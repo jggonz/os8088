@@ -151,6 +151,78 @@ Rows, once on `c5d1d8fe`: **the disk agent's 39 and the files agent's 13
 (50 selected): 50 passed**, `imgswap`, `stikswap`, `rdmount`, `fatwpin`,
 `dirwshed`, `curdisk`, `install` and the boot rows among them.
 
+### L.2 kern_mega carries the rest that pays on its machines (`KHP_*`)
+
+The owner's words: *"Kern mega can afford more ram, so the next step is
+'unleaning' mega - can you select optimizations from the larger set -
+anything 'worth its bytes' - and add them to mega?"*
+
+kern_mega runs on a 286 or 386, almost always with VGA or EGA, in protected
+mode; its `.cold` lives above 1MB and its conventional budget had room. So
+it takes eleven groups of the picks lean leaves out, each behind a `KHP_*`
+knob in `kernel/kernel.asm`'s KHP block, defined for `KERN_MEGA` alone:
+
+| knob | picks | bytes on kern_big if turned on | what it buys |
+|---|---|---:|---|
+| `KHP_VGASAVE` | vga-1 (`7e469c23`, `7390cd6d`), pointer-2 (`49f6681c`) | +122 `.vga` | the planar save/restore by words and the VGA cursor's walks: 70% of a VGA raise |
+| `KHP_VGAFILL` | vga-2 (`71a90157`) | +39 `.vga` | VGA fill interiors by words |
+| `KHP_VGAEDGE` | vga-3 (`9e5511d1`) | +21 `.vga` | VGA fill edges two rows a pass |
+| `KHP_VGABLITP` | vga-5 (`da0b1070`) | +32 `.vga` | `gfx_blitp` by words |
+| `KHP_FRAME` | gfxcall-3 (`4ea77a8b`) | +26 | `gfx_frame`'s clip questions once a frame |
+| `KHP_FPG` | gfxcall-4 (`2f15d7df`) | +18 | the unarmed progress unlock answered first |
+| `KHP_RELIT` | wm-4 (`233ccd04`), size-2 (`68f50f2a`) | +32 | fullscreen exit by the damage pass: the way back from FSX |
+| `KHP_CAPTION` | wm-2 (`db2e9670`), wm-3 (`cd852c89`) | +34 | the title bar's caption |
+| `KHP_DMGSTALE` | wm-6 (`ce2df232`) | +38 | drags over hidden windows |
+| `KHP_RAISEOL` | wm-7 (`4dd8b6d6`) | +90 | a partial raise's outline |
+| `KHP_LZ` | disk-1 (`f47761a8`), disk-2 (`d122c19d`), size-12 (`e59c61ea`) | +190 `.cold` | the lz4 and LZB decoders ~1.6-1.7x |
+
+Picks that overlap in source share a knob (wm-2/wm-3 both rewrite
+`wm_draw_title`; disk-2 builds on disk-1's budget register; vga-1's second
+commit drops a loop pointer-2 retired).
+
+**Not on kern_mega, and why.** mono-1/3/4/5 and files-3: 1bpp-only gains,
+least worth their bytes on a 286. text-6: its gain is 1bpp's, and on VGA it
+costs +0.3%. disk-4 and disk-5: the read-ahead's hint does not run through
+kern_mega's nine-sector bounce (`DSK_RAHINT` is undefined there), and its
+1.2/1.44MB drives gain least. pointer-6: pays only with O4.
+
+**How it was made, and how it is proved.** Each pick's patch was applied to a
+copy of the current file and the difference written back as
+`%ifdef KHP_x / new / %else / old / %endif` (a scratch tool, run per group in
+the picks' original order). Two equalities at one commit (`5d419969`, so one
+build number): with every knob off, kern_big's and kern_small's images are
+**byte-identical** to `kernel-hotpaths-lean`'s; with every knob on, kern_mega's
+is **byte-identical** to the same tree with the seventeen commits re-applied
+as plain code. Each knob also assembles alone on kern_big. One hand edit: the
+`VX_SAVE` hook in `vga_save_vram` is one line outside the arms (the
+instruction was identical; `t_vidext` counts hooks).
+
+**What it costs kern_mega.** Conventional resident 62,976 -> **63,488** of
+68,096 (4,608 spare). Its `.cold` half is above 1MB. In the kernel's 64KB
+segment kern_mega carries **399** bytes more than kern_big
+(`tests/megaseg.txt` 3,283 -> 3,682): kern_big growth room spent, 13,815
+left. That is the real price, because these are rewrites of `.text` routines
+kern_big also has and cannot move into `.mega`.
+
+**What it buys on kern_mega** is PREDICTED, not measured there: the same code
+measured on kern_big (sections 0 and 4.2 above, and 86Box's 286 for the VGA
+raise, -12.5% from the VGA items, RELATIVE). No harness here times kern_mega.
+
+**Tools.** `tools/stkbalance.py` now walks the corpus once with every `KHP_*`
+knob off and once with every one on (a knob's `push` in one arm and its
+`pop` in a later one are not a defect, but read as one sequence they are).
+Only `KHP_*` conditionals are evaluated.
+
+**Rows.** The 64 kern_mega rows (Bochs, 86Box), less five WIN16 rows whose
+fixtures this box has no rule to build: **56 passed, 2 failed, 1 skipped**
+(`megaaltrdg`, rgbds). The two failures, `megavidring` (the live playback
+leg) and `brmega` (a page's layout), miss a 240-guest-second deadline under
+Bochs - **and fail identically on lean without the knobs (`5d419969`) and at
+the pass's base (`a7ee7fab`)**, run alone each time: they predate the pass,
+and are not diagnosed here. `make test-full` and the fast tier pass.
+LAST-DROP-PERF.md section 7 is the ranked list of what kern_big could still
+turn on.
+
 ## 0. The owner's picks at a glance, ranked
 
 Every byte-costing item, in one place, ranked by user-visible time per

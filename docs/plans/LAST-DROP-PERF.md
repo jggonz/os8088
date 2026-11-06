@@ -545,6 +545,88 @@ price is a fraction of a millisecond per repaint of one of those, on VGA only.
    used as a moving texture - would make the 0.28% a per-frame cost, which is
    the case the trade was not priced for.
 
+## 7. Kernel hot-paths pass 1's shelf: what kern_big could still turn on
+
+Kernel hot-paths pass 1 (docs/plans/khp1/, the LOG is its record) built and
+measured 35 byte-costing speedups on the kernel's hot paths. The shipped line,
+`kernel-hotpaths-lean`, took the free ones and **twelve picks for +182 bytes**
+(LOG section L): the scheduler's two, the 1bpp save/restore by words, the
+scroll thumb, Up One Folder, a covered window not re-saved, the width measure,
+`gfx_rect_setup`, the XOR fill, the VGA glyph's index select, and the
+listing mount's one-call read (disk-3 and disk-5, without disk-4). Everything
+else is **here**: correct, measured, and not on kern_big or kern_small,
+because its bytes did not clear the bar the owner set for this round (about a
+hundred). kern_mega carries most of it (section 7.3).
+
+**Turning one on is a `%define`.** Eleven groups are `KHP_*` knobs in
+`kernel/kernel.asm`'s KHP block: each is an `%ifdef` arm around the rewritten
+body, with the body it replaced in the `%else`, so with the knob undefined the
+source assembles to exactly what ships today (proved byte for byte at the
+commit that added them), and each knob assembles alone on kern_big. To take
+one for kern_big: add its `%define` under `%ifdef KERN_BIG` in that block,
+re-measure with `tools/os88hot.py ab`, run its rows (the LOG's section 0 and
+the agent's note name them), and re-check `hotpar` (a knob moves the code
+after it, so a parity pad may be needed - the knob's own commit on
+`kernel-hotpaths` shows where the agent put one). The rest are commits on the
+`kernel-hotpaths` branch, to re-apply with `git cherry-pick` the same way.
+
+### 7.1 Ranked: what to turn on first for kern_big
+
+Bytes are kern_big resident, as each commit's `[+N]` measured it (assembled
+spans, not rungs). Times are MartyPC on the emulated 4.77 MHz XT, MEASURED by
+the agent that built each one unless marked P. "Hot" is the LOG's grade.
+
+| # | knob / commit | bytes | what it buys on the XT | hot | why it is not on yet / what would flip it |
+|---|---|---:|---|---|---|
+| 1 | **`KHP_LZ`** (disk-1 `f47761a8`, disk-2 `d122c19d`, size-12 `e59c61ea`) | +190 (`.cold`) | the lz4 and LZB decoders ~1.6-1.7x: launch decode Note Pad 405 -> 235 ms, Paint 607 -> 353, Calc 290 -> 183, TexPad 1,300 -> 831. **Every launch, every adapter, every driver and module load** | H1 | +190 against a ~100-byte round. The best time-per-byte left: take it first when the budget allows |
+| 2 | **`KHP_RELIT`** (wm-4 `233ccd04`, size-2 `68f50f2a`) | +32 | fullscreen exit and screen-saver wake by the damage pass: CGA 781 -> 629 ms, Hercules 984 -> 727, VGA 1,203 -> 706 (with wm-1, which is on). Each pixel written about once instead of 7-8 times: CHANGES TRANSIENTS, fewer | H3 | cheap for what it buys; left out only to keep the round near 100 bytes |
+| 3 | **`KHP_VGASAVE`** (vga-1 `7e469c23` + `7390cd6d`, pointer-2 `49f6681c`) | +122 (`.vga`) | the planar save-under and restore by words, and the VGA cursor's own cell walks: a VGA raise's save 133 -> 99 ms, menu drop and dismiss -10 ms each, `cur_move` 21,450 -> 15,100 cycles a packet. A VGA raise was 70% save/restore | H2 | VGA/EGA machines only (`.vga`, which a mono machine slides `.cold` over); pointer-2 alone crossed kern_big's top rung on `kernel-hotpaths` |
+| 4 | **`KHP_DMGSTALE`** (wm-6 `ce2df232`) | +38 | a vacated strip under another window draws nothing: a drag over a hidden window -12 to -32% (Paint on CGA 242 -> 212 ms, the Control Panel on VGA 335 -> 229) | H3 | +~2 ms on a drag where nothing is hidden (the region walk) |
+| 5 | **`KHP_CAPTION`** (wm-2 `db2e9670`, wm-3 `cd852c89`) | +34 | an inactive title bar's caption gap not filled (~2 ms a caption), an unclipped caption as one `font_run_x` (-3.5 to -8.5 ms a CGA raise) | H3 | small and cheap; wm-3 is kern_big's only (kern_small letters captions by glyph) |
+| 6 | **`KHP_VGAFILL`** (vga-2 `71a90157`) | +39 (`.vga`) | VGA solid and grey fill interiors by words: most of a VGA raise's fill time, `GFX_FILL 256x128` 13.37 -> 10.67 ms | H1 | VGA/EGA only |
+| 7 | **`KHP_RAISEOL`** (wm-7 `4dd8b6d6`) | +90 | a partial raise redraws outline and shadow only where they were covered: CGA raise -5 to -14 ms | H3 | good, but +90; it also crossed a rung in the knob test (a rung is not the price - the 90 bytes are) |
+| 8 | `KHP_VGAEDGE` (vga-3 `9e5511d1`) | +21 (`.vga`) | VGA fill edge columns two rows a pass: `GFX_VLINE 128` -21%, `GFX_FILL 64x64` -13% | H1 | one-row lines +1.9% |
+| 9 | `KHP_VGABLITP` (vga-5 `da0b1070`) | +32 (`.vga`) | `gfx_blitp` wide rows by words: Paint's canvas ~-53 ms (P), games' bands | H1 | the operation figure is PREDICTED |
+| 10 | `KHP_FPG` (gfxcall-4 `2f15d7df`) | +18 | an unarmed progress widget answers before the frame: -64 us every drawing burst (~-2 ms over 31 keys) | H2 | small |
+| 11 | `KHP_FRAME` (gfxcall-3 `4ea77a8b`) | +26 | `gfx_frame`'s entry questions once a frame: ~-0.27 ms a raise | H2 | small for its bytes |
+| 12 | mono-1 `13aeb31a` (+ mono-5 `bab1b495`) | +344 (+16) | the 1bpp rect walked a bank at a time: `GFX_FILL 64x64` -51%, CGA raise -9 ms, menu open -5 ms; small fills +2%. mono-5: a drag's XOR kernel 49 -> 40 ms | H1 | **the largest item of the pass**, and its value is in the big fills packages draw (Paint, games, dialogs) more than the desktop's. Not a knob: cherry-pick. kern_big only |
+| 13 | disk-4 `1217b318` | +208 | the loader's header peek fills to the CYLINDER's end: one `int 13h` (~0.4 s P) off every multi-track launch on 360KB and 1.44MB | H4 | narrow (only the loader arms it), and better re-done as an explicit prefetch call than an armed byte (LOG section L.1, and the owner's review). Not a knob, and not on kern_mega (its store's nine-sector bounce) |
+| 14 | mono-3 `1eabf883` | +56 | the 1bpp `gfx_scroll` by bank: `GFX_SCROLL 256x128` -26% | H1 | most of its PgDn gain overlaps files-2/3 on a merged tree (~-4 ms left) |
+| 15 | files-3 `f183b808` | +80 | 1bpp icons a word at a time: with files-2 (on), CGA PgDn -25%, Hercules -11% | H1 | **turns `glyphcost` red** (LOG O5): it speeds up the retired bitmap glyph's reference more than the shipped fills. Decide O5 first |
+| 16 | mono-4 `87574fa3` | +22 | the 1bpp pattern fill's rows inline: `GFX_FILL_PAT 64x64` -28% | H1 | small |
+| 17 | text-6 `c01cde29` | +362 (+346 kern_small) | `font_str_run`: a transparent string in one pass, 2.4x on a 17-cell caption | H2 | after wm-3 it mostly helps clipped captions and packages' transparent text: the desktop scenarios moved ~1-3%; VGA +0.3% |
+| 18 | pointer-6 `8924a280` | +8 | `cur_lazyend`'s early answer, 477 -> 224 cycles | H2 | pays only if LOG O4 (the arrow lit while drawing) is taken |
+
+### 7.2 What turning several on costs together
+
+On `kernel-hotpaths`, with every one of them on, kern_big resident was 93,287
+(+1,757 against the pass's base 91,530) and `KERN_SIZE` 99,328 of 100,864.
+`kernel-hotpaths-lean` is 91,577 (+47). Rows 1-11 above are +642 bytes
+between them; 12-18 another +1,096.
+
+### 7.3 kern_mega already carries rows 1-11
+
+kern_mega defines every `KHP_*` knob (`kernel-hotpaths-lean`, the commit that
+added them). It runs on a 286 or 386, almost always with VGA or EGA, its
+`.cold` (the decoders, `blk_relit`) lives above 1MB, and its conventional
+budget had room: conventional resident 62,976 -> 63,488 of 68,096. The price
+there is the kernel's 64KB segment: kern_mega carries 399 bytes more than
+kern_big in it (`tests/megaseg.txt` 3,283 -> 3,682), which is 399 bytes of
+kern_big growth room, 13,815 left. Rows 12-18 are not on kern_mega: the 1bpp
+items pay least on a 286, text-6 costs VGA, disk-4's fill does not run
+through kern_mega's bounce, and pointer-6 waits on O4.
+
+### 7.4 What would flip the answer
+
+- **A bigger round.** Rows 1 and 2 together are +222 bytes for the largest
+  launch and fullscreen-exit gains left; row 1 alone is the best time per
+  byte on the list.
+- **A field report from a VGA XT** (docs/FIELD-MACHINES.md) that the raise is
+  what users feel: rows 3 and 6 are where it goes.
+- **A decision on LOG O5** (glyphcost) frees row 15; **O4** frees row 18.
+- **disk-4 rewritten as an explicit prefetch call**, which removes its armed
+  state and may shave its bytes.
+
 ## The apparatus, so it is not rebuilt
 
 Everything Set 29 needed already exists in the tree:
