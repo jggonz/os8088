@@ -29,10 +29,11 @@ section .bss    follows=.data   align=2 nobits
 %include "pagedesk/pdabi.inc"
 
 ; The arithmetic: this module needs the 32-bit group, the 16.16 core (the line
-; arrow's unit vector), the far movers and the CRC; not the matrices or the
-; view transform.
+; arrow's unit vector), the far movers and the CRC; not the matrices, the view
+; transform or the PDF-number parser/printer.
 %define PDM_SKIP_MAT
 %define PDM_SKIP_VIEW
+%define PDM_SKIP_PARSE              ; pb_pt prints every real itself (20.5.3)
 
 section .text
 pdw_hdr:

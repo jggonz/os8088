@@ -38,6 +38,7 @@ static pdw v_init(pdw bx)
     pd_fcopy_in(bx, 0, &in, sizeof in);
     pdw_engvec[0] = in.eng_off; pdw_engvec[1] = in.eng_seg;
     g_wseg = in.wbuf_seg; g_wkb = in.wbuf_kb;
+    if (sv_active || g_created) pdw_io_delete(g_tmp);   /* 20.5.1: an INIT drops a job */
     job_clear();
     return PDE_OK;
 }
@@ -74,7 +75,7 @@ static pdw v_job(pdw fresh)
         } else if (r == PDE_OK) {
             g_sv.state = PDW_ST_DONE; job_clear();
         } else {
-            keep = replace && sv_phase == PH_RENAME;   /* delete done, rename failed */
+            keep = sv_tgone;                           /* delete done, rename failed */
             if (keep) { g_sv.err_detail = 1; sv_active = 0; sv_phase = PH_IDLE; g_created = 0; }
             else r = job_fail(r);
         }

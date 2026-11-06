@@ -81,8 +81,10 @@ static pdw eng_raw(pdw num, pdw gen)
 #ifdef PD_HOST
     pd_fcopy_in(PDW_HOST_SCRATCH, 0, g_pg, sc_n);
 #endif
-    /* is there more? ask for the next 8 bytes into the slack past the buffer */
-    pdm_u32_add16(&g_rc.done, sc_n);
+    /* is there more? ask for the next 8 bytes into the slack past the buffer.
+     * `done` is in/out (pdabi.h): PDENG has advanced it already, so set it
+     * rather than add to it */
+    pdm_u32_set(&g_rc.done, 0, sc_n);
 #ifdef PD_HOST
     g_rc.dseg = PDW_HOST_SCRATCH; g_rc.doff = PDW_PGBUF;
 #else
@@ -101,18 +103,28 @@ static pdw eng_raw(pdw num, pdw gen)
 /* ---- the scan of the edit store ------------------------------------------- */
 static pdw sv_bad(pdw why) { g_sv.err_detail = why; return PDE_LIMIT; }
 
+/* the live note record (not record i) whose id is `id`, else 0xFFFF */
+static pdw sv_note(pdw i, pdw id)
+{
+    pdw j;
+    for (j = 0; j < sv_cnt; j++)
+        if (j != i && EK(j) == PDA_NOTE && !(EF(j) & PDEF_DELETED) && g_eid[j] == id) return j;
+    return 0xFFFF;
+}
 static pdw sv_scan(void)
 {
-    pdw i, next = sv_base, k, f;
+    pdw i, j, next = sv_base, k, f, irt;
     sv_v14 = sv_v15 = 0;
+    /* pass 1: the near copies, and every live record checked */
     for (i = 0; i < sv_cnt; i++) {
         ed_head(i);
         g_ekf[i] = (pdw)(g_ed.kind | (g_ed.flags << 8));
         g_epg[i] = g_ed.page; g_eid[i] = g_ed.id; g_esn[i] = g_ed.src_num; g_esg[i] = g_ed.src_gen;
         g_onum[i] = 0; g_oapn[i] = 0;
         k = g_ed.kind; f = g_ed.flags;
-        if (k < PDA_NOTE || k > PDA_SIGN) continue;          /* page ops are 13.7 */
         if (f & PDEF_DELETED) continue;
+        if (k == PDA_PAGEOP) return sv_bad(7);                   /* page ops: 13.7, wave 2 */
+        if (k < PDA_NOTE || k > PDA_SIGN) { g_sv.err_detail = 10; return PDE_RANGE; }
         if (g_ed.text_len > PDW_TXTMAX) return sv_bad(1);
         if (g_ed.text_off > (pdw)(0xFFFFu - g_ed.text_len)) return sv_bad(2);
         if (g_ed.pts_n > 8000 || g_ed.pts_off > (pdw)(0xFFFFu - 4u * g_ed.pts_n)) return sv_bad(3);
@@ -121,14 +133,48 @@ static pdw sv_scan(void)
         if (k == PDA_LINE && g_ed.pts_n != 2) return sv_bad(6);
         if (!sv_fresh && (g_ed.page & 0x8000)) return sv_bad(7);   /* page ops: wave 2 */
         if (sv_fresh && (g_ed.page & 0x7FFF) >= sv_npages) return PDE_RANGE;
-        if (g_ed.src_num && !sv_fresh) g_onum[i] = g_ed.src_num;
-        else g_onum[i] = next++;
-        if (k == PDA_NOTE && g_ed.irt) { g_oapn[i] = 0; sv_v15 = 1; }
+        if (sv_fresh && k == PDA_NOTE && g_ed.irt && (f & PDEF_IRTSRC)) { g_sv.err_detail = 8; return PDE_RANGE; }
+    }
+    /* pass 2: numbers, in edit order. A review reply whose PageDesk parent is
+     * gone (deleted, or never there) is DROPPED - its /IRT would otherwise name
+     * whatever object happens to carry the parent's id as its number */
+    for (i = 0; i < sv_cnt; i++) {
+        k = EK(i); f = EF(i);
+        if (f & PDEF_DELETED) continue;
+        irt = 0;
+        if (k == PDA_NOTE) {
+            ed_head(i); irt = g_ed.irt;
+            if (irt && !(f & PDEF_IRTSRC) && sv_note(i, irt) == 0xFFFF) continue;
+        }
+        if (g_esn[i] && !sv_fresh) {
+            for (j = 0; j < i; j++)                 /* one record per source object */
+                if (g_onum[j] == g_esn[i] && g_esn[j]) return sv_bad(9);
+            g_onum[i] = g_esn[i];
+        } else g_onum[i] = next++;
+        if (k == PDA_NOTE && irt) { g_oapn[i] = 0; sv_v15 = 1; }
         else g_oapn[i] = next++;
-        if (k == PDA_HIGHLIGHT) sv_v14 = 1;
+        /* 13.5 by key, PDF 1.7 tables 164-182: /NM (13.2, on every annotation)
+         * and /LE, /Q, the highlight's /BM are 1.4; /Subj (area mark, drawn
+         * signature) and the review state's /IRT /State /StateModel are 1.5.
+         * (/RT would be 1.6 and is not written: /R is its default.) */
+        sv_v14 = 1;
+        if (k == PDA_AREA || k == PDA_SIGN) sv_v15 = 1;
         if (next > 0xFFF0) return PDE_LIMIT;
     }
     sv_next = next;
+    return PDE_OK;
+}
+/* an incremental save keeps the source's page list: a page order that is not
+   the identity (a move, a delete) is 13.7's new /Pages tree, which is wave 2 */
+static pdw sv_order(void)
+{
+    pdw i;
+    if (!g_sv.pages_count) return PDE_OK;
+    if (!g_sv.pages_seg) return PDE_NOMEM;
+    for (i = 0; i < g_sv.pages_count; i++)
+        if (pd_fpeekw(g_sv.pages_seg, (pdw)(2 * i)) != i) return sv_bad(7);
+    if (eng_pageinfo(g_sv.pages_count) == PDE_OK) return sv_bad(7);     /* a page left out */
+    sv_pgidx = 0xFFFF;
     return PDE_OK;
 }
 /* the object a reply points at: the live note record with that id, else irt is
@@ -238,6 +284,12 @@ static pdw cat_patch(void)
     ds = sc_body(); if (ds == SC_BAD) return PDE_SYNTAX;
     f = dict_find(ds, "Version");
     if (f == SC_BAD) return PDE_SYNTAX;
+    /* PDENG's version is the HEADER's: a catalog that already says /1.x or
+       /2.x at least what the output needs is left alone, never lowered */
+    if (f == 1 && sc_ve - sc_vs >= 4 && g_pg[sc_vs + 1] >= '1' && g_pg[sc_vs + 1] <= '9'
+        && g_pg[sc_vs + 2] == '.' && g_pg[sc_vs + 3] >= '0' && g_pg[sc_vs + 3] <= '9'
+        && (pdw)((g_pg[sc_vs + 1] - '0') * 10 + (g_pg[sc_vs + 3] - '0')) >= sv_catver)
+        return PDE_OK;
     pw_obj(g_tr.root_num, g_tr.root_gen);
     if (f) {
         pb_n(g_pg + ds, (pdw)(sc_vs - ds));
@@ -259,10 +311,11 @@ static pdw cat_patch(void)
 enum { AS_START, AS_LIST, AS_TAIL, AS_COUNT0, AS_COUNT, AS_HEAD, AS_BODY, AS_END, AS_DONE };
 static pdw an_sub, an_pn, an_pg;
 
+static const char *const pw_keepk[4] = { "NM", "T", "Popup", "CreationDate" };
 static pdw an_prep(pdw i)
 {
     static pdw pn, pg;
-    pdw r;
+    pdw r, ds, k, n;
     ed_load(i);
     ed_rect();
     if (sv_fresh) { g_pgnum = (pdw)(7 + 2 * (g_ed.page & 0x7FFF)); g_pggen = 0; }
@@ -270,12 +323,17 @@ static pdw an_prep(pdw i)
         r = eng_pageinfo(g_ed.page); if (r) return r;
         g_pgnum = g_pi.objnum; g_pggen = g_pi.gen;
     }
-    g_nmlen = 0;                    /* a replaced annotation keeps its identity (13.2) */
+    g_keepn = 0; g_keepf = 0;       /* a replaced annotation keeps its identity (13.2, 20.5.5) */
     if (!sv_fresh && g_esn[i] && !eng_raw(g_esn[i], g_esg[i])) {
-        r = sc_body();
-        if (r != SC_BAD && dict_find(r, "NM") == 1 && g_pg[sc_vs] == '(' && (pdw)(sc_ve - sc_vs) <= sizeof g_nmraw) {
-            g_nmlen = (pdw)(sc_ve - sc_vs);
-            pw_cpy(g_nmraw, g_pg + sc_vs, g_nmlen);
+        ds = sc_body();
+        for (k = 0; ds != SC_BAD && k < 4; k++) {
+            if (dict_find(ds, pw_keepk[k]) != 1) continue;
+            n = (pdw)(sc_ve - sc_kpos);                 /* "/Key value"          */
+            if (n >= (pdw)(sizeof g_keep - g_keepn)) continue;
+            pw_cpy(g_keep + g_keepn, g_pg + sc_kpos, n);
+            g_keepn = (pdw)(g_keepn + n); g_keep[g_keepn++] = ' ';
+            if (k == 0) g_keepf |= KEEP_NM;
+            if (k == 1) g_keepf |= KEEP_T;
         }
     }
     pn = pg = 0;
@@ -362,6 +420,12 @@ static pdw job_verify(void)
         pdm_u32_set(&one, 0, 1);
         pdm_u32_sub(&at, &g_pos, &one);
         at.lo = (pdw)(at.lo & ~mask);
+        /* "startxref N %%EOF" can straddle the last cluster boundary: when the
+         * last cluster holds under 190 bytes, read from the one before too
+         * (the output region is at least two clusters) */
+        if ((pdw)(g_pos.lo - at.lo) < 190 && (at.lo | at.hi)) {
+            pdm_u32_set(&one, 0, g_clu); pdm_u32_sub(&at, &at, &one);
+        }
         r = pdw_src_back(g_tmp, &at, g_wseg, 0, g_outcap, &got); if (r) return r;
         if (got < 12) return PDE_TRUNC;
         k = got > 190 ? 190 : got;
@@ -408,18 +472,20 @@ static pdw job_begin(pdw fresh)
     for (i = 0; i < 14; i++) g_tmp[i] = 0;
     pw_cpy(g_tmp, PDW_TEMPNAME, pw_len(PDW_TEMPNAME));
     pw_cpy(pdw_date, g_sv.date, 23); pdw_date[23] = 0; pw_cpy(pdw_author, g_sv.author, 47); pdw_author[47] = 0;
-    r = pw_setup(g_wseg, g_wkb); if (r) { g_sv.err_detail = (pdw)(g_wkb + 2); return r; }
+    r = pw_setup(g_wseg, g_wkb); if (r) { g_sv.err_detail = r == PDE_NOMEM ? g_wantkb : 0; return r; }
     sv_fresh = fresh; g_edseg = g_sv.edits_seg; sv_cnt = g_sv.edits_count;
     if (sv_cnt > PD_MAXEDITS) return PDE_LIMIT;
+    if (sv_cnt && !g_edseg) return PDE_NOMEM;           /* D2: a claim of 0 is no claim */
+    if (!fresh && !pdw_engvec[1]) return PDE_NOMEM;     /* no PDENG to read the source  */
     sv_xbad = 0; sv_catver = 0; sv_xi = 0; sv_i = 0; sv_xstart = 0; sv_copyw = 0; sv_sub = 0; sv_coff = 0; g_io = 0; an_sub = AS_START; sv_flushed = 0; sv_vstage = 0;
     pdm_u32_set(&sv_total, 0, 0);
-    g_need14 = g_need15 = 0;
     if (!fresh) {
         r = eng_trailer(); if (r) return r;
         r = eng_fingerprint(); if (r) return r;
         g_nm_hi = g_fp.crc_head; g_nm_lo = (pdw)(g_fp.crc_tail ^ g_fp.size.lo);
         sv_base = g_tr.size; u32cp(&sv_prev, &g_tr.startxref);
         if (sv_base < 2 || !g_tr.root_num) return PDE_XREF;
+        r = sv_order(); if (r) return r;
         r = pdw_src_open(g_sv.source); if (r) return r;
         sv_phase = PH_COPY;
     } else {
@@ -612,15 +678,17 @@ static pdw job_slice(void)
 
 /* 14.3: the verified temp file becomes the target. Returns PDE_EXISTS while the
    target is in the way and the caller has not said REPLACE. */
+static pdw sv_tgone;                    /* the target was deleted (14.3)  */
 static pdw job_rename(pdw replace)
 {
     pdw r = pdw_io_rename(g_tmp, g_sv.target);
+    sv_tgone = 0;
     if (r == PDE_EXISTS && replace) {
         r = pdw_io_delete(g_sv.target);
+        if (r) return r;                    /* the target is untouched: an ordinary failure */
         /* a failure from here leaves the complete new file as PDSAVE.$$$ */
-        if (r) return r;
+        sv_tgone = 1;
         r = pdw_io_rename(g_tmp, g_sv.target);
-        if (r) { sv_phase = PH_RENAME; return r; }
     }
     return r;
 }

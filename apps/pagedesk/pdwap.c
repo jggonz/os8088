@@ -19,7 +19,6 @@ static pdw  g_tlen;
 static pd_pt g_rx0, g_ry0, g_rx1, g_ry1;   /* the /Rect actually written      */
 static pdw  g_nm_hi, g_nm_lo;    /* the document nonce (20.5.2)              */
 static pdw  g_pgnum, g_pggen;    /* the page object the annotation belongs to */
-static pdw  g_need14, g_need15;  /* features emitted: highlight blend, review */
 
 static const char *const pw_pal[16] = {   /* the 16 VGA colours as PDF rgb     */
     "0 0 0", "0 0 0.667", "0 0.667 0", "0 0.667 0.667",
@@ -242,6 +241,8 @@ static void ap_frame(void)                  /* Area mark, Rect, Ellipse */
         pb_xy(x0, y0); pb_pt((pd_pt)(x1 - x0)); pb_c(' '); pb_pt((pd_pt)(y1 - y0)); pb_s(" re S\n");
     } else {
         rx = (pd_pt)((x1 - x0) / 2); ry = (pd_pt)((y1 - y0) / 2);
+        if (rx < 0) rx = 0;             /* a frame thinner than its border */
+        if (ry < 0) ry = 0;
         cx = (pd_pt)(x0 + rx); cy = (pd_pt)(y0 + ry);
         pdm_u32_mul16(&t, (pdw)rx, 5523); pdm_u32_divmod16(&t, &t, 10000); kx = (pd_pt)t.lo;
         pdm_u32_mul16(&t, (pdw)ry, 5523); pdm_u32_divmod16(&t, &t, 10000); ky = (pd_pt)t.lo;
@@ -310,8 +311,10 @@ static void ap_line(void)
     if (len && (g_ed.align & 3)) {
         pdm_fx_int(&fl, (pdi)len); pdm_fx_int(&nx, dx); pdm_fx_int(&ny, dy);
         pdm_fx_div(&ux, &nx, &fl); pdm_fx_div(&uy, &ny, &fl);
-        if (g_ed.align & 1) arrow_head(x2, y2, &ux, &uy, ARROW16(w16));
-        if (g_ed.align & 2) { pdm_fx_neg(&nx, &ux); pdm_fx_neg(&ny, &uy); arrow_head(x1, y1, &nx, &ny, ARROW16(w16)); }
+        /* PAGEDESK-SPEC 13.1.1: align bit 0 = an arrow at the START (point 0),
+           bit 1 = at the END (point 1) - the order of /LE */
+        if (g_ed.align & 2) arrow_head(x2, y2, &ux, &uy, ARROW16(w16));
+        if (g_ed.align & 1) { pdm_fx_neg(&nx, &ux); pdm_fx_neg(&ny, &uy); arrow_head(x1, y1, &nx, &ny, ARROW16(w16)); }
     }
     pb_s("Q\n");
 }
@@ -424,16 +427,24 @@ static void ap_head(pdw num)
 static void ap_tail(void) { pb_s("\nendstream\n"); pw_endobj(); }
 
 /* ---- the annotation dictionary ------------------------------------------- */
-static char g_nmraw[48];                 /* a replaced annotation's own /NM value, "(...)" */
-static pdw  g_nmlen;
+/* A REPLACED source annotation keeps the keys that are its identity and its
+ * history rather than the editor's (20.5.5): /NM (13.2), /T (whose note it is -
+ * the current author is NOT written over someone else's), /Popup and
+ * /CreationDate, copied verbatim as "/Key value " out of the source object by
+ * an_prep. g_keepf says which arrived: KEEP_NM, KEEP_T. */
+#define KEEP_NM 1
+#define KEEP_T  2
+static char g_keep[200];
+static pdw  g_keepn, g_keepf;
 static void pb_nm(void)
 {
-    if (g_nmlen) { pb_s("/NM "); pb_n(g_nmraw, g_nmlen); pb_c(' '); return; }
+    if (g_keepf & KEEP_NM) return;          /* in g_keep, written by pb_common */
     pb_s("/NM (PD-"); pb_hex4(g_nm_hi); pb_hex4(g_nm_lo); pb_c('-'); pb_hex4(g_ed.id); pb_s(") ");
 }
 static void pb_common(pdw f)
 {
     pb_nm();
+    if (g_keepn) pb_n(g_keep, g_keepn);
     pb_s("/F "); pb_u(f); pb_s(" /P "); pb_u(g_pgnum); pb_c(' '); pb_u(g_pggen); pb_s(" R ");
     if (pdw_date[0]) { pb_s("/M ("); pb_n(pdw_date, pw_len(pdw_date)); pb_s(") "); }
 }
@@ -448,7 +459,11 @@ static void pb_bs(pdw w16, pdw dashed)
     pb_s(" >> ");
 }
 static void pb_contents(void) { pb_s("/Contents "); pb_textstr(g_txt, g_tlen); pb_c(' '); }
-static void pb_author(void)   { if (pdw_author[0]) { pb_s("/T "); pb_textstr(pdw_author, pw_len(pdw_author)); pb_c(' '); } }
+static void pb_author(void)
+{
+    if (g_keepf & KEEP_T) return;           /* the source's own /T, in g_keep */
+    if (pdw_author[0]) { pb_s("/T "); pb_textstr(pdw_author, pw_len(pdw_author)); pb_c(' '); }
+}
 
 /* the end of every ordinary annotation: the common keys, /AP, endobj */
 static void annot_z(pdw apnum)
@@ -464,11 +479,10 @@ static pdw annot_a(pdw num, pdw gen, pdw apnum, pdw parent_n, pdw parent_g)
     if (g_ed.kind == PDA_NOTE && g_ed.irt) {
         pw_obj(num, gen);
         pb_s("<< /Type /Annot /Subtype /Text "); pb_rectarr();
-        pb_s("/IRT "); pb_u(parent_n); pb_c(' '); pb_u(parent_g); pb_s(" R /RT /R /StateModel /Review /State ");
+        pb_s("/IRT "); pb_u(parent_n); pb_c(' '); pb_u(parent_g); pb_s(" R /StateModel /Review /State ");
         pb_s(g_ed.state == PDS_COMPLETED ? "/Completed " : "/None ");
         pb_author(); pb_common(32);
         pb_s(">>\n"); pw_endobj();
-        g_need15 = 1;
         return 0;
     }
     pw_obj(num, gen);
@@ -478,7 +492,7 @@ static pdw annot_a(pdw num, pdw gen, pdw apnum, pdw parent_n, pdw parent_g)
         pb_s("/Subtype /Text "); pb_rectarr(); pb_s("/Name /Comment /Open false ");
         pb_contents(); pb_author(); pb_cref(); break;
     case PDA_HIGHLIGHT:
-        pb_s("/Subtype /Highlight "); pb_rectarr(); pb_s("/QuadPoints ["); g_need14 = 1;
+        pb_s("/Subtype /Highlight "); pb_rectarr(); pb_s("/QuadPoints [");
         return 1;
     case PDA_AREA:
         pb_s("/Subtype /Square "); pb_rectarr(); pb_cref(); pb_bs(ed_w16(), g_ed.align & 1);
@@ -500,7 +514,7 @@ static pdw annot_a(pdw num, pdw gen, pdw apnum, pdw parent_n, pdw parent_g)
     case PDA_LINE:
         pb_s("/Subtype /Line "); pb_rectarr(); pb_cref(); pb_bs(ed_w16(), 0);
         pb_s("/L ["); pb_xy(pt_x(0), pt_y(0)); pb_xy(pt_x(1), pt_y(1)); pb_s("] /LE [");
-        pb_s((g_ed.align & 2) ? "/OpenArrow " : "/None "); pb_s((g_ed.align & 1) ? "/OpenArrow" : "/None");
+        pb_s((g_ed.align & 1) ? "/OpenArrow " : "/None "); pb_s((g_ed.align & 2) ? "/OpenArrow" : "/None");
         pb_s("] "); break;
     }
     annot_z(apnum);

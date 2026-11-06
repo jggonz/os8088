@@ -104,8 +104,13 @@ static pdw sc_val(pdw p, pdw depth)     /* end of the value starting at p    */
 /* the object number and generation of an "n g R" at [a,b), else 0 */
 static pdw sc_ref(pdw a, pdw b, pdw *gen)
 {
-    pdw n = 0, g = 0;
-    while (a < b && g_pg[a] >= '0' && g_pg[a] <= '9') { n = (pdw)(n * 10 + (g_pg[a] - '0')); a++; }
+    pdw n = 0, g = 0, big = 0, d;
+    while (a < b && g_pg[a] >= '0' && g_pg[a] <= '9') {      /* > 65535 matches nothing */
+        d = (pdw)(g_pg[a] - '0');
+        if (n > 6553 || (n == 6553 && d > 5)) big = 1;
+        n = (pdw)((n << 3) + (n << 1) + d); a++;
+    }
+    if (big) return 0;
     a = sc_skip(a);
     while (a < b && g_pg[a] >= '0' && g_pg[a] <= '9') { g = (pdw)(g * 10 + (g_pg[a] - '0')); a++; }
     a = sc_skip(a);

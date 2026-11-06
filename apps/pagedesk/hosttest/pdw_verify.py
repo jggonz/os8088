@@ -128,6 +128,10 @@ for f in ("fresh512.pdf", "fresh4096.pdf"):
     les = sorted(tuple(x["/LE"]) for x in lines)
     if les != [("/None", "/OpenArrow"), ("/OpenArrow", "/None"), ("/OpenArrow", "/OpenArrow")]:
         fail("%s: /LE %s" % (f, les))
+    # PAGEDESK-SPEC 13.1.1: align bit 0 = arrow at the START (/LE's first name)
+    red = [x for x in lines if x["/L"] == [80, 80, 200, 60]]
+    if not red or red[0]["/LE"] != ["/OpenArrow", "/None"]:
+        fail("%s: align 1 must put the arrow at the start: %s" % (f, red and red[0]["/LE"]))
     ft = [x for x in a if x["/Subtype"] == "/FreeText"]
     if sorted(x["/Q"] for x in ft) != [0, 1, 2] or not all("/DA" in x for x in ft):
         fail("%s: FreeText /Q /DA %s" % (f, [(x["/Q"], x.get("/DA")) for x in ft]))
@@ -188,6 +192,9 @@ if o1:
     rep = [x for x in a0 if "/IRT" in x]
     if not rep or rep[0]["/State"] != "/Completed":
         fail("inc1 review reply %s" % rep)
+    moved = [x for x in a0 if x.get("/Contents") == "u:Existing note (moved)"]
+    if not moved or moved[0].get("/T") != "u:Alice (QA)" or moved[0].get("/CreationDate") != "u:D:20200101000000":
+        fail("inc1: the replaced note lost its own /T or /CreationDate: %s" % (moved and moved[0]))
     print("ok   inc1: /Prev, /Size %s, /Version /1.5, annots per page %d/%d/%d" % (t["/Size"], len(a0), len(a1), len(a2)))
 if o2:
     t = o2["trailer"]["value"]

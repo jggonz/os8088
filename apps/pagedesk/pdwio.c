@@ -64,9 +64,11 @@ pdw pdw_io_close(const char *name)
     if (h_out) { if (fclose(h_out)) { h_out = 0; return PDE_IO; } h_out = 0; }
     return PDE_OK;
 }
+pdw   pdw_host_delfail;         /* 1 = deleting anything but the temp file fails (a read-only target) */
 pdw pdw_io_delete(const char *name)
 {
     if (h_out) { fclose(h_out); h_out = 0; }
+    if (pdw_host_delfail && strcmp(name, PDW_TEMPNAME)) return PDE_WPROT;
     return remove(name) ? PDE_NOTFOUND : PDE_OK;
 }
 pdw pdw_io_rename(const char *from, const char *to)
@@ -119,7 +121,13 @@ static pdw pdw_map(int e)
     }
 }
 pdw pdw_ferr(void) { return pdw_map(os88_ferr()); }
-pdw pdw_io_clu(void) { return (pdw)(os88_disk_cluster_sectors() * 512); }
+pdw pdw_io_clu(void)                    /* 0 = unknown; 0xFFFF = past 16 KiB */
+{
+    int s = os88_disk_cluster_sectors();
+    if (s <= 0) return 0;
+    if (s > 32) return 0xFFFFu;         /* 64 sectors x 512 would wrap to 0 */
+    return (pdw)(s * 512);
+}
 pdw pdw_io_create(const char *name, pdw seg, pdw off, pdw n)
 {
     g_tok = 0; g_seq = 0;

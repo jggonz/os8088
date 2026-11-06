@@ -990,10 +990,14 @@ EMIT; no stream is buffered whole and no `/Length` is an indirect object.
 incremental save) or from 1 (a fresh document), **in emission order**, so a new
 object's xref entries are one ascending run. A record that replaces a source
 annotation (`src_num` != 0) is written under THAT number and generation
-(newest revision wins; its appearance stream is a new object). A review reply is
-numbered in edit order like any record; its `irt` is resolved by looking up the
-live note record with that `id`, else it is taken as a source object number of
-generation 0.
+(newest revision wins; its appearance stream is a new object); two live records
+naming one source object are refused `PDE_LIMIT`, `err_detail` 9. A review reply
+is numbered in edit order like any record; its `irt` is the `id` of a live note
+record, or with `PDEF_IRTSRC` a source object number (generation 0 - `pd_edit`
+has no field for the parent's generation). A reply whose PageDesk parent is not
+a live record (deleted, or never there) is DROPPED, never written with an `/IRT`
+that names whatever object carries that number; `PDEF_IRTSRC` in a fresh
+document is refused `PDE_RANGE`, `err_detail` 8.
 
 *Identity (13.2).* `/NM (PD-<nonce 8 hex>-<id 4 hex>)`; the nonce is
 `crc_head << 16 | (crc_tail ^ size.lo)` of PDENG's `FINGERPRINT` of the source
@@ -1021,20 +1025,24 @@ as `\ooo`. Names: `#xx` for anything outside the regular characters.
 `text_off` and `pts_off` are **byte offsets from `edits_seg`:0** (the text heap
 and the point heap live in the same claim past the records), `text_len` bytes
 (<= 1,024, 8-bit Windows-1252), `pts_n` **points**, each `x y` as two pt16
-words. Conventions the writer needs and `pdabi.h` leaves open (asked in
-`PROGRESS ASK`, 20.5.12):
+words. 13.1.1 pins these conventions (D9); the writer's reading of them:
 
 | kind | points | fields |
 |---|---|---|
 | `PDA_HIGHLIGHT` | 4 per quad in PDF 1.7 order UL, UR, LL, LR | `colour` |
 | `PDA_INK`, `PDA_SIGN` | strokes separated by a pen-up point (`x` = -32768) | `size` = width x 2 (half points), `colour` |
-| `PDA_LINE` | 2 (tail, tip) | `style` = width (pt), `align` bit 0 = arrow at the tip, bit 1 = at the tail |
+| `PDA_LINE` | 2 (start, end) | `style` = width (pt), `align` bit 0 = arrow at the START, bit 1 = at the END (13.1.1; `/LE [start end]`) |
 | `PDA_RECT`, `PDA_ELLIPSE`, `PDA_AREA` | none; `rect` | `style` = width (pt, min 1); area: `align` bit 0 = dashed |
 | `PDA_TEXT` | none; `rect` | `style` = family<<4 \| bold \| italic<<1, `size` pt, `align` 0/1/2, `colour` |
 | `PDA_NOTE` | none; `rect` origin (size forced to 20 x 18 pt) | `irt` != 0 makes it a review reply, `state` |
 
-`colour` is an index into the 16 VGA colours (black 0 ... white 15; the PDF rgb
-is the 4-level EGA triple). Default for a highlight is 14 (yellow).
+`colour` is a `PDC_*` index (black 0 ... white 15; the PDF rgb is the 4-level
+EGA triple, pdabi.h). Default for a highlight is `PDC_YELLOW`. Any other kind -
+`PDA_PAGEOP` (13.7, wave 2: `PDE_LIMIT`, `err_detail` 7) or a number outside
+`PDA_NOTE..PDA_SIGN` (`PDE_RANGE`, `err_detail` 10) - is REFUSED, never
+silently dropped; so is an incremental save whose `pages_seg`/`pages_count`
+is not the source's own order (a move, or a page left out: `PDE_LIMIT`, 7).
+`pages_count` = 0 means "the source's order".
 
 #### 20.5.5 Annotation dictionaries and appearance recipes
 
@@ -1063,12 +1071,21 @@ never clipped. The appearance is a Form XObject with `/BBox [0 0 W H]`, no
 * **Line**: `/L`, `/LE [/None /OpenArrow]` (either end or both), the arrowhead
   an open V of two barbs 25 degrees off the line (a 16.16 unit vector), length
   8 pt + 2 widths.
-* **Review reply (13.4)**: `/Text /IRT n g R /RT /R /StateModel /Review /State
-  /Completed|/None /F 32`, no `/AP` (it is never displayed); the highest-version
-  rule of 13.5 counts it as 1.5.
+* **Review reply (13.4)**: `/Text /IRT n g R /StateModel /Review /State
+  /Completed|/None /F 32`, no `/AP` (it is never displayed). No `/RT`: it is a
+  PDF 1.6 key and `/R` is its default.
 
-A replaced source annotation is rewritten from the record alone: keys the
-record cannot express (`/Popup`, `/CreationDate`) are not carried over.
+*Versions (13.5), by key* (PDF 1.7 tables 164-182): `/NM` is PDF 1.4 and every
+annotation carries one (13.2), so ANY annotation makes the output 1.4 (as do
+`/LE`, FreeText `/Q` and the highlight's `/BM`); `/Subj` (area mark, drawn
+signature) and the reply's `/IRT /State /StateModel` make it 1.5.
+
+A replaced source annotation is rewritten from the record, but keeps the keys
+that are its identity and history rather than the editor's, verbatim out of the
+source object: `/NM`, `/T` (the current author is never written over another
+person's note), `/Popup` and `/CreationDate` (200 bytes of them at most; one
+that does not fit falls back to the generated `/NM` / the current `/T`, or is
+dropped). Other keys the record cannot express are not carried over.
 
 #### 20.5.6 FreeText layout and the TEMPORARY width tables
 
@@ -1100,14 +1117,23 @@ syntax only (never deeper than 16, never past the buffer); an object longer than
 3,072 bytes is refused `PDE_LIMIT`. Before the rename the writer re-reads the
 temp file: the tail must be `startxref N %%EOF` with `N` the offset it wrote
 `xref` at, and the bytes at `N` must spell `xref` (`PDE_TRUNC` / `PDE_XREF`
-otherwise, temp deleted). Verifying through PDENG itself (14.2 step 4) is wave 2.
+otherwise, temp deleted); when the last cluster holds under 190 bytes the read
+starts a cluster earlier, because the trailer can straddle the boundary (it
+refused about one file length in sixty until verify-wrt's fix). The catalog is
+revised only when its own `/Version` is lower than the output needs: PDENG's
+TRAILER `version` is the HEADER's, so a `/1.6` catalog over a 1.3 header is left
+alone, never lowered. Verifying through PDENG itself (14.2 step 4) is wave 2.
 
 #### 20.5.8 PDENG verbs used
 
 `TRAILER` (size, root, info, id0, startxref, version), `FINGERPRINT` (nonce),
-`PAGEINFO` (page index -> object, generation), `RAW_COPY` (an object's bytes
-into a static buffer in the module's DS; asked twice - the second call into an
-8-byte slack so an over-long object is detected, not truncated). `DICT_GET` is
+`PAGEINFO` (page index -> object, generation), `RAW_COPY` (an object's bytes,
+from its `n g obj` through `endobj`, into a static buffer in the module's DS;
+asked twice - the second call into an 8-byte slack so an over-long object is
+detected, not truncated). `pdxb_rawcopy.done` is IN/OUT: PDENG advances it, so
+the second call sets it to the bytes received rather than adding them again
+(adding answered `PDE_RANGE` on every page patch against the real engine; the
+host stub now advances it the same way). `DICT_GET` is
 not used: `/Annots`, `/NM` and `/Version` are never inherited, and the patcher
 needs the raw text anyway.
 
@@ -1124,8 +1150,9 @@ the close, a verify read), at most ~1.5 KiB of generated text (point loops run
 `PDE_EXISTS` with `state` = `PDW_ST_CONFIRM` (0x0100) and the temp file waits;
 the primary asks, then calls again with `state` = `PDW_ST_REPLACE` (0x0200) -
 the target is deleted and the temp renamed (14.3: a failure after the delete
-leaves the complete file as `PDSAVE.$$$`, `err_detail` = 1) - or calls
-`PDV_WRT_ABORT`, which deletes the temp file. Every other failure deletes the
+leaves the complete file as `PDSAVE.$$$`, `err_detail` = 1; a failure of the
+DELETE itself leaves the target untouched and is an ordinary failure, temp
+deleted) - or calls `PDV_WRT_ABORT`, which deletes the temp file. Every other failure deletes the
 temp file before answering. Disk full / write protected / short write map to
 `PDE_DISKFULL` / `PDE_WPROT` / `PDE_IO`. Success: `state` = `PDW_ST_DONE`.
 
@@ -1139,32 +1166,65 @@ buffer a slice.
 
 #### 20.5.10 The date and the author
 
-`/M` is written only when the primary has set `pdw_date` (`"D:YYYYMMDDHHmmSS"`)
-and `/T` only when `pdw_author` is set. Both are plain module globals in wave 1
-(the harness sets them); how the primary supplies them across the door is a
-`PROGRESS ASK`.
+`/M` is written only when `pdxb_save.date` is set (`"D:YYYYMMDDHHmmSS"`) and
+`/T` only when `pdxb_save.author` is (D9); the writer copies both into its own
+`pdw_date`/`pdw_author` at the start of a job. The source an incremental save
+copies is `pdxb_save.source`, an 8.3 name in the CURRENT directory, as the target
+and `PDSAVE.$$$` are (READ_SEQ and WRITE_SEQ take nothing else).
 
 #### 20.5.11 Sizes and limits
 
-PDWRT.MOD measures image 27,342 + bss 9,030 = 35.5 KiB (target 40, cap 48);
-the widest C frame is 28 bytes. Limits: 256 records, 1,024 text bytes, 8,000
-points an annotation, 1,024 pages, one source object patched <= 3,072 bytes,
-objects per save = table capacity (20.5.2).
+PDWRT.MOD measures image 27,952 + bss 9,258 = 37,210 bytes, 36.3 KiB (target
+40, cap 48; verify-wrt's fixes cost 642 bytes net of the ~490 that skipping
+pdmath's unused PARSE group saved); the widest C frame is 28 bytes.
+Limits: 256 records, 1,024 text bytes, 8,000 points an annotation, 1,024 pages,
+one source object patched <= 3,072 bytes, objects per save = table capacity
+(20.5.2), a cluster of at most 32 sectors (16 KiB; `os88_disk_cluster_sectors`
+above 32 would wrap the 16-bit byte count and is refused `PDE_NOMEM`, a volume
+that does not answer `PDE_IO`).
 
-#### 20.5.12 What remains for wave 2, and the open asks
+#### 20.5.12 What remains for wave 2
 
-Not done: `PDV_WRT_SAVE` against the REAL PDENG (the harness uses a stub with a
-real classic-xref reader); `PDE_CHANGED` (14.4: comparing PDENG's fingerprint
-with the open-time one needs the primary to hold it); PDENG-side verification of
-the output (14.2 step 4); page operations and the new `/Pages` tree (13.7:
-`0x8000|n` pages and `PDA_PAGEOP` are refused `PDE_LIMIT` in an incremental
-save); `PDV_WRT_EXTRACT` and graph copy (13.8); xref-stream sources
-(`PDE_XREFSTM` is PDENG's refusal); a resumable FreeText line loop (one
-annotation's text is not split across slices); `/Popup` and other source keys
-on a replaced annotation. Asks: `pdxb_save` needs the source's name (module
-global `pdw_source` meanwhile) and `pdxb_save`/`pdxb_init` a date and author;
-the edit-store layout and the point conventions of 20.5.4 want to be pinned in
-13.1; a `PDC_*` palette; `wbuf_kb` 12.
+The asks of wave 1 are answered (D9: `pdxb_save.source/date/author`, the edit
+store pinned in 13.1.1, `PDC_*`, `wbuf_kb` 12). `make pdwrt-real` runs
+`hosttest/pdw_real.c`: PDWRT's incremental save through `pdw_verb` against
+PDENG's own host build, twice in a chain, each output re-opened by PDENG (it
+SKIPs until `pdeng.c` is on the branch; verify-wrt ran it green against
+`pagedesk/eng` 965a179db). Not done:
+
+1. **The target, run.** PDWRT.MOD has been assembled, never executed: the door,
+   `_pdw_engcall`, the READ_SEQ/WRITE_SEQ/rename/delete thunks and every 16-bit
+   product are covered by review and the host build only (whose `int` is 32
+   bits). The first emulator boot that saves is the first test of them.
+2. **One folder.** Source, target and `PDSAVE.$$$` are 8.3 names in the CURRENT
+   directory (READ_SEQ and WRITE_SEQ take nothing else). A Save As into another
+   folder needs the primary to copy across folders (or the module to hop the
+   current directory between the source read and the write), which is not built.
+3. **14.4 `PDE_CHANGED`**: the primary holds the open-time fingerprint and the
+   writer compares it with `FINGERPRINT` at `job_begin`.
+4. **14.2 step 4 through PDENG**: re-reading the trailer and three new objects
+   needs a second open document in PDENG (or a re-open after the rename);
+   `pdw_real.c` does the re-open on the host.
+5. **The slice budget, measured.** A slice makes at most one transfer of the
+   WRITER's, but `an_prep`/`pg_patch` also call PAGEINFO and two RAW_COPYs, which
+   may each read through PDENG's cache; one 1,024-byte FreeText's lines are not
+   split across slices (at most ~9 KB, two or three of the writer's own
+   transfers); a held WRITE_SEQ is committed at every `gfx_unlock`, so between
+   slices the token goes cold and the next append pays a lookup and a walk. A
+   MartyPC row must time a save of a sample with a note on a 360 KB disk.
+6. **Page operations, Extract, graph copy** (13.7, 13.8; refused today), and
+   xref-stream sources (PDENG's `PDE_XREFSTM`).
+7. **The shell's half**: `struct pdw_newpage` (10 bytes, PDV_WRT_NEWDOC's page
+   list) lives in the private `pdw.h` and belongs in `pdabi.h`; PDENG answers
+   `PDE_BUSY` with `CF` = 1 and PDWRT with `CF` = 0, so the primary must test
+   `AX` = `PDE_BUSY` first, whatever CF says; after a Save As over the source's
+   own name (REPLACE) PDENG's open file is gone and the document must be
+   re-opened; the edit store must not change between a job's slices.
+8. **Fidelity**: a replaced annotation keeps `/NM /T /Popup /CreationDate`
+   only (20.5.5); a reply to a SOURCE note is written with generation 0;
+   FreeText's `/DA` font name has no AcroForm `/DR` behind it (every reader
+   tested uses the `/AP`); widths are still the TEMPORARY `pdwwid.h` (PDRES's
+   tables are on `feat/pagedesk` now, 20.4.3).
 
 ### 20.6 The package and its interface (`shell`)
 

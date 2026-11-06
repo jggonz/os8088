@@ -28,6 +28,7 @@ static pdw g_tn, g_tmax;         /* object table fill / capacity             */
 static pdw g_created;            /* the temp file exists                     */
 static pdw g_io;                 /* disk transfers made (a slice ends after one, 15.2) */
 static pdw g_crcleft, g_crc;     /* running CRC over the first bytes (ID)    */
+static pdw g_wantkb;             /* the KB a refused buffer would have needed */
 static char g_tmp[14];           /* the temp file's name                     */
 static char g_ln[PDW_MAXLN + 8]; /* the line under construction              */
 static pdw g_lnn;
@@ -249,9 +250,11 @@ static pdw pw_setup(pdw wseg, pdw wkb)
     if (wkb > 63) wkb = 63;
     g_wseg = wseg; g_wkb = wkb;
     g_clu = pdw_io_clu();
+    if (!g_clu) return PDE_IO;                   /* the volume did not answer */
     if (g_clu < 512) g_clu = 512;
     cap = PDW_OUTMIN;
     if ((pdw)(2 * g_clu) > cap) cap = (pdw)(2 * g_clu);
+    g_wantkb = (pdw)(cap / 1024 + 2);            /* the region + a table of 128 */
     if (g_clu > 16384) return PDE_NOMEM;
     if ((pdw)(cap / 1024 + 1) >= wkb) return PDE_NOMEM;
     g_outcap = cap;

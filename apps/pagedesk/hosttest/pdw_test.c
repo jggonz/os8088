@@ -46,6 +46,7 @@ static int hexv(int c) { return c <= '9' ? c - '0' : (c | 32) - 'a' + 10; }
 static void eng_load(const char *path)
 {
     FILE *f = fopen(path, "rb"); long x, prev; int first = 1; char *p;
+    if (!f) { printf("FAIL stub: cannot open %s (an earlier save failed)\n", path); fflush(stdout); exit(4); }
     free(E_buf);
     memset(E_have, 0, sizeof E_have);
     fseek(f, 0, SEEK_END); E_len = ftell(f); fseek(f, 0, SEEK_SET);
@@ -78,9 +79,9 @@ static void eng_load(const char *path)
         { char *q = strstr(p, "/Prev"), *e = strstr(p, "startxref"); prev = (q && q < e) ? atol(q + 5) : -1; }
         if (prev < 0) first = -1;
     }
-    /* /Version in the catalog */
-    { char *c = (char *)E_buf + E_off[E_root], *e = strstr(c, "endobj"), *v = strstr(c, "/Version");
-      if (v && v < e) E_ver = 10u + (unsigned)(v[10] - '0'); }
+    /* the version is the HEADER's alone, as PDENG's TRAILER answers it
+     * (pdeverb.c v_trailer: doc_ver from the header) - the catalog's /Version
+     * is the writer's own business (cat_patch) */
 }
 static int obj_len(unsigned n)
 {
@@ -124,7 +125,10 @@ pdw pdw_engcall(pdw verb, pdw bx, pdw cx, pdw dx)
         len = obj_len(rc.objnum); done = ((long)rc.done.hi << 16) | rc.done.lo;
         take = len - done; if (take < 0) take = 0; if (take > rc.dmax) take = rc.dmax;
         memcpy(pd_host_mem + (((unsigned long)rc.dseg << 4) + rc.doff), E_buf + E_off[rc.objnum] + done, (size_t)take);
-        rc.got = (pdw)take; pd_fcopy_out(&rc, g_xb, 0, sizeof rc); return 0; }
+        if (done > len) { pdw_engcf = 1; return PDE_RANGE; }       /* as PDENG's v_raw_copy */
+        rc.got = (pdw)take; done += take;                           /* done is in/out (pdabi.h) */
+        rc.done.lo = (pdw)(done & 0xFFFF); rc.done.hi = (pdw)(done >> 16);
+        pd_fcopy_out(&rc, g_xb, 0, sizeof rc); return 0; }
     }
     pdw_engcf = 1; return PDE_RANGE;
 }
@@ -188,6 +192,7 @@ static void init_module(pdw wkb)
 {
     struct pdxb_init in; memset(&in, 0, sizeof in);
     in.xb_seg = SEG_XB; in.wbuf_seg = SEG_WBUF; in.wbuf_kb = wkb;
+    in.eng_off = 0; in.eng_seg = 0xE000;        /* the stub ignores it; 0 would be "no PDENG" (D2) */
     pd_fcopy_out(&in, SEG_XB, 0, sizeof in);
     CHECK(pdw_verb(PDV_WRT_INIT, SEG_XB, 0, 0) == PDE_OK, "init");
 }
@@ -285,6 +290,7 @@ static unsigned char *slurp(const char *p, long *n)
 
 /* ---- the hand-written source ---------------------------------------------- */
 static long SRC_FILLER;                 /* bytes of filler stream before the xref (0 = none) */
+static int  SRC_CATVER;                 /* 1 = the catalog already says /Version /1.6 */
 static void build_source(const char *p)
 {
     static const char *objs[] = {
@@ -297,7 +303,7 @@ static void build_source(const char *p)
         "<< /Producer (hand written) >>",
         NULL,
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-        "<< /Type /Annot /Subtype /Text /Rect [100 600 120 618] /Contents (Existing note) /P 3 0 R /F 4 >>",
+        "<< /Type /Annot /Subtype /Text /Rect [100 600 120 618] /Contents (Existing note) /P 3 0 R /F 4 /T (Alice \\(QA\\)) /CreationDate (D:20200101000000) >>",
         "[ 11 0 R 12 0 R ]",
         "<< /Type /Annot /Subtype /Text /Rect [100 500 120 518] /Contents (to be deleted) /P 4 0 R /F 4 >>",
         "<< /Type /Annot /Subtype /Square /Rect [200 200 300 260] /Contents (keeper) /P 4 0 R /F 4 /C [1 0 0] >>" };
@@ -308,6 +314,7 @@ static void build_source(const char *p)
         off[i] = ftell(f);
         fprintf(f, "%d 0 obj\n", i);
         if (i == 7) fprintf(f, "<< /Length %d >>\nstream\n%s\nendstream\n", (int)strlen(content), content);
+        else if (i == 1 && SRC_CATVER) fprintf(f, "<< /Type /Catalog /Version /1.6 /Pages 2 0 R >>\n");
         else fprintf(f, "%s\n", objs[i]);
         fputs("endobj\n", f);
     }
@@ -384,7 +391,10 @@ static int t_inc(const char *src, const char *dst, int round)
     CHECK(g_maxio <= 1, "%s: %d transfers in one slice (15.2: one)", dst, g_maxio);
     CHECK(!exists(PDW_TEMPNAME), "%s: no temp left", dst);
     for (i = 0; i < 1 && b; i++) CHECK(b[n0] == '\n', "new line after the source");
-    free(a); free(b);
+    free(b);
+    {   long n2; unsigned char *c = slurp(src, &n2);           /* the SOURCE FILE, after */
+        CHECK(c && n2 == n0 && !memcmp(a, c, (size_t)n0), "%s: the source file is unchanged by the save", src); free(c); }
+    free(a);
     report(dst);
     printf("  %s: %ld -> %ld bytes, %d slices, onum[0]=%u\n", dst, n0, n1, g_slices, g_onum[0]);
     return 0;
@@ -453,7 +463,7 @@ static void t_failures(void)
     pdw_host_clu = 8192; init_module(8);
     es_reset(); sv_setup(path("tiny.pdf"), PDSV_FRESH); stage_pages();
     r = call_job(PDV_WRT_NEWDOC);
-    CHECK(r == PDE_NOMEM && SV.err_detail > 8, "small buffer refused (%u, wants %u KB)", r, SV.err_detail);
+    CHECK(r == PDE_NOMEM && SV.err_detail == 18, "small buffer refused (%u, wants %u KB: 16 of output + 2)", r, SV.err_detail);
     pdw_host_clu = 512;
 }
 
@@ -476,6 +486,140 @@ static void t_limits(void)
     printf("  250 notes in an 8 KB buffer -> %u (table %u)\n", r, g_tmax);
     CHECK(r == PDE_LIMIT || r == PDE_OK, "8 KB buffer answers cleanly");
     CHECK(!exists(PDW_TEMPNAME), "limit: no temp left");
+}
+
+
+/* ============ verify-wrt: one check per defect the review found ============ */
+static pdw fresh_one(const char *name, pdw clu, int textlen, int extra)
+{
+    static char t[1100]; struct pd_edit *e; struct pdw_newpage np;
+    pdw_host_clu = clu; init_module(12);
+    es_reset();
+    memset(t, 'x', sizeof t);
+    e = es_new(PDA_NOTE, 0, 100, 100, 0, 0); es_text(e, t, textlen); es_add(e);
+    if (extra == 1) { e = es_new(PDA_PAGEOP, 0, 0, 0, 0, 0); es_add(e); }
+    if (extra == 2) { e = es_new(12, 0, 0, 0, 0, 0); es_add(e); }
+    if (extra == 3) {   /* the parent note is deleted: its reply must go too */
+        e = es_new(PDA_NOTE, 0, 200, 200, 0, 0); e->flags = PDEF_DELETED; es_text(e, "gone", -1); es_add(e);
+        e = es_new(PDA_NOTE, 0, 200, 200, 0, 0); e->irt = 2; e->state = PDS_COMPLETED; es_add(e);
+    }
+    if (extra == 4) { e = es_new(PDA_NOTE, 0, 200, 200, 0, 0); e->irt = 9; e->flags = PDEF_IRTSRC; es_add(e); }
+    sv_setup(name, PDSV_FRESH);
+    memset(&np, 0, sizeof np); np.w = PT(612); np.h = PT(792);
+    pd_fcopy_out(&np, SEG_PGS, 0, sizeof np); SV.pages_seg = SEG_PGS; SV.pages_count = 1;
+    return call_job(PDV_WRT_NEWDOC);
+}
+static int file_has(const char *f, const char *needle)
+{
+    long n; unsigned char *b = slurp(f, &n); int hit = 0; long i, k = (long)strlen(needle);
+    for (i = 0; b && i + k <= n; i++) if (!memcmp(b + i, needle, (size_t)k)) hit++;
+    free(b); return hit;
+}
+/* the newest revision of object `num` in f, as text (static) */
+static const char *newest_obj(const char *f, unsigned num)
+{
+    static char o[4096]; long n, i, at = -1; unsigned char *b = slurp(f, &n); char hd[16]; int k;
+    k = snprintf(hd, sizeof hd, "\n%u 0 obj", num);
+    for (i = 0; b && i + k <= n; i++) if (!memcmp(b + i, hd, (size_t)k)) at = i;
+    o[0] = 0;
+    if (at >= 0) { long e = at; while (e < n && memcmp(b + e, "endobj", 6)) e++; snprintf(o, sizeof o, "%.*s", (int)(e - at), (char *)b + at); }
+    free(b); return o;
+}
+static void t_review(void)
+{
+    pdw r, clu; int L, bad = 0, firstL = -1; pdw firstr = 0, firstc = 0;
+    /* 1. the self-check read the LAST CLUSTER only: a file whose length leaves
+     * fewer than ~30 bytes in it was refused PDE_TRUNC/PDE_XREF. Every length
+     * residue at 512 and 1024. */
+    for (clu = 512; clu <= 1024; clu *= 2)
+        for (L = 0; L <= 1024; L++) {
+            r = fresh_one("tail.pdf", clu, L, 0);
+            if (r != PDE_OK) { if (!bad) { firstL = L; firstr = r; firstc = clu; } bad++; }
+            remove("tail.pdf");
+        }
+    CHECK(bad == 0, "self-check: %d of 2050 file lengths refused (first: text %d at cluster %u -> %u)", bad, firstL, firstc, firstr);
+    printf("  tails: 2050 fresh saves, every length residue at 512 and 1024: %d refused\n", bad);
+    /* 2. a page operation, or an unknown kind, is refused - never dropped */
+    r = fresh_one("pgop.pdf", 512, 4, 1);
+    CHECK(r == PDE_LIMIT && SV.err_detail == 7 && !exists("pgop.pdf") && !exists(PDW_TEMPNAME), "PDA_PAGEOP refused (%u, detail %u)", r, SV.err_detail);
+    r = fresh_one("kind.pdf", 512, 4, 2);
+    CHECK(r == PDE_RANGE && SV.err_detail == 10 && !exists("kind.pdf"), "unknown kind refused (%u, detail %u)", r, SV.err_detail);
+    /* 3. an orphaned review reply is dropped, not pointed at a random object */
+    r = fresh_one("orph.pdf", 512, 4, 3);
+    CHECK(r == PDE_OK && file_has("orph.pdf", "/IRT") == 0 && file_has("orph.pdf", "/Subtype /Text") == 1, "orphan reply dropped (%u, IRT x%d)", r, file_has("orph.pdf", "/IRT"));
+    report("orph.pdf");
+    /* 4. PDEF_IRTSRC in a fresh document names nothing: refused */
+    r = fresh_one("irts.pdf", 512, 4, 4);
+    CHECK(r == PDE_RANGE && SV.err_detail == 8, "fresh + PDEF_IRTSRC refused (%u, detail %u)", r, SV.err_detail);
+    /* 5. an incremental reply to an UNEDITED source note (PDEF_IRTSRC) */
+    {   struct pd_edit *e;
+        pdw_host_clu = 512; init_module(12); eng_load("src.pdf"); strcpy(T_SRC, "src.pdf"); es_reset();
+        e = es_new(PDA_NOTE, 0, 100, 600, 0, 0); e->irt = 9; e->flags = PDEF_IRTSRC; e->state = PDS_COMPLETED; es_add(e);
+        sv_setup("irtsrc.pdf", PDSV_INCREMENTAL);
+        r = call_job(PDV_WRT_SAVE);
+        CHECK(r == PDE_OK && file_has("irtsrc.pdf", "/IRT 9 0 R") == 1, "reply to source note 9 (%u)", r);
+        report("irtsrc.pdf");
+    }
+    /* 6. a page order the incremental save cannot write is refused */
+    {   struct pd_edit *e; pdw ord[3]; int c;
+        static const pdw cases[3][3] = { {0, 1, 2}, {0, 2, 1}, {0, 1, 0xFFFF} };
+        for (c = 0; c < 3; c++) {
+            pdw_host_clu = 512; init_module(12); eng_load("src.pdf"); strcpy(T_SRC, "src.pdf"); es_reset();
+            e = es_new(PDA_NOTE, 0, 300, 300, 0, 0); es_text(e, "order", -1); es_add(e);
+            sv_setup("order.pdf", PDSV_INCREMENTAL);
+            ord[0] = cases[c][0]; ord[1] = cases[c][1]; ord[2] = cases[c][2];
+            pd_fcopy_out(ord, SEG_PGS, 0, sizeof ord); SV.pages_seg = SEG_PGS; SV.pages_count = cases[c][2] == 0xFFFF ? 2 : 3;
+            r = call_job(PDV_WRT_SAVE);
+            if (c == 0) CHECK(r == PDE_OK && file_has("order.pdf", "/Version /1.4") == 1,
+                              "identity page order saves, and a lone note (/NM) raises a 1.3 source to /1.4 (%u)", r);
+            else CHECK(r == PDE_LIMIT && SV.err_detail == 7 && !exists(PDW_TEMPNAME), "page order case %d refused (%u, detail %u)", c, r, SV.err_detail);
+            remove("order.pdf");
+        }
+    }
+    /* 7. the catalog's own /Version is never lowered (PDENG reports the header) */
+    SRC_CATVER = 1; build_source("srcv.pdf"); SRC_CATVER = 0; report("srcv.pdf");
+    T_CLU = 512; t_inc("srcv.pdf", "incv.pdf", 1);
+    CHECK(file_has("incv.pdf", "\n1 0 obj") == 1 && file_has("incv.pdf", "/Version /1.6") == 1, "a /1.6 catalog is left alone (%d catalogs)", file_has("incv.pdf", "\n1 0 obj"));
+    /* 8. a replaced annotation keeps its author, creation date and /NM */
+    {   const char *o = newest_obj("inc1.pdf", 9);
+        CHECK(strstr(o, "/T (Alice \\(QA\\))") && strstr(o, "/CreationDate (D:20200101000000)") && !strstr(o, "/T (Reviewer)"),
+              "replaced note 9 keeps /T and /CreationDate: %.300s", o); }
+    CHECK(file_has("inc1.pdf", "/RT ") == 0, "no /RT (PDF 1.6) in a file that claims 1.5");
+    /* 11. every pt16 value prints as exactly v/16 (pb_pt is the writer's only real) */
+    {   long v; int badpt = 0; char want[32], got[32]; int k;
+        for (v = -32768; v <= 32767; v++) {
+            g_lnn = 0; pb_pt((pd_pt)v);
+            memcpy(got, g_ln, g_lnn); got[g_lnn] = 0; g_lnn = 0;
+            snprintf(want, sizeof want, "%.4f", v / 16.0);
+            k = (int)strlen(want); while (want[k - 1] == '0') want[--k] = 0;
+            if (want[k - 1] == '.') want[--k] = 0;
+            if (strcmp(want, got)) { if (!badpt) printf("  pb_pt(%ld) = %s, want %s\n", v, got, want); badpt++; }
+        }
+        CHECK(badpt == 0, "pb_pt: %d of 65536 values misprinted", badpt);
+    }
+    /* 9. an INIT while a job runs deletes its temp file (20.5.1) */
+    {   int k;
+        pdw_host_clu = 512; init_module(12); scene_all_kinds(); sv_setup("ini.pdf", PDSV_FRESH); stage_pages();
+        pd_fcopy_out(&SV, SEG_XB, 0, sizeof SV);
+        for (k = 0; k < 200 && !exists(PDW_TEMPNAME); k++) { r = pdw_verb(PDV_WRT_NEWDOC, SEG_XB, 0, 0); pd_fcopy_in(SEG_XB, 0, &SV, sizeof SV); }
+        CHECK(exists(PDW_TEMPNAME), "the job made its temp file");
+        init_module(12);
+        CHECK(!exists(PDW_TEMPNAME), "INIT mid-job deleted the temp file");
+    }
+    /* 10. REPLACE whose delete fails: an ordinary failure - temp deleted, target intact, err_detail != 1 */
+    {   long n; unsigned char *b;
+        write_file("ro.pdf", "OLD", 3);
+        pdw_host_clu = 512; init_module(12); scene_all_kinds(); sv_setup("ro.pdf", PDSV_FRESH); stage_pages();
+        r = call_job(PDV_WRT_NEWDOC);
+        CHECK(r == PDE_EXISTS && SV.state == PDW_ST_CONFIRM, "ro: confirm (%u)", r);
+        pdw_host_delfail = 1; SV.state = PDW_ST_REPLACE;
+        r = call_job(PDV_WRT_NEWDOC);
+        pdw_host_delfail = 0;
+        b = slurp("ro.pdf", &n);
+        CHECK(r == PDE_WPROT && SV.err_detail != 1 && !exists(PDW_TEMPNAME) && n == 3 && b && !memcmp(b, "OLD", 3),
+              "failed delete: %u detail %u temp %d target %ld", r, SV.err_detail, exists(PDW_TEMPNAME), n);
+        free(b); remove("ro.pdf");
+    }
 }
 
 int main(void)
@@ -502,6 +646,7 @@ int main(void)
     SRC_FILLER = 0; T_CLU = 512;
     t_failures();
     t_limits();
+    t_review();
     printf("%s: %d failed check(s)\n", g_fail ? "FAIL" : "PASS", g_fail);
     return g_fail;
 }

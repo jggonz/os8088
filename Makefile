@@ -20254,6 +20254,24 @@ $(PDW_OUT)/.host.stamp: apps/pagedesk/hosttest/pdw_test.c apps/pagedesk/hosttest
 	touch $@
 pdwrt-host: $(PDW_OUT)/.host.stamp
 pdwrt: $(BUILD)/PDWRT.MOD pdwrt-host
+# PDWRT against the REAL PDENG (hosttest/pdw_real.c): on demand, and a SKIP
+# until pdeng.c is on the branch. PDW_ENG is the directory holding pdeng.c and
+# hosttest/pde_host.c; PDW_REAL_PDF the source it saves over twice.
+PDW_ENG      ?= apps/pagedesk
+PDW_REAL_PDF ?= apps/pagedesk/samples/MARKUP.PDF
+.PHONY: pdwrt-real
+pdwrt-real: | $(BUILD)
+ifneq ($(wildcard $(PDW_ENG)/pdeng.c),)
+	mkdir -p $(BUILD)/pdw-real
+	$(CC) -std=gnu99 -O1 -w -DPD_HOST -I $(PDW_ENG) -c $(PDW_ENG)/pdeng.c -o $(BUILD)/pdw-real/pdeng.o
+	$(CC) -std=gnu99 -O1 -w -DPD_HOST -I $(PDW_ENG) -c $(PDW_ENG)/hosttest/pde_host.c -o $(BUILD)/pdw-real/pde_host.o
+	$(CC) -std=gnu99 -O1 -Wall -DPD_HOST -I apps/pagedesk -o $(BUILD)/pdw-real/pdw_real apps/pagedesk/hosttest/pdw_real.c \
+		apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c $(BUILD)/pdw-real/pdeng.o $(BUILD)/pdw-real/pde_host.o
+	cd $(BUILD)/pdw-real && ./pdw_real $(abspath $(PDW_REAL_PDF))
+	qpdf --check $(BUILD)/pdw-real/R1.PDF && qpdf --check $(BUILD)/pdw-real/R2.PDF
+else
+	@echo "pdwrt-real: SKIP - PDENG ($(PDW_ENG)/pdeng.c) is not on this branch yet"
+endif
 # ---- end PageDesk: wrt ------------------------------------------------------
 
 # ---- PageDesk: math ----
