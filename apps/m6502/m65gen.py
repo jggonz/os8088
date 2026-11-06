@@ -714,10 +714,13 @@ class Gen:
               "    mov si, dx", "    xor dl, dl")
             self.next_ct(cyc)
         elif mn == "JSR":
-            # ONE WORD onto the stack while S is not at the page's bottom
+            # ONE WORD onto the stack while S is not at the page's bottom:
+            # S >= 2, DI >= $0102. At S = 1 the word fits ($0100-$0101) but
+            # `sub di, 2` leaves $00FF, outside the $0100+S form, and the
+            # next push lands in ZERO PAGE - so S = 1 takes the byte path
             slow, j = self.lab(), self.lab()
             L("    mov bx, [%ssi]" % F, "    inc si",
-              "    cmp di, 0x0101", "    jb %s" % slow,
+              "    cmp di, 0x0102", "    jb %s" % slow,
               "    mov [di-1], si", "    sub di, 2",
               "%s: mov si, bx" % j)
             self.next_ct(cyc)

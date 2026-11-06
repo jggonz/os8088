@@ -1828,6 +1828,46 @@ row_intstk:
     mov ax, [_a2_m+AM_S]
     cmp al, 0xFD                    ; ...and put all three bytes back
     jne .bad
+    ; --- JSR AT S = 1: the return address fills $0101 and $0100 and S
+    ; WRAPS to $FF, so the PHA after it writes $01FF. The fast cores move
+    ; the address as one word, and once took S = 1 down that path: DI came
+    ; out $00FF, outside the $0100+S form, and the PHA wrote ZERO PAGE $FF
+    push es
+    mov es, [_a2_m+AM_RAMSEG]
+    mov word [es:0x0800], 0x1020    ; JSR $0810
+    mov byte [es:0x0802], 0x08
+    mov byte [es:0x0810], 0x48      ; PHA
+    mov byte [es:0x0811], 0x02      ; JAM
+    mov byte [es:0x00FF], 0x5A
+    mov byte [es:0x01FF], 0
+    pop es
+    mov word [_a2_m+AM_PC], 0x0800
+    mov word [_a2_m+AM_S], 0x0001
+    mov word [_a2_m+AM_A], 0x0077
+    mov word [_a2_m+AM_P], 0x0024
+    call rebias
+    PUSHI 200
+    call _a2_run
+    add sp, 2
+    mov bx, 0x0101
+    call ram_rd
+    cmp al, 0x08                    ; the return address, high...
+    jne .bad
+    mov bx, 0x0100
+    call ram_rd
+    cmp al, 0x02                    ; ...and low ($0802, JSR's last byte)
+    jne .bad
+    mov bx, 0x01FF
+    call ram_rd
+    cmp al, 0x77                    ; PHA after the wrap
+    jne .bad
+    mov bx, 0x00FF
+    call ram_rd
+    cmp al, 0x5A                    ; ...and zero page untouched
+    jne .bad
+    mov ax, [_a2_m+AM_S]
+    cmp al, 0xFE
+    jne .bad
     xor ax, ax
     jmp short .out
 .bad:
