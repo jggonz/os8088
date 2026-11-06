@@ -50,7 +50,7 @@ static int eng_open(const char *file)
         pd_fcopy_out(&op, SEG_XB, 0, sizeof op);
         r = pde_verb(PDV_ENG_OPEN, 0, 0, 0);
         pd_fcopy_in(SEG_XB, 0, &op, sizeof op);
-        if (pde_fail && r == PDE_BUSY) { if (++n > 5000) return 999; continue; }
+        if (!pde_fail && r == PDE_BUSY) { if (++n > 5000) return 999; continue; }
         return pde_fail ? (int)r : 0;
     }
 }

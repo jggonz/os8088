@@ -24,12 +24,7 @@
 #define PDW_PENUP    ((pd_pt)(-32767 - 1))
 
 /* a fresh document's page (the PDV_WRT_NEWDOC description, 20.5.7) */
-struct pdw_newpage {
-    pdw w, h;            /* MediaBox [0 0 w h], pt16                        */
-    pdw rotate;          /* 0 / 90 / 180 / 270                              */
-    pdw cseg, clen;      /* content bytes at cseg:0, clen = 0 for a blank   */
-};
-typedef char pdw_sz_newpage[sizeof(struct pdw_newpage) == 10 ? 1 : -1];
+#define pdw_newpage pd_newpage   /* pdabi.h's, D11 */
 
 /* PDV_WRT_SAVE / NEWDOC progress words in pdxb_save.state (20.5.9) */
 #define PDW_ST_START    0
