@@ -210,7 +210,7 @@ static void ovl_d64_attach(const char *name, unsigned size_lo, unsigned size_hi)
      * whole, the image being above 1MB */
     gave = ovl_d64_xattach(name, trks);
     if (!gave && c64_fjit != 0 && c64x_caps() >= 192) {
-        c64_jit_drop();
+        ovl_jit_drop();
         gave = ovl_d64_xattach(name, trks);
         ovl_jit_init();                     /* back - whole if the image went
                                              * up, and the conventional way
@@ -236,7 +236,7 @@ static void ovl_d64_attach(const char *name, unsigned size_lo, unsigned size_hi)
         seg = os88_mem_claim_p(paras);
         if (seg != 0 || c64_fjit == 0)
             break;
-        c64_jit_drop();                     /* (the recompiler is optional) */
+        ovl_jit_drop();                     /* (the recompiler is optional) */
         gave = 1;
     }
     if (seg == 0) {

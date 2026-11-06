@@ -1077,6 +1077,7 @@ unsigned os88_file_read_seg(const char *name, unsigned seg, unsigned cap)
  * accurate core's stub - the one every case below drives - running alone */
 void c64f_core(unsigned dstseg, unsigned partseg) { (void)dstseg; (void)partseg; }
 unsigned c64f_codesel(unsigned seg) { return seg; }
+unsigned c64f_claimcode(void) { return os88_mem_claim(64); }
 void c64j_off(unsigned core) { (void)core; }
 void c64j_setup(unsigned dst, unsigned part, unsigned len, unsigned core, int force, int kb) { (void)dst; (void)part; (void)len; (void)core; (void)force; (void)kb; }
 
@@ -4731,6 +4732,19 @@ int main(int argc, char **argv)
         ovl_d64_trap();
         if (c64_m.pc != C64_D64_TRAP + 2 || c64_m.a != 0x60)
             fail("a LOAD from device 9 did not run the LDA #$60 the trap replaced");
+        if (h_xms_kb == 2048) {
+            /* ...AND THE RECOMPILER GIVES WAY FOR ANOTHER ATTACH: the disk
+             * stays on drive 8, its slots in a claim of their own (11.5.1).
+             * Verified to fail with ovl_jit_drop releasing the disk: the
+             * drive is empty before the new image is known to fit */
+            ovl_jit_drop();
+            if (c64_fjit != 0 || c64_d64_seg == 0 || c64_d64_inj || !c64_d64_xms)
+                fail("the recompiler giving way took drive 8's disk with it");
+            c64_wr(0xBA, 8);
+            H_LOADCALL(nm, 5, 1);
+            if (c64_m.pc != C64_D64_LOADING || c64_rd(0xC000 + 252) != 0xE2)
+                fail("after the recompiler gave way the disk's file did not load");
+        }
         ovl_d64_release();
         if (h_xms_live != 0 || c64_d64_seg != 0)
             fail("the D64 given back left its extended block or its claim");
