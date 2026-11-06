@@ -289,11 +289,10 @@ def load_strikes():
                     S[(fam, st, size)] = parse_strike(p)
     return S
 
-def build_bank(sizes):
+def collect_strikes(sizes):
+    """-> (records, blobs): records (fam, style, size, asc, desc, flags, blob index)"""
     S = load_strikes()
-    body = bytearray()
-    recs = []
-    cache = {}
+    blobs, recs, cache = [], [], {}
     for fam in FAMILIES:
         for size in sizes:
             for st in STYLES:
@@ -306,20 +305,12 @@ def build_bank(sizes):
                     flags = 1
                 meta, gl = S[key]
                 if key not in cache:
-                    data = pack_strike(meta, gl)
-                    cache[key] = (len(body), len(data), int(meta["ascent"]), int(meta["descent"]))
-                    body += data
-                    while len(body) % 2:
-                        body += b"\0"
-                off, ln, asc, desc = cache[key]
-                recs.append((fam, STYLEBITS[st], size, asc, desc, flags, off, ln))
-    n = len(recs)
-    base = 8 + 16 * n
-    hdr = b"PDFB" + struct.pack("<HH", 1, n)
-    for fam, st, size, asc, desc, flags, off, ln in recs:
-        hdr += struct.pack("<BBBBBBBBII", FAMILIES.index(fam), st, size, asc, desc,
-                           FIRST, LAST, flags, base + off, ln)
-    return hdr + bytes(body)
+                    cache[key] = len(blobs)
+                    d = pack_strike(meta, gl)
+                    blobs.append(d + b"\0" * (len(d) % 2))
+                recs.append((fam, STYLEBITS[st], size, int(meta["ascent"]), int(meta["descent"]),
+                             flags, cache[key]))
+    return recs, blobs
 
 def build_widths():
     faces = {}
@@ -341,33 +332,74 @@ def build_widths():
             out += struct.pack("<%dH" % len(v), *v)
     return out        # 8 + 12*224*2; face index = family*4 + style, style 0..3 as bank bytes
 
-K_FONT_CORE, K_FONT_MORE, K_WIDTHS, K_ICONS = 1, 2, 3, 4
-def build_res(art=True):
-    parts = [(K_FONT_CORE, build_bank(CORE_SIZES)),
-             (K_FONT_MORE, build_bank([s for s in SIZES if s not in CORE_SIZES])),
-             (K_WIDTHS, build_widths())]
-    if art:
-        import os88pdart
-        parts.append((K_ICONS, os88pdart.build_atlas()))
-    n = len(parts)
-    off = 8 + 12 * n
-    off = (off + 15) & ~15
-    ent = b""
-    body = b""
-    for kind, data in parts:
-        ent += struct.pack("<HHII", kind, 0, off + len(body), len(data))
-        body += data + b"\0" * (-len(data) % 16)
-    head = b"PDRS" + struct.pack("<HH", 1, n) + ent
-    head += b"\0" * (off - len(head))
-    return head + body, parts
+def build_names():
+    """Adobe glyph name -> Windows-1252 code, sorted bytewise: {u8 len, name, u8 code}*, 0."""
+    m = {}
+    for i, n in enumerate(GLYPHNAMES):
+        code = FIRST + i
+        if n in ("space", "hyphen", "bullet"):
+            code = {"space": 32, "hyphen": 45, "bullet": 149}[n]
+        m.setdefault(n, code)
+    out = b""
+    for n in sorted(m, key=lambda x: x.encode()):
+        out += bytes([len(n)]) + n.encode() + bytes([m[n]])
+    return out + b"\0"
+
+K_FONTS, K_WIDTHS, K_ICONS, K_NAMES, K_STRIKES, K_INDEX = 1, 3, 4, 5, 6, 7
+def build_res(core_only=False, art=True):
+    """Layout (D3): directory | PDFB bank (header, strike records, PDFX, widths, names)
+    | strike data | icons.  The first INDEX bytes are what the primary loads."""
+    recs, blobs = collect_strikes(CORE_SIZES if core_only else SIZES)
+    n = len(recs)
+    nent = 6
+    D = (8 + 12 * nent + 15) & ~15                    # the bank starts paragraph aligned
+    wid = build_widths()
+    names = build_names()
+    widths_off = 16 * n + 8 + 8                       # from the bank start
+    names_off = widths_off + len(wid)
+    bank_len = names_off + len(names)
+    index_len = D + bank_len
+    data_off = (index_len + 15) & ~15
+    offs, o = [], data_off
+    for d in blobs:
+        offs.append(o)
+        o += len(d)
+    strikes = b"".join(blobs)
+    icons_off = (o + 15) & ~15
+    icons = build_atlas_safe(art)
+    bank = b"PDFB" + struct.pack("<HH", 1, n)
+    for fam, st, size, asc, desc, flags, bi in recs:
+        bank += struct.pack("<BBBBBBBBII", FAMILIES.index(fam), st, size, asc, desc, FIRST, LAST,
+                            flags, offs[bi], len(blobs[bi]))
+    bank += b"PDFX" + struct.pack("<HH", widths_off, names_off)
+    bank += wid + names
+    assert len(bank) == bank_len
+    ent = [(K_FONTS, D, bank_len), (K_WIDTHS, D + widths_off, len(wid)),
+           (K_NAMES, D + names_off, len(names)), (K_STRIKES, data_off, len(strikes)),
+           (K_ICONS, icons_off, len(icons)), (K_INDEX, 0, index_len)]
+    assert len(ent) == nent
+    head = b"PDRS" + struct.pack("<HH", 1, nent)
+    for k, off, ln in ent:
+        head += struct.pack("<HHII", k, 0, off, ln)
+    head += b"\0" * (D - len(head))
+    blob = head + bank + b"\0" * (data_off - index_len) + strikes
+    blob += b"\0" * (icons_off - len(blob)) + icons
+    parts = {"index": index_len, "dir": D, "strike records": 16 * n, "widths": len(wid),
+             "names": len(names), "strike data": len(strikes), "icons": len(icons)}
+    return blob, parts
+
+def build_atlas_safe(art):
+    if not art:
+        return b""
+    import os88pdart
+    return os88pdart.build_atlas()
 
 def cmd_build(a):
-    blob, parts = build_res()
+    blob, parts = build_res(core_only=a.core)
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     open(a.out, "wb").write(blob)
-    names = {1: "fonts core", 2: "fonts more", 3: "widths", 4: "icons"}
-    print("PDRES.BIN %d bytes: " % len(blob) + ", ".join(
-        "%s %d" % (names[k], len(d)) for k, d in parts))
+    print("PDRES.BIN %d bytes%s: " % (len(blob), " (core sizes only)" if a.core else "")
+          + ", ".join("%s %d" % kv for kv in parts.items()))
 
 # ---------------------------------------------------------------- proof/check
 def read_res(blob):
@@ -376,16 +408,18 @@ def read_res(blob):
     ents = {}
     for i in range(n):
         k, f, o, l = struct.unpack_from("<HHII", blob, 8 + 12 * i)
-        ents[k] = blob[o:o + l]
+        ents[k] = (o, l)
     return ents
 
-def bank_strikes(bank):
-    assert bank[:4] == b"PDFB"
-    n = struct.unpack_from("<H", bank, 6)[0]
+def bank_strikes(blob):
+    ents = read_res(blob)
+    D = ents[1][0]
+    assert blob[D:D + 4] == b"PDFB"
+    n = struct.unpack_from("<H", blob, D + 6)[0]
     for i in range(n):
-        fam, st, size, asc, desc, f, l, flags, off, ln = struct.unpack_from("<BBBBBBBBII", bank, 8 + 16 * i)
+        fam, st, size, asc, desc, f, l, flags, off, ln = struct.unpack_from("<BBBBBBBBII", blob, D + 8 + 16 * i)
         yield dict(fam=fam, st=st, size=size, asc=asc, desc=desc, first=f, last=l,
-                   flags=flags, data=bank[off:off + ln])
+                   flags=flags, data=blob[off:off + ln])
 
 def blit_text(strike, text, widths_scale=None):
     """-> list of rows (strings) drawing text with the bitmap's own advance."""
@@ -411,56 +445,58 @@ def blit_text(strike, text, widths_scale=None):
 def cmd_proof(a):
     from PIL import Image
     blob = open(a.res, "rb").read()
-    ents = read_res(blob)
     out = a.out
     os.makedirs(out, exist_ok=True)
-    sample = "Hamburgefonts 0123 The quick brown fox, jumps over (lazy) dogs. Àéüß"
-    sample = "Hamburgefonts 0123 The quick brown fox jumps over lazy dogs. Ééü"
-    for kind, name in ((1, "core"), (2, "more")):
+    sample = "Hamburgefonts 0123 The quick brown fox jumps over lazy dogs. \u00c9\u00e9\u00fc"
+    for name, pick in (("core", lambda s: s["size"] in CORE_SIZES), ("more", lambda s: s["size"] not in CORE_SIZES)):
         rows = []
-        for s in bank_strikes(ents[kind]):
-            if s["flags"] & 1:
+        for s in bank_strikes(blob):
+            if s["flags"] & 1 or not pick(s):
                 continue
-            c = blit_text(s, sample)
-            rows.append((c, "%s st%d %d" % (FAMILIES[s["fam"]], s["st"], s["size"])))
-        W = max(len(r[0][0]) for r in rows)
-        H = sum(len(r[0]) + 3 for r in rows)
+            rows.append(blit_text(s, sample))
+        W = max(len(r[0]) for r in rows)
+        H = sum(len(r) + 3 for r in rows)
         img = Image.new("L", (W, H), 255)
         px = img.load()
         y0 = 0
-        for c, _ in rows:
+        for c in rows:
             for y, row in enumerate(c):
                 for x, v in enumerate(row):
                     if v:
                         px[x, y0 + y] = 0
             y0 += len(c) + 3
-        img = img.convert("1")
-        img = img.resize((W * 2, H * 2), Image.NEAREST)
+        img = img.convert("1").resize((W * 2, H * 2), Image.NEAREST)
         img.save(os.path.join(out, "strikes-%s.png" % name))
         print("strikes-%s.png %dx%d" % (name, W, H))
-    try:
-        import os88pdart
-        os88pdart.proof(out)
-    except ImportError:
-        pass
+    import os88pdart
+    os88pdart.proof(out)
 
 def cmd_check(a):
     blob = open(a.res, "rb").read()
     ents = read_res(blob)
-    assert set(ents) >= {1, 2, 3}, ents.keys()
-    for k in (1, 2):
-        for s in bank_strikes(ents[k]):
-            assert s["first"] == 32 and s["last"] == 255
-            assert len(s["data"]) >= 4 * 224
-    assert len(ents[3]) == 8 + 12 * 224 * 2
-    print("PDRES.BIN ok:", {k: len(v) for k, v in ents.items()})
+    D = ents[1][0]
+    assert D % 16 == 0
+    n = struct.unpack_from("<H", blob, D + 6)[0]
+    assert blob[D + 8 + 16 * n:D + 12 + 16 * n] == b"PDFX"
+    wo, no = struct.unpack_from("<HH", blob, D + 12 + 16 * n)
+    assert D + wo == ents[3][0] and D + no == ents[5][0]
+    assert ents[3][1] == 12 * 224 * 2 + 8
+    assert ents[7] == (0, ents[7][1]) and ents[7][1] <= ents[6][0]
+    for s in bank_strikes(blob):
+        assert s["first"] == 32 and s["last"] == 255 and len(s["data"]) >= 4 * 224
+    nm = blob[ents[5][0]:ents[5][0] + ents[5][1]]
+    i, prev = 0, b""
+    while nm[i]:
+        l = nm[i]; name = nm[i + 1:i + 1 + l]; assert name > prev; prev = name; i += l + 2
+    assert i + 1 == len(nm)
+    print("PDRES.BIN ok: index %d bytes (limit 8192)%s" % (ents[7][1], "" if ents[7][1] <= 8192 else "  OVER 8 KiB"))
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("fetch").set_defaults(f=cmd_fetch)
     sub.add_parser("draw").set_defaults(f=cmd_draw)
-    b = sub.add_parser("build"); b.add_argument("-o", "--out", default=os.path.join(ROOT, "build", "PDRES.BIN")); b.set_defaults(f=cmd_build)
+    b = sub.add_parser("build"); b.add_argument("-o", "--out", default=os.path.join(ROOT, "build", "PDRES.BIN")); b.add_argument("--core", action="store_true", help="only sizes 8,10,12 (360KB disk)"); b.set_defaults(f=cmd_build)
     pr = sub.add_parser("proof"); pr.add_argument("--res", default=os.path.join(ROOT, "build", "PDRES.BIN"))
     pr.add_argument("-o", "--out", default=os.path.expanduser("~/Repos/pagedesk-logs/shots/fonts")); pr.set_defaults(f=cmd_proof)
     c = sub.add_parser("check"); c.add_argument("--res", default=os.path.join(ROOT, "build", "PDRES.BIN")); c.set_defaults(f=cmd_check)

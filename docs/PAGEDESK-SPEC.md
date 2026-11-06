@@ -782,32 +782,53 @@ build` packs the committed sources under `apps/pagedesk/fonts/` and
 by `make` (`make pdfonts` also validates). Nothing is looked up at run time. Part
 offsets are 16-byte aligned. All little-endian.
 
-#### 20.4.1 The directory
+#### 20.4.1 Layout and the directory (D3)
+
+PDRES is not loaded whole: the primary reads only the INDEX, the first `index`
+bytes (directory, strike records, widths, names; 9,120 bytes on the full file -
+OVER the 8 KiB D3 target - and 7,776 on the core-only file), into one claim; the
+renderer reads each strike's bytes from the file on first use; the primary reads
+the icon atlas. All offsets in the directory, and the strike offsets in the
+records, are from PDRES's first byte (the file offset inside the part).
 
 ```
-+0  'PDRS'  magic
-+4  u16 version (1)
-+6  u16 entry count n
-+8  n x 12-byte entries: +0 u16 kind, +2 u16 flags (0), +4 u32 offset, +8 u32 length
+0                directory
+D (=80, para)    PDFB bank:  'PDFB' u16 1 u16 n, n x 16-byte strike records (11.2,
+                 strike offset/length in file-offset terms), then
+                 'PDFX' u16 widths_off u16 names_off  (offsets from D, the bank start),
+                 the widths (20.4.3), the glyph-name table (below)
+index end        (paragraph padded)
+data_off         strike data: every strike's glyph records + bitmaps (16-bit aligned)
+icons_off        icon atlas
 ```
 
-| kind | part | contents |
-|---|---|---|
-| 1 | `FONT_CORE` | a `PDFB` bank (11.2): sizes 8, 10, 12, all 12 face styles |
-| 2 | `FONT_MORE` | a `PDFB` bank: sizes 6, 7, 9, 14, 16, 20, 24 |
-| 3 | `WIDTHS` | the `PDWD` table (20.4.3) |
-| 4 | `ICONS` | the `PDIC` atlas (20.4.4) |
+The bank start D is a multiple of 16, so with the index in a claim,
+`bank_seg = claim_seg + D/16` and `widths_off`/`names_off` are offsets from it.
 
-Each bank is self-contained (its own strike records, offsets from the bank start). A
-size's four styles are always in the same bank. The renderer asks the directory for
-kind 1 first and 2 only when the nearest-size-at-or-below choice needs a size that is
-not in 1 (or when 1 alone is all that is present: a missing kind 2 is not an error,
-the largest core size at or below is used). Sizes: the 360KB disk carries the core
-bank and the widths/icons (about 75 KB); the full file is about 387 KB.
+Directory: `'PDRS'`, u16 version (1), u16 entry count n, n x 12-byte entries
+`u16 kind, u16 flags (0), u32 offset, u32 length`:
+
+| kind | part |
+|---|---|
+| 1 | the PDFB bank (header, records, PDFX, widths, names) |
+| 3 | the width tables (inside the bank) |
+| 4 | the icon atlas (20.4.5) |
+| 5 | the glyph-name table (inside the bank) |
+| 6 | the strike data region |
+| 7 | the INDEX: offset 0, length = what the primary loads |
+
+One bank: every record of every size and style. `os88pdfont.py build --core`
+writes the 360KB variant (`PDRES-core.BIN`, sizes 8, 10, 12 only: 77,268 bytes, index
+7,776); the full file is 388,356 bytes. A size is in the file or has no record, so the
+renderer's nearest-at-or-below rule needs no missing-bank case.
+
+The glyph-name table (rend's request, PAGEDESK-SPEC 20.3.4): Adobe glyph name to
+Windows-1252 code, `{u8 len, name bytes, u8 code}` repeated, sorted bytewise by
+name, ended by len 0 (1,720 bytes).
 
 #### 20.4.2 Strikes
 
-`PDFB` exactly as 11.2. Family 0/1/2 = sans/serif/mono (Liberation Sans/Serif/Mono
+`PDFB` as 11.2, with strike offsets from PDRES's first byte (20.4.1). Family 0/1/2 = sans/serif/mono (Liberation Sans/Serif/Mono
 2.1.5, OFL), style byte bit 0 bold, bit 1 italic. Per family and size there are four
 records (regular, bold, italic, bold italic). TRUE italic strikes exist at 14 and 16
 px only; at every other size the italic records carry flag bit 0 (`synthesise`) and
@@ -840,7 +861,7 @@ Adobe Core 14 AFMs (11.3) by name through the Windows-1252 glyph-name list in
 `os88pdfont.py`; every name must exist in every AFM or `draw` refuses. The notice
 `AFM-NOTICE.txt` travels with it.
 
-#### 20.4.4 The icon atlas
+#### 20.4.5 The icon atlas
 
 `PDIC`: `'PDIC'`, u16 version (1), u16 count n, then n x 20-byte entries:
 `name[12]` NUL padded, `u8 w, u8 h, u8 hot x, u8 hot y, u16 mono offset, u16 vga offset`
@@ -862,7 +883,7 @@ between `OS88_ICON16` and `OS88_ICON16_END`) and `$(BUILD)/pdart_docglyph.inc` (
 rows, between `OS88_DOCGLYPH8` and `OS88_DOCGLYPH8_END`). No generated artwork was
 used.
 
-#### 20.4.5 Licences and regeneration
+#### 20.4.6 Licences and regeneration
 
 `apps/pagedesk/fonts/LICENSES.txt` is the attribution file; `OFL-Liberation.txt`,
 `AUTHORS-Liberation.txt` and `AFM-NOTICE.txt` sit beside it. The strikes are

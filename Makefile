@@ -20225,6 +20225,8 @@ $(PD_RES_BIN): $(PD_RES_SRC)
 	@mkdir -p $(BUILD)
 	python3 tools/os88pdfont.py build -o $@
 	python3 tools/os88pdfont.py check --res $@
+	python3 tools/os88pdfont.py build --core -o $(BUILD)/PDRES-core.BIN
+	python3 tools/os88pdfont.py check --res $(BUILD)/PDRES-core.BIN
 	python3 tools/os88pdart.py build --inc-dir $(BUILD)
 
 .PHONY: pdfonts
