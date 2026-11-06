@@ -1517,6 +1517,14 @@ FAST = [
         "PD_MAXSUBSEC, a 3-revision chain where the newest wins, 256 "
         "annotations - 0.45 s of image generation kept out of the fast tier",
         needs=()),
+    Row("pdprep", "fast", py("tests/unit/t_pdprep.py"), 1.5,
+        "PAGEDESK-SPEC 20.14 / PD-22: tools/os88pdprep.py on generated "
+        "inputs - RunLength, dither, tokenizer, an objstm+Flate six-page PDF "
+        "prepared (raster of shading/alpha/poster pages, invisible text, Info "
+        "stamp, byte-reproducible), qpdf/os88pdfcheck/profile/PDENG "
+        "verification, refusals, decrypt, the input never overwritten, "
+        "negative control. SKIP without qpdf",
+        needs=()),
     Row("pdlay", "fast", py("tests/unit/t_pdlay.py"), 0.5,
         "PAGEDESK-SPEC 17.1 / 20.6.4: apps/pagedesk/pdulay.c - the layout "
         "the package compiles - built on the host and swept over every "
