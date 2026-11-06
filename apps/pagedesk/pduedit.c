@@ -37,6 +37,8 @@
 #define ED_TMAX   1024
 #define ED_PMAX   2000                  /* points in one record */
 #define ED_PENUP  (-32767 - 1)          /* PD_PENUP; SmallerC refuses the literal -32768 */
+/* the kinds with corner handles: Area 3, Text 4, Rect 7, Ellipse 8 */
+#define ED_SIZABLE(k) ((0x198 >> (k)) & 1)
 
 /* record byte offsets (struct pd_edit) the undo log swaps */
 #define EO_FLAGS   1
@@ -71,13 +73,13 @@ static pdw pdu_ed_idc;                  /* the /NM counter */
 static struct pd_edit ed_w, ed_v;       /* work records */
 static pd_px ed_px, ed_py;
 static struct os88_rect ed_sr;
-static struct os88_rect pdu_ed_dr;      /* the screen rect the marks union */
-static int pdu_ed_drv;                  /* ...and whether there is one */
+static pdw pdu_ed_genv;                 /* pdu_ed_gen() (D19) */
 
 /* undo (pduundo.c) -------------------------------------------------------- */
-static void ovl_ud_field(int i, int o, int l);
+static int ovl_ud_log(int i, int tag, int o, int l);
+#define UD_FIELD   1                    /* pduundo.c's UT_FIELD */
+#define ovl_ud_field(i, o, l) ovl_ud_log((i), UD_FIELD | ((l) << 4), (o), (l))
 static void ovl_ud_text(int i);
-static void ovl_ud_pts(int i);
 static void ovl_ud_create(void);
 static void ovl_ud_move(int i, int dx, int dy);
 static void ud_init(void);
@@ -85,6 +87,7 @@ static void ovl_ud_tr(int idx, int dx, int dy);
 static void pdu_undo_drop(void);
 static void ovl_pdu_ed_flush(void);
 static void ovl_pdu_ed_touch_i(int i);
+static int ovl_ud_trimok(int i);
 
 static unsigned ed_seg(void) { return pdu_dcseg(PDU_DC_EDITS); }
 
@@ -112,8 +115,8 @@ void pdu_ed_init(void)
     pdu_ed_tt = ED_TEXT0;
     pdu_ed_pt = ED_END;
     pdu_ed_idc = 0;
-    pdu_ed_drv = 0;
     pdu_ed_err = 0;
+    pdu_ed_genv++;                      /* a new store: every reader refreshes */
     ud_init();
 }
 
@@ -126,41 +129,36 @@ int pdu_ed_get(int i, struct pd_edit *e)
 }
 
 /* ---- the screen rectangle of a page rect, and the marks ------------------ */
-static void ovl_ed_scr(const struct pd_rect *r, int pad, struct os88_rect *o)
+/* o = the box with corners (a, b) and (c, d), in any order, grown by pad */
+static void ovl_ed_box(struct os88_rect *o, int a, int b, int c, int d, int pad)
 {
-    int k;
-    o->x1 = 32000; o->y1 = 32000; o->x2 = -32000; o->y2 = -32000;
-    for (k = 0; k < 2; k++) {        /* opposite corners stay opposite under any R */
-        pdm_view_fwd(&ed_px, &ed_py, &pdu_view, k ? r->x1 : r->x0, k ? r->y1 : r->y0);
-        if (ed_px < o->x1) o->x1 = ed_px;
-        if (ed_px > o->x2) o->x2 = ed_px;
-        if (ed_py < o->y1) o->y1 = ed_py;
-        if (ed_py > o->y2) o->y2 = ed_py;
-    }
-    o->x1 -= pad; o->y1 -= pad; o->x2 += pad; o->y2 += pad;
+    o->x1 = (a < c ? a : c) - pad;
+    o->x2 = (a < c ? c : a) + pad;
+    o->y1 = (b < d ? b : d) - pad;
+    o->y2 = (b < d ? d : b) + pad;
 }
 
-/* union the record's screen rect (if it is on the glass) into the owed one */
+static int ed_qx, ed_qy;
+static void ovl_ed_scr(const struct pd_rect *r, int pad, struct os88_rect *o)
+{
+    /* opposite corners stay opposite under any R */
+    pdm_view_fwd(&ed_px, &ed_py, &pdu_view, r->x0, r->y0);
+    ed_qx = ed_px;
+    ed_qy = ed_py;
+    pdm_view_fwd(&ed_px, &ed_py, &pdu_view, r->x1, r->y1);
+    ovl_ed_box(o, ed_qx, ed_qy, ed_px, ed_py, pad);
+}
+
+/* owe the renderer the record's screen rect, cut to the canvas, if it is on
+ * the glass. pdu_render_want keeps the union, and nothing renders before the
+ * next wake, so a command's marks still become ONE repaint of their union. */
 static void ovl_ed_mark(const struct pd_edit *w)
 {
     if (pdu_doc != D_OPEN || w->page != pdu_ed_pg())
         return;
     ovl_ed_scr(&w->rect, 6, &ed_sr);
-    if (ed_sr.x1 < pdu_L.canvas.x1) ed_sr.x1 = pdu_L.canvas.x1;
-    if (ed_sr.y1 < pdu_L.canvas.y1) ed_sr.y1 = pdu_L.canvas.y1;
-    if (ed_sr.x2 > pdu_L.canvas.x2) ed_sr.x2 = pdu_L.canvas.x2;
-    if (ed_sr.y2 > pdu_L.canvas.y2) ed_sr.y2 = pdu_L.canvas.y2;
-    if (ed_sr.x1 > ed_sr.x2 || ed_sr.y1 > ed_sr.y2)
-        return;
-    if (!pdu_ed_drv) {
-        os88_memcpy(&pdu_ed_dr, &ed_sr, sizeof(pdu_ed_dr));
-        pdu_ed_drv = 1;
-        return;
-    }
-    if (ed_sr.x1 < pdu_ed_dr.x1) pdu_ed_dr.x1 = ed_sr.x1;
-    if (ed_sr.y1 < pdu_ed_dr.y1) pdu_ed_dr.y1 = ed_sr.y1;
-    if (ed_sr.x2 > pdu_ed_dr.x2) pdu_ed_dr.x2 = ed_sr.x2;
-    if (ed_sr.y2 > pdu_ed_dr.y2) pdu_ed_dr.y2 = ed_sr.y2;
+    if (pdu_isect(&ed_sr, &pdu_L.canvas, &ed_sr))
+        pdu_render_want(&ed_sr);
 }
 
 static void ovl_pdu_ed_touch_i(int i)
@@ -173,18 +171,6 @@ static void ovl_pdu_ed_touch_i(int i)
 static int ovl_ed_room(unsigned tbytes, unsigned pbytes)
 {
     return pdu_ed_tt + tbytes + pbytes <= pdu_ed_pt;
-}
-
-/* bytes [a, a+n) of two near buffers equal? */
-static int ovl_ed_same(const void *a, const void *b, unsigned n)
-{
-    const char *p, *q;
-    p = (const char *)a;
-    q = (const char *)b;
-    while (n--)
-        if (*p++ != *q++)
-            return 0;
-    return 1;
 }
 
 /* bbox of a point list (PENUP-separated), into r */
@@ -258,7 +244,7 @@ int pdu_ed_new(struct pd_edit *e, const char *text, unsigned tlen,
 int pdu_ed_set(int i, const struct pd_edit *e)
 {
     unsigned char *a, *b;
-    int fl0, fl;
+    int fl0, fl, k, o, l, j;
     if (ovl_ed_rd(i, &ed_w))
         return -1;
     pdu_undo_begin(UL_NONE);
@@ -267,18 +253,17 @@ int pdu_ed_set(int i, const struct pd_edit *e)
     a = (unsigned char *)&ed_w;
     b = (unsigned char *)e;
     fl = (fl0 & ~PDEF_IRTSRC) | (e->flags & PDEF_IRTSRC) | PDEF_DIRTY;
-    if (!ovl_ed_same(a + EO_RECT, b + EO_RECT, 8)) {
-        ovl_ud_field(i, EO_RECT, 8);
-        os88_memcpy(a + EO_RECT, b + EO_RECT, 8);
-        fl |= PDEF_MOVED;
-    }
-    if (!ovl_ed_same(a + EO_COLOUR, b + EO_COLOUR, 4)) {
-        ovl_ud_field(i, EO_COLOUR, 4);
-        os88_memcpy(a + EO_COLOUR, b + EO_COLOUR, 4);
-    }
-    if (!ovl_ed_same(a + EO_IRT, b + EO_IRT, 4)) {
-        ovl_ud_field(i, EO_IRT, 4);
-        os88_memcpy(a + EO_IRT, b + EO_IRT, 4);
+    for (k = 0; k < 3; k++) {           /* rect 8; colour..align 4; irt, state 4 */
+        o = k == 0 ? EO_RECT : k == 1 ? EO_COLOUR : EO_IRT;
+        l = k ? 4 : 8;
+        for (j = 0; j < l && a[o + j] == b[o + j]; j++)
+            ;
+        if (j < l) {                    /* the group differs: log, then copy */
+            ovl_ud_field(i, o, l);
+            os88_memcpy(a + o, b + o, l);
+            if (!k)
+                fl |= PDEF_MOVED;
+        }
     }
     if (fl != fl0) {
         ovl_ud_field(i, EO_FLAGS, 1);
@@ -293,8 +278,9 @@ int pdu_ed_set(int i, const struct pd_edit *e)
 /* replace a record's text. A new block at the heap's top unless it is empty;
  * the old bytes stay where they are (undo restores the offset). Typing does
  * not come through here: ovl_ed_tx extends or trims the tail in place. */
-static int ovl_ed_text_set(int i, const char *text, unsigned tlen)
+int pdu_ed_text(int i, const char *text, unsigned tlen)
 {
+    pdu_ed_err = 0;
     if (ovl_ed_rd(i, &ed_w))
         return -1;
     if (tlen > ED_TMAX) {
@@ -319,12 +305,6 @@ static int ovl_ed_text_set(int i, const char *text, unsigned tlen)
     ovl_ed_mark(&ed_w);
     pdu_undo_end();
     return 0;
-}
-
-int pdu_ed_text(int i, const char *text, unsigned tlen)
-{
-    pdu_ed_err = 0;
-    return ovl_ed_text_set(i, text, tlen);
 }
 
 unsigned pdu_ed_text_get(int i, char *dst, unsigned cap)
@@ -358,7 +338,7 @@ int pdu_ed_pts(int i, const pd_pt *pts, unsigned npts)
     }
     pdu_undo_begin(UL_NONE);
     ovl_ed_mark(&ed_w);
-    ovl_ud_pts(i);
+    ovl_ud_log(i, 3, EO_PTS, 4);         /* UT_PTS */
     if (pb)
         pd_fcopy_out(pts, ed_seg(), pdu_ed_pt - pb, pb);
     pdu_ed_pt -= pb;
@@ -384,23 +364,17 @@ unsigned pdu_ed_pts_get(int i, pd_pt *dst, unsigned cap)
     return n;
 }
 
-/* a flags change, logged: set `on`, clear `off` */
-static int ovl_ed_flags(int i, int on, int off)
+int pdu_ed_del(int i)
 {
     if (ovl_ed_rd(i, &ed_w))
         return -1;
     pdu_undo_begin(UL_NONE);
     ovl_ud_field(i, EO_FLAGS, 1);
     ovl_ed_mark(&ed_w);
-    ed_w.flags = (ed_w.flags | on | PDEF_DIRTY) & ~off;
+    ed_w.flags |= PDEF_DELETED | PDEF_DIRTY;
     ovl_ed_wr(i, &ed_w);
     pdu_undo_end();
     return 0;
-}
-
-int pdu_ed_del(int i)
-{
-    return ovl_ed_flags(i, PDEF_DELETED, 0);
 }
 
 /* copy-on-edit of a source annotation (13.1). `e` arrives with what the
@@ -424,17 +398,11 @@ int pdu_ed_copy_src(unsigned obj, unsigned gen, struct pd_edit *e)
 }
 
 /* live = not deleted; a record's page is a word at +2 */
-static int ovl_ed_live_on(int i, unsigned page)
-{
-    if (pd_fpeekb(ed_seg(), (unsigned)i * ED_REC + 1) & PDEF_DELETED)
-        return 0;
-    return pd_fpeekw(ed_seg(), (unsigned)i * ED_REC + 2) == page;
-}
-
 int pdu_ed_next(int i, unsigned page)
 {
     for (i++; i >= 0 && i < (int)pdu_ed_n; i++)
-        if (ovl_ed_live_on(i, page))
+        if (!(pd_fpeekb(ed_seg(), (unsigned)i * ED_REC + 1) & PDEF_DELETED)
+            && pd_fpeekw(ed_seg(), (unsigned)i * ED_REC + 2) == page)
             return i;
     return -1;
 }
@@ -460,17 +428,6 @@ int pdu_ed_move(int i, int dx, int dy)
     ovl_ed_mark(&ed_w);
     pdu_undo_end();
     return 0;
-}
-
-/* how many records are live (the Notes panel's count) */
-static int ovl_pdu_ed_live(void)
-{
-    int i, n;
-    n = 0;
-    for (i = 0; i < (int)pdu_ed_n; i++)
-        if (!(pd_fpeekb(ed_seg(), (unsigned)i * ED_REC + 1) & PDEF_DELETED))
-            n++;
-    return n;
 }
 
 /* nav (20.10) owns the selection; until it lands there is none. nav defines
@@ -502,7 +459,6 @@ int pdu_sel_text(char *dst, unsigned cap) { return 0; }
  *     A scroll and a page change take it off before they move anything.
  * ==========================================================================*/
 char pdu_tbuf[1025];
-static pdw pdu_ed_genv;
 unsigned pdu_ed_gen(void) { return pdu_ed_genv; }
 static int pdu_ed_sel = -1;             /* the selected record, -1 none */
 static int pdu_tx = -1;                 /* the record being typed into */
@@ -522,69 +478,50 @@ void pdu_ed_sel_fix(void)
 }
 
 /* one clipped XOR fill, remembered so it can be replayed */
+static struct os88_rect ed_xr;
 static void ovl_ed_xf(int x1, int y1, int x2, int y2)
 {
-    struct os88_rect *c;
-    c = &pdu_L.canvas;
-    if (x1 < c->x1) x1 = c->x1;
-    if (y1 < c->y1) y1 = c->y1;
-    if (x2 > c->x2) x2 = c->x2;
-    if (y2 > c->y2) y2 = c->y2;
-    if (x1 > x2 || y1 > y2 || (ed_xrem && ed_xn >= 8))
+    ed_xr.x1 = x1;
+    ed_xr.y1 = y1;
+    ed_xr.x2 = x2;
+    ed_xr.y2 = y2;
+    if (!pdu_isect(&ed_xr, &pdu_L.canvas, &ed_xr) || (ed_xrem && ed_xn >= 8))
         return;
-    if (ed_xrem) {
-        ed_xl[ed_xn][0] = x1;
-        ed_xl[ed_xn][1] = y1;
-        ed_xl[ed_xn][2] = x2;
-        ed_xl[ed_xn][3] = y2;
-        ed_xn++;
-    }
-    os88_gfx_xor_fill(x1, y1, x2, y2);
+    if (ed_xrem)
+        os88_memcpy(ed_xl[ed_xn++], &ed_xr, sizeof(ed_xr));
+    os88_gfx_xor_fill(ed_xr.x1, ed_xr.y1, ed_xr.x2, ed_xr.y2);
 }
 
-/* the frame of a screen rect, and a 5x5 handle on each corner (a handle
- * only when it is wholly on the canvas, so on and off agree) */
+/* the frame of a screen rect and, for a shape that resizes, a 4x4 handle
+ * just OUTSIDE each corner - touching it, never over the frame, so no pixel
+ * is flipped twice (a handle centred on the corner came out notched) */
 static void ovl_ed_frame(struct os88_rect *r, int handles)
 {
-    struct os88_rect *c;
-    int x, y;
-    c = &pdu_L.canvas;
+    int k, x, y;
     ovl_ed_xf(r->x1, r->y1, r->x2, r->y1);
     ovl_ed_xf(r->x1, r->y2, r->x2, r->y2);
     ovl_ed_xf(r->x1, r->y1 + 1, r->x1, r->y2 - 1);
     ovl_ed_xf(r->x2, r->y1 + 1, r->x2, r->y2 - 1);
-    if (!handles)
-        return;
-    for (y = 0; y < 2; y++)
-        for (x = 0; x < 2; x++) {
-            int hx, hy;
-            hx = x ? r->x2 : r->x1;
-            hy = y ? r->y2 : r->y1;
-            if (hx - 2 >= c->x1 && hx + 2 <= c->x2 && hy - 2 >= c->y1
-                && hy + 2 <= c->y2)
-                ovl_ed_xf(hx - 2, hy - 2, hx + 2, hy + 2);
+    if (handles)
+        for (k = 0; k < 4; k++) {
+            x = (k & 1) ? r->x2 + 1 : r->x1 - 4;
+            y = (k & 2) ? r->y2 + 1 : r->y1 - 4;
+            ovl_ed_xf(x, y, x + 3, y + 3);
         }
 }
 
-/* the screen rect of the selection (inflated so it sits OUTSIDE the shape) */
-static int ovl_ed_selrect(struct os88_rect *o)
-{
-    if (pdu_ed_sel < 0 || pdu_doc != D_OPEN
-        || ovl_ed_rd(pdu_ed_sel, &ed_v) || ed_v.page != pdu_ed_pg()
-        || (ed_v.flags & PDEF_DELETED))
-        return 0;
-    ovl_ed_scr(&ed_v.rect, 3, o);
-    return 1;
-}
-
+/* the selection's outline: its screen rect inflated so it sits OUTSIDE the
+ * shape, when it is on the page shown and nothing covers the canvas */
 void pdu_ed_xon_l(void)
 {
-    if (ed_xon || pdu_pop != P_NONE || pdu_about || !ovl_ed_selrect(&ed_sr))
+    if (ed_xon || pdu_pop != P_NONE || pdu_about || pdu_ed_sel < 0
+        || pdu_doc != D_OPEN || ovl_ed_rd(pdu_ed_sel, &ed_v)
+        || ed_v.page != pdu_ed_pg() || (ed_v.flags & PDEF_DELETED))
         return;
+    ovl_ed_scr(&ed_v.rect, 3, &ed_sr);
     ed_xn = 0;
     ed_xrem = 1;
-    ovl_ed_frame(&ed_sr, ed_v.kind == PDA_TEXT || ed_v.kind == PDA_RECT
-                     || ed_v.kind == PDA_ELLIPSE || ed_v.kind == PDA_AREA);
+    ovl_ed_frame(&ed_sr, ED_SIZABLE(ed_v.kind));
     ed_xon = 1;
 }
 
@@ -598,10 +535,20 @@ void pdu_ed_xoff_l(void)
     ed_xon = 0;
 }
 
-/* the same two, for a caller that does NOT hold the lock (the wake handler) */
-void pdu_ed_xoff(void)
+/* the same two, for a caller that does NOT hold the lock (the wake handler).
+ * A render of strip r takes the outline off only when one of its strips
+ * meets r: PDREND writes nothing outside r, so an outline elsewhere stays
+ * lit and its replay (8 XOR fills each way) is not spent on every repaint. */
+void pdu_ed_xoff(const struct os88_rect *r)
 {
+    int k;
     if (!ed_xon)
+        return;
+    for (k = 0; k < ed_xn; k++)
+        if (ed_xl[k][0] <= r->x2 && ed_xl[k][2] >= r->x1
+            && ed_xl[k][1] <= r->y2 && ed_xl[k][3] >= r->y1)
+            break;
+    if (k == ed_xn)
         return;
     os88_gfx_lock();
     if (os88_wm_clip_set(pdu_win) == 0)
@@ -638,8 +585,10 @@ void pdu_ed_canvas(void)
 void pdu_ed_canvas2(void)
 {
     if (pdu_ed_sel >= 0 && ovl_ed_rd(pdu_ed_sel, &ed_v) == 0
-        && ed_v.page != pdu_ed_pg())
+        && ed_v.page != pdu_ed_pg()) {
         pdu_ed_sel = -1;
+        pdu_ed_genv++;                  /* a selection change (D19) */
+    }
     if (pdu_tx >= 0 && ovl_ed_rd(pdu_tx, &ed_v) == 0
         && ed_v.page != pdu_ed_pg())
         pdu_tx_end();
@@ -670,6 +619,7 @@ void pdu_ed_gone(void)
     ed_xon = 0;
     pdu_ed_sel = -1;
     pdu_tx = -1;
+    pdu_ed_genv++;
 }
 
 /* ---- typing ---------------------------------------------------------------- */
@@ -690,6 +640,8 @@ static int ovl_ed_tx(int i, int ch)
     if (ch < 0) {
         ovl_ud_text(i);
         ed_w.text_len = len - 1;
+        if (ed_w.text_off + len == pdu_ed_tt && ovl_ud_trimok(i))
+            pdu_ed_tt--;                    /* a byte this run wrote: reuse it */
     } else if (ed_w.text_off + len == pdu_ed_tt && ovl_ed_room(1, 0)) {
         ovl_ud_text(i);                     /* the tail of the last block: in place */
         pd_fpokeb(ed_seg(), pdu_ed_tt, (pdb)ch);

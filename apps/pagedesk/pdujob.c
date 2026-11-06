@@ -345,7 +345,7 @@ static int pdu_render_begin(void)
     pdu_xrend.edits_count = pdu_ed_count();
     pdu_xrend.rflags = PDRF_ANNOTS | PDRF_EDITS;
     pdu_xrend.hide = 0;
-    pdu_ed_xoff();                                  /* edit: the outline off first */
+    pdu_ed_xoff(&pdu_rrun);                         /* edit: the outline off first */
     pd_fcopy_out(&pdu_xrend, pdu_xb, 0, sizeof(pdu_xrend));
     r = pdu_mcall(PDU_M_REND, PDV_REND_BEGIN, 0, 0, 0);
     if (pdu_mcf) {

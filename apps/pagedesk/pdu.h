@@ -227,7 +227,7 @@ void     pdu_ed_sel_fix(void);
 void     pdu_ed_xon_l(void);            /* the selection's outline: lock held */
 void     pdu_ed_xoff_l(void);
 void     pdu_ed_xon(void);              /* ...and for a caller without it */
-void     pdu_ed_xoff(void);
+void     pdu_ed_xoff(const struct os88_rect *r);   /* a render of r begins */
 void     pdu_ed_canvas(void);
 void     pdu_ed_xon_w(void);
 void     pdu_ed_canvas2(void);

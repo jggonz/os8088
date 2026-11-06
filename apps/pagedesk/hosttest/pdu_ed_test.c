@@ -54,6 +54,14 @@ static void pdu_menusync(void) { nui++; }
 static void pdu_ctl_repaint(int id) { }
 static void pdu_title_set(void) { }
 static void pdu_render_want(struct os88_rect *r) { lastrender = *r; nrender++; }
+static int pdu_isect(struct os88_rect *a, struct os88_rect *b, struct os88_rect *o)
+{   /* pdudraw.c's, verbatim in effect */
+    o->x1 = a->x1 > b->x1 ? a->x1 : b->x1;
+    o->y1 = a->y1 > b->y1 ? a->y1 : b->y1;
+    o->x2 = a->x2 < b->x2 ? a->x2 : b->x2;
+    o->y2 = a->y2 < b->y2 ? a->y2 : b->y2;
+    return o->x1 <= o->x2 && o->y1 <= o->y2;
+}
 static unsigned pdu_muldiv(unsigned a, unsigned b, unsigned c) { return (unsigned)((unsigned long long)a * b / c); }
 static void os88_gfx_lock(void) {}
 static void os88_gfx_unlock(void) {}
@@ -388,6 +396,29 @@ static void test_move(void)
     pdu_undo();
     pdu_undo();
     CHECK(pdu_ed_get(a, &r) == 0 && r.rect.x0 == 10, "two undos");
+
+    /* a move, a resize and a points change, then a move again, all ONE
+     * command: the second move must not fold into the first across them */
+    fresh();
+    mk(PDA_INK, 0, 10, 10, 60, 60);
+    P[0] = 10; P[1] = 10; P[2] = 60; P[3] = 60;
+    a = pdu_ed_new(&E, "", 0, P, 2);
+    keep(0);
+    pdu_undo_begin(UL_MOVE);
+    pdu_ed_move(a, 7, 3);
+    pdu_ed_get(a, &r);
+    r.rect.x1 += 40;
+    pdu_ed_set(a, &r);
+    pdu_ed_move(a, 2, 2);
+    P[0] = 100; P[1] = 100; P[2] = 200; P[3] = 200;
+    pdu_ed_pts(a, P, 2);
+    pdu_ed_move(a, -4, 9);
+    pdu_undo_end();
+    keep(1);
+    pdu_undo();
+    CHECK(same(0), "move/set/pts/move as one command: undo is exact");
+    pdu_redo();
+    CHECK(same(1), "...and redo is exact");
 }
 
 static void test_typing(void)
@@ -432,6 +463,27 @@ static void test_typing(void)
     CHECK(strcmp(t, "Hellp\n!") == 0 && same(1), "ONE undo takes all three letters (%s)", t);
     pdu_redo();
     CHECK(same(2), "redo");
+    /* typos cost the heap nothing: a backspace inside the run gives its byte
+     * back, a backspace into the OLD text does not (undo needs it) */
+    {
+        pdw t0;
+        int k;
+        pdu_tx_begin(a, 0);
+        pdu_tx_key('a');
+        t0 = pdu_ed_tt;
+        for (k = 0; k < 300; k++) { pdu_tx_key(8); pdu_tx_key('b' + k % 20); }
+        CHECK(pdu_ed_tt == t0, "300 typos in a run use no heap (%u -> %u)", t0, pdu_ed_tt);
+        pdu_tx_key(8); pdu_tx_key(8);       /* into "xyz": the old text */
+        pdu_tx_key('Q');
+        pdu_ed_text_get(a, t, sizeof(t));
+        CHECK(strcmp(t, "Hellp\n!xyQ") == 0, "backspace into the old text (%s)", t);
+        pdu_tx_end();
+        CHECK(pdu_undo() == 0 && same(2), "ONE undo takes the whole run back, old text intact");
+        CHECK(pdu_redo() == 0, "redo the run");
+        pdu_ed_text_get(a, t, sizeof(t));
+        CHECK(strcmp(t, "Hellp\n!xyQ") == 0, "redo restores the run (%s)", t);
+        pdu_undo();
+    }
     /* a save between keystrokes ends the coalescing */
     pdu_saved();
     pdu_tx_begin(a, 0);
@@ -626,12 +678,14 @@ static void test_pageop(void)
 static unsigned seed = 12345;
 static int rnd(int n) { seed = seed * 1103515245u + 12345u; return (int)((seed >> 16) % (unsigned)n); }
 
-static void do_random_command(void)
+static int rw_pin = -1;                 /* the record a multi-op command aims at */
+static int pick(int n) { return (rw_pin >= 0 && rw_pin < n && rnd(4)) ? rw_pin : rnd(n); }
+
+static void do_random_op(void)
 {
     struct pd_edit r;
     int n = pdu_ed_count(), k = rnd(10), a, i, j;
     char t[40];
-    pdu_undo_begin(UL_PROPS);
     switch (k) {
     case 0: case 1: case 2:
         mk(PDA_NOTE + rnd(9), rnd(2), rnd(500), rnd(500), 500 + rnd(500), 500 + rnd(500));
@@ -642,32 +696,48 @@ static void do_random_command(void)
         pdu_ed_new(&E, t, i, P, j);
         break;
     case 3:
-        if (n) { pdu_ed_get(a = rnd(n), &r); r.rect.x1 += rnd(50); r.colour = rnd(16); r.size = rnd(30); pdu_ed_set(a, &r); }
+        if (n) { pdu_ed_get(a = pick(n), &r); r.rect.x1 += rnd(50); r.colour = rnd(16); r.size = rnd(30); pdu_ed_set(a, &r); }
         break;
     case 4:
-        if (n) pdu_ed_move(rnd(n), rnd(40) - 20, rnd(40) - 20);
+        if (n) pdu_ed_move(pick(n), rnd(40) - 20, rnd(40) - 20);
         break;
     case 5:
-        if (n) pdu_ed_del(rnd(n));
+        if (n) pdu_ed_del(pick(n));
         break;
     case 6:
-        if (n) { for (i = 0; i < rnd(30); i++) t[i] = 'A' + rnd(26); pdu_ed_text(rnd(n), t, i); }
+        if (n) { for (i = 0; i < rnd(30); i++) t[i] = 'A' + rnd(26); pdu_ed_text(pick(n), t, i); }
         break;
     case 7:
-        if (n) { for (i = 0; i < 2 * (j = rnd(6)); i++) P[i] = rnd(3000); pdu_ed_pts(rnd(n), P, j); }
+        if (n) { for (i = 0; i < 2 * (j = rnd(6)); i++) P[i] = rnd(3000); pdu_ed_pts(pick(n), P, j); }
         break;
     case 8:
         if (n) {
-            a = rnd(n);
+            a = pick(n);
             pdu_tx_begin(a, 0);
             for (i = 0; i < 1 + rnd(5); i++) pdu_tx_key(i % 7 == 6 ? 8 : 'a' + rnd(26));
             pdu_tx_end();
         }
         break;
     case 9:
-        if (n) { pdu_ed_get(a = rnd(n), &r); r.irt = rnd(100); r.state = rnd(3); pdu_ed_set(a, &r); }
+        if (n) { pdu_ed_get(a = pick(n), &r); r.irt = rnd(100); r.state = rnd(3); pdu_ed_set(a, &r); }
         break;
     }
+}
+
+/* one user command: usually one call, but a third of them several calls in
+ * ONE bracket (a caller may do a move, a resize and a points change as one
+ * step - 20.8 allows any mix), aimed at one record half the time so the
+ * entries of one command interleave on it */
+static int rw_multi = 1;
+static void do_random_command(void)
+{
+    int k, ops;
+    pdu_undo_begin(UL_PROPS);
+    ops = (rw_multi && rnd(3) == 0) ? 2 + rnd(4) : 1;
+    rw_pin = (ops > 1 && pdu_ed_count()) ? rnd(pdu_ed_count()) : -1;
+    for (k = 0; k < ops; k++)
+        do_random_op();
+    rw_pin = -1;
     pdu_undo_end();
 }
 

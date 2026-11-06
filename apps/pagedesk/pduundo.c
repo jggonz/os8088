@@ -60,6 +60,7 @@ static pdw ud_sav;                      /* the save point */
 static int ud_savok;
 static int ud_tyrec;                    /* typing: the record... */
 static pdw ud_tycmd;                    /* ...and the command typed into */
+static pdw ud_txfl;                     /* ...and the text top when it began */
 static pdb ud_pg[UD_PGMAX];
 static pdb ud_tmp[8];
 static pdw ud_ei;                       /* the entry being applied */
@@ -145,73 +146,76 @@ static int ovl_ud_push(void)
     return 1;
 }
 
-/* an entry of the open command for (tag, o, idx), or -1; loads it */
+/* the open command's LAST entry for (tag, o, idx), loaded, 1; or -1. For a
+ * MOVE, -1 also when a rectangle or points entry of idx came after it: a
+ * move does not commute with those (undo walks backwards, so folding a later
+ * move into an earlier one across a resize undoes to the wrong place). */
 static int ovl_ud_find(int tag, int o, int idx)
 {
     pdw slot, k;
     if (!ud_open)
         return -1;
     slot = (ud_c0 + ud_cur - 1) & (UD_NCMD - 1);
-    for (k = 0; k < ud_ce[slot]; k++) {
+    for (k = ud_ce[slot]; k-- > 0;) {
         ovl_ud_ld(ud_cs[slot] + k);
-        if (ud_en.tag == tag && ud_en.o == o && ud_en.idx == idx) {
+        if (ud_en.idx != (pdw)idx)
+            continue;
+        if (ud_en.tag == tag && ud_en.o == o) {
             ud_ei = ud_cs[slot] + k;
             return 1;
         }
+        if (tag == UT_MOVE && (ud_en.tag == UT_PTS
+            || (ud_en.tag == (UT_FIELD | (8 << 4)) && ud_en.o == EO_RECT)))
+            return -1;
     }
     return -1;
 }
 
 /* ---- the loggers pduedit.c calls BEFORE it changes a thing --------------- */
-static void ovl_ud_field(int i, int o, int l)
+/* l bytes of record i at o (FIELD), or its text/points words (TEXT, PTS: 4
+ * bytes and, in w[2], the heap top) - unless the record was born in this
+ * command or the command already holds this entry's first old state.
+ * 1 = pushed. */
+static int ovl_ud_log(int i, int tag, int o, int l)
 {
-    if (i >= (int)ud_base)
-        return;
-    if (ovl_ud_find(UT_FIELD | (l << 4), o, i) > 0)
-        return;
-    ud_en.tag = UT_FIELD | (l << 4);
+    if (i >= (int)ud_base || ovl_ud_find(tag, o, i) > 0)
+        return 0;
+    ud_en.tag = tag;
     ud_en.o = o;
     ud_en.idx = i;
     pd_fcopy_in(pdu_dcseg(PDU_DC_EDITS), (unsigned)i * ED_REC + o, ud_en.w, l);
-    ovl_ud_push();
+    if (tag == UT_TEXT)
+        ud_en.w[2] = pdu_ed_tt;
+    if (tag == UT_PTS)
+        ud_en.w[2] = pdu_ed_pt;
+    return ovl_ud_push();
 }
+
 
 static void ovl_ud_text(int i)
 {
-    if (i >= (int)ud_base)
-        return;
     /* typing joins the command that typed last, if nothing came between */
     if (!ud_open && ud_olab == UL_TYPE && ud_tyrec == i
         && ud_tycmd == (pdw)(ud_c0 + ud_cur) && ud_cur == ud_n && ud_cur > 0)
         return;
-    if (ovl_ud_find(UT_TEXT, 0, i) > 0)
-        return;
-    ud_en.tag = UT_TEXT;
-    ud_en.o = 0;
-    ud_en.idx = i;
-    pd_fcopy_in(pdu_dcseg(PDU_DC_EDITS), (unsigned)i * ED_REC + EO_TEXT,
-                ud_en.w, 4);
-    ud_en.w[2] = pdu_ed_tt;
-    if (ovl_ud_push()) {
+    if (ovl_ud_log(i, UT_TEXT, EO_TEXT, 4) > 0) {
         ud_tyrec = i;
         ud_tycmd = ud_c0 + ud_cur;
+        ud_txfl = pdu_ed_tt;
     }
 }
 
-static void ovl_ud_pts(int i)
+/* may a backspace give back the text heap's last byte? Only a byte the
+ * current typing run wrote itself (at or above the top it began at): a byte
+ * below that is the old text an undo puts back, and bytes above the top are
+ * a redo branch's only while one exists, which coalescing already excludes */
+static int ovl_ud_trimok(int i)
 {
-    if (i >= (int)ud_base)
-        return;
-    if (ovl_ud_find(UT_PTS, 0, i) > 0)
-        return;
-    ud_en.tag = UT_PTS;
-    ud_en.o = 0;
-    ud_en.idx = i;
-    pd_fcopy_in(pdu_dcseg(PDU_DC_EDITS), (unsigned)i * ED_REC + EO_PTS,
-                ud_en.w, 4);
-    ud_en.w[2] = pdu_ed_pt;
-    ovl_ud_push();
+    return ud_tyrec == i && ud_tycmd == (pdw)(ud_c0 + ud_cur)
+        && ud_cur == ud_n && ud_cur > 0 && !ud_dead
+        && (pdw)(pdu_ed_tt - 1) >= ud_txfl;
 }
+
 
 static void ovl_ud_create(void)
 {
@@ -225,6 +229,7 @@ static void ovl_ud_create(void)
     if (ovl_ud_push()) {
         ud_tyrec = pdu_ed_n;            /* a new box is typed into at once */
         ud_tycmd = ud_c0 + ud_cur;
+        ud_txfl = pdu_ed_tt;
     }
 }
 
@@ -232,7 +237,7 @@ static void ovl_ud_move(int i, int dx, int dy)
 {
     if (i >= (int)ud_base)
         return;
-    if (ovl_ud_find(UT_MOVE, 0, i) > 0) {   /* a drag's steps are one move */
+    if (ovl_ud_find(UT_MOVE, 0, i) > 0) {       /* a drag's steps are one move */
         ud_en.w[0] = (pdw)(ud_en.w[0] + dx);
         ud_en.w[1] = (pdw)(ud_en.w[1] + dy);
         ovl_ud_st(ud_ei);
@@ -265,13 +270,6 @@ void pdu_undo_end(void)
 }
 
 /* ---- applying one entry (ud_en) -------------------------------------------- */
-static void ovl_ud_swapw(pdw *a, pdw *b)
-{
-    pdw t;
-    t = *a;
-    *a = *b;
-    *b = t;
-}
 
 static void ovl_ud_tr(int idx, int dx, int dy)
 {
@@ -326,8 +324,8 @@ static void ovl_ud_apply(int undo)
             ovl_pdu_ed_touch_i((int)k);
         ud_en.w[0] = t;
         pdu_ed_n = e0;
-        ovl_ud_swapw(&ud_en.w[1], &pdu_ed_tt);
-        ovl_ud_swapw(&ud_en.w[2], &pdu_ed_pt);
+        n = ud_en.w[1]; ud_en.w[1] = pdu_ed_tt; pdu_ed_tt = n;
+        n = ud_en.w[2]; ud_en.w[2] = pdu_ed_pt; pdu_ed_pt = n;
         return;
     }
     ovl_pdu_ed_touch_i(i);
@@ -335,21 +333,20 @@ static void ovl_ud_apply(int undo)
         l = (pdi)ud_en.w[0];
         i2 = (pdi)ud_en.w[1];
         ovl_ud_tr(i, undo ? -l : l, undo ? -i2 : i2);
-    } else if (t == UT_FIELD) {
-        l = ud_en.tag >> 4;
-        pd_fcopy_in(pdu_dcseg(PDU_DC_EDITS), (unsigned)i * ED_REC + ud_en.o,
-                    ud_tmp, l);
-        pd_fcopy_out(ud_en.w, pdu_dcseg(PDU_DC_EDITS),
-                     (unsigned)i * ED_REC + ud_en.o, l);
+    } else {                            /* FIELD; TEXT, PTS: 4 bytes + a top */
+        l = t == UT_FIELD ? ud_en.tag >> 4 : 4;
+        i2 = i * ED_REC + ud_en.o;
+        pd_fcopy_in(pdu_dcseg(PDU_DC_EDITS), i2, ud_tmp, l);
+        pd_fcopy_out(ud_en.w, pdu_dcseg(PDU_DC_EDITS), i2, l);
         os88_memcpy(ud_en.w, ud_tmp, l);
-    } else {                            /* TEXT, PTS: two record words + a top */
-        l = (t == UT_TEXT) ? EO_TEXT : EO_PTS;
-        pd_fcopy_in(pdu_dcseg(PDU_DC_EDITS), (unsigned)i * ED_REC + l,
-                    ud_tmp, 4);
-        pd_fcopy_out(ud_en.w, pdu_dcseg(PDU_DC_EDITS),
-                     (unsigned)i * ED_REC + l, 4);
-        os88_memcpy(ud_en.w, ud_tmp, 4);
-        ovl_ud_swapw(&ud_en.w[2], t == UT_TEXT ? &pdu_ed_tt : &pdu_ed_pt);
+        n = ud_en.w[2];                 /* the heap top: swapped too */
+        if (t == UT_TEXT) {
+            ud_en.w[2] = pdu_ed_tt;
+            pdu_ed_tt = n;
+        } else if (t == UT_PTS) {
+            ud_en.w[2] = pdu_ed_pt;
+            pdu_ed_pt = n;
+        }
     }
     ovl_pdu_ed_touch_i(i);
 }
@@ -446,12 +443,14 @@ void pdu_undo_cmd(int redo)
 /* the outermost end: hand the screen what changed, refresh what shows state */
 static void ovl_pdu_ed_flush(void)
 {
+    int i, n;
     pdu_ed_genv++;
-    pdu_changes = ovl_pdu_ed_live();
-    if (pdu_ed_drv) {
-        pdu_ed_drv = 0;
-        pdu_render_want(&pdu_ed_dr);
-    }
+    n = 0;                              /* live records: the Notes count */
+    for (i = 0; i < (int)pdu_ed_n; i++)
+        if (!(pd_fpeekb(pdu_dcseg(PDU_DC_EDITS), (unsigned)i * ED_REC + 1)
+              & PDEF_DELETED))
+            n++;
+    pdu_changes = n;
     pdu_ed_sel_fix();
     pdu_menusync();
     pdu_ctl_repaint(C_UNDO);
@@ -483,6 +482,7 @@ void pdu_tx_end(void)
         && ud_cur == ud_n) {
         pdu_undo_drop();
         pdu_ed_sel = -1;
+        pdu_ed_genv++;
         pdu_tell("An empty box is not kept.");
         return;
     }
