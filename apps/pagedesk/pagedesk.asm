@@ -94,6 +94,8 @@
 
 %include "pagedesk/pdui.inc"        ; the seam: module vectors, part rows,
                                     ; the read by offset, the scroll bar
+%include "pagedesk/pdstk.inc"       ; pdu_mcall on the private module stack
+                                    ; (PAGEDESK-SPEC 20.15, D23)
 %include "weave/wfetch.inc"         ; THE lazy-part door, fetched from HOME
                                     ; (WEAVE-SPEC 1.2's sharing rule: one text,
                                     ; three images now) - PDWRT comes through it

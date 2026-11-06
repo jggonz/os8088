@@ -125,6 +125,7 @@ section .text
 %include "pdwrt.gen.asm"            ; found through -I build/
 
 ; the thunks the C names (os88_file_write_seq and friends), gated
+%include "pagedesk/pdkgate.inc"   ; D23: every kernel call on the UI stack (PAGEDESK-SPEC 20.15)
 %define CC_THUNK_GATED
 %include "cc/os88thunk.asm"
 

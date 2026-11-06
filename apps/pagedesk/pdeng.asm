@@ -121,6 +121,7 @@ section .text
 ; THE API BRIDGE - AFTER THE C, GATED (SPEC.md 73.9.1): only the thunks the C
 ; names are assembled (tools/cc8086.py wrote a %define CC_U_<name> for each).
 ; =============================================================================
+%include "pagedesk/pdkgate.inc"   ; D23: every kernel call on the UI stack (PAGEDESK-SPEC 20.15)
 %define CC_THUNK_GATED
 %include "cc/os88thunk.asm"
 

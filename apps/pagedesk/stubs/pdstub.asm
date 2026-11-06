@@ -100,6 +100,8 @@ pds_init:
     mov [pds_xb], bx
     jmp pds_ok0
 
+%include "pagedesk/pdkgate.inc"   ; D23: every kernel call on the UI stack (PAGEDESK-SPEC 20.15)
+
 %ifdef STUB_ENG
 ; ---------------------------------------------------------------------------
 pds_tab:

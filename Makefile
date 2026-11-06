@@ -17627,6 +17627,18 @@ ALLAPPSARGS += $(addprefix PAGEDESK:,$(PDALL))
 ALLAPPS += $(PDALL)
 # ---- end PageDesk: shell ----
 
+# ---- PageDesk: deepstk ----
+# D23 (docs/PAGEDESK-SPEC.md 20.15): THE PRIVATE MODULE STACK. pdstk.inc is
+# the primary's one door into the modules (pdu_mcall, on a 2 KiB stack carved
+# from claim B) and pdkgate.inc every module's kernel-call gate (back up to the
+# UI stack for each OSAPI call). Prerequisites only - the rules are the
+# shell's and the module blocks' - so an edit to either rebuilds what
+# includes it. tests/unit/t_pdkgate.py holds the gate to the built modules.
+$(BUILD)/pagedesk.bin: $(PDDIR)/pdstk.inc $(PDDIR)/pdabi.inc
+$(BUILD)/PDENG.MOD $(BUILD)/PDREND.MOD $(BUILD)/PDWRT.MOD: $(PDDIR)/pdkgate.inc
+$(PDSTUBDIR)/PDENG.MOD $(PDSTUBDIR)/PDREND.MOD $(PDSTUBDIR)/PDWRT.MOD: $(PDDIR)/pdkgate.inc
+# ---- end PageDesk: deepstk ----
+
 allapps: $(ALLAPPSLIST) $(ALLAPPSLIST120)
 
 # One recipe for both sets: they differ in the --size, which is also the

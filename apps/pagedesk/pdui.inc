@@ -51,45 +51,8 @@ _pdu_mvecseg:
     pop bp
     ret
 
-; -----------------------------------------------------------------------------
-; unsigned pdu_mcall(int mod, unsigned verb, unsigned bx, unsigned cx,
-;                    unsigned dx)
-; One far call through module `mod`'s door. Answers AX; the carry lands in
-; the C's pdu_mcf (1 = the verb failed, AX a PDE_*) and DX in pdu_mdx. With no
-; module bound it answers PDE_NOTFOUND with pdu_mcf = 1, so "not loaded" is
-; an ordinary refusal and never a jump through zero.
-; -----------------------------------------------------------------------------
-_pdu_mcall:
-    push bp
-    mov bp, sp
-    push si
-    push di
-    push es
-    mov bx, [bp+4]
-    shl bx, 1
-    shl bx, 1
-    cmp word [pdu_vec + bx + 2], 0
-    je .none
-    lea si, [pdu_vec + bx]
-    mov ax, [bp+6]
-    mov bx, [bp+8]
-    mov cx, [bp+10]
-    mov dx, [bp+12]
-    call far [si]
-    mov [_pdu_mdx], dx
-    sbb dx, dx                      ; CF -> 0 / -1
-    neg dx                          ; -> 0 / 1
-    mov [_pdu_mcf], dx
-    jmp short .out
-.none:
-    mov ax, 53                      ; PDE_NOTFOUND
-    mov word [_pdu_mcf], 1
-.out:
-    pop es
-    pop di
-    pop si
-    pop bp
-    ret
+; unsigned pdu_mcall(...) - the one call into a module - is pdstk.inc's: it
+; runs every verb on the private module stack (PAGEDESK-SPEC 20.15, D23).
 
 ; -----------------------------------------------------------------------------
 ; unsigned pdu_part_off(int i) - part i's offset in the package FILE, in

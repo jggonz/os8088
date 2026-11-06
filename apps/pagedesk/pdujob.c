@@ -483,6 +483,7 @@ void os88_onwake(void *win)
 
     if (win != pdu_win)
         return;
+    pdu_stk_wake();                     /* deepstk */
     pdu_at_doc();
     if (pdu_jcancel) {
         int was;
