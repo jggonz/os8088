@@ -288,7 +288,7 @@ _pdm_u32_shl:                           ; (r, a, n): bits shifted out set ovf
         jmp     pdmi_ret_r              ; 0 shifted by any amount is 0
 
 ; (buf, a, width) -> digits written; buf[n] = 0
-_pdm_u32_todec:
+_pdm_u32_todec:                         ; STKBALANCE-LOOP: digits pushed in one counted loop, popped in another
         push    bp
         mov     bp, sp
         mov     bx, [bp+6]
@@ -522,7 +522,8 @@ _pdm_fx_mul:                            ; (r, a, b)
 
 ; unsigned 48 / 32 division.  Stack (pushed in this order): N2, N1, N0, Dh, Dl
 ; (N = N2:N1:N0, D = Dh:Dl, D != 0); callee pops them. Out: Q = DX:CX:BX
-; (Q2:Q1:Q0), AX nonzero iff the remainder is.
+; (Q2:Q1:Q0), AX nonzero iff the remainder is.  The CALLER removes the five
+; words (add sp, 10): stkbalance.py cannot see a callee that pops its arguments.
 ; Fast path (Dh = 0): three DIVs.  Slow path: 48 restoring steps (~2.4 ms on
 ; an 8088, estimated; only fx_div with a divisor >= 1.0 takes it).
 pdmi_udiv48:
@@ -544,7 +545,7 @@ pdmi_udiv48:
         mov     ax, dx
         mov     dx, di
         pop     bp
-        ret     10
+        ret
 .slow:  xor     bx, bx
         xor     cx, cx
         xor     dx, dx
@@ -575,7 +576,7 @@ pdmi_udiv48:
         mov     ax, si
         or      ax, di
         pop     bp
-        ret     10
+        ret
 
 ; DX:CX:BX = AX... helpers for the view and for fx_div -------------------------
 _pdm_fx_div:                            ; (r, a, b)
@@ -619,6 +620,7 @@ _pdm_fx_div:                            ; (r, a, b)
         push    cx                      ; Dh
         push    bx                      ; Dl
         call    pdmi_udiv48
+        add     sp, 10
         test    dx, dx                  ; q > 0x7FFFFFFF ?
         jnz     .ov
         cmp     cx, 0x8000
@@ -785,19 +787,19 @@ _pdm_fx_parse:
         mov     [di], ax
         mov     [di+2], dx
         mov     ax, bx
-        mov     sp, bp
+        add     sp, 16
         pop     bp
         ret
 .syn:   mov     di, [bp+4]
         mov     word [di], 0
         mov     word [di+2], 0
         mov     ax, PDMI_E_SYNTAX
-        mov     sp, bp
+        add     sp, 16
         pop     bp
         ret
 
 ; (buf, a) -> length.  At most 4 fraction digits, rounded; "-0" becomes "0".
-_pdm_fx_todec:
+_pdm_fx_todec:                          ; STKBALANCE-LOOP: digits pushed in a counted loop, popped in another
         push    bp
         mov     bp, sp
         mov     bx, [bp+6]
@@ -999,7 +1001,7 @@ _pdm_mat_mul:                           ; (r, a, b): r = a x b
         inc     di
         inc     di
         loop    .c
-        mov     sp, bp
+        add     sp, 24
         pop     bp
         ret
 
@@ -1066,7 +1068,7 @@ _pdm_mat_apply:                         ; (x, y, m): (x,y) <- (x,y) x m
         mov     dx, [bp-2]
         mov     [si], ax
         mov     [si+2], dx
-        mov     sp, bp
+        add     sp, 4
         pop     bp
         ret
 
@@ -1191,7 +1193,7 @@ pdmi_divw:
         ret
 
 ; Q = N / (a * b): the shared body of scy and icy.  In: DX:CX:AX = N, SI = a,
-; and b pushed by the caller (this routine pops it).  Out: Q = DX:CX:BX, AX
+; and b pushed by the caller (who removes it: add sp, 2).  Out: Q = DX:CX:BX, AX
 ; nonzero iff there is a remainder.
 pdmi_divab:
         push    bp
@@ -1204,7 +1206,7 @@ pdmi_divab:
         pop     si
         or      ax, si
         pop     bp
-        ret     2
+        ret
 
 ; floor(s * zoom * asp_num / (1600 * asp_den)).  In DX:AX = s, BX = view.
 pdmi_scy:
@@ -1222,6 +1224,7 @@ pdmi_scy:
         push    word [bx+PDMI_V_ASPD]   ; b
         mov     si, 1600                ; a
         call    pdmi_divab
+        add     sp, 2
         pop     si
         jmp     pdmi_flsign
 
@@ -1253,6 +1256,7 @@ pdmi_icy:
         push    word [bx+PDMI_V_ASPN]   ; b
         mov     si, [bx+PDMI_V_ZOOM]    ; a
         call    pdmi_divab
+        add     sp, 2
         pop     si
         jmp     pdmi_clsign
 
@@ -1439,7 +1443,7 @@ _pdm_view_inv:
         PDMI_INV_OUT PDMI_UL, PDMI_UH, 1, PDMI_V_Y1    ; Y = y1 - u
 .sy:    mov     di, [bp+6]
         mov     [di], ax
-        mov     sp, bp
+        add     sp, 8
         pop     bp
         ret
 
