@@ -77,6 +77,27 @@ DEEP_BUDGET = DEEP_SIZE - DEEP_RECORD - DEEP_FARRET - DEEP_CANARY - DEEP_RESERVE
 UI_BUDGET = 384             # D22 1 / D23: task 0's 512 less 128 for interrupts
 DISPATCH = 48               # measured (rendfix): UI task top -> the C callback
 KAPI = 156                  # measured (rendfix): READ_SEQ + int 13h + IRQ0 draw
+
+
+def inline_cells(root="."):
+    """The OSAPI_* names whose cell is an OSAPI_ICELL in kernel/kernel.asm -
+    a store or a load and a retf, no call under it (kernel.asm's OSAPI_ICELL
+    macro) - so they cost the far frame alone, not KAPI. Read from the cell's
+    own address comment and apps/os88api.inc's %define, so a cell that stops
+    being inline stops being cheap here without anyone editing this table."""
+    try:
+        k = open(os.path.join(root, "kernel/kernel.asm")).read()
+        a = open(os.path.join(root, "apps/os88api.inc")).read()
+    except OSError:
+        return set()
+    addrs = set(m.upper() for m in
+                re.findall(r'OSAPI_ICELL\s+\d+\s*;\s*0x([0-9A-Fa-f]{4})', k))
+    return set(n for n, ad in
+               re.findall(r'%define\s+(OSAPI_\w+)\s+KERNEL_SEG:0x([0-9A-Fa-f]{4})', a)
+               if ad.upper() in addrs)
+
+
+ICELLS = inline_cells()
 GATE = 6                    # deepstk: a module's kernel call on the DEEP stack -
                             # near call to the slot 2 + pdk_up's call 2 + push 2
 SWAP = 8                    # deepstk: on the UI stack under pdu_mcall's banked
@@ -539,7 +560,8 @@ class Graph:
                 if mode == "deep":
                     c, p = d + GATE, ["%s+%d" % (f.name, d), "%s(gate %d)" % (t, GATE)]
                 else:
-                    c, p = d + 4 + KAPI, ["%s+%d" % (f.name, d + 4), "%s(%d)" % (t, KAPI)]
+                    ka = 0 if t in ICELLS else KAPI     # an inline cell: retf only
+                    c, p = d + 4 + ka, ["%s+%d" % (f.name, d + 4), "%s(%d)" % (t, ka)]
             elif kind in ("indirect", "farimm", "int"):
                 self._unknown(f, kind, t, where)
                 c, p = d + 4, [f.name, "%s %s (not followed)" % (kind, t)]

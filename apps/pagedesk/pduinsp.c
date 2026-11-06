@@ -71,7 +71,7 @@ static void ovl_nt_idone(void)
     } else if (pdu_pop == P_NOTE) {
         pdu_nt_pm = 0;
         pdu_nt_nocommit = 1;
-        pdu_pop_close();
+        pdu_pop_close_soon();           /* at the wake: 388 B in place (pdstk) */
     }
 }
 

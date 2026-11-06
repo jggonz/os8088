@@ -333,7 +333,7 @@ static void pdu_nt_srcwant(void)
 
 static int pdu_nt_owed(void)
 {
-    return pdu_nt_late || pdu_nt_post
+    return pdu_nt_late || pdu_nt_post || (pdu_nt_rvl && !pdu_pgwant)
            || (pdu_doc == D_OPEN && (int)pdu_ed_gen() != pdu_nt_seen
                && PDU_NT_PANEL() && pdu_pop == P_NONE);
 }
