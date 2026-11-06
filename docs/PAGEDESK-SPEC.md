@@ -2498,3 +2498,97 @@ Every mutating call records its undo delta itself, so a caller brackets a
 command with `pdu_undo_begin`/`end` and does nothing else for undo. Calls are
 made on the UI task only, never inside a module slice.
 
+
+
+### 20.9 Notes & edits, the note popover and Text properties (`notes`, wave 2)
+
+Stories PD-12 (notes), PD-14 (the inspector) and PD-16 (the changes list);
+13.4's review state. Files: `pdunotes.c` (resident state, pure model and hooks),
+`pdovlnotes.c` (the list, cards, Resolve, jump-to, the note popover - all
+`ovl_nt_*`), `pduinsp.c` (Text properties - control table resident, functions
+`ovl_nt_*`), `pdunt.h` (20.8's prototypes and the stand-ins), and
+`hosttest/pdu_nt.c` + `tests/unit/t_pdnotes.py` (the model, on the host).
+
+#### 20.9.1 The list
+
+A virtual list: no card is kept. `ovl_nt_step` walks the store with one int of
+state and returns the next item - an edit-store index, or `PDU_NT_SBASE` + a
+slot of the source cache - and `ovl_nt_seek(k)`/`ovl_nt_find(id)` are the
+walk run to item k / to an id; the panel paints `vis` rows from `top`. Three
+filters on `pdu_npall`, cycled by the filter button: **This page** (records on
+the page id, then the page's source annotations), **All pages** (every record,
+then the shown page's source annotations - the source of other pages is not
+read, which would be a disk walk per page), **Changes** (every record the store
+holds, deleted ones and review replies included, each with its word: Added,
+Edited, Moved, Deleted, Resolved, Reopened; no source annotations). Deleted
+records and review replies are in no other filter.
+
+**Source annotations** (`ovl_nt_srcload`, once a page, when the panel or the
+popover shows it and no job runs - an `ANNOTS` call moves the engine's object
+state): the first 32 `/Annots` elements through `PDV_ENG_ANNOTS`, at most 8
+listed (Text, Highlight/Underline/Squiggly/StrikeOut, FreeText, Ink, Line,
+Square, Circle - `Link`, `Popup`, `Stamp`, `Widget` are not), each with its
+object number, rect and the first 17 characters of `/Contents`; a reply
+(`/IRT`) is not listed and only sets its parent's state. A source annotation
+that a record replaces (`src_num`, 13.1's copy-on-edit) is listed once, as the
+record.
+
+**Review state** (13.4): resolved or reopened is a reply record: `PDA_NOTE`,
+`irt` = the parent's `id` (or, with `PDEF_IRTSRC`, its source object number),
+`state` `PDS_COMPLETED`/`PDS_NONE`. The newest reply wins, and a PageDesk reply
+is newer than one the source carries; up to 12 replies are kept for the lookup
+(`ovl_nt_sync`, one pass over the store when its count, the `pdu_ed_gen()` poll's
+generation, the page or the filter changed). `irt == 0` means "no parent":
+record ids are non-zero.
+
+#### 20.9.2 The panel
+
+Under the shell's header (title, close box, filter): cards 146 x 36 on a
+38-pixel pitch (title "Note - Page 3", the first 17 characters, then a 12-row
+band with the status word and, on a note, Resolve/Reopen), a strip
+`<  1-4/9  >` that pages by a screenful, and the Text properties button (grey
+until a text box is selected). A card's interior is 18 cells wide, so no sliver
+is written beside a row. Selection inverts the card (`pdu_cact`; black on 1bpp).
+**Click** a card: select it, jump to its page (`pdu_goto`; the wake loads it,
+`pdu_notes_page` then reveals the rect) and tell `edit` (`pdu_ed_select`);
+click the selected note again: its popover; the selected text box again: the
+inspector; the card's button: Resolve/Reopen as one undo command. A selection
+change repaints two cards, a scroll the list, a page change the list (This page
+only); never the panel's chrome.
+
+COMPACT: the Notes popover is the same list, one line a row (`Note p3 ok: the
+first words`), the same strip, a click picks, jumps and opens the note's
+popover or the inspector; Up/Down scroll, Enter/Esc close.
+
+#### 20.9.3 The note popover
+
+The CGA mockup: a title and `n/1024`, the last four 32-column lines of the text
+with a cursor, and Resolve/Reopen, Delete, Done. A bounded field: 13.1's 1,024
+bytes, a refused key says so and keeps what is typed; Esc discards the typing;
+Enter, Done, a click elsewhere or any other way of closing keeps it. **A new note
+is not in the store until it has text** (`pdu_nt_new(page, &rect)`, the Note
+tool's call): an empty or cancelled note is no change and does not dirty the
+document. The record is created with `pdu_ed_new` in one undo bracket, colour
+`PDC_YELLOW`; an existing note's text is `pdu_ed_text`. A note that came with the
+file is listed, jumped to and resolved but its text is the source's.
+
+#### 20.9.4 Text properties
+
+Family (Helvetica, Times, Courier), size (8 9 10 11 12 14 16 18 24, - and +),
+Bold, Italic, colour (Black, Blue, Red, Green, Magenta, Brown, Gray), alignment
+L/C/R, Delete and Done, for one `PDA_TEXT` record: in the panel's place (FULL,
+MID) or a popover (COMPACT, a hidden panel). Each control is one command -
+`pdu_undo_begin`, `pdu_ed_set`, `pdu_undo_end` - and the box is rendered again
+by its own rect (`pdu_render_want`). Keys: Esc/Enter Done, Del delete, B I + - F C
+L M R. `style` = family<<4 | bold | italic<<1 as 13.1.1.
+
+#### 20.9.5 What the other agents call
+
+The panel polls `unsigned pdu_ed_gen(void)` (D19: `edit` bumps it on every
+mutation, undo, redo and selection change) when it paints and on the wake, and
+repaints only the rows that changed; `edit` never calls `notes`. The note
+text and the `pdxb_annot` scratch share `edit`'s `char pdu_tbuf[1025]`.
+`edit` calls `pdu_nt_new(page_id, &rect)` (the Note tool), `pdu_nt_open(i)`
+and `pdu_nt_inspect(i)` (macros in `pdu.h` over the overlay's entry points);
+`pdu_ed_select(i)`/`pdu_ed_selected()` are `edit`'s, as are non-zero record ids.
+Until `edit` lands, `pdunt.h`'s `PDU_NT_STUB` supplies an empty store.
