@@ -1527,13 +1527,16 @@ def _diffrow(mach, label, x, y):
     if "rows" in x and "rows" in y:
         dx = dict((r["name"], r) for r in x["rows"])
         dy = dict((r["name"], r) for r in y["rows"])
-        nrep = 1
+        # a profile's cycles are SUMMED over its reps: per rep, as `profile`
+        # prints them, so two runs at different -n still compare
+        nx = (x.get("time") or {}).get("n") or 1
+        ny = (y.get("time") or {}).get("n") or 1
         top = [r["name"] for r in x["rows"][:15]]
         for n in top + [r["name"] for r in y["rows"][:15] if r["name"] not in top]:
-            cx = dx.get(n, {}).get("cycles", 0)
-            cy = dy.get(n, {}).get("cycles", 0)
-            print("      %-30s %9.2f -> %9.2f ms  (%+.2f)"
-                  % (n[:30], ms(cx) / nrep, ms(cy) / nrep, ms(cy - cx) / nrep))
+            cx = ms(dx.get(n, {}).get("cycles", 0)) / nx
+            cy = ms(dy.get(n, {}).get("cycles", 0)) / ny
+            print("      %-30s %9.2f -> %9.2f ms/rep  (%+.2f)"
+                  % (n[:30], cx, cy, cy - cx))
 
 
 # --- ab -------------------------------------------------------------------------
