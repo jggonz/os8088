@@ -102,7 +102,8 @@ int main(int argc, char **argv)
 {
     static struct pdxb_annot an[32]; int n, i, k; pdw r, noteobj = 0, hlobj = 0, hlgen = 0, notegen = 0;
     pdh_cluster = 1; pdw_host_clu = 512;
-    cp(argv[1], "DOC.PDF");
+    remove("R1.PDF"); remove("R2.PDF"); remove(PDW_TEMPNAME);    /* a re-run starts clean */
+    cp(argc > 1 ? argv[1] : "../../apps/pagedesk/samples/MARKUP.PDF", "DOC.PDF");
     /* round A: four new marks on a real sample */
     CK(eng_open("DOC.PDF") == 0, "PDENG opens %s", argv[1]);
     wrt_init(); es_reset();
