@@ -417,22 +417,21 @@ assoc_find:
 assoc_scan:
     push cx
     push di
+    push es                     ; ES = DS ONCE, not once a row (kernel
+    push ds                     ; hot-paths pass 1): the key and the row are
+    pop es                      ; both the kernel's, and nothing in the walk
+    cld                         ; touches ES - the same bytes, out of the loop
     xor ax, ax                  ; AL = the row index
 .row:
     cmp byte [bx], 0
     je .next                    ; a free slot never matches
     push cx
     push si
-    push es
-    push ds
-    pop es                      ; the key and the row are both the kernel's
     mov di, bx
     xor ch, ch
-    cld
     repe cmpsb                  ; CL >= 1 bytes, so ZF = 1 and CF = 0 exactly
-    pop es                      ; when all CL matched (kernel size pass 10,
-    pop si                      ; -5); `pop` writes no flag
-    pop cx
+    pop si                      ; when all CL matched (kernel size pass 10,
+    pop cx                      ; -5); `pop` writes no flag
     je .out
 .next:
     add bx, dx
@@ -441,6 +440,7 @@ assoc_scan:
     jb .row
     stc
 .out:
+    pop es
     pop di
     pop cx
     ret
