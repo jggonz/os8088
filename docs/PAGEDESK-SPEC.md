@@ -780,66 +780,76 @@ plan's agent table and nowhere else.
 
 ### 20.4 Fonts, widths and art (`fonts`)
 
-`PDRES.BIN` is the package's one resource file (11.2, 11.3, 11.6): `tools/os88pdfont.py
-build` packs the committed sources under `apps/pagedesk/fonts/` and
-`apps/pagedesk/art/` into `$(BUILD)/PDRES.BIN`. Pure Python, no network, no Pillow, run
-by `make` (`make pdfonts` also validates). Nothing is looked up at run time. Part
-offsets are 16-byte aligned. All little-endian.
+Two resource files in one format (DECISIONS D3, D5), built by `tools/os88pdfont.py`
+from the committed sources under `apps/pagedesk/fonts/` and `apps/pagedesk/art/`
+(pure Python, no network, no Pillow, run by `make`; `make pdfonts` builds and
+checks them alone). Nothing is looked up at run time. All little-endian.
+
+| file | where it lives | carries |
+|---|---|---|
+| `PDRES.BIN` | a part of `PAGEDESK.O88`, stored UNPACKED so file offsets are real (D3) | the CORE strikes: 8, 10, 12 px, all three families, all four styles (36 records, the italics synthesised); the width tables; the glyph-name table; the icon atlas |
+| `PDFONTX.RES` | optional, beside the package in the launch folder; on the 720KB, 1.2MB and 1.44MB PageDesk disks and the everything set, not the 360KB disk (D5) | the other sizes: 6, 7, 9, 14, 16, 20, 24 px, all three families, all four styles (84 records; TRUE italics at 14 and 16, the rest synthesised). No widths, names or icons |
+| `PDFONTS.TXT` | beside the package on EVERY disk that carries it | the font licence (SIL OFL 1.1 section 2 wants it with each copy) and the AFM notice: `LICENSES.txt`, `OFL-Liberation.txt`, `AUTHORS-Liberation.txt`, `AFM-NOTICE.txt` concatenated, CRLF, ASCII |
+
+A size is in exactly one of the two resource files. A missing `PDFONTX.RES` is not an
+error and not Incomplete rendering: the renderer scales a core strike (D5).
 
 #### 20.4.1 Layout and the directory (D3)
 
-PDRES is not loaded whole: the primary reads only the INDEX, the first `index`
-bytes (directory, strike records, widths, names; 7,776 bytes on PDRES.BIN, inside the
-8 KiB D3 target), into one claim; the
-renderer reads each strike's bytes from the file on first use; the primary reads
-the icon atlas. All offsets in the directory, and the strike offsets in the
-records, are from PDRES's first byte (the file offset inside the part).
+Each file is laid out INDEX first. Every offset in a file - the directory's, and the
+`u32` strike offsets in the strike records - is from THAT file's first byte (for
+`PDRES.BIN` the file offset of the part inside `PAGEDESK.O88` is added, D3's
+`part_off`). This is the one change to 11.2, whose strike offsets were from the bank
+start.
 
 ```
-0                directory
-D (=80, para)    PDFB bank:  'PDFB' u16 1 u16 n, n x 16-byte strike records (11.2,
-                 strike offset/length in file-offset terms), then
-                 'PDFX' u16 widths_off u16 names_off  (offsets from D, the bank start),
-                 the widths (20.4.3), the glyph-name table (below)
-index end        (paragraph padded)
-data_off         strike data: every strike's glyph records + bitmaps (16-bit aligned)
-icons_off        icon atlas
+0          directory: 'PDRS', u16 version (1), u16 entry count n (7),
+           n x 12-byte entries {u16 kind, u16 flags (0), u32 offset, u32 length}
+D          the PDFB bank: 'PDFB', u16 version (1), u16 strike count m,
+           m x 16-byte strike records (11.2's layout),
+           'PDFX', u16 widths_off, u16 names_off   (from D; 0 = absent),
+           the PDWD width tables (20.4.3), the glyph-name table (below)
+INDEX end  = D + the bank's length; zero padding to a multiple of 16
+data_off   strike data: every distinct strike's glyph records + bitmaps, each
+           starting 16-bit aligned (the records point here)
+icons_off  the PDIC icon atlas (20.4.4), 16-byte aligned
+notice     a short ASCII copyright notice naming PDFONTS.TXT; the file's last bytes
 ```
 
-The bank start D is a multiple of 16, so with the index in a claim,
-`bank_seg = claim_seg + D/16` and `widths_off`/`names_off` are offsets from it.
+`D` is a multiple of 16 (96 today: the directory padded to a paragraph), so with
+the INDEX in a claim at `claim_seg`, `bank_seg = claim_seg + D/16`, and
+`widths_off`/`names_off` are offsets from `bank_seg:0`. Read `D` from kind 1's offset,
+never assume it.
 
-Directory: `'PDRS'`, u16 version (1), u16 entry count n, n x 12-byte entries
-`u16 kind, u16 flags (0), u32 offset, u32 length`:
+| kind | part | `PDRES.BIN` (offset, length) | `PDFONTX.RES` |
+|---|---|---|---|
+| 1 | the PDFB bank: header, strike records, PDFX, widths, names | 96, 7,696 | 96, 1,360 |
+| 3 | the PDWD width tables (inside the bank) | 688, 5,384 | 0, 0 |
+| 4 | the PDIC icon atlas | 74,576, 2,708 | 0, 0 |
+| 5 | the glyph-name table (inside the bank) | 6,072, 1,720 | 0, 0 |
+| 6 | the strike data region | 7,792, 66,784 | 1,456, 309,730 |
+| 7 | the INDEX: offset 0, length = the bytes the primary loads | 0, **7,792** | 0, **1,456** |
+| 8 | the notice | 77,296, 532 | 311,200, 532 |
 
-| kind | part |
-|---|---|
-| 1 | the PDFB bank (header, records, PDFX, widths, names) |
-| 3 | the width tables (inside the bank) |
-| 4 | the icon atlas (20.4.5) |
-| 5 | the glyph-name table (inside the bank) |
-| 6 | the strike data region |
-| 7 | the INDEX: offset 0, length = what the primary loads |
+File sizes: `PDRES.BIN` 77,828 bytes, `PDFONTX.RES` 311,732. Both INDEXes are inside
+D3's 8 KiB, and `os88pdfont.py check` refuses either file when its INDEX is not. A
+kind whose length is 0 is absent (its offset is 0). The primary reads the INDEX of
+`PDRES.BIN` (directory first, then `[0, kind 7 length)`) into one claim and the
+icon atlas (kind 4) itself; PDREND reads a strike's `length` bytes at its record's
+offset into the glyph cache on first use. The largest strike is 4,692 bytes in
+`PDRES.BIN` and 11,790 in `PDFONTX.RES` (sans bold 24), so every strike fits 11.2's
+16 KiB glyph cache; `check` refuses a file with one that does not.
 
-TWO files, one format (D5). `PDRES.BIN` (inside PAGEDESK.O88, uncompressed) is the CORE:
-sizes 8, 10, 12 (regular, bold, italic and bold italic, all three families; the
-italics are flag-bit-0 synthesised records), the widths, the glyph names and the icons:
-77,268 bytes, index 7,776 (fits 8 KiB). `PDFONTX.RES` (`$(BUILD)/PDFONTX.RES`, a separate
-optional file beside the package, carried on the 720KB/1.2MB/1.44MB disks and the
-everything set, not the 360KB one) is the same format with its own directory
-and bank for sizes 6, 7, 9, 14, 16, 20 and 24 (true italics at 14 and 16): 311,184 bytes,
-index 1,440. It has no widths, no names and no icons (`PDFX` offsets 0, directory
-kinds 3/5 length 0, kind 4 length 0); PDREND takes those from `PDRES.BIN`. A size is in
-one file or the other and has no record elsewhere. When `PDFONTX.RES` is absent the
-renderer follows D5 (pixel-doubling the core strikes); that is not an error.
-
-The glyph-name table (rend's request, PAGEDESK-SPEC 20.3.4): Adobe glyph name to
-Windows-1252 code, `{u8 len, name bytes, u8 code}` repeated, sorted bytewise by
-name, ended by len 0 (1,720 bytes).
+The glyph-name table (rend's request): Adobe glyph name to Windows-1252 code,
+`{u8 len, name bytes, u8 code}` repeated, sorted bytewise by name, ended by a
+`len` of 0; 216 names, 1,720 bytes. The names are 11.4's Windows-1252 repertoire;
+`space`, `hyphen` and `bullet` map to 32, 45 and 149 (not 160, 173 or the undefined
+codes that draw a bullet). Names outside the repertoire (`minus`, `fi`, ...) are
+not in it: a `/Differences` name that is not found draws the substitute box.
 
 #### 20.4.2 Strikes
 
-`PDFB` as 11.2, with strike offsets from PDRES's first byte (20.4.1). Family 0/1/2 = sans/serif/mono (Liberation Sans/Serif/Mono
+`PDFB` as 11.2, with strike offsets from the file's first byte (20.4.1). Family 0/1/2 = sans/serif/mono (Liberation Sans/Serif/Mono
 2.1.5, OFL), style byte bit 0 bold, bit 1 italic. Per family and size there are four
 records (regular, bold, italic, bold italic). TRUE italic strikes exist at 14 and 16
 px only; at every other size the italic records carry flag bit 0 (`synthesise`) and
@@ -872,7 +882,7 @@ Adobe Core 14 AFMs (11.3) by name through the Windows-1252 glyph-name list in
 `os88pdfont.py`; every name must exist in every AFM or `draw` refuses. The notice
 `AFM-NOTICE.txt` travels with it.
 
-#### 20.4.5 The icon atlas
+#### 20.4.4 The icon atlas
 
 `PDIC`: `'PDIC'`, u16 version (1), u16 count n, then n x 20-byte entries:
 `name[12]` NUL padded, `u8 w, u8 h, u8 hot x, u8 hot y, u16 mono offset, u16 vga offset`
@@ -894,7 +904,7 @@ between `OS88_ICON16` and `OS88_ICON16_END`) and `$(BUILD)/pdart_docglyph.inc` (
 rows, between `OS88_DOCGLYPH8` and `OS88_DOCGLYPH8_END`). No generated artwork was
 used.
 
-#### 20.4.6 Licences and regeneration
+#### 20.4.5 Licences and regeneration
 
 `apps/pagedesk/fonts/LICENSES.txt` is the attribution file; `OFL-Liberation.txt`,
 `AUTHORS-Liberation.txt` and `AFM-NOTICE.txt` sit beside it. The strikes are
@@ -902,7 +912,13 @@ Modified Versions under the OFL and avoid the Reserved Font Name (called PD Sans
 PD Serif, PD Mono). `os88pdfont.py fetch` downloads the pinned Liberation 2.1.5
 archive and the twelve AFMs (Apache PDFBox commit a0e38de6 raw URLs) into
 `build/pdfetch/`, SHA-256 verified; `draw` re-rasterises (and OVERWRITES hand fixes);
-`proof` writes PNG proofs. Neither runs at make time.
+`proof` writes PNG proofs. None of the three runs at make time. What `make` runs:
+`build` and `build --extra` (the two files), `notice` (`$(BUILD)/PDFONTS.TXT`) and
+`check` / `check --extra`, which decodes every glyph back against its `.t88`, compares
+the widths, names and icon atlas with their sources, and holds the INDEX to 8 KiB and
+every strike to the 16 KiB glyph cache. `PDFONTS.TXT` must go on every disk that
+carries `PAGEDESK.O88` or `PDFONTX.RES` (20.6's disk rules), and the notice part in
+both resource files names it.
 
 ### 20.5 The writer (`wrt`)
 

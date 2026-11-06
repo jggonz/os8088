@@ -345,13 +345,39 @@ def build_names():
         out += bytes([len(n)]) + n.encode() + bytes([m[n]])
     return out + b"\0"
 
-K_FONTS, K_WIDTHS, K_ICONS, K_NAMES, K_STRIKES, K_INDEX = 1, 3, 4, 5, 6, 7
+K_FONTS, K_WIDTHS, K_ICONS, K_NAMES, K_STRIKES, K_INDEX, K_NOTICE = 1, 3, 4, 5, 6, 7, 8
+INDEX_MAX = 8192                     # D3: what the primary loads into one claim
+GLYPH_CACHE = 16384                  # PAGEDESK-SPEC 11.2: every strike must fit it
+
+NOTICE = (
+    "PageDesk font resources. Bitmap strikes PD Sans, PD Serif, PD Mono are Modified\r\n"
+    "Versions of Liberation Fonts 2.1.5: Digitized data copyright (c) 2010 Google\r\n"
+    "Corporation with Reserved Font Arimo, Tinos and Cousine. Copyright (c) 2012 Red\r\n"
+    "Hat, Inc. with Reserved Font Name Liberation. Licensed under the SIL Open Font\r\n"
+    "License, Version 1.1; the full licence is PDFONTS.TXT, which travels with this\r\n"
+    "file. Advance widths from the Adobe Core 14 AFM files, copyright (c) 1985-1997\r\n"
+    "Adobe Systems Incorporated, notice in PDFONTS.TXT.\r\n")
+
+def build_notice_text():
+    """PDFONTS.TXT: the licence text that travels with PDRES.BIN and PDFONTX.RES."""
+    out = []
+    for n in ("LICENSES.txt", "OFL-Liberation.txt", "AUTHORS-Liberation.txt", "AFM-NOTICE.txt"):
+        body = open(os.path.join(FONTS, n), encoding="utf-8").read().rstrip("\n")
+        out.append("=" * 76 + "\n" + n + "\n" + "=" * 76 + "\n" + body + "\n")
+    text = "\n".join(out)
+    text.encode("ascii")             # the guest's viewers are 8-bit; keep it plain ASCII
+    return text.replace("\n", "\r\n").encode("ascii")
+
+def cmd_notice(a):
+    os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
+    open(a.out, "wb").write(build_notice_text())
+    print("%s %d bytes" % (os.path.basename(a.out), os.path.getsize(a.out)))
 def build_res(core_only=True, art=True):
     """Layout (D3): directory | PDFB bank (header, strike records, PDFX, widths, names)
     | strike data | icons.  The first INDEX bytes are what the primary loads."""
     recs, blobs = collect_strikes(CORE_SIZES if core_only else [x for x in SIZES if x not in CORE_SIZES])
     n = len(recs)
-    nent = 6
+    nent = 7
     D = (8 + 12 * nent + 15) & ~15                    # the bank starts paragraph aligned
     wid = build_widths() if core_only else b""        # PDFONTX.RES leaves them to PDRES.BIN
     names = build_names() if core_only else b""
@@ -368,6 +394,8 @@ def build_res(core_only=True, art=True):
     strikes = b"".join(blobs)
     icons_off = (o + 15) & ~15
     icons = build_atlas_safe(art and core_only)
+    notice = NOTICE.encode("ascii")
+    notice_off = (icons_off + len(icons) + 15) & ~15
     bank = b"PDFB" + struct.pack("<HH", 1, n)
     for fam, st, size, asc, desc, flags, bi in recs:
         bank += struct.pack("<BBBBBBBBII", FAMILIES.index(fam), st, size, asc, desc, FIRST, LAST,
@@ -377,7 +405,8 @@ def build_res(core_only=True, art=True):
     assert len(bank) == bank_len
     ent = [(K_FONTS, D, bank_len), (K_WIDTHS, D + widths_off if wid else 0, len(wid)),
            (K_NAMES, D + names_off if names else 0, len(names)), (K_STRIKES, data_off, len(strikes)),
-           (K_ICONS, icons_off, len(icons)), (K_INDEX, 0, index_len)]
+           (K_ICONS, icons_off if icons else 0, len(icons)), (K_INDEX, 0, index_len),
+           (K_NOTICE, notice_off, len(notice))]
     assert len(ent) == nent
     head = b"PDRS" + struct.pack("<HH", 1, nent)
     for k, off, ln in ent:
@@ -385,8 +414,10 @@ def build_res(core_only=True, art=True):
     head += b"\0" * (D - len(head))
     blob = head + bank + b"\0" * (data_off - index_len) + strikes
     blob += b"\0" * (icons_off - len(blob)) + icons
+    blob += b"\0" * (notice_off - len(blob)) + notice
     parts = {"index": index_len, "dir": D, "strike records": 16 * n, "widths": len(wid),
-             "names": len(names), "strike data": len(strikes), "icons": len(icons)}
+             "names": len(names), "strike data": len(strikes), "icons": len(icons),
+             "notice": len(notice)}
     return blob, parts
 
 def build_atlas_safe(art):
@@ -399,7 +430,7 @@ def cmd_build(a):
     blob, parts = build_res(core_only=not a.extra)
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     open(a.out, "wb").write(blob)
-    print("PDRES.BIN %d bytes%s: " % (len(blob), " (extra sizes, no icons)" if a.extra else " (core sizes 8/10/12)")
+    print("%s %d bytes%s: " % (os.path.basename(a.out), len(blob), " (extra sizes, no icons)" if a.extra else " (core sizes 8/10/12)")
           + ", ".join("%s %d" % kv for kv in parts.items()))
 
 # ---------------------------------------------------------------- proof/check
@@ -420,7 +451,7 @@ def bank_strikes(blob):
     for i in range(n):
         fam, st, size, asc, desc, f, l, flags, off, ln = struct.unpack_from("<BBBBBBBBII", blob, D + 8 + 16 * i)
         yield dict(fam=fam, st=st, size=size, asc=asc, desc=desc, first=f, last=l,
-                   flags=flags, data=blob[off:off + ln])
+                   flags=flags, off=off, data=blob[off:off + ln])
 
 def blit_text(strike, text, widths_scale=None):
     """-> list of rows (strings) drawing text with the bitmap's own advance."""
@@ -474,28 +505,60 @@ def cmd_proof(a):
     os88pdart.proof(out)
 
 def cmd_check(a):
+    """Re-read a built file and hold it to PAGEDESK-SPEC 20.4: the layout, D3's index
+    limit, D5's split, every glyph decoded back against its .t88 source, the widths
+    against widths.txt, the names, and the icon atlas against the art."""
     blob = open(a.res, "rb").read()
+    name = os.path.basename(a.res)
     ents = read_res(blob)
-    D = ents[1][0]
-    assert D % 16 == 0
+    assert set(ents) == {K_FONTS, K_WIDTHS, K_ICONS, K_NAMES, K_STRIKES, K_INDEX, K_NOTICE}, ents
+    D = ents[K_FONTS][0]
+    idx = ents[K_INDEX][1]
+    assert D % 16 == 0 and D >= 8 + 12 * len(ents) and ents[K_INDEX][0] == 0
+    assert idx == D + ents[K_FONTS][1], "the INDEX is the directory plus the bank"
+    assert idx <= INDEX_MAX, "%s: INDEX %d bytes, over D3's %d" % (name, idx, INDEX_MAX)
+    so, sl = ents[K_STRIKES]
+    assert so == (idx + 15) & ~15 and so + sl <= len(blob)
     n = struct.unpack_from("<H", blob, D + 6)[0]
     assert blob[D + 8 + 16 * n:D + 12 + 16 * n] == b"PDFX"
     wo, no = struct.unpack_from("<HH", blob, D + 12 + 16 * n)
-    full = ents[3][1] != 0
-    if full:
-        assert D + wo == ents[3][0] and D + no == ents[5][0]
-        assert ents[3][1] == 12 * 224 * 2 + 8
+    core = not a.extra
+    sizes = CORE_SIZES if core else [x for x in SIZES if x not in CORE_SIZES]
+    if core:
+        assert (D + wo, len(build_widths())) == ents[K_WIDTHS], "widths"
+        assert blob[D + wo:D + wo + ents[K_WIDTHS][1]] == build_widths()
+        assert (D + no, len(build_names())) == ents[K_NAMES], "names"
+        assert blob[D + no:D + no + ents[K_NAMES][1]] == build_names()
+        io, il = ents[K_ICONS]
+        assert io % 16 == 0 and io >= so + sl and blob[io:io + il] == build_atlas_safe(True)
     else:
-        assert wo == 0 and no == 0
-    assert ents[7] == (0, ents[7][1]) and ents[7][1] <= ents[6][0]
+        assert wo == no == 0 and ents[K_WIDTHS] == ents[K_NAMES] == ents[K_ICONS] == (0, 0)
+    no_, nl = ents[K_NOTICE]
+    assert blob[no_:no_ + nl] == NOTICE.encode("ascii") and no_ + nl == len(blob)
+    # every record present once, each decoded back against its source
+    S = load_strikes()
+    seen, biggest = set(), 0
     for s in bank_strikes(blob):
-        assert s["first"] == 32 and s["last"] == 255 and len(s["data"]) >= 4 * 224
-    nm = blob[ents[5][0]:ents[5][0] + ents[5][1]]
-    i, prev = 0, b""
-    while full and nm[i]:
-        l = nm[i]; name = nm[i + 1:i + 1 + l]; assert name > prev; prev = name; i += l + 2
-    assert i + 1 == len(nm) or not full
-    print("%s ok: index %d bytes (limit 8192)%s" % (os.path.basename(a.res), ents[7][1], "" if ents[7][1] <= 8192 else "  OVER 8 KiB"))
+        fam, st = FAMILIES[s["fam"]], STYLES[s["st"]]
+        key = (fam, st, s["size"])
+        assert key not in seen and s["size"] in sizes, key
+        seen.add(key)
+        off = s["off"]
+        assert so <= off and off + len(s["data"]) <= so + sl and off % 2 == 0, key
+        src = key if key in S else (fam, st.replace("i", "") or "r", s["size"])
+        assert (src != key) == bool(s["flags"] & 1), key
+        meta, gl = S[src]
+        want_data = pack_strike(meta, gl)
+        want_data += b"\0" * (len(want_data) % 2)       # strikes start 16-bit aligned
+        assert s["data"] == want_data, "strike %s differs from its source" % (key,)
+        assert (s["asc"], s["desc"], s["first"], s["last"]) == \
+            (int(meta["ascent"]), int(meta["descent"]), FIRST, LAST)
+        biggest = max(biggest, len(s["data"]))
+    want = {(f, st, z) for f in FAMILIES for st in STYLES for z in sizes}
+    assert seen == want, sorted(want ^ seen)
+    assert biggest <= GLYPH_CACHE, "a %d-byte strike cannot fit the glyph cache" % biggest
+    print("%s ok: %d bytes, INDEX %d (limit %d), %d strike records, largest strike %d"
+          % (name, len(blob), idx, INDEX_MAX, n, biggest))
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -505,7 +568,9 @@ def main():
     b = sub.add_parser("build"); b.add_argument("-o", "--out", default=os.path.join(ROOT, "build", "PDRES.BIN")); b.add_argument("--extra", action="store_true", help="PDFONTX.RES: the sizes PDRES.BIN does not carry"); b.set_defaults(f=cmd_build)
     pr = sub.add_parser("proof"); pr.add_argument("--res", default=os.path.join(ROOT, "build", "PDRES.BIN"))
     pr.add_argument("--extra", default=os.path.join(ROOT, "build", "PDFONTX.RES")); pr.add_argument("-o", "--out", default=os.path.expanduser("~/Repos/pagedesk-logs/shots/fonts")); pr.set_defaults(f=cmd_proof)
-    c = sub.add_parser("check"); c.add_argument("--res", default=os.path.join(ROOT, "build", "PDRES.BIN")); c.set_defaults(f=cmd_check)
+    c = sub.add_parser("check"); c.add_argument("--res", default=os.path.join(ROOT, "build", "PDRES.BIN"))
+    c.add_argument("--extra", action="store_true", help="the file is PDFONTX.RES"); c.set_defaults(f=cmd_check)
+    nt = sub.add_parser("notice"); nt.add_argument("-o", "--out", default=os.path.join(ROOT, "build", "PDFONTS.TXT")); nt.set_defaults(f=cmd_notice)
     a = p.parse_args()
     a.f(a)
 

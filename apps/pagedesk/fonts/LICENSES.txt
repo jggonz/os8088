@@ -3,6 +3,7 @@ PageDesk document faces and width tables - sources, licences, attribution
 
 STRIKES (apps/pagedesk/fonts/*.t88)
   Bitmap strikes at 6, 7, 8, 9, 10, 12, 14, 16, 20 and 24 pixels, regular and bold
+  (8, 10 and 12 in PDRES.BIN inside PAGEDESK.O88, the rest in PDFONTX.RES)
   (true italic at 14 and 16, the other italic sizes are synthesised by the renderer),
   rasterised with FreeType (monochrome, TrueType-hinted) from
 
@@ -35,5 +36,8 @@ REGENERATING
                                         into build/pdfetch/
   python3 tools/os88pdfont.py draw      rewrite apps/pagedesk/fonts/*.t88 and
                                         widths.txt (this OVERWRITES hand fixes)
-  python3 tools/os88pdfont.py build     pack PDRES.BIN (what `make` runs)
+  python3 tools/os88pdfont.py build     pack PDRES.BIN, the core (what `make` runs)
+  python3 tools/os88pdfont.py build --extra   pack PDFONTX.RES, the other sizes
+  python3 tools/os88pdfont.py notice    write PDFONTS.TXT, this file and the licences,
+                                        which travels with both on every disk
   python3 tools/os88pdfont.py proof     PNG proofs of every strike and the icons
