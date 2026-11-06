@@ -1437,6 +1437,26 @@ int os88_toast(const char *text, int ticks);
  * operation your own begin returned 0 for. UI task. */
 int os88_fs_op(unsigned bytes_hi, unsigned bytes_lo);
 
+/* --- PageDesk's file I/O (docs/PAGEDESK-SPEC.md 6.1, 14) ----------------
+ * os88_file_read_seq - OSAPI_FILE_READ_SEQ (SPEC.md 18.4.8): a streaming read
+ * into a CLAIM (seg:off) from a 16-byte cursor of your own. Zero the cursor
+ * (unsigned cursor[8]) and set the dword at cursor[6], cursor[7] to start or
+ * seek (a cluster multiple); cap is a cluster multiple. The answer is the
+ * bytes delivered, 0 at the end - os88_ferr() separates that from a refusal.
+ * RAW: a compressed file arrives as it sits on the disk.
+ * os88_file_write_seq - OSAPI_FILE_WRITE_SEQ (SPEC.md 18.4.9): append count
+ * bytes from seg:off; *token is 0 on the first call and carries the stream
+ * between calls; flags are WSEQF_* (1 = HELD). 0 = written, -1 = os88_ferr().
+ * os88_vol_kind - OSAPI_VOL_KIND: -1 = no such volume, else AL | AH << 8
+ * (VK_* / VT_*, os88api.inc). os88_ferr_text copies the kernel's wording for
+ * a FERR_* into dst (NUL-terminated, cap counts the NUL). */
+unsigned os88_file_read_seq(const char *name, unsigned seg, unsigned off,
+                            unsigned cap, unsigned *cursor);
+int os88_file_write_seq(const char *name, unsigned seg, unsigned off,
+                        unsigned count, unsigned flags, unsigned *token);
+int os88_vol_kind(int vol);
+void os88_ferr_text(int ferr, char *dst, unsigned cap);
+
 /* --- the runtime's own helpers -------------------------------------------
  * There is no C library here (SPEC.md 73.9: no printf family - it is
  * thousands of bytes for the one conversion a program wanted). These six are
