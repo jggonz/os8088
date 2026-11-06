@@ -163,4 +163,45 @@ struct pdu_lay {
 #define J_RENDER  2
 #define J_SAVE    3
 
+/* ---- notes ---- */
+#define P_NOTE   7              /* the note popover / inspector (pdunotes.c) */
+#ifndef PD_HOST
+/* resident hooks (pdunotes.c) */
+static void pdu_notes_paint(void);      /* the panel */
+static void pdu_notes_page(void);
+static void pdu_nt_reset(void);
+static void pdu_nt_filter(void);
+static void pdu_nt_idle(void);
+static void pdu_nt_srcload(void);
+static int  pdu_nt_owed(void);
+static void pdu_nt_pclose(void);
+static int  pdu_nt_click(int x, int y);
+static int  pdu_nt_pclick(int x, int y);
+static int  pdu_nt_key(int ascii, int scan);
+static void pdu_nt_ppaint(void);
+static int  pdu_nt_pw(void);
+static int  pdu_nt_prows(void);
+/* the overlay's entry points (pdovlnotes.c, pduinsp.c) */
+static int  ovl_nt_body(void);
+static int  ovl_nt_click(int x, int y);
+static int  ovl_nt_pclick(int x, int y);
+static int  ovl_nt_key(int ascii, int scan);
+static int  ovl_nt_ppaint(void);
+static void ovl_nt_pclose(void);
+static void ovl_nt_page(void);
+static void ovl_nt_dirty(void);
+static void ovl_nt_idle(void);
+static void ovl_nt_relist(void);
+static void ovl_nt_srcload(void);
+static void ovl_nt_new(unsigned page, const struct pd_rect *r);
+static void ovl_nt_open(int id);
+static void ovl_nt_inspect(int id);
+/* WHAT EDIT AND PAGES CALL, after any change to the store or a selection */
+#define pdu_notes_dirty()      ovl_nt_dirty()
+#define pdu_nt_new(pg, r)      ovl_nt_new(pg, r)   /* the Note tool: a pending note */
+#define pdu_nt_open(id)        ovl_nt_open(id)     /* a note's popover */
+#define pdu_nt_inspect(id)     ovl_nt_inspect(id)  /* Text properties */
+#endif
+/* ---- end notes ---- */
+
 #endif /* PDU_H */

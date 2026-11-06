@@ -223,8 +223,8 @@ static int pdu_pop_rows(void)
         return pdu_L.kind == PDU_L_COMPACT ? 6 : 5;
     if (pdu_pop == P_FIND)
         return 2;
-    if (pdu_pop == P_NOTES)
-        return 3;
+    if (pdu_pop == P_NOTES || pdu_pop == P_NOTE)
+        return pdu_nt_prows();          /* notes */
     if (pdu_pop == P_PAGES)
         return (pdu_npages + 7) / 8 + 1;
     return 0;
@@ -286,6 +286,10 @@ static void pdu_pop_paint(void)
         ovl_card(pdu_helpw, p, pdu_mono);
         return;
     }
+    if (pdu_pop == P_NOTES || pdu_pop == P_NOTE) {      /* notes */
+        pdu_nt_ppaint();
+        return;
+    }
     pdu_fill(p->x1, p->y1, p->x2, p->y2, OS88_WHITE);
     os88_set_color(OS88_BLACK);
     os88_gfx_frame(p->x1, p->y1, p->x2, p->y2);
@@ -298,20 +302,6 @@ static void pdu_pop_paint(void)
         os88_font_run(p->x1 + 8, y + 2, pdu_line, OS88_BLACK, OS88_WHITE);
         os88_font_run(p->x1 + 8, y + 2 + PDU_POP_ROW,
                       "Enter: find  Esc: close", OS88_BLACK, OS88_WHITE);
-        return;
-    }
-    if (pdu_pop == P_NOTES) {
-        os88_font_run(p->x1 + 8, y + 2, "Notes & edits", OS88_BLACK,
-                      OS88_WHITE);
-        os88_set_color(OS88_BLACK);
-        os88_gfx_hline(p->x1 + 2, p->x2 - 2, y + PDU_POP_ROW - 1);
-        pdu_tr.x1 = p->x1 + 4;
-        pdu_tr.x2 = p->x2 - 4;
-        pdu_tr.y1 = y + PDU_POP_ROW - 6;
-        pdu_tr.y2 = y + 2 * PDU_POP_ROW;
-        pdu_notes_body(&pdu_tr, OS88_WHITE);
-        os88_font_run(p->x2 - 8 - 7 * PDU_CW, y + 2 + 2 * PDU_POP_ROW,
-                      "[Close]", OS88_BLACK, OS88_WHITE);
         return;
     }
     if (pdu_pop == P_PAGES) {
@@ -364,7 +354,7 @@ static void pdu_pop_open(int kind, int src)
     rows = pdu_pop_rows();
     w = 12;
     if (kind == P_FIND) w = 30;
-    if (kind == P_NOTES) w = 24;
+    if (kind == P_NOTES || kind == P_NOTE) w = pdu_nt_pw();  /* notes */
     if (kind == P_PAGES) w = 32;
     if (kind == P_HELP) {
         pdu_hpage = 0;
@@ -385,6 +375,7 @@ static void pdu_pop_close(void)
     int src, old;
     if (pdu_pop == P_NONE)
         return;
+    pdu_nt_pclose();                    /* notes */
     pdu_pop = P_NONE;
     src = pdu_popsrc;
     pdu_popsrc = C_NONE;
@@ -444,6 +435,7 @@ static void pdu_close_doc(void)
     pdu_rwant = 0;
     pdu_npages = 0;
     pdu_changes = 0;
+    pdu_nt_reset();                     /* notes */
     pdu_say("Document closed.");
     pdu_title_set();
     pdu_reflow();
@@ -582,8 +574,7 @@ static void pdu_cmd(int id)
         pdu_reflow();
         return;
     case C_NP_FILTER:
-        pdu_npall = !pdu_npall;
-        pdu_notes_paint();
+        pdu_nt_filter();                /* notes: This page, All pages, Changes */
         return;
     case C_PANEL_PG:
         pdu_pop_open(P_PAGES, id);
@@ -804,6 +795,8 @@ void os88_onkey(int ascii, int scan, void *win)
         return;
     }
     ascii = ascii & 0xFF;
+    if (pdu_nt_key(ascii, scan))        /* notes: the note field, inspector */
+        return;
     /* Escape, in order (PD-03, 17.5): a running job, a popover, the page
      * field, the keyboard focus, then the tool */
     if (ascii == 27) {
@@ -836,7 +829,7 @@ void os88_onkey(int ascii, int scan, void *win)
             pdu_pop_close();
         return;
     }
-    if (pdu_pop == P_NOTES) {
+    if (pdu_pop == P_NOTES || pdu_pop == P_NOTE) {       /* notes */
         if (ascii == 13 || ascii == ' ')
             pdu_pop_close();
         return;
@@ -908,6 +901,8 @@ static void pdu_pop_click(int x, int y)
 {
     struct os88_rect *p;
     int k, v;
+    if (pdu_nt_pclick(x, y))            /* notes */
+        return;
     p = &pdu_poprect;
     k = (y - p->y1 - 4) / PDU_POP_ROW;
     if (pdu_pop == P_ZOOM) {
@@ -943,9 +938,7 @@ static void pdu_pop_click(int x, int y)
         }
         return;
     }
-    if (pdu_pop == P_NOTES && k < 2)
-        return;
-    pdu_pop_close();                    /* Notes' [Close], a help card, Find */
+    pdu_pop_close();                    /* a help card, Find */
 }
 
 void os88_onclick(int x, int y, void *win)
@@ -978,6 +971,8 @@ void os88_onclick(int x, int y, void *win)
         pdu_cmd(id);
         return;
     }
+    if (pdu_nt_click(x, y))             /* notes: the panel's list */
+        return;
     if (pdu_inr(&pdu_L.sbar, x, y) && pdu_doc == D_OPEN) {
         pdu_sb_fill();
         r = pdu_sbhit(pdu_sb, x, y);
