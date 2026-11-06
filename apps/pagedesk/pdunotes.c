@@ -393,7 +393,8 @@ static int pdu_nt_key(int ascii, int scan)
     if (pdu_nt_insp && !PDU_NT_PANEL())
         pdu_nt_insp = 0;                /* the panel was put away */
     if (pdu_pop != P_NOTES && pdu_pop != P_NOTE
-        && (!pdu_nt_insp || pdu_fedit))  /* the page field keeps its keys */
+        && (!pdu_nt_insp || pdu_fedit   /* the page field keeps its keys, */
+            || pdu_pop != P_NONE))      /* and another popover its Esc */
         return 0;
     return ovl_nt_key(ascii, scan);
 }
