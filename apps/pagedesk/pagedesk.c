@@ -146,6 +146,8 @@ static const char *pdu_abtext[] = {
 #include "pdudraw.c"            /* every pixel of the chrome */
 #include "pduview.c"            /* the page view: zoom, scroll, pages */
 #include "pdujob.c"             /* 15: the scheduler and its three jobs */
+#include "pduedit.c"            /* 13.1, 20.8: the edit store (edit) */
+#include "pduundo.c"            /* 13.6, 20.8: undo and redo (edit) */
 #include "pducmd.c"             /* commands, menus, keys, clicks */
 #include "pdovl.c"              /* the overlay's tenants (ovl_*) */
 

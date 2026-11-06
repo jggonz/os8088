@@ -17502,7 +17502,7 @@ PDDIR        := apps/pagedesk
 PDSTUBDIR    := $(BUILD)/pdstub
 PD_MATH_STUB ?= 0
 PD_ENG_MOD   ?= $(BUILD)/PDENG.MOD
-PD_REND_MOD  ?= $(PDSTUBDIR)/PDREND.MOD   # back to the stand-in: the real one hangs the launch (lead, 21:20; set PD_REND_MOD=$(BUILD)/PDREND.MOD to reproduce)
+PD_REND_MOD  ?= $(PDSTUBDIR)/PDREND.MOD   # stand-in until the kernel-memory corruption past XTGUIDE p2 is fixed (lead, 21:45); PD_REND_MOD=$(BUILD)/PDREND.MOD for the real one
 PD_WRT_MOD   ?= $(BUILD)/PDWRT.MOD
 PD_RES_BIN   ?= $(BUILD)/PDRES.BIN
 PD_FONTX_RES ?= $(BUILD)/PDFONTX.RES

@@ -241,11 +241,15 @@ _pdr_fill4:
 
 ; -----------------------------------------------------------------------------
 ; unsigned pdr_eng(verb, bx, cx, dx) - the far call into PDENG. Returns 0 and
-; leaves AX/DX in pdr_eng_ax/pdr_eng_dx, or the PDE_ code when CF was set.
+; leaves AX/DX in pdr_eng_ax/pdr_eng_dx, or the PDE_ code when CF was set -
+; PDE_NOTFOUND, with no call made, while the vector is still 0 (before INIT).
 ; -----------------------------------------------------------------------------
 _pdr_eng:
     push bp
     mov bp, sp
+    mov ax, 53                      ; PDE_NOTFOUND: no vector yet (before INIT) -
+    cmp word [_pdr_eng_seg], 0      ; refuse, never far-call 0000:0000 (rendfix)
+    je .err
     mov ax, [bp+4]
     mov bx, [bp+6]
     mov cx, [bp+8]

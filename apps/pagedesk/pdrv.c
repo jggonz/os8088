@@ -378,11 +378,16 @@ static pdw verb_thumb(void)
 /* ---- INIT and the dispatcher -------------------------------------------------- */
 static pdw verb_init(pdw xbseg)
 {
+    pdw bound = pdr_eng_seg;            /* 0 on the FIRST INIT: the bss */
     g_xb = xbseg;
-    close_streams();
-    g_ph = PDR_IDLE; g_mode = PDR_IDLE;
+    /* the engine's vector first, before anything can call the engine. The
+     * first INIT then closes nothing: its g_idone = 0 is the bss, not an open
+     * content stream, and close_streams() through the 0000:0000 it found was
+     * rendfix's launch hang (pdr_eng now refuses a 0 vector as well) */
     pd_fcopy_in(g_xb, 0, &g_ini, sizeof g_ini);
     pdr_eng_off = g_ini.eng_off; pdr_eng_seg = g_ini.eng_seg;
+    if (bound) close_streams();
+    g_ph = PDR_IDLE; g_mode = PDR_IDLE;
     g_dls = g_ini.dl_seg;
     g_dlcap = g_ini.dl_kb ? (pdw)(g_ini.dl_kb >= 63 ? 0xFC00u : (pdw)(g_ini.dl_kb << 10)) : 0;
     /* the workspace is the last PDR_WSB bytes of the claim: the DL gets the rest.
