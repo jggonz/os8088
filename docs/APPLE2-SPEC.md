@@ -725,7 +725,7 @@ known to do this.
 
 **THE HEAP IS RESHAPED AT THE FIRST WAKE**: a 64KB code claim and a 64KB
 image replace the 49KB RAM, with a compaction on the way, which on an 8088 is
-seconds. `a2_fast_done` says it has run; `tests/apple2part.py` waits for it
+seconds. `a2_fast_done` says it has FINISHED (set after `a2_fast_init` returns, never mid-way); `tests/apple2part.py` waits for it
 before it reads a claim. **`soak -k a2move` IS RED WITH THE FAST CORE, and the
 reason is placement, not a mover**: both 64KB claims are made where a 64KB
 hole is, which on that row's heap is the bottom, so Note Pad's close leaves

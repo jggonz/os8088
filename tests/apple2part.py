@@ -262,9 +262,9 @@ def run():
         # 64KB claims and a compaction, seconds of work on an 8088, at the
         # first wake. Everything below reads claims, so it waits for that to
         # be over - read part-way, the carve is read before it moves and the
-        # claims after (a2_fast_done is set as it begins; the wake does
-        # nothing else until it returns, so one more wait for the RAM claim's
-        # final size closes the window)
+        # claims after (a2_fast_done is set once a2_fast_init has RETURNED,
+        # whatever it answered; the quiesce after it is for the heap's own
+        # posted work, which may still be settling)
         os88marty.until(m, lambda _: u16(m.read((seg << 4)
                                                 + A2.sym("_a2_fast_done"), 2)),
                         "the fast core's start-up", poll=0.5, guest=120)
