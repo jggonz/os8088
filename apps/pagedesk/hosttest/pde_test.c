@@ -9,6 +9,16 @@
  *   pde_test open  FILE [-c SECTORS] [-f N] [-b N]    open only; -f fails the
  *                                                     Nth read, -b read budget
  *   pde_test objs  FILE                               OBJ_FIND of every object
+ *   pde_test get FILE OBJ GEN [KEY KEY KEY]           DICT_GET (OBJ 0 0 = the trailer)
+ *   pde_test res FILE PAGE CATEGORY NAME              RES_LOOKUP on a page
+ *   pde_test resobj FILE OBJ GEN CATEGORY NAME        RES_LOOKUP in a Form XObject
+ *   pde_test outline FILE                             every outline item, depth first
+ *   pde_test annots FILE PAGE                         every annotation of a page
+ *   pde_test raw FILE OBJ GEN                         RAW_COPY in 100-byte pieces: length and CRC
+ *   pde_test strm FILE OBJ GEN                        STRM_OPEN + STRM_READ in 37-byte pieces
+ *   pde_test faults FILE                              fail every read in turn: IO error, never a crash,
+ *                                                     and the engine opens the file afterwards
+ *   pde_test multi FILE...                            open each in turn on one engine (re-INIT, reuse)
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -152,12 +162,191 @@ static void objs(void)
     }
 }
 
+
+static unsigned cmd_arg(const char *s) { return (unsigned)strtoul(s, 0, 0); }
+
+static void show_dg(const struct pdxb_dictget *g, unsigned r)
+{
+    printf("GET rc=%u kind=%u num=%d.%05u ref=%u,%u len=%u count=%u text=%s\n", r, g->kind, g->num.hi,
+           (unsigned)(((unsigned long)g->num.lo * 100000UL) >> 16), g->refnum, g->refgen, g->len, g->count, g->text);
+}
+static void cmd_get(int argc, char **argv)
+{
+    struct pdxb_dictget g;
+    unsigned r;
+    int k;
+    memset(&g, 0, sizeof g);
+    g.objnum = (pdw)cmd_arg(argv[0]); g.gen = (pdw)cmd_arg(argv[1]);
+    for (k = 0; k < 3 && 2 + k < argc; k++) strncpy(g.key[k], argv[2 + k], 31);
+    xb_put(&g, sizeof g);
+    r = call(PDV_ENG_DICT_GET, 0, 0, 0);
+    xb_get(&g, sizeof g);
+    show_dg(&g, cf ? r : 0);
+}
+static void cmd_res(int forms, int argc, char **argv)
+{
+    struct pdxb_reslookup rl;
+    unsigned r;
+    memset(&rl, 0, sizeof rl);
+    if (forms) { rl.page = 0xFFFF; rl.resobj = (pdw)cmd_arg(argv[0]); rl.resgen = (pdw)cmd_arg(argv[1]); argv += 2; }
+    else { rl.page = (pdw)cmd_arg(argv[0]); argv += 1; }
+    strncpy(rl.category, argv[0], 15); strncpy(rl.name, argv[1], 31);
+    xb_put(&rl, sizeof rl);
+    r = call(PDV_ENG_RES_LOOKUP, 0, 0, 0);
+    xb_get(&rl, sizeof rl);
+    if (cf) printf("RES rc=%u\n", r);
+    else printf("RES obj=%u,%u kind=%u\n", rl.objnum, rl.gen, rl.kind);
+}
+static void cmd_outline(void)
+{
+    struct pdxb_outline ol;
+    unsigned r;
+    unsigned stack_n[32], stack_g[32];
+    int sp = 0, depth = 0;
+    memset(&ol, 0, sizeof ol);
+    for (;;) {
+        xb_put(&ol, sizeof ol);
+        r = call(PDV_ENG_OUTLINE, 0, 0, 0);
+        if (cf) { printf("OUTLINE rc=%u\n", r); return; }
+        xb_get(&ol, sizeof ol);
+        printf("OUTLINE depth=%d obj=%u title=%s count=%u page=%u\n", depth, ol.objnum, ol.title, ol.count, ol.dest_page);
+        if (ol.first_num) {
+            if (sp >= 31) return;
+            stack_n[sp] = ol.next_num; stack_g[sp] = ol.next_gen; sp++;
+            depth++;
+            ol.objnum = ol.first_num; ol.gen = ol.first_gen;
+        } else if (ol.next_num) {
+            ol.objnum = ol.next_num; ol.gen = ol.next_gen;
+        } else {
+            for (;;) {
+                if (sp == 0) return;
+                sp--; depth--;
+                if (stack_n[sp]) { ol.objnum = (pdw)stack_n[sp]; ol.gen = (pdw)stack_g[sp]; break; }
+            }
+        }
+    }
+}
+static void cmd_annots(unsigned page)
+{
+    struct pdxb_annot an;
+    unsigned r, i;
+    for (i = 0;; i++) {
+        r = call(PDV_ENG_ANNOTS, page, i, 0);
+        if (cf) { if (r != PDE_RANGE) printf("ANNOT %u rc=%u\n", i, r); return; }
+        xb_get(&an, sizeof an);
+        printf("ANNOT %u obj=%u sub=%s rect=%d,%d,%d,%d nm=%s f=%u ap=%u irt=%u state=%u clen=%u contents=%s\n", i, an.objnum,
+               an.subtype, an.rect.x0, an.rect.y0, an.rect.x1, an.rect.y1, an.nm, an.flags, an.has_ap, an.irt_num,
+               an.state, an.contents_len, an.contents);
+    }
+}
+static void cmd_raw(unsigned num, unsigned gen)
+{
+    struct pdxb_rawcopy rw;
+    struct pdxb_objref rf;
+    struct pdxb_objinfo oi;
+    unsigned r, total = 0, crc = 0xFFFF;
+    unsigned char buf[100];
+    rf.objnum = (pdw)num; rf.gen = (pdw)gen;
+    xb_put(&rf, sizeof rf);
+    r = call(PDV_ENG_OBJ_FIND, 0, 0, 0);
+    if (cf) { printf("RAW rc=%u\n", r); return; }
+    xb_get(&oi, sizeof oi);
+    memset(&rw, 0, sizeof rw);
+    rw.objnum = (pdw)num; rw.gen = (pdw)gen; rw.dseg = SEG_BUF; rw.doff = 0; rw.dmax = 100;
+    for (;;) {
+        xb_put(&rw, sizeof rw);
+        r = call(PDV_ENG_RAW_COPY, 0, 0, 0);
+        if (cf) { printf("RAW rc=%u after %u\n", r, total); return; }
+        xb_get(&rw, sizeof rw);
+        if (!rw.got) break;
+        pd_fcopy_in(SEG_BUF, 0, buf, rw.got);
+        crc = pdm_crc16((pdw)crc, buf, rw.got);
+        total += rw.got;
+        if (total >= (((unsigned)oi.length.hi << 16) | oi.length.lo)) break;
+    }
+    printf("RAW obj=%u bytes=%u crc=%04x declared=%u\n", num, total, crc, ((unsigned)oi.length.hi << 16) | oi.length.lo);
+}
+static void cmd_strm(unsigned num, unsigned gen)
+{
+    struct pdxb_strm sx;
+    unsigned r, got, total = 0, crc = 0xFFFF;
+    unsigned char buf[40];
+    memset(&sx, 0, sizeof sx);
+    sx.objnum = (pdw)num; sx.gen = (pdw)gen;
+    xb_put(&sx, sizeof sx);
+    r = call(PDV_ENG_STRM_OPEN, 0, 0, 0);
+    if (cf) { printf("STRM rc=%u\n", r); return; }
+    for (;;) {
+        got = call(PDV_ENG_STRM_READ, SEG_BUF, 0, 37);
+        if (cf) { printf("STRM readrc=%u after %u\n", got, total); break; }
+        if (!got) break;
+        pd_fcopy_in(SEG_BUF, 0, buf, (pdw)got);
+        crc = pdm_crc16((pdw)crc, buf, (pdw)got);
+        total += got;
+    }
+    call(PDV_ENG_STRM_CLOSE, 0, 0, 0);
+    printf("STRM obj=%u bytes=%u crc=%04x\n", num, total, crc);
+}
+static void sig(void)
+{
+    struct pdxb_trailer tr;
+    unsigned p, n = op.npages;
+    struct pdxb_pageinfo pi;
+    unsigned h = 2166136261u;
+    call(PDV_ENG_TRAILER, 0, 0, 0); xb_get(&tr, sizeof tr);
+    fnv(&h, (unsigned char)tr.size); fnv(&h, (unsigned char)tr.root_num);
+    for (p = 0; p < n; p++) {
+        call(PDV_ENG_PAGEINFO, p, 0, 0);
+        xb_get(&pi, sizeof pi);
+        fnv(&h, (unsigned char)pi.objnum); fnv(&h, (unsigned char)(pi.media.x1 >> 3));
+    }
+    printf("SIG pages=%u hash=%08x\n", n, h);
+}
+static void cmd_faults(const char *file)
+{
+    unsigned long n, total;
+    int rc, base;
+    pdh_failat = 0; pdh_reads = 0;
+    if (do_init() || (base = do_open())) { printf("FAULTS base open failed\n"); return; }
+    sig();
+    total = pdh_reads;
+    call(PDV_ENG_CLOSE, 0, 0, 0);
+    for (n = 1; n <= total + 1; n++) {
+        pdh_failat = pdh_reads + n;                 /* the nth read from now */
+        rc = do_open();
+        if (rc && rc != PDE_IO) { printf("FAULTS read %lu gave rc=%d (want IO)\n", n, rc); return; }
+        if (!rc && n <= total) {
+            /* the fault may land after open on a cached path: only allowed when open needs fewer reads */
+        }
+        pdh_failat = 0;
+        call(PDV_ENG_CLOSE, 0, 0, 0);
+        rc = do_open();
+        if (rc) { printf("FAULTS reuse after fault %lu failed rc=%d\n", n, rc); return; }
+        call(PDV_ENG_CLOSE, 0, 0, 0);
+    }
+    printf("FAULTS ok reads=%lu file=%s\n", total, file);
+}
+
 int main(int argc, char **argv)
 {
-    int i, rc;
+    int i, rc, first_extra, total;
     const char *cmd, *file;
-    if (argc < 3) { fprintf(stderr, "usage: pde_test dump|open|objs FILE [-c N] [-k KB] [-f N] [-b N]\n"); return 2; }
+    if (argc < 3) { fprintf(stderr, "usage: pde_test CMD FILE [-c N] [-k KB] [-f N] [-b N] [-- ARGS]\n"); return 2; }
     cmd = argv[1]; file = argv[2];
+    total = argc;
+    first_extra = argc;
+    for (i = 3; i < argc; i++) if (!strcmp(argv[i], "--")) { first_extra = i + 1; argc = i; break; }
+    if (!strcmp(cmd, "multi")) {
+        for (i = 2; i < argc; i++) {
+            pdh_load(argv[i]);
+            if ((rc = do_init())) { printf("INIT rc=%d\n", rc); return 1; }
+            rc = do_open();
+            if (rc) printf("MULTI %s rc=%d\n", argv[i], rc);
+            else { printf("MULTI %s ok pages=%u\n", argv[i], op.npages); sig(); }
+            call(PDV_ENG_CLOSE, 0, 0, 0);
+        }
+        return 0;
+    }
     for (i = 3; i + 1 < argc; i += 2) {
         if (!strcmp(argv[i], "-c")) pdh_cluster = atoi(argv[i + 1]);
         else if (!strcmp(argv[i], "-k")) cache_kb = (unsigned)atoi(argv[i + 1]);
@@ -166,6 +355,7 @@ int main(int argc, char **argv)
     }
     if (pdh_load(file)) { fprintf(stderr, "cannot read %s\n", file); return 2; }
     if ((rc = do_init())) { printf("INIT rc=%d\n", rc); return 1; }
+    if (!strcmp(cmd, "faults")) { cmd_faults(file); return 0; }
     rc = do_open();
     if (rc) {
         printf("OPEN rc=%d err_obj=%u detail=%u reads=%lu\n", rc, op.err_obj, op.err_detail, pdh_reads);
@@ -177,8 +367,20 @@ int main(int argc, char **argv)
     }
     printf("OPEN ok pages=%u nrev=%u ver=%u flags=%u size=%u reads=%lu\n", op.npages, op.nrev, op.version, op.flags,
            ((unsigned)op.size.hi << 16) | op.size.lo, pdh_reads);
-    if (!strcmp(cmd, "dump")) dump();
-    else if (!strcmp(cmd, "objs")) objs();
+    {
+        char **ap = argv + first_extra;
+        int ex = total - first_extra;
+        if (ex < 0) ex = 0;
+        if (!strcmp(cmd, "dump")) dump();
+        else if (!strcmp(cmd, "objs")) objs();
+        else if (!strcmp(cmd, "get") && ex >= 2) cmd_get(ex, ap);
+        else if (!strcmp(cmd, "res") && ex >= 3) cmd_res(0, ex, ap);
+        else if (!strcmp(cmd, "resobj") && ex >= 4) cmd_res(1, ex, ap);
+        else if (!strcmp(cmd, "outline")) cmd_outline();
+        else if (!strcmp(cmd, "annots") && ex >= 1) cmd_annots(cmd_arg(ap[0]));
+        else if (!strcmp(cmd, "raw") && ex >= 2) cmd_raw(cmd_arg(ap[0]), cmd_arg(ap[1]));
+        else if (!strcmp(cmd, "strm") && ex >= 2) cmd_strm(cmd_arg(ap[0]), cmd_arg(ap[1]));
+    }
     call(PDV_ENG_CLOSE, 0, 0, 0);
     return 0;
 }

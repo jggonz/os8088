@@ -48,7 +48,7 @@ static pdw xr_entry(pdw num, pdw first, pdw count, const struct pd_u32 *off)
     if (u32_dec(&s_c, eb, 10)) goto bad;
     if (u32_dec(&s_b, eb + 11, 5) || s_b.hi) goto bad;     /* generation <= 65535 */
     if (eb[17] == 'f') {
-        pd_fpokew(g_tseg, slot, (pdw)(num + 1));
+        pd_fpokew(g_tseg, slot, num);
         pd_fpokew(g_tseg, (pdw)(slot + 2), 0);
         pd_fpokew(g_tseg, (pdw)(slot + 4), 0xFFFF);
         xo_state = 1;
@@ -57,7 +57,7 @@ static pdw xr_entry(pdw num, pdw first, pdw count, const struct pd_u32 *off)
     if (s_c.lo < 9 && s_c.hi == 0) goto bad;
     if (pdm_u32_cmp(&s_c, &fl_size) >= 0) goto bad;
     xo_off.lo = s_c.lo; xo_off.hi = s_c.hi;
-    pd_fpokew(g_tseg, slot, (pdw)(num + 1));
+    pd_fpokew(g_tseg, slot, num);
     pd_fpokew(g_tseg, (pdw)(slot + 2), xo_off.lo);
     pd_fpokew(g_tseg, (pdw)(slot + 4), xo_off.hi);
     xo_state = 2;
@@ -111,7 +111,7 @@ static pdw xr_find(pdw num)
     if (num == 0) { xo_state = 1; return PDE_OK; }
     slot = (pdw)(PDE_TBL_CACHE + (num & (PDE_OFFCACHE - 1)) * PDE_OCBYTES);
     tag = pd_fpeekw(g_tseg, slot);
-    if (tag == (pdw)(num + 1)) {
+    if (tag == num && num != 0xFFFF) {                 /* 0xFFFF = an empty slot, so 65535 is uncacheable */
         xo_off.lo = pd_fpeekw(g_tseg, (pdw)(slot + 2));
         xo_off.hi = pd_fpeekw(g_tseg, (pdw)(slot + 4));
         xo_state = (xo_off.hi == 0xFFFF) ? 1 : 2;
@@ -180,7 +180,8 @@ static pdw op_start(void)
     while (i < n && is_ws(tailbuf[i])) i++;
     j = i;
     while (j < n && tailbuf[j] >= '0' && tailbuf[j] <= '9') j++;
-    if (j == i || (pdw)(j - i) > 10) { err_detail = PDX_NOSTART; return PDE_TRUNC; }
+    if (j == i) { err_detail = PDX_NOSTART; return PDE_TRUNC; }
+    if ((pdw)(j - i) > 10) return PDE_XREF;
     if (u32_dec(&tr_start, tailbuf + i, (pdw)(j - i))) return PDE_XREF;
     if (pdm_u32_cmp(&tr_start, &fl_size) >= 0 || u32_is0(&tr_start)) return PDE_XREF;
     u32_cp(&xr_next, &tr_start);

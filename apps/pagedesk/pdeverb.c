@@ -39,7 +39,7 @@ static pdw open_step(void)
     pdw rc, k;
     switch (op_state) {
     case 0:
-        for (k = 0; k < PDE_OFFCACHE * PDE_OCBYTES; k += 2) pd_fpokew(g_tseg, (pdw)(PDE_TBL_CACHE + k), 0);
+        for (k = 0; k < PDE_OFFCACHE * PDE_OCBYTES; k += 2) pd_fpokew(g_tseg, (pdw)(PDE_TBL_CACHE + k), 0xFFFF);
         rc = op_start();
         if (rc) return rc;
         op_state = 2;
@@ -282,7 +282,7 @@ static pdw v_res_lookup(void)
 {
     static struct pdxb_reslookup rl;
     static struct pd_u32 rds;
-    pdw rc, num, gen, kind;
+    pdw rc, num, gen;
     pd_fcopy_in(g_xb, 0, &rl, sizeof(struct pdxb_reslookup));
     rl.category[15] = 0; rl.name[31] = 0;
     if (rl.page != 0xFFFF) {
@@ -565,7 +565,7 @@ unsigned pde_verb(unsigned verb, unsigned bx, unsigned cx, unsigned dx)
             }
         }
     }
-    if (rc == PDE_OK && pde_ioerr) rc = PDE_IO;
+    if (rc != PDE_BUSY && pde_ioerr) rc = PDE_IO;          /* a failed read is the truth, whatever the parser made of the gap */
     pde_fail = rc;
     return rc ? rc : pde_ax;
 }
