@@ -59,7 +59,7 @@ static void ep(pdi x, pdi y, pdw mv)
 }
 static void ec(pdi x1, pdi y1, pdi x2, pdi y2, pdi x3, pdi y3)
 {
-    pdi a, b, c, d;
+    static pdi a, b, c, d;
     edev(x1, y1); a = g_dx; b = g_dy;
     edev(x2, y2); c = g_dx; d = g_dy;
     edev(x3, y3);
@@ -319,10 +319,13 @@ static void ed_textline(pdw st, pdw n, pdi x, pdi y)
 }
 static void ed_text(void)
 {
-    pdw len = g_ed.text_len, size = g_ed.size ? g_ed.size : 12, s16 = (pdw)(size * 16), lead = (pdw)(s16 + s16 / 5), avail;
-    pdw fam = (pdw)(g_ed.style >> 4), fi, i, j, st, brk, end, nxt, eop, cw, c, lw, ox;
-    pdw wh, wl, bh, bl, th, tl, lh, ll;
-    pdi y;
+    /* static, not on the stack: the 512-byte UI stack carries this under the
+     * whole annotation phase chain (annot_go > annot_next > annot_edits) */
+    static pdw len, size, s16, lead, avail, fam, fi, i, j, st, brk, end, nxt, eop, cw, c, lw, ox;
+    static pdw wh, wl, bh, bl, th, tl, lh, ll;
+    static pdi y;
+    len = g_ed.text_len; size = g_ed.size ? g_ed.size : 12; s16 = (pdw)(size * 16); lead = (pdw)(s16 + s16 / 5);
+    fam = (pdw)(g_ed.style >> 4);
     if (len > 1024) len = 1024;
     if (!len) return;
     if (fam > 2) fam = 0;
