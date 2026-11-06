@@ -669,7 +669,11 @@ mouse_init:
     ; ours, so this is the ROM answering. An XT-class ROM has no such service
     ; and answers CF = 1 (the 5150's cassette code, AH = 80h; an XT's, 86h);
     ; IBM's contract for a table is CF = 0 AND AH = 0. ES and BX are the block
-    ; below's to load, so neither needs keeping
+    ; below's to load, so neither needs keeping. Save FLAGS across the whole
+    ; answer: the Pravetz 16S ROM rejects this with `stc / mov ah,86h /
+    ; retf 2`, leaving IF clear. Consume its CF before restoring ours, or
+    ; the timer stops and the serial reset's tick wait never finishes.
+    pushf
     mov ah, 0xC0
     stc
     int 0x15
@@ -680,6 +684,7 @@ mouse_init:
     mov dl, [es:bx+5]
     and dl, 0x10
 .no4f:
+    popf
 %endif
     ; --- save each present port's old vector, install ours -------------------
     xor ax, ax
