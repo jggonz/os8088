@@ -17,8 +17,6 @@
 
 #define PDF_K_FLATE     3       /* a chain stage, beside PDF_K_HEX / PDF_K_RLE */
 
-#define PDXI_FLATE      0x0001  /* pdxb_init.flags: the two words AFTER the struct hold flate_seg, flate_kb */
-
 #define PDE_NFL         2       /* slots: the page's stream and one form inside it */
 #define PDE_FLSLOT_KB   43      /* 32 KiB history + two 4 KiB predictor rows + 3 KiB of tables and saved state */
 #define PDE_FLSLOT_PARA 2752    /* ...in paragraphs                               */
@@ -69,7 +67,7 @@ static pdw fl_take(struct sctx *c, pdb *dst, pdw max);   /* the bulk of what is 
 static pdw fl_parms(pdw num);               /* /DecodeParms of the stream              */
 static pdw fl_attach(struct sctx *c);
 static void fl_drop(struct sctx *c);
-static void fl_init(pdw flags, pdw xbseg);
+static void fl_init(pdw flags, pdw seg, pdw kb);
 static pdw g_fseg, g_nfl;                   /* the claim; slots it holds (0: Flate is refused) */
 static struct flst fl;                      /* the loaded decoder */
 

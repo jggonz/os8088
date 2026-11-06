@@ -1,7 +1,7 @@
 /* os8088 - apps/pagedesk/hosttest/pde_fl_test.c
  * PDENG's FlateDecode on the host (PAGEDESK-SPEC 20.13): the verbs exactly as
  * the primary will speak them, with the Enhanced tier's flate claim handed in
- * through pdxb_init (flags = PDXI_FLATE and the two words after the struct).
+ * through pdxb_init (pdxb_init.flags = PDXI_FLATE, flate_seg, flate_kb).
  *
  *   pde_fl_test strm FILE OBJ OUT [-r CHUNK] [-w KB] [-c SECTORS] [-k CACHEKB]
  *       STRM_OPEN OBJ, STRM_READ it CHUNK bytes at a time into OUT. Prints
@@ -43,14 +43,11 @@ static void xb_get(void *p, unsigned n) { pd_fcopy_in(SEG_XB, 0, p, (pdw)n); }
 static int do_init(void)
 {
     struct pdxb_init in;
-    pdw ext[2];
     memset(&in, 0, sizeof in);
     in.xb_seg = SEG_XB; in.cache_seg = SEG_CACHE; in.cache_kb = (pdw)cache_kb;
     in.arena_seg = SEG_ARENA; in.arena_kb = 8; in.tables_seg = SEG_TBL; in.tables_kb = 11;
     if (flate_kb) {
-        in.flags = 1;                               /* PDXI_FLATE */
-        ext[0] = SEG_FLATE; ext[1] = (pdw)flate_kb;
-        pd_fcopy_out(ext, SEG_XB, (pdw)sizeof in, 4);
+        in.flags = PDXI_FLATE; in.flate_seg = SEG_FLATE; in.flate_kb = (pdw)flate_kb;
     }
     xb_put(&in, sizeof in);
     call(PDV_ENG_INIT, SEG_XB, 0, 0);

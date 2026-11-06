@@ -43,11 +43,10 @@ static unsigned flate_kb;
 static int do_init(void)
 {
     struct pdxb_init in;
-    pdw ext[2];
     memset(&in, 0, sizeof in);
     in.xb_seg = SEG_XB; in.cache_seg = SEG_CACHE; in.cache_kb = 16;
     in.arena_seg = SEG_ARENA; in.arena_kb = 8; in.tables_seg = SEG_TBL; in.tables_kb = 11;
-    if (flate_kb) { in.flags = 1; ext[0] = SEG_FLATE; ext[1] = (pdw)flate_kb; pd_fcopy_out(ext, SEG_XB, (pdw)sizeof in, 4); }
+    if (flate_kb) { in.flags = PDXI_FLATE; in.flate_seg = SEG_FLATE; in.flate_kb = (pdw)flate_kb; }
     pd_fcopy_out(&in, SEG_XB, 0, sizeof in);
     call(PDV_ENG_INIT, SEG_XB, 0, 0);
     return cf ? (int)pde_fail : 0;
