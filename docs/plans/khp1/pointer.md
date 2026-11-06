@@ -136,8 +136,9 @@ IMR bracket and two `sch_wake_ui`-class stores (section 4).
 | pointer-3 | `mou_apply` (`mou_whl_cl`, `mou_apply_w` new) | H2 (per packet) | the driver/VMware wheel decode (two `sar`, a zero add and a SECOND `sch_wake_ui`) moved out of the path every serial and PS/2 packet runs | 0 (+3 kern_emu) | 0 | ~210 cycles off the packet's third byte | 0.04 ms a packet, ~0.2% of the CPU while sweeping | M | same | `226fb2f8`, and its defect's fix `7e8e3220` (section 9) | FREE |
 | pointer-4 | `cur_move_mono` head and background walk | H2 | the save-buffer flip as `(a + b) - live` (no compare, no branch, -4 B); the background walk holds the row step's wrap bit and fix in DX/SI (+4 B) | 0 | 0 | `cur_move` 11,973 -> 11,536 CGA, 11,694 -> 11,413 Herc | packet byte 3.13 -> 3.00 ms CGA | M | same | `226fb2f8` | FREE |
 | pointer-5 | `cur_put_mono`, `cur_get_mono` | H2 (per lazy hide / show) | a word a row: one read of both bytes, one word banked, masks rotated into the word's byte order; `lodsw` and the row step in registers for the hide | -8 | -8 | put 6,309 -> 5,234, get 2,916 -> 2,215 (31 typed keys, CGA) | typing 31 keys under the pointer: 11.3 ms less busy, ~0.36 ms a key (CGA). os88hot `ab` of `type` vs `87104a50`, the whole branch: busy CGA 516.9 -> 505.9 ms (-2.1%), Hercules 458.0 -> 447.5 (-2.3%), VGA 525.6 -> 486.3 (-7.5%, pointer-2's planar show/hide) | M | same | `8780a506` | FREE |
+| pointer-6 | `cur_lazyend` (from `gfx_unlock` when a hold's hide survived) | H3 (per unlock of a hold away from the pointer) | "not moved" asked before the eight pushes, `pushf` and `cli`; the move reloads the position under cli (gfxcall's find, its section 7) | **+8** | **+8** | not moved 477 -> 224, moved 18,984 -> 11,463 (MartyPC CGA, called in place, base `87104a50`) | ~0.05 ms an unlock; no os88hot scenario reaches it today (a paint near the arrow spends the promise first), so it pays mainly if gfxcall-5 is taken | M | same | `8924a280` | **[+8] OWNER'S PICK** |
 
-All five keep the pixels and every result identical: proved under unicorn
+pointer-1 to pointer-5 keep the pixels and every result identical: proved under unicorn
 against the base kernel's own bytes - **36,000 random moves on kern_big and
 27,000 on kern_small** (CGA two-bank, Hercules four-bank and linear 1bpp
 geometry, all three shapes with their hot spots, the right and bottom
@@ -203,6 +204,19 @@ ABI. Nothing in the pointer path is slowed by a frozen interface.
   draws it) and cost the shape and hover up to 55 ms of lag. It changes
   behaviour (latency), so it is not taken.
 
+- **gfxcall-5's pointer half** (gfxcall.md section 6: the unclipped rect and
+  `fnt_unlazy` asking `cur_lazyrect` before hiding). Priced from this side:
+  what it saves per keystroke is one hide and one show, which pointer-5 has
+  already made cheaper (CGA 9,225 -> 7,449 cycles the pair), so its
+  -1.85 ms a Note Pad keystroke, measured on gfxcall's branch, is about
+  -1.5 ms on the merged tree. What it costs is `cur_lazyrect`'s ~300
+  cycles on every primitive of a hold whose promise stands; banking the
+  cell's VIRTUAL bounds once where the arrow is drawn (`cur_geom` already
+  banks the display-local ones) would make that test ~150 cycles for ~+20
+  bytes, and pointer-6 makes the unlock at the end of such a hold 224
+  cycles instead of 477. Still the owner's call: the arrow stays lit while
+  drawing happens beside it.
+
 ## 7. CROSS-FILE
 
 - **sched (`kernel/sched.inc`)**: `sch_switch` is 32% of a CGA pointer
@@ -247,7 +261,8 @@ green), `make -j2 small`, `make emu`, `make mega` all clean;
 `tools/stkbalance.py` reports the same 4 unbalanced paths on `mouse.inc`
 (5 with `vmmouse.inc`) at the base and the tip. The `kernel-hotpaths`
 merge at `87104a50` came after the rows and was not re-run here (no code
-of this branch moved in it).
+of this branch moved in it). For pointer-6, after merging `8f85f95c`:
+`curdisk`, `curbusy`, `mseglazy` and `gfxlk` once - **4 passed**.
 
 Rows that cover these items: `mouseup`, `curshape`, `curbusy`, `curdisk`,
 `mouresume`, `mouerrq`, `mouwheel`, `wheel`, `mousess` (the serial path,
