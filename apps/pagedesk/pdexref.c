@@ -64,7 +64,7 @@ static pdw xr_entry(pdw num, pdw first, pdw count, const struct pd_u32 *off)
     return 1;
 bad:
     err_obj = num;
-    err_detail = nrev;
+    err_detail = xr_rev;
     xr_rc = PDE_XREF;
     return 2;
 }
@@ -115,9 +115,11 @@ static pdw xr_find(pdw num)
         xo_off.lo = pd_fpeekw(g_tseg, (pdw)(slot + 2));
         xo_off.hi = pd_fpeekw(g_tseg, (pdw)(slot + 4));
         xo_state = (xo_off.hi == 0xFFFF) ? 1 : 2;
+        xr_rev = 0;                                     /* a cached entry: its revision is not kept */
         return PDE_OK;
     }
     for (r = 0; r < nrev; r++) {
+        xr_rev = r;
         last = 0xFFFF;
         for (j = 0; j < rv_n[r]; j++) {
             e = (pdw)(rv_lo[r] + j);
@@ -197,8 +199,10 @@ static pdw xr_add(pdw first, pdw count, const struct pd_u32 *off)
     pdw lo, n, j;
     if (++xr_total > PD_MAXSUBSEC) return PDE_LIMIT;
     lo = rv_lo[nrev]; n = rv_n[nrev];
+    /* a thinned revision is searched in ascending order: one out of order,
+     * before or AFTER the thinning, would hide objects (20.2.3) */
+    if (xr_unord && (rv_thin[nrev] || n == PDE_REVSUB)) return PDE_LIMIT;
     if (n == PDE_REVSUB) {                              /* thin: pairs become checkpoints */
-        if (xr_unord) return PDE_LIMIT;
         for (j = 0; j < PDE_REVSUB / 2; j++) {
             xs[lo + j].first = xs[lo + 2 * j].first;
             xs[lo + j].count = xs[lo + 2 * j].count;
@@ -258,7 +262,7 @@ static pdw op_rev(void)
         if (tk.iv.hi) return PDE_LIMIT;
         count = tk.iv.lo;
         n = (pdw)(0xFFFF - first);
-        if (count > n && (count != (pdw)(n + 1))) return PDE_XREF;     /* first+count <= 65536 */
+        if (count > n && (count != (pdw)(n + 1))) return PDE_LIMIT;    /* first+count <= 65536 (D8) */
         lx_skipws();
         lx_tell(&s_c);
         pdm_u32_mul16(&s_a, 20, count);

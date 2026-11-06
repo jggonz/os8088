@@ -160,7 +160,11 @@ static pdw v_raw_copy(void)
     if (pdm_u32_cmp(&rw.done, &ex_len) > 0) return PDE_RANGE;
     pdm_u32_sub(&s_c, &ex_len, &rw.done);              /* bytes left */
     want = rw.dmax;
+    if (want > 0xFFF0) want = 0xFFF0;                   /* pd_fcopy's largest move */
     if (s_c.hi == 0 && s_c.lo < want) want = s_c.lo;
+    /* the copy must not cross the end of the destination's segment: fl_copy
+     * adds its progress to doff in 16 bits, so a wrap would land at dseg:0 */
+    if (rw.doff != 0 && want > (pdw)(0 - rw.doff)) return PDE_RANGE;
     pdm_u32_add(&s_c, &sp_off, &rw.done);
     rw.got = fl_read_far(&s_c, rw.dseg, rw.doff, want);
     if (rw.got < want) return pde_ioerr ? PDE_IO : PDE_TRUNC;
@@ -204,7 +208,12 @@ static int key_index(const char *k)
 {
     int v = 0, i = 1;
     if (k[0] != '[') return -1;
-    while (k[i] >= '0' && k[i] <= '9') { v = v * 10 + (k[i] - '0'); if (v > PD_MAXITEMS) return -1; i++; }
+    while (k[i] >= '0' && k[i] <= '9') {
+        if (v > PD_MAXITEMS / 10) return -1;            /* before the multiply: int is 16 bits */
+        v = v * 10 + (k[i] - '0');
+        if (v > PD_MAXITEMS) return -1;
+        i++;
+    }
     if (k[i] != ']' || i == 1) return -1;
     return v;
 }

@@ -464,7 +464,7 @@ def own(pde, work):
         "n_objnum_70000": "open:33", "n_flate": "stream:16", "n_lzw": "stream:17", "n_a85": "stream:17", "n_dct": "stream:17",
         "n_crypt": "stream:17", "n_chain5": "stream:33", "n_chain4": "ok", "n_unknown": "stream:17", "n_rle_bomb": "read:33",
         "n_encrypt": "open:20", "n_perms": "flags:1", "n_sigflags": "flags:5", "n_acroform": "flags:4", "n_xrefstm": "open:21",
-        "hybrid": "ok", "n_good": "ok",
+        "hybrid": "ok", "n_good": "ok", "n_hexws_bomb": "read:33", "n_thin_unord": "open:33", "n_subsec_65540": "open:33",
     }
     for name, e in sorted(EXP.items()):
         out = lines(pde, "dump", P(name + ".pdf"), (), ("-b", "100000"))
@@ -498,6 +498,23 @@ def own(pde, work):
     for nme in ("n_good", "filters", "incr", "outline", "res", "sparse"):
         l = lines(pde, "faults", P(nme + ".pdf"))
         expect(l and l[-1].startswith("FAULTS ok"), "faults %s: %s" % (nme, l[-1:] if l else l))
+    # verify-eng: FINGERPRINT sees a file another program APPENDED an update to
+    # (same first KiB, same old last KiB, new size) and the same bytes as the same.
+    # filters.pdf is over 2 KiB, so the old head and tail are both unchanged
+    g = open(P("filters.pdf"), "rb").read()
+    expect(len(g) > 2048, "fpchange needs a file over 2 KiB")
+    grown = os.path.join(work, "fp_grown.pdf")
+    with open(grown, "wb") as f:
+        f.write(g + b"99 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>\nendobj\n" + b" " * 900)
+    l = lines(pde, "fpchange", P("filters.pdf"), (grown,))
+    fp = [x for x in l if x.startswith("FP before")]
+    expect(fp and fp[0].endswith(" CHANGED") and "before rc=0" in fp[0] and "after rc=0" in fp[0], "fingerprint of an appended file: %s" % fp)
+    l = lines(pde, "fpchange", P("n_good.pdf"), (P("n_good.pdf"),))
+    fp = [x for x in l if x.startswith("FP before")]
+    expect(fp and fp[0].endswith(" SAME"), "fingerprint of the same bytes: %s" % fp)
+    # verify-eng: err_detail names the revision whose entry is wrong (0 = newest)
+    f0 = first_of(pde, P("n_xref_off_eof.pdf"), ())
+    expect(f0.startswith("OPEN rc=2 ") and " detail=0 " in f0, "a bad entry in the only revision is detail 0: %s" % f0)
     # claims
     expect(first_of(pde, P("n_good.pdf"), ("-k", "4")).startswith("OPEN rc=34"), "a 4 KiB cache is PDE_NOMEM")
     for c in (1, 2, 4, 8, 16, 32, 64):

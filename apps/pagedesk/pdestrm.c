@@ -25,10 +25,28 @@ static int raw_get(struct sctx *c)
     return c->rb[c->rbi++];
 }
 
+/* One decoded byte from stage i (i < 0: the raw file bytes), or -1.
+ * sget counts every byte EVERY stage produces against PDE_WORK_HI: the 1 MiB
+ * output bound (st_account) is the top stage's, and a lower stage that only
+ * feeds white space to an ASCIIHex above it - /Filter [/RL /RL /RL /AHx] -
+ * would otherwise run 128^3 bytes of work a raw byte inside ONE call (PD-28). */
+static int sget1(struct sctx *c, int i);
 static int sget(struct sctx *c, int i)
 {
-    int b, d, v, n;
+    int b;
+    pdw k;
     if (i < 0) return raw_get(c);
+    b = sget1(c, i);
+    if (b >= 0 && ++c->wlo == 0 && ++c->whi >= PDE_WORK_HI) {
+        lx_err = PDE_LIMIT;
+        for (k = 0; k < PD_MAXFILTERS; k++) c->fdone[k] = 1;
+        return -1;
+    }
+    return b;
+}
+static int sget1(struct sctx *c, int i)
+{
+    int b, d, v, n;
     if (c->fdone[i]) return -1;
     if (c->flt[i] == PDF_K_HEX) {
         do { b = sget(c, i - 1); } while (b >= 0 && is_ws(b));
@@ -252,7 +270,7 @@ static pdw st_push(pdw filtered)
     for (i = 0; i < PD_MAXFILTERS; i++) {
         c->flt[i] = sp_flt[i]; c->fcnt[i] = 0; c->fbyte[i] = 0; c->fdone[i] = 0;
     }
-    c->rbn = 0; c->rbi = 0; c->depth = 0;
+    c->rbn = 0; c->rbi = 0; c->depth = 0; c->wlo = 0; c->whi = 0;
     c->filters = sp_filters;
     nctx++;
     return PDE_OK;
@@ -269,6 +287,7 @@ static pdw pg_contents(pdw page, pdw index)
     num = pgn; gen = pgg;
     rc = ob_enter(num, gen);
     if (rc) return rc;
+    if (ob_null) { err_obj = num; return PDE_SYNTAX; }
     rc = ob_value();
     if (rc) return rc;
     if (ov.kind != PDK_DICT) { err_obj = num; return PDE_SYNTAX; }

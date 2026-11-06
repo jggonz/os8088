@@ -19,6 +19,8 @@
  *   pde_test faults FILE                              fail every read in turn: IO error, never a crash,
  *                                                     and the engine opens the file afterwards
  *   pde_test multi FILE...                            open each in turn on one engine (re-INIT, reuse)
+ *   pde_test fpchange FILE -- FILE2                   FINGERPRINT, then the same name holds FILE2's
+ *                                                     bytes (another program saved it): FINGERPRINT again
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -422,6 +424,19 @@ int main(int argc, char **argv)
         else if (!strcmp(cmd, "annots") && ex >= 1) cmd_annots(cmd_arg(ap[0]));
         else if (!strcmp(cmd, "raw") && ex >= 2) cmd_raw(cmd_arg(ap[0]), cmd_arg(ap[1]));
         else if (!strcmp(cmd, "strm") && ex >= 2) cmd_strm(cmd_arg(ap[0]), cmd_arg(ap[1]));
+        else if (!strcmp(cmd, "fpchange") && ex >= 1) {
+            struct pdxb_fingerprint a, b;
+            unsigned r1, r2;
+            r1 = call(PDV_ENG_FINGERPRINT, 0, 0, 0); xb_get(&a, sizeof a);
+            if (pdh_load(ap[0])) { fprintf(stderr, "cannot read %s\n", ap[0]); return 2; }
+            r2 = call(PDV_ENG_FINGERPRINT, 0, 0, 0); xb_get(&b, sizeof b);
+            printf("FP before rc=%u size=%u head=%04x tail=%04x after rc=%u size=%u head=%04x tail=%04x %s\n",
+                   r1, ((unsigned)a.size.hi << 16) | a.size.lo, a.crc_head, a.crc_tail,
+                   r2, ((unsigned)b.size.hi << 16) | b.size.lo, b.crc_head, b.crc_tail,
+                   memcmp(&a, &b, sizeof a) ? "CHANGED" : "SAME");
+            r1 = call(PDV_ENG_PAGEINFO, 0, 0, 0);
+            printf("FP pageinfo after the change rc=%u\n", cf ? r1 : 0);
+        }
     }
     call(PDV_ENG_CLOSE, 0, 0, 0);
     return 0;

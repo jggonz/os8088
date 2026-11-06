@@ -20246,6 +20246,25 @@ $(BUILD)/pde_test: $(PDE_SRC) apps/pagedesk/pdmath.c apps/pagedesk/pdmath.h apps
 
 pdeng: $(BUILD)/PDENG.MOD $(BUILD)/pde_test apps/pagedesk/hosttest/pde_check.py
 	python3 apps/pagedesk/hosttest/pde_check.py $(BUILD)/pde_test $(BUILD)/pdeng-fix
+
+# `make pdefuzz` - the hostile-input pass (PAGEDESK-SPEC 20.2.1, PD-28): the
+# engine built with AddressSanitizer and UBSan, every verb driven over
+# mutations of the corpus `make pdeng` generates. PDEFUZZ_N mutations a file
+# (100 is about half a minute here), PDEFUZZ_SEED picks them. Host only.
+PDEFUZZ_N    ?= 100
+PDEFUZZ_SEED ?= 1
+PDE_SAN      ?= -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer
+$(BUILD)/pde_fuzz: $(PDE_SRC) apps/pagedesk/pdmath.c apps/pagedesk/pdmath.h apps/pagedesk/hosttest/pde_fuzz.c \
+                   apps/pagedesk/hosttest/pde_host.c apps/pagedesk/hosttest/pdhost.c | $(BUILD)
+	$(HOSTCC) -g -O1 $(PDE_SAN) -Wall -Wextra -Wno-unused-parameter -DPD_HOST -Iapps/pagedesk -Iapps/pagedesk/hosttest \
+		apps/pagedesk/pdeng.c apps/pagedesk/hosttest/pde_fuzz.c apps/pagedesk/hosttest/pde_host.c \
+		apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c -o $@
+
+.PHONY: pdeng pdefuzz
+pdefuzz: pdeng $(BUILD)/pde_fuzz
+	$(BUILD)/pde_fuzz -n $(PDEFUZZ_N) -s $(PDEFUZZ_SEED) -o $(BUILD)/pdeng-fix \
+		$(BUILD)/pdeng-fix/own/*.pdf $(BUILD)/pdeng-fix/shared/samples/*.PDF \
+		$(BUILD)/pdeng-fix/shared/neg/*.pdf $(BUILD)/pdeng-fix/shared/stress/*.PDF
 # ---- end PageDesk: eng ------------------------------------------------------
 
 # ---- PageDesk: math ----

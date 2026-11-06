@@ -71,6 +71,7 @@ static struct pd_u32 xr_seen[PD_MAXREV];
 static pdw   nrev;
 static struct pd_u32 xr_next;   /* the /Prev to follow, 0 = none              */
 static pdw   xo_state;          /* 0 absent, 1 free, 2 in use                 */
+static pdw   xr_rev;            /* the revision xr_find answered from (err_detail) */
 static struct pd_u32 xo_off;
 static pdw   xo_gen;
 static pdw   tr_size, tr_root_n, tr_root_g, tr_info_n, tr_info_g, tr_has_root;

@@ -252,8 +252,10 @@ static pdw v_pageinfo(pdw page)
     /* /Annots and /Contents are the page's own */
     rc = ob_enter(num, gen);
     if (rc) return rc;
+    if (ob_null) { err_obj = num; return PDE_SYNTAX; }  /* the walk saw it: never, but never parse air */
     rc = ob_value();
     if (rc) return rc;
+    if (ov.kind != PDK_DICT) { err_obj = num; return PDE_SYNTAX; }
     lx_tell(&ds);
     pi.flags = PDP_NOCONTENT;
     rc = ob_dict_find("Contents");

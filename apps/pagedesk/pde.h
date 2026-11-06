@@ -22,6 +22,7 @@
 #define PDE_TBL_BYTES   11264   /* 1024 pages x 8 + 512 x 6                   */
 #define PDE_VISBYTES    8192    /* arena: a bit per object number             */
 #define PDE_OUTMAX_HI   16      /* decoded stream limit: 16 x 64 KiB = 1 MiB  */
+#define PDE_WORK_HI     (PDE_OUTMAX_HI * PD_MAXFILTERS) /* every stage's bytes: 4 MiB */
 #define PDE_FILEMAX_HI  0x8000  /* a file of 2 GiB or more is refused         */
 #define PDE_TAIL        1024
 #define PDE_VT          256     /* a value's kept text                        */
@@ -68,6 +69,7 @@ struct sctx {
     pdb rb[PDE_RB];
     pdw rbn, rbi;
     pdw depth;              /* TOKEN's array/dict nesting                 */
+    pdw wlo, whi;           /* bytes every filter stage produced (sget)   */
     pdw filters;            /* PDFL_* of the chain                        */
 };
 

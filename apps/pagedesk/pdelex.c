@@ -397,7 +397,7 @@ static pdw ob_enter(pdw num, pdw gen)
     return PDE_OK;
 bad:
     err_obj = num;
-    err_detail = nrev;
+    err_detail = xr_rev;                        /* the revision whose entry pointed here */
     return PDE_XREF;
 }
 

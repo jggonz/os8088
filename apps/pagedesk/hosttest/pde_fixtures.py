@@ -384,6 +384,31 @@ def build(d):
     p.stream(4, b"/Filter /RunLengthDecode", b"\x81\x00" * 20000 + b"\x80")
     p.xref(1)
     save("n_rle_bomb.pdf", p)
+    # verify-eng: white space a LOWER stage makes and ASCIIHex skips is work too
+    # (PDE_WORK_HI): 0x81 0x20 -> 128 spaces, 40000 pairs = 5.1 MB of them
+    p = P()
+    p.put(1, b"<< /Type /Catalog /Pages 2 0 R >>")
+    p.put(2, b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 10 10] >>")
+    p.put(3, b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>")
+    p.stream(4, b"/Filter [/RL /AHx]", b"\x81\x20" * 40000 + b"\x80")
+    p.xref(1)
+    save("n_hexws_bomb.pdf", p)
+    # verify-eng: a thinned revision (33+ subsections) with one out of order
+    # AFTER the thinning is PDE_LIMIT, as one before it always was (20.2.3)
+    p = P()
+    p.put(1, b"<< /Type /Catalog /Pages 2 0 R >>")
+    p.put(2, b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 100] >>")
+    p.put(3, b"<< /Type /Page /Parent 2 0 R >>")
+    for i in range(40):
+        p.put(1000 + 7 * i, b"<< /Filler %d >>" % i)
+    order = [0, 1, 2, 3] + [1000 + 7 * i for i in range(40) if i != 5] + [1035]
+    p.xref(1, per_object=True, order=order)
+    save("n_thin_unord.pdf", p)
+    # verify-eng: a subsection reaching past object 65535 is PDE_LIMIT (D8)
+    g2 = bytes(basic().b)
+    t = g2.index(b"trailer")
+    g2 = g2[:t] + b"65530 10\n" + b"0000000000 00000 f \n" * 10 + g2[t:]
+    save("n_subsec_65540.pdf", g2)
     # a stream the content lexer must survive: a 100,000-byte string, huge numbers, nesting, an inline image
     big = (b"[" * 30 + b"]" * 30 + b" 99999999999 -99999999999 123456.789e3 1.5 (" + b"s" * 100000 + b") Tj\n"
            b"BI /W 2 /H 2 /BPC 8 /CS /G ID \x01\x02\x03\x04\nEI Q\n(\\(esc\\)) Tj <4142> Tj /N#41 gs % comment\n[(a)-5(b)] TJ")

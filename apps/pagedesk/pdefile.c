@@ -27,11 +27,29 @@ static int fl_nameq(const char *a, const char *b)
     return *a == 0 && *b == 0;
 }
 
+/* fl_name's directory entry into fl_fnd, and fl_name respelled as the
+ * directory spells it (READ_SEQ takes the name on every call). PDE_IO when it
+ * is not in the current folder. */
+static struct os88_find fl_fnd;
+static pdw fl_find(void)
+{
+    int ord, nx;
+    pdw i;
+    for (ord = 0;;) {
+        nx = os88_file_find(ord, &fl_fnd);
+        if (nx < 0 || nx <= ord) return PDE_IO;     /* not in this folder (or a find that does not advance) */
+        ord = nx;
+        if (fl_fnd.type >= OS88_FT_DIR) continue;
+        if (fl_nameq(fl_fnd.name, fl_name)) break;
+    }
+    for (i = 0; i < 13 && fl_fnd.name[i]; i++) fl_name[i] = fl_fnd.name[i];
+    fl_name[i] = 0;
+    return PDE_OK;
+}
+
 /* Name, size and packed-ness from the directory; geometry from the claim. */
 static pdw fl_open(const char *name)
 {
-    static struct os88_find fnd;
-    int ord, nx;
     pdw cs, k, i, bytes;
     cs = (pdw)os88_disk_cluster_sectors();
     if (cs == 0) cs = 1;
@@ -50,15 +68,10 @@ static pdw fl_open(const char *name)
     for (i = 0; i < 13 && name[i]; i++) fl_name[i] = name[i];
     fl_name[i] = 0;
     fl_invalidate();
-    for (ord = 0;;) {
-        nx = os88_file_find(ord, &fnd);
-        if (nx < 0) return PDE_IO;                  /* not in this folder    */
-        ord = nx;
-        if (fnd.type >= OS88_FT_DIR) continue;
-        if (fl_nameq(fnd.name, fl_name)) break;
-    }
-    if (fnd.rsvd & 1) { err_detail = PDX_PACKED; return PDE_SYNTAX; }
-    fl_size.lo = fnd.size_lo; fl_size.hi = fnd.size_hi;
+    i = fl_find();
+    if (i) return i;
+    if (fl_fnd.rsvd & 1) { err_detail = PDX_PACKED; return PDE_SYNTAX; }
+    fl_size.lo = fl_fnd.size_lo; fl_size.hi = fl_fnd.size_hi;
     if (fl_size.hi >= PDE_FILEMAX_HI) return PDE_LIMIT;
     g_filed = 1;
     return PDE_OK;
@@ -124,7 +137,8 @@ static pdw fl_copy(struct pd_u32 *pos, pdb *dst, pdw dseg, pdw doff, pdw n)
         take = (pdw)(fl_valid[slot] - inb);
         if (take > (pdw)(n - done)) take = (pdw)(n - done);
         if (dst) pd_fcopy_in(g_cseg, (pdw)(slot * fl_blk + inb), dst + done, take);
-        else pd_fcopy(dseg, (pdw)(doff + done), g_cseg, (pdw)(slot * fl_blk + inb), take);
+        else if (pd_fcopy(dseg, (pdw)(doff + done), g_cseg, (pdw)(slot * fl_blk + inb), take) != take)
+            break;                                  /* refused (it would wrap): stop short */
         pdm_u32_add16(pos, take);
         done = (pdw)(done + take);
     }
@@ -133,25 +147,38 @@ static pdw fl_copy(struct pd_u32 *pos, pdb *dst, pdw dseg, pdw doff, pdw n)
 static pdw fl_read(struct pd_u32 *pos, pdb *dst, pdw n) { return fl_copy(pos, dst, 0, 0, n); }
 static pdw fl_read_far(struct pd_u32 *pos, pdw dseg, pdw doff, pdw n) { return fl_copy(pos, 0, dseg, doff, n); }
 
-/* 6.2: size, CRC-16 of the first and last KiB, read fresh off the disk. */
+/* 6.2: size, CRC-16 of the first and last KiB, read fresh off the disk.
+ * The size is the directory's NOW, not OPEN's, and the tail is read at it: a
+ * file another program appended an update to keeps its first KiB and the KiB
+ * that used to be last, so a fingerprint taken at OPEN's size could not see
+ * the change the writer asks this verb about (14.4). The open document's own
+ * fl_size is put back afterwards and the cache dropped again: what was read
+ * under the new size is not the document that was parsed. */
+static struct pd_u32 fp_keep;
 static pdw fl_fingerprint(struct pdxb_fingerprint *fp)
 {
-    pdw n;
+    pdw n, rc;
     fl_invalidate();
     pde_ioerr = 0;
+    rc = fl_find();
+    if (rc) return rc;
+    u32_cp(&fp_keep, &fl_size);
+    fl_size.lo = fl_fnd.size_lo; fl_size.hi = fl_fnd.size_hi;
     fp->size.lo = fl_size.lo; fp->size.hi = fl_size.hi;
     u32_zero(&s_c);
     n = fl_read(&s_c, tailbuf, PDE_TAIL);
-    if (pde_ioerr) return PDE_IO;
-    fp->crc_head = pdm_crc16(0xFFFF, tailbuf, n);
-    if (fl_size.hi == 0 && fl_size.lo <= PDE_TAIL) {
-        fp->crc_tail = fp->crc_head;
-    } else {
-        u32_cp(&s_c, &fl_size);
-        u32_sub16(&s_c, PDE_TAIL);
-        n = fl_read(&s_c, tailbuf, PDE_TAIL);
-        if (pde_ioerr) return PDE_IO;
-        fp->crc_tail = pdm_crc16(0xFFFF, tailbuf, n);
+    if (!pde_ioerr) {
+        fp->crc_head = pdm_crc16(0xFFFF, tailbuf, n);
+        if (fl_size.hi == 0 && fl_size.lo <= PDE_TAIL) {
+            fp->crc_tail = fp->crc_head;
+        } else {
+            u32_cp(&s_c, &fl_size);
+            u32_sub16(&s_c, PDE_TAIL);
+            n = fl_read(&s_c, tailbuf, PDE_TAIL);
+            fp->crc_tail = pdm_crc16(0xFFFF, tailbuf, n);
+        }
     }
-    return PDE_OK;
+    u32_cp(&fl_size, &fp_keep);
+    fl_invalidate();
+    return pde_ioerr ? PDE_IO : PDE_OK;
 }
