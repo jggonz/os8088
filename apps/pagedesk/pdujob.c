@@ -446,7 +446,6 @@ static const unsigned pdu_savever[3] = { PDV_WRT_SAVE, PDV_WRT_NEWDOC,
                                          PDV_WRT_EXTRACT };
 static const unsigned pdu_savemode[3] = { PDSV_INCREMENTAL, PDSV_FRESH,
                                           PDSV_EXTRACT };
-static struct pdxb_fingerprint pdu_fp;
 
 static void pdu_save_done(unsigned err)
 {

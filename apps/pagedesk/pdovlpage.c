@@ -382,9 +382,9 @@ static int ovl_save_begin(const char *name, int kind)
         pdu_at_doc();
         pdu_mcall(PDU_M_ENG, PDV_ENG_FINGERPRINT, 0, 0, 0);
         if (!pdu_mcf) {
-            pd_fcopy_in(pdu_xb, 0, &pdu_fp, sizeof(pdu_fp));
-            if (pdu_fp.size.lo != pdu_xopen.size.lo
-                || pdu_fp.size.hi != pdu_xopen.size.hi) {
+            /* pdxb_fingerprint's size, the first two words */
+            if (pd_fpeekw(pdu_xb, 0) != pdu_xopen.size.lo
+                || pd_fpeekw(pdu_xb, 2) != pdu_xopen.size.hi) {
                 os88_file_goto_q_mark(pdu_tgtplace.clus, pdu_tgtplace.vol);
                 pdu_say2("Could not save ", pdu_errtext(PDE_CHANGED));
                 pdu_status_paint();
@@ -400,7 +400,8 @@ static int ovl_save_begin(const char *name, int kind)
         pdu_status_paint();
         return 1;
     }
-    os88_memset(&pdu_xsave, 0, sizeof(pdu_xsave));
+    for (r = 0; r < (int)sizeof(pdu_xsave); r++)
+        ((char *)&pdu_xsave)[r] = 0;
     os88_strcpy(pdu_xsave.target, name, sizeof(pdu_xsave.target));
     /* D9: what an incremental save copies, and the stamp it writes. The
      * source is the open document's 8.3 name; author stays "" (no author
