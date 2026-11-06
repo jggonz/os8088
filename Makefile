@@ -17481,6 +17481,96 @@ ALLAPPSARGS := $(addprefix APPS:,$(APPS_TOOLS) $(CORE_SYSONLY) \
                $(APPSYSARGS) \
                $(addprefix SYSTEM/DOS:,$(APPS_DOS) $(APPS_DOSCZ))
 
+# ---- PageDesk: shell ----
+# PAGEDESK.O88 (docs/PAGEDESK-SPEC.md 2.2, 20.6): the primary C package and
+# its five parts - PDENG and PDREND (eager), PDWRT (lazy), PDRES (lazy, read
+# by offset) and the overlay. `make pagedesk` builds it; `make pagedeskdisk`
+# its own floppy in all four geometries. NOT IN `all`, for cworddisk's and
+# loomdisk's reason: a C package needs SmallerC (SPEC.md 73.1).
+#
+# THE MODULES ARE VARIABLES. PD_ENG_MOD / PD_REND_MOD / PD_WRT_MOD /
+# PD_RES_BIN name each module image (a bare `nasm -f bin` output, its own
+# 8-byte header at +0, PAGEDESK-SPEC 3.1) and default to the STAND-INS in
+# apps/pagedesk/stubs/, so the package builds and launches before the real
+# modules land; the module agents' blocks build $(BUILD)/PDENG.MOD and the
+# rest, and the lead flips these defaults at integration. PD_MATH_STUB=1
+# likewise builds against stubs/pdmstub.inc until pdmath.inc lands.
+PDDIR        := apps/pagedesk
+PDSTUBDIR    := $(BUILD)/pdstub
+PD_MATH_STUB ?= 1
+PD_ENG_MOD   ?= $(PDSTUBDIR)/PDENG.MOD
+PD_REND_MOD  ?= $(PDSTUBDIR)/PDREND.MOD
+PD_WRT_MOD   ?= $(PDSTUBDIR)/PDWRT.MOD
+PD_RES_BIN   ?= $(PDSTUBDIR)/PDRES.BIN
+
+$(PDSTUBDIR):
+	@mkdir -p $@
+$(PDSTUBDIR)/PDENG.MOD: $(PDDIR)/stubs/pdstub.asm apps/os88api.inc | $(PDSTUBDIR)
+	$(NASM) -f bin -w+error -I apps/ -DSTUB_ENG -o $@ $<
+$(PDSTUBDIR)/PDREND.MOD: $(PDDIR)/stubs/pdstub.asm apps/os88api.inc | $(PDSTUBDIR)
+	$(NASM) -f bin -w+error -I apps/ -DSTUB_REND -o $@ $<
+$(PDSTUBDIR)/PDWRT.MOD: $(PDDIR)/stubs/pdstub.asm apps/os88api.inc | $(PDSTUBDIR)
+	$(NASM) -f bin -w+error -I apps/ -DSTUB_WRT -o $@ $<
+$(PDSTUBDIR)/PDRES.BIN: $(PDDIR)/stubs/pdresstub.asm | $(PDSTUBDIR)
+	$(NASM) -f bin -w+error -o $@ $<
+
+# A module PART is its image followed by its .bss as zeros, read out of the
+# header the module wrote (+4 image, +6 bss) - apps/loom's lmpvpart rule -
+# so the carve or op_fetch's claim covers the bss (pagedesk.asm's table).
+PD_PARTPAD = @python3 -c "import struct,sys; d=open('$<','rb').read(); \
+	    s,b=struct.unpack_from('<HH',d,4); assert s==len(d), ('$<',s,len(d)); \
+	    open('$@','wb').write(d+bytes(b))"
+$(BUILD)/pdeng.part: $(PD_ENG_MOD) | $(BUILD)
+	$(PD_PARTPAD)
+$(BUILD)/pdrend.part: $(PD_REND_MOD) | $(BUILD)
+	$(PD_PARTPAD)
+$(BUILD)/pdwrt.part: $(PD_WRT_MOD) | $(BUILD)
+	$(PD_PARTPAD)
+
+# the one translation unit (SPEC.md 73.1): pagedesk.c #includes its parts,
+# so every one of them is a prerequisite or an edit rebuilds nothing
+PDCSRC := $(PDDIR)/pagedesk.c $(wildcard $(PDDIR)/pdu*.c $(PDDIR)/pdu*.h) \
+          $(PDDIR)/pdovl.c $(PDDIR)/pdabi.h $(PDDIR)/pdmath.h
+PDASRC := $(PDDIR)/pagedesk.asm $(PDDIR)/pdui.inc $(PDDIR)/icon.inc \
+          $(PDDIR)/pduassoc.inc $(PDDIR)/pduglyph.inc \
+          $(if $(filter 1,$(PD_MATH_STUB)),$(PDDIR)/stubs/pdmstub.inc,$(PDDIR)/pdmath.inc) \
+          apps/weave/wfetch.inc apps/os88ui.inc
+PDMATHSTAMP := $(BUILD)/.pdmath-$(if $(filter 1,$(PD_MATH_STUB)),stub,real)
+$(PDMATHSTAMP): | $(BUILD)
+	@rm -f $(BUILD)/.pdmath-stub $(BUILD)/.pdmath-real
+	@touch $@
+
+$(BUILD)/pagedesk.raw.asm: $(PDCSRC) $(CC_RUNTIME) | $(BUILD) cc-toolchain
+	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S \
+		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) -I $(PDDIR) \
+		$(PDDIR)/pagedesk.c -o $@
+
+$(BUILD)/pagedesk.gen.asm: $(BUILD)/pagedesk.raw.asm tools/cc8086.py tools/ccpeep.py $(CC_PEEPSTAMP)
+	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME) $(CC_PEEPARG)
+
+$(BUILD)/pagedesk.bin: $(PDASRC) $(BUILD)/pagedesk.gen.asm $(CC_RUNTIME) $(PDMATHSTAMP) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ \
+		$(if $(filter 1,$(PD_MATH_STUB)),-DPD_MATH_STUB) \
+		-o $@ $(PDDIR)/pagedesk.asm
+	@echo "pagedesk: $(call FILESIZE,$@) bytes (primary + overlay, before the cut)"
+
+# the overlay is cut off the image and rides as the LAST part (SPEC.md
+# 73.14.2); os88pkg.py refuses a --part count that is not the table's rows
+$(BUILD)/pagedesk.o88: $(BUILD)/pagedesk.bin $(BUILD)/pdeng.part \
+                       $(BUILD)/pdrend.part $(BUILD)/pdwrt.part $(PD_RES_BIN) \
+                       tools/os88pkg.py tools/os88ovl.py $(PKGZSTAMP)
+	python3 tools/os88ovl.py $< -o $(BUILD)/PAGEDESK.OVL \
+		--trim $(BUILD)/pagedesk.trim.bin
+	$(OS88PKG) $(BUILD)/pagedesk.trim.bin -o $@ $(CC_PARTZ) \
+		--part $(BUILD)/pdeng.part --part $(BUILD)/pdrend.part \
+		--part $(BUILD)/pdwrt.part --part $(PD_RES_BIN) \
+		--part $(BUILD)/PAGEDESK.OVL
+$(BUILD)/PAGEDESK.OVL: $(BUILD)/pagedesk.o88 ;
+
+pagedesk: $(BUILD)/pagedesk.o88
+.PHONY: pagedesk pagedeskdisk
+# ---- end PageDesk: shell ----
+
 allapps: $(ALLAPPSLIST) $(ALLAPPSLIST120)
 
 # One recipe for both sets: they differ in the --size, which is also the
