@@ -341,3 +341,15 @@ agent's TAKEN rows. Its columns are what each note's TAKEN table carries:
   VGA boot 16.0 s with 18 int 13h calls. An idle desktop is 94% halted and
   its busy time is `sch_switch` 45%, `sch_account` 15%. A CGA raise is
   `sw_xfer` 36%, `sw_col` 18%, `sw_plane_op` 7%.
+* **Merge `kernel-hotpaths` (`763f4437`) now.** It carries three shared
+  fixes. (1) `mod_cfix` tests 9A/EA exactly (disk, `6209b524`, +2 `.cold`
+  on kern_big). Its old `(op | 70h) == FAh` test accepted 8A and BA too,
+  which failed `make` at `build/coldhma.sys` whenever resident growth moved
+  the HMA `COLD_HOME` onto such a byte (vga hit it at 08B3h). (2) `os88sym`
+  resolves the `.vga` rung's labels (vga). (3) `deskbench` raises a buried
+  placement through the dock (wm). **What is left of the hazard**: 14 homes
+  remain that no opcode test can tell from a real site. The nearest one
+  above today's 08AEh is **090Bh**, about 1.5 KB of resident growth BEFORE
+  `.cold` away. That is a pass-wide limit, and the coordinator watches the
+  merged total. If your branch alone adds more than ~300 bytes before
+  `.cold`, say so in your final message.
