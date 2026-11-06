@@ -1,0 +1,142 @@
+diff --git a/SPEC.md b/SPEC.md
+index 30ecc9b0..ff3ec9f9 100644
+--- a/SPEC.md
++++ b/SPEC.md
+@@ -18480,6 +18480,27 @@ window through `wm_pkgcall` on the calling task (the hard freeze
+ paint procs. The rule stands: never from a worker, and never from inside a
+ W_PAINT.
+ 
++#### 11.1.2.1 …and on `kern_big` it is one blit
++
++The box is a 13×13 picture — the outer square filled and framed, the large
++square framed, the small one filled and framed — and `wm_grow_paint` drew it as
++two `gfx_fill`s and three `gfx_frame`s: **fourteen primitive calls**, ~49k
++cycles, 10 ms on the 5150/CGA, for 169 pixels, after every draw of a front
++sizable window and every package repaint that asks for it. On `kern_big` the
++picture those calls leave is a 13-word bitmap (`wm_grow_bmp`); it is shifted to
++the box's pixel phase into a 39-byte band (`wm_gr_band`, three bytes a row,
++`x & 7` pixels in — where `gfx_blit1` starts an off-grid band, §5.4.2.8) and
++put down in ONE `gfx_blit1`, in `thm_pair`'s ink and ground: §5.4.2.2's pen on
++a VGA, and on a 1bpp adapter, which reads no pen, the band turned over when the
++ground is the lit colour (Bright's and Windows' white). The pen is put back
++after the call, because the lock hold may blit again.
++
++Two cases keep the fourteen calls, because `gfx_blit1` is greying-blind by
++contract (§5.4.2) and a fill is not: a DISABLED pen (`[gfx_dis]`) and a window
++that declared two colours (`[gfx_mono1]`), which `font_ink` reduces. The
++Windows theme's grip is WIN95.DRV's (`THV_GRIP`) and is untouched; `kern_small`
++has no off-grid blit and keeps the calls.
++
+ ### 11.2 Fullscreen
+ 
+ The SDK/kernel foundation for apps that want the whole screen (640×480 on
+diff --git a/kernel/wm.inc b/kernel/wm.inc
+index 305c85bb..6362a3da 100644
+--- a/kernel/wm.inc
++++ b/kernel/wm.inc
+@@ -11261,7 +11261,76 @@ wm_grow_paint:
+ %endif                          ; at rest it lands on the next line, and
+                                 ; WIN95.DRV's grip leaves through .out too
+ .glyph:                         ; the grow box itself, DI = its window (gates
+-    call wm_grow_rect           ; passed): 13x13 white square, black frame
++%ifdef KERN_BIG                 ; passed): 13x13 white square, black frame
++    ; --- ONE gfx_blit1 OF A COMPOSED BAND (SPEC.md 11.1.2). The calls below
++    ; are two fills and three gfx_frames - FOURTEEN primitive calls, ~49k
++    ; cycles, 10 ms on the 5150/CGA - for 169 pixels. wm_grow_bmp holds the
++    ; picture they leave; it is shifted to the box's phase (x & 7, which is
++    ; where gfx_blit1 starts an off-grid band) into wm_gr_band and put down
++    ; in one call, in thm_pair's pair: the same pixels. A DISABLED pen or a
++    ; two-colour window's reduction - font_ink's two cases, to which
++    ; gfx_blit1 is blind by contract (5.4.2) - keeps the fourteen calls.
++    mov al, [gfx_dis]
++    or al, [gfx_mono1]
++    jnz .calls
++    push si
++    push es
++    push di
++    push ds
++    pop es
++    call thm_pair               ; AL = ink, AH = the ground: VGA's emit reads
++    mov [gfx_b1ink], ax         ; it (5.4.2.2), a 1bpp one does not - there
++    xor dh, dh                  ; the BAND says lit, and its bits are the ink,
++    cmp byte [vid_mono], 0      ; so a lit ground (Bright's and Windows'
++    je .pol                     ; white) is the band turned over
++    cmp ah, CWHITE
++    jne .pol
++    dec dh
++.pol:
++    mov dl, [di+W_X]            ; the phase: x & 7 of wm_grow_rect's x,
++    add dl, [di+W_W]            ; W_X + W_W - 14, whose low three bits the
++    sub dl, 14                  ; low bytes carry
++    and dl, 7
++    mov si, wm_grow_bmp
++    mov di, wm_gr_band
++    mov ch, 13
++.row:
++    lodsw                       ; bit 15 = the box's left column
++    xor bl, bl
++    mov cl, dl
++    or cl, cl
++    jz .put
++.sh:
++    shr ax, 1                   ; ...24 bits wide, the third byte in BL
++    rcr bl, 1
++    dec cl
++    jnz .sh
++.put:
++    xchg al, ah                 ; the high byte first: it is the left one
++    xor al, dh
++    xor ah, dh
++    stosw
++    mov al, bl
++    xor al, dh
++    stosb
++    dec ch
++    jnz .row
++    pop di
++    call wm_grow_rect           ; AX = x, BX = y
++    mov si, wm_gr_band          ; ES:SI = the band (ES = DS, above)
++    push bp
++    mov bp, 3                   ; its stride
++    mov cx, 13                  ; 13 pixels wide - the bits past them are
++    mov dx, cx                  ; neither read nor written (5.4.2.5)
++    call gfx_blit1
++    pop bp
++    mov word [gfx_b1ink], CBLACK*256 + CWHITE   ; the pen back: it dies with
++    pop es                      ; the lock, but this hold may blit again
++    pop si
++    jmp short .out
++.calls:
++%endif
++    call wm_grow_rect
+     call .box
+     add ax, 4                   ; the big square of the glyph: 8x8 frame
+     add bx, 4                   ; at inset (+4,+4)..(+11,+11)
+@@ -11286,6 +11355,27 @@ wm_grow_paint:
+     call thm_ink
+     jmp gfx_frame
+ 
++%ifdef KERN_BIG
++; the grow box, 13x13, a word a row with bit 15 its left column (SPEC.md
++; 11.1.2): what wm_grow_paint's fourteen calls leave, bit for bit
++wm_grow_bmp:
++    dw 1111111111111000b        ; the outer frame
++    dw 1000000000001000b
++    dw 1011111110001000b        ; the small square's top
++    dw 1010000010001000b
++    dw 1010000011111000b        ; ...and the big one's top, right of it
++    dw 1010000010011000b
++    dw 1010000010011000b
++    dw 1010000010011000b
++    dw 1011111110011000b        ; the small square's bottom
++    dw 1000100000011000b        ; the big one's left side, below it
++    dw 1000100000011000b
++    dw 1000111111111000b        ; the big one's bottom
++    dw 1111111111111000b
++section .bss
++wm_gr_band: resb 39             ; ...composed at the box's phase, 13 x 3
++section .text
++%endif
+ 
+ %ifdef WM_ANIM
+ ; =============================================================================
