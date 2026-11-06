@@ -23,13 +23,21 @@
 extern unsigned pde_fail, pde_dx;
 extern unsigned pde_verb(unsigned verb, unsigned bx, unsigned cx, unsigned dx);
 extern int pdrh_cluster_sectors;
+extern unsigned pdrh_here_clus; extern int pdrh_here_vol; extern long pdrh_wrongdir;
+extern int pdrh_in_doc(void);
 extern unsigned pdr_font_read_seq(const char *name, unsigned seg, unsigned off, unsigned cap, unsigned *cursor);
 
 int os88_disk_cluster_sectors(void) { return pdrh_cluster_sectors; }
 unsigned os88_file_read_seq(const char *name, unsigned seg, unsigned off, unsigned cap, unsigned *cursor)
 {
     pdh_cluster = pdrh_cluster_sectors;
-    if (!strcmp(name, pdh_name)) return pde_doc_read_seq(name, (pdw)seg, (pdw)off, (pdw)cap, (pdw *)cursor);
+    if (!strcmp(name, pdh_name)) {
+        if (!pdrh_in_doc()) {
+            fprintf(stderr, "FOLDER: the document read by name from %u:%d, not its own folder\n", pdrh_here_clus, pdrh_here_vol);
+            pdrh_wrongdir++; return 0;
+        }
+        return pde_doc_read_seq(name, (pdw)seg, (pdw)off, (pdw)cap, (pdw *)cursor);
+    }
     return pdr_font_read_seq(name, seg, off, cap, cursor);
 }
 

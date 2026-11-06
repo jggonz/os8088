@@ -399,19 +399,23 @@ static struct os88_place g_savpl;
 static pdw g_fioerr;
 
 /* Stand in the package's folder (the primary gave its place, D3) and answer
- * the cluster size of the volume it is on; file_leave puts the working folder
- * back so PDENG's reads by name find the document again. 0 = could not */
+ * the cluster size of the volume it is on. PDENG reads the document BY NAME in
+ * the working folder, and the shell stands back in the document's folder only
+ * BETWEEN wakes - so every strike read is bracketed here, inside the verb:
+ * file_leave puts back the place file_enter found (os88_file_here, a word, no
+ * I/O), before PDENG's next read in the same slice. 0 = could not, and the
+ * folder is put back on that path too */
+static void file_leave(void) { os88_file_goto_q_mark(g_savpl.clus, g_savpl.vol); }
 static pdw file_enter(void)
 {
     pdw cb;
     os88_file_here(&g_savpl);
-    if (os88_file_goto_q_mark(g_pclus, g_pvol)) return 0;
+    if (os88_file_goto_q_mark(g_pclus, g_pvol)) { file_leave(); return 0; }
     cb = (pdw)os88_disk_cluster_sectors();
     cb = (pdw)(cb << 9);
-    if (cb < 512 || cb > 4096 || (cb & (cb - 1))) { os88_file_goto_q_mark(g_savpl.clus, g_savpl.vol); return 0; }
+    if (cb < 512 || cb > 4096 || (cb & (cb - 1))) { file_leave(); return 0; }
     return cb;
 }
-static void file_leave(void) { os88_file_goto_q_mark(g_savpl.clus, g_savpl.vol); }
 /* `cap` bytes (a cluster multiple) from byte (ahi:alo) (a cluster multiple) */
 static pdw file_read(const char *name, pdw alo, pdw ahi, pdw seg, pdw cap)
 {

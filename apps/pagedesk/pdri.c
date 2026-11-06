@@ -140,6 +140,8 @@ static struct pd_fx g_penx, g_peny, g_fsk, g_thk, g_tadv, g_xx, g_yy;
 static pdw g_tdirty;
 static pdw g_inbt;
 static pdw g_em;                    /* device em height of the current font, px  */
+static pdw g_pem;                   /* the em the strike is picked by (D16), px  */
+static pdw g_hem;                   /* device em WIDTH (text space's x axis), px */
 static pdw g_tupright;
 static pdb g_tmchan;
 
@@ -170,17 +172,11 @@ static void fs_changed(void)
     g_tdirty = 1;
 }
 
-/* M = Tm x CTM, the pen at (0, rise), and the device em height */
-static void text_sync(void)
+/* fs * |(x, y)| / 4: the device length, in pixels, of one em along a text axis */
+static pdw axis_em(struct pd_fx *x, struct pd_fx *y)
 {
     pdi h;
-    pdm_mat_mul(&g_M, &g_tm, &GS.ctm);
-    pdm_fx_int(&g_xx, 0);
-    pdr_cpy(&g_yy, &GS.rise, 4);
-    pdm_mat_apply(&g_xx, &g_yy, &g_M);
-    pdr_cpy(&g_penx, &g_xx, 4); pdr_cpy(&g_peny, &g_yy, 4);
-    /* em height: fs * |(M.c, M.d)| / 4 pixels */
-    pdr_cpy(&ta, &g_M.c, 4); pdr_cpy(&tb, &g_M.d, 4);
+    pdr_cpy(&ta, x, 4); pdr_cpy(&tb, y, 4);
     if (ta.hi < 0) pdm_fx_neg(&ta, &ta);
     if (tb.hi < 0) pdm_fx_neg(&tb, &tb);
     if (ta.hi < 120 && tb.hi < 120) {
@@ -192,7 +188,27 @@ static void text_sync(void)
     if (tb.hi < 0) pdm_fx_neg(&tb, &tb);
     pdm_fx_mul(&ta, &ta, &tb);
     h = pdm_fx_round(&ta);
-    g_em = h <= 0 ? 0 : (pdw)((h + 2) >> 2);
+    return h <= 0 ? 0 : (pdw)((h + 2) >> 2);
+}
+
+/* M = Tm x CTM, the pen at (0, rise), and the device em height */
+static void text_sync(void)
+{
+    pdm_mat_mul(&g_M, &g_tm, &GS.ctm);
+    pdm_fx_int(&g_xx, 0);
+    pdr_cpy(&g_yy, &GS.rise, 4);
+    pdm_mat_apply(&g_xx, &g_yy, &g_M);
+    pdr_cpy(&g_penx, &g_xx, 4); pdr_cpy(&g_peny, &g_yy, 4);
+    /* the em along text space's y axis (its height on the device) and along
+     * its x axis (its width there) */
+    g_em = axis_em(&g_M.c, &g_M.d);
+    g_hem = axis_em(&g_M.a, &g_M.b);
+    /* D16: the strike is picked by the WIDTH, capped at 5/4 of the height so a
+     * line cannot reach into the next one - on a square grid the two are equal
+     * and this is the height; on CGA and Hercules a pixel is tall, and a strike
+     * picked by the height is a narrow glyph on true-width advances */
+    g_pem = (pdw)(((g_em << 2) + g_em + 3) >> 2);   /* ceil(em * 5/4), no imul */
+    if (g_hem < g_pem) g_pem = g_hem;
     /* upright? (b and c negligible against a and d) */
     {
         pdi b = (pdi)pdr_abs(pdm_fx_round(&g_M.b)), a = (pdi)pdr_abs(pdm_fx_round(&g_M.a));
@@ -246,9 +262,9 @@ static pdw run_begin(void)
     f = font_sel(GS.font);
     if (!f->ok) return 0;
     sty = f->sty;
-    idx = strike_pick(f->fam, sty, g_em, &g_synth);
+    idx = strike_pick(f->fam, sty, g_pem, &g_synth);
     {   /* a strike the cache cannot hold (or a failed read): the next one down */
-        pdw tries = 0, em = g_em;
+        pdw tries = 0, em = g_pem;
         while (idx == 0xFFFF || !strike_load(idx)) {
             if (idx == 0xFFFF || ++tries > 4 || g_ssize <= 6) { inc_note(PDF_INC_FONT, "font strike unavailable"); return 0; }
             em = (pdw)(g_ssize - 1);
@@ -347,10 +363,10 @@ static void text_glyph(pdw code)
     if (GS.tr != 3 && lat >= 32 && g_em >= 1) {
         px = q2p(pdr_clampq(pdm_fx_round(&g_penx)));
         py = q2p(pdr_clampq(pdm_fx_round(&g_peny)));
-        if (g_mode == PDR_TEXT || g_em >= 5) glyph_emit(code, lat, px, py);
+        if (g_mode == PDR_TEXT || g_pem >= 5) glyph_emit(code, lat, px, py);
         else {
             if (!g_gkhave) { g_gkhave = 1; g_gkx0 = px; g_gky = (pdi)(py - (pdi)((g_em + 2) / 3)); }
-            g_gkx1 = (pdi)(px + (pdi)((w * g_em) / 1000));
+            g_gkx1 = (pdi)(px + (pdi)((w * g_hem) / 1000));
         }
     } else if (g_mode == PDR_TEXT && lat >= 32) glyph_emit(code, lat, 0, 0);
     /* advance: ((w/1000) fs + Tc + Tw if space) * Th */

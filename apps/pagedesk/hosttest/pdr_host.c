@@ -152,8 +152,17 @@ void pdr_imgrow(void)
 const char *pdrh_fdir = ".";
 int pdrh_cluster_sectors = 1;
 long pdrh_reads, pdrh_readbytes;
-void os88_file_here(struct os88_place *p) { p->clus = 0; p->vol = 0; }
-int os88_file_goto_q_mark(unsigned clus, int vol) { (void)clus; (void)vol; return 0; }
+/* The WORKING FOLDER is modelled: the package lives in one folder on one volume
+ * (PDRH_PKG_*, what FONTBANK's place says) and the document in ANOTHER folder on
+ * ANOTHER volume (PDRH_DOC_*), where the shell stands between wakes. A read by
+ * name finds its file only from its own folder - the strikes from the package's,
+ * the document (pdr_hosteng.c) from the document's - and anything else counts as
+ * pdrh_wrongdir and reads nothing, which is what FSV_* answers on the machine. */
+unsigned pdrh_here_clus = PDRH_DOC_CLUS; int pdrh_here_vol = PDRH_DOC_VOL;
+long pdrh_wrongdir;
+void os88_file_here(struct os88_place *p) { p->clus = pdrh_here_clus; p->vol = pdrh_here_vol; }
+int os88_file_goto_q_mark(unsigned clus, int vol) { pdrh_here_clus = clus; pdrh_here_vol = vol; return 0; }
+int pdrh_in_doc(void) { return pdrh_here_clus == PDRH_DOC_CLUS && pdrh_here_vol == PDRH_DOC_VOL; }
 #ifndef PDR_REAL_ENG
 int os88_disk_cluster_sectors(void) { return pdrh_cluster_sectors; }
 #endif
@@ -161,6 +170,10 @@ unsigned pdr_font_read_seq(const char *name, unsigned seg, unsigned off, unsigne
 {
     char path[512]; FILE *f; unsigned long seek = ((unsigned long)cursor[7] << 16) | cursor[6]; size_t n;
     unsigned cb = (unsigned)pdrh_cluster_sectors * 512;
+    if (pdrh_here_clus != PDRH_PKG_CLUS || pdrh_here_vol != PDRH_PKG_VOL) {
+        fprintf(stderr, "FOLDER: %s read by name from %u:%d, not the package's folder\n", name, pdrh_here_clus, pdrh_here_vol);
+        pdrh_wrongdir++; return 0;
+    }
     if (seek % cb || cap % cb || cap == 0) { fprintf(stderr, "READ_SEQ refused: seek %lu cap %u not a multiple of %u\n", seek, cap, cb); return 0; }
     snprintf(path, sizeof path, "%s/%s", pdrh_fdir, name);
     f = fopen(path, "rb"); if (!f) return 0;

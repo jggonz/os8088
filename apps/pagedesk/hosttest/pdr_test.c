@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../pdrend.h"
+#include "pdr_host.h"
 
 extern unsigned char pd_host_mem[];
 extern pdw pd_host_ds;
@@ -18,6 +19,20 @@ extern unsigned char pdrh_fb[];
 extern int pdrh_fbw, pdrh_fbh, pdrh_blits;
 extern int pdrh_open(const char *path);
 pdw pdr_verb(pdw verb, pdw bx, pdw cx, pdw dx);
+/* every verb is called through here: PDREND must hand the working folder back
+ * where it found it (the document's), and no read by name may have been made
+ * from the wrong folder - the shell only stands back between wakes */
+static pdw vcall(pdw verb, pdw bx, pdw cx, pdw dx)
+{
+    pdw r = pdr_verb(verb, bx, cx, dx);
+    /* PDR_SHELLBACK=1 does what the shell does between wakes (stands back in the
+     * document's folder) instead of failing, so only a read by name from the wrong
+     * folder INSIDE one verb is caught - the negative control for that case */
+    if (!pdrh_in_doc() && getenv("PDR_SHELLBACK")) { pdrh_here_clus = PDRH_DOC_CLUS; pdrh_here_vol = PDRH_DOC_VOL; }
+    if (!pdrh_in_doc()) { fprintf(stderr, "FOLDER: verb 0x%x left the working folder at %u:%d\n", verb, pdrh_here_clus, pdrh_here_vol); exit(6); }
+    if (pdrh_wrongdir) { fprintf(stderr, "FOLDER: %ld read(s) by name from the wrong folder (verb 0x%x)\n", pdrh_wrongdir, verb); exit(6); }
+    return r;
+}
 
 #define SEG_XB   0x2000
 #define SEG_DL   0x3000
@@ -51,7 +66,7 @@ static int load_bank(const char *dir)
     { int i; idxlen = 0; for (i = 0; i < 7; i++) if (hdr[8 + i * 12] == 7) idxlen = hdr[8 + i * 12 + 8] | (hdr[8 + i * 12 + 9] << 8); }
     fseek(f, 0, SEEK_SET); n = (long)fread(MEM(SEG_BANK, 0), 1, idxlen, f); fclose(f);
     memset(&fb, 0, sizeof fb);
-    strcpy(fb.pkgname, "PAGEDESK.O88"); fb.place_clus = 0; fb.place_vol = 0;
+    strcpy(fb.pkgname, "PAGEDESK.O88"); fb.place_clus = PDRH_PKG_CLUS; fb.place_vol = PDRH_PKG_VOL;
     fb.part_off.lo = 1536; fb.part_off.hi = 0;
     fb.index_seg = SEG_BANK; fb.index_len = (pdw)idxlen;
     memcpy(MEM(SEG_XB, 0), &fb, sizeof fb);
@@ -59,7 +74,7 @@ static int load_bank(const char *dir)
 }
 static int send_fontbank(void)
 {
-    return (int)pdr_verb(PDV_REND_FONTBANK, 0, 0, 0);
+    return (int)vcall(PDV_REND_FONTBANK, 0, 0, 0);
 }
 static void do_init(int bpp, int bankkb, int dlkb)
 {
@@ -72,7 +87,7 @@ static void do_init(int bpp, int bankkb, int dlkb)
     in.bank_seg = 0; in.bank_kb = 0; (void)bankkb;
     in.bpp = (pdw)bpp; in.adapter = 0;
     memcpy(MEM(SEG_XB, 0), &in, sizeof in);
-    if (pdr_verb(PDV_REND_INIT, SEG_XB, 0, 0)) { fprintf(stderr, "init failed\n"); exit(2); }
+    if (vcall(PDV_REND_INIT, SEG_XB, 0, 0)) { fprintf(stderr, "init failed\n"); exit(2); }
     memcpy(MEM(SEG_XB, 0), keep, sizeof keep);
     if (send_fontbank()) { fprintf(stderr, "fontbank failed\n"); exit(2); }
 }
@@ -106,7 +121,7 @@ static void write_ppm(const char *path, int x0, int y0, int w, int h)
 static void report(void)
 {
     struct pdxb_rstatus rs;
-    pdr_verb(PDV_REND_STATUS, 0, 0, 0);
+    vcall(PDV_REND_STATUS, 0, 0, 0);
     memcpy(&rs, MEM(SEG_XB, 0), sizeof rs);
     printf("status incomplete=0x%04x first='%s' ops=%u passes=%u blits=%d\n", rs.incomplete, rs.first, rs.ops, rs.passes, pdrh_blits);
 }
@@ -144,9 +159,9 @@ int main(int argc, char **argv)
         rq.view.clip_x0 = 0; rq.view.clip_y0 = 0; rq.view.clip_x1 = (pd_px)(W - 1); rq.view.clip_y1 = (pd_px)(H - 1);
         rq.page = (pdw)page; rq.win_off = 0x1234;
         memcpy(MEM(SEG_XB, 0), &rq, sizeof rq);
-        e = pdr_verb(PDV_REND_BEGIN, 0, 0, 0);
+        e = vcall(PDV_REND_BEGIN, 0, 0, 0);
         if (e) { fprintf(stderr, "begin -> %u\n", e); return 3; }
-        do { e = pdr_verb(PDV_REND_STEP, 0, 0, 0); steps++; } while (e == PDE_BUSY && steps < 100000);
+        do { e = vcall(PDV_REND_STEP, 0, 0, 0); steps++; } while (e == PDE_BUSY && steps < 100000);
         if (e) { fprintf(stderr, "step -> %u\n", e); return 3; }
         printf("steps=%d reads=%ld readbytes=%ld\n", steps, pdrh_reads, pdrh_readbytes);
         report();
@@ -189,7 +204,7 @@ int main(int argc, char **argv)
         for (;;) {
             struct pdtm_glyph *g; int n;
             memcpy(MEM(SEG_XB, 0), &tq, sizeof tq);
-            e = pdr_verb(PDV_REND_TEXTMAP, 0, 0, 0);
+            e = vcall(PDV_REND_TEXTMAP, 0, 0, 0);
             if (e) { fprintf(stderr, "textmap -> %u\n", e); return 3; }
             memcpy(&tq, MEM(SEG_XB, 0), sizeof tq);
             g = (struct pdtm_glyph *)MEM(SEG_TXT, 0);
@@ -213,7 +228,7 @@ int main(int argc, char **argv)
         memset(MEM(SEG_CELL, 0), 0xAA, 8192);
         do {
             memcpy(MEM(SEG_XB, 0), &tq, sizeof tq);
-            e = pdr_verb(PDV_REND_THUMB, 0, 0, 0);
+            e = vcall(PDV_REND_THUMB, 0, 0, 0);
             memcpy(&tq, MEM(SEG_XB, 0), sizeof tq);
         } while (e == PDE_BUSY && ++guard < 100000);
         if (e) { fprintf(stderr, "thumb -> %u\n", e); return 3; }

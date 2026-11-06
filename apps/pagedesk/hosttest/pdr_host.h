@@ -2,6 +2,13 @@
 #ifndef PDR_HOST_H
 #define PDR_HOST_H
 struct os88_place { unsigned clus; int vol; };
+/* the package's folder and the document's: different folders on different volumes */
+#define PDRH_PKG_CLUS 0x0123u
+#define PDRH_PKG_VOL  1
+#define PDRH_DOC_CLUS 0x0456u
+#define PDRH_DOC_VOL  0
+extern unsigned pdrh_here_clus; extern int pdrh_here_vol; extern long pdrh_wrongdir;
+int pdrh_in_doc(void);
 void os88_gfx_lock(void);
 void os88_gfx_unlock(void);
 int  os88_wm_clip_set(void *win);

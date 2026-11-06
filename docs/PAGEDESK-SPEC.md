@@ -1631,16 +1631,30 @@ guarantees): 40 edges **6,888 -> 5,727 instructions**.
   is refused when the stack has no room for its own save. A Form invoking itself
   ends at the depth limit. A `TJ` array of numbers only still moves the pen.
 
+#### 20.3.8.1 Strike choice and the working folder (DECISIONS D16, D14b)
+
+The strike is picked by `min(h_em, ceil(5/4 v_em))` pixels: the em along text
+space's x axis on the device, capped so a glyph cannot reach into the next line.
+On VGA the two ems are equal and nothing changes; on CGA and Hercules a pixel is
+tall, and the old pick by the vertical em drew a narrow glyph on true-width
+advances (letter-spaced, greeked below 6 px). Before/after crops of XTGUIDE at
+fit-width and 200% on both grids are in the lead's evidence
+(`shots/verify-rend/d16/`); the after reads better on every one. Greeking now
+uses the picked em, and a greeked run's length the horizontal em.
+
+Every strike read is bracketed inside the verb: `file_enter` records the working
+folder (`os88_file_here`), stands in the package's, and `file_leave` puts the
+recorded one back - on the failure paths too - before PDENG's next read by name
+in the same slice (the shell restores the document's folder only between wakes).
+`hosttest/pdr_host.c` models the two folders on different volumes and counts any
+engine read made in the wrong one (`pdrh_wrongdir`, 0 required).
+
 #### 20.3.9 Open items
 
 The 4bpp glyph compositor writes a nibble a set bit (a byte-table version would be
 ~3x faster); no `PDREND` row on an emulated XT yet; the clip pool holds 8
 polygon clips a pass (a ninth is its bounding box, `PDF_INC_LIMIT`); text and
-images under a polygon clip are cut to its bounding box; on CGA and Hercules the
-strike is chosen by the VERTICAL em, so body text on the squashed grid is drawn
-from a small strike and looks letter-spaced (or greeked below 6 px, 11.2) - a
-choice by the horizontal em is the alternative and is the shell's look question;
-device space is clamped to +-16,000 qpx, so a giant page at 400% loses the far
+images under a polygon clip are cut to its bounding box; device space is clamped to +-16,000 qpx, so a giant page at 400% loses the far
 part of a path rather than wrapping; 4bpp fills lighter than the palette's light
 grey round to white (10.5); a
 `kern_mega` build would need the glyph claim addressed through selectors (the cache
