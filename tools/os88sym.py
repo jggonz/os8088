@@ -49,6 +49,22 @@ import tempfile
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _src():
+    """Where the kernel's SOURCE is read from: `$OS88_SRC`, else the checkout.
+
+    **A FROZEN SOAK FREEZES THE SOURCE TOO** (tools/os88soak.py). The run's
+    tree holds the kernel.bin it built, and this reader re-assembles
+    kernel.asm to prove its map describes that file - from the LIVE checkout,
+    until 2026-11-06. One commit to kernel/ mid-run (two messages shortened)
+    and every emulator row after it died on "the map describes a DIFFERENT
+    kernel": fifteen in a quarter of an hour, none of them about anything the
+    row tested. os88soak now copies kernel/, boot/, drivers/ and apps/*.inc
+    into the tree as it builds it and names the copy here; nasm runs there,
+    so the copy's relative includes (`../boot/`, `drivers/thmpal/`) resolve
+    inside it."""
+    return os.environ.get("OS88_SRC") or ROOT
 KERNEL_SEG = 0x0060                      # SPEC.md 2 - one place, one meaning
 
 # Which segment each section is addressed through at run time. The VALUES come
@@ -445,7 +461,7 @@ def _load(defines=(), check=True):
         _cache[key] = hit
         return hit
 
-    src = os.path.join(ROOT, "kernel", "kernel.asm")
+    src = os.path.join(_src(), "kernel", "kernel.asm")
     with open(src) as f:
         body = f.read()
     tmp = tempfile.mkdtemp(prefix="os88sym")
@@ -508,15 +524,16 @@ def _load(defines=(), check=True):
     # and nothing for a kernel change to fix; the reader simply has to use the
     # assembler the image was built with.
     cmd = [os.environ.get("NASM", "nasm"), "-f", "bin", "-w+error"] + shadow + [
-           "-I", os.path.join(ROOT, "kernel") + os.sep,
-           "-I", os.path.join(ROOT, "apps") + os.sep,
+           "-I", os.path.join(_src(), "kernel") + os.sep,
+           "-I", os.path.join(_src(), "apps") + os.sep,
            "-I", bdir + os.sep] + \
           (["-I", idir + os.sep]
            if idir and os.path.normpath(idir) != os.path.normpath(bdir) else [])
     for d in defines:
         cmd += ["-D" + d]
     cmd += ["-o", binf, asm]
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = subprocess.run(cmd, capture_output=True, text=True,
+                       cwd=os.environ.get("OS88_SRC") or None)
     if r.returncode:
         raise RuntimeError("nasm failed:\n" + r.stderr)
 
@@ -626,8 +643,9 @@ def _disk_key(bdir, idir, defines):
         with open(built, "rb") as f:
             h.update(f.read())
         h.update(("\0".join(defines)).encode())
-        dirs = [(os.path.join(ROOT, "kernel"), None), (os.path.join(ROOT, "boot"), None),
-                (os.path.join(ROOT, "apps"), ".inc"), (bdir, ".inc")]
+        sr = _src()
+        dirs = [(os.path.join(sr, "kernel"), None), (os.path.join(sr, "boot"), None),
+                (os.path.join(sr, "apps"), ".inc"), (bdir, ".inc")]
         if idir:
             dirs.append((idir, ".inc"))
         files = [os.path.abspath(__file__)]
