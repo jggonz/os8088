@@ -418,7 +418,7 @@ static void xr_entry(pdw k)
 static pdw tn_num(pdw k) { return pd_fpeekw(g_wseg, (pdw)(g_tb + k * PDW_TENT)); }
 
 /* ---- the temp file's check (14.2 step 4, the part PDWRT can do alone) ------ */
-static char vt[200];
+#define vt g_keep                       /* verify scratch shares the kept-identity buffer (D18) */
 static pdw sv_vstage;
 static struct pd_u32 sv_vx;
 /* stage 0: the file ends "startxref N %%EOF" and N is where we wrote "xref";

@@ -28,7 +28,9 @@
 #define PGK_NM     32
 #define DM_MAX     16
 
-static char g_inh[600];                 /* an inherited /Resources                    */
+#define IH_MAX 600u
+#define g_inh g_txt                     /* an inherited /Resources: shares the annotation text buffer (D18) -
+                                           pages are done before any annotation text is staged */
 static pdw pf_par, pf_parg, pf_hasres, pf_hasmed, pf_hascrop, ih_a, ih_b;
 static pdw rs_mode;                     /* 0: the duplicate's map, 1: the graph copy's */
 static pdw dm_old[DM_MAX], dm_gen[DM_MAX], dm_n, dm_new, dm_pgold, dm_pgnew;
@@ -155,7 +157,7 @@ static pdw pg_fetch(pdw num, pdw gen, pdw inh, pdw stop)
         f = dict_find(ds, "Resources"); if (f == SC_BAD) return PDE_SYNTAX;
         if (f == 1) {
             len = (pdw)(sc_ve - sc_vs);
-            if (len > (pdw)(sizeof g_inh)) return sv_bad(13);
+            if (len > (pdw)IH_MAX) return sv_bad(13);
             pw_cpy(g_inh, g_pg + sc_vs, len);
             break;
         }
