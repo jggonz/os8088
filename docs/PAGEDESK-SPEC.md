@@ -711,7 +711,7 @@ the adapter kind:
 
 | layout | when | rows of chrome | panels |
 |---|---|---|---|
-| FULL | width >= 600 and height >= 300 | toolbar + mode/tool bar + status | Pages/Outline sidebar and Notes & edits panel, each collapsible |
+| FULL | width >= 600 and height >= 260 (Hercules and EGA content boxes measure 284-286) | toolbar + mode/tool bar + status | Pages/Outline sidebar and Notes & edits panel, each collapsible |
 | MID | height >= 240 | same | panels default hidden, open as overlays |
 | COMPACT | otherwise (CGA 640x200) | one combined bar + status | page chooser and notes as popovers/dialogs that fit the client area |
 
