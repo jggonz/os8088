@@ -35,7 +35,7 @@ static pdw gc_get(pdw base, pdw w) { return pd_fpeekw(g_wseg, (pdw)(base + 2u * 
 static void gc_mark(pdw n)
 {
     pdw w = (pdw)(n >> 4), b = (pdw)(1u << (n & 15)), v;
-    if (!n) return;
+    if (!n || n >= g_tr.size) return;   /* not in the xref: its references become null */
     if (gc_get(gc_scan, w) & b) return;
     v = gc_get(gc_seen, w);
     if (v & b) return;
@@ -46,7 +46,7 @@ static void gc_mark(pdw n)
 static pdw gc_newnum(pdw n)             /* 4 + the rank among seen objects; 0 = not copied */
 {
     pdw w = (pdw)(n >> 4), b = (pdw)(1u << (n & 15)), k, c;
-    if (!n || !(gc_get(gc_seen, w) & b)) return 0;
+    if (!n || n >= g_tr.size || !(gc_get(gc_seen, w) & b)) return 0;
     c = gc_get(gc_pref, (pdw)(w >> 3));
     for (k = (pdw)((w >> 3) << 3); k < w; k++) c = (pdw)(c + gc_popc(gc_get(gc_seen, k)));
     c = (pdw)(c + gc_popc((pdw)(gc_get(gc_seen, w) & (pdw)(b - 1))));
@@ -76,7 +76,7 @@ static pdw gc_disc(void)
     b = 1;
     k = 0;
     for (;;) {
-        if (gc_w >= 4096) {
+        if (gc_w >= gc_nw) {
             if (gc_over) return sv_bad(16);
             if (!gc_dirty) break;
             gc_dirty = 0; gc_w = 0;
@@ -86,12 +86,12 @@ static pdw gc_disc(void)
             while (!(v & b)) { b = (pdw)(b << 1); k++; }
             n = (pdw)((gc_w << 4) | k);
             pd_fpokew(g_wseg, (pdw)(gc_scan + 2u * gc_w), (pdw)(gc_get(gc_scan, gc_w) | b));
+            root = gc_root(n);
             r = gc_first(n);
-            if (r == PDE_IO || r == PDE_TRUNC) return r;
+            if (r == PDE_IO || r == PDE_TRUNC || (r && root)) return r;  /* a chosen page must copy */
             if (r) { gc_exclude(gc_w, b); return PDE_OK; }              /* a dangling reference */
             ds = sc_body();
-            if (ds == SC_BAD) { gc_exclude(gc_w, b); return PDE_OK; }
-            root = gc_root(n);
+            if (ds == SC_BAD) { if (root) return PDE_SYNTAX; gc_exclude(gc_w, b); return PDE_OK; }
             if (gc_isdict(ds)) {
                 f = dict_find(ds, "Type");
                 if (f == SC_BAD) return PDE_SYNTAX;
@@ -117,7 +117,7 @@ static pdw gc_disc(void)
     }
     /* the fixpoint: the prefix counts, the total */
     c = 0;
-    for (w = 0; w < 4096; w++) {
+    for (w = 0; w < gc_nw; w++) {
         if (!(w & 7)) pd_fpokew(g_wseg, (pdw)(gc_pref + 2u * (w >> 3)), c);
         j = gc_get(gc_seen, w);
         if (j) c = (pdw)(c + gc_popc(j));
@@ -163,7 +163,7 @@ static pdw gc_copy(void)
     }
     for (;;) {                                      /* the next seen object at or after gc_n */
         w = (pdw)(gc_n >> 4);
-        if (w >= 4096) return GC_DONE;
+        if (w >= gc_nw) return GC_DONE;
         v = gc_get(gc_seen, w);
         if (gc_n & 15) v = (pdw)(v & (pdw)~((1u << (gc_n & 15)) - 1u));
         if (v) break;

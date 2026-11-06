@@ -393,7 +393,14 @@ static int ovl_save_begin(const char *name, int kind)
         }
         os88_file_goto_q_mark(pdu_tgtplace.clus, pdu_tgtplace.vol);
     }
-    pdu_wkb = kind == 2 ? 40 : PDU_WBUF_KB;
+    pdu_wkb = PDU_WBUF_KB;
+    if (kind == 2) {                    /* 20.11.4: Extract's buffer follows the source's /Size */
+        pdu_mcall(PDU_M_ENG, PDV_ENG_TRAILER, 0, 0, 0);
+        r = pd_fpeekw(pdu_xb, 0);       /* pdxb_trailer's /Size, its first word */
+        pdu_wkb = pdu_mcf ? 40 : 16 + ((unsigned)r >> 7) + ((unsigned)r >> 11);
+        if (pdu_wkb > 40)
+            pdu_wkb = 40;
+    }
     r = pdu_wrt_in_now();
     if (r) {
         pdu_say2("Could not save ", pdu_errtext(r));

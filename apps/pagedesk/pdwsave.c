@@ -9,6 +9,7 @@
  * temp file is ever renamed (14.3).
  * ==========================================================================*/
 #define SV_UNITS 4
+#define PDW_ROOM 2048u                  /* see job_slice */
 
 enum { PH_IDLE, PH_COPY, PH_PAGES, PH_CAT, PH_ANNOTS, PH_HEAD, PH_NPAGES, PH_XREF, PH_TRAILER,
        PH_CLOSE, PH_VERIFY, PH_RENAME, PH_DONE,
@@ -56,9 +57,11 @@ static pdw  bm_get(pdw t, pdw i) { return (pdw)((tg(t, (pdw)(i >> 4)) >> (i & 15
 static void tclr(pdw t, pdw n) { pd_ffill(g_wseg, (pdw)(g_tail + 2u * t), 0, (pdw)(2u * n)); }
 
 /* the graph copy's state (pdwgc.c, 20.11.4) */
-#define GC_BM    8192u
-#define GC_BYTES 17408u                 /* seen + scan + the prefix table    */
 #define GC_DONE  0x0FFF
+/* seen + scan + the prefix table, sized from the source's /Size (an object
+   number at or past it is not in the xref): gc_nw words a bit map, a
+   multiple of 8, so 4.25 x gc_nw bytes in all - 17 KiB only at /Size 65535 */
+static pdw gc_nw;
 static pdw gc_seen, gc_scan, gc_pref;   /* far offsets in the writer buffer  */
 static pdw gc_w, gc_dirty, gc_cnt, gc_over, gc_total, gc_n, gc_sub, gc_k, gc_cur, gc_blk, gc_nb;
 static struct pd_u32 gc_pos, gc_zero;
@@ -508,11 +511,12 @@ static pdw job_begin(pdw kind)
             ts(T_PMNUM, i, 0);
         }
         pm_n = sv_npages; pm_on = 1;
-        g_tb = (pdw)(g_outcap + GC_BYTES);
-        if ((pdw)(g_tail) < (pdw)(g_tb + 64 * PDW_TENT)) { g_sv.err_detail = (pdw)(g_tb / 1024 + 4); return PDE_NOMEM; }
+        gc_nw = (pdw)(((g_tr.size >> 7) + 1) << 3);
+        gc_seen = g_outcap; gc_scan = (pdw)(gc_seen + 2 * gc_nw); gc_pref = (pdw)(gc_scan + 2 * gc_nw);
+        g_tb = (pdw)(gc_pref + gc_nw / 4);
+        if ((pdw)(g_tail) < (pdw)(g_tb + 64 * PDW_TENT)) { g_sv.err_detail = (pdw)((pdw)(g_tb + TB_BYTES) / 1024 + 5); return PDE_NOMEM; }
         g_tmax = (pdw)((pdw)(g_tail - g_tb) / PDW_TENT);
-        gc_seen = g_outcap; gc_scan = (pdw)(g_outcap + GC_BM); gc_pref = (pdw)(g_outcap + 2 * GC_BM);
-        pd_ffill(g_wseg, g_outcap, 0, GC_BYTES);
+        pd_ffill(g_wseg, g_outcap, 0, (pdw)(g_tb - g_outcap));
         gc_w = gc_dirty = gc_cnt = gc_over = gc_total = gc_sub = 0; gc_n = 0; gc_k = 4; gc_blk = 0; gc_nb = nb;
         tclr(T_PMDONE, 64);
         pdm_u32_set(&gc_zero, 0, 0);
@@ -688,6 +692,17 @@ static pdw job_slice(void)
     pdw units = 0, r, k, e, io0 = g_io;
     while (units < SV_UNITS && g_io == io0) {   /* one disk transfer ends a slice (15.2) */
         units++;
+        /* D21: the disk write happens HERE, at the top of the writer's chain,
+           whenever under PDW_ROOM of the output region is free - not at the
+           bottom of pb_* -> pw_n -> pw_flush inside an appearance stream,
+           which put the kernel's file code ~200 bytes deeper on the UI
+           task's 384-byte stack. A unit that writes more than PDW_ROOM
+           still flushes where it is (correct, only deeper). */
+        if (sv_phase != PH_COPY && (pdw)(g_outcap - g_wpos) < PDW_ROOM) {
+            pw_flush(0);
+            if (g_err) return g_err;
+            continue;
+        }
 #ifdef PD_HOST
         sv_lastph = sv_phase; sv_lasti = (pdw)(sv_phase == PH_PGOPS ? pm_i : sv_i);
 #endif
@@ -747,6 +762,7 @@ static pdw job_slice(void)
                 r = eng_pageinfo(PDM_IDX(e)); if (r) return r;
                 if (bm_get(T_PMDONE, PDM_IDX(e))) { g_sv.err_detail = 15; return PDE_RANGE; }   /* a page twice */
                 bm_set(T_PMDONE, PDM_IDX(e));
+                if (g_pi.objnum >= g_tr.size) return PDE_XREF;                     /* not in the xref */
                 ts(T_PMNUM, sv_i, g_pi.objnum); gc_mark(g_pi.objnum);
             }
             sv_i++;
