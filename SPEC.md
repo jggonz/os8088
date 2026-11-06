@@ -242049,7 +242049,7 @@ one `add` per sample, with no clip and no branch. A clip's OWN sound
 | 14 | 2 | its anchor table's offset in the resident block: (idle frame, entry record's PARAGRAPH in the clip's own region) pairs |
 | 16 | 2 | its anchors, at most 16 |
 | 18 | 4+2 | a LOOP's lap: record 1's offset in its stream (4 KB-aligned) and the lap's length in 4 KB |
-| 24 | 8 | the name |
+| 24 | 8 | the name: the clip id in ASCII, upper case, space padded (letters outside ASCII lose their accents or are dropped - `os88vbt.name8`); the engine reads none of it |
 | 32 | 2 | its ENTRIES' paragraphs, in front of its records (version 8); 0 for a clip with no anchors |
 
 #### 126.2.3 Records, their sound, and why every join is exact

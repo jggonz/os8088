@@ -514,6 +514,8 @@ class App(object):
         self.root = make_root()         # drag and drop, where installed
         self.root.geometry("1300x760")
         self.pending = []               # videos waiting to become clips
+        self.clip_job = self.reading = None     # the job reading one, and
+        #                                 the source it added for it
         self.proj = P.Project()
         self.saved = self._state()
         self.job = None
@@ -556,7 +558,10 @@ class App(object):
         self.root.update_idletasks()
         h = min(max(760, self.root.winfo_reqheight()),
                 self.root.winfo_screenheight() - 80)
-        self.root.geometry("1300x%d" % h)
+        w = min(max(1300, self.root.winfo_reqwidth()),  # (as wide as its
+                self.root.winfo_screenwidth())          # widest tab: the
+        self.root.geometry("%dx%d" % (w, h))            # Clips tab's right
+        #                                                 column was cut off)
 
     # --- drag and drop ----------------------------------------------------------
     def _dropped(self, paths):
@@ -652,12 +657,16 @@ class App(object):
         if not self.pending or self.job:    # (a job's end starts it)
             return
         path, then = self.pending[0]
+        known = set(self.proj.d["sources"])
         sid = self.add_video(path)
         cid = unique_id(sid, self.proj.d["clips"])
+        self.reading = sid if sid not in known else None
 
         def got(fr):
+            self.reading = None
+            self.pending.pop(0)     # (first: the edit's refresh lists what
+            #                          is still pending, not this one)
             self.edit("add_clip", cid, sid, (0, len(fr) - 1), anchors=())
-            self.pending.pop(0)
             if then:
                 then(cid)
             else:
@@ -665,6 +674,7 @@ class App(object):
             if self.pending:
                 self._next_clip()
         self.screens(sid, got)
+        self.clip_job = self.job        # (None: it was read already)
 
     # --- the shell -----------------------------------------------------------
     def _state(self):
@@ -787,8 +797,17 @@ class App(object):
             return self.save()
         return True
 
+    def _drop_jobs(self):
+        """Another project taken up: a job of the last one is cancelled
+        (its end would land in this one - a clip read for a project no
+        longer open became a clip here, its source missing) and the videos
+        waiting are not taken"""
+        self.pending = []
+        self.cancel()
+
     def new(self):
         if self._ask_save():
+            self._drop_jobs()
             self.proj = P.Project()
             self.saved = self._state()
             self.frames.clear()
@@ -806,9 +825,11 @@ class App(object):
     def open_path(self, p):
         try:
             self.proj = P.Project.load(p)
-        except (OSError, ValueError) as e:
+        except (OSError, ValueError, KeyError, TypeError,
+                AttributeError) as e:      # (not a project: said, not raised)
             self.say("Could not open %s: %s" % (p, e))
             return
+        self._drop_jobs()
         self.saved = self._state()
         self.frames.clear()
         recent_add(self.proj.path)
@@ -943,10 +964,18 @@ class App(object):
                     self.pbar.stop()
                     self.pbar.config(mode="determinate", value=0)
                     if job.killed or rc != 0:
+                        why = log[-1] if log else rc
+                        mine = self.pending and job is self.clip_job
+                        if mine and not job.killed:     # (which file)
+                            why = "%s is not a video that can be read " \
+                                "(%s)" % (os.path.basename(
+                                    self.pending[0][0]), why)
                         self.say("Cancelled" if job.killed else
-                                 "Failed: %s" % (log[-1] if log else rc))
-                        if self.pending:        # the videos still to come
-                            self.pending = []   # are not taken either
+                                 "Failed: %s" % why)
+                        if mine:                # the videos still to come
+                            self.pending = []   # are not taken either (a
+                            self._forget_unread()   # video dropped while
+                        #                      another job ran still is)
                     elif job.result is not None:
                         self.say("Done")
                         self._done(job.result)
@@ -954,6 +983,22 @@ class App(object):
                         self._next_clip()               # another job
         except queue.Empty:
             pass
+
+    def _forget_unread(self):
+        """A video that could not be read (not a video, empty, cancelled)
+        leaves no SOURCE behind: it was added only to become a clip, and
+        a source whose file will not decode stopped every later build
+        ("sources.X: ..."). One something else came to use is kept"""
+        sid, self.reading = getattr(self, "reading", None), None
+        d = self.proj.d
+        if not sid or sid not in d["sources"]:
+            return
+        if any(c["source"] == sid for c in d["clips"].values()) or \
+                (d.get("idle") or {}).get("source") == sid or \
+                any(s.get("source") == sid for s in d["sounds"].values()):
+            return
+        self.edit("set", ("sources",), {k: v for k, v in
+                                        d["sources"].items() if k != sid})
 
     def cancel(self):
         if self.job:
@@ -1950,7 +1995,8 @@ class ClipsTab(object):
             return
         self.picked = cid
         if not self.app.proj.d.get("idle"):
-            return
+            self.refresh()          # (its source, in and out shown: "Set"
+            return                  # would write the last clip's onto it)
         c = self.app.proj.d["clips"][cid]
         idle_src = self.app.proj.d["idle"]["source"]
         self.view = ("clip", int(self.scrub.get()))
@@ -3358,7 +3404,7 @@ class BuildTab(object):
         self.chk.heading("#0", text="")
         self.chk.heading("where", text="Where")
         self.chk.heading("text", text="What")
-        self.chk.column("#0", width=60, stretch=False)
+        self.chk.column("#0", width=76, stretch=False)
         self.chk.column("where", width=170, stretch=False)
         self.chk.column("text", width=860)
         self.chk.tag_configure("ERROR", foreground="#b00")
@@ -3393,7 +3439,10 @@ class BuildTab(object):
         self.mem_l.pack(anchor="w", pady=4)
         df = ttk.LabelFrame(f, text="...and make a disk of it, with "
                             "VBATTLE.O88 beside it", padding=4)
-        df.pack(fill="x", pady=4)
+        # (the disk and the game PACKED BEFORE the budget, at the bottom:
+        # the packer gives space in packing order, and on a laptop's screen
+        # the budget's lines pushed both buttons out of the window)
+        df.pack(fill="x", pady=4, side="bottom", before=bf)
         self.diskv = tk.StringVar()
         ttk.Combobox(df, textvariable=self.diskv, values=M.DISK_LABELS,
                      state="readonly", width=46).pack(side="left")
@@ -3405,7 +3454,7 @@ class BuildTab(object):
         gf = ttk.LabelFrame(f, text="...or make it a GAME: one .O88 for each "
                             "adapter, the battle inside it - copy the file "
                             "and double-click it", padding=4)
-        gf.pack(fill="x", pady=4)
+        gf.pack(fill="x", pady=4, side="bottom", before=df)
         ttk.Button(gf, text="Make the games", command=self._game
                    ).pack(side="left")
         self.game_l = ttk.Label(gf, text="", wraplength=700)
