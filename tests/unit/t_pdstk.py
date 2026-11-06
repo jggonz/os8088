@@ -6,7 +6,7 @@
 THE REAL TREE. Every PageDesk segment is read from the source it is
 assembled from and the C as `make pagedesk` left it (build/*.gen.asm). Three
 things must hold. No recursion outside the bounded ratchet. Every module
-verb's deepest chain on D23's private stack is <= 2048 - 256 = 1792. Every
+verb's deepest chain on D23's private stack is <= 1776 from the door. Every
 primary callback's chain on the UI task's 512-byte stack is <= 384. That
 last one counts the kernel's dispatch, the primary's frames, and the kernel
 call underneath: the primary's own, or a module's swapped back at
@@ -149,8 +149,9 @@ def controls():
     fails, g, txt = run()
     check(fails == [], "the clean synthetic tree passes the gate", got=fails, want=[])
     deep, _ = g.cost(("PDREND", "pdr_entry"), "deep")
-    # door 18 at the call + 2, verb 2 + 2, step 42 + 2, leaf 2 + 4 + WRAP
-    want = 18 + 2 + 2 + 2 + 42 + 2 + 2 + 4 + P.WRAP
+    # from the door's entry: door 18 at the call + 2, verb 2 + 2, step 42 + 2,
+    # leaf 2 + the gate's 6 for its kernel call (deepstk's figures)
+    want = 18 + 2 + 2 + 2 + 42 + 2 + 2 + P.GATE
     check(deep == want, "the scan adds the door's pushes, every frame and the "
           "return addresses exactly", got=deep, want=want,
           why="a gate whose arithmetic is off by a frame is a gate that passes "
@@ -164,7 +165,7 @@ def controls():
 
     fails, g, txt = run(stepframe=1900)
     check(any(f.startswith("DEEP PDREND pdr_entry") for f in fails),
-          "a verb deeper than the private stack's %d FAILS" % (P.DEEP_SIZE - P.DEEP_RESERVE),
+          "a verb deeper than the private stack's %d FAILS" % P.DEEP_BUDGET,
           got=fails)
 
     fails, g, txt = run(cbframe=300)
@@ -188,7 +189,7 @@ def real():
     fails, g = P.analyse(build, out=lambda s: buf.write(s + "\n"))
     sys.stdout.write(buf.getvalue())
     check(fails == [], "PageDesk's call graph: no recursion, DEEP <= %d, UI <= %d"
-          % (P.DEEP_SIZE - P.DEEP_RESERVE, P.UI_BUDGET), got=fails, want=[],
+          % (P.DEEP_BUDGET, P.UI_BUDGET), got=fails, want=[],
           why="D21/D23: the UI task's stack is 512 bytes and the kernel's menu bar "
               "is the next thing under it")
     for seg, door in (("PDENG", "pde_entry"), ("PDREND", "pdr_entry"), ("PDWRT", "pdw_entry")):
