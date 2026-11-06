@@ -555,3 +555,13 @@ N apps/win16/win16.asm @w16_pfetch       # the loader part (dropped inside the
                                          # w16_pfv while a dialog is up; a proc
                                          # re-stamping w16_pfv, w16_dseg and
                                          # w16_icseg would retire it
+
+# --- ARCADE (ARCADE-SPEC; the N lines are docs/plans/ARCADE-MEGA-PLAN.md's
+# wave M1: one place derives every segment from a claim, so a relocation
+# proc - and on kern_mega a selector - has one place to re-derive) --------------
+C apps/arcade/arcimp.inc @ar_impdone     # the import's set image (ar_iclaim):
+    # claimed, filled and written and freed inside the one chooser callback
+C apps/arcade/arcimp.inc ar_zclaim       # the import's zip, read whole and freed
+    # inside the same chooser callback (and its parent's, ar_z2)
+D apps/arcade/arcsnd.inc ar_sbseg        # the Sound Blaster's ring: the DMA
+    # channel reads it for the whole bracket (SND_EXT, ARCADE-SPEC 8)

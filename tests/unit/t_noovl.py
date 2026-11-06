@@ -50,7 +50,8 @@ SHIPPED = ["build/os8088.img", "build/os8088-120.img", "build/os8088-720.img",
            "build/games360.img", "build/emu360.img", "build/util360.img",
            "build/more720.img", "build/small360.img", "build/small720.img",
            "build/win16.img", "build/win16-120.img", "build/win16-720.img",
-           "build/win16-360.img"]
+           "build/win16-360.img", "build/arcrel.img", "build/arcrel120.img",
+           "build/arcrel720.img", "build/arcrel360.img"]
 
 # Built disks that may carry an .OVL beside a package ON PURPOSE.
 EXEMPT = {

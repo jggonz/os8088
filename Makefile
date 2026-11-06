@@ -131,8 +131,15 @@ WIN16IMG      := $(BUILD)/win16.img
 WIN16IMG120   := $(BUILD)/win16-120.img
 WIN16IMG720   := $(BUILD)/win16-720.img
 WIN16IMG360   := $(BUILD)/win16-360.img
+# ...and ARCADE's release floppy in all four (ARCADE-SPEC 1.6; the owner's
+# decision, 2026-11-05): the package and its README, no ROM - built from the
+# committed ROM-free parts, so `all` needs no ROM and no network
+ARCRELIMG     := $(BUILD)/arcrel.img
+ARCRELIMG120  := $(BUILD)/arcrel120.img
+ARCRELIMG720  := $(BUILD)/arcrel720.img
+ARCRELIMG360  := $(BUILD)/arcrel360.img
 
-# ...and all twenty-one in one list, because it appeared in FOUR places (`all`
+# ...and all twenty-five in one list, because it appeared in FOUR places (`all`
 # and the three tiers) and each of those had to be edited by hand the first
 # time a disk was added. A shipped image that is in `all` and in none of the
 # tiers is one no gate ever reads, which is the failure this prevents rather
@@ -142,7 +149,8 @@ SHIPIMGS := $(IMG) $(IMG120) $(IMG720) $(IMG360) \
             $(MEDIAIMG360) $(OFFICEIMG360) $(NETWORKIMG360) $(GAMESIMG360) \
             $(EMUIMG360) $(UTILIMG360) $(MOREIMG720) \
             $(SMALLIMG360) $(SMALLIMG720) \
-            $(WIN16IMG) $(WIN16IMG120) $(WIN16IMG720) $(WIN16IMG360)
+            $(WIN16IMG) $(WIN16IMG120) $(WIN16IMG720) $(WIN16IMG360) \
+            $(ARCRELIMG) $(ARCRELIMG120) $(ARCRELIMG720) $(ARCRELIMG360)
 
 # ...and each of them SIGNS IN A SLOT OF ITS OWN (SPEC.md 18.8.2.2): os88disk.py
 # reads this list (tools/os88ship.py) and steers every member's boot-sector
@@ -2395,6 +2403,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm \
         c64 c64disk c64rom c64bandbench c64cputest c64memtest 386-c64 xt-c64 286-c64 \
         apple2 apple2disk realdmgdisk apple2rom a2bandbench a2memtest a2cputest 386-apple2 \
         xt-apple2 286-apple2 \
+        arcade arcadedisk arcaderom arcaderom-pacman arclock \
         weave weavedisk weavevm weavecanvas weavegame weavebandbench \
         xt-weave 386-weave xt-weave-256 \
         loom loomdisk \
@@ -11514,6 +11523,262 @@ $(BUILD)/apple2360.img: $(APPLE2DISK)
 	$(call APPLE2IMG,$@,360)
 	@python3 tools/os88disk.py --verify $@
 
+# =============================================================================
+# ARCADE - arcade boards, their ROMs translated to 8086 AHEAD OF TIME
+# (docs/ARCADE-SPEC.md; the plan is docs/plans/ARCADE-EMU-PLAN.md)
+#
+# THE ROM IS FETCHED AT A PIN AND NEVER COMMITTED (ARCADE-SPEC 1.3):
+# tools/getarcrom.py takes MAME's `invaders` set from ONE archive.org item,
+# checks the zip by SHA-1 and each of its four chips by SHA-256, and writes
+# the 8KB board image. Only ARCFROM=rom, `make arcadeprebuilt`, the
+# development disks and the rows need it; `make clean` spares the cache. GETARCFROM=<dir-or-zip>
+# takes a set the owner already has instead of the network.
+#
+# THE CODE PART IS GENERATED from that ROM: apps/arcade/arcaot.py walks it
+# from the reset and interrupt vectors plus apps/arcade/invaders.seeds (the
+# PCHL and RET targets tools/arcsim.py saw - addresses, no ROM byte), and
+# writes one NASM file it has already assembled itself, as many times as
+# its short branches needed. The full translation is derived from the ROM,
+# so it lives in build/, never in git; what SHIPS is its ROM-free recipe,
+# whose last state IS committed (apps/arcade/prebuilt/, ARCADE-SPEC 1.6), so
+# the package builds with no ROM and no network (ARCFROM, below).
+# =============================================================================
+ARCROM := $(BUILD)/arcade-rom/INVADERS.ROM
+$(ARCROM): tools/getarcrom.py | $(BUILD)
+	python3 tools/getarcrom.py invaders -o $@ $(if $(GETARCFROM),--from $(GETARCFROM))
+
+# Taito's colour boards - Space Invaders Part II and Lunar Rescue - are the
+# same 8080 board with ROM at 4000h too and a colour map (ARCADE-SPEC 5.3):
+# fetched the same way, at their own pins, and translated the same way.
+ARCPT2ROM := $(BUILD)/arcade-rom/INVADPT2.ROM
+ARCLRROM := $(BUILD)/arcade-rom/LRESCUE.ROM
+$(ARCPT2ROM): tools/getarcrom.py | $(BUILD)
+	python3 tools/getarcrom.py invadpt2 -o $@
+$(ARCLRROM): tools/getarcrom.py | $(BUILD)
+	python3 tools/getarcrom.py lrescue -o $@
+
+# Midway's landscape boards - Gun Fight and Sea Wolf - the same 8080 board
+# the right way up, with other ports (ARCADE-SPEC 5.3): --board names the map
+ARCGFROM := $(BUILD)/arcade-rom/GUNFIGHT.ROM
+ARCSWROM := $(BUILD)/arcade-rom/SEAWOLF.ROM
+$(ARCGFROM): tools/getarcrom.py | $(BUILD)
+	python3 tools/getarcrom.py gunfight -o $@
+$(ARCSWROM): tools/getarcrom.py | $(BUILD)
+	python3 tools/getarcrom.py seawolf -o $@
+$(BUILD)/arcade/gfcode.bin: apps/arcade/arcaot.py apps/arcade/gunfight.seeds \
+                            apps/arcade/arcrt.inc apps/arcade/arcdefs.inc $(ARCGFROM)
+	@mkdir -p $(BUILD)/arcade
+	python3 apps/arcade/arcaot.py $(ARCGFROM) apps/arcade/gunfight.seeds \
+		$(BUILD)/arcade/gfcode.asm $@ $(BUILD)/arcade/gfaux.bin --aux-kb 50 \
+		--recipe $(BUILD)/arcade/gfcode.rcp --board gunfight
+$(BUILD)/arcade/gfaux.bin $(BUILD)/arcade/gfcode.rcp: $(BUILD)/arcade/gfcode.bin
+$(BUILD)/arcade/swcode.bin: apps/arcade/arcaot.py apps/arcade/seawolf.seeds \
+                            apps/arcade/arcrt.inc apps/arcade/arcdefs.inc $(ARCSWROM)
+	@mkdir -p $(BUILD)/arcade
+	python3 apps/arcade/arcaot.py $(ARCSWROM) apps/arcade/seawolf.seeds \
+		$(BUILD)/arcade/swcode.asm $@ $(BUILD)/arcade/swaux.bin --aux-kb 50 \
+		--recipe $(BUILD)/arcade/swcode.rcp --board seawolf
+$(BUILD)/arcade/swaux.bin $(BUILD)/arcade/swcode.rcp: $(BUILD)/arcade/swcode.bin
+
+# Gottlieb's Q*bert board is an 8088, and its program RUNS NATIVELY
+# (ARCADE-SPEC 10): no translation, only apps/arcade/qbert.patch's handful
+# of changes - applied and CHECKED by arcqbgfx.py, which also turns the tiles
+# and sprites - and the N88 core, a door of a hundred bytes (arcn88.asm).
+ARCQBROM := $(BUILD)/arcade-rom/QBERT.ROM
+$(ARCQBROM): tools/getarcrom.py | $(BUILD)
+	python3 tools/getarcrom.py qbert -o $@
+$(BUILD)/arcade/QBROM.PRT: apps/arcade/arcqbgfx.py apps/arcade/qbert.patch $(ARCQBROM)
+	@mkdir -p $(BUILD)/arcade
+	python3 apps/arcade/arcqbgfx.py $(ARCQBROM) apps/arcade/qbert.patch $@ \
+		$(BUILD)/arcade/QBSPR.PRT $(BUILD)/arcade/qbpatch.inc
+$(BUILD)/arcade/QBSPR.PRT $(BUILD)/arcade/qbpatch.inc: $(BUILD)/arcade/QBROM.PRT
+$(BUILD)/arcade/qbcode.bin: apps/arcade/arcn88.asm apps/arcade/arcdefs.inc
+	@mkdir -p $(BUILD)/arcade
+	$(NASM) -f bin -w+error -I apps/arcade/ -o $@ $<
+
+#> [Applications] arcaderom :: fetch every board's ROMs (Space Invaders, Part II, Lunar Rescue, Gun Fight, Sea Wolf, Q*bert, Pac-Man) at pinned hashes (never committed)
+arcaderom: $(ARCROM) $(ARCPT2ROM) $(ARCLRROM) $(ARCGFROM) $(ARCSWROM) $(ARCQBROM) $(ARCPMROM)
+
+$(BUILD)/arcade/pt2code.bin: apps/arcade/arcaot.py apps/arcade/invadpt2.seeds \
+                             apps/arcade/arcrt.inc apps/arcade/arcdefs.inc $(ARCPT2ROM)
+	@mkdir -p $(BUILD)/arcade
+	python3 apps/arcade/arcaot.py $(ARCPT2ROM) apps/arcade/invadpt2.seeds \
+		$(BUILD)/arcade/pt2code.asm $@ $(BUILD)/arcade/pt2aux.bin --aux-kb 50 \
+		--recipe $(BUILD)/arcade/pt2code.rcp
+$(BUILD)/arcade/pt2aux.bin $(BUILD)/arcade/pt2code.rcp: $(BUILD)/arcade/pt2code.bin
+$(BUILD)/arcade/lrcode.bin: apps/arcade/arcaot.py apps/arcade/lrescue.seeds \
+                            apps/arcade/arcrt.inc apps/arcade/arcdefs.inc $(ARCLRROM)
+	@mkdir -p $(BUILD)/arcade
+	python3 apps/arcade/arcaot.py $(ARCLRROM) apps/arcade/lrescue.seeds \
+		$(BUILD)/arcade/lrcode.asm $@ $(BUILD)/arcade/lraux.bin --aux-kb 50 \
+		--recipe $(BUILD)/arcade/lrcode.rcp
+$(BUILD)/arcade/lraux.bin $(BUILD)/arcade/lrcode.rcp: $(BUILD)/arcade/lrcode.bin
+
+$(BUILD)/arcade/invcode.bin: apps/arcade/arcaot.py apps/arcade/invaders.seeds \
+                             apps/arcade/arcrt.inc apps/arcade/arcdefs.inc $(ARCROM)
+	@mkdir -p $(BUILD)/arcade
+	python3 apps/arcade/arcaot.py $(ARCROM) apps/arcade/invaders.seeds \
+		$(BUILD)/arcade/invcode.asm $@ $(BUILD)/arcade/invaux.bin --aux-kb 50 \
+		--recipe $(BUILD)/arcade/invcode.rcp
+$(BUILD)/arcade/invaux.bin $(BUILD)/arcade/invcode.rcp: $(BUILD)/arcade/invcode.bin
+
+# Pac-Man is fetched like the rest (ARCADE-SPEC 7), at its pin in the
+# Namco Classics item; GETPACFROM=<dir-or-zip> takes the owner's set instead.
+ARCPMROM := $(BUILD)/arcade-rom/PACMAN.ROM
+$(ARCPMROM): tools/getarcrom.py | $(BUILD)
+	python3 tools/getarcrom.py pacman -o $@ $(if $(GETPACFROM),--from $(GETPACFROM))
+#> [Applications] arcaderom-pacman :: fetch Pac-Man's set at its pin (GETPACFROM=<dir-or-zip> takes yours instead)
+.PHONY: arcaderom-pacman
+arcaderom-pacman: $(ARCPMROM)
+
+$(BUILD)/arcade/paccode.bin: apps/arcade/arcz80t.py apps/arcade/z80dec.py apps/arcade/arcaot.py \
+                             apps/arcade/pacman.seeds apps/arcade/arcrt.inc apps/arcade/arcz80rt.inc \
+                             apps/arcade/arcdefs.inc $(ARCPMROM)
+	@mkdir -p $(BUILD)/arcade
+	python3 apps/arcade/arcz80t.py $(ARCPMROM) apps/arcade/pacman.seeds \
+		$(BUILD)/arcade/paccode.asm $@ $(BUILD)/arcade/pacaux.bin --aux-kb 51 \
+		--recipe $(BUILD)/arcade/paccode.rcp
+$(BUILD)/arcade/pacaux.bin $(BUILD)/arcade/paccode.rcp: $(BUILD)/arcade/paccode.bin
+$(BUILD)/arcade/PACMAN.PRT: apps/arcade/arcpmgfx.py $(ARCPMROM)
+	@mkdir -p $(BUILD)/arcade
+	python3 apps/arcade/arcpmgfx.py $(ARCPMROM) $@
+
+# Space Invaders' sounds, SYNTHESISED (ARCADE-SPEC 8.3): no recording, no ROM
+$(BUILD)/arcade/INVSFX.PRT: apps/arcade/arcsfx.py
+	@mkdir -p $(BUILD)/arcade
+	python3 apps/arcade/arcsfx.py $@
+
+ARCADE_SRC := apps/arcade/arcade.asm apps/arcade/arcdefs.inc apps/arcade/arcpm.inc apps/arcade/arcqb.inc \
+              apps/arcade/arcimp.inc apps/os88inflate.inc apps/os88data.inc \
+              apps/arcade/arcface.inc apps/arcade/arcopt.inc \
+              apps/arcade/arc6502.inc apps/arcade/arcqbs.inc \
+              apps/arcade/arcsnd.inc apps/arcade/arcland.inc drivers/sound/sndpkg.inc \
+              apps/os88api.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88pit.inc \
+              apps/os88ui.inc apps/os88mega.inc
+# WHAT SHIPS HAS NO ROM IN IT (docs/plans/ARCADE-RELEASE-PLAN.md 2.1): each
+# translated board's RECIPE (.rcp: its code with the ROM's bytes as holes,
+# and the fill list) and its PC table; Q*bert's N88 core. The ROMs are the
+# user's <SET>.ROM files, read at a pick; `make arcaderoms` writes them here
+# from the pinned sets, and only the DEVELOPMENT disk (arcadedisk) carries
+# them, beside ARCADE.O88. The full translations (.bin) stay in build/ for
+# the lockstep rows and for tests/arcrecipe.py's identity check.
+# WHERE THOSE PARTS COME FROM (ARCADE-SPEC 1.6): ARCFROM=prebuilt, the
+# default, takes them from apps/arcade/prebuilt/ - the last state of them,
+# committed, made by `make arcadeprebuilt` - so `make arcade` and the release
+# floppies need no ROM and no archive.org. ARCFROM=rom makes them here from
+# the pinned ROMs (fetched); tests/unit/t_arcprebuilt.py fails `make` when
+# their inputs moved and the committed state did not.
+ARCFROM ?= prebuilt
+ARCPRE := apps/arcade/prebuilt
+ARCPREFILES := invcode.rcp invaux.bin pt2code.rcp pt2aux.bin lrcode.rcp lraux.bin \
+               gfcode.rcp gfaux.bin swcode.rcp swaux.bin paccode.rcp pacaux.bin \
+               qbpatch.inc arcsets.inc
+ifeq ($(ARCFROM),rom)
+ARCGEN := $(BUILD)/arcade
+else
+ARCGEN := $(BUILD)/arcade/pre
+$(ARCGEN)/%: $(ARCPRE)/%.gz
+	@mkdir -p $(ARCGEN)
+	python3 -c "import gzip,sys; open(sys.argv[2],'wb').write(gzip.open(sys.argv[1]).read())" $< $@
+endif
+ARCADE_PARTS := $(addprefix $(ARCGEN)/,invcode.rcp invaux.bin pt2code.rcp pt2aux.bin \
+                  lrcode.rcp lraux.bin gfcode.rcp gfaux.bin swcode.rcp swaux.bin) \
+                $(BUILD)/arcade/qbcode.bin $(ARCGEN)/paccode.rcp $(ARCGEN)/pacaux.bin
+ARCADE_DEF := -DARC_PACMAN
+ARCROMS := $(addprefix $(BUILD)/arcade/roms/,INVADERS.ROM INVADPT2.ROM LRESCUE.ROM \
+                                             GUNFIGHT.ROM SEAWOLF.ROM QBERT.ROM PACMAN.ROM)
+ARCADE_PARTS += $(BUILD)/arcade/INVSFX.PRT      # lazy, so last (SPEC.md 20.12.4)
+# The sets ARCADE imports (arcimp.inc): MAME's names and CRC-32s, from the pins
+$(BUILD)/arcade/arcsets.inc: tools/getarcrom.py $(ARCROM) $(ARCPT2ROM) $(ARCLRROM) \
+                             $(ARCGFROM) $(ARCSWROM) $(ARCQBROM) $(ARCPMROM)
+	python3 tools/getarcrom.py invaders --asm-sets $@
+#> [Applications] arcadeprebuilt :: make ARCADE's ROM-free parts from the pinned ROMs (fetched) and commit-ready in apps/arcade/prebuilt/
+arcadeprebuilt:
+	$(MAKE) ARCFROM=rom $(addprefix $(BUILD)/arcade/,$(ARCPREFILES))
+	python3 tools/arcprebuilt.py write $(BUILD)/arcade $(ARCPRE)
+# The cabinet's art (ARCADE-SPEC 11.3): generated, checked, never drawn by hand
+$(BUILD)/arcade/arcart.inc: tools/arcart.py
+	python3 tools/arcart.py --selfcheck --out $@
+$(BUILD)/arcade.bin: $(ARCADE_SRC) $(ARCGEN)/qbpatch.inc $(ARCGEN)/arcsets.inc \
+                     $(BUILD)/arcade/arcart.inc | $(BUILD)
+	$(NASM) -f bin -w+error $(ARCADE_DEF) -I apps/ -I apps/arcade/ -I $(ARCGEN)/ -I $(BUILD)/arcade/ \
+		-I drivers/sound/ -l $(BUILD)/arcade.lst -o $@ apps/arcade/arcade.asm
+
+# A user's <SET>.ROM (ARCADE-SPEC 1.4), from the image each set's rule made
+$(BUILD)/arcade/roms/%.ROM: $(BUILD)/arcade-rom/%.ROM tools/getarcrom.py
+	python3 tools/getarcrom.py $(shell echo $* | tr A-Z a-z) --from-image $< --rom-file $@
+#> [Applications] arcaderoms :: write each set's ARCADE .ROM file (build/arcade/roms/) from the pinned ROMs - never committed, never on a release disk
+arcaderoms: $(ARCROMS)
+
+$(BUILD)/arcade.o88: $(BUILD)/arcade.bin $(ARCADE_PARTS) tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/arcade.bin -o $@ $(foreach p,$(ARCADE_PARTS),--part $(p)) --part-compress lz4
+
+#> [Applications] arcade :: ARCADE, arcade boards translated to 8086: five 8080 boards, Q*bert's 8088 native, and Pac-Man with your ROM (docs/ARCADE-SPEC.md)
+arcade: $(BUILD)/arcade.o88
+
+#> [Applications] arclock :: ARCADE's translated code in lockstep with tools/arcsim.py (needs unicorn)
+arclock: $(BUILD)/arcade/invcode.bin
+	python3 tests/arclock.py $(BUILD)/arcade/invcode.bin $(BUILD)/arcade/invaux.bin $(ARCROM) --frames 600
+
+ARCADEDISK := $(BUILD)/arcade.o88 apps/arcade/README.TXT tools/os88disk.py $(ARCROMS)
+ARCADEIMG = python3 tools/os88disk.py -o $(1) --size $(2) $(APPDATAFOLDER) \
+	    $(BUILD)/arcade.o88 apps/arcade/README.TXT $(ARCROMS)
+#> [Applications] arcadedisk :: the ARCADE DEVELOPMENT floppies in four geometries: the package and every set's .ROM beside it (fetches the ROMs)
+arcadedisk: $(BUILD)/arcade.img $(BUILD)/arcade720.img \
+            $(BUILD)/arcade120.img $(BUILD)/arcade360.img
+
+$(BUILD)/arcade.img: $(ARCADEDISK)
+	$(call ARCADEIMG,$@,1440)
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/arcade720.img: $(ARCADEDISK)
+	$(call ARCADEIMG,$@,720)
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/arcade120.img: $(ARCADEDISK)
+	$(call ARCADEIMG,$@,1200)
+	@python3 tools/os88disk.py --verify $@
+
+# (360KB: no README and no SYSTEM\APPDATA - the package and seven sets fill
+# it, Q*bert's with its sound chips, and the two folders were the last two
+# clusters (ARCADE-MEGA-PLAN's movable claims took one). No row on this disk
+# reads ARCADE.DAT or a picture back: arcopt and arcface use the 720KB one.
+# The README is the RELEASE disk's, arcrel360.img)
+$(BUILD)/arcade360.img: $(ARCADEDISK)
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/arcade.o88 $(ARCROMS)
+	@python3 tools/os88disk.py --verify $@
+
+# THE RELEASE FLOPPIES (docs/plans/ARCADE-RELEASE-PLAN.md R6): the package,
+# its README and an empty SYSTEM\APPDATA - NO ROM. The user's sets come in
+# through Game > Add ROM sets... (ARCADE-SPEC 1.5). The build still needs the
+# ROMs, since the code parts are translated from them (apps/RETIRED.txt).
+ARCADERELIMG = python3 tools/os88disk.py -o $(1) --size $(2) $(APPDATAFOLDER) \
+	       $(BUILD)/arcade.o88 $(BUILD)/arcade/ARCADE.TXT
+# (its README as ARCADE.TXT: README.TXT at a shipped disk's root is the
+# system's, and tests/unit/t_pkg.py holds every one to that file)
+$(BUILD)/arcade/ARCADE.TXT: apps/arcade/README.TXT
+	@mkdir -p $(dir $@)
+	cp $< $@
+#> [Applications] arcaderel :: the ARCADE RELEASE floppies in four geometries: the package and its README, no ROM (build/arcrel*.img)
+arcaderel: $(BUILD)/arcrel.img $(BUILD)/arcrel720.img \
+           $(BUILD)/arcrel120.img $(BUILD)/arcrel360.img
+
+$(BUILD)/arcrel.img: $(BUILD)/arcade.o88 $(BUILD)/arcade/ARCADE.TXT tools/os88disk.py
+	$(call ARCADERELIMG,$@,1440)
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/arcrel720.img: $(BUILD)/arcade.o88 $(BUILD)/arcade/ARCADE.TXT tools/os88disk.py
+	$(call ARCADERELIMG,$@,720)
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/arcrel120.img: $(BUILD)/arcade.o88 $(BUILD)/arcade/ARCADE.TXT tools/os88disk.py
+	$(call ARCADERELIMG,$@,1200)
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/arcrel360.img: $(BUILD)/arcade.o88 $(BUILD)/arcade/ARCADE.TXT tools/os88disk.py
+	$(call ARCADERELIMG,$@,360)
+	@python3 tools/os88disk.py --verify $@
+
 # ...and the Apple II beside HEAPFRAG and NOTEPAD, for tests/emumove.py
 # --pkg apple2 (APPLE2-SPEC 3.1.1): c64move360's layout one machine along.
 $(BUILD)/a2move360.img: $(BUILD)/heapfrag.o88 $(BUILD)/apple2.o88 \
@@ -15321,7 +15586,8 @@ MEGAAPPDIR := $(MEGADIR)/apps
 MEGAPKGS := $(MEGAAPPDIR)/video.o88 $(MEGAAPPDIR)/audio.o88 \
             $(MEGAAPPDIR)/tracker.o88 $(MEGAAPPDIR)/midirack.o88 \
             $(MEGAAPPDIR)/pixel.o88 $(MEGAAPPDIR)/xtmp3.o88 \
-            $(MEGAAPPDIR)/realdmg.o88 $(MEGAAPPDIR)/taskmgr.o88
+            $(MEGAAPPDIR)/realdmg.o88 $(MEGAAPPDIR)/taskmgr.o88 \
+            $(MEGAAPPDIR)/arcade.o88
 MEGABASE = $(patsubst $(MEGAAPPDIR)/%,$(BUILD)/%,$(MEGAPKGS))
 # ...and the substitution, ONE IDIOM for every list a kern_mega disk names
 # (SMALLSUB's): the mega arm of any package that has one, everything else as
@@ -15450,6 +15716,28 @@ $(MEGAAPPDIR)/taskmgr.bin: apps/taskmgr/taskmgr.asm apps/os88api.inc \
 	@echo "taskmgr (PKG_MEGA): $(call FILESIZE,$@) bytes"
 $(MEGAAPPDIR)/taskmgr.o88: $(MEGAAPPDIR)/taskmgr.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(MEGAAPPDIR)/taskmgr.bin -o $@
+
+# ARCADE's arm (docs/plans/ARCADE-MEGA-PLAN.md): protected mode throughout,
+# its region and claims above 1MB, code parts far-called through their CODE
+# selectors and Q*bert's program run in a code/data pair. The parts are the
+# shipped build's. It rides a floppy of its own, the twin of arcrel*.img
+# (the owner, 2026-11-05)
+$(MEGAAPPDIR)/arcade.bin: $(ARCADE_SRC) $(ARCGEN)/qbpatch.inc $(ARCGEN)/arcsets.inc \
+                          $(BUILD)/arcade/arcart.inc | $(BUILD)
+	@mkdir -p $(MEGAAPPDIR)
+	$(NASM) -f bin -w+error $(ARCADE_DEF) -DPKG_MEGA -I apps/ -I apps/arcade/ -I $(ARCGEN)/ \
+	    -I $(BUILD)/arcade/ -I drivers/sound/ -l $(MEGAAPPDIR)/arcade.lst -o $@ apps/arcade/arcade.asm
+	@echo "arcade (PKG_MEGA): $(call FILESIZE,$@) bytes"
+$(MEGAAPPDIR)/arcade.o88: $(MEGAAPPDIR)/arcade.bin $(ARCADE_PARTS) tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(MEGAAPPDIR)/arcade.bin -o $@ $(foreach p,$(ARCADE_PARTS),--part $(p)) --part-compress lz4
+#> [Kernels] arcrelmega :: ARCADE's kern_mega floppies (1.44MB, 1.2MB): its arm and ARCADE.TXT, no ROM
+arcrelmega: $(BUILD)/arcrelmega.img $(BUILD)/arcrelmega120.img
+$(BUILD)/arcrelmega.img: $(MEGAAPPDIR)/arcade.o88 $(BUILD)/arcade/ARCADE.TXT tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(APPDATAFOLDER) $< $(BUILD)/arcade/ARCADE.TXT
+	@python3 tools/os88disk.py --verify $@
+$(BUILD)/arcrelmega120.img: $(MEGAAPPDIR)/arcade.o88 $(BUILD)/arcade/ARCADE.TXT tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1200 $(APPDATAFOLDER) $< $(BUILD)/arcade/ARCADE.TXT
+	@python3 tools/os88disk.py --verify $@
 
 #> [Kernels] megapkgs :: print each kern_mega package arm against its shipped build
 megapkgs: $(MEGAPKGS) $(patsubst $(MEGAAPPDIR)/%,$(BUILD)/%,$(MEGAPKGS))
@@ -17529,6 +17817,7 @@ ALLAPPSARGS := $(addprefix APPS:,$(APPS_TOOLS) $(CORE_SYSONLY) \
                $(addprefix RUNCPM:,$(RUNCPMDISK)) \
                $(addprefix C64:,$(BUILD)/c64.o88 \
                                 apps/c64/README.TXT apps/c64/COPYING) \
+               $(addprefix ARCADE:,$(BUILD)/arcade.o88 apps/arcade/README.TXT) \
                $(addprefix APPLE2:,$(BUILD)/apple2.o88 \
                                    $(BUILD)/WELCOME.BAS \
                                    apps/apple2/README.TXT \

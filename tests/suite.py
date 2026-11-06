@@ -286,6 +286,12 @@ FAST = [
         "literal under 0.1 s, or marked `# host: <why>`; a scenario step is "
         "Box.guest_sleep / os88marty.guest_sleep / pace. VERIFIED TO FAIL "
         "on the tree before it (45 sites, 38 of them scenario steps)"),
+    Row("arcprebuilt-stamp", "fast", py("tests/unit/t_arcprebuilt.py"), 0.1,
+        "ARCADE's committed ROM-free parts (apps/arcade/prebuilt/, ARCADE-SPEC 1.6) "
+        "are the state of their inputs: STAMP's hashes of the translator, the "
+        "seeds, Q*bert's patch and the pins match the tree, so `make arcade` "
+        "never ships an old translation under new source. No ROM needed. Red "
+        "with a line added to qbert.patch, naming it"),
     Row("retired", "fast", py("tests/unit/t_retired.py"), 0.3,
         "every package under apps/ ships, or apps/RETIRED.txt says why not "
         "(SPEC.md 20.16). CLAUDE.md's Layout section states the invariant - "
@@ -4599,6 +4605,237 @@ SOAK = [
         "effect) that must be REFUSED - a guard nobody has seen fire is a "
         "guard nobody knows is alive",
         needs=("nasm",)),
+    Row("arclock", "soak", py("tests/arclock.py", "build/arcade/invcode.bin",
+                              "build/arcade/invaux.bin",
+                              "build/arcade-rom/INVADERS.ROM", "--frames", "600",
+                              "--marks"), 45.0,
+        "ARCADE's translated Space Invaders (docs/ARCADE-SPEC.md 6.1) under Unicorn in "
+        "LOCKSTEP with tools/arcsim.py: PC, A, BC, DE, HL and SP at every 8080 "
+        "instruction, the flags wherever the 8080 reads them, RAM and VRAM every "
+        "frame, interrupts on the same instruction, through a coin, a start and "
+        "play. The ROM is fetched (make arcaderom), never committed",
+        needs=("nasm", "unicorn"),
+        wants=("build/arcade/invcode.bin", "build/arcade/invaux.bin",
+               "build/arcade-rom/INVADERS.ROM")),
+    Row("arclockpm", "soak", py("tests/arclock.py", "build/arcade/paccode.bin",
+                                "build/arcade/pacaux.bin", "build/arcade-rom/PACMAN.ROM",
+                                "--board", "pacman", "--frames", "600"), 111.0,
+        "ARCADE's translated Pac-Man (docs/ARCADE-SPEC.md 7) under Unicorn in "
+        "LOCKSTEP with tools/arcpac.py's Z80 and Namco board: PC and the main "
+        "registers at every Z80 instruction, IX/IY and the alternate set, RAM "
+        "every frame, IM 2 interrupts on the same instruction, through a coin, "
+        "a start and play. The ROM is the OWNER'S (make arcaderom-pacman "
+        "GETPACFROM=<zip>), never fetched or committed, so the row SKIPs without it",
+        needs=("nasm", "unicorn"),
+        wants=("build/arcade/paccode.bin", "build/arcade/pacaux.bin",
+               "build/arcade-rom/PACMAN.ROM")),
+    Row("arclockpt2", "soak", py("tests/arclock.py", "build/arcade/pt2code.bin",
+                                 "build/arcade/pt2aux.bin", "build/arcade-rom/INVADPT2.ROM",
+                                 "--board", "invadpt2", "--frames", "600", "--marks"), 41.0,
+        "ARCADE's translated Space Invaders Part II (ARCADE-SPEC section 5.3, Taito's "
+        "colour board: ROM at 4000h too) under Unicorn in LOCKSTEP with "
+        "tools/arcsim.py's board, as row arclock: every 8080 instruction, the "
+        "flags where read, RAM each frame, a spin loop's HLT resumed where the "
+        "model's interrupt lands (ARCADE-SPEC 3.7). The ROM is fetched (make "
+        "arcaderom), never committed",
+        needs=("nasm", "unicorn"),
+        wants=("build/arcade/pt2code.bin", "build/arcade/pt2aux.bin",
+               "build/arcade-rom/INVADPT2.ROM")),
+    Row("arclocklr", "soak", py("tests/arclock.py", "build/arcade/lrcode.bin",
+                                "build/arcade/lraux.bin", "build/arcade-rom/LRESCUE.ROM",
+                                "--board", "lrescue", "--frames", "1000", "--marks"), 63.0,
+        "ARCADE's translated Lunar Rescue (ARCADE-SPEC section 5.3) under Unicorn "
+        "in LOCKSTEP with tools/arcsim.py's board through 1,000 frames - its "
+        "descent, past the coin and the start - as row arclock. The ROM is "
+        "fetched (make arcaderom), never committed",
+        needs=("nasm", "unicorn"),
+        wants=("build/arcade/lrcode.bin", "build/arcade/lraux.bin",
+               "build/arcade-rom/LRESCUE.ROM")),
+    Row("arcspeedlr", "soak", py("tests/arcspeed.py", "--game", "Lunar Rescue"), 14.0,
+        "ARCADE's Lunar Rescue on MartyPC's 5150 (ARCADE-SPEC sections 3.7 and 5): "
+        "picked from Game (its parts read), played 10 guest seconds, the "
+        "board's 59.54 frames a second within 3% with at most one half frame "
+        "dropped. Its wait for the interrupt (05D8h) was 63% of the 8088 and "
+        "dropped 32 half frames before spin loops became a HLT (ARCADE-SPEC "
+        "3.7); red with arcaot.py --no-spins",
+        needs=("marty",), wants=("build/arcade360.img", "build/os8088-360.img")),
+    Row("arclockgf", "soak", py("tests/arclock.py", "build/arcade/gfcode.bin",
+                                "build/arcade/gfaux.bin", "build/arcade-rom/GUNFIGHT.ROM",
+                                "--board", "gunfight", "--frames", "600", "--marks"), 62.0,
+        "ARCADE's translated Gun Fight (ARCADE-SPEC section 5.3: Midway's landscape "
+        "board, three-gate OUT decoding) under Unicorn in LOCKSTEP with "
+        "tools/arcsim.py, and --marks: every video RAM cell a frame changed "
+        "is on the write list the host draws from. The ROM is fetched (make "
+        "arcaderom), never committed",
+        needs=("nasm", "unicorn"),
+        wants=("build/arcade/gfcode.bin", "build/arcade/gfaux.bin",
+               "build/arcade-rom/GUNFIGHT.ROM")),
+    Row("arclocksw", "soak", py("tests/arclock.py", "build/arcade/swcode.bin",
+                                "build/arcade/swaux.bin", "build/arcade-rom/SEAWOLF.ROM",
+                                "--board", "seawolf", "--frames", "600", "--marks"), 62.0,
+        "ARCADE's translated Sea Wolf (ARCADE-SPEC section 5.3: the shifter read "
+        "bit-reversed at IN 0, the screen erased with SP in it) under Unicorn "
+        "in LOCKSTEP with tools/arcsim.py, and --marks as row arclockgf",
+        needs=("nasm", "unicorn"),
+        wants=("build/arcade/swcode.bin", "build/arcade/swaux.bin",
+               "build/arcade-rom/SEAWOLF.ROM")),
+    Row("arcspeedgf", "soak", py("tests/arcspeed.py", "--game", "Gun Fight"), 14.0,
+        "ARCADE's Gun Fight on MartyPC's 5150 (ARCADE-SPEC section 5): the board's "
+        "59.54 frames a second within 3%, at most one half frame dropped, in "
+        "10 guest seconds - a board whose 8080 never waits, so the 8088 runs "
+        "all of it",
+        needs=("marty",), wants=("build/arcade360.img", "build/os8088-360.img")),
+    Row("arcspeedsw", "soak", py("tests/arcspeed.py", "--game", "Sea Wolf"), 14.0,
+        "ARCADE's Sea Wolf on MartyPC's 5150, as row arcspeedgf",
+        needs=("marty",), wants=("build/arcade360.img", "build/os8088-360.img")),
+    Row("arcglass", "soak", py("tests/arcglass.py"), 24.0,
+        "ARCADE's landscape boards' picture IS their video RAM (ARCADE-SPEC "
+        "section 4.6): Gun Fight and Sea Wolf played on MartyPC's Hercules "
+        "5150, and at the instant ar_render has drawn its list (a breakpoint), "
+        "the Hercules page compared cell by cell with the guest's VRAM drawn "
+        "the board's way, three frames: none may differ. Red (54 cells) with "
+        "a PUSH into VRAM not listing its cells, which left Sea Wolf's "
+        "INSERT COIN on the glass in play",
+        needs=("marty",), wants=("build/arcade360.img", "build/os8088-360.img")),
+    Row("arcrecipe", "soak", py("tests/arcrecipe.py"), 2.0,
+        "ARCADE's RECIPES (docs/plans/ARCADE-RELEASE-PLAN.md 2.1): every translated "
+        "board's code part as it will ship, its ROM bytes left as holes - filled "
+        "from the pinned ROM it is byte for byte the translation the lockstep rows "
+        "test, and it carries no run of 8 ROM bytes. Red with one fill entry taken "
+        "out. Host-only",
+        wants=("build/arcade/invcode.rcp", "build/arcade/invcode.bin",
+               "build/arcade-rom/INVADERS.ROM")),
+    Row("arcbuilt", "soak", py("tests/arcbuilt.py"), 33.0,
+        "ARCADE builds on the guest what the host tools build (docs/plans/"
+        "ARCADE-RELEASE-PLAN.md 2.4): Q*bert and Pac-Man picked on MartyPC's VGA "
+        "XT from their .ROM files, and the parts pm_build and qb_build made - "
+        "turned tiles and sprites, palettes, the patched program - read back and "
+        "held byte for byte to arcpmgfx.py's and arcqbgfx.py's. Red (4,066 bytes) "
+        "with qbb_tiles taking each tile's nibbles the wrong way round",
+        needs=("marty",), wants=("build/arcade360.img", "build/os8088-360.img",
+                                 "build/arcade/QBROM.PRT")),
+    Row("inflate86", "soak", py("tests/inflate86.py", "build/arcade-rom/qbert.zip",
+                                "build/arcade-rom/invaders.zip"), 3.0,
+        "apps/os88inflate.inc, the 8086 DEFLATE decoder ARCADE's import uses "
+        "(ARCADE-SPEC 1.5): run under Unicorn on 345 streams - stored, fixed and "
+        "dynamic blocks, zlib at every level, every member of the pinned MAME "
+        "zips - each output held byte for byte to zlib's, and truncated or "
+        "corrupt streams refused with carry set and the stack restored. Host-only",
+        needs=("unicorn",),
+        wants=("build/arcade-rom/qbert.zip", "build/arcade-rom/invaders.zip")),
+    Row("arcimport", "soak", py("tests/arcimport.py"), 128.0,
+        "ARCADE imports ROM sets on the machine itself (ARCADE-SPEC 1.5): Game > "
+        "Add ROM sets... and the file chooser on MartyPC's VGA XT, a 720KB disk "
+        "with the sets in ROMS\\ and no .ROM. A zip with one chip one bit wrong, "
+        "and a zip cut short, write nothing; MAME's invaders.zip (forty clone "
+        "folders, a TorrentZip comment) and qbert.zip, Gun Fight's chips renamed "
+        "in a clone's folder, a split Pac-Man beside its parent and Sea Wolf as "
+        "loose files each write a .ROM byte for byte the one make arcaderoms "
+        "writes, with the menu bar's progress armed; two games run from them, "
+        "and after ARCADE is reopened from B:\\ Q*bert is found again through "
+        "ARCADE.DAT",
+        needs=("marty",), wants=("build/arcade.o88", "build/os8088-360.img",
+                                 "build/arcade-rom/invaders.zip",
+                                 "build/arcade-rom/qbert.zip",
+                                 "build/arcade-rom/gunfight.zip",
+                                 "build/arcade/roms/INVADERS.ROM",
+                                 "build/arcade/roms/QBERT.ROM")),
+    Row("arcface", "soak", py("tests/arcface.py", "--machine", "os8088_xt_vga"), 21.0,
+        "ARCADE's frontend (ARCADE-SPEC 11) on MartyPC's VGA XT: opening is a look - every game's state read out of the package; Down, End, Home, a letter and a click move the selection, ADD ROMS opens the chooser; a move redraws with no pixel changed twice (m.flicker); the incremental face is pixel for pixel a whole repaint; Space Invaders played and left gets its picture, INVADERS.PIC written. Red (120 rows) when a move did not redraw the row it left",
+        needs=("marty",), wants=("build/arcade720.img", "build/arcade.o88", "build/os8088-360.img")),
+    Row("arcfaceherc", "soak", py("tests/arcface.py", "--machine", "os8088_5150_herc_gla"), 15.0,
+        "ARCADE's frontend (ARCADE-SPEC 11) on MartyPC's Hercules 5150: opening is a look - every game's state read out of the package, Pac-Man and Q*bert NEEDS VGA; Down, End, Home, a letter and a click move the selection, ADD ROMS opens the chooser; a move redraws with no pixel changed twice (m.flicker); the incremental face is pixel for pixel a whole repaint; Space Invaders played and left gets its picture, INVADERS.PIC written. Red (120 rows) when a move did not redraw the row it left",
+        needs=("marty",), wants=("build/arcade720.img", "build/arcade.o88", "build/os8088-360.img")),
+    Row("arcfacecga", "soak", py("tests/arcface.py", "--machine", "os8088_5150_cga_gla"), 14.0,
+        "ARCADE's frontend (ARCADE-SPEC 11) on MartyPC's CGA 5150 (the compact layout): opening is a look - every game's state read out of the package, Pac-Man and Q*bert NEEDS VGA; Down, End, Home, a letter and a click move the selection, ADD ROMS opens the chooser; a move redraws with no pixel changed twice (m.flicker); the incremental face is pixel for pixel a whole repaint; Space Invaders played and left gets its picture, INVADERS.PIC written. Red (120 rows) when a move did not redraw the row it left",
+        needs=("marty",), wants=("build/arcade720.img", "build/arcade.o88", "build/os8088-360.img")),
+    Row("arcopt", "soak", py("tests/arcopt.py"), 22.0,
+        "ARCADE's settings, scores, pause and help (ARCADE-SPEC 12) on MartyPC's "
+        "VGA XT: SETTINGS turns Space Invaders' BASES to 5, kept in ARCADE.DAT and "
+        "in IN 2 at the next power-on; P and F1 each hold the board two guest "
+        "seconds with no frame run, a key plays on; a best put in the game's RAM "
+        "is kept as it is left with Esc from a hold, and is back after Game > "
+        "Reset. Red (0000) without the put-back",
+        needs=("marty",), wants=("build/arcade720.img", "build/arcade.o88", "build/os8088-360.img")),
+    Row("arcmove", "soak", py("tests/arcmove.py"), 78.0,
+        "ARCADE's claims MOVE (SPEC.md 66, ARCADE-SPEC 14) on MartyPC's VGA XT: "
+        "Q*bert, Pac-Man and Space Invaders each picked, played and left, then a "
+        "compaction posted from outside (tests/pkgmove.py's door). Every word "
+        "names a live declared claim, the copies agree (ar_rseg, ar_aseg, the "
+        "view, the code part; Q*bert's G in qb_gcs, the view and the CS its stack "
+        "keeps, every yield naming the N88 part's new place), moved bytes are "
+        "unchanged, at least one claim moved, and Enter plays on at the board's "
+        "rate. Red with qb_gmv a bare `ret` (the stack's CS, the yields)",
+        needs=("marty",), wants=("build/arcade720.img", "build/arcade.o88", "build/os8088-360.img")),
+    Row("m6502", "soak", py("tests/m6502.py"), 28.0,
+        "ARCADE's 6502 core (apps/arcade/arc6502.inc, ARCADE-SPEC 13.2) under Unicorn "
+        "against tools/qbsnd.py's CPU6502: every documented opcode from 300 random "
+        "states, one instruction each, to the cycle; then Q*bert's sound program in "
+        "lockstep, every DAC write compared to the cycle. Host-only",
+        needs=("unicorn",), wants=("build/arcade-rom/qbert.zip",)),
+    Row("qbsmix", "soak", py("tests/qbsmix.py"), 5.0,
+        "Q*bert's sound board as ARCADE runs it (ARCADE-SPEC 13): arcqbs.inc's RIOT, "
+        "latch and per-sample mix over arc6502.inc, under Unicorn on the sound "
+        "program from qbert.zip, fed 15 of the game's commands over 640 frames - "
+        "every one of 115,840 samples at 10,989 Hz the same as tools/qbsnd.py's "
+        "board driven the same way. Red at frame 42 with the cycle fraction one "
+        "65,536th off. Host-only",
+        needs=("unicorn",), wants=("build/arcade-rom/qbert.zip",)),
+    Row("arcprebuilt", "soak", py("tests/arcprebuilt.py"), 6.0,
+        "ARCADE's committed parts are the ROMs' (ARCADE-SPEC 1.6): made again from "
+        "the pinned ROMs (ARCFROM=rom), all 14 byte for byte the ones in "
+        "apps/arcade/prebuilt/, and none holding a run of 8 of a ROM's bytes. Red "
+        "with one bit of one committed recipe flipped",
+        wants=("build/arcade-rom/INVADERS.ROM", "build/arcade-rom/PACMAN.ROM")),
+    Row("qbnative", "soak", py("tests/qbnative.py"), 1.0,
+        "ARCADE's Q*bert (ARCADE-SPEC section 10): the shipped ROM part - the "
+        "program with apps/arcade/qbert.patch applied - run under Unicorn as the "
+        "N88 core runs it, 3,000 frames of attract mode, a coin, a start and "
+        "moves: every frame ends at a yield, no store lands on the inputs at "
+        "5800-5807h, the segment registers never move. Red (a store of 00 at "
+        "5803 from B034) with one port line taken out of the patch",
+        needs=("unicorn",),
+        wants=("build/arcade/QBROM.PRT", "build/arcade-rom/QBERT.ROM")),
+    Row("qbglass", "soak", py("tests/qbglass.py"), 28.0,
+        "ARCADE's Q*bert picture IS its board's memory (ARCADE-SPEC section "
+        "10.4): three moments of its attract mode on MartyPC's VGA XT, one with "
+        "the background in front of the sprites, stopped as a frame was DRAWN; "
+        "every screen row read out of the VGA's four planes against MAME's "
+        "picture of the game's own segment: none may differ. Red (4,430 to "
+        "40,102 pixels) without the priority pass and the latch copy",
+        needs=("marty",), wants=("build/arcade360.img", "build/os8088-360.img",
+                                 "build/arcade-rom/QBERT.ROM")),
+    Row("arcspeedqb", "soak", py("tests/arcspeed.py", "--game", "Q*bert", "--hz", "61.42",
+                                 "--boot", "900", "--secs", "30",
+                                 "--machine", "os8088_xt_vga"), 30.0,
+        "ARCADE's Q*bert on MartyPC's 4.77 MHz VGA XT (ARCADE-SPEC section 10.5): "
+        "the board's 61.42 frames a second within 3% with none dropped over 30 "
+        "guest seconds of rough play - the game's own 8088 code at full speed, "
+        "the picture skipping frames and drawing changed boxes a few a frame. "
+        "30 seconds because a priority change repaints the screen at once (107 "
+        "frames on the 8088) and a 10-second window can end before the catch-up; "
+        "red (45 frames/s, 3 dropped) when a screen of changed tiles was repainted "
+        "in one draw",
+        needs=("marty",), wants=("build/arcade360.img", "build/os8088-360.img")),
+    Row("arcspeed", "soak", py("tests/arcspeed.py"), 12.0,
+        "ARCADE on MartyPC's 5150 (docs/ARCADE-SPEC.md 5, 6.2): Space Invaders "
+        "played full screen for 10 guest seconds - a coin, a start, fire and "
+        "move - delivers the board's 59.54 frames a second within 3% with at "
+        "most one half frame dropped, read off the host's counters in the view; "
+        "and Esc ends the bracket. Red with AR_HALF at 1.5x (39.65 frames/s)",
+        needs=("marty",), wants=("build/arcade360.img", "build/os8088-360.img")),
+    Row("arcsound", "soak", py("tests/arcsound.py"), 34.0,
+        "ARCADE's sound routes (docs/ARCADE-SPEC.md 8) on MartyPC's 4.77 MHz "
+        "8088, Space Invaders with fire held. On the 5150 with a Sound Blaster "
+        "the route is the STREAM, every byte mixed is read back out of the "
+        "ring and must sound (5%+ off silence, within three voices' +-126) at "
+        "the card's 4,000 Hz, the board keeps 59.54 frames/s with at most one "
+        "half frame dropped, and Esc closes the ring. On a Hercules XT with an "
+        "AdLib alone the route is FM, the OPL's own capture must sound in play, "
+        "and Esc gives the chip back. Red with the clip kernels writing silence "
+        "and with the FM batch never sent (both arms fail, each naming it)",
+        needs=("marty",), wants=("build/arcade360.img", "build/os8088-360.img",
+                                 "build/arcade720.img", "build/os8088-720.img")),
     Row("redlinehost", "soak", py("tests/redline.py", "--host"), 1.0,
         "REDLINE four FAT12 geometries and actual recorded reference (SPEC.md 103)",
         needs=("nasm",), wants=("build/redline.img", "build/redline720.img",

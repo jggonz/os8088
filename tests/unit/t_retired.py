@@ -79,7 +79,8 @@ SHIPPED = ("os8088.img", "os8088-720.img", "os8088-360.img", "os8088-120.img",
            "media360.img", "office360.img", "network360.img", "games360.img",
            "emu360.img", "util360.img", "more720.img",
            "small360.img", "small720.img",
-           "win16.img", "win16-120.img", "win16-720.img", "win16-360.img")
+           "win16.img", "win16-120.img", "win16-720.img", "win16-360.img",
+           "arcrel.img", "arcrel120.img", "arcrel720.img", "arcrel360.img")
 
 # A package is a directory under apps/ that emits a package header. apps/cc is
 # the C SDK and emits none of its own.

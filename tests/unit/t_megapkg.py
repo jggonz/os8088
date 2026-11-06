@@ -80,6 +80,10 @@ INCLUDE = re.compile(r'^\s*%include\s+"([^"]+)"')
 LABEL = re.compile(r"^[A-Za-z_.$@?][\w.$@?#~]*:\s*")
 MINREASON = 30
 MEGA_IMGS = ("megaapps.img", "megaapps120.img")
+# An arm whose shipped build rides a floppy of ITS OWN rides kern_mega's twin
+# of it instead of megaapps: ARCADE's release disks are arcrel*.img, and the
+# owner chose a twin for the arm (2026-11-05, ARCADE-MEGA-PLAN 2.1)
+OWN_DISKS = {"ARCADE.O88": ("arcrelmega.img", "arcrelmega120.img")}
 
 
 def read(path):
@@ -509,10 +513,11 @@ def disks(megapkgs):
             nm = (p[:8] + ".O88").upper()
             want[nm] = (os.path.getsize(a), os.path.getsize(s),
                         max(os.path.getmtime(a), os.path.getmtime(s)))
-    for img in MEGA_IMGS:
+    for img in MEGA_IMGS + tuple(i for t in OWN_DISKS.values() for i in t):
         path = os.path.join(ROOT, BUILD, img)
         if not os.path.isfile(path) or not want:
             continue
+        own = [n for n, t in OWN_DISKS.items() if img in t]
         if os.path.getmtime(path) < max(w[2] for w in want.values()):
             continue                    # stale: `make mega` decides
         with open(path, "rb") as f:
@@ -521,7 +526,7 @@ def disks(megapkgs):
         for folder, name11, attr, clus, size in v.walk():
             nm = (name11[:8].decode("ascii", "replace").strip() + "." +
                   name11[8:].decode("ascii", "replace").strip()).upper()
-            if nm not in want:
+            if nm not in want or (own and nm not in own):
                 continue
             found.add(nm)
             asz, ssz, _ = want[nm]
@@ -531,7 +536,9 @@ def disks(megapkgs):
                   why="kern_mega's apps disk carries each package's arm; a "
                       "list that forgot MEGASUB ships the plain build there",
                   got="%d bytes" % size, want="%d (the arm)" % asz)
-        for nm in want:
+        for nm in (own or want):
+            if not own and nm in OWN_DISKS:
+                continue                # (on its twin, checked there)
             # XTMP3 is off the 1.2MB disks by SPEC.md 24.6.1's dated
             # decision (2026-10-23), the shipped apps120.img's own
             if nm == "XTMP3.O88" and img == "megaapps120.img":

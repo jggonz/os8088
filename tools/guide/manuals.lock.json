@@ -45,6 +45,14 @@
   "strings": null,
   "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
  },
+ "ARCADE_O88": {
+  "sources": [
+   "apps/arcade"
+  ],
+  "stamped": "c5fa4ae3",
+  "strings": "0a9b73ec79a8cc37",
+  "why": "kern_mega's own ARCADE disk; the speed line now says what was measured (Q*bert on an XT, Pac-Man on an XT and a 16 MHz 286), in the manual and ARCADE.TXT"
+ },
  "ARCHIVO_F88": {
   "sources": [],
   "stamped": "e4576a70",

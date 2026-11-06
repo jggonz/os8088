@@ -982,6 +982,24 @@ kind = "document"
 summary = "WIN16's licence, the GNU General Public License, version 2."
 short = "GNU General Public License"
 
+["ARCADE.O88"]
+title = "ARCADE"
+kind = "program"
+summary = "Seven arcade games played on their boards' own programs, in a cabinet: Space Invaders, Part II, Lunar Rescue, Gun Fight, Sea Wolf, Q*bert and Pac-Man. Bring your own ROM sets."
+short = "Arcade games, your ROMs"
+
+["ARCADE/"]
+title = "ARCADE"
+kind = "folder"
+summary = "The ARCADE program and its notes."
+short = "ARCADE and its notes"
+
+["ARCADE.TXT"]
+title = "ARCADE notes"
+kind = "document"
+summary = "How to add your ROM sets, the keys for each game, settings and sound. Double-click to read it in Note Pad."
+short = "Notes on ARCADE"
+
 ["CWORD.O88"]
 title = "Word, C edition"
 kind = "program"
