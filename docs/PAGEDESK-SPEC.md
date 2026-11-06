@@ -1364,7 +1364,7 @@ document set is **two claims cut with `os88_seg_sub`**, every cut on a KiB
 | claim | sub-segments, in order | size |
 |---|---|---|
 | A | block cache 16, object arena 8, xref + page tables 11, glyph cache 12 | 47 KiB |
-| B | display list + gstate 22, band (`((w+1)/2)*16` bytes at 4bpp, `((w+7)/8)*16` at 1bpp, to a whole KiB) | 23-27 KiB |
+| B | display list 22 + PDREND's gstate/font-cache workspace 7 (D13: `dl_kb` = 29), band (`((w+1)/2)*16` bytes at 4bpp, `((w+7)/8)*16` at 1bpp, to a whole KiB) | 30-34 KiB |
 
 and the claims at the peak are: the carve (primary + `PDENG` + `PDREND`), the
 exchange block, the `PDRES` INDEX, A, B, the overlay, `PDWRT`, the writer's
@@ -1420,7 +1420,12 @@ CGA, 450 KB on Hercules** (the band is 5 KiB at 4bpp and 2 KiB at 1bpp). On the
 stub-`PDRES` build the figure read the same after open, close, reopen, a Save
 As, quit and relaunch (458, 458, 459 KB), and on the final build a close
 through the close box (`os88_onclose`) and relaunch read 447 KB both times: no
-claim is leaked on any of those paths.
+claim is leaked on any of those paths. The verifier's pass (22 KiB display
+list, before D13 grew it to 29) read 427 KB on VGA with the Task Manager and
+two Disk windows up, the same after close + Sample guide and after both Save
+As refusals, and the Task Manager's HEAP read 21/580K before PageDesk's
+launch and again after its close box; CGA read 448 KB before and after a
+close and reopen, Hercules 448 KB.
 
 #### 20.6.3 The job scheduler (15.1-15.3)
 

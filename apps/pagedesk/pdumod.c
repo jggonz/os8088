@@ -33,8 +33,8 @@ static struct pdxb_init pdu_xinit;
  * come to 13 at a save's peak. So the six document rows ride two claims cut
  * with os88_seg_sub (a selector on kern_mega, seg + para on every real-mode
  * kernel): A = cache, arena, tables, glyph cache (47 KiB) and B = display
- * list, band (<= 27 KiB). Every cut is on a KiB, so every sub-segment is
- * 512-aligned for a disk transfer (SPEC.md 2.1.1); the cache is first in A,
+ * list + PDREND's workspace, band (<= 34 KiB, D13). Every cut is on a KiB,
+ * so every sub-segment is 512-aligned for a disk transfer (SPEC.md 2.1.1); the cache is first in A,
  * at the claim's own base. The peak is then the carve, the exchange block,
  * the font bank, A, B, the overlay, PDWRT and its buffers: 8. */
 #define PDU_DC_CACHE  0
@@ -45,7 +45,9 @@ static struct pdxb_init pdu_xinit;
 #define PDU_DC_BAND   5
 #define PDU_NDC       6
 #define PDU_DC_SPLIT  4                 /* rows 0..3 in claim A, 4..5 in B */
-static const unsigned pdu_dckb[PDU_NDC] = { 16, 8, 11, 12, 22, 0 };
+/* DECISIONS D13: PDREND keeps its gstates and font cache in a 6,912-byte
+ * workspace at the tail of dl_seg, so the display-list row is 22 + 7 = 29 */
+static const unsigned pdu_dckb[PDU_NDC] = { 16, 8, 11, 12, 29, 0 };
 static unsigned pdu_dc[PDU_NDC];        /* sub-segments, 0 = not held */
 static unsigned pdu_dclaim[2];          /* the two real claims */
 static unsigned pdu_bandb;              /* the band's bytes */
