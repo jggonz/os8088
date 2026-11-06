@@ -186,7 +186,7 @@ def check_good(pde, path, cluster):
 # the engine's documented code where it differs from tests/pdfneg/README.TXT
 KNOWN = {
     "prev_loop.pdf": "XREF",       # SPEC 7.4: a /Prev cycle is PDE_XREF with the revision named
-    "zero_pages.pdf": "SYNTAX",   # D10(b): a tree with no pages is PDE_SYNTAX (README still says NOTFOUND)
+    "zero_pages.pdf": "SYNTAX",   # D10(b): a tree with no pages is PDE_SYNTAX
 }
 
 

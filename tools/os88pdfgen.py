@@ -1951,7 +1951,7 @@ def negative_files():
     pr = pdf.alloc()
     pdf.put(pr, '<< /Type /Pages /Kids [] /Count 0 /MediaBox [0 0 612 792] >>')
     root = pdf.add('<< /Type /Catalog /Pages %d 0 R >>' % pr)
-    add('zero_pages.pdf', pdf.finish(root), 'open', 'PDE_NOTFOUND', 'a page tree with no pages')
+    add('zero_pages.pdf', pdf.finish(root), 'open', 'PDE_SYNTAX', 'a page tree with no pages')
     pdf, root, pg, pr, cs = mini()
     add('encrypted.pdf', good.replace(b'/ID [', b'/Encrypt << /Filter /Standard /V 1 /R 2 /O (aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) /U (bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb) /P -4 >> /ID ['), 'open', 'PDE_ENCRYPT', '/Encrypt in the trailer (the dictionary is a stub; the code must be PDE_ENCRYPT before anything is decrypted)')
     pdf, root, pg, pr, cs = mini()

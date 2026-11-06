@@ -77,7 +77,7 @@ missing_font.pdf           render  PDE_FONT      text selects /F9, which is not 
 missing_image.pdf          render  PDE_GRAPHICS  /ImX is not in /Resources: nothing drawn, Incomplete rendering
 shading_sh.pdf             render  PDE_GRAPHICS  the sh operator is outside the profile: Incomplete rendering
 dct_image.pdf              render  PDE_FILTER    a DCTDecode (JPEG) image
-zero_pages.pdf             open    PDE_NOTFOUND  a page tree with no pages
+zero_pages.pdf             open    PDE_SYNTAX    a page tree with no pages
 encrypted.pdf              open    PDE_ENCRYPT   /Encrypt in the trailer (the dictionary is a stub; the code must be PDE_ENCRYPT before anything is decrypted)
 signed_perms.pdf           open    PDE_SIGNED    catalog carries /Perms: opens READ-ONLY with a label, not refused
 xrefstm_objstm.pdf         open    PDE_XREFSTM   a PDF 1.5 file with a cross-reference STREAM and an object stream (valid, but outside the XT profile)
