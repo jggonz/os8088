@@ -341,10 +341,10 @@ def decouple_vgab(src):
 def cfix(img, home, new):
     """kernel/mod.inc's mod_cfix, byte for byte: every low byte of `home`
     from offset 3 to len-2 whose next byte is home's high byte and whose
-    opcode three bytes back reads FA once OR'd with 70h - a far CALL (9A) or
-    JMP (EA), and six opcodes no module puts there, which is why this models
-    the predicate rather than the intent - gets `new`, and a hit's high byte
-    is stepped over."""
+    opcode three bytes back is a far CALL (9A) or JMP (EA) - exactly those
+    two, `xor al, 9Ah` then a compare with 9Ah ^ EAh - gets `new`, and a
+    hit's high byte is stepped over. (It was `(op | 70h) == FAh`, which
+    also took 8A, AA, BA, CA, DA and FA: 8A and BA are in every module.)"""
     b = bytearray(img)
     if new == home:
         return b
@@ -359,7 +359,7 @@ def cfix(img, home, new):
             return b
         cx -= k - di + 1
         di = k + 1
-        if b[di] == hi and (b[di - 4] | 0x70) == 0xFA:
+        if b[di] == hi and b[di - 4] in (0x9A, 0xEA):
             b[di - 1:di + 1] = new.to_bytes(2, "little")
             if cx == 0:
                 return b

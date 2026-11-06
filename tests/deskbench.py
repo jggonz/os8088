@@ -357,6 +357,20 @@ def build(m, mo, settle, cp_fallback, say):
             raise RuntimeError("no window %04x to place (%s)" % (slot, why))
         pt = exposed_title(zs, i[0])
         if pt is None:
+            # WHOLLY BURIED, which is the Hercules and VGA case and not a
+            # broken scene: there Note Pad is wider (442 on a 640x480 VGA,
+            # against 266 on CGA) and the Disk window sits over the rest, so
+            # Paint's bar has no column left. The dock tile still reaches it
+            # (os88ui.raise_window), and a window brought to the front has
+            # its whole bar exposed. The scene ends in the same z-order -
+            # this placement raises the window either way.
+            import os88ui
+            os88ui.UI(m, mouse=mo, verbose=False).raise_window(slot)
+            os88marty.ui_done(m)
+            zs = rects(m)
+            i = [j for j, (sl, _) in enumerate(zs) if sl == slot]
+            pt = exposed_title(zs, i[0])
+        if pt is None:
             raise RuntimeError("cannot place %s - %04x's title bar is wholly "
                                "buried: %r" % (why, slot, [r for _, r in zs]))
         rx, ry, rw, rh = zs[i[0]][1]
