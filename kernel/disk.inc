@@ -389,6 +389,13 @@ VT_FILE      equ 2               ; AH: a DRVC_FILE driver ANSWERING QUESTIONS
                                  ; already the right conclusion for every
                                  ; question it could be asking
 
+%ifndef KD_BUILD
+%ifndef KERN_MEGA
+  %define DSK_RAHINT            ; the read-ahead's FILL HINT (dsk_rah_fill,
+%endif                          ; disk_mount_x step 1, ld_run_body_x): not
+%endif                          ; kern_dos, whose image has no room, and not
+                                ; kern_mega, whose store's landing is 9 sectors
+
 ; .text and not .bss for the reason every other boot-reachable table is: -f bin
 ; zeroes nothing, and the first disk_mount runs before anything could.
 dsk_vtab:
@@ -4113,6 +4120,27 @@ disk_mount_x:
     ; case the banked head is the same head and the read is a seek to cylinder
     ; 0 and back for an answer we already have (SPEC.md 18.9.2). A floppy
     ; always reads, because a floppy is the thing that can be swapped.
+%ifdef DSK_RAHINT
+    ; A LISTING MOUNT EMPTIES §18.95's CACHE FIRST - 2b's test, below - and
+    ; then reads LBA 0 THROUGH it (kernel hot-paths pass 1). A full mount is a
+    ; navigation or a Refresh and must re-read the disk (step 3), so nothing
+    ; it lists may be older than this mount's swap detector; and the swap
+    ; detector is this read. So it is a FILL of EIGHT sectors, LBA 0-7 - the
+    ; most every floppy geometry SPEC.md 18.2 rule 11 admits has on its first
+    ; track, the fallback 9/2 being in force - which on 360KB, 720KB and 1.2MB
+    ; is the boot sector AND the FAT window step 2 loads AND, at a root, the
+    ; directory's first sectors: what were two or three int 13h before the
+    ; first entry is listed are one. Each of those sectors still came off the
+    ; platter in this mount, in the very transfer that read LBA 0; the chunk is
+    ; tagged with THIS disk's signature (.resig) before anything can ask it.
+    cmp byte [dsk_quiet], 0
+    jne .nolist
+    cmp word [dsk_dseg], 0
+    je .nolist
+    call dsk_rah_flush
+    mov byte [dsk_rah_hint], 8
+.nolist:
+%endif
     call dsk_bpb_bank_get
     jnc .bpb_staged
 %ifdef DSK_STREAM
@@ -4122,6 +4150,10 @@ disk_mount_x:
     push ss
     pop es
     xor ax, ax                  ; LBA 0
+%ifdef DSK_RAHINT
+    cmp [dsk_rah_hint], al
+    jne .thru                   ; a listing mount: the cache is empty (above)
+%endif
     inc byte [dsk_rah_busy]     ; NEVER from §18.95's cache: this read is the
     call dsk_rd1_x                ; swap detector itself. Served from a cached
     dec byte [dsk_rah_busy]     ; chunk it would re-sign the OLD disk's boot
@@ -4135,7 +4167,30 @@ disk_mount_x:
                                 ; ONLY on this path: it sums dsk_secbuf, which
                                 ; the banked path never filled - the bank
                                 ; restored the signature along with the head
+%ifdef DSK_RAHINT
+    jmp short .bpb_staged
+    nop                         ; PARITY, never executed (kernel hot-paths
+                                ; pass 1): this arm is an odd 59 bytes, and
+                                ; dsk_next_clus_x below keeps its measured
+                                ; parity on both kernels
+.thru:
+    call dsk_rd1_x              ; ...so this misses and fills, off the platter
+    mov byte [dsk_rah_hint], 0  ; disarmed at once, BEFORE the failure test
+    jc .jfail                   ; (mov leaves CF): a refused LBA 0 must not
+                                ; leave the next unrelated fill capped
+    call dsk_bpb_sig
+    mov si, dsk_rah_tab         ; .resig: every live chunk is the one that
+    mov cx, DSK_RAH_RUNS        ; read filled - the cache was emptied for it -
+.resig:                         ; so every record takes THIS disk's signature,
+    mov [si+RAH_SIG], ax        ; which dsk_bpb_sig leaves in AX. The fill
+    add si, RAH_REC             ; stamped the one mounted before, and a chunk
+    loop .resig                 ; of the new disk under the old disk's key is
+                                ; the one thing this cache must never hold
+%endif
 .bpb_staged:
+%ifdef DSK_RAHINT
+    mov byte [dsk_rah_hint], 0  ; ...and on the banked path, which never read
+%endif
     call dsk_bpb_check          ; fills the 18.1 vars + disk_spt/disk_heads
     jc .jfail
     call desk_learn_x           ; ...which is what settles a floppy drive's
@@ -4155,6 +4210,8 @@ disk_mount_x:
 %ifndef KD_BUILD                ; (kern_dos keeps it at step 3: its image has
                                 ; twenty bytes left, and its DOS program reads
                                 ; a root once a session - kdlayout.inc)
+%ifndef DSK_RAHINT              ; ...and step 1 drops it, where it reads LBA 0
+                                ; through the cache: here only on kern_mega
     cmp byte [dsk_quiet], 0     ; ...AND A MOUNT THAT WILL LIST DROPS IT HERE,
     jne .keeprah                ; before the FAT window and not after it
     cmp word [dsk_dseg], 0      ; (kernel hot-paths pass 1): a full mount is
@@ -4171,6 +4228,7 @@ disk_mount_x:
                                 ; int 13h on every open of a root, every
                                 ; Refresh at one, and every Up to one. The
                                 ; test is .listing's own (2b, below)
+%endif
 %endif
     call dsk_fatw_want          ; ...give a floppy one first, if the machine
                                 ; can spare it (SPEC.md 18.8.2)
@@ -6806,6 +6864,19 @@ dsk_lbahi:   dw 0                ; the HIGH word of the next transfer's LBA
     %error "dsk_lbahi must follow dsk_rah_busy: dsk_xfer's cache gate reads them as one word"
 %endif
 %endif
+%ifdef DSK_RAHINT
+dsk_rah_hint: dw 0               ; A FILL'S CAP, in sectors, armed by a LISTING
+                                 ; MOUNT across its LBA 0 read alone
+                                 ; (disk_mount_x step 1) and 0 otherwise. That
+                                 ; read fills under the fallback 9/2, before
+                                 ; the BPB says what the disk is, and 8 is the
+                                 ; most every floppy geometry SPEC.md 18.2 rule
+                                 ; 11 admits has on track 0 (kernel hot-paths
+                                 ; pass 1, SPEC.md 18.95.11). .text with a real
+                                 ; initialiser: -f bin zeroes nothing. A BYTE,
+                                 ; in a word so `.text` after it keeps an even
+                                 ; shift
+%endif
 dsk_rah_cap:  db DSK_RAH_AUTO    ; A CEILING SOMEBODY ELSE SET (SPEC.md
                                  ; 18.95.8): DSK_RAH_AUTO = nobody has, which
                                  ; is the behaviour every machine that never
@@ -6971,6 +7042,16 @@ dsk_rah_fill:
     div word [disk_spt]
     mov ax, [disk_spt]
     sub ax, dx                  ; sectors left in DI's track, >= 1
+%ifdef DSK_RAHINT
+    mov cx, [dsk_rah_hint]      ; A LISTING MOUNT'S LBA 0 (kernel hot-paths
+    jcxz .nohint                ; pass 1): no more than the cap. Its fill runs
+    cmp ax, cx                  ; under the fallback 9/2, and an 8-sector
+    jbe .nohint                 ; track 0 would refuse a ninth. CX is free:
+    mov ax, cx                  ; .vol loads it next. `mov`, not `xchg`: the
+                                ; extra byte keeps what follows at an even
+                                ; shift
+.nohint:
+%endif
     cmp ax, DSK_RAH_SECS
     jbe .vol
     mov ax, DSK_RAH_SECS
