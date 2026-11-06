@@ -4003,7 +4003,7 @@ osapi_mouse_feed:
                                 ; next pass - which mou_apply below has just
                                 ; woken - and it does it in the order that
                                 ; works, powering every port back up first
-    call mou_apply
+    call mou_apply_w            ; (a driver's CL may carry a wheel)
 %ifndef NO_MOUPRIV
     mov sp, [mou_psave]         ; ...and the restore is gated with it
 %endif
@@ -4046,6 +4046,7 @@ mou_apply_abs:
                                 ; (SPEC.md 39.15.4). Preserves CX
     mov [mouse_x], ax
     mov [mouse_y], bx
+    call mou_whl_cl             ; ...and the report's wheel (mou_apply_w's)
     jmp mou_apply.tail
 %endif
 
@@ -4070,9 +4071,24 @@ mou_apply_abs:
 
 %ifdef KERN_BIG
 ; -----------------------------------------------------------------------------
+; mou_whl_cl - a REPORT's wheel: CL's top six bits, signed (SPEC.md 9.12.8),
+;              into the level below, and CL left as the two buttons
 ; mou_whl_add - AL = signed notches, added to the wheel's level (SPEC.md 10.4)
 ; ISR or cli context; out: AX spent, everything else preserved
+;
+; Only a DRIVER's report and the VMware backdoor's carry wheel bits in CL -
+; every driver built before 9.12.8 masked CL to the two buttons, so an old
+; binary reports no wheel rather than a wrong one. The serial and PS/2
+; decoders hand mou_apply two clean bits and carry their wheels themselves
+; (the fourth byte), so they enter mou_apply directly and never pay for this
+; or for its second wake (kernel hot-paths pass 1: ~240 cycles a packet; it
+; was inline in mou_apply, which every packet runs).
 ; -----------------------------------------------------------------------------
+mou_whl_cl:
+    mov al, cl
+    sar al, 1
+    sar al, 1
+    and cl, 0x03
 mou_whl_add:
     cbw
     add [mou_whl], ax
@@ -4086,6 +4102,9 @@ mou_p2wz    db 0                ; 3 when the knock put the PS/2 device in WHEEL
                                 ; HERE, among the code, for PARITY: in the PS/2
                                 ; block below cur_move it was one odd byte in
                                 ; front of sch_isr (t_hotpar)
+
+mou_apply_w:                    ; mou_apply for a report whose CL may carry a
+    call mou_whl_cl             ; wheel: osapi_mouse_feed and the VMware pointer
 %endif
 
 mou_apply:
@@ -4130,14 +4149,9 @@ mou_apply:
                                 ; is not an A/B
 %endif
 
-%ifdef KERN_BIG
-    mov al, cl                  ; A DRIVER'S WHEEL rides CL's top six bits,
-    sar al, 1                   ; signed (SPEC.md 9.12.8): every driver built
-    sar al, 1                   ; before it masked CL to the two buttons, so
-    call mou_whl_add            ; an old binary reports no wheel rather than a
-    and cl, 0x03                ; wrong one - and the decoders above leave them
-%endif                          ; clear. AX is dead here (CURFIX's own note)
     mov bl, cl                  ; the buttons, in mouse_btn's own two bits
+                                ; (a report's wheel, if it has one, was taken
+                                ; at mou_apply_w)
     mov bh, [mouse_btn]
     mov [mouse_btn], bl
     xor bh, bl                  ; changed bits
@@ -5470,13 +5484,11 @@ cur_move_mono:
     rep movsw                   ; already assume it from task code
     mov ax, [cur_sptr]          ; the buffer holding the OLD background...
     mov [mv_osave], ax
-    mov bx, cur_save            ; ...and the other one takes the new, so the
-    cmp ax, bx                  ; old can be read while the new is filled
-    jne .flip
-    mov bx, cur_savex
-.flip:
-    mov [mv_nsave], bx
-    mov [cur_sptr], bx
+    neg ax                      ; ...and the other one takes the new, so the
+    add ax, cur_save            ; old can be read while the new is filled.
+    add ax, cur_savex           ; [cur_sptr] is only ever one of the two, so
+    mov [mv_nsave], ax          ; the other is their sum less it: no compare
+    mov [cur_sptr], ax          ; and no branch
     pop bx
     pop ax
     mov [cur_drawn_x], ax
@@ -5500,15 +5512,17 @@ cur_move_mono:
     or ch, ch
     jz .meet                    ; wholly off the bottom: nothing to bank
     mov bx, [mv_nsave]
+    mov dx, [cs:vid_wrapbit]    ; this walk has the registers to hold all
+    mov si, [cs:vid_wrapfix]    ; three of the row step's words
 .bgrow:
     mov ax, [es:di]
     mov [bx], ax
     inc bx
     inc bx
     add di, bp                  ; gfx_nextrow, inlined (SPEC.md 39.3)
-    test di, [cs:vid_wrapbit]
+    test di, dx
     jz .bgnw
-    add di, [cs:vid_wrapfix]
+    add di, si
 .bgnw:
     dec ch
     jnz .bgrow

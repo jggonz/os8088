@@ -17648,9 +17648,14 @@ user, so `CL = buttons | (notches << 2)`. No new cell was needed, because every
 driver built before this masked CL to its two buttons (`and cl, 3`). An old
 binary therefore reports *no* wheel rather than a wrong one, and the contract
 grows with no `DRV_VER` bump (§20.2.0.1). The kernel decodes it once, in
-`mou_apply`'s shared tail: two `sar`s, §10.4's add, and `and cl, 3`. That is
-also where VMware's absolute arm joins (§9.11), so both backends share the
-same twelve bytes.
+`mou_whl_cl`: two `sar`s, `and cl, 3`, and §10.4's add. It is reached from
+`mou_apply_w`, the entry `OSAPI_MOUSE_FEED` and VMware's relative arm call,
+and from VMware's absolute arm (§9.11) before it joins `mou_apply`'s tail -
+so every backend whose CL can carry a wheel shares the same nine bytes. **The
+serial and PS/2 decoders enter `mou_apply` itself and skip it**: their CL is
+two clean bits and their wheels arrive in a fourth byte of their own, so the
+decode, its zero add and its second UI wake were ~240 cycles of every packet
+for nothing (kernel hot-paths pass 1; it was inline in the shared tail).
 
 **`VMMOUSE.DRV`'s private ABI is a different matter**, and `VMM_ABI_VER` went
 from 1 to 2 with it (`kernel/vmmabi.inc`, §9.11.2): an old kernel stores CL
