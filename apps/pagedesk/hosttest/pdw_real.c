@@ -67,7 +67,7 @@ static int eng_open(const char *file)
 static void wrt_init(void)
 {
     struct pdxb_init in; memset(&in, 0, sizeof in);
-    in.xb_seg = SEG_XB; in.eng_seg = 0xE000; in.wbuf_seg = SEG_WBUF; in.wbuf_kb = g_extract ? 40 : 12;
+    in.xb_seg = SEG_XB; in.eng_seg = 0xE000; in.wbuf_seg = SEG_WBUF; in.wbuf_kb = g_extract ? 40 : 18;
     pd_fcopy_out(&in, SEG_XB, 0, sizeof in);
     pdw_verb(PDV_WRT_INIT, SEG_XB, 0, 0);
 }

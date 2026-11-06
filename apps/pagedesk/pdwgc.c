@@ -55,7 +55,7 @@ static pdw gc_newnum(pdw n)             /* 4 + the rank among seen objects; 0 = 
 static pdw gc_root(pdw n)               /* the map entry (+1) whose page object is n */
 {
     pdw i;
-    for (i = 0; i < pm_n; i++) if (pm_num[i] == n) return (pdw)(i + 1);
+    for (i = 0; i < pm_n; i++) if (tg(T_PMNUM, i) == n) return (pdw)(i + 1);
     return 0;
 }
 static pdw gc_isdict(pdw ds) { return (pdw)(ds + 1 < sc_n && g_pg[ds] == '<' && g_pg[ds + 1] == '<'); }
@@ -141,7 +141,7 @@ static void gc_head(void)
     for (i = 0; i < pm_n; i++) {
         e = pd_fpeekw(g_sv.pages_seg, (pdw)(2 * i));
         pb_c(' ');
-        if (PDM_KIND(e) == PDM_SRC) pb_u(gc_newnum(pm_num[i]));
+        if (PDM_KIND(e) == PDM_SRC) pb_u(gc_newnum(tg(T_PMNUM, i)));
         else pb_u((pdw)(gc_blank0() + b++));
         pb_s(" 0 R");
     }

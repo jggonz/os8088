@@ -25,6 +25,8 @@ static struct pd_u32 g_cnt;      /* bytes counted (COUNT)                    */
 static pdw g_mode;               /* 0 EMIT, 1 COUNT                          */
 static pdw g_err;                /* sticky PDE_*                             */
 static pdw g_tn, g_tmax;         /* object table fill / capacity             */
+#define TB_BYTES 4768u            /* the tail tables of pdwsave.c (D18)       */
+static pdw g_tail;               /* ...which start here in the claim          */
 static pdw g_tb;                 /* ...and where it starts in the buffer      */
 static pdw g_created;            /* the temp file exists                     */
 static pdw g_io;                 /* disk transfers made (a slice ends after one, 15.2) */
@@ -255,11 +257,12 @@ static pdw pw_setup(pdw wseg, pdw wkb)
     if (g_clu < 512) g_clu = 512;
     cap = PDW_OUTMIN;
     if ((pdw)(2 * g_clu) > cap) cap = (pdw)(2 * g_clu);
-    g_wantkb = (pdw)(cap / 1024 + 2);            /* the region + a table of 128 */
+    g_wantkb = (pdw)((cap + TB_BYTES) / 1024 + 3);            /* the region + a table of 128 */
     if (g_clu > 16384) return PDE_NOMEM;
-    if ((pdw)(cap / 1024 + 1) >= wkb) return PDE_NOMEM;
+    if ((pdw)(cap / 1024 + 1 + TB_BYTES / 1024 + 1) >= wkb) return PDE_NOMEM;
     g_outcap = cap; g_tb = cap;
-    tb = (pdw)(wkb * 1024u - cap);               /* wkb <= 63 so this fits   */
+    g_tail = (pdw)(wkb * 1024u - TB_BYTES);
+    tb = (pdw)(g_tail - cap);               /* wkb <= 63 so this fits   */
     g_tmax = (pdw)(tb / PDW_TENT);
     g_wpos = 0; g_lnn = 0; g_tn = 0; g_err = 0; g_mode = 0; g_created = 0;
     g_crcleft = 4096; g_crc = 0xFFFF;

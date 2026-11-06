@@ -269,7 +269,7 @@ static void dm_list(pdw vs, pdw ve)     /* the refs of the array at g_pg[vs,ve) 
 static pdw pm_dup(pdw i, pdw rot)
 {
     static pdw g;
-    pdw r, ds, f, k, newp = pm_num[i], pgnum = g_pi.objnum, pggen = g_pi.gen, an;
+    pdw r, ds, f, k, newp = tg(T_PMNUM, i), pgnum = g_pi.objnum, pggen = g_pi.gen, an;
     dm_n = 0;
     r = eng_raw(pgnum, pggen); if (r) return r;
     ds = sc_body(); f = dict_find(ds, "Annots"); if (f == SC_BAD) return PDE_SYNTAX;
@@ -327,13 +327,13 @@ static pdw pm_prep(void)
     if (!n) return PDE_OK;
     if (!g_sv.pages_seg) return PDE_NOMEM;
     if (n > PDM_MAXMAP) return sv_bad(11);
-    for (i = 0; i < 128; i++) pm_in[i] = pm_done[i] = pm_ed[i] = 0;
+    tclr(T_PMIN, 192);
     for (i = 0; i < n; i++) {
         e = pd_fpeekw(g_sv.pages_seg, (pdw)(2 * i)); k = PDM_KIND(e); idx = PDM_IDX(e);
         if (k != PDM_SRC && k != PDM_BLANK) { g_sv.err_detail = 14; return PDE_RANGE; }
         if (idx >= PD_MAXPAGES) return PDE_RANGE;
         if (k != PDM_SRC || PDM_ROT(e) || idx != i) ident = 0;
-        if (k == PDM_SRC) bm_set(pm_in, idx);
+        if (k == PDM_SRC) bm_set(T_PMIN, idx);
     }
     r = eng_pageinfo(n);                      /* a page of the source left out? */
     sv_pgidx = 0xFFFF;
@@ -363,17 +363,17 @@ static pdw pm_prep(void)
     next = sv_base;
     for (i = 0; i < n; i++) {
         e = pd_fpeekw(g_sv.pages_seg, (pdw)(2 * i)); k = PDM_KIND(e); idx = PDM_IDX(e);
-        pm_num[i] = 0;
+        ts(T_PMNUM, i, 0);
         if (k == PDM_SRC) {
-            if (bm_get(pm_done, idx)) {         /* a duplicate */
+            if (bm_get(T_PMDONE, idx)) {         /* a duplicate */
                 r = eng_pageinfo(idx); if (r) return r;
                 if (g_pi.nannots > DM_MAX) return sv_bad(12);
-                pm_num[i] = next; next = (pdw)(next + 1 + g_pi.nannots);
-            } else bm_set(pm_done, idx);
-        } else pm_num[i] = next++;
+                ts(T_PMNUM, i, next); next = (pdw)(next + 1 + g_pi.nannots);
+            } else bm_set(T_PMDONE, idx);
+        } else ts(T_PMNUM, i, next++);
         if (next > 0xFFF0) return PDE_LIMIT;
     }
-    for (i = 0; i < 128; i++) pm_done[i] = 0;   /* now: the first occurrence is processed */
+    tclr(T_PMDONE, 64);   /* now: the first occurrence is processed */
     sv_pgidx = 0xFFFF;
     sv_base = next;
     return PDE_OK;
@@ -386,11 +386,11 @@ static pdw pm_step(void)
     if (pm_i >= pm_n) { sv_phase = PH_CAT; return PDE_OK; }
     e = pd_fpeekw(g_sv.pages_seg, (pdw)(2 * pm_i)); k = PDM_KIND(e); idx = PDM_IDX(e); rot = PDM_ROT(e);
     r = eng_pageinfo(idx); if (r) return r;
-    if (k == PDM_BLANK) pm_blank_obj(pm_num[pm_i], pm_root, rot);
-    else if (!bm_get(pm_done, idx)) {                                   /* the original */
-        bm_set(pm_done, idx);
-        pm_num[pm_i] = g_pi.objnum;
-        r = pg_rev(idx, rot, bm_get(pm_ed, idx)); if (r) return r;
+    if (k == PDM_BLANK) pm_blank_obj(tg(T_PMNUM, pm_i), pm_root, rot);
+    else if (!bm_get(T_PMDONE, idx)) {                                   /* the original */
+        bm_set(T_PMDONE, idx);
+        ts(T_PMNUM, pm_i, g_pi.objnum);
+        r = pg_rev(idx, rot, bm_get(T_PMED, idx)); if (r) return r;
     } else {
         r = pm_dup(pm_i, rot); if (r) return r;
     }
@@ -407,7 +407,7 @@ static pdw pm_tree(void)
     pw_obj(pm_root, pm_rootgen);
     r = dk_copy(ds, PGK_KIDS | PGK_COUNT, 0); if (r) return r;
     pb_s(" /Kids [");
-    for (i = 0; i < pm_n; i++) { pb_c(' '); pb_u(pm_num[i]); pb_s(" 0 R"); }
+    for (i = 0; i < pm_n; i++) { pb_c(' '); pb_u(tg(T_PMNUM, i)); pb_s(" 0 R"); }
     pb_s(" ] /Count "); pb_u(pm_n); pb_s(" >>\n"); pw_endobj();
     return PDE_OK;
 }

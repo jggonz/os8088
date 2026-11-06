@@ -36,10 +36,24 @@ static pdw sv_pgseg;
 
 /* the page map's state (pdwpg.c, 20.11.2) */
 static pdw pm_on, pm_n, pm_i, pm_flat, pm_root, pm_rootgen;
-static pdw pm_num[PDM_MAXMAP];          /* a page's object number (0 = not yet / none) */
-static pdb pm_in[128], pm_done[128], pm_ed[128];     /* per source page (< 1024)     */
-static void bm_set(pdb *b, pdw i) { b[i >> 3] = (pdb)(b[i >> 3] | (1 << (i & 7))); }
-static pdw  bm_get(pdb *b, pdw i) { return (pdw)((b[i >> 3] >> (i & 7)) & 1); }
+/* the page-op and edit tables live at the TAIL of the writer-buffer claim
+   (D18, 20.11.4): word tables, T_* = word offset from g_tail */
+#define T_EPG   0
+#define T_EID   256
+#define T_EKF   512
+#define T_ESN   768
+#define T_ESG   1024
+#define T_ONUM  1280
+#define T_OAPN  1536
+#define T_PMNUM 1792                    /* PDM_MAXMAP words                  */
+#define T_PMIN  2192                    /* three 64-word bitmaps (1024 pages) */
+#define T_PMDONE 2256
+#define T_PMED  2320
+static pdw tg(pdw t, pdw i) { return pd_fpeekw(g_wseg, (pdw)(g_tail + 2u * (pdw)(t + i))); }
+static void ts(pdw t, pdw i, pdw v) { pd_fpokew(g_wseg, (pdw)(g_tail + 2u * (pdw)(t + i)), v); }
+static void bm_set(pdw t, pdw i) { ts(t, (pdw)(i >> 4), (pdw)(tg(t, (pdw)(i >> 4)) | (1u << (i & 15)))); }
+static pdw  bm_get(pdw t, pdw i) { return (pdw)((tg(t, (pdw)(i >> 4)) >> (i & 15)) & 1); }
+static void tclr(pdw t, pdw n) { pd_ffill(g_wseg, (pdw)(g_tail + 2u * t), 0, (pdw)(2u * n)); }
 
 /* the graph copy's state (pdwgc.c, 20.11.4) */
 #define GC_BM    8192u
@@ -63,11 +77,9 @@ static pdw gc_copy(void);
 
 /* near copies of the fields every scan wants (a record in the far store is
    48 bytes; a scan over 256 of them should not re-read each one) */
-static pdw g_epg[PD_MAXEDITS], g_eid[PD_MAXEDITS], g_ekf[PD_MAXEDITS];
-static pdw g_esn[PD_MAXEDITS], g_esg[PD_MAXEDITS], g_onum[PD_MAXEDITS], g_oapn[PD_MAXEDITS];
 
-#define EK(i) ((pdw)(g_ekf[i] & 255))
-#define EF(i) ((pdw)(g_ekf[i] >> 8))
+#define EK(i) ((pdw)(tg(T_EKF, i) & 255))
+#define EF(i) ((pdw)(tg(T_EKF, i) >> 8))
 
 /* ---- PDENG calls ---------------------------------------------------------- */
 /* every call that reads the SOURCE stands in the source's folder (D14).
@@ -155,7 +167,7 @@ static pdw sv_note(pdw i, pdw id)
 {
     pdw j;
     for (j = 0; j < sv_cnt; j++)
-        if (j != i && EK(j) == PDA_NOTE && !(EF(j) & PDEF_DELETED) && g_eid[j] == id) return j;
+        if (j != i && EK(j) == PDA_NOTE && !(EF(j) & PDEF_DELETED) && tg(T_EID, j) == id) return j;
     return 0xFFFF;
 }
 static pdw sv_scan(void)
@@ -166,9 +178,9 @@ static pdw sv_scan(void)
     /* pass 1: the near copies, and every live record checked */
     for (i = 0; i < sv_cnt; i++) {
         ed_head(i);
-        g_ekf[i] = (pdw)(g_ed.kind | (g_ed.flags << 8));
-        g_epg[i] = g_ed.page; g_eid[i] = g_ed.id; g_esn[i] = g_ed.src_num; g_esg[i] = g_ed.src_gen;
-        g_onum[i] = 0; g_oapn[i] = 0;
+        ts(T_EKF, i, (pdw)(g_ed.kind | (g_ed.flags << 8)));
+        ts(T_EPG, i, g_ed.page); ts(T_EID, i, g_ed.id); ts(T_ESN, i, g_ed.src_num); ts(T_ESG, i, g_ed.src_gen);
+        ts(T_ONUM, i, 0); ts(T_OAPN, i, 0);
         k = g_ed.kind; f = g_ed.flags;
         if (f & PDEF_DELETED) continue;
         if (k == PDA_PAGEOP) return sv_bad(7);                   /* page ops: 13.7, wave 2 */
@@ -189,19 +201,19 @@ static pdw sv_scan(void)
     for (i = 0; i < sv_cnt; i++) {
         k = EK(i); f = EF(i);
         if (f & PDEF_DELETED) continue;
-        if (pm_on && (g_epg[i] >= 1024 || !bm_get(pm_in, g_epg[i]))) continue;   /* its page is gone (13.7) */
+        if (pm_on && (tg(T_EPG, i) >= 1024 || !bm_get(T_PMIN, tg(T_EPG, i)))) continue;   /* its page is gone (13.7) */
         irt = 0;
         if (k == PDA_NOTE) {
             ed_head(i); irt = g_ed.irt;
             if (irt && !(f & PDEF_IRTSRC) && sv_note(i, irt) == 0xFFFF) continue;
         }
-        if (g_esn[i] && !sv_fresh) {
+        if (tg(T_ESN, i) && !sv_fresh) {
             for (j = 0; j < i; j++)                 /* one record per source object */
-                if (g_onum[j] == g_esn[i] && g_esn[j]) return sv_bad(9);
-            g_onum[i] = g_esn[i];
-        } else g_onum[i] = next++;
-        if (k == PDA_NOTE && irt) { g_oapn[i] = 0; sv_v15 = 1; }
-        else g_oapn[i] = next++;
+                if (tg(T_ONUM, j) == tg(T_ESN, i) && tg(T_ESN, j)) return sv_bad(9);
+            ts(T_ONUM, i, tg(T_ESN, i));
+        } else ts(T_ONUM, i, next++);
+        if (k == PDA_NOTE && irt) { ts(T_OAPN, i, 0); sv_v15 = 1; }
+        else ts(T_OAPN, i, next++);
         /* 13.5 by key, PDF 1.7 tables 164-182: /NM (13.2, on every annotation)
          * and /LE, /Q, the highlight's /BM are 1.4; /Subj (area mark, drawn
          * signature) and the review state's /IRT /State /StateModel are 1.5.
@@ -220,8 +232,8 @@ static void sv_parent(pdw i, pdw irt, pdw irt_src, pdw *n, pdw *g)
     pdw j;
     if (irt_src) { *n = irt; *g = 0; return; }
     for (j = 0; j < sv_cnt; j++)
-        if (j != i && EK(j) == PDA_NOTE && g_onum[j] && g_eid[j] == irt) {
-            *n = g_onum[j]; *g = (sv_fresh || !g_esn[j]) ? 0 : g_esg[j];
+        if (j != i && EK(j) == PDA_NOTE && tg(T_ONUM, j) && tg(T_EID, j) == irt) {
+            *n = tg(T_ONUM, j); *g = (sv_fresh || !tg(T_ESN, j)) ? 0 : tg(T_ESG, j);
             return;
         }
     *n = irt; *g = 0;
@@ -232,14 +244,14 @@ static pdw pg_deleted(pdw page, pdw n, pdw g)
 {
     pdw j;
     for (j = 0; j < sv_cnt; j++)
-        if (g_epg[j] == page && g_esn[j] == n && g_esg[j] == g && (EF(j) & PDEF_DELETED)) return 1;
+        if (tg(T_EPG, j) == page && tg(T_ESN, j) == n && tg(T_ESG, j) == g && (EF(j) & PDEF_DELETED)) return 1;
     return 0;
 }
 static void pg_adds(pdw page)           /* " n 0 R" for each new annotation of the page */
 {
     pdw j;
     for (j = 0; j < sv_cnt; j++)
-        if (g_epg[j] == page && g_onum[j] && !g_esn[j]) { pb_c(' '); pb_u(g_onum[j]); pb_s(" 0 R"); }
+        if (tg(T_EPG, j) == page && tg(T_ONUM, j) && !tg(T_ESN, j)) { pb_c(' '); pb_u(tg(T_ONUM, j)); pb_s(" 0 R"); }
 }
 /* the array value at [vs,ve) of g_pg with deleted refs dropped and the page's
    new refs appended */
@@ -265,15 +277,15 @@ static pdw pg_array(pdw vs, pdw ve, pdw page)
 /* a page group is the first live edit of a page that adds or deletes */
 static pdw pg_relevant(pdw i)
 {
-    if (g_epg[i] & 0x8000) return 0;
+    if (tg(T_EPG, i) & 0x8000) return 0;
     if (EK(i) < PDA_NOTE || EK(i) > PDA_SIGN) return 0;
-    return (g_onum[i] && !g_esn[i]) || ((EF(i) & PDEF_DELETED) && g_esn[i]);
+    return (tg(T_ONUM, i) && !tg(T_ESN, i)) || ((EF(i) & PDEF_DELETED) && tg(T_ESN, i));
 }
 static pdw pg_first(pdw i)
 {
     pdw j;
     if (!pg_relevant(i)) return 0;
-    for (j = 0; j < i; j++) if (pg_relevant(j) && g_epg[j] == g_epg[i]) return 0;
+    for (j = 0; j < i; j++) if (pg_relevant(j) && tg(T_EPG, j) == tg(T_EPG, i)) return 0;
     return 1;
 }
 /* the catalog with /Version raised (13.5) */
@@ -324,7 +336,7 @@ static pdw an_prep(pdw i)
         g_pgnum = g_pi.objnum; g_pggen = g_pi.gen;
     }
     g_keepn = 0; g_keepf = 0;       /* a replaced annotation keeps its identity (13.2, 20.5.5) */
-    if (!sv_fresh && g_esn[i] && !eng_raw(g_esn[i], g_esg[i])) {
+    if (!sv_fresh && tg(T_ESN, i) && !eng_raw(tg(T_ESN, i), tg(T_ESG, i))) {
         ds = sc_body();
         for (k = 0; ds != SC_BAD && k < 4; k++) {
             if (dict_find(ds, pw_keepk[k]) != 1) continue;
@@ -347,14 +359,14 @@ static pdw an_run(void)
     switch (an_sub) {
     case AS_START:
         r = an_prep(i); if (r) return r;
-        if (annot_a(g_onum[i], (sv_fresh || !g_esn[i]) ? 0 : g_esg[i], g_oapn[i], an_pn, an_pg)) { bl_reset(); an_sub = AS_LIST; }
-        else an_sub = g_oapn[i] ? AS_COUNT0 : AS_DONE;
+        if (annot_a(tg(T_ONUM, i), (sv_fresh || !tg(T_ESN, i)) ? 0 : tg(T_ESG, i), tg(T_OAPN, i), an_pn, an_pg)) { bl_reset(); an_sub = AS_LIST; }
+        else an_sub = tg(T_OAPN, i) ? AS_COUNT0 : AS_DONE;
         break;
     case AS_LIST:
         if (ak_list()) an_sub = AS_TAIL;
         break;
     case AS_TAIL:
-        annot_c(g_oapn[i]); an_sub = AS_COUNT0;
+        annot_c(tg(T_OAPN, i)); an_sub = AS_COUNT0;
         break;
     case AS_COUNT0:                     /* the /Length: one counting pass         */
         pb_flush(); g_mode = 1; pdm_u32_set(&g_cnt, 0, 0); bl_reset(); an_sub = AS_COUNT;
@@ -363,7 +375,7 @@ static pdw an_run(void)
         if (ap_step()) { pb_flush(); u32cp(&ap_len, &g_cnt); g_mode = 0; an_sub = AS_HEAD; }
         break;
     case AS_HEAD:
-        ap_head(g_oapn[i]); bl_reset(); an_sub = AS_BODY;
+        ap_head(tg(T_OAPN, i)); bl_reset(); an_sub = AS_BODY;
         break;
     case AS_BODY:
         if (ap_step()) an_sub = AS_END;
@@ -493,16 +505,16 @@ static pdw job_begin(pdw kind)
             e = pd_fpeekw(sv_pgseg, (pdw)(2 * i)); k = PDM_KIND(e); idx = PDM_IDX(e);
             if ((k != PDM_SRC && k != PDM_BLANK) || idx >= PD_MAXPAGES) { g_sv.err_detail = 14; return PDE_RANGE; }
             if (k == PDM_BLANK) nb++;
-            pm_num[i] = 0;
+            ts(T_PMNUM, i, 0);
         }
         pm_n = sv_npages; pm_on = 1;
         g_tb = (pdw)(g_outcap + GC_BYTES);
-        if ((pdw)(g_wkb * 1024u) < (pdw)(g_tb + 64 * PDW_TENT)) { g_sv.err_detail = (pdw)(g_tb / 1024 + 4); return PDE_NOMEM; }
-        g_tmax = (pdw)((pdw)(g_wkb * 1024u - g_tb) / PDW_TENT);
+        if ((pdw)(g_tail) < (pdw)(g_tb + 64 * PDW_TENT)) { g_sv.err_detail = (pdw)(g_tb / 1024 + 4); return PDE_NOMEM; }
+        g_tmax = (pdw)((pdw)(g_tail - g_tb) / PDW_TENT);
         gc_seen = g_outcap; gc_scan = (pdw)(g_outcap + GC_BM); gc_pref = (pdw)(g_outcap + 2 * GC_BM);
         pd_ffill(g_wseg, g_outcap, 0, GC_BYTES);
         gc_w = gc_dirty = gc_cnt = gc_over = gc_total = gc_sub = 0; gc_n = 0; gc_k = 4; gc_blk = 0; gc_nb = nb;
-        for (i = 0; i < 128; i++) pm_done[i] = 0;
+        tclr(T_PMDONE, 64);
         pdm_u32_set(&gc_zero, 0, 0);
         g_nm_hi = pdm_crc16(0xFFFF, pdw_date, pw_len(pdw_date));
         g_nm_lo = pdm_crc16(g_nm_hi, &sv_npages, 2);
@@ -537,8 +549,8 @@ static pdw job_begin(pdw kind)
            xref section, not even the newline */
         sv_nochange = (pdw)!pm_on;
         for (i = 0; i < sv_cnt; i++) {
-            if (g_onum[i] || ((EF(i) & PDEF_DELETED) && g_esn[i])) sv_nochange = 0;
-            if (pm_on && pg_relevant(i) && g_epg[i] < 1024) bm_set(pm_ed, g_epg[i]);
+            if (tg(T_ONUM, i) || ((EF(i) & PDEF_DELETED) && tg(T_ESN, i))) sv_nochange = 0;
+            if (pm_on && pg_relevant(i) && tg(T_EPG, i) < 1024) bm_set(T_PMED, tg(T_EPG, i));
         }
         /* the estimate OSAPI_FS_OP is opened with: the source up to its last
            xref, plus a kilobyte and ~600 bytes an edit */
@@ -581,9 +593,9 @@ static pdw nd_page(pdw k)
     if (rot) { pb_s(" /Rotate "); pb_u(rot); }
     n = 0;
     for (j = 0; j < sv_cnt; j++)
-        if ((g_epg[j] & 0x7FFF) == k && g_onum[j]) {
+        if ((tg(T_EPG, j) & 0x7FFF) == k && tg(T_ONUM, j)) {
             if (!n) { pb_s(" /Annots ["); n = 1; }
-            pb_c(' '); pb_u(g_onum[j]); pb_s(" 0 R");
+            pb_c(' '); pb_u(tg(T_ONUM, j)); pb_s(" 0 R");
         }
     if (n) pb_s(" ]");
     pb_s(" >>\n"); pw_endobj();
@@ -699,8 +711,8 @@ static pdw job_slice(void)
         case PH_PAGES:
             while (sv_i < sv_cnt && !pg_first(sv_i)) sv_i++;
             if (sv_i >= sv_cnt) { sv_phase = PH_CAT; break; }
-            r = eng_pageinfo(g_epg[sv_i]); if (r) return r;
-            r = pg_rev(g_epg[sv_i], 0, 1); if (r) return r;
+            r = eng_pageinfo(tg(T_EPG, sv_i)); if (r) return r;
+            r = pg_rev(tg(T_EPG, sv_i), 0, 1); if (r) return r;
             sv_i++;
             break;
         case PH_CAT:
@@ -708,7 +720,7 @@ static pdw job_slice(void)
             sv_phase = PH_ANNOTS; sv_i = 0;
             break;
         case PH_ANNOTS:
-            while (sv_i < sv_cnt && !g_onum[sv_i]) sv_i++;
+            while (sv_i < sv_cnt && !tg(T_ONUM, sv_i)) sv_i++;
             if (sv_i >= sv_cnt) { sv_phase = pm_on ? PH_TREE : PH_XREF; sv_xi = 0; break; }
             r = an_run(); if (r) return r;
             break;
@@ -733,9 +745,9 @@ static pdw job_slice(void)
             e = pd_fpeekw(sv_pgseg, (pdw)(2 * sv_i));
             if (PDM_KIND(e) == PDM_SRC) {
                 r = eng_pageinfo(PDM_IDX(e)); if (r) return r;
-                if (bm_get(pm_done, PDM_IDX(e))) { g_sv.err_detail = 15; return PDE_RANGE; }   /* a page twice */
-                bm_set(pm_done, PDM_IDX(e));
-                pm_num[sv_i] = g_pi.objnum; gc_mark(g_pi.objnum);
+                if (bm_get(T_PMDONE, PDM_IDX(e))) { g_sv.err_detail = 15; return PDE_RANGE; }   /* a page twice */
+                bm_set(T_PMDONE, PDM_IDX(e));
+                ts(T_PMNUM, sv_i, g_pi.objnum); gc_mark(g_pi.objnum);
             }
             sv_i++;
             break;

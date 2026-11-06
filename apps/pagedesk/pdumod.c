@@ -73,9 +73,9 @@ static unsigned pdu_banklen;            /* the INDEX's bytes (kind 7) */
 static struct pdxb_fontbank pdu_xfb;
 
 static unsigned pdu_wbuf;               /* PDWRT's buffers (16.2, D9) */
-#define PDU_WBUF_KB 12                  /* D9: 12 KiB a save (36 an extract) */
+#define PDU_WBUF_KB 18                  /* D9/D18: 18 KiB a save (4 out + 4.7 tail tables), 40 an extract */  /* pages */
 static int pdu_wrt_in;                  /* PDWRT fetched and bound */
-static unsigned pdu_wkb = PDU_WBUF_KB;  /* pages: 12 a save, 40 an extract (20.11.4) */
+static unsigned pdu_wkb = PDU_WBUF_KB;  /* pages: 18 a save, 40 an extract (20.11.4) */
 
 static int pdu_adapter, pdu_bpp, pdu_scrw, pdu_scrh;
 
