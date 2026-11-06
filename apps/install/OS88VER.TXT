@@ -1,5 +1,5 @@
-20261105
-* Windows 3.x: Microsoft Arcade and
-  Paintbrush run on the 286+ kernel
-* Setups copy from floppy to hard disk
-* DDEML library, hooks, window props
+20261106
+* Claim your WireChat nickname
+* Manage WireChat nickname codes
+* One active sign-in per nickname
+* Fix Pravetz freeze during boot
