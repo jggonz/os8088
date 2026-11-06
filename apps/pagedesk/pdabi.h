@@ -150,7 +150,8 @@ struct pd_view {
                                     pdxb_textmap in/out                  */
 #define PDV_REND_THUMB      0x45 /* XB: pdxb_thumb, 1bpp into a seg:off   */
 #define PDV_REND_STATUS     0x46 /* XB: pdxb_rstatus out (incomplete bits)*/
-#define PDV_REND_FONTBANK   0x47 /* BX=seg of the PDRES bank, CX=len KB  */
+#define PDV_REND_FONTBANK   0x47 /* XB: pdxb_fontbank in (D3): the PDRES
+                                    index resident, strikes read on demand */
 
 /* PDWRT 0x80-0xBF */
 #define PDV_WRT_INIT        0x80 /* BX=XB seg. XB: pdxb_init            */
@@ -373,6 +374,18 @@ struct pdxb_rstatus {
     pdw  passes;            /* display-list passes (10.2)                  */
 };
 
+/* PDRES on demand (DECISIONS D3): the primary reads the PDRES directory,
+ * the strike records and the width tables (the INDEX, <= 8 KiB) into one
+ * claim; PDREND reads each strike's bytes itself, when first needed, from the
+ * package file at part_off + the strike's offset, into the glyph cache. */
+struct pdxb_fontbank {
+    char pkgname[14];       /* the package file, 8.3, in the launch folder */
+    pdw  place_clus, place_vol; /* os88_place of the launch folder      */
+    struct pd_u32 part_off; /* file offset of the PDRES part's first byte */
+    pdw  index_seg;         /* claim holding PDRES bytes [0, index_len)    */
+    pdw  index_len;         /* bytes                                       */
+};
+
 struct pdxb_save {
     char target[14];        /* 8.3 output name                             */
     pdw  mode;              /* PDSV_*                                      */
@@ -384,6 +397,9 @@ struct pdxb_save {
     struct pd_u32 written;  /* out: bytes so far                           */
     struct pd_u32 total;    /* out: estimate for OSAPI_FS_OP               */
     pdw  err_detail;
+    char source[14];        /* in: 8.3 source an incremental save copies  */
+    char date[24];          /* in: "D:YYYYMMDDHHmmSS" or "" (no RTC)      */
+    char author[48];        /* in: /T for new notes, "" = none            */
 };
 #define PDSV_INCREMENTAL 0
 #define PDSV_FRESH       1
@@ -407,6 +423,27 @@ struct pd_edit {
     pdw  state;             /* PDS_*                                       */
     pdw  reserved[7];
 };
+/* Colours (DECISIONS D9): pd_edit.colour is a VGA palette index 0..15,
+ * mapped to PDF RGB by the EGA 4-level triple (0, 1/3, 2/3, 1 per channel,
+ * index 6 brown = 2/3 1/3 0). 1bpp adapters draw by 17.4's patterns. */
+#define PDC_BLACK    0
+#define PDC_BLUE     1
+#define PDC_GREEN    2
+#define PDC_CYAN     3
+#define PDC_RED      4
+#define PDC_MAGENTA  5
+#define PDC_BROWN    6
+#define PDC_LGRAY    7
+#define PDC_DGRAY    8
+#define PDC_LBLUE    9
+#define PDC_LGREEN  10
+#define PDC_LCYAN   11
+#define PDC_LRED    12
+#define PDC_LMAGENTA 13
+#define PDC_YELLOW  14
+#define PDC_WHITE   15
+#define PD_PENUP    (-32768)    /* ink: a point with x = PD_PENUP ends a stroke */
+
 #define PDA_NOTE      1
 #define PDA_HIGHLIGHT 2
 #define PDA_AREA      3
@@ -420,6 +457,7 @@ struct pd_edit {
 #define PDEF_DELETED  0x01
 #define PDEF_MOVED    0x02
 #define PDEF_DIRTY    0x04
+#define PDEF_IRTSRC   0x08    /* irt names a SOURCE object number       */
 
 /* ---- pinned sizes: a layout change is a contract change ---------------- */
 typedef char pdabi_sz_u32 [sizeof(struct pd_u32)     ==  4 ? 1 : -1];

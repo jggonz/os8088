@@ -22,11 +22,6 @@ static struct pdxb_rawcopy g_rc;
 static struct pdxb_fingerprint g_fp;
 static struct pd_u32 sv_prev, sv_xrefpos, sv_total;
 static pdw sv_xstart;
-#ifdef PD_HOST
-char pdw_source[300];
-#else
-char pdw_source[14];
-#endif
                     /* the file to copy (wave 2: pdxb_save.source, 20.5.12) */
 static pdw sv_pgidx = 0xFFFF;           /* the page whose pageinfo g_pi holds */
 static pdw sv_idw[8];
@@ -138,9 +133,10 @@ static pdw sv_scan(void)
 }
 /* the object a reply points at: the live note record with that id, else irt is
    a source object number (generation 0) */
-static void sv_parent(pdw i, pdw irt, pdw *n, pdw *g)
+static void sv_parent(pdw i, pdw irt, pdw irt_src, pdw *n, pdw *g)
 {
     pdw j;
+    if (irt_src) { *n = irt; *g = 0; return; }
     for (j = 0; j < sv_cnt; j++)
         if (j != i && EK(j) == PDA_NOTE && g_onum[j] && g_eid[j] == irt) {
             *n = g_onum[j]; *g = (sv_fresh || !g_esn[j]) ? 0 : g_esg[j];
@@ -283,7 +279,7 @@ static pdw an_prep(pdw i)
         }
     }
     pn = pg = 0;
-    if (g_ed.kind == PDA_NOTE && g_ed.irt) sv_parent(i, g_ed.irt, &pn, &pg);
+    if (g_ed.kind == PDA_NOTE && g_ed.irt) sv_parent(i, g_ed.irt, (pdw)(g_ed.flags & PDEF_IRTSRC), &pn, &pg);
     an_pn = pn; an_pg = pg;
     return PDE_OK;
 }
@@ -411,6 +407,7 @@ static pdw job_begin(pdw fresh)
     if (!g_wseg) return PDE_NOMEM;
     for (i = 0; i < 14; i++) g_tmp[i] = 0;
     pw_cpy(g_tmp, PDW_TEMPNAME, pw_len(PDW_TEMPNAME));
+    pw_cpy(pdw_date, g_sv.date, 23); pdw_date[23] = 0; pw_cpy(pdw_author, g_sv.author, 47); pdw_author[47] = 0;
     r = pw_setup(g_wseg, g_wkb); if (r) { g_sv.err_detail = (pdw)(g_wkb + 2); return r; }
     sv_fresh = fresh; g_edseg = g_sv.edits_seg; sv_cnt = g_sv.edits_count;
     if (sv_cnt > PD_MAXEDITS) return PDE_LIMIT;
@@ -423,7 +420,7 @@ static pdw job_begin(pdw fresh)
         g_nm_hi = g_fp.crc_head; g_nm_lo = (pdw)(g_fp.crc_tail ^ g_fp.size.lo);
         sv_base = g_tr.size; u32cp(&sv_prev, &g_tr.startxref);
         if (sv_base < 2 || !g_tr.root_num) return PDE_XREF;
-        r = pdw_src_open(pdw_source); if (r) return r;
+        r = pdw_src_open(g_sv.source); if (r) return r;
         sv_phase = PH_COPY;
     } else {
         sv_npages = g_sv.pages_count; sv_pgseg = g_sv.pages_seg;

@@ -176,9 +176,11 @@ static pdw call_job(int verb)
     }
     return r;
 }
+static char T_SRC[14];
 static void sv_setup(const char *target, pdw mode)
 {
     memset(&SV, 0, sizeof SV);
+    strcpy(SV.source, T_SRC); strcpy(SV.date, "D:20261105120000"); strcpy(SV.author, "Reviewer");
     strncpy(SV.target, target, 13); SV.mode = mode;
     SV.edits_seg = SEG_EDS; SV.edits_count = ES_n;
 }
@@ -354,7 +356,7 @@ static int t_inc(const char *src, const char *dst, int round)
     init_module(12);
     pdw_host_clu = T_CLU; pdw_host_viol = 0;
     eng_load(src);
-    strcpy(pdw_source, src);
+    strncpy(T_SRC, src, 13);
     es_reset();
     if (round == 1) {
         e = es_new(PDA_NOTE, 0, 300, 500, 320, 518); e->colour = 14; es_text(e, "Check this figure", -1); es_add(e);
@@ -429,7 +431,7 @@ static void t_failures(void)
     report("exists.pdf");
     /* disk full during an incremental save leaves the source alone */
     {   long n0, n1; unsigned char *a, *b;
-        init_module(12); eng_load(path("src.pdf")); strcpy(pdw_source, path("src.pdf"));
+        init_module(12); eng_load(path("src.pdf")); strcpy(T_SRC, "src.pdf");
         es_reset(); { struct pd_edit *e = es_new(PDA_NOTE, 0, 300, 500, 320, 518); es_text(e, "x", 1); es_add(e); }
         sv_setup(path("incfull.pdf"), PDSV_INCREMENTAL); a = slurp(path("src.pdf"), &n0);
         pdw_host_budget = 2000;
@@ -484,8 +486,6 @@ int main(void)
     { char cmd[300]; snprintf(cmd, sizeof cmd, "mkdir -p '%s'", g_out); system(cmd); }
     if (chdir(g_out)) { perror("chdir"); return 9; }
     system("rm -f -- *.pdf PDSAVE.*");   /* (no slash-star in a string: tests/unit/t_swallow.py) */
-    strcpy(pdw_date, "D:20261105120000");
-    strcpy(pdw_author, "Reviewer");
     for (clu = 512; clu <= 4096; clu *= 2) {
         char nm[32]; snprintf(nm, sizeof nm, "fresh%u.pdf", clu);
         t_fresh(clu, nm);
