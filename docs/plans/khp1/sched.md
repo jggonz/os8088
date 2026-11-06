@@ -7,9 +7,11 @@ The heartbeat and the doors: `kernel/sched.inc` (IRQ0's `sch_isr`,
 kernel.asm's non-drawing API shims. The brief is `docs/plans/khp1/BRIEF.md`.
 
 Branch `khp1-sched`, cut from `6d6c23ae` (the same kernel as `a7ee7fab`).
-**Headline: an idle tick 17,558 -> 11,205 cycles (3.68 -> 2.35 ms, -36%;
-Hercules 17,597 -> 11,185, VGA 17,566 -> 11,225), `OSAPI_TASK_YIELD` 644 ->
-283 us, for 47 resident bytes (sched-1) and one free item (sched-2).**
+**Headline: an idle tick 17,558 -> 9,982 cycles (3.68 -> 2.09 ms, -43%;
+kern_small 12,393 -> 9,362), `OSAPI_TASK_YIELD` 644 -> 283 us, the pointer
+sweep's busy time 236.6 -> ~176 ms and typing's 618 -> ~517 ms, for 47 + 12
+resident bytes (sched-1, sched-4, both owner's picks) and one free item
+(sched-2).**
 
 Every figure below is MartyPC guest cycles on a 4.77 MHz 8088 (209.5 ns a
 cycle) unless it says otherwise. Two instruments were written for this
@@ -38,12 +40,13 @@ coordinator's `mod_cfix` fix merged from `kernel-hotpaths`, not this branch.
 
 | kernel | `.text` | `.bss` | other | resident delta (this branch) | `KERN_SIZE` base -> tip |
 |---|---:|---:|---|---:|---|
-| kern_big | 40,631 -> 40,677 | 5,377 -> 5,378 | `.ovl` +1 (not resident) | **+47** | 96,768 -> 96,768 |
-| kern_small | 30,220 -> 30,266 | 2,945 -> 2,946 | `.boot2` +1 (not resident) | **+47** | 59,392 -> 59,392 |
-| kern_emu | 40,885 -> 40,931 | 5,377 -> 5,378 | `.ovl` +1 | **+47** | 97,280 -> 97,280 |
-| kern_mega | 45,853 -> 45,899 | 5,415 -> 5,416 | `.ovl` +1 | **+47** (conventional) | resident 62,976 -> 62,976 of 68,096 |
+| kern_big | 40,631 -> 40,689 | 5,377 -> 5,378 | `.ovl` +1 (not resident) | **+59** (47 + 12) | 96,768 -> 96,768 |
+| kern_small | 30,220 -> 30,278 | 2,945 -> 2,946 | `.boot2` +1 (not resident) | **+59** | 59,392 -> 59,392 |
+| kern_emu | 40,885 -> 40,931 | 5,377 -> 5,378 | `.ovl` +1 | **+47** (sched-4 is not built there) | 97,280 -> 97,280 |
+| kern_mega | 45,853 -> 45,911 | 5,415 -> 5,416 | `.ovl` +1 | **+59** (conventional) | resident 62,976 -> 62,976 of 68,096 |
 
-All 47 bytes sit before `.cold` (BRIEF section 8's COLD_HOME limit). No
+All 59 bytes sit before `.cold` (BRIEF section 8's COLD_HOME limit), well
+under its ~300-byte flag. No
 rung moved on any kernel; the rung is not the point, the 47 bytes are.
 
 ## 2. WHERE THE TIME GOES
@@ -87,7 +90,7 @@ return out of `task_sleep`.
   ui_task 7.5%, `sch_switch` 6.7%, `sch_resume` 6.4%, `task_yield` 4.2%,
   `sch_account` 4.1%, `sch_idle_body` 2.6% - the scheduler is ~35% of the
   busy time of moving the mouse, because every serial BYTE ends the idle
-  task's `hlt` and each one costs a switch (2.4 and 4.1 below).
+  task's `hlt` and each one cost a switch until sched-4.
 * **launch Calc (cached)** (951 ms busy): `lz_lzb` 17%, `sw_col` 12%,
   `sch_switch` 9.1% + `task_yield` 4.7% + `sch_pit_now` 1.1% - that last
   group is `wm_anim` spinning on `task_yield` until a frame deadline, which
@@ -107,7 +110,8 @@ return out of `task_sleep`.
 
 | id | agent | routine / path | hotness | change | kern_big B | kern_small B | cycles base -> tip (input) | user-visible (operation, adapter: ms base -> tip) | M/P | 286 | commit | FREE / [+N] |
 |---|---|---|---|---|---:|---:|---|---|---|---|---|---|
-| sched-1 | sched | `sch_isr` wake loop, `sch_switch` scan, `task_spawn`, `task_exit` | H2 | the two loops stop at `sch_top`, one past the highest slot that can be live (SPEC.md 8.1.3) | +47 | +47 | idle tick 17,558 -> 11,533 (CGA, kern_big); 12,393 -> 10,897 (kern_small); a free slot in the scan ~144 -> 0; a no-op yield ~2,630 -> ~1,100 | `OSAPI_TASK_YIELD` 644 -> 283 us (sysbench, CGA, -56%); mouse packet to UI pass, scheduler share 0.74 -> 0.38 ms; menu open 45.0 -> 42.9 ms and close 24.3 -> 22.7 ms; pointer sweep busy 236.6 -> 189.8 ms (-19.8%); typing 31 keys busy 618 -> 545 ms; idle busy 6.5% -> 4.1%; with Fractal's worker running a tick 11,811 -> 9,516 cycles (+0.9% to the render) | M (all; ms rows are sched-1 + sched-2 together, os88hot `ab`) | fewer iterations on every CPU; the parity of `sch_isr`, `sch_switch` and everything after them is kept by three never-executed pads (`t_hotpar` green) | c6689352 | **[+47] OWNER'S PICK** |
+| sched-1 | sched | `sch_isr` wake loop, `sch_switch` scan, `task_spawn`, `task_exit` | H2 | the two loops stop at `sch_top`, one past the highest slot that can be live (SPEC.md 8.1.3) | +47 | +47 | idle tick 17,558 -> 11,533 (CGA, kern_big); 12,393 -> 10,897 (kern_small); a free slot in the scan ~144 -> 0; a no-op yield ~2,630 -> ~1,100 | `OSAPI_TASK_YIELD` 644 -> 283 us (sysbench, CGA, -56%); mouse packet to UI pass, scheduler share 0.74 -> 0.38 ms; menu open 45.0 -> 42.9 ms and close 24.3 -> 22.7 ms; pointer sweep busy 236.6 -> 189.8 ms (-19.8%); typing 31 keys busy 618 -> 545 ms; idle busy 6.5% -> 4.1%; with Fractal's worker running a tick 11,811 -> 9,516 cycles (+0.9% to the render) | M (all; ms rows are sched-1 + sched-2 together, os88hot `ab`) | fewer iterations on every CPU; the parity of `sch_isr`, `sch_switch` and everything after them is kept by three never-executed pads (`t_hotpar` green) | 488ea2d5 | **[+47] OWNER'S PICK** |
+| sched-4 | sched | `sch_idle_body`, `sch_isr`'s wake loop, `sch_switch`'s fallback | H2 (every interrupt while idle) | the idle task halts again after an interrupt that posted no wake; the tick's wake loop posts `[sch_idlewake]`, the "nothing ready" fallback spends it (SPEC.md 8.1.2.5). Not on kern_emu | +12 | +12 | idle tick 11,205 -> 9,982 (CGA); kern_small 10,897 -> 9,362 (with sched-2); the idle task's yields over 30 mouse packets 218 -> 29 | pointer sweep busy 191.1 -> 175.9 ms (-8.0%); typing 31 keys busy 544.6 -> 516.7 ms (-5.1%); idle busy 203.2 -> 179.7 ms / 5 s (-11.6%); ms unchanged (+0.2-0.3%, rep noise; a wake pays ~90 cycles more before its yield) | M (os88hot ab vs 89fe86d7) | none beyond the cycles; parity kept by one pad | d0ad21da | **[+12] OWNER'S PICK** |
 | sched-2 | sched | `ui_task` (the pass's first look at the event ring) | H2 (every pass) | enter the drain through `.yield`'s byte compare instead of a full `evq_pop` on an empty ring; `ui_drain` stored and decremented as a byte to pay for the near jump | 0 | 0 | ui_task + evq_pop ~2,180 -> ~1,870 a pass; idle tick 11,533 -> 11,205 on top of sched-1 | every UI pass, idle or event: ~300 cycles (0.06 ms) off the time from an event's wake to its handler | M | none | 31309aca | **FREE** |
 
 The ms rows from os88hot are `ab --base 6d6c23ae time <scen> -n 3 --machine
@@ -125,6 +129,16 @@ bound before its publish under its own `cli`; `task_exit` lowers it under
 its own. `uiblock`, `schacct`, `tmload`, `tmsmall`, `tmmaxrun`, `stkpanel`
 and the kern_mega rows are the rows that drive spawn and exit (section 8).
 
+**Equivalence, sched-4.** The unicorn harness against 89fe86d7: 3,000
+task tables, identical picks (the fallback's new store changes no pick).
+The argument for the idle loop is SPEC.md 8.1.2.5's: every READY-making
+event posts the byte, and the fallback spends it in the scan's own IF = 0
+window. What it buys is CPU the idle task was burning - so, as the bench
+note says of every switch item, it frees CPU under the pointer, typing and
+idle without shortening a drag. It is independent of sched-1 and reverts
+alone (its wake-loop comment names `[sch_top]` as CL's bound, which would
+read MAX_TASKS without sched-1; CL is non-zero either way).
+
 **Equivalence, sched-2.** The drain allows exactly `EVQ_CAP` pops as
 before (the count is seeded one higher for `.yield`'s `dec`), every event is
 dispatched by the same pass, and `evq_pop` on an empty ring has no effect
@@ -136,7 +150,6 @@ but its return; `ui_drain`'s high byte is read nowhere. `evqfull` and
 | what | bytes | cycles | why not |
 |---|---:|---|---|
 | **sched-3: a tighter scan loop** - BX stepped with DL instead of re-derived by `shl bx, cl` every slot, the wrap and the READY arm out of line | +4 (kern_big) | a free slot ~144 -> ~100; a 256- or 384-class worker's switch (Tracker, Telnet, Word, CWORD, anything undeclared: `[sch_top]` 11-13) ~380 cycles less; but an idle-desktop switch ~30 MORE (the two out-of-line arms are the common ones when two slots are live) - an idle tick 11,205 -> 11,298 with it | ~0.15% of the CPU with a high-slot worker running, a loss on the idle desktop. Built, measured, equivalence-checked (5,000 cases) and reverted. It depends on sched-1's CH = `[sch_top]` |
-| **the idle task's yield after a `hlt` no wake ended**: re-check the guard instead; the tick's wake loop sets `[sch_idlewake]`, the scan's "nothing ready" fallback clears it | +12 (with a parity pad) | ~1,100 a tick, and ~2,200 a mouse packet (bytes one and two of three each end the `hlt` and buy a no-op switch) | **all of it is idle CPU** - the idle task only runs when nothing else can - so no operation gets faster. kern_emu would also lose its VMware-pointer poll from those yields. Recorded for whoever wants the idle figure itself |
 | **`sch_isr`'s charge on a tick that switches**: let `.pick` bill the interval | 0 | ~500 a switching tick (0.2% of the machine) | see section 6: it trades exactness for a 1-hour wrap |
 | `clk_tick`: a `delta == 1` path with no `mul`/`div` | ~+12 | ~250 a tick | 0.1% of an idle machine, no operation faster |
 | `ui_task`'s `int 16h` AH=01h poll (~340 cycles a pass) gated on a keyboard-IRQ flag from `kbm_isr` | ~+10, cross-file | ~340 a pass | changes behaviour: a key STUFFED into the BIOS ring (int 16h AH=05h) would wait for the next keystroke, and an AT BIOS's function 01h drops extended keys a buffer-pointer test would see. A BDA head/tail compare instead of the call is wrong for the same reason |
@@ -169,7 +182,7 @@ in this pass changed either.
 * **The tick's own charge** (`call sch_account` after `inc word [ticks]` in
   `sch_isr`). SPEC.md 8.1 already says a switching tick charges twice and
   declines to correct it ("0.19%"); with the scan now cheap that is ~500 of
-  an ~11,500-cycle idle tick, 4%. Moving the call to the refusal arm
+  a ~10,000-cycle idle tick, 5%. Moving the call to the refusal arm
   (`.tres`, which the lock, the nested chain and the cooperative mode all
   reach) costs 0 bytes and leaves every Task Manager figure exact - EXCEPT
   that a tick which switches back to the SAME task would no longer stamp
@@ -201,15 +214,17 @@ in this pass changed either.
 
 ## 8. ROWS RUN
 
-One scoped pass after the last code commit, `--marty-jobs 1`:
+Scoped, `--marty-jobs 1`. The set ran once after sched-1 and sched-2 (18
+passed), and once more after sched-4, the last code commit, with
+`dskwstage` added because it stops at the idle loop's head:
 
-| row | result |
+| row | result (after sched-4) |
 |---|---|
-| `uiblock`, `schacct`, `stk0water`, `stkpanel`, `evqfull`, `wakedrain`, `tmload`, `tmsmall`, `tmmaxrun`, `tickzero`, `saverate`, `paintsize`, `uilayer`, `cpup`, `deskcaltask` (MartyPC) | ok |
+| `uiblock`, `schacct`, `stk0water`, `stkpanel`, `evqfull`, `wakedrain`, `tmload`, `tmsmall`, `tmmaxrun`, `tickzero`, `saverate`, `paintsize`, `uilayer`, `cpup` (the cooperative mode), `deskcaltask`, `dskwstage` (MartyPC) | ok |
 | `megatmmem`, `mega-cpup` (kern_mega, Bochs) | ok |
 | `box-dtwrite` (kern_big on 86Box's mr286, a 286) | ok |
 
-18 passed, 0 failed, 375.8 s. The fast tier passed in every `make` at each
+19 passed, 0 failed, 364.3 s. The fast tier passed in every `make` at each
 commit (73 passed, `hotpar` green on kern_big and kern_small); `make small`,
 `make emu` and `make mega` build at the tip; `tools/stkbalance.py` over
 sched.inc and ui.inc reports the base's own two pre-existing tails and
@@ -218,8 +233,9 @@ nothing new.
 Rows that cover the items: sched-1 - `uiblock`, `schacct`, `tmload`,
 `tmsmall`, `tmmaxrun`, `stk0water`, `stkpanel`, `stkclass` (fast),
 `tickzero`, `saverate`, `paintsize`, `cpup`, `deskcaltask`, `megatmmem`,
-`mega-cpup` (kern_mega under Bochs), `box-dtwrite` (kern_big on 86Box's
-mr286); sched-2 - `evqfull`, `wakedrain`, `uilayer`, `uiblock`.
+`mega-cpup`, `box-dtwrite`; sched-2 - `evqfull`, `wakedrain`, `uilayer`,
+`uiblock`; sched-4 - `uiblock`, `cpup`, `saverate`, `paintsize`,
+`dskwstage`, `uilayer`, `mega-cpup`.
 
 ## 9. DEFECTS FOUND
 
