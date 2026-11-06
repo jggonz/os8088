@@ -7,7 +7,7 @@
  * records PDREND draws from, and as the annotations PDWRT wrote, which mutool
  * renders independently. A scenario names the marks:
  *
- *   pdr_mkstore <source.pdf> <scenario> <outdir>
+ *   pdr_mkstore <source.pdf> <scenario> <outdir>     (run with the current directory = <outdir>: the OS's names are 8.3)
  *     writes <outdir>/store.bin (the store segment, 0x8000 bytes: records at 0, text heap at 0x3000,
  *     points at 0x5000), <outdir>/store.cnt (the record count) and <outdir>/R.PDF (the incremental save)
  *
@@ -121,7 +121,7 @@ int main(int argc, char **argv)
     char p[512]; pdw gen = 0, g2 = 0, r; int o1, o2;
     if (argc < 4) { fprintf(stderr, "usage: pdr_mkstore <source.pdf> <scenario> <outdir>\n"); return 2; }
     pdh_cluster = 1; pdw_host_clu = 512;
-    snprintf(p, sizeof p, "%s/R.PDF", argv[3]); remove(p); remove(PDW_TEMPNAME);
+    remove("R.PDF"); remove(PDW_TEMPNAME);          /* the OS's names are 8.3: R.PDF in the current directory */
     cp(argv[1], "DOC.PDF");
     if (eng_open("DOC.PDF")) { fprintf(stderr, "PDENG cannot open %s\n", argv[1]); return 2; }
     wrt_init(); es_reset();
@@ -169,7 +169,7 @@ int main(int argc, char **argv)
         return 0;
     } else { fprintf(stderr, "unknown scenario %s\n", argv[2]); return 2; }
     dump(argv[3]);
-    snprintf(p, sizeof p, "%s/R.PDF", argv[3]);
+    snprintf(p, sizeof p, "R.PDF");
     r = save(p);
     if (r != PDE_OK) { printf("FAIL: save answers %u\n", r); fails++; }
     printf("%s: store of %d records, %s\n", fails ? "FAIL" : "ok", (int)nE, p);

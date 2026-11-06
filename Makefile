@@ -20422,9 +20422,15 @@ $(PDR_FUZZREAL): $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c $
 	cc -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -DPD_HOST -DPDR_REAL_ENG -I$(PDR_DIR) -o $@ \
 		$(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c $(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c \
 		$(PDR_DIR)/pdrend.c $(PDR_DIR)/hosttest/pdr_hosteng.c $(PDR_DIR)/pdeng.c
-pdrend-fuzz: $(PDR_FUZZBIN) $(PDR_FUZZREAL) $(BUILD)/PDRES.BIN $(BUILD)/PDFONTX.RES
+PDR_MKSTORE := $(BUILD)/pdr-annot/pdr_mkstore        # annotr's store builder (below)
+pdrend-fuzz: $(PDR_FUZZBIN) $(PDR_FUZZREAL) $(BUILD)/PDRES.BIN $(BUILD)/PDFONTX.RES $(PDR_MKSTORE)
 	python3 $(PDR_DIR)/hosttest/pdr_fuzz.py $(PDR_FUZZBIN) $(BUILD)/pdrfuzz $(BUILD) -n 400
 	python3 $(PDR_DIR)/hosttest/pdr_fuzz.py $(PDR_FUZZREAL) $(BUILD)/pdrfuzzr $(BUILD) -n 200 --seed 23
+# wave 2 (annotr): the same hostile streams with PDRF_ANNOTS | PDRF_EDITS and a hostile edit store (bad offsets,
+# 60,000 points, inverted and page-sized rects, no such kind), through the real engine
+	mkdir -p $(BUILD)/pdrfuzze/store && cd $(BUILD)/pdrfuzze/store && $(abspath $(PDR_MKSTORE)) $(abspath $(PDR_DIR)/samples/MARKUP.PDF) hostile .
+	python3 $(PDR_DIR)/hosttest/pdr_fuzz.py $(PDR_FUZZREAL) $(BUILD)/pdrfuzze $(BUILD) -n 200 --seed 31 \
+		--store $(abspath $(BUILD))/pdrfuzze/store/store.bin --ecount `cat $(BUILD)/pdrfuzze/store/store.cnt`
 # `make pdrend-real`: PDREND linked with the REAL PDENG (hosttest/pdr_hosteng.c), every committed
 # sample drawn as VGA, Hercules and CGA see it and compared with mutool (hosttest/pdr_real.py).
 # PDR_SHOTS=<dir> also writes each page beside mutool's for a human to look at.
@@ -20442,7 +20448,6 @@ pdrend-real: $(PDR_REALBIN) $(BUILD)/PDRES.BIN $(BUILD)/PDFONTX.RES
 # the real PDENG) and saves the same marks as a PDF; hosttest/pdr_annot.py draws the ORIGINAL with the
 # store through PDREND (real engine) and compares it with mutool's render of the saved file, then
 # checks every kind, the source /AP annotations (against mutool), dash patterns and inline images.
-PDR_MKSTORE := $(BUILD)/pdr-annot/pdr_mkstore
 $(PDR_MKSTORE): $(PDR_DIR)/hosttest/pdr_mkstore.c $(wildcard $(PDR_DIR)/pdw*.c $(PDR_DIR)/pdw*.h) $(PDR_ENGSRC) \
                 $(PDR_DIR)/pdmath.c $(PDR_DIR)/hosttest/pdhost.c | $(BUILD)
 	mkdir -p $(BUILD)/pdr-annot

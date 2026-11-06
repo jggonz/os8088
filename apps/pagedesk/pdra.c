@@ -19,6 +19,13 @@
  *   edit highlights | source highlights | PAGE | other source annotations | edits
  * ==========================================================================*/
 
+#ifdef PD_HOST                       /* the offsets this file reads by number: the host build holds them to the structs */
+#include <stddef.h>
+typedef char pdra_ck_an[offsetof(struct pdxb_annot, subtype) == 4 && offsetof(struct pdxb_annot, rect) == 20 &&
+                        offsetof(struct pdxb_annot, flags) == 52 && offsetof(struct pdxb_annot, has_ap) == 54 ? 1 : -1];
+typedef char pdra_ck_ed[offsetof(struct pd_edit, src_num) == 12 && offsetof(struct pd_edit, src_gen) == 14 &&
+                        offsetof(struct pdxb_render, edits_seg) > 0 ? 1 : -1];
+#endif
 static struct pd_edit g_ed;
 static struct pd_rect g_ar;         /* the annotation's /Rect (pt16)          */
 static pdw g_aob, g_agn;            /* the annotation's object                */
@@ -111,8 +118,9 @@ static pdw ref_get(pdw obj, pdw gen, const char *k0)
     if (k0) pdr_scpy(g_dg.key[0], k0, 32);
     return eng_call(PDV_ENG_DICT_GET, &g_dg, sizeof g_dg, 0, 0, 0);
 }
-/* the annotation's normal appearance stream, /AP /N: a stream, or a state
- * dictionary by reference that /AS picks from. 1 = g_apobj / g_apgen hold it */
+/* the annotation's normal appearance stream, /AP /N: a form (an object with a /BBox -
+ * DICT_GET answers a stream's dictionary as a dictionary), or a state dictionary by
+ * reference that /AS picks the entry of. 1 = g_apobj / g_apgen hold it */
 static pdw ap_find(void)
 {
     pdw o, g;
@@ -121,15 +129,13 @@ static pdw ap_find(void)
     pdr_scpy(g_dg.key[0], "AP", 32); pdr_scpy(g_dg.key[1], "N", 32);
     if (eng_call(PDV_ENG_DICT_GET, &g_dg, sizeof g_dg, 0, 0, 0) || g_dg.kind != PDK_REF) return 0;
     o = g_dg.refnum; g = g_dg.refgen;
-    if (ref_get(o, g, 0)) return 0;
-    if (g_dg.kind == PDK_DICT) {                          /* states: /AS names the entry */
+    if (ref_get(o, g, "BBox")) {                          /* not a form: states, /AS names the entry */
         if (dict_get(g_aob, g_agn, "AS", 0, 0) || g_dg.kind != PDK_NAME) return 0;
         pdr_scpy(g_name, g_dg.text, PDR_NNAME);
         if (ref_get(o, g, g_name) || g_dg.kind != PDK_REF) return 0;
         o = g_dg.refnum; g = g_dg.refgen;
-        if (ref_get(o, g, 0)) return 0;
+        if (ref_get(o, g, "BBox")) return 0;
     }
-    if (g_dg.kind != PDK_STRM) return 0;
     g_apobj = o; g_apgen = g;
     return 1;
 }

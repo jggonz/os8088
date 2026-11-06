@@ -131,10 +131,10 @@ def dark(im, x0, y0, x1, y1): return int((im[y0:y1, x0:x1].sum(axis=2) < 200).su
 data = b" EI 1 0 0 rg 0 0 400 300 re f".ljust(32); assert len(data) == 32
 rc, im, st = draw(b"0 g 10 250 20 20 re f BI /W 8 /DP 7 /H 4 /BPC 8 /CS /G ID " + data +
                   b" EI 100 250 20 20 re f BI /IM true /W 16 /H 2 ID " + bytes(4) + b" EI 200 250 20 20 re f")
-check("inline images got past exactly (data containing EI; an /IM mask): every rectangle after them draws",
+check("inline images got past exactly (data containing EI; an /IM mask; drawn since 20.12.5): every rectangle after them draws",
       rc == 0 and dark(im, 12, 32, 28, 48) > 200 and dark(im, 102, 32, 118, 48) > 200 and dark(im, 202, 32, 218, 48) > 200
       and im[150, 300].min() > 200
-      and int(st.get("incomplete", "0"), 16) & 0x04, "rc=%d st=%r" % (rc, st))
+      and not int(st.get("incomplete", "0"), 16) & 0x04, "rc=%d st=%r" % (rc, st))     # wave 2 draws them (PAGEDESK-SPEC 20.12.5): no Incomplete (image)
 # 2. 40 q's past the 16-deep stack and 40 Q's: the colour after them is the one before them (red, not blue)
 rc, im, st = draw(b"q 1 0 0 rg " + b"q " * 40 + b"0 0 1 rg " + b"Q " * 40 + b"10 10 40 40 re f Q 60 10 40 40 re f")
 px = im[300 - 30, 30] if rc == 0 else None; px2 = im[300 - 30, 80] if rc == 0 else None

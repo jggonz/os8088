@@ -385,10 +385,10 @@ static pdw verb_thumb(void)
 static pdw verb_init(pdw xbseg)
 {
     g_xb = xbseg;
-    close_streams();
-    g_ph = PDR_IDLE; g_mode = PDR_IDLE;
     pd_fcopy_in(g_xb, 0, &g_ini, sizeof g_ini);
-    pdr_eng_off = g_ini.eng_off; pdr_eng_seg = g_ini.eng_seg;
+    pdr_eng_off = g_ini.eng_off; pdr_eng_seg = g_ini.eng_seg;      /* the vector first: close_streams calls PDENG (the launch hang of D20's neighbours) */
+    if (pdr_eng_seg) close_streams();                               /* no engine call through a 0:0 vector */
+    g_ph = PDR_IDLE; g_mode = PDR_IDLE;
     g_dls = g_ini.dl_seg;
     g_dlcap = g_ini.dl_kb ? (pdw)(g_ini.dl_kb >= 63 ? 0xFC00u : (pdw)(g_ini.dl_kb << 10)) : 0;
     /* the workspace is the last PDR_WSB bytes of the claim: the DL gets the rest.
