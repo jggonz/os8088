@@ -733,18 +733,20 @@ vb_prtgt:
     clc
     ret
 .dst:                               ; ES:SI = the file's byte VB_PRH + DX:AX
-    push ax
-    push dx
-    push cx
+    push ax                         ; (on kern_mega's 8-paragraph grid, as
+    push dx                         ; an OS88_HIGH package's segments are -
+    push cx                         ; tests/megagrid)
     add ax, VB_PRH
     adc dx, 0
     mov si, ax
-    and si, 15
-    mov cx, 4                       ; (DX:AX >> 4: the paragraph)
+    and si, 127
+    mov cx, 7                       ; (DX:AX >> 7, then 8 paragraphs each)
 .d:
     shr dx, 1
     rcr ax, 1
     loop .d
+    mov cl, 3
+    shl ax, cl
     add ax, [vb_prfseg]
     mov es, ax
     pop cx
