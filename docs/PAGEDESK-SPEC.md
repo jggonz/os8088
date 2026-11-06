@@ -694,7 +694,7 @@ that exceeds a row is a change to this table first.
 | exchange block | primary | 1 KiB | launch |
 | block cache | PDENG | 16 KiB | open |
 | object arena + xref tables + page table | PDENG | 8 + 3 + 8 KiB | open |
-| display list + gstate | PDREND | 20 + 2 KiB | open |
+| display list + PDREND workspace | PDREND | 22 + 7 KiB (D13) | open |
 | band | PDREND | 1.25-5 KiB by adapter | open |
 | glyph cache | PDREND | 12 KiB | open |
 | thumbnails | primary | 4 KiB | panel shown |
@@ -702,7 +702,7 @@ that exceeds a row is a change to this table first.
 | text/search scratch | primary | 2 KiB | search |
 | `PDWRT` image + bss | parts, lazy | <= 40 KiB | save/extract/new, freed after |
 | writer buffers | PDWRT | 12 KiB (4 KiB output + 1,024-object offset table); 36 KiB for an extract of up to 4,096 objects | save/extract, freed after |
-| overlay | parts, lazy | <= 24 KiB | dialog, freed when idle |
+| overlay | parts, lazy | <= 48 KiB (D19; was 24) | dialog, inspector, menu command; freed when idle |
 
 Failure of an optional claim (thumbnails, a larger cache) degrades quality;
 failure of a required one refuses the open with the KB it wanted.
