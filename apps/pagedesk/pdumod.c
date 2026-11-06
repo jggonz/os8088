@@ -408,6 +408,7 @@ static int pdu_doc_claim(void)
 /* close the document in the modules and give its claims back */
 static void pdu_doc_release(void)
 {
+    pdu_ed_gone();                      /* edit */
     pdu_mcall(PDU_M_REND, PDV_REND_ABORT, 0, 0, 0);
     pdu_mcall(PDU_M_ENG, PDV_ENG_CLOSE, 0, 0, 0);
     pdu_doc_free();

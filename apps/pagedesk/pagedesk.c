@@ -16,8 +16,6 @@
  * ==========================================================================*/
 #include "pdu.h"
 #include "pdmath.h"
-#define PDU_NT_STUB 1                   /* notes: until `edit` lands */
-#include "pdunt.h"
 
 /* --- pdui.inc (the hand-written seam) ------------------------------------ */
 void     pdu_mbind(int mod, unsigned seg);
@@ -148,6 +146,8 @@ static const char *pdu_abtext[] = {
 #include "pdudraw.c"            /* every pixel of the chrome */
 #include "pduview.c"            /* the page view: zoom, scroll, pages */
 #include "pdujob.c"             /* 15: the scheduler and its three jobs */
+#include "pduedit.c"            /* 13.1, 20.8: the edit store (edit) */
+#include "pduundo.c"            /* 13.6, 20.8: undo and redo (edit) */
 #include "pducmd.c"             /* commands, menus, keys, clicks */
 #include "pdunotes.c"           /* 17.3: Notes & edits, the note popover */
 #include "pduinsp.c"            /* 17.3: Text properties */

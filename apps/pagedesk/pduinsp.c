@@ -189,7 +189,7 @@ static void ovl_nt_iact(int k)
         return;
     }
     if (k == PDU_NI_DEL) {
-        pdu_undo_begin(0);
+        pdu_undo_begin(UL_DELETE);
         pdu_ed_del(pdu_nt_isel);
         pdu_undo_end();
         pdu_ed_select(-1);
@@ -218,7 +218,7 @@ static void ovl_nt_iact(int k)
         e->colour = pdu_ni_cols[(i + 1) % 7];     /* not found: i = 7 -> Blue */
     } else
         e->align = k - PDU_NI_AL;
-    pdu_undo_begin(0);
+    pdu_undo_begin(UL_PROPS);
     v = pdu_ed_set(pdu_nt_isel, e);
     pdu_undo_end();
     if (v < 0) {

@@ -489,7 +489,7 @@ static void ovl_nt_resolve(int id)
     e->flags = src ? PDEF_IRTSRC : 0;
     e->irt = key;
     e->state = done ? PDS_NONE : PDS_COMPLETED;
-    pdu_undo_begin(0);
+    pdu_undo_begin(UL_NOTE);
     r = pdu_ed_new(e, "", 0, 0, 0);
     pdu_undo_end();
     if (r < 0) {
@@ -828,7 +828,7 @@ static int ovl_nt_commit(void)
         e->page = pdu_nt_ppg;
         e->colour = PDC_YELLOW;
         os88_memcpy(&e->rect, &pdu_nt_prc, sizeof(struct pd_rect));
-        pdu_undo_begin(0);
+        pdu_undo_begin(UL_NOTE);
         r = pdu_ed_new(e, pdu_nt_buf, pdu_nt_blen, 0, 0);
         pdu_undo_end();
         if (r >= 0) {
@@ -836,7 +836,7 @@ static int ovl_nt_commit(void)
             ovl_nt_redraw(&pdu_nt_prc);
         }
     } else if (pdu_nt_ptxt) {
-        pdu_undo_begin(0);
+        pdu_undo_begin(UL_TYPE);
         r = pdu_ed_text(pdu_nt_pid, pdu_nt_buf, pdu_nt_blen);
         pdu_undo_end();
     } else
@@ -874,7 +874,7 @@ static void ovl_nt_pact(int k)
     id = pdu_nt_pid;
     if (k == 1 && id >= 0 && pdu_ed_get(id, &pdu_nt_e) == 0) {
         os88_memcpy(&pdu_nt_prc, &pdu_nt_e.rect, sizeof(struct pd_rect));
-        pdu_undo_begin(0);
+        pdu_undo_begin(UL_DELETE);
         pdu_ed_del(id);
         pdu_undo_end();
         pdu_ed_select(-1);

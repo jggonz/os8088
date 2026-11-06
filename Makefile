@@ -20631,7 +20631,7 @@ pdfonts: $(PD_RES_BIN) $(PD_FONTX_RES) $(PD_FONT_TXT) $(PD_ART_INC)
 $(BUILD)/pagedesk.raw.asm: $(PDDIR)/pdovlnotes.c
 
 $(BUILD)/pdu_nt: apps/pagedesk/hosttest/pdu_nt.c apps/pagedesk/pdunotes.c \
-                 apps/pagedesk/pdunt.h apps/pagedesk/pdu.h apps/pagedesk/pdabi.h | $(BUILD)
+                 apps/pagedesk/pdu.h apps/pagedesk/pdabi.h | $(BUILD)
 	$(HOSTCC) -O1 -Wall -Wno-unused-function -DPD_HOST -Iapps/pagedesk \
 		apps/pagedesk/hosttest/pdu_nt.c -o $@
 

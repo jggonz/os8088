@@ -24,7 +24,6 @@
 #endif
 struct os88_rect { int x1, y1, x2, y2; };
 #include "../pdu.h"
-#include "../pdunt.h"
 
 static unsigned pdu_page;
 static int pdu_npall;
@@ -51,7 +50,7 @@ void pdu_undo_end(void) { }
 void pdu_ed_select(int i) { }
 int pdu_ed_selected(void) { return -1; }
 unsigned pdu_ed_gen(void) { return 0; }
-static char pdu_tbuf[1025];
+char pdu_tbuf[1025];
 
 #include "../pdunotes.c"
 

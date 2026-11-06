@@ -1542,6 +1542,14 @@ FAST = [
         "change words - built on the host over a fake store "
         "(hosttest/pdu_nt.c; SKIP without cc)",
         needs=("cc",)),
+    Row("pded", "fast", py("tests/unit/t_pded.py"), 0.5,
+        "PAGEDESK-SPEC 13.1.1 / 13.6 / 20.8: apps/pagedesk/pduedit.c and "
+        "pduundo.c - the edit store and undo the package compiles - built on "
+        "the host: every kind's layout, the limits, undo/redo against "
+        "snapshots, typing coalescing, the 64-command history, the save "
+        "point, source annotations, page-op deltas and 40 seeded random "
+        "walks. ~0.5 s",
+        needs=("cc",)),
     Row("livefull", "fast", py("tests/unit/t_livefull.py"), 0.2,
         "SPEC.md 80.6: the live USB/CD is the ONE image whose premise is "
         "completeness, and until this row nothing in the tree had ever read "
