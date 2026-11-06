@@ -20120,6 +20120,39 @@ pixels), without the nothing-uncovered stores (the window redrawn, a title
 promoted), and on `kern_small` without the skip (both cells drawn).
 
 
+#### 11.91.7 A screen given back is the damage pass over the whole band
+
+Leaving an exclusive bracket (§53.6) and waking from the saver (§79.6) owe the
+whole desktop, and both reached `wm_paint_all` through `blk_relit`: the dither
+under the bar, every zone, and then every window back to front **whole**. With
+four overlapping windows a pixel under the top one was written once per layer —
+deskbench's fullscreen exit read **7.03 transient pixels per changed one** on
+CGA, 8.01 on Hercules, 7.65 on VGA (PERFORMANCE.md's deskbench table) — and
+every covered window put its whole content back off its cache for the windows
+above it to paint over.
+
+None of that is needed to answer "what does the screen look like now", because
+the damage pass already answers it for any rect: `blk_relit` hands
+`wm_paint_dmg` the band, `(0, MBAR_H)` to the far corner (clamped onto the live
+screen there). `[wm_dmg_stwin]` is 0 — nothing was vacated — so every window
+the rect touches is marked; each draws its chrome where nothing above covers it
+(§11.97), its cache in the pieces nothing above covers (§11.96.15) and its
+`W_PAINT` under the cull (§11.3.3); the dither lays only the ground no window
+holds (§11.91.1) and keeps to the bands (§39.16.2.1); the bar and the strip are
+forced first and drawn by the pass, and a window over the strip owes it through
+`[wm_dmg_dk]` as on every other pass. The settled screen is the one
+`wm_paint_all` leaves — the incremental-equals-full property every damage path
+rests on (`tests/dispcorner.py`).
+
+**Two cases keep `wm_paint_all`.** A second display (`kern_big`, `[vid_ndisp]`
+above 1): its desktop is `EXT_DESK`'s, drawn whole in that routine and nowhere
+in the damage pass. And a fullscreen window still up (`wm_fs_vis`), whose walk
+starts at the fullscreen window (`.fswins`). Both are tested before anything is
+drawn.
+
+Measured on MartyPC's 5150/CGA, deskbench's scene, Paint's fullscreen bracket
+left with `f`: see docs/plans/khp1/wm.md for the figures on each adapter.
+
 ### 11.92 Retitling costs a strip — `wm_title_set`
 
 A caption changes on an **event** — a folder was entered, a document was
@@ -106706,9 +106739,11 @@ The app's proc returning is the only exit. In order:
    the game must not land in the desktop ladder. The §34.4 click-abort
    drain is the precedent.
 3. Disarm: `[fsx_task]` = `[fsx_worker]` = 0xFF, under `cli`.
-4. Bring the desktop back under the still-held lock: a full
-   `wm_paint_all` with `[menu_bdirty]` forced (the save-under-overdraw
-   precedent, §12.05). With `[bb_dbl]` armed the repaint renders into the
+4. Bring the desktop back under the still-held lock: a full repaint
+   with the bar and the strip forced (the save-under-overdraw precedent,
+   §12.05) — `blk_relit`, which on one display with no fullscreen window
+   up is the damage pass over the whole band (§11.91.7) and otherwise
+   `wm_paint_all`. With `[bb_dbl]` armed the repaint renders into the
    buffer and the callback epilogue's flush carries it to VRAM; without,
    it writes VRAM direct.
 
@@ -140420,10 +140455,12 @@ of them draws.
 
 **The desktop is owed a full repaint and there is no cheaper answer.** A
 session has drawn over the menu bar, the drive column, the dock and every
-window, so there is no damage rect to be clever with — `wm_paint_all` *is* the
+window, so there is no damage rect to be clever with — the whole band *is* the
 damage. It is PERFORMANCE.md rule 1's legitimate exemption, because the whole
 screen really did change, and it is paid once per wake on the far side of a
-period measured in minutes. `[blk_sv]` is cleared **before** the repaint runs,
+period measured in minutes. It is paid through the damage pass rather than
+`wm_paint_all` since §11.91.7, which writes each pixel about once instead of
+once per window layer. `[blk_sv]` is cleared **before** the repaint runs,
 so nothing inside a UI pass's worth of drawing still believes the overlay owns
 the screen.
 
