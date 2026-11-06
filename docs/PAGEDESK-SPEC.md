@@ -2085,3 +2085,187 @@ one interface (DECISIONS D15). `edit` owns `apps/pagedesk/pduedit.c` and
 Every mutating call records its undo delta itself, so a caller brackets a
 command with `pdu_undo_begin`/`end` and does nothing else for undo. Calls are
 made on the UI task only, never inside a module slice.
+
+
+### 20.14 Host preparation of complex PDFs (`host`, wave 2, PD-22)
+
+`tools/os88pdprep.py` is the optional host command for a PDF outside the XT
+profile (1.3). It is a Python 3.11 script over three independent programs,
+`qpdf` (the rewrite), `mutool` or `pdftoppm` (the raster) and nothing else:
+no pip package, no Microsoft or Adobe binary, no network. Every other part of
+PageDesk works without it; a prepared file is just a PDF.
+
+#### 20.14.1 Command
+
+```
+tools/os88pdprep.py IN.pdf OUT.pdf [--flate] [--raster none|auto|all|2,5-7]
+    [--fonts keep|raster] [--dpi N] [--bits 1|8] [--target vga|cga|herc]
+    [--strip-bytes N] [--no-text-layer] [--pages RANGE]
+    [--password PW | --password-file F] [--force] [--pde-test PATH] [--report FILE|-]
+```
+
+| exit | meaning |
+|---|---|
+| 0 | prepared and verified |
+| 1 | refused, with the reason on stderr (below) |
+| 2 | usage |
+| 3 | a needed tool is missing (`qpdf`; `mutool` or `pdftoppm` for `--raster`): nothing was written, and it is never reported as a pass |
+| 4 | the derivative was written and FAILED verification: it is left in place and the report says why |
+
+Refusals: IN is not a file or has no `%PDF-` in its first KiB; OUT is IN
+(`samefile`: not even with `--force`); OUT exists without `--force`; the file
+is encrypted and no password was given (`PDE_ENCRYPT`), or the password is
+wrong; no pages; more than 1,024 pages (`PDE_LIMIT`; `--pages 1-1024` prepares
+a range). The original is only ever read, and OUT appears only after qpdf
+finished (`OUT.tmp` is renamed over).
+
+`--flate` is the Enhanced tier: Flate streams are kept (or re-made from LZW and
+ASCII85) for a build that has PD-25. The default is the XT tier: **no Flate
+at all**, which a 4.77 MHz machine with 640 KiB reads without a decoder, at the
+price of a larger file. `--raster` defaults to `none` so that nothing is
+destroyed unasked; the report names every page that will show *Incomplete
+rendering* and the command that would replace it.
+
+#### 20.14.2 What is rewritten
+
+One `qpdf` pass (`--object-streams=disable`, `--stream-data=uncompress` on the
+XT tier, `--newline-before-endstream`, `--deterministic-id`) gives, by
+construction, everything PDENG's profile lists:
+
+| input | derivative |
+|---|---|
+| xref stream, object streams, hybrid file, linearization | one classic `xref` of 20-byte entries in a single subsection, no `/ObjStm`, no `/XRef` |
+| incremental revisions (`/Prev`) | flattened to one revision (the report says how many there were) |
+| object numbers | renumbered 1..N (N is reported against `PD_MAX` 65,535, D8) |
+| `FlateDecode`, `LZWDecode`, `ASCII85Decode`, `ASCIIHex`, `RunLength` and predictors | decoded (XT tier), or Flate again (`--flate`) |
+| `/Encrypt` | decrypted only with a supplied password; the derivative has no encryption, no `/Perms`, no permissions |
+| `DCTDecode`, `JPXDecode`, `CCITTFaxDecode`, `JBIG2Decode` images | left as they are: their page is *incomplete* and is the raster's business |
+| `/Outlines` | kept; dropped with a warning when `--pages` selects a subset, because its targets are gone |
+| `/Perms`, signature byte ranges, XFA | kept as data, with a warning: rewriting invalidates a signature |
+
+A stream decoded past the engine's 1 MiB cut (7.5, 20.2.2) is not fixed by
+decoding; the classifier (below) names it.
+
+#### 20.14.3 What the classifier calls incomplete
+
+For each page the tool walks the page's content streams and the Form XObjects
+they draw (4 deep), with the page's inherited resources, and lists what 1.3
+refuses or draws with a stand-in. **Hard** (a reason to rasterise, named in
+the report): `sh`; a pattern colour or `/Pattern`; an ExtGState `/SMask`, a
+`/BM` other than Normal, `/ca` or `/CA` below 1; a colour space that is not
+DeviceGray/RGB/CMYK (ICCBased, Indexed, Separation, DeviceN, Cal*); an image
+with a filter PageDesk lacks, an `/SMask` or `/Mask`, a colour space other than
+DeviceGray/RGB, a depth other than 1 or 8, or a decoded size over 1 MiB; an
+inline image over 4,096 bytes or with such a filter or colour space; a Type 0
+(CID), Type 3, Symbol or ZapfDingbats font; a content stream or form over
+1 MiB; a page box outside +/-2,047 pt or empty. **Soft** (drawn with the
+substitute face, reported, rasterised only with `--fonts raster`): TrueType and
+non-base-14 Type 1 fonts; render modes 4-7.
+
+`--raster auto` takes the hard pages; `all` every page; a list (`2,5-7`,
+numbered after `--pages`) exactly those; `none` leaves every page vector.
+
+#### 20.14.4 A rasterised page
+
+The page is replaced in place - **its object number stays**, so outline and
+link targets still resolve - by `/Type /Page`, the parent, a new `/MediaBox
+[0 0 W H]` (CropBox, Rotate, Annots, groups and boxes dropped), and new contents:
+the page as MuPDF (or Poppler, `pdftoppm -gray`) draws it, with `/Rotate`, the
+CropBox and the source's annotation appearances baked in, cut into horizontal
+**strips**, each an Image XObject (`DeviceGray`, `--bits` 1 or 8) of at most
+`--strip-bytes` decoded (default 60,000: inside one 64 KiB segment, far under the
+1 MiB cut). 1-bit strips are Bayer 4x4 ordered-dithered; strips are
+RunLength-encoded when that is smaller (XT tier) or Flate (`--flate`). Each is
+placed by its own `q ... cm /Sn Do Q`. A page larger than 2,000 pt in either
+direction is shrunk so it fits +/-2,047 pt, and the report says by what factor.
+
+**Searchable text exists only when it genuinely did.** Where the source page
+had extractable text (MuPDF's `stext`), the page also carries an INVISIBLE
+layer - `BT 3 Tr`, one `Tj` per word in `Courier` with `Tz` set so the word's
+width equals its box in the picture (Courier's advance is 600/1000 em, so no
+width table is needed) - which Find, selection and Copy use as for any text.
+A word with a character outside WinAnsi is skipped and counted; a font with no
+widths gets half an em a letter. There is no layer on a scan, and the report
+says "searchable text: none". `--no-text-layer` omits it. Rotated lines are
+not given boxes.
+
+New annotations PageDesk adds to such a page are ordinary vector records
+(13.3); the source's annotations on it are part of the picture.
+
+#### 20.14.5 The stamp and what PageDesk can show from it
+
+The derivative's Info dictionary gains `/PageDeskPrep`, one text string:
+
+```
+os88pdprep 1.0; qpdf 12.4.2; src-size=N; src-sha256=<64 hex>; tier=xt|enhanced;
+  [raster=2,3; dpi=100; bits=1;] pages=N
+```
+
+(one line; the line break is for print). It is the only thing binding the
+derivative to its original: the original's size and SHA-256, the pages that
+are pictures, the tier. A reader that wants to show **Prepared copy** looks
+for the key through `PDV_ENG_TRAILER` and `DICT_GET`; a string starting
+`os88pdprep` is the signal, `raster=` says which pages are pictures and
+therefore whether the document has searchable text (a page in the list has it
+only if the report said so; the list does not say, by design - the report file
+does). PageDesk itself does not yet read it (open item 1).
+
+There is no side cache and no private container. PD-22 allowed "a
+documented versioned container with per-chunk offsets, sizes, checksums";
+that was written for a derivative that was NOT a PDF. This one is: the strips
+are image XObjects, the fingerprint is in the file, and a stale or wrong chunk
+cannot exist because there is no chunk to go stale (a damaged strip is an
+ordinary damaged stream, 7.5, and is refused by the engine like any other).
+The original is never edited and "restore the edits onto the complex original"
+is NOT offered (open item 2); a prepared copy is its own document.
+
+#### 20.14.6 Verification
+
+After writing, the tool re-reads the output with tools that share nothing
+with it and prints each verdict in the report: `qpdf --check` (any warning
+fails), `tools/os88pdfcheck.py validate`, its own profile check (classic xref
+at `startxref`, every entry 20 bytes, no `/ObjStm` or `/XRef`, subsections at
+most `PD_MAXSUBSEC`, object numbers under 65,536, no `/Encrypt`, page count) and,
+when `build/pde_test` (or `--pde-test`, `$PDE_TEST`) exists, **PDENG itself**:
+`pde_test dump` must open the file with the right page count and decode and
+tokenize every content stream. A page that the report lists as still
+incomplete may be refused by the engine (the page-box case is `PDE_RANGE`) and
+is then expected; any other refusal fails the run (exit 4). The Enhanced tier
+is not run through PDENG (it has no Flate until PD-25).
+
+#### 20.14.7 Checks and numbers
+
+`tests/unit/t_pdprep.py` (fast, about 0.7 s, proposed row `pdprep`): the
+RunLength encoder round-trips; the dither's white, black and grey; the
+tokenizer through strings, arrays, hex, comments and an inline image whose
+data holds a false `EI`; page lists; then on a generated six-page file that
+qpdf has turned into an object-stream + Flate PDF - a native page, a shading,
+a transparent TrueType page, a 2,500 pt wide page, a JPEG page and a long inline
+image - the report's every verdict, no `/ObjStm` or `/XRef` or Flate in the
+output, the profile check, `qpdf --check`, strips under the cap, the Info
+stamp (the original's SHA-256), MuPDF extracting the invisible words, the
+output byte-identical on a second run, the refusals (in place, existing,
+encrypted without and with a wrong password), a decrypt with the right one, and
+a **negative control**: the profile check must fail the object-stream input.
+It SKIPs, never passes, without `qpdf`.
+
+Measured on this host (qpdf 12.4.2, MuPDF 1.28.6): XTGUIDE.PDF as an
+object-stream/Flate file (9,555 bytes) becomes a 27,948-byte classic file
+PDENG opens (PDENG: XREFSTM before); an HTML page converted by MuPDF with CID
+fonts rasterises at 80 dpi, 1-bit, to one 3,861-byte strip with 22 invisible
+words.
+
+#### 20.14.8 Open items
+
+1. The shell/engine should read `/PageDeskPrep` and show **Prepared copy**
+   and the raster list (20.14.5): not done, it is the lead's to assign.
+2. No merge of a prepared copy's edits back onto the untouched original (PD-22
+   allows leaving it out; if wanted it is a separate host command that lifts the
+   `PDA_*` records out and re-applies them through qpdf).
+3. One scale and one depth per run; no multi-scale pyramid and no per-tile
+   checksum container (20.14.5 says why not).
+4. Colour (RGB/palette) rasters and CCITT/JBIG2 1-bit passthrough are not
+   produced; a 1-bit image whose filter is CCITT is a hard page like any other.
+5. Rotated text gets no layer; vertical writing is not recognised.
+6. Not run on a real XT: no host check can say how fast a strip draws (the
+   lead's final pass measures a prepared copy with MartyPC).
