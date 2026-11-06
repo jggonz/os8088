@@ -20120,6 +20120,36 @@ pixels), without the nothing-uncovered stores (the window redrawn, a title
 promoted), and on `kern_small` without the skip (both cells drawn).
 
 
+#### 11.91.8 …and a window whose vacated part is under somebody else draws nothing
+
+§11.91.2 marks a window that overlapped the rect the mover **vacated**, and
+asks only one question about what is left of that overlap: is it inside the
+mover's NEW frame? It never asked about the other windows. On a cascaded
+desktop that is the common case it got wrong: deskbench's Control Panel sits
+under the Disk window, and the strip Paint vacated when it moved crossed the
+Control Panel only where the Disk window already covers it. The panel was
+marked and drew its visible column — frame, shadow, title, a restore —
+**~35 ms on the 5150/CGA for a column whose every pixel was already right.**
+
+So `wm_dmg_stale` asks the question properly: the vacated rect cut to the
+window's rect (drop shadow included) is seeded as a region and every visible
+window ABOVE it subtracted **by its frame** (`wm_clip_occlf`, so the two
+corners a shadow's L never paints stay the window's, §11.96.15.1). An empty
+list means nothing of what it lost is on the glass: clean, CF = 1, and the
+window goes on to the pass's other questions (its shadow, a zone, the strip, a
+marked window below it) exactly as a window the vacated rect never reached. An
+overflow is "exposed", the answer before this existed.
+
+**It loses no pixel.** Take any pixel of the vacated rect inside such a window.
+The topmost visible window over it is either the mover (always drawn) or a
+window above this one whose vacated part contains that pixel, uncovered — so
+that window's own test finds it non-empty and it is marked, and its draw covers
+its visible region. The dither subtracts every visible frame, so it does not
+touch the pixel either. The cost is a region walk per window whose vacated part
+was otherwise exposed — §11.91.3's "several hundred bytes" was for keying the
+marking on REDRAWN regions; this keys it on the vacated rect, which is a rect,
+against occluders that do not move, and is 36 bytes.
+
 #### 11.91.7 A screen given back is the damage pass over the whole band
 
 Leaving an exclusive bracket (§53.6) and waking from the saver (§79.6) owe the

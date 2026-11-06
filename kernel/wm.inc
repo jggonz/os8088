@@ -4926,9 +4926,36 @@ wm_dmg_stale:
     cmp dx, ax
     jge .exposed
     stc                         ; covered again: nothing of it is showing -
-    db 0xB0                     ; and a `pop` writes no flag. mov al, imm8:
-.exposed:                       ; the imm8 is the clc, AL comes back off the
-    clc                         ; stack (kernel size pass 15)
+    jmp short .clr              ; and a `pop` writes no flag
+.exposed:
+    ; ...AND WHAT IT LEFT OF US MAY BE UNDER SOMEBODY ELSE (SPEC.md 11.91.8).
+    ; The part of this window the mover vacated is owed only where nothing
+    ; above this window covers it now: a window cascaded under another that
+    ; is not moving has its vacated strip hidden by that one, which repaints
+    ; it itself (it overlaps the vacated rect too, so it is marked unless it
+    ; is hidden in turn - and the topmost window at any such pixel is not).
+    ; So the vacated rect cut to ours is seeded and every visible window
+    ; above us subtracted BY ITS FRAME (wm_clip_occlf: the shadow's two
+    ; unpainted corners stay ours); an empty list is CF = 1, clean, and an
+    ; overflow is exposed, the answer before this existed.
+    mov bx, sp
+    mov bx, [ss:bx]             ; our window - the SI banked on entry (SS:
+    call wm_win_rect_bx         ; BP and SP address the stack, SPEC.md 1)
+    push si
+    mov si, wm_dmg_st1
+    call gfx_rect_isect         ; AX..DX = ours cut to the vacated rect,
+    mov si, dx                  ; non-empty (gfx_rect_hit said so above)
+    mov dx, bx
+    call wm_clip_seed           ; AX = x1, DX = y1, CX = x2, SI = y2
+    pop bx
+    call wm_clip_occlf          ; CF = 1 overflowed
+    jc .exp
+    cmp word [wm_clip_n], 1     ; CF = 1 exactly when the list is EMPTY
+    db 0xB0                     ; mov al, imm8: the imm8 is the clc, AL
+.exp:                           ; comes back off the stack (kernel size
+    clc                         ; pass 15)
+.clr:
+    call wm_clip_clear          ; (a `mov`: CF survives it)
     jmp kret_si
 .mark:
     CLC_OR_STC .clean           ; (the one caller reads CF alone)
