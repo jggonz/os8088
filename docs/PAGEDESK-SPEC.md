@@ -1060,7 +1060,10 @@ DX SI DI are the caller's to lose. Every struct argument is a NEAR pointer into
 DS; a module's door has loaded DS = CS (3.1), so `pdmath.inc` reads its own
 `.bss` flag and its CRC table through CS/DS with no further setup. A result
 pointer may equal an operand pointer (`mat_mul`, `mat_apply` and the u32/fx
-ops build the answer first). The far movers are the only code that loads DS
+ops build the answer first). Two RESULT pointers of one call - `mat_apply`'s `x`
+and `y`, the view's `px`/`py`, `x`/`y` and `w`/`h` - must be distinct: the
+assembly stores `view_fwd`'s and `mat_apply`'s in the opposite order from
+`pdmath.c`, so an aliased pair keeps a different one of the two. The far movers are the only code that loads DS
 or ES; they restore both and leave DF clear. Nothing touches SS.
 
 `pdmath.inc` is `%include`d by each assembly in its `section .text` after
@@ -1077,8 +1080,8 @@ needs only part of it defines before the include any of `PDM_SKIP_U32`,
 
 | configuration | bytes of `.text` |
 |---|---|
-| everything | 3,611 |
-| core only (all six skipped: overflow flag, fx add/sub/mul/div/neg/cmp/int/floor/round/to_pt16/pt16_to_fx, fx_div's 48/32 divider) | 826 |
+| everything | 3,627 |
+| core only (all six skipped: overflow flag, fx add/sub/mul/div/neg/cmp/int/floor/round/to_pt16/pt16_to_fx, fx_div's 48/32 divider) | 842 |
 | the groups, by what each adds to the core | U32 403, PARSE 515, MAT 525, VIEW 806, FAR 371, CRC 165 (the 21-byte span check both use is in the core) |
 
 Largest stack use of one call (return address included): `mat_mul` 50 bytes,
@@ -1149,8 +1152,9 @@ effective address. It is an instruction-count estimate, not a measurement on a
 |---|---|---|---|
 | `fx_add` | 19 | 321 | 67 |
 | `fx_mul` | 63 | 1,374 | 288 |
-| `fx_div`, divisor below 1.0 (three DIVs) | 63 | 1,336 | 280 |
-| `fx_div`, divisor of 1.0 or more (48 shift-subtract steps) | 773 | 11,629 | 2,437 |
+| `fx_div`, divisor below 1.0 (three DIVs) | 65 | 1,361 | 285 |
+| `fx_div`, an integral divisor of 1.0 or more (two DIVs) | 46 | 892 | 187 |
+| `fx_div`, any other divisor of 1.0 or more (32 shift-subtract steps in registers) | 395 | 4,727 | 991 |
 | `view_fwd` (any aspect) | 166 | 3,884 | 814 |
 | `view_inv` | 185 | 4,155 | 871 |
 | `view_size` | 169 | 3,894 | 816 |
@@ -1162,8 +1166,17 @@ effective address. It is an instruction-count estimate, not a measurement on a
 
 `view_fwd` costs the same at every aspect: the y scale divides by `1600`, then
 by `asp_den`, as two three-DIV chains (floor of a floor is the floor of the
-product), so no aspect reaches the 48-step divider; only `fx_div` by a divisor
-of 1.0 or more does. A hit test or highlight loop over N glyphs is N x 0.8 ms
+product), so no aspect reaches the shift-subtract divider; only `fx_div` by a
+NON-integral divisor of 1.0 or more does (an integral one, low word 0, is
+`|x| / hi` in two DIVs: `fx_int(1000)` costs 187 us, not 991, so a constant
+divisor should be integral - or, in a per-glyph loop, a multiplication by its
+reciprocal computed once).
+
+A second model (the verifier's: the Intel manual's clocks with the 8088's +4
+per word memory transfer on every form, Jcc/LOOP priced taken or not taken,
+shift-by-CL at its actual count) agrees with the table within 6% on every row
+except the 32-step divider, which it puts at 855 us (the table's model prices
+every conditional jump as taken). A hit test or highlight loop over N glyphs is N x 0.8 ms
 per corner pair: the renderer should transform a page rect's two corners once
 and step in device space, not call `view_fwd` per pixel.
 
@@ -1174,13 +1187,26 @@ assembles `tests/pdmath/pdmharness.asm` (the shipping include plus an entry
 table) under `cpu 8086 -w+error`, runs it in Unicorn's real-mode x86 with SS
 different from DS and sentinels in BP/ES, and runs `pdmath.c` natively through
 ctypes on the same inputs: edge-value pools plus a seeded stream per function,
-2,500 cases each by default, including the saturation edges of `fx_mul` and
+2,500 cases each by default, after a FIXED edge pass of about 26,000 cases run
+every time (every pair of 24 boundary 16.16 values through add/sub/mul/div/cmp,
+rounding and pt16 ties, the parser's edge strings - lone sign or point, 9+
+fraction digits including ones where an ignored 9th digit would change the
+rounding, leading zeros, the 32767.99999 and -32768 boundaries, junk - u32
+shifts by 0/16/31/32/33/FFFFh, divmod by 0, PageDesk's five aspects (5.4) at
+every rotation, zoom 25..400 edges and past 400, spans ending exactly at the
+segment's end, and 64 KB moves overlapping in both directions within and across
+segments), including the saturation edges of `fx_mul` and
 `fx_div`, the clamp edges of the view, string fuzzing for `fx_parse`, and
 far spans at, across and 64 KB past the segment end. It compares the return
 value, every byte of argument memory (guard bytes included), the overflow flag,
 the far arena, and the convention (BP/DS/ES/SS/SP/DF). Seven negative controls
 prove those checks can fail, an include-twice / every-`PDM_SKIP_*` assembly
-matrix runs, and the `fwd(inv(p)) == p` property is checked on the assembly.
+matrix runs, the `fwd(inv(p)) == p` property is checked on the assembly, 5.3's
+own claim is checked on it literally (every pixel of a 200-pixel row and column
+through the page's top-left, every R, every 5.4 aspect, zoom 25/33/100/400, two
+nonzero-origin cropped boxes: 64,000 pixels), and `pdm_crc16` on both sides is
+held to the published check values of "123456789" (CCITT-FALSE 29B1h, XMODEM
+31C3h).
 Mutating the include (a changed rounding constant, a dropped carry, a wrong
 comparison) fails the run. It needs the `unicorn` Python package and exits 77
 (skip) without it.
