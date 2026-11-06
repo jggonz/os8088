@@ -1536,12 +1536,24 @@ def need_tools():
 
 
 def probe(path):
-    """(width, height, display aspect, fps, duration, has audio)"""
-    out = subprocess.run(
+    """(width, height, display aspect, fps, duration, has audio). A file
+    ffprobe will not read is a V88Error naming it and what ffprobe said -
+    not the CalledProcessError's whole command line, which is what a
+    person dropping an empty or broken file was shown"""
+    r = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries",
          "stream=codec_type,width,height,r_frame_rate,sample_aspect_ratio,"
          "duration:format=duration", "-of", "default=nw=1", path],
-        capture_output=True, text=True, check=True).stdout
+        capture_output=True, text=True, errors="replace")
+    if r.returncode:
+        why = [ln.strip() for ln in (r.stderr or "").splitlines()
+               if ln.strip()]
+        why = why[-1] if why else "ffprobe exit %d" % r.returncode
+        if why.startswith(path + ": "):     # (ffprobe names the file too)
+            why = why[len(path) + 2:]
+        raise vid.V88Error("%s is not a video that can be read: %s"
+                           % (os.path.basename(path), why))
+    out = r.stdout
     v, audio, dur = {}, False, None
     cur = {}
     for line in out.splitlines() + ["codec_type=end"]:
