@@ -20319,27 +20319,6 @@ folder-vanished path reaches it from `ld_run`, which deliberately holds no
 lock across a mount (§21). A pointer cannot be spent on whichever window
 happened to repaint in between.
 
-#### 11.92.1 An inactive bar has no gap to cut
-
-`wm_draw_title` letters the caption on a **gap** — a `gfx_fill` six pixels
-either side of the text, rows `y+2 .. y+15` — whose whole purpose is to cut the
-active bar's pinstripes back from the glyphs. An inactive bar has no stripes:
-its interior fill (`y+1 .. y+16`, the bar's span) has already laid that rect in
-the same pen (`wm_tpen_bg`), clipped by the same region, and nothing between
-the two writes it. So on an inactive bar the gap is **not drawn** — one
-primitive call fewer per background caption, every raise (the outgoing front),
-every damage pass and every `wm_paint_all`.
-
-**Unless the caption is wider than the bar.** Centring is signed, so a title
-wider than its window puts the gap past the frame; there the fill paints over
-the border and that is what the glass has always shown. The skip therefore
-also requires the gap's left edge to be right of `W_X` — which, by the
-centring's symmetry (the gap is `tw + 11` wide around the text, the bar `w - 2`
-around the same centre), is the right edge's condition as well.
-
-Measured on MartyPC's 5150/CGA, deskbench's scene: the fill was ~2 ms of each
-inactive caption.
-
 ### 11.93 `WF_KEEPH` — a fixed layout hangs over the dock rather than be cut
 
 **`wm_keeph` (API slot 0x02F0), BX = window, AL = 0 clear / non-0 set: "my

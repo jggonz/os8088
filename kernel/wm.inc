@@ -7742,24 +7742,12 @@ wm_draw_title:                  ; Windows, and this body otherwise
     inc bx
     inc bx
     lea dx, [bx+13]             ; = W_Y + 15
-    cmp di, bp                  ; THE GAP IS THE FRONT BAR'S ALONE (SPEC.md
-    je .gap                     ; 11.92.1): it exists to cut the pinstripes
-    cmp ax, [di+W_X]            ; back, and an inactive bar has none - its
-    jg .nogap                   ; interior fill above laid this rect in this
-.gap:                           ; pen and nothing between wrote it, so the
-                                ; fill was a whole primitive call for no
-                                ; pixel. UNLESS THE CAPTION IS WIDER THAN THE
-                                ; BAR: a gap left of W_X+1 reaches the frame
-                                ; (and, by the centring's symmetry, so does
-                                ; its right end), and there the fill is what
-                                ; the glass has always shown
     call wm_tpen_bg          
     call gfx_fill               ; white gap (covers the stripe rows)
-.nogap:
+    call wm_tpen_ink          
     pop cx
     lea dx, [bx+3]              ; = W_Y + 5: 8px glyphs centered in the
                                 ; 16-row bar (the pens and the fill preserve BX)
-    call wm_tpen_ink          
     call font_str_x
     pop es
 .sep:
@@ -7800,9 +7788,6 @@ wm_draw_title:                  ; Windows, and this body otherwise
 %else
     ret
 %endif
-    db 90h                      ; PARITY PAD, never executed: SPEC.md 11.92.1's
-                                ; gap test is 9 bytes, and ui_task (pinned by
-                                ; tests/unit/t_hotpar.py) sits after this file
 
 %ifdef KERN_BIG
 section .cold                   ; the two chrome-box helpers are COLD (SPEC.md
