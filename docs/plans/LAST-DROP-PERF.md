@@ -558,17 +558,21 @@ else is **here**: correct, measured, and not on kern_big or kern_small,
 because its bytes did not clear the bar the owner set for this round (about a
 hundred). kern_mega carries most of it (section 7.3).
 
-**Turning one on is a `%define`.** Eleven groups are `KHP_*` knobs in
-`kernel/kernel.asm`'s KHP block: each is an `%ifdef` arm around the rewritten
-body, with the body it replaced in the `%else`, so with the knob undefined the
-source assembles to exactly what ships today (proved byte for byte at the
-commit that added them), and each knob assembles alone on kern_big. To take
+**Turning one on is a `%define`.** Seventeen groups are `KHP_*` knobs in
+`kernel/kernel.asm`'s KHP block - eleven defined for kern_mega, six defined by
+no kernel at all, kept as knobs so they outlive the branch they were measured
+on. Each is an `%ifdef` arm around the rewritten body, with the body it
+replaced in the `%else`, so with the knob undefined the source assembles to
+exactly what ships today (proved byte for byte at the commits that added
+them), and `tests/unit/t_khpknobs.py` (full tier) assembles kern_big and
+kern_small with every knob on, so no arm rots unseen. To take
 one for kern_big: add its `%define` under `%ifdef KERN_BIG` in that block,
 re-measure with `tools/os88hot.py ab`, run its rows (the LOG's section 0 and
 the agent's note name them), and re-check `hotpar` (a knob moves the code
 after it, so a parity pad may be needed - the knob's own commit on
-`kernel-hotpaths` shows where the agent put one). The rest are commits on the
-`kernel-hotpaths` branch, to re-apply with `git cherry-pick` the same way.
+`kernel-hotpaths` shows where the agent put one). The one item that is not a
+knob, disk-4, is kept as patches in `docs/plans/khp1/patches/` (it collides
+with the shipped disk-5 and is meant to be re-done, row 13).
 
 ### 7.1 Ranked: what to turn on first for kern_big
 
@@ -589,13 +593,13 @@ the agent that built each one unless marked P. "Hot" is the LOG's grade.
 | 9 | `KHP_VGABLITP` (vga-5 `da0b1070`) | +32 (`.vga`) | `gfx_blitp` wide rows by words: Paint's canvas ~-53 ms (P), games' bands | H1 | the operation figure is PREDICTED |
 | 10 | `KHP_FPG` (gfxcall-4 `2f15d7df`) | +18 | an unarmed progress widget answers before the frame: -64 us every drawing burst (~-2 ms over 31 keys) | H2 | small |
 | 11 | `KHP_FRAME` (gfxcall-3 `4ea77a8b`) | +26 | `gfx_frame`'s entry questions once a frame: ~-0.27 ms a raise | H2 | small for its bytes |
-| 12 | mono-1 `13aeb31a` (+ mono-5 `bab1b495`) | +344 (+16) | the 1bpp rect walked a bank at a time: `GFX_FILL 64x64` -51%, CGA raise -9 ms, menu open -5 ms; small fills +2%. mono-5: a drag's XOR kernel 49 -> 40 ms | H1 | **the largest item of the pass**, and its value is in the big fills packages draw (Paint, games, dialogs) more than the desktop's. Not a knob: cherry-pick. kern_big only |
-| 13 | disk-4 `1217b318` | +208 | the loader's header peek fills to the CYLINDER's end: one `int 13h` (~0.4 s P) off every multi-track launch on 360KB and 1.44MB | H4 | narrow (only the loader arms it), and better re-done as an explicit prefetch call than an armed byte (LOG section L.1, and the owner's review). Not a knob, and not on kern_mega (its store's nine-sector bounce) |
-| 14 | mono-3 `1eabf883` | +56 | the 1bpp `gfx_scroll` by bank: `GFX_SCROLL 256x128` -26% | H1 | most of its PgDn gain overlaps files-2/3 on a merged tree (~-4 ms left) |
-| 15 | files-3 `f183b808` | +80 | 1bpp icons a word at a time: with files-2 (on), CGA PgDn -25%, Hercules -11% | H1 | **turns `glyphcost` red** (LOG O5): it speeds up the retired bitmap glyph's reference more than the shipped fills. Decide O5 first |
-| 16 | mono-4 `87574fa3` | +22 | the 1bpp pattern fill's rows inline: `GFX_FILL_PAT 64x64` -28% | H1 | small |
-| 17 | text-6 `c01cde29` | +362 (+346 kern_small) | `font_str_run`: a transparent string in one pass, 2.4x on a 17-cell caption | H2 | after wm-3 it mostly helps clipped captions and packages' transparent text: the desktop scenarios moved ~1-3%; VGA +0.3% |
-| 18 | pointer-6 `8924a280` | +8 | `cur_lazyend`'s early answer, 477 -> 224 cycles | H2 | pays only if LOG O4 (the arrow lit while drawing) is taken |
+| 12 | **`KHP_MONORECT`** (mono-1 + mono-5) | +344 (+16) | the 1bpp rect walked a bank at a time: `GFX_FILL 64x64` -51%, CGA raise -9 ms, menu open -5 ms; small fills +2%. mono-5: a drag's XOR kernel 49 -> 40 ms | H1 | **the largest item of the pass**, and its value is in the big fills packages draw (Paint, games, dialogs) more than the desktop's. kern_big only |
+| 13 | disk-4 (`docs/plans/khp1/patches/disk4-loader-cylinder-fill.patch`, with `disk4-size17-multi-stamp.patch`) | +208 | the loader's header peek fills to the CYLINDER's end: one `int 13h` (~0.4 s P) off every multi-track launch on 360KB and 1.44MB | H4 | narrow (only the loader arms it), and better re-done as an explicit prefetch call than as an armed byte (LOG section L.1, and the owner's review). **Not a knob**: it rewrites the same `dsk_rah_fill` and `disk_mount_x` code the shipped standalone disk-5 does, so it cannot sit beside it as an arm. The patches are `kernel-hotpaths`' `1217b318` and `6538be65`, against that tree: a reference for the rewrite, not a drop-in. Not on kern_mega (its store's nine-sector bounce) |
+| 14 | `KHP_MONOSCROLL` (mono-3) | +56 | the 1bpp `gfx_scroll` by bank: `GFX_SCROLL 256x128` -26% | H1 | most of its PgDn gain overlaps files-2/3 on a merged tree (~-4 ms left) |
+| 15 | `KHP_ICONWORD` (files-3) | +80 | 1bpp icons a word at a time: with files-2 (on), CGA PgDn -25%, Hercules -11% | H1 | **turns `glyphcost` red** (LOG O5): it speeds up the retired bitmap glyph's reference more than the shipped fills. Decide O5 first |
+| 16 | `KHP_MONOPAT` (mono-4) | +22 | the 1bpp pattern fill's rows inline: `GFX_FILL_PAT 64x64` -28% | H1 | small |
+| 17 | `KHP_STRRUN` (text-6) | +362 (+346 kern_small) | `font_str_run`: a transparent string in one pass, 2.4x on a 17-cell caption | H2 | after wm-3 it mostly helps clipped captions and packages' transparent text: the desktop scenarios moved ~1-3%; VGA +0.3% |
+| 18 | `KHP_LAZYEND` (pointer-6) | +8 | `cur_lazyend`'s early answer, 477 -> 224 cycles | H2 | pays only if LOG O4 (the arrow lit while drawing) is taken |
 
 ### 7.2 What turning several on costs together
 

@@ -2424,6 +2424,17 @@ FULL = [
         "and not fast because the owner asked for it there; host-side, "
         "0.03s measured",
         needs=()),
+    Row("khpknobs", "full", py("tests/unit/t_khpknobs.py"), 4.0,
+        "every KHP_* knob in the kernel sources (kernel/kernel.asm's KHP "
+        "block: kernel hot-paths pass 1's rewrites of hot paths, eleven on "
+        "kern_mega and seven on NO kernel) assembles on kern_big and "
+        "kern_small with ALL of them on, so an arm no shipped build "
+        "assembles cannot rot unseen. Red, tried: one call in KHP_STRRUN's "
+        "arm aimed at a label that does not exist fails here while the "
+        "shipped kern_big still assembles. FULL and not fast: two kernel "
+        "assemblies, ~3.7s measured, and stkbalance's knobs-on walk already "
+        "reads these arms on every make",
+        needs=("nasm",)),
     Row("noovl", "full", py("tests/unit/t_noovl.py"), 0.1,
         "at the owner's word (SPEC.md 19.11): no shipped disk carries an "
         ".OVL beside a package - a program is one file, and anything it "

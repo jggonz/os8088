@@ -842,7 +842,7 @@ def main():
     global KHP_ON
     rc = 0
     for KHP_ON in (False, True):
-        print("stkbalance: KHP_* knobs %s" % ("ON (kern_mega)" if KHP_ON
+        print("stkbalance: KHP_* knobs %s" % ("ON (every knob: kern_mega's and the ones no kernel defines)" if KHP_ON
                                               else "OFF (kern_big, kern_small)"))
         rc |= main1()
     return rc

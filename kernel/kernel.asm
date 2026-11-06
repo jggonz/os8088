@@ -262,6 +262,21 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 ;   KHP_DMGSTALE  a vacated strip under another window draws nothing (wm-6)
 ;   KHP_RAISEOL   a partial raise's outline only where covered (wm-7)
 ;   KHP_LZ        the lz4 and LZB decoders' inline paths (disk-1, disk-2)
+;
+; ...and seven BUILT AND OFF ON EVERY KERNEL, kept as knobs so they outlive
+; the branch they were measured on (kernel-hotpaths). Their gains are the
+; 1bpp adapters' (CGA, Hercules), which kern_mega's machines rarely have, or
+; they wait on a decision (LOG O4, O5). tests/unit/t_khpknobs.py assembles
+; kern_big and kern_small with every knob on, so they cannot rot unseen.
+;
+;   KHP_MONORECT   the 1bpp rect walked a bank at a time, and its XOR column
+;                  kernel two rows a loop (mono-1, mono-5; kern_big only)
+;   KHP_MONOSCROLL the 1bpp gfx_scroll walked a bank at a time (mono-3)
+;   KHP_MONOPAT    the 1bpp pattern fill's rows inline (mono-4)
+;   KHP_ICONWORD   the 1bpp icon pass a word at a time (files-3; turns the
+;                  glyphcost row red, LOG O5)
+;   KHP_STRRUN     font_str_run, a transparent string in one pass (text-6)
+;   KHP_LAZYEND    cur_lazyend's early "not moved" (pointer-6; pays with O4)
 %ifdef KERN_MEGA
  %define KHP_VGASAVE
  %define KHP_VGAFILL
@@ -1298,10 +1313,26 @@ DRV_HMA_SEG equ 0xF000
 ; takes it out of kern_big too - that is the A/B, and it is the only thing that
 ; exercises the general body on an ordinary build, because a chrome fill is
 ; byte-aligned (11.94) and never reaches it.
+%ifdef KHP_MONORECT
 %ifdef KERN_BIG
   %ifndef NOCOLFAST
     %define GFX_COLFAST 1
   %endif
+%endif
+
+; SPEC.md 39.31's bank walk replaces sw_plane_op/sw_col on kern_big. It rides
+; the same knob: NOCOLFAST=1 builds the old column-major body (with no
+; whole-column store), which is what keeps tests/swcolsame.py an A/B of two
+; different bodies drawing the same pixels.
+%ifdef GFX_COLFAST
+  %define SW_BANKWALK 1
+%endif
+%else
+%ifdef KERN_BIG
+  %ifndef NOCOLFAST
+    %define GFX_COLFAST 1
+  %endif
+%endif
 %endif
 
 ; ...AND THE DECODER IS A VGA THING, so it may not outlive the card. Its three

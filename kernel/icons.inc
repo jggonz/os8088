@@ -694,6 +694,58 @@ ico_pass_bb:
                                 ; high byte is zero on all of them and no %if
                                 ; can check a runtime value. A stride over 255
                                 ; needs this pair widened, not just this read.
+%ifdef KHP_ICONWORD
+    ; --- THE ALIGNED FAST PATH (kernel hot-paths pass 1) ---------------------
+    ; At shift 0 a row word IS its two framebuffer bytes and the third is
+    ; always zero, so when every byte of every row is inside the stride
+    ; (col0 + 2*ww <= stride) there is nothing to test per byte: one word
+    ; or / and-not a word, the op chosen once a pass. Measured on MartyPC's
+    ; 5150/CGA, 33 of a session's 34 icon draws are at shift 0 (the Disk
+    ; window's rows and grid, the dock); the walk below stays for the rest
+    ; and for an icon touching the right edge. The result is the same bytes
+    ; - the walk skips a zero byte, and or-ing or and-not-ing zero writes
+    ; back what was there
+    or cl, cl
+    jnz .row                    ; shifted: the byte walk
+    mov al, [ico_col0]          ; col0 < stride <= 90 and 2*ww is small, so
+    add al, [ico_rb]            ; the byte sum cannot carry
+    cmp al, dh
+    ja .row                     ; the last byte would be past the edge
+    cmp byte [ico_bbop], 0
+    jne .fand
+.for:
+    mov dx, [ico_ww]            ; words in this row (DH is not needed here)
+.forw:
+    lodsw                       ; AX = row word, MSB = leftmost pixel...
+    xchg al, ah                 ; ...in framebuffer byte order
+    or [es:di], ax
+    inc di
+    inc di
+    dec dx
+    jnz .forw
+    call .fnext
+    jnz .for
+    jmp short .done
+.fand:
+    mov dx, [ico_ww]
+.fandw:
+    lodsw
+    xchg al, ah
+    not ax
+    and [es:di], ax
+    inc di
+    inc di
+    dec dx
+    jnz .fandw
+    call .fnext
+    jnz .fand
+    jmp short .done
+.fnext:                         ; back to the row's first byte, down one scan
+    sub di, [ico_rb]            ; line the adapter's way, and ZF = the rows
+    call gfx_nextrow            ; are done (`ret` keeps it)
+    dec bp
+    ret
+%endif
 .row:
     mov dl, [ico_col0]          ; DL = running byte column, INCREMENTED past
                                 ; each byte instead of three limits being

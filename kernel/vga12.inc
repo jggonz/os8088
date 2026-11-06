@@ -5486,14 +5486,62 @@ vgas_bankcopy:                  ; (no DS bank, for the linear copy's reason)
     mov ax, [vgas_sdy]
     and ax, [vid_bmask]         ; a negative dy is fine: two's complement keeps
     jnz .gen                    ; the low bits' residue
+%ifdef KHP_MONOSCROLL
+    ; --- ...AND THEN THE COPY IS WALKED A BANK AT A TIME (SPEC.md 39.33) -----
+    ; With dy a whole number of banks, a destination row and its source are
+    ; in the SAME bank, so every row of bank phase j - destination rows
+    ; ydst + j*step, + B*step, ... - is [vid_stride] from the last: the row
+    ; step is one register add with no wrap test, and the bytes go a WORD at a
+    ; time. Each phase is its own direction-safe walk (up copies top-down
+    ; from below, down bottom-up from above), and two phases touch different
+    ; banks, so the order between them cannot matter.
+%else
     mov ax, bx
     call gfx_rowbase            ; the destination base, ONCE
     add ax, [vgas_col]
     mov di, ax
+%endif
     mov ax, [vgas_sdy]          ; delta = (dy >> bshift) * stride, signed - SAR
     mov cl, [vid_bshift]        ; because dy may be negative and the shift has
     sar ax, cl                  ; to floor; exact, because dy is a multiple of
     mul word [vid_stride]       ; the bank count (mul's low word again)
+%ifdef KHP_MONOSCROLL
+    mov dx, ax                  ; DX = source - destination, the whole copy
+    mov ax, [vid_stride]
+    cmp word [vgas_step], 0
+    jge .dpos
+    neg ax                      ; down walks each bank bottom-up
+.dpos:
+    sub ax, [vgas_nb]
+    mov [vgas_rstep], ax        ; one row along the bank, less the copy's own
+    xor ax, ax                  ; advance (SPEC.md 5.7.1)
+    mov [vgas_ph], ax
+    push bp
+.ph:
+    mov ax, [vgas_ph]
+    cmp ax, [vid_bmask]
+    ja .wend                    ; B phases at most...
+    mov bp, [vgas_rows]
+    sub bp, ax
+    jle .wend                   ; ...and fewer when the copy has fewer rows
+    dec bp
+    shr bp, cl                  ; BP = ((rows - 1 - j) >> bshift) + 1 (CL is
+    inc bp                      ; still [vid_bshift]: nothing below writes it)
+    push dx
+    push cx
+    imul word [vgas_step]       ; j * step, +-j: once a phase (DX is banked)
+    add ax, [vgas_ydst]         ; AX = this phase's first destination row
+    call gfx_rowbase            ; (AX, CX and DX are its)
+    pop cx
+    pop dx
+    add ax, [vgas_col]
+    mov di, ax
+    mov ax, [vgas_nb]
+    mov bx, [vgas_rstep]
+    push es
+    pop ds
+.wrow:
+%else
     mov dx, ax                  ; (no `cld` here or in .gen's row loop: DF = 0
     push bp                     ; is SPEC.md 1's on entry - kernel size pass 17)                     ; ONE loop for both directions: the row step is
     mov bp, gfx_nextrow         ; a routine in BP, `call bp` being two bytes
@@ -5502,13 +5550,32 @@ vgas_bankcopy:                  ; (no DS bank, for the linear copy's reason)
     mov bp, gfx_prevrow         ; screen, down walks it bottom-up
 .rstep:
 .rup:
+%endif
     mov si, di
     add si, dx
+%ifdef KHP_MONOSCROLL
+    mov cx, ax                  ; `rep movsw` is 12.5 clocks a byte on an
+    shr cx, 1                   ; 8088 where `rep movsb` is 17, and the odd
+    rep movsw                   ; byte is CX = CF and one more rep, with no
+    adc cx, cx                  ; branch (string ops leave the shr's CF alone)
+%else
     mov cx, [vgas_nb]
     push es
     pop ds
+%endif
     rep movsb
+%ifdef KHP_MONOSCROLL
+    add di, bx
+    dec bp
+    jnz .wrow
+%endif
     KDS
+%ifdef KHP_MONOSCROLL
+    mov cl, [vid_bshift]
+    inc word [vgas_ph]
+    jmp short .ph
+.wend:
+%else
     sub di, [vgas_nb]           ; back to the row's own byte: rep movsb left DI
                                 ; nb past it, and the advance below is
                                 ; column-preserving, so it has to start from
@@ -5516,8 +5583,13 @@ vgas_bankcopy:                  ; (no DS bank, for the linear copy's reason)
     call bp                     ; gfx_nextrow/gfx_prevrow: DI and flags only,
     dec word [vgas_rows]        ; and CS-relative reads, so it is safe
     jnz .rup                    ; whatever DS was left at
+%endif
     pop bp
+%ifdef KHP_MONOSCROLL
+    ret
+%else
     ret                         ; (.out is a bare `ret` since size pass 9)
+%endif
 %endif
 .gen:                           ; the general form: one rowbase per END per row
 .r:
@@ -5654,6 +5726,11 @@ vgas_rows        resw 1          ;   rows to copy = height - |dy|, and the
                                  ;   copy's own countdown (one pass, so the
                                  ;   copy it used to be counted down in, a
                                  ;   vgas_left, had no reader - size pass 10)
+%ifdef KHP_MONOSCROLL
+vgas_rstep       resw 1          ; SPEC.md 39.33's walk: the in-bank row step
+vgas_ph          resw 1          ;   ...and the bank phase it is on (after the
+                                 ;   six words VXB_SCROLL reads in order)
+%endif
 gfx_u_scr:
 %if gfx_u_scr - gfx_u > gfx_u_end - gfx_u
   %error "gfx_scroll's working set no longer fits the primitive union"

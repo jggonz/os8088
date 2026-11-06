@@ -223,6 +223,51 @@ and are not diagnosed here. `make test-full` and the fast tier pass.
 LAST-DROP-PERF.md section 7 is the ranked list of what kern_big could still
 turn on.
 
+### L.3 The 1bpp items and the rest: knobs that no kernel turns on
+
+The owner's words: *"Do we have the info we need to remake the CGA/herc only
+changes? The temporary branch will not live long enough to cherry pick off
+of when we get back to this. We could put them into a file alongside the
+perf doc, or we could make them a knob for them, with them off for now."*
+
+They are knobs, defined by **no** kernel, so they outlive `kernel-hotpaths`:
+
+| knob | picks (commit on `kernel-hotpaths`) | bytes on kern_big if on |
+|---|---|---:|
+| `KHP_MONORECT` | mono-1 (`13aeb31a`) + mono-5 (`bab1b495`), kern_big only | +360 |
+| `KHP_MONOSCROLL` | mono-3 (`1eabf883`) | +56 |
+| `KHP_MONOPAT` | mono-4 (`87574fa3`) | +22 |
+| `KHP_ICONWORD` | files-3 (`f183b808`); turns `glyphcost` red (O5) | +80 |
+| `KHP_STRRUN` | text-6 (`c01cde29`) | +362 |
+| `KHP_LAZYEND` | pointer-6 (`8924a280`); pays with O4 | +8 |
+
+Made from lean's own revert commits, applied in reverse (so each change is
+in exactly lean's context). `softgfx.inc` carries two of them, and the merge
+for it is built from two independent variants of the plain file and refuses
+if their regions touch: patching a file that already held one knob's arms put
+the second knob's change into the wrong copy of a near-identical body, which
+the proof caught. Proved at one commit: with these six off, kern_big,
+kern_small and kern_mega assemble **byte-identical** to lean; with them on,
+kern_big and kern_small assemble byte-identical to lean with the seven
+commits re-applied as plain code; `KHP_MONOPAT` and `KHP_MONORECT` each match
+their own single variant alone.
+
+**`tests/unit/t_khpknobs.py`** (row `khpknobs`, full tier, ~3.7 s) assembles
+kern_big and kern_small with every `KHP_*` knob the sources test turned on, so
+an arm no shipped build assembles cannot rot unseen. Broken on purpose (one
+call in `KHP_STRRUN`'s arm aimed at a label that does not exist) it fails,
+while the shipped kern_big still assembles. `tools/stkbalance.py`'s knobs-on
+walk reads these arms too, on every `make`.
+
+**disk-4 is not a knob**: it rewrites the same `dsk_rah_fill` and
+`disk_mount_x` code the shipped standalone disk-5 does, so it cannot sit
+beside it. Its commit and its size trim are kept as
+`docs/plans/khp1/patches/disk4-loader-cylinder-fill.patch` and
+`disk4-size17-multi-stamp.patch`, against `kernel-hotpaths`: a reference for
+re-doing it as an explicit prefetch call, not a drop-in. With
+`growbox-blit1.patch` (O10) that is every byte-costing item of the pass, in
+the tree.
+
 ## 0. The owner's picks at a glance, ranked
 
 Every byte-costing item, in one place, ranked by user-visible time per
