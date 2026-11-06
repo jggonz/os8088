@@ -1319,17 +1319,22 @@ sw_xfer:
     jne .rst
     push si                     ; save: plane -> buffer; caller SI untouched
     mov si, ax
-    mov ds, bx                  ; movsb source = this plane
+    mov ax, [vid_wrapbit]       ; SPEC.md 39.32: the row step lives in BX and
+    mov ds, bx                  ; AX (the plane segment and the walking
+    mov bx, [cs:vid_rowadd]     ; offset are spent once DS and SI hold them),
+    sub bx, bp                  ; less the bytes the copy advanced the row by
 .srow:
-    mov cx, bp
-    rep movsb                   ; buffer DI advances contiguously
-    sub si, bp
-    add si, [cs:vid_rowadd]     ; gfx_nextrow INLINED, on SI: the framebuffer
-    test si, [cs:vid_wrapbit]   ; pointer is SI here, so through the call it
-    jz .snw                     ; cost two xchg's as well as the call and the
-    add si, [cs:vid_wrapfix]    ; ret - on a loop whose body is a rep movsb of
-.snw:                           ; two or three bytes (PERFORMANCE.md Part 9
-    dec dx                      ; Set 3: inline it in every row loop)
+    mov cx, bp                  ; A WORD AT A TIME: `rep movsw` is 12.5 clocks
+    shr cx, 1                   ; a byte on an 8088 where `rep movsb` is 17,
+    rep movsw                   ; and the odd byte is CX = CF and one more rep
+    adc cx, cx                  ; (string ops leave the shr's CF alone), with
+    rep movsb                   ; no branch. Buffer DI advances contiguously
+    add si, bx                  ; gfx_nextrow INLINED, on SI, its step and wrap
+    test si, ax                 ; bit in registers (PERFORMANCE.md Part 9 Set
+    jz .snw                     ; 3: inline it in every row loop)
+    add si, [cs:vid_wrapfix]
+.snw:
+    dec dx
     jnz .srow
     pop si
     jmp .pnext
@@ -1340,19 +1345,22 @@ sw_xfer:
                                 ; caller's buffer
     push di                     ; restore: buffer -> plane; caller DI untouched
     mov di, ax
+    mov ax, [vid_wrapbit]       ; ...and the same two registers for DI's step
     push es
     pop ds                      ; movsb source = caller's buffer
     mov es, bx                  ; movsb dest = this plane
+    mov bx, [cs:vid_rowadd]
+    sub bx, bp
 .rrow:
     mov cx, bp
+    shr cx, 1
+    rep movsw
+    adc cx, cx
     rep movsb
-    add si, [cs:gfx_sub_rs]     ; CS: IS MANDATORY - DS is the BUFFER in here,
-                                ; which is why the row walk below reads
-                                ; [cs:vid_rowadd] too
-    sub di, bp
-    add di, [cs:vid_rowadd]     ; ...and here on DI, which is what gfx_nextrow
-    test di, [cs:vid_wrapbit]   ; takes, so this one saves only the call and
-    jz .rnw                     ; the ret
+    add si, [cs:gfx_sub_rs]     ; CS: IS MANDATORY - DS is the BUFFER in here
+    add di, bx
+    test di, ax
+    jz .rnw
     add di, [cs:vid_wrapfix]
 .rnw:
     dec dx

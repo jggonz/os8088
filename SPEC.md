@@ -80794,6 +80794,22 @@ are `sw_k_col`, `sw_k_colf`, `sw_k_xcol`, `sw_k_i`, `sw_k_lir` and
 body alone (§39.27.4's cut). It costs `kern_big` 338 bytes of `.text` and 6
 of `.bss`; docs/plans/khp1/mono.md has the operations.
 
+### 39.32 The 1bpp save and restore move words
+
+**`sw_xfer` is `gfx_save` and `gfx_restore` on a 1bpp adapter** — every
+raise cache, every menu save-under — and it was 35% of a CGA window raise's
+busy time (docs/reports/HOTPATH-BASE-2026-11-06.md). Each row was `rep movsb`
+plus `gfx_nextrow` inlined through three CS-overridden memory reads.
+
+Now each row is `rep movsw` for the pairs and the odd byte as `adc cx, cx`
+/ `rep movsb` — `CX = CF`, the `shr`'s carry surviving the string op, with no
+branch — because an 8088 moves a byte for 12.5 clocks that way against
+`rep movsb`'s 17. The row step less the copy's advance lives in BX and the
+wrap bit in AX (both spent once DS or ES and SI or DI hold what they
+carried), so the step is `add`/`test`/`jz` on registers. Buffer layout,
+sub-rect restore (§5.8), the registers each entry advances and the pixels
+are all unchanged. Both kernels, +16 bytes of `.text` each.
+
 ### 39.27 `kern_small` does not drive a VGA
 
 **A 128KB machine has no business with a VGA card in it, so `kern_small` does
