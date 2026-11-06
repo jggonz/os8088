@@ -29,6 +29,7 @@ char    *pdu_pkgname(void);
 unsigned pdu_read_at_seg(const char *name, unsigned seg, unsigned cap,
                          unsigned off_lo, unsigned off_hi);
 unsigned pdu_muldiv(unsigned a, unsigned b, unsigned c);
+int      pdu_clk(unsigned *w);
 void     pdu_sbar(int *blk);
 void     pdu_sbmove(int *blk, int oldpos);
 int      pdu_sbhit(int *blk, int x, int y);

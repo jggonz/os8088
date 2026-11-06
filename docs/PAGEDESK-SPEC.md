@@ -1312,10 +1312,9 @@ SKIPs until `pdeng.c` is on the branch; verify-wrt ran it green against
    MartyPC row must time a save of a sample with a note on a 360 KB disk.
 6. **Page operations, Extract, graph copy** (13.7, 13.8; refused today), and
    xref-stream sources (PDENG's `PDE_XREFSTM`).
-7. **The shell's half**: `struct pdw_newpage` (10 bytes, PDV_WRT_NEWDOC's page
-   list) lives in the private `pdw.h` and belongs in `pdabi.h`; PDENG answers
-   `PDE_BUSY` with `CF` = 1 and PDWRT with `CF` = 0, so the primary must test
-   `AX` = `PDE_BUSY` first, whatever CF says; after a Save As over the source's
+7. **The shell's half**: `struct pd_newpage` (10 bytes, PDV_WRT_NEWDOC's page
+   list) is in `pdabi.h` now, and every module answers `PDE_BUSY` with `CF` = 0
+   (3.1, DECISIONS D11); after a Save As over the source's
    own name (REPLACE) PDENG's open file is gone and the document must be
    re-opened; the edit store must not change between a job's slices.
 8. **Fidelity**: a replaced annotation keeps `/NM /T /Popup /CreationDate`

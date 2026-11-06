@@ -157,6 +157,30 @@ _pdu_read_at_seg:
     ret
 
 ; -----------------------------------------------------------------------------
+; int pdu_clk(unsigned *w) - OSAPI_CLK_GET (SPEC.md 37) into a STATIC
+; four-word array: w[0] year, w[1] month<<8 | day, w[2] hour<<8 | minute,
+; w[3] second. Answers 1 when a hardware RTC was found, 0 when the clock is
+; the PIT's since boot and may never have been set - a save's /CreationDate
+; is then left empty (pdxb_save.date "", PAGEDESK-SPEC 20.6) rather than
+; stamped 1980.
+; -----------------------------------------------------------------------------
+_pdu_clk:
+    push bp
+    mov bp, sp
+    push si
+    call OSAPI_CLK_GET
+    mov si, [bp+4]
+    mov [si], cx
+    mov [si+2], dx
+    mov [si+4], bx
+    mov [si+6], ah
+    mov byte [si+7], 0
+    and ax, 1
+    pop si
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
 ; unsigned pdu_muldiv(unsigned a, unsigned b, unsigned c) - a * b / c with a
 ; 32-bit intermediate, unsigned; 0xFFFF when the quotient does not fit and 0
 ; for c = 0. Layout arithmetic only (thumbnail cells, scroll-bar ratios) -
