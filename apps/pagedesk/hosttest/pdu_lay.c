@@ -100,8 +100,9 @@ struct disp { const char *name; int sw, sh, cw, ch, kind; };
 int main(void)
 {
     /* content = the screen's width by its height less 64 (menu bar,
-     * title, dock): MEASURED on QEMU for CGA (640x136) and Hercules 348
-     * (720x284) with Help > Document info, the others by that rule */
+     * title, dock): MEASURED on QEMU for VGA (640x416), CGA (640x136) and
+     * Hercules 348 (720x284) with Help > Document info, EGA and Hercules
+     * 350 by that rule */
     static const struct disp D[] = {
         { "VGA 640x480",      640, 480, 640, 416, PDU_L_FULL },
         { "EGA 640x350",      640, 350, 640, 286, PDU_L_FULL },

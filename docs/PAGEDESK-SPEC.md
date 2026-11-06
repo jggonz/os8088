@@ -1117,11 +1117,12 @@ outcome free the buffers, unbind and `os88_part_drop` the module.
 and the XB and unbind every vector.
 
 Measured on QEMU (640 KB, kern_big, stub modules, the real `PDRES`), free heap
-with a document open, from Help > Document info: **446 KB on VGA, 451 KB on CGA,
-450 KB on Hercules** (the band is 5 KiB at 4bpp and 2 KiB at 1bpp). On the
+with a document open, from Help > Document info: **446-447 KB on VGA, 451 KB on
+CGA, 450 KB on Hercules** (the band is 5 KiB at 4bpp and 2 KiB at 1bpp). On the
 stub-`PDRES` build the figure read the same after open, close, reopen, a Save
-As, quit and relaunch (458, 458, 459 KB): no claim is leaked on any of those
-paths.
+As, quit and relaunch (458, 458, 459 KB), and on the final build a close
+through the close box (`os88_onclose`) and relaunch read 447 KB both times: no
+claim is leaked on any of those paths.
 
 #### 20.6.3 The job scheduler (15.1-15.3)
 
@@ -1172,7 +1173,7 @@ to match.
 
 | display | content box | layout | canvas | panels | source |
 |---|---|---|---|---|---|
-| VGA 640x480 | 640x416 | FULL | 328x372 | Pages + Notes | the rule; looked at on QEMU |
+| VGA 640x480 | 640x416 | FULL | 328x372 | Pages + Notes | MEASURED (QEMU, Document info) |
 | EGA 640x350 | 640x286 | FULL | 328x242 | Pages + Notes | the rule; host test |
 | Hercules 720x348 | 720x284 | FULL | 408x240 | Pages + Notes | MEASURED (QEMU `VIDEO=herc`, Document info) |
 | Hercules 720x350 | 720x286 | FULL | 408x242 | Pages + Notes | the rule; host test |
