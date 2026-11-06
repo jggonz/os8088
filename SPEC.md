@@ -10818,20 +10818,7 @@ against a 20 ms frame, so ~6.5% of every frame, on every mouse packet.
   a pointer at the API jump table.
 - **VGA keeps erase-then-draw.** Its save is four planes through Read Map
   Select and cannot take a background from a buffer. Its draw is one store
-  now (§7.1), which was the larger of the two windows there. **The save and
-  the restore are the cell's own walks** (`cur_saveu`/`cur_restoreu`, kernel
-  hot-paths pass 1), not `vga_save_vram`/`vga_restore_vram`: the cell is
-  already clipped by `cur_geom`, so `gfx_rect_setup`, the `rep movsb` row
-  loop and the one-plane and sub-rect arms were pure overhead. `cur_vspan`
-  derives the byte span exactly as `gfx_rect_setup` did (one byte when the
-  cell is byte-aligned, two otherwise unless the right edge took the second)
-  and the buffer keeps that routine's plane-major layout, so the glass is
-  identical - proved under unicorn with a four-plane model against the
-  previous kernel's bytes, 1,500 cells over 640x480 and 640x350, every shape.
-  MartyPC's XT VGA: `cur_move` **21,450 -> 15,100 cycles** a packet, the ISR's
-  share of a sweep 21.5% -> 16.4%. An armed sub-rect restore (§5.8) is now
-  never consumed by the pointer, which the shared routine's `gfx_sub_off`
-  used to do.
+  now (§7.1), which was the larger of the two windows there.
 
 Verified the only way a save-under can be: a dense walk of 37 moves — column
 deltas 0, ±1, ±2 and larger, every shift phase, plus the right and bottom
