@@ -102,8 +102,11 @@ gfx_rect_setup:
     jl .y2ok
     mov dx, [vid_chm1]
 .y2ok:
-    cmp dx, bx
-    jl .empty
+    sub dx, bx                  ; DX = rows - 1, and THE EMPTY TEST WITH IT: a
+    jl .empty                   ; `sub` sets exactly the flags the `cmp dx, bx`
+                                ; that stood here did, so `jl` reads the same
+                                ; answer and the count is already made
+                                ; (kernel hot-paths pass 1, gfxcall-1)
     or ax, ax                   ; x1 < 0 -> 0
     jns .x1ok
     xor ax, ax
@@ -114,42 +117,60 @@ gfx_rect_setup:
 .x2ok:
     cmp cx, ax
     jl .empty
-    mov [gfx_ry1], bx            ; y1 is banked, so BX is the free register the
-    sub dx, bx                  ; mask lookups below index through - which is
-    inc dx                      ; what retires the two variable shifts and the
-    mov [gfx_rrows], dx          ; three push/pops the old sequence needed
+    inc dx                      ; nothing is stored until the rect is known to
+    mov [gfx_rrows], dx         ; be non-empty, as before
+    mov [gfx_ry1], bx
+    push bx                     ; ...and y1 kept for the row base below: a
+                                ; push and a pop are 2 bytes where reloading
+                                ; [gfx_ry1] is 4, and faster than either a
+                                ; reload or a call
     mov bx, ax                  ; left mask = FF >> (x1 & 7)
-    and bx, 7                   ; (BH = 0 falls out of the AND)
-    mov dl, [bx + gfx_lmtab]
-    mov [gfx_lmsk], dl
-    mov bx, cx                  ; right mask = FF << (7 - (x2 & 7))
-    and bx, 7
-    mov dl, [bx + gfx_rmtab]
-    mov [gfx_rmsk], dl
-    mov dx, cx                  ; DX = x2; [gfx_rrows] already banked it
+    and bx, 7                   ; (BH = 0 falls out of the AND, and stays 0
+    mov dl, [bx + gfx_lmtab]    ; for the right mask's index below)
+    mov bl, cl                  ; right mask = FF << (7 - (x2 & 7))
+    and bl, 7
+    mov dh, [bx + gfx_rmtab]
+    mov [gfx_rmsk], dh          ; BOTH MASKS ARE HELD IN DL/DH, so a one-byte
+                                ; rect combines them in a register: it was a
+                                ; reload of [gfx_rmsk] and an `and` into memory,
+                                ; ~60 clocks on every vline, pixel and narrow
+                                ; fill in the machine
+    xchg ax, cx                 ; AX = x2, CX = x1 (one byte)
+    mov bx, cx                  ; BX = x1
     mov cl, 3
-    shr ax, cl                  ; ax = left byte  (x1 / 8)
-    mov bx, ax                  ; ...carried over gfx_rowbase in BX, which it
-                                ; PRESERVES on both its arms (viddet.inc), and
-                                ; which holds `x2 & 7` here - dead since the
-                                ; right-mask lookup two instructions up. It
-                                ; was a .bss word whose only two references
-                                ; were this store and the add below
-    shr dx, cl                  ; dx = right byte (x2 / 8)
-    sub dx, ax
-    mov [gfx_rspan], dx          ; span = right byte - left byte (`mov` writes
-    jnz .offs                   ; no flag: the `sub`'s ZF is the test - kernel
-                                ; size pass 17, -2)
-    mov dl, [gfx_rmsk]          ; one-byte rect: combine the masks
-    and [gfx_lmsk], dl
-.offs:
-    mov ax, [gfx_ry1]            ; this one call re-bases every rect primitive
-    call gfx_rowbase            ; in BOTH renderers - on VGA it is still just
-    add ax, bx                   ; y1 * 80 (SPEC.md 39.3) - AND CF = 0: a
-    mov [gfx_roff], ax           ; row base plus a byte column is inside one
-    ret                          ; framebuffer (under 0x9660 on every adapter
-                                 ; there is), so the ADD cannot carry and the
-                                 ; clc that followed it restated its answer
+    shr bx, cl                  ; BX = left byte  (x1 / 8)
+    shr ax, cl                  ; AX = right byte (x2 / 8)
+    sub ax, bx
+    mov [gfx_rspan], ax         ; span = right byte - left byte, AX's short
+    jnz .wide                   ; store (`mov` writes no flag: the `sub`'s ZF
+    and dl, dh                  ; is the test). One-byte rect: combine the
+.wide:                          ; masks
+    mov [gfx_lmsk], dl
+    ; --- THE ROW BASE, INLINE: gfx_rowbase's table arm, written here. It was a
+    ; `call gfx_rowbase` with y1 reloaded into AX for it, and the call, the
+    ; ret and its push/pop of BX were ~70 clocks of the fixed cost of every
+    ; rect primitive in the machine (PERFORMANCE.md Part 2). The table is
+    ; gfx_rowbase's own (SPEC.md 39.3.1) and so is the one guard: [vid_rowmax]
+    ; is 0 until vid_apply has filled it and VID_ROWTAB after, so "no table
+    ; yet" and "this row is past its end" are one compare - and a row past it
+    ; takes the arithmetic, gfx_rowbase_calc, exactly as gfx_rowbase does.
+    ; DS, not CS: this routine has always read [vid_ch] through DS, so its
+    ; callers are on KERNEL_SEG already (gfx_rowbase's CS reads are for its
+    ; OTHER callers, which are not)
+    pop ax                      ; y1 ...
+    xchg ax, bx                 ; ...into BX, and AX = the left byte
+    cmp bx, [vid_rowmax]
+    jae .calc
+    shl bx, 1
+    add ax, [ss:bx + vid_rowtab]    ; LOW_SEG, as gfx_rowbase reads it. A row
+.roff:                          ; base plus a byte column is inside one
+    mov [gfx_roff], ax          ; framebuffer (under 0x9660 on every adapter
+    ret                         ; there is), so the ADD cannot carry: CF = 0
+.calc:
+    xchg ax, bx                 ; AX = y1, BX = the left byte - which
+    call gfx_rowbase_calc       ; gfx_rowbase_calc PRESERVES (it clobbers only
+    add ax, bx                  ; CX/DX, both dead here). CF = 0 for the
+    jmp short .roff             ; same reason as the table arm
 .empty:
     stc
     ret

@@ -4003,7 +4003,7 @@ osapi_mouse_feed:
                                 ; next pass - which mou_apply below has just
                                 ; woken - and it does it in the order that
                                 ; works, powering every port back up first
-    call mou_apply
+    call mou_apply_w            ; (a driver's CL may carry a wheel)
 %ifndef NO_MOUPRIV
     mov sp, [mou_psave]         ; ...and the restore is gated with it
 %endif
@@ -4046,6 +4046,7 @@ mou_apply_abs:
                                 ; (SPEC.md 39.15.4). Preserves CX
     mov [mouse_x], ax
     mov [mouse_y], bx
+    call mou_whl_cl             ; ...and the report's wheel (mou_apply_w's)
     jmp mou_apply.tail
 %endif
 
@@ -4070,9 +4071,24 @@ mou_apply_abs:
 
 %ifdef KERN_BIG
 ; -----------------------------------------------------------------------------
+; mou_whl_cl - a REPORT's wheel: CL's top six bits, signed (SPEC.md 9.12.8),
+;              into the level below, and CL left as the two buttons
 ; mou_whl_add - AL = signed notches, added to the wheel's level (SPEC.md 10.4)
 ; ISR or cli context; out: AX spent, everything else preserved
+;
+; Only a DRIVER's report and the VMware backdoor's carry wheel bits in CL -
+; every driver built before 9.12.8 masked CL to the two buttons, so an old
+; binary reports no wheel rather than a wrong one. The serial and PS/2
+; decoders hand mou_apply two clean bits and carry their wheels themselves
+; (the fourth byte), so they enter mou_apply directly and never pay for this
+; or for its second wake (kernel hot-paths pass 1: ~240 cycles a packet; it
+; was inline in mou_apply, which every packet runs).
 ; -----------------------------------------------------------------------------
+mou_whl_cl:
+    mov al, cl
+    sar al, 1
+    sar al, 1
+    and cl, 0x03
 mou_whl_add:
     cbw
     add [mou_whl], ax
@@ -4086,6 +4102,11 @@ mou_p2wz    db 0                ; 3 when the knock put the PS/2 device in WHEEL
                                 ; HERE, among the code, for PARITY: in the PS/2
                                 ; block below cur_move it was one odd byte in
                                 ; front of sch_isr (t_hotpar)
+
+mou_apply_w:                    ; mou_apply for a report whose CL may carry a
+    push ax                     ; wheel: osapi_mouse_feed and the VMware
+    call mou_whl_cl             ; pointer's relative arm. AX is the report's dx
+    pop ax                      ; here - the decode spends it
 %endif
 
 mou_apply:
@@ -4130,14 +4151,9 @@ mou_apply:
                                 ; is not an A/B
 %endif
 
-%ifdef KERN_BIG
-    mov al, cl                  ; A DRIVER'S WHEEL rides CL's top six bits,
-    sar al, 1                   ; signed (SPEC.md 9.12.8): every driver built
-    sar al, 1                   ; before it masked CL to the two buttons, so
-    call mou_whl_add            ; an old binary reports no wheel rather than a
-    and cl, 0x03                ; wrong one - and the decoders above leave them
-%endif                          ; clear. AX is dead here (CURFIX's own note)
     mov bl, cl                  ; the buttons, in mouse_btn's own two bits
+                                ; (a report's wheel, if it has one, was taken
+                                ; at mou_apply_w)
     mov bh, [mouse_btn]
     mov [mouse_btn], bl
     xor bh, bl                  ; changed bits
@@ -4487,41 +4503,38 @@ cur_put_1:
 ; clobbers: ax, bx, cx, dx, si, di, bp, es
 ; -----------------------------------------------------------------------------
 cur_put_mono:
-    call cur_geom
+    call cur_geom               ; DI = the cell's first byte, CL = its shift
     mov ch, [cur_rows]
     or ch, ch
     jz .out                     ; wholly off the bottom: nothing to bank
     mov es, [vid_seg]
     mov si, [cur_tabp]
-    mov bp, [cur_sptr]          ; the live save buffer (SPEC.md 7.1.2)
+    mov bx, [cur_sptr]          ; the live save buffer (SPEC.md 7.1.2)
+    mov bp, [cs:vid_rowadd]     ; gfx_nextrow's step, in a register
 .row:
-    xor ax, ax                  ; the white pass's row, widened from the
-    mov ah, [si]                ; byte the table stores...
-    xor dx, dx                  ; ...and the black one's, one table along
-    mov dh, [si+CUR_TABSZ]
+    mov ax, [es:di]             ; ONE read of both bytes under the arrow...
+    mov [bx], ax                ; ...banked. Both, whatever the clip said: a
+                                ; read writes nothing, and a column-1 byte the
+                                ; clip dropped is never drawn or put back
+    mov dl, [si]                ; the white row, rotated so DL is column 0's
+    xor dh, dh                  ; bits and DH column 1's - the word's own
+    ror dx, cl                  ; order, so no byte is swapped (kernel
+    or ax, dx                   ; hot-paths pass 1, cur_move_mono's draw)
+    mov dl, [si+CUR_TABSZ]      ; ...and the black body over it, one table
+    xor dh, dh                  ; along
+    ror dx, cl
+    not dx
+    and ax, dx
     inc si
-    shr ax, cl                  ; AH:AL = white bits, byte 0 : byte 1
-    shr dx, cl                  ; DH:DL = black bits, likewise...
-    not dx                      ; ...as an AND mask, so the body clears to 0
-
-    mov bl, [es:di]             ; ONE read of the byte under the arrow...
-    mov [ds:bp], bl             ; ...banked (SS is LOW_SEG, so ds: is not
-                                ; decoration - SPEC.md 2.1)
-    or  bl, ah                  ; ...white outline...
-    and bl, dh                  ; ...black body over it...
-    mov [es:di], bl             ; ...and ONE write
-
-    cmp byte [cur_b1ok], 0      ; the second byte, unless the screen edge is
+    inc bx
+    inc bx                      ; CUR_SPAN a row, so cur_get_mono's walk
+                                ; needs no clip of its own
+    mov [es:di], al             ; ...and ONE write a byte
+    cmp byte [cur_b1ok], 0      ; the second, unless the screen edge is
     je .adv                     ; between them
-    mov bl, [es:di+1]
-    mov [ds:bp+1], bl
-    or  bl, al
-    and bl, dl
-    mov [es:di+1], bl
+    mov [es:di+1], ah
 .adv:
-    add bp, CUR_SPAN            ; RESERVED whether or not byte 1 was taken, so
-                                ; cur_get_mono's walk needs no clip of its own
-    add di, [cs:vid_rowadd]     ; gfx_nextrow, inlined (SPEC.md 39.3)
+    add di, bp                  ; gfx_nextrow, inlined (SPEC.md 39.3)
     test di, [cs:vid_wrapbit]
     jz .nowrap
     add di, [cs:vid_wrapfix]
@@ -4545,34 +4558,59 @@ section .vga                    ; COLD-PLAN 2): VIDEXTM above is the door, and
 %endif
 
 ; -----------------------------------------------------------------------------
-; cur_restoreu - write cur_save back under (cur_drawn_x, cur_drawn_y).
-;                VRAM-direct (SPEC.md 32) - the cursor lives on the screen
-;                only, and this runs from the ISR
-;                where the bb dispatch must not apply.
-; clobbers: ax, bx, cx, dx, si
+; cur_restoreu - write cur_save back under the cell cur_geom banked, four
+;                planes. VRAM-direct (SPEC.md 32) - the cursor lives on the
+;                screen only, and this runs from the ISR where the bb dispatch
+;                must not apply.
+;
+; THE CELL'S OWN WALK, not vga_restore_vram's (kernel hot-paths pass 1). That
+; one is a whole rect primitive - gfx_rect_setup's generic clip, a row loop of
+; `rep movsb` per plane, the sub-rect and one-plane arms - and it cost 7,600
+; cycles a restore on the XT's VGA, a third of every planar mouse packet. The
+; cell is already clipped: [cur_rows] and the byte span (cur_vspan) are
+; exactly the rect gfx_rect_setup derived from the same cell, and the buffer
+; layout is the one vga_save_vram wrote - plane-major, the span's bytes a row
+; - so the bytes on the glass are identical. Neither [vga_pn] nor [gfx_sub_*]
+; is read or written here: the arrow is always four planes (SPEC.md 11.96.17)
+; and never a sub-rect, which is what cur_rect's banking of the pair existed
+; to force on the shared routine.
+; in:       [cur_off], [cur_rows], [cur_cellx], [cur_b1ok] - the drawn cell's,
+;           as cur_geom banked them; the GC/Sequencer in their default state
+; clobbers: ax, bx, cx, dx, si, di, bp (ES preserved)
 ; -----------------------------------------------------------------------------
 cur_restoreu:
+    mov ch, [cur_rows]
+    or ch, ch
+    jz .out                     ; wholly off the bottom: nothing was saved
     push es
-    push word [vga_pn]          ; **AND THE POINTER IS ALWAYS FOUR PLANES**
-    call cur_rect               ; (SPEC.md 11.96.17, 32 - cur_rect disarms the
-                                ; one-plane arm, see there). vga_pn/vga_pm's own
-                                ; header says an arm "cannot leak onto the
-                                ; pointer, which reaches vga_restore_vram
-                                ; DIRECTLY out of IRQ4, below the two routines
-                                ; that disarm" - and gfx_save/gfx_restore call
-                                ; cur_unlazy FIRST, above their own disarm, so
-                                ; a window that promised OSAPI_SAVEU_1BPP hid
-                                ; the arrow with the one-plane arm still up.
-                                ; A restore seeded 0Fh does ONE pass with the
-                                ; Map Mask on all four planes, so plane 0 of a
-                                ; four-plane cur_save is broadcast into all of
-                                ; them and the cell under the arrow comes back
-                                ; black or white. Two words, at the one point
-                                ; both cursor paths pass through; the mono
-                                ; branch is inside vga_restore_vram, below this
-    call vga_restore_vram
-    pop word [vga_pn]           ; ...and the caller's arm is its own again
+    call cur_vspan              ; BL = second byte?, BP = the row step
+    mov si, cur_save
+    mov di, [cur_off]
+    VSEG ax, VGA_SEG
+    mov es, ax                  ; movsb dest = VRAM
+    mov dx, VGA_SEQ
+    mov ax, 0x0102              ; SEQ2: Map Mask = plane 0
+.plane:
+    out dx, ax
+    push di
+    mov cl, ch
+.row:
+    movsb
+    or bl, bl
+    jz .one
+    movsb
+.one:
+    add di, bp
+    dec cl
+    jnz .row
+    pop di
+    shl ah, 1                   ; next plane bit
+    cmp ah, 0x10
+    jb .plane
+    mov ax, 0x0F02              ; SEQ2: Map Mask back to all planes
+    out dx, ax
     pop es
+.out:
     ret
 section .text
 %endif                          ; GFX_VGA: cur_get_1's dispatch and the restore
@@ -4593,18 +4631,20 @@ cur_get_mono:
     mov es, [vid_seg]
     mov di, [cur_off]
     mov si, [cur_sptr]
+    mov bp, [cs:vid_rowadd]     ; gfx_nextrow's three words, held in the
+    mov dx, [cs:vid_wrapbit]    ; registers this walk does not otherwise use
+    mov bx, [cs:vid_wrapfix]    ; (kernel hot-paths pass 1)
 .row:
-    lodsb                       ; both bytes are always CONSUMED - the stride
+    lodsw                       ; both bytes are always CONSUMED - the stride
     mov [es:di], al             ; is CUR_SPAN whatever the clip said - and only
-    lodsb                       ; the second one is conditionally written
-    cmp byte [cur_b1ok], 0
+    cmp byte [cur_b1ok], 0      ; the second one is conditionally written
     je .adv
-    mov [es:di+1], al
+    mov [es:di+1], ah
 .adv:
-    add di, [cs:vid_rowadd]     ; gfx_nextrow, inlined
-    test di, [cs:vid_wrapbit]
+    add di, bp                  ; gfx_nextrow, inlined
+    test di, dx
     jz .nowrap
-    add di, [cs:vid_wrapfix]
+    add di, bx
 .nowrap:
     dec ch
     jnz .row
@@ -4616,50 +4656,73 @@ cur_get_mono:
 section .vga                    ; cur_put_1 and cur_move_1 reach them through
 %endif                          ; VIDEXTM's planar arm alone)
 ; -----------------------------------------------------------------------------
-; cur_saveu - copy the cell under (cur_drawn_x, cur_drawn_y) into cur_save via
-;             vga_save_vram. vga_save_vram clips the rect at the screen edges
-;             the same way vga_restore_vram does, so partial cells stay
-;             coherent - which is the whole reason these two share cur_rect.
-; clobbers: ax, bx, cx, dx, di
+; cur_saveu - copy the cell cur_geom just banked into cur_save, four planes
+;             through Read Map Select: cur_restoreu's twin, and its own walk
+;             for the same reason (vga_save_vram's rect machinery was 5,800
+;             cycles a save on the XT's VGA). The buffer is the layout
+;             vga_save_vram wrote and cur_restoreu reads.
+; clobbers: ax, bx, cx, dx, si, di, bp (ES preserved)
 ; -----------------------------------------------------------------------------
 cur_saveu:
+    mov ch, [cur_rows]
+    or ch, ch
+    jz .out
     push es
-    push word [vga_pn]          ; four planes, cur_restoreu's reason exactly -
-    call cur_rect               ; and it has to be BOTH halves or the save and
-                                ; the restore disagree about the buffer
-    call vga_save_vram
-    pop word [vga_pn]
+    call cur_vspan
+    push ds
     pop es
+    mov di, cur_save            ; movsb dest = the buffer, in kernel .bss
+    mov si, [cur_off]
+    push ds
+    VSEG ax, VGA_SEG
+    mov ds, ax                  ; movsb source = VRAM
+    mov dx, VGA_GC
+    mov ax, 0x0004              ; GC4: Read Map Select = plane 0
+.plane:
+    out dx, ax
+    push si
+    mov cl, ch
+.row:
+    movsb
+    or bl, bl
+    jz .one
+    movsb
+.one:
+    add si, bp
+    dec cl
+    jnz .row
+    pop si
+    inc ah
+    cmp ah, 4
+    jb .plane
+    mov ax, 0x0004              ; GC4 back to plane 0 (default)
+    out dx, ax
+    pop ds
+    pop es
+.out:
     ret
 
-; cur_rect - the cell the two above save and restore, as a rect. ONE place,
-; because a save and a restore that disagree about it by a byte smear the
-; cursor across the screen. CUR_GW/CUR_GH bound it, and the tables are cut to
-; the same 8x12 - there is no larger cell left to walk by accident.
-; out: AX/BX/CX/DX = x1/y1/x2/y2, ES = DS, SI = DI = cur_save, and the
-;      one-plane arm DOWN ([vga_pn] = 4 planes) - EVERYTHING the save and the
-;      restore set up besides banking ES and the arm, in the one routine both
-;      already call (size pass 9: gfx_1bpp_off's call and the buffer setup were
-;      written twice, once each side)
-cur_rect:
-    mov word [vga_pn], VGA_PN_FOUR  ; gfx_1bpp_off, inline (vga12.inc)
-    push ds                     ; the buffer lives in kernel .bss
-    pop es
-    mov si, cur_save            ; the restore's source...
-    mov di, si                  ; ...and the save's destination
-    mov ax, [cur_cellx]         ; the CELL as cur_geom banked it: the drawn
-    mov bx, [cur_celly]         ; point in the ACTIVE display's coordinates
-                                ; (SPEC.md 39.15.1), off the HOT SPOT and
-                                ; clamped at the display origin (7.2.2). Every
-                                ; planar draw runs cur_geom first now (cur_put_1,
-                                ; cur_move_1), so for a restore this is the cell
-                                ; that was DRAWN - with the hot spot it was drawn
-                                ; with - and for a save the one about to be.
-                                ; Size pass 9: it re-derived both, twice a move
-    mov cx, ax
-    add cx, CUR_GW-1
-    mov dx, bx
-    add dx, CUR_GH-1
+; cur_vspan - how many bytes of each row the planar cell covers: the rect
+; gfx_rect_setup cut from x = [cur_cellx] .. +CUR_GW-1, which is one byte when
+; the cell is byte-aligned and two otherwise - unless the screen's right edge
+; took the second, which is cur_geom's [cur_b1ok] answer for the same cell.
+; One place for the save and the restore, because the two disagreeing by a
+; byte smears the arrow (cur_rect's reason, before it).
+; out: BL = 1 two bytes / 0 one, BP = ROW_BYTES less the bytes taken;
+;      clobbers AX
+%if CUR_GW != 8
+  %error "cur_vspan assumes an 8px cell: one byte aligned, two otherwise"
+%endif
+cur_vspan:
+    mov bl, [cur_cellx]
+    and bl, 7
+    jz .one                     ; aligned: x2 lands in the same byte
+    mov bl, [cur_b1ok]
+.one:
+    mov al, bl
+    cbw
+    mov bp, ROW_BYTES - 1
+    sub bp, ax
     ret
 section .text
 %endif                          ; GFX_VGA
@@ -4681,8 +4744,9 @@ cur_geom:
 %ifdef KERN_BIG
     sub ax, [vid_oy]            ; into the ACTIVE display's coordinates: this
 %endif                          ; is the ONLY place a position becomes an
-                                ; ADDRESS (SPEC.md 39.15.1) - cur_rect reads
-                                ; the banked cell below rather than re-deriving
+                                ; ADDRESS (SPEC.md 39.15.1) - the planar save
+                                ; and restore read the banked cell below
+                                ; rather than re-deriving
     sub ax, [cur_hy]            ; ...and off the hot spot, clamped at the
     jns .yok                    ; origin, or a centred shape near the top edge
     xor ax, ax                  ; addresses the row above the framebuffer
@@ -4911,7 +4975,7 @@ cur_lazyck:
     mov si, wm_clip_tab         ; VIRTUAL rects (SPEC.md 39.14.9), and so is
     mov di, [wm_clip_n]         ; [cur_drawn_x] - the display subtraction
                                 ; happens where a position becomes an ADDRESS
-                                ; (cur_rect, cur_geom) and nowhere else, so
+                                ; (cur_geom) and nowhere else, so
                                 ; the two are already in one space
 .frag:                          ; OVERLAP, not containment: wm_clip_test asks
     cmp ax, [si+WCR_X2]         ; whether a whole shape fits one fragment and
@@ -5307,8 +5371,14 @@ cur_busy_on:
 ; is nothing to bound and nothing to get wrong at the extremes.
 ;
 ; Which bytes those are is decided ONCE, before either walk, from the byte-
-; column difference d = newcol - oldcol (mv_p1s0/1 and mv_p2s0/1), because it
-; is the same answer for every row.
+; column difference d = newcol - oldcol and the row difference e = newtop -
+; oldtop: the columns meet only for |d| <= 1, and then the rows that meet are
+; one contiguous RUN, so no walk asks a per-row question (kernel hot-paths
+; pass 1). And the walks carry no per-byte test: the new cell's background is
+; banked straight off the screen first, pass 1 patches the run's rows of that
+; bank from the old save while it restores the rest, and the draw composes
+; from the bank - 19,400 -> 12,000 cycles a move on the 5150's CGA (SPEC.md
+; 7.1.2 has the measurement and the proof).
 ;
 ; in:       AX = new x, BX = new y; [cur_drawn_x/y] and the banked geometry
 ;           still describe where the cursor IS. IF = 0 (ISR, or the gfx lock).
@@ -5413,75 +5483,169 @@ cur_move_mono:
     mov di, mv_ooff             ; is clear on every path here - the ISR's own
     mov cx, 4                   ; cld, and this file's other string reads
     rep movsw                   ; already assume it from task code
-    mov cl, 3
-    shr word [mv_d], cl         ; the OLD byte column, banked in the word that
-                                ; will hold the DELTA: cur_geom clobbers DX
-                                ; and the new column is not known until it has
-                                ; run, so the subtraction moved below it
     mov ax, [cur_sptr]          ; the buffer holding the OLD background...
     mov [mv_osave], ax
-    mov bx, cur_save            ; ...and the other one takes the new, so pass 2
-    cmp ax, bx                  ; can read one while it fills the other
-    jne .flip
-    mov bx, cur_savex
-.flip:
-    mov [mv_nsave], bx
-    mov [cur_sptr], bx
+    neg ax                      ; ...and the other one takes the new, so the
+    add ax, cur_save            ; old can be read while the new is filled.
+    add ax, cur_savex           ; [cur_sptr] is only ever one of the two, so
+    mov [mv_nsave], ax          ; the other is their sum less it: no compare
+    mov [cur_sptr], ax          ; and no branch
     pop bx
     pop ax
     mov [cur_drawn_x], ax
     mov [cur_drawn_y], bx
-    call cur_geom               ; DI = new offset, CL = shift, [cur_rows],
-                                ; [cur_b1ok], [cur_off], [cur_cellx/y] - all
-                                ; NEW now
-    mov ax, [cur_cellx]         ; d = newcol - oldcol, and the shifts are
-    shr ax, 1                   ; single-bit because CL is cur_geom's answer
-    shr ax, 1                   ; and the pass-2 loop below still wants it -
-    shr ax, 1                   ; `mov cl, 3` here would eat the shift
-    sub ax, [mv_d]
-    mov [mv_d], ax
-    call cur_mvcols             ; ...and the four per-column answers
+    call cur_geom               ; DI = the new cell's first byte, CL = its
+                                ; shift, and [cur_off], [cur_rows],
+                                ; [cur_b1ok], [cur_cellx/y] - all NEW now
+    push cx                     ; the shift, for the draw at the bottom
 
-    ; --- pass 1: the old background back, except where pass 2 will draw ------
+    ; --- the new cell's background, off the screen ---------------------------
+    ; Every byte under the new cell is its background already EXCEPT where the
+    ; old arrow still stands, and those bytes are exactly the overlap, whose
+    ; background is in the old save: pass 1 below patches them in as it walks
+    ; the old cell. So this walk tests nothing. Both bytes of a row are read
+    ; and banked whatever the clip said: a read writes nothing, and a
+    ; column-1 byte the clip dropped is never drawn or put back (cur_b1ok
+    ; gates both).
+    mov es, [vid_seg]
+    mov bp, [cs:vid_rowadd]     ; gfx_nextrow's step, held in a register
+    mov ch, [cur_rows]
+    or ch, ch
+    jz .meet                    ; wholly off the bottom: nothing to bank
+    mov bx, [mv_nsave]
+    mov dx, [cs:vid_wrapbit]    ; this walk has the registers to hold all
+    mov si, [cs:vid_wrapfix]    ; three of the row step's words
+.bgrow:
+    mov ax, [es:di]
+    mov [bx], ax
+    inc bx
+    inc bx
+    add di, bp                  ; gfx_nextrow, inlined (SPEC.md 39.3)
+    test di, dx
+    jz .bgnw
+    add di, si
+.bgnw:
+    dec ch
+    jnz .bgrow
+
+    ; --- WHERE THE TWO CELLS MEET, decided once for the whole move -----------
+    ; Two numbers say it: d = newcol - oldcol in bytes, and e = newtop - oldtop
+    ; in rows. The columns meet only for d = -1, 0 or +1 (an 8px arrow spans
+    ; two bytes, CUR_SPAN), and then the rows that meet are ONE CONTIGUOUS
+    ; RUN, old rows [i_lo, i_lo + n) - so "is this row covered" is a range
+    ; and never a per-row search.
+    ;
+    ; BH carries pass 1's answers. Bits 2-3: what an old row the new cell
+    ; does not reach writes - column 0, and column 1 if the old clip kept it.
+    ; Bits 0-1: what a covered row writes. There old column j IS new column
+    ; j-d, which the draw writes, so it is skipped exactly when that new
+    ; column exists. Bits 4-5 say how a covered row's saved bytes become the
+    ; new background: 01 both (d = 0), 00 old column 0 as new column 1
+    ; (d = -1), 11 old column 1 as new column 0 (d = +1) - two bits so that
+    ; one  and its PARITY flag tell the three apart.
+.meet:
+    mov ax, [cur_cellx]         ; d = newcol - oldcol
+    mov dx, [mv_d]              ; (the OLD cell x, as banked above)
+    mov cl, 3
+    shr ax, cl
+    shr dx, cl
+    sub ax, dx
+    mov bl, [mv_ob1ok]          ; 0 or 1: the old cell's column 1 on screen
+    shl bl, 1                   ; ...as bit 1
+    mov bh, bl
+    or bh, 1                    ; an uncovered old row, into bits 2-3
+    shl bh, 1
+    shl bh, 1
+    inc ax                      ; d + 1: 0, 1 or 2 for the three that meet,
+    cmp ax, 2                   ; and anything else - a negative d included,
+    ja .nocov                   ; unsigned - is columns that never do
+    dec al
+    jz .kzero
+    jns .kplus
+    mov al, [cur_b1ok]          ; d = -1: old column 0 is new column 1, drawn
+    xor al, 1                   ; only if the new clip kept it; old column 1
+    or bl, al                   ; is new column 2, never drawn
+    or bh, bl
+    jmp short .krow
+.kplus:
+    or bl, bl                   ; d = +1: old column 1 is new column 0 - and if
+    jz .nocov                   ; the old clip dropped it there is no overlap
+    or bh, 0x21                 ; at all; old column 0 is new column -1. Bits
+                                ; 4-5 = 11 with .kzero's 0x10, which it falls
+.kzero:                         ; into
+    or bh, 0x10                 ; d = 0: both columns, and a covered row
+.krow:                          ; writes neither
+    mov si, [cur_celly]         ; e = newtop - oldtop, the NEW cell's top row
+    sub si, [mv_oy]             ; and not the pointer's y (SPEC.md 7.2.2)
+    xor dx, dx                  ; r_lo = max(0, -e), in NEW rows...
+    mov ax, si
+    neg ax
+    jle .rlo
+    xchg ax, dx
+.rlo:
+    mov al, [mv_orows]          ; ...and r_hi = min(new rows, old rows - e),
+    cbw                         ; signed: a cell far below is a negative
+    sub ax, si                  ; reach and an empty run
+    mov cl, [cur_rows]
+    xor ch, ch
+    cmp ax, cx
+    jle .rhi
+    xchg ax, cx
+.rhi:
+    sub ax, dx                  ; n = r_hi - r_lo
+    jg .cov
+.nocov:
+    xor ax, ax                  ; no run: the skip never fires, nothing is
+.cov:                           ; patched, the screen was the background
+    add dx, si                  ; DH:DL = i_lo (r_lo + e, the run in OLD rows)
+    mov dh, dl                  ; and n
+    mov dl, al
+    mov ax, [mv_nsave]          ; BP = the NEW save's row for old row i, which
+    sub ax, si                  ; is i - e: nsave - 2e at i = 0. Out of range
+    sub ax, si                  ; except inside the run, the only place it is
+    xchg ax, bp                 ; used (the walk below steps by [vid_rowadd])
+
+    ; --- pass 1: the old background back, except where the draw will write --
     mov ch, [mv_orows]
     or ch, ch
-    jz .p2
-    mov es, [vid_seg]
+    jz .draw
     mov di, [mv_ooff]
     mov si, [mv_osave]
-    mov bx, [mv_oy]
-    mov dl, [cur_rows]          ; the NEW cell's height, loop-invariant, so it
-    xor dh, dh                  ; is widened once here rather than per row
+    xor bl, bl                  ; BL = the old row
 .p1row:
-    mov ax, bx                  ; is this row one pass 2 will draw into?
-    sub ax, [cur_celly]         ; the NEW cell's top row, which cur_geom has
-                                ; just published - not the pointer's y
-    cmp ax, dx                  ; unsigned: a row above the new cell is huge
     lodsw                       ; AL/AH = the two saved bytes; the stride is
-                                ; CUR_SPAN whatever the clip said. LODSW
-                                ; WRITES NO FLAG, so the compare's answer is
-                                ; branched on straight through it - where DL
-                                ; used to carry it as a 0/1 byte and `or dl,
-                                ; dl` re-asked (kernel size pass 10: 8 bytes,
-                                ; and ~20 clocks a row of every 1bpp move)
-    jb .p1s0                    ; row covered: consult the column answers
+                                ; CUR_SPAN whatever the clip said
+    mov cl, bl
+    sub cl, dh                  ; unsigned: a row above the run is huge
+    cmp cl, dl
+    mov cl, bh                  ; (MOV writes no flag)
+    jae .p1unc
+    test cl, 0x30               ; --- covered: the patch ---
+    jz .pminus
+    jpe .pplus                  ; both of bits 4-5 (even parity): d = +1
+    mov [ds:bp], ax             ; d = 0: both saved bytes
+    jmp short .p1w
+.pplus:
+    mov [ds:bp], ah             ; d = +1: old column 1 is new column 0
+    jmp short .p1w
+.pminus:
+    mov [ds:bp+1], al           ; d = -1: old column 0 is new column 1
+    jmp short .p1w
+.p1unc:
+    shr cl, 1
+    shr cl, 1                   ; not covered: bits 2-3
+.p1w:
+    shr cl, 1
+    jnc .p1b
     mov [es:di], al
-    cmp byte [mv_ob1ok], 0
-    je .p1next
+.p1b:
+    shr cl, 1
+    jnc .p1n
     mov [es:di+1], ah
-    jmp short .p1next
-.p1s0:
-    cmp byte [mv_p1s0], 0
-    jne .p1c1                   ; pass 2 writes this column: leave it alone
-    mov [es:di], al
-.p1c1:
-    cmp byte [mv_ob1ok], 0
-    je .p1next
-    cmp byte [mv_p1s1], 0
-    jne .p1next
-    mov [es:di+1], ah
-.p1next:
-    inc bx
+.p1n:
+    inc bx                      ; the old row (BL never carries: <= CUR_GH)
+    inc bp
+    inc bp
     add di, [cs:vid_rowadd]     ; gfx_nextrow, inlined (SPEC.md 39.3)
     test di, [cs:vid_wrapbit]
     jz .p1nw
@@ -5490,143 +5654,45 @@ cur_move_mono:
     dec ch
     jnz .p1row
 
-    ; --- pass 2: save and draw the new cell, background from either place ----
-.p2:
+    ; --- the draw: the arrow over the banked background, ONE write a byte ----
+.draw:
+    pop cx                      ; CL = the shift
     mov ch, [cur_rows]
     or ch, ch
     jz .out
-    mov es, [vid_seg]
+    mov bp, [cs:vid_rowadd]
     mov di, [cur_off]
     mov si, [cur_tabp]
-    mov bp, [mv_nsave]
-.p2row:
-    call cur_mvrow              ; [mv_orp] = this row's slot in the OLD save,
-                                ; or 0 if the old cell does not reach it
-    xor ax, ax                  ; the white row, widened from the byte...
-    mov ah, [si]
-    xor dx, dx                  ; ...and the black one, one table along
-    mov dh, [si+CUR_TABSZ]
+    mov bx, [mv_nsave]
+.drow:
+    mov dl, [si]                ; the white row...
+    xor dh, dh
+    ror dx, cl                  ; ...rotated: DL = column 0's bits, DH = column
+                                ; 1's - little-endian, the order the word
+                                ; below is in, so no byte swap anywhere
+    mov ax, [bx]                ; the background, both bytes
+    or ax, dx                   ; white outline...
+    mov dl, [si+CUR_TABSZ]      ; ...and the black body, one table along
+    xor dh, dh
+    ror dx, cl
+    not dx
+    and ax, dx                  ; ...over it
     inc si
-    shr ax, cl
-    shr dx, cl
-    not dx                      ; DH:DL = the black body as an AND mask
-
-    push ax                     ; --- byte 0 ---
-    mov al, [mv_p2s0]
-    call cur_mvbg               ; BL = the background, from the buffer or the
-    pop ax                      ; screen, whichever this byte's answer says
-    mov [ds:bp], bl
-    or  bl, ah
-    and bl, dh
-    mov [es:di], bl
-
-    cmp byte [cur_b1ok], 0      ; --- byte 1 ---
-    je .p2adv
-    push ax
-    mov al, [mv_p2s1]
-    inc di
-    call cur_mvbg
-    dec di
-    pop ax
-    mov [ds:bp+1], bl
-    or  bl, al
-    and bl, dl
-    mov [es:di+1], bl
-.p2adv:
-    add bp, CUR_SPAN
-    inc word [mv_prow]
-    add di, [cs:vid_rowadd]
+    inc bx
+    inc bx
+    mov [es:di], al             ; ONE write a byte
+    cmp byte [cur_b1ok], 0      ; the second, unless the screen edge is
+    je .dadv                    ; between them
+    mov [es:di+1], ah
+.dadv:
+    add di, bp
     test di, [cs:vid_wrapbit]
-    jz .p2nw
+    jz .dnw
     add di, [cs:vid_wrapfix]
-.p2nw:
+.dnw:
     dec ch
-    jnz .p2row
+    jnz .drow
 .out:
-    ret
-
-; cur_mvcols - the four per-column answers, from d = newcol - oldcol
-;
-; mv_p1s0/1: pass 1 must SKIP old column 0/1, because pass 2 writes it.
-;            Old column j is a new column when j-d is 0 or 1, and column 1 of
-;            the new cell only exists if the new cell's own clip kept it.
-; mv_p2s0/1: pass 2 takes new column 0/1's background from the old save at
-;            this offset - d+j, when that is 0 or 1 and the OLD clip kept it -
-;            or 0FFh, meaning "read the screen".
-; clobbers: ax, bx, flags
-cur_mvcols:
-    mov bx, 1                   ; ONE LOOP, j = 1 then 0: the four answers are
-.col:                           ; independent, so the two passes' columns share
-                                ; a counter, and each answer is computed into
-                                ; AL and stored once where it was stored a
-                                ; default and then overwritten (kernel size
-                                ; pass 10: 24 bytes, and fewer instructions on
-                                ; every 1bpp move)
-    mov ax, [mv_d]              ; --- pass 2, new column j ---------------------
-    add ax, bx                  ; AX = d + j - UNSIGNED below, so a negative
-    cmp ax, 1                   ; offset is just "not 0 or 1"
-    jb .p2set                   ; offset 0: always saved (AL = 0)
-    ja .p2ff
-    cmp byte [mv_ob1ok], 0      ; offset 1 only exists if the OLD clip kept it
-    jne .p2set                  ; (AL = 1)
-.p2ff:
-    mov al, 0xFF                ; "read the screen"
-.p2set:
-    mov [bx + mv_p2s0], al
-    mov ax, bx                  ; --- pass 1, old column j ---------------------
-    sub ax, [mv_d]              ; AX = j - d
-    cmp ax, 1
-    mov al, 1                   ; (MOV writes no flag)
-    jb .p1set                   ; new column 0: pass 2 always writes it
-    mov al, [cur_b1ok]          ; new column 1 only if the NEW clip kept it -
-    je .p1set                   ; and [cur_b1ok] IS that 0/1 answer
-    mov al, 0
-.p1set:
-    mov [bx + mv_p1s0], al
-    dec bx
-    jns .col
-    inc bx                      ; BX = 0, and [mv_prow] starts there
-    mov [mv_prow], bx
-    ret
-
-; cur_mvrow - does the OLD cell reach the new cell's row [mv_prow]?
-; out: [mv_orp] = a pointer into the old save buffer, or 0
-; clobbers: ax, bx, flags
-cur_mvrow:
-    mov ax, [cur_celly]         ; the NEW cell's top row (SPEC.md 7.2.2), not
-    add ax, [mv_prow]           ; the pointer's y - [mv_oy] is the OLD cell's
-    sub ax, [mv_oy]             ; AX = the row's index in the OLD cell
-    mov bl, [mv_orows]
-    xor bh, bh
-    cmp ax, bx
-    mov bx, 0                   ; (a MOV: the compare's flags survive it)
-    jae .out                    ; unsigned: a row above it is a huge number
-    add ax, ax                  ; CUR_SPAN bytes a row
-    add ax, [mv_osave]
-    xchg ax, bx
-.out:
-    mov [mv_orp], bx            ; ONE store of the answer, where a zero was
-    ret                         ; stored first and then overwritten - and no
-                                ; DX bank: nothing here writes DX (size pass 9)
-
-; cur_mvbg - one byte's background: the old save buffer if this column's
-;            answer names an offset AND the old cell reaches this row,
-;            otherwise the screen.
-; in:  AL = the column answer (0, 1 or 0FFh), ES:DI = the screen byte
-; out: BL = the background byte
-; clobbers: ax, bx, flags
-cur_mvbg:
-    cmp al, 0xFF
-    je .screen
-    mov bx, [mv_orp]
-    or bx, bx
-    jz .screen
-    xor ah, ah
-    add bx, ax
-    mov bl, [bx]
-    ret
-.screen:
-    mov bl, [es:di]
     ret
 
 %ifdef GFX_VGA                  ; ...and the PLANAR draw, whose only callers are
@@ -5904,7 +5970,7 @@ CUR_SHAPE_END "clock"
 ; --- the hot spot per shape, in the same order (SPEC.md 7.2) -----------------
 ; Two bytes a shape: the pixel inside the cell that sits under the pointer.
 ; The arrow's is (0,0), which is what every walk in this file assumed for
-; years - cur_geom and cur_rect subtract it now, and clamp the result at the
+; years - cur_geom subtracts it now, and clamps the result at the
 ; screen origin rather than clipping the cell (SPEC.md 7.2.2).
 cur_shtab   dw cur_and,       cur_cross_and,   cur_busy_and
 cur_shhot   db 0, 0,          CUR_XHX, CUR_XHY, CUR_BHX, CUR_BHY
@@ -6023,10 +6089,10 @@ cur_drawn_x dw 0                ; where the cursor pixels actually are, in
 cur_drawn_y dw 0                ; VIRTUAL coordinates (SPEC.md 39.15) - the
                                 ; same space as mouse_x/mouse_y, so every
                                 ; comparison in this file is between two
-                                ; positions of the same kind. cur_rect and
-                                ; cur_geom are the only two places that turn
-                                ; one into an ADDRESS, and the only two that
-                                ; subtract a display's origin.
+                                ; positions of the same kind. cur_geom is
+                                ; the only place that turns one into an
+                                ; ADDRESS, and the only one that subtracts a
+                                ; display's origin.
                                 ; (valid only while cur_level >= 0)
 %ifdef KERN_BIG
 cur_disp    db 0                ; which display the arrow is ON, and cur_dprev
@@ -6445,21 +6511,13 @@ mv_ob1ok    resb 1              ; (then the delta - see mv_d) and top row. THE
 mv_d        resw 1              ; ORDER IS cur_off..cur_celly's, word for word:
 mv_oy       resw 1              ; cur_move_mono banks all five with one rep
                                 ; movsw (size pass 9). mv_d is the old CELL x
-                                ; as copied, its byte column after the shift
-                                ; that follows, and newcol - oldcol, signed,
-                                ; once cur_geom has run: the ONE number the
-                                ; four column answers below come out of
+                                ; as copied, which the move shifts down to its
+                                ; byte column beside the new one's to get d
 %if mv_orows - mv_ooff != cur_rows - cur_off || mv_ob1ok - mv_ooff != cur_b1ok - cur_off || mv_d - mv_ooff != cur_cellx - cur_off || mv_oy - mv_ooff != cur_celly - cur_off || mv_oy - mv_ooff != 6
   %error "mv_ooff..mv_oy must mirror cur_off..cur_celly exactly: cur_move_mono banks them with one 4-word rep movsw"
 %endif
 mv_osave    resw 1              ; -> the buffer holding the old background...
 mv_nsave    resw 1              ; ...and the one taking the new
-mv_p1s0     resb 1              ; pass 1 skips this old column (pass 2 has it)
-mv_p1s1     resb 1
-mv_p2s0     resb 1              ; pass 2's background offset in the old save,
-mv_p2s1     resb 1              ; or 0FFh for "read the screen"
-mv_prow     resw 1              ; the new cell's row, as pass 2 walks it
-mv_orp      resw 1              ; -> that row in the old save, or 0
 gfx_u_mv:
 %if gfx_u_mv - gfx_u > gfx_u_end - gfx_u
   %error "cur_move_mono's working set no longer fits the primitive union - raise GFX_U_FLOOR in vga12.inc"
