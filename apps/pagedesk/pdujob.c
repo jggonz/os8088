@@ -504,3 +504,27 @@ void os88_onwake(void *win)
     if (pdu_job != J_NONE || pdu_pgwant || pdu_argp)
         pdu_kick();
 }
+
+/* ---------------------------------------------------------------------------
+ * CLOSE (SPEC.md 75.1): the window is going. The instance's death frees every
+ * claim (SPEC.md 50), but not a file: a save stopped here would leave
+ * PDWRT's temporary file behind, so the writer is told first. Wave 1 has no
+ * edits to lose, so the answer is always yes; wave 2's unsaved-changes alert
+ * goes in front of this.
+ * -------------------------------------------------------------------------*/
+int os88_onclose(void *win)
+{
+    if (win != pdu_win)
+        return 1;
+    if (pdu_job == J_SAVE) {
+        pdu_mcall(PDU_M_WRT, PDV_WRT_ABORT, 0, 0, 0);
+        pdu_fsop_end();
+        pdu_job = J_NONE;
+    }
+    if (pdu_doc == D_OPEN || pdu_doc == D_OPENING)
+        pdu_doc_release();
+    pdu_doc = D_EMPTY;
+    pdu_job = J_NONE;
+    pdu_mod_quit();
+    return 1;
+}

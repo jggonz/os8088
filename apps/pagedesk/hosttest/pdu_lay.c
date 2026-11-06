@@ -93,19 +93,21 @@ static void one(int w, int h, int side, int notes, int mode, int empty,
     CHECK(L.kind == pdu_kind(w, h), "%s %dx%d kind", tag, w, h);
 }
 
-/* the content box os8088 gives a full-desktop PageDesk window on a display:
- * frame 2 each side, the title bar, the menu bar above and the dock below.
- * Measured on QEMU (20.6.4); the grid sweep covers every other size. */
+/* the content box os8088 gives a full-desktop PageDesk window on a display
+ * (20.6.4); the grid sweep covers every other size. */
 struct disp { const char *name; int sw, sh, cw, ch, kind; };
 
 int main(void)
 {
+    /* content = the screen's width by its height less 64 (menu bar,
+     * title, dock): MEASURED on QEMU for CGA (640x136) and Hercules 348
+     * (720x284) with Help > Document info, the others by that rule */
     static const struct disp D[] = {
-        { "VGA 640x480",      640, 480, 632, 404, PDU_L_FULL },
-        { "EGA 640x350",      640, 350, 632, 274, PDU_L_FULL },
-        { "Hercules 720x348", 720, 348, 712, 272, PDU_L_FULL },
-        { "Hercules 720x350", 720, 350, 712, 274, PDU_L_FULL },
-        { "CGA 640x200",      640, 200, 632, 132, PDU_L_COMPACT },
+        { "VGA 640x480",      640, 480, 640, 416, PDU_L_FULL },
+        { "EGA 640x350",      640, 350, 640, 286, PDU_L_FULL },
+        { "Hercules 720x348", 720, 348, 720, 284, PDU_L_FULL },
+        { "Hercules 720x350", 720, 350, 720, 286, PDU_L_FULL },
+        { "CGA 640x200",      640, 200, 640, 136, PDU_L_COMPACT },
     };
     int i, w, h, m;
 

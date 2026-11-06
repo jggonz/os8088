@@ -191,6 +191,7 @@ void *os88_main(void)
     os88_wm_minsize(win, 320, 120);
     os88_wm_onresize(win);
     os88_wm_onwake(win);
+    os88_wm_onclose(win);               /* a save is told to abort first */
     os88_wm_onwheel(win);
     os88_wm_cursor(win, OS88_CUR_ARROW);
     os88_about_set(win);

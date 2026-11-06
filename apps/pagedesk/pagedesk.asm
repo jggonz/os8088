@@ -57,6 +57,7 @@
 %define CC_HAS_ONWAKE               ; THE JOB SCHEDULER (PAGEDESK-SPEC 15.1):
                                     ; one slice a wake, re-posted
 %define CC_HAS_ONWHEEL              ; the wheel scrolls the canvas
+%define CC_HAS_ONCLOSE              ; a save in flight deletes its temp file
 %define CC_HAS_OVL                  ; pdovl.c's ovl_* (PAGEDESK-SPEC 2.2)
 %define CC_OVL_PART                 ; ...a PART of PAGEDESK.O88
 %define CC_OVL_LAZY                 ; ...fetched on the first call into it
