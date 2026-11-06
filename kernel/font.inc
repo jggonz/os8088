@@ -643,9 +643,22 @@ font_char:
     out dx, ax                  ; GC0 Set/Reset = color
     mov ax, 0x0F01
     out dx, ax                  ; GC1 enable Set/Reset on all planes
+    mov al, 8                   ; ...and the INDEX on GC8, the Bit Mask, for
+    out dx, al                  ; the whole cell (kernel hot-paths pass 1): a
+    inc dx                      ; mask is then ONE byte out to 3CFh a write,
+                                ; where it was a word out to 3CEh and the two
+                                ; moves that built it. Nothing else may touch
+                                ; the GC between here and the reset below -
+                                ; the caller holds the gfx lock, which is what
+                                ; keeps the cursor's ISR off the card (SPEC.md
+                                ; 7.1), exactly as the Set/Reset pair above
+                                ; already required
 
     mov ch, [wm_clip_rn]        ; row counter: the rows the region allows,
                                 ; 8 whenever it is not cutting this cell
+%ifdef KERN_BIG
+    mov bl, [wm_clip_cm]        ; the region's column mask, in a register
+%endif
     VSEG ax, VGA_SEG            ; ...and DS = the FRAMEBUFFER for the loop, so
     mov ds, ax                  ; its four latch accesses carry no override:
                                 ; nothing below reads a kernel word but the
@@ -653,19 +666,18 @@ font_char:
 .row:
     mov ah, [es:si]             ; glyph row in the high byte of the window
 %ifdef KERN_BIG
-    and ah, [cs:wm_clip_cm]     ; the region's column mask (SPEC.md 11.3.4) -
+    and ah, bl                  ; the region's column mask (SPEC.md 11.3.4) -
 %endif                          ; KERN_BIG only, so the floor machine's glyph
                                 ; loops are byte-identical (11.3.4.1)
     inc si
     xor al, al
     shr ax, cl                  ; AH = first-byte mask, AL = second-byte mask
-    mov bx, ax                  ; keep both masks in BH/BL
+    mov bh, al                  ; BH = the second; BL is the column mask
 
-    or bh, bh                   ; anything landing in the first byte?
+    or ah, ah                   ; anything landing in the first byte?
     jz .no_first
-    mov al, 8
-    mov ah, bh
-    out dx, ax                  ; GC8 Bit Mask = first-byte glyph bits
+    mov al, ah
+    out dx, al                  ; GC8 Bit Mask = first-byte glyph bits
     xchg [di], al               ; load the latches and write back in ONE
                                 ; instruction: an 8088's xchg reads the byte
                                 ; and then writes it, which is the latch
@@ -675,17 +687,17 @@ font_char:
                                 ; 2 bytes and 22 clocks against the mov
                                 ; pair's 4 and 27
 .no_first:
-    or bl, bl                   ; spill into the second byte?
+    or bh, bh                   ; spill into the second byte?
     jz .no_second
-    mov al, 8
-    mov ah, bl
-    out dx, ax                  ; GC8 Bit Mask = second-byte glyph bits
+    mov al, bh
+    out dx, al                  ; GC8 Bit Mask = second-byte glyph bits
     xchg [di+1], al             ; load latches and write, as above
 .no_second:
     add di, ROW_BYTES
     dec ch
     jnz .row
 
+    dec dx                      ; the INDEX port again
     mov ax, 0x0001
     out dx, ax                  ; GC1 enable Set/Reset = 0 (default, SPEC 1.7)
     mov ax, 0xFF08
