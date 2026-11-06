@@ -9,6 +9,96 @@ the byte-costing items side by side.
 
 **Status: COMPLETE.** All nine speed agents and the size agent are merged into `kernel-hotpaths`.
 
+## L. This branch: `kernel-hotpaths-lean`
+
+**The owner's words:** *"Split out the free ones, and pick around 100b of the
+most impactful, and put those on a new branch."*
+
+`kernel-hotpaths-lean` is `kernel-hotpaths` with 24 of its byte-costing picks
+reverted (`git revert`, newest first) together with the three size-agent
+trims that edit code those picks added (size-2 needs wm-4, size-12 needs
+disk-1, size-17 needs disk-4). It keeps **every free item** (the size agent's
+other fourteen included), the tools, the baseline report and the notes, and
+**the ten picks below, +108 bytes** chosen from section 0's tier A by
+user-visible time per byte:
+
+| id | commit | kern_big B | what it buys |
+|---|---|---:|---|
+| sched-1 | `488ea2d5` | +47 | `OSAPI_TASK_YIELD` 644 -> 283 us; the idle tick -34%; pointer and typing CPU |
+| mono-2 | `58ea45aa` | +16 | 1bpp save/restore by words: CGA/Hercules raise -11 to -15 ms |
+| sched-4 | `d0ad21da` | +12 | the idle task halts again: pointer CPU -8%, idle CPU -11.6% |
+| files-2 | `e02c1b7e` | +7 | a scroll moves the thumb only: CGA PgDn -18 ms |
+| text-8 | `1139897c` | +6 | `font_width_x` -69% (menus, every layout) |
+| gfxcall-1 | `10323197` | +6 | `gfx_rect_setup` 751 -> 639 cycles: -1.27 ms a CGA raise |
+| files-1 | `048c7097` | +5 | Up One Folder ~-250 ms |
+| wm-1 | `9c64eaea` | +4 | a covered window put back whole is not re-saved: fullscreen exit CGA -106 ms |
+| vga-4 | `8b1de03b` | +3 | VGA XOR fill -36%: menu highlights, every drag-outline step |
+| text-9 | `499dfc5c` | +2 | VGA `font_char` -6% a glyph |
+
+**Left out, and why.** disk-5 (+40) is the largest single win of the pass
+(two int 13h calls fewer a navigation on 360 KB), but it needs disk-4 (+208),
+which is twice the whole allowance by itself; the pair is the obvious next
+pick if the allowance grows. wm-4 (+34, fullscreen exit) and the decoders
+(disk-1 +126, disk-2 +72) are next after it. Everything in tiers B and C is
+out.
+
+**One byte of glue.** vga-4's +3 in `vga_solid_rect_v` had been balanced on
+`kernel-hotpaths` by vga-1/2/3; without them `gfx_fill_gray_raw_v` and the
+planar save and restore sat at an odd shift from the base. A never-executed
+`nop` in `.vga` puts all three back at the base's parity, and `hotpar` pins
+`vga_save_vram_v` at the base's again (its body is the base's).
+
+**What it costs.** Nothing, net: the free items and the size agent's trims
+give back more than the ten picks spend.
+
+| kernel | resident at base (`a7ee7fab`) | resident here | delta | `KERN_SIZE` |
+|---|---:|---:|---:|---|
+| **kern_big** | 91,530 | **91,503** | **-27** | 96,768, unchanged (4,096 spare) |
+| kern_small | 57,258 | 57,259 | +1 | 59,392, unchanged (4,608 spare) |
+| kern_emu | 91,784 | 91,747 | -37 | 97,280, unchanged |
+| kern_mega | conventional 62,976 | conventional 62,976 | 0 | of 68,096, unchanged |
+
+against `kernel-hotpaths`' +1,757 / +1,150 / +1,747 / +1,024.
+
+**What it buys** (`tools/os88hot.py ab --base a7ee7fab`, MartyPC, the
+emulated 4.77 MHz XT):
+
+| operation | CGA | Hercules | VGA |
+|---|---|---|---|
+| raise a window (ms) | 179.9 -> **164.1 (-8.8%)** | 234.3 -> **209.1 (-10.7%)** | 367.8 -> 360.5 (-2.0%) |
+| PgDn / PgUp (ms) | 131.2 -> **106.2 (-19.1%)** / -19.4% | -5.2% / -4.6% | -4.5% / -3.8% |
+| menu open (ms / CPU busy) | -3.4% / busy -14.2% | -7.3% / busy -14.1% | -1.5% / busy -10.3% |
+| menu close (ms, n=6) | +2.4% (one tick's phase) | +0.6% | -3.9% |
+| drag (ms, n=8, mode for mode) | -3.0% (n=6) | -3.5% | -0.9% |
+| open A:'s Disk window (ms) | -5.0% (4 int 13h calls, unchanged) | -1.3% | -6.3% |
+| launch Calc, cached (ms) | 970.7 -> 942.6 (-2.9%) | -3.1% | -1.8% |
+| pointer sweep (CPU busy) | 237.4 -> **139.5 ms (-41.2%)** | -41.2% | -25.8% |
+| typing 31 keys (CPU busy) | -19.1% | -21.4% | -16.4% |
+| **idle desktop (CPU busy)** | 326.0 -> **179.7 ms (-44.9%)** | -44.9% | -44.9% |
+
+Against `kernel-hotpaths` with every pick, lean gives up most of the VGA
+raise (-24% there, -2% here: vga-1/2/3 and wm-7 stay out), the disk work
+(opening A: -27% there, -5% here; launches -17 to -19% there, -3% here) and
+the Hercules PgDn (-22% there): that is what the 1,665 bytes it leaves out
+buy. It keeps the scheduler's whole gain (the pointer, typing and idle rows
+are within a point of `kernel-hotpaths`') and most of the CGA raise and PgDn.
+
+**Three cells needed re-measuring, and the reasons are worth keeping.**
+Drag is quantised to whole timer ticks: the same base commit read VGA drag at
+610 ms in one run and 666 in another, so -n 6 read lean as +8.2% against the
+low mode; at -n 8 both sides took the high one and the delta is -0.9%. A
+cold launch is ONE sample and its disk sits wherever the platter is: the
+base read 1,299, 1,354 and 1,409 ms across three runs, lean 1,381-1,401, with
+the same int 13h calls - unchanged within the rotational phase. Menu close
+on CGA (+2.4%) is the same tick phase the main pass found at -n 3.
+
+**Rows.** The union of every row the nine notes name (150, the same `-k`
+set as `kernel-hotpaths`' section 4.3), once on this tree: **150 passed, 0
+failed, 0 skipped** - `glyphcost` included, files-3 being out (LOG O5).
+**`make test-full`: 85 passed, 0 failed, 3 skipped** (the same three fixture
+skips). `make`, `make small`, `make emu` and `make mega` build; `hotpar` is
+green on kern_big and kern_small.
+
 ## 0. The owner's picks at a glance, ranked
 
 Every byte-costing item, in one place, ranked by user-visible time per
