@@ -1511,6 +1511,17 @@ FAST = [
         "(SKIP, never pass, without qpdf on PATH), and every negative file's "
         "expected PDE_* code exists in pdabi.h",
         needs=()),
+    Row("pdstk", "fast", py("tests/unit/t_pdstk.py"), 1.3,
+        "DECISIONS D21/D23 (PageDesk's stack): tools/os88pdstk.py reads every "
+        "PageDesk segment's source and build/*.gen.asm, builds the call graph "
+        "with each frame, push and return address, and fails on recursion "
+        "outside its bounded ratchet, a module verb deeper than the 2 KiB "
+        "private stack less 256, or a callback chain on the UI task's 512-byte "
+        "stack over 384 (dispatch + frames + the kernel call). bez() recursing "
+        "seven deep wrote over the kernel's menu bar. Three synthetic negative "
+        "controls always run; the real tree SKIPs, by name, until `make "
+        "pagedesk` has built it",
+        ),
     Row("pdfixstress", "full", py("tests/unit/t_pdfix.py", "--stress"), 0.8,
         "t_pdfix's stress-set claims (PD-06/PD-21): a >640 KiB file, a "
         ">64 KiB stream, 64 pages, 10,000 sparse objects within "
