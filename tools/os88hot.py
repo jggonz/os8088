@@ -89,13 +89,25 @@ other drive's window acted re-reads that disk; a relaunch of a closed Calc
 reads nothing) and say so in their labels.
 
 WHAT IT IS NOT. MartyPC is cycle-accurate for the CPU, the bus and the
-video card and is NOT disk-accurate (docs/MARTYPC-DEBUG.md): every scenario
-that touches the floppy - `desktop`, `opendisk`, `launch` - has a disk term
-that is 17-30x fast here, so its ms is a CPU-and-redraw figure and its disk
-part must be priced from the FDC counters (reported as `fdc`: int 13h
-calls and sectors) at ~400 ms a call (PERFORMANCE.md Part 2). On 86Box
-nothing is cycle-accurate and a figure is relative; the 86Box arm (a 286
-A/B) is not in this version.
+video card, and this tree's build of it gives the FLOPPY a platter
+(tools/martypc/patches/04: rotation, data rate, one sector at a time,
+seeks; docs/MARTYPC-DEBUG.md *The disk has a platter*), which reproduces
+the 5150's raw int 13h rows to the measurement quantum and boots in 0.92x
+the field's ticks. So `desktop`, `opendisk` and the cold `launch` include
+a disk term that is close to real; what it does NOT model is motor
+spin-up (instant here) and anything below the BIOS a real NEC 765 might do
+differently, and a disk figure still goes to the 5150 before PERFORMANCE.md
+Part 9 quotes it. `fdc` counts the int 13h-level reads and sectors exactly.
+
+ON 86BOX (--emu 86box [--cpu 286|386], an AT through
+tools/os88box86api.py) NOTHING IS CYCLE-ACCURATE and every figure is
+RELATIVE - an A/B on one machine and nothing else (docs/86BOX.md, *What it
+is NOT*). There are no logging breakpoints and `advance` is a whole
+emulated millisecond, so every 86Box run is sampled at 1 ms: `busy` is the
+share of samples not at the idle hlt, the end is the first millisecond the
+DONE state is seen at (1-2 ms resolution), `unl` is not available, and
+`cycles` is MartyPC-only. Output names the machine `286/cga` and the JSON
+carries `relative: true`.
 """
 import argparse
 import bisect
@@ -148,7 +160,19 @@ def img(name):
     return os.path.join(bdir(), name)
 
 
+# --emu 86box: the same three adapters on an AT (tools/os88box86api.py's
+# names - no `os8088_` prefix, which is MartyPC's namespace). NOT
+# cycle-accurate and stepped in 1 ms quanta: every figure is RELATIVE, for an
+# A/B on one machine and nothing else (docs/86BOX.md, *What it is NOT*).
+EMU = "marty"
+CPU = "286"
+
+
 def machine_name(m):
+    if EMU == "86box":
+        return {"cga": "at%s_cga", "herc": "at%s_herc",
+                "vga": "at%s_vga"}.get(m, m).replace("%s", CPU) \
+            if m in ("cga", "herc", "vga") else m
     return MACHINES.get(m, m)
 
 
@@ -163,7 +187,7 @@ class KMap(object):
     THIS machine now - so build it after the boot (the `.cold` slide and
     [spl_fseg] are read from the guest)."""
 
-    def __init__(self, m):
+    def __init__(self, m, fseg=None):
         import os88sym
         off = os88sym.syms()
         sect = os88sym.sections()
@@ -171,7 +195,9 @@ class KMap(object):
         self.slide = m.cold_slide()
         kseg = os88sym.KERNEL_SEG
         cold = eq.get("COLD_SEG")
-        fseg = u16(m.read(m.sym("spl_fseg"), 2)) if "spl_fseg" in off else 0
+        if fseg is None:
+            fseg = u16(m.read(m.sym("spl_fseg"), 2)) if "spl_fseg" in off \
+                else 0
         segs = {".text": kseg, ".bss": kseg, ".vga": kseg,
                 ".cold": cold, ".ovl": eq.get("FAT_SEG"),
                 ".boot2": fseg or None}
@@ -253,18 +279,66 @@ class Buckets(object):
                         self.pk.append((seg * 16, seg * 16 + size, t))
         except Exception:                                   # noqa: BLE001
             pass
-        self.mods = []
+        # ON-DEMAND MODULES (SPEC.md 2.8): a mod_tab row's claim, matched to
+        # its `.mod*` section by its CODE BYTES against kernel-full.bin (the
+        # sections are vstart=0, so a symbol's offset is its offset in the
+        # claim), and resolved by routine like the kernel. A row no section
+        # matches is bucketed whole, by file.
+        self.mods = []          # (lo, hi, file, [(off, name)])
         try:
             a, b = m.sym("mod_tab"), m.sym("mod_tab_end")
             raw = m.read(a, b - a)
+            groups = _mod_groups()
             for r in range(0, len(raw) - 3, 4):
                 seg, fp = u16(raw, r), u16(raw, r + 2)
-                if seg:
-                    nm = bytes(m.readseg(0x60, fp, 13)).split(b"\0")[0]
-                    self.mods.append((seg * 16, nm.decode("latin-1")))
+                if not seg:
+                    continue
+                nm = bytes(m.readseg(0x60, fp, 13)).split(b"\0")[0] \
+                    .decode("latin-1")
+                live = bytes(m.read(seg * 16 + 0x20, 0x40))
+                best, tab, size = 0, [], 0x10000
+                for g in groups:
+                    hit = sum(1 for x, y in zip(live, g["probe"]) if x == y)
+                    if hit > best:
+                        best, tab, size = hit, g["syms"], g["size"]
+                if best < 0x30:
+                    tab, size = [], 0x10000
+                self.mods.append((seg * 16, seg * 16 + size, nm, tab))
             self.mods.sort()
         except Exception:                                   # noqa: BLE001
             pass
+        # LOADED DRIVERS (SPEC.md 51): drv_tab rows, each image at its own
+        # segment for DRVR_PARA paragraphs, resolved through the driver's
+        # own map (tools/os88drvsym.py, the Makefile's own nasm line)
+        self.drv = []
+        try:
+            import os88sym
+            n = os88sym.equates().get("DRV_MAX", 0)
+            base = m.sym("drv_tab")
+            raw = m.read(base, n * 16)
+            for r in range(n):
+                seg = u16(raw, r * 16 + 2)
+                para = u16(raw, r * 16 + 8)
+                fp = u16(raw, r * 16 + 4)
+                if not seg:
+                    continue
+                nm = bytes(m.readseg(0x60, fp, 13)).split(b"\0")[0] \
+                    .decode("latin-1")
+                self.drv.append((seg * 16, seg * 16 + (para or 0x1000) * 16,
+                                 nm, _drv_syms(nm)))
+        except Exception:                                   # noqa: BLE001
+            pass
+
+    def _sub(self, kind, lo, nm, tab, ip):
+        if not tab:
+            return "%s %s" % (kind, nm)
+        off = ip - lo
+        i = bisect.bisect_right(tab, (off, "\xff")) - 1
+        if i < 0:
+            return "%s %s" % (kind, nm)
+        n = tab[i][1]
+        return "%s:%s" % (nm.split(".")[0].lower(),
+                          n if self.local else routine(n))
 
     def name(self, ip):
         for lo, hi, t in self.pk:
@@ -275,10 +349,71 @@ class Buckets(object):
         f = self.k.find(ip)
         if f is not None:
             return f[0] if self.local else routine(f[0])
-        for base, nm in reversed(self.mods):
-            if base <= ip < base + 0x10000:
-                return "mod " + nm
+        for lo, hi, nm, tab in self.mods:
+            if lo <= ip < hi:
+                return self._sub("mod", lo, nm, tab, ip)
+        for lo, hi, nm, tab in self.drv:
+            if lo <= ip < hi:
+                return self._sub("drv", lo, nm, tab, ip)
         return "other %05X" % (ip & 0xFFF00)
+
+
+_MODG = None
+
+
+def _mod_groups():
+    """[{probe, syms, size}] per on-demand module: its sections out of
+    build/kernel.map's segment table (a `.modX` and any section that follows
+    it at a nonzero vstart is one module), the bytes at +0x20 out of
+    kernel-full.bin, and its labels out of os88sym."""
+    global _MODG
+    if _MODG is not None:
+        return _MODG
+    import os88sym
+    mp = os.path.join(bdir(), "kernel.map")
+    full = open(os.path.join(bdir(), "kernel-full.bin"), "rb").read()
+    secs = []
+    for line in open(mp):
+        f = line.split()
+        if len(f) == 6 and f[4] == "progbits" and f[5].startswith(".mod") \
+                and f[5] != ".modmap":
+            secs.append((int(f[1], 16), int(f[0], 16), int(f[3], 16), f[5]))
+        if line.startswith("-- Symbols"):
+            break
+    off, sect = os88sym.syms(), os88sym.sections()
+    groups = []
+    for start, vstart, length, name in secs:
+        if vstart and groups:           # a follows= half of the one before
+            g = groups[-1]
+            g["names"].append(name)
+            g["size"] = max(g["size"], vstart + length)
+            continue
+        groups.append(dict(names=[name], size=length,
+                           probe=full[start + 0x20:start + 0x60]))
+    for g in groups:
+        g["syms"] = sorted((off[n], n) for n in off
+                           if sect.get(n) in g["names"])
+    _MODG = groups
+    return groups
+
+
+_DRVS = {}
+
+
+def _drv_syms(fname):
+    """[(offset, label)] for a loaded driver, or [] when its map cannot be
+    had (a knob arm, a build tree without its .bin)."""
+    key = fname.upper()
+    if key not in _DRVS:
+        tab = []
+        try:
+            import os88drvsym
+            d = os88drvsym.symbols(fname.split(".")[0].lower() + ".bin")
+            tab = sorted((v, k) for k, v in d.items())
+        except BaseException:                               # noqa: BLE001
+            tab = []
+        _DRVS[key] = tab
+    return _DRVS[key]
 
 
 # =============================================================================
@@ -329,8 +464,20 @@ class Run(object):
             u16(ivt, n * 4 + 2) * 16 + u16(ivt, n * 4) for n in range(8, 16)))
         self.unl = m.sym("gfx_unlock")
         self._mo = ui.mo
+        # 86BOX: no logging breakpoints and no batch, and `advance` is a
+        # whole emulated millisecond. So it is always SAMPLED - the IP after
+        # every 1 ms step - and both halts and the end come off the samples:
+        # a sample at the idle hlt is halted, and the end is the first step
+        # the DONE state is seen at (1-2 ms resolution)
+        self.box = bool(getattr(m, "box86", False))
+        if self.box:
+            self.sample = True
+            self.step = int(HZ / 1000) + 1
+            self.per = 2
 
     def _bps(self):
+        if self.box:
+            return []
         a = [self.hlt, self.unl] + self.isr + self.extra
         seen, out = set(), []
         for x in a:
@@ -340,6 +487,15 @@ class Run(object):
         return out
 
     def _adv(self, n):
+        if self.box:
+            c = None
+            for _ in range(n):
+                r = self.m.cmd(cmd="advance", cycles=self.step)
+                c1 = int(r["cycles"])
+                prev = self.samples[-1][0] if self.samples else c1 - self.step
+                self.samples.append((c1, int(r["flat_ip"]), c1 - prev))
+                c = c1
+            return c
         cmds = [{"cmd": "advance", "cycles": self.step}] * n
         out = self.m.batch(cmds)
         for r in out:
@@ -435,7 +591,7 @@ class Run(object):
             if cyc > lim:
                 raise SystemExit("os88hot: the scenario never reached its "
                                  "DONE state inside %.0f guest s" % limit)
-        lg = m.cmd(cmd="bplog")
+        lg = m.cmd(cmd="bplog") if not self.box else {"hits": []}
         m.breakpoints([])
         fdc1 = _fdc(m)
         m.run()
@@ -447,6 +603,8 @@ class Run(object):
                              min_secs)
 
     def _account(self, hits, c0, t0, t_done, c_last, fdc0, fdc1, min_secs):
+        if self.box:
+            return self._account_box(c0, t0, t_done, fdc0, fdc1)
         isr = set(self.isr)
         # halted intervals: hlt hit -> the next logged hit (which can only be
         # an interrupt entry, the CPU executing nothing in between). The
@@ -493,13 +651,28 @@ class Run(object):
         self.hits = hits
         return res
 
+    def _account_box(self, c0, t0, t_done, fdc0, fdc1):
+        self.halts = []
+        self.hits = []
+        t_end = t_done
+        win = max(1, t_end - t0)
+        smp = [x for x in self.samples if t0 < x[0] <= t_end]
+        tot = sum(w for c, ip, w in smp) or 1
+        hal = sum(w for c, ip, w in smp if ip in (self.hlt, self.hlt + 1))
+        return dict(ms=ms(win), busy_ms=ms(win) * (tot - hal) / tot,
+                    busy_pct=100.0 * (tot - hal) / tot, unlocks=None,
+                    irqs=None, t0=t0, t_end=t_end, t_done=t_done, cycles=win,
+                    fdc=_fdcdelta(fdc0, fdc1), relative=True)
+
     def start(self):
         """Note whether the paused guest is halted right now (the window's
         first interval). Called by go() after the pause."""
         st = self.m.status()
         self._was_halted = int(st["flat_ip"]) in (self.hlt, self.hlt + 1)
 
-    def halted_at(self, c):
+    def halted_at(self, c, ip=None):
+        if self.box:
+            return ip in (self.hlt, self.hlt + 1)
         i = bisect.bisect_right(self._hstarts, c) - 1
         return i >= 0 and self.halts[i][0] <= c < self.halts[i][1]
 
@@ -889,14 +1062,20 @@ def run_desktop(mach, sample=False, local=False):
             except Exception:                               # noqa: BLE001
                 return False
         seen = None
+        fseg = 0                # stage 2's blob is where [spl_fseg] said
+        fsa = m.sym("spl_fseg")  # while it lived: kmain zeroes it at the end
         step = 1 if sample else 60000
         n = 48 if sample else 8
         while True:
             out = m.batch([{"cmd": "advance", "cycles": step}] * n)
             if sample:
                 samples += [(int(r["cycles"]), int(r["flat_ip"]),
-                             int(r["advanced_cycles"])) for r in out]
+                             int(r.get("advanced_cycles", step)))
+                            for r in out]
             cyc = int(out[-1]["cycles"])
+            if sample:                  # the LAST value it held before
+                v = u16(m.read(fsa, 2))  # kmain cleared it
+                fseg = v or fseg
             if up():
                 if seen is None:
                     seen = cyc
@@ -909,9 +1088,11 @@ def run_desktop(mach, sample=False, local=False):
         res = dict(ms=ms(seen - c0), busy_ms=None, fdc=_fdc(m))
         prof = None
         if sample:
-            km = KMap(m)
+            km = KMap(m, fseg=fseg or None)
             bk = Buckets(m, km, local)
-            prof = _profile_table(samples, bk, lambda c: False)
+            hl = m.sym("sch_idle_body.rearm")
+            prof = _profile_table(samples, bk,
+                                  lambda c, ip: ip in (hl - 1, hl))
         m.run()
         return res, prof
 
@@ -920,7 +1101,7 @@ def _profile_table(samples, bk, halted):
     tab, tot, hal = {}, 0, 0
     for c, ip, w in samples:
         tot += w
-        if halted(c):
+        if halted(c, ip):
             hal += w
             continue
         k = bk.name(ip)
@@ -998,6 +1179,12 @@ def machines(a):
     return list(ALL) if a.all else [a.machine]
 
 
+def tag(mach):
+    """How a machine is named in the output: `286/cga` on 86Box, where the
+    figures are RELATIVE, so they cannot be read as MartyPC ones."""
+    return mach if EMU == "marty" else "%s/%s" % (CPU, mach)
+
+
 def cmd_time(a):
     res = {}
     for mach in machines(a):
@@ -1013,7 +1200,7 @@ def cmd_time(a):
             fdc = sm["fdc"] or {}
             print("%-5s %-8s %-22s ms %8.1f (min %8.1f)  busy %8s  %5s%%  "
                   "unl %4s  fdc %s"
-                  % (mach, a.scenario, label, sm["ms_med"], sm["ms_min"],
+                  % (tag(mach), a.scenario, label, sm["ms_med"], sm["ms_min"],
                      "%.1f" % sm["busy_med"] if sm["busy_med"] is not None
                      else "-",
                      "%.0f" % sm["busy_pct"] if sm["busy_pct"] is not None
@@ -1045,7 +1232,7 @@ def cmd_profile(a):
             tm = times[label]
             print("\n%s  %s / %s: %s ms, busy %s ms  (%d reps, %.0f%% of "
                   "the window halted)" % (
-                      mach, a.scenario, label,
+                      tag(mach), a.scenario, label,
                       "%.1f" % tm.get("ms_med", tm.get("ms")),
                       "%.1f" % tm["busy_med"] if tm.get("busy_med") else "-",
                       a.n if a.scenario != "desktop" else 1,
@@ -1283,6 +1470,11 @@ def _num(v):
 
 def cmd_diff(a):
     A, B = json.load(open(a.a)), json.load(open(a.b))
+    # a COMBINED file (the baseline report's HOTPATH-BASE-*.json) holds one
+    # result per `<subcommand>-<scenario>`: --key picks one out of either side
+    key = getattr(a, "key", None)
+    if key:
+        A, B = A.get(key, A), B.get(key, B)
     for mach in sorted(set(A) & set(B)):
         ra = A[mach]
         rb = B[mach]
@@ -1335,13 +1527,16 @@ def _diffrow(mach, label, x, y):
     if "rows" in x and "rows" in y:
         dx = dict((r["name"], r) for r in x["rows"])
         dy = dict((r["name"], r) for r in y["rows"])
-        nrep = 1
+        # a profile's cycles are SUMMED over its reps: per rep, as `profile`
+        # prints them, so two runs at different -n still compare
+        nx = (x.get("time") or {}).get("n") or 1
+        ny = (y.get("time") or {}).get("n") or 1
         top = [r["name"] for r in x["rows"][:15]]
         for n in top + [r["name"] for r in y["rows"][:15] if r["name"] not in top]:
-            cx = dx.get(n, {}).get("cycles", 0)
-            cy = dy.get(n, {}).get("cycles", 0)
-            print("      %-30s %9.2f -> %9.2f ms  (%+.2f)"
-                  % (n[:30], ms(cx) / nrep, ms(cy) / nrep, ms(cy - cx) / nrep))
+            cx = ms(dx.get(n, {}).get("cycles", 0)) / nx
+            cy = ms(dy.get(n, {}).get("cycles", 0)) / ny
+            print("      %-30s %9.2f -> %9.2f ms/rep  (%+.2f)"
+                  % (n[:30], cx, cy, cy - cx))
 
 
 # --- ab -------------------------------------------------------------------------
@@ -1410,6 +1605,10 @@ def main():
 
     def common(q):
         q.add_argument("--machine", default="cga")
+        q.add_argument("--emu", choices=("marty", "86box"), default="marty",
+                       help="86box: an AT (RELATIVE figures only)")
+        q.add_argument("--cpu", choices=("286", "386"), default="286",
+                       help="with --emu 86box: at286_* or at386_*")
         q.add_argument("--all", action="store_true")
         q.add_argument("--json")
         return q
@@ -1433,7 +1632,13 @@ def main():
     q = sub.add_parser("diff")
     q.add_argument("a")
     q.add_argument("b")
+    q.add_argument("--key", help="one result out of a combined baseline "
+                   "file, e.g. time-raise or gfxbench")
     a = p.parse_args(argv)
+    global EMU, CPU
+    EMU, CPU = getattr(a, "emu", "marty"), getattr(a, "cpu", "286")
+    if EMU == "86box":
+        os.environ["OS88_EMU"] = "86box"
     fn = {"scenarios": cmd_scenarios, "time": cmd_time,
           "profile": cmd_profile, "cycles": cmd_cycles,
           "gfxbench": cmd_bench, "sysbench": cmd_bench,
