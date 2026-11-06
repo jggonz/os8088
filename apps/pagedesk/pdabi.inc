@@ -138,6 +138,9 @@ PDT_NULL                 equ 11
 PDT_REF                  equ 12
 PDS_NONE                 equ 0
 PDS_COMPLETED            equ 1
+PDRF_ANNOTS              equ 0x0001
+PDRF_EDITS               equ 0x0002
+PDRF_NOEDITID            equ 0x0004
 PDSV_INCREMENTAL         equ 0
 PDSV_FRESH               equ 1
 PDSV_EXTRACT             equ 2
@@ -408,12 +411,16 @@ PDXB_FINGERPRINT_CRC_HEAD      equ 4
 PDXB_FINGERPRINT_CRC_TAIL      equ 6
 PDXB_FINGERPRINT_BYTES         equ 8
 
-; ---- struct pdxb_render (34 bytes) -----------------------------------------
+; ---- struct pdxb_render (42 bytes) -----------------------------------------
 PDXB_RENDER_VIEW               equ 0
 PDXB_RENDER_PAGE               equ 28
 PDXB_RENDER_WIN_OFF            equ 30
 PDXB_RENDER_MONO_MARK          equ 32
-PDXB_RENDER_BYTES              equ 34
+PDXB_RENDER_EDITS_SEG          equ 34
+PDXB_RENDER_EDITS_COUNT        equ 36
+PDXB_RENDER_RFLAGS             equ 38
+PDXB_RENDER_HIDE               equ 40
+PDXB_RENDER_BYTES              equ 42
 
 ; ---- struct pdxb_textmap (42 bytes) ----------------------------------------
 PDXB_TEXTMAP_VIEW              equ 0
@@ -465,7 +472,7 @@ PDXB_FONTBANK_INDEX_SEG        equ 22
 PDXB_FONTBANK_INDEX_LEN        equ 24
 PDXB_FONTBANK_BYTES            equ 26
 
-; ---- struct pdxb_save (122 bytes) -------------------------------------------
+; ---- struct pdxb_save (126 bytes) -------------------------------------------
 PDXB_SAVE_TARGET               equ 0
 PDXB_SAVE_TARGET_N             equ 14
 PDXB_SAVE_TARGET_ESZ           equ 1
@@ -487,7 +494,9 @@ PDXB_SAVE_DATE_ESZ             equ 1
 PDXB_SAVE_AUTHOR               equ 74
 PDXB_SAVE_AUTHOR_N             equ 48
 PDXB_SAVE_AUTHOR_ESZ           equ 1
-PDXB_SAVE_BYTES                equ 122
+PDXB_SAVE_SRC_CLUS             equ 122
+PDXB_SAVE_SRC_VOL              equ 124
+PDXB_SAVE_BYTES                equ 126
 
 ; ---- struct pd_newpage (10 bytes) ------------------------------------------
 PDXB_NEWPAGE_W                 equ 0

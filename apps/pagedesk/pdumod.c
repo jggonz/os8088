@@ -43,13 +43,25 @@ static struct pdxb_init pdu_xinit;
 #define PDU_DC_GLYPH  3
 #define PDU_DC_DL     4
 #define PDU_DC_BAND   5
-#define PDU_NDC       6
-#define PDU_DC_SPLIT  4                 /* rows 0..3 in claim A, 4..5 in B */
+/* wave 2's rows (DECISIONS D15, carved by the lead so no two agents edit
+ * this table): the edit store (13.1, owner `edit`), its undo history (13.6,
+ * `edit`), the page order (13.7, `pages`), thumbnails (16.2, `nav`) and the
+ * text/search scratch (16.2, `nav`). Reach them ONLY through pdu_dcseg(). */
+#define PDU_DC_EDITS  6
+#define PDU_DC_UNDO   7
+#define PDU_DC_PAGES  8
+#define PDU_DC_THUMB  9
+#define PDU_DC_SCRATCH 10
+#define PDU_NDC       11
+#define PDU_DC_SPLIT  4                 /* rows 0..3 in claim A, 4.. in B */
 /* DECISIONS D13: PDREND keeps its gstates and font cache in a 6,912-byte
  * workspace at the tail of dl_seg, so the display-list row is 22 + 7 = 29 */
-static const unsigned pdu_dckb[PDU_NDC] = { 16, 8, 11, 12, 29, 0 };
+static const unsigned pdu_dckb[PDU_NDC] = { 16, 8, 11, 12, 29, 0,
+                                            16, 4, 1, 4, 2 };
 static unsigned pdu_dc[PDU_NDC];        /* sub-segments, 0 = not held */
 static unsigned pdu_dclaim[2];          /* the two real claims */
+/* a document row's segment, 0 when no document is open (D15) */
+static unsigned pdu_dcseg(int row) { return (row >= 0 && row < PDU_NDC) ? pdu_dc[row] : 0; }
 static unsigned pdu_bandb;              /* the band's bytes */
 
 static unsigned pdu_bankraw;            /* the PDRES INDEX claim... */

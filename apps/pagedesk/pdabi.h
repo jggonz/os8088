@@ -343,7 +343,14 @@ struct pdxb_render {
     pdw  win_off;           /* the window record (kernel segment offset),  */
                             /* for OSAPI_WM_CLIP_SET per band              */
     pdw  mono_mark;         /* 17.4 style                                  */
+    pdw  edits_seg;         /* wave 2 (D15): the edit store (13.1.1), 0=none*/
+    pdw  edits_count;
+    pdw  rflags;            /* PDRF_*                                      */
+    pdw  hide;              /* with PDRF_NOEDITID: the record not drawn    */
 };
+#define PDRF_ANNOTS   0x0001  /* draw the source's annotations (/AP /N)      */
+#define PDRF_EDITS    0x0002  /* draw the edit store's records for this page */
+#define PDRF_NOEDITID 0x0004  /* with edits: skip record index `hide` (drag) */
 
 struct pdxb_textmap {
     struct pd_view view;    /* for device quads; pt16 quads are canonical  */
@@ -401,6 +408,8 @@ struct pdxb_save {
     char source[14];        /* in: 8.3 source an incremental save copies  */
     char date[24];          /* in: "D:YYYYMMDDHHmmSS" or "" (no RTC)      */
     char author[48];        /* in: /T for new notes, "" = none            */
+    pdw  src_clus, src_vol; /* in (D14): the source's folder, for a Save As
+                               into another folder; 0,0 = the current one  */
 };
 #define PDSV_INCREMENTAL 0
 #define PDSV_FRESH       1

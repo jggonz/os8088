@@ -2057,3 +2057,31 @@ Mutating the include (a changed rounding constant, a dropped carry, a wrong
 comparison) fails the run. It needs the `unicorn` Python package and exits 77
 (skip) without it.
 
+
+### 20.8 The edit store and undo (`edit`, wave 2)
+
+Pinned by the lead before wave 2 so `edit`, `notes` and `pages` build against
+one interface (DECISIONS D15). `edit` owns `apps/pagedesk/pduedit.c` and
+`pduundo.c`; every other agent calls only these, never the claim directly.
+
+| call | contract |
+|---|---|
+| `int pdu_ed_count(void)` | records in the store, deleted ones included |
+| `int pdu_ed_get(int i, struct pd_edit *e)` | copy record `i` out; 0, or -1 for a bad index |
+| `int pdu_ed_new(struct pd_edit *e, const char *text, unsigned tlen, const pd_pt *pts, unsigned npts)` | append; assigns `e->id`, sets `PDEF_DIRTY`, stores text and points; the new index, or -1 with `pdu_ed_err` = `PDE_NOMEM`/`PDE_LIMIT` (the typed text is kept by the caller, 13.1) |
+| `int pdu_ed_set(int i, const struct pd_edit *e)` | replace the fixed fields (geometry, colour, style, state) |
+| `int pdu_ed_text(int i, const char *text, unsigned tlen)` / `unsigned pdu_ed_text_get(int i, char *dst, unsigned cap)` | the record's text heap entry |
+| `int pdu_ed_pts(int i, const pd_pt *pts, unsigned npts)` / `unsigned pdu_ed_pts_get(int i, pd_pt *dst, unsigned cap)` | the point heap entry (13.1.1's orders) |
+| `int pdu_ed_del(int i)` | sets `PDEF_DELETED`; a record replacing a SOURCE annotation stays as the deletion |
+| `int pdu_ed_copy_src(unsigned obj, unsigned gen, struct pd_edit *e)` | copy-on-edit of a source annotation (13.1): finds or creates the record naming it |
+| `int pdu_ed_first(unsigned page)` / `int pdu_ed_next(int i, unsigned page)` | live records on a page id, in z-order; -1 at the end |
+| `unsigned pdu_ed_seg(void)` | the segment for `pdxb_render.edits_seg` / `pdxb_save.edits_seg` (records at 0, heaps after, 13.1.1) |
+| `void pdu_undo_begin(int label)` / `void pdu_undo_end(void)` | bracket one user command; nested calls coalesce |
+| `int pdu_undo(void)` / `int pdu_redo(void)` | 0 = done, -1 = nothing to do |
+| `int pdu_undo_can(void)` / `int pdu_redo_can(void)` | greying (17.3) |
+| `void pdu_undo_pageop(const void *delta, unsigned len)` | a page operation as a command (13.6, 13.7): `pages` supplies the delta and its own apply/revert through `pdu_pg_apply(const void *, unsigned, int undo)` |
+| `int pdu_dirty(void)` / `void pdu_saved(void)` | dirty since the save point; Save calls `pdu_saved` on success |
+
+Every mutating call records its undo delta itself, so a caller brackets a
+command with `pdu_undo_begin`/`end` and does nothing else for undo. Calls are
+made on the UI task only, never inside a module slice.
