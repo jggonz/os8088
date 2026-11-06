@@ -1504,6 +1504,19 @@ FAST = [
         "C message and a tool's help text and stands for comments and code. "
         "~2s: it walks the built disks and hashes the packages' strings",
         needs=()),
+    Row("pdfix", "fast", py("tests/unit/t_pdfix.py"), 0.3,
+        "PAGEDESK-SPEC 18 / 20.1: tools/os88pdfgen.py regenerates PageDesk's "
+        "eight sample PDFs byte-identically to the committed "
+        "apps/pagedesk/samples/, every XT-profile sample passes qpdf --check "
+        "(SKIP, never pass, without qpdf on PATH), and every negative file's "
+        "expected PDE_* code exists in pdabi.h",
+        needs=()),
+    Row("pdfixstress", "full", py("tests/unit/t_pdfix.py", "--stress"), 0.8,
+        "t_pdfix's stress-set claims (PD-06/PD-21): a >640 KiB file, a "
+        ">64 KiB stream, 64 pages, 10,000 sparse objects within "
+        "PD_MAXSUBSEC, a 3-revision chain where the newest wins, 256 "
+        "annotations - 0.45 s of image generation kept out of the fast tier",
+        needs=()),
     Row("livefull", "fast", py("tests/unit/t_livefull.py"), 0.2,
         "SPEC.md 80.6: the live USB/CD is the ONE image whose premise is "
         "completeness, and until this row nothing in the tree had ever read "
