@@ -765,24 +765,37 @@ lz_len:
 ;
 ; The tag byte lives in DL with a GUARD bit below it, so DL reaching zero is
 ; the refill signal and no register is spent on a counter - which matters,
-; because every register a bit reader holds is one `rep movsb` wants.
+; because every register a bit reader holds is one `rep movsb` wants. A bit
+; is `add dl, dl`, CF the bit; when that leaves DL zero the guard has gone
+; out and the next byte comes in as `mov dl, [si] / inc si / adc dl, dl` -
+; `inc` leaves CF alone, by design, so the guard shifted out above becomes
+; the new low bit and CF is the byte's top bit.
+;
+; **THE BYTE PATH IS THE BUDGET'S, AS LZ4's IS** (kernel hot-paths pass 1):
+; BP the checkpoint, BX the budget, a literal `sub bx, 1 / jb / movsb`, and a
+; match inline with lz_match's checks in its order - lz_lz4's banner is the
+; account, and the slow paths are the same ones. The refills are out of line:
+; seven bits in eight do not refill, and on an 8088 the jump the old `jnz`
+; took every time is 16 cycles where an untaken `jz` is 4.
 ; -----------------------------------------------------------------------------
-%macro LZ_GETBIT 0
-    add dl, dl
-    jnz %%ok
-    mov dl, [si]
-    inc si                      ; `inc` leaves CF alone, by design, so the
-    adc dl, dl                  ; guard shifted out above becomes the new low
-%%ok:                           ; bit and CF is the byte's top bit
-%endmacro
-
 lz_lzb:
+    call lz_arm                 ; the budget (D0 = DI = 0), as lz_lz4 has it -
+    mov bx, dx                  ; but in BX, because DL is the tag byte
     mov dl, 0x80                ; the guard alone: the first read refills
+.fast:
+    mov bp, [bp+LZ_F_TSI]       ; BP = the checkpoint, until a slow path
 .loop:
-    cmp si, [bp+LZ_F_TSI]       ; the tail bound, as LZ4's `.seq` reads it
+    cmp si, bp                  ; the tail bound, as LZ4's `.seq` reads it
     jae .end
-    LZ_GETBIT
-    jnc .lit
+    add dl, dl                  ; a bit, its refill out of line (above)
+    jz .refill
+.bit:
+    jc .match
+    sub bx, 1                   ; ONE LITERAL BYTE, off the budget (kernel
+    jb .lslow                   ; hot-paths pass 1: lz_lz4's banner) - and
+    movsb                       ; this is the path a byte of LZB is made of
+    jmp short .loop
+.match:
     call .gamma                 ; the match length
     mov cx, ax
     call .gamma                 ; (offset >> 8) + 2
@@ -790,35 +803,84 @@ lz_lzb:
     dec ax
     mov ah, al
     lodsb                       ; ...and its low byte: AX is the offset
-    call lz_match
-    jnc .loop
+    dec ax                      ; lz_match's checks, in its order, inline as
+    cmp ax, di                  ; lz_lz4 makes them: offset 0 wraps to FFFFh,
+    jae .mslow                  ; one reaching below DI is past it,
+    sub bx, cx                  ; and then the take
+    jb .mslow
+    push ds
+    xchg ax, si                 ; AX = the source's place, SI = offset - 1
+    neg si
+    add si, di
+    dec si                      ; SI = DI - offset, with no borrow
+    push es
+    pop ds                      ; a match reads what has already been written
+    rep movsb
+    pop ds
+    xchg ax, si
+    jmp short .loop
+.mslow:                         ; THE OLD WAY ROUND, REM settled first. BL
+    inc ax                      ; carries the tag across lz_sync and lz_arm,
+    call .sync                  ; which spend DX, and the budget comes back
+    call lz_match               ; into BX with the tag into DL in one xchg
+    jc .bad
+.rearm:
+    call lz_arm
+    xchg bx, dx
+    jmp short .fast
+.lslow:
+    call .sync
+    sub word [bp+LZ_F_REM], 1   ; lz_take's body, inline, for the one byte a
+    sbb word [bp+LZ_F_REMH], 0  ; literal is here - LZB has no literal RUNS
+    jc .bad
+    movsb
+    or di, di
+    jnz .rearm
+    call lz_dbump               ; ...and one byte can land on the boundary too
+    jmp short .rearm
+.refill:
+    mov dl, [si]
+    inc si                      ; `inc` leaves CF alone: the guard shifted
+    adc dl, dl                  ; out above becomes the new low bit, and CF
+    jmp short .bit              ; is the byte's top bit
 .bad:
     stc
     ret
-.lit:
-    sub word [bp+LZ_F_REM], 1   ; lz_take's body, inline, for the one byte a
-    sbb word [bp+LZ_F_REMH], 0  ; literal is here - LZB has no literal RUNS,
-    jc .bad                     ; and this is the path 207 cycles a byte is
-    movsb                       ; made of
-    or di, di
-    jnz .loop
-    call lz_dbump               ; ...and one byte can land on the boundary too
-    jmp short .loop
+.sync:                          ; the tag into BL, BP the frame - four bytes
+    mov bl, dl                  ; up here, this call's return being on top of
+    mov bp, sp                  ; the arm's - and REM settled
+    add bp, 4
+    jmp lz_sync
 .end:
+    call .sync                  ; REM exact, for lz_tail
     call lz_at                  ; the checkpoint, as LZ4's `.end` reads it
-    jb .loop
+    jb .rearm
     jne .bad
-    jmp lz_tail
+    jmp lz_tail                 ; ...with BP the frame
 
 .gamma:                         ; AX = the value, which is always >= 2
     mov ax, 1
 .g:
-    LZ_GETBIT
+    add dl, dl                  ; two bits a round, each refill out of line
+    jz .gr1
+.g1:
     adc ax, ax
     jc .gsat                    ; a gamma past a word: lz_len's .sat, for the
-    LZ_GETBIT                   ; same all-ones window
+    add dl, dl                  ; same all-ones window
+    jz .gr2
+.g2:
     jc .g
     ret
+.gr1:
+    mov dl, [si]
+    inc si
+    adc dl, dl
+    jmp short .g1
+.gr2:
+    mov dl, [si]
+    inc si
+    adc dl, dl
+    jmp short .g2
 .gsat:
     sbb ax, ax                  ; CF=1: AX = 0xFFFF
     ret
@@ -832,9 +894,5 @@ lz_lzb:
 ; -----------------------------------------------------------------------------
 lzf_decomp:             call lz_decomp_x
                     retf
-    nop                         ; PARITY PAD, never executed: the decoders'
-                                ; fast paths are 125 bytes, and dsk_xfer,
-                                ; dsk_runcap and dsk_next_clus_x below them
-                                ; keep an EVEN shift (t_hotpar.py)
 
 section .text
