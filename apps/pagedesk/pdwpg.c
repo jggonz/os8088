@@ -68,7 +68,7 @@ static void gc_mark(pdw n);
 static pdw  gc_newnum(pdw n);
 static pdw rs_map(pdw n)
 {
-    pdw k;
+    static pdw k;
     if (rs_mode) return gc_newnum(n);
     for (k = 0; k < dm_n; k++) if (dm_old[k] == n) return (pdw)(dm_new + k);
     if (n == dm_pgold) return dm_pgnew;
@@ -121,7 +121,7 @@ static void rs_walk(pdw a, pdw b, pdw emit)
  * is left OPEN: the caller appends keys and writes " >>". */
 static pdw dk_copy(pdw ds, pdw skip, pdw map)
 {
-    pdw r;
+    static pdw r;
     pb_s("<<");
     for (r = dk_first(ds); r == 1; r = dk_next()) {
         if (dk_bit() & skip) continue;
@@ -204,7 +204,13 @@ static pdw pg_annarr(pdw page)
  * With no page map (pm_on = 0) this is the 14.2 step 2 patch of /Annots alone. */
 static pdw pg_rev(pdw page, pdw rot, pdw edited)
 {
-    pdw r, ds, f, reparent, ind = 0, inl = 0, av = 0, ae = 0, skip, num = g_pi.objnum, gen = g_pi.gen;
+    static pdw r, ds, f, reparent, ind, inl, av, ae, skip, num, gen;
+    ind = 0;
+    inl = 0;
+    av = 0;
+    ae = 0;
+    num = g_pi.objnum;
+    gen = g_pi.gen;
     r = pg_fetch(num, gen, 0, pm_root); if (r) return r;
     reparent = (pdw)(pm_on && !pm_flat && pf_par != pm_root);
     ds = sc_body(); f = dict_find(ds, "Annots");
@@ -312,7 +318,11 @@ static pdw pm_dup(pdw i, pdw rot)
  * new objects taken from sv_base up */
 static pdw pm_prep(void)
 {
-    pdw n = g_sv.pages_count, i, e, k, idx, ident = 1, next, r, ds, f, kids = 0, cnt = 0, b, p, ie;
+    static pdw n, i, e, k, idx, ident, next, r, ds, f, kids, cnt, b, p, ie;
+    n = g_sv.pages_count;
+    ident = 1;
+    kids = 0;
+    cnt = 0;
     pm_on = 0; pm_n = 0; pm_flat = 1;
     if (!n) return PDE_OK;
     if (!g_sv.pages_seg) return PDE_NOMEM;
@@ -372,7 +382,7 @@ static pdw pm_prep(void)
 /* one map entry per call (PH_PGOPS) */
 static pdw pm_step(void)
 {
-    pdw e, k, idx, rot, r;
+    static pdw e, k, idx, rot, r;
     if (pm_i >= pm_n) { sv_phase = PH_CAT; return PDE_OK; }
     e = pd_fpeekw(g_sv.pages_seg, (pdw)(2 * pm_i)); k = PDM_KIND(e); idx = PDM_IDX(e); rot = PDM_ROT(e);
     r = eng_pageinfo(idx); if (r) return r;
@@ -391,7 +401,7 @@ static pdw pm_step(void)
 /* the root /Pages node again, /Kids in the new order (13.7): its other keys stay */
 static pdw pm_tree(void)
 {
-    pdw i, r, ds;
+    static pdw i, r, ds;
     r = eng_raw(pm_root, pm_rootgen); if (r) return r;
     ds = sc_body(); if (ds == SC_BAD) return PDE_SYNTAX;
     pw_obj(pm_root, pm_rootgen);

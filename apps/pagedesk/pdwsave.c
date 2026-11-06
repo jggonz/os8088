@@ -70,44 +70,17 @@ static pdw g_esn[PD_MAXEDITS], g_esg[PD_MAXEDITS], g_onum[PD_MAXEDITS], g_oapn[P
 #define EF(i) ((pdw)(g_ekf[i] >> 8))
 
 /* ---- PDENG calls ---------------------------------------------------------- */
-/* every call that reads the SOURCE stands in the source's folder (D14) */
-static pdw eng_call(pdw verb, pdw bx, pdw cx, pdw dx)
+/* every call that reads the SOURCE stands in the source's folder (D14).
+ * THE UI TASK'S STACK IS 384 BYTES (SPEC.md 8) and PDENG is called from the
+ * bottom of this module's own chain, so every frame between job_slice and
+ * pdw_engcall is paid for twice: eng_get is ONE function (no wrapper, no
+ * separate chunk/probe layers) and its arguments are file-scope words. */
+static pdw eg_num, eg_gen, eg_probe;
+static struct pd_u32 eg_at;
+static pdw eng_get(void)
 {
-    pdw r;
-    pdw_in_src();
-    r = pdw_engcall(verb, bx, cx, dx);
-    pdw_in_tgt();
-    return r;
-}
-static pdw eng_trailer(void)
-{
-    pdw r = eng_call(PDV_ENG_TRAILER, 0, 0, 0);
-    if (pdw_engcf) return r ? r : PDE_XREF;
-    pd_fcopy_in(g_xb, 0, &g_tr, sizeof g_tr);
-    return PDE_OK;
-}
-static pdw eng_fingerprint(void)
-{
-    pdw r = eng_call(PDV_ENG_FINGERPRINT, 0, 0, 0);
-    if (pdw_engcf) return r ? r : PDE_IO;
-    pd_fcopy_in(g_xb, 0, &g_fp, sizeof g_fp);
-    return PDE_OK;
-}
-static pdw eng_pageinfo(pdw idx)
-{
-    pdw r;
-    if (sv_pgidx == idx) return PDE_OK;
-    r = eng_call(PDV_ENG_PAGEINFO, idx, 0, 0);
-    if (pdw_engcf) return r ? r : PDE_RANGE;
-    pd_fcopy_in(g_xb, 0, &g_pi, sizeof g_pi);
-    sv_pgidx = idx;
-    return PDE_OK;
-}
-/* up to PDW_PGBUF bytes of object num gen from byte `at` of it into g_pg / sc_n */
-static pdw eng_chunk(pdw num, pdw gen, const struct pd_u32 *at)
-{
-    pdw r;
-    g_rc.objnum = num; g_rc.gen = gen; pdm_u32_set(&g_rc.done, at->hi, at->lo);
+    static pdw r;
+    g_rc.objnum = eg_num; g_rc.gen = eg_gen; pdm_u32_set(&g_rc.done, eg_at.hi, eg_at.lo);
 #ifdef PD_HOST
     g_rc.dseg = PDW_HOST_SCRATCH; g_rc.doff = 0;
 #else
@@ -115,7 +88,7 @@ static pdw eng_chunk(pdw num, pdw gen, const struct pd_u32 *at)
 #endif
     g_rc.dmax = PDW_PGBUF; g_rc.got = 0;
     pd_fcopy_out(&g_rc, g_xb, 0, sizeof g_rc);
-    r = eng_call(PDV_ENG_RAW_COPY, 0, 0, 0);
+    pdw_in_src(); r = pdw_engcall(PDV_ENG_RAW_COPY, 0, 0, 0); pdw_in_tgt();
     if (pdw_engcf) return r ? r : PDE_XREF;
     pd_fcopy_in(g_xb, 0, &g_rc, sizeof g_rc);
     sc_n = g_rc.got;
@@ -123,14 +96,7 @@ static pdw eng_chunk(pdw num, pdw gen, const struct pd_u32 *at)
 #ifdef PD_HOST
     pd_fcopy_in(PDW_HOST_SCRATCH, 0, g_pg, sc_n);
 #endif
-    return PDE_OK;
-}
-/* object num gen's bytes into g_pg / sc_n; PDE_LIMIT when it does not fit */
-static pdw eng_raw(pdw num, pdw gen)
-{
-    static struct pd_u32 z0;
-    pdw r;
-    r = eng_chunk(num, gen, &z0); if (r) return r;
+    if (!eg_probe) return PDE_OK;
     /* is there more? ask for the next 8 bytes into the slack past the buffer.
      * `done` is in/out (pdabi.h): PDENG has advanced it already, so set it
      * rather than add to it */
@@ -142,11 +108,42 @@ static pdw eng_raw(pdw num, pdw gen)
 #endif
     g_rc.dmax = 8; g_rc.got = 0;
     pd_fcopy_out(&g_rc, g_xb, 0, sizeof g_rc);
-    r = eng_call(PDV_ENG_RAW_COPY, 0, 0, 0);
+    pdw_in_src(); r = pdw_engcall(PDV_ENG_RAW_COPY, 0, 0, 0); pdw_in_tgt();
     if (pdw_engcf) return r ? r : PDE_XREF;
     pd_fcopy_in(g_xb, 0, &g_rc, sizeof g_rc);
     if (g_rc.got) return PDE_LIMIT;
     g_pg[sc_n] = 0;
+    return PDE_OK;
+}
+/* object num gen's bytes into g_pg / sc_n (PDE_LIMIT when it does not fit), or the
+ * first PDW_PGBUF bytes from byte `at` of it (eng_chunk; no over-length probe) */
+#define eng_raw(n, g) (eg_num = (n), eg_gen = (g), eg_at.lo = 0, eg_at.hi = 0, eg_probe = 1, eng_get())
+#define eng_chunk(n, g, at) (eg_num = (n), eg_gen = (g), eg_at.lo = (at)->lo, eg_at.hi = (at)->hi, eg_probe = 0, eng_get())
+
+static pdw eng_trailer(void)
+{
+    pdw r;
+    pdw_in_src(); r = pdw_engcall(PDV_ENG_TRAILER, 0, 0, 0); pdw_in_tgt();
+    if (pdw_engcf) return r ? r : PDE_XREF;
+    pd_fcopy_in(g_xb, 0, &g_tr, sizeof g_tr);
+    return PDE_OK;
+}
+static pdw eng_fingerprint(void)
+{
+    pdw r;
+    pdw_in_src(); r = pdw_engcall(PDV_ENG_FINGERPRINT, 0, 0, 0); pdw_in_tgt();
+    if (pdw_engcf) return r ? r : PDE_IO;
+    pd_fcopy_in(g_xb, 0, &g_fp, sizeof g_fp);
+    return PDE_OK;
+}
+static pdw eng_pageinfo(pdw idx)
+{
+    static pdw r;
+    if (sv_pgidx == idx) return PDE_OK;
+    pdw_in_src(); r = pdw_engcall(PDV_ENG_PAGEINFO, idx, 0, 0); pdw_in_tgt();
+    if (pdw_engcf) return r ? r : PDE_RANGE;
+    pd_fcopy_in(g_xb, 0, &g_pi, sizeof g_pi);
+    sv_pgidx = idx;
     return PDE_OK;
 }
 
@@ -163,7 +160,8 @@ static pdw sv_note(pdw i, pdw id)
 }
 static pdw sv_scan(void)
 {
-    pdw i, j, next = sv_base, k, f, irt;
+    static pdw i, j, next, k, f, irt;
+    next = sv_base;
     sv_v14 = sv_v15 = 0;
     /* pass 1: the near copies, and every live record checked */
     for (i = 0; i < sv_cnt; i++) {
@@ -614,7 +612,7 @@ static struct pdxb_open g_op;
 static pdw sv_vk;
 static pdw job_vfy(void)
 {
-    pdw r, k, num, gen, n;
+    static pdw r, k, num, gen, n;
     if (sv_vf == 0) {
         g_sv.mode = (pdw)(g_sv.mode | PDW_OUT_REOPEN);
         pdw_engcall(PDV_ENG_CLOSE, 0, 0, 0);

@@ -189,3 +189,4 @@ static int ovl_card_more(int which)
     ovl_card(which, r, pdu_mono);
     return 2;
 }
+#include "pdovlpage.c"          /* pages: the page-operation commands and prompts */

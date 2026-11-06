@@ -120,7 +120,7 @@ int main(int argc, char **argv)
 {
     static struct pdxb_annot an[32]; int n, i, k; pdw r, noteobj = 0, hlobj = 0, hlgen = 0, notegen = 0;
     pdh_cluster = 1; pdw_host_clu = 512;
-    remove("R1.PDF"); remove("R2.PDF"); remove("P1.PDF"); remove("X1.PDF"); remove("N1.PDF"); remove("X2.PDF"); remove(PDW_TEMPNAME);    /* a re-run starts clean */
+    remove("R1.PDF"); remove("R2.PDF"); remove("P1.PDF"); remove("X1.PDF"); remove("N1.PDF"); remove("P2.PDF"); remove("X2.PDF"); remove(PDW_TEMPNAME);    /* a re-run starts clean */
     cp(argc > 1 ? argv[1] : "../../apps/pagedesk/samples/MARKUP.PDF", "DOC.PDF");
     if (system("python3 ../../apps/pagedesk/hosttest/pdw_nest.py NEST.PDF")) { printf("FAIL: pdw_nest.py\n"); return 2; }
     /* round A: four new marks on a real sample */
@@ -214,6 +214,17 @@ int main(int argc, char **argv)
         for (j = 0; j < 4; j++) { pde_verb(PDV_ENG_PAGEINFO, (pdw)j, 0, 0); pd_fcopy_in(SEG_XB, 0, &q, sizeof q);
             printf("     page %d: obj %u rotate %u media %d x %d\n", j, q.objnum, q.rotate, q.media.x1 / 16, q.media.y1 / 16); }
         printf("PDW-EXTRACT X1.PDF XTGUIDE.PDF 5,1,blank,3r90\n");
+    }
+    /* ---- what the glass did: rotate page 1, a blank after it, page 2 deleted ---- */
+    {   unsigned map[8]; int j;
+        cp(argc > 2 ? argv[2] : "../../apps/pagedesk/samples/PAGES.PDF", "DOC.PDF");
+        CK(eng_open("DOC.PDF") == 0, "PDENG opens PAGES.PDF again");
+        map[0] = PDM_MK(PDM_SRC, 1, 0); map[1] = PDM_MK(PDM_BLANK, 0, 0);
+        for (j = 2; j < 8; j++) map[j] = PDM_MK(PDM_SRC, 0, j);
+        map_set(map, 8); wrt_init(); es_reset();
+        r = save("P2.PDF");
+        CK(r == PDE_OK, "rotate + blank + delete answers %u", r);
+        map_set(0, 0);
     }
     /* ---- a NESTED page tree whose boxes, resources and rotation are inherited ---- */
     {   unsigned map[6]; int j; static struct pdxb_pageinfo q, p0[4]; static struct pdxb_annot an[8];

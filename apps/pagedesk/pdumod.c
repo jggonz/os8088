@@ -75,6 +75,7 @@ static struct pdxb_fontbank pdu_xfb;
 static unsigned pdu_wbuf;               /* PDWRT's buffers (16.2, D9) */
 #define PDU_WBUF_KB 12                  /* D9: 12 KiB a save (36 an extract) */
 static int pdu_wrt_in;                  /* PDWRT fetched and bound */
+static unsigned pdu_wkb = PDU_WBUF_KB;  /* pages: 12 a save, 40 an extract (20.11.4) */
 
 static int pdu_adapter, pdu_bpp, pdu_scrw, pdu_scrh;
 
@@ -429,13 +430,13 @@ static int pdu_wrt_in_now(void)
         pdu_wrt_out();
         return PDE_LIMIT;
     }
-    pdu_wbuf = os88_mem_claim_p(PDU_WBUF_KB << 6);
+    pdu_wbuf = os88_mem_claim_p(pdu_wkb << 6);
     if (pdu_wbuf == 0) {
         pdu_wrt_out();
         return PDE_NOMEM;
     }
     pdu_xinit.wbuf_seg = pdu_wbuf;
-    pdu_xinit.wbuf_kb = PDU_WBUF_KB;
+    pdu_xinit.wbuf_kb = pdu_wkb;
     if (pdu_minit(PDU_M_WRT) != 0) {
         pdu_wrt_out();
         return PDE_LIMIT;

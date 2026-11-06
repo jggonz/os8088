@@ -16,6 +16,7 @@
  * ==========================================================================*/
 #include "pdu.h"
 #include "pdmath.h"
+#include "pdwmap.h"            /* pages: the page map and PDW_OUT_REOPEN */
 
 /* --- pdui.inc (the hand-written seam) ------------------------------------ */
 void     pdu_mbind(int mod, unsigned seg);
@@ -126,6 +127,17 @@ static void pdu_job_abort(void);
 static void pdu_job_abort_render(void);
 static void pdu_job_shift(int dy);
 static void pdu_kick(void);
+/* ---- pages (PAGEDESK-SPEC 20.11) ---- */
+unsigned pdu_pg_count(void);
+unsigned pdu_pg_id(unsigned view_index);
+int  pdu_pg_isdup(unsigned view_index);
+void pdu_pg_apply(const void *delta, unsigned len, int undo);
+static void pdu_open_begin(const char *name);
+static void pdu_save_begin(const char *name, int kind);
+static void pdu_reopen_begin(void);
+static void pdu_tell(const char *s);
+static void pdu_say2(const char *a, const char *b);
+/* ---- end pages ---- */
 
 /* About PageDesk (os88_about, SPEC.md 20.5.1.1) */
 static const char *pdu_abtext[] = {
@@ -145,6 +157,7 @@ static const char *pdu_abtext[] = {
 #include "pdumod.c"             /* 3.1-3.4, 16.2: modules and claims */
 #include "pdudraw.c"            /* every pixel of the chrome */
 #include "pduview.c"            /* the page view: zoom, scroll, pages */
+#include "pdupage.c"            /* pages: 13.7, 20.11: the page map (resident part) */
 #include "pdujob.c"             /* 15: the scheduler and its three jobs */
 #include "pducmd.c"             /* commands, menus, keys, clicks */
 #include "pdovl.c"              /* the overlay's tenants (ovl_*) */

@@ -72,7 +72,9 @@ static void gc_exclude(pdw w, pdw b)    /* scanned, but not seen: never copied *
 /* PH_XDISC: one object a call. GC_DONE = the fixpoint is reached */
 static pdw gc_disc(void)
 {
-    pdw v, b = 1, k = 0, n, r, ds, de, f, root, w, c, j;
+    static pdw v, b, k, n, r, ds, de, f, root, w, c, j;
+    b = 1;
+    k = 0;
     for (;;) {
         if (gc_w >= 4096) {
             if (gc_over) return sv_bad(16);
@@ -130,7 +132,8 @@ static pdw gc_blank0(void) { return (pdw)(4 + gc_total); }
 /* PH_XHEAD: catalog, /Pages, /Info (objects 1-3) */
 static void gc_head(void)
 {
-    pdw i, e, b = 0, v;
+    static pdw i, e, b, v;
+    b = 0;
     v = (pdw)(g_tr.version < 15 ? 15 : g_tr.version);
     pb_s("%PDF-1."); pb_u((pdw)(v % 10)); pb_s("\n%\xE2\xE3\xCF\xD3\n");
     pw_obj(1, 0); pb_s("<< /Type /Catalog /Pages 2 0 R >>\n"); pw_endobj();
@@ -151,7 +154,7 @@ static void gc_head(void)
 /* PH_XCOPY: one object, or one piece of a stream, a call. GC_DONE = all copied */
 static pdw gc_copy(void)
 {
-    pdw w, v, b, k, n, r, ds, de, q, root, e;
+    static pdw w, v, b, k, n, r, ds, de, q, root, e;
     if (gc_sub) {                                   /* the rest of a stream object */
         r = eng_chunk(gc_cur, 0, &gc_pos); if (r) return r;
         if (sc_n) { pb_flush(); pw_n(g_pg, sc_n); pdm_u32_add16(&gc_pos, sc_n); }
