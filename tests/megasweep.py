@@ -64,9 +64,11 @@ REFUSES = {
 LINGER = 10
 # The shipped disks whose packages are swept: the 1.44MB apps disk and the
 # five 360KB category disks, which between them carry every package `all`
-# ships (the system disk's SYSTEM/ ones are on kern_mega's own disk too).
+# ships (the system disk's SYSTEM/ ones are on kern_mega's own disk too) -
+# and ARCADE's release floppy, the one package on a disk of its own (its
+# arm is kern_mega's twin of it, ARCADE-SPEC 14)
 DISKS = ("apps.img", "office360.img", "network360.img", "games360.img",
-         "emu360.img", "util360.img", "os8088.img")
+         "emu360.img", "util360.img", "os8088.img", "arcrel.img")
 # Not a package a user opens: the installer wants a blank C: of its own
 SKIP = {"install", "rlapply"}
 

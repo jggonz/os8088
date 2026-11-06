@@ -8,8 +8,10 @@
 ; Not shipped software. The image sits at offset 0 of a segment that is CS =
 ; DS; the harness lays out the rest of the machine (the .ROM's claim, the
 ; game's segment, the 6503's memory, the stream's ring) and finds everything
-; through the HEADER at offset 0. The three OS calls arcqbs.inc makes are
-; stubs here: a 286 (CPU_INFO), and a claim at a segment the harness names.
+; through the HEADER at offset 0. The OS calls arcqbs.inc makes are stubs
+; here: a 386 (CPU_INFO), a claim at a segment the harness names, and a
+; MOVABLE declaration that does nothing - and arcade.asm's ar_sub is the
+; shipped build's, the sum (ARCADE-MEGA-PLAN M1).
 ; =============================================================================
     cpu 8086
     bits 16
@@ -20,6 +22,7 @@ CPU_386     equ 2
 %define OSAPI_CPU_INFO  qt_cpu
 %define OSAPI_MEM_CLAIM qt_claim
 %define OSAPI_MEM_FREE  qt_free
+%define OSAPI_MEM_MOVABLE qt_movable
 
 qt_hdr:
     db 'QBS1'                       ; +0  the signature
@@ -54,6 +57,12 @@ qt_claim:
     clc
     ret
 qt_free:
+    ret
+qt_movable:
+    clc
+    ret
+ar_sub:                             ; (arcade.asm's, the shipped build: the sum)
+    add dx, ax
     ret
 
 %include "arc6502.inc"
