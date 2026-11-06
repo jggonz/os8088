@@ -2207,14 +2207,14 @@ as for a bad hex digit, are void), later reads see the end of the stream.
 * `make pdflate` (host): `hosttest/pde_fl_check.py` drives the real engine with
   the flate claim over PDFs it writes, byte for byte against Python's `zlib`,
   a predictor written in the script from the specification, and `qpdf
-  --filtered-stream-data` as the independent decoder. 401 engine runs: every
+  --filtered-stream-data` as the independent decoder. 938 engine runs in all: every
   block type (stored, fixed, dynamic, Z_HUFFMAN_ONLY, Z_RLE, flushed
   multi-block), eight data sets including distances to 32,768 and a 3 MiB
   bomb cut at 1 MiB with `PDE_LIMIT`, five read sizes from 1 to 4,096, three
   cluster sizes and cache sizes to 64 KiB; the filter chains; every PNG tag at
   gray/RGB/RGBA/16-bit and 1/2/4 bits, rows to the 4,096-byte limit and over
   it, TIFF at 8 and 16 bits; the parameter forms; nested reads of two streams
-  with one and two slots; and 938 malformed streams (every truncation point,
+  with one and two slots; and 537 malformed streams (every truncation point,
   random bit flips, named malformations) whose output must equal an
   independent inflater's up to the failure and whose code must be
   `PDE_SYNTAX` or `PDE_TRUNC` exactly when it is.
