@@ -38,6 +38,9 @@ extern unsigned long pdh_reads, pdh_failat, pdh_budget, pdh_bytes;
 #define SEG_BUF   0x6000
 
 static int cf;
+static void cmd_outline(void);
+static void cmd_annots(unsigned page);
+static void show_dg(const struct pdxb_dictget *g, unsigned r);
 static unsigned call(unsigned verb, unsigned bx, unsigned cx, unsigned dx)
 {
     unsigned r = pde_verb(verb, bx, cx, dx);
@@ -75,14 +78,14 @@ static int do_open(void)
     }
 }
 
-static void fnv(unsigned *h, unsigned char c) { *h = (*h ^ c) * 16777619u; }
+static void fnv(unsigned *h, unsigned char c) { *h = (*h * 31 + c) & 0xFFFF; }
 
 static void dump_page_content(int pg)
 {
     struct pdxb_strm sx;
     struct pdxb_token tkn;
     unsigned idx, r, got, crc, total, ntok, ops, nops;
-    unsigned char buf[4096];
+    unsigned char buf[512];
     for (idx = 0;; idx++) {
         memset(&sx, 0, sizeof sx);
         sx.page = (pdw)pg; sx.index = (pdw)idx;
@@ -92,7 +95,7 @@ static void dump_page_content(int pg)
         xb_get(&sx, sizeof sx);
         crc = 0xFFFF; total = 0;
         for (;;) {
-            got = call(PDV_ENG_STRM_READ, SEG_BUF, 0, 4096);
+            got = call(PDV_ENG_STRM_READ, SEG_BUF, 0, 512);
             if (cf) { printf("CONTENT %d %u readrc=%u\n", pg, idx, got); break; }
             if (!got) break;
             pd_fcopy_in(SEG_BUF, 0, buf, (pdw)got);
@@ -105,7 +108,8 @@ static void dump_page_content(int pg)
         sx.page = (pdw)pg; sx.index = (pdw)idx;
         xb_put(&sx, sizeof sx);
         call(PDV_ENG_STRM_OPEN, 0, 0, 0);
-        ntok = 0; ops = 2166136261u; nops = 0;
+        xb_get(&sx, sizeof sx);
+        ntok = 0; ops = 0; nops = 0;
         for (;;) {
             unsigned k;
             r = call(PDV_ENG_TOKEN, 0, 0, 0);
@@ -116,11 +120,12 @@ static void dump_page_content(int pg)
             if (tkn.kind == PDT_OP) { nops++; for (k = 0; k < tkn.len; k++) fnv(&ops, (unsigned char)tkn.text[k]); fnv(&ops, ' '); }
         }
         call(PDV_ENG_STRM_CLOSE, 0, 0, 0);
-        printf("CONTENT %d %u obj=%u bytes=%u crc=%04x flt=%u declen=%u tokens=%u ops=%u opshash=%08x\n",
+        printf("CONTENT %d %u obj=%u bytes=%u crc=%04x flt=%u declen=%u tokens=%u ops=%u opshash=%04x\n",
                pg, idx, sx.objnum, total, crc, sx.filters, sx.declen.lo, ntok, nops, ops);
     }
 }
 
+static void extras(void);
 static void dump(void)
 {
     struct pdxb_pageinfo pi;
@@ -141,6 +146,43 @@ static void dump(void)
                pi.media.x0, pi.media.y0, pi.media.x1, pi.media.y1, pi.crop.x0, pi.crop.y0, pi.crop.x1, pi.crop.y1,
                pi.rotate, pi.nannots, pi.flags);
         dump_page_content(p);
+    }
+    extras();
+}
+
+
+/* the same four tails as pde_boot.c: OBJ_FIND and a key-less DICT_GET of every object,
+ * the outline, every page's annotations */
+static void extras(void)
+{
+    struct pdxb_objref rf;
+    struct pdxb_objinfo oi;
+    struct pdxb_dictget g;
+    struct pdxb_trailer trl;
+    unsigned n, r, last;
+    call(PDV_ENG_TRAILER, 0, 0, 0); xb_get(&trl, sizeof trl);
+    last = trl.size < 120 ? trl.size : 120;
+    for (n = 1; n < last; n++) {
+        rf.objnum = (pdw)n; rf.gen = 0;
+        xb_put(&rf, sizeof rf);
+        r = call(PDV_ENG_OBJ_FIND, 0, 0, 0);
+        if (cf) printf("OBJ %u rc=%u\n", n, r);
+        else {
+            xb_get(&oi, sizeof oi);
+            printf("OBJ %u kind=%u off=%u len=%u\n", n, oi.kind, ((unsigned)oi.offset.hi << 16) | oi.offset.lo,
+                   ((unsigned)oi.length.hi << 16) | oi.length.lo);
+        }
+        memset(&g, 0, sizeof g);
+        g.objnum = (pdw)n;
+        xb_put(&g, sizeof g);
+        r = call(PDV_ENG_DICT_GET, 0, 0, 0);
+        xb_get(&g, sizeof g);
+        show_dg(&g, cf ? r : 0);
+    }
+    cmd_outline();
+    {
+        unsigned p;
+        for (p = 0; p < op.npages; p++) cmd_annots(p);
     }
 }
 
@@ -168,7 +210,7 @@ static unsigned cmd_arg(const char *s) { return (unsigned)strtoul(s, 0, 0); }
 static void show_dg(const struct pdxb_dictget *g, unsigned r)
 {
     printf("GET rc=%u kind=%u num=%d.%05u ref=%u,%u len=%u count=%u text=%s\n", r, g->kind, g->num.hi,
-           (unsigned)(((unsigned long)g->num.lo * 100000UL) >> 16), g->refnum, g->refgen, g->len, g->count, g->text);
+           (unsigned)(((unsigned long)g->num.lo * 3125UL) >> 11), g->refnum, g->refgen, g->len, g->count, g->text);
 }
 static void cmd_get(int argc, char **argv)
 {
@@ -292,7 +334,7 @@ static void sig(void)
     struct pdxb_trailer tr;
     unsigned p, n = op.npages;
     struct pdxb_pageinfo pi;
-    unsigned h = 2166136261u;
+    unsigned h = 0;
     call(PDV_ENG_TRAILER, 0, 0, 0); xb_get(&tr, sizeof tr);
     fnv(&h, (unsigned char)tr.size); fnv(&h, (unsigned char)tr.root_num);
     for (p = 0; p < n; p++) {

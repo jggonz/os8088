@@ -772,6 +772,314 @@ plan's agent table and nowhere else.
 
 ### 20.2 The engine (`eng`)
 
+`PDENG.MOD` (apps/pagedesk/pdeng.asm + pdeng.c and the pde*.c files it includes,
+one translation unit) is the PDF reader segment. This section is its contract
+beyond 3, 6, 7 and 8: the numbers it enforces, the exact behaviour of every
+verb, the error each failure gives and the places it differs from those
+sections. Sizes are measured, not estimated (20.2.1).
+
+#### 20.2.1 Build, size and checks
+
+`make pdeng` compiles `pdeng.c` with smlrcc, lowers and peepholes it with
+`tools/cc8086.py` (96-byte frame gate, `&local` refusal), assembles
+`pdeng.asm` with `nasm -f bin -w+error`, `cpu 8086`, and prints the size. It
+then builds the host harness (`hosttest/pde_test.c`, `-DPD_HOST`, pdmath.c,
+pdhost.c) and runs `hosttest/pde_check.py`.
+
+| item | bytes |
+|---|---|
+| `PDENG.MOD` image (code + data, the file) | 26,986 |
+| bss (zeroed by the door on first entry) | 8,940 |
+| image + bss | 35,926 (target 40,960; cap 57,344) |
+
+The bss is: the tail/fingerprint buffer 1,024; the subsection table 2,560
+(256 x 10); six stream contexts 6 x 420; the object lexer's 256-byte buffer;
+the token (270), value (270) and verb structs; the block-cache tables; the
+verbs' static exchange copies. Nothing is on the stack but scalars (largest
+frame 20 bytes), because SS != DS.
+
+Checks, none of them an emulator row:
+
+* `hosttest/pde_check.py` - the engine's own fixtures
+  (`hosttest/pde_fixtures.py`: filter pipelines, three-revision update with a
+  freed object and a generation mismatch, escapes and numbers through
+  DICT_GET, outline, annotations, resources, boxes, 33 and 3,000 and 10,000
+  one-object subsections, and about 50 negatives whose xref is correct so the
+  engine reaches the defect under test) with explicit expectations; and the
+  shared samples, stress set and negative corpus (20.1) compared with qpdf:
+  page count, page object numbers, inherited MediaBox/CropBox/Rotate, the CRC
+  of every content stream's decoded bytes, every object's offset against
+  `qpdf --show-xref`, at cluster sizes of 1, 2 and 8 sectors; a token
+  count/operator hash against an independent content lexer written in Python;
+  failure injection at every READ_SEQ call (`pde_test faults`: an I/O error,
+  never a crash, and the file opens afterwards); re-INIT and reuse after
+  each failure (`pde_test multi`).
+* `hosttest/pde_boot.py` - the module itself, on the TARGET build: a boot
+  floppy carries `PDENG.MOD`, a kernel stub (READ_SEQ with its contract
+  enforced: capacity and offset cluster multiples, else it prints
+  `!CONTRACT` and stops), and a PDF; QEMU boots it; a harness compiled by the
+  same toolchain drives the verbs through the exchange block and prints, over
+  COM1, the same lines as `pde_test dump` (pages, trailer, fingerprint,
+  content CRCs, token counts, every object's extent and DICT_GET, the whole
+  outline, every annotation); the script diffs the two. It proves the 16-bit
+  `int`, SmallerC's code and `pdmath.inc` compute what the host build
+  computed. QEMU is a 386-class CPU: it says nothing about speed or about an
+  8088's behaviour beyond what `cpu 8086` and the cc8086 gate already hold.
+  Files over 345,600 bytes do not fit the harness's 640 KiB map and run on
+  the host only.
+
+#### 20.2.2 Claims and the limits the engine adds
+
+The engine uses only the segments `PDV_ENG_INIT` gave it (D2: INIT may be
+called again, only with no document open; a claim of 0 is "none"). `OPEN`
+refuses with `PDE_NOMEM` unless `cache_kb >= 8`, `arena_kb >= 8`,
+`tables_kb >= 11` and the three segments are nonzero.
+
+| claim | layout |
+|---|---|
+| exchange block | offset 0: the verb's struct (3.2); every verb copies it in and out whole |
+| cache | `nblk` blocks of `blk` bytes (20.2.3) |
+| arena | 8 KiB bitmap, one bit per object number, live only during `OPEN`'s page-tree walk (the visited set of 8); released when the walk ends. `ARENA_MARK` returns the claim's current top (0 when idle), `ARENA_REL` sets it back; no other verb allocates from it |
+| tables | bytes 0-8191: the page table, 8 per page (object number, generation, flags 0, reserved 0), 1,024 pages; 8192-11263: the resolved-offset cache, 512 direct-mapped entries of 6 (tag = object number, 0xFFFF empty, offset lo, hi; hi 0xFFFF = free) |
+
+Limits not in `pdabi.h`: 32 cache blocks; 6 open streams (a page, 4 nested
+forms, an image); a decoded stream is cut at 1 MiB (`PDE_LIMIT`); 16 page-tree
+nodes per `OPEN` slice; 8 indirect hops before `PDE_CYCLE`; 32 exact xref
+subsections per revision (20.2.3); object numbers above 65,535 are
+`PDE_LIMIT` (the ABI carries them in 16 bits); a file of 2 GiB or more is
+`PDE_LIMIT`; a page tree visits at most 2,080 nodes (`PDE_LIMIT`).
+
+#### 20.2.3 The file layer and the cross-reference
+
+`blk` = `max(2048, cluster bytes)`, a cluster multiple always (READ_SEQ's
+rule), so a cluster over 32 KiB or one that leaves fewer than two blocks in the
+cache is `PDE_NOMEM` (6.1's "4 KiB windows of a bigger cluster" cannot be
+expressed: the capacity must be a cluster multiple). `nblk = cache_kb /
+(blk / 1024)`, at most 32, LRU, filled by one READ_SEQ call per block from the
+engine's own 16-byte cursor, re-seeded only when the next block is not the one
+the cursor stands at. The directory is read once at `OPEN` (`os88_file_find`
+by name) for the size and the compressed bit; a CZ-packed file, or one
+whose first two bytes are `CZ`, is refused `PDE_SYNTAX` with
+`err_detail = 1` (a packed PDF would be read as its wrapper). The name is
+matched case-insensitively; a name not in the current folder is `PDE_IO`.
+
+The cross-reference follows 7.3 with one extension: each revision keeps at most
+32 subsection records; the 33rd merges adjacent pairs into CHECKPOINTS (a
+record that stands for `span` consecutive subsections, found again by reading
+their 20-byte-aligned headers off the file). A lookup in a thinned revision
+takes the last record whose first object is at most the one asked for and
+walks at most `span` headers, so a valid file with 301 or 10,000 subsections
+opens in bounded memory. A thinned revision must be in ascending order of
+first object; 33 or more subsections out of order are `PDE_LIMIT`. A revision
+with 32 or fewer subsections may be in any order.
+
+Entries are checked byte by byte (ten digits, space, five digits, space, `n`
+or `f`, a two-byte end of line: space+CR, space+LF or CR+LF); an in-use
+offset under 9 or at or past the end of the file, a generation over 65,535, a
+bad type or an object whose header does not read `n g obj` is `PDE_XREF` with
+`err_obj` the object and `err_detail` the revision (0 = newest). A reference
+whose generation is not the object's, a free entry and an object in no
+subsection are all a null (`ob_null`; OBJ_FIND answers kind `PDK_NULL`,
+offset and length 0).
+
+`startxref` is searched in the last 1,024 bytes (the last occurrence wins);
+none is `PDE_TRUNC` with `err_detail = 5`; a number over ten digits, zero, or
+at or past the end of the file is `PDE_XREF`. The header must be at offset 0
+(`%PDF-d.d`; anything else `PDE_SYNTAX` with `err_detail = 2`, a file under 9
+bytes `PDE_TRUNC`). A `/Prev` that is a revision already read is `PDE_XREF`
+(the revision named in `err_detail`), the ninth revision is `PDE_LIMIT`. At the
+offset the engine expects `xref`; `n g obj` there whose dictionary says
+`/Type /XRef` is `PDE_XREFSTM`, any other thing `PDE_XREF`. A trailer with
+`/Encrypt` is `PDE_ENCRYPT` in any revision; no `/Root` is `PDE_XREF`
+(`err_detail = 4`); a hybrid file's `/XRefStm` is ignored and the classic table
+read (1.3). The newest revision's `/Size`, `/Root`, `/Info` and first `/ID`
+element win, an older revision filling only what is missing.
+
+#### 20.2.4 Objects
+
+There is no object tree. The parser works in place on the file: it tokenises,
+skips what it does not need, and answers a query by walking the one dictionary
+or array concerned, so the arena is not where objects live and `OPEN`'s
+memory is the 8 KiB bitmap above plus the tables. Limits are those of
+`pdabi.h`: a token over 1,023 bytes `PDE_LIMIT`; a name over 127 `PDE_LIMIT`;
+nesting over 32 `PDE_DEPTH`; an array or dictionary of over 4,096 items
+`PDE_LIMIT` where the engine counts them; integers of 2^31 or more are flagged
+and a number that does not fit 16.16 is saturated and answers `PDE_RANGE`.
+Strings are lexed in pieces of at most 255 bytes (literal escapes, octal,
+line continuation, balanced parentheses, EOL normalised to LF; hex with an
+odd last digit padded with 0); a value's text is the first 255 bytes and its
+`len` the true length (to 65,535).
+
+#### 20.2.5 Streams and TOKEN
+
+`STRM_OPEN` pushes onto a stack of 6 open streams; `STRM_READ`, `TOKEN` and
+`STRM_CLOSE` address the top, so a content interpreter opens a Form XObject
+while its caller's stream is still being read. `/Length` is read first
+(direct, or a reference to an integer object; a real, a negative number, a
+missing key or a non-integer is `PDE_SYNTAX`); data starting past the end of
+the file is `PDE_TRUNC`; `endstream` must follow the data after optional white
+space, else `PDE_SYNTAX` (so a /Length too short or too long is caught here,
+and at `OBJ_FIND`/`RAW_COPY`/`STRM_OPEN`, never at `OPEN`: the engine does not
+read page content while opening). The end-of-line after `stream` is LF or
+CR+LF; a lone CR is `PDE_SYNTAX`. `/F` (an external file) is `PDE_FILTER`.
+Filters: `ASCIIHexDecode`/`AHx` and `RunLengthDecode`/`RL`, alone or in
+a chain of at most 4 (`/Filter` a name, an array, or a reference to either);
+`/DecodeParms` is ignored; `FlateDecode`/`Fl` is `PDE_FLATE`; every other
+name (`LZW`, `ASCII85`, `DCT`, `CCITT`, `JBIG2`, `JPX`, `Crypt`, anything
+unknown) is `PDE_FILTER`; a fifth stage is `PDE_LIMIT`. A hex stage ends at
+`>` or the end of data; a run-length stage at 128 or the end of data; a bad
+hex digit is `PDE_SYNTAX` at the read. `declen` is the length for an
+unfiltered stream, 0xFFFFFFFF for a filtered one, and `filters` the `PDFL_`
+bits.
+
+`TOKEN` returns the next token of the top stream: `kind`, `num` (16.16) for a
+number, `text`/`len` for a name (without the slash), operator, keyword
+(`true`, `false` and `null` have their own kinds) or a string PIECE (at most
+255 bytes, `more = 1` while the string continues; the next call returns the
+next piece with kind `PDT_STR`). There are no references in a content stream.
+A number that does not fit 16.16 is delivered saturated with the call
+answering `PDE_RANGE` (CF = 1, the token valid; the renderer marks
+`PDF_INC_RANGE` and goes on). Array/dictionary nesting beyond 32 is `PDE_DEPTH`.
+After the operator `ID` the engine consumes exactly one white-space byte; the
+inline image's bytes are then read with `STRM_READ`, which first drains the
+lexer's lookahead, and the renderer scans for `EI` itself. End of data is
+kind `PDT_EOF` with CF = 0, unless the decoder stopped on an error, which is
+returned instead. `STRM_READ(BX = dest seg, CX = dest off, DX = max)` answers
+the bytes copied (0 at the end), up to 0xFFF0 and never across the end of the
+destination segment (`PDE_RANGE`).
+
+#### 20.2.6 The verbs
+
+* `INIT` - as 20.2.2. Always succeeds (a re-INIT closes any document).
+* `OPEN` - 4 slices: (1) directory, header, `startxref`; (2) one revision per
+  slice; (3) the catalog and the first page-tree node; (4) up to 16 page-tree
+  nodes per slice. Each returns CF = 1 / `PDE_BUSY` with `state` set (2, 3 or 4)
+  until the last, which returns OK. A call whose `state` is not the one the
+  last BUSY returned is `PDE_RANGE`. On any failure `err_obj` (the object or
+  0) and `err_detail` are written, the document is closed, the file layer
+  forgets the file and the engine is ready for the next `OPEN`; calling
+  `CLOSE` instead of finishing is the cancel. Outputs: `npages` (1-1,024; none
+  is `PDE_NOTFOUND`, `err_detail = 3`), `nrev`, `version` (header x10),
+  `flags`: `PDO_OUTLINE` (catalog has `/Outlines`), `PDO_ACROFORM`,
+  `PDO_TAGGED` (`/MarkInfo` present), `PDO_READONLY` (catalog `/Perms`, or
+  the AcroForm's `/SigFlags` bit 0; a signature field's own `/V` is not
+  searched), `size`. A node is a page when it has no `/Kids`; a node with
+  `/Type` other than `/Page`/`/Pages` is `PDE_SYNTAX`; a node reached twice
+  (a cycle, or a page shared by two parents) is `PDE_CYCLE`; a `/Parent` that
+  is not the node it hangs from is tolerated unless following it loops
+  (`PDE_CYCLE`); depth over 32 is `PDE_DEPTH`; a kid that is a free or
+  absent object, or has the wrong generation, is skipped.
+* `CLOSE` - closes the document and the streams; always OK; idempotent.
+* `PAGEINFO(BX = index)` - `objnum`/`gen`, `media`, `crop` (= media when
+  absent), `rotate` (normalised to 0/90/180/270; a value that is not a
+  multiple of 90 is `PDE_RANGE`), `nannots` (the elements of `/Annots`, of any
+  kind), `flags`: `PDP_NOCONTENT` when `/Contents` is absent or null;
+  `PDP_HASLINKS` is never set (finding out costs one object read per
+  annotation: use `ANNOTS`). Boxes are inherited through `/Parent` (a loop or
+  32 hops is `PDE_DEPTH`), reversed corners are swapped, an absent MediaBox is
+  Letter, a zero-area box or any coordinate outside +/-2,047.9 pt is
+  `PDE_RANGE`. Index past the end: `PDE_RANGE`.
+* `OBJ_FIND` - a free, absent or wrong-generation object is `PDK_NULL`,
+  offset/length 0, CF = 0. Otherwise `kind` (`PDK_STRM` when a dictionary is
+  followed by `stream`), `offset` of the digits of `n g obj`, `length` through
+  `endobj`; a missing `endobj` or a stream whose length is wrong is
+  `PDE_SYNTAX`/`PDE_TRUNC`.
+* `DICT_GET` - `objnum`/`gen` 0/0 is the newest trailer. The path is up to
+  three names; `"[n]"` indexes an array (so `Widths`, `"[17]"`); an indirect
+  value met MID-path is followed; the FINAL value is not (a `PDK_REF` comes back
+  as `refnum`/`refgen`); no names at all describe the object's own value
+  (`DICT_GET` of the referenced object is how a reference is dereferenced).
+  `num` carries INT, REAL (rounded to 1/65536) and BOOL (0/1); a number
+  that does not fit is saturated and answers `PDE_RANGE`. `text` holds a
+  name/string's first 127 bytes, `len` its true length; `count` an
+  array's elements or a dictionary's pairs. A missing key is `PDE_NOTFOUND`.
+* `STRM_OPEN`/`STRM_READ`/`STRM_CLOSE`/`TOKEN` - 20.2.5. With `objnum` 0, `page`
+  and `index` name a page's content stream: `/Contents` a stream is element 0,
+  an array (direct or indirect) its elements; past the last is `PDE_RANGE`
+  (the way to count them), as is a page with no `/Contents`.
+* `RES_LOOKUP` - for a page, `/Resources` is inherited; for `page = 0xFFFF`,
+  `resobj`/`resgen` name a Form XObject (its own `/Resources`) or a resource
+  dictionary itself; no fallback to the page is made when a form has its own
+  and lacks the name (that is the renderer's decision). The result is the
+  referenced object (`objnum`, `gen`, `kind` of the target, `PDK_STRM` for a
+  stream), or `objnum` = 0 with `kind` = `PDK_DICT` for a dictionary written
+  inline in `/Resources` (it has no object number, so `DICT_GET` cannot reach
+  it: the renderer treats it as a missing resource). Not found:
+  `PDE_NOTFOUND`.
+* `RAW_COPY` - the object's bytes from `n g obj` through `endobj` from
+  `done`, at most `dmax` to `dseg:doff`; `done` advances; the copy is complete
+  when `done` equals `OBJ_FIND`'s `length`. A short read is `PDE_TRUNC`.
+* `TRAILER` - the newest revision's `/Size`, `/Root`, `/Info`, `startxref`, the
+  first 16 bytes of the first `/ID` element (`id0_len` its true length) and the
+  header version.
+* `OUTLINE` - item `objnum`/`gen` (0/0 is the first item under the catalog's
+  `/Outlines`; the identity of the item is written back); `next_*`, `first_*`
+  (children), `count` (the magnitude of `/Count`), `dest_page` (the index of
+  the page `/Dest [page ...]` or `/A << /D [page ...] >>` names; 0xFFFF for a
+  name, a string, a remote destination or a missing page), `title` (PDFDoc
+  bytes pass through with controls as spaces; UTF-16BE `FEFF` keeps code
+  points under 256 and turns the rest into `?`; 63 characters). No outline is
+  `PDE_NOTFOUND`.
+* `ANNOTS(BX = page, CX = index)` - element `index` of `/Annots`. A hole
+  (a string, an integer, a dangling reference, a non-dictionary) is a record
+  with `objnum` 0 or the number and an EMPTY `subtype`, rectangle 0, so the
+  caller skips it and keeps counting; a missing or short `/Rect` leaves it 0;
+  `/Rect` is normalised; `nm`, `flags`, `has_ap` (an `/AP` with `/N`), `irt_num`,
+  `state` (`PDS_COMPLETED` when `/State` is `Completed`), `contents_len` (the
+  true length) and `contents` (159 PD Latin characters). Past the end:
+  `PDE_RANGE`.
+* `SEARCH` - NOT IMPLEMENTED in wave 1: answers `PDE_NOTFOUND`. Search needs the
+  renderer's text map (`PDV_REND_TEXTMAP`, 9.2); the engine has nothing to
+  match until that exists.
+* `FINGERPRINT` - flushes the cache and re-reads the first and last 1,024
+  bytes from the disk (CRC-16/CCITT, initial value 0xFFFF; a file under 1 KiB
+  uses the same bytes for both) with the size from the directory taken at
+  `OPEN`. The primary stores the answer at open; the writer calls it again
+  before it writes and refuses `PDE_CHANGED` when it moved. Before an `OPEN`
+  it is `PDE_RANGE`.
+* `ARENA_MARK`/`ARENA_REL` - 20.2.2.
+
+A verb that needs a document before `OPEN` finished answers `PDE_RANGE`. An
+I/O error in any read is `PDE_IO` whatever the parser made of the gap, the
+block it was reading is not cached, and the cursor is unmoved (so the same
+call may be retried).
+
+#### 20.2.7 Error map
+
+| code | when |
+|---|---|
+| `PDE_SYNTAX` | no `%PDF-d.d` at offset 0 (detail 2); packed file (1); catalog or tree malformed; a stream's `/Length` or `endstream` wrong; a stray `>` or `)`; a bad hex digit |
+| `PDE_XREF` | table damaged, `/Prev` loop or out of range, entry/header mismatch, no `/Root` (4), `startxref` out of range, an offset the file does not hold |
+| `PDE_TRUNC` | under 9 bytes; no `startxref` (5); data past the end of the file; end of file inside a token |
+| `PDE_CYCLE` | a page-tree node twice; a `/Parent` loop; more than 8 indirect hops |
+| `PDE_DEPTH` | nesting over 32 in an object, a content stream or the page tree |
+| `PDE_FLATE`, `PDE_FILTER` | 20.2.5, at `STRM_OPEN` |
+| `PDE_ENCRYPT` / `PDE_XREFSTM` | `/Encrypt` in a trailer / `/Type /XRef` where `xref` was expected |
+| `PDE_RANGE` | a page box outside +/-2,047.9 pt or of zero area; `/Rotate` not a multiple of 90; a number that does not fit 16.16; an index past the end; a bad `state`; no document |
+| `PDE_LIMIT` | token/name/array limits; more than 8 revisions or 1,024 pages; an object number over 65,535; a file of 2 GiB; 5 filters; 7 open streams; 1 MiB decoded |
+| `PDE_NOMEM` | a claim too small (20.2.2); a cluster over 32 KiB |
+| `PDE_IO` | any failed read; a name not in the folder |
+| `PDE_NOTFOUND` | a missing dictionary key or resource; no pages; no outline; `SEARCH` |
+| `PDE_BUSY` | `OPEN` has more to do |
+
+`PDE_SIGNED` is not returned: a signed or `/Perms` document opens with
+`PDO_READONLY`. `PDE_CANCEL`, `PDE_FONT`, `PDE_GRAPHICS`, `PDE_DISKFULL`,
+`PDE_WPROT`, `PDE_EXISTS` and `PDE_CHANGED` are not the engine's.
+
+#### 20.2.8 Where the engine departs from the rest of the contract
+
+* 6.1: a block is never smaller than 2 KiB and a cluster over 32 KiB is refused.
+* 7.2: no object arena of parsed nodes; see 20.2.4. The arena claim is the page
+  tree's visited bitmap.
+* 7.3: 32 exact subsections a revision and checkpoints beyond, not 256 in total.
+* 7.4: a `/Prev` loop is `PDE_XREF`; the 1,024-byte tail search for `startxref`
+  and header-at-zero are the whole of "a damaged file is never repaired".
+* 8: no page-table "inherited source" word - inheritance is found by walking
+  `/Parent` and the word is reserved 0.
+* 1.3: a signature field's own `/V` is not looked for; `/SigFlags` bit 0 and
+  `/Perms` decide `PDO_READONLY`.
+* The wave-1 stub: `SEARCH`. `PDP_HASLINKS` is never set.
+
 ### 20.3 The renderer (`rend`)
 
 ### 20.4 Fonts, widths and art (`fonts`)

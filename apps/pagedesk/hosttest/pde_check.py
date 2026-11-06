@@ -244,12 +244,12 @@ def expect(cond, msg):
 
 def ref_tokens(data):
     """An independent content lexer (PDF 7.2/8.2), reduced to what the engine reports:
-    (tokens, operators, FNV-1a over operator names). After ID one white space is consumed."""
+    (tokens, operators, h = h*31 + c over operator names and a space, mod 2^16). After ID one white space is consumed."""
     ws = b"\x00\t\n\x0c\r "
     dl = b"()<>[]{}/%"
     i, n = 0, len(data)
     ntok = nops = 0
-    h = 2166136261
+    h = 0
     while i < n:
         c = data[i:i + 1]
         if c in ws:
@@ -297,7 +297,7 @@ def ref_tokens(data):
                 continue
             nops += 1
             for b in w + b" ":
-                h = ((h ^ b) * 16777619) & 0xFFFFFFFF
+                h = (h * 31 + b) & 0xFFFF
             if w == b"ID" and i < n and data[i] in ws:
                 i += 1
     return ntok, nops, h
@@ -424,6 +424,16 @@ def own(pde, work):
         key = {1006: "Filler", 7000: "Filler", 1000: "Filler", 30000: "Other", 5: "Low", 60994: "Filler"}[n]
         g = lines(pde, "get", P("sparse.pdf"), (n, 0, key))[-1]
         expect(g.startswith(want[:want.index(" ref=")]) if " ref=" in want else g.startswith(want), "sparse obj %d: %s (want %s)" % (n, g, want))
+    # thinning: 33 subsections is the first checkpoint merge, 3000 many of them; every filler answers
+    for name, nsub in (("sub33.pdf", 33), ("sparse3k.pdf", 3000)):
+        for i in sorted({0, 1, 2, 15, 16, 17, 31, 32, nsub // 2, nsub - 2, nsub - 1} & set(range(nsub))):
+            n = 1000 + 7 * i
+            g = lines(pde, "get", P(name), (n, 0, "Filler"))[-1]
+            want = "kind=4 " if n == 1007 else "kind=2 num=%d.00000" % i
+            expect(g.startswith("GET rc=0") and want in g, "%s obj %d: %s" % (name, n, g))
+        for n in (1003, 1008, 999, 40001, 65535, 1000 + 7 * nsub):
+            g = lines(pde, "get", P(name), (n, 0, "Filler"))[-1]
+            expect(g.startswith("GET rc=53"), "%s obj %d should be absent: %s" % (name, n, g))
     for n in (2, 1001, 1002, 65535):
         g = lines(pde, "get", P("sparse.pdf"), (n, 0, "Filler"))[-1]
         expect(g.startswith("GET rc=53") or n == 2 and False, "sparse obj %d should be absent: %s" % (n, g))
@@ -436,7 +446,7 @@ def own(pde, work):
     pieces = (100000 + 254) // 255
     rt, ro, rh = ref_tokens(big)
     expect(m and int(m.group(1)) == rt + pieces - 1 + 2 * 0 and int(m.group(2)) == ro and int(m.group(3), 16) == rh,
-           "tokens: engine %s, reference tokens=%d (+%d pieces) ops=%d hash=%08x" % (m.groups() if m else cl, rt, pieces - 1, ro, rh))
+           "tokens: engine %s, reference tokens=%d (+%d pieces) ops=%d hash=%04x" % (m.groups() if m else cl, rt, pieces - 1, ro, rh))
     tl = [l for l in out if l.startswith("TOKEN")]
     expect(not tl, "tokens: %s" % tl)
     out = dumpf("n_deep_content.pdf")
@@ -447,7 +457,7 @@ def own(pde, work):
         "n_len_real": "stream:1", "n_no_endstream": "stream:1", "n_cr_only": "stream:1", "n_crlf": "ok", "n_huge_length": "stream:1",
         "n_trunc_xref": "open:3", "n_trunc_in_trailer": "open:3", "n_startxref_inside": "open:2", "n_startxref_zero": "open:2",
         "n_startxref_huge": "open:2", "n_no_eof_marker": "ok", "n_junk_after_eof": "open:3", "n_header_late": "open:1",
-        "n_header_v20": "ok", "n_header_bad_ver": "open:1", "n_empty": "open:3", "n_garbage": "open:1",
+        "n_header_v20": "ok", "n_header_bad_ver": "open:1", "n_empty": "open:3", "n_cz": "open:1", "n_garbage": "open:1",
         "n_xref_short_entry": "open:2", "n_xref_badtype": "open:2", "n_xref_gen_big": "open:2", "n_xref_off_eof": "open:2",
         "n_prev_inside": "open:2", "n_prev_cycle3": "open:2", "n_page_twice": "open:4", "n_no_pages": "open:53",
         "n_kid_not_page": "open:1", "n_kid_dangling": "ok", "n_kid_wrong_gen": "open:53", "n_tree_30": "ok", "n_tree_33": "open:5",
@@ -462,6 +472,8 @@ def own(pde, work):
         kind, _, val = e.partition(":")
         if kind == "open":
             expect(f0.startswith("OPEN rc=%s " % val), "%s: want OPEN rc=%s, got %s" % (name, val, f0))
+            if name == "n_cz":
+                expect("detail=1 " in f0, "n_cz: a packed file is reported with detail 1: %s" % f0)
         elif kind == "flags":
             expect(f0.startswith("OPEN ok") and ("flags=%s " % val) in f0, "%s: want flags=%s, got %s" % (name, val, f0))
         else:

@@ -235,6 +235,20 @@ def build(d):
     save("sparse.pdf", p)
     exp["sparse.pdf"] = {"contents": [CONTENT % b"sparse"]}
 
+    # ---- small enough for the 640 KiB target harness: 33 and 3000 one-object subsections
+    for nsub, name in ((33, "sub33.pdf"), (3000, "sparse3k.pdf")):
+        p = P()
+        p.put(1, b"<< /Type /Catalog /Pages 2 0 R >>")
+        p.put(2, b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 100] >>")
+        p.put(3, b"<< /Type /Page /Parent 2 0 R /Contents 40000 0 R >>")
+        for i in range(nsub):
+            p.put(1000 + 7 * i, b"<< /Filler %d >>" % i)
+        p.stream(40000, b"", CONTENT % b"thin")
+        x1 = p.xref(1, per_object=True)
+        p.put(1007, b"<< /Filler (revised) >>")
+        p.xref(1, prev=x1, per_object=True, size=40001)
+        save(name, p)
+
     # ---- the negatives whose xref is correct
     good = basic()
     save("n_good.pdf", good)
@@ -272,6 +286,7 @@ def build(d):
     save("n_header_v20.pdf", g.replace(b"%PDF-1.4", b"%PDF-2.0", 1))
     save("n_header_bad_ver.pdf", g.replace(b"%PDF-1.4", b"%PDF-X.4", 1))
     save("n_empty.pdf", b"")
+    save("n_cz.pdf", b"CZ" + g[2:])             # a CZ-packed file as READ_SEQ would deliver it
     save("n_garbage.pdf", bytes(range(256)) * 20)
     # xref entry damage
     ent = g.index(b"0000000000 65535 f")
