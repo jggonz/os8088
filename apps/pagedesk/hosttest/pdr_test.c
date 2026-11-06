@@ -33,24 +33,48 @@ static const unsigned char vga[16][3] = {
     {0,0,0},{0,0,170},{0,170,0},{0,170,170},{170,0,0},{170,0,170},{170,85,0},{170,170,170},
     {85,85,85},{85,85,255},{85,255,85},{85,255,255},{255,85,85},{255,85,255},{255,255,85},{255,255,255} };
 
-static int load_bank(const char *path)
+extern const char *pdh_fdir;
+extern int pdh_cluster_sectors;
+extern long pdh_reads, pdh_readbytes;
+static int g_glykb = 16;
+/* "bank" is now a DIRECTORY holding PDRES.BIN, PAGEDESK.O88 (a pad, then PDRES.BIN:
+ * the part offset is not zero) and optionally PDFONTX.RES - what the shell lays out.
+ * The INDEX (directory kind 7's length) is read into the claim the primary would
+ * hand over, and PDV_REND_FONTBANK is sent exactly as D3 says. */
+static int load_bank(const char *dir)
 {
-    FILE *f = fopen(path, "rb"); long n;
-    if (!f) return 0;
-    n = (long)fread(MEM(SEG_BANK, 0), 1, 0xA0000, f); fclose(f);
-    return (int)(n / 1024 + 1);
+    char path[600]; FILE *f; unsigned char hdr[200]; long n; unsigned idxlen; struct pdxb_fontbank fb;
+    pdh_fdir = dir;
+    snprintf(path, sizeof path, "%s/PDRES.BIN", dir);
+    f = fopen(path, "rb"); if (!f) return 0;
+    fread(hdr, 1, 200, f);
+    { int i; idxlen = 0; for (i = 0; i < 7; i++) if (hdr[8 + i * 12] == 7) idxlen = hdr[8 + i * 12 + 8] | (hdr[8 + i * 12 + 9] << 8); }
+    fseek(f, 0, SEEK_SET); n = (long)fread(MEM(SEG_BANK, 0), 1, idxlen, f); fclose(f);
+    memset(&fb, 0, sizeof fb);
+    strcpy(fb.pkgname, "PAGEDESK.O88"); fb.place_clus = 0; fb.place_vol = 0;
+    fb.part_off.lo = 1536; fb.part_off.hi = 0;
+    fb.index_seg = SEG_BANK; fb.index_len = (pdw)idxlen;
+    memcpy(MEM(SEG_XB, 0), &fb, sizeof fb);
+    return n == (long)idxlen ? 1 : 0;
+}
+static int send_fontbank(void)
+{
+    return (int)pdr_verb(PDV_REND_FONTBANK, 0, 0, 0);
 }
 static void do_init(int bpp, int bankkb, int dlkb)
 {
-    struct pdxb_init in;
+    struct pdxb_init in; static unsigned char keep[sizeof(struct pdxb_fontbank)];
+    memcpy(keep, MEM(SEG_XB, 0), sizeof keep);
     memset(&in, 0, sizeof in);
     in.xb_seg = SEG_XB; in.dl_seg = SEG_DL; in.dl_kb = (pdw)dlkb;
     in.band_seg = SEG_BAND; in.band_bytes = 5200;
-    in.glyph_seg = SEG_GLY; in.glyph_kb = 12;
-    in.bank_seg = SEG_BANK; in.bank_kb = (pdw)bankkb;
+    in.glyph_seg = SEG_GLY; in.glyph_kb = (pdw)g_glykb;
+    in.bank_seg = 0; in.bank_kb = 0; (void)bankkb;
     in.bpp = (pdw)bpp; in.adapter = 0;
     memcpy(MEM(SEG_XB, 0), &in, sizeof in);
     if (pdr_verb(PDV_REND_INIT, SEG_XB, 0, 0)) { fprintf(stderr, "init failed\n"); exit(2); }
+    memcpy(MEM(SEG_XB, 0), keep, sizeof keep);
+    if (send_fontbank()) { fprintf(stderr, "fontbank failed\n"); exit(2); }
 }
 static void write_ppm(const char *path, int x0, int y0, int w, int h)
 {
@@ -71,6 +95,8 @@ int main(int argc, char **argv)
 {
     if (argc < 2) return 1;
     pd_host_ds = 0x1000;
+    if (getenv("PDR_CLUSTER")) pdh_cluster_sectors = atoi(getenv("PDR_CLUSTER"));
+    if (getenv("PDR_GLYPHKB")) g_glykb = atoi(getenv("PDR_GLYPHKB"));
     if (!strcmp(argv[1], "render") && argc >= 14) {
         int page = atoi(argv[3]), zoom = atoi(argv[4]), rot = atoi(argv[5]), bpp = atoi(argv[6]);
         int an = 1, ad = 1, W = atoi(argv[8]), H = atoi(argv[9]), ox = atoi(argv[10]), oy = atoi(argv[11]);
@@ -101,7 +127,7 @@ int main(int argc, char **argv)
         if (e) { fprintf(stderr, "begin -> %u\n", e); return 3; }
         do { e = pdr_verb(PDV_REND_STEP, 0, 0, 0); steps++; } while (e == PDE_BUSY && steps < 100000);
         if (e) { fprintf(stderr, "step -> %u\n", e); return 3; }
-        printf("steps=%d\n", steps);
+        printf("steps=%d reads=%ld readbytes=%ld\n", steps, pdh_reads, pdh_readbytes);
         report();
         write_ppm(argv[12], 0, 0, W, H);
         return 0;

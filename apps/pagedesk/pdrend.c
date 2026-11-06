@@ -12,6 +12,13 @@
 #include "os88.h"
 #endif
 #include "pdrend.h"
+#ifndef PD_HOST
+/* DECISIONS D1: eng adds this thunk (and its prototype) to apps/cc; declared here
+ * with the exact prototype until that is merged - a repeated identical
+ * declaration is harmless once it is */
+unsigned os88_file_read_seq(const char *name, unsigned seg, unsigned off,
+                            unsigned cap, unsigned *cursor);
+#endif
 
 #include "pdrg.c"
 #include "pdrd.c"

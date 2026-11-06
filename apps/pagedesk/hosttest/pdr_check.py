@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """PDREND host checks (PAGEDESK-SPEC 20.3.6), run by `make pdrend`.
 
-  pdr_check.py <pdr_test binary> [scratch dir]
+  pdr_check.py <pdr_test binary> [scratch dir] [resource dir]
 
-Needs Pillow + numpy, the host's system fonts (for a test glyph bank) and
+Needs Pillow + numpy, build/PDRES.BIN and build/PDFONTX.RES (make pdfonts) and
 mutool; a missing one SKIPS the check that needs it and says so - the exit
 status is 0 only when every check that could run passed.
 
@@ -24,6 +24,7 @@ import os, subprocess, sys, shutil
 here = os.path.dirname(os.path.abspath(__file__))
 exe = os.path.abspath(sys.argv[1])
 scratch = os.path.abspath(sys.argv[2]) if len(sys.argv) > 2 else os.path.join(os.path.dirname(exe), 'pdrtest')
+resdir = os.path.abspath(sys.argv[3]) if len(sys.argv) > 3 else os.path.dirname(exe)
 os.makedirs(scratch, exist_ok=True)
 fails, skips, oks = [], [], 0
 
@@ -49,18 +50,27 @@ except Exception as e:
     skip('rendering checks', 'Pillow/numpy missing: %s' % e)
     print('pdr_check: %d ok, %d skipped, %d FAILED' % (oks, len(skips), len(fails)))
     sys.exit(1 if fails else 0)
-pdf = os.path.join(scratch, 't.pdf'); bank = os.path.join(scratch, 'bank.bin')
+pdf = os.path.join(scratch, 't.pdf')
 subprocess.run([sys.executable, os.path.join(here, 'pdr_mkpdf.py'), pdf], check=True, capture_output=True)
-if not os.path.exists(bank):
-    r = subprocess.run([sys.executable, os.path.join(here, 'pdr_mkbank.py'), bank, '6', '8', '10', '12', '16', '24'], capture_output=True, text=True)
-    if r.returncode:
-        skip('rendering checks', 'no system fonts for a test bank: ' + r.stderr.strip().split('\n')[-1])
-        print('pdr_check: %d ok, %d skipped, %d FAILED' % (oks, len(skips), len(fails)))
-        sys.exit(1 if fails else 0)
+# the files the shell lays out beside the package (DECISIONS D3, D5): PDRES.BIN, PAGEDESK.O88 (a 1536-byte
+# pad, then the PDRES part - so the part offset is not zero), and the optional PDFONTX.RES
+bank = os.path.join(scratch, 'fd'); bank_nox = os.path.join(scratch, 'fd_nox')
+res = os.path.join(resdir, 'PDRES.BIN'); resx = os.path.join(resdir, 'PDFONTX.RES')
+if not (os.path.exists(res) and os.path.exists(resx)):
+    skip('rendering checks', 'no %s / %s (make pdfonts)' % (res, resx))
+    print('pdr_check: %d ok, %d skipped, %d FAILED' % (oks, len(skips), len(fails)))
+    sys.exit(1 if fails else 0)
+for d, withx in ((bank, True), (bank_nox, False)):
+    os.makedirs(d, exist_ok=True)
+    data = open(res, 'rb').read()
+    open(os.path.join(d, 'PDRES.BIN'), 'wb').write(data)
+    open(os.path.join(d, 'PAGEDESK.O88'), 'wb').write(b'\x55' * 1536 + data)
+    if withx: shutil.copy(resx, os.path.join(d, 'PDFONTX.RES'))
 
-def render(page, zoom, rot, bpp, asp, W, H, name, dlkb=22):
+def render(page, zoom, rot, bpp, asp, W, H, name, dlkb=22, bk=None, env=None):
     out = os.path.join(scratch, name + '.ppm')
-    r = run(['render', pdf, page, zoom, rot, bpp, asp, W, H, 8, 8, out, bank, dlkb])
+    e = dict(os.environ); e.update(env or {})
+    r = run(['render', pdf, page, zoom, rot, bpp, asp, W, H, 8, 8, out, bk or bank, dlkb], env=e)
     st = {}
     for l in r.stdout.split('\n'):
         if l.startswith('status'):
@@ -139,6 +149,26 @@ else:
     r, out, st = render(3, 100, 0, 4, '1/1', 640, 480, 'cmp')
     b = np.asarray(Image.open(os.path.join(scratch, 'ref.png')).convert('L'))
     # (rendered above at 150; the geometry check is the cell comparison)
+
+# ---- 5b. the font files: cluster sizes, a missing PDFONTX.RES, a small glyph claim -------
+imgs = {}
+for cl in (1, 2, 8):
+    r, out, st = render(0, 150, 0, 4, '1/1', 640, 480, 'cl%d' % cl, env={'PDR_CLUSTER': str(cl), 'PDR_GLYPHKB': '24'})
+    imgs[cl] = open(out, 'rb').read()
+    if r.returncode or 'refused' in r.stderr: fail('strike reads at cluster = %d sectors' % cl, r.stderr[:200])
+if imgs[1] == imgs[2] == imgs[8]: ok('strikes read on demand identically at 512 B, 1 KiB and 4 KiB clusters (every seek and capacity a cluster multiple)')
+else: fail('cluster sweep', 'images differ between cluster sizes')
+rx, ox, sx = render(0, 150, 0, 4, '1/1', 640, 480, 'nox', bk=bank_nox, env={'PDR_GLYPHKB': '24'})
+ax = np.asarray(Image.open(ox).convert('L'))[8:, 8:]
+ref = np.asarray(Image.open(os.path.join(scratch, 'cl1.ppm')).convert('L'))[8:, 8:]
+# the 36 px "Big36" line at zoom 150 sits near y=285..330 of the page: with no PDFONTX.RES it is a doubled 12 px strike
+band = ax[110:200, 370:520]
+if rx.returncode == 0 and (band < 100).sum() > 150 and int(sx.get('incomplete', '0x0'), 16) == 0x0001:
+    ok('no PDFONTX.RES: large text is a pixel-doubled core strike (%d dark px), not an error, not Incomplete' % (band < 100).sum())
+else: fail('no PDFONTX.RES', 'rc=%d dark=%d st=%r' % (rx.returncode, (band < 100).sum(), sx))
+rs, os_, ss = render(0, 100, 0, 4, '1/1', 640, 480, 'small', env={'PDR_GLYPHKB': '8'})
+if rs.returncode == 0 and (np.asarray(Image.open(os_).convert('L'))[8:, 8:] < 100).sum() > 300 and int(ss.get('incomplete', '0x0'), 16) & 1: ok('an 8 KiB glyph claim draws what its cache holds and reports Incomplete (font), it does not fail')
+else: fail('small glyph claim', rs.stderr[:200])
 
 # ---- 6. text map -----------------------------------------------------------------
 want = ['Helvetica 14: The quick brown fox', 'Times 14: The quick brown fox', 'Courier 12: The quick brown fox',

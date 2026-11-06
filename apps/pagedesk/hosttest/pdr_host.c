@@ -15,6 +15,7 @@
 #include <string.h>
 #include <ctype.h>
 #include "../pdrend.h"
+#include "pdr_host.h"
 
 extern unsigned char pd_host_mem[];
 #define MEM(seg, off) (pd_host_mem + (((unsigned long)(seg) << 4) + (off)))
@@ -23,7 +24,7 @@ extern unsigned char pd_host_mem[];
 pdi pdr_muldiv(pdi a, pdi b, pdi c)
 {
     long long v = (long long)a * b, q;
-    if (c == 0) return 32767;
+    if (c == 0) return v < 0 ? -32767 : 32767;
     q = v / c;                                /* truncates toward zero, as the asm's magnitude divide */
     if (q > 32767) q = 32767;
     if (q < -32767) q = -32767;
@@ -108,6 +109,30 @@ void pdr_imgrow(void)
             }
         }
     }
+}
+
+/* ---- the file layer the strikes are read through (D3) -------------------------
+ * A directory of real files (PAGEDESK.O88 = padding + PDRES.BIN, PDFONTX.RES);
+ * the stub REFUSES what the kernel refuses - a seek or a capacity that is not
+ * a cluster multiple - so the renderer's alignment arithmetic is tested, and
+ * the cluster size is a knob (pdh_cluster_sectors). */
+const char *pdh_fdir = ".";
+int pdh_cluster_sectors = 1;
+long pdh_reads, pdh_readbytes;
+void os88_file_here(struct os88_place *p) { p->clus = 0; p->vol = 0; }
+int os88_file_goto_q_mark(unsigned clus, int vol) { (void)clus; (void)vol; return 0; }
+int os88_disk_cluster_sectors(void) { return pdh_cluster_sectors; }
+unsigned os88_file_read_seq(const char *name, unsigned seg, unsigned off, unsigned cap, unsigned *cursor)
+{
+    char path[512]; FILE *f; unsigned long seek = ((unsigned long)cursor[7] << 16) | cursor[6]; size_t n;
+    unsigned cb = (unsigned)pdh_cluster_sectors * 512;
+    if (seek % cb || cap % cb || cap == 0) { fprintf(stderr, "READ_SEQ refused: seek %lu cap %u not a multiple of %u\n", seek, cap, cb); return 0; }
+    snprintf(path, sizeof path, "%s/%s", pdh_fdir, name);
+    f = fopen(path, "rb"); if (!f) return 0;
+    fseek(f, (long)seek, SEEK_SET);
+    n = fread(MEM(seg, off), 1, cap, f); fclose(f);
+    pdh_reads++; pdh_readbytes += (long)n;
+    return (unsigned)n;
 }
 
 /* ---- 2. the framebuffer ------------------------------------------------------ */

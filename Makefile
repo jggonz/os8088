@@ -20223,6 +20223,7 @@ PDR_CSRC  := $(PDR_DIR)/pdrend.c $(PDR_DIR)/pdrg.c $(PDR_DIR)/pdrd.c $(PDR_DIR)/
              $(PDR_DIR)/pdri.c $(PDR_DIR)/pdrv.c $(PDR_DIR)/pdrend.h $(PDR_DIR)/pdrenc.h \
              $(PDR_DIR)/pdabi.h $(PDR_DIR)/pdmath.h
 PDR_MATH  := $(if $(wildcard $(PDR_DIR)/pdmath.inc),,-DPD_MATH_STUB)
+PDR_RSQ   := $(if $(shell grep -c _os88_file_read_seq apps/cc/os88thunk.asm | grep -v '^0$$'),,-DPDR_NO_READSEQ)
 
 $(BUILD)/pdrend.raw.asm: $(PDR_CSRC) $(CC_RUNTIME) | $(BUILD) cc-toolchain
 	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S \
@@ -20242,7 +20243,7 @@ $(BUILD)/pdr_mathstub.inc: $(BUILD)/pdrend.gen.asm
 $(BUILD)/PDREND.MOD: $(PDR_DIR)/pdrend.asm $(PDR_DIR)/pdrprim.inc $(BUILD)/pdrend.gen.asm \
                      $(CC_RUNTIME) apps/os88api.inc | $(BUILD)
 	@$(if $(PDR_MATH),$(MAKE) --no-print-directory $(BUILD)/pdr_mathstub.inc,:)
-	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ $(PDR_MATH) -o $@ $(PDR_DIR)/pdrend.asm
+	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ $(PDR_MATH) $(PDR_RSQ) -o $@ $(PDR_DIR)/pdrend.asm
 	@echo "PDREND.MOD: $(call FILESIZE,$@) bytes image$(if $(PDR_MATH), (math stub: size is a floor),)"
 
 PDR_HOSTBIN := $(BUILD)/pdr_test
@@ -20253,11 +20254,14 @@ $(PDR_HOSTBIN): $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c $(
 		$(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c $(PDR_DIR)/pdrend.c
 
 .PHONY: pdrend pdrend-host
-pdrend-host: $(PDR_HOSTBIN)
-	python3 $(PDR_DIR)/hosttest/pdr_check.py $(PDR_HOSTBIN)
+# the asm primitives against their C twins need Unicorn: whichever python has it
+PDR_UPY := $(shell for p in python3 /usr/bin/python3; do $$p -c 'import unicorn' 2>/dev/null && { echo $$p; break; }; done)
+pdrend-host: $(PDR_HOSTBIN) $(PD_RES_BIN) $(PD_FONTX_RES)
+	python3 $(PDR_DIR)/hosttest/pdr_check.py $(PDR_HOSTBIN) $(BUILD)/pdrtest $(BUILD)
+	@$(if $(PDR_UPY),$(PDR_UPY) $(PDR_DIR)/hosttest/pdr_primtest.py,echo "pdr_primtest: SKIP - no python with the unicorn package")
 pdrend: $(BUILD)/PDREND.MOD pdrend-host
 # ---- end PageDesk: rend ----
-=======
+
 # ---- PageDesk: math ----
 # PageDesk's arithmetic contract (PAGEDESK-SPEC 4, 20.7). `pdabi-check` is in
 # `all`: tools/os88pdabi.py --check holds apps/pagedesk/pdabi.h to its generated

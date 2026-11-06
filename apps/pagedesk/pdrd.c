@@ -383,48 +383,136 @@ static void shape_clipped(pdi y, pdw kind, pdi x0, pdi x1, pdw ne, pdw rule)
 
 /* ---- glyph drawing ------------------------------------------------------- */
 static pdb g_srec[16];
-static pdw g_sseg, g_soff;          /* the strike, as seg:off (off < 16)      */
-static pdw g_sfirst, g_slast, g_sasc, g_sdesc, g_ssize, g_sflags;
+static pdw g_sseg, g_soff;          /* the loaded strike: seg:off, off = 0     */
+static pdw g_sfirst, g_slast, g_sasc, g_sdesc, g_ssize, g_sflags, g_sid;
 
-/* far address of a 32-bit bank offset */
-static void far_of(pdw base, pdw lo, pdw hi, pdw *seg, pdw *off)
+/* ---- the strike cache (PAGEDESK-SPEC 20.3.4, DECISIONS D3) -----------------
+ * The glyph claim is carved: [0,1024) the image row buffer, [1024,3072) the
+ * INDEX of PDFONTX.RES, [3072,5120) the transformed-glyph cache (14 slots) and
+ * [SC_BASE, claim end) the STRIKE CACHE: strikes are read from the package or
+ * PDFONTX.RES on first use. Entries are bump-allocated 512-aligned; when the
+ * region is full everything is dropped and the one wanted is read again. */
+#define GC_IDX    1024
+#define GC_XBASE  3072
+#define GC_NSLOT  14
+#define SC_BASE   5120
+#define SC_NENT   8
+static pdb g_scb[SC_NENT];
+static pdw g_scolo[SC_NENT], g_scohi[SC_NENT], g_scoff[SC_NENT], g_sclen[SC_NENT];
+static pdw g_scn, g_scbump;
+static pdw g_pclus, g_pvol, g_poff_lo, g_poff_hi, g_fxok;
+static char g_pkgname[14];
+static unsigned g_cur8[8];
+static struct os88_place g_savpl;
+static pdw g_fioerr;
+
+/* Stand in the package's folder (the primary gave its place, D3) and answer
+ * the cluster size of the volume it is on; file_leave puts the working folder
+ * back so PDENG's reads by name find the document again. 0 = could not */
+static pdw file_enter(void)
 {
-    *seg = (pdw)(base + (hi << 12) + (lo >> 4));
-    *off = lo & 15;
+    pdw cb;
+    os88_file_here(&g_savpl);
+    if (os88_file_goto_q_mark(g_pclus, g_pvol)) return 0;
+    cb = (pdw)os88_disk_cluster_sectors();
+    cb = (pdw)(cb << 9);
+    if (cb < 512 || cb > 4096 || (cb & (cb - 1))) { os88_file_goto_q_mark(g_savpl.clus, g_savpl.vol); return 0; }
+    return cb;
 }
-static pdw strike_load(pdw idx)
+static void file_leave(void) { os88_file_goto_q_mark(g_savpl.clus, g_savpl.vol); }
+/* `cap` bytes (a cluster multiple) from byte (ahi:alo) (a cluster multiple) */
+static pdw file_read(const char *name, pdw alo, pdw ahi, pdw seg, pdw cap)
 {
-    pdw lo, hi;
-    pd_fcopy_in(g_bankseg, 8 + idx * 16, g_srec, 16);
+    pdr_zero(g_cur8, sizeof g_cur8);
+    g_cur8[6] = alo; g_cur8[7] = ahi;
+    return os88_file_read_seq(name, seg, 0, cap, g_cur8);
+}
+
+static pdw strike_fetch(pdw b, pdw olo, pdw ohi, pdw len)
+{
+    static struct pd_u32 u, p;
+    pdw cb, head, cap, room, seg, got, i;
+    if (!g_gseg || g_gkb * 1024u <= SC_BASE + 512u) return 0;
+    pdm_u32_set(&u, ohi, olo);
+    if (b == 0) { pdm_u32_set(&p, g_poff_hi, g_poff_lo); pdm_u32_add(&u, &u, &p); }
+    cb = file_enter();
+    if (!cb) { g_fioerr = 1; return 0; }
+    head = u.lo & (cb - 1);
+    cap = (pdw)((head + len + cb - 1) & ~(cb - 1));
+    room = (pdw)(g_gkb << 10);
+    if (g_scbump + cap > room || g_scn >= SC_NENT) { g_scn = 0; g_scbump = SC_BASE; }
+    if (g_scbump + cap > room) { file_leave(); return 0; }       /* a strike larger than the cache */
+    seg = (pdw)(g_gseg + (g_scbump >> 4));
+    got = file_read(b ? "PDFONTX.RES" : g_pkgname, (pdw)(u.lo & ~(cb - 1)), u.hi, seg, cap);
+    file_leave();
+    if (got < head + len) { g_fioerr = 1; return 0; }
+    pd_fcopy(seg, 0, seg, head, len);          /* the strike down to the paragraph */
+    i = g_scn++;
+    g_scb[i] = (pdb)b; g_scolo[i] = olo; g_scohi[i] = ohi;
+    g_scoff[i] = g_scbump; g_sclen[i] = len;
+    g_scbump = (pdw)(g_scbump + ((len + 511) & ~511));
+    return 1;
+}
+
+/* make strike `id` (bank << 8 | index) resident; sets g_sseg/g_soff and the
+ * metrics. 0 = unavailable (bank absent, read failed, larger than the cache) */
+static pdw strike_load(pdw id)
+{
+    pdw b = id >> 8, idx = id & 255, i, lo, hi, len;
+    if (b > 1 || !g_bk_seg[b] || idx >= g_bk_n[b]) return 0;
+    pd_fcopy_in(g_bk_seg[b], 8 + idx * 16, g_srec, 16);
     g_ssize = g_srec[2]; g_sasc = g_srec[3]; g_sdesc = g_srec[4];
     g_sfirst = g_srec[5]; g_slast = g_srec[6]; g_sflags = g_srec[7];
     lo = (pdw)(g_srec[8] | (g_srec[9] << 8)); hi = (pdw)(g_srec[10] | (g_srec[11] << 8));
-    far_of(g_bankseg, lo, hi, &g_sseg, &g_soff);
+    len = (pdw)(g_srec[12] | (g_srec[13] << 8));
+    g_sid = id;
+    for (i = 0; i < g_scn; i++)
+        if (g_scb[i] == b && g_scolo[i] == lo && g_scohi[i] == hi) goto found;
+    if (!strike_fetch(b, lo, hi, len)) return 0;
+    i = g_scn - 1;
+found:
+    g_sseg = (pdw)(g_gseg + (g_scoff[i] >> 4)); g_soff = 0;
     return 1;
 }
-/* pick the strike for (family, style) at the largest size <= em; returns
- * the index or 0xFFFF. the smallest strike serves when every one is larger */
+
+/* pick the strike for (family, style) at the largest size <= em, over both
+ * banks; the smallest serves when every one is larger. With only the core
+ * sizes (8, 10, 12) a request of 16 px or more is a core strike of at most
+ * half the size, PIXEL-DOUBLED (D5): g_pkscale says 2. Returns an id or 0xFFFF */
+static pdw g_pkfam_, g_pkdummy;
+static pdw pick_in(pdw fam, pdw sty, pdw em, pdw maxb)
+{
+    pdw b, i, best = 0xFFFF, bsz = 0, small = 0xFFFF, ssz = 0xFFFF, sz, f, s;
+    for (b = 0; b <= maxb; b++) {
+        if (!g_bk_seg[b]) continue;
+        for (i = 0; i < g_bk_n[b]; i++) {
+            f = pd_fpeekb(g_bk_seg[b], 8 + i * 16);
+            s = pd_fpeekb(g_bk_seg[b], 8 + i * 16 + 1);
+            if (f != fam || s != sty) continue;
+            sz = pd_fpeekb(g_bk_seg[b], 8 + i * 16 + 2);
+            if (sz <= em && sz >= bsz) { best = (pdw)((b << 8) | i); bsz = sz; }
+            if (sz < ssz) { small = (pdw)((b << 8) | i); ssz = sz; }
+        }
+    }
+    return best != 0xFFFF ? best : small;
+}
 static pdw strike_pick(pdw fam, pdw sty, pdw em, pdw *synth)
 {
-    pdw i, best = 0xFFFF, bsz = 0, small = 0xFFFF, ssz = 0xFFFF, sz, f, s;
+    pdw id, sz;
     *synth = 0;
     if (!g_bankok) return 0xFFFF;
-    if (fam == g_pkfam && sty == g_pksty && em == g_pkem) return g_pkres;
-    for (i = 0; i < g_nstrikes; i++) {
-        f = pd_fpeekb(g_bankseg, 8 + i * 16);
-        s = pd_fpeekb(g_bankseg, 8 + i * 16 + 1);
-        if (f != fam || s != sty) continue;
-        sz = pd_fpeekb(g_bankseg, 8 + i * 16 + 2);
-        if (sz <= em && sz >= bsz) { best = i; bsz = sz; }
-        if (sz < ssz) { small = i; ssz = sz; }
+    if (fam == g_pkfam && sty == g_pksty && em == g_pkem) { *synth = 0; return g_pkres; }
+    g_pkscale = 1;
+    id = pick_in(fam, sty, em, 1);
+    if (id != 0xFFFF) {
+        sz = pd_fpeekb(g_bk_seg[id >> 8], 8 + (id & 255) * 16 + 2);
+        if (sz < 14 && em >= 16) {              /* core only: double a strike of half the size */
+            pdw id2 = pick_in(fam, sty, (pdw)(em >> 1), 0);
+            if (id2 != 0xFFFF) { id = id2; g_pkscale = 2; }
+        }
     }
-    if (best == 0xFFFF) best = small;
-    if (best == 0xFFFF && (sty & 2)) {              /* no italic: upright + shear */
-        best = strike_pick(fam, sty & 1, em, synth);
-        *synth = 1;
-    }
-    g_pkfam = fam; g_pksty = sty; g_pkem = em; g_pkres = best;
-    return best;
+    g_pkfam = fam; g_pksty = sty; g_pkem = em; g_pkres = id;
+    return id;
 }
 
 static pdb g_gl[4];
@@ -450,38 +538,45 @@ static void glyph_slow(pdi gx, pdi top, pdw wpx, pdw wb, pdw gseg, pdw goff, pdw
     }
 }
 
-/* ---- rotated glyph cache (20.3.4): a direct-mapped table in the glyph claim,
- * keyed by (strike, rotation, code); slot = 8 header bytes + up to 4 x 32 ---- */
+/* ---- the transformed-glyph cache (20.3.4): a direct-mapped table of 14
+ * slots in the glyph claim, keyed by (strike, rotation, scale, code); a slot
+ * is 8 header bytes + up to 4 bytes x 32 rows ---------------------------- */
 #define GCSLOT   144
-#define GCBASE   1024
-static pdw g_gcn, g_gcoff, g_gcw, g_gcrows;
+static pdw g_gcoff, g_gcw, g_gcrows;
 static pdi g_gcdx, g_gcdy;
-/* make (or find) the rotated bitmap of the current glyph; sets g_gcoff etc. */
-static pdw glyph_rotated(pdw sidx, pdw rk, pdw code, pdw wpx, pdw wb, pdw boff, pdw rows, pdw bear)
+/* make (or find) the rotated and/or doubled bitmap of the current glyph;
+ * leaves its slot offset, size and the top-left offset from the pen */
+static pdw glyph_xform(pdw sidx, pdw rk, pdw sc, pdw code, pdw wpx, pdw wb, pdw boff, pdw rows, pdw bear)
 {
-    pdw slot, base, j, i, w2, r2, wb2, r, c;
+    pdw slot, base, j, i, W, R, w2, r2, wb2, r, c, tag;
+    pdi Bs, As, Ds;
     pdb v;
-    if (!g_gseg || g_gkb < 4) return 0;
-    if (!g_gcn) g_gcn = (pdw)(((g_gkb * 1024u) - GCBASE) / GCSLOT);
-    if (!g_gcn) return 0;
-    slot = (pdw)((code + sidx * 7 + rk * 3) % g_gcn);
-    base = GCBASE + slot * GCSLOT;
-    if (rk == 2) { w2 = wpx; r2 = rows; } else { w2 = rows; r2 = wpx; }
+    if (!g_gseg || g_gkb < 5) return 0;
+    slot = (pdw)((code + sidx * 7 + rk * 3 + sc) % GC_NSLOT);
+    base = GC_XBASE + slot * GCSLOT;
+    W = sc * wpx; R = sc * rows;
+    Bs = (pdi)((pdi)sc * (pdi)(signed char)bear); As = (pdi)(sc * g_sasc); Ds = (pdi)(sc * g_sdesc);
+    if (rk == 0 || rk == 2) { w2 = W; r2 = R; } else { w2 = R; r2 = W; }
     wb2 = (w2 + 7) >> 3;
     if (wb2 > 4 || r2 > 32) return 0;
     g_gcoff = base + 8; g_gcw = w2; g_gcrows = r2;
-    if (rk == 1) { g_gcdx = (pdi)(-(pdi)g_sdesc); g_gcdy = (pdi)bear; }
-    else if (rk == 3) { g_gcdx = (pdi)(-(pdi)g_sasc); g_gcdy = (pdi)(-(pdi)bear - (pdi)wpx); }
-    else { g_gcdx = (pdi)(-(pdi)bear - (pdi)wpx); g_gcdy = (pdi)(-(pdi)g_sdesc); }
-    if (pd_fpeekb(g_gseg, base) == (pdb)(code) && pd_fpeekb(g_gseg, base + 1) == (pdb)(sidx + 1) &&
-        pd_fpeekb(g_gseg, base + 2) == (pdb)rk) return 1;
-    pd_fpokeb(g_gseg, base, (pdb)code); pd_fpokeb(g_gseg, base + 1, (pdb)(sidx + 1)); pd_fpokeb(g_gseg, base + 2, (pdb)rk);
+    if (rk == 0)      { g_gcdx = Bs;                 g_gcdy = (pdi)(-As); }
+    else if (rk == 1) { g_gcdx = (pdi)(-Ds);         g_gcdy = Bs; }
+    else if (rk == 3) { g_gcdx = (pdi)(-As);         g_gcdy = (pdi)(-Bs - (pdi)W); }
+    else              { g_gcdx = (pdi)(-Bs - (pdi)W); g_gcdy = (pdi)(-Ds); }
+    tag = rk | (sc << 2);
+    if (pd_fpeekb(g_gseg, base) == (pdb)code && pd_fpeekb(g_gseg, base + 1) == (pdb)(sidx + 1) &&
+        pd_fpeekb(g_gseg, base + 2) == (pdb)tag && pd_fpeekb(g_gseg, base + 3) == (pdb)(g_sid >> 8) + 1) return 1;
+    pd_fpokeb(g_gseg, base, (pdb)code); pd_fpokeb(g_gseg, base + 1, (pdb)(sidx + 1));
+    pd_fpokeb(g_gseg, base + 2, (pdb)tag); pd_fpokeb(g_gseg, base + 3, (pdb)((g_sid >> 8) + 1));
     pd_ffill(g_gseg, base + 8, 0, wb2 * r2);
     for (j = 0; j < r2; j++) {
         for (i = 0; i < w2; i++) {
-            if (rk == 1)      { r = rows - 1 - i; c = j; }
-            else if (rk == 3) { r = i; c = wpx - 1 - j; }
-            else              { r = rows - 1 - j; c = wpx - 1 - i; }
+            if (rk == 0)      { r = j; c = i; }
+            else if (rk == 1) { r = R - 1 - i; c = j; }
+            else if (rk == 3) { r = i; c = W - 1 - j; }
+            else              { r = R - 1 - j; c = W - 1 - i; }
+            if (sc == 2) { r >>= 1; c >>= 1; }
             v = pd_fpeekb(g_sseg, (pdw)(boff + r * wb + (c >> 3)));
             if (v & (0x80 >> (c & 7)))
                 pd_fpokeb(g_gseg, (pdw)(base + 8 + j * wb2 + (i >> 3)),
@@ -494,20 +589,19 @@ static pdw glyph_rotated(pdw sidx, pdw rk, pdw code, pdw wpx, pdw wb, pdw boff, 
 static pdb g_gbuf[PDR_NRUN * 5];
 static void draw_glyphs(pdw off, pdw len, pdi ry0, pdi ry1)
 {
-    pdw fam, sty, px, shear, n, i, idx, code, wb, wpx, boff, rows, skip, nrow, rk;
+    pdw fam, sty, px, shear, n, i, idx, code, wb, wpx, boff, rows, skip, nrow, rk, sc;
     pdw gseg, goff, gw, grows;
     pdi x, y, bear, top, first, last, gx, mn, mx;
-    static pdb hd[6];
+    static pdb hd[8];
     pdw cnt;
-    pd_fcopy_in(g_dls, off + DLH, hd, 6);
-    fam = hd[0]; sty = hd[1]; px = hd[2]; rk = hd[3]; n = (pdw)r16(hd + 4);
-    idx = strike_pick(fam, sty, px, &g_synth);
-    if (idx == 0xFFFF) return;
-    strike_load(idx);
-    if (g_synth || (g_sflags & 1)) shear = 1; else shear = 0;
-    if (rk) shear = 0;
+    pd_fcopy_in(g_dls, off + DLH, hd, 8);
+    fam = hd[0]; sty = hd[1]; px = hd[2]; rk = hd[3] & 3; sc = (hd[3] & 4) ? 2 : 1; n = (pdw)r16(hd + 4);
+    idx = (pdw)r16(hd + 6);                    /* the run's strike id (bank << 8 | index) */
+    if (idx == 0xFFFF || !strike_load(idx)) return;
+    if (g_sflags & 1) shear = 1; else shear = 0;
+    if (rk || sc > 1) shear = 0;
     rows = g_sasc + g_sdesc;
-    off += DLH + 6;
+    off += DLH + 8;
     while (n) {
         cnt = n > PDR_NRUN ? PDR_NRUN : n;
         pd_fcopy_in(g_dls, off, g_gbuf, cnt * 5);
@@ -522,9 +616,9 @@ static void draw_glyphs(pdw off, pdw len, pdi ry0, pdi ry1)
             wb = (wpx + 7) >> 3;
             boff = (pdw)(g_soff + ((g_slast - g_sfirst + 1) * 4) + (pdw)(g_gl[2] | (g_gl[3] << 8)));
             gseg = g_sseg; goff = boff; gw = wpx; grows = rows;
-            if (!rk) { gx = (pdi)(x + bear); top = (pdi)(y - (pdi)g_sasc); }
+            if (!rk && sc == 1) { gx = (pdi)(x + bear); top = (pdi)(y - (pdi)g_sasc); }
             else {
-                if (!glyph_rotated(idx, rk, code, wpx, wb, boff, rows, (pdw)bear)) continue;
+                if (!glyph_xform(idx, rk, sc, code, wpx, wb, boff, rows, (pdw)bear)) continue;
                 gseg = g_gseg; goff = g_gcoff; gw = g_gcw; grows = g_gcrows; wb = (gw + 7) >> 3;
                 gx = (pdi)(x + g_gcdx); top = (pdi)(y + g_gcdy);
             }

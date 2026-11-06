@@ -377,9 +377,43 @@ static pdw verb_init(pdw xbseg)
     g_dls = g_ini.dl_seg; g_dlcap = g_ini.dl_kb ? (pdw)(g_ini.dl_kb >= 63 ? 0xFC00u : (pdw)(g_ini.dl_kb << 10)) : 0;
     g_bseg = g_ini.band_seg; g_bbytes = g_ini.band_bytes;
     g_gseg = g_ini.glyph_seg; g_gkb = g_ini.glyph_kb;
-    bank_attach(g_ini.bank_seg, g_ini.bank_kb);
+    g_bankok = 0; g_bankseg = 0; g_bk_seg[0] = g_bk_seg[1] = 0; g_pkfam = 0xFF;
+    g_scn = 0; g_scbump = SC_BASE; g_fxok = 0;
     g_bpp = g_ini.bpp == 4 ? 4 : 1;
     g_nfr = 0; g_idone = 1;
+    return PDE_OK;
+}
+
+/* PDV_REND_FONTBANK (D3): the primary's INDEX claim of PDRES, where the package
+ * is, and where the PDRES part starts in it. The optional PDFONTX.RES beside
+ * the package gets its own INDEX read into the glyph claim (D5). The primary
+ * sends this after every PDV_REND_INIT that changed the claims. */
+static struct pdxb_fontbank g_fbq;
+static pdw verb_fontbank(void)
+{
+    pdw cb, cap, got, n, seg;
+    pd_fcopy_in(g_xb, 0, &g_fbq, sizeof g_fbq);
+    bank_attach(g_fbq.index_seg);
+    pdr_scpy(g_pkgname, g_fbq.pkgname, 14);
+    g_pclus = g_fbq.place_clus; g_pvol = g_fbq.place_vol;
+    g_poff_lo = g_fbq.part_off.lo; g_poff_hi = g_fbq.part_off.hi;
+    g_scn = 0; g_scbump = SC_BASE; g_bk_seg[1] = 0; g_bk_n[1] = 0; g_fxok = 0;
+    if (!g_bankok) return PDE_FONT;
+    if (g_gseg && g_gkb >= 8) {
+        cb = file_enter();
+        if (cb) {
+            cap = (pdw)((2048 + cb - 1) & ~(cb - 1));
+            got = file_read("PDFONTX.RES", 0, 0, (pdw)(g_gseg + (GC_IDX >> 4)), cap);
+            file_leave();
+            if (got >= 96) {
+                seg = index_bank((pdw)(g_gseg + (GC_IDX >> 4)), &g_bn_tmp);
+                n = g_bn_tmp;
+                if (seg) { g_bk_seg[1] = seg; g_bk_n[1] = n; g_fxok = 1; }
+            }
+        }
+        pd_ffill(g_gseg, GC_XBASE, 0, SC_BASE - GC_XBASE);
+    }
+    g_pkfam = 0xFF;
     return PDE_OK;
 }
 
@@ -394,7 +428,7 @@ pdw pdr_verb(pdw verb, pdw bx, pdw cx, pdw dx)
     case PDV_REND_TEXTMAP:  return verb_textmap();
     case PDV_REND_THUMB:    return verb_thumb();
     case PDV_REND_STATUS:   return verb_status();
-    case PDV_REND_FONTBANK: bank_attach(bx, cx); return PDE_OK;
+    case PDV_REND_FONTBANK: return verb_fontbank();
     }
     return PDE_RANGE;
 }

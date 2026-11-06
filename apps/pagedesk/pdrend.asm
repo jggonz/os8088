@@ -25,47 +25,6 @@ section .bss    follows=.data   align=2 nobits
 
 %include "os88api.inc"
 
-; ---- parameter block offsets: THE ASSEMBLY SIDE of pdrend.h's struct pdr_gp and
-; struct pdr_ip; hosttest/pdr_layout.py compares them with the C offsets ------
-GP_BSEG   equ 0
-GP_BOFF   equ 2
-GP_STRIDE equ 4
-GP_X      equ 6
-GP_NROW   equ 8
-GP_SKIP   equ 10
-GP_GSEG   equ 12
-GP_GOFF   equ 14
-GP_WBYTES equ 16
-GP_WPX    equ 18
-GP_MODE   equ 20
-GP_COL    equ 22
-GP_SHEAR  equ 24
-GP_ROWSTEP equ 26
-GP_SIZE_  equ 28
-
-IP_BSEG   equ 0
-IP_BOFF   equ 2
-IP_X0     equ 4
-IP_X1     equ 6
-IP_SSEG   equ 8
-IP_SOFF   equ 10
-IP_SW     equ 12
-IP_XLO    equ 14
-IP_XHI    equ 16
-IP_SLO    equ 18
-IP_SHI    equ 20
-IP_SMODE  equ 22
-IP_INV    equ 24
-IP_DMODE  equ 26
-IP_DYROW  equ 28
-IP_COL    equ 30
-IP_SIZE_  equ 32
-
-
-PDM_MAGIC_REND  equ 0x5250          ; 'PR' - pdabi.h PDM_MAGIC_REND
-PDM_ABI         equ 1               ; pdabi.h PDM_ABI
-PDE_BUSY        equ 65              ; pdabi.h PDE_BUSY
-
 section .text
 pdr_hdr:
     dw PDM_MAGIC_REND
@@ -133,25 +92,10 @@ section .data
 pdr_ready:  dw 0
 
 section .bss
-pdr_bss_beg:
-_pdr_eng_off:   resw 1              ; the far vector into PDENG: offset, segment
-_pdr_eng_seg:   resw 1
-_pdr_eng_ax:    resw 1
-_pdr_eng_dx:    resw 1
-_pdr_gp:        resb GP_SIZE_
-_pdr_ip:        resb IP_SIZE_
-gl_row:         resw 1
-gl_rows:        resw 1
-gl_r:           resw 1
-gl_bi:          resw 1
-gl_x:           resw 1
-gl_nb:          resw 1
-gl_k:           resb 1
-gl_collo:       resb 1
-gl_colhi:       resb 1
-gl_pad:         resb 1
-gi_row:         resw 1
-gi_dy4:         resw 1
+pdr_bss_beg:                        ; FIRST label in .bss: everything from here to
+                                    ; pdr_bss_end is zeroed by the door; the
+                                    ; primitives' own variables (pdrprim.inc)
+                                    ; come after the compiled C's
 
 section .text
 
@@ -172,7 +116,20 @@ section .text
 %ifdef PD_MATH_STUB
 %include "pdr_mathstub.inc"
 %else
+; this segment never parses or prints a number and never checksums (PDENG's and PDWRT's work)
+%define PDM_SKIP_PARSE
+%define PDM_SKIP_CRC
 %include "pagedesk/pdmath.inc"
+%endif
+
+%ifdef PDR_NO_READSEQ
+; SCAFFOLDING, never shipped: until eng's os88_file_read_seq thunk (DECISIONS D1)
+; is merged into apps/cc/os88thunk.asm the Makefile defines PDR_NO_READSEQ and this
+; stands in for it, answering 0 bytes (every strike read refuses, so a module built
+; so draws no text). The real thunk replaces it with no source change here.
+_os88_file_read_seq:
+    xor ax, ax
+    ret
 %endif
 
 %include "pagedesk/pdrprim.inc"

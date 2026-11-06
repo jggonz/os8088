@@ -59,18 +59,41 @@ static const char *idx_key(pdw n)
 /* ---- the PDRES bank: strikes (11.2) and the extension (20.3.4) ----------- */
 static pdw g_wid_off, g_nam_off;    /* from the 'PDFX' record, 0 = absent     */
 
-static void bank_attach(pdw seg, pdw kb)
+/* index_seg holds a PDRES-format file's INDEX from byte 0: 'PDRS', the
+ * directory, then the PDFB bank at the offset D of directory kind 1 (a
+ * multiple of 16, 20.4.1). Returns the bank's segment, or 0 */
+static pdw index_bank(pdw index_seg, pdw *nstrikes)
 {
-    pdw n, x;
-    g_bankseg = seg; g_bankok = 0; g_nstrikes = 0; g_wid_off = g_nam_off = 0;
-    g_pkfam = 0xFF;
-    if (!seg || !kb) return;
-    if (pd_fpeekw(seg, 0) != 0x4450 || pd_fpeekw(seg, 2) != 0x4246) return;  /* "PDFB" */
+    pdw n, i, k, d = 0, seg;
+    if (!index_seg || pd_fpeekw(index_seg, 0) != 0x4450 || pd_fpeekw(index_seg, 2) != 0x5352) return 0;   /* "PDRS" */
+    n = pd_fpeekw(index_seg, 6);
+    for (i = 0; i < n && i < 16; i++) {
+        k = pd_fpeekw(index_seg, 8 + i * 12);
+        if (k == 1) { d = pd_fpeekw(index_seg, 8 + i * 12 + 4); break; }
+    }
+    if (!d || (d & 15)) return 0;
+    seg = (pdw)(index_seg + (d >> 4));
+    if (pd_fpeekw(seg, 0) != 0x4450 || pd_fpeekw(seg, 2) != 0x4246) return 0;                       /* "PDFB" */
     n = pd_fpeekw(seg, 6);
-    if (n == 0 || n > 200) return;
-    g_nstrikes = n; g_bankok = 1;
+    if (n == 0 || n > 120) return 0;
+    *nstrikes = n;
+    return seg;
+}
+
+/* the PDRES core bank: the primary's INDEX claim (PDV_REND_FONTBANK). The
+ * widths ('PDWD', 20.4.3) and names ('PDFX' record) live in it */
+static pdw g_bn_tmp;
+static void bank_attach(pdw index_seg)
+{
+    pdw n, x, seg;
+    g_bankseg = 0; g_bankok = 0; g_bk_seg[0] = 0; g_bk_n[0] = 0; g_wid_off = g_nam_off = 0;
+    g_pkfam = 0xFF;
+    seg = index_bank(index_seg, &g_bn_tmp);
+    n = g_bn_tmp;
+    if (!seg) return;
+    g_bankseg = seg; g_bankok = 1; g_bk_seg[0] = seg; g_bk_n[0] = n;
     x = 8 + n * 16;
-    if (pd_fpeekw(seg, x) == 0x4450 && pd_fpeekw(seg, x + 2) == 0x5846) {    /* "PDFX" */
+    if (pd_fpeekw(seg, x) == 0x4450 && pd_fpeekw(seg, x + 2) == 0x5846) {                            /* "PDFX" */
         g_wid_off = pd_fpeekw(seg, x + 4);
         g_nam_off = pd_fpeekw(seg, x + 6);
     }
@@ -243,7 +266,7 @@ static pdw font_width(pdw fi, pdw code)
         if (lat < 32) lat = 32;
         face = (pdw)(f->fam * 4 + (f->sty & 3));
         if (f->fam == 2) w = 600;
-        else if (g_wid_off) w = pd_fpeekw(g_bankseg, g_wid_off + face * 448 + (lat - 32) * 2);
+        else if (g_wid_off) w = pd_fpeekw(g_bankseg, g_wid_off + 8 + face * 448 + (lat - 32) * 2);
         else w = 556;
     }
     f->wid[code - 32] = w;

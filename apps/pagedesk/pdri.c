@@ -190,7 +190,8 @@ static void text_sync(void)
 /* ---- glyph runs ------------------------------------------------------------ */
 static pdw g_rn;                    /* glyphs in the open run                     */
 static pdb g_rfam, g_rsty, g_rpx, g_ropen;
-static pdb g_rbody[6 + PDR_NRUN * 5];
+static pdb g_rbody[8 + PDR_NRUN * 5];
+static pdw g_rid, g_rscale;
 static pdw g_rasc, g_rdesc, g_rrot;
 /* the text direction as a quadrant: 0 right, 1 down (90 cw), 2 left, 3 up */
 static pdw text_quadrant(void)
@@ -206,16 +207,17 @@ static void run_flush(void)
     pdi y0 = 32000, y1 = -32000, t;
     if (!g_rn) { g_ropen = 0; return; }
     for (i = 0; i < g_rn; i++) {
-        t = (pdi)(r16(g_rbody + 6 + i * 5 + 3) - (pdi)g_rasc); if (t < y0) y0 = t;
-        t = (pdi)(r16(g_rbody + 6 + i * 5 + 3) + (pdi)g_rdesc); if (t > y1) y1 = t;
+        t = (pdi)(r16(g_rbody + 8 + i * 5 + 3) - (pdi)g_rasc); if (t < y0) y0 = t;
+        t = (pdi)(r16(g_rbody + 8 + i * 5 + 3) + (pdi)g_rdesc); if (t > y1) y1 = t;
     }
-    g_rbody[0] = g_rfam; g_rbody[1] = g_rsty; g_rbody[2] = g_rpx; g_rbody[3] = (pdb)g_rrot;
-    w16(g_rbody + 4, (pdi)g_rn);
+    g_rbody[0] = g_rfam; g_rbody[1] = g_rsty; g_rbody[2] = g_rpx;
+    g_rbody[3] = (pdb)(g_rrot | (g_rscale > 1 ? 4 : 0));
+    w16(g_rbody + 4, (pdi)g_rn); w16(g_rbody + 6, (pdi)g_rid);
     if (y0 < g_gy0) y0 = g_gy0;
     if (y1 > g_gy1) y1 = g_gy1;
     emit_state(PK_TEXT);
-    hdr_set(DLR_GLYPHS, 0, DLH + 6 + g_rn * 5, y0, y1);
-    dl_put(g_hdr, DLH, g_rbody, 6 + g_rn * 5);
+    hdr_set(DLR_GLYPHS, 0, DLH + 8 + g_rn * 5, y0, y1);
+    dl_put(g_hdr, DLH, g_rbody, 8 + g_rn * 5);
     g_rn = 0; g_ropen = 0;
 }
 
@@ -230,11 +232,19 @@ static pdw run_begin(void)
     if (!f->ok) return 0;
     sty = f->sty;
     idx = strike_pick(f->fam, sty, g_em, &g_synth);
-    if (idx == 0xFFFF) return 0;
-    strike_load(idx);
+    {   /* a strike the cache cannot hold (or a failed read): the next one down */
+        pdw tries = 0, em = g_em;
+        while (idx == 0xFFFF || !strike_load(idx)) {
+            if (idx == 0xFFFF || ++tries > 4 || g_ssize <= 6) { inc_note(PDF_INC_FONT, "font strike unavailable"); return 0; }
+            em = (pdw)(g_ssize - 1);
+            idx = strike_pick(f->fam, sty, em, &g_synth);
+            g_pkem = 0xFFFF; g_pkfam = 0xFF;      /* do not let the memo pin the retry */
+        }
+    }
+    g_rid = idx; g_rscale = g_pkscale;
     g_rfam = f->fam; g_rsty = (pdb)sty; g_rpx = (pdb)g_ssize;
     g_rrot = text_quadrant();
-    g_rasc = g_sasc; g_rdesc = g_sdesc;
+    g_rasc = (pdw)(g_sasc * g_pkscale); g_rdesc = (pdw)(g_sdesc * g_pkscale);
     g_rn = 0; g_ropen = 1;
     return 1;
 }
@@ -311,7 +321,7 @@ static void glyph_emit(pdw code, pdw lat, pdi px, pdi py)
         if (px > GS.cx1 || (pdi)(px + 2 * (pdi)g_rpx) < GS.cx0 || bot < GS.cy0 || top > GS.cy1) return;
     }
     if (g_rn >= PDR_NRUN) { run_flush(); if (!run_begin()) return; }
-    g_rbody[6 + g_rn * 5] = (pdb)lat; w16(g_rbody + 6 + g_rn * 5 + 1, px); w16(g_rbody + 6 + g_rn * 5 + 3, py); g_rn++;
+    g_rbody[8 + g_rn * 5] = (pdb)lat; w16(g_rbody + 8 + g_rn * 5 + 1, px); w16(g_rbody + 8 + g_rn * 5 + 3, py); g_rn++;
 }
 
 /* one glyph: draw it (unless invisible), advance the pen */

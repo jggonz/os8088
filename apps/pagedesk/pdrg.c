@@ -35,8 +35,9 @@ static pdw g_mode;                  /* PDR_*                                 */
 static pdw g_fillrule, g_deskwhite;
 static pdw g_gseg, g_gkb;           /* the glyph-cache claim (INIT)           */
 /* the PDRES bank, attached by PDV_REND_FONTBANK / INIT (pdrd.c, pdrf.c) */
-static pdw g_bankseg, g_bankok, g_nstrikes;
-static pdw g_pkfam = 0xFF, g_pksty, g_pkem, g_pkres;
+static pdw g_bankseg, g_bankok;     /* bank 0 (PDRES core): widths and names live there */
+static pdw g_bk_seg[2], g_bk_n[2];  /* the PDFB banks: 0 PDRES core, 1 PDFONTX.RES (D3, D5) */
+static pdw g_pkfam = 0xFF, g_pksty, g_pkem, g_pkres, g_pkscale;
 static pdw g_inc;                   /* PDF_INC_* seen                        */
 static char g_incname[32];
 static pdw g_ops, g_passes;
