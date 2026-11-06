@@ -12510,8 +12510,8 @@ no-op. Three callers:
 wrong: only IRQ0 falls into `sch_switch`; every other ISR `iret`s straight back
 to what it interrupted, so a task an ISR has just made ready would wait for the
 next tick. The idle task's `task_yield` after its `hlt` (§8.1.2) is what closes
-that — any interrupt ends the halt and the yield re-enters the scheduler at
-once. Measured: from the mouse ISR finishing a packet to the next `ui_task`
+that — any interrupt ends the halt and, when it posted a wake (§8.1.2.5),
+the yield re-enters the scheduler at once. Measured: from the mouse ISR finishing a packet to the next `ui_task`
 pass, **5.14 ms median against a spinning kernel's 4.99, with a lower worst
 case (5.22 against 6.41)**; without the yield the same figure is 32.4 ms
 median and 54.5 max.
@@ -12582,6 +12582,43 @@ on a deadline of its own (§79.5) — everything below `.posted_done` is
 tick-driven, where coalescing is a feature and not a cost (§13.12) — so it is
 the only rung that needs to say so.
 
+
+#### 8.1.2.5 A halt no wake ended is halted again
+
+Until kernel hot-paths pass 1 the idle task yielded after EVERY interrupt
+that ended its `hlt` (8.1.2.2's yield), and with nothing ready that yield
+was a switch that resumed the idle task: one a serial BYTE (three a mouse
+packet, of which only the third wakes anything) and one a tick (IRQ0 had
+already switched to the woken UI task and back). Now the idle task goes back
+round its loop after its `hlt` (`popf`, then `.loop`'s fail-safe test and the
+guard's `pushf` / `cli` / test of `[sch_idlewake]`), halts again if the byte is
+clear, and yields only when it is set. The loop's head is still passed after
+every interrupt, which tests/dskwstage.py's quiet point relies on.
+That is exact because every event that makes a task READY now posts the
+byte:
+
+- `sch_wake_ui`, as before (the mouse, the keyboard, `evq_push`);
+- **`sch_isr`'s wake loop**, for each sleeper it wakes - the case where the
+  tick cannot switch (`sch_lock`, a nested tick, the cooperative mode)
+  leaves the woken task to the idle task's yield;
+- `task_spawn` publishes from a running task, never from an interrupt, so
+  a spawned task is never ready while the idle task is the one running.
+
+And **`sch_switch`'s "nothing ready" fallback clears it** (`mov
+[sch_idlewake], dh`, DH being the spent count): when the scan found nothing
+eligible every wake posted before it has been looked at, so the byte means
+exactly "something became ready since the scheduler last looked". The scan
+and the store are one IF = 0 window. Under the fsx freeze a ready but
+ineligible UI task still costs one yield per wake, as 8.1.2 describes.
+
+**kern_emu keeps the old loop** (`%ifndef KERN_EMU`): its VMware pointer is
+POLLED in `task_yield` (SPEC.md 9.11.3), and the interrupt that ended the
+halt is how a moving absolute pointer reaches that poll.
+
+Measured on MartyPC's 4.77 MHz 8088, CGA, kern_big: an idle tick 11,205 ->
+9,941 cycles; over 30 mouse packets the idle task's yields fell from 218 to
+29 and the hand-off to the UI task stayed 1,794 cycles. 12 bytes (one a
+parity pad) - docs/plans/khp1/sched.md item sched-4.
 
 ### 8.1.3 `sch_top` — the scan stops at the last slot that can be live
 

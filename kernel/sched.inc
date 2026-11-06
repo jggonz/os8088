@@ -762,10 +762,31 @@ sch_idle_body:
     pushf
     cli                         ; the guard: nothing may be posted between the
     cmp byte [sch_idlewake], 0  ; test and the halt...
-    jne .rearm                  ; a wake landed since the last pass: go round
+    jne .woke                   ; a wake landed since the last pass: go round
     sti                         ; ...and sti's shadow covers the hlt, so an
     hlt                         ; interrupt taken here ENDS it rather than
-.rearm:                         ; preceding it
+.rearm:                         ; preceding it. (tools/os88hot.py finds the
+                                ; hlt as THIS label less one: keep them so)
+%ifndef KERN_EMU
+    popf                        ; ...and A HALT NO WAKE ENDED IS HALTED AGAIN
+    jmp short .loop             ; (SPEC.md 8.1.2.5): round to the guard,
+                                ; rather than into a yield. Every READY-
+                                ; making event posts the byte now -
+                                ; sch_wake_ui, the tick's wake loop - and
+                                ; sch_switch's "nothing ready" fallback spends
+                                ; it, so a clear byte means nothing became
+                                ; ready since the scheduler last looked, and
+                                ; the yield below would resume this task. It
+                                ; was one switch per serial BYTE and one per
+                                ; tick. Through .loop and not straight to the
+                                ; test, so the idle loop's head is still
+                                ; passed after every interrupt (tests/
+                                ; dskwstage.py stops there). kern_emu keeps
+                                ; the yield: its VMware pointer is POLLED in
+                                ; task_yield, and an interrupt is how a moving
+                                ; absolute pointer gets there
+%endif
+.woke:
     mov byte [sch_idlewake], 0  ; spent BEFORE the yield, so a wake posted
     popf                        ; after this is one the next pass sees
 .spin:
@@ -778,8 +799,12 @@ sch_idle_body:
                                 ; made ready waits for the next TICK, so the
                                 ; wake byte on its own buys nothing and input
                                 ; still lands up to 55 ms late. Costs one
-                                ; switch per interrupt taken
-                                ; while idle, which is what being idle is for
+                                ; switch per WAKE taken while idle (8.1.2.5)
+%ifndef KERN_EMU
+    nop                         ; PARITY PAD, never executed: the halt-again
+                                ; arm is 3 bytes, and this keeps everything
+                                ; after it at t_hotpar's measured parity
+%endif
 
 ; in:  nothing.  out: CF=1 if no slot was free (the machine keeps the old
 ;      resume-the-outgoing fallback and nothing else changes)
@@ -2335,6 +2360,13 @@ sch_isr:
                                 ; ax, dx / sub`: the same SF, 2 bytes and ~8
                                 ; cycles less per sleeper (size pass 9)
     mov byte [bx+T_STATE], 1
+%ifndef KERN_EMU
+    mov [sch_idlewake], cl      ; ...and SAY SO to the idle task (8.1.2.5): a
+                                ; tick that cannot switch - locked, nested,
+                                ; cooperative - leaves the woken task to the
+                                ; idle task's yield. CL is the loop count,
+                                ; 1..[sch_top], so never 0
+%endif
 .next:
     add bx, T_SIZE
     loop .wake
@@ -2451,6 +2483,13 @@ sch_switch:
 .skip:
     dec dh
     jnz .scan
+%ifndef KERN_EMU
+    mov [sch_idlewake], dh      ; NOTHING IS READY, so every wake posted before
+                                ; this look is spent (8.1.2.5): DH is 0 from
+                                ; the loop. IF = 0 since the switch began, so
+                                ; nothing can be posted between the scan and
+                                ; this store
+%endif
     mov dl, [sch_idleslot]      ; nothing ready: the idle task, if there is
     cmp dl, 0xFF                ; one (6.2). Without it - and before boot
     jne .idlepick               ; starts it - the old behaviour stands, which
