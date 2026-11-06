@@ -2576,7 +2576,7 @@ remembered and taken off by replaying them; a render's BEGIN takes the outline
 off first (the page under it is still the page it was drawn on) and its END
 puts it back; scrolling, zooming and a page change take it off before they
 move anything. `Esc` deselects; `Delete` deletes the selection (one undoable
-command); Enter on a selected note or text box opens it for typing.
+command); Enter on a selected text box opens it for typing. `pdu_ed_gen()` is bumped on every mutation, undo, redo and selection change (D19, for `notes`); `pdu_tbuf[1025]` is the one near text buffer shared with notes.
 
 **The tools** (`pdutool.c`; Annotate and Edit modes, never Read or Pages, never
 on a signed document). A gesture is modal: the OS delivers a press and a
@@ -2588,14 +2588,14 @@ scroll and rotation never touch a stored byte.
 
 | tool | gesture | result |
 |---|---|---|
-| Select | click a mark; drag it; drag a corner handle; double-click or Enter a note/text to type | moves by an exact pt16 translation, kept on the page; resize re-converts the corner |
-| Note | click | a 20x18 pt Note centred there, then typing; Esc with no text discards it (not a change) |
+| Select | click a mark (a shape by its border, a note/text by its box, Ink/Sign/Line/Highlight by their bounding box); drag it; drag a corner handle; double-click or Enter a text box to type | moves by an exact pt16 translation, kept on the page; resize re-converts the corner |
+| Note | click | `pdu_nt_new(page, &rect)`: notes' popover (20.9) makes the Note (20x18 pt centred there) on Done with text; double-click a note calls `pdu_nt_open` |
 | Text | drag a frame, or click for 144 x 36 pt; click an existing box to edit it | Text record, then typing |
 | Highlight | with a selection, press Highlight | one record, up to 12 quads (`pdu_sel_quads`, 4 points each), `rect` = their union |
 | Mark / Rect / Ellipse | drag | Area mark / Rect / Ellipse over the dragged frame (4 pt minimum) |
 | Line | drag tail to head | Line with an arrow at the end |
-| Ink | draw with the button down | one Ink record per stroke: points 3 px apart or more, thinned to within a pixel, at most 126 per stroke (said when reached) |
-| Sign | draw strokes; Enter places | one Sign record (pen-up separated strokes), at most 126 points in all. `Drawn signature: Enter places, Esc cancels` - **not a certificate signature** (13.9) |
+| Ink | draw with the button down | one Ink record per stroke: a point only when the pointer is 3 px from the last kept one, at most 126 per stroke (said when reached) |
+| Sign | draw one stroke | one Sign record placed on release; the status line says `Drawn signature - not a certificate` (13.9). A multi-stroke capture is not built |
 
 **Typing** (`pdu_tx_*`): while a note or text box is open the printable keys,
 Backspace and Enter (a new line, LF) go to it; every other key and every command
@@ -2608,9 +2608,18 @@ said; the typed text is never dropped.
 exists and is tested, but a click on one needs `PDV_ENG_ANNOTS` per page, which
 is `notes`' list; it calls `copy_src` then `pdu_ed_set`/`pdu_ed_move`/`pdu_ed_del`.
 (2) The Highlight tool's text drag is `nav`'s: its selection gesture, when the
-tool is Highlight, ends by calling `pdu_tool_hilite()` (a macro-free wrapper:
-`ovl_tool_hilite`); until nav lands `pdu_sel_quads` answers 0 and the status
+tool is Highlight, ends by calling `pdu_tool_hilite()`; until nav lands `pdu_sel_quads` answers 0 and the status
 line says `Select text first.`. (3) Line-end handles, a plain (arrow-less) Line
 gesture, text caret positioning and property editing are not here; properties
 are `notes`' inspector through `pdu_ed_set`. (4) Page ids are view indices until
 `pages` lands `pdu_pg_id` (`pdu_ed_pg()` is the one line to change).
+
+**As measured (2026-11-05, QEMU VGA with the stand-in PDREND, `LATIN.PDF`).** Mark drag
+creates a record (title `*`, Undo lit); Select picks it with four corner
+handles; a corner drag resizes, a border drag moves, Delete removes, Ctrl+Z
+brings it back; the Text tool's frame and typed `Test` and the Area mark
+Save As into `LATIN2.PDF`, which `qpdf --check` passes and `mutool draw` shows
+as a red rectangle and blue `Test` where they were placed. Sizes: primary
+43,232 + 6,225 bss (+4.9 KiB, of which 1,025 is `pdu_tbuf`, which `notes`
+drops from its own bss); overlay 16,045 bytes against D19's +12 KiB share
+(14,547): **1.5 KiB over**.
