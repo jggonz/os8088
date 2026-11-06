@@ -202801,6 +202801,10 @@ The checkbox reads "...and make a disk of it", and its list (`DISKS`) is:
 | a 32 MB hard disk: ST-238R on an ST11R (XT) | 615/4/26, the ST11's layout | `os88hdd.py --st11` |
 | a 32 MB hard disk: IDE (286 and up) | 250/15/17 | `os88hdd.py` |
 
+- **The list and the making are `tools/os88mkdisk.py`'s** (`DISKS`,
+  `disk_of`), shared with the Video Battle builder (125.7), which puts its
+  battle and engine on the same seven disks. This window adds its player
+  and the video's 8.3 name (`disk_argv`).
 - **A hard disk BOOTS.** It is a fixed VHD for 86Box, or for a real disk
   written with an image tool, carrying:
   - the kernel and its boot records;
@@ -237398,3 +237402,1473 @@ the instance's stay within §124.25.1's eight. When the MessageBox is
 closed and the instance ends, the heap must be the one before the launch.
 Program Manager 3.0 starting Clock, and Calculator's Help menu opening
 Windows Help, are Microsoft's programs, and are looked at (124.28.10).
+
+## 125. VIDEO BATTLE — a battle played as joined video clips (`apps/vbattle/`, `VBATTLE.O88`, `.VBT`)
+
+A turn-based battle on a 4.77 MHz 8088 whose picture is **video**. An idle
+loop plays in the top of the screen while the player chooses a command in
+the band under it. The command's clip joins the loop at an anchor frame and
+seams back onto it at its end, so the battle reads as one continuous scene.
+docs/plans/VIDEO-BATTLE-PLAN.md is the feasibility study and the story list.
+
+It is an engine, and the battles are data. A `.VBT` bundle holds:
+- the idle loop;
+- the action clips, each carrying the sound effects only it uses;
+- the menu's own sounds;
+- the music, which the engine STREAMS from the disk;
+- a script of who has which command.
+
+**A hard disk is the target and a floppy is a bonus** (the owner,
+2026-11-04). A floppy cannot feed the music and the clips at once, so a
+bundle whose music is short enough is held resident instead (125.4).
+
+`tools/os88vbt.py` builds one. Its `demo` command builds an ORIGINAL
+battle, drawn and scored by `tools/vbtscene.py` with nothing captured, so
+the engine can be built, tested and shown from the tree. A battle made from
+captured footage is its maker's, and none is committed.
+
+### 125.1 What is shared, and what is its own
+
+| from | for |
+|---|---|
+| `apps/video/vdec.inc` (`vd_native`), as SOURCE | every frame: the Video Player's ten lists (98.1.3) |
+| `tools/os88vid.py` (`Geom`, `seam_ops`, `to_lists`, `decode_lists`) | the host's records, and the reference decoder `verify` runs every join through |
+| `OSAPI_FSX_RUN` with `FSXF_RATE` (53.2.2) | the bracket, and the hook the frames are drawn from |
+| `OSAPI_SND_STREAM`'s external ring (34.5.3) | the sound |
+| `OSAPI_FILE_READ_SEQ` (18.4.8) | every read |
+
+The Video Player's reader, ring, seeking, posters and windowed play are NOT
+used. A V88 file interleaves its sound with its frames and is one stream.
+A battle is many short streams and one continuous sound, so the container
+is the battle's own (125.2) and only the record format is shared.
+
+### 125.2 The bundle
+
+Little-endian. Every region starts on a 4 KB boundary, because
+`OSAPI_FILE_READ_SEQ` seeks and reads in cluster multiples, and 4 KB covers
+every floppy and a FAT16 disk to 128 MB.
+
+**A battle is a DOCUMENT** (§54): `VBATTLE.O88` declares `.VBT` (flags
+bit 1, `OS88_ASSOC16`), so a bundle under any name, double-clicked, opens
+the package with it (`OSAPI_ARG_FILE` at the entry, `vb_docnames`). The
+play goes to the document's folder (`OSAPI_FILE_GOTO_QM`, §74.1) and reads
+this machine's rendition BESIDE it, named as the builder names them - the
+stem less a trailing V or H, then with V on a VGA, H on a Hercules
+(`MYFIGHT.VBT`, `MYFIGHTV.VBT`, `MYFIGHTH.VBT`) - or the document itself
+when there is none. Launched with no document it looks for `BATTLE.VBT`,
+`BATTLEV.VBT` and `BATTLEH.VBT` as before (`vbtdoc`).
+
+**The TITLE PICTURE** (the project's `"cover"`: a picture and a line; the
+Battle tab's "Title picture") is shown in the battle's WINDOW on the desktop
+before the play, with one line under it ("Click or press Enter to begin"
+unless it says otherwise) - the window titled with the battle's name and
+sized to the two (`vb_tpl`, before it is created). Its region, at header
+88: `C2`, the variants' count, the line (64 bytes), the battle's name (32:
+31 letters, what the title bar of a picture's 322-pixel window shows
+between its boxes at 8 a letter - `os88vbt.TITLE_MAX`, which the Battle
+tab's Name holds itself to and counts; `CV`, the first, carried 16), a
+12-byte row a variant - its desktop's SHAPE (0: 640 x 200, CGA's; 1: 640
+x 480 and EGA's 350; 2: 720 x 348, Hercules'), 0, width, height, stride,
+its offset in the region - and the 1bpp bitmaps, half the screen wide and
+as tall as the picture's shape on a 4:3 screen of that many rows, dithered
+(Floyd-Steinberg); a CGA4 bundle carries 0 and 1, VGA's 1, Hercules' 2.
+The engine reads the region into a claim at its entry (`vb_coverload`,
+the bundle found as a play finds it, the variant by `OSAPI_VIDEO`'s
+screen), puts it down with `OSAPI_GFX_BLIT1` (`vb_cvpaint`: white on
+black, the line centred, every other pixel black once) and gives the claim
+back as a play starts (`vb_cvfree`: the rings want it), reading it again
+as the play ENDS, while the screen is still the play's (`vb_main`'s exit):
+read after, the desktop's first paint of the window was its text window
+and then the picture (the owner's "flash"). A window made for a picture
+never paints the text window: with its picture out it paints black where
+the picture goes, and its line (`[vb_cvwin]`). A status (*Loading...*, a refusal) takes the line's
+place while it says anything. `vbtcover`.
+
+**A battle may be EMBEDDED in its own copy of the engine** - a GAME, one
+file to copy and double-click, one adapter each (`os88vbt.py game`, the
+Build tab's "Make the games": `NAME.O88`, `NAMEV.O88`, `NAMEH.O88`, NAME
+the battle's name's first seven letters and digits). `os88vbt.embed_o88`
+takes the shipped `VBATTLE.O88` - a packed package (flags bit 3) - sets
+flags bit 2 and puts where its packed image ENDS in the link word, which
+is what makes the loader read the image alone (§20.13.8: the parts rule,
+with no parts table; the kernel parses none of it), then pads to 4 KB and
+appends the bundle; the window's title (the header's name) becomes the
+battle's. With no document the engine reads its own file's header first
+(`vb_embfind`, its name and folder kept from the entry, §20.2): flags bit
+2 and a `VBT1` header of this version at the link word rounded up to 4 KB
+is a battle inside it, and every read is on by that offset (`[vb_embat]`,
+in `vb_dread`) - one read when there is none, two when there is. A game
+for another adapter says so (*Needs CGA, EGA or VGA*). `vbtgame`.
+
+Version 8 (2026-11-05) is the current version. Over version 7 it moves
+**each clip's ENTRIES in front of its own records** (docs/plans/completed/
+VBATTLE-RAM-PLAN.md R2): an anchor names a paragraph of its clip's region, the clip
+table's word at 32 says how many paragraphs the entries take, and the
+ENTRIES region and its header field (88, now zero) are gone. They were
+resident, every action's held for the whole play - 82 KB of the owner's
+100% Hercules battle - so that a chosen action could start on the next
+frame. A clip's head is read before it may start anyway (125.4), so its
+entries are read WITH it: they are the first bytes of its ring, the
+picture's cursor stays on them until the entry is drawn (which keeps the
+reader off them), and the sound's goes past them to record 0 as the clip
+is anchored. A clip's entries are at most 96 KB (`ENT_CLIP`; Hercules' whole-screen title entries, 16 anchors, are 75), and the
+engine wants a ring of the largest clip's entries and 16 KB past them (`vb_rmin`; a title's way out, whole-screen entries, is the big one), so a clip always has its record 0 read with them. The
+engine refuses version 7 with *BATTLE.VBT is an older build: rebuild it*.
+Versions 6 and 7 brought the loops (125.3.1) and streamed them, and took
+the idle loop's records out of the block into a region of their own.
+Version 5 (2026-11-04), over version 4, has the
+RULES (125.6) in its first region, which is 8 to 16 KB as they need, up to
+64 clips, and the band's PICTURES (125.5) as a region of their own.
+Version 4 had:
+- a clip is a STREAM of any length;
+- each record carries its frame's sound;
+- the anchors are per clip;
+- the openings are clips of their own kind;
+- **the ENTRIES are a region of their own**, of any length, each entry on
+  a paragraph and named by its paragraph number.
+
+Version 4 held a 512-byte script of two members of four commands. Version 3
+kept the entries in the resident block beside the idle loop,
+named by a 16-bit offset, so the block's 60 KB bounded the idle loop and
+every clip's entries together. With the owner's footage (a 39 KB idle loop
+and about 3.3 KB an entry) eight clips did not fit. An entry is resident
+either way, so that a chosen action starts on the very next frame; a
+paragraph number lets the entries take as much memory as there is (up to
+1 MB), and fewer anchors a clip simply cost fewer bytes. Version 2 cached
+each clip whole and kept its effects in front of its records. Version 1
+kept every effect, and the music, resident. The engine refuses all four.
+
+| offset | what |
+|---|---|
+| 0 | the header (125.2.1) |
+| 512 | the clip table, 48 bytes a clip, at most 64 clips (125.2.2) |
+| 4096 | the RULES (125.2.4, 125.6), the first region's rest: it is 8 to 16 KB, its length at header byte 326 |
+| then | the VIDEO RESIDENT block, at most 60 KB: the idle loop's records, every clip's anchor table, the idle table |
+| then | the MUSIC: unsigned 8-bit, 64..191, streamed (125.4) |
+| then | the MENU's effects: signed 8-bit, -64..63, back to back, resident |
+| then | the IDLE loop's records, each on a paragraph; resident (read 32 KB at a time, `vb_entload`) |
+| then | the band's PICTURES: CGA4 bytes, two a cell, a row after a row, each on a paragraph (125.5); resident |
+| then | each clip's STREAM: its ENTRIES first (version 8: one an anchor, each a record padded inside to a whole paragraph, so the ring's walk steps over them; at most 32 KB), then its records, back to back, any length |
+
+**The ranges are the mix.** The music is held to 64..191 and a clip's
+mixed sound to -64..63, so their sum never leaves 0..255. Mixing is then
+one `add` per sample, with no clip and no branch. A clip's OWN sound
+(125.2.3), played instead of the music, is unsigned 0..255.
+
+#### 125.2.1 The header
+
+| off | size | field |
+|---|---|---|
+| 0 | 4 | `VBT1` |
+| 4 | 2 | version, 8 |
+| 6 | 2 | 512 |
+| 8 | 1 | the CGA4 palette byte (98.1.3.3) |
+| 9 | 1 | the canvas's rows |
+| 10 | 2 | frames a second |
+| 12 | 2 | the sample rate |
+| 14 | 2 | samples a frame: the frame clock in the sound's units |
+| 16 | 2 | clips |
+| 18 | 2 | idle frames, N |
+| 20 | 2 | openings, at most 8 |
+| 22 | 2 | the menu's effects, at most 16 |
+| 24 | 5 | which effect sounds for MOVE (the cursor), OPEN (a sub-menu), CLOSE, TAKE (an action chosen) and DENY (refused); FFh none |
+| 30 | 4+2 | the resident block's offset and length |
+| 36 | 4+4 | the music's offset and its region's length |
+| 44 | 4 | the music's length in samples |
+| 48 | 4 | the music's JOIN: the sample it comes in at when the openings end |
+| 52 | 4 | the file's length |
+| 56 | 4+2 | the menu's effects' offset and length |
+| 62 | 2 | the idle table's offset in the resident block: N words, each a record's PARAGRAPH in the idle region (338) |
+| 64 | 1+1+1+1 | the BAND: its first cell, first row, cells and rows |
+| 68 | 2 x 4 | the CANVAS: x, y, width and height in pixels (the build's; the engine does not need it) |
+| 76 | 2 | the largest record, at most 16 KB (VB_CGUARD) |
+| 80 | 8 | the openings' clips, in turn; FFh past the last |
+| 88 | 4+4 | the TITLE PICTURE's offset and length, or zero (version 7's ENTRIES region was here: the entries are in their clips, 125.2.2) |
+| 320 | 4+2 | the PICTURES' offset and length |
+| 326 | 2 | the first region's length: 4096 and the rules rounded to 4 KB |
+| 330 | 1 | the TITLE loop's clip (125.3.1), FFh none |
+| 331 | 1 | how the title is left on a key: FFh a FADE; otherwise the clip it is left by, which is opening 0 and ENTERED from the title's frames |
+| 332 | 1+1 | VICTORY: how it ends (0 HOLD, 1 FADE to its end loop, 2 JOIN its end loop, 3 FADE and play AGAIN) and its end loop's clip, FFh none |
+| 334 | 1+1 | DEFEAT: the same |
+| 336 | 1 | a fade's steps, 1 to 16 (one a frame) |
+| 337 | 1 | the ADAPTER (125.3.2): 0 CGA4, 1 VGA4 (mode 0Dh), 2 Hercules |
+| 338 | 4+4 | the IDLE loop's records' offset and length (format 7): each record on a paragraph, which the idle table names |
+| 352 | 16 x 3 | VGA4: its sixteen colours (r, g, b), the DAC's six bits; slots 0 to 3 the band's CGA colours |
+| 398 | 2 | the HOLD ORDER's ranges, at most 28 (125.4.1) |
+| 400 | 4 x 28 | ...each (its first 4 KB of the file, its 4 KBs), most worth holding first |
+| 96 | 6 x 16 | each menu effect's offset in them and its length |
+| 192 | 8 x 16 | each menu effect's name, for a reader |
+
+#### 125.2.2 The clip table
+
+| off | size | field |
+|---|---|---|
+| 0 | 4 | the stream's offset |
+| 4 | 4 | its length: any |
+| 8 | 2 | its records |
+| 10 | 2 | flags: 1 JOINS (the last record is a seam onto idle frame EXIT); 2 FULL (its records address the whole screen); 4 ENDS (the battle ends on it, and its last frame is held); 8 OWNSND (its sound plays INSTEAD of the music); 16 OPENING; 32 LOOP (a title or end loop, 125.3.1: record 0 draws its frame 0 from black, the last is the seam back onto frame 0, and records 1 to the last play round until a key); 64 ENTER (left into from the title loop's frames, at its anchors: its first record is its sound alone) |
+| 12 | 2 | EXIT |
+| 14 | 2 | its anchor table's offset in the resident block: (idle frame, entry record's PARAGRAPH in the clip's own region) pairs |
+| 16 | 2 | its anchors, at most 16 |
+| 18 | 4+2 | a LOOP's lap: record 1's offset in its stream (4 KB-aligned) and the lap's length in 4 KB |
+| 24 | 8 | the name |
+| 32 | 2 | its ENTRIES' paragraphs, in front of its records (version 8); 0 for a clip with no anchors |
+
+#### 125.2.3 Records, their sound, and why every join is exact
+
+A record is:
+- its length (a word, counting all of it);
+- its sound's length (a word);
+- the ten lists;
+- the frame's sound, at its end.
+
+A frame with no sound carries none. `vd_native` decodes the lists onto
+CGA's B800h with BP = 0, the way a CGA4 V88 frame decodes (98.1.2). A
+record is a list of absolute stores, so it is correct only on top of the
+screen it was made against. **The host makes each one between the screens
+the decoder will really hold:**
+
+- **idle record *i*** takes idle frame *i* − 1 to *i*, and record 0 takes
+  the last frame to the first;
+- **an action's ENTRY record** for each of its anchors *k* takes idle
+  frame *k* to the action's frame 0. The entries live in the resident
+  block. The action's stream starts with frame 0's record, which is its
+  SOUND alone (ten empty lists), then frame 1's;
+- **a JOINS clip's last record is a SEAM**: its last frame onto idle frame
+  EXIT, as LOOPREC is (98.1.1.2). The loop goes on at EXIT + 1;
+- **the OPENINGS are played in turn from a black screen**, every record
+  over the whole screen. A canvas frame is the canvas with the band's rows
+  black under it, so the first opening's last frame and the next one's
+  first are joined by a seam like any other. The last opening, the SCENE
+  opening, JOINS the loop - and its seam, when it has its own sound, SOUNDS
+  the music's frame before the music's join (the bytes the card plays of
+  the music), so that the music follows the opening's sound with no frame
+  of silence between (the owner's "a small but noticeable pause ... when
+  it joins to the main music"). **The next opening starts once its head is IN
+  its ring** (`vb_ogo`; until then `VM_OWAIT`, the last frame held, asked
+  again each frame), and its sound, when the sound's side came to it
+  first and found it not there, with its frame 0 (`[vb_owsnd]`). It was
+  started at once: an opening streamed on Hercules' XT keeps the reader on
+  it to its end, so the next one's head was sometimes never read, and the
+  next was played out of the title's records left in its ring - no sound,
+  then a wait for records that never came (the owner's "sometimes the
+  first opening clip is freezing"; `vbtendingop`). **A fade's time is the
+  next opening's**: the title faded has its picture over at the fade's
+  first step (its ring no longer read round), and while a fade runs or an
+  opening is waited for, the reader fills that opening's ring rather than
+  reading it to its head alone - what a ring holds is what an opening
+  faster than the disk plays before it waits (the owner's 55 KB/s ones on
+  Hercules). **Each opening is FULL SCREEN or WITH THE
+  MENU** (the project's `"full"`, the Openings tab's Screen choice): a
+  full one is encoded over the whole screen - 200 rows, Hercules' 348 -
+  and carries `CF_FULL`; one with the menu is the canvas over black. The
+  full ones come first and the last is with the menu (it joins the idle
+  loop): the check refuses any other order, since the band, once it is
+  up, stays. The title's way out (opening 0, ENTER) is flagged full: the
+  band is not up before the openings. **The band comes in at the first
+  frame of an opening with the menu, or when the last opening is over** -
+  never under a full one, which writes the band's rows to its last frame
+  (the engine let it in at the LAST opening's first frame, full or not,
+  and the opening's records then ate into it - unseen while every menu
+  rebuilt the band, 125.5). **A battle given no opening gets one**, START:
+  idle frame 0 alone, from black, joined onto the loop. Without it the
+  engine began the loop over a black screen, and the loop's records, each
+  a difference from the frame before, drew only what changed.
+
+**A clip's sound is the builder's mix.** An action's effects are placed at
+their frames and mixed into its sound once, at build time; the engine has
+no effect queue. An opening's sound is its own and plays instead of the
+music (OWNSND).
+
+`os88vbt.py verify` (which `demo` runs before it writes) checks every
+join:
+- it plays the openings in turn from black onto the loop, through
+  `decode_lists`;
+- it plays two laps of the loop, and requires lap 2 to be lap 1;
+- for every action and every one of its anchors, it decodes the entry and
+  the stream from that anchor's real screen, and requires the seam to land
+  on idle frame EXIT byte for byte.
+
+A captured battle's clips are lossy V88 encodes. Their DECODED screens are
+what the records are made between, so the joins stay exact
+(VBATTLE-BUILDER-PLAN 3).
+
+#### 125.2.4 The rules block
+
+At 4096, to the first region's end, little-endian; `tools/vbtrules.py` is
+its compiler, its reader and the reference the engine is held to (125.6).
+A 64-byte header gives the counts and each table's offset from the block's
+start, the enemy, and the seed:
+
+| off | size | field |
+|---|---|---|
+| 0 | 1 each | the version (1), then characters (1 to 4), actions (at most 96), menus (32), stances (8), pools (255), items (8), pictures (8) |
+| 8 | 2 each | the offsets of the characters, actions, menus, stances, pools, items and pictures tables |
+| 22 | 1 | the picture under the whole band (FFh none) |
+| 23 | 1 | the stance the enemy starts in |
+| 24 | 10 | the enemy's name |
+| 34 | 2 each | its HP, MP, ATK, MAG, DEF, MDEF |
+| 46 | 1 | its evade, % |
+| 47, 48 | 1 each | the victory clip, the defeat clip |
+| 49, 50 | 1, 2 | bit 0: the seed at 50 is used (a test's battle is the same every time); else the clock's |
+
+The tables, a record after a record:
+- **a character, 32 bytes**: name (8), HP, MP, ATK, MAG, DEF, MDEF (words;
+  the four stats at most 999), evade (%), its top menu, its side menu (FFh
+  none);
+- **an action, 72 bytes**: its label (8), target (0 the enemy, 1 self, 2 an
+  ally the player picks, 3 the allies, 4 none, 5 a character the enemy's
+  rule picks, 6 every character), cost (0 none, 1 MP, 2 an item, 3 a full
+  limit gauge) and its count (a word) and item, accuracy %, flags (1 it
+  does physical damage, 2 magical: what a response sees), then FOUR EFFECTS
+  of 6 bytes (verb, a, power word, b, c: 125.6.1) at 16, the five POOLS at
+  40 (hit, miss, defended, critical, finishing: a pool's index, FFh none)
+  and the same five for each character at 48 (its own, when the action is
+  aimed at it alone);
+- **a menu, 32 bytes**: its label (8), its items' count (at most 8), its
+  picture (FFh none), its text's column (cell), row (in the band) and
+  pitch, its ink, flags (1 an arrow cursor, else inverse), then 8 items of
+  (index, kind: 0 an action, 1 a sub-menu);
+- **a stance, 56 bytes**: name (8), modifiers to ATK MAG DEF MDEF (signed
+  %), its moves' and responses' counts, its RETURN action (FFh none), 6
+  MOVES of (action, weight, target rule, its argument) at 16, 2 RESPONSES
+  of (trigger: 0 any, 1 physical, 2 magical, 3 a named action; that action;
+  chance %; the response) at 40, and its AUTOMATIC CHANGE (kind: 0 none,
+  1 HP under arg %, 2 after arg of its turns; arg; the stance; the action
+  that makes it, FFh none) at 48;
+- **a pool, 8 bytes**: its count (1 to 7) and the clips;
+- **an item, 12 bytes**: name (8), the party's count;
+- **a picture, 8 bytes**: its column and row in the band, its cells and
+  rows, its paragraph in the PICTURES region.
+
+### 125.3 The engine
+
+Three pieces, the Video Player's own shape (98.3):
+
+- **`vb_hook`, `FSXF_RATE`'s hook at divisor 16,384 (72.8 Hz).** It draws
+  the frames that are due out of the clip rings and the resident block, at
+  most two a call, with IF = 1 while it decodes. **The rate was 582.6 Hz
+  (divisor 2,048, the kernel's fastest)**, and on the owner's Hercules
+  battle (75 KB/s clips) the hook's bookkeeping a call - the clock, the
+  frames due, the card fed - and the kernel's IRQ0 under it took as much
+  of the machine as decoding did: on MartyPC's Hercules 5150, 23% and 23%,
+  the music dry 56 times in three turns and the picture waiting 6.9 s. At
+  72.8 Hz, 8% and 30%: the music never dry, the waiting 3 s, all of it in
+  the one clip the XT-IDE cannot feed. A period is 13.7 ms, a fifth of a
+  frame. It keeps the card's ring 4 KB ahead, mixing the music (out of its own
+  ring), the clip's sound (out of the clip's ring) and the menu's sound. It
+  starts each action at an anchor and each opening on the frame after the
+  last. It reads no disk and calls nothing in the kernel.
+- **`vb_main`, the bracket's foreground.** It reads the keys (int 16h),
+  runs the battle, draws the band and reads one piece a pass (125.4), then
+  waits with `FSXW_FRAME`.
+- **the window.** A title, "Enter or click: play", and the last thing that
+  went wrong.
+
+**The clock is the card.** Frame *n* is due at sample *n* × spf. The
+played position is the ring's consumed count, plus the periods since the
+card's last block × 151 samples, capped below a block and never moving
+backwards (98.3.1's `vp_adue`). With no card the clock is the PIT's
+periods × 151.388 samples, kept in 16.16, so the same battle runs silent.
+
+**A stream the driver ENDED is opened again** (`vb_snd_keep`): SOUND.DRV's
+watchdog ends a stream whose block interrupt is ~165 ms late (34.5). The
+engine took that as the play gone silent for good and did not even CLOSE
+it, so the driver held it as the battle's and every open after - the play
+again included - was refused: the owner's "esc to desktop, then enter to
+restart does not bring sound back". With no card a clip's sound cursor
+never moved, and the ring's room was counted from it, so a clip larger than
+its ring froze once it had played what the ring held ("the video played ...
+up to the point it was supposed to play a sound, and then froze,
+permanently"). Now the ended stream is CLOSED and opened again on the same
+timeline - the card's ring numbered from where the clock stands
+(`[vb_rbase]`: every place that turns the timeline into the card's ring,
+`vb_chunk`, `vb_uisound`, the TOTAL word and verb 1, subtracts it), the
+lead queued in the old one dropped, the clock going on - and a sound
+cursor counts in a ring's room only while a card plays it and the ring
+sounds (`vb_rpiece`, the reader's step 2). `vbtsndend` fires the driver's
+own watchdog under the battle ([sbl_wd] and its reload poked to 1): the
+stream opened again, the music on, a streamed action played to its end;
+the old way, no card and the action frozen.
+
+**The card's block is 512 bytes when the driver offers it**
+(`SND_CAP_EXTBLK`, `SND_OPENF_BLKSH` code 2), otherwise 2,048, and the
+ring runs **4 KB (0.37 s) ahead either way**. It ran 2 KB ahead with the
+small block, and one hook call's two heavy Hercules frames ran past that:
+the card halted, and the picture with it (its clock), until the UI task
+saw it - the owner's "lose sound, stop playing" (8 halts in eight turns of
+quick keys on the 100% bundle; none at 4 KB). A small block makes the
+consumed count fresh to 46 ms rather than 186, and costs 21 block
+interrupts a second.
+
+**A frame whose record is not yet read is WAITED for** (`[vb_stall]` counts
+the hook's calls that found it so). The frame is not drawn and the clock is
+not advanced past it. A frame owed is drawn two a call until the picture
+has caught up with the sound. Only a picture a second behind is let go
+(`[vb_late]`), since a delta frame cannot be skipped.
+
+**An action starts at one of ITS anchors.** The foreground sets
+`[vb_pend]`. On each idle frame the hook waits for the clip's ring to hold
+its head (VB_HEAD, 40 KB, or all of it). Then it takes the nearest anchor at
+least `[vb_dmin]` frames on: the lead's frames and two more, so that the
+clip's sound starts ahead of the ring's write position (4 frames with a
+2 KB lead, 7 with 4 KB, 2 with no card). The sound is booked at the sample
+frame 0 will be shown at. When the loop has shown that many frames
+(`[vb_pleft]`, counted down) and stands on that anchor, the next frame is
+the entry record, and frame 0's record (its sound alone) is passed over.
+**Counted, not matched**: an anchor nearer than `[vb_dmin]` is the one a
+LAP on (d = (k - now) mod N + N), and the picture matched the anchor's frame
+and went in on the first pass - its sound a lap behind it, 1.6 s on a
+24-frame loop: the owner's "audio for a clip often delayed by ~2 s", half
+the time on Bolt (one anchor) and a quarter on the rest (`vbtanchor`). The
+title's way out is counted the same way (`[vb_lleft]`).
+The demo's anchors are every sixth frame of a 24-frame loop, so with a
+512-byte block a command waits 0.27 to 0.6 s for its clip to begin.
+
+**The card's count is taken SIGNED.** `SND_EXT_CONS` is free-running mod
+65536 and normally only moves on, but when the card has played past the
+total SOUND.DRV stops it AT the total (§34.5.3: what it played there was
+stale), a step back. Taken as an unsigned step it read as ~62,000 samples
+ON - the clock 5.7 s ahead, every frame "late" and forgiven, an end clip
+that never started; held at its highest instead, the writer thought itself
+a lead ahead and never fed the halted card, and the play stood still.
+Signed, the clock goes back to the card's: the picture holds a moment and
+the writer feeds the card again (`vb_hook`). `vbtownsnd` saw both, now and
+then, on its streamed opening.
+
+**A clip with its OWN sound that starts on the next frame** - the first
+opening after the title's fade, an opening whose sound the sound's side found
+not there, an end clip - has its sound booked AT THE WRITE POSITION and its
+picture HELD until the clock comes to it (`vb_abook`): booked at the frame's
+own time, which the ring - written the card's lead ahead - had passed, the
+sound started at once and was heard a lead (0.37 s) after its picture, and
+every opening after it joined on just as late (the owner's "~0.3-0.5 s late
+... the opening perfectly joins to the second"). The hold is over a black
+screen or a frame already up. The hook calls it inside `vb_frame`, after
+which it adds a frame to `[vb_due]`, so the time booked is the next frame's
+or the write position, whichever is later (`vb_ftitle` leaves the opening to
+the hook's `vb_ogo` for that, a frame on). `vbtownsnd`.
+
+**A clip's sound is read from the clip's own ring by a cursor of its own**,
+a frame's worth (spf samples) a record. It runs ahead of the picture by the
+card's lead, so the ring keeps everything past the EARLIER of the two
+cursors. A record not yet read when its sound is due plays silent, and the
+sound waits for it (`[vb_alate]`). The frames it played silent are OWED
+(`[vb_aowe]`): once records are read again, the owed ones are passed over
+without being sounded, so the sound comes back level with the picture
+rather than as far behind it as the disk was. MIXED sound is added over the music.
+OWN sound is written in its place, and the music stands still under it.
+
+**The openings follow each other on the next frame**, picture and sound
+alike. Opening *i* is read into ring *i* mod 2, so the next one's head is
+read while the last one plays. The picture starts the next when it shows
+the last record. The sound, which runs ahead, starts the next one's at the
+sample the last one's ends. **A battle may have NO MUSIC** (the project's
+`"music"` null, the Battle tab's "(no music)"): the builder writes a second
+of silence as the music region, played round as any music is, so the engine
+is the same. A build reads only the sounds something uses
+(`Project.sounds_used`), and `remove_sound` takes one out - the music's own
+leaving the battle with none, any other refused while it is used, naming
+what uses it - unless forced, as the Sounds tab's **Remove** does once it
+is confirmed, which takes it out of each user too (a menu sound silent, an
+opening's or a loop's sound the music, a cue gone). The Sounds tab lists
+EVERY sound, the unused ones "nothing (not built)" and one whose file is
+gone FILE MISSING, and **Replace file** points a sound at another file
+(`set_sound_file`) with everything that uses it kept - the owner's "if I
+rename one, it just breaks the project". **Each sound has a LEVEL** (`"level"`, the Sounds tab's dB),
+and the AUTO-LEVEL suggestion (`vbtana.levels`) measures every sound in use
+AS HEARD - a gated loudness over 100 ms windows - knowing how each is
+stored: the music at half scale (64..191) and an effect at half scale
+(+-64), so that they add without wrapping, and a clip's OWN sound (an
+opening's, a loop's), which plays instead of the music, at full scale. It
+suggests each the level that makes it as loud as the music (with none, the
+sounds' median), never past its peak. `vbtlevels` holds it to the BUNDLE'S
+OWN BYTES: the demo's opening sound 5.2 dB over its music region before,
+0.0 after. The band is let in (`[vb_bandok]`) at the
+first frame of the first opening WITHOUT `CF_FULL` - or, where every
+opening has it (a bundle made before the choice, when all did), of the
+scene opening, as it always was. When the scene opening's sound ends, the MUSIC comes in
+at the bundle's join (`VH_MUSAT`): its ring was filled from there before
+the play began.
+
+**A menu sound is mixed into what is already queued.** The five sounds
+(move, open, close, take, deny) are resident. The foreground asks with
+`[vb_ui]` and the hook, on its next call (`vb_uisound`), adds the sound
+straight into the card ring's bytes from a block past the card's last report
+up to the write position. It is heard about a block from now rather than a
+whole lead from now, and the rest of it is mixed as the ring is written.
+Measured on MartyPC's XT (`os8088_xt_hdd_sb`, SB 2.01 with 512-byte
+blocks), from the key to the sound in the card's own capture:
+- **69 to 96 ms** when the foreground was free. The key took 29 to 47 ms to
+  reach the menu, and the mix 39 to 63 ms to be heard.
+- **about 240 ms** when the key landed during a read already under way.
+  MartyPC's only hard disk is an XT-IDE, whose transfers the CPU makes, and
+  the key waited about 180 ms for the read. The owner's ST11M moves its
+  sectors by DMA (98.2.15.5); its time here is unmeasured.
+
+#### 125.3.1 The title loop, the fade, and the endings
+
+Both are optional, and a bundle with neither plays as version 5's did.
+
+- **The TITLE loop** plays before the openings, over the whole screen
+  (FULL), with its own sound or none: the music has not come in. It goes
+  round until Enter or Space - or, the battle saying so (`"any_key"`, the
+  header's flags byte 348 bit 0, `HF_ANYKEY`), until ANY key, Esc aside
+  (which leaves); an end loop is played again the same way. The key
+  dispatch runs every pass with AX = 0 for no key, so "any" is a key
+  whose AX is not 0 (`vbtloops` D: a letter leaves the title and plays
+  the end loop again; in A a letter leaves nothing). Its records: record 0 draws frame 0 from a
+  black screen, records 1 to *n* - 1 frame *i* - 1 to *i*, record *n* the
+  seam from frame *n* - 1 back onto frame 0, and the lap is records 1 to
+  *n*. Each record carries its frame's sound, so the lap's sound is frames
+  1 to *n* - 1 then 0, as its pictures are.
+- **It is left by a FADE or by a CLIP.**
+  - A **FADE** is the engine's, not the bundle's: the frame on the glass
+    is drawn with less of itself a step at a time, each step a 4 x 4
+    ordered-dither threshold putting more of its pixels to colour 0, until
+    none of it is left (`vb_fade`, [vb_fsteps] steps, one a frame, the
+    UI task's, the thresholds `vb_fmasks`). The sound comes down with it: a shift of one
+    more bit every quarter of the fade, then silence. The openings start
+    from black, which a fade leaves, so the join is exact. **The step is
+    the CLOCK'S**: each pass of the UI task's loop puts down the step the
+    hook's frames say (`[vb_fticks]`), not the next one - a pass is also
+    the reader's and a frame's wait, ~0.5 s on the XT and ~1.4 s on
+    Hercules, and a step a pass made a 16-frame fade take 8 s and 23 s
+    (the owner's "the fades are taking like 8-10 seconds"). A step's mask
+    holds every one before it, so the skipped steps are ANDed in with it;
+    a fade now takes its frames and one pass at most (3 s on MartyPC's
+    Hercules 5150). Hercules ANDs each of its four banks as one run, every
+    row of a bank taking the same mask.
+  - A **CLIP** is opening 0, flagged ENTER: entered at the title loop's
+    frames as an action is at the idle loop's (its anchors are title
+    frames, its entries in the ENTRIES, its first record its sound alone),
+    then on into the next opening as any opening is.
+- **A loop is HELD in its ring when it fits, and READ ROUND when it does
+  not** (format 7, `VB_STRM`, `[vb_lstream]`). Held: read once, and at the
+  lap's end the picture's cursor and the sound's go back to record 1.
+  Read round: the builder lays the loop out for it - record 0 padded to end
+  on 4 KB, the lap padded to whole 4 KB, the padding inside records after
+  their ten lists, which `vd_native` never reads past - and the reader
+  reads it as the music is read, its next read's place (`RG_FOFF`) going
+  back to the lap at its end, with the file cursor kept at the lap's start
+  (`RG_LCUR`) so that going round is not a seek. The cursors go on through
+  the ring; only `[vb_cleft]` reloads. A 204 KB loop against a 144 KB ring
+  laps with no stall (`vbtloops` C).
+- **An ENDING** - VICTORY or DEFEAT; an escape holds, as before - is one of:
+  - **HOLD**: its clip's last frame held, Esc to leave (version 5's);
+  - **FADE to its end loop**: the canvas fades, and the END loop plays in
+    it from black;
+  - **JOIN its end loop**: the ending clip's last record is a seam onto
+    the end loop's frame 0, as a JOINS clip's is onto the idle loop, and
+    the loop goes on from its record 1;
+  - **FADE and play AGAIN**: the whole screen fades, and the play starts
+    over - the title loop if there is one, the openings if not.
+- **An END loop** plays in the CANVAS, as the idle loop does, its records
+  canvas rows: the band stays up under it with the ending's line, and
+  says Enter to play again. Its sound is its own (OWNSND), or, with none,
+  the music goes on under it. Enter or Space: the whole screen fades and
+  the play starts over. Esc leaves from anywhere, as always.
+- **An END CLIP may be FULL SCREEN, and may PLAY ONCE** (the ending's
+  `"full"`, `"plays"` and `"then"`; the Title & endings tab's Victory and
+  Defeat panels). Full screen: its frames are encoded over the whole
+  screen and it carries CF_FULL; the engine takes the band down as it
+  starts and draws it no more (`vb_eloop_go`), a FADE to it is over the
+  whole screen (`[vb_fwant]` 4), and a JOIN's seam is written over the
+  whole screen - **the band's rows written WHOLE** (`band_unknown`,
+  `seam_full`): the seam is made from a band that differs from the clip's
+  frame 0 at every pixel, since what the glass has there - the menu, its
+  numbers, its cursor - is not the builder's to know, and a seam made as
+  though the band were black left the menu up under the clip until its
+  own records covered those pixels (the owner's, 2026-11-05). The same
+  for a canvas end clip's seam onto the full-screen title. `verify` holds
+  both to it: decoded from a band of random bytes, the seam lands on the
+  whole of the next frame. A seam that would pass the guard so is made as
+  before. Once: it carries CF_ENDS and not CF_LOOP - record 0 from
+  black, its frames in turn and no lap - and when it starts, what follows
+  it, header byte 346 (victory) or 347 (defeat), becomes the ending's
+  `[vb_ehow]`, so that its end goes on as an ending's does: EH_HOLD (its
+  last frame stays; Enter plays again), EH_AGAIN (the screen fades and the
+  play starts again at the title), or EH_AGAINJ (4): its last record is a
+  seam onto the title's frame 0, and the play starts again at once, with
+  no fade (`[vb_awant]`, the UI task's) - the title's record 0, drawn from
+  black, puts down what the seam already shows. With no title a join is a
+  fade. **A once-clip JOINED** from its ending starts at record 1, its
+  frame 0 being up, and its sound skips the very record the picture did
+  (`[vb_askipn]`): it skipped a LOOP's record 0 (`[vb_lbase]`), stale for
+  a once-clip, and so played static from the wrong place - and, its cursor
+  never in step, the ring was never given back and the picture froze
+  once it had played what the ring held (the owner's: ~20 frames, then
+  still). `vbtendingjf` holds it on Hercules with a clip too big for its
+  ring. **After a once-clip's own sound, no music** unless the ending says
+  `"music_after"` (the window's "Battle music after its sound"): the
+  clip carries `CF_NOMUS` (128) and its start puts `[vb_mon]` to 0, so
+  its fade to the title is silent - the battle's loop coming back under
+  it was the owner's "doesn't work well in my current case". `vbtending` holds the three shapes on MartyPC's CGA XT: a
+  full-screen once-clip joined from victory and joining the title (the
+  band down, its rows the clip's, no fade anywhere), a canvas once-clip
+  faded to and fading to the title, and a full-screen end loop faded to
+  over the whole screen.
+- **The play starts over inside the bracket** (`vb_again`): the hook is
+  stopped, the music's ring is filled from its join again (`vb_load`'s
+  second-play path), the rings are emptied, the battle's state is set up
+  from the bundle, and the first head is read - all over a black screen.
+
+#### 125.3.2 The renditions: VGA4 and Hercules
+
+**One project, a bundle per adapter** (VBATTLE-MEMORY-PLAN 9): BATTLE.VBT
+(CGA4), BATTLEV.VBT (VGA4) and BATTLEH.VBT (Hercules), `os88vbt.py build`
+making each the project asks for (`target.renditions`). The engine takes
+its adapter's first and the CGA4 one after it (`vb_load`: a VGA without a
+BATTLEV.VBT plays the CGA4 bundle in mode 4, as before); a Hercules has no
+second choice ("Needs BATTLEH.VBT on a Hercules"). The bundle's byte 337
+then sets the mode, the palette and the decode.
+
+- **The same frames.** Loop points, anchors and cues are frame numbers, so
+  every rendition is made of the CGA4 encode's own frames: read with the
+  encoder's `ffmpeg_video` at the same fps, then quantized by the builder -
+  an ordered dither anchored to the canvas and a pixel's value HELD while
+  its source moves less than a threshold (`vbtana.quant_vga`,
+  `quant_herc`), so still footage costs nothing frame to frame. **Within
+  `target.clip` levels of a colour (16 by default; black and white on
+  Hercules) a pixel is that colour SOLID and never held**: a slow fade to
+  black moved each dot less than the hold, so dim dots stayed lit for good
+  (the owner's "videos that fade completely to black, but are leaving
+  smears") - the CGA4 encode's own `--clip`, which it is passed too.
+- **How a video FITS the canvas** (`target.fit`, the Battle tab): `fill`,
+  cropped to the canvas's displayed shape (the default, as it always was),
+  or `stretch`, the whole picture squeezed into it - for footage edited at
+  a shape that is not quite ours (a 640 x 480 source on Hercules' 640 x 348
+  lost its sides to the crop).
+- **VGA4** is mode 0Dh, 320 x 200 in four planes of 40-byte rows. ONE
+  palette for the battle (`vbtana.battle_palette`): slots 0 to 3 the band's
+  CGA colours, the rest a k-means of every video source, 4, 8 or 16 in all
+  (`target.vga_colours`). A record is sub-records, each its Map Mask and ten
+  lists, a 0 after the last (`os88vid.vga4_subs`, planes wanting the same
+  byte under one mask), which `vb_decode` plays with an OUT a sub-record.
+- **Hercules** is 720 x 348, the canvas 640 wide at byte 5 (`VB_HORG`, the
+  decoder's BP), its rows `348 - 2 x the band's`: the band's every logical
+  pixel two by two, so the band is the same 40 x 8 cells.
+- **The band is the same picture everywhere**: composed in 2 bits a pixel
+  as on CGA, and on VGA4 and Hercules always into the composition buffer,
+  which `vb_bpres` presents - planes 0 and 1 of a cell from a table, 2 and 3
+  cleared, a row's plane at a time with interrupts off (the hook's decode
+  moves the Map Mask); on Hercules each pixel as a 2 x 2 pattern (0 none, 1
+  one, 2 a checker, 3 all - `vbtana.HERC22`).
+- **The fade**: Hercules ANDs one-bit masks; VGA4 writes each byte through
+  the latches with Set/Reset 0 enabled on every plane and the Bit Mask the
+  step's pixels.
+- **A record may be 32 KB** where a whole screen is more than 16 (VGA's
+  planes, Hercules'): the rings' guard is the header's largest record's,
+  16 or 32 KB (`[vb_cgkb]`).
+- **A rendition's PICTURE can be set down** (`target.scale`, the Battle
+  tab's Picture size: 100, 90, 75, 67 or 50% of the canvas - and of the screen,
+  for a full-screen opening): the footage is made at that size - CGA4 by the
+  encoder's own `--box`, VGA4 and Hercules by ffmpeg - and centred in black,
+  its width and left edge in whole bytes (`vbtana.boxed`, `pad_into`). The
+  black never changes, so no record touches it: a frame costs the picture's
+  area, about a quarter of Hercules' 640 x 232 at half size. The band and
+  the menus are the same, and the ENGINE IS UNCHANGED - a smaller picture
+  is only fewer bytes. `vbtscale` holds it on MartyPC's Hercules at 50%:
+  the picture lit inside its box on the glass and nothing outside it.
+
+`vbtadapters` holds each on MartyPC: the title byte for byte against the
+host's decode (VGA's planes read off the card), the fade, the band exact
+against the engine's own buffer converted by the host, the idle frames,
+and victory to its end loop. Measured on the owner's H3 battle: CGA4 3.0
+MB, VGA4 at eight colours 4.0 MB, Hercules 4.1 MB.
+
+### 125.4 Reading, and memory
+
+**Three claims** (an owner may hold eight, `MEM_OWNER_MAX`, §50):
+
+- **the RESIDENT claim** (`vb_load`), held while the window is open. Each
+  part is its own segment, the claim's base plus the parts' rounded sizes
+  before it:
+  - the idle loop's block, with every clip's entries;
+  - the menu's effects;
+  - the music's RING, 32 KB (3 s at 11 kHz) with a 4 KB guard; or the
+    whole music when it is 60 KB or less;
+  - the ENTRIES (125.2), as many 4 KB as they take;
+  - the IDLE loop's records (format 7), the same way: out of the block, so
+    that a loop of more than 60 KB - VGA's (VBATTLE-MEMORY-PLAN 2) - fits.
+- **the card's ring** (`vb_cardclaim`, in `vb_load`), page-safe from the
+  top (`OSAPI_MEM_CLAIM_DMA_HI`), 17 KB, when there is a card. It is
+  claimed before the rings are sized, so that they leave nothing it needs.
+- **the two CLIP RINGS** (`vb_rclaim`), **claimed per play inside the
+  bracket and given back as it ends** (`vb_rfree`): nothing else can claim
+  while the full screen runs, so they are ALL there is. The largest run
+  (`OSAPI_MEM_AVAIL`) less 8 KB (`VB_RKEEP`), split two ways, each less its
+  16 KB GUARD and cut to whole 4 KB; at least 48 KB each (`VB_CRMIN`), or
+  Play says "Not enough memory". On the owner's 640 KB 5150 with an SB
+  that is **172 KB a ring**, 2.8 s of a 61 KB/s clip, where it was 48. Video
+  Player sizes its ring the same way (98.3). A ring so big takes more than
+  16 bits to index, so a place in it is a segment and an offset of 0..15
+  (`vb_cadv`), and a stream's cursors are dwords.
+
+The claims are the default, pinned (§66). The package does arithmetic on its
+segment to carve it, so it is real mode's (125.7).
+
+**A clip ring holds a stream as it is read.** A piece is read at the
+stream's offset, always a cluster multiple, into the ring at its fill
+position, and ends at the ring's end at the most. The reader then walks
+the records the piece completed (`RG_PIDX`, `RG_POFF`): the one that runs
+past the ring's end has its TAIL copied past the end, into the guard, so
+it is whole where it starts and the hook decodes it there. A header that
+runs past the end is copied the same way as soon as it is read, so the
+hook reads the right length and waits. **Nothing else is copied.** The
+first rings copied every byte read into their first 16 KB, and every byte
+a piece put past the end - a third of the stream and more, 88 to 136 KB a
+clip - and that copying was a third of the machine's time while a clip
+streamed (125.7). It is 18 to 30 KB a clip now. The hook gives back what is behind the
+earlier of its picture's cursor and its sound's. A ring is given back to the
+reader once its clip's picture and sound are both over, with its cursors
+back at the clip's top. A clip that fit the ring whole plays again from it
+unread. One that did not has lost its head to its tail, so its ring is
+nobody's. (With the played cursors left as they were, an enemy attacking
+with the clip a member had just played replayed it from its end: an idle
+screen, nothing read.)
+
+**The music streams the same way** (`vb_mpiece`): a piece at its own
+offset, into its ring, and looped on the disk. A ring found empty plays as
+silence and is counted (`[vb_munder]`). **Short music is resident**
+(`VB_MRES`, 60 KB, about 5.5 s at 11 kHz): read once and looped out of
+memory. A floppy needs it: a streamed music on a 360 KB disk ran dry 337
+times in 150 s, and a clip chosen never loaded.
+
+**Each stream has its own file cursor.** `OSAPI_FILE_READ_SEQ` goes on from
+where a cursor stopped, and a SEEK walks the file's chain from its start.
+With one cursor shared by the music and the clips, every read was a seek.
+Measured on MartyPC's XT, a 279 KB clip 600 KB into the bundle then played
+in 36 s where it should have taken 7.8: the clip arrived at 8 KB/s. The
+music has its cursor and each ring its own, and a read that goes on from
+its cursor's offset does not seek.
+
+**The reader reads one piece a pass, in this order** (`vb_reader`):
+1. the music, while its ring holds under half;
+2. a clip playing, while its ring holds under half;
+3. the next opening's head, into its ring;
+4. the action pending's head, into a ring;
+5. a clip playing, to its ring's top: what is on the glass first;
+6. (after a key, nothing more for a third of a second, `VB_KQUIET`) the head
+   of the clip under the menu's cursor;
+7. the head of the enemy's attack;
+8. the music, to its ring's top.
+
+A ring is given to a clip only if it is not playing and not holding the
+action pending or the next most wanted. Moving the cursor drops the head
+being read for the old position and starts the new one. **A piece is 4 KB
+while a menu waits on a key**, so that a key waits behind at most about a
+revolution, **and as much as the ring has room for, up to 32 KB
+(`VB_SPIECE`), while no menu is up**: an eighth of the calls. A piece is
+cut to its clip's last 4 KB: the last clip in the bundle ends at the file's
+end, and a read past it fails every time the reader asks again (the
+victory clip hung on it).
+
+**A clip far bigger than memory streams.** The demo's Limit is 250 KB
+(118 frames, 7.8 s, 31 KB/s with its sound), about five rings. Measured on
+MartyPC's XT (`os8088_xt_hdd_sb`, the bundle on its XT-IDE C:): it played
+in real time, 7.67 s captured for 7.8 s, inside a battle with 0 late
+frames, 0 stalls, 0 frames of sound late and 0 music underruns. **The rate
+is what limits it.** The first Limit, at 34.6 KB/s, could not be fed: with
+the music's 11 KB/s that was 46 KB/s, and the reader, then reading 4 KB a
+piece, moved about 35. That was the reader's small pieces and its seeks,
+not the disk: with per-stream cursors and adaptive pieces the same XT-IDE
+moved 57, then 68.6 KB/s while a clip played. Its sound ran ahead into
+records not yet read (67 frames silent); it now waits (`[vb_aowe]`, 125.3).
+The builder budgets each clip against its profile's disk
+(VBATTLE-BUILDER-PLAN 3), and 125.7 has what a disk delivers while the
+engine plays.
+
+The demo battle on a 640 KB machine:
+
+| | bytes |
+|---|---|
+| the package's image | 9,489 (7,306 packed on the disk) |
+| its bss | 5,352 (the first 4 KB of the bundle among it) |
+| the resident claim | 80 KB: the block 9,725 (12 KB), the menu's effects 3,471 (4 KB), the music's ring and guard (36 KB), the entries 29,696 (32 KB) |
+| the clip rings, per play | all the largest run less 8 KB: on 86Box's 640 KB 5150, 2 x (172 + 16) KB |
+| the card's ring | 17 KB |
+| the bundle | 847,872 bytes on the disk: the music 282,240 (25.6 s), the Limit 249,650 |
+
+#### 125.4.1 The bundle held in extended memory
+
+**On a machine with an XMS pool (SPEC.md 41) the bundle is HELD, and every
+read lying wholly inside what has arrived is a copy instead of a disk
+read** (VBATTLE-MEMORY-PLAN 4 and 5, `apps/vbattle/vbhold.inc`). An 8088 is
+unchanged: one `OSAPI_XMEM_CAPS` at load, and a compare in each read.
+
+- **What is held** (`vb_hopen`, at the first load): the WHOLE file, one
+  range, when the pool can take it - the whole pool, none kept back (Video
+  Player's 98.3.18.2.1); else the builder's HOLD ORDER (header 398), its
+  ranges taken in order while the pool lasts, the last one cut. One block
+  (`OSAPI_XMEM_ALLOC`), subdivided; a 32 KB bounce for the fill.
+- **The order** (`os88vbt.hold_order`): the music when it streams (it reads
+  all through the play), the loops, every action's HEAD - the 40 KB a start
+  waits for, so no action waits on the disk to start - the openings, then
+  the rest of each action's clip, smallest first; ranges that follow each
+  other in the file are one.
+- **It fills while the reader has nothing better to do** (`vb_hstep`, the
+  reader's last turn): a chunk of up to 32 KB off the disk into the bounce
+  and up into the block, on a cursor of its own. The title loop's wait for
+  a key is where most of it happens. A ring with no room now passes the
+  reader's turn on, so a loop read round cannot keep the fill from running.
+- **A read** (`vb_read`, all of them pass there: a ring's piece, a head,
+  the music, a loop's lap, the again path's reload): out of the hold when
+  it has all of the bytes, in copies of 32 KB with a card and 4 KB under
+  the PIT's clock (`int 15h AH=87h` holds interrupts off for a whole copy,
+  and a period lost under the PIT is time lost); the stream's cursor then
+  zeroed but for its offset, so a later disk read seeks from the name
+  (18.4.8). A copy refused, or a fill's read failing, drops the hold.
+- **The UI task alone copies** (41.8): the reader is there.
+- **EXPANDED memory too** (EMS.DRV, SPEC.md 107; VBATTLE-MEMORY-PLAN 7):
+  below a 386 the hold is taken in EMS first and XMS after (Video Player's
+  98.3.18.6: one copy with interrupts on against `int 15h`'s two with them
+  off), from a 386 XMS first. A run of the board's pages and the frame's
+  quarters 0 and 1, a 32 KB window: a fill maps the pages it lands in and
+  the disk reads straight INTO the window - no bounce, no copy up - and a
+  read maps them and copies out with `rep movsb`. So an 8088 with a board
+  holds a whole battle (a 2 MB Lo-tech holds the Hercules demo's 700 KB),
+  and an action never waits for the disk. Once the hold is whole the
+  rings are read IN PLACE (125.4.2) and nothing is copied at all.
+- **THE BOARD IS TIMED FIRST** (`vb_espeed`, Video Player's 98.3.18.8,
+  whose field run found the owner's PicoMEM v1 answering with eight wait
+  states): at the hold's open, 1 KB `rep lodsw` passes over the frame and
+  over the package's own RAM, two ticks each from a tick's edge, the
+  frame's time in tenths of RAM's in `[vb_er10]`. To 1.5x (`VB_EFAST`) the
+  board keeps its place - EMS first below a 386, read in place; to 4x
+  (`VB_ESLOW`) the pool is taken first and, with none, the board is COPIED
+  out of and never read in place (the decode is the hook's time, a slow
+  board's reads late frames); slower, the pool or no hold at all. About
+  four ticks, once, and only where a board answers. `[vb_eforce]` is a
+  test's answer (the tier plus one).
+
+`vbtems` (MartyPC's 5150 with the Lo-tech board) holds the EMS hold to the
+glass and to the disk: the board timed at RAM's speed (1.0x), the title
+played again out of the board byte for byte the host's decode, and not one
+disk read from the fill on; `vbtemsslow` forces the board slow (copied,
+never in place) and `vbtemsnone` too slow (no hold, the disk's play).
+
+`vbthold` (QEMU) holds it to the file: the hold one range, filled while the
+title goes round, byte for byte the bundle, then B: changed to a BLANK
+floppy and the battle played to victory, its end loop and the title again
+out of the hold alone; `vbtholdpart` with the pool capped under the bundle
+(`[vb_hcap]`, a gate's) takes the order's ranges; `vbtholdnox` with no
+pool plays the disk's. The Build tab shows what a 1 MB and a 3 MB pool hold.
+
+#### 125.4.2 The decode in place
+
+When a hold has the WHOLE bundle (one range from the file's first byte, all
+of it arrived), every ring given a clip from then on reads that clip where
+the hold has it (`apps/vbattle/vbinp.inc`; VBATTLE-MEMORY-PLAN 12). Video
+Player's 98.3.18.7 (EMS), 98.3.18.11 (LOADALL) and 98.3.18.14 (a 386's
+loaded base) are the precedents and their mechanisms are taken as they are:
+
+- **The ring's bookkeeping stays.** A ring in place (`RG_INP`, with
+  `RG_HB` its clip's first byte in the block) is FILLED the moment it is
+  given the clip - `RG_FILL` its whole length - so the reader never reads
+  for it, a loop is always held (VB_STRM answers so), and its picture's and
+  sound's cursors are the stream offsets they always were. What changes is
+  the address: `vb_iat` turns a ring and a cursor's offset into the record
+  in the hold. `vb_rrec` hands the decode DX:SI, DX a segment or a handle;
+  the sound's two reads (`vb_aframe`, `vb_anext`) and a loop's first
+  record's length (`vb_start_clip`) go through it too.
+- **EMS**, only on a board timed as fast as RAM (125.4.1): the frame's FOUR
+  quarters are taken at the hold's open (EMSV_FRAME
+  0Fh, the two of 125.4.1 when another instance holds the others - and then
+  no decode in place), with the driver's recipe (107.4) and the run's first
+  page (EMSV_BASE). The hook maps the three pages from the one under a
+  record into quarters 0-2 with its own OUTs - it is an ISR and may call
+  nothing - so a record of up to 32 KB from anywhere in a page is whole
+  there, and DX is the frame at it. The UI task's copies (the music, and a
+  ring given its clip before the fill ended) move to QUARTER 3, which the
+  hook never writes; the run is one page longer for the third quarter's
+  page past the end.
+- **XMS, on a 286 or a 386 in real mode**: DX is the handle `VB_XH`
+  (FFFFh) naming `[vb_xpc]`, the record's linear address (the token is the
+  block's linear base, 41.13), and the `mov ds, dx` every read of a record
+  starts with is VB_DSDX - a BORROW of DS's hidden base, LOADALL on a 286
+  (`apps/os88la.inc`) or a moment of protected mode on a 386
+  (`apps/os88ub.inc`), inside its own `pushf`/`cli` ... VB_DSEND/`popf`.
+  The base dies at any segment load and every ISR loads DS, so a borrow
+  runs with interrupts off; the hook's decode, which runs with them on,
+  YIELDS at `vdec.inc`'s VD_YCK sites every `[vb_xyb]` record bytes (2,048,
+  98.3.18.11's VP_XYB): DS ours, a moment with interrupts on, the same base
+  borrowed again at the same SI. The sites are jumps over themselves until
+  the check below patches them live (`vd_ypatch`), which is all an 8088
+  pays. The sound's borrows are in the hook's interrupts-off part and never
+  yield.
+- **The check**, at the fill's end (`vb_hipq`): the whole file held; EMS the
+  four quarters; XMS a 286 or up, NOT under CPU_F_PM (on kern_mega a token
+  is no address, 50.6.10), LOADALL probed with INT 6 hooked on a 286, and on
+  either tier the hold's first 16 bytes read in place against
+  OSAPI_XMEM_COPY's - a gate a BIOS closed reads 1 MB low and fails it.
+  `[vb_noinp]` is the A/B gate (a test's poke): the copying hold plays.
+- **A ring given its clip BEFORE the fill ended keeps copying** until it is
+  given another: the title's, and whatever the reader had read ahead.
+  Counters for the rows: `[vb_irings]`, `[vb_icalls]`, `[vb_iyc]`.
+
+`vbtems` (MartyPC, the Lo-tech board) holds EMS in place to the glass: the
+title played again out of the board's pages exact on the glass, six rings in
+place and no copy at all from the fill on. `vbthold` (QEMU's 386, the closed
+list's entry 1) holds XMS in place: the check passes, the yield step poked
+to 256 so the demo's small records yield (~130 times), and the title again
+is the host's decode in B8000 byte for byte; `vbtholdcopy` gates it off and
+the copying hold still plays. `vbt286` holds the 286's arm on 86Box's
+mr286, whose 286 executes LOADALL: the check passes on that CPU, the battle
+plays to victory and again in place with ~136 yields - each a `la_restore`
+and a fresh LOADALL - the title again exact in B8000, and no exception
+outside the BIOS. Still for the field: the Victory 286 itself (86Box is not
+cycle-accurate, so what a borrow costs there is not measured here).
+
+#### 125.4.3 A streamed clip held to the disk: the reader's model
+
+**The owner's Hercules battle at 100% (75 KB/s clips) played its picture
+clean and cut its clips' own sound** - Scope's and Bolt's - on 86Box's 5150
+with the ST11M (`vm/pc5150`, the owner's own profile's machine): 36 frames
+of Bolt's sound late, 10 of Scope's, 15 of Search's. A clip's averages
+hid it: Bolt is 74 KB/s and its first 1.5 s run at **129 KB/s**, Search's
+seconds 4 - 6 at 131. A ring holds 88 KB beside a 196 KB resident block,
+and the records between the picture's cursor and its sound's - the card's
+lead, 0.37 s, ~27 KB of a heavy clip - are held in it too, so a burst
+the disk cannot match is met with ~60 KB of buffer at most, and on
+Bolt's with its 40 KB head alone. The picture waited little (it runs a
+lead behind); the sound, reaching records not yet read, skipped them.
+
+Two things now meet it:
+
+- **The engine reads by the LEADING cursor.** A ring "running low"
+  (`vb_reader`'s step 2) is measured from the clip's sound when the ring
+  is the one sounding, not from its picture - its room is still counted
+  from the earlier of the two, so nothing still wanted is overwritten.
+  Bolt 36 -> 32 frames late, Scope 10 -> 5, Search 15 -> 7.
+- **The builder holds a streamed clip to the disk** (`target.burst_cap`,
+  on unless set false; the Build tab's "Hold clips to the disk"). An
+  action's records are made against a model of the reader - the clip
+  starts with its head (40 KB) in; each frame the disk adds the profile's
+  disk at three quarters less the music's rate (`CAP_SHARE`; 76 KB/s on
+  5150-st225); no more than the bundle's OWN RING holds ahead of the
+  sound (VBATTLE-RAM-PLAN R4, below; it was a constant 56 KB, `CAP_HOLD`).
+  A frame that would overdraw it is drawn **in part**: as
+  many of its rows as fit, taken on round from where the last such frame
+  stopped (`capped_run`), the rest left for the frames after - each record
+  being a change from what is ON the screen, they catch up by themselves,
+  and the seam after the clip is made from the screen it ended on. The
+  sound is whole: it is in every record whatever its picture. The build
+  says what it held (`os88vbt build`'s "held to the disk", the Build
+  tab's note). The demo, which never overdraws, builds byte for byte as
+  before. A battle of the demo's actions each given two seconds of a
+  picture changing all over (~140 KB/s at 100% Hercules), on the same
+  86Box machine: the actions' sound late 51, 35 and 38 frames uncapped,
+  **0, 0 and 0 capped**.
+
+**R4: the cap is held to the bundle's own ring.** The rings a play is
+given are a function of the bundle - of its resident claim, out of what a
+640 KB machine has free once the battle is loaded - and the builder knows
+both before it makes a clip's records: `vbtana.resident_parts` sizes the
+claim from the idle loop, the menu's sounds, the music and the band (as
+`vb_load` does), `vbtana.ring_of` the smaller ring beside it (as
+`vb_rclaim` does, out of `VB_FREE`, measured: 495 KB on MartyPC's
+Hercules 5150 with a Sound Blaster and the hard disk), and `cap_hold` that
+ring less the lead's share - the card's lead and a frame, at the clip's
+income - and a piece. The owner's 100% battle: 168 KB a ring, so about 140
+held ahead of the sound, against the 56 every bundle had. The same function
+gives the Build tab's ring (its memory lines), which says SMALL under 96
+KB: a smaller resident claim is a larger ring, and a clip held to it
+harder otherwise. `vbtcap`: the hold is the bundle's own ring, and a
+machine with less free (a smaller ring) holds the same clip harder.
+
+#### 125.4.4 What a battle holds in 640 KB
+
+Measured on MartyPC's Hercules 5150 (640 KB, the owner's 86Box profile's
+machine), the owner's battles played to their first menu and the heap read
+off the machine (`tools/heapmap.py`), 2026-11-05:
+
+| | 100% Hercules | 75% |
+|---|---|---|
+| below the arena (kernel, low tables, boot-loaded drivers) | 94 KB | 94 KB |
+| the desktop's caches (directory read-ahead 31.5, raise cache 8, icons 5) | 44.5 | 44.5 |
+| a kernel claim and a driver image | 10.5 | 10.5 |
+| VBATTLE.O88, code and bss | 40.5 | 40.5 |
+| the block: tables 4, menu sounds 12, music ring 36, **entries 84 / 48**, idle loop 20 / 16, band pictures 8, band buffers 32 | 196 | 156 |
+| the two clip rings, each with its 16 KB guard | 2 x 88 | 2 x 108 |
+| the card's ring (page-safe, from the top) | 17 | 17 |
+| free, in two pieces | 30 | 30 |
+
+That is a FRESH BOOT's map, and only its sizes are general: on a machine
+that has been used (programs opened and closed, a driver mounted between),
+the battle's own region, a later driver's image and the holes closed
+programs leave can be anywhere. On the fresh boot the block is claimed
+first and PINNED, so it lands just above the caches and they are a pocket
+no ring can use; the band's buffers are 16 KB where
+the band is 4.6; the entries are held from the play's start to its end.
+(R1 and R2, below, are what became of each.)
+docs/plans/completed/VBATTLE-RAM-PLAN.md is the plan to give the rings the ~90 KB
+that is, and to read nothing at a menu that a key has to wait for.
+
+**R1, built**: the band's buffers are the band's rows (`vb_bpara`: 2 x 5
+KB at the default band, not 2 x 16); the block is claimed FROM THE TOP
+(`OSAPI_MEM_CLAIM_HI`), so the caches lie beside the rings' run rather
+than under the block; the play first asks the compaction door (`vb_cpask`,
+Video Player's `vp_cptry`: `OSAPI_MEM_COMPACT`'s what-if at `MEM_LVL_TOP`
+against `OSAPI_MEM_AVAIL`, and when moving the battle's own region would
+buy 16 KB or more, the compaction POSTED and the play started on the wake,
+"Making room..." in the window); and the rings are TWO claims
+(`vb_rclaim`), after the whole largest run is claimed and given back once
+- the kernel can serve that only by shedding the caches and packing what
+moves, and a claim that fits a free run as it stands does neither (on a
+used machine the directory read-ahead's 31.5 KB was left a hole under a 2
+KB claim). Then ring 0 is half of `OSAPI_MEM_AVAIL`'s largest run - exact:
+checked against the heap at the instant, 298 KB said and 298 there - and
+ring 1 the largest left; when ring 1 went to another run, ring 0 is claimed
+again over the whole of its own. `VB_RKEEP` (8 KB) stays free for the
+kernel's FAT window, which the sequential reads step clusters through. The
+owner's battles: **128 + 128 KB** of ring (100%, was 88 + 88), **144 + 148**
+(75%, was 108 + 108). `vbtram` holds a fresh boot and a used machine (Skies
+and Paint opened, the battle, the two closed) to the same rings.
+
+**R2, built - the entries ride in their clips** (format 8, 125.2): an
+action's entries are the first bytes of its own region, read into its
+ring with its head (`vb_headof`: the entries and `VB_HEAD` of records, or
+all of it, or all the ring holds), drawn from there (`vb_entat`), and the
+ring's cursors put past them (`vb_entcur`) - the sound's as the clip is
+anchored, the picture's once the entry is up, so that the reader, which
+counts its room from the earlier cursor, never overwrites an entry before
+it is drawn. The resident claim loses the whole of them: **the owner's
+battles' rings 168 + 172 KB (100%, the resident claim 96 KB) and 172 + 172
+(75%, 92 KB)**, measured as above at the first menu, 10 KB left free.
+
+**R3, built - the menu reads nothing a key waits on, nothing it cannot
+use.** The music is read WHOLE at a menu only when its ring is under half
+(`vb_mbig`; between half and 3/4 a 4 KB piece, a key's worth of wait); the
+clip under the cursor is wanted only when the action CAN be taken
+(`vb_hover` asks `vb_canpay`: its MP, its item, its limit) and only after
+the cursor has rested ~0.5 s (`VB_KQUIET` 9 ticks, was 6). The waits are
+the choice's: the pending action's head is read in the pause between the
+choice and its clip, as before. `vbtmenu`: on Limit with no gauge nothing
+wanted, on Bolt its clip; a key taken in under 0.3 s every time (0.12 at
+most measured; the owner's 100% battle's Ice <-> Bolt 0.05 - 0.35 s).
+
+**Between plays the window holds nothing pinned** (SPEC.md 66.3,
+docs/HEAP-CLAIMS.md, `tests/pins.txt`). One relocation proc, `vb_reloc`,
+covers three claims: the resident claim, whose six parts are segments
+derived from its base (`vb_rltab`, all moved by the delta); the title
+picture (`[vb_cvseg]`, declared once read); and the XMS hold's 32 KB fill
+bounce (`[vb_hbnc]`, read only by the fill's foreground copy). The resident
+claim is pinned again by `vb_play` before each load, because the hook reads
+its music at interrupt time, and declared again by `vb_between` when the
+bracket returns. The clip rings are claimed and freed inside the bracket
+(bucket C), and the card's DMA ring, which no compaction may move, is
+freed when the play ends (bucket D) and claimed again by the next load
+(`vb_cardclaim`, at `vb_load`'s `.again`).
+
+### 125.5 The band
+
+The band is the rows from the header's band row (142 by default) to 199 of
+mode 4. It is outside the canvas, so no record writes there and nothing is
+saved or restored around it (`apps/vbattle/vbband.inc`).
+
+**It is composed in a buffer of its own** (the band's rows and no more,
+in the resident claim: `vb_bpara`, 125.4.4's R1; 80 bytes a row): the band's PICTURE (the rules' band picture, at its
+place) or the plain look (black, a cyan rule at the band's second row and
+above the message line, a divider before the party), and over it the open
+menu's own picture. Text is drawn over the buffer's bytes - ground and
+glyph in one store a byte, the glyph's mask taking the ink and the rest
+the buffer's pixels (6.1's rule, by hand: the desktop's slots are not legal
+in the bracket, 53.7) - so a picture shows through around every letter.
+**A band rebuilt** (it first appears, or its picture changes, below) **is composed
+off the screen** in a second 16 KB buffer, its text and all, **and put on
+the screen once**: the first build put the ground up and then drew the
+letters over it, which shows the ground alone for the time the letters
+take. A cursor's move or a number's change is drawn straight onto the
+screen over the buffer's ground. The glyphs are `OSAPI_FONT_GLYPHS`'s,
+copied before the bracket.
+
+It holds:
+- **the menu**, at its own column, row and pitch, in its ink: an item an
+  action whose cost cannot be met in red; the cursor an arrow (`>`) or the
+  line inverse; an MP cost beside its label;
+- **the party panel** (column 18): the enemy's name and, when it has more
+  than one, its stance; then each character's name, a `*` when its limit
+  gauge is full, HP of its most, MP. Whose turn it is is drawn inverse, or
+  the character being aimed at while an ally is picked; the fallen red;
+- **the message line** at row 191.
+
+`[vb_dirty]`: 1 the menu, 2 the party, 4 the line, 8 the band rebuilt.
+
+**The band is rebuilt only when its GROUND changes** (the owner,
+2026-11-05: "any way to draw the menus faster?"). A rebuild was asked for
+at every turn's menu, every sub-menu opened or closed and every action
+taken - on MartyPC's XT, under the idle loop's hook, ~0.75 s of composing,
+and on Hercules ~0.75 s more to put two by two. But the ground is only the
+band's picture and the open menu's own (`MN_IMG`), and `[vb_gkey]` keeps
+the one the last rebuild composed: when a rebuild is asked for and the
+key is the same (`vb_needrb`), the old menu's lines that no line of the
+new one covers at the same place are put back to the ground - fifteen
+spaces over the buffer's ground, `vb_menu_erase` - and the menu, the party
+and the line are drawn as a cursor's move is. A rebuild is still the
+band's first appearance (`[vb_gkey]` 0FEh) and every change of picture.
+The menu is up 0.1 - 0.3 guest s after its turn begins, on CGA and on
+Hercules, where it was ~0.9 s and ~1.5 s. `vbtlayout` holds the glass to
+the preview pixel for pixel after each kind of partial redraw.
+**Parts that share cells are drawn in the order they change** - a cursor
+moved redraws the menu over a message line placed across it, where the
+whole band draws the message last - so the check WARNS of any two text
+parts that overlap (`vbtband.overlaps`).
+
+**The selected member is the band's**: the footage carries no marker, so no
+clip is captured twice to show it.
+
+The four colours are the bundle's palette byte, set as
+`vp_cgaset .c4` sets it (mode 5's cyan, red and white through 3D8h on a
+CGA, and palette register 2 on an EGA or a VGA). A picture is quantised to
+those four by the builder (`os88vbt.band_picture`: the nearest, after a
+4x4 ordered dither), and `tools/vbtband.py` draws the band from the same
+bytes for the builder's preview.
+
+**The music is fed while the band is drawn.** A band rebuilt keeps the
+reader - the UI task's - away for its whole length: on Hercules' XT the
+composing and the two-by-two present are ~2 s of the foreground's time
+under the hook, and the music's ring (32 KB, 3 s) is refilled only under
+half - so a rebuild begun near half ran it dry, under the band or a moment
+after. So the ring is topped up FULL before a rebuild (`vb_mtopup`), and
+a piece is read whenever it is under half between the menu's lines, the
+party's, before the message and every eighth row of a present
+(`vb_mkeep`). `[vb_mlow]` keeps the lowest the ring stood at as a rebuild
+ended; `vbtsound` holds it over a second on MartyPC's Hercules 5150, where
+without the top-up it ran dry 23 times in six turns. **The ring is read
+whenever it holds under THREE QUARTERS** (`VB_MLOW`, the reader's and
+`vb_mkeep`'s), not half: under the idle loop's decode a disk read on
+Hercules' XT moves ~16 KB a second against the music's 11, and a busy
+menu (the owner's "three down arrow presses, quickly") held the ring at
+14 - 19 KB, 1.3 s from dry, where it now holds 22 - 26 KB. **A stream
+running low is read WHOLE at a menu too**: a menu keeps 4 KB reads for
+what it may never want (the clip under the cursor, the enemy's, the
+hold), so that a key is answered, but the music under 3/4 and a playing
+clip's ring under half take a whole read (`[vb_pbig]`, `vb_psize`) - on
+the owner's ST-225 a read is a seek and a turn, ~75 ms, and 4 KB a call
+is ~50 KB/s. **The card is asked every pass whether it halted**
+(`vb_snd_keep`, verb 3, and verb 1 to resume): a halted card is a halted
+picture, the hook's clock being the card's, and asked an eighth pass a
+busy Hercules XT stood still seconds - the owner's "the music and video
+pause". `vbtsound --heavy` plays the battle under a 55 KB/s idle loop with
+the cursor moved quickly at every menu; MartyPC's XT-IDE did not halt the
+card there with or without these, so they stand on the owner's machine's
+figures.
+
+#### 125.5.1 The band's layout
+
+**Every part of the band has a place and may be hidden** (the project's
+`band_layout`, the Characters & menus tab's "The band's layout"; absent, the
+band as it always was): the enemy's name (its column, row, shown); the party
+(its first row, its pitch) and, on each character's line, the name, the
+limit star, HP (and its "/most") and MP, each a column and shown or not -
+hiding MP hides the menus' MP costs too; an ITEM's count beside an action
+it costs ("x3", at the cost's column: `item_count_show`, off unless asked,
+the layout's byte 19); the message line (column, row,
+shown); and the plain look's lines (shown; the divider's column). Rows are
+pixels from the band's top, columns cells 0..39. A character's line is
+composed from its first shown field to its last, spaces between, so the
+turn's highlight is one bar; fields that overlap are warned of. The plain
+look's lower rule and divider are drawn above the message line, wherever it
+is. **A menu item may be placed of its own** (a look's `places`, [col, row]
+or null per item - the item chosen's column and row on the same tab):
+otherwise the menu's column and its row plus the pitch.
+
+In the rules block: the layout's 20 bytes in `vbtrules.LAYOUT`'s order,
+named by the header word at 56 (0 none - every block before it, and the
+engine's own defaults then: `vb_laydef`, the message on screen row 191),
+and the placed items, four bytes each (menu, item, column, row), counted at
+58 and named by the word at 60. The engine copies the layout at the
+battle's start (`vb_lay_init`) and draws every part from it
+(`vbband.inc`); the builder's preview (`vbtband.render`) draws from the
+same. `vbtlayout` holds them to each other PIXEL FOR PIXEL on MartyPC's
+XT - the engine's composed band against the preview drawn for the same
+moment with the engine's own glyphs, for the default layout, a custom one
+with an item placed, and one with MP and the message hidden.
+
+### 125.6 The battle
+
+`apps/vbattle/vbrules.inc` and `vbgame.inc` play the RULES block (125.2.4);
+`tools/vbtrules.Sim` is their REFERENCE, routine for routine, and the two
+must agree to the hit point: `tests/vbtengine.py` plays a battle that
+covers every rule on MartyPC and in the reference in lockstep, and reads
+every HP, MP, limit gauge, the enemy's HP and stance and the generator's
+own state at every character's turn. (On the owner's footage, on 86Box's
+ST11M, 27 turns agreed the same way, 2026-11-04.)
+
+**The turns** go the characters in order, then the enemy, and repeat; a
+character at 0 HP is skipped. A character's turn ends its guard and ages
+its stat changes. Its menu is its TOP menu: Up and Down move, Enter takes
+an action or opens a SUB-MENU, Left or Right opens the SIDE menu, and Esc
+(or Left or Right) goes back. An action that cannot be paid for says so
+and waits. An action aimed at an ALLY picks one first: Up and Down among
+the standing (the fallen, for a REVIVE), Enter, or Esc back. The action is
+then PAID, PLANNED (125.6.3) and its clip played; its effects are APPLIED
+when its clip is over (an action with no clip is over at once); then the
+enemy may RESPOND (125.6.6); then the next turn. Esc at the top menu, or
+while a clip plays, leaves.
+
+#### 125.6.1 The effects
+
+| verb | a | power | b | c | what it does to each target |
+|---|---|---|---|---|---|
+| 1 DAMAGE | 0 physical, 1 magical, 2 fixed | power, or the amount | hits 1-4 | | 125.6.2's damage, every hit summed; the actor's CHARGE doubles the first DAMAGE effect; a GUARD halves it |
+| 2 HEAL | 0 by power, 1 % of the most HP (to 100), 2 fixed | | | | the HP up to its most; the fallen are not healed |
+| 3 RESTORE | | MP | | | the MP up to its most |
+| 4 REVIVE | | % of the most HP | | | a fallen character back at that share (at least 1) |
+| 5 GUARD | | | | | halves damage taken until its next turn |
+| 6 CHARGE | | | | | doubles its next DAMAGE (the target's; not the limit gauge - 12 LIMIT is) |
+| 7 BOOST, 8 LOWER | the stat (ATK MAG DEF MDEF) | | steps 1-4 | turns | the stat's steps up or down (held to -4..4) for c of its turns |
+| 9 PASS | | | | | nothing: the turn passes |
+| 10 ESCAPE | | | | | the battle ends, escaped |
+| 11 STANCE | the stance | | | turns | the enemy into it, for c of its turns (0: until something changes it); its return is 125.6.7's |
+| 12 LIMIT | 0 the targets, 1 self | percent 0-100 | | | a LIMIT GAUGE that much fuller, to 100: each character it hits (0), or once its DOER's (1) - an Attack that charges its own limit break; the enemy has none |
+
+A target's damage is applied once, the total; so is its heal.
+
+#### 125.6.2 The arithmetic
+
+All integers; the four stats at most 999, so every product fits the
+8088's 32/16 divide.
+- a stat: its base × (8 + its steps) / 8; the enemy's then × (100 + its
+  stance's modifier) / 100;
+- DAMAGE = min(65535, power × ATK >> 4), then min(9999, that × (256 −
+  min(255, DEF)) >> 8), then min(9999, that × variance / 100); magical
+  uses MAG and MDEF; fixed is the amount, at most 9,999;
+- a CRITICAL (physical only, 1 in 16) doubles a hit; the variance is 90 to
+  110 %;
+- HEAL by power = min(9999, power × MAG >> 4), × variance / 100;
+- a character's LIMIT gauge rises by the damage's share of its most HP
+  (× 100, to 100); a limit cost needs 100 and spends it.
+
+#### 125.6.3 The draws, in order
+
+The generator is a 16-bit xorshift (7, 9, 8); rnd(n) advances it and
+gives (x × n) >> 16. A plan (`vb_resolve`) draws, in this order and only
+these: the POOL's pick; then for each target in turn, its HIT roll -
+rnd(100) < accuracy − the target's evade - when it is an opponent and the
+action can miss (accuracy under 100, or an evade over 0); and for each
+DAMAGE effect's each hit, its CRITICAL roll (physical) and its VARIANCE
+(not fixed); a HEAL by power its variance. The enemy's turn draws its move
+(rnd of the moves' total weight) before its plan, and a RANDOM target rule
+its target; a response its chance. Nothing else draws, so the read-ahead
+may PEEK the next draw to fetch the clip the action under the cursor would
+most likely play (`vb_peekclip`).
+
+#### 125.6.4 The outcome and its clip
+
+Over the results on the OTHER side only: **FINISHING** when a character's
+action leaves the enemy at 0; else **CRITICAL** when any hit was one;
+else **DEFENDED** when every hit landed on a guard; else **MISSED** when
+none hit; else **HIT**. The clip is that outcome's pool's, or HIT's when it
+has none (no pool: no clip); for an action aimed at one character alone,
+that character's own pool before the general one - and for one aimed at
+the ENEMY, the own pool of the character DOING it (`vbtrules.clip_char`,
+the engine's `[vb_qsingle]`), so two characters' shared Attack plays each
+one's own clip; picked by the plan's
+first draw. The outcome is decided before the clip is chosen, so the
+footage always agrees with the number.
+
+#### 125.6.5 Costs
+
+MP; an item (the party's count, at least one a use); or a full limit gauge
+(spent). An action whose cost cannot be met is drawn red and refused.
+
+#### 125.6.6 Responses
+
+After a character's action, if the battle goes on, the enemy's stance's
+responses are tried in order: each whose trigger the action meets (any, a
+physical one, a magical one, a named action) draws its chance, and the
+first that comes up is played - at the actor, or, fallen, at the
+alternating rule's pick - before the next turn.
+
+#### 125.6.7 The enemy's turn
+
+Its guard ends and its stat changes age. **A FOLLOW-UP owed is the turn**
+(the enemy's `"follow_ups"`, the Enemy tab's box, in every stance): after
+its own turn played AFTER, its next turn plays THEN - at the SAME character
+while they stand (the next in turn when they do not), or by a move's rule -
+before anything below; a stance's timer still counts, and a return action
+due that turn gives way to it. THEN may have a follow-up of its own; the
+first naming an action is the one it owes. A response (125.6.6) owes none.
+In the rules block: up to 16 entries of four bytes (after, then, the rule -
+FFh the same - and its argument), counted at header byte 52 and named by
+the word at 54, which every block before them left zero. `vbtengine` holds
+the engine to `vbtrules.Sim` across a battle that plays one. **A stance
+whose turns are up returns** to the one it came from, and its RETURN action,
+if it has one, is the turn. Else **its automatic change** (HP under a share, or after a number
+of its turns in it), if it fires and goes somewhere new: the stance changes
+and the change's action, if any, is the turn. Else **a move**, drawn by
+weight from the stance's, at a target by the move's RULE: ALTERNATING (the
+next standing after the last it went for), RANDOM, the LOWEST HP, the LAST
+to hit it, or a NAMED character - a rule whose character is down falls back
+to alternating. An action aimed at every character rolls each one alone.
+
+#### 125.6.8 The ending
+
+The enemy at 0: the victory clip, held. Every character at 0: the defeat
+clip, held. An ESCAPE: its own clip, which should be an ending. Esc leaves
+at any time; the card is closed, the rings given back, and the kernel puts
+the desktop back. Playing again starts from the intro, with what was read
+kept.
+
+### 125.7 What is not done
+
+**Refusals.**
+- `kern_small` refuses `FSXF_RATE`, and the window says "Needs the full
+  kernel".
+- **kern_mega is not supported.** The claims are carved by paragraph
+  arithmetic (125.4), which a selector does not allow (SPEC.md 20.18), and
+  no kern_mega disk carries the package. A refusal at the entry
+  (`OS88_MEGA_REFUSE`) wants a kern_mega arm beside it (`t_megapkg`), and
+  is for when the package ships.
+
+**Other adapters.** The VGA4 and Hercules renditions (125.3.2) play on one
+page: like CGA's, a cut is drawn where it can be seen. Their second page is
+not used yet. An EGA takes the CGA4 bundle in mode 4.
+
+**Hardware not yet heard.** The PC speaker (VIDEO-BATTLE-PLAN 3.2) is not
+an output.
+
+**The builder** (docs/plans/completed/VBATTLE-BUILDER-PLAN.md, waves 1 to 5):
+`tools/vbtproj.py` (a project), `tools/vbtana.py` (decoded screens,
+cached; loop and attachment points; the music's loop and its JOIN after
+the openings; the budget and this section's memory), `tools/vbtrules.py`
+(the rules, 125.6), `tools/vbtband.py` (the band's preview), `os88vbt.py
+build PROJECT` and `disk PROJECT`, and `tools/os88vbtgui.py` (the Battle,
+Idle, Clips, Openings, Actions, Characters & menus, Enemy and Build tabs).
+The shipped `BATTLE.VBT` is the demo, built through its project. The
+title and endings (125.3.1) are the window's Title & endings tab: a panel
+each, its loop recommended as the idle loop's is (`loop_candidates`), the
+title's way out entered at anchors spread a quarter of its lap apart, an
+ending that joins shown how its last frame differs from each loop's start,
+and the fade previewed with the engine's own thresholds (the test holds the
+window's table to `vb_fmasks`).
+
+**A project names its files RELATIVE to itself** when they are in its
+folder or below it (the owner's "so I can copy projects around without
+needing to relink"): `Project.save` writes each video, sound file and band
+picture so - forward slashes, on any host - and one elsewhere absolute,
+each resolved first against where the project WAS, so a Save As to another
+folder keeps every file. A path that is absolute and not there - another
+machine's, a Windows `D:\...` on any host - is looked for beside the
+project by its name (`Project.here`). `vbtpaths` holds the four.
+
+- **The join** (`vbtana.music_joins`): the music comes in when the scene
+  opening's sound ends, at `VH_MUSAT`. The builder suggests where by the
+  loudness envelopes: the places in the music's loop whose 2 s BEFORE them
+  are most like the openings' last 2 s, by correlation, so the music goes
+  on with what the opening's sound was doing. A planted passage is found
+  to within a 256-sample hop (`tests/vbtguitest.py`).
+- **The memory** (`vbtana.memory`) is 125.4's carving, part for part:
+  each resident part rounded to 4 KB, the music's 32 + 4 KB ring or all
+  of a music of 60 KB or less, the band's two 16 KB buffers, the card's
+  17 KB, and two rings of `(free - resident - 17 - 8) / 2 - 16` KB cut to
+  4 KB. FREE is MEASURED, 461 KB: on MartyPC's 640 KB XT with a Sound
+  Blaster (`os8088_xt_hdd_sb`) the rules battle's rings were 144 KB each
+  beside a 116 KB resident claim. 86Box's 640 KB 5150 left about 20 KB
+  more (its 172 KB rings beside the demo's 80 KB claim, before the band's
+  buffers). The test holds the arithmetic to the measurement.
+- **A disk** is 98.2.12.1's, through the same module (`tools/os88mkdisk.py`):
+  `VBATTLE.O88` and `BATTLE.VBT` in the root of any of its seven disks, a
+  hard disk booting when the boot files are at hand. A floppy too small is
+  refused with the sizes before anything is written.
+
+**Not yet built:**
+- a FULL-SCREEN title loop or end loop: theirs are the canvas's frames
+  over black, as openings were before the Screen choice;
+- **a stance's own idle loop**: every stance shares the battle's;
+- a time gauge (ATB), several enemies, status ailments past guard and
+  charge.
+
+The rows: `vbtbuild`, `vbtgui`, `vbtbundle`, `vbtrules` (host),
+`vbtengine` and `vbtloops` (MartyPC), all `soak`.
+
+**What a disk delivered while the engine played was about half what it
+delivers alone - and it was the engine's copying, not the disk.** Measured on 86Box (a 5150, CGA, SB 2.0, an ST-225 on a
+Seagate ST11M, the owner's disk; 2026-11-04) with a bundle of the owner's
+own three generated clips: an idle of 30 frames, two attacks at 77.3 and
+53.5 KB/s (CGA4, 320x142, 15 fps, encoded for `5150-st225`) and 25.6 s of
+streamed music. The battle played to victory. While a clip played the
+reader moved 59 to 77 KB/s, and every clip stalled: 1.8 to 2.7 s for the
+77 KB/s attack (6 s long), 0.6 to 0.8 s for the 53.5 KB/s ones (5 s). With
+the music resident, so that no read seeks between two streams, the reader
+moved 52 to 62 KB/s and the stalls were the same: the second stream's
+seeks are not what limits it.
+
+**Video Player on the same machine** played the owner's `TAKEONME.V88`
+(640x200 mono, 24 fps, 95.4 KB/s with its sound) with 0 stalls and 8 late
+periods, its reader moving about 115 KB/s - so the disk was not the limit.
+The engine's own account of its time (`[vb_hper]`, the hook's periods;
+`[vb_rper]`, those inside `vb_read`; the main loop's marks, `vb_tmark`)
+said why. **Inside a read the disk moved 140 to 200 KB/s**, but the reader
+was inside a read only 31 to 43% of the time; **copying the ring's first
+16 KB into its guard took 31 to 35%**, with the hook (about 37%) running
+over all of it. With only the straddling record's tail copied (above):
+
+| the 77 KB/s attack | before | after |
+|---|---|---|
+| copied a clip | 124 to 136 KB | 18 to 26 KB |
+| inside a read | 31 to 36% | 49 to 55% |
+| stalled | 1.9 to 2.5 s in 5.5 | 0.46 to 0.95 s in 4.7 |
+| the battle to victory | 54.3 s | 48.8 s |
+
+The 53.5 KB/s clips stalled 0.33 to 0.51 s. What was left was the
+ring's depth: 48 KB is 0.6 s of the 77 KB/s clip, so a burst of catching
+up (two frames a hook call after a stall) left the reader no time to start
+its next piece. **With the rings sized from all the memory there is**
+(172 KB each, above) the same battle, and one with the owner's two gunner
+attacks added (55.8 and 70.6 KB/s), played to victory with **0 stalls, 0
+late frames, 0 frames of sound late and 0 music underruns**, every clip;
+the reader inside a read 39 to 72% of the time. A second play claimed the
+rings again (168 KB) and started. The demo bundle plays to victory, the
+Limit among it, with 0 stalls.
+
+**Measured on MartyPC's `os8088_xt_hdd_sb` with the version 3 bundle on
+C:** (2026-11-04).
+- **A battle to victory**, every command used, the Limit among them: 0
+  late frames, 0 stalls, 0 frames of sound late, 0 music underruns.
+- **The openings' own sound**, rebuilt from the bundle a frame at a time,
+  correlates with the card's capture at offset 0 at 0.96.
+- **The music comes in at 3.903 s**, exactly where the openings end, at
+  0.97. After it, one-second windows correlate with the bundle's music at a
+  median of 0.99 (lowest 0.72, under an effect) over 58 s.
+- **The floppy's battle** (no Limit, 3.2 s of resident music) played its
+  eight actions from the 360 KB disk on the 5150 with 0 late frames.
+
+**Measured on MartyPC's `os8088_xt_hdd_sb`** (a 4.77 MHz XT, CGA, SB 2.01,
+XT-IDE, 640 KB), with the system and the 25.6 s bundle on C:.
+
+- **The load** before the intro takes 1.7 guest seconds.
+- **A whole battle** to victory used every command over four rounds. It
+  took 50 guest seconds, with **0 frames late** and **0 underruns** of the
+  music's ring (`[vb_munder]` = 0).
+- **The music is the bundle's, byte for byte in time.** In the card's
+  capture, a one-second window every two seconds correlates with the
+  bundle's music at the same offset: median 0.95, lowest 0.69, where an
+  effect is mixed over it. That holds across the loop at 25.6 s, and the
+  best offset never moved from 0, so no piece was dropped or played twice.
+  (The card plays 11,111 Hz: the DSP's time constant rounds 11,025 to it.)
+- **The menu's sounds** were found in the capture at every key, matched
+  0.90 to 0.99 against the effect itself, with the latencies in 125.3.
+
+**Measured on MartyPC's `os8088_5150_sb_gla`** (5150, CGA, SB 2.01,
+640 KB), from the 360 KB disk.
+
+- **The first build** loaded for 14 guest seconds before the intro (168 KB,
+  the music resident). With this one, the music short and resident, the
+  load is 9 seconds and the battle to victory had 0 late frames and 0
+  underruns.
+- **A whole battle** from the intro to victory used every command over
+  four rounds. It took 600 captured frames, 49.8 guest seconds, and
+  **0 frames ran late** (`[vb_late]` = 0).
+- **The sound kept time with it.** The card's capture is 49.9 s against
+  the frames' 49.8. No 20 ms window of the capture is silent, so the ring
+  never ran dry, and the effects sound at the hits.
+- **A whole-canvas change TEARS on CGA.** Its one page means a record is
+  drawn where it is seen. The demo's first bolt flashed the whole sky,
+  changing every byte of the canvas, and was captured half drawn: CGA's
+  even-row bank new and its odd-row bank old. A captured battle's camera
+  cuts will do the same. A cut that must not tear wants Hercules's or a
+  VGA's second page, and those renditions are not written. The demo now
+  flashes the beetle alone.

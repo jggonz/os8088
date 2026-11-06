@@ -40,6 +40,16 @@ high apps/waverack/waverack.asm   # ITS OWN DS COMPARED AS A PARAGRAPH: wc_myslo
     # and has never run on kern_mega. Retired by a snapshot field that names
     # the caller's own instance, or a run on kern_mega showing SSI_SEG is DS.
 
+high apps/vbattle/vbattle.asm   # DS'S HIDDEN BASE BORROWED: M5's read in
+    # place (apps/vbattle/vbinp.inc's vb_xbeg, under VB_DSDX) loads DS's
+    # descriptor cache with a 386's base or a 286's LOADALL to decode a
+    # record straight out of XMS - a real-mode technique on the package's
+    # own segment registers, and its rate hook (vb_hook) runs out of the
+    # region at interrupt time. Video Battle has never run on kern_mega.
+    # Retired by the kern_mega round that follows this merge (the owner,
+    # 2026-11-06): Video Player's PKG_MEGA arm and its real-mode fullscreen
+    # bracket (SPEC.md 98.3.24) are the model, and that arm declares both.
+
 # --- highmem -----------------------------------------------------------------
 
 highmem apps/waverack/waverack.asm   # A CLAIM STEPPED BY PARAGRAPH: wt_hoff
@@ -65,3 +75,11 @@ highmem apps/win16/win16.asm    # THE SAME REFUSAL, and the claims are the same
     # paragraphs: the program's segments and its global heap are addressed as
     # base + paragraph offsets by the fixups and by GlobalAlloc's arena walk
     # (w16_garena, GH_SIZE in paragraphs). Retired with the line above.
+highmem apps/vbattle/vbattle.asm   # PARAGRAPH ARITHMETIC ON CLAIMS:
+    # vb_load derives six segments from the resident claim's base
+    # ([vb_vres] plus [vb_psfx], [vb_pmus], ... -> vb_sfxseg..vb_cseg), and
+    # a clip ring addresses its records as RG_SEG plus a paragraph cursor
+    # (vb_entcur, the reader's `add dx, [bx+RG_SEG]`); on kern_mega a claim
+    # is an LDT selector, and those sums are not addresses. Retired by the
+    # same kern_mega round (OSAPI_SEG's derived segments, SPEC.md 50.6.11,
+    # as Video Player's arm does).

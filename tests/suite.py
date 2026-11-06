@@ -16726,6 +16726,368 @@ SOAK = [
         wants=("build/video.o88", "build/kernel.sys", "build/boothd.bin",
                "build/mbr.bin", "build/hdd.drv", "build/ctrl.drv",
                "build/sound.drv")),
+    Row("vbtbuild", "soak", py("tests/vbtbuild.py"), 23.0,
+        "SPEC.md 125.2, VBATTLE-BUILDER-PLAN wave 1: the builder's project "
+        "model and build, host-side. The demo battle re-expressed as a "
+        "PROJECT must build the shipped BATTLE.VBT byte for byte (full and "
+        "floppy), and the bundle must be the same from two processes - it "
+        "was not, while vbtscene seeded its noise with str's per-process "
+        "hash(). Then the model's checks must bite (no anchor, a missing "
+        "action, a fifth character), undo must invert an edit, a save must "
+        "lose nothing, and the analysis must find a planted anchor and exit "
+        "at a score of 0. A model or build that goes wrong here writes a "
+        "bundle that verifies and plays the wrong battle",
+        needs=("pil",)),
+    Row("vbtrules", "soak", py("tests/vbtrules.py"), 8.0,
+        "SPEC.md 125.6: the Video Battle RULES' reference (tools/vbtrules.py), "
+        "host-side - the 16-bit xorshift's full period, the damage and heal "
+        "arithmetic by hand (stance and step shares, the caps), the outcome's "
+        "precedence and its clip (a pool's fallback, a character's own pool), "
+        "the compiler's refusals, the rules battle covering every rule and "
+        "the same twice, and the builder's rules tabs' arithmetic (every "
+        "verb's form round-trips, the estimate is the reference's, the band "
+        "preview's arrow where the engine puts it). Broken on purpose (the "
+        "damage shift 3 not 4) it FAILS naming the hand-worked hits",
+        needs=("pil",)),
+    Row("vbtengine", "soak", py("tests/vbtengine.py"), 130.0,
+        "SPEC.md 125.6: the Video Battle ENGINE against its reference, in "
+        "LOCKSTEP. The rules battle (tests/vbtrulesdemo.py: a sub-menu, a "
+        "side menu, an ally aimed at, MP, item and limit costs, heal, revive, "
+        "guard and a boost, three stances with a timed one and an automatic "
+        "change, an area attack, a miss chance, a counter) on MartyPC's XT "
+        "with the bundle on its XT-IDE C:, every HP, MP, limit gauge, the "
+        "enemy's HP and stance and the generator's state read at every "
+        "character's turn and held equal to vbtrules.Sim's, 43 turns to the "
+        "same ending. Broken on purpose (the engine's damage shift 3 not 4) "
+        "it FAILS at turn 1 naming both states",
+        needs=("marty",)),
+    Row("vbtloops", "soak", py("tests/vbtloops.py"), 90.0,
+        "SPEC.md 125.3.1: the Video Battle's TITLE loop, FADE and ENDINGS on "
+        "MartyPC's XT, two bundles of the demo with a 1-HP enemy. A: the "
+        "title laps twice and the glass shows its own frames (the host's "
+        "decode); Enter fades it, the steps in order and the lit pixels "
+        "falling to under a third; the openings, the menu, one Attack, "
+        "victory fades the canvas to its end loop, which laps; Enter fades "
+        "and the play starts over at the title. B: the title left by an "
+        "entered clip, and victory JOINING its end loop with no fade. C: A's "
+        "ways with a title and an end loop of 204 KB, far over a ring, each "
+        "READ ROUND (format 7) and lapping with the glass its own frames. "
+        "Broken on purpose (vb_fmask drawing nothing) it FAILS naming the "
+        "lit pixels before and after",
+        needs=("marty",)),
+    Row("vbtadapters", "soak", py("tests/vbtadapters.py"), 130.0,
+        "VBATTLE-MEMORY-PLAN 9: the Video Battle's VGA4 and Hercules "
+        "RENDITIONS on MartyPC (os8088_xt_vga_hdd_sb, "
+        "os8088_5150_herc_hdd_sb_gla), the demo with a 1-HP enemy beside its "
+        "CGA4 bundle. Each: the engine takes its adapter's bundle; the title "
+        "on the glass is the host's decode byte for byte (VGA's planes off "
+        "the card); Enter fades it out; at the menu the BAND on the glass is "
+        "the engine's band buffer as the host converts it, exactly (planes 0 "
+        "and 1; two by two); the canvas an idle frame; victory to its end "
+        "loop. Broken on purpose (Hercules' odd-row pattern swapped) the band "
+        "FAILS at every look",
+        needs=("marty",)),
+    Row("vbthold", "soak", py("tests/vbthold.py"), 20.0,
+        "VBATTLE-MEMORY-PLAN 4: the Video Battle's bundle HELD WHOLE in XMS "
+        "(QEMU: the closed list's entry 1). The demo with a 1-HP enemy on "
+        "B:; the hold one range, the whole bundle, filled while the title "
+        "goes round and byte for byte the file; then B: changed to a BLANK "
+        "floppy and the play runs on - the fade, the menu, victory, its end "
+        "loop, Enter and the title again - out of the hold alone. Broken on "
+        "purpose (vb_read skipping the hold) it stalls before victory. "
+        "VBATTLE-MEMORY-PLAN 12 (M5): from the fill on the rings are read IN "
+        "PLACE through a 386's loaded base (vbinp.inc), the yield step poked "
+        "to 256 bytes so the decode yields (~130 times), and the title again "
+        "is the host's decode on the glass, B8000 byte for byte. Broken on "
+        "purpose (a yield re-borrowing a byte on) the guest stops",
+        needs=("qemu",)),
+    Row("vbtholdcopy", "soak", py("tests/vbthold.py", "--arm", "copy"), 20.0,
+        "The whole hold with the decode in place GATED OFF ([vb_noinp], "
+        "M5's A/B): the copying hold M2 built still plays from a blank B: "
+        "to victory and again, every read a copy",
+        needs=("qemu",)),
+    Row("vbtholdpart", "soak", py("tests/vbthold.py", "--arm", "part"), 20.0,
+        "VBATTLE-MEMORY-PLAN 5: the pool held under the bundle (a gate's cap, "
+        "[vb_hcap]): the hold is the builder's HOLD ORDER's ranges in order, "
+        "it fills while the title goes round, and the play runs with the "
+        "disk serving the rest and the hold answering reads",
+        needs=("qemu",)),
+    Row("vbtholdnox", "soak", py("tests/vbthold.py", "--arm", "nox"), 20.0,
+        "The Video Battle with NO pool (`-m 1`): no hold taken, and the play "
+        "the disk's, to victory and again, as on an 8088",
+        needs=("qemu",)),
+    Row("vbtems", "soak", py("tests/vbtems.py"), 150.0,
+        "VBATTLE-MEMORY-PLAN 7: the Video Battle's bundle HELD IN EXPANDED "
+        "MEMORY on an 8088 - MartyPC's 5150 with a Hercules, an SB, an XT-IDE "
+        "and the Lo-tech 2 MB board, booted from build/emstest.img with "
+        "SOUND, HDD and EMS wanted. Below a 386 the hold is EMS, one range, "
+        "the whole Hercules demo; it fills while the title goes round, the "
+        "disk reading into the frame; then the title played again out of the "
+        "board is the host's decode on the glass, and from the fill on NOT "
+        "ONE disk read ([vb_rcalls]) through victory and the play again. "
+        "Broken on purpose (the read two bytes off in the window) the battle "
+        "stalls before victory. M5: from the fill on the rings are read IN "
+        "PLACE - the hook maps three pages into the frame with its own OUTs "
+        "- and the title again is that; broken on purpose (a page on) the "
+        "battle never reaches victory",
+        needs=("marty",), wants=("build/emstest.img",)),
+    Row("vbtemsslow", "soak", py("tests/vbtems.py", "--eslow", "1"), 50.0,
+        "SPEC.md 125.4.1, Video Player's 98.3.18.8: vbtems with the board's "
+        "timing forced SLOW ([vb_eforce]): still the EMS hold, but COPIED "
+        "out of, no ring read in place - and still not one disk read from "
+        "the fill on. Broken on purpose (vb_hipq not asking the board's "
+        "speed) it goes in place and fails twice",
+        needs=("marty",), wants=("build/emstest.img",)),
+    Row("vbtemsnone", "soak", py("tests/vbtems.py", "--eslow", "2"), 40.0,
+        "vbtems with the board forced TOO SLOW and no XMS pool (a 5150): "
+        "no hold at all, and the battle to victory off the disk alone",
+        needs=("marty",), wants=("build/emstest.img",)),
+    Row("vbt286", "soak", py("tests/vbt286.py"), 30.0,
+        "SPEC.md 125.4.2 on a REAL 286's LOADALL - 86Box's mr286 (vm/286-hma, "
+        "which runs 0F 05): the XMS hold whole, then the check passes on "
+        "this CPU (la_probe with INT 6 hooked, 16 bytes through a "
+        "LOADALL'd DS against the driver's copy), the battle to victory "
+        "and again with its rings read in place and the decode yielding "
+        "(~136 times at a poked 256-byte step, each a la_restore and a "
+        "fresh LOADALL), the title again exact in B8000, and no exception "
+        "outside the BIOS. Broken on purpose (a yield re-borrowing a byte "
+        "on) victory never comes",
+        needs=("86box",)),
+    Row("vbtopenfull", "soak", py("tests/vbtopenfull.py"), 30.0,
+        "SPEC.md 125.3: a FULL-SCREEN opening and then one WITH THE MENU, "
+        "the owner's ask. On the host the full one is encoded over all 200 "
+        "rows with CF_FULL and the menu one is the canvas over black, and "
+        "the check refuses a full one last or after a menu one; on MartyPC's "
+        "CGA XT the full one's picture fills the band's rows with the band "
+        "held back, the band let in at the menu opening's first frame and "
+        "up under it before the idle loop. Broken on purpose (the band let "
+        "in at any opening) the glass check fails",
+        needs=("marty", "ffmpeg")),
+    Row("vbtscale", "soak", py("tests/vbtscale.py"), 60.0,
+        "SPEC.md 125.3.2: a rendition's PICTURE SET DOWN, the owner's ask "
+        "(Hercules' 640 x 348 is heavy). On the host the picture at 50% is "
+        "320 x 174 centred in black on Hercules, CGA4 and VGA4 at 75% the "
+        "same, the bundle smaller, a 60% refused; on MartyPC's Hercules "
+        "5150 the half-size opening is lit inside its box and nothing "
+        "outside it, and the battle reaches its menu. Broken on purpose "
+        "(the picture padded at the top left) four checks fail",
+        needs=("marty", "ffmpeg")),
+    Row("vbtminimal", "soak", py("tests/vbtminimal.py"), 40.0,
+        "SPEC.md 125: THE SMALLEST BATTLE THAT BUILDS, the owner's 'a "
+        "minimal set to see the menu': one test pattern, one character, one "
+        "action, one enemy move, no music. On the host what is missing is "
+        "said by name - never 'None', a KeyError on an unchosen field (the "
+        "enemy's victory clip) - the band draws before the endings are "
+        "chosen, no music is not an error, a leftover sound whose file is "
+        "gone does not stop the build, and a sound in use refuses to be "
+        "removed; on MartyPC's CGA XT it plays to its menu with the band up "
+        "and to victory. Broken on purpose (the band demanding the endings) "
+        "it stops at the band",
+        needs=("marty", "ffmpeg")),
+    Row("vbtlevels", "soak", py("tests/vbtlevels.py"), 15.0,
+        "SPEC.md 125.3: the AUTO-LEVEL suggestion, the owner's 'a hard time "
+        "matching the music volume and the clip volumes'. On the demo every "
+        "sound in use measured as heard (the music and effects stored at "
+        "half scale, an opening's own sound at full), each suggested the "
+        "level that matches the music or its peak's limit, and - in the "
+        "built bundle's own bytes - the opening's sound 5 dB over the music "
+        "before and level with it after. Broken on purpose (an opening's "
+        "sound taken as half scale) the bundle's two part again",
+        needs=("ffmpeg",)),
+    Row("vbtlayout", "soak", py("tests/vbtlayout.py"), 40.0,
+        "SPEC.md 125.5.1: THE BAND'S LAYOUT, the owner's ask (place each "
+        "menu item and each band part; hide MP, the message). The rules "
+        "battle with the enemy's name, HP, MP, the message and the divider "
+        "moved, the limit star and HP's most hidden and a menu item placed "
+        "of its own - and again with MP and the message hidden - played to "
+        "its first menu on MartyPC's CGA XT - and on, through the next "
+        "turn's menu, a cursor moved, a sub-menu opened and closed, all "
+        "drawn IN PART (125.5: the band rebuilt only when its ground "
+        "changes): at every look THE GLASS IS the preview's, pixel for "
+        "pixel, drawn with the engine's own glyphs and its HP, MP, gauges "
+        "and items. Broken on purpose (the message at its old fixed row; "
+        "vb_menu_erase returning at once) the builds differ",
+        needs=("marty",)),
+    Row("vbtlayoutdef", "soak", py("tests/vbtlayout.py", "--arm",
+                                    "default"), 20.0,
+        "vbtlayout with NO layout: the band as it always was, the engine's "
+        "and the preview's the same pixel for pixel",
+        needs=("marty",)),
+    Row("vbtending", "soak", py("tests/vbtending.py"), 50.0,
+        "SPEC.md 125.3.1: victory JOINS a full-screen END CLIP with its own "
+        "sound that PLAYS ONCE and JOINS the title - on MartyPC's CGA XT "
+        "the band down and its rows the clip's, and the play again at the "
+        "title with no fade anywhere. Broken on purpose (the once-clip's "
+        "'then' not taken) it never reaches the title",
+        needs=("marty", "ffmpeg")),
+    Row("vbtendingfade", "soak", py("tests/vbtending.py", "--arm", "fade"),
+        50.0,
+        "vbtending: victory FADES (the canvas) to a canvas once-clip, which "
+        "FADES (the whole screen) to the title",
+        needs=("marty", "ffmpeg")),
+    Row("vbtendingloop", "soak", py("tests/vbtending.py", "--arm",
+                                    "fullloop"), 50.0,
+        "vbtending: victory FADES to a FULL-SCREEN end LOOP - the fade over "
+        "the whole screen, the band down while it goes round",
+        needs=("marty", "ffmpeg")),
+    Row("vbtendingjf", "soak", py("tests/vbtending.py", "--arm",
+                                  "joinfade", "--secs", "9", "--herc",
+                                  "--noisy"), 60.0,
+        "vbtending, the owner's ending on HERCULES: victory JOINS a "
+        "once-clip with its own sound, too big for its ring (9 s of a "
+        "picture changing all over), which plays to its end and FADES to "
+        "the title - the fade under 4 guest s. Broken: the joined sound "
+        "skipped by a loop's record 0 (static, frozen at frame 54); a fade "
+        "step a loop pass (23 s)",
+        needs=("marty", "ffmpeg")),
+    Row("vbtendingop", "soak", py("tests/vbtending.py", "--arm",
+                                  "joinfade", "--herc", "--opening",
+                                  "leave", "--delay", "1.2"), 75.0,
+        "vbtending, the owner's 'sometimes the first opening clip is "
+        "freezing' on HERCULES: the title left by Enter into a full-screen "
+        "opening with its own sound, streamed - the next opening starts "
+        "only once its head is in its ring (vb_ogo, VM_OWAIT), and the play "
+        "reaches the menu. Broken (started at once, whatever its ring "
+        "held): about half the Enter moments around 1.2 s froze the second "
+        "opening at frame 17 of 19, its ring the title's",
+        needs=("marty", "ffmpeg")),
+    Row("vbtcap", "soak", py("tests/vbtcap.py"), 15.0,
+        "SPEC.md 125.4.3: a streamed clip HELD TO THE DISK, host side - the "
+        "demo's ARI attack given two seconds changing all over (~140 KB/s, "
+        "100% Hercules): built capped, the reader's model over its records "
+        "never overdrawn and every path verified; uncapped, overdrawn by "
+        "tens of KB (the owner's cut sound). Broken (CAP_HOLD 1 MB) red",
+        needs=("ffmpeg",)),
+    Row("vbtpaths", "soak", py("tests/vbtpaths.py"), 2.0,
+        "SPEC.md 125.2's builder: a project's files RELATIVE to it when in "
+        "its folder or below (absolute elsewhere), the folder copied and "
+        "found, a Save As into another folder found, and another machine's "
+        "D:\\ path found beside the project by name. Broken (paths saved "
+        "as given) 1-3 red"),
+    Row("vbtcover", "soak", py("tests/vbtcover.py"), 80.0,
+        "SPEC.md 125.2: the TITLE PICTURE (header 88) in the battle's window "
+        "on the desktop - the window titled with the battle's name and sized "
+        "to the picture and its line; on the glass the bundle's own variant "
+        "for the screen's shape bit for bit (CGA 320 x 100, Hercules 360 x "
+        "174) and the line lit under it, again after a play. Broken (the "
+        "blit taken out) red"),
+    Row("vbtgame", "soak", py("tests/vbtgame.py"), 100.0,
+        "SPEC.md 125.2: a battle EMBEDDED in its own copy of the engine "
+        "(os88vbt.py game: flags bit 2, the packed image's end in the link "
+        "word, the bundle at the next 4 KB) - the file ALONE on C:, its "
+        "window titled with the battle's name, plays to its first menu on "
+        "CGA and on Hercules, read out of itself; the CGA4 game on a "
+        "Hercules says Needs CGA. Broken (vb_embfind answering none) the "
+        "play arms red"),
+    Row("vbtdoc", "soak", py("tests/vbtdoc.py"), 70.0,
+        "SPEC.md 125.2, 54.5-54.6: VBATTLE.O88 declares .VBT, so a battle "
+        "under any name double-clicked opens it and the play reads THAT "
+        "document - and this machine's own rendition beside it (MYFIGHT.VBT "
+        "on CGA, MYFIGHTH.VBT on Hercules). Broken (vb_docnames not "
+        "called) both arms red"),
+    Row("vbtownsnd", "soak", py("tests/vbtownsnd.py"), 75.0,
+        "SPEC.md 125.3: a clip with its OWN sound - the first opening after "
+        "the title's fade, an end clip victory joins - has its sound WITH "
+        "its picture: the record on the glass against the record heard "
+        "(fed, less what the card has queued) within a frame and a half. "
+        "It was booked at the frame's own time, which the ring had already "
+        "passed: heard a lead late (the owner's '~0.3-0.5 s late'). Broken "
+        "(the old booking) the picture 3-4.5 frames ahead, red"),
+    Row("vbtanchor", "soak", py("tests/vbtanchor.py"), 40.0,
+        "SPEC.md 125.3: an action whose only anchor is nearer than the "
+        "lead's frames is booked a LAP on - and its picture went in on the "
+        "first pass, its sound a lap (~1.6 s) behind (the owner's 'audio "
+        "delayed ~2 s ... 50% for bolt, 25% for the others'). MartyPC's XT: "
+        "Attack with one anchor taken at idle frames spread round the loop; "
+        "some turns take the lap, every picture enters within two frames "
+        "of its sound. Broken (the countdown out of .anchored) the lap "
+        "turns 22-23 frames out"),
+    Row("vbtreach", "soak", py("tests/vbtreach.py"), 3.0,
+        "SPEC.md 125.6's builder checks: a missing per-character HIT clip is "
+        "warned of only where the battle can go - the characters who have "
+        "the action, the ones the enemy can aim it at (a named move, a "
+        "follow-up 'same'); and the party line's fields as wide as the "
+        "party's own values, so HP's widest-possible 11 cells do not warn of "
+        "an overlap that is not there. Broken (every character reachable) 3 "
+        "red; the widths at their widest, 1 red"),
+    Row("vbtsndend", "soak", py("tests/vbtsndend.py"), 60.0,
+        "SPEC.md 125.3: the card's stream ENDED under the battle (SOUND.DRV's "
+        "watchdog made to fire) - the owner's 'no sound causes a permanent "
+        "freeze'. The stream closed and opened again on the same timeline, "
+        "the music on, and the next action (streamed, more than its ring) "
+        "played to its end. Broken (ENDED as silence, the ring's room by a "
+        "sound cursor that never moves): no card, and the action froze",
+        needs=("marty", "ffmpeg")),
+    Row("vbtram", "soak", py("tests/vbtram.py"), 200.0,
+        "SPEC.md 125.4.4, VBATTLE-RAM-PLAN R1: what a battle holds, on "
+        "MartyPC's Hercules 5150 - on a FRESH boot (the desktop's caches gone "
+        "for the play, nothing stranded, both rings over 100 KB) and on a "
+        "USED machine (Skies and Paint opened, the battle opened, the two "
+        "closed: the play posts a compaction, starts on its wake, and its "
+        "rings are the fresh boot's); back on the desktop nothing the battle "
+        "holds is pinned and, a second window's block MOVED, it plays on. Broken (no compaction door; the block "
+        "from the bottom) the used rings come out short / the caches stay",
+        needs=("marty",)),
+    Row("vbtmenu", "soak", py("tests/vbtmenu.py"), 60.0,
+        "VBATTLE-RAM-PLAN R3: the menu reads nothing it cannot use and "
+        "nothing a key waits on - the rules battle, ARI's menu: Limit (no "
+        "gauge yet) wants no clip, Bolt wants its own; a dozen cursor moves "
+        "each taken in under 0.3 guest s. Broken (no cost check) Limit's "
+        "clip is wanted",
+        needs=("marty",)),
+    Row("vbtsound", "soak", py("tests/vbtsound.py"), 60.0,
+        "SPEC.md 125.5: the music under the band, the owner's 'when the "
+        "menus are drawing the sound shuts off' on Hercules. MartyPC's 5150 "
+        "with a Hercules and an SB, the demo's music STREAMING, six turns "
+        "of menus and enemy moves: the music never runs dry and every band "
+        "rebuild ends with over a second of it in the ring (the ring topped "
+        "up first, and fed while the band is drawn). Broken on purpose (no "
+        "top-up) it ran dry 23 times, the ring empty as a rebuild ended",
+        needs=("marty",)),
+    Row("vbtguiwin", "soak", py("tests/vbtguiwin.py"), 30.0,
+        "The Video Battle builder's WINDOW under Xvfb, its event pump "
+        "driven: a NEW project's first video dropped on the Openings tab, "
+        "the save answered, is read and becomes opening 1, the next two an "
+        "opening and a clip, nothing raised in a Tk callback; the save "
+        "CANCELLED leaves nothing queued and the next drop still works. The "
+        "owner's report (2026-11-04): every job built its arguments from "
+        "the project's path before run() saved, so a never-saved project's "
+        "first job got None, Popen raised inside the pump and the window "
+        "answered nothing after. Broken on purpose (the path not taken "
+        "after the save) the first case fails",
+        needs=("tk", "ffmpeg")),
+    Row("vbtbundle", "soak", py("tests/vbtbundle.py"), 16.0,
+        "`make vbtbundle`: the Video Battle builder's zip for someone with no "
+        "os8088 tree. Unpacked in a temporary folder and run there with "
+        "python -I, demo-project, build and verify must work and give the "
+        "tree's own demo bundle byte for byte, the window's module must "
+        "import, every tool the builder runs as a process must be in it, "
+        "VBATTLE.O88 must be the one built, `disk` must make a hard disk "
+        "carrying what it boots from out of the zip's boot/, and the zip must "
+        "be the same bytes made twice. A module the closure missed fails here as an "
+        "ImportError, where the owner would otherwise meet it",
+        needs=("pil",), wants=("build/os8088-battle-builder.zip",)),
+    Row("vbtgui", "soak", py("tests/vbtguitest.py"), 38.0,
+        "VBATTLE-BUILDER-PLAN wave 2: the builder's WINDOW without a window "
+        "(tools/os88vbtgui.py). The palette's parts must be cga4_colours' own "
+        "over all 96 CGA4 bytes (a swatch showing one set while the encode "
+        "used another), the band the rest of 200 rows, the music's loop "
+        "found at a planted passage's length to the sample and honoured by "
+        "the build (the music region IS the loop, the join from its start), "
+        "a vbtana job answering as the call does, and Cancel killing an "
+        "encode and every worker it started with no cache left that loads "
+        "short. Wave 3's Clips tab: what Listen plays must be what the "
+        "build bakes, frame for frame, and the filmstrip's entry bytes the "
+        "bundle's own; a range carries its cues and own soundtrack; an "
+        "ending has no exit. Wave 5: the music's join found where a planted "
+        "passage ends (and nothing for openings that end in silence), the "
+        "openings' sound each one's frames long, the engine's memory "
+        "arithmetic equal to the rings MEASURED on MartyPC's XT (144 KB "
+        "beside a 116 KB claim), a clip over a floppy's disk marked, and "
+        "a 1.44 MB disk of the battle made and verified. Broken on purpose (Cancel killing the parent "
+        "alone, the set bits swapped, cues placed a frame late) it FAILS "
+        "naming it. SKIPS the cancel without ffmpeg",
+        needs=("pil", "mtools")),
     Row("videnc", "soak", py("tests/videnc.py"), 1300.0,
         "SPEC.md 98.2.1: the encoder front end and its budgets, host-side. "
         "ffmpeg makes a 16:9 source with a still tail and tools/os88venc.py "

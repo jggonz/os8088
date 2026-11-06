@@ -14074,6 +14074,21 @@ $(BUILD)/os8088-encoder.zip: $(BUILD)/video.o88 $(VENCBOOT) tools/os88vbundle.py
 	$(wildcard docs/encoder-guide/GUIDE.HTML docs/encoder-guide/guide/*)
 	python3 tools/os88vbundle.py $@ --player $(BUILD)/video.o88 --boot $(BUILD)
 
+# THE VIDEO BATTLE BUILDER FOR PEOPLE WITH NO os8088 TREE
+# (docs/plans/completed/VBATTLE-BUILDER-PLAN.md): the builder's window, every tools/
+# module it imports or runs (tools/os88vbtbundle.py computes the list with
+# os88vbundle's closure), VBATTLE.O88 and a README, in one folder of one
+# deterministic zip. On demand. `soak -k vbtbundle` unpacks it outside the
+# tree and builds the demo battle there.
+#> [Applications] vbtbundle :: zip the Video Battle builder for someone with no os8088 tree
+.PHONY: vbtbundle
+vbtbundle: $(BUILD)/os8088-battle-builder.zip
+$(BUILD)/os8088-battle-builder.zip: $(BUILD)/vbattle.o88 $(VENCBOOT) \
+	tools/os88vbtbundle.py tools/os88vbundle.py \
+	$(wildcard tools/os88*.py tools/vbt*.py)
+	python3 tools/os88vbtbundle.py $@ --engine $(BUILD)/vbattle.o88 \
+	    --boot $(BUILD)
+
 # ...and the one that shows a FACE rather than timing one: it draws the same
 # sentence through the kernel, through face 0, and through both of the
 # library's compose loops, so a screendump is the whole assertion (SPEC.md 6.5).
@@ -20148,6 +20163,55 @@ $(BUILD)/wireflet120.img: $(BUILD)/wireflet.o88 apps/wirefleet/README.TXT tools/
 	python3 tools/os88disk.py --size 1200 -o $@ $< apps/wirefleet/README.TXT
 $(BUILD)/wireflet360.img: $(BUILD)/wireflet.o88 apps/wirefleet/README.TXT tools/os88disk.py
 	python3 tools/os88disk.py --size 360 -o $@ $< apps/wirefleet/README.TXT
+
+# VIDEO BATTLE (SPEC.md 125): a battle played as joined video clips. The
+# package, the original demo battle's bundle (tools/os88vbt.py demo, drawn
+# and scored by tools/vbtscene.py - nothing captured), and an on-demand disk
+# carrying both, in all four geometries.
+.PHONY: vbattle vbattledisk
+#> [Applications] vbattle :: Video Battle's package and its demo bundle (SPEC.md 125)
+vbattle: $(BUILD)/vbattle.o88 $(BUILD)/BATTLE.VBT
+$(BUILD)/vbattle.bin: apps/vbattle/vbattle.asm apps/vbattle/vbrules.inc apps/vbattle/vbgame.inc \
+                      apps/vbattle/vbloop.inc apps/vbattle/vbhold.inc apps/vbattle/vbinp.inc \
+                      apps/vbattle/vbband.inc apps/video/vdec.inc apps/os88la.inc apps/os88ub.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -l $(BUILD)/vbattle.lst -o $@ $<
+$(BUILD)/vbattle.o88: $(BUILD)/vbattle.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $< -o $@
+$(BUILD)/BATTLE.VBT: tools/os88vbt.py tools/vbtscene.py tools/os88vid.py | $(BUILD)
+	python3 tools/os88vbt.py demo $@
+# ...and the FLOPPY's (the 360KB and 720KB disks): the same battle less its
+# Limit, a clip far bigger than memory that only a hard disk streams, and
+# over two bars of the music (3.2 s, short enough to be RESIDENT, 125.4):
+# a floppy cannot feed the music and the clips at once. A hard disk is the
+# target; the 1.2MB and 1.44MB disks carry the whole battle
+$(BUILD)/vbshort/BATTLE.VBT: tools/os88vbt.py tools/vbtscene.py tools/os88vid.py | $(BUILD)
+	@mkdir -p $(BUILD)/vbshort
+	python3 tools/os88vbt.py demo $@ --floppy
+# ...and the demo for a VGA (mode 0Dh) and for a Hercules (VBATTLE-MEMORY-PLAN
+# 9), each a 1.44 MB disk of its own: the engine takes BATTLEV.VBT or
+# BATTLEH.VBT where it finds one for its adapter
+$(BUILD)/vbvga/BATTLEV.VBT: tools/os88vbt.py tools/vbtscene.py tools/vbtana.py tools/os88vid.py | $(BUILD)
+	@mkdir -p $(BUILD)/vbvga
+	python3 tools/os88vbt.py demo $@ --rendition vga4
+$(BUILD)/vbherc/BATTLEH.VBT: tools/os88vbt.py tools/vbtscene.py tools/vbtana.py tools/os88vid.py | $(BUILD)
+	@mkdir -p $(BUILD)/vbherc
+	python3 tools/os88vbt.py demo $@ --rendition herc
+$(BUILD)/vbattlev.img: $(BUILD)/vbattle.o88 $(BUILD)/vbvga/BATTLEV.VBT tools/os88disk.py
+	python3 tools/os88disk.py --size 1440 -o $@ $(BUILD)/vbattle.o88 $(BUILD)/vbvga/BATTLEV.VBT
+$(BUILD)/vbattleh.img: $(BUILD)/vbattle.o88 $(BUILD)/vbherc/BATTLEH.VBT tools/os88disk.py
+	python3 tools/os88disk.py --size 1440 -o $@ $(BUILD)/vbattle.o88 $(BUILD)/vbherc/BATTLEH.VBT
+#> [Applications] vbattledisk :: Video Battle's floppy, package and demo battle, in all four geometries, and its VGA and Hercules demos
+vbattledisk: $(BUILD)/vbattle.img $(BUILD)/vbattle720.img $(BUILD)/vbattle120.img $(BUILD)/vbattle360.img \
+	$(BUILD)/vbattlev.img $(BUILD)/vbattleh.img
+VBATTLEFILES = $(BUILD)/vbattle.o88 $(BUILD)/BATTLE.VBT
+$(BUILD)/vbattle.img: $(VBATTLEFILES) tools/os88disk.py
+	python3 tools/os88disk.py --size 1440 -o $@ $(VBATTLEFILES)
+$(BUILD)/vbattle720.img: $(BUILD)/vbattle.o88 $(BUILD)/vbshort/BATTLE.VBT tools/os88disk.py
+	python3 tools/os88disk.py --size 720 -o $@ $(BUILD)/vbattle.o88 $(BUILD)/vbshort/BATTLE.VBT
+$(BUILD)/vbattle120.img: $(VBATTLEFILES) tools/os88disk.py
+	python3 tools/os88disk.py --size 1200 -o $@ $(VBATTLEFILES)
+$(BUILD)/vbattle360.img: $(BUILD)/vbattle.o88 $(BUILD)/vbshort/BATTLE.VBT tools/os88disk.py
+	python3 tools/os88disk.py --size 360 -o $@ $(BUILD)/vbattle.o88 $(BUILD)/vbshort/BATTLE.VBT
 
 .PHONY: wireball wireballdisk wireballtest wireball-pair
 wireball-pair:

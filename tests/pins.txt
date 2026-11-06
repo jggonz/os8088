@@ -342,6 +342,22 @@ C apps/video/video.asm vp_xsclm          # one chunk's staging into the XMS hold
 D apps/video/video.asm vp_aseg           # the card's ring, page-safe: the Sound
                                          # Blaster DMAs out of it for one play,
                                          # claimed at vp_sndprep, freed at its end
+C apps/vbattle/vbattle.asm @vb_rclaim    # Video Battle's packing probe: the whole
+                                         # largest run claimed and given back at
+                                         # once, inside vb_rclaim's call, so the
+                                         # kernel sheds its caches and packs what
+                                         # moves before the rings are sized
+                                         # (SPEC.md 125.4.4)
+C apps/vbattle/vbattle.asm vb_rclm       # the two clip rings, claimed at the top of
+                                         # the play's fsx bracket (vb_main) and
+                                         # freed at its end (vb_rfree): the
+                                         # reader's file calls hold them, and the
+                                         # play draws out of them every frame
+D apps/vbattle/vbattle.asm vb_ring       # the card's ring, page-safe: the Sound
+                                         # Blaster DMAs out of it while a play's
+                                         # stream is open; claimed for each play
+                                         # (vb_load), freed when the bracket
+                                         # returns (vb_between)
 D apps/1942/pcm.inc n_pcmseg             # the 13KB PCM rings, page-safe, inside the
                                          # fsx bracket - the card DMAs out of them
 D apps/midirack/mrout.inc mrb_seg        # the external ring, page-safe: claimed at
