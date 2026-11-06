@@ -20609,11 +20609,11 @@ $(BUILD)/flc/PDENG.MOD: apps/pagedesk/pdeng.asm $(BUILD)/flc/pdeng.gen.asm apps/
 # the lead's integration tree.
 PDW_C    := apps/pagedesk/pdwrt.c apps/pagedesk/pdwio.c apps/pagedesk/pdwser.c apps/pagedesk/pdwap.c \
             apps/pagedesk/pdwscan.c apps/pagedesk/pdwsave.c \
-            apps/pagedesk/pdwpg.c apps/pagedesk/pdwgc.c   # pages: 20.11
+            apps/pagedesk/pdwpg.c apps/pagedesk/pdwgc.c apps/pagedesk/pdwin.c   # pages: 20.11, insert: 20.16
 PDW_H    := apps/pagedesk/pdw.h apps/pagedesk/pdwwid.h apps/pagedesk/pdabi.h apps/pagedesk/pdmath.h apps/pagedesk/pdwmap.h
 PDW_SDK  ?=
 PDW_OUT  := $(BUILD)/pdw
-PDW_CAP  := 47104   # D18: PDWRT <= 46 KiB (target 44)
+PDW_CAP  := 49152   # D24: PDWRT <= 48 KiB (D18's 46, raised for Insert)
 .PHONY: pdwrt pdwrt-host
 $(BUILD)/pdwrt.raw.asm: $(PDW_C) $(PDW_H) $(CC_RUNTIME) | $(BUILD) cc-toolchain
 	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S \

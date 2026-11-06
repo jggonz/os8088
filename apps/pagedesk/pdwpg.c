@@ -332,6 +332,11 @@ static pdw pm_prep(void)
     tclr(T_PMIN, 192);
     for (i = 0; i < n; i++) {
         e = pd_fpeekw(g_sv.pages_seg, (pdw)(2 * i)); k = PDM_KIND(e); idx = PDM_IDX(e);
+        if (k == PDM_FOREIGN) {                  /* Insert (20.16): a page of another file */
+            if (((idx >> 10) & 3u) >= PDM_NSLOT) { g_sv.err_detail = 14; return PDE_RANGE; }
+            ident = 0; fg_has = 1; fg_pages++;
+            continue;
+        }
         if (k != PDM_SRC && k != PDM_BLANK) { g_sv.err_detail = 14; return PDE_RANGE; }
         if (idx >= PD_MAXPAGES) return PDE_RANGE;
         if (k != PDM_SRC || PDM_ROT(e) || idx != i) ident = 0;
@@ -387,6 +392,7 @@ static pdw pm_step(void)
     static pdw e, k, idx, rot, r;
     if (pm_i >= pm_n) { sv_phase = PH_CAT; return PDE_OK; }
     e = pd_fpeekw(g_sv.pages_seg, (pdw)(2 * pm_i)); k = PDM_KIND(e); idx = PDM_IDX(e); rot = PDM_ROT(e);
+    if (k == PDM_FOREIGN) { pm_i++; return PDE_OK; }       /* written by its window (pdwin.c) */
     r = eng_pageinfo(idx); if (r) return r;
     if (k == PDM_BLANK) pm_blank_obj(tg(T_PMNUM, pm_i), pm_root, rot);
     else if (!bm_get(T_PMDONE, idx)) {                                   /* the original */

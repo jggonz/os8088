@@ -82,6 +82,8 @@ pdw pdw_io_rename(const char *from, const char *to)
     return rename(from, to) ? PDE_IO : PDE_OK;
 }
 void pdw_cross(pdw clus, pdw vol) { (void)clus; h_cross = vol != 0; }
+char  pdw_host_fdir[4][128];    /* Insert: the folder of foreign slot clus (clus 1-3); empty = the current one */
+void pdw_src_dir(pdw clus, pdw vol1) { (void)vol1; if (clus < 4 && pdw_host_fdir[clus][0]) { strcpy(pdw_host_srcdir, pdw_host_fdir[clus]); h_cross = 1; } }
 void pdw_in_src(void) { if (h_cross && pdw_host_srcdir[0]) { if (chdir(pdw_host_srcdir)) pdw_host_swaps += 1000; pdw_host_swaps++; } }
 void pdw_in_tgt(void) { if (h_cross && pdw_host_tgtdir[0]) { if (chdir(pdw_host_tgtdir)) pdw_host_swaps += 1000; pdw_host_swaps++; } }
 static char h_srcname[14];
@@ -141,6 +143,11 @@ void pdw_cross(pdw clus, pdw vol)       /* 20.11.3: src_vol is the volume + 1, 0
 }
 void pdw_in_src(void) { if (g_cross) os88_file_goto_q_mark(g_scl, (int)g_svol); }
 void pdw_in_tgt(void) { if (g_cross) os88_file_goto_q_mark(g_tpl.clus, g_tpl.vol); }
+void pdw_src_dir(pdw clus, pdw vol1)    /* 20.16: we stand in the target's folder between calls */
+{
+    if (!g_cross) os88_file_here(&g_tpl);
+    g_scl = clus; g_svol = (pdw)(vol1 - 1); g_cross = 1;
+}
 pdw pdw_io_clu(void)                    /* 0 = unknown; 0xFFFF = past 16 KiB */
 {
     int s = os88_disk_cluster_sectors();

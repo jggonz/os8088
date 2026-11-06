@@ -39,24 +39,36 @@ static void gc_mark(pdw n)
     if (gc_get(gc_scan, w) & b) return;
     v = gc_get(gc_seen, w);
     if (v & b) return;
-    if (gc_cnt >= (pdw)(g_tmax - 8)) { gc_over = 1; return; }
+    if (gc_cnt >= gc_cap) { gc_over = 1; return; }
     pd_fpokew(g_wseg, (pdw)(gc_seen + 2u * w), (pdw)(v | b));
     gc_cnt++; gc_dirty = 1;
 }
-static pdw gc_newnum(pdw n)             /* 4 + the rank among seen objects; 0 = not copied */
+static pdw gc_root(pdw n);
+static pdw gc_newnum(pdw n)             /* the window's first number + the rank among seen objects; 0 = not copied */
 {
     pdw w = (pdw)(n >> 4), b = (pdw)(1u << (n & 15)), k, c;
-    if (!n || n >= g_tr.size || !(gc_get(gc_seen, w) & b)) return 0;
+    if (!n || n >= g_tr.size) return 0;
+    if (!(gc_get(gc_seen, w) & b)) {    /* Insert: a chosen page is not in the set, it has its number already */
+        if (!gc_ins) return 0;
+        c = gc_root(n);
+        return c ? tg(T_PMNUM, (pdw)(c - 1)) : 0;
+    }
     c = gc_get(gc_pref, (pdw)(w >> 3));
     for (k = (pdw)((w >> 3) << 3); k < w; k++) c = (pdw)(c + gc_popc(gc_get(gc_seen, k)));
     c = (pdw)(c + gc_popc((pdw)(gc_get(gc_seen, w) & (pdw)(b - 1))));
-    return (pdw)(4 + c);
+    return (pdw)(gc_b0 + c);
 }
 static pdw gc_root(pdw n)               /* the map entry (+1) whose page object is n */
 {
     pdw i;
-    for (i = 0; i < pm_n; i++) if (tg(T_PMNUM, i) == n) return (pdw)(i + 1);
+    for (i = 0; i < pm_n; i++) if (tg(gc_ins ? T_FSRC : T_PMNUM, i) == n) return (pdw)(i + 1);
     return 0;
+}
+static pdw gc_pg(pdw e) { return gc_ins ? (pdw)(PDM_IDX(e) & 1023u) : PDM_IDX(e); }
+static pdw gc_mine(pdw e)
+{
+    if (gc_ins) return (pdw)(PDM_KIND(e) == PDM_FOREIGN && ((PDM_IDX(e) >> 10) & 3u) == gc_slot);
+    return (pdw)(PDM_KIND(e) == PDM_SRC);
 }
 static pdw gc_isdict(pdw ds) { return (pdw)(ds + 1 < sc_n && g_pg[ds] == '<' && g_pg[ds + 1] == '<'); }
 
@@ -95,6 +107,11 @@ static pdw gc_disc(void)
             if (gc_isdict(ds)) {
                 f = dict_find(ds, "Type");
                 if (f == SC_BAD) return PDE_SYNTAX;
+                if (gc_ins && !root) {          /* 20.16.3: no form field, no script comes along */
+                    if (dict_find(ds, "JS") == 1) return sv_bad(18);
+                    if (dict_find(ds, "Subtype") == 1 && sc_eqname((pdw)(sc_vs + 1), sc_ve, "Widget")) return sv_bad(18);
+                    f = dict_find(ds, "Type");
+                }
                 if (f == 1 && !root && (sc_eqname((pdw)(sc_vs + 1), sc_ve, "Page") || sc_eqname((pdw)(sc_vs + 1), sc_ve, "Pages")
                                         || sc_eqname((pdw)(sc_vs + 1), sc_ve, "Catalog"))) {
                     gc_exclude(gc_w, b); return PDE_OK;
@@ -104,7 +121,7 @@ static pdw gc_disc(void)
             if (de == SC_BAD) return sv_bad(14);                           /* a dictionary over the buffer */
             rs_mode = 1;
             if (root) {
-                r = eng_pageinfo(PDM_IDX(pd_fpeekw(g_sv.pages_seg, (pdw)(2 * (root - 1))))); if (r) return r;
+                r = eng_pageinfo(gc_pg(pd_fpeekw(g_sv.pages_seg, (pdw)(2 * (root - 1))))); if (r) return r;
                 r = pg_fetch(n, g_pi.gen, 1, 0); if (r) return r;
                 ds = sc_body(); de = sc_val(ds, 1);
                 rs_walk(ds, de, 0);
@@ -115,7 +132,12 @@ static pdw gc_disc(void)
         }
         gc_w++;
     }
-    /* the fixpoint: the prefix counts, the total */
+    /* the fixpoint: the prefix counts, the total. Insert: the chosen pages leave the set first,
+       so the rank counts the copied objects alone (their numbers were given up front) */
+    if (gc_ins) for (w = 0; w < pm_n; w++) {
+        j = tg(T_FSRC, w);
+        if (j) { k = (pdw)(j >> 4); pd_fpokew(g_wseg, (pdw)(gc_seen + 2u * k), (pdw)(gc_get(gc_seen, k) & (pdw)~(1u << (j & 15)))); }
+    }
     c = 0;
     for (w = 0; w < gc_nw; w++) {
         if (!(w & 7)) pd_fpokew(g_wseg, (pdw)(gc_pref + 2u * (w >> 3)), c);

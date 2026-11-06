@@ -13,7 +13,8 @@
 
 enum { PH_IDLE, PH_COPY, PH_PAGES, PH_CAT, PH_ANNOTS, PH_HEAD, PH_NPAGES, PH_XREF, PH_TRAILER,
        PH_CLOSE, PH_VERIFY, PH_RENAME, PH_DONE,
-       PH_PGOPS, PH_TREE, PH_XROOT, PH_XDISC, PH_XHEAD, PH_XCOPY, PH_XBLANK, PH_VFY };
+       PH_PGOPS, PH_TREE, PH_XROOT, PH_XDISC, PH_XHEAD, PH_XCOPY, PH_XBLANK, PH_VFY,
+       PH_FOPEN, PH_FROOTS };
 
 static pdw sv_active, sv_fresh, sv_phase, sv_i, sv_xi, sv_cnt, sv_base, sv_next, sv_v14, sv_v15;
 static pdw sv_catver, sv_xbad, sv_copyw, sv_sub, sv_coff, sv_flushed;
@@ -50,6 +51,8 @@ static pdw pm_on, pm_n, pm_i, pm_flat, pm_root, pm_rootgen;
 #define T_PMIN  2192                    /* three 64-word bitmaps (1024 pages) */
 #define T_PMDONE 2256
 #define T_PMED  2320
+#define T_FSRC  T_EID                   /* Insert (20.16): the chosen foreign pages' object numbers in THEIR file, by map entry -
+                                           the edit tables are dead once the annotations are written */
 static pdw tg(pdw t, pdw i) { return pd_fpeekw(g_wseg, (pdw)(g_tail + 2u * (pdw)(t + i))); }
 static void ts(pdw t, pdw i, pdw v) { pd_fpokew(g_wseg, (pdw)(g_tail + 2u * (pdw)(t + i)), v); }
 static void bm_set(pdw t, pdw i) { ts(t, (pdw)(i >> 4), (pdw)(tg(t, (pdw)(i >> 4)) | (1u << (i & 15)))); }
@@ -65,6 +68,14 @@ static pdw gc_nw;
 static pdw gc_seen, gc_scan, gc_pref;   /* far offsets in the writer buffer  */
 static pdw gc_w, gc_dirty, gc_cnt, gc_over, gc_total, gc_n, gc_sub, gc_k, gc_cur, gc_blk, gc_nb;
 static struct pd_u32 gc_pos, gc_zero;
+/* Insert (pdwin.c, 20.16) */
+static pdw gc_ins, gc_slot, gc_b0, gc_cap;                   /* a foreign window; its slot; its first number; the entry budget */
+static pdw fg_has, fg_next, fg_stage, fg_closed, fg_cur, fg_tmax0, fg_pages;
+static struct pdxb_trailer sv_srctr;                          /* the source's trailer, while PDENG holds a foreign file */
+static pdw gc_pg(pdw e);
+static pdw gc_mine(pdw e);
+static pdw fw_open(void);
+static pdw fw_roots(void);
 
 /* pdwpg.c / pdwgc.c, included after this file */
 static void gc_mark(pdw n);
@@ -474,6 +485,7 @@ static void job_clear(void)
 }
 static pdw job_fail(pdw err)
 {
+    if (gc_ins && !g_sv.err_detail) g_sv.err_detail = (pdw)(20 + gc_slot);       /* Insert: which file */
     if (g_created || sv_active) pdw_io_delete(g_tmp);
     job_clear();
     return err;
@@ -498,6 +510,7 @@ static pdw job_begin(pdw kind)
     if (kind != 1 && !pdw_engvec[1]) return PDE_NOMEM;  /* no PDENG to read the source  */
     sv_xbad = 0; sv_catver = 0; sv_xi = 0; sv_i = 0; sv_xstart = 0; sv_copyw = 0; sv_sub = 0; sv_coff = 0; g_io = 0; an_sub = AS_START; sv_flushed = 0; sv_vstage = 0;
     sv_nochange = 0; sv_vf = 0; sv_wsize = 0; pm_i = 0;
+    gc_ins = 0; gc_b0 = 4; fg_has = 0; fg_next = 0; fg_stage = 0; fg_closed = 0; fg_pages = 0;
     pdm_u32_set(&sv_total, 0, 0);
     if (kind == 2) {                                    /* Extract (13.8) */
         sv_npages = g_sv.pages_count; sv_pgseg = g_sv.pages_seg;
@@ -516,6 +529,7 @@ static pdw job_begin(pdw kind)
         g_tb = (pdw)(gc_pref + gc_nw / 4);
         if ((pdw)(g_tail) < (pdw)(g_tb + 64 * PDW_TENT)) { g_sv.err_detail = (pdw)((pdw)(g_tb + TB_BYTES) / 1024 + 5); return PDE_NOMEM; }
         g_tmax = (pdw)((pdw)(g_tail - g_tb) / PDW_TENT);
+        gc_cap = (pdw)(g_tmax - 8);
         pd_ffill(g_wseg, g_outcap, 0, (pdw)(g_tb - g_outcap));
         gc_w = gc_dirty = gc_cnt = gc_over = gc_total = gc_sub = 0; gc_n = 0; gc_k = 4; gc_blk = 0; gc_nb = nb;
         tclr(T_PMDONE, 64);
@@ -559,7 +573,8 @@ static pdw job_begin(pdw kind)
         /* the estimate OSAPI_FS_OP is opened with: the source up to its last
            xref, plus a kilobyte and ~600 bytes an edit */
         {   static struct pd_u32 per; u32cp(&sv_total, &g_tr.startxref);
-            pdm_u32_mul16(&per, sv_cnt, 600); pdm_u32_add(&sv_total, &sv_total, &per); pdm_u32_add16(&sv_total, 1024); }
+            pdm_u32_mul16(&per, sv_cnt, 600); pdm_u32_add(&sv_total, &sv_total, &per); pdm_u32_add16(&sv_total, 1024);
+          pdm_u32_mul16(&per, fg_pages, 8192); pdm_u32_add(&sv_total, &sv_total, &per); }     /* Insert: a page of another file */
         if (sv_nochange) { u32cp(&sv_total, &sv_srcsize); u32cp(&sv_xrefpos, &g_tr.startxref); sv_wsize = g_tr.size; }
     }
     sv_active = 1;
@@ -741,7 +756,7 @@ static pdw job_slice(void)
             break;
         case PH_TREE:
             r = pm_tree(); if (r) return r;
-            sv_phase = PH_XREF; sv_xi = 0;
+            sv_phase = fg_has ? PH_FOPEN : PH_XREF; sv_xi = 0;     /* Insert: the foreign windows follow (20.16.3) */
             break;
         case PH_HEAD:
             nd_head(); sv_phase = PH_NPAGES; sv_i = 0;
@@ -758,20 +773,25 @@ static pdw job_slice(void)
         case PH_XROOT:                           /* Extract: the chosen pages are the roots */
             if (sv_i >= sv_npages) { gc_dirty = 0; gc_w = 0; sv_phase = PH_XDISC; break; }
             e = pd_fpeekw(sv_pgseg, (pdw)(2 * sv_i));
-            if (PDM_KIND(e) == PDM_SRC) {
-                r = eng_pageinfo(PDM_IDX(e)); if (r) return r;
-                if (bm_get(T_PMDONE, PDM_IDX(e))) { g_sv.err_detail = 15; return PDE_RANGE; }   /* a page twice */
-                bm_set(T_PMDONE, PDM_IDX(e));
+            if (gc_mine(e)) {
+                r = eng_pageinfo(gc_pg(e)); if (r) return r;
+                if (bm_get(T_PMDONE, gc_pg(e))) { g_sv.err_detail = 15; return PDE_RANGE; }   /* a page twice */
+                bm_set(T_PMDONE, gc_pg(e));
                 if (g_pi.objnum >= g_tr.size) return PDE_XREF;                     /* not in the xref */
-                ts(T_PMNUM, sv_i, g_pi.objnum); gc_mark(g_pi.objnum);
+                ts(gc_ins ? T_FSRC : T_PMNUM, sv_i, g_pi.objnum); gc_mark(g_pi.objnum);
             }
             sv_i++;
             break;
         case PH_XDISC:
             r = gc_disc();
             if (r == GC_DONE) {
-                if ((pdw)(3 + gc_total + gc_nb) > g_tmax) return sv_bad(16);
-                sv_phase = PH_XHEAD;
+                if (gc_ins) {
+                    if ((pdw)(g_tn + gc_total + gc_nb) > g_tmax) return sv_bad(16);
+                    gc_n = 1; sv_phase = PH_XCOPY;
+                } else {
+                    if ((pdw)(3 + gc_total + gc_nb) > g_tmax) return sv_bad(16);
+                    sv_phase = PH_XHEAD;
+                }
             } else if (r) return r;
             break;
         case PH_XHEAD:
@@ -780,8 +800,8 @@ static pdw job_slice(void)
         case PH_XCOPY:
             r = gc_copy();
             if (r == GC_DONE) {
-                if (gc_k != (pdw)(4 + gc_total)) return PDE_SYNTAX;          /* the ranks and the copy disagree */
-                sv_phase = PH_XBLANK; sv_i = 0;
+                if (gc_k != (pdw)(gc_b0 + gc_total)) return PDE_SYNTAX;      /* the ranks and the copy disagree */
+                sv_phase = gc_ins ? PH_FROOTS : PH_XBLANK; sv_i = 0;
             } else if (r) return r;
             break;
         case PH_XBLANK:
@@ -792,6 +812,12 @@ static pdw job_slice(void)
                 pm_blank_obj((pdw)(gc_blank0() + gc_blk++), 2, PDM_ROT(e));
             }
             sv_i++;
+            break;
+        case PH_FOPEN:
+            r = fw_open(); if (r) return r;
+            break;
+        case PH_FROOTS:
+            r = fw_roots(); if (r) return r;
             break;
         case PH_XREF:
             if (!sv_xstart) {                    /* "xref", the first subsection */
