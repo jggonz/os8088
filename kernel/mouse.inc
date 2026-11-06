@@ -4545,34 +4545,59 @@ section .vga                    ; COLD-PLAN 2): VIDEXTM above is the door, and
 %endif
 
 ; -----------------------------------------------------------------------------
-; cur_restoreu - write cur_save back under (cur_drawn_x, cur_drawn_y).
-;                VRAM-direct (SPEC.md 32) - the cursor lives on the screen
-;                only, and this runs from the ISR
-;                where the bb dispatch must not apply.
-; clobbers: ax, bx, cx, dx, si
+; cur_restoreu - write cur_save back under the cell cur_geom banked, four
+;                planes. VRAM-direct (SPEC.md 32) - the cursor lives on the
+;                screen only, and this runs from the ISR where the bb dispatch
+;                must not apply.
+;
+; THE CELL'S OWN WALK, not vga_restore_vram's (kernel hot-paths pass 1). That
+; one is a whole rect primitive - gfx_rect_setup's generic clip, a row loop of
+; `rep movsb` per plane, the sub-rect and one-plane arms - and it cost 7,600
+; cycles a restore on the XT's VGA, a third of every planar mouse packet. The
+; cell is already clipped: [cur_rows] and the byte span (cur_vspan) are
+; exactly the rect gfx_rect_setup derived from the same cell, and the buffer
+; layout is the one vga_save_vram wrote - plane-major, the span's bytes a row
+; - so the bytes on the glass are identical. Neither [vga_pn] nor [gfx_sub_*]
+; is read or written here: the arrow is always four planes (SPEC.md 11.96.17)
+; and never a sub-rect, which is what cur_rect's banking of the pair existed
+; to force on the shared routine.
+; in:       [cur_off], [cur_rows], [cur_cellx], [cur_b1ok] - the drawn cell's,
+;           as cur_geom banked them; the GC/Sequencer in their default state
+; clobbers: ax, bx, cx, dx, si, di, bp (ES preserved)
 ; -----------------------------------------------------------------------------
 cur_restoreu:
+    mov ch, [cur_rows]
+    or ch, ch
+    jz .out                     ; wholly off the bottom: nothing was saved
     push es
-    push word [vga_pn]          ; **AND THE POINTER IS ALWAYS FOUR PLANES**
-    call cur_rect               ; (SPEC.md 11.96.17, 32 - cur_rect disarms the
-                                ; one-plane arm, see there). vga_pn/vga_pm's own
-                                ; header says an arm "cannot leak onto the
-                                ; pointer, which reaches vga_restore_vram
-                                ; DIRECTLY out of IRQ4, below the two routines
-                                ; that disarm" - and gfx_save/gfx_restore call
-                                ; cur_unlazy FIRST, above their own disarm, so
-                                ; a window that promised OSAPI_SAVEU_1BPP hid
-                                ; the arrow with the one-plane arm still up.
-                                ; A restore seeded 0Fh does ONE pass with the
-                                ; Map Mask on all four planes, so plane 0 of a
-                                ; four-plane cur_save is broadcast into all of
-                                ; them and the cell under the arrow comes back
-                                ; black or white. Two words, at the one point
-                                ; both cursor paths pass through; the mono
-                                ; branch is inside vga_restore_vram, below this
-    call vga_restore_vram
-    pop word [vga_pn]           ; ...and the caller's arm is its own again
+    call cur_vspan              ; BL = second byte?, BP = the row step
+    mov si, cur_save
+    mov di, [cur_off]
+    VSEG ax, VGA_SEG
+    mov es, ax                  ; movsb dest = VRAM
+    mov dx, VGA_SEQ
+    mov ax, 0x0102              ; SEQ2: Map Mask = plane 0
+.plane:
+    out dx, ax
+    push di
+    mov cl, ch
+.row:
+    movsb
+    or bl, bl
+    jz .one
+    movsb
+.one:
+    add di, bp
+    dec cl
+    jnz .row
+    pop di
+    shl ah, 1                   ; next plane bit
+    cmp ah, 0x10
+    jb .plane
+    mov ax, 0x0F02              ; SEQ2: Map Mask back to all planes
+    out dx, ax
     pop es
+.out:
     ret
 section .text
 %endif                          ; GFX_VGA: cur_get_1's dispatch and the restore
@@ -4616,50 +4641,73 @@ cur_get_mono:
 section .vga                    ; cur_put_1 and cur_move_1 reach them through
 %endif                          ; VIDEXTM's planar arm alone)
 ; -----------------------------------------------------------------------------
-; cur_saveu - copy the cell under (cur_drawn_x, cur_drawn_y) into cur_save via
-;             vga_save_vram. vga_save_vram clips the rect at the screen edges
-;             the same way vga_restore_vram does, so partial cells stay
-;             coherent - which is the whole reason these two share cur_rect.
-; clobbers: ax, bx, cx, dx, di
+; cur_saveu - copy the cell cur_geom just banked into cur_save, four planes
+;             through Read Map Select: cur_restoreu's twin, and its own walk
+;             for the same reason (vga_save_vram's rect machinery was 5,800
+;             cycles a save on the XT's VGA). The buffer is the layout
+;             vga_save_vram wrote and cur_restoreu reads.
+; clobbers: ax, bx, cx, dx, si, di, bp (ES preserved)
 ; -----------------------------------------------------------------------------
 cur_saveu:
+    mov ch, [cur_rows]
+    or ch, ch
+    jz .out
     push es
-    push word [vga_pn]          ; four planes, cur_restoreu's reason exactly -
-    call cur_rect               ; and it has to be BOTH halves or the save and
-                                ; the restore disagree about the buffer
-    call vga_save_vram
-    pop word [vga_pn]
+    call cur_vspan
+    push ds
     pop es
+    mov di, cur_save            ; movsb dest = the buffer, in kernel .bss
+    mov si, [cur_off]
+    push ds
+    VSEG ax, VGA_SEG
+    mov ds, ax                  ; movsb source = VRAM
+    mov dx, VGA_GC
+    mov ax, 0x0004              ; GC4: Read Map Select = plane 0
+.plane:
+    out dx, ax
+    push si
+    mov cl, ch
+.row:
+    movsb
+    or bl, bl
+    jz .one
+    movsb
+.one:
+    add si, bp
+    dec cl
+    jnz .row
+    pop si
+    inc ah
+    cmp ah, 4
+    jb .plane
+    mov ax, 0x0004              ; GC4 back to plane 0 (default)
+    out dx, ax
+    pop ds
+    pop es
+.out:
     ret
 
-; cur_rect - the cell the two above save and restore, as a rect. ONE place,
-; because a save and a restore that disagree about it by a byte smear the
-; cursor across the screen. CUR_GW/CUR_GH bound it, and the tables are cut to
-; the same 8x12 - there is no larger cell left to walk by accident.
-; out: AX/BX/CX/DX = x1/y1/x2/y2, ES = DS, SI = DI = cur_save, and the
-;      one-plane arm DOWN ([vga_pn] = 4 planes) - EVERYTHING the save and the
-;      restore set up besides banking ES and the arm, in the one routine both
-;      already call (size pass 9: gfx_1bpp_off's call and the buffer setup were
-;      written twice, once each side)
-cur_rect:
-    mov word [vga_pn], VGA_PN_FOUR  ; gfx_1bpp_off, inline (vga12.inc)
-    push ds                     ; the buffer lives in kernel .bss
-    pop es
-    mov si, cur_save            ; the restore's source...
-    mov di, si                  ; ...and the save's destination
-    mov ax, [cur_cellx]         ; the CELL as cur_geom banked it: the drawn
-    mov bx, [cur_celly]         ; point in the ACTIVE display's coordinates
-                                ; (SPEC.md 39.15.1), off the HOT SPOT and
-                                ; clamped at the display origin (7.2.2). Every
-                                ; planar draw runs cur_geom first now (cur_put_1,
-                                ; cur_move_1), so for a restore this is the cell
-                                ; that was DRAWN - with the hot spot it was drawn
-                                ; with - and for a save the one about to be.
-                                ; Size pass 9: it re-derived both, twice a move
-    mov cx, ax
-    add cx, CUR_GW-1
-    mov dx, bx
-    add dx, CUR_GH-1
+; cur_vspan - how many bytes of each row the planar cell covers: the rect
+; gfx_rect_setup cut from x = [cur_cellx] .. +CUR_GW-1, which is one byte when
+; the cell is byte-aligned and two otherwise - unless the screen's right edge
+; took the second, which is cur_geom's [cur_b1ok] answer for the same cell.
+; One place for the save and the restore, because the two disagreeing by a
+; byte smears the arrow (cur_rect's reason, before it).
+; out: BL = 1 two bytes / 0 one, BP = ROW_BYTES less the bytes taken;
+;      clobbers AX
+%if CUR_GW != 8
+  %error "cur_vspan assumes an 8px cell: one byte aligned, two otherwise"
+%endif
+cur_vspan:
+    mov bl, [cur_cellx]
+    and bl, 7
+    jz .one                     ; aligned: x2 lands in the same byte
+    mov bl, [cur_b1ok]
+.one:
+    mov al, bl
+    cbw
+    mov bp, ROW_BYTES - 1
+    sub bp, ax
     ret
 section .text
 %endif                          ; GFX_VGA
@@ -4681,8 +4729,9 @@ cur_geom:
 %ifdef KERN_BIG
     sub ax, [vid_oy]            ; into the ACTIVE display's coordinates: this
 %endif                          ; is the ONLY place a position becomes an
-                                ; ADDRESS (SPEC.md 39.15.1) - cur_rect reads
-                                ; the banked cell below rather than re-deriving
+                                ; ADDRESS (SPEC.md 39.15.1) - the planar save
+                                ; and restore read the banked cell below
+                                ; rather than re-deriving
     sub ax, [cur_hy]            ; ...and off the hot spot, clamped at the
     jns .yok                    ; origin, or a centred shape near the top edge
     xor ax, ax                  ; addresses the row above the framebuffer
@@ -4911,7 +4960,7 @@ cur_lazyck:
     mov si, wm_clip_tab         ; VIRTUAL rects (SPEC.md 39.14.9), and so is
     mov di, [wm_clip_n]         ; [cur_drawn_x] - the display subtraction
                                 ; happens where a position becomes an ADDRESS
-                                ; (cur_rect, cur_geom) and nowhere else, so
+                                ; (cur_geom) and nowhere else, so
                                 ; the two are already in one space
 .frag:                          ; OVERLAP, not containment: wm_clip_test asks
     cmp ax, [si+WCR_X2]         ; whether a whole shape fits one fragment and
@@ -5906,7 +5955,7 @@ CUR_SHAPE_END "clock"
 ; --- the hot spot per shape, in the same order (SPEC.md 7.2) -----------------
 ; Two bytes a shape: the pixel inside the cell that sits under the pointer.
 ; The arrow's is (0,0), which is what every walk in this file assumed for
-; years - cur_geom and cur_rect subtract it now, and clamp the result at the
+; years - cur_geom subtracts it now, and clamps the result at the
 ; screen origin rather than clipping the cell (SPEC.md 7.2.2).
 cur_shtab   dw cur_and,       cur_cross_and,   cur_busy_and
 cur_shhot   db 0, 0,          CUR_XHX, CUR_XHY, CUR_BHX, CUR_BHY
@@ -6025,10 +6074,10 @@ cur_drawn_x dw 0                ; where the cursor pixels actually are, in
 cur_drawn_y dw 0                ; VIRTUAL coordinates (SPEC.md 39.15) - the
                                 ; same space as mouse_x/mouse_y, so every
                                 ; comparison in this file is between two
-                                ; positions of the same kind. cur_rect and
-                                ; cur_geom are the only two places that turn
-                                ; one into an ADDRESS, and the only two that
-                                ; subtract a display's origin.
+                                ; positions of the same kind. cur_geom is
+                                ; the only place that turns one into an
+                                ; ADDRESS, and the only one that subtracts a
+                                ; display's origin.
                                 ; (valid only while cur_level >= 0)
 %ifdef KERN_BIG
 cur_disp    db 0                ; which display the arrow is ON, and cur_dprev
