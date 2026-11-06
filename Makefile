@@ -20539,6 +20539,63 @@ pdefuzz: pdeng $(BUILD)/pde_fuzz
 		$(BUILD)/pdeng-fix/shared/neg/*.pdf $(BUILD)/pdeng-fix/shared/stress/*.PDF
 # ---- end PageDesk: eng ------------------------------------------------------
 
+# ---- PageDesk: flate --------------------------------------------------------
+# FlateDecode and the PNG/TIFF predictors in PDENG (PAGEDESK-SPEC 20.13, PD-25).
+# `make pdflate` builds PDENG.MOD (the target gates and the size print) and the
+# host driver hosttest/pde_fl_test.c, then hosttest/pde_fl_check.py runs the
+# whole matrix against Python's zlib, a predictor written from the spec and
+# qpdf. `make pdflatefuzz` is the same engine under AddressSanitizer and UBSan,
+# driven over mutated streams and every read size (hosttest/pde_fl_fuzz.c).
+# Host only; the target arm is hosttest/pde_boot.py's (PDENG.MOD in QEMU).
+PDFL_SRC := $(PDE_SRC) apps/pagedesk/pdeflate.h apps/pagedesk/pdeflate.c
+# The SHIPPED module's dependencies on flate's own files: eng's PDE_SRC wildcard
+# (pde*.c, pde.h) does not match pdeflate.h, and eng's PDENG.MOD rule predates
+# pdeflate.inc, so without these an edit to either left PDENG.MOD stale.
+$(BUILD)/pdeng.raw.asm $(BUILD)/pde_test $(BUILD)/pde_fuzz: apps/pagedesk/pdeflate.h
+$(BUILD)/PDENG.MOD: apps/pagedesk/pdeflate.inc
+$(BUILD)/pde_fl_test: $(PDFL_SRC) apps/pagedesk/pdmath.c apps/pagedesk/pdmath.h apps/pagedesk/hosttest/pde_fl_test.c \
+                      apps/pagedesk/hosttest/pde_host.c apps/pagedesk/hosttest/pdhost.c | $(BUILD)
+	$(HOSTCC) -g -Wall -Wextra -Wno-unused-parameter -DPD_HOST -Iapps/pagedesk -Iapps/pagedesk/hosttest \
+		apps/pagedesk/pdeng.c apps/pagedesk/hosttest/pde_fl_test.c apps/pagedesk/hosttest/pde_host.c \
+		apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c -o $@
+
+$(BUILD)/pde_fl_fuzz: $(PDFL_SRC) apps/pagedesk/pdmath.c apps/pagedesk/pdmath.h apps/pagedesk/hosttest/pde_fl_fuzz.c \
+                      apps/pagedesk/hosttest/pde_host.c apps/pagedesk/hosttest/pdhost.c | $(BUILD)
+	$(HOSTCC) -g -O1 $(PDE_SAN) -Wall -Wextra -Wno-unused-parameter -DPD_HOST -Iapps/pagedesk -Iapps/pagedesk/hosttest \
+		apps/pagedesk/pdeng.c apps/pagedesk/hosttest/pde_fl_fuzz.c apps/pagedesk/hosttest/pde_host.c \
+		apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c -o $@
+
+.PHONY: pdflate pdflatefuzz pdflateboot
+pdflate: $(BUILD)/PDENG.MOD $(BUILD)/pde_fl_test apps/pagedesk/hosttest/pde_fl_check.py
+	python3 apps/pagedesk/hosttest/pde_fl_check.py $(BUILD)/pde_fl_test $(BUILD)
+
+# the module itself, in QEMU (a 386-class CPU running the 16-bit code SmallerC
+# emitted): `make pdflateboot` checks its CRCs and prints instructions a byte
+pdflateboot: $(BUILD)/PDENG.MOD $(BUILD)/flc/PDENG.MOD apps/pagedesk/hosttest/pde_fl_boot.py apps/pagedesk/hosttest/pde_fl_boot.c
+	python3 apps/pagedesk/hosttest/pde_fl_boot.py $(BUILD) --icount
+
+PDFLFUZZ_N ?= 300
+pdflatefuzz: $(BUILD)/pde_fl_fuzz apps/pagedesk/hosttest/pde_fl_check.py
+	python3 apps/pagedesk/hosttest/pde_fl_check.py --corpus $(BUILD)/pdfl-corpus
+	$(BUILD)/pde_fl_fuzz -n $(PDFLFUZZ_N) -s $(PDEFUZZ_SEED) $(BUILD)/pdfl-corpus/*.pdf
+# THE C TWIN ON THE TARGET: the same module with the hand-written symbol loop
+# (apps/pagedesk/pdeflate.inc) left out and its C twin compiled in, into
+# $(BUILD)/flc/. `make pdflateboot` boots both and compares them.
+$(BUILD)/flc: | $(BUILD)
+	mkdir -p $@
+$(BUILD)/flc/pdeng.raw.asm: $(PDFL_SRC) apps/pagedesk/pdabi.h apps/pagedesk/pdmath.h $(CC_RUNTIME) | $(BUILD)/flc cc-toolchain
+	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S -DFL_NOASM \
+		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) -I $(BUILD) -I apps/pagedesk \
+		apps/pagedesk/pdeng.c -o $@
+	@rm -f apps/pagedesk/pdeng.i
+$(BUILD)/flc/pdeng.gen.asm: $(BUILD)/flc/pdeng.raw.asm tools/cc8086.py tools/ccpeep.py $(CC_PEEPSTAMP)
+	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME) $(CC_PEEPARG)
+$(BUILD)/flc/PDENG.MOD: apps/pagedesk/pdeng.asm $(BUILD)/flc/pdeng.gen.asm apps/pagedesk/pdmath.inc \
+                        apps/pagedesk/pdabi.inc apps/os88api.inc $(CC_RUNTIME) | $(BUILD)
+	$(NASM) -f bin -w+error -DFL_NOASM -I apps/ -I $(BUILD)/flc/ -I $(BUILD)/ -o $@ apps/pagedesk/pdeng.asm
+# ---- end PageDesk: flate ----------------------------------------------------
+
+
 # ---- PageDesk: wrt ----------------------------------------------------------
 # PDWRT.MOD (PAGEDESK-SPEC 20.5): the writer module - serialiser, appearance
 # streams, incremental save, fresh documents. A SEPARATE compilation and a

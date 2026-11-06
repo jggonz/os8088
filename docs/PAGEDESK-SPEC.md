@@ -3172,6 +3172,227 @@ made from the primary, which is why it is not built.
    `pdu_at_doc` is not called during a save.
 
 
+### 20.13 FlateDecode and the predictors (`flate`, wave 2, PD-25)
+
+PDENG's `FlateDecode` is the Enhanced tier's decoder. It is a stage of the
+filter chain (20.2.5) like `ASCIIHexDecode` and `RunLengthDecode`: it hands the
+stage above it one byte at a time and is resumable at any byte, so every bound
+of 20.2.5 (1 MiB out, 4 MiB of every stage's work, PD-28) holds unchanged. A
+machine that gives PDENG no flate claim (20.13.3) refuses Flate with `PDE_FLATE`
+exactly as the XT build always has, and the page says Incomplete.
+
+**20.13.1 What is decoded.**
+* zlib (RFC 1950): the two header bytes are checked (method 8, window <= 32 KiB,
+  FCHECK, no preset dictionary); anything else is `PDE_SYNTAX`. The Adler-32
+  trailer is **not read and not verified**: a corrupt stream is caught by the
+  structure of its deflate data, and the checksum would cost a pass over every
+  output byte on a 4.77 MHz machine for a defect that real viewers also
+  tolerate (a wrong or missing trailer is not an error here, as in MuPDF).
+* deflate (RFC 1951): stored, fixed and dynamic blocks, a history of up to
+  32,768 bytes. A code set that is over-subscribed, or incomplete other than
+  zlib's single code of length 1, is `PDE_SYNTAX` (as zlib); so are a block
+  type 3, a stored block whose LEN and NLEN disagree, a dynamic header with
+  more than 286 literal/length or 30 distance codes or no end-of-block code,
+  a length or distance symbol that does not exist, and a match that reaches
+  before the first byte the stream produced.
+* a stream that ends before its final block's end-of-block code is `PDE_TRUNC`
+  (`PDE_IO` when the file read failed), reported after every byte decoded
+  before that point has been delivered; a stream whose final block is whole
+  and whose trailer is missing is complete.
+* Predictors, from the stage's `/DecodeParms` (a dictionary, an array with one
+  entry per filter of which the Flate stage's is used, either direct or by
+  reference; `null`, no entry and no dictionary mean predictor 1). `/Predictor`
+  10-15 is PNG: every row carries its own tag byte (None, Sub, Up, Average,
+  Paeth) and the value 10-15 is not consulted, as in every viewer; a tag over 4 is
+  `PDE_SYNTAX`. `/Predictor` 2 is TIFF with `/BitsPerComponent` 8 or 16.
+  `/Colors` 1-4 (default 1), `/BitsPerComponent` 1, 2, 4, 8 or 16 (default 8;
+  PNG at every depth, TIFF at 8 and 16 only), `/Columns` (default 1). A row
+  of more than 4,096 bytes is `PDE_LIMIT`; `/Colors` over 4, a predictor
+  other than 1, 2 and 10-15, a TIFF depth under 8 and a parameter that is not
+  a positive integer are `PDE_FILTER`, all at `STRM_OPEN`. A last row the
+  data stops inside is delivered as far as it goes. (`/DP` is an inline
+  image's abbreviation and is not read in a stream dictionary.)
+* At most one Flate stage in a chain (a second is `PDE_FILTER`), anywhere in
+  it: `[/ASCIIHexDecode /FlateDecode]` and `[/RunLengthDecode /FlateDecode]`
+  decode, and `/FlateDecode` and `/Fl` are the same filter.
+
+**20.13.2 Why the decoder is C and not apps/pixel/pxpng.asm's, and what is
+shared.** PiXEL's inflater is a 600-line assembly loop whose input is a *bit
+position over a de-chunked buffer in its scratch segment*, whose output is a
+*ring window it also extracts scanlines from*, and whose registers (SI, DI, DX,
+BP, CL) are its calling convention; its tables are a 9-bit primary plus
+sub-tables laid out in that same segment, and it runs to the end of a batch
+rather than yielding a byte. None of that is a seam PDENG can use (a pull of
+one byte at a time through the filter chain, a far history, every call
+bounded), and cutting one into the file PiXEL assembles would change PiXEL's
+only decode path with no way to run PiXEL's rows in this wave (CLAUDE.md,
+Testing). The decoder is therefore a new one, written to PDENG's rules, and
+**what is shared is the constants**: `fl_lbase`, `fl_lext`, `fl_dbase`,
+`fl_dext` and `fl_clord` are checked element for element against
+`pz_lbase`, `pz_lext`, `pz_dbase`, `pz_dext` and `pz_clord` by
+`hosttest/pde_fl_check.py` (`tables`), which fails if either file drifts. It
+reads the same way PiXEL's does: an 8-bit lookup for the first bytes of a
+code, the canonical walk for a longer one.
+
+**20.13.3 Memory: nothing is claimed by PDENG.** The primary hands PDENG a
+**flate claim** in `pdxb_init` (`flate_seg`, `flate_kb`, valid when `flags &
+PDXI_FLATE`; DECISIONS D17), 43 KiB a **slot**, one or two slots
+(`flate_kb / 43`, capped at 2; under 43 KiB, or no flag, is no slot). Slot *k*
+is at `flate_seg + k * 2752` paragraphs, so every slot is under 64 KiB and no
+offset wraps:
+
+| offset in the slot | bytes | holds |
+|---|---|---|
+| 0 | 32,768 | the deflate history (a ring) |
+| 32,768 | 4,096 | the predictor's row A |
+| 36,864 | 4,096 | the predictor's row B |
+| 40,960 | 1,728 | the Huffman tables: counts, symbols and an 8-bit lookup for the literal/length code, counts, symbols and a lookup for the distance code (`FT_*` in `pdeflate.h`) |
+| 42,688 | 448 | the decoder's saved state (`struct flst`: 56 bytes of state, the 256-byte output buffer, the 72-byte predictor chunk, the 64-byte input read-ahead) |
+
+The primary carves the area only on the Enhanced tier, by RAM and not by CPU
+(D17): from claim B's tail when the free heap after the whole document set
+stays at or above 32 KiB (PD-29's reserve), two slots when two fit, and never
+when the Control Panel's low-memory setting is on, so the XT's capability set
+can be shown on any machine. Re-`INIT` is legal (D2): each `INIT` replaces the
+claim and frees every slot. A stream opened while both slots are in use is
+`PDE_LIMIT` at `STRM_OPEN` (so with one slot a Form XObject that is itself
+Flate inside a Flate page is incomplete; with two it works).
+
+PDENG's near cost is one *loaded* decoder (the bit buffer, the output buffer
+`ob` of 256 bytes, the predictor's 72-byte chunk, the 64-byte input read-ahead
+and its state, 448 bytes in all) and a 320-byte scratch for a dynamic header and the predictor's row
+above. Reading a Flate stream other than the one loaded swaps the loaded
+state out to its own slot and the reader's in (two block copies of 448 bytes;
+a form opened inside a page's content and then closed costs two swaps); the
+tables and the history never move. PDENG.MOD: **34,680 + 9,852 = 44,532 bytes**
+against 27,466 + 8,972 = 36,438 before (+7.9 KiB: +7,214 image, +880 bss;
+96 of them are the iterative chain below).
+
+**20.13.4 Resumability and the work bound.** The decoder runs in *fills* of at
+most 256 output bytes into `ob`: one literal, one stored byte or one symbol's
+match at a time, a match that does not fit finishing in the next fill
+(`mleft`, `mdist`). Input is the stage below (`sget_lo`), so the raw bytes and
+every lower stage are still counted against the 4 MiB bound as before, and a
+fill that finds the input ended fails with `PDE_TRUNC` rather than waiting.
+
+*The chain has no recursion (D21).* `pdestrm.c` walks the filter stages with
+one index instead of one call each: ASCIIHex and RunLength are push machines
+(`st_step`: offered nothing, a stage gives a byte it holds or asks for one;
+fed a byte of the stage below, it gives a byte, asks again or ends), and
+`sg_run` goes down while a stage asks and up while one gives. The Flate stage
+pulls bits in the middle of a header and cannot be a push machine, so it is
+the bottom source of the stages above it (`sg_flate`) and reads the stages
+below it through `sget_lo`, which holds no Flate stage: `sget -> sg_flate ->
+fl_get -> ... -> fl_infill -> sget_lo` is a chain, not a cycle, and
+`tools/os88pdstk.py` passes with no allowance for it. Every byte each stage
+produces is counted as before, a stage that ends stays ended, and a stage
+that asked for input is fed the end of the stage below it too (an odd final
+hex digit still decodes). Behaviour is unchanged byte for byte (the eng and
+flate host matrices, 1,170 chain/size/bomb cases, both target harnesses);
+what changed is speed on a pathological ASCIIHex-over-RunLength whitespace
+bomb, about 1.6x slower to reach `PDE_LIMIT` on the target, and 0.4
+instructions a byte on Flate content.
+The history is written once at the end of each fill and read only for a match
+whose source lies before the fill's first byte (a source inside the fill is
+read from `ob`). The top Flate stage's bytes are handed up in bulk
+(`fl_take`) instead of a call each, and counted against the work bound as
+`sget` would have. A block that decodes to nothing is still work, and nothing
+the stages produce would count it, so a stream of empty blocks would run its
+whole length inside one call: more than **64 block headers with no output
+byte between them** is `PDE_LIMIT`, and each block header is charged to the
+4 MiB work bound as if a stage had produced bytes - **1,024** for one that
+builds tables (dynamic, or fixed after a dynamic one), 16 for any other. A
+legitimate stream does not come near either (zlib writes a block per ~16 K
+symbols; one sync-flushed every 300 bytes into dynamic blocks would stop at
+about 950 KB instead of the 1 MiB output bound); a hostile one of one-literal dynamic blocks stops after about
+4,000 of them. The most work between two returns of a byte is then a
+block start: a dynamic block's header (up to 316 code lengths, two tables,
+the lookups) plus the first fill, measured at **108,102 instructions** for a
+2 KB stream and **188,550** for a 240 KB one on the target code (20.13.6);
+the work after it is bounded by the caller's `STRM_READ` size as for any
+stage, and the number of blocks by the charge above.
+
+**20.13.5 A failure surfaces once.** It is parked when found and reported, as
+`lx_err`, when the bytes decoded before it have been delivered: the `STRM_READ`
+or `TOKEN` that reaches it returns the failure (and the bytes of *that* call,
+as for a bad hex digit, are void), later reads see the end of the stream.
+`PDE_FLATE` at `STRM_OPEN` is only "no flate claim".
+
+**20.13.6 Verification.**
+* `make pdflate` (host): `hosttest/pde_fl_check.py` drives the real engine with
+  the flate claim over PDFs it writes, byte for byte against Python's `zlib`,
+  a predictor written in the script from the specification, and `qpdf
+  --filtered-stream-data` as the independent decoder. 938 engine runs in all: every
+  block type (stored, fixed, dynamic, Z_HUFFMAN_ONLY, Z_RLE, flushed
+  multi-block), eight data sets including distances to 32,768 and a 3 MiB
+  bomb cut at 1 MiB with `PDE_LIMIT`, five read sizes from 1 to 4,096, three
+  cluster sizes and cache sizes to 64 KiB; the filter chains; every PNG tag at
+  gray/RGB/RGBA/16-bit and 1/2/4 bits, rows to the 4,096-byte limit and over
+  it, TIFF at 8 and 16 bits; the parameter forms; nested reads of two streams
+  with one and two slots; and 537 malformed streams (every truncation point,
+  random bit flips, named malformations) whose output must equal an
+  independent inflater's up to the failure and whose code must be
+  `PDE_SYNTAX` or `PDE_TRUNC` exactly when it is.
+* `make pdflatefuzz`: the same engine under AddressSanitizer and UBSan
+  (`hosttest/pde_fl_fuzz.c`) over 24,000 mutations of six streams, with a
+  guard pattern around the flate claim checked after every run: no crash, no
+  write outside the claim, no stream over 1 MiB.
+* `make pdflateboot` (`hosttest/pde_fl_boot.py`): the **module as the target
+  toolchain built it** (SmallerC, `cc8086.py`, `nasm cpu 8086`) booted in QEMU
+  with the flate claim, twice: the shipped module (hand-written symbol loop,
+  20.13.7) and the same source built with `-DFL_NOASM` (its C twin, in
+  `build/flc/`). Each runs 70 streams - three read sizes, nested reads, a
+  corrupt stream, and a corpus of every block type (stored, fixed, dynamic at
+  levels 1/6/9, Huffman-only, RLE, flushed multi-block, a 9-bit window), a
+  history distance of exactly 32,768, 28 malformed streams (bit flips,
+  truncations, a block type 3, a bad stored length) and 10 built by hand for
+  the symbol loop's edges (length 258 as symbol 285 and as 284 + 31; symbols
+  286 and distance 30; a distance before the first byte, and one exactly at
+  and one past the history across a fill boundary; distance 32,768 with
+  exactly 32,768 bytes of history and with one fewer; history copies that
+  straddle the 32 KiB ring's end), the malformed and hand-built ones read a
+  byte a call - and the result lines are compared with what Python's inflater
+  yields **and with each other**: 0 of 70 differ. **The comparison is proved to bite** by a
+  negative control in the same run: the shipped module's literal store is
+  patched in the image (`mov [di],al` -> `mov [di],ah`) and the run must
+  fail, which it does (63 results wrong against the expected values, 64
+  against the C twin); a second control breaks the history copy's ring mask
+  (`and si, 0x7FFF` -> `0x7FFE`) and must fail too (39 and 40), which proves
+  the corpus reaches the history path. The harness refuses a PDF that would
+  grow into the flate slots it places in memory. Boots use `-icount shift=0`, so the BIOS and the PIT
+  count guest instructions (1 ns each). Instructions per output byte,
+  240,000 bytes of Flate text: **90.6 as C, 63.4 as shipped**; the same kind
+  of text unfiltered 20.7; a PNG-predicted 8-bit gray image 243.2 as C, 190.1
+  as shipped. QEMU counts one `rep movsb` as one instruction, so the
+  asm figure flatters it (an 8088 pays about 17 clocks a byte there); clock
+  counts need MartyPC, the lead's final pass. `pde_fl_check.py` (`asmlayout`)
+  checks `pdeflate.inc`'s FL_* offsets and table addresses against
+  `struct flst` and `pdeflate.h` on the 16-bit layout.
+
+**20.13.7 The symbol loop in assembly.** `_fl_codes` (`pdeflate.inc`,
+included by `pdeng.asm`; defined only when `FL_ASM`, that is on the target and
+not under `FL_NOASM`) decodes literal/length and distance symbols through the
+slot's lookups (read directly through ES, no call per table word), their
+extra bits, and the match copy - a source inside the output buffer by
+`rep movsb`, one before it from the history - until the 256-byte buffer is
+full or the block ends, then returns. A code longer than the lookup is
+resolved by C's walk (`fl_slow`) and the read-ahead is refilled by C
+(`fl_infill`); everything else (headers, tables, stored blocks, predictors,
+the slot swap) stays C. Its C twin is the `FS_CODES` case and `fl_match()`
+of `fl_fill()`, which the host harness runs and the target builds under
+`-DFL_NOASM`. Input is read ahead 64 bytes at a time from the file's
+lookahead when Flate is the first stage (one byte at a time through a lower
+stage, so its errors and bounds are unchanged).
+
+**20.13.8 Not done.** `/Predictor` with more than four colours or a TIFF
+sub-byte depth (`PDE_FILTER`); a second Flate stage in one chain; the Adler-32
+check; LZW and every other filter (still `PDE_FILTER`); inline-image Flate
+(`BI ... /F /Fl`: PDREND's, `annotr`). The page's *rendering* of a Flate
+stream was not looked at on screen: the package still ships the stand-in
+PDREND (`PD_REND_MOD`, the lead's hold), which reads no stream, and the
+primary does not yet carve the flate claim (D17, the lead's), so on the
+target every Flate stream is still refused with `PDE_FLATE`.
+
 ### 20.14 Host preparation of complex PDFs (`host`, wave 2, PD-22)
 
 `tools/os88pdprep.py` is the optional host command for a PDF outside the XT

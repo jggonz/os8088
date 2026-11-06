@@ -116,6 +116,9 @@ section .text
 ; THE COMPILED C
 ; =============================================================================
 %include "pdeng.gen.asm"            ; found through -I build/
+%ifndef FL_NOASM
+%include "pagedesk/pdeflate.inc"    ; FlateDecode's symbol loop (PAGEDESK-SPEC 20.13)
+%endif
 
 ; =============================================================================
 ; THE API BRIDGE - AFTER THE C, GATED (SPEC.md 73.9.1): only the thunks the C

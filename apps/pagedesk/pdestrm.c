@@ -25,56 +25,139 @@ static int raw_get(struct sctx *c)
     return c->rb[c->rbi++];
 }
 
-/* One decoded byte from stage i (i < 0: the raw file bytes), or -1.
- * sget counts every byte EVERY stage produces against PDE_WORK_HI: the 1 MiB
- * output bound (st_account) is the top stage's, and a lower stage that only
- * feeds white space to an ASCIIHex above it - /Filter [/RL /RL /RL /AHx] -
- * would otherwise run 128^3 bytes of work a raw byte inside ONE call (PD-28). */
-static int sget1(struct sctx *c, int i);
-static int sget(struct sctx *c, int i)
+/* ---- the filter chain, without recursion (D21) ------------------------------
+ * Stage i decodes the bytes of stage i - 1 (stage -1 is the raw file). A stage
+ * is a push machine, st_step: offered nothing (SG_ASK) it produces a byte from
+ * what it holds or answers SG_NEED; fed a byte of the stage below (or -1, that
+ * stage's end) it produces a byte, SG_NEED or -1. sg_run walks the stages
+ * lo..top with one index: down while a stage needs input, up while one has a
+ * byte, so the chain costs no stack per stage.
+ * The one Flate stage cannot be a push machine (it pulls bits in the middle of
+ * a header), so it is the BOTTOM source of the stages above it, and what is
+ * below it is reached through sget_lo, which contains no Flate stage: the call
+ * graph is sget -> sg_flate -> fl_get -> ... -> fl_infill -> sget_lo, a chain
+ * and not a cycle.
+ * Every byte EVERY stage produces counts against PDE_WORK_HI: the 1 MiB output
+ * bound (st_account) is the top stage's, and a lower stage that only feeds
+ * white space to an ASCIIHex above it - /Filter [/RL /RL /RL /AHx] - would
+ * otherwise run 128^3 bytes of work a raw byte inside ONE call (PD-28). */
+#define SG_ASK  (-2)
+#define SG_NEED (-3)
+
+/* n bytes some stage produced: 1 when that is over the work bound, and then
+ * every stage has ended with PDE_LIMIT. */
+static int sg_add(struct sctx *c, pdw n)
 {
-    int b;
-    pdw k;
-    if (i < 0) return raw_get(c);
-    b = sget1(c, i);
-    if (b >= 0 && ++c->wlo == 0 && ++c->whi >= PDE_WORK_HI) {
+    pdw k = c->wlo;
+    c->wlo = (pdw)(k + n);
+    if (c->wlo < k && ++c->whi >= PDE_WORK_HI) {
         lx_err = PDE_LIMIT;
         for (k = 0; k < PD_MAXFILTERS; k++) c->fdone[k] = 1;
-        return -1;
+        return 1;
     }
-    return b;
+    return 0;
 }
-static int sget1(struct sctx *c, int i)
+
+/* ASCIIHex: fcnt 1 while the first digit of a pair (fbyte) waits for its second.
+ * Run length: fcnt > 0 literal bytes still to copy, fcnt < 0 repeats of fbyte
+ * still to give, fcnt 0 a length byte to read - fbyte bit 8 set when it has been
+ * read (its low byte) and the byte after it is wanted. */
+static int st_step(struct sctx *c, int i, int in)
 {
-    int b, d, v, n;
-    if (c->fdone[i]) return -1;
+    int v, *n = c->fcnt + i;
+    pdw *fb = c->fbyte + i;
     if (c->flt[i] == PDF_K_HEX) {
-        do { b = sget(c, i - 1); } while (b >= 0 && is_ws(b));
-        if (b < 0 || b == '>') { c->fdone[i] = 1; return -1; }
-        if (hexv(b) < 0) { lx_err = PDE_SYNTAX; c->fdone[i] = 1; return -1; }
-        do { d = sget(c, i - 1); } while (d >= 0 && is_ws(d));
-        if (d < 0 || d == '>') { c->fdone[i] = 1; return hexv(b) << 4; }
-        v = hexv(d);
-        if (v < 0) { lx_err = PDE_SYNTAX; c->fdone[i] = 1; return -1; }
-        return (hexv(b) << 4) | v;
+        if (in == SG_ASK || (in >= 0 && is_ws(in))) return SG_NEED;
+        if (in < 0 || in == '>') {
+            if (*n) { *n = 0; c->fdone[i] = 1; return (int)*fb << 4; }   /* an odd last digit */
+            return -1;
+        }
+        v = hexv(in);
+        if (v < 0) { lx_err = PDE_SYNTAX; return -1; }
+        if (!*n) { *fb = (pdw)v; *n = 1; return SG_NEED; }
+        *n = 0;
+        return ((int)*fb << 4) | v;
     }
     /* run length */
-    if (c->fcnt[i] > 0) {
-        c->fcnt[i]--;
-        b = sget(c, i - 1);
-        if (b < 0) c->fdone[i] = 1;
-        return b;
+    v = *n;
+    if (v < 0) { *n = v + 1; return (int)*fb; }
+    if (in == SG_ASK) return SG_NEED;
+    if (in < 0) return -1;
+    if (v > 0) { *n = v - 1; return in; }
+    v = (int)*fb;
+    if (!(v & 0x100)) {                                 /* the length byte */
+        if (in == 128) return -1;
+        *fb = (pdw)(0x100 | in);
+        return SG_NEED;
     }
-    if (c->fcnt[i] < 0) { c->fcnt[i]++; return (int)c->fbyte[i]; }
-    b = sget(c, i - 1);
-    if (b < 0 || b == 128) { c->fdone[i] = 1; return -1; }
-    d = sget(c, i - 1);
-    if (d < 0) { c->fdone[i] = 1; return -1; }
-    if (b < 128) { c->fcnt[i] = b; return d; }
-    n = 257 - b;
-    c->fbyte[i] = (pdw)d;
-    c->fcnt[i] = -(n - 1);
-    return d;
+    v &= 255;                                           /* the byte after it */
+    *fb = (pdw)in;
+    *n = v < 128 ? v : v - 256;                         /* v + 1 copies, or 257 - v repeats: this one and 256 - v more */
+    return in;
+}
+
+/* Stages lo..top. in = SG_ASK: a byte of stage top, -1 at its end, or SG_NEED
+ * when stage lo wants a byte of the stage below it; call again with that byte
+ * (or -1) as in. Every stage above lo is then waiting on the one below it. A
+ * stage that has ended is asked nothing more; one that asked for input is fed
+ * whatever comes, including the end. */
+static int sg_run(struct sctx *c, int lo, int top, int in)
+{
+    int i = in == SG_ASK ? top : lo, r;
+    for (;;) {
+        r = (in == SG_ASK && c->fdone[i]) ? -1 : st_step(c, i, in);
+        if (r == SG_NEED) {
+            if (i == lo) return SG_NEED;
+            i--;
+            in = SG_ASK;
+            continue;
+        }
+        if (r == -1) c->fdone[i] = 1;          /* a stage that ends stays ended */
+        else if (r >= 0 && sg_add(c, 1)) r = -1;
+        if (i == top) return r;
+        i++;
+        in = r;
+    }
+}
+
+/* One byte of stage top of a chain with no Flate stage at or below it. */
+static int sget_lo(struct sctx *c, int top)
+{
+    int r = SG_ASK;
+    if (top < 0) return raw_get(c);
+    for (;;) {
+        r = sg_run(c, 0, top, r);
+        if (r != SG_NEED) return r;
+        r = raw_get(c);
+    }
+}
+
+/* One byte of the Flate stage k (pdeflate.c, 20.13), counted like any stage's. */
+static int sg_flate(struct sctx *c, int k)
+{
+    int b;
+    if (c->fdone[k]) return -1;
+    b = fl_get(c);
+    if (b < 0) c->fdone[k] = 1;
+    else if (sg_add(c, 1)) b = -1;
+    return b;
+}
+
+/* One decoded byte from stage top (top < 0: the raw file bytes), or -1. */
+static int sget(struct sctx *c, int top)
+{
+    int k = top, r = SG_ASK;
+    if (top < 0) return raw_get(c);
+    if (c->filters & PDFL_FLATE)
+        while (k >= 0 && c->flt[k] != PDF_K_FLATE) k--;
+    else k = -1;
+    if (k < 0) return sget_lo(c, top);
+    if (k == top) return sg_flate(c, k);
+    for (;;) {
+        r = sg_run(c, k + 1, top, r);
+        if (r != SG_NEED) return r;
+        r = sg_flate(c, k);
+    }
 }
 
 /* The expansion bound (PD-28): 1 MiB of decoded output a stream. */
@@ -104,6 +187,7 @@ static pdw st_decode(struct sctx *c)
         b = sget(c, (int)c->nflt - 1);
         if (b < 0) break;
         c->ib[n++] = (pdb)b;
+        if (c->flt[c->nflt - 1] == PDF_K_FLATE) n = (pdw)(n + fl_take(c, c->ib + n, (pdw)(PDE_IB - n)));
     }
     if (n && st_account(c, n)) return 0;
     return n;
@@ -115,7 +199,7 @@ static pdw flt_kind(const pdb *name)
 {
     if (str_eq(name, "ASCIIHexDecode") || str_eq(name, "AHx")) return PDF_K_HEX;
     if (str_eq(name, "RunLengthDecode") || str_eq(name, "RL")) return PDF_K_RLE;
-    if (str_eq(name, "FlateDecode") || str_eq(name, "Fl")) return 100 + PDE_FLATE;
+    if (str_eq(name, "FlateDecode") || str_eq(name, "Fl")) return g_nfl ? PDF_K_FLATE : 100 + PDE_FLATE;
     return 100 + PDE_FILTER;
 }
 static pdw flt_add(const pdb *name)
@@ -123,8 +207,9 @@ static pdw flt_add(const pdb *name)
     pdw k = flt_kind(name);
     if (k > 100) return (pdw)(k - 100);
     if (sp_nflt >= PD_MAXFILTERS) return PDE_LIMIT;
+    if (k == PDF_K_FLATE && (sp_filters & PDFL_FLATE)) return PDE_FILTER;   /* one Flate stage a chain */
     sp_flt[sp_nflt++] = (pdb)k;
-    sp_filters |= (k == PDF_K_HEX) ? PDFL_HEX : PDFL_RLE;
+    sp_filters |= (k == PDF_K_HEX) ? PDFL_HEX : (k == PDF_K_FLATE) ? PDFL_FLATE : PDFL_RLE;
     return PDE_OK;
 }
 
@@ -169,7 +254,14 @@ static pdw ob_stream_dict(pdw num, pdw gen)
 }
 
 /* The stream's /Filter chain into sp_flt (needs sp_kind == PDK_STRM). */
+static pdw ob_filters1(pdw num);
 static pdw ob_filters(pdw num)
+{
+    pdw rc = ob_filters1(num);
+    if (!rc && (sp_filters & PDFL_FLATE)) rc = fl_parms(num);
+    return rc;
+}
+static pdw ob_filters1(pdw num)
 {
     pdw rc, rn, rg;
     int hops;
@@ -272,6 +364,11 @@ static pdw st_push(pdw filtered)
     }
     c->rbn = 0; c->rbi = 0; c->depth = 0; c->wlo = 0; c->whi = 0;
     c->filters = sp_filters;
+    fl_drop(c);
+    if (c->nflt && (sp_filters & PDFL_FLATE)) {
+        i = fl_attach(c);
+        if (i) return i;
+    }
     nctx++;
     return PDE_OK;
 }
@@ -391,6 +488,7 @@ static pdw v_strm_read(pdw dseg, pdw doff, pdw dmax)
                 b = sget(c, (int)c->nflt - 1);
                 if (b < 0) break;
                 tmpb[k++] = (pdb)b;
+                if (c->flt[c->nflt - 1] == PDF_K_FLATE) k = (pdw)(k + fl_take(c, tmpb + k, (pdw)(want - k)));
             }
             if (k) {
                 if (st_account(c, k)) return lx_err;

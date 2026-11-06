@@ -20,6 +20,7 @@
 #include "os88.h"
 #endif
 #include "pde.h"
+#include "pdeflate.h"
 
 /* ---- the claims PDV_ENG_INIT received (and nothing else) ---------------- */
 static pdw g_xb;
@@ -128,4 +129,5 @@ static int upc(int c) { return (c >= 'a' && c <= 'z') ? c - 32 : c; }
 #include "pdexref.c"
 #include "pdepage.c"
 #include "pdestrm.c"
+#include "pdeflate.c"
 #include "pdeverb.c"
