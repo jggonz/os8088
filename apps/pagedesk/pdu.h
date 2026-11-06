@@ -172,5 +172,144 @@ static void pdu_close_doc(void);
 static void pdu_wsay(const char *s);
 #endif
 /* ---- end deepstk ---- */
+/* ---- notes ---- */
+#define P_NOTE   7              /* the note popover / inspector (pdunotes.c) */
+#ifndef PD_HOST
+/* resident hooks (pdunotes.c) */
+static void pdu_notes_paint(void);      /* the panel */
+static void pdu_notes_page(void);
+static void pdu_nt_reset(void);
+static void pdu_nt_filter(void);
+static void pdu_nt_idle(void);
+static void pdu_nt_srcload(void);
+static int  pdu_nt_owed(void);
+static void pdu_nt_pclose(void);
+static int  pdu_nt_click(int x, int y);
+static int  pdu_nt_pclick(int x, int y);
+static int  pdu_nt_key(int ascii, int scan);
+static void pdu_nt_ppaint(void);
+static int  pdu_nt_pw(void);
+static int  pdu_nt_prows(void);
+/* the overlay's entry points (pdovlnotes.c, pduinsp.c) */
+static int  ovl_nt_body(void);
+static int  ovl_nt_click(int x, int y);
+static int  ovl_nt_pclick(int x, int y);
+static int  ovl_nt_key(int ascii, int scan);
+static int  ovl_nt_ppaint(void);
+static void ovl_nt_pclose(void);
+static void ovl_nt_page(void);
+static void ovl_nt_dirty(void);
+static void ovl_nt_idle(void);
+static void ovl_nt_relist(void);
+static void ovl_nt_srcload(void);
+static void ovl_nt_new(unsigned page, const struct pd_rect *r);
+static void ovl_nt_open(int id);
+static void ovl_nt_inspect(int id);
+/* WHAT EDIT CALLS (D19, 20.9.5) - real resident functions with exactly the
+ * prototypes edit's block declares, so the two blocks may sit in either
+ * order; PDU_NOTES switches off edit's own stand-ins (pduedit.c). Nobody
+ * calls notes to report a change: the panel polls pdu_ed_gen(). */
+#define PDU_NOTES 1
+void     pdu_nt_new(unsigned page_id, const struct pd_rect *r); /* the Note tool */
+void     pdu_nt_open(int i);                                    /* a note's popover */
+void     pdu_nt_inspect(int i);                                 /* Text properties */
+#endif
+/* ---- end notes ---- */
+/* ---- edit ---- (PAGEDESK-SPEC 20.8; pduedit.c, pduundo.c, pdutool.c) --- */
+/* these ride the overlay (SPEC.md 73.14): the macro IS the rename the overlay
+ * cutter keys on, so every caller in the one translation unit reaches the shim */
+#define pdu_ed_get ovl_ed_get
+#define pdu_ed_new ovl_ed_new
+#define pdu_ed_set ovl_ed_set
+#define pdu_ed_text ovl_ed_text
+#define pdu_ed_text_get ovl_ed_text_get
+#define pdu_ed_pts ovl_ed_pts
+#define pdu_ed_pts_get ovl_ed_pts_get
+#define pdu_ed_del ovl_ed_del
+#define pdu_ed_copy_src ovl_ed_copy_src
+#define pdu_ed_first ovl_ed_first
+#define pdu_ed_next ovl_ed_next
+#define pdu_ed_move ovl_ed_move
+#define pdu_ed_sel_fix ovl_ed_sel_fix
+#define pdu_ed_xon_l ovl_ed_xon_l
+#define pdu_ed_show ovl_ed_show
+#define pdu_ed_select ovl_ed_select
+#define pdu_tx_key ovl_tx_key
+#define pdu_tx_begin ovl_tx_begin
+#define pdu_tx_end ovl_tx_end
+#define pdu_undo_begin ovl_undo_begin
+#define pdu_undo_end ovl_undo_end
+#define pdu_undo ovl_undo
+#define pdu_redo ovl_redo
+#define pdu_undo_pageop ovl_undo_pageop
+#define pdu_undo_drop ovl_undo_drop
+#define pdu_ed_xon_w ovl_ed_xon_w
+#define pdu_ed_canvas2 ovl_ed_canvas2
+
+int      pdu_ed_count(void);
+int      pdu_ed_get(int i, struct pd_edit *e);
+int      pdu_ed_new(struct pd_edit *e, const char *text, unsigned tlen,
+                    const pd_pt *pts, unsigned npts);
+int      pdu_ed_set(int i, const struct pd_edit *e);
+int      pdu_ed_text(int i, const char *text, unsigned tlen);
+unsigned pdu_ed_text_get(int i, char *dst, unsigned cap);
+int      pdu_ed_pts(int i, const pd_pt *pts, unsigned npts);
+unsigned pdu_ed_pts_get(int i, pd_pt *dst, unsigned cap);
+int      pdu_ed_del(int i);
+int      pdu_ed_copy_src(unsigned obj, unsigned gen, struct pd_edit *e);
+int      pdu_ed_first(unsigned page);
+int      pdu_ed_next(int i, unsigned page);
+unsigned pdu_ed_seg(void);
+void     pdu_undo_begin(int label);
+void     pdu_undo_end(void);
+int      pdu_undo(void);
+int      pdu_redo(void);
+int      pdu_undo_can(void);
+int      pdu_redo_can(void);
+void     pdu_undo_pageop(const void *delta, unsigned len);
+int      pdu_dirty(void);
+void     pdu_saved(void);
+/* nav (20.10) supplies these two; the quads are 4 points (x, y pairs) each */
+int      pdu_sel_quads(pd_pt *dst, unsigned cap);   /* cap = quads */
+int      pdu_sel_text(char *dst, unsigned cap);
+/* the hooks the shell's files call (20.8) */
+void     pdu_ed_init(void);             /* a document's claims exist */
+void     pdu_ed_gone(void);             /* the document is going */
+void     pdu_ed_sel_fix(void);
+void     pdu_ed_xon_l(void);            /* the selection's outline: lock held */
+void     pdu_ed_xoff_l(void);
+void     pdu_ed_xon(void);              /* ...and for a caller without it */
+void     pdu_ed_xoff(const struct os88_rect *r);   /* a render of r begins */
+void     pdu_ed_canvas(void);
+void     pdu_ed_xon_w(void);
+void     pdu_ed_canvas2(void);
+void     pdu_ed_show(void);
+void     pdu_ed_select(int i);
+int      pdu_ed_selected(void);
+int      pdu_ed_move(int i, int dx, int dy);
+int      pdu_tx_key(int ascii);
+void     pdu_tx_begin(int i, int isnew);
+void     pdu_tx_end(void);
+void     pdu_pg_apply(const void *delta, unsigned len, int undo);
+#define pdu_undo_cmd ovl_undo_cmd
+#define pdu_tool_click ovl_tool_click
+#define pdu_tool_hilite ovl_tool_hilite
+#define pdu_tool_delete ovl_tool_delete
+#define pdu_tool_enter ovl_tool_enter
+#define pdu_tool_hint ovl_tool_hint
+#define pdu_undo_cmd ovl_undo_cmd
+int      pdu_tool_click(int x, int y);
+int      pdu_tool_hilite(void);         /* nav calls it when a Highlight selection ends */
+int      pdu_tool_delete(void);
+int      pdu_tool_enter(void);
+void     pdu_tool_hint(int id);
+void     pdu_undo_cmd(int redo);
+unsigned pdu_ed_gen(void);              /* bumped by every mutation, undo, redo, selection change */
+extern char pdu_tbuf[1025];             /* ONE near text buffer, shared with notes (D19) */
+/* notes (20.9) implements these; edit stubs them until PDU_NOTES is defined */
+void     pdu_nt_new(unsigned page_id, const struct pd_rect *r);
+void     pdu_nt_open(int i);
+void     pdu_nt_inspect(int i);
+/* ---- end edit ---- */
 
 #endif /* PDU_H */

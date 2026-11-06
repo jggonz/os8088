@@ -9,6 +9,8 @@
  * ==========================================================================*/
 
 static void pdu_pop_close(void);
+static void pdu_pop_shut(void);
+static void pdu_popdmg_add(struct os88_rect *r);
 static void pdu_about_off(void);
 static void ovl_card(int which, struct os88_rect *r, int mono);
 static int ovl_card_size(int which);
@@ -83,9 +85,9 @@ static const char *pdu_why(int id)
         return "Open a document first.";
     switch (id) {
     case C_UNDO:
-        return "Nothing to undo.";
+        return pdu_undo_can() ? 0 : "Nothing to undo.";      /* edit */
     case C_REDO:
-        return "Nothing to redo.";
+        return pdu_redo_can() ? 0 : "Nothing to redo.";
     case C_PREV:
         return pdu_page == 0 ? "This is the first page." : 0;
     case C_NEXT:
@@ -99,7 +101,9 @@ static const char *pdu_why(int id)
     case C_T_SIGN: case C_E_DELETE:
         if (pdu_rdonly)
             return "This document is signed: it opens read-only.";
-        return "Annotation tools are not in this build yet.";
+        if (id == C_E_DELETE && pdu_ed_selected() < 0)       /* edit */
+            return "Nothing is selected.";
+        return 0;
     case C_P_ROTL: case C_P_ROTR: case C_P_DELETE: case C_P_BLANK:
     case C_P_EXTRACT:
         return "Page operations are not in this build yet.";
@@ -129,7 +133,7 @@ static void pdu_menusync(void)
     pdu_mfile[MI_CLOSE]  = pdu_mi("\001Close document", open);
     pdu_medit[ME_UNDO]   = pdu_mi("\001Undo  ^Z", !pdu_why(C_UNDO));
     pdu_medit[ME_REDO]   = pdu_mi("\001Redo  ^Y", !pdu_why(C_REDO));
-    pdu_medit[ME_DEL]    = pdu_mi("\001Delete  Del", 0);
+    pdu_medit[ME_DEL]    = pdu_mi("\001Delete  Del", !pdu_why(C_E_DELETE));   /* edit */
     pdu_medit[ME_FIND]   = pdu_mi("\001Find...  ^F", open);
     pdu_medit[ME_NEXT]   = pdu_mi("\001Find next  F3", open && pdu_nlen);
     pdu_medit[ME_PREV]   = pdu_mi("\001Find previous  Sh+F3", 0);
@@ -223,8 +227,8 @@ static int pdu_pop_rows(void)
         return pdu_L.kind == PDU_L_COMPACT ? 6 : 5;
     if (pdu_pop == P_FIND)
         return 2;
-    if (pdu_pop == P_NOTES)
-        return 3;
+    if (pdu_pop == P_NOTES || pdu_pop == P_NOTE)
+        return pdu_nt_prows();          /* notes */
     if (pdu_pop == P_PAGES)
         return (pdu_npages + 7) / 8 + 1;
     return 0;
@@ -286,6 +290,10 @@ static void pdu_pop_paint(void)
         ovl_card(pdu_helpw, p, pdu_mono);
         return;
     }
+    if (pdu_pop == P_NOTES || pdu_pop == P_NOTE) {      /* notes */
+        pdu_nt_ppaint();
+        return;
+    }
     pdu_fill(p->x1, p->y1, p->x2, p->y2, OS88_WHITE);
     os88_set_color(OS88_BLACK);
     os88_gfx_frame(p->x1, p->y1, p->x2, p->y2);
@@ -298,20 +306,6 @@ static void pdu_pop_paint(void)
         os88_font_run(p->x1 + 8, y + 2, pdu_line, OS88_BLACK, OS88_WHITE);
         os88_font_run(p->x1 + 8, y + 2 + PDU_POP_ROW,
                       "Enter: find  Esc: close", OS88_BLACK, OS88_WHITE);
-        return;
-    }
-    if (pdu_pop == P_NOTES) {
-        os88_font_run(p->x1 + 8, y + 2, "Notes & edits", OS88_BLACK,
-                      OS88_WHITE);
-        os88_set_color(OS88_BLACK);
-        os88_gfx_hline(p->x1 + 2, p->x2 - 2, y + PDU_POP_ROW - 1);
-        pdu_tr.x1 = p->x1 + 4;
-        pdu_tr.x2 = p->x2 - 4;
-        pdu_tr.y1 = y + PDU_POP_ROW - 6;
-        pdu_tr.y2 = y + 2 * PDU_POP_ROW;
-        pdu_notes_body(&pdu_tr, OS88_WHITE);
-        os88_font_run(p->x2 - 8 - 7 * PDU_CW, y + 2 + 2 * PDU_POP_ROW,
-                      "[Close]", OS88_BLACK, OS88_WHITE);
         return;
     }
     if (pdu_pop == P_PAGES) {
@@ -355,16 +349,20 @@ static void pdu_pop_paint(void)
 
 static void pdu_pop_open(int kind, int src)
 {
-    int w, rows;
-    if (pdu_pop != P_NONE)
-        pdu_pop_close();
+    int w, rows, sw;
+    sw = 0;
+    if (pdu_pop != P_NONE) {            /* one popover for another: the old */
+        pdu_popdmg_add(&pdu_poprect);   /* one's ground and the new one are */
+        pdu_pop_shut();                 /* ONE repaint at the wake, so no */
+        sw = 1;                         /* pixel is drawn twice and the click */
+    }                                   /* is not charged both paints (pdstk) */
     pdu_job_abort_render();
     pdu_pop = kind;
     pdu_popsrc = src;
     rows = pdu_pop_rows();
     w = 12;
     if (kind == P_FIND) w = 30;
-    if (kind == P_NOTES) w = 24;
+    if (kind == P_NOTES || kind == P_NOTE) w = pdu_nt_pw();  /* notes */
     if (kind == P_PAGES) w = 32;
     if (kind == P_HELP) {
         pdu_hpage = 0;
@@ -377,19 +375,52 @@ static void pdu_pop_open(int kind, int src)
     }
     pdu_pop_place(w, rows);
     pdu_ctl_repaint(src);
-    pdu_pop_paint();
+    if (sw)                             /* a switch: ground + new, once */
+        pdu_popdmg_add(&pdu_poprect);
+    else {                              /* a fresh popover: its own pixels */
+        pdu_popown = 1;                 /* only - at the wake, whose chain is */
+        pdu_kick();                     /* a dispatcher deep and not a click's */
+    }                                   /* ten (pdstk measured 386 of 384) */
 }
 
-static void pdu_pop_close(void)
+/* a popover's own Done/Esc, from deep in a click: the close (and the repaint
+ * under it) happens at the next wake, one level below the dispatcher instead
+ * of ten - the static stack gate measured the in-place close at 388 B of the
+ * UI task's 384 (pdstk, D22). Input to the popover meanwhile is refused. */
+/* the union a popover switch owes, painted once by the wake (pdu_paint_rect:
+ * the ground, then the new popover where it meets it) */
+static void pdu_popdmg_add(struct os88_rect *r)
+{
+    if (!pdu_popdmg_on) {
+        os88_memcpy(&pdu_popdmg, r, sizeof(pdu_popdmg));
+        pdu_popdmg_on = 1;
+    } else {
+        if (r->x1 < pdu_popdmg.x1) pdu_popdmg.x1 = r->x1;
+        if (r->y1 < pdu_popdmg.y1) pdu_popdmg.y1 = r->y1;
+        if (r->x2 > pdu_popdmg.x2) pdu_popdmg.x2 = r->x2;
+        if (r->y2 > pdu_popdmg.y2) pdu_popdmg.y2 = r->y2;
+    }
+    pdu_kick();
+}
+
+static void pdu_pop_close_soon(void)
+{
+    pdu_popcls = 1;
+    pdu_kick();
+}
+
+/* the popover's STATE goes - notes told, focus home, the owed render kicked -
+ * and nothing under it is painted: pdu_pop_open's switch owes that to the
+ * wake. Split from pdu_pop_close so the static stack gate sees no paint here */
+static void pdu_pop_shut(void)
 {
     int src, old;
     if (pdu_pop == P_NONE)
         return;
+    pdu_nt_pclose();                    /* notes */
     pdu_pop = P_NONE;
     src = pdu_popsrc;
     pdu_popsrc = C_NONE;
-    os88_memcpy(&pdu_dmg, &pdu_poprect, sizeof(pdu_dmg));
-    pdu_paint_rect(&pdu_dmg);
     /* PD-23: focus goes back home - to the control that opened it. A card
      * a MENU opened has no home (C_NONE) and leaves the focus where it was;
      * the first build cleared it there without repainting the control that
@@ -401,6 +432,15 @@ static void pdu_pop_close(void)
     if (old != pdu_focus)
         pdu_ctl_repaint(old);
     pdu_kick();                         /* the render that waited */
+}
+
+static void pdu_pop_close(void)
+{
+    if (pdu_pop == P_NONE)
+        return;
+    os88_memcpy(&pdu_dmg, &pdu_poprect, sizeof(pdu_dmg));
+    pdu_pop_shut();
+    pdu_paint_under(&pdu_dmg);          /* P_NONE already: nothing over it */
 }
 
 /* ============================================================================
@@ -444,6 +484,7 @@ static void pdu_close_doc(void)
     pdu_rwant = 0;
     pdu_npages = 0;
     pdu_changes = 0;
+    pdu_nt_reset();                     /* notes */
     pdu_say("Document closed.");
     pdu_title_set();
     pdu_reflow();
@@ -451,6 +492,7 @@ static void pdu_close_doc(void)
 
 static void pdu_set_mode(int m)
 {
+    pdu_tx_end();                       /* edit */
     if (pdu_doc != D_OPEN) {
         pdu_tell(pdu_why(C_M_READ));
         return;
@@ -470,11 +512,14 @@ static void pdu_set_tool(int id)
     if (pdu_refuse(id))
         return;
     old = pdu_tool;
-    pdu_tool = id;
+    pdu_tx_end();                       /* edit */
+    if (id != old)
+        pdu_tool = id;
     pdu_ctl_repaint(old);
     pdu_ctl_repaint(id);
     os88_wm_cursor(pdu_win, id == C_T_SELECT ? OS88_CUR_ARROW
                                              : OS88_CUR_CROSS);
+    pdu_tool_hint(id);                  /* edit */
 }
 
 /* the find job: PDV_ENG_SEARCH from the current page on, resumable */
@@ -528,7 +573,17 @@ static void pdu_cmd(int id)
 {
     if (pdu_refuse(id))
         return;
+    pdu_tx_end();                       /* edit: a command ends the typing */
     switch (id) {
+    case C_UNDO:                        /* edit */
+        pdu_undo_cmd(0);
+        return;
+    case C_REDO:                        /* edit */
+        pdu_undo_cmd(1);
+        return;
+    case C_E_DELETE:                    /* edit */
+        pdu_tool_delete();
+        return;
     case C_OPEN: case C_EV_OPEN:
         pdu_open_dlg();
         return;
@@ -582,8 +637,7 @@ static void pdu_cmd(int id)
         pdu_reflow();
         return;
     case C_NP_FILTER:
-        pdu_npall = !pdu_npall;
-        pdu_notes_paint();
+        pdu_nt_filter();                /* notes: This page, All pages, Changes */
         return;
     case C_PANEL_PG:
         pdu_pop_open(P_PAGES, id);
@@ -592,8 +646,11 @@ static void pdu_cmd(int id)
         pdu_pop_open(P_NOTES, id);
         return;
     }
-    if (id >= C_T_SELECT && id <= C_T_SIGN)
+    if (id >= C_T_SELECT && id <= C_T_SIGN) {
         pdu_set_tool(id);
+        if (id == C_T_HILITE)           /* edit: a selection already made */
+            pdu_tool_hilite();
+    }
 }
 
 /* a menu command: the gfx lock held, like a click (SPEC.md 12.2) */
@@ -611,6 +668,7 @@ void os88_oncmd(int item, int menu, void *win)
         else if (item == ME_REDO) pdu_cmd(C_REDO);
         else if (item == ME_FIND) pdu_cmd(C_FIND);
         else if (item == ME_NEXT) pdu_find_run(1);
+        else if (item == ME_DEL) pdu_cmd(C_E_DELETE);   /* edit */
         else pdu_tell("Nothing is selected.");
     } else if (menu == 2) {
         if (item == MV_ZIN) pdu_cmd(C_ZIN);
@@ -804,6 +862,8 @@ void os88_onkey(int ascii, int scan, void *win)
         return;
     }
     ascii = ascii & 0xFF;
+    if (pdu_tx < 0 && pdu_nt_key(ascii, scan))  /* notes: after an open text box */
+        return;
     /* Escape, in order (PD-03, 17.5): a running job, a popover, the page
      * field, the keyboard focus, then the tool */
     if (ascii == 27) {
@@ -815,6 +875,10 @@ void os88_onkey(int ascii, int scan, void *win)
             pdu_pop_close();
         else if (pdu_fedit)
             pdu_field_key(27);
+        else if (pdu_tx >= 0)           /* edit: finish the typing */
+            pdu_tx_end();
+        else if (pdu_ed_selected() >= 0) /* edit: deselect */
+            pdu_ed_select(-1);
         else if (pdu_focus != C_NONE) {
             ch = pdu_focus;
             pdu_focus = C_NONE;
@@ -827,6 +891,8 @@ void os88_onkey(int ascii, int scan, void *win)
         pdu_field_key(ascii);
         return;
     }
+    if (pdu_tx >= 0 && pdu_tx_key(ascii)) /* edit: the open text owns the keys */
+        return;
     if (pdu_pop == P_FIND && ascii) {
         pdu_find_key(ascii);
         return;
@@ -836,7 +902,7 @@ void os88_onkey(int ascii, int scan, void *win)
             pdu_pop_close();
         return;
     }
-    if (pdu_pop == P_NOTES) {
+    if (pdu_pop == P_NOTES || pdu_pop == P_NOTE) {       /* notes */
         if (ascii == 13 || ascii == ' ')
             pdu_pop_close();
         return;
@@ -853,6 +919,8 @@ void os88_onkey(int ascii, int scan, void *win)
     case '+': case '=': pdu_cmd(C_ZIN); return;
     case '-': case 0x1F: pdu_cmd(C_ZOUT); return;        /* - and ^- */
     case 13: case ' ':
+        if (ascii == 13 && pdu_tool_enter())    /* edit */
+            return;
         if (pdu_focus != C_NONE && pdu_find(&pdu_L, pdu_focus) >= 0)
             pdu_cmd(pdu_focus);
         else if (pdu_doc != D_OPEN && ascii == 13)
@@ -883,7 +951,7 @@ void os88_onkey(int ascii, int scan, void *win)
     case K_DOWN:  pdu_scroll_by(0, 16); return;
     case K_LEFT:  pdu_scroll_by(-16, 0); return;
     case K_RIGHT: pdu_scroll_by(16, 0); return;
-    case K_DEL:   pdu_tell("Nothing is selected."); return;
+    case K_DEL:   pdu_cmd(C_E_DELETE); return;     /* edit */
     case K_F3:    pdu_find_run(1); return;
     case K_SF3:   pdu_tell("Find previous is not in this build yet."); return;
     }
@@ -908,6 +976,10 @@ static void pdu_pop_click(int x, int y)
 {
     struct os88_rect *p;
     int k, v;
+    if (pdu_popcls)                     /* closing at the wake: no more input */
+        return;
+    if (pdu_nt_pclick(x, y))            /* notes */
+        return;
     p = &pdu_poprect;
     k = (y - p->y1 - 4) / PDU_POP_ROW;
     if (pdu_pop == P_ZOOM) {
@@ -943,9 +1015,7 @@ static void pdu_pop_click(int x, int y)
         }
         return;
     }
-    if (pdu_pop == P_NOTES && k < 2)
-        return;
-    pdu_pop_close();                    /* Notes' [Close], a help card, Find */
+    pdu_pop_close();                    /* a help card, Find */
 }
 
 void os88_onclick(int x, int y, void *win)
@@ -978,6 +1048,8 @@ void os88_onclick(int x, int y, void *win)
         pdu_cmd(id);
         return;
     }
+    if (pdu_nt_click(x, y))             /* notes: the panel's list */
+        return;
     if (pdu_inr(&pdu_L.sbar, x, y) && pdu_doc == D_OPEN) {
         pdu_sb_fill();
         r = pdu_sbhit(pdu_sb, x, y);
@@ -1008,6 +1080,8 @@ void os88_onclick(int x, int y, void *win)
         return;
     }
     if (pdu_inr(&pdu_L.canvas, x, y) && pdu_doc == D_OPEN) {
+        if (pdu_tool_click(x, y))       /* edit: the annotation tools */
+            return;
         if (pdu_mode == PDU_MODE_PAGES)
             pdu_tell("Page operations are not in this build yet.");
         else if (pdu_tool == C_T_SELECT)

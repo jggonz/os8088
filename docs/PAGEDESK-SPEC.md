@@ -2499,6 +2499,304 @@ Every mutating call records its undo delta itself, so a caller brackets a
 command with `pdu_undo_begin`/`end` and does nothing else for undo. Calls are
 made on the UI task only, never inside a module slice.
 
+#### 20.8.1 As built (`edit`, wave 2)
+
+**Files.** `pduedit.c` (the store, the selection outline, typing), `pduundo.c`
+(the history), `pdutool.c` (the annotation tools: every function an `ovl_*`);
+`hosttest/pdu_ed_test.c` compiles the first two UNCHANGED on the host
+(`tests/unit/t_pded.py`). Everything but the hot path rides the overlay
+(SPEC.md 73.14): `pdu.h` renames the 20.8 calls with `#define pdu_ed_new
+ovl_ed_new` and so on, so every caller keeps the pinned name and reaches the
+overlay's resident shim. Resident: `pdu_ed_seg`, `pdu_ed_count`,
+`pdu_ed_selected`, `pdu_ed_init`, `pdu_ed_gone`, the outline's off/on hooks,
+`pdu_dirty`, `pdu_saved`, `pdu_undo_can`, `pdu_redo_can`.
+
+**What it costs the primary** (measured at the cut, against the base before
+`edit` of 40,650 image + 3,969 bss = 44,619): **43,146 + 5,515 = 48,661 B**,
++4,042 against a share of +4,096; the overlay 14,821. The near scratch is one
+set shared by the three files - `ed_pts` (96 points: a Line's two, a
+Highlight's quads, a page delta's copy in the history), `ed_xr` (a clip rect,
+and the history's 8-byte swap) and the three 48-byte record buffers - and
+everything bigger lives in the claims: an Ink or Sign stroke is captured
+STRAIGHT into the EDITS segment's gap below the point top and converted there
+in place - converted, then turned round so the first point drawn is the first stored (`pdu_ed_new` with `pts` NULL means the points are already in place),
+and the history's command table is in `PDU_DC_UNDO` after its entries. Nothing
+in `edit` recurses, and its widest frame is 16 bytes of locals (`ovl_ed_set`; D21).
+
+**The segment** (`pdu_dcseg(PDU_DC_EDITS)`, 16 KiB, never zeroed; `pdu_ed_init`
+sets the three tops when a document's claims exist):
+
+| bytes | what |
+|---|---|
+| 0 .. 6,143 | 128 records of 48 bytes, in z-order (index = z; a later record is on top) |
+| 6,144 .. `text top` | the text heap, grows up (one text is at most 1,024 bytes) |
+| `point top` .. 16,383 | the point heap, grows down (one record at most 2,000 points) |
+
+13.1's 256 records and swap file are NOT built: 128 records, and the 10 KiB the
+two heaps share, are refused with `PDE_LIMIT` / `PDE_NOMEM` (`pdu_ed_err`) and
+the caller keeps what was typed. A heap is a bump allocator. A replaced text or
+point list is a new block and the old one is abandoned (no compaction); typing
+extends the tail of the LAST text block in place, and a backspace gives that
+block's last byte back to the heap **when the current typing run wrote it** (a
+byte below the top the run began at is old text an undo restores, so it is
+only dropped from the length) - so typos cost nothing and only retyping into
+old text copies the block, which is the only reuse. **`rect` is the tight bounding box of the points** for every
+point-based kind (Highlight, Ink, Sign, Line); the renderer pads it.
+
+**Defaults** (13.3): Note 20 x 18 pt centred on the click, yellow; Highlight
+yellow; Area mark light red, 1 pt border; Text blue, Helvetica 12, left;
+Ink red, 2 pt (`size` 4); Sign black, 1.5 pt (`size` 3); Line red, 1 pt, **arrow
+at the end** (`align` 2; there is no plain-line gesture yet - the inspector
+clears the bit); Rect and Ellipse red, 1 pt.
+
+**Undo** (`pduundo.c`). A command is one `pdu_undo_begin`/`end` bracket (a
+mutating call outside one is its own command). 64 commands over a ring of 256
+twelve-byte entries in `PDU_DC_UNDO` (bytes 0..3,071; the 64 commands'
+first-entry and entry-count words follow at 3,072..3,327). Every entry is an involution (undo and
+redo are the same swap, walked in opposite orders): a FIELD swaps up to 8
+bytes of a record, TEXT and PTS swap a record's offset/length and a heap top,
+CREATE swaps the store's count and both tops, MOVE stores the translation (its
+undo is the negation, exact in pt16). Three things are not logged and why that
+is right: a change to a record born in the same command (undo truncates the
+store below it; redo restores the count and the record is back as it ended,
+because **truncation never erases a byte**), the second edit of a field in one
+command (the first old state is the one that matters, so a drag of fifty sets is
+one step - and a MOVE of a record folds into that command's last move of it only
+while no rectangle or points entry of the record came after that move, since a
+move does not commute with them), and a keystroke into the record the previous command typed into
+(coalescing, 13.6). A new command discards the redo branch. The oldest command
+falls off at the 65th and the status line says so once until the next save
+(`Undo history full: the oldest step is dropped.`); a command that cannot fit
+at all clears the history and says `Too large to undo: the history was
+cleared.`
+
+**Dirty** is "not at the save point". The save point is an absolute command
+number: undo back to it is clean, redo past it dirty, a new edit made from
+below it forgets it (that state is on a dead branch), and a history that has
+run past it never matches. Save calls `pdu_saved()` on success only, so a
+failed save stays dirty. The title's `*` and the greying of Undo/Redo follow it.
+
+**Page operations** (`pdu_undo_pageop`): the delta (at most 96 bytes) is chunked
+into the log and handed back to `pages` through `pdu_pg_apply(delta, len, undo)`
+- 1 on undo, 0 on redo - in order with the annotation commands. `pduundo.c`
+carries a stub of `pdu_pg_apply` guarded by `#ifndef PDU_PAGES`; `pages`
+defines `PDU_PAGES` (pdu.h's pages block) when it lands its own. A delta over
+96 bytes clears the history (said, not hidden).
+
+**What a mutation does to the screen.** Every mutating call hands the screen
+rectangle of the record before and after (through `pdm_view_fwd`, padded 6 px,
+cut to the canvas) to `pdu_render_want`, which keeps the union - nothing renders
+before the next wake, so a command is still ONE repaint of the union of its
+marks; the outermost `pdu_undo_end` refreshes Undo/Redo, the title,
+`pdu_changes` (the live count) and the menus. So a caller of 20.8 never asks for a repaint. The primary
+draws no annotation pixel (D15).
+
+**The selection** is an XOR outline with a 4 x 4 handle just OUTSIDE each
+corner on the shapes that resize (Text, Rect, Ellipse, Area mark) - outside, so
+no pixel is flipped twice. The strips actually drawn (8 at most) are
+remembered and taken off by replaying them; a render's BEGIN takes the outline
+off first, but only when one of its strips meets the render's rectangle (the
+page under it is still the page it was drawn on), and its END puts it back;
+`pdu_canvas_paint` takes it off before it paints (a closed dialog's damage) and
+puts it back itself when no render will; scrolling, zooming and a page change
+take it off before they move anything. `Esc` deselects; `Delete` deletes the selection (one undoable
+command); Enter on a selected text box opens it for typing. `pdu_ed_gen()` is bumped on every mutation, undo, redo and selection change (D19, for `notes`); `pdu_tbuf[1025]` is the one near text buffer shared with notes.
+
+**The tools** (`pdutool.c`; Annotate and Edit modes, never Read or Pages, never
+on a signed document). A gesture is modal: the OS delivers a press and a
+release but no motion (13.7), so it polls `os88_mouse()` and yields, holding
+the gfx lock until the button comes up (CWORD's menu and ruler do the same),
+bounded by a MINUTE of ticks - not a pass count, which ended a drag in well
+under a second on a fast machine. It draws an XOR band and takes it off again
+(an Ink or Sign stroke is left for PDREND's opaque bands to paint over, D4, so
+a stroke is not drawn twice; a refused stroke repaints its own strip); the
+record is made at the release,
+converted ONCE from screen to page space with `pdm_view_inv` (5.1), so zoom,
+scroll and rotation never touch a stored byte.
+
+| tool | gesture | result |
+|---|---|---|
+| Select | click a mark (a shape by its border, a note/text by its box, Ink/Sign/Line/Highlight by their bounding box); drag it; drag a corner handle; double-click or Enter a text box to type | moves by an exact pt16 translation, kept on the page; resize re-converts the corner |
+| Note | click | `pdu_nt_new(page, &rect)`: notes' popover (20.9) makes the Note (20x18 pt centred there) on Done with text; double-click a note calls `pdu_nt_open` |
+| Text | drag a frame (any direction), or click for 144 x 36 pt; click an existing box to edit it; a click in the margin is refused (`Click on the page.`) | Text record, then typing |
+| Highlight | with a selection, press Highlight | one record, up to 12 quads (`pdu_sel_quads`, 4 points each), `rect` = their union |
+| Mark / Rect / Ellipse | drag | Area mark / Rect / Ellipse over the dragged frame (4 pt minimum) |
+| Line | drag tail to head | Line with an arrow at the end |
+| Ink | draw with the button down | one Ink record per stroke: a point only when the pointer is 3 px from the last kept one, at most 126 per stroke (said when reached) |
+| Sign | draw one stroke | one Sign record placed on release; the status line says 13.9's `Drawn signature. This is not a certificate signature.` A multi-stroke capture is not built |
+
+**Typing** (`pdu_tx_*`): while a note or text box is open the printable keys,
+Backspace and Enter (a new line, LF) go to it; every other key and every command
+ends the session. Each keystroke is a command that coalesces into the one
+before, so one Undo removes a freshly made box with all its typing, and one
+Undo takes back a whole later typing run. 1,024 characters is the limit and is
+said; the typed text is never dropped.
+
+**Not built / ASKs.** (1) Source annotations are not hit-tested - `pdu_ed_copy_src`
+exists and is tested, but a click on one needs `PDV_ENG_ANNOTS` per page, which
+is `notes`' list; it calls `copy_src` then `pdu_ed_set`/`pdu_ed_move`/`pdu_ed_del`.
+(2) The Highlight tool's text drag is `nav`'s: its selection gesture, when the
+tool is Highlight, ends by calling `pdu_tool_hilite()`; until nav lands `pdu_sel_quads` answers 0 and the status
+line says `Select text first.`. (3) Line-end handles, a plain (arrow-less) Line
+gesture, text caret positioning and property editing are not here; properties
+are `notes`' inspector through `pdu_ed_set`. (4) Page ids are view indices until
+`pages` lands `pdu_pg_id` (`pdu_ed_pg()` is the one line to change). (5) Esc
+does not cancel a gesture while the button is down: no key event is delivered
+inside the held-button loop and `os88_key_down` would arm the kernel's key map
+for the whole session; Undo takes a finished gesture back in one step.
+
+**As measured (2026-11-05, QEMU VGA with the stand-in PDREND, `LATIN.PDF`;
+verify-edit).** An Area mark, a Line dragged up-left, a Rect, an Ellipse, an
+Ink stroke, a Sign stroke and a Text box typed `Hi there`, two backspaces,
+`re`, Enter, `Ok`; the Rect selected, moved by its border, resized by its
+lower-right handle, undone and redone; Save As into `LATIN2.PDF`: `qpdf
+--check` passes and `mutool draw` shows all seven (/Square x2, /Line with
+`/LE [/None /OpenArrow]` at the release end, /Circle, /Ink x2 - the Sign at
+`/BS /W 1.5` with `/Subj (Drawn signature)` - and /FreeText `(Hi there\nOk)`)
+where they were placed; the title's `*` goes at the save. Note and Highlight
+wait for `notes` and `nav`. Sizes: primary 43,398 + 6,239 bss (+4,999 over the
+44,619 base, of which 1,025 is `pdu_tbuf`, which `notes` drops from its own
+bss: +3,974 net of it); overlay 14,248 bytes against D19's +12 KiB share
+(14,547).
+
+
+### 20.9 Notes & edits, the note popover and Text properties (`notes`, wave 2)
+
+Stories PD-12 (notes), PD-14 (the inspector) and PD-16 (the changes list);
+13.4's review state. Files: `pdunotes.c` (resident state, pure model and hooks),
+`pdovlnotes.c` (the list, cards, Resolve, jump-to, the note popover - all
+`ovl_nt_*`), `pduinsp.c` (Text properties - control table resident, functions
+`ovl_nt_*`), and
+`hosttest/pdu_nt.c` + `tests/unit/t_pdnotes.py` (the model, on the host).
+
+#### 20.9.1 The list
+
+A virtual list: no card is kept. `ovl_nt_step` walks the store with one int of
+state and returns the next item - an edit-store index, or `PDU_NT_SBASE` + a
+slot of the source cache - and `ovl_nt_seek(k)`/`ovl_nt_find(id)` are the
+walk run to item k / to an id; the panel paints `vis` rows from `top`. Three
+filters on `pdu_npall`, cycled by the filter button: **This page** (records on
+the page id, then the page's source annotations), **All pages** (every record,
+then the shown page's source annotations - the source of other pages is not
+read, which would be a disk walk per page; so this filter follows the page
+too), **Changes** (every record the store
+holds, deleted ones and review replies included, each with its word: Added,
+Edited, Moved, Deleted, Resolved, Reopened; no source annotations). Deleted
+records and review replies are in no other filter.
+
+**Source annotations** (`ovl_nt_srcload`, once a page, when the panel or the
+popover shows it and no job runs - an `ANNOTS` call moves the engine's object
+state): the first 32 `/Annots` elements through `PDV_ENG_ANNOTS`, at most 8
+listed (Text, Highlight/Underline/Squiggly/StrikeOut, FreeText, Ink, Line,
+Square, Circle - `Link`, `Popup`, `Stamp`, `Widget`, `Caret`,
+`FileAttachment`, `TrapNet` and the rest are not), each with its
+object number, rect and the first 17 characters of `/Contents`; a reply
+(`/IRT`) is not listed and only sets its parent's state. The load runs from
+the page change (`pdu_page_load`) or the wake, **never from a paint**: a module
+verb at the bottom of a paint is the deepest stack PageDesk could build (D21),
+so a paint that finds the cache of another page empties it (the list never
+shows another page's annotations, and a selected source slot is dropped) and
+asks the wake (`pdu_nt_srcwant`), which loads it and repaints the rows that
+changed. The answer's head comes into `pdu_line` and the 17 characters straight
+into the cache - not `pdu_tbuf`, which may be holding `edit`'s open text box. A source annotation
+that a record replaces (`src_num`, 13.1's copy-on-edit) is listed once, as the
+record.
+
+**Review state** (13.4): resolved or reopened is a reply record: `PDA_NOTE`,
+`irt` = the parent's `id` (or, with `PDEF_IRTSRC`, its source object number),
+`state` `PDS_COMPLETED`/`PDS_NONE`. The newest reply wins, and a PageDesk reply
+is newer than one the source carries; up to 12 replies are kept for the lookup
+(`ovl_nt_sync`, one pass over the store when its count, the `pdu_ed_gen()` poll's
+generation, the page or the filter changed). `irt == 0` means "no parent":
+record ids are non-zero.
+
+#### 20.9.2 The panel
+
+Under the shell's header (title, close box, filter): cards 146 x 36 on a
+38-pixel pitch (title "Note - Page 3", the first 17 characters, then a 12-row
+band with the status word and, on a note, Resolve/Reopen), a strip
+`<  1-4/9  >` that pages by a screenful, and the Text properties button (grey
+until a text box is selected). A card's interior is 18 cells wide, so no sliver
+is written beside a row. Selection inverts the card (`pdu_cact`; black on 1bpp).
+**Click** a card: select it, jump to its page (`pdu_goto`; the wake loads it,
+`pdu_notes_page` then reveals the rect) and tell `edit` (`pdu_ed_select`);
+click the selected note again: its popover; the selected text box again: the
+inspector; the card's button: Resolve/Reopen as one undo command.
+
+**Row pictures.** Every visible row (up to 12), the strip and the Text
+properties button keep one word saying what they last showed - for a row a
+hash of its title, preview and status word with the selection, the review
+state and the button folded in; 1 for a blank row - and any repaint of the
+list compares before it draws: an unchanged row is no call at all. So a
+selection change paints two cards, a resolve one, a page change only the rows
+whose item moved, a `pdu_ed_gen()` change the rows it touched, and none of them
+the panel's chrome. The words are forgotten when the ground under the list was
+just filled (the panel's chrome, the popover) or its geometry moved. A button
+is its frame, the four slabs round its caption and the caption in one
+`font_run` (20.6.4's rule), so a toggled state does not flash the label.
+
+COMPACT: the Notes popover is the same list, one line a row (`Note p3 ok: the
+first words`), the same strip, a click picks, jumps and opens the note's
+popover or the inspector; Up/Down scroll, Enter/Esc close. A scroll or a store
+change repaints the list's rows over what they showed; only opening the popover
+fills it.
+
+#### 20.9.3 The note popover
+
+The CGA mockup: a title and `n/1024`, the last four 32-column lines of the text
+with a cursor, and Resolve/Reopen, Delete, Done. A bounded field: 13.1's 1,024
+bytes, a refused key says so and keeps what is typed; Esc discards the typing;
+Enter, Done, a click elsewhere or any other way of closing keeps it. A key
+redraws the counter and the one or two lines it touched (the character and the
+cursor); the four lines only when the text scrolls. **A new note
+is not in the store until it has text** (`pdu_nt_new(page, &rect)`, the Note
+tool's call): an empty or cancelled note is no change and does not dirty the
+document. The record is created with `pdu_ed_new` in one undo bracket, colour
+`PDC_YELLOW`; an existing note's text is `pdu_ed_text`. A note that came with the
+file is listed, jumped to and resolved but its text is the source's. A full
+store refuses Done with the popover still open and the text in it; a close by
+a click elsewhere cannot be refused (`pdu_pop_close` has many callers), so
+there the refused typing is lost with a toast - the one gap in 13.1's rule.
+
+#### 20.9.4 Text properties
+
+Family (Helvetica, Times, Courier), size (8 9 10 11 12 14 16 18 24, - and +),
+Bold, Italic, colour (Black, Blue, Red, Green, Magenta, Brown, Gray; a record
+in any other `PDC_*` shows its own colour labelled `Other`, and C moves it to
+Blue), alignment
+L/C/R, Delete and Done, for one `PDA_TEXT` record: in the panel's place (FULL,
+MID) or a popover (COMPACT, a hidden panel). Each control is one command -
+`pdu_undo_begin`, `pdu_ed_set`, `pdu_undo_end` - and the box is rendered again
+by its own rect (`pdu_render_want`). Keys: Esc/Enter Done, Del delete, B I + - F C
+L M R. `style` = family<<4 | bold | italic<<1 as 13.1.1. In the panel the
+inspector's keys yield to the page field while it is being typed in (and, once
+`edit` lands, must yield to its open text box: 20.9.5).
+
+#### 20.9.5 What the other agents call
+
+The panel polls `unsigned pdu_ed_gen(void)` (D19: `edit` bumps it on every
+mutation, undo, redo and selection change) when it paints and on the wake, and
+repaints only the rows that changed (20.9.2's row pictures); `edit` never
+calls `notes`. The note text is `edit`'s `char pdu_tbuf[1025]`.
+`edit` calls `void pdu_nt_new(unsigned page_id, const struct pd_rect *r)` (the
+Note tool), `void pdu_nt_open(int i)` and `void pdu_nt_inspect(int i)`: real
+resident functions in `pdunotes.c` with exactly the prototypes `edit`'s block of
+`pdu.h` declares, so the two blocks may sit in either order, and notes' block
+defines `PDU_NOTES`, which switches off `edit`'s stand-ins in `pduedit.c`.
+`pdu_ed_select(i)`/`pdu_ed_selected()` are `edit`'s, as are non-zero record ids.
+Notes reaches the store only through 20.8 (`edit`'s `pdu.h` block; the
+stand-in store `pdunt.h` went at the merge with `edit`), brackets each command
+with `edit`'s own undo labels (`UL_NOTE` for a new note and a review reply,
+`UL_TYPE` for a note's text, `UL_DELETE`, `UL_PROPS` for an inspector control),
+and its key hook in `os88_onkey` is `pdu_tx < 0 && pdu_nt_key(...)`: an open
+text box of `edit`'s keeps B, I, C, L, M, R, + and -.
+
+**Sizes (the lead's grant, 22:55):** notes' shares are 2 KiB of the primary
+(image + bss) and 11.5 KiB of the overlay over the wave-1 base (40,650 + 3,973;
+overlay 2,259). Measured at 983d3bc1b, less the stand-in store that went at the
+merge: **+2,030 B resident (1,441 image + 589 bss) and +11,775 B of overlay**.
+About 0.8 KB of the resident figure is string literals the overlay code names
+(SPEC.md 73.14 keeps them resident).
 
 ### 20.14 Host preparation of complex PDFs (`host`, wave 2, PD-22)
 

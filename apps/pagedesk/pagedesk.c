@@ -120,6 +120,11 @@ static void pdu_menusync(void);
 static void pdu_relayout(void);
 static void pdu_paint_all(void);
 static void pdu_paint_rect(struct os88_rect *r);
+static void pdu_paint_under(struct os88_rect *r);
+static int pdu_popcls;                  /* pducmd.c: a popover close owed to the wake */
+static int pdu_popdmg_on;               /* pducmd.c: a switch's repaint is owed */
+static int pdu_popown;                  /* pducmd.c: a new popover's paint is owed */
+static struct os88_rect pdu_popdmg;
 static void pdu_render_want(struct os88_rect *r);
 static void pdu_canvas_full(void);
 static void pdu_job_abort(void);
@@ -146,7 +151,11 @@ static const char *pdu_abtext[] = {
 #include "pdudraw.c"            /* every pixel of the chrome */
 #include "pduview.c"            /* the page view: zoom, scroll, pages */
 #include "pdujob.c"             /* 15: the scheduler and its three jobs */
+#include "pduedit.c"            /* 13.1, 20.8: the edit store (edit) */
+#include "pduundo.c"            /* 13.6, 20.8: undo and redo (edit) */
 #include "pducmd.c"             /* commands, menus, keys, clicks */
+#include "pdunotes.c"           /* 17.3: Notes & edits, the note popover */
+#include "pduinsp.c"            /* 17.3: Text properties */
 #include "pdovl.c"              /* the overlay's tenants (ovl_*) */
 
 /* ============================================================================

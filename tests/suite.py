@@ -1511,6 +1511,17 @@ FAST = [
         "(SKIP, never pass, without qpdf on PATH), and every negative file's "
         "expected PDE_* code exists in pdabi.h",
         needs=()),
+    Row("pdstk", "fast", py("tests/unit/t_pdstk.py"), 1.3,
+        "DECISIONS D21/D23 (PageDesk's stack): tools/os88pdstk.py reads every "
+        "PageDesk segment's source and build/*.gen.asm, builds the call graph "
+        "with each frame, push and return address, and fails on recursion "
+        "outside its bounded ratchet, a module verb deeper than the 2 KiB "
+        "private stack less 256, or a callback chain on the UI task's 512-byte "
+        "stack over 384 (dispatch + frames + the kernel call). bez() recursing "
+        "seven deep wrote over the kernel's menu bar. Three synthetic negative "
+        "controls always run; the real tree SKIPs, by name, until `make "
+        "pagedesk` has built it",
+        ),
     Row("pdfixstress", "full", py("tests/unit/t_pdfix.py", "--stress"), 0.8,
         "t_pdfix's stress-set claims (PD-06/PD-21): a >640 KiB file, a "
         ">64 KiB stream, 64 pages, 10,000 sparse objects within "
@@ -1540,6 +1551,22 @@ FAST = [
         "slot (near call to one pdk_up before, jump to one pdk_dn after), so "
         "no kernel call runs on the private module stack. SKIP when no "
         "module is built"),
+    Row("pdnotes", "fast", py("tests/unit/t_pdnotes.py"), 0.5,
+        "PAGEDESK-SPEC 20.9 / PD-12, PD-16: apps/pagedesk/pdunotes.c's list "
+        "model - the filters (This page / All pages / Changes), order, "
+        "seek/step/find consistency, copy-on-edit shadowing, review state "
+        "(resolve/reopen as a reply), 256 records, the kind table and the "
+        "change words - built on the host over a fake store "
+        "(hosttest/pdu_nt.c; SKIP without cc)",
+        needs=("cc",)),
+    Row("pded", "fast", py("tests/unit/t_pded.py"), 0.5,
+        "PAGEDESK-SPEC 13.1.1 / 13.6 / 20.8: apps/pagedesk/pduedit.c and "
+        "pduundo.c - the edit store and undo the package compiles - built on "
+        "the host: every kind's layout, the limits, undo/redo against "
+        "snapshots, typing coalescing, the 64-command history, the save "
+        "point, source annotations, page-op deltas and 40 seeded random "
+        "walks. ~0.5 s",
+        needs=("cc",)),
     Row("livefull", "fast", py("tests/unit/t_livefull.py"), 0.2,
         "SPEC.md 80.6: the live USB/CD is the ONE image whose premise is "
         "completeness, and until this row nothing in the tree had ever read "

@@ -17523,11 +17523,21 @@ $(PDSTUBDIR)/PDWRT.MOD: $(PDDIR)/stubs/pdstub.asm apps/os88api.inc | $(PDSTUBDIR
 PD_PARTPAD = @python3 -c "import struct,sys; d=open('$<','rb').read(); \
 	    s,b=struct.unpack_from('<HH',d,4); assert s==len(d), ('$<',s,len(d)); \
 	    open('$@','wb').write(d+bytes(b))"
-$(BUILD)/pdeng.part: $(PD_ENG_MOD) | $(BUILD)
+# WHICH module each part is cut from is STAMPED, VPSTAMP's shape: a stand-in
+# and a real PDREND.MOD can both be older than the part, so without this a
+# PD_REND_MOD switch kept the previous module in the package (it read as a
+# CGA launch hang on the real renderer's stack overrun - verify-notes, 22:44)
+PDMODSTAMP := $(BUILD)/.pdmods-$(subst /,_,$(subst $(BUILD)/,,$(strip $(PD_ENG_MOD))+$(strip $(PD_REND_MOD))+$(strip $(PD_WRT_MOD))))
+$(shell mkdir -p $(BUILD); \
+        [ -f '$(PDMODSTAMP)' ] || { rm -f $(BUILD)/.pdmods-* \
+                                      $(BUILD)/pdeng.part $(BUILD)/pdrend.part \
+                                      $(BUILD)/pdwrt.part; \
+                                touch '$(PDMODSTAMP)'; })
+$(BUILD)/pdeng.part: $(PD_ENG_MOD) $(PDMODSTAMP) | $(BUILD)
 	$(PD_PARTPAD)
-$(BUILD)/pdrend.part: $(PD_REND_MOD) | $(BUILD)
+$(BUILD)/pdrend.part: $(PD_REND_MOD) $(PDMODSTAMP) | $(BUILD)
 	$(PD_PARTPAD)
-$(BUILD)/pdwrt.part: $(PD_WRT_MOD) | $(BUILD)
+$(BUILD)/pdwrt.part: $(PD_WRT_MOD) $(PDMODSTAMP) | $(BUILD)
 	$(PD_PARTPAD)
 
 # PDRES.BIN is over a part's 65,024-byte ceiling (os88pkg.py), so it rides as
@@ -20632,3 +20642,22 @@ all: $(PD_RES_BIN) $(PD_FONTX_RES) $(PD_FONT_TXT) $(PD_ART_INC)
 pdfonts: $(PD_RES_BIN) $(PD_FONTX_RES) $(PD_FONT_TXT) $(PD_ART_INC)
 	python3 tools/os88pdart.py check
 # ---- end PageDesk: fonts ----
+
+# ---- PageDesk: notes ----
+# Notes & edits, the note popover and the Text properties inspector
+# (docs/PAGEDESK-SPEC.md 20.9). pdovlnotes.c is included by pdovl.c, so the
+# shell block's PDCSRC wildcard (pdu*.c) does not name it: say so here, or an
+# edit to it rebuilds nothing. `make pdnotes` runs the list model's host test
+# (apps/pagedesk/hosttest/pdu_nt.c compiles pdunotes.c, the file the package
+# compiles, against a fake store); tests/unit/t_pdnotes.py is the same run.
+$(BUILD)/pagedesk.raw.asm: $(PDDIR)/pdovlnotes.c
+
+$(BUILD)/pdu_nt: apps/pagedesk/hosttest/pdu_nt.c apps/pagedesk/pdunotes.c \
+                 apps/pagedesk/pdu.h apps/pagedesk/pdabi.h | $(BUILD)
+	$(HOSTCC) -O1 -Wall -Wno-unused-function -DPD_HOST -Iapps/pagedesk \
+		apps/pagedesk/hosttest/pdu_nt.c -o $@
+
+pdnotes: $(BUILD)/pdu_nt
+	$(BUILD)/pdu_nt
+.PHONY: pdnotes
+# ---- end PageDesk: notes ----
