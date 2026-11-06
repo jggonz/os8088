@@ -314,6 +314,13 @@ user gives a different workflow. `apps/wirefleet/` and its SPEC.md section
 - **Label hygiene.** One flat namespace: every module-internal label carries
   its module prefix (`vga_`, `wm_`, `menu_`, `fm_`, `dsk_`, …) or is a NASM
   local label.
+- **A toast message is a `TOASTSTR`, never a bare `db` (§59.10.1).**
+  `TOASTSTR label, 'text'` (or `TOASTRUN label` ... `TOASTEND` round a run
+  with fields poked at run time) emits the same bytes and FAILS THE BUILD at
+  that line past `TOAST_MAX` (24) - the bar drops the rest silently. In C,
+  hand `os88_toast` a literal. `tests/unit/t_toast.py` follows every toast
+  argument back and fails on anything else; text only the running program
+  knows (a name, a number) goes in `tests/toastdyn.txt` with its reason.
 - **Text is `font_run`, not `font_str` (§6.1, §6.6).** `font_char`/`font_str`
   are TRANSPARENT — they leave what is underneath — so a `gfx_fill` followed by
   one of them writes every pixel twice, and the gap between the two passes is

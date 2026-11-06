@@ -111034,42 +111034,78 @@ the frontmost application's menu titles off the bar, which reads as the
 application breaking), and ending a cut message with an ellipsis (it tells the
 user something is missing and still does not tell them what).
 
-#### 59.10.1 …and the rule is a gate now, not a paragraph
+#### 59.10.1 …and the length is the ASSEMBLER's, at the line that wrote it
 
-`tests/unit/t_toast.py` (fast tier, ~1 s, no emulator) reads `TOAST_MAX` out
-of `kernel/toast.inc` — never a copy of it — and checks every fixed string a
-toasting procedure can reach.
+**A fixed toast message is never a bare `db`.** It is written
 
-**It over-approximates, deliberately.** A toast argument cannot be resolved
-exactly from source: it arrives in `SI`, `AX` or `BX`, through wrappers
-(`hbm_toast`, `wd_saymsg` and six more), through shared `jmp` tails — which is
-how the first draft of the checker missed `hbm_s_stale`, the one string the
-report was actually about — and sometimes composed into a buffer at run time.
-So it takes *every* `db` string that *any* procedure which toasts loads into a
-register, plus every string a `dw` table such a procedure loads names, walking
-callers to a **fixed point**. That cannot miss a fixed toast string, which is
-the direction that matters.
+    TOASTSTR label, 'text'          ; exactly `label: db 'text', 0`
 
-What it produces instead is false positives — a routine that draws an About
-box *and* toasts one line of it — and `tests/toastlong.txt` is where those go,
-one line each, with the routine that draws the string and what it draws it
-with. **It is a ratchet and it starts at two.**
+or, for a run of `db` lines with inner labels for fields poked at run time
+(a drive letter, a digit, a name buffer),
 
-The closure is tight enough for that to be affordable: **249 of the tree's
-13,158 top-level labels, 1.9%**. It is not quietly converging on "every
-procedure in the program", and if it ever starts to, the registry is what will
-say so by filling up with strings nobody toasts.
+    TOASTRUN label
+                db 'No system disk in '
+    ui_s_nodisk_l: db 'A:', 0
+    TOASTEND                        ; the bytes before the LAST NUL must fit
 
-**The SDK never stated the cap at all**, which is the root cause on the
-package side and why `apps/audio` shipped `Sent to the running Audio Player`.
-`OSAPI_TOAST`'s entry in `apps/os88api.inc` says it now, with the reason it is
-geometry, and with the one piece of advice that follows from it: a name the
-**user** chose may be any length and is what the truncation is *for*, so put
-it **last** — what survives is then your own words.
+and either one **fails to assemble at its own line** when the text is longer
+than `TOAST_MAX`, saying how long it is. The bytes are the `db` they replaced
+— converting the tree moved no byte of any kernel, checked with `cmp` against
+a build of the parent at one pinned build number. The macros live twice, in
+`kernel/kernel.asm` above every `%include` and in `apps/os88api.inc` for
+packages and drivers; `tests/unit/t_toast.py` holds the two blocks identical,
+and `t_mirror.py` the two `TOAST_MAX` equal. A macro is not an API cell, so
+adding them moved the SDK's fingerprint without a `PKG_FMT` bump
+(§20.2.0.1). A package macro that builds a toasted string checks `TOAST_MAX`
+itself (`RW_MI`, `OS88_MEGA_REFUSE`).
+
+**Why not a gate that finds the strings.** For five rounds
+`tests/unit/t_toast.py` INFERRED which strings were toasts, from the
+procedures around a toast call, and each round missed a shape — `label db`
+without a colon, the modules, a package's `.inc` files, a wrapper reached by a
+tail `jmp` — and each miss shipped a message the user saw cut. A string that
+says what it is needs nothing inferred about it.
+
+**What the gate proves now is that nothing ELSE reaches a toast.** From every
+`call` or `jmp` to `OSAPI_TOAST`, `toast_show` or `cw_toast_show` (string in
+`SI`) and `toast_say` (a table in `BX`), it walks BACKWARDS for the register
+that carries the argument: across fall-through, every branch to a label on the
+way (so a wrapper's callers are walked like direct sites, however they reach
+it), every arm of a `%if`, `push`/`pop` pairs, register copies, a callee that
+WRITES the register (summarised from its own `ret`s, and filtered by the carry
+flag the caller branches on — `call x / jc .say` takes only `x`'s `stc` exits),
+`pushf`/`popf`, a word table indexed by a register (every entry), and a
+pointer variable (every store to it). Every path must end at a `TOASTSTR` or
+`TOASTRUN` label, at a table or variable whose every entry is one, or at a
+value only the running program knows — a buffer a name is composed into, a C
+caller's argument — which `tests/toastdyn.txt` registers with the reason and
+the bound, as a ratchet. **Anything else fails**: a raw `db`, a string a
+macro made without checking, a label it cannot find, an instruction it does
+not model. The old gate passed what it did not recognise; this one fails on
+it, so a shape nobody has written yet arrives as a red row naming the line.
+
+The C half is simpler, because C has literals: every `os88_toast(` argument
+in `apps/` that is a literal is measured (a ternary of two literals, both);
+one that is the enclosing function's parameter is followed to that
+function's callers in the package; a local pointer, to every value it is
+assigned; anything else is a `toastdyn.txt` line.
+
+What it cannot see, and says: an indirect call or jump, a store to a pointer
+variable through a string op or a computed address, and a callee writing the
+register through an instruction it does not model. A COMPOSED message is
+measured by nobody — its fixed words and its name are joined at run time —
+which is what the registry's reasons are for, and why a composed line puts
+the name last.
+
+**The SDK states the cap**, which it did not until `apps/audio` shipped `Sent
+to the running Audio Player`: `OSAPI_TOAST`'s entry in `apps/os88api.inc`
+says it is geometry, points at `TOASTSTR`, and gives the one advice that
+follows — a name the **user** chose may be any length and is what the
+truncation is *for*, so put it **last**, and what survives is your own words.
 
 #### 59.10.2 …and `TOAST_MAX` itself is asked of the MACHINE
 
-§59.10.1 checks every message against `TOAST_MAX`. Nothing checked
+§59.10.1 holds every message to `TOAST_MAX`. Nothing checked
 `TOAST_MAX`. It is derived from a geometry by arithmetic — 25 cells less
 §59.9.2's gap — and a constant derived that way can be wrong by one with
 *every* message in the tree quietly a cell short and the static gate green for
