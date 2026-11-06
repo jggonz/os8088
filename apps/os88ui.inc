@@ -102,10 +102,12 @@
 ; never inside OS88UI_KFAR, whose image's CS is not COLD_SEG's; and
 ; OS88UI_BTN_BODY, which kern_small expands INTO two such images, takes its
 ; rung as a second argument instead, so tools/os88ovlchk.py (which reads both
-; arms of an %if) sees no near jump to `.cold` from them. UI_KRET builds the
-; rung's name rather than taking it whole so that tools/stkbalance.py, which
-; reads a `jmp %1` macro as a branch, walks the pops of the package arm on
-; both corpora and the package one is not shown a jump to a label it lacks.
+; arms of an %if) sees no near jump to `.cold` from them. Both BUILD the
+; rung's name (`kretc_%1`) rather than take it whole: tools/stkbalance.py
+; reads a `jmp %1` macro as a branch, and a label named as a macro ARGUMENT as
+; an address taken - which walks the rung as an entry from depth 0 - so this
+; way it walks the package arm's pops on both corpora and no rung is shown to
+; it as anything but the continuation it is.
 ; These are per-control routines (a button, a scroll bar), so the taken `jmp`
 ; is ~20 clocks on an operation that draws (kernel hot-paths pass 1, size).
 %ifdef OS88UI_KERNEL
@@ -638,7 +640,7 @@ OS88UI_BT_SIZE   equ 18
 ; here: its button's only callers are CTRL.DRV and FDLG.DRV, so it is expanded
 ; INTO each of those images instead, with OS88UI_KFAR's far primitives.
 ; -----------------------------------------------------------------------------
-%macro OS88UI_BTN_BODY 1-2      ; %2: the kernel .cold copy's exit rung
+%macro OS88UI_BTN_BODY 1-2      ; %2: the kernel .cold copy's exit rung, kretc_<%2>
 %1:
     push ax
     push bx
@@ -1237,7 +1239,7 @@ OS88UI_BT_SIZE   equ 18
 %endif
 .out:
 %if %0 > 1
-    jmp %2                      ; OS88UI_KCOLD (above): the .cold expansion
+    jmp kretc_%2                ; OS88UI_KCOLD (above): the .cold expansion
 %else                           ; names the ladder's rung
     pop bp
     pop di
@@ -1257,7 +1259,7 @@ os88ui_band: times 48 db 0      ; a picture cut by the clip, as a band
 %endmacro
 %ifndef OS88UI_KBTNIMG
  %ifdef OS88UI_KERNEL
-OS88UI_BTN_BODY os88ui_btn, kretc_bp   ; kern_big's, in .cold (OS88UI_KCOLD)
+OS88UI_BTN_BODY os88ui_btn, bp         ; kern_big's, in .cold (OS88UI_KCOLD)
  %else
 OS88UI_BTN_BODY os88ui_btn
  %endif
