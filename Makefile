@@ -20504,6 +20504,11 @@ pdefuzz: pdeng $(BUILD)/pde_fuzz
 # driven over mutated streams and every read size (hosttest/pde_fl_fuzz.c).
 # Host only; the target arm is hosttest/pde_boot.py's (PDENG.MOD in QEMU).
 PDFL_SRC := $(PDE_SRC) apps/pagedesk/pdeflate.h apps/pagedesk/pdeflate.c
+# The SHIPPED module's dependencies on flate's own files: eng's PDE_SRC wildcard
+# (pde*.c, pde.h) does not match pdeflate.h, and eng's PDENG.MOD rule predates
+# pdeflate.inc, so without these an edit to either left PDENG.MOD stale.
+$(BUILD)/pdeng.raw.asm $(BUILD)/pde_test $(BUILD)/pde_fuzz: apps/pagedesk/pdeflate.h
+$(BUILD)/PDENG.MOD: apps/pagedesk/pdeflate.inc
 $(BUILD)/pde_fl_test: $(PDFL_SRC) apps/pagedesk/pdmath.c apps/pagedesk/pdmath.h apps/pagedesk/hosttest/pde_fl_test.c \
                       apps/pagedesk/hosttest/pde_host.c apps/pagedesk/hosttest/pdhost.c | $(BUILD)
 	$(HOSTCC) -g -Wall -Wextra -Wno-unused-parameter -DPD_HOST -Iapps/pagedesk -Iapps/pagedesk/hosttest \

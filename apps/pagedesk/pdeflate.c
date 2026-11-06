@@ -204,20 +204,25 @@ static void fl_fail(pdw code)
     fl.state = FS_END;
 }
 
-/* n (<= 16) bits; 0 and a TRUNC failure when the input ends. */
-static pdw fl_bits(pdw n)
+/* n (<= 8) bits; 0 and a TRUNC failure when the input ends. */
+static pdw fl_bits8(pdw n)
 {
     pdw v;
     if (n == 0) return 0;
-    if (n > 8) {
-        v = fl_bits(8);
-        return (pdw)(v | (pdw)(fl_bits((pdw)(n - 8)) << 8));
-    }
     if (!fl_need(n)) { fl_fail(eof_err()); return 0; }
     v = (pdw)(fl.bb & (pdw)((1u << n) - 1));
     fl.bb = (pdw)(fl.bb >> n);
     fl.bn = (pdw)(fl.bn - n);
     return v;
+}
+
+/* n (<= 16) bits, the first 8 low (no recursion: D21). */
+static pdw fl_bits(pdw n)
+{
+    pdw v;
+    if (n <= 8) return fl_bits8(n);
+    v = fl_bits8(8);
+    return (pdw)(v | (pdw)(fl_bits8((pdw)(n - 8)) << 8));
 }
 
 /* ---- Huffman tables ------------------------------------------------------------- */
