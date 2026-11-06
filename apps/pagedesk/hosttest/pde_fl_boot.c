@@ -47,7 +47,6 @@ static struct pdxb_open op;
 static struct pdxb_strm sx;
 static struct pdxb_init ini;
 static unsigned char buf[512];
-static unsigned ext[2];
 static unsigned crc, nlo, nhi, rc;
 
 static unsigned tick(void) { return pd_fpeekw(0x40, 0x6C); }
@@ -92,10 +91,8 @@ void pdb_main(void)
     unsigned r, k, t0, obj, ra, na, ca;
     ini.xb_seg = SEG_XB; ini.cache_seg = SEG_CACHE; ini.cache_kb = 16;
     ini.arena_seg = SEG_ARENA; ini.arena_kb = 8; ini.tables_seg = SEG_TBL; ini.tables_kb = 11;
-    ini.flags = 1;                                  /* PDXI_FLATE: the two words after the struct */
-    ext[0] = SEG_FLATE; ext[1] = 86;
+    ini.flags = PDXI_FLATE; ini.flate_seg = SEG_FLATE; ini.flate_kb = 86;
     xb_put(&ini, sizeof ini);
-    pd_fcopy_out(ext, SEG_XB, (pdw)sizeof ini, 4);
     call(PDV_ENG_INIT, SEG_XB, 0, 0);
     if (pdb_cf) { ps("INIT failed\n"); return; }
     op.state = 0;
@@ -135,6 +132,15 @@ void pdb_main(void)
     crc = ca; nlo = na; nhi = 0; drain(100, 0);
     line("NESTA", 10, 100, 0xFFFF);
     call(PDV_ENG_STRM_CLOSE, 0, 0, 0);
+    /* the longest single piece of work before a byte comes back: a dynamic block's header (tables built) */
+    for (obj = 10; obj <= 13; obj += 3) {
+        strm_open(obj);
+        ra = pdb_pit();
+        k = call(PDV_ENG_STRM_READ, SEG_BUF, 0, 1);
+        na = pdb_pit();
+        call(PDV_ENG_STRM_CLOSE, 0, 0, 0);
+        ps("FIRST "); pu(obj); ps(" got="); pu(k); ps(" pit0="); pu(ra); ps(" pit1="); pu(na); pdb_putc('\n');
+    }
     /* throughput: objects 13 (Flate text), 14 (the same kind of text, unfiltered), 15 (a PNG-predicted image) */
     for (obj = 13; obj <= 15; obj++) {
         r = strm_open(obj);

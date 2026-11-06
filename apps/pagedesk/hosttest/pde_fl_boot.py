@@ -136,6 +136,7 @@ def main():
     lines = out.split("\n")
     seen = 0
     timing = {}
+    first = {}
     for l in lines:
         f = l.split()
         if not f:
@@ -154,6 +155,15 @@ def main():
                 bad_n += 1
                 print("FAIL", l, "want rc", rc, "bytes", len(data), "crc %04x" % crc16(data))
             else:
+                print("ok  ", l)
+        elif tag == "FIRST":
+            seen += 1
+            units = (int(kv["pit0"]) - int(kv["pit1"])) % 65536
+            if kv["got"] != "1":
+                bad_n += 1
+                print("FAIL", l)
+            else:
+                first[int(f[1])] = units * 838
                 print("ok  ", l)
         elif tag == "TIME":
             obj = int(f[1])
@@ -182,9 +192,12 @@ def main():
             if obj in timing:
                 ns_, n = timing[obj]
                 print('instructions per output byte, %-34s %6.1f   (%d bytes)' % (what, ns_ / n, n))
-    if seen != 14:
+    if icount:
+        for obj, ins in sorted(first.items()):
+            print('first byte of object %d: %d instructions (the dynamic header and its tables)' % (obj, ins))
+    if seen != 16:
         bad_n += 1
-        print("FAIL: %d result lines, expected 14\n%s" % (seen, out[-600:]))
+        print("FAIL: %d result lines, expected 16\n%s" % (seen, out[-600:]))
     sys.exit(1 if bad_n else 0)
 
 

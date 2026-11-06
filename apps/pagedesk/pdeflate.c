@@ -50,17 +50,15 @@ static pdw fl_ld;                       /* the slot whose state is in `fl`, or F
 
 #define fl_segof(k) ((pdw)(g_fseg + (k) * PDE_FLSLOT_PARA))
 
-static void fl_init(pdw flags, pdw xbseg)
+static void fl_init(pdw flags, pdw seg, pdw kb)
 {
-    static pdw ext[2];
     pdw k;
     g_fseg = 0; g_nfl = 0; fl_ld = FL_NONE;
     for (k = 0; k < PDE_NFL; k++) fl_sc[k] = 0;
-    if (!(flags & PDXI_FLATE)) return;
-    if (!pd_fcopy_in(xbseg, (pdw)sizeof(struct pdxb_init), ext, 4)) return;
-    k = (pdw)(ext[1] / PDE_FLSLOT_KB);
-    if (!ext[0] || !k) return;
-    g_fseg = ext[0];
+    if (!(flags & PDXI_FLATE) || !seg) return;
+    k = (pdw)(kb / PDE_FLSLOT_KB);
+    if (!k) return;
+    g_fseg = seg;
     g_nfl = k > PDE_NFL ? PDE_NFL : k;
 }
 
@@ -223,7 +221,7 @@ static pdw fl_build(pdw cnt, pdw sym, pdw lut, const pdb *len, pdw n, pdw comple
     pdw i, l, left = 1, mx = 0, code = 0, r, k;
     for (l = 0; l < 16; l++) fl_tw(cnt, l, 0);
     for (i = 0; i < n; i++) fl_tw(cnt, len[i], (pdw)(fl_tr(cnt, len[i]) + 1));
-    if (lut) for (k = 0; k < 256; k++) fl_tw(lut, k, 0);
+    if (lut) pd_ffill(fl.seg, (pdw)(PDE_FLTAB + lut), 0, 512);
     if (fl_tr(cnt, 0) == n) return PDE_OK;
     fl_tw(cnt, 0, 0);
     for (l = 1; l < 16; l++) {
@@ -309,11 +307,11 @@ static pdw fl_dynamic(void)
     for (i = 0; i < hclen; i++) fl_scr[fl_clord[i]] = (pdb)fl_bits(3);
     if (fl.state == FS_END) return fl.errc;
     /* the code-length code is read with the distance table's arrays */
-    rc = fl_build(FT_DCNT, FT_DSYM, 0, fl_scr, 19, 1);
+    rc = fl_build(FT_DCNT, FT_DSYM, FT_DLUT, fl_scr, 19, 1);
     if (rc) return rc;
     n = (pdw)(hlit + hdist);
     for (i = 0; i < n; ) {
-        s = fl_walk(FT_DCNT, FT_DSYM);
+        s = fl_sym(FT_DLUT, FT_DCNT, FT_DSYM);
         if (s == -1) return eof_err();
         if (s < 0) return PDE_SYNTAX;
         if (s < 16) { fl_scr[i++] = (pdb)s; continue; }

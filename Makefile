@@ -20434,9 +20434,14 @@ $(BUILD)/pde_fl_fuzz: $(PDFL_SRC) apps/pagedesk/pdmath.c apps/pagedesk/pdmath.h 
 		apps/pagedesk/pdeng.c apps/pagedesk/hosttest/pde_fl_fuzz.c apps/pagedesk/hosttest/pde_host.c \
 		apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c -o $@
 
-.PHONY: pdflate pdflatefuzz
+.PHONY: pdflate pdflatefuzz pdflateboot
 pdflate: $(BUILD)/PDENG.MOD $(BUILD)/pde_fl_test apps/pagedesk/hosttest/pde_fl_check.py
 	python3 apps/pagedesk/hosttest/pde_fl_check.py $(BUILD)/pde_fl_test $(BUILD)
+
+# the module itself, in QEMU (a 386-class CPU running the 16-bit code SmallerC
+# emitted): `make pdflateboot` checks its CRCs and prints instructions a byte
+pdflateboot: $(BUILD)/PDENG.MOD apps/pagedesk/hosttest/pde_fl_boot.py apps/pagedesk/hosttest/pde_fl_boot.c
+	python3 apps/pagedesk/hosttest/pde_fl_boot.py $(BUILD) --icount
 
 PDFLFUZZ_N ?= 300
 pdflatefuzz: $(BUILD)/pde_fl_fuzz apps/pagedesk/hosttest/pde_fl_check.py
