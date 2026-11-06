@@ -498,6 +498,13 @@ static void pdu_find_run(int again)
         pdu_say(pdu_line);
         if (pdu_xfind.page != pdu_page)
             pdu_goto(pdu_xfind.page);
+    } else if (r == PDE_BUSY) {
+        /* D11: BUSY is CF=0 and means "more to do", never "no match" */
+        os88_strcpy(pdu_line, "Searched to page ", sizeof(pdu_line));
+        os88_utoa(pdu_xfind.page + 1, pdu_num);
+        pdu_cat(pdu_line, pdu_num, sizeof(pdu_line));
+        pdu_cat(pdu_line, " - F3 searches on", sizeof(pdu_line));
+        pdu_say(pdu_line);
     } else {
         os88_strcpy(pdu_line, "No match for \"", sizeof(pdu_line));
         pdu_cat(pdu_line, pdu_needle, sizeof(pdu_line));
