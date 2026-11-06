@@ -7287,6 +7287,22 @@ whole win is proportional to height. It is the *opposite* lever from
 having because a fill is usually tall, and not worth quoting as a figure for
 drawing in general.
 
+### 5.7.2 The planar fill's inner loops: what kernel hot-paths pass 1 changed in them
+
+Each paragraph below is one change to `vga_solid_rect` or `gfx_fill_gray` on
+VGA/EGA, priced on MartyPC's `os8088_xt_vga` (gfxbench, guest time). None of
+them changes a pixel, a register contract or a refusal.
+
+**The XOR interior is `rep movsb` with SI = DI and DS = ES = the framebuffer**,
+which keeps §5's rule — every target byte read immediately before it is written,
+because the ALU XORs against the latches — in the form that rule always
+allowed: each iteration's read is that byte's latch load and its write is the
+same byte, whose CPU value Set/Reset ignores. 17 clocks a byte where `mov al,
+[es:di]` / `stosb` / `loop` was about 45. What §5 forbids is `rep stosb`, which
+writes without reading; nothing else about the rule changed. Measured as above:
+`GFX_XOR_FILL 64x64` 6.75 → 4.35 ms, `GFX_XOR_RECT 256x1` (one drag-outline
+edge) 1.09 → 0.88 ms.
+
 ### 5.8 `gfx_restore` can put back PART of its buffer
 
 `gfx_restore` and `gfx_blit4` are both off §11.3's clipped list for one stated

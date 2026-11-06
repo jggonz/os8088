@@ -3398,14 +3398,18 @@ vga_solid_rect_v:               ; 2,405-cycle floor, +0.6% PREDICTED
     jnz .irow
     jmp short .reset
 .xrow:                          ; XOR: every interior byte read before write,
-    mov cx, bx                  ; because the ALU works off the latches
-.xbyte:
-    mov al, [es:di]
-    stosb
-    loop .xbyte
+    xchg ax, si                 ; because the ALU works off the latches - and
+    push ds                     ; `rep movsb` OVER ITSELF is exactly that: each
+    push es                     ; iteration reads DS:SI = the byte (the latch
+    pop ds                      ; load) and writes ES:DI = the same byte, whose
+.xr:                            ; CPU value Set/Reset ignores. 17 clocks a byte
+    mov si, di                  ; where `mov al,[es:di] / stosb / loop` was
+    mov cx, bx                  ; ~45 (kernel hot-paths pass 1, SPEC.md 5).
+    rep movsb                   ; AX counts the rows: its value is spent
     add di, dx
-    dec si
-    jnz .xrow
+    dec ax
+    jnz .xr
+    pop ds
 .reset:
     call vga_gc_reset
 .done:
