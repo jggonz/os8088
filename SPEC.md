@@ -6056,6 +6056,23 @@ the first Live pass, every primitive after it believing it was nested and
 `gfx_blitp` refusing every block. It leaves past the teardown now;
 `vidlivext` is the gate (every sample 255 before, none above 1 after).
 
+#### 5.4.3.7 A WIDE row on the fast path is copied as words; a narrow one stays bytes
+
+`gfx_blitp`'s plane-major fast path (§5.4.3.5) moves **words when the row is
+8 bytes or wider**, and bytes below that. `rep movsw` is 25 clocks a word on
+an 8088 against `rep movsb`'s 17 a byte, and a Map Mask'd plane with Set/Reset
+off and the Bit Mask open takes a word write's two CPU bytes exactly as two
+byte writes. The threshold is what keeps the earlier measurement true: a word
+copy was built for every row once and REFUSED, because on Gorillas' 2-byte
+rows the shift and the odd tail cost more than the one word saved (71.7 ms
+against 68.3 on MartyPC's XT VGA, over `tests/gorillasmenu.py`'s 75 ms
+budget). A row under 8 bytes now pays one compare a PLANE and nothing else.
+The loop is picked once a plane and the odd byte is the shift's carry, which
+no `rep` writes. Measured (gfxbench, MartyPC `os8088_xt_vga`, kernel
+hot-paths pass 1): `GFX_BLITP 256x16` (32-byte rows) 9.48 → 7.97 ms, and
+`GFX_BLITP 64x64` (8-byte rows, the break-even) 12.38 → 12.43 ms. The masked
+rows `vga_prow_emit` writes were left as bytes: nothing measured them.
+
 ### 5.5 `gfx_scroll` — move a rect instead of redrawing it
 
 **in** AX/BX/CX/DX = x1/y1/x2/y2 inclusive, absolute screen coordinates;

@@ -3007,22 +3007,34 @@ gfx_blitp_v:
     mov dx, bx
     mov ax, [ss:vga_pr_rs]
     sub ax, [ss:vga_pr_n]       ; AX = a row's source advance past it
+    cmp word [ss:vga_pr_n], 8   ; WIDE rows go as words, chosen once a plane
+    jae .wrow                   ; (kernel hot-paths pass 1, SPEC.md 5.4.3.7)
 .frow:
     mov cx, [ss:vga_pr_n]
-    rep movsb                   ; BYTES, and a word copy is REFUSED: on the
-                                ; 8088's 8-bit bus `rep movsw` is 33 clocks a
-                                ; word against 2 x 17 - one clock saved - and
-                                ; the even-byte test, the shift and the odd
-                                ; tail cost ~40 a ROW. Built and MEASURED on
-                                ; MartyPC's XT VGA: Gorillas' animation frame
-                                ; (2-byte rows) 71.7 ms words against 68.3
-                                ; bytes, over tests/gorillasmenu.py's 75 ms
-                                ; budget; it bought 50.9 -> 50.7 ms on 86Box's
-                                ; 286-mega, and a 2-byte row loses there too
+    rep movsb                   ; BYTES under 8 a row, and a word copy is
+                                ; REFUSED there: the shift and the odd tail
+                                ; cost a row ~30 clocks against ~9 saved a
+                                ; word. Built and MEASURED on MartyPC's XT
+                                ; VGA: Gorillas' animation frame (2-byte rows)
+                                ; 71.7 ms words against 68.3 bytes, over
+                                ; tests/gorillasmenu.py's 75 ms budget
     add si, ax
     add di, bp
     dec dx
     jnz .frow
+    jmp short .fpe
+.wrow:                          ; ...and from 8 bytes the words win: `rep
+    mov cx, [ss:vga_pr_n]       ; movsw` is 25 clocks a word against `rep
+    shr cx, 1                   ; movsb`'s 17 a byte, a Map Mask'd plane
+    rep movsw                   ; takes a word write's two CPU bytes as they
+    jnc .weven                  ; stand, and the odd byte is the carry the
+    movsb                       ; shift left (no `rep` writes a flag)
+.weven:
+    add si, ax
+    add di, bp
+    dec dx
+    jnz .wrow
+.fpe:
     pop ax
     pop si
     add si, [ss:vga_pr_ps]
