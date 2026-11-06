@@ -125,7 +125,7 @@ Every module image starts with an 8-byte header and its door at +8, exactly
 | +2 | `PDM_ABI` |
 | +4 | image size |
 | +6 | bss size (the module zeroes its own bss on first entry) |
-| +8 | the door: `call far` with AL = verb, BX, CX, DX = arguments; answer AX (and DX where a verb says so), CF = 1 on failure with AX = a `PDE_*` code |
+| +8 | the door: `call far` with AL = verb, BX, CX, DX = arguments; answer AX (and DX where a verb says so), CF = 1 on failure with AX = a `PDE_*` code. A resumable verb that has more to do answers **CF = 0, AX = `PDE_BUSY`** - it is not a failure - and the caller calls again; CF = 0 with AX = `PDE_OK` (or the verb's answer) is done (DECISIONS D11) |
 
 DS is the caller's on entry and on return; the door sets DS = CS and calls
 the module's C dispatcher `pdX_verb(verb, bx, cx, dx)`.
