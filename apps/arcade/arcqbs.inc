@@ -29,6 +29,59 @@ QBS_CPS     equ 81                  ; 6503 cycles a sample: 894,886 / 10,989
 QBS_FRAC    equ 28490               ;   = 81.4347, its fraction in 65536ths
 QBS_KB      equ 32                  ; its memory: 0000-7FFFh (A15 not decoded)
 QBS_BOOT    equ 178977              ; its power-on run: 0.2 s, as qbsnd.py's
+QBS_CHIPKB  equ 4                   ; the two chips (the image's 10000h on),
+QBS_CHIPAT  equ QB_ROMKB * 1024     ;   kept at the ROM part's end: the image
+                                    ;   is freed at the pick (qb_build), long
+                                    ;   before the first play's qbs_prep
+
+; -----------------------------------------------------------------------------
+; qbs_want - qb_build's, before the ROM part is claimed: AX = its KB, plus
+; QBS_CHIPKB and [qbs_chips] = 1 when the board can be heard here (a 386 or
+; better) and the image carries the chips (its header's length past 64KB).
+; The board's own 32KB is NOT claimed here: with the image still held that
+; would be ARCADE's ninth claim, over MEM_OWNER_MAX. Kept: all but AX
+; -----------------------------------------------------------------------------
+qbs_want:
+    mov byte [qbs_chips], 0
+    push ax
+    call OSAPI_CPU_INFO
+    cmp al, CPU_386
+    pop ax
+    jb .r
+    push es
+    push si
+    mov si, [ar_rimgc]
+    mov es, si
+    cmp word [es:18], 1             ; (the image's length, its high word)
+    pop si
+    pop es
+    jb .r
+    add ax, QBS_CHIPKB
+    mov byte [qbs_chips], 1
+.r:
+    ret
+
+; qbs_keep - qb_build's, the image and the ROM part both in: the chips
+; copied to the ROM part's QBS_CHIPAT, if qbs_want made room. Kept: BX, DS
+qbs_keep:
+    cmp byte [qbs_chips], 0
+    je .r
+    push ds
+    push es
+    mov es, [qb_rclaim]
+    mov dx, [ar_rimgc]              ; (the image's 64KB on: its claim's
+    mov ax, 0x1002                  ;   paragraph past the header)
+    call ar_sub
+    mov ds, dx
+    xor si, si
+    mov di, QBS_CHIPAT
+    mov cx, QBS_CHIPKB * 512
+    cld
+    rep movsw
+    pop es
+    pop ds
+.r:
+    ret
 
 ; -----------------------------------------------------------------------------
 ; qbs_prep - BD_SBPREP, on the desktop: the board can be heard here - a 386
@@ -42,14 +95,8 @@ qbs_prep:
     jb .no
     cmp word [qbs_on], 1            ; (powered on already: as it was left)
     je .yes
-    mov si, [ar_rimgc]              ; the .ROM's header: its length, 68KB
-    or si, si
-    jz .no
-    push es
-    mov es, si
-    cmp word [es:18], 1             ; (the image past 64KB: the sound chips
-    jb .nochips                     ;   at its 10000h)
-    pop es
+    cmp byte [qbs_chips], 0         ; the chips, kept by the pick (qbs_keep)
+    je .no
     cmp word [qbs_seg], 0
     jne .have
     mov ax, QBS_KB
@@ -67,13 +114,10 @@ qbs_prep:
     xor ax, ax
     cld
     rep stosw
-    mov dx, [ar_rimgc]              ; (the image's 64KB on: its claim's
-    mov ax, 0x1002                  ;   paragraph past the header)
-    call ar_sub
-    mov ds, dx
-    xor si, si
+    mov ds, [qb_rclaim]             ; (the chips, at the ROM part's end)
+    mov si, QBS_CHIPAT
     mov di, 0x7000
-    mov cx, 0x800
+    mov cx, QBS_CHIPKB * 512
     rep movsw
     pop es
     pop ds
@@ -97,8 +141,6 @@ qbs_prep:
 .yes:
     clc
     ret
-.nochips:
-    pop es
 .no:
     stc
     ret

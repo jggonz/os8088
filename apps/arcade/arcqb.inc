@@ -219,7 +219,8 @@ qb_off:
 qb_build:
     push bx
     mov ax, QB_ROMKB
-    call OSAPI_MEM_CLAIM
+    call qbs_want                   ; (+4KB: the sound chips, kept past the
+    call OSAPI_MEM_CLAIM            ;   image - ARCADE-SPEC 13.3)
     jc .nomem
     mov [qb_rclaim], dx
     mov [ar_rseg], dx
@@ -276,6 +277,7 @@ qb_build:
     mov es, [cs:ar_aseg]
     call qbb_sprites
     pop ds
+    call qbs_keep                   ; (the sound chips, before the image goes)
     call ar_freeimg
     mov dx, [qb_rclaim]             ; built: both MOVABLE (qb_rmv, qb_smv)
     mov ax, qb_rmv

@@ -2729,6 +2729,7 @@ AR_VAR pm_md, 2
 AR_VAR pm_wtp, 2                    ;     ...where the tables start
 AR_VAR pm_wtabs, 3 * 256 + 255      ;     three, on a 256-byte page
 %endif
+AR_VAR qbs_chips, 1                 ; 1: the pick kept Q*bert's sound chips (qbs_want)
     OS88_BSS OP_BSS + AR_BSS
     OS88_IMAGE_END
 
