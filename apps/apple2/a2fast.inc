@@ -186,6 +186,21 @@ _a2_run:
 ; claim through: the segment itself on a real-mode kernel, its pair's code
 ; half under kern_mega (os88api.inc's OSAPI_MEM_CODESEL). 0 = none.
 ; -----------------------------------------------------------------------------
+; unsigned a2f_claimcode(void) - the fast core's 64KB code claim, 0 = refused.
+; CONVENTIONAL on every kernel (MEMP_CONV, SPEC.md 50.3.7): on kern_mega that
+; makes it an allocator pair whose code half OSAPI_MEM_CODESEL answers. The KB
+; door sends an OS88_HIGHMEM package's 64KB above 1MB as a lone DATA selector,
+; which CODESEL refuses - the fast core then never ran on kern_mega.
+_a2f_claimcode:
+    mov ax, 0x1000                  ; 64KB in paragraphs
+    mov cx, MEMP_CONV
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
+    sbb ax, ax                      ; CF -> -1 / 0...
+    not ax
+    and ax, dx                      ; ...-> 0 = refused, or the claim
+    ret
+
 _a2f_codesel:
     push bp
     mov bp, sp

@@ -780,7 +780,7 @@ class Aot:
             # the return address pushed as one word, inline; a_jsr where S is
             # at the stack page's edge
             sl, back = self.lab(), self.lab()
-            L("    cmp di, 0x0101", "    jb %s" % sl,
+            L("    cmp di, 0x0102", "    jb %s" % sl,
               "    mov word [di-1], 0x%04X" % ((pc + 2) & 0xFFFF), "    sub di, 2",
               "%s:" % back)
             self.tail.append(["%s: mov dx, 0x%04X" % (sl, (pc + 2) & 0xFFFF),
@@ -1387,7 +1387,7 @@ class Aot:
         # JSR's push (DX = the return address less one) and RTS, once
         slow = self.lab()
         L("a_jsr:",
-          "    cmp di, 0x0101", "    jb .slow",
+          "    cmp di, 0x0102", "    jb .slow",
           "    mov [di-1], dx", "    sub di, 2",
           "    xor dl, dl", "    or bp, bp", "    ret",
           ".slow:")
