@@ -6161,7 +6161,10 @@ spantest: $(BUILD)/spantest.img
 # tests/drvcall.py already knows how to make it answer.
 #   make lzdrvtest && python3 tests/lzdrv.py
 LZDDIR := $(BUILD)/lzd
-LZDRIVERS := $(subst $(BUILD)/ramdisk.drv,$(LZDDIR)/ramdisk.drv,$(DRIVERS))
+# The SHIPPED disk's drivers (DRIVERS360) and cluster size, not every
+# driver: built off $(DRIVERS) it carried the four SYS360OMITDRV leaves too
+# and, once PCIETHER.DRV joined them, needed 361 clusters of the disk's 354.
+LZDRIVERS = $(subst $(BUILD)/ramdisk.drv,$(LZDDIR)/ramdisk.drv,$(DRIVERS360))
 
 $(LZDDIR)/ramdisk.drv: $(BUILD)/ramdisk.bin tools/os88drv.py tools/os88lz.py
 	@mkdir -p $(LZDDIR)
@@ -6170,7 +6173,7 @@ $(LZDDIR)/ramdisk.drv: $(BUILD)/ramdisk.bin tools/os88drv.py tools/os88lz.py
 $(BUILD)/lzdrv360.img: $(BUILD)/boot360.bin $(KERNFILE) \
                        $(LZDRIVERS) $(SYSAPPS) $(STIKAPPS) $(COREAPPS360) $(SYSDOC) \
                        $(SYSLOGO) $(FACES360) $(FACELIC) tools/os88disk.py $(SYSROOT360)
-	python3 tools/os88disk.py -o $@ --size 360 \
+	python3 tools/os88disk.py -o $@ --size 360 $(SYS360SPC) \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
 		$(LZDRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(SYSROOTARG360) $(COREAPPSARGS360) $(SYSDOC) \
 		$(SYSLOGOARG) $(FACESARG360) $(APPDATAFOLDER)
