@@ -3358,12 +3358,16 @@ vga_solid_rect_v:               ; 2,405-cycle floor, +0.6% PREDICTED
     out dx, ax                  ; wide): AL = 8, AH = the mask, one word
     mov di, [gfx_roff]
     mov si, [gfx_rrows]
-.lcol:
-    xchg [es:di], al            ; load latches, and the masked write, in ONE
-                                ; instruction: Set/Reset supplies all four
-                                ; planes, so the byte written (AL's old value)
-                                ; is don't-care - font.inc's idiom
-    add di, ROW_BYTES
+    mov cx, ROW_BYTES           ; the row step in a register for both columns:
+    inc si                      ; `add di, cx` is a byte shorter than the
+    shr si, 1                   ; immediate. SI = row PAIRS rounded up, CF =
+    jnc .l1                     ; the count was even; an odd one enters at the
+.lcol:                          ; second row, so the loop's branch is paid once
+    xchg [es:di], al            ; a pair (kernel hot-paths pass 1, SPEC.md
+    add di, cx                  ; 5.7.2). Load latches, and the masked write,
+.l1:                            ; in ONE instruction: Set/Reset supplies all
+    xchg [es:di], al            ; four planes, so the byte written (AL's old
+    add di, cx                  ; value) is don't-care - font.inc's idiom
     dec si
     jnz .lcol
     mov bx, [gfx_rspan]
@@ -3374,9 +3378,15 @@ vga_solid_rect_v:               ; 2,405-cycle floor, +0.6% PREDICTED
     mov di, [gfx_roff]
     add di, bx
     mov si, [gfx_rrows]
+    inc si                      ; ...the same pairs, CX still the step
+    shr si, 1
+    jnc .r1
 .rcol:
     xchg [es:di], al            ; latch load and masked write in ONE instruction
-    add di, ROW_BYTES
+    add di, cx
+.r1:
+    xchg [es:di], al
+    add di, cx
     dec si
     jnz .rcol
     dec bx                      ; interior bytes per row
