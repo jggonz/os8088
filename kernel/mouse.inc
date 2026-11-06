@@ -4104,7 +4104,9 @@ mou_p2wz    db 0                ; 3 when the knock put the PS/2 device in WHEEL
                                 ; front of sch_isr (t_hotpar)
 
 mou_apply_w:                    ; mou_apply for a report whose CL may carry a
-    call mou_whl_cl             ; wheel: osapi_mouse_feed and the VMware pointer
+    push ax                     ; wheel: osapi_mouse_feed and the VMware
+    call mou_whl_cl             ; pointer's relative arm. AX is the report's dx
+    pop ax                      ; here - the decode spends it
 %endif
 
 mou_apply:
@@ -5568,9 +5570,9 @@ cur_move_mono:
 .kplus:
     or bl, bl                   ; d = +1: old column 1 is new column 0 - and if
     jz .nocov                   ; the old clip dropped it there is no overlap
-    or bh, 0x31                 ; at all; old column 0 is new column -1
-    jmp short .krow
-.kzero:
+    or bh, 0x21                 ; at all; old column 0 is new column -1. Bits
+                                ; 4-5 = 11 with .kzero's 0x10, which it falls
+.kzero:                         ; into
     or bh, 0x10                 ; d = 0: both columns, and a covered row
 .krow:                          ; writes neither
     mov si, [cur_celly]         ; e = newtop - oldtop, the NEW cell's top row
