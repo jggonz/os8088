@@ -238499,8 +238499,17 @@ bracket** (SPEC.md 53.2.3).
   nothing inside, and the window says "Needs real mode:" and the reason
   (`vb_nrsay`: `no low memory`, `its volume`, `fragmented`, `a driver`, `no
   room for a driver`, `a claim above 1MB`). There is no protected-mode play.
-- **Not yet** (VBATTLE-MEGA-PLAN W2-W5): the hold is not opened under
-  `CPU_F_PM`; the title picture is read after the bracket returns (a
+- **The hold** (W3): opened at the DOOR on kern_mega (`vb_load`, once - an
+  XMS block, EMS pages and the bounce claim are all refused inside a
+  real-mode bracket), the bounce pinned for the bracket and with the EMS
+  frame in the swap list, `FSXL_DRV DRVC_EMS` for an EMS hold; filled and
+  read inside through `OSAPI_XMEM_COPY`'s and `OSAPI_DRV_CALL`'s twins.
+  The read in place (125.4.2) is checked again at each bracket's start: on
+  kern_mega a token is the block's linear address only while the pool
+  leaves the block where it is, and the check's 16 bytes through the twin
+  against the same 16 in place is what says so. EMS is written and not yet
+  run (no board in Bochs).
+- **Not yet** (VBATTLE-MEGA-PLAN W4-W5): the title picture is read after the bracket returns (a
   real-mode bracket refuses its claim), so the window shows its text layout
   first there; the 286's reset path and CGA/Hercules under kern_mega have
   not been run.
@@ -238509,8 +238518,8 @@ bracket** (SPEC.md 53.2.3).
   stream runs through `OSAPI_SND_STREAM`'s real-mode twin. On Bochs's SB16
   the music is heard (`vbtmega --arm card`).
 
-**What it cost** the shipped engine: image 24,337 -> 24,887 (+550), bss
-+69, the packed file +451. `tests/vbtmega.py` (Bochs, VGA) is the gate.
+**What it cost** the shipped engine: W1 image 24,337 -> 24,887 (+550),
+bss +69, the packed file +451; W3 +76, +1, +49. `tests/vbtmega.py` (Bochs, VGA) is the gate.
 
 ### 125.5 The band
 

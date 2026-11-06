@@ -18398,15 +18398,18 @@ SOAK = [
         needs=("86box",),
         wants=("build/mega.img", "build/megarmbe.o88", "build/megarmbe.bin",
                "build/ems.bin")),
-    Row("vbtmega", "soak", py("tests/vbtmega.py"), 180.0,
-        "SPEC.md 125.4.5, VBATTLE-MEGA-PLAN W1-W2: the SHIPPED Video Battle "
+    Row("vbtmega", "soak", py("tests/vbtmega.py"), 240.0,
+        "SPEC.md 125.4.5, VBATTLE-MEGA-PLAN W1-W3: the SHIPPED Video Battle "
         "on kern_mega (Bochs, VGA), in an FSXF_REAL bracket - [fsx_rmode] "
         "seen 1, the demo's title exact in B8000, victory and its end loop, "
         "the play again exact, back to the desktop with the rings given "
         "back, a second play; a bracket the kernel ran in PROTECTED mode (a "
         "list naming DRVC_NET) refused with 'Needs real mode: a driver'; "
         "and with Bochs's SB16 the music heard in its capture at the "
-        "bundle's own rate. Broken (vb_door blind to CPU_F_PM) the first "
+        "bundle's own rate; the bundle held in XMS - opened at the door, "
+        "filled through the twin, read IN PLACE by a 386's loaded base, no "
+        "disk read from the fill on. 240s is 238 measured. Broken (vb_door "
+        "blind to CPU_F_PM) the first "
         "Play is CLOSED by a #GP again; DRVC_SOUND left out of the list, a "
         "silent play",
         needs=("bochs", "numpy"),

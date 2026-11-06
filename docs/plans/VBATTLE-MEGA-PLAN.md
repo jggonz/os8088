@@ -1,6 +1,6 @@
 # VBATTLE-MEGA — Video Battle on kern_mega, in a real-mode bracket
 
-**Status: W1 and W2 BUILT (2026-11-06, SPEC.md 125.4.5).** SPEC.md 125.7 said "kern_mega is not
+**Status: W1, W2 and W3's XMS half BUILT (2026-11-06, SPEC.md 125.4.5).** SPEC.md 125.7 said "kern_mega is not
 supported", and that was true in a worse way than it sounded: the SHIPPED
 engine, opened from an ordinary disk on a kern_mega machine, was CLOSED by a
 #GP the moment Play was pressed (measured on Bochs, below). This plan makes
@@ -97,11 +97,26 @@ kern_big and kern_small keep the load on the desktop, where the window says
 
 ### W3 - the hold
 
-- [ ] XMS: the block allocated at the door, filled inside through
-      `OSAPI_XMEM_COPY`'s twin; the read in place (LOADALL, a 386's base)
-      inside a real-mode bracket, the token's address as Video Player gets
-      it (98.3.18.11).
-- [ ] EMS: `FSXL_DRV DRVC_EMS`.
+- [x] XMS: the hold opened at the door (`vb_load`, once: the block, the
+      EMS pages and the bounce claim are refused inside a real-mode
+      bracket), filled inside through `OSAPI_XMEM_COPY`'s twin; the bounce
+      pinned for the bracket and swapped with the rest. The read in place
+      needed NO new address: on kern_mega a token is the block's linear
+      address while the pool leaves the block where it is - the Video
+      Player's door tests the same thing (its `MOVED` reason) - and the
+      battle's in-place check already compares 16 bytes read through the
+      twin with the same 16 read in place, so a moved block fails it and the
+      hold copies. It is run again at each bracket's start (a 286's LOADALL
+      state is that bracket's too). `vbtmega --arm hold` on Bochs's 386:
+      568 KB held, read in place by the loaded base, no disk read from the
+      fill on, the play again's title exact, a second bracket in place again.
+      A MOVED block is not provoked by the row.
+- [ ] EMS: `FSXL_DRV DRVC_EMS` and the frame in the swap list are written
+      (W3) but not run: Bochs has no EMS board - W4's, on 86Box.
+
+  **What W3 found.** `vb_mklist` ended on an `stosb` that relied on CF = 0
+  from an `or`; W3's new `cmp byte [vb_htype], 2` before it left CF = 1 with
+  an XMS hold, which read as "a claim above 1MB" - every held play refused.
 
 ### W4 - the other machines
 
@@ -139,6 +154,8 @@ Measured per wave, against the byte, on the shipped engine:
 | wave | image | bss | packed file |
 |---|---|---|---|
 | W1 | 24,337 -> 24,887 (+550) | +69 | +451 |
+| W2 | no engine change | | |
+| W3 | 24,887 -> 24,963 (+76) | +1 | +49 |
 
 W1's split (claims at the door, `vb_lread`, `vb_derive`) is shared code;
 the kern_mega markers are registered in `tests/megapkg.txt`.

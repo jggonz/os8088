@@ -30,6 +30,17 @@ inside an FSXF_REAL bracket:
           and stands clear of every other resampling. BROKEN ON PURPOSE
           (vb_mklist leaving DRVC_SOUND out) the play is SILENT - the card
           consumes nothing and the capture is empty - and this goes red.
+  hold    W3: the bundle HELD in XMS (Bochs's 16 MB): opened at the door
+          (an XMS block, a bounce claim - both refused inside a real-mode
+          bracket), filled inside through OSAPI_XMEM_COPY's twin, and READ
+          IN PLACE by a 386's loaded base (os88ub.inc) - the in-place check
+          passing in the bracket: the token is the block's linear address
+          while the pool leaves it where it is. From the fill on, a battle
+          and its play again with no disk read, the decode yielding, the
+          title again exact; and a second bracket checks in place again.
+          BROKEN ON PURPOSE (the door's vb_hopen left out) no hold opens and
+          this goes red. A block the pool MOVED between plays fails that
+          check and the hold copies instead - not provoked here.
   refuse  the kernel made to fall back: at OSAPI_FSX_RUN's call the list
           gains FSXL_DRV DRVC_NET, a class the real-mode bracket does not
           carry (FSXR_DRV) - so the bracket runs in PROTECTED mode: vb_main
@@ -157,6 +168,8 @@ def run(arm, tmp, syms):
         until(lambda: rb("vb_ready") == 1, "the play")
         if arm == "card":
             return card(m, S, rb, rw, until, key, bd, tmp)
+        if arm == "hold":
+            return hold(m, S, rb, rw, until, key, bd, data, sel)
         until(lambda: rb("vb_tplay") == 1, "the title")
         ok(rmode[0] == 1, "1. the play's bracket is REAL MODE "
            "([fsx_rmode] seen 1)")
@@ -269,6 +282,54 @@ def card(m, S, rb, rw, until, key, bd, tmp):
                                        sorted(byrate.items()) if k != 4)))
 
 
+def hold(m, S, rb, rw, until, key, bd, data, sel):
+    """W3: the bundle HELD in XMS (Bochs's 16 MB) - see the module note"""
+    m.write(m.lin(sel(), SYMS["vb_xyb"]), struct.pack("<H", 256))
+    ok(rb("vb_hon") == 1 and rb("vb_htype") == 1 and rb("vb_hrn") == 1
+       and rw("vb_hkb4") * 4096 >= len(data),
+       "hold: opened at the door - XMS, one range, the whole bundle (%d KB)"
+       % (rw("vb_hkb4") * 4))
+    until(lambda: rb("vb_tplay") == 1, "the title")
+    until(lambda: rb("vb_hfull") == 1, "the hold to fill", 300)
+    ok(rb("vb_hinp") == 1 and rb("vb_tier") >= 2,
+       "hold: filled in the bracket through OSAPI_XMEM_COPY's twin, and "
+       "READ IN PLACE (tier %d: a 386's loaded base) - its 16 bytes in place "
+       "matched the twin's copy" % rb("vb_tier"))
+    r0, i0, y0 = rw("vb_rcalls"), rw("vb_icalls"), rw("vb_iyc")
+    key("Enter")
+    until(lambda: rb("vb_state") == GS_MENU, "the menu", 240)
+    key("Enter")
+    until(lambda: rb("vb_eplay") == 1, "victory's end loop", 240)
+    key("Enter")
+    until(lambda: rb("vb_tplay") == 1 and rb("vb_over") == 0,
+          "the play again, at the title", 240)
+    title = screens_of(bd, bd.title)
+    hits = 0
+    for _ in range(12):
+        hits += bytes(m.read(0xB8000, 16384)) in title
+        until(lambda: True, "a look", guest=0.15)
+    nr = (rw("vb_rcalls") - r0) & 0xFFFF
+    ni = (rw("vb_icalls") - i0) & 0xFFFF
+    ny = (rw("vb_iyc") - y0) & 0xFFFF
+    ok(nr == 0 and ni > 0 and ny > 0,
+       "hold: from the fill on, a battle and the play again with NO disk "
+       "read (%d), records read in place %d, the decode yielding %d times"
+       % (nr, ni, ny))
+    ok(hits >= 6, "hold: the play again's title is the host's decode, read "
+       "in place (%d of 12 looks exact)" % hits)
+    key("Escape")
+    until(lambda: rb("vb_ready") == 0, "Esc to the desktop", 60)
+    os88marty.ui_done(m)
+    key("Enter")
+    until(lambda: rb("vb_ready") == 1 and rb("vb_tplay") == 1,
+          "the second play's title")
+    ok(rb("vb_hinp") == 1 and rw("vb_err") == 0,
+       "hold: a SECOND bracket checks the read in place again and keeps it")
+    key("Escape")
+    until(lambda: rb("vb_ready") == 0, "Esc again", 60)
+    ok(not m.box.faults(), "hold: no kern_mega FAULT or CLOSED")
+
+
 def music_heard(cap, bd):
     """{step: the best normalised correlation of a 0.36 s window of the
     bundle's music against Bochs's capture (44,100 Hz, 16-bit stereo; its
@@ -303,13 +364,14 @@ SYMS = {}
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--arm", choices=("play", "refuse", "card", "both"),
+    ap.add_argument("--arm", choices=("play", "refuse", "card", "hold",
+                                      "both"),
                     default="both")
     a = ap.parse_args()
     os.chdir(ROOT)
     syms, _ = pkg_syms("apps/vbattle/vbattle.asm", ("apps/",))
     SYMS.update(syms)
-    for arm in (("play", "refuse", "card") if a.arm == "both"
+    for arm in (("play", "refuse", "card", "hold") if a.arm == "both"
                 else (a.arm,)):
         tmp = tempfile.mkdtemp(dir=os.path.join(ROOT, "build"))
         try:

@@ -648,6 +648,12 @@ vb_cvfree:
 ; Player's 98.1.7.4). Preserves all but AX and DX
 vb_between:
     call vb_rfree                   ; (the clip rings: the play's alone)
+    mov dx, [vb_hbnc]               ; (the hold's bounce movable again)
+    or dx, dx
+    jz .bn
+    mov ax, vb_reloc
+    call OSAPI_MEM_MOVABLE
+.bn:
     xor dx, dx
     xchg dx, [vb_ring]
     or dx, dx
@@ -728,6 +734,12 @@ vb_mklist:
     push si
     push di
     push es
+    mov dx, [vb_hbnc]               ; THE BOUNCE PINNED for the bracket (it is
+    or dx, dx                       ; movable on the desktop): a move made by
+    jz .pin                         ; the door's own claims would leave its
+    xor ax, ax                      ; banked paragraph behind (53.2.3)
+    call OSAPI_MEM_MOVABLE
+.pin:
     mov si, vb_rlst
     mov di, vb_rlst_bank
     call os88real_prep
@@ -748,8 +760,14 @@ vb_mklist:
     mov ax, FSXL_DRV | (DRVC_SOUND << 8)
     stosw
 .e:
-    mov al, FSXL_END                ; (CF = 0 from the or)
+    cmp byte [vb_htype], 2          ; (an EMS hold: EMS.DRV, low)
+    jne .e2
+    mov ax, FSXL_DRV | (DRVC_EMS << 8)
+    stosw
+.e2:
+    mov al, FSXL_END
     stosb
+    clc                             ; (the compares above leave CF anyhow)
 .out:
     pop es
     pop di
@@ -1755,7 +1773,12 @@ vb_load:
                                     ; the rings' below (no hole on the desktop)
     cmp byte [vb_pmd], 0            ; ON kern_mega THE BRACKET READS: no
     je vb_lread                     ; paragraph is added to a selector
-    clc                             ; (VBATTLE-MEGA-PLAN W1)
+    cmp byte [vb_hopd], 0           ; (VBATTLE-MEGA-PLAN W1) - and the HOLD
+    jne .ok                         ; is opened here, once: its XMS block,
+    mov byte [vb_hopd], 1           ; its EMS pages and its bounce are refused
+    call vb_hopen                   ; inside a real-mode bracket (W3)
+.ok:
+    clc
     ret
 .fail:
     stc
@@ -2745,7 +2768,11 @@ vb_main:
     call .ring
     call vb_lread                   ; ...and read (once a session)
     jc .back
-    call vb_main1
+    cmp byte [vb_hinp], 0           ; THE HOLD IN PLACE checked again in THIS
+    je .m1                          ; bracket: the pool may have moved the
+    call vb_hipq                    ; block since (its token is its address
+.m1:                                ; only while it stays), and a 286's
+    call vb_main1                   ; LOADALL state is this bracket's
 .back:
     mov byte [vb_ready], 0          ; (the hook off before the words go
     mov si, vb_rlst                 ; back to selectors)
@@ -4687,9 +4714,10 @@ vb_s_nr10:    db 'a claim above 1MB', 0
 vb_s_nrq:     db '?', 0
 ; THE CLAIMS' WORDS a real-mode bracket makes real segments (os88real.inc):
 ; the resident claim's base (its parts are derived inside, vb_derive), the
-; card's ring and the two clip rings' segments
+; card's ring, the two clip rings' segments, the hold's bounce and the EMS
+; page frame (VBATTLE-MEGA-PLAN W3)
 %include "os88real.inc"
-OS88REAL_LIST vb_rlst, vb_vres, vb_ring, vb_rg0 + RG_SEG, vb_rg1 + RG_SEG
+OS88REAL_LIST vb_rlst, vb_vres, vb_ring, vb_rg0 + RG_SEG, vb_rg1 + RG_SEG, vb_hbnc, vb_efseg
 vb_s_badread: db ' BATTLE.VBT: a read failed', 0
 vb_s_norate:  db ' Needs the full kernel (FSXF_RATE)', 0
 vb_s_nocga:   db ' Needs CGA, EGA or VGA', 0
@@ -4853,6 +4881,7 @@ VB_VAR vb_enext, 2
 VB_VAR vb_fsi, FSI_SIZE
 VB_VAR vb_vseg, 2
 VB_VAR vb_vid, 1
+VB_VAR vb_hopd, 1                   ; kern_mega: the hold opened at the door
 VB_VAR vb_pmd, 1                    ; the desktop in PROTECTED mode at the
                                     ; door: kern_mega (vb_door)
 VB_VAR vb_capm, 2                   ; OSAPI_FSX_CAPS's modes, at the door
