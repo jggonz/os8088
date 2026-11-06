@@ -104,11 +104,12 @@ with os88ui.boot(ROOT + "/build/os8088-360.img",
                      ["-I", ROOT + "/apps/", "-I", ROOT + "/apps/dos/",
                       "-I", ROOT + "/drivers/net/", "-I", ROOT + "/kerndos/",
                       "-DDOSKPART", "-DDOS_EXTCORE"]
-                     # kern_mega's system disk carries ITS OWN DOS.O88,
-                     # built -DDOS_MEGA (KERN-MEGA-DOS-PLAN 12.1 item 4); the
-                     # others carry WIN16's forward (SPEC.md 124.18.1)
-                     + (["-DDOS_MEGA"] if os.environ.get("OS88_MEGA")
-                        else ["-DDOS_WIN16"]))
+                     # every kernel but kern_small carries WIN16's forward
+                     # (SPEC.md 124.18.1; kern_mega's since 124.31.1), and
+                     # kern_mega's system disk carries ITS OWN DOS.O88, built
+                     # -DDOS_MEGA as well (KERN-MEGA-DOS-PLAN 12.1 item 4)
+                     + ["-DDOS_WIN16"]
+                     + (["-DDOS_MEGA"] if os.environ.get("OS88_MEGA") else []))
     dseg = u16(m.read(os88geom.winptr(m, dw.i, ui.sym) + os88geom.W_SEG, 2))
     n = u16(m.readseg(dseg, dsyms["dos_btrec"] + 6, 2))     # OS88UI_BT_N
     r = u16(m.readseg(dseg, dsyms["dos_btrec"] + 0, 2))     # OS88UI_BT_RECTS

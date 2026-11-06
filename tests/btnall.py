@@ -90,7 +90,8 @@ ROWS = [
 # their maps are taken with the same defines or they resolve to plausible,
 # wrong offsets - pkg_syms' own warning
 if os.environ.get("OS88_MEGA"):
-    ROWS = [r[:4] + (tuple(d for d in r[4] if d != "-DDOS_WIN16")
+    ROWS = [r[:4] + (tuple(r[4])    # -DDOS_WIN16 kept: kern_mega's DOS has
+                                     # the forward since SPEC.md 124.31.1
                      + (("-DDOS_MEGA",) if "DOS" in r[0] else
                         ("-DPKG_MEGA",) if "AUDIO" in r[0] else ()),)
             + r[5:] for r in ROWS]
