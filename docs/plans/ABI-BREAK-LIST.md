@@ -225,6 +225,23 @@ the natural moment to tidy them.
 | `OSAPI_WM_DESK` verb 4 for the shared Sticky App library | built with the owner's approval (STIKLIB-PLAN, SPEC.md 110.15) |
 | `OSAPI_FSX_SPK` thin door; `OSAPI_DRV_SUSPEND`'s mask | R4, R5 |
 
+## V. Speed - rows that would make a HOT path faster
+
+Opened by kernel hot-paths pass 1 (`docs/plans/khp1/BRIEF.md`, 2026-11-06).
+The sections above are mostly about BYTES. This one is about CYCLES. Each row
+is a frozen interface that a hot path pays for on every call, priced in
+cycles on the 4.77 MHz 8088 (MartyPC guest cycles unless it says
+PREDICTED), in user-visible milliseconds for a named operation, and in bytes.
+A row here can cost bytes and still be worth a flag day, because it buys
+time. Every row carries the same status words as above. Ids are `V<n>`.
+Rows found elsewhere that are speed trades are cross-referenced rather than
+copied: **T2-2** (section 10) is one, trading kern_big's 52-cycle inline
+`OSAPI_SET_COLOR` against kern_mega's conventional bytes.
+
+| id | what changes | who it breaks | what it buys (cycles, ms, bytes) | source | status |
+|---|---|---|---|---|---|
+| *(filled at the pass's merge, from each agent's WANTS AN ABI BREAK)* | | | | | |
+
 ## 10. Rows from kern_mega size pass 2's agents
 
 Folded in at the merge from each agent's *WANTS AN ABI BREAK*
