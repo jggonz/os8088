@@ -242129,6 +242129,14 @@ what the records are made between, so the joins stay exact
 
 At 4096, to the first region's end, little-endian; `tools/vbtrules.py` is
 its compiler, its reader and the reference the engine is held to (126.6).
+**Every byte is hostile** (§19): the engine refuses (*is not a VBT1 file*)
+a bundle whose band starts past row 191 (header 65) or whose rules have
+other than 1 to 4 characters or more than 8 items - the counts that size
+its own tables (`vb_hp`, `vb_items`); an action costing an item past the
+party's count can never be paid; and a band picture, a line of text or the
+plain look's rules that would leave the band's rows are not drawn, so no
+place the bundle names writes past the band's buffers. The title picture's
+variant must fit its region and a desktop (720 x 350), or there is none.
 A 64-byte header gives the counts and each table's offset from the block's
 start, the enemy, and the seed:
 

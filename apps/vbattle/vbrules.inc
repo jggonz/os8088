@@ -910,6 +910,9 @@ vb_canpay:
 .i:
     cmp al, C_ITEM
     jne .l
+    mov dl, [si+AC_ITEM]            ; (an item the party has not got: never,
+    cmp dl, [RL+RH_NITEM]           ; and vb_pay's write stays in vb_items)
+    jae .no
     push bx
     mov bl, [si+AC_ITEM]
     shl bx, 1
