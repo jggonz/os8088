@@ -150,6 +150,8 @@ VH_COVER    equ 88              ; dword offset, dword length: the TITLE
                                 ; variants, the line, a 12-byte row each
 CV_NAME     equ 68              ; the battle's name, the window's title
 CV_TAB      equ 84              ; (the rows: kind, 0, w, h, stride, offset)
+CV2_TAB     equ 100             ; 'C2': the name 32 bytes (31 letters, what
+                                ; a 322-pixel window's title bar shows)
 CV_LINE     equ 64
 CV_TALL     equ 0               ; 640 x 200
 CV_SQUARE   equ 1               ; 640 x 480 (and 350, EGA's)
@@ -537,8 +539,15 @@ vb_coverload:
     call vb_read
     jc .free
     mov es, [vb_cvseg]
+    mov word [vb_cvtab], CV_TAB     ; 'CV': a 15-letter name; 'C2': 31
+    mov byte [vb_cvnl], 16
     cmp word [es:0], 'CV'
+    je .lay
+    mov word [vb_cvtab], CV2_TAB
+    mov byte [vb_cvnl], 32
+    cmp word [es:0], 'C2'
     jne .free
+.lay:
     call OSAPI_VIDEO                ; THIS SCREEN'S SHAPE: 200 rows the tall
     mov cl, CV_TALL                 ; one, 720 across or 348 and 350 rows
     cmp bx, 200                     ; Hercules' shape, anything else square
@@ -556,7 +565,7 @@ vb_coverload:
     mov ch, [es:2]                  ; the variants
     or ch, ch
     jz .free
-    mov si, CV_TAB
+    mov si, [vb_cvtab]
     mov bp, si                      ; (the first, when none is this shape)
 .v:
     cmp [es:si], cl
@@ -588,17 +597,19 @@ vb_coverload:
     cmp byte [es:si], 0             ; (its own, when it has one)
     je .nn
     mov di, vb_cvname
-    mov cx, 16
+    mov cl, [vb_cvnl]
+    xor ch, ch
 .nm:
     mov al, [es:si]
     mov [di], al
     inc si
     inc di
     loop .nm
-    mov byte [vb_cvname+15], 0
+    mov byte [di-1], 0
     mov word [vb_tpl+8], vb_cvname
 .nn:
     mov byte [vb_cvon], 1
+    mov byte [vb_cvwin], 1          ; (the window is a picture's from now)
     clc
     jmp short .out
 .free:
@@ -633,6 +644,21 @@ vb_cvpaint:
     shr ax, 1
     add ax, [vb_px]
     mov [vb_cvx], ax
+    cmp byte [vb_cvon], 0           ; (out: its place black)
+    jne .pic
+    mov al, CBLACK
+    call OSAPI_SET_COLOR
+    mov ax, [vb_cvx]
+    mov cx, ax
+    add cx, [vb_cvw]
+    dec cx
+    mov bx, [vb_py]
+    mov dx, bx
+    add dx, [vb_cvh]
+    dec dx
+    call OSAPI_GFX_FILL
+    jmp short .bd
+.pic:
     mov al, CWHITE
     mov ah, CBLACK
     call OSAPI_GFX_BLIT1_PEN
@@ -891,9 +917,9 @@ vb_paint:
     mov ax, 60
 .c:
     mov [vb_pcols], ax
-    cmp byte [vb_cvon], 0           ; (the title picture, and its line)
-    je .lines
-    jmp vb_cvpaint
+    cmp byte [vb_cvwin], 0          ; (the title picture, and its line - or,
+    je .lines                       ; its claim given to a play, black where
+    jmp vb_cvpaint                  ; it goes: never the text window)
 .lines:
     xor bp, bp                      ; the line
 .line:
@@ -1026,7 +1052,9 @@ vb_play:
     mov dx, VB_DIV
     mov di, vb_hook
     call OSAPI_FSX_RUN
-    jnc .back
+    mov al, [vb_cvon]               ; (the picture's as the desktop came
+    mov [vb_cvback], al             ; back: up already, no text flash - a
+    jnc .back                       ; test's, vbtcover)
     mov word [vb_err], vb_s_norate
 .say:
     mov ax, [vb_err]
@@ -2558,6 +2586,10 @@ vb_main:
 .rout:
     call vb_rfree
 .out:
+    cmp byte [vb_cvwin], 0          ; THE TITLE PICTURE back while the screen
+    je .o2                          ; is still the play's: read when the
+    call vb_coverload               ; desktop came back, the window showed
+.o2:                                ; its text first (the owner's "flash")
     ret
 
 ; vb_rstart - the rings empty, and the first opening's head read into ring
@@ -2829,11 +2861,17 @@ vb_hook:
     mov dx, bx
     sub bx, [vb_cons]
     jz .same
-    mov [vb_cons], dx
-    add [vb_cons32], bx
-    adc word [vb_cons32+2], 0
-    mov word [vb_pers], 0
-    jmp short .est
+    mov [vb_cons], dx               ; A STEP BACK is a step back: SOUND.DRV's
+    mov dx, 0                       ; count stops at the total when the card
+    test bh, 0x80                   ; played past it (SPEC.md 34.5.3: what it
+    jz .fwd                         ; played there was stale), and taken mod
+    dec dx                          ; 65536 as a step ON it put the clock
+.fwd:                               ; ~62,000 samples (5.7 s) ahead - every
+    add [vb_cons32], bx             ; frame "late", an end clip never started
+    adc [vb_cons32+2], dx           ; (vbtownsnd, now and then). Signed, the
+    mov word [vb_pers], 0           ; clock goes back to the card's, the
+    jmp short .est                  ; picture holds a moment and the writer
+                                    ; feeds the halted card again
 .same:
     add [vb_pers], ax
 .est:
@@ -4480,7 +4518,11 @@ VB_VAR vb_cvh, 2
 VB_VAR vb_cvstr, 2
 VB_VAR vb_cvx, 2
 VB_VAR vb_cvline, CV_LINE
-VB_VAR vb_cvname, 16
+VB_VAR vb_cvname, 32
+VB_VAR vb_cvwin, 1                  ; the window is a title picture's
+VB_VAR vb_cvback, 1                 ; ...and it was up as a play ended
+VB_VAR vb_cvtab, 2                  ; the region's rows ('CV' or 'C2')
+VB_VAR vb_cvnl, 1                   ; ...and its name's bytes
 VB_VAR vb_selfname, 14              ; our own file, and its folder: a battle
 VB_VAR vb_selfdir, 2                ; embedded in it (vb_embfind)
 VB_VAR vb_selfvol, 1

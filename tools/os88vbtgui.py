@@ -1040,8 +1040,18 @@ class BattleTab(object):
         r = 0
         ttk.Label(f, text="Name").grid(row=r, column=0, sticky="w")
         self.name = tk.StringVar()
-        e = ttk.Entry(f, textvariable=self.name, width=40)
+        import os88vbt as B_
+        self.tmax = B_.TITLE_MAX        # (what a window's title bar shows)
+        vcmd = (f.register(lambda v: len(v) <= self.tmax), "%P")
+        e = ttk.Entry(f, textvariable=self.name, width=40, validate="key",
+                      validatecommand=vcmd)
         e.grid(row=r, column=1, columnspan=3, sticky="w")
+        self.name_l = ttk.Label(f, text="")
+        self.name_l.grid(row=r, column=4, sticky="w", padx=6)
+        self.name.trace_add("write", lambda *a: self.name_l.config(
+            text="%d of %d letters - the window's title (with a title "
+                 "picture), all of it shown" % (len(self.name.get()),
+                                                self.tmax)))
         e.bind("<FocusOut>", lambda ev: self._set("name", self.name.get()))
         e.bind("<Return>", lambda ev: self._set("name", self.name.get()))
         r += 1

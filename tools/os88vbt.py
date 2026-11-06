@@ -1477,6 +1477,11 @@ CV_KINDS = {"cga4": (CV_TALL, CV_SQUARE), "vga4": (CV_SQUARE,),
             "herc": (CV_HERC,)}
 CV_LINE = 64
 COVER_LINE = "Click or press Enter to begin"
+# THE WINDOW'S TITLE: the battle's name, as many letters as the title bar of
+# a title picture's window shows - 322 pixels, less the close and collapse
+# boxes (29 each side) and the 6-pixel gaps round the text, at 8 a letter
+TITLE_MAX = (322 - 2 * 29 - 12) // 8        # 31
+CV_NAME = TITLE_MAX + 1
 
 
 def cover_bitmap(img, kind):
@@ -1499,12 +1504,12 @@ def cover_region(img, line, kinds, name=None):
     w, h, stride, its offset in the region - and the bitmaps (SPEC.md
     125.2)"""
     vs = [(k,) + cover_bitmap(img, k) for k in kinds]
-    head = bytearray(b"CV" + bytes([len(vs), 0]))
+    head = bytearray(b"C2" + bytes([len(vs), 0]))   # ('CV': a 16-byte name)
     t = (line if line is not None else COVER_LINE)
     t = "".join(c for c in t if 0x20 <= ord(c) <= 0x7E)[:CV_LINE - 1]
     head += t.encode("ascii").ljust(CV_LINE, b"\0")
-    nm = "".join(c for c in (name or "") if 0x20 <= ord(c) <= 0x7E)[:15]
-    head += nm.encode("ascii").ljust(16, b"\0")
+    nm = "".join(c for c in (name or "") if 0x20 <= ord(c) <= 0x7E)
+    head += nm[:TITLE_MAX].encode("ascii").ljust(CV_NAME, b"\0")
     at = len(head) + 12 * len(vs)
     body = bytearray()
     for k, w, h, st, bm in vs:

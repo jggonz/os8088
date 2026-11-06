@@ -237294,8 +237294,11 @@ Battle tab's "Title picture") is shown in the battle's WINDOW on the desktop
 before the play, with one line under it ("Click or press Enter to begin"
 unless it says otherwise) - the window titled with the battle's name and
 sized to the two (`vb_tpl`, before it is created). Its region, at header
-88: `CV`, the variants' count, the line (64 bytes), the battle's name (16),
-a 12-byte row a variant - its desktop's SHAPE (0: 640 x 200, CGA's; 1: 640
+88: `C2`, the variants' count, the line (64 bytes), the battle's name (32:
+31 letters, what the title bar of a picture's 322-pixel window shows
+between its boxes at 8 a letter - `os88vbt.TITLE_MAX`, which the Battle
+tab's Name holds itself to and counts; `CV`, the first, carried 16), a
+12-byte row a variant - its desktop's SHAPE (0: 640 x 200, CGA's; 1: 640
 x 480 and EGA's 350; 2: 720 x 348, Hercules'), 0, width, height, stride,
 its offset in the region - and the 1bpp bitmaps, half the screen wide and
 as tall as the picture's shape on a 4:3 screen of that many rows, dithered
@@ -237305,7 +237308,11 @@ the bundle found as a play finds it, the variant by `OSAPI_VIDEO`'s
 screen), puts it down with `OSAPI_GFX_BLIT1` (`vb_cvpaint`: white on
 black, the line centred, every other pixel black once) and gives the claim
 back as a play starts (`vb_cvfree`: the rings want it), reading it again
-when the play returns. A status (*Loading...*, a refusal) takes the line's
+as the play ENDS, while the screen is still the play's (`vb_main`'s exit):
+read after, the desktop's first paint of the window was its text window
+and then the picture (the owner's "flash"). A window made for a picture
+never paints the text window: with its picture out it paints black where
+the picture goes, and its line (`[vb_cvwin]`). A status (*Loading...*, a refusal) takes the line's
 place while it says anything. `vbtcover`.
 
 **A battle may be EMBEDDED in its own copy of the engine** - a GAME, one
@@ -237648,6 +237655,17 @@ the time on Bolt (one anchor) and a quarter on the rest (`vbtanchor`). The
 title's way out is counted the same way (`[vb_lleft]`).
 The demo's anchors are every sixth frame of a 24-frame loop, so with a
 512-byte block a command waits 0.27 to 0.6 s for its clip to begin.
+
+**The card's count is taken SIGNED.** `SND_EXT_CONS` is free-running mod
+65536 and normally only moves on, but when the card has played past the
+total SOUND.DRV stops it AT the total (§34.5.3: what it played there was
+stale), a step back. Taken as an unsigned step it read as ~62,000 samples
+ON - the clock 5.7 s ahead, every frame "late" and forgiven, an end clip
+that never started; held at its highest instead, the writer thought itself
+a lead ahead and never fed the halted card, and the play stood still.
+Signed, the clock goes back to the card's: the picture holds a moment and
+the writer feeds the card again (`vb_hook`). `vbtownsnd` saw both, now and
+then, on its streamed opening.
 
 **A clip with its OWN sound that starts on the next frame** - the first
 opening after the title's fade, an opening whose sound the sound's side found

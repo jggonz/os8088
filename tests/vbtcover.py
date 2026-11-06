@@ -10,9 +10,11 @@ with a picture (an ellipse under a white bar) and its line, built and
 played:
 
   cga:  on the XT's CGA desktop (640 x 200) the window is the picture and a
-        line: the picture on the glass IS the bundle's tall variant (320 x
-        100) bit for bit, and the line under it is lit; Enter plays it to
-        the menu and Esc comes back to the picture, bit for bit again;
+        line, titled with the battle's whole 31-letter name: the picture on
+        the glass IS the bundle's tall variant (320 x 100) bit for bit, and
+        the line under it is lit; Enter plays it and Esc comes back - the
+        picture already read back as the play hands the screen over (no
+        flash of the text window), and bit for bit again;
   herc: on the 5150's Hercules desktop (720 x 348), its own variant (360
         wide), bit for bit.
 
@@ -60,7 +62,7 @@ def pixel_reader(m, arm):
 
 def variant(cover, kind):
     for i in range(cover[2]):
-        k, _, w, h, st, off = struct.unpack_from("<BBHHHI", cover, 84 + 12 * i)
+        k, _, w, h, st, off = struct.unpack_from("<BBHHHI", cover, 100 + 12 * i)
         if k == kind:
             return w, h, st, cover[off:off + st * h]
     raise SystemExit("no variant %d" % kind)
@@ -77,6 +79,7 @@ def run(arm, tmp, syms):
     dr.rectangle((0, 0, 639, 40), fill=(255, 255, 255))
     im.save(os.path.join(tmp, "cover.png"))
     p = P.Project.load(vbp)
+    p.set(("name",), "The Demo Battle of the Beetle 31"[:B.TITLE_MAX])
     p.set(("cover",), {"image": "cover.png", "line": "Click or press Enter "
                        "to begin"})
     p.save()
@@ -157,16 +160,25 @@ def run(arm, tmp, syms):
                "%s, %s: the picture on the glass is the bundle's %d x %d, bit "
                "for bit (%d differ), the line under it lit (%d px)"
                % (arm, tag, w, h, bad, lit))
-        ok(wn.title == p.d["name"][:15],
-           "%s: the window titled with the battle's name (%r)"
-           % (arm, wn.title))
+        tp = struct.unpack_from("<H", rec, geom.W_TITLE)[0]  # (os88geom's
+        title = m.read(base + tp, 48).split(b"\0")[0].decode()  # reads 24)
+        ok(title == p.d["name"] and len(title) == B.TITLE_MAX,
+           "%s: the window titled with the battle's whole name, %d letters "
+           "(%r)" % (arm, len(title), title))
         look("opened")
         if arm == "cga":
             key("Enter")
             until(lambda: rb("vb_ready") == 1, "the play")
             until(lambda: rb("vb_tplay") == 1, "the title")
             key("Escape")
-            until(lambda: rb("vb_ready") == 0, "back on the desktop")
+            until(lambda: rb("vb_ready") == 0, "back on the desktop",
+                  guest=30.0)
+            os88marty.ui_done(m)
+            # NO FLASH: the picture read back while the screen was still the
+            # play's ([vb_cvback], its state as FSX_RUN returned) - read
+            # after, the window's first paint was its text
+            ok(rb("vb_cvback") == 1, "cga: the picture back in memory as the "
+               "play hands the screen back (no text-window flash)")
             look("after a play")
     finally:
         m.quit()
