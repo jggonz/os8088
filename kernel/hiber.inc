@@ -5610,20 +5610,20 @@ kds_stub_end:
 ; MODULE DATA and not kernel bss: 543 bytes that only exist while the module
 ; is resident, which is the whole economy of osapi_dos_handoff_x keeping a far
 ; POINTER (SPEC.md 96.40).
-hbm_s_d1:       db 'Not our handoff record', 0
+TOASTSTR hbm_s_d1, 'Not our handoff record'
 hbm_s_d2:       db 'That folder has moved', 0
 hbm_s_d3:       db 'DOS.O88 is not there now', 0
 hbm_s_d4:       db 'The ROM cannot read it', 0
 hbm_s_d5:       db 'No room for the extents', 0
-hbm_s_d6:       db 'kern_dos too scattered', 0
+TOASTSTR hbm_s_d6, 'kern_dos too scattered'
 %ifdef OS88_IMG
-hbm_s_dimg:     db 'Unmount the image first', 0
+TOASTSTR hbm_s_dimg, 'Unmount the image first'
 %endif
 %ifdef KERN_MEGA
-hbm_s_d7:       db 'No room above 1MB', 0
-hbm_s_d8:       db 'Could not save to disk', 0   ; 14.43's image
-hbm_s_mode:     db 'Hibernation: other mode', 0
-hbm_s_clus:     db 'Disk clusters too small', 0  ; 512 bytes, protected mode
+TOASTSTR hbm_s_d7, 'No room above 1MB'
+TOASTSTR hbm_s_d8, 'Could not save to disk'      ; 14.43's image
+TOASTSTR hbm_s_mode, 'Hibernation: other mode'
+TOASTSTR hbm_s_clus, 'Disk clusters too small'   ; 512 bytes, protected mode
 %endif
 
 hbm_ptrfix:     db 'HIB1'      ; THE POINTER FILE as hbm_wrimg writes it,
@@ -5668,17 +5668,17 @@ hbm_s_bdis: db 'Discard', 0         ; than choosing between four (NULs pad)
   %error "hbm_btnrect: each RESUME label is one fixed distance past its ASK label"
 %endif
 
-hbm_s_nobios: db 'Needs a BIOS hard disk', 0
-hbm_s_noroom: db 'Not enough room on disk', 0
-hbm_s_failed: db 'Hibernate failed', 0
-hbm_s_serial: db 'Disconnect serial before hibernating',0
+TOASTSTR hbm_s_nobios, 'Needs a BIOS hard disk'
+TOASTSTR hbm_s_noroom, 'Not enough room on disk'
+TOASTSTR hbm_s_failed, 'Hibernate failed'
+TOASTSTR hbm_s_serial, 'Disconnect serial first'
 %ifdef HMA_DRV
-hbm_s_nomem:  db 'Not enough memory', 0  ; the HMA pool's copy (87.4 step 3b)
+TOASTSTR hbm_s_nomem, 'Not enough memory' ; the HMA pool's copy (87.4 step 3b)
 %endif
-hbm_s_stale:  db 'Hibernation: other build', 0
-hbm_s_lost:   db 'Hibernation: unreadable', 0
+TOASTSTR hbm_s_stale, 'Hibernation: other build'
+TOASTSTR hbm_s_lost, 'Hibernation: unreadable'
 %ifdef KERN_MEGA
-hbm_s_frag:   db 'Hibernate: fragmented', 0
+TOASTSTR hbm_s_frag, 'Hibernate: fragmented'
 %endif
 
 hbm_psv:    dw 0, 0             ; the programs' sum, s1 and s2 (hbm_psum):

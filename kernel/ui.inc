@@ -2673,7 +2673,8 @@ menu_dropd  db 0                ; a pull-down is on the screen (SPEC.md 9.6.3).
 ; on TASKMGR.O88 in a Disk window is unaffected and still opens as many as
 ; you like - that is the package rule, and this is the menu item's rule.
 ; =============================================================================
-ui_s_nofile: db 'Not in '        ; ONE 'SYSTEM',0 serves both the
+TOASTRUN ui_s_nofile
+             db 'Not in '        ; ONE 'SYSTEM',0 serves both the
 ui_s_tmdir:  db 'SYSTEM', 0      ; folder name and the tail of the notice that
                                  ; says the file is not in it - two labels
                                  ; over one `db`, so nothing may be inserted
@@ -2685,6 +2686,7 @@ ui_s_tmdir:  db 'SYSTEM', 0      ; folder name and the tail of the notice that
                                  ; spelled out in full would not:
                                  ; app_about_center centres it and font_str
                                  ; stops at the SCREEN edge, not the window's
+TOASTEND
 ui_s_tmfile: db 'TASKMGR.O88', 0
 ui_s_tmname: db 'TaskMgr', 0     ; the 16-byte header name inst_set_name_x
                                  ; copied into the record - what identifies
@@ -2963,7 +2965,8 @@ ui_tm_drv:  db 0                ; .text: -f bin zeroes no .bss, and A:'s root
                                 ; is the right answer before the first load
 
 ui_s_tmttl:  db 'Task Manager', 0
-ui_s_nodisk: db 'No system disk in '
+TOASTRUN ui_s_nodisk
+             db 'No system disk in '
 ui_s_nodisk_l: db 'A:', 0       ; the LETTER, stamped once by dsk_boot_from
                                 ; (SPEC.md 52.10.3) - a label rather than an
                                 ; offset, so rewording the message cannot
@@ -2972,6 +2975,7 @@ ui_s_nodisk_l: db 'A:', 0       ; the LETTER, stamped once by dsk_boot_from
                                 ; `equ` this, the formatter's swap prompt
                                 ; being the only standalone 'A:' of the six.
                                 ; Reword the message; do not delete the label
+TOASTEND
 
 ui_desc:    dw ui_d_tm          ; ui_sys_open's descriptor for the load in
                                 ; hand. In .text with a resting value for the

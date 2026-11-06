@@ -2615,19 +2615,19 @@ op_scrub:
 ; TOAST_MAX is 24 characters and a cut message reads like a bug in the thing
 ; it is reporting on, so these are short on purpose.
 %if OP_HAS_READ
-op_s_big:   db 'Parts do not fit', 0
-op_s_mem:   db 'Not enough memory', 0
-op_s_disk:  db 'No disk to read from', 0
-op_s_read:  db 'Cannot read my parts', 0
+TOASTSTR op_s_big, 'Parts do not fit'
+TOASTSTR op_s_mem, 'Not enough memory'
+TOASTSTR op_s_disk, 'No disk to read from'
+TOASTSTR op_s_read, 'Cannot read my parts'
 %endif
 %if OP_HAS_FETCH
-op_s_lazy:  db 'Not a fetchable part', 0
+TOASTSTR op_s_lazy, 'Not a fetchable part'
 %endif
 %if OP_HAS_COMP && (OP_HAS_CARVE || OP_HAS_ZLAZY)
-op_s_zbad:  db 'A part will not unpack', 0
+TOASTSTR op_s_zbad, 'A part will not unpack'
 %endif
 %if OP_HAS_ZLAZY
-op_s_spent: db 'That part was dropped', 0   ; ...and cannot come back: a
+TOASTSTR op_s_spent, 'That part was dropped' ; ...and cannot come back: a
 %endif                                      ; compressed lazy row's packed
                                             ; length is where the segment went
                                             ; (SPEC.md 20.12.7.4)

@@ -345,7 +345,7 @@ volume_set:
     ret
 
 volume_label:  db 'Volume',0
-volume_memerr: db 'Volume needs memory',0
+TOASTSTR volume_memerr, 'Volume needs memory'
 
 %define MIXUI_BUFFER 0           ; THE BAND IS AT THE FOOT OF THE POPUP'S
 %define MIXUI_BAND_SEG volume_save  ; CLAIM, not in this image: mixui_draw

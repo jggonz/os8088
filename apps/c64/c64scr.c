@@ -2895,7 +2895,7 @@ static void c64_flush(void *win)
             c64_row_font(i, df, dl, sx, sy + i * 8);    /* 9.5's font path */
             if (!c64_blit_said) {
                 c64_blit_said = 1;
-                c64_say("No bands here - text only.");
+                c64_say("No bands - text only.");
             }
         } else {
 #ifdef C64_HOST

@@ -2649,9 +2649,9 @@ in_s_hflop:   db 'Uses the system disk, then the apps disk.', 0
 in_s_cfnet:   db '  and copy os8088 from the network.', 0
 in_s_chk0:    db 'Do not check for updates', 0
 in_s_chk1:    db 'Check for updates at startup', 0
-in_s_tuptodate: db 'os8088 is up to date', 0     ; toasts: 24 characters at most
-in_s_tnonet:  db 'Update check: no network', 0
-in_s_tnoans:  db 'Update check: no answer', 0
+TOASTSTR in_s_tuptodate, 'os8088 is up to date'  ; toasts: 24 characters at most
+TOASTSTR in_s_tnonet, 'Update check: no network'
+TOASTSTR in_s_tnoans, 'Update check: no answer'
 in_s_auto:    db 'AUTOSTRT', 0
 in_s_lnk:     db 'OSCHECK.LNK', 0
 in_s_url:     db IN_URL, 0

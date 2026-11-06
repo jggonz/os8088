@@ -241,7 +241,7 @@ static void ovl_cmd(int menu, int item, void *win)
             c64_smart = (item == C64_I_ATTACH);   /* (11.3.2: only
                                              * Smart attach starts it) */
             if (os88_file_dlg(OS88_FDLG_OPEN, win, 0) < 0)
-                c64_say("A file dialog is already open.");
+                c64_say("A file dialog is open.");
             return;
         }
         /* Reset machine CPU vs Power cycle machine: on a real machine the
@@ -391,7 +391,7 @@ static void ovl_cmd(int menu, int item, void *win)
             if (!c64_warp)
                 c64_say("Warp mode off.");
             else if (os88_cpu() == OS88_CPU_8086)
-                c64_say("Warp mode on - no change.");
+                c64_say("Warp on - no change.");
             else
                 c64_say("Warp mode on.");
             return;

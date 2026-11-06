@@ -1522,11 +1522,10 @@ assoc_s_games:  db 'GAMES', 0
 ; bytes read on into the name. It was assoc_progname writing a second copy
 ; of the same name into a 13-byte tail of its own (kernel size pass 5).
 ; 6 + 12 + 1 = 19 bytes, inside a toast's TOAST_MAX of 24.
-assoc_pnbuf:    db 'Needs '
+TOASTRUN assoc_pnbuf
+                db 'Needs '
 assoc_fnb:      times 13 db 0   ; '<STEM>.O88', built by assoc_fname
-%if 6 + 8 + 5 > TOAST_MAX + 1
-  %error "assoc_pnbuf's toast is longer than TOAST_MAX"
-%endif
+TOASTEND
 
 section .bss
 ; **THESE THREE CELLS ARE THE PUBLISHED LOCATOR, IN ITS OWN ORDER** (SPEC.md

@@ -3332,10 +3332,10 @@ x3c_s_qno:   db 'Queue too: No', 0
 x3c_s_qyes:  db 'Queue too: Yes', 0
 x3c_s_dwav:  db '.WAV', 0
 x3c_s_dtmp:  db '.TMP', 0
-x3c_s_nothd: db 'Choose a hard drive folder', 0
-x3c_s_taken: db 'That name is taken', 0
-x3c_s_full:  db 'Not enough room there', 0
-x3c_s_badnm: db 'Give it a name', 0
+TOASTSTR x3c_s_nothd, 'Pick a hard drive folder'
+TOASTSTR x3c_s_taken, 'That name is taken'
+TOASTSTR x3c_s_full, 'Not enough room there'
+TOASTSTR x3c_s_badnm, 'Give it a name'
 x3c_s_to:    db 'To:      ', 0
 x3c_s_audio: db 'Audio:   ', 0
 x3c_s_of:    db 'of ', 0

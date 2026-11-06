@@ -67,7 +67,7 @@ Sound cards and network cards are switched off before the memory is saved
 and switched back on after a resume.
 
 Disconnect programs using a serial cable before hibernating. An active
-serial connection is refused with `Disconnect serial before hibernating`.
+serial connection is refused with `Disconnect serial first`.
 
 ## Why it is a separate file
 

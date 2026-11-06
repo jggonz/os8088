@@ -216,7 +216,7 @@ each followed by a tab and its page number.
   makes a level 2 entry, `.CCC.` level 3, and so on.
 
 **From** and **To** keep only some levels. If nothing matches, Word says
-**No table of contents entries**.
+**No contents entries**.
 
 ## Views
 

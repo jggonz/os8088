@@ -265,7 +265,7 @@ static void ovl_d64_attach(const char *name, unsigned size_lo, unsigned size_hi)
     c64_menu_state();
     if (gave && c64_fjit == 0) {
         c64_ld_ok = 1;
-        c64_say("Disk on drive 8; no room for recompiler.");
+        c64_say("Disk on 8; no recompiler");
         return;
     }
     c64_ld_ok = 1;

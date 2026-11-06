@@ -642,4 +642,4 @@ rw_s_rpempty:   db 'Replay # is empty', 0
 rw_s_rpbad:     db 'Replay # is damaged', 0
 rw_s_rpother:   db 'Slot # was saved over', 0
 rw_s_rproom:    db 'Replay: no room', 0
-rw_s_rpbusy:    db 'A replay is running', 0
+TOASTSTR rw_s_rpbusy, 'A replay is running'

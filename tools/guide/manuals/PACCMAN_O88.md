@@ -69,7 +69,7 @@ it. There are no extra lives.
 Press `F`, or choose **Game > Full Screen**, to fill the screen. The maze
 stays the same size in the middle of a black screen. Press `F` or `Esc` to
 go back to the window. If another program is already full screen, PaccMan
-says **Another window is full screen.**
+says **Other window full screen**
 
 ![PaccMan full screen on a VGA display.](shot:paccman-full){full}
 

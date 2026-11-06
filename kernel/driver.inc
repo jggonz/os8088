@@ -2094,21 +2094,21 @@ drv_errstr:                     ; DRVE_* -> what the user is told
 %endif
     dw drv_s_off                ; [DRVE_NERR]: what a row that never failed
                                 ; and is not up says instead (drv_status)
-drv_e0: db 'Loaded', 0
-drv_s_off: db 'Not loaded', 0
-drv_e1: db 'No system disk in A:', 0    ; the letter is copied in at staging
+TOASTSTR drv_e0, 'Loaded'
+TOASTSTR drv_s_off, 'Not loaded'
+TOASTSTR drv_e1, 'No system disk in A:' ; the letter is copied in at staging
 DRV_E1L equ 18                  ; ...here (SPEC.md 52.10.3): this is the
                                 ; string an installed machine showed as "No
                                 ; system disk in A:" about a driver on C:
-drv_e2: db 'Not on the system disk', 0
-drv_e3: db 'Not a valid driver', 0
-drv_e4: db 'Not enough memory', 0
-drv_e5: db 'No hardware found', 0
-drv_e6: db 'Port or IRQ in use', 0
-drv_e7: db 'Attached twice (bug)', 0    ; 20 chars, drv_e1's width - the widest
-drv_e8: db 'Nothing to mount', 0        ; DRVE_NOVOL (SPEC.md 51.3.2)
+TOASTSTR drv_e2, 'Not on the system disk'
+TOASTSTR drv_e3, 'Not a valid driver'
+TOASTSTR drv_e4, 'Not enough memory'
+TOASTSTR drv_e5, 'No hardware found'
+TOASTSTR drv_e6, 'Port or IRQ in use'
+TOASTSTR drv_e7, 'Attached twice (bug)' ; 20 chars, drv_e1's width - the widest
+TOASTSTR drv_e8, 'Nothing to mount'     ; DRVE_NOVOL (SPEC.md 51.3.2)
 %ifdef DRV_PCIETH
-drv_e9: db 'Class already in use', 0    ; DRVE_CLASS - 20 chars, the widest
+TOASTSTR drv_e9, 'Class already in use' ; DRVE_CLASS - 20 chars, the widest
 %endif                                  ; the column takes, like drv_e7
 DRV_E1LEN equ drv_e2 - drv_e1
 %if DRV_E1LEN != DRV_E1L + 3 || DRVE_DISK != 1
@@ -6274,7 +6274,7 @@ section .modc
 cp_fdno:   db 0                 ; cpc_fdtest turned Cylinder back to Auto:
                                 ; cp_flush_x says so after the save
 cp_fdn:    db 0                 ; cpc_fdtest's track count
-cp_s_fdno: db 'No Cylinder Here: Auto', 0   ; ...and what it says. A toast
+TOASTSTR cp_s_fdno, 'No Cylinder Here: Auto' ; ...and what it says. A toast
                                 ; copies its line (SPEC.md 59), so it may be
                                 ; read out of this image through ES = CS
 cp_fdnop:  dw cp_s_fdno         ; ...through this, which cp_flush_x reads cs:
@@ -6775,7 +6775,7 @@ drv_status_x:                   ; the two builds would put one name in two
 drv_errstg:                     ; different segments (the one status a row
     CPSTAGE drv_s_off           ; could ever have, and the one word cp_snd_note
     ret                         ; can have to say) - staged, the image's own
-drv_s_off:  db 'Not loaded', 0
+TOASTSTR drv_s_off, 'Not loaded'
 section .cold
 
 section .ovl                   ; ...and these two are BOOT-OVERLAY code on the

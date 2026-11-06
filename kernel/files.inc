@@ -2349,12 +2349,12 @@ fm_btab:      dw 76, 67         ; would carry a table nothing reads
               dw 142, 135       ; view toggle
 %endif
 
-fm_s_empty:   db 0              ; status line strings, indexed by [ld_status]
-fm_s_dskerr:  db 'Disk error', 0
-fm_s_toobig:  db 'Too large', 0
-fm_s_ldfail:  db 'Load failed', 0
-fm_s_nomem:   db 'Out of memory', 0
-fm_s_ldver:   db 'Wrong os8088 version', 0  ; LD_EVER (SPEC.md 20.2.0): said on
+TOASTSTR fm_s_empty             ; status line strings, indexed by [ld_status]
+TOASTSTR fm_s_dskerr, 'Disk error'
+TOASTSTR fm_s_toobig, 'Too large'
+TOASTSTR fm_s_ldfail, 'Load failed'
+TOASTSTR fm_s_nomem, 'Out of memory'
+TOASTSTR fm_s_ldver, 'Wrong os8088 version' ; LD_EVER (SPEC.md 20.2.0): said on
                                             ; EVERY build, LDDIAG or not - the
                                             ; one loader reason a user can act
                                             ; on besides memory
@@ -2369,7 +2369,7 @@ fm_s_ldver:   db 'Wrong os8088 version', 0  ; LD_EVER (SPEC.md 20.2.0): said on
 ; is debugging one. The SAME table is the Task Manager's and the desktop
 ; service zone's toast (ui.inc's ui_sys_open), so there is one wording.
 %ifdef LD_DIAG
-fm_s_badpkg:  db 'Bad package', 0
+TOASTSTR fm_s_badpkg, 'Bad package'
 fm_stattab:   dw fm_s_empty, fm_s_dskerr, fm_s_badpkg, fm_s_toobig, fm_s_ldfail
 %else
 fm_stattab:   dw fm_s_empty, fm_s_ldfail, fm_s_ldfail, fm_s_ldfail, fm_s_ldfail
@@ -2388,14 +2388,14 @@ LD_NSTAT      equ ($ - fm_stattab) / 2 ; LD_OK .. LD_EVER. The bound toast_say
 ; the worst possible outcome. Indexed by the FERR_* code; slot 0 is never
 ; drawn (fm_ferr = 0 means "nothing to report") and only exists so the
 ; index is the code. 'Disk error' is shared with the loader's table above.
-fm_s_enodisk: db 'No disk', 0
-fm_s_ename:   db 'Bad name', 0
-fm_s_enoent:  db 'No such file', 0
-fm_s_eexist:  db 'Name exists', 0
-fm_s_efull:   db 'Disk full', 0
-fm_s_edfull:  db 'Folder full', 0
-fm_s_eprot:   db 'Protected', 0
-fm_s_ewprot:  db 'Write protected', 0
+TOASTSTR fm_s_enodisk, 'No disk'
+TOASTSTR fm_s_ename, 'Bad name'
+TOASTSTR fm_s_enoent, 'No such file'
+TOASTSTR fm_s_eexist, 'Name exists'
+TOASTSTR fm_s_efull, 'Disk full'
+TOASTSTR fm_s_edfull, 'Folder full'
+TOASTSTR fm_s_eprot, 'Protected'
+TOASTSTR fm_s_ewprot, 'Write protected'
 fm_errtab:    dw fm_s_empty,  fm_s_enodisk, fm_s_dskerr, fm_s_ename
               dw fm_s_enoent, fm_s_eexist,  fm_s_efull,  fm_s_edfull
               dw fm_s_eprot,  fm_s_ewprot,  fm_s_toobig
@@ -2496,12 +2496,14 @@ fm_s_swapd    equ ui_s_nodisk_l ; NOT ITS OWN STRING.  The six messages that
                                 ; LABEL AND ITS BYTES; a reword of the message
                                 ; around it is fine, deleting the label is not
 fm_s_swapk:   db 'Enter=ready  Esc=no', 0
-fm_s_swapno:  db 'Format needs disk '  ; ...and this one is a TOAST, so it is
+TOASTRUN fm_s_swapno
+              db 'Format needs disk '  ; ...and this one is a TOAST, so it is
 fm_s_swapnd:  db 'A:', 0        ; bounded by TOAST_MAX = 23 rather than by the
                                 ; status line's width (SPEC.md 59.8): it read
                                 ; `Format needs the system disk in A:` while
                                 ; the strip had the menus segment to sit in.
                                 ; Stamped, same rule as the two above it
+TOASTEND
 fm_swaptab:   dw 0, fm_s_swapno ; toast_say never uses index 0
 FM_NSWAP  equ 2
 ; --- what the cloner leaves behind (SPEC.md 2.8.6, 22.21) --------------------
@@ -2518,14 +2520,14 @@ FM_NSWAP  equ 2
 ;     own anyway: the same failure said the same way (SPEC.md 22);
 ;   * the MENU ITEM below - the bar is built when the user PRESSES it, which
 ;     is the gesture that leads to loading.
-fm_s_clsml:   db 'Target too small', 0
-fm_s_notimg:  db 'Not a disk image', 0   ; ...a file whose length is not one of
+TOASTSTR fm_s_clsml, 'Target too small'
+TOASTSTR fm_s_notimg, 'Not a disk image' ; ...a file whose length is not one of
                                     ; the four standard floppies (SPEC.md
                                     ; 18.99.8), which is the only validation
                                     ; an exact image admits of
-fm_s_clsame2: db 'Pick another disk', 0  ; ...the image may not live on the
+TOASTSTR fm_s_clsame2, 'Pick another disk' ; ...the image may not live on the
                                     ; disk it is of (SPEC.md 18.99.8)
-fm_s_clbusy:  db 'Clone already running', 0   ; ...and a SECOND one, refused
+TOASTSTR fm_s_clbusy, 'Clone already running' ; ...and a SECOND one, refused
                                     ; because the File menu is not gated on
                                     ; FS_EDIT (SPEC.md 22.21.2). It borrowed
                                     ; fm_s_nomem, which said 'Out of memory'

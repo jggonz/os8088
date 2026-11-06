@@ -10698,11 +10698,15 @@ dos_l_envb: db 'Environment:', 0    ; ...and the rows under it are NAME=VALUE,
                                     ; one to a line (SPEC.md 96.32.2.1)
 dos_l_retb: db 'Return', 0          ; --- the setup area's furniture (96.32.2)
 %ifdef DOS_SETPART
-dos_s_nosetp: db 'Cannot open '     ; the part's refusal (96.32.2.3), whose
-%endif                              ; last word is the page's own name
+TOASTRUN dos_s_nosetp               ; the part's refusal (96.32.2.3), whose
+            db 'Cannot open '       ; last word is the page's own name
+%endif
 dos_l_tset: db 'Setup', 0           ; ...and its name, which the title row
                                     ; shows and the bar's own button carries -
                                     ; one page, one word (SPEC.md 96.32.2.1)
+%ifdef DOS_SETPART
+TOASTEND
+%endif
 dos_l_run:  db 'Run', 0             ; --- and the top bar's (96.32.1)
 dos_l_full: db 'Full Screen', 0     ; ...and the console's own (96.33.5)
 dos_l_savb: db 'Save Shortcut', 0

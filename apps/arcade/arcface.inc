@@ -161,8 +161,8 @@ af_hints:   dw af_s_play, af_s_add, af_s_vga
 af_s_cnt:   db 'READY '
 af_s_cntn:  db '0 OF '
 af_s_cntt:  db '0', 0
-af_s_tnorom: db 'Arcade: add its ROM set', 0
-af_s_tnovga: db 'Arcade: it needs VGA', 0
+TOASTSTR af_s_tnorom, 'Arcade: add its ROM set'
+TOASTSTR af_s_tnovga, 'Arcade: it needs VGA'
 af_s_pic:   db 'XXXXXXXX.PIC', 0, 0, 0
 
 ; =============================================================================
