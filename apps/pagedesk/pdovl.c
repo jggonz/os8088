@@ -189,3 +189,6 @@ static int ovl_card_more(int which)
     ovl_card(which, r, pdu_mono);
     return 2;
 }
+
+#include "pdovlnotes.c"         /* notes: the cards, the popover, the inspector */
+#include "pdutool.c"            /* the annotation tools (edit) */

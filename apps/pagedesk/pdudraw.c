@@ -89,7 +89,7 @@ static const char *pdu_label(int id)
         return pdu_lbuf;
     }
     if (id == C_NP_FILTER)
-        return pdu_npall ? "All pages" : "This page";
+        return pdu_npall == 2 ? "Changes" : pdu_npall ? "All pages" : "This page";
     return pdu_lab[id * 2 + (pdu_L.kind == PDU_L_COMPACT ? 1 : 0)];
 }
 
@@ -574,91 +574,6 @@ static void pdu_side_page(int old)
     pdu_cell_mark((int)pdu_page - pdu_sidetop, 1);
 }
 
-/* --- Notes & edits (17.3) -------------------------------------------------- */
-static void pdu_notes_list(struct os88_rect *o)
-{
-    o->x1 = pdu_L.notes.x1 + 4;
-    o->x2 = pdu_L.notes.x2 - 4;
-    o->y1 = pdu_L.notes.y1 + 2 * PDU_BAR_F + 4;
-    o->y2 = pdu_L.notes.y2 - 4;
-}
-
-static void pdu_notes_body(struct os88_rect *o, int paper)
-{
-    int y;
-    y = o->y1 + 6;
-    if (pdu_doc != D_OPEN) {
-        os88_font_run(o->x1 + 4, y, "No document", OS88_BLACK, paper);
-        return;
-    }
-    if (pdu_changes == 0) {
-        os88_font_run(o->x1 + 4, y, "No notes or edits", OS88_BLACK, paper);
-        y = y + 12;
-    }
-    if (!pdu_npall && pdu_pinfo.nannots) {
-        os88_utoa(pdu_pinfo.nannots, pdu_line);
-        pdu_cat(pdu_line, " in the file", sizeof(pdu_line));
-        os88_font_run(o->x1 + 4, y, pdu_line, OS88_BLACK, paper);
-    }
-}
-
-/* the page changed: only the body's second line can have ("N in the
- * file" is per page), and it is redrawn as one font_run padded to the list's
- * width, so the old count is overwritten rather than erased first. Wave 1's
- * edit store is empty, so the first line ("No notes or edits") stands. */
-static void pdu_notes_page(void)
-{
-    struct os88_rect *o;
-    int cols, n, y;
-    if (pdu_L.notes.x1 > pdu_L.notes.x2 || pdu_doc != D_OPEN || pdu_npall
-        || pdu_changes)
-        return;
-    o = &pdu_tr;
-    pdu_notes_list(o);
-    cols = (o->x2 - o->x1 - 4) / PDU_CW;
-    if (cols > (int)sizeof(pdu_line) - 1)
-        cols = sizeof(pdu_line) - 1;
-    pdu_line[0] = 0;
-    if (pdu_pinfo.nannots) {
-        os88_utoa(pdu_pinfo.nannots, pdu_line);
-        pdu_cat(pdu_line, " in the file", sizeof(pdu_line));
-    }
-    n = os88_strlen(pdu_line);
-    while (n < cols)
-        pdu_line[n++] = ' ';
-    pdu_line[cols] = 0;
-    y = o->y1 + 6 + 12;
-    os88_font_run(o->x1 + 4, y, pdu_line, OS88_BLACK,
-                  pdu_mono ? OS88_WHITE : pdu_cbar);
-}
-
-static void pdu_notes_paint(void)
-{
-    struct os88_rect *n, *o;
-    int i, paper;
-
-    n = &pdu_L.notes;
-    if (n->x1 > n->x2)
-        return;
-    pdu_fill(n->x1 + 1, n->y1, n->x2, n->y2, pdu_cbar);
-    os88_set_color(OS88_BLACK);
-    os88_gfx_vline(n->x1, n->y1, n->y2);
-    os88_font_run(n->x1 + 4, n->y1 + 5, "Notes & edits", OS88_BLACK,
-                  pdu_cbar);
-    pdu_cground = pdu_cbar;
-    for (i = 0; i < pdu_L.nctl; i++)
-        if (pdu_L.ctl[i].id == C_NP_CLOSE || pdu_L.ctl[i].id == C_NP_FILTER)
-            pdu_ctl_paint(i);
-    pdu_cground = -1;
-    o = &pdu_tr;
-    pdu_notes_list(o);
-    paper = pdu_mono ? OS88_WHITE : pdu_cbar;
-    pdu_fill(o->x1, o->y1, o->x2, o->y2, paper);
-    os88_set_color(OS88_BLACK);
-    os88_gfx_frame(o->x1, o->y1, o->x2, o->y2);
-    pdu_notes_body(o, paper);
-}
-
 /* --- the canvas -------------------------------------------------------------- */
 /* the page's rect on screen (pduview.c keeps pdu_view.ox/oy right) */
 static void pdu_page_rect(struct os88_rect *r)
@@ -727,6 +642,7 @@ static void pdu_canvas_paint(struct os88_rect *clip)
         pdu_empty_paint(c);
         return;
     }
+    pdu_ed_xoff_l();                    /* edit: off while its pixels are its own */
     pdu_page_rect(&pdu_pr);
     /* the desk: above, below, left, right of the page, each cut to c */
     pdu_desk(c->x1, c->y1, c->x2, (pdu_pr.y1 - 1 < c->y2 ? pdu_pr.y1 - 1 : c->y2));
@@ -739,6 +655,8 @@ static void pdu_canvas_paint(struct os88_rect *clip)
 #endif
         pdu_render_want(&pdu_tr);
     }
+    if (pdu_ed_selected() >= 0)         /* edit: back on, unless a render will */
+        pdu_ed_show();
 }
 
 /* --- the popover (one at a time, inside the canvas) ------------------------ */

@@ -231,30 +231,60 @@ static void path_close(void)
 /* cubic flattening by de Casteljau subdivision. FLATNESS BOUND: a piece is
  * flat when both second differences of its control polygon sum (|dx|+|dy|)
  * to <= 1 qpx, so the chord is within 3/4 * 1 qpx = 0.19 pixel of the curve;
- * depth is capped at 6 (64 pieces a curve - the operation limit). */
-static void bez(pdi x0, pdi y0, pdi x1, pdi y1, pdi x2, pdi y2, pdi x3, pdi y3,
-                pdw d)
+ * depth is capped at 6 (64 pieces a curve - the operation limit).
+ *
+ * ITERATIVE, over a stack in the bss (rendfix): this ran on the UI task's
+ * 512-byte stack (SS is the caller's, PAGEDESK-SPEC 3.1) below the shell, two
+ * module doors and the interpreter, and recursing seven deep at 50 bytes a
+ * level overran it into the kernel's menu bar (.lowbss under task 0's stack):
+ * XTGUIDE.PDF page 3's cable curve. Same pieces, same order: the left half is
+ * taken first. At most depth + 1 pieces are pending, so 7 is the bound. */
+#define PDR_BZMAX 7
+static pdi g_bz[PDR_BZMAX * 8];      /* pending pieces: x0 y0 x1 y1 x2 y2 x3 y3 */
+static pdw g_bzd[PDR_BZMAX];         /* ...and each one's depth               */
+static void bez(pdi x0, pdi y0, pdi x1, pdi y1, pdi x2, pdi y2, pdi x3, pdi y3)
 {
-    pdi m1, m2, ax, ay, bx, by, cx, cy, ex, ey, fx, fy, gx, gy;
-    m1 = (pdi)(pdr_abs((pdi)(x0 - 2 * x1 + x2)) + pdr_abs((pdi)(y0 - 2 * y1 + y2)));
-    m2 = (pdi)(pdr_abs((pdi)(x1 - 2 * x2 + x3)) + pdr_abs((pdi)(y1 - 2 * y2 + y3)));
-    if (d >= 6 || (m1 <= 1 && m2 <= 1) || g_nv >= PDR_NPATH) {
-        path_add(x3, y3, 0);
-        return;
+    pdi a, b, c, e, f, m1, m2;
+    pdi *p, *r, *t;
+    pdw n, d;
+    g_bz[0] = x0; g_bz[1] = y0; g_bz[2] = x1; g_bz[3] = y1;
+    g_bz[4] = x2; g_bz[5] = y2; g_bz[6] = x3; g_bz[7] = y3;
+    g_bzd[0] = 0;
+    n = 1;
+    while (n) {
+        n--;
+        p = g_bz + n * 8;
+        d = g_bzd[n];
+        m1 = 0; m2 = 0;
+        for (r = p; r < p + 2; r++) {      /* the x's, then the y's */
+            m1 = (pdi)(m1 + pdr_abs((pdi)(r[0] - 2 * r[2] + r[4])));
+            m2 = (pdi)(m2 + pdr_abs((pdi)(r[2] - 2 * r[4] + r[6])));
+        }
+        if (d >= 6 || (m1 <= 1 && m2 <= 1) || g_nv >= PDR_NPATH || n + 2 > PDR_BZMAX) {
+            path_add(p[6], p[7], 0);
+            continue;
+        }
+        /* the left half on top (t), the right half where this piece was (its
+         * end point stays) */
+        for (r = p; r < p + 2; r++) {
+            t = r + 8;
+            a = (pdi)((r[0] + r[2]) >> 1);
+            b = (pdi)((r[2] + r[4]) >> 1);
+            c = (pdi)((r[4] + r[6]) >> 1);
+            e = (pdi)((a + b) >> 1);
+            f = (pdi)((b + c) >> 1);
+            t[0] = r[0]; t[2] = a; t[4] = e;
+            t[6] = r[0] = (pdi)((e + f) >> 1);
+            r[2] = f; r[4] = c;
+        }
+        g_bzd[n] = g_bzd[n + 1] = (pdw)(d + 1);
+        n += 2;
     }
-    ax = (pdi)((x0 + x1) >> 1); ay = (pdi)((y0 + y1) >> 1);
-    bx = (pdi)((x1 + x2) >> 1); by = (pdi)((y1 + y2) >> 1);
-    cx = (pdi)((x2 + x3) >> 1); cy = (pdi)((y2 + y3) >> 1);
-    ex = (pdi)((ax + bx) >> 1); ey = (pdi)((ay + by) >> 1);
-    fx = (pdi)((bx + cx) >> 1); fy = (pdi)((by + cy) >> 1);
-    gx = (pdi)((ex + fx) >> 1); gy = (pdi)((ey + fy) >> 1);
-    bez(x0, y0, ax, ay, ex, ey, gx, gy, d + 1);
-    bez(gx, gy, fx, fy, cx, cy, x3, y3, d + 1);
 }
 static void path_curve(pdi x1, pdi y1, pdi x2, pdi y2, pdi x3, pdi y3)
 {
     if (!g_cur) { path_move(x1, y1); }
-    bez(g_cpx, g_cpy, x1, y1, x2, y2, x3, y3, 0);
+    bez(g_cpx, g_cpy, x1, y1, x2, y2, x3, y3);
 }
 
 /* ---- edges: the staging area every filled shape goes through ------------ */
