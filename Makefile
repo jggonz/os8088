@@ -20388,7 +20388,7 @@ apps/wireball/art/wbfront.inc: apps/wireball/art/splash-source.png tools/wbfront
 # `make` itself does not depend on it until the lead flips PD_REND_MOD.
 PDR_DIR   := apps/pagedesk
 PDR_CSRC  := $(PDR_DIR)/pdrend.c $(PDR_DIR)/pdrg.c $(PDR_DIR)/pdrd.c $(PDR_DIR)/pdrf.c \
-             $(PDR_DIR)/pdri.c $(PDR_DIR)/pdrv.c $(PDR_DIR)/pdrend.h $(PDR_DIR)/pdrenc.h \
+             $(PDR_DIR)/pdri.c $(PDR_DIR)/pdrv.c $(PDR_DIR)/pdra.c $(PDR_DIR)/pdrend.h $(PDR_DIR)/pdrenc.h \
              $(PDR_DIR)/pdabi.h $(PDR_DIR)/pdmath.h
 PDR_MATH  := $(if $(wildcard $(PDR_DIR)/pdmath.inc),,-DPD_MATH_STUB)
 PDR_RSQ   := $(if $(shell grep -c _os88_file_read_seq apps/cc/os88thunk.asm | grep -v '^0$$'),,-DPDR_NO_READSEQ)
@@ -20444,9 +20444,15 @@ $(PDR_FUZZREAL): $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c $
 	cc -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -DPD_HOST -DPDR_REAL_ENG -I$(PDR_DIR) -o $@ \
 		$(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c $(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c \
 		$(PDR_DIR)/pdrend.c $(PDR_DIR)/hosttest/pdr_hosteng.c $(PDR_DIR)/pdeng.c
-pdrend-fuzz: $(PDR_FUZZBIN) $(PDR_FUZZREAL) $(BUILD)/PDRES.BIN $(BUILD)/PDFONTX.RES
+PDR_MKSTORE := $(BUILD)/pdr-annot/pdr_mkstore        # annotr's store builder (below)
+pdrend-fuzz: $(PDR_FUZZBIN) $(PDR_FUZZREAL) $(BUILD)/PDRES.BIN $(BUILD)/PDFONTX.RES $(PDR_MKSTORE)
 	python3 $(PDR_DIR)/hosttest/pdr_fuzz.py $(PDR_FUZZBIN) $(BUILD)/pdrfuzz $(BUILD) -n 400
 	python3 $(PDR_DIR)/hosttest/pdr_fuzz.py $(PDR_FUZZREAL) $(BUILD)/pdrfuzzr $(BUILD) -n 200 --seed 23
+# wave 2 (annotr): the same hostile streams with PDRF_ANNOTS | PDRF_EDITS and a hostile edit store (bad offsets,
+# 60,000 points, inverted and page-sized rects, no such kind), through the real engine
+	mkdir -p $(BUILD)/pdrfuzze/store && cd $(BUILD)/pdrfuzze/store && $(abspath $(PDR_MKSTORE)) $(abspath $(PDR_DIR)/samples/MARKUP.PDF) hostile .
+	python3 $(PDR_DIR)/hosttest/pdr_fuzz.py $(PDR_FUZZREAL) $(BUILD)/pdrfuzze $(BUILD) -n 200 --seed 31 \
+		--store $(abspath $(BUILD))/pdrfuzze/store/store.bin --ecount `cat $(BUILD)/pdrfuzze/store/store.cnt`
 # `make pdrend-real`: PDREND linked with the REAL PDENG (hosttest/pdr_hosteng.c), every committed
 # sample drawn as VGA, Hercules and CGA see it and compared with mutool (hosttest/pdr_real.py).
 # PDR_SHOTS=<dir> also writes each page beside mutool's for a human to look at.
@@ -20459,6 +20465,22 @@ $(PDR_REALBIN): $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c $(
 .PHONY: pdrend-real
 pdrend-real: $(PDR_REALBIN) $(BUILD)/PDRES.BIN $(BUILD)/PDFONTX.RES
 	python3 $(PDR_DIR)/hosttest/pdr_real.py $(PDR_REALBIN) $(BUILD)/pdrreal $(BUILD) $(PDR_DIR)/samples $(PDR_SHOTS)
+# ---- annotr (wave 2, PAGEDESK-SPEC 20.12): annotations on screen ------------------------------
+# `make pdrend-annot`: hosttest/pdr_mkstore.c builds an edit store through the real writer (PDWRT over
+# the real PDENG) and saves the same marks as a PDF; hosttest/pdr_annot.py draws the ORIGINAL with the
+# store through PDREND (real engine) and compares it with mutool's render of the saved file, then
+# checks every kind, the source /AP annotations (against mutool), dash patterns and inline images.
+$(PDR_MKSTORE): $(PDR_DIR)/hosttest/pdr_mkstore.c $(wildcard $(PDR_DIR)/pdw*.c $(PDR_DIR)/pdw*.h) $(PDR_ENGSRC) \
+                $(PDR_DIR)/pdmath.c $(PDR_DIR)/hosttest/pdhost.c | $(BUILD)
+	mkdir -p $(BUILD)/pdr-annot
+	cc -std=gnu99 -O1 -w -DPD_HOST -I $(PDR_DIR) -c $(PDR_DIR)/pdeng.c -o $(BUILD)/pdr-annot/pdeng.o
+	cc -std=gnu99 -O1 -w -DPD_HOST -I $(PDR_DIR) -c $(PDR_DIR)/hosttest/pde_host.c -o $(BUILD)/pdr-annot/pde_host.o
+	cc -std=gnu99 -O1 -w -DPD_HOST -I $(PDR_DIR) -o $@ $(PDR_DIR)/hosttest/pdr_mkstore.c $(PDR_DIR)/pdmath.c \
+		$(PDR_DIR)/hosttest/pdhost.c $(BUILD)/pdr-annot/pdeng.o $(BUILD)/pdr-annot/pde_host.o
+.PHONY: pdrend-annot
+pdrend-annot: $(PDR_REALBIN) $(PDR_MKSTORE) $(BUILD)/PDRES.BIN $(BUILD)/PDFONTX.RES
+	python3 $(PDR_DIR)/hosttest/pdr_annot.py $(PDR_REALBIN) $(PDR_MKSTORE) $(BUILD)/pdrannot $(BUILD) $(PDR_DIR)/samples $(abspath $(BUILD))/stress $(PDR_SHOTS)
+# ---- end annotr --------------------------------------------------------------------------------
 # ---- end PageDesk: rend ----
 
 # ---- PageDesk: eng ----------------------------------------------------------

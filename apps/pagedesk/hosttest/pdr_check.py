@@ -78,7 +78,7 @@ def render(page, zoom, rot, bpp, asp, W, H, name, dlkb=29, bk=None, env=None):
                 if '=' in kv: k, v = kv.split('=', 1); st[k] = v
     return r, out, st
 
-EXPECT_INC = {0: 0x0001, 1: 0x0040, 2: 0, 3: 0, 4: 0}      # page 0: a non-base-14 font on purpose; page 1: a dash pattern, which is drawn solid and said so
+EXPECT_INC = {0: 0x0001, 1: 0, 2: 0, 3: 0, 4: 0}      # page 0: a non-base-14 font on purpose; page 1's dash pattern is drawn now (PAGEDESK-SPEC 20.12.4)
 # adapter -> (aspect, W, H, band depth): VGA and EGA are 4bpp, Hercules and CGA 1bpp (the band claim
 # is sized for the live depth, 10.3); VGA also runs 1bpp, which is what a mono window of it would be
 ASPECTS = {'vga': ('1/1', 640, 480, 4), 'ega': ('35/48', 640, 350, 4), 'herc': ('29/45', 720, 348, 1), 'cga': ('5/12', 640, 200, 1), 'vga1': ('1/1', 640, 480, 1)}

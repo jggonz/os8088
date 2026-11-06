@@ -14,6 +14,8 @@ skipped content.
 import os, random, subprocess, sys, shutil, argparse
 ap = argparse.ArgumentParser(); ap.add_argument("exe"); ap.add_argument("scratch"); ap.add_argument("resdir")
 ap.add_argument("-n", type=int, default=120); ap.add_argument("--seed", type=int, default=11)
+ap.add_argument("--store", help="a hostile edit store (pdr_mkstore ... hostile): every case is also drawn with PDRF_ANNOTS | PDRF_EDITS and this store (wave 2, PAGEDESK-SPEC 20.12)")
+ap.add_argument("--ecount", type=int, default=0)
 a = ap.parse_args()
 os.makedirs(a.scratch, exist_ok=True)
 fd = os.path.join(a.scratch, "fd")
@@ -143,6 +145,78 @@ def _():
 @case("extreme miters and long strokes")
 def _(): return pdf(b"20 M 200 w 0 J 0 j 0 0 m 400 1 l 0 2 l S 1 0 0 1 0 0 cm 30 w -100000 -100000 m 100000 100000 l -100000 100000 l S 1000 w 200 150 m 200.01 150 l 200 150.01 l s")
 
+# ---- annotr's additions (PAGEDESK-SPEC 20.12): hostile appearances, annotation arrays, dashes and inline images --------
+def annot_pdf(forms, anns, content=b"0 g 0 0 5 5 re f", rect_default="[10 10 60 60]"):
+    """forms are objects 5.., annotations follow them; the page lists every annotation"""
+    n0 = 5 + len(forms)
+    return pdf(content, extra_objs=list(forms) + [a(n0 + i) if callable(a) else a for i, a in enumerate(anns)],
+               extra_page="/Annots [%s]" % " ".join("%d 0 R" % (n0 + i) for i in range(len(anns))))
+def ann(ap, rect="[10 10 60 60]", extra="", sub="Stamp"):
+    return "<< /Type /Annot /Subtype /%s /Rect %s /AP << /N %s >> %s >>" % (sub, rect, ap, extra)
+HEAVY = b"".join(b"%d 0 m %d %d l %d 0 l f 0 %d %d 5 re S BT /F1 4 Tf 1 %d Td (x) Tj ET " % (i % 9, i % 7, 10, 9, i % 8, i % 9, i % 10) for i in range(40))
+FORMS = [stream("/Type /XObject /Subtype /Form /BBox [0 0 0 0]", b"1 0 0 rg 0 0 100 100 re f"),                                   # 5 zero BBox
+         stream("/Type /XObject /Subtype /Form /BBox [0 0 100 100] /Matrix [0 0 0 0 0 0]", b"1 0 0 rg 0 0 100 100 re f"),         # 6 singular
+         stream("/Type /XObject /Subtype /Form /BBox [0 0 100 100] /Matrix [1e30 0 0 1e30 1e30 -1e30]", b"1 0 0 rg 0 0 100 100 re f"),  # 7
+         stream("/Type /XObject /Subtype /Form /BBox [0 0 1e30 -1e30]", b"1 0 0 rg 0 0 100 100 re f"),                            # 8
+         stream("/Type /XObject /Subtype /Form /BBox [5 5]", b"1 0 0 rg 0 0 100 100 re f"),                                        # 9 short BBox
+         stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << /XObject << /F 10 0 R >> >>", b"/F Do 1 0 0 rg 0 0 5 5 re f"),   # 10 includes itself
+         stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10]", HEAVY),                                                          # 11 heavy
+         "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Length 99999 >>\nstream\n1 0 0 rg 0 0 5 5 re f\nendstream",     # 12 lying length
+         stream("/Type /XObject /Subtype /Form /BBox [0 0 100 100] /Matrix [1 2 3]", b"0 0 1 rg 0 0 50 50 re f"),                 # 13 short Matrix
+         stream("/Type /XObject /Subtype /Form /BBox [-5 -5 5 5] /Matrix [0 1 -1 0 0 0]", b"BI /W 2 /H 2 /BPC 8 /CS /G ID abcd EI 0 0 3 3 re f")]  # 14 inline image in an appearance
+@case("hostile source appearances (BBox, Matrix, Rect, /N, /AS, /F)")
+def _():
+    anns = [ann("%d 0 R" % (5 + i)) for i in range(len(FORMS))]
+    anns += [ann("999 0 R"), ann("42"), ann("<< /On 5 0 R >>", extra="/AS /Off"), ann("<< /On 5 0 R >>"), ann("<< /On 7 0 R >>", extra="/AS 5"),
+             ann("5 0 R", "[60 60 10 10]"), ann("11 0 R", "[0 0 1e9 1e9]"), ann("11 0 R", "[1 2 3]"), ann("11 0 R", "[-1e9 -1e9 1e9 1e9]"),
+             ann("11 0 R", "[10 10 10.001 10.001]"), ann("11 0 R", extra="/F 1e9"), ann("11 0 R", extra="/F (s)"), ann("11 0 R", extra="/F -1"),
+             lambda me: ann("%d 0 R" % me), lambda me: ann("<< /On %d 0 R >>" % me, extra="/AS /On")]
+    return annot_pdf(FORMS, anns)
+@case("an /Annots array of holes")
+def _():
+    n0 = 5 + len(FORMS)
+    return pdf(b"0 g 0 0 5 5 re f", extra_objs=list(FORMS) + [ann("11 0 R")],
+               extra_page="/Annots [1 0 R 2 0 R 3 0 R 4 0 R (s) 5 << /A 1 >> null 99 0 R %d 0 R [ 1 ] true %d 0 R]" % (n0, n0))
+@case("300 annotations with a heavy appearance")
+def _(): return annot_pdf(FORMS, [ann("11 0 R", "[%d %d %d %d]" % (i % 20 * 18, i // 20 * 18, i % 20 * 18 + 17, i // 20 * 18 + 17)) for i in range(300)])
+@case("highlights over text, and annotations on a page with no content")
+def _(): return annot_pdf(FORMS, [ann("11 0 R", sub="Highlight") for _ in range(20)] + [ann("5 0 R")], content=b"BT /F1 12 Tf 10 100 Td (text under a highlight) Tj ET")
+@case("dash patterns at every extreme", 0x80)
+def _(): return pdf(b"[1 2 3 4 5 6 7 8 9] 0 d 5 w 0 0 m 400 300 l S [0.0001] 0 d 200 0 m 200 300 l S [0 0] 0 d 0 0 m 400 1 l S [255 255] 255 d 0 0 m 400 0 l S "
+                    b"[-1 -2] -3 d 10 10 m 390 290 l S [1e9 1e9] 1e9 d 10 10 m 100 100 l S [0 8] 0 d 1 J 3 w 0 100 m 400 100 l S [0 8] 0 d 2 J 3 w 0 200 m 400 200 l S "
+                    b"[2 2] 1 d 10 w 1 j 10 10 m 390 10 l 390 290 l 10 290 l h S [4 4] 0 d 2 w " + b"".join(b"%d %d m %d %d %d %d %d %d c " % (i, i, i * 2, 300, 400 - i, 0, i + 100, 150) for i in range(0, 200, 5)) + b"S "
+                    b"[3] [4] 5 d [] d [ d ] d 0 d [5 5 d")
+@case("inline images: every size, depth and space, truncated")      # the list may fill first: nothing to demand of Incomplete
+def _():
+    parts = [b"BI /W %d /H %d /BPC %d /CS %s ID " % (w, h, b, cs) + bytes((i * 37) & 255 for i in range(n)) + b" EI "
+             for (w, h, b, cs, n) in ((1, 1, 1, b"/G", 1), (8, 8, 1, b"/G", 8), (3, 3, 2, b"/G", 3), (5, 2, 4, b"/G", 5), (7, 7, 8, b"/RGB", 147), (30, 30, 4, b"/RGB", 450), (64, 96, 1, b"/G", 768),
+                                      (1024, 5, 8, b"/G", 5120), (2000, 2, 1, b"/G", 500), (50, 50, 8, b"/G", 2500), (1100, 1, 8, b"/G", 1100), (4097, 1, 1, b"/G", 513),
+                                      (10, 10, 8, b"/G", 20), (200, 200, 8, b"/G", 40000), (6, 6, 16, b"/G", 72), (6, 6, 8, b"/DeviceCMYK", 144), (6, 6, 3, b"/G", 20))]
+    ctms = (b"q 100 0 0 100 10 10 cm ", b"q 1e5 0 0 1e5 -5e4 -5e4 cm ", b"q 0.001 0 0 0.001 5 5 cm ", b"q 0 100 -100 0 200 10 cm ", b"q -100 0 0 100 300 10 cm ",
+            b"q 100 0 0 -100 10 250 cm ", b"q 1 0 0 1 0 0 cm ", b"q 100 20 -20 100 50 50 cm ")
+    return pdf(b"".join(c + p + b" Q " for c in ctms for p in parts) + b"BI /W 8 /H 8 /BPC 1 /CS /G /D [1 0] /Foo [1 2 [3] << /A 1 >>] ID " + bytes(8) + b"EI 1 0 0 rg 0 0 9 9 re f BI /W 4 /H 4 /BPC 8 /CS /G ID abc")
+@case("verify-annotr: direct state dictionaries, turned and skewed forms, appearances that err or end mid-BI")
+def _():
+    long_as = "/" + "S" * 200
+    anns = [ann("<< /Yes 11 0 R /Off 5 0 R >>", extra="/AS /Yes"), ann("<< /Yes 11 0 R >>", extra="/AS " + long_as),
+            ann("<< %s 11 0 R >>" % long_as, extra="/AS " + long_as), ann("<< /Yes << /A 1 >> >>", extra="/AS /Yes"),
+            ann("<< /Yes 999 0 R >>", extra="/AS /Yes"), ann("<< >>", extra="/AS /Yes"), ann("<< /Yes 11 0 R >>", extra="/AS (Yes)"),
+            lambda me: ann("<< /Yes %d 0 R >>" % me, extra="/AS /Yes")]
+    forms = list(FORMS) + [stream("/Type /XObject /Subtype /Form /BBox [0 0 40 40] /Matrix [0.7071 0.7071 -0.7071 0.7071 0 0]", b"0 0 1 rg 0 0 40 40 re f"),
+                           stream("/Type /XObject /Subtype /Form /BBox [0 0 40 40] /Matrix [1 0 30000 1 0 0]", b"0 0 1 rg 0 0 40 40 re f"),
+                           stream("/Type /XObject /Subtype /Form /BBox [0 0 40 40] /Matrix [1e-6 1 -1 1e-6 0 0]", b"0 0 1 rg 0 0 40 40 re f"),
+                           stream("/Type /XObject /Subtype /Form /BBox [0 0 40 40]", b"1 0 0 rg 0 0 40 40 re f > ) ] >> 0 0 1 rg"),
+                           stream("/Type /XObject /Subtype /Form /BBox [0 0 40 40]", b"0 0 1 rg BI /W 2 /H 2 /BPC 8 /CS /G"),
+                           stream("/Type /XObject /Subtype /Form /BBox [0 0 40 40]", b"0 0 1 rg << /A [1 2 << /B 3")]
+    n = 5 + len(FORMS)
+    anns += [ann("%d 0 R" % (n + i)) for i in range(6)] * 3
+    return annot_pdf(forms, anns, content=b"0 g 0 0 5 5 re f > BI /W 1")
+
+@case("inline images under a clip, after a dash, in a form")
+def _():
+    f = stream("/Type /XObject /Subtype /Form /BBox [0 0 100 100]", b"q 50 0 0 50 0 0 cm BI /W 2 /H 2 /BPC 8 /CS /G ID \x00\xff\xff\x00 EI Q".replace(b"\\x00", b"\x00").replace(b"\\xff", b"\xff"))
+    return pdf(b"[3 3] 0 d 0 0 m 100 100 l 100 0 l h W n q 200 0 0 200 0 0 cm BI /W 8 /H 8 /BPC 1 /CS /G ID " + bytes([0xAA, 0x55] * 4) + b" EI Q /F Do", extra_objs=(f,), res="/XObject << /F 5 0 R >>")
+
 RAND_OPS = ["q", "Q", "cm", "w", "J", "j", "M", "d", "m", "l", "c", "v", "y", "h", "re", "S", "s", "f", "F", "f*", "B", "B*", "b", "b*", "n", "W", "W*",
             "g", "G", "rg", "RG", "k", "K", "sc", "scn", "SC", "cs", "BT", "ET", "Tc", "Tw", "Tz", "TL", "Tf", "Tr", "Ts", "Td", "TD", "Tm", "T*", "Tj", "TJ", "'", '"', "Do", "gs", "foo"]
 def rand_content(R):
@@ -166,6 +240,7 @@ def run(name, content_pdf, expect_inc=None, cl="1"):
         out = os.path.join(a.scratch, "o.ppm")
         env = dict(os.environ); env["PDR_CLUSTER"] = cl; env["PDR_GLYPHKB"] = "24"
         env["ASAN_OPTIONS"] = "detect_leaks=0:abort_on_error=0"
+        if a.store: env["PDR_RFLAGS"] = "3"; env["PDR_EDITS"] = a.store; env["PDR_ECOUNT"] = str(a.ecount)
         try:
             r = subprocess.run([a.exe, "render", p, "0", str(zoom), "0", str(bpp), asp, str(W), str(H), "8", "8", out, fd, "29"], capture_output=True, text=True, errors="replace", timeout=60, env=env)
         except subprocess.TimeoutExpired:
@@ -188,6 +263,7 @@ for i in range(a.n):
     p = os.path.join(a.scratch, "r.pdf"); content = rand_content(R)
     before = fails; open(p, "wb").write(pdf(content))
     out = os.path.join(a.scratch, "o.ppm"); env = dict(os.environ); env["PDR_GLYPHKB"] = "24"; env["ASAN_OPTIONS"] = "detect_leaks=0"
+    if a.store: env["PDR_RFLAGS"] = "3"; env["PDR_EDITS"] = a.store; env["PDR_ECOUNT"] = str(a.ecount)
     bpp, asp, W, H, z = R.choice([(4, "1/1", 640, 480, 100), (1, "5/12", 640, 200, 50), (1, "29/45", 720, 348, 150)])
     try:
         r = subprocess.run([a.exe, "render", p, "0", str(z), "0", str(bpp), asp, str(W), str(H), "8", "8", out, fd, str(R.choice([7, 9, 11, 29]))], capture_output=True, text=True, errors="replace", timeout=60, env=env)

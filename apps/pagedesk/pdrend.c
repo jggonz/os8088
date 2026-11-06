@@ -25,3 +25,4 @@ unsigned os88_file_read_seq(const char *name, unsigned seg, unsigned off,
 #include "pdrf.c"
 #include "pdri.c"
 #include "pdrv.c"
+#include "pdra.c"
