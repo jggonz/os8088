@@ -4516,16 +4516,17 @@ gfx_sub_arm:
 ; gfx_sub_off - back to restoring whole buffers
 ; Called by both restore bodies on their way out, so a caller CANNOT leave one
 ; armed: the safe value is the one a forgetful caller inherits, which is
-; wm_dmg_dk's rule (SPEC.md 11.91). Preserves every register; clobbers flags,
-; which both callers have already finished with.
+; wm_dmg_dk's rule (SPEC.md 11.91). Clobbers AX and the flags, which both
+; callers have already finished with: each pops AX straight after - the VGA
+; body's own run, softgfx.inc's sw_xfer through gfx_xor_rect_d.pops - so the
+; bank it carried was dead (kernel hot-paths pass 1, size: -2, ~27 clocks a
+; restore faster).
 ; -----------------------------------------------------------------------------
 gfx_sub_off:
-    push ax
     xor ax, ax
     mov [gfx_sub_st], ax
     mov [gfx_sub_rs], ax
     mov [gfx_sub_ps], ax
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------

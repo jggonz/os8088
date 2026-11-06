@@ -2008,9 +2008,8 @@ ui_drag:
     mov bx, [ui_origy]
     mov dx, bx
     add dx, [ui_dragh]
-    mov si, [ui_dragwin]        ; ...AGAIN: wm_dg_precover's banner says it
-                                ; preserves every register, and its
-                                ; wm_rz_precover spends SI (tests/dockmark.py
+    mov si, [ui_dragwin]        ; ...AGAIN: wm_dg_precover spends SI, AX,
+                                ; BX and CX (its banner; tests/dockmark.py
                                 ; went red on a straddle without this reload)
     call wm_dmg_vacate          ; WHERE IT WAS is the whole of what can have
                                 ; gone stale (SPEC.md 11.91.2) - recorded

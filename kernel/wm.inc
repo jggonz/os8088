@@ -2638,6 +2638,33 @@ wm_rz_swap:
 ; still says its content is its own, so what is banked is correct - and the
 ; alternative is a z-order compare in a walk that has none.
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; wm_dg_precover - the same, for a window that MOVED rather than resized
+; in:  SI = the window, its record holding the NEW rect; AX/BX/CX/DX = the
+;      x/y/w/h it LEFT; caller holds the gfx lock and nothing has been drawn
+; out: nothing; AX, BX, CX, SI and the flags are SPENT - its one caller,
+;      ui_drag, reloads all four registers straight after and reads no flag
+;      before an `add` writes them
+;
+; SPEC.md 11.96.16.2. wm_rz_paint is the funnel for every GEOMETRY change and
+; catches the zoom, the zoom's restore and the grow box - and a drag is none
+; of them: ui_drag writes x/y into the record itself and repaints through
+; wm_paint_dmg, so dragging a window wholly over another banked nothing.
+;
+; The old rect arrives in registers rather than being read back, because
+; ui_drag has it in [ui_orig*]/[ui_drag*] and the record does not - it moved
+; two screens up. wm_rz_o* is free at that moment: it is banked across ONE
+; geometry change and a drop is not one, so this borrows the same four words
+; wm_rz_swap above already knows how to exchange.
+;
+; IT FALLS INTO wm_rz_precover, which is the rest of it (kernel hot-paths pass
+; 1, size: -8). It was a routine of its own that banked BX and the flags
+; around a `call` there, and nothing at its one call site reads either.
+; -----------------------------------------------------------------------------
+wm_dg_precover:
+    call rect_put               ; <- AX..DX, four adjacent words
+    dw wm_rz_ox
+    mov bx, si                  ; ...and into wm_rz_precover with the window
 wm_rz_precover:
     pushf
     push di
@@ -2652,33 +2679,6 @@ wm_rz_precover:
     popf
     ret
 
-; -----------------------------------------------------------------------------
-; wm_dg_precover - the same, for a window that MOVED rather than resized
-; in:  SI = the window, its record holding the NEW rect; AX/BX/CX/DX = the
-;      x/y/w/h it LEFT; caller holds the gfx lock and nothing has been drawn
-; out: nothing (every register and the flags preserved)
-;
-; SPEC.md 11.96.16.2. wm_rz_paint is the funnel for every GEOMETRY change and
-; catches the zoom, the zoom's restore and the grow box - and a drag is none
-; of them: ui_drag writes x/y into the record itself and repaints through
-; wm_paint_dmg, so dragging a window wholly over another banked nothing.
-;
-; The old rect arrives in registers rather than being read back, because
-; ui_drag has it in [ui_orig*]/[ui_drag*] and the record does not - it moved
-; two screens up. wm_rz_o* is free at that moment: it is banked across ONE
-; geometry change and a drop is not one, so this borrows the same four words
-; wm_rz_swap above already knows how to exchange.
-; -----------------------------------------------------------------------------
-wm_dg_precover:
-    pushf
-    push bx
-    call rect_put               ; <- AX..DX, four adjacent words
-    dw wm_rz_ox
-    mov bx, si
-    call wm_rz_precover
-    pop bx
-    popf
-    ret
 
 ; -----------------------------------------------------------------------------
 ; wm_rz_bank  - bank BX's rect before a geometry change
