@@ -93,7 +93,25 @@
 ; to follow.
 ; =============================================================================
 
+; OS88UI_KCOLD - the kernel's `.cold` copy LEAVES THROUGH kernel.asm's ladder
+; (SPEC.md 15.1.2). A routine here that banks a suffix of the canonical
+; prologue (push ax / bx / cx / dx / si / di / bp) and pops it back in mirror
+; order ends `jmp kretc_<rung>` in the kernel - 3 bytes for N+1 - and keeps its
+; own pop run in a package, which has no such ladder: `%ifdef OS88UI_KERNEL`,
+; `UI_KRET <rung>`, `%else`, the pops. Only for blocks that land in `.cold` -
+; never inside OS88UI_KFAR, whose image's CS is not COLD_SEG's; and
+; OS88UI_BTN_BODY, which kern_small expands INTO two such images, takes its
+; rung as a second argument instead, so tools/os88ovlchk.py (which reads both
+; arms of an %if) sees no near jump to `.cold` from them. UI_KRET builds the
+; rung's name rather than taking it whole so that tools/stkbalance.py, which
+; reads a `jmp %1` macro as a branch, walks the pops of the package arm on
+; both corpora and the package one is not shown a jump to a label it lacks.
+; These are per-control routines (a button, a scroll bar), so the taken `jmp`
+; is ~20 clocks on an operation that draws (kernel hot-paths pass 1, size).
 %ifdef OS88UI_KERNEL
+  %macro UI_KRET 1                  ; OS88UI_KCOLD: leave by kretc_<%1>
+    jmp kretc_%1
+  %endmacro
   ; OS88UI_KFAR: the block being assembled is NOT in `.cold` but in an
   ; on-demand image (OS88UI_KGLYPH below), so the three primitives it reaches
   ; are far calls to their shims rather than near calls to the trampolines
@@ -620,7 +638,7 @@ OS88UI_BT_SIZE   equ 18
 ; here: its button's only callers are CTRL.DRV and FDLG.DRV, so it is expanded
 ; INTO each of those images instead, with OS88UI_KFAR's far primitives.
 ; -----------------------------------------------------------------------------
-%macro OS88UI_BTN_BODY 1
+%macro OS88UI_BTN_BODY 1-2      ; %2: the kernel .cold copy's exit rung
 %1:
     push ax
     push bx
@@ -1218,6 +1236,9 @@ OS88UI_BT_SIZE   equ 18
     jmp .lpen
 %endif
 .out:
+%if %0 > 1
+    jmp %2                      ; OS88UI_KCOLD (above): the .cold expansion
+%else                           ; names the ladder's rung
     pop bp
     pop di
     pop si
@@ -1226,6 +1247,7 @@ OS88UI_BT_SIZE   equ 18
     pop bx
     pop ax
     ret
+%endif
 
 %ifdef OS88UI_BIMG
 os88ui_ir: dw 0, 0, 0, 0        ; the inner rect, and the pair - DATA, inline,
@@ -1234,7 +1256,11 @@ os88ui_band: times 48 db 0      ; a picture cut by the clip, as a band
 %endif                          ; OS88UI_BIMG
 %endmacro
 %ifndef OS88UI_KBTNIMG
+ %ifdef OS88UI_KERNEL
+OS88UI_BTN_BODY os88ui_btn, kretc_bp   ; kern_big's, in .cold (OS88UI_KCOLD)
+ %else
 OS88UI_BTN_BODY os88ui_btn
+ %endif
 %endif
 
 ; -----------------------------------------------------------------------------
@@ -2273,6 +2299,9 @@ os88ui_sbar:
     jc .out
     call os88ui_sbthdraw
 .out:
+%ifdef OS88UI_KERNEL
+    UI_KRET bp                  ; OS88UI_KCOLD (above)
+%else
     pop bp
     pop di
     pop si
@@ -2281,6 +2310,7 @@ os88ui_sbar:
     pop bx
     pop ax
     ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; os88ui_sbcx - the arrow glyphs' centre column (internal)
@@ -2347,11 +2377,15 @@ os88ui_sbthdraw:
     clc                         ; the header's promise: the pen leaves BLACK -
     UI_PEN                      ; the live pen, one call and no AX
 .out:
+%ifdef OS88UI_KERNEL
+    UI_KRET dx                  ; OS88UI_KCOLD (above)
+%else
     pop dx
     pop cx
     pop bx
     pop ax
     ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; os88ui_sbhit - which part of the bar is this point in?
@@ -2485,6 +2519,9 @@ os88ui_sbmove:
     dec cx
     UI_GRAY
 .out:
+%ifdef OS88UI_KERNEL
+    UI_KRET bp                  ; OS88UI_KCOLD (above)
+%else
     pop bp
     pop di
     pop si
@@ -2493,6 +2530,7 @@ os88ui_sbmove:
     pop bx
     pop ax
     ret
+%endif
 
 %ifdef OS88UI_SBUPD
 ; -----------------------------------------------------------------------------
@@ -2946,12 +2984,16 @@ os88ui_sbpos:
     mov di, [os88ui_sbd_pos]
 .out:
     pop bp
+%ifdef OS88UI_KERNEL
+    UI_KRET si                  ; OS88UI_KCOLD (above)
+%else
     pop si
     pop dx
     pop cx
     pop bx
     pop ax
     ret
+%endif
 
 %ifndef OS88UI_KERNEL
 ; A PACKAGE's state is inline DATA (SPEC.md 2.6 rule 1) - os88ui_armw's
