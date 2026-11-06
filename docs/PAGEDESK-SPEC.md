@@ -1397,7 +1397,22 @@ the INDEX stays for the next open. **Save**: fetch `PDWRT`, check and bind it,
 claim the writer's buffers (12 KiB, D9), INIT it, step `PDV_WRT_SAVE`; on any
 outcome free the buffers, unbind and `os88_part_drop` the module.
 **Quit** (`os88_onclose` and every refused launch): close, then free the INDEX
-and the XB and unbind every vector.
+and the XB and unbind every vector. A freed segment never stays in
+`pdxb_init`: the document fields are zeroed with A and B (on a failed open
+too) and `wbuf_seg`/`wbuf_kb` with the writer, so a later INIT (D2) hands a
+module 0, never a claim that has been given back.
+
+**The document's folder.** `pdxb_open.name` and `pdxb_save.source` are 8.3
+names resolved in the instance's CURRENT folder, and a Standard File dialog
+moves that folder (SPEC.md 19.2.1). The open banks its folder
+(`pdu_docplace`); every wake and every Find stand back in it first
+(`os88_file_goto_q_mark`: a word, no I/O, inside one volume). Save As writes
+beside the document only (20.5.12 item 2): a dialog answered in another
+folder is refused, `Save As writes beside the document in this build.`, and
+the instance is stood back beside the document. `pdxb_save` carries
+`source` = the open document's name and `date` = `D:YYYYMMDDHHmmSS` from
+`OSAPI_CLK_GET`, or "" when no hardware RTC was found (a PIT clock since
+boot may never have been set); `author` is "".
 
 Measured on QEMU (640 KB, kern_big, stub modules, the real `PDRES`), free heap
 with a document open, from Help > Document info: **446-447 KB on VGA, 451 KB on
@@ -1465,11 +1480,23 @@ to match.
 `tests/unit/t_pdlay.py` (fast row `pdlay`) compiles `pdulay.c` on the host and
 sweeps every content box 320x100..720x460 in every mode plus these five rows.
 
-COMPACT has one combined bar: Open, the page field with Prev/Next, zoom, the
-four mode tabs and the mode's tools; Save As, Find, Undo/Redo and the panels
-are in the menus and the popovers (Pages: a grid; Notes; Zoom list; More).
-Monochrome marks the active control by inversion and focus by a double frame;
-colour by cyan.
+COMPACT has one combined bar: the page field with Prev/Next, zoom, the four
+mode tabs, the mode's tools (as many as fit) and the Pg and Notes popover
+buttons; Open, Save As, Find, Undo/Redo and the panels are in the menus and
+the popovers (Pages: a grid; Notes; Zoom list; More). Monochrome marks the
+active control by inversion and focus by a double frame; colour by cyan.
+Every shown panel has its own put-away control (Pages: `<` at the foot,
+Notes: `x`) - `t_pdlay` checks it at every box.
+
+**What a redraw costs.** Each laid-out control keeps the state and label it
+last showed (keyed on id and position): unchanged is no call; a new label is
+the slivers beside it and one `font_run`; a new state the four slabs round
+the label, the frame and the label; on a ground its painter just filled,
+frame and label. No pixel is written twice (the first build filled each
+control and ran the label over the fill, so the page field blanked on every
+PgDn). A page change moves the sidebar's heavy frame between two cells - or
+pages the list by screenfuls when the page is off it - and redraws only the
+Notes panel's per-page line, padded to the list's width.
 
 #### 20.6.5 Menus and keys
 

@@ -91,6 +91,12 @@ static void one(int w, int h, int side, int notes, int mode, int empty,
         }
     }
     CHECK(L.kind == pdu_kind(w, h), "%s %dx%d kind", tag, w, h);
+    /* a shown panel can always be put away from its own controls (PD-04):
+     * the first build never laid out the Pages panel's hide button */
+    if (present(&L.side))
+        CHECK(pdu_find(&L, C_SB_HIDE) >= 0, "%s %dx%d Pages panel has no hide button", tag, w, h);
+    if (present(&L.notes))
+        CHECK(pdu_find(&L, C_NP_CLOSE) >= 0, "%s %dx%d Notes panel has no close button", tag, w, h);
 }
 
 /* the content box os8088 gives a full-desktop PageDesk window on a display

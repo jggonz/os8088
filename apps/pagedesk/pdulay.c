@@ -304,6 +304,11 @@ void pdu_layout(struct pdu_lay *L, int ox, int oy, int w, int h,
         if (lay_put(L, C_SB_PAGES, CF_PANEL))
             lay_x = lay_x - lay_gap;
         lay_put(L, C_SB_OUTL, CF_PANEL);
+        /* the bottom row is a NEW row: its left edge is the panel's again
+         * (the first build left lay_x past Outline, so lay_putr found no room
+         * and the hide button was never laid out - the Pages panel could be
+         * hidden only from the View menu) */
+        lay_x = L->side.x1 + 4;
         lay_y1 = L->side.y2 - PDU_BAR_F + 2;
         lay_y2 = L->side.y2 - 2;
         lay_putr(L, C_SB_HIDE, CF_PANEL);
