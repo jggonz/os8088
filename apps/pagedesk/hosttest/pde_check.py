@@ -185,8 +185,8 @@ def check_good(pde, path, cluster):
 
 # the engine's documented code where it differs from tests/pdfneg/README.TXT
 KNOWN = {
-    "xref_subsec_300.pdf": "OK",      # 20.2.3: a revision thins past 32 subsections into checkpoints, so 301 open
     "prev_loop.pdf": "XREF",       # SPEC 7.4: a /Prev cycle is PDE_XREF with the revision named
+    "zero_pages.pdf": "SYNTAX",   # D10(b): a tree with no pages is PDE_SYNTAX (README still says NOTFOUND)
 }
 
 
@@ -419,13 +419,13 @@ def own(pde, work):
     expect(out[0].startswith("OPEN ok pages=1 nrev=2"), "sparse: %s" % out[0])
     cl = [l for l in out if l.startswith("CONTENT")]
     expect(cl and ("crc=%04x" % crc16(CONTENT_SPARSE)) in cl[0], "sparse content: %s" % cl)
-    for n, want in ((1006, "GET rc=0 kind=4 num=0.00000 ref=0,0 len=29 count=0 text=replaced in revision 2"), (7000, "GET rc=0 kind=2 num=1000.00000"), (1000, "GET rc=0 kind=2 num=0.00000"),
-                    (30000, "GET rc=0 kind=2 num=1.00000"), (5, "GET rc=0 kind=2 num=1.00000"), (60994, "GET rc=0 kind=2 num=9999.")):
-        key = {1006: "Filler", 7000: "Filler", 1000: "Filler", 30000: "Other", 5: "Low", 60994: "Filler"}[n]
+    for n, want in ((1006, "GET rc=0 kind=4 num=0.00000 ref=0,0 len=29 count=0 text=replaced in revision 2"), (1300, "GET rc=0 kind=2 num=50.00000"), (1000, "GET rc=0 kind=2 num=0.00000"),
+                    (30000, "GET rc=0 kind=2 num=1.00000"), (5, "GET rc=0 kind=2 num=1.00000"), (2134, "GET rc=0 kind=2 num=189.")):
+        key = {1006: "Filler", 1300: "Filler", 1000: "Filler", 30000: "Other", 5: "Low", 2134: "Filler"}[n]
         g = lines(pde, "get", P("sparse.pdf"), (n, 0, key))[-1]
         expect(g.startswith(want[:want.index(" ref=")]) if " ref=" in want else g.startswith(want), "sparse obj %d: %s (want %s)" % (n, g, want))
-    # thinning: 33 subsections is the first checkpoint merge, 3000 many of them; every filler answers
-    for name, nsub in (("sub33.pdf", 33), ("sparse3k.pdf", 3000)):
+    # thinning: 33 subsections is the first checkpoint merge, 240 many of them; every filler answers
+    for name, nsub in (("sub33.pdf", 33), ("sparse3k.pdf", 240)):
         for i in sorted({0, 1, 2, 15, 16, 17, 31, 32, nsub // 2, nsub - 2, nsub - 1} & set(range(nsub))):
             n = 1000 + 7 * i
             g = lines(pde, "get", P(name), (n, 0, "Filler"))[-1]
@@ -459,8 +459,8 @@ def own(pde, work):
         "n_startxref_huge": "open:2", "n_no_eof_marker": "ok", "n_junk_after_eof": "open:3", "n_header_late": "open:1",
         "n_header_v20": "ok", "n_header_bad_ver": "open:1", "n_empty": "open:3", "n_cz": "open:1", "n_garbage": "open:1",
         "n_xref_short_entry": "open:2", "n_xref_badtype": "open:2", "n_xref_gen_big": "open:2", "n_xref_off_eof": "open:2",
-        "n_prev_inside": "open:2", "n_prev_cycle3": "open:2", "n_page_twice": "open:4", "n_no_pages": "open:53",
-        "n_kid_not_page": "open:1", "n_kid_dangling": "ok", "n_kid_wrong_gen": "open:53", "n_tree_30": "ok", "n_tree_33": "open:5",
+        "n_prev_inside": "open:2", "n_prev_cycle3": "open:2", "n_page_twice": "open:4", "n_no_pages": "open:1",
+        "n_kid_not_page": "open:1", "n_kid_dangling": "ok", "n_kid_wrong_gen": "open:1", "n_tree_30": "ok", "n_tree_33": "open:5",
         "n_objnum_70000": "open:33", "n_flate": "stream:16", "n_lzw": "stream:17", "n_a85": "stream:17", "n_dct": "stream:17",
         "n_crypt": "stream:17", "n_chain5": "stream:33", "n_chain4": "ok", "n_unknown": "stream:17", "n_rle_bomb": "read:33",
         "n_encrypt": "open:20", "n_perms": "flags:1", "n_sigflags": "flags:5", "n_acroform": "flags:4", "n_xrefstm": "open:21",

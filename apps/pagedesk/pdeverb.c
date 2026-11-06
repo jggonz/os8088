@@ -61,7 +61,7 @@ static pdw open_step(void)
         rc = pw_step();
         if (rc) return rc;
         pw_end();
-        if (npages == 0) { err_detail = PDX_NOPAGES; return PDE_NOTFOUND; }
+        if (npages == 0) { err_detail = PDX_NOPAGES; return PDE_SYNTAX; }
         return PDE_OK;
     }
     return PDE_RANGE;

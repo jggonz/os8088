@@ -910,9 +910,9 @@ pdhost.c) and runs `hosttest/pde_check.py`.
 
 | item | bytes |
 |---|---|
-| `PDENG.MOD` image (code + data, the file) | 26,986 |
-| bss (zeroed by the door on first entry) | 8,940 |
-| image + bss | 35,926 (target 40,960; cap 57,344) |
+| `PDENG.MOD` image (code + data, the file) | 27,010 |
+| bss (zeroed by the door on first entry) | 8,942 |
+| image + bss | 35,952 (target 40,960; cap 57,344) |
 
 The bss is: the tail/fingerprint buffer 1,024; the subsection table 2,560
 (256 x 10); six stream contexts 6 x 420; the object lexer's 256-byte buffer;
@@ -925,7 +925,7 @@ Checks, none of them an emulator row:
 * `hosttest/pde_check.py` - the engine's own fixtures
   (`hosttest/pde_fixtures.py`: filter pipelines, three-revision update with a
   freed object and a generation mismatch, escapes and numbers through
-  DICT_GET, outline, annotations, resources, boxes, 33 and 3,000 and 10,000
+  DICT_GET, outline, annotations, resources, boxes, 33, 190 and 240
   one-object subsections, and about 50 negatives whose xref is correct so the
   engine reaches the defect under test) with explicit expectations; and the
   shared samples, stress set and negative corpus (20.1) compared with qpdf:
@@ -990,8 +990,8 @@ The cross-reference follows 7.3 with one extension: each revision keeps at most
 record that stands for `span` consecutive subsections, found again by reading
 their 20-byte-aligned headers off the file). A lookup in a thinned revision
 takes the last record whose first object is at most the one asked for and
-walks at most `span` headers, so a valid file with 301 or 10,000 subsections
-opens in bounded memory. A thinned revision must be in ascending order of
+walks at most `span` headers. The whole chain may name at most `PD_MAXSUBSEC`
+(256) subsections: the 257th is `PDE_LIMIT` (D10c). A thinned revision must be in ascending order of
 first object; 33 or more subsections out of order are `PDE_LIMIT`. A revision
 with 32 or fewer subsections may be in any order.
 
@@ -1181,7 +1181,7 @@ call may be retried).
 | `PDE_LIMIT` | token/name/array limits; more than 8 revisions or 1,024 pages; an object number over 65,535; a file of 2 GiB; 5 filters; 7 open streams; 1 MiB decoded |
 | `PDE_NOMEM` | a claim too small (20.2.2); a cluster over 32 KiB |
 | `PDE_IO` | any failed read; a name not in the folder |
-| `PDE_NOTFOUND` | a missing dictionary key or resource; no pages; no outline; `SEARCH` |
+| `PDE_NOTFOUND` | a missing dictionary key or resource; no outline; `SEARCH` |
 | `PDE_BUSY` | `OPEN` has more to do |
 
 `PDE_SIGNED` is not returned: a signed or `/Perms` document opens with
@@ -1193,7 +1193,8 @@ call may be retried).
 * 6.1: a block is never smaller than 2 KiB and a cluster over 32 KiB is refused.
 * 7.2: no object arena of parsed nodes; see 20.2.4. The arena claim is the page
   tree's visited bitmap.
-* 7.3: 32 exact subsections a revision and checkpoints beyond, not 256 in total.
+* 7.3: 32 exact subsections a revision and checkpoints beyond; 256 in total across the chain.
+* A page tree with no pages is `PDE_SYNTAX` (`err_detail = 3`, D10b). An object number above 65535 is `PDE_LIMIT` (D8).
 * 7.4: a `/Prev` loop is `PDE_XREF`; the 1,024-byte tail search for `startxref`
   and header-at-zero are the whole of "a damaged file is never repaired".
 * 8: no page-table "inherited source" word - inheritance is found by walking

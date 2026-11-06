@@ -150,6 +150,7 @@ static pdw xr_find(pdw num)
 }
 
 /* ---- OPEN, step 0: the file, the header, startxref ---------------------- */
+static pdw xr_total;                    /* subsections named by the whole chain */
 static pdw op_start(void)
 {
     pdw rc, n, i, j, found;
@@ -185,14 +186,16 @@ static pdw op_start(void)
     if (u32_dec(&tr_start, tailbuf + i, (pdw)(j - i))) return PDE_XREF;
     if (pdm_u32_cmp(&tr_start, &fl_size) >= 0 || u32_is0(&tr_start)) return PDE_XREF;
     u32_cp(&xr_next, &tr_start);
-    nxs = 0; nrev = 0;
+    nxs = 0; nrev = 0; xr_total = 0;
     return PDE_OK;
 }
 
+/* D10c: the whole chain may name at most PD_MAXSUBSEC subsections */
 static pdw xr_unord;
 static pdw xr_add(pdw first, pdw count, const struct pd_u32 *off)
 {
     pdw lo, n, j;
+    if (++xr_total > PD_MAXSUBSEC) return PDE_LIMIT;
     lo = rv_lo[nrev]; n = rv_n[nrev];
     if (n == PDE_REVSUB) {                              /* thin: pairs become checkpoints */
         if (xr_unord) return PDE_LIMIT;

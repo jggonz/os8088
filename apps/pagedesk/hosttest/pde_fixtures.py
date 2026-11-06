@@ -218,12 +218,12 @@ def build(d):
     p.xref(1)
     save("boxes.pdf", p)
 
-    # ---- 10,000 one-object subsections (ids <= 65535) and an unordered second revision
+    # ---- 190 one-object subsections (PD_MAXSUBSEC is 256 for the whole chain) (ids <= 65535) and an unordered second revision
     p = P()
     p.put(1, b"<< /Type /Catalog /Pages 2 0 R >>")
     p.put(2, b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 100] >>")
     p.put(3, b"<< /Type /Page /Parent 2 0 R /Contents 60999 0 R >>")
-    ids = [1000 + 6 * i for i in range(10000)]
+    ids = [1000 + 6 * i for i in range(190)]
     for i, n in enumerate(ids):
         p.put(n, b"<< /Filler %d >>" % i)
     p.stream(60999, b"", CONTENT % b"sparse")
@@ -235,8 +235,8 @@ def build(d):
     save("sparse.pdf", p)
     exp["sparse.pdf"] = {"contents": [CONTENT % b"sparse"]}
 
-    # ---- small enough for the 640 KiB target harness: 33 and 3000 one-object subsections
-    for nsub, name in ((33, "sub33.pdf"), (3000, "sparse3k.pdf")):
+    # ---- small enough for the 640 KiB target harness: 33 and 240 one-object subsections
+    for nsub, name in ((33, "sub33.pdf"), (240, "sparse3k.pdf")):
         p = P()
         p.put(1, b"<< /Type /Catalog /Pages 2 0 R >>")
         p.put(2, b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 100] >>")
