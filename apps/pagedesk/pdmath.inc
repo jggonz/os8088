@@ -523,7 +523,8 @@ _pdm_fx_mul:                            ; (r, a, b)
 ; unsigned 48 / 32 division.  Stack (pushed in this order): N2, N1, N0, Dh, Dl
 ; (N = N2:N1:N0, D = Dh:Dl, D != 0); callee pops them. Out: Q = DX:CX:BX
 ; (Q2:Q1:Q0), AX nonzero iff the remainder is.
-; Fast path (Dh = 0): three DIVs.  Slow path: 48 restoring steps, ~1.2 ms.
+; Fast path (Dh = 0): three DIVs.  Slow path: 48 restoring steps (~2.4 ms on
+; an 8088, estimated; only fx_div with a divisor >= 1.0 takes it).
 pdmi_udiv48:
         push    bp
         mov     bp, sp
@@ -1169,6 +1170,42 @@ pdmi_scx:
         xor     dx, dx
         jmp     pdmi_flsign
 
+; DX:CX:BX (a 48-bit N) / SI (16-bit, nonzero) -> DX:CX:BX, AX = remainder.
+; floor(floor(N / a) / b) = floor(N / (a * b)) for positive integers, with a
+; zero remainder exactly when both steps leave none: so a divisor that is a
+; PRODUCT of two words is two of these, three DIVs each, and never the 48-step
+; loop (a 1600 * asp_den divisor reaches 2^26).  Clobbers DI.
+pdmi_divw:
+        mov     ax, dx
+        xor     dx, dx
+        div     si
+        mov     di, ax                  ; Q2
+        mov     ax, cx
+        div     si
+        mov     cx, ax                  ; Q1
+        mov     ax, bx
+        div     si
+        mov     bx, ax                  ; Q0
+        mov     ax, dx
+        mov     dx, di
+        ret
+
+; Q = N / (a * b): the shared body of scy and icy.  In: DX:CX:AX = N, SI = a,
+; and b pushed by the caller (this routine pops it).  Out: Q = DX:CX:BX, AX
+; nonzero iff there is a remainder.
+pdmi_divab:
+        push    bp
+        mov     bp, sp
+        mov     bx, ax
+        call    pdmi_divw
+        push    ax                      ; first remainder
+        mov     si, [bp+4]              ; b
+        call    pdmi_divw
+        pop     si
+        or      ax, si
+        pop     bp
+        ret     2
+
 ; floor(s * zoom * asp_num / (1600 * asp_den)).  In DX:AX = s, BX = view.
 pdmi_scy:
         cmp     word [bx+PDMI_V_ASPD], 0
@@ -1178,18 +1215,13 @@ pdmi_scy:
         xor     dx, dx
         ret
 .ok:    call    pdmi_absw
-        push    si
+        push    si                      ; the sign
         mul     word [bx+PDMI_V_ZOOM]
         mov     cx, [bx+PDMI_V_ASPN]
-        call    pdmi_mul3216
-        push    dx
-        push    cx
-        push    ax
-        mov     ax, 1600
-        mul     word [bx+PDMI_V_ASPD]
-        push    dx
-        push    ax
-        call    pdmi_udiv48
+        call    pdmi_mul3216            ; N = DX:CX:AX
+        push    word [bx+PDMI_V_ASPD]   ; b
+        mov     si, 1600                ; a
+        call    pdmi_divab
         pop     si
         jmp     pdmi_flsign
 
@@ -1217,15 +1249,10 @@ pdmi_icy:
         mov     cx, 1600
         mul     cx
         mov     cx, [bx+PDMI_V_ASPD]
-        call    pdmi_mul3216
-        push    dx
-        push    cx
-        push    ax
-        mov     ax, [bx+PDMI_V_ZOOM]
-        mul     word [bx+PDMI_V_ASPN]
-        push    dx
-        push    ax
-        call    pdmi_udiv48
+        call    pdmi_mul3216            ; N = DX:CX:AX
+        push    word [bx+PDMI_V_ASPN]   ; b
+        mov     si, [bx+PDMI_V_ZOOM]    ; a
+        call    pdmi_divab
         pop     si
         jmp     pdmi_clsign
 
@@ -1423,9 +1450,7 @@ _pdm_view_inv:
 ; is clear.  A span that wraps the 64KB segment, or n > 0xFFF0, is refused:
 ; the function returns 0 and touches nothing.
 ; -----------------------------------------------------------------------------
-%ifndef PDM_SKIP_FAR
-
-; BX = off, CX = n -> CF clear if off + n <= 0x10000 and n <= 0xFFF0.
+; (shared by the far movers and crc16_far)  BX = off, CX = n -> CF clear if off + n <= 0x10000 and n <= 0xFFF0.
 pdmi_okspan:
         cmp     cx, 0xFFF0
         ja      .bad
@@ -1438,6 +1463,8 @@ pdmi_okspan:
         ret
 .bad:   stc
         ret
+
+%ifndef PDM_SKIP_FAR
 
 _pd_fcopy_in:                           ; (seg, off, dst, n)
         push    bp

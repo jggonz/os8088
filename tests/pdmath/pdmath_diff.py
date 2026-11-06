@@ -47,9 +47,9 @@ def build():
         os.path.join(ROOT, "tests/pdmath/pdmharness.asm")])
     so = os.path.join(BUILD, "pdref.so")
     ad = os.path.join(ROOT, "apps/pagedesk")
-    subprocess.check_call(["cc", "-O1", "-shared", "-fPIC", "-DPD_HOST",
+    subprocess.check_call(["cc", "-O1", "-shared", "-fPIC", "-DPD_HOST", "-Wl,-w",
         "-I", ad, "-o", so, os.path.join(ad, "pdmath.c"),
-        os.path.join(ad, "hosttest/pdhost.c")])
+        os.path.join(ad, "hosttest/pdhost.c")], stderr=subprocess.DEVNULL)
     return asm_bin, so
 
 
@@ -638,8 +638,62 @@ def main():
             print("    first: %s\n    scratch: %s\n    diff: %s" % (first[0], first[1], "; ".join(first[2])))
     if not a.no_control and not a.k:
         fails += negative_controls(H)
+        fails += roundtrip(H, a.seed, a.n)
+        fails += asm_matrix()
     print("pdmath_diff: %d cases, %d failures - %s" % (total, fails, "PASS" if not fails else "FAIL"))
     return 1 if fails else 0
+
+
+def asm_matrix():
+    """pdmath.inc must assemble (cpu 8086, -w+error) included twice and with every
+    PDM_SKIP_* group left out, alone and together; prints each group's bytes."""
+    import tempfile
+    groups = ["U32", "PARSE", "MAT", "VIEW", "FAR", "CRC"]
+    ad = os.path.join(ROOT, "apps/pagedesk/")
+    bad = 0; sizes = {}
+    with tempfile.TemporaryDirectory() as td:
+        src = os.path.join(td, "t.asm"); out = os.path.join(td, "t.bin")
+        open(src, "w").write('cpu 8086\nbits 16\norg 0\nsection .text\n%include "pdmath.inc"\n%include "pdmath.inc"\n')
+        for name, skips in [("all", [])] + [("skip " + g, [g]) for g in groups] + [("core only", groups)]:
+            cmd = ["nasm", "-f", "bin", "-w+error", "-I", ad, "-o", out, src] + ["-dPDM_SKIP_" + g for g in skips]
+            r = subprocess.run(cmd, capture_output=True, text=True)
+            if r.returncode:
+                bad += 1; print("asm matrix: %s FAILED\n%s" % (name, r.stderr[:400])); continue
+            sizes[name] = os.path.getsize(out)
+    if not bad:
+        print("asm matrix (included twice): " + ", ".join("%s %d" % kv for kv in sizes.items()) + " bytes")
+    return bad
+
+
+def roundtrip(H, seed, n):
+    """PAGEDESK-SPEC 5.3 on the ASSEMBLY alone: fwd(inv(p)) == p for every pixel
+    whose page point is representable (no clamp, no overflow) in a view that
+    maps at most one pixel per pt16 unit - a coarser view cannot reach every pixel."""
+    emu = H.emu; G = Gen(seed + 77); good = skipped = bad = 0
+    for _ in range(n):
+        v = mkview(G)
+        zoom, an, ad = (int.from_bytes(v[o:o + 2], "little") for o in (10, 12, 14))
+        if zoom > 1600 or zoom * an > 1600 * ad:        # more than one pixel per pt16 unit:
+            skipped += 1; continue                      # not every pixel is reachable
+        px = G.r.randint(-300, 700); py = G.r.randint(-300, 700)
+        emu.mem_w((DSEG << 4) + SCR + 16, v)
+        emu.mem_w((DSEG << 4) + emu.ovfw, b"\0\0")
+        emu.call("pdm_view_inv", [SCR, SCR + 2, SCR + 16, px, py])
+        if emu.mem_r((DSEG << 4) + emu.ovfw, 2) != b"\0\0":
+            skipped += 1; continue
+        x = int.from_bytes(emu.mem_r((DSEG << 4) + SCR, 2), "little")
+        y = int.from_bytes(emu.mem_r((DSEG << 4) + SCR + 2, 2), "little")
+        emu.call("pdm_view_fwd", [SCR + 4, SCR + 6, SCR + 16, x, y])
+        qx = int.from_bytes(emu.mem_r((DSEG << 4) + SCR + 4, 2), "little")
+        qy = int.from_bytes(emu.mem_r((DSEG << 4) + SCR + 6, 2), "little")
+        if emu.mem_r((DSEG << 4) + emu.ovfw, 2) != b"\0\0":
+            skipped += 1; continue
+        if (qx, qy) == (px & 0xFFFF, py & 0xFFFF): good += 1
+        else:
+            bad += 1
+            if bad < 4: print("  roundtrip: p=(%d,%d) -> pt=(%d,%d) -> (%d,%d)" % (px, py, x if x < 32768 else x - 65536, y if y < 32768 else y - 65536, qx, qy))
+    print("property fwd(inv(p)) == p on the asm: %d held, %d unrepresentable (skipped), %d broken" % (good, skipped, bad))
+    return bad
 
 
 def negative_controls(H):
@@ -666,7 +720,7 @@ def negative_controls(H):
     _, bad = stub(bytes([0xB8, 0x00, 0x77, 0x8E, 0xC0, 0xC3]))    # mov ax,7700; mov es,ax; ret
     report("ES clobbered", "ES" in bad)
     _, bad = stub(bytes([0xB8, 0x00, 0x77, 0x8E, 0xD8, 0x8C, 0xC8, 0x8E, 0xD8, 0xC3]))
-    report("DS clobbered then restored (not a fault)", not bad)    # ...and so it must NOT be reported
+    report("DS changed and restored is NOT reported", not bad)
     _, bad = stub(bytes([0xBD, 0x34, 0x12, 0xC3]))                # mov bp,1234; ret
     report("BP clobbered", "BP" in bad)
     _, bad = stub(bytes([0xFC, 0x5B, 0x53, 0xC3]) )                     # cld; pop bx; push bx; ret (balanced)
