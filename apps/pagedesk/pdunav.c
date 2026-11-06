@@ -290,6 +290,23 @@ static void ovl_gend(int x, int y)
     pdu_kick();                         /* the render the gesture held back */
 }
 
+/* polish (20.19.5): Esc while a press is being tracked (the Select tool's
+ * rubber band and the scroll thumb poll from os88_ontimer, so a key reaches
+ * os88_onkey meanwhile). The band comes off, nothing is selected, and the
+ * button's release finds pdu_gs = 0 and does nothing. */
+static void ovl_gcancel(void)
+{
+    int g;
+    g = pdu_gs;
+    pdu_gs = 0;
+    if (g == 1)
+        pdu_sbdrop(pdu_sb);             /* the thumb lets go where it is */
+    else if (pdu_gband && os88_wm_clip_set(pdu_win) == 0)
+        ovl_band(pdu_gx, pdu_gy, pdu_gmx, pdu_gmy);
+    pdu_gband = 0;
+    pdu_kick();                         /* the render the gesture held back */
+}
+
 void os88_onmouseup(int x, int y, void *win)
 {
     if (pdu_gs)

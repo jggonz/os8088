@@ -374,6 +374,7 @@ static void pdu_pop_open(int kind, int src)
         sw = 1;                         /* pixel is drawn twice and the click */
     }                                   /* is not charged both paints (pdstk) */
     pdu_job_abort_render();
+    pdu_ed_xoff_l();                    /* polish: off BEFORE the popover covers it */
     pdu_pop = kind;
     pdu_popsrc = src;
     rows = pdu_pop_rows();
@@ -694,6 +695,7 @@ void os88_about(void *win)
 {
     pdu_pop_close();
     pdu_job_abort_render();
+    pdu_ed_xoff_l();                    /* polish: off BEFORE the card covers it */
     pdu_about = 1;
     os88_about_card(win, pdu_abtext);
 }
@@ -858,7 +860,9 @@ void os88_onkey(int ascii, int scan, void *win)
     /* Escape, in order (PD-03, 17.5): a running job, a popover, the page
      * field, the keyboard focus, then the tool */
     if (ascii == 27) {
-        if (pdu_job != J_NONE && !pdu_reopening) {    /* pages: PDENG must get its document back */
+        if (pdu_gs)                     /* polish (20.19.5): a held drag ends, undone */
+            ovl_gcancel();
+        else if (pdu_job != J_NONE && !pdu_reopening) {    /* pages: PDENG must get its document back */
             pdu_jcancel = 1;
             pdu_tell("Cancelling...");
             pdu_kick();

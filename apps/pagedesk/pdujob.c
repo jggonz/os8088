@@ -144,11 +144,13 @@ static void pdu_job_abort(void)
         pdu_reopen_begin();             /* pages: PDENG was left on the output (20.11.5) */
 }
 
+static int pdu_pshown;                  /* polish: a progress line was drawn */
 static void pdu_job_start(int kind)
 {
     pdu_job = kind;
     pdu_jcancel = 0;
     pdu_jslices = 0;
+    pdu_pshown = 0;
     pdu_jt0 = os88_ticks();
     pdu_kick();
 }
@@ -169,6 +171,7 @@ static void pdu_progress(const char *verb, const char *what)
         return;
     if (pdu_jslices & 3)
         return;                         /* a status repaint every 4 slices */
+    pdu_pshown = 1;
     os88_strcpy(pdu_line, verb, sizeof(pdu_line));
     pdu_cat(pdu_line, what, sizeof(pdu_line));
     pdu_cat(pdu_line, " ", sizeof(pdu_line));
@@ -413,7 +416,7 @@ static void pdu_render_step(void)
             pdu_say2("Incomplete rendering - ", pdu_incwhy);
             pdu_wsay(pdu_msg);
         }
-    } else if (pdu_jslices > 8)
+    } else if (pdu_jslices > 8 || pdu_pshown)  /* polish: never leave "Esc cancels" */
         pdu_wsay("Page drawn.");
 }
 
@@ -542,8 +545,11 @@ void os88_onwake(void *win)
         int was;
         was = pdu_job;
         pdu_job_abort();
-        if (was == J_RENDER)
+        if (was == J_RENDER) {
             pdu_rwant = 0;              /* cancelled: the page stays partial */
+            pdu_sel_cancelled(&pdu_rrun);   /* polish: no XOR to trust there */
+            pdu_ed_xon();                   /* polish: the outline, back on */
+        }
         pdu_wsay(was == J_RENDER ? "Drawing cancelled - the page is incomplete."
                                  : pdu_errtext(PDE_CANCEL));
         if (was == J_OPEN)
