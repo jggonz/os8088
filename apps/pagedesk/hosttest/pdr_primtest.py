@@ -125,9 +125,15 @@ def run(seed, n, img):
         mode = R.choice([0, 1, 2]); wb = R.randint(1, 4); wpx = R.randint((wb - 1) * 8 + 1, wb * 8)
         nrow = R.randint(1, 12); skip = R.randint(0, 6)
         stride = 24 if mode != 2 else 24
-        # a real glyph has at most 8 rows below the baseline: (shear-1) - row + 8 >= 0 for every row drawn
-        shear = R.choice([0, 0, R.randint(max(1, skip + nrow - 7), 22)])
-        x = R.randint(0, (stride * (8 if mode != 2 else 2)) - wpx - 12) if mode != 2 else R.randint(0, 48 - wpx - 12)
+        # any shear, including rows more than 8 below the baseline, where (shear-1) - row + 8 is
+        # NEGATIVE and the shift must be a floor (SAR, as the twin's signed >>), not a logical shift
+        shear = R.choice([0, 0, R.randint(1, 22)])
+        if shear:                                   # the C keeps every row's pixels inside the band row
+            lo = min(0, ((shear - 1) - (skip + nrow - 1) + 8) >> 2); hi = ((shear - 1) - skip + 8) >> 2
+            width_px = stride * (8 if mode != 2 else 2)
+            x = R.randint(-lo, max(-lo, width_px - wpx - hi))
+        else:
+            x = R.randint(0, (stride * (8 if mode != 2 else 2)) - wpx - 12) if mode != 2 else R.randint(0, 48 - wpx - 12)
         x = max(0, x)
         bmp = bytearray(R.getrandbits(8) for _ in range(wb * 24))
         if R.random() < .3: bmp = bytearray(0xFF for _ in bmp)
@@ -182,7 +188,9 @@ def run(seed, n, img):
     # ---- act / scan / fcopy: edges in a far arena, near arrays in the module's own segment ----
     ESEG2 = 0x7000; EO = 0x30
     ACT, CXA, CDA = 0x6000, 0x6200, 0x6400          # near arrays: offsets inside DSEG (past the image)
-    def rq(): return R.choice([0, 1, -1, 2, 3, 4, 5, 6, 7, 8, 100, -100, 16000, -16000, 32767, -32768]) if R.random() < .25 else R.randint(-60, 60) * 4 + R.choice([0, 0, 1, 2, 3])
+    # edges are clamped to +/-PDR_QMAX (16000) by edge_add: that is pdr_scan's precondition (its
+    # in-line IDIV cannot fault while |xb - xa| < 32768), so the extremes are +/-16000
+    def rq(): return R.choice([0, 1, -1, 2, 3, 4, 5, 6, 7, 8, 100, -100, 16000, -16000, 15999, -15999]) if R.random() < .25 else R.randint(-60, 60) * 4 + R.choice([0, 0, 1, 2, 3])
     for _ in range(n):
         ne = R.randint(0, 24)
         raw = bytearray()

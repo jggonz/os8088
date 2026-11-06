@@ -24,6 +24,7 @@ section .data   follows=.rodata align=2
 section .bss    follows=.data   align=2 nobits
 
 %include "os88api.inc"
+%include "pagedesk/pdabi.inc"       ; PDM_MAGIC_REND, PDM_ABI, PDE_* (generated)
 
 section .text
 pdr_hdr:

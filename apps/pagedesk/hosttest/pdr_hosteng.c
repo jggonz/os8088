@@ -64,7 +64,8 @@ int pdrh_open(const char *path)
         pd_fcopy_out(&op, SEG_XB, 0, sizeof op);
         r = pde_verb(PDV_ENG_OPEN, 0, 0, 0);
         pd_fcopy_in(SEG_XB, 0, &op, sizeof op);
-        if (pde_fail && r == PDE_BUSY) { if (++n > 5000) return 0; continue; }
+        /* D11: more to do is CF = 0 (pde_fail 0) with AX = PDE_BUSY */
+        if (!pde_fail && r == PDE_BUSY) { if (++n > 5000) return 0; continue; }
         if (pde_fail) { fprintf(stderr, "engine OPEN failed %u (obj %u detail %u)\n", r, op.err_obj, op.err_detail); return 0; }
         break;
     }

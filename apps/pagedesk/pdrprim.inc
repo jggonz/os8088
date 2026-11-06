@@ -58,9 +58,8 @@ IP_COL    equ 30
 IP_SIZE_  equ 32
 
 
-PDM_MAGIC_REND  equ 0x5250          ; 'PR' - pdabi.h PDM_MAGIC_REND
-PDM_ABI         equ 1               ; pdabi.h PDM_ABI
-PDE_BUSY        equ 65              ; pdabi.h PDE_BUSY
+; PDM_MAGIC_REND, PDM_ABI and PDE_BUSY come from pagedesk/pdabi.inc (generated
+; from pdabi.h by tools/os88pdabi.py), which pdrend.asm includes
 
 
 ; ---- the primitives' variables (in the bss the door clears) ------------------
@@ -80,7 +79,7 @@ gl_nb:          resw 1
 gl_k:           resb 1
 gl_collo:       resb 1
 gl_colhi:       resb 1
-gl_pad:         resb 1
+gl_pok:         resb 1              ; the unsheared row position is worked out
 gi_row:         resw 1
 gi_dy4:         resw 1
 section .text
@@ -327,6 +326,7 @@ _pdr_glyph:
     mov cl, 4
     shl al, cl
     mov [cs:gl_colhi], al
+    mov byte [cs:gl_pok], 0         ; no unsheared position worked out yet
 .row:
     ; ---- this row's x (with the shear) --------------------------------------
     mov cx, GPV(GP_X)
@@ -336,13 +336,22 @@ _pdr_glyph:
     dec dx
     sub dx, [cs:gl_r]
     add dx, 8
-    shr dx, 1
-    shr dx, 1
+    sar dx, 1                       ; SIGNED: below the descent's eighth row the
+    sar dx, 1                       ; sum is negative (floor, as the C twin)
     add cx, dx
+    cmp word GPV(GP_MODE), 2
+    je .nib
+    jmp short .pos
 .noshear:
     cmp word GPV(GP_MODE), 2
     je .nib
+    ; an upright glyph's every row has the same position, shift and byte count:
+    ; worked out on the first row, kept for the rest (~50 bytes of fetch a row)
+    cmp byte [cs:gl_pok], 0
+    jne .loadrow
+.pos:
     ; ---- bytes: position, shift, byte count ---------------------------------
+    mov byte [cs:gl_pok], 1
     mov [cs:gl_x], cx
     mov dx, cx
     mov cl, 3
@@ -357,6 +366,7 @@ _pdr_glyph:
     mov cl, 3
     shr ax, cl
     mov [cs:gl_nb], ax              ; ((k + wpx + 7) >> 3) bytes are touched
+.loadrow:
     ; ---- the source row into AH AL BH BL = b0 b1 b2 b3 ----------------------
     xor bx, bx
     lodsb
@@ -772,7 +782,6 @@ _pdr_scan:
     mov cl, 3
     shl bx, cl
     add bx, [bp+6]
-    mov [bp-10], bx
     mov ax, [es:bx+2]               ; ya
     mov dx, [es:bx+6]               ; yb
     mov cx, [bp+12]                 ; ys
@@ -791,17 +800,19 @@ _pdr_scan:
     jge .skip
     mov word [bp-8], 0
 .hit:
-    sub dx, ax                      ; yb - ya
+    ; x = xa + (xb - xa) * (ys - ya) / (yb - ya), the quotient truncated toward
+    ; zero. In line, not through _pdr_muldiv: ys lies in [ya, yb) (or (yb, ya]),
+    ; so |ys - ya| < |yb - ya| and |quotient| < |xb - xa| <= 32768 - it always
+    ; fits and IDIV cannot fault, which is the only thing the saturating
+    ; routine adds (its result is the same: the C twin calls pdr_muldiv)
+    sub dx, ax                      ; yb - ya (nonzero)
     sub cx, ax                      ; ys - ya
+    mov si, dx
     mov ax, [es:bx+4]
     sub ax, [es:bx]                 ; xb - xa
-    push dx
-    push cx
-    push ax
-    call _pdr_muldiv
-    add sp, 6
-    mov bx, [bp-10]
-    add ax, [es:bx]                 ; x
+    imul cx                         ; DX:AX = (xb - xa) * (ys - ya)
+    idiv si
+    add ax, [es:bx]                 ; x  (BX is still this edge's offset)
     cmp di, [bp+18]
     jae .done
     mov bx, di

@@ -20241,6 +20241,7 @@ $(BUILD)/pdr_mathstub.inc: $(BUILD)/pdrend.gen.asm
 	   grep -o '_pd[m_][a-z0-9_]*' $< | sort -u | while read n; do echo "$$n: ret"; done; } > $@
 
 $(BUILD)/PDREND.MOD: $(PDR_DIR)/pdrend.asm $(PDR_DIR)/pdrprim.inc $(BUILD)/pdrend.gen.asm \
+                     $(PDR_DIR)/pdabi.inc $(wildcard $(PDR_DIR)/pdmath.inc) \
                      $(CC_RUNTIME) apps/os88api.inc | $(BUILD)
 	@$(if $(PDR_MATH),$(MAKE) --no-print-directory $(BUILD)/pdr_mathstub.inc,:)
 	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ $(PDR_MATH) $(PDR_RSQ) -o $@ $(PDR_DIR)/pdrend.asm
@@ -20256,7 +20257,7 @@ $(PDR_HOSTBIN): $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c $(
 .PHONY: pdrend pdrend-host pdrend-fuzz
 # the asm primitives against their C twins need Unicorn: whichever python has it
 PDR_UPY := $(shell for p in python3 /usr/bin/python3; do $$p -c 'import unicorn' 2>/dev/null && { echo $$p; break; }; done)
-pdrend-host: $(PDR_HOSTBIN) $(PD_RES_BIN) $(PD_FONTX_RES)
+pdrend-host: $(PDR_HOSTBIN) $(BUILD)/PDRES.BIN $(BUILD)/PDFONTX.RES
 	python3 $(PDR_DIR)/hosttest/pdr_check.py $(PDR_HOSTBIN) $(BUILD)/pdrtest $(BUILD)
 	@$(if $(PDR_UPY),$(PDR_UPY) $(PDR_DIR)/hosttest/pdr_primtest.py,echo "pdr_primtest: SKIP - no python with the unicorn package")
 pdrend: $(BUILD)/PDREND.MOD pdrend-host
@@ -20267,8 +20268,29 @@ $(PDR_FUZZBIN): $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c $(
 	cc -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -Wno-int-to-void-pointer-cast \
 		-DPD_HOST -I$(PDR_DIR) -o $@ $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c \
 		$(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c $(PDR_DIR)/pdrend.c
-pdrend-fuzz: $(PDR_FUZZBIN) $(PD_RES_BIN) $(PD_FONTX_RES)
+# the same hostile streams through the REAL engine (pdeng.c answers every verb), ASan+UBSan
+PDR_FUZZREAL := $(BUILD)/pdr_test_real_asan
+PDR_ENGSRC   := $(wildcard $(PDR_DIR)/pde*.c $(PDR_DIR)/pde*.h) $(PDR_DIR)/hosttest/pde_host.c
+$(PDR_FUZZREAL): $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c $(PDR_DIR)/hosttest/pdr_hosteng.c \
+                 $(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c $(PDR_CSRC) $(PDR_ENGSRC) | $(BUILD)
+	cc -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -DPD_HOST -DPDR_REAL_ENG -I$(PDR_DIR) -o $@ \
+		$(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c $(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c \
+		$(PDR_DIR)/pdrend.c $(PDR_DIR)/hosttest/pdr_hosteng.c $(PDR_DIR)/pdeng.c
+pdrend-fuzz: $(PDR_FUZZBIN) $(PDR_FUZZREAL) $(BUILD)/PDRES.BIN $(BUILD)/PDFONTX.RES
 	python3 $(PDR_DIR)/hosttest/pdr_fuzz.py $(PDR_FUZZBIN) $(BUILD)/pdrfuzz $(BUILD) -n 400
+	python3 $(PDR_DIR)/hosttest/pdr_fuzz.py $(PDR_FUZZREAL) $(BUILD)/pdrfuzzr $(BUILD) -n 200 --seed 23
+# `make pdrend-real`: PDREND linked with the REAL PDENG (hosttest/pdr_hosteng.c), every committed
+# sample drawn as VGA, Hercules and CGA see it and compared with mutool (hosttest/pdr_real.py).
+# PDR_SHOTS=<dir> also writes each page beside mutool's for a human to look at.
+PDR_REALBIN := $(BUILD)/pdr_test_real
+PDR_SHOTS   ?=
+$(PDR_REALBIN): $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c $(PDR_DIR)/hosttest/pdr_hosteng.c \
+                $(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c $(PDR_CSRC) $(PDR_ENGSRC) | $(BUILD)
+	cc -O1 -w -DPD_HOST -DPDR_REAL_ENG -I$(PDR_DIR) -o $@ $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c \
+		$(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c $(PDR_DIR)/pdrend.c $(PDR_DIR)/hosttest/pdr_hosteng.c $(PDR_DIR)/pdeng.c
+.PHONY: pdrend-real
+pdrend-real: $(PDR_REALBIN) $(BUILD)/PDRES.BIN $(BUILD)/PDFONTX.RES
+	python3 $(PDR_DIR)/hosttest/pdr_real.py $(PDR_REALBIN) $(BUILD)/pdrreal $(BUILD) $(PDR_DIR)/samples $(PDR_SHOTS)
 # ---- end PageDesk: rend ----
 
 # ---- PageDesk: eng ----------------------------------------------------------

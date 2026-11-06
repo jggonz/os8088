@@ -46,6 +46,9 @@ struct pdr_gp {
     pdw rowstep;                /* bytes from one band row to the next      */
 };
 extern struct pdr_gp pdr_gp;
+/* pdrprim.inc's GP_* offsets are this order, word by word: the size pins it
+ * (hosttest/pdr_primtest.py writes the block in this order for both sides) */
+typedef char pdr_gp_size[sizeof(struct pdr_gp) == 28 ? 1 : -1];
 void pdr_glyph(void);
 /* the edge scan (pdrprim.inc): edges are 8-byte records (x0 y0 x1 y1) at eseg:eoff.
  * pdr_act lists the edges that can touch qpx rows qlo..qhi in act[] and returns
@@ -68,6 +71,7 @@ struct pdr_ip {
     pdw col;                    /* stencil: 1bpp 0 black / 1 white; 4bpp c4 */
 };
 extern struct pdr_ip pdr_ip;
+typedef char pdr_ip_size[sizeof(struct pdr_ip) == 32 ? 1 : -1];
 void pdr_imgrow(void);
 
 /* globals the asm shares */
@@ -81,12 +85,15 @@ extern pdw pdr_eng_off, pdr_eng_seg;
 #define PDR_NSTR        512
 #define PDR_NPATH       200     /* flattened path vertices                    */
 #define PDR_WSB         6912u   /* workspace at the tail of dl_seg: saved gstates + font cache */
+#define PDR_MINDL       256u    /* the least list room BEGIN accepts (D13): 7 KiB of dl_seg */
 #define PDR_NEDGE       256     /* staged edges                               */
 #define PDR_NCLIPE      96      /* edges in the clip pool                     */
 #define PDR_NCLIP       8       /* non-rectangular clips in the pool          */
 #define PDR_NFONT       4
 #define PDR_NRUN        64      /* glyphs per DL run record                   */
-#define PDR_NSPAN       64      /* crossings per scanline                     */
+#define PDR_NSPAN       128     /* crossings per scanline; a row with more is NOT
+                                 * painted (a dropped crossing would pair the rest
+                                 * wrongly and paint a false span) and is noted */
 #define PDR_MAXSTRIDE   96      /* band stride the masks are sized for        */
 #define PDR_NFORM       5       /* nested stream frames: page + 4 forms       */
 #define PDR_MAXRES      4

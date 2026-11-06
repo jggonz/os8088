@@ -70,20 +70,23 @@ static pdw g_wid_off, g_nam_off;    /* from the 'PDFX' record, 0 = absent     */
 /* index_seg holds a PDRES-format file's INDEX from byte 0: 'PDRS', the
  * directory, then the PDFB bank at the offset D of directory kind 1 (a
  * multiple of 16, 20.4.1). Returns the bank's segment, or 0 */
-static pdw index_bank(pdw index_seg, pdw *nstrikes)
+static pdw index_bank(pdw index_seg, pdw have, pdw *nstrikes)
 {
-    pdw n, i, k, d = 0, seg;
-    if (!index_seg || pd_fpeekw(index_seg, 0) != 0x4450 || pd_fpeekw(index_seg, 2) != 0x5352) return 0;   /* "PDRS" */
+    pdw n, i, k, d = 0, ilen = 0, seg;
+    if (!index_seg || have < 96 || pd_fpeekw(index_seg, 0) != 0x4450 || pd_fpeekw(index_seg, 2) != 0x5352) return 0;   /* "PDRS" */
     n = pd_fpeekw(index_seg, 6);
-    for (i = 0; i < n && i < 16; i++) {
+    for (i = 0; i < n && i < 7; i++) {         /* 7 entries end at 92: inside the 96 checked */
         k = pd_fpeekw(index_seg, 8 + i * 12);
-        if (k == 1) { d = pd_fpeekw(index_seg, 8 + i * 12 + 4); break; }
+        if (k == 1 && !d) d = pd_fpeekw(index_seg, 8 + i * 12 + 4);
+        if (k == 7) ilen = pd_fpeekw(index_seg, 8 + i * 12 + 8);
     }
-    if (!d || (d & 15)) return 0;
+    /* D from kind 1 and the INDEX length from kind 7 (D10), never constants; the
+     * INDEX must be what was read, and the strike records and PDFX inside it */
+    if (!d || (d & 15) || !ilen || ilen > have || d > ilen - 8) return 0;
     seg = (pdw)(index_seg + (d >> 4));
     if (pd_fpeekw(seg, 0) != 0x4450 || pd_fpeekw(seg, 2) != 0x4246) return 0;                       /* "PDFB" */
     n = pd_fpeekw(seg, 6);
-    if (n == 0 || n > 120) return 0;
+    if (n == 0 || n > 120 || 8 + n * 16 > ilen - d) return 0;
     *nstrikes = n;
     return seg;
 }
@@ -91,12 +94,12 @@ static pdw index_bank(pdw index_seg, pdw *nstrikes)
 /* the PDRES core bank: the primary's INDEX claim (PDV_REND_FONTBANK). The
  * widths ('PDWD', 20.4.3) and names ('PDFX' record) live in it */
 static pdw g_bn_tmp;
-static void bank_attach(pdw index_seg)
+static void bank_attach(pdw index_seg, pdw index_len)
 {
     pdw n, x, seg;
     g_bankseg = 0; g_bankok = 0; g_bk_seg[0] = 0; g_bk_n[0] = 0; g_wid_off = g_nam_off = 0;
     g_pkfam = 0xFF;
-    seg = index_bank(index_seg, &g_bn_tmp);
+    seg = index_bank(index_seg, index_len, &g_bn_tmp);
     n = g_bn_tmp;
     if (!seg) return;
     g_bankseg = seg; g_bankok = 1; g_bk_seg[0] = seg; g_bk_n[0] = n;
@@ -296,7 +299,18 @@ static pdw font_width(pdw fi, pdw code)
 {
     struct pdr_font *f = font_sel(fi);
     pdw w, face, lat;
-    if (code < 32) return 0;
+    if (code < 32) {
+        /* a subset font's control codes (TeX's ligatures at 11..15, a symbolic
+         * font's 1..31) are not drawn (no PD Latin for them) but still ADVANCE
+         * by their /Widths entry, uncached: there is no table room for them */
+        if (f->nw && code >= f->first && code - f->first < f->nw && f->objnum &&
+            dict_get(f->objnum, f->gen, "Widths", idx_key((pdw)(code - f->first)), 0) == 0 &&
+            (g_dg.kind == PDK_INT || g_dg.kind == PDK_REAL)) {
+            pdi v = pdm_fx_round(&g_dg.num);
+            return v < 0 ? 0 : (pdw)v;
+        }
+        return 0;
+    }
     w = f->wid[code - 32];
     if (w != 0xFFFF) return w;
     w = 0xFFFF;

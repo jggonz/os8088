@@ -18,7 +18,7 @@ struct pdr_gs {
     pdb  flum, fc4, slum, sc4;      /* fill / stroke: luminance, VGA index   */
     pdb  fncs, sncs;                /* colour components of the space (1,3,4)*/
     pdb  tr, font;                  /* render mode, font cache index (255=none)*/
-    pdb  ncl;                       /* non-rectangular clips active          */
+    pdb  clid;                      /* innermost polygon clip in the pool, 0xFF none */
     pdb  pad;
 };
 /* the current state lives here; the SAVED states (q) and the font cache live in
@@ -101,6 +101,7 @@ static pdi pdr_hypot(pdi dx, pdi dy)
     while (a > 180 || b > 180) { a >>= 1; b >>= 1; sh++; }
     r = pdr_isqrt((pdw)(a * a + b * b));
     if (r == 0 && (dx || dy)) r = 1;
+    if (r > (pdw)(0x7FFF >> sh)) return 0x7FFF;      /* saturate: a length is never negative */
     return (pdi)(r << sh);
 }
 
@@ -262,6 +263,9 @@ static pdi g_eylo, g_eyhi;          /* the group's rows, qpx, for culling    */
  * out-of-group ones cannot matter, so neither is kept */
 static void edge_add(pdi x0, pdi y0, pdi x1, pdi y1)
 {
+    /* every stored edge lies in +/-PDR_QMAX: a stroke's offset or a miter can
+     * reach past it, and pdr_scan's in-line divide relies on |x1 - x0| < 32768 */
+    x0 = pdr_clampq(x0); y0 = pdr_clampq(y0); x1 = pdr_clampq(x1); y1 = pdr_clampq(y1);
     if (y0 == y1) return;
     if (y0 < y1) { if (y1 < g_eylo || y0 > g_eyhi) return; }
     else         { if (y0 < g_eylo || y1 > g_eyhi) return; }
@@ -423,6 +427,10 @@ static void stroke_poly(const pdi *xs, const pdi *ys, pdw n, pdw closed)
                 if (miter_ok) {
                     mx = pdr_muldiv((pdi)(nx + nx2), 100, (pdi)(100 + dot));
                     my = pdr_muldiv((pdi)(ny + ny2), 100, (pdi)(100 + dot));
+                    /* the tip can be ~14 half widths out (and rounding of the
+                     * x100 directions makes it more): clamp BEFORE the add, so
+                     * the sum cannot wrap 16 bits; edge_add clamps the result */
+                    mx = pdr_clampq(mx); my = pdr_clampq(my);
                     mx = (pdi)(xs[j] + s * mx); my = (pdi)(ys[j] + s * my);
                     if (cr > 0) poly4(xs[j], ys[j], ax, ay, mx, my, bx, by);
                     else        poly4(xs[j], ys[j], bx, by, mx, my, ax, ay);

@@ -23,11 +23,11 @@ open(os.path.join(fd, "PDRES.BIN"), "wb").write(data)
 open(os.path.join(fd, "PAGEDESK.O88"), "wb").write(b"\x55" * 1536 + data)
 shutil.copy(os.path.join(a.resdir, "PDFONTX.RES"), fd)
 
-def pdf(content, extra_objs=(), res="", extra_page=""):
+def pdf(content, extra_objs=(), res="", extra_page="", font1=None):
     objs = []
     def add(b): objs.append(b); return len(objs)
     add(None); add(None)
-    f1 = add("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")
+    f1 = add(font1 or "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")
     c = add(b"<< /Length %d >>\nstream\n" % len(content) + content + b"\nendstream")
     ex = []
     for o in extra_objs: ex.append(add(o(len(objs) + 1) if callable(o) else o))
@@ -109,6 +109,40 @@ def _():
 @case("huge pages")
 def _(): return pdf(b"0 0 m 5000 5000 l S BT /F1 12 Tf 4000 4000 Td (far) Tj ET 1000000 1000000 5 5 re f")
 
+# ---- verify-rend's additions: the paths its fixes are on -------------------------------------
+@case("inline images: counted, mask, filtered, CMYK, unterminated", 0x04)
+def _():
+    return pdf(b"BI /W 4 /H 4 /BPC 8 /CS /G ID " + b"EI Q q " * 3 + b"rest" + b" EI 0 0 9 9 re f "        # data containing 'EI': counted, not scanned
+               b"BI /IM true /W 9 /H 3 /D [1 0] ID " + bytes(6) + b" EI 10 10 5 5 re f "
+               b"BI /W 2 /H 2 /BPC 8 /CS /CMYK ID " + bytes(16) + b" EI "
+               b"BI /W 3 /H 3 /BPC 8 /CS /RGB /F /AHx ID 00ff00ff00ff00ff00ff00ff00ff00ff00ff00> EI "
+               b"BI /W 3 /Foo 7 /H 2 /BPC 4 /CS /G ID " + bytes(4) + b" EI "
+               b"BI /W 100 /H 100000 /BPC 8 /CS /G ID " + bytes(3000) + b" EI 20 20 5 5 re f BI /W 1 /H")
+@case("graphics state overflow keeps q/Q balanced", 0x80)
+def _(): return pdf(b"q 1 0 0 rg " + b"q " * 40 + b"0 0 1 rg " + b"Q " * 40 + b"0 0 50 50 re f Q 0 0 0 rg 60 60 20 20 re f")
+@case("token flood without an operator")
+def _(): return pdf(b"1 " * 200000 + b"0 0 10 10 re f " + b"[ " * 30 + b"(a) " * 20000 + b"] " * 30 + b"<< " + b"/K 1 " * 20000 + b">> 5 5 5 5 re f")
+@case("TJ of numbers only")
+def _(): return pdf(b"BT /F1 12 Tf 10 100 Td [-5000] TJ (after) Tj [1e9] TJ [-1e9 (x)] TJ ET")
+@case("image rows that wrap 16 bits")
+def _():
+    imgs = (stream("/Type /XObject /Subtype /Image /Width 2731 /Height 2 /BitsPerComponent 8 /ColorSpace /DeviceRGB", b"\x80" * 40000),
+            stream("/Type /XObject /Subtype /Image /Width 21846 /Height 2 /BitsPerComponent 8 /ColorSpace /DeviceRGB", b"\x80" * 100),
+            stream("/Type /XObject /Subtype /Image /Width 8 /Height 40000 /BitsPerComponent 8 /ColorSpace /DeviceGray", b"\x80" * 1000))
+    return pdf(b"".join(b"q 300 0 0 80 10 %d cm /I%d Do Q " % (10 + 90 * i, i) for i in range(3)), extra_objs=imgs,
+               res="/XObject << " + " ".join("/I%d %d 0 R" % (i, 5 + i) for i in range(3)) + " >>")
+@case("large text at every scale and quarter turn")
+def _():
+    return pdf(b"".join(b"BT /F1 %d Tf %s %d %d Tm (Big WMgy) Tj ET " % (sz, m, x, y) for sz, m, x, y in (
+        (300, b"1 0 0 1", 0, 50), (90, b"0 1 -1 0", 300, 20), (90, b"0 -1 1 0", 100, 280), (90, b"-1 0 0 -1", 390, 280),
+        (500, b"0 1 -1 0", 390, 0), (64, b"1 0 0 1", -50, 150), (40, b"1 0 0.3 1", 50, 200))))
+@case("control codes with widths")
+def _():
+    return pdf(b"BT /F1 12 Tf 10 100 Td (\001\002\013\014\037A) Tj ET",
+               font1="<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman /FirstChar 0 /LastChar 65 /Widths [%s] >>" % " ".join(["500"] * 66))
+@case("extreme miters and long strokes")
+def _(): return pdf(b"20 M 200 w 0 J 0 j 0 0 m 400 1 l 0 2 l S 1 0 0 1 0 0 cm 30 w -100000 -100000 m 100000 100000 l -100000 100000 l S 1000 w 200 150 m 200.01 150 l 200 150.01 l s")
+
 RAND_OPS = ["q", "Q", "cm", "w", "J", "j", "M", "d", "m", "l", "c", "v", "y", "h", "re", "S", "s", "f", "F", "f*", "B", "B*", "b", "b*", "n", "W", "W*",
             "g", "G", "rg", "RG", "k", "K", "sc", "scn", "SC", "cs", "BT", "ET", "Tc", "Tw", "Tz", "TL", "Tf", "Tr", "Ts", "Td", "TD", "Tm", "T*", "Tj", "TJ", "'", '"', "Do", "gs", "foo"]
 def rand_content(R):
@@ -156,7 +190,7 @@ for i in range(a.n):
     out = os.path.join(a.scratch, "o.ppm"); env = dict(os.environ); env["PDR_GLYPHKB"] = "24"; env["ASAN_OPTIONS"] = "detect_leaks=0"
     bpp, asp, W, H, z = R.choice([(4, "1/1", 640, 480, 100), (1, "5/12", 640, 200, 50), (1, "29/45", 720, 348, 150)])
     try:
-        r = subprocess.run([a.exe, "render", p, "0", str(z), "0", str(bpp), asp, str(W), str(H), "8", "8", out, fd, str(R.choice([9, 11, 29]))], capture_output=True, text=True, errors="replace", timeout=60, env=env)
+        r = subprocess.run([a.exe, "render", p, "0", str(z), "0", str(bpp), asp, str(W), str(H), "8", "8", out, fd, str(R.choice([7, 9, 11, 29]))], capture_output=True, text=True, errors="replace", timeout=60, env=env)
         if r.returncode not in (0, 3) or "AddressSanitizer" in r.stderr or "runtime error" in r.stderr or "CANARY" in r.stderr:
             fails += 1; keep = os.path.join(a.scratch, "crash_%d.pdf" % i); shutil.copy(p, keep)
             print("  FAIL random #%d rc=%d %s (kept %s)" % (i, r.returncode, r.stderr.strip().split("\n")[0][:160], keep))

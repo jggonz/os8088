@@ -37,23 +37,30 @@ static void draw_image(pdw off, pdw len, pdi ry0, pdi ry1)
     static pdb b[20];
     static struct pd_u32 u, q;
     pdi xl, yt, xr, yb, wq, hq, y, sr, x0, x1, delta;
-    pdw W, H, bpc, ncomp, flags, rb, stencil, sm;
+    pdw W, H, bpc, ncomp, flags, rb, stencil, sm, obj, gen;
     (void)len;
     if (!g_gseg || g_gkb < 2) { inc_note(PDF_INC_IMAGE, "no image buffer"); return; }
     pd_fcopy_in(g_dls, off + DLH, b, 20);
     xl = r16(b); yt = r16(b + 2); xr = r16(b + 4); yb = r16(b + 6);
     W = (pdw)r16(b + 8); H = (pdw)r16(b + 10);
-    g_iobj = (pdw)r16(b + 12); g_igen = (pdw)r16(b + 14);
+    obj = (pdw)r16(b + 12); gen = (pdw)r16(b + 14);
     bpc = b[16]; ncomp = b[17]; flags = b[18];
     stencil = flags & 1;
     wq = (pdi)(xr - xl); hq = (pdi)(yb - yt);
     if (wq < 1) wq = 1;
     if (hq < 1) hq = 1;
-    if (!W || !H || W > 4096) return;
-    rb = (pdw)((W * ncomp * bpc + 7) >> 3);
+    if (!W || !H || W > 4096 || H > 0x7FFF) return;
+    /* the row in bytes, without a 16-bit product that can wrap (do_image allows
+     * 8 bits of 1 or 3 components, or 1 bit of one) */
+    rb = bpc == 8 ? (pdw)(W * ncomp) : (pdw)((W + 7) >> 3);
     if (rb > 1024) { inc_note(PDF_INC_LIMIT, "image row size"); return; }
-    g_ibytes = rb;
-    if (!img_reopen()) { inc_note(PDF_INC_FILTER, "image stream"); return; }
+    /* the stream stays open from band to band while the same image is drawn
+     * further down: each band reads on from the row the last one stopped at,
+     * instead of decoding the image from its first row again */
+    if (!g_iopen || g_iobj != obj || g_igen != gen || g_ibytes != rb) {
+        g_iobj = obj; g_igen = gen; g_ibytes = rb;
+        if (!img_reopen()) { inc_note(PDF_INC_FILTER, "image stream"); return; }
+    }
     sm = stencil ? 3 : (ncomp == 3 ? 2 : (bpc == 1 ? 0 : 1));
     /* destination columns: first/last pixel the rectangle and the clip share */
     x0 = q_lo(xl); x1 = q_hi(xr);
@@ -62,13 +69,14 @@ static void draw_image(pdw off, pdw len, pdi ry0, pdi ry1)
     if (x1 > g_scx1) x1 = g_scx1;
     if (x0 < g_bx0) x0 = g_bx0;
     if (x1 > (pdi)(g_bx0 + g_bw - 1)) x1 = (pdi)(g_bx0 + g_bw - 1);
-    if (x1 < x0) { img_close(); return; }
+    if (x1 < x0) return;
     delta = (pdi)(x0 * 4 + 2 - xl);
     if (delta < 0) delta = 0;
     pdm_u32_set(&u, (pdw)(4 * W), 0);
     pdm_u32_divmod16(&q, &u, (pdw)wq);
     for (y = ry0; y <= ry1; y++) {
         pdi qy = (pdi)(y * 4 + 2);
+        if (y < g_scy0 || y > g_scy1) continue;
         if (qy <= yt) sr = 0;
         else if (qy >= yb) sr = (pdi)(H - 1);
         else sr = pdr_muldiv((pdi)(qy - yt), (pdi)H, hq);
@@ -92,7 +100,6 @@ static void draw_image(pdw off, pdw len, pdi ry0, pdi ry1)
             pdr_imgrow();
         }
     }
-    img_close();
 }
 
 /* ============================================================================
@@ -119,8 +126,9 @@ static void close_streams(void)
 static pdw g_subm, g_subm_w;            /* sub-row mode: one band, composed in pieces */
 static pdw pass_begin(void)
 {
+    img_close();                        /* a held image is not the top stream any more */
     g_eylo = (pdi)(g_gy0 * 4); g_eyhi = (pdi)(g_gy1 * 4 + 3);
-    g_dllen = 0; g_dlfull = 0; g_lstv = 0; g_ndl = 0; g_cetop = 0;
+    g_dllen = 0; g_dlfull = 0; g_lstv = 0; g_ndl = 0; g_cetop = 0; g_ncl = 0;
     g_passes++;
     gs_init();
     g_ph = PDR_INTERP;
@@ -237,7 +245,7 @@ static pdw verb_step(void)
         g_bcur++;
         if (g_bcur >= g_b1) {
         groupend:
-            if (g_b1 >= g_nb) { g_ph = PDR_DONE; return PDE_OK; }
+            if (g_b1 >= g_nb) { img_close(); g_ph = PDR_DONE; return PDE_OK; }
             g_b0 = g_b1;
             g_b1 = g_b0 + g_gw; if (g_b1 > g_nb) g_b1 = g_nb;
             err = pass_start();
@@ -273,6 +281,7 @@ static pdw verb_textmap(void)
     pdw n, room, err;
     pd_fcopy_in(g_xb, 0, &g_tmq, sizeof g_tmq);
     if (!g_dls) return PDE_NOMEM;
+    if (g_tmq.dmax < 12) return PDE_RANGE;          /* no room for one record: it would never finish */
     if (g_tmq.state == 0) {
         close_streams();
         mode_reset();
@@ -320,7 +329,7 @@ static pdw verb_thumb(void)
     pdi pw, ph;
     pd_fcopy_in(g_xb, 0, &g_thq, sizeof g_thq);
     if (g_thq.state == 0) {
-        if (!g_dls || !g_bseg || !g_thq.w || !g_thq.h || g_thq.w > 720) return PDE_NOMEM;
+        if (!g_dls || !g_bseg || !g_thq.w || !g_thq.h || g_thq.w > 720 || g_thq.h > 720) return PDE_NOMEM;
         close_streams();
         mode_reset();
         err = eng_call(PDV_ENG_PAGEINFO, &g_pi, sizeof g_pi, g_thq.page, 0, 0);
@@ -376,11 +385,14 @@ static pdw verb_init(pdw xbseg)
     pdr_eng_off = g_ini.eng_off; pdr_eng_seg = g_ini.eng_seg;
     g_dls = g_ini.dl_seg;
     g_dlcap = g_ini.dl_kb ? (pdw)(g_ini.dl_kb >= 63 ? 0xFC00u : (pdw)(g_ini.dl_kb << 10)) : 0;
-    /* the workspace is the last PDR_WSB bytes of the claim: the DL gets the rest */
-    if (g_dlcap > PDR_WSB) { g_dlcap -= PDR_WSB; g_ws = (pdw)(g_dls + (g_dlcap >> 4)); }
-    else { g_dlcap = 0; g_ws = g_dls; }
+    /* the workspace is the last PDR_WSB bytes of the claim: the DL gets the rest.
+     * A claim with no room for both is NO claim (D13): BEGIN, TEXTMAP and THUMB
+     * refuse PDE_NOMEM rather than put the workspace past its end */
+    if (g_dls && g_dlcap >= PDR_WSB + PDR_MINDL) { g_dlcap -= PDR_WSB; g_ws = (pdw)(g_dls + (g_dlcap >> 4)); }
+    else { g_dlcap = 0; g_dls = 0; g_ws = 0; }
     g_bseg = g_ini.band_seg; g_bbytes = g_ini.band_bytes;
-    g_gseg = g_ini.glyph_seg; g_gkb = g_ini.glyph_kb;
+    g_gseg = g_ini.glyph_seg; g_gkb = g_ini.glyph_kb > 63 ? 63 : g_ini.glyph_kb;   /* << 10 fits 16 bits */
+    if (!g_gseg) g_gkb = 0;
     g_bankok = 0; g_bankseg = 0; g_bk_seg[0] = g_bk_seg[1] = 0; g_pkfam = 0xFF;
     g_scn = 0; g_scbump = SC_BASE; g_fxok = 0;
     g_bpp = g_ini.bpp == 4 ? 4 : 1;
@@ -397,7 +409,7 @@ static pdw verb_fontbank(void)
 {
     pdw cb, cap, got, n, seg;
     pd_fcopy_in(g_xb, 0, &g_fbq, sizeof g_fbq);
-    bank_attach(g_fbq.index_seg);
+    bank_attach(g_fbq.index_seg, g_fbq.index_len);
     pdr_scpy(g_pkgname, g_fbq.pkgname, 14);
     g_pclus = g_fbq.place_clus; g_pvol = g_fbq.place_vol;
     g_poff_lo = g_fbq.part_off.lo; g_poff_hi = g_fbq.part_off.hi;
@@ -409,14 +421,18 @@ static pdw verb_fontbank(void)
             cap = (pdw)((2048 + cb - 1) & ~(cb - 1));
             got = file_read("PDFONTX.RES", 0, 0, (pdw)(g_gseg + (GC_IDX >> 4)), cap);
             file_leave();
+            if (got > cap) got = cap;
+            if (got > GC_XBASE - GC_IDX) got = GC_XBASE - GC_IDX;     /* what the region holds */
             if (got >= 96) {
-                seg = index_bank((pdw)(g_gseg + (GC_IDX >> 4)), &g_bn_tmp);
+                seg = index_bank((pdw)(g_gseg + (GC_IDX >> 4)), got, &g_bn_tmp);
                 n = g_bn_tmp;
                 if (seg) { g_bk_seg[1] = seg; g_bk_n[1] = n; g_fxok = 1; }
             }
         }
-        pd_ffill(g_gseg, GC_XBASE, 0, SC_BASE - GC_XBASE);
     }
+    /* the transformed-glyph slots hold whatever the new claim held: empty them
+     * wherever glyph_xform may use them (a claim of 5 KiB or more) */
+    if (g_gseg && g_gkb >= 5) pd_ffill(g_gseg, GC_XBASE, 0, SC_BASE - GC_XBASE);
     g_pkfam = 0xFF;
     return PDE_OK;
 }

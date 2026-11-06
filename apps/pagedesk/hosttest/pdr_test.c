@@ -76,20 +76,24 @@ static void do_init(int bpp, int bankkb, int dlkb)
     memcpy(MEM(SEG_XB, 0), keep, sizeof keep);
     if (send_fontbank()) { fprintf(stderr, "fontbank failed\n"); exit(2); }
 }
-/* the claims are laid out with a pad of 0xCD behind each; a renderer that writes past its claim shows up here */
+/* the claims are laid out with 8 KiB of 0xCD behind each (every arena is at least that far from the
+ * next); a renderer that writes past its claim shows up here - 8 KiB, not a few bytes, because the
+ * workspace's regions start up to 6 KiB in, so an overrun need not touch a claim's first bytes */
+#define CANARY 8192
 static const struct { pdw seg; unsigned size; const char *name; } g_cl[4] = {
     { SEG_XB, 1024, "exchange block" }, { SEG_DL, 0, "display list" }, { SEG_BAND, 9600, "band" }, { SEG_GLY, 0, "glyph claim" } };
 static unsigned g_clsize[4];
+static unsigned canary_len(int i) { unsigned room = 0x10000u - g_clsize[i]; return room < CANARY ? room : CANARY; }
 static void canary_set(int dlkb)
 {
     int i;
     g_clsize[0] = 1024; g_clsize[1] = dlkb >= 63 ? 0xFC00u : (unsigned)dlkb << 10; g_clsize[2] = 9600; g_clsize[3] = (unsigned)g_glykb << 10;
-    for (i = 0; i < 4; i++) memset(MEM(g_cl[i].seg, g_clsize[i]), 0xCD, 64);
+    for (i = 0; i < 4; i++) memset(MEM(g_cl[i].seg, g_clsize[i]), 0xCD, canary_len(i));
 }
 static int canary_check(void)
 {
     int i, j, bad = 0;
-    for (i = 0; i < 4; i++) for (j = 0; j < 64; j++) if (MEM(g_cl[i].seg, g_clsize[i])[j] != 0xCD) { fprintf(stderr, "CANARY: %s overrun at +%d\n", g_cl[i].name, j); bad = 1; break; }
+    for (i = 0; i < 4; i++) for (j = 0; j < canary_len(i); j++) if (MEM(g_cl[i].seg, g_clsize[i])[j] != 0xCD) { fprintf(stderr, "CANARY: %s overrun at +%d\n", g_cl[i].name, j); bad = 1; break; }
     return bad;
 }
 static void write_ppm(const char *path, int x0, int y0, int w, int h)

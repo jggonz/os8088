@@ -121,9 +121,17 @@ r5, o5, s5 = render(4, 100, 0, 1, '5/12', 640, 200, 'sub_a', 60)
 r5b, o5b, s5b = render(4, 100, 0, 1, '5/12', 640, 200, 'sub_b', 11)
 if open(o5, 'rb').read() == open(o5b, 'rb').read() and int(s5b.get('passes', 0)) > 30: ok('a 4 KiB list composes one band in sub-passes (%s passes) and draws the identical image' % s5b['passes'])
 else: fail('sub-row passes', repr((s5, s5b)))
-r6, o6, s6 = render(4, 100, 0, 4, '1/1', 640, 480, 'ovl_c', 1)
-if int(s6.get('incomplete', '0x0'), 16) & 0x80: ok('a 1 KiB list that cannot hold even ONE ROW: reported Incomplete (limit), not silently dropped')
-else: fail('DL too small for one row', repr(s6))
+r6, o6, s6 = render(4, 100, 0, 4, '1/1', 640, 480, 'ovl_c', 7)
+if r6.returncode == 0 and int(s6.get('incomplete', '0x0'), 16) & 0x80: ok('a 256-byte list (7 KiB claim) that cannot hold even ONE ROW: reported Incomplete (limit), not silently dropped, no overrun')
+else: fail('DL too small for one row', 'rc=%d %r %s' % (r6.returncode, s6, r6.stderr.strip()[:160]))
+# D13: a dl claim with no room for the workspace AND a list is refused by BEGIN (PDE_NOMEM = 34), and
+# nothing is written past it (the harness's canary sits at the claim's end)
+bad = []
+for kb in (0, 1, 4, 6):
+    r7, o7, s7 = render(4, 100, 0, 4, '1/1', 640, 480, 'ovl_d', kb)
+    if r7.returncode != 3 or 'begin -> 34' not in r7.stderr or 'CANARY' in r7.stderr: bad.append((kb, r7.returncode, r7.stderr.strip()[:80]))
+if not bad: ok('dl_kb 0/1/4/6 (no room for the 6,912-byte workspace and a list): BEGIN refuses PDE_NOMEM, no write past the claim')
+else: fail('small dl claims refused', repr(bad))
 
 # ---- 5. against mutool -----------------------------------------------------------
 if not shutil.which('mutool'):
