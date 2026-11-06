@@ -353,3 +353,13 @@ agent's TAKEN rows. Its columns are what each note's TAKEN table carries:
   `.cold` away. That is a pass-wide limit, and the coordinator watches the
   merged total. If your branch alone adds more than ~300 bytes before
   `.cold`, say so in your final message.
+* **files and sched have landed** (`kernel-hotpaths` after `e8c636ca`).
+  Three things they found that bind the rest of the pass. (1) The boot
+  overlay's window half (`.ovl`) is at **5,117 of 5,120 bytes on kern_big**:
+  anything added to `.ovl` needs a move out first. (2) `tools/os88hot.py`
+  finds the idle task's `hlt` at `sch_idle_body.rearm - 1`. sched-4 keeps it
+  there, and an edit that moves it makes busy read 100% rather than raise an
+  error. (3) sysbench's `PIT/tick want 65536` row can read 131050 from
+  unsigned jitter in `sb_ticklen`, and its `int 16h` row moves ~10% with tick
+  phase. Both are noise in an A/B.
+
