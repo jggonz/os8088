@@ -422,6 +422,24 @@ with tempfile.TemporaryDirectory() as tdir:
        len(set(dv[352:356])) == 4,
        "format 9: VGA's palette at 464 by plane code, the band's map at 352 "
        "- four DIFFERENT values")
+    # THE BUILD TAB'S PALETTE VIEWER (126.3.2): the K colours in index
+    # order, the band's four marked, and a clip's share of each - read by
+    # decoding the clip as the engine does, so a clip drawn with several
+    # colours shows several
+    vfile = os.path.join(os.path.dirname(vbp), "pv.vbt")
+    open(vfile, "wb").write(dv)
+    bv = B2.Bundle(dv)
+    pv = max((G.vga_colours(vfile, 8, i) for i in range(len(bv.clips))),
+             key=lambda v: sum(u > 0.01 for u in v["usage"]))
+    B2.REND = B2.Rend("cga4")
+    us = pv["usage"] or [0]
+    ok([x["rgb"] for x in pv["cols"]] == [tuple(c) for c in pal] and
+       sorted(x["band"] for x in pv["cols"] if x["band"] is not None)
+       == [0, 1, 2, 3] and abs(sum(us) - 1) < 1e-6 and
+       sum(u > 0.01 for u in us) >= 3,
+       "the palette viewer: the 8 in order, the band's four marked, %s's "
+       "pixels over %d of them (%s)"
+       % (pv["clip"], sum(u > 0.01 for u in us), " ".join("%.0f" % (u * 100) for u in us)))
     B2.REND = B2.Rend("cga4")
     fr = np.zeros((3, 8, 16, 3), np.uint8)
     fr[:] = 120
@@ -447,9 +465,24 @@ with tempfile.TemporaryDirectory() as tdir:
     vpal = [(0, 0, 0), (255, 255, 255), (40, 40, 40), (120, 120, 120)]
     v0 = int(A.quant_vga(vf, vpal)[-1].astype(bool).sum())
     vq = A.quant_vga(vf, vpal, 16)
-    ok(lit0 > 0 and lit16 == 0 and v0 > 0 and not vq[-1].any(),
+    ok(lit0 > 0 and lit16 == 0 and not vq[-1].any(),
        "a slow fade to black: Hercules %d dots left lit unclipped, %d "
-       "clipped at 16; VGA %d, then all black" % (lit0, lit16, v0))
+       "clipped at 16; VGA all black clipped (%d unclipped - Knoll's hold "
+       "is relative, so it leaves none either)" % (lit0, lit16, v0))
+    # VGA DITHERS FOR COLOUR (126.3.2, the owner's "red things choose to be
+    # brown"): a pink between red and white in a palette that also holds
+    # yellow - a brightness-only dither mixed red with YELLOW (mean error
+    # 74); Video Player's Knoll pattern dither mixes it to the source's mean
+    hpal = [(0, 0, 0), (255, 255, 255), (200, 40, 40), (40, 40, 200),
+            (130, 90, 40), (210, 200, 50), (100, 100, 100), (60, 140, 60)]
+    pk = np.zeros((1, 16, 16, 3), np.uint8)
+    pk[:] = (230, 120, 120)
+    pq = A.quant_vga(pk, hpal)[0]
+    perr = np.abs(np.array(hpal, float)[pq].mean((0, 1)) -
+                  (230, 120, 120)).max()
+    ok(perr < 25,
+       "a pink dithers to pink, mostly red and white: mean error %.0f "
+       "(%d of 256 yellow)" % (perr, int((pq == 5).sum())))
     # HOW A VIDEO FITS (target.fit): a 4:3 source with a bar along its top
     # edge - FILL crops it on every rendition (each canvas is wider than
     # 4:3 shows), STRETCH keeps it

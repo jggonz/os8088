@@ -195,6 +195,27 @@ kern_big and kern_small keep the load on the desktop, where the window says
       value: at 352 their sixteenth overlapped the hold order's count, and
       a 16-colour rendition's hold was garbage (the hold order now holds 16
       ranges). No legacy reader: nothing has shipped (the owner).
+- [x] **VGA colours, step 1: the dither** (2026-11-06, SPEC.md 126.3.2).
+      The owner, after the palette fix: "blue things choose to be a dither
+      of red and yellow ... red things choose to be brown". The palette had
+      the colours; the dither did not use them - it offset all three
+      channels by one grey amount and took the nearest entry, so it
+      dithered brightness. `quant_vga` is now Video Player's
+      `KnollDitherer` (a pattern whose mean is the source colour): a pink
+      74 -> 11 mean error (`vbtgui`), the records +1.5% on scratch footage.
+- [ ] **Step 2: the shared colours by error reduction** - the K chosen
+      greedily for the least CIELAB error over every clip, rather than by
+      k-means centres.
+- [ ] **Step 3: four colours a clip** - per-clip DAC slots swapped at a
+      clip's start (format 10, engine work: a seam rewrites the clip-slot
+      pixels on a clip-to-clip join).
+- [ ] **Step 4: 8- and 4-colour variants**, and the CGA palette as an
+      automatic 4-colour option.
+- [x] **A palette viewer on the Build page** (2026-11-06, SPEC.md
+      126.3.2): the battle's K colours, black the base and the band's four
+      marked "menu", beside the memory lines; a clip picked in the budget
+      shows each colour's share of its pixels. Until step 3 a clip has no
+      colours of its own, so its view is its use of the shared ones.
 
 ## What it costs
 

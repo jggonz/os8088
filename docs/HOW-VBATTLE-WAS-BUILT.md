@@ -884,6 +884,24 @@ overlapped the hold order's count at 398, so a 16-colour rendition's hold
 order was garbage. Format 9 puts the colours at 464 and holds 16 ranges.
 Nothing had shipped, so there is no legacy reader.
 
+The palette fix didn't fix the colours: "blue things choose to be a dither
+of red and yellow, instead of blue. Red is in the palette, but red things
+choose to be brown." The palette had the right entries, and the dither
+wasn't using them. It added one offset to all three channels and took the
+nearest entry, so it dithered brightness and ignored hue: a pink between
+red and white came out as red and yellow. Video Player already had the
+answer, the Knoll pattern dither, which picks a pattern of entries whose
+average is the source colour. On that pink the mean error fell from 74 to
+11, for 1.5% more record bytes on the Ikaruga test footage.
+
+The Build page got a palette viewer at the same time, so colour choices
+can be seen rather than guessed. It shows the battle's colours, with black
+marked as the base and the band's four marked as the menu's. Clicking a
+clip in the budget adds a bar per colour: that clip's share of each,
+decoded from the built bundle. That tells the owner which colours a clip
+actually draws with, and it is the view the per-clip colours of step 3
+will fill in.
+
 ## Measured (MartyPC `os8088_5150_sb_gla`, 360 KB disk)
 
 | | |

@@ -225,8 +225,8 @@ def screens(proj, sid, progress=_nop, full=False):
 #         by two, so the band is the same 40 x 8 cells; one bit a pixel
 
 REND_KINDS = ("cga4", "vga4", "herc")
-HOLD_RGB = 14           # a pixel keeps its colour while its source moves less
-HOLD_LUM = 10           # ...and its bit, while its brightness does
+HOLD_LUM = 10           # Hercules: a pixel keeps its bit while its brightness
+#                         moves less (VGA4's hold is Knoll's own, quant_vga)
 
 
 def rend_size(proj, kind):
@@ -338,37 +338,34 @@ def _bayer4():
 
 
 def quant_vga(fr, pal, clip=0):
-    """rgb24 frames to palette indexes: an ordered dither anchored to the
-    canvas, and a pixel's colour HELD while its source has moved less than
-    HOLD_RGB, so still footage costs nothing frame to frame"""
-    pal = np.array(pal, float)
+    """rgb24 frames to palette indexes - VIDEO PLAYER'S PATTERN DITHER
+    (os88venc.KnollDitherer, SPEC.md 98.2.5), with its defaults: each
+    pixel's plan is sixteen palette colours whose mean is the target, the
+    4 x 4 Bayer cell picks one, and a pixel keeps its colour while what it
+    was chosen for has moved less than `stable` (24) and the colour is still
+    in its plan - so still footage costs nothing frame to frame. CLIP
+    levels: a pixel that near a colour is that colour, solid.
+
+    It replaces an ordered dither that shifted all three channels together
+    and took the nearest by RGB: that only ever mixes towards a brightness,
+    never between hues, so a blue between two palette entries came out a
+    dither of red and yellow and a red came out brown (the owner, 2026-11-06:
+    the Video Player's own encode of a clip "yields a drastically better
+    colour set" - its dither as much as its palette)"""
+    import os88venc as VE
+    pal6 = bytes(int(v) >> 2 for c in pal for v in c)
     n, h, w, _ = fr.shape
-    b = _bayer4()[np.arange(h)[:, None] % 4, np.arange(w)[None, :] % 4]
-    spread = 40.0
+    d = VE.KnollDitherer(w, h, pal6, KNOLL_STABLE, float(clip), 0.0,
+                         KNOLL_SCORE, KNOLL_CAP, 0)
     out = np.zeros((n, h, w), np.uint8)
-    prev, prgb = None, None
     for i in range(n):
-        x = fr[i].astype(float) + ((b - 0.5) * spread)[..., None]
-        d = ((x[:, :, None, :] - pal[None, None]) ** 2).sum(3)
-        idx = np.argmin(d, 2).astype(np.uint8)
-        solid = None
-        if clip:                    # NEAR A COLOUR: that colour, solid and
-            d0 = ((fr[i].astype(float)[:, :, None, :] - pal[None, None]) **
-                  2).sum(3)         # never held - a fade to black ends
-            n0 = np.argmin(d0, 2)   # black, where a held dot stayed lit
-            solid = np.abs(fr[i].astype(float) - pal[n0]).max(2) < clip
-            idx[solid] = n0[solid]
-        if prev is not None:
-            still = np.abs(fr[i].astype(int) - prgb).max(2) < HOLD_RGB
-            if solid is not None:
-                still &= ~solid
-            idx[still] = prev[still]
-            prgb = np.where(still[..., None], prgb, fr[i].astype(int))
-        else:
-            prgb = fr[i].astype(int)
-        out[i] = idx
-        prev = idx
+        out[i] = d(np.ascontiguousarray(fr[i]))
     return out
+
+
+KNOLL_STABLE = 24.0     # os88venc's --vga4-stable default
+KNOLL_SCORE = 60.0      # ...--vga4-hold-score's
+KNOLL_CAP = 64.0        # ...--vga4-plan-cap's
 
 
 def quant_herc(fr, clip=0):
@@ -447,8 +444,8 @@ def rend_screens(proj, sid, kind, progress=_nop, full=False):
     t = proj.d["target"]
     k = t.get("vga_colours", 8)
     key = hashlib.sha1(json.dumps(
-        ["q1", file_hash(proj.here(s["path"])), kind, w, h, k, t["palette"],
-         HOLD_RGB, HOLD_LUM, battle_palette(proj, k) if kind == "vga4"
+        ["q2", file_hash(proj.here(s["path"])), kind, w, h, k, t["palette"],
+         KNOLL_STABLE, KNOLL_SCORE, KNOLL_CAP, HOLD_LUM, battle_palette(proj, k) if kind == "vga4"
          else None] + ([pct] if pct < 100 else []) +
         ([fit_of(proj)] if fit_of(proj) != "fill" else []) +
         [clip_of(proj)]).encode()).hexdigest()[:20]

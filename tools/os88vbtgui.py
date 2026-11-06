@@ -3350,6 +3350,52 @@ CHECK_TABS = (("clips.", "clips"), ("openings", "openings"),
               ("ui_sounds", "battle"), ("target", "battle"), ("sounds", "clips"))
 
 
+_VGAC = {}
+
+
+def vga_colours(path, k, clip=None):
+    """The Build tab's palette viewer out of a built VGA4 bundle (SPEC.md
+    126.3.2): its K colours in index order, each {rgb, value, band} - the
+    8-bit colour, the pixel value it is drawn in, and which of the band's
+    four (the menu's) it serves, or None - and, given CLIP (an index of the
+    bundle's clips, the budget's order), "usage": each colour's share of
+    that clip's canvas pixels over all its frames, decoded as the engine
+    decodes them. Every clip shares the battle's one palette; the usage
+    says which of it a clip actually draws with"""
+    import numpy as np
+    import os88vbt as B
+    import os88vid as V
+    st = os.stat(path)
+    key = (path, st.st_mtime, st.st_size, k, clip)
+    if key in _VGAC:
+        return _VGAC[key]
+    data = open(path, "rb").read()
+    bd = B.Bundle(data)
+    codes = B.vga_codes(k)
+    bmap = list(data[352:356])
+    out = dict(cols=[dict(rgb=tuple((v << 2) | (v >> 4) for v in
+                                    data[464 + 3 * c:467 + 3 * c]),
+                          value=c, band=bmap.index(c) if c in bmap else None)
+                     for c in codes], usage=None, clip=None)
+    if clip is not None and 0 <= clip < len(bd.clips):
+        c = bd.clips[clip]
+        rows = B.REND.rows
+        surf = B.REND.blank()
+        hist = np.zeros(16, np.int64)
+        for r in bd.stream(c)[:-1]:
+            B.decode(surf, r)
+            pl = [np.unpackbits(np.frombuffer(bytes(
+                surf[q * V.PLANE:q * V.PLANE + 40 * rows]), np.uint8))
+                for q in range(4)]
+            px = pl[0] | (pl[1] << 1) | (pl[2] << 2) | (pl[3] << 3)
+            hist += np.bincount(px, minlength=16)
+        tot = max(1, int(hist.sum()))
+        out["usage"] = [float(hist[x["value"]]) / tot for x in out["cols"]]
+        out["clip"] = c["name"]
+    _VGAC[key] = out
+    return out
+
+
 def check_tab(where):
     for pre, tab in CHECK_TABS:
         if where.startswith(pre):
@@ -3460,9 +3506,20 @@ class BuildTab(object):
         self.tv.tag_configure("over", background="#f3c0c0")
         self.tv.tag_configure("near", background="#f6e2b0")
         self.tv.pack(fill="x")
-        self.mem_l = ttk.Label(bf, text="", font=("TkFixedFont", 9),
+        mf = ttk.Frame(bf)
+        mf.pack(fill="x")
+        self.mem_l = ttk.Label(mf, text="", font=("TkFixedFont", 9),
                                justify="left")
-        self.mem_l.pack(anchor="w", pady=4)
+        self.mem_l.pack(side="left", anchor="n", pady=4)
+        self.tv.bind("<<TreeviewSelect>>", lambda e: self._pal())
+        pf = ttk.LabelFrame(mf, text="VGA's colours", padding=4)
+        pf.pack(side="left", anchor="n", padx=12, pady=4)
+        self.pal_l = ttk.Label(pf, text="Build a VGA rendition to see its "
+                               "colours.", wraplength=16 * 33)
+        self.pal_l.pack(anchor="w")
+        self.pal_c = tk.Canvas(pf, height=96, width=16 * 36 + 4,
+                               highlightthickness=0)
+        self.pal_c.pack(anchor="w")
         df = ttk.LabelFrame(f, text="...and make a disk of it, with "
                             "VBATTLE.O88 beside it", padding=4)
         df.pack(fill="x", pady=4)
@@ -3523,6 +3580,53 @@ class BuildTab(object):
         if self.res:
             self.show(self.res)
 
+    def _pal(self):
+        """THE PALETTE VIEWER (126.3.2): the battle's K colours - black, the
+        base; the band's four, the menu's; the rest shared by every clip -
+        and, with a clip picked in the budget, each one's share of that
+        clip's pixels"""
+        c = self.pal_c
+        c.delete("all")
+        rs = [r for r in (self.res or {}).get("renditions") or []
+              if r["kind"] == "vga4"]
+        if not rs or not os.path.exists(rs[0]["out"]):
+            self.pal_l.config(text="Build a VGA rendition to see its "
+                              "colours.")
+            return
+        k = self.app.proj.d["target"].get("vga_colours", 8)
+        sel = self.tv.selection()
+        clip = self.tv.index(sel[0]) if sel else None
+        name = self.tv.item(sel[0], "text") if sel else None
+        try:
+            v = vga_colours(rs[0]["out"], k, clip)
+        except (OSError, ValueError) as e:
+            self.pal_l.config(text="Cannot read %s: %s" % (rs[0]["out"], e))
+            return
+        self.pal_l.config(text=(
+            "The battle's %d, shared by every clip; \"menu\" marks the band's "
+            "four. " % k) + (
+            "Bars: each one's share of %s's pixels, all its frames." %
+            (name or v["clip"]) if v["usage"] else
+            "Click a clip above to see what it draws with."))
+        top = max(v["usage"] or [0]) or 1.0
+        for i, x in enumerate(v["cols"]):
+            x0 = 2 + i * 36
+            c.create_rectangle(x0, 2, x0 + 30, 24, outline="#000",
+                               fill="#%02x%02x%02x" % x["rgb"])
+            role = [r for r, on in (("base", i == 0 and x["rgb"] == (0, 0, 0)),
+                                    ("menu %d" % (x["band"] or 0),
+                                     x["band"] is not None)) if on]
+            for j, r in enumerate(role):
+                c.create_text(x0 + 15, 31 + 10 * j, text=r,
+                              font=("TkDefaultFont", 7))
+            if v["usage"]:
+                u = v["usage"][i]
+                h = max(1, int(round(u / top * 34)))
+                c.create_rectangle(x0 + 6, 94 - h, x0 + 24, 94,
+                                   outline="", fill="#557")
+                c.create_text(x0 + 15, 94 - h - 6, text="%.0f%%" % (u * 100),
+                              font=("TkDefaultFont", 7))
+
     def show(self, res):
         self.res = res
         rs = res.get("renditions") or [dict(kind="cga4", out=res["out"],
@@ -3563,6 +3667,7 @@ class BuildTab(object):
             "(on a 640 KB machine: %d KB free to the engine, measured on "
             "MartyPC's XT; 86Box's 5150 left about 20 KB more)" %
             (bud["memory"]["free"] // 1024)]))
+        self._pal()
 
     def _disk(self):
         self.disk_picked = True

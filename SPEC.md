@@ -242472,10 +242472,17 @@ then sets the mode, the palette and the decode.
 
 - **The same frames.** Loop points, anchors and cues are frame numbers, so
   every rendition is made of the CGA4 encode's own frames: read with the
-  encoder's `ffmpeg_video` at the same fps, then quantized by the builder -
-  an ordered dither anchored to the canvas and a pixel's value HELD while
-  its source moves less than a threshold (`vbtana.quant_vga`,
-  `quant_herc`), so still footage costs nothing frame to frame. **Within
+  encoder's `ffmpeg_video` at the same fps, then quantized by the builder
+  so still footage costs nothing frame to frame. **VGA4 is Video Player's
+  own dither** (`vbtana.quant_vga` is `os88venc.KnollDitherer`, stable 24,
+  score 60, cap 64 - Video Encoder's defaults): a pattern of palette
+  entries chosen so its MEAN is the source colour, a pixel kept while its
+  source is stable. The ordered dither it replaced added one grey offset to
+  all three channels, so it dithered BRIGHTNESS and took the nearest entry
+  in RGB: a pink between red and white came out red and YELLOW (mean error
+  74 of 255; Knoll 11, `vbtgui`), the owner's "red things choose to be
+  brown". Hercules keeps the ordered threshold and its hold (`quant_herc`).
+  **Within
   `target.clip` levels of a colour (16 by default; black and white on
   Hercules) a pixel is that colour SOLID and never held**: a slow fade to
   black moved each dot less than the hold, so dim dots stayed lit for good
@@ -242531,6 +242538,13 @@ then sets the mode, the palette and the decode.
   flipped, each frame drawn on the hidden page; a flipped VGA4 rendition,
   no flash at all at a frame's two-frame delta and the band drawn twice,
   is not built.
+- **The Build tab's palette viewer** (`os88vbtgui.vga_colours`) reads the
+  built VGA4 bundle: its K colours in index order, black marked the base
+  and the band's four marked "menu" (from the band map), and with a clip
+  picked in the budget each colour's share of that clip's canvas pixels
+  over all its frames, decoded as `vb_decode` decodes them. Every clip
+  draws from the one palette, so the viewer shows which part of it a clip
+  uses (`vbtgui` holds it to the bundle).
 - **Hercules** is 720 x 348, the canvas 640 wide at byte 5 (`VB_HORG`, the
   decoder's BP), its rows `348 - 2 x the band's`: the band's every logical
   pixel two by two, so the band is the same 40 x 8 cells.
