@@ -10603,7 +10603,12 @@ Four things make the pair what it is.
   then `cur_pass_mono` again for black) read the same byte three times and
   wrote it twice, each through its own row walk and its own `gfx_nextrow`
   call. The masks compose: `(under | white) & ~black` is exactly what drawing
-  one pass on top of the other always produced.
+  one pass on top of the other always produced. Since kernel hot-paths pass 1
+  the row is a WORD: one read of both bytes under the arrow, one word banked,
+  the masks rotated (`ror`, not `shr`) so their bytes come out in the word's
+  own order, then the byte writes - 6,309 -> 5,234 cycles a show on the
+  5150's CGA, measured over 31 typed keys; `cur_get_mono` takes `lodsw` and
+  holds the row step in registers, 2,916 -> 2,215.
 - **And the PLANAR draw is one pass too, with no Set/Reset at all.** VGA used
   to paint the whole dilated body solid white and then punch the black arrow
   into it — two passes with a GC reprogram between them, and a window in which

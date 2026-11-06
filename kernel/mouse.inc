@@ -4501,41 +4501,38 @@ cur_put_1:
 ; clobbers: ax, bx, cx, dx, si, di, bp, es
 ; -----------------------------------------------------------------------------
 cur_put_mono:
-    call cur_geom
+    call cur_geom               ; DI = the cell's first byte, CL = its shift
     mov ch, [cur_rows]
     or ch, ch
     jz .out                     ; wholly off the bottom: nothing to bank
     mov es, [vid_seg]
     mov si, [cur_tabp]
-    mov bp, [cur_sptr]          ; the live save buffer (SPEC.md 7.1.2)
+    mov bx, [cur_sptr]          ; the live save buffer (SPEC.md 7.1.2)
+    mov bp, [cs:vid_rowadd]     ; gfx_nextrow's step, in a register
 .row:
-    xor ax, ax                  ; the white pass's row, widened from the
-    mov ah, [si]                ; byte the table stores...
-    xor dx, dx                  ; ...and the black one's, one table along
-    mov dh, [si+CUR_TABSZ]
+    mov ax, [es:di]             ; ONE read of both bytes under the arrow...
+    mov [bx], ax                ; ...banked. Both, whatever the clip said: a
+                                ; read writes nothing, and a column-1 byte the
+                                ; clip dropped is never drawn or put back
+    mov dl, [si]                ; the white row, rotated so DL is column 0's
+    xor dh, dh                  ; bits and DH column 1's - the word's own
+    ror dx, cl                  ; order, so no byte is swapped (kernel
+    or ax, dx                   ; hot-paths pass 1, cur_move_mono's draw)
+    mov dl, [si+CUR_TABSZ]      ; ...and the black body over it, one table
+    xor dh, dh                  ; along
+    ror dx, cl
+    not dx
+    and ax, dx
     inc si
-    shr ax, cl                  ; AH:AL = white bits, byte 0 : byte 1
-    shr dx, cl                  ; DH:DL = black bits, likewise...
-    not dx                      ; ...as an AND mask, so the body clears to 0
-
-    mov bl, [es:di]             ; ONE read of the byte under the arrow...
-    mov [ds:bp], bl             ; ...banked (SS is LOW_SEG, so ds: is not
-                                ; decoration - SPEC.md 2.1)
-    or  bl, ah                  ; ...white outline...
-    and bl, dh                  ; ...black body over it...
-    mov [es:di], bl             ; ...and ONE write
-
-    cmp byte [cur_b1ok], 0      ; the second byte, unless the screen edge is
+    inc bx
+    inc bx                      ; CUR_SPAN a row, so cur_get_mono's walk
+                                ; needs no clip of its own
+    mov [es:di], al             ; ...and ONE write a byte
+    cmp byte [cur_b1ok], 0      ; the second, unless the screen edge is
     je .adv                     ; between them
-    mov bl, [es:di+1]
-    mov [ds:bp+1], bl
-    or  bl, al
-    and bl, dl
-    mov [es:di+1], bl
+    mov [es:di+1], ah
 .adv:
-    add bp, CUR_SPAN            ; RESERVED whether or not byte 1 was taken, so
-                                ; cur_get_mono's walk needs no clip of its own
-    add di, [cs:vid_rowadd]     ; gfx_nextrow, inlined (SPEC.md 39.3)
+    add di, bp                  ; gfx_nextrow, inlined (SPEC.md 39.3)
     test di, [cs:vid_wrapbit]
     jz .nowrap
     add di, [cs:vid_wrapfix]
@@ -4632,18 +4629,20 @@ cur_get_mono:
     mov es, [vid_seg]
     mov di, [cur_off]
     mov si, [cur_sptr]
+    mov bp, [cs:vid_rowadd]     ; gfx_nextrow's three words, held in the
+    mov dx, [cs:vid_wrapbit]    ; registers this walk does not otherwise use
+    mov bx, [cs:vid_wrapfix]    ; (kernel hot-paths pass 1)
 .row:
-    lodsb                       ; both bytes are always CONSUMED - the stride
+    lodsw                       ; both bytes are always CONSUMED - the stride
     mov [es:di], al             ; is CUR_SPAN whatever the clip said - and only
-    lodsb                       ; the second one is conditionally written
-    cmp byte [cur_b1ok], 0
+    cmp byte [cur_b1ok], 0      ; the second one is conditionally written
     je .adv
-    mov [es:di+1], al
+    mov [es:di+1], ah
 .adv:
-    add di, [cs:vid_rowadd]     ; gfx_nextrow, inlined
-    test di, [cs:vid_wrapbit]
+    add di, bp                  ; gfx_nextrow, inlined
+    test di, dx
     jz .nowrap
-    add di, [cs:vid_wrapfix]
+    add di, bx
 .nowrap:
     dec ch
     jnz .row
