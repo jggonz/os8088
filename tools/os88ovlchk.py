@@ -198,6 +198,34 @@ TEXP = re.compile(r'^\s*(\w+)\s+([A-Za-z_]\w*)\s*(?:,.*)?$')
 # this walk had never seen.
 
 
+_TOASTSTR = re.compile(r'^(\s*)TOASTSTR\s+([A-Za-z_.][\w.]*)\s*(?:,(.*))?$')
+_TOASTRUN = re.compile(r'^(\s*)TOASTRUN\s+([A-Za-z_.][\w.]*)\s*$')
+
+
+TOASTLABELS = set()
+
+
+def _toastline(line):
+    """A toast macro line read as the bytes it emits (SPEC.md 59.10):
+    `TOASTSTR x, 'a'` IS `x: db 'a', 0`, `TOASTRUN x` IS `x:`, and TOASTEND
+    emits nothing - so every rule here about a label and its section sees a
+    toast string as the `db` it is. The label is remembered: see the staging
+    rule, which a toast's ARGUMENT is not the question of."""
+    m = _TOASTSTR.match(line) or _TOASTRUN.match(line)
+    if m:
+        TOASTLABELS.add(m.group(2))
+    m = _TOASTSTR.match(line)
+    if m:
+        rest = (m.group(3) or '').strip().rstrip()
+        return '%s: db %s' % (m.group(2), rest + ', 0' if rest else '0')
+    m = _TOASTRUN.match(line)
+    if m:
+        return '%s:' % m.group(2)
+    if line.strip() == 'TOASTEND':
+        return ''
+    return line
+
+
 def _walk(path):
     """[(section, line-number, stripped-line, raw-line)] for the whole file."""
     got = _WALK.get(path)
@@ -213,7 +241,7 @@ def _walk(path):
                     if cur == '.boot2' and path not in LOADER:
                         cur = '.blob'       # the overlay's half (SPEC.md 2.9.14)
                     continue
-            got.append((cur, n, line, raw))
+            got.append((cur, n, _toastline(line), raw))
         _WALK[path] = got
     return got
 
@@ -1367,6 +1395,13 @@ def main():
                     continue          # unregistered image: half 1 only, and
                                       # this is a pointer LOAD rather than a
                                       # memory operand over the image
+                if w in TOASTLABELS and not re.search(r'\[[^]]*\b%s\b' % w, line):
+                    continue          # a TOAST's argument, loaded as a
+                                      # pointer: toast_show reads it through
+                                      # ES:SI and copies it (SPEC.md 59.3),
+                                      # so DS staging is not its question.
+                                      # Read THROUGH (a memory operand), it
+                                      # still has to name CS, as above
                 d_bad.append((f, n, sect, w, line.strip()[:56]))
     for f, n, sect, w, src in d_bad:
         print("%s:%d: %s is %s data read through DS: %s" % (f, n, w, sect, src),

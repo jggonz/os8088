@@ -264,6 +264,55 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
  %define MEGA_E9
 %endif
 
+; TOAST_MAX / TOASTSTR / TOASTRUN..TOASTEND - the toast's cap, and the ONLY
+; ways to write a fixed toast message (SPEC.md 59.10). toast_show copies at
+; most TOAST_MAX characters and drops the rest SILENTLY, and the cap is
+; geometry, not a budget (toast.inc says why it is 24). So:
+;
+;   TOASTSTR label, 'text'      emits exactly `label: db 'text', 0`
+;   TOASTRUN label ... TOASTEND  a RUN of db lines (inner labels for the
+;                                fields poked at run time) whose bytes before
+;                                the LAST NUL must fit
+;
+; and an over-length message FAILS TO ASSEMBLE AT THE LINE THAT WROTE IT,
+; naming its length. tests/unit/t_toast.py proves every toast argument is one
+; of these or a registered run-time buffer. HERE, above every %include,
+; because a macro is known only below its definition. apps/os88api.inc holds
+; the SDK's copy, which t_toast.py holds identical to this one, and
+; t_mirror.py holds the two TOAST_MAX equal.
+; ---- BEGIN TOAST MACROS (t_toast.py compares this block with os88api.inc's)
+TOAST_MAX   equ 24
+%macro TOASTSTR 1-2+
+%1:
+%if %0 > 1
+    db %2
+%endif
+%%end: db 0
+%assign %%n %%end - %1
+%assign %%cap TOAST_MAX
+%if %%n > TOAST_MAX
+  %error TOASTSTR %1 is %[%%n] characters and a toast shows TOAST_MAX = %[%%cap] (SPEC.md 59.10) - shorten it
+%endif
+%endmacro
+%macro TOASTRUN 1
+%push toastrun
+%define %$at %1
+%1:
+%endmacro
+%macro TOASTEND 0
+%ifnctx toastrun
+  %error TOASTEND without a TOASTRUN above it
+%else
+%assign %%n $ - %$at - 1
+%assign %%cap TOAST_MAX
+%if %%n > TOAST_MAX
+  %error TOASTRUN %$at holds %[%%n] characters before its last NUL and a toast shows TOAST_MAX = %[%%cap] (SPEC.md 59.10) - shorten it
+%endif
+%pop
+%endif
+%endmacro
+; ---- END TOAST MACROS
+
 ; KDS / KES - "DS (ES) = the kernel's data", from code running in .text.
 ; In real mode that is `push cs / pop ds`, and on every build but kern_mega it
 ; still is, byte for byte. In 286 protected mode CS is 0x0060 as READABLE CODE
