@@ -7759,20 +7759,8 @@ wm_draw_title:                  ; Windows, and this body otherwise
     pop cx
     lea dx, [bx+3]              ; = W_Y + 5: 8px glyphs centered in the
                                 ; 16-row bar (the pens and the fill preserve BX)
-%ifdef KERN_BIG
-    cmp word [wm_clip_n], 0     ; UNCLIPPED, THE CAPTION IS A RUN (SPEC.md
-    jne .xpar                   ; 11.92.2): its eight rows lie wholly inside the
-    call wm_tpen_bg             ; gap - or, inactive, the interior - so every
-    mov ah, [gfx_color]         ; cell's ground is already the paper, and an
-    call wm_tpen_ink            ; opaque cell writes exactly the pixels a
-    mov al, [gfx_color]         ; transparent glyph leaves: one decision a cell
-    call font_run_x             ; where font_str_x made a font_char call of
-    jmp short .tdone            ; each. UNDER A REGION it stays transparent: an
-.xpar:                          ; unaligned run a region cuts goes through
-%endif                          ; font_run_scell, a fill AND a glyph a cell
     call wm_tpen_ink          
     call font_str_x
-.tdone:
     pop es
 .sep:
     ; The separator under the bar, drawn LAST and by both paths. It is row
@@ -7812,11 +7800,9 @@ wm_draw_title:                  ; Windows, and this body otherwise
 %else
     ret
 %endif
-%ifndef KERN_BIG
     db 90h                      ; PARITY PAD, never executed: SPEC.md 11.92.1's
                                 ; gap test is 9 bytes, and ui_task (pinned by
-                                ; tests/unit/t_hotpar.py) sits after this file.
-%endif                          ; kern_big's 11.92.2 run is the odd byte there
+                                ; tests/unit/t_hotpar.py) sits after this file
 
 %ifdef KERN_BIG
 section .cold                   ; the two chrome-box helpers are COLD (SPEC.md

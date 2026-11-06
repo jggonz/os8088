@@ -20340,25 +20340,6 @@ around the same centre), is the right edge's condition as well.
 Measured on MartyPC's 5150/CGA, deskbench's scene: the fill was ~2 ms of each
 inactive caption.
 
-#### 11.92.2 …and an unclipped caption is a RUN (`kern_big`)
-
-The caption was `font_str_x` — a transparent `font_char` call per glyph, ~0.8
-ms a cell on the 5150 — over the gap (active) or the interior (inactive). Its
-eight rows, `y+5 .. y+12`, and its width lie wholly inside that ground, which
-is the paper `wm_tpen_bg` names. So an opaque `font_run_x` in the bar's pair —
-paper from `wm_tpen_bg`, ink from `wm_tpen_ink`, both read back off the pen as
-a kernel may (§6.6.5) — writes exactly the pixels the glyphs leave, in one
-call: on an unaligned pen (seven captions in eight, §11.94) §6.1.11's two
-merges and whole stores.
-
-**Only with no region armed.** A run a region cuts goes cell by cell, and an
-unaligned one through `font_run_scell`, which is a fill *and* a glyph per cell
-— dearer than the transparent pass — and draws the same pixels; so a caption
-under a region (a covered window's, on a damage pass) stays `font_str_x`.
-`kern_small` has no unaligned run at all (its `.slow` is fill-and-letter), so
-the change is `kern_big`'s. The site stays in `tests/textsites.txt`: the
-transparent call is still there for the clipped case and the small build.
-
 ### 11.93 `WF_KEEPH` — a fixed layout hangs over the dock rather than be cut
 
 **`wm_keeph` (API slot 0x02F0), BX = window, AL = 0 clear / non-0 set: "my
