@@ -700,8 +700,8 @@ that exceeds a row is a change to this table first.
 | thumbnails | primary | 4 KiB | panel shown |
 | edit store + undo | primary | 16 KiB | open |
 | text/search scratch | primary | 2 KiB | search |
-| `PDWRT` image + bss | parts, lazy | <= 40 KiB | save/extract/new, freed after |
-| writer buffers | PDWRT | 18 KiB (4 KiB output + 4.7 KiB of page-op/edit tables at the tail + a ~1,100-object offset table); 40 KiB for an extract (D18, 20.11.4) | save/extract, freed after |
+| `PDWRT` image + bss | parts, lazy | <= 46 KiB (D18; `PDW_CAP`) | save/extract/new, freed after |
+| writer buffers | PDWRT | 18 KiB (4 KiB output + 4.7 KiB of page-op/edit tables at the tail + a ~1,100-object offset table); an extract 16 + /Size/128 + /Size/2048 KiB, at most 40: the bit maps sized from the source's `/Size` go between the output and the object table (D18, 20.11.4) | save/extract, freed after |
 | overlay | parts, lazy | <= 48 KiB (D19; was 24) | dialog, inspector, menu command; freed when idle |
 
 Failure of an optional claim (thumbnails, a larger cache) degrades quality;
@@ -2516,8 +2516,12 @@ in claim row `PDU_DC_PAGES` and, byte for byte, the `pages_seg` of
 document, `PDM_BLANK` a new empty page of the size of source page `idx`,
 `PDM_FOREIGN` reserved for Insert, 20.11.7), bits 13-12 quarter turns ADDED to
 the page's own `/Rotate`, bits 11-0 `idx`. `pages_count` = 0 is the source's own
-order. A map holds at most `PDM_MAXMAP` = 400 pages (page operations on a longer
-document are refused in words; Extract, which needs no map, is not limited by it).
+order. A map holds at most `PDM_MAXMAP` = 240 pages: the row is 1 KiB, the map
+at byte 0, Extract's page list at `PDM_XLIST` = 480 and the prompt's names at
+`PDM_NAMES` = 960 (a 400-page cap put the list inside the map). Page operations
+on a longer document, and Duplicate or Insert blank page on a 240-page one, are
+refused in words ("Page operations handle up to 240 pages."); so is an Extract
+list of more than 240 pages, which is refused rather than cut short.
 The second time `PDM_SRC` names a source page it is a **duplicate**; the first is
 the original and owns the page id's edit records (`pdu_pg_isdup(view)` tells the
 renderer's caller). `pdu_npages` is the VIEW's page count, so nothing else in the
@@ -2527,8 +2531,8 @@ new order and rotation before the save: `pdu_page_load` asks PAGEINFO for
 `pdu_pg_id(n)` and turns `pdu_pinfo.rotate`; a blank page is paper (no render).
 A page operation is a delta of four words `{op, a, b, entry}` - 1 ROT, 2 DEL, 3 INS,
 4 MOVE - applied and reverted by `pdu_pg_apply(delta, len, undo)` (edit's undo
-calls it; `pdu_pg_record()` is the one line that becomes `pdu_undo_pageop(d, 8)`
-when edit lands, until then an operation applies without a history). When the
+calls it; the commented `pdu_undo_pageop(pdu_pgd, 8)` in `ovl_pg_do` is the one
+line edit enables when it lands, until then an operation applies without a history). When the
 map returns to the identity it is dropped (nothing to write).
 
 #### 20.11.2 The writer's page operations (13.7)
@@ -2556,7 +2560,7 @@ the source (no newline, no xref section; PDENG's check below still runs, and its
 `startxref` must be the source's own). The writer copies to the end of the source
 and compares the length with the fingerprint's size taken at the start: a source
 that moved answers `PDE_CHANGED`. The primary compares the directory's size with
-the one OPEN saw before it starts (`pdu_save_begin`). **`src_vol` is the source's
+the one OPEN saw before it starts (`ovl_save_begin`, the 4-byte fingerprint read back from the exchange block). **`src_vol` is the source's
 volume PLUS ONE** (0 = one folder; volume 0 is A:, a legal source) and `src_clus`
 its folder: the writer stands in the source's folder for every PDENG call and
 source read and in the target's for every write, rename and delete (`pdw_cross`,
@@ -2566,9 +2570,16 @@ the primary stands in the TARGET's folder for a job's slices (`pdu_tgtplace`).
 #### 20.11.4 Extract (13.8)
 
 `PDV_WRT_EXTRACT` with the map as the page list (SRC and BLANK entries, a source
-page at most once, `err_detail` 15) writes a fresh document. `wbuf_kb` = 40: the
-output region, a 17 KiB bit-map block (one bit a source object number: `seen`,
-`scan`, and a prefix count a 128 numbers), then the object table. Phases: PAGEINFO
+page at most once, `err_detail` 15) writes a fresh document. The output region,
+then three bit maps sized from the source's `/Size` (`gc_nw` = ((size >> 7) + 1)
+x 8 words each for `seen` and `scan`, a quarter of that for the prefix count a
+128 numbers; 1,048 bytes for a 1,000-object source, 17 KiB only at the 2^16
+ceiling), then the object table and the tail tables; a claim too small answers
+`PDE_NOMEM` with the KiB it needed in `err_detail`. The primary sizes the claim
+from PDENG's trailer: `wbuf_kb` = 16 + size/128 + size/2048, at most 40 (40 when
+the trailer cannot be read). A reference past `/Size` is not marked (it becomes
+`null`), a root page whose object number is past `/Size` answers `PDE_XREF`, and
+a root that cannot be read fails the job rather than being dropped. Phases: PAGEINFO
 of every chosen page (its object is a root); a fixpoint that reads every reachable
 object's references (an object whose `/Type` is Page, Pages or Catalog and is not
 a root is NOT copied and every reference to it becomes `null`, as does a reference
@@ -2583,11 +2594,18 @@ buffer 14. Marks not yet saved are not extracted.
 
 #### 20.11.5 The jobs (primary)
 
-`pdu_save_begin(name, kind)` (kind 0 Save As, 1 New, 2 Extract; the code is the
-overlay's `ovl_save_begin`) claims the writer (18 KiB; 40 for an Extract), fills
+`ovl_save_begin(name, kind)` (kind 0 Save As, 1 New, 2 Extract; an overlay
+function, so a save needs the overlay part) claims the writer (18 KiB; an Extract
+sized from `/Size`, 20.11.4), fills
 `pdxb_save` and starts `J_SAVE`; `pdu_save_step` runs the verb of the kind.
 `PDE_EXISTS` with `state` = `PDW_ST_CONFIRM` parks the job and asks in the status
-line (Enter replaces, Esc keeps and aborts). **The writer reads its output back
+line (Enter replaces, Esc keeps and aborts). **Esc does not say "Cancelled." from
+the key handler**: a key arrives with the gfx lock held, and the job's ending
+(`ovl_save_done` -> `pdu_wsay`) takes it again, which deadlocked the UI task in
+`gfx_lock` on the first build. Esc starts `J_SAVE` with `pdu_jcancel` set, and the
+onwake slice, lock free, takes the ordinary cancel path: "Cancelled." and the
+source re-opened. Escape during the re-open itself is ignored (`pdu_reopening`),
+since cancelling it would leave PDENG with no document. **The writer reads its output back
 through PDENG** (14.2 step 4: `PH_VFY` closes the source's document, opens
 `PDSAVE.$$$`, checks the file's size, the trailer's `startxref` and `/Size`, and
 the first, middle and last object written) and says so by ORing
@@ -2600,9 +2618,15 @@ keeps PDENG's claims; the edit store and the map are untouched). New writes
 the exchange block, written again before every slice. The prompts (`PK_*`: extract
 list, destination, delete confirmation, New's size, replace) live in the status
 line, so CGA does everything the other adapters do. Menu items: File New,
-Extract pages..., Insert from PDF..., Insert blank page; Edit Move earlier, later,
-to..., Duplicate, Delete page; Document Rotate left, right (a pull-down holds 11
-items, 12.4); the Pages-mode buttons are the same commands.
+Extract pages..., Insert blank page; Edit Move earlier, later, to..., Duplicate,
+Delete page; Document Rotate left, right (a pull-down holds 11 items, 12.4). The
+nine page rows are one table in `pdupage.c` (`pdu_pgmrow`/`pdu_pgmcmd`/
+`pdu_pgmtxt`) that both the menu sync and the command lookup read, and every
+command body is in the overlay (`ovl_pg_cmd`, `ovl_pg_key`, `ovl_pg_onfile`);
+Insert from another PDF has no row until it is built (20.11.7). The Pages-mode
+buttons are the same commands. A job's outcome line ("Saved X", "Extracted to
+X", "Could not save ...") is the last thing the job says: the re-open after it
+does not overwrite it with "Ready:".
 
 #### 20.11.6 The UI task's stack (D21)
 
@@ -2616,7 +2640,16 @@ function (arguments in file-scope words), the page-operation and graph-copy
 functions keep their locals in statics, `pdw_ferr` is one function. The writer's
 tail tables are read through `tg`/`ts`, far peeks and pokes in the claim. A new
 feature in PDWRT must be measured with `tools/stkwater.py` (and, when it lands,
-`tools/os88pdstk.py`) before it is believed. Insert from another PDF opens a
+`tools/os88pdstk.py`) before it is believed. **The output region is flushed at
+the top of the slice loop** whenever less than `PDW_ROOM` = 2,048 bytes of it is
+free (`job_slice`), so the file write happens one level below the door instead of
+at the bottom of `pb_*` -> `pw_n` -> `pw_flush` inside an appearance stream, which
+was 196 bytes of package frames plus the kernel's file code. Measured on the
+verifier's pass (cc8086 frames + pushes over the generated asm): every kernel call
+from PDWRT is within 122 bytes of the door, the PDENG door within 134, no
+recursion; a unit that writes more than 2,048 bytes still flushes where it is.
+D23's private module stack supersedes the byte budget; the flush stays because
+it is also fewer, larger writes. Insert from another PDF opens a
 second document in PDENG from inside the writer, which needs the engine's requests
 made from the primary, which is why it is not built.
 
@@ -2632,12 +2665,17 @@ made from the primary, which is why it is not built.
    `pdu_changes`.
 4. `pdu_side_sel()` (nav) is a commented line in `ovl_pg_tgt`: the command's page
    is the current one until nav lands.
-5. Sizes at this writing: PDWRT 38,608 + 6,430 = 45,038 bytes (44.0 KiB; D18's
-   cap is 46 KiB, target 44: the page-op, edit and map tables went to the claim's
-   tail, the inherited-resources buffer shares the annotation text buffer and the
-   verify scratch the kept-identity buffer), the primary 43,070 + 4,085 (+2.5 KiB of the
-   shell's 44.6 against a 1 KiB share: menu text, the doors and 700 bytes of
-   strings that an overlay cannot take), the overlay +4,000.
+5. Sizes at this writing: PDWRT 45,194 bytes (44.1 KiB; D18's cap is 46 KiB,
+   `PDW_CAP` = 47,104, target 44: the page-op, edit and map tables went to the
+   claim's tail, the Extract bit maps are sized from `/Size` inside the claim,
+   the inherited-resources buffer shares the annotation text buffer and the
+   verify scratch the kept-identity buffer). The primary 42,484 + 4,057 = 46,541
+   against the wave-1 shell's 44,623: +1,918 against a +1.5 KiB share. What is
+   left is the overlay's cost, not the commands: ~280 bytes of shims and vectors
+   for the resident routines the overlay calls (shared with any later overlay
+   tenant), the overlay's literals (which stay resident, 73.14), the nine-row menu
+   table and the resident lookups. The overlay holds every command body: 6,171
+   bytes, pages' share about +3.9 KiB.
 6. 14.4's open-time reference is the file's SIZE (free at OPEN); the CRCs would
    cost two uncached reads at every open.
 7. A foreign-folder Save As stands the primary in the target's folder, so
