@@ -7325,18 +7325,6 @@ writes without reading; nothing else about the rule changed. Measured as above:
 `GFX_XOR_FILL 64x64` 6.75 → 4.35 ms, `GFX_XOR_RECT 256x1` (one drag-outline
 edge) 1.09 → 0.88 ms.
 
-**The two masked edge COLUMNS of `vga_solid_rect` take two rows a pass.** A
-column is a latch load and a masked write per row, one `xchg [es:di], al`, and
-the loop around it was most of its cost: `inc si / shr si, 1` makes SI the row
-pairs rounded up and an odd count enters at the second row, so the loop's
-branch is paid once a pair, and the row step lives in CX for both columns
-(`add di, cx` is a byte shorter than the immediate). It is a trade with a
-shape and it is taken on purpose: a column of ONE row pays the entry, about
-45 cycles, so `GFX_HLINE 8px` measured 488.7 → 498.2 µs (+1.9%) while
-`GFX_VLINE 128px` went 2.08 → 1.64 ms (−21%), `GFX_FILL 64x64` 3.32 → 2.88 ms
-(−13%) and `GFX_FRAME 64x64` −11%; over a scripted scene's window raises the
-mean fill fell 4–16% (docs/plans/khp1/vga.md).
-
 ### 5.8 `gfx_restore` can put back PART of its buffer
 
 `gfx_restore` and `gfx_blit4` are both off §11.3's clipped list for one stated
