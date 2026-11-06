@@ -1068,14 +1068,15 @@ gfx_pixel:
 ; gfx_fill produces identical pixels for one row.)
 ; -----------------------------------------------------------------------------
 gfx_hline:
-    push bx
     push cx
     mov cx, bx                  ; rect (x1,y)-(x2,y)
     mov bx, dx
     call gfx_fill
-    pop cx
-    pop bx
-    ret
+    mov bx, cx                  ; gfx_fill keeps every register, so CX comes
+    pop cx                      ; back as x2 - the caller's BX - and the push
+    ret                         ; and pop of BX are a `mov` (same 12 bytes,
+                                ; ~24 clocks off every hline: kernel hot-paths
+                                ; pass 1, gfxcall-2)
 
 
 
