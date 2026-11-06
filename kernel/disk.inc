@@ -6780,6 +6780,9 @@ RAH_END equ 8                    ; ...and the sector index just past the
                                  ; writes it, the fill's included, so it needs
                                  ; no clearing of its own
 RAH_REC equ 9
+%if RAH_LBA != 0 || RAH_N != 2 || RAH_SIG != 4 || RAH_VOL != 6 || RAH_HIT != 7 || RAH_END != 8 || RAH_REC != 9
+  %error "dsk_rah_fill's .multi stamps a record with stosw LBA, N, SIG, VOL:HIT and stosb END, in that order and back to back: keep the layout or rewrite the stamp"
+%endif
 %if RAH_HIT != RAH_VOL + 1 || RAH_HIT >= RAH_REC
 %error "dsk_rah_fill clears RAH_HIT with the word store that writes RAH_VOL"
 %endif
@@ -7245,26 +7248,30 @@ dsk_rah_fill:
     dec byte [dsk_rah_busy]     ; (dec leaves CF alone)
     pop si                      ; SI = record 0, the output (pop: CF kept)
     jc .out
-    mov bx, si
     mov ax, di                  ; AX = the LBA each record starts at
-.mstamp:
-    mov [bx+RAH_LBA], ax
+    mov di, si                  ; ES:DI = record 0: the five fields are laid
+    push ds                     ; down in order with string stores - DI and
+    pop es                      ; ES are banked above (kernel hot-paths pass
+.mstamp:                        ; 1, size: -4; the disk agent's find)
+    stosw                       ; RAH_LBA
     mov cx, DSK_RAH_SECS
     cmp dx, cx
     jae .mn
     mov cx, dx                  ; the last slot's share
 .mn:
-    mov [bx+RAH_N], cx
+    xchg ax, cx
+    stosw                       ; RAH_N
+    xchg ax, cx
     push ax
+    mov ax, [dsk_sigcur]
+    stosw                       ; RAH_SIG
     mov al, [disk_drive]
     cbw
-    mov [bx+RAH_VOL], ax        ; the volume, and RAH_HIT clear
-    mov byte [bx+RAH_END], 0    ; the stream's next sector is each one's first
-    mov ax, [dsk_sigcur]
-    mov [bx+RAH_SIG], ax
-    pop ax
+    stosw                       ; RAH_VOL, and RAH_HIT clear
+    mov al, 0
+    stosb                       ; RAH_END: the stream's next sector is each
+    pop ax                      ; one's first
     add ax, cx
-    add bx, RAH_REC
     sub dx, cx
     jnz .mstamp                 ; (CF = 0 out of the last sub)
     jmp .out
