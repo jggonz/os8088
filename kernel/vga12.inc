@@ -4238,8 +4238,9 @@ vga_xor_fill_vram:
 ; clobbers: flags
 ;
 ; Dispatches to sw_save on a 1bpp adapter (SPEC.md 39.5). vga_save_vram is
-; the VRAM body under its own name: the mouse cursor's save-under calls it
-; directly, without cur_unlazy.
+; the VRAM body under its own name. The mouse cursor called it directly out of
+; IRQ4 until kernel hot-paths pass 1 gave the planar pointer its own walks
+; (mouse.inc's cur_saveu/cur_restoreu); gfx_save is its only caller now.
 ; -----------------------------------------------------------------------------
 gfx_save:
     GFXAUDIT_HOOK
@@ -4270,17 +4271,16 @@ gfx_sr_tail:                    ; (gfx_restore's tail too - size pass 10)
                                 ; restore agree with each other and leave the
                                 ; rest of the rect stale.
                                 ;
-                                ; BELOW the hook and reached directly by the
-                                ; CURSOR out of IRQ4, which must not take it:
-                                ; the arrow brackets itself (39.15.2), and a
-                                ; hook here would translate a rect that
-                                ; cur_geom has already resolved.
+                                ; BELOW the hook: the body was once reached
+                                ; directly by the CURSOR out of IRQ4, which
+                                ; must not take it (39.15.2). The pointer has
+                                ; its own walks since kernel hot-paths pass 1,
+                                ; and the hook stays out here regardless.
 %ifndef GFX_VGA
     NOVGA_ARM vga_save_vram, sw_save
 %else                           ; renderer is not a branch - it is the
 vga_save_vram:                              ; only renderer gfx_save has
-    VIDEXTM VX_SAVE, sw_save    ; the cursor's save-under, from inside IRQ4:
-                                ; on mono the framebuffer IS the renderer's
+    VIDEXTM VX_SAVE, sw_save    ; on mono the framebuffer IS the renderer's
                                 ; target, so one "plane" of sw_xfer is it
                                 ; ...and a packed display's save is the
                                 ; driver's, in [vga_pn]'s terms (SPEC.md 120.4)
@@ -4313,24 +4313,15 @@ vga_save_vram_v:         ; machine with neither card never falls here
     push ds
     VSEG cx, VGA_SEG
     mov ds, cx                  ; movs source = VRAM
-    ; --- WORDS, and three loops chosen once a plane (kernel hot-paths pass 1,
+    ; --- WORDS, and two loops chosen once a plane (kernel hot-paths pass 1,
     ; SPEC.md 5.8.1). `rep movsw` is 25 clocks a word on an 8088 against
     ; `rep movsb`'s 17 a byte, and a read in read mode 0 loads the latches
     ; and answers the Read Map's plane whatever its width. Splitting the odd
     ; byte off by LOOP rather than by a per-row `jnc` is what makes the word
-    ; form win at every width; the one-word loop is the POINTER's cell (two
-    ; bytes, 7 positions in 8), where `movsw` alone replaces the count load
-    ; and the rep. The buffer DI advances contiguously as it always did
+    ; form win at every width. The buffer DI advances contiguously as it
+    ; always did
     shr bp, 1                   ; BP = words a row, CF = an odd byte as well
     jc .odd
-    cmp bp, 1
-    jne .even
-.w1:
-    movsw
-    add si, ax
-    dec dx
-    jnz .w1
-    jmp short .pend
 .even:
     mov cx, bp
     rep movsw
@@ -4369,13 +4360,14 @@ section .text
 ;
 ; Three words that make gfx_restore put back PART of a buffer instead of all of
 ; it. They are in .text with real initialisers, not .bss: `-f bin` zeroes
-; nothing, and the mouse cursor reaches vga_restore_vram on the machine's first
-; pointer move, long before anything arms these (the cur_sptr trap, SPEC.md
-; 7.1.2).
+; nothing, and the first restore can come long before anything arms these
+; (the cur_sptr trap, SPEC.md 7.1.2: the cursor's restore was that first one
+; until kernel hot-paths pass 1 gave the planar pointer its own walks, and
+; softgfx.inc's sw_xfer still reads them on every mono restore).
 ;
 ; ALL THREE ARE 0 AT REST, which is what makes the whole feature additive: the
 ; two restore bodies read them unconditionally and a zero skip is the walk they
-; had, so the cursor's own path and the menu save-under are byte-identical.
+; had, so the menu save-under is byte-identical.
 ; --- SPEC.md 11.96.17's ONE-PLANE save and restore --------------------------
 ;
 ; A window whose content is only colour 0 and colour 15 has four IDENTICAL
@@ -4387,16 +4379,16 @@ section .text
 ;
 ; 4 and 1 AT REST, which is gfx_sub_*'s discipline below and for its reason:
 ; the two bodies read them unconditionally and the resting pair IS the walk
-; they had, so the cursor's own path is byte-identical. gfx_save and
-; gfx_restore put them back, so an arm is good for exactly ONE call.
+; they had. gfx_save and gfx_restore put them back, so an arm is good for
+; exactly ONE call.
 ;
-; THAT IS NOT WHAT KEEPS IT OFF THE POINTER, and this comment said it was.
-; cur_saveu and cur_restoreu reach vga_save_vram and vga_restore_vram DIRECTLY
-; out of IRQ4 - and gfx_save and gfx_restore call cur_unlazy at their TOP,
-; above their own disarm, so the arrow was hidden and put back with a live
-; one-plane arm every time a window that promised OSAPI_SAVEU_1BPP was banked.
-; The pair is banked and cleared by those two routines now, at the one point
-; both cursor paths pass through (SPEC.md 11.96.17).
+; THE POINTER CANNOT MEET AN ARM ANY MORE. cur_saveu and cur_restoreu used to
+; reach vga_save_vram and vga_restore_vram DIRECTLY out of IRQ4, below the
+; disarm, and had to bank and clear the pair themselves (SPEC.md 11.96.17).
+; Since kernel hot-paths pass 1 the planar pointer has its own walks, which
+; read neither [vga_pn] nor [gfx_sub_*] - so neither a one-plane arm nor an
+; armed sub-rect can be consumed by a mouse packet landing between the arm
+; and the gfx_restore it was meant for.
 ;
 ; The restore's loop needs no terminator of its own: seeded with 0Fh it does
 ; one pass and `add al, al` gives 1Eh, which fails `cmp al, 0x10`.
@@ -4408,7 +4400,7 @@ vga_pn      db 4                ; planes a SAVE walks: 4, or 1 for one plane
 vga_pm      db 1                ; ...and the Map Mask a RESTORE starts on: the
                                 ; single-plane bit 1, or 0Fh to broadcast
 %if vga_pm - vga_pn != 1
-  %error "vga_pn/vga_pm must stay adjacent, pn first: gfx_1bpp_on/off store the pair as one word, and cur_saveu/cur_restoreu bank it with push/pop word"
+  %error "vga_pn/vga_pm must stay adjacent, pn first: gfx_1bpp_on and the save and restore tail store the pair as one word"
 %endif
 
 ; gfx_1bpp_on - arm the next gfx_save/gfx_restore for ONE plane. Preserves
@@ -4548,7 +4540,8 @@ gfx_sub_off:
 ; clobbers: flags
 ;
 ; Dispatches to sw_restore on a 1bpp adapter (SPEC.md 39.5);
-; vga_restore_vram is the VRAM body for the cursor path (see gfx_save).
+; vga_restore_vram is the VRAM body under its own name, gfx_restore its only
+; caller (see gfx_save).
 ; -----------------------------------------------------------------------------
 gfx_restore:
     GFXAUDIT_HOOK
@@ -4609,20 +4602,11 @@ vga_restore_vram_v:      ; machine with neither card never falls here
     pop ds                      ; movs source = caller's buffer
     VSEG cx, VGA_SEG
     mov es, cx                  ; movs dest = VRAM
-    ; --- WORDS, three loops chosen once a plane: vga_save_vram's shape and
+    ; --- WORDS, two loops chosen once a plane: vga_save_vram's shape and
     ; reason exactly (SPEC.md 5.8.1). With Set/Reset off and the Bit Mask FF
     ; a word write lands both CPU bytes verbatim through the Map Mask
     shr bx, 1                   ; BX = words a row, CF = an odd byte as well
     jc .odd
-    cmp bx, 1
-    jne .even
-.w1:
-    movsw
-    add si, bp
-    add di, ax
-    dec dx
-    jnz .w1
-    jmp short .pend
 .even:
     mov cx, bx
     rep movsw
