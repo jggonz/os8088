@@ -78,6 +78,8 @@ section .text
 ; it resumes, ready for its far call.
 ; -----------------------------------------------------------------------------
 pdk_up:
+    ; STKBALANCE-OK: a STACK SWITCH (PAGEDESK-SPEC 20.15) - SS:SP move between the
+    ; UI stack and the private module stack; each side is balanced on its own stack
     pop word [pdk_ra]               ; the slot's resume address
     pushf
     pop word [pdk_fl]               ; the API's input flags
@@ -111,6 +113,8 @@ pdk_up:
 ; the thunk called on, with the API's flags.
 ; -----------------------------------------------------------------------------
 pdk_dn:
+    ; STKBALANCE-OK: a STACK SWITCH (PAGEDESK-SPEC 20.15) - SS:SP move between the
+    ; UI stack and the private module stack; each side is balanced on its own stack
     pushf
     pop word [pdk_fl]               ; the API's answer flags
     pop word [pdk_dss]

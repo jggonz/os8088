@@ -62,6 +62,8 @@ section .text
 ; an ordinary refusal and never a jump through zero.
 ; -----------------------------------------------------------------------------
 _pdu_mcall:
+    ; STKBALANCE-OK: a STACK SWITCH (PAGEDESK-SPEC 20.15) - SS:SP move between the
+    ; UI stack and the private module stack; each side is balanced on its own stack
     push bp
     mov bp, sp
     push si
