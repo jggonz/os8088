@@ -610,6 +610,11 @@ writes the temp file and then asks to replace it (14.3).
 4. Verify by re-reading the new trailer and three random new objects through
    `PDENG` before the rename.
 
+With no new or changed objects (a Save As of an unedited document) the
+output is a byte copy of the source: steps 2 and 3 are skipped and step 4
+checks the length. The writer must not refuse it (lead's look, 2026-11-05:
+PDWRT answered `PDE_RANGE`, its "nothing to save", on MARKUP.PDF - wave 2).
+
 ### 14.3 Finalisation
 
 `PDSAVE.$$$` -> (target exists: confirm, delete target) -> rename. The
