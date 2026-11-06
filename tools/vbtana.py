@@ -602,7 +602,7 @@ def _bayer4():
     return (m + 0.5) / 16
 
 
-def quant_vga(fr, pal, clip=0, seed=None):
+def quant_vga(fr, pal, clip=0, seed=None, progress=_nop, what=""):
     """rgb24 frames to palette indexes - VIDEO PLAYER'S PATTERN DITHER
     (os88venc.KnollDitherer, SPEC.md 98.2.5), with its defaults: each
     pixel's plan is sixteen palette colours whose mean is the target, the
@@ -628,6 +628,8 @@ def quant_vga(fr, pal, clip=0, seed=None):
         #                         so the hold keeps what is still near
     out = np.zeros((n, h, w), np.uint8)
     for i in range(n):
+        if not i % 8:               # (~70 ms a frame here: a long clip is
+            progress("dither", i, n, what)  # minutes - say how far)
         out[i] = d(np.ascontiguousarray(fr[i]))
     return out
 
@@ -650,15 +652,15 @@ def moved_from(fr, ref):
     return g
 
 
-def quant_split(fr, pal, nshared, clip, seed):
+def quant_split(fr, pal, nshared, clip, seed, progress=_nop, what=""):
     """An ACTION's frames (126.3.2): the idle loop's dither where its
     picture is the loop's, its own colours only where it MOVED. Two Knoll
     ditherers, both started from the loop's screen at the anchor: one in
     the shared colours alone - the loop's own, so a still background stays
     the loop's pattern and the join redraws what changed - and one in all
     its colours, taken where the source moved from the loop's"""
-    a = quant_vga(fr, pal[:nshared], clip, seed)
-    b = quant_vga(fr, pal, clip, seed)
+    a = quant_vga(fr, pal[:nshared], clip, seed, progress, what + " 1/2")
+    b = quant_vga(fr, pal, clip, seed, progress, what + " 2/2")
     return np.where(moved_from(fr, seed[1]), b, a).astype(np.uint8)
 
 
@@ -767,14 +769,16 @@ def rend_screens(proj, sid, kind, progress=_nop, full=False, stream=None,
     fr = _rgb_n(proj, sid, pw, ph, kind, progress, full)
     if kind == "vga4" and rng:  # VGA: a STREAM's frames with its colours
         fr = fr[rng[0]:rng[1]]  # (126.3.2), quantized on their own
-    progress("analyse", 0, 1, "%s (%s)" % (sid, kind))
+    what = "%s (%s)" % (stream or sid, {"vga4": "VGA", "herc": "Hercules"}
+                        .get(kind, kind))
+    progress("dither", 0, 1, what)
     nsh = len(vga_plan(proj)["shared"]) if kind == "vga4" else 0
     if kind != "vga4":
         q = quant_herc(fr, clip_of(proj))
     elif seed is not None and len(pal) > nsh:
-        q = quant_split(fr, pal, nsh, clip_of(proj), seed)
+        q = quant_split(fr, pal, nsh, clip_of(proj), seed, progress, what)
     else:
-        q = quant_vga(fr, pal, clip_of(proj), seed)
+        q = quant_vga(fr, pal, clip_of(proj), seed, progress, what)
     if pct < 100:
         q = pad_into(q, w, h, x0, y0)
     np.save(npy + ".part.npy", q)

@@ -117,7 +117,8 @@ class Job(object):
 def progress_text(ev):
     st, done, of, what = (ev.get(k) for k in ("stage", "done", "of", "what"))
     words = {"encode": "Reading the video", "decode": "Decoding", "cost": "Costing",
-             "analyse": "Listening to", "clips": "Clips:", "check": "Checking"}
+             "analyse": "Listening to", "clips": "Clips:", "check": "Checking",
+             "dither": "Dithering"}     # (VGA's and Hercules' pictures)
     w = words.get(st, str(st).capitalize())
     if of:
         return "%s %s - %d%%" % (w, what or "", 100 * done // max(1, of))
