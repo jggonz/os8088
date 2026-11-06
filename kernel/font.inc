@@ -2522,17 +2522,22 @@ font_width:                     ; FAR-ENTERED, no near caller of its own
 ; clobbers: nothing else
 ; -----------------------------------------------------------------------------
 font_width_x:
-    push si
-    xor ax, ax
-.next:
-    cmp byte [es:si], 0
-    je .done
-    inc si
-    add ax, 8
-    jmp .next
-.done:
-    pop si
+    push cx                     ; ONE STRING INSTRUCTION (kernel hot-paths pass
+    push di                     ; 1): `repne scasb` is ~15 clocks a character
+    mov di, si                  ; on an 8088 where the compare/increment/add/
+    mov cx, -1                  ; jump walk was ~65 - menu layout measures
+    xor ax, ax                  ; every item of a menu with this, and the
+    repne scasb                 ; caption and the bar every title. DF = 0 is
+    not cx                      ; the system contract (SPEC.md 1). CX ends
+    dec cx                      ; at -(len + 2), so NOT is len + 1
+    xchg ax, cx                 ; AX = len, CX = 0
+    mov cl, 3
+    shl ax, cl                  ; AX = 8 * len, mod 64K as the walk's was
+    pop di
+    pop cx
     ret
+    nop                         ; PARITY, never executed: the body is an odd
+                                ; 5 bytes longer than the walk it replaces
 
 ; -----------------------------------------------------------------------------
 %ifdef BAKED_FONT
