@@ -188,6 +188,7 @@ static void pdu_open_begin(const char *name)
     pdu_rwant = 0;
     pdu_pgwant = 0;
     pdu_changes = 0;
+    pdu_nt_reset();                     /* notes */
     pdu_inc = 0;
     pdu_outn = 0;
     pdu_rdonly = 0;
@@ -268,6 +269,7 @@ static int pdu_page_load(int n)
     pdu_sy = 0;
     pdu_sx = 0;
     pdu_view_set();
+    pdu_nt_srcload();                   /* notes: this page's source annots */
     return 0;
 }
 
@@ -556,6 +558,9 @@ void os88_onwake(void *win)
     if (pdu_job == J_NONE && pdu_rwant && pdu_doc == D_OPEN
         && pdu_pop == P_NONE && !pdu_about)
         pdu_render_begin();
+
+    if (pdu_job == J_NONE && pdu_nt_owed())     /* notes */
+        pdu_nt_idle();
 
     if (pdu_job != J_NONE || pdu_pgwant || pdu_argp)
         pdu_kick();

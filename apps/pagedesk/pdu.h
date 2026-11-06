@@ -163,6 +163,49 @@ struct pdu_lay {
 #define J_RENDER  2
 #define J_SAVE    3
 
+/* ---- notes ---- */
+#define P_NOTE   7              /* the note popover / inspector (pdunotes.c) */
+#ifndef PD_HOST
+/* resident hooks (pdunotes.c) */
+static void pdu_notes_paint(void);      /* the panel */
+static void pdu_notes_page(void);
+static void pdu_nt_reset(void);
+static void pdu_nt_filter(void);
+static void pdu_nt_idle(void);
+static void pdu_nt_srcload(void);
+static int  pdu_nt_owed(void);
+static void pdu_nt_pclose(void);
+static int  pdu_nt_click(int x, int y);
+static int  pdu_nt_pclick(int x, int y);
+static int  pdu_nt_key(int ascii, int scan);
+static void pdu_nt_ppaint(void);
+static int  pdu_nt_pw(void);
+static int  pdu_nt_prows(void);
+/* the overlay's entry points (pdovlnotes.c, pduinsp.c) */
+static int  ovl_nt_body(void);
+static int  ovl_nt_click(int x, int y);
+static int  ovl_nt_pclick(int x, int y);
+static int  ovl_nt_key(int ascii, int scan);
+static int  ovl_nt_ppaint(void);
+static void ovl_nt_pclose(void);
+static void ovl_nt_page(void);
+static void ovl_nt_dirty(void);
+static void ovl_nt_idle(void);
+static void ovl_nt_relist(void);
+static void ovl_nt_srcload(void);
+static void ovl_nt_new(unsigned page, const struct pd_rect *r);
+static void ovl_nt_open(int id);
+static void ovl_nt_inspect(int id);
+/* WHAT EDIT CALLS (D19, 20.9.5) - real resident functions with exactly the
+ * prototypes edit's block declares, so the two blocks may sit in either
+ * order; PDU_NOTES switches off edit's own stand-ins (pduedit.c). Nobody
+ * calls notes to report a change: the panel polls pdu_ed_gen(). */
+#define PDU_NOTES 1
+void     pdu_nt_new(unsigned page_id, const struct pd_rect *r); /* the Note tool */
+void     pdu_nt_open(int i);                                    /* a note's popover */
+void     pdu_nt_inspect(int i);                                 /* Text properties */
+#endif
+/* ---- end notes ---- */
 /* ---- edit ---- (PAGEDESK-SPEC 20.8; pduedit.c, pduundo.c, pdutool.c) --- */
 /* these ride the overlay (SPEC.md 73.14): the macro IS the rename the overlay
  * cutter keys on, so every caller in the one translation unit reaches the shim */
