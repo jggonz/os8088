@@ -83,13 +83,26 @@ static void pdu_fsop_end(void)
 
 /* a running render is abandoned and its rect owed again (the next wake
  * restarts it - after a popover closes, after a scroll has shifted it) */
+/* PDREND hears the abort at the next wake's top (pdu_rend_sync), before any
+ * slice could run - slices run only from the wake, so nothing is drawn in
+ * between. Telling it here put a module call (and its kernel calls) under
+ * every view change, ten frames down a click: 498 B of the UI task's 384
+ * in the stack gate (pdstk, D22) once the page map's undo was real. */
+static void pdu_rend_sync(void)
+{
+    if (pdu_rabort) {
+        pdu_rabort = 0;
+        pdu_mcall(PDU_M_REND, PDV_REND_ABORT, 0, 0, 0);
+    }
+}
+
 static void pdu_job_abort_render(void)
 {
     if (pdu_job != J_RENDER)
         return;
-    pdu_mcall(PDU_M_REND, PDV_REND_ABORT, 0, 0, 0);
+    pdu_rabort = 1;
     pdu_job = J_NONE;
-    pdu_render_want(&pdu_rrun);
+    pdu_render_want(&pdu_rrun);         /* kicks the wake */
 }
 
 /* the canvas pixels moved by dy: so did what is owed (pduview.c) */
@@ -111,6 +124,8 @@ static void pdu_job_shift(int dy)
 /* Escape and every way out: stop what runs, release what it held */
 static void pdu_job_abort(void)
 {
+    int reopen;
+    reopen = 0;
     if (pdu_job == J_RENDER) {
         pdu_mcall(PDU_M_REND, PDV_REND_ABORT, 0, 0, 0);
     } else if (pdu_job == J_OPEN) {
@@ -119,10 +134,13 @@ static void pdu_job_abort(void)
     } else if (pdu_job == J_SAVE) {
         pdu_mcall(PDU_M_WRT, PDV_WRT_ABORT, 0, 0, 0);
         pdu_wrt_out();
+        reopen = (pdu_xsave.mode & PDW_OUT_REOPEN) != 0;          /* pages */
     }
     pdu_fsop_end();
     pdu_job = J_NONE;
     pdu_jcancel = 0;
+    if (reopen)
+        pdu_reopen_begin();             /* pages: PDENG was left on the output (20.11.5) */
 }
 
 static void pdu_job_start(int kind)
@@ -193,6 +211,9 @@ static void pdu_open_begin(const char *name)
     pdu_outn = 0;
     pdu_rdonly = 0;
     pdu_npages = 0;
+    pdu_pgmap = 0;                      /* pages */
+    pdu_pk = PK_NONE;
+    pdu_reopening = 0;
     os88_strcpy(pdu_name, name, sizeof(pdu_name));
     os88_file_here(&pdu_docplace);      /* every caller stood there first */
     os88_memset(&pdu_xopen, 0, sizeof(pdu_xopen));
@@ -259,10 +280,12 @@ static int pdu_incpg;                   /* page + 1 whose incompleteness
 static int pdu_page_load(int n)
 {
     unsigned r;
-    r = pdu_mcall(PDU_M_ENG, PDV_ENG_PAGEINFO, n, 0, 0);
+    r = pdu_mcall(PDU_M_ENG, PDV_ENG_PAGEINFO, pdu_pg_id(n), 0, 0);   /* pages */
     if (pdu_mcf)
         return r ? r : PDE_LIMIT;
     pd_fcopy_in(pdu_xb, 0, &pdu_pinfo, sizeof(pdu_pinfo));
+    if (pdu_pgmap)                                                  /* pages: 13.7 */
+        pdu_pinfo.rotate = (pdu_pinfo.rotate + 90 * PDM_ROT(pdu_pgw(n))) % 360;
     pdu_page = n;
     pdu_inc = 0;
     pdu_incpg = 0;
@@ -285,11 +308,15 @@ static void pdu_open_step(void)
     pd_fcopy_in(pdu_xb, 0, &pdu_xopen, sizeof(pdu_xopen));
     pdu_jslices++;
     if (!pdu_mcf && r == PDE_BUSY) {    /* D11: BUSY is CF=0, never CF=1 */
-        pdu_progress("Opening ", pdu_name);
+        if (!pdu_reopening)             /* pages: the save's outcome stays said */
+            pdu_progress("Opening ", pdu_name);
         return;
     }
     pdu_job = J_NONE;
-    if (pdu_mcf || pdu_xopen.npages == 0) {
+    if (pdu_mcf || pdu_xopen.npages == 0
+        || (pdu_reopening && pdu_xopen.npages != pdu_srcn)) {       /* pages */
+        pdu_reopening = 0;
+        pdu_pgsaved = 0;
         pdu_doc_release();
         pdu_doc = D_FAILED;
         pdu_err = (pdu_mcf && r) ? r : PDE_SYNTAX;
@@ -297,11 +324,19 @@ static void pdu_open_step(void)
         pdu_dirty_all = 1;
         return;
     }
+    if (pdu_reopening) {                /* pages: PDENG has its document back (20.11.5) */
+        pdu_reopening = 0;
+        pdu_pgwant = pdu_page + 1;
+        pdu_kick();
+        return;
+    }
     pdu_npages = pdu_xopen.npages;
+    pdu_srcn = pdu_npages;              /* pages */
     pdu_rdonly = (pdu_xopen.flags & PDO_READONLY) != 0;
     pdu_sidetop = 0;
     pdu_fit = 1;
-    r = pdu_page_load(0);
+    r = pdu_page_load(pdu_resume && pdu_resume <= pdu_npages ? pdu_resume - 1 : 0);   /* pages */
+    pdu_resume = 0;
     if (r) {
         pdu_doc_release();
         pdu_doc = D_FAILED;
@@ -315,7 +350,10 @@ static void pdu_open_step(void)
     pdu_doc = D_OPEN;
     if (pdu_rdonly)
         pdu_say(pdu_errtext(PDE_SIGNED));
-    else {
+    else if (pdu_pgsaved) {             /* pages: "Saved X", said after the re-open */
+        pdu_say2("Saved ", pdu_target);
+        pdu_pgsaved = 0;
+    } else {
         os88_strcpy(pdu_line, "Opened ", sizeof(pdu_line));
         pdu_cat(pdu_line, pdu_name, sizeof(pdu_line));
         pdu_say(pdu_line);
@@ -330,7 +368,7 @@ static int pdu_render_begin(void)
 {
     unsigned r;
 
-    if (!pdu_isect(&pdu_rr, &pdu_L.canvas, &pdu_rrun)) {
+    if (!pdu_isect(&pdu_rr, &pdu_L.canvas, &pdu_rrun) || pdu_pg_kind(pdu_page) != PDM_SRC) {   /* pages: a blank is paper */
         pdu_rwant = 0;
         return 0;
     }
@@ -340,7 +378,7 @@ static int pdu_render_begin(void)
     pdu_xrend.view.clip_y0 = pdu_rrun.y1;
     pdu_xrend.view.clip_x1 = pdu_rrun.x2;
     pdu_xrend.view.clip_y1 = pdu_rrun.y2;
-    pdu_xrend.page = pdu_page;
+    pdu_xrend.page = pdu_pg_id(pdu_page);                           /* pages */
     pdu_xrend.win_off = (unsigned)pdu_win;
     pdu_xrend.mono_mark = 0;
     pdu_xrend.edits_seg = pdu_ed_seg();             /* edit (D15) */
@@ -349,6 +387,7 @@ static int pdu_render_begin(void)
     pdu_xrend.hide = 0;
     pdu_ed_xoff(&pdu_rrun);                         /* edit: the outline off first */
     pd_fcopy_out(&pdu_xrend, pdu_xb, 0, sizeof(pdu_xrend));
+    pdu_rend_sync();                    /* an owed abort before a new begin */
     r = pdu_mcall(PDU_M_REND, PDV_REND_BEGIN, 0, 0, 0);
     if (pdu_mcf) {
         pdu_say2("Could not draw the page: ", pdu_errtext(r));
@@ -427,40 +466,40 @@ static void pdu_datestamp(char *dst)
     dst[16] = 0;
 }
 
-static void pdu_save_begin(const char *name)
-{
-    int r;
+static const unsigned pdu_savever[3] = { PDV_WRT_SAVE, PDV_WRT_NEWDOC,
+                                         PDV_WRT_EXTRACT };
+static const unsigned pdu_savemode[3] = { PDSV_INCREMENTAL, PDSV_FRESH,
+                                          PDSV_EXTRACT };
 
-    pdu_job_abort_render();
-    if (pdu_doc != D_OPEN)
-        return;
-    os88_strcpy(pdu_target, name, sizeof(pdu_target));
-    r = pdu_wrt_in_now();
-    if (r) {
-        pdu_say2("Could not save: ", pdu_errtext(r));
-        pdu_status_paint();
-        return;
+static void pdu_save_done(unsigned err)
+{
+    if (!ovl_save_done(err)) {           /* the overlay could not be had: PDENG still needs its document */
+        pdu_wrt_out();
+        if (pdu_xsave.mode & PDW_OUT_REOPEN)
+            pdu_reopen_begin();
     }
-    os88_memset(&pdu_xsave, 0, sizeof(pdu_xsave));
-    os88_strcpy(pdu_xsave.target, name, sizeof(pdu_xsave.target));
-    /* D9: what an incremental save copies, and the stamp it writes. The
-     * source is the open document's 8.3 name; author stays "" (no author
-     * preference in wave 1). */
-    os88_strcpy(pdu_xsave.source, pdu_name, sizeof(pdu_xsave.source));
-    pdu_datestamp(pdu_xsave.date);
-    pdu_xsave.mode = PDSV_INCREMENTAL;
-    pdu_xsave.edits_seg = pdu_ed_seg();             /* edit (13.1.1) */
-    pdu_xsave.edits_count = pdu_ed_count();
-    pdu_say2("Saving ", name);
-    pdu_status_paint();
-    pdu_job_start(J_SAVE);
+}
+static void pdu_wrt_out(void);
+
+/* PDENG gets the source back: OPEN again with the claims it still holds
+ * (CLOSE keeps them), nothing of ours released - the edits and the page map
+ * are the user's work */
+static void pdu_reopen_begin(void)
+{
+    pdu_at_doc();
+    os88_memset(&pdu_xopen, 0, sizeof(pdu_xopen));
+    os88_strcpy(pdu_xopen.name, pdu_name, sizeof(pdu_xopen.name));
+    pdu_reopening = 1;
+    pdu_job_start(J_OPEN);
 }
 
 static void pdu_save_step(void)
 {
     unsigned r;
+    if (pdu_savekind == 1)              /* the XB survives nothing: New's page, again */
+        pd_fcopy_out(pdu_newp, pdu_xb, 512, sizeof(pdu_newp));
     pd_fcopy_out(&pdu_xsave, pdu_xb, 0, sizeof(pdu_xsave));
-    r = pdu_mcall(PDU_M_WRT, PDV_WRT_SAVE, 0, 0, 0);
+    r = pdu_mcall(PDU_M_WRT, pdu_savever[pdu_savekind], 0, 0, 0);
     pd_fcopy_in(pdu_xb, 0, &pdu_xsave, sizeof(pdu_xsave));
     pdu_jslices++;
     if (!pdu_fsop && (pdu_xsave.total.lo | pdu_xsave.total.hi))
@@ -471,20 +510,13 @@ static void pdu_save_step(void)
     }
     pdu_job = J_NONE;
     pdu_fsop_end();
-    pdu_wrt_out();                      /* 16.2: the writer is freed after */
-    if (pdu_mcf) {
-        os88_strcpy(pdu_line, "Could not save ", sizeof(pdu_line));
-        pdu_cat(pdu_line, pdu_target, sizeof(pdu_line));
-        pdu_cat(pdu_line, ": ", sizeof(pdu_line));
-        pdu_cat(pdu_line, pdu_errtext(r), sizeof(pdu_line));
-        pdu_wsay(pdu_line);
+    if (pdu_mcf && r == PDE_EXISTS && pdu_xsave.state == PDW_ST_CONFIRM) {
+        pdu_pk = PK_REPLACE;            /* 14.3: the target is there - ask */
+        pdu_say2(pdu_target, " exists. Enter replaces it, Esc keeps it.");
+        pdu_wsay(pdu_msg);
         return;
     }
-    pdu_saved();                        /* edit: the save point */
-    pdu_title_set();
-    os88_strcpy(pdu_line, "Saved ", sizeof(pdu_line));
-    pdu_cat(pdu_line, pdu_target, sizeof(pdu_line));
-    pdu_wsay(pdu_line);
+    pdu_save_done(pdu_mcf ? r : 0);
 }
 
 /* ---------------------------------------------------------------------------
@@ -497,7 +529,12 @@ void os88_onwake(void *win)
     if (win != pdu_win)
         return;
     pdu_stk_wake();                     /* deepstk */
-    pdu_at_doc();
+    pdu_rend_sync();                    /* an abort a view change owed */
+    pdu_pg_wake();                      /* pages: an undone/redone page op */
+    if (pdu_job == J_SAVE)              /* pages: a save stands in the TARGET's folder (D14) */
+        os88_file_goto_q_mark(pdu_tgtplace.clus, pdu_tgtplace.vol);
+    else
+        pdu_at_doc();
     if (pdu_popcls) {                   /* a close a deep click asked for */
         pdu_popcls = 0;
         os88_gfx_lock();                /* a callback's paints run locked; */
@@ -598,7 +635,7 @@ int os88_onclose(void *win)
 {
     if (win != pdu_win)
         return 1;
-    if (pdu_job == J_SAVE) {
+    if (pdu_job == J_SAVE || pdu_pk == PK_REPLACE) {         /* pages: a parked replace too */
         pdu_mcall(PDU_M_WRT, PDV_WRT_ABORT, 0, 0, 0);
         pdu_fsop_end();
         pdu_job = J_NONE;

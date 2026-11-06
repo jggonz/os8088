@@ -10,6 +10,7 @@
 #define PDW_H
 #include "pdabi.h"
 #include "pdmath.h"
+#include "pdwmap.h"
 
 /* ---- writer-private numbers (PAGEDESK-SPEC 20.5.1, 20.5.2) -------------- */
 #define PDW_OUTMIN   4096u   /* the output region of the writer buffer, bytes
@@ -48,6 +49,12 @@ pdw  pdw_src_read(pdw seg, pdw off, pdw cap, pdw *got);
 pdw  pdw_src_back(const char *name, const struct pd_u32 *at, pdw seg, pdw off,
                   pdw cap, pdw *got);           /* read a range of any file  */
 pdw  pdw_ferr(void);                            /* last FERR mapped to PDE_* */
+
+/* ---- Save As into another folder (D14, 20.11.3) ----------------------- */
+void pdw_cross(pdw clus, pdw vol);              /* job start: remember "here" as the target's folder;
+                                                   0,0 = one folder, the calls below do nothing   */
+void pdw_in_src(void);                          /* stand in the source's folder (PDENG, source reads) */
+void pdw_in_tgt(void);                          /* ...and back in the target's                    */
 
 /* ---- the date and the author (set by the primary, 20.5.10) -------------- */
 extern char pdw_date[24];                       /* "D:YYYYMMDDHHmmSS", "" = omit */

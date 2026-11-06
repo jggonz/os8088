@@ -17553,7 +17553,7 @@ $(BUILD)/pdres2.part: $(PD_RES_BIN) | $(BUILD)
 # the one translation unit (SPEC.md 73.1): pagedesk.c #includes its parts,
 # so every one of them is a prerequisite or an edit rebuilds nothing
 PDCSRC := $(PDDIR)/pagedesk.c $(wildcard $(PDDIR)/pdu*.c $(PDDIR)/pdu*.h) \
-          $(PDDIR)/pdovl.c $(PDDIR)/pdabi.h $(PDDIR)/pdmath.h
+          $(PDDIR)/pdovl.c $(PDDIR)/pdabi.h $(PDDIR)/pdmath.h $(PDDIR)/pdovlpage.c $(PDDIR)/pdwmap.h   # pages
 PDASRC := $(PDDIR)/pagedesk.asm $(PDDIR)/pdui.inc $(PDDIR)/pduassoc.inc \
           $(BUILD)/pdart_appicon.inc $(BUILD)/pdart_docglyph.inc \
           $(PDDIR)/pdmath.inc $(PDDIR)/stubs/pdmstub.inc \
@@ -20551,11 +20551,12 @@ pdefuzz: pdeng $(BUILD)/pde_fuzz
 # exists for verifying before those files land on this branch and is empty in
 # the lead's integration tree.
 PDW_C    := apps/pagedesk/pdwrt.c apps/pagedesk/pdwio.c apps/pagedesk/pdwser.c apps/pagedesk/pdwap.c \
-            apps/pagedesk/pdwscan.c apps/pagedesk/pdwsave.c
-PDW_H    := apps/pagedesk/pdw.h apps/pagedesk/pdwwid.h apps/pagedesk/pdabi.h apps/pagedesk/pdmath.h
+            apps/pagedesk/pdwscan.c apps/pagedesk/pdwsave.c \
+            apps/pagedesk/pdwpg.c apps/pagedesk/pdwgc.c   # pages: 20.11
+PDW_H    := apps/pagedesk/pdw.h apps/pagedesk/pdwwid.h apps/pagedesk/pdabi.h apps/pagedesk/pdmath.h apps/pagedesk/pdwmap.h
 PDW_SDK  ?=
 PDW_OUT  := $(BUILD)/pdw
-PDW_CAP  := 49152
+PDW_CAP  := 47104   # D18: PDWRT <= 46 KiB (target 44)
 .PHONY: pdwrt pdwrt-host
 $(BUILD)/pdwrt.raw.asm: $(PDW_C) $(PDW_H) $(CC_RUNTIME) | $(BUILD) cc-toolchain
 	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S \
@@ -20593,10 +20594,11 @@ ifneq ($(wildcard $(PDW_ENG)/pdeng.c),)
 	mkdir -p $(BUILD)/pdw-real
 	$(CC) -std=gnu99 -O1 -w -DPD_HOST -I $(PDW_ENG) -c $(PDW_ENG)/pdeng.c -o $(BUILD)/pdw-real/pdeng.o
 	$(CC) -std=gnu99 -O1 -w -DPD_HOST -I $(PDW_ENG) -c $(PDW_ENG)/hosttest/pde_host.c -o $(BUILD)/pdw-real/pde_host.o
-	$(CC) -std=gnu99 -O1 -Wall -DPD_HOST -I apps/pagedesk -o $(BUILD)/pdw-real/pdw_real apps/pagedesk/hosttest/pdw_real.c \
+	$(CC) -std=gnu99 -O1 -Wall -DPD_HOST $(PDW_TRACE) -I apps/pagedesk -o $(BUILD)/pdw-real/pdw_real apps/pagedesk/hosttest/pdw_real.c \
 		apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c $(BUILD)/pdw-real/pdeng.o $(BUILD)/pdw-real/pde_host.o
 	cd $(BUILD)/pdw-real && ./pdw_real $(abspath $(PDW_REAL_PDF))
 	qpdf --check $(BUILD)/pdw-real/R1.PDF && qpdf --check $(BUILD)/pdw-real/R2.PDF
+	python3 apps/pagedesk/hosttest/pdw_pgcheck.py $(abspath $(BUILD)/pdw-real) $(abspath apps/pagedesk/samples)
 else
 	@echo "pdwrt-real: SKIP - PDENG ($(PDW_ENG)/pdeng.c) is not on this branch yet"
 endif

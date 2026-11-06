@@ -26,19 +26,29 @@ extern int pdh_cluster;
 #define SEG_TBL   0x5000
 #define SEG_WBUF  0x7000
 #define SEG_EDS   0x8000
+#define SEG_MAP   0x9800
+static pdw g_mapn, g_extract, g_lastmode;
 static int fails;
 #define CK(c, ...) do { if (!(c)) { fails++; printf("FAIL %d: ", __LINE__); printf(__VA_ARGS__); printf("\n"); } else { printf("ok   "); printf(__VA_ARGS__); printf("\n"); } } while (0)
 
+extern char pdh_name[14];
 pdw pdw_engcall(pdw verb, pdw bx, pdw cx, pdw dx)
 {
-    pdw r = (pdw)pde_verb(verb, bx, cx, dx);
+    pdw r;
+    if (verb == PDV_ENG_OPEN) {                          /* the verify opens PDSAVE.$$$ (14.2 step 4) */
+        struct pdxb_open op; pd_fcopy_in(SEG_XB, 0, &op, sizeof op);
+        if (op.state == 0 && strcmp(op.name, pdh_name) && !pdh_load(op.name)) strcpy(pdh_name, op.name);
+    }
+    r = (pdw)pde_verb(verb, bx, cx, dx);
     pdw_engcf = pde_fail != 0;
+    if (getenv("PDW_ENGLOG") && (pde_fail || getenv("PDW_ENGALL"))) fprintf(stderr, "     PDENG verb %02X bx %u -> %u\n", verb, bx, (unsigned)r);
     return r;
 }
 static int eng_open(const char *file)
 {
     struct pdxb_init in; struct pdxb_open op; unsigned r; int n = 0;
     if (pdh_load(file)) return -1;
+    strcpy(pdh_name, "DOC.PDF");
     memset(&in, 0, sizeof in);
     in.xb_seg = SEG_XB; in.cache_seg = SEG_CACHE; in.cache_kb = 16;
     in.arena_seg = SEG_ARENA; in.arena_kb = 8; in.tables_seg = SEG_TBL; in.tables_kb = 11;
@@ -57,7 +67,7 @@ static int eng_open(const char *file)
 static void wrt_init(void)
 {
     struct pdxb_init in; memset(&in, 0, sizeof in);
-    in.xb_seg = SEG_XB; in.eng_seg = 0xE000; in.wbuf_seg = SEG_WBUF; in.wbuf_kb = 12;
+    in.xb_seg = SEG_XB; in.eng_seg = 0xE000; in.wbuf_seg = SEG_WBUF; in.wbuf_kb = g_extract ? 40 : 18;
     pd_fcopy_out(&in, SEG_XB, 0, sizeof in);
     pdw_verb(PDV_WRT_INIT, SEG_XB, 0, 0);
 }
@@ -75,15 +85,23 @@ static void es_text(const char *t) { pdw n = (pdw)strlen(t); pd_fcopy_out(t, SEG
 static void es_pts(const int *p, int n) { int i; for (i = 0; i < 2 * n; i++) pd_fpokew(SEG_EDS, (pdw)(px + 2 * i), (pdw)(pd_pt)(p[i] * 16)); E.pts_off = px; E.pts_n = (pdw)n; px = (pdw)(px + 4 * n); }
 static void es_add(void) { pd_fcopy_out(&E, SEG_EDS, (pdw)(nE * sizeof E), sizeof E); nE++; }
 
+static void map_set(const unsigned *m, int n)
+{
+    int i; pd_ffill(SEG_MAP, 0, 0, 1024);
+    for (i = 0; i < n; i++) pd_fpokew(SEG_MAP, (pdw)(2 * i), (pdw)m[i]);
+    g_mapn = (pdw)n;
+}
 static pdw save(const char *dst)
 {
     struct pdxb_save sv; pdw r; int g = 0;
     memset(&sv, 0, sizeof sv);
+    sv.pages_seg = g_mapn ? SEG_MAP : 0; sv.pages_count = g_mapn;
     strcpy(sv.target, dst); strcpy(sv.source, "DOC.PDF"); strcpy(sv.date, "D:20261105190000"); strcpy(sv.author, "Verifier");
-    sv.mode = PDSV_INCREMENTAL; sv.edits_seg = SEG_EDS; sv.edits_count = nE;
+    sv.mode = g_extract ? PDSV_EXTRACT : PDSV_INCREMENTAL; sv.edits_seg = SEG_EDS; sv.edits_count = nE;
     pd_fcopy_out(&sv, SEG_XB, 0, sizeof sv);
-    do { r = (pdw)pdw_verb(PDV_WRT_SAVE, SEG_XB, 0, 0); pd_fcopy_in(SEG_XB, 0, &sv, sizeof sv); } while (r == PDE_BUSY && ++g < 20000);
-    if (r) printf("     save %s -> %u detail %u\n", dst, r, sv.err_detail);
+    do { r = (pdw)pdw_verb(g_extract ? PDV_WRT_EXTRACT : PDV_WRT_SAVE, SEG_XB, 0, 0); pd_fcopy_in(SEG_XB, 0, &sv, sizeof sv); } while (r == PDE_BUSY && ++g < 20000);
+    g_lastmode = sv.mode;
+    if (r) printf("     save %s -> %u detail %u (phase %u item %u)\n", dst, r, sv.err_detail, sv_lastph, sv_lasti);
     return r;
 }
 static int annots(pdw page, struct pdxb_annot *out, int max)
@@ -102,8 +120,9 @@ int main(int argc, char **argv)
 {
     static struct pdxb_annot an[32]; int n, i, k; pdw r, noteobj = 0, hlobj = 0, hlgen = 0, notegen = 0;
     pdh_cluster = 1; pdw_host_clu = 512;
-    remove("R1.PDF"); remove("R2.PDF"); remove(PDW_TEMPNAME);    /* a re-run starts clean */
+    remove("R1.PDF"); remove("R2.PDF"); remove("P1.PDF"); remove("X1.PDF"); remove("N1.PDF"); remove("P2.PDF"); remove("X2.PDF"); remove(PDW_TEMPNAME);    /* a re-run starts clean */
     cp(argc > 1 ? argv[1] : "../../apps/pagedesk/samples/MARKUP.PDF", "DOC.PDF");
+    if (system("python3 ../../apps/pagedesk/hosttest/pdw_nest.py NEST.PDF")) { printf("FAIL: pdw_nest.py\n"); return 2; }
     /* round A: four new marks on a real sample */
     CK(eng_open("DOC.PDF") == 0, "PDENG opens %s", argv[1]);
     wrt_init(); es_reset();
@@ -136,6 +155,111 @@ int main(int argc, char **argv)
     n = annots(1, an, 32);
     for (i = 0, k = 0; i < n; i++) { if (an[i].objnum == hlobj) k |= 1; if (!strncmp(an[i].subtype, "Ink", 3)) k |= 2; }
     CK(k == 2, "page 2: highlight gone, ink present (%d annots, flags %d)", n, k);
+    /* ---- 20.11: page operations on PAGES.PDF (8 pages, a flat tree whose root carries
+       /MediaBox and /Resources) against the real engine ---- */
+    {   unsigned map[12]; int np; struct pdxb_pageinfo pi[12]; int j;
+        unsigned srcobj[8];
+        cp(argc > 2 ? argv[2] : "../../apps/pagedesk/samples/PAGES.PDF", "DOC.PDF");
+        CK(eng_open("DOC.PDF") == 0, "PDENG opens PAGES.PDF");
+        for (j = 0; j < 8; j++) {
+            pde_verb(PDV_ENG_PAGEINFO, (pdw)j, 0, 0); pd_fcopy_in(SEG_XB, 0, &pi[j], sizeof pi[j]); srcobj[j] = pi[j].objnum;
+        }
+        /* reversed-ish order, one rotated, two deleted, one duplicated (itself rotated), a blank */
+        map[0] = PDM_MK(PDM_SRC, 0, 7); map[1] = PDM_MK(PDM_SRC, 0, 6); map[2] = PDM_MK(PDM_SRC, 1, 5);
+        map[3] = PDM_MK(PDM_SRC, 0, 1); map[4] = PDM_MK(PDM_SRC, 2, 1); map[5] = PDM_MK(PDM_BLANK, 0, 0);
+        map[6] = PDM_MK(PDM_SRC, 0, 2); map[7] = PDM_MK(PDM_SRC, 3, 4);
+        map_set(map, 8); np = 8;
+        wrt_init(); es_reset();
+        es_new(PDA_NOTE, 5, 300, 300, 0, 0); E.colour = PDC_YELLOW; es_text("a note on a page that moved"); es_add();
+        es_new(PDA_NOTE, 3, 300, 300, 0, 0); E.colour = PDC_RED; es_text("a note on a deleted page"); es_add();
+        r = save("P1.PDF");
+        CK(r == PDE_OK, "page operations save answers %u", r);
+        CK((g_lastmode & PDW_OUT_REOPEN) != 0, "the writer says PDENG was left on the output (re-open)");
+        cp("P1.PDF", "DOC.PDF");
+        CK(eng_open("DOC.PDF") == 0, "PDENG opens the result");
+        r = (pdw)pde_verb(PDV_ENG_PAGEINFO, (pdw)np, 0, 0);
+        CK(pde_fail != 0, "exactly %d pages", np);
+        {   static struct pdxb_pageinfo q; static const int want[8] = { 7, 6, 5, 1, 1, 0, 2, 4 };
+            static const unsigned wrq[8] = { 0, 0, 1, 0, 2, 0, 0, 3 };
+            int bad = 0;
+            for (j = 0; j < np; j++) {
+                pde_verb(PDV_ENG_PAGEINFO, (pdw)j, 0, 0); pd_fcopy_in(SEG_XB, 0, &q, sizeof q);
+                if (j == 5) { if (q.objnum == srcobj[0] || (q.flags & PDP_NOCONTENT) == 0) bad++; }     /* a new, empty page */
+                else if (j == 4) { if (q.objnum == srcobj[1]) bad++; }                                    /* the duplicate is a NEW object */
+                else if (q.objnum != srcobj[want[j]]) bad++;
+                if (q.rotate != (pdw)((pi[want[j]].rotate + 90 * wrq[j]) % 360)) { bad++; printf("     page %d rotate %u want %u\n", j, q.rotate, (pi[want[j]].rotate + 90 * wrq[j]) % 360); }
+                if (q.media.x1 != pi[want[j]].media.x1 || q.media.y1 != pi[want[j]].media.y1) { bad++; printf("     page %d media %d x %d want %d x %d\n", j, q.media.x1, q.media.y1, pi[want[j]].media.x1, pi[want[j]].media.y1); }
+            }
+            CK(bad == 0, "order, rotation and boxes of the 8 pages (%d wrong)", bad);
+        }
+        {   static struct pdxb_annot an[8]; int n5 = annots(2, an, 8), n1 = annots(3, an, 8);
+            CK(n5 == 1 && n1 == 0, "the note went with its page (page 3 of 8 has %d, the duplicate of page 1 has %d)", n5, n1); }
+        printf("PDW-PAGES P1.PDF 8 root-flat\n");
+        /* a second save over the result: the nine-page order is the source's own again (identity) -> byte copy plus */
+        map_set(0, 0);
+    }
+    /* ---- Extract: pages 5, 1, a blank and 3 (rotated) of XTGUIDE.PDF into a fresh document ---- */
+    {   unsigned map[4]; int j; static struct pdxb_pageinfo q;
+        cp(argc > 3 ? argv[3] : "../../apps/pagedesk/samples/XTGUIDE.PDF", "DOC.PDF");
+        CK(eng_open("DOC.PDF") == 0, "PDENG opens XTGUIDE.PDF");
+        map[0] = PDM_MK(PDM_SRC, 0, 4); map[1] = PDM_MK(PDM_SRC, 0, 0); map[2] = PDM_MK(PDM_BLANK, 0, 0); map[3] = PDM_MK(PDM_SRC, 1, 2);
+        map_set(map, 4); g_extract = 1; wrt_init(); es_reset();
+        r = save("X1.PDF");
+        CK(r == PDE_OK, "Extract answers %u", r);
+        g_extract = 0; map_set(0, 0);
+        cp("X1.PDF", "DOC.PDF");
+        CK(eng_open("DOC.PDF") == 0, "PDENG opens the extract");
+        pde_verb(PDV_ENG_PAGEINFO, 4, 0, 0);
+        CK(pde_fail != 0, "four pages");
+        for (j = 0; j < 4; j++) { pde_verb(PDV_ENG_PAGEINFO, (pdw)j, 0, 0); pd_fcopy_in(SEG_XB, 0, &q, sizeof q);
+            printf("     page %d: obj %u rotate %u media %d x %d\n", j, q.objnum, q.rotate, q.media.x1 / 16, q.media.y1 / 16); }
+        printf("PDW-EXTRACT X1.PDF XTGUIDE.PDF 5,1,blank,3r90\n");
+    }
+    /* ---- what the glass did: rotate page 1, a blank after it, page 2 deleted ---- */
+    {   unsigned map[8]; int j;
+        cp(argc > 2 ? argv[2] : "../../apps/pagedesk/samples/PAGES.PDF", "DOC.PDF");
+        CK(eng_open("DOC.PDF") == 0, "PDENG opens PAGES.PDF again");
+        map[0] = PDM_MK(PDM_SRC, 1, 0); map[1] = PDM_MK(PDM_BLANK, 0, 0);
+        for (j = 2; j < 8; j++) map[j] = PDM_MK(PDM_SRC, 0, j);
+        map_set(map, 8); wrt_init(); es_reset();
+        r = save("P2.PDF");
+        CK(r == PDE_OK, "rotate + blank + delete answers %u", r);
+        map_set(0, 0);
+    }
+    /* ---- a NESTED page tree whose boxes, resources and rotation are inherited ---- */
+    {   unsigned map[6]; int j; static struct pdxb_pageinfo q, p0[4]; static struct pdxb_annot an[8];
+        cp("NEST.PDF", "DOC.PDF");
+        CK(eng_open("DOC.PDF") == 0, "PDENG opens the nested tree");
+        for (j = 0; j < 4; j++) { pde_verb(PDV_ENG_PAGEINFO, (pdw)j, 0, 0); pd_fcopy_in(SEG_XB, 0, &p0[j], sizeof p0[j]); }
+        map[0] = PDM_MK(PDM_SRC, 0, 3); map[1] = PDM_MK(PDM_SRC, 0, 0); map[2] = PDM_MK(PDM_SRC, 0, 1);
+        map[3] = PDM_MK(PDM_SRC, 0, 1); map[4] = PDM_MK(PDM_SRC, 1, 2);
+        map_set(map, 5);
+        wrt_init(); es_reset();
+        es_new(PDA_NOTE, 1, 100, 100, 0, 0); E.colour = PDC_CYAN; es_text("a new note on B, which is also duplicated"); es_add();
+        r = save("N1.PDF");
+        CK(r == PDE_OK, "nested tree: page operations answer %u", r);
+        cp("N1.PDF", "DOC.PDF");
+        CK(eng_open("DOC.PDF") == 0, "PDENG opens the nested result");
+        for (j = 0; j < 5; j++) {
+            static const int want[5] = { 3, 0, 1, 1, 2 };
+            pde_verb(PDV_ENG_PAGEINFO, (pdw)j, 0, 0); pd_fcopy_in(SEG_XB, 0, &q, sizeof q);
+            CK(q.media.x1 == p0[want[j]].media.x1 && q.media.y1 == p0[want[j]].media.y1
+               && q.rotate == (pdw)((p0[want[j]].rotate + (j == 4 ? 90 : 0)) % 360),
+               "page %d: media %d x %d rotate %u (source page %d: %d x %d rotate %u)", j + 1, q.media.x1 / 16, q.media.y1 / 16, q.rotate,
+               want[j] + 1, p0[want[j]].media.x1 / 16, p0[want[j]].media.y1 / 16, p0[want[j]].rotate);
+        }
+        CK(annots(2, an, 8) == 3 && annots(3, an, 8) == 2, "B has its note, its popup and the new note; the duplicate has the note and the popup (copies)");
+        printf("PDW-NEST N1.PDF\n");
+        /* Extract two of them: D and B (with its note and popup, /P and /Parent retargeted) */
+        cp("NEST.PDF", "DOC.PDF");
+        CK(eng_open("DOC.PDF") == 0, "PDENG opens the nested tree again");
+        map[0] = PDM_MK(PDM_SRC, 0, 3); map[1] = PDM_MK(PDM_SRC, 0, 1);
+        map_set(map, 2); g_extract = 1; wrt_init(); es_reset();
+        r = save("X2.PDF");
+        CK(r == PDE_OK, "nested tree: Extract answers %u", r);
+        g_extract = 0; map_set(0, 0);
+        printf("PDW-NEST X2.PDF\n");
+    }
     printf("%s: %d failure(s)\n", fails ? "FAIL" : "PASS", fails);
     return fails;
 }

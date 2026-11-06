@@ -14,7 +14,7 @@
  * ==========================================================================*/
 #ifdef PD_HOST
 #include "pdw.h"
-#define PDW_HOST_SCRATCH 0x3000u        /* the harness's raw-copy landing zone */
+#define PDW_HOST_SCRATCH 0xA000u        /* the harness's raw-copy landing zone (neither harness maps anything here) */
 #else
 #include "os88.h"
 #include "pdw.h"
@@ -29,6 +29,8 @@ pdw pdw_engvec[2];                      /* PDENG's door, offset then segment  */
 #include "pdwap.c"
 #include "pdwscan.c"
 #include "pdwsave.c"
+#include "pdwpg.c"
+#include "pdwgc.c"
 
 /* ---- the verbs ------------------------------------------------------------ */
 static pdw v_init(pdw bx)
@@ -52,14 +54,14 @@ static pdw v_abort(void)
 
 static pdw v_job(pdw fresh)
 {
-    pdw r, replace = 0, keep = 0, st;
+    pdw r, replace = 0, keep = 0, st;      /* fresh = the job's kind: 0 save, 1 new, 2 extract */
     pd_fcopy_in(g_xb, 0, &g_sv, sizeof g_sv);
     st = g_sv.state;
     if (st == 0) {
         if (sv_active) v_abort();
         r = job_begin(fresh);
         if (r) { pd_fcopy_out(&g_sv, g_xb, 0, sizeof g_sv); return job_fail(r); }
-    } else if (!sv_active || sv_fresh != fresh) {
+    } else if (!sv_active || sv_kind != fresh) {
         return PDE_RANGE;
     } else if (st == PDW_ST_REPLACE) {
         if (sv_phase != PH_RENAME) return PDE_RANGE;
@@ -98,7 +100,7 @@ unsigned pdw_verb(unsigned verb, unsigned bx, unsigned cx, unsigned dx)
     case PDV_WRT_INIT:    r = v_init(bx); break;
     case PDV_WRT_SAVE:    r = v_job(0); break;
     case PDV_WRT_NEWDOC:  r = v_job(1); break;
-    case PDV_WRT_EXTRACT: r = PDE_LIMIT; break;     /* graph copy: wave 2 (20.5.12) */
+    case PDV_WRT_EXTRACT: r = v_job(2); break;
     case PDV_WRT_ABORT:   r = v_abort(); break;
     default:              r = PDE_RANGE; break;
     }

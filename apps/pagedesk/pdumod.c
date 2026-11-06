@@ -84,8 +84,9 @@ static unsigned pdu_banklen;            /* the INDEX's bytes (kind 7) */
 static struct pdxb_fontbank pdu_xfb;
 
 static unsigned pdu_wbuf;               /* PDWRT's buffers (16.2, D9) */
-#define PDU_WBUF_KB 12                  /* D9: 12 KiB a save (36 an extract) */
+#define PDU_WBUF_KB 18                  /* D9/D18: 18 KiB a save (4 out + 4.7 tail tables + 1,068 objects); an Extract 16 + /Size/128 + /Size/2048, at most 40 (pdovlpage.c) */  /* pages */
 static int pdu_wrt_in;                  /* PDWRT fetched and bound */
+static unsigned pdu_wkb = PDU_WBUF_KB;  /* pages: this job's writer buffer (20.11.4) */
 
 static int pdu_adapter, pdu_bpp, pdu_scrw, pdu_scrh;
 
@@ -431,6 +432,7 @@ static int pdu_doc_claim(void)
 static void pdu_doc_release(void)
 {
     pdu_ed_gone();                      /* edit */
+    pdu_rabort = 0;                     /* told here, unconditionally */
     pdu_mcall(PDU_M_REND, PDV_REND_ABORT, 0, 0, 0);
     pdu_mcall(PDU_M_ENG, PDV_ENG_CLOSE, 0, 0, 0);
     pdu_doc_free();
@@ -465,13 +467,13 @@ static int pdu_wrt_in_now(void)
         pdu_wrt_out();
         return PDE_LIMIT;
     }
-    pdu_wbuf = os88_mem_claim_p(PDU_WBUF_KB << 6);
+    pdu_wbuf = os88_mem_claim_p(pdu_wkb << 6);
     if (pdu_wbuf == 0) {
         pdu_wrt_out();
         return PDE_NOMEM;
     }
     pdu_xinit.wbuf_seg = pdu_wbuf;
-    pdu_xinit.wbuf_kb = PDU_WBUF_KB;
+    pdu_xinit.wbuf_kb = pdu_wkb;
     if (pdu_minit(PDU_M_WRT) != 0) {
         pdu_wrt_out();
         return PDE_LIMIT;

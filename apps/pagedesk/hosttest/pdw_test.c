@@ -102,6 +102,12 @@ pdw pdw_engcall(pdw verb, pdw bx, pdw cx, pdw dx)
     E_calls[verb & 255]++;
     pdw_engcf = 0;
     switch (verb) {
+    case PDV_ENG_CLOSE: return 0;
+    case PDV_ENG_OPEN: {                                    /* the verify (14.2 step 4) opens PDSAVE.$$$ */
+        struct pdxb_open op; pd_fcopy_in(g_xb, 0, &op, sizeof op);
+        eng_load(op.name);
+        op.size.lo = (pdw)(E_len & 0xFFFF); op.size.hi = (pdw)(E_len >> 16); op.state = 0;
+        pd_fcopy_out(&op, g_xb, 0, sizeof op); return 0; }
     case PDV_ENG_TRAILER: {
         struct pdxb_trailer t; memset(&t, 0, sizeof t);
         t.size = (pdw)E_size; t.root_num = (pdw)E_root; t.info_num = (pdw)E_info;
@@ -339,7 +345,7 @@ static void t_fresh(pdw clu, const char *name)
 {
     pdw r; int viol0;
     pdw_host_clu = clu; pdw_host_viol = 0; viol0 = 0;
-    init_module(12);
+    init_module(18);
     scene_all_kinds();
     sv_setup(path(name), PDSV_FRESH);
     stage_pages();
@@ -360,7 +366,7 @@ static int t_inc(const char *src, const char *dst, int round)
 {
     pdw r; long n0, n1; unsigned char *a, *b; int i;
     struct pd_edit *e; static pd_pt pt[1100]; int used;
-    init_module(12);
+    init_module(18);
     pdw_host_clu = T_CLU; pdw_host_viol = 0;
     eng_load(src);
     strncpy(T_SRC, src, 13);
@@ -375,8 +381,8 @@ static int t_inc(const char *src, const char *dst, int round)
         e = es_new(PDA_NOTE, 1, 100, 500, 120, 518); e->src_num = 11; e->flags = PDEF_DELETED; es_add(e);
         e = es_new(PDA_NOTE, 0, 300, 500, 320, 518); e->irt = 1; e->state = PDS_COMPLETED; es_add(e);
     } else {
-        e = es_new(PDA_NOTE, 0, 300, 500, 320, 518); e->colour = 14; e->src_num = g_onum[0]; es_text(e, "Check this figure (revised)", -1); es_add(e);
-        e = es_new(PDA_INK, 2, 0, 0, 0, 0); e->src_num = g_onum[2]; e->flags = PDEF_DELETED; es_add(e);
+        e = es_new(PDA_NOTE, 0, 300, 500, 320, 518); e->colour = 14; e->src_num = tg(T_ONUM, 0); es_text(e, "Check this figure (revised)", -1); es_add(e);
+        e = es_new(PDA_INK, 2, 0, 0, 0, 0); e->src_num = tg(T_ONUM, 2); e->flags = PDEF_DELETED; es_add(e);
         e = es_new(PDA_AREA, 2, 100, 100, 200, 160); e->colour = 2; es_text(e, "second round", -1); es_add(e);
     }
     sv_setup(path(dst), PDSV_INCREMENTAL);
@@ -396,7 +402,7 @@ static int t_inc(const char *src, const char *dst, int round)
         CHECK(c && n2 == n0 && !memcmp(a, c, (size_t)n0), "%s: the source file is unchanged by the save", src); free(c); }
     free(a);
     report(dst);
-    printf("  %s: %ld -> %ld bytes, %d slices, onum[0]=%u\n", dst, n0, n1, g_slices, g_onum[0]);
+    printf("  %s: %ld -> %ld bytes, %d slices, onum[0]=%u\n", dst, n0, n1, g_slices, tg(T_ONUM, 0));
     return 0;
 }
 
@@ -404,7 +410,7 @@ static void t_failures(void)
 {
     pdw r; long n; unsigned char *s;
     /* disk full during a fresh save */
-    pdw_host_clu = 512; init_module(12);
+    pdw_host_clu = 512; init_module(18);
     scene_all_kinds(); sv_setup(path("full.pdf"), PDSV_FRESH); stage_pages();
     pdw_host_budget = 6000;
     r = call_job(PDV_WRT_NEWDOC);
@@ -441,7 +447,7 @@ static void t_failures(void)
     report("exists.pdf");
     /* disk full during an incremental save leaves the source alone */
     {   long n0, n1; unsigned char *a, *b;
-        init_module(12); eng_load(path("src.pdf")); strcpy(T_SRC, "src.pdf");
+        init_module(18); eng_load(path("src.pdf")); strcpy(T_SRC, "src.pdf");
         es_reset(); { struct pd_edit *e = es_new(PDA_NOTE, 0, 300, 500, 320, 518); es_text(e, "x", 1); es_add(e); }
         sv_setup(path("incfull.pdf"), PDSV_INCREMENTAL); a = slurp(path("src.pdf"), &n0);
         pdw_host_budget = 2000;
@@ -452,7 +458,7 @@ static void t_failures(void)
         pdw_host_budget = -1;
     }
     /* the self-check refuses a damaged file: no rename, temp deleted */
-    pdw_host_clu = 512; init_module(12);
+    pdw_host_clu = 512; init_module(18);
     scene_all_kinds(); sv_setup(path("tamper.pdf"), PDSV_FRESH); stage_pages();
     pdw_host_tamper = 1;
     r = call_job(PDV_WRT_NEWDOC);
@@ -463,14 +469,14 @@ static void t_failures(void)
     pdw_host_clu = 8192; init_module(8);
     es_reset(); sv_setup(path("tiny.pdf"), PDSV_FRESH); stage_pages();
     r = call_job(PDV_WRT_NEWDOC);
-    CHECK(r == PDE_NOMEM && SV.err_detail == 18, "small buffer refused (%u, wants %u KB: 16 of output + 2)", r, SV.err_detail);
+    CHECK(r == PDE_NOMEM && SV.err_detail == 23, "small buffer refused (%u, wants %u KB: 16 of output + tail + 3)", r, SV.err_detail);
     pdw_host_clu = 512;
 }
 
 static void t_limits(void)
 {
     pdw r; int i;
-    pdw_host_clu = 512; init_module(12);
+    pdw_host_clu = 512; init_module(18);
     es_reset();
     for (i = 0; i < 250; i++) {
         struct pd_edit *e = es_new(PDA_NOTE, (pdw)(i & 1), 100 + (i % 20) * 20, 100 + (i / 20) * 40, 0, 0);
@@ -481,10 +487,10 @@ static void t_limits(void)
     printf("  many.pdf: 250 notes -> %u (detail %u), table %u of %u\n", r, SV.err_detail, g_tn, g_tmax);
     CHECK(r == PDE_OK, "250 notes in a 12 KB buffer");
     report("many.pdf");
-    init_module(8); sv_setup(path("many8.pdf"), PDSV_FRESH); stage_pages();
+    init_module(12); sv_setup(path("many8.pdf"), PDSV_FRESH); stage_pages();
     r = call_job(PDV_WRT_NEWDOC);
-    printf("  250 notes in an 8 KB buffer -> %u (table %u)\n", r, g_tmax);
-    CHECK(r == PDE_LIMIT || r == PDE_OK, "8 KB buffer answers cleanly");
+    printf("  250 notes in a 12 KB buffer -> %u (table %u)\n", r, g_tmax);
+    CHECK(r == PDE_LIMIT || r == PDE_OK, "a tight buffer answers cleanly");
     CHECK(!exists(PDW_TEMPNAME), "limit: no temp left");
 }
 
@@ -493,7 +499,7 @@ static void t_limits(void)
 static pdw fresh_one(const char *name, pdw clu, int textlen, int extra)
 {
     static char t[1100]; struct pd_edit *e; struct pdw_newpage np;
-    pdw_host_clu = clu; init_module(12);
+    pdw_host_clu = clu; init_module(18);
     es_reset();
     memset(t, 'x', sizeof t);
     e = es_new(PDA_NOTE, 0, 100, 100, 0, 0); es_text(e, t, textlen); es_add(e);
@@ -553,18 +559,19 @@ static void t_review(void)
     CHECK(r == PDE_RANGE && SV.err_detail == 8, "fresh + PDEF_IRTSRC refused (%u, detail %u)", r, SV.err_detail);
     /* 5. an incremental reply to an UNEDITED source note (PDEF_IRTSRC) */
     {   struct pd_edit *e;
-        pdw_host_clu = 512; init_module(12); eng_load("src.pdf"); strcpy(T_SRC, "src.pdf"); es_reset();
+        pdw_host_clu = 512; init_module(18); eng_load("src.pdf"); strcpy(T_SRC, "src.pdf"); es_reset();
         e = es_new(PDA_NOTE, 0, 100, 600, 0, 0); e->irt = 9; e->flags = PDEF_IRTSRC; e->state = PDS_COMPLETED; es_add(e);
         sv_setup("irtsrc.pdf", PDSV_INCREMENTAL);
         r = call_job(PDV_WRT_SAVE);
         CHECK(r == PDE_OK && file_has("irtsrc.pdf", "/IRT 9 0 R") == 1, "reply to source note 9 (%u)", r);
         report("irtsrc.pdf");
     }
-    /* 6. a page order the incremental save cannot write is refused */
-    {   struct pd_edit *e; pdw ord[3]; int c;
+    /* 6. a page order is a page operation (20.11.2): identity saves with a note; a
+          move and a deletion write the root /Pages again */
+    {   struct pd_edit *e; pdw ord[3]; int c; unsigned kids[16]; int nk;
         static const pdw cases[3][3] = { {0, 1, 2}, {0, 2, 1}, {0, 1, 0xFFFF} };
         for (c = 0; c < 3; c++) {
-            pdw_host_clu = 512; init_module(12); eng_load("src.pdf"); strcpy(T_SRC, "src.pdf"); es_reset();
+            pdw_host_clu = 512; init_module(18); eng_load("src.pdf"); strcpy(T_SRC, "src.pdf"); es_reset();
             e = es_new(PDA_NOTE, 0, 300, 300, 0, 0); es_text(e, "order", -1); es_add(e);
             sv_setup("order.pdf", PDSV_INCREMENTAL);
             ord[0] = cases[c][0]; ord[1] = cases[c][1]; ord[2] = cases[c][2];
@@ -572,7 +579,12 @@ static void t_review(void)
             r = call_job(PDV_WRT_SAVE);
             if (c == 0) CHECK(r == PDE_OK && file_has("order.pdf", "/Version /1.4") == 1,
                               "identity page order saves, and a lone note (/NM) raises a 1.3 source to /1.4 (%u)", r);
-            else CHECK(r == PDE_LIMIT && SV.err_detail == 7 && !exists(PDW_TEMPNAME), "page order case %d refused (%u, detail %u)", c, r, SV.err_detail);
+            else {
+                CHECK(r == PDE_OK && !exists(PDW_TEMPNAME), "page order case %d saves (%u, detail %u)", c, r, SV.err_detail);
+                if (r == PDE_OK) { eng_load("order.pdf"); nk = obj_kids(kids);
+                    CHECK(nk == (c == 1 ? 3 : 2) && kids[0] == 3 && kids[1] == (c == 1 ? 5u : 4u) && (c == 2 || kids[2] == 4),
+                          "case %d: the new /Kids %u %u %u (%d pages)", c, kids[0], kids[1], nk > 2 ? kids[2] : 0, nk); }
+            }
             remove("order.pdf");
         }
     }
@@ -599,17 +611,17 @@ static void t_review(void)
     }
     /* 9. an INIT while a job runs deletes its temp file (20.5.1) */
     {   int k;
-        pdw_host_clu = 512; init_module(12); scene_all_kinds(); sv_setup("ini.pdf", PDSV_FRESH); stage_pages();
+        pdw_host_clu = 512; init_module(18); scene_all_kinds(); sv_setup("ini.pdf", PDSV_FRESH); stage_pages();
         pd_fcopy_out(&SV, SEG_XB, 0, sizeof SV);
         for (k = 0; k < 200 && !exists(PDW_TEMPNAME); k++) { r = pdw_verb(PDV_WRT_NEWDOC, SEG_XB, 0, 0); pd_fcopy_in(SEG_XB, 0, &SV, sizeof SV); }
         CHECK(exists(PDW_TEMPNAME), "the job made its temp file");
-        init_module(12);
+        init_module(18);
         CHECK(!exists(PDW_TEMPNAME), "INIT mid-job deleted the temp file");
     }
     /* 10. REPLACE whose delete fails: an ordinary failure - temp deleted, target intact, err_detail != 1 */
     {   long n; unsigned char *b;
         write_file("ro.pdf", "OLD", 3);
-        pdw_host_clu = 512; init_module(12); scene_all_kinds(); sv_setup("ro.pdf", PDSV_FRESH); stage_pages();
+        pdw_host_clu = 512; init_module(18); scene_all_kinds(); sv_setup("ro.pdf", PDSV_FRESH); stage_pages();
         r = call_job(PDV_WRT_NEWDOC);
         CHECK(r == PDE_EXISTS && SV.state == PDW_ST_CONFIRM, "ro: confirm (%u)", r);
         pdw_host_delfail = 1; SV.state = PDW_ST_REPLACE;
@@ -620,6 +632,49 @@ static void t_review(void)
               "failed delete: %u detail %u temp %d target %ld", r, SV.err_detail, exists(PDW_TEMPNAME), n);
         free(b); remove("ro.pdf");
     }
+}
+
+
+/* ---- 20.11: a byte copy, a source that moved, Save As into another folder ------- */
+static void t_copy(void)
+{
+    long n1, n2; unsigned char *a, *b; pdw r; struct pd_edit *e;
+    char cwd[256], da[300], db[300];
+    /* 14.2: with nothing new the output IS the source - and no edit still alive means nothing new */
+    pdw_host_clu = 512; init_module(18); eng_load("src.pdf"); strcpy(T_SRC, "src.pdf"); es_reset();
+    e = es_new(PDA_NOTE, 0, 300, 300, 0, 0); es_text(e, "added then deleted", -1); e->flags = PDEF_DELETED; es_add(e);
+    sv_setup("bcopy.pdf", PDSV_INCREMENTAL);
+    r = call_job(PDV_WRT_SAVE);
+    a = slurp("src.pdf", &n1); b = slurp("bcopy.pdf", &n2);
+    CHECK(r == PDE_OK && n1 == n2 && a && b && !memcmp(a, b, (size_t)n1) && (SV.mode & PDW_OUT_REOPEN),
+          "an unedited Save As is a byte copy (%u, %ld vs %ld bytes), PDENG was left: re-open flag %u", r, n1, n2, SV.mode & PDW_OUT_REOPEN);
+    free(a); free(b);
+    /* 14.4: the source grew while it was copied */
+    pdw_host_clu = 512; init_module(18); eng_load("src.pdf"); es_reset();
+    { FILE *f = fopen("src.pdf", "ab"); fputs("\n%grown after the fingerprint\n", f); fclose(f); }
+    sv_setup("moved.pdf", PDSV_INCREMENTAL);
+    r = call_job(PDV_WRT_SAVE);
+    CHECK(r == PDE_CHANGED && !exists(PDW_TEMPNAME) && !exists("moved.pdf"), "a source that moved is refused PDE_CHANGED (%u), temp gone", r);
+    build_source("src.pdf");                                  /* back as it was */
+    /* D14: source in A/, target in B/ */
+    if (!getcwd(cwd, sizeof cwd)) return;
+    system("rm -rf Adir Bdir; mkdir Adir Bdir; cp src.pdf Adir/SRC.PDF");
+    snprintf(da, sizeof da, "%s/Adir", cwd); snprintf(db, sizeof db, "%s/Bdir", cwd);
+    strcpy(pdw_host_srcdir, da); strcpy(pdw_host_tgtdir, db); pdw_host_swaps = 0;
+    if (chdir(db)) return;
+    pdw_host_clu = 512; init_module(18);
+    { char p[320]; snprintf(p, sizeof p, "%s/SRC.PDF", da); eng_load(p); }
+    strcpy(T_SRC, "SRC.PDF"); es_reset();
+    e = es_new(PDA_NOTE, 0, 300, 300, 0, 0); es_text(e, "from another folder", -1); es_add(e);
+    sv_setup("OUT.PDF", PDSV_INCREMENTAL); SV.src_clus = 7; SV.src_vol = 1;
+    r = call_job(PDV_WRT_SAVE);
+    CHECK(r == PDE_OK && exists("OUT.PDF") && !exists("SRC.PDF") && pdw_host_swaps > 4,
+          "Save As into another folder: %u, %u folder switches, target beside nothing else", r, pdw_host_swaps);
+    n1 = 0; a = slurp("OUT.PDF", &n1);
+    CHECK(a && n1 > 1639 && file_has("OUT.PDF", "from another folder") == 1, "the output carries the note (%ld bytes)", n1); free(a);
+    pdw_host_srcdir[0] = pdw_host_tgtdir[0] = 0;
+    if (chdir(cwd)) return;
+    system("cp Bdir/OUT.PDF xfolder.pdf; rm -rf Adir Bdir"); report("xfolder.pdf");
 }
 
 int main(void)
@@ -647,6 +702,7 @@ int main(void)
     t_failures();
     t_limits();
     t_review();
+    t_copy();
     printf("%s: %d failed check(s)\n", g_fail ? "FAIL" : "PASS", g_fail);
     return g_fail;
 }
