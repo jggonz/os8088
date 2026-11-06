@@ -264,8 +264,12 @@ static int ovl_pg_key(int ascii, int scan)
         n = pdu_pk;
         pdu_pk = PK_NONE;
         if (n == PK_REPLACE) {          /* keep the target: the temp file goes (14.3) */
-            pdu_mcall(PDU_M_WRT, PDV_WRT_ABORT, 0, 0, 0);
-            ovl_save_done(PDE_CANCEL);
+            /* as an Escape on a running save: the wake handler aborts the
+             * writer, says so and gives PDENG its document back. Not here -
+             * a key arrives with the gfx lock held, and saying it takes the
+             * lock again (the first build deadlocked in gfx_lock) */
+            pdu_job_start(J_SAVE);
+            pdu_jcancel = 1;
         } else
             pdu_tell("Cancelled.");
         return 1;
