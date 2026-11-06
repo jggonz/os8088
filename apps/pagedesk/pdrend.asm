@@ -107,6 +107,7 @@ section .text
 
 ; the API bridge, gated: only the thunks the C names (os88_gfx_lock/unlock,
 ; os88_wm_clip_set) are assembled - lmpvmod.asm's note on CC_THUNK_GATED
+%include "pagedesk/pdkgate.inc"   ; D23: every kernel call on the UI stack (PAGEDESK-SPEC 20.15)
 %define CC_THUNK_GATED
 %include "cc/os88thunk.asm"
 

@@ -19,9 +19,17 @@
  *            buffers, INIT; afterwards free the buffers, unbind, drop it.
  * ==========================================================================*/
 
-/* written by pdui.inc's pdu_mcall: NOT static, an nasm label names them */
+/* written by pdstk.inc's pdu_mcall: NOT static, an nasm label names them */
 int pdu_mcf;                    /* 1 = the last verb failed (CF) */
 unsigned pdu_mdx;               /* ...and its DX */
+/* THE PRIVATE MODULE STACK (PAGEDESK-SPEC 20.15, D23): the PDU_DC_DSTK row's
+ * segment while it is armed (0 = none: pdu_mcall calls flat), and its two
+ * flags - the canary was found broken (sticky until the claims go back) and
+ * the wake that closes the document has been posted. pdstk.inc reads and
+ * writes all three by name. */
+unsigned pdu_dstkseg;
+int pdu_stkbad;
+int pdu_stktold;
 
 static unsigned pdu_xb;         /* the exchange block, 1 KiB (3.2) */
 static struct pdxb_init pdu_xinit;
@@ -52,12 +60,15 @@ static struct pdxb_init pdu_xinit;
 #define PDU_DC_PAGES  8
 #define PDU_DC_THUMB  9
 #define PDU_DC_SCRATCH 10
-#define PDU_NDC       11
+/* D23: the private module stack every verb runs on (pdstk.inc, 20.15), last
+ * in B. 2 KiB = PD_DSTK_BYTES: the record at its top, the canary at its foot */
+#define PDU_DC_DSTK   11
+#define PDU_NDC       12
 #define PDU_DC_SPLIT  4                 /* rows 0..3 in claim A, 4.. in B */
 /* DECISIONS D13: PDREND keeps its gstates and font cache in a 6,912-byte
  * workspace at the tail of dl_seg, so the display-list row is 22 + 7 = 29 */
 static const unsigned pdu_dckb[PDU_NDC] = { 16, 8, 11, 12, 29, 0,
-                                            16, 4, 1, 4, 2 };
+                                            16, 4, 1, 4, 2, 2 };
 static unsigned pdu_dc[PDU_NDC];        /* sub-segments, 0 = not held */
 static unsigned pdu_dclaim[2];          /* the two real claims */
 /* a document row's segment, 0 when no document is open (D15) */
@@ -189,6 +200,9 @@ static void pdu_doc_free(void)
         }
     for (i = 0; i < PDU_NDC; i++)
         pdu_dc[i] = 0;
+    pdu_dstkseg = 0;                    /* D23: verbs run flat again */
+    pdu_stkbad = 0;
+    pdu_stktold = 0;
     /* D2: a field of 0 is "no claim of that kind now" - the next INIT must
      * never hand a module a segment that has been given back */
     pdu_xinit.cache_seg = 0;
@@ -380,6 +394,14 @@ static int pdu_doc_claim(void)
             at = at + pdu_dcpara[i];
         }
     }
+    /* D23: arm the private module stack. 0xCC everywhere, so its high-water
+     * mark can be read off it (a debugger's `xp`), and the canary at its foot
+     * that pdu_mcall checks at every outermost return; the record at its top
+     * is written by pdu_mcall itself at each call. */
+    pd_ffill(pdu_dc[PDU_DC_DSTK], 0, PD_DSTK_FILL, PD_DSTK_BYTES);
+    pd_fpokew(pdu_dc[PDU_DC_DSTK], 0, PD_DSTK_CAN0);
+    pd_fpokew(pdu_dc[PDU_DC_DSTK], 2, PD_DSTK_CAN1);
+    pdu_dstkseg = pdu_dc[PDU_DC_DSTK];
     pdu_xinit.cache_seg = pdu_dc[PDU_DC_CACHE];
     pdu_xinit.cache_kb = pdu_dckb[PDU_DC_CACHE];
     pdu_xinit.arena_seg = pdu_dc[PDU_DC_ARENA];
@@ -412,6 +434,19 @@ static void pdu_doc_release(void)
     pdu_mcall(PDU_M_REND, PDV_REND_ABORT, 0, 0, 0);
     pdu_mcall(PDU_M_ENG, PDV_ENG_CLOSE, 0, 0, 0);
     pdu_doc_free();
+}
+
+/* D23: the private module stack was overrun (pdu_mcall found its canary
+ * broken or its SP off, and has refused every verb since but the three that
+ * let go). Called first thing in every wake - pdu_mcall posted one: close the
+ * document, which gives the claims and the stack back and so re-arms it for
+ * the next open, and say why on the status line. */
+static void pdu_stk_wake(void)
+{
+    if (!pdu_stkbad)
+        return;
+    pdu_close_doc();                    /* ...pdu_doc_free clears the flags */
+    pdu_wsay(pdu_errtext(PDE_STACK));
 }
 
 /* the writer, for one save: fetch (from HOME), check, bind, buffers, INIT.

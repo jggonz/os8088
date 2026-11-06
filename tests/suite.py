@@ -1561,6 +1561,12 @@ FAST = [
         "point, source annotations, page-op deltas and 40 seeded random "
         "walks. ~0.5 s",
         needs=("cc",)),
+    Row("pdkgate", "fast", py("tests/unit/t_pdkgate.py"), 0.1,          # deepstk
+        "PAGEDESK-SPEC 20.15 (D23): every far call to KERNEL_SEG in the "
+        "BUILT PDENG/PDREND/PDWRT and the stand-ins sits in a pdkgate.inc "
+        "slot (near call to one pdk_up before, jump to one pdk_dn after), so "
+        "no kernel call runs on the private module stack. SKIP when no "
+        "module is built"),
     Row("livefull", "fast", py("tests/unit/t_livefull.py"), 0.2,
         "SPEC.md 80.6: the live USB/CD is the ONE image whose premise is "
         "completeness, and until this row nothing in the tree had ever read "

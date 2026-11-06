@@ -49,6 +49,7 @@ PDE_SIGNED               equ 22
 PDE_RANGE                equ 32
 PDE_LIMIT                equ 33
 PDE_NOMEM                equ 34
+PDE_STACK                equ 35
 PDE_IO                   equ 48
 PDE_DISKFULL             equ 49
 PDE_WPROT                equ 50
@@ -66,6 +67,15 @@ PDF_INC_TRANSP           equ 0x0020
 PDF_INC_OPER             equ 0x0040
 PDF_INC_LIMIT            equ 0x0080
 PDF_INC_RANGE            equ 0x0100
+PD_DSTK_BYTES            equ 2048
+PD_DSTK_UISP             equ 2040
+PD_DSTK_UISS             equ 2042
+PD_DSTK_SELF             equ 2044
+PD_DSTK_MAG              equ 2046
+PD_DSTK_MAGIC            equ 0x4B53
+PD_DSTK_CAN0             equ 0x5350
+PD_DSTK_CAN1             equ 0x4B44
+PD_DSTK_FILL             equ 0xCC
 PDM_ABI                  equ 1
 PDM_MAGIC_ENG            equ 0x4550
 PDM_MAGIC_REND           equ 0x5250

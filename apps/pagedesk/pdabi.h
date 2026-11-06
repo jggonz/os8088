@@ -83,6 +83,8 @@ struct pd_view {
 #define PDE_RANGE       32
 #define PDE_LIMIT       33
 #define PDE_NOMEM       34
+#define PDE_STACK       35      /* the private module stack (20.15) was
+                                   overrun: the primary closes the document */
 #define PDE_IO          48
 #define PDE_DISKFULL    49
 #define PDE_WPROT       50
@@ -103,6 +105,22 @@ struct pd_view {
 #define PDF_INC_OPER    0x0040  /* an unknown operator                    */
 #define PDF_INC_LIMIT   0x0080  /* a limit stopped part of the page       */
 #define PDF_INC_RANGE   0x0100  /* a transform overflowed                 */
+
+/* ---- the private module stack (PAGEDESK-SPEC 20.15, DECISIONS D23) -----
+ * Every module verb runs on a 2 KiB stack carved from claim B, not on the UI
+ * task's 512 bytes. Its top 8 bytes are a RECORD the primary writes at each
+ * swap down; a module's kernel-call gate (pdkgate.inc) reads it through SS to
+ * swap back to the UI stack for the kernel call. Its bottom 4 bytes are a
+ * canary the primary checks at every outermost return. */
+#define PD_DSTK_BYTES   2048    /* claim B's PDU_DC_DSTK row              */
+#define PD_DSTK_UISP    2040    /* record: the UI SP to swap back to      */
+#define PD_DSTK_UISS    2042    /*         the UI SS                      */
+#define PD_DSTK_SELF    2044    /*         the deep stack's own SS        */
+#define PD_DSTK_MAG     2046    /*         PD_DSTK_MAGIC                  */
+#define PD_DSTK_MAGIC   0x4B53  /* 'SK'                                   */
+#define PD_DSTK_CAN0    0x5350  /* the canary at offset 0 ...             */
+#define PD_DSTK_CAN1    0x4B44  /* ... and at offset 2 ('PSDK')           */
+#define PD_DSTK_FILL    0xCC    /* everything between, at each carve      */
 
 /* ---- the module header (PAGEDESK-SPEC 3.1) ------------------------------ */
 #define PDM_ABI         1

@@ -700,6 +700,7 @@ that exceeds a row is a change to this table first.
 | thumbnails | primary | 4 KiB | panel shown |
 | edit store + undo | primary | 16 KiB | open |
 | text/search scratch | primary | 2 KiB | search |
+| private module stack | primary (every module verb runs on it, 20.15) | 2 KiB | open |
 | `PDWRT` image + bss | parts, lazy | <= 40 KiB | save/extract/new, freed after |
 | writer buffers | PDWRT | 12 KiB (4 KiB output + 1,024-object offset table); 36 KiB for an extract of up to 4,096 objects | save/extract, freed after |
 | overlay | parts, lazy | <= 48 KiB (D19; was 24) | dialog, inspector, menu command; freed when idle |
@@ -2133,7 +2134,7 @@ document set is **two claims cut with `os88_seg_sub`**, every cut on a KiB
 | claim | sub-segments, in order | size |
 |---|---|---|
 | A | block cache 16, object arena 8, xref + page tables 11, glyph cache 12 | 47 KiB |
-| B | display list 22 + PDREND's gstate/font-cache workspace 7 (D13: `dl_kb` = 29), band (`((w+1)/2)*16` bytes at 4bpp, `((w+7)/8)*16` at 1bpp, to a whole KiB) | 30-34 KiB |
+| B | display list 22 + PDREND's gstate/font-cache workspace 7 (D13: `dl_kb` = 29), band (`((w+1)/2)*16` bytes at 4bpp, `((w+7)/8)*16` at 1bpp, to a whole KiB), then wave 2's rows (D15): edit store 16, undo 4, page order 1, thumbnails 4, text/search scratch 2, and the private module stack 2 (D23, 20.15) | 60-63 KiB (2 KiB band on CGA and Hercules, 5 KiB at 640 px 4bpp) |
 
 and the claims at the peak are: the carve (primary + `PDENG` + `PDREND`), the
 exchange block, the `PDRES` INDEX, A, B, the overlay, `PDWRT`, the writer's
@@ -3015,3 +3016,145 @@ most 59,920.
 5. Rotated text gets no layer; vertical writing is not recognised.
 6. Not run on a real XT: no host check can say how fast a strip draws (the
    lead's final pass measures a prepared copy with MartyPC).
+
+### 20.15 The private module stack (`deepstk`, wave 2, DECISIONS D23)
+
+**Why.** Every module verb ran on the CALLER's stack, which is the UI task's:
+512 bytes (`kernel/kernel.asm`'s `STK0_SIZE`) in `LOW_SEG`, sitting directly
+on top of `.lowbss`. A PDREND verb is 388-470 bytes of module frames, PDENG
+adds 158-236 when PDREND calls it, and the kernel's FAT and `int 13h` go under
+that: it ran into `.lowbss` (the menu bar's line buffer on XTGUIDE page 3, the
+stack at 510 on page 1, the canary overrun on page 12). D22's cure - hoist
+every engine call, make every frame static - was withdrawn for this one.
+
+**The contract** (`apps/pagedesk/pdstk.inc`, `apps/pagedesk/pdkgate.inc`,
+`pdabi.h`'s `PD_DSTK_*`):
+
+1. **The stack.** Claim B's last row, `PDU_DC_DSTK`, `PD_DSTK_BYTES` = 2 KiB,
+   carved like every row (paragraph offset, `os88_seg_sub`; a selector on
+   kern_mega). At each carve the primary fills it with `0xCC` and writes the
+   canary `PD_DSTK_CAN0`/`PD_DSTK_CAN1` at offsets 0 and 2, then arms it
+   (`pdu_dstkseg`); `pdu_doc_free` disarms it with the claims.
+2. **The door** (`pdu_mcall`, the primary's only call into `PDENG`, `PDREND`
+   and `PDWRT`). With a stack armed and no verb already down there: bank the
+   UI SS:SP in statics; `pushf` / `cli`; SS = the row, SP = `PD_DSTK_MAG`;
+   write the **record** - `[2046]` = `PD_DSTK_MAGIC`, `[2044]` = the row's own
+   SS, `[2042]` = the UI SS, `[2040]` = the UI SP - so SP = `PD_DSTK_UISP`;
+   `popf`; far-call the door. A module that calls another (`PDREND` ->
+   `PDENG`, `PDWRT` -> `PDENG`, through `pdxb_init.eng_*`) stays on this
+   stack: only `pdu_mcall` swaps. On the way back the answer is banked, the
+   stack is **checked** (SP back at `PD_DSTK_UISP`, both canary words whole)
+   and the UI SS:SP restored the same way, IF as the caller had it.
+3. **Flat.** With no stack armed (no document: the launch INITs) or with a
+   verb already down there (`pdu_mcall` re-entered from inside a module's
+   kernel call - a modal loop that dispatches this package), the door is
+   called where it stands, as before this section.
+4. **Every kernel call goes back up.** The kernel cannot run on the deep
+   stack: its bodies reach `.lowbss` through SS (`gfx_rowbase`'s
+   `vid_rowtab`, `evq_push`'s ring; `os88api.inc`: SS = `LOW_SEG` is a
+   requirement of every OSAPI call). Each module includes `pdkgate.inc`
+   (one line, after its compiled C and before `cc/os88thunk.asm`), which
+   re-defines every slot a module calls from `KERNEL_SEG:0xNNNN` to a near
+   **slot** - `call pdk_up` / the original far call / `jmp pdk_dn` - so
+   `apps/cc/` is unchanged for everyone. `pdk_up` decides from SS:SP alone,
+   with no register and no segment load: **SP below `PD_DSTK_BYTES`** (task
+   0's stack is on top of `.lowbss`, so its SP is never below 2 KiB) **and
+   the record's magic and self-SS match** -> with IF off, bank the deep SS:SP
+   ON THE UI STACK under a nonzero word and stand on the record's UI SS:SP;
+   otherwise push a zero word where it stands. `pdk_dn` takes the word back
+   and, if nonzero, goes back down. Every register and flag crosses both
+   ways (the API's CF/ZF/DF come back), BP is never touched (`pdr_blit`
+   passes the stride in it), and what must survive the kernel call lives on
+   the UI stack, so a re-entered module cannot overwrite it. A slot is
+   assembled only when the C names a thunk that makes that call (the
+   `CC_U_` gating `os88thunk.asm` uses), and **after the table `KERNEL_SEG`
+   is re-defined to an undefined symbol**, so a module calling a slot the
+   table does not list does not assemble. `tests/unit/t_pdkgate.py` holds
+   the BUILT modules to it: every `9A off 60 00` is in a slot, one `pdk_up`
+   and one `pdk_dn` per module.
+5. **An overrun is loud.** A failed check sets `pdu_stkbad`, answers the verb
+   CF = 1, AX = `PDE_STACK` (35), posts ONE wake, and from then on
+   `pdu_mcall` refuses every verb `PDE_STACK` except the three that let go
+   (`PDV_REND_ABORT`, `PDV_ENG_CLOSE`, `PDV_WRT_ABORT`). The wake's first act
+   (`pdu_stk_wake`, `pdumod.c`) closes the document and puts *Out of module stack: the document was
+   closed.* on the status line; giving the claims back re-arms the stack for the next open. The
+   fill and the canary are left as they were for a debugger. A check after
+   the fact cannot undo the overrun: in real mode a stack that passes offset
+   0 wraps to the top of its 64 KiB, outside claim B (on kern_mega the row's
+   limit faults instead) - which is why the static gate below exists.
+
+**Why the kernel tolerates a foreign SS for the length of a verb.** SeaBIOS
+already forces the case on every `int 13h` and `int 16h` it serves on a stack
+of its own, so every ISR path has been made to stand it:
+
+- `sch_switch` (`kernel/sched.inc`, `mov ax, ss` / `cmp ax, LOW_SEG` /
+  `jne sch_isr.tres`) refuses to switch off a stack that is not `LOW_SEG`'s,
+  so no task record ever holds a deep SP; the cost is "not switching this
+  tick", the cooperative watchdog's forced switch included.
+- `sch_isr` chains the ROM's `int 08h` in place on a foreign SS (the same
+  `cmp ax, LOW_SEG` before `.chplain`), and the `FSXF_RATE` hook is refused
+  there (`sch_rhook`), which PageDesk never arms.
+- both mouse ISRs bank SS:SP and stand on `LOW_SEG:mou_pstack` whatever SS
+  was (`MOUPRIV_ENTER`, `kernel/mouse.inc`; kern_mega banks through its data
+  alias).
+- the keyboard ISR (`kbm_isr`) writes nothing through SS: the keypad mouse's
+  events are posted in task context (`kbm_p5spend`), not from the ISR.
+
+**The no-preemption window.** While the UI task is on the deep stack it is
+not pre-empted, so the window is one verb - one bounded slice (15.1). Disk
+and drawing are NOT in it: they are kernel calls, made on the UI stack, where
+pre-emption works as before. The final pass measures the longest window on
+MartyPC.
+
+**kern_mega** (checked in `kernel/mega.inc`, not run here). The row's
+segment is a `SEG_SUB` selector: an LDT descriptor from `mega_ldt_alloc`,
+TI = 1 and RPL 0, access byte `0x92` (present, DPL 0, data, writable,
+expand-up), limit = the asked paragraphs x 16 - 1, clipped to claim B's end -
+here 2,047. Packages run at CPL 0, so loading it into SS is legal and SP
+stays inside the limit (pushes from 2,048 down; an overrun past 0 faults
+`#SS` rather than wrapping). It is re-loaded from memory after every kernel
+call (`pdk_dn`, `pdu_mcall`), so a compaction that moved claim B during a
+call is followed. One residual hazard, not taken here because it is the
+kernel's: `mega_svc` reflects an OPTION ROM's IRQ (`mega_irqrom`, the
+PicoMEM's) that lands on a stack that is neither `LOW_SEG`'s nor a lent one
+IN PLACE, giving the ROM the selector as a real-mode SS. A WIN16 program's
+stack has the same exposure; `SEG_LEND` is the kernel's answer and has one
+lender at a time, so PageDesk does not take it. The deep stack is used on
+kern_mega: the flat alternative overruns `.lowbss` on every machine.
+
+**Cost.** 2 KiB of claim B (16.2, 20.6.2). The gate: about 118 bytes of body
+in each module plus 10-11 bytes a slot - `PDENG` 3 slots (+148 B), `PDREND`
+9 (+224 B), `PDWRT` 6 (+170 B), the stand-in renderer 5 - and on an 8088
+about 90 clocks of instructions a kernel call (~20 us at 4.77 MHz, the UI
+stack's 8 bytes) against 756 us for the cheapest drawing call. The primary's
+`pdu_mcall` grew by the swap and the check (~90 bytes).
+
+**Budgets (the static gate, `tools/os88pdstk.py`, rendfix).** The door is
+entered at SP 2,036 (the record, then the far return); offsets 4-2,035 are
+the module chain's and the interrupts'. D23 reserves 256 bytes for the
+interrupt floor (an IRQ frame, `sch_isr`'s, the ROM's `int 08h`/`09h`), so
+the module chain from the door's entry - nested `PDENG` included, plus 6
+bytes of gate at the leaf - is <= **1,776 bytes**. The UI side is the
+primary's chain + `pdu_mcall`'s 10 + 8 a kernel call (the banked deep SS:SP
+and the far return) + the API's own depth, <= 384 (D22 item 1).
+
+#### 20.15.1 Measured
+
+On QEMU (kern_big, 640 KB, the REAL `PDREND`, `XTGUIDE.PDF`), read by dumping
+memory: the deep stack's 0xCC fill from its canary up, and task 0's stack
+filled with 0xCC through QEMU's gdbstub below the UI SP the record banked
+(`pdu_mcall` was 80 bytes into task 0's stack) and read back after paging:
+
+| adapter | pages | deep stack, deepest use | task 0, high-water |
+|---|---|---|---|
+| VGA 640x480 | 1 | 332 of 2,036 | - (filled after page 1) |
+| VGA 640x480 | 1, 2, 3, 12, then 11 back to 1 | **448 of 2,036** | **258 of 512** |
+| CGA 640x200 | 1, 2, 1 | **386 of 2,036** | **252 of 512** |
+
+The menu bar stayed whole on every page (the corruption was on page 3), the
+View menu opened over page 1 afterwards, and the machine ran on. The refusal
+was driven on CGA by zeroing the canary through the gdbstub and paging: the
+document closed with the line above, and *Sample guide* reopened it on a
+re-armed stack. Not run: kern_mega and kern_small, MartyPC (the no-preemption
+window), Hercules and EGA. The final pass re-takes both water marks with
+`tools/stkwater.py` / `tests/stk0water.py` on every adapter.

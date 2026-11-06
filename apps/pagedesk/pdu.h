@@ -302,5 +302,14 @@ void     pdu_nt_new(unsigned page_id, const struct pd_rect *r);
 void     pdu_nt_open(int i);
 void     pdu_nt_inspect(int i);
 /* ---- end edit ---- */
+/* ---- deepstk ---- */
+/* the private module stack (PAGEDESK-SPEC 20.15, D23): pdumod.c's
+ * pdu_stk_wake closes the document from the wake after an overrun, with
+ * these two, which are defined after pdumod.c in the one translation unit */
+#ifndef PD_HOST
+static void pdu_close_doc(void);
+static void pdu_wsay(const char *s);
+#endif
+/* ---- end deepstk ---- */
 
 #endif /* PDU_H */

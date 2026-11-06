@@ -496,6 +496,7 @@ void os88_onwake(void *win)
 
     if (win != pdu_win)
         return;
+    pdu_stk_wake();                     /* deepstk */
     pdu_at_doc();
     if (pdu_popcls) {                   /* a close a deep click asked for */
         pdu_popcls = 0;
