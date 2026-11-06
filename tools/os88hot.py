@@ -1062,6 +1062,8 @@ def run_desktop(mach, sample=False, local=False):
             except Exception:                               # noqa: BLE001
                 return False
         seen = None
+        fseg = 0                # stage 2's blob is where [spl_fseg] said
+        fsa = m.sym("spl_fseg")  # while it lived: kmain zeroes it at the end
         step = 1 if sample else 60000
         n = 48 if sample else 8
         while True:
@@ -1071,6 +1073,9 @@ def run_desktop(mach, sample=False, local=False):
                              int(r.get("advanced_cycles", step)))
                             for r in out]
             cyc = int(out[-1]["cycles"])
+            if sample:                  # the LAST value it held before
+                v = u16(m.read(fsa, 2))  # kmain cleared it
+                fseg = v or fseg
             if up():
                 if seen is None:
                     seen = cyc
@@ -1083,9 +1088,11 @@ def run_desktop(mach, sample=False, local=False):
         res = dict(ms=ms(seen - c0), busy_ms=None, fdc=_fdc(m))
         prof = None
         if sample:
-            km = KMap(m)
+            km = KMap(m, fseg=fseg or None)
             bk = Buckets(m, km, local)
-            prof = _profile_table(samples, bk, lambda c, ip: False)
+            hl = m.sym("sch_idle_body.rearm")
+            prof = _profile_table(samples, bk,
+                                  lambda c, ip: ip in (hl - 1, hl))
         m.run()
         return res, prof
 
