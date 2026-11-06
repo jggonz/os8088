@@ -393,6 +393,47 @@ def check_malformed(E, rng, nfuzz):
     rc, got = E.run(build_pdf([(b"/Filter /FlateDecode", z)]))
     if rc != 0 or got != b"ababa":
         fail("dist == history: rc=%r got=%r" % (rc, got))
+    check_blockflood(E, W)
+
+
+def check_blockflood(E, W):
+    """Blocks that decode to little or nothing are still work (20.13.4, verify-flate2): more than
+    FL_MAXEMPTY (64) block headers with no output byte between them is PDE_LIMIT, and a header
+    that builds tables is charged FL_TABCOST (1024) against the 4 MiB work bound. Each stream is
+    first checked to be VALID deflate by Python's inflater, so the refusal is the bound's."""
+    def empties(n):                              # n empty stored blocks, then 'a' in a final fixed block
+        w = W()
+        for _ in range(n):
+            w.put(0, 1); w.put(0, 2); w.n = (w.n + 7) & ~7; w.put(0, 16); w.put(0xFFFF, 16)
+        w.put(1, 1); w.put(1, 2); w.code(0x30 + ord("a"), 8); w.code(0, 7)
+        return bytes([0x78, 0x9C]) + w.bytes()
+    def dyn1(w, final):                          # a dynamic block whose only output is 'a'
+        w.put(final, 1); w.put(2, 2); w.put(0, 5); w.put(0, 5); w.put(14, 4)    # HLIT 257, HDIST 1, HCLEN 18
+        cl = {0: 2, 1: 2, 17: 2, 18: 2}          # code-length code: 0, 1, 17, 18 at 2 bits (complete)
+        for s in (16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1):
+            w.put(cl.get(s, 0), 3)
+        c = {0: 0, 1: 1, 17: 2, 18: 3}           # canonical: by symbol
+        w.code(c[18], 2); w.put(97 - 11, 7)      # literals 0..96: zero
+        w.code(c[1], 2)                          # 'a': 1
+        w.code(c[18], 2); w.put(138 - 11, 7)     # 98..235: zero
+        w.code(c[18], 2); w.put(20 - 11, 7)      # 236..255: zero
+        w.code(c[1], 2)                          # 256: 1
+        w.code(c[0], 2)                          # the one distance code: 0
+        w.code(0, 1); w.code(1, 1)               # 'a', end of block
+    def dyns(n):
+        w = W()
+        for k in range(n):
+            dyn1(w, int(k == n - 1))
+        return bytes([0x78, 0x9C]) + w.bytes()
+    for name, z, wantrc, wantn in (("63 empty blocks and a fixed one", empties(63), 0, 1), ("65 empty blocks", empties(65), LIMIT, 0),
+                                   ("3,000 one-byte dynamic blocks", dyns(3000), 0, 3000),
+                                   ("5,000 one-byte dynamic blocks", dyns(5000), LIMIT, None)):
+        out, how, why = partial_zlib(z)
+        if how != "done" or out != b"a" * (len(out)):
+            fail("%s: not valid deflate (%s %s)" % (name, how, why)); continue
+        rc, got = E.run(build_pdf([(b"/Filter /FlateDecode", z)]), chunk=512)
+        if rc != wantrc or (wantn is not None and len(got) != wantn) or got != b"a" * len(got):
+            fail("%s: rc=%r bytes=%d (want rc=%r bytes=%r)" % (name, rc, len(got), wantrc, wantn))
 
 
 def check_nest(E, rng):

@@ -34,6 +34,9 @@
 #define PDE_FLOB        256     /* decoded bytes held between deliveries           */
 #define PDE_FLIB        64      /* the input read-ahead                            */
 #define PDE_PRC         64      /* a predictor chunk                               */
+#define FL_MAXEMPTY     64      /* block headers in a row with no output byte: PDE_LIMIT beyond */
+#define FL_TABCOST      1024    /* work-bound bytes a block header that builds tables is charged */
+#define FL_HDRCOST      16      /* ...and one that does not (stored, fixed with the tables built) */
 
 /* the state machine */
 #define FS_HDR          0       /* the zlib header                                 */

@@ -204,6 +204,18 @@ static void fl_fail(pdw code)
     fl.state = FS_END;
 }
 
+/* A block header's work, charged to the stream's work bound (PD-28) as if it
+ * were n bytes some stage produced: a block that decodes to nothing is still
+ * work, and a stream of them would otherwise run its whole length inside one
+ * call (20.13.4). */
+static void fl_charge(pdw n)
+{
+    struct sctx *c = fl_sc[fl_ld];
+    pdw o = c->wlo;
+    c->wlo = (pdw)(o + n);
+    if (c->wlo < o && ++c->whi >= PDE_WORK_HI) fl_fail(PDE_LIMIT);
+}
+
 /* n (<= 8) bits; 0 and a TRUNC failure when the input ends. */
 static pdw fl_bits8(pdw n)
 {
@@ -404,7 +416,7 @@ static void fl_match(void)
 static void fl_fill(void)
 {
     int s;
-    pdw v, len, ds;
+    pdw v, len, ds, nb = 0, lon = 0;
     fl.on = 0; fl.oi = 0;
     while (fl.on < PDE_FLOB && fl.state != FS_END) {
 #ifdef FL_ASM
@@ -425,8 +437,12 @@ static void fl_fill(void)
             else fl.state = FS_BLK;
             break;
         case FS_BLK:
+            if (fl.on != lon) { lon = fl.on; nb = 0; }
+            if (++nb > FL_MAXEMPTY) { fl_fail(PDE_LIMIT); break; }   /* blocks with no byte between them */
             fl.final = fl_bits(1);
             v = fl_bits(2);
+            if (fl.state == FS_END) break;
+            fl_charge(v == 2 || (v == 1 && fl.tab != 1) ? FL_TABCOST : FL_HDRCOST);
             if (fl.state == FS_END) break;
             if (v == 0) {
                 v = (pdw)(fl.bn & 7);           /* to the byte boundary */

@@ -2737,8 +2737,8 @@ and its state, 448 bytes in all) and a 320-byte scratch for a dynamic header and
 above. Reading a Flate stream other than the one loaded swaps the loaded
 state out to its own slot and the reader's in (two block copies of 448 bytes;
 a form opened inside a page's content and then closed costs two swaps); the
-tables and the history never move. PDENG.MOD: **34,416 + 9,852 = 44,268 bytes**
-against 27,466 + 8,972 = 36,438 before (+7.6 KiB: +6,950 image, +880 bss).
+tables and the history never move. PDENG.MOD: **34,584 + 9,852 = 44,436 bytes**
+against 27,466 + 8,972 = 36,438 before (+7.8 KiB: +7,118 image, +880 bss).
 
 **20.13.4 Resumability and the work bound.** The decoder runs in *fills* of at
 most 256 output bytes into `ob`: one literal, one stored byte or one symbol's
@@ -2750,11 +2750,21 @@ The history is written once at the end of each fill and read only for a match
 whose source lies before the fill's first byte (a source inside the fill is
 read from `ob`). The top Flate stage's bytes are handed up in bulk
 (`fl_take`) instead of a call each, and counted against the work bound as
-`sget` would have. The most work between two returns of a byte is a block
-start: a dynamic block's header (up to 316 code lengths, two tables, the
-lookups) plus the first fill, measured at **108,102 instructions** for a 2 KB
-stream and **188,550** for a 240 KB one on the target code (20.13.6); the work
-after it is bounded by the caller's `STRM_READ` size as for any stage.
+`sget` would have. A block that decodes to nothing is still work, and nothing
+the stages produce would count it, so a stream of empty blocks would run its
+whole length inside one call: more than **64 block headers with no output
+byte between them** is `PDE_LIMIT`, and each block header is charged to the
+4 MiB work bound as if a stage had produced bytes - **1,024** for one that
+builds tables (dynamic, or fixed after a dynamic one), 16 for any other. A
+legitimate stream does not come near either (zlib writes a block per ~16 K
+symbols; one sync-flushed every 300 bytes into dynamic blocks would stop at
+about 950 KB instead of the 1 MiB output bound); a hostile one of one-literal dynamic blocks stops after about
+4,000 of them. The most work between two returns of a byte is then a
+block start: a dynamic block's header (up to 316 code lengths, two tables,
+the lookups) plus the first fill, measured at **108,102 instructions** for a
+2 KB stream and **188,550** for a 240 KB one on the target code (20.13.6);
+the work after it is bounded by the caller's `STRM_READ` size as for any
+stage, and the number of blocks by the charge above.
 
 **20.13.5 A failure surfaces once.** It is parked when found and reported, as
 `lx_err`, when the bytes decoded before it have been delivered: the `STRM_READ`
