@@ -2956,9 +2956,15 @@ live), Document > Back, Forward.
 
 #### 20.10.6 Sizes, deviations and what is open
 
-Primary image 43,928 bytes (+3,278 over wave 1's 40,650; bss +56), overlay
-12,574 (+10,315 over 2,259), PDENG image +2,396; every figure is a `make` line
-(see nav-report.md). Deviations: (1) the Copy claim above; (2) `pdxb_search`
+Measured by verify-nav against feat/pagedesk a9cc94d37 (edit and notes in):
+primary 47,800 + 6,207 = 54,007 bytes, **+3,160** of nav's +3,584 (feat:
+44,728 + 6,119); overlay part 37,306, **+10,585** of +10,752 (feat 26,721);
+PDENG.MOD +1,994 of +2.5 KiB. Every figure is an `os88pkg` line of `make
+pagedesk` (nav-verify.md). Stack (`tools/os88pdstk.py`, t_pdstk green): nav's
+deepest UI-task chain is the wake's text pass scrolling a Find hit into view,
+360 of 384 (`cc_onwake > ovl_tx_step > ovl_tx_done > ovl_sel_view >
+pdu_scroll_to > pdu_canvas_full`, the tail being the popover's paint); no
+recursion in pdesrch.c, pdelink.c or the primary's nav files. Deviations: (1) the Copy claim above; (2) `pdxb_search`
 and `pdxb_annot` carry the protocol above instead of new fields (no ABI
 change); (3) `os88_gfx_blit1_seg`, an SDK thunk. Open: reading order is the
 content stream's, so columns and tables copy in stream order; a name-tree
