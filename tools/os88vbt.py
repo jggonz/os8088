@@ -786,7 +786,7 @@ def build(b):
         if c.get("lap"):            # a loop's lap: where, and its 4 KBs
             struct.pack_into("<IH", ct, at + 18, *c["lap"])
         struct.pack_into("<H", ct, at + 32, c.get("esz", 0))  # its entries
-        ct[at + 24:at + 32] = c["name"].upper().encode()[:8].ljust(8, b" ")
+        ct[at + 24:at + 32] = name8(c["name"])
 
     meta = bytearray(h) + ct + bytes(b.rules)
     assert len(meta) <= META
@@ -896,7 +896,7 @@ class Bundle:
             at = CLIP_TAB + i * CLIP_SZ
             (off, ln, nrec, flags, ex, anchtab, nanch) = \
                 struct.unpack_from("<IIHHHHH", data, at)
-            name = data[at + 24:at + 32].decode().strip()
+            name = data[at + 24:at + 32].decode("ascii", "replace").strip()
             anch = [struct.unpack_from("<HH", self.vres, anchtab + 4 * j)
                     for j in range(nanch)]
             lap = struct.unpack_from("<IH", data, at + 18) \
@@ -1518,11 +1518,21 @@ def cover_region(img, line, kinds, name=None):
     return bytes(head + body)
 
 
+def name8(name):
+    """A clip's 8-byte name in the clip table: ASCII, upper case, space
+    padded. A project's clip ids may be any letters (a video's own file
+    name) - cut as UTF-8 bytes, an eighth byte inside a letter made a
+    bundle its own reader could not read back ("built, verified" raised)"""
+    import unicodedata
+    a = unicodedata.normalize("NFKD", name).encode("ascii", "ignore")
+    return a.decode("ascii").upper().encode("ascii")[:8].ljust(8, b" ")
+
+
 def game_stem(proj):
-    """A battle's game files' 8.3 stem: its name's letters and digits, up to
+    """A battle's game files' 8.3 stem: its name's ASCII letters and digits, up to
     seven (an eighth for the rendition's V or H), BATTLE when it has none"""
     name = (proj.d.get("name") or "") if proj is not None else ""
-    st = "".join(c for c in name.upper() if c.isalnum())[:7]
+    st = "".join(c for c in name.upper() if c.isascii() and c.isalnum())[:7]
     return st or "BATTLE"
 
 
@@ -1574,7 +1584,7 @@ def disk_plan(proj, disk=None, bundle=None, out=None, build=None, stage=None,
     here = os.path.dirname(proj.path)
     eng = engine_path(build)
     if not eng:
-        raise ValueError("no VBATTLE.O88 here to put beside it")
+        raise ValueError("no VBATTLE.O88 here to put beside it (in a tree: make vbattle)")
     files = [("VBATTLE.O88", eng)]
     if bundle:
         files.append(("BATTLE.VBT", bundle))
@@ -1675,7 +1685,7 @@ def cmd_game(a):
     proj = P.Project.load(a.project)
     eng = engine_path()
     if not eng:
-        raise SystemExit("os88vbt game: no VBATTLE.O88 here to embed into")
+        raise SystemExit("os88vbt game: no VBATTLE.O88 here to embed into (in a tree: make vbattle)")
     here = os.path.dirname(proj.path)
     outdir = a.out or here
     stem = game_stem(proj)

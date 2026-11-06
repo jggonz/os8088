@@ -269,7 +269,8 @@ def rgb_frames(proj, sid, w, h, kind, progress=_nop):
 
 def battle_palette(proj, k, progress=_nop):
     """The VGA rendition's K colours (8-bit RGB): the band's four CGA colours,
-    then K - 4 of the footage's own, a k-means over every video source"""
+    then K - 4 of the footage's own, a k-means over every video source
+    the build reads (Project.sources_used)"""
     t = proj.d["target"]
     band = palette_rgb(t["palette"])
     if k <= 4:
@@ -277,8 +278,9 @@ def battle_palette(proj, k, progress=_nop):
     w, h, _ = rend_size(proj, "vga4")
     samp = []
     rng = np.random.RandomState(1)
-    for sid, s in proj.d["sources"].items():
-        if s["kind"] == "scene":
+    used = proj.sources_used()      # (what is built: a video left over
+    for sid, s in proj.d["sources"].items():    # is not read, nor coloured)
+        if s["kind"] == "scene" or sid not in used:
             continue
         fr = rgb_frames(proj, sid, w, h, "vga4", progress)
         px = fr.reshape(-1, 3)
@@ -579,8 +581,12 @@ def budget(proj, data):
     for a in d["actions"].values():
         for pool in a["pools"].values():
             used |= set(pool)
-    ids = opened + [c for c in d["clips"] if c not in opened and
-                    (c not in looped or c in used)]
+        for per in a.get("by_target", {}).values():
+            for pool in per.values():
+                used |= set(pool)
+    every = set(proj.clips_used())  # (a clip nothing plays is not built -
+    ids = opened + [c for c in d["clips"] if c not in opened and   # battle_of
+                    (c not in looped or c in used) and c in every]  # skips it)
     for c, cid in zip(clips, ids):
         c["id"] = cid
     for c, bc in zip(clips, b.clips):
