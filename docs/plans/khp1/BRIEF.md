@@ -321,4 +321,23 @@ agent's TAKEN rows. Its columns are what each note's TAKEN table carries:
 
 ## 8. Coordinator notices (updated during the pass)
 
-* (none yet)
+* **`tools/os88hot.py` landed** on `kernel-hotpaths` at `98b08327`
+  (`git merge kernel-hotpaths`). `python3 tools/os88hot.py --help`, and
+  read its header. Subcommands: `scenarios`, `time <scen> [-n 3]`,
+  `profile <scen> [--top 25] [--local]`, `cycles <sym> <scen>`,
+  `gfxbench|sysbench --json f`, `diff A.json B.json`, and
+  `ab --base <commit> <subcommand ...>`. `--machine cga|herc|vga|<name>`,
+  `--all` and `--json` work everywhere. Every window starts aligned to IRQ0,
+  which makes reps repeatable to about 1%. Compare medians over the same
+  `-n`. Its limits: disk TIME is MartyPC's fast model, so price disk in
+  int 13h calls (the `fdc` column) at about 400 ms each; profiles bucket
+  modules per file; gfxbench and sysbench are validated on CGA only so
+  far; `ab` leaves a worktree under `build/os88hot-ab/`; 86Box support is
+  coming in bench's phase 2. Use `ab --base 6d6c23ae` (or `a7ee7fab`, the
+  same kernel) for base-versus-tip.
+* First readings (bench, CGA unless named): raise 181 ms (Hercules 219, VGA
+  370), drag 504 ms, menu open 45 / close 22 ms, opendisk 1,741 ms with 4
+  int 13h calls, launch Calc 971 ms, PgDn 131 ms, typing 31 keys 620 ms busy,
+  VGA boot 16.0 s with 18 int 13h calls. An idle desktop is 94% halted and
+  its busy time is `sch_switch` 45%, `sch_account` 15%. A CGA raise is
+  `sw_xfer` 36%, `sw_col` 18%, `sw_plane_op` 7%.
