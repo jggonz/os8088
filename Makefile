@@ -20210,3 +20210,21 @@ wireballtest: wireballdisk $(IMG)
 # Native WireBall art is reproducible from the committed imagegen source.
 apps/wireball/art/wbfront.inc: apps/wireball/art/splash-source.png tools/wbfront.py
 	python3 tools/wbfront.py
+
+# ---- PageDesk: math ----
+# PageDesk's arithmetic contract (PAGEDESK-SPEC 4, 20.7). `pdabi-check` is in
+# `all`: tools/os88pdabi.py --check holds apps/pagedesk/pdabi.h to its generated
+# assembly mirror pdabi.inc, pdmath.inc's mirrored constants and its coverage of
+# pdmath.h, in a few milliseconds. `pdmathtest` is the differential test -
+# pdmath.inc (8086, run in Unicorn's real-mode x86) against pdmath.c bit for bit
+# - on demand, like the other host-side instruments (needs nasm, cc and
+# `pip install unicorn`). `pdabi-write` regenerates pdabi.inc.
+.PHONY: pdabi-check pdabi-write pdmathtest
+all: pdabi-check
+pdabi-check:
+	@python3 tools/os88pdabi.py --check
+pdabi-write:
+	python3 tools/os88pdabi.py --write
+pdmathtest:
+	python3 tests/pdmath/pdmath_diff.py $(PDMATH_ARGS)
+# ---- end PageDesk: math ----

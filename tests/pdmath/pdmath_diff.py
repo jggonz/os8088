@@ -40,7 +40,9 @@ except ImportError:
 def build():
     os.makedirs(BUILD, exist_ok=True)
     asm_bin = os.path.join(BUILD, "pdmharness.bin")
-    subprocess.check_call(["nasm", "-f", "bin", "-w+error", "-I",
+    # PDM_INC=<dir> puts a MUTATED copy of pdmath.inc first (the mutation check)
+    inc = ["-I", os.environ["PDM_INC"] + "/"] if os.environ.get("PDM_INC") else []
+    subprocess.check_call(["nasm", "-f", "bin", "-w+error"] + inc + ["-I",
         os.path.join(ROOT, "apps/pagedesk/"), "-o", asm_bin,
         os.path.join(ROOT, "tests/pdmath/pdmharness.asm")])
     so = os.path.join(BUILD, "pdref.so")
@@ -231,11 +233,25 @@ def g_fx_bin(G):
     s = scratch(); s[4:8] = pk32(G.fx()); s[8:12] = pk32(G.fx()); return [P(0), P(4), P(8)], s, None
 
 
+def g_fx_mul(G):
+    """a third of the cases sit on the +-0x7FFFFFFF saturation edge"""
+    r = G.r; a, b = G.fx(), G.fx()
+    if r.random() < .35:
+        a = r.choice([1, -1]) * r.randint(1, 1 << 31)
+        m = max(1, abs(a)); b = (0x7FFFFFFF << 16) // m + r.randint(-3, 3)
+        b = r.choice([1, -1]) * max(0, min(b, 1 << 31))
+        if r.random() < .5: a, b = b, a
+    s = scratch(); s[4:8] = pk32(a); s[8:12] = pk32(b); return [P(0), P(4), P(8)], s, None
+
+
 def g_fx_div(G):
     s = scratch(); a = G.fx(); b = G.fx()
     if G.r.random() < .5:                          # divisors under 2^16 (fast path)
         b = G.r.choice([G.r.randint(1, 65535), -G.r.randint(1, 65535), 0x10000 // 3, 7])
     if G.r.random() < .05: b = 0
+    if G.r.random() < .35 and b:                   # quotient on the saturation edge
+        a = (0x7FFFFFFF * abs(b)) >> 16
+        a = max(0, min(a + G.r.randint(-3, 3), 1 << 31)) * G.r.choice([1, -1])
     s[4:8] = pk32(a); s[8:12] = pk32(b); return [P(0), P(4), P(8)], s, None
 
 
@@ -292,6 +308,7 @@ def g_fx_todec(G):
 def g_to_pt16(G):
     s = scratch(); v = G.fx()
     if G.r.random() < .5: v = G.r.randint(-40, 40) * 4096 + G.r.choice([0, 2047, 2048, 2049, -2047, -2048, -2049, 1, -1])
+    if G.r.random() < .3: v = G.r.choice([1, -1]) * (32767 * 4096 + G.r.choice([-2049, -2048, -2047, 0, 2047, 2048, 2049, 4096, 1 << 27, (1 << 27) + 2047]) )
     s[0:4] = pk32(v); return [P(0)], s, None
 
 
@@ -339,6 +356,7 @@ def mkview(G, flat=False):
     if r.random() < .05: an, ad = r.randint(1, 65535), r.randint(1, 65535)
     ox, oy = G.i16(), G.i16()
     if r.random() < .5: ox, oy = r.randint(-200, 200), r.randint(-200, 200)
+    if r.random() < .2: ox, oy = r.choice([32767, 32766, -32767, -32766, -32768, 32000, -32000]), r.choice([32767, 32766, -32767, -32768, 32500])
     v = b"".join(pk16(t) for t in (x0, y0, x1, y1, rot, zoom, an, ad, ox, oy, -1, -1, 1, 1))
     return v
 
@@ -491,7 +509,7 @@ FUNCS = [
     ("pdm_fx_round", "p", "i", g_fx_one),
     ("pdm_fx_add", "ppp", "v", g_fx_bin),
     ("pdm_fx_sub", "ppp", "v", g_fx_bin),
-    ("pdm_fx_mul", "ppp", "v", g_fx_bin),
+    ("pdm_fx_mul", "ppp", "v", g_fx_mul),
     ("pdm_fx_div", "ppp", "v", g_fx_div),
     ("pdm_fx_neg", "pp", "v", g_fx_un),
     ("pdm_fx_cmp", "pp", "i", g_fx_cmp),
@@ -625,48 +643,50 @@ def main():
 
 
 def negative_controls(H):
-    """The checks must be able to fail: each of these deliberately corrupts one
-    thing the differential compares and must be CAUGHT."""
-    emu = H.emu; miss = 0
-    # 1. calling-convention checks: run a routine with DF set on entry (the
-    #    movers cld on entry, so use a routine that never touches DF): the
-    #    harness must report it.
-    ax, bad = emu.call("pd_ds", [], df=True)
-    ok = any("DF" in b for b in bad)
-    print("control  DF left set is reported:        %s" % ("caught" if ok else "MISSED")); miss += (not ok)
-    # 2. an ES clobber: patch a one-off routine into the scratch area
-    code = bytes([0xB8, 0x00, 0x77, 0x8E, 0xC0, 0xC3])      # mov ax,7700; mov es,ax; ret
-    emu.mem_w((DSEG << 4) + 0x5000, code)
-    saved = emu.addr["pd_ds"]; emu.addr["pd_ds"] = 0x5000
-    ax, bad = emu.call("pd_ds", [])
-    emu.addr["pd_ds"] = saved
-    ok = "ES" in bad
-    print("control  ES clobber is reported:        %s" % ("caught" if ok else "MISSED")); miss += (not ok)
-    # 3. an unbalanced stack
-    code = bytes([0x50, 0xC3])                                # push ax; ret
-    emu.mem_w((DSEG << 4) + 0x5000, code)
-    emu.addr["pd_ds"] = 0x5000
-    ax, bad = emu.call("pd_ds", [])
-    emu.addr["pd_ds"] = saved
-    ok = any(b.startswith("SP") or b == "BP" for b in bad) or True  # a push+ret returns to a bogus ip
-    # 4. a wrong function: compare fx_add's asm against fx_sub's reference
-    G = Gen(5); wrong = 0
-    f_add = FUNCS_BY["pdm_fx_add"]
+    """The checks must be able to fail.  Each control corrupts one thing the
+    differential compares and must be CAUGHT; a harness that cannot see a
+    broken routine has proved nothing."""
+    emu = H.emu; miss = 0; slot = [0x5000]
+    saved = emu.addr["pd_ds"]
+
+    def stub(code, **kw):
+        # a fresh address each time: the engine caches translated blocks
+        slot[0] += 0x40; scratch_at = slot[0]
+        emu.mem_w((DSEG << 4) + scratch_at, code)
+        emu.addr["pd_ds"] = scratch_at
+        try: return emu.call("pd_ds", [], **kw)
+        finally: emu.addr["pd_ds"] = saved
+
+    def report(label, ok):
+        nonlocal miss
+        print("control  %-38s %s" % (label, "caught" if ok else "MISSED")); miss += (not ok)
+
+    _, bad = stub(bytes([0xC3]), df=True)                         # ret, DF set on entry
+    report("DF left set", any("DF" in b for b in bad))
+    _, bad = stub(bytes([0xB8, 0x00, 0x77, 0x8E, 0xC0, 0xC3]))    # mov ax,7700; mov es,ax; ret
+    report("ES clobbered", "ES" in bad)
+    _, bad = stub(bytes([0xB8, 0x00, 0x77, 0x8E, 0xD8, 0x8C, 0xC8, 0x8E, 0xD8, 0xC3]))
+    report("DS clobbered then restored (not a fault)", not bad)    # ...and so it must NOT be reported
+    _, bad = stub(bytes([0xBD, 0x34, 0x12, 0xC3]))                # mov bp,1234; ret
+    report("BP clobbered", "BP" in bad)
+    _, bad = stub(bytes([0xFC, 0x5B, 0x53, 0xC3]) )                     # cld; pop bx; push bx; ret (balanced)
+    report("balanced stub is not reported", not bad)
+    # a routine that is simply WRONG: asm fx_sub against the reference fx_add
+    G = Gen(5); f_add = FUNCS_BY["pdm_fx_add"]; caught = 0
+    orig = emu.addr["pdm_fx_add"]; emu.addr["pdm_fx_add"] = emu.addr["pdm_fx_sub"]
     for _ in range(50):
         args, s, aux = f_add[3](G)
-        d = H.run_case("pdm_fx_sub", f_add[1], f_add[2], args, s, aux) if False else None
-    # run asm sub against the reference add and demand a difference
-    caught = 0
+        caught += bool(H.run_case("pdm_fx_add", f_add[1], f_add[2], args, s, aux))
+    emu.addr["pdm_fx_add"] = orig
+    report("asm fx_sub vs ref fx_add (%d/50 differ)" % caught, caught >= 40)
+    # the far arena comparison: asm fcopy_out vs ref fcopy_in's arena effect
+    f_o = FUNCS_BY["pd_fcopy_out"]; caught = 0
+    orig = emu.addr["pd_fcopy_out"]; emu.addr["pd_fcopy_out"] = emu.addr["pd_ds"]
     for _ in range(50):
-        args, s, aux = f_add[3](G)
-        emu_name = "pdm_fx_add"
-        H.emu.addr["x_tmp"] = H.emu.addr["pdm_fx_sub"]
-        orig = H.emu.addr["pdm_fx_add"]; H.emu.addr["pdm_fx_add"] = H.emu.addr["pdm_fx_sub"]
-        d = H.run_case("pdm_fx_add", f_add[1], f_add[2], args, s, aux)
-        H.emu.addr["pdm_fx_add"] = orig
-        caught += bool(d)
-    ok = caught >= 40
-    print("control  asm fx_sub vs ref fx_add differs: %s (%d/50)" % ("caught" if ok else "MISSED", caught)); miss += (not ok)
+        args, s, aux = f_o[3](G)
+        caught += bool(H.run_case("pd_fcopy_out", f_o[1], f_o[2], args, s, aux))
+    emu.addr["pd_fcopy_out"] = orig
+    report("asm that copies nothing (%d/50 differ)" % caught, caught >= 25)
     return miss
 
 
