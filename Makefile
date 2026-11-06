@@ -20247,3 +20247,66 @@ $(BUILD)/pde_test: $(PDE_SRC) apps/pagedesk/pdmath.c apps/pagedesk/pdmath.h apps
 pdeng: $(BUILD)/PDENG.MOD $(BUILD)/pde_test apps/pagedesk/hosttest/pde_check.py
 	python3 apps/pagedesk/hosttest/pde_check.py $(BUILD)/pde_test $(BUILD)/pdeng-fix
 # ---- end PageDesk: eng ------------------------------------------------------
+
+# ---- PageDesk: math ----
+# PageDesk's arithmetic contract (PAGEDESK-SPEC 4, 20.7). `pdabi-check` is in
+# `all`: tools/os88pdabi.py --check holds apps/pagedesk/pdabi.h to its generated
+# assembly mirror pdabi.inc, pdmath.inc's mirrored constants and its coverage of
+# pdmath.h, in a few milliseconds. `pdmathtest` is the differential test -
+# pdmath.inc (8086, run in Unicorn's real-mode x86) against pdmath.c bit for bit
+# - on demand, like the other host-side instruments (needs nasm, cc and
+# `pip install unicorn`). `pdabi-write` regenerates pdabi.inc.
+.PHONY: pdabi-check pdabi-write pdmathtest
+all: pdabi-check
+pdabi-check:
+	@python3 tools/os88pdabi.py --check
+pdabi-write:
+	python3 tools/os88pdabi.py --write
+pdmathtest:
+	python3 tests/pdmath/pdmath_diff.py $(PDMATH_ARGS)
+# ---- end PageDesk: math ----
+# ---- PageDesk: fonts ----
+# PDRES.BIN and PDFONTX.RES (docs/PAGEDESK-SPEC.md 20.4, DECISIONS D3/D5): the
+# document font strikes, the Core14 width tables, the glyph-name table and the icon
+# atlas, packed from the COMMITTED sources under apps/pagedesk/fonts/ and
+# apps/pagedesk/art/.  Pure Python, no network, no Pillow.  PDRES.BIN is the core
+# (8/10/12 px, widths, names, icons) that rides inside PAGEDESK.O88; PDFONTX.RES is
+# the optional file of the other sizes that rides beside it; PDFONTS.TXT is the
+# font licence text that must travel with both (SIL OFL 1.1 section 2).
+# `python3 tools/os88pdfont.py fetch|draw` is the one-time regeneration of the font
+# sources from the pinned TTFs/AFMs (never run by make).
+PD_RES_BIN   := $(BUILD)/PDRES.BIN
+PD_FONTX_RES := $(BUILD)/PDFONTX.RES
+PD_FONT_TXT  := $(BUILD)/PDFONTS.TXT
+PD_ART_INC   := $(BUILD)/pdart_appicon.inc
+PD_FONT_LIC  := apps/pagedesk/fonts/LICENSES.txt apps/pagedesk/fonts/OFL-Liberation.txt \
+                apps/pagedesk/fonts/AUTHORS-Liberation.txt apps/pagedesk/fonts/AFM-NOTICE.txt
+PD_RES_SRC   := $(wildcard apps/pagedesk/fonts/*.t88) apps/pagedesk/fonts/widths.txt \
+                $(wildcard apps/pagedesk/art/*.art) $(PD_FONT_LIC) \
+                tools/os88pdfont.py tools/os88pdart.py
+
+$(PD_RES_BIN): $(PD_RES_SRC)
+	@mkdir -p $(BUILD)
+	python3 tools/os88pdfont.py build -o $@
+	python3 tools/os88pdfont.py check --res $@
+
+$(PD_FONTX_RES): $(PD_RES_SRC)
+	@mkdir -p $(BUILD)
+	python3 tools/os88pdfont.py build --extra -o $@
+	python3 tools/os88pdfont.py check --extra --res $@
+
+$(PD_FONT_TXT): $(PD_FONT_LIC) tools/os88pdfont.py
+	@mkdir -p $(BUILD)
+	python3 tools/os88pdfont.py notice -o $@
+
+# both includes come out of one run; the second rides on the first
+$(PD_ART_INC): $(wildcard apps/pagedesk/art/*.art) tools/os88pdart.py
+	@mkdir -p $(BUILD)
+	python3 tools/os88pdart.py build --inc-dir $(BUILD)
+$(BUILD)/pdart_docglyph.inc: $(PD_ART_INC) ;
+
+.PHONY: pdfonts
+all: $(PD_RES_BIN) $(PD_FONTX_RES) $(PD_FONT_TXT) $(PD_ART_INC)
+pdfonts: $(PD_RES_BIN) $(PD_FONTX_RES) $(PD_FONT_TXT) $(PD_ART_INC)
+	python3 tools/os88pdart.py check
+# ---- end PageDesk: fonts ----
