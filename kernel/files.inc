@@ -6165,9 +6165,17 @@ fm_c_up:                        ; Nav > Up One Folder
     cmp word [di+FS_CWD], 0
     je .none                    ; already at the root: nothing is above it,
                                 ; and saying so is not worth an error line
-    call fmv_sync_x             ; so the cache below - or the globals it falls
-                                ; back to when a window has none - is OUR
-                                ; folder (SPEC.md 22.1)
+    call fmv_ishere             ; ONLY A WINDOW THE GLOBALS DO NOT DESCRIBE
+    je .synced                  ; is synced (kernel hot-paths pass 1). Where
+    call fmv_sync_x             ; they do, the sync's whole work is
+.synced:                        ; dsk_chdir_q_x's media check - a boot-sector
+                                ; read once the motor has stopped - and fm_go
+                                ; below remounts through dsk_chdir, which
+                                ; reads the boot sector again regardless: a
+                                ; second isolated int 13h on every Up One
+                                ; Folder (~250 ms on a 5150), whose answer
+                                ; nothing here reads. The '..' below comes
+                                ; out of the WINDOW'S OWN cache either way
     xor ax, ax                  ; SLOT 0 OF A SUBDIRECTORY'S LISTING IS THE
     call fmv_get_dir            ; PARENT LINK (SPEC.md 19.5), and dsk_up_open
     cmp word [si+16], 3         ; filled it for whichever volume kind this is:
