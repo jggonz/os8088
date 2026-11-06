@@ -166,4 +166,15 @@
 #             through DS (drv_load_at, dskw_read). The DRVE_CLASS string, its
 #             table word, the title and the drv_memk word are CTRL.DRV's and
 #             the blob's, not resident. Data, so it cannot go in .mega
-3283
+# 2026-11-06: +399, kernel hot-paths pass 1's KHP_* knobs (kernel.asm's KHP
+#             block, LOG section L.2): kern_mega takes the hot-path rewrites
+#             kern_big and kern_small leave out on kernel-hotpaths-lean - the
+#             planar save/restore and the VGA cursor's walks, the VGA fills,
+#             gfx_blitp, gfx_frame, the wm raise/caption/damage paths. Each is
+#             a REWRITE of a .text routine kern_big also has, called from
+#             .text in protected mode, so it cannot move to .mega without a
+#             far door on every call of a hot path. Their `.cold` half (the
+#             decoders, blk_relit) is above 1MB and not counted here. This is
+#             the knobs' whole price on kern_mega: 399 bytes of kern_big's
+#             growth room in the segment (13,815 left at this figure)
+3682

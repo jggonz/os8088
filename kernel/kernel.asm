@@ -240,6 +240,41 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
   %define KERN_BIG
  %endif
 %endif
+; --- KHP_* - kernel hot-paths pass 1's optimisations, ONE KNOB A GROUP ------
+; (docs/plans/khp1/LOG.md section L.2, docs/plans/LAST-DROP-PERF.md section 7.)
+; Each knob selects the rewritten body of a hot path; undefined, the source
+; assembles to the body it replaced, byte for byte. kern_big and kern_small
+; carry none of them on this branch - their resident bytes were the price -
+; and kern_mega carries all of them: it runs on a 286 or 386, almost always
+; with VGA or EGA, its `.cold` lives above 1MB, and its conventional budget had
+; room. Enabling one for kern_big is a %define here and a re-measure.
+;
+;   KHP_VGASAVE   the planar save/restore by words and the VGA cursor's own
+;                 walks (vga-1, pointer-2): ~70% of a VGA raise
+;   KHP_VGAFILL   the planar solid and grey fill interiors by words (vga-2)
+;   KHP_VGAEDGE   vga_solid_rect's edge columns two rows a pass (vga-3)
+;   KHP_VGABLITP  gfx_blitp's wide rows by words (vga-5)
+;   KHP_FRAME     gfx_frame's clip questions once a frame (gfxcall-3)
+;   KHP_FPG       fpg_finish's unarmed unlock answered first (gfxcall-4)
+;   KHP_RELIT     blk_relit by the damage pass: fullscreen exit (wm-4)
+;   KHP_CAPTION   the title bar's caption: no gap fill on an inactive bar,
+;                 one font_run_x when unclipped (wm-2, wm-3)
+;   KHP_DMGSTALE  a vacated strip under another window draws nothing (wm-6)
+;   KHP_RAISEOL   a partial raise's outline only where covered (wm-7)
+;   KHP_LZ        the lz4 and LZB decoders' inline paths (disk-1, disk-2)
+%ifdef KERN_MEGA
+ %define KHP_VGASAVE
+ %define KHP_VGAFILL
+ %define KHP_VGAEDGE
+ %define KHP_VGABLITP
+ %define KHP_FRAME
+ %define KHP_FPG
+ %define KHP_RELIT
+ %define KHP_CAPTION
+ %define KHP_DMGSTALE
+ %define KHP_RAISEOL
+ %define KHP_LZ
+%endif
 ; MEGA_DIAG (MEGADIAG=1) is kern_mega's FIELD READINGS on the menu bar - the
 ; NMI, the 286 reset's floppy bytes, the 765 resets, the IRQ reflections' rate,
 ; the PicoMEM's queue, the DOS trip's times, the native floppy's fallbacks and

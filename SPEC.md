@@ -6056,6 +6056,25 @@ the first Live pass, every primitive after it believing it was nested and
 `gfx_blitp` refusing every block. It leaves past the teardown now;
 `vidlivext` is the gate (every sample 255 before, none above 1 after).
 
+#### 5.4.3.7 A WIDE row on the fast path is copied as words; a narrow one stays bytes
+
+> **kern_mega only on `kernel-hotpaths-lean`**, behind `KHP_VGABLITP` (`kernel/kernel.asm`'s KHP block): kern_big and kern_small assemble the body this replaced. docs/plans/LAST-DROP-PERF.md section 7 is the record of what turning it on for kern_big would buy and cost.
+
+`gfx_blitp`'s plane-major fast path (§5.4.3.5) moves **words when the row is
+8 bytes or wider**, and bytes below that. `rep movsw` is 25 clocks a word on
+an 8088 against `rep movsb`'s 17 a byte, and a Map Mask'd plane with Set/Reset
+off and the Bit Mask open takes a word write's two CPU bytes exactly as two
+byte writes. The threshold is what keeps the earlier measurement true: a word
+copy was built for every row once and REFUSED, because on Gorillas' 2-byte
+rows the shift and the odd tail cost more than the one word saved (71.7 ms
+against 68.3 on MartyPC's XT VGA, over `tests/gorillasmenu.py`'s 75 ms
+budget). A row under 8 bytes now pays one compare a PLANE and nothing else.
+The loop is picked once a plane and the odd byte is the shift's carry, which
+no `rep` writes. Measured (gfxbench, MartyPC `os8088_xt_vga`, kernel
+hot-paths pass 1): `GFX_BLITP 256x16` (32-byte rows) 9.48 → 7.97 ms, and
+`GFX_BLITP 64x64` (8-byte rows, the break-even) 12.38 → 12.43 ms. The masked
+rows `vga_prow_emit` writes were left as bytes: nothing measured them.
+
 ### 5.5 `gfx_scroll` — move a rect instead of redrawing it
 
 **in** AX/BX/CX/DX = x1/y1/x2/y2 inclusive, absolute screen coordinates;
@@ -7325,6 +7344,34 @@ writes without reading; nothing else about the rule changed. Measured as above:
 `GFX_XOR_FILL 64x64` 6.75 → 4.35 ms, `GFX_XOR_RECT 256x1` (one drag-outline
 edge) 1.09 → 0.88 ms.
 
+**The two masked edge COLUMNS of `vga_solid_rect` take two rows a pass.** A
+column is a latch load and a masked write per row, one `xchg [es:di], al`, and
+the loop around it was most of its cost: `inc si / shr si, 1` makes SI the row
+pairs rounded up and an odd count enters at the second row, so the loop's
+branch is paid once a pair, and the row step lives in CX for both columns
+(`add di, cx` is a byte shorter than the immediate). It is a trade with a
+shape and it is taken on purpose: a column of ONE row pays the entry, about
+45 cycles, so `GFX_HLINE 8px` measured 488.7 → 498.2 µs (+1.9%) while
+`GFX_VLINE 128px` went 2.08 → 1.64 ms (−21%), `GFX_FILL 64x64` 3.32 → 2.88 ms
+(−13%) and `GFX_FRAME 64x64` −11%; over a scripted scene's window raises the
+mean fill fell 4–16% (docs/plans/khp1/vga.md).
+
+**The replace-mode interiors of `vga_solid_rect` and `gfx_fill_gray` store
+words.** `rep stosw` is 14 clocks a word on an 8088 against `rep stosb`'s 10 a
+byte, and nothing about a planar byte makes a word store different from two
+byte stores: with Set/Reset on all four planes the CPU value is ignored, and
+the gray fill's row is one dither byte, so `AL = AH` is the word. The odd byte
+is split off by choosing the LOOP once a call (`shr bx,1` then one of two row
+loops, the second ending in a `stosb`), never by a per-row test, so a one-byte
+interior is a `rep` of no iteration and a `stosb` and costs what it did. §5.7.1's
+fold is untouched: DI still ends each row `count` bytes on, so `add di, dx`
+still ends it. **On a 16-bit bus** the word may straddle (the interior starts
+at whatever parity `x1/8 + 1` has); a straddling word is two bus cycles, which
+is the byte loop's bus traffic with fewer instructions, so it is never slower.
+Measured (gfxbench, MartyPC `os8088_xt_vga`, kernel hot-paths pass 1):
+`GFX_FILL 256x128` 13.37 → 10.67 ms, `GFX_FILL 64x64` 3.56 → 3.32 ms,
+`GFX_FILL_GRAY 64x64` 4.08 → 3.89 ms; `GFX_FILL 8x8` does not move.
+
 ### 5.8 `gfx_restore` can put back PART of its buffer
 
 `gfx_restore` and `gfx_blit4` are both off §11.3's clipped list for one stated
@@ -7421,6 +7468,38 @@ it. The principle that decides between the two consumers stands and is
 unaffected: **who already holds the pixels** — if only the kernel can, that is
 `WF_SAVEU`; if the application already does, it needs telling which part to put
 back.
+
+#### 5.8.1 The planar save and restore move WORDS, in a loop chosen once a plane
+
+> **kern_mega only on `kernel-hotpaths-lean`**, behind `KHP_VGASAVE` (`kernel/kernel.asm`'s KHP block): kern_big and kern_small assemble the body this replaced. docs/plans/LAST-DROP-PERF.md section 7 is the record of what turning it on for kern_big would buy and cost.
+
+`vga_save_vram` and `vga_restore_vram` are the VGA's busiest bodies by time,
+not by calls: the window manager's save-under (§11.96) banks and returns whole
+window rects through them, and a menu's drop and dismissal are one each
+(§12.2). Measured on MartyPC's 4.77 MHz VGA XT at the base of kernel hot-paths
+pass 1, a raise of Paint over Note Pad spent 133 ms in saves and 53 in
+restores against 51 in every fill together. (The pointer's cell went through
+them too, on every mouse packet, until the same pass gave the planar pointer
+its own walks in mouse.inc - §7.1.)
+
+Each plane's rows are copied as WORDS: `rep movsw` is 25 clocks a word on an
+8088 against `rep movsb`'s 17 a byte. A read in read mode 0 loads the latches
+and answers the Read Map's plane whatever its width, and with Set/Reset off and
+the Bit Mask FF a word write lands both CPU bytes through the Map Mask, so the
+bytes moved are exactly the bytes they were. **The odd byte is split off by
+choosing the LOOP, once a plane**, not by a per-row `jnc`: an even word count,
+or the same with a trailing `movsb` - so the word form wins at every width, a
+one-byte row included (it then runs a `rep` of no iteration and the `movsb`).
+The row steps are registers computed once a plane; the restore's sub-rect step
+(`[gfx_sub_rs]`) is read into BP while DS is still `KERNEL_SEG`, which is what
+retired the `cs:`-overridden memory add every row paid. Neither body's
+contract, buffer layout or result changed.
+
+**Measured** (MartyPC `os8088_xt_vga`, exact guest cycles inside each body,
+the same scripted scene on both kernels; docs/plans/khp1/vga.md): a menu's
+drop save is 188,240 → 138,856 cycles (39.4 → 29.1 ms) and its dismissal's
+restore 199,357 → 145,101 (41.8 → 30.4 ms); a raise of Paint over Note Pad
+spent 132.9 → 99.4 ms in saves and 52.6 → 36.3 in restores.
 
 ### 5.9 `band.inc` — the 1bpp BAND COMPOSER (a knob: `BAND=1` compiles it in)
 
@@ -10818,7 +10897,21 @@ against a 20 ms frame, so ~6.5% of every frame, on every mouse packet.
   a pointer at the API jump table.
 - **VGA keeps erase-then-draw.** Its save is four planes through Read Map
   Select and cannot take a background from a buffer. Its draw is one store
-  now (§7.1), which was the larger of the two windows there.
+  now (§7.1), which was the larger of the two windows there. **On kern_mega
+  (`KHP_VGASAVE`) the save and the restore are the cell's own walks** (`cur_saveu`/`cur_restoreu`, kernel
+  hot-paths pass 1), not `vga_save_vram`/`vga_restore_vram`: the cell is
+  already clipped by `cur_geom`, so `gfx_rect_setup`, the `rep movsb` row
+  loop and the one-plane and sub-rect arms were pure overhead. `cur_vspan`
+  derives the byte span exactly as `gfx_rect_setup` did (one byte when the
+  cell is byte-aligned, two otherwise unless the right edge took the second)
+  and the buffer keeps that routine's plane-major layout, so the glass is
+  identical - proved under unicorn with a four-plane model against the
+  previous kernel's bytes, 1,500 cells over 640x480 and 640x350, every shape.
+  MartyPC's XT VGA: `cur_move` **21,450 -> 15,100 cycles** a packet, the ISR's
+  share of a sweep 21.5% -> 16.4%. An armed sub-rect restore (§5.8) is now
+  never consumed by the pointer, which the shared routine's `gfx_sub_off`
+  used to do. kern_big and kern_small still save and restore the cell
+  through the shared routine on `kernel-hotpaths-lean`.
 
 Verified the only way a save-under can be: a dense walk of 37 moves — column
 deltas 0, ±1, ±2 and larger, every shift phase, plus the right and bottom
@@ -20266,6 +20359,73 @@ pixels), without the nothing-uncovered stores (the window redrawn, a title
 promoted), and on `kern_small` without the skip (both cells drawn).
 
 
+#### 11.91.8 …and a window whose vacated part is under somebody else draws nothing
+
+> **kern_mega only on `kernel-hotpaths-lean`**, behind `KHP_DMGSTALE` (`kernel/kernel.asm`'s KHP block): kern_big and kern_small assemble the body this replaced. docs/plans/LAST-DROP-PERF.md section 7 is the record of what turning it on for kern_big would buy and cost.
+
+§11.91.2 marks a window that overlapped the rect the mover **vacated**, and
+asks only one question about what is left of that overlap: is it inside the
+mover's NEW frame? It never asked about the other windows. On a cascaded
+desktop that is the common case it got wrong: deskbench's Control Panel sits
+under the Disk window, and the strip Paint vacated when it moved crossed the
+Control Panel only where the Disk window already covers it. The panel was
+marked and drew its visible column — frame, shadow, title, a restore —
+**~35 ms on the 5150/CGA for a column whose every pixel was already right.**
+
+So `wm_dmg_stale` asks the question properly: the vacated rect cut to the
+window's rect (drop shadow included) is seeded as a region and every visible
+window ABOVE it subtracted **by its frame** (`wm_clip_occlf`, so the two
+corners a shadow's L never paints stay the window's, §11.96.15.1). An empty
+list means nothing of what it lost is on the glass: clean, CF = 1, and the
+window goes on to the pass's other questions (its shadow, a zone, the strip, a
+marked window below it) exactly as a window the vacated rect never reached. An
+overflow is "exposed", the answer before this existed.
+
+**It loses no pixel.** Take any pixel of the vacated rect inside such a window.
+The topmost visible window over it is either the mover (always drawn) or a
+window above this one whose vacated part contains that pixel, uncovered — so
+that window's own test finds it non-empty and it is marked, and its draw covers
+its visible region. The dither subtracts every visible frame, so it does not
+touch the pixel either. The cost is a region walk per window whose vacated part
+was otherwise exposed — §11.91.3's "several hundred bytes" was for keying the
+marking on REDRAWN regions; this keys it on the vacated rect, which is a rect,
+against occluders that do not move, and is 36 bytes.
+
+#### 11.91.7 A screen given back is the damage pass over the whole band
+
+> **kern_mega only on `kernel-hotpaths-lean`**, behind `KHP_RELIT` (`kernel/kernel.asm`'s KHP block): kern_big and kern_small assemble the body this replaced. docs/plans/LAST-DROP-PERF.md section 7 is the record of what turning it on for kern_big would buy and cost.
+
+Leaving an exclusive bracket (§53.6) and waking from the saver (§79.6) owe the
+whole desktop, and both reached `wm_paint_all` through `blk_relit`: the dither
+under the bar, every zone, and then every window back to front **whole**. With
+four overlapping windows a pixel under the top one was written once per layer —
+deskbench's fullscreen exit read **7.03 transient pixels per changed one** on
+CGA, 8.01 on Hercules, 7.65 on VGA (PERFORMANCE.md's deskbench table) — and
+every covered window put its whole content back off its cache for the windows
+above it to paint over.
+
+None of that is needed to answer "what does the screen look like now", because
+the damage pass already answers it for any rect: `blk_relit` hands
+`wm_paint_dmg` the band, `(0, MBAR_H)` to the far corner (clamped onto the live
+screen there). `[wm_dmg_stwin]` is 0 — nothing was vacated — so every window
+the rect touches is marked; each draws its chrome where nothing above covers it
+(§11.97), its cache in the pieces nothing above covers (§11.96.15) and its
+`W_PAINT` under the cull (§11.3.3); the dither lays only the ground no window
+holds (§11.91.1) and keeps to the bands (§39.16.2.1); the bar and the strip are
+forced first and drawn by the pass, and a window over the strip owes it through
+`[wm_dmg_dk]` as on every other pass. The settled screen is the one
+`wm_paint_all` leaves — the incremental-equals-full property every damage path
+rests on (`tests/dispcorner.py`).
+
+**Two cases keep `wm_paint_all`.** A second display (`kern_big`, `[vid_ndisp]`
+above 1): its desktop is `EXT_DESK`'s, drawn whole in that routine and nowhere
+in the damage pass. And a fullscreen window still up (`wm_fs_vis`), whose walk
+starts at the fullscreen window (`.fswins`). Both are tested before anything is
+drawn.
+
+Measured on MartyPC's 5150/CGA, deskbench's scene, Paint's fullscreen bracket
+left with `f`: see docs/plans/khp1/wm.md for the figures on each adapter.
+
 ### 11.92 Retitling costs a strip — `wm_title_set`
 
 A caption changes on an **event** — a folder was entered, a document was
@@ -20318,6 +20478,50 @@ callers are a mixed set: `fm_go`, `fm_mount` and `fm_view` hold the lock,
 folder-vanished path reaches it from `ld_run`, which deliberately holds no
 lock across a mount (§21). A pointer cannot be spent on whichever window
 happened to repaint in between.
+
+#### 11.92.1 An inactive bar has no gap to cut
+
+> **kern_mega only on `kernel-hotpaths-lean`**, behind `KHP_CAPTION` (`kernel/kernel.asm`'s KHP block): kern_big and kern_small assemble the body this replaced. docs/plans/LAST-DROP-PERF.md section 7 is the record of what turning it on for kern_big would buy and cost.
+
+`wm_draw_title` letters the caption on a **gap** — a `gfx_fill` six pixels
+either side of the text, rows `y+2 .. y+15` — whose whole purpose is to cut the
+active bar's pinstripes back from the glyphs. An inactive bar has no stripes:
+its interior fill (`y+1 .. y+16`, the bar's span) has already laid that rect in
+the same pen (`wm_tpen_bg`), clipped by the same region, and nothing between
+the two writes it. So on an inactive bar the gap is **not drawn** — one
+primitive call fewer per background caption, every raise (the outgoing front),
+every damage pass and every `wm_paint_all`.
+
+**Unless the caption is wider than the bar.** Centring is signed, so a title
+wider than its window puts the gap past the frame; there the fill paints over
+the border and that is what the glass has always shown. The skip therefore
+also requires the gap's left edge to be right of `W_X` — which, by the
+centring's symmetry (the gap is `tw + 11` wide around the text, the bar `w - 2`
+around the same centre), is the right edge's condition as well.
+
+Measured on MartyPC's 5150/CGA, deskbench's scene: the fill was ~2 ms of each
+inactive caption.
+
+#### 11.92.2 …and an unclipped caption is a RUN (`kern_big`)
+
+> **kern_mega only on `kernel-hotpaths-lean`**, behind `KHP_CAPTION` (`kernel/kernel.asm`'s KHP block): kern_big and kern_small assemble the body this replaced. docs/plans/LAST-DROP-PERF.md section 7 is the record of what turning it on for kern_big would buy and cost.
+
+The caption was `font_str_x` — a transparent `font_char` call per glyph, ~0.8
+ms a cell on the 5150 — over the gap (active) or the interior (inactive). Its
+eight rows, `y+5 .. y+12`, and its width lie wholly inside that ground, which
+is the paper `wm_tpen_bg` names. So an opaque `font_run_x` in the bar's pair —
+paper from `wm_tpen_bg`, ink from `wm_tpen_ink`, both read back off the pen as
+a kernel may (§6.6.5) — writes exactly the pixels the glyphs leave, in one
+call: on an unaligned pen (seven captions in eight, §11.94) §6.1.11's two
+merges and whole stores.
+
+**Only with no region armed.** A run a region cuts goes cell by cell, and an
+unaligned one through `font_run_scell`, which is a fill *and* a glyph per cell
+— dearer than the transparent pass — and draws the same pixels; so a caption
+under a region (a covered window's, on a damage pass) stays `font_str_x`.
+`kern_small` has no unaligned run at all (its `.slow` is fill-and-letter), so
+the change is `kern_big`'s. The site stays in `tests/textsites.txt`: the
+transparent call is still there for the clipped case and the small build.
 
 ### 11.93 `WF_KEEPH` — a fixed layout hangs over the dock rather than be cut
 
@@ -23281,6 +23485,34 @@ instead of 130 and 60.
 copied without its guard**: a rect argument spends four registers, and a
 routine whose contract names two of them is holding the other two for someone
 else.
+
+#### 11.96.10.2 …and its OUTLINE and SHADOW only where they were covered
+
+> **kern_mega only on `kernel-hotpaths-lean`**, behind `KHP_RAISEOL` (`kernel/kernel.asm`'s KHP block): kern_big and kern_small assemble the body this replaced. docs/plans/LAST-DROP-PERF.md section 7 is the record of what turning it on for kern_big would buy and cost.
+
+§11.96.10 cut a partial raise's CONTENT to the covered box and left the chrome
+as §11.90 drew it: the outline and the drop shadow WHOLE. But a window raised
+from behind another was visible, and every pixel of its outline and shadow that
+nothing covered is already on the glass in the colour a front window's chrome
+writes (`thm_ink` in both states — focus changes the title bar alone). On the
+5150 that is not small: a frame side or the shadow's long arm is a 1-px column
+the height of the window, ~5.3 ms on CGA for 158 rows, and a raise drew three
+of them where the occluder had covered one.
+
+So `wm_cov_rect` folds a second box in the same walk: the occluders' frames
+(shadow included) into `wm_cvf_x1..y2` uncut, and at the walk's end that box
+cut once to OUR frame (shadow included). A partial raise arms `[wm_cvf_on]`
+beside its `wm_su_sub`, and `wm_draw_win`'s chrome arm then seeds the region
+with that box instead of `wm_chrome_clip`'s (there is nothing above a raised
+window to subtract), draws the outline and the shadow through it, and disarms
+it before the title bar — which a raise changes whole and draws unclipped, so
+it keeps §11.92.2's run. An empty box (nothing over the frame) is an inverted
+fragment that every clipped primitive cuts to nothing. The flag is spent by
+the draw it was armed for, on every exit, a chromeless window's included.
+
+The box may over-claim — never under: every covered chrome pixel lies in some
+occluder's frame and in ours, so in the union's bounding box cut to our frame.
+What it over-claims is chrome that was visible, rewritten with its own value.
 
 #### 11.96.11 The app keeps a band, and the kernel banks it
 
@@ -106899,9 +107131,11 @@ The app's proc returning is the only exit. In order:
    the game must not land in the desktop ladder. The §34.4 click-abort
    drain is the precedent.
 3. Disarm: `[fsx_task]` = `[fsx_worker]` = 0xFF, under `cli`.
-4. Bring the desktop back under the still-held lock: a full
-   `wm_paint_all` with `[menu_bdirty]` forced (the save-under-overdraw
-   precedent, §12.05). With `[bb_dbl]` armed the repaint renders into the
+4. Bring the desktop back under the still-held lock: a full repaint
+   with the bar and the strip forced (the save-under-overdraw precedent,
+   §12.05) — `blk_relit`, which on kern_mega (`KHP_RELIT`) with one
+   display and no fullscreen window up is the damage pass over the whole
+   band (§11.91.7) and otherwise `wm_paint_all`. With `[bb_dbl]` armed the repaint renders into the
    buffer and the callback epilogue's flush carries it to VRAM; without,
    it writes VRAM direct.
 
@@ -140613,10 +140847,12 @@ of them draws.
 
 **The desktop is owed a full repaint and there is no cheaper answer.** A
 session has drawn over the menu bar, the drive column, the dock and every
-window, so there is no damage rect to be clever with — `wm_paint_all` *is* the
+window, so there is no damage rect to be clever with — the whole band *is* the
 damage. It is PERFORMANCE.md rule 1's legitimate exemption, because the whole
 screen really did change, and it is paid once per wake on the far side of a
-period measured in minutes. `[blk_sv]` is cleared **before** the repaint runs,
+period measured in minutes. On kern_mega (`KHP_RELIT`) it is paid through
+the damage pass rather than `wm_paint_all` (§11.91.7), which writes each pixel about once instead of
+once per window layer. `[blk_sv]` is cleared **before** the repaint runs,
 so nothing inside a UI pass's worth of drawing still believes the overlay owns
 the screen.
 
