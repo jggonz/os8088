@@ -150,6 +150,13 @@ vb_band_frame:
 .plain:
     cmp byte [vb_lay+LY_LINES], 0   ; THE PLAIN LOOK (its lines may be off,
     je .menu                        ; 126.5.1): rules at the band's second
+    mov al, [vb_lay+LY_SROW]        ; (the layout is the bundle's: lines
+    add al, [vb_meta+VH_BAND+1]     ; that would leave the buffer are not
+    jc .menu                        ; drawn)
+    cmp al, 200
+    ja .menu
+    cmp byte [vb_lay+LY_DIV], 40
+    jae .menu
     mov dx, 1                       ; row and above the line, the divider
     call .rule                      ; between
     mov dl, [vb_lay+LY_SROW]
@@ -430,6 +437,19 @@ vb_blit_img:
     add ax, [RL+RH_OIMG]
     mov si, ax
     add si, RL
+    mov al, [si]                    ; INSIDE THE BAND, or not drawn: its
+    add al, [si+2]                  ; place is the bundle's (hostile), and
+    jc .o0                          ; the buffer is 40 cells by 200 less
+    cmp al, 40                      ; the band's first row
+    ja .o0
+    VB_BY
+    neg ax
+    add ax, 200
+    mov ah, [si+1]
+    add ah, [si+3]
+    jc .o0
+    cmp ah, al
+    ja .o0
     cmp byte [vb_vlay], 0           ; VGA's own version, into the layer
     je .cga                         ; (126.5)
     cmp word [si+6], 0
@@ -466,6 +486,7 @@ vb_blit_img:
     jmp .row
 .o:
     pop ds
+.o0:
     ret
 
 ; vb_vblit - band picture SI (its table row) in VGA's own colours into the
@@ -977,6 +998,14 @@ vb_draw_msg:
 ; buffer under it. Each cell is its 8 rows of 2 bytes, ground and glyph in
 ; one store (6.1's rule)
 vb_text:
+    VB_BY                           ; (a row the band has not got - a
+    cmp dx, ax                      ; layout's or a menu's, the bundle's -
+    jb .none                        ; is not drawn: its buffer is the band's
+    cmp dx, 200 - 8                 ; rows and no more)
+    jbe .row
+.none:
+    ret
+.row:
     push bp
     mov [vb_tcol], cx
     mov [vb_tcol0], cx

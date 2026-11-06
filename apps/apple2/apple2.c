@@ -198,11 +198,12 @@ static unsigned a2_aotseg;                  /* (the translation's part, as
                                              * os88_part_seg said: a2_faot is
                                              * derived from it) */
 static unsigned a2_fcode;
-static int a2_fast_done;                    /* a2_fast_init has run, whatever
-                                             * it answered - the moment the
+static int a2_fast_done;                    /* a2_fast_init has FINISHED,
+                                             * whatever it answered - the moment the
                                              * heap stops changing under a
                                              * reader (tests/apple2part.py) */
 unsigned a2f_codesel(unsigned seg);
+unsigned a2f_claimcode(void);
 void a2f_image(unsigned newseg, unsigned oldseg, unsigned romseg);
 void a2f_core(unsigned dstseg, unsigned partseg);
 int  a2_run(unsigned cycles);           /* -> A2_RUN_*, and a2_m.cnt is what
@@ -1541,17 +1542,19 @@ static void a2_jam(void)
  * and the last two slots written, and the part goes back. Any refusal leaves
  * the accurate core running the machine alone, which is a slower machine and
  * not a broken one, so nothing is said. */
-static void a2_fast_init(void)
+static void a2_fast_go(void)
 {
     unsigned code, img;
 
-    a2_fast_done = 1;                       /* (set first: every return
-                                             * below is the end of it, and the
-                                             * UI task finishes this before
-                                             * anything else reads the heap) */
     if (os88_part_fetch(A2_FAST_PART) != 0)
         return;
-    code = os88_mem_claim(64);
+    /* THE CODE CLAIM IS CONVENTIONAL (a2f_claimcode, MEMP_CONV): on
+     * kern_mega that makes it an allocator PAIR whose code half
+     * OSAPI_MEM_CODESEL answers. Through the KB door an OS88_HIGHMEM
+     * package's 64KB lands above 1MB as a lone data selector, CODESEL
+     * refuses it, and the fast core never ran on kern_mega. The image is
+     * only ever data, so it may go above 1MB */
+    code = a2f_claimcode();
     img = code ? os88_mem_claim(64) : 0;
     if (img == 0) {
         if (code)
@@ -1585,8 +1588,10 @@ static void a2_fast_init(void)
     a2_ftab = os88_part_seg(A2_AOTPC_PART);
     a2_aotseg = os88_part_seg(A2_AOT_PART);
     a2_faot = a2f_codesel(a2_aotseg);
-    if (a2_faot == 0) {
+    if (a2_faot == 0) {                     /* (both parts or neither) */
         a2_ftab = 0;
+        os88_part_drop(A2_AOTPC_PART);
+        os88_part_drop(A2_AOT_PART);
         return;
     }
     /* BOTH MAY MOVE (3.1.1): a run builds its frame from a2_faot and
@@ -1594,6 +1599,15 @@ static void a2_fast_init(void)
      * were a 78KB wall under the RAM that a2move found */
     os88_part_movable(A2_AOT_PART);
     os88_part_movable(A2_AOTPC_PART);
+}
+
+/* ...and the flag a reader waits on, set when it is OVER whatever it
+ * answered: set first, a reader outside the machine (tests/apple2part.py)
+ * could see 1 while the claims were still being made and the carve moved */
+static void a2_fast_init(void)
+{
+    a2_fast_go();
+    a2_fast_done = 1;
 }
 
 /* a2_slice - one run of the core for the wall budget.

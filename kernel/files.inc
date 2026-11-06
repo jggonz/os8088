@@ -230,6 +230,7 @@ FS_SEL      equ 0               ; word: selected DIRECTORY index (not a row),
 FS_SCRL     equ 2               ; word: first visible row
 FS_CLKT     equ 4               ; word: birth tick of this window's last click
 FS_N        equ 6               ; word: entries in this window's cache, 0..32
+                                ; (0..1,023 under DSK_BIGDIR, SPEC.md 22.6.4)
 FS_CWD      equ 8               ; word: the folder it shows (first cluster,
                                 ; 0 = the root)
 FS_DRV      equ 10              ; byte: the drive it shows
@@ -284,10 +285,12 @@ FS_VSEG     equ 16              ; word: this window's listing-cache claim
                                 ; VIEW_KB and the instance's teardown frees
                                 ; it, so nothing here has a close hook
 FS_VKB      equ 18              ; byte: how many KB that claim actually is.
-                                ; ONE SIZE NOW - every volume lists DSK_NENT
-                                ; entries, so fm_kinit's VIEW_KB covers the
-                                ; machine and no window is ever re-claimed
-                                ; (SPEC.md 22.6). It was two while a
+                                ; Under DSK_BIGDIR it GROWS with the folder
+                                ; (1KB floor, re-claimed at a re-list,
+                                ; SPEC.md 22.6.4). Without it, ONE SIZE -
+                                ; every volume lists DSK_NENT entries, so
+                                ; fm_kinit's VIEW_KB covers the machine and
+                                ; no window is re-claimed (SPEC.md 22.6). It was two while a
                                 ; driver-backed volume could list more. The
                                 ; byte stays: a refusal clears FS_VSEG and
                                 ; this says so, which is the documented

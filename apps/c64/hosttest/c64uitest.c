@@ -1077,6 +1077,7 @@ unsigned os88_file_read_seg(const char *name, unsigned seg, unsigned cap)
  * accurate core's stub - the one every case below drives - running alone */
 void c64f_core(unsigned dstseg, unsigned partseg) { (void)dstseg; (void)partseg; }
 unsigned c64f_codesel(unsigned seg) { return seg; }
+unsigned c64f_claimcode(void) { return os88_mem_claim(64); }
 void c64j_off(unsigned core) { (void)core; }
 void c64j_setup(unsigned dst, unsigned part, unsigned len, unsigned core, int force, int kb) { (void)dst; (void)part; (void)len; (void)core; (void)force; (void)kb; }
 
@@ -4319,6 +4320,14 @@ int main(int argc, char **argv)
         ovl_d64_trap();
         if (h_fold[f].len != 18)
             fail("SAVE\"@0:HELLO\" did not replace HELLO.PRG");
+        /* ...and a pattern is no name to write (a 1541's 33) */
+        H_NAME("HE*");
+        c64_m.s = 0xF0;
+        c64_m.pc = C64_SV_TRAP;
+        ovl_d64_trap();
+        if (h_fold_find("HE*.PRG") >= 0
+                || strcmp(last_toast, "Not saved: HE*.PRG") != 0)
+            fail("SAVE\"HE*\",8 wrote a file with a wildcard in its name");
         /* ...LOAD it back at BASIC's start, by a wildcard */
         memset(&ram[0x0801], 0, 64);
         H_NAME("HE*");
@@ -4723,6 +4732,19 @@ int main(int argc, char **argv)
         ovl_d64_trap();
         if (c64_m.pc != C64_D64_TRAP + 2 || c64_m.a != 0x60)
             fail("a LOAD from device 9 did not run the LDA #$60 the trap replaced");
+        if (h_xms_kb == 2048) {
+            /* ...AND THE RECOMPILER GIVES WAY FOR ANOTHER ATTACH: the disk
+             * stays on drive 8, its slots in a claim of their own (11.5.1).
+             * Verified to fail with ovl_jit_drop releasing the disk: the
+             * drive is empty before the new image is known to fit */
+            ovl_jit_drop();
+            if (c64_fjit != 0 || c64_d64_seg == 0 || c64_d64_inj || !c64_d64_xms)
+                fail("the recompiler giving way took drive 8's disk with it");
+            c64_wr(0xBA, 8);
+            H_LOADCALL(nm, 5, 1);
+            if (c64_m.pc != C64_D64_LOADING || c64_rd(0xC000 + 252) != 0xE2)
+                fail("after the recompiler gave way the disk's file did not load");
+        }
         ovl_d64_release();
         if (h_xms_live != 0 || c64_d64_seg != 0)
             fail("the D64 given back left its extended block or its claim");
@@ -5226,6 +5248,33 @@ int main(int argc, char **argv)
         c64_kbd_poll();
         if (c64_ndown != 1 || c64_down[0] != 0x1F)
             fail("the second tap of the same key never went in");
+        ovl_kbd_init();
+        c64_cyc_lo = 0;
+
+        /* RULE 6: A TAP KEEPS THE SHIFT IT WAS TYPED WITH. `4` tapped, then
+         * Shift held for the `+` while the 4 is still in its fresh window:
+         * the matrix must not show SHIFT with the 4 (`$` on the machine).
+         * Then SHIFT+A - an optionally shifted key, the graphic character -
+         * with Shift let go before its turn (it waits behind the 4): SHIFT
+         * must be there with it. Verified to fail with c64_kbd_build's live
+         * Shift unconditional: the 4 reads as $, and the A as a letter. */
+        os88_onkey('4', 0x05, win);
+        c64_kbd_poll();
+        h_keydown[KSC_LSHIFT] = 1;          /* the hand goes to Shift */
+        os88_onkey('A', 0x1E, win);         /* (pushed with Shift down) */
+        c64_kbd_poll();
+        if ((c64_matrix[1] & (1 << 3)) == 0
+                || (c64_matrix[C64K_LSHIFT_R] & (1 << C64K_LSHIFT_C)) != 0)
+            fail("a 4 tapped without Shift read as SHIFT+4 once Shift went "
+                 "down for the next key (7.2's rule 6)");
+        h_keydown[KSC_LSHIFT] = 0;
+        c64_cyc_lo = (unsigned)C64K_FRESH_CYC + 1;
+        c64_kbd_poll();                     /* the 4 leaves */
+        c64_kbd_poll();                     /* ...and the ( goes in */
+        if ((c64_matrix[1] & (1 << 2)) == 0
+                || (c64_matrix[C64K_LSHIFT_R] & (1 << C64K_LSHIFT_C)) == 0)
+            fail("SHIFT+A lost its Shift when Shift was let go before its "
+                 "turn in the ring (7.2's rule 6)");
         ovl_kbd_init();
         c64_cyc_lo = 0;
 

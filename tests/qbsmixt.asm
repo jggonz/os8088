@@ -19,6 +19,9 @@
 
 CPU_286     equ 1
 CPU_386     equ 2
+QB_ROMKB    equ 35                  ; arcqb.inc's: the ROM part, before the chips
+QT_RCLAIM   equ 0x9000              ; the ROM part qb_build would claim (free
+                                    ;   in tests/qbsmix.py's map)
 %define OSAPI_CPU_INFO  qt_cpu
 %define OSAPI_MEM_CLAIM qt_claim
 %define OSAPI_MEM_FREE  qt_free
@@ -35,7 +38,13 @@ qt_hdr:
     dw qt_cf                        ; +20 qbs_prep's CF
     dw m6_cyc, qbs_dac, m6_bad      ; +22
 
-qt_prep:
+qt_prep:                            ; the PACKAGE's order (qb_build, then a
+    mov word [qb_rclaim], QT_RCLAIM ;   play): the ROM part claimed with room
+    mov ax, QB_ROMKB                ;   for the chips, the chips kept there,
+    call qbs_want                   ;   the image FREED - and only then the
+    call qbs_keep                   ;   board powered on. Run against the
+    mov word [ar_rimgc], 0          ;   image still held, this passed while
+    mov word [ar_rimg], 0           ;   the package never heard the board
     call qbs_prep
     mov byte [qt_cf], 0
     jnc qt_stop
@@ -74,6 +83,8 @@ qt_cf:      db 0
 ar_rimgc:   dw 0
 ar_rimg:    dw 0
 qb_gseg:    dw 0
+qb_rclaim:  dw 0
+qbs_chips:  db 0
 m6_a:       db 0
 m6_x:       db 0
 m6_y:       db 0

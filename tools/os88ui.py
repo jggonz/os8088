@@ -1508,6 +1508,13 @@ class UI:
                      tuple(r[0] for r in self.listing(win))),
             guest=1.0,
             what="the mount %r started to finish" % name)
+        # ...AND A QUIET DRIVE IS NOT A FINISHED MOUNT EITHER, on kern_big:
+        # a folder past 32 entries is listed TWICE (SPEC.md 22.6.4), and the
+        # second pass's Shell sort reads no sector and writes no FS_N for
+        # whole guest seconds - 2.7 at 1,000 entries - so the quiesce above
+        # ended inside it and this reported the FIRST pass's 32. fmv_load is
+        # ui_task's, so ui_task asleep is the mount over.
+        os88marty.ui_done(self.m, "the mount %r to finish" % name)
         self._say("open %s -> %d entries" % (name, len(self.listing(win))))
         return self._refresh(win)
 

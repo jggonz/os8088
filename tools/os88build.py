@@ -297,6 +297,33 @@ def _carry_inputs(d):
                 shutil.copy2(s, t)
 
 
+# FETCHED DATA A ROW DECLARES BY NAME, carried in BEFORE the tree's make
+# rather than after it. getarcrom.py keeps its pinned MAME zips in the SHARED
+# build/arcade-rom/ whatever $(BUILD) is (its CACHE), and no make rule
+# produces a .zip - so `inflate86`, `arcimport` and `m6502` declaring
+# `build/arcade-rom/qbert.zip` made the frozen tree's make die on "No rule to
+# make target" and the whole soak refused to start. An existing file with no
+# rule is something make accepts, so copying it first is the whole fix; a
+# copy, not a link, for the reason CARRY gives.
+FETCHED = (("arcade-rom", ".ZIP"),)
+
+
+def _carry_fetched(d):
+    """Copy into tree `d` the shared build/'s fetched caches rows declare."""
+    for sub, ext in FETCHED:
+        src = os.path.join(ROOT, "build", sub)
+        if not os.path.isdir(src) or os.path.realpath(src) == \
+                os.path.realpath(os.path.join(d, sub)):
+            continue
+        for n in os.listdir(src):
+            s = os.path.join(src, n)
+            t = os.path.join(d, sub, n)
+            if (n.upper().endswith(ext) and os.path.isfile(s)
+                    and not os.path.exists(t)):
+                os.makedirs(os.path.dirname(t), exist_ok=True)
+                shutil.copy2(s, t)
+
+
 def _sweep_truncated(d):
     """Delete zero-length build products before make looks at the tree.
 
@@ -1067,6 +1094,7 @@ def tree(*args, **kw):
                 raise
         _sweep_truncated(d)
         _share_instruments(d)
+        _carry_fetched(d)
         # RELATIVE, and it has to be. The Makefile spells the C toolchain's
         # PATH as `$(CURDIR)/$(CC_SC)` where `CC_SC := $(BUILD)/cc/SmallerC`,
         # so an ABSOLUTE BUILD produces `$(CURDIR)//tmp/...` - a path that

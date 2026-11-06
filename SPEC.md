@@ -42675,6 +42675,12 @@ moves an entry only past a strictly greater one, so equal keys keep their
 order. `kern_small` keeps the selection sort: at 32 entries it is 496
 compares, and the bytes are that kernel's to keep.
 
+**The compare folds case only where two bytes DIFFER**, and the exchange
+moves words. Equal bytes need no fold, and most of a compare is the shared
+prefix of two names, so the two `dsk_upper` calls a byte were most of its
+cost; measured on MartyPC's XT, a 1,000-entry folder in reverse order sorted
+in **4.26 s** that way and sorts in **2.74 s** now, for 6 bytes of `.cold`.
+
 ### 19.5 `..` is an entry in the listing, not a menu command
 
 In a subdirectory the listing **opens with a `..` row** — folder icon, no
@@ -242045,7 +242051,7 @@ one `add` per sample, with no clip and no branch. A clip's OWN sound
 | 14 | 2 | its anchor table's offset in the resident block: (idle frame, entry record's PARAGRAPH in the clip's own region) pairs |
 | 16 | 2 | its anchors, at most 16 |
 | 18 | 4+2 | a LOOP's lap: record 1's offset in its stream (4 KB-aligned) and the lap's length in 4 KB |
-| 24 | 8 | the name |
+| 24 | 8 | the name: the clip id in ASCII, upper case, space padded (letters outside ASCII lose their accents or are dropped - `os88vbt.name8`); the engine reads none of it |
 | 32 | 2 | its ENTRIES' paragraphs, in front of its records (version 8); 0 for a clip with no anchors |
 
 #### 126.2.3 Records, their sound, and why every join is exact
@@ -242131,6 +242137,25 @@ what the records are made between, so the joins stay exact
 
 At 4096, to the first region's end, little-endian; `tools/vbtrules.py` is
 its compiler, its reader and the reference the engine is held to (126.6).
+**Every byte is hostile** (§19): the engine refuses (*is not a VBT1 file*)
+a bundle whose band starts past row 191 (header 65) or whose rules have
+other than 1 to 4 characters or more than 8 items - the counts that size
+its own tables (`vb_hp`, `vb_items`); an action costing an item past the
+party's count can never be paid; and a band picture, a line of text or the
+plain look's rules that would leave the band's rows are not drawn, so no
+place the bundle names writes past the band's buffers. The title picture's
+variant must fit its region and a desktop (720 x 350), or there is none.
+A bundle that names a clip its table has not got (an opening, the title
+and its way out, an end loop, the victory and defeat clips, a pool's), a
+clip whose stream runs past the file's length (header 52) or whose entries
+outrun it, more than 16 anchors, a pool of more than 7 clips, or an action
+naming a pool past the pools is refused as *NAME.VBT is damaged*
+(`vb_vcheck`): each was a play that waited for ever on a head no read
+could bring. Every refusal names the file it was about - the document,
+its rendition beside it, or the game's own `.O88` (`vb_errname`) - and a
+file shorter than a header *is not a VBT1 file*, not *not found*; the
+text window's fourth line is the file it plays (*Plays MYFIGHT.VBT*), or
+*Needs BATTLE.VBT beside it* when it has none (`vb_t4set`).
 A 64-byte header gives the counts and each table's offset from the block's
 start, the enemy, and the seed:
 

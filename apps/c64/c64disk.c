@@ -210,7 +210,7 @@ static void ovl_d64_attach(const char *name, unsigned size_lo, unsigned size_hi)
      * whole, the image being above 1MB */
     gave = ovl_d64_xattach(name, trks);
     if (!gave && c64_fjit != 0 && c64x_caps() >= 192) {
-        c64_jit_drop();
+        ovl_jit_drop();
         gave = ovl_d64_xattach(name, trks);
         ovl_jit_init();                     /* back - whole if the image went
                                              * up, and the conventional way
@@ -222,9 +222,13 @@ static void ovl_d64_attach(const char *name, unsigned size_lo, unsigned size_hi)
         c64_say("Disk on drive 8.");
         return;
     }
-    /* the sectors, and 512 bytes over: the last READ_AT moves whole sectors
-     * and the image does not end on one */
-    paras = (trks == 35 ? 683 : 768) * 16 + 32;
+    /* the sectors, and over: the last READ_AT moves whole sectors and the
+     * image does not end on one. 35 tracks WITH error bytes is 175,531
+     * bytes, and the last 32KB read starts at 160KB, inside them: its
+     * sectors end at 175,616 - 48 paragraphs past the 683 sectors, not 32,
+     * or the read's last 256 bytes land on the next claim. 40 tracks stop
+     * at 196,608, a sector boundary, before the error bytes */
+    paras = (trks == 35 ? 683 * 16 + 48 : 768 * 16 + 32);
     gave = 0;
     for (;;) {                              /* (ONE claim site, which the pin
                                              * gate follows to its movable
@@ -232,17 +236,21 @@ static void ovl_d64_attach(const char *name, unsigned size_lo, unsigned size_hi)
         seg = os88_mem_claim_p(paras);
         if (seg != 0 || c64_fjit == 0)
             break;
-        c64_jit_drop();                     /* (the recompiler is optional) */
+        ovl_jit_drop();                     /* (the recompiler is optional) */
         gave = 1;
     }
     if (seg == 0) {
+        ovl_jit_init();                     /* (back, if it gave way for
+                                             * nothing) */
         c64_say("D64: no heap for it.");
         return;
     }
-    for (i = 0; i < paras - 32; i += 2048) {    /* 32KB, a cluster multiple */
+    for (i = 0; i < (trks == 35 ? 683 : 768) * 16; i += 2048) {
+                                            /* 32KB, a cluster multiple */
         got = c64_read_at(name, seg + i, 0x8000u, i << 4, i >> 12);
         if (got == 0) {
             os88_mem_free(seg);
+            ovl_jit_init();
             c64_say("D64: cannot read it.");
             return;
         }
@@ -623,7 +631,14 @@ static void ovl_fs_save(void)
     at = ovl_fs_name();
     if (c64_fs_wn == 0)
         return;
-    if (!at) {                              /* a 1541 says 63, FILE EXISTS */
+    i = 0;
+    for (k = 0; c64_fs_host[k]; k++)        /* a 1541 says 33, SYNTAX ERROR:
+                                             * a pattern is no name to write,
+                                             * and FAT takes `*` and `?` in a
+                                             * name it then cannot match */
+        if (c64_fs_host[k] == '*' || c64_fs_host[k] == '?')
+            i = 1;
+    if (!at && !i) {                              /* a 1541 says 63, FILE EXISTS */
         for (r = 0; (r = os88_file_find(r, c64_fs_f)) >= 0; )
             if (ovl_streq(c64_fs_f->name, c64_fs_host)) {
                 os88_strcpy(c64_msg, "Exists: ", C64_MSGMAX);
@@ -638,8 +653,8 @@ static void ovl_fs_save(void)
     if (end < a)
         n = 0;
     first = 1;
-    r = 0;
-    do {
+    r = -i;                                 /* (a pattern: Not saved) */
+    if (!i) do {
         k = 0;
         if (first) {
             c64_sh[0] = (unsigned char)(a & 0xFF);
@@ -786,7 +801,9 @@ static void ovl_d64_trap(void)
                         if (c64_rd(end) != os88_peek(para, off))
                             st |= 0x10;
                 } else {
-                    c64_zzcopy_in(end, para, off, i - off);
+                    ovl_land(end, para, off, i - off);  /* ($FFC0-$FFF9 is
+                                             * c64_hiram, not the RAM claim:
+                                             * C64-SPEC 3.5) */
                     end += i - off;
                 }
             }

@@ -437,7 +437,7 @@ class T(Gen):
             L("    jmp near xa_go")
         elif mn == "JSR":
             slow, j = self.lab(), self.lab()
-            L("    cmp di, 0x0101", "    jb %s" % slow,
+            L("    cmp di, 0x0102", "    jb %s" % slow,
               "    mov word [di-1], strict word RET", "    sub di, 2",
               "%s: sub bp, %d" % (j, cyc))
             self.target_si()

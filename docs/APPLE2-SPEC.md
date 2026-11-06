@@ -641,6 +641,12 @@ and gives the part back. Both 64KB claims are movable; `os88_onmove` follows
 `a2_fcode`. **The far call goes through `a2_fseg` = `OSAPI_MEM_CODESEL` of that
 claim**: the same value on a real-mode kernel, the claim's code half under
 kern_mega, where a far call through the data half is a #GP per transfer.
+**The code claim is CONVENTIONAL** (`a2f_claimcode`: `OSAPI_MEM_P` with
+`MEMP_CONV`, SPEC.md 50.3.7), because only a conventional claim is an
+allocator pair on kern_mega: APPLE2 is `OS88_HIGHMEM`, so the KB door sent
+its 64KB above 1MB as a lone data selector, `OSAPI_MEM_CODESEL` refused it,
+and until that was found the fast core and the translation silently never
+ran there. The image is only data and may still go above 1MB.
 
 **The frame.** Nothing the core keeps is in its own segment, which kern_mega
 makes read-only: the machine record, the package's DS and the two I/O doors
@@ -719,7 +725,7 @@ known to do this.
 
 **THE HEAP IS RESHAPED AT THE FIRST WAKE**: a 64KB code claim and a 64KB
 image replace the 49KB RAM, with a compaction on the way, which on an 8088 is
-seconds. `a2_fast_done` says it has run; `tests/apple2part.py` waits for it
+seconds. `a2_fast_done` says it has FINISHED (set after `a2_fast_init` returns, never mid-way); `tests/apple2part.py` waits for it
 before it reads a claim. **`soak -k a2move` IS RED WITH THE FAST CORE, and the
 reason is placement, not a mover**: both 64KB claims are made where a 64KB
 hole is, which on that row's heap is the bottom, so Note Pad's close leaves

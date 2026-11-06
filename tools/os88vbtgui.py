@@ -514,6 +514,9 @@ class App(object):
         self.root = make_root()         # drag and drop, where installed
         self.root.geometry("1300x760")
         self.pending = []               # videos waiting to become clips
+        self.scrolls = {}               # each tab's Scroll, by its canvas
+        self.clip_job = self.reading = None     # the job reading one, and
+        #                                 the source it added for it
         self.proj = P.Project()
         self.saved = self._state()
         self.job = None
@@ -531,6 +534,53 @@ class App(object):
         self.root.protocol("WM_DELETE_WINDOW", self.quit)
         self.root.after(50, self._poll)
         self.drop_how = enable_drop(self.root, self._dropped)
+        for ev in ("<MouseWheel>", "<Shift-MouseWheel>", "<Button-4>",
+                   "<Button-5>", "<Shift-Button-4>", "<Shift-Button-5>"):
+            self.root.bind_all(ev, self._wheel, add="+")
+        self.root.bind_all("<FocusIn>", self._focus, add="+")
+
+    # --- the tabs' scrolling (Scroll) -------------------------------------------
+    SELF_SCROLLING = ("Listbox", "Treeview", "Text", "TCombobox", "Scale",
+                      "TScale", "Spinbox", "TSpinbox")
+
+    def scroll_of(self, w):
+        """The Scroll whose content holds widget W, or None"""
+        while w is not None:
+            sc = self.scrolls.get(str(w))
+            if sc is not None:
+                return sc
+            w = getattr(w, "master", None)
+        return None
+
+    def _wheel(self, e):
+        """The wheel over a tab: the tab scrolls - not when the widget
+        under it scrolls itself (a list, a tree, a text, a slider), which
+        it is already doing"""
+        w = e.widget
+        if not hasattr(w, "winfo_class") or \
+                w.winfo_class() in self.SELF_SCROLLING:
+            return
+        sc = self.scroll_of(w)
+        across = bool(e.state & 1)      # Shift
+        if sc is None or not sc.scrolls(across):
+            return
+        if e.num in (4, 5):             # X11
+            n = -1 if e.num == 4 else 1
+        elif abs(e.delta) >= 120:       # Windows (and Tk 8.7's X11)
+            n = -int(e.delta / 120)
+        else:                           # the Mac: small steps
+            n = -e.delta
+        if n:
+            (sc.cv.xview_scroll if across else sc.cv.yview_scroll)(
+                n * 3 if abs(n) == 1 else n, "units")
+
+    def _focus(self, e):
+        """A field reached by the keyboard (Tab) is scrolled into view"""
+        w = e.widget
+        if hasattr(w, "winfo_class"):
+            sc = self.scroll_of(w)
+            if sc is not None and w is not sc.inner:
+                sc.see(w)
 
     def _cover(self):
         from tkinter import filedialog
@@ -556,7 +606,12 @@ class App(object):
         self.root.update_idletasks()
         h = min(max(760, self.root.winfo_reqheight()),
                 self.root.winfo_screenheight() - 80)
-        self.root.geometry("1300x%d" % h)
+        # as wide as its widest tab AND a tab's scroll bar (Scroll: a tab
+        # taller than the window scrolls, and its bar is not taken out of
+        # the content's width), no wider than the screen
+        w = min(max(1300, self.root.winfo_reqwidth() + 18),
+                self.root.winfo_screenwidth())
+        self.root.geometry("%dx%d" % (w, h))
 
     # --- drag and drop ----------------------------------------------------------
     def _dropped(self, paths):
@@ -573,7 +628,9 @@ class App(object):
         on a clip's effects a cue at its frame, on the Openings tab the
         chosen opening's sound; a picture joins the band pictures"""
         tab = self.nb.index(self.nb.select())
-        inside = lambda w, frame: w is not None and str(w).startswith(str(frame))
+        inside = lambda w, frame: w is not None and (str(w) == str(frame) or
+                                                     str(w).startswith(
+                                                         str(frame) + "."))
         for p in paths:
             k = drop_kind(p)
             if k == "project":
@@ -652,12 +709,16 @@ class App(object):
         if not self.pending or self.job:    # (a job's end starts it)
             return
         path, then = self.pending[0]
+        known = set(self.proj.d["sources"])
         sid = self.add_video(path)
         cid = unique_id(sid, self.proj.d["clips"])
+        self.reading = sid if sid not in known else None
 
         def got(fr):
+            self.reading = None
+            self.pending.pop(0)     # (first: the edit's refresh lists what
+            #                          is still pending, not this one)
             self.edit("add_clip", cid, sid, (0, len(fr) - 1), anchors=())
-            self.pending.pop(0)
             if then:
                 then(cid)
             else:
@@ -665,6 +726,7 @@ class App(object):
             if self.pending:
                 self._next_clip()
         self.screens(sid, got)
+        self.clip_job = self.job        # (None: it was read already)
 
     # --- the shell -----------------------------------------------------------
     def _state(self):
@@ -787,8 +849,17 @@ class App(object):
             return self.save()
         return True
 
+    def _drop_jobs(self):
+        """Another project taken up: a job of the last one is cancelled
+        (its end would land in this one - a clip read for a project no
+        longer open became a clip here, its source missing) and the videos
+        waiting are not taken"""
+        self.pending = []
+        self.cancel()
+
     def new(self):
         if self._ask_save():
+            self._drop_jobs()
             self.proj = P.Project()
             self.saved = self._state()
             self.frames.clear()
@@ -806,9 +877,11 @@ class App(object):
     def open_path(self, p):
         try:
             self.proj = P.Project.load(p)
-        except (OSError, ValueError) as e:
+        except (OSError, ValueError, KeyError, TypeError,
+                AttributeError) as e:      # (not a project: said, not raised)
             self.say("Could not open %s: %s" % (p, e))
             return
+        self._drop_jobs()
         self.saved = self._state()
         self.frames.clear()
         recent_add(self.proj.path)
@@ -943,10 +1016,21 @@ class App(object):
                     self.pbar.stop()
                     self.pbar.config(mode="determinate", value=0)
                     if job.killed or rc != 0:
+                        why = log[-1] if log else rc
+                        if str(why).startswith("os88venc: "):   # (the
+                            why = str(why)[10:]     # encoder's own name)
+                        mine = self.pending and job is self.clip_job
+                        if mine and not job.killed and \
+                                "can be read" not in str(why):  # (which
+                            why = "%s is not a video that can be read " \
+                                "(%s)" % (os.path.basename(   # file)
+                                    self.pending[0][0]), why)
                         self.say("Cancelled" if job.killed else
-                                 "Failed: %s" % (log[-1] if log else rc))
-                        if self.pending:        # the videos still to come
-                            self.pending = []   # are not taken either
+                                 "Failed: %s" % why)
+                        if mine:                # the videos still to come
+                            self.pending = []   # are not taken either (a
+                            self._forget_unread()   # video dropped while
+                        #                      another job ran still is)
                     elif job.result is not None:
                         self.say("Done")
                         self._done(job.result)
@@ -954,6 +1038,22 @@ class App(object):
                         self._next_clip()               # another job
         except queue.Empty:
             pass
+
+    def _forget_unread(self):
+        """A video that could not be read (not a video, empty, cancelled)
+        leaves no SOURCE behind: it was added only to become a clip, and
+        a source whose file will not decode stopped every later build
+        ("sources.X: ..."). One something else came to use is kept"""
+        sid, self.reading = getattr(self, "reading", None), None
+        d = self.proj.d
+        if not sid or sid not in d["sources"]:
+            return
+        if any(c["source"] == sid for c in d["clips"].values()) or \
+                (d.get("idle") or {}).get("source") == sid or \
+                any(s.get("source") == sid for s in d["sounds"].values()):
+            return
+        self.edit("set", ("sources",), {k: v for k, v in
+                                        d["sources"].items() if k != sid})
 
     def cancel(self):
         if self.job:
@@ -1035,7 +1135,8 @@ class BattleTab(object):
     def __init__(self, app, parent):
         tk, ttk = app.tk, app.ttk
         self.app = app
-        self.f = f = ttk.Frame(parent, padding=8)
+        self.scroll = Scroll(app, parent, 8)    # (the page scrolls)
+        self.f, f = self.scroll.outer, self.scroll.inner
         self.loops = []
         r = 0
         ttk.Label(f, text="Name").grid(row=r, column=0, sticky="w")
@@ -1549,7 +1650,8 @@ class IdleTab(object):
     def __init__(self, app, parent):
         tk, ttk = app.tk, app.ttk
         self.app = app
-        self.f = f = ttk.Frame(parent, padding=8)
+        self.scroll = Scroll(app, parent, 8)    # (the page scrolls)
+        self.f, f = self.scroll.outer, self.scroll.inner
         self.cands = []
         top = ttk.Frame(f)
         top.pack(fill="x")
@@ -1809,7 +1911,8 @@ class ClipsTab(object):
     def __init__(self, app, parent):
         tk, ttk = app.tk, app.ttk
         self.app = app
-        self.f = f = ttk.Frame(parent, padding=6)
+        self.scroll = Scroll(app, parent, 6)    # (the page scrolls)
+        self.f, f = self.scroll.outer, self.scroll.inner
         self.rep = None             # the clip_report of the clip shown
         self.sel = 0                # the idle frame selected on the strip
         self.thumbs = {}
@@ -1822,8 +1925,8 @@ class ClipsTab(object):
         self.lb.heading("#0", text="Clip")
         self.lb.heading("joins", text="Joins at")
         self.lb.heading("exit", text="Exits to")
-        self.lb.column("#0", width=130)
-        self.lb.column("joins", width=150)
+        self.lb.column("#0", width=124)
+        self.lb.column("joins", width=96)    # (the tab in 1366 px, with its bar)
         self.lb.column("exit", width=60)
         self.lb.pack(fill="y")
         self.picked = None          # the clip _pick last took up
@@ -1912,7 +2015,7 @@ class ClipsTab(object):
         ttk.Label(ow, text="to").pack(side="left")
         ttk.Spinbox(ow, from_=0, to=9999, width=4, textvariable=self.oto
                     ).pack(side="left")
-        self.cues = tk.Listbox(ef, height=5, width=40, exportselection=False)
+        self.cues = tk.Listbox(ef, height=5, width=34, exportselection=False)
         self.cues.grid(row=3, column=0, columnspan=3, sticky="we", pady=4)
         self.cues.bind("<<ListboxSelect>>", lambda e: self._cue_pick())
         cf = ttk.Frame(ef)
@@ -2004,7 +2107,8 @@ class ClipsTab(object):
             return
         self.picked = cid
         if not self.app.proj.d.get("idle"):
-            return
+            self.refresh()          # (its source, in and out shown: "Set"
+            return                  # would write the last clip's onto it)
         c = self.app.proj.d["clips"][cid]
         idle_src = self.app.proj.d["idle"]["source"]
         self.view = ("clip", int(self.scrub.get()))
@@ -2418,7 +2522,8 @@ class OpeningsTab(object):
     def __init__(self, app, parent):
         tk, ttk = app.tk, app.ttk
         self.app = app
-        self.f = f = ttk.Frame(parent, padding=6)
+        self.scroll = Scroll(app, parent, 6)    # (the page scrolls)
+        self.f, f = self.scroll.outer, self.scroll.inner
         self.joins = []
         self.frames = None          # (pictures, the openings' first frames)
         left = ttk.Frame(f)
@@ -3265,7 +3370,8 @@ class LoopsTab(object):
     def __init__(self, app, parent):
         tk, ttk = app.tk, app.ttk
         self.app = app
-        self.f = f = ttk.Frame(parent, padding=6)
+        self.scroll = Scroll(app, parent, 6)    # (the page scrolls)
+        self.f, f = self.scroll.outer, self.scroll.inner
         left = ttk.Frame(f)
         left.grid(row=0, column=0, sticky="nw")
         self.panels = [LoopPanel(self, left, k)
@@ -3494,7 +3600,8 @@ class BuildTab(object):
         tk, ttk = app.tk, app.ttk
         import os88mkdisk as M
         self.app, self.M = app, M
-        self.f = f = ttk.Frame(parent, padding=6)
+        self.scroll = Scroll(app, parent, 6)    # (the page scrolls)
+        self.f, f = self.scroll.outer, self.scroll.inner
         self.bud = None
         top = ttk.Frame(f)
         top.pack(fill="x")
@@ -3512,7 +3619,7 @@ class BuildTab(object):
         self.chk.heading("#0", text="")
         self.chk.heading("where", text="Where")
         self.chk.heading("text", text="What")
-        self.chk.column("#0", width=60, stretch=False)
+        self.chk.column("#0", width=76, stretch=False)
         self.chk.column("where", width=170, stretch=False)
         self.chk.column("text", width=860)
         self.chk.tag_configure("ERROR", foreground="#b00")
@@ -3558,7 +3665,10 @@ class BuildTab(object):
         self.pal_c.pack(anchor="w")
         df = ttk.LabelFrame(f, text="...and make a disk of it, with "
                             "VBATTLE.O88 beside it", padding=4)
-        df.pack(fill="x", pady=4)
+        # (the disk and the game PACKED BEFORE the budget, at the bottom:
+        # the packer gives space in packing order, and on a laptop's screen
+        # the budget's lines pushed both buttons out of the window)
+        df.pack(fill="x", pady=4, side="bottom", before=bf)
         self.diskv = tk.StringVar()
         ttk.Combobox(df, textvariable=self.diskv, values=M.DISK_LABELS,
                      state="readonly", width=46).pack(side="left")
@@ -3570,7 +3680,7 @@ class BuildTab(object):
         gf = ttk.LabelFrame(f, text="...or make it a GAME: one .O88 for each "
                             "adapter, the battle inside it - copy the file "
                             "and double-click it", padding=4)
-        gf.pack(fill="x", pady=4)
+        gf.pack(fill="x", pady=4, side="bottom", before=df)
         ttk.Button(gf, text="Make the games", command=self._game
                    ).pack(side="left")
         self.game_l = ttk.Label(gf, text="", wraplength=700)
@@ -3741,6 +3851,99 @@ class BuildTab(object):
 
 # --- small form pieces ------------------------------------------------------------------
 
+class Scroll(object):
+    """A TAB THAT SCROLLS: OUTER is the notebook's page (the tab's `f`, so
+    nb.select(tab.f) and a drop's "inside this tab" test hold), and the
+    tab's content goes in INNER, a frame on a Canvas inside it. INNER is
+    never smaller than the view - a tab that fits fills it, as before -
+    and the scroll bars come only when it does not. The canvas ASKS for
+    the content's size, so the window still opens as tall as its tallest
+    tab where the screen allows (App._fit). The Battle tab is 900 px and
+    Title & endings 850: on a 1366x768 screen, without this, their lower
+    halves could not be reached at all.
+
+    The wheel scrolls the tab under the pointer (App._wheel: X11's
+    buttons 4 and 5, Windows' and the Mac's <MouseWheel>, Shift for
+    across) unless a list, a tree or a text under it scrolls itself; a
+    field reached by the keyboard is scrolled into view (App._focus)"""
+
+    def __init__(self, app, parent, padding=0):
+        tk, ttk = app.tk, app.ttk
+        self.outer = ttk.Frame(parent)
+        self.cv = tk.Canvas(self.outer, highlightthickness=0, bd=0)
+        self.vs = ttk.Scrollbar(self.outer, orient="vertical",
+                                command=self.cv.yview)
+        self.hs = ttk.Scrollbar(self.outer, orient="horizontal",
+                                command=self.cv.xview)
+        self.cv.configure(yscrollcommand=self.vs.set,
+                          xscrollcommand=self.hs.set)
+        self.cv.grid(row=0, column=0, sticky="nsew")
+        self.outer.rowconfigure(0, weight=1)
+        self.outer.columnconfigure(0, weight=1)
+        self.inner = ttk.Frame(self.cv, padding=padding)
+        self.win = self.cv.create_window(0, 0, window=self.inner,
+                                         anchor="nw")
+        self.inner.bind("<Configure>", lambda e: self._ask())
+        self.cv.bind("<Configure>", lambda e: self._lay())
+        app.scrolls[str(self.cv)] = self
+
+    def _ask(self):
+        """The content's size changed: the canvas asks for it"""
+        w, h = self.inner.winfo_reqwidth(), self.inner.winfo_reqheight()
+        if (int(self.cv.cget("width")), int(self.cv.cget("height"))) != \
+                (w, h):
+            self.cv.configure(width=w, height=h)
+        self._lay()
+
+    def _lay(self):
+        """The view's size or the content's: the content at least the
+        view's size, the region all of it, a bar where it is wanted"""
+        vw, vh = self.cv.winfo_width(), self.cv.winfo_height()
+        if vw <= 1 or vh <= 1:          # (not mapped yet)
+            return
+        rw, rh = self.inner.winfo_reqwidth(), self.inner.winfo_reqheight()
+        self.cv.itemconfigure(self.win, width=max(vw, rw),
+                              height=max(vh, rh))
+        self.cv.configure(scrollregion=(0, 0, max(vw, rw), max(vh, rh)))
+        for bar, need, grid in ((self.vs, rh > vh, dict(row=0, column=1)),
+                                (self.hs, rw > vw, dict(row=1, column=0))):
+            if need and not bar.winfo_ismapped():
+                bar.grid(sticky="ns" if bar is self.vs else "ew", **grid)
+            elif not need and bar.winfo_ismapped():
+                bar.grid_remove()
+        if rh <= vh:
+            self.cv.yview_moveto(0)
+        if rw <= vw:
+            self.cv.xview_moveto(0)
+
+    def scrolls(self, across=False):
+        """Is there anything to scroll, down (or ACROSS)?"""
+        lo, hi = (self.cv.xview() if across else self.cv.yview())
+        return lo > 0.0 or hi < 1.0
+
+    def see(self, w):
+        """Widget W, somewhere in INNER, scrolled into the view"""
+        try:
+            y = w.winfo_rooty() - self.inner.winfo_rooty()
+            x = w.winfo_rootx() - self.inner.winfo_rootx()
+            spans = ((y, w.winfo_height(), self.cv.winfo_height(),
+                      self.inner.winfo_height(), self.cv.yview,
+                      self.cv.yview_moveto),
+                     (x, w.winfo_width(), self.cv.winfo_width(),
+                      self.inner.winfo_width(), self.cv.xview,
+                      self.cv.xview_moveto))
+        except Exception:               # noqa: BLE001 (a TclError)
+            return                      # (a widget gone meanwhile)
+        for pos, size, view, total, where, move in spans:
+            if total <= view or total <= 0 or size >= view:
+                continue                # (one taller than the view: left)
+            top = where()[0] * total
+            if pos < top:
+                move(max(0, pos - 8) / float(total))
+            elif pos + size > top + view:
+                move(min(total - view, pos + size + 8 - view) / float(total))
+
+
 class Rows(object):
     """A frame of labelled fields in a grid, each committing on Return or
     on leaving it"""
@@ -3795,7 +3998,8 @@ class ActionsTab(object):
     def __init__(self, app, parent):
         tk, ttk = app.tk, app.ttk
         self.app = app
-        self.f = f = ttk.Frame(parent, padding=6)
+        self.scroll = Scroll(app, parent, 6)    # (the page scrolls)
+        self.f, f = self.scroll.outer, self.scroll.inner
         left = ttk.Frame(f)
         left.pack(side="left", fill="y")
         self.lb = tk.Listbox(left, height=24, width=24, exportselection=False)
@@ -4040,7 +4244,8 @@ class SoundsTab(object):
     def __init__(self, app, parent):
         tk, ttk = app.tk, app.ttk
         self.app = app
-        self.f = f = ttk.Frame(parent, padding=8)
+        self.scroll = Scroll(app, parent, 8)    # (the page scrolls)
+        self.f, f = self.scroll.outer, self.scroll.inner
         self.res = None             # the last measurement (vbtana levels)
         ttk.Label(f, text="Every sound the battle plays, as loud as it will "
                   "be heard. The music and the effects are kept at half "
@@ -4271,7 +4476,8 @@ class PartyTab(object):
     def __init__(self, app, parent):
         tk, ttk = app.tk, app.ttk
         self.app = app
-        self.f = f = ttk.Frame(parent, padding=6)
+        self.scroll = Scroll(app, parent, 6)    # (the page scrolls)
+        self.f, f = self.scroll.outer, self.scroll.inner
         left = ttk.Frame(f)
         left.pack(side="left", fill="y")
         self.lb = tk.Listbox(left, height=5, width=20, exportselection=False)
@@ -4755,7 +4961,8 @@ class EnemyTab(object):
     def __init__(self, app, parent):
         tk, ttk = app.tk, app.ttk
         self.app = app
-        self.f = f = ttk.Frame(parent, padding=6)
+        self.scroll = Scroll(app, parent, 6)    # (the page scrolls)
+        self.f, f = self.scroll.outer, self.scroll.inner
         self.left = ttk.Frame(f)
         self.left.pack(side="left", fill="y")
         self.body = ttk.Frame(f)

@@ -770,6 +770,17 @@ class Project:
                 used.append(en["loop"]["clip"])
         return used
 
+    def sources_used(self):
+        """The sources a build READS: the idle loop's, those of the clips
+        something plays, and those a used sound is cut from"""
+        d = self.d
+        out = {(d.get("idle") or {}).get("source")} | {
+            d["clips"][c]["source"] for c in self.clips_used()
+            if c in d["clips"]} | {
+            d["sounds"][k].get("source") for k in self.sounds_used()
+            if k in d["sounds"]}
+        return out - {None}
+
     # --- the title loop and the endings (SPEC.md 126.3.1) ---------------------
     def set_title(self, clip, loop=None, sound=None, leave=None, anchors=()):
         """The TITLE loop: clip CLIP's frames LOOP (all of it by default),
@@ -885,11 +896,17 @@ class Project:
         bc, br, bn, bh = t["band"]
         if br < y + h and br + bh > y:
             err("target", "the band overlaps the canvas")
+        used = self.sounds_used()
+        # a source is READ only for what is built (sources_used) - one
+        # nothing uses missing is said, and stops nothing (as a sound)
+        srcs = self.sources_used()
         for sid, s in d["sources"].items():
             if s["kind"] == "video" and self.path and \
                     not os.path.exists(self.here(s["path"])):
-                err("sources." + sid, "%s is missing" % s["path"])
-        used = self.sounds_used()
+                (err if sid in srcs else warn)(
+                    "sources." + sid, "%s is missing%s" % (
+                        s["path"], "" if sid in srcs else
+                        " (nothing built uses it)"))
         for sid, s in d["sounds"].items():
             if s["kind"] == "file" and self.path and sid in used and \
                     not os.path.exists(self.here(s["path"])):

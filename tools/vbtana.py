@@ -857,8 +857,12 @@ def budget(proj, data):
     for a in d["actions"].values():
         for pool in a["pools"].values():
             used |= set(pool)
-    ids = opened + [c for c in d["clips"] if c not in opened and
-                    (c not in looped or c in used)]
+        for per in a.get("by_target", {}).values():
+            for pool in per.values():
+                used |= set(pool)
+    every = set(proj.clips_used())  # (a clip nothing plays is not built -
+    ids = opened + [c for c in d["clips"] if c not in opened and   # battle_of
+                    (c not in looped or c in used) and c in every]  # skips it)
     for c, cid in zip(clips, ids):
         c["id"] = cid
     for c, bc in zip(clips, b.clips):

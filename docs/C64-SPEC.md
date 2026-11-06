@@ -689,7 +689,11 @@ fallback when the part cannot be had.
 eager, and a lazy row may not precede an eager one (SPEC.md 20.12.4). The
 build puts it there through `CC_PACKAGE`'s sixth argument and the shim says
 so with `CC_PARTS_AFTER_OVL` (apps/cc/Makefile.inc, crt0.asm).
-`ovl_fast_init` runs in `os88_main`: the 64KB code claim, the part copied in
+`ovl_fast_init` runs in `os88_main`: the 64KB code claim (`c64f_claimcode`,
+`OSAPI_MEM_P` with `MEMP_CONV` - conventional on every kernel, because C64 is
+`OS88_HIGHMEM` and on kern_mega a KB-door claim lands above 1MB as a lone
+data selector `OSAPI_MEM_CODESEL` refuses, which left the fast core and both
+translated ROMs off there), the part copied in
 (`c64f_core`), the part dropped, and the far call through
 `OSAPI_MEM_CODESEL`'s answer (`c64_fseg`; `c64_fcode` is the claim, followed
 by `os88_onmove`). **It runs in the RAM claim the accurate core already has**:
@@ -1217,7 +1221,7 @@ a block's exits jump STRAIGHT into the blocks they reach (4.9.4), and those
 jumps are only safe while every block dies together - invalidating one page
 would leave other blocks' jumps pointing into freed or rewritten cache. The
 volatile rule does what per-page invalidation was for: the page that keeps
-writing its own code is taken out of the recompiler after four flushes, and
+writing its own code is taken out of the recompiler after sixteen flushes, and
 the rest is translated again once and stays.
 
 #### 4.9.4 Chaining, batching, and the claim — BUILT
@@ -1255,8 +1259,10 @@ whole block fits, so the run's end is unchanged.
 **The claim, by tier.** `ovl_jit_init` claims 64KB, else 48; the cache ends
 where the claim does (`jv_end`). It is set up after every other part, beside
 the free heap, so that when it gives way the hole it leaves is one piece. When a D64 will not fit the heap
-the recompiler GIVES WAY: `c64_jit_drop` zeroes the core's page map, frees
-the claim, and the attach claims again; after the attach the recompiler is
+the recompiler GIVES WAY: `ovl_jit_drop` zeroes the core's page map, frees
+the claim, and the attach claims again (a disk already on drive 8 whose
+sector slots were in that claim keeps them in a 512-byte claim of its own,
+§11.5.1, so the drive holds its disk until the new one is whole); after the attach the recompiler is
 set up again in whatever is left. A smaller machine gets a smaller cache,
 never a refused disk. **Where there is extended memory the D64 goes there
 and the two fit together** (§11.5.1); the giving way is for a machine
@@ -1568,6 +1574,26 @@ Four rules, each of which exists because getting it wrong is silent:
    scan reads two keys down as one of them or neither - measured on 86Box,
    `PRINT` typed at 12% came out `PRIT`. A key HELD on the host never waits
    and never blocks, so chords and game keys go in together as they are.
+6. **A tap keeps the Shift it was typed with.** Rules 4 and 5 keep a tap in
+   the matrix, or waiting in the ring, for a fifth of a second of the user's
+   time on a slow machine, and by then the host's Shift belongs to the NEXT
+   key: `4+` typed at speed came out `$+` (MartyPC, the VGA XT - the 4 still
+   fresh when the hand went to Shift for the `+`), and a shifted key whose
+   Shift was let go before its turn came out unshifted. So a down-list
+   entry whose host key is UP brings its OWN Shift to the matrix, never the
+   live one, and while a tap typed without Shift is shown the live Shift
+   waits. Its own Shift is the ASCII's where the ASCII can say: the BIOS
+   made `4` or `$`, `e` or `E` with the Shift as it stood at the make, so
+   a key whose entry is not optionally shifted (a number, a sign) and a
+   lower-case letter take none. Only the rest (an upper-case letter,
+   space, the scan-mapped keys) use the Shift `c64_key_push` recorded with
+   the press, in bit 7 of the ring's scan code - not alone, because
+   `os88_onkey` can arrive late, after the hand has gone to Shift for the
+   next key (measured: `e+` pushed the `e` with the `+`'s Shift down). A
+   key HELD on the host still takes the live Shift, so
+   SHIFT+letter held, and a bare Shift as a game's second button, are as
+   before. `c64uitest` holds both halves, red with the live Shift
+   unconditional.
 
 The **down-list is `C64K_DOWNMAX` = 16 entries** and its overflow path is
 bounded: the 17th simultaneous key is dropped, not written past the end. The
@@ -3129,7 +3155,9 @@ File dialog - puts a `.D64` on drive 8. `os88_onfile` tells a D64 from a
 64KB is refused anyway): 174,848 bytes (35 tracks) or 196,608 (40), each with
 or without its error bytes. Anything else in that size range is `Not a D64
 image.` The image is held WHOLE, in one claim (683 or 768 sectors, plus 512
-bytes for the last read's sector rounding), read once in 32KB chunks through
+bytes for the last read's sector rounding - 768 for 35 tracks, whose last
+read reaches into the error bytes and ends on the sector after them, at
+175,616), read once in 32KB chunks through
 `c64_read_at` - `OSAPI_FILE_READ_AT` into a far buffer, a package-local shim
 in `c64.asm` - and given back when another image is attached. `D64: no heap
 for it.` and `D64: cannot read it.` leave the drive as it was;
@@ -3219,6 +3247,10 @@ file-system device is a host directory. `ovl_fs_*` (`c64disk.c`):
   `BLOCKS FREE.` from the free kilobytes.
 - **A C64 name becomes an 8.3 name**: letters and digits kept (a shifted
   letter is its letter), anything else `_`, eight at most, `.PRG` after.
+  `*` and `?` are kept for LOAD's matching, so a SAVE name holding one is
+  refused (`Not saved: NAME*.PRG`, nothing written - a 1541's `33,
+  SYNTAX ERROR`): FAT would take the character and nothing could name the
+  file.
 
 `c64uitest` keeps a folder in memory and holds: a 10,000-byte SAVE across
 the staging's chunks with its address, the exists refusal, `@0:`, LOAD by
@@ -3248,8 +3280,10 @@ conventional memory:
   - the slots are the claim's last 512 bytes, which the cache stops short of
   (`CACHE_END` `$FD00`, `jv_end` 768 bytes under the claim's end), and the
   image is read 4KB at a time through the cache, which is then flushed
-  (`JC_FLUSH+1` = 2). They follow it when it moves (`os88_onmove`) and go with
-  it if it is dropped. Without one, a 512-byte claim for the slots and an 8KB
+  (`JC_FLUSH+1` = 2). They follow it when it moves (`os88_onmove`), and when it
+  is dropped for an attach they move into a 512-byte claim of their own
+  (`ovl_jit_drop`: only a cache of the image, so nothing is copied) - the
+  disk stays on drive 8 until the new one is whole. Without one, a 512-byte claim for the slots and an 8KB
   buffer, or down to 512 bytes, given back after.
 - **The four OSAPI_XMEM_* calls** are `c64fast.inc`'s `c64x_*` shims; the
   token is two words the C never adds to (`c64x_copy` adds the offset), so it

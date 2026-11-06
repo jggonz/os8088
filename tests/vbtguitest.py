@@ -334,6 +334,35 @@ with tempfile.TemporaryDirectory() as tdir:
        any(v[0] == "the title (a loop)" for v, _ in rows),
        "the budget names clips as the project does - the title loop too - "
        "and the Limit is over a floppy's disk (%s)" % tags["ari_limit"])
+    # A CLIP NOTHING PLAYS, ahead of the rest: not built, so not named -
+    # it was, and every row after it carried the NEXT clip's name
+    pu = P.Project.load(vbp)
+    first = next(iter(pu.d["clips"]))
+    pu.d["clips"] = dict([("unused", dict(pu.d["clips"][first]))] +
+                         list(pu.d["clips"].items()))
+    du = B2.build_project(pu)
+    rows = G.budget_rows(A.budget(pu, du))
+    bn = [c["name"].strip() for c in B2.Bundle(du).clips]
+    ids = [v[0] for v, _ in rows]
+    ok("unused" not in ids and len(ids) == len(bn) and all(
+        i.endswith("(a loop)") or B2.name8(i).decode().strip() == n
+        for i, n in zip(ids, bn)),
+       "...and a clip nothing plays shifts no row's name (%s / %s)"
+       % (ids[:4], bn[:4]))
+    ok(B2.name8("aaaaaaaÉ") == b"AAAAAAAE" and
+       B2.name8("Ünïcødé") == b"UNICDE  ",
+       "a clip id in any letters is ASCII in the clip table - never a "
+       "letter's UTF-8 cut at its eighth byte, which the bundle's own "
+       "reader raised on")
+    pu.add_source("gone", path="nowhere/gone.mp4")
+    lv = [(x.level, x.where) for x in pu.check()]
+    fsrc = pu.d["clips"][first]["source"]
+    pu.set(("sources", fsrc), {"kind": "video", "path": "nowhere/also.mp4"})
+    lv2 = [(x.level, x.where) for x in pu.check()]
+    ok(("WARN", "sources.gone") in lv and ("ERROR", "sources.gone") not in lv
+       and ("ERROR", "sources." + fsrc) in lv2,
+       "a missing video nothing built uses is a WARN, one the build reads "
+       "an ERROR (%s; %s)" % (lv, [x for x in lv2 if x[0] == "ERROR"]))
     open(os.path.join(tdir, "BATTLE.VBT"), "wb").write(data)
     try:
         B2.disk_plan(pr, 0)

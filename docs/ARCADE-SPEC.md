@@ -124,7 +124,9 @@ A set the user has given ARCADE is one file, named for MAME's set -
 `ar_romload` reads it whole from ARCADE's current folder (`OSAPI_FILE_READ`:
 a probe for its size, a claim, the read; the file may be packed on the
 disk) and refuses it, with a toast naming the file, unless the header is
-right, the name is the board's, and the image's CRC-32 is the header's
+right, the name is the board's, the length is the set's in `arcsets.inc` (a
+header that agrees with a SHORT image of its own would otherwise have
+`ar_fill` and `BD_BUILD` read past the claim), and the image's CRC-32 is the header's
 (`ar_crc32`, a table made at start). The recipe is then filled from it
 (`ar_fill`) and the board builds what it needs (`BD_BUILD`). `make
 arcaderoms` writes the files from the pinned sets (`getarcrom.py
@@ -1451,10 +1453,16 @@ Undocumented opcodes are 2-cycle NOPs, counted in `m6_bad`.
   constant 165, as Pac-Man's), each sample is the DAC after the 6503 has
   run 81 cycles and a fraction of 28,490/65,536 more - 894,886 / 10,989
   exactly, so the pitch is the board's.
+- **The chips are kept at the pick** (`qbs_want`, `qbs_keep`, in
+  `qb_build`): the `.ROM` image is freed when the board is built, long before
+  the first play, so on a 386 or better with a `QBERT.ROM` that carries them
+  the ROM part is claimed 4KB larger and the two chips copied to its end
+  (`QBS_CHIPAT`, 8C00h). Not the board's own 32KB there: with the image
+  still held that would be ARCADE's ninth claim, over `MEM_OWNER_MAX`.
 - **Power-on** (`qbs_prep`, `BD_SBPREP`, on the desktop at the first play):
-  the memory claimed, the chips copied to 7000h, the RIOT and the 6503
-  reset, and 0.2 s of the board's own start-up run. It stays on between
-  plays, and goes with the board (`qb_off`).
+  the memory claimed, the chips copied from the ROM part to 7000h, the RIOT
+  and the 6503 reset, and 0.2 s of the board's own start-up run. It stays on
+  between plays, and goes with the board (`qb_off`).
 
 ### 13.4 Verification
 
@@ -1463,7 +1471,11 @@ Undocumented opcodes are 2-cycle NOPs, counted in `m6_bad`.
 - `tests/qbsmix.py` (Unicorn, row `qbsmix`): `arcqbs.inc` and the core as
   ARCADE assembles them, powered on and fed 15 of Q\*bert's commands over
   640 frames: all 115,840 samples are the reference's, driven the same way.
-  Red at frame 42 with the cycle fraction one 65,536th off.
+  Red at frame 42 with the cycle fraction one 65,536th off. It runs the
+  PACKAGE's order - the chips kept, the image freed, then the power-on - and
+  is red at frame 2 with `qbs_keep` a bare `ret`: run with the image still
+  held, as it was, it passed while the package's `qbs_prep` found
+  `ar_rimgc` zero at every play and the board was never heard.
 - Not measured: the board's cost on a real machine (the 29 MHz figure is an
   estimate), and the sound itself in a field run on a 386.
 

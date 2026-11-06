@@ -17,6 +17,7 @@ RH_NCH      equ 1
 RH_NACT     equ 2
 RH_NMENU    equ 3
 RH_NST      equ 4
+RH_NPOOL    equ 5
 RH_NITEM    equ 6
 RH_OCH      equ 8
 RH_OACT     equ 10
@@ -910,6 +911,9 @@ vb_canpay:
 .i:
     cmp al, C_ITEM
     jne .l
+    mov dl, [si+AC_ITEM]            ; (an item the party has not got: never,
+    cmp dl, [RL+RH_NITEM]           ; and vb_pay's write stays in vb_items)
+    jae .no
     push bx
     mov bl, [si+AC_ITEM]
     shl bx, 1
