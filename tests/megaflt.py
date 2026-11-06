@@ -64,11 +64,22 @@ def main():
     box = os88bochs.Box(out, [os.path.join(ROOT, p) for p in PKGS])
     fails = []
     lines = []
-    said = []       # every CLOSED line read out of the kernel's STATE: it
-                    # holds the LAST incident's toast (mega_fkmsg), and the
-                    # builds are five seconds apart, so a poll sees each
+    said = []       # every CLOSED line read out of the kernel's STATE. It
+    # holds the LAST incident's toast (mega_fkmsg), and the builds are five
+    # GUEST seconds apart - which a poll on the HOST's clock does not
+    # guarantee to see: on the loaded soak a 20-second host stall between
+    # two polls let FLTA..FLTD all fault unseen (2026-11-06, e9.out: no stop
+    # from FLTA's tick to FLTE's refusal). So the guest is STOPPED at each
+    # toast (a write watchpoint on [mega_fktm], which mega_fkmsg_mk sets
+    # once the message is whole) and read there (Box.watch_write)
     def look():
         got = box.said()
+        for fkn, msg in box.watched:
+            if fkn[:1] not in (b"", b"\0"):
+                l = "kern_mega CLOSED " + msg.split(b"\0")[0].decode(
+                    "latin-1")
+                if l not in said:
+                    said.append(l)
         for l in got:
             if l.startswith("kern_mega CLOSED") and l not in said:
                 said.append(l)
@@ -78,6 +89,7 @@ def main():
             fails.append("kern_mega never switched to protected mode in 240s")
             raise StopIteration
         box.up()                        # the desktop, off kernel state
+        box.watch_write("mega_fktm", [("mega_fkn", 1), ("mega_fkmsg", 25)])
         box.megarun()                   # C:, RUN, 0RUN.O88
         end = time.time() + 300
         while time.time() < end:
@@ -87,6 +99,8 @@ def main():
             if "MEGARUN: done" in lines and "FLTZ: alive" in lines:
                 break
             time.sleep(0.2)
+        lines = look()
+        box.unwatch()                   # the guest runs on for the input
         os88bochs.shot(os.path.join(out, "after.png"))
         if "FLTZ: alive" in lines:
             # each answer is FLTZ's own E9 line, so wait for THAT (10 s,
