@@ -56,6 +56,7 @@
 #define PDU_SIDE_W   136        /* Pages/Outline sidebar, a multiple of 8 */
 #define PDU_NOTE_W   160        /* Notes & edits, a multiple of 8 */
 #define PDU_SBAR_W   16         /* the canvas's vertical bar */
+#define PDU_GROW_W   16         /* the grow box the status line stops short of */
 #define PDU_MARGIN   8          /* desk around the page, each side */
 #define PDU_MINCANVAS 160       /* below this the panels fold away */
 

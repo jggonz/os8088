@@ -17568,7 +17568,43 @@ $(BUILD)/pagedesk.o88: $(BUILD)/pagedesk.bin $(BUILD)/pdeng.part \
 $(BUILD)/PAGEDESK.OVL: $(BUILD)/pagedesk.o88 ;
 
 pagedesk: $(BUILD)/pagedesk.o88
+
+# --- PAGEDESK'S OWN DISK, all four geometries (PD-24) ------------------------
+# PAGEDESK.O88 (every part inside it), README.TXT and the samples at the ROOT,
+# so the empty view's Sample guide finds XTGUIDE.PDF beside the program. The
+# PDFs go on RAW: os88disk.py packs nothing it is not told to, and PDENG
+# reads them with READ_SEQ/READ_AT, which deliver a file as it lies (the
+# WaveRack clips' precedent, PAGEDESK-PLAN L8). The samples are the fix
+# agent's apps/pagedesk/samples/*.PDF; until those land the one stand-in
+# apps/pagedesk/stubs/HELLO.PDF rides alone.
+PD_SAMPLES ?= $(or $(wildcard $(PDDIR)/samples/*.PDF),$(PDDIR)/stubs/HELLO.PDF)
+PDDISKDEPS := $(BUILD)/pagedesk.o88 $(PDDIR)/README.TXT $(PD_SAMPLES) \
+              tools/os88disk.py tools/checkreadme.py
+define PDDISK
+	python3 tools/checkreadme.py $(PDDIR)/README.TXT
+	python3 tools/os88disk.py -o $@ --size $(1) $(BUILD)/pagedesk.o88 \
+	    $(PDDIR)/README.TXT $(PD_SAMPLES) --folder SYSTEM/APPDATA
+	python3 tools/os88disk.py --verify $@
+endef
+$(BUILD)/pagedesk.img: $(PDDISKDEPS)
+	$(call PDDISK,1440)
+$(BUILD)/pagedesk120.img: $(PDDISKDEPS)
+	$(call PDDISK,1200)
+$(BUILD)/pagedesk720.img: $(PDDISKDEPS)
+	$(call PDDISK,720)
+$(BUILD)/pagedesk360.img: $(PDDISKDEPS)
+	$(call PDDISK,360)
+pagedeskdisk: $(BUILD)/pagedesk.img $(BUILD)/pagedesk120.img \
+              $(BUILD)/pagedesk720.img $(BUILD)/pagedesk360.img
 .PHONY: pagedesk pagedeskdisk
+
+# ...and the everything set and the live media carry it (SPEC.md 80.6,
+# tests/unit/t_livefull.py): one PAGEDESK\ folder, the program beside its
+# samples. Appended here because $(ALLAPPSARGS) is defined just above and
+# $(LIVEARGS) reads it further down.
+ALLAPPSARGS += $(addprefix PAGEDESK:,$(BUILD)/pagedesk.o88 $(PDDIR)/README.TXT \
+                                     $(PD_SAMPLES))
+ALLAPPS += $(BUILD)/pagedesk.o88 $(PDDIR)/README.TXT $(PD_SAMPLES)
 # ---- end PageDesk: shell ----
 
 allapps: $(ALLAPPSLIST) $(ALLAPPSLIST120)

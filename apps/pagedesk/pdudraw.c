@@ -188,6 +188,24 @@ static void pdu_put(char *line, int cols, int at, const char *s)
     }
 }
 
+/* one line centred on cx and CUT to maxw pixels: the cut is a copy, because
+ * font_run draws to the string's NUL (the first version measured the cut
+ * and then handed font_run the whole string, which ran off the card) */
+static char pdu_cut[64];
+static void pdu_cutrun(int cx, int y, const char *s, int maxw)
+{
+    int i, n;
+    n = os88_strlen(s);
+    if (n > (int)sizeof(pdu_cut) - 1)
+        n = sizeof(pdu_cut) - 1;
+    if (n * PDU_CW > maxw)
+        n = maxw / PDU_CW;
+    for (i = 0; i < n; i++)
+        pdu_cut[i] = s[i];
+    pdu_cut[n] = 0;
+    os88_font_run(cx - n * PDU_CW / 2, y, pdu_cut, OS88_BLACK, OS88_WHITE);
+}
+
 static char pdu_sline[96];
 static char pdu_sright[24];
 static void pdu_status_paint(void)
@@ -197,7 +215,9 @@ static void pdu_status_paint(void)
     const char *ctr;
 
     r = &pdu_L.status;
-    cols = (r->x2 - r->x1 + 1) / PDU_CW;
+    /* the window's grow box sits in the content's bottom-right corner
+     * (os88_wm_grow), so the line stops PDU_GROW_W short of the edge */
+    cols = (r->x2 - r->x1 + 1 - PDU_GROW_W) / PDU_CW;
     if (cols > 95)
         cols = 95;
     for (i = 0; i < cols; i++)
@@ -252,7 +272,8 @@ static void pdu_status_full(void)
     struct os88_rect *r;
     r = &pdu_L.status;
     pdu_fill(r->x1, r->y1, r->x2, r->y2, OS88_WHITE);
-    pdu_status_paint();
+    pdu_status_paint();                 /* pdu_paint_rect puts the grow
+                                         * box back over the fill, last */
 }
 
 /* say s on the status line - the one place a reason, a result or an error
@@ -490,7 +511,7 @@ static void pdu_empty_paint(struct os88_rect *clip)
     pdu_desk(clip->x1, clip->y1, clip->x2, clip->y2);
     cx = (c->x1 + c->x2) / 2;
     cy = (c->y1 + c->y2) / 2;
-    w = 34 * PDU_CW;
+    w = 46 * PDU_CW;                    /* the longest PDE_* text is 44 */
     if (w > c->x2 - c->x1 - 8)
         w = c->x2 - c->x1 - 8;
     pdu_fill(cx - w / 2, cy - 34, cx + w / 2, cy + PDU_BAR_F + 6, OS88_WHITE);
@@ -510,14 +531,8 @@ static void pdu_empty_paint(struct os88_rect *clip)
         l1 = "No document open.";
         l2 = "Open a PDF, or read the guide.";
     }
-    i = os88_strlen(l1);
-    if (i * PDU_CW > w - 8)
-        i = (w - 8) / PDU_CW;
-    os88_font_run(cx - i * PDU_CW / 2, cy - 28, l1, OS88_BLACK, OS88_WHITE);
-    i = os88_strlen(l2);
-    if (i * PDU_CW > w - 8)
-        i = (w - 8) / PDU_CW;
-    os88_font_run(cx - i * PDU_CW / 2, cy - 16, l2, OS88_BLACK, OS88_WHITE);
+    pdu_cutrun(cx, cy - 28, l1, w - 8);
+    pdu_cutrun(cx, cy - 16, l2, w - 8);
     for (i = 0; i < pdu_L.nctl; i++)
         if (pdu_L.ctl[i].flags & CF_EMPTY)
             pdu_ctl_paint(i);

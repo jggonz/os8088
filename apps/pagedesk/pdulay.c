@@ -280,12 +280,14 @@ void pdu_layout(struct pdu_lay *L, int ox, int oy, int w, int h,
     }
 
     /* --- modes, then the mode's tools ------------------------------------ */
-    lay_put(L, C_M_READ, CF_BAR2);
-    lay_x = lay_x - lay_gap;            /* the four modes abut, as a tab row */
-    lay_put(L, C_M_ANNOT, CF_BAR2);
-    lay_x = lay_x - lay_gap;
-    lay_put(L, C_M_EDIT, CF_BAR2);
-    lay_x = lay_x - lay_gap;
+    /* the four modes abut, as a tab row: the gap is taken back only after a
+     * control that was placed */
+    if (lay_put(L, C_M_READ, CF_BAR2))
+        lay_x = lay_x - lay_gap;
+    if (lay_put(L, C_M_ANNOT, CF_BAR2))
+        lay_x = lay_x - lay_gap;
+    if (lay_put(L, C_M_EDIT, CF_BAR2))
+        lay_x = lay_x - lay_gap;
     lay_put(L, C_M_PAGES, CF_BAR2);
     lay_group();
     t = pdu_tools(mode, !full);
@@ -299,8 +301,8 @@ void pdu_layout(struct pdu_lay *L, int ox, int oy, int w, int h,
         lay_bar(&L->side, 1);
         lay_y1 = L->side.y1 + 2;
         lay_y2 = lay_y1 + PDU_BAR_F - 3;
-        lay_put(L, C_SB_PAGES, CF_PANEL);
-        lay_x = lay_x - lay_gap;
+        if (lay_put(L, C_SB_PAGES, CF_PANEL))
+            lay_x = lay_x - lay_gap;
         lay_put(L, C_SB_OUTL, CF_PANEL);
         lay_y1 = L->side.y2 - PDU_BAR_F + 2;
         lay_y2 = L->side.y2 - 2;

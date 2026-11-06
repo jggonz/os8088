@@ -26,16 +26,28 @@ unsigned pdu_mdx;               /* ...and its DX */
 static unsigned pdu_xb;         /* the exchange block, 1 KiB (3.2) */
 static struct pdxb_init pdu_xinit;
 
-/* the document set (16.2), in this order; KB except the band */
+/* the document set (16.2), in this order; KB except the band.
+ *
+ * TWO CLAIMS, CARVED (20.6.2). MEM_OWNER_MAX is 8 claims per owner on
+ * kern_big (kernel/memory.inc, SPEC.md 50), and 16.2's rows one claim each
+ * come to 13 at a save's peak. So the six document rows ride two claims cut
+ * with os88_seg_sub (a selector on kern_mega, seg + para on every real-mode
+ * kernel): A = cache, arena, tables, glyph cache (47 KiB) and B = display
+ * list, band (<= 27 KiB). Every cut is on a KiB, so every sub-segment is
+ * 512-aligned for a disk transfer (SPEC.md 2.1.1); the cache is first in A,
+ * at the claim's own base. The peak is then the carve, the exchange block,
+ * the font bank, A, B, the overlay, PDWRT and its buffers: 8. */
 #define PDU_DC_CACHE  0
 #define PDU_DC_ARENA  1
 #define PDU_DC_TABLES 2
-#define PDU_DC_DL     3
-#define PDU_DC_BAND   4
-#define PDU_DC_GLYPH  5
+#define PDU_DC_GLYPH  3
+#define PDU_DC_DL     4
+#define PDU_DC_BAND   5
 #define PDU_NDC       6
-static const unsigned pdu_dckb[PDU_NDC] = { 16, 8, 11, 22, 0, 12 };
-static unsigned pdu_dc[PDU_NDC];        /* segments, 0 = not held */
+#define PDU_DC_SPLIT  4                 /* rows 0..3 in claim A, 4..5 in B */
+static const unsigned pdu_dckb[PDU_NDC] = { 16, 8, 11, 12, 22, 0 };
+static unsigned pdu_dc[PDU_NDC];        /* sub-segments, 0 = not held */
+static unsigned pdu_dclaim[2];          /* the two real claims */
 static unsigned pdu_bandb;              /* the band's bytes */
 
 static unsigned pdu_bankraw;            /* the PDRES claim... */
@@ -152,11 +164,13 @@ static int pdu_mod_launch(void)
 static void pdu_doc_free(void)
 {
     int i;
-    for (i = 0; i < PDU_NDC; i++)
-        if (pdu_dc[i]) {
-            os88_mem_free(pdu_dc[i]);
-            pdu_dc[i] = 0;
+    for (i = 0; i < 2; i++)
+        if (pdu_dclaim[i]) {
+            os88_mem_free(pdu_dclaim[i]);
+            pdu_dclaim[i] = 0;
         }
+    for (i = 0; i < PDU_NDC; i++)
+        pdu_dc[i] = 0;
 }
 
 static void pdu_wrt_out(void)
@@ -255,34 +269,46 @@ static int pdu_bank_load(void)
 
 /* open: the document set. 0, or PDE_NOMEM with pdu_needkb set */
 static unsigned pdu_needkb;
+static unsigned pdu_dcpara[PDU_NDC];    /* each row's size in paragraphs */
 static int pdu_doc_claim(void)
 {
-    int i;
-    unsigned paras, w;
+    int i, c, first, last;
+    unsigned w, tot, at;
 
     pdu_doc_free();
     w = pdu_scrw;
     if (pdu_bpp >= 4)
-        pdu_bandb = ((w + 1) >> 1) << 4;         /* PD_BANDROWS = 16 */
+        pdu_bandb = ((w + 1) >> 1) << 4;        /* PD_BANDROWS = 16 */
     else
         pdu_bandb = ((w + 7) >> 3) << 4;
     pdu_needkb = 0;
     for (i = 0; i < PDU_NDC; i++) {
-        if (i == PDU_DC_BAND)
-            paras = (pdu_bandb + 15) >> 4;
+        if (i == PDU_DC_BAND)                   /* the band to a whole KiB */
+            pdu_dcpara[i] = ((pdu_bandb + 1023) >> 10) << 6;
         else
-            paras = pdu_dckb[i] << 6;
-        pdu_needkb = pdu_needkb + ((paras + 63) >> 6);
+            pdu_dcpara[i] = pdu_dckb[i] << 6;
+        pdu_needkb = pdu_needkb + (pdu_dcpara[i] >> 6);
     }
-    for (i = 0; i < PDU_NDC; i++) {
-        if (i == PDU_DC_BAND)
-            paras = (pdu_bandb + 15) >> 4;
-        else
-            paras = pdu_dckb[i] << 6;
-        pdu_dc[i] = os88_mem_claim_p(paras);
-        if (pdu_dc[i] == 0) {
+    for (c = 0; c < 2; c++) {
+        first = c ? PDU_DC_SPLIT : 0;
+        last = c ? PDU_NDC : PDU_DC_SPLIT;
+        tot = 0;
+        for (i = first; i < last; i++)
+            tot = tot + pdu_dcpara[i];
+        pdu_dclaim[c] = os88_mem_claim_p(tot);
+        if (pdu_dclaim[c] == 0) {
             pdu_doc_free();
             return PDE_NOMEM;
+        }
+        at = 0;
+        for (i = first; i < last; i++) {
+            pdu_dc[i] = at ? os88_seg_sub(pdu_dclaim[c], at, pdu_dcpara[i])
+                           : pdu_dclaim[c];
+            if (pdu_dc[i] == 0) {
+                pdu_doc_free();
+                return PDE_NOMEM;
+            }
+            at = at + pdu_dcpara[i];
         }
     }
     pdu_xinit.cache_seg = pdu_dc[PDU_DC_CACHE];
@@ -294,7 +320,7 @@ static int pdu_doc_claim(void)
     pdu_xinit.dl_seg = pdu_dc[PDU_DC_DL];
     pdu_xinit.dl_kb = pdu_dckb[PDU_DC_DL];
     pdu_xinit.band_seg = pdu_dc[PDU_DC_BAND];
-    pdu_xinit.band_bytes = pdu_bandb;
+    pdu_xinit.band_bytes = pdu_bandb;      /* the claim is a whole KiB */
     pdu_xinit.glyph_seg = pdu_dc[PDU_DC_GLYPH];
     pdu_xinit.glyph_kb = pdu_dckb[PDU_DC_GLYPH];
     pdu_xinit.bank_seg = pdu_bank;

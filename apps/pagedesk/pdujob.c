@@ -238,6 +238,8 @@ static void pdu_outline_fetch(void)
 }
 
 /* PAGEINFO for page n, then the view. 0 or a PDE_*. No lock: a disk read. */
+static int pdu_incpg;                   /* page + 1 whose incompleteness
+                                         * was said; 0 = not yet */
 static int pdu_page_load(int n)
 {
     unsigned r;
@@ -247,6 +249,7 @@ static int pdu_page_load(int n)
     pd_fcopy_in(pdu_xb, 0, &pdu_pinfo, sizeof(pdu_pinfo));
     pdu_page = n;
     pdu_inc = 0;
+    pdu_incpg = 0;
     pdu_sy = 0;
     pdu_sx = 0;
     pdu_view_set();
@@ -358,9 +361,16 @@ static void pdu_render_step(void)
         pdu_xrst.first[31] = 0;
         os88_strcpy(pdu_incwhy, pdu_xrst.first, sizeof(pdu_incwhy));
     }
+    /* ONCE A PAGE: a repair of a damaged strip (a dialog closing, a
+     * popover going) draws the same incomplete page again, and saying so
+     * again would overwrite what the user just did - a save's outcome was
+     * lost exactly that way. Help > Document info keeps the fact. */
     if (pdu_inc) {
-        pdu_say2("Incomplete rendering - ", pdu_incwhy);
-        pdu_wsay(pdu_msg);
+        if (pdu_incpg != pdu_page + 1) {
+            pdu_incpg = pdu_page + 1;
+            pdu_say2("Incomplete rendering - ", pdu_incwhy);
+            pdu_wsay(pdu_msg);
+        }
     } else if (pdu_jslices > 8)
         pdu_wsay("Page drawn.");
 }
