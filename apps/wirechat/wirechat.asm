@@ -105,7 +105,9 @@ WC_MINH     equ 147
 
 ; --- stores (SPEC.md 113.10) -------------------------------------------------
 WC_NICKN    equ 13              ; a nick, 12 and the NUL
-WC_KEYN     equ 37              ; an owned nick's code: a UUID, 36 and the NUL
+WC_KEYN     equ 37              ; the nick's code, owned (a UUID, 36) or
+                                ; claimed (19, SPEC.md 113.2.2), and the NUL
+WC_KBUFN    equ 13 + WC_KEYN    ; 'Your code is ' and a code (SPEC.md 113.6.6)
 WC_TEXTN    equ 201             ; a message, 200 and the NUL
 WC_NMSG     equ 40              ; messages held for the view: the server's
                                 ; history is 30 (SPEC.md 113.2.3), and 10 more
@@ -206,12 +208,15 @@ LK_LIVE     equ 3               ; a session
 LK_REST     equ 4               ; a 503: waiting [wc_wait]
 LK_OFF      equ 5               ; a failure: backing off [wc_wait]
 LK_KEY      equ 6               ; the nick is owned: waiting for its code
+LK_GONE     equ 7               ; a 410: signed in elsewhere, nothing is sent
+                                ; until the user asks (SPEC.md 113.6.6)
 
 RQ_NONE     equ 0               ; the request in flight
 RQ_JOIN     equ 1
 RQ_POLL     equ 2
 RQ_SAY      equ 3
 RQ_FLAG     equ 4
+RQ_CLAIM    equ 5               ; claim, or release (SPEC.md 113.2.2)
 
 MD_MSG      equ 0               ; the field's modes (SPEC.md 113.6.1)
 MD_NICK     equ 1
@@ -418,6 +423,7 @@ WC_HOLD     equ 70              ; seconds a request may take before it is
     WCV wc_qtext, WC_TEXTN      ; ...this one
     WCV wc_qflag, 4             ; a flag is queued: this seq, 0 = none
     WCV wc_qflagdm, 1           ; ...in a conversation
+    WCV wc_qclaim, 1            ; a claim is queued: 1 claim, 2 release
     WCV wc_tsub, 1              ; ticks into the current second
     WCV wc_vgen, 1              ; bumped at every view change...
     WCV wc_rqvgen, 1            ; ...and as it was when the request was made
@@ -491,8 +497,11 @@ WC_HOLD     equ 70              ; seconds a request may take before it is
     WCV wc_rqnote, 1            ; ...and whether it set the notice line
     WCV wc_draft, WC_TEXTN      ; the message set aside for another mode
     WCV wc_askn, WC_NICKN       ; the nick an alert asks about...
-    WCV wc_askwhat, 1           ; ...and what it asks: 1 add, 2 remove, 3 flag
+    WCV wc_askwhat, 1           ; ...and what it asks: 1 add, 2 remove, 3 flag,
+                                ; 4 claim, 5 release, 0 nothing (the code's)
     WCV wc_askbuf, 40           ; ...in its words
+    WCV wc_kshow, 1             ; a K arrived: its alert is owed (wc_onwake)
+    WCV wc_kbuf, WC_KBUFN       ; ...and its words, which the alert keeps
     WCV wc_mbuf, WC_NOTEN       ; '<nick> mentioned you in #<room>'
     WCV wc_cpl, 1               ; Tab's @nick run: the typed prefix, 0 none
     WCV wc_cpi, 1               ; ...the roster record it took last
@@ -621,7 +630,7 @@ wc_ttl      equ 16                      ; the header's name field: 'WireChat'
 
 ; --- the menus (SPEC.md 113.6.4) ---------------------------------------------
     OS88_MENUSET wc_menus, wc_ttl, wc_oncmd
-        OS88_MENU wc_m_chat, wc_i_chat, 5
+        OS88_MENU wc_m_chat, wc_i_chat, 7
         OS88_MENU wc_m_rooms, wc_i_rooms, WC_NROOM
         OS88_MENU wc_m_stat, wc_i_stat, 3
         OS88_MENU wc_m_frnd, wc_i_frnd, 2

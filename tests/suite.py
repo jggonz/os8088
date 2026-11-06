@@ -19739,7 +19739,7 @@ SOAK = [
         "WIRECHAT end to end over a real card (SPEC.md 113.12): the test's "
         "own fixture - a literal stdlib reading of SPEC.md 113.2 - on 8093, "
         "and `make wirechattest`'s B: carrying the package and a "
-        "WIRECHAT.CFG aimed at it. Fifteen assertions: the join is 113.3's "
+        "WIRECHAT.CFG aimed at it. Twenty-two assertions: the join is 113.3's "
         "request to the byte, the session goes live with the issued token, "
         "the lobby's history is in the store in order, a HELD poll is "
         "answered by a second session's message, a sent message is the "
@@ -19752,11 +19752,29 @@ SOAK = [
         "written to the floppy's WIRECHAT.CFG. Then SPEC.md 113.2.4: x=1 on "
         "every request, a message stored with its date, a mention in the "
         "view marked, an A from another room marking that room and saying "
-        "who, and Tab completing @ret to @RetroAmy off the roster. QEMU by "
+        "who, and Tab completing @ret to @RetroAmy off the roster. Then "
+        "SPEC.md 113.6.6's claimed nicks through the real Chat menu: a "
+        "refused claim on the notice line with the session untouched, a "
+        "claim's K kept as the code and shown in an alert, a new code that "
+        "stops the old one, a takeover from another address answered 410 "
+        "and NOT rejoined, Reconnect taking the nick back with the code, a "
+        "release, and the last claim's code in WIRECHAT.CFG. QEMU by "
         "name: MartyPC has no network card (SPEC.md 72.9).",
         needs=("qemu",), serial=True,
         wants=("build/telnetsys.img", "build/wirechatdata.img"),
         locks=("port:8093",)),
+    Row("wcclaim", "soak", py("tests/unit/t_wcclaim.py"), 1.0,
+        "tests/wirechat.py's FIXTURE against SPEC.md 113.2.2's claimed nicks, "
+        "host-side with the clock turned by hand: a claim's K of the "
+        "pinned shape with only a salted hash kept, the code asked for at "
+        "the next join and compared without case, - or space, a takeover "
+        "from any address and the token it ended answered 410 - a HELD "
+        "poll included - for a day and 200 tokens, today's same-address "
+        "rule for a nick with no code, a new code stopping the old one, "
+        "release, every refusal of the table in its words, the claim and "
+        "wrong-code buckets. The second server the wirechat row trusts has "
+        "to be right first; about one package, so soak (WRITING-TESTS 2.1). "
+        "VERIFIED TO FAIL with the held poll or the takeover answered 401"),
     Row("wcdraw", "soak", py("tests/wcdraw.py"), 40.0,
         "WireChat's redraw, priced in drawing calls (SPEC.md 113.5.1): every "
         "far call the PACKAGE makes into a drawing cell of the API table, "

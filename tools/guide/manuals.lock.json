@@ -1351,9 +1351,9 @@
   "sources": [
    "apps/wirechat"
   ],
-  "stamped": "24c3d243",
-  "strings": "fd2e07efd394d8ce",
-  "why": "credit line in About and the five-theme help line; the page already describes Wired, Mono-Dark, Blue, Green and Amber and the About card's credit"
+  "stamped": "c13806ae4",
+  "strings": "6e00d17167409314",
+  "why": "claimed nicks (SPEC.md 113.6.6): Claim Nick.../New Code..., Release Nick..., the code's alert and Signed in elsewhere; the page gained Claiming your nick, three menu rows and a status-bar row"
  },
  "WIREFLET_O88": {
   "sources": [

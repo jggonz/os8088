@@ -21,7 +21,7 @@
 
 ; -----------------------------------------------------------------------------
 ; wc_compose - write request [wc_rq] into wc_reqb, set [wc_reqn]
-; in:  the UI task; [wc_rq] = RQ_JOIN / POLL / SAY / FLAG
+; in:  the UI task; [wc_rq] = RQ_JOIN / POLL / SAY / FLAG / CLAIM
 ; out: nothing; clobbers AX, BX, CX, DX, SI, DI
 ;
 ; The request line, then SPEC.md 113.3's headers, then the body. The body's
@@ -57,6 +57,9 @@ wc_compose:
     mov si, wc_s_say
     cmp al, RQ_SAY
     je .verb
+    mov si, wc_s_claim
+    cmp al, RQ_CLAIM
+    je .verb
     mov si, wc_s_flag
 .verb:
     call wc_put
@@ -83,10 +86,12 @@ wc_compose:
     mov al, [wc_rq]
     cmp al, RQ_FLAG
     je .fq
-    cmp al, RQ_POLL
-    jne .qend
-    call wc_putst                       ; poll: &st=<status>
-    cmp byte [wc_hist], 0               ; ...and &h=1 when the view is new
+    cmp al, RQ_SAY
+    je .qend
+    call wc_putst                       ; poll, claim: &st=<status>
+    cmp byte [wc_rq], RQ_POLL           ; ...and a poll &h=1 when the view is
+    jne .qend                           ; new (a claim's delta is the s=
+    cmp byte [wc_hist], 0               ; one: the history waits for the poll)
     je .qend
     mov byte [wc_rqh], 1
     mov si, wc_q_h
@@ -165,7 +170,13 @@ wc_body:
     mov si, wc_qtext                    ; say: the message
     cmp al, RQ_SAY
     je .len
-    mov si, wc_empty                    ; poll, flag: nothing
+    mov si, wc_s_release                ; claim: `release`, to give it up
+    cmp al, RQ_CLAIM
+    jne .none
+    cmp byte [wc_qclaim], 2
+    je .len
+.none:
+    mov si, wc_empty                    ; poll, flag, a claim: nothing
 .len:                                   ; CX += the string's length
     push si
 .c:
@@ -369,6 +380,8 @@ wc_rtab:
     dw wc_rec_l
     db 'A'
     dw wc_rec_a
+    db 'K'
+    dw wc_rec_k
     db 0
 
 ; --- wc_forview - ZF = 1 when the reply is for the view on the glass --------
@@ -442,6 +455,32 @@ wc_setnote:
     pop cx
     pop bx
     pop ax
+    ret
+
+; --- K code (SPEC.md 113.6.6) ----------------------------------------------------
+; The nick's new code, sent this once: it is the nick's code from now on - as
+; a typed one is - and written to the file. The notice line and an alert
+; (wc_onwake's, under the lock this parser does not hold) both show it, so it
+; can be written down for another machine.
+wc_rec_k:
+    cmp byte [si], 0
+    je .out
+    mov bx, si
+    mov di, wc_key
+    mov cx, WC_KEYN
+    call wc_ncopy
+    mov di, wc_kbuf
+    mov bx, wc_kbuf + WC_KBUFN - 2
+    mov si, wc_s_yourcode
+    call wc_put
+    mov si, wc_key
+    call wc_put
+    mov byte [di], 0
+    mov si, wc_kbuf
+    call wc_setnote
+    mov byte [wc_kshow], 1
+    jmp wc_wantsave
+.out:
     ret
 
 ; --- J token nick --------------------------------------------------------------

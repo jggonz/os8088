@@ -17,6 +17,14 @@ for tests/ (CLAUDE.md). It does not moderate (that is hub.js's, and its own
 tests'); it refuses one word, `badword`, so the 422 path has a trigger, and
 it owns a nick only when assertion 11 gives it one, so the 428 path has one.
 
+**AND SPEC.md 113.2.2's CLAIMED NICKS**, as hub.js answers them: `claim` and
+`release`, a `K` with a code of SPEC.md's shape (only its salted hash kept),
+a join with the code taking the nick over from ANY address and the token it
+ended answered `410` - a poll it is holding included - and the limits of
+SPEC.md 113.7 in hub.js's order of refusals. `join_as` is another machine's
+join, by the fixture's own hand. Its own checks are tests/unit/t_wcclaim.py,
+which turns the clock by hand for the hour- and day-long limits.
+
 **IT SPEAKS SPEC.md 113.2.4 TOO** - `x=1`'s dates and mentions, to a request
 that carries `x=1` and to no other, exactly as hub.js does: a `yyyymmdd`
 ahead of every `hhmm` in `M` and `D` (the fixture's clock is fixed - `DAY`
@@ -34,7 +42,7 @@ What QEMU costs is what it always costs: the machine is not an 8088 and no
 timing here means anything. Every assertion is about BYTES - guest memory read
 through the package's own map, and the requests the fixture logged.
 
-FIFTEEN ASSERTIONS.
+TWENTY-TWO ASSERTIONS.
 
 1.  THE JOIN is SPEC.md 113.3's request to the byte: `POST
     /chat/v1/join?v=0&st=0&x=1 HTTP/1.0` (the `x=1` since SPEC.md 113.2.4,
@@ -68,11 +76,31 @@ FIFTEEN ASSERTIONS.
     marked, the notice line saying who and where.
 15. TAB COMPLETES AN @NICK: `@ret` and Tab is `@RetroAmy` off the roster,
     and the view stays where it was.
+16. A REFUSED CLAIM (SPEC.md 113.6.6): Chat > New Code... on the owned nick
+    asks, and Yes sends a `claim` with an empty body and the usual query; the
+    fixture's `409 That nick has an owner` is on the notice line and nothing
+    else moves - the link live, the code kept, no join, and the poll goes on.
+17. A CLAIM: on a nick no longer owned the same item is a `claim` answered
+    `K`; [wc_key] is the fixture's code, and the notice line and an OK alert
+    both say `Your code is <code>`.
+18. A NEW CODE: the item again makes a second code, and the first no longer
+    joins.
+19. A TAKEOVER: another machine joins with the code; the package's held poll
+    is answered 410, the link is LK_GONE with `Signed in elsewhere`, and it
+    does NOT join again by itself.
+20. RECONNECT joins with the nick and its code, and takes the nick back.
+21. RELEASE: Chat > Release Nick... sends `release`; `N Nick released`
+    empties [wc_key].
+22. CLAIM AGAIN: Chat > Claim Nick... asks `Claim Tester with a code?` and a
+    third code is the one WIRECHAT.CFG says at the end (12).
 """
 import argparse
 import datetime
+import hashlib
+import math
 import os
 import re
+import secrets
 import socket
 import struct
 import subprocess
@@ -88,6 +116,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 sys.path.insert(0, HERE)
 import dispcp                                              # noqa: E402
+import os88geom                                            # noqa: E402
 import os88qemu                                            # noqa: E402
 import os88sym                                             # noqa: E402
 import os88build                                           # noqa: E402
@@ -101,7 +130,9 @@ PORT = 8093                     # NOT 8090 (ethernet.py), 8092 (thewire.py) or
                                 # OTHER one's answers. The disk's WIRECHAT.CFG
                                 # names this number (the Makefile)
 LK_LIVE = 3
+LK_GONE = 7
 MD_KEY = 4
+CHAT_CLAIM, CHAT_RELEASE, CHAT_RECONN = 4, 5, 6     # the Chat menu's items
 WV_DM = 0xFF
 WC_MREC, WC_MSEQ, WC_MFLG, WC_MNICK, WC_MTEXT = 224, 0, 6, 8, 21
 WCM_MINE = 2
@@ -110,6 +141,20 @@ WC_DREC, WC_DUNR = 16, 13
 DAY = "20261019"                # the fixture's date, SPEC.md 113.2.4's yyyymmdd
 MENTION_KEEP = 20               # a session's unread mentions (SPEC.md 113.2.4)
 MENTION_AGE = 600.0             # ...and for this many seconds
+# --- SPEC.md 113.2.2's claimed nicks, and 113.7's limits on them ---------------
+CODE_ABC = "abcdefghijkmnpqrstuvwxyz23456789"     # no l, o, 0 or 1
+CODE_RE = re.compile(r"^[%s]{4}(-[%s]{4}){3}$" % (CODE_ABC, CODE_ABC))
+B_CODE = (5, 720)               # wrong codes per address: 5, then 5 an hour
+B_CLAIM = (3, 8 * 3600)         # claims and new codes per address: 3, then 1/8 h
+CLAIMS_PER_ADDR = 2
+CLAIMS_MAX = 2000
+GONE_KEEP = 200                 # taken-over tokens remembered, answered 410...
+GONE_AGE = 24 * 3600.0          # ...for a day
+# The server's reserved names (os8088-web keeps the list; these are only the
+# NAMES, case-blind): usable unclaimed, never claimable
+RESERVED = {"admin", "administrator", "mod", "moderator", "os8088", "wirechat",
+            "wirebot", "system", "server", "sysop", "root", "help", "staff",
+            "everyone", "here", "nobody"}
 
 
 def say(*a):
@@ -144,6 +189,16 @@ class Hub:
         self.held = 0               # polls being held right now
         self.ntok = 0
         self.owned = {}             # lowercase nick -> its code
+        # SPEC.md 113.2.2: claims (lowercase nick -> {hash, addr, ts}), the
+        # tokens a takeover ended, the limits' buckets, and muted addresses
+        self.claims = {}
+        self.gone = {}              # token -> when it was taken over
+        self.buckets = {}           # key -> (level, when)
+        self.mutes = {}             # address -> muted until
+        self.claims_max = CLAIMS_MAX
+        self.issued = []            # (lowercase nick, code), every K made
+        self.salt = secrets.token_hex(8)
+        self.clock = time.time      # a unit test turns it
 
     # --- the fixture's own hand ------------------------------------------
     def post(self, room, nick, text, date=DAY):
@@ -198,7 +253,7 @@ class Hub:
             self.ntok += 1
             self.sessions["vis%09d" % self.ntok] = {
                 "nick": nick, "room": room, "st": 0, "view": str(room), "x": False,
-                "ments": []}
+                "ments": [], "addr": "fixture", "keyed": False}
             self.rver += 1
             self.seq += 1
             self.lock.notify_all()
@@ -208,6 +263,105 @@ class Hub:
             self.sessions.clear()
             self.rver += 1
             self.lock.notify_all()
+
+    def join_as(self, nick, code="", addr="198.51.100.7"):
+        """Another machine joins: the fixture's own hand, through the same
+        `join` the wire's are answered by - with a code, it is a TAKEOVER."""
+        return self.answer("join", {"v": "0", "st": "0", "x": "1"},
+                           nick + ("\n" + code if code else ""), addr)
+
+    # --- SPEC.md 113.2.2: codes and the limits' buckets ------------------------
+    @staticmethod
+    def new_code():
+        c = "".join(secrets.choice(CODE_ABC) for _ in range(16))
+        return "-".join(c[i:i + 4] for i in range(0, 16, 4))
+
+    @staticmethod
+    def normal(code):
+        return code.lower().replace("-", "").replace(" ", "")
+
+    def code_hash(self, lnick, code):
+        return hashlib.sha256(("%s:claim:%s:%s" % (self.salt, lnick, self.normal(code)))
+                              .encode("latin1")).hexdigest()
+
+    def _level(self, key, cap, per, now):
+        lvl, t = self.buckets.get(key, (cap, now))
+        return min(cap, lvl + (now - t) / per)
+
+    def peek(self, key, b, now):
+        """Seconds until bucket `key` has a token; 0 = it has one now."""
+        lvl = self._level(key, b[0], b[1], now)
+        return 0 if lvl >= 1 else math.ceil(round((1 - lvl) * b[1], 6))
+
+    def take(self, key, b, now):
+        """Spend a token: 0, or the seconds until there is one (none spent)."""
+        slow = self.peek(key, b, now)
+        if not slow:
+            self.buckets[key] = (self._level(key, b[0], b[1], now) - 1, now)
+        return slow
+
+    @staticmethod
+    def mins(secs):
+        return "%d min" % math.ceil(secs / 60) if secs >= 120 else "%ds" % secs
+
+    def drop(self, tok, taken_over):
+        """End session `tok`; a takeover's token is answered 410 from now on.
+        Under the lock."""
+        self.sessions.pop(tok, None)
+        if taken_over:
+            self.gone[tok] = self.clock()
+            while len(self.gone) > GONE_KEEP:
+                del self.gone[next(iter(self.gone))]
+        self.rver += 1
+        self.lock.notify_all()
+
+    def lost(self, tok):
+        """The verdict for a token with no session: 410 for a taken-over one
+        (SPEC.md 113.2.3), else 401."""
+        at = self.gone.get(tok)
+        if at is not None and self.clock() - at < GONE_AGE:
+            return ["ER 410 3600 Signed in elsewhere"]
+        return ["ER 401 0 Session ended - joining again"]
+
+    def claim(self, s, q, body, addr):
+        """SPEC.md 113.2.2's `claim`, in hub.js's order of refusals. Under the
+        lock; `s` is the session."""
+        now = self.clock()
+        what = body.strip()
+        if what not in ("", "release"):
+            return ["ER 400 0 Bad request"]
+        lnick = s["nick"].lower()
+        if lnick in self.owned:
+            return ["ER 409 0 That nick has an owner"]
+        had = self.claims.get(lnick)
+        if what == "release":
+            if not had or not s["keyed"]:
+                return ["ER 404 0 That nick is not claimed"]
+            del self.claims[lnick]
+            s["keyed"] = False
+            return ["OK %d 1200 0" % self.seq, "N Nick released"] + self.delta(s, q)
+        if had and not s["keyed"]:
+            return ["ER 409 0 That nick is claimed already"]
+        if lnick in RESERVED:
+            return ["ER 422 0 That nick cannot be claimed"]
+        until = self.mutes.get(addr, 0)
+        if until > now:
+            return ["ER 403 0 You are muted for %d min" % math.ceil((until - now) / 60)]
+        if not had:
+            if sum(1 for c in self.claims.values() if c["addr"] == addr) >= CLAIMS_PER_ADDR:
+                return ["ER 403 0 Two claimed nicks per address"]
+            if len(self.claims) >= self.claims_max:
+                return ["ER 503 3600 No more nicks can be claimed"]
+        slow = self.take("c:" + addr, B_CLAIM, now)
+        if slow:
+            return ["ER 429 %d Too many claims - wait %s" % (slow, self.mins(slow))]
+        code = self.new_code()
+        row = dict(had) if had else {"addr": addr, "ts": now}
+        row["hash"] = self.code_hash(lnick, code)
+        self.claims[lnick] = row
+        s["keyed"] = True
+        self.issued.append((lnick, code))
+        return ["OK %d 1200 0" % self.seq, "K " + code] + self.delta(s, q)
 
     # --- the wire ------------------------------------------------------------
     def delta(self, s, q):
@@ -258,24 +412,45 @@ class Hub:
                 out.append("P %s %d %d" % (x["nick"], x["room"], x["st"]))
         return out
 
-    def answer(self, verb, q, body):
+    def answer(self, verb, q, body, addr="127.0.0.1"):
         with self.lock:
             if verb == "join":
                 nick, _, code = body.partition("\n")
-                nick, code = nick.strip(), code.strip().lower()
+                nick, code = nick.strip(), code.strip()
                 if not re.match(r"^[A-Za-z][A-Za-z0-9_-]{1,11}$", nick):
                     return ["ER 400 0 Nick: 2-12 letters"]
-                if nick.lower() in self.owned:
+                lnick, now = nick.lower(), self.clock()
+                # SPEC.md 113.2.2: an owned nick first (it is never claimed),
+                # then a claimed one; a wrong code of either is the limit's
+                owned = self.owned.get(lnick)
+                claimed = None if owned else self.claims.get(lnick)
+                if owned or claimed:
                     if not code:
                         return ["ER 428 0 That nick needs its code"]
-                    if code != self.owned[nick.lower()]:
+                    slow = self.peek("k:" + addr, B_CODE, now)
+                    if slow:
+                        return ["ER 429 %d Too many wrong codes - wait %s"
+                                % (slow, self.mins(slow))]
+                    if (code.lower() != owned) if owned else \
+                            (self.code_hash(lnick, code) != claimed["hash"]):
+                        self.take("k:" + addr, B_CODE, now)
                         return ["ER 428 0 Wrong code for that nick"]
+                keyed = bool(owned or claimed)
+                # the code takes the nick from ANY address (a takeover, its
+                # token answered 410); without one only the same address may
+                # take its own nick back
+                holder = [t for t, x in self.sessions.items() if x["nick"].lower() == lnick]
+                if holder and not keyed and self.sessions[holder[0]]["addr"] != addr:
+                    return ["ER 409 0 That nick is in use"]
+                for t in holder:
+                    self.drop(t, keyed)
                 self.ntok += 1
                 tok = ("tok%09d" % self.ntok)[:12]
                 v = q.get("v", "0")
                 self.sessions[tok] = {"nick": nick, "room": int(v) if v.isdigit() else 0,
                                       "st": int(q.get("st", "0")), "view": v,
-                                      "x": q.get("x") == "1", "ments": []}
+                                      "x": q.get("x") == "1", "ments": [],
+                                      "addr": addr, "keyed": keyed}
                 self.rver += 1
                 lines = ["J %s %s" % (tok, nick)]
                 lines += ["L %d %s %s" % (i, n, t) for i, (n, t) in enumerate(self.ROOMS)]
@@ -283,7 +458,7 @@ class Hub:
                 return ["OK %d 1200 0" % self.seq] + lines + self.delta(self.sessions[tok], q)
             s = self.sessions.get(q.get("t", ""))
             if not s:
-                return ["ER 401 0 Session ended - joining again"]
+                return self.lost(q.get("t", ""))
             # SPEC.md 113.2.4: x rides on every request; an `s` at or past a
             # mention says the client has read it; ten minutes is the most
             s["x"] = q.get("x") == "1"
@@ -323,7 +498,9 @@ class Hub:
                         self.lock.wait(0.5)
                     self.held -= 1
                     if self.sessions.get(q["t"]) is not s:
-                        return ["ER 401 0 Session ended - joining again"]
+                        return self.lost(q["t"])    # a HELD poll is 410 too
+            elif verb == "claim":
+                return self.claim(s, q, body, addr)
             elif verb != "leave":
                 return ["ER 400 0 Bad request"]
             out = ["OK %d 1200 0" % self.seq] + self.delta(s, q)
@@ -351,7 +528,8 @@ class Handler(BaseHTTPRequestHandler):
         if not u.path.startswith("/chat/v1/"):
             self.send_error(404)
             return
-        data = ("\n".join(HUB.answer(verb, q, body)) + "\n").encode("ascii")
+        data = ("\n".join(HUB.answer(verb, q, body, self.client_address[0]))
+                + "\n").encode("ascii")
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=us-ascii")
         self.send_header("Content-Length", str(len(data)))
@@ -491,7 +669,8 @@ def wc_syms():
     for n in ("wc_link", "wc_tok", "wc_mn", "wc_msgs", "wc_view", "wc_dn", "wc_dms",
               "wc_note", "wc_lbuf", "wc_ox", "wc_oy", "wc_tx", "wc_py1", "wc_cw",
               "wc_sy", "wc_notify", "wc_save", "wc_cfgld", "wc_hist", "wc_mode", "wc_key",
-              "wc_ment", "wc_rn"):
+              "wc_ment", "wc_rn", "wc_qclaim", "wc_kbuf", "wc_askbuf", "wc_i_chat",
+              "os88ui_awin", "os88ui_amsg"):
         if n not in syms:
             sys.exit("wirechat: %s is not in build/wirechat.map" % n)
     return syms
@@ -729,6 +908,147 @@ def main():
         check(wait(lambda: rs("wc_lbuf", 201) == "@RetroAmy", "the completion"),
               "15 Tab after @ret is @RetroAmy (got %r)" % rs("wc_lbuf", 201))
         check(rb("wc_view") == view, "15 ...and the view stays")
+
+        # --- 16-22: claimed nicks (SPEC.md 113.2.2, 113.6.6) ---------------------
+        m.key("Escape")                              # the @RetroAmy goes
+        settle(m)
+
+        def chat_item(k):
+            """Chat's item k's label, as the menu has it (MENU_DIS a '-')."""
+            p = rw("wc_i_chat", 2 * k)
+            raw = m.readseg(pseg, p, 20)
+            return ("-" + cstr(raw[1:])) if raw[0] == 1 else cstr(raw)
+
+        def menu_pick(title, k):
+            """tests/thewire.py's gesture: press the cell (its x off the
+            KERNEL's bar table), move onto item k, release - each step
+            waited for on the kernel's own menu state."""
+            mo.click(ox + 24, oy + 4)                # WireChat in front
+            settle(m)
+            fx = None
+            for c in range(8):
+                cell = m.read(S("menu_bar") + c * os88geom.MB_ENTSZ, os88geom.MB_ENTSZ)
+                tp = u16(cell, os88geom.MB_TITLE)
+                xl, xr = u16(cell, os88geom.MB_XL), u16(cell, os88geom.MB_XR)
+                if tp and xr > xl and cstr(m.readseg(pseg, tp, 12)) == title:
+                    fx = (xl + xr) // 2
+            if fx is None:
+                return False
+            tool("mouse.py", "down", str(fx), "8")
+            os88qemu.acted(m, lambda: m.read(S("menu_dropd"), 1)[0], secs=10,
+                           what="the %s pull-down" % title, poll=0.05)
+            y = (u16(m.read(S("menu_y1"), 2)) + 1 + k * os88geom.MENU_ITEM_H
+                 + os88geom.MENU_ITEM_H // 2)
+            tool("mouse.py", "to", str(u16(m.read(S("menu_x1"), 2)) + 8), str(y))
+            hit = os88qemu.acted(m, lambda: u16(m.read(S("menu_sel"), 2)) == k,
+                                 secs=10, what="item %d highlighted" % k, poll=0.05)
+            tool("mouse.py", "up")
+            settle(m)
+            return hit
+
+        def ask(k, words):
+            """Chat's item k, its alert's question, and Yes (Enter)."""
+            ok = menu_pick("Chat", k) and wait(lambda: rw("os88ui_awin") != 0, "the alert")
+            ok = ok and rs("wc_askbuf", 40) == words
+            m.key("Return")
+            return ok
+
+        def alert_text():
+            return cstr(m.readseg(pseg, rw("os88ui_amsg"), 40)) if rw("os88ui_awin") else None
+
+        def claims():
+            return [e for e in HUB.log if e[0] == "claim"]
+
+        # 16 - the nick is still owned: New Code... asks, and is refused
+        check(chat_item(CHAT_CLAIM) == "New Code..." and chat_item(CHAT_RELEASE)
+              == "Release Nick...", "16 with a code the items are New Code... and "
+              "Release Nick... (got %r, %r)" % (chat_item(CHAT_CLAIM), chat_item(CHAT_RELEASE)))
+        nj, nc = len([e for e in HUB.log if e[0] == "join"]), len(claims())
+        check(ask(CHAT_CLAIM, "Replace Tester's code?"),
+              "16 Chat > New Code... asks `Replace Tester's code?`")
+        check(wait(lambda: rs("wc_note", 64) == "That nick has an owner", "the refusal"),
+              "16 the claim's 409 is on the notice line (%r)" % rs("wc_note", 64))
+        cl = claims()[nc:]
+        check(len(cl) == 1 and cl[0][3] == "" and cl[0][1].get("t") == rs("wc_tok", 13)
+              and all(k in cl[0][1] for k in ("v", "s", "r", "st", "x")) and "h" not in cl[0][1],
+              "16 ...for a claim with an empty body and the usual query (%r)"
+              % ([(e[1], e[3]) for e in cl],))
+        n = len(HUB.log)
+        check(wait(lambda: any(e[0] == "poll" for e in HUB.log[n:]), "the next poll", secs=20)
+              and rb("wc_link") == LK_LIVE and rb("wc_qclaim") == 0
+              and rs("wc_key", 37) == "0b5e-c0de-42"
+              and len([e for e in HUB.log if e[0] == "join"]) == nj,
+              "16 ...and nothing else moved: live, the code kept, no join, polling")
+
+        # 17 - the owner gives the nick up; the same item claims it
+        HUB.owned.pop("tester")
+        check(ask(CHAT_CLAIM, "Replace Tester's code?"), "17 the item asks again")
+        check(wait(lambda: len(HUB.issued) == 1 and rs("wc_key", 37) == HUB.issued[0][1],
+                   "the K"), "17 a claim's K is the nick's code (%r)" % rs("wc_key", 37))
+        k1 = HUB.issued[0][1] if HUB.issued else "?"
+        check(CODE_RE.match(k1) is not None and rs("wc_note", 64) == "Your code is " + k1
+              and wait(lambda: alert_text() == "Your code is " + k1, "the code's alert"),
+              "17 ...on the notice line and in an alert: `Your code is %s`" % k1)
+        shot("6-code")
+        m.key("Return")                              # OK
+        check(wait(lambda: rw("os88ui_awin") == 0 and rb("wc_save") == 0, "the alert down"),
+              "17 OK takes the alert down, and the file is written")
+
+        # 18 - a new code, and the old one stops
+        check(ask(CHAT_CLAIM, "Replace Tester's code?")
+              and wait(lambda: len(HUB.issued) == 2 and rs("wc_key", 37) == HUB.issued[1][1],
+                       "the second K"),
+              "18 New Code... makes a second code, and it is the nick's")
+        k2 = HUB.issued[1][1] if len(HUB.issued) > 1 else "?"
+        wait(lambda: rw("os88ui_awin") != 0, "the second code's alert")
+        m.key("Return")
+        wait(lambda: rw("os88ui_awin") == 0, "the alert down")
+        check(k2 != k1 and HUB.join_as("Tester", k1) == ["ER 428 0 Wrong code for that nick"],
+              "18 ...and the first no longer joins")
+
+        # 19 - another machine joins with the code: 410, and no rejoin
+        wait(lambda: HUB.held > 0, "a held poll", secs=20)
+        nj = len([e for e in HUB.log if e[0] == "join"])
+        other = HUB.join_as("Tester", k2)
+        check(other[0].startswith("OK"), "19 another machine joins with the code (%r)"
+              % other[:1])
+        check(wait(lambda: rb("wc_link") == LK_GONE
+                   and rs("wc_note", 64) == "Signed in elsewhere", "the 410"),
+              "19 the held poll's 410 is LK_GONE and `Signed in elsewhere` (%d, %r)"
+              % (rb("wc_link"), rs("wc_note", 64)))
+        shot("7-elsewhere")
+        os88qemu.pace(m, 8.0)                        # a negative: nothing comes
+        check(len([e for e in HUB.log if e[0] == "join"]) == nj and rb("wc_link") == LK_GONE,
+              "19 ...and it does not join again by itself")
+
+        # 20 - Reconnect takes it back, with the code
+        check(menu_pick("Chat", CHAT_RECONN), "20 Chat > Reconnect")
+        check(wait(lambda: rb("wc_link") == LK_LIVE, "the reconnect", secs=45),
+              "20 ...is live again")
+        rj = [e for e in HUB.log if e[0] == "join"]
+        check(rj[-1][3] == "Tester\n" + k2 and other[1].split()[1] in HUB.gone,
+              "20 ...joined with the code, taking the nick back (%r)" % (rj[-1][3],))
+
+        # 21 - release
+        check(ask(CHAT_RELEASE, "Release Tester to anyone?"),
+              "21 Chat > Release Nick... asks `Release Tester to anyone?`")
+        check(wait(lambda: rs("wc_key", 37) == "" and rs("wc_note", 64) == "Nick released",
+                   "the release"), "21 `Nick released`, and the code is gone")
+        cl = claims()
+        check(cl[-1][3] == "release" and "tester" not in HUB.claims,
+              "21 ...sent as a claim whose body is `release`")
+        check(chat_item(CHAT_CLAIM) == "Claim Nick..." and chat_item(CHAT_RELEASE)
+              == "-Release Nick...", "21 without a code: Claim Nick..., and Release "
+              "greyed (%r, %r)" % (chat_item(CHAT_CLAIM), chat_item(CHAT_RELEASE)))
+
+        # 22 - claim it again: the code the file keeps
+        check(ask(CHAT_CLAIM, "Claim Tester with a code?"),
+              "22 Chat > Claim Nick... asks `Claim Tester with a code?`")
+        check(wait(lambda: len(HUB.issued) == 3 and rs("wc_key", 37) == HUB.issued[2][1],
+                   "the third K"), "22 ...and a third code is the nick's")
+        wait(lambda: rw("os88ui_awin") != 0, "the third code's alert")
+        m.key("Return")
+        wait(lambda: rw("os88ui_awin") == 0 and rb("wc_save") == 0, "the alert down")
         shot("5-end")
     finally:
         if not a.keep:
@@ -739,9 +1059,10 @@ def main():
     if not a.keep:
         files = fat12_files(datimg)
         cfg = files.get("SYSTEM/APPDATA/WIRECHAT.CFG", b"(no file)").decode("latin1")
+        k3 = HUB.issued[2][1] if len(HUB.issued) > 2 else "?"
         check("notify 0" in cfg and "friend Alin" in cfg and "nick Tester" in cfg
-              and "code 0b5e-c0de-42" in cfg,
-              "12 ...and WIRECHAT.CFG on B: says so (%r)" % cfg)
+              and "code " + k3 in cfg.splitlines(),
+              "12 ...and WIRECHAT.CFG on B: says so, with 22's code (%r)" % cfg)
 
     if fails:
         say("wirechat: %d failure(s)" % len(fails))

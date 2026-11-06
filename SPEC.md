@@ -222698,6 +222698,7 @@ either, so changing room or going Away costs one request, not two.
 | `poll` | empty | answers the delta at once when there is one, else HOLDS up to 50 s for one |
 | `say` | the message | posts it to the view (a room, or `@nick` privately); answers the delta |
 | `flag` | empty | flags message `m`; answers `N` and the delta |
+| `claim` | empty, or `release` | empty: claims the session's own nick, or gives a nick this session holds BY ITS CODE a new code; answers `K` and the delta. `release`: gives the claim up; answers `N` and the delta |
 | `leave` | empty | ends the session |
 
 A nick is 2–12 of `[A-Za-z0-9_-]`, beginning with a letter, unique among
@@ -222710,7 +222711,52 @@ in any case, only by a join whose body has the nick's code on a second line
 line on any other nick. The codes are the server's, never this tree's. The
 list and the codes are in os8088-web, which is private. A join without the
 code, or with the wrong one, is `428`. Five wrong codes from one address
-shut it out of owned nicks, then it may try five more an hour (`429`).
+shut it out of owned and claimed nicks, then it may try five more an hour
+(`429`).
+
+**Claimed nicks.** Any other nick may be CLAIMED by the session holding it,
+and is then taken exactly as an owned nick is: only by a join whose second
+line is its code, `428` without it, the same wrong-code limit. The code is
+the SERVER'S, made at the claim: 16 of the 32 letters
+`abcdefghijkmnpqrstuvwxyz23456789` (no `l`, `o`, `0` or `1`) in four groups
+of four, `k7qm-2xfp-9wce-hd3t`, 19 characters. The server compares a claimed
+nick's code after lowercasing it and removing every `-` and space, so
+`K7QM2XFP9WCEHD3T` is the same code, and stores only a salted SHA-256 of
+that form - it cannot tell anyone the code again, and the `K` record that
+carries it is the only time it is sent. A claim never expires. An owned
+nick is checked first and is never claimed; the server also keeps a short
+list of RESERVED nicks (`admin`, `sysop`, `wirechat` and the like) that may
+be used, as today, but never claimed.
+
+- **`claim`, empty body** - the session's nick is claimed and a `K` record
+  carries its code. When the nick is claimed already and this session joined
+  WITH ITS CODE (or claimed it), the same request makes a NEW code instead -
+  the old one stops working at once. Either way the session now holds the
+  nick by its code.
+- **`claim`, body `release`** - only a session holding the nick by its code;
+  the nick is anyone's again, and `N Nick released` says so.
+- **A TAKEOVER.** A join carrying the right code for an owned or claimed nick
+  ends the live session holding it, from ANY address: whoever has the code is
+  the nick. That session's token is remembered (in memory, 200 tokens, 24
+  hours) and every request carrying it - a poll already held included - is
+  answered `410` rather than `401`. A join for a nick that is neither owned
+  nor claimed is as it always was: the same address may take its own nick
+  back (a client that crashed and came back before its old session timed
+  out), and any other address is `409`.
+
+The refusals of a `claim`, all `ER code wait text`:
+
+| case | ER |
+|---|---|
+| the nick is owned | `409 0 That nick has an owner` |
+| claimed, and this session did not join with its code | `409 0 That nick is claimed already` |
+| on the reserved list | `422 0 That nick cannot be claimed` |
+| the address is muted (§113.7) | `403 0 You are muted for N min` |
+| the address made two claims already (counted by the address that made each) | `403 0 Two claimed nicks per address` |
+| the claim limit (§113.7) | `429 <secs> Too many claims - wait <n> min` (`<n>s` under two minutes) |
+| the server holds 2,000 claims | `503 3600 No more nicks can be claimed` |
+| `release`, and the nick is not claimed or not held by its code | `404 0 That nick is not claimed` |
+| a body neither empty nor `release` | `400 0 Bad request` |
 
 #### 113.2.3 The reply
 
@@ -222737,6 +222783,7 @@ characters. The records:
 | `P` | nick room st | one live session, its room and its status |
 | `N` | text | a notice for the user |
 | `A` | seq room date hhmm nick | `nick` named this session in room `room` (§113.2.4; `x=1` only) |
+| `K` | code | the nick's new code (`claim` only, §113.2.2), sent this once |
 
 `M` and `D` arrive in sequence order. A history (`h=1`, and every `join`)
 is the view's last 30 messages. `D` records for conversations OTHER than the
@@ -222753,11 +222800,25 @@ The codes, and what the client does with each:
 | 403 | muted, or flagging what may not be flagged | says `text` |
 | 404 | the message or the private partner is gone | says `text` |
 | 409 | the nick is in use / already flagged | `join`: asks for another nick |
-| 428 | an owned nick, and its code missing or wrong (§113.2.2) | `join`: forgets any code it had and asks for the code |
+| 410 | the session was TAKEN OVER by a join with the nick's code, from anywhere (§113.2.2); `wait` is 3600 | says `text` and STOPS: no rejoin of its own, until the user asks for one (Reconnect, or a nick) |
+| 428 | an owned or claimed nick, and its code missing or wrong (§113.2.2) | `join`: forgets any code it had and asks for the code |
 | 413 | the message is over 200 characters | says `text` (the field cannot produce one) |
 | 422 | the language scanner refused it | says `text`; the text stays in the field |
 | 429 | rate limited | says `text`; the text stays in the field |
 | 503 | full, or resting until 00:00 UTC | waits `wait` seconds (at most an hour), then tries again |
+
+**A refused `claim` changes nothing else.** Whatever its code, the client
+says `text` and carries on polling the session it has: a claim's `429` waits
+are hours and its `503` is the claim store's, not the room's, so neither is
+the session's `wait` and neither rests the link. A `401` to a `claim` is a
+`401` like any other (join again; the claim is asked for again after it).
+
+**Why 410 stops.** Two machines holding one nick's code would otherwise take
+the nick from each other for ever: each 410 a rejoin with the code, each
+rejoin a takeover that answers the other 410. A client that stops on `410`
+leaves the nick with whoever joined LAST, and the user decides. `wait` is
+3600 so a client written before `410` existed - which treats an unknown code
+as "wait, then try again" - comes back in an hour rather than at once.
 
 #### 113.2.4 Dates and mentions — `x=1`
 
@@ -222823,9 +222884,10 @@ and posts `WW_DONE` or `WW_FAIL` in the one byte `[wc_wake]`, written last,
 then `OSAPI_WM_WAKE`. It knows nothing of chat. The UI TASK's wake handler
 parses the reply (§113.2.3) into the stores, decides the NEXT request — the
 CONDUCTOR, `wc_next` — and paints what changed. Its order: a queued `flag`,
-then a queued `say`, then a `poll`. A `say` or `flag` queued while a `poll`
-is in flight bumps the generation (§71.11) and closes the socket, and the
-conductor starts the `say` on the same pass.
+then a queued `say`, then a queued `claim` (§113.6.6), then a `poll`. A
+`say`, `flag` or `claim` queued while a `poll` is in flight bumps the
+generation (§71.11) and closes the socket, and the conductor starts it on the
+same pass.
 
 Between requests the conductor honours the server's `wait`, and after a
 failure backs off 5, 10, 20, 40, then 60 seconds; both are counted by the
@@ -223222,7 +223284,8 @@ One `os88line` field with five MODES, its prompt drawn to its left:
 
 Code mode is only ever entered by a `428`, and the status bar then says
 `Enter the code for this nick`. A nick changed to a DIFFERENT nick (compared
-case-blind) forgets the code.
+case-blind) forgets the code. A code the server makes at a claim (§113.6.6)
+is kept exactly as a typed one is.
 
 **Find is the box in the HIGHLIGHT**: its inside, the `Find:` prompt, the
 prompt's rule and the field's text and ground take the theme's highlight
@@ -223264,7 +223327,7 @@ and with nobody on the roster to complete, Tab is the next room.
 
 | menu | items |
 |---|---|
-| Chat | Change Nick..., Flag Message..., Notifications On/Off, Emoticons..., Reconnect |
+| Chat | Change Nick..., Flag Message..., Notifications On/Off, Emoticons..., Claim Nick... (New Code... while the nick has a code), Release Nick..., Reconnect |
 | Rooms | lobby, hardware, development, games (the `L` names) |
 | Status | Online, Away, Busy |
 | Friends | Add Friend..., Remove Friend |
@@ -223294,6 +223357,40 @@ and with nobody on the roster to complete, Tab is the next room.
   to 15 minutes; a machine whose clock was never set shows a consistent
   wrong time rather than none.
 
+#### 113.6.6 Claiming a nick
+
+Two Chat items, each behind a Yes/No alert (§113.6.2's, `os88ui_ask`):
+
+| item | the alert | Yes |
+|---|---|---|
+| **Claim Nick...** - while there is no code | `Claim <nick> with a code?` | a `claim`, empty body |
+| **New Code...** - the same item while `[wc_key]` holds one | `Replace <nick>'s code?` | the same request: the server makes a new code |
+| **Release Nick...** - greyed with no code | `Release <nick> to anyone?` | a `claim`, body `release` |
+
+Both are greyed, and refused if picked anyway, without a live session
+(`LK_LIVE`). The request is queued like a flag (`[wc_qclaim]`: 1 claim, 2
+release) and the conductor sends it after a queued `flag` and `say` and
+ahead of the `poll`; one being queued abandons a held poll for it (§113.4).
+The notice line says `Claiming...` or `Releasing...` meanwhile.
+
+- **`K code`** - the code goes into `[wc_key]` (as a typed code does, §113.6.1)
+  and `WIRECHAT.CFG` is written (§113.8). The notice line and an OK alert both
+  say `Your code is k7qm-2xfp-9wce-hd3t`: the server cannot show it again,
+  and the user needs it to use the nick on another machine (§113.2.2), where
+  it is typed at the `Code:` prompt that nick's join brings up.
+- **`N Nick released`** after a release - `[wc_key]` is emptied and the file
+  written.
+- **A refusal** is the server's sentence on the notice line, and nothing
+  else: the session, its `wait` and the link are as they were (§113.2.3).
+- **`410`** - the link becomes `LK_GONE`: the status bar says
+  `Signed in elsewhere`, its lamp is the hollow ring, the header says
+  OFFLINE, and the conductor sends nothing (§113.4's `wc_next` skips it, as
+  it does `LK_NONICK` and `LK_KEY`). **Chat > Reconnect** or a nick entered
+  (Change Nick...) joins again, with the code - which takes the nick back from
+  the other machine, which then sees `410` in its turn. The code is kept.
+
+No mark on the roster says a nick is claimed (`P` is unchanged).
+
 ### 113.7 Moderation and limits — what the server does
 
 Not the client's to enforce — a client cannot be trusted with its own limits
@@ -223313,6 +223410,12 @@ Not the client's to enforce — a client cannot be trusted with its own limits
 - **Rates.** Per address: 30 requests a minute; 3 messages, then one per 8 s,
   and 60 an hour; 10 flags an hour; 6 joins an hour; 3 sessions. Everyone
   together: 20 messages a minute, 50 sessions.
+- **Claims** (§113.2.2). Per address: 3 claims, then one per 8 hours - a new
+  code counts as a claim, or rotating would be a free way to keep the server
+  hashing - and at most 2 nicks claimed, counted by the address that made
+  each claim. A muted address cannot claim. Everyone together: 2,000 claimed
+  nicks. A claim never expires; a wrong code, owned or claimed, counts toward
+  the same 5-then-5-an-hour limit.
 - **The daily budget.** The server counts its requests per UTC day against
   a cap (40,000 by default, of the Workers Free plan's 100,000 the whole
   site shares). Past half of it every client is told `wait` 5; past three
@@ -223333,9 +223436,10 @@ its code, the friends, the notification switch or the theme change. Lines of `ke
     friend Daniel
 
 `host` is §92.4's `host[:port][/prefix/]`, default `os8088.com:80/chat/`;
-the gate's disk carries `10.0.2.2:8093/chat/`. `code` is an owned nick's
-code (§113.2.2), at most 36 characters, stored as plain text. Anyone with the
-disk has it. `theme` is §113.5.2's: 0 Wired, 1 Mono-Dark, 2 Blue, 3 Green,
+the gate's disk carries `10.0.2.2:8093/chat/`. `code` is the nick's code -
+an owned nick's, typed at `Code:`, or a claimed nick's, typed or made by a
+claim (§113.2.2, §113.6.6) - at most 36 characters, stored as plain text.
+Anyone with the disk has it, and with it the nick. `theme` is §113.5.2's: 0 Wired, 1 Mono-Dark, 2 Blue, 3 Green,
 4 Amber, and a file without one is Wired. Unknown keys are kept on no
 rewrite — the file is the package's own and is written whole. Up to 8
 friends; at most 512 bytes.
@@ -223371,7 +223475,14 @@ LED pictures and the bevel went, the four theme rows, the glyph table, the
 three button painters, the F keys and §113.5.1's ink-only run came, +301
 bytes in all. The bss grew by
 the slots' wider meta (sixteen spans, an underline) and the Theme menu's
-composed items.
+composed items. Claimed nicks (§113.6.6) took it from **22,204 / 32,593 —
+54,797** and 16,062 packed (lzb, which every figure above predates) to
+**22,784 / 32,645 — 55,429** and 16,435 packed: +580 of image - the `claim`
+verb and its `release` body, the `K` parser, the two Chat items and their
+greyed forms, three questions and the code's OK alert, the 410 stop, a
+refused claim's own path and the eighth link word; +52 of bss, `wc_kbuf`
+(`WC_KBUFN` = 50, the alert's words, which it keeps while it is up) and two
+bytes of state.
 No heap claim: every buffer is in the package's own segment, which is what
 `OSAPI_DRV_CALL` wants of a socket buffer anyway (§72, `netpkg.inc`). The bss,
 largest first:
@@ -223403,7 +223514,8 @@ own is `wc_nstep` → `wc_take` → `wc_hdrline` → `wc_dec32`.
 
 | row | tier | what |
 |---|---|---|
-| `wirechat` | soak | QEMU + ETHER.DRV against `tests/wirechat.py`'s fixture: join, a history, a held poll answered by a second session's message, a `say` round trip, a `422` shown, a flag, a room change, a private message, a `401` rejoined, a `428` answered with the code - and §113.2.4: `x=1` on every request, a message stored with its date, a mention in the view marked, an `A` from another room marking it, Tab completing an `@nick` |
+| `wirechat` | soak | QEMU + ETHER.DRV against `tests/wirechat.py`'s fixture: join, a history, a held poll answered by a second session's message, a `say` round trip, a `422` shown, a flag, a room change, a private message, a `401` rejoined, a `428` answered with the code - and §113.2.4: `x=1` on every request, a message stored with its date, a mention in the view marked, an `A` from another room marking it, Tab completing an `@nick` - and §113.6.6 through the Chat menu: a refused claim leaving the session as it was, a claim's `K` kept and shown, a new code stopping the old, a takeover answered `410` and not rejoined, Reconnect taking the nick back with the code, a release, and the code in `WIRECHAT.CFG` |
+| `wcclaim` | soak | host-side: the fixture's §113.2.2 against itself, the clock turned by hand - a `K` of the pinned shape and only its hash kept, the code at the next join (case, `-` and space ignored), a takeover from any address and its token `410` (a held poll included) for a day and 200 tokens, the same-address rule for an unclaimed nick, a new code, a release, each refusal in its words, and both buckets |
 | `wcdraw` | soak | §113.5.1 on MartyPC's Hercules 5150: each gesture's drawing calls under its ceiling — `OSAPI_GFX_BLIT1` counted among them since §113.5.3, which is every run of text — and the incremental picture identical to a repaint's |
 | `wcdrawcga` | soak | the same on its CGA: the short layout, in Wired (the default) |
 | `wcdrawvga` | soak | the same on the VGA XT: the Blue theme, picked from the Theme menu (§113.5.2) |
