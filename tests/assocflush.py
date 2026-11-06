@@ -10,14 +10,17 @@ FORMAT.DRV's flush rebuilds the file. Five boots on MartyPC's 5150, the 720KB
 system disk in A: and a scratch copy of apps720 in B:, every leg read OFF THE
 FLOPPY the guest wrote (os88flush) and never off the kernel that wrote it:
 
-  WRITE      apps720 with ASSOC.DAT deleted; browse B:\\APPS. Exactly one
-             flush, and the file it writes holds the folder's rows exactly as
-             tools/os88disk.py's own builder made them - size, folder cluster,
+  WRITE      apps720 with ASSOC.DAT deleted; browse B:\\APPS. One flush a
+             visit while the visit learned something - a listing peeks at
+             most DSK_HARV_MAX (16) packages (SPEC.md 22.6.4), so APPS' 20
+             take two visits, the first file holding 16 rows - and the
+             file holds the folder's rows exactly as tools/os88disk.py's
+             own builder made them - size, folder cluster,
              icon, glyph - and the same association rows.
-  QUIET      ...browse B:\\APPS again: no second flush (the store holds every
+  QUIET      ...browse B:\\APPS once more: no flush (the store holds every
              body now, so nothing is taken).
   ONE FLUSH  the shipped cache plus ONE new package in B:\\ - and the flush's
-             own int 13h count against WRITE's, where SEVENTEEN were new. It
+             own int 13h count against WRITE's first, where SIXTEEN were new. It
              must not grow with what it found (54.7.6.2's whole point): the
              harvest pays a read per package, the flush pays directories.
   REBOOT     a fresh boot off the floppy WRITE wrote: from B:\\MEDIA, before
@@ -35,7 +38,8 @@ FLOPPY the guest wrote (os88flush) and never off the kernel that wrote it:
 Broken on purpose, each must go red: the harvest's `call asc_learn` taken out
 fails WRITE and REBOOT; the capture not kept fails ONE FLUSH (the flush reads
 every declaring package's header again); the location trigger taken out
-fails LOCATE; `[asc_wno]` never set fails REFUSED.
+fails LOCATE; `[asc_wno]` never set fails REFUSED; ico_ref_try's store hit
+skipped (every visit peeks again) fails QUIET with a flush a visit.
 """
 import os
 import struct
@@ -171,30 +175,77 @@ def ext_map(ui):
     return out
 
 
+def harv_max():
+    """DSK_HARV_MAX, the icon peeks one LISTING may spend (SPEC.md 22.6.4),
+    read out of the source rather than copied: the QUIET leg's count of
+    flushes is a function of it."""
+    with open(os.path.join(ROOT, "kernel", "dskwin.inc")) as f:
+        for line in f:
+            w = line.split()
+            if len(w) >= 3 and w[0] == "DSK_HARV_MAX" and w[1] == "equ":
+                return int(w[2], 0)
+    raise ValueError("DSK_HARV_MAX not found in kernel/dskwin.inc")
+
+
 def leg_write(bad):
-    """WRITE + QUIET: a cold disk, one browse, one flush, the right file."""
+    """WRITE + QUIET: a cold disk, one flush a visit while the visit learned
+    something, and the right file.
+
+    A listing peeks at most DSK_HARV_MAX packages (SPEC.md 22.6.4) and a body
+    read is KEPT in the store, so a folder of N new packages is learned over
+    ceil(N / DSK_HARV_MAX) visits - each of which really did teach the store
+    rows the file lacks, and so posts its flush (54.7.6.1). apps720's APPS
+    holds 20 against a budget of 16: two flushes, then quiet. QUIET is the
+    visit AFTER the store holds every body, and it must post nothing."""
     img = scratch("all")
     fat = Fat12(img)
     fat.delete("ASSOC.DAT")
     fat.save()
     after = scratch("after")
+    orig_rows, _ = assoc_of(APPS)
+    apps_clus = first_cluster(Fat12(img), "APPS")
+    napps = sum(1 for r in orig_rows.values()
+                if r["clus"] == apps_clus and r["icon"] != bytes(64))
+    hm = harv_max()
+    learning = -(-napps // hm)          # the visits that each learn something
     with os88ui.boot(SYS, apps=img, machine=MACHINE, quick=True) as ui:
         fl = os88flush.Flush(marty=ui.m)
         with Flushes(ui.m) as w:
             ui.path("B:/APPS")
             w.wait(1, "the flush after B:\\APPS", bad)
-            ui.path("B:/")
-            ui.path("B:/APPS")
             w.settle()
-            n = len(w.done)
-            print("   WRITE: %d flush(es); the first %r"
-                  % (n, w.done[0] if w.done else None))
-            if n > 1:
-                bad.append("QUIET: browsing B:\\APPS again flushed again "
-                           "(%d flushes)" % n)
+            try:
+                first, _ = assoc_of(fl.volume(1))
+            except Exception as e:
+                first = {}
+                bad.append("WRITE: no ASSOC.DAT after the first flush (%s)"
+                           % e)
+            got = [len(w.done)]
+            for _ in range(learning):           # ...and the QUIET one after
+                ui.path("B:/")
+                ui.path("B:/APPS")
+                if len(got) < learning:
+                    w.wait(sum(got) + 1, "visit %d's flush" % (len(got) + 1),
+                           bad)
+                w.settle()
+                got.append(len(w.done) - sum(got))
+            print("   WRITE: %d iconed packages in B:\\APPS, %d peeks a "
+                  "listing; flushes per visit %s; the first file %d rows; "
+                  "the first flush %r" % (napps, hm, got, len(first),
+                                          w.done[0] if w.done else None))
+            if len(first) != min(napps, hm):
+                bad.append("WRITE: the first visit's file holds %d rows, not "
+                           "min(%d, DSK_HARV_MAX %d)"
+                           % (len(first), napps, hm))
+            if got[:learning] != [1] * learning:
+                bad.append("WRITE: flushes per learning visit %s, not one "
+                           "each over %d visits" % (got[:learning], learning))
+            if got[learning:] != [0]:
+                bad.append("QUIET: browsing B:\\APPS once the store held "
+                           "every body flushed again (%s flushes per visit)"
+                           % got)
         fl.save(1, after)
     orig_rows, orig_exts = assoc_of(APPS)
-    apps_clus = first_cluster(Fat12(img), "APPS")
     try:
         rows, exts = assoc_of(after)
     except Exception as e:
@@ -227,7 +278,7 @@ def leg_write(bad):
 
 
 def leg_one(bad, all_flush):
-    """ONE FLUSH: one new package; the flush's cost against seventeen.
+    """ONE FLUSH: one new package; the flush's cost against sixteen.
 
     ...and one package GONE: a package that is no longer on the disk must
     leave the file, and the walk is what drops it. (It was also what kept
@@ -259,16 +310,16 @@ def leg_one(bad, all_flush):
     if not w.done:
         return
     one = w.done[0]
-    print("   ONE FLUSH: one new -> %d reads %d writes; seventeen new -> "
+    print("   ONE FLUSH: one new -> %d reads %d writes; sixteen new -> "
           "%d reads %d writes" % (one["reads"], one["writes"],
                                   all_flush["reads"], all_flush["writes"]))
     if len(w.done) != 1:
         bad.append("ONE FLUSH: %d flushes for one browse" % len(w.done))
-    # the 17-new flush may read the THREE built-in programs' headers (a slot
+    # the 16-new flush may read the THREE built-in programs' headers (a slot
     # and no record) and finds no old file; one more for slack. A flush that
     # re-read the declaring packages it learned would be 5+ reads over
     if all_flush["reads"] > one["reads"] + 4:
-        bad.append("ONE FLUSH: seventeen new packages cost %d reads against "
+        bad.append("ONE FLUSH: sixteen new packages cost %d reads against "
                    "one's %d - the flush is reading packages again"
                    % (all_flush["reads"], one["reads"]))
     rows, _ = assoc_of(after)

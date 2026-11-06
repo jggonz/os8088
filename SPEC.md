@@ -53118,6 +53118,8 @@ through 0 into the negatives (`dec` / `js`): two mounts of 1,024 entries is
 the most one listing asks of it, so it cannot wrap. A body read is kept in the
 store, so the next visit's sixteen are the NEXT sixteen; a volume with an
 `ASSOC.DAT` (§54.7) costs none of it. Folders and documents never peek.
+Each visit that takes rows posts its own `ASSOC.DAT` flush (§54.7.6.1), so a
+folder of more than sixteen new packages is written back in as many visits.
 
 **The sort is a Shell sort** on these kernels (§19.4.1).
 
@@ -108569,7 +108571,13 @@ A flush is posted for a volume at two points, and nowhere else:
   not hold. The trigger is the take and not the miss. An **iconless**
   package misses on every mount and never gets a store row, and a **full**
   store misses for everything it did not take; either would post on every
-  navigation. A folder therefore posts at most once a session.
+  navigation. A folder therefore posts once per visit that LEARNED
+  something, and then never again that session: on `kern_big` and
+  `kern_mega` a listing peeks at most `DSK_HARV_MAX` (16) packages
+  (§22.6.4), so a folder of N packages the file does not hold is learned -
+  and flushed - over ceil(N / 16) visits, each of which really did take
+  rows the file lacked. `tests/assocflush.py`'s APPS holds 20: two flushes,
+  the first file 16 rows, then quiet.
 - **The search's `.found`** (§54.4.2). Between `asc_use_x` and
   `assoc_hint_here`, the slot's hint is what this volume's own cache said.
   When that is not where the program was just found, the cache did not know
