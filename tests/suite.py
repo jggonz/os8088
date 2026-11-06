@@ -7717,6 +7717,19 @@ SOAK = [
         "BIOS buffer drained, and one more paced key still lands. Red on a "
         "MartyPC built without patch 14 (leg B stops in sch_stkdie).",
         needs=("marty",)),
+    Row("pravetzboot", "soak", py("tests/pravetzboot.py"), 8.0,
+        "SPEC.md 9.7.2: the Pravetz 16S / CPU12 Plus ROM rejects INT 15h "
+        "AH=C0h with RETF 2, leaving IF clear. The keyboard probe must save "
+        "FLAGS until its CF/AH answer is consumed, then restore them or "
+        "serial-mouse reset waits forever at ticks=2 on a black screen. "
+        "Boot the real ROM on a V20/12 MHz with an 8087 and OTI-037C; "
+        "check the adverse ROM return, int 09h fallback, live desktop, "
+        "advancing IRQ0 and responsive serial mouse. Red on the original "
+        "system image passed with its map. kbd4f covers the supported "
+        "intercept path. 86Box models the reported machine and BIOS; "
+        "8s is 7.2 measured.",
+        needs=("86box",),
+        wants=("build/os8088.img", "build/apps.img", "build/kernel.map")),
     Row("kbd4f", "soak", py("tests/kbd4f.py"), 8.0,
         "THE SCANCODE COMES FROM THE ROM'S int 15h AH=4Fh, NOT A PEEK (SPEC.md "
         "9.7.2). kbm_isr used to read port 60h ahead of the ROM whenever the "

@@ -15595,6 +15595,12 @@ it.
   AH=4Fh"*) is a yes. SeaBIOS - QEMU's and v86's - says yes. An XT-class ROM
   has no such service and answers `CF` = 1 (the 5150's cassette code says
   AH = 80h, an XT's 86h).
+  The probe saves the caller's FLAGS and restores them **after consuming
+  the BIOS's CF/AH/table answer**. An unsupported-service handler may return
+  with `retf 2`, discarding the interrupt frame's FLAGS and leaving IF clear:
+  the Pravetz 16S / CPU12 Plus ROM does exactly this at `F000:F859`.
+  Leaving that interrupt state in place stops IRQ0 and strands the serial
+  mouse's following tick-based reset wait before the desktop is painted.
 - **It then hooks ONE vector, never both**: `int 15h` (`kbm_i15`) on a yes,
   `int 09h` (`kbm_isr`, the peek) on a no. `[kbm_ivec]` says which (24h or
   54h) and `kbm_old9` holds that vector's old value, which is the chain both
@@ -15702,6 +15708,13 @@ as `1CF0`. **On the kernel before this, the same row reads**: int 09h
 `0060:2C8D`, nothing for the batched `a`, `2064 2064`, `4B00 4B00`, and
 nothing at all for Alt+Enter. MartyPC's 8255 rows (`altenter`,
 `dosaltenter`, `kbdburst`, `kdkbd`, ...) keep the peek.
+
+`tests/pravetzboot.py` (`soak -k pravetzboot`) covers the unsupported query
+on 86Box's Pravetz 16S / CPU12 Plus with a V20 and OTI-037C. It verifies
+the ROM's `retf 2` rejection, the int 09h fallback, a live desktop, advancing
+timer ticks and a responsive serial mouse. The kernel before the FLAGS
+save/restore freezes on a black screen with `ticks = 2`. The repair adds
+two boot-overlay bytes and no resident bytes.
 
 ### 9.8 The overrun guard — a full BIOS buffer is a HANG, not a beep
 
