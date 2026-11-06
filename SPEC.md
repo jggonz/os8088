@@ -25910,6 +25910,21 @@ file-activity widget (§12.8) changes an 88px span and used to force all of it.
 Granularity by *cell* is indeed useless here; granularity by **segment** is
 the whole feature.
 
+#### 12.05.1 The logo is seven rects
+
+Segment 1 — the field, the rule and the logo — is drawn only after an overdraw
+(`[menu_bovr]`): every fullscreen exit, every saver wake, the first paint. Its
+logo, the 11×11 DIP-chip silhouette at `MENU_SYS_TX`, was a bitmap walked a bit
+at a time with **one `gfx_pixel` call per lit pixel — 78 calls**, ~0.5 ms each
+on the 5150/CGA, so ~39 ms of every forced bar was the logo. Its rows are only
+two shapes and a notch: a 7-wide body (`x+2 .. x+8`) on rows `y+2 .. y+9`, an
+11-wide pin row across it on `y+2`, `y+4`, `y+6` and `y+8`, and the top row's
+two 3-wide halves either side of the notch. So it is one `gfx_fill` and six
+`gfx_hline`s in the same pen, over the field just filled: the same pixels,
+the pins rewriting seven body pixels each in the colour they already hold, and
+the bitmap's 18 bytes and its decoding loop go — 6 bytes smaller on both
+kernels.
+
 ### 12.1 The menu-bar clock
 
 The right end of the bar shows the system clock of §37 — the date and the
