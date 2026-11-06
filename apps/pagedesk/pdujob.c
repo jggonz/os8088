@@ -46,6 +46,18 @@ static void pdu_kick(void)
     os88_wm_wake(pdu_win);
 }
 
+/* stand in the document's folder before a module touches it. PDENG reads
+ * pdu_name, and PDWRT the source, by NAME in the instance's current folder
+ * (pdxb_open, 20.5.12 item 2), and a Standard File dialog moves that folder
+ * (SPEC.md 19.2.1) - a Save As browsed elsewhere, or an Open cancelled after
+ * browsing, would otherwise send every later page read to the wrong place.
+ * Inside one volume this is a word and no I/O (os88_file_goto_q_mark). */
+static void pdu_at_doc(void)
+{
+    if (pdu_doc == D_OPEN || pdu_doc == D_OPENING)
+        os88_file_goto_q_mark(pdu_docplace.clus, pdu_docplace.vol);
+}
+
 /* union r into the rect a render is owed for */
 static void pdu_render_want(struct os88_rect *r)
 {
@@ -181,6 +193,7 @@ static void pdu_open_begin(const char *name)
     pdu_rdonly = 0;
     pdu_npages = 0;
     os88_strcpy(pdu_name, name, sizeof(pdu_name));
+    os88_file_here(&pdu_docplace);      /* every caller stood there first */
     os88_memset(&pdu_xopen, 0, sizeof(pdu_xopen));
     os88_strcpy(pdu_xopen.name, name, sizeof(pdu_xopen.name));
     pdu_doc = D_OPENING;
@@ -267,7 +280,7 @@ static void pdu_open_step(void)
     r = pdu_mcall(PDU_M_ENG, PDV_ENG_OPEN, 0, 0, 0);
     pd_fcopy_in(pdu_xb, 0, &pdu_xopen, sizeof(pdu_xopen));
     pdu_jslices++;
-    if (r == PDE_BUSY) {
+    if (!pdu_mcf && r == PDE_BUSY) {    /* D11: BUSY is CF=0, never CF=1 */
         pdu_progress("Opening ", pdu_name);
         return;
     }
@@ -328,7 +341,7 @@ static int pdu_render_begin(void)
     pdu_xrend.mono_mark = 0;
     pd_fcopy_out(&pdu_xrend, pdu_xb, 0, sizeof(pdu_xrend));
     r = pdu_mcall(PDU_M_REND, PDV_REND_BEGIN, 0, 0, 0);
-    if (pdu_mcf && r != PDE_BUSY) {
+    if (pdu_mcf) {
         pdu_say2("Could not draw the page: ", pdu_errtext(r));
         os88_gfx_lock();
         pdu_status_paint();
@@ -344,7 +357,7 @@ static void pdu_render_step(void)
     unsigned r;
     r = pdu_mcall(PDU_M_REND, PDV_REND_STEP, 0, 0, 0);
     pdu_jslices++;
-    if (r == PDE_BUSY) {
+    if (!pdu_mcf && r == PDE_BUSY) {
         pdu_progress("Drawing page ", "");
         return;
     }
@@ -440,7 +453,7 @@ static void pdu_save_step(void)
     pdu_jslices++;
     if (!pdu_fsop && (pdu_xsave.total.lo | pdu_xsave.total.hi))
         pdu_fsop = os88_fs_op(pdu_xsave.total.hi, pdu_xsave.total.lo) == 0;
-    if (r == PDE_BUSY) {
+    if (!pdu_mcf && r == PDE_BUSY) {
         pdu_progress("Saving ", pdu_target);
         return;
     }
@@ -470,6 +483,7 @@ void os88_onwake(void *win)
 
     if (win != pdu_win)
         return;
+    pdu_at_doc();
     if (pdu_jcancel) {
         int was;
         was = pdu_job;
@@ -501,6 +515,8 @@ void os88_onwake(void *win)
         else
             pdu_render_step();
     } else if (pdu_pgwant && pdu_doc == D_OPEN) {
+        int old;
+        old = pdu_page;
         r = pdu_page_load(pdu_pgwant - 1);
         pdu_pgwant = 0;
         os88_gfx_lock();
@@ -509,10 +525,8 @@ void os88_onwake(void *win)
         else {
             pdu_say("");
             pdu_canvas_full();
-            if (pdu_L.side.x1 <= pdu_L.side.x2)
-                pdu_side_paint();
-            if (pdu_L.notes.x1 <= pdu_L.notes.x2)
-                pdu_notes_paint();
+            pdu_side_page(old);         /* two cells, or a new list */
+            pdu_notes_page();           /* the one line that can change */
         }
         os88_gfx_unlock();
         pdu_menusync();

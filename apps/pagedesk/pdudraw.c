@@ -56,6 +56,8 @@ static void pdu_desk(int x1, int y1, int x2, int y2)
         pdu_fill(x1, y1, x2, y2, pdu_cdesk);
 }
 
+static char pdu_cut[64];                /* a cut copy for one font_run */
+
 /* --- a control's live label ---------------------------------------------- */
 static char pdu_lbuf[16];
 static const char *pdu_label(int id)
@@ -111,17 +113,45 @@ static int pdu_active(int id)
 
 static const char *pdu_why(int id);     /* pducmd.c: 0 = enabled */
 
-/* one control: ground, frame, centred label. 2-4 calls. */
+/* one control: ground, frame, centred label.
+ *
+ * NOTHING IS WRITTEN TWICE, AND NOTHING UNCHANGED IS WRITTEN AT ALL
+ * (CLAUDE.md, PERFORMANCE.md rules 1-2). The first version filled the whole
+ * control and then ran the label over the fill, so every repaint blanked the
+ * label for a call's length - the page field flashed on every PgDn - and
+ * pdu_canvas_full repainted six controls whether or not they had changed.
+ * Now each laid-out control remembers what it last showed (pdu_cst: state
+ * and colours; pdu_clab: the label), and:
+ *   - the region under it was just filled with its paper (pdu_cground, set
+ *     by the bar/panel/card painter around its loop): frame + label, 2 calls
+ *   - same state, same label: nothing
+ *   - same state, new label: the slivers either side of the new label on
+ *     its rows, then the label - the old label's pixels are each written
+ *     once (the page field's 2/12 -> 3/12)
+ *   - anything else: the four slabs round the label inside the frame, the
+ *     frame, the label
+ * The cache is keyed on (id, x1, y1), so a relayout that moves or replaces
+ * a control finds nothing and takes the full path. */
+static int pdu_cground = -1;            /* the paper every control the caller
+                                         * is about to paint stands on; -1 =
+                                         * not known */
+static int pdu_cid[PDU_MAXCTL], pdu_cx1[PDU_MAXCTL], pdu_cy1[PDU_MAXCTL];
+static unsigned pdu_cst[PDU_MAXCTL];    /* 0 = nothing known */
+static char pdu_clab[PDU_MAXCTL][16];
+
 static void pdu_ctl_paint(int i)
 {
     struct pdu_ctl *c;
     const char *s;
-    int act, dis, ink, paper, tx, ty, n, ground;
+    int act, dis, foc, ink, paper, tx, ty, n, k, ground, in, same, max;
+    int ry1, ry2;
+    unsigned st;
 
     c = &pdu_L.ctl[i];
     s = pdu_label(c->id);
     act = pdu_active(c->id);
     dis = pdu_why(c->id) != 0;
+    foc = (c->id == pdu_focus && !dis);  /* PD-23: where Tab is */
     ground = (c->flags & (CF_FIELD | CF_EMPTY)) ? OS88_WHITE : pdu_cbar;
     if (act && !dis) {
         paper = pdu_cact;
@@ -130,21 +160,66 @@ static void pdu_ctl_paint(int i)
         paper = ground;
         ink = OS88_BLACK;
     }
-    pdu_fill(c->x1, c->y1, c->x2, c->y2, paper);
-    if (dis) {
-        os88_gfx_pen(1);
+    if (dis)
         ink = pdu_mono ? OS88_BLACK : OS88_DGRAY;
-    } else
-        os88_set_color(OS88_BLACK);
-    os88_gfx_frame(c->x1, c->y1, c->x2, c->y2);
-    if (c->id == pdu_focus && !dis)      /* PD-23: where Tab is */
-        os88_gfx_frame(c->x1 + 1, c->y1 + 1, c->x2 - 1, c->y2 - 1);
+    st = 1 | (act ? 2 : 0) | (dis ? 4 : 0) | (foc ? 8 : 0)
+         | ((unsigned)paper << 4) | ((unsigned)ink << 8);
+    in = foc ? 2 : 1;
     n = os88_strlen(s);
+    max = (c->x2 - c->x1 + 1 - 2 * in) / PDU_CW;
+    if (n > max)
+        n = max;
+    if (n > 15)
+        n = 15;
+    for (k = 0; k < n; k++)
+        pdu_cut[k] = s[k];
+    pdu_cut[n] = 0;
     tx = c->x1 + (c->x2 - c->x1 + 1 - n * PDU_CW) / 2;
     ty = c->y1 + (c->y2 - c->y1 + 1 - 8) / 2;
-    os88_font_run(tx, ty, s, ink, paper);
+    same = pdu_cid[i] == c->id && pdu_cx1[i] == c->x1 && pdu_cy1[i] == c->y1;
+    /* the label's rows, kept inside the frame(s): COMPACT's 10-row control
+     * puts the label against the focus frame */
+    ry1 = ty < c->y1 + in ? c->y1 + in : ty;
+    ry2 = ty + 7 > c->y2 - in ? c->y2 - in : ty + 7;
+
+    if (pdu_cground >= 0) {
+        if (paper != pdu_cground)
+            same = 0;                   /* the slabs, below */
+        else
+            same = 2;                   /* frame and label on the ground */
+    } else if (same && pdu_cst[i] == st) {
+        for (k = 0; pdu_clab[i][k] == pdu_cut[k] && pdu_cut[k]; k++)
+            ;
+        if (pdu_clab[i][k] == pdu_cut[k])
+            return;                     /* nothing changed */
+        pdu_fill(c->x1 + in, ry1, tx - 1, ry2, paper);
+        pdu_fill(tx + n * PDU_CW, ry1, c->x2 - in, ry2, paper);
+        same = 3;                       /* only the label, below */
+    } else
+        same = 0;
+    if (same == 0) {
+        pdu_fill(c->x1 + in, c->y1 + in, c->x2 - in, ty - 1, paper);
+        pdu_fill(c->x1 + in, ty + 8, c->x2 - in, c->y2 - in, paper);
+        pdu_fill(c->x1 + in, ry1, tx - 1, ry2, paper);
+        pdu_fill(tx + n * PDU_CW, ry1, c->x2 - in, ry2, paper);
+    }
+    if (dis)
+        os88_gfx_pen(1);
+    else
+        os88_set_color(OS88_BLACK);
+    if (same != 3) {
+        os88_gfx_frame(c->x1, c->y1, c->x2, c->y2);
+        if (foc)
+            os88_gfx_frame(c->x1 + 1, c->y1 + 1, c->x2 - 1, c->y2 - 1);
+    }
+    os88_font_run(tx, ty, pdu_cut, ink, paper);
     if (dis)
         os88_gfx_pen(0);
+    pdu_cid[i] = c->id;
+    pdu_cx1[i] = c->x1;
+    pdu_cy1[i] = c->y1;
+    pdu_cst[i] = st;
+    os88_strcpy(pdu_clab[i], pdu_cut, sizeof(pdu_clab[i]));
 }
 
 /* repaint one control by id, if it is laid out */
@@ -164,9 +239,11 @@ static void pdu_bar_paint(struct os88_rect *b, int flag)
     pdu_fill(b->x1, b->y1, b->x2, b->y2 - 1, pdu_cbar);
     os88_set_color(OS88_BLACK);
     os88_gfx_hline(b->x1, b->x2, b->y2);
+    pdu_cground = pdu_cbar;
     for (i = 0; i < pdu_L.nctl; i++)
         if (pdu_L.ctl[i].flags & flag)
             pdu_ctl_paint(i);
+    pdu_cground = -1;
 }
 
 /* --- the status line: ONE font_run of a composed line (20.6.4) ----------- */
@@ -191,7 +268,6 @@ static void pdu_put(char *line, int cols, int at, const char *s)
 /* one line centred on cx and CUT to maxw pixels: the cut is a copy, because
  * font_run draws to the string's NUL (the first version measured the cut
  * and then handed font_run the whole string, which ran off the card) */
-static char pdu_cut[64];
 static void pdu_cutrun(int cx, int y, const char *s, int maxw)
 {
     int i, n;
@@ -206,6 +282,25 @@ static void pdu_cutrun(int cx, int y, const char *s, int maxw)
     os88_font_run(cx - n * PDU_CW / 2, y, pdu_cut, OS88_BLACK, OS88_WHITE);
 }
 
+/* the window's grow box sits in the content's bottom-right corner
+ * (os88_wm_grow), so the line stops PDU_GROW_W short of the edge */
+static int pdu_status_cols(void)
+{
+    int cols;
+    cols = (pdu_L.status.x2 - pdu_L.status.x1 + 1 - PDU_GROW_W) / PDU_CW;
+    if (cols > 95)
+        cols = 95;
+    if (cols < 0)
+        cols = 0;
+    return cols;
+}
+
+static int pdu_status_ty(void)
+{
+    return pdu_L.status.y1 + (pdu_L.status.y2 - pdu_L.status.y1 + 1 - 8) / 2
+           + 1;
+}
+
 static char pdu_sline[96];
 static char pdu_sright[24];
 static void pdu_status_paint(void)
@@ -215,11 +310,7 @@ static void pdu_status_paint(void)
     const char *ctr;
 
     r = &pdu_L.status;
-    /* the window's grow box sits in the content's bottom-right corner
-     * (os88_wm_grow), so the line stops PDU_GROW_W short of the edge */
-    cols = (r->x2 - r->x1 + 1 - PDU_GROW_W) / PDU_CW;
-    if (cols > 95)
-        cols = 95;
+    cols = pdu_status_cols();
     for (i = 0; i < cols; i++)
         pdu_sline[i] = ' ';
     pdu_sline[cols] = 0;
@@ -259,19 +350,24 @@ static void pdu_status_paint(void)
         n = i;
     for (i = 0; i < n; i++)
         pdu_sline[1 + i] = pdu_msg[i];
-    os88_font_run(r->x1, r->y1 + (r->y2 - r->y1 + 1 - 8) / 2 + 1, pdu_sline,
-                  OS88_BLACK, OS88_WHITE);
-    /* the line above it, once */
-    os88_set_color(OS88_BLACK);
-    os88_gfx_hline(r->x1, r->x2, r->y1);
+    os88_font_run(r->x1, pdu_status_ty(), pdu_sline, OS88_BLACK, OS88_WHITE);
 }
 
-/* the status line's ground band (rows the font_run does not cover) */
+/* the whole status strip: the rule above it, the ground the font_run does
+ * not cover (rows above and below the text, and right of its last cell,
+ * where the grow box goes), then the line - every pixel once */
 static void pdu_status_full(void)
 {
     struct os88_rect *r;
+    int ty;
     r = &pdu_L.status;
-    pdu_fill(r->x1, r->y1, r->x2, r->y2, OS88_WHITE);
+    ty = pdu_status_ty();
+    os88_set_color(OS88_BLACK);
+    os88_gfx_hline(r->x1, r->x2, r->y1);
+    pdu_fill(r->x1, r->y1 + 1, r->x2, ty - 1, OS88_WHITE);
+    pdu_fill(r->x1, ty + 8, r->x2, r->y2, OS88_WHITE);
+    pdu_fill(r->x1 + pdu_status_cols() * PDU_CW, ty, r->x2, ty + 7,
+             OS88_WHITE);
     pdu_status_paint();                 /* pdu_paint_rect puts the grow
                                          * box back over the fill, last */
 }
@@ -400,10 +496,12 @@ static void pdu_side_paint(void)
     pdu_fill(s->x1, s->y1, s->x2 - 1, s->y2, pdu_cbar);
     os88_set_color(OS88_BLACK);
     os88_gfx_vline(s->x2, s->y1, s->y2);
+    pdu_cground = pdu_cbar;
     for (i = 0; i < pdu_L.nctl; i++)
         if (pdu_L.ctl[i].id == C_SB_PAGES || pdu_L.ctl[i].id == C_SB_OUTL
             || pdu_L.ctl[i].id == C_SB_HIDE)
             pdu_ctl_paint(i);
+    pdu_cground = -1;
     o = &pdu_tr;
     pdu_side_list(o);
     pdu_fill(o->x1, o->y1, o->x2, o->y2, pdu_mono ? OS88_WHITE : pdu_cbar);
@@ -434,6 +532,48 @@ static void pdu_side_paint(void)
     }
 }
 
+/* the current page moved from `old`: the sidebar follows it. A page still
+ * in the list costs two cells' marks (the heavy frame off one, on the other,
+ * and their numbers) - the first build repainted the whole panel on every
+ * PgDn, and never scrolled it, so from the ninth page on VGA the current
+ * page was in no cell at all. A page off the list pages the list by whole
+ * screenfuls, which is a new list and is painted as one. Lock held. */
+static void pdu_cell_mark(int k, int act)
+{
+    int n, g;
+    if (k < 0 || pdu_sidetop + k >= (int)pdu_npages || !pdu_cell(k, &pdu_cr))
+        return;
+    g = pdu_mono ? OS88_WHITE : pdu_cbar;
+    os88_set_color(act ? OS88_BLACK : g);
+    os88_gfx_frame(pdu_cr.x1 - 2, pdu_cr.y1 - 2, pdu_cr.x2 + 2,
+                   pdu_cr.y2 + 2);
+    os88_utoa(pdu_sidetop + k + 1, pdu_num);
+    n = os88_strlen(pdu_num);
+    os88_font_run(pdu_cr.x1 + (PDU_CELL_W - n * PDU_CW) / 2, pdu_cr.y2 + 3,
+                  pdu_num, act ? OS88_WHITE : OS88_BLACK,
+                  act ? pdu_cact : pdu_cbar);
+}
+
+static void pdu_side_page(int old)
+{
+    int cells;
+    if (pdu_L.side.x1 > pdu_L.side.x2 || pdu_doc != D_OPEN)
+        return;
+    cells = pdu_side_rows() * 2;
+    if (cells <= 0)
+        return;
+    if ((int)pdu_page < pdu_sidetop || (int)pdu_page >= pdu_sidetop + cells) {
+        pdu_sidetop = ((int)pdu_page / cells) * cells;
+        if (pdu_sbtab == 0)
+            pdu_side_paint();
+        return;
+    }
+    if (pdu_sbtab != 0 || old == (int)pdu_page)
+        return;
+    pdu_cell_mark(old - pdu_sidetop, 0);
+    pdu_cell_mark((int)pdu_page - pdu_sidetop, 1);
+}
+
 /* --- Notes & edits (17.3) -------------------------------------------------- */
 static void pdu_notes_list(struct os88_rect *o)
 {
@@ -462,6 +602,36 @@ static void pdu_notes_body(struct os88_rect *o, int paper)
     }
 }
 
+/* the page changed: only the body's second line can have ("N in the
+ * file" is per page), and it is redrawn as one font_run padded to the list's
+ * width, so the old count is overwritten rather than erased first. Wave 1's
+ * edit store is empty, so the first line ("No notes or edits") stands. */
+static void pdu_notes_page(void)
+{
+    struct os88_rect *o;
+    int cols, n, y;
+    if (pdu_L.notes.x1 > pdu_L.notes.x2 || pdu_doc != D_OPEN || pdu_npall
+        || pdu_changes)
+        return;
+    o = &pdu_tr;
+    pdu_notes_list(o);
+    cols = (o->x2 - o->x1 - 4) / PDU_CW;
+    if (cols > (int)sizeof(pdu_line) - 1)
+        cols = sizeof(pdu_line) - 1;
+    pdu_line[0] = 0;
+    if (pdu_pinfo.nannots) {
+        os88_utoa(pdu_pinfo.nannots, pdu_line);
+        pdu_cat(pdu_line, " in the file", sizeof(pdu_line));
+    }
+    n = os88_strlen(pdu_line);
+    while (n < cols)
+        pdu_line[n++] = ' ';
+    pdu_line[cols] = 0;
+    y = o->y1 + 6 + 12;
+    os88_font_run(o->x1 + 4, y, pdu_line, OS88_BLACK,
+                  pdu_mono ? OS88_WHITE : pdu_cbar);
+}
+
 static void pdu_notes_paint(void)
 {
     struct os88_rect *n, *o;
@@ -475,9 +645,11 @@ static void pdu_notes_paint(void)
     os88_gfx_vline(n->x1, n->y1, n->y2);
     os88_font_run(n->x1 + 4, n->y1 + 5, "Notes & edits", OS88_BLACK,
                   pdu_cbar);
+    pdu_cground = pdu_cbar;
     for (i = 0; i < pdu_L.nctl; i++)
         if (pdu_L.ctl[i].id == C_NP_CLOSE || pdu_L.ctl[i].id == C_NP_FILTER)
             pdu_ctl_paint(i);
+    pdu_cground = -1;
     o = &pdu_tr;
     pdu_notes_list(o);
     paper = pdu_mono ? OS88_WHITE : pdu_cbar;
@@ -533,9 +705,11 @@ static void pdu_empty_paint(struct os88_rect *clip)
     }
     pdu_cutrun(cx, cy - 28, l1, w - 8);
     pdu_cutrun(cx, cy - 16, l2, w - 8);
+    pdu_cground = OS88_WHITE;           /* the card's own fill, above */
     for (i = 0; i < pdu_L.nctl; i++)
         if (pdu_L.ctl[i].flags & CF_EMPTY)
             pdu_ctl_paint(i);
+    pdu_cground = -1;
 }
 
 /* paint the canvas inside clip: the desk around the page, the page's white

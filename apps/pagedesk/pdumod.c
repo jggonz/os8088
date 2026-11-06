@@ -175,6 +175,14 @@ static void pdu_doc_free(void)
         }
     for (i = 0; i < PDU_NDC; i++)
         pdu_dc[i] = 0;
+    /* D2: a field of 0 is "no claim of that kind now" - the next INIT must
+     * never hand a module a segment that has been given back */
+    pdu_xinit.cache_seg = 0;
+    pdu_xinit.arena_seg = 0;
+    pdu_xinit.tables_seg = 0;
+    pdu_xinit.dl_seg = 0;
+    pdu_xinit.band_seg = 0;
+    pdu_xinit.glyph_seg = 0;
 }
 
 static void pdu_wrt_out(void)
@@ -183,6 +191,8 @@ static void pdu_wrt_out(void)
         os88_mem_free(pdu_wbuf);
         pdu_wbuf = 0;
     }
+    pdu_xinit.wbuf_seg = 0;             /* D2: never a freed segment */
+    pdu_xinit.wbuf_kb = 0;
     if (pdu_wrt_in) {
         pdu_mbind(PDU_M_WRT, 0);
         os88_part_drop(PDU_PART_WRT);
@@ -387,12 +397,6 @@ static void pdu_doc_release(void)
     pdu_mcall(PDU_M_REND, PDV_REND_ABORT, 0, 0, 0);
     pdu_mcall(PDU_M_ENG, PDV_ENG_CLOSE, 0, 0, 0);
     pdu_doc_free();
-    pdu_xinit.cache_seg = 0;
-    pdu_xinit.arena_seg = 0;
-    pdu_xinit.tables_seg = 0;
-    pdu_xinit.dl_seg = 0;
-    pdu_xinit.band_seg = 0;
-    pdu_xinit.glyph_seg = 0;
 }
 
 /* the writer, for one save: fetch (from HOME), check, bind, buffers, INIT.
@@ -419,7 +423,6 @@ static int pdu_wrt_in_now(void)
     pdu_xinit.wbuf_seg = pdu_wbuf;
     pdu_xinit.wbuf_kb = PDU_WBUF_KB;
     if (pdu_minit(PDU_M_WRT) != 0) {
-        pdu_xinit.wbuf_seg = 0;
         pdu_wrt_out();
         return PDE_LIMIT;
     }

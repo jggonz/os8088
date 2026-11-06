@@ -61,6 +61,10 @@ static int pdu_about;                   /* the About card is up */
 
 static int pdu_doc;                     /* D_* */
 static char pdu_name[14];               /* the open (or failed) file, 8.3 */
+static struct os88_place pdu_docplace;  /* ...and the folder it is in: the
+                                         * modules resolve pdu_name in the
+                                         * CURRENT folder (pdxb_open), and a
+                                         * file dialog moves that */
 static int pdu_err;                     /* why the last open failed */
 static int pdu_rdonly;
 static unsigned pdu_npages, pdu_page;
@@ -129,7 +133,7 @@ static const char *pdu_abtext[] = {
     "A PDF reader and annotator for os8088",
     "",
     "The XT PDF profile: Help menu",
-    "Wave 1 build - stub modules",
+    "Wave 1 build",
     0
 };
 

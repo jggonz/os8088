@@ -382,7 +382,7 @@ static void pdu_pop_open(int kind, int src)
 
 static void pdu_pop_close(void)
 {
-    int src;
+    int src, old;
     if (pdu_pop == P_NONE)
         return;
     pdu_pop = P_NONE;
@@ -390,8 +390,16 @@ static void pdu_pop_close(void)
     pdu_popsrc = C_NONE;
     os88_memcpy(&pdu_dmg, &pdu_poprect, sizeof(pdu_dmg));
     pdu_paint_rect(&pdu_dmg);
-    pdu_focus = src;                    /* PD-23: focus goes back home */
+    /* PD-23: focus goes back home - to the control that opened it. A card
+     * a MENU opened has no home (C_NONE) and leaves the focus where it was;
+     * the first build cleared it there without repainting the control that
+     * lost it, which kept its focus frame on the glass */
+    old = pdu_focus;
+    if (src != C_NONE)
+        pdu_focus = src;
     pdu_ctl_repaint(src);
+    if (old != pdu_focus)
+        pdu_ctl_repaint(old);
     pdu_kick();                         /* the render that waited */
 }
 
@@ -484,12 +492,13 @@ static void pdu_find_run(int again)
         pdu_xfind.glyph = pdu_xfind.glyph_end;
     pdu_xfind.last_page = pdu_npages - 1;
     pdu_xfind.found = 0;
+    pdu_at_doc();
     /* one call here; a long search is one more job kind in wave 2, and
      * PDE_BUSY then re-posts like the others */
     pd_fcopy_out(&pdu_xfind, pdu_xb, 0, sizeof(pdu_xfind));
     r = pdu_mcall(PDU_M_ENG, PDV_ENG_SEARCH, 0, 0, 0);
     pd_fcopy_in(pdu_xb, 0, &pdu_xfind, sizeof(pdu_xfind));
-    if (pdu_mcf && r != PDE_BUSY) {
+    if (pdu_mcf) {
         pdu_say2("Find: ", pdu_errtext(r));
     } else if (pdu_xfind.found) {
         os88_strcpy(pdu_line, "Found on page ", sizeof(pdu_line));
@@ -654,6 +663,7 @@ static void pdu_about_off(void)
  * THE FILE DIALOG'S ANSWER (SPEC.md 38): Cancel calls nothing, so the
  * current document is untouched (PD-01)
  * ==========================================================================*/
+static struct os88_place pdu_hereplace;
 void os88_onfile(int mode, const char *name, unsigned size_lo,
                  unsigned size_hi, void *win)
 {
@@ -663,6 +673,17 @@ void os88_onfile(int mode, const char *name, unsigned size_lo,
     }
     if (pdu_doc != D_OPEN)
         return;
+    /* ONE FOLDER (20.5.12 item 2): PDWRT reads the source and writes the
+     * target and its temp file by name in the current folder, so a Save As
+     * browsed into another folder cannot be done yet - and the dialog has
+     * moved the instance there, so stand back beside the document first */
+    os88_file_here(&pdu_hereplace);
+    if (pdu_hereplace.clus != pdu_docplace.clus
+        || pdu_hereplace.vol != pdu_docplace.vol) {
+        pdu_at_doc();
+        pdu_tell("Save As writes beside the document in this build.");
+        return;
+    }
     {
         int i, same;
         same = 1;
