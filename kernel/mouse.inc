@@ -5307,8 +5307,14 @@ cur_busy_on:
 ; is nothing to bound and nothing to get wrong at the extremes.
 ;
 ; Which bytes those are is decided ONCE, before either walk, from the byte-
-; column difference d = newcol - oldcol (mv_p1s0/1 and mv_p2s0/1), because it
-; is the same answer for every row.
+; column difference d = newcol - oldcol and the row difference e = newtop -
+; oldtop: the columns meet only for |d| <= 1, and then the rows that meet are
+; one contiguous RUN, so no walk asks a per-row question (kernel hot-paths
+; pass 1). And the walks carry no per-byte test: the new cell's background is
+; banked straight off the screen first, pass 1 patches the run's rows of that
+; bank from the old save while it restores the rest, and the draw composes
+; from the bank - 19,400 -> 12,000 cycles a move on the 5150's CGA (SPEC.md
+; 7.1.2 has the measurement and the proof).
 ;
 ; in:       AX = new x, BX = new y; [cur_drawn_x/y] and the banked geometry
 ;           still describe where the cursor IS. IF = 0 (ISR, or the gfx lock).
@@ -5413,15 +5419,10 @@ cur_move_mono:
     mov di, mv_ooff             ; is clear on every path here - the ISR's own
     mov cx, 4                   ; cld, and this file's other string reads
     rep movsw                   ; already assume it from task code
-    mov cl, 3
-    shr word [mv_d], cl         ; the OLD byte column, banked in the word that
-                                ; will hold the DELTA: cur_geom clobbers DX
-                                ; and the new column is not known until it has
-                                ; run, so the subtraction moved below it
     mov ax, [cur_sptr]          ; the buffer holding the OLD background...
     mov [mv_osave], ax
-    mov bx, cur_save            ; ...and the other one takes the new, so pass 2
-    cmp ax, bx                  ; can read one while it fills the other
+    mov bx, cur_save            ; ...and the other one takes the new, so the
+    cmp ax, bx                  ; old can be read while the new is filled
     jne .flip
     mov bx, cur_savex
 .flip:
@@ -5431,57 +5432,156 @@ cur_move_mono:
     pop ax
     mov [cur_drawn_x], ax
     mov [cur_drawn_y], bx
-    call cur_geom               ; DI = new offset, CL = shift, [cur_rows],
-                                ; [cur_b1ok], [cur_off], [cur_cellx/y] - all
-                                ; NEW now
-    mov ax, [cur_cellx]         ; d = newcol - oldcol, and the shifts are
-    shr ax, 1                   ; single-bit because CL is cur_geom's answer
-    shr ax, 1                   ; and the pass-2 loop below still wants it -
-    shr ax, 1                   ; `mov cl, 3` here would eat the shift
-    sub ax, [mv_d]
-    mov [mv_d], ax
-    call cur_mvcols             ; ...and the four per-column answers
+    call cur_geom               ; DI = the new cell's first byte, CL = its
+                                ; shift, and [cur_off], [cur_rows],
+                                ; [cur_b1ok], [cur_cellx/y] - all NEW now
+    push cx                     ; the shift, for the draw at the bottom
 
-    ; --- pass 1: the old background back, except where pass 2 will draw ------
+    ; --- the new cell's background, off the screen ---------------------------
+    ; Every byte under the new cell is its background already EXCEPT where the
+    ; old arrow still stands, and those bytes are exactly the overlap, whose
+    ; background is in the old save: pass 1 below patches them in as it walks
+    ; the old cell. So this walk tests nothing. Both bytes of a row are read
+    ; and banked whatever the clip said: a read writes nothing, and a
+    ; column-1 byte the clip dropped is never drawn or put back (cur_b1ok
+    ; gates both).
+    mov es, [vid_seg]
+    mov bp, [cs:vid_rowadd]     ; gfx_nextrow's step, held in a register
+    mov ch, [cur_rows]
+    or ch, ch
+    jz .meet                    ; wholly off the bottom: nothing to bank
+    mov bx, [mv_nsave]
+.bgrow:
+    mov ax, [es:di]
+    mov [bx], ax
+    inc bx
+    inc bx
+    add di, bp                  ; gfx_nextrow, inlined (SPEC.md 39.3)
+    test di, [cs:vid_wrapbit]
+    jz .bgnw
+    add di, [cs:vid_wrapfix]
+.bgnw:
+    dec ch
+    jnz .bgrow
+
+    ; --- WHERE THE TWO CELLS MEET, decided once for the whole move -----------
+    ; Two numbers say it: d = newcol - oldcol in bytes, and e = newtop - oldtop
+    ; in rows. The columns meet only for d = -1, 0 or +1 (an 8px arrow spans
+    ; two bytes, CUR_SPAN), and then the rows that meet are ONE CONTIGUOUS
+    ; RUN, old rows [i_lo, i_lo + n) - so "is this row covered" is a range
+    ; and never a per-row search.
+    ;
+    ; BH carries pass 1's answers. Bits 2-3: what an old row the new cell
+    ; does not reach writes - column 0, and column 1 if the old clip kept it.
+    ; Bits 0-1: what a covered row writes. There old column j IS new column
+    ; j-d, which the draw writes, so it is skipped exactly when that new
+    ; column exists. Bits 4-5 say how a covered row's saved bytes become the
+    ; new background: 01 both (d = 0), 00 old column 0 as new column 1
+    ; (d = -1), 11 old column 1 as new column 0 (d = +1) - two bits so that
+    ; one  and its PARITY flag tell the three apart.
+.meet:
+    mov ax, [cur_cellx]         ; d = newcol - oldcol
+    mov dx, [mv_d]              ; (the OLD cell x, as banked above)
+    mov cl, 3
+    shr ax, cl
+    shr dx, cl
+    sub ax, dx
+    mov bl, [mv_ob1ok]          ; 0 or 1: the old cell's column 1 on screen
+    shl bl, 1                   ; ...as bit 1
+    mov bh, bl
+    or bh, 1                    ; an uncovered old row, into bits 2-3
+    shl bh, 1
+    shl bh, 1
+    inc ax                      ; d + 1: 0, 1 or 2 for the three that meet,
+    cmp ax, 2                   ; and anything else - a negative d included,
+    ja .nocov                   ; unsigned - is columns that never do
+    dec al
+    jz .kzero
+    jns .kplus
+    mov al, [cur_b1ok]          ; d = -1: old column 0 is new column 1, drawn
+    xor al, 1                   ; only if the new clip kept it; old column 1
+    or bl, al                   ; is new column 2, never drawn
+    or bh, bl
+    jmp short .krow
+.kplus:
+    or bl, bl                   ; d = +1: old column 1 is new column 0 - and if
+    jz .nocov                   ; the old clip dropped it there is no overlap
+    or bh, 0x31                 ; at all; old column 0 is new column -1
+    jmp short .krow
+.kzero:
+    or bh, 0x10                 ; d = 0: both columns, and a covered row
+.krow:                          ; writes neither
+    mov si, [cur_celly]         ; e = newtop - oldtop, the NEW cell's top row
+    sub si, [mv_oy]             ; and not the pointer's y (SPEC.md 7.2.2)
+    xor dx, dx                  ; r_lo = max(0, -e), in NEW rows...
+    mov ax, si
+    neg ax
+    jle .rlo
+    xchg ax, dx
+.rlo:
+    mov al, [mv_orows]          ; ...and r_hi = min(new rows, old rows - e),
+    cbw                         ; signed: a cell far below is a negative
+    sub ax, si                  ; reach and an empty run
+    mov cl, [cur_rows]
+    xor ch, ch
+    cmp ax, cx
+    jle .rhi
+    xchg ax, cx
+.rhi:
+    sub ax, dx                  ; n = r_hi - r_lo
+    jg .cov
+.nocov:
+    xor ax, ax                  ; no run: the skip never fires, nothing is
+.cov:                           ; patched, the screen was the background
+    add dx, si                  ; DH:DL = i_lo (r_lo + e, the run in OLD rows)
+    mov dh, dl                  ; and n
+    mov dl, al
+    mov ax, [mv_nsave]          ; BP = the NEW save's row for old row i, which
+    sub ax, si                  ; is i - e: nsave - 2e at i = 0. Out of range
+    sub ax, si                  ; except inside the run, the only place it is
+    xchg ax, bp                 ; used (the walk below steps by [vid_rowadd])
+
+    ; --- pass 1: the old background back, except where the draw will write --
     mov ch, [mv_orows]
     or ch, ch
-    jz .p2
-    mov es, [vid_seg]
+    jz .draw
     mov di, [mv_ooff]
     mov si, [mv_osave]
-    mov bx, [mv_oy]
-    mov dl, [cur_rows]          ; the NEW cell's height, loop-invariant, so it
-    xor dh, dh                  ; is widened once here rather than per row
+    xor bl, bl                  ; BL = the old row
 .p1row:
-    mov ax, bx                  ; is this row one pass 2 will draw into?
-    sub ax, [cur_celly]         ; the NEW cell's top row, which cur_geom has
-                                ; just published - not the pointer's y
-    cmp ax, dx                  ; unsigned: a row above the new cell is huge
     lodsw                       ; AL/AH = the two saved bytes; the stride is
-                                ; CUR_SPAN whatever the clip said. LODSW
-                                ; WRITES NO FLAG, so the compare's answer is
-                                ; branched on straight through it - where DL
-                                ; used to carry it as a 0/1 byte and `or dl,
-                                ; dl` re-asked (kernel size pass 10: 8 bytes,
-                                ; and ~20 clocks a row of every 1bpp move)
-    jb .p1s0                    ; row covered: consult the column answers
+                                ; CUR_SPAN whatever the clip said
+    mov cl, bl
+    sub cl, dh                  ; unsigned: a row above the run is huge
+    cmp cl, dl
+    mov cl, bh                  ; (MOV writes no flag)
+    jae .p1unc
+    test cl, 0x30               ; --- covered: the patch ---
+    jz .pminus
+    jpe .pplus                  ; both of bits 4-5 (even parity): d = +1
+    mov [ds:bp], ax             ; d = 0: both saved bytes
+    jmp short .p1w
+.pplus:
+    mov [ds:bp], ah             ; d = +1: old column 1 is new column 0
+    jmp short .p1w
+.pminus:
+    mov [ds:bp+1], al           ; d = -1: old column 0 is new column 1
+    jmp short .p1w
+.p1unc:
+    shr cl, 1
+    shr cl, 1                   ; not covered: bits 2-3
+.p1w:
+    shr cl, 1
+    jnc .p1b
     mov [es:di], al
-    cmp byte [mv_ob1ok], 0
-    je .p1next
+.p1b:
+    shr cl, 1
+    jnc .p1n
     mov [es:di+1], ah
-    jmp short .p1next
-.p1s0:
-    cmp byte [mv_p1s0], 0
-    jne .p1c1                   ; pass 2 writes this column: leave it alone
-    mov [es:di], al
-.p1c1:
-    cmp byte [mv_ob1ok], 0
-    je .p1next
-    cmp byte [mv_p1s1], 0
-    jne .p1next
-    mov [es:di+1], ah
-.p1next:
-    inc bx
+.p1n:
+    inc bx                      ; the old row (BL never carries: <= CUR_GH)
+    inc bp
+    inc bp
     add di, [cs:vid_rowadd]     ; gfx_nextrow, inlined (SPEC.md 39.3)
     test di, [cs:vid_wrapbit]
     jz .p1nw
@@ -5490,143 +5590,45 @@ cur_move_mono:
     dec ch
     jnz .p1row
 
-    ; --- pass 2: save and draw the new cell, background from either place ----
-.p2:
+    ; --- the draw: the arrow over the banked background, ONE write a byte ----
+.draw:
+    pop cx                      ; CL = the shift
     mov ch, [cur_rows]
     or ch, ch
     jz .out
-    mov es, [vid_seg]
+    mov bp, [cs:vid_rowadd]
     mov di, [cur_off]
     mov si, [cur_tabp]
-    mov bp, [mv_nsave]
-.p2row:
-    call cur_mvrow              ; [mv_orp] = this row's slot in the OLD save,
-                                ; or 0 if the old cell does not reach it
-    xor ax, ax                  ; the white row, widened from the byte...
-    mov ah, [si]
-    xor dx, dx                  ; ...and the black one, one table along
-    mov dh, [si+CUR_TABSZ]
+    mov bx, [mv_nsave]
+.drow:
+    mov dl, [si]                ; the white row...
+    xor dh, dh
+    ror dx, cl                  ; ...rotated: DL = column 0's bits, DH = column
+                                ; 1's - little-endian, the order the word
+                                ; below is in, so no byte swap anywhere
+    mov ax, [bx]                ; the background, both bytes
+    or ax, dx                   ; white outline...
+    mov dl, [si+CUR_TABSZ]      ; ...and the black body, one table along
+    xor dh, dh
+    ror dx, cl
+    not dx
+    and ax, dx                  ; ...over it
     inc si
-    shr ax, cl
-    shr dx, cl
-    not dx                      ; DH:DL = the black body as an AND mask
-
-    push ax                     ; --- byte 0 ---
-    mov al, [mv_p2s0]
-    call cur_mvbg               ; BL = the background, from the buffer or the
-    pop ax                      ; screen, whichever this byte's answer says
-    mov [ds:bp], bl
-    or  bl, ah
-    and bl, dh
-    mov [es:di], bl
-
-    cmp byte [cur_b1ok], 0      ; --- byte 1 ---
-    je .p2adv
-    push ax
-    mov al, [mv_p2s1]
-    inc di
-    call cur_mvbg
-    dec di
-    pop ax
-    mov [ds:bp+1], bl
-    or  bl, al
-    and bl, dl
-    mov [es:di+1], bl
-.p2adv:
-    add bp, CUR_SPAN
-    inc word [mv_prow]
-    add di, [cs:vid_rowadd]
+    inc bx
+    inc bx
+    mov [es:di], al             ; ONE write a byte
+    cmp byte [cur_b1ok], 0      ; the second, unless the screen edge is
+    je .dadv                    ; between them
+    mov [es:di+1], ah
+.dadv:
+    add di, bp
     test di, [cs:vid_wrapbit]
-    jz .p2nw
+    jz .dnw
     add di, [cs:vid_wrapfix]
-.p2nw:
+.dnw:
     dec ch
-    jnz .p2row
+    jnz .drow
 .out:
-    ret
-
-; cur_mvcols - the four per-column answers, from d = newcol - oldcol
-;
-; mv_p1s0/1: pass 1 must SKIP old column 0/1, because pass 2 writes it.
-;            Old column j is a new column when j-d is 0 or 1, and column 1 of
-;            the new cell only exists if the new cell's own clip kept it.
-; mv_p2s0/1: pass 2 takes new column 0/1's background from the old save at
-;            this offset - d+j, when that is 0 or 1 and the OLD clip kept it -
-;            or 0FFh, meaning "read the screen".
-; clobbers: ax, bx, flags
-cur_mvcols:
-    mov bx, 1                   ; ONE LOOP, j = 1 then 0: the four answers are
-.col:                           ; independent, so the two passes' columns share
-                                ; a counter, and each answer is computed into
-                                ; AL and stored once where it was stored a
-                                ; default and then overwritten (kernel size
-                                ; pass 10: 24 bytes, and fewer instructions on
-                                ; every 1bpp move)
-    mov ax, [mv_d]              ; --- pass 2, new column j ---------------------
-    add ax, bx                  ; AX = d + j - UNSIGNED below, so a negative
-    cmp ax, 1                   ; offset is just "not 0 or 1"
-    jb .p2set                   ; offset 0: always saved (AL = 0)
-    ja .p2ff
-    cmp byte [mv_ob1ok], 0      ; offset 1 only exists if the OLD clip kept it
-    jne .p2set                  ; (AL = 1)
-.p2ff:
-    mov al, 0xFF                ; "read the screen"
-.p2set:
-    mov [bx + mv_p2s0], al
-    mov ax, bx                  ; --- pass 1, old column j ---------------------
-    sub ax, [mv_d]              ; AX = j - d
-    cmp ax, 1
-    mov al, 1                   ; (MOV writes no flag)
-    jb .p1set                   ; new column 0: pass 2 always writes it
-    mov al, [cur_b1ok]          ; new column 1 only if the NEW clip kept it -
-    je .p1set                   ; and [cur_b1ok] IS that 0/1 answer
-    mov al, 0
-.p1set:
-    mov [bx + mv_p1s0], al
-    dec bx
-    jns .col
-    inc bx                      ; BX = 0, and [mv_prow] starts there
-    mov [mv_prow], bx
-    ret
-
-; cur_mvrow - does the OLD cell reach the new cell's row [mv_prow]?
-; out: [mv_orp] = a pointer into the old save buffer, or 0
-; clobbers: ax, bx, flags
-cur_mvrow:
-    mov ax, [cur_celly]         ; the NEW cell's top row (SPEC.md 7.2.2), not
-    add ax, [mv_prow]           ; the pointer's y - [mv_oy] is the OLD cell's
-    sub ax, [mv_oy]             ; AX = the row's index in the OLD cell
-    mov bl, [mv_orows]
-    xor bh, bh
-    cmp ax, bx
-    mov bx, 0                   ; (a MOV: the compare's flags survive it)
-    jae .out                    ; unsigned: a row above it is a huge number
-    add ax, ax                  ; CUR_SPAN bytes a row
-    add ax, [mv_osave]
-    xchg ax, bx
-.out:
-    mov [mv_orp], bx            ; ONE store of the answer, where a zero was
-    ret                         ; stored first and then overwritten - and no
-                                ; DX bank: nothing here writes DX (size pass 9)
-
-; cur_mvbg - one byte's background: the old save buffer if this column's
-;            answer names an offset AND the old cell reaches this row,
-;            otherwise the screen.
-; in:  AL = the column answer (0, 1 or 0FFh), ES:DI = the screen byte
-; out: BL = the background byte
-; clobbers: ax, bx, flags
-cur_mvbg:
-    cmp al, 0xFF
-    je .screen
-    mov bx, [mv_orp]
-    or bx, bx
-    jz .screen
-    xor ah, ah
-    add bx, ax
-    mov bl, [bx]
-    ret
-.screen:
-    mov bl, [es:di]
     ret
 
 %ifdef GFX_VGA                  ; ...and the PLANAR draw, whose only callers are
@@ -6445,21 +6447,13 @@ mv_ob1ok    resb 1              ; (then the delta - see mv_d) and top row. THE
 mv_d        resw 1              ; ORDER IS cur_off..cur_celly's, word for word:
 mv_oy       resw 1              ; cur_move_mono banks all five with one rep
                                 ; movsw (size pass 9). mv_d is the old CELL x
-                                ; as copied, its byte column after the shift
-                                ; that follows, and newcol - oldcol, signed,
-                                ; once cur_geom has run: the ONE number the
-                                ; four column answers below come out of
+                                ; as copied, which the move shifts down to its
+                                ; byte column beside the new one's to get d
 %if mv_orows - mv_ooff != cur_rows - cur_off || mv_ob1ok - mv_ooff != cur_b1ok - cur_off || mv_d - mv_ooff != cur_cellx - cur_off || mv_oy - mv_ooff != cur_celly - cur_off || mv_oy - mv_ooff != 6
   %error "mv_ooff..mv_oy must mirror cur_off..cur_celly exactly: cur_move_mono banks them with one 4-word rep movsw"
 %endif
 mv_osave    resw 1              ; -> the buffer holding the old background...
 mv_nsave    resw 1              ; ...and the one taking the new
-mv_p1s0     resb 1              ; pass 1 skips this old column (pass 2 has it)
-mv_p1s1     resb 1
-mv_p2s0     resb 1              ; pass 2's background offset in the old save,
-mv_p2s1     resb 1              ; or 0FFh for "read the screen"
-mv_prow     resw 1              ; the new cell's row, as pass 2 walks it
-mv_orp      resw 1              ; -> that row in the old save, or 0
 gfx_u_mv:
 %if gfx_u_mv - gfx_u > gfx_u_end - gfx_u
   %error "cur_move_mono's working set no longer fits the primitive union - raise GFX_U_FLOOR in vga12.inc"

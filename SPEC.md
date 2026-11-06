@@ -10736,13 +10736,33 @@ against a 20 ms frame, so ~6.5% of every frame, on every mouse packet.
   overlap degenerate to the old behaviour by themselves: the skip never fires
   and the background always comes from the screen. There is nothing to bound
   and nothing to get wrong at the extremes.
-- **Which bytes those are is decided once, not per row.** `cur_mvcols` turns
-  the byte-column difference `d = newcol - oldcol` into four answers —
-  `mv_p1s0/1` (pass 1 must skip this old column) and `mv_p2s0/1` (pass 2's
-  offset into the old save, or `0FFh` for "read the screen") — because it is
-  the same answer for every row. Both halves fold in the *other* cell's edge
-  clip: pass 1 may only skip a byte pass 2 will really write, and pass 2 may
-  only source from a slot the old cell really saved.
+- **Which bytes those are is decided once, not per row.** Two numbers say
+  it: the byte-column difference `d = newcol - oldcol` and the row difference
+  `e = newtop - oldtop`. The columns meet only for `d` = -1, 0 or +1 (the
+  arrow spans two bytes), and then the rows that meet are **one contiguous
+  run**, so "does the other cell reach this row" is a range compare and never
+  a per-row search. Pass 1's two write answers for a covered row and for an
+  uncovered one, and how a covered row's saved bytes become the new
+  background, are packed into one register before either walk. Both fold in
+  the *other* cell's edge clip: pass 1 may only skip a byte the draw will
+  really write, and the new background may only come from a slot the old
+  cell really saved.
+- **The second pass is two walks, neither with a test per byte** (kernel
+  hot-paths pass 1). The new cell's background is first banked straight off
+  the screen - which is right for every byte except the overlap, where the
+  old arrow still stands - and pass 1, walking the old cell, patches the
+  overlap rows of that bank from the old save as it restores the rest. The
+  draw then composes from the bank: one read, one write a byte. Measured on
+  MartyPC (a 24-packet sweep, `cur_move` entry to return): **19,400 -> 12,000
+  cycles** (4.07 -> 2.51 ms) on the 5150's CGA, 19,300 -> 11,700 on
+  Hercules, and the serial ISR's share of the CPU while the pointer sweeps
+  falls from 20.0% to 14.1%. `cur_mvcols`, `cur_mvrow` and `cur_mvbg`, the
+  three per-row helpers the earlier shape called 36 times a move, are gone,
+  and the routine is 26 bytes smaller. Equivalence is proved against the
+  previous kernel's own bytes under unicorn - 36,000 random moves over CGA,
+  Hercules and linear 1bpp geometry and all three shapes, with the whole
+  framebuffer, the save buffer and the banked geometry compared after every
+  move and every framebuffer write counted (none twice).
 - **Two save buffers, swapped by a pointer.** Pass 2 reads the old background
   while filling the new, so they cannot be the same 24 bytes. `[cur_sptr]`
   names the live one; nothing is copied. `cur_sptr` lives in `.text` with a
@@ -11390,7 +11410,7 @@ error. It addresses the row above the framebuffer.
 Left and top *clipping* is the correct fix and it is not a small one: a
 `cur_b0ok` beside `cur_b1ok`, a table start offset for the skipped rows, `sar`
 where the column shift is `shr`, and the two of those threaded through
-`cur_mvcols`/`cur_mvrow`/`cur_mvbg` — the four per-column answers §7.1.2 built
+`cur_move_mono`'s overlap answers — the per-column decisions §7.1.2 built
 to write every byte exactly once, whose cases double when either cell can lose
 its first column.
 
@@ -11407,8 +11427,8 @@ Three things follow and each broke first:
 
 - **`[cur_cellx]`/`[cur_celly]` are banked by `cur_geom`**, because the cell's
   top-left is no longer the pointer's position and `cur_move_mono` asks about
-  it three times — the old cell's byte column, pass 1's "will pass 2 cover
-  this row", and `cur_mvrow`. §7.1's rule applies unchanged: two derivations
+  it twice — the old cell's byte column and the row run where the two cells
+  meet. §7.1's rule applies unchanged: two derivations
   of a save-under's geometry are two chances to disagree by a byte, and a byte
   is a smear.
 - **`cur_lazyck` subtracts the hot spot too, and deliberately does NOT clamp.**
