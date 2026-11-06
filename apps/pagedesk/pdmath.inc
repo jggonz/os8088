@@ -373,9 +373,12 @@ _pdm_fx_round:                          ; (a): nearest, ties away from zero
         pop     bp
         ret
 .p:     add     ax, 0x8000
-        adc     dx, 0
+        adc     dx, 0                   ; OF: 32767.5 or more rounded past 7FFFh
         mov     ax, dx
-        pop     bp
+        jno     .r
+        call    pdmi_setovf             ; saturate (pdmath.c, 53e8ebeb6)
+        dec     ax                      ; 8000h -> 7FFFh
+.r:     pop     bp
         ret
 
 _pdm_fx_add:                            ; (r, a, b)

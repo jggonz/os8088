@@ -1080,8 +1080,8 @@ needs only part of it defines before the include any of `PDM_SKIP_U32`,
 
 | configuration | bytes of `.text` |
 |---|---|
-| everything | 3,627 |
-| core only (all six skipped: overflow flag, fx add/sub/mul/div/neg/cmp/int/floor/round/to_pt16/pt16_to_fx, fx_div's 48/32 divider) | 842 |
+| everything | 3,633 |
+| core only (all six skipped: overflow flag, fx add/sub/mul/div/neg/cmp/int/floor/round/to_pt16/pt16_to_fx, fx_div's 48/32 divider) | 848 |
 | the groups, by what each adds to the core | U32 403, PARSE 515, MAT 525, VIEW 806, FAR 371, CRC 165 (the 21-byte span check both use is in the core) |
 
 Largest stack use of one call (return address included): `mat_mul` 50 bytes,
@@ -1104,8 +1104,8 @@ are torn down with `add sp, N`; the two digit routines carry
   the flag (the return code is its report).
 * **Rounding.** `fx_mul`/`fx_div` truncate toward zero (magnitude, then sign).
   `fx_floor` is the high word. `fx_round` and `fx_to_pt16` round half away from
-  zero; `fx_round` of a value >= 32767.5 wraps to -32768, because the result is
-  a `pdi` (the host's cast, kept bit for bit): range-check first.
+  zero; `fx_round` of a value >= 32767.5 saturates to 32767 and sets the flag
+  (the low end cannot overflow: -32768 fits).
   `fx_to_pt16` saturates to +-32767 and sets the flag. `fx_parse` rounds half up
   in magnitude: at most 8 fraction digits count, the integer part saturates at
   40000, no spaces or exponents are allowed, a lone sign or point is
