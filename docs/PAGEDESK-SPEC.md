@@ -2510,6 +2510,18 @@ overlay's resident shim. Resident: `pdu_ed_seg`, `pdu_ed_count`,
 `pdu_ed_selected`, `pdu_ed_init`, `pdu_ed_gone`, the outline's off/on hooks,
 `pdu_dirty`, `pdu_saved`, `pdu_undo_can`, `pdu_redo_can`.
 
+**What it costs the primary** (measured at the cut, against the base before
+`edit` of 40,650 image + 3,969 bss = 44,619): **43,142 + 5,515 = 48,657 B**,
++4,038 against a share of +4,096; the overlay 14,763. The near scratch is one
+set shared by the three files - `ed_pts` (96 points: a Line's two, a
+Highlight's quads, a page delta's copy in the history), `ed_xr` (a clip rect,
+and the history's 8-byte swap) and the three 48-byte record buffers - and
+everything bigger lives in the claims: an Ink or Sign stroke is captured
+STRAIGHT into the EDITS segment's gap below the point top and converted there
+in place (`pdu_ed_new` with `pts` NULL means the points are already in place),
+and the history's command table is in `PDU_DC_UNDO` after its entries. Nothing
+in `edit` recurses, and its widest frame is 16 bytes of locals (`ovl_ed_set`; D21).
+
 **The segment** (`pdu_dcseg(PDU_DC_EDITS)`, 16 KiB, never zeroed; `pdu_ed_init`
 sets the three tops when a document's claims exist):
 
@@ -2538,7 +2550,8 @@ clears the bit); Rect and Ellipse red, 1 pt.
 
 **Undo** (`pduundo.c`). A command is one `pdu_undo_begin`/`end` bracket (a
 mutating call outside one is its own command). 64 commands over a ring of 256
-twelve-byte entries in `PDU_DC_UNDO`. Every entry is an involution (undo and
+twelve-byte entries in `PDU_DC_UNDO` (bytes 0..3,071; the 64 commands'
+first-entry and entry-count words follow at 3,072..3,327). Every entry is an involution (undo and
 redo are the same swap, walked in opposite orders): a FIELD swaps up to 8
 bytes of a record, TEXT and PTS swap a record's offset/length and a heap top,
 CREATE swaps the store's count and both tops, MOVE stores the translation (its

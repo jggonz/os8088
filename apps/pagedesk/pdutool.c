@@ -34,14 +34,14 @@
 static struct os88_mouse ot_m;
 static struct os88_rect ot_r;           /* the band, screen */
 static struct pd_rect ot_pr;            /* ...and as a page rect */
-static struct pd_edit ot_e;
+#define ot_e ed_v                       /* a record being made (pduedit.c's) */
 static int ot_sx, ot_sy;                /* the press */
 static int ot_ax, ot_ay;                /* the band's fixed corner / line start */
 static int ot_cx, ot_cy;                /* the pointer */
 static struct os88_rect ot_o;           /* the outline a move carries */
 static int ot_moved;
 static pd_px ot_px, ot_py;
-static pd_pt ot_pts[OT_NPTS * 2];       /* ink / signature / highlight quads */
+#define ot_pts ed_pts                   /* a Line's points, a Highlight's quads */
 static int ot_last;                     /* the last record clicked */
 static unsigned ot_tick;
 
@@ -53,7 +53,7 @@ static const char ot_lab[10] = { 0, UL_NOTE, UL_HILITE, UL_MARK, UL_TEXT,
                                  UL_INK, UL_LINE, UL_RECT, UL_ELLIPSE,
                                  UL_SIGN };
 
-static int ot_abs(int v) { return v < 0 ? -v : v; }
+static int ovl_abs(int v) { return v < 0 ? -v : v; }   /* overlay: no thunk */
 
 /* ---- XOR drawing, cut to the canvas (the selection's code, not remembered) */
 static struct os88_rect ot_t;           /* scratch: a run, a page corner pair */
@@ -87,8 +87,8 @@ static void ovl_xline(int x0, int y0, int x1, int y1)
 {
     int dx, dy, sx, sy, err, a, b, run, steep, t;
 
-    dx = ot_abs(x1 - x0);
-    dy = ot_abs(y1 - y0);
+    dx = ovl_abs(x1 - x0);
+    dy = ovl_abs(y1 - y0);
     steep = dy > dx;
     if (steep) {
         t = x0; x0 = y0; y0 = t;
@@ -150,50 +150,87 @@ static void ovl_prect(const struct os88_rect *s, struct pd_rect *p)
 
 /* ---- the pointer loop ------------------------------------------------------- */
 
-/* one stroke is captured in SCREEN pixels at ot_pts[ot_from..], thinned as it
- * goes (a point only when the pointer is 3 pixels from the last kept), drawn
- * as it grows, and made page space by ovl_ink_done */
+/* one stroke is captured in SCREEN pixels straight into the edit store's
+ * free gap - point k at ot_ib - 4(k + 1), ot_ib being the point heap's top -
+ * so it lies, reversed, exactly where pdu_ed_new puts a record's points: it
+ * is made page space in place and becomes the record with no copy and no
+ * near buffer. Thinned as it goes (a point only when the pointer is 3 pixels
+ * from the last kept) and drawn as it grows. */
 static int ot_k;                        /* points in the stroke so far */
-static int ot_from;                     /* ...and where they start */
+static unsigned ot_ib;                  /* the point heap's top at the press */
+static int ot_ix, ot_iy;                /* ovl_ipt's answer */
+
+static void ovl_ipt(int k)
+{
+    ot_ix = (pd_pt)pd_fpeekw(ed_seg(), ot_ib - 4 - (k << 2));
+    ot_iy = (pd_pt)pd_fpeekw(ed_seg(), ot_ib - 2 - (k << 2));
+}
 
 /* point k of the stroke as XOR: a dot, or the segment from k-1 without its
  * first pixel. Drawing every k again in any order takes the stroke off. */
 static void ovl_ink_seg(int k)
 {
-    int i;
-    i = (ot_from + k) << 1;
+    int x, y;
+    ovl_ipt(k);
     if (k == 0) {
-        ovl_xrun(ot_pts[i], ot_pts[i + 1], ot_pts[i], ot_pts[i + 1]);
+        ovl_xrun(ot_ix, ot_iy, ot_ix, ot_iy);
         return;
     }
+    x = ot_ix;
+    y = ot_iy;
+    ovl_ipt(k - 1);
     ot_skip = 1;
-    ovl_xline(ot_pts[i - 2], ot_pts[i - 1], ot_pts[i], ot_pts[i + 1]);
+    ovl_xline(ot_ix, ot_iy, x, y);
 }
 
 static void ovl_ink_add(int x, int y)
 {
-    int i;
-    i = (ot_from + ot_k) << 1;
-    if (ot_k > 0 && ot_abs(x - ot_pts[i - 2]) < 3
-        && ot_abs(y - ot_pts[i - 1]) < 3)
-        return;
-    if (ot_from + ot_k >= OT_NPTS - 2)
-        return;                         /* the documented stroke limit */
-    ot_pts[i] = x;
-    ot_pts[i + 1] = y;
+    if (ot_k > 0) {
+        ovl_ipt(ot_k - 1);
+        if (ovl_abs(x - ot_ix) < 3 && ovl_abs(y - ot_iy) < 3)
+            return;
+    }
+    if (ot_k >= OT_NPTS - 2 || !ovl_ed_room(0, (ot_k + 1) << 2))
+        return;                         /* the stroke limit, or the store's */
+    pd_fpokew(ed_seg(), ot_ib - 4 - (ot_k << 2), x);
+    pd_fpokew(ed_seg(), ot_ib - 2 - (ot_k << 2), y);
     ovl_ink_seg(ot_k);
     ot_k++;
 }
 
-/* the stroke becomes page space (it was thinned as it was drawn) */
+/* grow the box r (x1 y1 x2 y2 as words) to hold (x, y) */
+static void ovl_grow(int *r, int x, int y)
+{
+    if (x < r[0]) r[0] = x;
+    if (y < r[1]) r[1] = y;
+    if (x > r[2]) r[2] = x;
+    if (y > r[3]) r[3] = y;
+}
+
+/* ot_pr = the page box of n near points at ot_pts (a Line, a Highlight) */
+static void ovl_pbox(int n)
+{
+    int k;
+    ot_pr.x0 = ot_pr.y0 = 32767;
+    ot_pr.x1 = ot_pr.y1 = -32767;
+    for (k = 0; k < n; k++)
+        ovl_grow((int *)&ot_pr, ot_pts[k << 1], ot_pts[(k << 1) + 1]);
+}
+
+/* the stroke becomes page space in place; ot_r = its screen box (for a
+ * refusal's repaint), ot_pr = its page box (the record's rect) */
 static void ovl_ink_done(void)
 {
     int k;
-    for (k = ot_from; k < ot_from + ot_k; k++) {
-        pdm_view_inv(&ot_px, &ot_py, &pdu_view, ot_pts[k << 1],
-                     ot_pts[(k << 1) + 1]);
-        ot_pts[k << 1] = ot_px;
-        ot_pts[(k << 1) + 1] = ot_py;
+    ot_r.x1 = ot_r.y1 = ot_pr.x0 = ot_pr.y0 = 32767;
+    ot_r.x2 = ot_r.y2 = ot_pr.x1 = ot_pr.y1 = -32767;
+    for (k = 0; k < ot_k; k++) {
+        ovl_ipt(k);
+        ovl_grow((int *)&ot_r, ot_ix, ot_iy);
+        pdm_view_inv(&ot_px, &ot_py, &pdu_view, ot_ix, ot_iy);
+        pd_fpokew(ed_seg(), ot_ib - 4 - (k << 2), ot_px);
+        pd_fpokew(ed_seg(), ot_ib - 2 - (k << 2), ot_py);
+        ovl_grow((int *)&ot_pr, ot_px, ot_py);
     }
 }
 
@@ -213,8 +250,8 @@ static void ovl_loop(int mode)
         if ((ot_m.btn & 1) == 0)
             break;
         if ((ot_m.x != ot_cx || ot_m.y != ot_cy)
-            && (ot_moved || ot_abs(ot_m.x - ot_sx) >= OT_DRAG
-                || ot_abs(ot_m.y - ot_sy) >= OT_DRAG)) {
+            && (ot_moved || ovl_abs(ot_m.x - ot_sx) >= OT_DRAG
+                || ovl_abs(ot_m.y - ot_sy) >= OT_DRAG)) {
             if (have)
                 ovl_shape(mode);
             /* the pointer, kept on the canvas */
@@ -332,8 +369,8 @@ static int ovl_select_click(int x, int y)
     if (i >= 0 && ovl_ed_rd(i, &ed_w) == 0 && ED_SIZABLE(ed_w.kind)) {
         ovl_ed_scr(&ed_w.rect, 3, &ot_o);
         for (h = 3; h >= 0; h--)
-            if (ot_abs(x - ((h & 1) ? ot_o.x2 : ot_o.x1)) <= 5
-                && ot_abs(y - ((h & 2) ? ot_o.y2 : ot_o.y1)) <= 5)
+            if (ovl_abs(x - ((h & 1) ? ot_o.x2 : ot_o.x1)) <= 5
+                && ovl_abs(y - ((h & 2) ? ot_o.y2 : ot_o.y1)) <= 5)
                 break;
     }
     if (h >= 0) {                       /* resize: the opposite corner stays */
@@ -458,7 +495,7 @@ int ovl_tool_click(int x, int y)
     if (t == C_T_INK || t == C_T_SIGN) {
         /* one stroke, placed when the button comes up; a signature is one
          * stroke here (multi-stroke capture is not built) and says what it is */
-        ot_from = 0;
+        ot_ib = pdu_ed_pt;
         ot_k = 0;
         ovl_loop(OT_INK);
         if (ot_k < 2) {                 /* a dot or nothing: take it off */
@@ -466,18 +503,14 @@ int ovl_tool_click(int x, int y)
                 ovl_ink_seg(0);
             return 1;
         }
-        ovl_ed_bbox(&ot_pr, ot_pts, ot_k);  /* screen pixels, while they are */
         ovl_ink_done();
         if (ot_k >= OT_NPTS - 2)
-            pdu_tell("Stroke limit reached; the stroke is kept.");
+            pdu_tell("Stroke limit: the stroke is kept.");
         else if (t == C_T_SIGN)
             pdu_tell("Drawn signature. This is not a certificate signature.");
-        ot_r.x1 = ot_pr.x0;             /* the stroke's pixels, for a refusal */
-        ot_r.y1 = ot_pr.y0;
-        ot_r.x2 = ot_pr.x1;
-        ot_r.y2 = ot_pr.y1;
-        ovl_ed_bbox(&ot_pr, ot_pts, ot_k);
-        if (ovl_make(t == C_T_INK ? PDA_INK : PDA_SIGN, ot_pts, ot_k) < 0)
+        /* the points are already in place below the heap's top: no copy */
+        if (ovl_make(t == C_T_INK ? PDA_INK : PDA_SIGN, (const pd_pt *)0,
+                     ot_k) < 0)
             pdu_render_want(&ot_r);     /* the XOR stroke goes: that strip only */
         return 1;
     }
@@ -492,7 +525,7 @@ int ovl_tool_click(int x, int y)
         pdm_view_inv(&ot_px, &ot_py, &pdu_view, ot_cx, ot_cy);
         ot_pts[2] = ot_px;
         ot_pts[3] = ot_py;
-        ovl_ed_bbox(&ot_pr, ot_pts, 2);
+        ovl_pbox(2);
         ovl_make(PDA_LINE, ot_pts, 2);
         return 1;
     }
@@ -536,7 +569,7 @@ int ovl_tool_hilite(void)
         pdu_tell("Select text first.");
         return 0;
     }
-    ovl_ed_bbox(&ot_pr, ot_pts, nq << 2);
+    ovl_pbox(nq << 2);
     return ovl_make(PDA_HIGHLIGHT, ot_pts, nq << 2) >= 0;
 }
 
@@ -576,12 +609,12 @@ void ovl_tool_hint(int id)
     case C_T_HILITE:  s = "Select text, then press Highlight."; break;
     case C_T_NOTE:    s = "Click to place a note, then type."; break;
     case C_T_TEXT:    s = "Drag a frame, then type."; break;
-    case C_T_MARK:    s = "Drag a rectangle (an area, not text)."; break;
+    case C_T_MARK:    s = "Drag a rectangle over an area."; break;
     case C_T_INK:     s = "Draw with the button down."; break;
     case C_T_LINE:    s = "Drag from the tail to the arrow."; break;
     case C_T_RECT:    s = "Drag a rectangle."; break;
     case C_T_ELLIPSE: s = "Drag the box the ellipse fits."; break;
-    case C_T_SIGN:    s = "Draw one stroke. Not a certificate signature."; break;
+    case C_T_SIGN:    s = "Draw one stroke."; break;
     }
     if (s)
         pdu_tell(s);
