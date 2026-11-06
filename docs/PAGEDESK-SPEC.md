@@ -2497,3 +2497,4 @@ one interface (DECISIONS D15). `edit` owns `apps/pagedesk/pduedit.c` and
 Every mutating call records its undo delta itself, so a caller brackets a
 command with `pdu_undo_begin`/`end` and does nothing else for undo. Calls are
 made on the UI task only, never inside a module slice.
+

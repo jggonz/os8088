@@ -1526,6 +1526,14 @@ FAST = [
         "8-pixel grid, the kind from the thresholds, every mode's tools on "
         "the glass. ~15M checks in ~0.4 s",
         needs=("cc",)),
+    Row("pdnotes", "fast", py("tests/unit/t_pdnotes.py"), 0.5,
+        "PAGEDESK-SPEC 20.9 / PD-12, PD-16: apps/pagedesk/pdunotes.c's list "
+        "model - the filters (This page / All pages / Changes), order, "
+        "seek/step/find consistency, copy-on-edit shadowing, review state "
+        "(resolve/reopen as a reply), 256 records, the kind table and the "
+        "change words - built on the host over a fake store "
+        "(hosttest/pdu_nt.c; SKIP without cc)",
+        needs=("cc",)),
     Row("livefull", "fast", py("tests/unit/t_livefull.py"), 0.2,
         "SPEC.md 80.6: the live USB/CD is the ONE image whose premise is "
         "completeness, and until this row nothing in the tree had ever read "
