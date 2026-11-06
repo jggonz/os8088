@@ -150,7 +150,8 @@ struct pd_view {
                                     pdxb_textmap in/out                  */
 #define PDV_REND_THUMB      0x45 /* XB: pdxb_thumb, 1bpp into a seg:off   */
 #define PDV_REND_STATUS     0x46 /* XB: pdxb_rstatus out (incomplete bits)*/
-#define PDV_REND_FONTBANK   0x47 /* BX=seg of the PDRES bank, CX=len KB  */
+#define PDV_REND_FONTBANK   0x47 /* XB: pdxb_fontbank in (D3): the PDRES
+                                    index resident, strikes read on demand */
 
 /* PDWRT 0x80-0xBF */
 #define PDV_WRT_INIT        0x80 /* BX=XB seg. XB: pdxb_init            */
@@ -371,6 +372,18 @@ struct pdxb_rstatus {
     char first[32];         /* the first thing skipped, by name            */
     pdw  ops;               /* operators interpreted                        */
     pdw  passes;            /* display-list passes (10.2)                  */
+};
+
+/* PDRES on demand (DECISIONS D3): the primary reads the PDRES directory,
+ * the strike records and the width tables (the INDEX, <= 8 KiB) into one
+ * claim; PDREND reads each strike's bytes itself, when first needed, from the
+ * package file at part_off + the strike's offset, into the glyph cache. */
+struct pdxb_fontbank {
+    char pkgname[14];       /* the package file, 8.3, in the launch folder */
+    pdw  place_clus, place_vol; /* os88_place of the launch folder      */
+    struct pd_u32 part_off; /* file offset of the PDRES part's first byte */
+    pdw  index_seg;         /* claim holding PDRES bytes [0, index_len)    */
+    pdw  index_len;         /* bytes                                       */
 };
 
 struct pdxb_save {
