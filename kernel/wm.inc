@@ -10814,10 +10814,28 @@ wm_draw_win:
 %ifndef REDRAWFULL
     call wm_su_bget             ; ...UNLESS THE CACHE IS ONLY THE BANDS OF IT
     jnc .paint                  ; (SPEC.md 11.96.11), in which case what came
-%endif                          ; back is the furniture and the app still owes
+                                ; back is the furniture and the app still owes
                                 ; the rest - wm_damage hands it exactly that,
-    jmp .growbox                ; and the white fill is skipped because a band
+                                ; and the white fill is skipped because a band
                                 ; needs WF_OWNBG to have been granted at all
+    inc byte [wm_dw_part]       ; A WHOLE HIT IS NOT RE-BANKED (SPEC.md
+                                ; 11.96.4.1): the content on the glass is the
+                                ; cache, byte for byte, because it was put back
+                                ; from it a moment ago and nothing drew into it
+                                ; since - so wm_su_bank's .take would drop the
+                                ; claim and gfx_save the same pixels into a
+                                ; new one. Marking the draw PARTIAL sends it
+                                ; down 11.96.9's arm, which keeps a cache that
+                                ; exists (wm_su_ck) - and this one does. The
+                                ; front window's .front drop does not read the
+                                ; flag. `inc` and not a store of 1, a byte
+                                ; less and the same answer: the flag is
+                                ; [wm_su_son]'s low byte, 0 or 1, and is only
+                                ; ever tested for nonzero. Measured: a
+                                ; fullscreen exit on CGA re-saved three
+                                ; windows, ~31 ms each
+%endif
+    jmp .growbox
 .content:
     test byte [di+W_FLAGS], WF_OWNBG
     jnz .paint                  ; IT OWNS ITS BACKGROUND (SPEC.md 11.90.1): the

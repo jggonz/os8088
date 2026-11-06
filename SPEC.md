@@ -22593,6 +22593,30 @@ about 5.7KB of framebuffer for a mono Disk window against §11.96's measured
 machine with no room declines and behaves exactly as it did before any of
 this existed.
 
+##### 11.96.4.1 …but a window put back WHOLE from its cache is not banked again
+
+"Takes everybody else's" re-took a cache that had just been spent in the same
+draw. A covered window that `wm_su_try` puts back **whole** — every fragment,
+no sub-rect, the bands-only case aside — has on the glass exactly the bytes its
+claim holds: they were copied out of it a moment ago and nothing has drawn into
+the content since (the grow box is the front window's, and the front window's
+cache is dropped, not taken). `wm_su_bank`'s `.take` then dropped the claim,
+claimed a new one and `gfx_save`d the same pixels back into it.
+
+So the whole-hit arm of `wm_draw_win` marks the draw **partial**
+(`[wm_dw_part]`), which sends `wm_su_bank` down §11.96.9's arm: an existing
+cache is kept (`wm_su_ck`), and this one exists by construction. The front
+window's drop does not read the flag. The one difference a reader could find is
+a window restored only in PART because it hangs off its display (§11.96.14):
+the re-take there refused (`wm_su_take` banks only a rect wholly on one
+display) and left the window with no cache, where now it keeps the one it has
+— whose pixels are still its content, which is the promise the cache was taken
+under.
+
+Measured on MartyPC's 5150/CGA, deskbench's four-window scene, leaving Paint's
+fullscreen bracket (`wm_paint_all` entry to return): the three covered windows
+each re-saved their content, **~31 ms apiece**, and do not now.
+
 #### 11.96.5 …including the moment a window is minimized
 
 `wm_hide` **dropped** the cache, on §11.96.1's reasoning that a hidden
