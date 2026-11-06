@@ -199,6 +199,7 @@ static void pdu_open_begin(const char *name)
     pdu_npages = 0;
     pdu_pgmap = 0;                      /* pages */
     pdu_pk = PK_NONE;
+    pdu_reopening = 0;
     os88_strcpy(pdu_name, name, sizeof(pdu_name));
     os88_file_here(&pdu_docplace);      /* every caller stood there first */
     os88_memset(&pdu_xopen, 0, sizeof(pdu_xopen));
@@ -290,13 +291,15 @@ static void pdu_open_step(void)
     pd_fcopy_in(pdu_xb, 0, &pdu_xopen, sizeof(pdu_xopen));
     pdu_jslices++;
     if (!pdu_mcf && r == PDE_BUSY) {    /* D11: BUSY is CF=0, never CF=1 */
-        pdu_progress("Opening ", pdu_name);
+        if (!pdu_reopening)             /* pages: the save's outcome stays said */
+            pdu_progress("Opening ", pdu_name);
         return;
     }
     pdu_job = J_NONE;
     if (pdu_mcf || pdu_xopen.npages == 0
         || (pdu_reopening && pdu_xopen.npages != pdu_srcn)) {       /* pages */
         pdu_reopening = 0;
+        pdu_pgsaved = 0;
         pdu_doc_release();
         pdu_doc = D_FAILED;
         pdu_err = (pdu_mcf && r) ? r : PDE_SYNTAX;
@@ -308,7 +311,6 @@ static void pdu_open_step(void)
         pdu_reopening = 0;
         pdu_pgwant = pdu_page + 1;
         pdu_kick();
-        pdu_say2("Ready: ", pdu_name);
         return;
     }
     pdu_npages = pdu_xopen.npages;
@@ -331,9 +333,9 @@ static void pdu_open_step(void)
     pdu_doc = D_OPEN;
     if (pdu_rdonly)
         pdu_say(pdu_errtext(PDE_SIGNED));
-    else if (pdu_pgnote[0]) {           /* pages: "Saved X", said after the re-open */
-        pdu_say(pdu_pgnote);
-        pdu_pgnote[0] = 0;
+    else if (pdu_pgsaved) {             /* pages: "Saved X", said after the re-open */
+        pdu_say2("Saved ", pdu_target);
+        pdu_pgsaved = 0;
     } else {
         os88_strcpy(pdu_line, "Opened ", sizeof(pdu_line));
         pdu_cat(pdu_line, pdu_name, sizeof(pdu_line));
@@ -454,11 +456,6 @@ static void pdu_save_done(unsigned err)
             pdu_reopen_begin();
     }
 }
-static void pdu_save_begin(const char *name, int kind)
-{
-    if (!ovl_save_begin(name, kind))
-        pdu_tell("Out of memory: cannot start.");
-}
 static void pdu_wrt_out(void);
 
 /* PDENG gets the source back: OPEN again with the claims it still holds
@@ -497,14 +494,6 @@ static void pdu_save_step(void)
         return;
     }
     pdu_save_done(pdu_mcf ? r : 0);
-}
-
-/* Enter on the replace question: the writer deletes the target and renames */
-static void pdu_save_replace(void)
-{
-    pdu_pk = PK_NONE;
-    pdu_xsave.state = PDW_ST_REPLACE;
-    pdu_job_start(J_SAVE);
 }
 
 /* ---------------------------------------------------------------------------

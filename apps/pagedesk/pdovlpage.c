@@ -19,13 +19,6 @@
 
 static unsigned pdu_pgd[4];             /* the delta being made */
 
-/* page op deltas are recorded for undo through edit's pdu_undo_pageop(d, 8);
- * until edit lands this build applies them directly and has no history */
-static void pdu_pg_record(const unsigned *d)
-{
-    (void)d;
-}
-
 /* view page v's map entry, with or without a map */
 static unsigned ovl_pg_entry(unsigned v)
 {
@@ -50,7 +43,7 @@ static int ovl_pg_ready(void)
     if (pdu_doc != D_OPEN || !seg)
         return 0;
     if (pdu_npages > PDM_MAXMAP) {
-        pdu_tell(pdu_pg_why(C_P_ROTL));
+        pdu_tell("Page operations handle up to 240 pages.");
         return 0;
     }
     for (i = 0; i < pdu_npages; i++)
@@ -59,16 +52,6 @@ static int ovl_pg_ready(void)
     return 1;
 }
 
-static int ovl_pg_ident(void)
-{
-    unsigned i;
-    if (pdu_npages != pdu_srcn)
-        return 0;
-    for (i = 0; i < pdu_npages; i++)
-        if (pdu_pgw(i) != PDM_MK(PDM_SRC, 0, i))
-            return 0;
-    return 1;
-}
 
 static void ovl_pg_ins(unsigned at, unsigned e)
 {
@@ -91,22 +74,6 @@ static unsigned ovl_pg_del(unsigned at)
     return e;
 }
 
-/* show view page n after the list changed: the sidebar now, the page and the
- * rest at the next wake (PAGEINFO is a disk read) */
-static void ovl_pg_show(unsigned n)
-{
-    pdu_job_abort_render();
-    pdu_rwant = 0;
-    pdu_page = n;
-    pdu_changes = 1;
-    pdu_title_set();                    /* the "*" */
-    pdu_pgwant = n + 1;
-    if (n < (unsigned)pdu_sidetop || n >= (unsigned)pdu_sidetop + 2 * pdu_side_rows())
-        pdu_sidetop = n - n % 2;
-    pdu_side_paint();
-    pdu_menusync();
-    pdu_kick();
-}
 
 /* apply (undo = 0) or revert (undo = 1) a delta (20.11.1) */
 static int ovl_pg_apply(const unsigned *d, int undo)
@@ -131,17 +98,36 @@ static int ovl_pg_apply(const unsigned *d, int undo)
         if (undo) { e = ovl_pg_del(b); ovl_pg_ins(a, e); }
         else { e = ovl_pg_del(a); ovl_pg_ins(b, e); n = b; }
     }
-    if (ovl_pg_ident())
-        pdu_pgmap = 0;                  /* back to the source's own order: nothing to write */
-    ovl_pg_show(n);
+    /* back to the source's own order: nothing to write */
+    if (pdu_npages == pdu_srcn) {
+        for (e = 0; e < pdu_npages && pdu_pgw(e) == PDM_MK(PDM_SRC, 0, e); e++)
+            ;
+        if (e == pdu_npages)
+            pdu_pgmap = 0;
+    }
+    /* show view page n: the sidebar now, the page and the rest at the next
+     * wake (PAGEINFO is a disk read) */
+    pdu_job_abort_render();
+    pdu_rwant = 0;
+    pdu_page = n;
+    pdu_changes = 1;
+    pdu_title_set();                    /* the "*" */
+    pdu_pgwant = n + 1;
+    if (n < (unsigned)pdu_sidetop || n >= (unsigned)pdu_sidetop + 2 * pdu_side_rows())
+        pdu_sidetop = n - n % 2;
+    pdu_side_paint();
+    pdu_menusync();
+    pdu_kick();
     return 1;
 }
 
 static void ovl_pg_do(unsigned op, unsigned a, unsigned b, unsigned e)
 {
     pdu_pgd[0] = op; pdu_pgd[1] = a; pdu_pgd[2] = b; pdu_pgd[3] = e;
+    /* edit's undo records it when edit lands (20.8, 20.11.1): until then a
+     * page operation applies without a history */
     if (ovl_pg_apply(pdu_pgd, 0))
-        pdu_pg_record(pdu_pgd);
+        ;                               /* edit: pdu_undo_pageop(pdu_pgd, 8); */
 }
 
 /* the prompt line: "<what> <typed>_" */
@@ -170,16 +156,12 @@ static int ovl_pg_cmd(int id)
     unsigned t, e;
     if (id == PGC_NEW) {
         pdu_pk = PK_NEWSIZE;
-        pdu_tell("New page: 1 Letter  2 A4  3 Letter wide  4 A4 wide  (Esc cancels)");
+        pdu_tell("New page: 1 Letter, 2 A4, 3 Letter wide, 4 A4 wide");
         return 1;
     }
     if (id == C_P_EXTRACT) {
         pdu_pgfd = 0;
         ovl_pg_prompt(PK_EXTRACT, "Extract pages (e.g. 1,3-5): ", 1);
-        return 1;
-    }
-    if (id == PGC_INSERT) {
-        pdu_tell("Insert from another PDF is not in this build.");
         return 1;
     }
     if (!ovl_pg_ready())
@@ -204,7 +186,7 @@ static int ovl_pg_cmd(int id)
         ovl_pg_do(3, t + 1, 0, pdu_pgw(t));
         break;
     case C_P_BLANK:
-        e = PDM_MK(PDM_BLANK, 0, pdu_pg_id(t));
+        e = PDM_MK(PDM_BLANK, 0, PDM_IDX(pdu_pgw(t)));
         ovl_pg_do(3, t + 1, 0, e);
         break;
     case PGC_UP:
@@ -221,12 +203,12 @@ static int ovl_pg_cmd(int id)
 }
 
 /* "1,3-5" in pdu_pkbuf into the Extract list; the count, 0 for nothing, -1
- * for a list that is not one */
+ * for a list that is not one, -2 for more than PDM_MAXMAP pages */
 static int ovl_pg_list(void)
 {
     unsigned i, n, lo, hi, v, k, e, seg;
     int cnt, dup;
-    seg = pdu_dcseg(PDU_DC_PAGES) + 30;
+    seg = pdu_dcseg(PDU_DC_PAGES) + PDM_XLIST / 16;
     pdu_xtn = 0;
     cnt = 0;
     i = 0;
@@ -258,8 +240,10 @@ static int ovl_pg_list(void)
             for (k = 0; k < pdu_xtn; k++)       /* a source page twice would be two page objects */
                 if (PDM_KIND(e) == PDM_SRC && pd_fpeekw(seg, (unsigned)(2 * k)) == e)
                     dup = 1;
-            if (dup || pdu_xtn >= PDM_MAXMAP)
+            if (dup)
                 continue;
+            if (pdu_xtn >= PDM_MAXMAP)          /* the row's half (pdwmap.h): refuse, never truncate */
+                return -2;
             pd_fpokew(seg, (unsigned)(2 * pdu_xtn), e);
             pdu_xtn++;
             cnt++;
@@ -276,17 +260,29 @@ static int ovl_pg_key(int ascii, int scan)
 {
     int n;
     unsigned v;
-    if (pdu_pk == PK_REPLACE) {
-        if (ascii == 13)
-            pdu_save_replace();
+    if (ascii == 27) {
+        n = pdu_pk;
+        pdu_pk = PK_NONE;
+        if (n == PK_REPLACE) {          /* keep the target: the temp file goes (14.3) */
+            pdu_mcall(PDU_M_WRT, PDV_WRT_ABORT, 0, 0, 0);
+            ovl_save_done(PDE_CANCEL);
+        } else
+            pdu_tell("Cancelled.");
+        return 1;
+    }
+    if (pdu_pk == PK_REPLACE) {         /* Enter: the writer deletes the target and renames */
+        if (ascii == 13) {
+            pdu_pk = PK_NONE;
+            pdu_xsave.state = PDW_ST_REPLACE;
+            pdu_job_start(J_SAVE);
+        }
         return 1;
     }
     if (pdu_pk == PK_DELETE) {
         if (ascii == 13 || (ascii == 0 && scan == 0x53)) {
             pdu_pk = PK_NONE;
             ovl_pg_do(2, ovl_pg_tgt(), 0, pdu_pgw(ovl_pg_tgt()));
-            pdu_say("Page deleted.");
-            pdu_status_paint();
+            pdu_tell("Page deleted.");
         }
         return 1;
     }
@@ -312,7 +308,7 @@ static int ovl_pg_key(int ascii, int scan)
         if (pdu_pk == PK_EXTRACT) {
             n = ovl_pg_list();
             if (n < 0) {
-                pdu_tell("Use a list like 1,3-5.");
+                pdu_tell(n == -1 ? "Use a list like 1,3-5." : "Page operations handle up to 240 pages.");
                 return 1;
             }
             if (n == 0)
@@ -362,40 +358,12 @@ static int ovl_pg_onfile(const char *name)
             return 1;
         }
     }
-    pdu_save_begin(name, kind);
+    ovl_save_begin(name, kind);
     return 1;
 }
 
 /* ---- the writer jobs: start and end (20.11.5) ---- */
-/* where the job's pages are (20.11.1) and where its source is (D14): the
- * source's folder is named only when it is not the one we write into */
-static void ovl_save_pages(void)
-{
-    if (pdu_savekind == 1) {
-        pdu_xsave.pages_seg = pdu_xb + 32;         /* pd_newpage, 512 bytes into the XB */
-        pdu_xsave.pages_count = 1;
-        return;
-    }
-    if (pdu_savekind == 2) {
-        pdu_xsave.pages_seg = pdu_dcseg(PDU_DC_PAGES) + 30;   /* the Extract list, 480 bytes up */
-        pdu_xsave.pages_count = pdu_xtn;
-    } else if (pdu_pgmap) {
-        pdu_xsave.pages_seg = pdu_dcseg(PDU_DC_PAGES);
-        pdu_xsave.pages_count = pdu_npages;
-    }
-    if (pdu_tgtplace.clus != pdu_docplace.clus || pdu_tgtplace.vol != pdu_docplace.vol) {
-        pdu_xsave.src_clus = pdu_docplace.clus;
-        pdu_xsave.src_vol = pdu_docplace.vol + 1;   /* 20.11.3: volume + 1, 0 = one folder */
-    }
-}
 
-/* os88_onfile for an Extract or a New: 1 = ours */
-static int pdu_pg_onfile(const char *name)
-{
-    if (!pdu_pgfd)
-        return 0;
-    return ovl_pg_onfile(name);
-}
 
 /* PAGEDESK-SPEC 20.11.5: the three jobs the writer runs for the primary.
  * kind 0 Save As (14.2), 1 New (14.6), 2 Extract (13.8). The writer reads
@@ -441,7 +409,24 @@ static int ovl_save_begin(const char *name, int kind)
     pdu_datestamp(pdu_xsave.date);
     pdu_xsave.mode = pdu_savemode[kind];
     pdu_savekind = kind;
-    ovl_save_pages();                   /* pages: the map and the source's folder */
+    /* the job's pages (20.11.1) and the source's folder (D14), named only
+     * when it is not the one we write into */
+    if (kind == 1) {
+        pdu_xsave.pages_seg = pdu_xb + 32;         /* pd_newpage, 512 bytes into the XB */
+        pdu_xsave.pages_count = 1;
+    } else {
+        if (kind == 2) {
+            pdu_xsave.pages_seg = pdu_dcseg(PDU_DC_PAGES) + PDM_XLIST / 16;   /* the Extract list */
+            pdu_xsave.pages_count = pdu_xtn;
+        } else if (pdu_pgmap) {
+            pdu_xsave.pages_seg = pdu_dcseg(PDU_DC_PAGES);
+            pdu_xsave.pages_count = pdu_npages;
+        }
+        if (pdu_tgtplace.clus != pdu_docplace.clus || pdu_tgtplace.vol != pdu_docplace.vol) {
+            pdu_xsave.src_clus = pdu_docplace.clus;
+            pdu_xsave.src_vol = pdu_docplace.vol + 1;   /* 20.11.3: volume + 1, 0 = one folder */
+        }
+    }
     pdu_say2(kind == 1 ? "Creating " : kind == 2 ? "Extracting to " : "Saving ", name);
     pdu_status_paint();
     pdu_job_start(J_SAVE);
@@ -474,8 +459,7 @@ static int ovl_save_done(unsigned err)
         return 1;
     }
     pdu_changes = 0;
-    os88_strcpy(pdu_pgnote, "Saved ", sizeof(pdu_pgnote));
-    pdu_cat(pdu_pgnote, pdu_target, sizeof(pdu_pgnote));
+    pdu_pgsaved = 1;                    /* "Saved <target>", once it is open */
     pdu_resume = pdu_savekind == 0 ? pdu_page + 1 : 0;
     pdu_open_begin(pdu_target);         /* the output IS the document now */
     return 1;

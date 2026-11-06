@@ -20,7 +20,7 @@
 #define PGC_MOVE    103
 #define PGC_INSERT  104
 #define PGC_NEW     105
-#define PGC_FIRST   100
+#define PGC_FIRST   100                 /* PGC_FIRST..PGC_NEW */
 
 /* the prompt in the status line (ovl_pg_key) */
 #define PK_NONE     0
@@ -44,12 +44,10 @@ static unsigned pdu_xtn;        /* the Extract list's length (in the claim, 480 
 #define PDW_ST_CONFIRM 0x0100u  /* the writer's answer: the target exists (20.5.9) */
 #define PDW_ST_REPLACE 0x0200u
 static unsigned pdu_resume;     /* the page + 1 to return to after a re-open */
-static char pdu_pgnote[24];     /* said once the re-open is through */
+static int pdu_pgsaved;         /* "Saved <target>" is said once the re-open is through */
 
-static void pdu_save_replace(void);
 static int ovl_save_begin(const char *name, int kind);
 static int ovl_save_done(unsigned err);
-static void ovl_save_pages(void);
 static void pdu_save_done(unsigned err);
 static int ovl_pg_cmd(int id);
 static int ovl_pg_key(int ascii, int scan);
@@ -100,14 +98,21 @@ void pdu_pg_apply(const void *d, unsigned len, int undo)
     ovl_pg_apply((const unsigned *)d, undo);
 }
 
-/* the greyed-with-a-reason answer for a page command; 0 = enabled */
+/* a page command's id: the Pages-mode buttons C_P_* and the menu-only PGC_* */
+static int pdu_pg_isop(int id)
+{
+    return (id >= C_P_ROTL && id <= C_P_EXTRACT) || (id >= PGC_FIRST && id <= PGC_NEW);
+}
+
+/* the greyed-with-a-reason answer for a page command; 0 = enabled. The
+ * caller (pdu_why) has already refused it with no document open. */
 static const char *pdu_pg_why(int id)
 {
-    if (id == PGC_NEW)
-        return 0;
     if (pdu_rdonly)
         return "This document is signed: it opens read-only.";
-    if (pdu_npages > PDM_MAXMAP && !pdu_pgmap)
+    /* the map and the Extract list are 240 entries each (pdwmap.h) */
+    if (id != C_P_EXTRACT && (pdu_npages > PDM_MAXMAP
+        || (pdu_npages == PDM_MAXMAP && (id == PGC_DUP || id == C_P_BLANK))))
         return "Page operations handle up to 240 pages.";
     if (id == C_P_DELETE && pdu_npages < 2)
         return "The last page cannot be deleted.";
@@ -118,26 +123,49 @@ static const char *pdu_pg_why(int id)
     return 0;
 }
 
-static void pdu_pg_cmd(int id)
+/* the page commands' menu rows (12.4): menu << 4 | item, the command, the
+ * text - ONE table for both the sync and the dispatch. The items follow
+ * pducmd.c's: File 5-6 after Close, Edit 6-10 after Find previous, Document
+ * 9-10 after Go to page (a pull-down holds 11). Insert from another PDF
+ * (PGC_INSERT, 20.11.7) has no row until it is built. */
+#define PDU_PGMN 9
+static const unsigned char pdu_pgmrow[PDU_PGMN] = {
+    0x05, 0x06, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x39, 0x3A };
+static const unsigned char pdu_pgmcmd[PDU_PGMN] = {
+    C_P_EXTRACT, C_P_BLANK, PGC_UP, PGC_DOWN, PGC_MOVE, PGC_DUP,
+    C_P_DELETE, C_P_ROTL, C_P_ROTR };
+static const char *const pdu_pgmtxt[PDU_PGMN] = {
+    "\001Extract pages...", "\001Insert blank page",
+    "\001Move page earlier", "\001Move page later", "\001Move page to...",
+    "\001Duplicate page", "\001Delete page", "\001Rotate page left",
+    "\001Rotate page right" };
+
+static const char *pdu_why(int id);
+static void pdu_pg_msync(const char **mf, const char **me, const char **md)
 {
-    ovl_pg_cmd(id);
+    int i, r;
+    const char **m;
+    for (i = 0; i < PDU_PGMN; i++) {
+        r = pdu_pgmrow[i];
+        m = (r >> 4) == 0 ? mf : (r >> 4) == 1 ? me : md;
+        m[r & 15] = pdu_pgmtxt[i] + (pdu_why(pdu_pgmcmd[i]) == 0);
+    }
 }
 
-/* a key while a prompt is up (consumes every key) */
+/* a menu pick that is a page command: its id, else 0 */
+static int pdu_pg_menucmd(int menu, int item)
+{
+    int i;
+    for (i = 0; i < PDU_PGMN; i++)
+        if (pdu_pgmrow[i] == ((menu << 4) | item))
+            return pdu_pgmcmd[i];
+    return 0;
+}
+
+/* a key while a prompt is up (consumes every key, the overlay's) */
 static int pdu_pg_key(int ascii, int scan)
 {
     if (pdu_pk == PK_NONE)
         return 0;
-    if (ascii == 27) {
-        if (pdu_pk == PK_REPLACE) {     /* keep the target: the temp file goes (14.3) */
-            pdu_pk = PK_NONE;
-            pdu_mcall(PDU_M_WRT, PDV_WRT_ABORT, 0, 0, 0);
-            pdu_save_done(PDE_CANCEL);
-            return 1;
-        }
-        pdu_pk = PK_NONE;
-        pdu_tell("Cancelled.");
-        return 1;
-    }
     return ovl_pg_key(ascii, scan);
 }

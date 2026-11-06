@@ -133,7 +133,6 @@ unsigned pdu_pg_id(unsigned view_index);
 int  pdu_pg_isdup(unsigned view_index);
 void pdu_pg_apply(const void *delta, unsigned len, int undo);
 static void pdu_open_begin(const char *name);
-static void pdu_save_begin(const char *name, int kind);
 static void pdu_reopen_begin(void);
 static void pdu_tell(const char *s);
 static void pdu_say2(const char *a, const char *b);

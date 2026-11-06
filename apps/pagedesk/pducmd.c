@@ -23,10 +23,9 @@ static int pdu_hpage;
 #define MI_NEW     2
 #define MI_SAVEAS  3
 #define MI_CLOSE   4
-#define MI_EXTRACT 5                    /* pages: File 5-7, Edit 6-10, Document 9-10 (11 items a pull-down, 12.4) */
-#define MI_INSERT  6
-#define MI_BLANK   7
-static const char *pdu_mfile[8];
+#define MI_EXTRACT 5                    /* pages: File 5-6, Edit 6-10, Document 9-10 (pdupage.c's pdu_pgmrow) */
+#define MI_BLANK   6
+static const char *pdu_mfile[7];
 #define ME_UNDO    0
 #define ME_REDO    1
 #define ME_DEL     2
@@ -64,7 +63,7 @@ static const char *pdu_mhelp[3];
 
 static struct os88_menuset pdu_menus = {
     "PageDesk", 0, 5,
-    { { "File", pdu_mfile, 8 },
+    { { "File", pdu_mfile, 7 },
       { "Edit", pdu_medit, 11 },
       { "View", pdu_mview, 8 },
       { "Document", pdu_mdoc, 11 },
@@ -112,11 +111,9 @@ static const char *pdu_why(int id)
         if (pdu_rdonly)
             return "This document is signed: it opens read-only.";
         return "Annotation tools are not in this build yet.";
-    case C_P_ROTL: case C_P_ROTR: case C_P_DELETE: case C_P_BLANK:
-    case C_P_EXTRACT: case PGC_DUP: case PGC_UP: case PGC_DOWN:
-    case PGC_MOVE: case PGC_INSERT:
-        return pdu_pg_why(id);          /* pages */
     }
+    if (pdu_pg_isop(id))                /* pages */
+        return pdu_pg_why(id);
     return 0;
 }
 
@@ -138,9 +135,6 @@ static void pdu_menusync(void)
     pdu_mfile[MI_OPEN]   = pdu_mi("\001Open...  ^O", 1);
     pdu_mfile[MI_SAMPLE] = pdu_mi("\001Open sample guide", 1);
     pdu_mfile[MI_NEW]    = pdu_mi("\001New  ^N", 1);                    /* pages */
-    pdu_mfile[MI_EXTRACT] = pdu_mi("\001Extract pages...", open);
-    pdu_mfile[MI_INSERT] = pdu_mi("\001Insert from PDF...", open);
-    pdu_mfile[MI_BLANK]  = pdu_mi("\001Insert blank page", open);
     pdu_mfile[MI_SAVEAS] = pdu_mi("\001Save As...  ^S", open);
     pdu_mfile[MI_CLOSE]  = pdu_mi("\001Close document", open);
     pdu_medit[ME_UNDO]   = pdu_mi("\001Undo  ^Z", !pdu_why(C_UNDO));
@@ -149,11 +143,7 @@ static void pdu_menusync(void)
     pdu_medit[ME_FIND]   = pdu_mi("\001Find...  ^F", open);
     pdu_medit[ME_NEXT]   = pdu_mi("\001Find next  F3", open && pdu_nlen);
     pdu_medit[ME_PREV]   = pdu_mi("\001Find previous  Sh+F3", 0);
-    pdu_medit[ME_MVUP]   = pdu_mi("\001Move page earlier", !pdu_why(PGC_UP));     /* pages */
-    pdu_medit[ME_MVDN]   = pdu_mi("\001Move page later", !pdu_why(PGC_DOWN));
-    pdu_medit[ME_MVTO]   = pdu_mi("\001Move page to...", !pdu_why(PGC_MOVE));
-    pdu_medit[ME_DUP]    = pdu_mi("\001Duplicate page", !pdu_why(PGC_DUP));
-    pdu_medit[ME_DELPG]  = pdu_mi("\001Delete page", !pdu_why(C_P_DELETE));
+    pdu_pg_msync(pdu_mfile, pdu_medit, pdu_mdoc);                     /* pages */
     pdu_mview[MV_ZIN]    = pdu_mi("\001Zoom in  +", !pdu_why(C_ZIN));
     pdu_mview[MV_ZOUT]   = pdu_mi("\001Zoom out  -", !pdu_why(C_ZOUT));
     pdu_mview[MV_100]    = pdu_mi("\001Actual size", open);
@@ -180,8 +170,6 @@ static void pdu_menusync(void)
     pdu_mdoc[MD_FIRST] = pdu_mi("\001First page  Home", open);
     pdu_mdoc[MD_LAST]  = pdu_mi("\001Last page  End", open);
     pdu_mdoc[MD_GOTO]  = pdu_mi("\001Go to page...  ^G", open);
-    pdu_mdoc[MD_ROTL]  = pdu_mi("\001Rotate page left", !pdu_why(C_P_ROTL));      /* pages */
-    pdu_mdoc[MD_ROTR]  = pdu_mi("\001Rotate page right", !pdu_why(C_P_ROTR));
     pdu_mhelp[MH_KEYS]    = "Keyboard...";
     pdu_mhelp[MH_PROFILE] = "The XT PDF profile...";
     pdu_mhelp[MH_INFO]    = pdu_mi("\001Document info...", open);
@@ -555,6 +543,10 @@ static void pdu_cmd(int id)
 {
     if (pdu_refuse(id))
         return;
+    if (pdu_pg_isop(id)) {              /* pages */
+        ovl_pg_cmd(id);
+        return;
+    }
     switch (id) {
     case C_OPEN: case C_EV_OPEN:
         pdu_open_dlg();
@@ -618,11 +610,6 @@ static void pdu_cmd(int id)
     case C_PANEL_NT:
         pdu_pop_open(P_NOTES, id);
         return;
-    case C_P_ROTL: case C_P_ROTR: case C_P_DELETE: case C_P_BLANK:    /* pages */
-    case C_P_EXTRACT: case PGC_DUP: case PGC_UP: case PGC_DOWN:
-    case PGC_MOVE: case PGC_INSERT: case PGC_NEW:
-        pdu_pg_cmd(id);
-        return;
     }
     if (id >= C_T_SELECT && id <= C_T_SIGN)
         pdu_set_tool(id);
@@ -631,26 +618,24 @@ static void pdu_cmd(int id)
 /* a menu command: the gfx lock held, like a click (SPEC.md 12.2) */
 void os88_oncmd(int item, int menu, void *win)
 {
+    int pg;
     pdu_about_off();
+    pg = pdu_pg_menucmd(menu, item);   /* pages: the page commands' rows */
+    if (pg) {
+        pdu_cmd(pg);
+        return;
+    }
     if (menu == 0) {
         if (item == MI_OPEN) pdu_cmd(C_OPEN);
         else if (item == MI_SAMPLE) pdu_sample();
         else if (item == MI_SAVEAS) pdu_cmd(C_SAVEAS);
         else if (item == MI_CLOSE) pdu_close_doc();
         else if (item == MI_NEW) pdu_cmd(PGC_NEW);                  /* pages */
-        else if (item == MI_EXTRACT) pdu_cmd(C_P_EXTRACT);
-        else if (item == MI_INSERT) pdu_cmd(PGC_INSERT);
-        else if (item == MI_BLANK) pdu_cmd(C_P_BLANK);
     } else if (menu == 1) {
         if (item == ME_UNDO) pdu_cmd(C_UNDO);
         else if (item == ME_REDO) pdu_cmd(C_REDO);
         else if (item == ME_FIND) pdu_cmd(C_FIND);
         else if (item == ME_NEXT) pdu_find_run(1);
-        else if (item == ME_MVUP) pdu_cmd(PGC_UP);                  /* pages */
-        else if (item == ME_MVDN) pdu_cmd(PGC_DOWN);
-        else if (item == ME_MVTO) pdu_cmd(PGC_MOVE);
-        else if (item == ME_DUP) pdu_cmd(PGC_DUP);
-        else if (item == ME_DELPG) pdu_cmd(C_P_DELETE);
         else pdu_tell("Nothing is selected.");
     } else if (menu == 2) {
         if (item == MV_ZIN) pdu_cmd(C_ZIN);
@@ -673,8 +658,6 @@ void os88_oncmd(int item, int menu, void *win)
         else if (item == MD_FIRST) pdu_goto(0);
         else if (item == MD_LAST) pdu_goto(pdu_npages - 1);
         else if (item == MD_GOTO) pdu_cmd(C_PAGE);
-        else if (item == MD_ROTL) pdu_cmd(C_P_ROTL);                /* pages */
-        else if (item == MD_ROTR) pdu_cmd(C_P_ROTR);
     } else if (menu == 4) {
         pdu_helpw = item;
         pdu_pop_open(P_HELP, C_NONE);
@@ -713,8 +696,10 @@ void os88_onfile(int mode, const char *name, unsigned size_lo,
         pdu_open_begin(name);
         return;
     }
-    if (pdu_pg_onfile(name))            /* pages: an Extract or a New */
+    if (pdu_pgfd) {                     /* pages: an Extract or a New */
+        ovl_pg_onfile(name);
         return;
+    }
     if (pdu_doc != D_OPEN)
         return;
     /* D14 (20.11.3): the writer reads the source in ITS folder and writes
@@ -732,7 +717,8 @@ void os88_onfile(int mode, const char *name, unsigned size_lo,
             return;
         }
     }
-    pdu_save_begin(name, 0);
+    if (!ovl_save_begin(name, 0))      /* pages: the overlay could not be had */
+        pdu_tell(pdu_errtext(PDE_NOMEM));
 }
 
 /* ============================================================================
@@ -846,7 +832,7 @@ void os88_onkey(int ascii, int scan, void *win)
     /* Escape, in order (PD-03, 17.5): a running job, a popover, the page
      * field, the keyboard focus, then the tool */
     if (ascii == 27) {
-        if (pdu_job != J_NONE) {
+        if (pdu_job != J_NONE && !pdu_reopening) {    /* pages: PDENG must get its document back */
             pdu_jcancel = 1;
             pdu_tell("Cancelling...");
             pdu_kick();
@@ -1048,7 +1034,7 @@ void os88_onclick(int x, int y, void *win)
     }
     if (pdu_inr(&pdu_L.canvas, x, y) && pdu_doc == D_OPEN) {
         if (pdu_mode == PDU_MODE_PAGES)
-            pdu_tell("Pages mode: use the buttons above and the Edit and Document menus.");
+            pdu_tell("Pages mode: use the buttons above or the menus.");
         else if (pdu_tool == C_T_SELECT)
             pdu_tell("Selecting text is not in this build yet.");
         else

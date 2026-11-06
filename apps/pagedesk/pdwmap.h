@@ -21,15 +21,17 @@
  * The SECOND time a PDM_SRC entry names one source page it is a duplicate
  * (13.7): a new page object sharing /Contents and /Resources, annotations
  * deep-copied. The first is the original and keeps the page's edit records.
- * The three foreign file names (8.3, NUL, 14 bytes each) sit at byte
- * PDM_NAMES of the same segment, which is why a map holds at most
- * PDM_MAXMAP = 400 pages.
+ * The 1 KiB row holds the map at byte 0, the Extract list (the same
+ * encoding, a source page at most once) at byte PDM_XLIST and the three
+ * foreign file names (8.3, NUL, 14 bytes each) at byte PDM_NAMES, which is
+ * why a map - and an Extract list - holds at most PDM_MAXMAP = 240 pages.
  *
  * Shared by pdwsave.c/pdwpg.c (the writer) and pdupage.c (the primary).
  * ==========================================================================*/
 #ifndef PDWMAP_H
 #define PDWMAP_H
-#define PDM_MAXMAP   400u
+#define PDM_MAXMAP   240u
+#define PDM_XLIST    480u     /* = 2 * PDM_MAXMAP */
 #define PDM_NAMES    960u
 #define PDM_NSLOT    3u
 #define PDM_SRC      0u
