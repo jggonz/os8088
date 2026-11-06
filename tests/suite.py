@@ -4780,6 +4780,15 @@ SOAK = [
         "is kept as it is left with Esc from a hold, and is back after Game > "
         "Reset. Red (0000) without the put-back",
         needs=("marty",), wants=("build/arcade720.img", "build/arcade.o88", "build/os8088-360.img")),
+    Row("arcpacghost", "soak", py("tests/arcpacghost.py"), 17.0,
+        "Pac-Man's ghost states all have code (ARCADE-SPEC 7.6): on 86Box's mr286 "
+        "(kern_big), Pac-Man picked, coined and started, play confirmed (4E00h = "
+        "3), then each ghost's state set to 2 - the RST 20h entry (11DBh for the "
+        "fourth) a script that never ate a ghost never reached, which stopped play "
+        "with 'no code at 11DB' (the owner's field report, 2026-11-06). Frames go "
+        "on at the board's rate. Red with the parts from before tools/arcpac.py "
+        "read every table: 0 frames, back at the cabinet",
+        needs=("86box",), wants=("build/arcade.o88", "build/os8088.img")),
     Row("arcmove", "soak", py("tests/arcmove.py"), 78.0,
         "ARCADE's claims MOVE (SPEC.md 66, ARCADE-SPEC 14) on MartyPC's VGA XT: "
         "Q*bert, Pac-Man and Space Invaders each picked, played and left, then a "

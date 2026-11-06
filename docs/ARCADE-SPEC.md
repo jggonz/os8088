@@ -714,6 +714,20 @@ writes it as `RST 28 +3` lines in the seeds file; the walk and the
 speculative walks follow them. Pac-Man: RST 08h, 10h, 18h +1, 28h +3, 30h
 +4, and 20h none. 5,615 instructions, 578 of them speculative.
 
+**RST 20h's tables are read, not learned.** A learned seed is a target the
+script REACHED, and an RST 20h table entry is reached only in the state that
+selects it: a script that never ate a ghost never put 2 in 4DAFh, and 11DBh
+(10B7h's table: 000Ch, 11C9h, 11DBh, 11FCh) had no translation - "no code
+at 11DB" in play, halfway through a first level (the owner's field report,
+2026-11-06). So `arcpac.py seeds` reads every table of every RST 20h the
+run executed, off the ROM: an entry is a word below 4000h, and the table
+ends at the first that is not, at a position that ran or that any entry
+names (the code after it), or at its own lowest target. 42 targets the
+script never reached, the intermissions among them; the code part grew 193
+bytes, most of those routines having been translated speculatively with no
+entry in the PC table. `tests/arcpacghost.py` (86Box's 286, kern_big) puts
+each ghost in state 2 in play: red with the parts from before.
+
 An instruction the translation does not take (IXH/IXL, IN, OUT other than
 OUT (00),A, RRD/RLD, CPI/CPD, INI and kin) is a build failure in real code
 and drops a speculative walk.

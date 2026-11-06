@@ -265,6 +265,34 @@ def cmd_stats(img, a):
         write_png(a.png, b.screen())
 
 
+def rst20_tables(m, sites, ranpc):
+    """Every entry of the RST 20h tables at SITES (the RSTs a run executed),
+    read off the ROM. A table's length is in no byte, so it ends at the first
+    word that is not a ROM address, at a position that ran or that any entry
+    names (code after it), or at its own lowest target - a table cannot run
+    into the code it dispatches to. Iterated, since one table's entries end
+    another"""
+    rd = lambda a: m[a] | m[a + 1] << 8
+    tabs = {}
+    for _ in range(4):
+        named = set(t for v in tabs.values() for t in v)
+        new = {}
+        for s in sorted(sites):
+            ent, a = [], s + 1
+            while True:
+                w = rd(a)
+                lo = min([t for t in ent if t > s] or [0x10000])
+                if w >= 0x4000 or a in ranpc or a in named or a >= lo:
+                    break
+                ent.append(w)
+                a += 2
+            new[s] = ent
+        if new == tabs:
+            break
+        tabs = new
+    return set(t for v in tabs.values() for t in v)
+
+
 def cmd_seeds(img, a):
     b = Board(img)
     targets = set()
@@ -275,9 +303,15 @@ def cmd_seeds(img, a):
     rst = {}                            # vector -> [where it came back]
     ran = {}                            # vector -> how often it ran
     pending = []                        # (SP before, RST's PC, vector)
+    ranpc = set()                       # every PC the run executed
+    rst20 = set()                       # every RST 20h it executed
 
     def each(b, pc, ev):
         cpu = b.cpu
+        if ev != 'irq':
+            ranpc.add(pc)
+            if b.m[pc] == 0xE7:
+                rst20.add(pc)
         if ev == 'irq':
             intpc.add(b.cpu.rd16(cpu.sp))
             targets.add(cpu.pc)
@@ -314,6 +348,12 @@ def cmd_seeds(img, a):
         if len(set(back)) == 1 and len(back) >= 0.9 * ran[vec]:
             lines.append('RST %02X +%d' % (vec, back[0]))
     lines += ['%04X' % p for p in sorted(targets - after - intpc) if p < 0x4000]
+    tab = rst20_tables(b.m, rst20, ranpc) - targets - after - intpc - ranpc
+    lines.append('# RST 20h tables (0020h: pop hl, add a,a, ... jp (hl) - the table follows')
+    lines.append('# the RST), every entry read statically: a script reaches a state\'s')
+    lines.append('# entry only if it plays into that state, and one it never reached was')
+    lines.append('# a "no code" stop in play (11DBh, eating a ghost):')
+    lines += ['%04X' % p for p in sorted(tab)]
     out = '\n'.join(lines) + '\n'
     if a.output:
         open(a.output, 'w').write(out)
