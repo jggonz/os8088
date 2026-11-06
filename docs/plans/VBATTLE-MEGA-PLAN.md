@@ -1,6 +1,6 @@
 # VBATTLE-MEGA — Video Battle on kern_mega, in a real-mode bracket
 
-**Status: W1 BUILT (2026-11-06, SPEC.md 125.4.5).** SPEC.md 125.7 said "kern_mega is not
+**Status: W1 and W2 BUILT (2026-11-06, SPEC.md 125.4.5).** SPEC.md 125.7 said "kern_mega is not
 supported", and that was true in a worse way than it sounded: the SHIPPED
 engine, opened from an ordinary disk on a kern_mega machine, was CLOSED by a
 #GP the moment Play was pressed (measured on Bochs, below). This plan makes
@@ -80,10 +80,20 @@ kern_big and kern_small keep the load on the desktop, where the window says
 
 ### W2 - sound through a card
 
-- [ ] `FSXL_DRV DRVC_SOUND` when the play has a card; the card's ring
-      conventional (`OSAPI_MEM_CLAIM_DMA_HI`) and in the swap list.
-- [ ] Verified on Bochs's SB16: music and an action's own sound heard
-      (the card's capture against the frames, `vbtsound`'s measure).
+- [x] `FSXL_DRV DRVC_SOUND` when the play has a card; the card's ring
+      conventional (`OSAPI_MEM_CLAIM_DMA_HI`) and in the swap list - both
+      already W1's, and W2 needed no engine change.
+- [x] Verified on Bochs's SB16 (`vbtmega --arm card`): the card's ring
+      claimed, the music never dry, the card never found halted, 12.5 s of
+      the stream consumed in the bracket, and Bochs's capture IS the
+      battle's music - its best correlation with the bundle's music 0.67 at
+      the bundle's own rate, 0.41 at most at any other resampling (Bochs's
+      own resampler softens the demo's square-ish synth, so a clean copy
+      scores ~0.6-0.7 there, which is why the test is the margin). Red with
+      SOUND.DRV left out of the list: a silent play, nothing consumed.
+      **Not measured here**: an action's own sound against its picture
+      (`vbtownsnd`'s frames) - Bochs's PIT is not on an 8088's clock; that
+      is W4's, on 86Box.
 
 ### W3 - the hold
 

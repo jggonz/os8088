@@ -21,6 +21,15 @@ inside an FSXF_REAL bracket:
              given back; and Enter again plays a SECOND time to the title,
              the resident claim's parts derived afresh in that bracket;
           5. no kern_mega FAULT and no CLOSED, anywhere.
+  card    W2: the same play with Bochs's SB16 (FSXL_DRV DRVC_SOUND in the
+          list, SOUND.DRV's low copy): the card's ring claimed at the door,
+          the music never dry ([vb_munder]) and the card never found halted
+          ([vb_nunder]), the card consuming seconds of the stream ([vb_cons32])
+          - and Bochs's capture (OUT/sb.wav) is the battle's MUSIC: its best
+          correlation with the bundle's music is at the bundle's own rate
+          and stands clear of every other resampling. BROKEN ON PURPOSE
+          (vb_mklist leaving DRVC_SOUND out) the play is SILENT - the card
+          consumes nothing and the capture is empty - and this goes red.
   refuse  the kernel made to fall back: at OSAPI_FSX_RUN's call the list
           gains FSXL_DRV DRVC_NET, a class the real-mode bracket does not
           carry (FSXR_DRV) - so the bracket runs in PROTECTED mode: vb_main
@@ -85,10 +94,12 @@ def run(arm, tmp, syms):
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", disk,
                     "--size", "1440", os88build.at("build/vbattle.o88"),
                     vbt], check=True, capture_output=True)
-    with os88ui.boot("build/os8088.img", apps=disk) as ui:
+    machine = "os8088_xt_vga_sb" if arm == "card" else "os8088_xt_vga"
+    with os88ui.boot("build/os8088.img", apps=disk, machine=machine) as ui:
         m = ui.m
         S = ui._S
         w = ui.path("B:/VBATTLE.O88")
+        W[:] = [w]
 
         def sel():
             return u16(m.read(geom.winptr(m, w.i, S) + geom.W_SEG, 2))
@@ -144,6 +155,8 @@ def run(arm, tmp, syms):
             return
         key("Enter")
         until(lambda: rb("vb_ready") == 1, "the play")
+        if arm == "card":
+            return card(m, S, rb, rw, until, key, bd, tmp)
         until(lambda: rb("vb_tplay") == 1, "the title")
         ok(rmode[0] == 1, "1. the play's bracket is REAL MODE "
            "([fsx_rmode] seen 1)")
@@ -215,14 +228,89 @@ def run(arm, tmp, syms):
         ok(not m.box.faults(), "5. no kern_mega FAULT or CLOSED")
 
 
+def card(m, S, rb, rw, until, key, bd, tmp):
+    """W2: the play through Bochs's SB16 - see the module note"""
+    ring = rw("vb_ring")
+    until(lambda: rb("vb_tplay") == 1, "the title")
+    key("Enter")
+    until(lambda: rb("vb_state") == GS_MENU, "the menu", 240)
+    until(lambda: True, "the music", guest=8.0)
+    key("Enter")                    # Attack: its own sound
+    until(lambda: rb("vb_eplay") == 1, "victory's end loop", 240)
+    def rd(n):
+        return struct.unpack("<I", m.readseg(
+            u16(m.read(geom.winptr(m, W[0].i, S) + geom.W_SEG, 2)),
+            SYMS[n], 4))[0]
+    st = dict(cons=rd("vb_cons32"), hper=rd("vb_hper"),
+              ring=ring, under=rw("vb_munder"), nunder=rw("vb_nunder"),
+              err=rw("vb_err"), reopen=rw("vb_sreopen") if "vb_sreopen"
+              in SYMS else None)
+    key("Escape")
+    until(lambda: rb("vb_ready") == 0, "Esc to the desktop", 60)
+    wav = os.path.join(m.box.out, "sb.wav")
+    cap = open(wav, "rb").read() if os.path.exists(wav) else b""
+    keep = os.environ.get("VBTMEGA_WAV")
+    if keep:
+        open(keep, "wb").write(cap)
+    print("   card: %r, capture %d bytes" % (st, len(cap)), flush=True)
+    ok(st["ring"] and st["err"] == 0 and st["under"] == 0
+       and st["nunder"] == 0,
+       "card: the card's ring claimed (%04X), the music never dry, the card "
+       "never found halted" % st["ring"])
+    ok(st["cons"] > 5 * bd.rate, "card: the card consumed %.1f s of the "
+       "stream in the bracket" % (st["cons"] / float(bd.rate)))
+    byrate = music_heard(cap, bd)
+    best = max(byrate, key=byrate.get)
+    ok(best == 4 and byrate[4] >= 0.55 and
+       all(v < byrate[4] - 0.15 for k, v in byrate.items() if k != 4),
+       "card: the capture is the battle's music - its best match %.2f at "
+       "the bundle's own rate (44,100 / %d), %s elsewhere"
+       % (byrate[4], bd.rate, ", ".join("%.2f" % v for k, v in
+                                       sorted(byrate.items()) if k != 4)))
+
+
+def music_heard(cap, bd):
+    """{step: the best normalised correlation of a 0.36 s window of the
+    bundle's music against Bochs's capture (44,100 Hz, 16-bit stereo; its
+    first channel) resampled by STEP}. Bochs's own resampler softens a
+    square-ish synth, so a clean copy scores ~0.6-0.7 here; the TEST is that
+    the bundle's rate (step 4) stands clear of every other."""
+    import numpy as np
+    if b"data" not in cap or len(cap) < 200000:
+        return {k: 0.0 for k in (2, 3, 3.5, 4, 4.5, 5, 6)}
+    d = cap[cap.index(b"data") + 8:]
+    a = np.frombuffer(d[:len(d) // 4 * 4], dtype="<i2").reshape(-1, 2)
+    a = a[:, 0].astype(float)
+    mus = np.frombuffer(bd.mus, dtype=np.uint8).astype(float) - 128
+    win = mus[bd.rate:bd.rate + 4000]
+    win = win - win.mean()
+    n = len(win)
+    out = {}
+    for step in (2.0, 3.0, 3.5, 4.0, 4.5, 5.0, 6.0):
+        c = np.interp(np.arange(0, len(a) - 1, step), np.arange(len(a)), a)
+        c = c - c.mean()
+        cc = np.correlate(c, win, "valid")
+        cs = np.sqrt(np.convolve(c * c, np.ones(n), "valid"))
+        out[int(step) if step == int(step) else step] = float(
+            (cc / (cs * np.linalg.norm(win) + 1e-9)).max())
+    return out
+
+
+CARD = {}
+W = []
+SYMS = {}
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--arm", choices=("play", "refuse", "both"),
+    ap.add_argument("--arm", choices=("play", "refuse", "card", "both"),
                     default="both")
     a = ap.parse_args()
     os.chdir(ROOT)
     syms, _ = pkg_syms("apps/vbattle/vbattle.asm", ("apps/",))
-    for arm in (("play", "refuse") if a.arm == "both" else (a.arm,)):
+    SYMS.update(syms)
+    for arm in (("play", "refuse", "card") if a.arm == "both"
+                else (a.arm,)):
         tmp = tempfile.mkdtemp(dir=os.path.join(ROOT, "build"))
         try:
             run(arm, tmp, syms)

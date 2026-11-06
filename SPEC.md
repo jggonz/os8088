@@ -238502,8 +238502,12 @@ bracket** (SPEC.md 53.2.3).
 - **Not yet** (VBATTLE-MEGA-PLAN W2-W5): the hold is not opened under
   `CPU_F_PM`; the title picture is read after the bracket returns (a
   real-mode bracket refuses its claim), so the window shows its text layout
-  first there; a card's sound, the 286's reset path and CGA/Hercules under
-  kern_mega have not been heard or run.
+  first there; the 286's reset path and CGA/Hercules under kern_mega have
+  not been run.
+- **A card** (W2): SOUND.DRV goes low through the list, and the card's ring
+  - conventional, from `OSAPI_MEM_CLAIM_DMA_HI` - is in the swap list; the
+  stream runs through `OSAPI_SND_STREAM`'s real-mode twin. On Bochs's SB16
+  the music is heard (`vbtmega --arm card`).
 
 **What it cost** the shipped engine: image 24,337 -> 24,887 (+550), bss
 +69, the packed file +451. `tests/vbtmega.py` (Bochs, VGA) is the gate.
