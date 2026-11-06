@@ -73,6 +73,9 @@ static void ovl_find_begin(void)
 static void ovl_find_hit(unsigned lo, unsigned hi)
 {
     pdu_job = J_NONE;
+    os88_gfx_lock();
+    ovl_sel_hide();                     /* the hit before this one */
+    os88_gfx_unlock();
     ovl_sel_set(pdu_fpg, lo, hi);
     pdu_selgoto = 1;
     os88_strcpy(pdu_line, "Found on page ", sizeof(pdu_line));

@@ -94,18 +94,19 @@ static int ovl_sel_rect(int q, struct os88_rect *c)
     y0 = pd_fpeekw(s, q * 16 + 10);         /* LL y */
     pdm_view_fwd(&pdu_spx0, &pdu_spy0, &pdu_view, x0, y0);
     pdm_view_fwd(&pdu_spx1, &pdu_spy1, &pdu_view, x1, y1);
-    if (pdu_spx0 > pdu_spx1) { pdu_spx0 = pdu_spx0 ^ pdu_spx1; pdu_spx1 = pdu_spx0 ^ pdu_spx1; pdu_spx0 = pdu_spx0 ^ pdu_spx1; }
-    if (pdu_spy0 > pdu_spy1) { pdu_spy0 = pdu_spy0 ^ pdu_spy1; pdu_spy1 = pdu_spy0 ^ pdu_spy1; pdu_spy0 = pdu_spy0 ^ pdu_spy1; }
-    pdu_sqr.x1 = pdu_spx0;
-    pdu_sqr.y1 = pdu_spy0;
-    pdu_sqr.x2 = pdu_spx1 - 1;
-    pdu_sqr.y2 = pdu_spy1 - 1;
+    pdu_sqr.x1 = pdu_spx0 < pdu_spx1 ? pdu_spx0 : pdu_spx1;
+    pdu_sqr.x2 = (pdu_spx0 < pdu_spx1 ? pdu_spx1 : pdu_spx0) - 1;
+    pdu_sqr.y1 = pdu_spy0 < pdu_spy1 ? pdu_spy0 : pdu_spy1;
+    pdu_sqr.y2 = (pdu_spy0 < pdu_spy1 ? pdu_spy1 : pdu_spy0) - 1;
     if (pdu_sqr.x2 < pdu_sqr.x1) pdu_sqr.x2 = pdu_sqr.x1;
     if (pdu_sqr.y2 < pdu_sqr.y1) pdu_sqr.y2 = pdu_sqr.y1;
     return pdu_isect(&pdu_sqr, c, &pdu_sqr);
 }
 
-/* XOR the selection's quads inside c. Takes the lock. */
+/* XOR the selection's quads inside c. THE GFX LOCK MUST BE HELD: it is not
+ * re-entrant (a byte with no owner), and this is reached from callbacks, which
+ * hold it, and from the wake handler, which does not and takes it around the
+ * call. */
 static struct os88_rect pdu_sxc;
 static void ovl_sel_xor(struct os88_rect *c)
 {
@@ -114,12 +115,10 @@ static void ovl_sel_xor(struct os88_rect *c)
         return;
     if (!pdu_isect(c, &pdu_L.canvas, &pdu_sxc))
         return;
-    os88_gfx_lock();
     if (os88_wm_clip_set(pdu_win) == 0)
         for (q = 0; q < pdu_selq; q++)
             if (ovl_sel_rect(q, &pdu_sxc))
                 os88_gfx_xor_fill(pdu_sqr.x1, pdu_sqr.y1, pdu_sqr.x2, pdu_sqr.y2);
-    os88_gfx_unlock();
 }
 
 static int ovl_sel_busy(void)
@@ -139,15 +138,20 @@ static void ovl_sel_show(void)
     }
     pdu_selshow = 0;
     pdu_selvis = 1;
+    os88_gfx_lock();
     ovl_sel_xor(&pdu_L.canvas);
+    os88_gfx_unlock();
 }
 
 /* a render of r finished: put the selection back inside it (called with the
  * lock NOT held, from the wake handler) */
 static void pdu_sel_after(struct os88_rect *r)
 {
-    if (pdu_selvis && pdu_selpg == (int)pdu_page)
+    if (pdu_selvis && pdu_selpg == (int)pdu_page) {
+        os88_gfx_lock();
         ovl_sel_xor(r);
+        os88_gfx_unlock();
+    }
 }
 
 /* the names `edit` calls (COMMON.md's interface); the work is the overlay's */
@@ -360,8 +364,6 @@ static void ovl_tx_begin(int mode)
 /* the pass is over: what its mode owed */
 static void ovl_sel_set(int pg, unsigned lo, unsigned hi)
 {
-    if (pdu_selpg >= 0 && pdu_selpg == (int)pdu_page)
-        ovl_sel_hide();
     pdu_selpg = pg;
     pdu_sello = lo < hi ? lo : hi;
     pdu_selhi = lo < hi ? hi : lo;
