@@ -945,6 +945,23 @@ through them, which looks better than it sounds. It costs 415 bytes of
 engine code, and the ground buffer grows by the band's rows times 160
 bytes, only for a VGA bundle that has pictures.
 
+The owner's next test found two things. Every join flashed the whole
+screen, and the planar tearing was back. The flash was step 3's own
+doing: the stand-in first frame in shared colours was a full picture in
+other colours for one frame. Video Player had already answered this for
+its scene palettes: load the new colours as the cut is drawn, and accept
+that the old picture is in the wrong colours for the length of the draw,
+because the picture is changing anyway. Here it is better still for the
+joins that matter most. The idle loop gave up its own colours, so
+entering an action from it recolours nothing, and returning to it needs
+no load at all.
+
+The tearing turned out to be the dither crawling. Knoll was running
+without its colour hold, so on a still picture with a little video noise
+a fifth of the pixels changed every frame, each change a write of
+several planes. Video Encoder's measured setting (hold 24, score 60) cut
+that to about 1%, for almost no loss of colour accuracy.
+
 ## Measured (MartyPC `os8088_5150_sb_gla`, 360 KB disk)
 
 | | |

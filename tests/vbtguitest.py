@@ -571,29 +571,33 @@ with tempfile.TemporaryDirectory() as tdir:
             finally:
                 B2.REND.dac_check = True
             return [tuple(B2.REND.dac[v]) for v in codes[12:]]
-        base = [tuple(d16[464 + 3 * v:467 + 3 * v]) for v in codes[12:]]
-        own_e = loaded(b16.entry(cc_, cc_["anch"][0][1]))
-        own_s = loaded(rs2[-2])
+        e0 = b16.entry(cc_, cc_["anch"][0][1])
+        n_, al_ = struct.unpack_from("<HH", e0, 0)
+        own_e = loaded(e0)
+        seam = rs2[-1]
+        ns_, as_ = struct.unpack_from("<HH", seam, 0)
         ok(tuple(d16[349:351]) == (16, 4) and len(cc_["own"]) == 4 and
-           own_e == cc_["own"] and own_s == base,
-           "a clip's own four: its entries load them (%s), the clip table "
-           "names them, and the frame before its seam onto the idle loop "
-           "loads the loop's back (%s)" % (own_e, own_s))
-        # ...and a swap the screen could see is refused: frame 0 drawn in
-        # the clip's own colours (vga_alone a no-op) recolours the screen
-        keep_alone = A.vga_alone
-        A.vga_alone = lambda proj, cid, i, full=False, progress=None: \
-            A.frames_of(proj, cid, kind="vga4", full=full)[i]
+           own_e == cc_["own"] and e0[4] == 0x84 and
+           not any(seam[4 + j] & 0x80 for j in (0,)) and
+           not A.vga_plan(po)["own"].get("idle"),
+           "a clip's own four: its entries load them FIRST, before the "
+           "picture - a cut, as Video Player loads a scene's (%s); the seam "
+           "back loads nothing, the idle loop using the shared alone"
+           % (own_e,))
+        # ...and a clip drawn without its load is refused: its entries'
+        # loads taken out, its frames use own slots under the loop's colours
+        keep_wd = B2.with_dac
+        B2.with_dac = lambda r, *loads: r
         try:
             B2.REND = B2.Rend("cga4")
             B2.build_project(po, kind="vga4")
-            ok(False, "a palette load onto its own colours on the screen is "
-               "refused")
+            ok(False, "a clip drawn in its own colours with no load of them "
+               "is refused")
         except ValueError as e:
-            ok("recolour" in str(e), "a palette load onto its own colours on "
-               "the screen is refused: %s" % e)
+            ok("own colours" in str(e), "a clip drawn in its own colours "
+               "with no load of them is refused: %s" % e)
         finally:
-            A.vga_alone = keep_alone
+            B2.with_dac = keep_wd
             B2.REND = B2.Rend("cga4")
     # HOW A VIDEO FITS (target.fit): a 4:3 source with a bar along its top
     # edge - FILL crops it on every rendition (each canvas is wider than

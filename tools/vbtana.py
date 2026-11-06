@@ -326,7 +326,8 @@ def _lum(c):
     return (77 * c[0] + 150 * c[1] + 29 * c[2], tuple(c))
 
 
-def plan_colours(streams, k, slots, fixed, band=None, band_w=0.0):
+def plan_colours(streams, k, slots, fixed, band=None, band_w=0.0,
+                 no_own=()):
     """VGA's colours by ERROR (126.3.2, step 2): SHARED K - SLOTS entries
     over every stream, and SLOTS more for each. STREAMS: {key: ((N, 3)
     sRGB pixels, weight)}; FIXED: colours always shared (black, white; the
@@ -341,7 +342,8 @@ def plan_colours(streams, k, slots, fixed, band=None, band_w=0.0):
     rounds of each shared entry swapped for the best candidate given the
     streams' own, then three Lloyd steps (each entry the weighted mean of
     the pixels nearest it). Deterministic. Returns (shared, {key: own}),
-    8-bit, shared darkest first with black first, each own darkest first"""
+    8-bit, shared darkest first with black first, each own darkest first.
+    NO_OWN: streams that use the shared alone (the idle loop's)"""
     import os88cgacomp as cc
     keys = sorted(streams)
     if band:
@@ -395,7 +397,7 @@ def plan_colours(streams, k, slots, fixed, band=None, band_w=0.0):
             for x in xs:
                 base[x] = np.minimum(base[x], D[x][:, j])
         return got
-    own_keys = [x for x in keys if x != "\0band"]
+    own_keys = [x for x in keys if x != "\0band" and x not in no_own]
     if slots:                   # EACH STREAM'S OWN FIRST: what it alone
         for x in own_keys:      # wants most, so that the shared go to what
             own[x] = pick([x], {x: floor(x, shared, [])}, slots)  # the
@@ -468,7 +470,7 @@ def vga_plan(proj, progress=_nop):
     if keep and k <= 4:
         return dict(k=k, slots=0, shared=band[:k], own={})
     w, h, _ = rend_size(proj, "vga4")
-    key = json.dumps(["p3", t["palette"], k, slots, keep, w, h,
+    key = json.dumps(["p4", t["palette"], k, slots, keep, w, h,
                       [(im.get("path"), os.path.exists(proj.here(im["path"]))
                         and file_hash(proj.here(im["path"])))
                        for im in proj.d.get("images", [])],
@@ -509,7 +511,7 @@ def vga_plan(proj, progress=_nop):
         bw = PLAN_IDLE_W * max(0, 200 - cr) / float(cr) * \
             (max(1, k - 4) / 12.0) ** 2
     sh, own = plan_colours(samp, k, slots, fixed[:k - slots],
-                           bpx or None, bw)
+                           bpx or None, bw, no_own=("idle",))
     sh = (sh + [sh[-1]] * k)[:k - slots]
     out = dict(k=k, slots=slots, shared=sh, own=own)
     _PALS[key] = out
@@ -518,20 +520,23 @@ def vga_plan(proj, progress=_nop):
 
 def battle_palette(proj, k=None, progress=_nop):
     """The K colours the header carries (126.3.2), in index order: the
-    shared, then the idle loop's own - the palette at the play's start"""
+    shared, then the own slots - the shared's last, as nothing on the
+    screen at the play's start uses them (the idle loop uses the shared
+    alone, and every clip loads its own before it draws)"""
     p = vga_plan(proj, progress)
-    idle = p["own"].get("idle") or []
-    own = (idle + [p["shared"][-1]] * p["slots"])[:p["slots"]]
-    return list(p["shared"]) + own
+    return list(p["shared"]) + [p["shared"][-1]] * p["slots"]
 
 
 def clip_palette(proj, cid, progress=_nop):
-    """Clip CID's K colours in index order: the shared, then its own (the
-    idle loop's for "idle", or a clip with none)"""
+    """Clip CID's colours in index order: the shared, then its own - or the
+    shared ALONE for a stream with none (the idle loop, a scene), so its
+    frames never use an own slot (126.3.2)"""
     p = vga_plan(proj, progress)
-    own = p["own"].get(cid) or p["own"].get("idle") or []
-    own = (list(own) + [p["shared"][-1]] * p["slots"])[:p["slots"]]
-    return list(p["shared"]) + own
+    own = p["own"].get(cid)
+    if not own:
+        return list(p["shared"])
+    return list(p["shared"]) + (list(own) + [own[-1]] * p["slots"])[
+        :p["slots"]]
 
 
 _PALS = {}
@@ -578,7 +583,7 @@ def quant_vga(fr, pal, clip=0):
     import os88venc as VE
     pal6 = bytes(int(v) >> 2 for c in pal for v in c)
     n, h, w, _ = fr.shape
-    d = VE.KnollDitherer(w, h, pal6, KNOLL_STABLE, float(clip), 0.0,
+    d = VE.KnollDitherer(w, h, pal6, KNOLL_STABLE, float(clip), KNOLL_HOLD,
                          KNOLL_SCORE, KNOLL_CAP, 0)
     out = np.zeros((n, h, w), np.uint8)
     for i in range(n):
@@ -587,6 +592,12 @@ def quant_vga(fr, pal, clip=0):
 
 
 KNOLL_STABLE = 24.0     # os88venc's --vga4-stable default
+KNOLL_HOLD = 24.0       # --vga4-hold: Video Encoder's MEASURED pair with a
+#                         score of 60. Off (0), a still picture with a little
+#                         noise changed 21.9% of its pixels a frame - each a
+#                         write of several planes the beam can catch half
+#                         done (the owner's tearing "always in its bands");
+#                         on, 1.1%, and a moving clip's error 2.3 -> 2.5
 KNOLL_SCORE = 60.0      # ...--vga4-hold-score's
 KNOLL_CAP = 64.0        # ...--vga4-plan-cap's
 
@@ -671,8 +682,8 @@ def rend_screens(proj, sid, kind, progress=_nop, full=False, stream=None,
     t = proj.d["target"]
     pal = clip_palette(proj, stream or "idle") if kind == "vga4" else None
     key = hashlib.sha1(json.dumps(
-        ["q3", file_hash(proj.here(s["path"])), kind, w, h, t["palette"],
-         KNOLL_STABLE, KNOLL_SCORE, KNOLL_CAP, HOLD_LUM, pal,
+        ["q4", file_hash(proj.here(s["path"])), kind, w, h, t["palette"],
+         KNOLL_STABLE, KNOLL_HOLD, KNOLL_SCORE, KNOLL_CAP, HOLD_LUM, pal,
          list(rng) if rng and kind == "vga4" else None] +
         ([pct] if pct < 100 else []) +
         ([fit_of(proj)] if fit_of(proj) != "fill" else []) +

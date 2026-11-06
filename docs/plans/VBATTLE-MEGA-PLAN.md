@@ -219,6 +219,17 @@ kern_big and kern_small keep the load on the desktop, where the window says
       one would. Measured: at 16 colours the mean block error 6.1 / 3.2
       (Mandelbrot title / Ikaruga clip) against one palette's 6.8 / 6.9;
       at 8, 11.6 / 6.2 against 11.0 / 9.4.
+- [x] **The joins, fixed** (2026-11-06, SPEC.md 126.3.2). Step 3 drew a
+      clip's first frame in the shared colours alone so a load after it
+      changed no pixel; that frame popped at every join (70% of the canvas
+      moved > 10 dE into the next frame, against ~34% for any frame). Now
+      a load goes FIRST in the record that draws frame 0 - a cut, Video
+      Player's rule for scene palettes - and the idle loop uses the shared
+      alone, so an action's joins load nothing over its pixels and its
+      seam back loads nothing. `verify` models the DAC on every path.
+- [x] **The tearing back**: the dither now HOLDS (Video Encoder's
+      `--vga4-hold` 24, score 60): a noisy still picture's changed pixels
+      a frame 21.9% -> 1.1%, a moving clip's error 2.3 -> 2.5.
 - [x] **Step 4: 8 and 4 colours** - 1 of 8 a clip's own and 4 of 16
       (`target.vga_clip_colours`, the Battle tab, "auto" the default); at 4
       none, black and three from the footage, white not kept; "Keep the

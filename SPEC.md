@@ -242543,27 +242543,41 @@ then sets the mode, the palette and the decode.
   Ikaruga clip), the mean CIELAB error of 4 x 4 blocks against the
   source: at 16, 6.1 and 3.2 against one k-means palette's 6.8 and 6.9; at
   8, 11.6 and 6.2 against 11.0 and 9.4.
-- **A clip's own colours are swapped in by its records** (format 10): a
-  VGA4 record's sub-records may include a PALETTE LOAD, a byte `80h | N`
-  and N entries of (value, r, g, b) in the DAC's six bits, after the
-  picture's sub-records, which `vb_decode` writes to ports 3C8h/3C9h once
-  the picture is drawn (`os88vbt.with_dac`). Three rules make it
-  invisible, whatever path the engine takes: a clip's FIRST frame, and
-  the last before a seam onto the idle loop, are drawn in the shared
-  colours alone (`vbtana.vga_alone`, quantized on its own); every record
-  that draws a clip's frame 0 - its record 0, each entry, a loop's seam
-  back onto it, a join onto it - loads that clip's own; the record that
-  draws the last frame before a seam onto the idle loop loads the loop's
-  (the header's), and that record is never capped (126.4.1). So when a
-  load happens the screen holds none of the values it loads, and nothing
-  on the glass changes colour. `os88vbt.verify` plays every path and
-  REFUSES a bundle where a load would recolour a pixel on the screen. The
-  header's sixteen at 464 are the shared and the idle loop's own (the
-  palette at the play's start); 349 is K, 350 SLOTS and 351 1 when the
-  band's pictures have VGA versions (126.5), and a clip's own
-  are in its clip-table row at 34 (a count, then three bytes each) for a
-  reader - the engine takes them from the records. Each clip is quantized
-  on its own in its own colours (`vbtana.rend_screens`' STREAM).
+- **A clip's own colours are loaded by its records** (format 10): a VGA4
+  record's sub-records may include a PALETTE LOAD, a byte `80h | N` and N
+  entries of (value, r, g, b) in the DAC's six bits, which `vb_decode`
+  writes to ports 3C8h/3C9h where it meets it (`os88vbt.with_dac`). The
+  builder puts it FIRST, before the picture, in every record that draws a
+  clip's frame 0 - its record 0 from black, each entry, the seam of a clip
+  that joins it - as Video Player loads a scene's sixteen at a cut
+  (98.1.3.2.3): for the moment the draw takes, what was on the screen is
+  under the new colours, and that moment is the cut. **The idle loop has
+  no colours of its own** (its stream is weighted in the shared), so a clip
+  entered from it recolours nothing, and its seam back loads nothing - the
+  joins an action makes are clean. A loop's lap keeps its colours. The
+  first version drew a clip's first frame in the shared colours alone so
+  that a load AFTER it changed no pixel; that frame was a whole picture in
+  other colours, and every join POPPED (the owner, 2026-11-06: "a whole
+  screen flash between each clip join") - 70% of the canvas moved more than
+  10 dE into the frame after it, against ~34% for any other frame on the
+  same footage. `os88vbt.verify` plays every path holding a model of the
+  DAC and refuses a bundle in which a clip draws an own slot under any
+  colours but its own, or the idle loop draws one at all (`vbtgui`: its
+  entries' loads taken out, it is refused). The header's sixteen at 464
+  are the shared and the own slots the shared's last (nothing at the
+  start uses them); 349 is K, 350 SLOTS and 351 1 when the band's
+  pictures have VGA versions (126.5), and a clip's own are in its
+  clip-table row at 34 (a count, then three bytes each) for a reader - the
+  engine takes them from the records. Each clip is quantized on its own in
+  its own colours (`vbtana.rend_screens`' STREAM), the idle loop and the
+  scenes in the shared alone.
+- **The dither HOLDS** (`vbtana.KNOLL_HOLD`, Video Encoder's `--vga4-hold`
+  24 with its score of 60, the pair it measured): a pixel keeps its colour
+  while that colour is within 24 of the source, scored so a colour that
+  stays wrong is let go. Without it a still picture with a little noise
+  changed 21.9% of its pixels a frame, every one a write of several planes
+  the beam can catch half done (the owner: the tearing back, "always in
+  its bands"); with it 1.1%, and a moving clip's error 2.3 -> 2.5.
 - **The band takes the nearest four of the SHARED** (a clip's own are
   swapped; the band's stay) (`vbtana.band_index`: four DIFFERENT entries, the assignment
   nearest in all, so its text, cursor and ground stay apart), drawn in

@@ -3511,14 +3511,16 @@ def vga_colours(path, k=None, clip=None):
     pal = [tuple(data[464 + 3 * c:467 + 3 * c]) for c in codes]
     c = bd.clips[clip] if clip is not None and 0 <= clip < len(bd.clips) \
         else None
-    if c is not None and c["own"]:
+    has = bool(c is not None and c["own"])
+    if has:
         pal[k - slots:] = c["own"][:slots]
     out = dict(cols=[dict(rgb=tuple((v << 2) | (v >> 4) for v in pal[i]),
                           value=codes[i],
                           band=bmap.index(codes[i]) if codes[i] in bmap and
-                          i < k - slots else None, own=i >= k - slots)
+                          i < k - slots else None, own=i >= k - slots,
+                          free=i >= k - slots and not has)
                      for i in range(k)], usage=None, clip=None,
-               slots=slots)
+               slots=slots, has_own=has)
     if c is not None:
         rows = B.REND.rows
         surf = B.REND.blank()
@@ -3752,9 +3754,12 @@ class BuildTab(object):
         self.pal_l.config(text=(
             "The battle's %d: %d shared by every clip (\"menu\" marks the "
             "band's four)%s. " % (len(v["cols"]), len(v["cols"]) - sl,
-                                  ", and %d each clip's OWN, swapped in as it "
-                                  "starts - %s" % (sl, "%s's" % name if name
-                                                   else "the idle loop's")
+                                  ", and %d each clip's OWN, loaded as it "
+                                  "starts%s" % (sl, " - %s's" % name if
+                                                v.get("has_own") else
+                                                " (the idle loop and the "
+                                                "scenes use the shared "
+                                                "alone)")
                                   if sl else "")) + (
             "Bars: each one's share of %s's pixels, all its frames." %
             (name or v["clip"]) if v["usage"] else
@@ -3767,7 +3772,8 @@ class BuildTab(object):
             role = [r for r, on in (("base", i == 0 and x["rgb"] == (0, 0, 0)),
                                     ("menu %d" % (x["band"] or 0),
                                      x["band"] is not None),
-                                    ("own", x.get("own"))) if on]
+                                    ("free" if x.get("free") else "own",
+                                     x.get("own"))) if on]
             for j, r in enumerate(role):
                 c.create_text(x0 + 15, 31 + 10 * j, text=r,
                               font=("TkDefaultFont", 7))

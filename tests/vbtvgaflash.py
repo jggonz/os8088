@@ -31,7 +31,10 @@ turns cells between colours that differ in several planes):
 
 Measured when written: 639 -> 88 a sample (bands of 16), and on the owner's
 own VGA footage (debug only) 308 -> 30 for 11.6% more record bytes.
-BROKEN ON PURPOSE (vga_banded answering ops unbanded) 2 goes red.
+BROKEN ON PURPOSE (vga_banded answering ops unbanded) 2 goes red. The
+Life grid is SEEDED (seed=1): unseeded, each run was other footage, and a
+run that once failed (one sample of 44,546, the whole canvas) could not be
+had again.
 """
 import argparse
 import os
@@ -56,7 +59,7 @@ from cycweb import pkg_syms     # noqa: E402
 
 MACHINE = "os8088_xt_vga_hdd_sb"
 TEMPLATE = "build/martypc/run/media/hdds/default_xtide.vhd"
-LIFE = ("life=s=320x200:r=12:ratio=0.3:life_color=#ffffff:"
+LIFE = ("life=s=320x200:r=12:ratio=0.3:seed=1:life_color=#ffffff:"
         "death_color=#202060:mold=0")
 fails = []
 
