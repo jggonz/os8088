@@ -786,7 +786,8 @@ host's zlib).
 `tests/unit/t_pdfix.py` regenerates the samples and requires byte equality with
 the committed copies, the manifest to match each file's size and SHA-256, the
 negative README to be what the generator writes, `qpdf --check` to accept
-every sample, and the stress set to keep 20.1.3's size and structure claims
+every sample, and (`--stress`, about 0.45 s more, so not in the fast tier) the
+stress set to keep 20.1.3's size and structure claims
 (over 640 KiB, a stream over 64 KiB, 10,000 sparse objects, every stress file
 within `PD_MAXSUBSEC` xref subsections, three revisions, 256 annotations, 64
 pages, rotated nonzero-origin boxes).
