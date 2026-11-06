@@ -459,7 +459,7 @@ arp_send:
     mov di, eth_txb + EH_SIZE + AR_SPA
     call mem_cp4
     mov cx, EH_SIZE + AR_SIZE
-    jmp ne_tx
+    jmp nic_tx
 
 ; the wire bytes from EH_TYPE to AR_OPER's high byte, big-endian as sent:
 ; ARP over Ethernet, hardware type 1 (Ethernet), protocol IP, six and four
@@ -633,7 +633,7 @@ ip_start:                       ; STKDEPTH-NOSAVE: bx
 
 ; -----------------------------------------------------------------------------
 ; ip_finish - CX bytes of payload are in place: length, checksum, send
-; out: CF from ne_tx
+; out: CF from nic_tx
 ; -----------------------------------------------------------------------------
 ip_finish:
     push ax
@@ -652,7 +652,7 @@ ip_finish:
     pop cx
     mov [eth_txb+IP_OFF+IPO_CK], ax
     add cx, EH_SIZE + IP_HLEN
-    call ne_tx
+    call nic_tx
     pop di
     pop si
     pop cx
@@ -708,7 +708,7 @@ icmp_in:
     jne .out
     cmp cx, 4                           ; CX = the IP payload length
     jb  .out
-    cmp cx, NE_FRAME - IP_PAY
+    cmp cx, NIC_FRAME - IP_PAY
     ja  .out
     mov si, eth_rxb + IP_OFF + IPO_SRC
     mov al, IPP_ICMP
@@ -928,7 +928,7 @@ eth_frame_i:                    ; STKDEPTH-NOSAVE: bx
 ETH_BUDGET  equ 8
 
 eth_pump_i:                     ; STKDEPTH-NOSAVE: ax bx dx si di
-    push cx                     ; **ONLY CX AND BP.** CX is ne_rx's output and
+    push cx                     ; **ONLY CX AND BP.** CX is nic_rx's output and
     push bp                     ; is live across `call eth_frame`; BP is the
                                 ; budget. The other five are given back by
                                 ; every callee - dhcp_timer and dns_timer save
@@ -960,7 +960,7 @@ eth_pump_i:                     ; STKDEPTH-NOSAVE: ax bx dx si di
 
 ; -----------------------------------------------------------------------------
 ; eth_pump1 - ONE frame off the ring, if there is one
-; out: CF=1 = the ring was empty. CX is ne_rx's length and eth_frame's input,
+; out: CF=1 = the ring was empty. CX is nic_rx's length and eth_frame's input,
 ;      so it flows between them and is the caller's to save.
 ;
 ; Split out of the loop above so that a caller can put the CARD MUTEX round one
@@ -969,7 +969,7 @@ eth_pump_i:                     ; STKDEPTH-NOSAVE: ax bx dx si di
 ; that lands in that window gets NETE_BUSY; one frame is ten.
 ; -----------------------------------------------------------------------------
 eth_pump1:
-    call ne_rx
+    call nic_rx
     jc  .none
     inc word [eth_nrx]
     call eth_frame

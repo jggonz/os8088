@@ -63,7 +63,7 @@ CORE_ORG    equ 0x0080
 ; CORE alone spends, both hosts read, and whose slack is one number in one
 ; place. Measured at the wave, with the assertion in `apps/dos/doscore.asm`.
 %ifndef DOS_MEGA
-CORE_MAX    equ 16528            ; +512 for SPEC.md 96.7.2's stack swap and
+CORE_MAX    equ 16560            ; +512 for SPEC.md 96.7.2's stack swap and
                                 ; 96.12.5's name truncation, which are 214
                                 ; bytes between them against 89 of slack. The
                                 ; two are the Playroom's whole report: a gate
@@ -171,9 +171,14 @@ CORE_MAX    equ 16528            ; +512 for SPEC.md 96.7.2's stack swap and
                                 ; repairs - a closed FCB's handle spoiled,
                                 ; and 27h/28h bounded by the DTA's segment
                                 ; (AL = 2): 28 bytes against 13 of slack,
-                                ; 16,527 used
+                                ; 16,527 used. +32 for SPEC.md 96.11.11's
+                                ; per-volume cluster (dos_fh_cb), which met
+                                ; main's 1 of slack at #327's merge of #328
+                                ; at 16,568 and was cut back to 16,558 (36h's
+                                ; one tail, two shared jumps); kern_dos paid
+                                ; its kilobyte's worth back in kd_resume
 %else                           ; **kern_mega's core is 67 bytes longer**:
-CORE_MAX    equ 17184            ; SPEC.md 96.15.4's extended-to-extended
+CORE_MAX    equ 17216            ; SPEC.md 96.15.4's extended-to-extended
 %endif                          ; move (dos_xms_move's `.bothx`), 15,409 used.
                                 ; +80, kept a multiple of 16, and paid ONLY by
                                 ; kern_mega's DOS.O88 - both of its hosts
@@ -209,6 +214,10 @@ CORE_MAX    equ 17184            ; SPEC.md 96.15.4's extended-to-extended
                                 ; +32 for the two FCB repairs, as on
                                 ; kern_big's arm (28 bytes against 3 of
                                 ; slack): 17,177 used
+                                ; +32 for SPEC.md 96.11.11's per-volume
+                                ; cluster and WIN16's forward (dosw16.inc,
+                                ; 124.31.1) on this arm, met at #327's
+                                ; merge of #328: 17,208 used
 ; ...and the core's bss sits directly above its code, at the same offset in
 ; every host, which is what SPEC.md 96.44.2 requires of every `DBSS` cell.
 ; --- THE CORE'S BLOCK IS A BUDGET, NOT A SUM (SPEC.md 96.44.2) --------------
@@ -219,9 +228,12 @@ CORE_MAX    equ 17184            ; SPEC.md 96.15.4's extended-to-extended
 ; core cell is spent out of.
 %ifndef CORE_BSS_SIZE               ; `-DCORE_BSS_SIZE=n` is how the budget is
  %ifndef DOS_MEGA                   ; probed: bisect on it and the assertion
-CORE_BSS_SIZE equ 3511              ; below names the exact figure
+CORE_BSS_SIZE equ 3517              ; below names the exact figure. +6 for
+                                    ; dos_vcb, a byte a volume, less the
+                                    ; launch-only word it replaced (SPEC.md
+                                    ; 96.11.11)
  %else                              ; kern_mega's +2 is `dos_hslot`, the HMA
-CORE_BSS_SIZE equ 3515              ; host's slot maker (KERN-MEGA-DOS-PLAN
+CORE_BSS_SIZE equ 3521              ; host's slot maker (KERN-MEGA-DOS-PLAN
                                     ; 10.5 defect 4), and +2 again for
                                     ; DHK_XUNP, the child's EXEPACK hook
                                     ; (SPEC.md 96.40.9.1) - DHK_NENT 7 -> 8

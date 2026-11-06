@@ -165,6 +165,20 @@ profile and NOT copied - a `.cue` names its `.bin` relative to itself - and
 and dropped the drive without a word (KERN-MEGA-PLAN 14.68).
 `vm/286-mega-cdrom` and `vm/386-mega-cdrom` are kern_mega with a CD-ROM and
 `tests/megacdrom.py` is the row that drives the first.
+`vm/pentium-pciether` (`make pentium-pciether`, SPEC.md 125.6) is `vm/pentium`'s
+PCI board (`p54tp4xe`, 16 MB) with 86Box's Realtek RTL8139C+ (`net_01_card =
+rtl8139c+`, SLiRP) booting kern_mega's `make pciethertest` disk with
+`megaapps.img` in B: - the one profile where PCIETHER.DRV meets a period PCI
+BIOS instead of SeaBIOS's. The card's internal name `rtl8139c+` (UI string
+"Realtek RTL8139C+") is `src/network/net_rtl8139.c`'s `.internal_name` at the
+commit `tools/86box/UPSTREAM` pins, and the installed app's agrees. The link
+key is left out, as `vm/xt-wire`'s is: absent is every speed and the cable
+up, where `net_01_link = 0` is a link with no speed at all. It is a place to
+LOOK (86Box cannot be keyed or asserted against); `tests/pciether.py` is the
+gate and runs under QEMU. kern_big carries the same row (SPEC.md 125.1), so
+the shipped `os8088.img` with Control Panel → Drivers → PCI Ethernet ticked
+is the same card on the real-mode kernel; `make pcibigtest` is that disk
+with the tick already made.
 `vm/286-mega-ems` is `vm/286-mega` with 86Box's Lo-tech EMS board
 (`isamem0_type = lotechems`: registers 260h, frame E000h, 2 MB) added and
 nothing else changed - the one machine here that gives kern_mega expanded

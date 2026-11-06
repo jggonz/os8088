@@ -78,7 +78,7 @@ w16_copyres:
     mov ax, [w16_rtab]
     push es
     pop ds                          ; DS:SI = the file's table
-    mov es, ax
+    W16SEG es, ax
     xor di, di
     cld
     rep movsb
@@ -86,7 +86,7 @@ w16_copyres:
     pop es
     pop ds
     push es                         ; every entry's cache words to zero
-    mov es, [w16_rtab]
+    W16SEG es, [w16_rtab]
     mov si, 2
 .type:
     mov ax, si                      ; w16_rscan's bounds: a type header and
@@ -123,8 +123,10 @@ w16_copyres:
 
 ; -----------------------------------------------------------------------------
 ; w16_rkey - a far type or name, DX:AX -> a key: AX = 8000h | id for an
-; integer (MAKEINTRESOURCE, or a string "#123"), else AX = 0 and the name in
-; DI's 16-byte buffer, upper case. Keeps the rest.
+; integer (MAKEINTRESOURCE, or a string "#123"), else AX = 0 and DX:AX kept
+; as a far pointer in DI's 4-byte word pair (w16_rtyp, w16_rnam): the name is
+; compared where the program keeps it, case blind, so it has no length limit
+; but Windows' own (SPEC.md 124.10). Keeps the rest.
 ; -----------------------------------------------------------------------------
 w16_rkey:
     push bx
@@ -156,23 +158,8 @@ w16_rkey:
     or ah, 0x80
     jmp short .out
 .str:
-    mov cx, 15
-.ch:
-    mov al, [es:si]
-    cmp al, 'a'
-    jb .up
-    cmp al, 'z'
-    ja .up
-    sub al, 0x20
-.up:
-    mov [di], al
-    or al, al
-    jz .end
-    inc si
-    inc di
-    loop .ch
-    mov byte [di], 0
-.end:
+    mov [di], ax                    ; the name, far: compared in place
+    mov [di + 2], dx
     xor ax, ax
 .out:
     pop es
@@ -182,7 +169,7 @@ w16_rkey:
     ret
 
 ; w16_rmatch - does table word AX (an rtTypeID or rnID) match key BX (with
-; string SI)? ZF=1 yes. ES = the table. Keeps all.
+; its string's far pointer at SI)? ZF=1 yes. ES = the table. Keeps all.
 w16_rmatch:
     push ax
     push cx
@@ -200,23 +187,25 @@ w16_rmatch:
     jae .no
     mov cl, [es:di]
     xor ch, ch
+    push ds
+    lds si, [si]                    ; DS:SI = the program's own string
 .c:
     inc di
     jcxz .tail
+    mov al, [si]
+    call w16_rup
+    mov ah, al
     mov al, [es:di]
-    cmp al, 'a'
-    jb .u
-    cmp al, 'z'
-    ja .u
-    sub al, 0x20
-.u:
-    cmp al, [si]
-    jne .out
+    call w16_rup
+    cmp al, ah
+    jne .pop
     inc si
     dec cx
     jmp short .c
 .tail:
     cmp byte [si], 0
+.pop:
+    pop ds
     jmp short .out
 .no:
     or sp, sp                       ; ZF = 0
@@ -227,9 +216,19 @@ w16_rmatch:
     pop ax
     ret
 
+; w16_rup - AL upper-cased, a-z only (the resource compiler's own fold)
+w16_rup:
+    cmp al, 'a'
+    jb .o
+    cmp al, 'z'
+    ja .o
+    sub al, 0x20
+.o:
+    ret
+
 ; -----------------------------------------------------------------------------
-; w16_rfind - [w16_rtk]/[w16_rnk] (keys, w16_rkey's, with the strings in
-; w16_rtypb/w16_rnamb) -> AX = the entry's offset in the table, 0 = none.
+; w16_rfind - [w16_rtk]/[w16_rnk] (keys, w16_rkey's, with the strings' far
+; pointers in w16_rtyp/w16_rnam) -> AX = the entry's offset in the table, 0 = none.
 ; A string type or name the table does not carry is looked up in the
 ; program's RT_NAMETABLE (SPEC.md 124.10): a Windows 3.0 linker gave every
 ; resource a number and wrote the names there, CALC 3.00's "SC" for DIALOG 1
@@ -244,127 +243,31 @@ w16_rfind:
     cmp word [w16_rtk], 0
     jne .ret                        ; both integers: no table to ask
 .tab:
-    call w16_rnametab
+    LCALL w16_rnametab              ; (the library part's: a miss, rarely)
 .ret:
     ret
 
-; w16_rnametab - w16_rfind's miss, by the name table (SPEC.md 124.10): AX =
-; the entry, 0 = none. An entry is its length, its type and id as numbers,
-; then the type's name (empty for a numbered type) and the resource's: CALC
-; 3.00 names a dialog of type 5 "SC", CLOCK 3.00 a resource of type "DATA"
-; "CLOCK" (stored as type F006h), Terminal type "CCTL" its numbers 1000,
-; 1002 and 1003 (F008h, with no name). [w16_rtk]/[w16_rnk] are put back.
-; Keeps the rest.
-w16_rnametab:
-    push bp
+; w16_rin - a resource call (W16B_RES) is about to run: when its first
+; argument is a library's hInstance, the library's resources are made
+; current (w16n_rset); w16_dispatch puts the program's back after. Keeps all.
+w16_rin:
+    push ax
     push bx
-    push cx
-    push dx
     push si
-    push di
     push es
-    mov dx, [w16_rtk]               ; DX = the type asked for, 0 = by name
-    mov bp, [w16_rnk]               ; BP = the name asked for, 0 = by name
-    mov word [w16_rtk], 0x8000 | RT_NAMETABLE
-    mov word [w16_rnk], 0x8001
-    call w16_rscan
-    mov [w16_rtk], dx
-    mov [w16_rnk], bp
-    or ax, ax
-    jz .out
-    call w16_rload                  ; AX = its handle
-    or ax, ax
-    jz .out
-    call w16_gfind                  ; ES = its header
-    jc .none
-    cmp byte [w16_gdisc], 0
-    jne .none
-    mov ax, es
-    inc ax
-    mov es, ax
-    xor di, di
-.ent:
-    cmp di, 0x0F00                  ; a table is a few entries: a walk this
-    ja .none                        ;   long is a damaged one
-    mov cx, [es:di]                 ; the entry's length; 0 ends it
-    cmp cx, 7
-    jb .none
-    lea bx, [di + 6]                ; BX = the type's name
-    or dx, dx
-    jz .bytype
-    mov ax, [es:di + 2]             ; a numbered type: its number, and no name
-    or ah, 0x80
-    cmp ax, dx
-    jne .next
-    cmp byte [es:bx], 0
-    jne .next
-    inc bx
-    jmp short .name
-.bytype:
-    mov si, w16_rtypb
-    call w16_rnmcmp
-    jne .next
-.name:
-    or bp, bp
-    jz .byname
-    cmp byte [es:bx], 0             ; a numbered name: its number, and no name
-    jne .next
-    mov ax, [es:di + 4]
-    or ah, 0x80
-    cmp ax, bp
-    jne .next
-    jmp short .hit
-.byname:
-    mov si, w16_rnamb
-    call w16_rnmcmp
-    jne .next
-.hit:
-    mov ax, [es:di + 2]             ; the type and the number it is filed as
-    or ah, 0x80
-    mov [w16_rtk], ax
-    mov ax, [es:di + 4]
-    or ah, 0x80
-    mov [w16_rnk], ax
-    call w16_rscan
-    mov [w16_rtk], dx
-    mov [w16_rnk], bp
-    jmp short .out
-.next:
-    add di, cx
-    jmp short .ent
-.none:
-    xor ax, ax
+    call w16_args
+    add bx, [w16_nargb]
+    mov ax, [es:bx - 2]
+    call w16_libof                  ; SI -> it, BX = its index
+    jc .out
+    LCALL w16n_rset
 .out:
     pop es
-    pop di
     pop si
-    pop dx
-    pop cx
     pop bx
-    pop bp
-    ret
-
-; w16_rnmcmp - the name at ES:BX against the upper-case one at DS:SI, case
-; blind: ZF=1 the same, BX past its NUL. Keeps all but BX, SI, the flags.
-w16_rnmcmp:
-    push ax
-.c:
-    mov al, [es:bx]
-    cmp al, 'a'
-    jb .u
-    cmp al, 'z'
-    ja .u
-    sub al, 0x20
-.u:
-    cmp al, [si]
-    jne .o
-    inc bx
-    inc si
-    or al, al
-    jnz .c
-.o:
     pop ax
     ret
+
 
 ; w16_rscan - w16_rfind's own table, without the name table
 w16_rscan:
@@ -376,7 +279,7 @@ w16_rscan:
     xor ax, ax
     cmp word [w16_rtlen], 0
     je .out
-    mov es, [w16_rtab]
+    W16SEG es, [w16_rtab]
     mov di, 2
 .type:
     mov ax, di                      ; a type header past the table: none
@@ -391,7 +294,7 @@ w16_rscan:
     add di, 8
     push di
     mov bx, [w16_rtk]
-    mov si, w16_rtypb
+    mov si, w16_rtyp
     call w16_rmatch
     pop di
     jne .skip
@@ -403,7 +306,7 @@ w16_rscan:
     ja .none
     mov ax, [es:di + RN_ID]
     mov bx, [w16_rnk]
-    mov si, w16_rnamb
+    mov si, w16_rnam
     call w16_rmatch
     je .hit
     add di, RN_SIZE
@@ -450,7 +353,7 @@ w16_rload:
     or ax, ax
     jz .out
     mov si, ax
-    mov es, [w16_rtab]
+    W16SEG es, [w16_rtab]
     mov ax, [es:si + RN_HANDLE]
     or ax, ax
     jz .read
@@ -462,14 +365,17 @@ w16_rload:
     call w16_rread                  ; AX = the handle
     or ax, ax
     jz .out
-    mov es, [w16_rtab]
+    W16SEG es, [w16_rtab]
     mov [es:si + RN_HANDLE], ax
     mov word [es:si + RN_USAGE], 1
     push ax                         ; the block knows its entry, for discard
     mov bx, si
     call w16_gfind                  ; (it takes SI)
     mov si, bx
+    push si
+    or si, [w16_rown]               ; (a library's: its record, w16n_rset)
     mov [es:GH_OWNER], si
+    pop si
     or byte [es:GH_FLAGS], GHF_RES
     pop ax
     jmp short .out
@@ -488,7 +394,7 @@ w16_rload:
 w16_rspan:
     push bx
     push es
-    mov es, [w16_rtab]
+    W16SEG es, [w16_rtab]
     mov cl, [es:0]                  ; the alignment shift
     mov ax, [es:si + RN_LEN]
     xor dx, dx
@@ -572,6 +478,13 @@ w16_rread:
     mov [w16_rbackv], bl
     mov dx, [w16_dir]
     mov bl, [w16_vol]
+    mov si, [w16_rfp]               ; a library's own folder (it may be WIN16's
+    or si, si                       ;   system folder, SPEC.md 124.23.1.1)
+    jz .gohere
+    W16SEG es, [si - W16L_FILE + W16L_MREC]
+    mov dx, [es:W16LM_DIR]
+    mov bl, [es:W16LM_VOL]
+.gohere:
     call OSAPI_FILE_GOTO_QM
     jc .fail
     mov bp, [w16_rdat]              ; BP = the paragraph being filled
@@ -586,9 +499,13 @@ w16_rread:
     jae .cx
     mov cx, [w16_rspanb]
 .cx:
-    mov es, bp
+    W16SEG es, bp
     xor bx, bx
+    mov si, [w16_rfp]               ; a library's file (w16n_rset), or
+    or si, si                       ;   the program's
+    jnz .file
     mov si, w16_name
+.file:
     mov ax, [w16_roff]
     mov dx, [w16_roff + 2]
     call OSAPI_FILE_READ_AT         ; DX:AX = the bytes delivered
@@ -618,10 +535,10 @@ w16_rread:
     shr ax, cl
     add ax, [w16_rdat]
     mov cx, [w16_rlen]
-    mov es, [w16_rdat]
+    W16SEG es, [w16_rdat]
     xor di, di
     push ds
-    mov ds, ax
+    W16SEG ds, ax
     cld
     rep movsb
     pop ds
@@ -664,10 +581,10 @@ w16_gcut:
     cmp bx, cx
     jae .out
     mov [es:GH_SIZE], bx
-    mov ax, es
+    W16VOF ax, es
     add ax, bx
     push es
-    mov es, ax
+    W16SEG es, ax
     sub cx, bx
     mov [es:GH_SIZE], cx
     mov byte [es:GH_FLAGS], GHF_USED
@@ -686,7 +603,7 @@ w16_rdiscard:
     push si
     push es
     mov si, ax
-    mov es, [w16_rtab]
+    W16SEG es, [w16_rtab]
     cmp word [es:si + RN_USAGE], 0
     jne .keep
     mov ax, [es:si + RN_HANDLE]
@@ -715,6 +632,10 @@ w16_rentry:
     test byte [es:GH_FLAGS], GHF_RES
     jz .no
     mov si, [es:GH_OWNER]
+    or si, si
+    jns .own
+    LCALL w16n_rown                 ; a library's: its table current
+.own:
     clc
     jmp short .out
 .no:
@@ -735,12 +656,12 @@ w16k_findres:
     push word [es:bx + 2]
     mov ax, [es:bx + 4]
     mov dx, [es:bx + 6]
-    mov di, w16_rnamb
+    mov di, w16_rnam
     call w16_rkey
     mov [w16_rnk], ax
     pop dx
     pop ax
-    mov di, w16_rtypb
+    mov di, w16_rtyp
     call w16_rkey
     mov [w16_rtk], ax
     call w16_rfind
@@ -770,7 +691,7 @@ w16k_freeres:
     mov ax, [es:bx]
     call w16_rentry
     jc .no
-    mov es, [w16_rtab]
+    W16SEG es, [w16_rtab]
     cmp word [es:si + RN_USAGE], 0
     je .z
     dec word [es:si + RN_USAGE]
@@ -792,7 +713,7 @@ w16k_sizeres:
     xor dx, dx
     or si, si
     jz .out
-    mov es, [w16_rtab]
+    W16SEG es, [w16_rtab]
     mov ax, [es:si + RN_LEN]
     mov cl, [es:0]
     xor ch, ch
@@ -831,9 +752,9 @@ w16u_loadstr:
     jz .none
     call w16_gfind
     jc .none
-    mov ax, es
+    W16VOF ax, es
     inc ax
-    mov es, ax                      ; ES:SI = the block's 16 strings
+    W16SEG es, ax                      ; ES:SI = the block's 16 strings
     xor si, si
     mov cx, [w16_rsid]
     and cx, 15
@@ -879,3 +800,136 @@ w16u_loadstr:
     pop di
     pop si
     ret
+
+; --- the library part's: rarely reached (SPEC.md 124.10, 124.23.6) --------
+section .w16dlg
+; w16_rnametab - w16_rfind's miss, by the name table (SPEC.md 124.10): AX =
+; the entry, 0 = none. An entry is its length, its type and id as numbers,
+; then the type's name (empty for a numbered type) and the resource's: CALC
+; 3.00 names a dialog of type 5 "SC", CLOCK 3.00 a resource of type "DATA"
+; "CLOCK" (stored as type F006h), Terminal type "CCTL" its numbers 1000,
+; 1002 and 1003 (F008h, with no name). [w16_rtk]/[w16_rnk] are put back.
+; Keeps the rest.
+w16_rnametab:
+    push bp
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov dx, [w16_rtk]               ; DX = the type asked for, 0 = by name
+    mov bp, [w16_rnk]               ; BP = the name asked for, 0 = by name
+    mov word [w16_rtk], 0x8000 | RT_NAMETABLE
+    mov word [w16_rnk], 0x8001
+    ICALL w16_rscan
+    mov [w16_rtk], dx
+    mov [w16_rnk], bp
+    or ax, ax
+    jz .out
+    ICALL w16_rload                  ; AX = its handle
+    or ax, ax
+    jz .out
+    ICALL w16_gfind                  ; ES = its header
+    jc .none
+    cmp byte [w16_gdisc], 0
+    jne .none
+    W16VOF ax, es
+    inc ax
+    W16SEG es, ax
+    xor di, di
+.ent:
+    cmp di, 0x0F00                  ; a table is a few entries: a walk this
+    ja .none                        ;   long is a damaged one
+    mov cx, [es:di]                 ; the entry's length; 0 ends it
+    cmp cx, 7
+    jb .none
+    lea bx, [di + 6]                ; BX = the type's name
+    or dx, dx
+    jz .bytype
+    mov ax, [es:di + 2]             ; a numbered type: its number, and no name
+    or ah, 0x80
+    cmp ax, dx
+    jne .next
+    cmp byte [es:bx], 0
+    jne .next
+    inc bx
+    jmp short .name
+.bytype:
+    mov si, w16_rtyp
+    call w16_rnmcmp
+    jne .next
+.name:
+    or bp, bp
+    jz .byname
+    cmp byte [es:bx], 0             ; a numbered name: its number, and no name
+    jne .next
+    mov ax, [es:di + 4]
+    or ah, 0x80
+    cmp ax, bp
+    jne .next
+    jmp short .hit
+.byname:
+    mov si, w16_rnam
+    call w16_rnmcmp
+    jne .next
+.hit:
+    mov ax, [es:di + 2]             ; the type and the number it is filed as
+    or ah, 0x80
+    mov [w16_rtk], ax
+    mov ax, [es:di + 4]
+    or ah, 0x80
+    mov [w16_rnk], ax
+    ICALL w16_rscan
+    mov [w16_rtk], dx
+    mov [w16_rnk], bp
+    jmp short .out
+.next:
+    add di, cx
+    jmp short .ent
+.none:
+    xor ax, ax
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop bp
+    ret
+
+; w16_rnmcmp - the name at ES:BX against the program's, its far pointer at
+; DS:SI, case blind: ZF=1 the same, BX past its NUL. Keeps all but BX, SI,
+; the flags.
+w16_rnmcmp:
+    push ax
+    push ds
+    lds si, [si]
+.c:
+    mov al, [si]
+    cmp al, 'a'
+    jb .k
+    cmp al, 'z'
+    ja .k
+    sub al, 0x20
+.k:
+    mov ah, al
+    mov al, [es:bx]
+    cmp al, 'a'
+    jb .u
+    cmp al, 'z'
+    ja .u
+    sub al, 0x20
+.u:
+    cmp al, ah
+    jne .o
+    inc bx
+    inc si
+    or al, al
+    jnz .c
+.o:
+    pop ds
+    pop ax
+    ret
+section .text

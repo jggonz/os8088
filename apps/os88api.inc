@@ -2235,7 +2235,8 @@ OS88_HUGE_INCR      equ 0x1000
                                  ;          Inside a claim or a pool block
                                  ;          only; it moves and goes with it
                                  ; SEG_BWIN DX = a selector of yours based in
-                                 ;          a claim or a pool block -> DX = a
+                                 ;          a claim or a pool block OF YOURS
+                                 ;          (else CF=1, AX=3) -> DX = a
                                  ;          new BOUND WINDOW over that block,
                                  ;          aimed at that base. Yours until
                                  ;          SEG_FREE or your end; it moves
@@ -2263,11 +2264,67 @@ OS88_HUGE_INCR      equ 0x1000
                                  ;          sum DX + AX is the answer there.
                                  ;          For a walk over a PINNED claim
                                  ;          (os88partsbody.inc's op_at)
+                                 ; SEG_WINL DX:AX = a 32-bit LINEAR base,
+                                 ;          CX = bytes (0 = 64KB), SI = a
+                                 ;          window of yours to re-aim or 0
+                                 ;          -> DX = a data selector over it,
+                                 ;          SEG_WIN's in all but the base:
+                                 ;          a window over memory above 1MB
+                                 ;          (SPEC.md 124.31.3). CF=1 on a
+                                 ;          real-mode kernel
+                                 ; SEG_LEND DX = the real paragraph of a
+                                 ;          claim of yours below 1MB
+                                 ;          (SEG_REAL's answer for its
+                                 ;          base), CX = the top of a
+                                 ;          stack in it: a BIOS int 10h-1Fh
+                                 ;          made on a stack that is not the
+                                 ;          kernel's runs on this one
+                                 ;          (SPEC.md 50.6.11, 124.31.2).
+                                 ;          The last lender's is used; DX =
+                                 ;          0 takes yours back, and your end
+                                 ;          does. CF=1 on a real-mode kernel
+                                 ;          or DX no claim's base
+                                 ; SEG_HND  SI = a selector of yours based
+                                 ;          in a claim or pool block, AX =
+                                 ;          a PARAGRAPH offset, CX = bytes
+                                 ;          (0 = 64KB), DX = a handle
+                                 ;          descriptor of yours to re-aim,
+                                 ;          or 0 for a new one -> DX = it,
+                                 ;          based there, reaching CX cut at
+                                 ;          the block's end; SI = 0 frees
+                                 ;          DX. Never shared, so a re-aim
+                                 ;          moves nobody else's; it moves
+                                 ;          and goes with its block (SPEC.md
+                                 ;          50.6.11, 124.31.3). CF=1 on a
+                                 ;          real-mode kernel
+                                 ; SEG_TYPE DX = a WINDOW of yours (SEG_WIN,
+                                 ;          SEG_WINL, SEG_AT) or a HANDLE
+                                 ;          descriptor (SEG_HND) in a block
+                                 ;          of yours, CX = 0 data
+                                 ;          or 1 code or 2 code NOT
+                                 ;          PRESENT -> the descriptor's
+                                 ;          type set in place, base, limit
+                                 ;          and selector kept (SPEC.md
+                                 ;          50.6.11, 124.31.6). A code
+                                 ;          window is never matched as a
+                                 ;          data one. CX = 3: SI = the
+                                 ;          offset and DX the code
+                                 ;          selector of your #NP handler
+                                 ;          (DX = 0 withdraws it): a far
+                                 ;          transfer to a not-present
+                                 ;          handle descriptor of yours
+                                 ;          arrives there with [selector]
+                                 ;          [IP] [CS] [FLAGS] on the
+                                 ;          stack (SPEC.md 50.6.11,
+                                 ;          124.26.12). CF=1, AX = 4 for
+                                 ;          anything else; CF=1 on a
+                                 ;          real-mode kernel
                                  ; out CF=0 and the answer; CF=1 refused (no
                                  ; LDT entry free, or SEG_REAL's none),
                                  ; AX = the reason: 1 no LDT entry or window
                                  ; row, 2 the null selector, 3 in no block,
-                                 ; 4 not a bound window of yours, 5 past the
+                                 ; 4 not a bound window (SEG_HND: not a handle
+                                 ; descriptor) of yours, 5 past the
                                  ; block's end. Every other register kept.
                                  ; UI-task or worker context, and SEG_AIM
                                  ; from a rate hook too; not from an ISR
@@ -2280,6 +2337,11 @@ SEG_SUBC    equ 5
 SEG_BWIN    equ 6
 SEG_AIM     equ 7
 SEG_AT      equ 8
+SEG_TILE    equ 9
+SEG_WINL    equ 10
+SEG_LEND    equ 11
+SEG_HND     equ 12
+SEG_TYPE    equ 13
 
 ; OSAPI_MEM_P - THE CLAIM HEAP IN PARAGRAPHS (SPEC.md 50.2.1, 50.3.7). Every
 ; claim is rounded to the heap's GRANULE - 512 bytes today, and the door says
@@ -3292,10 +3354,10 @@ DQ_A       equ 2                 ; dw: the class's own three words. For
 DQ_B       equ 4                 ; dw: DRVC_SOUND: the DSP base port, then
 DQ_C       equ 6                 ; dw: (IRQ | DMA<<8), then the DSP version -
 DQ_SIZE    equ 8                 ;     which is what a BLASTER= is made of
-DQ_MAXREC  equ 11                ; the most records one call can write, so
+DQ_MAXREC  equ 12                ; the most records one call can write, so
                                  ; a caller can size a buffer without
                                  ; mirroring the kernel's own DRV_MAX -
-                                 ; which is 11, 10, 9 or 4 depending on the
+                                 ; which is 12, 11 or 4 depending on the
                                  ; build and is asserted against this at
                                  ; assembly time (SPEC.md 51.11.2)
 %define OSAPI_DRV_SUSPEND   KERNEL_SEG:0x0419   ; AL = 1 suspend / 0 resume /
@@ -3448,7 +3510,12 @@ PKGV_IDENT   equ 0              ; **VERB 0 OF EVERY PACKAGE DOOR IS IDENTIFY**
 ; the ANSWER here and derives nothing, which is what makes it different from
 ; the per-driver copy 51.12.1 refuses.
 DRVM_CEIL_DISK equ 4           ; DRVC_DISK's ceiling, in KB
-DRVM_CEIL_NET  equ 34          ; ...and DRVC_NET's
+DRVM_CEIL_NET  equ 34          ; ...and DRVC_NET's on kern_small, which has
+                                ; no PCIETHER.DRV row
+DRVM_CEIL_NET_PCI equ 39       ; ...and DRVC_NET's on kern_big, kern_emu and
+                                ; kern_mega, whose PCIETHER.DRV (SPEC.md
+                                ; 125.5) is the class's larger row: DOS.O88
+                                ; quotes this one
 DRVC_SOUND   equ 1
 DRVC_DISK    equ 2              ; block volumes: hard disks (SPEC.md 51.8).
                                 ; Its package door reaches TWO verbs and no

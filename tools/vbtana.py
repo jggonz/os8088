@@ -155,7 +155,7 @@ def screens_npy(proj, sid, full=False):
 
 def screens(proj, sid, progress=_nop, full=False):
     """Source SID's frames, as the decoder will show them - the canvas's
-    rows, or FULL: the whole 200 (a full-screen opening, 125.3)"""
+    rows, or FULL: the whole 200 (a full-screen opening, 126.3)"""
     s = proj.d["sources"][sid]
     if s["kind"] == "scene":
         return [np.asarray(f, np.uint8) for f in _scene(s["name"])]
@@ -537,7 +537,7 @@ def attach(frames, idle, search=10, margin=1.5, slack=0.002, most=4):
 
 def wait_frames(anchors, n):
     """The longest a command waits for an anchor: the largest gap between
-    them around the loop, in frames (125.3)"""
+    them around the loop, in frames (126.3)"""
     if not anchors:
         return None
     a = sorted(anchors)
@@ -611,7 +611,7 @@ def budget(proj, data):
                 memory=mem, music_rate=mrate)
 
 
-# THE ENGINE'S MEMORY (SPEC.md 125.4), carved as vb_load and vb_rclaim carve
+# THE ENGINE'S MEMORY (SPEC.md 126.4), carved as vb_load and vb_rclaim carve
 # it, so that the Build tab's figures are the engine's own arithmetic
 VB_MR, VB_MPIECE, VB_MRES = 32768, 4096, 61440      # the music's ring, or
                                                     # all of a short one;
@@ -634,7 +634,7 @@ def _r4k(n):
 
 
 def memory(data, free_kb=None):
-    """What the engine claims for bundle DATA (125.4), in bytes: the
+    """What the engine claims for bundle DATA (126.4), in bytes: the
     resident claim's parts, the card's ring, and the two clip rings a play
     is given out of FREE_KB (the largest run once it is loaded). "rings" is
     None when they would be under VB_CRMIN: Play says Not enough memory"""
@@ -680,7 +680,7 @@ def ring_of(res, maxrec, free_kb=None):
 
 def cap_hold(ring, income, fps, srate):
     """What a ring of RING bytes holds ahead of a clip's SOUND, for the
-    builder's reader's model (125.4.3, VBATTLE-RAM-PLAN R4): the ring less
+    builder's reader's model (126.4.3, VBATTLE-RAM-PLAN R4): the ring less
     the lead's share - the card's lead (VB_LEAD samples at SRATE) and a
     frame, at the clip's INCOME of bytes a second - and a piece"""
     lead_frames = -(-VB_LEAD * fps // srate) + 1
@@ -851,7 +851,7 @@ def sound_wav(x, rate, path):
 # --- the openings, and where the music comes in (plan 10.3) ----------------------
 
 def openings_sound(proj):
-    """The openings' sound as the engine plays it (125.3): each one's own,
+    """The openings' sound as the engine plays it (126.3): each one's own,
     as long as its frames (cut, or silence after it), the next starting at
     the sample the last ends; then the MUSIC comes in. Floats, and the
     (first sample, clip) of each opening. The music's place is its end"""
@@ -939,7 +939,7 @@ def join_wav(proj, path, join=None, after=4.0, before=4.0):
     """A WAV of the openings' last BEFORE seconds and the music's first
     AFTER seconds from JOIN (the project's own by default), mixed at the
     engine's levels - an opening's sound is OWN (the whole range), the
-    music half of it (125.2) - so the join is heard as it will be"""
+    music half of it (126.2) - so the join is heard as it will be"""
     op, _ = openings_sound(proj)
     reg, j, lp0 = music_region(proj)
     if join is not None:
@@ -982,7 +982,7 @@ def clip_report(proj, cid, progress=_nop):
                     anchors=rec["anchors"], exit=rec["exit"]))
 
 
-# --- LEVELS: every sound as loud as the music (SPEC.md 125.3) --------------------
+# --- LEVELS: every sound as loud as the music (SPEC.md 126.3) --------------------
 #
 # What a sound sounds like depends on HOW it plays: the music is stored at half
 # scale (music_bytes, 64..191) and an effect - a cue, a menu sound - at half

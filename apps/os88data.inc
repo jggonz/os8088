@@ -101,6 +101,7 @@
 ; =============================================================================
 
 od_s_system: db 'SYSTEM', 0
+od_s_syslen equ $ - od_s_system   ; its length, the NUL with it (no bytes)
 od_s_appdat: db 'APPDATA', 0
 od_home:     dw 0               ; where the instance stood before this visit
 od_homedrv:  db 0

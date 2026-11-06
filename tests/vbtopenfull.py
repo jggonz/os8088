@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A FULL-SCREEN opening, then one WITH THE MENU (SPEC.md 125.3): the owner's
+"""A FULL-SCREEN opening, then one WITH THE MENU (SPEC.md 126.3): the owner's
 "Opening0: Fullscreen; Opening1: Menu appears, video is in its upper
 position", on MartyPC's XT with a CGA.
 

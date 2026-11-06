@@ -53,6 +53,38 @@ w16_bmslot:
     stc
     ret
 
+; w16_bmrp - AX = a row, BX = bitmap slot * 2 -> AX = the row's byte offset,
+; DX = the segment (the arm: the virtual paragraph) it lies in, for W16SEG.
+; Keeps all but AX and DX. A bitmap of one segment is a multiply; a TILED one
+; (w16b_mono high byte 2, SPEC.md 124.25.17) is part 9's w16_bmrps, which
+; w16_bmnew fetched to make it, so it is here while the bitmap is.
+w16_bmrp:
+    test byte [w16b_mono + bx + 1], 2
+    jnz .t
+    mul word [w16b_str + bx]
+    mov dx, [w16b_seg + bx]
+    ret
+.t:
+    mov word [w16_sfn], w16_bmrps
+; w16_bmsys - part 3 -> part 9 for a tiled bitmap's work (SPEC.md 124.25.17):
+; the image's SCALL half, through ICALL, [w16_sfn] the routine. Every
+; register and the flags pass both ways
+w16_bmsys:
+    ICALL w16_scall
+    ret
+
+; w16_bmcap - BX = bitmap slot * 2 -> AX = the rows a call limited to one 64KB
+; segment (Get/SetBitmapBits, CreateBitmap's bits) may reach: the bitmap's, or
+; a tiled one's first tile's (part 9's w16_bmcaps). Keeps all but AX.
+w16_bmcap:
+    mov ax, [w16b_h + bx]
+    test byte [w16b_mono + bx + 1], 2
+    jz .out
+    mov word [w16_sfn], w16_bmcaps
+    jmp short w16_bmsys
+.out:
+    ret
+
 ; w16_mdcslot - AX = a DC handle -> BX = its memory DC's slot. CF=1 not one.
 ; Keeps the rest.
 w16_mdcslot:
@@ -94,9 +126,9 @@ w16_bmnew:
     add bx, 2
     cmp bx, 2 * W16_NBMP
     jb .find
-    jmp short .no
+    jmp .no
 .take:
-    mov byte [w16b_mono + bx], 0
+    mov word [w16b_mono + bx], 0    ; (its high byte: 1 = a claim of its own)
     mov [w16b_w + bx], ax
     mov [w16b_h + bx], dx
     inc ax
@@ -104,9 +136,9 @@ w16_bmnew:
     mov [w16b_str + bx], ax         ; 4bpp bytes a row
     mul dx                          ; DX:AX = its bytes
     or dx, dx
-    jnz .no
+    jnz .huge
     cmp ax, W16_BMMAX
-    ja .no
+    ja .huge
     mov cx, ax
     push cx                         ; a FIXED block of the global heap, not a
     xor dx, dx                      ;   claim of its own: an owner's claims
@@ -115,13 +147,32 @@ w16_bmnew:
     pop cx                          ;   The handle IS the segment
     or ax, ax
     jnz .got
+    mov ax, cx                      ; the heap is short: the bits get a claim
+    add ax, 15                      ;   of their own (SPEC.md 124.15.2), one
+    rcr ax, 1                       ;   map row on the arm and a plain heap
+    shr ax, 1                       ;   claim in real mode. A large DIB needs
+    shr ax, 1                       ;   its resource and its bits at once,
+    shr ax, 1                       ;   two blocks the arenas' runs cannot
+    W16VCLAIM                       ;   always hold
+    jc .ask
+    mov byte [w16b_mono + bx + 1], 1
+    jmp short .got
+.ask:
     push si                         ; the heap is short: a GlobalNotify
     call w16k_gnask                 ;   procedure is asked to give a block
     pop si                          ;   up, and the call runs again after
     jmp short .no                   ;   (SPEC.md 124.9.1)
+.huge:                              ; past W16_BMMAX: a TILED bitmap, part 9's
+    xor ax, ax                      ;   (SPEC.md 124.25.17; AX = 0 stays if
+    mov word [w16_sfn], w16_bmhuge  ;   the part cannot be fetched)
+    call w16_bmsys                  ; CF=0 AX = the handle; CF=1 AX = 1 the
+    jnc .out                        ;   heap is short, 0 too large
+    dec ax
+    jz .ask
+    jmp short .no
 .got:
     mov [w16b_seg + bx], dx
-    mov es, dx                      ; black: CBLACK in both halves
+    W16SEG es, dx                      ; black: CBLACK in both halves
     xor di, di
     xor al, al
     cld
@@ -185,12 +236,12 @@ w16_bmfills:
     ICALL w16_dibrow                 ; CF=1: the DIB has not that row
     mov bx, [w16b_bm]               ; (it keeps neither AX nor BX)
     jc .next
-    mov ax, [w16b_str + bx]
     push dx
-    mul dx
-    pop dx
+    mov ax, dx
+    call w16_bmrp                   ; AX = the row's offset, DX its segment
     mov di, ax
-    mov es, [w16b_seg + bx]
+    W16SEG es, dx
+    pop dx
     mov si, w16_gbuf
     mov cx, [w16b_n]
     cld
@@ -292,7 +343,10 @@ w16_bmdelete:
     cmp byte [w16b_sel + bx], 0
     jne .done
     mov ax, [w16b_seg + bx]         ; the block's handle is its segment
+    call w16_bmown                  ; (or a claim of its own: given back)
+    jnc .freed
     ICALL w16_gfreeh
+.freed:
     mov word [w16b_seg + bx], 0
     mov ax, 1
 .done:
@@ -300,6 +354,22 @@ w16_bmdelete:
 .out:
     pop dx
     pop bx
+    ret
+
+; w16_bmown - AX = bitmap slot BX's bits: CF=0 they were a claim of their own
+; (w16_bmnew's fallback, the slot's w16b_mono high byte), given back; CF=1 a
+; block of the global heap. Keeps every register.
+w16_bmown:
+    test byte [w16b_mono + bx + 1], 1
+    stc
+    jz .out                         ; (2: a tiled bitmap, a heap block too)
+    mov byte [w16b_mono + bx + 1], 0
+    push dx
+    mov dx, ax
+    W16VFREE
+    pop dx
+    clc
+.out:
     ret
 
 ; w16_bmend - the program has ended: its bitmaps freed, its memory DCs gone
@@ -311,6 +381,9 @@ w16_bmend:
     mov dx, [w16b_seg + bx]         ; the global heap's arenas go with the
     or dx, dx                       ;   program, and the bitmaps in them
     jz .n
+    xchg ax, dx                     ; ...but a claim of its own does not
+    call w16_bmown
+    xchg ax, dx
     mov word [w16b_seg + bx], 0
     mov byte [w16b_sel + bx], 0
 .n:
@@ -397,7 +470,7 @@ W16LIB w16u_loadbmp
     pop si
     ret
 .prog:
-    mov di, w16_rnamb
+    mov di, w16_rnam
     ICALL w16_rkey
     mov [w16_rnk], ax
     mov word [w16_rtk], 0x8000 | RT_BITMAP
@@ -412,9 +485,9 @@ W16LIB w16u_loadbmp
     jc .rel
     cmp byte [w16_gdisc], 0
     jne .rel
-    mov ax, es
+    W16VOF ax, es
     inc ax
-    mov es, ax                      ; ES:0 = the BITMAPINFO
+    W16SEG es, ax                      ; ES:0 = the BITMAPINFO
     xor si, si
     call w16_dibmake
     jmp short .relx
@@ -422,7 +495,7 @@ W16LIB w16u_loadbmp
     xor ax, ax
 .relx:
     push es                         ; LoadBitmap frees the resource
-    mov es, [w16_rtab]
+    W16SEG es, [w16_rtab]
     cmp word [es:di + RN_USAGE], 0
     je .r0
     dec word [es:di + RN_USAGE]
@@ -837,12 +910,14 @@ w16_bmcopy:
     jnz .odd
     mov ax, [w16b_str + bx]         ; on a byte: straight from the claim
     mov bp, ax
+    push es
+    test byte [w16b_mono + bx + 1], 2
+    jnz .tiles
     mul word [w16b_sy]
     mov si, [w16b_sx]
     shr si, 1
     add si, ax
-    push es
-    mov es, [w16b_seg + bx]
+    W16SEG es, [w16b_seg + bx]
     mov ax, [w16_rl]
     mov bx, [w16_rt]
     mov cx, [w16_rr]
@@ -854,6 +929,11 @@ w16_bmcopy:
     call OSAPI_GFX_BLIT4
     pop es
 .none:
+    ret
+.tiles:                             ; a tiled source: one BLIT4 a tile, in
+    mov word [w16_sfn], w16_bmtiles ;   part 9 (SPEC.md 124.25.17)
+    call w16_bmsys
+    pop es
     ret
 .odd:                               ; through the band: w16_bmscale's frame,
     mov ax, [w16b_sx]               ;   a scale of one, from the cut corner
@@ -952,9 +1032,9 @@ w16_bmrow:
     add ax, [w16b_ys]
     mov bx, [w16b_bm]
     call w16_bmclamp_h
-    mul word [w16b_str + bx]
+    call w16_bmrp
     mov si, ax                      ; SI = the source row's first byte
-    mov es, [w16b_seg + bx]
+    W16SEG es, dx
     mov ax, [w16b_sx0]
     mov [w16b_sx], ax
     mov ax, [w16b_err0]
@@ -1068,6 +1148,10 @@ w16_bltm:
     ICALL w16_mdrec
     mov ax, [bx + W16DC_BRUSH]      ; its own brush, for the pattern ROPs
     mov [w16b_mbr], ax
+    mov al, [bx + W16DC_TCOL]       ; its text and background colours, for
+    mov [w16b_ropb], al             ;   a monochrome source (w16_bmink;
+    mov al, [bx + W16DC_TPAP]       ;   .srcrop sets its own)
+    mov [w16b_ropp], al
     mov ax, [bx + W16DC_OX]         ; its origin moves the destination, and
     add [w16b_x], ax                ;   its clip cuts it (SPEC.md 124.25.6)
     mov ax, [bx + W16DC_OY]
@@ -1165,15 +1249,11 @@ w16_bltm:
     call w16_bmfillr
     jmp short .yes
 .copy:
-    mov ax, [w16b_cx]               ; the same size, or nothing (a stretch
-    cmp ax, [w16b_cxs]              ;   into a bitmap is not provided)
-    jne .no
-    mov ax, [w16b_cy]
-    cmp ax, [w16b_cys]
-    jne .no
     mov ax, [w16b_src]
     cmp ax, W16_HDC
     jne .frommem
+    call w16_bltsz                  ; the screen: the same size, or nothing
+    jc .no
     call w16_scr2bm
     jmp short .yes
 .frommem:
@@ -1187,18 +1267,32 @@ w16_bltm:
     call w16_bmslot
     jc .no
     mov [w16b_bm], bx
+    call w16_bltsz
+    jnc .same
+    cmp word [w16b_cxs], 0          ; a stretch (SPEC.md 124.33.1): a
+    jle .no                         ;   pixel from the one it falls on, as
+    cmp word [w16b_cys], 0          ;   onto the screen - but not colour
+    jle .no                         ;   into monochrome, whose mask is
+    call w16_bminkq                 ;   built for a copy
+    jc .no
+    call w16_bm2bms
+    jmp short .done
+.same:
     cmp byte [w16b_mono + bx], 0    ; colour into monochrome: by the
-    jne .plain                      ;   source's background colour
+    jne .mono                       ;   source's background colour
     mov bx, [w16b_dbm]
     cmp byte [w16b_mono + bx], 0
     je .plain
     call w16_bmmask
     mov byte [w16b_brop], 1
     call w16_bm2bm
-    mov byte [w16b_brop], 0
-    jmp short .yes
-.plain:
+    jmp short .done
+.mono:
+    call w16_bminkq                 ; monochrome into colour: by the DC's
+.plain:                             ;   text and background colours
     call w16_bm2bm
+.done:
+    mov byte [w16b_brop], 0
 .yes:
     mov ax, 1
     ret
@@ -1216,8 +1310,8 @@ w16_bltm:
     je .srok
     mov ax, [w16b_mbr]
     ICALL w16_brcol
-    cmp al, W16_GRAY
-    jae .no
+    cmp al, W16_GRAY                ; a checker is drawn pixel by pixel, its
+    ja .no                          ;   black and white alternating (w16_ckrop)
     mov [w16b_ropp], al
 .srok:
     mov ax, [w16b_cx]
@@ -1243,6 +1337,63 @@ w16_bltm:
     call w16_bm2bm
     mov byte [w16b_brop], 0
     jmp short .yes
+
+; w16_bminkq - [w16b_bm] into [w16b_dbm]: CF=1 colour into monochrome, which
+; w16_bmmask's copy answers and a stretch does not. A monochrome source into
+; colour is INKED, as Windows draws one: its black in the destination DC's
+; text colour, its white in its background colour ([w16b_ropb], [w16b_ropp],
+; w16_bltm's), through w16_ropt and [w16b_brop] = 1 (SPEC.md 124.33.1). Black
+; on white is a plain copy. Keeps BX
+w16_bminkq:
+    push bx
+    mov bx, [w16b_bm]
+    cmp byte [w16b_mono + bx], 0
+    jne .mono
+    mov bx, [w16b_dbm]
+    cmp byte [w16b_mono + bx], 0
+    pop bx
+    je .ok
+    stc
+    ret
+.mono:
+    pop bx
+    cmp byte [w16b_ropb], CBLACK
+    jne .ink
+    cmp byte [w16b_ropp], CWHITE
+    je .ok
+.ink:
+    push ax
+    push cx
+    push di
+    push es
+    push ds
+    pop es
+    mov di, w16_ropt
+    xor ah, ah                      ; AH = the source colour
+    cld
+.s:
+    mov al, ah
+    cmp ah, CBLACK
+    jne .w
+    mov al, [w16b_ropb]
+.w:
+    cmp ah, CWHITE
+    jne .f
+    mov al, [w16b_ropp]
+.f:
+    mov cx, 16                      ; whatever is under it
+    rep stosb
+    inc ah
+    cmp ah, 16
+    jb .s
+    mov byte [w16b_brop], 1
+    pop es
+    pop di
+    pop cx
+    pop ax
+.ok:
+    clc
+    ret
 
 ;w16_bmmask - CX = a colour source DC's slot: w16_ropt makes a SRCCOPY into
 ; a monochrome bitmap, as Windows makes it - white where the source is its DC's
@@ -1336,14 +1487,14 @@ w16_bmcut:
 ; byte, CF = 1 when the pixel is the byte's low nibble. Keeps BX, CX, SI.
 w16_bmaddr:
     push ax
-    mov ax, [w16b_str + bx]
-    mul dx
+    mov ax, dx
+    call w16_bmrp                   ; AX = the row's offset, DX its segment
     mov di, ax
-    pop ax
-    mov dx, ax
+    W16SEG es, dx
+    pop dx
+    mov ax, dx
     shr ax, 1
     add di, ax
-    mov es, [w16b_seg + bx]
     shr dl, 1                       ; CF = the column's low bit
     ret
 
@@ -1661,6 +1812,93 @@ w16_mblit4:
     pop ax
     ret
 
+; w16_bltsz - CF=1: the destination's [w16b_cx] x [w16b_cy] is not the
+; source's [w16b_cxs] x [w16b_cys] - a stretch. Takes AX
+w16_bltsz:
+    mov ax, [w16b_cx]
+    cmp ax, [w16b_cxs]
+    jne .st
+    mov ax, [w16b_cy]
+    cmp ax, [w16b_cys]
+    je .out                         ; (CF = 0: equal)
+.st:
+    stc
+.out:
+    ret
+
+; w16_bm2bms - w16_bm2bm's stretch: [w16_rl]..[w16_rb] (cut) of bitmap
+; [w16b_dbm] as the [w16b_cx] x [w16b_cy] block at [w16b_dx0], [w16b_dy0],
+; each pixel the source pixel it falls on in the [w16b_cxs] x [w16b_cys]
+; block at [w16b_xs], [w16b_ys] of bitmap [w16b_bm] - w16_bmscale's rule and
+; its row (w16_bmrow), a row at a time through w16_gbuf. A row wider than
+; the buffer is not drawn
+w16_bm2bms:
+    mov ax, [w16_rr]
+    sub ax, [w16_rl]
+    inc ax
+    mov [w16b_n], ax                ; pixels a row
+    cmp ax, 2 * W16_GBUF
+    ja .out
+    mov ax, [w16_rl]                ; the first column's source, and the
+    sub ax, [w16b_dx0]              ;   error the DDA carries from it
+    mul word [w16b_cxs]
+    div word [w16b_cx]
+    add ax, [w16b_xs]
+    mov [w16b_sx0], ax
+    mov [w16b_err0], dx
+    mov dx, [w16_rt]                ; DX = the destination's row
+.row:
+    cmp dx, [w16_rb]
+    jg .out
+    mov di, w16_gbuf
+    call w16_bmrow
+    cmp byte [w16b_brop], 0
+    je .put
+    call w16_inkrow                 ; inked (w16_bminkq)
+.put:
+    push dx
+    mov bx, [w16b_dbm]
+    mov ax, [w16_rl]
+    call w16_bmaddr                 ; ES:DI, CF = the destination starts low
+    sbb bl, bl
+    and bl, 1
+    xor bh, bh                      ; the row's first is a high nibble
+    mov si, w16_gbuf
+    mov cx, [w16b_n]
+    call w16_nibrow
+    pop dx
+    inc dx
+    jmp short .row
+.out:
+    ret
+
+; w16_inkrow - w16_gbuf's [w16b_n] pixels each through w16_ropt (its source
+; colour's row: what is under it plays no part). Takes AX, BX, CL, SI
+w16_inkrow:
+    push dx
+    mov si, w16_gbuf
+    mov dx, [w16b_n]
+    inc dx
+    shr dx, 1                       ; DX = the row's bytes
+    mov cl, 4
+.b:
+    mov al, [si]
+    mov bl, al
+    and bx, 0x00F0                  ; the high pixel's row: its colour * 16
+    mov ah, [w16_ropt + bx]
+    mov bl, al
+    and bl, 0x0F
+    shl bl, cl                      ; ...and the low pixel's
+    mov al, [w16_ropt + bx]
+    shl ah, cl
+    or al, ah
+    mov [si], al
+    inc si
+    dec dx
+    jnz .b
+    pop dx
+    ret
+
 ; w16_bm2bm - a same-size SRCCOPY from bitmap [w16b_bm] into [w16b_dbm], the
 ; destination cut already and the source cut here. Rows top first, so a
 ; bitmap copied onto itself overlapping downward is not provided.
@@ -1687,12 +1925,12 @@ w16_bm2bm:
     add ax, [w16b_sy]
     push bx
     mov bx, [w16b_bm]
-    mul word [w16b_str + bx]
+    call w16_bmrp
     mov cx, [w16b_sx]
     mov si, cx
     shr si, 1
     add si, ax
-    mov ax, [w16b_seg + bx]
+    mov ax, dx
     pop bx
     mov bh, cl
     and bh, 1                       ; BH = 1: the source starts low
@@ -1702,7 +1940,7 @@ w16_bm2bm:
     cmp byte [w16b_brop], 0
     jne .rop
     push ds
-    mov ds, ax                      ; DS:SI = the source, ES:DI the destination
+    W16SEG ds, ax                      ; DS:SI = the source, ES:DI the destination
     call w16_nibrow
     pop ds
 .next:
@@ -1710,6 +1948,9 @@ w16_bm2bm:
     inc dx
     jmp short .row
 .rop:
+    pop dx                          ; DL's bit 0: the checker's phase at the
+    push dx                         ;   row's first pixel (w16_ckrop)
+    add dx, [w16_rl]
     call w16_nibrop
     jmp short .next
 .out:
@@ -1717,7 +1958,9 @@ w16_bm2bm:
 
 ; w16_nibrop - w16_nibrow's row, AX the source's segment, through w16_ropt:
 ; the source into w16_gbuf first, then each pixel there and the one under it
-; combined (SPEC.md 124.25.7). Takes AX, CX, SI, DI, BX.
+; combined (SPEC.md 124.25.7) - or, under a checkered brush ([w16b_ropp] =
+; W16_GRAY), through w16_ckrop, DL's bit 0 the first pixel's phase. Takes
+; AX, CX, SI, DI, BX, DX.
 w16_nibrop:
     push di
     push es
@@ -1728,7 +1971,7 @@ w16_nibrop:
     mov di, w16_gbuf
     xor bl, bl
     push ds
-    mov ds, ax
+    W16SEG ds, ax                   ; (a virtual paragraph on kern_mega)
     call w16_nibrow
     pop ds
     pop cx
@@ -1760,6 +2003,8 @@ w16_nibrop:
     shr ah, 1
 .dlo:
     and ah, 0x0F
+    cmp byte [w16b_ropp], W16_GRAY
+    je .ck
     push bx
     shl al, 1
     shl al, 1
@@ -1770,8 +2015,54 @@ w16_nibrop:
     xor bh, bh
     mov al, [w16_ropt + bx]
     pop bx
+.st:
     call w16_nibst
     loop .p
+    ret
+.ck:
+    call w16_ckrop
+    xor dl, 1
+    jmp short .st
+
+; w16_ckrop - AL = a source pixel, AH = the one under it, DL's bit 0 = the
+; checker's there (1 white, 0 black): AL = ROP [w16b_ropb] of the three, plane
+; by plane, as w16_roptab's table would have it for a solid brush of that
+; colour (SPEC.md 124.25.7). Keeps the rest
+w16_ckrop:
+    push bx
+    push cx
+    push dx
+    mov dh, [w16b_ropb]
+    test dl, 1
+    jz .p0
+    mov cl, 4                       ; the half where the pattern is 1
+    shr dh, cl
+.p0:
+    xor bl, bl                      ; BL = the answer, BH = the plane's bit
+    mov bh, 1
+.b:
+    xor cl, cl                      ; the index: S * 2 + D
+    test al, bh
+    jz .s0
+    mov cl, 2
+.s0:
+    test ah, bh
+    jz .d0
+    inc cl
+.d0:
+    mov ch, dh
+    shr ch, cl
+    test ch, 1
+    jz .z
+    or bl, bh
+.z:
+    shl bh, 1
+    cmp bh, 16
+    jb .b
+    mov al, bl
+    pop dx
+    pop cx
+    pop bx
     ret
 
 ; w16_nibrow - CX pixels (1 or more) from DS:SI to ES:DI, BH = 1 when the
@@ -2233,12 +2524,12 @@ w16_roprow:
     sub ax, [w16b_dy0]
     add ax, [w16_rt]
     mov bx, [w16b_bm]
-    mul word [w16b_str + bx]
+    call w16_bmrp
     mov cx, [w16b_sx]
     mov si, cx
     shr si, 1
     add si, ax
-    mov es, [w16b_seg + bx]
+    W16SEG es, dx
     mov dh, cl
     and dh, 1                       ; DH = 1: the source starts low
     xor dl, dl                      ; DL = 1: the row buffer's low half

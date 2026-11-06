@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""THE CARD'S STREAM ENDED UNDER THE BATTLE (SPEC.md 125.3): the owner's
+"""THE CARD'S STREAM ENDED UNDER THE BATTLE (SPEC.md 126.3): the owner's
 "no sound causes a permanent freeze", on MartyPC's XT with a CGA and an SB.
 
     make vbattle && python3 tests/vbtsndend.py

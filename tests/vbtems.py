@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The Video Battle's bundle HELD IN EXPANDED MEMORY on an 8088
-(VBATTLE-MEMORY-PLAN 7, SPEC.md 125.4.1): MartyPC's 5150 with a Hercules,
+(VBATTLE-MEMORY-PLAN 7, SPEC.md 126.4.1): MartyPC's 5150 with a Hercules,
 a Sound Blaster, an XT-IDE and the Lo-tech 2 MB EMS board
 (os8088_5150_herc_hdd_sb_ems_gla) - the machine class the owner plays on.
 
@@ -13,7 +13,7 @@ the hard disk and EMS.DRV; C: holds VBATTLE.O88 and the Hercules demo
   - the hold is EMS (`[vb_htype]` 2), one range, the whole bundle;
   - it fills while the title goes round, the disk reading straight INTO
     the frame's window;
-  - and from then on IN PLACE (SPEC.md 125.4.2): every ring given a clip
+  - and from then on IN PLACE (SPEC.md 126.4.2): every ring given a clip
     is read where the board has it, the hook mapping the pages itself;
   - from then on the engine reads THE DISK NOT ONCE (`[vb_rcalls]`, which
     only the disk path counts) through the fade, the openings, the menu,

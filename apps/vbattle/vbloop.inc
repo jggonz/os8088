@@ -1,6 +1,6 @@
 ; =============================================================================
 ; os8088 - apps/vbattle/vbloop.inc - THE TITLE LOOP, THE FADE AND THE ENDINGS
-; (SPEC.md 125.3.1). A loop is a clip played out of one ring, read whole,
+; (SPEC.md 126.3.1). A loop is a clip played out of one ring, read whole,
 ; whose lap goes round in it (vb_lrewind, vb_lcur, in vbattle.asm). The
 ; title is left on Enter or Space by a FADE (the UI task's, vb_fadetick) or
 ; by opening 0 ENTERED at one of the title's frames (the hook's, vb_lanchor
@@ -105,7 +105,7 @@ vb_leave_go:
     call vb_onextset                ; (opening 0 plays: the next is 1)
     test word [vb_cflags], CF_FULL  ; an opening with the menu: the band
     jnz .x                          ; may come (a full-screen one: once it
-    mov byte [vb_bandok], 1         ; is over, 125.3)
+    mov byte [vb_bandok], 1         ; is over, 126.3)
 .x:
     clc
     ret
@@ -127,14 +127,14 @@ vb_eloop_go:
     mov al, [vb_eloop]
     call vb_start_clip              ; (RG_PLAY, the lap's bookkeeping)
     mov byte [vb_eplay], 1
-    test word [vb_cflags], CF_LOOP  ; ONE THAT PLAYS ONCE (125.3.1): its end
+    test word [vb_cflags], CF_LOOP  ; ONE THAT PLAYS ONCE (126.3.1): its end
     jnz .lp                         ; goes on as its "then" says
     push ax
     mov al, [vb_ethen]
     mov [vb_ehow], al
     pop ax
     test word [vb_cflags], CF_NOMUS ; (no music after its own sound: its
-    jz .lp                          ; fade is silent - the owner's, 125.3.1)
+    jz .lp                          ; fade is silent - the owner's, 126.3.1)
     mov byte [vb_mon], 0
 .lp:
     test word [vb_cflags], CF_FULL  ; FULL SCREEN: the band down, and not

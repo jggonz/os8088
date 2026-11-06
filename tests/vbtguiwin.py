@@ -137,7 +137,7 @@ def inner(tmp):
        == ["clip0", "clip1"] and "clip2" in app.proj.d["clips"],
        "A. ...a second dropped there is opening 2, a third added is a clip "
        "(openings %s)" % [o["clip"] for o in app.proj.d.get("openings", [])])
-    # FULL SCREEN, or with the menu (125.3): opening 1 set full through its
+    # FULL SCREEN, or with the menu (126.3): opening 1 set full through its
     # radio button; the last's "Full screen" greyed (it joins the idle loop)
     ot = app.openings_tab
     app.nb.select(ot.f)
@@ -176,7 +176,7 @@ def inner(tmp):
     ot._set_full()
     pump(app, lambda: ot.frames is not None and not app.job, 60)
 
-    # THE PICTURE'S SIZE (125.3.2): Hercules set down to half on the
+    # THE PICTURE'S SIZE (126.3.2): Hercules set down to half on the
     # Battle tab, then back
     bt = app.battle_tab
     bt.scv["herc"].set("50%")
@@ -297,13 +297,13 @@ def inner(tmp):
        "C. the Sounds tab: %d sounds measured, the tick +3 dB, the "
        "suggestions applied (the opening's riser %.2f -> %.2f)"
        % (len(rows), riser0, riser1))
-    # THE BAND'S LAYOUT (125.5.1): MP hidden, the message moved, an item
+    # THE BAND'S LAYOUT (126.5.1): MP hidden, the message moved, an item
     # placed - on the Characters & menus tab, its preview following
     pt = app.party_tab
     app.nb.select(pt.f)
     b0 = np.array(app.band_rgb())
     pt._lay("mp_show", 0)
-    pt._lay("msg_row", "51")            # (clear of the menu: 125.5)
+    pt._lay("msg_row", "51")            # (clear of the menu: 126.5)
     pt.mrow = 1
     pt._place(app.proj.d["characters"][0]["name"] + ":top", 1, 0, "1")
     b1 = np.array(app.band_rgb())
@@ -360,7 +360,7 @@ def inner(tmp):
        "menu sound that used it" % (said, re_ok))
     st.uiv["take"].set("(none)")
 
-    # THE END CLIP (125.3.1): full screen, played once, then the title
+    # THE END CLIP (126.3.1): full screen, played once, then the title
     lt = app.loops_tab
     app.nb.select(lt.f)
     vp = [x for x in lt.panels if x.kind == "victory"][0]
@@ -387,7 +387,7 @@ def inner(tmp):
        "C. ...and the battle music after its own sound: off unless asked "
        "(%s), on (%s), off again" % (off, on))
 
-    # FOLLOW-UPS (125.6.7): the Enemy tab's box, one added and set
+    # FOLLOW-UPS (126.6.7): the Enemy tab's box, one added and set
     et = app.enemy_tab
     app.nb.select(et.f)
     acts = list(app.proj.d["actions"])

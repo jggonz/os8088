@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""THE TITLE PICTURE in the battle's window (SPEC.md 125.2), on MartyPC.
+"""THE TITLE PICTURE in the battle's window (SPEC.md 126.2), on MartyPC.
 
     make vbattle && python3 tests/vbtcover.py
 

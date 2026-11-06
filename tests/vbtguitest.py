@@ -348,7 +348,7 @@ with tempfile.TemporaryDirectory() as tdir:
        sorted(os.path.basename(f) for f in ls) == ["BATTLE.VBT", "VBATTLE.O88"],
        "a 1.44 MB floppy of it: VBATTLE.O88 and BATTLE.VBT, verified (%s)" % ls)
 
-    # 8: the title loop, the fade and the endings (SPEC.md 125.3.1)
+    # 8: the title loop, the fade and the endings (SPEC.md 126.3.1)
     import re
     src = open(os.path.join(ROOT, "apps/vbattle/vbloop.inc")).read()
     tab = src[src.index("vb_fmasks:"):]

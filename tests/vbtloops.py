@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The Video Battle's TITLE loop, its FADE and its ENDINGS on MartyPC's XT
-(SPEC.md 125.3.1): os8088_xt_hdd_sb, the bundle on its XT-IDE C:.
+(SPEC.md 126.3.1): os8088_xt_hdd_sb, the bundle on its XT-IDE C:.
 
     make vbattle && python3 tests/vbtloops.py
 

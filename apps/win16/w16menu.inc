@@ -134,6 +134,7 @@ w16_mheap:
     or ax, ax
     jz .fail
     mov [w16_mhh], ax
+    W16TOSEL dx                     ; (the arm: a selector, 124.31.3)
     mov [w16_mseg], dx
     mov ax, dx
     mov bx, 16
@@ -668,7 +669,7 @@ w16_mparse:
     push es
     mov cx, ax
 .item:
-    mov es, [w16_mtps]
+    W16SEG es, [w16_mtps]
     mov si, [w16_mtp]
     mov dx, [es:si]
     add si, 2
@@ -743,7 +744,7 @@ w16_mparse:
 w16_mtpl:
     push si
     push es
-    mov es, [w16_mtps]
+    W16SEG es, [w16_mtps]
     mov si, [w16_mtp]
     mov ax, [es:si + 2]             ; MENUITEMTEMPLATEHEADER's offset
     add ax, 4
@@ -768,7 +769,7 @@ w16_mload:
     push si
     push di
     push es
-    mov di, w16_rnamb
+    mov di, w16_rnam
     ICALL w16_rkey
     mov [w16_rnk], ax
     mov word [w16_rtk], 0x8000 | RT_MENU
@@ -783,12 +784,12 @@ w16_mload:
     jc .no
     cmp byte [w16_gdisc], 0
     jne .no
-    mov ax, es
+    W16VOF ax, es
     inc ax
     mov [w16_mtps], ax
     mov word [w16_mtp], 0
     call w16_mtpl
-    mov es, [w16_rtab]              ; LoadMenu frees the resource
+    W16SEG es, [w16_rtab]              ; LoadMenu frees the resource
     cmp word [es:bx + RN_USAGE], 0
     je .out
     dec word [es:bx + RN_USAGE]
@@ -1328,7 +1329,7 @@ w16_s_sysswitch: db 'S&witch To...', 9, 'Ctrl+Esc', 0
 section .w16dlg
 w16_frows:
     push es
-    mov es, [w16_face]
+    W16SEG es, [w16_face]
     mov al, [es:W16F_ROWS]
     xor ah, ah
     pop es
@@ -1637,7 +1638,7 @@ w16_mbstr:
     push dx
     push si
     push es
-    mov es, [w16_face]
+    W16SEG es, [w16_face]
     mov word [w16_r0], 0
     mov al, [es:W16F_ROWS]
     xor ah, ah
@@ -1938,7 +1939,7 @@ w16_munder:
     mov bl, [w16_mmn]
     xor bh, bh
     mov al, [w16_mlab + bx]
-    mov es, [w16_face]
+    W16SEG es, [w16_face]
     ICALL w16_glyph
     mov al, [es:W16F_ADV + bx]
     xor ah, ah
@@ -2340,7 +2341,7 @@ w16_mpsave:
     mov bx, [w16_mrec]
     mov [bx + MP_SH], ax
     mov [bx + MP_SS], dx
-    mov es, dx
+    W16SEG es, dx
     xor di, di
     mov ax, [w16_mx0]
     mov bx, [w16_my0]
@@ -2384,7 +2385,7 @@ w16_mpclose:
     call w16_mgon
     jc .free
     call w16_mprect
-    mov es, [bx + MP_SS]
+    W16SEG es, [bx + MP_SS]
     xor si, si
     mov ax, [w16_mx0]
     mov bx, [w16_my0]
@@ -2491,6 +2492,11 @@ w16_mcloseto:
     call w16_mplev
     call w16_mpclose
     pop ax
+    cmp byte [w16_mlev], 0          ; TrackPopupMenu's loop has no bar: its
+    jne .l                          ;   last popup down ends it (124.25.16)
+    cmp byte [w16_mkbd], 2
+    jne .l
+    mov byte [w16_mtrk], 0
     jmp short .l
 .out:
     pop bx
@@ -2732,8 +2738,17 @@ w16_mt_tail:
 .ret:
     ret
 .done:
-    xor ax, ax
+    jmp short w16_mans
+
+; w16_mans - AX:DX = what the loop's import answers once it has ended: 0 for
+; DefWindowProc, TRUE for TrackPopupMenu (w16_mkbd 2, 124.25.16)
+w16_mans:
     xor dx, dx
+    xor ax, ax
+    cmp byte [w16_mkbd], 2
+    jne .r
+    inc ax
+.r:
     ret
 
 ; w16_mtbegin - DefWindowProc enters the loop: BX = the window, AX = its
@@ -2830,7 +2845,10 @@ w16_mstop:
     call w16_mcloseto
     mov byte [w16_mbsel], 0xFF
     mov byte [w16_mtrk], 0
+    cmp byte [w16_mkbd], 2          ; TrackPopupMenu's loop never touched
+    je .nobar                       ;   the bar: nothing to draw (124.25.16)
     call w16_mbardraw
+.nobar:
     pop ax
     ret
 
@@ -3217,8 +3235,7 @@ w16_mhpost:
 .nosend:
     cmp byte [w16_mtrk], 0
     jne .still
-    xor ax, ax
-    xor dx, dx
+    call w16_mans
     ICALL w16_resume
 .after:
     ICALL w16_after                  ; (the lock still marked held)
@@ -3338,6 +3355,8 @@ w16_mup:
     je .bar
     cmp al, 2
     je .pop
+    cmp byte [w16_mkbd], 2          ; TrackPopupMenu's menu stays up for a
+    je .post                        ;   release outside it (124.25.16)
     call w16_mstop
     jmp short .post
 .bar:
@@ -3579,7 +3598,7 @@ W16LIB w16u_loadaccel
     ICALL w16_args
     mov ax, [es:bx]
     mov dx, [es:bx + 2]
-    mov di, w16_rnamb
+    mov di, w16_rnam
     ICALL w16_rkey
     mov [w16_rnk], ax
     mov word [w16_rtk], 0x8000 | RT_ACCEL
@@ -3653,9 +3672,9 @@ W16LIB w16u_transaccel
     jc .zero
     cmp byte [w16_gdisc], 0
     jne .zero
-    mov ax, es
+    W16VOF ax, es
     inc ax
-    mov es, ax
+    W16SEG es, ax
     xor si, si
 .e:
     mov al, [es:si]

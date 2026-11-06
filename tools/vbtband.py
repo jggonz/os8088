@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""vbtband - the Video Battle band as the engine draws it (SPEC.md 125.5),
+"""vbtband - the Video Battle band as the engine draws it (SPEC.md 126.5),
 for the builder's preview (VBATTLE-BUILDER-PLAN 4.4).
 
 Drawn from the COMPILED rules and images (vbtrules.compile_rules and
@@ -47,7 +47,7 @@ class Band(object):
         self.img = images
         self.by = by
         self.px = np.zeros((200 - by, 320), np.uint8)
-        self.lay = self.R.layout or V.layout_defaults(by)   # (125.5.1)
+        self.lay = self.R.layout or V.layout_defaults(by)   # (126.5.1)
 
     def blit(self, k):
         b = self.R.b
@@ -106,7 +106,7 @@ class Band(object):
 
 
 def party_line(L, name, star, hp, most, mp):
-    """A character's line of the party, laid out (125.5.1): (its text, its
+    """A character's line of the party, laid out (126.5.1): (its text, its
     first column) - its fields at their columns, spaces between, so that a
     highlight is one bar from its first field to its last. The engine's
     vb_draw_party composes the same"""
@@ -178,7 +178,7 @@ def render(proj, char=0, menu=None, cursor=0, target=None, message=None,
                 ink = 2
         line = line.ljust(15)[:15]
         col, row = m["col"], by + m["row"] + i * m["pitch"]
-        if (mi, i) in rules.places:     # AN ITEM PLACED of its own (125.5.1)
+        if (mi, i) in rules.places:     # AN ITEM PLACED of its own (126.5.1)
             col, prow = rules.places[(mi, i)]
             row = by + prow
         if not (m["flags"] & V.MF_ARROW) and i == cursor:
@@ -212,7 +212,7 @@ def render(proj, char=0, menu=None, cursor=0, target=None, message=None,
 
 
 def overlaps(proj):
-    """The band's text parts that SHARE CELLS (125.5.1): [(what, what)].
+    """The band's text parts that SHARE CELLS (126.5.1): [(what, what)].
     The engine redraws only what changed, so a cursor moved redraws a menu
     over the message line it overlaps where the whole band drew the message
     last - a layout's mistake, said by the check rather than drawn in a

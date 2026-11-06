@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The Video Battle's hold READ IN PLACE THROUGH LOADALL, on a 286 - 86Box
-(SPEC.md 125.4.2, VBATTLE-MEMORY-PLAN 12).
+(SPEC.md 126.4.2, VBATTLE-MEMORY-PLAN 12).
 
     make && python3 tests/vbt286.py [--keep] [--noinp]
 
@@ -25,7 +25,7 @@ system disk, and B: holds VBATTLE.O88 and the CGA4 demo with its enemy at
   5. the fault log charges nothing to the run outside the BIOS's own F000.
 
 `--noinp` pokes the A/B gate ([vb_noinp]): the copying hold, for comparing.
-Broken on purpose: see SPEC.md 125.4.2's account.
+Broken on purpose: see SPEC.md 126.4.2's account.
 
 Needs a built 86Box (python3 tools/os88box.py build) and its ROM set.
 """

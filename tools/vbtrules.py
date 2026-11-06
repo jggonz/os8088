@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""vbtrules - a Video Battle's RULES (SPEC.md 125.6, VBATTLE-BUILDER-PLAN
+"""vbtrules - a Video Battle's RULES (SPEC.md 126.6, VBATTLE-BUILDER-PLAN
 11): the bytes the engine interprets, the compiler that makes them from a
 project, and the REFERENCE the engine is held to.
 
@@ -11,7 +11,7 @@ here and on MartyPC and compare every number (tests/vbtrules.py, and the
 soak row that drives the engine).
 
 THE RULES BLOCK sits at offset 4096 of the bundle's first region (SPEC.md
-125.2), 12 KB at most, little-endian, every table at an offset its header
+126.2), 12 KB at most, little-endian, every table at an offset its header
 gives:
 
   header    64 bytes     counts, table offsets, the enemy, the seed
@@ -42,9 +42,9 @@ CHAR_SZ, ACT_SZ, MENU_SZ, STANCE_SZ, POOL_SZ, ITEM_SZ, IMG_SZ = \
 MAX_CHARS, MAX_ACTS, MAX_MENUS, MAX_STANCES, MAX_POOLS, MAX_ITEMS, \
     MAX_IMGS = 4, 96, 32, 8, 255, 8, 8
 MAX_ITEMS_MENU, MAX_MOVES, MAX_RESP, MAX_POOL = 8, 6, 2, 7
-MAX_FOLLOW = 16                 # the enemy's FOLLOW-UPS (125.6.7)
-MAX_PLACES = 64                 # menu items placed one by one (125.5.1)
-# THE BAND'S LAYOUT (125.5.1): every part of the band at a column (cells,
+MAX_FOLLOW = 16                 # the enemy's FOLLOW-UPS (126.6.7)
+MAX_PLACES = 64                 # menu items placed one by one (126.5.1)
+# THE BAND'S LAYOUT (126.5.1): every part of the band at a column (cells,
 # 0..39) and a row (pixels from the band's top), each shown or hidden - in
 # this order, a byte each, in the rules block (header 56: its offset, 0
 # none, every older block). The defaults are the band as it always was
@@ -96,7 +96,7 @@ CAP = 9999
 
 
 STAT_MAX = 999       # ATK, MAG, DEF, MDEF: the arithmetic's 32/16
-                     # divides stay in range (SPEC.md 125.6.2)
+                     # divides stay in range (SPEC.md 126.6.2)
 
 
 def stat(v):
@@ -384,7 +384,7 @@ def compile_rules(proj, clip_index, images=(), preview=False):
     for col, row, cells, rows, para in images:
         b += struct.pack("<4BH2x", col, row, cells, rows, para)
     table("img", b)
-    # THE ENEMY'S FOLLOW-UPS (125.6.7): after its turn played AFTER, its
+    # THE ENEMY'S FOLLOW-UPS (126.6.7): after its turn played AFTER, its
     # next turn plays THEN - at the same target (FOLLOW_SAME), or by a
     # move's rule. Four bytes each, named from the header's 52..55, which
     # every rules block before them left zero: none
@@ -409,7 +409,7 @@ def compile_rules(proj, clip_index, images=(), preview=False):
         b += bytes([need(aidx, x.get("after"), w, "action it follows"),
                     need(aidx, x.get("then"), w, "action"), rule, arg])
     table("fol", b)
-    # THE BAND'S LAYOUT (125.5.1), and the menu items placed one by one: a
+    # THE BAND'S LAYOUT (126.5.1), and the menu items placed one by one: a
     # look's "places" [[col, row] or null per item]
     lay = layout_of(proj)
     for k in LAYOUT:
@@ -618,7 +618,7 @@ class Sim:
     def standing(self):
         return [i for i in range(self.R.nchar) if self.hp[i] > 0]
 
-    # --- the arithmetic (SPEC.md 125.6.2) ----------------------------------
+    # --- the arithmetic (SPEC.md 126.6.2) ----------------------------------
     def damage(self, kind, power, att, dfn, var):
         if kind == KIND_FIXED:
             return min(CAP, power)
@@ -660,7 +660,7 @@ class Sim:
         return [ENEMY]
 
     def resolve(self, ai, who, chosen=None):
-        """THE DRAWS, in order (SPEC.md 125.6.3): the POOL pick first; then
+        """THE DRAWS, in order (SPEC.md 126.6.3): the POOL pick first; then
         for each target in turn, its HIT roll (an opponent, accuracy under
         100 or an evade over 0), and for each DAMAGE effect's each hit its
         CRITICAL roll (physical only) and its VARIANCE; a HEAL by power its
@@ -699,7 +699,7 @@ class Sim:
                     var = 90 + rng.rnd(21) if aa == HEAL_POWER else 100
                     r["heal"] += self.heal_amount(aa, p, who, t, var)
             res.append(r)
-        # the outcome, and the pool it plays (SPEC.md 125.6.4): over the
+        # the outcome, and the pool it plays (SPEC.md 126.6.4): over the
         # OPPONENTS' results only
         O = [r for r in res if (who == ENEMY) != (r["t"] == ENEMY)]
         H = [r for r in O if r["hit"]]
@@ -767,7 +767,7 @@ class Sim:
             self.lim[who] = 0
 
     def apply(self, plan):
-        """The effects, once the clip is over (SPEC.md 125.6.5)"""
+        """The effects, once the clip is over (SPEC.md 126.6.5)"""
         R = self.R
         a = R.acts[plan["action"]]
         who = plan["who"]
@@ -876,7 +876,7 @@ class Sim:
         return out
 
     def respond(self, ai, who):
-        """SPEC.md 125.6.6: the stance's responses in order, each whose
+        """SPEC.md 126.6.6: the stance's responses in order, each whose
         trigger the action meets drawing its chance; the first that comes up
         is played, at the actor"""
         a = self.R.acts[ai]
@@ -925,7 +925,7 @@ class Sim:
         return None
 
     def enemy_turn(self):
-        """SPEC.md 125.6.7: the guard ends and the stat changes age; a stance
+        """SPEC.md 126.6.7: the guard ends and the stat changes age; a stance
         whose turns are up returns (its return action, if any, is the
         turn); else the stance's automatic change (its action, if any, is
         the turn); else a move drawn by weight, at a target by its rule"""
@@ -935,7 +935,7 @@ class Sim:
         st = R.stances[self.stance]
         ai = NONE
         rule, arg = 0, 0
-        fol, self.efol = self.efol, NONE    # A FOLLOW-UP OWED (125.6.7): it
+        fol, self.efol = self.efol, NONE    # A FOLLOW-UP OWED (126.6.7): it
         ftgt = self.eftgt                   # is this turn, whatever else
         if self.sleft:
             self.sleft -= 1

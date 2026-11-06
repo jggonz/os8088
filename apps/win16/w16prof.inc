@@ -292,6 +292,7 @@ w16pf_write:
 ; [w16pf_val], [w16pf_nokey] and [w16pf_noval] as w16pf_write leaves them.
 ; AX = TRUE or FALSE. The merge plays a log back through here
 w16pf_wcore:
+    mov byte [w16pf_path], 0        ; [w16pf_val] is the value: no seed
     call w16pf_open
     jc .no
     call w16pf_sect
@@ -440,7 +441,8 @@ w16pf_priv:
     ret
 
 ; w16pf_name - DX:AX = a file name: its last component, upper case, into
-; [w16pf_nm]. CF=1: NULL, or not a legal 8.3 name
+; [w16pf_nm], the whole name left in [w16pf_val] and [w16pf_path] = 1 when
+; it had a drive or a folder. CF=1: NULL, or not a legal 8.3 name
 w16pf_name:
     mov di, w16pf_val               ; (a scratch string here)
     call w16pf_cpy
@@ -461,6 +463,12 @@ w16pf_name:
     mov bx, si
     jmp short .last
 .got:
+    xor ax, ax                      ; [w16pf_path] = 1: a drive or a folder
+    cmp bx, w16pf_val               ;   was cut off (w16pf_dseed)
+    je .np
+    inc ax
+.np:
+    mov [w16pf_path], al
     mov di, w16pf_nm                ; zeroed whole: rows compare all 13 bytes
     mov cx, 13
 .z:
@@ -713,6 +721,9 @@ w16pf_open:
     call w16pf_in                   ; SYSTEM\APPDATA\WIN16
     jnc .read
     or byte [bx + WPF_FL], WPFF_MEM ; no folder: memory only
+%ifdef PKG_MEGA
+    call w16pf_seed
+%endif
     jmp short .have
 .read:
     call w16pf_rd
@@ -732,7 +743,14 @@ w16pf_open:
     jnc .rdone
 .rfail:
     cmp ax, FERR_NOENT              ; none yet: a new, empty file
-    je .back
+    jne .keep
+%ifdef PKG_MEGA
+    call w16pf_seed                 ; (SYSTEM.INI's [mci])
+%endif
+    call w16pf_out                  ; ...or the one the program named, read
+    call w16pf_dseed                ;   from where it is (SPEC.md 124.14)
+    jnc .have
+    ret                             ; (the row went with its claim)
 .keep:
     or byte [bx + WPF_FL], WPFF_KEEP    ; unreadable or too large: as empty,
     jmp short .back                 ;   and never written over
@@ -748,7 +766,7 @@ w16pf_open:
     mov [w16pf_row], bx
     mov al, [w16pf_clock]
     mov [bx + WPF_LRU], al
-    mov es, [bx + WPF_SEG]
+    W16SEG es, [bx + WPF_SEG]
     mov ax, [bx + WPF_LEN]
     mov [w16pf_end], ax
     clc
@@ -757,6 +775,120 @@ w16pf_open:
 .gone:
     call w16pf_out                  ; the claim went: the row is free again
     mov byte [bx + WPF_NAME], 0
+    stc
+    ret
+
+%ifdef PKG_MEGA
+; w16pf_seed - BX = a row whose file is not there yet. SYSTEM.INI starts
+; with the [mci] section Windows 3.1's Setup writes, naming the two MCI
+; devices the arm has (SPEC.md 124.32.4): Media Player lists its Device menu
+; from it, and with none says no MCI driver is installed. The file is not
+; changed by this, so it is written only if the program writes it. Keeps BX
+w16pf_seed:
+    push si
+    push di
+    push cx
+    mov si, w16pf_nm
+    mov di, w16pf_s_sys             ; XSEC-OK: the part's string, read via cs:
+    mov cx, 11
+.c:
+    mov al, [si]
+    cmp al, [cs:di]
+    jne .out
+    inc si
+    inc di
+    loop .c
+    push es
+    W16SEG es, [bx + WPF_SEG]
+    mov si, w16pf_s_mci             ; XSEC-OK: the part's text, read via cs:
+    xor di, di
+    mov cx, W16PF_MCIL
+    cld
+.cp:
+    mov al, [cs:si]
+    stosb
+    inc si
+    loop .cp
+    pop es
+    mov word [bx + WPF_LEN], W16PF_MCIL
+.out:
+    pop cx
+    pop di
+    pop si
+    ret
+w16pf_s_sys:    db 'SYSTEM.INI', 0
+w16pf_s_mci:    db '[mci]', 13, 10, 'WaveAudio=mciwave.drv 4', 13, 10
+                db 'CDAudio=mcicda.drv', 13, 10
+W16PF_MCIL      equ $ - w16pf_s_mci
+%endif
+
+; w16pf_dseed - BX = a row whose file the Windows directory does not hold,
+; and nothing moved. When the program's name for it had a drive or a folder
+; ([w16pf_path], the name in [w16pf_val]), that file is read into the row
+; through WIN16's DOS, whole when it is at most W16PF_MAX: a setup's
+; SETUP.LST on its own floppy (SPEC.md 124.14). It is never written there.
+; CF=1: a larger claim was refused and the row is free. Keeps BX
+w16pf_dseed:
+    cmp byte [w16pf_path], 0
+    je .ok
+    mov di, bx                      ; DI = the row, across the DOS's calls
+    mov ax, 0x3D00                  ; open, for reading
+    mov dx, w16pf_val
+    push ds
+    pop es
+    ICALL w16_dcall
+    jc .ok0
+    xchg ax, bx                     ; BX = the handle
+    mov ax, 0x4202                  ; its size: to the end...
+    xor cx, cx
+    xor dx, dx
+    ICALL w16_dcall
+    jc .close
+    or dx, dx
+    jnz .close
+    cmp ax, W16PF_MAX
+    ja .close
+    push ax
+    mov ax, 0x4200                  ; ...and back to the start
+    xor cx, cx
+    xor dx, dx
+    ICALL w16_dcall
+    pop si                          ; SI = the size
+    jc .close
+    cmp si, [di + WPF_CAP]
+    jb .fits
+    push bx                         ; a larger claim, as FERR_BIG's
+    xchg bx, di
+    mov dx, [bx + WPF_SEG]
+    ICALL w16_kfree
+    mov ax, si
+    mov cl, 10
+    shr ax, cl
+    inc ax
+    call w16pf_claim                ; CF=1: refused, the row free
+    xchg bx, di
+    pop bx
+    jc .gone
+.fits:
+    mov ah, 0x3F                    ; read it, into the row's claim
+    mov cx, si
+    xor dx, dx
+    W16SEG es, [di + WPF_SEG]
+    ICALL w16_dcall
+    jc .close
+    mov [di + WPF_LEN], ax
+.close:
+    mov ah, 0x3E
+    ICALL w16_dcall
+.ok0:
+    mov bx, di
+.ok:
+    clc
+    ret
+.gone:
+    mov ah, 0x3E
+    ICALL w16_dcall
+    mov bx, di
     stc
     ret
 
@@ -785,7 +917,7 @@ w16pf_rd:
     push bx
     lea si, [bx + WPF_NAME]
     mov cx, [bx + WPF_CAP]
-    mov es, [bx + WPF_SEG]
+    W16SEG es, [bx + WPF_SEG]
     xor bx, bx
     xor dx, dx
     call OSAPI_FILE_READ
@@ -826,7 +958,7 @@ w16pf_flush:
     push bx
     lea si, [bx + WPF_NAME]
     mov cx, [bx + WPF_LEN]
-    mov es, [bx + WPF_SEG]
+    W16SEG es, [bx + WPF_SEG]
     xor bx, bx
     xor dx, dx
     call OSAPI_FILE_WRITE
@@ -896,7 +1028,7 @@ w16pf_log:
     jc .over
     mov [bx + WPF_LOG], dx
 .have:
-    mov es, dx
+    W16SEG es, dx
     mov di, [bx + WPF_LLEN]
     add [bx + WPF_LLEN], cx
     mov al, [w16pf_noval]
@@ -964,7 +1096,7 @@ w16pf_merge:
     jnz .cap
     dec cx
 .cap:
-    mov es, dx
+    W16SEG es, dx
     xor bx, bx
     push dx
     xor dx, dx
@@ -1044,7 +1176,7 @@ w16pf_replay:
     cmp si, [bx + WPF_LLEN]
     jae .done
     push ds
-    mov ds, [bx + WPF_LOG]          ; (DS: the log, until the copies are made)
+    W16SEG ds, [bx + WPF_LOG]       ; (DS: the log, until the copies are made)
     lodsb
     pop ds
     mov ah, al
@@ -1052,7 +1184,7 @@ w16pf_replay:
     mov [w16pf_nokey], al
     shr ah, 1
     mov [w16pf_noval], ah
-    mov es, [bx + WPF_LOG]
+    W16SEG es, [bx + WPF_LOG]
     mov di, w16pf_app
     call w16pf_lcpy
     mov di, w16pf_key
@@ -1148,9 +1280,9 @@ w16pf_splice:
     ICALL w16_kclaim                ; in the heap (SPEC.md 124.25.1)
     jc .full
     push ds
-    mov es, dx
+    W16SEG es, dx
     mov cx, [w16pf_end]
-    mov ds, [bx + WPF_SEG]
+    W16SEG ds, [bx + WPF_SEG]
     xor si, si
     xor di, di
     rep movsb
@@ -1167,7 +1299,7 @@ w16pf_splice:
     pop si
     pop ax
 .fits:
-    mov es, [bx + WPF_SEG]
+    W16SEG es, [bx + WPF_SEG]
     push ax
     push si
     mov si, [w16pf_sp]              ; the tail: from sp + sd to the end
@@ -1211,7 +1343,7 @@ w16pf_splice:
 .full:
     pop si
     pop ax
-    mov es, [bx + WPF_SEG]
+    W16SEG es, [bx + WPF_SEG]
 .no:
     stc
     ret

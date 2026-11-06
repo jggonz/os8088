@@ -3118,6 +3118,359 @@ row apart. That moved every one of the ten special segment values
 numbers and passed. Batch 2 moved the rows and made the two markers one
 number, so it cannot happen again.
 
+## 2026-11-01 — O3: a CD-ROM title and two installers to aim at
+
+**The owner asked for a CD-ROM title off archive.org to try**, and for the
+two installers the plan had promised: one built with Microsoft's Setup
+Toolkit and one with InstallShield. Phase B and C are now aimed at three
+real things rather than at a description of them (the plan's section 3.1).
+
+**The title is *Microsoft Multimedia Mozart* (1993).** It is a mixed-mode
+disc: a data track with the program, its pictures and its spoken clips, and
+six audio tracks of the quartet itself, which the program plays as CD audio.
+Its program runs from the disc; its setup copies only shared libraries and
+makes a group. It carries its pictures twice, once in 16 colours and once
+in 256, and the setup picks by the display, so os8088's 16-colour desktop is
+a display it was made for.
+
+**The installers are *Microsoft Arcade* 1.0 (1993) and *Sir Hangman* 1.0
+(1995).** Arcade is the Setup Toolkit in its textbook form on one floppy.
+Sir Hangman is InstallShield 3.0, and it is ASP shareware whose README
+grants redistribution, which made it the one of the three with a plainly
+clean licence. All three are pinned by SHA-256 and fetched by
+`win16ref.py titles`; none of them enters the tree.
+
+**Reading them took two decoders.** The Setup Toolkit compresses with the
+same `COMPRESS` as Windows' own disks, which WIN16's tools already read.
+InstallShield 3 uses PKWARE's "implode", in a single-file wrapper for its
+engine and an archive of its own for the program. A port of Mark Adler's
+`blast.c` reads both, and the census could then see inside.
+
+**The census found that the three rest on one thing.** Mozart's program is
+one import long: `VBRUN300.100`. It is a **Visual Basic 3.0** program, and
+so is Sir Hangman. The same `VBRUN300.DLL`, byte for byte, rides with both.
+That runtime is 398 KB in 101 segments and runs only in protected mode, and
+so does every Setup Toolkit bootstrap. Arcade's five games are 386 code
+playing their sounds through `WAVEMIX` over MMSYSTEM. InstallShield's engine
+is the exception: it runs in real mode, and needs `DDEML` for its
+conversation with Program Manager.
+
+**What was turned down.** *Multimedia Beethoven* (1992) was the first
+candidate, but its disc is High Sierra, the format before ISO 9660, which
+os8088's CD-ROM driver does not read, and its program is the ToolBook
+runtime. The later composer discs are Mozart's engine on bigger discs.
+*Living Books* draws in 256 colours. Netscape and Acrobat Reader have
+InstallShield 3 installers too, but they are multi-megabyte programs.
+
+## 2026-11-01 — S22: the first Windows program in protected mode
+
+**Story.** *As a user on a 286, a Windows program runs in an os8088 window on
+kern_mega.* The real-mode WIN16 computes in paragraphs everywhere: a heap
+block's header is the paragraph below its data, an arena is walked by adding
+sizes, a program's segments are its claim plus offsets. Under kern_mega none
+of those numbers can go into a segment register.
+
+**The decision: keep the arithmetic, change what the numbers mean.** The arm
+gives every claim WIN16 sub-allocates a *virtual* base, first fit from 1000h,
+and keeps a map of them. A virtual paragraph becomes a selector only where it
+is loaded. `W16SEG es, ax` is `mov es, ax` in real mode, and in the arm it
+asks `OSAPI_SEG`'s `SEG_SUB` for a selector at that paragraph of the claim,
+with an eight-row cache in front. The program is handed selectors and gives
+selectors back, converted at the edge (`w16_psel`, `w16_pvirt`). The real-mode
+build is byte-identical after every change. Rejected:
+- Rewriting WIN16 to keep selectors everywhere. Every heap walk, every
+  comparison of two blocks and every split would have changed.
+- Trapping the segment-register load in the kernel. A virtual paragraph and
+  an LDT selector are numbers in the same range, so the load would succeed
+  silently with the wrong base.
+
+**Discoveries, in the order they were met.**
+- `__?SECT?__` keeps a section's attributes (`[section .w16ld follows=.w16fp
+  vstart=0 align=1]`). The macro that picks a part's own thunks compares the
+  name alone.
+- A variable must hold one kind of value. The first run had a selector,
+  11CCh, inside the range of the virtual paragraphs, so `W16SEG` on a
+  selector would have read the wrong memory without faulting. The USER
+  heap's segment and a dialog template's are kept as selectors, made once.
+- The program's ES at its start, the PSP, was handed over as a virtual
+  paragraph. The first fault said so: error code 2008h, a GDT index nobody
+  has.
+- The census is the 8088's alone. Taking it out of the arm paid for the
+  arm's own code: 1,656 bytes of room against the real-mode build's 1,279.
+
+**Seen.** TINY16 under QEMU's 486 on kern_mega: InitTask, InitApp, and its
+MessageBox drawn in the os8088 window. Clicking OK resumes it into its exit,
+`int 21h` 4Ch, and nothing happens.
+
+**Why.** kern_mega moves the master 8259 to 20h in protected mode, because
+08h-0Fh are CPU exceptions there. So IDT 21h is the keyboard's gate. A
+program's `int 21h` runs the keyboard ISR and returns as if the call were
+done. Routing it is a kernel change, and the owner's to make (SPEC.md
+124.31.2).
+
+## 2026-11-01 — S22: Minesweeper, Solitaire and a library in protected mode
+
+**What it is.** Batch 3 of S22: the rest of the loader. These were left after
+TINY16: code segments that are discarded and loaded again, libraries, and
+WIN16's own habit of reaching its data through CS. The test machine is a dev
+build of kern_mega carrying the owner-pending vector fix (SPEC.md 124.31.2,
+(d1)). That kernel is not committed.
+
+**Seen, QEMU 486, kern_mega, protected mode.**
+- Minesweeper 3.1 plays: two clicks open cells and the timer runs.
+- Clock draws its face and keeps time.
+- Solitaire deals. Its code is in eleven discardable segments, most loaded
+  on first call.
+- Notepad opens empty.
+- DLLUSE loads its two test libraries and says `DLLUSE OK`.
+
+Calculator and the FPU fixture stop at the x87 emulator's interrupt vectors,
+which are batch 4's. Paintbrush stops where WIN16's DOS host is far-called,
+which is batch 6's.
+
+**Discoveries, in the order they were met.**
+- *A flag cleared by a shift.* The loader's segment-selector helper tested a
+  segment's DATA flag, then shifted BX back before the jump. The shift
+  rewrote ZF, so every segment came out as a data selector. Solitaire's first
+  return into its own code faulted on a descriptor the LDT dump showed as
+  type 92h: data, with the segment's exact length as its limit.
+- *Every way of naming a code segment has to agree.* A discardable segment
+  is named by its thunks, by the frame `w16_segld` returns through, and by
+  the stack scan that decides whether it may be discarded. The scan compares
+  numbers. If it builds a different selector from the one the program is
+  running on, it discards a segment in use, and the fault comes later, on a
+  far return. The segment's length cannot be what makes them agree:
+  `w16_slen` holds it only while that module is being laid out. So a code
+  segment's selector reaches the end of its claim. kern_mega already
+  answers the same pair for the same base and limit (`mega_dfind`).
+- *`push cs / pop ds` is a write through a code selector.* There are 27 such
+  sites, and kern_mega completes each store by trap. `W16CSEG` gives the
+  pair's data half instead, and in real mode it is the same two
+  instructions.
+- *The machine's interrupt vectors are real-mode addresses.* AH=35h for a
+  vector the program never set read the IVT through selector 0. kern_mega
+  fixed that read up, but then loaded the BIOS's F000h into ES, and that
+  load faulted. The program now gets an `iret` of WIN16's instead.
+- *Two of WIN16's own far addresses used `ds`.* LibMain's trampoline and
+  `GetProcAddress`'s stub both did, so both were data selectors. A far call
+  through a data selector is a fault.
+- *A library's hInstance is the program's value.* It is now the block's
+  selector, as `GlobalLock` answers it. The free path converts it back
+  first.
+
+The shipped `build/win16.bin`, `win16.o88` and `kdos/DOS.O88` are
+byte-identical after every change. The arm has 1,495 bytes of room (65,024
+less image and bss), the real-mode build still 1,279.
+
+## 2026-11-01 — S22: Paintbrush, Write and Cardfile in protected mode
+
+**What it is.** S22's batch 6: the DOS that WIN16 hosts for a program's file
+calls (SPEC.md 124.31.7). The S22 survey had flagged it as the risky part.
+The core lays out its read window by paragraph arithmetic, keeps its state
+through CS, and has one byte of `CORE_MAX` to spare.
+
+**Decision.** The core is left alone. kern_mega's build of it
+(`-DDOS_MEGA`) is already the arm's. Of its paragraph arithmetic, only one
+result is ever loaded into a segment register: the read window,
+`dos_wseg`, which is loaded in eight places. So the host part's table gains
+one word in the arm, the address of that cell. After the core's init
+returns, WIN16 rewrites the cell with a selector for the same paragraph.
+
+The core's far entry is the block's code half, and the PSP is passed as the
+program's selector. The forward runs on the program's stack, where DS is
+the program's and `W16SEG` cannot run, so WIN16 keeps the block's data
+selector in its own variable.
+
+**Seen, QEMU 486, kern_mega with (d1), protected mode.**
+- Paintbrush starts with its library, and a line drawn with the line tool
+  is there.
+- Write, Cardfile and Calendar open.
+- Windows 3.1's Solitaire deals.
+
+The real-mode build is byte-identical.
+
+## 2026-11-01 — S22: what a protected-mode program is told
+
+**What it is.** Batch 5 of S22 (SPEC.md 124.31.6) covers what a program
+learns about the machine and what it may build for itself:
+- `GetWinFlags` answers standard mode (`WF_PMODE | WF_STANDARD`).
+- A block over 64 KB is reached by huge pointers that step `__AHINCR` = 8.
+- The KERNEL selector functions are there.
+- A DPMI 0.9 subset answers on `int 31h`.
+
+The targets need all of it. Mozart's `VBRUN300.DLL`, InstallShield's
+`_INST16.EXE` and the Setup Toolkit's bootstrap import the selector calls,
+and between them they issue `int 31h` eleven times (`tools/os88ne.py`'s
+census).
+
+**Decisions.**
+- *The kernel lends consecutive selectors, and nothing else new.*
+  `SEG_TILE` (the owner's O2(b)) is 195 bytes of `.mega`. Everything else is
+  built from verbs kern_mega already had. A selector the program makes is a
+  window of WIN16's, which can be re-aimed but not rewritten, so its base
+  must sit on a paragraph below 1 MB and its reach is 64 KB at most. An
+  alias of a selector in a claim is that claim's own SUB or pair.
+- *The selector functions live in the system-library part*, so the image
+  pays only for the DPMI handler. An `int` cannot wait for a part to be
+  fetched, so that handler has to be resident.
+
+**Discoveries.**
+- *Freeing a selector is the program's business, and so is its ES.* BIG
+  frees its 128 KB block while ES still holds the block's selector. The
+  gate's return reloaded that ES and faulted. Standard mode's KERNEL gave
+  such a register back as 0, and so does the arm now: one `VERR` on the way
+  out.
+- *kern_mega reads its tables through SS.* The first DPMI test passed the
+  version, increment and base calls and failed allocate and alias with
+  CF = 1. The handler had made `OSAPI_SEG` calls on the program's stack,
+  where `[ss:mega_wtab]` is somewhere in the program's DGROUP. The handler
+  now moves to the UI task's stack, as the DOS forward always had.
+- *A package's IVT write never reaches `mega_ivt_sync`.* Owner-pending
+  prototype (d1) rebuilt gates 31h and 34h-3Dh from the IVT at each sync,
+  but WIN16's writes through segment 0 are completed without one. So
+  Calculator's x87 vectors and SELTEST's `int 31h` landed on "a software
+  interrupt nobody handles". The prototype now reads those vectors at the
+  int, as its 21h already did. This is recorded beside the owner's
+  question (SPEC.md 124.31.2), because either kernel shape needs it.
+
+**Seen, QEMU 486, the dev kern_mega with (d1), protected mode.**
+- `BIG.EXE`: 131,072 bytes through a huge pointer, 0 wrong, `__AHINCR`
+  0008.
+- `SELTEST.EXE`: 0 wrong, flags 0415.
+- Calculator 3.1: 9 x 9 = 81, then sqrt gives 9.
+- `FPU.EXE`'s three answers.
+
+The arm has 769 bytes of room. The real-mode build is byte-identical.
+
+## 2026-11-01: S22 batch 7, WIN16 above 1 MB
+
+kern_mega lets a package's image go above 1 MB (`OS88_HIGH`), and its claims
+of 64 KB or less too (`OS88_HIGHMEM`). Every package either declares both
+bits or carries a line in `tests/megahigh.txt` saying what in its code
+breaks. WIN16 carried two lines, written when it refused protected mode
+outright.
+
+**Decision: the image goes up, the program's memory does not.**
+- In the arm, nothing does a sum on WIN16's own CS or DS except the pair's
+  `- 8`. Its plain claims (the cluster cache, the loader's tables) are only
+  ever loaded into a segment register. So both bits are honest for them.
+- A Windows program is another matter, though WIN16's own sums are not the
+  reason. The program can ask for a selector at a linear address of its
+  own: `AllocSelector`, then `SetSelectorBase`. The only window kern_mega
+  can aim on demand, `SEG_WIN`, takes a physical paragraph.
+  `GlobalDOSAlloc` likewise answers a real-mode paragraph.
+- So the claims the arm's map holds come through the DMA door, which is
+  conventional whatever the class byte says. Those are the program's
+  image, PSP and resources, and the global heap's arenas.
+- Lifting them too would need a window verb with a 32-bit base. That is a
+  kernel decision with no target asking for it yet.
+
+**What it buys.** 37,877 bytes of code and 26,382 of bss no longer come out
+of the memory a program loads into. That is about 63 KB of the 640.
+
+**A gate found the one sum.** `t_megagrid` flags a segment built off
+kern_mega's 8-paragraph grid in any `OS88_HIGH` package. It found
+`w16e_paste`'s `inc ax`, a header-skipping step. That sum is on a VIRTUAL
+paragraph, which `W16TOSEL` turns into a selector through the map. It is
+registered in `tests/megagrid.txt` with that reason.
+
+**Seen.** SELTEST now prints where WIN16 runs: an import's far pointer
+points into WIN16's image, so `GetSelectorBase` of it is the image's base.
+Run on the dev kern_mega, it reads `00F9D000`, near the top of a 16 MB
+machine, with 0 wrong. BIG, Minesweeper 3.1 and Paintbrush run as before.
+
+## 2026-11-01: S23 batch 1, MMSYSTEM's clock, devices and mmio
+
+**What the targets ask for.** `tools/os88ne.py` over the three titles names
+MMSYSTEM's users:
+- Arcade's `WAVEMIX.DLL`: `waveOut*`, `mmio*`, `sndPlaySound`,
+  `timeGetTime`.
+- Mozart's setup DLLs: the clock and `*GetNumDevs`.
+- Its `RTFCC.VBX`: buffered mmio, `mmioGetInfo` and `mmioAdvance`.
+- Both titles' `MCI.VBX`: `mciSendCommand`.
+
+**Decision: arm-only, in part 9.** Every importer is a protected-mode
+program, so the real-mode build has no MMSYSTEM at all and its image is
+unchanged. In the arm the module costs its name (9 bytes) and 32 bytes of
+bss for mmio's working words; the handlers are in the system-library part.
+
+**mmio's shape.** An HMMIO is a fixed block of the program's heap whose
+first 66 bytes ARE the MMIOINFO. `mmioGetInfo` is a copy, and the four
+buffer pointers are the program's own far pointers. A DOS file reads
+through an 8 KB buffer only when the program has used `mmioAdvance`;
+`mmioRead` and `mmioWrite` go straight to WIN16's DOS in pieces that never
+cross the program's 64 KB, stepping the selector by `__AHINCR`. A memory
+file is the program's buffer.
+
+**A discovery.** timeGetTime first used `apps/os88pit.inc`'s rule:
+IRQ0 pending with the count under half a tick in means the tick is owed.
+In MMTEST's eight steps it went backwards once. Under kern_mega the tick's
+IRQ can wait longer than half a tick, so the rule now owes the tick unless
+the count is in the period's last 3 ms, and the answer never falls below
+the last one.
+
+**Seen**, dev kern_mega, QEMU 486, no card: "mmtest: 0 wrong, waveOut 0,
+step 1 ms". The fixture wrote a RIFF WAVE with an odd data chunk (so a pad
+byte) and read it back three ways:
+- Descend, then Read;
+- GetInfo and Advance through the buffer;
+- as a memory file.
+Then it ran EXIST and DELETE.
+
+## 2026-11-01: S23 batch 2, waveOut and sndPlaySound
+
+**The shape.** One output device over `SOUND.DRV`'s ring stream, the way
+WaveRack plays: a grant of 8 KB (16 or 32 KB for a faster stream), the
+program's bytes staged into it with verb 6, the new total fed with verb 1,
+the card's place read exactly with verb 9.
+- An `HWAVEOUT` is a fixed block of the program's heap, as an `HMMIO` is.
+- **The queue is the program's own `WAVEHDR`s**, linked through `lpNext`,
+  the field Windows keeps for the driver. `reserved` holds where the block
+  ends in the stream. So there is no queue table and no count to run out of.
+- The copy happens on WIN16's turns: a write, a position asked, and the
+  tick while a block is queued. That needed two arm-only lines in WIN16's
+  timer (keep it at one tick, and call the copy) and one at the program's
+  end (close the stream). They cost 42 bytes of the arm's image; 31 are
+  left.
+- When the queue has all been copied, the ring is padded with silence to
+  the card's next half. Without it the last block's tail would sit in a
+  half the card never finishes, and that block would never be done.
+- `sndPlaySound` reads the WAV whole into a block, finds `fmt ` and `data`,
+  and plays it through the same path with its own `WAVEHDR` inside the
+  device's block. Without `SND_ASYNC` it sleeps a tick between copies until
+  the sound is done.
+
+**A discovery: the third arena.** With this batch the system-library part
+went from 33 to 34 KB, and MMTEST stopped at its closing `MessageBox` with
+*WIN16's library part could not be read*. Bisection:
+- HEAD's arm with a fixture free of waveOut: fine.
+- The new arm without the export rows: fine, but only because the program
+  never ran (a missing import is reported at load).
+- HEAD's arm with part 9 padded by 2,600 bytes (33 KB): fine; by 3,600
+  (34 KB): the same failure.
+
+So it was the size alone. Part 9 no longer fitted the second arena beside
+the program's blocks, WIN16 made its third, and the third takes the largest
+free run less 32 KB. On kern_mega a part's fetch is a conventional claim
+whatever the class byte says, and the library part's fetch is 62 KB, so
+after that third arena it could never be fetched. The arm now keeps 96 KB
+(`W16_ARKEEP`). It is a constant, so neither image changes. Real mode has
+the same rule and the same exposure for a program that allocates heavily
+before its first library call; that is noted for the lead.
+
+**Seen**, dev kern_mega, QEMU 486:
+- With an SB16 (SOUND.DRV wanted in SYSTEM.CFG): "mmtest: 0 wrong, waveOut
+  1, step 1 ms, played 486 ms".
+  - Three 3,000-byte blocks were queued with `CALLBACK_TASK`. Each was done
+    in order with its `MM_WOM_DONE`, after `MM_WOM_OPEN`. Close while
+    queued answered `WAVERR_STILLPLAYING`, and the position at the end was
+    between 810 and 1,300 ms.
+  - The capture holds the 919 Hz square.
+  - QEMU's card took the 816 ms of sound in about 490 ms of guest time. So
+    the fixture asks only that a block is not done as it is written.
+- With no card: "0 wrong, waveOut 0": `waveOutOpen` answered
+  `MMSYSERR_BADDEVICEID` and `sndPlaySound` answered FALSE.
+
 ## 2026-11-01 — S21, batch 3: talking across, and leaving
 
 **A message sent to another program has to run on that program's own
@@ -3152,6 +3505,459 @@ only task left was one that had never run, and the turns only ever looked
 at the others. So the end of a task now runs the turns itself, and a task
 that has never run is the one current task they will start. That second
 TASKB takes over WIN16's own window: the title bar now says *Task B*.
+
+## 2026-11-01: merging S21 batch 3 into the protected-mode arm
+
+The lead's batch 3 came into Phase B/C as a merge, and the arm came out of
+it 86 bytes over `APP_MAX_SIZE`. Room is 65,024 bytes less the image and
+its bss. Before the merge the arm had 77 left, not the 589 I had written
+down: I had measured against 65,536.
+
+The bytes came back by moving the `int 31h` functions (`w16_i31b`) into the
+system-library part. The image keeps only the stub that changes stacks and
+sets CF, which leaves 330 bytes of room.
+
+**A discovery: a part's first byte is its header.** After that move, SELTEST
+and MMTEST both stopped with *kern_mega FAULT 0D* in `RegQueryValue`, which
+neither program calls.
+- `w16i31.inc` was included before `w16syslib.inc`. So its
+  `section .w16sys` came before the line that declares the part
+  (`follows=.w16ld vstart=0`), and its 426 bytes landed ahead of the part's
+  header.
+- `os88ovl.py` cuts the part at the header, so in memory every handler sat
+  426 bytes away from the offset the image called. SELTEST's first int 31h
+  call landed in the middle of `RegQueryValue`.
+- `w16syslib.inc` now refuses to assemble when anything comes before its
+  header, and the include sits beside `w16sel.inc`. The old order fails with
+  *part 9 does not start with its header*.
+
+Three of batch 3's new segment loads needed the arm's conversions:
+- `w16t_gfree` walks the arenas: `W16SEG es, bx`.
+- `w16t_codefree` reads the code list: `W16SEG es, [w16_clive]`.
+- `w16t_end` frees a context block by handle: `W16VOF ax, es`.
+
+The new GH_TASK byte took offset 10. The arm's tile fields (`GH_TN`,
+`GH_TSEL`, `GH_TVP`) moved to 11 through 15 of the 16-byte header.
+
+**Seen**, dev kern_mega, QEMU 486:
+- SELTEST: "seltest: 0 wrong, flags 0415, WIN16 at 00F9CC00".
+- MMTEST with an SB16: "0 wrong, waveOut 1, step 1 ms, played 491 ms".
+- TASKS with TASKB: "TASKS OK".
+
+The real-mode `win16.bin` is byte-identical to the lead's tip.
+
+## 2026-11-01: S23 batch 3, MCI
+
+Windows programs mostly reach sound and CD audio through MCI rather than
+`waveOut`. Media Player is an MCI program, and so is many a title's "play
+the narration" button. Batch 3 adds `mciSendCommand` and `mciSendString`
+for two device types (SPEC.md 124.32.4):
+- `waveaudio` streams a WAV file through batch 2's `waveOut` device, in two
+  half-second buffers that WIN16's tick reads again and writes again.
+- `cdaudio` drives `CDROM.DRV` through its package door (§119.4).
+
+Both are handlers in the system-library part, and a string becomes the same
+parameter block a command fills, so the two share one path. `mciGetErrorString`
+gives Windows' own sentences.
+
+**A discovery: the first slice ran 274 bytes deep.** The first look at
+MCITEST stopped on *STACK OVERFLOW TASK 00* with an SB16 playing. Task 0's
+stack is 512 bytes, and its canary was gone. To find out where the bytes
+went, a scratch build recorded the deepest SP at four places in WIN16's bss,
+behind a marker. QEMU's `pmemsave` then wrote the guest's memory out, and
+the marker was found in it:
+
+| place | SP | below the top |
+|---|---|---|
+| `w16_hsp`, where the program was resumed | 1EEB | 274 |
+| an MCI handler's entry | 1EE3 | 282 |
+| the file read in `w16mm_wvfill` | 1ECD | 304 |
+| WIN16's tick, `w16_ontimer` | 1FCB | 50 |
+
+MCI itself costs about 30 bytes. The rest was where the program had been
+resumed from: the wake that started it. A dump of the dead stack showed what
+spent the last 200 bytes under the file read. An IRQ0 had taken
+`SOUND.DRV`'s tick (`snd_tick`, then `drv_svc_call`, then the driver's
+protected-mode far call) on top of the DOS core's read.
+
+**The fix is WIN16's, and is the arm's alone.** The wake loads the program
+and sets `w16_go1`, and the next tick runs its first instruction (SPEC.md
+124.31.8). `w16_hsp` measured 66 bytes below the top after the change. Real
+mode is byte-identical.
+
+The same looks also turned up a kernel defect, which is the owner's to
+decide. kern_mega's `.cold` arm of `MEGA_CSELTOP` decides real or protected
+mode by reading `[ss:mega_pm]`. When an IRQ0 arrives while a Windows program
+runs on its own stack, SS is the program's selector, and that byte is
+whatever the program keeps at that offset. When it read 0, `drv_svc_call_x`'s
+`retf` went to a data selector: *kern_mega FAULT 0D*. A local prototype reads
+the machine status word instead (`smsw`, its PE bit), and MCITEST runs on it.
+That prototype is not committed.
+
+Three answers that were wrong on the first pass:
+- `mciSendString` answered 768 and 6656 with the right text, because
+  the routine that writes the answer left AX holding its scratch. It now
+  answers 0.
+- `status position` after a play to 500 ms said 499: 500 ms is 5,512.5
+  samples, kept as 5,512. Milliseconds are now rounded as Windows' `MulDiv`
+  rounds them, and `waveOutGetPosition`'s `TIME_MS` is rounded the same way.
+- `cdaudio`'s mode said *not ready* on QEMU, whose drive has a disc but no
+  audio commands. That drive is now *stopped*.
+
+**Seen**, dev kern_mega, QEMU 486, SB16 and the gate's `CDROM.DRV` (three
+fake audio tracks):
+- MCITEST: "mcitest: 0 wrong, wave 1, cd 2, waited 328 ms".
+- The capture held 0.8 s of tone.
+- MMTEST: "0 wrong, waveOut 1, step 1 ms, played 463 ms".
+- MSGBOX: its box, as before.
+
+**Open:** SELTEST computes "0 wrong", read out of its own memory, but its
+MessageBox draws with no title and no text. The menus outside it still draw.
+At the batch's base it never got that far, because it overran the stack.
+
+**Chasing it.** I compiled truncated copies of SELTEST, each ending in a
+MessageBox at a different point:
+- Every section through the selector functions, the aliases, GlobalDOSAlloc
+  and DPMI `0400h`/`0003h`/`0006h`/`0000h` left the box readable.
+- After DPMI `0000h` then `0007h`, the box had no text, whatever base was
+  given and whether or not the selector was freed afterwards.
+- `AllocSelector(0)` then `SetSelectorBase` to the same base was fine.
+- A DPMI-allocated selector re-aimed by `SetSelectorBase` lost the text
+  too.
+
+A dump of WIN16's bss shows the dialog part's USER heap selector
+(`w16_mseg`) at 0 even though its block handle exists. So the conversion
+that names the block failed, or something cleared the selector afterwards.
+I have not found which.
+
+The chase did find a real hazard on the way. `SEG_WIN`, asked for a new
+window, answers any window the caller already has with the same base and
+reach: two `AllocSelector(0)` calls got one selector back, and the program's
+selector could be one of WIN16's own. Program selectors are now made by
+`SEG_AT`, which never matches, and recorded in a 16-row table. Only a
+recorded selector is re-aimed or freed (SPEC.md 124.31.6). BIG still reads
+its 128 KB huge block back with 0 wrong.
+
+## 2026-11-01: S23 batch 4, waveIn
+
+Sound Recorder is the target. Of the eleven imports the census says it
+lacks, eight are `waveIn`'s. They are 504 to 512; 513 and 514 come with
+them.
+
+**The ring.** `SOUND.DRV` offers two ways to record:
+- Verb 4 into a grant of its pool is linear and holds 20 KB at most, under
+  two seconds. Sound Recorder records for up to a minute.
+- Verb 4 with `SND_OPENF_EXT` captures into a ring of the caller's own, in
+  place, and writes a free-running count after it. WaveRack records that
+  way.
+
+WIN16 takes the second: 16 KB and the two control words, in one
+`OSAPI_MEM_CLAIM_DMA_HI` claim made at `waveInOpen`. On WIN16's tick, the
+copy moves whatever the count says is new into the program's `WAVEHDR`s,
+one after another. A full block is returned with `MM_WIM_DATA`. With no
+block queued, what the card captured is lost, as on Windows. A copy that
+falls more than the ring less one block behind skips to what the card has
+not yet overwritten. The card is half-duplex: each side refuses while the
+other is open.
+
+QEMU's SB16 never sends a capture interrupt, so the driver's watchdog ends
+the stream and nothing is recorded. The fixture is written to that:
+- both blocks must come back exactly once, from the stop or the reset;
+- neither may hold more than its length;
+- the second is begun only once the first is full;
+- the position is 0 after the reset.
+
+The box says how much was recorded, so the same fixture means something on a
+card that records.
+
+**What the look found instead.** WITEST died at its MessageBox every time,
+as a FAULT 0D at a nonsense address inside the dialog part, or as STACK
+OVERFLOW TASK 00. Cutting the fixture short sent the failure back and forth
+without settling on any one call. Under a debugger or an execution trace it
+passed, so it was about timing. The pattern was this:
+- a truncated copy passed when it reached its MessageBox quickly;
+- a copy that spent a few seconds first failed.
+
+A probe with no MMSYSTEM call at all shows it. It waits, then calls
+MessageBox:
+
+| wait | SOUND.DRV loaded | without it | kern_big, with it |
+|---|---|---|---|
+| 500 ms | passes | passes | - |
+| 2,000 ms | STACK OVERFLOW | passes | - |
+| 4,000 ms | STACK OVERFLOW | passes | passes |
+
+The MessageBox fetches the dialog part from the floppy. Two seconds after the
+last read, the BIOS has stopped the motor. On QEMU, kern_mega's native floppy
+code falls back to the BIOS, and the BIOS's spin-up wait takes IRQ0s with
+interrupts on. On kern_mega, `SOUND.DRV`'s IRQ0 tick then runs on top of all
+of that, on the UI task's 512-byte stack.
+
+A dump at the overflow shows nested kernel reflection frames below WIN16's
+own. A prototype kern_mega with a 1 KB `STK0_SIZE` passes all four probes:
+DL2000, DL4000, the truncated WITEST, and WITEST whole. Its stack's
+high-water mark read 499 bytes. So on that kernel, a 512-byte stack has no
+margin left.
+
+This is a kernel decision, so it is not committed. The waveIn look ran on
+that prototype: "witest: 0 wrong, waveIn 1, start 0, captured 0, recorded
+0". MMTEST and MCITEST still read 0 wrong.
+
+One mistake of my own also turned up. The half-duplex test went into
+`w16mm_wmake` ahead of the line that saves its format. That clobbered AL and
+AH and failed twelve of MMTEST's checks. Looking at the neighbouring
+fixtures, not only the new one, is what caught it.
+
+## 2026-11-01: S23 batch 4, timeSetEvent and CALLBACK_FUNCTION
+
+Windows 3.x calls a `timeSetEvent` procedure, and a wave device's
+`CALLBACK_FUNCTION`, at interrupt time, whatever the program is doing. WIN16
+enters a program only where it waits in an import (§124.2.2). An
+interrupt-time callback could do almost nothing but `PostMessage`, so the
+place a Windows 3.x program can rely on is where it waits for messages. That
+is where WIN16 makes these calls.
+
+**The shape.** One block in the program's heap holds:
+- eight event rows;
+- a queue of eight owed calls;
+- a flag that says a call is running.
+
+A row and a queued call are the same sixteen bytes: the procedure and its
+first four arguments. The fifth argument is always 0. Each waits for one of
+three moments:
+- `GetMessage` before it looks for a message;
+- the tick while `GetMessage` waits;
+- `PeekMessage`'s answer, which is already a wait for one UI pass.
+
+Each moment makes one call through the continuation machinery. The owner-drawn
+items already use that path from the same three places (`w16_odgo`). When the
+procedure returns, the import asks again, so every owed call comes before the
+next message. Three short hooks in USER's message code reach part 9, and
+nothing else in the image changed.
+
+**Seen** on the dev kern_mega with an SB16: "tmtest: 0 wrong, periodic 15,
+waited 198 ms, wave 1/1/1, in 1/2/1":
+- a 50 ms periodic event and a 150 ms one-shot, met in a PeekMessage loop;
+- the periodic one again while `GetMessage` waits, its third call posting
+  the message that ends the wait;
+- a killed event that calls no more;
+- waveOut's open, done and close notices, and waveIn's open, two data and
+  close notices, each delivered to a procedure with the open's
+  `dwInstance`.
+
+The first look counted the GetMessage leg too strictly. A call that is
+already due when the third one returns is made before the posted message, by
+design, so the fixture now allows one or two more.
+
+## 2026-11-01: S23 batch 4, midiOut
+
+MIDIRack already drives the MPU-401 through `SOUND.DRV` (§105.8.5), so
+`midiOut` is a thin layer over the same five verbs. Two things shaped it.
+
+**The bytes have to be WIN16's.** `SNDV_MIDW` sends from the *caller's*
+segment, which `OSAPI_DRV_CALL` stamps into ES from DS, and in part 9 DS is
+WIN16's image. A message the program hands over is in the program's memory.
+So a short message is unpacked into WIN16's 16-byte scratch, and a long one
+goes through it 16 bytes a call. A long message is sent before
+`midiOutLongMsg` returns, so a header is never queued: prepare and unprepare
+are waveOut's own routines, since a `MIDIHDR`'s flags sit where a
+`WAVEHDR`'s do.
+
+**The notices needed no new code.** The `HMIDIOUT` block keeps its handle,
+callback kind, callback and `dwInstance` at the offsets an `HWAVEOUT` uses,
+so the existing notice routine posts `MM_MOM_*` to a window or a task, or
+queues it for a procedure.
+
+**Seen** on the dev kern_mega:
+- under QEMU, which has no MPU-401: "motest: 0 wrong, midiOut 0", with
+  caps and open refused as `MMSYSERR_BADDEVICEID`;
+- on 86Box's 386 with an SB16 and its MPU-401: "motest: 0 wrong, midiOut 1,
+  1/1/1". The run covered caps, an open with a procedure, a refused second
+  open, a note under running status, a long General MIDI reset (refused
+  unprepared, then sent), reset and close, and one each of the open, done
+  and close notices.
+
+The fixture also caught an older defect. The error-text table scan ended
+with `lodsb` reading the table's terminator into AL, so
+`waveOutGetErrorText` answered 255 for a number it did not know rather than
+`MMSYSERR_BADERRNUM`.
+
+
+### The stack overflow that was a QEMU jump (2026-11-01)
+
+On kern_mega's stock 512-byte task-0 stack, four of the arm's fixtures
+(SELTEST, TMTEST, MOTEST, WITEST) died on `STACK OVERFLOW TASK 00`. BIG
+did not. The dev kernel with a 1 KB stack passed them all, so the first
+reading was that the arm's frames were too deep, and the owner asked for
+them to be cut rather than for the kernel to grow.
+
+**Measured, they were not too deep.** With a 1 KB stack filled with CCh,
+all four peak at 498 bytes, at the same place: the face fetch when
+`\AUTOSTRT` launches the program. That fits in 512.
+
+Two more instrumented kernels found the real failure:
+- one whose overflow panel halts instead of drawing (the panel draws
+  through the wrong segment in protected mode and paints over the
+  evidence);
+- one that halts when IRQ0 finds `SS = LOW_SEG` with SP above the stack's
+  top.
+
+Together they show task 0 running at `SS = LOW_SEG` with SP near 8D80h. It
+had pushed the program's ES some 37,000 times, wrapping all 64 KB of
+`LOW_SEG`. It was executing in the library part at 131C:FFE9, past the
+part's limit.
+
+**The decisive A/B moved one thing.** A 512-byte stack with the heap moved
+up 512 bytes, and nothing else changed, passed all four. The 1 KB kernel
+had only hidden the fault by moving the heap. The library part's claim was
+3FE00h-4F200h in the failing layout and started at 40000h in the passing
+one.
+
+It disappeared under `-d exec`, under a gdb stub, with TB chaining off and
+with one instruction a TB. It reproduced every time under `-icount
+shift=4,sleep=off`. `-d in_asm` in that mode showed the step:
+`w16_mheap`, at offset B7h of the library part, did `call w16vd_sdx`, the
+arm's thunk at F36Fh.
+
+That is displacement F292h, so IP goes from DDh to F36Fh. QEMU took it to
+the part's base **minus** 0C91h:
+- its `gen_jmp_rel` skips the 16-bit mask when the jump stays on the
+  current 4 KB page and the block can be chained;
+- with a base of 3FE00h, the unwrapped target 3F16Fh is on that page.
+
+Below the part were zeros. The zeros fell through into the part's first
+bytes, and the loop pushed ES from there.
+
+**The fix is the arm's own.** In `.w16dlg`, the only section over 60 KB,
+`W16V_CALL` calls a thunk through a word beside it. That is 79 sites and
+164 bytes of the arm's library part. Real mode is byte-identical. A new
+fast row, `w16wrap`, disassembles both builds and refuses any near call or
+jmp whose IP wraps within 4 KB of its target. Today the real-mode build has
+119 wraps in the library part, all more than 4 KB from their targets.
+
+On the stock stack, SELTEST says 0 wrong, MOTEST 0 wrong, TMTEST, WITEST
+and BIG run, and Calculator computes 9 x 9 and its reciprocal.
+
+### What a period BIOS said that QEMU did not (2026-11-01)
+
+Phase B's targets are Windows 3.1's own protected-mode programs, and the
+plan asks for them to be looked at on 86Box as well as QEMU, because QEMU
+runs code a real 286 or 386 faults on. Under QEMU, REGEDIT 3.1 opened its
+Registration Info Editor and SOL 3.1 dealt on the stock kern_mega.
+
+86Box cannot be keyed from this host, and `vm/286-mega` has never had its
+CMOS saved, so its BIOS stops at *Fixed Disk Configuration Change, Press
+Any Key*. A copy of `vm/386dx` with that machine's saved CMOS boots
+untouched, and an `\AUTOSTRT` link opens the program. There, SOL 3.1
+stopped twice.
+
+**First, a store through a code selector.** With a 1 KB task stack SOL got
+further and died on `FAULT 0D err 0000`. The faulting offset was
+`w16_i21clk.anchor`: int 21h's time of day loaded DS with `mov si, cs /
+mov ds, si` and wrote its anchor through it. In protected mode CS is the
+pair's execute/read half, so the store is #GP. QEMU does not check a
+segment's type on a store, so it had run every time. The 27 `push cs /
+pop ds` sites had been converted in batch 3 (`W16CSEG`); this one had the
+other spelling. It is `W16CSDS si` now, the data half, and SOL dealt on
+86Box's 386 with the 1 KB stack.
+
+**Second, one word too deep.** On the stock 512-byte stack SOL still hit
+`STACK OVERFLOW TASK 00`, so this time it was depth. A 1 KB-stack kern_mega
+that fills task 0 with CCh at its first switch and, 160 seconds in, shows
+the lowest word touched as the panel's SP read **514 bytes**, on 86Box and
+on QEMU alike. That is 16 bytes deeper than BIG's 498, and it puts the
+deepest frame one word below the canary. Whether a tick lands in that frame
+decides whether the canary dies, which is why QEMU happened to run it.
+
+The owner had already answered how: cut the arm's stack, no kernel change.
+The arm's own frames down to the read are 84 bytes, and cutting a few of
+them would have bought a few bytes. The 246 bytes the kernel holds at the
+call are a better target, and they are not the kernel's to keep: a
+document's launch calls the package's `W_ONWAKE` handler *itself*, from
+inside the launch (SPEC.md 54.10). Under `\AUTOSTRT` that is inside
+`lnk_open`, with its record on the stack. The entry proc's own wake is
+still queued in the ring behind that call. So the arm's first wake in the
+loading state now kicks once more and returns, and the load runs from the
+ring's wake, which the UI task pops at the top of its loop. The same
+measurement reads **336 bytes**, 174 under the canary. SOL deals on 86Box's
+386 on the stock kern_mega.
+
+WRITE 3.1 is the one target left. It is not WRITE 3.0, which runs. On
+GetVersion 3.10 it asks `GetProcAddress` for KERNEL.310 by ordinal and
+calls the answer without checking it, so a NULL is a far call to 0000:0000.
+A trial row for `LocalHandleDelta` got it past that, to *Needs KERNEL.107*,
+and a census of its imports names three more. All four are in the lead's
+files, so they went to the lead rather than into this branch.
+
+### What the trap census counted (2026-11-01)
+
+kern_mega completes some of what a real-mode program does that protected
+mode refuses: a store through a code segment, an access through segment 0.
+It does that by trapping each one, and a site left to the trap is correct
+and slow. So the plan names Bochs with `MEGATRAP=1` as the instrument. That
+kernel writes a line to port E9 for every `#GP` it completes, and
+`tools/megatraps.py` ranks the lines by site.
+
+Write 3.0 ran under it for eight minutes, an idle window and a few
+keystrokes. The census read **114,952** traps from 45 sites, and twelve of
+those sites had **9,388 each**. All twelve were in WIN16's own image, in
+`w16_i21_on` and `w16_i21_off`. Every time WIN16 hands the CPU to the
+program, they swap the IVT's int 21h and int 31h, and they put them back
+when the program calls out. They reached the IVT with `xor ax, ax / mov es,
+ax`. In real mode that is the IVT. In protected mode 0 is the NULL
+selector, and each of the six accesses per swap was a fault, a single step
+and a second trap. The next two sites were `GetTickCount` reading the BIOS
+tick the same way.
+
+The kernel already had the answer in the API: `SEG_WIN` makes a data
+selector over any paragraph below 1 MB, and the segment equates' `__0000H`
+was bound to one already. The arm now asks for that window once per load
+and keeps it in `w16_seg0`. A macro, `W16SEG0`, loads it where real mode
+zeroes a register into the segment. `mov es, [w16_seg0]` is four bytes, the
+same as the two instructions it replaces, and that matters: the arm had 3
+bytes of room. Real mode assembles exactly what it did.
+
+### Windows 3.1's own programs, and what they found (2026-11-01)
+
+Write 3.1, Sound Recorder and Media Player each import a few calls Windows
+3.0's programs did not. With the setup bootstrap's list beside them, that
+is twenty-two export rows, all in part 9, so the image pays nothing. Five of
+them are another call's arguments with a head of their own. `ScrollDC`'s
+last five arguments are `ScrollWindow`'s in the same order, so it runs
+`ScrollWindow` on them where they stand. It moves the saved program stack
+pointer by six bytes for the length of the call.
+
+Once they loaded, the two multimedia programs found three things:
+
+- **A dialog at `CW_USEDEFAULT`.** Both have a dialog for a main window,
+  placed at 8000h. Scaling 8000h dialog units by 7/4 is an `idiv` whose
+  answer does not fit in 16 bits, which is a divide fault, and kern_mega
+  restarts the machine on one. Wine's dialog code leaves 8000h alone, and
+  so does WIN16 now.
+- **`CreateBitmap` with bits** wrote through a virtual paragraph on the
+  arm. It is one of the few places that loaded one into ES by hand.
+- **Media Player reads `SYSTEM.INI`'s `[mci]` section** to list its
+  devices, and said none were installed. The arm now starts a `SYSTEM.INI`
+  that is not there with the two lines Windows 3.1's Setup would have
+  written. After that, its Device menu lists Waveform Audio and CD Audio,
+  and CD Audio opens with its tracks along the scale.
+
+Their buttons were blank grey faces. A trace build (`-DW16_TRACE`, its
+ring found by scanning the arm's memory, which is above 1 MB) showed Media
+Player's button painting its TEXT, not its bitmap. The bitmap is loaded
+when the button's `WM_SETTEXT` sees `#Play`, and the button sends itself
+that from `WM_CREATE`, out of the CREATESTRUCT's name. For a control in a
+dialog, WIN16 had passed that name as NULL. With the name in place, three
+more things came into view one after another:
+
+- `EnableWindow` sent a program's own window nothing, so a button enabled
+  when a CD opened kept its disabled face;
+- `StretchBlt` into a memory DC answered FALSE;
+- a monochrome glyph copied into a colour memory DC ignored the DC's text
+  and background colours.
+
+After all four fixes, Media Player's Play and Eject show their glyphs once
+CD Audio is open, and Sound Recorder's Record button shows its microphone.
 
 ## 2026-11-01 — S21, batch 4: Windows Help, and a launch that ate itself
 
@@ -3253,6 +4059,215 @@ table, and it holds four names. That is enough for this conversation and
 too few for Program Manager's DDE server, so moving it out of the image is
 on the list.
 
+## 2026-11-01: merging S21 batches 4 and 5 into the protected-mode arm
+
+Batches 4 and 5 (Windows Help, `ShellExecute`, `HWND_BROADCAST` and DDE
+between tasks) came into Phase B/C as a merge. The arm came out of it 30
+bytes over `APP_MAX_SIZE`: the image grew 31 bytes, and the arm had one
+byte left before.
+
+The bytes came from the atom table, which the merge had just made
+important. It was four names of 32 bytes in the image's bss. It is
+sixteen names in the system-library part now (SPEC.md 124.28.6), which
+the instance fetches once and keeps, so every task shares it. Part 9's
+code reaches it through a data segment for the part (`W16SEG` of
+`[w16_sseg]`), not through CS, which the kern_mega arm cannot write
+through without a trap. The four routines that named an atom became
+two: `w16i_atom` adds or finds, and `w16i_atomname` reads a name back.
+They moved out of the library part as well, which is the one closest
+to its 64 KB.
+
+The arm has 98 bytes of room again. It keeps three arenas, where real
+mode now has four (SPEC.md 124.31.1): a fourth is four more bytes of bss.
+
+**Seen**, by looking: TASKS and TASKB say *TASKS OK* on the kern_mega arm
+and in real mode, a DDE conversation over the moved atoms included.
+
+## 2026-11-01: Program Manager, answered from inside WIN16
+
+A Windows setup program's last step is a conversation with Program
+Manager. It broadcasts `WM_DDE_INITIATE` for `PROGMAN`, then posts
+`[CreateGroup(...)][AddItem(...)]` and waits for the acknowledgement.
+Without an answer, Visual Basic's `SETUP1` waits out its link timeout
+and reports an error, and an installer that copied every file still
+looks as if it failed.
+
+**Where the answer lives.** S21's routing already sent a broadcast to
+every top-level window. The server joins at the end of that broadcast,
+which is part 9's (`w16t_bsend`), so it costs the image nothing. The
+reply has to be *sent*, inside the client's `SendMessage`, because the
+client checks for a server the moment the call returns. The routing
+already had the shape for that: a send to the caller's own window is a
+call into the program with a continuation.
+
+**A window that needs no message loop.** DDE wants the server to be a
+window: the client posts to it, and may ask `IsWindow`. WIN16's server
+window is a hidden child of the client's, of a kind of its own
+(`W16Q_DDE`). A post to it never reaches a queue. `w16t_postmsg` sees
+the kind and runs the commands right there, inside the client's
+`PostMessage`, then posts the acknowledgement back. By the time the
+client's loop looks, the answer is waiting in its queue.
+
+**What a group becomes.** os8088 already had both halves. A link
+(§26.10) is a 50-byte file that opens what it names, and
+`OSAPI_DESK_ITEM` puts a shortcut on the desktop. So a group is a folder
+in the Windows directory's `GROUPS`, and an item is a link in it. A new
+group's folder gets a desktop shortcut with the Disk window's folder for
+its picture. `AddItem(NOTEPAD.EXE C:\APP\README.TXT)` becomes a link to
+the text file, which os8088 opens itself: Windows' Notepad is not on the
+machine.
+
+**Seen**, by looking, in real mode and on the kern_mega arm: `PMDDE.EXE`
+runs all four command blocks and says *PMDDE OK*. A *PMDDE Test*
+shortcut appears on the desktop, and the deleted group's does not.
+Opening the shortcut shows `PMTEST.LNK` alone, because `DeleteItem` took
+the other link. Opening that link starts `PMDDE.EXE` again, through
+`DOS.O88` and WIN16. The second run finds the folder already there and
+adds no second shortcut.
+
+## 2026-11-01: the rest of the installer's list, and one item left out
+
+Three more items from S24's list:
+- **A setup that asks Windows to restart** (`ExitWindows` with
+  `EW_RESTARTWINDOWS`) now ends with a toast, *No restart is needed*.
+  The first wording ran past the toast's room on VGA and was cut off at
+  the menu bar's right end, so it was shortened.
+- **`GetDriveType` of a CD** needed no code. A CD volume is one of the
+  kernel's file-serving volumes, which reports a redirected transport,
+  and WIN16 already answers that as `DRIVE_REMOTE`. Windows 3.1 under
+  MSCDEX answered the same.
+- **MSCDEX's `int 2Fh` is left out**, on purpose and written down.
+  Hooking it would be a third interrupt vector, swapped at every way into
+  and out of a program, plus an entry that changes stacks. That is about
+  100 bytes of the image, and the kern_mega arm has 98. No installer
+  among the targets has been seen to ask, so the real installs in S25
+  will decide.
+
+## 2026-11-01: the disabled buttons, and a fault the arm had been hiding
+
+Media Player starts with every button disabled, and those buttons were
+blank. A disabled glyph is drawn with the ROP `DPSoa` under a checkered
+brush: the brush's black pixels cut half the glyph's ink away, which
+leaves a grey glyph. WIN16 built one table per call, for a solid brush,
+and refused a checker. A memory DC now takes it pixel by pixel. Each
+pixel uses the brush's black or white at that spot, which alternates
+with x + y.
+
+**The first look faulted.** Media Player stopped with *kern_mega FAULT 0D*
+at an offset that the map put in `w16_nibrop`, the routine every
+pattern ROP into a memory DC goes through. It loaded its source bitmap's
+segment straight into DS. In real mode that is a paragraph, but on the
+kern_mega arm it is a virtual paragraph and has to be converted. No
+pattern ROP had reached that routine on the arm before the checker let
+one through. One `W16SEG` fixed it.
+
+**Seen on the arm:** Media Player's four buttons and Sound Recorder's four
+disabled ones show checkered grey glyphs. Sound Recorder's Record, which
+is enabled, stays black.
+
+## 2026-11-02: why Media Player's Play was "out of range"
+
+A temporary build that wrote MCI's play arguments to port E9 showed the
+cause on the first press of Play:
+- Media Player sends a play with no `from` and no `to`.
+- WIN16 played from where the opened disc stood, track 1.
+- On the test disc, track 1 is the data track; the three audio tracks
+  come after it. The drive refuses `PLAY AUDIO` on data, and that
+  refusal surfaced as `MCIERR_OUTOFRANGE`.
+
+A play that starts on a data track now starts at the next audio track.
+The first version of the fix still picked track 1. The CD helper it
+called restores SI, and SI is where the drive's door answers a track's
+control nibble, so the data bit read as clear. The fix now calls the
+door's raw entry, which leaves SI as the drive set it.
+
+QEMU's drive refuses `PLAY AUDIO` on any track, so under QEMU the play
+now does nothing and shows no error. Hearing it needs 86Box's
+`386-mega-cdrom`, whose disc is audio. That is S25's.
+
+## 2026-11-02: a setup from a floppy, one failure at a time
+
+Microsoft Arcade's `SETUP.EXE` was run the way its box says: from the floppy
+in A:, with WIN16 installed on the hard disk. The test machine was kern_mega
+booted off a 32 MB FAT16 IDE disk, with an `\AUTOSTRT` link to
+`A:\SETUP.EXE`. Each failure was traced, fixed, and the setup run again.
+
+1. **Nothing started, and the stack overflowed.** DOS.O88 hands an NE to
+   WIN16. The association lookup could not find WIN16.O88 from A:, so it
+   retried by the document's extension, which handed the program back to
+   DOS.O88, which handed it to WIN16 again. The retry now stops when the
+   extension's slot is the one that just failed. This defect is on main too.
+2. *"Initialization list file has been corrupted."* The setup reads its own
+   `A:\SETUP.LST` with `GetPrivateProfileString`. WIN16's profile cache knew
+   only the Windows directory, so that file read as empty. A profile named
+   with a drive or a folder is now read through WIN16's DOS.
+3. *"Insufficient memory or disk space."* The setup asked AH=36h about C:
+   while it stood on A:, and was told about A:. Since 96.48 the drive select
+   no longer mounts, so the call now stands the machine on the drive it
+   names.
+4. **A fault in LZCopy on the arm.** A raw load of a virtual paragraph into
+   ES; it is now `W16SEG`.
+5. **"Access denied" on every file larger than a kilobyte.** The DOS core's
+   file window works in clusters, and it used the floppy's 512-byte cluster
+   for the hard disk's files too. An in-place write then landed at offsets
+   that were not on C:'s 2 KB clusters, and the kernel's `WRITE_AT` refused
+   them. The window now asks each file's own volume once. `XVOL.EXE` is the
+   reduction: a program on A: copying itself to C: a kilobyte at a time.
+6. *"Insufficient memory or disk space"* again, this time from WinExec. The
+   setup changes into `C:\~MSSTFQF.T` and starts `_mstest arcade.mst` by
+   bare name. Windows looks in the current folder first; WIN16 did not, and
+   answered 2 ("file not found"). It now opens the name through its DOS
+   first.
+7. **The setup deleted its own second stage.** After WinExec, the bootstrap
+   waits while `GetModuleHandle("DSHELL")` answers. DSHELL is `_MSTEST.EXE`'s
+   module name, which is not its file name, and WIN16 knew only the current
+   program's file name. The loader now keeps each program's module name, and
+   GetModuleHandle searches the other tasks too.
+
+After step 7, all eighteen files are copied and expanded, and `_MSTEST`
+runs. It then faults inside its own string helper, on a far pointer
+`03E1:0000` read out of a table in one of its global blocks.
+
+8. **The table was WIN16's own memory.** `_MSTEST` keeps its keyword table
+   in a discardable code segment, and reaches it with segment relocations.
+   WIN16 had sent every relocation to such a segment through a thunk in its
+   module block, so the program read the module block as its table. A
+   `pmemsave` dump showed it. Segment and offset relocations now take the
+   segment itself, and the segment stays loaded.
+
+The next stop is *Parser out of memory*: `_MSTEST` grows a block that it
+holds locked. Real-mode Windows refused that too; the protected modes moved
+the block and kept its selector. That is a design question for the arm.
+
+### Sir Hangman: an error box with nothing in it
+
+Sir Hangman's setup is InstallShield 3's. It showed *Setup Initialization
+Error* over an empty box. The launcher's string table holds the text for
+only one of its eight errors, so the box said nothing whichever one it was.
+To find out which, a scratch copy of `SETUP.EXE` was patched (never
+committed): every error number was given a string naming itself, and the
+WinExec error was made to show WinExec's answer. Each run then named its
+own failure:
+
+1. *7068*, too little memory. The launcher wants 700,000 bytes from
+   `GetFreeSpace`, which answered the largest free run in an arena, 388 KB.
+   On kern_mega it now adds the heap's free memory outside the arenas.
+   A 640 KB machine never has 700,000 bytes, so this installer has no
+   real-mode leg.
+2. *7067* with answer 11, "not a Windows program". The launcher expands its
+   engine to `C:\SYSTEM\APPDATA\WIN16\_INS0433._MP` and starts it by that
+   full name. WIN16's DOS opened it, and then walked back to the program's
+   folder, `A:\`, where WIN16 looked for the file. A one-byte read now
+   stands the machine on the file first.
+3. The same answer, for a new reason: *Imports more than WIN16 can bind*.
+   The launcher's 135 imports and the engine's 247 needed 386 of the 384
+   slots, because the engine's loader did not know which handlers already
+   had one. It looks for a slot bound to the same handler now.
+4. *Not enough memory to load it.* The engine refers to all 64 of its code
+   segments by number, 607 times, so WIN16 must keep all 404 KB of them
+   loaded. Beside the launcher, they do not fit in three arenas. That is
+   where this entry stops.
+
 ## 2026-11-02 — S21, batch 6: the second program joins the first
 
 **The final pass found the memory wall.** One WIN16 instance now costs
@@ -3353,3 +4368,1004 @@ the right colours. FPU.EXE reaches its MessageBox on MartyPC's 5150. The
 cross-section gate (`t_w16xsec`) now knows part 10 and passes, and so
 does the fast tier.
 
+
+## 2026-11-02: batches 6 and 7 into the protected-mode arm
+
+Batches 6 and 7 (a desktop launch joining a running instance, part 10, the
+8087 emulator's fetch) came into Phase B/C as a merge. Three things had to
+be made to fit.
+
+**Part 10 needed the arm's pieces.** A part has a thunk suffix, a word that
+holds WIN16's data selector, and a code half for its vector. The first
+suffix tried was `k`, which turned out to be a loop counter that an
+`%assign` had left at 8, so the word was named `w16v8_myds`. It is `q` now.
+The two part-fetch tails that the lead's `w16_sysin` and `w16_tskin` share
+had to be renamed as well. Their names collided with the arm's own
+`w16_pin` and `w16_pout`.
+
+**Program Manager's DDE server moved to part 10.** It answers through the
+atom table and is reached from the broadcast, and both of those had gone
+to part 10 with `w16mdi.inc` and `w16task.inc`. Left in part 9, its calls
+into them would have been near calls between two parts, which
+`t_w16xsec` refused. The atom table also still addressed its part through
+part 9's segment, and that was corrected. The lead had put SendMessage and
+PostMessage back in the image, so a post to the server's window needed a
+new route. It costs one bss byte and no code. Making the server window
+sets `w16_ddeup`, the byte after `w16_ntk`, and `w16_post` compares the
+two as one word. From then on every post goes to part 10's `w16t_post`,
+which runs a post to the server in the call.
+
+**The arm was 33 bytes over.** The join box, part 10's fetch and the
+dispatch's third part cost the image about 180 bytes on both arms. The
+fix is a tail call. Wherever the image did `LCALL`, `SCALL` or `TCALL` and
+then `ret`, it now stores the routine and jumps (`LJMP`, `SJMP`, `TJMP`).
+That covers 14 sites and the 21 continuation trampolines, and it saved 35
+bytes on each arm. The arm now has **one byte** of room. The real-mode
+arm has 626.
+
+Two arm-only changes then bought back 33 more bytes, which left **34 bytes
+of room** on the arm. First, parts 9 and 10 now keep their data-selector
+word in the header, at the same offset in both, so the shared fetch writes
+it with one instruction instead of choosing between two. Second, the
+code-half request was written out four times, and it is now one routine,
+`w16_pcode`.
+
+## 2026-11-02: the room cut before Mozart
+
+The lead asked for at least 300 bytes of room on the arm before Mozart's
+work, since the fixes it needs would spend the 34 that were left. Two
+changes gave 1,072 bytes (1,106 of room on the arm, 1,698 in real mode):
+
+- **The import stubs are four bytes, not six.** There are 384 of them, one
+  per bind slot. Each was `mov ax, k / jmp near w16_gate`. Each is now
+  `call w16_gstub` and a pad byte, and `w16_gstub` pops the return address
+  and works out the slot from it: `(ret - w16_stubs - 3) / 4`, two shifts.
+  That is 768 bytes on both arms, for one pop and three ALU instructions a
+  call. Every place that turned a slot into a stub address (the loader's
+  two, GetProcAddress's, the fixed rows the image names, the x87 end stub
+  and the census's division) reads `W16_STUBSZ` now, and so does the
+  census gate on the host.
+- **SetDIBitsToDevice moved to part 9**, beside SetDIBits. It costs nothing
+  in fetches: its first instruction after the arguments was already an
+  `SCALL` into part 9 (`w16_dibuse`), so every program that called it had
+  the part. That was 312 bytes.
+
+**Seen:** Arcade 1.0's setup to *Congratulations!* on kern_mega, and the
+TASKS fixture's *TASKS OK* on kern_big (QEMU, looks).
+
+## 2026-11-02: Mozart's selectors, a rule and a stopgap
+
+Mozart's setup ran kern_mega's LDT out. Its interpreter grows blocks a
+paragraph at a time. Every new length was a new selector for the program,
+and every new place a new one for WIN16. The selectors went from 615 to
+the LDT's 2,016 in eight seconds. The lead approved two changes:
+
+- **GlobalReAlloc's grow in place keeps a quarter more than asked**, when
+  the free neighbour has it. This is a rule rather than a bend, because
+  Windows promises at least the size asked for.
+- **A program's block selector reaches its claim's end, not the block's.**
+  This is a stopgap, marked so in SPEC.md 124.31.3. It gives up an overrun
+  faulting. It is to be replaced before the merge by one descriptor per
+  handle that GlobalReAlloc retargets in place, as Windows' standard mode
+  did, plus a walk window for WIN16's own header touches.
+
+With both, the LDT levels off at 1,646 entries.
+
+## 2026-11-02: a stack for the BIOS
+
+The next thing that stopped Mozart's setup was a reboot. Its user-interface
+library calls `int 10h` straight from its own code. On kern_mega a software
+int goes down to real mode for the BIOS, on the stack it was made on, and a
+WIN16 program's stack is a claim above 1MB. Real mode took the stack's
+selector for a segment, and the BIOS pushed its frame somewhere under 1MB
+that belonged to someone else.
+
+The lead decided against a stack in the kernel's own low memory, which
+would have cost every kern_mega machine a rung for one package. WIN16
+lends one instead: a 1 KB claim below 1MB, handed over with a new
+`OSAPI_SEG` subfunction, `SEG_LEND` (SPEC.md 50.6.11). When a BIOS int
+arrives on a stack that is not the kernel's, `mega_svc` moves the caller's
+frame onto the lent stack, and a return stub puts the caller's stack back
+afterwards. A software int made with no stack lent is the caller's stack
+fault.
+
+The first try faulted at once, `GP 0D err 1180` inside `mega_svc`. The
+plan had assumed a claim's paragraph below 1MB is also a usable selector.
+It is not: kern_mega's GDT is an identity map only up to `.cold`, and every
+claim has an LDT selector. A lent stack has two names, then: its selector
+in protected mode and its paragraph in real mode. `SEG_LEND` takes the
+paragraph and finds the claim's selector. `mega_svc` writes both before the
+drop to real mode, and each side of the switch loads its own. kern_big is
+byte-identical. kern_mega's `.text` and `.bss` are two bytes smaller together, `.mega` grew
+272 bytes (one rung, paid at boot), and `.lowbss` grew 7 bytes with no
+paragraph crossed.
+
+**Seen (QEMU, kern_mega, a look):** Mozart's setup from the Welcome screen
+through the copy. `MOZART\` holds its 11 files and `ILLUS256\HD\`, and
+VBRUN300.DLL went into WIN16's folder. Its group MICROSOF was made with two
+links. The final dialog still does not show, because the heap is short of
+room for its bitmap; that is the next piece of work.
+
+## 2026-11-03: a library's code comes and goes
+
+With its stack lent, Mozart's setup reached its last dialog and stopped
+there. The dialog wants a 42 KB bitmap, and the heap had nowhere to put it.
+Four arenas held 810 KB with 68 KB free, but the largest run was 20 KB.
+Most of the rest was library code: the Setup Toolkit's nine libraries, about
+160 KB, kept fixed for the whole setup because WIN16 had never discarded a
+library's code. Real-mode Windows did. The lead approved doing the same
+(M1) and refused a second step that would have grown the number of arenas.
+
+The machinery was already there for a program's own segments: thunks, a
+module block, and a stack scan that pins a segment someone will return
+into. A library added three surprises, and each one was a fault.
+
+- **`FAULT 05`, then `FAULT 04`.** A library exports some entries from a
+  FIXED bundle in its entry table, which names a segment that may now be
+  discardable. Those entries got no thunk, so a call through one jumped
+  into an empty one. Every exported entry into a discardable segment now
+  gets a thunk, whatever bundle it is in.
+- **A far return into selector C000h.** MSCUISTF's segment 4 names itself
+  by number, at offset 2287. Its exported ordinal 12 begins that segment.
+  The value escapes as a dialog procedure's address and outlives a
+  discard. A program's self-reference is applied again at each load, so it
+  is safe. A library's can leak, so a library's segment that names itself
+  is now kept. Three of the Toolkit's modules have one: MSCUISTF, ENCCDPRF
+  and MMUTIL, five small segments in all.
+- **Pins that were not there.** The stack scan matched any word on the
+  stack that looked like a code selector. On kern_mega selectors and stack
+  offsets are numbers in the same range, so a saved BP or a local pinned
+  segments nobody would return into. The scan now pins only a far return
+  address: a selector of a loaded segment with an offset inside its length.
+
+No binding is left pointing into code that has gone. A far pointer to a
+library's entry in a discardable segment is bound to that library's thunk,
+from a program, another library or WIN16. A thunk is what changes when the
+segment is loaded or discarded, so none of the bound pointers ever names a
+block that has gone (SPEC.md 124.26.11).
+
+**Seen (QEMU, kern_mega, looks):** Mozart's setup runs to its last dialog
+with nothing faulting. At that dialog 50 of MSCOMSTF's segments have gone,
+and the bitmap's 42.8 KB resource loads. Arcade still reaches
+*Congratulations!*.
+
+**The dialog is still not seen.** `LoadBitmap` needs a second block of the
+same size for the bitmap's bits, and the largest run left is 33.8 KB. The
+dialog runs, invisible: its window record has a size made of whatever
+`GetObject` left. Three ways out went to the lead: give a big bitmap a claim
+of its own, stream a big DIB a row at a time, or compact the arenas. The
+first was taken, below.
+
+## 2026-11-03: a selector for every handle
+
+The stopgap selector from 2026-11-02 kept the LDT alive. It did so by
+reaching to the end of the claim, so a write past a block landed in its
+neighbour. The lead wanted the real thing before the merge: what Windows'
+standard mode did. One selector per handle, and `GlobalReAlloc` changes its
+base and limit in place.
+
+Nothing in `OSAPI_SEG` could re-aim a descriptor that way.
+- A SUB is shared by anyone asking for the same base and limit, so
+  re-aiming one moves somebody else's.
+- A bound window can be re-aimed, but kern_mega has only 32 window rows,
+  and Mozart's setup alone holds a dozen handles at once.
+
+So kern_mega got a thirteenth verb, `SEG_HND`. It makes a fresh descriptor
+based in a block and re-aims or frees it on request. It is marked with the
+one bit of a descriptor that software may use: the 386's AVL bit, in a byte
+a 286 never reads. The kernel's SUB lookup passes a marked entry by, and the
+entry needs no window row. It cost `.mega` 208 bytes in the same rung, and
+kern_big and kern_small not a byte.
+
+On WIN16's side:
+- Each global block under 64 KB gets its handle descriptor the first time
+  the program is given its selector.
+- A grow, a shrink or a move re-aims it.
+- Freeing the block frees it.
+
+That alone took the LDT's peak across Mozart's setup to 1,859 entries.
+WIN16's own touches of block headers were the rest. A fit, a merge or a
+discard walks an arena a header at a time, and every header was a new SUB
+that lived until its arena went. Two more handle descriptors, which WIN16
+keeps for itself and re-aims at each step, replaced them. A trace build
+that logged where SUBs were made showed four more sites worth moving: a
+new block's header, a split's remainder (twice), and a freed block's
+header.
+
+The numbers, all looks on QEMU:
+
+| | LDT entries at the peak, of 1,992 |
+|---|---:|
+| before the stopgap | ran out |
+| the stopgap (a selector to the claim's end), at the last dialog | 1,825 |
+| handle descriptors alone | 1,859 |
+| plus the first walk sites | 1,740 |
+| plus the four traced sites, to the copy's end | 1,635 |
+| ...and through the last dialog's bitmap | **1,658** |
+
+(The 2026-11-02 entry says the LDT has 2,016 entries. Read off the
+descriptor table, it has 1,992.)
+
+**QEMU cannot see the point of it.** The fixture written for the overrun,
+`OVRTEST.EXE`, reported its selector unchanged across a `GlobalReAlloc`,
+with the new limit and the old bytes. Then it wrote one byte past the block
+and said it had survived. QEMU's TCG checks no data segment's limit. Bochs
+does, so the row `win16ovr` boots kern_mega under Bochs, and it runs in the
+final pass with everything else.
+
+## 2026-11-03: Mozart's setup is complete
+
+The lead's plan for the bitmap was route D: when the global heap refuses
+a bitmap's bits, give them a claim of their own. That takes one row of
+WIN16's memory map, and only a bitmap may use it, so it is not a fifth
+arena by another name. `DeleteObject` gives the claim back, and so does the
+program's end. Telling a claim from an arena's block needs no new state:
+a claim's map row starts at the bits, while an arena's block never starts
+at its row, because a header comes first. The code is all in the library
+part, and the arm's image did not grow.
+
+The first look after it failed much earlier, which was useful. `_MSTEST`
+said *Parsetime error: Syntax error* at `SETUP.MST(45)`, before the first
+dialog. The cause was a change made to `w16_pblk` that same morning,
+AFTER the morning's looks: a block holding a handle descriptor was answered
+that descriptor even once it had grown past 64 KB. Mozart's script engine
+grows such a block and walks it with huge pointers, `__AHINCR` = 8, so the
+selector 8 above the handle descriptor was somebody else's. Such a block
+is now tiled at its next ask, as it was before the handle descriptors. Its
+old descriptor stays with the arena, reaching the first 64 KB, in case the
+program still holds it.
+
+**Seen (QEMU, kern_mega, looks):**
+- Mozart's last dialog shows, the registration card with its picture.
+- *Continue* brings *Microsoft Mozart Setup is complete*.
+- *Return to Windows* says the new configuration needs a restart, then
+  ends the setup on the desktop with the group's shortcut.
+- Across the whole run the LDT peaks at 1,658 of 1,992.
+- Arcade still reaches *Congratulations!*.
+
+The lesson is the old one: a change made after the look is a change
+nobody looked at.
+
+## Phase B/C: where it stands (2026-11-03)
+
+**Works, seen:**
+- Protected mode on kern_mega:
+  - Registry Editor, Solitaire, Minesweeper, Write, Paintbrush, Cardfile
+    and Calendar, Write's document above 1 MB;
+  - on 86Box's 286 and 386 as well as QEMU.
+- MMSYSTEM: the clock, mmio, `waveOut`, `waveIn`, MCI, `timeSetEvent` and
+  `midiOut`, each against a fixture that says 0 wrong.
+- The Program Manager DDE server: a group is a desktop shortcut to a
+  folder of links.
+- Microsoft Arcade's setup from its floppy, to *Congratulations!*.
+- Mozart's setup from its CD, through its copy and its group to *Setup
+  is complete*.
+
+**Decided, by the lead, with the owner's standing rules:**
+- A grow in place keeps a quarter more than asked (D1(b)).
+- One descriptor per handle replaced the stopgap (D1(a)).
+- A BIOS call on a program's stack runs on a stack WIN16 lends, not on a
+  low rung every kern_mega machine would pay for (D2).
+- A library's code is discardable (M1), and the number of arenas stays
+  four (no M2).
+- Sir Hangman is a known limit: its installer keeps 404 KB of code.
+
+**Not done:**
+- Mozart itself, started from its link. It is Visual Basic 3.0 over
+  VBRUN300, about 520 KB of code that cannot be discarded
+  (WIN16-NEXT-PLAN L1).
+- Sound Recorder playing, and Media Player playing an audio CD, have not
+  been heard. QEMU's drive refuses `PLAY AUDIO`, and 86Box's
+  `386-mega-cdrom` has not been listened to.
+- MSCDEX's `int 2Fh`.
+- A `win16setup` row.
+- Phase A's rows have no kern_mega leg.
+- The final pass (S25) is still to run.
+
+## 2026-11-04: MSCDEX answers (WIN16-NEXT-PLAN Q3)
+
+**What it is.** A CD-ROM title's installer asks DOS, through `int 2Fh`
+`15xxh`, whether MSCDEX is there and which letter the CD is. WIN16 already
+owned `int 2Fh` (124.2.1) and answered nothing, so no third vector was
+needed: `w16_i2f` now answers `1500h`, `150Bh`, `150Ch` and `150Dh` from
+one byte, the CD's volume, which `w16_entry` asks `CDROM.DRV` for once.
+Every other `15xxh` is refused rather than faked (SPEC.md 124.33.3).
+
+**Who asks.** A byte scan of the titles found Sir Hangman's `_INST16.EXE`
+asking `1500h` and `150Bh`, and Windows' own `MCICDA.DRV` asking
+`1500h`, `150Ch`, `150Dh` and `1510h`. Mozart's and Arcade's setups ask
+only APPEND.
+
+**A wrong answer caught in review.** The first version wrote the drive's
+unit, 0, into `150Dh`'s buffer. MSCDEX writes the drive's NUMBER there
+(0 = A:); the unit is `1501h`'s. The fixture had been written to the same
+misreading, so it passed. Both now say 3 for D:, and the fixture also checks
+that only one byte was written and that with no drive `150Bh`-`1510h`
+change nothing.
+
+**Why D: is 3.** The kernel keeps C: for a hard disk (SPEC.md 18.7.4), so
+a CD driver's volume is the first free row from D:. The row's first draft
+expected 2; the reason it is 3 is that reservation, not the run.
+
+**What it cost.** No kernel byte. Image + bss, against 65,024: real mode
+63,626 -> 63,736, the kern_mega arm 64,491 -> 64,601 (423 left). The old
+note's "the arm has 92" was stale; the arm had 533.
+
+**Tested.** Built; the row `win16mscdex` (three QEMU legs: a disc, an empty
+drive, no drive) was seen green on the first version and is to be re-run in
+the final pass with the corrected `150Dh`. The kern_mega arm's handler is
+not yet run in protected mode.
+
+## 2026-11-04: what Mozart and the Arcade games do when started
+
+This was a measurement and changed no code. Every boot was QEMU, a look at
+the screen, on `kern_mega` with a 486 and 16 MB unless it says `kern_big`.
+The rig was a hard disk built from `mega.img`'s files plus WIN16 and its
+DOS in `C:\WIN16`, an `\AUTOSTRT` link to the setup, and the installer's
+files on A: or in `C:\SRC`.
+
+**Three traps in the rig, each worth one line.**
+- `win16ref/titles/mozart/x` is only the setup's own files. The copy stops
+  at *Could not open the file named C:\SRC\MOZART\GLOSSARY.IDX*, and then at
+  the picture folders. The CD's data track has to be extracted for the files
+  the INF names.
+- `os88disk.py` marks `*.DRV` files hidden or system. A setup that copies
+  `MSACM.DRV` from the hard disk then says it cannot open it. The files were
+  put on the volume with `mcopy` instead.
+- The first double-click after another window had the focus often only
+  selects. Launching a link needed a second one, three seconds on.
+
+**Mozart's setup** went through to *Microsoft Mozart Setup is complete* on
+the merged tree, with its 42 KB picture. It left the group's desktop icon.
+
+**Mozart itself did not start.**
+1. From the group's link: *Needs VBRUN300.100 which WIN16 does not provide
+   yet.* The setup had put `VBRUN300.DLL` in the Windows directory and the
+   loader looks only in the program's folder. WIN16-ANY-PLAN's O5 had
+   chosen Windows' order and this part of it was never built.
+2. With `VBRUN300.DLL` and the VBXs copied beside `MOZART.EXE`: *Loading...*,
+   then WIN16's *Running* box, then, a second or two later, nothing. No
+   window of Mozart's, no dialog, no toast, no *Needs* line.
+3. `HANGMAN.EXE` does exactly the same from its own folder. Two Visual
+   Basic 3.0 programs ending the same way, silently, say the cause is in
+   VBRUN300's start and not in either program.
+
+What was ruled out by looking: a fault (kern_mega's *closed* toast never
+showed, in screenshots taken faster than the toast lasts), a missing import
+(the *Needs* window), and a memory refusal (its own sentence). What was not
+possible: the `-DW16_TRACE` arm does not assemble any more (word
+displacements, and `APP_MAX_SIZE`), and the `make megadiag` kernel did not
+start this tree's WIN16 arms at all. A trace that fits is the next tool.
+
+**The arithmetic stayed an arithmetic.** VBRUN300 and Mozart's fixed code is
+513 KB against about 810 KB of arenas, and the load finished, so it fit. How
+much free space was left was not read, because the arena table sits behind
+the virtual map and nothing reads it from outside. The case for the `#NP`
+reload (owner decision O8) is therefore not made: the program did not get
+far enough to allocate anything we could measure.
+
+**Arcade's five games all stop at the same call.** The setup completes, and
+each game refuses a few seconds after its link with *Needs USER.26 which
+WIN16 does not provide yet.* That is `SetProp`; `GetProp` and `RemoveProp`
+are missing too. It is the cheapest wall in the way of the games and it is
+USER's, not memory.
+
+**Real mode** (`kern_big`): Arcade's and Mozart's `SETUP.EXE` say *It needs
+protected mode.* Sir Hangman's `SETUP.EXE` says InstallShield's *Insufficient
+memory available to run Setup. Error 111*, on both kernels.
+
+**`tools/w16reach.py`**: WIN16 exports 720 functions where it was 560. The
+imports VBRUN300 wants that WIN16 lacks went from 48 to 23. The games miss 9
+each, `_INST16` misses 10 and still needs `DDEML`.
+
+All of it, with the boots and the shots' places, is in
+`docs/plans/WIN16-NEXT-PLAN.md` (L1, L2, Q4) and the lead's measure report.
+The screenshots of Microsoft programs are kept outside the repository.
+
+### VBRUN300's USER and KERNEL imports (WIN16-NEXT L1, `vbuser`, 2026-11-04)
+
+**What "exits silently" was.** A call to an import WIN16 lacks ends the
+program on the spot and leaves WIN16's window with two lines naming it
+(SPEC.md 124.12). So the Visual Basic programs that "ran and left after a
+second or two" had met one of VBRUN300's 23 missing functions; the window
+said which, and nobody had it open. Thirteen of the 23 are USER and KERNEL.
+
+**Nothing resident.** The room on the kern_mega arm was 423 bytes. A row
+lives in the loader part now and every handler in a part, so the thirteen
+cost the image and the bss nothing (36,281 + 27,475 real mode, 37,921 +
+26,700 on the arm, before and after). The library part grew by nothing (it
+has 1,045 left on the arm: 64,491 of 65,536); the task part took +346 /
++353 and the system-library part +159. EndMenu first went into the library
+part, +15, and that tipped `t_w16wrap` (a call from the part's end to its
+start within 4 KB, which fails on the base as well, at `w16_pnames+D8 ->
+w16_mheap+33`), so it went to the task part and calls `w16_mstop` through
+the library gate.
+
+**Two of them were already someone else's.** `DeferWindowPos` is
+`SetWindowPos` with one more word under its arguments, so its row names the
+same handler with 16 argument bytes instead of 14, and the handle it
+answers is 1, which every caller treats as a handle. `CreateIcon` is
+`CreateCursorIconIndirect` with the row bytes worked out by the caller.
+
+**TrackPopupMenu is the one not done.** The menu loop belongs to the bar:
+its start (`WM_INITMENU`), its hit test and its dismissal all assume the
+bar. A popup at a point is a second loop, estimated at 600-900 bytes of the
+library part against 800 left. It answers FALSE and shows nothing. SPEC.md
+124.25.15 has the table.
+
+**The look took that back** (`verify-vbuser`, 2026-11-04). With all of the
+VBRUN300 work merged, Mozart from its group link and Hangman from its folder
+both still showed *Running* and a file bar, and then WIN16's window closed
+with no line at all; every frame of the exit was captured, and there was no
+dialog and no toast either. A missing import leaves the window up, so this
+was something else. A `-DW16_TRACE` build of WIN16 (`tools/w16trace.py`)
+showed three calls in the ring: the libraries' `LibMain` gate, its return,
+and `GlobalHandle`. Then nothing, because `AH=4Ch` leaves before the trace
+point. VBRUN300's code says the rest. A VB 3.0 program's entry is a single
+far call to `VBRUN300.100`, which asks `GlobalHandle(SS)` for the program's
+DGROUP, grows it with `GlobalReAlloc` by its own 8,856 bytes of data and
+moves the stack to the top. WIN16's DGROUP is no global-heap block, so the
+answer is 0, and on 0 the runtime ends with `int 21h` `4CFFh`. The thirteen
+imports are still needed (their calls are further in), but the next wall is
+the program's own DGROUP as a global handle.
+
+While checking the thirteen against what VBRUN300 actually does with them:
+it calls `SetHandleCount` only on Windows 3.10 or later and otherwise grows
+the PSP's handle table itself, reading the table's size at `PSP:32h`, so
+`SetHandleCount` answers the table's size, 13, as Windows answers its own
+(never less than 20). It asks `GetClassWord` only for `GCW_CBWNDEXTRA`, to
+find its words at the end of a window's extra bytes, and `GetClassLong`
+only for `GCL_WNDPROC`, to ask whether a window is one of its own classes.
+Its one `FreeModule` ignores the answer, which is TRUE now anyway. Its one
+`TrackPopupMenu` is the `PopupMenu` method (the flags it builds are the
+method's argument), so a refusal there costs a program's right-click menu
+and nothing at start-up.
+
+### Part 11, and a popup menu with no bar (WIN16-NEXT `part11`, 2026-11-04)
+
+The refusal above was the cheap answer, and Visual Basic's `PopupMenu` is a
+real feature, so `TrackPopupMenu` was built, and in a new part, because the
+library part had 819 bytes of its 64 KB left and part 9 is fetched whole by 42
+of the 85 programs. Part 11 is part 10's shape (SPEC.md 124.25.16), and
+Arc and Pie moved into it: part 9 fell by 775 bytes for the 1,048 bytes of the
+new part, which Arc, Pie and the menu share.
+
+What worked: the menu loop of 124.11 needed almost nothing to run with no bar.
+Level 0 is the popup, `w16_mhbar` is 0 (`w16_mget` of it fails by itself, so
+every bar branch of the hit test falls to "nothing"), and a key byte says which
+kind of loop it is. Two things had to be taught to the library part: the last
+popup closing ends the loop (`w16_mcloseto`), and the import answers TRUE where
+the bar's `DefWindowProc` answers 0. 28 bytes. The rest is the handler, in the
+part, and it is `w16_mtbegin`'s state written again with the popup's menu.
+
+The merged dispatch is what made the plumbing cheap. Parts 9, 10 and 11 have
+their bss blocks 8 bytes apart, so the dispatch finds a part's block from its
+number and one fetch and one drop serve all three: the third part cost the
+image 18 bytes (10 of code, 8 of bss) where the second had cost 35.
+
+Looked at, on QEMU (VGA desktop, kern_big with the shipped WIN16): the popup
+drawn at the screen point, the first item inverted after Down, the popup gone
+after Enter and the second one, right aligned, up. The fixture ended
+"VBUSER OK". A trap for the next person driving it from the host: **the
+screen saver turns the screen black after about two minutes of idle, and the
+first key only wakes it** - a host script that waits that long before sending
+Esc sends it to the saver and not to the menu. And polling `w16_mtrk` for "the
+menu loop ended and another started" misses the gap: it is shorter than a poll,
+so the test tells popups apart by the x they were placed at (`w16_mnx`).
+
+The review (Opus, the same day) found three things the keyboard test could not
+see, and fixed them for 14 more bytes of the library part and 4 of the image
+(resident 22 bytes on both arms, not 18). **A popup's loop ended on a
+release outside it**: the bar's rule, but a program that calls
+`TrackPopupMenu` from `WM_LBUTTONDOWN` still has the button down, and Wine's
+`TPM_POPUPMENU` keeps the menu up for that release. **The end of the loop drew
+the menu bar again**, which this loop never touched: a whole row of text for
+nothing, on every popup. And **part 11 that could not be fetched ended the
+program** with "WIN16's library part could not be read", as parts 9 and 10
+do; a rare import now answers 0, its failure, which is what Windows does
+with a call it has no memory for - so a part 11 import must fail with 0
+(SPEC.md 124.25.16 says so). The fixture gained a third popup, centred, with a
+grey item and a submenu: Enter on the grey item does nothing, Right opens the
+submenu (a second `WM_INITMENUPOPUP`), Enter there posts its `WM_COMMAND`.
+Looked at on QEMU's VGA desktop and "VBUSER OK". Not looked at: a 1bpp
+adapter (the popup drawing is §124.11's, unchanged) and the mouse fixes,
+which no fixture drives. Still open: whether Windows 3.1 sends `WM_INITMENU`
+for `TrackPopupMenu` (Wine does; this does not).
+
+## 2026-11-04: a not-present selector is a fault WIN16 can repair (O8)
+
+*As a user, I run a Windows program whose code Windows' standard mode would
+have discarded and reloaded, on a machine that cannot hold all of it.* That
+is VBRUN300's 329 KB, Sir Hangman's engine's 395 KB, Mozart's 185 KB of
+p-code and every Arcade game's 55-97 KB: code that something names by its
+selector, so a thunk cannot stand in front of it. Until O8 WIN16 kept it all.
+The owner decided yes, in the narrow form `o8design` had priced: the kernel
+only routes a `#NP`, and WIN16 does the reloading (SPEC.md 124.26.12,
+KERN-MEGA-PLAN 14.143).
+
+**What was built.** The kernel half is two verbs and a router: `SEG_TYPE`
+`CX` = 2 makes a handle descriptor code-not-present, `CX` = 3 registers the
+caller's `#NP` handler, and the IDT's 0Bh stub is a five-byte far jump to
+`mega_npx` in `.cold`, so `.mega` stayed at +0 bytes. The router routes only
+the UI task's fault from an LDT code selector, on a handle descriptor based in
+a block of the registrant's, and gives the handler the CPU's frame as it was.
+WIN16 makes one handle descriptor per segment that a relocation names by
+number (where §124.26.11 kept it), so every fixup, every pointer built from
+one and every thunk holds the same selector for the module's life. The
+segment is loaded when the selector is touched and parked, not present and
+off its block, when it is discarded. The handler enters the gate as the
+thunk's slot with a far return to an `iret`, so the loader, the discard and
+the answer's AX/DX are the thunk path's.
+
+**What the first draft got wrong, found on the glass** (QEMU, kern_mega, 486,
+16 MB; PMNP.EXE, `tests/win16/pmnp.c`). The prototype of the router had never
+run. It read the error code's selector with its RPL/TI bits in the descriptor
+index; the build masks them. And the first run that left WIN16 with room for
+one segment, while the program's ES held the only loaded one, spun for five
+minutes at 100% CPU with no segment loaded and no message. Counters said the
+`#NP` handler had entered 1,269 times and the discard had failed 1,908 times
+with the failure never reaching the program's end. The loader's refusal
+ended in `and byte [w16_nplod], ~1`, and an `and` clears the carry: a load that
+failed was handed back as a load that worked, the instruction ran again, and
+it faulted again, forever. A `pushf` / `popf` around the one instruction ended
+the loop, and the same run now closes with *Not enough memory for its code.*
+in the program's window, as a thunk's failure does. It is also the proof that
+a segment the banked ES holds is never discarded (SPEC.md 124.26.12): with
+room for two segments the run passes, with room for one it ends cleanly.
+
+**What was seen.** PMNP: six 9 KB segments, protected-mode-only, discardable,
+named by number from a far-pointer table and by direct far calls. A pass in
+28-38 s on QEMU: *pmnp: 0 wrong, 36 calls*, `w16_cnload` 38 and `w16_cndrop`
+32. Each of the six ways of touching a segment that is not present (a far
+call, a data read, a bare `mov es`, a pointer handed to `lstrcpy`,
+`LockSegment`, and a window procedure WIN16 calls) ran after a squeeze of the
+heap that discarded every code segment not in use.
+
+**Sir Hangman's engine, looked at** (QEMU kern_mega, `SETUP.EXE` from its
+own folder on the hard disk, 150 s). The engine's 25 KB `GlobalAlloc` is no
+longer the wall: six allocations of 24 KB or more, the largest 64 KB, all
+succeeded, four of them in arenas made for them, and the heap ended with
+**240 KB free** (largest run 103 KB), 147 KB of code loaded, 292 KB of data,
+`w16_cnload` 23 and `w16_cndrop` 0. Nothing was discarded because nothing
+had to be: its 64 discardable segments are named by number, each has a
+stable selector, and none is loaded until it is touched (22 were, by the end),
+where §124.26.11 kept all 405 KB from the launch. The textless *Setup* box
+is still there, so the engine meets another wall after it; with 240 KB free
+it is not memory, and it was not chased.
+
+**What was not.** The engine's next wall. A hardware interrupt
+handler of a program is not a case WIN16 has, so the PIC check was not
+exercised by anything but running. FS and GS are not banked by the gate.
+`w16_touch` is wired into `LockSegment` and `GetCodeHandle`.
+
+**The review (verify-o8np).** An Opus reviewer read the kernel half first and
+found the router handing `mega_fault` the wrong vector on one refusal: the
+handler's CS was written over the vector's slot before the last test (the
+descriptor's base in a block of the registrant's), so a refusal there reported
+a selector as the vector. The slots are written last now, and the router also
+refuses an error code with its EXT or IDT bit and bounds the index with `lar`
+(a software `int 0Bh` has no error code). On WIN16's side, `w16_lend` clobbered
+SI against its "keeps every register", which was harmless only because its one
+caller did not need SI; and it ran at a wake only, while a program also runs
+from a key or timer callback, so a second WIN16 instance could hold the
+registration when the first one's program faulted. It is called from
+`w16_dcunpark` now, the one routine both `w16_resume` and `w16_resumecb` call
+first. The callback pre-check went: WIN16's `retf` into a callee is on the
+program's stack, so a callee that is not present faults there and takes the
+program arm, discard allowed, where the pre-check had loaded it on WIN16's
+stack with no discard and closed WIN16 when there was no room. The discard
+rule gained the host stack: a segment register WIN16's own frames pushed
+(`w16_gnew` pushes its caller's ES) holds the selector it would park, and an
+interrupt's `pop es` of a not-present selector is a `#NP` in the kernel. The
+three alias calls touch their source, since a parked selector's base is the
+module block. The resident cost fell from 150 to 123 bytes. PMNP on QEMU
+again: *pmnp: 0 wrong, 36 calls, 222 blocks*, `w16_cnload` 38, `w16_cndrop`
+32, with the window procedure now reloaded through the program arm.
+
+**The touch-before-OSAPI audit.** Of the 40 calls WIN16 makes to a
+pointer-taking `OSAPI_*` slot (`GFX_BLIT4` 6, `GFX_BLIT1`/`_PEN` 4,
+`GFX_POINTS`, `ICON_DRAW`, `FONT_RUN` 2, `CLIP_PUT` 2, `CLIP_GET` 3,
+`FILE_READ`/`_AT` 5, `FILE_WRITE` 2, `SND_STREAM` (verb 6 through
+`w16mm_wput`), `DRV_CALL` 3, `WM_TITLE` 7, `TOAST` 3), every pointer's segment
+is a segment register WIN16 loaded in its own code: its own DS (`push ds` /
+`pop es`), its own claims (`W16SEG`), a global block the program handed over
+(the clipboard's), or a program buffer it loaded itself (`mov ds, bx` before
+`SND_STREAM`'s verb 6, so a `#NP` there is WIN16's and routed). No slot takes
+a pointer's segment in a general register for the kernel to load, so none can
+fault in the kernel; a string `TextOut`, `DrawText` or `lstrcpy` is given in
+a code segment is read by WIN16's own code. What could still reach the
+kernel is a selector made not present while a register holds it, and that is
+the discard rule above.
+
+### Sir Hangman's engine, the next two walls (`hangman2`, 2026-11-04)
+
+After O8 the textless *Setup* box was still there with 240 KB of heap free,
+so it was not memory. A `-DW16_TRACE` ring (frozen at the first `MessageBox`
+with a scratch flag) ended `LoadLibrary`, `LoadString`, `LoadString`,
+`MessageBox`; a scratch log of the names `LoadLibrary` was given read
+`_SETUP.DLL` 1FE3h (found), then `CTL3D.DLL`, `_ISRES.DLL` and `_ISUSER.DLL`,
+each **2**, no such file. The files were there: `SETUP.EXE` unpacks them into
+`C:\SYSTEM\APPDATA\WIN16\_ISTMP0.DIR\` and the engine names them by full path,
+and WIN16 had ignored the folder since §124.23. The box has no text because
+the engine's strings come from `_ISRES.DLL`, the one library it did not get.
+`LoadLibrary` now tries a drive-and-folder path in that folder first (§124.25.22).
+
+With the libraries found the engine got further and a kernel toast closed it:
+*SETUP 0D at 1D84:0216* (a #GP; read off the screen it looks like 1084, the
+glyph is a D). QEMU's `-d int` log gave the registers and a memory dump gave
+the code: `CTL3D.DLL`'s `call far [DS:0320h]` through a pointer its start-up
+fills with `GetProcAddress(USER, "SETWINDOWSHOOKEX")`, null, because WIN16
+had neither the function nor the name. USER.291-.293 are kept-and-answered
+and their names are in `GetProcAddress`'s list (a row alone changed nothing:
+the first look after adding only rows showed the same fault at the same
+address). The *Setup* window now stays up at 81 % for about 90 seconds and
+closes with no toast and no box. The engine wrote `_ISERR31.INI` and
+`_DELIS43.INI`; it did not reach its welcome dialog. That is the next wall and
+it is not named: the look budget was spent, and it needs a trace read of the
+engine at that moment.
+
+**The review, and the third wall (`verify-hangman2`).** An Opus reviewer
+merged the branch onto plan (O8, lheap, vbxlib), checked USER.291-293
+against Windows 3.1's own `USER.EXE` (`SETWINDOWSHOOKEX`,
+`UNHOOKWINDOWSHOOKEX`, `CALLNEXTHOOKEX`, in its export table at those
+numbers) and found one real defect: `LoadLibrary`'s scan cuts a name at 142
+characters and the cut name still began `X:\`, so the walk went to the folder
+above the one named; a cut name is not a path now. `SetWindowsHookEx` had been
+called "kept"; it is answered and not kept, and SPEC says so. `DLLUSE.EXE`
+gained the gates: `W16DLL3.DLL` in a `LIBS\` folder answers 2 by its name and
+loads by its full path, and the three hooks bound by name out of `USER`
+round-trip through their pointers.
+
+Then the wall. The ring was read every few seconds through the whole run, so
+the last picture before the close survived it, and it told the story in one
+line: `[258] MISSING`, eight seconds in. The engine is a second task in the
+instance; its first `DDEML` call, `DdeInitialize`, is an import WIN16 does
+not have, and §124.12 ended the engine as it should. But its *Needs DDEML.2*
+went into WIN16's own two lines, which nobody could see behind the
+launcher's window, and its flag went with its context when the task was
+freed. The launcher sat in its wait loop - `GetMessage`, `IsDialogMessage`,
+`GetTickCount`, seven times a second - until its own timeout, then quit in
+the ordinary way, and an ordinary last end closes the instance. That is the
+"closes with no toast and no box": not a fault the toast path missed, but a
+message with nowhere to go. A task that ends with something to say while
+others run now says it as a toast, and the second look showed it on the menu
+bar, *Needs DDEML.2*, for ten seconds. The `DDEML` module itself is the next
+item (SPEC.md 124.25.22 prices it). The ring also settled which hook CTL3D
+sets: one `SetWindowsHookEx`, type 5, `WH_CBT`.
+
+## 2026-11-04: WIN16-NEXT round 2, the entries the branches did not write
+
+The round ran as a fan-out: one agent a wall, each in its own worktree,
+each reviewed by a second reader. What follows is one short entry per branch
+that had none. The reports in `~/Repos/w16next-logs/` carry the detail; the
+numbers here are theirs. "Seen" means a look boot (QEMU, `kern_mega`,
+`-cpu 486 -m 16`) or one Bochs run; "built" means it assembled and nothing
+more. No soak row had run when these were written.
+
+### Q7 and Q1: the kernel learns whose a window and a fault are (`q7bwin`, `q1fault`, `q1ivt`)
+
+`SEG_BWIN` bound a window into any block it was given, one verb along from
+the hole 14.135 closed for `SEG_AT`. `mega_segbw` now asks `mega_segown`
+and then `mega_bown` before `mega_wbind` (which flags a pool block
+`MX_FWIN`, sticky, so the test had to come first); a refusal is CF = 1,
+AX = 3 (SPEC.md 50.6.11, KERN-MEGA-PLAN 14.139). Every shipped caller (the
+Video Player, the browser, `megaxm`) binds a block it owns. Built, with a
+new `mo_bwin` leg in `megaown`; not run.
+
+Q1 was the fault that took the machine down: a WIN16 program's CS is a SUB
+or tile selector over memory above 1 MB, so neither `mega_cs2ds` nor
+`mega_fown` found an owner. `mega_fbown` reads the CS descriptor's base and
+asks the block's owner (`MX_OWN` above 1 MB, `mem_tab` below), then the
+ordinary close runs (SPEC.md 124.31.11, KERN-MEGA-PLAN 14.140). The open
+check, whether the +8 assumption can blame the wrong package, came out no
+by reading. `.mega` grew 64 bytes (128 before the reviewer's shrink). **Seen
+once under Bochs** (`win16ovr` step 3): `kern_mega CLOSED OVRTEST 0D at
+11BC:0517`, no halt, no fatal line. The toast names the program's stem, not
+WIN16. A fault in a multi-program instance closes the whole instance.
+
+`q1ivt` found the second half by reading: WIN16 writes IVT 21h, 2Fh and 31h,
+and a fault close left them. The restore is a copy the switch takes (in
+`.cold`, KERN-MEGA-PLAN 14.141, 26 bytes of the `.mega` rung left) and
+Bochs passed it 5 of 5.
+
+### SEG_TYPE: real code selectors (`csalias`)
+
+ASTEROID builds code the way a 1992 program does: `AllocDStoCSAlias`, and
+`PrestoChangoSelector(sel, sel)` to flip a block's selector from data to
+code and back. WIN16 had no way to retype a descriptor. New `OSAPI_SEG` verb
+`SEG_TYPE` (13): the caller's own window or handle descriptor, `CX` 0 data
+or 1 code, access byte set in place, refused for SUBs, pairs, tiles and
+other owners (SPEC.md 50.6.11, 124.31.6, KERN-MEGA-PLAN 14.142). The first
+build changed only windows and ASTEROID closed at the same address; the
+diagnosis was that 15AC is a *handle descriptor* of a 256-byte block, so the
+verb took those too. `.mega` 23,040 to 23,056 (10 left), `.cold` +104,
+resident 62,976 unchanged. **Seen:** ASTEROID starts, Quick Help, the
+attract mode plays, and after F2 it shows its own box, *Error code = -1*.
+The fixture and its Bochs row `win16csalias` are built, not run.
+
+### The 21-character dialog (`asterr`)
+
+The -1 was not a sound call. A trace ring ended `DialogBoxParam`,
+`wvsprintf`, `MessageBox`, and a marker in `w16_dlgres` showed
+`w16_rfind` finding nothing: `w16_rkey` copied a resource name into a
+16-byte buffer, so `NUMBEROFPLAYERSDIALOG` (21) became `NUMBEROFPLAYERS`
+(15) and matched nothing; `QUICKHELPDIALOG` (15) fit, which is why Quick Help
+showed. Names are kept to 31 characters now (SPEC.md 124.10); bss +32.
+**Seen:** F2 opens *Select Players* and One starts Asteroids with a ship;
+Battlezone starts a game, Missile Command starts, Tempest reaches its *Rate
+yourself* screen (stopped there). Centipede reaches the dialog and then shows
+a black field with one mark; bigbmp's tiles are the likely cure and it is
+to be looked at again. Names past 31 still fail (Windows allows 255).
+
+### Game > Exit (`astexit`)
+
+`ASTEROID 0D at 10E4:068F` was not the game's code. A MEGATRAP boot with the
+code bytes dumped showed `CB`, a `retf`, at the end of `w16_ibgate`, with a
+return address in the dialog part: the menu code runs in a part, ends the
+program through `w16_after`, `w16_freeprog` drops the part and its code alias,
+and the `retf` returns into the freed alias. The first guesses (WAVEMIX,
+ARCCTL, a freed thunk) were wrong and the code byte ruled them out. On
+`kern_big` the freed block is still in memory, so it only passed by luck. A
+part reaches `w16_afterp` now, which for the ending case posts `WM_CLOSE` and
+sets `[w16_defer]` so the UI task frees the program with no part on the stack
+(SPEC.md 124.8.3). Resident +59 bytes (cap 60). **Seen:** Game > Exit closes
+cleanly in Asteroids, Battlezone and Missile Command. Not seen: a Bochs leg
+on `kern_mega`; `win16hiber` gained an Alt+F, X leg that has not run.
+
+### Properties (`props`)
+
+All five of Arcade's games failed on `Needs USER.26`: `SetProp`, `GetProp`
+and `RemoveProp`, then `WaitMessage`, `CloseWindow` and `ExcludeUpdateRgn`
+(the census over the games and their private DLLs; nothing else was missing).
+`EnumProps` was done as asked. The property table (32 six-byte records, names
+as atoms) lives in the task part, and `w16_cargone` drops a window's
+properties when the window is freed. `WaitMessage` is a `PeekMessage` that
+found nothing; `CloseWindow` and `ExcludeUpdateRgn` are stubs. Image +18
+bytes (SPEC.md 124.25.13). **Seen:** ASTEROID no longer refuses, creates its
+window, and then the machine halts with interrupts off in `kern_mega`'s
+high code, which is what `q1fault` and `csalias` were about.
+
+### Mozart's start, a wall at a time
+
+Mozart is Visual Basic 3.0 over `VBRUN300.DLL`; each wall below was behind the
+last, and each took a trace ring and a memory read to name.
+
+**`dgroup` (SPEC.md 124.9.2).** VB calls `GlobalHandle(SS)` and then
+`GlobalReAlloc` on its own data segment. The program's DGROUP now answers
+`GlobalHandle/Lock/Size/ReAlloc`; growth never moves it, because 124.21.4
+already laid it out at 64 KB when the arena allowed. +27 bytes. **Seen:**
+Mozart no longer exits silently; VB shows *Unexpected error; quitting*.
+
+**`ctlproc` (124.25.18).** The failing call was `GetClassInfo` for a
+built-in control: VB superclasses `Edit`, `Button` and the rest, copying the
+base procedure. WIN16 had a callable stub per control kind already; it now
+answers `GetClassInfo` with it, and seven fixed bind slots let a window of a
+program's class become a control when its procedure forwards to the base.
+Then the class table was the wall: all 12 records full, the 13th refused, and
+VB registers about 26. Round two moved the table into a 64-record heap block
+(2,112 bytes), which made WIN16 **300 bytes smaller**; the verifier later
+grew it to 255. **Seen:** the failure moved from `RegisterClass` to
+`LocalAlloc`. The `kern_mega` path of the table's growth is not seen.
+
+**`lheap` (124.25.19).** The heap that was full was not VB's DGROUP heap
+(44,768 bytes free) but a 2,064-byte moveable, locked global block it had
+given its own heap with `LocalInit`: 43 blocks, 8 bytes free. Windows grows
+such a heap by moving the block. `w16_lnewg` retries a failed `LocalAlloc`
+through the system part's `w16s_lgrow`; on `kern_mega` the grow may move a
+locked moveable block for that one call. +27 bytes. **Seen:** no box; the
+ring runs from 275 calls to 843, VB opens a file and loads `RTFCC.VBX` and
+`SPUSH.VBX`.
+
+**`vbxlib` (124.25.21).** The next death was a `0D` in the fourth
+library's C start-up, on `mov es,dx` after `GetDOSEnvironment`.
+`w16i_dosenv` answered AX = an offset and DX = the part's selector; that
+start-up treats a nonzero AX as the segment. Windows answers `selector:0`,
+which both readings accept. A 32-byte zeroed block per task (+2 bytes).
+The library was `SPUSH.VBX`, not the one static reading suggested; the
+fault address settled it. **Seen:** every library loads and the ring runs
+past call 985; VB reaches its own *Out of memory* (error 7).
+
+**`oddsel` (124.25.23, KERN-MEGA-PLAN 14.144).** VB's table selector is
+tested with `test cl,1`: Windows hands a program's data selectors with RPL 3
+and WIN16's were even. Every selector `w16_pblk` hands out is odd now, over a
+DPL 3 descriptor; a selector flipped to code becomes conforming so the odd
+value can still be far-called. The kernel change is three access-byte
+immediates, **0 bytes in every section**; WIN16 +6 bytes of image. The
+reviewer found that a `retf` to an odd CS is an outer-ring return and could
+drop to CPL 3, and fixed it in `w16_cbcall` (2 bytes); an Opus audit of every
+place WIN16 keeps a block's linear base found three defects (U1, U2, U4)
+that were fixed, and the unlocked-move hazard is an open item. The owner's
+rule that a locked moveable block moves for any program (Windows 3.1 ran
+every program in protected mode) is in. **Seen:** error 7 is gone; Mozart
+stops at its own *Insufficient resources to continue*. SS from a global
+block is a stated limit.
+
+### Windows that hear their own messages (`kindmsg`)
+
+WIN16 routed `WM_SETFOCUS`, `WM_KILLFOCUS` and `WM_ENABLE` straight to a
+control by kind, so a superclass or subclass (VB's GotFocus and LostFocus)
+never saw them. They are posted through the window's procedure now, with
+Wine's order (kill to the old, set to the new); an unsubclassed control stays
+immediate (SPEC.md 124.25.20). +5 bytes. **Seen:** `win16ctlproc` run twice
+as the look: the first showed the fixture lacked a pump after `EnableWindow`;
+the second read `CTLPROC OK`, order `kFKfEETt`. Dialog navigation under a
+replaced procedure still answers 0 for `WM_GETDLGCODE`.
+
+### Code that comes and goes without a table (`thunk`, `maplo`)
+
+`thunk` (SPEC.md 124.26.14) is O8's cousin for the real-mode arm: a far call
+`9Ah offset` into a discardable segment goes through a per-target thunk,
+proved site by site at the apply pass, and a segment that fails the proof is
+kept lazily. 0 resident bytes on both arms (the `kern_mega` file is
+byte-identical), part 5 +788 against an estimate of 150 to 250. It does not,
+by the scoping, make Sir Hangman's engine run on `kern_big`: the launcher's
+own `GetFreeSpace(0) >= 700,000` stops first, and of the engine's 64
+discardable segments 26 (240,345 bytes) are named from DGROUP as far
+pointers, which the far-call-only rule keeps. **Seen:** `THKCALL.EXE` loads 5
+segments through thunks and discards 4; `_INST16.EXE` alone gets past the
+code (28 kept, 442 thunks) to *Its System font could not be read*, undiagnosed.
+
+`maplo` moved `W16V_LO` from 1000h to 0300h, which takes WIN16's map from 960
+to 1,012 KB; an audit of every site found none that needed a change but the
+constant, a link-time check that `W16_GH0 + 2*W16_NGH == W16V_LO` and the
+prose. 0 bytes; no boot, since the audit found nothing a run would settle.
+
+### Where a library is, and where setup puts it (`libpath`, `mozcopy`)
+
+`libpath` (SPEC.md 124.23.1.1): a library is looked for in the program's
+folder, then the Windows directory, then the system directory; the two folders
+are named in one place (`W16L_WINDEPTH`, `W16L_SYSDEPTH`). Loader part +189,
+image +21 to +24. The look was inconclusive: no *Needs VBRUN300* refusal, a
+*Loading...* window, and two minutes later it was gone without a word.
+
+`mozcopy` found why Mozart's setup skipped five files: it copies `MCI.VBX`,
+`MSGBLAST.VBX`, `MVFS2.DLL` and `PICCLIP.VBX` to `GetWindowsSysDir()` and ends
+by `RemoveFile(GetWindowsDir()+name)` on those four, and WIN16 answered the
+same folder for both, so the setup deleted what it had just installed. WIN16
+has a distinct system directory now, `SYSTEM` under its Windows directory
+(124.20.5.1), +8 resident bytes. `MCICDA.DRV` was not a defect: the setup
+copies it only when `SYSTEM.INI` has no `[mci] CDAudio`, and `kern_mega`
+seeds one. The first hypothesis (a NULL default in `GetPrivateProfileString`)
+was wrong and was reverted. **Seen:** setup completes with 12 files in
+`SYSTEM`, none of the four missing.
+
+### Sir Hangman's Error 111, from three sides (`l2hang`, `l2diag`, `isbox`)
+
+`l2hang` let a program started while only one task runs take a claim of its
+own (SPEC.md 124.28.5), and found that `W16K_FL` was read by `w16t_end` and
+written nowhere, so every later task was freed as a claim. `l2diag`
+disproved its reading: with a scratch ring of every refused `w16_gnew`, there
+were zero refusals, one task and no engine file, and the box came from the
+launcher's own test, `GetFreeSpace(0)` against 700,000. The arm answered
+545,376. The owner's decision was an honest `GetFreeSpace` (arenas' free and
+discardable SUM plus the room a new arena could take, SPEC.md 124.25.1), done
+in part 9 for -114/-148 resident bytes; the launcher's test passed and the
+engine showed a stop-icon box with no text. `isbox` read that box off the
+ring: three `GlobalAlloc(25,088)` refused, then `LoadString(hInst 0, ...)`
+returning 0 and `MessageBox` with an empty text. The engine's own
+out-of-memory path, with its strings loaded through a NULL instance; Windows
+would answer the same. The arenas held 405 KB of kept code and 17.5 KB free in
+total. That is O8's wall (entry above). `kern_big` caps at one program claim
+by the lead's decision.
+
+### Bitmaps past 64,000 bytes (`bigbmp`)
+
+Paintbrush 3.0 on `kern_mega` showed *Insufficient memory* because
+`CreateCompatibleBitmap(dc, 640, 480)` (153,600 bytes) was refused by
+`W16_BMMAX`. Above it a bitmap is one fixed global block cut into tiles of
+`65535/stride` rows, 64 KB (1000h paragraphs) apart; `w16_bmrp` is the only
+place that knows (SPEC.md 124.25.17, no kernel change). Resident +6 bytes;
+the library part grew 303 to 65,013 of 65,536. A new fixture, `BIGBMP.EXE`,
+because `MEMDC.EXE` faults on `kern_mega` (0D in WIN16, with the old WIN16
+too). **Seen:** `BIGBMP OK` with the new build and failing with the old;
+Paintbrush reaches its window with no box and draws a stroke. `Get/SetBitmapBits`
+reach the first tile only.
+
+### Nine GDI imports and a FloodFill (`vbgdi`, `pbfill`)
+
+`vbgdi` added nine GDI functions VBRUN300 imports (`OffsetWindowOrg`,
+`SetRectRgn`, `CreatePenIndirect`, `CreateBrushIndirect`, `Arc`, `Pie` and
+the rest, SPEC.md 124.25.14), part 9 +987. Its first finding is the one to
+keep: an import WIN16 lacks does not refuse at load, it binds a stub that
+ends the program when *called*, with a toast that is gone in a second, which
+is the "Running, then gone" the measurement had seen. `MEMDC` passed on VGA;
+on CGA the old colour-only legs fail, a 4bpp DIB on a 1bpp adapter.
+`pbfill` added `FloodFill` (GDI.25, one row and a byte) and could not
+reproduce Paintbrush's outlined brush stroke in two boots; every `Polygon`
+filled. Next: record `Polygon`'s arguments when it happens.
+
+### A trace that assembles, and the rows that were missing (`instr`, `chores`, `megarows`, `wrapfix`)
+
+`instr`: the `-DW16_TRACE` arm did not assemble because `W16_TRN` defaulted
+to 1024 (the ring overflowed real mode's 64 KB data segment and the
+`kern_mega` arm's room). The defaults are arm-aware now (64 real, 256 mega) and
+the default builds are byte-identical. `MEGADIAG` was never refusing WIN16:
+`make megadiag` built no WIN16 disk, so a tester paired it with whatever was
+there, and the double-click was the harness's. `chores`: Q8's cause was not
+the switch-table bound; the host did not follow a far call whose segment word
+carries a selector-only relocation (`tools/os88ne.py`), and `t_w16cens
+--all` passes 110 checks. `win16test.img` puts its fixtures in a `FIXTURES`
+folder (the root-entry limit). `megarows` wrote five Bochs rows
+(`win16megabigbmp`, `megactlproc`, `megadgroup`, `megamemdc`, `megamenu`) in
+`win16csalias`'s shape; each fixture writes its line to a `.TXT` because
+Bochs cannot read a `MessageBox`. Built, not run, and `megamemdc` is known to
+fault. `wrapfix`: `w16wrap` was a false positive on the `GetProcAddress` name
+table (bytes `E8 43 09` read as a call), skipped by a label now.
+
+### DDEML, "no server" (`ddeml`)
+
+Sir Hangman's engine is a second task whose first DDEML call,
+`DdeInitialize`, ended it silently. WIN16 now has a built-in `DDEML` module
+of 27 functions whose ordinals and names come from the real Windows 3.1
+`DDEML.DLL`'s name table; the reviewer checked every argument-byte count
+against the `retf N` of the DLL's own code. `DdeInitialize` writes an
+instance of 1 and returns 0, the string-handle calls answer a non-zero value,
+and a connection or a transaction answers NULL. The first version did not
+give a string back; the reviewer made string handles atoms, so
+`DdeQueryString` returns the name (SPEC.md 124.25.26). Resident +6 bytes (the
+module name). **Seen:** `DDEUSE OK` on the real-mode arm, and Sir Hangman's
+engine past `DdeInitialize` to a new toast, *Not enough memory for its code*,
+at about 14 s, after a `GlobalAlloc`/`GlobalLock` and a segment load. That is
+a memory wall, not a DDEML one, and `DdeConnect` was never reached.
+
+## 2026-11-04: WIN16-NEXT round 2, where it stands
+
+**What runs now.**
+- **Arcade, on `kern_mega`:** Asteroids, Battlezone and Missile Command start
+  a game from F2 and close cleanly from Game > Exit (seen). Tempest reaches
+  its *Rate yourself* screen (seen; stopped there). Centipede reaches *Select
+  Players* and then draws a black field (seen; to be looked at again with
+  bigbmp's tiles). They ran without sound: the rig has no card.
+- **Paintbrush 3.0 on `kern_mega`:** window, no *Insufficient memory* box, a
+  stroke on the canvas (seen, bigbmp).
+- **Mozart:** setup completes and leaves 12 files in the system directory
+  (seen). Started, it loads VBRUN300 and its libraries, registers all its
+  classes and gets through VB's local heap, then stops at its own
+  *Insufficient resources to continue*, which is VB's error handler after
+  `GetProcAddress(hModule, "Name")` came back NULL. Mozart declares about 55
+  functions by name; WIN16 knew 16 to 18 names.
+- **Sir Hangman's setup:** past the launcher's `GetFreeSpace` test, past
+  O8's `#NP` reload, with its libraries found, through `SetWindowsHookEx`
+  and through `DdeInitialize`; then *Not enough memory for its code*. On
+  `kern_big` it stops at the launcher's `GetFreeSpace(0) >= 700,000`,
+  honestly.
+- **Real mode** runs none of the three titles past their setups' *It needs
+  protected mode.*
+
+**The room left.** WIN16 on `kern_mega`: 472 bytes under 65,024 (it was
+about 490 at the start of the round, with seven agents each capped at 60).
+Real mode: 1,459. Kernel resident: 62,976, unchanged. `.mega` has 10 bytes of
+its rung left; `.cold` crossed a rung with the owner's approval (O8), 479
+left. Part 3 (`.w16dlg`) is 64,977 of 65,536 (559 left).
+
+**Walls deferred to the next round**, with the estimates the reports gave
+(see WIN16-NEXT-PLAN.md section 4, "Found in round 2"):
+- GetProcAddress by name for every bound export: about 8 KB in part 11 (about
+  600 exports at about 14 bytes), 0 resident. Mozart's next wall.
+- Mozart's 256-colour check: WIN16 answers as Windows 3.0's VGA driver; which
+  `GetDeviceCaps` index it reads was not seen. No estimate.
+- Sir Hangman's code-memory wall: 50 to 150 part bytes and 0 to 20 resident,
+  a guess; one boot with heap counters names it first.
+- DDEML's `PROGMAN` conversation into 124.33.2's parser: 300 to 500 part
+  bytes and a conversation table.
+- The split of the library part (`.w16dlg`): no byte estimate; it is the
+  durable fix and nothing may now be added there.
+- A `kern_mega` row for each fixture that only runs on `kern_big`; the rest
+  are listed in the plan.
+
+**Final soak.** The final pass ran once, at 37641464f, and found six red rows. Each was fixed, and then every WIN16 row was run again:
+
+- **Host:** 46 WIN16 rows, plus `kdos` and `megapkg`, on QEMU and MartyPC.
+- **Bochs container:** the 13 kern_mega rows.
+- **`make test-full`:** run alone.
+
+Everything is green at ee762bd54. The only exception is `ctoolchain`, which is skipped because this machine has no C compiler.
+
+What the six were:
+
+- **`win16write`: a real WIN16 bug.** `w16od_slot` multiplied all of AX by the own-DC record size while two callers loaded only AL. An open DC's state was therefore written kilobytes past its block, into Write's code segment 18, which then ran into an invalid opcode after Save As. A bisect named the props merge, which only moved the heap layout. A/Bs that took out each suspect, and one that padded the image, showed that. The fix is a byte multiply, a byte shorter (SPEC 124.25.11).
+- **`win16megamemdc`: a real kern_mega bug.** Three palette routines in part 9 loaded a virtual paragraph straight into ES or DS. A MEGATRAP census found them, and they are now `W16SEG`. The fixture's GlobalNotify leg is sized for kern_mega's 1 MB map.
+- **`win16props` and `win16bigbmp`: rows that had never run.** The first message after the timer was a real WM_MOUSEMOVE. The 640 KB real-mode heap's largest block was 100,336 bytes, short of the 102,416 the mono bitmap needs. Both fixtures now test what Windows promises.
+- **`win16np` and `megaown`: harness only.** The instance takes the program's name, and a debugger stop split one line of `e9.out`.
+- **`win16tasks`: a race in the row under host load.** Enter was pressed before the MessageBox was up.
+- **`pins` (`test-full`):** the registry key moved to the label O8 added.

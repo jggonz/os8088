@@ -105,6 +105,13 @@ w16_carpost:
 ; w16_cargone - AX = a window being destroyed: the caret goes with it (its
 ; pixels go with the window). Keeps every register.
 w16_cargone:
+    cmp word [w16_tseg], 0          ; its window properties go too (124.25.13),
+    je .nop                         ;   if the task part is here for them to be in
+    push ax
+    mov word [w16_tfn], w16i_propgone
+    ICALL w16_tcall
+    pop ax
+.nop:
     cmp ax, [w16_car + CAR_HWND]
     jne .out
     mov word [w16_car + CAR_HWND], 0

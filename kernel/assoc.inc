@@ -1244,7 +1244,9 @@ assoc_run_x:
 .doc:
 
     mov di, [assoc_pwin]
-    or di, di
+    inc di                      ; ASSOC_PWBANK: OSAPI_PKG_START's document,
+    jz .banked                  ;   whose locator is banked already
+    dec di
     jz .curvol
     call fmv_here               ; the poster's OWN folder, read straight off
                                 ; its state block. This was a fmv_sync - a
@@ -1256,8 +1258,13 @@ assoc_run_x:
                                 ; assoc_back comes back to what is banked
                                 ; here, and files_refresh paints from the
                                 ; WINDOW's cache (SPEC.md 22.1)
+.banked:                        ; A PROGRAM'S OWN REQUEST (21.5.3.3): the
+    mov [assoc_pwin], di        ;   locator it handed over says where, and
+    mov dx, [assoc_dclus]       ;   no window posted it (DI = 0). A POSTED
+    mov al, [assoc_ddrv]        ;   one (21.5.4) runs after the caller has
+    jmp short .located          ;   unwound, standing anywhere by then
 .curvol:
-    mov dx, [dsk_cwd]           ; no poster - a package's own request - so the
+    mov dx, [dsk_cwd]           ; no poster and no locator, so the
     mov al, [disk_drive]        ; volume the machine is on IS the home
 .located:
     cbw                         ; ...banked once, whichever rung answered,
@@ -1358,6 +1365,8 @@ assoc_run_x:
     ; ASSOC.DAT. Bit 7 of [assoc_dead] is the once: volumes are 0..5 there
     test byte [assoc_dead], 0x80
     jnz .needs
+    call assoc_ownex            ; ONLY FOR THE EXTENSION'S OWN PROGRAM
+    jc .needs                   ; (54.4.2.4)
     or byte [assoc_dead], 0x80
     pop ax                      ; the slot the extension named...
     push ax
@@ -1444,6 +1453,30 @@ assoc_run_x:
 ; -----------------------------------------------------------------------------
 ; (THE CODE IS assoc_run_x's .handover since size pass 9, its one caller.)
 
+; assoc_ownex - CF=0 when the extension of assoc_doc names the slot its
+; caller banked on top of its stack (assoc_run_x's .nofile, which pops it
+; later). One OSAPI_PKG_START NAMED (21.5.3) is not the extension's to
+; replace: DOS names WIN16 for an .EXE, the sweep answered DOS, and DOS
+; forwarded again, a DOS a round on the UI stack until it overflowed
+; (SPEC.md 54.4.2.4). Out of line so the short jumps across .nofile stay
+; short - inline, two of them became five-byte pairs. Clobbers AX, BX, SI
+assoc_ownex:
+    mov si, assoc_doc
+    call assoc_slot_of          ; AL = the extension's slot
+    jc .r
+    mov bx, sp
+    cmp al, [ss:bx+2]           ; ...against the caller's banked one
+    je .r                       ; (equal: CF = 0)
+    stc
+.r:
+    ret
+    nop                         ; PARITY PAD, never executed: dsk_xfer and
+                                ; its hot neighbours behind it in .cold keep
+                                ; their parity (t_hotpar)
+%ifndef KERN_SMALL
+    nop                         ; ...and on kern_big since ASSOC_PWBANK's
+%endif                          ;   .banked arm (SPEC.md 54.9.1)
+
 ; assoc_back - put the user's volume back where the document is. A failed
 ; remount leaves that volume mount-failed at its root with the write gate
 ; shut, which is survivable and is exactly ui_tm_back's contract.
@@ -1515,6 +1548,7 @@ assoc_dead:  resb 1             ; volumes whose mount failed in this locate,
 %if assoc_dead - assoc_ddrv != 1
   %error "assoc_run_x stores assoc_ddrv and clears assoc_dead as one word"
 %endif
+ASSOC_PWBANK equ 0xFFFF         ; [assoc_pwin]: no window, the locator banked
 assoc_pwin:  resw 1             ; the posting Disk window's STATE BLOCK, not
                                 ; its window record - FS_DRV/FS_CWD are read
                                 ; off it (SPEC.md 54.9.1), as ld_pwin is

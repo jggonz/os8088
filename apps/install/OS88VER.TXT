@@ -1,5 +1,5 @@
-20261030
-* Windows 3.x programs in a window
-* WaveRack: record and edit WAV files
-* RealDMG faster: banks read on demand
-* Video Player flips narrow screens
+20261105
+* Windows 3.x: Microsoft Arcade and
+  Paintbrush run on the 286+ kernel
+* Setups copy from floppy to hard disk
+* DDEML library, hooks, window props

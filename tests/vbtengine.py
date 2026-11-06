@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The Video Battle ENGINE against its REFERENCE (SPEC.md 125.6): the rules
+"""The Video Battle ENGINE against its REFERENCE (SPEC.md 126.6): the rules
 battle (tests/vbtrulesdemo.py) played on MartyPC's XT (os8088_xt_hdd_sb,
 the bundle on its XT-IDE C:) and in tools/vbtrules.Sim in LOCKSTEP.
 

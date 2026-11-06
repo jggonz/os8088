@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """AN ACTION'S SOUND WITH ITS PICTURE, from an anchor NEARER THAN THE LEAD
-(SPEC.md 125.3), on MartyPC's XT with a CGA and an SB.
+(SPEC.md 126.3), on MartyPC's XT with a CGA and an SB.
 
     make vbattle && python3 tests/vbtanchor.py
 

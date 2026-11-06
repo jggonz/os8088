@@ -1,6 +1,6 @@
 ; =============================================================================
 ; os8088 - apps/vbattle/vbinp.inc - THE DECODE IN PLACE
-; (VBATTLE-MEMORY-PLAN 12, wave M5; SPEC.md 125.4.2)
+; (VBATTLE-MEMORY-PLAN 12, wave M5; SPEC.md 126.4.2)
 ;
 ; Once a hold has the WHOLE bundle (vbhold.inc, [vb_hfull]), a ring given a
 ; clip from then on reads it where the hold has it: nothing is copied into

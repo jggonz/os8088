@@ -67,7 +67,7 @@ local      excitebike  # SPEC.md 102. A standalone game disk (make excitebikedis
                        # and committed, so it needs no user-supplied asset, but it is not
                        # on the standard images, the allapps floppy or the live media
                        # until the maintainer decides it should be (the game is complete).
-local      vbattle     # SPEC.md 125. Video Battle: an ENGINE whose battles are bundles
+local      vbattle     # SPEC.md 126. Video Battle: an ENGINE whose battles are bundles
                        # (.VBT) - the owner's own, made from captured clips, are theirs and
                        # are never committed. `make vbattledisk` carries the package with
                        # the original demo battle tools/os88vbt.py builds; no standard

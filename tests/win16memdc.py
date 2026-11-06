@@ -14,7 +14,9 @@ SetPixel - and reads each back through GetDIBits; sends the bits out and
 back by GetBitmapBits/SetBitmapBits and GetDIBits/SetDIBits; cuts a fill by
 a clip region and ExcludeClipRect; copies the screen into a bitmap and a
 bitmap onto the screen through a moved window origin; and fills on the
-window's DC, inside a frame and across the whole client. Its MessageBox,
+window's DC, inside a frame and across the whole client; and calls what VBRUN300
+imports from GDI (SPEC.md 124.25.14: OffsetWindowOrg, SetRectRgn,
+CreatePenIndirect, CreateBrushIndirect, Arc, Pie, the metafile calls). Its MessageBox,
 read off the program's stack, is "MEMDC OK" or names each check that failed.
 """
 import argparse

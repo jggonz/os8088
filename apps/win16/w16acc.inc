@@ -33,6 +33,10 @@ W16LIB w16_ans1
     xor dx, dx
 W16LIB w16u_setcurpos
     ret
+W16LIB w16_ans2                     ; ExcludeUpdateRgn's SIMPLEREGION (124.25.13)
+    mov ax, 2
+    cwd
+    ret
 
 ; CreateFontIndirect (GDI.57) - args: +0 lplf. CreateFont (GDI.56) - args:
 ; +0 lpszFace, +4 fbPitchAndFamily, ... The request mapped onto WIN16's two
@@ -193,7 +197,7 @@ w16_talign:
     test byte [w16_tal], TA_RIGHT
     jz .v
     push es
-    mov es, [w16_face]
+    W16SEG es, [w16_face]
     mov si, w16_txt
     mov cx, [w16_tn]
     ICALL w16_textw
@@ -208,7 +212,7 @@ w16_talign:
     and cl, TA_BASELINE
     jz .ret
     push es
-    mov es, [w16_face]
+    W16SEG es, [w16_face]
     mov al, [es:W16F_ASC]           ; the baseline: the ascent above it
     cmp cl, TA_BASELINE
     je .up
@@ -411,7 +415,7 @@ w16_ttwalk:
     mov ax, [es:bx + di + 4]
     mov [w16_tt + TT_STR + 2], ax
     push es
-    mov es, [w16_face]              ; eight average widths, the default
+    W16SEG es, [w16_face]              ; eight average widths, the default
     mov al, [es:W16F_AVG]
     xor ah, ah
     mov cl, 3
@@ -466,7 +470,7 @@ w16_ttwalk:
     or dx, dx
     jz .tab
     push es
-    mov es, [w16_face]
+    W16SEG es, [w16_face]
     mov si, w16_txt
     mov cx, dx
     ICALL w16_textw                 ; AX = its width
@@ -531,7 +535,7 @@ w16_ttwalk:
     mov [w16_gcol], bl
     mov bx, [w16_ty]
     push es
-    mov es, [w16_face]
+    W16SEG es, [w16_face]
     mov dl, [es:W16F_ROWS]
     pop es
     xor dh, dh
@@ -547,7 +551,7 @@ w16_ttwalk:
     mov ax, [w16_tt + TT_PEN]
     sub ax, [w16_tt + TT_X0]
     push es
-    mov es, [w16_face]
+    W16SEG es, [w16_face]
     mov dl, [es:W16F_ROWS]
     pop es
     xor dh, dh
@@ -657,9 +661,13 @@ W16LIB w16g_crebmp
     mov [w16_scratch + 2], ax       ; the bits' bytes a row
     mov ax, [ds:w16b_str + bp]
     mov [w16_scratch + 4], ax       ; the bitmap's
-    mov ax, [ds:w16b_h + bp]
+    push bx
+    mov bx, bp
+    call w16_bmcap                  ; (a tiled bitmap: the first tile's rows)
+    pop bx
     mov [w16_scratch + 6], ax       ; rows to go
     mov dx, [ds:w16b_seg + bp]
+    W16TOSEL dx                     ; the arm: its selector (SPEC.md 124.31.3)
     xor di, di
 .row:
     xor bx, bx                      ; BX = the column
@@ -725,7 +733,7 @@ W16LIB w16g_patbrush
     call w16_bmslot                 ; BX = its slot * 2
     mov ax, 0
     jc .out
-    mov es, [w16b_seg + bx]
+    W16SEG es, [w16b_seg + bx]
     mov cx, [w16b_h + bx]
     cmp cx, 8
     jbe .h

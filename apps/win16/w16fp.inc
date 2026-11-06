@@ -105,8 +105,7 @@ w16f_indef: dw 0, 0, 0, 0xC000, 0xFFFF    ; the real indefinite, Intel's
 ; =============================================================================
 w16f_fpmath:
     push ds
-    push cs
-    pop ds
+    W16CSEG ds
     cmp bx, 12
     ja .bad
     push bx
@@ -114,8 +113,7 @@ w16f_fpmath:
     push si
     push di
     push es
-    push cs
-    pop es
+    W16CSEG es
     shl bx, 1
     call [cs:w16f_fptab + bx]
     pop es
@@ -279,8 +277,7 @@ w16f_int:
     mov bp, sp
     sti
     cld
-    push cs
-    pop ds
+    W16CSEG ds
     mov es, [bp + W16FF_CS]
     mov si, [bp + W16FF_IP]
     mov byte [w16f_ovr], 0
@@ -305,8 +302,7 @@ w16f_int:
     je .reg
     call w16f_ea                    ; SI past the displacement
     mov [bp + W16FF_IP], si
-    push cs
-    pop es
+    W16CSEG es
     xor ax, ax
     mov [w16f_exc], al
     mov [w16f_nowr], al
@@ -325,8 +321,7 @@ w16f_int:
     jmp short w16f_post
 .reg:
     mov [bp + W16FF_IP], si
-    push cs
-    pop es
+    W16CSEG es
     xor ax, ax
     mov [w16f_exc], al
     mov [w16f_nowr], al

@@ -21,11 +21,21 @@
  * the GlobalNotify procedure says so, as a short heap makes room, which is
  * PBRUSH.DLL's band cache; and two hundred moveable handles at once.
  *
+ * Last, what Visual Basic 3.0's runtime imports from GDI (SPEC.md 124.25.14):
+ * OffsetWindowOrg, SetRectRgn, CreatePenIndirect, CreateBrushIndirect, Arc
+ * (the short way, the long way and a whole ellipse), Pie, and the three
+ * metafile calls that answer 0; Arc and Pie are drawn again on the window
+ * itself, along its bottom edge, to be looked at on each adapter.
+ *
+ * And FloodFill (GDI.25), and a wide parallelogram Polygon - the shape of a
+ * fast Paintbrush stroke - filled and outlined (pgfill, pgout, pgpen, ffill).
+ *
  * Every check that fails is named in the message box, which
  * tests/win16memdc.py reads; "MEMDC OK" when none does.
  */
 #include <windows.h>
 #include <string.h>
+#include "restxt.h"
 
 #define W 64
 #define H 48
@@ -297,19 +307,26 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     }
 
     /* --- GMEM_NOTIFY blocks, as PBRUSH.DLL's band cache keeps them: the
-     * heap runs short, the procedure is asked, and what it lets go goes --- */
+     * heap runs short, the procedure is asked, and what it lets go goes.
+     * At least 48 of them (768,000 bytes, past a 640 KB machine's heap),
+     * and on until the procedure has been asked: kern_mega's heap is not
+     * short at 48, and runs short at its virtual map's 1 MB (SPEC.md
+     * 124.31.3), so NBMAX - 1.5 MB - is past every machine's --- */
     {
-        static HGLOBAL hb[48];
-        int nb;
+#define NBMAX 96
+        static HGLOBAL hb[NBMAX];
+        int nb, refused = 0;
 
         GlobalNotify((GNOTIFYPROC)NotifyProc);
-        for (nb = 0; nb < 48; nb++) {
+        for (nb = 0; nb < NBMAX && (nb < 48 || notified == 0); nb++) {
             hb[nb] = GlobalAlloc(GMEM_MOVEABLE | GMEM_DISCARDABLE | GMEM_NOTIFY,
                                  16000L);
-            if (hb[nb] == NULL)
+            if (hb[nb] == NULL) {
+                refused = 1;
                 break;
+            }
         }
-        check(nb == 48, "notifyroom");
+        check(!refused && nb >= 48, "notifyroom");
         check(notified > 0 && asked != NULL
               && (GlobalFlags(asked) & GMEM_DISCARDED), "notifyasked");
         check(nb == 0 || GlobalLock(hb[nb - 1]) != NULL, "notifynewest");
@@ -333,6 +350,176 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
             GlobalFree(hs[k]);
     }
 
+    /* --- what Visual Basic 3.0's runtime imports (SPEC.md 124.25.14): the
+     * origin moved by an offset, a region reset, a pen and a brush made from
+     * their LOG structures, an Arc and a Pie, and the metafile calls that
+     * answer 0 where no metafile exists --- */
+    {
+        static LOGPEN lp = { PS_SOLID, { 1, 0 }, RED };
+        static LOGBRUSH lb = { BS_SOLID, BLUE, 0 };
+        static HANDLETABLE ht;
+        static METARECORD mr = { 3L, 0, { 0 } };
+        HRGN rg;
+        HPEN pn, op2;
+        HBRUSH bh, ob2;
+        DWORD o;
+        int hit, i, j;
+
+        SetWindowOrg(mem, 0, 0);
+        o = OffsetWindowOrg(mem, 5, 7);
+        check(o == 0L, "offorgret");
+        check(GetWindowOrg(mem) == MAKELONG(5, 7), "offorg");
+        o = OffsetWindowOrg(mem, -5, -7);
+        check(o == MAKELONG(5, 7), "offorgback");
+        check(GetWindowOrg(mem) == 0L, "offorg0");
+
+        rg = CreateRectRgn(0, 0, 1, 1);
+        SetRectRgn(rg, 8, 8, 24, 24);
+        check(PtInRegion(rg, 10, 10) && !PtInRegion(rg, 30, 30)
+              && !PtInRegion(rg, 4, 4), "setrectrgn");
+        DeleteObject(rg);
+
+        PatBlt(mem, 0, 0, W, H, WHITENESS);
+        pn = CreatePenIndirect(&lp);
+        check(pn != NULL, "penind");
+        op2 = SelectObject(mem, pn);
+        MoveTo(mem, 2, 40);
+        LineTo(mem, 22, 40);
+        SelectObject(mem, op2);
+        DeleteObject(pn);
+        lb.lbColor = BLUE;
+        bh = CreateBrushIndirect(&lb);
+        check(bh != NULL, "brind");
+        SetRect(&r, 30, 36, 40, 44);
+        FillRect(mem, &r, bh);
+        DeleteObject(bh);
+        lb.lbStyle = BS_HOLLOW;
+        bh = CreateBrushIndirect(&lb);
+        ob2 = SelectObject(mem, bh);
+        op2 = SelectObject(mem, GetStockObject(NULL_PEN));
+        Rectangle(mem, 30, 36, 40, 44);     /* hollow: nothing painted over */
+        SelectObject(mem, op2);
+        SelectObject(mem, ob2);
+        DeleteObject(bh);
+        snap(dc);
+        check(pix(10, 40) == RED && pix(10, 38) == WHITE, "penindpix");
+        check(pix(35, 40) == BLUE, "brindsolid");
+
+        /* an Arc from 3 o'clock up to 12 o'clock: the upper right quarter of
+         * the circle in the box 4..44, counter-clockwise, in the pen alone */
+        PatBlt(mem, 0, 0, W, H, WHITENESS);
+        SetRect(&r, 0, 0, 1, 1);
+        Arc(mem, 4, 4, 44, 44, 44, 24, 24, 4);
+        snap(dc);
+        for (hit = 0, j = 8; j <= 11; j++)      /* (37.3, 9.7), a pixel's slack */
+            for (i = 36; i <= 38; i++)
+                hit += pix(i, j) == BLACK;
+        check(hit > 0, "arcquarter");
+        for (hit = 0, j = 36; j <= 40; j++)     /* the lower left is untouched */
+            for (i = 8; i <= 12; i++)
+                hit += pix(i, j) == BLACK;
+        check(hit == 0, "arcother");
+        check(pix(24, 24) == WHITE, "arcnofill");
+
+        PatBlt(mem, 0, 0, W, H, WHITENESS);     /* 12 o'clock round to 3: the */
+        Arc(mem, 4, 4, 44, 44, 24, 4, 44, 24);  /* long way, three quarters */
+        snap(dc);
+        for (hit = 0, j = 36; j <= 40; j++)
+            for (i = 8; i <= 12; i++)
+                hit += pix(i, j) == BLACK;
+        check(hit > 0, "arclong");
+        for (hit = 0, j = 8; j <= 11; j++)
+            for (i = 36; i <= 38; i++)
+                hit += pix(i, j) == BLACK;
+        check(hit == 0, "arclongother");
+
+        PatBlt(mem, 0, 0, W, H, WHITENESS);     /* one point twice: all of it */
+        Arc(mem, 4, 4, 44, 44, 44, 24, 44, 24);
+        snap(dc);
+        for (hit = 0, j = 36; j <= 40; j++)
+            for (i = 8; i <= 12; i++)
+                hit += pix(i, j) == BLACK;
+        check(hit > 0, "arcfull");
+
+        /* a Pie of the same quarter: red inside it, black round it, and the
+         * lower left left alone */
+        PatBlt(mem, 0, 0, W, H, WHITENESS);
+        ob2 = SelectObject(mem, red);
+        Pie(mem, 4, 4, 44, 44, 44, 24, 24, 4);
+        SelectObject(mem, ob2);
+        snap(dc);
+        check(pix(30, 16) == RED && pix(28, 20) == RED, "piefill");
+        check(pix(16, 30) == WHITE && pix(40, 40) == WHITE, "pieother");
+        for (hit = 0, j = 8; j <= 11; j++)
+            for (i = 36; i <= 38; i++)
+                hit += pix(i, j) == BLACK;
+        check(hit > 0, "piearc");
+        for (hit = 0, j = 10; j <= 14; j++)     /* the radius up to 12 o'clock */
+            for (i = 23; i <= 25; i++)
+                hit += pix(i, j) == BLACK;
+        check(hit > 0, "pieradius");
+
+        /* a ray whose reduced direction is -32768: the quarter from 9
+         * o'clock down to 6 of the circle in 0..129, seen through a window
+         * origin of (0, 60) - its left end, and no chord along logical row
+         * 64, which the arc once drew with three quarters of the circle -
+         * and a 45-degree start that once overflowed a divide */
+        PatBlt(mem, 0, 0, W, H, WHITENESS);
+        SetWindowOrg(mem, 0, 60);
+        Arc(mem, 0, 0, 129, 129, -64, 64, 64, 200);
+        SetWindowOrg(mem, 0, 0);
+        snap(dc);
+        for (hit = 0, j = 34; j <= 38; j++)     /* (8.6, 96), at 210 degrees */
+            for (i = 7; i <= 10; i++)
+                hit += pix(i, j) == BLACK;
+        check(hit > 0, "arcwide");
+        for (hit = 0, j = 2; j <= 6; j++)
+            for (i = 24; i <= 56; i++)
+                hit += pix(i, j) == BLACK;
+        check(hit == 0, "arcwidechord");
+        check(Arc(mem, 0, 0, 257, 257, 64, 192, 300, 0), "arcdiv");
+
+        check(CopyMetaFile(NULL, NULL) == NULL, "copymf");
+        check(!EnumMetaFile(mem, NULL, (MFENUMPROC)NULL, 0L), "enummf");
+        PlayMetaFileRecord(mem, &ht, &mr, 0);
+    }
+
+    /* ...and the same Arc and Pie on the window itself, along its bottom edge
+     * for a look at each adapter (the MessageBox is centred and leaves them) */
+    {
+        HBRUSH ob3 = SelectObject(dc, blue);
+
+        PatBlt(dc, 4, 100, 280, 52, WHITENESS);
+        Pie(dc, 8, 102, 56, 150, 56, 126, 32, 102);
+        SelectObject(dc, ob3);
+        Arc(dc, 100, 102, 148, 150, 124, 102, 100, 126);
+        Arc(dc, 180, 102, 228, 150, 204, 126, 204, 126);
+    }
+
+    /* --- FloodFill (GDI.25) and the wide parallelogram a fast Paintbrush
+     * stroke is: a horizontal top and bottom, long sides, filled in the
+     * brush and outlined by the pen (SPEC.md 124.25.4, 124.25.19) --- */
+    {
+        static POINT pg[4] = { {10, 6}, {40, 6}, {58, 40}, {28, 40} };
+
+        PatBlt(mem, 0, 0, W, H, WHITENESS);
+        ob = SelectObject(mem, red);
+        Polygon(mem, pg, 4);
+        snap(dc);
+        check(pix(34, 23) == RED && pix(22, 23) == RED && pix(45, 23) == RED
+              && pix(30, 10) == RED && pix(44, 36) == RED, "pgfill");
+        check(pix(5, 23) == WHITE && pix(55, 23) == WHITE
+              && pix(5, 10) == WHITE && pix(62, 40) == WHITE, "pgout");
+        check(pix(10, 6) == BLACK && pix(28, 40) == BLACK, "pgpen");
+        SelectObject(mem, green);
+        check(FloodFill(mem, 34, 23, BLACK), "ffret");
+        snap(dc);
+        check(pix(34, 23) == GREEN && pix(22, 23) == GREEN
+              && pix(45, 36) == GREEN && pix(5, 23) == WHITE
+              && pix(10, 6) == BLACK, "ffill");
+        SelectObject(mem, ob);
+    }
+
     SelectObject(mem2, old);
     DeleteDC(mem2);
     DeleteObject(bm2);
@@ -343,6 +530,8 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     DeleteObject(green);
     DeleteObject(blue);
     ReleaseDC(hwnd, dc);
+
+    restxt(inst, "MEMDC.TXT", res[0] ? res : "MEMDC OK");
 
     MessageBox(hwnd, res[0] ? res : "MEMDC OK", "MEMDC", MB_OK);
     DestroyWindow(hwnd);

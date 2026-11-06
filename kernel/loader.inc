@@ -2000,11 +2000,12 @@ ld_pkg_byname:
     jc .nodoc
     mov [assoc_dapp], al
     xor ax, ax
-    mov [assoc_pwin], ax        ; NO POSTER, so assoc_run reads [dsk_cwd] for
-                                ; the document's home - which is where the
-                                ; caller stands, and the caller is the one who
-                                ; told us the document's own dir and volume
-                                ; anyway (both are banked above)
+    mov word [assoc_pwin], ASSOC_PWBANK ; NO POSTER: assoc_run takes the
+                                ; document's home from the locator banked
+                                ; above, not from where the machine stands -
+                                ; on the POSTED arm below the caller has
+                                ; unwound by then, and an \AUTOSTRT walk or
+                                ; assoc_back has moved the volume
     inc byte [ui_post]          ; ...and SAY SO (SPEC.md 13.13), which is the
                                 ; whole of the POSTED form (SPEC.md 21.5.4):
     cmp [ld_base], ax           ; asked FROM AN ENTRY PROC - a launch is in

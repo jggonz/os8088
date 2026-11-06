@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A rendition's PICTURE SET DOWN (SPEC.md 125.3.2): Hercules' 640 x 348 at
+"""A rendition's PICTURE SET DOWN (SPEC.md 126.3.2): Hercules' 640 x 348 at
 half size, centred in black, on MartyPC's 5150 with a Hercules.
 
     make vbattle && python3 tests/vbtscale.py

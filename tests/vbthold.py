@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The Video Battle's bundle HELD IN XMS (VBATTLE-MEMORY-PLAN 4 and 5,
-SPEC.md 125.4.1), on QEMU.
+SPEC.md 126.4.1), on QEMU.
 
     make && python3 tests/vbthold.py [--arm whole|copy|part|nox]
 
@@ -17,7 +17,7 @@ THE INSTRUMENT IS A DISK SWAP, as tests/vidxms.py's is. The demo battle
          menu, an Attack, victory and its end loop, Enter and the title
          again - every read after the swap the hold's (`[vb_hcopies]`
          counts them), none the disk's, which has nothing to find.
-         From the fill on the rings are read IN PLACE (SPEC.md 125.4.2)
+         From the fill on the rings are read IN PLACE (SPEC.md 126.4.2)
          through a 386's loaded base, the decode yielding (the step poked
          to 256 bytes), and the title again is the host's decode in B8000.
   copy:  whole, with the decode in place gated off ([vb_noinp]): the

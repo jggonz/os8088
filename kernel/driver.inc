@@ -41,6 +41,11 @@
 ; happens.
 ; =============================================================================
 
+%ifdef KERN_BIG                 ; PCIETHER.DRV's row (SPEC.md 125.1): on every
+%define DRV_PCIETH              ; big build - kern_big, kern_emu, kern_mega -
+%endif                          ; and not kern_small. Unticked by default, so a
+                                ; machine with no PCI bus pays the row's bytes
+                                ; and never runs a line of the driver
 %ifdef VID_EXT
 DRV_VX      equ 1               ; ...plus VESA.DRV's row, LAST on both big
 %else                           ; builds (SPEC.md 120.1): a DRVC_OVL row like
@@ -49,8 +54,13 @@ DRV_VX      equ 0               ; the absolute mouse's, with a SYSTEM.CFG bit
                                 ; An `equ` and not a %define, so that
                                 ; tests/unit/t_drvmem.py's expression reader
                                 ; can evaluate DRV_MAX
+%ifdef DRV_PCIETH
+DRV_PX      equ 1               ; ...plus PCIETHER.DRV's row (SPEC.md 125.5),
+%else                           ; LAST on every big build (kern_mega's alone
+DRV_PX      equ 0               ; until 125.1 widened it); kern_small
+%endif                          ; assembles without it
 %ifdef KERN_EMU
-DRV_MAX     equ 10 + DRV_VX     ; rows in drv_tab. The FIFTH is SPEC.md 72's
+DRV_MAX     equ 10 + DRV_VX + DRV_PX ; rows in drv_tab. The FIFTH is SPEC.md 72's
                                 ; Ethernet card and the SIXTH is SPEC.md
                                 ; 9.11's absolute mouse - the one DRVC_OVL row
                                 ; in the table, which takes no publication
@@ -67,7 +77,7 @@ DRV_MAX     equ 10 + DRV_VX     ; rows in drv_tab. The FIFTH is SPEC.md 72's
                                 ; 119), and the TENTH its ninth, HTTPFS.DRV
                                 ; (SPEC.md 122)
 %elifdef KERN_BIG
-DRV_MAX     equ 9 + DRV_VX      ; ...and kern_big stops at HTTPFS.DRV (SPEC.md
+DRV_MAX     equ 9 + DRV_VX + DRV_PX ; ...and kern_big stops at HTTPFS.DRV (SPEC.md
                                 ; 121), after CDROM.DRV (SPEC.md 119), after
                                 ; EMS.DRV (SPEC.md 107), after the
                                 ; CH375 USB mouse (SPEC.md
@@ -304,7 +314,18 @@ DRVE_NOVOL  equ 8               ; DRVV_READY's answer, never attach's: the
                                 ; the user ticked stays loaded and reads it on
                                 ; the Drivers page; a row the MACHINE chose
                                 ; is taken down again by drv_boot (51.3.2)
+%ifdef DRV_PCIETH
+DRVE_CLASS  equ 9               ; the big builds' (SPEC.md 125.5): another
+                                ; driver of this row's CLASS owns the slot.
+                                ; ETHER.DRV and PCIETHER.DRV are alternatives
+                                ; in DRVC_NET, and 'Attached twice (bug)' is
+                                ; the wrong sentence for a choice the user
+                                ; made. Not in drivers/os88drv.inc: a driver
+                                ; never returns it, only drv_load_at does
+DRVE_NERR   equ 10              ; how many strings drv_errstr has
+%else
 DRVE_NERR   equ 9               ; how many strings drv_errstr has
+%endif
 
 ; OSAPI_DRV_USE's verbs in AH (SPEC.md 117.3), MIRRORED in apps/os88api.inc
 DRVU_UP     equ 0               ; bring a class's driver up: the tick's load
@@ -415,7 +436,7 @@ DQ_A        equ 2               ; dw: the CLASS's own three words - for
 DQ_B        equ 4               ; dw: DRVC_SOUND, the DSP base port, then
 DQ_C        equ 6               ; dw: (IRQ | DMA<<8), then the DSP version
 DQ_SIZE     equ 8
-DQ_MAXREC   equ 11              ; the most records one call can write. It is
+DQ_MAXREC   equ 12              ; the most records one call can write. It is
 %if DRV_MAX > DQ_MAXREC         ; MIRRORED in apps/os88api.inc, so a caller can
 %error "DRV_MAX exceeds DQ_MAXREC - widen it here AND in apps/os88api.inc"
 %endif                          ; size a buffer without mirroring DRV_MAX - and
@@ -1070,6 +1091,11 @@ BOOT2_RES   equ BOOT2_PAD + ((CFG_FBUF + 511) / 512) * 512
 %else
     db 0, 1, 3, 2               ; sound, hdd, ether, net
 %endif
+%ifdef DRV_PCIETH
+    db 11                       ; ...and PCIETHER.DRV, bit 11 on every big
+%endif                          ; build (SPEC.md 125.5): the next free one, 0-10
+                                ; being taken on every build (5 is the absolute
+                                ; mouse's even where this build has no such row)
 %if ($ - %1 %+ _bit) != DRV_MAX
   %error "drv_cfgbit has drifted from drv_tab: one byte per row, same order"
 %endif
@@ -1182,6 +1208,9 @@ drv_f_usbm:  db 'USBMOUSE.DRV', 0 ; SPEC.md 9.12's CH375 mouse. kern_big's and
                                 ; is OS88_DRIVERS already, and a 128KB machine
                                 ; with a CH375 has no disk that carries the file
 %endif
+%ifdef DRV_PCIETH
+drv_f_pcieth: db 'PCIETHER.DRV', 0 ; SPEC.md 125's PCI NICs: the big builds'
+%endif
 drv_f_eth:   db 'ETHER.DRV', 0   ; ...and the card's, on BOTH builds: the store
                                 ; a RAM disk is made of is what kern_small has
                                 ; none of, and a network card is not
@@ -1209,6 +1238,9 @@ drv_f_eth:   db 'ETHER.DRV', 0   ; ...and the card's, on BOTH builds: the store
 %1_cd:      db 'CD-ROM', 0
 %1_http:    db 'HTTP Drive', 0
 %1_usbm:    db 'USB Mouse', 0
+%ifdef DRV_PCIETH
+%1_pcieth:  db 'PCI '           ; 'PCI Ethernet': its tail IS the next title,
+%endif                          ; nine bytes of both copies (SPEC.md 125.5)
 %1_eth:     db 'Ethernet', 0
 %endmacro
 DRVT_SOUND  equ drvt_sound - drvt_base  ; (CTRL.DRV's copy names them)
@@ -1226,6 +1258,9 @@ DRVT_CD     equ drvt_cd - drvt_base
 DRVT_HTTP   equ drvt_http - drvt_base
 DRVT_USBM   equ drvt_usbm - drvt_base
 DRVT_ETH    equ drvt_eth - drvt_base
+%ifdef DRV_PCIETH
+DRVT_PCIETH equ drvt_pcieth - drvt_base
+%endif
 
 ; The published drivers' dispatchers, as FAR POINTERS - ONE PAIR PER CLASS.
 ; Adjacent and in this order because together they ARE the dword
@@ -1549,6 +1584,19 @@ vesa_row:                       ; ...a label for vx_boot_x (vidext.inc) and
     db DRVE_OK
     db 0
 %endif
+%ifdef DRV_PCIETH
+    dw PKG_DISP, 0              ; LAST: PCIETHER.DRV (SPEC.md 125.5), every
+    dw drv_f_pcieth, DRVT_PCIETH ; big build. DRVC_NET - ETHER.DRV's class - so
+    dw 0, 0                     ; packages, net_find and the DOS packet layer
+    db DRVC_NET                 ; need no change; the two are ALTERNATIVES,
+                                ; since a class is one publication slot, and
+                                ; drv_load_at refuses whichever attaches
+                                ; second with DRVE_CLASS (below)
+    db 0                        ; NOT wanted by default (SPEC.md 51.3): the
+                                ; PCI BIOS scan and the card's registers
+    db DRVE_OK
+    db 0
+%endif
 %if $ - drv_tab != DRV_MAX * DRVR_SIZE
   %error "driver: thmv_row must follow drv_tab's last row (drv_call's bound)"
 %endif
@@ -1626,6 +1674,8 @@ DRVM_IMG_EMS equ 2              ; ceil(build/ems.drv / 512)
 DRVM_IMG_CD  equ 18              ; ceil(build/cdrom.drv / 512)
 DRVM_IMG_HTTP equ 11             ; ceil(build/httpfs.drv / 512)
 DRVM_IMG_VESA equ 16             ; ceil(build/vesa.drv / 512)
+DRVM_IMG_PCIETH equ 34           ; ceil(build/pciether.drv / 512): 17,153 =
+                                ; 16,897 + 256 bss, 255 bytes under the rung
 
 DRVM_SND     equ DRVM_IMG_SND + 16*2      ; SBL_PLAYKB: what it holds PLAYING -
                                 ; a 16KB ring the card reads in place, and no
@@ -1664,6 +1714,20 @@ DRVM_RAM     equ (DRVM_IMG_RAM + 13 + 8*2) | DRVM_PLUS
                                 ; paths are exclusive - conventional takes an
                                 ; arena instead of a bounce - so this is the
                                 ; larger, and the arena is what the '+' is
+DRVM_RT_PCIETH equ 23           ; PCIETHER.DRV's rt_claim, held from attach to
+                                ; detach: the RTL8139's 8KB receive ring, its
+                                ; 16 of slack, the 1,536-byte overrun and one
+                                ; transmit buffer - RT_CLAIM, 11,280 bytes,
+                                ; 11,776 at the heap's granule
+DRVM_SK_PCIETH equ 21           ; ...and ETHER.DRV's socket pool, but at the
+                                ; MIDDLE rung: sk_cardcap holds a rung to the
+                                ; ring less SK_RINGSLK (8,192 - 1,536), so
+                                ; SK_RXMAX is never taken on this card -
+                                ; 4,096 + 2,048 + the lean rings' 4,608
+DRVM_PCIETH  equ DRVM_IMG_PCIETH + DRVM_RT_PCIETH + DRVM_SK_PCIETH
+                                ; (SPEC.md 125.5; t_drvmem re-derives all three
+                                ; terms from drivers/pciether/). The big
+                                ; builds' row, and an equ costs nothing elsewhere
 DRVM_VMM     equ DRVM_IMG_VMM   ; the absolute mouse claims nothing either: it
                                 ; hooks no vector, owns no port and keeps no
                                 ; buffer. The image IS the whole footprint
@@ -1708,6 +1772,9 @@ drv_memk:                       ; one word per drv_tab row, in the same order
 %ifdef VID_EXT
     dw DRVM_VESA                ; ...until VESA.DRV (SPEC.md 120)
 %endif
+%ifdef DRV_PCIETH
+    dw DRVM_PCIETH              ; ...and PCIETHER.DRV (SPEC.md 125), last
+%endif
 %endif
 %if ($ - drv_memk) / 2 != DRV_MAX
   %error "drv_memk has drifted from drv_tab: one word per row, same order"
@@ -1736,11 +1803,25 @@ section .text
 ; is not a number and the SDK cannot see DRVM_HDD. The %if is what makes the
 ; literal safe, and it is the half a package could never have had.
 DRVM_CEIL_DISK equ 4            ; MIRRORED in apps/os88api.inc - t_mirror
-DRVM_CEIL_NET  equ 34           ; ...ditto
+DRVM_CEIL_NET  equ 34           ; ...ditto, on kern_small (no PCI row)
+DRVM_CEIL_NET_PCI equ 39        ; ...and DRVC_NET's on every big build
+                                ; (SPEC.md 125.5): ETHER.DRV and PCIETHER.DRV
+                                ; are ALTERNATIVES in one publication slot, so
+                                ; it is the LARGER of the two rows, not their
+                                ; sum. Per kernel because the rows are: every
+                                ; kernel DOS.O88 runs on has the PCI row, so
+                                ; DOS quotes this one and kern_small has no DOS
 %if DRVM_CEIL_DISK != (DRVM_HDD + 1) / 2 || DRVM_CEIL_NET != (DRVM_ETH + 1) / 2
                                 ; (the ceilings are KB, drv_memk half-KB:
                                 ; a ceiling is rounded UP)
   %error "a class ceiling has drifted from drv_memk - apps/os88api.inc too"
+%endif
+%if DRVM_PCIETH > DRVM_ETH
+  %if DRVM_CEIL_NET_PCI != (DRVM_PCIETH + 1) / 2
+    %error "the big builds' DRVC_NET ceiling has drifted from PCIETHER.DRV's row - apps/os88api.inc too"
+  %endif
+%elif DRVM_CEIL_NET_PCI != DRVM_CEIL_NET
+  %error "the big builds' DRVC_NET ceiling has drifted from ETHER.DRV's row - apps/os88api.inc too"
 %endif
 
 ; The loader's words for each DRVE_* code (drv_errstr) are in CTRL.DRV's
@@ -2008,6 +2089,9 @@ drv_errstg:
 drv_errstr:                     ; DRVE_* -> what the user is told
     dw drv_e0, drv_e1, drv_e2, drv_e3, drv_e4, drv_e5, drv_e6, drv_e7
     dw drv_e8
+%ifdef DRV_PCIETH
+    dw drv_e9
+%endif
     dw drv_s_off                ; [DRVE_NERR]: what a row that never failed
                                 ; and is not up says instead (drv_status)
 drv_e0: db 'Loaded', 0
@@ -2023,6 +2107,9 @@ drv_e5: db 'No hardware found', 0
 drv_e6: db 'Port or IRQ in use', 0
 drv_e7: db 'Attached twice (bug)', 0    ; 20 chars, drv_e1's width - the widest
 drv_e8: db 'Nothing to mount', 0        ; DRVE_NOVOL (SPEC.md 51.3.2)
+%ifdef DRV_PCIETH
+drv_e9: db 'Class already in use', 0    ; DRVE_CLASS - 20 chars, the widest
+%endif                                  ; the column takes, like drv_e7
 DRV_E1LEN equ drv_e2 - drv_e1
 %if DRV_E1LEN != DRV_E1L + 3 || DRVE_DISK != 1
 %error "driver: DRV_E1L must index the DRVE_DISK string's drive letter"
@@ -3353,7 +3440,11 @@ drv_load_at:
     jz .clsfree                 ; while the first driver's volumes stay mounted
     cmp ax, bx                  ; and browsable. RAMDISK.DRV and NET.DRV are
     je .clsfree                 ; both DRVC_FILE, so the user can ask for it
+%ifdef DRV_PCIETH
+    mov al, DRVE_CLASS          ; (the big builds' own words, SPEC.md 125.5)
+%else
     mov al, DRVE_TWICE          ; from the Drivers page. REFUSE AND SAY SO
+%endif
     jmp .fail                   ; instead: 'Attached twice (bug)' beside the
                                 ; second row, and the image never claimed.
                                 ; Genuine coexistence is a [drv_fscls]

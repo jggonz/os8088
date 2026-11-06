@@ -261,7 +261,7 @@ w16_rowsn:
     cmp word [w16_face], 0
     je .sys
     push es
-    mov es, [w16_face]              ; the CURRENT face's: a DS_SETFONT
+    W16SEG es, [w16_face]              ; the CURRENT face's: a DS_SETFONT
     mov al, [es:W16F_ROWS]          ;   dialog's controls are laid out and
     xor ah, ah                      ;   drawn in the dialog face (124.22.17)
     pop es
@@ -290,7 +290,8 @@ w16u_callwndproc:
     jmp w16_intproc
 .cb:
     push si
-    mov si, w16_cont_ret
+    push di                         ; (w16_cbopen answers ES:DI: the
+    mov si, w16_cont_ret            ;   procedure's segment is kept here)
     xor ax, ax
     xor cx, cx
     call w16_cbopen
@@ -304,8 +305,8 @@ w16u_callwndproc:
     call w16_ppush
     mov ax, [w16_sm_lp]
     call w16_ppush
+    pop dx
     pop ax
-    mov dx, di
     jmp w16_cbcall
 
 ; -----------------------------------------------------------------------------
@@ -355,7 +356,7 @@ w16_dlgres:
     push dx
     push si
     push di
-    mov di, w16_rnamb
+    mov di, w16_rnam
     call w16_rkey
     mov [w16_rnk], ax
     mov word [w16_rtk], 0x8000 | RT_DIALOG
@@ -372,9 +373,9 @@ w16_dlgres:
     jc .no
     cmp byte [w16_gdisc], 0
     jne .no
-    mov ax, es
+    W16VOF ax, es
     inc ax
-    mov es, ax
+    W16SEG es, ax
     clc
     jmp short .out
 .no:
@@ -390,7 +391,7 @@ w16_dlgres:
 ; Keeps every register.
 w16_dlgrel:
     push es
-    mov es, [w16_rtab]
+    W16SEG es, [w16_rtab]
     cmp word [es:bx + RN_USAGE], 0
     je .out
     dec word [es:bx + RN_USAGE]
@@ -664,10 +665,10 @@ w16d_inval:
 
 ; w16d_notify - BX = a control, AX = a notification: WM_COMMAND to its
 ; parent, POSTED (SPEC.md 124.13): wParam its ID, lParam it and the code.
-; Keeps every register.
+; Inside a program's SetFocus or EnableWindow it is queued to be SENT when
+; that returns (w16d_nfq). Keeps every register.
 w16d_notify:
     push ax
-    push cx
     mov [w16_sm_lp + 2], ax
     ICALL w16_rec2hwnd
     mov [w16_sm_lp], ax
@@ -676,36 +677,76 @@ w16d_notify:
     mov word [w16_sm_msg], WM_COMMAND
     mov ax, [bx + W16W_MENU]
     mov [w16_sm_wp], ax
-    cmp byte [w16_nfdefer], 0       ; inside a program's SetFocus: sent when
-    jne .defer                      ;   it returns (SPEC.md 124.22.6)
-.post:
+    call w16d_nfq                   ; inside a program's SetFocus: sent when
+    jnc .out                        ;   it returns (SPEC.md 124.22.6)
     xor al, al
     ICALL w16_post
 .out:
-    pop cx
     pop ax
     ret
-.defer:
-    mov cl, [w16_nfn]
-    cmp cl, 2
-    jae .post
-    inc byte [w16_nfn]
+
+; w16d_tell - w16_tellfocus's (DCALL): BX = a window, [w16_sm_*] a
+; WM_KILLFOCUS, WM_SETFOCUS or WM_ENABLE to it, lParam 0, and CF as
+; w16_isctl answered. One of WIN16's controls whose procedure is still
+; WIN16's (CF=0) is told at once, a dialog not at all; a program's procedure
+; - its own window's, or a control's it replaced (a superclass, a subclass)
+; - is queued to be SENT when the program's SetFocus or EnableWindow returns
+; (w16d_nfq), and anywhere else CF=1: the image posts it (SPEC.md
+; 124.25.20). Keeps every register.
+w16d_tell:
+    jnc .ctl
+    cmp byte [bx + W16W_KIND], W16Q_DIALOG
+    je .out                         ; (CF=0 from the compare)
+    call w16d_nfq
+.out:
+    retf
+.ctl:
+    push ax
+    push cx
+    push dx
+    ; STKBALANCE-OK: push cs and a near call are a far call, and
+    ; w16d_ctlproc ends in retf
+    push cs
+    call w16d_ctlproc
+    pop dx
+    pop cx
+    pop ax
+    clc
+    retf
+
+; w16d_nfq - [w16_sm_*] queued for w16_nfsend, which SENDS each in order
+; when the program's SetFocus or EnableWindow returns (SPEC.md 124.22.6,
+; 124.25.20): CF=1 not inside one, or W16_NFMAX are queued already (post it
+; instead). Keeps every register.
+w16d_nfq:
+    cmp byte [w16_nfdefer], 1
+    jb .ret                         ; CF=1: not inside one
+    push ax
     push di
-    mov di, cx
-    and di, 0xff
-    shl di, 1
-    shl di, 1
-    shl di, 1
+    mov al, [w16_nfn]
+    cmp al, W16_NFMAX
+    cmc
+    jc .out                         ; CF=1: full
+    inc byte [w16_nfn]
+    mov ah, W16_NFSZ
+    mul ah
+    mov di, ax
     mov ax, [w16_sm_hwnd]
     mov [w16_nfq + di], ax
-    mov ax, [w16_sm_wp]
+    mov ax, [w16_sm_msg]
     mov [w16_nfq + di + 2], ax
-    mov ax, [w16_sm_lp]
+    mov ax, [w16_sm_wp]
     mov [w16_nfq + di + 4], ax
-    mov ax, [w16_sm_lp + 2]
+    mov ax, [w16_sm_lp]
     mov [w16_nfq + di + 6], ax
+    mov ax, [w16_sm_lp + 2]
+    mov [w16_nfq + di + 8], ax
+    clc
+.out:
     pop di
-    jmp short .out
+    pop ax
+.ret:
+    ret
 
 ; w16d_popen - BX = a control: BeginPaint's DC on it, its invalid part made
 ; valid - or, for a WM_PAINT whose wParam is a DC the program opened on it
@@ -4730,20 +4771,18 @@ w16d_focusin:
     ret
 
 ; w16d_cmsg - BX = a control, CX = a message, DX = wParam, SI:DI = lParam:
-; sent at once if it is one of WIN16's (it never calls the program) ->
-; DX:AX. 0 for any other window. Keeps BX, SI, DI.
+; WIN16's procedure for its kind, at once (it never calls the program) ->
+; DX:AX; 0 for a program's own window or a dialog. A control whose
+; procedure a program replaced (a superclass, a subclass) is answered by the
+; control under it, so the dialog manager's WM_GETDLGCODE, its Tab's
+; EM_SETSEL and CheckDlgButton/IsDlgButtonChecked/CheckRadioButton reach
+; the control and not 0 (SPEC.md 124.25.20). Keeps BX, SI, DI.
 w16d_cmsg:
-    ICALL w16_isctl
-    jc .no
     mov [w16_sm_msg], cx
     mov [w16_sm_wp], dx
     mov [w16_sm_lp], di
     mov [w16_sm_lp + 2], si
     ICALL w16_intproc
-    ret
-.no:
-    xor ax, ax
-    xor dx, dx
     ret
 
 ; w16d_fcode - BX = a control or 0 -> AX = its WM_GETDLGCODE. Keeps BX.
@@ -5414,11 +5453,18 @@ w16d_dfoff:
     ret
 
 ; w16d_dux / w16d_duy - AX = dialog units across / down -> AX = pixels
-; (SPEC.md 124.13: 8 / 4 across, the face's rows / 8 down). Keep the rest.
+; (SPEC.md 124.13: 8 / 4 across, the face's rows / 8 down). 8000h is
+; CW_USEDEFAULT, and stays it: a dialog that is a program's main window
+; (Sound Recorder's, Media Player's) is placed by Windows, as Wine's
+; DIALOG_CreateIndirect16 leaves it - and scaled it was an idiv that
+; overflowed (SPEC.md 124.33.1). Keep the rest.
 w16d_dux:
+    cmp ax, CW_USEDEFAULT
+    je .ret
     cmp byte [w16d_dfon], 0
     jne .dface
     sal ax, 1
+.ret:
     ret
 .dface:
     push cx                         ; the dialog face's unit: 7 a quarter
@@ -5431,6 +5477,8 @@ w16d_dux:
     pop cx
     ret
 w16d_duy:
+    cmp ax, CW_USEDEFAULT
+    je w16d_dux.ret
     push cx
     push dx
     push ax
@@ -5566,10 +5614,7 @@ w16d_mkitem:
     jnc .bi
     ICALL w16_findcls               ; ...or a class the program registered,
     jc .refuse1                     ;   made as CreateWindow makes one
-    mov ax, bx                      ;   (SPEC.md 124.22.12)
-    sub ax, w16_cls
-    mov dl, W16C_SIZE
-    div dl
+    mov al, [w16_cbi]               ;   (SPEC.md 124.22.12)
     mov [w16_cwcls], al
     mov ax, [bx + W16C_PROC]
     mov [w16_cwproc], ax
@@ -5726,10 +5771,7 @@ w16d_mkdlg:
     jc .fail
     ICALL w16_findcls               ; BX = the class
     jc .fail
-    mov ax, bx
-    sub ax, w16_cls
-    mov dl, W16C_SIZE
-    div dl
+    mov al, [w16_cbi]
     mov [w16_cwcls], al
     mov ax, [bx + W16C_PROC]
     mov [w16_cwproc], ax
@@ -5765,6 +5807,12 @@ w16d_mkdlg:
     xor cx, cx
     xor dx, dx
 .org:
+    cmp word [w16_cwx], CW_USEDEFAULT   ; Windows' to place (w16d_dux):
+    jne .add                        ;   where 0, 0 would be
+    mov [w16_cwx], cx
+    mov [w16_cwy], dx
+    jmp short .mk
+.add:
     add [w16_cwx], cx
     add [w16_cwy], dx
 .mk:
@@ -5838,10 +5886,8 @@ w16d_ownwin:
     mov al, [bx + W16W_CLS]         ; the class's, by name
     cmp al, 0xFF
     je .size
-    mov ah, W16C_SIZE
-    mul ah
+    ICALL w16_clsget
     mov di, ax
-    add di, w16_cls
     mov ax, [di + W16C_MENU]
     mov dx, [di + W16C_MENU + 2]
     mov cx, ax
@@ -5937,8 +5983,9 @@ w16d_byhandle:
     mov ax, [es:bx + 6]
     ICALL w16_gfind                 ; ES = its block's header
     jc w16d_failed
-    mov ax, es
+    W16VOF ax, es
     inc ax
+    W16TOSEL ax                     ; (a selector, as the other two are)
     mov [w16d_tseg], ax
     mov word [w16d_tp], 0
     mov word [w16d_rent], 0
@@ -6061,8 +6108,10 @@ w16d_initsend:
 
 ; w16d_owecr - BX = a dialog just made: the first of its controls whose
 ; WM_CREATE is owed (w16d_mkprog) sent it, with a CREATESTRUCT as
-; CreateWindow's (its creation parameters, name and class NULL), and
-; w16d_cc continues. CF=1 none is owed. Keeps BX.
+; CreateWindow's (its creation parameters and class NULL; its name the
+; control's text, copied in after it, as the template gave it - Media
+; Player's and Sound Recorder's buttons load their bitmaps by it, SPEC.md
+; 124.33.1), and w16d_cc continues. CF=1 none is owed. Keeps BX.
 w16d_owecr:
     push bx
     ICALL w16_rec2hwnd
@@ -6087,13 +6136,32 @@ w16d_owecr:
     push si
     push di
     push es
+    ICALL w16_textptr               ; ES:SI = its text, CX = its length
+    push es
+    push si
+    push cx
+    add cx, W16_CSSIZE + 2          ; the struct, the text and its NUL, even
+    and cl, 0xFE
     mov ax, dx                      ; the continuation's word: the dialog's
     sub ax, W16_HWND0               ;   slot
     shr ax, 1
     shr ax, 1
     mov si, w16d_cc_c
-    mov cx, W16_CSSIZE
     ICALL w16_cbopen                ; ES:DI = the CREATESTRUCT, zeroed
+    pop cx
+    pop si
+    pop ax
+    push di
+    push ds
+    mov ds, ax
+    add di, W16_CSSIZE
+    cld
+    rep movsb                       ; the text (its NUL is the zeroing's)
+    pop ds
+    pop di
+    lea ax, [di + W16_CSSIZE]
+    mov [es:di + 22], ax            ; lpszName
+    mov [es:di + 24], es
     mov ax, [w16_dgroup]
     mov [es:di + 4], ax             ; hInstance
     mov ax, [bx + W16W_MENU]
@@ -6884,6 +6952,8 @@ W16D_MBTX   equ 68              ;   beside an icon starts here
 W16D_MBGV   equ 22              ; the content to the buttons, and the buttons
 W16D_MBBOT  equ 10              ;   to the bottom (SPEC.md 124.18.4: Windows
                                 ;   3.0's VGA boxes, measured)
+W16D_MBCAP  equ 56              ; a title's 6-pixel gaps and both boxes'
+                                ;   21 pixels (SPEC.md 11's title bar)
 
 w16u_msgbox_d:
     ICALL w16_args
@@ -6985,6 +7055,31 @@ w16u_msgbox_d:
     mov cx, ax
 .w:
     add cx, 2 * W16D_MBM
+    push cx                         ; ...and never narrower than its caption
+    ICALL w16_args                  ;   in os8088's title bar: 8 pixels a
+    les di, [es:bx + 2]             ;   letter, the gap round it and both
+    mov ax, es                      ;   boxes (SPEC.md 124.13)
+    or ax, di
+    mov cx, 5                       ; "Error", when there is none
+    jz .capw
+    xor cx, cx
+.capn:
+    cmp byte [es:di], 0
+    je .capw
+    inc di
+    inc cx
+    cmp cx, 76
+    jb .capn
+.capw:
+    mov ax, cx
+    mov cl, 3
+    shl ax, cl
+    add ax, W16D_MBCAP
+    pop cx
+    cmp cx, ax
+    jae .wcap
+    mov cx, ax
+.wcap:
     mov [w16_cwcx], cx
     mov [w16d_mcw], cx
     ICALL w16_rowsn

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""vbtscene - the ORIGINAL test battle for Video Battle (SPEC.md 125).
+"""vbtscene - the ORIGINAL test battle for Video Battle (SPEC.md 126).
 
 Renders every clip of a small battle as CGA mode 4 pixel indexes (0..3,
 palette byte 50h: black, light cyan, light red, white), and makes its
@@ -642,7 +642,7 @@ def music(bars=16):
     """A loop in A minor at 150 BPM, `bars` bars of 1.6 s: a square bass, a
     pulse lead and a noise hat. Sixteen bars are four sections - A, A with
     the lead an octave up, B over a new bass, A again - so a play hears a
-    piece of music, not a phrase, and the engine streams it (125.4)"""
+    piece of music, not a phrase, and the engine streams it (126.4)"""
     beat = RATE * 60 / 150
     n = int(round(bars * 4 * beat))
     out = np.zeros(n)

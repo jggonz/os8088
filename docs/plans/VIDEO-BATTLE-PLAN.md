@@ -1,7 +1,7 @@
 # VIDEO-BATTLE — a battle played as joined video clips, on a 5150
 
 **Status: THE ENGINE IS BUILT (2026-11-04)**, with an original demo battle:
-`apps/vbattle/`, SPEC.md §125, `make vbattledisk`. The stories in section
+`apps/vbattle/`, SPEC.md §126, `make vbattledisk`. The stories in section
 10 say what works and what is still to come. The study below is unchanged
 from 2026-11-03, and section 10 notes where the build went another way.
 How it was built is docs/HOW-VBATTLE-WAS-BUILT.md.
@@ -379,7 +379,7 @@ evidence names the machine.
   250 KB clip in real time, a battle with 0 late frames, 0 stalls and the
   music in exactly where the openings end.*
 - [ ] **Captured footage.** An importer that takes the DECODED screens of
-  lossy V88 clips and makes exact records between them (SPEC.md 125.2.3).
+  lossy V88 clips and makes exact records between them (SPEC.md 126.2.3).
 - [x] **Music streamed from disk** (2026-11-04): a 32 KB ring refilled 4 KB
   a piece, first in the reader's order while under half. *MartyPC
   `os8088_xt_hdd_sb`, C:: 25.6 s of music over a 50 s battle, 0 underruns,
@@ -393,7 +393,7 @@ evidence names the machine.
   0 late, 0 underruns.*
 - [ ] **kern_mega** (a later wave, the owner, 2026-11-04).
 - [ ] **Hercules and VGA renditions** (a later wave). Their second page would let a camera
-  cut flip instead of tear (SPEC.md 125.7).
+  cut flip instead of tear (SPEC.md 126.7).
 - [ ] **The PC speaker tier** (section 3.2; a later wave).
 - [ ] **A suite row**: a battle to victory, `[vb_late]` = 0, and the card
   consuming.
@@ -401,7 +401,7 @@ evidence names the machine.
 
 Where the build went another way from the study:
 - **The container is the battle's own (`.VBT`), not V88.** Only the record
-  format is shared (SPEC.md 125.1).
+  format is shared (SPEC.md 126.1).
 - **The music was resident** in the first build, and streams since the
   second wave; short music stays resident for a floppy.
-- **Three claims, carved.** An owner may hold eight (SPEC.md 125.4).
+- **Three claims, carved.** An owner may hold eight (SPEC.md 126.4).

@@ -190,7 +190,7 @@ def run(tmp, kind, machine, code, syms):
         early = [c for s_, c in seen if s_ <= 3]
         late = [c for s_, c in seen if s_ >= 13]
         # (the first look against the last: a step may jump ahead to the
-        # clock's, 125.3.1, so the looks between are not one a step)
+        # clock's, 126.3.1, so the looks between are not one a step)
         ok(early and late and late[-1] * 3 < early[0],
            "%s: Enter fades it (lit pixels %s early, %s late)"
            % (kind, early[:1], late[-1:]))

@@ -14,7 +14,7 @@ A project file (version 1):
      "target":   {"profile", "palette" (the CGA4 byte), "fps", "rate",
                   "canvas": [x, y, w, h], "band": [cell, row, cells, rows],
                   "burst_cap": false to build a streamed clip's bursts
-                  as they are (SPEC.md 125.4.3; true when absent)},
+                  as they are (SPEC.md 126.4.3; true when absent)},
      "sources":  {id: {"kind": "video", "path"} | {"kind": "scene", "name"}},
      "sounds":   {id: {"kind": "file", "path", "level"}
                     | {"kind": "scene", "name", "level"}
@@ -38,7 +38,7 @@ A project file (version 1):
                  the menu (it joins the idle loop),
      "title":    null | LOOP + {"leave": null (a fade) | a clip id, "anchors":
                  [k...] (the title's frames the leaving clip is entered at)}
-                 - SPEC.md 125.3.1: before the openings, round until a key,
+                 - SPEC.md 126.3.1: before the openings, round until a key,
      "endings":  {"victory"|"defeat": {"how": "hold" | "fade" (to its loop)
                  | "join" (its clip seams onto its loop's frame 0) |
                  "again" (fade, and play again), "loop": LOOP | null,
@@ -59,7 +59,7 @@ A project file (version 1):
                   "start_stance"},
      "items":    [{"name", "count"}] - the party's, for an action's cost,
      "band_layout": {vbtrules.LAYOUT key: value} - the band's parts placed
-                 and shown (125.5.1; absent: as it always was); a menu
+                 and shown (126.5.1; absent: as it always was); a menu
                  look's "places": [[col, row] | null per item],
      "images":   [{"name", "path", "col", "row", "dither"}] - band pictures,
      "band_image": an image's name, under the whole band, or null,
@@ -760,7 +760,7 @@ class Project:
                 used.append(en["loop"]["clip"])
         return used
 
-    # --- the title loop and the endings (SPEC.md 125.3.1) ---------------------
+    # --- the title loop and the endings (SPEC.md 126.3.1) ---------------------
     def set_title(self, clip, loop=None, sound=None, leave=None, anchors=()):
         """The TITLE loop: clip CLIP's frames LOOP (all of it by default),
         round until a key, then a fade (LEAVE None) or clip LEAVE, entered
@@ -993,7 +993,7 @@ class Project:
             for m in st["moves"]:
                 if m.get("rule", "alternate") not in RULES:
                     err("enemy.stances.%d" % si, "no rule %s" % m["rule"])
-        # THE BAND'S LAYOUT (125.5.1)
+        # THE BAND'S LAYOUT (126.5.1)
         import vbtrules as V_
         own = d.get("band_layout") or {}
         for k in own:
@@ -1030,7 +1030,7 @@ class Project:
         for a, b in VB_.overlaps(self):  # redraw lays them otherwise
             warn("band_layout", "%s and %s share cells - whichever changed "
                  "last is drawn over the other" % (a, b))
-        # THE FOLLOW-UPS (125.6.7): after X, the next turn Y
+        # THE FOLLOW-UPS (126.6.7): after X, the next turn Y
         fol = e.get("follow_ups", [])
         nxt = {}
         for i, x in enumerate(fol):
@@ -1148,7 +1148,7 @@ class Project:
     def errors(self):
         return [p for p in self.check() if p.level == "ERROR"]
 
-    # --- what today's engine does not play yet (SPEC.md 125.7) ------------------
+    # --- what today's engine does not play yet (SPEC.md 126.7) ------------------
     def engine_gaps(self):
         """INFO for each thing the project says that the engine of today
         does not play yet"""

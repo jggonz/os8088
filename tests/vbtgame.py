@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A BATTLE EMBEDDED IN ITS OWN .O88 (SPEC.md 125.2), on MartyPC.
+"""A BATTLE EMBEDDED IN ITS OWN .O88 (SPEC.md 126.2), on MartyPC.
 
     make vbattle && python3 tests/vbtgame.py
 

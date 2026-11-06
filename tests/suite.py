@@ -2086,6 +2086,17 @@ FAST = [
         "is a landmine for whoever edits the TCP stack next. "
         "SOAK and not fast: every one of those markers is ETHER.DRV's "
         "own, so this is a per-driver row"),
+    Row("stknosave-pciether", "soak",
+        py("tools/stkdepth.py", "drivers/pciether/pciether.asm",
+           "-I", "drivers/pciether/", "-I", "drivers/ether/",
+           "-I", "drivers/net/", "-I", "drivers/", "-I", "apps/", "--check"),
+        0.4,
+        "...and the same markers as PCIETHER.DRV assembles them (SPEC.md "
+        "125.2): the stack is SHARED SOURCE, so a NOSAVE that holds in "
+        "ETHER.DRV's image can still break here, where the NIC seam calls "
+        "the RTL8139 backend and rt_es puts an OSAPI_SEG call on the "
+        "receive and transmit path. Measured 2026-11-04: 12 dropped saves "
+        "across 5 routines, all holding"),
     Row("sheetfmtlib", "fast",
         py("tools/os88sheetfmt.py", "--selfcheck"), 1.5,
         "tools/os88sheetfmt.py parses what it writes - the host-side SYLK, "
@@ -2255,6 +2266,18 @@ FAST = [
         "the DCALL/LCALL vector store, and a part whose DS is the image may "
         "not read its own data without cs:. S14 moves handlers into the "
         "library part, and this is what keeps that move honest",
+        needs=("nasm",)),
+    Row("w16wrap", "fast", py("tests/unit/t_w16wrap.py"), 3.0,
+        "A near call or jmp adds a 16-bit displacement to IP modulo 64 KB, "
+        "and QEMU (11.0) skips that wrap when the jump stays on one 4 KB "
+        "page of a segment whose base is not page-aligned - which a call "
+        "from a >60 KB part's first bytes to its last makes, and on kern_mega "
+        "the library part's first function called its arm thunk at the end: "
+        "the CPU ran zeros below the part and pushed ES round LOW_SEG, read "
+        "as a STACK OVERFLOW. SPEC.md 124.31.3: in both builds, image and "
+        "parts, no E8/E9 whose IP wraps with a displacement under 4 KB. Reads "
+        "the maps the Makefile writes beside win16.bin; assembles (cached) "
+        "when they are stale",
         needs=("nasm",)),
 ]
 
@@ -16964,7 +16987,7 @@ SOAK = [
                "build/mbr.bin", "build/hdd.drv", "build/ctrl.drv",
                "build/sound.drv")),
     Row("vbtbuild", "soak", py("tests/vbtbuild.py"), 23.0,
-        "SPEC.md 125.2, VBATTLE-BUILDER-PLAN wave 1: the builder's project "
+        "SPEC.md 126.2, VBATTLE-BUILDER-PLAN wave 1: the builder's project "
         "model and build, host-side. The demo battle re-expressed as a "
         "PROJECT must build the shipped BATTLE.VBT byte for byte (full and "
         "floppy), and the bundle must be the same from two processes - it "
@@ -16976,7 +16999,7 @@ SOAK = [
         "bundle that verifies and plays the wrong battle",
         needs=("pil",)),
     Row("vbtrules", "soak", py("tests/vbtrules.py"), 8.0,
-        "SPEC.md 125.6: the Video Battle RULES' reference (tools/vbtrules.py), "
+        "SPEC.md 126.6: the Video Battle RULES' reference (tools/vbtrules.py), "
         "host-side - the 16-bit xorshift's full period, the damage and heal "
         "arithmetic by hand (stance and step shares, the caps), the outcome's "
         "precedence and its clip (a pool's fallback, a character's own pool), "
@@ -16987,7 +17010,7 @@ SOAK = [
         "damage shift 3 not 4) it FAILS naming the hand-worked hits",
         needs=("pil",)),
     Row("vbtengine", "soak", py("tests/vbtengine.py"), 130.0,
-        "SPEC.md 125.6: the Video Battle ENGINE against its reference, in "
+        "SPEC.md 126.6: the Video Battle ENGINE against its reference, in "
         "LOCKSTEP. The rules battle (tests/vbtrulesdemo.py: a sub-menu, a "
         "side menu, an ally aimed at, MP, item and limit costs, heal, revive, "
         "guard and a boost, three stances with a timed one and an automatic "
@@ -16999,7 +17022,7 @@ SOAK = [
         "it FAILS at turn 1 naming both states",
         needs=("marty",)),
     Row("vbtloops", "soak", py("tests/vbtloops.py"), 90.0,
-        "SPEC.md 125.3.1: the Video Battle's TITLE loop, FADE and ENDINGS on "
+        "SPEC.md 126.3.1: the Video Battle's TITLE loop, FADE and ENDINGS on "
         "MartyPC's XT, two bundles of the demo with a 1-HP enemy. A: the "
         "title laps twice and the glass shows its own frames (the host's "
         "decode); Enter fades it, the steps in order and the lit pixels "
@@ -17069,7 +17092,7 @@ SOAK = [
         "battle never reaches victory",
         needs=("marty",), wants=("build/emstest.img",)),
     Row("vbtemsslow", "soak", py("tests/vbtems.py", "--eslow", "1"), 50.0,
-        "SPEC.md 125.4.1, Video Player's 98.3.18.8: vbtems with the board's "
+        "SPEC.md 126.4.1, Video Player's 98.3.18.8: vbtems with the board's "
         "timing forced SLOW ([vb_eforce]): still the EMS hold, but COPIED "
         "out of, no ring read in place - and still not one disk read from "
         "the fill on. Broken on purpose (vb_hipq not asking the board's "
@@ -17080,7 +17103,7 @@ SOAK = [
         "no hold at all, and the battle to victory off the disk alone",
         needs=("marty",), wants=("build/emstest.img",)),
     Row("vbt286", "soak", py("tests/vbt286.py"), 30.0,
-        "SPEC.md 125.4.2 on a REAL 286's LOADALL - 86Box's mr286 (vm/286-hma, "
+        "SPEC.md 126.4.2 on a REAL 286's LOADALL - 86Box's mr286 (vm/286-hma, "
         "which runs 0F 05): the XMS hold whole, then the check passes on "
         "this CPU (la_probe with INT 6 hooked, 16 bytes through a "
         "LOADALL'd DS against the driver's copy), the battle to victory "
@@ -17091,7 +17114,7 @@ SOAK = [
         "on) victory never comes",
         needs=("86box",)),
     Row("vbtopenfull", "soak", py("tests/vbtopenfull.py"), 30.0,
-        "SPEC.md 125.3: a FULL-SCREEN opening and then one WITH THE MENU, "
+        "SPEC.md 126.3: a FULL-SCREEN opening and then one WITH THE MENU, "
         "the owner's ask. On the host the full one is encoded over all 200 "
         "rows with CF_FULL and the menu one is the canvas over black, and "
         "the check refuses a full one last or after a menu one; on MartyPC's "
@@ -17101,7 +17124,7 @@ SOAK = [
         "in at any opening) the glass check fails",
         needs=("marty", "ffmpeg")),
     Row("vbtscale", "soak", py("tests/vbtscale.py"), 60.0,
-        "SPEC.md 125.3.2: a rendition's PICTURE SET DOWN, the owner's ask "
+        "SPEC.md 126.3.2: a rendition's PICTURE SET DOWN, the owner's ask "
         "(Hercules' 640 x 348 is heavy). On the host the picture at 50% is "
         "320 x 174 centred in black on Hercules, CGA4 and VGA4 at 75% the "
         "same, the bundle smaller, a 60% refused; on MartyPC's Hercules "
@@ -17110,7 +17133,7 @@ SOAK = [
         "(the picture padded at the top left) four checks fail",
         needs=("marty", "ffmpeg")),
     Row("vbtminimal", "soak", py("tests/vbtminimal.py"), 40.0,
-        "SPEC.md 125: THE SMALLEST BATTLE THAT BUILDS, the owner's 'a "
+        "SPEC.md 126: THE SMALLEST BATTLE THAT BUILDS, the owner's 'a "
         "minimal set to see the menu': one test pattern, one character, one "
         "action, one enemy move, no music. On the host what is missing is "
         "said by name - never 'None', a KeyError on an unchosen field (the "
@@ -17122,7 +17145,7 @@ SOAK = [
         "it stops at the band",
         needs=("marty", "ffmpeg")),
     Row("vbtlevels", "soak", py("tests/vbtlevels.py"), 15.0,
-        "SPEC.md 125.3: the AUTO-LEVEL suggestion, the owner's 'a hard time "
+        "SPEC.md 126.3: the AUTO-LEVEL suggestion, the owner's 'a hard time "
         "matching the music volume and the clip volumes'. On the demo every "
         "sound in use measured as heard (the music and effects stored at "
         "half scale, an opening's own sound at full), each suggested the "
@@ -17132,14 +17155,14 @@ SOAK = [
         "sound taken as half scale) the bundle's two part again",
         needs=("ffmpeg",)),
     Row("vbtlayout", "soak", py("tests/vbtlayout.py"), 40.0,
-        "SPEC.md 125.5.1: THE BAND'S LAYOUT, the owner's ask (place each "
+        "SPEC.md 126.5.1: THE BAND'S LAYOUT, the owner's ask (place each "
         "menu item and each band part; hide MP, the message). The rules "
         "battle with the enemy's name, HP, MP, the message and the divider "
         "moved, the limit star and HP's most hidden and a menu item placed "
         "of its own - and again with MP and the message hidden - played to "
         "its first menu on MartyPC's CGA XT - and on, through the next "
         "turn's menu, a cursor moved, a sub-menu opened and closed, all "
-        "drawn IN PART (125.5: the band rebuilt only when its ground "
+        "drawn IN PART (126.5: the band rebuilt only when its ground "
         "changes): at every look THE GLASS IS the preview's, pixel for "
         "pixel, drawn with the engine's own glyphs and its HP, MP, gauges "
         "and items. Broken on purpose (the message at its old fixed row; "
@@ -17151,7 +17174,7 @@ SOAK = [
         "and the preview's the same pixel for pixel",
         needs=("marty",)),
     Row("vbtending", "soak", py("tests/vbtending.py"), 50.0,
-        "SPEC.md 125.3.1: victory JOINS a full-screen END CLIP with its own "
+        "SPEC.md 126.3.1: victory JOINS a full-screen END CLIP with its own "
         "sound that PLAYS ONCE and JOINS the title - on MartyPC's CGA XT "
         "the band down and its rows the clip's, and the play again at the "
         "title with no fade anywhere. Broken on purpose (the once-clip's "
@@ -17189,27 +17212,27 @@ SOAK = [
         "opening at frame 17 of 19, its ring the title's",
         needs=("marty", "ffmpeg")),
     Row("vbtcap", "soak", py("tests/vbtcap.py"), 15.0,
-        "SPEC.md 125.4.3: a streamed clip HELD TO THE DISK, host side - the "
+        "SPEC.md 126.4.3: a streamed clip HELD TO THE DISK, host side - the "
         "demo's ARI attack given two seconds changing all over (~140 KB/s, "
         "100% Hercules): built capped, the reader's model over its records "
         "never overdrawn and every path verified; uncapped, overdrawn by "
         "tens of KB (the owner's cut sound). Broken (CAP_HOLD 1 MB) red",
         needs=("ffmpeg",)),
     Row("vbtpaths", "soak", py("tests/vbtpaths.py"), 2.0,
-        "SPEC.md 125.2's builder: a project's files RELATIVE to it when in "
+        "SPEC.md 126.2's builder: a project's files RELATIVE to it when in "
         "its folder or below (absolute elsewhere), the folder copied and "
         "found, a Save As into another folder found, and another machine's "
         "D:\\ path found beside the project by name. Broken (paths saved "
         "as given) 1-3 red"),
     Row("vbtcover", "soak", py("tests/vbtcover.py"), 80.0,
-        "SPEC.md 125.2: the TITLE PICTURE (header 88) in the battle's window "
+        "SPEC.md 126.2: the TITLE PICTURE (header 88) in the battle's window "
         "on the desktop - the window titled with the battle's name and sized "
         "to the picture and its line; on the glass the bundle's own variant "
         "for the screen's shape bit for bit (CGA 320 x 100, Hercules 360 x "
         "174) and the line lit under it, again after a play. Broken (the "
         "blit taken out) red"),
     Row("vbtgame", "soak", py("tests/vbtgame.py"), 100.0,
-        "SPEC.md 125.2: a battle EMBEDDED in its own copy of the engine "
+        "SPEC.md 126.2: a battle EMBEDDED in its own copy of the engine "
         "(os88vbt.py game: flags bit 2, the packed image's end in the link "
         "word, the bundle at the next 4 KB) - the file ALONE on C:, its "
         "window titled with the battle's name, plays to its first menu on "
@@ -17217,13 +17240,13 @@ SOAK = [
         "Hercules says Needs CGA. Broken (vb_embfind answering none) the "
         "play arms red"),
     Row("vbtdoc", "soak", py("tests/vbtdoc.py"), 70.0,
-        "SPEC.md 125.2, 54.5-54.6: VBATTLE.O88 declares .VBT, so a battle "
+        "SPEC.md 126.2, 54.5-54.6: VBATTLE.O88 declares .VBT, so a battle "
         "under any name double-clicked opens it and the play reads THAT "
         "document - and this machine's own rendition beside it (MYFIGHT.VBT "
         "on CGA, MYFIGHTH.VBT on Hercules). Broken (vb_docnames not "
         "called) both arms red"),
     Row("vbtownsnd", "soak", py("tests/vbtownsnd.py"), 75.0,
-        "SPEC.md 125.3: a clip with its OWN sound - the first opening after "
+        "SPEC.md 126.3: a clip with its OWN sound - the first opening after "
         "the title's fade, an end clip victory joins - has its sound WITH "
         "its picture: the record on the glass against the record heard "
         "(fed, less what the card has queued) within a frame and a half. "
@@ -17231,7 +17254,7 @@ SOAK = [
         "passed: heard a lead late (the owner's '~0.3-0.5 s late'). Broken "
         "(the old booking) the picture 3-4.5 frames ahead, red"),
     Row("vbtanchor", "soak", py("tests/vbtanchor.py"), 40.0,
-        "SPEC.md 125.3: an action whose only anchor is nearer than the "
+        "SPEC.md 126.3: an action whose only anchor is nearer than the "
         "lead's frames is booked a LAP on - and its picture went in on the "
         "first pass, its sound a lap (~1.6 s) behind (the owner's 'audio "
         "delayed ~2 s ... 50% for bolt, 25% for the others'). MartyPC's XT: "
@@ -17240,7 +17263,7 @@ SOAK = [
         "of its sound. Broken (the countdown out of .anchored) the lap "
         "turns 22-23 frames out"),
     Row("vbtreach", "soak", py("tests/vbtreach.py"), 3.0,
-        "SPEC.md 125.6's builder checks: a missing per-character HIT clip is "
+        "SPEC.md 126.6's builder checks: a missing per-character HIT clip is "
         "warned of only where the battle can go - the characters who have "
         "the action, the ones the enemy can aim it at (a named move, a "
         "follow-up 'same'); and the party line's fields as wide as the "
@@ -17248,7 +17271,7 @@ SOAK = [
         "an overlap that is not there. Broken (every character reachable) 3 "
         "red; the widths at their widest, 1 red"),
     Row("vbtsndend", "soak", py("tests/vbtsndend.py"), 60.0,
-        "SPEC.md 125.3: the card's stream ENDED under the battle (SOUND.DRV's "
+        "SPEC.md 126.3: the card's stream ENDED under the battle (SOUND.DRV's "
         "watchdog made to fire) - the owner's 'no sound causes a permanent "
         "freeze'. The stream closed and opened again on the same timeline, "
         "the music on, and the next action (streamed, more than its ring) "
@@ -17256,7 +17279,7 @@ SOAK = [
         "sound cursor that never moves): no card, and the action froze",
         needs=("marty", "ffmpeg")),
     Row("vbtram", "soak", py("tests/vbtram.py"), 200.0,
-        "SPEC.md 125.4.4, VBATTLE-RAM-PLAN R1: what a battle holds, on "
+        "SPEC.md 126.4.4, VBATTLE-RAM-PLAN R1: what a battle holds, on "
         "MartyPC's Hercules 5150 - on a FRESH boot (the desktop's caches gone "
         "for the play, nothing stranded, both rings over 100 KB) and on a "
         "USED machine (Skies and Paint opened, the battle opened, the two "
@@ -17273,7 +17296,7 @@ SOAK = [
         "clip is wanted",
         needs=("marty",)),
     Row("vbtsound", "soak", py("tests/vbtsound.py"), 60.0,
-        "SPEC.md 125.5: the music under the band, the owner's 'when the "
+        "SPEC.md 126.5: the music under the band, the owner's 'when the "
         "menus are drawing the sound shuts off' on Hercules. MartyPC's 5150 "
         "with a Hercules and an SB, the demo's music STREAMING, six turns "
         "of menus and enemy moves: the music never runs dry and every band "
@@ -17633,9 +17656,10 @@ SOAK = [
     Row("win16big", "soak", py("tests/win16big.py"), 60.0,
         "SPEC.md 124.20, WIN16-ANY-PLAN S15: BIG.EXE (`make win16fixtures`, "
         "tests/win16/big.c) - 17 code segments and about 155 KB of code, each "
-        "of sixteen functions far-called forward and back, and a 128 KB "
+        "of sixteen functions far-called forward and back, a 96 KB "
         "GlobalAlloc block written through a __huge pointer and read back by "
-        "adding __AHINCR (KERNEL.114) to the segment. Its MessageBox, read "
+        "adding __AHINCR (KERNEL.114) to the segment, and a 40 KB block "
+        "GlobalReAlloc grows to 80 KB, read back the same way. Its MessageBox, read "
         "off the program's stack, must be the sums the row computes itself",
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
@@ -17670,11 +17694,15 @@ SOAK = [
         "GetModuleHandle, GetProcAddress, GetModuleFileName and "
         "GetModuleUsage answer for it; LoadLibrary loads W16DLL2.DLL, which "
         "imports W16DLL too and raises its counter - one DGROUP for both - "
-        "and FreeLibrary runs its WEP. The MessageBox, read off the program's "
-        "stack, must be DLLUSE OK",
+        "and FreeLibrary runs its WEP. W16DLL3.DLL, in LIBS/ below the "
+        "program, answers 2 by its plain name and loads by its full path "
+        "(124.25.22), and USER's SetWindowsHookEx, UnhookWindowsHookEx and "
+        "CallNextHookEx, bound by name as CTL3D binds them, round-trip. The "
+        "MessageBox, read off the program's stack, must be DLLUSE OK",
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
-               "build/win16/DOS.O88", "build/win16/W16DLL.DLL")),
+               "build/win16/DOS.O88", "build/win16/W16DLL.DLL",
+               "build/win16/W16DLL3.DLL")),
     Row("win16cdlg", "soak", py("tests/win16cdlg.py"), 120.0,
         "SPEC.md 124.24, WIN16-ANY-PLAN S19: COMMDLG. CDLG.EXE (`make "
         "win16fixtures`, tests/win16/cdlg.c) waits in ChooseFont and in "
@@ -17713,6 +17741,124 @@ SOAK = [
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),
+    Row("win16mscdex", "soak", py("tests/win16mscdex.py"), 90.0,
+        "SPEC.md 124.33.3, WIN16-NEXT-PLAN Q3: MSCDX.EXE (`make "
+        "win16fixtures`, tests/win16/mscdx.c) asks MSCDEX's int 2Fh 15xxh - "
+        "1500h, 150Bh for the CD's letter and the next, 150Ch, 150Dh, a "
+        "refused 1510h - and GetDriveType of the letter, on `make "
+        "cdromtest`'s disk with build/cdfix.iso in the drive, with the drive "
+        "empty, and on the shipped disk with no CD at all (MSCDEX absent: "
+        "BX = 0). Its MessageBox must say MSCDX OK 3, MSCDX OK 3 and MSCDX "
+        "NONE",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), serial=True,
+        timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88", "build/cdromtest.img",
+               "build/cdfix.iso")),
+    Row("win16vbuser", "soak", py("tests/win16vbuser.py"), 60.0,
+        "SPEC.md 124.25.15, WIN16-NEXT-PLAN L1: VBUSER.EXE (`make "
+        "win16fixtures`, tests/win16/vbuser.c) calls the thirteen KERNEL and "
+        "USER functions VBRUN300 imports that WIN16 lacked - GetCurrentPDB, "
+        "SetHandleCount, GetCodeHandle, FreeModule, GetClassWord/Long, "
+        "GetUpdateRgn, Begin/Defer/EndDeferWindowPos, CreateIcon, EndMenu, "
+        "and TrackPopupMenu's refusal - each against a computed value; its "
+        "MessageBox must be VBUSER OK",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
+    Row("win16ctlproc", "soak", py("tests/win16ctlproc.py"), 60.0,
+        "SPEC.md 124.25.18, WIN16-NEXT ctlproc: CTLPROC.EXE (`make "
+        "win16fixtures`, tests/win16/ctlproc.c) asks GetClassInfo for Edit "
+        "and Button, SUPERCLASSES both (a class of its own over the copied "
+        "procedure, forwarding with CallWindowProc) and uses them - "
+        "WM_SETTEXT, EM_SETSEL, EM_REPLACESEL, WM_GETTEXT, BM_SETCHECK, "
+        "BM_GETCHECK - checks the superclass keeps its class name and a "
+        "multi-line one its own window word after Edit's 18 bytes, makes one "
+        "that answers WM_CREATE itself (its Edit state made at the first "
+        "message it forwards), and SUBCLASSES a plain Edit with SetWindowLong "
+        "(GWL_WNDPROC), eating one key; its MessageBox must be CTLPROC OK. "
+        "What Visual Basic 3.0's runtime does to every control it makes",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
+    Row("win16props", "soak", py("tests/win16props.py"), 60.0,
+        "SPEC.md 124.25.13, WIN16-NEXT-PLAN: PROPS.EXE (`make "
+        "win16fixtures`, tests/win16/props.c) sets, gets, replaces, "
+        "enumerates and removes string- and atom-named window properties "
+        "(USER.24-27) on several windows, reads a string-named one's name in "
+        "EnumProps' callback, checks that a destroyed window's properties go "
+        "with it and that WaitMessage with an empty queue waits for a timer, "
+        "and calls CloseWindow, the "
+        "calls Microsoft Arcade's five games were refused for; its "
+        "MessageBox must be PROPS OK",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
+    Row("win16dgroup", "soak", py("tests/win16dgroup.py"), 60.0,
+        "SPEC.md 124.9.2, WIN16-NEXT-PLAN: DGROUP.EXE (`make "
+        "win16fixtures`, tests/win16/dgroup.c) asks GlobalHandle(SS), "
+        "GlobalSize, GlobalLock and GlobalUnlock of its own DGROUP, grows it "
+        "with GlobalReAlloc as VBRUN300 does, writes past the old stack and "
+        "is refused a size past 64 KB; GMEM_MODIFY, GlobalFlags, "
+        "LockSegment(-1) and a refused GlobalFree of it, and handle 0 still "
+        "0 to all four calls; its MessageBox must be DGROUP OK",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
+    Row("win16lheap", "soak", py("tests/win16lheap.py"), 60.0,
+        "SPEC.md 124.25.19, WIN16-NEXT `lheap`: LHEAP.EXE (`make "
+        "win16fixtures`, tests/win16/lheap.c) makes a 1 KB local heap in its "
+        "DGROUP and allocates 100 blocks of 100 bytes (distinct, filled, read "
+        "back), grows a moveable block with LocalReAlloc and calls "
+        "LocalCompact; then a heap of 496 bytes in a locked GlobalAlloc block "
+        "of 2 KB takes 60 blocks, so the block grows in place; the same in a "
+        "block whose neighbour is in use (kern_mega: it moves, its selector "
+        "following; real mode: it stops short, data intact); 70 window "
+        "classes, past the class block's first 64 (124.25.18.1); its "
+        "MessageBox must be LHEAP OK",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
+    Row("win16dosenv", "soak", py("tests/win16dosenv.py"), 60.0,
+        "SPEC.md 124.25.21, WIN16-NEXT `vbxlib`: DOSENV.EXE (`make "
+        "win16fixtures`, tests/win16/dosenv.c) asks GetDOSEnvironment for the "
+        "task's environment: the offset must be 0, the selector readable (a C "
+        "start-up that loads a nonzero AX into ES faulted Mozart's "
+        "SPUSH.VBX), the list must end at a double NUL followed by the word "
+        "1 and the program's own path (GetModuleFileName's), getenv() must "
+        "find windir and TEMP equal to GetWindowsDirectory and PATH naming "
+        "it, the PSP's word 2Ch must hold the selector, and a second call "
+        "must answer the same block; its MessageBox must be DOSENV OK",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
+    Row("win16dde", "soak", py("tests/win16dde.py"), 60.0,
+        "SPEC.md 124.25.26, WIN16-NEXT `ddeml`: DDEUSE.EXE (`make "
+        "win16fixtures`, tests/win16/ddeuse.c) runs an installer's DDEML "
+        "calls against a machine with no DDE server: DdeInitialize writes a "
+        "non-zero instance id and answers 0, DdeCreateStringHandle answers "
+        "an atom (one HSZ for one name, case aside) that DdeQueryString "
+        "gives back and DdeCmpStringHandles compares, DdeConnect and DdeConnectList and "
+        "DdeClientTransaction answer NULL, DdeGetLastError answers "
+        "DMLERR_NO_CONV_ESTABLISHED, DdeNameService answers non-zero, the "
+        "keep and free calls and DdeUninitialize answer TRUE; its "
+        "MessageBox must be DDEUSE OK",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
+    Row("win16longname", "soak", py("tests/win16longname.py"), 60.0,
+        "SPEC.md 124.10: LONGNAME.EXE (`make win16fixtures`, "
+        "tests/win16/longname.c) asks for a dialog named in 21 characters "
+        "(Microsoft Arcade's NUMBEROFPLAYERSDIALOG, which a 15-character "
+        "copy of the name never found, so Asteroids said Error code = -1 on "
+        "F2), a menu in 40, a bitmap in 255 and by #300, a resource of a "
+        "28-character type and accelerators in 26, the dialog in lower case, "
+        "and must miss it cut to 15 or one longer, and a 40-character "
+        "global atom added twice is one atom GlobalFindAtom finds; its "
+        "MessageBox must be LONGNAME OK",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
     Row("win16shx", "soak", py("tests/win16shx.py"), 60.0,
         "SPEC.md 124.24.10, WIN16-ANY-PLAN S19: SHX.EXE (`make "
         "win16fixtures`, tests/win16/shx.c) asks ShellExecute and "
@@ -17735,6 +17881,21 @@ SOAK = [
         "ExcludeClipRect, copies screen to bitmap and back through a moved "
         "window origin, and flood-fills on the window's DC inside a frame "
         "and across the client; its MessageBox must be MEMDC OK",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
+    Row("win16bigbmp", "soak", py("tests/win16bigbmp.py"), 60.0,
+        "SPEC.md 124.25.17, WIN16-NEXT-PLAN: BIGBMP.EXE (`make "
+        "win16fixtures`, tests/win16/bigbmp.c) makes a 640 x 480 bitmap, "
+        "153,600 bytes in WIN16's 4 bits a pixel, which is three tiles - "
+        "past W16_BMMAX's 64,000 - selects it into a memory DC, draws in "
+        "each tile and across the seam, reads every pixel back, BitBlts the "
+        "last tile's block and a source across the seam onto the window, "
+        "reads a scan through GetDIBits, writes one through SetDIBits, "
+        "StretchBlts the seam, draws a line and an ExtFloodFill across a "
+        "seam, blits from an odd column, makes a pattern brush of it, copies "
+        "both ways with a second tiled bitmap of other tile heights and fills "
+        "a tiled monochrome one; its MessageBox must be BIGBMP OK",
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),
@@ -17765,6 +17926,44 @@ SOAK = [
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),
+    Row("win16pmdde", "soak", py("tests/win16pmdde.py"), 60.0,
+        "SPEC.md 124.33.2, WIN16-ANY-PLAN S24: PMDDE.EXE (`make "
+        "win16fixtures`, tests/win16/pmdde.c) talks to Program Manager over "
+        "DDE as a setup program does - WM_DDE_INITIATE to HWND_BROADCAST "
+        "answered inside the send by a window of class Progman, blocks of "
+        "CreateGroup, ShowGroup, AddItem, DeleteItem and DeleteGroup "
+        "acknowledged, an unknown command and a WM_DDE_REQUEST refused, "
+        "WM_DDE_TERMINATE both ways - and its MessageBox must be PMDDE OK; "
+        "then B: must hold the group's folder in the Windows directory's "
+        "GROUPS with a link to B:\\PMDDE.EXE and not the deleted item or "
+        "group, and A:'s SYSTEM.CFG the group's desktop shortcut and not "
+        "the deleted group's",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
+    Row("win16nowin", "soak", py("tests/win16nowin.py"), 60.0,
+        "SPEC.md 54.4.2.4, 124.18.1, WIN16-ANY-PLAN S24: TINY16.EXE alone on "
+        "B:, the shipped system disk in A: with APPS\\DOS.O88 and no "
+        "WIN16.O88 anywhere - a double-click on it opens DOS, which hands "
+        "the NE to a WIN16 that is not there, and the toast must say it "
+        "needs WIN16.O88 with the machine still running; before 54.4.2.4 "
+        "the miss re-ran the sweep by extension into DOS again, nesting a "
+        "DOS a round, and stopped on STACK OVERFLOW TASK 00 with no toast",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=300,
+        wants=("build/os8088.img",)),
+    Row("win16xvol", "soak", py("tests/win16xvol.py"), 90.0,
+        "SPEC.md 96.11.11, 96.27.1, 124.28.5, WIN16-ANY-PLAN S24: XVOL.EXE "
+        "(`make win16fixtures`, tests/win16/xvol.c) on A:, a copy of the "
+        "system disk, with WIN16 and its DOS on B:, so the Windows directory "
+        "is on another volume than the program, as for a setup run from its "
+        "floppy - AH=36h answers for the Windows directory's drive, the "
+        "program copies itself a kilobyte at a time into WINDIR\\XVOLDIR "
+        "and WINDIR\\~XVOL.T and compares each copy, and its MessageBox "
+        "must be XVOL OK; then both COPY.BIN files on B: must be XVOL.EXE "
+        "byte for byte",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
     Row("win16pbrush", "soak", py("tests/win16pbrush.py"), 240.0,
         "SPEC.md 124.8, 124.9, 124.25, 96.11.6.4, WIN16-ANY-PLAN S19b: Windows 3.0's "
         "Paintbrush (PBRUSH.EXE and .DLL - Microsoft's, in build/win16/ only "
@@ -17790,6 +17989,19 @@ SOAK = [
         "sentence, and WIN16's load and discard counters both moved",
         needs=("qemu", "mtools", "nasm", "win16samples"), timeout=900,
         wants=("build/os8088.img", "build/win16/DOS.O88")),
+    Row("win16thunk", "soak", py("tests/win16thunk.py"), 120.0,
+        "SPEC.md 124.26.14, WIN16-NEXT c3 (the real-mode arm): THKCALL.EXE "
+        "(tests/win16/thkcall.asm, assembled, with Microsoft's linker's "
+        "`9Ah offset` and a SELECTOR relocation on the segment word) under "
+        "QEMU on kern_big, WIN16 built W16DEFS=-DW16_CODEKB=5 into a private "
+        "tree: two 3,500-byte discardable segments reached by far calls only "
+        "are loaded and discarded in turn through per-target thunks, a third "
+        "that a `mov ax, seg` in the first also names is kept when the first "
+        "loads (not at launch) and stays loaded, and the MessageBox says "
+        "`thkcall: abacxba` with 5 segments loaded and 4 discarded",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=300,
+        wants=("build/os8088.img", "build/win16/DOS.O88",
+               "build/win16/THKCALL.EXE")),
     Row("win16calc", "soak", py("tests/win16calc.py"), 150.0,
         "SPEC.md 124.16, WIN16-PLAN S10: Windows 3.0's and 3.1's Calculator "
         "(CALC.EXE, W31CALC.EXE - Microsoft's, in build/win16/ only where the "
@@ -17859,7 +18071,9 @@ SOAK = [
         "pass with a Windows program open - MENU.EXE through the shipped "
         "DOS.O88 forward off an XT-IDE disk's root, hibernated from the System "
         "menu, resumed at the same segment still running, then PLAYED ON: F3's "
-        "MessageBox up and answered, and its close box freeing WIN16. MartyPC",
+        "MessageBox up and answered, and File > Exit through the menu (Alt+F, "
+        "X: SPEC.md 124.8.3, an end inside the dialog part) freeing WIN16. "
+        "MartyPC",
         needs=("marty", "nasm", "win16fixtures"), serial=True, timeout=1800,
         wants=("build/kernel.sys", "build/win16.o88", "build/kdos/DOS.O88",
                "build/hiber.drv")),
@@ -17872,11 +18086,117 @@ SOAK = [
         "MZ still opens DOS, and an NE TYPED at its prompt still reaches "
         "WIN16 through the host's own arm. TINY16.EXE is assembled here, so "
         "it needs neither Microsoft's samples nor Watcom. Red on c714ec45 "
-        "(DOS's window at frame 261, a 55,328-byte carve)",
-        needs=("marty", "nasm"), timeout=600,
+        "(DOS's window at frame 261, a 55,328-byte carve). Leg D, a second "
+        "boot: an \\AUTOSTRT link on A: to B:\\TINY16.EXE must hand WIN16 "
+        "B:'s file (w16_vol 1), the posted launch keeping the document's "
+        "locator (ASSOC_PWBANK, SPEC.md 21.5.4)",
+        needs=("marty", "nasm", "mtools"), timeout=900,
         wants=("build/os8088-360.img", "build/win16.o88",
                "build/win16/DOS.O88", "build/win16/TINY16.EXE",
                "build/DOSHELLO.EXE", "build/dosp.bin")),
+    Row("win16ovr", "soak", py("tests/win16ovr.py"), 90.0,
+        "SPEC.md 124.31.3 and 50.6.11 (SEG_HND), WIN16-ANY-PLAN S24: under "
+        "Bochs, kern_mega boots off C: and \\AUTOSTRT opens OVRTEST.EXE "
+        "(tests/win16/ovrtest.c). A 100-byte moveable block's selector is its "
+        "HANDLE descriptor and reaches exactly GlobalSize; a GlobalReAlloc to "
+        "6000 bytes past a fixed block answers the SAME selector with the new "
+        "limit and the old bytes; a block grown past 64 KB reads back through "
+        "__AHINCR; and a write one byte past the block raises #GP(0) inside "
+        "OVRTEST's code, OVRTEST.TXT never saying SURVIVED. kern_mega then "
+        "stops FATAL rather than closing WIN16 (WIN16-NEXT-PLAN Q1), and the "
+        "row fails on a close so it is changed when Q1 lands. Bochs, because "
+        "QEMU checks no data segment's limit and the write completes there. "
+        "Red expected on the parent commit, whose stopgap selector reached "
+        "the claim's end",
+        needs=("bochs", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/mega.img", "build/mbr.bin", "build/megak/kernel.sys",
+               "build/megak/apps/win16.o88", "build/megak/kdos/DOS.O88",
+               "build/win16/OVRTEST.EXE")),
+    Row("win16csalias", "soak", py("tests/win16csalias.py"), 90.0,
+        "SPEC.md 124.31.6, 50.6.11 (SEG_TYPE), KERN-MEGA-PLAN 14.142: under "
+        "Bochs, kern_mega boots off C: and \\AUTOSTRT opens CSALIAS.EXE "
+        "(tests/win16/csalias.c), which copies mov ax,1234h / retf and a LAR "
+        "probe into a global block, far-calls it through AllocDStoCSAlias and "
+        "PrestoChangoSelector's code selectors (1234h back, LAR says code), "
+        "takes AllocDStoCSAlias's new code window over a selector in no claim "
+        "(the ROM) and frees it, flips a window and the block's own handle "
+        "descriptor (ASTEROID's idiom) in place, and is refused when it "
+        "PrestoChangos onto a selector it does not own. No fault line. "
+        "Red expected before 14.142: the far call is a #GP and WIN16 closes",
+        needs=("bochs", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/mega.img", "build/mbr.bin", "build/megak/kernel.sys",
+               "build/megak/apps/win16.o88", "build/megak/kdos/DOS.O88",
+               "build/win16/CSALIAS.EXE")),
+    Row("win16np", "soak", py("tests/win16np.py"), 120.0,
+        "SPEC.md 124.26.12, 50.6.11 (SEG_TYPE CX = 2 and 3), KERN-MEGA-PLAN "
+        "14.143 (O8): under Bochs, kern_mega boots off C: and \\AUTOSTRT opens "
+        "PMNP.EXE (tests/win16/pmnp.c), a protected-mode-only program whose six "
+        "discardable code segments are named by their number. It squeezes the "
+        "global heap (GlobalAlloc until it refuses) before each way of touching "
+        "a segment that is not present: a far call, a data read, a bare mov es, "
+        "a pointer handed to lstrcpy (WIN16's own stack faults), LockSegment "
+        "and a window procedure WIN16 calls; PMNP.TXT says 0 wrong, WIN16's "
+        "w16_cnload and w16_cndrop both moved, and there is no fault line. Red "
+        "expected without the router: the first far call into a segment that is "
+        "not present closes WIN16. The fixture is built by `make win16fixtures`",
+        needs=("bochs", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/mega.img", "build/mbr.bin", "build/megak/kernel.sys",
+               "build/megak/apps/win16.o88", "build/megak/kdos/DOS.O88",
+               "build/win16/PMNP.EXE")),
+    Row("win16megabigbmp", "soak", py("tests/win16mega.py", "BIGBMP"), 120.0,
+        "SPEC.md 124.25.17, WIN16-NEXT-PLAN: BIGBMP.EXE on kern_mega, under "
+        "Bochs (tests/win16mega.py; the kern_big row win16bigbmp is real "
+        "mode). Tiled bitmaps past W16_BMMAX = 64,000 bytes through "
+        "kern_mega's selectors (SEG_SUB, mega_bclip), the arm Paintbrush "
+        "and Centipede need; BIGBMP writes BIGBMP.TXT and it must say "
+        "BIGBMP OK, with no fault line",
+        needs=("bochs", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/mega.img", "build/mbr.bin", "build/megak/kernel.sys",
+               "build/megak/apps/win16.o88", "build/megak/kdos/DOS.O88",
+               "build/win16/BIGBMP.EXE")),
+    Row("win16megactlproc", "soak", py("tests/win16mega.py", "CTLPROC"), 120.0,
+        "SPEC.md 124.25.18, WIN16-NEXT ctlproc round 2: CTLPROC.EXE on "
+        "kern_mega, under Bochs (tests/win16mega.py). It registers 75 "
+        "classes, so the class table grows once; on kern_mega the old block "
+        "is freed through W16VOF + w16_gfreeh, which no row had run. "
+        "CTLPROC.TXT must say CTLPROC OK, with no fault line",
+        needs=("bochs", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/mega.img", "build/mbr.bin", "build/megak/kernel.sys",
+               "build/megak/apps/win16.o88", "build/megak/kdos/DOS.O88",
+               "build/win16/CTLPROC.EXE")),
+    Row("win16megadgroup", "soak", py("tests/win16mega.py", "DGROUP"), 120.0,
+        "SPEC.md 124.9.2, WIN16-NEXT dgroup: DGROUP.EXE on kern_mega, under "
+        "Bochs (tests/win16mega.py). The program's DGROUP answers "
+        "GlobalHandle/Size/Lock/ReAlloc and GMEM_MODIFY, whose kern_mega "
+        "fix had review only. DGROUP.TXT must say DGROUP OK, with no fault "
+        "line",
+        needs=("bochs", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/mega.img", "build/mbr.bin", "build/megak/kernel.sys",
+               "build/megak/apps/win16.o88", "build/megak/kdos/DOS.O88",
+               "build/win16/DGROUP.EXE")),
+    Row("win16megamemdc", "soak", py("tests/win16mega.py", "MEMDC"), 120.0,
+        "SPEC.md 124.25.3-6, WIN16-ANY-PLAN S19b: MEMDC.EXE on kern_mega, "
+        "under Bochs (tests/win16mega.py): the palette calls' blocks "
+        "reached through W16SEG (GetObject's was a raw `mov es` of a "
+        "virtual paragraph, a #GP), and the GMEM_NOTIFY leg past the arm's "
+        "1 MB heap. MEMDC.TXT must say MEMDC OK, with no fault line",
+        needs=("bochs", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/mega.img", "build/mbr.bin", "build/megak/kernel.sys",
+               "build/megak/apps/win16.o88", "build/megak/kdos/DOS.O88",
+               "build/win16/MEMDC.EXE")),
+    Row("win16megamenu", "soak", py("tests/win16mega.py", "MENU"), 120.0,
+        "SPEC.md 124, WIN16-NEXT astexit (astexit-verify.md, Open: a "
+        "kern_mega leg): MENU.EXE on kern_mega, under Bochs "
+        "(tests/win16mega.py). File > Exit (Alt+F, X) ends the program from "
+        "a menu command: MENU.TXT says menu: ended, WIN16's instance is "
+        "gone, and there is no fault line or kern_mega CLOSED toast "
+        "(ASTEROID's #GP on Game > Exit). Bochs input is unproven here, so "
+        "a red may be the keys and not the kernel: look at end.png with "
+        "--keep",
+        needs=("bochs", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/mega.img", "build/mbr.bin", "build/megak/kernel.sys",
+               "build/megak/apps/win16.o88", "build/megak/kdos/DOS.O88",
+               "build/win16/MENU.EXE")),
     Row("atkey", "soak", py("tests/atkey.py"), 70.0,
         "WHAT ONE ARTFULTYPE KEYSTROKE COSTS on a 4.77MHz 8088, in guest "
         "cycles off at_onkey's entry to its return. Nothing in this tree had "
@@ -20055,7 +20375,7 @@ SOAK = [
         "WIRECHAT end to end over a real card (SPEC.md 113.12): the test's "
         "own fixture - a literal stdlib reading of SPEC.md 113.2 - on 8093, "
         "and `make wirechattest`'s B: carrying the package and a "
-        "WIRECHAT.CFG aimed at it. Fifteen assertions: the join is 113.3's "
+        "WIRECHAT.CFG aimed at it. Twenty-two assertions: the join is 113.3's "
         "request to the byte, the session goes live with the issued token, "
         "the lobby's history is in the store in order, a HELD poll is "
         "answered by a second session's message, a sent message is the "
@@ -20068,11 +20388,29 @@ SOAK = [
         "written to the floppy's WIRECHAT.CFG. Then SPEC.md 113.2.4: x=1 on "
         "every request, a message stored with its date, a mention in the "
         "view marked, an A from another room marking that room and saying "
-        "who, and Tab completing @ret to @RetroAmy off the roster. QEMU by "
+        "who, and Tab completing @ret to @RetroAmy off the roster. Then "
+        "SPEC.md 113.6.6's claimed nicks through the real Chat menu: a "
+        "refused claim on the notice line with the session untouched, a "
+        "claim's K kept as the code and shown in an alert, a new code that "
+        "stops the old one, a takeover from another address answered 410 "
+        "and NOT rejoined, Reconnect taking the nick back with the code, a "
+        "release, and the last claim's code in WIRECHAT.CFG. QEMU by "
         "name: MartyPC has no network card (SPEC.md 72.9).",
         needs=("qemu",), serial=True,
         wants=("build/telnetsys.img", "build/wirechatdata.img"),
         locks=("port:8093",)),
+    Row("wcclaim", "soak", py("tests/unit/t_wcclaim.py"), 1.0,
+        "tests/wirechat.py's FIXTURE against SPEC.md 113.2.2's claimed nicks, "
+        "host-side with the clock turned by hand: a claim's K of the "
+        "pinned shape with only a salted hash kept, the code asked for at "
+        "the next join and compared without case, - or space, a takeover "
+        "from any address and the token it ended answered 410 - a HELD "
+        "poll included - for a day and 200 tokens, today's same-address "
+        "rule for a nick with no code, a new code stopping the old one, "
+        "release, every refusal of the table in its words, the claim and "
+        "wrong-code buckets. The second server the wirechat row trusts has "
+        "to be right first; about one package, so soak (WRITING-TESTS 2.1). "
+        "VERIFIED TO FAIL with the held poll or the takeover answered 401"),
     Row("wcdraw", "soak", py("tests/wcdraw.py"), 40.0,
         "WireChat's redraw, priced in drawing calls (SPEC.md 113.5.1): every "
         "far call the PACKAGE makes into a drawing cell of the API table, "
@@ -20378,6 +20716,42 @@ SOAK = [
         "find is a row nobody runs.",
         needs=("qemu",), serial=True,
         wants=("build/brtest360.img", "build/ether360.img", "build/browser.o88"),
+        locks=("port:8090",)),
+    Row("pciether", "soak", py("tests/pciether.py"), 20.0,
+        "SPEC.md 125 (docs/plans/PCIETHER-PLAN.md S8): PCIETHER.DRV on "
+        "kern_mega with a PCI RTL8139 (`-device rtl8139` on slirp, "
+        "os88qemu.make_test's PCIETHER=1) - the driver attached off a "
+        "SYSTEM.CFG that already asks for it (`make pciethertest`), the "
+        "station address QEMU's, DHCP bound to 10.0.2.15, the shipped "
+        "Browser fetching a page the row serves itself over TCP, and the "
+        "frame counters moving with no receive-overflow reset. QEMU by name: "
+        "MartyPC has no NIC, Bochs has no RTL8139 and 86Box cannot be "
+        "asserted against (vm/pentium-pciether is where a person LOOKS). "
+        "The machine carries no AdLib (NOCARD=1), so PCIETHER.DRV is the one "
+        "driver up. kern_mega's selectors are decoded through the GDT/LDT "
+        "in `info registers` (tests/pciether.py MQemu). Measured 14.7s on "
+        "2026-11-04, its first run: row 10, the image at FC3000 (above 1MB), "
+        "DHCP bound, the page fetched, rx 7 tx 9, no overflow reset.",
+        needs=("qemu", "nasm"), serial=True,
+        wants=("build/pciethertest.img", "build/brtest.img",
+               "build/megak/kernel.map", "build/pciether.bin",
+               "build/pciether.drv", "build/mega.img",
+               "build/browser.o88", "build/browser.map"),
+        locks=("port:8090",)),
+    Row("pcibig", "soak", py("tests/pciether.py", "--big"), 20.0,
+        "SPEC.md 125.1, 125.6: the pciether row on kern_big, which carries "
+        "PCIETHER.DRV's drv_tab row since the owner widened it from kern_mega "
+        "(2026-11-04) - the shipped real-mode kernel booting `make "
+        "pcibigtest`'s disk on QEMU with a PCI RTL8139: the driver attached "
+        "off SYSTEM.CFG bit 11, the PCI BIOS reached directly (no "
+        "reflection), the ring a conventional paragraph, DHCP bound, the "
+        "Browser's page fetched and the counters moving with no "
+        "receive-overflow reset. QEMU by name, for the pciether row's reasons.",
+        needs=("qemu", "nasm"), serial=True,
+        wants=("build/pcibigtest.img", "build/brtest.img",
+               "build/kernel.map", "build/pciether.bin",
+               "build/pciether.drv", "build/kernel.sys",
+               "build/browser.o88", "build/browser.map"),
         locks=("port:8090",)),
     Row("brdownload", "soak", py("tests/brdownload.py"), 180.0,
         "SPEC.md 71.20: Save Link As streams a 32 KiB unknown-length binary "

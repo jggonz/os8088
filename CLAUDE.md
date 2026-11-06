@@ -255,6 +255,7 @@ remains manual-only, with matching policy in its `agents/openai.yaml`.
 | `vga-face` | a colour face for a package on VGA/EGA (**manual invocation only**) |
 | `retro-face` | an app whose UI is a styled piece of hardware from mockups |
 | `win16-reference` | rebuilding the real Windows 3.0/3.1 machines SPEC.md §124 is held to |
+| `story-fanout` | building a plan's stories or open items with parallel sub-agents, each in its own worktree, verified before it is integrated |
 
 Each has a `LESSONS.md` beside it: what the runs it came from learned.
 

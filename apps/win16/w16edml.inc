@@ -52,6 +52,9 @@ ME_UINS  equ W16W_EXTRA + 10    ;   what it put in (bytes),
 ME_UBLK  equ W16W_EXTRA + 12    ;   what it took out (a USER heap block,
 ME_UDEL  equ W16W_EXTRA + 14    ;   0 none) and how much
 ME_FL2   equ W16W_EXTRA + 16    ; MEF_*
+ME_XTRA  equ ME_FL2 + 2 - W16W_EXTRA ; ...so "Edit"'s cbWndExtra is 18: a
+                                ;   superclass's own words follow these
+                                ;   (GetClassInfo, SPEC.md 124.25.18)
 MEF_USER   equ 1                ; the text is in WIN16's USER heap
 MEF_NODRAW equ 2                ; WM_SETREDRAW FALSE
 MEF_UNDO   equ 4                ; a step to undo
@@ -246,7 +249,7 @@ w16e_wset:
     push si
     push es
     mov [w16e_wface], ax
-    mov es, ax
+    W16SEG es, ax
     xor cx, cx
 .c:
     mov al, cl
@@ -2312,7 +2315,7 @@ w16e_copy:
     push ds
     push es
     pop ds                          ; DS:SI = the selection
-    mov es, dx
+    W16SEG es, dx
     xor di, di
     push cx
     cld
@@ -2339,10 +2342,11 @@ w16e_paste:
     jz .z
     push es
     ICALL w16_gfind                 ; ES = its header
-    mov ax, es
+    W16VOF ax, es
     pop es
     jc .z
     inc ax
+    W16TOSEL ax                     ; (a far pointer's: a selector)
     mov [w16e_src + 2], ax
     mov word [w16e_src], 0
     push es

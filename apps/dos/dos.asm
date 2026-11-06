@@ -2445,7 +2445,10 @@ dos_exe_setup:
     ; --- the image's size, in bytes then paragraphs ------------------------
     mov ax, [es:MZ_CP]              ; pages INCLUDING the header. A last-page
     or ax, ax                       ; count of 0 means the last page is FULL,
-    jz .bad                         ; which is the encoding everybody forgets
+    jnz .pages                      ; which is the encoding everybody forgets
+.tbad:
+    jmp .bad                        ; (and the way out for the jump below)
+.pages:
     dec ax
     mov cx, 512
     mul cx                          ; DX:AX = the whole pages' bytes
@@ -2461,7 +2464,7 @@ dos_exe_setup:
     shl bx, cl                      ; header bytes - a header over 4,095
     sub ax, bx                      ; paragraphs is not a thing that exists
     sbb dx, 0
-    jc .bad
+    jc .tbad
 
     add ax, 15                      ; ...and in paragraphs, rounded up: a
     adc dx, 0                       ; 32-bit shift right by four
@@ -4531,18 +4534,15 @@ DOS_T21_N equ ($ - .t21) / 2        ; ...or .bad for a function we lack
                                     ; which is disk work on the program's stack
     jc .dfbad
     mov [bp-8], dx                  ; DX is an ANSWER (SPEC.md 96.7.1)...
-    pop es
-    pop di
-    pop si
-    pop dx                          ; ...and so is BX: drop the banked one
-    jmp .ok                         ; into DX, which .ok reloads from [bp-8]
+    jmp short .dft
 .dfbad:
     mov ax, 0xFFFF                  ; DOS's own "invalid drive", and a value a
-    pop es                          ; program can test even when it ignores the
-    pop di                          ; flag - which for this call every program
-    pop si                          ; does, DOS never setting CF here
-    pop bx
-    jmp .ok
+.dft:                               ; program can test even when it ignores the
+    pop es                          ; flag - which for this call every program
+    pop di                          ; does, DOS never setting CF here. BX is
+    pop si                          ; the answer's, or undefined with FFFFh,
+    pop dx                          ; as DOS leaves it: the banked one is
+    jmp .ok                         ; dropped into DX, which .ok reloads
 
 .setdta:
     mov [dos_dta], dx               ; AH=1Ah: DS:DX, and DS is the program's -
@@ -5589,10 +5589,11 @@ DOS_T21_N equ ($ - .t21) / 2        ; ...or .bad for a function we lack
     mov bh, dl
     mov [si+0x0C], bx
     cmp byte [si+0x1A], 0x15
-    ja .fcbret
+    ja .fcbrj
     les bx, [si+0x1C]               ; 14h/15h: the random record given back
     mov [si+0x21], bx
     mov [si+0x23], es
+.fcbrj:
     jmp .fcbret
 .fcbsr:
     ; AH=24h: the random record from the current block and record
@@ -13167,7 +13168,8 @@ dos_fh_setup:
     push ds
     pop es
     mov di, dos_fhtab               ; a launch starts with nothing open, and
-    mov cx, FH_SIZEOF * DOS_NFH     ; saying so costs six bytes against a
+    mov cx, FH_SIZEOF * DOS_NFH + DVOL_CAP  ; (and no cluster asked: dos_vcb)
+                                    ; saying so costs six bytes against a
     xor al, al                      ; stale handle surviving into a second run
     cld
     rep stosb
@@ -13187,9 +13189,9 @@ dos_fh_setup:
     mov bx, 2                       ; a volume that will not say: 1KB, which is
 .got:                               ; the 360KB floppy's own and is a multiple
     mov cl, 9                       ; of every smaller one
-    shl bx, cl                      ; sectors -> bytes
-    mov [dos_cbytes], bx
-
+    shl bx, cl                      ; sectors -> bytes: it sizes the window,
+                                    ; and each file's own volume answers for
+                                    ; its arithmetic (dos_fh_cb, 96.11.11)
     mov ax, DOS_WKB * 1024
     cmp bx, ax                      ; a cluster larger than the floor IS the
     jbe .round                      ; window: READ_AT cannot be asked for a
@@ -13537,8 +13539,11 @@ dos_cd_go:
     push ds
     pop es
 
-    cmp byte [dos_fabs], 0          ; "\" or "\NAME": from the VOLUME's root.
-    je .rel                         ; There is no jail any more - a program
+    cmp word [dos_fabs], 1          ; "\" or "\NAME": from the VOLUME's root -
+    jne .rel                        ; and "\A\B" from where dos_fh_enter's walk
+                                    ; of "\A" ended: [dos_fhpath], the byte
+                                    ; after, is set (SPEC.md 96.12.3). There
+                                    ; is no jail any more - a program
     xor dx, dx                      ; launched from a subdirectory may leave it
     mov bl, [dos_vol]               ; and may change drives, as it would under
     call dos_be_goto                ; DOS (SPEC.md 96.6.1)
@@ -16115,7 +16120,7 @@ dos_fh_shrink:
     ; leaves the old file whole
     cmp word [si+FH_POS+2], 0
     jne .bcut
-    mov ax, [dos_cbytes]
+    call dos_fh_cb
     dec ax
     test ax, [si+FH_POS]            ; a cluster multiple: the cut is all of it
     jz .bcut
@@ -16123,10 +16128,10 @@ dos_fh_shrink:
     cmp ax, [dos_wbytes]
     jbe .b1
 .bcut:
-    mov ax, [dos_cbytes]
+    call dos_fh_cb
     neg ax
     and ax, [si+FH_POS]             ; C: the new end, rounded down to a
-    mov dx, [si+FH_POS+2]           ; cluster (dos_cbytes is a power of two)
+    mov dx, [si+FH_POS+2]           ; cluster (a power of two)
     push ax
     push dx
     call .brd                       ; the cluster C starts, into the window
@@ -16415,7 +16420,7 @@ dos_fh_wiloop:
     jz .iappend                     ; exactly on a cluster boundary: the file
                                     ; owns nothing past its end, and its size
                                     ; is already the multiple APPEND wants
-    mov ax, [dos_cbytes]            ; ...otherwise the rest of this cluster,
+    call dos_fh_cb                  ; ...otherwise the rest of this cluster,
     sub ax, [dos_wlen]              ; less what the window already holds
     jbe .iappend
     mov cx, ax                      ; CX = the room, which .iroom clamps to
@@ -17252,6 +17257,39 @@ dos_fh_at:
     pop ax
     ret
 
+; dos_fh_cb - AX = the cluster, in bytes, of the volume the record at SI is on
+; (SPEC.md 96.11.11). Asked of that volume the first time a launch needs it -
+; standing the machine on the file, so OSAPI_FILE_DFREE answers for it - and
+; kept in dos_vcb as the cluster's bytes / 256. A volume that will not say is
+; taken as 1KB, as dos_fh_setup takes one, and asked again next time. Keeps
+; everything else but the flags
+dos_fh_cb:
+    push bx
+    mov bl, [si+FH_VOL]
+    mov bh, 0                       ; BX = the volume, all the way down
+    mov ah, [bx+dos_vcb]
+    or ah, ah
+    jnz .have
+    call dos_fh_at
+    jc .guess
+    push dx
+    push bx
+    call dos_be_dfree               ; BX = sectors per cluster
+    mov ah, bl
+    pop bx
+    pop dx
+    jc .guess
+    shl ah, 1                       ; sectors * 512 = (sectors * 2) * 256
+    jz .guess                       ; (none, or a 64KB one no AX can say)
+    mov [bx+dos_vcb], ah            ; kept
+    jmp short .have
+.guess:
+    mov ah, 4                       ; 1KB, not kept
+.have:
+    xor al, al
+    pop bx
+    ret
+
 ; dos_fh_here - the record at SI resolves where the machine stands now: the
 ; open's and the create's, after dos_fh_enter has walked the name's folder
 ; clobbers: AX
@@ -17416,7 +17454,7 @@ dos_fh_flush:
     mov [si+FH_TOK], di             ; which is when DOS writes them too
     jc .errv
 .acc:
-    mov ax, [dos_cbytes]            ; **A PARTIAL FLUSH MAKES THE FILE A VIEW**
+    call dos_fh_cb                  ; **A PARTIAL FLUSH MAKES THE FILE A VIEW**
     dec ax                          ; (SPEC.md 96.52): another handle took the
     test ax, [dos_wlen]             ; window mid-cluster, so the file now ends
     jz .home                        ; off a cluster boundary and the next
@@ -17541,11 +17579,10 @@ dos_fh_fill:
     jnz .whole                      ; the window IS the file on that arm, and
                                     ; it is re-read rather than kept because
                                     ; another handle may have taken it
-    mov ax, [si+FH_POS]             ; the cluster-aligned base under the
-    mov dx, [si+FH_POS+2]           ; position. The cluster is a power of two,
-    mov bx, [dos_cbytes]            ; so the mask is its own negation
-    neg bx
-    and ax, bx
+    call dos_fh_cb                  ; the cluster-aligned base under the
+    neg ax                          ; position. The cluster is a power of two,
+    and ax, [si+FH_POS]             ; so the mask is its own negation - and it
+    mov dx, [si+FH_POS+2]           ; is the FILE's volume's (SPEC.md 96.11.11)
     mov [dos_wbase], ax
     mov [dos_wbase+2], dx
 
@@ -17652,7 +17689,7 @@ dos_fh_fill:
     HBSS DOS_B_FSI,   FSI_SIZE
     DBSS DOS_B_WSEG,  2        ; the file window (SPEC.md 96.11): the
     DBSS DOS_B_WBYTES,2        ; paragraph it starts at and its size, which
-    DBSS DOS_B_CBYTES,2        ; is a multiple of the volume's cluster
+                               ; is a multiple of the launch volume's cluster
     DBSS DOS_B_WOWN,  1        ; the handle index holding it, 0xFF = nobody
     DBSS DOS_B_WFILL, 1        ; ...and whether it holds anything of that
     DBSS DOS_B_WDIRTY,1        ; file, which "0 bytes at offset 0" cannot say
@@ -17678,6 +17715,9 @@ dos_fh_fill:
     DBSS DOS_B_FHIX,  1        ; the window owner's index, set by every
     DBSS DOS_B_FHPAD, 1        ; slot resolution rather than threaded
     DBSS DOS_B_FHTAB, FH_SIZEOF * DOS_NFH
+    DBSS DOS_B_VCB,   DVOL_CAP ; per volume: sectors a cluster, 0 = not yet
+                               ;   asked (dos_fh_cb). AFTER the table, so
+                               ;   dos_fh_setup's one rep stosb clears both
     DBSS DOS_B_DTA,   2        ; the Disk Transfer Area a find fills,
     DBSS DOS_B_DTASEG,2        ; PSP:0080 until AH=1Ah moves it
     DBSS DOS_B_DTASV, 2        ; ...banked while the kernel's own record is
@@ -17726,6 +17766,8 @@ dos_fh_fill:
     DBSS DOS_B_TMP3,  2
     DBSS DOS_B_ACC,   2
     DBSS DOS_B_FABS,  1        ; did the name carry a leading separator?
+    DBSS DOS_B_FHPATH,  1      ; ...and a folder part: THE BYTE AFTER, which
+                               ; dos_cd_go reads with it as one word
     DBSS DOS_B_PFBUF, DOS_PFIN + 1  ; AH=29h's copy of the program's name...
     DBSS DOS_B_PFCB,  12            ; ...and the twelve bytes it hands back
     DBSS DOS_B_FNAME2, 16      ; AH=56h's SECOND name (SPEC.md 96.31)
@@ -17898,8 +17940,7 @@ dos_fh_fill:
     DBSS DOS_B_SHSSEG,  2           ; DIR's sort claim, 0 = none (SPEC.md
     DBSS DOS_B_SHSN,    2           ; 96.33.9.2) ...and how many records in it
     DBSS DOS_B_SHSI,    2           ; ...and which one the listing is emitting
-    DBSS DOS_B_FHPATH,  1           ; the name carried a folder part...
-    DBSS DOS_B_FPBUF,   DOS_PBUF    ; ...which is this
+    DBSS DOS_B_FPBUF,   DOS_PBUF    ; the name's folder part ([dos_fhpath])
     DBSS DOS_B_FHCWD,   2           ; where we were before walking it
     DBSS DOS_B_FHMOVED, 1           ; ...and whether we did
     DBSS DOS_B_FHKEEP,  1           ; AH=3Bh: do NOT walk back
@@ -18522,7 +18563,6 @@ dos_mou_rx  equ DOS_CBASE + DOS_B_MRX
 dos_mou_ry  equ DOS_CBASE + DOS_B_MRY
 dos_wseg    equ DOS_CBASE + DOS_B_WSEG
 dos_wbytes  equ DOS_CBASE + DOS_B_WBYTES
-dos_cbytes  equ DOS_CBASE + DOS_B_CBYTES
 dos_wown    equ DOS_CBASE + DOS_B_WOWN
 dos_wfill   equ DOS_CBASE + DOS_B_WFILL
 dos_wdirty  equ DOS_CBASE + DOS_B_WDIRTY
@@ -18544,6 +18584,7 @@ dos_beflg   equ DOS_CBASE + DOS_B_BEFLG
 dos_onprog  equ DOS_CBASE + DOS_B_ONPRG
 dos_fhix    equ DOS_CBASE + DOS_B_FHIX
 dos_fhtab   equ DOS_CBASE + DOS_B_FHTAB
+dos_vcb     equ DOS_CBASE + DOS_B_VCB
 dos_dta     equ DOS_CBASE + DOS_B_DTA
 dos_dtaseg  equ DOS_CBASE + DOS_B_DTASEG
 dos_dtasv   equ DOS_CBASE + DOS_B_DTASV
@@ -18661,6 +18702,9 @@ dos_tmp2    equ DOS_CBASE + DOS_B_TMP2
 dos_tmp3    equ DOS_CBASE + DOS_B_TMP3
 dos_acc     equ DOS_CBASE + DOS_B_ACC
 dos_fabs    equ DOS_CBASE + DOS_B_FABS
+%if DOS_B_FHPATH != DOS_B_FABS + 1
+  %error "dos_cd_go reads [dos_fabs] and [dos_fhpath] as one word"
+%endif
 dos_pfbuf   equ DOS_CBASE + DOS_B_PFBUF   ; AH=29h's name scratch...
 dos_pfcb    equ DOS_CBASE + DOS_B_PFCB    ; ...and its FCB prefix
 dos_fname2  equ DOS_CBASE + DOS_B_FNAME2  ; AH=56h's second name

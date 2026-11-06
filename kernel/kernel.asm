@@ -655,7 +655,10 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
  %ifidni __?SECT?__, [section .text]
     cmp word [cs:k_dsel], KERNEL_SEG    ; REAL MODE - the boot, before
  %elifidni __?SECT?__, [section .cold]
-    cmp byte [ss:mega_pm], 0    ; (.cold names no CS data: KDATAR_C's flag)
+    push ax                     ; (.cold names no CS data, and SS may be a
+    db 0x0F, 0x01, 0xE0         ;   program's own stack in an IRQ: `smsw ax`,
+    test al, 1                  ;   its PE bit, is the fact - SPEC.md 20.18.2)
+    pop ax
  %else
   %error "MEGA_CSELTOP outside .text and .cold"
  %endif
@@ -6229,6 +6232,10 @@ osapi_arg_text_x equ mod_gone   ; no links on kern_small, so no parameter
 ;            LDT entry is free. CF = 1 on a real-mode kernel, every register
 ;            kept: DX + AX is the answer there (the parts standard's op_at,
 ;            KERN-MEGA-MEMORY-PLAN MC7)
+;   SEG_WINL DX:AX = a LINEAR base, CX = bytes (0 = 64KB), SI = a window of
+;            yours to re-aim or 0 -> DX = a data selector over it, as
+;            SEG_WIN; above 1MB too. CF = 1 on a real-mode kernel, which has
+;            nothing above 1MB to window (SPEC.md 124.31.3)
 ; THE REAL-MODE ANSWER IS THE CALLER'S OWN ARITHMETIC - DX x 16, DX, DX + AX
 ; - so a package converted to these verbs runs unchanged on every kernel
 ; and needs no CPU_F_PM test; only kern_mega in protected mode, where a
@@ -6242,6 +6249,11 @@ SEG_SUBC    equ 5
 SEG_BWIN    equ 6
 SEG_AIM     equ 7
 SEG_AT      equ 8               ; (refused below: protected mode's alone)
+SEG_TILE    equ 9               ; (refused below too: SPEC.md 124.31.2)
+SEG_WINL    equ 10              ; (and refused below: SPEC.md 124.31.3)
+SEG_LEND    equ 11              ; kern_mega's lent stack (124.31.2), refused below too
+SEG_HND     equ 12              ; kern_mega's handle descriptor (124.31.3), and too
+SEG_TYPE    equ 13              ; kern_mega's code/data retype of a window (124.31.6), and too
 section .cold
 osapi_seg:                      ; (api_rxc's far body: DS = KDATA)
 %ifdef KERN_MEGA

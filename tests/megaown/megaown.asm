@@ -225,6 +225,7 @@ mo_run:
     inc byte [mo_phase]
     push bp
     call mo_walk
+    call mo_bwin
     xor bp, bp                      ; --- 1. fill ---------------------------
 .fill:
     cmp bp, MO_MAX
@@ -436,6 +437,72 @@ mo_walk:
     pop ax
     ret
 
+; mo_bwin - SEG_BWIN's owner test (KERN-MEGA-PLAN 14.139): a window over
+; a pool claim of OUR OWN is made (the control), and one over our own REGION
+; - a pool block owned 80h | slot, not the 0A0h | slot a claim is, so not a
+; block a package may bind a window into - is refused with AX = 3. Prints
+; 'MEGAOWN: bwin ok' or 'MEGAOWN: bwin no C' (C: 1 no claim, 2 the control
+; refused, 3 the region was bound, 4 refused with another reason)
+mo_bwin:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov cl, 1
+    mov ax, MO_KB
+    call OSAPI_MEM_CLAIM
+    jc .say
+    test dl, 4
+    jz .cfree                       ; conventional: not a pool block
+    push dx                         ; the claim, for its free
+    mov bl, SEG_BWIN
+    call OSAPI_SEG                  ; DX = a window over our own claim
+    mov cl, 2
+    jc .win
+    mov bl, SEG_FREE                ; (a window of ours: give it back)
+    call OSAPI_SEG
+    mov dx, ds
+    mov bl, SEG_BWIN                ; ...and one over our own region
+    call OSAPI_SEG
+    mov cl, 3
+    jnc .bound
+    mov cl, 4
+    cmp ax, 3
+    jne .win
+    mov cl, 0
+    jmp short .win
+.bound:
+    mov bl, SEG_FREE
+    call OSAPI_SEG
+.win:
+    pop dx
+.cfree:
+    push cx
+    call OSAPI_MEM_FREE
+    pop cx
+.say:
+    mov si, mo_s_bwin
+    call mo_say
+    or cl, cl
+    jz .ok
+    mov si, mo_s_no2
+    call mo_say
+    mov al, cl
+    call mo_hex2
+    jmp short .nl
+.ok:
+    mov si, mo_s_okt2
+    call mo_say
+.nl:
+    call mo_nl
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 mo_magic    dw 0x6D4F
 %endif
 
@@ -514,6 +581,9 @@ mo_s_ok:    db 'MEGAOWN: ok', 0
 mo_s_no:    db 'MEGAOWN: no ', 0
 mo_s_after: db 'MEGAOWN: after', 0
 mo_s_okt:   db ' ok', 0
+mo_s_bwin:  db 'MEGAOWN: bwin', 0
+mo_s_okt2:  db ' ok', 0
+mo_s_no2:   db ' no ', 0
 mo_s_not:   db ' no', 0
 %endif
 

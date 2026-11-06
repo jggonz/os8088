@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""os88vbt - the host half of Video Battle (SPEC.md 125): a .VBT bundle.
+"""os88vbt - the host half of Video Battle (SPEC.md 126): a .VBT bundle.
 
 A battle played as joined video clips. The bundle holds the openings, an
 idle loop, a set of action clips (each a stream of frames carrying its own
@@ -25,10 +25,10 @@ Commands:
     os88vbt.py info FILE.VBT
     os88vbt.py verify FILE.VBT        decode every path, check every join
 
-Format version 8 (SPEC.md 125.2), little-endian:
+Format version 8 (SPEC.md 126.2), little-endian:
     0             the header
     512           the clip table, 48 bytes a clip, at most 64
-    4096          the RULES (tools/vbtrules.py, SPEC.md 125.6), to 16 KB
+    4096          the RULES (tools/vbtrules.py, SPEC.md 126.6), to 16 KB
     then, each on 4 KB: the VIDEO RESIDENT block (the idle loop, every
                   clip's anchor table), the MUSIC (streamed), the MENU's
                   effects (resident), the IDLE loop's records (resident),
@@ -62,7 +62,7 @@ ENT_CLIP = 96 * 1024    # a clip's ENTRIES, in front of its records (format 8):
                         # wants a ring of them and 16 KB more (vb_rmin); a
                         # title's way out, whole-screen entries, is the big one
 REC_MAX = 16384     # a record is read contiguously out of a clip's ring, so
-                    # it is at most the ring's guard (VB_CGUARD, 125.4)
+                    # it is at most the ring's guard (VB_CGUARD, 126.4)
 MAX_CLIPS = 64
 MAX_OPEN = 8
 MAX_ANCH = 16
@@ -85,7 +85,7 @@ CF_LOOP = 32        # a title or end loop: record 0 from black, the last the
 CF_ENTER = 64       # opening 0, entered at the title loop's frames (anchors)
 CF_NOMUS = 128      # an end clip played once: no music after its own sound
 ENDING_HOW = {"hold": 0, "fade": 1, "join": 2, "again": 3}
-# AFTER AN ENDING'S CLIP THAT PLAYS ONCE (125.3.1, header 346/347): hold its
+# AFTER AN ENDING'S CLIP THAT PLAYS ONCE (126.3.1, header 346/347): hold its
 # last frame, fade and play again from the title, or JOIN the title - its
 # last record the seam onto the title's frame 0, the play again no fade
 ENDING_THEN = {"hold": 0, "fade": 3, "join": 4}
@@ -95,7 +95,7 @@ HF_ANYKEY = 1       # header 348, the battle's flags: ANY key (Esc aside)
                     # leaves the title and plays an end loop again
 
 
-# the menu's sounds, header bytes 24..28 (125.2.1)
+# the menu's sounds, header bytes 24..28 (126.2.1)
 UI_SOUNDS = ("move", "open", "close", "take", "deny")
 
 ROWS_FULL = 200
@@ -212,7 +212,7 @@ def geom(rows):
     return REND.geom(rows)
 
 
-CAP_SHARE = 0.75    # (125.4.1) of the profile's disk, a streamed clip's
+CAP_SHARE = 0.75    # (126.4.1) of the profile's disk, a streamed clip's
 CAP_HOLD = 57344    # ...what a ring holds ahead of the sound, at most:
                     # the bundle's own ring now (build(), VBATTLE-RAM-PLAN
                     # R4), this the floor's when nothing is known of it
@@ -253,7 +253,7 @@ def seam_full(fl, target, rows):
 def capped_run(recs, fs, snd, rows, cap, log, name):
     """A streamed clip's records 1.. appended to RECS, each the frame's
     change from the screen before - unless the reader's model CAP says the
-    engine will not have it in time (125.4.1): then as many of its ROWS as
+    engine will not have it in time (126.4.1): then as many of its ROWS as
     fit, taken on from where the last capped frame stopped, the rest left
     for the frames after it (each is a change from what is ON the screen).
     The sound is never cut. The screen the clip ends on is returned"""
@@ -303,7 +303,7 @@ def capped_run(recs, fs, snd, rows, cap, log, name):
 def rec(a, b, rows, audio=b""):
     """The record that takes surface a to surface b, with its frame's sound:
     its length (all of it), the sound's length, the lists (SPEC.md 98.1.3;
-    VGA4's sub-records), the sound (125.2.3)"""
+    VGA4's sub-records), the sound (126.2.3)"""
     lists = REND.lists(a, b, rows) if a is not None else REND.empty()
     n = REC_HDR + len(lists) + len(audio)
     if n > REND.recmax:
@@ -339,7 +339,7 @@ def decode(surf, r):
 
 def music_bytes(x):
     """The music, held to 64..191 so that music + an effect never leaves
-    0..255 (125.2): mixing is one add a sample"""
+    0..255 (126.2): mixing is one add a sample"""
     return np.clip(np.round(x * 63.5 + 127.5), 64, 191).astype(np.uint8).tobytes()
 
 
@@ -355,7 +355,7 @@ def own_bytes(x):
 
 def frame_sound(track, nframes, spf, own):
     """A clip's sound cut a frame each: bytes, or b"" for a silent frame
-    (125.2.3: a frame with no sound carries none)"""
+    (126.2.3: a frame with no sound carries none)"""
     out = []
     for f in range(nframes):
         x = track[f * spf:(f + 1) * spf] if track is not None else []
@@ -420,12 +420,12 @@ class Battle:
         self.canvas = (0, 0, 320, 142)  # pixels
         self.rules = None       # the RULES block (vbtrules.compile_rules)
         self.images = b""       # the band's pictures, back to back
-        self.title = None       # (125.3.1) dict: name, frames, sound - a
+        self.title = None       # (126.3.1) dict: name, frames, sound - a
                                 # loop over the whole screen
         self.endings = {}       # outcome -> (how, a loop dict or None);
                                 # an end loop is the canvas's
         self.fade_steps = 16
-        self.cap = None         # (125.4.1) the reader's model a streamed
+        self.cap = None         # (126.4.1) the reader's model a streamed
                                 # clip is held to: dict(rate, hold, head),
                                 # bytes; None: no cap
         self.capped = {}        # ...and what it did: clip -> frames capped
@@ -465,7 +465,7 @@ def build(b):
 
     def entry_rec(r):
         """An entry: a record padded inside to a whole paragraph, so that
-        the next starts on one and the ring's walk steps over it (125.4)"""
+        the next starts on one and the ring's walk steps over it (126.4)"""
         maxrec[0] = max(maxrec[0], len(r))
         return rec_pad(r, -len(r) % 16)
 
@@ -495,7 +495,7 @@ def build(b):
         recs = []
         anch = []
         ents = bytearray()
-        # FULL SCREEN, or with the menu (125.3): only a full one's flag
+        # FULL SCREEN, or with the menu (126.3): only a full one's flag
         # says so, and the engine brings the band in at the first opening
         # without it - or, every opening full, once the last is over
         flags = CF_OPENING | CF_OWNSND | (CF_FULL if o.get("full") else 0)
@@ -597,7 +597,7 @@ def build(b):
         regions.append(with_entries(ents, recs, c["name"]))
         clip_rows.append(dict(name=c["name"], nrec=len(recs), flags=flags,
                               exit=exit_to, anch=anch, esz=len(ents) >> 4))
-    # --- the LOOPS (125.3.1): the title over the whole screen, an end loop
+    # --- the LOOPS (126.3.1): the title over the whole screen, an end loop
     # in the canvas. Record 0 from black, records 1..n-1, and record n the
     # seam back onto frame 0; each carries its frame's sound (frame 0's
     # twice: record n shows it again)
@@ -638,7 +638,7 @@ def build(b):
         loop_ix[key] = len(clip_rows) - 1
         return loop_ix[key]
     def once_clip(lp, then):
-        """An ending's clip that PLAYS ONCE (125.3.1): record 0 from black,
+        """An ending's clip that PLAYS ONCE (126.3.1): record 0 from black,
         then its frames in turn, and - when it JOINS the title - the seam
         onto the title's frame 0, over the whole screen; CF_ENDS, so the
         engine goes on as its "then" says"""
@@ -762,7 +762,7 @@ def build(b):
     struct.pack_into("<IHH", h, 320, img_at, len(imgs), meta_len)
     h[330:337] = bytes([title_ix, leave_ix] + ends + [b.fade_steps])
     h[337] = REND.code                  # the adapter (cga4, vga4, herc)
-    h[346:348] = bytes(thens)           # what follows a once-clip (125.3.1)
+    h[346:348] = bytes(thens)           # what follows a once-clip (126.3.1)
     h[348] = HF_ANYKEY if b.any_key else 0  # the battle's flags
     hold = hold_order(clip_rows, offs, regions, mus_at, len(mus))
     struct.pack_into("<H", h, 398, len(hold))
@@ -1116,7 +1116,7 @@ def battle_of(proj, progress=None, kind="cga4"):
         pal = [tuple(v >> 2 for v in c) for c in p8] + \
             [(0, 0, 0)] * (16 - len(p8))
     b.rend = Rend(kind, rows_, pal)
-    if t.get("burst_cap", True):    # THE READER'S MODEL (125.4.1): the
+    if t.get("burst_cap", True):    # THE READER'S MODEL (126.4.1): the
         import os88venc as VE_      # profile's disk at three quarters,
         disk = VE_.PROFILES.get(t.get("profile"), {}).get("disk") or 119000
         b.cap = dict(rate=int(disk * CAP_SHARE) - t["rate"],  # the music's
@@ -1179,7 +1179,7 @@ def battle_of(proj, progress=None, kind="cga4"):
         b.music = np.zeros(t["rate"])
         b.music_at = 0
     b.ui = dict(d["ui_sounds"])
-    # --- the title loop and the endings (125.3.1)
+    # --- the title loop and the endings (126.3.1)
     b.fade_steps = d.get("fade_steps", 16)
     b.any_key = bool(d.get("any_key"))
     b.name = d.get("name")
@@ -1272,7 +1272,7 @@ BAYER4 = np.array([[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9],
 def band_picture(path, pal, dither=True, cells=None, rows=None):
     """A picture file as pixel indexes 0..3 in CGA4 palette PAL, its width
     a whole number of 8-pixel cells: the nearest of the four colours, after
-    an ordered dither when DITHER (SPEC.md 125.5)"""
+    an ordered dither when DITHER (SPEC.md 126.5)"""
     from PIL import Image
     import vbtana as A
     im = Image.open(path).convert("RGB")
@@ -1311,7 +1311,7 @@ def build_project(proj, progress=None, kind="cga4"):
     data = build(b)
     verify(data, quiet=True)
     LAST_CAPPED.clear()             # (what the reader's model held back,
-    LAST_CAPPED.update(b.capped)    # for the build's report: 125.4.1)
+    LAST_CAPPED.update(b.capped)    # for the build's report: 126.4.1)
     LAST_CAP.clear()                # (and the ring it was held to: R4)
     if b.cap is not None:
         LAST_CAP.update(ring=b.cap_ring, hold=b.cap["hold"])
@@ -1387,7 +1387,7 @@ def demo_project(path, bars=16, floppy=False):
     p.enemy_move("lunge")
     p.set(("enemy", "victory"), "victory")
     p.set(("enemy", "defeat"), "defeat")
-    if not floppy:                  # THE TITLE AND THE ENDINGS (125.3.1): the
+    if not floppy:                  # THE TITLE AND THE ENDINGS (126.3.1): the
         p.set_title("title", (19, 35))      # title card round until a key,
         p.set_ending("victory", "fade", "victory", (21, 31))   # a fade away;
         p.set_ending("defeat", "again")     # victory's end loop; defeat
@@ -1502,7 +1502,7 @@ def cover_region(img, line, kinds, name=None):
     """The region: 'CV', the variants' count, the line (64 bytes), the
     battle's name (16, the window's title), then a row a variant - kind, 0,
     w, h, stride, its offset in the region - and the bitmaps (SPEC.md
-    125.2)"""
+    126.2)"""
     vs = [(k,) + cover_bitmap(img, k) for k in kinds]
     head = bytearray(b"C2" + bytes([len(vs), 0]))   # ('CV': a 16-byte name)
     t = (line if line is not None else COVER_LINE)
@@ -1528,7 +1528,7 @@ def game_stem(proj):
 
 def embed_o88(engine, bundle, name=None):
     """A GAME: VBATTLE.O88 (ENGINE, its bytes) with the battle BUNDLE inside
-    it (SPEC.md 125.2): one file to copy and double-click, for one adapter.
+    it (SPEC.md 126.2): one file to copy and double-click, for one adapter.
     The engine is a packed package (flags bit 3); this marks it as one with
     parts (bit 2) and puts where its packed image ENDS in the link word -
     which is what makes the loader read the image alone and leave the rest
@@ -1655,7 +1655,7 @@ def cmd_build(a):
             print("%s (%s): %d bytes; idle loop %d bytes, entries %d" % (
                 out, kind, len(data), bud["idle_bytes"], bud["entries"]))
             if LAST_CAPPED:
-                print("  held to the disk (125.4.1): %s" % ", ".join(
+                print("  held to the disk (126.4.1): %s" % ", ".join(
                     "%s %d frames" % kv for kv in sorted(LAST_CAPPED.items())))
             for c in bud["clips"]:
                 print("  %-14s %7d bytes %5.1f KB/s (%3.0f%% of the disk) "
@@ -1736,7 +1736,7 @@ def main(argv=None):
                    help="the music's length in bars of 1.6 s (default 16)")
     q.add_argument("--floppy", action="store_true",
                    help="the floppy's battle: no Limit, and 3.2 s of music, "
-                        "short enough to be resident (SPEC.md 125.4)")
+                        "short enough to be resident (SPEC.md 126.4)")
     q.add_argument("--preview", help="write a contact sheet per clip here")
     q.add_argument("--rendition", choices=("cga4", "vga4", "herc"),
                    default="cga4", help="the adapter it is for")

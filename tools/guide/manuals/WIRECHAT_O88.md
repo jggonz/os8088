@@ -34,11 +34,43 @@ If someone is already using that nick, or the server refuses it, the field
 asks again with your nick in it to change. **Chat > Change Nick...** chooses
 another at any time.
 
-A few nicks belong to particular people. Choosing one of those asks for its
-code: the field says `Code:` and the status bar says **Enter the code for
-this nick**. Type the code and press `Return`. `Esc` goes back to choose a
-different nick. WireChat remembers the code with the nick, as plain text on
-the disk, so anyone with the disk has the code too.
+A few nicks belong to particular people, and any nick can be claimed (see
+Claiming your nick). Choosing one of those asks for its code: the field says
+`Code:` and the status bar says **Enter the code for this nick**. Type the
+code and press `Return`. `Esc` goes back to choose a different nick.
+WireChat remembers the code with the nick, as plain text on the disk, so
+anyone with the disk has the code too.
+
+## Claiming your nick
+
+A nick you claim is yours on every machine: nobody can use it without its
+code. Choose **Chat > Claim Nick...** and answer **Yes** to
+`Claim <nick> with a code?`. The server makes a code such as
+`k7qm-2xfp-9wce-hd3t`, and WireChat shows it in a window and on the line
+above the field: `Your code is k7qm-2xfp-9wce-hd3t`. Write it down. The
+server cannot show it to you again. WireChat remembers it on this disk.
+
+To use the nick on another machine, choose it there and type the code at the
+`Code:` prompt. Capital letters, and the hyphens, do not matter.
+
+A claim does not run out. While WireChat has the code, the item is
+**Chat > New Code...**: it asks `Replace <nick>'s code?` and makes a new code,
+and the old one stops working. **Chat > Release Nick...** asks
+`Release <nick> to anyone?` and gives the nick up, so anyone can use it
+again. Release Nick is greyed when WireChat has no code, and both items are
+greyed while WireChat is not connected.
+
+The server refuses some claims, and the line above the field says why: a nick
+that belongs to someone, a nick someone else has claimed, a few names such as
+`help` and `wirebot`, a machine that is muted, or a third claimed nick from
+the same machine. A machine can claim or get a new code three times, then once
+every 8 hours.
+
+If you join with the code on another machine while this one is connected,
+the other machine takes the nick. This one stops, and its status bar says
+**Signed in elsewhere**. It does not reconnect by itself. Choose **Chat >
+Reconnect** to take the nick back, or **Chat > Change Nick...** to use a
+different one.
 
 ## The window
 
@@ -180,6 +212,9 @@ the field says who and where, for example `RetroAmy mentioned you in
 | Chat | Flag Message... | Flag the selected message |
 | Chat | Notifications Off / On | Switch the chirp off or on |
 | Chat | Emoticons... | Eight emoticons to type at the caret |
+| Chat | Claim Nick... | Claim your nick and get its code |
+| Chat | New Code... | Replace the code of the nick you have claimed |
+| Chat | Release Nick... | Give up the nick you have claimed |
 | Chat | Reconnect | Start a fresh connection to the server |
 | Rooms | lobby, hardware, development, games | Go to that room |
 | Status | Online, Away, Busy | Set your status |
@@ -221,6 +256,7 @@ the status bar does the same as the key.
 | Offline - retrying in 10s | The server did not answer; WireChat tries again by itself, waiting longer each time up to a minute |
 | Resting - trying again later | The server is full or resting until midnight UTC; WireChat tries again by itself |
 | Enter the code for this nick | The nick needs its code |
+| Signed in elsewhere | Another machine joined with your nick's code. Choose Chat > Reconnect to take it back |
 
 ## Files
 

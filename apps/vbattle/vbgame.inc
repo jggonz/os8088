@@ -1,6 +1,6 @@
 ; =============================================================================
 ; os8088 - apps/vbattle/vbgame.inc - THE BATTLE'S TURNS AND MENUS (SPEC.md
-; 125.6): the characters in order, then the enemy; a character's menu tree
+; 126.6): the characters in order, then the enemy; a character's menu tree
 ; (its top menu, a sub-menu Enter opens, the side menu Left or Right opens,
 ; Esc or Left/Right back), a target picked when the action wants an ally;
 ; each action PLANNED by the rules (vbrules.inc), its clip played, its
@@ -64,7 +64,7 @@ vb_game_init:
     mov [vb_stance], al
     mov byte [vb_sret], NONE
     mov byte [vb_efol], NONE        ; (no follow-up owed at the start)
-    call vb_lay_init                ; (the band's layout, 125.5.1)
+    call vb_lay_init                ; (the band's layout, 126.5.1)
     mov word [vb_mlow], 0xFFFF      ; (the music's lowest, after a rebuild)
     xor bx, bx                      ; the party's items
 .i:
@@ -111,7 +111,7 @@ vb_game:
     je .wait
     cmp byte [vb_eplay], 0          ; GS_END: Esc, and on an END loop Enter
     je .r                           ; or Space - the screen fades, and the
-    call .go                        ; play starts over (125.3.1)
+    call .go                        ; play starts over (126.3.1)
     jne .r
     mov byte [vb_fwant], 3
     ret
@@ -507,7 +507,7 @@ vb_end_battle:
     jmp short .e
 .w:
     mov ax, [vb_meta+di]            ; how it goes on, and its end loop
-    mov [vb_ehow], al               ; (125.3.1): the line says what a key
+    mov [vb_ehow], al               ; (126.3.1): the line says what a key
     mov [vb_eloop], ah              ; does
     push di
     sub di, VH_ENDS

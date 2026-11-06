@@ -153,4 +153,17 @@
 # 2026-11-01: elendilon's review fixes read 3,289 with the close in its own
 #             far routine (fsx_rspkf); at the merge of kernel size pass 16 the
 #             close is ops's inline one at fsx_rupf's head and fsx_rspkf goes
-3250
+# 2026-11-02: #327 (WIN16 Phase B/C) merged #328 and read 3,254: +4 of the
+#             branch's kern_mega code that stays low - SPEC.md 20.18.2's
+#             MEGA_CSELTOP reading the PE bit with `smsw` in .cold (an IRQ
+#             may run on a program's own stack, so [ss:mega_pm] is not ours
+#             to read) and D2's lent BIOS stack (SPEC.md 50.6.11, 124.31.2),
+#             whose real-mode landing needs the stack's segment and selector
+#             both
+# 2026-11-04: PCIETHER.DRV's drv_tab row (SPEC.md 125.5), kern_mega's alone:
+#             +29 of driver-layer DATA in the kernel's segment - the 16-byte
+#             drv_tab row and the 13-byte 'PCIETHER.DRV' name, both read
+#             through DS (drv_load_at, dskw_read). The DRVE_CLASS string, its
+#             table word, the title and the drv_memk word are CTRL.DRV's and
+#             the blob's, not resident. Data, so it cannot go in .mega
+3283

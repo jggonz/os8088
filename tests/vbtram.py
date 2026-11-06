@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WHAT A BATTLE HOLDS, on a machine that has been USED (SPEC.md 125.4.4,
+"""WHAT A BATTLE HOLDS, on a machine that has been USED (SPEC.md 126.4.4,
 docs/plans/completed/VBATTLE-RAM-PLAN.md R1), on MartyPC's Hercules 5150, 640 KB.
 
     make vbattle && python3 tests/vbtram.py [--arm fresh|used]
@@ -20,7 +20,7 @@ read off the machine (tools/heapmap.py's Map):
          within 16 KB of the fresh boot's.
 
 Both arms then leave the play: back on the desktop every claim the battle
-still holds is MOVABLE (125.4.4: the resident claim declared again as the
+still holds is MOVABLE (126.4.4: the resident claim declared again as the
 bracket returns) and the card's page-safe ring has been given back. In the
 fresh arm a SECOND battle window then plays once, its resident claim from
 the top under the first's; the first closes, and a compaction posted from
@@ -175,7 +175,7 @@ def run(arm, tmp, syms):
         mp = heapmap.Map(Q(m), heapmap.symbols())
         got = dict(r0=rw("vb_rkb"), r1=rw("vb_rkb2"), comp=rw("vb_ncomp"))
         m.run()
-        # BETWEEN PLAYS NOTHING PINNED (125.4.4, tests/pins.txt): back on
+        # BETWEEN PLAYS NOTHING PINNED (126.4.4, tests/pins.txt): back on
         # the desktop, every claim the battle still holds MOVABLE (the
         # resident claim declared again as the bracket returned) and the
         # card's page-safe ring given back

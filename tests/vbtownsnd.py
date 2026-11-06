@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A CLIP WITH ITS OWN SOUND, its sound WITH its picture (SPEC.md 125.3),
+"""A CLIP WITH ITS OWN SOUND, its sound WITH its picture (SPEC.md 126.3),
 on MartyPC's XT with a CGA and an SB.
 
     make vbattle && python3 tests/vbtownsnd.py

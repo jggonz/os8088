@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - apps/vbattle/vbattle.asm
 ;
-; VIDEO BATTLE (SPEC.md 125): a turn-based battle played as JOINED VIDEO
+; VIDEO BATTLE (SPEC.md 126): a turn-based battle played as JOINED VIDEO
 ; CLIPS. A .VBT bundle (tools/os88vbt.py) holds an idle loop, the action
 ; clips, the music, the sound effects and the battle's script; this package
 ; plays it full screen in CGA mode 4 on a CGA, an EGA or a VGA:
@@ -12,7 +12,7 @@
 ;     142-199) is the interface, drawn here, straight into the framebuffer;
 ;   - every join is EXACT: an action starts from an ANCHOR frame of the idle
 ;     loop through an entry record made against that frame's screen, and its
-;     last record is a seam back onto the loop (SPEC.md 125.3);
+;     last record is a seam back onto the loop (SPEC.md 126.3);
 ;   - the sound is PCM at the bundle's rate on a Sound Blaster (SPEC.md
 ;     34.5.3's external ring): the music loops, one effect at a time is
 ;     mixed into it, and the card is the clock the pictures keep to.
@@ -78,7 +78,7 @@
     db 0x00                         ; ........
     OS88_DOCGLYPH8_END
 
-; --- the bundle's layout (SPEC.md 125.2; tools/os88vbt.py is the writer) ------
+; --- the bundle's layout (SPEC.md 126.2; tools/os88vbt.py is the writer) ------
 VH_MAGIC    equ 0               ; 'VBT1'
 VH_VER      equ 4               ; 4
 VH_PAL      equ 8               ; CGA4 palette byte (98.1.3.3)
@@ -102,9 +102,9 @@ VH_OPENS    equ 80              ; 8 bytes: the openings' clips, in turn
 VH_METALEN  equ 326             ; word: the first region's length, 8 KB to
                                 ; 16 KB (the rules' 4 KB at a time)
 VH_IMG      equ 320             ; dword offset, word length: the band's
-                                ; pictures (125.5)
+                                ; pictures (126.5)
 VH_ENT      equ 88              ; dword offset, dword length: the ENTRIES
-                                ; (125.2), each named by its paragraph
+                                ; (126.2), each named by its paragraph
 VH_SFXTAB   equ 96              ; 16 x (dword offset, word length)
 VB_CTAB     equ 512             ; the clip table, 48 bytes a clip
 VC_OFF      equ 0               ; dword: the stream's offset
@@ -122,9 +122,9 @@ CF_FULL     equ 2
 CF_ENDS     equ 4
 CF_OWNSND   equ 8               ; its sound is played instead of the music
 CF_OPENING  equ 16
-CF_LOOP     equ 32              ; a title or end loop (125.3.1)
+CF_LOOP     equ 32              ; a title or end loop (126.3.1)
 CF_NOMUS    equ 128             ; an end clip played once: its own sound,
-                                ; and no music after it (125.3.1)
+                                ; and no music after it (126.3.1)
 CF_ENTER    equ 64              ; opening 0, entered at the title's frames
 VH_TITLE    equ 330             ; the title loop's clip, FFh none
 VH_LEAVE    equ 331             ; FFh: the title is left by a fade
@@ -143,7 +143,7 @@ EH_FADE     equ 1
 EH_JOIN     equ 2
 EH_AGAIN    equ 3
 EH_AGAINJ   equ 4               ; (after a once-clip: JOIN the title, the
-                                ; play again with no fade - 125.3.1)
+                                ; play again with no fade - 126.3.1)
 VH_ETHEN    equ 346             ; victory, defeat: what follows an end clip
 VH_COVER    equ 88              ; dword offset, dword length: the TITLE
                                 ; PICTURE (format 8; 0 none) - 'CV', the
@@ -173,7 +173,7 @@ VB_PIECE    equ 4096            ; a read: a cluster multiple, and under a
                                 ; 360 KB track (9 sectors), so a key waits at
                                 ; most about a revolution for it
 VB_CRMIN    equ 48              ; a CLIP RING: as many KB as the machine has
-                                ; (125.4), split two ways - and at least this
+                                ; (126.4), split two ways - and at least this
 VB_RKEEP    equ 8               ; KB left free when the rings are sized
 VB_CPGAIN   equ 16              ; KB a compaction must buy to be posted
 VB_RGROW    equ 32              ; ...and ring 0 claimed again over its run
@@ -181,10 +181,10 @@ VB_RGROW    equ 32              ; ...and ring 0 claimed again over its run
 VB_CGUARD   equ 16384           ; 16 KB guard past it: the tail of the record
                                 ; that runs past the end, copied, so a record
                                 ; (at most the guard, VH_MAXREC) is whole at
-                                ; its cursor (125.4)
+                                ; its cursor (126.4)
 VB_SPIECE   equ 32768           ; the most a read moves while no menu waits
                                 ; on a key: as much as the ring has room for,
-                                ; up to this (125.4)
+                                ; up to this (126.4)
 VB_HEAD     equ 40960           ; a clip may START once this much is read
                                 ; (or all of it): the rest streams as it plays
 VB_MLOW     equ 24576           ; ...refilled whenever it holds less (3/4:
@@ -195,7 +195,7 @@ VB_MR       equ 32768           ; the music's ring (3 s at 11 kHz), read
 VB_MPIECE   equ 4096
 VB_MRES     equ 61440           ; music this short is RESIDENT instead: read
                                 ; once and looped out of memory, so a floppy
-                                ; spends its reads on the clips (125.4)
+                                ; spends its reads on the clips (126.4)
 VB_RMAX     equ 32768           ; vb_read's most in one call
 VB_RL       equ 16384           ; the card's ring, code 2
 VB_RLCODE   equ 2
@@ -216,7 +216,7 @@ VB_DIV      equ 16384           ; the hook's PIT divisor: 72.8 Hz. It was
                                 ; card fed - and the kernel's IRQ0 under it
                                 ; took as much of the machine as decoding
                                 ; did: 13.7 ms is a fifth of a frame and a
-                                ; fourteenth of the card's lead (125.3)
+                                ; fourteenth of the card's lead (126.3)
 VB_SPP_LO   equ 0x635C          ; 11,025 samples / 72.8 periods in 16.16:
 VB_SPP_HI   equ 0x0097          ; 151.388 (the clock with no card)
 VB_SPPI     equ 151             ; ...whole: the clock between card blocks
@@ -434,7 +434,7 @@ vb_embfind:
     jmp vb_read
 
 ; =============================================================================
-; THE TITLE PICTURE (SPEC.md 125.2: header 88): the battle's own picture in
+; THE TITLE PICTURE (SPEC.md 126.2: header 88): the battle's own picture in
 ; its window on the desktop, and one line under it
 ; =============================================================================
 
@@ -1202,7 +1202,7 @@ vb_onwake:
 ; (vb_cur unless a stream's own: the music's, a ring's). A cursor already
 ; at DX:AX goes on from there; any other is SEEKED, which costs the kernel
 ; a walk of the file's chain from its start (FILE_READ_SEQ, 18.4.8) - the
-; reason each stream keeps its own (125.4). out CF=1 on an error or a
+; reason each stream keeps its own (126.4). out CF=1 on an error or a
 ; short file. Clobbers AX, BX, CX, DX; [vb_rcur] back to vb_cur. Out of
 ; the HOLD in extended memory when it has all of the bytes (vbhold.inc)
 vb_read:
@@ -1223,7 +1223,7 @@ vb_dread:
     mov [vb_rseg], es
     mov [vb_rcap], cx
     add [vb_rbytes], cx             ; (what was read, and in how many calls:
-    adc word [vb_rbytes+2], 0       ; a reader's own account, 125.4)
+    adc word [vb_rbytes+2], 0       ; a reader's own account, 126.4)
     inc word [vb_rcalls]
     pushf
     cli
@@ -1303,7 +1303,7 @@ vb_dread:
     ret
 
 ; vb_tmark - the periods since the last mark added to the dword at SI
-; (a diagnostic: where the foreground's time goes, 125.7). AX, DX spent
+; (a diagnostic: where the foreground's time goes, 126.7). AX, DX spent
 vb_tmark:
     pushf
     cli
@@ -1381,7 +1381,7 @@ vb_entload:
 .out:
     ret
 
-; vb_round - AX = CX rounded up to 4 KB (a cluster multiple, 125.2)
+; vb_round - AX = CX rounded up to 4 KB (a cluster multiple, 126.2)
 vb_round:
     mov ax, cx
     add ax, 4095
@@ -1495,7 +1495,7 @@ vb_load:
     push ds                         ; the first region, into our bss: its
     pop es                          ; first 4 KB (the header and the clip
     mov bx, vb_meta                 ; table), then the rest the header says
-    mov cx, 4096                    ; it has (the rules, 125.2)
+    mov cx, 4096                    ; it has (the rules, 126.2)
     xor ax, ax
     xor dx, dx
     jmp vb_read
@@ -1604,7 +1604,7 @@ vb_load:
     call vb_entpara
     add ax, [vb_pidl]
     jc .fail1
-    mov [vb_pimg], ax               ; the band's pictures (125.5)
+    mov [vb_pimg], ax               ; the band's pictures (126.5)
     mov cx, [vb_meta+VH_IMG+4]
     call vb_round
     mov cl, 4
@@ -1619,7 +1619,7 @@ vb_load:
     call OSAPI_MEM_CLAIM_HI         ; FROM THE TOP: claimed from the bottom it
     jc .fail1                       ; landed just over the desktop's caches
                                     ; and left them a pocket no ring could
-                                    ; reach (125.4.4); from the top, they lie
+                                    ; reach (126.4.4); from the top, they lie
                                     ; beside the run the rings are sized from,
                                     ; and the rings' claim sheds them into it
     mov [vb_vres], dx
@@ -2066,7 +2066,7 @@ vb_entcur:
 ; wants of it (its picture's cursor and its sound's). A piece ends at the
 ; ring's end at the most. The records it completes are walked, and the one
 ; that runs past the end has its tail copied past it, into the guard, so a
-; record is always whole at its cursor (125.4) - that tail and nothing
+; record is always whole at its cursor (126.4) - that tail and nothing
 ; else. Out AL = 1 a piece was read, 0 nothing to read; CF=1 a read failed
 vb_rpiece:
     push si
@@ -2185,7 +2185,7 @@ vb_rpiece:
 .parse:                             ; THE RECORDS NOW WHOLE, walked: one
     mov ax, [ds:bp+RG_FILL]         ; that runs past the ring's end has its
     mov dx, [ds:bp+RG_FILL+2]       ; tail copied past it, into the guard,
-    add ax, [vb_pn]                 ; and nothing else is (125.4)
+    add ax, [vb_pn]                 ; and nothing else is (126.4)
     adc dx, 0
     sub ax, [ds:bp+RG_POFF]         ; what is read of the record there
     sbb dx, [ds:bp+RG_POFF+2]
@@ -2344,7 +2344,7 @@ vb_mbig:
     ret
 
 ; vb_psize - AX = the room (a multiple of VB_PIECE) cut to the piece the
-; moment allows (125.4): VB_PIECE while a menu waits on a key, else up to
+; moment allows (126.4): VB_PIECE while a menu waits on a key, else up to
 ; VB_SPIECE - a read costs the kernel a call's overhead whatever it moves,
 ; and four 4 KB reads took 80 ms each where one of 16 KB is far less
 vb_psize:
@@ -2404,7 +2404,7 @@ vb_ringfor:
     ret
 
 ; vb_mpiece - one 4 KB piece of the music into its ring, when the ring has
-; room for it (125.4). The file is read at the music's own offset
+; room for it (126.4). The file is read at the music's own offset
 ; [vb_mrd], always a cluster multiple; the piece lands at the ring's fill
 ; position, and what it puts past the ring's end (into the guard) is copied
 ; to its start. The last piece of the music carries less than 4 KB of it, and
@@ -2614,7 +2614,7 @@ vb_main:
     je .bt
     call vb_bptab
 .bt:
-    call vb_rclaim                  ; the clip rings, all there is (125.4)
+    call vb_rclaim                  ; the clip rings, all there is (126.4)
     jc .out
     call vb_rstart                  ; ...and the first opening's head
     jc .rout
@@ -2629,7 +2629,7 @@ vb_main:
     call vb_game
     call vb_fadetick                ; a fade's next step, and what follows it
     cmp byte [vb_awant], 0          ; the play again with no fade: a
-    je .naw                         ; once-clip joined the title (125.3.1)
+    je .naw                         ; once-clip joined the title (126.3.1)
     mov byte [vb_awant], 0
     call vb_again
 .naw:
@@ -2671,7 +2671,7 @@ vb_main:
 vb_rstart:
     mov al, [vb_meta+VH_TITLE]      ; a TITLE plays first, out of ring 1 -
     mov bx, vb_rg1                  ; opening 0 is read into ring 0 while it
-    cmp al, 0xFF                    ; goes round (125.3.1)
+    cmp al, 0xFF                    ; goes round (126.3.1)
     jne .r
     cmp word [vb_meta+VH_NOPEN], 0
     je .ok
@@ -2783,7 +2783,7 @@ vb_keys:
     ret
 
 ; =============================================================================
-; the clips, from the hook's side (SPEC.md 125.3)
+; the clips, from the hook's side (SPEC.md 126.3)
 ; =============================================================================
 
 ; vb_rrec - BX = a ring; out: CF=0 and DX:SI = the record at its VIDEO
@@ -2920,7 +2920,7 @@ vb_hook:
     jne .live
     ret
 .live:
-    add [vb_hper], ax               ; (the periods, counted: 125.7's account
+    add [vb_hper], ax               ; (the periods, counted: 126.7's account
     adc word [vb_hper+2], 0         ; of where the reader's time goes; and
     mov dx, ax                      ; the ones that passed while the hook
     dec dx                          ; ran last, near enough)
@@ -3081,7 +3081,7 @@ vb_frame:
     jne .cnt                        ; has its first frame up: the band may
     test word [vb_cflags], CF_FULL  ; be drawn under it now. A FULL-SCREEN
     jnz .cnt                        ; one owns the band's rows to its last
-    mov byte [vb_bandok], 1         ; frame (125.3) - the band once it is
+    mov byte [vb_bandok], 1         ; frame (126.3) - the band once it is
 .cnt:                               ; over, below
     dec word [vb_cleft]
     jz .over
@@ -3123,7 +3123,7 @@ vb_frame:
     ret
 .hold:
     mov byte [vb_mode], VM_HOLD
-    test word [vb_cflags], CF_ENDS  ; AN ENDING: how it goes on (125.3.1)
+    test word [vb_cflags], CF_ENDS  ; AN ENDING: how it goes on (126.3.1)
     jz .hx
     mov al, [vb_ehow]
     cmp al, EH_JOIN                 ; it seamed onto its end loop's frame 0
@@ -3135,7 +3135,7 @@ vb_frame:
     jne .h2
     mov bl, [vb_eloop]              ; the canvas fades, then its end clip -
     xor bh, bh                      ; or the WHOLE SCREEN, before one that
-    call vb_crec                    ; is full screen (125.3.1)
+    call vb_crec                    ; is full screen (126.3.1)
     mov byte [vb_fwant], 2
     test word [si+VC_FLAGS], CF_FULL
     jz .hx
@@ -3316,7 +3316,7 @@ vb_oring_of:
 
 ; vb_anchor - clip [vb_pend] waits for its head in a ring, then takes the
 ; next of ITS anchors far enough on that its sound starts ahead of the
-; ring's write position: the lead's frames and one more (125.3)
+; ring's write position: the lead's frames and one more (126.3)
 vb_anchor:
     xor bh, bh
     mov bl, [vb_pend]
@@ -3429,7 +3429,7 @@ vb_decode:
 
 ; =============================================================================
 ; the sound, from the hook's side: the card's ring topped up out of the
-; music's ring and the clip's own sound (SPEC.md 125.3)
+; music's ring and the clip's own sound (SPEC.md 126.3)
 ; =============================================================================
 
 ; vb_feed - the card's ring topped up to [vb_lead] ahead of what it consumed
@@ -3466,7 +3466,7 @@ vb_feed:
 ; vb_uisound - menu sound AL - 1 (resident), NOW: it replaces the menu sound
 ; playing and is mixed straight into what the ring holds from a block past
 ; the card's last report up to the write position, so it is heard about a
-; block from now rather than the ring's whole lead (125.3). The rest of it
+; block from now rather than the ring's whole lead (126.3). The rest of it
 ; is mixed as the ring is written
 vb_uisound:
     dec al
@@ -3786,7 +3786,7 @@ vb_aframe:
 ; vb_anext - the clip's sound on to its next frame: past this record. Its
 ; last done, the ring is given back once its picture is too; an opening's
 ; sound is followed by the next opening's at once, and the last opening's
-; by the music (125.3)
+; by the music (126.3)
 vb_anext:
     mov word [vb_afpos], 0
     inc word [vb_aowe]              ; a frame's time is over: one record owed
@@ -3803,7 +3803,7 @@ vb_anext:
 .h:
     cmp dx, RH_SIZE
     jb .stay                        ; it is: it keeps to the picture's
-    cmp byte [bx+RG_INP], 0         ; timeline and never trails it (125.3)
+    cmp byte [bx+RG_INP], 0         ; timeline and never trails it (126.3)
     jne .inp
     mov cx, [es:si+RH_LEN]
 .ilen:
@@ -4038,7 +4038,7 @@ vb_play_init:
     mov [vb_mon], al
     mov word [vb_cfr], 0
     mov byte [vb_onext], 0xFF
-    mov [vb_tplay], al              ; (125.3.1's: no title, fade, loop yet)
+    mov [vb_tplay], al              ; (126.3.1's: no title, fade, loop yet)
     mov [vb_lwant], al
     mov [vb_estart], al
     mov [vb_eplay], al
@@ -4155,7 +4155,7 @@ vb_snd_close:
 ; reading ahead (the UI task, in the bracket)
 ; =============================================================================
 
-; vb_reader - one piece of what is most worth reading (125.4):
+; vb_reader - one piece of what is most worth reading (126.4):
 ;   1. the music, while its ring holds under half;
 ;   2. a clip playing, while its ring holds under half;
 ;   3. the next opening's head;
@@ -4219,7 +4219,7 @@ vb_reader:
     call vb_rhead
     jnc .read
 .eloop:
-    cmp byte [vb_state], GS_END     ; 4b. an ending's END loop (125.3.1)
+    cmp byte [vb_state], GS_END     ; 4b. an ending's END loop (126.3.1)
     jne .quiet
     mov al, [vb_eloop]
     cmp al, 0xFF
@@ -4699,7 +4699,7 @@ VB_VAR vb_tcomp, 1                  ; text into the composition
 VB_VAR vb_pimg, 2
 VB_VAR vb_pbband, 2
 ; the battle's state, zeroed at its start (vb_game_init)
-VB_VAR vb_tplay, 1                  ; the title goes round (125.3.1)
+VB_VAR vb_tplay, 1                  ; the title goes round (126.3.1)
 VB_VAR vb_lwant, 1                  ; ...and is to be left by its clip
 VB_VAR vb_lk, 2                     ; the title frame it is left at, FFFFh
 VB_VAR vb_lent, 2                   ; ...and its entry's paragraph
@@ -4794,7 +4794,7 @@ VB_VAR vb_emodt, 4
 VB_VAR vb_stance, 1
 VB_VAR vb_sleft, 1
 VB_VAR vb_sret, 1
-VB_VAR vb_efol, 1                   ; a follow-up owed (125.6.7), NONE none
+VB_VAR vb_efol, 1                   ; a follow-up owed (126.6.7), NONE none
 VB_VAR vb_eftgt, 1                  ; ...the target it keeps
 VB_VAR vb_qfol, 1                   ; ...this turn's, taken at its start
 VB_VAR vb_sturns, 1
@@ -4844,7 +4844,7 @@ VB_VAR vb_ddef, 2
 VB_VAR vb_msg, 2
 VB_VAR vb_mbuf, 48
 VB_VAR vb_lbuf, 48
-VB_VAR vb_lay, 20                   ; the band's layout (vbband.inc, 125.5.1)
+VB_VAR vb_lay, 20                   ; the band's layout (vbband.inc, 126.5.1)
 VB_VAR vb_plo, 1                    ; ...the party line's first column
 VB_VAR vb_phi, 1                    ; ...and its end
 VB_VAR vb_chrec, 2                  ; ...a character's record, composing

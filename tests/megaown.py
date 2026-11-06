@@ -26,6 +26,12 @@ checks a word of MEGAOWN's own bss and of its own code, read through DS and
 CS after the call that moved them); a second callback two seconds later must
 say the same (`MEGAOWN: after ok`); and no kern_mega FAULT or CLOSED.
 
+A last leg (KERN-MEGA-PLAN 14.139, `MEGAOWN: bwin ok`): SEG_BWIN over one of
+MEGAOWN's own pool claims is answered, and over its own REGION (a block owned
+80h | slot, not a claim's 0A0h | slot - a block it may not bind a window
+into) is refused with AX = 3. Red with the owner test taken out of
+mega_segbw: `bwin no 03`.
+
 THE FAILING CASE (docs/WRITING-TESTS.md 1): make mx_canmove pin a package
 region (kernel/mega.inc: `jmp short .no` after `cmp al, 0x80 / jb` ... i.e.
 answer ZF = 0 for 80h-9Fh) and the region stays where it was: red on "did
@@ -99,6 +105,10 @@ def main():
     if "MEGAOWN: ok" not in lines:
         fails.append("MEGAOWN's steps or self checks failed: %s" % " | ".join(
             l for l in lines if l.startswith("MEGAOWN: no")))
+    if "MEGAOWN: bwin ok" not in lines:
+        fails.append("SEG_BWIN's owner test (KERN-MEGA-PLAN 14.139): %s" %
+                     ([l for l in lines if l.startswith("MEGAOWN: bwin")] or
+                      "no line"))
     if "MEGAOWN: after ok" not in lines:
         fails.append("MEGAOWN's second callback did not read itself back")
     print("megaown: %.0fs under Bochs" % (time.time() - t0))

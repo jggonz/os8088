@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """AN ENDING'S CLIP: full screen, played once, and on to the title (SPEC.md
-125.3.1) - the owner's "like openings, can the clips joined to have an
+126.3.1) - the owner's "like openings, can the clips joined to have an
 option to use their own music and be fullscreen? Can we also join victory
 to a clip that doesn't loop - and then that clip (via a fade, or a join) to
 title?", on MartyPC's XT with a CGA.

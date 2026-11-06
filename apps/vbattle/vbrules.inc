@@ -1,5 +1,5 @@
 ; =============================================================================
-; os8088 - apps/vbattle/vbrules.inc - THE BATTLE'S RULES (SPEC.md 125.6)
+; os8088 - apps/vbattle/vbrules.inc - THE BATTLE'S RULES (SPEC.md 126.6)
 ;
 ; The engine's half of tools/vbtrules.py, which is the REFERENCE: every
 ; routine here says which of its functions it is, and must draw the
@@ -36,10 +36,10 @@ RH_VICT     equ 47
 RH_DEFT     equ 48
 RH_FLAGS    equ 49
 RH_SEED     equ 50
-RH_NFOL     equ 52              ; the enemy's FOLLOW-UPS (125.6.7): how many,
+RH_NFOL     equ 52              ; the enemy's FOLLOW-UPS (126.6.7): how many,
 RH_OFOL     equ 54              ; and their table - after, then, rule, arg
 FOL_SAME    equ 0xFF            ; ...a follow-up's rule: the same target
-RH_OLAY     equ 56              ; THE BAND'S LAYOUT (125.5.1): its offset, 0
+RH_OLAY     equ 56              ; THE BAND'S LAYOUT (126.5.1): its offset, 0
 RH_NPLACE   equ 58              ; none; menu items placed of their own: how
 RH_OPLACE   equ 60              ; many, and where (menu, item, col, row)
 ; a character
@@ -1613,7 +1613,7 @@ vb_enemy_plan:
     call vb_tick
     mov byte [vb_eact], NONE
     mov word [vb_qrule], 0
-    mov al, NONE                    ; A FOLLOW-UP OWED (125.6.7): this turn,
+    mov al, NONE                    ; A FOLLOW-UP OWED (126.6.7): this turn,
     xchg al, [vb_efol]              ; whatever else - the stance's timer
     mov [vb_qfol], al               ; still counts, its return gives way
     cmp byte [vb_sleft], 0

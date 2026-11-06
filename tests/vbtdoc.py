@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A .VBT DOUBLE-CLICKED (SPEC.md 125.2, 54.5, 54.6), on MartyPC.
+"""A .VBT DOUBLE-CLICKED (SPEC.md 126.2, 54.5, 54.6), on MartyPC.
 
     make vbattle && python3 tests/vbtdoc.py
 

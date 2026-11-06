@@ -119,6 +119,14 @@ w16_epi:
 .bank:
     mov bx, [w16_rbx]
     mov cx, [w16_rcx]
+%ifdef PKG_MEGA
+cpu 286                             ; a selector the call freed (GlobalFree,
+    verr word [w16_res]             ;   FreeSelector) comes back as 0, as
+cpu 8086                            ;   standard mode's KERNEL gave it
+    jz .esok
+    mov word [w16_res], 0
+.esok:
+%endif
     mov es, [w16_res]
     mov ax, [w16_rax]
     mov dx, [w16_rdx]
@@ -129,10 +137,21 @@ w16_epi:
     retf
 
 ; -----------------------------------------------------------------------------
+; w16_gstub - a stub's near call (w16_stubs): AX = its slot, off the return
+; address, which is popped - then the gate, with the program's far call on top
 ; w16_gate - every import arrives here (SPEC.md 124.2.1)
 ; in:  a far call from the program, AX = the export row (the stub's), the
 ;      program's SS:SP and DS; BX, CX, ES may be a register function's inputs
 ; -----------------------------------------------------------------------------
+w16_gstub:
+    ; STKBALANCE-OK: the stub's near call is popped here and never returned to
+    pop ax
+    sub ax, w16_stubs + 3
+    shr ax, 1
+    shr ax, 1
+%if W16_STUBSZ != 4
+  %error "w16_gstub: a stub is not four bytes"
+%endif
 w16_gate:
     ; STKBALANCE-OK: the other half of w16_resume's switch. It arrives on the
     ; program's stack by a far call and leaves on the HOST's, through
@@ -141,16 +160,12 @@ w16_gate:
     push ds
     push si
     push di
-    mov bp, cs
+    W16CSDS bp
     mov ds, bp
     mov [w16_idx], ax
 %ifdef W16_TRACE
-    push bx
-    push ax
-    mov bx, ax                      ; the slot's row, which the tool names
-    shl bx, 1
-    mov ax, [w16_trow + bx]
-    mov bx, [w16_trn]
+    push bx                         ; AX = the slot, which the tool names
+    mov bx, [w16_trn]               ;   from w16_bind (SPEC.md 124.17.4)
 %ifdef W16_TRFIRST                 ; keep the FIRST W16_TRN, the last slot
     cmp bx, W16_TRN - 1             ;   taking every call after them
     jb short $+5
@@ -160,7 +175,6 @@ w16_gate:
     shl bx, 1
     mov [w16_trc + bx], ax
     inc word [w16_trn]
-    pop ax
     pop bx
 %endif
     mov [w16_rbx], bx
@@ -224,6 +238,20 @@ w16_dispatch:
     and al, ~W16B_NORET & 0xFF
     cmp al, W16B_MISS               ; (before W16B_MDC: 7Fh has its bit)
     je .miss
+    test al, W16B_RES               ; a resource call: a library's hInstance
+    jz .nores                       ;   reads the library's resources, and
+    push word [w16_rtab]            ;   the program's are current again after
+    push word [w16_rtlen]           ;   (SPEC.md 124.23.6)
+    push word [w16_rfp]
+    push word [w16_rown]
+    call w16_rin
+    call .nores
+    pop word [w16_rown]
+    pop word [w16_rfp]
+    pop word [w16_rtlen]
+    pop word [w16_rtab]
+    ret
+.nores:
     test al, W16B_MDC
     jz .plain
     call w16_odarg                  ; an own DC's the open DC (124.25.11)
@@ -233,16 +261,14 @@ w16_dispatch:
     jmp w16_mdcout
 .plain:
     mov al, [bx + W16B_PART]
-    and al, ~(W16B_NORET | W16B_MDC) & 0xFF
+    and al, ~(W16B_NORET | W16B_MDC | W16B_RES) & 0xFF
     test al, W16B_DCF
     jnz .dcf
 .go:
     and al, ~W16B_DCF & 0xFF
     jz .image
     cmp al, W16P_SYS
-    je .sys
-    cmp al, W16P_TSK
-    je .tsk
+    jae .part
     mov ax, [bx + W16B_PROC]
     mov [w16_lfn], ax
     call w16_dlgin
@@ -250,22 +276,27 @@ w16_dispatch:
     mov ax, [w16_nargb]
     call far [w16_lbv]
     ret
-.sys:                               ; the system-library part (124.24.1)
-    mov ax, [bx + W16B_PROC]
-    mov [w16_sfn], ax
-    call w16_sysin
-    jc .nolib
+.part:                              ; the system parts, 9 to 11 (124.25.16):
+    push si                         ;   one path by the part's block of bss
+    xor ah, ah
+    mov si, ax
+    shl si, 1
+    shl si, 1
+    shl si, 1
+    add si, w16_sseg - W16P_SYS * 8 ; SI = the block, AL = the part
+    push word [bx + W16B_PROC]
+    pop word [si + 6]               ; its routine
+    call w16_ptin
+    jc .nopart
     mov ax, [w16_nargb]
-    call far [w16_sbv]
+    call far [si + 2]
+    pop si
     ret
-.tsk:                               ; the task part (124.28.13)
-    mov ax, [bx + W16B_PROC]
-    mov [w16_tfn], ax
-    call w16_tskin
-    jc .nolib
-    mov ax, [w16_nargb]
-    call far [w16_tbv]
-    ret
+.nopart:                            ; it could not be had: a part 9 or 10
+    pop si                          ;   import ends the program, saying why,
+    cmp al, W16P_RARE               ;   and a rare one answers 0, its FAILURE
+    je .zero                        ;   - FALSE, NULL - as a call Windows had
+    jmp short .nolib                ;   no memory for does (124.25.16)
 .image:
     mov ax, [w16_nargb]
     jmp [bx + W16B_PROC]
@@ -308,6 +339,7 @@ w16_dispatch:
     mov byte [w16_state], W16S_ENDED
     pop di
     pop si
+.zero:
     xor ax, ax
     cwd
     ret
@@ -389,8 +421,12 @@ w16_resumecb:
 ; callee's answer, kept through CS because DS is the program's.
 w16_cbret:
     ; STKBALANCE-OK: reached by the callee's retf, and left through the gate
+%ifdef PKG_MEGA
+    call w16_dxax                   ; (no write through CS: 124.31.5)
+%else
     mov [cs:w16_cbax], ax
     mov [cs:w16_cbdx], dx
+%endif
     push cs                         ; a far return for the gate's frame, never
     call w16_cbret2                 ; used: the handler discards the frame
 w16_cbret2:
@@ -403,10 +439,121 @@ w16_cbret2:
 ; and DX are the entry's, kept through CS because DS is the program's.
 w16_thkhit:
     ; STKBALANCE-OK: reached by the thunk's far call, and left through the gate
+%ifdef PKG_MEGA
+    call w16_dxth
+%else
     mov [cs:w16_thax], ax
     mov [cs:w16_thdx], dx
+%endif
     mov ax, W16_SLROW
     jmp w16_gate
+
+%ifdef PKG_MEGA
+; -----------------------------------------------------------------------------
+; w16_npent - the #NP handler (SPEC.md 124.26.12, KERN-MEGA-PLAN 14.143), far
+; returned to by the kernel with [selector] [IP] [CS] [FLAGS] on the faulting
+; stack, every register as at the fault and IF = 0. The program's stack (its
+; code, or WIN16's own retf into a callback's callee, w16_cbenter and
+; w16_resumecb): the selector kept for w16_segld, AX and DX as w16_thkhit
+; keeps them, and the gate entered as W16_SLROW with a far return to the iret
+; below, which restarts the instruction; part 5 loads the segment and may
+; discard others for the room. Any other stack (WIN16's own code reading a
+; program pointer, or another package's on the UI task): the segment is loaded
+; in place and no code discarded (part 5's w16l_nplow), since what the
+; interrupted code holds in its registers is unknown. Refused by an undefined
+; opcode (kern_mega closes WIN16): a load already going, or no room.
+; -----------------------------------------------------------------------------
+cpu 286
+w16_npent:
+    ; STKBALANCE-OK: far-returned to by the kernel with the CPU's frame on the
+    ; faulting stack. Its program arm pushes the gate's far return (CS and the
+    ; call's IP) onto an iret, and the gate's retf lands there; the other arm's
+    ; iret is the CPU frame's own
+    push bp
+    push ds
+    W16CSDS bp
+    mov ds, bp
+    mov bp, ss
+    cmp bp, [w16_pss]
+    jne .low
+    mov bp, sp
+    mov bp, [bp + 4]
+    mov [w16_npsel], bp
+    mov [w16_thax], ax
+    mov [w16_thdx], dx
+    pop ds
+    pop bp
+    add sp, 2                       ; the selector
+    push cs
+    call .go
+    iret                            ; the gate returns here, then the fault's
+.go:                                ;   own frame: the instruction runs again
+    mov ax, W16_SLROW
+    jmp w16_gate
+.low:
+    pop ds
+    pop bp
+    pusha
+    push ds
+    push es
+    mov bp, sp
+    mov ax, [bp + 20]               ; the selector, under ES DS and the pusha
+    W16CSDS bp
+    mov ds, bp
+    mov bx, w16l_nplow              ; XSEC-OK: part 5's, w16_ldcall calls it there
+    sti
+    call w16_ldcall
+    pop es
+    pop ds
+    jc .die
+    popa
+    add sp, 2
+    iret
+.die:
+    db 0x0F, 0x0B                   ; #UD: a program's fault closes WIN16
+
+; w16_touch - AX = a selector the program holds: one that is not present (a
+; discarded code segment, 124.26.12) is loaded by reading it into DS, here (a
+; #NP in WIN16's own code, w16_npent's second arm). VERR does not ask the
+; present bit, so it passes a not-present code selector and refuses what is
+; no selector at all. Keeps every register, the flags not
+w16_touch:
+    test al, 4                      ; an LDT selector (a handle or a GDT value
+    jz .ret                         ;   is no code segment of the program's)
+    push ds
+    verr ax
+    jnz .no
+    mov ds, ax
+.no:
+    pop ds
+.ret:
+    ret
+cpu 8086
+
+; w16_dxax / w16_dxth - the arm's [cs:] store of DX:AX, through our data
+; selector rather than CS (SPEC.md 124.31.5): to w16_cbax/w16_cbdx, or to
+; w16_thax/w16_thdx. Keeps all, the flags too.
+w16_dxax:
+    push bx
+    mov bx, w16_cbax
+    jmp short w16_dxst
+w16_dxth:
+    push bx
+    mov bx, w16_thax
+w16_dxst:
+    pushf
+    push ds
+    push bp
+    W16CSDS bp
+    mov ds, bp
+    mov [bx], ax
+    mov [bx + 2], dx
+    pop bp
+    pop ds
+    popf
+    pop bx
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; w16_cbdone - the W16_CBROW handler: discard the stub's frame, the record
@@ -484,6 +631,9 @@ w16_cbcall:
     mov ax, w16_cbret
     call w16_ppush
     mov ax, dx
+%ifdef PKG_MEGA
+    and al, 0xFC                    ; RPL 0: entered by a retf, an odd CS
+%endif                              ;   would be a ring change (124.25.23)
     call w16_ppush
     pop ax
     call w16_ppush
@@ -517,20 +667,33 @@ w16_args:
 
 ; -----------------------------------------------------------------------------
 ; w16_i21_on / w16_i21_off - int 21h is the program's only while its code
-; runs (SPEC.md 124.2.1), and so are int 34h-3Dh and int 2 (124.5). IF = 0
+; runs (SPEC.md 124.2.1), and so are int 2Fh, 34h-3Dh and int 2 (124.5). IF = 0
 ; on entry to both; DS = ours.
 ; -----------------------------------------------------------------------------
 w16_i21_on:
     push ax
     push es
-    xor ax, ax
-    mov es, ax
+    W16SEG0 ax, es
     mov ax, [es:0x21 * 4]
     mov [w16_old21], ax
     mov ax, [es:0x21 * 4 + 2]
     mov [w16_old21 + 2], ax
     mov word [es:0x21 * 4], w16_i21
     mov [es:0x21 * 4 + 2], cs
+    mov ax, [es:0x2F * 4]           ; ...the multiplex (SPEC.md 124.2.1)
+    mov [w16_old2f], ax
+    mov ax, [es:0x2F * 4 + 2]
+    mov [w16_old2f + 2], ax
+    mov word [es:0x2F * 4], w16_i2f
+    mov [es:0x2F * 4 + 2], cs
+%ifdef PKG_MEGA
+    mov ax, [es:0x31 * 4]           ; ...and DPMI's (SPEC.md 124.31.6)
+    mov [w16_old31], ax
+    mov ax, [es:0x31 * 4 + 2]
+    mov [w16_old31 + 2], ax
+    mov word [es:0x31 * 4], w16_i31
+    mov [es:0x31 * 4 + 2], cs
+%endif
     pop es
     pop ax
     jmp w16x_on                     ; and the x87's (SPEC.md 124.5)
@@ -538,12 +701,21 @@ w16_i21_on:
 w16_i21_off:
     push ax
     push es
-    xor ax, ax
-    mov es, ax
+    W16SEG0 ax, es
     mov ax, [w16_old21]
     mov [es:0x21 * 4], ax
     mov ax, [w16_old21 + 2]
     mov [es:0x21 * 4 + 2], ax
+    mov ax, [w16_old2f]
+    mov [es:0x2F * 4], ax
+    mov ax, [w16_old2f + 2]
+    mov [es:0x2F * 4 + 2], ax
+%ifdef PKG_MEGA
+    mov ax, [w16_old31]
+    mov [es:0x31 * 4], ax
+    mov ax, [w16_old31 + 2]
+    mov [es:0x31 * 4 + 2], ax
+%endif
     pop es
     pop ax
     jmp w16x_off

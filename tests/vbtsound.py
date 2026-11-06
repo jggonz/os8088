@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""THE MUSIC UNDER THE BAND (SPEC.md 125.5), on MartyPC's 5150 with a
+"""THE MUSIC UNDER THE BAND (SPEC.md 126.5), on MartyPC's 5150 with a
 Hercules and a Sound Blaster - the owner: "when the menus are drawing the
 sound shuts off ... sometimes half a second to more than a second later".
 

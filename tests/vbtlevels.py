@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""LEVELS: every sound as loud as the music (SPEC.md 125.3) - the owner's
+"""LEVELS: every sound as loud as the music (SPEC.md 126.3) - the owner's
 "I'm having a hard time matching the music volume and the clip volumes".
 
     python3 tests/vbtlevels.py

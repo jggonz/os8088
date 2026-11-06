@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """THE SMALLEST BATTLE THAT BUILDS, and plays to its menu and to victory -
 the owner's "a minimal set to see the menu, and to build so I can start
-iterating" (SPEC.md 125), on MartyPC's XT with a CGA.
+iterating" (SPEC.md 126), on MartyPC's XT with a CGA.
 
     make vbattle && python3 tests/vbtminimal.py
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A PROJECT'S FILES BY RELATIVE PATH (SPEC.md 125.2): the owner's "store
+"""A PROJECT'S FILES BY RELATIVE PATH (SPEC.md 126.2): the owner's "store
 paths to clips/sound/images relatively if they are alongside, or below the
 .vbp ... so I can copy projects around without needing to relink".
 

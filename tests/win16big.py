@@ -10,7 +10,10 @@ functions of straight-line arithmetic, each in a code segment of its own, are
 17 code segments and about 155 KB of code. It calls each far, forward and
 back, writes a 96 KB GlobalAlloc block through a __huge pointer and reads it
 back 64 KB at a time by adding __AHINCR (KERNEL.114, which the loader binds
-to its value, 1000h) to the segment. Its MessageBox carries the result, read
+to its value, 1000h) to the segment. Then it grows a 40 KB moveable block
+to 80 KB with GlobalReAlloc and reads the whole of it back the same way:
+the 40 KB written before the grow, and the 40 KB after it, past 64 KB. Its
+MessageBox carries the result, read
 off the program's stack as win16fpu reads FPU.EXE's, and must equal the same
 sums computed here. A loader that placed a segment wrongly, a far call that
 landed in the wrong one, a block that was not 96 KB, or an __AHINCR that was
@@ -30,6 +33,7 @@ import win16fpu as F                                          # noqa: E402
 
 NAME = "BIG.EXE"
 HUGE_N = 98304                  # 128 KB until S21 (big.c says why)
+GROW_A, GROW_N = 40960, 81920   # GlobalReAlloc's grow, past 64 KB
 
 
 def want():
@@ -45,8 +49,12 @@ def want():
     s = 0                               # the steps' own mix, over the bytes
     for i in range(HUGE_N):             #   (a plain sum of them is 0000)
         s = ((s * 31 + ((i * 7 + (i >> 9)) & 0xFF)) & 0xFFFF) ^ (s >> 3)
+    g = 0                               # the grown block: every byte, the
+    for i in range(GROW_N):             #   kept 40 KB and the new 40 KB
+        g = ((g * 31 + ((i * 5 + (i >> 8)) & 0xFF)) & 0xFFFF) ^ (g >> 3)
     return ("big: code %04X\nhuge %d bytes, sum %04X, 0 wrong\n__AHINCR 1000"
-            % (h, HUGE_N, s))
+            "\ngrow %d to %d, sum %04X, 0 wrong"
+            % (h, HUGE_N, s, GROW_A, GROW_N, g))
 
 
 def main():

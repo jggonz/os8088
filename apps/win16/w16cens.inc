@@ -343,7 +343,7 @@ w16c_walk:
     xor al, al
     call w16c_bits
     jc .end
-    mov es, [w16c_cs]
+    W16SEG es, [w16c_cs]
     call w16c_dec                   ; CX = length, SI = the opcode, DH = modrm
     jc .end                         ; bytes that are not an instruction
     xor al, al
@@ -795,6 +795,22 @@ w16c_far:
     mov cx, ds                      ; the stubs' segment: the image's
     cmp dx, cx
     je .import
+    cmp dx, [w16_cthk]              ; a thunk (SPEC.md 124.26.14): the
+    jne .segs                       ;   segment and offset it names, which
+    push es                         ;   a far call's site no longer holds
+    mov es, dx
+    mov bx, ax
+    mov ax, [es:bx + W16TK_OFF]
+    mov bl, [es:bx + W16TK_SEG]
+    pop es
+    xor bh, bh
+    dec bx
+    cmp bx, [w16_nseg]              ; (0 or past them: nothing)
+    jae .ret
+    shl bx, 1
+    call w16c_push
+    jmp short .ret
+.segs:
     xor bx, bx
 .seg:
     cmp [w16_sbase + bx], dx
@@ -813,7 +829,7 @@ w16c_far:
     sub ax, w16_stubs               ; the stub's bind slot (SPEC.md 124.19.1)
     jb .ret
     xor dx, dx
-    mov cx, 6
+    mov cx, W16_STUBSZ
     div cx
     cmp ax, W16_NBIND
     jae .ret
@@ -935,7 +951,7 @@ w16c_tables:
     xor al, al
     call w16c_bits
     jc .walk                        ; p is code already
-    mov es, [w16_sbase + bx]
+    W16SEG es, [w16_sbase + bx]
     mov ax, [es:di]                 ; e
     cmp ax, [w16_clast + bx]
     ja .walk
@@ -957,7 +973,7 @@ w16c_tables:
     jmp short .entry
 .walk:
     call w16c_run
-    jmp short .next
+    jmp .next
 .done:
     pop es
     pop bp
@@ -1008,7 +1024,7 @@ w16c_prologs:
     xor al, al
     call w16c_bits
     jc .step
-    mov es, [w16_sbase + bx]
+    W16SEG es, [w16_sbase + bx]
     mov si, w16c_pro                ; each pattern: its length, its bytes
 .pat:
     xor cx, cx

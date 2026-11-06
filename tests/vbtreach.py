@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A MISSING CLIP IS WARNED OF ONLY WHERE THE BATTLE CAN GO (SPEC.md 125.6,
+"""A MISSING CLIP IS WARNED OF ONLY WHERE THE BATTLE CAN GO (SPEC.md 126.6,
 the builder's checks), host side.
 
     python3 tests/vbtreach.py

@@ -2258,6 +2258,7 @@ fsx_rdownf:
     mov [fsx_rent], bp          ; across the drop
     pusha
     push es
+    mov [mega_pss], ss          ; the stack mega_up puts back (fsx_rland)
     in al, 0x21                 ; the masks the return puts back, and what
     mov [mega_imr1], al         ; mega_r286 compares a 286's reset against
     in al, 0xA1

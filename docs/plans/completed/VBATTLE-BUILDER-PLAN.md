@@ -6,10 +6,10 @@ Characters & menus, Enemy and Build tabs, and the engine playing section
 11's rules (10.5). The owner's later rounds (2026-11-05/06: Hercules
 fixes, the RAM plan, fit and clip, the document, the embedded game, the
 title picture) were built on top of it, and the plan moved to completed/ at
-the merge to the integration branch; SPEC.md 125 and the builder are the
+the merge to the integration branch; SPEC.md 126 and the builder are the
 authority now.** `make
 vbtbundle` zips the builder for a machine with no os8088 tree. It turns a battle's footage into a `.VBT` bundle (SPEC.md
-§125) through a window. Section 9 has the questions and their answers,
+§126) through a window. Section 9 has the questions and their answers,
 section 10 what the answers changed, and section 11 the proposal for what an
 action DOES.
 
@@ -69,7 +69,7 @@ The consequences:
 A battle's clips are real footage, so they are encoded LOSSILY by
 `os88venc` (budgeted for the target, 98.2). A lossy encoder's frame *n* is a
 particular decoded screen. A join is exact only if it is made between the
-screens the decoder will really hold (125.2.3). So the build does this:
+screens the decoder will really hold (126.2.3). So the build does this:
 
 1. **Encode every clip with `os88venc`**, from its source between its in
    and out points. The options are fixed by the project, not per clip:
@@ -145,7 +145,7 @@ For each clip:
 - **Trimming in and out** moves the clip's first or last frame. Scores
   update as it moves, since a frame later may match better.
 - **The wait**: the longest a command can wait for this clip, from its
-  anchors (125.3). Anchors spread out bring it down.
+  anchors (126.3). Anchors spread out bring it down.
 
 ### 4.4 Menus: the editor
 
@@ -167,7 +167,7 @@ Each action has:
 - its MP cost and what it does (question 2).
 
 **The band's picture is the engine's, drawn in Python from the same rules**
-(125.5): the font is `OSAPI_FONT_GLYPHS`'s 8x8 table, the colours the
+(126.5): the font is `OSAPI_FONT_GLYPHS`'s 8x8 table, the colours the
 palette's. A menu that runs off its background, or text that overlaps it
 badly, is visible here before any build.
 
@@ -177,7 +177,7 @@ badly, is visible here before any build.
   - its bytes and KB/s against the profile's disk;
   - its entries' and its exit's bytes;
   - its longest wait.
-- **Memory on a 640 KB machine** (125.4):
+- **Memory on a 640 KB machine** (126.4):
   - the resident claim;
   - the ring;
   - the clip cache, and whether every clip has a place or slots are used.
@@ -189,7 +189,7 @@ badly, is visible here before any build.
 
 ## 5. What the engine must learn for this
 
-The current engine (SPEC.md §125) plays the demo's shape. A captured battle
+The current engine (SPEC.md §126) plays the demo's shape. A captured battle
 needs these changes. Each is the bundle's format version 3, with its own
 SPEC section first:
 
@@ -380,7 +380,7 @@ any of the builder's (section 7's order moves). Its contents:
      section 11's verbs and pools, the enemy's stances and moves, in the
      model and checked;
    - [x] **the ENTRIES as a region of their own** (bundle version 4,
-     SPEC.md 125.2), for the owner's "more than one set of join clips":
+     SPEC.md 126.2), for the owner's "more than one set of join clips":
      a paragraph number names each entry, so they take what memory
      there is rather than sharing 60 KB with the idle loop;
    - [x] `tests/vbtbuild.py` (soak).
@@ -433,7 +433,7 @@ any of the builder's (section 7's order moves). Its contents:
      holds them equal frame for frame).
 4. **The Menus and Characters tabs**, and the engine's menu tree,
    backgrounds and rules (11). **DONE 2026-11-04**:
-   - [x] the RULES as bundle data (version 5, SPEC.md 125.2.4): characters,
+   - [x] the RULES as bundle data (version 5, SPEC.md 126.2.4): characters,
      actions of up to 4 effects with every verb of 11.2, 11.2.1 and
      11.2.2, clip pools per outcome and per target, menus (top, sub, side)
      with their looks, stances (modifiers, weighted moves at five target
@@ -442,7 +442,7 @@ any of the builder's (section 7's order moves). Its contents:
    - [x] `tools/vbtrules.py`: the compiler, the reader and the REFERENCE
      (`Sim`), and the engine (`apps/vbattle/vbrules.inc`, `vbgame.inc`)
      routine for routine beside it: the same generator, drawn in the same
-     order (SPEC.md 125.6.3), the same capped arithmetic;
+     order (SPEC.md 126.6.3), the same capped arithmetic;
    - [x] the engine's menu tree and targeting, up to 4 characters, the band
      laid out from the header, pictures under the band and any menu, the
      text over them, a rebuilt band composed off the screen;
@@ -479,7 +479,7 @@ any of the builder's (section 7's order moves). Its contents:
      (the bundle, verified), the BUDGET per clip (KB, seconds, KB/s, the
      clip and the music against the profile's disk, red over it, the
      head's read, whether it fits a ring whole, anchors, the longest
-     wait) and the engine's MEMORY on a 640 KB machine (125.4's carving,
+     wait) and the engine's MEMORY on a 640 KB machine (126.4's carving,
      its free figure measured on MartyPC's XT);
    - [x] "...and make a disk of it": the encoder's seven disks, shared
      through `tools/os88mkdisk.py`, `os88vbt.py disk`, a floppy too small
@@ -493,7 +493,7 @@ any of the builder's (section 7's order moves). Its contents:
    the user could provide clips that join in other ways too... The victory
    would fade to the end clip, which would loop and wait for a key - or to
    the opening clip, letting the user play in a loop either way").
-   **DONE 2026-11-04** (bundle version 6, SPEC.md 125.3.1):
+   **DONE 2026-11-04** (bundle version 6, SPEC.md 126.3.1):
    - [x] a TITLE loop before the openings, full screen, round until Enter
      or Space, its loop recommended as the idle loop's is; left by a FADE
      the engine draws (a 4 x 4 ordered dissolve to colour 0, the sound a

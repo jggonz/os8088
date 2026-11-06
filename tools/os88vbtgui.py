@@ -301,7 +301,7 @@ EFFECT_FIELDS = {
     "limit": [("to", "Whose", "choice", "self", ("self", "target")),
               ("percent", "Fills %", "int", 25, None)],
 }
-# what each verb does, beside its row (SPEC.md 125.6)
+# what each verb does, beside its row (SPEC.md 126.6)
 VERB_HELP = {
     "damage": "HP off the target(s)",
     "heal": "HP back to the target(s)",
@@ -2412,7 +2412,7 @@ class OpeningsTab(object):
                    ).grid(row=2, column=2, sticky="w", padx=4)
         ttk.Button(of, text="Recommend", command=self._rec_exit
                    ).grid(row=2, column=3, sticky="w")
-        # FULL SCREEN, or the canvas with the menu below (125.3): the full
+        # FULL SCREEN, or the canvas with the menu below (126.3): the full
         # ones first, the last always with the menu
         ttk.Label(of, text="Screen").grid(row=3, column=0, sticky="w")
         self.fullv = tk.IntVar()
@@ -2778,7 +2778,7 @@ class OpeningsTab(object):
                      "Mixing the start...")
 
 
-# --- the Title & endings tab (SPEC.md 125.3.1) ----------------------------------------
+# --- the Title & endings tab (SPEC.md 126.3.1) ----------------------------------------
 
 # what a VGA rendition's colours cost, measured (VBATTLE-MEMORY-PLAN 2: the
 # owner's Attack1, unbudgeted, against CGA4's 82 KB/s)
@@ -2881,7 +2881,7 @@ class LoopPanel(object):
             cb.grid(row=r, column=1, columnspan=3, sticky="w")
             cb.bind("<<ComboboxSelected>>", lambda e: self._commit())
             r += 1
-            # THE END CLIP (125.3.1): full screen or the canvas, round or
+            # THE END CLIP (126.3.1): full screen or the canvas, round or
             # once, and after one that plays once - the title, or a hold
             ef = ttk.Frame(f)
             ef.grid(row=r, column=0, columnspan=4, sticky="w")
@@ -3159,7 +3159,7 @@ class LoopPanel(object):
 
 
 class LoopsTab(object):
-    """The title loop, and how victory and defeat end (SPEC.md 125.3.1): a
+    """The title loop, and how victory and defeat end (SPEC.md 126.3.1): a
     panel each, one picture for all three, and the fade"""
 
     def __init__(self, app, parent):
@@ -3345,7 +3345,7 @@ class BuildTab(object):
         top = ttk.Frame(f)
         top.pack(fill="x")
         ttk.Button(top, text="Build", command=self._build).pack(side="left")
-        self.capv = app.tk.IntVar(value=1)      # (125.4.1: on, unless asked)
+        self.capv = app.tk.IntVar(value=1)      # (126.4.1: on, unless asked)
         ttk.Checkbutton(top, text="Hold clips to the disk", variable=self.capv,
                         command=self._cap).pack(side="left", padx=6)
         self.out_l = ttk.Label(top, text="")
@@ -3412,7 +3412,7 @@ class BuildTab(object):
         self.game_l.pack(side="left", padx=8)
 
     def _cap(self):
-        """THE READER'S MODEL (125.4.1) on or off: a streamed clip's burst
+        """THE READER'S MODEL (126.4.1) on or off: a streamed clip's burst
         drawn in part where the disk would not have it in time"""
         on = bool(self.capv.get())
         if on != self.app.proj.d["target"].get("burst_cap", True):
@@ -3808,7 +3808,7 @@ def db(level):
 
 
 class SoundsTab(object):
-    """EVERY SOUND'S LEVEL (SPEC.md 125.3): each sound in use, what plays it
+    """EVERY SOUND'S LEVEL (SPEC.md 126.3): each sound in use, what plays it
     and how loud it is AS HEARD - the music and an effect at half scale, an
     opening's or a loop's own sound at full - its level in dB to set, and
     the AUTO-LEVEL suggestion (vbtana.levels): each as loud as the music,
@@ -3866,7 +3866,7 @@ class SoundsTab(object):
                    command=lambda: self._apply(one=True)).pack(side="left")
         self.note = ttk.Label(f, text="", wraplength=900)
         self.note.pack(anchor="w")
-        # THE MENU'S SOUNDS (125.5): the engine plays each at its moment
+        # THE MENU'S SOUNDS (126.5): the engine plays each at its moment
         mf = ttk.LabelFrame(f, text="Menu sounds (each an effect over the "
                             "music; blank: silent)", padding=6)
         mf.pack(anchor="w", fill="x", pady=8)
@@ -4175,7 +4175,7 @@ class PartyTab(object):
                      lambda v: self._look(key, "ink", int(v)))
         lform.choice("Cursor", lk.get("cursor", "inverse"), ("inverse", "arrow"),
                      lambda v: self._look(key, "cursor", v))
-        # THE ITEM CHOSEN, placed of its own (125.5.1): blank, the menu's
+        # THE ITEM CHOSEN, placed of its own (126.5.1): blank, the menu's
         # rows from its look
         it = self._item_of_row()
         if it is not None:
@@ -4196,7 +4196,7 @@ class PartyTab(object):
         self._preview(ci, where, sub)
         self._layout()
 
-    # THE BAND'S LAYOUT (125.5.1): every part placed, and shown or not
+    # THE BAND'S LAYOUT (126.5.1): every part placed, and shown or not
     LAYOUT_ROWS = (("The enemy's name", "enemy_col", "enemy_row", "enemy_show"),
                    ("The party: first row, pitch", None, "party_row", None),
                    ("A character's name", "name_col", None, "name_show"),
@@ -4670,7 +4670,7 @@ class EnemyTab(object):
             ttk.Button(rf, text="Add a response", command=lambda: self.app.edit(
                 "set", base + ("responses",), st.get("responses", []) + [
                     {"trigger": "any", "chance": 30, "action": acts[0]}])).pack(anchor="w")
-        # FOLLOW-UPS (125.6.7): the enemy's, in every stance - "if it did X
+        # FOLLOW-UPS (126.6.7): the enemy's, in every stance - "if it did X
         # last turn, it must do Y this turn, at the same target"
         ff = ttk.LabelFrame(self.body, text="Follow-ups (in every stance): "
                             "after the enemy's turn plays one action, its "

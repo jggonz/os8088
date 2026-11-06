@@ -1,5 +1,5 @@
 ; =============================================================================
-; os8088 - apps/vbattle/vbband.inc - THE BAND (SPEC.md 125.5): the rows under
+; os8088 - apps/vbattle/vbband.inc - THE BAND (SPEC.md 126.5): the rows under
 ; the canvas, from the header's band row to the screen's bottom. Composed in
 ; a buffer of its own ([vb_bseg], 80 bytes a row): the band's PICTURE (or
 ; the plain look: black, two cyan rules, a divider), with the open menu's
@@ -12,7 +12,7 @@
 COL_PARTY   equ 18
 ROW_MSG     equ 191
 BG_TEXT     equ 0xF0            ; a text colour's ground: the buffer's
-; THE BAND'S LAYOUT (125.5.1), [vb_lay]: vbtrules.LAYOUT's bytes, in order -
+; THE BAND'S LAYOUT (126.5.1), [vb_lay]: vbtrules.LAYOUT's bytes, in order -
 ; columns in cells, rows from the band's top
 LY_ECOL     equ 0
 LY_EROW     equ 1
@@ -133,7 +133,7 @@ vb_band_frame:
     jmp short .menu
 .plain:
     cmp byte [vb_lay+LY_LINES], 0   ; THE PLAIN LOOK (its lines may be off,
-    je .menu                        ; 125.5.1): rules at the band's second
+    je .menu                        ; 126.5.1): rules at the band's second
     mov dx, 1                       ; row and above the line, the divider
     call .rule                      ; between
     mov dl, [vb_lay+LY_SROW]
@@ -599,7 +599,7 @@ vb_draw_menu:
     mov word [di], 'MP'
     jmp short .afford
 .icost:                             ; AN ITEM's: "x3" beside it, when the
-    cmp byte [si+AC_COST], C_ITEM   ; layout asks (125.5.1)
+    cmp byte [si+AC_COST], C_ITEM   ; layout asks (126.5.1)
     jne .afford
     cmp byte [vb_lay+LY_ICOUNT], 0
     je .afford
@@ -644,7 +644,7 @@ vb_draw_menu:
     mov dx, ax
     mov cl, [si+MN_COL]
     xor ch, ch
-    call vb_placed                  ; (an item placed of its own, 125.5.1)
+    call vb_placed                  ; (an item placed of its own, 126.5.1)
     VB_BY
     add dx, ax
     mov si, vb_lbuf
@@ -731,7 +731,7 @@ vb_draw_party:
     jb .c
     ret
 .c:
-    ; A CHARACTER'S LINE, laid out (125.5.1, vbtband.party_line): each
+    ; A CHARACTER'S LINE, laid out (126.5.1, vbtband.party_line): each
     ; field shown at its column, spaces between, from [vb_plo] to [vb_phi]
     mov al, [vb_phi]
     sub al, [vb_plo]

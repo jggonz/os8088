@@ -2,7 +2,7 @@
 
 **Status: M1, the renditions (9), M2, M3, M4 (the EMS hold, the board
 timed first) and M5's decode in place (EMS, and XMS on a 386 and a 286)
-BUILT (2026-11-04, format 7, SPEC.md 125.4.1-2); the 286 arm checked on
+BUILT (2026-11-04, format 7, SPEC.md 126.4.1-2); the 286 arm checked on
 86Box's 286, the Victory's own run still the field's. Complete; moved to
 completed/ at the merge to the integration branch (2026-11-06).** The owner's
 questions, ahead of the Hercules and VGA renditions: *"Could the openings
@@ -12,17 +12,17 @@ data hungry, even at the 320x200n we have planned (and likely not using all
 which video player itself uses to good effect. Make a plan for how to best
 utilize this."*
 
-SPEC.md 125 is the battle as built; SPEC.md 98.3.18 is Video Player's hold,
+SPEC.md 126 is the battle as built; SPEC.md 98.3.18 is Video Player's hold,
 bank and in-place decode, which this plan borrows from and does not copy.
 
 ## 1. What streams today, and what does not
 
 | part | today | at 640 KB |
 |---|---|---|
-| the openings, in turn | **stream**, ring *i* mod 2, the next one's head read while one plays (125.4) | any length |
+| the openings, in turn | **stream**, ring *i* mod 2, the next one's head read while one plays (126.4) | any length |
 | an action's clip, an ending's clip | **stream** through a ring, its head read before it may start | any length |
 | the music | **streams** through its 32 KB ring, or is resident when 60 KB or less | any length |
-| the title loop, an end loop (125.3.1) | **held whole in one ring**, round in memory | must fit a ring: 144 KB |
+| the title loop, an end loop (126.3.1) | **held whole in one ring**, round in memory | must fit a ring: 144 KB |
 | the idle loop | **resident** in the block, 16-bit offsets | the block: 60 KB |
 | the entries (one per anchor per clip) | resident, by paragraph (format 4) | memory |
 
@@ -69,7 +69,7 @@ makes VGA good:
 
 ### 3.1 A loop on the disk, laid out to be read round
 
-A ring is filled in 4 KB pieces at cluster multiples (125.4), and a loop's
+A ring is filled in 4 KB pieces at cluster multiples (126.4), and a loop's
 lap starts at record 1, which is not on a cluster boundary. So the BUILDER
 makes it one:
 - **record 0 is padded** to end on a 4 KB boundary of the file, and **the
@@ -166,7 +166,7 @@ in each read.
 - **The window says which**: "Held in XMS: 3,000 KB" on the window's card,
   as Video Player's line 6 does.
 
-**M2 DONE 2026-11-04** (SPEC.md 125.4.1): on QEMU the demo is held whole,
+**M2 DONE 2026-11-04** (SPEC.md 126.4.1): on QEMU the demo is held whole,
 byte for byte, while the title goes round, and with B: made blank the
 battle plays to victory and starts again from the hold alone. Not on a
 real 286 yet: the copies' cost under its `int 15h` is Video Player's
@@ -268,7 +268,7 @@ If a third package needs a hold, that is the time to factor one out
   ring, and its idle loop does not fit the block. So the order after the
   renditions is M1 (format 7), then M2 (the whole hold), then M3 (the
   order), then M4 (EMS in place).
-- **DONE 2026-11-04** (SPEC.md 125.3.2): BATTLEV.VBT and BATTLEH.VBT, made of
+- **DONE 2026-11-04** (SPEC.md 126.3.2): BATTLEV.VBT and BATTLEH.VBT, made of
   the CGA encode's own frames, one palette for a VGA battle with the band's
   colours in slots 0..3, the band presented per adapter, the fade per
   adapter; `vbtadapters` holds both on MartyPC to the byte. The owner's H3
@@ -324,7 +324,7 @@ for each, are gone. What it does not change: the conventional rings are
 still claimed (a ring given its clip before the fill ended copies into
 them, and the music streams through the hold as before).
 
-**M5 DONE 2026-11-04** (SPEC.md 125.4.2): `vbtems` with EMS in place on
+**M5 DONE 2026-11-04** (SPEC.md 126.4.2): `vbtems` with EMS in place on
 MartyPC's 5150 (the replayed title exact on the glass, 2,041 records read
 off the board, no copy); `vbthold` with XMS in place on QEMU's 386 (the
 title again exact in B8000, ~130 yields at a poked 256-byte step);
@@ -342,7 +342,7 @@ not asking the speed) the slow arm goes in place and fails twice.
 
 ## 11. Not in it
 
-- kern_mega: the battle refuses it (125.7), its claims being carved by
+- kern_mega: the battle refuses it (126.7), its claims being carved by
   paragraph arithmetic.
 - A faster frame rate on a fast machine: the bundle's fps is the project's,
   and a rendition at 20 or 30 frames a second is its own encode, priced the

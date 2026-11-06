@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The RULES test battle (SPEC.md 125.6): the demo's scene clips with a rule
+"""The RULES test battle (SPEC.md 126.6): the demo's scene clips with a rule
 set that exercises everything the engine plays - a top menu, a sub-menu and
 a side menu; physical, magical and limit damage; an ally aimed at; MP, item
 and limit costs; heal, revive, guard and a stat boost; the enemy's three
@@ -109,7 +109,7 @@ def make_project(path=None, seed=SEED):
          "moves": [{"action": "lunge", "weight": 3, "rule": "random"},
                    {"action": "swarm", "weight": 1},
                    {"action": "mark", "weight": 1, "rule": "random"}]}]
-    # A FOLLOW-UP (125.6.7): a Mark is followed, the enemy's next turn,
+    # A FOLLOW-UP (126.6.7): a Mark is followed, the enemy's next turn,
     # by a Snap at the same character
     e["follow_ups"] = [{"after": "mark", "then": "snap", "target": "same"}]
     p.set(("enemy",), e)

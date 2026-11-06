@@ -112,8 +112,17 @@ w16x_fpin:
     call w16_pkeep                  ;   folder) in the heap, not a claim
     jc .out                         ;   (124.25.1); AX = it
     mov [w16_fpseg], ax
+%ifdef PKG_MEGA
+    push ax                         ; the copy's code half, for its vectors
+    call w16_pcode                  ;   and __FPMATH (SPEC.md 124.31.5)
+    mov [w16x_fcs], ax
+    pop ax
+    W16SEG es, ax
+    W16PMDS f, es
+%else
     mov es, ax                      ; its end stub: the x87 row's gate stub
-    mov ax, W16_X87ROW * 6
+%endif
+    mov ax, W16_X87ROW * W16_STUBSZ
     add ax, w16_stubs
     mov [es:W16FPH_ENDP], ax
     mov [es:W16FPH_ENDP + 2], cs
@@ -122,7 +131,12 @@ w16x_fpin:
 .v:
     mov ax, [es:si]
     mov [w16x_new + di], ax
+%ifdef PKG_MEGA
+    push word [w16x_fcs]
+    pop word [w16x_new + di + 2]
+%else
     mov [w16x_new + di + 2], es
+%endif
     add si, 2
     add di, 4
     cmp di, 40
@@ -171,8 +185,7 @@ w16x_on:
     push si
     push di
     push es
-    xor ax, ax
-    mov es, ax
+    W16SEG0 ax, es
     mov si, 0x34 * 4                ; the machine's, kept
     xor di, di
 .save:
@@ -223,8 +236,7 @@ w16x_off:
     push si
     push di
     push es
-    xor ax, ax
-    mov es, ax
+    W16SEG0 ax, es
     mov si, 0x34 * 4
     xor di, di
 .back:
@@ -258,7 +270,7 @@ w16x_lacks:
     mov di, w16_l1
     call w16_strcpy
     push es
-    mov es, [w16_fpseg]             ; its name, from the part
+    W16SEG es, [w16_fpseg]             ; its name, from the part
     mov si, W16FPH_WHY
 .c:
     mov al, [es:si]
@@ -289,8 +301,7 @@ w16x_never:
 ; -----------------------------------------------------------------------------
 w16x_fpmath:
     push ds
-    push cs
-    pop ds
+    W16CSEG ds
     cmp bx, 12
     ja .bad
     push bx
@@ -466,8 +477,7 @@ w16x_code:
 w16x_n02:
     push ax
     push ds
-    push cs
-    pop ds
+    W16CSEG ds
     fnstsw [w16x_sw]
     fwait
     test byte [w16x_sw], 0x80       ; ES: the coprocessor's
@@ -493,8 +503,7 @@ w16x_n3d:
     fwait
     push ax
     push ds
-    push cs
-    pop ds
+    W16CSEG ds
     mov al, [w16x_q]
     or al, al
     jnz .have

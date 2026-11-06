@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""THE BAND'S LAYOUT (SPEC.md 125.5.1): every part of the band placed and
+"""THE BAND'S LAYOUT (SPEC.md 126.5.1): every part of the band placed and
 shown or hidden, and menu items placed one by one - the engine's band
 against the builder's preview (tools/vbtband.py), PIXEL FOR PIXEL, on
 MartyPC's XT with a CGA.
@@ -19,7 +19,7 @@ that nothing but the layout can differ. The looks: the first menu (a whole
 band built); the next turn's menu after the enemy has acted; then BRAM's
 cursor moved, his Help sub-menu (three items, placed of their own) opened,
 and closed again - all drawn IN PART, the band rebuilt only when its
-ground changes (125.5: "any way to draw the menus faster?"):
+ground changes (126.5: "any way to draw the menus faster?"):
 
   custom:  the enemy's name moved, the limit star and HP's most hidden,
            HP and MP moved, the message moved (clear of the menu), the divider moved, and the
@@ -31,7 +31,7 @@ ground changes (125.5: "any way to draw the menus faster?"):
 Broken on purpose (the engine's message drawn at its old fixed row) the
 custom arm differs, at the message's rows; vb_menu_erase returning at once,
 every look after the first differs (the old menu's lines left up). Before
-the openings were encoded in the canvas once the band is up (125.3) the
+the openings were encoded in the canvas once the band is up (126.3) the
 band's rules were eaten by the last opening's records, and the glass
 differed at both arms' rule rows.
 """
@@ -193,7 +193,7 @@ def run(tmp, layout, tag, syms):
 
         seen = []
         compare("the first menu")
-        # THE MENUS AFTER THE FIRST, drawn in part (125.5): the ground kept,
+        # THE MENUS AFTER THE FIRST, drawn in part (126.5): the ground kept,
         # the old menu's uncovered lines cleared, only what changed drawn
         for _ in range(6):
             key("Enter")                    # the top menu's first item

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A STREAMED CLIP HELD TO THE DISK (SPEC.md 125.4.3): the builder's
+"""A STREAMED CLIP HELD TO THE DISK (SPEC.md 126.4.3): the builder's
 reader's model, host side.
 
     python3 tests/vbtcap.py

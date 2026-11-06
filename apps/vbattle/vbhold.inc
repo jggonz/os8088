@@ -1,6 +1,6 @@
 ; =============================================================================
 ; os8088 - apps/vbattle/vbhold.inc - THE BUNDLE HELD IN EXTENDED MEMORY
-; (VBATTLE-MEMORY-PLAN 4 and 5, SPEC.md 125.4.1). On a machine with an XMS
+; (VBATTLE-MEMORY-PLAN 4 and 5, SPEC.md 126.4.1). On a machine with an XMS
 ; pool (SPEC.md 41) the bundle - all of it when the pool can take it, else
 ; the ranges the builder's HOLD ORDER names, most worth holding first - is
 ; copied up a chunk at a time while the reader has nothing better to do, and

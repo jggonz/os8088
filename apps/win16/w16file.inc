@@ -56,7 +56,7 @@ w16_dosup:
     call w16_kclaim                 ;   window (SPEC.md 124.25.1)
     jc .out
     mov [w16_dhtmp], dx
-    mov es, dx                      ; zero: the core's bss and the host's
+    W16SEG es, dx                      ; zero: the core's bss and the host's
     xor di, di
     xor ax, ax
     mov cx, W16DH_KB * 512
@@ -70,7 +70,7 @@ w16_dosup:
     mov di, W16DH_ORG
     call w16_dhcopy
     jc .free
-    mov es, [w16_dhtmp]
+    W16SEG es, [w16_dhtmp]
     mov al, [es:W16DH_WKB]          ; the DOS's own floor (SPEC.md 96.11)
     cmp al, W16DH_WFLOOR
     jbe .floor
@@ -86,8 +86,11 @@ w16_dosup:
     add cx, W16DH_KB * 64           ;   bytes, as the block is (w16_kclaim)
     mov ax, [w16_dhtmp]
     mov word [w16_dhent], W16DH_INIT
+%ifdef PKG_MEGA
+    call w16_pcode                  ; the block's code half (SPEC.md 124.31.5)
+%endif
     mov [w16_dhent + 2], ax
-    mov ax, [w16_psp]               ; AX = the PSP, BL = the volume, DX = the
+    W16PSP                          ; AX = the PSP, BL = the volume, DX = the
     mov bl, [w16_vol]               ;   folder, CX:SI = the window, ES:DI =
     mov dx, [w16_dir]               ;   the program's name
     push ds
@@ -96,6 +99,22 @@ w16_dosup:
     call far [w16_dhent]
     mov word [w16_dhent], W16DH_I21
     jc .free
+%ifdef PKG_MEGA
+    W16SEG es, [w16_dhtmp]          ; the window the core computed, as a
+    mov bx, [es:W16DH_WSEGP]        ;   selector (SPEC.md 124.31.7)
+    mov ax, [es:bx]
+    xor cx, cx
+    push bx
+    xor bl, bl
+    call w16_psel
+    pop bx
+    mov [es:bx], ax
+    mov ax, [w16_dhtmp]
+    xor cx, cx
+    xor bl, bl
+    call w16_psel
+    mov [w16_dhsel], ax
+%endif
     mov ax, [w16_dhtmp]
     mov [w16_dhseg], ax             ; ready
     clc
@@ -131,7 +150,7 @@ w16_dhcopy:
     shr cx, 1
     pop ax
     push ds
-    mov es, [w16_dhtmp]
+    W16SEG es, [w16_dhtmp]
     mov ds, ax
     xor si, si
     cld
@@ -152,7 +171,7 @@ w16_dosend:
     je .ret
     push dx
     push es
-    mov es, [w16_dhseg]
+    W16SEG es, [w16_dhseg]
     mov [es:W16DH_HSS], ss
     mov word [w16_dhent], W16DH_DONE
     call far [w16_dhent]
@@ -181,7 +200,7 @@ w16_dcall:
     push ds
     push es
     push ax
-    mov es, [w16_dhseg]
+    W16SEG es, [w16_dhseg]
     mov [es:W16DH_HSS], ss          ; the stack it runs on is this one
     mov ax, [w16_hsp]
     mov [es:W16DH_HSP], ax
@@ -192,9 +211,14 @@ w16_dcall:
     pop ds                          ; DS = the call's
     pushf                           ; ...and an int's frame
     call far [cs:w16_dhent]
-    mov [cs:w16_dces], es           ; the ES it answers (2Fh's), banked
+    push es                         ; the ES it answers (2Fh's), banked
+    push bp                         ;   through OUR DS, not CS: a store
+    mov bp, sp                      ;   through CS traps on kern_mega, and
+    mov ds, [bp + 6]                ;   every _lread takes this path
+    pop bp                          ;   (SPEC.md 124.31.10). Flags kept
+    pop word [w16_dces]
     jnc .ok
-    mov [cs:w16_xerr], ax           ; AH=59h's answer (SPEC.md 124.21.2)
+    mov [w16_xerr], ax              ; AH=59h's answer (SPEC.md 124.21.2)
 .ok:
     pop es
     pop ds
@@ -222,8 +246,7 @@ w16_i21dos:
     push bp
     push ds
     push es
-    push cs
-    pop ds
+    W16CSEG ds
     push word [w16_hflags]          ; interrupts as the host has them: a disk
     popf                            ;   is read
     cld
@@ -249,7 +272,11 @@ w16_i21dos:
 .go:
     push es
     push ax
+%ifdef PKG_MEGA
+    mov es, [cs:w16_dhsel]
+%else
     mov es, [cs:w16_dhseg]
+%endif
     mov ax, [cs:w16_hss]
     mov [es:W16DH_HSS], ax
     mov ax, [cs:w16_hsp]
@@ -340,14 +367,14 @@ W16LIB w16k_accres
     push si
     ICALL w16_dosup
     jc .no
-    mov es, [w16_dhseg]
+    W16SEG es, [w16_dhseg]
     cmp byte [es:W16DH_PATH], 0
     je .no
     ICALL w16_args
     mov si, [es:bx]                 ; hRsrc: its entry in the kept table
     or si, si
     jz .no
-    mov es, [w16_rtab]
+    W16SEG es, [w16_rtab]
     mov cl, [es:0]                  ; the alignment shift
     mov ax, [es:si + RN_OFF]
     xor dx, dx
@@ -362,7 +389,7 @@ W16LIB w16k_accres
     push ax
     mov ax, 0x3D00                  ; OF_READ
     mov dx, W16DH_PATH
-    mov es, [w16_dhseg]
+    W16SEG es, [w16_dhseg]
     ICALL w16_dcall
     pop dx                          ; CX:DX = the resource's offset
     pop cx
@@ -451,7 +478,7 @@ W16LIB w16k_openfile
     jz .use
     call w16f_putpath
     xor ax, ax
-    jmp short .out
+    jmp .out
 .use:
     test ax, OF_CREATE
     jz .find
@@ -472,7 +499,16 @@ W16LIB w16k_openfile
     call w16f_cat
     mov ax, 0x4300
     call w16f_onpath
-    jc .err
+    jnc .found
+    mov di, w16f_path               ; ...and in the system directory
+    call w16f_sysdir
+    mov si, w16f_name
+    call w16f_cat
+    mov ax, 0x4300
+    call w16f_onpath
+    jnc .found
+    mov ax, 2                       ; not found, as Windows says: a system
+    jmp short .err                  ;   folder not made yet answers 3
 .found:
     mov ax, [w16f_style]
     test ax, OF_DELETE
@@ -600,6 +636,61 @@ w16f_windir:
     mov al, '\'
     stosb
     pop es
+    ret
+
+; w16f_sysdir - WIN16's system directory (SPEC.md 124.20.5.1): the Windows
+; directory's SYSTEM folder, at DI, then '\'; DI past it. The folder's NAME is
+; od_s_system, the one the loader's library search (w16l_gofold) and the
+; program search (w16t_where) dive into, so the path and the walk cannot
+; disagree. Clobbers AX, CX, SI
+w16f_sysdir:
+    call w16f_windir
+    push es
+    push ds
+    pop es
+    mov si, od_s_system
+    mov cx, od_s_syslen - 1         ; "SYSTEM"
+    cld
+    rep movsb
+    mov al, '\'
+    stosb
+    pop es
+    ret
+
+; w16f_mksys - the system folder made, if it is not there: SYSTEM\APPDATA\
+; WIN16 on WIN16's volume, then od_s_system made in it by the kernel, as the
+; library search walks to it. Not through WIN16's DOS, which a program that
+; only asks the directory would fetch whole, and which would leave its
+; refusal as AH=59h's answer. An existing folder, a read-only volume (a CD),
+; a write-protected or full disk and a disk without WIN16's folder are all
+; refusals and change nothing: the path is answered regardless, as Windows
+; answers one that is there. The instance stands where it stood. Keeps every
+; register
+w16f_mksys:
+    push ax
+    push bx
+    push cx                         ; (CX, SI and DI a redirected volume's
+    push dx                         ;   driver's to clobber, as od_qm says)
+    push si
+    push di
+    push es
+    ICALL od_enter                  ; SYSTEM\APPDATA, WIN16's volume
+    jc .out
+    mov si, w16pf_s_dir             ; ...WIN16
+    ICALL od_dive
+    jc .back
+    mov si, od_s_system             ; ...SYSTEM in it
+    call OSAPI_FILE_MKDIR
+.back:
+    ICALL od_back
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; w16f_cat - DS:SI, NUL-ended, at DI (in DS), upper-cased, '/' made '\'.
@@ -756,8 +847,7 @@ W16LIB w16k_tempname
     or ax, ax
     jnz .given
     push es
-    xor ax, ax                      ; a number from the clock: the BIOS's tick
-    mov es, ax
+    W16SEG0 ax, es                  ; a number from the clock: the BIOS's tick
     mov ax, [es:0x046C]
     pop es
     or ax, ax

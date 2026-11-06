@@ -13461,3 +13461,461 @@ against a HEAD worktree. Not yet run under an emulator (no Bochs in the
 container). The covering rows are `megadosp`, `megadosroom`, `megahiber`,
 `megaown`, `megarehome`, `megaxmove`, `megavidring`, `megatbl`, `brmega`,
 and megaport's `c64part` and `c64move` (14.80's windows).
+
+### 14.136 WIN16 Phase B/C's kern_mega work crossed two `.mega` rungs (2026-11-02) - RECORDED, ACCEPTED
+
+A rung crossing is never silent, so here are both. Measured with
+`tools/kernsize.py --build build/megak` against `origin/main` (6dfafef44),
+before D2 (084991764~1) and after it:
+
+| | `.mega` | its rung (with its 1,490-byte scratch) | left |
+|---|---:|---:|---:|
+| main | 21,440 | 23,040 | 110 |
+| before D2: SEG_TILE, O7's software interrupts, 20.18.2, SEG_WINL | 22,016 (+576) | 23,552 | 46 |
+| after D2: SEG_LEND, `mega_svc_lend`/`mega_svc_fb` (SPEC.md 50.6.11, 124.31.2) | 22,288 (+272) | 24,064 | 286 |
+
+Both crossings cost only at boot. The `.mega` rung is part of `KERN_SIZE`
+until the switch, when it is given to the heap, and after that the code
+runs above 1MB. The resident footprint (`MEGA_RESIDENT`) is unchanged at
+65,024 of `KERN_BUDGET` 68,096. LOW is not crossed: `.lowbss` 6,758 (+7,
+D2), 410 left in its 7,680 rung. kern_big and kern_small are
+byte-identical. The lead accepted the crossing. Winning D2's 272 bytes
+back would mean moving the frame shuffle into WIN16, whose image is the
+tighter of the two.
+
+**Re-measured after #327 merged #328** (whose kern_mega size pass 2 moved
+the baseline): `.mega` is 22,560 against main's 21,712 (+848, the same
+two changes), 24,070 with its scratch in a 24,576 rung against main's
+23,222 in 23,552 - still two rungs, still boot only. Resident 62,976 of
+68,096, unchanged from main; LOW 5,576 in 6,144 (56 left); kern_big and
+kern_small differ from main only by `assoc_ownex` (SPEC.md 54.4.2.4), and
+`make budget-check` passes on all four kernels.
+
+### 14.137 A bound window re-aimed inside a block is re-bound there, not replaced (2026-11-03) - FIXED
+
+14.135's fourth item gave a caller a fresh window whenever `SEG_WIN`,
+`SEG_AT` or `SEG_WINL` named one of its BOUND windows. That was right for
+a window aimed outside every block, and wrong for one aimed inside
+another. WIN16's `GlobalReAlloc` (`w16s_gwin`, SPEC.md 124.31.3) carries a
+protected-mode-only program's window from a block to its new home,
+possibly in another arena, with `SEG_AT`. After #328 that call answered a
+new selector and left the old one aimed where the block had been. The
+program kept the selector it had, so it wrote over the heap headers
+behind the moved block. Microsoft Arcade's setup stopped at
+`MSTEST: parse error` and Mozart's well before its copy.
+
+`mega_wset` now asks `mega_wbind` first. Called with the new base and
+reach, it answers CF = 0 when the base lies in a conventional claim or a
+pool block. It then clips the reach to that block's end and flags a pool
+block `MX_FWIN`, which is exactly what `SEG_BWIN` does when it makes a
+bound window, and the window is re-aimed in place as its owner's.
+Outside every block 14.135's rule stands, and the caller gets a fresh
+window. `mega_segbw` calls the same routine, so the inline lookup it had
+is gone. WIN16 frees a window it was answered fresh, so a refused
+re-bind leaks no LDT entry.
+
+**Conditions (the lead's, 2026-11-03).**
+- **Only into the caller's OWN block.** `mega_bown` checks that the
+  block the new base lies in belongs to the window's owner: a conventional
+  claim's `MC_OWN` against the slot, or a pool block's `MX_OWN` against
+  0A0h | slot (a driver's 0C0h | row). A base inside anyone else's block
+  gets a fresh window, as outside every block. Otherwise `SEG_AT` would
+  bind a window into another package's memory, which 14.135 closed for
+  `SEG_FREE`. `SEG_BWIN` makes no such test of the selector it is handed,
+  and was left as it is.
+- **The old block forgets it.** A window is tied to its block by its base
+  alone: the free and a move each look for descriptors based inside the
+  block. So after the re-bind the old block's free and moves no longer see
+  it, and the new block's do. The old block keeps its `MX_FWIN` if it is a
+  pool block. That is 14.135's documented, benign case: a move with the
+  rate hook held off.
+- **kern_big and kern_small are byte-identical.** Checked by assembling
+  both with and without the change (`mega.inc` is `KERN_MEGA`'s alone).
+
+Measured with `tools/kernsize.py --build build/megak`: `.mega` 22,592,
+24,576 rung, 474 left. The owner test added 112 bytes on 2026-11-03,
+after 14.138's `SEG_HND`: `.mega` 22,912, 154 left, the same rung. That is the same rung as 14.136's re-measure, and
+the routine shared with `mega_segbw` paid for most of itself. Resident,
+LOW and `.cold` are unchanged. kern_big and kern_small are not touched.
+
+Seen (QEMU, kern_mega, looks): Arcade 1.0's setup reaches
+*Congratulations!*. Mozart's runs through every file and its Program
+Manager group. Its last dialog is SPEC.md 124.26.11's to answer, not the
+kernel's.
+
+### 14.138 `SEG_HND`: a descriptor per Windows handle, re-aimed in place (2026-11-03) - FIXED
+
+The lead's D1 for #327: WIN16's stopgap gave a global block a SUB that
+reached to its CLAIM's end, so a block kept one selector however its length
+moved, and the LDT stopped running out under Mozart's setup. What it gave up
+was the overrun: a write past the block landed in its neighbour. Windows'
+standard mode keeps ONE selector per handle and changes its base and limit
+when `GlobalReAlloc` grows or moves the block. Nothing in `OSAPI_SEG` could
+do that. A SUB is deduped by base and limit, so re-aiming one would move
+somebody else's. A bound window can be re-aimed, but there are only 32
+`mega_wtab` rows, and Mozart's setup alone holds 15 handles at once.
+
+`OSAPI_SEG` verb 12, `SEG_HND` (`mega_segh`, SPEC.md 50.6.11), makes a
+fresh data descriptor based in a claim or a pool block. It re-aims the same
+descriptor in place, or frees it when SI = 0. It is marked in byte 6's AVL
+bit (`MEGA_HAVL`, 10h; a reserved byte on a 286). `mega_dfind` passes a
+marked entry by, so no SUB is ever answered one. It has no `mega_wtab` row.
+Being based in its block, the compactor rebases it and the block's free
+takes it, as `SEG_TILE`'s tiles. WIN16 holds one per global block under
+64 KB, plus two of its own as walk descriptors for its arena walks
+(SPEC.md 124.31.3).
+
+Measured with `tools/kernsize.py --build build/megak`: `.mega` 22,800
+(+208 over 14.137's 22,592: the body's 191, its dispatch and
+`mega_dfind`'s test). That is 24,310 with its scratch, in the same 24,576
+rung, 266 left. With 14.137's owner test after it: 22,912, 154 left. Resident, LOW and `.cold` are unchanged; kern_big and
+kern_small are byte-identical. A constant was added to `apps/os88api.inc`,
+so `tools/abi.lock.json` was refreshed with no bump.
+
+Seen (QEMU, kern_mega, looks, 2026-11-03):
+- Mozart's setup runs to its last dialog with every file copied. The LDT's
+  high-water is 1,658 of 1,992 entries, at its last dialog. With D1's
+  stopgap it was 1,825 (92%), with handle descriptors alone 1,859, and the
+  setup ran out before D1.
+- Arcade's setup reaches *Congratulations!*.
+
+The overrun itself cannot be seen under QEMU, which checks no data
+segment's limit. `tests/win16ovr.py` is Bochs's row for it.
+
+### 14.139 `SEG_BWIN` binds only into the caller's own block (2026-11-04) - FIXED, NOT YET RUN
+
+WIN16-NEXT-PLAN Q7. 14.137 gave `mega_wset`'s re-bind the owner test
+(`mega_bown`) and said `SEG_BWIN` "makes no such test of the selector it is
+handed, and was left as it is". That is 14.135 item 2's hole one verb along:
+a package could hand `SEG_BWIN` a selector based in ANOTHER package's block
+and get a window over it, and `mega_wbind` flagged a pool block `MX_FWIN`
+(sticky) as a side effect.
+
+`mega_segbw` now takes the caller's owner byte (`mega_segown`) and asks
+`mega_bown` of the selector's base BEFORE `mega_wbind`. Another owner's
+block, nobody's block, a caller with no owner byte (FFh) or a base in no
+block answer CF = 1, AX = 3 (not in a block of the caller's own; SPEC.md
+50.6.11), with no window made and no block flagged. Nothing new is added to
+the refusal codes.
+
+Shipped callers (each binds a block it owns): Video Player's `vp_xrun` window
+over its own `OSAPI_XMEM_RUN` block and its `vp_sel`/`vp_rsel` slot windows
+over its own claims (video.asm); the Browser's `br_bwaim` over its own claim
+(browser.asm); tests/megaxm over its own block. WIN16 uses `SEG_HND` and
+`SEG_AT`, not `SEG_BWIN`.
+
+**`mega_bown` did not know an `OSAPI_XMEM_ALLOC` block** (found verifying
+this item). Such a block's `MX_OWN` is the BARE slot (00h-7Fh,
+`osapi_xmem_walk`'s owner list), and `mega_bown` OR'd 0A0h into every
+package's owner byte before it compared, so it recognised a pool CLAIM and
+never an XMEM block. Under 14.137 that was quiet - a `SEG_AT` re-bind over
+one fell to a fresh window - but with the test in front of `SEG_BWIN` it
+refused the Video Player's bound window over its `OSAPI_XMEM_RUN` block
+(BIGSP fell back to its copy, `vp_pmbigq`) and tests/megaxm's step 59h. The
+pool path now compares `MX_OWN` with the owner byte as given first (the
+bare slot, or a driver's 0C0h | row) and then with 0A0h | slot; a REGION
+(80h | slot) still matches neither.
+
+tests/megaown gains a leg (`MEGAOWN: bwin ok`): `SEG_BWIN` over one of
+MEGAOWN's own pool claims (0A0h | slot) is answered, and over its own DS -
+its REGION above 1MB, 80h | slot, not a block a window binds into - is
+refused with AX = 3; red without the test as `bwin no 03`, and on a wrongly
+refused claim as `bwin no 02`. The XMEM case is tests/megaxm's step 59h,
+which goes red at that step on the first version of this item (row
+`megaxmove`).
+
+### 14.140 A WIN16 program's fault closes WIN16, attributed by the code selector's base (2026-11-04)
+
+WIN16-NEXT-PLAN Q1. `mega_fkill` named the faulting package through
+`mega_cs2ds` (the data twin 8 above an image's code half) and `mega_fown`
+(an instance's `I_SPTR`, or a conventional claim's owner). A WIN16 program's
+CS is a SUB or tile of WIN16's memory, above 1MB since S22 batch 9, so
+neither found an owner and OVRTEST's #GP was fatal (`FAULT 0D`, halt).
+
+*The +8 check.* It cannot close the wrong package: `mega_ldt2ds` needs a
+present writable data entry over the same base next to the code entry, and
+`mega_fown` needs that selector to be a live instance's `I_SPTR`, a pair's data
+half; the code half is the entry before it. And the catch must still call into
+the same instance.
+
+*The fix.* When the pair lookup finds nothing, `mega_fbown` attributes the CS
+by its base: `MX_OWN` of the pool block (slot, `80h | slot`, `A0h | slot`) or
+`mem_tab`'s `MC_OWN` below 1MB, then the normal close. SPEC.md 124.31.11.
+A GDT CS (BIOS on a lent stack) stays fatal.
+
+*Verified (2026-11-04).* `mega_fbown` ends in `mega_fown`'s own claim walk
+(`.para`, the paragraph test skipped) and slot test (`.slot`), so the
+change is `.mega` +64 (22,912 -> 22,976, 90 left in the 24,576 rung), not
+the first draft's +128; resident 62,976 unchanged. Under Bochs
+(`tests/win16ovr.py`, once): `kern_mega CLOSED OVRTEST 0D at 11BC:0517`,
+`[mega_infault]` 0, OVRTEST.TXT without "SURVIVED", and the close completed
+(`[mega_fkslot]` 0, no instance). The fault is on the program's stack, under
+the catch `wm_pkgcall` pushed for WIN16's `W_ONTIMER` (the first
+instruction's run, SPEC.md 124.31.8). Left open: the IVT vectors WIN16 holds
+across a run (SPEC.md 124.31.11), and `mega_fown`'s `[ld_base]` match,
+which answers a stale `[ld_rec]` (it names a freed record after any load)
+when a SUBC pair reuses the last-loaded OS88_HIGH region's freed selectors;
+the catch test then refuses it, so that case is a halt, never a wrong close.
+
+### 14.141 A fault close puts back the vectors the package held (2026-11-04)
+
+Found verifying 14.140. WIN16 points IVT 21h, 2Fh, 31h and 34h-3Dh (or 3Dh
+and 02h with a native x87) at its own code for the length of a program's run
+and gives the machine's back in `w16_i21_off`. A fault close runs no package
+code, so after 14.140's close those cells named a freed code selector:
+harmless in protected mode while the LDT entry stayed free (`mega_swok`),
+reachable by a real-mode NMI and by a later image reusing the entry, and
+copied by the next WIN16 run as "the machine's", to be put back at its end.
+
+*The choice.* Not WIN16's own saved copy: it is in the bss being given up,
+it is a WIN16 layout the kernel would have to know, and it is precisely the
+value that goes stale. Not a kernel `iret` either, which loses the BIOS's NMI
+handler. The machine's value is knowable without the package: nothing in the
+tree but WIN16 writes those fourteen cells and keeps them, so the switch's
+copy is the machine's. `mega_mxtinit` takes it into the tables' tail
+(`mega_ivts`, 14 x {cell, offset, segment}), which is above 1MB on every
+machine with the room and carried by the park and the hibernate with the
+rest of the tail.
+
+*The restore.* `mega_fkivt`, from `mega_fkill` at an incident's first fault,
+before the unwind: a cell whose segment is a present descriptor (`lar`, so a
+real-mode segment past the LDT's end cannot fault the fault handler) that
+`mega_fattr` - the CS attribution 14.140 made, now one routine for both
+callers - names as the instance being closed gets the switch's value back.
+A cell held by another package, or by real-mode code, is left as it is.
+**21h is not the switch's**: `mega_pmtail` copies IVT 08h-0Fh over 20h-27h
+after `mega_mxtinit` (an IRQ the BIOS takes in real mode lands there, the
+PIC staying at 20h), and `mega_ivt_sync` keeps that mirror, so 21h gets IVT
+09h's value, which is what `w16_i21_on` found there.
+
+*Where it lives.* `mega_fkivt` is `.cold` and far-called (`mega_fattrf` is
+its door back into `.mega`): `.mega` had 74 bytes before its rung, counting
+its 1,510-byte scratch. Measured with `tools/kernsize.py --build
+build/megak` against the merge 46b8d578c: `.mega` 22,992 -> 23,040 (+48:
+`mega_fattr` and its door, `mega_fkvec`, the snapshot loop, less the
+nibble test's 13), 26 left in the 24,576 rung; `.cold` +84, 295 left in its
+46,080; resident 62,976 unchanged, LOW unchanged; the tables' tail 1,216 ->
+1,280 bytes above 1MB. kern_big and kern_small do not assemble `mega.inc`.
+
+*Seen.* The first Bochs run of `tests/win16ovr.py` halted in `mega_fkivt`
+itself (`FAULT 0D at COLD:0ADC`): it walked the tail from 0, `mega_ustab`'s
+rows, instead of from `mega_ivts`, and read a "cell" past LOW0's limit. The
+same run showed the residue the entry is about: after the close IVT 21h,
+2Fh and 31h were `10E4:1038`, `10E4:0FD7` and `10E4:826A`, WIN16's code
+selector, and 02h, 34h-3Dh the BIOS's `F000:FF53` (OVRTEST has no x87
+code). Step 5 of the row is that check. The second run, after the fix (b40899b02),
+passed all five steps: CLOSED OVRTEST 0D at 11BC:0517, not halted, the close
+completed, and every cell the machine's again - 21h `F000:E987` (= IVT 09h),
+2Fh, 31h, 02h and 34h-3Dh `F000:FF53`. **`.mega` has 26 bytes left in its
+rung**: the next `.mega` change of any size beyond that crosses it.
+
+*Owner bytes.* `mega_fbown`'s nibble test became `test al, 50h`: the owners
+written are a slot, 80h|, A0h| (taken), C0h|, F0h, FEh and FFh (refused),
+and bits 4 and 6 are clear in exactly the taken three.
+
+### 14.142 `OSAPI_SEG` `SEG_TYPE`: a real code selector over a program's own window (2026-11-04)
+
+Found by the props agent: Arcade's ASTEROID, on kern_mega, closed with `0D at
+14CC:01D0`, `call far [es:di+12h]` through selector 15AC, a 256-byte DATA
+window. ASTEROID imports `AllocCStoDSAlias`, `PrestoChangoSelector` and
+`FreeSelector`: it builds code in a block and calls it. WIN16 left the
+code/data switch to kern_mega, which completes a far call only through an
+image's identity selector or a pair's data half (`mega_codesel`), so a lone
+LDT data window was refused and closed.
+
+*The choice* (lead, 2026-11-04): WIN16 makes the real thing, as Windows does;
+kern_mega does not emulate far calls through data selectors. The smallest
+kernel mechanism is a verb that retypes a window in place, because everything
+else - base, limit, owner, the row in `mega_wtab`, the owner's end freeing it,
+re-aim by `SEG_WINL` - a window already has. A verb that made a new code
+window over a base would have repeated `mega_wset`'s re-aim, match and bound
+logic for a second kind. So `SEG_TYPE` (13): DX = a window, CX = 0/1, access
+byte 92h/9Ah. WIN16 composes the rest: `LAR` for the source's type,
+`SEG_WINL` for the destination's base and limit, `SEG_TYPE` last.
+
+*Seen, and the second half* (2026-11-04): the first build (a window's retype
+only) left ASTEROID closed at the very same `14CC:01D0`. Selector 15AC is not a
+window: it is the HANDLE descriptor of a 256-byte `GlobalAlloc` block (159C,
+15A4, 15AC are consecutive entries, and the program's object holds it as the
+function pointer), and the idiom is `PrestoChangoSelector(sel, sel)`, which
+flips a selector in place. So `SEG_TYPE` takes a handle descriptor too, when
+its base lies in a block of the caller's own (`mega_bown`, SEG_BWIN's test, by
+a four-byte door `mega_bownf` in `.mega`), and WIN16 retypes in place when
+source and destination are the same selector. A handle descriptor is
+re-aimed in place by `GlobalReAlloc`, so this alias DOES follow its block,
+which settles the coherence question for the case that matters. On the second
+build ASTEROID starts: Quick Help, the Asteroids window, and the attract
+mode playing; F2 then gives its own "Application Error: Error code = -1.
+Continue?" box (the next thing to chase; not a fault, WIN16 is not closed).
+
+*The owner test* is `SEG_FREE`'s (14.135) for a window: the caller's
+`mega_segown` byte against the window's `mega_wtab` row. A selector with no
+row is a handle descriptor of a block of the caller's own (`mega_bown`, as
+above) or it is refused with AX = 4: a block's own selector, a SUB, a pair and
+a tile are shared or tied to a block, and retyping one would change it for
+everyone. DX must first be an allocator LDT entry (TI set, at or above
+`MEGA_LDT_FREE0`, below `mega_ldte`, as `mega_segh` bounds its own DX) and the
+caller somebody (`mega_segown` not FFh). Without that bound, found in review,
+DX = 0 matched a FREE row of `mega_wtab` - a free row's selector word is 0 and
+its owner byte is left from its last holder - and retyped entry 0, the GDT's
+under the allocator's range; and a DX past the LDT read beyond the alias, a
+#GP inside the kernel. `.cold` +23 for it. `mega_wfind` skips a code window so a data question over the same
+base and reach (`SEG_WIN`, a non-block `SEG_SUB`) does not answer it.
+
+*Coherence* (the question asked): a WINDOW does not follow a block that
+moves, data or code, and `SEG_TYPE` does not change that. The alias is
+documented as valid while the block stays put, which is Windows' rule for
+these calls; a SUBC pair's code half, the block case, still follows. Making a
+BOUND code window (`SEG_BWIN` + retype) would follow the block, but the
+`mega_wset` re-bind path would then treat a re-aimed destination as bound and
+hand back a different selector, so it was not taken. No evidence from a real
+Windows 3.1 run was available here; the statement rests on the documented
+semantics, and the SPEC says so.
+
+*Where it lives.* The body, `mega_segty`, is `.cold` and far-called from a
+dispatch in `.mega` as `mega_fkivt` is (14.141). ABI: a new verb is additive
+(`apps/os88api.inc`), so `tools/abilock.py --update` without a version bump.
+Real-mode kernels refuse it (CF = 1), a segment being code or data by use.
+
+### 14.143 `#NP` routed to a package: discardable code named by its selector (O8, 2026-11-04)
+
+The owner approved O8 (docs/plans/WIN16-NEXT-PLAN.md, `o8-proposal.md`) in its
+narrow form: the kernel only ROUTES a `#NP`; WIN16 does the reloading, the LRU
+and every re-entry guard (SPEC.md 124.26.12). Windows' standard mode marked a
+discardable segment's selector not present and loaded the segment again at the
+fault. A program that names such code by its selector - VBRUN300, Sir
+Hangman's engine, every protected-mode-only program - could not be given that
+before, because only the kernel sees a fault. Until now WIN16 therefore kept
+all of it, 329 KB of VBRUN300 and 395 KB of the Hangman engine.
+
+*What is built.* `SEG_TYPE` (14.142) gains `CX = 2` (access 1Ah: code, not
+present) and `CX = 3` (register DX:SI as the caller's `#NP` handler; one
+registration, five bytes in the tables' tail: `mega_npo`, `mega_npc`,
+`mega_npw`). The IDT's 0Bh stub, `push byte 0Bh` / `jmp near mega_fault` / two
+`nop`, becomes `jmp COLD_SEG:mega_npx` / two `nop` in the same seven bytes, so
+`.mega` is +0 and needed no size pass. `mega_npx` (`.cold`) routes only when
+the error code is an LDT selector, the faulting CS is an LDT selector,
+`sch_rbusy` = 0, `sch_cur` = 0, the descriptor is a handle descriptor, a
+handler is registered and the descriptor's base lies in a block of the
+registrant's (`mega_bownf`). It leaves by a far return whose CS:IP are two
+slots it put under the CPU's frame, so the handler sees `[selector] [IP] [CS]
+[FLAGS]` and the registers as they were. Anything else pushes the vector back
+and enters `mega_fault`, so a `#NP` that was fatal stays fatal, with the frame
+the reporter expects.
+
+*Measured* (`tools/kernsize.py --build build/megak`, before -> after):
+`.text` 45,853 -> 45,853, `.mega` 23,056 -> 23,056 (10 left), `.cold` 45,912 ->
+46,102, which crosses its 46,080 rung to 46,592 (490 left): KERN_SIZE at BOOT
++512, nothing resident (`.cold` is above 1MB after the switch). The resident
+footprint reads 62,976 either way.
+
+*Owner of the registration.* The router names no owner of its own: the
+registrant's byte is what `mega_bown` is asked about, so only the registrant's
+own not-present handle descriptors route. A registrant's end leaves its
+registration naming a byte that a later package may hold. That is harmless
+today, since WIN16 alone makes a not-present descriptor and registers again
+before every run of its program (`w16_lend`, from `w16_dcunpark`), and `mx_relinst` (`.mega`, 10 bytes left)
+is not touched; a second user of `CX = 2` must register as well. `CX = 3`
+with `DX = 0` withdraws, and only for its registrant.
+
+*Not routed, on purpose.* FS and GS are not banked by anyone. A `#NP` from a
+GDT CS (the kernel, a BIOS call reflected to real mode never reaches a
+descriptor), from the rate hook or a worker, and from a task other than the UI
+task is the old fatal one.
+
+*Review (verify-o8np, 2026-11-04).* Three router fixes, `.cold` +11 (46,102 ->
+46,113, 479 left of its rung), `.mega` and resident still +0. (1) A refusal
+AFTER the handler's CS had been written over the vector's slot (the base not
+in a block of the registrant's) handed `mega_fault` that CS as its vector: the
+slots are now written only once every test has passed, so every refusal
+reaches `mega_fault` with 0Bh. (2) The error code's EXT and IDT bits are
+refused: with IDT set the index is a gate's, not an LDT descriptor's. (3) `lar`
+bounds the index by the LDT's limit before the alias is read, because a
+software `int 0Bh` pushes no error code and the word in its place is an IP;
+read unchecked, a large one would have faulted inside the router. WIN16's
+side registers before every run of its program now (`w16_dcunpark`), not at a
+wake only: a program also runs from a key or timer callback, and a second
+WIN16 instance that woke in between would otherwise hold the registration.
+
+### 14.144 A Windows program's global selectors are odd: DPL 3 data, conforming code (2026-11-04)
+
+Found by `verify-lheap` (WIN16-NEXT): Microsoft Mozart, a Visual Basic 3.0
+program, shows *Out of memory* on kern_mega. The cause is VBRUN300's
+`GlobalReAlloc` wrapper, which begins `test cl, 1` / `jz` *fail*. On Windows
+3.x every selector a program held for its global memory had RPL 3 and ended
+in 7 or F, and a moveable handle was the selector with bit 0 clear. VB
+refuses an even value as "a handle, not a selector". Every selector WIN16
+handed out here had RPL 0, because its descriptor was DPL 0: a data
+selector loads only when DPL >= max(CPL, RPL).
+
+*The kernel's part is three access bytes, as immediates, so no section
+grows:*
+
+- `SEG_HND` (`mega_segh`) makes a new handle descriptor with access F2h:
+  data, writable, **DPL 3**. Re-aiming one writes bytes 0-4 only, so the DPL
+  stays.
+- `SEG_TILE` (`mega_segtile`) makes its tiles F2h too.
+- `SEG_TYPE` (`mega_segty`) sets data to F2h, and sets code to **9Eh**:
+  code, readable, **conforming**, DPL 0. ASTEROID (14.142) flips a
+  `GlobalAlloc` block's selector in place and far-calls through the value
+  it holds, which is odd now. A far call to non-conforming code with RPL 3
+  is #GP at CPL 0, and a conforming segment's far call does not check RPL.
+  `LAR` and `LSL` on a conforming segment do not check privilege either,
+  and WIN16's flip back to data reads the type with `LAR`.
+
+*What nothing else noticed.* At CPL 0 a DPL 3 data segment loads with any
+RPL, so WIN16's own loads of these descriptors, its two walk descriptors
+among them, do not change. `mega_dfind` asks for 92h, so it now passes a
+tile by, as it already passed a handle descriptor (by `MEGA_HAVL`). Tiles
+were never meant to be a match. The kernel's other checks on an access
+byte do not look at the DPL: `mega_ldt2ds` checks a pair's data half (92h,
+which pairs keep), and `mega_dacc` masks with 91h. Every kernel lookup of
+a program's selector already drops the RPL: `mega_selbase` (`and al,
+0F8h`), `mega_segh`, `mega_segty`'s handle arm, `mega_ldt_free`, and
+`mega_npx` (14.143). The exact compares are the WINDOW verbs
+(`mega_wslot`, `mega_wset`, `mega_segty`'s window walk) and
+`mega_codesel`'s refusal of an RPL. WIN16 never hands a program an odd
+window, and never asks `OSAPI_MEM_CODESEL` about a program's value.
+
+*What it costs a program:* a handle descriptor can no longer be loaded into
+`SS`, because `SS` needs DPL = CPL = 0. The old comment said "a program may
+load it into SS as Windows allowed". Windows allowed it at CPL 3, where the
+descriptor was DPL 3. That is a STATED LIMIT (decided 2026-11-04): a DPL 0
+shadow the kernel completed the load through would be `.mega` bytes, and no
+target needs it. A `retf` or `iret` to an RPL 3 `CS` is an outer-ring
+return, so the conforming flip covers far calls and far jumps only. It is
+not a clean #GP either: the CPU takes `SS:SP` from the stack above the
+return address and checks them as ring 3's, and a handle descriptor's value
+passes that check. WIN16's own `retf` into a program - every callback,
+through `w16_cbcall` - therefore clears the callee's RPL first (SPEC.md
+124.25.23). Neither case is known in any target.
+
+*Checked, not changed* (verify-oddsel): the compactor's rebase (`mx_desc`)
+and a block's free (`mx_dfree`, `mega_mpfreef`, `mega_mpmovef`) test only
+that an entry is in use, never its access byte, so F2h, 9Eh and 1Ah move
+and go as 92h and 9Ah did; `mega_dacc` sets the accessed bit on DPL 3
+descriptors as on DPL 0 ones (`and 91h`); a hibernate image's run 0 is the
+LDT, so the access bytes travel; and `mega_ldt_free`'s pair test asks 92h of
+the entry AFTER a code descriptor, which an F2h never matches, so a flipped
+handle descriptor is never freed as a pair. `LAR`, `VERR` and `VERW` agree
+on a 286 and a 386: data needs DPL >= max(CPL, RPL), which DPL 3 meets at
+any RPL; conforming code is not privilege-checked; `VERR` and `LAR` do not
+read the present bit, which O8's `w16_touch` relies on.
+
+*Why not run the program at CPL 3, which would cure SS and `retf` too:*
+every import is a far call from the program into WIN16's DPL 0 code. At CPL
+3 that needs a call gate, and a gate names one entry, so every import stub
+would need a gate of its own. The privilege change also switches
+stacks, and WIN16's gate reads its arguments off the program's stack
+through `SS`. Every exception and IRQ that arrives at CPL 3 switches to the
+TSS's ring-0 stack, which would have to be re-aimed below `w16_hsp` at every
+resume. Every fault-completion arm (`mega_gpfix`, `mega_gpw`, `mega_null0`,
+`mega_npx`, the fault close) assumes the three-word same-ring frame, and an
+inter-ring frame is five words. `int 21h`, `2Fh`, `31h` and `34h`-`3Dh`
+gates would need DPL 3. That is a change to kern_mega's entry and exit
+paths, which the 10 bytes left in the `.mega` rung cannot hold, and the
+owner's rule allows no rung to be crossed for it.
+
+Cost: `.text`, `.cold`, `.mega`, `.bss` +0 on kern_mega, and kern_big and
+kern_small are byte-identical (`tools/kernsize.py`). WIN16 is SPEC.md
+124.25.23.

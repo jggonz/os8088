@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The Video Battle RULES' reference, host-side (tools/vbtrules.py, SPEC.md
-125.6): the bytes, the arithmetic, the outcome and its clip, the turns -
+126.6): the bytes, the arithmetic, the outcome and its clip, the turns -
 everything the engine is held to by tests/vbtengine.py - and the builder's
 rules tabs' arithmetic (tools/os88vbtgui.py, tools/vbtband.py).
 
@@ -177,7 +177,7 @@ ok(states == states2, "...and is the same played twice")
 ok(any(st["stance"] == 1 for st in states) and any(st["stance"] == 2 for st in states),
    "it goes into the shell and comes back, and is enraged below 40%")
 
-# THE LIMIT EFFECT (125.6): ARI's Attack fills ARI's own gauge 10 points
+# THE LIMIT EFFECT (126.6): ARI's Attack fills ARI's own gauge 10 points
 # (to: self), BRAM's Heal the healed one's 20 (to: target)
 s = V.Sim(R, seed=5)
 l0 = s.lim[0]

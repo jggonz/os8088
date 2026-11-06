@@ -2,7 +2,7 @@
 
 **Status: COMPLETED - R1 BUILT (2026-11-05: 88 -> 128 KB a ring on the owner's 100%
 battle, 108 -> 144/148 on the 75%, a used machine the same as a fresh boot -
-SPEC.md 125.4.4, `vbtram`); R3 BUILT (`vbtmenu`); R2 BUILT
+SPEC.md 126.4.4, `vbtram`); R3 BUILT (`vbtmenu`); R2 BUILT
 (format 8, the owner's rings 168 + 172 KB); R4 BUILT (`vbtcap`). Section 2 is the memory as
 it stood before R1, measured.** The owner, after the Hercules rounds:
 *"We should probably take a close look at the entire ram layout, and when we
@@ -13,8 +13,8 @@ more responsive by changing when we delay to after a selection, so the user
 can use the interface freely, and then the longer waits (when needed) are
 hidden in the delay AFTER they make the selection."*
 
-SPEC.md 125.4 is the reader and the rings as built, 125.4.3 the builder's
-reader's model (the burst cap) and 125.4.4 the map below as a fact.
+SPEC.md 126.4 is the reader and the rings as built, 126.4.3 the builder's
+reader's model (the burst cap) and 126.4.4 the map below as a fact.
 docs/plans/completed/VBATTLE-MEMORY-PLAN.md is the earlier round (streaming loops,
 XMS/EMS holds); this one is about **conventional memory on the owner's 5150**
 and the reading policy, which every machine shares.
@@ -23,7 +23,7 @@ and the reading policy, which every machine shares.
 
 A clip streams through one of two **clip rings**. What a ring holds ahead of
 the clip's sound is all there is to ride out a burst - Bolt's first 1.5 s at
-129 KB/s against a 74 KB/s average, Search's seconds 4-6 at 131 (125.4.3) -
+129 KB/s against a 74 KB/s average, Search's seconds 4-6 at 131 (126.4.3) -
 and the builder's cap (`CAP_HOLD`, 56 KB) is sized from it. **Every KB the
 rings gain is a KB of burst the builder no longer has to cut**, on every
 adapter. Today the owner's 100% Hercules battle gets **88 KB a ring**; the
@@ -69,7 +69,7 @@ Three things in it are waste, and one is the size of a ring:
 2. **30 KB is left over in two pieces**: `VB_RKEEP`'s 8 KB, the rounding of
    two rings to whole 4 KB, and the gap the card's top-down ring leaves.
 3. **The band's buffers are 16 KB each and the band is 58 rows**: 58 x 80
-   = 4.6 KB is all either holds since the partial redraw (125.5) cut the
+   = 4.6 KB is all either holds since the partial redraw (126.5) cut the
    copy and the clear to the band's rows.
 4. **The entries are 84 KB of the block** - every action's first frame from
    every anchor, held from the play's start to its end, of which one is
@@ -158,7 +158,7 @@ R1: ~178 / ~180 KB a ring** - about double today's at 100%.
 
 ### R3 - when the reader reads: the interface first, the waits after a choice
 
-What the reader does today at a menu (SPEC.md 125.4's steps), and what
+What the reader does today at a menu (SPEC.md 126.4's steps), and what
 changes:
 
 | step | today | planned |
@@ -206,7 +206,7 @@ small is told so on the Build tab (as the budget's red does today).
 | R4 | `vbtcap` | the cap at the bundle's own ring |
 
 Then the owner's battles again on 86Box's pc5150 (the scratch harness that
-found 125.4.3): the late sound and the waits per clip, before and after.
+found 126.4.3): the late sound and the waits per clip, before and after.
 
 ## 5. Not in it
 

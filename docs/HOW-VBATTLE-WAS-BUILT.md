@@ -1,9 +1,9 @@
 # How Video Battle was built
 
-A diary of the first build of Video Battle (SPEC.md §125,
+A diary of the first build of Video Battle (SPEC.md §126,
 docs/plans/VIDEO-BATTLE-PLAN.md). It records what was decided and what was
 discovered, and names what was measured and where. It says how the engine
-came to be, not how it works now: SPEC.md §125 is the authority on that.
+came to be, not how it works now: SPEC.md §126 is the authority on that.
 
 ## The question (2026-11-03)
 
@@ -370,7 +370,7 @@ Decisions:
   way nobody sees: a damage a few points off looks like a design. So
   `tools/vbtrules.py` defines the rules as the bytes the engine reads and
   a `Sim` that plays them, with the draws' order written down (SPEC.md
-  125.6.3); the engine is that, routine for routine, and a test reads the
+  126.6.3); the engine is that, routine for routine, and a test reads the
   engine's whole state at every turn and compares.
 - **Draw at commit, peek at hover.** Rolling an action's outcome while the
   cursor merely rests on it would tie the battle to how the player moves
@@ -471,7 +471,7 @@ judged wrongly.
 
 **The memory figure had to be measured, and the first number was a
 guess.** The Build tab says what the engine will claim on a 640 KB machine
-and how big its two clip rings come out, and the arithmetic is 125.4's
+and how big its two clip rings come out, and the arithmetic is 126.4's
 carving part for part. What it cannot know is how much is free when the
 engine opens. The 172 KB rings measured on 86Box earlier were against a
 resident claim the bundle no longer has (wave 4 added the band's two 16 KB

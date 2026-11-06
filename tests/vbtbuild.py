@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The Video Battle builder's model and build, host-side
-(docs/plans/completed/VBATTLE-BUILDER-PLAN.md wave 1, SPEC.md 125.2).
+(docs/plans/completed/VBATTLE-BUILDER-PLAN.md wave 1, SPEC.md 126.2).
 
     python3 tests/vbtbuild.py
 
