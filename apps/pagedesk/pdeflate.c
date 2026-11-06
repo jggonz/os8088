@@ -178,7 +178,7 @@ pdw fl_infill(void)
     int b;
     pdw n = 1;
     fl.ii = 0; fl.in = 0;
-    b = sget(c, (int)fl.stage - 1);
+    b = sget_lo(c, (int)fl.stage - 1);           /* the stages below hold no Flate stage */
     if (b < 0) return 0;
     fl.ib[0] = (pdb)b;
     if (!fl.stage)
@@ -592,11 +592,7 @@ static pdw fl_take(struct sctx *c, pdb *dst, pdw max)
     else { src = fl.ob + fl.oi; k = (pdw)(fl.on - fl.oi); fl.oi = (pdw)(fl.oi + (k > max ? max : k)); }
     if (k > max) k = max;
     for (max = k; max--; ) *dst++ = *src++;
-    c->wlo = (pdw)(c->wlo + k);
-    if (c->wlo < k && ++c->whi >= PDE_WORK_HI) {
-        lx_err = PDE_LIMIT;
-        for (max = 0; max < PD_MAXFILTERS; max++) c->fdone[max] = 1;
-    }
+    sg_add(c, k);
     return k;
 }
 

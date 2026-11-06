@@ -2737,15 +2737,34 @@ and its state, 448 bytes in all) and a 320-byte scratch for a dynamic header and
 above. Reading a Flate stream other than the one loaded swaps the loaded
 state out to its own slot and the reader's in (two block copies of 448 bytes;
 a form opened inside a page's content and then closed costs two swaps); the
-tables and the history never move. PDENG.MOD: **34,584 + 9,852 = 44,436 bytes**
-against 27,466 + 8,972 = 36,438 before (+7.8 KiB: +7,118 image, +880 bss).
+tables and the history never move. PDENG.MOD: **34,680 + 9,852 = 44,532 bytes**
+against 27,466 + 8,972 = 36,438 before (+7.9 KiB: +7,214 image, +880 bss;
+96 of them are the iterative chain below).
 
 **20.13.4 Resumability and the work bound.** The decoder runs in *fills* of at
 most 256 output bytes into `ob`: one literal, one stored byte or one symbol's
 match at a time, a match that does not fit finishing in the next fill
-(`mleft`, `mdist`). Input is the stage below (`sget`), so the raw bytes and
+(`mleft`, `mdist`). Input is the stage below (`sget_lo`), so the raw bytes and
 every lower stage are still counted against the 4 MiB bound as before, and a
 fill that finds the input ended fails with `PDE_TRUNC` rather than waiting.
+
+*The chain has no recursion (D21).* `pdestrm.c` walks the filter stages with
+one index instead of one call each: ASCIIHex and RunLength are push machines
+(`st_step`: offered nothing, a stage gives a byte it holds or asks for one;
+fed a byte of the stage below, it gives a byte, asks again or ends), and
+`sg_run` goes down while a stage asks and up while one gives. The Flate stage
+pulls bits in the middle of a header and cannot be a push machine, so it is
+the bottom source of the stages above it (`sg_flate`) and reads the stages
+below it through `sget_lo`, which holds no Flate stage: `sget -> sg_flate ->
+fl_get -> ... -> fl_infill -> sget_lo` is a chain, not a cycle, and
+`tools/os88pdstk.py` passes with no allowance for it. Every byte each stage
+produces is counted as before, a stage that ends stays ended, and a stage
+that asked for input is fed the end of the stage below it too (an odd final
+hex digit still decodes). Behaviour is unchanged byte for byte (the eng and
+flate host matrices, 1,170 chain/size/bomb cases, both target harnesses);
+what changed is speed on a pathological ASCIIHex-over-RunLength whitespace
+bomb, about 1.6x slower to reach `PDE_LIMIT` on the target, and 0.4
+instructions a byte on Flate content.
 The history is written once at the end of each fill and read only for a match
 whose source lies before the fill's first byte (a source inside the fill is
 read from `ob`). The top Flate stage's bytes are handed up in bulk

@@ -213,19 +213,21 @@ flc_byte:
 
 ; flc_n8 - the bit buffer to 8 bits or more where the input allows
 flc_n8:
+.more:                                  ; a loop, not a call: a local label, so the stack gate reads it so
     call flc_byte
     jc .end
     cmp ch, 8
-    jb flc_n8
+    jb .more
 .end:
     ret
 
 ; flc_get - BL (1..8) bits into AX. CF = 1 when the input has ended.
 flc_get:
+.more:
     cmp ch, bl
     jae .ok
     call flc_byte
-    jnc flc_get
+    jnc .more
     ret
 .ok:
     mov cl, bl
