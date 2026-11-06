@@ -81262,9 +81262,7 @@ the even rows of the rect, then the odd).
 **`NOCOLFAST=1` builds the old column-major body**, so `tests/swcolsame.py`
 stays an A/B of two different bodies drawing the same pixels. The row bodies
 are `sw_k_col`, `sw_k_colf`, `sw_k_xcol`, `sw_k_i`, `sw_k_lir` and
-`sw_k_xrow`; the driver is `sw_walk`. `sw_k_xcol` - both sides of every drag
-outline, redrawn on every pointer step - does two rows a `loop`, the odd row
-first. `kern_small` keeps the column-major
+`sw_k_xrow`; the driver is `sw_walk`. `kern_small` keeps the column-major
 body alone (§39.27.4's cut). It costs `kern_big` 338 bytes of `.text` and 6
 of `.bss`; docs/plans/khp1/mono.md has the operations.
 
