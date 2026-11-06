@@ -13224,7 +13224,8 @@ mega_wbind:
 
 ; mega_bown - DX:AX = a base, BL = a window's owner (mega_segown's) -> CF = 0
 ; the block it lies in is that owner's: a conventional claim recorded under
-; the slot, a pool block under 0A0h | slot (a claim) or the bare slot (its
+; the slot or the package's segment (I_SPTR: mem_own records a package's
+; own claims under it), a pool block under 0A0h | slot (a claim) or the bare slot (its
 ; OSAPI_XMEM_ALLOC block), or a driver's pool block under its 0C0h | row. A
 ; REGION (80h | slot) is not a block a window binds into. CF = 1 someone
 ; else's, nobody's, or in no block - so neither mega_wset's re-bind nor
@@ -13279,12 +13280,18 @@ mega_bown:
     jmp short .no
 .f:
     xor bh, bh
-    cmp [ss:si+MC_OWN], bx
-    jne .no
-.yes:
-    clc
-.o:
-    pop es
+    mov ax, [ss:si+MC_OWN]          ; the slot (a claim the kernel made for
+    cmp ax, bx                      ; the instance)...
+    je .yes
+    cmp bl, INST_MAX
+    jae .no
+    shl bx, 5                       ; ...or THE PACKAGE'S SEGMENT, which is
+    cmp ax, [bx+inst_tab+I_SPTR]    ; what every claim it makes itself is
+    jne .no                         ; recorded under (mem_own, SPEC.md 50.2;
+.yes:                               ; mega_fown reads both): matched against
+    clc                             ; the slot alone, a package's own claim
+.o:                                 ; was nobody's and SEG_BWIN refused it
+    pop es                          ; on a 1MB machine (14.139's follow-up)
     pop si
     pop dx
     pop cx
