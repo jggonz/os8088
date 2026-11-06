@@ -243594,10 +243594,21 @@ BATTLEV.VBT] [--frames]` reads it.
   counts of 0.838 us, the speaker's data line off - the battle never sounds
   the speaker), latched at a frame's start and end in the hook; a frame of
   55 ms or more wraps.
-- **The claim** (`vbprof.inc`, ~62 KB) is made before the rings are sized,
-  so a profiled play's rings are that much smaller - as VIDEOD's are. On
-  kern_mega's real-mode bracket a claim is a selector the hook cannot write
-  through, and there the play is not profiled.
+- **Where it is kept.** With an XMS pool (the owner's profiling machine:
+  "so its more accurate as well - not cache starving anything") the
+  profile is a 326 KB block there, 30,000 frames and 4,096 reads, and the
+  hold leaves it room: the hook stages frames in 4 KB of conventional
+  memory, the play's foreground loop moves them up (`vb_prdrain`), a read
+  goes up as it is logged, and the play's end brings it all down into a
+  claim of its own, the rings given back by then. Without XMS it is a
+  conventional claim of 48 KB beside the rings - or 24, 12, 6, halved
+  while the rings cannot be sized beside it, and none at last: a 62 KB
+  claim made first refused a big bundle's play ("Not enough memory", the
+  owner). On kern_mega's real-mode bracket a claim is a selector the hook
+  cannot write through, and there the play is not profiled.
+- **A read's log keeps the read's answer**: logged between `vb_dread`'s
+  CF and its return, it cleared CF on the first build, and VBATTLED took a
+  bundle that was not there as read (`vbtdiagx` found it).
 - **A frame** (10 bytes, 5,000 at most): its time in `vb_frame` (the
   decode), the time since the last frame's start, whether it STALLED (its
   record not in its ring yet), the mode, the clip, KB of the clip read
@@ -243609,7 +243620,10 @@ BATTLEV.VBT] [--frames]` reads it.
   frame rate, the sound rate and samples a frame, the adapter and VGA's K,
   the frames late (forgiven) and stalled, the hook's periods, the reader's
   periods, bytes and calls (126.4's own account), the bundle's name, whether
-  a card plays, the rings' KB, the entry sizes.
+  a card plays, the rings' KB, the entry size, +56 the frames' room (the
+  reads follow it), +58 the claim's KB, +60 1 when kept in XMS, +62 frames
+  the staging had no room for.
 - `vbtdiag` plays the demo on MartyPC's VGA XT, reads `VBPROF1.DAT` back
-  off B: and holds it to the play. Measured there: the title's VGA4 records
+  off B: and holds it to the play; `vbtdiagx` the same on QEMU with XMS,
+  500 frames through the staging, none dropped. Measured there: the title's VGA4 records
   (8 colours) decode in 6.4 ms a frame against a 66.7 ms frame.

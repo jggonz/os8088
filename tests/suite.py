@@ -17046,6 +17046,17 @@ SOAK = [
         "lit pixels before and after",
         needs=("marty",),
         wants=("build/vbattle.o88",)),
+    Row("vbtdiagx", "soak", py("tests/vbtdiag.py", "--arm", "xms"), 60.0,
+        "SPEC.md 126.8: VBATTLED.O88's profile KEPT IN XMS, on QEMU with "
+        "128 MB (the closed list's entry 1: XMS is 286-and-up): 4 KB of "
+        "conventional memory staged by the hook, the play's foreground "
+        "moving it up, the reads up as they are logged, all of it brought "
+        "down at the end - VBPROF1.DAT says so (+60), 500 frames (the "
+        "staging's 400 round once) none dropped, each clip frame a time, "
+        "the reads with them. Broken on purpose (the play loop's drain "
+        "out) the staging fills and the frames stop at 400",
+        needs=("qemu",),
+        wants=("build/vbattled.o88", "build/os8088.img")),
     Row("vbtdiag", "soak", py("tests/vbtdiag.py"), 60.0,
         "SPEC.md 126.8: VBATTLED.O88, the engine built VB_DIAG, on "
         "MartyPC's VGA XT with 1.44 MB drives (os8088_xt_vga_144), "

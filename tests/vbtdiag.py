@@ -14,8 +14,20 @@ and B: read back on the host:
      (vb_prn at the end), each with a decode time, the title's clip;
   3. tools/vbtprof.py reads it and prints the play.
 
+--arm xms: the same on QEMU with 128 MB (docs/TESTING.md's closed list,
+entry 1: XMS is a 286-and-up store, every MartyPC machine an 8088), the
+demo's CGA4 bundle beside VBATTLED.O88 on B: - the profile KEPT IN XMS
+(4 KB of conventional memory staged, the foreground moving it up):
+
+  x1. VBPROF1.DAT says so (+60 1), its claim the XMS one's, and the hold
+      kept off it;
+  x2. every frame the hook drew is in it - none dropped from the staging -
+      and the reads with them (QEMU's times are not the machine's; only
+      the path is held).
+
 BROKEN ON PURPOSE (vb_prmark's call out of the hook) 2 goes red: a profile
-of no frames.
+of no frames; (vb_prdrain's call out of the play's loop) x2 goes red - the
+staging fills and frames are dropped.
 """
 import os
 import shutil
@@ -44,6 +56,11 @@ def ok(cond, what):
 
 
 def main():
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--arm", choices=("conv", "xms"), default="conv")
+    if ap.parse_args().arm == "xms":
+        return xms()
     os.chdir(ROOT)
     syms, _ = pkg_syms("apps/vbattle/vbattle.asm", ("apps/",),
                        defines=("VB_DIAG",))
@@ -106,8 +123,128 @@ def main():
         r = subprocess.run([sys.executable, "tools/vbtprof.py", p],
                            capture_output=True, text=True)
         print("\n".join("     | " + x for x in r.stdout.splitlines()[:12]))
-        ok(r.returncode == 0 and "frames drawn" in r.stdout,
+        ok(r.returncode == 0 and "frames profiled" in r.stdout,
            "3. tools/vbtprof.py reads it")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    if fails:
+        print("vbtdiag: %d FAILED" % len(fails))
+        return 1
+    print("vbtdiag: all passed")
+    return 0
+
+
+def xms():
+    """The profile kept in XMS, on QEMU (the docstring's x1, x2)"""
+    import os88qemu
+    import os88vbt as B
+    import vbtproj as P
+    import xmcheck
+    from vidxms import Q
+    os.chdir(ROOT)
+    syms, _ = pkg_syms("apps/vbattle/vbattle.asm", ("apps/",),
+                       defines=("VB_DIAG",))
+    tmp = tempfile.mkdtemp(dir=os.path.join(ROOT, "build"))
+    try:
+        vbp = os.path.join(tmp, "x.vbp")
+        B.demo_project(vbp, bars=2)
+        pr = P.Project.load(vbp)
+        vbt = os.path.join(tmp, "BATTLE.VBT")
+        open(vbt, "wb").write(B.build_project(pr))
+        disk = os.path.join(tmp, "vbt.img")
+        sysimg = os.path.join(tmp, "sys.img")
+        shutil.copy(os88build.at("build/os8088.img"), sysimg)
+        subprocess.run([sys.executable, "tools/os88disk.py", "-o", disk,
+                        "--size", "1440", os88build.at(os.environ.get(
+                            "VBTD_ENGINE", "build/vbattled.o88")),
+                        vbt], check=True, capture_output=True)
+        q = Q(tmp, sysimg, disk, 128)
+        xmcheck.wait_desktop(q.sock, "vbtdiag")
+        S = xmcheck.sym
+        ui = os88ui.UI(q, mouse=object(), sym=S, verbose=False)
+        mo = os88qemu.Mouse(q, S, q.hmp, after=0)
+
+        def wait(cond, what, secs=60):
+            if not os88qemu.acted(q, cond, secs=secs, what=what, poll=0.05):
+                raise SystemExit("vbtdiag: timed out waiting for %s" % what)
+        x, y = geom.drive_pt(q, "B", S)
+        mo.dblclick(x, y)
+        box = {}
+
+        def diskwin():
+            for w in ui.windows():
+                if w.visible and ui.fs_of(w) == (1, 0, 1):
+                    box["w"] = w
+                    return True
+            return False
+        wait(diskwin, "drive B's window", 30)
+        os88qemu.ui_done(q, S, cap=1.0)
+        i, _ = ui.entry(os.path.basename(os.environ.get(
+            "VBTD_ENGINE", "VBATTLED.O88")).upper(), box["w"])
+        before = set(o.i for o in ui.windows())
+        mo.dblclick(*ui.row_xy(box["w"], i - ui.scroll(box["w"])))
+
+        def engine():
+            for o in ui.windows():
+                if o.i not in before and o.visible:
+                    box["p"] = o
+                    return True
+            return False
+        wait(engine, "the battle's window", 30)
+        os88qemu.ui_done(q, S, cap=1.0)
+        rec = q.read(S("wm_wins") + box["p"].i * geom.WIN_SIZE,
+                     geom.WIN_SIZE)
+        base = struct.unpack_from("<H", rec, geom.W_SEG)[0] << 4
+
+        def rb(n):
+            return q.read(base + syms[n], 1)[0]
+
+        def rw(n):
+            return struct.unpack_from("<H", q.read(base + syms[n], 2))[0]
+        q.hmp("sendkey ret")
+        if os.environ.get("VBTD_DBG"):
+            import time
+            for _ in range(20):
+                time.sleep(2)
+                print("   ready %d tplay %d err %04x status %04x prx %d prkb %d "
+                      "prseg %04x" % (rb("vb_ready"), rb("vb_tplay"),
+                                      rw("vb_err"), rw("vb_status"),
+                                      rb("vb_prx"), rw("vb_prkb"),
+                                      rw("vb_prseg")), flush=True)
+                print("   says: %r" % q.read(base + rw("vb_status"), 60)
+                      .split(b"\0")[0])
+        wait(lambda: rb("vb_tplay") == 1, "the title", 120)
+        wait(lambda: rw("vb_prn") >= 500, "500 frames of it (the staging's "
+             "400 round once)", 300)
+        kept = rb("vb_prx")
+        q.hmp("sendkey esc")
+        wait(lambda: rw("vb_prseg") == 0 and rb("vb_prx") == 0,
+             "the profile written", 120)
+        drawn = rw("vb_prn")
+        os88qemu.ui_done(q, S, cap=1.0)
+        q.close()
+        fat = os88fat.Fat12(disk)
+        try:
+            prof = bytes(fat.read("VBPROF1.DAT"))
+        except Exception as e:
+            prof = b""
+            print("     (no VBPROF1.DAT: %s)" % e)
+        p = os.path.join(tmp, "VBPROF1.DAT")
+        open(p, "wb").write(prof)
+        good = prof[:4] == b"VBPR"
+        h, fr, rd = vbtprof.read_prof(p) if good else ({}, [], [])
+        ok(good and kept == 1 and prof[60] == 1 and h["claimkb"] > 300,
+           "x1. VBPROF1.DAT kept in XMS: the play's flag %d, the file's +60 "
+           "%s, a %s KB block" % (kept, prof[60] if good else None,
+                                  h.get("claimkb")))
+        drop = struct.unpack_from("<H", prof, 62)[0] if good else -1
+        clipf = [f for f in fr if f["mode"] == vbtprof.CLIP_MODE and
+                 not f["stall"]]
+        ok(good and len(fr) == drawn >= 500 and drop == 0 and rd and
+           clipf and all(f["t"] > 0 for f in clipf),
+           "x2. every frame the hook drew is in it (%d of %d, %d dropped, "
+           "the clips' each with a time), and %d reads" % (
+               len(fr), drawn, drop, len(rd)))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     if fails:

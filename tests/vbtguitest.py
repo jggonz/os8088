@@ -488,9 +488,11 @@ with tempfile.TemporaryDirectory() as tdir:
     us = pv["usage"] or [0]
     ok([x["rgb"] for x in pv["cols"]] == [tuple(c) for c in pal] and
        sorted(x["band"] for x in pv["cols"] if x["band"] is not None)
-       == [0, 1, 2, 3] and abs(sum(us) - 1) < 1e-6 and
+       == [0, 1, 3] and abs(sum(us) - 1) < 1e-6 and
        sum(u > 0.01 for u in us) >= 3,
-       "the palette viewer: the 8 in order, the band's four marked, %s's "
+       "the palette viewer: the 8 in order, the band's DRAWN roles marked "
+       "(ground, rules, white - red is a grey-out on VGA, so its role is "
+       "not called the menu's), %s's "
        "pixels over %d of them (%s)"
        % (pv["clip"], sum(u > 0.01 for u in us), " ".join("%.0f" % (u * 100) for u in us)))
     B2.REND = B2.Rend("cga4")

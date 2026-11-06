@@ -1288,12 +1288,13 @@ vb_play:
     call OSAPI_MEM_MOVABLE
 .ld:
     call vb_door                    ; kern_mega's facts, and the room kept
-%ifdef VB_DIAG
-    call vb_prbeg                   ; (THE PROFILE's claim, before the rings)
-%endif
     call vb_load
     jc .say
+%ifdef VB_DIAG
+    call vb_prtry                   ; (the rings, and THE PROFILE if they fit
+%else                               ; beside it - 126.8)
     call vb_rclaim                  ; THE CLIP RINGS, at the door on every
+%endif
     jc .say                         ; kernel: a real-mode bracket refuses a
                                     ; claim (SPEC.md 53.2.3)
     push bp
@@ -1509,6 +1510,7 @@ vb_dread:
     clc
 .out:
 %ifdef VB_DIAG
+    pushf                           ; (CF is the read's answer: kept)
     push ax
     push cx
     push dx
@@ -1519,6 +1521,7 @@ vb_dread:
     pop dx
     pop cx
     pop ax
+    popf
 %endif
     pushf
     cli
@@ -3135,6 +3138,9 @@ vb_main1:
     mov si, vb_tr
     call vb_tmark
     call vb_band
+%ifdef VB_DIAG
+    call vb_prdrain                 ; (the profile's frames, up to XMS)
+%endif
     call vb_snd_keep
     mov si, vb_tb
     call vb_tmark
@@ -5404,6 +5410,20 @@ VB_VAR vb_prtg, 2                   ; ...the feed's
 VB_VAR vb_prfs, 2                   ; ...the feeds' time since the last frame
 VB_VAR vb_pr61, 1                   ; ...port 61h as it was
 VB_VAR vb_prrc, 2                   ; ...a read's bytes
+VB_VAR vb_prkb, 2                   ; ...its claim's KB (vb_prtry)
+VB_VAR vb_prna, 2                   ; ...room for frames
+VB_VAR vb_prrl, 2                   ; ...room for reads
+VB_VAR vb_prrb, 2                   ; ...where the reads begin
+VB_VAR vb_prx, 1                    ; ...1: kept in XMS (vbprof.inc)
+VB_VAR vb_prxt, 4                   ; ...its block's token
+VB_VAR vb_prtot, 2                  ; ...frames moved up
+VB_VAR vb_prhi, 2                   ; ...the staging's next for the hook
+VB_VAR vb_prti, 2                   ; ...and for the foreground
+VB_VAR vb_prdrop, 2                 ; ...frames the staging had no room for
+VB_VAR vb_prrbuf, 8                 ; ...a read's entry, on its way up
+VB_VAR vb_prfseg, 2                 ; ...the file's claim at the end
+VB_VAR vb_prsz, 4                   ; ...its size
+VB_VAR vb_prroom, 2                 ; ...the frames' room it says
 VB_VAR vb_prro, 4                   ; ...and its offset
 %endif
 VB_VAR vb_loff, 2                   ; ...its offset in the ground's buffer

@@ -29,13 +29,15 @@ def read_prof(path):
     (ver, nf, nr, div, fps, rate, spf, kind, k, late, stall, hper, rper,
      rbytes, rcalls) = struct.unpack_from("<HHHHHHHBBHHIIIH", d, 4)
     name = d[38:51].split(b"\0")[0].decode("ascii", "replace")
-    snd, rkb, pre, prmax = d[51], struct.unpack_from("<H", d, 52)[0], \
-        struct.unpack_from("<H", d, 54)[0], struct.unpack_from("<H", d, 56)[0]
+    snd, rkb, pre, prmax, ckb = d[51], struct.unpack_from("<H", d, 52)[0], \
+        struct.unpack_from("<H", d, 54)[0], \
+        struct.unpack_from("<H", d, 56)[0], struct.unpack_from("<H", d, 58)[0]
     h = dict(ver=ver, frames=nf, reads=nr, div=div, fps=fps, rate=rate,
              spf=spf, kind=("CGA4", "VGA4", "Hercules")[kind]
              if kind < 3 else kind, k=k, late=late, stall=stall, hper=hper,
              rper=rper, rbytes=rbytes, rcalls=rcalls, name=name, card=snd,
-             ringkb=rkb)
+             ringkb=rkb, room=prmax, claimkb=ckb, xms=d[60] == 1,
+             dropped=struct.unpack_from("<H", d, 62)[0])
     fr = []
     for i in range(nf):
         o = 64 + pre * i
@@ -76,8 +78,16 @@ def main():
         h["fps"], period, h["rate"], " on a card" if h["card"] else
         " (no card)", h["ringkb"]))
     secs = h["hper"] * h["div"] * PIT_US / 1e6
-    print("the play: %.1f s, %d frames drawn (%d profiled), %d stalled, %d "
-          "late (forgiven)" % (secs, len(fr), len(fr), h["stall"], h["late"]))
+    if h["xms"]:
+        where = "kept in XMS (%d KB)%s" % (h["claimkb"], "; %d frames the "
+                                            "staging dropped" % h["dropped"]
+                                            if h["dropped"] else "")
+    else:
+        where = "room for %d in a %d KB claim%s" % (
+            h["room"], h["claimkb"], ": the rest of the play was not"
+            if len(fr) >= h["room"] else "")
+    print("the play: %.1f s, %d frames profiled (%s), %d stalled, %d late "
+          "(forgiven)" % (secs, len(fr), where, h["stall"], h["late"]))
     print("the reader: %d calls, %.0f KB, %.1f s of the hook's periods "
           "(%.0f KB/s while reading)" % (
               h["rcalls"], h["rbytes"] / 1024.0,

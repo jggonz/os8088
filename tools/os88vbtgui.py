@@ -3516,10 +3516,15 @@ def vga_colours(path, k=None, clip=None):
     has = bool(c is not None and c["own"])
     if has:
         pal[k - slots:] = c["own"][:slots]
+    drawn = (0, 3) if bd.vlayer else (0, 1, 3)  # (the band's roles VGA
+    #   draws: its ground and white - red is a grey-out, 126.5 - and the
+    #   plain look's rules without a picture; red's role pointed at the
+    #   footage's red read "menu" to the owner, who saw nothing draw it)
+    role = {v: r for r, v in enumerate(bmap) if r in drawn}
     out = dict(cols=[dict(rgb=tuple((v << 2) | (v >> 4) for v in pal[i]),
                           value=codes[i],
-                          band=bmap.index(codes[i]) if codes[i] in bmap and
-                          i < k - slots else None, own=i >= k - slots,
+                          band=role.get(codes[i]) if i < k - slots else None,
+                          own=i >= k - slots,
                           free=i >= k - slots and not has)
                      for i in range(k)], usage=None, clip=None,
                slots=slots, has_own=has)
@@ -3755,7 +3760,7 @@ class BuildTab(object):
         sl = v.get("slots", 0)
         self.pal_l.config(text=(
             "The battle's %d: %d shared by every clip (\"menu\" marks the "
-            "band's four)%s. " % (len(v["cols"]), len(v["cols"]) - sl,
+            "ones the band draws)%s. " % (len(v["cols"]), len(v["cols"]) - sl,
                                   ", and %d each clip's OWN, loaded as it "
                                   "starts%s" % (sl, " - %s's" % name if
                                                 v.get("has_own") else

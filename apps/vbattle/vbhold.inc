@@ -223,6 +223,10 @@ vb_hon1:
 ; and a 32 KB bounce for the fill. CF=1 not taken
 vb_xopen:
     call OSAPI_XMEM_CAPS            ; AX = KB the pool can hand out
+%ifdef VB_DIAG
+    sub ax, VB_PRXKB + 4            ; (VBATTLED: the profile's, kept - 126.8)
+    jbe .no
+%endif
     or ax, ax
     jz .no
     mov cl, 2                       ; in 4 KBs, one kept for the round-up
