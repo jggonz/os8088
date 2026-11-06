@@ -6056,6 +6056,23 @@ the first Live pass, every primitive after it believing it was nested and
 `gfx_blitp` refusing every block. It leaves past the teardown now;
 `vidlivext` is the gate (every sample 255 before, none above 1 after).
 
+#### 5.4.3.7 A WIDE row on the fast path is copied as words; a narrow one stays bytes
+
+`gfx_blitp`'s plane-major fast path (§5.4.3.5) moves **words when the row is
+8 bytes or wider**, and bytes below that. `rep movsw` is 25 clocks a word on
+an 8088 against `rep movsb`'s 17 a byte, and a Map Mask'd plane with Set/Reset
+off and the Bit Mask open takes a word write's two CPU bytes exactly as two
+byte writes. The threshold is what keeps the earlier measurement true: a word
+copy was built for every row once and REFUSED, because on Gorillas' 2-byte
+rows the shift and the odd tail cost more than the one word saved (71.7 ms
+against 68.3 on MartyPC's XT VGA, over `tests/gorillasmenu.py`'s 75 ms
+budget). A row under 8 bytes now pays one compare a PLANE and nothing else.
+The loop is picked once a plane and the odd byte is the shift's carry, which
+no `rep` writes. Measured (gfxbench, MartyPC `os8088_xt_vga`, kernel
+hot-paths pass 1): `GFX_BLITP 256x16` (32-byte rows) 9.48 → 7.97 ms, and
+`GFX_BLITP 64x64` (8-byte rows, the break-even) 12.38 → 12.43 ms. The masked
+rows `vga_prow_emit` writes were left as bytes: nothing measured them.
+
 ### 5.5 `gfx_scroll` — move a rect instead of redrawing it
 
 **in** AX/BX/CX/DX = x1/y1/x2/y2 inclusive, absolute screen coordinates;
@@ -7309,6 +7326,50 @@ whole win is proportional to height. It is the *opposite* lever from
 having because a fill is usually tall, and not worth quoting as a figure for
 drawing in general.
 
+### 5.7.2 The planar fill's inner loops: what kernel hot-paths pass 1 changed in them
+
+Each paragraph below is one change to `vga_solid_rect` or `gfx_fill_gray` on
+VGA/EGA, priced on MartyPC's `os8088_xt_vga` (gfxbench, guest time). None of
+them changes a pixel, a register contract or a refusal.
+
+**The XOR interior is `rep movsb` with SI = DI and DS = ES = the framebuffer**,
+which keeps §5's rule — every target byte read immediately before it is written,
+because the ALU XORs against the latches — in the form that rule always
+allowed: each iteration's read is that byte's latch load and its write is the
+same byte, whose CPU value Set/Reset ignores. 17 clocks a byte where `mov al,
+[es:di]` / `stosb` / `loop` was about 45. What §5 forbids is `rep stosb`, which
+writes without reading; nothing else about the rule changed. Measured as above:
+`GFX_XOR_FILL 64x64` 6.75 → 4.35 ms, `GFX_XOR_RECT 256x1` (one drag-outline
+edge) 1.09 → 0.88 ms.
+
+**The two masked edge COLUMNS of `vga_solid_rect` take two rows a pass.** A
+column is a latch load and a masked write per row, one `xchg [es:di], al`, and
+the loop around it was most of its cost: `inc si / shr si, 1` makes SI the row
+pairs rounded up and an odd count enters at the second row, so the loop's
+branch is paid once a pair, and the row step lives in CX for both columns
+(`add di, cx` is a byte shorter than the immediate). It is a trade with a
+shape and it is taken on purpose: a column of ONE row pays the entry, about
+45 cycles, so `GFX_HLINE 8px` measured 488.7 → 498.2 µs (+1.9%) while
+`GFX_VLINE 128px` went 2.08 → 1.64 ms (−21%), `GFX_FILL 64x64` 3.32 → 2.88 ms
+(−13%) and `GFX_FRAME 64x64` −11%; over a scripted scene's window raises the
+mean fill fell 4–16% (docs/plans/khp1/vga.md).
+
+**The replace-mode interiors of `vga_solid_rect` and `gfx_fill_gray` store
+words.** `rep stosw` is 14 clocks a word on an 8088 against `rep stosb`'s 10 a
+byte, and nothing about a planar byte makes a word store different from two
+byte stores: with Set/Reset on all four planes the CPU value is ignored, and
+the gray fill's row is one dither byte, so `AL = AH` is the word. The odd byte
+is split off by choosing the LOOP once a call (`shr bx,1` then one of two row
+loops, the second ending in a `stosb`), never by a per-row test, so a one-byte
+interior is a `rep` of no iteration and a `stosb` and costs what it did. §5.7.1's
+fold is untouched: DI still ends each row `count` bytes on, so `add di, dx`
+still ends it. **On a 16-bit bus** the word may straddle (the interior starts
+at whatever parity `x1/8 + 1` has); a straddling word is two bus cycles, which
+is the byte loop's bus traffic with fewer instructions, so it is never slower.
+Measured (gfxbench, MartyPC `os8088_xt_vga`, kernel hot-paths pass 1):
+`GFX_FILL 256x128` 13.37 → 10.67 ms, `GFX_FILL 64x64` 3.56 → 3.32 ms,
+`GFX_FILL_GRAY 64x64` 4.08 → 3.89 ms; `GFX_FILL 8x8` does not move.
+
 ### 5.8 `gfx_restore` can put back PART of its buffer
 
 `gfx_restore` and `gfx_blit4` are both off §11.3's clipped list for one stated
@@ -7405,6 +7466,36 @@ it. The principle that decides between the two consumers stands and is
 unaffected: **who already holds the pixels** — if only the kernel can, that is
 `WF_SAVEU`; if the application already does, it needs telling which part to put
 back.
+
+#### 5.8.1 The planar save and restore move WORDS, in a loop chosen once a plane
+
+`vga_save_vram` and `vga_restore_vram` are the VGA's busiest bodies by time,
+not by calls: the window manager's save-under (§11.96) banks and returns whole
+window rects through them, and a menu's drop and dismissal are one each
+(§12.2). Measured on MartyPC's 4.77 MHz VGA XT at the base of kernel hot-paths
+pass 1, a raise of Paint over Note Pad spent 133 ms in saves and 53 in
+restores against 51 in every fill together. (The pointer's cell went through
+them too, on every mouse packet, until the same pass gave the planar pointer
+its own walks in mouse.inc - §7.1.)
+
+Each plane's rows are copied as WORDS: `rep movsw` is 25 clocks a word on an
+8088 against `rep movsb`'s 17 a byte. A read in read mode 0 loads the latches
+and answers the Read Map's plane whatever its width, and with Set/Reset off and
+the Bit Mask FF a word write lands both CPU bytes through the Map Mask, so the
+bytes moved are exactly the bytes they were. **The odd byte is split off by
+choosing the LOOP, once a plane**, not by a per-row `jnc`: an even word count,
+or the same with a trailing `movsb` - so the word form wins at every width, a
+one-byte row included (it then runs a `rep` of no iteration and the `movsb`).
+The row steps are registers computed once a plane; the restore's sub-rect step
+(`[gfx_sub_rs]`) is read into BP while DS is still `KERNEL_SEG`, which is what
+retired the `cs:`-overridden memory add every row paid. Neither body's
+contract, buffer layout or result changed.
+
+**Measured** (MartyPC `os8088_xt_vga`, exact guest cycles inside each body,
+the same scripted scene on both kernels; docs/plans/khp1/vga.md): a menu's
+drop save is 188,240 → 138,856 cycles (39.4 → 29.1 ms) and its dismissal's
+restore 199,357 → 145,101 (41.8 → 30.4 ms); a raise of Paint over Note Pad
+spent 132.9 → 99.4 ms in saves and 52.6 → 36.3 in restores.
 
 ### 5.9 `band.inc` — the 1bpp BAND COMPOSER (a knob: `BAND=1` compiles it in)
 
