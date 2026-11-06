@@ -542,7 +542,7 @@ static int w_built(int bi, int argc)
         /* 8.4: v1 ships no clip carriage, so this refuses politely and says
          * so once. The name is specified now so it is not re-invented, and
          * 9.11 is why it would freeze the desktop if it did play. */
-        os88_toast("playSound: this bundle carries no clips.", 0);
+        os88_toast("No sound clips in bundle", 0);
         return w_nres(WT_NULL, 0);
 
     case WB_TONE:
@@ -653,7 +653,7 @@ static void ovl_menubuild(void *win)
             pos += 2 + 2 * nit;
         }
         if (nm > W_APPMENUS)
-            os88_toast("This app declares more menus than the bar holds.", 0);
+            os88_toast("Too many menus for bar", 0);
     }
     os88_menu_set(win, &w_menus);
 }

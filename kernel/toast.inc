@@ -82,7 +82,7 @@
 
 section .text
 
-TOAST_MAX   equ 24              ; characters, AND IT IS THE TIGHT ONE (SPEC.md
+; TOAST_MAX = 24 (kernel.asm, beside TOASTSTR) characters, AND IT IS THE TIGHT ONE (SPEC.md
                                 ; 59.8). The clock's field is ([vid_wm8] -
                                 ; [vid_clk_hx]) / 8 = 200/8 = 25 cells on
                                 ; every screen this runs on - 640 and 720 both
@@ -103,10 +103,13 @@ TOAST_MAX   equ 24              ; characters, AND IT IS THE TIGHT ONE (SPEC.md
                                 ; - and the sweep behind it found TWENTY-ONE
                                 ; over the cap in six files, ten of them in
                                 ; `HIBER.DRV`, which is a MODULE and was never
-                                ; walked. `tests/unit/t_toast.py` is the gate
-                                ; now: it reads this very `equ` rather than
-                                ; carrying a copy, and `tests/toastlong.txt`
-                                ; is the ratchet its false positives live in
+                                ; walked. Inferring which strings were toasts
+                                ; missed a shape every round after that, so
+                                ; the length is now the ASSEMBLER's: a fixed
+                                ; message is a TOASTSTR (kernel.asm), which
+                                ; fails the build at its own line when it is
+                                ; long, and tests/unit/t_toast.py proves every
+                                ; toast argument is one
 TOAST_TICKS equ 55              ; ~3.0 s at 18.2 Hz: long enough to read eight
                                 ; words on a 4.77MHz machine, short enough
                                 ; that it is gone before it becomes furniture

@@ -159,9 +159,9 @@
   "sources": [
    "apps/c64"
   ],
-  "stamped": "bd6ed742",
-  "strings": "4e85a1fc2ca74b10",
-  "why": "SAVE, the folder, character sets"
+  "stamped": "38069791",
+  "strings": "9f15ac039135842b",
+  "why": "toast messages cut to TOAST_MAX (SPEC.md 59.10.1); the messages the page quotes are updated to the new words"
  },
  "CALC_O88": {
   "sources": [
@@ -263,9 +263,9 @@
   "sources": [
    "kernel/ctrl.inc"
   ],
-  "stamped": "1b5a0fd9",
-  "strings": "5a8f150309d151bc",
-  "why": "kernel size pass 16: ctrl.inc's changes are internal - the save's no-system-disk line moved into CTRL.DRV with its text unchanged, and SYSTEM.CFG/KERNEL.SYS are staged into cp_sbuf; nothing a user reads changed"
+  "stamped": "38069791",
+  "strings": "968a5adf84f05f2f",
+  "why": "toast messages written as TOASTSTR and over-length ones cut to TOAST_MAX (SPEC.md 59.10.1); no words the page quotes or describes change"
  },
  "CWORD": {
   "sources": [],
@@ -277,9 +277,9 @@
   "sources": [
    "apps/cword"
   ],
-  "stamped": "55642792",
-  "strings": "e29c72eb33b83e26",
-  "why": "Undo, Cut/Copy/Paste keys, Ctrl+F Search, Alt+F4, Y/N/C on the save prompt, draggable ruler markers, labelled indent boxes, Confirm Changes and RTF keeping every format, all driven under MartyPC"
+  "stamped": "38069791",
+  "strings": "cd315d8f05825318",
+  "why": "toast messages cut to TOAST_MAX (SPEC.md 59.10.1); the messages the page quotes are updated to the new words"
  },
  "CYCLONE_O88": {
   "sources": [
@@ -565,9 +565,9 @@
   "sources": [
    "kernel/hiber.inc"
   ],
-  "stamped": "ea7b512a",
-  "strings": "98dbfbe0d4d32714",
-  "why": "MC4's streaming resume: a full pool no longer greys the item, only no memory above 1MB does; added 'Hibernate: fragmented'; 'No room above 1MB' kept for a resume on less extended memory"
+  "stamped": "38069791",
+  "strings": "f80029845cffca5e",
+  "why": "toast messages cut to TOAST_MAX (SPEC.md 59.10.1); the messages the page quotes are updated to the new words"
  },
  "HOUSE_PNG": {
   "sources": [],
@@ -673,9 +673,9 @@
   "sources": [
    "apps/loom"
   ],
-  "stamped": "6495d304",
-  "strings": "f1ec8a4b0eb77b99",
-  "why": "the Packing toast now brackets only the compile; the status line, which the page describes, still says Packing... for the whole verb - unchanged"
+  "stamped": "38069791",
+  "strings": "df1b6e84bf10b542",
+  "why": "toast messages cut to TOAST_MAX (SPEC.md 59.10.1); the messages the page quotes are updated to the new words"
  },
  "MEDIA": {
   "sources": [],
@@ -807,9 +807,9 @@
   "sources": [
    "apps/paccman"
   ],
-  "stamped": "2206227d",
-  "strings": "1ed7784a6a152635",
-  "why": "only docs/PACCMAN-PORT-PLAN.md -> docs/plans/completed/ path renames in comments and README.md; nothing the page describes changed"
+  "stamped": "38069791",
+  "strings": "860c9413154506bd",
+  "why": "toast messages cut to TOAST_MAX (SPEC.md 59.10.1); the messages the page quotes are updated to the new words"
  },
  "PAINT_O88": {
   "sources": [
@@ -983,9 +983,9 @@
   "sources": [
    "apps/scribe"
   ],
-  "stamped": "9deeee7d",
-  "strings": "9002627c285a05c8",
-  "why": "Exit lists Alt+F4, which Scribe now handles; the welcome files are SCWELCOM.RTF and SCWELCOM.DOC; the Insert Picture 'not placed' note removed (the message reads 'WxH placed'); About box line checked on MartyPC"
+  "stamped": "38069791",
+  "strings": "417a79e27c4548c2",
+  "why": "toast messages written as TOASTSTR and over-length ones cut to TOAST_MAX (SPEC.md 59.10.1); no words the page quotes or describes change"
  },
  "SCWELCOM_RTF": {
   "sources": [],
@@ -1249,9 +1249,9 @@
    "kernel/vidext.inc",
    "kernel/ctrl.inc"
   ],
-  "stamped": "1b5a0fd9",
-  "strings": "287b8f561883cf80",
-  "why": "kernel size pass 16: ctrl.inc's changes are internal - the save's no-system-disk line moved into CTRL.DRV with its text unchanged, and SYSTEM.CFG/KERNEL.SYS are staged into cp_sbuf; nothing a user reads changed"
+  "stamped": "38069791",
+  "strings": "9a119e740c33a0bb",
+  "why": "toast messages written as TOASTSTR and over-length ones cut to TOAST_MAX (SPEC.md 59.10.1); no words the page quotes or describes change"
  },
  "VIDEO_O88": {
   "sources": [
@@ -1287,9 +1287,9 @@
   "sources": [
    "apps/weave"
   ],
-  "stamped": "7ec8cb8a",
-  "strings": "ac1b906ade71c22c",
-  "why": "checked: no-bundle and refusal screens now name Bundle > Open Bundle..., which the page already says"
+  "stamped": "38069791",
+  "strings": "561b07689a677058",
+  "why": "toast messages written as TOASTSTR and over-length ones cut to TOAST_MAX (SPEC.md 59.10.1); no words the page quotes or describes change"
  },
  "WELCOME_BAS": {
   "sources": [],
@@ -1381,9 +1381,9 @@
   "sources": [
    "apps/word"
   ],
-  "stamped": "9deeee7d",
-  "strings": "466d7146ee799a0e",
-  "why": "Exit lists Alt+F4, which Word now handles (checked on MartyPC)"
+  "stamped": "38069791",
+  "strings": "bd9d9db5d783e988",
+  "why": "toast messages cut to TOAST_MAX (SPEC.md 59.10.1); the messages the page quotes are updated to the new words"
  },
  "WRITING_MD": {
   "sources": [],
@@ -1403,8 +1403,8 @@
   "sources": [
    "apps/xtmp3"
   ],
-  "stamped": "24c3d243",
-  "strings": "4f1c265a642e8c1e",
-  "why": "only an About-card credit line changed (ec45f031 / 'by jggonz'); the page already says the card shows who made it, its credits, or a line about it, so nothing quoted is wrong"
+  "stamped": "38069791",
+  "strings": "952a5583ac539493",
+  "why": "toast messages written as TOASTSTR and over-length ones cut to TOAST_MAX (SPEC.md 59.10.1); no words the page quotes or describes change"
  }
 }

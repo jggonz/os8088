@@ -1805,7 +1805,7 @@ static int c64_tick(void)
                 c64_sid_tries = 0;
                 if (!c64_sid_said) {
                     c64_sid_said = 1;
-                    c64_say("No square voice here - no SID sound.");
+                    c64_say("No square voice: no SID.");
                 }
             } else if (c64_sid_voice1() >= 0) {
                 c64_sid_dirty = 0;
@@ -1815,7 +1815,7 @@ static int c64_tick(void)
                 c64_sid_tries = 0;
                 if (!c64_sid_said) {
                     c64_sid_said = 1;
-                    c64_say("The speaker is busy - no SID sound.");
+                    c64_say("Speaker busy: no SID.");
                 }
             }
         }
@@ -2161,7 +2161,7 @@ static void *ovl_main(void)
      * so out loud rather than the assumption that does not. */
     if (c64_m.romseg < 0x0E00) {
         os88_mem_free(c64_m.ramseg);
-        os88_toast("C64: the ROM claim is too low in memory", 0);
+        os88_toast("C64: ROM too low", 0);
         return 0;
     }
     /* DRIVE 8'S TRAP (11.5): the KERNAL's serial LOAD, just past SEARCHING

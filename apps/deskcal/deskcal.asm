@@ -1862,14 +1862,14 @@ dc_s_rem:   db 'Reminder ', 0       ; the selected appointment's...
 dc_s_def:   db 'Default: ', 0       ; ...or a new one's (<= 24 in all)
 %defstr DC_NAPPT_S DC_NAPPT
 %defstr DC_NTASK_S DC_NTASK
-dc_s_afull: db 'Calendar is full (', DC_NAPPT_S, ')', 0
-dc_s_tfull: db 'Task list is full (', DC_NTASK_S, ')', 0
-dc_s_long:  db 'At most 25 letters', 0
-dc_s_tlong: db 'A task: at most 23', 0
-dc_s_qdel:  db 'Delete again to confirm', 0
-dc_s_dmg:   db 'Calendar file damaged', 0
+TOASTSTR dc_s_afull, 'Calendar is full (', DC_NAPPT_S, ')'
+TOASTSTR dc_s_tfull, 'Task list is full (', DC_NTASK_S, ')'
+TOASTSTR dc_s_long, 'At most 25 letters'
+TOASTSTR dc_s_tlong, 'A task: at most 23'
+TOASTSTR dc_s_qdel, 'Delete again to confirm'
+TOASTSTR dc_s_dmg, 'Calendar file damaged'
 
-dc_s_about: db 'Desk Calendar by jggonz', 0
+TOASTSTR dc_s_about, 'Desk Calendar by jggonz'
 
 %include "dcdate.inc"
 %include "dcdata.inc"

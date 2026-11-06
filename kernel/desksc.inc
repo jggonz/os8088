@@ -595,7 +595,7 @@ sc_s_remx   db MENU_DIS
 sc_s_rem    db 'Remove Shortcut'    ; NO NUL OF ITS OWN: it ends on sc_nul's,
 sc_nul      db 0                ; ...which is also an EMPTY name, for a
                                 ; document's open. Nothing may go between
-sc_s_nf     db 'Shortcut not found (?:)', 0   ; 23: exactly a toast
+TOASTSTR sc_s_nf, 'Shortcut not found (?:)'   ; 23: exactly a toast
 sc_bdg      db 1, 10            ; the badge: 10x10, one word across - a box
             times 10 dw 0x07FE  ; the mask: the whole box white
             dw 0x07FE, 0x0402, 0x043A, 0x041A, 0x042A   ; the box, and an arrow
@@ -1697,10 +1697,10 @@ sc_m_serx:
     popf
     ret
 
-sc_s_room   db 'No room on the desktop', 0  ; the image's own strings: a toast
-sc_s_many   db 'Too many shortcuts', 0      ; copies, and these cost the
-sc_s_path   db 'Path too long', 0           ; kernel nothing (SPEC.md 2.8)
-sc_s_self   db 'A link cannot replace itself', 0
+TOASTSTR sc_s_room, 'No room on the desktop' ; the image's own strings: a toast
+TOASTSTR sc_s_many, 'Too many shortcuts'    ; copies, and these cost the
+TOASTSTR sc_s_path, 'Path too long'         ; kernel nothing (SPEC.md 2.8)
+TOASTSTR sc_s_self, 'Cannot replace itself'
 
 ; =============================================================================
 section .boot2                    ; the BOOT half (SPEC.md 2.5.1): runs once,
@@ -2048,7 +2048,7 @@ as_boot:                        ; (BLOBCALL from kmain_o)
 
 as_s_dir:   db 'AUTOSTRT', 0
 as_s_dirn   equ $ - as_s_dir
-as_s_skip:  db 'Autostart skipped', 0
+TOASTSTR as_s_skip, 'Autostart skipped'
 as_find:    times DSK_FIND_SZ db 0
 %else
 section .cold

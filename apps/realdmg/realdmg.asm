@@ -3911,8 +3911,8 @@ rw_f9was:   db 0                    ; ...and F9
 rw_f10was:  db 0                    ; ...and F10, F11
 rw_f11was:  db 0
 rw_lossq:   db 0                    ; Screen's toggles for the worker
-rw_s_bw:    db 'Two shades: On', 0  ; (rw_lossyt's: each "On", then its
-rw_s_bw2:   db 'Two shades: Off', 0 ;   "Off")
+TOASTSTR rw_s_bw, 'Two shades: On'  ; (rw_lossyt's: each "On", then its
+TOASTSTR rw_s_bw2, 'Two shades: Off' ;   "Off")
 rw_lflq:    db 0                    ; F12: the log to be written by the UI
                                     ;   task (rw_onwake, rw_fsenter's end)
 rw_ftyped:  db 0                    ; ...and this look's (rw_fedge)
@@ -4852,6 +4852,9 @@ RW_MW           equ MENU_MAXCH      ; glyphs an item, its mark and key with it
 %1: db MENU_DIS, ' ', %2
 %strlen %%a %2
 %strlen %%b %3
+%if %%a > TOAST_MAX                 ; rw_note TOASTS an item's text, its mark
+  %error "RW_MI: the item's text is longer than a toast shows (TOAST_MAX, SPEC.md 59.10)"
+%endif                              ; and key stripped: it must fit the bar
     times RW_MW - 1 - %%a - %%b db ' '  ; (fails the build when it is too long)
 %if %%b
     db %3
@@ -4917,7 +4920,7 @@ RW_SSV          equ 7               ;   only, a 14-item menu being taller
 RW_SLD          equ 8               ;   than CGA's 200 lines - then Save,
 RW_SREC         equ 9               ;   Load, and the replays)
 RW_SPLY         equ 10
-rw_it_sep:      db MENU_DIS, '----------------------', 0
+TOASTSTR rw_it_sep, MENU_DIS, '----------------------'
     RW_MI rw_it_load, 'Load Game...', ''
     RW_MI rw_it_reset, 'Reset', ''
     RW_MI rw_it_pause, 'Pause', ''
@@ -4965,9 +4968,9 @@ rw_it_sep:      db MENU_DIS, '----------------------', 0
     RW_MI rw_it_recs, 'Stop Recording', 'F6'
     RW_MI rw_it_ply, 'Play Replay', 'F7'
     RW_MI rw_it_plys, 'Stop Replay', 'F7'
-rw_s_prfst:     db 'Static reads the profile', 0
-rw_s_jroom:     db 'No room: Interpreter', 0
-rw_s_bignx:     db 'Cache: for the next game', 0
+TOASTSTR rw_s_prfst, 'Static reads the profile'
+TOASTSTR rw_s_jroom, 'No room: Interpreter'
+TOASTSTR rw_s_bignx, 'Cache: for the next game'
 rw_s_cfg:       db 'REALDMG.CFG', 0
 rw_spdit:       dw rw_it_spd0, rw_it_spd1, rw_it_spd2, rw_it_spd3
 rw_sndit:       dw rw_it_snd0, rw_it_snd1, rw_it_snd2
@@ -4980,8 +4983,8 @@ rw_jmenu:       db 1, 3, 2          ; CPU's items 0-2: the mode each chooses
 rw_spdtab:      dw 256, 230, 192, 128   ; Speed, 256ths of the Game Boy's
 
 rw_s_fps:       db 'fps', 0
-rw_s_pfree:     db 'Pacing: Free', 0
-rw_s_pstdy:     db 'Pacing: Steady', 0
+TOASTSTR rw_s_pfree, 'Pacing: Free'
+TOASTSTR rw_s_pstdy, 'Pacing: Steady'
 rw_s_jit:       db ' JIT', 0
 rw_s_aot:       db ' AOT', 0
 rw_s_open1:     db 'Machine > Load Game', 0
@@ -4991,21 +4994,21 @@ rw_s_slow1:     db 'Windowed is slow:', 0
 rw_s_slow2:     db 'Alt+Enter for', 0
 rw_s_slow3:     db 'Full Screen', 0
 rw_s_stop2:     db 'an invalid opcode', 0
-rw_s_big:       db 'REALDMG: needs more XMS', 0
-rw_s_notrom:    db 'REALDMG: not a GB ROM', 0
-rw_s_cgb:       db 'REALDMG: needs GB Color', 0
+TOASTSTR rw_s_big, 'REALDMG: needs more XMS'
+TOASTSTR rw_s_notrom, 'REALDMG: not a GB ROM'
+TOASTSTR rw_s_cgb, 'REALDMG: needs GB Color'
 rw_s_mbc:       db 'REALDMG: MBC '
 rw_s_mbcx:      db 'h unknown', 0
-rw_s_room:      db 'REALDMG: no room for ROM', 0
-rw_s_read:      db 'REALDMG: read failed', 0
+TOASTSTR rw_s_room, 'REALDMG: no room for ROM'
+TOASTSTR rw_s_read, 'REALDMG: read failed'
 %ifdef RDG_AOT
-rw_s_pm:        db 'PRE: not on kern_mega', 0
-rw_s_other:     db 'REALDMG: not this game', 0
-rw_s_ameta:     db 'REALDMG: bad precompile', 0
+TOASTSTR rw_s_pm, 'PRE: not on kern_mega'
+TOASTSTR rw_s_other, 'REALDMG: not this game'
+TOASTSTR rw_s_ameta, 'REALDMG: bad precompile'
 rw_s_ano:       db 'REALDMG: no ', 0
 %endif
-rw_s_noram:     db 'REALDMG: no room for RAM', 0
-rw_s_nosave:    db 'REALDMG: save failed', 0
+TOASTSTR rw_s_noram, 'REALDMG: no room for RAM'
+TOASTSTR rw_s_nosave, 'REALDMG: save failed'
 
 rw_ablines:
     dw rw_ab1, rw_ab2, rw_ab3, rw_ab8, rw_ab9, rw_ab3, rw_ab4, rw_ab5, rw_ab7, 0

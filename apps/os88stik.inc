@@ -2867,12 +2867,12 @@ stik_dname  db STIK_DATNAME, 0
 stik_dsys   db 'SYSTEM', 0
 stik_dapp   db 'APPDATA', 0
 %ifdef STIK_ISOPEN
-stik_isopen db STIK_ISOPEN, 0
+TOASTSTR stik_isopen, STIK_ISOPEN
 %else
-stik_isopen db 'Already open', 0
+TOASTSTR stik_isopen, 'Already open'
 %endif
 %ifdef STIK_DESKONLY
-stik_nodesk db 'No desk layer (DESK.DRV)', 0
+TOASTSTR stik_nodesk, 'No desk layer (DESK.DRV)'
 %endif
 %strlen STIK_CAPLEN STIK_CAP
 %if STIK_CAPLEN > 12             ; the row's caption is 13 bytes, its NUL in

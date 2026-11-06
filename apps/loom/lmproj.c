@@ -291,7 +291,7 @@ static int lm_save(int slot)
      * into whatever folder we happen to stand in. */
     if (lm_projhave
         && os88_file_goto_q_mark(lm_projplace.clus, lm_projplace.vol) != 0) {
-        lm_say("The project's folder is unreachable - was the disk swapped?");
+        lm_say("Project folder not found");
         return -1;
     }
     /* PINNED ACROSS THE WRITE (WEAVE-SPEC 1.2.6, SPEC.md 66.3 rule 5): the
@@ -714,7 +714,7 @@ static void lm_open_pend(void *win)
     lm_mkname(lm_stem, "WML");
     os88_strcpy(lm_argname, lm_line, sizeof(lm_argname));
     if (!ovl_openproj(win, lm_argname))
-        lm_say("LOOM could not load its overlay; a project cannot be opened.");
+        lm_say("LOOM overlay won't load");
 }
 
 /* ============================================================================
@@ -876,7 +876,7 @@ static void lm_pack(void)
     os88_toast("", 0);                  /* retired: the write shows the bar */
     if (!ok && !lm_failed()) {
         lm_pack_free();
-        lm_say("LOOM could not load its overlay; no bundle can be packed.");
+        lm_say("LOOM overlay won't load");
         lm_side_paint();
         lm_status_paint(0);
         return;
@@ -919,7 +919,7 @@ static void lm_pack(void)
          * PLAIN's 240. It is kept as a REPORT rather than removed because a
          * writer that ever answers this way must say so on the glass instead
          * of writing an empty file over the author's last good bundle. */
-        lm_say("Packed 0 bytes - nothing was written.");
+        lm_say("Packed 0 bytes - no file");
     } else if (written != 0) {
         lm_l0();
         lm_ls(lm_amsg);

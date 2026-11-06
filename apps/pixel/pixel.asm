@@ -3969,14 +3969,14 @@ px_s_mem:   db 'Memory: ', 0
 px_s_k:     db 'K', 0
 px_s_ttl:   db 'PiXEL', 0
 px_s_dashsp: db ' - ', 0
-px_s_notfile: db 'Not a file here', 0       ; toasts: 24 glyphs at most
-px_s_badpart: db 'PiXEL part is damaged', 0 ; (SPEC.md 59.10)
-px_s_busy:  db 'Still opening a picture', 0
-px_s_diskback: db "Put PiXEL's disk back", 0
-px_s_later: db 'Not in this build yet', 0
-px_s_nopico: db 'No picture open', 0
-px_s_noother: db 'No other picture here', 0
-px_s_nofs:  db 'No full screen here', 0
+TOASTSTR px_s_notfile, 'Not a file here'    ; toasts: 24 glyphs at most
+TOASTSTR px_s_badpart, 'PiXEL part is damaged' ; (SPEC.md 59.10)
+TOASTSTR px_s_busy, 'Still opening a picture'
+TOASTSTR px_s_diskback, "Put PiXEL's disk back"
+TOASTSTR px_s_later, 'Not in this build yet'
+TOASTSTR px_s_nopico, 'No picture open'
+TOASTSTR px_s_noother, 'No other picture here'
+TOASTSTR px_s_nofs, 'No full screen here'
 px_s_opening: db 'Opening ', 0
 px_s_pct:   db '%', 0
 px_s_fitsp: db 'Fit ', 0
@@ -4015,7 +4015,7 @@ px_s_r3:    db 'depth not read', 0
 px_s_r4:    db 'packing not read', 0
 px_s_r5:    db 'cut short', 0
 px_s_r6:    db 'damaged', 0
-px_s_r7:    db 'not enough memory', 0
+TOASTSTR px_s_r7, 'not enough memory'
 px_s_r8:    db 'disk read failed', 0
 px_s_r9:    db 'right-to-left', 0
 px_s_r10:   db 'not read yet', 0

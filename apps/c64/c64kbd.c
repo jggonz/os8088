@@ -1104,7 +1104,7 @@ static void ovl_clip_service(unsigned base)
         } else {
             n = c64_copy_screen(seg, base);
             if (os88_clip_put_seg(seg, 0, (unsigned)n) != 0)
-                c64_say("The clipboard refused the screen.");
+                c64_say("Clipboard refused it.");
             os88_mem_free(seg);             /* ...and it is gone before the
                                              * slice runs: the claim lives for
                                              * one wake and no longer */
@@ -1132,7 +1132,7 @@ static void ovl_clip_service(unsigned base)
         c64_paste_seg = seg;
         got = os88_clip_get_seg(seg, 0, (unsigned)C64_PASTEMAX);
         if (got <= 0) {
-            c64_say("The clipboard refused to be read.");
+            c64_say("Clipboard would not read");
             c64_paste_stop();               /* which frees the claim */
             return;
         }
@@ -1144,7 +1144,7 @@ static void ovl_clip_service(unsigned base)
         c64_paste_n = got;                  /* WHAT FITS, which is CX and not
                                              * the clipboard's whole length */
         if ((unsigned)n > (unsigned)C64_PASTEMAX)
-            c64_say("Pasting the first 2048 bytes.");  /* C64_PASTEMAX, spelled
+            c64_say("Pasting first 2048 bytes");  /* C64_PASTEMAX, spelled
                                                         * out; hosttest checks
                                                         * the two still agree */
     }

@@ -456,7 +456,7 @@ af_s_mark:   db '>', 0
 af_s_nomark: db ' ', 0
 af_s_sethd:  db 'SETTINGS', 0
 af_s_setkeys: db 'UP DOWN LEFT RIGHT', 0
-af_s_noset:  db 'Arcade: no settings', 0
+TOASTSTR af_s_noset, 'Arcade: no settings'
 
 ; af_setkey - in SETTINGS mode, W_ONKEY's: AL = ASCII, AH = scan. Up/Down
 ; the setting, Left/Right/Space/Enter its choice, Esc or Insert leaves.

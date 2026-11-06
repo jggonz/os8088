@@ -431,7 +431,7 @@ dsl_entry:
     pop es
     stc
     ret
-dsl_s_notpm: db "DOS.O88 is kern_mega's", 0
+TOASTSTR dsl_s_notpm, "DOS.O88 is kern_mega's"
 dsl_pmok:
 %endif
 %ifdef DOS_WIN16

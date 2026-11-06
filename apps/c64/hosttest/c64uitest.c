@@ -5733,7 +5733,7 @@ int main(int argc, char **argv)
         if (i3 < 2)
             fail("the retry gave up on the FIRST refusal - that is the "
                  "permanent silence this row exists to catch");
-        if (strcmp(last_toast, "The speaker is busy - no SID sound.") != 0)
+        if (strcmp(last_toast, "Speaker busy: no SID.") != 0)
             fail("the SID gave up SILENTLY - a refusal the user cannot see "
                  "is the shape SPEC.md 47 forbids");
         t0 = n_tone;
@@ -6371,7 +6371,7 @@ int main(int argc, char **argv)
             fail("a TRUNCATED paste said nothing");
         {
             char want[64];
-            sprintf(want, "Pasting the first %d bytes.", C64_PASTEMAX);
+            sprintf(want, "Pasting first %d bytes", C64_PASTEMAX);
             if (strcmp(c64_msg, want) != 0)
                 fail("the truncation message and C64_PASTEMAX have drifted "
                      "apart - the message names the number and the number is "
@@ -6514,7 +6514,7 @@ int main(int argc, char **argv)
          * whole visible effect is a message that is false is what SPEC.md 47
          * exists to stop, and PERFORMANCE.md's "degrade by tier" gives the
          * answer: os88_cpu() is a fact the code can test. */
-        if (strcmp(c64_msg, "Warp mode on - no change.") != 0)
+        if (strcmp(c64_msg, "Warp on - no change.") != 0)
             fail("Warp mode on CPU_8086 announced a speed-up the machine "
                  "does not deliver (§4.4, SPEC.md 47)");
         /* ...AND ITS LENGTH IS CHECKED AT THE SOURCE, NOT ON THE COPY. This
@@ -6573,12 +6573,12 @@ int main(int argc, char **argv)
      * ==================================================================== */
     {
         static const char *msgs[] = {
-            "A file dialog is already open.",
+            "A file dialog is open.",
             "Not a D64 image.",
             "D64: no heap for it.",
             "D64: cannot read it.",
             "Disk on drive 8.",
-            "Disk on drive 8; no room for recompiler.",
+            "Disk on 8; no recompiler",
             "Recompiler on.", "Recompiler off.",
             "No memory for the copy.",
             "No memory for the paste.",
@@ -6586,28 +6586,28 @@ int main(int argc, char **argv)
             "Joysticks normal.",
             "Joysticks swapped.",
             "Not a T64 tape image.", "T64: cannot read it.",
-            "Autostarting...", "Autostart: no READY. prompt.",
+            "Autostarting...", "Autostart: no READY.",
             "Sprite collisions off.", "Sprite collisions on.",
             "Exists: ABCDEFGH.PRG", "Not saved: ABCDEFGH.PRG",
             "Saved ABCDEFGH.PRG",
             "T64: no program in it.", "T64: no heap for it.",
-            "No bands here - text only.",
-            "No square voice here - no SID sound.",
+            "No bands - text only.",
+            "No square voice: no SID.",
             "PRG over 65533 bytes.",
             "PRG runs past $FFFF.",
             "PRG too short.",
             "PRG: cannot read it.",
             "PRG: no heap for it.",
-            "Pasting the first 2048 bytes.",
+            "Pasting first 2048 bytes",
             "Paused.",
             "Running.",
             "ScrollLock for joystick",
             "The clipboard is empty.",
-            "The clipboard refused the screen.",
-            "The clipboard refused to be read.",
-            "The speaker is busy - no SID sound.",
+            "Clipboard refused it.",
+            "Clipboard would not read",
+            "Speaker busy: no SID.",
             "Warp mode off.",
-            "Warp mode on - no change.",
+            "Warp on - no change.",
             "Warp mode on.",
             "C64.ROM missing - see README.TXT",   /* ovl_status, msg == 2 */
             "Main CPU: JAM at $FFFF"              /* ...and msg == 3 (§4.5) */

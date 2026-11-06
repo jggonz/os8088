@@ -498,7 +498,7 @@ static void ovl_auto_step(void)
     n = (int)((c64_frames_lo - c64_au_fr) & 0xFFFFu);
     if (n > C64_AU_LATE) {
         ovl_au_end();
-        c64_say("Autostart: no READY. prompt.");
+        c64_say("Autostart: no READY.");
         return;
     }
     if (n >= 5 && ovl_at_ready())

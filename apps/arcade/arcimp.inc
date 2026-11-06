@@ -951,11 +951,13 @@ ar_setfind:
     ret
 
 ar_s_dat:    db 'ARCADE.DAT', 0
-ar_s_added:  db 'Arcade: '
+TOASTRUN ar_s_added
+             db 'Arcade: '
 ar_s_addn:   db '0 set(s) added', 0
-ar_s_noset:  db 'Arcade: no set in it', 0
-ar_s_wrongz: db 'Arcade: not a set I know', 0
-ar_s_badzip: db 'Arcade: cannot read it', 0
-ar_s_bigzip: db 'Arcade: zip too big', 0
+TOASTEND
+TOASTSTR ar_s_noset, 'Arcade: no set in it'
+TOASTSTR ar_s_wrongz, 'Arcade: not a set I know'
+TOASTSTR ar_s_badzip, 'Arcade: cannot read it'
+TOASTSTR ar_s_bigzip, 'Arcade: zip too big'
 ar_s_notzip: db 'Arcade: pick a .ZIP', 0
-ar_s_nodlg:  db 'Arcade: no chooser', 0
+TOASTSTR ar_s_nodlg, 'Arcade: no chooser'

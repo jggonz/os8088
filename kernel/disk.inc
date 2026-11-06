@@ -698,7 +698,8 @@ dsk_dbg_phc:  times 6 dw 0
 ; characters of a quoted string. It starts as DASHES: a CERR_IO with no failed
 ; int 13h behind it (a file error, a driver volume) says so instead of
 ; repeating an old transfer.
-dsk_flstr:   db 'S'
+TOASTRUN dsk_flstr
+             db 'S'
 dsk_fl_st:   db '-- '
 dsk_fl_cyl:  db '--/'
 dsk_fl_hd:   db '-/'
@@ -709,9 +710,7 @@ dsk_fl_run:  db '-- '
 dsk_fl_mot:  db '--'
 dsk_fl_cnt:  db '--'
 dsk_fl_end:  db 0
-%if dsk_fl_end - dsk_flstr > TOAST_MAX
-  %error "dsk_flstr is longer than a toast can show (SPEC.md 59.8)"
-%endif
+TOASTEND
 section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
                                 ; segment of its own. DS is still KERNEL_SEG,
                                 ; so the DATA stays in .text at every toggle

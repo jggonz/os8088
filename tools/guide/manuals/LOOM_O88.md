@@ -221,7 +221,7 @@ mistake.
 **View > Preview** shows the app's card as Weave will lay it out, without
 running anything: buttons do not press and fields do not take typing. A
 grid or a game area appears as an empty frame of the right size. The status
-line says **Preview: layout and controls only - Weave runs the app**. Choose **View > Edit** to
+line says **Preview: layout only**. Choose **View > Edit** to
 go back to the text. Preview packs the project to draw it, so a mistake
 shows up here just as it would in a pack.
 

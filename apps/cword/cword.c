@@ -2606,7 +2606,7 @@ static void ovl_pap_apply(void *win, int al, int sp, int op, int li, int fi,
 
         idx = ovl_pap_find(nal, nsp, nop, nli, nfi, nri);
         if (idx < 0) {
-            cw_toast("Too many different paragraph formats.");
+            cw_toast("Too many para formats.");
             break;
         }
         if (m >= 0)
@@ -2780,7 +2780,7 @@ void os88_onwake(void *win)
      * refused GOTO_QM also MOVES NOTHING, so the arm is what stops a load of a
      * same-named document from wherever we happen to stand. */
     if (os88_file_goto_q_mark(cw_argplace.clus, cw_argplace.vol) != 0)
-        cw_toast("Could not open that folder.");
+        cw_toast("Cannot open that folder.");
     else
         ovl_file_load(win, cw_argname, 0, 0);
     cw_redraw_all(win);
