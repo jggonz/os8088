@@ -268,62 +268,270 @@ def rgb_frames(proj, sid, w, h, kind, progress=_nop):
     return fr
 
 
-def battle_palette(proj, k, progress=_nop):
-    """The VGA rendition's K colours (8-bit RGB), in index order, black first
-    and the rest darkest first (SPEC.md 126.3.2) - chosen FOR COLOUR, as
-    Video Encoder's `--palette colourN` chooses them (os88venc.colour_kmeans:
-    k-means in CIELAB, each pixel weighted by its chroma, black fixed), over
-    a sample of every video source. A pixel-count k-means put the entries
-    where the most pixels are, so a dark battle's colours were greys, and its
-    reds and blues went grey too (the owner's "red, teal and shades of
-    grey"). The band's four CGA colours are NOT kept unless
-    target.vga_band_cga asks: the band takes the nearest of the K
-    (band_index). A battle with no video source: the band's four, padded"""
+VGA_SLOTS = {16: 4, 8: 1, 4: 0}    # a clip's own colours, by K (126.3.2)
+PLAN_SAMPLES = 4000     # pixels a stream, for the choice
+PLAN_IDLE_W = 3.0       # the idle loop is on the glass most of the play
+PLAN_CANDS = 96
+
+
+def vga_slots(proj, k=None):
+    """How many of VGA's K colours are each clip's OWN (126.3.2): swapped in
+    as the clip starts, the rest shared. target.vga_clip_colours, or 4 of
+    16, 1 of 8 and none of 4 - the owner's plan"""
     t = proj.d["target"]
+    k = k or t.get("vga_colours", 8)
+    n = t.get("vga_clip_colours")
+    if n is None:
+        n = VGA_SLOTS.get(k, 0)
+    return max(0, min(int(n), k - 4))
+
+
+def vga_streams(proj):
+    """What VGA's colours are chosen over: (key, source, first, end, weight)
+    for the idle loop ("idle") and every video clip a build plays. A clip's
+    key is its id: wherever it plays (an action, an opening, a loop cut
+    from it) it has its own colours"""
+    d = proj.d
+    out = []
+    i = d["idle"]
+    if d["sources"].get(i["source"], {}).get("kind") not in (None, "scene"):
+        a, b = i["loop"]
+        out.append(("idle", i["source"], a, b, PLAN_IDLE_W))
+    for cid in sorted(set(proj.clips_used())):
+        c = d["clips"].get(cid)
+        if c is None or d["sources"][c["source"]]["kind"] == "scene":
+            continue
+        out.append((cid, c["source"], c["in"], c["out"] + 1, 1.0))
+    return out
+
+
+def _lab2rgb8(C):
+    """CIELAB (D65) rows to 8-bit sRGB through the DAC's six bits"""
+    C = np.atleast_2d(C)
+    fy = (C[:, 0] + 16) / 116
+    fx, fz = fy + C[:, 1] / 500, fy - C[:, 2] / 200
+    fi = lambda f: np.where(f ** 3 > 0.008856, f ** 3,
+                            (f - 16 / 116) / 7.787)
+    xyz = np.stack([fi(fx) * 0.95047, fi(fy), fi(fz) * 1.08883], -1)
+    m = np.linalg.inv(np.array([[0.4124, 0.3576, 0.1805],
+                                [0.2126, 0.7152, 0.0722],
+                                [0.0193, 0.1192, 0.9505]]))
+    c = np.clip(xyz @ m.T, 0, 1)
+    c = np.where(c > 0.0031308, 1.055 * c ** (1 / 2.4) - 0.055, 12.92 * c)
+    v6 = np.clip(np.rint(c * 63), 0, 63).astype(int)
+    return [tuple(int((x << 2) | (x >> 4)) for x in v) for v in v6]
+
+
+def _lum(c):
+    return (77 * c[0] + 150 * c[1] + 29 * c[2], tuple(c))
+
+
+def plan_colours(streams, k, slots, fixed, band=None, band_w=0.0):
+    """VGA's colours by ERROR (126.3.2, step 2): SHARED K - SLOTS entries
+    over every stream, and SLOTS more for each. STREAMS: {key: ((N, 3)
+    sRGB pixels, weight)}; FIXED: colours always shared (black, white; the
+    band's four when kept); BAND: the band's colours, a stream of their own
+    at BAND_W (the menu draws with the nearest shared). The error of a
+    pixel is its squared CIELAB distance to the nearest colour it may use,
+    weighted 1 + C*/8 as Video Encoder's colourN weights it (a red that no
+    entry is near can never be dithered into being; a grey can); the
+    shared are chosen greedily out of candidates spread over the footage
+    (k-means++), each the one that most lowers the whole battle's error,
+    then each stream's own by the same rule against the shared, then two
+    rounds of each shared entry swapped for the best candidate given the
+    streams' own, then three Lloyd steps (each entry the weighted mean of
+    the pixels nearest it). Deterministic. Returns (shared, {key: own}),
+    8-bit, shared darkest first with black first, each own darkest first"""
+    import os88cgacomp as cc
+    keys = sorted(streams)
+    if band:
+        keys.append("\0band")
+        streams = dict(streams)
+        streams["\0band"] = (np.array(band, float), band_w)
+    lab, wt = {}, {}
+    for key in keys:
+        px, w = streams[key]
+        L = cc.srgb2lab(np.asarray(px, np.float64))
+        lab[key] = L.astype(np.float32)
+        wt[key] = ((1 + np.hypot(L[:, 1], L[:, 2]) / 8) * w /
+                   max(1, len(L))).astype(np.float32)
+    fixl = [cc.srgb2lab(np.array([c], np.float64))[0] for c in fixed]
+    nshare = k - slots
+    pool = np.concatenate([lab[x] for x in keys])
+    pw = np.concatenate([wt[x] for x in keys]).astype(np.float64)
+    rng = np.random.default_rng(1)
+    cands = list(fixl)
+    near = np.min([((pool - c) ** 2).sum(1) for c in cands], 0) \
+        if cands else np.full(len(pool), 1e9)
+    for _ in range(PLAN_CANDS):
+        dd = near * pw
+        if not dd.sum():
+            break
+        c = pool[rng.choice(len(pool), p=dd / dd.sum())]
+        cands.append(c)
+        near = np.minimum(near, ((pool - c) ** 2).sum(1))
+    cands = np.array(cands, np.float32)
+    D = {x: ((lab[x][:, None, :] - cands[None]) ** 2).sum(2) for x in keys}
+    nf = len(fixl)
+    shared = list(range(nf))
+    own = {x: [] for x in keys}
+
+    def floor(x, sh, ow):
+        cols = sh + ow
+        return D[x][:, cols].min(1) if cols else np.full(len(D[x]), 1e9,
+                                                         np.float32)
+
+    def pick(xs, base, n):
+        """N more of the candidates for streams XS from floors BASE: the one
+        that lowers their weighted error most, in turn"""
+        got = []
+        for _ in range(n):
+            gain = sum((wt[x][:, None] * np.maximum(
+                base[x][:, None] - D[x], 0)).sum(0) for x in xs)
+            for j in got:
+                gain[j] = -1
+            j = int(np.argmax(gain))
+            got.append(j)
+            for x in xs:
+                base[x] = np.minimum(base[x], D[x][:, j])
+        return got
+    own_keys = [x for x in keys if x != "\0band"]
+    if slots:                   # EACH STREAM'S OWN FIRST: what it alone
+        for x in own_keys:      # wants most, so that the shared go to what
+            own[x] = pick([x], {x: floor(x, shared, [])}, slots)  # the
+    for rnd in range(3):        # streams have in common (shared first gave
+        if rnd == 0:            # one clip's colour to all, and the others
+            base = {x: floor(x, shared, own.get(x, []))     # went without)
+                    for x in keys}
+            shared += pick(keys, base, max(0, nshare - nf))
+        else:                   # each shared entry swapped for the best
+            for i in range(nf, len(shared)):    # candidate, the streams'
+                rest = shared[:i] + shared[i + 1:]  # own as they are
+                base = {x: floor(x, rest, own.get(x, [])) for x in keys}
+                shared[i] = pick(keys, base, 1)[0]
+        if slots:
+            for x in own_keys:
+                own[x] = pick([x], {x: floor(x, shared, [])}, slots)
+    # Lloyd: each entry to the weighted mean of
+    C = cands.astype(np.float64)    # the pixels nearest it
+    sh = [C[j].copy() for j in shared]
+    ow = {x: [C[j].copy() for j in own[x]] for x in own_keys}
+    for _ in range(3):
+        acc = [[np.zeros(3), 0.0] for _ in sh]
+        oacc = {x: [[np.zeros(3), 0.0] for _ in ow[x]] for x in own_keys}
+        for x in keys:
+            pal = np.array(sh + ow.get(x, []))
+            a = np.argmin(((lab[x][:, None, :] - pal[None]) ** 2).sum(2), 1)
+            for j in range(len(pal)):
+                m = a == j
+                if not m.any():
+                    continue
+                s_ = (lab[x][m] * wt[x][m, None]).sum(0)
+                w_ = float(wt[x][m].sum())
+                tgt = acc[j] if j < len(sh) else oacc[x][j - len(sh)]
+                tgt[0] += s_
+                tgt[1] += w_
+        for j in range(nf, len(sh)):
+            if acc[j][1] > 0:
+                sh[j] = acc[j][0] / acc[j][1]
+        for x in own_keys:
+            for j in range(len(ow[x])):
+                if oacc[x][j][1] > 0:
+                    ow[x][j] = oacc[x][j][0] / oacc[x][j][1]
+    shr = [tuple(c) for c in fixed] + _lab2rgb8(np.array(sh[nf:])) \
+        if len(sh) > nf else [tuple(c) for c in fixed]
+    shr = sorted(shr[:nshare], key=lambda c: (c != (0, 0, 0),) + _lum(c))
+    owr = {x: sorted(_lab2rgb8(np.array(ow[x])), key=_lum) if ow[x] else []
+           for x in own_keys}
+    return shr, owr
+
+
+def vga_plan(proj, progress=_nop):
+    """THE BATTLE'S VGA COLOURS (126.3.2): dict(k, slots, shared - the
+    K - SLOTS every frame may use, black first and the rest darkest first
+    - and own - {stream: its SLOTS}, "idle" the idle loop's, which the
+    header's sixteen carry and every other is swapped for as its clip
+    starts). Chosen by plan_colours over a sample of every stream; black
+    and white always shared (black alone at 4); the band's four CGA colours
+    too when target.vga_band_cga keeps them, else the band's colours are a
+    stream of their own, weighted by the band's share of the screen. A
+    battle with no video: the band's four, padded"""
+    t = proj.d["target"]
+    k = t.get("vga_colours", 8)
+    slots = vga_slots(proj, k)
     band = [tuple(c) for c in palette_rgb(t["palette"])]
     keep = bool(t.get("vga_band_cga"))
-    srcs = sorted((sid, s["path"]) for sid, s in proj.d["sources"].items()
-                  if s["kind"] != "scene")
-    if not srcs:
-        return band[:k] + [(0, 0, 0)] * max(0, k - 4)
+    streams = vga_streams(proj)
+    if not streams:
+        sh = (band + [(0, 0, 0)] * k)[:k - slots]
+        return dict(k=k, slots=slots, shared=sh, own={})
     if keep and k <= 4:
-        return band[:k]
-    key = (json.dumps([t["palette"], srcs, k, keep, rend_size(proj, "vga4"),
-                       fit_of(proj), scale_of(proj, "vga4")]))
+        return dict(k=k, slots=0, shared=band[:k], own={})
+    w, h, _ = rend_size(proj, "vga4")
+    key = json.dumps(["p2", t["palette"], k, slots, keep, w, h,
+                      fit_of(proj), scale_of(proj, "vga4"),
+                      [(x, file_hash(proj.here(proj.d["sources"][sid]
+                                               ["path"])), a, b, wt)
+                       for x, sid, a, b, wt in streams]])
     if key in _PALS:
         return _PALS[key]
-    w, h, _ = rend_size(proj, "vga4")
-    samp = []
     rng = np.random.RandomState(1)
-    for sid, _ in srcs:
-        fr = rgb_frames(proj, sid, w, h, "vga4", progress)
+    samp = {}
+    for x, sid, a, b, wt in streams:
+        fr = rgb_frames(proj, sid, w, h, "vga4", progress)[a:b]
+        if not len(fr):
+            continue
         px = fr.reshape(-1, 3)
-        samp.append(px[rng.randint(0, len(px), min(len(px), 20000))])
-    import os88venc as VE
-    n = k - 4 if keep else k
-    dac = VE.colour_kmeans(np.concatenate(samp), n)
-    cols = [tuple((dac[3 * i + c] << 2) | (dac[3 * i + c] >> 4)
-                  for c in range(3)) for i in range(n)]
-    if keep:                        # the band's own four, then all of them
-        cols = sorted(set(cols) | set(band), key=lambda c: (
-            c != (0, 0, 0), 77 * c[0] + 150 * c[1] + 29 * c[2], c))
-        cols = (cols + [cols[-1]] * k)[:k]
-    _PALS[key] = cols
-    return cols
+        samp[x] = (px[rng.randint(0, len(px), min(len(px), PLAN_SAMPLES))],
+                   wt)
+    fixed = [(0, 0, 0)] + ([(255, 255, 255)] if k > 4 else [])
+    if keep:
+        fixed = sorted(set(fixed) | set(band), key=lambda c: (
+            c != (0, 0, 0),) + _lum(c))
+    cr = t["canvas"][3]
+    bw = 0.0 if keep else PLAN_IDLE_W * max(0, 200 - cr) / float(cr) * \
+        (max(0, k - 4) / 12.0) ** 2     # (the menu's own colours: two of
+    #       16, about one of 8, none of 4 - the owner's plan. At 8 the full
+    #       pull cost the footage: a title's error 11.1 -> 13.1)
+    sh, own = plan_colours(samp, k, slots, fixed[:k - slots],
+                           None if keep else band, bw)
+    sh = (sh + [sh[-1]] * k)[:k - slots]
+    out = dict(k=k, slots=slots, shared=sh, own=own)
+    _PALS[key] = out
+    return out
+
+
+def battle_palette(proj, k=None, progress=_nop):
+    """The K colours the header carries (126.3.2), in index order: the
+    shared, then the idle loop's own - the palette at the play's start"""
+    p = vga_plan(proj, progress)
+    idle = p["own"].get("idle") or []
+    own = (idle + [p["shared"][-1]] * p["slots"])[:p["slots"]]
+    return list(p["shared"]) + own
+
+
+def clip_palette(proj, cid, progress=_nop):
+    """Clip CID's K colours in index order: the shared, then its own (the
+    idle loop's for "idle", or a clip with none)"""
+    p = vga_plan(proj, progress)
+    own = p["own"].get(cid) or p["own"].get("idle") or []
+    own = (list(own) + [p["shared"][-1]] * p["slots"])[:p["slots"]]
+    return list(p["shared"]) + own
 
 
 _PALS = {}
 
 
-def band_index(proj, k):
-    """The band's four CGA colours as indexes of battle_palette's K: FOUR
-    DIFFERENT entries (the band's text, cursor and ground must stay apart),
-    the assignment nearest in all (exact when target.vga_band_cga kept
-    them). Fewer than four entries: the nearest each"""
+def band_index(proj, k=None):
+    """The band's four CGA colours as indexes of the SHARED colours (126.3.2:
+    a clip's own are swapped, the band's stay): FOUR DIFFERENT entries (the
+    band's text, cursor and ground must stay apart), the assignment nearest
+    in all (exact when target.vga_band_cga kept them). Fewer than four
+    shared: the nearest each"""
     import itertools
-    pal = np.array(battle_palette(proj, k), float)
+    pal = np.array(vga_plan(proj)["shared"], float)
     band = np.array(palette_rgb(proj.d["target"]["palette"]), float)
-    d = ((band[:, None, :] - pal[None]) ** 2).sum(2)        # 4 x K
+    d = ((band[:, None, :] - pal[None]) ** 2).sum(2)        # 4 x S
     if len(pal) < 4:
         return [int(x) for x in d.argmin(1)]
     best = min(itertools.permutations(range(len(pal)), 4),
@@ -413,18 +621,22 @@ def herc_of_cga(px, rows):
                                yy, 1][..., None]], 2).reshape(rows, w * 2)
 
 
-def rend_screens(proj, sid, kind, progress=_nop, full=False):
+def rend_screens(proj, sid, kind, progress=_nop, full=False, stream=None,
+                 rng=None):
     """Source SID's frames in rendition KIND, as the adapter will show them:
     palette indexes for cga4 and vga4, bits for herc. FULL: over the whole
-    screen (a full-screen opening), not the canvas"""
+    screen (a full-screen opening), not the canvas. RNG (first, end): those
+    frames alone; on VGA they are quantized on their own, in the colours of
+    STREAM (a clip's id, or "idle"; 126.3.2)"""
     if kind == "cga4":
-        return screens(proj, sid, progress, full)
+        sc = screens(proj, sid, progress, full)
+        return sc[rng[0]:rng[1]] if rng else sc
     s = proj.d["sources"][sid]
     if s["kind"] == "scene":
         base = screens(proj, sid, progress)     # (CGA values: on VGA, each
         if kind == "vga4":                      # the nearest of the K)
-            lut = np.array(band_index(proj, proj.d["target"].get(
-                "vga_colours", 8)), np.uint8)
+            lut = np.array(band_index(proj), np.uint8)
+            base = base[rng[0]:rng[1]] if rng else base
             return [lut[f] for f in base]
         _, crow, frow = rend_size(proj, "herc")
         cr = proj.d["target"]["canvas"][3]
@@ -435,48 +647,82 @@ def rend_screens(proj, sid, kind, progress=_nop, full=False):
                                       herc_of_cga(f[cr:], frow - crow)]))
             else:                   # for one onto Hercules' band - scaled
                 out.append(herc_of_cga(f, crow))    # whole, the picture ran
-        return out                                  # into the band's rows
+        return out[rng[0]:rng[1]] if rng else out   # into the band's rows
     w, h, fh = rend_size(proj, kind)
     if full:
         h = fh
     pct = scale_of(proj, kind)
     pw, ph, x0, y0 = boxed(w, h, pct)
     t = proj.d["target"]
-    k = t.get("vga_colours", 8)
+    pal = clip_palette(proj, stream or "idle") if kind == "vga4" else None
     key = hashlib.sha1(json.dumps(
-        ["q2", file_hash(proj.here(s["path"])), kind, w, h, k, t["palette"],
-         KNOLL_STABLE, KNOLL_SCORE, KNOLL_CAP, HOLD_LUM, battle_palette(proj, k) if kind == "vga4"
-         else None] + ([pct] if pct < 100 else []) +
+        ["q3", file_hash(proj.here(s["path"])), kind, w, h, t["palette"],
+         KNOLL_STABLE, KNOLL_SCORE, KNOLL_CAP, HOLD_LUM, pal,
+         list(rng) if rng and kind == "vga4" else None] +
+        ([pct] if pct < 100 else []) +
         ([fit_of(proj)] if fit_of(proj) != "fill" else []) +
         [clip_of(proj)]).encode()).hexdigest()[:20]
     npy = os.path.join(cache_dir(proj), key + ".q.npy")
     if os.path.exists(npy):
-        return list(np.load(npy))
-    fr = rgb_frames(proj, sid, pw, ph, kind, progress)
-    n = len(screens(proj, sid, progress, full))   # (the CGA encode's count)
-    fr = fr[:n] if len(fr) >= n else np.concatenate(
-        [fr, np.repeat(fr[-1:], n - len(fr), 0)])
+        q = list(np.load(npy))
+        return q if kind == "vga4" or not rng else q[rng[0]:rng[1]]
+    fr = _rgb_n(proj, sid, pw, ph, kind, progress, full)
+    if kind == "vga4" and rng:  # VGA: a STREAM's frames with its colours
+        fr = fr[rng[0]:rng[1]]  # (126.3.2), quantized on their own
     progress("analyse", 0, 1, "%s (%s)" % (sid, kind))
-    q = quant_vga(fr, battle_palette(proj, k), clip_of(proj)) \
+    q = quant_vga(fr, pal, clip_of(proj)) \
         if kind == "vga4" else quant_herc(fr, clip_of(proj))
     if pct < 100:
         q = pad_into(q, w, h, x0, y0)
     np.save(npy + ".part.npy", q)
     os.replace(npy + ".part.npy", npy)
-    return list(q)
+    q = list(q)
+    return q if kind == "vga4" or not rng else q[rng[0]:rng[1]]
+
+
+def _rgb_n(proj, sid, pw, ph, kind, progress, full):
+    """Source SID's rgb frames at PW x PH, as many as the CGA encode's"""
+    fr = rgb_frames(proj, sid, pw, ph, kind, progress)
+    n = len(screens(proj, sid, progress, full))   # (the CGA encode's count)
+    return fr[:n] if len(fr) >= n else np.concatenate(
+        [fr, np.repeat(fr[-1:], n - len(fr), 0)])
+
+
+def vga_alone(proj, cid, i, full=False, progress=_nop):
+    """Frame I of clip CID in the SHARED colours alone (126.3.2): a clip's
+    first frame, and its last before a seam onto the idle loop, are drawn
+    so - the screen holds none of any clip's own colours when the DAC
+    swaps them, so the swap changes nothing on the glass"""
+    c = proj.d["clips"][cid]
+    s = proj.d["sources"][c["source"]]
+    if s["kind"] == "scene":
+        return frames_of(proj, cid, progress, "vga4", full)[i]
+    w, h, fh = rend_size(proj, "vga4")
+    if full:
+        h = fh
+    pct = scale_of(proj, "vga4")
+    pw, ph, x0, y0 = boxed(w, h, pct)
+    fr = _rgb_n(proj, c["source"], pw, ph, "vga4", progress, full)
+    j = min(c["in"] + i, len(fr) - 1)
+    q = quant_vga(fr[j:j + 1], vga_plan(proj)["shared"], clip_of(proj))
+    if pct < 100:
+        q = pad_into(q, w, h, x0, y0)
+    return q[0]
 
 
 def frames_of(proj, cid, progress=_nop, kind="cga4", full=False):
-    """Clip CID's frames: its source's, in..out (FULL: the whole screen's)"""
+    """Clip CID's frames: its source's, in..out (FULL: the whole screen's) -
+    on VGA quantized in the clip's own colours (126.3.2)"""
     c = proj.d["clips"][cid]
-    return rend_screens(proj, c["source"], kind, progress, full)[
-        c["in"]:c["out"] + 1]
+    return rend_screens(proj, c["source"], kind, progress, full, cid,
+                        (c["in"], c["out"] + 1))
 
 
 def idle_of(proj, progress=_nop, kind="cga4"):
     i = proj.d["idle"]
     a, b = i["loop"]
-    return rend_screens(proj, i["source"], kind, progress)[a:b]
+    return rend_screens(proj, i["source"], kind, progress, False, "idle",
+                        (a, b))
 
 
 def _ffmpeg(path, rate, start=None, end=None):

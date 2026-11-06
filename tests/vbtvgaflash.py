@@ -91,13 +91,12 @@ def title_frames(data):
             bytes(surf[q * V.PLANE:q * V.PLANE + 40 * rows]), np.uint8))
             .reshape(rows, 320) for q in range(4)]
         out.append(pl[0] | (pl[1] << 1) | (pl[2] << 2) | (pl[3] << 3))
-    return out, rows
+    return out, rows, list(B.REND.dac)  # (the title's own colours loaded)
 
 
 def glass_flashes(tmp, data, syms, n):
     """The mean flash pixels a sample over N samples of the title loop"""
-    frames, rows = title_frames(data)
-    pal = [tuple(data[464 + 3 * i:467 + 3 * i]) for i in range(16)]
+    frames, rows, pal = title_frames(data)
     rgb = np.array([[(c << 2) | (c >> 4) for c in v] for v in pal], np.int16)
     allowed = np.zeros((rows, 320, 16), bool)
     yy, xx = np.arange(rows)[:, None], np.arange(320)[None, :]
@@ -163,8 +162,8 @@ def main():
                         LIFE, "-t", "4", "-pix_fmt", "yuv420p", mp4],
                        check=True)
         whole, banded = bundle(tmp, 0, mp4), bundle(tmp, 16, mp4)
-        fw, _ = title_frames(whole)
-        fb, _ = title_frames(banded)
+        fw = title_frames(whole)[0]
+        fb = title_frames(banded)[0]
         ok(len(fw) == len(fb) and all((x == y).all() for x, y in zip(fw, fb)),
            "0. the banded title decodes to the whole-frame one's %d frames"
            % len(fw))

@@ -50,7 +50,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import os88vid as V  # noqa: E402
 
 MAGIC = b"VBT1"
-VERSION = 9
+VERSION = 10
 SECTOR = 512
 ALIGN = 4096        # every region starts on 4 KB: OSAPI_FILE_READ_SEQ seeks
                     # and reads in CLUSTER multiples, and 4 KB covers every
@@ -127,6 +127,9 @@ class Rend:
         self.full = 348 if kind == "herc" else 200
         self.rows = rows
         self.pal = pal              # vga4: 16 (r, g, b), the DAC's six bits
+        self.dac = [tuple(c) for c in pal] if pal else [(0, 0, 0)] * 16
+        self.dac_check = True       # (a load onto its values on the screen
+        #                             is an error; verify's junk band aside)
         # a record's most: the rings' guard - 16 KB, or 32 where a whole
         # screen is more than 16 (VGA's planes, Hercules'), the engine's
         # [vb_cgkb] from the header's largest record
@@ -182,6 +185,14 @@ class Rend:
     def empty(self):
         return b"\0" if self.kind == "vga4" else EMPTY_LISTS
 
+    def pixels(self, surf, rows=None):
+        """vga4: SURF's pixel values, ROWS (the whole screen) x 320"""
+        rows = rows or self.full
+        pl = [np.unpackbits(np.frombuffer(bytes(
+            surf[q * V.PLANE:q * V.PLANE + 40 * rows]), np.uint8)).reshape(
+                rows, 320) for q in range(4)]
+        return pl[0] | (pl[1] << 1) | (pl[2] << 2) | (pl[3] << 3)
+
     def decode(self, surf, lists):
         """The lists onto SURF; their length"""
         if self.kind != "vga4":
@@ -190,6 +201,23 @@ class Rend:
         mv = memoryview(surf)
         while lists[at]:
             m = lists[at]
+            if m & DAC_SUB:         # A PALETTE LOAD (126.3.2): the screen
+                k = m & 0x7F        # must hold none of the values it loads
+                ents = [tuple(lists[at + 1 + 4 * j:at + 5 + 4 * j])
+                        for j in range(k)]
+                if self.dac_check:
+                    px = self.pixels(surf)
+                    on = np.isin(px, [e[0] for e in ents])
+                    if on.any():
+                        raise ValueError(
+                            "a palette load would recolour %d pixels on the "
+                            "screen (rows %d..%d)" % (int(on.sum()),
+                            int(np.nonzero(on.any(1))[0][0]),
+                            int(np.nonzero(on.any(1))[0][-1])))
+                for e in ents:
+                    self.dac[e[0]] = e[1:]
+                at += 1 + 4 * k
+                continue
             used = 0
             for p in range(4):
                 if m >> p & 1:
@@ -320,17 +348,20 @@ def seam_full(fl, target, rows):
         return rec(bytes(fl), target, REND.full)
 
 
-def capped_run(recs, fs, snd, rows, cap, log, name):
+def capped_run(recs, fs, snd, rows, cap, log, name, last_dac=None):
     """A streamed clip's records 1.. appended to RECS, each the frame's
     change from the screen before - unless the reader's model CAP says the
     engine will not have it in time (126.4.1): then as many of its ROWS as
     fit, taken on from where the last capped frame stopped, the rest left
     for the frames after it (each is a change from what is ON the screen).
-    The sound is never cut. The screen the clip ends on is returned"""
+    The sound is never cut. The screen the clip ends on is returned.
+    LAST_DAC (126.3.2): a palette load on its last record, which is then
+    drawn WHOLE - the load wants the screen it was planned for"""
     cur = fs[0]
     if cap is None:
         for i in range(1, len(fs)):
-            recs.append(rec(fs[i - 1], fs[i], rows, snd[i]))
+            recs.append(with_dac(rec(fs[i - 1], fs[i], rows, snd[i]),
+                                 last_dac if i == len(fs) - 1 else None))
         return fs[-1]
     g = geom(rows)
     per = cap["rate"] / float(cap["fps"])
@@ -339,7 +370,9 @@ def capped_run(recs, fs, snd, rows, cap, log, name):
     for i in range(1, len(fs)):
         avail = min(cap["hold"], avail + per)
         full = rec(cur, fs[i], rows, snd[i])
-        if len(full) <= avail:
+        if last_dac and i == len(fs) - 1:
+            full = with_dac(full, last_dac)
+        if len(full) <= avail or last_dac and i == len(fs) - 1:
             recs.append(full)
             cur = fs[i]
             avail -= len(full)
@@ -379,6 +412,30 @@ def rec(a, b, rows, audio=b""):
     if n > REND.recmax:
         raise ValueError("a record of %d bytes, over %d" % (n, REND.recmax))
     return struct.pack("<HH", n, len(audio)) + lists + audio
+
+
+DAC_SUB = 0x80     # vga4: a sub-record of N palette entries, 0x80 | N, each
+#                    (value, r, g, b) in the DAC's six bits (126.3.2)
+
+
+def with_dac(r, *loads):
+    """Record R loading LOADS (lists of (value, r, g, b); None skipped) into
+    the DAC once its picture is drawn (126.3.2: a clip's own colours,
+    swapped as it starts and back as it seams onto the idle loop) - a
+    sub-record after the picture's, before the lists' 0. R not yet padded"""
+    ents = [e for ld in loads if ld for e in ld]
+    if not ents or REND.kind != "vga4":
+        return r
+    n, alen = struct.unpack_from("<HH", r, 0)
+    body = r[REC_HDR:n - alen]
+    if not body or body[-1] != 0:
+        raise ValueError("a palette load on a record that is not VGA4's")
+    sub = bytes([DAC_SUB | len(ents)]) + b"".join(bytes(e) for e in ents)
+    if n + len(sub) > REND.recmax:
+        raise ValueError("a record of %d bytes, over %d" % (n + len(sub),
+                                                            REND.recmax))
+    return struct.pack("<HH", n + len(sub), alen) + body[:-1] + sub + \
+        b"\0" + r[n - alen:n]
 
 
 def rec_pad(r, k):
@@ -502,6 +559,8 @@ class Battle:
         self.capped = {}        # ...and what it did: clip -> frames capped
         self.cap_ring = None    # ...and the ring it took the engine to have
         self.any_key = False    # any key leaves the title (header 348)
+        self.vga = None         # vga4: (K, a clip's own colours) (126.3.2)
+        self.dac_base = None    # ...the idle loop's own, as a palette load
         self.cover = None       # (a PIL image, its line): the window's
         self.name = None        # the battle's name (the window's title)
         self.rend = Rend("cga4", rows)  # the adapter it is for
@@ -570,12 +629,19 @@ def build(b):
         # says so, and the engine brings the band in at the first opening
         # without it - or, every opening full, once the last is over
         flags = CF_OPENING | CF_OWNSND | (CF_FULL if o.get("full") else 0)
+        # ITS OWN COLOURS (126.3.2): loaded by the record that draws its
+        # frame 0 (shared alone), and the idle loop's by the one that draws
+        # the last opening's last, before its seam onto the loop
+        base0 = b.dac_base if last and len(fr) == 1 else None
+        dac0 = o.get("dac")
         if o.get("enter"):          # ENTERED at the title's frames, as an
             flags |= CF_ENTER       # action is at the idle loop's: an entry
             cur = surface_of(fr[0], REND.full)      # from each anchor, and
             for ka in o["anchors"]:                 # its record 0 its sound
                 anch.append((ka, len(ents) >> 4))
-                ents += entry_rec(rec(title_s[ka], cur, REND.full))
+                ents += entry_rec(with_dac(rec(title_s[ka], cur, REND.full),
+                                           dac0, base0))
+            dac0 = None
             recs.append(rec(None, None, REND.full, snd[0]))
             prev = cur
             fr, snd = fr[1:], snd[1:]
@@ -585,11 +651,13 @@ def build(b):
         # clears. Over the whole screen, a span's gap closed across a band
         # row put the black under the canvas over the band (the rules'
         # bytes, eaten while the opening played)
-        for f, a in zip(fr, snd):
+        for j, (f, a) in enumerate(zip(fr, snd)):
             cur = surface_of(f, REND.full)
             rw = REND.full if (o.get("full") or not recs and wasfull) \
                 else rows
-            recs.append(rec(prev, cur, rw, a))
+            recs.append(with_dac(rec(prev, cur, rw, a), dac0 if j == 0
+                                 else None, b.dac_base if last and
+                                 j == len(fr) - 1 else None))
             prev = cur
         exit_to = 0
         if last:            # the scene opening seams onto the idle loop
@@ -616,7 +684,8 @@ def build(b):
         wasfull = bool(o.get("full"))
         regions.append(with_entries(ents, recs, o["name"]))
         clip_rows.append(dict(name=o["name"], nrec=len(recs), flags=flags,
-                              exit=exit_to, anch=anch, esz=len(ents) >> 4))
+                              exit=exit_to, anch=anch, esz=len(ents) >> 4,
+                              dac=o.get("dac")))
         ents = bytearray()
     # --- the actions: an entry from each anchor, IN FRONT OF THE CLIP'S
     # RECORDS (format 8, VBATTLE-RAM-PLAN R2: they were a resident region
@@ -642,13 +711,18 @@ def build(b):
         fs = [surface_of(f, rows) for f in c["frames"]]
         anch = []
         ents = bytearray()
+        one = c.get("joins") and len(fs) == 1
         for k in c.get("anchors", b.anchors):
             anch.append((k, len(ents) >> 4))
-            ents += entry_rec(rec(idle_s[k], fs[0], rows))
+            ents += entry_rec(with_dac(rec(idle_s[k], fs[0], rows),
+                                       c.get("dac"),    # (its own colours:
+                                       b.dac_base if one else None))  # 126.3.2)
         snd = frame_sound(place(c.get("cues", {}), len(fs), spf, b.sfx),
                           len(fs), spf, False)
         recs = [rec(None, None, rows, snd[0])]
-        last = capped_run(recs, fs, snd, rows, b.cap, b.capped, c["name"])
+        last = capped_run(recs, fs, snd, rows, b.cap, b.capped, c["name"],
+                          b.dac_base if c.get("joins") and len(fs) > 1
+                          else None)
         exit_to = c.get("exit", 0)
         flags = CF_ENDS if c.get("ends") else 0
         if c.get("joins"):
@@ -659,15 +733,16 @@ def build(b):
                 fl = bytearray(surface_of(full_of(c["frames"][-1]),
                                           REND.full))    # (the screen the
                 rows_into(fl, last, geom(rows), 0, rows)  # clip ENDED on,
-                recs.append(seam_full(fl, surface_of(     # its band up) -
-                    full_of(c["join_loop"]), REND.full),  # its frame 0 -
-                    rows))                                          # over
-            else:                                   # the whole screen when
-                recs.append(rec(last, surface_of(    # it is full screen
-                    c["join_loop"], rows), rows))
+                recs.append(with_dac(seam_full(fl, surface_of(  # its band
+                    full_of(c["join_loop"]), REND.full),  # up) - its frame 0
+                    rows), c.get("join_dac")))              # - over the
+            else:                                   # whole screen when it
+                recs.append(with_dac(rec(last, surface_of(  # is full screen
+                    c["join_loop"], rows), rows), c.get("join_dac")))
         regions.append(with_entries(ents, recs, c["name"]))
         clip_rows.append(dict(name=c["name"], nrec=len(recs), flags=flags,
-                              exit=exit_to, anch=anch, esz=len(ents) >> 4))
+                              exit=exit_to, anch=anch, esz=len(ents) >> 4,
+                              dac=c.get("dac")))
     # --- the LOOPS (126.3.1): the title over the whole screen, an end loop
     # in the canvas. Record 0 from black, records 1..n-1, and record n the
     # seam back onto frame 0; each carries its frame's sound (frame 0's
@@ -682,10 +757,12 @@ def build(b):
         fr = [full_of(f) if full else f for f in lp["frames"]]
         ss = [surface_of(f, rw) for f in fr]
         snd = frame_sound(lp.get("sound"), len(ss), spf, True)
-        recs = [rec(surface_of(np.zeros_like(fr[0]), rw), ss[0], rw, snd[0])]
-        for i in range(1, len(ss)):
-            recs.append(rec(ss[i - 1], ss[i], rw, snd[i]))
-        recs.append(rec(ss[-1], ss[0], rw, snd[0]))
+        recs = [with_dac(rec(surface_of(np.zeros_like(fr[0]), rw), ss[0], rw,
+                             snd[0]), lp.get("dac"))]   # (126.3.2: frame 0,
+        for i in range(1, len(ss)):                     # however it is
+            recs.append(rec(ss[i - 1], ss[i], rw, snd[i]))  # drawn, loads
+        recs.append(with_dac(rec(ss[-1], ss[0], rw, snd[0]),    # its own
+                             lp.get("dac")))                    # colours)
         # ...laid out to be read ROUND (format 7, VBATTLE-MEMORY-PLAN 3.1):
         # record 0 padded to end on 4 KB, the lap a whole number of 4 KB,
         # the padding inside records past their lists
@@ -705,7 +782,8 @@ def build(b):
         regions.append(stream(recs))
         clip_rows.append(dict(name=lp["name"], nrec=len(recs), flags=flags,
                               exit=0, anch=[], lap=(len(recs[0]),
-                              sum(len(r) for r in recs[1:]) // ALIGN)))
+                              sum(len(r) for r in recs[1:]) // ALIGN),
+                              dac=lp.get("dac")))
         loop_ix[key] = len(clip_rows) - 1
         return loop_ix[key]
     def once_clip(lp, then):
@@ -721,21 +799,23 @@ def build(b):
         fr = [full_of(f) if full else f for f in lp["frames"]]
         ss = [surface_of(f, rw) for f in fr]
         snd = frame_sound(lp.get("sound"), len(ss), spf, True)
-        recs = [rec(surface_of(np.zeros_like(fr[0]), rw), ss[0], rw, snd[0])]
+        recs = [with_dac(rec(surface_of(np.zeros_like(fr[0]), rw), ss[0], rw,
+                             snd[0]), lp.get("dac"))]
         for i in range(1, len(ss)):
             recs.append(rec(ss[i - 1], ss[i], rw, snd[i]))
         if then == "join" and b.title:      # (from the canvas, the band up
             t0 = surface_of(full_of(b.title["frames"][0]), REND.full)
             f1 = surface_of(full_of(fr[-1]), REND.full)
-            recs.append(rec(f1, t0, REND.full) if full else
-                        seam_full(bytearray(f1), t0, rows))   # under it)
+            recs.append(with_dac(rec(f1, t0, REND.full) if full else
+                                 seam_full(bytearray(f1), t0, rows),
+                                 b.title.get("dac")))   # under it)
         flags = CF_ENDS | (CF_FULL if full else 0) | \
             (CF_OWNSND if lp.get("sound") is not None else 0) | \
             (CF_NOMUS if lp.get("sound") is not None and
              not lp.get("music_after") else 0)
         regions.append(stream(recs))
         clip_rows.append(dict(name=lp["name"], nrec=len(recs), flags=flags,
-                              exit=0, anch=[]))
+                              exit=0, anch=[], dac=lp.get("dac")))
         loop_ix[key] = len(clip_rows) - 1
         return loop_ix[key]
     title_ix = loop_clip(b.title, True) if b.title else NO_SFX
@@ -843,6 +923,7 @@ def build(b):
     if REND.pal:                        # vga4: the band's map (its four
         h[352:356] = bytes(REND.bmap)   # colours' values), and the sixteen
         h[464:512] = bytes(v for c in REND.pal for v in c)  # by value
+        h[349:351] = bytes(b.vga or (len(REND.codes), 0))   # K, a clip's own
     struct.pack_into("<II", h, 338, idl_at, len(idle))
     for i, (nm, o, ln) in enumerate(ui_tab):    # 96: the menu's effects
         struct.pack_into("<IH", h, 96 + 6 * i, o, ln)
@@ -859,6 +940,10 @@ def build(b):
         if c.get("lap"):            # a loop's lap: where, and its 4 KBs
             struct.pack_into("<IH", ct, at + 18, *c["lap"])
         struct.pack_into("<H", ct, at + 32, c.get("esz", 0))  # its entries
+        if c.get("dac"):            # vga4: its own colours (126.3.2; for a
+            ct[at + 34] = len(c["dac"])     # reader - the engine takes them
+            ct[at + 35:at + 35 + 3 * len(c["dac"])] = bytes(  # from the
+                v for e in c["dac"] for v in e[1:])     # records' loads)
         ct[at + 24:at + 32] = c["name"].upper().encode()[:8].ljust(8, b" ")
 
     at = len(h) + len(ct) + len(b.rules)    # THE ENDINGS' LINES (126.3.1),
@@ -969,6 +1054,7 @@ class Bundle:
                     bmap=tuple(data[352:356]) if kind == "vga4"
                     else (0, 1, 2, 3))
         self.rend = REND
+        self.vga = (data[349], data[350]) if kind == "vga4" else None
         self.idl_at, ilen2 = struct.unpack_from("<II", data, 338)
         nh = struct.unpack_from("<H", data, 398)[0]
         self.hold = [struct.unpack_from("<HH", data, 400 + 4 * i)
@@ -988,9 +1074,12 @@ class Bundle:
             lap = struct.unpack_from("<IH", data, at + 18) \
                 if flags & CF_LOOP else None
             esz = struct.unpack_from("<H", data, at + 32)[0] * 16
+            nown = min(data[at + 34], 4)
+            own = [tuple(data[at + 35 + 3 * j:at + 38 + 3 * j])
+                   for j in range(nown)]
             self.clips.append(dict(off=off, len=ln, nrec=nrec, flags=flags,
                                    exit=ex, anch=anch, name=name, lap=lap,
-                                   esz=esz))
+                                   esz=esz, own=own))
         self.ents_len = sum(c["esz"] for c in self.clips)
 
     def idle_rec(self, i):
@@ -1132,7 +1221,11 @@ def verify(data, quiet=False):
                 0, 256, len(s)).astype(np.uint8).tobytes(),
                 geom(REND.full), b.rows, REND.full - b.rows)
             decode(s, rs[-1])
-            decode(junk, rs[-1])
+            REND.dac_check = False      # (junk is no screen: the menu's
+            try:                        # values are the shared colours)
+                decode(junk, rs[-1])
+            finally:
+                REND.dac_check = True
             if c["flags"] & CF_JOINS and canvas(s) != idle[c["exit"]]:
                 raise ValueError("clip %s from anchor %d misses idle %d"
                                  % (c["name"], k, c["exit"]))
@@ -1163,7 +1256,11 @@ def verify(data, quiet=False):
             decode(s, r)
         rows_into(s, np.random.RandomState(7).randint(0, 256, len(s)).astype(
             np.uint8).tobytes(), geom(REND.full), b.rows, REND.full - b.rows)
-        decode(s, rs[-1])
+        REND.dac_check = False
+        try:
+            decode(s, rs[-1])
+        finally:
+            REND.dac_check = True
         if bytes(s) != title[0]:
             raise ValueError("the %s end clip %s's seam onto the title leaves "
                              "the band's rows to what was there (the menu)"
@@ -1197,16 +1294,40 @@ def battle_of(proj, progress=None, kind="cga4"):
     b = Battle(t["palette"], rows_, t["fps"], t["rate"])
     pal = None
     codes, bmap = None, (0, 1, 2, 3)
-    if kind == "vga4":              # ONE PALETTE for the battle (126.3.2):
-        k = t.get("vga_colours", 8)     # K colours chosen for colour, each
-        p8 = A_.battle_palette(proj, k, progress or (lambda *a: None))
-        codes = vga_codes(len(p8))      # on a group of planes by its index
+    slots = 0
+    if kind == "vga4":              # VGA'S COLOURS (126.3.2): K, the shared
+        plan = A_.vga_plan(proj, pg)    # and each clip's own SLOTS, each
+        k, slots = plan["k"], plan["slots"]     # colour on a group of planes
+        p8 = A_.battle_palette(proj)    # by its index; the header's are the
+        codes = vga_codes(len(p8))      # shared and the idle loop's own
         pal = [(0, 0, 0)] * 16          # (the DAC's six bits, by VALUE)
         for i, c in enumerate(p8):
             pal[codes[i]] = tuple(v >> 2 for v in c)
-        bmap = [codes[j] for j in A_.band_index(proj, k)]
+        bmap = [codes[j] for j in A_.band_index(proj)]
+        b.vga = (k, slots)
     b.rend = Rend(kind, rows_, pal, t.get("vga_bands", VGA_BANDS), codes,
                   bmap)
+
+    def dac_of(cid):
+        """Stream CID's own colours as a palette load: (value, r, g, b)"""
+        if not slots:
+            return None
+        cp = A_.clip_palette(proj, cid)
+        sh = len(cp) - slots
+        return [(codes[sh + j],) + tuple(v >> 2 for v in cp[sh + j])
+                for j in range(slots)]
+
+    def alone(cid, frames, last=False, full=False, off=0):
+        """FRAMES (clip CID's from its frame OFF) with the first - or the
+        LAST - in the shared colours alone: the frames a swap follows
+        (126.3.2)"""
+        if slots and len(frames):
+            frames = list(frames)
+            i = len(frames) - 1 if last else 0
+            full = frames[i].shape[0] > rows_     # (as tall as it was)
+            frames[i] = A_.vga_alone(proj, cid, off + i, full, pg)
+        return frames
+    b.dac_base = dac_of("idle")
     if t.get("burst_cap", True):    # THE READER'S MODEL (126.4.1): the
         import os88venc as VE_      # profile's disk at three quarters,
         disk = VE_.PROFILES.get(t.get("profile"), {}).get("disk") or 119000
@@ -1222,10 +1343,10 @@ def battle_of(proj, progress=None, kind="cga4"):
         c = d["clips"][o["clip"]]
         pg("clips", i, len(d["clips"]), o["clip"])
         full = bool(o.get("full"))
-        b.openings.append(dict(name=o["clip"], frames=A.frames_of(
-            proj, o["clip"], pg, kind, full=full),
-            sound=b.sfx[o["sound"]] if o.get("sound") else None,
-            exit=c["exit"], full=full))
+        b.openings.append(dict(name=o["clip"], frames=alone(
+            o["clip"], A.frames_of(proj, o["clip"], pg, kind, full=full),
+            full=full), sound=b.sfx[o["sound"]] if o.get("sound") else None,
+            exit=c["exit"], full=full, dac=dac_of(o["clip"])))
     # a clip only a loop or the title's way out plays is not an action's
     tt = d.get("title") or {}
     loops_only = {tt.get("clip"), tt.get("leave")} | {
@@ -1248,14 +1369,17 @@ def battle_of(proj, progress=None, kind="cga4"):
         pg("clips", i, len(d["clips"]), cid)
         spf = t["rate"] // t["fps"]
         cues = [(q["frame"], cue_key(q, b.sfx, spf)) for q in c["cues"]]
-        b.clips.append(dict(name=cid, frames=A.frames_of(proj, cid, pg, kind),
+        joins = c["joins"] and cid not in ending_clips
+        fr = alone(cid, A.frames_of(proj, cid, pg, kind))
+        if joins:                       # (its last frame before the seam
+            fr = alone(cid, fr, True)   # onto the idle loop: shared alone)
+        b.clips.append(dict(name=cid, frames=fr, dac=dac_of(cid),
                             # (THE ENEMY'S VICTORY AND DEFEAT CLIPS are
                             # endings, whatever their own flags: they end
                             # the battle and never go back to the idle
                             # loop - a dropped video's clip joins it, and
                             # its seam missed the end clip it joins)
-                            cues=cues, joins=c["joins"] and cid not in
-                            ending_clips, exit=c["exit"],
+                            cues=cues, joins=joins, exit=c["exit"],
                             ends=c["ends"] or cid in ending_clips,
                             anchors=c["anchors"]))
     if d["music"]:
@@ -1281,13 +1405,14 @@ def battle_of(proj, progress=None, kind="cga4"):
 
     def loop_of(lp, tag, full=False):
         c = d["clips"][lp["clip"]]
-        fr = A.frames_of(proj, lp["clip"], pg, kind, full=full)[
-            lp["loop"][0]:lp["loop"][1]]
+        fr = alone(lp["clip"], A.frames_of(proj, lp["clip"], pg, kind,
+                                           full=full)[
+            lp["loop"][0]:lp["loop"][1]], full=full, off=lp["loop"][0])
         x = None
         if lp.get("sound"):
             x = b.sfx[lp["sound"]]
         return dict(name=("%s%d" % (tag, lp["loop"][0]))[:8], frames=fr,
-                    sound=x, src=(lp["clip"], tuple(lp["loop"]),
+                    sound=x, dac=dac_of(lp["clip"]), src=(lp["clip"], tuple(lp["loop"]),
                                   lp.get("sound"), c["in"]))
     t = d.get("title")
     if t:
@@ -1295,7 +1420,9 @@ def battle_of(proj, progress=None, kind="cga4"):
         if t.get("leave"):              # the clip it is left by: opening 0,
             lc = d["clips"][t["leave"]]   # entered at the title's frames
             b.openings.insert(0, dict(      # (its sound: its cues, mixed,
-                name=t["leave"], frames=A.frames_of(proj, t["leave"], pg, kind),
+                name=t["leave"], dac=dac_of(t["leave"]),
+                frames=alone(t["leave"], A.frames_of(proj, t["leave"], pg,
+                                                     kind)),
                 sound=A.clip_sound(proj, t["leave"]),   # played as its own)
                 exit=lc["exit"], enter=True, anchors=list(t["anchors"]),
                 full=True))     # (the band not yet: the title's way out is
@@ -1325,6 +1452,10 @@ def battle_of(proj, progress=None, kind="cga4"):
                 if c["name"] == clip:
                     c["join_loop"] = lp["frames"][0]
                     c["join_full"] = lp.get("full")
+                    c["join_dac"] = lp.get("dac")
+    if b.openings:                  # THE LAST OPENING seams onto the idle
+        o = b.openings[-1]          # loop: its last frame shared alone
+        o["frames"] = alone(o["name"], o["frames"], True, full=o["full"])
     import vbtrules
     # the clips as the bundle numbers them: the openings first - and a
     # battle with none gets START at 0 (build) - then the rest

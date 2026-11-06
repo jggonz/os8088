@@ -242493,15 +242493,53 @@ then sets the mode, the palette and the decode.
   or `stretch`, the whole picture squeezed into it - for footage edited at
   a shape that is not quite ours (a 640 x 480 source on Hercules' 640 x 348
   lost its sides to the crop).
-- **VGA4** is mode 0Dh, 320 x 200 in four planes of 40-byte rows. ONE
-  palette for the battle (`vbtana.battle_palette`), 4, 8 or 16 colours
-  (`target.vga_colours`), **chosen from the footage FOR COLOUR** - Video
-  Encoder's `--palette colourN` (`os88venc.colour_kmeans`: k-means in
-  CIELAB, each pixel weighted by its chroma, black fixed), over a sample of
-  every video source. The pixel-count k-means it replaces put the entries
-  where most pixels are, and four of eight were the band's CGA colours: the
-  owner's "red, teal and shades of grey". **The band takes the nearest four
-  of them** (`vbtana.band_index`: four DIFFERENT entries, the assignment
+- **VGA4** is mode 0Dh, 320 x 200 in four planes of 40-byte rows, with K
+  colours (`target.vga_colours`: 4, 8 or 16). **SLOTS of them are each
+  clip's OWN** (`target.vga_clip_colours`; by default 4 of 16, 1 of 8,
+  none of 4 - the owner's plan) and the rest SHARED by every frame
+  (`vbtana.vga_plan`, format 10). The choice is BY ERROR
+  (`vbtana.plan_colours`): every stream - the idle loop and each video
+  clip a build plays, keyed by clip id wherever it plays - is sampled, and
+  a pixel's error is its squared CIELAB distance to the nearest colour it
+  may use, weighted 1 + C*/8 as Video Encoder's `--palette colourN`
+  weights it (a pattern dither reaches only the hull of its palette: a
+  grey can be dithered into being and a red no entry is near cannot). Each
+  stream's own are chosen first, greedily out of k-means++ candidates
+  spread over the footage, then the shared, the one that most lowers the
+  whole battle's error at a time, given those; then each stream's own
+  again against the shared, two rounds of each shared entry swapped for
+  its best candidate, and three Lloyd steps. Black and white are always
+  shared (black alone at 4); the idle loop counts three times a clip (it
+  is on the glass most), and the band's four CGA colours are a stream of
+  their own weighted by the band's share of the screen and by ((K - 4) /
+  12)^2 - the menu's own two of 16, about one of 8, none of 4. Shared
+  first gave one clip's colour to every clip and left the others without
+  theirs (`vbtgui`). Measured on scratch footage (a Mandelbrot title, an
+  Ikaruga clip), the mean CIELAB error of 4 x 4 blocks against the
+  source: at 16, 6.1 and 3.2 against one k-means palette's 6.8 and 6.9; at
+  8, 11.6 and 6.2 against 11.0 and 9.4.
+- **A clip's own colours are swapped in by its records** (format 10): a
+  VGA4 record's sub-records may include a PALETTE LOAD, a byte `80h | N`
+  and N entries of (value, r, g, b) in the DAC's six bits, after the
+  picture's sub-records, which `vb_decode` writes to ports 3C8h/3C9h once
+  the picture is drawn (`os88vbt.with_dac`). Three rules make it
+  invisible, whatever path the engine takes: a clip's FIRST frame, and
+  the last before a seam onto the idle loop, are drawn in the shared
+  colours alone (`vbtana.vga_alone`, quantized on its own); every record
+  that draws a clip's frame 0 - its record 0, each entry, a loop's seam
+  back onto it, a join onto it - loads that clip's own; the record that
+  draws the last frame before a seam onto the idle loop loads the loop's
+  (the header's), and that record is never capped (126.4.1). So when a
+  load happens the screen holds none of the values it loads, and nothing
+  on the glass changes colour. `os88vbt.verify` plays every path and
+  REFUSES a bundle where a load would recolour a pixel on the screen. The
+  header's sixteen at 464 are the shared and the idle loop's own (the
+  palette at the play's start); 349 is K and 350 SLOTS, and a clip's own
+  are in its clip-table row at 34 (a count, then three bytes each) for a
+  reader - the engine takes them from the records. Each clip is quantized
+  on its own in its own colours (`vbtana.rend_screens`' STREAM).
+- **The band takes the nearest four of the SHARED** (a clip's own are
+  swapped; the band's stay) (`vbtana.band_index`: four DIFFERENT entries, the assignment
   nearest in all, so its text, cursor and ground stay apart), drawn in
   their pixel values through the header's band map (`vb_bmap`, all four
   planes from `vb_bptab`'s two tables); `target.vga_band_cga` keeps the

@@ -902,6 +902,37 @@ decoded from the built bundle. That tells the owner which colours a clip
 actually draws with, and it is the view the per-clip colours of step 3
 will fill in.
 
+Steps 2 to 4 changed how the colours are chosen and gave each clip some
+of its own. The plan is the owner's: keep black and white, a couple for
+the menu, most of them shared, and a few per clip, swapped in when the
+clip starts. Choosing them is a greedy search on error, the error being
+how far each pixel is from the nearest colour it may use, measured in
+CIELAB and weighted toward colourful pixels the way Video Encoder's
+colourN weights them. The first version chose the shared colours first,
+and on a test with two clips, each grey plus one colour of its own, it
+spent a shared entry on one clip's orange and left the other's teal
+with nothing. Choosing each clip's own first fixed it.
+
+Swapping a clip's colours into the DAC is the risky part. Change the
+DAC while a pixel of the old clip's colours is still on screen, and that
+pixel changes colour: a flash. So a palette load rides inside the record
+that draws the clip's first frame, and that frame uses only the shared
+colours. When the load happens, no pixel uses the slots it changes. The
+same goes in reverse before the clip seams back onto the idle loop. The
+verifier plays every path the engine can take and fails the build if any
+load would recolour a pixel on screen. Breaking the shared-only first
+frame on purpose made it fail with 12,561 pixels.
+
+On the measurements, 16 colours with four per clip cut a busy clip's
+error by more than half (6.9 to 3.2), and 8 colours with one per clip
+from 9.4 to 6.2, the title staying about where it was.
+
+The same day the owner sent a screenshot of the menu: their band
+picture, a blue window, drawn on VGA as a red and yellow dither. The
+video's colours were never the problem there. The band is still CGA's
+two bits a pixel on every adapter, so a band picture is dithered into
+the band's four CGA colours, and VGA only maps those four to its own.
+
 ## Measured (MartyPC `os8088_5150_sb_gla`, 360 KB disk)
 
 | | |

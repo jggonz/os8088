@@ -81,6 +81,8 @@
 ; --- the bundle's layout (SPEC.md 126.2; tools/os88vbt.py is the writer) ------
 VH_MAGIC    equ 0               ; 'VBT1'
 VH_VER      equ 4               ; 4
+VB_FMT      equ 10              ; the format this engine plays (10: VGA4's
+                                ; records may load the DAC, SPEC.md 126.3.2)
 VH_PAL      equ 8               ; CGA4 palette byte (98.1.3.3)
 VH_FPS      equ 10
 VH_RATE     equ 12
@@ -424,7 +426,7 @@ vb_embfind:
     jne .no
     cmp word [vb_meta+VH_MAGIC+2], 'T1'
     jne .no
-    cmp word [vb_meta+VH_VER], 9
+    cmp word [vb_meta+VH_VER], VB_FMT
     jne .no
     mov [vb_embat], ax              ; ours
     mov [vb_embat+2], dx
@@ -522,7 +524,7 @@ vb_coverload:
     jne .tno
     cmp word [vb_meta+VH_MAGIC+2], 'T1'
     jne .tno
-    cmp word [vb_meta+VH_VER], 9
+    cmp word [vb_meta+VH_VER], VB_FMT
     jne .tno
     clc
     ret
@@ -1690,9 +1692,10 @@ vb_load:
     jne .fail1
     cmp word [vb_meta+VH_MAGIC+2], 'T1'
     jne .fail1
-    mov word [vb_err], vb_s_oldvbt  ; (format 8: VGA's palette at 352, 7: the
+    mov word [vb_err], vb_s_oldvbt  ; (format 9: VGA's palette loads not in
+                                    ; its records, 8: at 352, 7: the
                                     ; entries resident -
-    cmp word [vb_meta+VH_VER], 9    ; rebuilt, they ride in their clips)
+    cmp word [vb_meta+VH_VER], VB_FMT ; rebuilt, they ride in their clips)
     jne .fail1
     mov word [vb_err], vb_s_notvbt
     mov ax, [vb_meta+VH_NCLIPS]
@@ -3661,12 +3664,31 @@ vb_decode:
     lodsb                           ; and ten lists, a 0 after the last
     or al, al
     jz .pd
+    test al, 0x80
+    jnz .dac
     mov ah, al
     mov al, 2
     mov dx, 0x3C4
     out dx, ax
     xor bp, bp
     call vd_native
+    jmp short .planar
+.dac:                               ; A PALETTE LOAD (126.3.2: a clip's own
+    and al, 0x7F                    ; colours, as it starts and as it seams
+    mov cl, al                      ; onto the idle loop): AL & 7Fh entries,
+    xor ch, ch                      ; each its value and the DAC's six bits
+.dl:                                ; of red, green and blue. The builder
+    lodsb                           ; loads only values the screen does not
+    mov dx, 0x3C8                   ; hold, so nothing on the glass changes
+    out dx, al
+    inc dx
+    lodsb
+    out dx, al
+    lodsb
+    out dx, al
+    lodsb
+    out dx, al
+    loop .dl
     jmp short .planar
 .pd:
     mov ax, 0x0F02                  ; every plane again

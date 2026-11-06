@@ -203,14 +203,33 @@ kern_big and kern_small keep the load on the desktop, where the window says
       dithered brightness. `quant_vga` is now Video Player's
       `KnollDitherer` (a pattern whose mean is the source colour): a pink
       74 -> 11 mean error (`vbtgui`), the records +1.5% on scratch footage.
-- [ ] **Step 2: the shared colours by error reduction** - the K chosen
-      greedily for the least CIELAB error over every clip, rather than by
-      k-means centres.
-- [ ] **Step 3: four colours a clip** - per-clip DAC slots swapped at a
-      clip's start (format 10, engine work: a seam rewrites the clip-slot
-      pixels on a clip-to-clip join).
-- [ ] **Step 4: 8- and 4-colour variants**, and the CGA palette as an
-      automatic 4-colour option.
+- [x] **Step 2: the colours by error** (2026-11-06, SPEC.md 126.3.2):
+      `vbtana.plan_colours` - each stream's own first, then the shared,
+      each the candidate that most lowers the battle's weighted CIELAB
+      error, then swaps and Lloyd steps; black and white always shared,
+      the idle loop weighted three times, the band's colours a stream of
+      their own. Shared-first gave one clip's colour to every clip
+      (`vbtgui` holds the order).
+- [x] **Step 3: each clip's own colours** (format 10): a VGA4 record may
+      load the DAC after its picture (`80h | N` and N entries;
+      `vb_decode`); a clip's first frame and its last before a seam onto
+      the idle loop use the shared alone, the records that draw its frame
+      0 load its own and the one before the seam the loop's, so no load
+      ever changes a pixel on the glass - `verify` refuses a bundle where
+      one would. Measured: at 16 colours the mean block error 6.1 / 3.2
+      (Mandelbrot title / Ikaruga clip) against one palette's 6.8 / 6.9;
+      at 8, 11.6 / 6.2 against 11.0 / 9.4.
+- [x] **Step 4: 8 and 4 colours** - 1 of 8 a clip's own and 4 of 16
+      (`target.vga_clip_colours`, the Battle tab, "auto" the default); at 4
+      none, black and three from the footage, white not kept; "Keep the
+      band's CGA colours" at 4 is CGA's own four.
+- [ ] **Step 5: band pictures in VGA's colours.** The owner's menu is a
+      band PICTURE - a blue window - and the band is CGA's two bits a
+      pixel on every adapter, so on VGA the window is dithered into the
+      band's four CGA colours (red and yellow) whatever VGA's palette
+      holds. Planned: a 16-colour picture layer for the band on VGA, shown
+      where the band's buffer is its ground (value 0), so text and the
+      cursor stay the band's and the window is its own colours.
 - [x] **A palette viewer on the Build page** (2026-11-06, SPEC.md
       126.3.2): the battle's K colours, black the base and the band's four
       marked "menu", beside the memory lines; a clip picked in the budget
@@ -228,6 +247,7 @@ Measured per wave, against the byte, on the shipped engine:
 | W3 | 24,887 -> 24,963 (+76) | +1 | +49 |
 | W4 | no engine change | | |
 | W5 | 24,963 -> 25,011 (+48) | +1 | +34 |
+| VGA colours step 3 | `vb_decode` 101 -> 127 bytes (+26: the palette load) | 0 | |
 
 W1's split (claims at the door, `vb_lread`, `vb_derive`) is shared code;
 the kern_mega markers are registered in `tests/megapkg.txt`.

@@ -53,6 +53,11 @@ import vbtproj as P     # noqa: E402
 fails = []
 
 
+def shutil_which(x):
+    import shutil
+    return shutil.which(x)
+
+
 def ok(cond, what):
     print("%s %s" % ("ok  " if cond else "FAIL", what), flush=True)
     if not cond:
@@ -416,12 +421,12 @@ with tempfile.TemporaryDirectory() as tdir:
     dv = B2.build_project(pr, kind="vga4")      # FORMAT 9 (126.3.2): the
     codes = B2.vga_codes(len(pal))              # sixteen at 464 by pixel
     p16 = [tuple(dv[464 + 3 * i:467 + 3 * i]) for i in range(16)]  # value,
-    ok(dv[4] == 9 and all(p16[codes[i]] == tuple(v >> 2 for v in c)   # the
-                          for i, c in enumerate(pal)) and          # band map
+    ok(dv[4] == 10 and all(p16[codes[i]] == tuple(v >> 2 for v in c)  # the
+                           for i, c in enumerate(pal)) and         # band map
        list(dv[352:356]) == [codes[j] for j in A.band_index(pr, 8)] and
-       len(set(dv[352:356])) == 4,
-       "format 9: VGA's palette at 464 by plane code, the band's map at 352 "
-       "- four DIFFERENT values")
+       len(set(dv[352:356])) == 4 and tuple(dv[349:351]) == (8, 1),
+       "format 10: VGA's palette at 464 by plane code, the band's map at 352 "
+       "- four DIFFERENT values - and K and a clip's own at 349 (8, 1)")
     # THE BUILD TAB'S PALETTE VIEWER (126.3.2): the K colours in index
     # order, the band's four marked, and a clip's share of each - read by
     # decoding the clip as the engine does, so a clip drawn with several
@@ -483,6 +488,84 @@ with tempfile.TemporaryDirectory() as tdir:
     ok(perr < 25,
        "a pink dithers to pink, mostly red and white: mean error %.0f "
        "(%d of 256 yellow)" % (perr, int((pq == 5).sum())))
+    # VGA'S COLOURS BY ERROR, AND EACH CLIP'S OWN (126.3.2, steps 2 and 3):
+    # two streams, each grey with a colour no other has - with one colour
+    # of its own each gets its colour; shared alone, one of them goes
+    # without. Black and white are always shared
+    rs_ = np.random.RandomState(3)
+    grey = rs_.randint(40, 200, (3000, 1)).repeat(3, 1)
+    orange = np.tile([[250, 120, 10]], (1500, 1))
+    teal = np.tile([[10, 160, 150]], (1500, 1))
+    st = {"a": (np.vstack([grey, orange]), 1.0),
+          "b": (np.vstack([grey, teal]), 1.0)}
+    fx = [(0, 0, 0), (255, 255, 255)]
+    sh1, own1 = A.plan_colours(st, 4, 1, fx)
+    sh0, _ = A.plan_colours(st, 4, 0, fx)
+
+    def err(pal, px):
+        d = ((np.asarray(px, float)[:, None] - np.asarray(pal, float)[None])
+             ** 2).sum(2).min(1)
+        return float(d.mean())
+    e1 = [err(sh1 + own1[x], st[x][0]) for x in "ab"]
+    e0 = [err(sh0, st[x][0]) for x in "ab"]
+    ok(sh1[0] == (0, 0, 0) and (255, 255, 255) in sh1 and
+       all(x < 0.7 * y for x, y in zip(e1, e0)),
+       "VGA's colours by error: a colour of each clip's own cuts its error "
+       "(%.0f, %.0f against %.0f, %.0f shared alone - the shared chosen "
+       "first gave one clip's colour to all, and b 7235); black and white "
+       "shared" % tuple(e1 + e0))
+    if shutil_which("ffmpeg"):
+        tv = os.path.join(os.path.dirname(vbp), "tsrc.mp4")
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi",
+                        "-i", "testsrc2=size=320x240:rate=12", "-t", "3",
+                        "-pix_fmt", "yuv420p", tv], check=True)
+        po = P.Project.load(vbp)
+        po.add_source("tsrc", path=tv)
+        cl = po.d["clips"]["ari_attack"]
+        cl["source"], cl["in"], cl["out"] = "tsrc", 0, 20
+        po.set(("target", "vga_colours"), 16)
+        po.save()
+        B2.REND = B2.Rend("cga4")
+        d16 = B2.build_project(po, kind="vga4")     # (verify inside)
+        b16 = B2.Bundle(d16)
+        ci = [c["name"] for c in b16.clips].index("ARI_ATTA")
+        cc_ = b16.clips[ci]
+        codes = B2.vga_codes(16)
+        rs2 = b16.stream(cc_)
+
+        def loaded(r):
+            """The four own slots' colours once record R is played"""
+            B2.REND.dac = [(1, 2, 3)] * 16
+            B2.REND.dac_check = False
+            try:
+                B2.decode(B2.REND.blank(), r)
+            finally:
+                B2.REND.dac_check = True
+            return [tuple(B2.REND.dac[v]) for v in codes[12:]]
+        base = [tuple(d16[464 + 3 * v:467 + 3 * v]) for v in codes[12:]]
+        own_e = loaded(b16.entry(cc_, cc_["anch"][0][1]))
+        own_s = loaded(rs2[-2])
+        ok(tuple(d16[349:351]) == (16, 4) and len(cc_["own"]) == 4 and
+           own_e == cc_["own"] and own_s == base,
+           "a clip's own four: its entries load them (%s), the clip table "
+           "names them, and the frame before its seam onto the idle loop "
+           "loads the loop's back (%s)" % (own_e, own_s))
+        # ...and a swap the screen could see is refused: frame 0 drawn in
+        # the clip's own colours (vga_alone a no-op) recolours the screen
+        keep_alone = A.vga_alone
+        A.vga_alone = lambda proj, cid, i, full=False, progress=None: \
+            A.frames_of(proj, cid, kind="vga4", full=full)[i]
+        try:
+            B2.REND = B2.Rend("cga4")
+            B2.build_project(po, kind="vga4")
+            ok(False, "a palette load onto its own colours on the screen is "
+               "refused")
+        except ValueError as e:
+            ok("recolour" in str(e), "a palette load onto its own colours on "
+               "the screen is refused: %s" % e)
+        finally:
+            A.vga_alone = keep_alone
+            B2.REND = B2.Rend("cga4")
     # HOW A VIDEO FITS (target.fit): a 4:3 source with a bar along its top
     # edge - FILL crops it on every rendition (each canvas is wider than
     # 4:3 shows), STRETCH keeps it

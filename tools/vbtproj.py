@@ -19,7 +19,10 @@ A project file (version 1):
                   0 the whole frame (SPEC.md 126.3.2; 16 when absent),
                   "vga_band_cga": true to keep the band's four CGA colours
                   among VGA4's (false when absent: the nearest four of the
-                  footage's)},
+                  footage's),
+                  "vga_clip_colours": how many of VGA4's colours are each
+                  clip's own, swapped in as it starts (SPEC.md 126.3.2;
+                  absent: 4 of 16, 1 of 8, none of 4)},
      "sources":  {id: {"kind": "video", "path"} | {"kind": "scene", "name"}},
      "sounds":   {id: {"kind": "file", "path", "level"}
                     | {"kind": "scene", "name", "level"}
@@ -870,6 +873,11 @@ class Project:
                     "(A-Z, digits, punctuation)" % ln)
         if t.get("vga_band_cga") not in (None, True, False):
             err("target.vga_band_cga", "vga_band_cga: true or false")
+        vo = t.get("vga_clip_colours")
+        if vo is not None and not (isinstance(vo, int) and not
+                                   isinstance(vo, bool) and 0 <= vo <= 4):
+            err("target.vga_clip_colours", "vga_clip_colours %r: 0 to 4"
+                % (vo,))
         if t.get("vga_bands") is not None and not (
                 isinstance(t["vga_bands"], int) and 0 <= t["vga_bands"] <= 200):
             err("target.vga_bands", "vga_bands %s: rows a band, 0 the whole "

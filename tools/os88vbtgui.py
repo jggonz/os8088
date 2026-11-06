@@ -1145,6 +1145,18 @@ class BattleTab(object):
                         "the nearest four of the footage's)",
                         variable=self.rbcga, command=self._rends).grid(
                             row=4, column=0, columnspan=4, sticky="w")
+        # EACH CLIP'S OWN COLOURS on VGA (126.3.2): the last of the K,
+        # swapped into the DAC as a clip starts - the rest are shared
+        vo = ttk.Frame(rf)
+        vo.grid(row=5, column=0, columnspan=4, sticky="w", pady=(4, 0))
+        ttk.Label(vo, text="Each clip's own VGA colours:").pack(side="left")
+        self.rown = tk.StringVar()
+        cbo = ttk.Combobox(vo, textvariable=self.rown, state="readonly",
+                           values=["auto", "0", "1", "2", "3", "4"], width=6)
+        cbo.pack(side="left", padx=4)
+        cbo.bind("<<ComboboxSelected>>", lambda e: self._rends())
+        self.rownote = ttk.Label(vo, text="", wraplength=640)
+        self.rownote.pack(side="left", padx=6)
         # THE PICTURE'S SIZE, each rendition's: a smaller picture centred in
         # black is fewer bytes a frame - the black never changes - so a
         # heavy adapter (Hercules' 640 x 232) can be set down
@@ -1286,6 +1298,11 @@ class BattleTab(object):
         self.rcol.set(str(t.get("vga_colours", 8)))
         self.rnote.config(text=REND_NOTE.get(int(self.rcol.get()), ""))
         self.rbcga.set(1 if t.get("vga_band_cga") else 0)
+        import vbtana as A_o
+        own = t.get("vga_clip_colours")
+        self.rown.set("auto" if own is None else str(own))
+        self.rownote.config(text=OWN_NOTE % (A_o.vga_slots(self.app.proj),
+                                             int(self.rcol.get())))
         vbn = t.get("vga_bands", VGA_BANDS_DEFAULT)
         self.rband.set(dict(VGA_BANDS).get(vbn, str(vbn)))
         self.rbnote.config(text=VGA_BAND_NOTE.get(vbn, ""))
@@ -1338,6 +1355,10 @@ class BattleTab(object):
         if bool(self.rbcga.get()) != bool(t.get("vga_band_cga")):
             self.app.edit("set", ("target", "vga_band_cga"),
                           bool(self.rbcga.get()))
+        ov = self.rown.get()
+        ov = None if ov in ("", "auto") else int(ov)
+        if ov != t.get("vga_clip_colours"):
+            self.app.edit("set", ("target", "vga_clip_colours"), ov)
         lab = self.rband.get()
         for v, l in VGA_BANDS:
             if l == lab and v != t.get("vga_bands", VGA_BANDS_DEFAULT):
@@ -2815,12 +2836,19 @@ class OpeningsTab(object):
 
 # what a VGA rendition's colours cost, measured (VBATTLE-MEMORY-PLAN 2: the
 # owner's Attack1, unbudgeted, against CGA4's 82 KB/s)
-REND_NOTE = {4: "Four colours, chosen from the footage: about what CGA4 "
-                "costs (x1.2).",
-             8: "Eight, chosen from the footage for colour - about twice "
-                "CGA4's data (x2.1). Usually the right choice.",
-             16: "Sixteen - about three times CGA4's data (x3.1): a fast "
-                 "disk, or memory to hold it."}
+REND_NOTE = {4: "Four: black and three chosen from the footage, none a "
+                "clip's own - about what CGA4 costs (x1.2). \"Keep the "
+                "band's CGA colours\" makes them CGA's own four.",
+             8: "Eight: black, white and five shared, chosen from every "
+                "clip for colour, and one more each clip's own - about "
+                "twice CGA4's data (x2.1). Usually the right choice.",
+             16: "Sixteen: black, white and ten shared, and four each "
+                 "clip's own - about three times CGA4's data (x3.1): a "
+                 "fast disk, or memory to hold it."}
+# each clip's own VGA colours (target.vga_clip_colours; SPEC.md 126.3.2)
+OWN_NOTE = ("%d of the %d are each clip's own, loaded as it starts (auto: "
+            "4 of 16, 1 of 8, none of 4); a clip's first and last frames "
+            "use the shared alone, so the swap never shows")
 # VGA's write bands (target.vga_bands, rows; 0 the whole frame): measured on
 # 86Box's VGA XT with real footage - the flash pixels a sampled frame and
 # the records' bytes against the whole frame (SPEC.md 126.3.2)
@@ -3353,42 +3381,50 @@ CHECK_TABS = (("clips.", "clips"), ("openings", "openings"),
 _VGAC = {}
 
 
-def vga_colours(path, k, clip=None):
+def vga_colours(path, k=None, clip=None):
     """The Build tab's palette viewer out of a built VGA4 bundle (SPEC.md
-    126.3.2): its K colours in index order, each {rgb, value, band} - the
-    8-bit colour, the pixel value it is drawn in, and which of the band's
-    four (the menu's) it serves, or None - and, given CLIP (an index of the
-    bundle's clips, the budget's order), "usage": each colour's share of
-    that clip's canvas pixels over all its frames, decoded as the engine
-    decodes them. Every clip shares the battle's one palette; the usage
-    says which of it a clip actually draws with"""
+    126.3.2): its K colours in index order, each {rgb, value, band, own} -
+    the 8-bit colour, the pixel value it is drawn in, which of the band's
+    four (the menu's) it serves or None, and whether it is a clip's OWN (one
+    of the last SLOTS, swapped as each clip starts) - the idle loop's own,
+    or with CLIP (an index of the bundle's clips, the budget's order) that
+    clip's, and "usage": each colour's share of the clip's canvas pixels
+    over all its frames, decoded as the engine decodes them. K: the
+    header's (an older caller's K is ignored)"""
     import numpy as np
     import os88vbt as B
-    import os88vid as V
     st = os.stat(path)
-    key = (path, st.st_mtime, st.st_size, k, clip)
+    key = (path, st.st_mtime, st.st_size, clip)
     if key in _VGAC:
         return _VGAC[key]
     data = open(path, "rb").read()
     bd = B.Bundle(data)
+    k, slots = bd.vga or (k or 8, 0)
     codes = B.vga_codes(k)
     bmap = list(data[352:356])
-    out = dict(cols=[dict(rgb=tuple((v << 2) | (v >> 4) for v in
-                                    data[464 + 3 * c:467 + 3 * c]),
-                          value=c, band=bmap.index(c) if c in bmap else None)
-                     for c in codes], usage=None, clip=None)
-    if clip is not None and 0 <= clip < len(bd.clips):
-        c = bd.clips[clip]
+    pal = [tuple(data[464 + 3 * c:467 + 3 * c]) for c in codes]
+    c = bd.clips[clip] if clip is not None and 0 <= clip < len(bd.clips) \
+        else None
+    if c is not None and c["own"]:
+        pal[k - slots:] = c["own"][:slots]
+    out = dict(cols=[dict(rgb=tuple((v << 2) | (v >> 4) for v in pal[i]),
+                          value=codes[i],
+                          band=bmap.index(codes[i]) if codes[i] in bmap and
+                          i < k - slots else None, own=i >= k - slots)
+                     for i in range(k)], usage=None, clip=None,
+               slots=slots)
+    if c is not None:
         rows = B.REND.rows
         surf = B.REND.blank()
         hist = np.zeros(16, np.int64)
-        for r in bd.stream(c)[:-1]:
-            B.decode(surf, r)
-            pl = [np.unpackbits(np.frombuffer(bytes(
-                surf[q * V.PLANE:q * V.PLANE + 40 * rows]), np.uint8))
-                for q in range(4)]
-            px = pl[0] | (pl[1] << 1) | (pl[2] << 2) | (pl[3] << 3)
-            hist += np.bincount(px, minlength=16)
+        B.REND.dac_check = False        # (from a blank screen, not the one
+        try:                            # the engine plays it over)
+            for r in bd.stream(c)[:-1]:
+                B.decode(surf, r)
+                hist += np.bincount(B.REND.pixels(surf, rows).ravel(),
+                                    minlength=16)
+        finally:
+            B.REND.dac_check = True
         tot = max(1, int(hist.sum()))
         out["usage"] = [float(hist[x["value"]]) / tot for x in out["cols"]]
         out["clip"] = c["name"]
@@ -3602,9 +3638,14 @@ class BuildTab(object):
         except (OSError, ValueError) as e:
             self.pal_l.config(text="Cannot read %s: %s" % (rs[0]["out"], e))
             return
+        sl = v.get("slots", 0)
         self.pal_l.config(text=(
-            "The battle's %d, shared by every clip; \"menu\" marks the band's "
-            "four. " % k) + (
+            "The battle's %d: %d shared by every clip (\"menu\" marks the "
+            "band's four)%s. " % (len(v["cols"]), len(v["cols"]) - sl,
+                                  ", and %d each clip's OWN, swapped in as it "
+                                  "starts - %s" % (sl, "%s's" % name if name
+                                                   else "the idle loop's")
+                                  if sl else "")) + (
             "Bars: each one's share of %s's pixels, all its frames." %
             (name or v["clip"]) if v["usage"] else
             "Click a clip above to see what it draws with."))
@@ -3615,7 +3656,8 @@ class BuildTab(object):
                                fill="#%02x%02x%02x" % x["rgb"])
             role = [r for r, on in (("base", i == 0 and x["rgb"] == (0, 0, 0)),
                                     ("menu %d" % (x["band"] or 0),
-                                     x["band"] is not None)) if on]
+                                     x["band"] is not None),
+                                    ("own", x.get("own"))) if on]
             for j, r in enumerate(role):
                 c.create_text(x0 + 15, 31 + 10 * j, text=r,
                               font=("TkDefaultFont", 7))
