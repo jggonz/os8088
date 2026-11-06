@@ -881,8 +881,24 @@ ld_run_body_x:
     ; LOW_SEG, so the sector lands there and only the 32 header bytes are
     ; staged back into the kernel segment for ld_check_hdr to read.
 .peek:
+%ifdef DSK_RAHINT
+    push ax                     ; (AX is the cluster dsk_peek_x reads)
+    mov ax, [ld_fsz]            ; THE HINT (dsk_rah_fill, kernel hot-paths pass
+    add ax, 511                 ; 1): the file's sectors, for the fill this
+    mov al, ah                  ; peek causes to run on into the cylinder the
+    rcr al, 1                   ; read behind it would have begun again - a
+    cmp word [ld_fsz+2], 0      ; byte, a cylinder being under 255 sectors:
+    je .hint                    ; (fsz + 511) >> 9, with the add's carry
+    mov al, 0xFF                ; brought in at the top by the rcr, and FFh
+.hint:                          ; for a file of 64KB or more
+    mov [dsk_rah_hint], al
+    pop ax
+%endif
     mov cx, 512                 ; ...whichever transport (SPEC.md 20.14.6.2).
     call dsk_peek_x             ; A redirected volume has no sectors at all -
+%ifdef DSK_RAHINT
+    mov byte [dsk_rah_hint], 0  ; ...and disarmed at once, whatever the peek
+%endif                          ; did: `mov` leaves its CF alone
     jc .disk1                   ; dsk_xfer refuses one outright - so without
                                 ; the arm inside dsk_peek_x every package on
                                 ; one is "Bad package"; FSV_READAT at offset 0
@@ -925,6 +941,9 @@ ld_run_body_x:
                                 ; ld_unreserve preserves AX (its banner, and
                                 ; every callee down to mem_free_owner_x's
                                 ; "all registers preserved")
+%ifdef DSK_RAHINT
+    nop                         ; PARITY PAD, never executed: the peek's hint
+%endif                          ; above is an odd 29 bytes (t_hotpar.py's rule)
 
     ; --- 6. read the whole file into the region --------------------------------
 .read:

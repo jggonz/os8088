@@ -10,11 +10,15 @@
 ;   LZ4  byte-oriented, min match 4. 50.6 cycles an output byte, measured on a
 ;        4.77 MHz 8088, against a `rep movsw` floor of 13.09. The default,
 ;        because it is the only candidate whose ratio pays for its own decode
-;        time on the target machine (plan 1).
+;        time on the target machine (plan 1). (A real package's stream is
+;        shorter-symbolled than that corpus: Note Pad's measured 109.7 cycles
+;        a byte at launch, filter included, and 63.8 since kernel hot-paths
+;        pass 1 took the plain symbol inline - lz_lz4's banner.)
 ;   LZB  bit-oriented, aPLib-family: a tag BYTE carried in DL behind a guard
 ;        bit, byte-aligned literals and low offset byte, interlaced Elias
 ;        gamma for the length and the high offset byte. ~10 points better on
-;        ratio and 207 cycles a byte - four times the floor. Built because the
+;        ratio and 207 cycles a byte - four times the floor (Calc's, at
+;        launch: 303, and 191 since the same pass). Built because the
 ;        360KB disk's RUNWAY may be worth that, and only a field A/B can say
 ;        (plan 12.7).
 ;
@@ -182,7 +186,17 @@ LZ_F_K      equ 7               ; was filtered, and K, a BYTE: 32KB slides
                                 ; to go...
 LZ_F_T      equ 8               ; ...the tail's length...
 LZ_F_REM    equ 10              ; ...and the output bytes still to produce, 32
-LZ_F_REMH   equ 12              ; bits
+LZ_F_REMH   equ 12              ; bits...
+LZ_F_D0     equ 14              ; ...and LZ4'S FAST PATH's (lz_lz4, lz_arm):
+                                ; DI when REM was last exact. Between two
+                                ; syncs REM is LAZY - what was produced since
+                                ; is DI - D0, which no copy in the fast path
+                                ; can wrap, every one that would going the
+                                ; slow way round (kernel hot-paths pass 1)
+LZ_F_SIZE   equ 16              ; the whole frame, for the unwind
+%if LZ_F_SIZE != 16
+  %error "lz_decomp_big unwinds the frame with a literal `add sp, 16` (tools/stkbalance.py reads it)"
+%endif
 
 LZ_CHK      equ 0x8000          ; the checkpoint while the tail is further:
                                 ; SI is under 32KB after every slide, so the
@@ -248,6 +262,8 @@ lz_decomp_big:
     cmp bp, si
     jb .early                   ; ...or one that begins inside its own T word
 .far:
+    push di                     ; LZ_F_D0 = DI = 0, which lz_lz4's lz_arm
+                                ; sets again and lz_lzb never reads
     push bx                     ; LZ_F_REMH: the expected output, high...
     push dx                     ; LZ_F_REM: ...and low
     push cx                     ; LZ_F_T
@@ -311,10 +327,11 @@ lz_decomp_big:
     LZ_UNE8                     ; (lzfilt.inc)
     clc                         ; ...whose last compare leaves CF anything
 .fin:
-    lahf                        ; drop the seven locals with the CF the arm
-    add sp, 14                  ; answered carried round the `add` in AH -
-                                ; (a literal: tools/stkbalance.py reads it)
-    sahf                        ; two bytes shorter than seven pops
+    lahf                        ; drop the eight locals with the CF the arm
+    add sp, 16                  ; answered carried round the `add` in AH -
+                                ; (a literal: tools/stkbalance.py reads it,
+                                ; and LZ_F_SIZE is asserted equal to it)
+    sahf                        ; two bytes shorter than eight pops
     SKIPAL1                     ; mov al, imm8 over the stc: no flag written,
 .early:                         ; and AX is this routine's to clobber (pass 15)                         ; refused before the frame was built
     stc
@@ -377,6 +394,45 @@ lz_take:
     sub [bp+LZ_F_REM], cx
     sbb word [bp+LZ_F_REMH], 0
     ret                         ; CF is the answer, and `ret` leaves it alone
+
+%macro LZ_FRAME 0               ; BP = the frame, from anywhere in an arm's
+    mov bp, sp                  ; body - which pushes nothing it does not pop
+    inc bp                      ; before it gets here, so SP is its entry SP
+    inc bp                      ; and the frame is past the return address
+%endmacro
+
+; -----------------------------------------------------------------------------
+; lz_sync - settle the fast path's lazy count: REM -= DI - D0, then lz_arm
+; lz_arm  - D0 = DI, and DX = the BUDGET: how many bytes may be written from
+;           DI before either REM runs out or DI would leave its segment -
+;           min(REM, FFFFh - DI) (module-internal: an arm's entry, its
+;           slow paths and its end)
+; in:  BP = the FRAME (an arm holds the checkpoint in BP between them)
+; out: DX = the budget. clobbers: DX (the output), flags - nothing else, so
+;      AX can carry a match offset and BL the token across them
+;
+; Valid only while nothing since D0 has wrapped DI, which is the fast path's
+; whole contract (lz_lz4's banner): sync BEFORE a slow copy, which may wrap,
+; and arm AFTER it - never sync after, or the copy lz_take already counted is
+; counted twice. The count cannot go below zero: every take was within the
+; budget, which is never more than REM.
+; -----------------------------------------------------------------------------
+lz_sync:
+    mov dx, di
+    sub dx, [bp+LZ_F_D0]
+    sub [bp+LZ_F_REM], dx
+    sbb word [bp+LZ_F_REMH], 0
+lz_arm:
+    mov [bp+LZ_F_D0], di
+    mov dx, di
+    not dx                      ; FFFFh - DI: the bytes to the segment's end
+    cmp word [bp+LZ_F_REMH], 0
+    jne .set                    ; 64KB or more still to come: that, then
+    cmp [bp+LZ_F_REM], dx
+    ja .set                     ; ...and so if REM runs past it from here
+    mov dx, [bp+LZ_F_REM]       ; ...else what was declared is the bound
+.set:
+    ret
 
 ; -----------------------------------------------------------------------------
 ; lz_copy - CX bytes from DS:SI to ES:DI, which lz_take has already claimed
@@ -516,62 +572,148 @@ lz_match:
 %ifdef LZ_HAVE_LZ4
 ; -----------------------------------------------------------------------------
 ; lz_lz4 - the LZ4 block format, bounded on both pointers.
+;
+; **THE PLAIN SYMBOL IS ONE STRAIGHT LINE, AND ITS BOUNDS ARE THE SAME ONES**
+; (kernel hot-paths pass 1). Every check lz_take, lz_copy and lz_match make
+; is made here, in the same order, against the same quantities - but inline,
+; where they were six near calls a symbol (lz_take twice, lz_copy twice,
+; lz_len, lz_match), each read-modify-writing a 32-bit count on the stack.
+; MEASURED on MartyPC's 5150: Note Pad's 1,252 symbols cost ~1,040 cycles of
+; overhead each, and the decode was 405 ms of its launch.
+;
+; On an 8088 a straight line like this is BUS-bound - four cycles a byte of
+; code, and eight a word of data - so what it keeps in registers is chosen
+; to take memory operands out of it: BP is the source CHECKPOINT (the frame
+; is two bytes above SP throughout, and LZ_FRAME finds it for the slow
+; paths), DX is the BUDGET, BL the token's match nibble, and CH is 0 at
+; every token
+; (a `rep movsb` ends with CX = 0, and so does lz_copy), so a length is
+; `mov cl, ...` with no extension.
+;
+; What makes the inline take ONE subtract is the budget, lz_arm's
+; min(REM, FFFFh - DI): "CX more bytes fit what was declared AND stay in this
+; segment" is exactly CX <= DX, and the count itself is not touched - lz_sync
+; settles it from DI before anything that reads it. A take the budget refuses
+; goes the old way round, through lz_take, lz_copy and lz_match, which are
+; unchanged - they refuse it there, or carry it across the segment - and
+; lz_arm re-derives the budget after each. So every refusal is the one the
+; old code made at the same symbol, and every byte written is the same byte.
+;
+; Neither pointer can wrap in a fast copy. The DESTINATION by the carry test.
+; The SOURCE of a literal because SI is under the checkpoint <= 32KB at the
+; token, a literal run here is under 16KB (.litx sends a longer one round in
+; pieces), and a token's extension bytes are under 70: under 49KB in all. The
+; source of a match because it is DI - offset with no borrow, under DI. And
+; with no wrap there is no segment bump or slide, which is what makes the
+; inline match right on kern_mega too: lz_match's MEGA_SEL_BACK detour is for
+; a copy that bumps the ODD scratch or slides its source, and this one does
+; neither.
 ; -----------------------------------------------------------------------------
 lz_lz4:
+    xor cx, cx                  ; CH = 0, the loop's invariant
+    call lz_arm                 ; DX = the budget (D0 = DI = 0)
+.fast:
+    mov bp, [bp+LZ_F_TSI]       ; BP = the checkpoint, until a slow path
 .seq:
-    cmp si, [bp+LZ_F_TSI]       ; the symbols end where the tail begins, and a
+    cmp si, bp                  ; the symbols end where the tail begins, and a
     jae .end                    ; stream that ran PAST that point is refused -
-                                ; the compare's own flags say which, below
+                                ; lz_at's own compare says which, below
     lodsb                       ; the token: literal length in the high nibble,
-    mov dl, al                  ; match length - 4 in the low one
+    mov bl, al                  ; match length - 4 in the low one
+    and bl, 0x0F
     mov cl, 4
     shr al, cl
-    cbw                         ; lz_len's body, inline for the literal: a run
-    mov cx, ax                  ; of 16KB or more can only arrive through the
-    cmp al, 15                  ; extension bytes, so that is where it is
-    je .litx                    ; caught, and a short run pays nothing
-.lit:
-    jcxz .nolit
-    call lz_take                ; the literals may not run past what was
-    jc .bad                     ; declared, and this is where that is decided
-    call lz_copy
+    mov cl, al                  ; CX = the literal run (CH = 0)
+    cmp al, 15                  ; a run of 16KB or more can only arrive
+    je .litx                    ; through the extension bytes, so that is
+                                ; where it is caught, and a short one pays
+.lit:                           ; nothing. THE TAKE, inline, off the budget -
+    sub dx, cx                  ; which CX = 0 always passes, moving nothing
+    jb .lslow                   ; ...past what was declared, or past the
+    rep movsb                   ; segment's end: lz_take and lz_copy decide
 .nolit:
     lodsw                       ; the match offset...
-    mov bx, ax
-    mov al, dl
-    and al, 0x0F
-    call lz_len                 ; ...its length...
+    mov cl, bl                  ; ...its length (CH = 0 again, after the rep)
+    cmp cl, 15
+    je .mx
+.mlen:
     add cx, 4
-    mov ax, bx
-    call lz_match               ; ...and the copy, bounded on both
-    jnc .seq
+    dec ax                      ; ...and lz_match's checks, in its order: a
+    cmp ax, di                  ; ZERO offset wraps to FFFFh here and one
+    jae .mslow                  ; reaching below DI is past it, and both go to
+                                ; lz_match, which refuses or reaches down a
+    sub dx, cx                  ; segment as it always did; then the take,
+    jb .mslow                   ; which lz_match refuses or crosses
+    push ds
+    xchg ax, si                 ; AX = the source's place, SI = offset - 1
+    neg si
+    add si, di
+    dec si                      ; SI = DI - offset, with no borrow: AX < DI
+    push es
+    pop ds                      ; a match reads what has already been written
+    rep movsb
+    pop ds
+    xchg ax, si
+    jmp short .seq
+.mx:
+    xchg ax, bx                 ; AL = 15, AH = 0 for lz_len.x (BL is spent)
+    cbw
+    call lz_len.x
+    xchg ax, bx                 ; ...and the offset back
+    jmp short .mlen
+.mslow:                         ; THE OLD WAY ROUND, with REM settled first
+    inc ax                      ; the offset itself
+    LZ_FRAME
+    call lz_sync
+    call lz_match
+    jc .bad
+.rearm:
+    call lz_arm                 ; ...and the budget again from where DI landed
+    jmp short .fast
+.lslow:
+    LZ_FRAME
+    call lz_sync
+    call lz_take
+    jc .bad
+    call lz_copy
+.lrearm:
+    call lz_arm
+    mov bp, [bp+LZ_F_TSI]
+    jmp short .nolit
 .bad:
     stc
     ret
 .litx:
+    cbw                         ; AH = 0 for lz_len.x (AL is 15)
     call lz_len.x               ; the extension bytes, as lz_len reads them
     cmp ch, 0x40
     jb .lit                     ; under 16KB: the 32KB budget above the
-    call lz_take                ; checkpoint covers it. Over: claimed whole,
-    jc .bad                     ; then copied 16KB at a time with the source
-    mov bx, cx                  ; slid between pieces, so SI never wraps
+    LZ_FRAME                    ; checkpoint covers it. Over: claimed whole,
+    call lz_sync                ; then copied 16KB at a time with the source
+    call lz_take                ; slid between pieces, so SI never wraps
+    jc .bad
+    mov dx, cx                  ; (DX is the budget's: .lrearm re-derives it)
 .piece:
     mov cx, 0x4000
-    cmp bx, cx
+    cmp dx, cx
     jae .full
-    mov cx, bx
+    mov cx, dx
 .full:
-    sub bx, cx
+    sub dx, cx
     call lz_copy
     call lz_at                  ; slide DS if SI reached the top half, re-arm
-    or bx, bx
+    or dx, dx
     jnz .piece
-    jmp short .nolit
+    jmp short .lrearm
 .end:
+    LZ_FRAME
+    call lz_sync                ; REM exact: lz_tail reads it, and a checkpoint
+                                ; going round keeps LIM, which D0 + REM is
     call lz_at                  ; a CHECKPOINT, or the tail (SPEC.md 20.14.5.1)
-    jb .seq                     ; ...more source beyond it: go round
+    jb .fast                    ; ...more source beyond it: go round
     jne .bad                    ; SI is PAST the tail: a length ran off the end
-                                ; ...and SI AT it falls into lz_tail below
+                                ; ...and SI AT it falls into lz_tail below,
+                                ; BP the frame, which lz_decomp_big reads
 %endif
 
 ; -----------------------------------------------------------------------------
@@ -627,24 +769,37 @@ lz_len:
 ;
 ; The tag byte lives in DL with a GUARD bit below it, so DL reaching zero is
 ; the refill signal and no register is spent on a counter - which matters,
-; because every register a bit reader holds is one `rep movsb` wants.
+; because every register a bit reader holds is one `rep movsb` wants. A bit
+; is `add dl, dl`, CF the bit; when that leaves DL zero the guard has gone
+; out and the next byte comes in as `mov dl, [si] / inc si / adc dl, dl` -
+; `inc` leaves CF alone, by design, so the guard shifted out above becomes
+; the new low bit and CF is the byte's top bit.
+;
+; **THE BYTE PATH IS THE BUDGET'S, AS LZ4's IS** (kernel hot-paths pass 1):
+; BP the checkpoint, BX the budget, a literal `sub bx, 1 / jb / movsb`, and a
+; match inline with lz_match's checks in its order - lz_lz4's banner is the
+; account, and the slow paths are the same ones. The refills are out of line:
+; seven bits in eight do not refill, and on an 8088 the jump the old `jnz`
+; took every time is 16 cycles where an untaken `jz` is 4.
 ; -----------------------------------------------------------------------------
-%macro LZ_GETBIT 0
-    add dl, dl
-    jnz %%ok
-    mov dl, [si]
-    inc si                      ; `inc` leaves CF alone, by design, so the
-    adc dl, dl                  ; guard shifted out above becomes the new low
-%%ok:                           ; bit and CF is the byte's top bit
-%endmacro
-
 lz_lzb:
+    call lz_arm                 ; the budget (D0 = DI = 0), as lz_lz4 has it -
+    mov bx, dx                  ; but in BX, because DL is the tag byte
     mov dl, 0x80                ; the guard alone: the first read refills
+.fast:
+    mov bp, [bp+LZ_F_TSI]       ; BP = the checkpoint, until a slow path
 .loop:
-    cmp si, [bp+LZ_F_TSI]       ; the tail bound, as LZ4's `.seq` reads it
+    cmp si, bp                  ; the tail bound, as LZ4's `.seq` reads it
     jae .end
-    LZ_GETBIT
-    jnc .lit
+    add dl, dl                  ; a bit, its refill out of line (above)
+    jz .refill
+.bit:
+    jc .match
+    sub bx, 1                   ; ONE LITERAL BYTE, off the budget (kernel
+    jb .lslow                   ; hot-paths pass 1: lz_lz4's banner) - and
+    movsb                       ; this is the path a byte of LZB is made of
+    jmp short .loop
+.match:
     call .gamma                 ; the match length
     mov cx, ax
     call .gamma                 ; (offset >> 8) + 2
@@ -652,35 +807,84 @@ lz_lzb:
     dec ax
     mov ah, al
     lodsb                       ; ...and its low byte: AX is the offset
-    call lz_match
-    jnc .loop
+    dec ax                      ; lz_match's checks, in its order, inline as
+    cmp ax, di                  ; lz_lz4 makes them: offset 0 wraps to FFFFh,
+    jae .mslow                  ; one reaching below DI is past it,
+    sub bx, cx                  ; and then the take
+    jb .mslow
+    push ds
+    xchg ax, si                 ; AX = the source's place, SI = offset - 1
+    neg si
+    add si, di
+    dec si                      ; SI = DI - offset, with no borrow
+    push es
+    pop ds                      ; a match reads what has already been written
+    rep movsb
+    pop ds
+    xchg ax, si
+    jmp short .loop
+.mslow:                         ; THE OLD WAY ROUND, REM settled first. BL
+    inc ax                      ; carries the tag across lz_sync and lz_arm,
+    call .sync                  ; which spend DX, and the budget comes back
+    call lz_match               ; into BX with the tag into DL in one xchg
+    jc .bad
+.rearm:
+    call lz_arm
+    xchg bx, dx
+    jmp short .fast
+.lslow:
+    call .sync
+    sub word [bp+LZ_F_REM], 1   ; lz_take's body, inline, for the one byte a
+    sbb word [bp+LZ_F_REMH], 0  ; literal is here - LZB has no literal RUNS
+    jc .bad
+    movsb
+    or di, di
+    jnz .rearm
+    call lz_dbump               ; ...and one byte can land on the boundary too
+    jmp short .rearm
+.refill:
+    mov dl, [si]
+    inc si                      ; `inc` leaves CF alone: the guard shifted
+    adc dl, dl                  ; out above becomes the new low bit, and CF
+    jmp short .bit              ; is the byte's top bit
 .bad:
     stc
     ret
-.lit:
-    sub word [bp+LZ_F_REM], 1   ; lz_take's body, inline, for the one byte a
-    sbb word [bp+LZ_F_REMH], 0  ; literal is here - LZB has no literal RUNS,
-    jc .bad                     ; and this is the path 207 cycles a byte is
-    movsb                       ; made of
-    or di, di
-    jnz .loop
-    call lz_dbump               ; ...and one byte can land on the boundary too
-    jmp short .loop
+.sync:                          ; the tag into BL, BP the frame - four bytes
+    mov bl, dl                  ; up here, this call's return being on top of
+    mov bp, sp                  ; the arm's - and REM settled
+    add bp, 4
+    jmp lz_sync
 .end:
+    call .sync                  ; REM exact, for lz_tail
     call lz_at                  ; the checkpoint, as LZ4's `.end` reads it
-    jb .loop
+    jb .rearm
     jne .bad
-    jmp lz_tail
+    jmp lz_tail                 ; ...with BP the frame
 
 .gamma:                         ; AX = the value, which is always >= 2
     mov ax, 1
 .g:
-    LZ_GETBIT
+    add dl, dl                  ; two bits a round, each refill out of line
+    jz .gr1
+.g1:
     adc ax, ax
     jc .gsat                    ; a gamma past a word: lz_len's .sat, for the
-    LZ_GETBIT                   ; same all-ones window
+    add dl, dl                  ; same all-ones window
+    jz .gr2
+.g2:
     jc .g
     ret
+.gr1:
+    mov dl, [si]
+    inc si
+    adc dl, dl
+    jmp short .g1
+.gr2:
+    mov dl, [si]
+    inc si
+    adc dl, dl
+    jmp short .g2
 .gsat:
     sbb ax, ax                  ; CF=1: AX = 0xFFFF
     ret

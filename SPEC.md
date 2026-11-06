@@ -38943,7 +38943,9 @@ caller had already coalesced. Slots are a knee rather than a slope: 1 → 156,
   disks made identical somewhere other than this machine.
 - **A full mount drops everything and a quiet one does not.** A full mount is
   a navigation or a **Refresh**, and Refresh answered out of a cache is a
-  no-op, which is the one thing it must never be.
+  no-op, which is the one thing it must never be. The drop is the mount's
+  first act, before its boot-sector read (§18.95.11), so what it may still be
+  served is what it has itself just read off the platter.
 - **The fill re-enters `dsk_xfer`**, with `[dsk_rah_busy]` stopping it caching
   its own fill. That is why it needs no CHS conversion, no retry ladder and no
   EOT handling of its own. The claim is page-safe by construction
@@ -39813,6 +39815,39 @@ resident, on both kernels** (`kern_big` 37,632 -> 37,644, `kern_small` 21,529
 It touches no claim: what is cached, the width solve, a requester's command
 (§18.95.8), the purge and every invalidation are exactly as they were - only
 which slot a fill spends moves.
+
+#### 18.95.11 …and two reads that know what follows them fill further
+
+Kernel hot-paths pass 1 (docs/plans/khp1/disk.md). A fill reads forward from
+the sector that missed to the end of the TRACK, nine sectors at most, because
+a fill is a guess. Two reads in the system are not guessing, and for those
+the guess is replaced by what they know - through one byte, `[dsk_rah_hint]`,
+the sectors the caller will read from the one it asks for, armed across that
+one read and disarmed straight after it:
+
+- **The loader's header peek** (§21 step 2). The peek is one sector and the
+  whole file follows it, so with the hint set to the file's sectors the fill
+  runs to the bound `dsk_xfer`'s own reads use - the CYLINDER on a two-headed
+  floppy whose FDC was seen to cross a head (§18.91.1, `[dsk_cylrun]`), else
+  the track - and no further than the file. Longer than one slot, it is one
+  `int 13h` into the first *m* slots, each record then stamped with its own
+  nine, so every slot stays an ordinary chunk a later fill evicts alone.
+  Measured (FDC calls): Note Pad, TexPad and Paint each launch in one call
+  fewer on 360KB and on 1.44MB, Calc as before.
+- **A listing mount's LBA 0.** A full mount empties the cache at step 1, now
+  BEFORE the boot-sector read and not after the FAT window, and reads LBA 0
+  through it with the hint at **8** - the most every rule-11 geometry has on
+  its first track under the fallback 9/2. On 360KB, 720KB and 1.2MB those
+  eight are the boot sector, the FAT window and the root's first sectors, so
+  a navigation spends one call where it spent two or three. The rule the old
+  "never from the cache" stated is kept exactly: the boot sector is still the
+  first thing this mount read off the platter, and so is every byte served
+  after it. The chunk is re-tagged with the NEW disk's signature straight
+  after `dsk_bpb_sig`, before anything can look it up. A quiet mount reads
+  LBA 0 as it always did, around the cache.
+
+Not on kern_dos (no room in its image) and not on kern_mega (its store above
+1MB lands through a nine-sector bounce): `DSK_RAHINT` is undefined there.
 
 ### 18.96 Formatting a floppy — the mount's verdict, run backwards
 
@@ -48782,7 +48817,11 @@ That is not a hedge:
 
 **The disks stay LZ4** (§20.13.5), and the trade is still the one §12.7 of
 `docs/plans/O88-COMPRESSION-PLAN.md` states: LZ4 is 50.6 cycles an output byte and
-LZB is 207, against about ten points of ratio. A disk saving happens once and
+LZB is 207, against about ten points of ratio. (Kernel hot-paths pass 1 took
+both arms' plain symbol inline, `docs/plans/khp1/disk.md`: measured at
+launch on MartyPC's 5150, filter included, Note Pad's LZ4 went 109.7 -> 63.8
+cycles an output byte and Calc's LZB 303 -> 191 - the trade's two sides moved
+together, and its shape did not.) A disk saving happens once and
 a launch cost happens for ever. §20.13.5 records the packages that ship
 LZB anyway and what a launch was measured to cost.
 
