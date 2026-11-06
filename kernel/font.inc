@@ -1045,6 +1045,10 @@ font_str_x:
     push ax
     push cx
     push si
+%ifndef SNAPAUDIT               ; (SPEC.md 11.94's histograms count font_char's
+    call font_str_run           ; cells, so the audit build keeps the walk)
+    jnc .done                   ; CF = 0: the string is drawn, ONE pass
+%endif
 .next:
     es lodsb                    ; ES:SI, and SI walks itself (DF = 0, SPEC.md
     or al, al                   ; 1): 2 bytes where the load and `inc` were 4
@@ -1057,6 +1061,9 @@ font_str_x:
     pop cx
     pop ax
     ret
+%ifndef SNAPAUDIT
+    nop                         ; PARITY, never executed (kernel hot-paths
+%endif                          ; pass 1): the fast path's door is 5 bytes
 
 ; =============================================================================
 ; font_run - draw a string as OPAQUE cells: background and glyph in one pass
@@ -2262,6 +2269,236 @@ font_run_scell:
     pop ax
     ret
 
+
+%ifndef SNAPAUDIT
+; -----------------------------------------------------------------------------
+; font_str_run - font_str_x as a RUN: the transparent string in one row-major
+;                pass (kernel hot-paths pass 1)
+;
+; in:       CX = x, DX = y, ES:SI -> ASCIIZ, [gfx_color] = pen; gfx lock held
+; out:      CF = 0 the string is drawn; CF = 1 it is NOT this path's, and
+;           nothing has been drawn - font_str_x walks it per cell as before
+; clobbers: flags only
+;
+; font_char's per-cell cost is almost all overhead on a 1bpp adapter - the
+; frame, the edge and clip tests, the glyph arithmetic, gfx_rowbase,
+; font_ink and the eight row advances - against eight read-modify-writes
+; (~3,300 cycles a cell, measured, against ~800 of row work). A STRING pays
+; them once: one y, one pen, one clip decision and one row base, which is
+; SPEC.md 6.1.6/6.1.7's argument for font_run carried over to the
+; transparent pair. Pass 1 is font_run_x's own walk into font_rn_tab (the
+; same +8 bias, the same prefix of on-screen cells); pass 2 is one ROW of
+; the whole string at a time, and at an unaligned x a byte two cells
+; straddle takes BOTH their bits in one merge (6.1.11's shift: the previous
+; glyph row in CH, `shr ax, cl`), so a row is n+1 merges, not up to 2n.
+;
+; THE PIXELS ARE font_char's. OR (and AND-NOT) are commutative and
+; idempotent, so merging two cells' bits into a byte at once is the byte the
+; two merges left; a byte with no bits is not written, which a 1bpp
+; framebuffer cannot tell from or-ing in zero. A cell font_char drops - off
+; the right edge - is past the prefix. Everything this path cannot prove the
+; same goes back to the walk: a planar or packed display (font_char's VGA
+; writer), more than one display (39.14's per-cell translation and seam
+; cut), DISABLED text (47's stipple), a cell row off the bottom, a negative
+; or off-screen x, a string longer than the table, and an armed region that
+; does not hold the whole string in ONE fragment or that the cull is
+; rounding outward (11.3.3) - inside one fragment every cell's own
+; wm_clip_rows answers all eight rows and every column, as font_run's single
+; test already relies on. The cursor's deferred hide is spent once, as the
+; first font_char would, and only once a cell is known to be drawn; the
+; clip-state bytes are left as the last drawn cell left them.
+; -----------------------------------------------------------------------------
+font_str_run:
+%ifdef VID_EXT
+    cmp byte [vid_planes], 4    ; planar or packed: font_char's VRAM writers
+    jae .no
+%elifdef GFX_VGA
+    cmp byte [vid_mono], 0
+    je .no
+%endif
+%ifdef KERN_BIG
+    cmp byte [vid_ndisp], 1
+    ja .no
+%endif
+    cmp byte [gfx_dis], 0
+    jne .no
+    cmp dx, [vid_chm8]
+    ja .no
+    cmp cx, [vid_cwm8]          ; unsigned: a negative x fails this too
+    jbe .go
+.no:
+    stc
+    ret
+.go:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    ; --- PASS 1: font_run_x's walk (SPEC.md 6.1.7, and its sizing above) -----
+    mov ax, [vid_cwm8]
+    sub ax, cx
+    mov bp, cx                  ; BP = x, for the clip rect and the row base
+    mov cl, 3
+    shr ax, cl
+    inc ax                      ; AX = the cells the screen has room for
+    mov cx, FONT_RN_MAX + 1     ; ...and one past the table, as font_run_x
+    cmp ax, cx
+    ja .p1go
+    xchg ax, cx
+.p1go:
+    mov di, [font_base]
+    add di, 8                   ; the row pass's -8 bias (font_run_x's)
+    mov bx, font_rn_tab
+.p1:
+    es lodsb
+    or al, al
+    jz .p1end
+    sub al, FONT_FIRST
+    cmp al, FONT_LAST - FONT_FIRST
+    ja .blank
+    cbw
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1
+    add ax, di
+.put:
+    mov [bx], ax
+    inc bx
+    inc bx
+    loop .p1
+    jmp short .p1end
+.blank:                         ; an unprintable cell draws nothing: the blank
+%ifdef BAKED_FONT               ; cell's eight zero rows, which merge nothing
+    mov ax, font_zero + 8
+%else
+    mov ax, di
+%endif
+    jmp short .put
+.p1end:
+    sub bx, font_rn_tab
+    shr bx, 1                   ; BX = the cells drawn
+    jz .done                    ; the empty string: nothing, and no hide spent
+    cmp bx, FONT_RN_MAX
+    ja .fall                    ; more string than the table: the walk
+    mov [font_rn_n], bx
+    call fnt_unlazy             ; the first font_char's, once
+    CLIPQ
+    je .clipok
+    cmp byte [wm_dmg_cull], 0   ; the cull asks OVERLAP of wm_clip_test
+    jne .fall                   ; (11.3.3), which says nothing about a cell
+    mov ax, bp                  ; AX = x1
+    mov cx, bx
+    shl cx, 1
+    shl cx, 1
+    shl cx, 1
+    add cx, ax
+    dec cx                      ; CX = x2 = x + 8n - 1
+    mov bx, dx                  ; BX = y1
+    push dx
+    add dx, 7                   ; DX = y2
+    call wm_clip_test           ; ...wholly inside ONE fragment?
+    pop dx
+    jc .fall
+.clipok:
+    mov ax, dx
+    call gfx_rowbase            ; AX = rowbase(y), once for the string
+    mov di, bp
+    mov cl, 3
+    shr di, cl
+    add di, ax                  ; DI = the first framebuffer byte
+    mov cx, bp
+    and cl, 7                   ; CL = the shift, the string's phase
+    mov bx, gfx_inktab          ; the pen, reduced: font_ink's mono answer
+    mov al, [gfx_color]         ; with [gfx_dis] clear (tested above)
+    and al, 15
+    xlatb
+    add al, 1
+    sbb dh, dh                  ; DH = FF sets bits, 00 clears them - the
+                                ; ink's direction for the whole pass
+    mov es, [vid_rseg]          ; ES = font_char_bb's own target
+    mov ds, [font_seg]          ; DS = the glyph rows (SPEC.md 6); kernel words
+    mov bp, -8                  ; through CS from here. BP = row - 8
+%macro FSR_CELL 1               ; one cell of a row; %1 = 1 sets bits, 0 clears
+    cs lodsw                    ; this cell's glyph base (+8)
+    add ax, bp                  ; ...+ the row - 8
+    xchg ax, bx
+    mov al, [bx]                ; the glyph row
+    mov ah, ch                  ; the cell before it...
+    mov ch, al                  ; ...and this one, for the next
+    shr ax, cl                  ; AL = the framebuffer byte the two straddle
+    or al, al
+    jz %%skip                   ; no bits: no write, the same byte
+%if %1
+    or [es:di], al
+%else
+    not al
+    and [es:di], al
+%endif
+%%skip:
+    inc di
+%endmacro
+.row:
+    mov si, font_rn_tab
+    mov dl, [cs:font_rn_n]      ; DL = cells (at most FONT_RN_MAX)
+    xor ch, ch                  ; no cell before the first
+    push di
+    or dh, dh                   ; the pen's direction, asked once a row: the
+    jz .cpx                     ; two loops differ in ONE instruction pair
+.spx:
+    FSR_CELL 1
+    dec dl
+    jnz .spx
+    jmp short .tail
+.cpx:
+    FSR_CELL 0
+    dec dl
+    jnz .cpx
+.tail:
+    mov ah, ch                  ; the last cell's spill into the byte after
+    xor al, al                  ; it - none at all when x is byte-aligned
+    shr ax, cl
+    or al, al
+    jz .rend
+    or dh, dh
+    jz .tclr
+    or [es:di], al
+    jmp short .rend
+.tclr:
+    not al
+    and [es:di], al
+.rend:
+    pop di
+    FONT_RN_NEXTROW
+    inc bp
+    jnz .row
+.drawn:
+    KDS                         ; DS the kernel's again
+    mov word [wm_clip_r0], (8 << 8) | 0 ; what the last drawn cell left
+%ifdef KERN_BIG
+    mov byte [wm_clip_cm], 0xFF
+%endif
+.done:
+    clc
+    db 0xB0                     ; `mov al, imm8` swallows the `stc`: AL is
+.fall:                          ; popped back below either way
+    stc
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+%ifdef KERN_SMALL
+    nop                         ; PARITY, never executed: kern_small's body is
+%endif                          ; an odd 339 bytes (no display or column tests)
+%endif
 
 ; -----------------------------------------------------------------------------
 ; font_width - pixel width of a NUL-terminated string

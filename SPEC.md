@@ -9541,6 +9541,33 @@ is the site that gives it up (§12.2.1).
 (§39.5) — VGA greys with a colour — so `[font_rn_dt]` is set to zero on the
 common path before either prologue and the planar one never looks at it.
 
+#### 6.1.13 …and the TRANSPARENT string is a run too — `font_str_run`
+
+`font_str_x` letters a string through `font_char` one cell at a time, and on a
+1bpp adapter almost all of a cell is overhead: the frame, the edge and clip
+tests, the glyph arithmetic, `gfx_rowbase`, `font_ink` and eight row
+advances, ~3,300 cycles against ~800 of row work. **`font_str_run` pays them
+once a string** (kernel hot-paths pass 1): §6.1.7's pass 1 into
+`font_rn_tab` (the same +8 bias and on-screen prefix), then one ROW of the
+whole string at a time, and at an unaligned x a byte two cells straddle takes
+both cells' bits in ONE merge (§6.1.11's `shr ax, cl` with the previous glyph
+row in `CH`). OR and AND-NOT are commutative and idempotent, so the merged
+byte is the byte the two merges left, and a byte with no bits is not written.
+
+It takes the string only where the result is provably `font_char`'s:
+`[vid_mono]` (a planar or packed display keeps `font_char`'s VRAM writer),
+one display, `[gfx_dis]` clear, the row on screen, a non-negative x, a
+string within `FONT_RN_MAX` cells, and either no armed region or one whose
+single fragment holds the whole string with the cull off (§11.3.3) - inside
+one fragment every cell's own `wm_clip_rows` answers all eight rows and every
+column, which §6.1.7's single test already relies on. Anything else returns
+CF = 1 having drawn nothing, and `font_str_x` walks the cells as before. The
+cursor's deferred hide is spent once, as the first `font_char` would.
+MEASURED (MartyPC, the routine parked): ten cells 35,853 → 16,103 cycles on
+CGA, a 17-cell title 62,728 → 26,523 (2.4×), framebuffer byte-identical on
+CGA, Hercules and VGA; a string a region cuts pays its pass 1 and falls
+back, +4%. `make SNAPAUDIT=1` leaves it out, §11.94.2 counting cells.
+
 ### 6.2 `BAKED_FONT` — a typeface the build carries, instead of one it borrows
 
 `make FONT=<name>` builds a kernel whose 8x8 typeface is `fonts/<name>.f8`
