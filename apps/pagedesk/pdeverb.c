@@ -27,6 +27,7 @@ static pdw v_init(pdw xbseg)
     g_cseg = ini.cache_seg; g_ckb = ini.cache_kb;
     g_aseg = ini.arena_seg; g_akb = ini.arena_kb;
     g_tseg = ini.tables_seg; g_tkb = ini.tables_kb;
+    fl_init(ini.flags, xbseg);                  /* the Flate tier's claim, if any (20.13) */
     /* PD D2: INIT is re-callable and a claim may be 0 until OPEN needs it */
     g_filed = 0;
     g_ready = 1;

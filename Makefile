@@ -20413,6 +20413,38 @@ pdefuzz: pdeng $(BUILD)/pde_fuzz
 		$(BUILD)/pdeng-fix/shared/neg/*.pdf $(BUILD)/pdeng-fix/shared/stress/*.PDF
 # ---- end PageDesk: eng ------------------------------------------------------
 
+# ---- PageDesk: flate --------------------------------------------------------
+# FlateDecode and the PNG/TIFF predictors in PDENG (PAGEDESK-SPEC 20.13, PD-25).
+# `make pdflate` builds PDENG.MOD (the target gates and the size print) and the
+# host driver hosttest/pde_fl_test.c, then hosttest/pde_fl_check.py runs the
+# whole matrix against Python's zlib, a predictor written from the spec and
+# qpdf. `make pdflatefuzz` is the same engine under AddressSanitizer and UBSan,
+# driven over mutated streams and every read size (hosttest/pde_fl_fuzz.c).
+# Host only; the target arm is hosttest/pde_boot.py's (PDENG.MOD in QEMU).
+PDFL_SRC := $(PDE_SRC) apps/pagedesk/pdeflate.h apps/pagedesk/pdeflate.c
+$(BUILD)/pde_fl_test: $(PDFL_SRC) apps/pagedesk/pdmath.c apps/pagedesk/pdmath.h apps/pagedesk/hosttest/pde_fl_test.c \
+                      apps/pagedesk/hosttest/pde_host.c apps/pagedesk/hosttest/pdhost.c | $(BUILD)
+	$(HOSTCC) -g -Wall -Wextra -Wno-unused-parameter -DPD_HOST -Iapps/pagedesk -Iapps/pagedesk/hosttest \
+		apps/pagedesk/pdeng.c apps/pagedesk/hosttest/pde_fl_test.c apps/pagedesk/hosttest/pde_host.c \
+		apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c -o $@
+
+$(BUILD)/pde_fl_fuzz: $(PDFL_SRC) apps/pagedesk/pdmath.c apps/pagedesk/pdmath.h apps/pagedesk/hosttest/pde_fl_fuzz.c \
+                      apps/pagedesk/hosttest/pde_host.c apps/pagedesk/hosttest/pdhost.c | $(BUILD)
+	$(HOSTCC) -g -O1 $(PDE_SAN) -Wall -Wextra -Wno-unused-parameter -DPD_HOST -Iapps/pagedesk -Iapps/pagedesk/hosttest \
+		apps/pagedesk/pdeng.c apps/pagedesk/hosttest/pde_fl_fuzz.c apps/pagedesk/hosttest/pde_host.c \
+		apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c -o $@
+
+.PHONY: pdflate pdflatefuzz
+pdflate: $(BUILD)/PDENG.MOD $(BUILD)/pde_fl_test apps/pagedesk/hosttest/pde_fl_check.py
+	python3 apps/pagedesk/hosttest/pde_fl_check.py $(BUILD)/pde_fl_test $(BUILD)
+
+PDFLFUZZ_N ?= 300
+pdflatefuzz: $(BUILD)/pde_fl_fuzz apps/pagedesk/hosttest/pde_fl_check.py
+	python3 apps/pagedesk/hosttest/pde_fl_check.py --corpus $(BUILD)/pdfl-corpus
+	$(BUILD)/pde_fl_fuzz -n $(PDFLFUZZ_N) -s $(PDEFUZZ_SEED) $(BUILD)/pdfl-corpus/*.pdf
+# ---- end PageDesk: flate ----------------------------------------------------
+
+
 # ---- PageDesk: wrt ----------------------------------------------------------
 # PDWRT.MOD (PAGEDESK-SPEC 20.5): the writer module - serialiser, appearance
 # streams, incremental save, fresh documents. A SEPARATE compilation and a

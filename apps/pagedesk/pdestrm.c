@@ -48,6 +48,11 @@ static int sget1(struct sctx *c, int i)
 {
     int b, d, v, n;
     if (c->fdone[i]) return -1;
+    if (c->flt[i] == PDF_K_FLATE) {                     /* pdeflate.c (20.13) */
+        b = fl_get(c);
+        if (b < 0) c->fdone[i] = 1;
+        return b;
+    }
     if (c->flt[i] == PDF_K_HEX) {
         do { b = sget(c, i - 1); } while (b >= 0 && is_ws(b));
         if (b < 0 || b == '>') { c->fdone[i] = 1; return -1; }
@@ -115,7 +120,7 @@ static pdw flt_kind(const pdb *name)
 {
     if (str_eq(name, "ASCIIHexDecode") || str_eq(name, "AHx")) return PDF_K_HEX;
     if (str_eq(name, "RunLengthDecode") || str_eq(name, "RL")) return PDF_K_RLE;
-    if (str_eq(name, "FlateDecode") || str_eq(name, "Fl")) return 100 + PDE_FLATE;
+    if (str_eq(name, "FlateDecode") || str_eq(name, "Fl")) return g_nfl ? PDF_K_FLATE : 100 + PDE_FLATE;
     return 100 + PDE_FILTER;
 }
 static pdw flt_add(const pdb *name)
@@ -123,8 +128,9 @@ static pdw flt_add(const pdb *name)
     pdw k = flt_kind(name);
     if (k > 100) return (pdw)(k - 100);
     if (sp_nflt >= PD_MAXFILTERS) return PDE_LIMIT;
+    if (k == PDF_K_FLATE && (sp_filters & PDFL_FLATE)) return PDE_FILTER;   /* one Flate stage a chain */
     sp_flt[sp_nflt++] = (pdb)k;
-    sp_filters |= (k == PDF_K_HEX) ? PDFL_HEX : PDFL_RLE;
+    sp_filters |= (k == PDF_K_HEX) ? PDFL_HEX : (k == PDF_K_FLATE) ? PDFL_FLATE : PDFL_RLE;
     return PDE_OK;
 }
 
@@ -169,7 +175,14 @@ static pdw ob_stream_dict(pdw num, pdw gen)
 }
 
 /* The stream's /Filter chain into sp_flt (needs sp_kind == PDK_STRM). */
+static pdw ob_filters1(pdw num);
 static pdw ob_filters(pdw num)
+{
+    pdw rc = ob_filters1(num);
+    if (!rc && (sp_filters & PDFL_FLATE)) rc = fl_parms(num);
+    return rc;
+}
+static pdw ob_filters1(pdw num)
 {
     pdw rc, rn, rg;
     int hops;
@@ -272,6 +285,11 @@ static pdw st_push(pdw filtered)
     }
     c->rbn = 0; c->rbi = 0; c->depth = 0; c->wlo = 0; c->whi = 0;
     c->filters = sp_filters;
+    fl_drop(c);
+    if (c->nflt && (sp_filters & PDFL_FLATE)) {
+        i = fl_attach(c);
+        if (i) return i;
+    }
     nctx++;
     return PDE_OK;
 }
