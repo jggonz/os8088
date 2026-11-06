@@ -789,8 +789,8 @@ offsets are 16-byte aligned. All little-endian.
 #### 20.4.1 Layout and the directory (D3)
 
 PDRES is not loaded whole: the primary reads only the INDEX, the first `index`
-bytes (directory, strike records, widths, names; 9,120 bytes on the full file -
-OVER the 8 KiB D3 target - and 7,776 on the core-only file), into one claim; the
+bytes (directory, strike records, widths, names; 7,776 bytes on PDRES.BIN, inside the
+8 KiB D3 target), into one claim; the
 renderer reads each strike's bytes from the file on first use; the primary reads
 the icon atlas. All offsets in the directory, and the strike offsets in the
 records, are from PDRES's first byte (the file offset inside the part).
@@ -821,10 +821,17 @@ Directory: `'PDRS'`, u16 version (1), u16 entry count n, n x 12-byte entries
 | 6 | the strike data region |
 | 7 | the INDEX: offset 0, length = what the primary loads |
 
-One bank: every record of every size and style. `os88pdfont.py build --core`
-writes the 360KB variant (`PDRES-core.BIN`, sizes 8, 10, 12 only: 77,268 bytes, index
-7,776); the full file is 388,356 bytes. A size is in the file or has no record, so the
-renderer's nearest-at-or-below rule needs no missing-bank case.
+TWO files, one format (D5). `PDRES.BIN` (inside PAGEDESK.O88, uncompressed) is the CORE:
+sizes 8, 10, 12 (regular, bold, italic and bold italic, all three families; the
+italics are flag-bit-0 synthesised records), the widths, the glyph names and the icons:
+77,268 bytes, index 7,776 (fits 8 KiB). `PDFONTX.RES` (`$(BUILD)/PDFONTX.RES`, a separate
+optional file beside the package, carried on the 720KB/1.2MB/1.44MB disks and the
+everything set, not the 360KB one) is the same format with its own directory
+and bank for sizes 6, 7, 9, 14, 16, 20 and 24 (true italics at 14 and 16): 311,184 bytes,
+index 1,440. It has no widths, no names and no icons (`PDFX` offsets 0, directory
+kinds 3/5 length 0, kind 4 length 0); PDREND takes those from `PDRES.BIN`. A size is in
+one file or the other and has no record elsewhere. When `PDFONTX.RES` is absent the
+renderer follows D5 (pixel-doubling the core strikes); that is not an error.
 
 The glyph-name table (rend's request, PAGEDESK-SPEC 20.3.4): Adobe glyph name to
 Windows-1252 code, `{u8 len, name bytes, u8 code}` repeated, sorted bytewise by

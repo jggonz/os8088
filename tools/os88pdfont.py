@@ -346,18 +346,19 @@ def build_names():
     return out + b"\0"
 
 K_FONTS, K_WIDTHS, K_ICONS, K_NAMES, K_STRIKES, K_INDEX = 1, 3, 4, 5, 6, 7
-def build_res(core_only=False, art=True):
+def build_res(core_only=True, art=True):
     """Layout (D3): directory | PDFB bank (header, strike records, PDFX, widths, names)
     | strike data | icons.  The first INDEX bytes are what the primary loads."""
-    recs, blobs = collect_strikes(CORE_SIZES if core_only else SIZES)
+    recs, blobs = collect_strikes(CORE_SIZES if core_only else [x for x in SIZES if x not in CORE_SIZES])
     n = len(recs)
     nent = 6
     D = (8 + 12 * nent + 15) & ~15                    # the bank starts paragraph aligned
-    wid = build_widths()
-    names = build_names()
-    widths_off = 16 * n + 8 + 8                       # from the bank start
-    names_off = widths_off + len(wid)
-    bank_len = names_off + len(names)
+    wid = build_widths() if core_only else b""        # PDFONTX.RES leaves them to PDRES.BIN
+    names = build_names() if core_only else b""
+    widths_off = 16 * n + 8 + 8 if core_only else 0   # from the bank start (0 = absent)
+    names_off = widths_off + len(wid) if core_only else 0
+    tail = 16 * n + 8 + 8
+    bank_len = tail + len(wid) + len(names)
     index_len = D + bank_len
     data_off = (index_len + 15) & ~15
     offs, o = [], data_off
@@ -366,7 +367,7 @@ def build_res(core_only=False, art=True):
         o += len(d)
     strikes = b"".join(blobs)
     icons_off = (o + 15) & ~15
-    icons = build_atlas_safe(art)
+    icons = build_atlas_safe(art and core_only)
     bank = b"PDFB" + struct.pack("<HH", 1, n)
     for fam, st, size, asc, desc, flags, bi in recs:
         bank += struct.pack("<BBBBBBBBII", FAMILIES.index(fam), st, size, asc, desc, FIRST, LAST,
@@ -374,8 +375,8 @@ def build_res(core_only=False, art=True):
     bank += b"PDFX" + struct.pack("<HH", widths_off, names_off)
     bank += wid + names
     assert len(bank) == bank_len
-    ent = [(K_FONTS, D, bank_len), (K_WIDTHS, D + widths_off, len(wid)),
-           (K_NAMES, D + names_off, len(names)), (K_STRIKES, data_off, len(strikes)),
+    ent = [(K_FONTS, D, bank_len), (K_WIDTHS, D + widths_off if wid else 0, len(wid)),
+           (K_NAMES, D + names_off if names else 0, len(names)), (K_STRIKES, data_off, len(strikes)),
            (K_ICONS, icons_off, len(icons)), (K_INDEX, 0, index_len)]
     assert len(ent) == nent
     head = b"PDRS" + struct.pack("<HH", 1, nent)
@@ -395,10 +396,10 @@ def build_atlas_safe(art):
     return os88pdart.build_atlas()
 
 def cmd_build(a):
-    blob, parts = build_res(core_only=a.core)
+    blob, parts = build_res(core_only=not a.extra)
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     open(a.out, "wb").write(blob)
-    print("PDRES.BIN %d bytes%s: " % (len(blob), " (core sizes only)" if a.core else "")
+    print("PDRES.BIN %d bytes%s: " % (len(blob), " (extra sizes, no icons)" if a.extra else " (core sizes 8/10/12)")
           + ", ".join("%s %d" % kv for kv in parts.items()))
 
 # ---------------------------------------------------------------- proof/check
@@ -444,11 +445,12 @@ def blit_text(strike, text, widths_scale=None):
 
 def cmd_proof(a):
     from PIL import Image
-    blob = open(a.res, "rb").read()
     out = a.out
     os.makedirs(out, exist_ok=True)
     sample = "Hamburgefonts 0123 The quick brown fox jumps over lazy dogs. \u00c9\u00e9\u00fc"
-    for name, pick in (("core", lambda s: s["size"] in CORE_SIZES), ("more", lambda s: s["size"] not in CORE_SIZES)):
+    for name, path in (("core", a.res), ("more", a.extra)):
+        blob = open(path, "rb").read()
+        pick = lambda s: True
         rows = []
         for s in bank_strikes(blob):
             if s["flags"] & 1 or not pick(s):
@@ -479,26 +481,30 @@ def cmd_check(a):
     n = struct.unpack_from("<H", blob, D + 6)[0]
     assert blob[D + 8 + 16 * n:D + 12 + 16 * n] == b"PDFX"
     wo, no = struct.unpack_from("<HH", blob, D + 12 + 16 * n)
-    assert D + wo == ents[3][0] and D + no == ents[5][0]
-    assert ents[3][1] == 12 * 224 * 2 + 8
+    full = ents[3][1] != 0
+    if full:
+        assert D + wo == ents[3][0] and D + no == ents[5][0]
+        assert ents[3][1] == 12 * 224 * 2 + 8
+    else:
+        assert wo == 0 and no == 0
     assert ents[7] == (0, ents[7][1]) and ents[7][1] <= ents[6][0]
     for s in bank_strikes(blob):
         assert s["first"] == 32 and s["last"] == 255 and len(s["data"]) >= 4 * 224
     nm = blob[ents[5][0]:ents[5][0] + ents[5][1]]
     i, prev = 0, b""
-    while nm[i]:
+    while full and nm[i]:
         l = nm[i]; name = nm[i + 1:i + 1 + l]; assert name > prev; prev = name; i += l + 2
-    assert i + 1 == len(nm)
-    print("PDRES.BIN ok: index %d bytes (limit 8192)%s" % (ents[7][1], "" if ents[7][1] <= 8192 else "  OVER 8 KiB"))
+    assert i + 1 == len(nm) or not full
+    print("%s ok: index %d bytes (limit 8192)%s" % (os.path.basename(a.res), ents[7][1], "" if ents[7][1] <= 8192 else "  OVER 8 KiB"))
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("fetch").set_defaults(f=cmd_fetch)
     sub.add_parser("draw").set_defaults(f=cmd_draw)
-    b = sub.add_parser("build"); b.add_argument("-o", "--out", default=os.path.join(ROOT, "build", "PDRES.BIN")); b.add_argument("--core", action="store_true", help="only sizes 8,10,12 (360KB disk)"); b.set_defaults(f=cmd_build)
+    b = sub.add_parser("build"); b.add_argument("-o", "--out", default=os.path.join(ROOT, "build", "PDRES.BIN")); b.add_argument("--extra", action="store_true", help="PDFONTX.RES: the sizes PDRES.BIN does not carry"); b.set_defaults(f=cmd_build)
     pr = sub.add_parser("proof"); pr.add_argument("--res", default=os.path.join(ROOT, "build", "PDRES.BIN"))
-    pr.add_argument("-o", "--out", default=os.path.expanduser("~/Repos/pagedesk-logs/shots/fonts")); pr.set_defaults(f=cmd_proof)
+    pr.add_argument("--extra", default=os.path.join(ROOT, "build", "PDFONTX.RES")); pr.add_argument("-o", "--out", default=os.path.expanduser("~/Repos/pagedesk-logs/shots/fonts")); pr.set_defaults(f=cmd_proof)
     c = sub.add_parser("check"); c.add_argument("--res", default=os.path.join(ROOT, "build", "PDRES.BIN")); c.set_defaults(f=cmd_check)
     a = p.parse_args()
     a.f(a)

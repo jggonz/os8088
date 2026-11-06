@@ -20218,6 +20218,7 @@ apps/wireball/art/wbfront.inc: apps/wireball/art/splash-source.png tools/wbfront
 # `python3 tools/os88pdfont.py fetch|draw` is the one-time regeneration of the font
 # sources from the pinned TTFs/AFMs (never run by make).
 PD_RES_BIN   := $(BUILD)/PDRES.BIN
+PD_FONTX_RES := $(BUILD)/PDFONTX.RES   # D5: sizes 6,7,9,14,16,20,24, optional, beside the package
 PD_RES_SRC   := $(wildcard apps/pagedesk/fonts/*.t88) apps/pagedesk/fonts/widths.txt \
                 $(wildcard apps/pagedesk/art/*.art) tools/os88pdfont.py tools/os88pdart.py
 
@@ -20225,12 +20226,13 @@ $(PD_RES_BIN): $(PD_RES_SRC)
 	@mkdir -p $(BUILD)
 	python3 tools/os88pdfont.py build -o $@
 	python3 tools/os88pdfont.py check --res $@
-	python3 tools/os88pdfont.py build --core -o $(BUILD)/PDRES-core.BIN
-	python3 tools/os88pdfont.py check --res $(BUILD)/PDRES-core.BIN
+	python3 tools/os88pdfont.py build --extra -o $(PD_FONTX_RES)
+	python3 tools/os88pdfont.py check --res $(PD_FONTX_RES)
 	python3 tools/os88pdart.py build --inc-dir $(BUILD)
 
 .PHONY: pdfonts
 all: $(PD_RES_BIN)
 pdfonts: $(PD_RES_BIN)
+	@test -f $(PD_FONTX_RES)
 	python3 tools/os88pdart.py check
 # ---- end PageDesk: fonts ----
