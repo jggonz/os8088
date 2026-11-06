@@ -89,13 +89,25 @@ other drive's window acted re-reads that disk; a relaunch of a closed Calc
 reads nothing) and say so in their labels.
 
 WHAT IT IS NOT. MartyPC is cycle-accurate for the CPU, the bus and the
-video card and is NOT disk-accurate (docs/MARTYPC-DEBUG.md): every scenario
-that touches the floppy - `desktop`, `opendisk`, `launch` - has a disk term
-that is 17-30x fast here, so its ms is a CPU-and-redraw figure and its disk
-part must be priced from the FDC counters (reported as `fdc`: int 13h
-calls and sectors) at ~400 ms a call (PERFORMANCE.md Part 2). On 86Box
-nothing is cycle-accurate and a figure is relative; the 86Box arm (a 286
-A/B) is not in this version.
+video card, and this tree's build of it gives the FLOPPY a platter
+(tools/martypc/patches/04: rotation, data rate, one sector at a time,
+seeks; docs/MARTYPC-DEBUG.md *The disk has a platter*), which reproduces
+the 5150's raw int 13h rows to the measurement quantum and boots in 0.92x
+the field's ticks. So `desktop`, `opendisk` and the cold `launch` include
+a disk term that is close to real; what it does NOT model is motor
+spin-up (instant here) and anything below the BIOS a real NEC 765 might do
+differently, and a disk figure still goes to the 5150 before PERFORMANCE.md
+Part 9 quotes it. `fdc` counts the int 13h-level reads and sectors exactly.
+
+ON 86BOX (--emu 86box [--cpu 286|386], an AT through
+tools/os88box86api.py) NOTHING IS CYCLE-ACCURATE and every figure is
+RELATIVE - an A/B on one machine and nothing else (docs/86BOX.md, *What it
+is NOT*). There are no logging breakpoints and `advance` is a whole
+emulated millisecond, so every 86Box run is sampled at 1 ms: `busy` is the
+share of samples not at the idle hlt, the end is the first millisecond the
+DONE state is seen at (1-2 ms resolution), `unl` is not available, and
+`cycles` is MartyPC-only. Output names the machine `286/cga` and the JSON
+carries `relative: true`.
 """
 import argparse
 import bisect
@@ -148,7 +160,19 @@ def img(name):
     return os.path.join(bdir(), name)
 
 
+# --emu 86box: the same three adapters on an AT (tools/os88box86api.py's
+# names - no `os8088_` prefix, which is MartyPC's namespace). NOT
+# cycle-accurate and stepped in 1 ms quanta: every figure is RELATIVE, for an
+# A/B on one machine and nothing else (docs/86BOX.md, *What it is NOT*).
+EMU = "marty"
+CPU = "286"
+
+
 def machine_name(m):
+    if EMU == "86box":
+        return {"cga": "at%s_cga", "herc": "at%s_herc",
+                "vga": "at%s_vga"}.get(m, m).replace("%s", CPU) \
+            if m in ("cga", "herc", "vga") else m
     return MACHINES.get(m, m)
 
 
@@ -163,7 +187,7 @@ class KMap(object):
     THIS machine now - so build it after the boot (the `.cold` slide and
     [spl_fseg] are read from the guest)."""
 
-    def __init__(self, m):
+    def __init__(self, m, fseg=None):
         import os88sym
         off = os88sym.syms()
         sect = os88sym.sections()
@@ -171,7 +195,9 @@ class KMap(object):
         self.slide = m.cold_slide()
         kseg = os88sym.KERNEL_SEG
         cold = eq.get("COLD_SEG")
-        fseg = u16(m.read(m.sym("spl_fseg"), 2)) if "spl_fseg" in off else 0
+        if fseg is None:
+            fseg = u16(m.read(m.sym("spl_fseg"), 2)) if "spl_fseg" in off \
+                else 0
         segs = {".text": kseg, ".bss": kseg, ".vga": kseg,
                 ".cold": cold, ".ovl": eq.get("FAT_SEG"),
                 ".boot2": fseg or None}
@@ -438,8 +464,20 @@ class Run(object):
             u16(ivt, n * 4 + 2) * 16 + u16(ivt, n * 4) for n in range(8, 16)))
         self.unl = m.sym("gfx_unlock")
         self._mo = ui.mo
+        # 86BOX: no logging breakpoints and no batch, and `advance` is a
+        # whole emulated millisecond. So it is always SAMPLED - the IP after
+        # every 1 ms step - and both halts and the end come off the samples:
+        # a sample at the idle hlt is halted, and the end is the first step
+        # the DONE state is seen at (1-2 ms resolution)
+        self.box = bool(getattr(m, "box86", False))
+        if self.box:
+            self.sample = True
+            self.step = int(HZ / 1000) + 1
+            self.per = 2
 
     def _bps(self):
+        if self.box:
+            return []
         a = [self.hlt, self.unl] + self.isr + self.extra
         seen, out = set(), []
         for x in a:
@@ -449,6 +487,15 @@ class Run(object):
         return out
 
     def _adv(self, n):
+        if self.box:
+            c = None
+            for _ in range(n):
+                r = self.m.cmd(cmd="advance", cycles=self.step)
+                c1 = int(r["cycles"])
+                prev = self.samples[-1][0] if self.samples else c1 - self.step
+                self.samples.append((c1, int(r["flat_ip"]), c1 - prev))
+                c = c1
+            return c
         cmds = [{"cmd": "advance", "cycles": self.step}] * n
         out = self.m.batch(cmds)
         for r in out:
@@ -544,7 +591,7 @@ class Run(object):
             if cyc > lim:
                 raise SystemExit("os88hot: the scenario never reached its "
                                  "DONE state inside %.0f guest s" % limit)
-        lg = m.cmd(cmd="bplog")
+        lg = m.cmd(cmd="bplog") if not self.box else {"hits": []}
         m.breakpoints([])
         fdc1 = _fdc(m)
         m.run()
@@ -556,6 +603,8 @@ class Run(object):
                              min_secs)
 
     def _account(self, hits, c0, t0, t_done, c_last, fdc0, fdc1, min_secs):
+        if self.box:
+            return self._account_box(c0, t0, t_done, fdc0, fdc1)
         isr = set(self.isr)
         # halted intervals: hlt hit -> the next logged hit (which can only be
         # an interrupt entry, the CPU executing nothing in between). The
@@ -602,13 +651,28 @@ class Run(object):
         self.hits = hits
         return res
 
+    def _account_box(self, c0, t0, t_done, fdc0, fdc1):
+        self.halts = []
+        self.hits = []
+        t_end = t_done
+        win = max(1, t_end - t0)
+        smp = [x for x in self.samples if t0 < x[0] <= t_end]
+        tot = sum(w for c, ip, w in smp) or 1
+        hal = sum(w for c, ip, w in smp if ip in (self.hlt, self.hlt + 1))
+        return dict(ms=ms(win), busy_ms=ms(win) * (tot - hal) / tot,
+                    busy_pct=100.0 * (tot - hal) / tot, unlocks=None,
+                    irqs=None, t0=t0, t_end=t_end, t_done=t_done, cycles=win,
+                    fdc=_fdcdelta(fdc0, fdc1), relative=True)
+
     def start(self):
         """Note whether the paused guest is halted right now (the window's
         first interval). Called by go() after the pause."""
         st = self.m.status()
         self._was_halted = int(st["flat_ip"]) in (self.hlt, self.hlt + 1)
 
-    def halted_at(self, c):
+    def halted_at(self, c, ip=None):
+        if self.box:
+            return ip in (self.hlt, self.hlt + 1)
         i = bisect.bisect_right(self._hstarts, c) - 1
         return i >= 0 and self.halts[i][0] <= c < self.halts[i][1]
 
@@ -1004,7 +1068,8 @@ def run_desktop(mach, sample=False, local=False):
             out = m.batch([{"cmd": "advance", "cycles": step}] * n)
             if sample:
                 samples += [(int(r["cycles"]), int(r["flat_ip"]),
-                             int(r["advanced_cycles"])) for r in out]
+                             int(r.get("advanced_cycles", step)))
+                            for r in out]
             cyc = int(out[-1]["cycles"])
             if up():
                 if seen is None:
@@ -1020,7 +1085,7 @@ def run_desktop(mach, sample=False, local=False):
         if sample:
             km = KMap(m)
             bk = Buckets(m, km, local)
-            prof = _profile_table(samples, bk, lambda c: False)
+            prof = _profile_table(samples, bk, lambda c, ip: False)
         m.run()
         return res, prof
 
@@ -1029,7 +1094,7 @@ def _profile_table(samples, bk, halted):
     tab, tot, hal = {}, 0, 0
     for c, ip, w in samples:
         tot += w
-        if halted(c):
+        if halted(c, ip):
             hal += w
             continue
         k = bk.name(ip)
@@ -1107,6 +1172,12 @@ def machines(a):
     return list(ALL) if a.all else [a.machine]
 
 
+def tag(mach):
+    """How a machine is named in the output: `286/cga` on 86Box, where the
+    figures are RELATIVE, so they cannot be read as MartyPC ones."""
+    return mach if EMU == "marty" else "%s/%s" % (CPU, mach)
+
+
 def cmd_time(a):
     res = {}
     for mach in machines(a):
@@ -1122,7 +1193,7 @@ def cmd_time(a):
             fdc = sm["fdc"] or {}
             print("%-5s %-8s %-22s ms %8.1f (min %8.1f)  busy %8s  %5s%%  "
                   "unl %4s  fdc %s"
-                  % (mach, a.scenario, label, sm["ms_med"], sm["ms_min"],
+                  % (tag(mach), a.scenario, label, sm["ms_med"], sm["ms_min"],
                      "%.1f" % sm["busy_med"] if sm["busy_med"] is not None
                      else "-",
                      "%.0f" % sm["busy_pct"] if sm["busy_pct"] is not None
@@ -1154,7 +1225,7 @@ def cmd_profile(a):
             tm = times[label]
             print("\n%s  %s / %s: %s ms, busy %s ms  (%d reps, %.0f%% of "
                   "the window halted)" % (
-                      mach, a.scenario, label,
+                      tag(mach), a.scenario, label,
                       "%.1f" % tm.get("ms_med", tm.get("ms")),
                       "%.1f" % tm["busy_med"] if tm.get("busy_med") else "-",
                       a.n if a.scenario != "desktop" else 1,
@@ -1392,6 +1463,11 @@ def _num(v):
 
 def cmd_diff(a):
     A, B = json.load(open(a.a)), json.load(open(a.b))
+    # a COMBINED file (the baseline report's HOTPATH-BASE-*.json) holds one
+    # result per `<subcommand>-<scenario>`: --key picks one out of either side
+    key = getattr(a, "key", None)
+    if key:
+        A, B = A.get(key, A), B.get(key, B)
     for mach in sorted(set(A) & set(B)):
         ra = A[mach]
         rb = B[mach]
@@ -1519,6 +1595,10 @@ def main():
 
     def common(q):
         q.add_argument("--machine", default="cga")
+        q.add_argument("--emu", choices=("marty", "86box"), default="marty",
+                       help="86box: an AT (RELATIVE figures only)")
+        q.add_argument("--cpu", choices=("286", "386"), default="286",
+                       help="with --emu 86box: at286_* or at386_*")
         q.add_argument("--all", action="store_true")
         q.add_argument("--json")
         return q
@@ -1542,7 +1622,13 @@ def main():
     q = sub.add_parser("diff")
     q.add_argument("a")
     q.add_argument("b")
+    q.add_argument("--key", help="one result out of a combined baseline "
+                   "file, e.g. time-raise or gfxbench")
     a = p.parse_args(argv)
+    global EMU, CPU
+    EMU, CPU = getattr(a, "emu", "marty"), getattr(a, "cpu", "286")
+    if EMU == "86box":
+        os.environ["OS88_EMU"] = "86box"
     fn = {"scenarios": cmd_scenarios, "time": cmd_time,
           "profile": cmd_profile, "cycles": cmd_cycles,
           "gfxbench": cmd_bench, "sysbench": cmd_bench,
