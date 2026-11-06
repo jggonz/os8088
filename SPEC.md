@@ -7234,6 +7234,28 @@ mostly irreducible: the far-call cell is the package ABI (§20.1), the eight
 push/pops in `sw_rect` are `gfx_fill`'s "clobbers flags" contract, and
 `vga_rect_setup`'s clipping is the clipping.
 
+Kernel hot-paths pass 1 (docs/plans/khp1/gfxcall.md) took three more off the
+same floor, each measured by single-stepping a real call on MartyPC's 5150:
+
+8. **`gfx_rect_setup` reads the row table itself** rather than calling
+   `gfx_rowbase` (the call, the ret, its push/pop and a reload of y1 were
+   ~70 clocks), takes its empty test from the `sub` that makes the row count,
+   and holds both edge masks in DL/DH so a one-byte rect combines them in a
+   register: 751 -> 639 clocks a call. A row past the table still takes
+   `gfx_rowbase_calc`.
+9. **`gfx_frame` asks `GFXCLIP`'s questions once an outline**, not once a
+   strip: unclipped and on one display, its four strips go straight to
+   `gfx_fill_raw`. A region, the open dock's hole and a second display keep
+   the per-strip public entry.
+10. **`fpg_finish` answers the unarmed unlock before its frame**: with no
+    widget up, warming or parked, the five pushes and the exchange of a zero
+    word changed nothing but `[cur_barok]`. `gfx_unlock` runs it on every
+    drawing burst, 483 -> 176 clocks.
+
+gfxbench on CGA, base against the pass's tip: `GFX_PIXEL` 539 -> 509 us,
+`GFX_HLINE 8px` 540 -> 508, `GFX_FILL 8x8` 666 -> 636, `GFX_FRAME 64x64`
+6,142 -> 5,895, the `GFX_UNLOCK+LOCK` pair 473 -> 403.
+
 ### 5.7.1 A string op already advanced DI — do not pay to undo it
 
 **A rect's interior walk must not bank DI around its own `rep`.** §5.7's
@@ -9488,11 +9510,16 @@ no second glyph set, and **§6.1.5's compose, §6.1.7's glyph-pointer table and
 §6.1.6's once-per-run prologue are all unchanged** — the phase is the only thing
 this path knows that the aligned one does not.
 
-**`CX` carries the shift in `CL` and the previous composed byte in `CH`**, so
-there is no register left to count cells with: the walk ends on `SI` reaching
-the glyph table's end (`[font_rn_send]`) instead. That is a real constraint and
-not a stylistic one — every other register is spoken for (`DL`/`DH` the masks,
-`SI` the table, `DI` the framebuffer, `BP` the row, `AX`/`BX` the compose).
+**`CL` carries the shift and `CH` counts the cells; the previous composed byte
+rides in `BH`** (kernel hot-paths pass 1). `BX` is the glyph pointer only until
+the row byte is loaded, so the composed byte is parked in `BH` and the next
+cell's `xchg ax, bx` hands it back as `AH`, exactly where the shift wants it.
+This used to say there was no register left to count with — the previous byte
+rode in `CH` — and the walk compared `SI` against the table's end in memory
+(`[font_rn_send]`) every cell row; the `BH` arrangement drops that compare and
+two moves, and a skewed run measures **−15% (10 cells) to −19% (78)** on all
+three adapters (`DL`/`DH` the masks, `SI` the table, `DI` the framebuffer,
+`BP` the row, as before).
 
 ##### The two edge bytes are COLUMN-major, and that is the design
 
@@ -9635,6 +9662,33 @@ is the site that gives it up (§12.2.1).
 **On a planar adapter none of this runs.** `font_ink`'s checkerboard is mono-only
 (§39.5) — VGA greys with a colour — so `[font_rn_dt]` is set to zero on the
 common path before either prologue and the planar one never looks at it.
+
+#### 6.1.13 …and the TRANSPARENT string is a run too — `font_str_run`
+
+`font_str_x` letters a string through `font_char` one cell at a time, and on a
+1bpp adapter almost all of a cell is overhead: the frame, the edge and clip
+tests, the glyph arithmetic, `gfx_rowbase`, `font_ink` and eight row
+advances, ~3,300 cycles against ~800 of row work. **`font_str_run` pays them
+once a string** (kernel hot-paths pass 1): §6.1.7's pass 1 into
+`font_rn_tab` (the same +8 bias and on-screen prefix), then one ROW of the
+whole string at a time, and at an unaligned x a byte two cells straddle takes
+both cells' bits in ONE merge (§6.1.11's `shr ax, cl` with the previous glyph
+row in `CH`). OR and AND-NOT are commutative and idempotent, so the merged
+byte is the byte the two merges left, and a byte with no bits is not written.
+
+It takes the string only where the result is provably `font_char`'s:
+`[vid_mono]` (a planar or packed display keeps `font_char`'s VRAM writer),
+one display, `[gfx_dis]` clear, the row on screen, a non-negative x, a
+string within `FONT_RN_MAX` cells, and either no armed region or one whose
+single fragment holds the whole string with the cull off (§11.3.3) - inside
+one fragment every cell's own `wm_clip_rows` answers all eight rows and every
+column, which §6.1.7's single test already relies on. Anything else returns
+CF = 1 having drawn nothing, and `font_str_x` walks the cells as before. The
+cursor's deferred hide is spent once, as the first `font_char` would.
+MEASURED (MartyPC, the routine parked): ten cells 35,853 → 16,103 cycles on
+CGA, a 17-cell title 62,728 → 26,523 (2.4×), framebuffer byte-identical on
+CGA, Hercules and VGA; a string a region cuts pays its pass 1 and falls
+back, +4%. `make SNAPAUDIT=1` leaves it out, §11.94.2 counting cells.
 
 ### 6.2 `BAKED_FONT` — a typeface the build carries, instead of one it borrows
 
@@ -10698,7 +10752,12 @@ Four things make the pair what it is.
   then `cur_pass_mono` again for black) read the same byte three times and
   wrote it twice, each through its own row walk and its own `gfx_nextrow`
   call. The masks compose: `(under | white) & ~black` is exactly what drawing
-  one pass on top of the other always produced.
+  one pass on top of the other always produced. Since kernel hot-paths pass 1
+  the row is a WORD: one read of both bytes under the arrow, one word banked,
+  the masks rotated (`ror`, not `shr`) so their bytes come out in the word's
+  own order, then the byte writes - 6,309 -> 5,234 cycles a show on the
+  5150's CGA, measured over 31 typed keys; `cur_get_mono` takes `lodsw` and
+  holds the row step in registers, 2,916 -> 2,215.
 - **And the PLANAR draw is one pass too, with no Set/Reset at all.** VGA used
   to paint the whole dilated body solid white and then punch the black arrow
   into it — two passes with a GC reprogram between them, and a window in which
@@ -10831,13 +10890,33 @@ against a 20 ms frame, so ~6.5% of every frame, on every mouse packet.
   overlap degenerate to the old behaviour by themselves: the skip never fires
   and the background always comes from the screen. There is nothing to bound
   and nothing to get wrong at the extremes.
-- **Which bytes those are is decided once, not per row.** `cur_mvcols` turns
-  the byte-column difference `d = newcol - oldcol` into four answers —
-  `mv_p1s0/1` (pass 1 must skip this old column) and `mv_p2s0/1` (pass 2's
-  offset into the old save, or `0FFh` for "read the screen") — because it is
-  the same answer for every row. Both halves fold in the *other* cell's edge
-  clip: pass 1 may only skip a byte pass 2 will really write, and pass 2 may
-  only source from a slot the old cell really saved.
+- **Which bytes those are is decided once, not per row.** Two numbers say
+  it: the byte-column difference `d = newcol - oldcol` and the row difference
+  `e = newtop - oldtop`. The columns meet only for `d` = -1, 0 or +1 (the
+  arrow spans two bytes), and then the rows that meet are **one contiguous
+  run**, so "does the other cell reach this row" is a range compare and never
+  a per-row search. Pass 1's two write answers for a covered row and for an
+  uncovered one, and how a covered row's saved bytes become the new
+  background, are packed into one register before either walk. Both fold in
+  the *other* cell's edge clip: pass 1 may only skip a byte the draw will
+  really write, and the new background may only come from a slot the old
+  cell really saved.
+- **The second pass is two walks, neither with a test per byte** (kernel
+  hot-paths pass 1). The new cell's background is first banked straight off
+  the screen - which is right for every byte except the overlap, where the
+  old arrow still stands - and pass 1, walking the old cell, patches the
+  overlap rows of that bank from the old save as it restores the rest. The
+  draw then composes from the bank: one read, one write a byte. Measured on
+  MartyPC (a 24-packet sweep, `cur_move` entry to return): **19,400 -> 12,000
+  cycles** (4.07 -> 2.51 ms) on the 5150's CGA, 19,300 -> 11,700 on
+  Hercules, and the serial ISR's share of the CPU while the pointer sweeps
+  falls from 20.0% to 14.1%. `cur_mvcols`, `cur_mvrow` and `cur_mvbg`, the
+  three per-row helpers the earlier shape called 36 times a move, are gone,
+  and the routine is 26 bytes smaller. Equivalence is proved against the
+  previous kernel's own bytes under unicorn - 36,000 random moves over CGA,
+  Hercules and linear 1bpp geometry and all three shapes, with the whole
+  framebuffer, the save buffer and the banked geometry compared after every
+  move and every framebuffer write counted (none twice).
 - **Two save buffers, swapped by a pointer.** Pass 2 reads the old background
   while filling the new, so they cannot be the same 24 bytes. `[cur_sptr]`
   names the live one; nothing is copied. `cur_sptr` lives in `.text` with a
@@ -10845,7 +10924,20 @@ against a 20 ms frame, so ~6.5% of every frame, on every mouse packet.
   a pointer at the API jump table.
 - **VGA keeps erase-then-draw.** Its save is four planes through Read Map
   Select and cannot take a background from a buffer. Its draw is one store
-  now (§7.1), which was the larger of the two windows there.
+  now (§7.1), which was the larger of the two windows there. **The save and
+  the restore are the cell's own walks** (`cur_saveu`/`cur_restoreu`, kernel
+  hot-paths pass 1), not `vga_save_vram`/`vga_restore_vram`: the cell is
+  already clipped by `cur_geom`, so `gfx_rect_setup`, the `rep movsb` row
+  loop and the one-plane and sub-rect arms were pure overhead. `cur_vspan`
+  derives the byte span exactly as `gfx_rect_setup` did (one byte when the
+  cell is byte-aligned, two otherwise unless the right edge took the second)
+  and the buffer keeps that routine's plane-major layout, so the glass is
+  identical - proved under unicorn with a four-plane model against the
+  previous kernel's bytes, 1,500 cells over 640x480 and 640x350, every shape.
+  MartyPC's XT VGA: `cur_move` **21,450 -> 15,100 cycles** a packet, the ISR's
+  share of a sweep 21.5% -> 16.4%. An armed sub-rect restore (§5.8) is now
+  never consumed by the pointer, which the shared routine's `gfx_sub_off`
+  used to do.
 
 Verified the only way a save-under can be: a dense walk of 37 moves — column
 deltas 0, ±1, ±2 and larger, every shift phase, plus the right and bottom
@@ -11485,7 +11577,7 @@ error. It addresses the row above the framebuffer.
 Left and top *clipping* is the correct fix and it is not a small one: a
 `cur_b0ok` beside `cur_b1ok`, a table start offset for the skipped rows, `sar`
 where the column shift is `shr`, and the two of those threaded through
-`cur_mvcols`/`cur_mvrow`/`cur_mvbg` — the four per-column answers §7.1.2 built
+`cur_move_mono`'s overlap answers — the per-column decisions §7.1.2 built
 to write every byte exactly once, whose cases double when either cell can lose
 its first column.
 
@@ -11502,8 +11594,8 @@ Three things follow and each broke first:
 
 - **`[cur_cellx]`/`[cur_celly]` are banked by `cur_geom`**, because the cell's
   top-left is no longer the pointer's position and `cur_move_mono` asks about
-  it three times — the old cell's byte column, pass 1's "will pass 2 cover
-  this row", and `cur_mvrow`. §7.1's rule applies unchanged: two derivations
+  it twice — the old cell's byte column and the row run where the two cells
+  meet. §7.1's rule applies unchanged: two derivations
   of a save-under's geometry are two chances to disagree by a byte, and a byte
   is a smear.
 - **`cur_lazyck` subtracts the hot spot too, and deliberately does NOT clamp.**
@@ -12605,8 +12697,8 @@ no-op. Three callers:
 wrong: only IRQ0 falls into `sch_switch`; every other ISR `iret`s straight back
 to what it interrupted, so a task an ISR has just made ready would wait for the
 next tick. The idle task's `task_yield` after its `hlt` (§8.1.2) is what closes
-that — any interrupt ends the halt and the yield re-enters the scheduler at
-once. Measured: from the mouse ISR finishing a packet to the next `ui_task`
+that — any interrupt ends the halt and, when it posted a wake (§8.1.2.5),
+the yield re-enters the scheduler at once. Measured: from the mouse ISR finishing a packet to the next `ui_task`
 pass, **5.14 ms median against a spinning kernel's 4.99, with a lower worst
 case (5.22 against 6.41)**; without the yield the same figure is 32.4 ms
 median and 54.5 max.
@@ -12677,6 +12769,79 @@ on a deadline of its own (§79.5) — everything below `.posted_done` is
 tick-driven, where coalescing is a feature and not a cost (§13.12) — so it is
 the only rung that needs to say so.
 
+
+#### 8.1.2.5 A halt no wake ended is halted again
+
+Until kernel hot-paths pass 1 the idle task yielded after EVERY interrupt
+that ended its `hlt` (8.1.2.2's yield), and with nothing ready that yield
+was a switch that resumed the idle task: one a serial BYTE (three a mouse
+packet, of which only the third wakes anything) and one a tick (IRQ0 had
+already switched to the woken UI task and back). Now the idle task goes back
+round its loop after its `hlt` (`popf`, then `.loop`'s fail-safe test and the
+guard's `pushf` / `cli` / test of `[sch_idlewake]`), halts again if the byte is
+clear, and yields only when it is set. The loop's head is still passed after
+every interrupt, which tests/dskwstage.py's quiet point relies on.
+That is exact because every event that makes a task READY now posts the
+byte:
+
+- `sch_wake_ui`, as before (the mouse, the keyboard, `evq_push`);
+- **`sch_isr`'s wake loop**, for each sleeper it wakes - the case where the
+  tick cannot switch (`sch_lock`, a nested tick, the cooperative mode)
+  leaves the woken task to the idle task's yield;
+- `task_spawn` publishes from a running task, never from an interrupt, so
+  a spawned task is never ready while the idle task is the one running.
+
+And **`sch_switch`'s "nothing ready" fallback clears it** (`mov
+[sch_idlewake], dh`, DH being the spent count): when the scan found nothing
+eligible every wake posted before it has been looked at, so the byte means
+exactly "something became ready since the scheduler last looked". The scan
+and the store are one IF = 0 window. Under the fsx freeze a ready but
+ineligible UI task still costs one yield per wake, as 8.1.2 describes.
+
+**kern_emu keeps the old loop** (`%ifndef KERN_EMU`): its VMware pointer is
+POLLED in `task_yield` (SPEC.md 9.11.3), and the interrupt that ended the
+halt is how a moving absolute pointer reaches that poll.
+
+Measured on MartyPC's 4.77 MHz 8088, CGA, kern_big: an idle tick 11,205 ->
+9,941 cycles; over 30 mouse packets the idle task's yields fell from 218 to
+29 and the hand-off to the UI task stayed 1,794 cycles. 12 bytes (one a
+parity pad) - docs/plans/khp1/sched.md item sched-4.
+
+### 8.1.3 `sch_top` — the scan stops at the last slot that can be live
+
+`sch_top` (a `.bss` byte) is **one past the highest task slot that can be
+non-free**: every slot at or above it has `T_STATE` = 0. The two loops that
+walk the task table on the hot path - `sch_isr`'s wake scan, every tick, and
+`sch_switch`'s round-robin scan, every switch - run over slots `0 ..
+[sch_top]-1` instead of `0 .. MAX_TASKS-1`. A free slot was never woken and
+never picked, so **the pick is the same task in every case**; only the count
+of free slots looked at changes.
+
+- `sched_init` seeds it to 1 (only slot 0, the UI task, is live) in the same
+  word store that seeds `sch_idleslot` = 0xFF, the byte below it.
+- `task_spawn` raises it to slot + 1 when the slot it found is at or above it,
+  **before the publish** and inside the routine's own IF = 0 window, so no
+  tick can see a ready slot past the bound.
+- `task_exit` lowers it past every free slot at the top, after it frees its
+  own record and still under its `cli`. The walk stops at slot 0 at the
+  latest, because the UI task never exits.
+- The scan's wrap is `jb`, not `jne`: a `task_exit` that lowered the bound
+  under its OWN slot reaches `sch_switch` with `[sch_cur]` >= `[sch_top]`, and
+  the first step wraps to slot 0. The count is `[sch_top]`, so the scan visits
+  every slot below the bound exactly once, the outgoing task last when it is
+  below it.
+
+It pays because slots are allocated by stack CLASS, smallest first (§8.7),
+so the slots in use cluster at the bottom: an idle desktop has two live
+slots (the UI task and the idle task in slot 1) out of fourteen, and a
+package with a 192-byte worker raises the bound to 5. Measured on MartyPC's
+4.77 MHz 8088 (CGA, kern_big, idle desktop): **an idle tick fell from 17,558
+to 11,533 cycles (3.68 to 2.42 ms; 6.7% to 4.4% of the machine)**, a
+yield-to-self from ~2,630 to ~1,100 cycles, and the scheduler's share of the
+mouse-to-UI-task hand-off (idle task's `hlt` to the UI task's pass) from
+3,520 to 1,791 cycles. It costs 47 resident bytes on kern_big (three of them
+parity pads, `tests/unit/t_hotpar.py`) - docs/plans/khp1/sched.md item
+sched-1.
 
 ### 8.2 Scheduler modes — pre-emptive and cooperative
 
@@ -17710,9 +17875,14 @@ user, so `CL = buttons | (notches << 2)`. No new cell was needed, because every
 driver built before this masked CL to its two buttons (`and cl, 3`). An old
 binary therefore reports *no* wheel rather than a wrong one, and the contract
 grows with no `DRV_VER` bump (§20.2.0.1). The kernel decodes it once, in
-`mou_apply`'s shared tail: two `sar`s, §10.4's add, and `and cl, 3`. That is
-also where VMware's absolute arm joins (§9.11), so both backends share the
-same twelve bytes.
+`mou_whl_cl`: two `sar`s, `and cl, 3`, and §10.4's add. It is reached from
+`mou_apply_w`, the entry `OSAPI_MOUSE_FEED` and VMware's relative arm call,
+and from VMware's absolute arm (§9.11) before it joins `mou_apply`'s tail -
+so every backend whose CL can carry a wheel shares the same nine bytes. **The
+serial and PS/2 decoders enter `mou_apply` itself and skip it**: their CL is
+two clean bits and their wheels arrive in a fourth byte of their own, so the
+decode, its zero add and its second UI wake were ~240 cycles of every packet
+for nothing (kernel hot-paths pass 1; it was inline in the shared tail).
 
 **`VMMOUSE.DRV`'s private ABI is a different matter**, and `VMM_ABI_VER` went
 from 1 to 2 with it (`kernel/vmmabi.inc`, §9.11.2): an old kernel stores CL
@@ -81952,7 +82122,7 @@ including the ones with no VESA card at all.
 So the boundary is cut **once per primitive** instead of tested once per row.
 `vbe_cut_run` splits a rect that straddles a bank into one rect per bank and
 runs the body once per piece, each piece a whole rect in its own right:
-`gfx_rect_setup`'s existing `gfx_rowbase` call then selects that piece's bank,
+`gfx_rect_setup`'s existing row-base lookup then selects that piece's bank,
 which is also its *only* bank, so no walker can cross a window inside its own
 loop.
 
