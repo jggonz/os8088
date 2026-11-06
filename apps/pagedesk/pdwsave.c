@@ -59,8 +59,8 @@ static void tclr(pdw t, pdw n) { pd_ffill(g_wseg, (pdw)(g_tail + 2u * t), 0, (pd
 /* the graph copy's state (pdwgc.c, 20.11.4) */
 #define GC_DONE  0x0FFF
 /* seen + scan + the prefix table, sized from the source's /Size (an object
-   number at or past it is not in the xref): gc_nw words a bit map, a
-   multiple of 8, so 4.25 x gc_nw bytes in all - 17 KiB only at /Size 65535 */
+   * number at or past it is not in the xref): gc_nw words a bit map, a
+   * multiple of 8, so 4.25 x gc_nw bytes in all - 17 KiB only at /Size 65535 */
 static pdw gc_nw;
 static pdw gc_seen, gc_scan, gc_pref;   /* far offsets in the writer buffer  */
 static pdw gc_w, gc_dirty, gc_cnt, gc_over, gc_total, gc_n, gc_sub, gc_k, gc_cur, gc_blk, gc_nb;
@@ -693,11 +693,11 @@ static pdw job_slice(void)
     while (units < SV_UNITS && g_io == io0) {   /* one disk transfer ends a slice (15.2) */
         units++;
         /* D21: the disk write happens HERE, at the top of the writer's chain,
-           whenever under PDW_ROOM of the output region is free - not at the
-           bottom of pb_* -> pw_n -> pw_flush inside an appearance stream,
-           which put the kernel's file code ~200 bytes deeper on the UI
-           task's 384-byte stack. A unit that writes more than PDW_ROOM
-           still flushes where it is (correct, only deeper). */
+           * whenever under PDW_ROOM of the output region is free - not at the
+           * bottom of pb_* -> pw_n -> pw_flush inside an appearance stream,
+           * which put the kernel's file code ~200 bytes deeper on the UI
+           * task's 384-byte stack. A unit that writes more than PDW_ROOM
+           * still flushes where it is (correct, only deeper). */
         if (sv_phase != PH_COPY && (pdw)(g_outcap - g_wpos) < PDW_ROOM) {
             pw_flush(0);
             if (g_err) return g_err;
