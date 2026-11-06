@@ -7,13 +7,72 @@ section 7 defines the columns). Each agent's note in `docs/plans/khp1/` is
 the authority on its own rows. This file collects them so the owner can read
 the byte-costing items side by side.
 
-**Status: IN PROGRESS.** Merged so far: gfxcall, vga, mono, text, pointer, wm, files, disk, sched.
+**Status: COMPLETE.** All nine speed agents and the size agent are merged into `kernel-hotpaths`.
+
+## 0. The owner's picks at a glance, ranked
+
+Every byte-costing item, in one place, ranked by user-visible time per
+resident byte on kern_big and by how often a user meets the operation. The
+grades are the coordinator's reading of the agents' measured figures
+(sections 1 and 4, and each note); the ms are MEASURED on MartyPC unless
+marked P. "Needs" is a hard dependency: the later commit edits code the
+earlier one adds. **Dropping a pick is `git revert <commit>`** (in the order
+"needs" implies). Dropping all of them still leaves a kernel faster and
+smaller than the base.
+
+**A - clear wins: a lot of time for few bytes, on operations met all day.**
+
+| id | commit | kern_big B | what it buys |
+|---|---|---:|---|
+| disk-5 | `073d705b` | +40 | 360/720 KB: open a root 4 -> 2 int 13h calls, enter a folder 3 -> 2, Up 3 -> 1 (~0.4 s a call). Needs disk-4 |
+| files-1 | `048c7097` | +5 | Up One Folder ~-250 ms (one boot-sector read fewer) |
+| wm-1 | `9c64eaea` | +4 | a covered window put back whole is not re-saved: fullscreen exit CGA -106 ms |
+| sched-1 | `488ea2d5` | +47 | `OSAPI_TASK_YIELD` 644 -> 283 us; the idle tick -34%; pointer and typing CPU -12 to -20% |
+| sched-4 | `d0ad21da` | +12 | the idle task halts again: pointer CPU -8%, idle CPU -11.6% |
+| disk-1 | `f47761a8` | +126 | lz4 decode ~1.7x: Note Pad launch -170 ms, Paint -254 ms |
+| disk-2 | `d122c19d` | +72 | LZB decode ~1.6x: Calc -107 ms, TexPad -469 ms. Needs disk-1 |
+| disk-4 | `1217b318` | +208 | one int 13h call fewer on most launches (360 KB and 1.44 MB): ~-400 ms each |
+| mono-2 | `58ea45aa` | +16 | 1bpp save/restore by words: raise -11 ms CGA, -15 ms Hercules |
+| wm-4 | `233ccd04` | +34 | fullscreen exit and saver wake by the damage pass: with wm-1, CGA 781 -> 629 ms, VGA 1,203 -> 706 |
+| text-8 | `1139897c` | +6 | `font_width_x` -69%: ~-0.9 ms a menu open (P) |
+| gfxcall-1 | `10323197` | +6 | `gfx_rect_setup` 751 -> 639 cycles: -1.27 ms a CGA raise |
+| files-2 | `e02c1b7e` | +7 | a scroll moves the thumb only: CGA PgDn -18 ms, fewer transients |
+| vga-4 | `8b1de03b` | +3 | VGA XOR fill -36%: menu highlights, every drag-outline step |
+| text-9 | `499dfc5c` | +2 | VGA `font_char` -6% a glyph |
+
+**B - good value: tens of ms on common operations for tens of bytes.**
+
+| id | commit | kern_big B | what it buys |
+|---|---|---:|---|
+| vga-1 | `7e469c23` + `7390cd6d` | +41 net | VGA save/restore by words: a raise's save 133 -> 99 ms, menu drop and dismiss -10 ms each. Revert `7390cd6d` first |
+| vga-2 | `71a90157` | +39 | VGA solid/grey fill interiors by words: most of a VGA raise's fill time |
+| wm-6 | `ce2df232` | +38 | a vacated strip under another window draws nothing: drags over hidden windows -12 to -32% (+~2 ms where nothing is hidden) |
+| wm-3 | `cd852c89` | +24 | an unclipped caption as one `font_run_x`: -3.5 to -8.5 ms a CGA raise (kern_big only) |
+| vga-3 | `9e5511d1` | +21 | VGA fill edge columns two rows a pass: `VLINE 128` -21% (one-row lines +1.9%) |
+| mono-3 | `1eabf883` | +56 | 1bpp scroll by bank: `GFX_SCROLL` -25%; PgDn -28 ms on its own base, but most of that overlaps files-2/3 on the merged tree (~-4 ms left) |
+| mono-4 | `87574fa3` | +22 | 1bpp pattern fill -28% |
+| gfxcall-4 | `2f15d7df` | +18 | an unarmed progress widget answers before the frame: -64 us every drawing burst (~-2 ms over 31 keys) |
+| wm-2 | `db2e9670` | +10 | an inactive title's caption gap is not filled: ~-2 ms a caption |
+| pointer-2 | `49f6681c` | +81 (`.vga`) | the VGA cursor saves/restores its own cell: `cur_move` 21,451 -> 15,103 cycles, VGA pointer CPU -5 points. **This one crossed kern_big's top rung** |
+| files-3 | `f183b808` | +80 | 1bpp icons by words: with files-2, CGA PgDn -25%, Hercules -11%. **It is also why `glyphcost` reads red (O5)** |
+
+**C - the real choices: large bytes, or small gains, or both.**
+
+| id | commit | kern_big B | what it buys | why it is a choice |
+|---|---|---:|---|---|
+| mono-1 | `13aeb31a` | **+344** | the 1bpp rect walked a bank at a time: `GFX_FILL 64x64` -51%, CGA raise -9 ms, menu open -5 ms, drag pass -6 ms; small fills +2% | the largest single item. Its value is in every big fill a package draws (Paint, games, dialogs), not in the desktop scenarios alone. kern_big only. mono-5 needs it |
+| mono-5 | `bab1b495` | +16 | XOR columns two rows a loop: a drag's XOR kernel 49 -> 40 ms busy | needs mono-1 |
+| text-6 | `c01cde29` | **+362** | `font_str_run`: a transparent string in one pass, 2.4x on a 17-cell caption (13.1 -> 5.6 ms) | +346 on kern_small too. After wm-3 it mostly speeds clipped captions and packages' transparent text: the desktop scenarios moved ~1-3% |
+| wm-7 | `4dd8b6d6` | +90 | a partial raise redraws outline and shadow only where covered: CGA raise -5 to -14 ms | good, but +90 |
+| vga-5 | `da0b1070` | +32 | `gfx_blitp` wide rows by words: Paint's canvas ~-53 ms (P) | predicted, not measured on an operation |
+| gfxcall-3 | `4ea77a8b` | +26 | `gfx_frame`'s entry questions once a frame: ~-0.27 ms a raise | small |
+| pointer-6 | `8924a280` | +8 | `cur_lazyend`'s early answer: 477 -> 224 cycles | pays only if O4 is taken; no measured scenario reaches it today |
+| disk-3 | `04528080` | +14 | the read-ahead drop that disk-5 builds on | superseded by disk-5 on kern_big and kern_small; it is kern_mega's only form of the fix. Keep it while disk-5 stays |
 
 ## 1. Byte-costing items: the owner's picks
 
 Each row is one commit whose subject starts `[+N]`, revertable on its own.
-They are listed best value first: user-visible ms saved per resident byte,
-weighted by how often the operation happens.
+They are listed by agent; section 0 ranks them by value.
 
 | id | agent | routine / path | hotness | change | kern_big B | kern_small B | cycles base -> tip (input) | user-visible (operation, adapter: ms base -> tip) | M/P | 286 | commit | FREE / [+N] |
 |---|---|---|---|---|---:|---:|---|---|---|---|---|---|
@@ -74,6 +133,31 @@ weighted by how often the operation happens.
 | files-4 | files | `assoc_scan` (assoc.inc) | H4 (listing, harvest) | ES = DS and `cld` once in front of the walk, not per row | 0 | 0 (no OS88_ASSOC) | median 1,959 -> 1,530 cycles a call (os88hot cycles, opendisk, CGA) | first open of B:, ~31 calls: ~-2.8 ms | M | same | `31c9775e` | **FREE** |
 | sched-2 | sched | `ui_task` (the pass's first look at the event ring) | H2 (every pass) | enter the drain through `.yield`'s byte compare instead of a full `evq_pop` on an empty ring; `ui_drain` stored and decremented as a byte to pay for the near jump | 0 | 0 | ui_task + evq_pop ~2,180 -> ~1,870 a pass; idle tick 11,533 -> 11,205 on top of sched-1 | every UI pass, idle or event: ~300 cycles (0.06 ms) off the time from an event's wake to its handler | M | none | 31309aca | **FREE** |
 
+### 2.1 The size agent's give-back (all FREE, off the hot paths)
+
+From `docs/plans/khp1/size.md`, which is the authority on each row.
+
+| id | file | routine | what | bytes (big / small / emu / mega) | cycles | commit |
+|---|---|---|---|---:|---|---|
+| size-1 | `apps/os88ui.inc` (kernel copy) | button body, `os88ui_sbar`, `os88ui_sbmove`, `os88ui_sbpos`, `os88ui_sbthdraw` | the kernel's `.cold` copy ends on `kretc_bp` / `kretc_si` / `kretc_dx` (SPEC.md 15.1.2); a package keeps its pops. `UI_KRET <rung>` at the file-level sites, the rung as a second macro argument to `OS88UI_BTN_BODY` because kern_small expands it into CTRL.DRV and FDLG.DRV (`OS88UI_KFAR`) | -20 / -12 / -20 / -20 | +~20 clocks a button or scroll-bar draw / thumb move, each already several drawing calls (~2.3 ms) | `7d6beace`, `a9972c68` |
+| size-2 | `kernel/blank.inc` | `blk_relit` | wm-4's bank of AX..DX leaves by `kret_dx`. **Depends on `233ccd04` (wm-4)** | -2 / -2 / -2 / -2 | +~20 clocks once a relight (a ~600 ms repaint) | `68f50f2a` |
+| size-3 | `kernel/vidsel.inc` | `vid_pt_clamp` | CX not banked: the one caller pops its own next | -2 / 0 / -2 / -2 | faster (a push and a pop) | `968d8df2` |
+| size-4 | `kernel/wm.inc` | `wm_rz_swap` | DI not banked: `mov di, bx` after one call, `pop di` after the other | -2 all | faster | `968d8df2` |
+| size-5 | `kernel/wm.inc` | `wm_su_bank` | AX and BX not banked (the caller leaves by `kret_di`); both arms then TAIL-jump into `wm_su_take` / `wm_su_drop` | -6 all | faster: two pushes, two pops and a call/ret gone a window draw | `968d8df2` |
+| size-6 | `kernel/clip.inc` | `clip_drop` | BX not banked: `mov bx, MEM_K_CLIP` next, or `kret_bp` | -2 all | faster | `968d8df2` |
+| size-7 | `kernel/memory.inc` | `mem_bcopy` | SI not banked: both callers `pop si` next | -2 all | faster, once a block moved | `968d8df2` |
+| size-8 | `kernel/files.inc` | `fm_clamp_scroll` | AX not banked: `kretc_di`, or reloaded from `[fm_lscr]` | -2 all | faster | `968d8df2` |
+| size-9 | `kernel/wm.inc`, `kernel/ui.inc` | `wm_dg_precover` | its BX and flags bank and its `call wm_rz_precover / ret` were dead; it is now three instructions that FALL INTO `wm_rz_precover` (pass 17's CROSS-FILE ~-8) | -8 all | faster, once a drag's drop | `eabd9200` |
+| size-10 | `kernel/vga12.inc` | `gfx_sub_off` | AX not banked: both restore bodies pop it next | -2 all | ~27 clocks faster a gfx_restore (every menu dismiss, every save-under put-back) | `eabd9200` |
+| size-11 | `kernel/toast.inc` | `toast_now` | AX not banked: `toast_show` leaves by `kret_di` | -2 all | faster | `eabd9200` |
+| size-12 | `kernel/lz.inc` | `lz_lz4` slow paths | `.mslow`, `.lslow`, `.litx`'s long run and `.end` `call .sync` (lz_lzb's shape) instead of LZ_FRAME + `call lz_sync` each; LZ_FRAME retired. **Depends on `f47761a8` (disk-1)**. The disk agent's inbox item | -8 all | the inline symbol path is byte-identical at the same addresses; each slow-path ENTRY +~35 clocks against the several-hundred-clock round it makes, a handful a file (<0.02% of Note Pad's 1.12M-cycle decode) | `e59c61ea` |
+| size-13 | `kernel/assoc.inc` | `assoc_scan` | CX comes back unchanged without its bank: the one write is inside the row's own push/pop. kern_big only (OS88_ASSOC) | -2 / 0 / -2 / -2 | faster, ~31 calls an open of B: | `64d97ff3` |
+| size-14 | `kernel/wm.inc` | `wm_su_merge` | SI and DI not banked: `wm_su_edge` reloads both before its second call and leaves by `kret_bp` | -4 all | faster, twice a clipped-edge save-under restore (per raise) | `64d97ff3` |
+| size-15 | `kernel/disk.inc` | `dsk_ico_stage` | AX not banked: both callers pop it next | -2 all | faster | `64d97ff3` |
+| size-16 | `kernel/disk.inc` | `dsk_fatw_demote` | AX and BX not banked (mem_pg_forget pops both); both copies of the pops go, the live exit is `.out`'s `ret` and the IF = 0 arm falls into `dsk_fatw_home` | -10 / -4 / -10 / -10 | faster, once a FAT window shed | `64d97ff3` |
+| size-17 | `kernel/disk.inc` | `dsk_rah_fill` `.multi` | the record stamp as `stosw` x4 + `stosb` with ES:DI on the record (both banked in the prologue); an %if pins the layout. **Depends on `1217b318` (disk)**. The disk agent's inbox item | -7 / -7 / -7 / 0 | once a launch's header peek; equal | `6538be65` |
+| - | `kernel/vga12.inc` | `GFX_U_FLOOR` | comment only: its kern_small byte is a .bss parity pad now (see 3) | 0 | - | `6320019c` |
+
 ## 3. Where the time goes: the ranked profiles
 
 The pass's map is the baseline report,
@@ -113,8 +197,69 @@ An idle desktop was 94% halted, and its busy time was `sch_switch` 45% and
 
 ## 4. Totals
 
-Resident bytes and `KERN_SIZE` on all four kernels at the base (`a7ee7fab`)
-and the tip, and the headline user-visible operations before and after.
+### 4.1 Bytes (assembled, `tools/kernsize.py --json`; `.mega` kernels from `make mega`)
+
+| kernel | resident at base (`a7ee7fab`) | resident at tip | delta | `KERN_SIZE` / budget, base -> tip |
+|---|---:|---:|---:|---|
+| **kern_big** | 91,530 | **93,287** | **+1,757** | 96,768 -> **99,328** of 100,864 (1,536 spare, no grace used) |
+| kern_small | 57,258 | 58,408 | +1,150 | 59,392 -> 60,416 of 64,000 (3,584 spare) |
+| kern_emu | 91,784 | 93,531 | +1,747 | 97,280 -> 99,328 of 100,864 |
+| kern_mega | conventional 62,976 | conventional 64,000 | +1,024 (one step) | of `MEGA_RESIDENT` 68,096 (4,096 spare) |
+
+The 35 `[+N]` commits sum to **+1,910** on kern_big (vga's `[-28]`
+included). The free items and the size agent's seventeen give back 153, of
+which the size agent's are -83 kern_big / -65 kern_small / -83 kern_emu /
+-76 kern_mega. Every byte of the pass that is not an owner's pick is a byte
+saved. **Dropping every `[+N]` pick leaves the kernel smaller than the base
+and still faster** (sched-2, files-4, pointer-1/3/4/5, text-1..7, vga-6/7,
+wm-5, gfxcall-2 and all of size are FREE).
+
+### 4.2 What the user sees: the whole pass, base `a7ee7fab` -> tip
+
+`tools/os88hot.py ab --base a7ee7fab time <scenario> --all -n 3` on
+MartyPC (the emulated 4.77 MHz 5150/XT), every pick kept. `busy` is the CPU
+the operation took; `ms` is the operation's span on the glass. Where the
+operation waits on the serial mouse or a key rate, `ms` cannot move and
+`busy` is the measure. **Three cells read as regressions at -n 3 and were
+re-measured at -n 6/7** (menu close on CGA and Hercules, Hercules drag): all
+three are improvements, and the -n 3 readings were packet-arrival phase
+(bench's caveat). Disk operations on this MartyPC model the platter, so
+their ms are close to the 5150's; the call count is the robust part.
+
+| operation | CGA | Hercules | VGA |
+|---|---|---|---|
+| **raise a window** (ms) | 182.4 -> **144.3 (-20.9%)** | 230.6 -> **182.4 (-20.9%)** | 368.0 -> **281.0 (-23.6%)** |
+| drag a window, 8 packets (ms) | 512.3 -> 475.3 (-7.2%) | 538.0 -> 496.6 (-7.7%, n=6) | 610.7 -> 586.5 (-4.0%) |
+| menu open (ms / busy) | 44.2 -> 40.5 (-8.4%) / busy -21.3% | 45.4 -> 38.3 (-15.6%, n=7) / busy -19.5% | 49.6 -> 45.1 (-9.0%) / busy -21.1% |
+| menu close (ms) | 23.4 -> 21.0 (-10.4%, n=7) | 25.0 -> 21.5 (-14.0%, n=7) | 30.4 -> 25.1 (-17.5%) |
+| **PgDn / PgUp in a Disk window** (ms) | 131.3 -> **88.5 (-32.6%)** / 124.2 -> 82.4 (-33.7%) | 131.9 -> 103.5 (-21.5%) / -21.8% | 104.1 -> 95.0 (-8.8%) / -8.3% |
+| **open A:'s Disk window** (ms, int 13h) | 1,750 -> **1,281 (-26.8%)**, 4 -> 3 calls | 1,683 -> 1,320 (-21.6%) | 1,708 -> 1,306 (-23.5%) |
+| **launch Calc**, cold / cached (ms) | 1,354 -> 1,127 (-16.8%) / 961 -> 782 (-18.6%) | cached 977 -> 794 (-18.7%) | cached 978 -> 800 (-18.2%) |
+| pointer sweep, 24 packets (CPU busy) | 235.5 -> **137.7 ms (-41.5%)** | 234.5 -> 138.1 (-41.1%) | 243.3 -> 154.5 (-36.5%) |
+| typing 31 keys (CPU busy) | 618.3 -> 493.2 ms (-20.2%) | 561.9 -> 439.7 (-21.8%) | 624.4 -> 481.7 (-22.9%) |
+| **idle desktop, 5 s (CPU busy)** | 326.0 -> **179.7 ms (-44.9%)**: 6.5% -> 3.6% of the machine | same | same |
+
+Not in the table (the agents' own measurements, not re-run here): fullscreen
+exit -25/-31/-44% (wm), Up One Folder ~-250 ms and a 360 KB root open 4 -> 2
+int 13h calls (files, disk), Note Pad launch 1,598 -> 1,271 ms and Paint
+2,454 -> 1,894 ms (disk), `OSAPI_TASK_YIELD` 644 -> 283 us (sched), mouse
+byte to arrow on CGA 4.69 -> 3.13 ms (pointer).
+
+### 4.3 Rows
+
+* **The deduplicated union** of every row the nine notes name (148 soak rows
+  plus `mega-cpup` and `box-dtwrite`: 150), once, after the last speed
+  merge: **149 passed, 1 failed** - `glyphcost`, which is O5 below (a
+  relative gate whose reference got faster; no glyph got slower). The first
+  run of the union reported 32 failures; 31 of them were the coordinator's
+  doing (section 6, lesson 1) and passed on re-run on the final tree.
+* The size agent's 20 rows on its own tip (which carries every speed merge)
+  passed.
+* **`make test-full`** at the final tip: **85 passed, 0 failed, 3 skipped**
+  (`w16cens`/`w16censall` need the WIN16 fixtures, `ctoolchain` the C
+  cross-compiler; the pass touched neither).
+* `make`, `make small`, `make emu` and `make mega` build at the tip; the fast
+  tier (with `hotpar`) is green.
 
 ## 5. Decisions for the owner
 
@@ -137,4 +282,33 @@ at the merges. None of these is taken.
 | O12 | disk | Reuse the FAT window on a full mount, and skip the boot-sector read while the motor spins (files' finds 2 and 3) | after disk-5, ~1 int 13h (~400 ms) a navigation on 1.44 MB only | DISK-PERF-PLAN phases 2 and 3, which the owner dropped: they narrow swap detection on drives with no change line |
 | O13 | disk | Pad R in `tools/os88kz.py` so the 360 KB boot's 64 KB DMA page boundary lands on a cylinder edge, and raise `BLOB_LIFT` (boot-time memory only) | one boot `int 13h` call on 360 KB and 720 KB (cylinder 6 is read in two: 801 ms against ~600 for one) | 0 resident bytes, but a change to a host tool that writes `KERNEL.SYS` (fork rule 6's list) |
 | O14 | disk | Re-weigh which packages ship LZB rather than lz4 | at launch LZB is now 191 cycles a byte against lz4's 64 (~3x, was ~4x) | a packing-policy question (disk bytes against launch time), SPEC.md 20.13.5 |
+
+## 6. Method lessons for the next speed pass
+
+1. **Do not merge into the tree a soak is running from.** `os88soak.py`
+   freezes its own BUILD tree (`build/trees/plain-*`), but `os88sym`
+   re-assembles `kernel/kernel.asm` from the LIVE checkout to check that tree's
+   `kernel.bin`, so a merge mid-run makes every later row that resolves a
+   symbol fail with "the map describes a DIFFERENT kernel". 31 rows went red
+   that way here. Merge after the run, or run the soak from a worktree of
+   its own.
+2. **A shared instrument first, in its own agent, pays.** `tools/os88hot.py`
+   landed ninety minutes in and every speed agent priced its items with the
+   same scenarios, the same IRQ0-aligned windows and the same `ab`; the
+   baseline report then ranked the work before most of it was written.
+3. **Compare medians at more than three reps where a serial packet or a key
+   sets the operation's rhythm.** Menu close and Hercules drag read as
+   regressions at -n 3 and as -10% to -14% at -n 6/7.
+4. **A relative gate turns red when its reference gets faster** (`glyphcost`,
+   O5). Read a red timing row for which arm moved before reading it as a
+   regression.
+5. **The fixed per-call floor was smaller than its reputation.** The 756 us
+   figure is real, but gfxcall found it is 6-8% of a raise; the pixel loops,
+   the save-under, the scheduler and the disk call count were where the time
+   was. The baseline profile, not the folklore, should set the next pass's
+   owners.
+6. **Cross-file finds routed mid-pass were worth more than some owners'
+   own items**: files' disk.inc finds became disk-3..5 (two int 13h calls a
+   navigation), and sched's single-stepped packet split told pointer where
+   85% of a packet went.
 
