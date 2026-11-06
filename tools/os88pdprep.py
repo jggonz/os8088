@@ -24,7 +24,8 @@ that profile and writes a DERIVATIVE that PageDesk opens:
   4. --raster auto|all|PAGES replaces the pages you choose by horizontal
      strips of a mono (1-bit, ordered dither) or grey (8-bit) image rendered
      by MuPDF (or Poppler), each strip at most --strip-bytes decoded so no
-     image nears PDENG's 1 MiB cap, plus an INVISIBLE Courier text layer
+     image nears PDENG's 1 MiB cap and no row passes PDREND's 1,024-byte row
+     buffer (a wide page is cut into columns too), plus an INVISIBLE Courier text layer
      (render mode 3, one word at a time, horizontally scaled onto the word's
      box) where the page really had text - so Find and Copy keep working;
   5. the derivative is VERIFIED by qpdf --check, by tools/os88pdfcheck.py, by
@@ -32,7 +33,8 @@ that profile and writes a DERIVATIVE that PageDesk opens:
      harness build/pde_test; and a plain-text report says what changed.
 
 The ORIGINAL is never touched: OUT must be a different file and must not exist
-(--force replaces an earlier derivative). The derivative's Info dictionary
+(--force replaces an earlier derivative); qpdf writes a fresh temporary name
+beside OUT, never one an input could already have. The derivative's Info dictionary
 gets /PageDeskPrep, a text string naming this tool, the original's size and
 SHA-256, and the pages that were rasterised, so PageDesk can show
 "Prepared copy" and an independent tool can bind the derivative to its source.
@@ -64,9 +66,13 @@ MAX_PAGES = 1024           # PD_MAXPAGES
 MAX_DECODED = 1 << 20      # a decoded stream is cut at 1 MiB
 MAX_INLINE = 4096          # inline images beyond 4 KiB are refused
 BOX_LIMIT = 2047.0         # page boxes within +/-2047 pt
+POSTER_PT = 2000.0         # a raster page larger than this is scaled to fit BOX_LIMIT
+ROW_MAX = 1024             # PDREND's image row buffer: a longer row is refused (20.3.2)
 BASE14 = ('Helvetica', 'Times', 'Courier')
 NATIVE_FILTERS = ('/ASCIIHexDecode', '/AHx', '/RunLengthDecode', '/RL')
 FLATE_FILTERS = ('/FlateDecode', '/Fl')
+GENERALIZED = ('/FlateDecode', '/Fl', '/LZWDecode', '/LZW', '/ASCII85Decode', '/A85', '/ASCIIHexDecode', '/AHx',
+               '/RunLengthDecode', '/RL')   # what qpdf's generalized decode level undoes
 GOOD_COLOR = ('/DeviceGray', '/DeviceRGB', '/DeviceCMYK', '/G', '/RGB', '/CMYK')
 GOOD_IMG_COLOR = ('/DeviceGray', '/DeviceRGB', '/G', '/RGB')
 
@@ -436,8 +442,10 @@ class Scan:
                 if bm not in (None, '/Normal', '/Compatible'):
                     add(hard, 'BLEND', 'blend mode %s' % bm)
                 for k in ('/CA', '/ca'):
-                    if isinstance(g.get(k), (int, float)) and g[k] < 1:
-                        add(hard, 'ALPHA', 'transparency (%s %s)' % (k[1:], g[k]))
+                    # one line per key: a page with forty alpha values is "transparency", not forty reasons
+                    if isinstance(g.get(k), (int, float)) and g[k] < 1 and \
+                            not any(c == 'ALPHA' and t.startswith('transparency (%s ' % k[1:]) for c, t in hard):
+                        add(hard, 'ALPHA', 'transparency (%s %g)' % (k[1:], g[k]))
             elif op in ('cs', 'CS') and a and isinstance(a[0], str):
                 self.cspace(a[0], cspaces, hard)
             elif op in ('scn', 'SCN', 'sc', 'SC') and a and isinstance(a[-1], str):
@@ -626,18 +634,20 @@ def stext_words(path, pageno):
     pw, ph = float(at.get('width', 0)), float(at.get('height', 0))
     words = []
     size, dirok, cur = 10.0, True, []
+    line = [0]
 
     def flush():
         if cur:
             x0 = float(cur[0][1])
             x1 = max(cur[-1][3])
-            words.append((x0, x1, float(cur[0][2]), size, ''.join(c[0] for c in cur)))
+            words.append((x0, x1, float(cur[0][2]), size, ''.join(c[0] for c in cur), line[0]))
             del cur[:]
 
     for t in re.finditer(r'<(/?)(line|font|char)\b([^>]*?)/?>', txt):
         close, tag, rest = t.group(1), t.group(2), t.group(3)
         if tag == 'line':
             flush()
+            line[0] += 1
             if not close:
                 at = dict(re.findall(r'(\w+)="([^"]*)"', rest))
                 dirok = at.get('dir') in (None, '1 0')
@@ -680,50 +690,76 @@ class Raster:
         self.dpi, self.bits, self.strip_bytes = dpi, bits, strip_bytes
         self.textlayer, self.flate = textlayer, flate
 
-    def page(self, path, pageno, first_obj, font_obj):
-        """-> (objs, page_dict_overrides, info) ; objs is {key: json}, next free obj number."""
+    def page(self, path, pageno, first_obj, font_obj, disp_pt=None):
+        """-> (objs, page_dict_overrides, info, next free obj number); objs is {key: json}.
+
+        disp_pt is the page's displayed size in points (CropBox, turned by
+        /Rotate) when known: a poster is then rendered ONCE at the reduced
+        resolution rather than at full size and again (a 14,400 pt page at
+        100 dpi is a 20,000-pixel square, 400 MB of grey)."""
         f = 1.0
-        (w, h, gray), used = render_gray(path, pageno, self.dpi)
-        if max(w, h) * 72.0 / self.dpi > 2000:               # a poster: shrink it inside +/-2047 pt
-            f = 2000.0 / (max(w, h) * 72.0 / self.dpi)
+        if disp_pt and max(disp_pt) > POSTER_PT:
+            f = POSTER_PT / max(disp_pt)
+        # Rendered at dpi * f, placed at dpi: the page SHRINKS by f (its pixels
+        # are the same size), so a poster's points fit +/-2047 pt.
+        (w, h, gray), used = render_gray(path, pageno, self.dpi * f)
+        if max(w, h) * 72.0 / self.dpi > POSTER_PT:            # the box was not known or was wrong
+            f *= POSTER_PT / (max(w, h) * 72.0 / self.dpi)
             (w, h, gray), used = render_gray(path, pageno, self.dpi * f)
-        wpage, hpage = w * 72.0 / (self.dpi), h * 72.0 / (self.dpi)
+        dpi = self.dpi                                          # pixels -> points from here on
+        wpage, hpage = w * 72.0 / dpi, h * 72.0 / dpi
         objs = {}
         n = first_obj
-        rowbytes = (w + 7) // 8 if self.bits == 1 else w
-        per = max(1, self.strip_bytes // rowbytes)
+        # PDREND refuses an image row longer than ROW_MAX bytes (PAGEDESK-SPEC
+        # 20.3.2, its 1 KiB row buffer): a wide page is cut into COLUMNS as
+        # well as strips. A 1-bit column is 8,192 px, an 8-bit one 1,024.
+        colpx = ROW_MAX * 8 if self.bits == 1 else ROW_MAX
+        if self.bits == 1:
+            full, stride = dither_1bit(gray, w, h)
+        else:
+            full, stride = bytes(gray), w
         content = [b'q']
         xobj = {}
-        y = 0
         k = 0
         total = 0
-        while y < h:
-            rows = min(per, h - y)
-            chunk = gray[y * w:(y + rows) * w]
+        tiles = 0
+        cols = []
+        for c0 in range(0, w, colpx):
+            cols.append((c0, min(w, c0 + colpx)))
+        for c0, c1 in cols:
             if self.bits == 1:
-                raw, _ = dither_1bit(chunk, w, rows)
+                b0, b1 = c0 // 8, (c1 + 7) // 8
             else:
-                raw = bytes(chunk)
-            d = {'/Type': '/XObject', '/Subtype': '/Image', '/Width': w, '/Height': rows,
-                 '/ColorSpace': '/DeviceGray', '/BitsPerComponent': self.bits}
-            data = raw
-            if not self.flate:
-                enc = rl_encode(raw)
-                if len(enc) < len(raw):
-                    d['/Filter'] = '/RunLengthDecode'
-                    data = enc
-            total += len(data)
-            objs['obj:%d 0 R' % n] = {'stream': {'dict': d, 'data': base64.b64encode(data).decode()}}
-            top = hpage - y * 72.0 / self.dpi
-            hh = rows * 72.0 / self.dpi
-            nm = '/S%d' % k
-            xobj[nm] = '%d 0 R' % n
-            content.append(('%.4f 0 0 %.4f 0 %.4f cm %s Do' % (wpage, hh, top - hh, nm)).encode())
-            # cm accumulates in a q/Q pair per strip so each strip stands alone
-            content[-1] = b'q ' + content[-1] + b' Q'
-            n += 1
-            k += 1
-            y += rows
+                b0, b1 = c0, c1
+            rowbytes = b1 - b0
+            per = max(1, self.strip_bytes // rowbytes)
+            y = 0
+            while y < h:
+                rows = min(per, h - y)
+                if b0 == 0 and b1 == stride:
+                    raw = full[y * stride:(y + rows) * stride]
+                else:
+                    raw = b''.join(full[r * stride + b0:r * stride + b1] for r in range(y, y + rows))
+                d = {'/Type': '/XObject', '/Subtype': '/Image', '/Width': c1 - c0, '/Height': rows,
+                     '/ColorSpace': '/DeviceGray', '/BitsPerComponent': self.bits}
+                data = raw
+                if not self.flate:
+                    enc = rl_encode(raw)
+                    if len(enc) < len(raw):
+                        d['/Filter'] = '/RunLengthDecode'
+                        data = enc
+                total += len(data)
+                objs['obj:%d 0 R' % n] = {'stream': {'dict': d, 'data': base64.b64encode(data).decode()}}
+                top = hpage - y * 72.0 / dpi
+                hh = rows * 72.0 / dpi
+                nm = '/S%d' % k
+                xobj[nm] = '%d 0 R' % n
+                # each tile in its own q/Q, so a cm never accumulates into the next
+                content.append(('q %.4f 0 0 %.4f %.4f %.4f cm %s Do Q' % (
+                    (c1 - c0) * 72.0 / dpi, hh, c0 * 72.0 / dpi, top - hh, nm)).encode())
+                n += 1
+                k += 1
+                y += rows
         content.append(b'Q')
         words = 0
         skipped = 0
@@ -733,13 +769,20 @@ class Raster:
             if ws:
                 sx = wpage / sz[0] if sz and sz[0] else 1.0
                 tl = [b'BT 3 Tr /FT 10 Tf']
-                for x0, x1, base, size, txt in ws:
+                for i, (x0, x1, base, size, txt, ln) in enumerate(ws):
                     b = pdf_text_string(txt)
                     if not b or size <= 0:
                         skipped += 1
                         continue
                     if x1 <= x0:                              # an unembedded font with no widths: guess half an em a letter
                         x1 = x0 + 0.5 * size * len(b)
+                    # A word followed by another on the same line carries its SPACE,
+                    # stretched over the gap: a reader that joins glyphs (PageDesk's
+                    # text map, Copy) gets "two words", not "twowords".
+                    nx = ws[i + 1] if i + 1 < len(ws) else None
+                    if nx and nx[5] == ln and nx[0] > x1 and pdf_text_string(nx[4]):
+                        b += b' '
+                        x1 = nx[0]
                     sizep = size * sx
                     tz = (x1 - x0) * sx / (0.6 * sizep * len(b)) * 100.0
                     tz = min(max(tz, 1.0), 2000.0)
@@ -753,9 +796,12 @@ class Raster:
         objs['obj:%d 0 R' % n] = {'stream': {'dict': {}, 'data': base64.b64encode(cdata).decode()}}
         cref = '%d 0 R' % n
         n += 1
-        info = {'strips': k, 'w': w, 'h': h, 'bytes': total, 'words': words, 'skipped': skipped, 'tool': used,
-                'scale': f, 'pt': (wpage, hpage)}
-        over = {'/MediaBox': [0, 0, round(wpage, 3), round(hpage, 3)], '/Contents': cref, '/Resources': res}
+        info = {'strips': k, 'cols': len(cols), 'w': w, 'h': h, 'bytes': total, 'words': words, 'skipped': skipped,
+                'tool': used, 'scale': f, 'pt': (wpage, hpage)}
+        box = [0, 0, round(wpage, 3), round(hpage, 3)]
+        # /CropBox and /Rotate are INHERITABLE: left out, a /Pages node's would
+        # crop and turn a picture that already has them baked in.
+        over = {'/MediaBox': box, '/CropBox': list(box), '/Rotate': 0, '/Contents': cref, '/Resources': res}
         return objs, over, info, n
 
 
@@ -788,6 +834,115 @@ def parse_pages(spec, npages):
     return out
 
 
+def key_bytes(s):
+    """The bytes a name-tree key (qpdf JSON v2 string) is written as, for sorting."""
+    if isinstance(s, str) and s.startswith('b:'):
+        try:
+            return bytes.fromhex(s[2:])
+        except ValueError:
+            return s[2:].encode('latin-1', 'replace')
+    t = text_of(s) if isinstance(s, str) else ''
+    if all(ord(c) < 0x80 or 0xA1 <= ord(c) <= 0xFF for c in t):
+        return t.encode('latin-1')                  # PDFDocEncoding agrees with Latin-1 there
+    return b'\xfe\xff' + t.encode('utf-16-be')
+
+
+DESTS_LEAF = 128           # pairs per rebuilt leaf: 256 array items, far inside 4,096
+
+
+def rebuild_dests(doc, keep_pages, nextobj, upd):
+    """The /Root /Names /Dests name tree, checked and if need be REBUILT.
+
+    A tree whose keys are out of order (a real producer wrote one: qpdf --check
+    then fails the derivative, and a reader's binary search misses names) or,
+    after --pages, one that still names thousands of destinations on pages that
+    are gone, is replaced by a sorted two-level tree of fresh objects; the old
+    nodes are then unreferenced and qpdf drops them. -> (note or None, nextobj)."""
+    cat = doc.get(doc.trailer.get('/Root'))
+    if not isinstance(cat, dict):
+        return None, nextobj
+    nref = cat.get('/Names')
+    nd = doc.get(nref)
+    if not isinstance(nd, dict) or '/Dests' not in nd:
+        return None, nextobj
+    pairs, nodes, unsorted, seen = [], [0], [False], set()
+
+    def walk(r, depth):
+        if depth > 32 or (isinstance(r, str) and r in seen):
+            return
+        if isinstance(r, str):
+            seen.add(r)
+        node = doc.get(r)
+        if not isinstance(node, dict):
+            return
+        nodes[0] += 1
+        arr = doc.get(node.get('/Names'))
+        if isinstance(arr, list):
+            ks = [key_bytes(k) for k in arr[0::2]]
+            if ks != sorted(ks):
+                unsorted[0] = True
+            pairs.extend(zip(arr[0::2], arr[1::2]))
+        kids = doc.get(node.get('/Kids'))
+        for kd in kids if isinstance(kids, list) else []:
+            walk(kd, depth + 1)
+
+    walk(nd['/Dests'], 0)
+    allk = [key_bytes(k) for k, _ in pairs]
+    if allk != sorted(allk):
+        unsorted[0] = True
+    dropped = 0
+    if keep_pages is not None:
+        kept = []
+        for k, v in pairs:
+            d = doc.get(v)
+            if isinstance(d, dict):
+                d = doc.get(d.get('/D'))
+            tgt = d[0] if isinstance(d, list) and d else None
+            if isinstance(tgt, str) and tgt in keep_pages:
+                kept.append((k, v))
+            else:
+                dropped += 1
+        pairs = kept
+    if not unsorted[0] and not dropped:
+        return None, nextobj
+    pairs.sort(key=lambda kv: key_bytes(kv[0]))
+    dedup = []
+    for k, v in pairs:                              # a duplicated name: the first one wins, as a lookup would
+        if dedup and key_bytes(dedup[-1][0]) == key_bytes(k):
+            continue
+        dedup.append((k, v))
+    nd2 = dict(nd)
+    if not dedup:
+        nd2.pop('/Dests')
+    else:
+        leaves = []
+        for i in range(0, len(dedup), DESTS_LEAF):
+            chunk = dedup[i:i + DESTS_LEAF]
+            arr = []
+            for k, v in chunk:
+                arr += [k, v]
+            upd['obj:%d 0 R' % nextobj] = {'value': {'/Names': arr, '/Limits': [chunk[0][0], chunk[-1][0]]}}
+            leaves.append('%d 0 R' % nextobj)
+            nextobj += 1
+        upd['obj:%d 0 R' % nextobj] = {'value': {'/Kids': leaves}}
+        nd2['/Dests'] = '%d 0 R' % nextobj
+        nextobj += 1
+    if isinstance(nref, str) and REF.match(nref):
+        upd['obj:' + nref] = {'value': nd2}
+    else:
+        catref = doc.trailer.get('/Root')
+        cv = dict(upd.get('obj:' + catref, {}).get('value') or cat)
+        cv['/Names'] = nd2
+        upd['obj:' + catref] = {'value': cv}
+    why = []
+    if unsorted[0]:
+        why.append('its keys were out of order')
+    if dropped:
+        why.append('%d destination(s) on pages not kept were dropped' % dropped)
+    return ('named destinations (%d in %d node(s)) rebuilt as a sorted tree of %d: %s' % (
+        len(pairs) + dropped, nodes[0], len(dedup), '; '.join(why))), nextobj
+
+
 def filters_in(js):
     cnt = {}
     for k, o in js['qpdf'][1].items():
@@ -800,6 +955,50 @@ def filters_in(js):
 
 
 # ------------------------------------------------------------ the job ------
+def report_path(a):
+    """Where the report file goes, or None (--report -)."""
+    if a.report == '-':
+        return None
+    return os.path.abspath(a.report or (a.output + '.report.txt'))
+
+
+def current_umask():
+    m = os.umask(0)
+    os.umask(m)
+    return m
+
+
+def qpdf_msgs(err, path):
+    """qpdf's warning lines without the (long, temporary) file path."""
+    out = []
+    for ln in err.decode('utf-8', 'replace').split('\n'):
+        ln = ln.strip()
+        if ln and not ln.startswith('qpdf: operation succeeded'):
+            out.append(ln.replace(path, os.path.basename(path)))
+    return out
+
+
+def norm_warning(ln):
+    """A qpdf --check warning with what renumbering moves taken out (the path,
+    object numbers, offsets), so the original's and the derivative's compare."""
+    ln = re.sub(r'^WARNING: [^(]*', 'WARNING: ', ln)
+    ln = re.sub(r'\(object \d+ \d+[^)]*\)', '(object)', ln)
+    ln = re.sub(r'object \d+', 'object', ln)
+    ln = re.sub(r'offset \d+', 'offset', ln)
+    ln = re.sub(r'/\S+?\.pdf', 'FILE', ln)
+    return ln
+
+
+def disp_size(doc, pd):
+    """The page's displayed size in points (CropBox else MediaBox), or None."""
+    try:
+        bx = doc.inh(pd, '/CropBox') or doc.inh(pd, '/MediaBox') or [0, 0, 612, 792]
+        v = [float(doc.get(x)) for x in bx]
+        return abs(v[2] - v[0]), abs(v[3] - v[1])
+    except (TypeError, ValueError, IndexError):
+        return None
+
+
 def sha256(path):
     h = hashlib.sha256()
     with open(path, 'rb') as f:
@@ -814,8 +1013,13 @@ def prepare(a, rep):
         raise Refused('%s is not a file' % a.input)
     if os.path.exists(dst) and (os.path.samefile(src, dst)):
         raise Refused('the output is the input; the original is never overwritten')
+    if os.path.isdir(dst):
+        raise Refused('%s is a directory; name the output file' % a.output)
     if os.path.exists(dst) and not a.force:
         raise Refused('%s exists (use --force to replace an earlier derivative)' % a.output)
+    rp = report_path(a)
+    if rp and os.path.exists(rp) and os.path.samefile(src, rp):
+        raise Refused('the report would be written over the input; the original is never overwritten')
     head = open(src, 'rb').read(1024)
     if b'%PDF-' not in head:
         raise Refused('%s does not look like a PDF (no %%PDF- in the first 1 KiB)' % a.input)
@@ -828,11 +1032,16 @@ def prepare(a, rep):
     pwtmp = None
     pw = a.password
     if a.password_file:
-        pw = open(a.password_file, 'rb').read().rstrip(b'\r\n').decode('utf-8', 'replace')
+        lines = open(a.password_file, 'rb').read().splitlines()
+        pw = (lines[0] if lines else b'').decode('utf-8', 'replace')       # its FIRST line, as documented
     rc, _, _ = run([qpdf, '--is-encrypted', src])
     encrypted = rc == 0
     if encrypted:
         if pw is None:
+            rc, _, _ = run([qpdf, '--requires-password', src])
+            if rc == 3:                                 # opens with an empty user password: restrictions only
+                raise Refused('the file is encrypted (PDE_ENCRYPT) with an empty user password (owner restrictions '
+                              'only); give --password "" to decrypt it, if its owner allows you to')
             raise Refused('the file is encrypted (PDE_ENCRYPT); give --password or --password-file to decrypt it')
         fd, pwtmp = tempfile.mkstemp(prefix='pdprep-')
         os.write(fd, pw.encode('utf-8'))
@@ -864,8 +1073,8 @@ def _prepare2(a, rep, src, dst, raw, qpdf, qv, flate, encrypted, pwargs, td):
     n_in = len(idoc.pages)
     has_xrefstm = bool(re.search(rb'/Type\s*/XRef', raw))
     has_objstm = bool(re.search(rb'/Type\s*/ObjStm', raw))
-    revs = raw.count(b'startxref')
     linear = b'/Linearized' in raw[:2048]
+    revs = raw.count(b'startxref') - (1 if linear else 0)     # a linearized file's first-page xref is not a revision
     cat = idoc.get(idoc.trailer.get('/Root')) or {}
     sigs = '/Perms' in cat or bool(re.search(rb'/ByteRange\b', raw))
     notes = []
@@ -880,7 +1089,8 @@ def _prepare2(a, rep, src, dst, raw, qpdf, qv, flate, encrypted, pwargs, td):
     if encrypted:
         notes.append('decrypted with the supplied password; the derivative carries NO encryption or permissions')
     if sigs:
-        warnings.append('the file carries /Perms or a signature: rewriting INVALIDATES any signature')
+        warnings.append('the file carries /Perms or a signature: rewriting INVALIDATES any signature, and PageDesk '
+                        'opens a file that still names one read-only (PDE_SIGNED, 1.3)')
     if '/AcroForm' in cat and isinstance(idoc.get(cat['/AcroForm']), dict) and '/XFA' in idoc.get(cat['/AcroForm']):
         warnings.append('XFA form data is present; PageDesk ignores it (AcroForm editing is Enhanced, PD-26)')
     if '/Names' in cat or '/OpenAction' in cat or '/AA' in cat:
@@ -888,7 +1098,7 @@ def _prepare2(a, rep, src, dst, raw, qpdf, qv, flate, encrypted, pwargs, td):
 
     # ---- step A: normalise (and page subset)
     A = os.path.join(td, 'a.pdf')
-    cmd = [qpdf] + pwargs + ['--object-streams=disable', '--newline-before-endstream']
+    cmd = [qpdf] + pwargs + ['--object-streams=disable', '--newline-before-endstream', '--deterministic-id']
     if flate:
         cmd += ['--decode-level=generalized', '--compress-streams=y']
     else:
@@ -904,7 +1114,7 @@ def _prepare2(a, rep, src, dst, raw, qpdf, qv, flate, encrypted, pwargs, td):
         raise Refused('qpdf could not rewrite the file: ' + err.decode('utf-8', 'replace').strip()[-300:])
     if rc == 3:
         warnings.append('qpdf reported warnings (the input was damaged and was reconstructed): ' +
-                        ' | '.join(l[:100] for l in err.decode('utf-8', 'replace').split('\n') if l.strip())[:300])
+                        ' | '.join(l[:100] for l in qpdf_msgs(err, src)[:3])[:300])
     aj = qpdf_json(A)
     doc = Doc(aj)
     npages = len(doc.pages)
@@ -953,7 +1163,7 @@ def _prepare2(a, rep, src, dst, raw, qpdf, qv, flate, encrypted, pwargs, td):
         upd_objs['obj:%d 0 R' % font_obj] = {'value': {'/Type': '/Font', '/Subtype': '/Type1', '/BaseFont': '/Courier',
                                                        '/Encoding': '/WinAnsiEncoding'}}
         for pg in sorted(chosen):
-            objs, over, info, nextobj = ras.page(A, pg, nextobj, font_obj)
+            objs, over, info, nextobj = ras.page(A, pg, nextobj, font_obj, disp_size(doc, doc.get(doc.pages[pg - 1]['object'])))
             upd_objs.update(objs)
             page_over[pg] = over
             rinfo[pg] = info
@@ -963,6 +1173,12 @@ def _prepare2(a, rep, src, dst, raw, qpdf, qv, flate, encrypted, pwargs, td):
             keep = {k: v for k, v in pd.items() if k in ('/Type', '/Parent')}
             keep.update(page_over[pg])
             upd_objs['obj:' + ref] = {'value': keep}
+
+    # ---- named destinations: sorted, and pruned to the pages kept
+    nextobj = max([doc.maxobj()] + [int(k.split(':')[1].split()[0]) for k in upd_objs]) + 1
+    dnote, nextobj = rebuild_dests(doc, {p['object'] for p in doc.pages} if sel else None, nextobj, upd_objs)
+    if dnote:
+        notes.append(dnote)
 
     # ---- the Info stamp
     ptxt = 'os88pdprep %s; qpdf %s; src-size=%d; src-sha256=%s; tier=%s' % (
@@ -978,17 +1194,14 @@ def _prepare2(a, rep, src, dst, raw, qpdf, qv, flate, encrypted, pwargs, td):
         upd_objs['obj:' + iref] = {'value': iv}
         trailer_upd = None
     else:
-        if chosen:
-            nid = max(int(k.split(':')[1].split()[0]) for k in upd_objs) + 1
-        else:
-            nid = doc.maxobj() + 1
+        nid = nextobj
         upd_objs['obj:%d 0 R' % nid] = {'value': {'/Producer': 'u:os88pdprep ' + VERSION, '/PageDeskPrep': 'u:' + ptxt}}
         tv = dict(doc.trailer)
         tv['/Info'] = '%d 0 R' % nid
         trailer_upd = {'value': tv}
     if sel:
         catref = doc.trailer.get('/Root')
-        cv = dict(doc.get(catref))
+        cv = dict(upd_objs.get('obj:' + catref, {}).get('value') or doc.get(catref))
         cv.pop('/Outlines', None)
         upd_objs['obj:' + catref] = {'value': cv}
     uj = {'qpdf': [{'jsonversion': 2, 'pushedinheritedpageresources': False, 'calledgetallpages': False,
@@ -999,21 +1212,27 @@ def _prepare2(a, rep, src, dst, raw, qpdf, qv, flate, encrypted, pwargs, td):
     with open(ufile, 'w') as f:
         json.dump(uj, f)
 
-    # ---- step D: the final write, to a name beside the output, then renamed
-    tmp = dst + '.tmp'
+    # ---- step D: the final write, to a FRESH name beside the output, then renamed.
+    # Never `dst + '.tmp'`: an input that happens to be called OUT.tmp would be
+    # written over by qpdf and then renamed away - the original destroyed.
+    fd, tmp = tempfile.mkstemp(prefix='.pdprep-', suffix='.tmp', dir=os.path.dirname(dst))
+    os.close(fd)
     cmd = [qpdf, '--object-streams=disable', '--newline-before-endstream', '--deterministic-id',
            '--update-from-json=' + ufile]
     cmd += ['--compress-streams=y'] if flate else ['--stream-data=preserve']
-    rc, _, err = run(cmd + [A, tmp])
-    if rc not in (0, 3):
+    try:
+        rc, _, err = run(cmd + [A, tmp])
+        if rc not in (0, 3):
+            raise Refused('qpdf could not write the derivative: ' + err.decode('utf-8', 'replace').strip()[-300:])
+        os.chmod(tmp, 0o666 & ~current_umask())             # mkstemp made it 0600; a PDF is an ordinary file
+        os.replace(tmp, dst)
+    finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
-        raise Refused('qpdf could not write the derivative: ' + err.decode('utf-8', 'replace').strip()[-300:])
-    os.replace(tmp, dst)
 
     # ---- verification
     unfixed = {i + 1 for i, (h, _s) in enumerate(report) if h and (i + 1) not in chosen}
-    ver = verify(a, dst, npages, flate, unfixed)
+    ver = verify(a, dst, npages, flate, unfixed, A)
     out_size = os.path.getsize(dst)
 
     # ---- the report
@@ -1026,15 +1245,21 @@ def _prepare2(a, rep, src, dst, raw, qpdf, qv, flate, encrypted, pwargs, td):
     rep.add('original: untouched (the derivative is a separate file)')
     rep.add('')
     rep.add('FILE')
-    for n in notes or ['already a classic file; rewritten only to renumber objects and unify streams']:
+    outj = qpdf_json(dst)
+    out_filters = filters_in(outj)
+    gen = [f for f in sorted(in_filters) if '/' + f in GENERALIZED and not (flate and '/' + f in FLATE_FILTERS)]
+    if gen and flate:
+        notes.append('streams in %s re-encoded as Flate (the Enhanced tier)' % ', '.join(gen))
+    elif gen:
+        notes.append('streams in %s decoded: the XT tier reads them with no decoder' % ', '.join(gen))
+    if not (has_xrefstm or has_objstm or revs > 1 or linear):
+        notes.insert(0, 'already a classic file; rewritten so objects are numbered 1..N in one xref subsection')
+    for n in notes:
         rep.add('  - ' + n)
-    out_filters = filters_in(qpdf_json(dst))
     rep.add('  - stream filters in : %s' % (', '.join('%s x%d' % kv for kv in sorted(in_filters.items())) or 'none'))
     rep.add('  - stream filters out: %s' % (', '.join('%s x%d' % kv for kv in sorted(out_filters.items())) or 'none'))
-    nobj = sum(1 for k in aj['qpdf'][1] if k.startswith('obj:'))
-    rep.add('  - objects: %d numbered 1..%d (limit %d)' % (nobj, nobj, MAX_OBJ))
-    if sel:
-        rep.add('  - page selection %s' % sel)
+    onums = [int(k.split(':')[1].split()[0]) for k in outj['qpdf'][1] if k.startswith('obj:')]
+    rep.add('  - objects: %d numbered 1..%d (limit %d)' % (len(onums), max(onums or [0]), MAX_OBJ))
     for w in warnings:
         rep.add('  ! ' + w)
     rep.add('')
@@ -1045,8 +1270,10 @@ def _prepare2(a, rep, src, dst, raw, qpdf, qv, flate, encrypted, pwargs, td):
         if pg in chosen:
             ri = rinfo[pg]
             why = '; '.join(t for _, t in hard) or ('substituted fonts' if soft else 'requested')
-            rep.add('  page %-4d RASTERISED (%s) -> %d strip%s of %dx%d px, %d-bit, %g dpi%s, %d bytes of image data' % (
-                pg, why, ri['strips'], '' if ri['strips'] == 1 else 's', ri['w'], ri['h'], a.bits, a.dpi,
+            rep.add('  page %-4d RASTERISED (%s) -> %d strip%s%s of %dx%d px, %d-bit, %g dpi%s, %d bytes of image data' % (
+                pg, why, ri['strips'], '' if ri['strips'] == 1 else 's',
+                ' in %d columns (rows of at most %d bytes)' % (ri['cols'], ROW_MAX) if ri['cols'] > 1 else '',
+                ri['w'], ri['h'], a.bits, a.dpi,
                 ' (page scaled to %.0f%% to fit +/-2047 pt)' % (ri['scale'] * 100) if ri['scale'] < 1 else '', ri['bytes']))
             if ri['words']:
                 text_pages += 1
@@ -1147,15 +1374,33 @@ def profile_check(path, flate, npages):
     return errs, hard_unknown
 
 
-def verify(a, dst, npages, flate, expected=()):
-    lines, ok = [], True
-    rc, out, err = run([need('qpdf'), '--check', dst])
+def check_warnings(path):
+    rc, out, err = run([need('qpdf'), '--check', path])
     msg = (out + err).decode('utf-8', 'replace')
-    if rc == 0 and 'No syntax or stream encoding errors found' in msg and 'WARNING' not in msg:
+    return rc, msg, [l for l in msg.split('\n') if l.startswith('WARNING')]
+
+
+def verify(a, dst, npages, flate, expected=(), before=None):
+    """before: the qpdf rewrite of the ORIGINAL (step A). A qpdf --check warning
+    the derivative shares with it word for word (a damaged JPEG in the source,
+    say) was inherited, not made here: it is reported, and does not fail the
+    run; any other warning does."""
+    lines, ok = [], True
+    rc, msg, warns = check_warnings(dst)
+    if rc == 0 and 'No syntax or stream encoding errors found' in msg and not warns:
         lines.append('qpdf --check: clean')
     else:
-        ok = False
-        lines.append('qpdf --check: FAILED (rc %d): %s' % (rc, ' | '.join(l for l in msg.split('\n') if 'WARN' in l or 'ERR' in l)[:300]))
+        inherited = set()
+        if rc in (0, 3) and warns and before:
+            inherited = {norm_warning(w) for w in check_warnings(before)[2]}
+        new = [w for w in warns if norm_warning(w) not in inherited]
+        shown = ' | '.join(l.replace(dst, os.path.basename(dst)) for l in (new or warns))[:300]
+        if rc in (0, 3) and warns and not new:
+            lines.append('qpdf --check: %d warning(s), every one INHERITED from the original (the source has the same '
+                         'defect; nothing here made it): %s' % (len(warns), shown))
+        else:
+            ok = False
+            lines.append('qpdf --check: FAILED (rc %d): %s' % (rc, shown or msg.strip()[-200:]))
     chk = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'os88pdfcheck.py')
     if os.path.isfile(chk):
         rc, out, err = run([sys.executable, '-I', chk, 'validate', dst])
@@ -1165,7 +1410,7 @@ def verify(a, dst, npages, flate, expected=()):
             lines.append('os88pdfcheck validate: SKIPPED (a tool is missing)')
         else:
             ok = False
-            lines.append('os88pdfcheck validate: FAIL ' + (out + err).decode('utf-8', 'replace').strip()[:200])
+            lines.append('os88pdfcheck validate: FAIL ' + (out + err).decode('utf-8', 'replace').replace(dst, os.path.basename(dst)).strip()[:200])
     else:
         lines.append('os88pdfcheck validate: not run (tools/os88pdfcheck.py not found)')
     errs, leftover = profile_check(dst, flate, npages)
@@ -1247,9 +1492,12 @@ def main(argv=None):
     except NoTool as e:
         print('os88pdprep: SKIP: %s; nothing was prepared' % e, file=sys.stderr)
         return EXIT_NOTOOL
+    except (OSError, ValueError, KeyError, json.JSONDecodeError) as e:
+        print('os88pdprep: refused: %s: %s' % (type(e).__name__, e), file=sys.stderr)
+        return EXIT_REFUSED
     sys.stdout.write(rep.text())
-    if a.report != '-':
-        rp = a.report or (a.output + '.report.txt')
+    rp = report_path(a)
+    if rp:
         with open(rp, 'w') as f:
             f.write(rep.text())
     return rc

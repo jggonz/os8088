@@ -213,13 +213,6 @@ with tempfile.TemporaryDirectory() as tmp:
     else:
         print('t_pdprep: note: mutool missing, the text-layer checks did NOT run')
 
-    # reproducible
-    out2 = os.path.join(tmp, 'out2.pdf')
-    with contextlib.redirect_stdout(io.StringIO()):
-        rc2 = prep.main([cx, out2, '--raster', '2,3,4', '--pde-test', os.path.join(ROOT, 'build', 'pde_test'), '--report', '-'])
-    eq(rc2, 0, 'second run exits 0')
-    eq(open(out2, 'rb').read(), data, 'the derivative is byte-identical on a second run')
-
     # refusals
     def refuses(args, why):
         e = io.StringIO()
@@ -240,10 +233,96 @@ with tempfile.TemporaryDirectory() as tmp:
         check(r == 1 and 'encrypted' in e and not os.path.exists(o3), 'an encrypted file is refused without a password', got=(r, e))
         r, e = refuses([enc, o3, '--password', 'nope'], 'wrongpw')
         check(r == 1 and not os.path.exists(o3), 'a wrong password is refused', got=(r, e))
+        pwf = os.path.join(tmp, 'pw.txt')
+        open(pwf, 'w').write('upw\nnot the password\n')
         with contextlib.redirect_stdout(io.StringIO()) as _o:
-            r = prep.main([enc, o3, '--password', 'upw', '--report', '-', '--pde-test', os.path.join(ROOT, 'build', 'pde_test')])
-        check(r == 0 and b'/Encrypt' not in open(o3, 'rb').read(), 'with the password the derivative is decrypted and verified', got=r)
+            r = prep.main([enc, o3, '--password-file', pwf, '--report', '-', '--pde-test', os.path.join(ROOT, 'build', 'pde_test')])
+        check(r == 0 and b'/Encrypt' not in open(o3, 'rb').read(),
+              'with the password (the FIRST line of --password-file) the derivative is decrypted and verified', got=r)
     else:
         print('t_pdprep: note: qpdf cannot encrypt here, the password checks did NOT run')
+
+    # ---- what verify-host found (each was a real defect in the first version)
+    rpt = os.path.join(tmp, 'v.pdf.report.txt')
+    shutil.copy(cx, rpt)
+    r, e = refuses([rpt, os.path.join(tmp, 'v.pdf')], 'report-over-input')
+    check(r == 1 and 'never overwritten' in e and open(rpt, 'rb').read() == raw,
+          'the default report name (OUT.report.txt) is never the input', got=(r, e))
+
+    # a /Pages node that crops and turns its pages, a wide shaded page, an
+    # unsorted /Dests name tree and no /ID - prepared from an input NAMED
+    # OUT.tmp, which the first version wrote over and renamed away
+    d2 = {1: '<< /Type /Catalog /Pages 2 0 R /Names << /Dests 6 0 R >> >>',
+          2: '<< /Type /Pages /Kids [3 0 R] /Count 1 /Rotate 90 /MediaBox [0 0 612 792] /CropBox [0 0 306 792] '
+             '/Resources << /Font << /F1 5 0 R >> /Shading << /S 7 0 R >> >> >>',
+          3: '<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>',
+          5: '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+          6: '<< /Names [(zeta) [3 0 R /Fit] (alpha) [3 0 R /Fit]] >>',
+          7: '<< /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 612 0] /Function << /FunctionType 2 '
+             '/Domain [0 1] /C0 [0] /C1 [1] /N 1 >> >>'}
+    body = b'q 0 0 612 792 re W n /S sh Q BT /F1 30 Tf 72 500 Td (two words) Tj ET'
+    out2 = bytearray(b'%PDF-1.4\n')
+    offs = {}
+    for n in sorted(d2):
+        offs[n] = len(out2)
+        out2 += ('%d 0 obj\n%s\nendobj\n' % (n, d2[n])).encode()
+    offs[4] = len(out2)
+    out2 += b'4 0 obj\n<< /Length %d >>\nstream\n' % len(body) + body + b'\nendstream\nendobj\n'
+    xr = len(out2)
+    out2 += b'xref\n0 8\n0000000000 65535 f \n' + b''.join(b'%010d 00000 n \n' % offs[n] for n in range(1, 8))
+    out2 += b'trailer\n<< /Size 8 /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n' % xr
+    vin = os.path.join(tmp, 'w.pdf.tmp')
+    open(vin, 'wb').write(bytes(out2))
+    w1, w2 = os.path.join(tmp, 'w.pdf'), os.path.join(tmp, 'w2.pdf')
+    pa = ['--raster', 'auto', '--bits', '8', '--dpi', '150', '--report', '-', '--pde-test', os.path.join(ROOT, 'build', 'pde_test')]
+    with contextlib.redirect_stdout(io.StringIO()) as o:
+        r = prep.main([vin, w1] + pa)
+    rep2 = o.getvalue()
+    check(r == 0 and open(vin, 'rb').read() == bytes(out2), 'an input named OUT.tmp is untouched and the run verifies',
+          'the first version wrote qpdf\'s output to OUT + ".tmp" and renamed it: the original was destroyed', got=rep2[-600:])
+    check(not [f for f in os.listdir(tmp) if f.startswith('.pdprep-')], 'no temporary file is left beside the output')
+    if os.path.exists(w1):                        # every check below runs even when the run itself failed
+        with contextlib.redirect_stdout(io.StringIO()):
+            prep.main([vin, w2] + pa)
+        eq(open(w2, 'rb').read() if os.path.exists(w2) else None, open(w1, 'rb').read(), 'an input with no /ID still prepares byte-identically',
+           'without --deterministic-id on the first qpdf pass the /ID was random')
+        js = json.loads(sh(['qpdf', '--json=2', '--json-stream-data=none', w1]).stdout)
+        objs = js['qpdf'][1]
+
+        def val(r):
+            o = objs.get('obj:' + r, {})
+            return o.get('value') or o.get('stream', {}).get('dict')
+        pg = val(js['pages'][0]['object'])
+        mb = pg.get('/MediaBox')
+        check(pg.get('/Rotate') == 0 and pg.get('/CropBox') == mb,
+              'a rasterised page sets /Rotate 0 and /CropBox itself',
+              'they are inheritable: the /Pages node\'s turned and cropped the picture a second time', got=pg)
+        check(isinstance(mb, list) and abs(mb[2] - 792) < 1 and abs(mb[3] - 306) < 1,
+              'the picture is the page as displayed (cropped to 306 pt, turned to 792 x 306)', got=mb)
+        rows = [((o['stream']['dict']['/Width'] * o['stream']['dict']['/BitsPerComponent'] + 7) // 8)
+                for o in objs.values() if 'stream' in o and o['stream']['dict'].get('/Subtype') == '/Image']
+        check(rows and max(rows) <= 1024 and len(rows) > 1,
+              'an 8-bit raster 1,650 px wide is cut into columns whose rows are at most 1,024 bytes',
+              'PDREND refuses a longer image row (PAGEDESK-SPEC 20.3.2)', got=rows)
+        check('in 2 columns' in rep2, 'the report says the page was cut into columns', got=rep2)
+        r = sh(['qpdf', '--check', w1])
+        check(r.returncode == 0 and b'WARNING' not in r.stdout + r.stderr, 'an unsorted /Dests tree is rebuilt: qpdf --check is clean',
+              got=(r.stdout + r.stderr)[-300:])
+        cat = val(js['qpdf'][1]['trailer']['value']['/Root'])
+        nd = cat['/Names'] if isinstance(cat['/Names'], dict) else val(cat['/Names'])
+        root = val(nd['/Dests'])
+        keys = []
+        for kref in root.get('/Kids', []):
+            keys += val(kref)['/Names'][0::2]
+        eq(keys, ['u:alpha', 'u:zeta'], 'the rebuilt /Dests tree is sorted')
+
+    # the invisible layer of the six-page file's shaded page carries the space
+    # between its two words, so a reader that joins glyphs gets "Shaded page"
+    j1 = json.loads(sh(['qpdf', '--json=2', '--json-stream-data=none', out]).stdout)
+    c2 = j1['qpdf'][1]['obj:' + j1['pages'][1]['object']]['value']['/Contents']
+    j2 = json.loads(sh(['qpdf', '--json=2', '--json-stream-data=inline', '--json-object=' + c2.split()[0], out]).stdout)
+    cdata = prep.b64(j2['qpdf'][1]['obj:' + c2]['stream']['data'])
+    check(b'(Shaded ) Tj' in cdata and b'(page) Tj' in cdata, 'the invisible words carry the space between them',
+          got=cdata[-200:])
 
 done('t_pdprep')

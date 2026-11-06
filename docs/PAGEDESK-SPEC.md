@@ -2115,9 +2115,13 @@ tools/os88pdprep.py IN.pdf OUT.pdf [--flate] [--raster none|auto|all|2,5-7]
 Refusals: IN is not a file or has no `%PDF-` in its first KiB; OUT is IN
 (`samefile`: not even with `--force`); OUT exists without `--force`; the file
 is encrypted and no password was given (`PDE_ENCRYPT`), or the password is
-wrong; no pages; more than 1,024 pages (`PDE_LIMIT`; `--pages 1-1024` prepares
-a range). The original is only ever read, and OUT appears only after qpdf
-finished (`OUT.tmp` is renamed over).
+wrong (a file with an EMPTY user password - owner restrictions only - is
+refused too, saying that `--password ""` decrypts it); OUT is a directory; the
+report would land on IN; no pages; more than 1,024 pages (`PDE_LIMIT`;
+`--pages 1-1024` prepares a range). The original is only ever read, and OUT
+appears only after qpdf finished: qpdf writes a fresh `mkstemp` name beside
+OUT, which is renamed over it (never `OUT.tmp`, which an input could be
+called). `--password-file` uses the file's first line.
 
 `--flate` is the Enhanced tier: Flate streams are kept (or re-made from LZW and
 ASCII85) for a build that has PD-25. The default is the XT tier: **no Flate
@@ -2129,7 +2133,8 @@ rendering* and the command that would replace it.
 #### 20.14.2 What is rewritten
 
 One `qpdf` pass (`--object-streams=disable`, `--stream-data=uncompress` on the
-XT tier, `--newline-before-endstream`, `--deterministic-id`) gives, by
+XT tier, `--newline-before-endstream`, `--deterministic-id` - on BOTH passes:
+an input with no `/ID` otherwise gets a random one from the first) gives, by
 construction, everything PDENG's profile lists:
 
 | input | derivative |
@@ -2141,6 +2146,7 @@ construction, everything PDENG's profile lists:
 | `/Encrypt` | decrypted only with a supplied password; the derivative has no encryption, no `/Perms`, no permissions |
 | `DCTDecode`, `JPXDecode`, `CCITTFaxDecode`, `JBIG2Decode` images | left as they are: their page is *incomplete* and is the raster's business |
 | `/Outlines` | kept; dropped with a warning when `--pages` selects a subset, because its targets are gone |
+| `/Names /Dests` name tree | kept when its keys are in order; REBUILT as a sorted two-level tree (leaves of 128 pairs) when they are not (a real producer's file had them out of order, which fails `qpdf --check` and a binary search), and pruned to the pages kept under `--pages` (31 pages of a 4,234-page manual kept 58 of 9,066 destinations) |
 | `/Perms`, signature byte ranges, XFA | kept as data, with a warning: rewriting invalidates a signature |
 
 A stream decoded past the engine's 1 MiB cut (7.5, 20.2.2) is not fixed by
@@ -2169,21 +2175,30 @@ numbered after `--pages`) exactly those; `none` leaves every page vector.
 
 The page is replaced in place - **its object number stays**, so outline and
 link targets still resolve - by `/Type /Page`, the parent, a new `/MediaBox
-[0 0 W H]` (CropBox, Rotate, Annots, groups and boxes dropped), and new contents:
+[0 0 W H]`, `/CropBox` equal to it and `/Rotate 0` (both are INHERITABLE: left
+out, a `/Pages` node's would crop and turn a picture that has them baked in),
+with Annots, groups and the other boxes dropped, and new contents:
 the page as MuPDF (or Poppler, `pdftoppm -gray`) draws it, with `/Rotate`, the
 CropBox and the source's annotation appearances baked in, cut into horizontal
 **strips**, each an Image XObject (`DeviceGray`, `--bits` 1 or 8) of at most
 `--strip-bytes` decoded (default 60,000: inside one 64 KiB segment, far under the
-1 MiB cut). 1-bit strips are Bayer 4x4 ordered-dithered; strips are
-RunLength-encoded when that is smaller (XT tier) or Flate (`--flate`). Each is
-placed by its own `q ... cm /Sn Do Q`. A page larger than 2,000 pt in either
-direction is shrunk so it fits +/-2,047 pt, and the report says by what factor.
+1 MiB cut). A row is at most 1,024 bytes, PDREND's image row buffer (20.3.2
+refuses a longer one), so a page wider than 1,024 px at 8 bits (8,192 px at 1)
+is cut into COLUMNS as well; the report names them. 1-bit strips are Bayer 4x4
+ordered-dithered; strips are RunLength-encoded when that is smaller (XT tier)
+or Flate (`--flate`). Each is placed by its own `q ... cm /Sn Do Q`. A page
+larger than 2,000 pt in either direction is shrunk so it fits +/-2,047 pt -
+rendered ONCE at the reduced resolution, from its box (a 14,400 pt page is not
+first drawn as a 20,000-pixel square) - and the report says by what factor.
 
 **Searchable text exists only when it genuinely did.** Where the source page
 had extractable text (MuPDF's `stext`), the page also carries an INVISIBLE
 layer - `BT 3 Tr`, one `Tj` per word in `Courier` with `Tz` set so the word's
 width equals its box in the picture (Courier's advance is 600/1000 em, so no
-width table is needed) - which Find, selection and Copy use as for any text.
+width table is needed) - which Find, selection and Copy use as for any text. A
+word followed by another on the same line carries its space, stretched over the
+gap (`(two ) Tj (words) Tj`), so a reader that joins glyphs in content order
+gets the words apart.
 A word with a character outside WinAnsi is skipped and counted; a font with no
 widths gets half an em a letter. There is no layer on a scan, and the report
 says "searchable text: none". `--no-text-layer` omits it. Rotated lines are
@@ -2223,7 +2238,10 @@ is NOT offered (open item 2); a prepared copy is its own document.
 
 After writing, the tool re-reads the output with tools that share nothing
 with it and prints each verdict in the report: `qpdf --check` (any warning
-fails), `tools/os88pdfcheck.py validate`, its own profile check (classic xref
+fails - except a warning the qpdf rewrite of the ORIGINAL gives word for word,
+path, object numbers and offsets aside: that defect was inherited, not made
+here, and is printed as such, e.g. a damaged JPEG the page still draws through),
+`tools/os88pdfcheck.py validate`, its own profile check (classic xref
 at `startxref`, every entry 20 bytes, no `/ObjStm` or `/XRef`, subsections at
 most `PD_MAXSUBSEC`, object numbers under 65,536, no `/Encrypt`, page count) and,
 when `build/pde_test` (or `--pde-test`, `$PDE_TEST`) exists, **PDENG itself**:
@@ -2235,7 +2253,7 @@ is not run through PDENG (it has no Flate until PD-25).
 
 #### 20.14.7 Checks and numbers
 
-`tests/unit/t_pdprep.py` (fast, about 0.7 s, proposed row `pdprep`): the
+`tests/unit/t_pdprep.py` (fast, about 1.1 s, proposed row `pdprep`): the
 RunLength encoder round-trips; the dither's white, black and grey; the
 tokenizer through strings, arrays, hex, comments and an inline image whose
 data holds a false `EI`; page lists; then on a generated six-page file that
@@ -2245,15 +2263,33 @@ image - the report's every verdict, no `/ObjStm` or `/XRef` or Flate in the
 output, the profile check, `qpdf --check`, strips under the cap, the Info
 stamp (the original's SHA-256), MuPDF extracting the invisible words, the
 output byte-identical on a second run, the refusals (in place, existing,
-encrypted without and with a wrong password), a decrypt with the right one, and
+encrypted without and with a wrong password), a decrypt with the right one (the first line of a `--password-file`), and
 a **negative control**: the profile check must fail the object-stream input.
-It SKIPs, never passes, without `qpdf`.
+Then what the verifier found, each check failing on the first version (nine
+FAILs against it, 0cebd288e): the report never lands on the input; an input
+NAMED `OUT.tmp` is untouched; an input with no `/ID` still prepares
+byte-identically; a page under a `/Pages` node with `/Rotate 90` and a CropBox
+comes out with `/Rotate 0` and its own CropBox; an 8-bit raster 1,650 px wide
+is cut into columns of at most 1,024 bytes a row; an unsorted `/Dests` tree is
+rebuilt sorted and `qpdf --check` is clean; and the invisible words carry their
+spaces. It SKIPs, never passes, without `qpdf`.
 
 Measured on this host (qpdf 12.4.2, MuPDF 1.28.6): XTGUIDE.PDF as an
 object-stream/Flate file (9,555 bytes) becomes a 27,948-byte classic file
 PDENG opens (PDENG: XREFSTM before); an HTML page converted by MuPDF with CID
 fonts rasterises at 80 dpi, 1-bit, to one 3,861-byte strip with 22 invisible
-words.
+words. verify-host ran it over 25 more: six macOS system PDFs (ICC colour,
+transparency and blend modes, an 18-page Thai licence in CID fonts -> 36 strips,
+920 KB), the same guide linearized, with object streams, with three incremental
+revisions, and encrypted RC4-40/RC4-128/AES-128/AES-256/AES-256+object streams;
+a generated file with a Type 3, a CID, an Indexed + pattern, a Separation and a
+Symbol page and LZW+ASCII85 content and a PNG-predictor Flate image; posters of
+5,000 and 14,400 pt (0.9 s, 46 MB, scaled to 14%); 1,024 pages (2.9 s) and
+1,100 (refused); and pages 100-130 of a 209 MB, 4,234-page manual (17.7 s,
+530 MB resident - the original is read whole) -> 1.56 MB, `qpdf --check`
+clean. Every output passed `qpdf --check`, `os88pdfcheck validate`, the profile
+check and PDENG, and every raster row is at most 1,024 bytes and every strip at
+most 59,920.
 
 #### 20.14.8 Open items
 
