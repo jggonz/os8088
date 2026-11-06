@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """os88pdstk - PageDesk's static stack gate (DECISIONS D21/D22/D23).
 
-    python3 tools/os88pdstk.py [--build DIR] [--guard N] [--top N] [-v]
+    python3 tools/os88pdstk.py [--build DIR] [--top N] [-v]
 
 WHY IT EXISTS. Every PageDesk module verb used to run on the CALLER's stack,
 the UI task's 512 bytes (SPEC.md 2.1, STK0_SIZE). PDREND's recursive bez()
@@ -14,16 +14,22 @@ a PRIVATE 2 KiB deep stack. pdu_mcall runs every module verb on it, and each
 kernel call a module makes swaps back to the UI stack at the depth the shell
 reached. This gate checks the two budgets that split leaves:
 
-  DEEP   pdu_mcall's far call + the door + every C frame, push and return
-         address under it, including the nested PDREND/PDWRT -> PDENG call.
-         Must be <= 2048 - 256 = 1792. The 256 is kept for the ISR floor,
-         the ROM's int 09h and sch_isr's frame.
+  DEEP   the door's entry (its pushes included) down through every C frame,
+         push and return address, the nested PDREND/PDWRT -> PDENG call
+         included. deepstk's figures (pagedesk/deepstk 6c3e70673):
+         PD_DSTK_BYTES = 2048, an 8-byte record at the top and a 4-byte
+         canary at the bottom; pdu_mcall loads SP = 2040 and far-calls the
+         door, so the door is entered at 2036 and 2036 - 4 = 2032 is usable.
+         Less D23's 256 for the ISR floor, the ROM's int 09h and sch_isr's
+         frame: <= 1776.
   UI     the kernel's callback dispatch (DISPATCH = 48, measured: the UI
          task's top down to the package's C callback) + the primary's chain
          + the kernel API underneath (KAPI = 156, measured: READ_SEQ ->
          int 13h -> IRQ0 drawing the menu-bar progress widget, the deepest
-         thing the kernel does on this stack). A module's kernel call is
-         charged here at pdu_mcall's depth + the guard (--guard, D23 3).
+         thing the kernel does on this stack). A module's kernel call runs
+         at pdu_mcall's banked SP: the primary's chain + pdu_mcall's own
+         frame, then SWAP = 8 (the deep SS:SP banked on the UI stack, 4,
+         and the far return, 4) and the API (deepstk's figures).
          Must be <= 384, which leaves 128 for the interrupt floor.
 
 It also REFUSES RECURSION (D21 a). A cycle anywhere in the call graph fails
@@ -43,7 +49,9 @@ then costs:
 
   near call     depth + 2 + the callee
   tail jmp      depth + the callee
-  OSAPI_*       depth + 4 + KAPI on the UI stack (deep side: + WRAP, D23 3)
+  OSAPI_*       depth + 4 + KAPI on the UI stack; deep side + GATE 6: the
+                thunk's call to its slot 2, the slot's call to pdk_up 2,
+                pdk_up's one push 2 (deepstk)
   far edges     PDREND _pdr_eng and PDWRT _pdw_engcall -> PDENG's door;
                 the primary's pdu_mcall -> the three doors; the C overlay's
                 cc_ovm_* / cc_ovv_* vectors -> the function they name, + OVL
@@ -60,13 +68,19 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-DEEP_SIZE = 2048            # D23 1: PDU_DC_DSTK
+DEEP_SIZE = 2048            # D23 1: PD_DSTK_BYTES (pdabi.h)
+DEEP_RECORD = 8             # deepstk: the record at offsets 2040..2047
+DEEP_FARRET = 4             # pdu_mcall's far call: the door is entered at 2036
+DEEP_CANARY = 4             # deepstk: the canary at 0..3
 DEEP_RESERVE = 256          # D23 5: ISR floor + int 09h ROM + sch_isr frame
+DEEP_BUDGET = DEEP_SIZE - DEEP_RECORD - DEEP_FARRET - DEEP_CANARY - DEEP_RESERVE  # 1776
 UI_BUDGET = 384             # D22 1 / D23: task 0's 512 less 128 for interrupts
 DISPATCH = 48               # measured (rendfix): UI task top -> the C callback
 KAPI = 156                  # measured (rendfix): READ_SEQ + int 13h + IRQ0 draw
-WRAP = 8                    # D23 3: the module thunk wrapper's own saves
-GUARD = 16                  # D23 3: "SS:SP pdu_mcall saved, less a small guard"
+GATE = 6                    # deepstk: a module's kernel call on the DEEP stack -
+                            # near call to the slot 2 + pdk_up's call 2 + push 2
+SWAP = 8                    # deepstk: on the UI stack under pdu_mcall's banked
+                            # SP - the deep SS:SP 4 + the far return 4
 OVL = 8                     # cc_ovthunk / cc_ovmthunk's stash path + far frame
 
 # segment: top source, door label, dispatcher (per-verb chains)
@@ -294,6 +308,7 @@ class Func:
         self.maxd = 0
         self.sites = []             # (kind, target, depth, where)
         self.notes = []
+        self.bank_d = None          # the depth at the first SS/SP load (pdu_mcall's bank)
 
 
 def is_local(name):
@@ -302,6 +317,7 @@ def is_local(name):
 
 
 def split_functions(seg, src):
+    root = getattr(src, "root", ROOT)
     funcs, order = {}, []
     sect = ".text"
     cur = None
@@ -311,7 +327,7 @@ def split_functions(seg, src):
         if not s:
             continue
         if path not in rel:
-            rel[path] = os.path.relpath(path, ROOT)
+            rel[path] = os.path.relpath(path, root)
         m = re.match(r'(section|segment)\s+(\S+)', s, re.I)
         if m:
             sect = m.group(2)
@@ -393,8 +409,10 @@ def scan(f):
         elif mn == "leave":
             if bpd is not None:
                 d = max(0, bpd - 2)
-        elif (mn == "mov" and o.lower().startswith("sp,")) or mn == "lss" or \
-                (mn == "xchg" and "sp" in o.lower().split(",")):
+        elif (mn == "mov" and (o.lower().startswith("sp,") or o.lower().startswith("ss,"))) \
+                or mn == "lss" or (mn == "xchg" and "sp" in o.lower().split(",")):
+            if f.bank_d is None:
+                f.bank_d = d
             f.notes.append("%s: SP is loaded (`%s %s`) - a stack switch the scan does "
                            "not follow" % (where, mn, ops))
         elif mn == "mov" and o.lower().startswith("bx,cc_ovm_"):
@@ -446,10 +464,9 @@ def scan(f):
 # the graph
 # ---------------------------------------------------------------------------
 class Graph:
-    def __init__(self, build, guard=GUARD, segments=SEGMENTS, root=ROOT):
+    def __init__(self, build, segments=SEGMENTS, root=ROOT):
         self.build = build
         self.segments = segments
-        self.guard = guard
         self.funcs = {}             # (seg, name) -> Func
         self.missing = {}
         self.recursion = []
@@ -483,8 +500,8 @@ class Graph:
         """The deepest bytes below `key`'s return address, and the path.
 
         mode "ui":   kernel calls cost KAPI; pdu_mcall's module call costs the
-                     swap guard + a module kernel call (D23).
-        mode "deep": kernel calls cost WRAP (D23 3 swaps them to the UI stack).
+                     swap-back (SWAP) + a module kernel call (D23).
+        mode "deep": kernel calls cost GATE (D23 3 swaps them to the UI stack).
         mode "flat": today's layout, no deep stack - everything on one stack.
         trail is ((key, bytes the call into it added), ...) from the root.
         """
@@ -519,8 +536,10 @@ class Graph:
         best, path = f.maxd, [f.name]
         for kind, t, d, where in f.sites:
             if kind == "kernel":
-                extra = 4 + (KAPI if mode in ("ui", "flat") else WRAP)
-                c, p = d + extra, ["%s+%d" % (f.name, d + 4), "%s(%d)" % (t, extra - 4)]
+                if mode == "deep":
+                    c, p = d + GATE, ["%s+%d" % (f.name, d), "%s(gate %d)" % (t, GATE)]
+                else:
+                    c, p = d + 4 + KAPI, ["%s+%d" % (f.name, d + 4), "%s(%d)" % (t, KAPI)]
             elif kind in ("indirect", "farimm", "int"):
                 self._unknown(f, kind, t, where)
                 c, p = d + 4, [f.name, "%s %s (not followed)" % (kind, t)]
@@ -534,7 +553,10 @@ class Graph:
                     if (key == MCALL) and mode == "ui":
                         # D23 2/3: the module runs on the deep stack; what is
                         # charged HERE is the swap back for its kernel call
-                        cc, pp = d + self.guard + 4 + KAPI, ["%s+%d" % (f.name, d + self.guard + 4), "%s's kernel call (swapped back: guard %d + KAPI %d)" % (tk[1], self.guard, KAPI)]
+                        # at the depth pdu_mcall banked SS:SP (its first SS/SP
+                        # load), or - before deepstk - at the far call itself
+                        bd = f.bank_d if f.bank_d is not None else d
+                        cc, pp = bd + SWAP + KAPI, ["%s+%d" % (f.name, bd + SWAP), "a module's kernel call (swapped back: %d + KAPI %d)" % (SWAP, KAPI)]
                     else:
                         sub = self.cost(tk, mode, trail + ((tk, d + extra),) if trail else ((key, 0), (tk, d + extra)), nocycle)
                         cc, pp = d + extra + sub[0], ["%s+%d" % (f.name, d + extra)] + sub[1]
@@ -574,22 +596,23 @@ def fmt_path(p):
     return " > ".join(p)
 
 
-def analyse(build, guard=GUARD, top=10, verbose=False, out=print, segments=SEGMENTS, root=ROOT):
-    g = Graph(build, guard, segments, root)
+def analyse(build, top=10, verbose=False, out=print, segments=SEGMENTS, root=ROOT):
+    g = Graph(build, segments, root)
     fails = []
     for seg, miss in g.missing.items():
         if miss:
             out("SKIP %s: %s not built (make pagedesk)" % (seg, ", ".join(miss)))
     have = {seg for seg, _, _, _ in segments if not g.missing[seg]}
     # ---- DEEP: per door, per verb
-    deep_max = DEEP_SIZE - DEEP_RESERVE
-    out("DEEP STACK (D23: <= %d = %d - %d; pdu_mcall's far call is the +4)" % (deep_max, DEEP_SIZE, DEEP_RESERVE))
+    deep_max = DEEP_BUDGET
+    out("DEEP STACK (D23: <= %d from the door's entry = %d - record %d - far return %d - canary %d "
+        "- interrupt reserve %d; a kernel call costs the gate's %d here)"
+        % (deep_max, DEEP_SIZE, DEEP_RECORD, DEEP_FARRET, DEEP_CANARY, DEEP_RESERVE, GATE))
     for seg, _, door, disp in segments:
         if not door or seg not in have:
             continue
         dk = (seg, door)
         tot, path = g.cost(dk, "deep")
-        tot += 4
         out("  %-6s door %-10s worst %5d  %s" % (seg, door, tot, fmt_path(path)))
         df = g.funcs.get(dk)
         disp_f = g.funcs.get((seg, disp))
@@ -600,7 +623,7 @@ def analyse(build, guard=GUARD, top=10, verbose=False, out=print, segments=SEGME
                 if k != "near":
                     continue
                 c, p = g.cost((seg, t), "deep")
-                v = 4 + dsite + 2 + d + 2 + c
+                v = dsite + 2 + d + 2 + c
                 if v > rows.get(t, (0,))[0]:
                     rows[t] = (v, p)
             for t, (v, p) in sorted(rows.items(), key=lambda x: -x[1][0])[:top if not verbose else None]:
@@ -627,7 +650,7 @@ def analyse(build, guard=GUARD, top=10, verbose=False, out=print, segments=SEGME
         rows.sort(key=lambda r: -r[0])
         out("UI STACK (D22/D23: <= %d = the kernel's dispatch %d (%d measured to the C callback, less "
             "cc_onwake's %d) + the primary's chain + kernel API %d; a module's kernel call is charged at "
-            "pdu_mcall's depth + guard %d)" % (UI_BUDGET, kdisp, DISPATCH, tdep + 2, KAPI, guard))
+            "pdu_mcall's banked SP + %d)" % (UI_BUDGET, kdisp, DISPATCH, tdep + 2, KAPI, SWAP))
         for v, name, p, fl, fp in rows[:top if not verbose else None]:
             flag = "  OVER" if v > UI_BUDGET else ""
             out("  %-28s %5d%s  (no deep stack: %d)  %s" % (name, v, flag, fl, fmt_path(p)))
@@ -661,11 +684,10 @@ def analyse(build, guard=GUARD, top=10, verbose=False, out=print, segments=SEGME
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--build", default=os.path.join(ROOT, "build"))
-    ap.add_argument("--guard", type=int, default=GUARD)
     ap.add_argument("--top", type=int, default=8)
     ap.add_argument("-v", "--verbose", action="store_true")
     a = ap.parse_args()
-    fails, _ = analyse(a.build, a.guard, a.top, a.verbose)
+    fails, _ = analyse(a.build, a.top, a.verbose)
     if fails:
         print("os88pdstk: %d FAILED" % len(fails))
         for f in fails:
