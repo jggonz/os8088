@@ -149,7 +149,7 @@ static int c64_jit_kb;                      /* ...and its claim's size */
 void c64j_setup(unsigned dst, unsigned part, unsigned len, unsigned core,
                 int force, int kb);
 void c64j_off(unsigned core);              /* the core's page map zeroed */
-static void c64_jit_drop(void);
+static void ovl_jit_drop(void);
 static void ovl_jit_init(void);
 static void ovl_jit_toggle(void);
 void c64f_core(unsigned dstseg, unsigned partseg);
@@ -2013,20 +2013,37 @@ static void ovl_jit_init(void)
     os88_part_drop(C64_JIT_PART);
 }
 
-/* c64_jit_drop - THE RECOMPILER GIVES WAY (section 4.9): its claim back to
+/* ovl_jit_drop - THE RECOMPILER GIVES WAY (section 4.9): its claim back to
  * the heap for something the user asked for (a D64 that would not fit),
  * the core's page map zeroed first so no transfer looks for it again. The
- * fast core runs alone from here, as it did before the recompiler. */
-static void c64_jit_drop(void)
+ * fast core runs alone from here, as it did before the recompiler.
+ *
+ * AND THE DISK ON DRIVE 8 STAYS (11.5.1). Its two sector slots may be in
+ * this claim (c64_d64_inj); they are only a cache of the image in extended
+ * memory, so they move into a 512-byte claim of their own - there is room
+ * for one, the recompiler's having just gone - and the drive keeps its disk
+ * whatever the attach that asked for this does next. Only with no claim at
+ * all is the disk given back. An overlay routine: only attaches call it. */
+static void ovl_jit_drop(void)
 {
+    int inj = c64_d64_inj;
+
     if (c64_fjit == 0)
         return;
-    if (c64_d64_inj)                        /* (its slots go with it) */
-        ovl_d64_release();
+    c64_d64_inj = 0;
     c64j_off(c64_fcode);
     os88_mem_free(c64_fjit);
     c64_fjit = 0;
     c64_jit_on = 0;
+    if (inj) {
+        c64_d64_slot[0] = 0;
+        c64_d64_slot[1] = 0;
+        c64_d64_seg = os88_mem_claim_p(32);
+        if (c64_d64_seg == 0)
+            ovl_d64_release();
+        else
+            os88_mem_movable(c64_d64_seg, 1);
+    }
     c64_menu_state();
 }
 

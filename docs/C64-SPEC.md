@@ -1255,8 +1255,10 @@ whole block fits, so the run's end is unchanged.
 **The claim, by tier.** `ovl_jit_init` claims 64KB, else 48; the cache ends
 where the claim does (`jv_end`). It is set up after every other part, beside
 the free heap, so that when it gives way the hole it leaves is one piece. When a D64 will not fit the heap
-the recompiler GIVES WAY: `c64_jit_drop` zeroes the core's page map, frees
-the claim, and the attach claims again; after the attach the recompiler is
+the recompiler GIVES WAY: `ovl_jit_drop` zeroes the core's page map, frees
+the claim, and the attach claims again (a disk already on drive 8 whose
+sector slots were in that claim keeps them in a 512-byte claim of its own,
+§11.5.1, so the drive holds its disk until the new one is whole); after the attach the recompiler is
 set up again in whatever is left. A smaller machine gets a smaller cache,
 never a refused disk. **Where there is extended memory the D64 goes there
 and the two fit together** (§11.5.1); the giving way is for a machine
@@ -3274,8 +3276,10 @@ conventional memory:
   - the slots are the claim's last 512 bytes, which the cache stops short of
   (`CACHE_END` `$FD00`, `jv_end` 768 bytes under the claim's end), and the
   image is read 4KB at a time through the cache, which is then flushed
-  (`JC_FLUSH+1` = 2). They follow it when it moves (`os88_onmove`) and go with
-  it if it is dropped. Without one, a 512-byte claim for the slots and an 8KB
+  (`JC_FLUSH+1` = 2). They follow it when it moves (`os88_onmove`), and when it
+  is dropped for an attach they move into a 512-byte claim of their own
+  (`ovl_jit_drop`: only a cache of the image, so nothing is copied) - the
+  disk stays on drive 8 until the new one is whole. Without one, a 512-byte claim for the slots and an 8KB
   buffer, or down to 512 bytes, given back after.
 - **The four OSAPI_XMEM_* calls** are `c64fast.inc`'s `c64x_*` shims; the
   token is two words the C never adds to (`c64x_copy` adds the offset), so it

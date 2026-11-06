@@ -4731,6 +4731,19 @@ int main(int argc, char **argv)
         ovl_d64_trap();
         if (c64_m.pc != C64_D64_TRAP + 2 || c64_m.a != 0x60)
             fail("a LOAD from device 9 did not run the LDA #$60 the trap replaced");
+        if (h_xms_kb == 2048) {
+            /* ...AND THE RECOMPILER GIVES WAY FOR ANOTHER ATTACH: the disk
+             * stays on drive 8, its slots in a claim of their own (11.5.1).
+             * Verified to fail with ovl_jit_drop releasing the disk: the
+             * drive is empty before the new image is known to fit */
+            ovl_jit_drop();
+            if (c64_fjit != 0 || c64_d64_seg == 0 || c64_d64_inj || !c64_d64_xms)
+                fail("the recompiler giving way took drive 8's disk with it");
+            c64_wr(0xBA, 8);
+            H_LOADCALL(nm, 5, 1);
+            if (c64_m.pc != C64_D64_LOADING || c64_rd(0xC000 + 252) != 0xE2)
+                fail("after the recompiler gave way the disk's file did not load");
+        }
         ovl_d64_release();
         if (h_xms_live != 0 || c64_d64_seg != 0)
             fail("the D64 given back left its extended block or its claim");
