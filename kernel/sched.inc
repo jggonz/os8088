@@ -348,11 +348,14 @@ sched_init:
     mov byte [sch_coop], 0      ; pre-emptive until the Control Panel says
     mov byte [sch_hold], SCH_WD_TICKS
                                 ; otherwise (SPEC.md 8.2). All three are
-    mov byte [sch_idleslot], 0xFF ; NO idle task yet, and this is exactly why
+    mov word [sch_idleslot], 0x01FF ; NO idle task yet, and this is exactly why
                                 ; it is 0xFF rather than 0 - nothing clears
                                 ; .bss, and a zero here names slot 0, the UI
                                 ; task, which sch_switch's scan would then
-                                ; skip for ever
+                                ; skip for ever. The HIGH byte is [sch_top]
+                                ; = 1: only slot 0 is live (SPEC.md 8.1.3),
+                                ; one word store for the two (the %if at the
+                                ; foot of this file keeps them adjacent)
     mov word [sch_wd_hits], 0   ; zeroed HERE by hand, like the four bytes
                                 ; above it: nothing clears .bss at boot, so
                                 ; every one of these has to be stored rather
@@ -1013,6 +1016,12 @@ task_spawn:
                                 ; BP - which is the addressing this already
                                 ; used
 
+    cmp cl, [sch_top]           ; RAISE THE BOUND BEFORE THE PUBLISH (SPEC.md
+    jb .intop                   ; 8.1.3): the scan stops at [sch_top], so a
+    mov al, cl                  ; slot made ready above it would never run.
+    inc ax                      ; AX is 0 from the zeroing above, so this is
+    mov [sch_top], al           ; slot + 1. Still IF=0 - the ISR cannot look
+.intop:                         ; between this store and the one below
     mov byte [bx+T_STATE], 1    ; publish - MUST be the last record write
     mov ax, cx                  ; AL = slot index (1..MAX_TASKS-1)
 
@@ -1166,7 +1175,22 @@ task_exit:
 .norel:
     call sch_currec             ; free our own task record
     mov byte [bx+sch_tasks+T_STATE], 0
+    mov al, [sch_top]           ; ...and LOWER THE BOUND past every free slot
+    cbw                         ; at the top (SPEC.md 8.1.3), so a closed app
+    mov bx, ax                  ; stops costing the wake loop and the scan.
+    mov cl, 3                   ; [sch_top] <= MAX_TASKS < 80h, so cbw makes
+    shl bx, cl                  ; AH = 0, and BX = [sch_top] * T_SIZE. The
+.lower:                         ; walk stops at slot 0 at the latest: the UI
+    dec ax                      ; task never exits, so its T_STATE is never 0.
+    sub bx, T_SIZE              ; IF=0 since the cli above, so nothing spawns
+    cmp byte [bx+sch_tasks+T_STATE], 0  ; under it; AX, BX and CX are dead -
+    je .lower                   ; sch_switch re-derives all three
+    inc ax
+    mov [sch_top], al
     jmp sch_switch              ; explicit jump - placement-safe
+    nop                         ; PARITY PAD, never executed: the bound above
+                                ; is 25 bytes, and this keeps sch_isr at the
+                                ; parity it was measured at (t_hotpar)
 
 ; -----------------------------------------------------------------------------
 ; sch_account - charge the PIT cycles since the last measure point to the
@@ -2301,7 +2325,8 @@ sch_isr:
 
     mov dx, [ticks]             ; wake sleepers whose deadline has passed
     mov bx, sch_tasks
-    mov cx, MAX_TASKS
+    mov cl, [sch_top]           ; ...among the slots that can be live: every
+    xor ch, ch                  ; one at or above [sch_top] is free (8.1.3)
 .wake:
     cmp byte [bx+T_STATE], 2
     jne .next
@@ -2332,6 +2357,9 @@ sch_isr:
                                 ; sch_switch re-arms the budget
 .tres:                          ; ONE near jump for the refusals above and
     jmp sch_resume              ; sch_switch's own: a `jne` that far is five
+    nop                         ; PARITY PAD, never executed: the wake loop's
+                                ; bound (SPEC.md 8.1.3) is 3 bytes, and this
+                                ; keeps sch_switch at its measured parity
                                 ; bytes, a short one to here two - and the
                                 ; common tick (no lock, no coop) now takes no
                                 ; branch at all until .sw
@@ -2366,6 +2394,9 @@ sch_switch:
     xor bh, bh                  ; were two (-2 bytes, ~8 cycles; size pass 9)
     mov cl, 3                   ; T_SIZE = 8: ***CL = 3 FROM HERE TO .pick***
     shl bx, cl                  ; (see below)
+    mov ch, [sch_top]           ; ...and CH = [sch_top], the scan's modulus
+                                ; and its count (SPEC.md 8.1.3), live to .pick
+                                ; with CL
     mov [bx+sch_tasks+T_SP], sp
 
     ; --- the outgoing task's canary (SPEC.md 8), through sch_stkbase above.
@@ -2395,13 +2426,13 @@ sch_switch:
                                 ; .pick, `call sch_account` clobbers CX and
                                 ; nothing reads CL again. DL = [sch_cur] from
                                 ; the park, and nothing between writes DX
-    mov dh, MAX_TASKS           ; scan cur+1, cur+2, ... (cur itself last)
-.scan:
-    inc dl
-    cmp dl, MAX_TASKS
-    jne .nowrap
-    xor dl, dl
-.nowrap:
+    mov dh, ch                  ; scan cur+1, cur+2, ... (cur itself last)
+.scan:                          ; over the [sch_top] slots that can be live,
+    inc dl                      ; not MAX_TASKS (SPEC.md 8.1.3): the ones above
+    cmp dl, ch                  ; are free, and a free slot was never picked.
+    jb .nowrap                  ; `jb`, not `jne`: a task_exit that lowered
+    xor dl, dl                  ; the bound under its OWN slot arrives with
+.nowrap:                        ; DL >= CH, and wraps to 0 on the first step
     mov bl, dl
     xor bh, bh
     shl bx, cl                  ; CL = 3, set once above the scan
@@ -2471,6 +2502,10 @@ sch_resume:
     pop cx
     pop ax
     iret
+    nop                         ; PARITY PAD, never executed: the scan's
+                                ; bound (SPEC.md 8.1.3) is 3 bytes, and this
+                                ; keeps everything after it at the parity it
+                                ; was measured at (t_hotpar)
 
 ; -----------------------------------------------------------------------------
 ; sch_stkdie - a task overran its stack slice (SPEC.md 8)
@@ -2978,6 +3013,13 @@ sch_idleslot: resb 1                    ; the idle task's slot, or 0xFF for
                                         ; none - sched_init sets it, because
                                         ; a zero here names slot 0, the UI
                                         ; task, and the scan would skip it
+sch_top:    resb 1                      ; ONE PAST the highest slot that can
+                                        ; be live (SPEC.md 8.1.3): every slot
+                                        ; at or above it is free, so the wake
+                                        ; loop and sch_switch's scan stop here
+                                        ; instead of at MAX_TASKS. Raised by
+                                        ; task_spawn before the publish,
+                                        ; lowered by task_exit after the free
 sch_wd_hits: resw 1                     ; watchdog-forced switches; diagnostic
                                         ; only (QMP xp on segment 0x0800),
                                         ; wraps mod 65536, never reset
@@ -2985,6 +3027,9 @@ sch_wd_hits: resw 1                     ; watchdog-forced switches; diagnostic
 ; sch_wake_ui sets BOTH wake bytes with one `mov word [sch_uiwake], 0x0101`.
 ; The labels cannot be folded at the store's own line, so the guard lives here,
 ; after the declarations.
+%if sch_top - sch_idleslot != 1
+  %error "the boot seed writes [sch_idleslot] = 0xFF and [sch_top] = 1 as ONE word store - keep sch_top directly after sch_idleslot"
+%endif
 %if sch_idlewake - sch_uiwake != 1
   %error "sch_wake_ui sets both wake bytes with ONE word store (SPEC.md 8.1.2) - keep sch_uiwake and sch_idlewake adjacent, in that order"
 %endif

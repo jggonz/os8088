@@ -12583,6 +12583,42 @@ tick-driven, where coalescing is a feature and not a cost (§13.12) — so it is
 the only rung that needs to say so.
 
 
+### 8.1.3 `sch_top` — the scan stops at the last slot that can be live
+
+`sch_top` (a `.bss` byte) is **one past the highest task slot that can be
+non-free**: every slot at or above it has `T_STATE` = 0. The two loops that
+walk the task table on the hot path - `sch_isr`'s wake scan, every tick, and
+`sch_switch`'s round-robin scan, every switch - run over slots `0 ..
+[sch_top]-1` instead of `0 .. MAX_TASKS-1`. A free slot was never woken and
+never picked, so **the pick is the same task in every case**; only the count
+of free slots looked at changes.
+
+- `sched_init` seeds it to 1 (only slot 0, the UI task, is live) in the same
+  word store that seeds `sch_idleslot` = 0xFF, the byte below it.
+- `task_spawn` raises it to slot + 1 when the slot it found is at or above it,
+  **before the publish** and inside the routine's own IF = 0 window, so no
+  tick can see a ready slot past the bound.
+- `task_exit` lowers it past every free slot at the top, after it frees its
+  own record and still under its `cli`. The walk stops at slot 0 at the
+  latest, because the UI task never exits.
+- The scan's wrap is `jb`, not `jne`: a `task_exit` that lowered the bound
+  under its OWN slot reaches `sch_switch` with `[sch_cur]` >= `[sch_top]`, and
+  the first step wraps to slot 0. The count is `[sch_top]`, so the scan visits
+  every slot below the bound exactly once, the outgoing task last when it is
+  below it.
+
+It pays because slots are allocated by stack CLASS, smallest first (§8.7),
+so the slots in use cluster at the bottom: an idle desktop has two live
+slots (the UI task and the idle task in slot 1) out of fourteen, and a
+package with a 192-byte worker raises the bound to 5. Measured on MartyPC's
+4.77 MHz 8088 (CGA, kern_big, idle desktop): **an idle tick fell from 17,558
+to 11,533 cycles (3.68 to 2.42 ms; 6.7% to 4.4% of the machine)**, a
+yield-to-self from ~2,630 to ~1,100 cycles, and the scheduler's share of the
+mouse-to-UI-task hand-off (idle task's `hlt` to the UI task's pass) from
+3,520 to 1,791 cycles. It costs 47 resident bytes on kern_big (three of them
+parity pads, `tests/unit/t_hotpar.py`) - docs/plans/khp1/sched.md item
+sched-1.
+
 ### 8.2 Scheduler modes — pre-emptive and cooperative
 
 Two modes, selected at run time from the Control Panel (§31), both
