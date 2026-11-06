@@ -133,6 +133,9 @@ VH_FSTEPS   equ 336             ; a fade's steps, 1..16
 VH_KIND     equ 337             ; the adapter: VK_CGA4, VK_VGA4, VK_HERC
 VH_BMAP     equ 352             ; VGA4: the band's four colours' pixel
                                 ; VALUES (126.3.2, format 9)
+VH_ELINE    equ 356             ; 2 x 2: VICTORY's and DEFEAT's LINES - each
+                                ; an offset in the first region of a NUL
+                                ; line (format 9, 126.3.1)
 VH_VPAL     equ 464             ; VGA4's sixteen (r, g, b), six bits each, by
                                 ; pixel value (format 9: was 352, under the
                                 ; hold order's count at 398)
@@ -4761,12 +4764,6 @@ vb_s_damage:  db ' damage', 0
 vb_s_healed:  db 'The party heals ', 0
 vb_s_hp:      db ' HP', 0
 vb_s_hits:    db ' hits ', 0
-vb_s_victory: db 'VICTORY!   Esc to leave', 0
-vb_s_defeat:  db 'The party has fallen.   Esc to leave', 0
-vb_s_victl:   db 'VICTORY!   Enter: again   Esc: leave', 0
-vb_s_defl:    db 'The party has fallen.   Enter: again', 0
-vb_s_victa:   db 'VICTORY!', 0
-vb_s_defa:    db 'The party has fallen.', 0
 vb_s_head:    db '        HP          MP', 0
 
 %define VD_YIELD                    ; (the yield sites, live in place: vbinp)

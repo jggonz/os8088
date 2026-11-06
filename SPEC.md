@@ -242026,6 +242026,7 @@ one `add` per sample, with no clip and no branch. A clip's OWN sound
 | 337 | 1 | the ADAPTER (126.3.2): 0 CGA4, 1 VGA4 (mode 0Dh), 2 Hercules |
 | 338 | 4+4 | the IDLE loop's records' offset and length (format 7): each record on a paragraph, which the idle table names |
 | 352 | 4 | VGA4: the BAND'S MAP - the pixel value each of the band's four colours is drawn in (126.3.2) |
+| 356 | 2 x 2 | VICTORY's and DEFEAT's LINES: each an offset in the first region of its NUL line (126.3.1) |
 | 398 | 2 | the HOLD ORDER's ranges, at most 16 (126.4.1) |
 | 400 | 4 x 16 | ...each (its first 4 KB of the file, its 4 KBs), most worth holding first |
 | 464 | 16 x 3 | VGA4: its sixteen colours (r, g, b), the DAC's six bits, BY PIXEL VALUE |
@@ -242397,10 +242398,23 @@ Both are optional, and a bundle with neither plays as version 5's did.
   - **FADE and play AGAIN**: the whole screen fades, and the play starts
     over - the title loop if there is one, the openings if not.
 - **An END loop** plays in the CANVAS, as the idle loop does, its records
-  canvas rows: the band stays up under it with the ending's line, and
-  says Enter to play again. Its sound is its own (OWNSND), or, with none,
-  the music goes on under it. Enter or Space: the whole screen fades and
-  the play starts over. Esc leaves from anywhere, as always.
+  canvas rows: the band stays up under it with the ending's line. Its
+  sound is its own (OWNSND), or, with none, the music goes on under it.
+  Enter or Space: the whole screen fades and the play starts over. Esc
+  leaves from anywhere, as always.
+- **THE ENDING'S LINE is the bundle's** (format 9: header 356 and 358, an
+  offset in the first region of each ending's NUL line, after the rules):
+  the author's (`endings.<k>.line`, the Title & endings tab's "Its line",
+  38 plain characters), or `os88vbt.ending_line`'s default. The line is up
+  from the moment the battle ends - while the victory or defeat clip still
+  plays, before any end clip has started, when Enter does nothing yet - so
+  the default names only what works from that moment: a HOLD with no end
+  clip "VICTORY!   Esc to leave", anything else the word alone
+  ("VICTORY!", "The party has fallen."). The engine chose among six lines
+  of its own by the ending's kind, and an end clip's said "Enter: again"
+  while Enter did nothing (the owner); it now shows the bundle's
+  (`vb_end_battle`), 196 bytes smaller. `vbtloops` holds A to C to the
+  default and D to an author's line.
 - **An END CLIP may be FULL SCREEN, and may PLAY ONCE** (the ending's
   `"full"`, `"plays"` and `"then"`; the Title & endings tab's Victory and
   Defeat panels). Full screen: its frames are encoded over the whole

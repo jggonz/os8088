@@ -50,7 +50,9 @@ A project file (version 1):
                  "full"?: true (the end clip over the whole screen),
                  "plays"?: "once" (not round), "then"?: "fade" | "join"
                  (after one that plays once: to the title, the play
-                 again; absent: hold)}},
+                 again; absent: hold), "line"?: the band's line at the
+                 end, 38 characters at most (absent: os88vbt.ending_line's
+                 default - SPEC.md 126.3.1)}},
      "fade_steps": 1..16, a fade's steps, one a frame,
      "any_key":  true: any key (Esc aside) leaves the title and plays an
                  end loop again, not Enter or Space alone (header 348),
@@ -811,6 +813,8 @@ class Project:
                 v = old.get(k) if v is None else v
                 if v not in (None, False, "loop", "hold"):
                     en[k] = v
+            if old.get("line"):     # (its line, the author's: kept)
+                en["line"] = old["line"]
             d["endings"][outcome] = en
         self._edit(f)
 
@@ -859,6 +863,11 @@ class Project:
         if t.get("clip") is not None and not (
                 isinstance(t["clip"], int) and 0 <= t["clip"] <= 96):
             err("target.clip", "clip %s: 0 to 96 levels" % t["clip"])
+        for k, en in d.get("endings", {}).items():
+            ln = en.get("line") or ""
+            if len(ln) > 38 or any(not (" " <= ch <= "~") for ch in ln):
+                err("endings.%s.line" % k, "%r: 38 plain characters at most "
+                    "(A-Z, digits, punctuation)" % ln)
         if t.get("vga_band_cga") not in (None, True, False):
             err("target.vga_band_cga", "vga_band_cga: true or false")
         if t.get("vga_bands") is not None and not (

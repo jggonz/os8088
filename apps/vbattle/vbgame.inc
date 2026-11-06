@@ -493,12 +493,10 @@ vb_finish_plan:
 vb_end_battle:
     mov al, [vb_over]
     mov bl, [RL+RH_VICT]
-    mov si, vb_s_victory
     mov di, VH_ENDS
     cmp al, OVER_WIN
     je .w
     mov bl, [RL+RH_DEFT]
-    mov si, vb_s_defeat
     mov di, VH_ENDS+2
     cmp al, OVER_LOSE
     je .w
@@ -507,28 +505,15 @@ vb_end_battle:
     jmp short .e
 .w:
     mov ax, [vb_meta+di]            ; how it goes on, and its end loop
-    mov [vb_ehow], al               ; (126.3.1): the line says what a key
-    mov [vb_eloop], ah              ; does
-    push di
+    mov [vb_ehow], al               ; (126.3.1)
+    mov [vb_eloop], ah
     sub di, VH_ENDS
     shr di, 1
     mov ah, [vb_meta+VH_ETHEN+di]   ; ...and what follows it, when it plays
     mov [vb_ethen], ah              ; once
-    pop di
-    cmp al, EH_HOLD
-    je .e
-    cmp di, VH_ENDS
-    jne .wd
-    mov si, vb_s_victl
-    cmp al, EH_AGAIN
-    jne .e
-    mov si, vb_s_victa
-    jmp short .e
-.wd:
-    mov si, vb_s_defl
-    cmp al, EH_AGAIN
-    jne .e
-    mov si, vb_s_defa
+    shl di, 1                       ; ITS LINE, the bundle's (126.3.1): the
+    mov si, [vb_meta+VH_ELINE+di]   ; builder's, which knows whether a key
+    add si, vb_meta                 ; does anything there, or the author's
 .e:
     mov [vb_msg], si
     mov byte [vb_state], GS_END

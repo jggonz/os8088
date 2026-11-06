@@ -156,10 +156,15 @@ kern_big and kern_small keep the load on the desktop, where the window says
 
 ## Queued (the owner, 2026-11-06 - after W1, before or between the waves)
 
-- [ ] **Victory's line.** "Victory! Enter: again / Esc: exit" is shown even
-      with an end video attached, where Enter does nothing. Make the line
-      editable in the builder, and the default, where the end does not hold
-      its last frame for a key, just "Victory!".
+- [x] **Victory's line** (2026-11-06, SPEC.md 126.3.1). The engine chose
+      among six built-in lines by the ending's kind, and an end clip's said
+      "Enter: again" while the victory clip still played and Enter did
+      nothing. The builder now writes each ending's line into the bundle
+      (format 9, header 356): the author's (the Title & endings tab's "Its
+      line") or a default naming only what works from the moment the line
+      appears - "VICTORY!   Esc to leave" for a hold with no end clip,
+      "VICTORY!" otherwise. The engine is 196 bytes smaller; `vbtloops`
+      holds both kinds.
 - [x] **VGA tears** (2026-11-06, SPEC.md 126.3.2). `IKARU.V88` turned out
       to be PAGE FLIPPED (its title says "Page Flipped"; two pages): each
       frame is drawn on the hidden page, and its few flashes at the tunnel

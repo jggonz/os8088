@@ -203,6 +203,23 @@ REND = Rend()
 VGA_BANDS = 16                  # target.vga_bands' default (126.3.2)
 
 
+LINE_MAX = 38           # an ending's line: the band's row, less its margins
+END_WORDS = {"victory": "VICTORY!", "defeat": "The party has fallen."}
+
+
+def ending_line(k, how, lp, then):
+    """An ending's line when the author set none (SPEC.md 126.3.1). It is up
+    from the moment the battle ends - while the victory or defeat clip still
+    plays, before any end clip, when Enter does nothing yet - so it names no
+    key it cannot keep: a HOLD (no end clip: the last frame stays) waits for
+    Esc and says so; anything else is the word alone. The owner: "Victory
+    says 'Enter: again / Esc: exit' even when an end video is attached, and
+    pressing enter at that point does nothing". An author who wants the key
+    named writes it (endings.<k>.line)"""
+    w = END_WORDS[k]
+    return w + "   Esc to leave" if how == "hold" and lp is None else w
+
+
 def vga_codes(n):
     """Palette index -> pixel VALUE for N VGA colours (126.3.2): Video
     Player's PLANE_CODES (a colour's bits on a GROUP of planes, so planes
@@ -475,6 +492,7 @@ class Battle:
         self.images = b""       # the band's pictures, back to back
         self.title = None       # (126.3.1) dict: name, frames, sound - a
                                 # loop over the whole screen
+        self.end_lines = {}     # outcome -> the author's line, or none
         self.endings = {}       # outcome -> (how, a loop dict or None);
                                 # an end loop is the canvas's
         self.fade_steps = 16
@@ -722,7 +740,7 @@ def build(b):
         return loop_ix[key]
     title_ix = loop_clip(b.title, True) if b.title else NO_SFX
     leave_ix = 0 if openings[0].get("enter") else NO_SFX
-    ends, thens = [], []
+    ends, thens, lines = [], [], []
     for k in ("victory", "defeat"):
         how, lp, then = (tuple(b.endings.get(k, ("hold", None))) +
                          ("hold",))[:3]
@@ -733,6 +751,7 @@ def build(b):
         else:
             ix = loop_clip(lp, bool(lp.get("full")))
         ends += [ENDING_HOW[how], ix]
+        lines.append(b.end_lines.get(k) or ending_line(k, how, lp, then))
         th = ENDING_THEN[then] if lp is not None and lp.get("once") else 0
         if th == ENDING_THEN["join"] and not b.title:
             th = ENDING_THEN["fade"]    # (no title to join: the play again
@@ -842,7 +861,12 @@ def build(b):
         struct.pack_into("<H", ct, at + 32, c.get("esz", 0))  # its entries
         ct[at + 24:at + 32] = c["name"].upper().encode()[:8].ljust(8, b" ")
 
-    meta = bytearray(h) + ct + bytes(b.rules)
+    at = len(h) + len(ct) + len(b.rules)    # THE ENDINGS' LINES (126.3.1),
+    tail = bytearray()                      # after the rules, NUL-ended
+    for i, ln in enumerate(lines):
+        struct.pack_into("<H", h, 356 + 2 * i, at + len(tail))
+        tail += ln.encode("ascii", "replace")[:LINE_MAX] + b"\0"
+    meta = bytearray(h) + ct + bytes(b.rules) + tail
     assert len(meta) <= META
     meta = bytes(meta).ljust(meta_len, b"\0")    # (as long as its rules)
     assert len(meta) <= META
@@ -928,6 +952,11 @@ class Bundle:
         self.endings = {"victory": (data[332], data[333]),
                         "defeat": (data[334], data[335])}
         self.ends_then = {"victory": data[346], "defeat": data[347]}
+        self.end_lines = {k: data[o:data.index(b"\0", o)].decode("ascii")
+                          for k, o in (("victory", struct.unpack_from(
+                                            "<H", data, 356)[0]),
+                                       ("defeat", struct.unpack_from(
+                                           "<H", data, 358)[0]))}
         self.fade_steps = data[336]
         self.any_key = bool(data[348] & HF_ANYKEY)
         cat, clen = struct.unpack_from("<II", data, 88)
@@ -1289,6 +1318,7 @@ def battle_of(proj, progress=None, kind="cga4"):
             lp = made[key]
         b.endings[k] = (en["how"] if lp or en["how"] in ("hold", "again")
                         else "hold", lp, en.get("then") or "hold")
+        b.end_lines[k] = (en.get("line") or "").strip()
         clip = d["enemy"].get(k)
         if en["how"] == "join" and lp and clip:
             for c in b.clips:

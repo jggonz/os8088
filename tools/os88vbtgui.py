@@ -2955,6 +2955,19 @@ class LoopPanel(object):
             self.thencb.pack(side="left", padx=2)
             self.thencb.bind("<<ComboboxSelected>>", lambda e: self._commit())
             r += 1
+            # ITS LINE in the band (126.3.1): the author's, or the builder's
+            # default - which names a key only where it works from the start
+            lf = ttk.Frame(f)
+            lf.grid(row=r, column=0, columnspan=4, sticky="w")
+            ttk.Label(lf, text="Its line").pack(side="left")
+            self.line = tk.StringVar()
+            le = ttk.Entry(lf, textvariable=self.line, width=40)
+            le.pack(side="left", padx=2)
+            le.bind("<Return>", lambda e: self._line())
+            le.bind("<FocusOut>", lambda e: self._line())
+            self.lnote = ttk.Label(lf, text="")
+            self.lnote.pack(side="left", padx=4)
+            r += 1
         ttk.Label(f, text="Loop clip" if kind == "title" else "End clip"
                   ).grid(row=r, column=0, sticky="w")
         self.clip = tk.StringVar()
@@ -3053,6 +3066,11 @@ class LoopPanel(object):
             self.then.set(dict(THEN_LABELS)[en.get("then") or "hold"])
             self.thencb.config(state="readonly" if once else "disabled")
             self.musv.set(1 if en.get("music_after") else 0)
+            import os88vbt as B_
+            self.line.set(en.get("line") or "")
+            self.lnote.config(text="(empty: \"%s\")" % B_.ending_line(
+                self.kind, en["how"], en.get("loop") if en["how"] in
+                ("fade", "join") else None, en.get("then")))
             self.muscb.config(state="normal" if once and (en.get("loop") or {})
                               .get("sound") else "disabled")
             ex = d["enemy"].get(self.kind)
@@ -3107,6 +3125,15 @@ class LoopPanel(object):
             self.app.edit("set_ending", self.kind, how, cid, loop, snd,
                           full=bool(self.fullv.get()), plays=plays, then=then,
                           music_after=bool(self.musv.get()))
+
+    def _line(self):
+        """Its line, into the project: 38 plain characters at most, empty
+        for the builder's default"""
+        t = "".join(ch for ch in self.line.get() if " " <= ch <= "~")[:38]
+        t = t.strip()
+        en = self.app.proj.d["endings"][self.kind]
+        if t != (en.get("line") or ""):
+            self.app.edit("set", ("endings", self.kind, "line"), t or None)
 
     def _clip(self):
         cid = self.clip.get()

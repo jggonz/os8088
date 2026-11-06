@@ -22,6 +22,11 @@ Two bundles of the demo battle, its enemy at 1 HP so that one Attack wins:
      the title and plays the end loop again - where in A a letter leaves
      nothing (Enter or Space).
 
+Victory's LINE is the bundle's (126.3.1): in A, B and C the builder's
+default, "VICTORY!" with no key named (a fade or a join to an end loop: up
+while the victory clip plays, when Enter does nothing yet); in D the
+author's own (endings.victory.line).
+
 Esc leaves at the end of each. The waits are on the guest's state, never
 on a clock: a fade or a lap that never comes fails by name.
 """
@@ -43,6 +48,7 @@ from cycweb import pkg_syms     # noqa: E402
 TEMPLATE = "build/martypc/run/media/hdds/default_xtide.vhd"
 MACHINE = "os8088_xt_hdd_sb"
 KEYS = {"return": "Enter", "esc": "Escape", "a": "KeyA"}
+LINE_D = "YOU WIN!   Any key: again"
 VM_CLIP, VM_FADE = 1, 4
 GS_MENU, GS_END = 1, 3
 fails = []
@@ -73,7 +79,8 @@ def project(tmp, mode):
         p.set_title("title", (10, 34))
         p.set_ending("victory", "fade", "victory", (0, 20))
     if mode == "D":                 # D: A's, ANY key continuing (header 348)
-        p.set(("any_key",), True)
+        p.set(("any_key",), True)   # ...and VICTORY'S LINE the author's
+        p.set(("endings", "victory", "line"), LINE_D)
     p.set(("fade_steps",), 12)
     p.save()
     data = B.build_project(p)
@@ -218,6 +225,13 @@ def run(tmp, mode, syms):
         until(ended, "%s: the end loop" % tag, guest=180.0, poll=0.02)
         ok(rb("vb_cc") == vloop and rb("vb_over") == 1,
            "%s: victory, and its end loop plays (clip %d)" % (tag, rb("vb_cc")))
+        line = bytes(m.read(base + rw("vb_msg"), 48)).split(b"\0")[0]
+        want = LINE_D if mode == "D" else "VICTORY!"
+        ok(line.decode("latin-1") == want == b.end_lines["victory"],
+           "%s: victory's line is the bundle's, %r (126.3.1: %s)"
+           % (tag, line.decode("latin-1"), "the author's" if mode == "D"
+              else "no key named - Enter does nothing while the victory "
+              "clip plays"))
         ok(fon_seen[0] != bool(leave),
            "%s: ...%s" % (tag, "JOINED, with no fade" if leave else
                           "after a fade of the canvas"))
