@@ -52,8 +52,14 @@ def rots(f):
 
 
 def pix(f, page, rotate=None):
-    r = run("pdftoppm", "-r", "30", "-f", str(page), "-l", str(page), "-gray", f, "-")
-    return r.stdout
+    import glob, tempfile
+    with tempfile.TemporaryDirectory() as t:
+        r = run("pdftoppm", "-r", "30", "-f", str(page), "-l", str(page), "-gray", f, os.path.join(t, "p"))
+        fs = sorted(glob.glob(os.path.join(t, "p*.pgm")))
+        if r.returncode != 0 or not fs:
+            fail("pdftoppm produced nothing for %s page %d" % (f, page))
+            return b"?"
+        return open(fs[0], "rb").read()
 
 
 # ---- P1: PAGES.PDF reordered ----
@@ -132,6 +138,8 @@ if os.path.exists(n1) and check(n1):
         fail("N1: %d pages" % npages(n1))
     else:
         for i, w in enumerate(want[:4]):
+            if i == 2:
+                continue                    # B carries the new note: it draws more than the source
             if pix(n1, i + 1) != pix(src, w + 1):
                 fail("N1 page %d draws differently from source page %d (an inherited attribute was lost)" % (i + 1, w + 1))
         sr, nr = rots(src), rots(n1)
