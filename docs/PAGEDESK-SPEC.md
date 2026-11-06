@@ -364,12 +364,16 @@ band rasteriser -> `OSAPI_GFX_BLIT1` (1bpp adapters) or `OSAPI_GFX_BLIT4`
 
 ### 10.2 The display list overflows correctly
 
-When the DL fills, the interpreter stops at an operator boundary, the
-rasteriser draws the bands for what was interpreted, the DL is reset and the
-interpreter resumes **from the stream position and graphics state it stopped
-at** for the next pass, with the earlier passes' output kept on screen (each
-pass paints over the same bands in content order, so the result is the
-correct painter's order). Nothing is dropped.
+A band is put on the glass OPAQUE, and the framebuffer cannot be read back,
+so a band must be composed from ALL of the page's content that touches it
+before it is blitted. When the DL fills, the renderer therefore narrows the
+vertical range rather than resuming: it rasterises the bands the DL covers
+completely, then RE-SCANS the content stream from the start (graphics state
+reset) keeping only items that intersect the next, smaller range of rows,
+halving the range again on a further overflow down to one band. Every band is
+drawn exactly once, from every item that touches it, in content order.
+Nothing is dropped; a page whose single band overflows the DL is drawn with
+what fits and marked Incomplete rendering (`PDF_INC_LIMIT`). (DECISIONS D4.)
 
 ### 10.3 Bands
 
