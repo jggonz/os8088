@@ -73,7 +73,7 @@ def make_image(build, harness, kstub, module, pdf, cluster):
     return path
 
 
-def boot(img, timeout=90):
+def boot(img, timeout=180):         # 180: n_hexws_bomb is 1.6x slower since sget lost its recursion (verify-flate2)
     q = subprocess.Popen([QEMU, "-display", "none", "-monitor", "none", "-serial", "stdio", "-m", "16", "-no-reboot", "-drive",
                           "file=%s,format=raw,if=floppy" % img, "-boot", "a"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     out, t0 = b"", time.time()

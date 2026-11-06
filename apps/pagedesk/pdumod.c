@@ -71,6 +71,7 @@ static const unsigned pdu_dckb[PDU_NDC] = { 16, 8, 11, 12, 29, 0,
                                             16, 4, 1, 4, 2, 2 };
 static unsigned pdu_dc[PDU_NDC];        /* sub-segments, 0 = not held */
 static unsigned pdu_dclaim[2];          /* the two real claims */
+static unsigned pdu_flslots;            /* D17: Flate slots at B's tail, 0-2 */
 /* a document row's segment, 0 when no document is open (D15) */
 static unsigned pdu_dcseg(int row) { return (row >= 0 && row < PDU_NDC) ? pdu_dc[row] : 0; }
 static unsigned pdu_bandb;              /* the band's bytes */
@@ -212,6 +213,10 @@ static void pdu_doc_free(void)
     pdu_xinit.dl_seg = 0;
     pdu_xinit.band_seg = 0;
     pdu_xinit.glyph_seg = 0;
+    pdu_xinit.flags = pdu_xinit.flags & ~PDXI_FLATE;   /* D17: no slots now */
+    pdu_xinit.flate_seg = 0;
+    pdu_xinit.flate_kb = 0;
+    pdu_flslots = 0;
 }
 
 static void pdu_wrt_out(void)
@@ -354,10 +359,16 @@ static int pdu_bank_load(void)
 /* open: the document set. 0, or PDE_NOMEM with pdu_needkb set */
 static unsigned pdu_needkb;
 static unsigned pdu_dcpara[PDU_NDC];    /* each row's size in paragraphs */
+/* D17 / PAGEDESK-SPEC 20.13.3: the Flate slots, 43 KiB (2,752 paragraphs)
+ * each, at claim B's tail. Chosen by RAM, never by CPU: two when the largest
+ * free run holds B, both slots and PD-29's 32 KiB reserve, one when one fits,
+ * none otherwise (PDENG then refuses Flate with PDE_FLATE, as before) */
+#define PDU_FL_PARA   2752
+#define PDU_FL_RESV   2048              /* 32 KiB, in paragraphs */
 static int pdu_doc_claim(void)
 {
     int i, c, first, last;
-    unsigned w, tot, at;
+    unsigned w, tot, at, big, fl;
 
     pdu_doc_free();
     w = pdu_scrw;
@@ -379,6 +390,15 @@ static int pdu_doc_claim(void)
         tot = 0;
         for (i = first; i < last; i++)
             tot = tot + pdu_dcpara[i];
+        fl = 0;
+        if (c) {                        /* B: the Flate slots ride its tail */
+            big = os88_mem_largest_p();
+            if (big >= tot + 2 * PDU_FL_PARA + PDU_FL_RESV)
+                fl = 2;
+            else if (big >= tot + PDU_FL_PARA + PDU_FL_RESV)
+                fl = 1;
+            tot = tot + fl * PDU_FL_PARA;
+        }
         pdu_dclaim[c] = os88_mem_claim_p(tot);
         if (pdu_dclaim[c] == 0) {
             pdu_doc_free();
@@ -393,6 +413,23 @@ static int pdu_doc_claim(void)
                 return PDE_NOMEM;
             }
             at = at + pdu_dcpara[i];
+        }
+        if (fl) {                       /* PDENG finds slot k at flate_seg + k
+                                         * * 2752 paragraphs: true on every
+                                         * real-mode kernel; where the second
+                                         * slot's selector is not that, one */
+            pdu_xinit.flate_seg = os88_seg_sub(pdu_dclaim[c], at, PDU_FL_PARA);
+            if (fl == 2 && os88_seg_sub(pdu_dclaim[c], at + PDU_FL_PARA, PDU_FL_PARA)
+                           != pdu_xinit.flate_seg + PDU_FL_PARA)
+                fl = 1;
+            if (pdu_xinit.flate_seg == 0)
+                fl = 0;
+        }
+        if (c) {
+            pdu_flslots = fl;
+            pdu_xinit.flate_kb = fl * 43;
+            if (fl)
+                pdu_xinit.flags = pdu_xinit.flags | PDXI_FLATE;
         }
     }
     /* D23: arm the private module stack. 0xCC everywhere, so its high-water

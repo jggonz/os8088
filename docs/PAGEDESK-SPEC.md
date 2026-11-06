@@ -3390,8 +3390,11 @@ check; LZW and every other filter (still `PDE_FILTER`); inline-image Flate
 (`BI ... /F /Fl`: PDREND's, `annotr`). The page's *rendering* of a Flate
 stream was not looked at on screen: the package still ships the stand-in
 PDREND (`PD_REND_MOD`, the lead's hold), which reads no stream, and the
-primary does not yet carve the flate claim (D17, the lead's), so on the
-target every Flate stream is still refused with `PDE_FLATE`.
+primary carves the flate claim at claim B's tail (`pdumod.c`, `pdu_doc_claim`):
+two slots when the largest free run holds B, both slots and the 32 KiB reserve,
+one when one fits, none otherwise. On a kernel whose second slot's selector is
+not `flate_seg + 2752` (kern_mega), one slot. The Control Panel low-memory
+setting D17 names is not built; until it is, the rule is by RAM alone.
 
 ### 20.14 Host preparation of complex PDFs (`host`, wave 2, PD-22)
 

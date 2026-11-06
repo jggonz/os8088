@@ -126,12 +126,7 @@ MCALL = ("PRIMARY", "_pdu_mcall")
 # cycle here is charged (bound - 1) more trips round it, then the deepest
 # exit, and it is printed on every run until its owner makes it iterative.
 ALLOWED_RECURSION = {
-    ("PDENG", ("_sget", "_sget1")): (PD_MAXFILTERS := 4, "eng/flate",
-        "apps/pagedesk/pdestrm.c sget<->sget1: one level per filter stage, "
-        "PD_MAXFILTERS = 4"),
-    ("PDWRT", ("_sc_val",)): (17, "pages",
-        "apps/pagedesk/pdwscan.c sc_val: one level per nested << >> / [ ], "
-        "SC_DEPTH = 16 (depth 1..16 recurse, 17 refuses)"),
+    # empty since f6184ae14 (sget, verify-flate2) and 9ae748a75 (sc_val, pages)
 }
 
 CODE_SECTIONS = (".text", ".modc")
