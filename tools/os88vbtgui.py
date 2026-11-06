@@ -797,8 +797,17 @@ class App(object):
             return self.save()
         return True
 
+    def _drop_jobs(self):
+        """Another project taken up: a job of the last one is cancelled
+        (its end would land in this one - a clip read for a project no
+        longer open became a clip here, its source missing) and the videos
+        waiting are not taken"""
+        self.pending = []
+        self.cancel()
+
     def new(self):
         if self._ask_save():
+            self._drop_jobs()
             self.proj = P.Project()
             self.saved = self._state()
             self.frames.clear()
@@ -816,9 +825,11 @@ class App(object):
     def open_path(self, p):
         try:
             self.proj = P.Project.load(p)
-        except (OSError, ValueError) as e:
+        except (OSError, ValueError, KeyError, TypeError,
+                AttributeError) as e:      # (not a project: said, not raised)
             self.say("Could not open %s: %s" % (p, e))
             return
+        self._drop_jobs()
         self.saved = self._state()
         self.frames.clear()
         recent_add(self.proj.path)
