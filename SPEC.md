@@ -9393,11 +9393,16 @@ no second glyph set, and **§6.1.5's compose, §6.1.7's glyph-pointer table and
 §6.1.6's once-per-run prologue are all unchanged** — the phase is the only thing
 this path knows that the aligned one does not.
 
-**`CX` carries the shift in `CL` and the previous composed byte in `CH`**, so
-there is no register left to count cells with: the walk ends on `SI` reaching
-the glyph table's end (`[font_rn_send]`) instead. That is a real constraint and
-not a stylistic one — every other register is spoken for (`DL`/`DH` the masks,
-`SI` the table, `DI` the framebuffer, `BP` the row, `AX`/`BX` the compose).
+**`CL` carries the shift and `CH` counts the cells; the previous composed byte
+rides in `BH`** (kernel hot-paths pass 1). `BX` is the glyph pointer only until
+the row byte is loaded, so the composed byte is parked in `BH` and the next
+cell's `xchg ax, bx` hands it back as `AH`, exactly where the shift wants it.
+This used to say there was no register left to count with — the previous byte
+rode in `CH` — and the walk compared `SI` against the table's end in memory
+(`[font_rn_send]`) every cell row; the `BH` arrangement drops that compare and
+two moves, and a skewed run measures **−15% (10 cells) to −19% (78)** on all
+three adapters (`DL`/`DH` the masks, `SI` the table, `DI` the framebuffer,
+`BP` the row, as before).
 
 ##### The two edge bytes are COLUMN-major, and that is the design
 

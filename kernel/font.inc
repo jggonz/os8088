@@ -1633,13 +1633,17 @@ font_run_x:
 ; with the mask set ONCE. gfx_fill_gray's .lcol / .irow / .rcol, in the same
 ; order and for the same reason.
 ;
-; CX carries the SHIFT in CL and the previous composed byte in CH, so there is
-; no register left for a cell counter - the walk ends on SI reaching the glyph
-; table's end instead. That is why [font_rn_send] exists.
+; CL carries the SHIFT and CH COUNTS the cells. The previous composed byte rides
+; in BH, which is free the moment a cell's glyph row is loaded: the next cell's
+; `xchg ax, bx` hands it back as AH, exactly where the shift wants it. It used
+; to ride in CH, which left no register to count with, so the walk compared SI
+; against the table's end in memory every cell - [font_rn_send], `cmp si,
+; [cs:...]`, 5 bytes and ~21 clocks a cell row on top of the two moves the BH
+; arrangement does not need (kernel hot-paths pass 1).
 ; WHERE THE UNALIGNED RUN KEEPS ITS STATE. DS is the glyphs' segment and ES the
 ; framebuffer's for the whole walk, so the stores below go through CS - which
 ; kern_mega cannot do, code being read-only in protected mode (KERN-MEGA-PLAN
-; 2.4). There the three live in .lowbss and go through SS instead, and the 16
+; 2.4). There the edge rows live in .lowbss and go through SS instead, and the 16
 ; edge bytes are copied into font_rn_le/font_rn_re once the walk is done, for
 ; fnt_rn_edge to read through DS as it always has. It ASSUMES SS = LOW_SEG,
 ; which is the SDK's rule for EVERY kernel call (apps/os88api.inc's
@@ -1652,38 +1656,34 @@ font_run_x:
 ; (SeaBIOS's int 13h), sets SS itself now (SPEC.md 9.10.1).
 %ifdef KERN_MEGA
  %define FRN_SEG ss
- %define FRN_SEND font_rn_sendm
  %define FRN_LE font_rn_lem
  %define FRN_RE (font_rn_lem + 8)
 %else
  %define FRN_SEG cs
- %define FRN_SEND font_rn_send
  %define FRN_LE font_rn_le
  %define FRN_RE font_rn_re
 %endif
 %macro FONT_RN_UPX 0
     cs lodsw                    ; AX = this cell's glyph base (CS:SI, the table)
     add ax, bp                  ; ...+ the row this pass is on
-    xchg ax, bx                 ; BX = it, and the old BX is spent
+    xchg ax, bx                 ; BX = it, and AH = the old BH: the cell before
     mov al, [bx]                ; the glyph row byte (DS = its segment)
     and al, dl
     xor al, dh                  ; AL = this cell, composed
-    mov ah, ch                  ; AH = the cell BEFORE it...
-    mov ch, al                  ; ...and this one becomes that for the next
+                                ; AH = the cell BEFORE it, out of the xchg
+    mov bh, al                  ; ...and this one becomes that for the next:
+                                ; BX's pointer is spent
     shr ax, cl                  ; AL = the framebuffer byte the two straddle
 %endmacro
 
 .rmu:
-    mov ax, [cs:font_rn_n]      ; where the cell walk ends (see above)
-    shl ax, 1
-    add ax, font_rn_tab
-    mov [FRN_SEG:FRN_SEND], ax
     mov cl, [cs:font_rn_k7]
     push di                     ; the run's first byte, for the column passes
 .rmurow:
     mov si, font_rn_tab
-    xor ch, ch                  ; no cell before the first: its bits fall off
-    push di                     ; the top of the shift and are masked away
+    xor bx, bx                  ; BH = no cell before the first: its bits fall
+    mov ch, [cs:font_rn_n]      ; off the top of the shift and are masked
+    push di                     ; away. CH = the cells (<= FONT_RN_MAX)
     FONT_RN_UPX                 ; ...so this is the LEFT edge byte
     mov [FRN_SEG:bp + FRN_LE + 8], al ; (+8: BP runs -8..-1)
                                 ; **THE `cs:` IS LOAD-BEARING.** SS != DS, so
@@ -1702,15 +1702,15 @@ font_run_x:
                                 ; BP is the row index less 8, -8..-1, so +8
                                 ; bounded six lines from here
     inc di                      ; it is written by the column pass, not here
-    cmp si, [FRN_SEG:FRN_SEND]
-    jae .rmuend                 ; a one-cell run: no interior at all
+    dec ch
+    jz .rmuend                  ; a one-cell run: no interior at all
 .rmumid:
     FONT_RN_UPX
     stosb                       ; the interior: bytes the run owns whole
-    cmp si, [FRN_SEG:FRN_SEND]
-    jb .rmumid
+    dec ch
+    jnz .rmumid
 .rmuend:
-    mov ah, ch                  ; the RIGHT edge: the last cell's tail, with
+    mov ah, bh                  ; the RIGHT edge: the last cell's tail, with
     xor al, al                  ; nothing after it
     shr ax, cl
     mov [FRN_SEG:bp + FRN_RE + 8], al ; ...and the same override, for the same
@@ -2607,13 +2607,10 @@ font_rn_k7:     resb 1          ; SPEC.md 6.1.11: the pen's phase, x & 7. 0 is
                                 ; shift the row pass runs at
 %ifdef KERN_MEGA
 section .lowbss
-font_rn_sendm:  resw 1          ; kern_mega's font_rn_send and edge rows,
-font_rn_lem:    resb 16         ; reached through SS (FRN_SEG, above)
+font_rn_lem:    resb 16         ; kern_mega's edge rows, reached through SS
+                                ; (FRN_SEG, above)
 section .bss
 %endif
-font_rn_send:   resw 1          ; ...and where the cell walk stops, because CX
-                                ; is carrying the shift and the previous byte
-                                ; and has nothing left to count with
 font_rn_le      equ ico_ibuf + FONT_RN_MAX*2     ; UNION, see font_rn_tab
 font_rn_re      equ ico_ibuf + FONT_RN_MAX*2 + 8 ; the two edge bytes each row
                                 ; composed, held
