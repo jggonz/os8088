@@ -816,8 +816,13 @@ The owner confirmed the timing, the title picture and the embedding on
 86Box's 5150 before the merge.
 
 Left open: one pause on a long title idle, which the owner saw once and
-neither side could reproduce (the signed count is a plausible cause), and
-`vbtmenu`'s Bolt check, which failed about one run in four.
+neither side could reproduce (the signed count is a plausible cause);
+`vbtmenu`'s Bolt check, which failed about one run in four; and
+`vbtownsnd`'s first opening, an overloaded stress fixture. Its sound starts
+with the picture and then drifts about 4 frames later during the clip, and
+the row judges the median of the first three samples, which sits on its
+2-frame line: it failed 2 runs in 7 on the merge's engine and 0 in 3 on the
+engine before it, with the same samples.
 
 ## Measured (MartyPC `os8088_5150_sb_gla`, 360 KB disk)
 
