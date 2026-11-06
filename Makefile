@@ -20210,3 +20210,40 @@ wireballtest: wireballdisk $(IMG)
 # Native WireBall art is reproducible from the committed imagegen source.
 apps/wireball/art/wbfront.inc: apps/wireball/art/splash-source.png tools/wbfront.py
 	python3 tools/wbfront.py
+
+# ---- PageDesk: eng ----------------------------------------------------------
+# PDENG.MOD (PAGEDESK-SPEC 3, 6-8, 20.2): the PDF reader segment, a C MODULE in
+# apps/loom/lmpvmod.asm's shape - the same smlrcc, the same tools/cc8086.py gate
+# and peephole, the same open-coded compile line (a module has no package
+# header, so CC_PACKAGE does not fit it). `make pdeng` builds it and runs the
+# host harness over the engine's own fixtures and, when tools/os88pdfgen.py is
+# there, over the shared samples, stress set and negative corpus, checked
+# against qpdf. NOT in `all`: the lead flips that at integration.
+PDE_SRC := $(wildcard apps/pagedesk/pde*.c apps/pagedesk/pde.h apps/pagedesk/pde_os88.h)
+PDE_INC ?=
+HOSTCC  ?= cc
+$(BUILD)/pdeng.raw.asm: $(PDE_SRC) apps/pagedesk/pdabi.h apps/pagedesk/pdmath.h $(CC_RUNTIME) | $(BUILD) cc-toolchain
+	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S \
+		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) -I $(BUILD) -I apps/pagedesk \
+		apps/pagedesk/pdeng.c -o $@
+	@rm -f apps/pagedesk/pdeng.i
+
+$(BUILD)/pdeng.gen.asm: $(BUILD)/pdeng.raw.asm tools/cc8086.py tools/ccpeep.py $(CC_PEEPSTAMP)
+	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME) $(CC_PEEPARG)
+
+$(BUILD)/PDENG.MOD: apps/pagedesk/pdeng.asm $(BUILD)/pdeng.gen.asm apps/pagedesk/pdmath.inc \
+                    apps/pagedesk/pdabi.inc apps/os88api.inc $(CC_RUNTIME) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ $(PDE_INC) -l $(BUILD)/PDENG.lst -o $@ apps/pagedesk/pdeng.asm
+	@python3 -c "import struct,sys; d=open('$@','rb').read(); m,a,s,b=struct.unpack_from('<HHHH',d,0); \
+	    assert s==len(d),(s,len(d)); print('PDENG.MOD: image %d + bss %d = %d bytes (target 40960, cap 57344)' % (s,b,s+b)); \
+	    sys.exit(1 if s+b>57344 else 0)"
+
+$(BUILD)/pde_test: $(PDE_SRC) apps/pagedesk/pdmath.c apps/pagedesk/pdmath.h apps/pagedesk/hosttest/pde_test.c \
+                   apps/pagedesk/hosttest/pde_host.c apps/pagedesk/hosttest/pdhost.c | $(BUILD)
+	$(HOSTCC) -g -Wall -Wextra -Wno-unused-parameter -DPD_HOST -Iapps/pagedesk -Iapps/pagedesk/hosttest \
+		apps/pagedesk/pdeng.c apps/pagedesk/hosttest/pde_test.c apps/pagedesk/hosttest/pde_host.c \
+		apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c -o $@
+
+pdeng: $(BUILD)/PDENG.MOD $(BUILD)/pde_test apps/pagedesk/hosttest/pde_check.py
+	python3 apps/pagedesk/hosttest/pde_check.py $(BUILD)/pde_test $(BUILD)/pdeng-fix
+# ---- end PageDesk: eng ------------------------------------------------------
