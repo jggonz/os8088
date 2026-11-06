@@ -10,11 +10,15 @@
 ;   LZ4  byte-oriented, min match 4. 50.6 cycles an output byte, measured on a
 ;        4.77 MHz 8088, against a `rep movsw` floor of 13.09. The default,
 ;        because it is the only candidate whose ratio pays for its own decode
-;        time on the target machine (plan 1).
+;        time on the target machine (plan 1). (A real package's stream is
+;        shorter-symbolled than that corpus: Note Pad's measured 109.7 cycles
+;        a byte at launch, filter included, and 63.8 since kernel hot-paths
+;        pass 1 took the plain symbol inline - lz_lz4's banner.)
 ;   LZB  bit-oriented, aPLib-family: a tag BYTE carried in DL behind a guard
 ;        bit, byte-aligned literals and low offset byte, interlaced Elias
 ;        gamma for the length and the high offset byte. ~10 points better on
-;        ratio and 207 cycles a byte - four times the floor. Built because the
+;        ratio and 207 cycles a byte - four times the floor (Calc's, at
+;        launch: 303, and 191 since the same pass). Built because the
 ;        360KB disk's RUNWAY may be worth that, and only a field A/B can say
 ;        (plan 12.7).
 ;
