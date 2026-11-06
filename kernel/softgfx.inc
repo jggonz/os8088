@@ -499,12 +499,20 @@ sw_k_colf:                      ; one whole byte column: nothing under it to
     loop .r
     ret
 
-sw_k_xcol:                      ; one XOR column
-    mov cx, dx
+sw_k_xcol:                      ; one XOR column - every drag outline's two
+    mov cx, dx                  ; sides, redrawn on every pointer step - TWO
+    shr cx, 1                   ; rows a `loop`: the odd row first, then pairs
+    jnc .r
+    xor [es:di], bl
+    add di, si
+    jcxz .o
 .r:
     xor [es:di], bl
     add di, si
+    xor [es:di], bl
+    add di, si
     loop .r
+.o:
     ret
 
 sw_k_i:                         ; whole bytes only: an aligned fill
