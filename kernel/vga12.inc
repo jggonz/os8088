@@ -3400,12 +3400,22 @@ vga_solid_rect_v:               ; 2,405-cycle floor, +0.6% PREDICTED
     sub dx, bx                  ; DI by, so one add ends the row (SPEC.md 5.7.1)
     cmp byte [vga_xorm], 0
     jne .xrow
-.irow:
+    shr bx, 1                   ; WORDS (kernel hot-paths pass 1, SPEC.md
+    jc .orow                    ; 5.7.2): `rep stosw` is 14 clocks a word on
+.irow:                          ; an 8088 against `rep stosb`'s 10 a byte,
+    mov cx, bx                  ; and Set/Reset answers both bytes of one. The
+    rep stosw                   ; odd byte is the LOOP's, chosen once, not a
+    add di, dx                  ; per-row test - so a 1-byte interior is a
+    dec si                      ; rep of nothing and a `stosb`, and costs
+    jnz .irow                   ; what it did
+    jmp short .reset
+.orow:
     mov cx, bx
-    rep stosb
+    rep stosw
+    stosb
     add di, dx
     dec si
-    jnz .irow
+    jnz .orow
     jmp short .reset
 .xrow:                          ; XOR: every interior byte read before write,
     xchg ax, si                 ; because the ALU works off the latches - and
@@ -3766,14 +3776,26 @@ gfx_fill_gray_raw_v:     ; machine with neither card never falls here
     mov bx, cx                  ; the count the rep destroys, and DX the row
     mov dx, ROW_BYTES           ; step less that count (SPEC.md 5.7.1)
     sub dx, bx
-.irow:
-    mov al, ah
+    shr bx, 1                   ; WORDS, vga_solid_rect's shape (SPEC.md
+    jc .orow                    ; 5.7.2): a row is ONE dither byte, so AL =
+.irow:                          ; AH is the word, and the odd byte is the
+    mov al, ah                  ; loop's, chosen once
     mov cx, bx
-    rep stosb
+    rep stosw
     add di, dx
     not ah
     dec si
     jnz .irow
+    jmp short .reset
+.orow:
+    mov al, ah
+    mov cx, bx
+    rep stosw
+    stosb
+    add di, dx
+    not ah
+    dec si
+    jnz .orow
 .reset:                         ; its OWN teardown, and not vga_solid_rect's
     call vga_gc_reset           ; through a jump (-5) as gfx_fill_pat's is:
 .done:                          ; MEASURED at +0.29% on gfxbench's 64x64 gray

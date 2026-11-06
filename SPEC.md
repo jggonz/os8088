@@ -7315,6 +7315,22 @@ shape and it is taken on purpose: a column of ONE row pays the entry, about
 (−13%) and `GFX_FRAME 64x64` −11%; over a scripted scene's window raises the
 mean fill fell 4–16% (docs/plans/khp1/vga.md).
 
+**The replace-mode interiors of `vga_solid_rect` and `gfx_fill_gray` store
+words.** `rep stosw` is 14 clocks a word on an 8088 against `rep stosb`'s 10 a
+byte, and nothing about a planar byte makes a word store different from two
+byte stores: with Set/Reset on all four planes the CPU value is ignored, and
+the gray fill's row is one dither byte, so `AL = AH` is the word. The odd byte
+is split off by choosing the LOOP once a call (`shr bx,1` then one of two row
+loops, the second ending in a `stosb`), never by a per-row test, so a one-byte
+interior is a `rep` of no iteration and a `stosb` and costs what it did. §5.7.1's
+fold is untouched: DI still ends each row `count` bytes on, so `add di, dx`
+still ends it. **On a 16-bit bus** the word may straddle (the interior starts
+at whatever parity `x1/8 + 1` has); a straddling word is two bus cycles, which
+is the byte loop's bus traffic with fewer instructions, so it is never slower.
+Measured (gfxbench, MartyPC `os8088_xt_vga`, kernel hot-paths pass 1):
+`GFX_FILL 256x128` 13.37 → 10.67 ms, `GFX_FILL 64x64` 3.56 → 3.32 ms,
+`GFX_FILL_GRAY 64x64` 4.08 → 3.89 ms; `GFX_FILL 8x8` does not move.
+
 ### 5.8 `gfx_restore` can put back PART of its buffer
 
 `gfx_restore` and `gfx_blit4` are both off §11.3's clipped list for one stated
