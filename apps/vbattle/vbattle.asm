@@ -31,7 +31,7 @@
 ; =============================================================================
 
 %include "os88api.inc"
-    OS88_HEADER 'Video Battle', vb_entry, 0x23    ; icon, .VBT (SPEC.md
+    OS88_HEADER 'Video Battle', vb_entry, 0x23, OS88_HIGH | OS88_HIGHMEM ; icon, .VBT (SPEC.md
                                     ; 54.6) and its glyph (54.3.2)
     OS88_ICON16
     ; A SWORD ON A FILM FRAME - the battle and the video, on a white card with
@@ -630,6 +630,19 @@ vb_coverload:
     pop si
     ret
 
+; vb_cvplay - the picture's claim at a play's door: given back (the play
+; wants the memory) - unless it is ABOVE 1MB (kern_mega with OS88_HIGHMEM:
+; SEG_REAL has no paragraph for it), where it costs the play nothing and
+; is kept, so the window is the picture again the moment the play returns
+vb_cvplay:
+    mov dx, [vb_cvseg]
+    or dx, dx
+    jz vb_cvfree
+    mov bl, SEG_REAL
+    call OSAPI_SEG
+    jnc vb_cvfree
+    ret
+
 ; vb_cvfree - the picture's claim given back (the play wants the memory)
 vb_cvfree:
     mov byte [vb_cvon], 0
@@ -719,6 +732,14 @@ vb_door:
     add ax, VB_RKEEPM
 .k:
     mov [vb_rkeep], ax
+    cmp byte [vb_pmd], 0
+    je .lo
+    mov dx, ds                      ; OUR REGION ABOVE 1MB (OS88_HIGH): the
+    mov bl, SEG_REAL                ; bracket copies it DOWN, so the rings
+    call OSAPI_SEG                  ; leave its room as well (53.2.3's
+    jnc .lo                         ; FSXR_ROOM otherwise)
+    add word [vb_rkeep], VB_REGKB
+.lo:
     mov bx, [vb_win]
     call OSAPI_FSX_CAPS             ; AX = modes, DL = VID_*
     mov [vb_capm], ax
@@ -1221,7 +1242,7 @@ vb_play:
     mov word [vb_status], vb_s_load
     mov si, [vb_win]
     call vb_paint
-    call vb_cvfree                  ; (the picture's claim: the play's now)
+    call vb_cvplay                  ; (the picture's claim: the play's now)
     mov dx, [vb_vres]               ; THE RESIDENT CLAIM PINNED for the play:
     or dx, dx                       ; the hook reads its music at interrupt
     jz .ld                          ; time, where no relocation proc reaches
@@ -1760,7 +1781,9 @@ vb_load:
     add ax, cx                      ; KB each for a 4.6 KB band: VBATTLE-
     call vb_p2kb                    ; RAM-PLAN R1)
     mov word [vb_err], vb_s_nomem
-    call OSAPI_MEM_CLAIM_HI         ; FROM THE TOP: claimed from the bottom it
+    xor cx, cx                      ; (the DMA door, no head: CONVENTIONAL on
+    call OSAPI_MEM_CLAIM_DMA_HI     ; kern_mega, where the bracket sums it -
+                                    ; 125.4.5) FROM THE TOP: claimed from the bottom it
     jc .fail1                       ; landed just over the desktop's caches
                                     ; and left them a pocket no ring could
                                     ; reach (125.4.4); from the top, they lie
@@ -2019,7 +2042,8 @@ vb_rclaim:
     call OSAPI_MEM_AVAIL            ; THE ARENA PACKED FIRST: the whole of the
     sub ax, [vb_rkeep]              ; largest run claimed and given back. The
     jc .no                          ; kernel can serve that only by shedding
-    call OSAPI_MEM_CLAIM            ; the caches and packing what moves - a
+    xor cx, cx                      ; (conventional: the DMA door, no head)
+    call OSAPI_MEM_CLAIM_DMA        ; the caches and packing what moves - a
     jc .pk                          ; claim that fits a free run as it stands
     call OSAPI_MEM_FREE             ; does neither, and on a USED machine the
 .pk:                                ; directory read-ahead's 31.5 KB was left
@@ -2092,7 +2116,8 @@ vb_rclaim:
     jb .cno                         ; room past them: format 8)
     push ax
     add ax, dx
-    call OSAPI_MEM_CLAIM
+    xor cx, cx                      ; (CONVENTIONAL: a ring is read and summed
+    call OSAPI_MEM_CLAIM_DMA        ; inside a real-mode bracket, 125.4.5)
     pop ax
     jc .cno
     cmp bx, vb_rg0
@@ -5095,5 +5120,8 @@ VB_VAR vb_tink, 1
 VB_VAR vb_tc, 1
 VB_VAR vb_tgnd, 1
 VB_VAR vb_texp, 16
+VB_REGKB equ ((os88_image_end - $$) + VB_BSS + 1023) / 1024 + 1 ; the region in KB,
+                                    ; image and bss: what a real-mode bracket
+                                    ; copies down when it is above 1MB
     OS88_BSS VB_BSS
     OS88_IMAGE_END

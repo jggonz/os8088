@@ -1,6 +1,6 @@
 # VBATTLE-MEGA — Video Battle on kern_mega, in a real-mode bracket
 
-**Status: W1 to W4 BUILT (2026-11-06, SPEC.md 125.4.5); W5 next.** SPEC.md 125.7 said "kern_mega is not
+**Status: W1 to W5 BUILT (2026-11-06, SPEC.md 125.4.5).** The three queued items below are next. SPEC.md 125.7 said "kern_mega is not
 supported", and that was true in a worse way than it sounded: the SHIPPED
 engine, opened from an ordinary disk on a kern_mega machine, was CLOSED by a
 #GP the moment Play was pressed (measured on Bochs, below). This plan makes
@@ -137,12 +137,22 @@ kern_big and kern_small keep the load on the desktop, where the window says
 
 ### W5 - the region and the title picture
 
-- [ ] `OS88_HIGH` (the region copied down for the bracket) and
-      `OS88_HIGHMEM` where a claim can be above 1MB - retiring
-      `tests/megahigh.txt`'s two lines.
-- [ ] The title picture read back without a claim inside the bracket (a
-      real-mode bracket refuses one), so the window does not show its text
-      layout first.
+- [x] `OS88_HIGH | OS88_HIGHMEM` declared, `tests/megahigh.txt`'s two lines
+      retired. Every claim the bracket reads or sums takes the DMA door with
+      no head (`OSAPI_MEM_CLAIM_DMA[_HI]`, CX = 0: conventional on every
+      kernel, Video Player's way) - the resident claim, the rings and their
+      packing probe, the hold's bounce; the card's ring always did. On
+      kern_mega the region is then above 1MB on the desktop, and the door
+      leaves its room too (`vb_rkeep` + `VB_REGKB`, the image and bss in KB,
+      when `SEG_REAL` has no paragraph for DS): the bracket copies it down.
+- [x] The title picture is the one claim free to go above 1MB, and there it
+      costs a play nothing - so `vb_cvplay` keeps it through the play when
+      `SEG_REAL` says it is high, and the window is the picture the moment
+      the play returns (on kern_big, and in conventional memory, it is
+      given back as before). `vbtmega --arm play` on Bochs: the region at
+      FD4C00h, the picture at FD0C00h, kept through the play, the window the
+      picture as it returns; red with the picture freed at the door as
+      before (kept and the window both FAIL).
 
 ## Queued (the owner, 2026-11-06 - after W1, before or between the waves)
 
@@ -168,6 +178,8 @@ Measured per wave, against the byte, on the shipped engine:
 | W1 | 24,337 -> 24,887 (+550) | +69 | +451 |
 | W2 | no engine change | | |
 | W3 | 24,887 -> 24,963 (+76) | +1 | +49 |
+| W4 | no engine change | | |
+| W5 | 24,963 -> 25,011 (+48) | +1 | +34 |
 
 W1's split (claims at the door, `vb_lread`, `vb_derive`) is shared code;
 the kern_mega markers are registered in `tests/megapkg.txt`.

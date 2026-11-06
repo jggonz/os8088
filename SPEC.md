@@ -238512,9 +238512,15 @@ bracket** (SPEC.md 53.2.3).
 - **The machines** (W4, 86Box's mr286 through the port): the 286's CMOS
   shutdown reset, CGA and Hercules, a Sound Blaster 2.0, the XMS and EMS
   holds - no engine change was needed for any (`vbtmega86`).
-- **Not yet** (VBATTLE-MEGA-PLAN W5): the title picture is read after the bracket returns (a
-  real-mode bracket refuses its claim), so the window shows its text layout
-  first there.
+- **Above 1MB** (W5): the class byte says `OS88_HIGH | OS88_HIGHMEM`. Every
+  claim the bracket reads or sums takes the DMA door with no head
+  (conventional on every kernel) - the resident claim, the rings and their
+  packing probe, the hold's bounce, the card's ring - so on kern_mega the
+  only claim that goes above 1MB is the title picture, and the region
+  itself; the door leaves the region's room as well (`VB_REGKB`) for the
+  bracket's copy down. A picture above 1MB costs a play nothing and is kept
+  through it (`vb_cvplay`), so the window is the picture again the moment
+  the play returns.
 - **A card** (W2): SOUND.DRV goes low through the list, and the card's ring
   - conventional, from `OSAPI_MEM_CLAIM_DMA_HI` - is in the swap list; the
   stream runs through `OSAPI_SND_STREAM`'s real-mode twin. On Bochs's SB16
@@ -238523,7 +238529,7 @@ bracket** (SPEC.md 53.2.3).
 
 `tests/vbtmega.py` on Bochs and, `--emu 86box`, on the mr286 (rows
 `vbtmega`, `vbtmega86`) are the gates. **What it cost** the shipped engine: W1 image 24,337 -> 24,887 (+550),
-bss +69, the packed file +451; W3 +76, +1, +49.
+bss +69, the packed file +451; W3 +76, +1, +49; W5 +48, +1, +34.
 
 ### 125.5 The band
 

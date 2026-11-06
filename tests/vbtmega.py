@@ -147,6 +147,12 @@ def run(arm, tmp, syms):
     B.demo_project(vbp, bars=2)
     p = P.Project.load(vbp)
     p.set(("enemy", "hp"), 1)
+    if arm == "play":                   # (W5: a title picture, kept)
+        from PIL import Image, ImageDraw
+        im = Image.new("RGB", (640, 480), (0, 0, 0))
+        ImageDraw.Draw(im).ellipse((100, 80, 540, 440), fill=(220, 160, 40))
+        im.save(os.path.join(tmp, "cover.png"))
+        p.set(("cover",), {"image": "cover.png", "line": "Press Enter"})
     p.save()
     herc = OPT["adapter"] == "herc"
     data = B.build_project(p, kind="herc") if herc else B.build_project(p)
@@ -239,8 +245,21 @@ def run(arm, tmp, syms):
             ok(txt.strip() == b"Needs real mode: a driver",
                "refuse: the window says %r" % txt.decode("latin-1"))
             return
+        if arm == "play":
+            # W5: OS88_HIGH and OS88_HIGHMEM - the region and the picture
+            # above 1MB on the desktop (where Bochs's pool has the room)
+            rbase = m._desc(sel())[0]
+            cv0 = rw("vb_cvseg")
+            cbase = m._desc(cv0)[0] if cv0 else 0
+            ok(rbase >= 0x100000 and cbase >= 0x100000 and rb("vb_cvon"),
+               "W5: the region above 1MB (%06X) and the title picture too "
+               "(%06X), up in the window" % (rbase, cbase))
         key("Enter")
         until(lambda: rb("vb_ready") == 1, "the play")
+        if arm == "play":
+            ok(rw("vb_cvseg") == cv0 and rb("vb_cvon"),
+               "W5: the picture KEPT through the play - it costs the play no "
+               "conventional byte")
         if arm == "card":
             return card(m, S, rb, rw, until, key, bd, tmp)
         if arm in ("hold", "ems"):
@@ -298,11 +317,14 @@ def run(arm, tmp, syms):
             hits += glass(m) in title
             until(lambda: True, "a look", guest=0.15)
         ok(hits >= 6, "3. the play again is read in the bracket, and the "
-           "title is the host's decode in B8000 (%d of 12 looks exact)"
+           "title is the host's decode on the glass (%d of 12 looks exact)"
            % hits)
         key("Escape")
         until(lambda: rb("vb_ready") == 0, "Esc to the desktop", 60)
         os88marty.ui_done(m)
+        ok(rb("vb_cvback") == 1 and rb("vb_cvon") == 1,
+           "W5: the window is the picture as the play returns - no text "
+           "layout first")
         ok(rw("vb_err") == 0 and rw("vb_rclm") == 0 and rw("vb_ring") == 0,
            "4. back on the desktop: no error, the rings and the card's "
            "ring given back")

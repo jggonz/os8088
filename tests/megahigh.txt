@@ -40,15 +40,6 @@ high apps/waverack/waverack.asm   # ITS OWN DS COMPARED AS A PARAGRAPH: wc_myslo
     # and has never run on kern_mega. Retired by a snapshot field that names
     # the caller's own instance, or a run on kern_mega showing SSI_SEG is DS.
 
-high apps/vbattle/vbattle.asm   # DS'S HIDDEN BASE BORROWED: M5's read in
-    # place (apps/vbattle/vbinp.inc's vb_xbeg, under VB_DSDX) loads DS's
-    # descriptor cache with a 386's base or a 286's LOADALL to decode a
-    # record straight out of XMS - a real-mode technique on the package's
-    # own segment registers, and its rate hook (vb_hook) runs out of the
-    # region at interrupt time. Since VBATTLE-MEGA-PLAN W1 the play runs
-    # in an FSXF_REAL bracket (SPEC.md 125.4.5) with the region where it
-    # is; declaring OS88_HIGH (a copy down at every bracket) is that plan's
-    # W5, which retires this line.
 
 # --- highmem -----------------------------------------------------------------
 
@@ -75,12 +66,3 @@ highmem apps/win16/win16.asm    # THE SAME REFUSAL, and the claims are the same
     # paragraphs: the program's segments and its global heap are addressed as
     # base + paragraph offsets by the fixups and by GlobalAlloc's arena walk
     # (w16_garena, GH_SIZE in paragraphs). Retired with the line above.
-highmem apps/vbattle/vbattle.asm   # PARAGRAPH ARITHMETIC ON CLAIMS:
-    # vb_load derives six segments from the resident claim's base
-    # ([vb_vres] plus [vb_psfx], [vb_pmus], ... -> vb_sfxseg..vb_cseg), and
-    # a clip ring addresses its records as RG_SEG plus a paragraph cursor
-    # (vb_entcur, the reader's `add dx, [bx+RG_SEG]`); on kern_mega a claim
-    # is an LDT selector, and those sums are not addresses. Since W1 they
-    # are made only inside a real-mode bracket (SPEC.md 125.4.5), where
-    # every claim must have a real segment - one above 1MB refuses the play.
-    # VBATTLE-MEGA-PLAN W5 decides whether any claim may go high.
