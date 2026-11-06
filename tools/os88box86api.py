@@ -43,6 +43,7 @@ THE MACHINE a row's MartyPC name describes (`machine_config`):
                   BIOS drives neither) and for `_ne2k` (a 16-bit card)
     _NNNk         the XT's RAM (128k, 256k, 512k ...)
   kern_mega - always vm/at286-port, as before.
+  `_ems` adds a Lo-tech EMS board (260h, frame E000h, 2 MB) to it.
   $OS88_86BOX_VM (kern_mega: $OS88_MEGA_VM) names any other vm/ profile.
   A name for a machine only 86Box has carries NO `os8088_` prefix - that is
   MartyPC's namespace, which tests/unit/t_machines.py holds to its machine
@@ -286,6 +287,15 @@ def machine_config(machine, mega=False, images=()):
                      ("Network", "net_01_link", "0"),
                      ("Novell NE1000 #1", "base", "0300"),
                      ("Novell NE1000 #1", "irq", "3")]
+    if "_ems" in n:
+        # A LO-TECH EMS BOARD, vm/286-mega-ems's (260h, frame E000h, 2 MB),
+        # added to the machine the name picks - the kern_mega port's seeded
+        # mr286 included, which that profile (no CMOS seed) cannot be booted
+        # through the port as (tests/vbtmega.py's ems arm)
+        sec = "Lo-tech EMS Board #1"
+        sets += [("Other peripherals", "isamem0_type", "lotechems"),
+                 (sec, "base", "0260"), (sec, "frame", "E0000"),
+                 (sec, "size", "2048")]
     if not mega:
         # THE MOUSE the name asks for (the 386's profile carries a PS/2 one)
         # and the XT's RAM; kern_mega's machine keeps its profile's own

@@ -440,6 +440,7 @@ profile. Whatever the row's MartyPC machine name says is added to it
 | `_sb` | a Sound Blaster 2.0 at 220h, IRQ 7, DMA 1. `$OS88_MEGA_SND=sb16[:irq]` gives an SB16 instead |
 | `_ne2k` | an NE2000 at 300h, IRQ 10, on slirp. The host is 10.0.2.2, as on QEMU |
 | `_hdd` | the row's own fixed disk on the IDE controller, mounted in place |
+| `_ems` | a Lo-tech EMS board at 260h, frame E000h, 2 MB (`vm/286-mega-ems`'s), on the seeded machine - that profile has no CMOS seed of its own and stops in MR BIOS setup under the port. A kern_mega system disk still needs a `SYSTEM.CFG` wanting EMS.DRV (bit 7; `tests/vbtmega.py --arm ems`) |
 
 A floppy drive's type follows its image: a 360KB or 1.2MB image gets a
 5.25" HD drive and anything else a 3.5" one. `$OS88_MEGA_MEGS` sets the RAM.

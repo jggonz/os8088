@@ -18965,6 +18965,36 @@ SOAK = [
         needs=("86box",),
         wants=("build/mega.img", "build/megarmbe.o88", "build/megarmbe.bin",
                "build/ems.bin")),
+    Row("vbtmega", "soak", py("tests/vbtmega.py"), 240.0,
+        "SPEC.md 126.4.5, VBATTLE-MEGA-PLAN W1-W3: the SHIPPED Video Battle "
+        "on kern_mega (Bochs, VGA), in an FSXF_REAL bracket - [fsx_rmode] "
+        "seen 1, the demo's title exact in B8000, victory and its end loop, "
+        "the play again exact, back to the desktop with the rings given "
+        "back, a second play; a bracket the kernel ran in PROTECTED mode (a "
+        "list naming DRVC_NET) refused with 'Needs real mode: a driver'; "
+        "and with Bochs's SB16 the music heard in its capture at the "
+        "bundle's own rate; the bundle held in XMS - opened at the door, "
+        "filled through the twin, read IN PLACE by a 386's loaded base, no "
+        "disk read from the fill on. 240s is 238 measured. Broken (vb_door "
+        "blind to CPU_F_PM) the first "
+        "Play is CLOSED by a #GP again; DRVC_SOUND left out of the list, a "
+        "silent play",
+        needs=("bochs", "numpy"),
+        wants=("build/mega.img", "build/megak/kernel.map",
+               "build/vbattle.o88")),
+    Row("vbtmega86", "soak", py("tests/vbtmega.py", "--emu", "86box"), 120.0,
+        "SPEC.md 126.4.5, VBATTLE-MEGA-PLAN W4: the SHIPPED Video Battle on "
+        "kern_mega on 86Box's mr286 (MR BIOS, a real 286: protected mode "
+        "left by the CMOS shutdown RESET) - the play to victory and its play "
+        "again exact on CGA and on HERCULES (the Hercules rendition), a "
+        "Sound Blaster 2.0 fed on the emulated clock, the XMS hold read in "
+        "place by LOADALL, and an EMS hold (a Lo-tech board, the name's "
+        "_ems) read in place through the frame - no disk read from either "
+        "fill on. Broken (vb_door blind to CPU_F_PM) the package is CLOSED "
+        "at the first Play. 120s is 107 measured",
+        needs=("86box",),
+        wants=("build/mega.img", "build/megak/kernel.map",
+               "build/vbattle.o88")),
     Row("vidrmbplay", "soak", py("tests/vidrmbplay.py"), 120.0,
         "SPEC.md 98.3.24, MEGA-VIDEO-REALMODE-PLAN W5: WHICH bracket the "
         "Video Player's kern_mega arm plays in, read two ways that do not "
