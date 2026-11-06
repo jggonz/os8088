@@ -131,7 +131,7 @@ static int do_open(void)
         xb_put(&op, sizeof op);
         r = call(PDV_ENG_OPEN, 0, 0, 0);
         xb_get(&op, sizeof op);
-        if (cf && r == PDE_BUSY) {
+        if (!cf && r == PDE_BUSY) {                 /* D11: CF = 0, AX = PDE_BUSY */
             /* 8 revisions + 1024 pages / 16 nodes a slice + slack */
             if (++n > 400) { fprintf(stderr, "OPEN never ends: %s case %lu\n", curfile, curcase); exit(96); }
             continue;

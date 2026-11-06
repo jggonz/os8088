@@ -75,7 +75,7 @@ static int do_open(void)
         xb_put(&op, sizeof op);
         r = call(PDV_ENG_OPEN, 0, 0, 0);
         xb_get(&op, sizeof op);
-        if (cf && r == PDE_BUSY) { if (++n > 5000) { fprintf(stderr, "OPEN never ends\n"); exit(96); } continue; }
+        if (!cf && r == PDE_BUSY) { if (++n > 5000) { fprintf(stderr, "OPEN never ends\n"); exit(96); } continue; }
         return cf ? (int)r : 0;
     }
 }

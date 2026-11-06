@@ -11,8 +11,8 @@
 ;   in:  AL = the verb, BX / CX / DX = its arguments
 ;   out: AX = the answer (a count, a mark, or on failure the PDE_* code),
 ;        DX = 0, CF = 1 on failure. BX, CX, SI, DI, BP, DS, ES, SS:SP, DF as
-;        they arrived. `PDE_BUSY` comes back with CF = 1 and means "call
-;        again" (OPEN's slices).
+;        they arrived. `PDE_BUSY` comes back with CF = 0 (it is not a
+;        failure, DECISIONS D11) and means "call again" (OPEN's slices).
 ;
 ; THE SEGMENT RULES (apps/loom/lmpvmod.asm has the long form): SS is the
 ; caller's task stack, never ours, so no C `&local` (tools/cc8086.py refuses

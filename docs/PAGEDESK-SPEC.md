@@ -906,16 +906,20 @@ sections. Sizes are measured, not estimated (20.2.1).
 `tools/cc8086.py` (96-byte frame gate, `&local` refusal), assembles
 `pdeng.asm` with `nasm -f bin -w+error`, `cpu 8086`, and prints the size. It
 then builds the host harness (`hosttest/pde_test.c`, `-DPD_HOST`, pdmath.c,
-pdhost.c) and runs `hosttest/pde_check.py`.
+pdhost.c) and runs `hosttest/pde_check.py`. `make pdefuzz` runs that and then
+the sanitized mutation pass below.
 
 | item | bytes |
 |---|---|
-| `PDENG.MOD` image (code + data, the file) | 27,010 |
-| bss (zeroed by the door on first entry) | 8,942 |
-| image + bss | 35,952 (target 40,960; cap 57,344) |
+| `PDENG.MOD` image (code + data, the file) | 27,466 |
+| bss (zeroed by the door on first entry) | 8,972 |
+| image + bss | 36,438 (target 40,960; cap 57,344) |
+
+(27,010 + 8,942 at the implementer's DONE; verify-eng's fixes, D11 and
+feat/pagedesk's faster `pdmath.inc` took it to the figures above.)
 
 The bss is: the tail/fingerprint buffer 1,024; the subsection table 2,560
-(256 x 10); six stream contexts 6 x 420; the object lexer's 256-byte buffer;
+(256 x 10); six stream contexts 6 x 424; the object lexer's 256-byte buffer;
 the token (270), value (270) and verb structs; the block-cache tables; the
 verbs' static exchange copies. Nothing is on the stack but scalars (largest
 frame 20 bytes), because SS != DS.
@@ -936,6 +940,19 @@ Checks, none of them an emulator row:
   failure injection at every READ_SEQ call (`pde_test faults`: an I/O error,
   never a crash, and the file opens afterwards); re-INIT and reuse after
   each failure (`pde_test multi`).
+* `hosttest/pde_fuzz.c` (`make pdefuzz`, verify-eng) - the hostile-input
+  pass: the engine built with AddressSanitizer and UBSan, every verb driven
+  over mutations of that corpus (a truncation at every 997th byte; bit flips,
+  syntax bytes, `/Length` +/-1, 0, huge, negative, real and indirect, xref
+  entry offsets and `startxref` shifted, subsection headers, splices,
+  nesting and filter-chain bombs, half of the moved cases with the newest
+  xref repaired so they reach the parser), one READ_SEQ failure injected in
+  one case of eight, all on ONE engine re-INITed between cases. A case fails
+  on a crash, a run over 20 s (a hang), a canary moved after any claim or
+  around a destination (the claims live in one host array ASan cannot
+  police), an unterminated text field, `ARENA_MARK` not 0 after `CLOSE`, or
+  the pristine file opening differently after the mutations (every 64th
+  case). At `PDEFUZZ_N=100` it is 16,486 cases in about 20 s, clean.
 * `hosttest/pde_boot.py` - the module itself, on the TARGET build: a boot
   floppy carries `PDENG.MOD`, a kernel stub (READ_SEQ with its contract
   enforced: capacity and offset cluster multiples, else it prints
@@ -965,7 +982,9 @@ refuses with `PDE_NOMEM` unless `cache_kb >= 8`, `arena_kb >= 8`,
 | tables | bytes 0-8191: the page table, 8 per page (object number, generation, flags 0, reserved 0), 1,024 pages; 8192-11263: the resolved-offset cache, 512 direct-mapped entries of 6 (tag = object number, 0xFFFF empty, offset lo, hi; hi 0xFFFF = free) |
 
 Limits not in `pdabi.h`: 32 cache blocks; 6 open streams (a page, 4 nested
-forms, an image); a decoded stream is cut at 1 MiB (`PDE_LIMIT`); 16 page-tree
+forms, an image); a decoded stream is cut at 1 MiB (`PDE_LIMIT`), and the
+bytes EVERY stage of its filter chain produces at 4 MiB (`PDE_LIMIT`, 20.2.5);
+16 page-tree
 nodes per `OPEN` slice; 8 indirect hops before `PDE_CYCLE`; 32 exact xref
 subsections per revision (20.2.3); object numbers above 65,535 are
 `PDE_LIMIT` (the ABI carries them in 16 bits); a file of 2 GiB or more is
@@ -979,11 +998,12 @@ cache is `PDE_NOMEM` (6.1's "4 KiB windows of a bigger cluster" cannot be
 expressed: the capacity must be a cluster multiple). `nblk = cache_kb /
 (blk / 1024)`, at most 32, LRU, filled by one READ_SEQ call per block from the
 engine's own 16-byte cursor, re-seeded only when the next block is not the one
-the cursor stands at. The directory is read once at `OPEN` (`os88_file_find`
-by name) for the size and the compressed bit; a CZ-packed file, or one
+the cursor stands at. The directory is read at `OPEN` (`os88_file_find`
+by name) for the size and the compressed bit, and again by `FINGERPRINT`; a CZ-packed file, or one
 whose first two bytes are `CZ`, is refused `PDE_SYNTAX` with
 `err_detail = 1` (a packed PDF would be read as its wrapper). The name is
-matched case-insensitively; a name not in the current folder is `PDE_IO`.
+matched case-insensitively and READ_SEQ is then handed the directory's own
+spelling of it; a name not in the current folder is `PDE_IO`.
 
 The cross-reference follows 7.3 with one extension: each revision keeps at most
 32 subsection records; the 33rd merges adjacent pairs into CHECKPOINTS (a
@@ -992,14 +1012,20 @@ their 20-byte-aligned headers off the file). A lookup in a thinned revision
 takes the last record whose first object is at most the one asked for and
 walks at most `span` headers. The whole chain may name at most `PD_MAXSUBSEC`
 (256) subsections: the 257th is `PDE_LIMIT` (D10c). A thinned revision must be in ascending order of
-first object; 33 or more subsections out of order are `PDE_LIMIT`. A revision
-with 32 or fewer subsections may be in any order.
+first object throughout: a revision of 33 or more subsections with one out of
+order, before the thinning or after it, is `PDE_LIMIT`. A revision with 32 or
+fewer subsections may be in any order. A subsection that reaches past object
+65,535 (`first + count > 65,536`) is `PDE_LIMIT` (D8).
 
 Entries are checked byte by byte (ten digits, space, five digits, space, `n`
 or `f`, a two-byte end of line: space+CR, space+LF or CR+LF); an in-use
 offset under 9 or at or past the end of the file, a generation over 65,535, a
 bad type or an object whose header does not read `n g obj` is `PDE_XREF` with
-`err_obj` the object and `err_detail` the revision (0 = newest). A reference
+`err_obj` the object and `err_detail` the revision whose entry it is (0 =
+newest; 0 also when the entry came from the resolved-offset cache, which does
+not keep the revision). The generation a reference is matched against is the
+one in the object's `n g obj` header; the entry's own generation field is
+checked for its range only (20.2.8). A reference
 whose generation is not the object's, a free entry and an object in no
 subsection are all a null (`ob_null`; OBJ_FIND answers kind `PDK_NULL`,
 offset and length 0).
@@ -1050,7 +1076,13 @@ a chain of at most 4 (`/Filter` a name, an array, or a reference to either);
 name (`LZW`, `ASCII85`, `DCT`, `CCITT`, `JBIG2`, `JPX`, `Crypt`, anything
 unknown) is `PDE_FILTER`; a fifth stage is `PDE_LIMIT`. A hex stage ends at
 `>` or the end of data; a run-length stage at 128 or the end of data; a bad
-hex digit is `PDE_SYNTAX` at the read. `declen` is the length for an
+hex digit is `PDE_SYNTAX` at the read. Two bounds hold a stream's decoding
+(PD-28): the decoded output is cut at 1 MiB, and every byte ANY stage of the
+chain produces counts against 4 MiB - a lower stage that feeds only white
+space to an `ASCIIHex` above it (`[/RL /AHx]`, 128 spaces a raw pair) produces
+no output at all and would otherwise be unbounded work inside one `TOKEN` or
+`STRM_READ`. Either is `PDE_LIMIT` at the read, and the stream stays at its
+end afterwards. `declen` is the length for an
 unfiltered stream, 0xFFFFFFFF for a filtered one, and `filters` the `PDFL_`
 bits.
 
@@ -1075,13 +1107,14 @@ destination segment (`PDE_RANGE`).
 * `INIT` - as 20.2.2. Always succeeds (a re-INIT closes any document).
 * `OPEN` - 4 slices: (1) directory, header, `startxref`; (2) one revision per
   slice; (3) the catalog and the first page-tree node; (4) up to 16 page-tree
-  nodes per slice. Each returns CF = 1 / `PDE_BUSY` with `state` set (2, 3 or 4)
-  until the last, which returns OK. A call whose `state` is not the one the
+  nodes per slice. Each returns **CF = 0, AX = `PDE_BUSY`** (D11: more to do
+  is not a failure) with `state` set (2, 3 or 4) until the last, which returns
+  CF = 0, AX = `PDE_OK`. A call whose `state` is not the one the
   last BUSY returned is `PDE_RANGE`. On any failure `err_obj` (the object or
   0) and `err_detail` are written, the document is closed, the file layer
   forgets the file and the engine is ready for the next `OPEN`; calling
   `CLOSE` instead of finishing is the cancel. Outputs: `npages` (1-1,024; none
-  is `PDE_NOTFOUND`, `err_detail = 3`), `nrev`, `version` (header x10),
+  is `PDE_SYNTAX`, `err_detail = 3`, D10b), `nrev`, `version` (header x10),
   `flags`: `PDO_OUTLINE` (catalog has `/Outlines`), `PDO_ACROFORM`,
   `PDO_TAGGED` (`/MarkInfo` present), `PDO_READONLY` (catalog `/Perms`, or
   the AcroForm's `/SigFlags` bit 0; a signature field's own `/V` is not
@@ -1129,8 +1162,11 @@ destination segment (`PDE_RANGE`).
   it: the renderer treats it as a missing resource). Not found:
   `PDE_NOTFOUND`.
 * `RAW_COPY` - the object's bytes from `n g obj` through `endobj` from
-  `done`, at most `dmax` to `dseg:doff`; `done` advances; the copy is complete
-  when `done` equals `OBJ_FIND`'s `length`. A short read is `PDE_TRUNC`.
+  `done`, at most `dmax` (itself at most 0xFFF0) to `dseg:doff`; `done`
+  advances; the copy is complete when `done` equals `OBJ_FIND`'s `length`. A
+  short read is `PDE_TRUNC`. A copy that would cross the end of `dseg`
+  (`doff` + the bytes it would move > 0x10000) is `PDE_RANGE` and copies
+  nothing - it used to wrap into `dseg:0`.
 * `TRAILER` - the newest revision's `/Size`, `/Root`, `/Info`, `startxref`, the
   first 16 bytes of the first `/ID` element (`id0_len` its true length) and the
   header version.
@@ -1155,10 +1191,14 @@ destination segment (`PDE_RANGE`).
   match until that exists.
 * `FINGERPRINT` - flushes the cache and re-reads the first and last 1,024
   bytes from the disk (CRC-16/CCITT, initial value 0xFFFF; a file under 1 KiB
-  uses the same bytes for both) with the size from the directory taken at
-  `OPEN`. The primary stores the answer at open; the writer calls it again
-  before it writes and refuses `PDE_CHANGED` when it moved. Before an `OPEN`
-  it is `PDE_RANGE`.
+  uses the same bytes for both) with the size the directory gives NOW, and the
+  last KiB read at that size: a file another program appended an update to
+  keeps its first KiB and its old last KiB, so only the current size and the
+  current tail can see it. The open document keeps OPEN's size and the cache
+  is flushed again afterwards. The primary stores the answer at open; the
+  writer calls it again before it writes and refuses `PDE_CHANGED` when it
+  moved. A file no longer in the folder is `PDE_IO`. Before an `OPEN` it is
+  `PDE_RANGE`.
 * `ARENA_MARK`/`ARENA_REL` - 20.2.2.
 
 A verb that needs a document before `OPEN` finished answers `PDE_RANGE`. An
@@ -1177,12 +1217,12 @@ call may be retried).
 | `PDE_DEPTH` | nesting over 32 in an object, a content stream or the page tree |
 | `PDE_FLATE`, `PDE_FILTER` | 20.2.5, at `STRM_OPEN` |
 | `PDE_ENCRYPT` / `PDE_XREFSTM` | `/Encrypt` in a trailer / `/Type /XRef` where `xref` was expected |
-| `PDE_RANGE` | a page box outside +/-2,047.9 pt or of zero area; `/Rotate` not a multiple of 90; a number that does not fit 16.16; an index past the end; a bad `state`; no document |
-| `PDE_LIMIT` | token/name/array limits; more than 8 revisions or 1,024 pages; an object number over 65,535; a file of 2 GiB; 5 filters; 7 open streams; 1 MiB decoded |
+| `PDE_RANGE` | a page box outside +/-2,047.9 pt or of zero area; `/Rotate` not a multiple of 90; a number that does not fit 16.16; an index past the end; a bad `state`; no document; a `RAW_COPY` or `STRM_READ` destination that would cross the end of its segment |
+| `PDE_LIMIT` | token/name/array limits; more than 8 revisions or 1,024 pages; an object number over 65,535; a subsection past object 65,535; a revision of 33+ subsections out of order; a file of 2 GiB; 5 filters; 7 open streams; 1 MiB decoded; 4 MiB of filter work |
 | `PDE_NOMEM` | a claim too small (20.2.2); a cluster over 32 KiB |
 | `PDE_IO` | any failed read; a name not in the folder |
 | `PDE_NOTFOUND` | a missing dictionary key or resource; no outline; `SEARCH` |
-| `PDE_BUSY` | `OPEN` has more to do |
+| `PDE_BUSY` | `OPEN` has more to do - with CF = 0 (D11), not a failure |
 
 `PDE_SIGNED` is not returned: a signed or `/Perms` document opens with
 `PDO_READONLY`. `PDE_CANCEL`, `PDE_FONT`, `PDE_GRAPHICS`, `PDE_DISKFULL`,
@@ -1201,6 +1241,9 @@ call may be retried).
   `/Parent` and the word is reserved 0.
 * 1.3: a signature field's own `/V` is not looked for; `/SigFlags` bit 0 and
   `/Perms` decide `PDO_READONLY`.
+* 7.4: the generation a reference must match is the object header's; an xref
+  entry whose generation disagrees with the header it points at is not
+  detected (the resolved-offset cache keeps no generation).
 * The wave-1 stub: `SEARCH`. `PDP_HASLINKS` is never set.
 
 ### 20.3 The renderer (`rend`)

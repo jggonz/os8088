@@ -216,7 +216,7 @@ void pdb_main(void)
         xb_put(&op, sizeof op);
         r = call(PDV_ENG_OPEN, 0, 0, 0);
         xb_get(&op, sizeof op);
-        if (pdb_cf && r == PDE_BUSY) continue;
+        if (!pdb_cf && r == PDE_BUSY) continue;     /* D11: CF = 0, AX = PDE_BUSY */
         break;
     }
     if (pdb_cf) {

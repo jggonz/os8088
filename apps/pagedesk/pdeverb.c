@@ -575,6 +575,7 @@ unsigned pde_verb(unsigned verb, unsigned bx, unsigned cx, unsigned dx)
         }
     }
     if (rc != PDE_BUSY && pde_ioerr) rc = PDE_IO;          /* a failed read is the truth, whatever the parser made of the gap */
+    if (rc == PDE_BUSY) { pde_fail = 0; return PDE_BUSY; }  /* D11: more to do is not a failure - CF = 0, AX = PDE_BUSY */
     pde_fail = rc;
     return rc ? rc : pde_ax;
 }
