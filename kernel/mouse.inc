@@ -5097,34 +5097,8 @@ cur_lazyrect:
 ; counting the same way. Nothing faulted, nothing froze, and the task table
 ; showed both tasks sleeping and waking on schedule - which is what made it
 ; read as "a worker is broken" rather than as a register bug.
-;
-; THE COMMON ANSWER IS "NOT MOVED", AND IT IS ASKED BEFORE THE FRAME (kernel
-; hot-paths pass 1, found by gfxcall: 498 -> ~170 cycles an unlock). None of
-; the three reads needs the cli. [cur_lazy] and [cur_level] are TASK state -
-; no ISR reads the one or writes the other (the ISR reads [cur_level]; only
-; cursor_show/cursor_hide write it, on the task, under the lock this task
-; still holds). The position compare can race a packet, and the race is the
-; one the old body already had: the gfx lock is held until gfx_unlock's .rel
-; store, so a packet landing after ANY check - this one, or the old one under
-; cli, which ended at its popf - is refused by mou_apply and leaves the arrow
-; where it is until the next packet. A packet BETWEEN the two reads below
-; makes the y compare see it and takes the move. The move itself reloads the
-; position under cli, so it draws the latest one.
 cur_lazyend:
-    mov byte [cur_lazy], 0
-    cmp byte [cur_level], 0
-    jl .ret                     ; hidden by refcount: nothing is on screen
-    push ax                     ; the frame's first word, and the compare's
-    mov ax, [mouse_x]           ; register
-    cmp ax, [cur_drawn_x]
-    jne .move
-    mov ax, [mouse_y]
-    cmp ax, [cur_drawn_y]
-    jne .move
-    pop ax
-.ret:
-    ret
-.move:
+    push ax
     push bx
     push cx
     push dx
@@ -5134,10 +5108,19 @@ cur_lazyend:
     push es
     pushf
     cli
+    mov byte [cur_lazy], 0
+    cmp byte [cur_level], 0
+    jl .out                     ; hidden by refcount: nothing is on screen
     mov ax, [mouse_x]
     mov bx, [mouse_y]
+    cmp ax, [cur_drawn_x]
+    jne .move
+    cmp bx, [cur_drawn_y]
+    je .out
+.move:
     call cur_move
     mov byte [cur_dirty], 0
+.out:
     popf
     jmp kret_es
 
