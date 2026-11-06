@@ -14,7 +14,7 @@ nested, compared with what this script knows they must be.
   --icount runs QEMU with -icount shift=0, so the BIOS tick counts guest
   instructions (1 ns each), and prints instructions a decoded byte.
 """
-import os, random, subprocess, sys, zlib
+import os, random, re, subprocess, sys, zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 src = open(os.path.join(HERE, "pde_boot.py")).read()
@@ -70,13 +70,50 @@ def make_pdf():
     rawt = big_text(rng, 80000)
     icols, irows = 200, 600
     img = bytes(((x // 4 + y // 3) & 255) ^ (rng.randrange(4) if rng.random() < .3 else 0) for y in range(irows) for x in range(icols))
+    # the corpus: every block type, far distances, then (from object 100) the malformed ones
+    cs = []
+    t2 = text[:2000]
+    far = bytes(rng.randrange(256) for _ in range(32768))
+    valid = [("L6", fc.zl(t2, 6)), ("L1", fc.zl(t2, 1)), ("L9", fc.zl(t2, 9)), ("stored", fc.zl(t2, 0)),
+             ("fixed", fc.zl(t2, 6, zlib.Z_FIXED)), ("huff", fc.zl(t2, 6, zlib.Z_HUFFMAN_ONLY)),
+             ("rle", fc.zl(t2, 6, zlib.Z_RLE)), ("zeros", fc.zl(bytes(40000))), ("w9", fc.zl(t2, 6, wbits=9))]
+    vdata = [t2] * 7 + [bytes(40000), t2]
+    far2 = far + far[:3000] + far[100:200]
+    valid.append(("far", fc.zl(far2, 9))); vdata.append(far2)
+    allb = bytes(range(256)) * 20
+    valid.append(("allbytes", fc.zl(allb))); vdata.append(allb)
+    low = bytes(rng.randrange(4) for _ in range(30000))
+    valid.append(("lowent", fc.zl(low))); vdata.append(low)
+    c = zlib.compressobj(6); part = b""
+    for i in range(0, len(t2), 300):
+        part += c.compress(t2[i:i + 300]) + c.flush(zlib.Z_FULL_FLUSH)
+    valid.append(("flushed", part + c.flush())); vdata.append(t2)
+    streams = [(b"/Filter /FlateDecode", z) for _, z in valid]
+    pad = 100 - 10 - 6 - len(streams)
+    mal = []
+    base = fc.zl(t2[:600], 6)
+    for k in range(20):
+        b = bytearray(base)
+        for _ in range(rng.choice((1, 1, 2, 4))):
+            b[rng.randrange(len(b))] ^= 1 << rng.randrange(8)
+        mal.append(bytes(b))
+    fixed = fc.zl(t2[:300], 6, zlib.Z_FIXED)
+    for k in range(8):
+        b = bytearray(fixed); b[rng.randrange(len(b))] ^= 1 << rng.randrange(8); mal.append(bytes(b))
+    for cut in (3, 10, 40, 90, 200, len(base) - 10):
+        mal.append(base[:cut])
+    mal.append(bytes([0x78, 0x9C, 0x07])); mal.append(bytes([0x78, 0x9C, 0x01, 5, 0, 0, 0, 1, 2, 3, 4, 5]))
     pdf = fc.build_pdf([(b"/Filter /FlateDecode", z10),
                         (b"/Filter /FlateDecode /DecodeParms << /Predictor 15 /Columns %d >>" % cols, z11),
                         (b"/Filter /FlateDecode", bad),
                         (b"/Filter /FlateDecode", fc.zl(big)), (b"", rawt),
                         (b"/Filter /FlateDecode /DecodeParms << /Predictor 15 /Columns %d >>" % icols,
-                         fc.zl(fc.png_encode(img, icols, 1, (1, 2, 4, 3, 0))))])
-    return pdf, text, raw, bad, {13: big, 14: rawt, 15: img}
+                         fc.zl(fc.png_encode(img, icols, 1, (1, 2, 4, 3, 0))))] + streams +
+                       [(None, b"null")] * pad + [(b"/Filter /FlateDecode", m) for m in mal])
+    corpus = {16 + i: (vdata[i], 0) for i in range(len(valid))}
+    for i, m in enumerate(mal):
+        corpus[100 + i] = expect(m)
+    return pdf, text, raw, bad, {13: big, 14: rawt, 15: img}, corpus
 
 
 def build_harness(build, root):
@@ -100,27 +137,12 @@ def build_harness(build, root):
 
 
 def expect(z):
-    d = zlib.decompressobj(-15)
-    out = bytearray()
-    try:
-        for i in range(2, len(z)):
-            out += d.decompress(z[i:i + 1])
-    except zlib.error:
-        return bytes(out), 1
-    return bytes(out), 0 if d.eof else 3
+    out, how, _ = fc.partial_zlib(z)
+    return out, {"done": 0, "trunc": 3, "error": 1}[how]
 
 
-def main():
-    build = sys.argv[1]
-    icount = "--icount" in sys.argv
-    root = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
-    os.makedirs(build, exist_ok=True)
-    pdf, text, raw, bad, bigs = make_pdf()
-    # the harness is pde_boot.asm plus pdb_pit, built from a copy in the build tree
-    asm = open(os.path.join(HERE, "pde_boot.asm")).read().replace("section .data\nh_door", PIT_ASM + "section .data\nh_door", 1)
-    open(os.path.join(build, "pde_fl_boot.asm"), "w").write(asm)
-    harness, kstub = build_harness(build, root)
-    module = open(os.path.join(build, "PDENG.MOD"), "rb").read()
+def run_boot(build, module, pdf, icount):
+    harness, kstub = build_harness(build, root_dir())
     img = ns["make_image"](build, harness, kstub, module, pdf, 2)
     if icount:
         orig = ns["subprocess"].Popen
@@ -128,77 +150,113 @@ def main():
             return orig(cmd + ["-icount", "shift=0,sleep=off"], *a, **k)
         ns["subprocess"].Popen = popen
     out = ns["boot"](img)
-    bad_n = 0
+    if icount:
+        ns["subprocess"].Popen = orig
+    return out
+
+
+def root_dir():
+    return os.path.abspath(os.path.join(HERE, "..", "..", ".."))
+
+
+def judge(tag, out, want, bigs, corpus):
+    """-> (problems, results {key: line without ticks}, timing, first)"""
+    bad_n, res, timing, first, seen = [], {}, {}, {}, 0
     if "DONE\n" not in out:
-        print("FAIL: no DONE\n" + out[-600:])
-        sys.exit(1)
-    want_bad, want_rc = expect(bad)
-    lines = out.split("\n")
-    seen = 0
-    timing = {}
-    first = {}
-    for l in lines:
+        return ["%s: no DONE\n%s" % (tag, out[-500:])], res, timing, first
+    text, raw, want_bad, want_rc = want
+    for l in out.split("\n"):
         f = l.split()
         if not f:
             continue
-        tag = f[0]
         kv = dict(x.split("=") for x in f if "=" in x)
-        if tag == "READ":
+        n = (int(kv["bytes"].split(":")[0]) * 65536 + int(kv["bytes"].split(":")[1])) if "bytes" in kv else 0
+        crc = int(kv["crc"], 16) if "crc" in kv else 0
+        t = f[0]
+        if t == "READ":
             obj = int(f[1])
             data, rc = {10: (text, 0), 11: (raw, 0), 12: (want_bad, want_rc)}[obj]
-            ok = int(kv["rc"]) == rc
-            n = int(kv["bytes"].split(":")[0]) * 65536 + int(kv["bytes"].split(":")[1])
-            if obj != 12:
-                ok = ok and n == len(data) and int(kv["crc"], 16) == crc16(data)
-            seen += 1
-            if not ok:
-                bad_n += 1
-                print("FAIL", l, "want rc", rc, "bytes", len(data), "crc %04x" % crc16(data))
-            else:
-                print("ok  ", l)
-        elif tag == "FIRST":
-            seen += 1
-            units = (int(kv["pit0"]) - int(kv["pit1"])) % 65536
-            if kv["got"] != "1":
-                bad_n += 1
-                print("FAIL", l)
-            else:
-                first[int(f[1])] = units * 838
-                print("ok  ", l)
-        elif tag == "TIME":
+            ok = int(kv["rc"]) == rc and (obj == 12 or (n == len(data) and crc == crc16(data)))
+            res[("READ", obj, f[2])] = (kv["rc"], n, crc)
+        elif t in ("NESTA", "NESTB"):
+            data = text if t == "NESTA" else raw
+            ok = kv["rc"] == "0" and n == len(data) and crc == crc16(data)
+            res[(t,)] = (kv["rc"], n, crc)
+        elif t == "FIRST":
+            ok = kv["got"] == "1"
+            first[int(f[1])] = ((int(kv["pit0"]) - int(kv["pit1"])) % 65536) * 838
+        elif t == "TIME":
             obj = int(f[1])
             data = bigs[obj]
-            n = int(kv["bytes"].split(":")[0]) * 65536 + int(kv["bytes"].split(":")[1])
-            ok = kv["rc"] == "0" and n == len(data) and int(kv["crc"], 16) == crc16(data)
-            seen += 1
-            units = int(kv["ticks"]) * 65536 + int(kv["pit0"]) - int(kv["pit1"])
-            if not ok:
-                bad_n += 1
-                print("FAIL", l, "want bytes", len(data), "crc %04x" % crc16(data))
-            else:
-                timing[obj] = (units * 838, n)       # 838 ns a PIT count; under -icount shift=0 that is instructions
-                print("ok  ", l)
-        elif tag in ("NESTA", "NESTB"):
-            data = text if tag == "NESTA" else raw
-            ok = kv["rc"] == "0" and int(kv["bytes"].split(":")[1]) == len(data) and int(kv["crc"], 16) == crc16(data)
-            seen += 1
-            if not ok:
-                bad_n += 1
-                print("FAIL", l, "want bytes", len(data), "crc %04x" % crc16(data))
-            else:
-                print("ok  ", l)
-    if icount:
-        for obj, what in ((13, 'Flate text'), (14, 'unfiltered text'), (15, 'Flate + PNG predictor, gray image')):
-            if obj in timing:
-                ns_, n = timing[obj]
-                print('instructions per output byte, %-34s %6.1f   (%d bytes)' % (what, ns_ / n, n))
-    if icount:
-        for obj, ins in sorted(first.items()):
-            print('first byte of object %d: %d instructions (the dynamic header and its tables)' % (obj, ins))
-    if seen != 16:
-        bad_n += 1
-        print("FAIL: %d result lines, expected 16\n%s" % (seen, out[-600:]))
-    sys.exit(1 if bad_n else 0)
+            ok = kv["rc"] == "0" and n == len(data) and crc == crc16(data)
+            timing[obj] = ((int(kv["ticks"]) * 65536 + int(kv["pit0"]) - int(kv["pit1"])) * 838, n)
+        elif t == "CORP":
+            obj = int(f[1])
+            data, rc = corpus[obj]
+            ok = int(kv["rc"]) == rc and n == len(data) and crc == crc16(data)
+            res[("CORP", obj)] = (kv["rc"], n, crc)
+        else:
+            continue
+        seen += 1
+        if not ok:
+            bad_n.append("%s: %s" % (tag, l))
+    if seen != 16 + len(corpus):
+        bad_n.append("%s: %d result lines, expected %d" % (tag, seen, 16 + len(corpus)))
+    return bad_n, res, timing, first
+
+
+def main():
+    build = sys.argv[1]
+    icount = "--icount" in sys.argv
+    os.makedirs(build, exist_ok=True)
+    pdf, text, raw, bad, bigs, corpus = make_pdf()
+    want = (text, raw) + expect(bad)
+
+    mods = {"asm": open(os.path.join(build, "PDENG.MOD"), "rb").read(),
+            "c": open(os.path.join(build, "flc", "PDENG.MOD"), "rb").read()}
+    # the harness is pde_boot.asm plus pdb_pit, built from a copy in the build tree
+    asmtxt = open(os.path.join(HERE, "pde_boot.asm")).read().replace("section .data\nh_door", PIT_ASM + "section .data\nh_door", 1)
+    open(os.path.join(build, "pde_fl_boot.asm"), "w").write(asmtxt)
+    problems, results = [], {}
+    for tag, mod in mods.items():
+        out = run_boot(build, mod, pdf, icount)
+        p, res, timing, first = judge(tag, out, want, bigs, corpus)
+        problems += p
+        results[tag] = res
+        print("%-4s module: %d result lines, %d problems" % (tag, len(res), len(p)))
+        if icount:
+            for obj, what in ((13, "Flate text"), (14, "unfiltered text"), (15, "Flate + PNG predictor, gray image")):
+                if obj in timing:
+                    print("  instructions per output byte, %-34s %6.1f   (%d bytes)" % (what, timing[obj][0] / timing[obj][1], timing[obj][1]))
+            for obj, ins in sorted(first.items()):
+                print("  first byte of object %d: %d instructions" % (obj, ins))
+    # the asm and the C twin must agree line for line, including on the malformed corpus
+    diff = [k for k in results["c"] if results["c"][k] != results["asm"].get(k)]
+    print("asm against its C twin: %d of %d results differ" % (len(diff), len(results["c"])))
+    problems += ["asm and C differ at %r: %r vs %r" % (k, results["asm"].get(k), results["c"][k]) for k in diff]
+    # NEGATIVE CONTROL: break one instruction of the asm (the literal store) and the comparison must bite
+    lst = open(os.path.join(build, "PDENG.lst")).read().split("\n")
+    start = next(i for i, l in enumerate(lst) if l.rstrip().endswith("_fl_codes:"))
+    off = None
+    for l in lst[start:start + 120]:
+        m = re.match(r"\s*\d+\s+([0-9A-F]{8})\s+8805\s", l)
+        if m:
+            off = int(m.group(1), 16)
+            break
+    broken = bytearray(mods["asm"])
+    assert broken[off:off + 2] == b"\x88\x05", "listing and image disagree"
+    broken[off + 1] = 0x25                                  # mov [di], al  ->  mov [di], ah
+    out = run_boot(build, bytes(broken), pdf, False)
+    p, res, _, _ = judge("broken", out, want, bigs, corpus)
+    dd = [k for k in results["c"] if results["c"][k] != res.get(k)]
+    print("negative control (the literal store broken at image offset 0x%X): %d expected-value problems, %d differences from the C twin"
+          % (off, len(p), len(dd)))
+    if not p or not dd:
+        problems.append("NEGATIVE CONTROL DID NOT BITE: the comparison cannot see a broken asm")
+    for q in problems:
+        print("FAIL", q)
+    print("FAILURES: %d" % len(problems))
+    sys.exit(1 if problems else 0)
 
 
 main()

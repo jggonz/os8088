@@ -2178,8 +2178,8 @@ all) and a 320-byte scratch for a dynamic header and the predictor's row
 above. Reading a Flate stream other than the one loaded swaps the loaded
 state out to its own slot and the reader's in (two block copies of 380 bytes;
 a form opened inside a page's content and then closed costs two swaps); the
-tables and the history never move. PDENG.MOD: **34,054 + 9,782 = 43,836 bytes**
-against 27,466 + 8,972 = 36,438 before (+7.3 KiB: +6,588 image, +810 bss).
+tables and the history never move. PDENG.MOD: **34,400 + 9,852 = 44,252 bytes**
+against 27,466 + 8,972 = 36,438 before (+7.6 KiB: +6,934 image, +880 bss).
 
 **20.13.4 Resumability and the work bound.** The decoder runs in *fills* of at
 most 256 output bytes into `ob`: one literal, one stored byte or one symbol's
@@ -2193,8 +2193,8 @@ read from `ob`). The top Flate stage's bytes are handed up in bulk
 (`fl_take`) instead of a call each, and counted against the work bound as
 `sget` would have. The most work between two returns of a byte is a block
 start: a dynamic block's header (up to 316 code lengths, two tables, the
-lookups) plus the first fill, measured at **118,158 instructions** for a 2 KB
-stream and **203,634** for a 240 KB one on the target code (20.13.6); the work
+lookups) plus the first fill, measured at **108,940 instructions** for a 2 KB
+stream and **187,712** for a 240 KB one on the target code (20.13.6); the work
 after it is bounded by the caller's `STRM_READ` size as for any stage.
 
 **20.13.5 A failure surfaces once.** It is parked when found and reported, as
@@ -2224,15 +2224,42 @@ as for a bad hex digit, are void), later reads see the end of the stream.
   write outside the claim, no stream over 1 MiB.
 * `make pdflateboot` (`hosttest/pde_fl_boot.py`): the **module as the target
   toolchain built it** (SmallerC, `cc8086.py`, `nasm cpu 8086`) booted in QEMU
-  with the flate claim, its CRCs compared with the host's at three read
-  sizes, nested, over a corrupt stream, with `-icount shift=0` so the BIOS and
-  the PIT count guest instructions (1 ns each). It reads 240,000 bytes of
-  Flate text at **89.4 instructions a byte**, the same kind of text unfiltered
-  at 20.7, a PNG-predicted 8-bit gray image at 240.9. At roughly 14-18 clocks
-  an instruction for compiler output on an 8088 that is 1,250-1,600 clocks a
-  text byte, **about 3-4 KB/s**, and about 1.1-1.4 KB/s for a predicted image:
-  an estimate, not a measurement (QEMU counts 386 instructions; MartyPC's
-  guest cycles are the lead's final pass).
+  with the flate claim, twice: the shipped module (hand-written symbol loop,
+  20.13.8) and the same source built with `-DFL_NOASM` (its C twin, in
+  `build/flc/`). Each runs 60 streams - three read sizes, nested reads, a
+  corrupt stream, and a corpus of every block type (stored, fixed, dynamic at
+  levels 1/6/9, Huffman-only, RLE, flushed multi-block, a 9-bit window), a
+  history distance of exactly 32,768 and 28 malformed streams (bit flips,
+  truncations, a block type 3, a bad stored length) read a byte a call - and
+  the result lines are compared with what Python's inflater yields **and with
+  each other**: 0 of 60 differ. **The comparison is proved to bite** by a
+  negative control in the same run: the shipped module's literal store is
+  patched in the image (`mov [di],al` -> `mov [di],ah`) and the run must
+  fail, which it does (53 results wrong against the expected values, 54
+  against the C twin). Boots use `-icount shift=0`, so the BIOS and the PIT
+  count guest instructions (1 ns each). Instructions per output byte,
+  240,000 bytes of Flate text: **90.2 as C, 63.4 as shipped**; the same kind
+  of text unfiltered 20.7; a PNG-predicted 8-bit gray image 242.1 as C, 190.1
+  as shipped. QEMU counts one `rep movsb` as one instruction, so the
+  asm figure flatters it (an 8088 pays about 17 clocks a byte there); clock
+  counts need MartyPC, the lead's final pass. `pde_fl_check.py` (`asmlayout`)
+  checks `pdeflate.inc`'s FL_* offsets and table addresses against
+  `struct flst` and `pdeflate.h` on the 16-bit layout.
+
+**20.13.8 The symbol loop in assembly.** `_fl_codes` (`pdeflate.inc`,
+included by `pdeng.asm`; defined only when `FL_ASM`, that is on the target and
+not under `FL_NOASM`) decodes literal/length and distance symbols through the
+slot's lookups (read directly through ES, no call per table word), their
+extra bits, and the match copy - a source inside the output buffer by
+`rep movsb`, one before it from the history - until the 256-byte buffer is
+full or the block ends, then returns. A code longer than the lookup is
+resolved by C's walk (`fl_slow`) and the read-ahead is refilled by C
+(`fl_infill`); everything else (headers, tables, stored blocks, predictors,
+the slot swap) stays C. Its C twin is the `FS_CODES` case and `fl_match()`
+of `fl_fill()`, which the host harness runs and the target builds under
+`-DFL_NOASM`. Input is read ahead 64 bytes at a time from the file's
+lookahead when Flate is the first stage (one byte at a time through a lower
+stage, so its errors and bounds are unchanged).
 
 **20.13.7 Not done.** `/Predictor` with more than four colours or a TIFF
 sub-byte depth (`PDE_FILTER`); a second Flate stage in one chain; the Adler-32

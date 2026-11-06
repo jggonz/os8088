@@ -32,6 +32,7 @@
 #define FT_DLUT         1216    /*   ...and of a distance code (256 words)                  */
 #define PDE_FLSAVE      42688u  /* the saved decoder state, after the tables (<= 3 KiB all told) */
 #define PDE_FLOB        256     /* decoded bytes held between deliveries           */
+#define PDE_FLIB        64      /* the input read-ahead                            */
 #define PDE_PRC         64      /* a predictor chunk                               */
 
 /* the state machine */
@@ -56,10 +57,12 @@ struct flst {
     pdw on, oi;             /* ob: decoded bytes / the next one to deliver        */
     pdw pi, pe;             /* pout[pi..pe) is the unread decoded output          */
     pdw ptag, ppos, pcur;
+    pdw ii, in;             /* ib: the next input byte / how many it holds          */
     pdw zero_to;            /* (the end of what a fresh decoder zeroes)           */
     pdw pred, prow, bpp, bpc;   /* the predictor: 0 none / 1 PNG / 2 TIFF; a row's bytes; ... */
     pdb ob[PDE_FLOB];
     pdb pout[PDE_PRC + 8];
+    pdb ib[PDE_FLIB];       /* input read ahead from the stage below (the raw bytes, in bulk) */
 };
 
 static int fl_get(struct sctx *c);          /* one byte of the Flate stage of c, or -1 */
@@ -68,6 +71,15 @@ static pdw fl_parms(pdw num);               /* /DecodeParms of the stream       
 static pdw fl_attach(struct sctx *c);
 static void fl_drop(struct sctx *c);
 static void fl_init(pdw flags, pdw seg, pdw kb);
+pdw fl_infill(void);                        /* (called from pdeflate.inc) refill fl.ib; the count, 0 at the end */
+int fl_slow(pdw which);                     /* (called from pdeflate.inc) a code longer than the lookup: the walk */
+/* The symbol loop is hand-written 8086 (pdeflate.inc) on the target, and the
+ * C below it is its twin: the host's, and the target's when FL_NOASM is
+ * defined (the build the target harness compares the asm against). */
+#if !defined(PD_HOST) && !defined(FL_NOASM)
+#define FL_ASM 1
+pdw fl_codes(void);
+#endif
 static pdw g_fseg, g_nfl;                   /* the claim; slots it holds (0: Flate is refused) */
 static struct flst fl;                      /* the loaded decoder */
 

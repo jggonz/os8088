@@ -170,14 +170,29 @@ static pdw fl_attach(struct sctx *c)
 
 /* ---- bits ----------------------------------------------------------------------- */
 
+/* Refill the read-ahead: one byte from the stage below, and when that stage is
+ * the file itself, whatever else its lookahead holds. The count, 0 at the end. */
+pdw fl_infill(void)
+{
+    struct sctx *c = fl_sc[fl_ld];
+    int b;
+    pdw n = 1;
+    fl.ii = 0; fl.in = 0;
+    b = sget(c, (int)fl.stage - 1);
+    if (b < 0) return 0;
+    fl.ib[0] = (pdb)b;
+    if (!fl.stage)
+        while (n < PDE_FLIB && c->rbi < c->rbn) fl.ib[n++] = c->rb[c->rbi++];
+    fl.in = n;
+    return n;
+}
+
 /* At least n (<= 8) bits in the buffer, or 0: the input has ended. */
 static int fl_need(pdw n)
 {
-    int b;
     while (fl.bn < n) {
-        b = sget(fl_sc[fl_ld], (int)fl.stage - 1);
-        if (b < 0) return 0;
-        fl.bb = (pdw)(fl.bb | (pdw)((pdw)b << fl.bn));
+        if (fl.ii >= fl.in && !fl_infill()) return 0;
+        fl.bb = (pdw)(fl.bb | (pdw)((pdw)fl.ib[fl.ii++] << fl.bn));
         fl.bn = (pdw)(fl.bn + 8);
     }
     return 1;
@@ -284,6 +299,11 @@ static int fl_sym(pdw lut, pdw cnt, pdw sym)
     return fl_walk(cnt, sym);
 }
 
+int fl_slow(pdw which)
+{
+    return which ? fl_walk(FT_DCNT, FT_DSYM) : fl_walk(FT_LCNT, FT_LSYM);
+}
+
 static void fl_fixed(void)
 {
     pdw i;
@@ -351,6 +371,7 @@ static void fl_flush(void)
     if (fl.whave > PDE_FLWIN) fl.whave = PDE_FLWIN;
 }
 
+#ifndef FL_ASM
 /* As much of the pending match as the room holds. */
 static void fl_match(void)
 {
@@ -371,6 +392,8 @@ static void fl_match(void)
     while (n--) { fl.ob[fl.on] = fl.ob[fl.on - d]; fl.on++; }
 }
 
+#endif
+
 /* ---- the decoder -------------------------------------------------------------------- */
 
 static void fl_fill(void)
@@ -379,7 +402,15 @@ static void fl_fill(void)
     pdw v, len, ds;
     fl.on = 0; fl.oi = 0;
     while (fl.on < PDE_FLOB && fl.state != FS_END) {
+#ifdef FL_ASM
+        if (fl.state == FS_CODES) {                 /* pdeflate.inc: symbols, matches, to a full buffer */
+            v = fl_codes();
+            if (v) fl_fail(v == 1 ? eof_err() : PDE_SYNTAX);
+            continue;
+        }
+#else
         if (fl.mleft) { fl_match(); continue; }
+#endif
         switch (fl.state) {
         case FS_HDR:
             v = fl_bits(8); len = fl_bits(8);
@@ -415,6 +446,7 @@ static void fl_fill(void)
             fl.ob[fl.on++] = (pdb)v;
             if (--fl.slen == 0) fl.state = fl.final ? FS_END : FS_BLK;
             break;
+#ifndef FL_ASM
         default:                                /* FS_CODES */
             s = fl_sym(FT_LUT, FT_LCNT, FT_LSYM);
             if (s >= 0 && s < 256) { fl.ob[fl.on++] = (pdb)s; break; }
@@ -427,6 +459,7 @@ static void fl_fill(void)
             ds = (pdw)(fl_dbase[s] + fl_bits(fl_dext[s]));
             if (fl.state != FS_END) { fl.mleft = len; fl.mdist = ds; }
             break;
+#endif
         }
     }
     fl_flush();

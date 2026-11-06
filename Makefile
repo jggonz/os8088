@@ -20440,13 +20440,28 @@ pdflate: $(BUILD)/PDENG.MOD $(BUILD)/pde_fl_test apps/pagedesk/hosttest/pde_fl_c
 
 # the module itself, in QEMU (a 386-class CPU running the 16-bit code SmallerC
 # emitted): `make pdflateboot` checks its CRCs and prints instructions a byte
-pdflateboot: $(BUILD)/PDENG.MOD apps/pagedesk/hosttest/pde_fl_boot.py apps/pagedesk/hosttest/pde_fl_boot.c
+pdflateboot: $(BUILD)/PDENG.MOD $(BUILD)/flc/PDENG.MOD apps/pagedesk/hosttest/pde_fl_boot.py apps/pagedesk/hosttest/pde_fl_boot.c
 	python3 apps/pagedesk/hosttest/pde_fl_boot.py $(BUILD) --icount
 
 PDFLFUZZ_N ?= 300
 pdflatefuzz: $(BUILD)/pde_fl_fuzz apps/pagedesk/hosttest/pde_fl_check.py
 	python3 apps/pagedesk/hosttest/pde_fl_check.py --corpus $(BUILD)/pdfl-corpus
 	$(BUILD)/pde_fl_fuzz -n $(PDFLFUZZ_N) -s $(PDEFUZZ_SEED) $(BUILD)/pdfl-corpus/*.pdf
+# THE C TWIN ON THE TARGET: the same module with the hand-written symbol loop
+# (apps/pagedesk/pdeflate.inc) left out and its C twin compiled in, into
+# $(BUILD)/flc/. `make pdflateboot` boots both and compares them.
+$(BUILD)/flc: | $(BUILD)
+	mkdir -p $@
+$(BUILD)/flc/pdeng.raw.asm: $(PDFL_SRC) apps/pagedesk/pdabi.h apps/pagedesk/pdmath.h $(CC_RUNTIME) | $(BUILD)/flc cc-toolchain
+	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S -DFL_NOASM \
+		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) -I $(BUILD) -I apps/pagedesk \
+		apps/pagedesk/pdeng.c -o $@
+	@rm -f apps/pagedesk/pdeng.i
+$(BUILD)/flc/pdeng.gen.asm: $(BUILD)/flc/pdeng.raw.asm tools/cc8086.py tools/ccpeep.py $(CC_PEEPSTAMP)
+	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME) $(CC_PEEPARG)
+$(BUILD)/flc/PDENG.MOD: apps/pagedesk/pdeng.asm $(BUILD)/flc/pdeng.gen.asm apps/pagedesk/pdmath.inc \
+                        apps/pagedesk/pdabi.inc apps/os88api.inc $(CC_RUNTIME) | $(BUILD)
+	$(NASM) -f bin -w+error -DFL_NOASM -I apps/ -I $(BUILD)/flc/ -I $(BUILD)/ -o $@ apps/pagedesk/pdeng.asm
 # ---- end PageDesk: flate ----------------------------------------------------
 
 

@@ -153,5 +153,20 @@ void pdb_main(void)
         ps("TIME "); pu(obj); ps(" rc="); pu(rc); ps(" bytes="); pu(nhi); pdb_putc(':'); pu(nlo); ps(" crc="); px(crc);
         ps(" ticks="); pu(r); ps(" pit0="); pu(ra); ps(" pit1="); pu(na); pdb_putc('\n');
     }
+    /* the corpus: objects 16.. read 509 bytes a call, 100.. (the malformed ones) one byte a call, each to the end of its run */
+    for (obj = 16; obj < 400; obj++) {
+        if (obj == 60) obj = 100;
+        r = strm_open(obj);
+        if (pdb_cf) {
+            if (r == PDE_NOTFOUND && obj < 100) { obj = 99; continue; }
+            if (r == PDE_NOTFOUND) break;
+            rc = r; crc = 0; nlo = 0; nhi = 0; line("COPEN", obj, 0, 0xFFFF);
+            continue;
+        }
+        crc = 0xFFFF; nlo = 0; nhi = 0; rc = 0;
+        drain(obj < 100 ? 509 : 1, 0);
+        call(PDV_ENG_STRM_CLOSE, 0, 0, 0);
+        line("CORP", obj, obj < 100 ? 509 : 1, 0xFFFF);
+    }
     call(PDV_ENG_CLOSE, 0, 0, 0);
 }

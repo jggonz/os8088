@@ -466,6 +466,51 @@ def write_corpus(d):
         open(os.path.join(d, k + ".pdf"), "wb").write(build_pdf([(files[k], data[k])]))
 
 
+def check_asm_layout():
+    """pdeflate.inc's FL_* offsets and table addresses are struct flst's and pdeflate.h's, on the TARGET's
+    16-bit layout (every pdw two bytes, pdb one, no padding)."""
+    h = open(os.path.join(ROOT, "apps", "pagedesk", "pdeflate.h")).read()
+    inc = open(os.path.join(ROOT, "apps", "pagedesk", "pdeflate.inc")).read()
+    consts = {k: int(v.rstrip("u"), 0) for k, v in re.findall(r"#define\s+(\w+)\s+(0x[0-9A-Fa-f]+u?|\d+u?)\b", h)}
+    body = re.search(r"struct flst \{(.*?)\n\};", h, re.S).group(1)
+    body = re.sub(r"/\*.*?\*/", "", body, flags=re.S)
+    off, offs = 0, {}
+    for decl in body.split(";"):
+        decl = decl.strip()
+        if not decl:
+            continue
+        kind, names = decl.split(None, 1)
+        for n in names.split(","):
+            n = n.strip()
+            m = re.match(r"(\w+)(?:\[(\w+)(?:\s*\+\s*(\w+))?\])?$", n)
+            cnt = 1
+            if m.group(2):
+                cnt = consts.get(m.group(2), None) if not m.group(2).isdigit() else int(m.group(2))
+                if m.group(3):
+                    cnt += int(m.group(3))
+            offs[m.group(1)] = off
+            off += cnt * (2 if kind == "pdw" else 1)
+    want = {"FL_SEG": offs["seg"], "FL_STATE": offs["state"], "FL_FINAL": offs["final"], "FL_BB": offs["bb"], "FL_BN": offs["bn"],
+            "FL_MLEFT": offs["mleft"], "FL_MDIST": offs["mdist"], "FL_WPOS": offs["wpos"], "FL_WHAVE": offs["whave"],
+            "FL_ON": offs["on"], "FL_II": offs["ii"], "FL_IN": offs["in"], "FL_OB": offs["ob"], "FL_IB": offs["ib"],
+            "FL_OBSZ": consts["PDE_FLOB"], "FL_TABLUT": consts["PDE_FLTAB"] + consts["FT_LUT"],
+            "FL_TABDLUT": consts["PDE_FLTAB"] + consts["FT_DLUT"], "FL_S_BLK": consts["FS_BLK"], "FL_S_END": consts["FS_END"]}
+    for k, v in re.findall(r"^(FL_\w+)\s+equ\s+(\d+)", inc, re.M):
+        if k in want and int(v) != want[k]:
+            fail("pdeflate.inc %s = %s, pdeflate.h says %d" % (k, v, want[k]))
+        want.pop(k, None)
+    for k in want:
+        fail("pdeflate.inc does not define %s" % k)
+    if off + 0 and offs["ib"] + consts["PDE_FLIB"] != off:
+        fail("struct flst parse: size mismatch")
+    if PDE_FLSAVE_END(consts, off) > consts["PDE_FLSLOT_KB"] * 1024:
+        fail("the saved decoder state does not fit its slot")
+
+
+def PDE_FLSAVE_END(consts, size):
+    return consts["PDE_FLSAVE"] + size
+
+
 def main():
     if sys.argv[1] == "--corpus":
         write_corpus(sys.argv[2])
@@ -476,7 +521,7 @@ def main():
         nfuzz = int(sys.argv[sys.argv.index("--fuzz") + 1])
     rng = random.Random(20261105)
     E = Engine(exe, os.path.join(build, "pdflate-work"))
-    for name, fn in (("tables", lambda: check_tables()), ("samples", lambda: check_samples(E)),
+    for name, fn in (("tables", lambda: check_tables()), ("asmlayout", check_asm_layout), ("samples", lambda: check_samples(E)),
                      ("basic", lambda: check_basic(E, rng)), ("chain", lambda: check_chain(E, rng)),
                      ("predictors", lambda: check_predictors(E, rng)), ("nest", lambda: check_nest(E, rng)),
                      ("malformed", lambda: check_malformed(E, rng, nfuzz))):
