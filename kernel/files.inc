@@ -3461,7 +3461,9 @@ fm_sbset:
 ; -----------------------------------------------------------------------------
 ; fm_clamp_scroll - clamp fm_lscr into [0, max(total - fit, 0)], then commit
 ; in:  fm_total/fm_fit valid (fm_layout ran)
-; out: nothing (all registers preserved)
+; out: AX = the committed scroll, [fm_lscr]; every other register preserved.
+;      AX is not banked: fm_layout leaves by kretc_di straight after, and
+;      fm_scroll_by reloads AX from [fm_lscr] (kernel hot-paths pass 1, size)
 ; Signed on purpose: click paths subtract a page first and clamp after.
 ;
 ; This is the ONE write-back of the scroll mirror into the window's own state
@@ -3470,7 +3472,6 @@ fm_sbset:
 ; scan codes, and the shrink-resize self-heal above.
 ; -----------------------------------------------------------------------------
 fm_clamp_scroll:
-    push ax
     push di
     mov ax, [fm_total]
     sub ax, [fm_fit]
@@ -3491,7 +3492,6 @@ fm_clamp_scroll:
     mov di, [fm_vp]
     mov [di+FS_SCRL], ax
     pop di
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------

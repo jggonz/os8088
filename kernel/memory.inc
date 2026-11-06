@@ -1789,7 +1789,9 @@ mem_hifit:
 ; mem_bcopy - move CX paragraphs from segment SI to segment DI
 ; in:  SI = source base segment, DI = destination base segment, CX = paragraphs
 ; out: nothing; preserves every register but DX, which is the chunk
-;      direction on the way out (0 forward, 1 backward)
+;      direction on the way out (0 forward, 1 backward), and SI, which is
+;      spent: both callers reload it at once (a `pop si` after each call),
+;      so it is not banked (kernel hot-paths pass 1, size: -2)
 ;
 ; Segment-stepped, 1KB at a time, so a block bigger than 64KB moves without a
 ; 16-bit offset ever binding - the dskw_rdata idiom (SPEC.md 18.4.1). The two
@@ -1800,7 +1802,6 @@ mem_hifit:
 mem_bcopy:
     push ax
     push cx
-    push si
     push di
     cld                         ; DF is 0 except inside .uchunk below
     xor dx, dx                  ; a forward chunk starts at its first word
@@ -1815,7 +1816,6 @@ mem_bcopy:
     jmp short .chunk
 .done:
     pop di
-    pop si
     pop cx
     pop ax
     ret
@@ -2964,8 +2964,9 @@ mem_cp_walk:
     ; --- mem_cp_move, INLINE (size pass 10: this was its one caller, and its
     ; header below is where the IF = 0 reasoning still lives). BX is dead
     ; here - .stay rebuilds the fill point from DI - so it carries the OLD
-    ; base to mem_reloc_call directly, and SI and DI come back off mem_bcopy,
-    ; which banks both; CX and DX are spent, as they always were
+    ; base to mem_reloc_call directly, and DI comes back off mem_bcopy, which
+    ; banks it (SI, the record, is banked here); CX and DX are spent, as they
+    ; always were
     pushf
     cmp word [ss:si+MC_OWN], MEM_K_DRV
     jne .noff
