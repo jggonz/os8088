@@ -50,12 +50,16 @@ static unsigned pdu_dc[PDU_NDC];        /* sub-segments, 0 = not held */
 static unsigned pdu_dclaim[2];          /* the two real claims */
 static unsigned pdu_bandb;              /* the band's bytes */
 
-static unsigned pdu_bankraw;            /* the PDRES claim... */
+static unsigned pdu_bankraw;            /* the PDRES INDEX claim... */
 static unsigned pdu_bank;               /* ...and the part's first byte in it */
 static unsigned pdu_bankkb;
-#define PDU_BANK_MAXKB 32               /* 20.6.2: asked of fonts/rend */
+static unsigned pdu_banklen;            /* the INDEX's bytes (kind 7) */
+#define PDU_INDEX_MAX 8192u             /* D3: the INDEX is at most 8 KiB */
+#define PDU_RES_KIND_INDEX 7            /* 20.4.1's directory kinds */
+static struct pdxb_fontbank pdu_xfb;
 
-static unsigned pdu_wbuf;               /* PDWRT's buffers (16.2, 8 KiB) */
+static unsigned pdu_wbuf;               /* PDWRT's buffers (16.2, D9) */
+#define PDU_WBUF_KB 12                  /* D9: 12 KiB a save (36 an extract) */
 static int pdu_wrt_in;                  /* PDWRT fetched and bound */
 
 static int pdu_adapter, pdu_bpp, pdu_scrw, pdu_scrh;
@@ -203,17 +207,22 @@ static void pdu_mod_quit(void)
     pdu_mbind(PDU_M_REND, 0);
 }
 
-/* the PDRES font bank, once per instance: the part is read BY OFFSET out of
- * PAGEDESK.O88 itself (an OP_SELF row), from the folder it was launched
- * from. READ_AT wants a cluster-aligned offset and capacity (18.4.4), so the
- * claim covers the clusters the part spans and the bank is the part's first
- * paragraph inside it - a paragraph offset, because os88pkg.py lays parts on
- * paragraphs. 0, or a PDE_*; a missing bank is not fatal (the renderer then
- * substitutes the kernel face) and is reported. */
+/* the PDRES INDEX, once per instance (DECISIONS D3, PAGEDESK-SPEC 20.4.1).
+ * The part is read BY OFFSET out of PAGEDESK.O88 itself (an OP_SELF row,
+ * stored unpacked so the offsets are real), from the folder the package was
+ * launched from - and ONLY its INDEX: the directory, the PDFB strike records,
+ * the widths and the glyph names, at most 8 KiB. PDREND reads each strike's
+ * bitmaps itself on first use, at part_off + the record's offset.
+ *
+ * READ_AT wants a cluster-aligned offset and capacity (SPEC.md 18.4.4), so
+ * the claim covers the clusters the INDEX spans and the bank is the part's
+ * first paragraph inside it - a paragraph offset, because os88pkg.py lays
+ * parts on paragraphs. 0, or a PDE_*; a missing bank is not fatal (the
+ * renderer then substitutes the kernel face) and is reported. */
 static int pdu_bank_load(void)
 {
     static struct os88_place here;
-    unsigned para, len, clus, slack, cap, got;
+    unsigned para, len, clus, slack, cap, got, n, i, e;
     unsigned off_lo, off_hi;
     int r;
 
@@ -223,8 +232,13 @@ static int pdu_bank_load(void)
     para = pdu_part_off(PDU_PART_RES);
     if (len == 0 || para == 0)
         return PDE_NOTFOUND;
-    if (len > PDU_BANK_MAXKB * 1024u)
+    /* the second row must be the first row's next byte in the file, or a
+     * strike past 65,024 would be read from the wrong place (pagedesk.asm) */
+    if ((len & 15) != 0
+        || pdu_part_off(PDU_PART_RES2) != para + (len >> 4))
         return PDE_LIMIT;
+    if (len > PDU_INDEX_MAX)            /* the INDEX is what is read */
+        len = PDU_INDEX_MAX;
     clus = os88_disk_cluster_sectors();
     if (clus <= 0)
         clus = 1;
@@ -257,13 +271,44 @@ static int pdu_bank_load(void)
             r = os88_ferr() ? pdu_ferr_pde(os88_ferr()) : PDE_TRUNC;
         os88_file_goto_q_mark(here.clus, here.vol);
     }
+    if (r == 0) {
+        pdu_bank = os88_seg_sub(pdu_bankraw, slack >> 4, (len + 15) >> 4);
+        /* the directory: 'PDRS', version 1, n entries of 12 bytes; kind 7 is
+         * the INDEX, and it must lie inside what was read */
+        r = PDE_FONT;                   /* the bank itself is not right */
+        if (pdu_bank && pdu_peekw(pdu_bank, 0) == 0x4450       /* "PD" */
+            && pdu_peekw(pdu_bank, 2) == 0x5352                 /* "RS" */
+            && pdu_peekw(pdu_bank, 4) == 1) {
+            n = pdu_peekw(pdu_bank, 6);
+            for (i = 0; i < n && 8 + i * 12 + 12 <= len; i++) {
+                e = 8 + i * 12;
+                if (pdu_peekw(pdu_bank, e) == PDU_RES_KIND_INDEX
+                    && pdu_peekw(pdu_bank, e + 4) == 0
+                    && pdu_peekw(pdu_bank, e + 6) == 0
+                    && pdu_peekw(pdu_bank, e + 10) == 0) {
+                    pdu_banklen = pdu_peekw(pdu_bank, e + 8);
+                    r = pdu_banklen && pdu_banklen <= len ? 0 : PDE_LIMIT;
+                    break;
+                }
+            }
+        }
+    }
     if (r) {
         os88_mem_free(pdu_bankraw);
         pdu_bankraw = 0;
+        pdu_bank = 0;
         return r;
     }
-    pdu_bank = os88_seg_sub(pdu_bankraw, slack >> 4, (len + 15) >> 4);
-    pdu_bankkb = (len + 1023) >> 10;
+    pdu_bankkb = (pdu_banklen + 1023) >> 10;
+    /* D3's pdxb_fontbank: where PDREND finds the strikes it reads itself */
+    os88_memset(&pdu_xfb, 0, sizeof(pdu_xfb));
+    os88_strcpy(pdu_xfb.pkgname, pdu_pkgname(), sizeof(pdu_xfb.pkgname));
+    pdu_xfb.place_clus = pdu_home.clus;
+    pdu_xfb.place_vol = pdu_home.vol;
+    pdu_xfb.part_off.lo = para << 4;
+    pdu_xfb.part_off.hi = para >> 12;
+    pdu_xfb.index_seg = pdu_bank;
+    pdu_xfb.index_len = pdu_banklen;
     return 0;
 }
 
@@ -329,8 +374,10 @@ static int pdu_doc_claim(void)
         pdu_doc_free();
         return PDE_LIMIT;
     }
-    if (pdu_bank)
-        pdu_mcall(PDU_M_REND, PDV_REND_FONTBANK, pdu_bank, pdu_bankkb, 0);
+    if (pdu_bank) {
+        pd_fcopy_out(&pdu_xfb, pdu_xb, 0, sizeof(pdu_xfb));
+        pdu_mcall(PDU_M_REND, PDV_REND_FONTBANK, 0, 0, 0);
+    }
     return 0;
 }
 
@@ -364,13 +411,13 @@ static int pdu_wrt_in_now(void)
         pdu_wrt_out();
         return PDE_LIMIT;
     }
-    pdu_wbuf = os88_mem_claim_p(8 * 64);
+    pdu_wbuf = os88_mem_claim_p(PDU_WBUF_KB << 6);
     if (pdu_wbuf == 0) {
         pdu_wrt_out();
         return PDE_NOMEM;
     }
     pdu_xinit.wbuf_seg = pdu_wbuf;
-    pdu_xinit.wbuf_kb = 8;
+    pdu_xinit.wbuf_kb = PDU_WBUF_KB;
     if (pdu_minit(PDU_M_WRT) != 0) {
         pdu_xinit.wbuf_seg = 0;
         pdu_wrt_out();

@@ -17488,20 +17488,25 @@ ALLAPPSARGS := $(addprefix APPS:,$(APPS_TOOLS) $(CORE_SYSONLY) \
 # its own floppy in all four geometries. NOT IN `all`, for cworddisk's and
 # loomdisk's reason: a C package needs SmallerC (SPEC.md 73.1).
 #
-# THE MODULES ARE VARIABLES. PD_ENG_MOD / PD_REND_MOD / PD_WRT_MOD /
-# PD_RES_BIN name each module image (a bare `nasm -f bin` output, its own
-# 8-byte header at +0, PAGEDESK-SPEC 3.1) and default to the STAND-INS in
-# apps/pagedesk/stubs/, so the package builds and launches before the real
-# modules land; the module agents' blocks build $(BUILD)/PDENG.MOD and the
-# rest, and the lead flips these defaults at integration. PD_MATH_STUB=1
-# likewise builds against stubs/pdmstub.inc until pdmath.inc lands.
+# THE MODULES ARE VARIABLES. PD_ENG_MOD / PD_REND_MOD / PD_WRT_MOD name
+# each module image (a bare `nasm -f bin` output, its own 8-byte header at
+# +0, PAGEDESK-SPEC 3.1) and default to the STAND-INS in apps/pagedesk/stubs/,
+# so the package builds and launches before the real modules land; the module
+# agents' blocks build $(BUILD)/PDENG.MOD and the rest, and the lead flips
+# these defaults at integration. PDRES.BIN, PDFONTX.RES and PDFONTS.TXT are
+# the fonts block's (below this one, so they are named here too: a
+# prerequisite is expanded where its rule is read, and the fonts block's `:=`
+# comes later - the two must agree). PD_MATH_STUB=1 builds against
+# stubs/pdmstub.inc instead of pdmath.inc, the A/B the stand-in was for.
 PDDIR        := apps/pagedesk
 PDSTUBDIR    := $(BUILD)/pdstub
-PD_MATH_STUB ?= 1
+PD_MATH_STUB ?= 0
 PD_ENG_MOD   ?= $(PDSTUBDIR)/PDENG.MOD
 PD_REND_MOD  ?= $(PDSTUBDIR)/PDREND.MOD
 PD_WRT_MOD   ?= $(PDSTUBDIR)/PDWRT.MOD
-PD_RES_BIN   ?= $(PDSTUBDIR)/PDRES.BIN
+PD_RES_BIN   ?= $(BUILD)/PDRES.BIN
+PD_FONTX_RES ?= $(BUILD)/PDFONTX.RES
+PD_FONT_TXT  ?= $(BUILD)/PDFONTS.TXT
 
 $(PDSTUBDIR):
 	@mkdir -p $@
@@ -17511,8 +17516,6 @@ $(PDSTUBDIR)/PDREND.MOD: $(PDDIR)/stubs/pdstub.asm apps/os88api.inc | $(PDSTUBDI
 	$(NASM) -f bin -w+error -I apps/ -DSTUB_REND -o $@ $<
 $(PDSTUBDIR)/PDWRT.MOD: $(PDDIR)/stubs/pdstub.asm apps/os88api.inc | $(PDSTUBDIR)
 	$(NASM) -f bin -w+error -I apps/ -DSTUB_WRT -o $@ $<
-$(PDSTUBDIR)/PDRES.BIN: $(PDDIR)/stubs/pdresstub.asm | $(PDSTUBDIR)
-	$(NASM) -f bin -w+error -o $@ $<
 
 # A module PART is its image followed by its .bss as zeros, read out of the
 # header the module wrote (+4 image, +6 bss) - apps/loom's lmpvpart rule -
@@ -17527,12 +17530,22 @@ $(BUILD)/pdrend.part: $(PD_REND_MOD) | $(BUILD)
 $(BUILD)/pdwrt.part: $(PD_WRT_MOD) | $(BUILD)
 	$(PD_PARTPAD)
 
+# PDRES.BIN is over a part's 65,024-byte ceiling (os88pkg.py), so it rides as
+# TWO adjacent rows cut at 65,024 - a multiple of 16, so the second row's
+# bytes follow the first's in the file and D3's offsets hold across the cut
+# (pagedesk.asm's table; pdumod.c's pdu_bank_load checks the adjacency)
+$(BUILD)/pdres1.part: $(PD_RES_BIN) | $(BUILD)
+	@python3 -c "d=open('$<','rb').read(); open('$@','wb').write(d[:65024])"
+$(BUILD)/pdres2.part: $(PD_RES_BIN) | $(BUILD)
+	@python3 -c "d=open('$<','rb').read(); assert 65024 < len(d) <= 2*65024, len(d); \
+	    open('$@','wb').write(d[65024:])"
+
 # the one translation unit (SPEC.md 73.1): pagedesk.c #includes its parts,
 # so every one of them is a prerequisite or an edit rebuilds nothing
 PDCSRC := $(PDDIR)/pagedesk.c $(wildcard $(PDDIR)/pdu*.c $(PDDIR)/pdu*.h) \
           $(PDDIR)/pdovl.c $(PDDIR)/pdabi.h $(PDDIR)/pdmath.h
-PDASRC := $(PDDIR)/pagedesk.asm $(PDDIR)/pdui.inc $(PDDIR)/icon.inc \
-          $(PDDIR)/pduassoc.inc $(PDDIR)/pduglyph.inc \
+PDASRC := $(PDDIR)/pagedesk.asm $(PDDIR)/pdui.inc $(PDDIR)/pduassoc.inc \
+          $(BUILD)/pdart_appicon.inc $(BUILD)/pdart_docglyph.inc \
           $(if $(filter 1,$(PD_MATH_STUB)),$(PDDIR)/stubs/pdmstub.inc,$(PDDIR)/pdmath.inc) \
           apps/weave/wfetch.inc apps/os88ui.inc
 PDMATHSTAMP := $(BUILD)/.pdmath-$(if $(filter 1,$(PD_MATH_STUB)),stub,real)
@@ -17557,43 +17570,49 @@ $(BUILD)/pagedesk.bin: $(PDASRC) $(BUILD)/pagedesk.gen.asm $(CC_RUNTIME) $(PDMAT
 # the overlay is cut off the image and rides as the LAST part (SPEC.md
 # 73.14.2); os88pkg.py refuses a --part count that is not the table's rows
 $(BUILD)/pagedesk.o88: $(BUILD)/pagedesk.bin $(BUILD)/pdeng.part \
-                       $(BUILD)/pdrend.part $(BUILD)/pdwrt.part $(PD_RES_BIN) \
+                       $(BUILD)/pdrend.part $(BUILD)/pdwrt.part \
+                       $(BUILD)/pdres1.part $(BUILD)/pdres2.part \
                        tools/os88pkg.py tools/os88ovl.py $(PKGZSTAMP)
 	python3 tools/os88ovl.py $< -o $(BUILD)/PAGEDESK.OVL \
 		--trim $(BUILD)/pagedesk.trim.bin
 	$(OS88PKG) $(BUILD)/pagedesk.trim.bin -o $@ $(CC_PARTZ) \
 		--part $(BUILD)/pdeng.part --part $(BUILD)/pdrend.part \
-		--part $(BUILD)/pdwrt.part --part $(PD_RES_BIN) \
+		--part $(BUILD)/pdwrt.part \
+		--part $(BUILD)/pdres1.part --part $(BUILD)/pdres2.part \
 		--part $(BUILD)/PAGEDESK.OVL
 $(BUILD)/PAGEDESK.OVL: $(BUILD)/pagedesk.o88 ;
 
 pagedesk: $(BUILD)/pagedesk.o88
 
 # --- PAGEDESK'S OWN DISK, all four geometries (PD-24) ------------------------
-# PAGEDESK.O88 (every part inside it), README.TXT and the samples at the ROOT,
-# so the empty view's Sample guide finds XTGUIDE.PDF beside the program. The
-# PDFs go on RAW: os88disk.py packs nothing it is not told to, and PDENG
-# reads them with READ_SEQ/READ_AT, which deliver a file as it lies (the
-# WaveRack clips' precedent, PAGEDESK-PLAN L8). The samples are the fix
-# agent's apps/pagedesk/samples/*.PDF; until those land the one stand-in
-# apps/pagedesk/stubs/HELLO.PDF rides alone.
+# PAGEDESK.O88 (every part inside it, the core fonts among them), README.TXT,
+# PDFONTS.TXT (the font licence, which SIL OFL 1.1 section 2 wants with every
+# copy - DECISIONS D10) and the samples at the ROOT, so the empty view's
+# Sample guide finds XTGUIDE.PDF beside the program; PDFONTX.RES, the other
+# font sizes, beside them on every geometry but 360KB (D5). The PDFs go on
+# RAW: os88disk.py packs nothing it is not told to, and PDENG reads them
+# with READ_SEQ/READ_AT, which deliver a file as it lies (the WaveRack clips'
+# precedent, PAGEDESK-PLAN L8). The samples are the fix agent's
+# apps/pagedesk/samples/*.PDF; apps/pagedesk/stubs/HELLO.PDF is the stand-in
+# a tree without them falls back on.
 PD_SAMPLES ?= $(or $(wildcard $(PDDIR)/samples/*.PDF),$(PDDIR)/stubs/HELLO.PDF)
-PDDISKDEPS := $(BUILD)/pagedesk.o88 $(PDDIR)/README.TXT $(PD_SAMPLES) \
-              tools/os88disk.py tools/checkreadme.py
+PDDISKDEPS := $(BUILD)/pagedesk.o88 $(PDDIR)/README.TXT $(PD_FONT_TXT) \
+              $(PD_SAMPLES) tools/os88disk.py tools/checkreadme.py
 define PDDISK
 	python3 tools/checkreadme.py $(PDDIR)/README.TXT
 	python3 tools/os88disk.py -o $@ --size $(1) $(BUILD)/pagedesk.o88 \
-	    $(PDDIR)/README.TXT $(PD_SAMPLES) --folder SYSTEM/APPDATA
+	    $(PDDIR)/README.TXT $(PD_FONT_TXT) $(2) $(PD_SAMPLES) \
+	    --folder SYSTEM/APPDATA
 	python3 tools/os88disk.py --verify $@
 endef
-$(BUILD)/pagedesk.img: $(PDDISKDEPS)
-	$(call PDDISK,1440)
-$(BUILD)/pagedesk120.img: $(PDDISKDEPS)
-	$(call PDDISK,1200)
-$(BUILD)/pagedesk720.img: $(PDDISKDEPS)
-	$(call PDDISK,720)
+$(BUILD)/pagedesk.img: $(PDDISKDEPS) $(PD_FONTX_RES)
+	$(call PDDISK,1440,$(PD_FONTX_RES))
+$(BUILD)/pagedesk120.img: $(PDDISKDEPS) $(PD_FONTX_RES)
+	$(call PDDISK,1200,$(PD_FONTX_RES))
+$(BUILD)/pagedesk720.img: $(PDDISKDEPS) $(PD_FONTX_RES)
+	$(call PDDISK,720,$(PD_FONTX_RES))
 $(BUILD)/pagedesk360.img: $(PDDISKDEPS)
-	$(call PDDISK,360)
+	$(call PDDISK,360,)
 pagedeskdisk: $(BUILD)/pagedesk.img $(BUILD)/pagedesk120.img \
               $(BUILD)/pagedesk720.img $(BUILD)/pagedesk360.img
 .PHONY: pagedesk pagedeskdisk
@@ -17602,9 +17621,10 @@ pagedeskdisk: $(BUILD)/pagedesk.img $(BUILD)/pagedesk120.img \
 # tests/unit/t_livefull.py): one PAGEDESK\ folder, the program beside its
 # samples. Appended here because $(ALLAPPSARGS) is defined just above and
 # $(LIVEARGS) reads it further down.
-ALLAPPSARGS += $(addprefix PAGEDESK:,$(BUILD)/pagedesk.o88 $(PDDIR)/README.TXT \
-                                     $(PD_SAMPLES))
-ALLAPPS += $(BUILD)/pagedesk.o88 $(PDDIR)/README.TXT $(PD_SAMPLES)
+PDALL := $(BUILD)/pagedesk.o88 $(PDDIR)/README.TXT $(PD_FONT_TXT) \
+         $(PD_FONTX_RES) $(PD_SAMPLES)
+ALLAPPSARGS += $(addprefix PAGEDESK:,$(PDALL))
+ALLAPPS += $(PDALL)
 # ---- end PageDesk: shell ----
 
 allapps: $(ALLAPPSLIST) $(ALLAPPSLIST120)

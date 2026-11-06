@@ -22,7 +22,8 @@
 #define PDU_PART_ENG   0
 #define PDU_PART_REND  1
 #define PDU_PART_WRT   2
-#define PDU_PART_RES   3
+#define PDU_PART_RES   3          /* PDRES [0, 65024)            */
+#define PDU_PART_RES2  4          /* PDRES [65024, end), adjacent */
 
 /* --- module vectors (pdui.inc's pdu_vec) --------------------------------- */
 #define PDU_M_ENG   0

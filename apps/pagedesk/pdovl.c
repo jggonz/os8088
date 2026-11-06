@@ -46,8 +46,8 @@ static const char *pdu_hprof[] = {
     0
 };
 
-static char pdu_iline[8][40];
-static const char *pdu_hinfo[9];
+static char pdu_iline[10][40];
+static const char *pdu_hinfo[11];
 
 
 static const char **ovl_card_lines(int which)
@@ -82,6 +82,26 @@ static const char **ovl_card_lines(int which)
     os88_strcpy(pdu_iline[k], "Page:     ", 40);
     pdu_cat(pdu_iline[k], pdu_inc ? "incomplete rendering" : "fully drawn",
             40);
+    pdu_hinfo[k] = pdu_iline[k]; k++;
+    /* the PDRES INDEX the primary holds (D3): a bank that did not load is
+     * not an error, so this line is where it shows */
+    if (pdu_bank) {
+        os88_strcpy(pdu_iline[k], "Fonts:    index ", 40);
+        os88_utoa(pdu_banklen, pdu_num);
+        pdu_cat(pdu_iline[k], pdu_num, 40);
+        pdu_cat(pdu_iline[k], " bytes", 40);
+    } else
+        os88_strcpy(pdu_iline[k], "Fonts:    none (system face)", 40);
+    pdu_hinfo[k] = pdu_iline[k]; k++;
+    /* the layout as chosen from the LIVE content box (17.1, 20.6.4) - the
+     * number a host test can only estimate */
+    os88_strcpy(pdu_iline[k], pdu_L.kind == PDU_L_FULL ? "Layout:   full "
+                : pdu_L.kind == PDU_L_MID ? "Layout:   mid " : "Layout:   compact ", 40);
+    os88_utoa(pdu_L.w, pdu_num);
+    pdu_cat(pdu_iline[k], pdu_num, 40);
+    pdu_cat(pdu_iline[k], "x", 40);
+    os88_utoa(pdu_L.h, pdu_num);
+    pdu_cat(pdu_iline[k], pdu_num, 40);
     pdu_hinfo[k] = pdu_iline[k]; k++;
     os88_strcpy(pdu_iline[k], "Free memory: ", 40);
     os88_utoa(os88_mem_total_kb(), pdu_num);
