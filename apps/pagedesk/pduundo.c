@@ -50,8 +50,19 @@ struct ud_ent {
 static struct ud_ent ud_en;             /* sizeof == UD_SZ on both targets */
 typedef char ud_sz_ent[sizeof(struct ud_ent) == UD_SZ ? 1 : -1];
 
-static pdw ud_cs[UD_NCMD];              /* a command's first entry counter */
-static pdw ud_ce[UD_NCMD];              /* ...and how many entries it has */
+/* per command slot, in PDU_DC_UNDO after the entry ring (not near bss): its
+ * first entry counter and how many entries it has */
+#define UD_CMDS  (UD_NENT * UD_SZ)      /* 3,072: 64 x 4 bytes, to 3,328 of 4 KiB */
+#define ud_cs(s) ovl_ud_cw((s) << 2)
+#define ud_ce(s) ovl_ud_cw(((s) << 2) + 2)
+static pdw ovl_ud_cw(pdw o)
+{
+    return pd_fpeekw(pdu_dcseg(PDU_DC_UNDO), UD_CMDS + o);
+}
+static void ovl_ud_cset(pdw o, pdw v)
+{
+    pd_fpokew(pdu_dcseg(PDU_DC_UNDO), UD_CMDS + o, v);
+}
 static pdw ud_c0, ud_n, ud_cur, ud_ntot;/* oldest command, retained, applied */
 static pdw ud_base;                     /* the store's count at begin */
 static int ud_depth, ud_open, ud_dead, ud_olab;
@@ -61,8 +72,8 @@ static int ud_savok;
 static int ud_tyrec;                    /* typing: the record... */
 static pdw ud_tycmd;                    /* ...and the command typed into */
 static pdw ud_txfl;                     /* ...and the text top when it began */
-static pdb ud_pg[UD_PGMAX];
-static pdb ud_tmp[8];
+#define ud_pg ((pdb *)ed_pts)           /* the page delta: the tools' scratch */
+#define ud_tmp ((pdb *)&ed_xr)          /* 8 bytes: the XOR fill's scratch */
 static pdw ud_ei;                       /* the entry being applied */
 
 /* pages (20.11) supplies pdu_pg_apply; pdu.h's pages block defines PDU_PAGES */
@@ -126,13 +137,13 @@ static int ovl_ud_push(void)
         if (ud_n >= UD_NCMD)
             ovl_ud_drop();
         slot = (ud_c0 + ud_n) & (UD_NCMD - 1);
-        ud_cs[slot] = ud_ntot;
-        ud_ce[slot] = 0;
+        ovl_ud_cset(slot << 2, ud_ntot);
+        ovl_ud_cset((slot << 2) + 2, 0);
         ud_n++;
         ud_cur++;
         ud_open = 1;
     }
-    while ((pdw)(ud_ntot - ud_cs[ud_c0 & (UD_NCMD - 1)]) >= UD_NENT) {
+    while ((pdw)(ud_ntot - ud_cs(ud_c0 & (UD_NCMD - 1))) >= UD_NENT) {
         if (ud_cur <= 1) {
             ovl_ud_clear();
             return 0;
@@ -141,7 +152,7 @@ static int ovl_ud_push(void)
     }
     slot = (ud_c0 + ud_cur - 1) & (UD_NCMD - 1);
     ovl_ud_st(ud_ntot);
-    ud_ce[slot]++;
+    ovl_ud_cset((slot << 2) + 2, ud_ce(slot) + 1);
     ud_ntot++;
     return 1;
 }
@@ -156,12 +167,12 @@ static int ovl_ud_find(int tag, int o, int idx)
     if (!ud_open)
         return -1;
     slot = (ud_c0 + ud_cur - 1) & (UD_NCMD - 1);
-    for (k = ud_ce[slot]; k-- > 0;) {
-        ovl_ud_ld(ud_cs[slot] + k);
+    for (k = ud_ce(slot); k-- > 0;) {
+        ovl_ud_ld(ud_cs(slot) + k);
         if (ud_en.idx != (pdw)idx)
             continue;
         if (ud_en.tag == tag && ud_en.o == o) {
-            ud_ei = ud_cs[slot] + k;
+            ud_ei = ud_cs(slot) + k;
             return 1;
         }
         if (tag == UT_MOVE && (ud_en.tag == UT_PTS
@@ -354,15 +365,17 @@ static void ovl_ud_apply(int undo)
 /* ---- the walk -------------------------------------------------------------- */
 static int ovl_ud_walk(int undo)
 {
-    pdw slot, k, e;
+    pdw slot, k, e, c, m;
     if (ud_depth > 0)
         return -1;
     if (undo ? ud_cur == 0 : ud_cur >= ud_n)
         return -1;
     slot = (ud_c0 + (undo ? ud_cur - 1 : ud_cur)) & (UD_NCMD - 1);
     pdu_undo_begin(UL_NONE);
-    for (k = 0; k < ud_ce[slot]; k++) {
-        e = ud_cs[slot] + (undo ? ud_ce[slot] - 1 - k : k);
+    c = ud_cs(slot);
+    m = ud_ce(slot);
+    for (k = 0; k < m; k++) {
+        e = c + (undo ? m - 1 - k : k);
         ovl_ud_ld(e);
         ud_ei = e;
         ovl_ud_apply(undo);
@@ -398,7 +411,7 @@ void pdu_undo_pageop(const void *delta, unsigned len)
         return;
     }
     n = (len + 7) >> 3;
-    os88_memset(ud_pg, 0, sizeof(ud_pg));
+    os88_memset(ud_pg, 0, UD_PGMAX);
     os88_memcpy(ud_pg, delta, len);
     for (k = 0; k < n; k++) {
         ud_en.tag = UT_PCHUNK;

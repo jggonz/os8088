@@ -74,6 +74,10 @@ static struct pd_edit ed_w, ed_v;       /* work records */
 static pd_px ed_px, ed_py;
 static struct os88_rect ed_sr;
 static pdw pdu_ed_genv;                 /* pdu_ed_gen() (D19) */
+/* near scratch shared by the tools (a Line's two points, a Highlight's 12
+ * quads) and undo (a page operation's delta, 96 bytes): never both at once */
+static pd_pt ed_pts[96];
+static struct os88_rect ed_xr;          /* the XOR fill's rect; undo's 8 bytes */
 
 /* undo (pduundo.c) -------------------------------------------------------- */
 static int ovl_ud_log(int i, int tag, int o, int l);
@@ -89,11 +93,11 @@ static void ovl_pdu_ed_flush(void);
 static void ovl_pdu_ed_touch_i(int i);
 static int ovl_ud_trimok(int i);
 
-static unsigned ed_seg(void) { return pdu_dcseg(PDU_DC_EDITS); }
+#define ed_seg() pdu_dcseg(PDU_DC_EDITS)  /* a macro: no thunk from the overlay */
 
 /* the page id of the page on the glass. The pages agent's view map
  * (pdu_pg_id) replaces this one line; until then a view index IS the id. */
-static unsigned pdu_ed_pg(void) { return pdu_page; }
+#define pdu_ed_pg() pdu_page
 
 static int ovl_ed_rd(int i, struct pd_edit *e)
 {
@@ -173,28 +177,6 @@ static int ovl_ed_room(unsigned tbytes, unsigned pbytes)
     return pdu_ed_tt + tbytes + pbytes <= pdu_ed_pt;
 }
 
-/* bbox of a point list (PENUP-separated), into r */
-static void ovl_ed_bbox(struct pd_rect *r, const pd_pt *p, unsigned n)
-{
-    unsigned k;
-    int first;
-    first = 1;
-    for (k = 0; k < n; k++, p += 2) {
-        if (p[0] == ED_PENUP)
-            continue;
-        if (first) {
-            r->x0 = r->x1 = p[0];
-            r->y0 = r->y1 = p[1];
-            first = 0;
-            continue;
-        }
-        if (p[0] < r->x0) r->x0 = p[0];
-        if (p[0] > r->x1) r->x1 = p[0];
-        if (p[1] < r->y0) r->y0 = p[1];
-        if (p[1] > r->y1) r->y1 = p[1];
-    }
-}
-
 /* ============================================================================
  * 20.8
  * ==========================================================================*/
@@ -230,7 +212,7 @@ int pdu_ed_new(struct pd_edit *e, const char *text, unsigned tlen,
     os88_memset(e->reserved, 0, sizeof(e->reserved));
     if (tlen)
         pd_fcopy_out(text, ed_seg(), pdu_ed_tt, tlen);
-    if (pb)
+    if (pb && pts)                      /* NULL: already there (a captured stroke) */
         pd_fcopy_out(pts, ed_seg(), e->pts_off, pb);
     ovl_ed_wr(idx, e);
     pdu_ed_n++;
@@ -478,7 +460,6 @@ void pdu_ed_sel_fix(void)
 }
 
 /* one clipped XOR fill, remembered so it can be replayed */
-static struct os88_rect ed_xr;
 static void ovl_ed_xf(int x1, int y1, int x2, int y2)
 {
     ed_xr.x1 = x1;
@@ -539,11 +520,9 @@ void pdu_ed_xoff_l(void)
  * A render of strip r takes the outline off only when one of its strips
  * meets r: PDREND writes nothing outside r, so an outline elsewhere stays
  * lit and its replay (8 XOR fills each way) is not spent on every repaint. */
-void pdu_ed_xoff(const struct os88_rect *r)
+static void ovl_ed_xoff_r(const struct os88_rect *r)
 {
     int k;
-    if (!ed_xon)
-        return;
     for (k = 0; k < ed_xn; k++)
         if (ed_xl[k][0] <= r->x2 && ed_xl[k][2] >= r->x1
             && ed_xl[k][1] <= r->y2 && ed_xl[k][3] >= r->y1)
@@ -556,6 +535,12 @@ void pdu_ed_xoff(const struct os88_rect *r)
     else
         ed_xon = 0;                     /* nothing of us shows: it is gone */
     os88_gfx_unlock();
+}
+
+void pdu_ed_xoff(const struct os88_rect *r)
+{
+    if (ed_xon)                         /* the overlay only with a selection lit */
+        ovl_ed_xoff_r(r);
 }
 
 /* the same, resident: the render's end asks, and only a selection answers */
