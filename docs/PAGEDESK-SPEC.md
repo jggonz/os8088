@@ -781,7 +781,7 @@ host's zlib).
 | `python3 tools/os88pdfgen.py apps/pagedesk/samples` | the eight shipping samples and `MANIFEST.TXT` (committed; 64,364 bytes in all) |
 | `python3 tools/os88pdfgen.py build/pdfix` | the same, for the build tree (18.1) |
 | `python3 tools/os88pdfgen.py --stress build/pdfstress` | ten stress files and `STRESS.TXT` (never committed, never shipped) |
-| `python3 tools/os88pdfgen.py --negative build/pdfneg` | 52 deliberately invalid or unsupported files and `README.TXT` (only the README is committed, as `tests/pdfneg/README.TXT`) |
+| `python3 tools/os88pdfgen.py --negative build/pdfneg` | 53 deliberately invalid or unsupported files and `README.TXT` (only the README is committed, as `tests/pdfneg/README.TXT`) |
 
 `tests/unit/t_pdfix.py` regenerates the samples and requires byte equality with
 the committed copies, the manifest to match each file's size and SHA-256, the
@@ -824,10 +824,12 @@ editing exercises as machine-readable operations (`op` of `find`, `highlight`,
 
 **20.1.3 Stress (18.2).** `STRESS64.PDF` (64 pages under an 8x8 nested tree),
 `BIGFILE.PDF` (721,926 bytes), `LONGSTRM.PDF` (one 85 KB content stream),
-`SPARSE.PDF` (10,000 filler objects in 200 runs of 50 numbers at 1000+350k,
-the page, content and font at 80000-80002: 203 xref subsections, inside 7.3's
-`PD_MAXSUBSEC` = 256, so it must open; one subsection per object is the
-negative `xref_subsec_300.pdf`),
+`SPARSE.PDF` (10,000 filler objects in 200 runs of 50 numbers at 1000+320k,
+the highest 64729, the page, content and font at 61000-61002: 203 xref
+subsections, inside 7.3's `PD_MAXSUBSEC` = 256, every number within the
+1..65535 of DECISIONS D8, so it must open; one subsection per object is the
+negative `xref_subsec_300.pdf`, a number above 65535 the negative
+`objnum_70000.pdf`),
 `INDIRLEN.PDF` (`/Length N 0 R`, the length object after the stream),
 `CONTARR.PDF` (`/Contents` as three streams, `q` and `Q` in different ones),
 `INHERIT.PDF` (resources, boxes and `/Rotate` through three `/Pages` levels),

@@ -55,6 +55,7 @@ graphics_stack_1000.pdf    render  PDE_LIMIT     1,000 nested q operators (the s
 string_100k.pdf            render  PDE_LIMIT     a 100,000 byte literal string in one operator
 name_20k.pdf               open    PDE_LIMIT     a 20,000 byte name
 xref_subsec_300.pdf        open    PDE_LIMIT     a VALID file whose xref has 301 subsections (one per object); the engine keeps at most 256 (PD_MAXSUBSEC)
+objnum_70000.pdf           open    PDE_LIMIT     the page content is object 70000: an xref subsection and a reference above 65535 (DECISIONS D8)
 runlength_bomb.pdf         render  PDE_LIMIT     80,000 bytes of RunLength that expand to about 5 MB
 flate_unsupported.pdf      render  PDE_FLATE     FlateDecode content on the XT build
 lzw_unsupported.pdf        render  PDE_FILTER    LZWDecode content
@@ -81,4 +82,4 @@ encrypted.pdf              open    PDE_ENCRYPT   /Encrypt in the trailer (the di
 signed_perms.pdf           open    PDE_SIGNED    catalog carries /Perms: opens READ-ONLY with a label, not refused
 xrefstm_objstm.pdf         open    PDE_XREFSTM   a PDF 1.5 file with a cross-reference STREAM and an object stream (valid, but outside the XT profile)
 
-52 files.
+53 files.

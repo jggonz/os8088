@@ -1503,9 +1503,10 @@ def stress_files():
 
     # SPARSE: 10,000 objects with sparse numbers. PAGEDESK-SPEC 7.3 keeps only a
     # subsection table of at most PD_MAXSUBSEC = 256 entries, so the gaps are
-    # between 200 RUNS of 50 consecutive numbers (1000 + 350k ... +49), the way
-    # a real writer's deletions leave them, and the page, its content and its
-    # font sit in a run of their own far above: 203 subsections in all. One
+    # between 200 RUNS of 50 consecutive numbers (1000 + 320k ... +49, the last
+    # 64729), the way a real writer's deletions leave them, and the page, its
+    # content and its font sit in a run of their own inside a gap at 61000:
+    # 203 subsections in all, every number <= 65535 (DECISIONS D8). One
     # subsection per object would be 10,004 and is the negative corpus's
     # xref_subsec_300.pdf, not a stress file.
     pdf = Pdf('SPARSE.PDF')
@@ -1513,7 +1514,7 @@ def stress_files():
     i = 0
     for k in range(200):
         for j in range(50):
-            objs[1000 + 350 * k + j] = b'<< /Filler %d >>' % i
+            objs[1000 + 320 * k + j] = b'<< /Filler %d >>' % i
             i += 1
     assert len(objs) == 10000
     objs[2] = b'<< /Type /Catalog /Pages 3 0 R >>'
@@ -1521,16 +1522,17 @@ def stress_files():
     c.pdf.font('Helvetica')
     c.text(72, 700, 'Helvetica', 24, 'SPARSE: 10000 filler objects, sparse numbers')
     content = c.bytes()
-    objs[3] = b'<< /Type /Pages /Kids [80000 0 R] /Count 1 /MediaBox [0 0 612 792] /Resources << /Font << /F1 80002 0 R >> >> >>'
-    objs[80000] = b'<< /Type /Page /Parent 3 0 R /Contents 80001 0 R >>'
-    objs[80001] = b'<< /Length %d >>\nstream\n' % len(content) + content + b'\nendstream'
-    objs[80002] = b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /FirstChar 32 /LastChar 126 /Widths [%s] /Encoding /WinAnsiEncoding >>' % ' '.join(map(str, HELV)).encode()
+    objs[3] = b'<< /Type /Pages /Kids [61000 0 R] /Count 1 /MediaBox [0 0 612 792] /Resources << /Font << /F1 61002 0 R >> >> >>'
+    objs[61000] = b'<< /Type /Page /Parent 3 0 R /Contents 61001 0 R >>'
+    objs[61001] = b'<< /Length %d >>\nstream\n' % len(content) + content + b'\nendstream'
+    objs[61002] = b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /FirstChar 32 /LastChar 126 /Widths [%s] /Encoding /WinAnsiEncoding >>' % ' '.join(map(str, HELV)).encode()
     assert len(objs) == 10005
     pdf.npages = 1
     data = write_pdf(objs, 2, None, '1.3', 'SPARSE.PDF')
     nsub = len(re.findall(rb'\n\d+ \d+\n', data[data.rindex(b'\nxref\n'):]))
     assert nsub <= 256, nsub
-    out['SPARSE.PDF'] = (pdf, data, '10,000 filler objects in 200 runs of 50 at 1000+350k, page/content/font at 80000-80002; %d xref subsections (PD_MAXSUBSEC 256)' % nsub)
+    assert max(objs) <= 65535 and len(objs) == 10005
+    out['SPARSE.PDF'] = (pdf, data, '10,000 filler objects in 200 runs of 50 at 1000+320k (up to 64729), page/content/font at 61000-61002; %d xref subsections (PD_MAXSUBSEC 256)' % nsub)
 
     # INDIRLEN: indirect /Length (the length object comes AFTER the stream)
     pdf = Pdf('INDIRLEN.PDF')
@@ -1859,6 +1861,12 @@ def negative_files():
     assert nsub > 256, nsub
     add('xref_subsec_300.pdf', sub, 'open', 'PDE_LIMIT',
         'a VALID file whose xref has %d subsections (one per object); the engine keeps at most 256 (PD_MAXSUBSEC)' % nsub)
+    pdf, root, pg, pr, cs = mini()
+    body = pdf.objs.pop(cs)
+    pdf.objs[70000] = body
+    pdf.put(pg, '<< /Type /Page /Parent %d 0 R /Contents 70000 0 R >>' % pr)
+    add('objnum_70000.pdf', pdf.finish(root), 'open', 'PDE_LIMIT',
+        'the page content is object 70000: an xref subsection and a reference above 65535 (DECISIONS D8)')
     # filters
     pdf = Pdf('NEG')
     pdf.font('Helvetica')

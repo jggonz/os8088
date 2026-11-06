@@ -123,6 +123,9 @@ with tempfile.TemporaryDirectory() as tmp:
     ids = [int(x) for x in re.findall(rb'\n(\d+) 0 obj', sp)]
     check(len(ids) >= 10000 and max(ids) > 5 * len(ids), 'SPARSE.PDF: %d objects, numbers up to %d' % (len(ids), max(ids)))
     for n, d in st.items():
+        top = max(int(x) for x in re.findall(rb'\n(\d+) 0 obj', d))
+        check(top <= 65535, '%s: object numbers <= 65535 (%d)' % (n, top), 'DECISIONS D8: a larger number is refused PDE_LIMIT')
+    for n, d in st.items():
         check(subsections(d) <= maxsub, '%s: %d xref subsections, at most PD_MAXSUBSEC %d' % (n, subsections(d), maxsub),
               'a stress file must OPEN; more subsections than the engine keeps is a negative case')
     check(len(re.findall(rb'startxref', st['REVCHAIN.PDF'])) == 3, 'REVCHAIN.PDF has three revisions')
