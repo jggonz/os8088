@@ -621,6 +621,8 @@ def main():
     asm_bin, so = build()
     H = Harness(asm_bin, so)
     total = fails = 0
+    t, f = edge_pass(H, a.k)
+    total += t; fails += f
     for name, spec, ret, gen in FUNCS:
         if a.k and not any(k in name for k in a.k): continue
         G = Gen(a.seed ^ (hash(name) & 0xFFFF) ^ sum(map(ord, name)) * 7919)
@@ -639,9 +641,205 @@ def main():
     if not a.no_control and not a.k:
         fails += negative_controls(H)
         fails += roundtrip(H, a.seed, a.n)
+        fails += strip_roundtrip(H)
+        fails += crc_check_value(H)
         fails += asm_matrix()
     print("pdmath_diff: %d cases, %d failures - %s" % (total, fails, "PASS" if not fails else "FAIL"))
     return 1 if fails else 0
+
+
+# ---- the fixed edge pass -----------------------------------------------------
+# Every case below runs on every invocation, before the seeded stream: the
+# values a random draw reaches only by luck (the most negative 16.16, the exact
+# saturation and rounding ties, the shift counts 0/16/31/32+, a zero divisor,
+# integral and non-integral divisors either side of 1.0, the parser's edge
+# strings, the PageDesk aspects at every rotation and zoom edge, spans that end
+# EXACTLY at the segment's end, 64KB moves in both overlap directions).
+FXE = [0, 1, -1, 2, 3, 0x8000, -0x8000, 0xFFFF, 0x10000, -0x10000, 0x10001,
+       0x18000, -0x18000, 0x20000, 0x3E80000, -0x3E80000, 0x640000, 0x9800C,
+       0xB504F3, -0xB504F4, 0x7FFF0000, 0x7FFFFFFF, -0x7FFFFFFF, -0x80000000]
+U32E = [0, 1, 0xFFFF, 0x10000, 0x7FFFFFFF, 0x80000000, 0xFFFFFFFE, 0xFFFFFFFF, 0x12345678]
+PARSE_E = ["", "-", "+", ".", "-.", "+.", "+.5", "-.5", "5.", "-5.", "0", "-0", "-0.0",
+    "-0.000001", "-0.0000076", "-0.0000077", "0.00000762939", "0.0000076293945",
+    "0.000007629394531", "32767", "32767.99999", "32767.999992", "32767.9999924",
+    "32767.99999237", "32767.999993", "-32767.99999", "-32767.999993", "32768",
+    "-32768", "-32768.0", "-32767.5", "40000", "4000", "39999", "4001", "40001",
+    "9" * 40, "." + "9" * 40, "-." + "0" * 30 + "1", "123.123456789", "1.000000005",
+    "1.999999995", "1.99999999", "0.99999999", "0.999999999", "000000000000000000001.5",
+    "-0000032767.5", "0000032768", "00000.50000000000", "1e5", "1E5", "1.5x", "1..5",
+    "1.5.", "\x00", "1\x00", "1-", "+-1", "-+1", "--1", "++1", " 1", "1 ", "\t1",
+    "1,5", "0x10", "inf", "nan", ".-1", "+0.", "-.0",
+    # the 9th fraction digit is IGNORED (fd stops at 10^8): these round differently if it counted
+    "0.000022889", "-0.000022889", "32767.000022889", "0.000022888"]
+PD_ASPECTS = [(1, 1), (35, 48), (29, 45), (35, 54), (5, 12)]     # PAGEDESK-SPEC 5.4
+PD_ZOOMS = [25, 26, 33, 50, 67, 75, 100, 125, 150, 200, 300, 399, 400]
+PD_BOXES = [(-1600, -800, 8192, 12672), (160, 320, 9952, 12992)]  # nonzero origin, cropped
+
+
+def pdview(box, rot, zoom, an, ad, ox, oy):
+    return b"".join(pk16(t) for t in box + (rot, zoom, an, ad, ox, oy, -1, -1, 1, 1))
+
+
+def edge_cases():
+    """yields (name, args, scratch, aux)"""
+    def s2(a, b=None, at=4):
+        s = scratch(); s[at:at + 4] = pk32(a)
+        if b is not None: s[at + 4:at + 8] = pk32(b)
+        return s
+    for a in FXE:
+        for b in FXE:
+            for f in ("pdm_fx_add", "pdm_fx_sub", "pdm_fx_mul", "pdm_fx_div"):
+                yield f, [P(0), P(4), P(8)], s2(a, b), None
+            yield "pdm_fx_cmp", [P(4), P(8)], s2(a, b), None
+        yield "pdm_fx_div", [P(4), P(4), P(4)], s2(a), None          # r == a == b
+        yield "pdm_fx_mul", [P(4), P(4), P(4)], s2(a), None
+        for f in ("pdm_fx_neg",):
+            yield f, [P(0), P(4)], s2(a), None
+        for f in ("pdm_fx_floor", "pdm_fx_round", "pdm_fx_to_pt16"):
+            yield f, [P(4)], s2(a), None
+        yield "pdm_fx_todec", [P(0), P(64)], s2(a, at=64), ("todec", 14)
+    for k in (-32768, -32767, -3, -2, -1, 0, 1, 2, 3, 32766, 32767):
+        for d in (-32769, -32768, -32767, -1, 0, 1, 32767, 32768, 32769):
+            v = k * 65536 + d
+            if -0x80000000 <= v <= 0x7FFFFFFF:
+                yield "pdm_fx_round", [P(4)], s2(v), None
+                yield "pdm_fx_floor", [P(4)], s2(v), None
+                yield "pdm_fx_todec", [P(0), P(64)], s2(v, at=64), ("todec", 14)
+        yield "pdm_fx_int", [P(0), k], scratch(), None
+        yield "pdm_pt16_to_fx", [P(0), k], scratch(), None
+    for k in (-32768, -32767, -32766, -2, -1, 0, 1, 2, 32766, 32767, 32768):
+        for d in (-2049, -2048, -2047, -1, 0, 1, 2047, 2048, 2049):
+            v = k * 4096 + d
+            if -0x80000000 <= v <= 0x7FFFFFFF:
+                yield "pdm_fx_to_pt16", [P(4)], s2(v), None
+    for raw in (1, 2, 3, 4, 5, 6, 7, 0xFFFD, 0xFFFE, 0x1FFFC, 0x1FFFD, 0x1FFFE, 0x199A, 0xCCD, 0x28F6):
+        for sg in (1, -1):
+            yield "pdm_fx_todec", [P(0), P(64)], s2(sg * raw, at=64), ("todec", 14)
+    for t in PARSE_E:
+        b = t.encode("latin1"); s = scratch(); s[16:16 + len(b)] = b
+        yield "pdm_fx_parse", [P(0), P(16), len(b)], s, None
+    for a in U32E:
+        for b in U32E:
+            for f in ("pdm_u32_add", "pdm_u32_sub"):
+                yield f, [P(0), P(4), P(8)], s2(a, b), None
+            yield "pdm_u32_cmp", [P(4), P(8)], s2(a, b), None
+        for n in (0, 1, 15, 16, 17, 31, 32, 33, 0x8000, 0xFFFF):
+            for f in ("pdm_u32_shl", "pdm_u32_shr"):
+                yield f, [P(0), P(4), n], s2(a), None
+        for d in (0, 1, 2, 10, 0x8000, 0xFFFF):
+            yield "pdm_u32_divmod16", [P(0), P(4), d], s2(a), None
+            yield "pdm_u32_divmod16", [P(4), P(4), d], s2(a), None    # q == a
+        for w in (0, 1, 9, 10, 11, 0xFFFF):
+            yield "pdm_u32_todec", [P(0), P(64), w], s2(a, at=64), ("todec", 12)
+        for n in (0, 1, 0xFFFF):
+            yield "pdm_u32_add16", [P(4), n], s2(a), None
+    for a in (0, 1, 0x8000, 0xFFFF):
+        for b in (0, 1, 0x8000, 0xFFFF):
+            yield "pdm_u32_mul16", [P(0), a, b], scratch(), None
+    # the view: PageDesk's aspects, every rotation, the zoom range's edges, negative coordinates
+    pts = (-32768, -32767, -1601, -1, 0, 1, 17, 8192, 32767)
+    pxs = (-32768, -32767, -1, 0, 1, 199, 32767)
+    for box in PD_BOXES:
+        for rot in (0, 90, 180, 270, 45):
+            for an, ad in PD_ASPECTS:
+                for zoom in PD_ZOOMS:
+                    for ox, oy in ((17, -33), (-300, 400)):
+                        v = pdview(box, rot, zoom, an, ad, ox, oy)
+                        s = scratch(); s[16:44] = v
+                        yield "pdm_view_size", [P(0), P(2), P(16)], s, None
+                        for i, x in enumerate(pts):
+                            y = pts[(i * 4 + zoom) % len(pts)]
+                            s = scratch(); s[16:44] = v
+                            yield "pdm_view_fwd", [P(0), P(2), P(16), x, y], s, None
+                        for i, px in enumerate(pxs):
+                            py = pxs[(i * 3 + zoom) % len(pxs)]
+                            s = scratch(); s[16:44] = v
+                            yield "pdm_view_inv", [P(0), P(2), P(16), px, py], s, None
+    # zooms past 400 (the contract holds for 0..65535): the floor's -65536 edge,
+    # |u| * zoom / 1600 just under 65536 with a remainder, and saturation
+    for zoom, x0, x in ((1601, 32727, -32768), (1601, -32768, 32727), (1600, 32767, -32768),
+                        (1600, -32768, 32767), (65535, 0, -1), (65535, 0, 1), (32767, -32768, 32767)):
+        for rot in (0, 180):
+            for an, ad in ((1, 1), (5, 12), (65535, 1)):
+                v = pdview((x0, x0, x0, x0), rot, zoom, an, ad, 0, 0)
+                s = scratch(); s[16:44] = v
+                yield "pdm_view_fwd", [P(0), P(2), P(16), x, x], s, None
+                s = scratch(); s[16:44] = v
+                yield "pdm_view_size", [P(0), P(2), P(16)], s, None
+    # far spans ending exactly at the segment's end, one past it, n = 0, the 0xFFF0 cap
+    for off, n in ((0xFFFF, 1), (0xFFFF, 2), (0xFFC4, 60), (0xFFC5, 60), (0, 0), (0xFFFF, 0),
+                   (0x10, 0xFFF0), (0x11, 0xFFF0), (0, 0xFFF1), (0, 0xFFFF)):
+        rg = [(lin(0x5000, min(off, 0xFF00)) - 16, 0x140)] if n <= 60 else [(0x50000, 0x10020)]
+        if n <= 60 or (off + n > 0x10000 or n > 0xFFF0):     # a near buffer cannot take 64KB
+            yield "pd_fcopy_in", [0x5000, off, P(64), n], scratch(), ("far", rg)
+            s = scratch(); s[64:] = bytes(range(SCRN - 64))
+            yield "pd_fcopy_out", [P(64), 0x5000, off, n], s, ("far", rg)
+        yield "pd_ffill", [0x5000, off, 0x5AA5, n], scratch(), ("far", rg)
+        yield "pdm_crc16_far", [0x1D0F, 0x5000, off, n], scratch(), ("far", rg)
+    # 64KB moves: disjoint, overlapping both ways in one segment and across segments
+    big = [(0x50000, 0x20100)]
+    for d, s_ in (((0x6000, 0x10), (0x5000, 0x10)), ((0x5001, 0x10), (0x5000, 0x10)),
+                  ((0x5000, 0x10), (0x5001, 0x10)), ((0x5000, 0x21), (0x5002, 0x0)),
+                  ((0x5002, 0x0), (0x5000, 0x21)), ((0x5001, 0x0), (0x5000, 0x10))):
+        for n in (0xFFF0, 0x8001, 1, 2, 3):
+            if d[1] + n <= 0x10000 and s_[1] + n <= 0x10000:
+                yield "pd_fcopy", [d[0], d[1], s_[0], s_[1], n], scratch(), ("far", big)
+    yield "pd_fcopy", [0x5000, 0x10, 0x5000, 0x11, 0xFFF0], scratch(), ("far", big)   # refused (src end)
+    yield "pd_fcopy", [0x5000, 0x11, 0x5000, 0x10, 0xFFF0], scratch(), ("far", big)   # refused (dst end)
+
+
+def edge_pass(H, ks):
+    total = fails = 0; per = {}
+    for name, args, s, aux in edge_cases():
+        if ks and not any(k in name for k in ks): continue
+        _, spec, ret, _g = FUNCS_BY[name]
+        d = H.run_case(name, spec, ret, args, s, aux)
+        total += 1; c = per.setdefault(name, [0, 0]); c[0] += 1
+        if d:
+            fails += 1; c[1] += 1
+            if c[1] <= 2:
+                print("    edge FAIL %s: %s" % (describe(name, args, s), "; ".join(d)))
+    print("edge pass: %d fixed cases over %d functions, %d failures" % (total, len(per), fails))
+    return total, fails
+
+
+def strip_roundtrip(H):
+    """PAGEDESK-SPEC 5.3's own claim, on the assembly: every pixel of a 200-pixel
+    strip (a row and a column through the page's top-left) round-trips for every
+    R, at each PageDesk aspect and zoom edge, on nonzero-origin cropped pages."""
+    emu = H.emu; good = bad = 0; base = (DSEG << 4) + SCR
+    rd = lambda o: int.from_bytes(emu.mem_r(base + o, 2), "little")
+    for box in PD_BOXES:
+        for rot in (0, 90, 180, 270):
+            for an, ad in PD_ASPECTS:
+                for zoom in (25, 33, 100, 400):
+                    ox, oy = 17, -33
+                    emu.mem_w(base + 16, pdview(box, rot, zoom, an, ad, ox, oy))
+                    for i in range(200):
+                        for px, py in ((ox + i, oy + 37), (ox + 41, oy + i)):
+                            emu.mem_w((DSEG << 4) + emu.ovfw, b"\0\0")
+                            emu.call("pdm_view_inv", [SCR, SCR + 2, SCR + 16, px, py])
+                            emu.call("pdm_view_fwd", [SCR + 4, SCR + 6, SCR + 16, rd(0), rd(2)])
+                            ok = (rd(4), rd(6)) == (px & 0xFFFF, py & 0xFFFF) and rd(-SCR + emu.ovfw) == 0
+                            good += ok; bad += not ok
+                            if not ok and bad < 4:
+                                print("  strip: box %s R%d %d/%d z%d p=(%d,%d) -> (%d,%d)" % (box, rot, an, ad, zoom, px, py, rd(4), rd(6)))
+    print("PAGEDESK-SPEC 5.3 strip: %d pixels round-tripped, %d broken" % (good, bad))
+    return bad
+
+
+def crc_check_value(H):
+    """the published CRC-16/CCITT-FALSE (init FFFF) and XMODEM (init 0) check
+    values of "123456789", on BOTH sides: the reference is held to the world too"""
+    s = scratch(); s[64:73] = b"123456789"; miss = 0
+    for init, want in ((0xFFFF, 0x29B1), (0x0000, 0x31C3)):
+        _, spec, ret, _g = FUNCS_BY["pdm_crc16"]
+        d = H.run_case("pdm_crc16", spec, ret, [init, P(64), 9], s, None)
+        ax, _ = H.emu.call("pdm_crc16", [init, SCR + 64, 9])
+        ok = not d and ax == want
+        print("crc16 check value init %04x: asm %04x, want %04x %s" % (init, ax, want, "ok" if ok else "FAIL"))
+        miss += not ok
+    return miss
 
 
 def asm_matrix():

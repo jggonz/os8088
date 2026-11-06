@@ -373,9 +373,12 @@ _pdm_fx_round:                          ; (a): nearest, ties away from zero
         pop     bp
         ret
 .p:     add     ax, 0x8000
-        adc     dx, 0
+        adc     dx, 0                   ; OF: 32767.5 or more rounded past 7FFFh
         mov     ax, dx
-        pop     bp
+        jno     .r
+        call    pdmi_setovf             ; saturate (pdmath.c, 53e8ebeb6)
+        dec     ax                      ; 8000h -> 7FFFh
+.r:     pop     bp
         ret
 
 _pdm_fx_add:                            ; (r, a, b)
@@ -524,8 +527,13 @@ _pdm_fx_mul:                            ; (r, a, b)
 ; (N = N2:N1:N0, D = Dh:Dl, D != 0); callee pops them. Out: Q = DX:CX:BX
 ; (Q2:Q1:Q0), AX nonzero iff the remainder is.  The CALLER removes the five
 ; words (add sp, 10): stkbalance.py cannot see a callee that pops its arguments.
-; Fast path (Dh = 0): three DIVs.  Slow path: 48 restoring steps (~2.4 ms on
-; an 8088, estimated; only fx_div with a divisor >= 1.0 takes it).
+; Fast path (Dh = 0): three DIVs.  Slow path (Dh != 0, so D >= 2^16 > N2): the
+; first 16 restoring steps would only shift N2 into the remainder, so R starts
+; AS N2, Q2 is 0, and 32 steps run in registers - N1:N0 and the quotient share
+; CX:BX (a quotient bit enters at the bottom as a dividend bit leaves the top),
+; R is DI:SI, D is DX:AX and BP counts.  ~0.8 ms on an 8088 (estimated); only
+; fx_div with a non-integral divisor >= 1.0 takes it (an integral one is two
+; DIVs in fx_div itself).
 pdmi_udiv48:
         push    bp
         mov     bp, sp
@@ -546,39 +554,37 @@ pdmi_udiv48:
         mov     dx, di
         pop     bp
         ret
-.slow:  xor     bx, bx
-        xor     cx, cx
-        xor     dx, dx
-        xor     si, si                  ; R = di:si
+.slow:  mov     bx, [bp+8]              ; CX:BX = N1:N0, becoming Q1:Q0
+        mov     cx, [bp+10]
+        mov     si, [bp+12]             ; R = DI:SI = N2 (< D: nothing to subtract yet)
         xor     di, di
-        mov     ax, 48
-.lp:    shl     word [bp+8], 1
-        rcl     word [bp+10], 1
-        rcl     word [bp+12], 1
+        mov     ax, [bp+4]              ; DX:AX = D
+        mov     dx, [bp+6]
+        push    bp
+        mov     bp, 32
+.lp:    shl     bx, 1                   ; R:N <<= 1, the new quotient bit 0
+        rcl     cx, 1
         rcl     si, 1
         rcl     di, 1
-        jc      .sub
-        cmp     di, [bp+6]
+        jc      .sub                    ; R reached 2^32 > D
+        cmp     di, dx
         jb      .no
         ja      .sub
-        cmp     si, [bp+4]
+        cmp     si, ax
         jb      .no
-.sub:   sub     si, [bp+4]
-        sbb     di, [bp+6]
-        stc
-        jmp     .q
-.no:    clc
-.q:     rcl     bx, 1
-        rcl     cx, 1
-        rcl     dx, 1
-        dec     ax
+.sub:   sub     si, ax
+        sbb     di, dx
+        inc     bx                      ; quotient bit 1 (bit 0 was clear)
+.no:    dec     bp
         jnz     .lp
+        pop     bp
+        xor     dx, dx                  ; Q2 = 0
         mov     ax, si
         or      ax, di
         pop     bp
         ret
 
-; DX:CX:BX = AX... helpers for the view and for fx_div -------------------------
+; (r, a, b): r = a / b, truncated toward zero; b = 0 saturates toward a's sign
 _pdm_fx_div:                            ; (r, a, b)
         push    bp
         mov     bp, sp
@@ -613,7 +619,19 @@ _pdm_fx_div:                            ; (r, a, b)
         neg     cx
         neg     bx
         sbb     cx, 0
-.yp:    push    dx                      ; N2 = |x|.hi
+.yp:    test    bx, bx                  ; an integral |y| (CX nonzero): (|x| << 16) /
+        jnz     .gen                    ; (CX << 16) is |x| / CX, two DIVs
+        mov     si, cx
+        mov     cx, ax
+        mov     ax, dx
+        xor     dx, dx
+        div     si
+        xchg    ax, cx                  ; CX = Q1, AX = |x|.lo
+        div     si
+        mov     bx, ax                  ; Q0
+        xor     dx, dx                  ; Q2 = 0
+        jmp     .q
+.gen:   push    dx                      ; N2 = |x|.hi
         push    ax                      ; N1 = |x|.lo
         xor     si, si
         push    si                      ; N0 = 0   (N = |x| << 16)
@@ -621,7 +639,7 @@ _pdm_fx_div:                            ; (r, a, b)
         push    bx                      ; Dl
         call    pdmi_udiv48
         add     sp, 10
-        test    dx, dx                  ; q > 0x7FFFFFFF ?
+.q:     test    dx, dx                  ; q > 0x7FFFFFFF ?
         jnz     .ov
         cmp     cx, 0x8000
         jae     .ov

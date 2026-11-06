@@ -489,6 +489,14 @@ PDXB_SAVE_AUTHOR_N             equ 48
 PDXB_SAVE_AUTHOR_ESZ           equ 1
 PDXB_SAVE_BYTES                equ 122
 
+; ---- struct pd_newpage (10 bytes) ------------------------------------------
+PDXB_NEWPAGE_W                 equ 0
+PDXB_NEWPAGE_H                 equ 2
+PDXB_NEWPAGE_ROTATE            equ 4
+PDXB_NEWPAGE_CSEG              equ 6
+PDXB_NEWPAGE_CLEN              equ 8
+PDXB_NEWPAGE_BYTES             equ 10
+
 ; ---- struct pd_edit (48 bytes) ---------------------------------------------
 PDXB_EDIT_KIND                 equ 0
 PDXB_EDIT_FLAGS                equ 1
