@@ -4516,16 +4516,17 @@ gfx_sub_arm:
 ; gfx_sub_off - back to restoring whole buffers
 ; Called by both restore bodies on their way out, so a caller CANNOT leave one
 ; armed: the safe value is the one a forgetful caller inherits, which is
-; wm_dmg_dk's rule (SPEC.md 11.91). Preserves every register; clobbers flags,
-; which both callers have already finished with.
+; wm_dmg_dk's rule (SPEC.md 11.91). Clobbers AX and the flags, which both
+; callers have already finished with: each pops AX straight after - the VGA
+; body's own run, softgfx.inc's sw_xfer through gfx_xor_rect_d.pops - so the
+; bank it carried was dead (kernel hot-paths pass 1, size: -2, ~27 clocks a
+; restore faster).
 ; -----------------------------------------------------------------------------
 gfx_sub_off:
-    push ax
     xor ax, ax
     mov [gfx_sub_st], ax
     mov [gfx_sub_rs], ax
     mov [gfx_sub_ps], ax
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -5469,11 +5470,17 @@ gfx_u_blt:
 %ifdef KERN_BIG                 ; ...and never smaller than the largest of the
 GFX_U_FLOOR equ 22              ; OTHER sets, which is laid down below it and
 %else                           ; cannot size this block: gfx_points' 22 bytes
-GFX_U_FLOOR equ 20              ; on kern_big, cur_move_mono's 20 (mouse.inc)
-%endif                          ; on kern_small. It binds only on a knob build
-%if gfx_u_blt - gfx_u < GFX_U_FLOOR ; that thins gfx_blit4's set - NOPLANE=1
-    resb GFX_U_FLOOR - (gfx_u_blt - gfx_u) ; drops its five planar bytes - and
-%endif                          ; on kern_small; every overlay is still guarded
+GFX_U_FLOOR equ 20              ; on kern_big. On kern_small the largest is
+%endif                          ; gfx_scroll's 16 - cur_move_mono's set is 12
+%if gfx_u_blt - gfx_u < GFX_U_FLOOR ; since kernel hot-paths pass 1, where it
+    resb GFX_U_FLOOR - (gfx_u_blt - gfx_u) ; was 20 - so its 20 is gfx_blit4's
+%endif                          ; 19 and ONE byte that is a .bss PARITY pad
+                                ; now: 16 would move every .bss word after it
+                                ; ([ticks], the scheduler's) to an odd address
+                                ; (docs/plans/khp1/size.md). It binds on a knob
+                                ; build that thins gfx_blit4's set (NOPLANE=1
+                                ; drops five planar bytes); every overlay is
+                                ; guarded
 gfx_u_end:
 
 absolute gfx_u                  ; gfx_points (SPEC.md 5.6.9)

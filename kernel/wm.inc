@@ -2581,22 +2581,22 @@ wm_resize_nb:                   ; ...and the entry for a caller that has
 ; -----------------------------------------------------------------------------
 ; wm_rz_swap - exchange BX's rect with the one wm_rz_bank put aside
 ; in:  BX = the window; [wm_rz_o*] holds the other rect
-; out: nothing; DI preserved, and AX/CX/SI are NOT
-; clobbers: AX, CX, SI, flags
+; out: nothing; AX/CX/SI/DI are NOT preserved
+; clobbers: AX, CX, SI, DI, flags
 ;
 ; Four words each and laid out the same way, so this is one loop rather than
 ; eight named moves - and calling it TWICE puts everything back, which is what
 ; makes wm_rz_precover a bracket rather than a rewrite.
 ;
-; IT SAVES DI AND NOTHING ELSE, which is a size decision and not a style one:
-; its one caller sits inside wm_rz_paint, past that routine's own push of AX,
-; CX, DX and SI, so three of the four registers are already on the stack. Six
-; bytes, and the DISKCNT knob kernel is close enough to MIN_RAM_KB
-; (docs/KERNEL-MEMORY.md) that six bytes is the difference between this
-; assembling and not.
+; IT SAVES NOTHING, which is a size decision and not a style one: its one
+; caller sits inside wm_rz_paint, past that routine's own push of AX, CX, DX
+; and SI, so those are already on the stack - and DI, which it banked until
+; kernel hot-paths pass 1 (size, -2), is dead after both calls: the first is
+; followed by `mov di, bx`, the second by wm_rz_precover's own `pop di`.
+; The DISKCNT knob kernel is close enough to MIN_RAM_KB
+; (docs/KERNEL-MEMORY.md) that bytes here have mattered before.
 ; -----------------------------------------------------------------------------
 wm_rz_swap:
-    push di
     mov si, wm_rz_ox
     lea di, [bx+W_X]
     mov cx, 4
@@ -2607,7 +2607,6 @@ wm_rz_swap:
     inc di
     inc di
     loop .w
-    pop di
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2639,6 +2638,33 @@ wm_rz_swap:
 ; still says its content is its own, so what is banked is correct - and the
 ; alternative is a z-order compare in a walk that has none.
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; wm_dg_precover - the same, for a window that MOVED rather than resized
+; in:  SI = the window, its record holding the NEW rect; AX/BX/CX/DX = the
+;      x/y/w/h it LEFT; caller holds the gfx lock and nothing has been drawn
+; out: nothing; AX, BX, CX, SI and the flags are SPENT - its one caller,
+;      ui_drag, reloads all four registers straight after and reads no flag
+;      before an `add` writes them
+;
+; SPEC.md 11.96.16.2. wm_rz_paint is the funnel for every GEOMETRY change and
+; catches the zoom, the zoom's restore and the grow box - and a drag is none
+; of them: ui_drag writes x/y into the record itself and repaints through
+; wm_paint_dmg, so dragging a window wholly over another banked nothing.
+;
+; The old rect arrives in registers rather than being read back, because
+; ui_drag has it in [ui_orig*]/[ui_drag*] and the record does not - it moved
+; two screens up. wm_rz_o* is free at that moment: it is banked across ONE
+; geometry change and a drop is not one, so this borrows the same four words
+; wm_rz_swap above already knows how to exchange.
+;
+; IT FALLS INTO wm_rz_precover, which is the rest of it (kernel hot-paths pass
+; 1, size: -8). It was a routine of its own that banked BX and the flags
+; around a `call` there, and nothing at its one call site reads either.
+; -----------------------------------------------------------------------------
+wm_dg_precover:
+    call rect_put               ; <- AX..DX, four adjacent words
+    dw wm_rz_ox
+    mov bx, si                  ; ...and into wm_rz_precover with the window
 wm_rz_precover:
     pushf
     push di
@@ -2653,33 +2679,6 @@ wm_rz_precover:
     popf
     ret
 
-; -----------------------------------------------------------------------------
-; wm_dg_precover - the same, for a window that MOVED rather than resized
-; in:  SI = the window, its record holding the NEW rect; AX/BX/CX/DX = the
-;      x/y/w/h it LEFT; caller holds the gfx lock and nothing has been drawn
-; out: nothing (every register and the flags preserved)
-;
-; SPEC.md 11.96.16.2. wm_rz_paint is the funnel for every GEOMETRY change and
-; catches the zoom, the zoom's restore and the grow box - and a drag is none
-; of them: ui_drag writes x/y into the record itself and repaints through
-; wm_paint_dmg, so dragging a window wholly over another banked nothing.
-;
-; The old rect arrives in registers rather than being read back, because
-; ui_drag has it in [ui_orig*]/[ui_drag*] and the record does not - it moved
-; two screens up. wm_rz_o* is free at that moment: it is banked across ONE
-; geometry change and a drop is not one, so this borrows the same four words
-; wm_rz_swap above already knows how to exchange.
-; -----------------------------------------------------------------------------
-wm_dg_precover:
-    pushf
-    push bx
-    call rect_put               ; <- AX..DX, four adjacent words
-    dw wm_rz_ox
-    mov bx, si
-    call wm_rz_precover
-    pop bx
-    popf
-    ret
 
 ; -----------------------------------------------------------------------------
 ; wm_rz_bank  - bank BX's rect before a geometry change
@@ -10398,9 +10397,11 @@ wm_su_edge:
 ;
 ; With no sub-rect armed [wm_su_pext] is 0 and [wm_su_srow] is every row, so
 ; this degenerates to the one flat walk it replaced.
+;
+; SI and DI come back WALKED, BX, CX and DH spent: wm_su_edge, the one
+; caller, reloads SI and DI before its second call and leaves by kret_bp after
+; either (kernel hot-paths pass 1, size: -4 - the bank was dead).
 wm_su_merge:
-    push si
-    push di
 %ifdef KERN_BIG                 ; (kern_small: one plane, so no plane loop -
     push bp                     ; the walk below runs once and the tail step
 %endif                          ; that only fed the next plane goes with it)
@@ -10428,8 +10429,6 @@ wm_su_merge:
     jnz .plane
     pop bp
 %endif
-    pop di
-    pop si
     ret
 
 ; wm_su_try - put window DI's content back from the cache
@@ -11022,7 +11021,9 @@ wm_draw_win:
 ; -----------------------------------------------------------------------------
 ; wm_su_bank - after drawing window DI, decide what its raise cache should be
 ; in:  DI = the window just drawn (gfx lock held)
-; out: nothing (all registers preserved)
+; out: nothing; AX and BX are SPENT - its one caller, wm_draw_win's tail,
+;      leaves through kret_di straight after, which puts both back (kernel
+;      hot-paths pass 1, size: -4, and two pushes and pops faster a window)
 ;
 ; SPEC.md 11.96.4. The cache used to be taken in ONE place - wm_raise, from
 ; the window losing the front - and spent on the first restore, so it served
@@ -11043,8 +11044,6 @@ wm_draw_win:
 ; declines and behaves exactly as it did before this existed.
 ; -----------------------------------------------------------------------------
 wm_su_bank:
-    push ax
-    push bx
 %ifdef REDRAWFULL
     jmp short .front            ; the reference build (SPEC.md 11.96.4): only
 %endif                          ; wm_raise ever banks, and the first restore
@@ -11075,15 +11074,12 @@ wm_su_bank:
                                 ; marked window above it still to come is
                                 ; covered by construction
 .take:
-    call wm_su_take             ; covered, or minimized a moment from now:
-    jmp short .out              ; its pixels stand until something draws it
-.front:
+    jmp wm_su_take              ; covered, or minimized a moment from now:
+.out:                           ; its pixels stand until something draws it.
+    ret                         ; (Both arms TAIL-jump now that nothing is
+.front:                         ; banked: kernel hot-paths pass 1, size)
     mov bx, di
-    call wm_su_drop             ; the front window is about to change them
-.out:
-    pop bx
-    pop ax
-    ret
+    jmp wm_su_drop              ; the front window is about to change them
 
 ; -----------------------------------------------------------------------------
 ; wm_su_precover - bank what a window ABOUT TO APPEAR is going to cover
