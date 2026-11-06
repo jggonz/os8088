@@ -90,7 +90,8 @@ struct pd_view {
 #define PDE_CHANGED     52
 #define PDE_NOTFOUND    53
 #define PDE_CANCEL      64
-#define PDE_BUSY        65      /* a job is still running: call again     */
+#define PDE_BUSY        65      /* NOT a failure: CF=0, AX=PDE_BUSY means
+                                   the job continues - call again (D11)  */
 
 /* ---- incomplete-rendering features (PAGEDESK-SPEC 10.6), a bitmask ------ */
 #define PDF_INC_FONT    0x0001  /* a font was substituted                 */
@@ -405,6 +406,14 @@ struct pdxb_save {
 #define PDSV_FRESH       1
 #define PDSV_EXTRACT     2
 
+/* a fresh document's page, PDV_WRT_NEWDOC's page list at pages_seg:0
+ * (PAGEDESK-SPEC 14.6, DECISIONS D11) */
+struct pd_newpage {
+    pdw w, h;            /* MediaBox [0 0 w h], pt16                        */
+    pdw rotate;          /* 0 / 90 / 180 / 270                              */
+    pdw cseg, clen;      /* content bytes at cseg:0, clen = 0 for a blank   */
+};
+
 /* ---- the edit store record (PAGEDESK-SPEC 13.1), 48 bytes -------------- */
 struct pd_edit {
     pdb  kind;              /* PDA_*                                       */
@@ -466,6 +475,7 @@ typedef char pdabi_sz_mat [sizeof(struct pd_mat)     == 24 ? 1 : -1];
 typedef char pdabi_sz_view[sizeof(struct pd_view)    == 28 ? 1 : -1];
 typedef char pdabi_sz_edit[sizeof(struct pd_edit)    == 48 ? 1 : -1];
 typedef char pdabi_sz_tmg [sizeof(struct pdtm_glyph) == 12 ? 1 : -1];
+typedef char pdabi_sz_npg [sizeof(struct pd_newpage) == 10 ? 1 : -1];
 typedef char pdabi_sz_tok [sizeof(struct pdxb_token) <= PD_XB_BYTES ? 1 : -1];
 typedef char pdabi_sz_dg  [sizeof(struct pdxb_dictget) <= PD_XB_BYTES ? 1 : -1];
 

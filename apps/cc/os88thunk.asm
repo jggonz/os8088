@@ -2443,6 +2443,120 @@ _os88_fs_op:
     ret
 %endif
 
+; --- PageDesk's four (docs/PAGEDESK-SPEC.md 6.1, 14): the streaming file I/O,
+; the volume's medium and the kernel's refusal text ----------------------------
+
+; unsigned os88_file_read_seq(const char *name, unsigned seg, unsigned off,
+;                             unsigned cap, unsigned *cursor)
+; OSAPI_FILE_READ_SEQ (SPEC.md 18.4.8). SI = name, DX:BX = the buffer in a
+; claim of its own, CX = its capacity (a cluster multiple), ES:DI = the 16-byte
+; cursor, which is OURS (DS) here. Zero the cursor and set its dword at byte 12
+; to start or seek. The answer is the bytes delivered (a 16-bit count: cap is
+; a word), 0 at the end; os88_ferr() separates the end from a refusal, and the
+; small kernel's FERR_NAME is a refusal like any other.
+CC_GATE _os88_file_read_seq
+%ifdef CC_U__os88_file_read_seq
+_os88_file_read_seq:
+    push bp
+    mov bp, sp
+    mov si, [bp+4]
+    mov dx, [bp+6]
+    mov bx, [bp+8]
+    mov cx, [bp+10]
+    mov di, [bp+12]
+    push ds
+    pop es                          ; ES:DI - the cursor is ours
+    call OSAPI_FILE_READ_SEQ
+    sbb cx, cx                      ; -1 refused, 0 delivered
+    and cx, ax                      ; CX = the FERR_*, or 0
+    mov [cc_ferr], cx
+    sub ax, cx                      ; AX = the count, or 0 - os88_ferr() says why
+    pop bp
+    ret
+%endif
+
+; int os88_file_write_seq(const char *name, unsigned seg, unsigned off,
+;                         unsigned count, unsigned flags, unsigned *token)
+; OSAPI_FILE_WRITE_SEQ (SPEC.md 18.4.9). SI = name, ES:BX = the bytes in a
+; claim, CX = the count (a cluster multiple but the last), AL = WSEQF_*,
+; DI = the token. *token goes in (0 to start) and comes back for the next call.
+; 0 = written, -1 = see os88_ferr(). The file must exist.
+CC_GATE _os88_file_write_seq
+%ifdef CC_U__os88_file_write_seq
+_os88_file_write_seq:
+    push bp
+    mov bp, sp
+    mov si, [bp+4]
+    mov ax, [bp+6]
+    mov es, ax
+    mov bx, [bp+8]
+    mov cx, [bp+10]
+    mov ax, [bp+12]                 ; AL = the flags
+    mov di, [bp+14]
+    mov di, [di]                    ; the token
+    call OSAPI_FILE_WRITE_SEQ
+    jc .e
+    mov bx, [bp+14]
+    mov [bx], di                    ; the token for the next call
+    xor ax, ax
+    mov [cc_ferr], ax
+    pop bp
+    ret
+.e:
+    mov [cc_ferr], ax
+    mov ax, -1
+    pop bp
+    ret
+%endif
+
+; int os88_vol_kind(int vol) - OSAPI_VOL_KIND (SPEC.md 18.7.2). -1 = no such
+; volume, else AL | AH << 8: VK_REMOVABLE/VK_FIXED in the low byte,
+; VT_BIOS/VT_DRIVER/VT_FILE in the high one.
+CC_GATE _os88_vol_kind
+%ifdef CC_U__os88_vol_kind
+_os88_vol_kind:
+    mov bx, sp
+    mov ax, [ss:bx+2]
+    call OSAPI_VOL_KIND
+    jnc .k
+    mov ax, -1
+.k:
+    ret
+%endif
+
+; void os88_ferr_text(int ferr, char *dst, unsigned cap) - OSAPI_FERR_TEXT
+; (SPEC.md 18.4.11): the kernel's own wording for a FERR_*, copied into dst
+; (always NUL-terminated, cap counts the NUL) because the text lives in the
+; kernel's segment and a C pointer cannot name it.
+CC_GATE _os88_ferr_text
+%ifdef CC_U__os88_ferr_text
+_os88_ferr_text:
+    push bp
+    mov bp, sp
+    mov ax, [bp+4]
+    call OSAPI_FERR_TEXT            ; ES:SI = the kernel's text
+    mov di, [bp+6]
+    mov cx, [bp+8]
+    test cx, cx
+    jz .d
+    dec cx
+.l:
+    jcxz .z
+    mov al, [es:si]
+    test al, al
+    jz .z
+    mov [di], al
+    inc si
+    inc di
+    dec cx
+    jmp .l
+.z:
+    mov byte [di], 0
+.d:
+    pop bp
+    ret
+%endif
+
 ; =============================================================================
 ; THE RUNTIME'S OWN HELPERS
 ;
@@ -2730,6 +2844,12 @@ cc_nul: db 0
   %assign cc__ferr 1
 %endif
 %ifdef CC_U__os88_file_append
+  %assign cc__ferr 1
+%endif
+%ifdef CC_U__os88_file_read_seq
+  %assign cc__ferr 1
+%endif
+%ifdef CC_U__os88_file_write_seq
   %assign cc__ferr 1
 %endif
 %ifdef CC_U__os88_file_delete

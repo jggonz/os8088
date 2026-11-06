@@ -76,7 +76,7 @@ pdw pdm_u32_todec(char *buf, const struct pd_u32 *a, pdw width)
 
 void pdm_fx_int(struct pd_fx *r, pdi n) { fxs(r, (i64)n * 65536); }
 pdi  pdm_fx_floor(const struct pd_fx *a) { i64 v = fxv(a); return (pdi)(v >= 0 ? v / 65536 : -((-v + 65535) / 65536)); }
-pdi  pdm_fx_round(const struct pd_fx *a) { i64 v = fxv(a); return (pdi)(v >= 0 ? (v + 32768) / 65536 : -((-v + 32768) / 65536)); }
+pdi  pdm_fx_round(const struct pd_fx *a) { i64 v = fxv(a), q = v >= 0 ? (v + 32768) / 65536 : -((-v + 32768) / 65536); if (q > 32767) { g_ovf = 1; q = 32767; } return (pdi)q; }
 void pdm_fx_add(struct pd_fx *r, const struct pd_fx *a, const struct pd_fx *b) { fxs(r, fxv(a) + fxv(b)); }
 void pdm_fx_sub(struct pd_fx *r, const struct pd_fx *a, const struct pd_fx *b) { fxs(r, fxv(a) - fxv(b)); }
 void pdm_fx_neg(struct pd_fx *r, const struct pd_fx *a) { fxs(r, -fxv(a)); }
