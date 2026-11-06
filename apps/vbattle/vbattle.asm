@@ -590,6 +590,25 @@ vb_coverload:
     mov [vb_cvstr], ax
     mov ax, [es:si+8]
     mov [vb_cvoff], ax
+    cmp word [es:si+10], 0          ; THE VARIANT INSIDE THE REGION (every
+    jne .free                       ; byte is hostile): a desktop's size at
+    mov ax, [vb_cvw]                ; most, its rows' bytes enough for its
+    dec ax                          ; width, and its last byte read - the
+    cmp ax, 720 - 1                 ; blit reads stride x height from the
+    ja .free                        ; offset, which past the claim is a
+    cmp word [vb_cvh], 350          ; neighbour's memory, and on kern_mega
+    ja .free                        ; a fault that closes us
+    mov cl, 3
+    shr ax, cl
+    cmp ax, [vb_cvstr]
+    jae .free
+    mov ax, [vb_cvstr]
+    mul word [vb_cvh]
+    jc .free
+    add ax, [vb_cvoff]
+    jc .free
+    cmp ax, [vb_meta+VH_COVER+4]
+    ja .free
     mov si, 4                       ; the line, ours
     mov di, vb_cvline
     mov cx, CV_LINE
@@ -1702,6 +1721,16 @@ vb_load:
     cmp ax, 2 * VB_CGUARD
     ja .fail1                       ; (a record past the guard: not ours)
 .g16:
+    cmp byte [vb_meta+VH_BAND+1], 191   ; THE BAND'S FIRST ROW, at most the
+    ja .fail1                       ; message line's (a band buffer is 200
+                                    ; less it, in rows: past 200 it is
+                                    ; negative, and copied as 64K words)
+    mov al, [RL+RH_NCH]             ; the RULES' counts that size our own
+    dec al                          ; tables: 1 to 4 characters (vb_hp...),
+    cmp al, 4 - 1                   ; at most 8 items (vb_items) - every
+    ja .fail1                       ; other count only indexes the block
+    cmp byte [RL+RH_NITEM], 8       ; (126.2.4; every byte is hostile)
+    ja .fail1
     mov ax, [vb_meta+VH_MLEN]       ; the music: at least a piece
     or ax, [vb_meta+VH_MLEN+2]
     jz .fail1
