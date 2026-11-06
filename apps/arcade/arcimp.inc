@@ -897,6 +897,25 @@ ar_placesload:
 ar_setdrv:
     push bx
     push cx
+    call ar_setfind
+    jc .r
+    mov bx, cx
+    cmp bx, AR_NSET
+    jae .no
+    mov al, [ar_sdrv+bx]
+    cmp al, 26
+    jb .r                           ; (CF=0)
+.no:
+    stc
+.r:
+    pop cx
+    pop bx
+    ret
+
+; ar_setfind - SI = a .ROM's name: BX = its set in ar_sets (arcsets.inc),
+; CX = the set's index; CF=1 not a set ARCADE knows. Kept: all else
+ar_setfind:
+    push ax
     push di
     push si
     mov di, ar_sets
@@ -907,6 +926,7 @@ ar_setdrv:
     jz .no
     pop si
     push si
+    push bx
 .c:
     lodsb
     cmp al, [bx]
@@ -914,15 +934,10 @@ ar_setdrv:
     inc bx
     or al, al
     jnz .c
-    mov bx, cx                      ; this one
-    cmp bx, AR_NSET
-    jae .no
-    mov al, [ar_sdrv+bx]
-    cmp al, 26
-    jae .no
-    clc
+    pop bx                          ; this one (CF=0 from the OR)
     jmp short .r
 .n:
+    pop bx
     inc di
     inc di
     inc cx
@@ -932,8 +947,7 @@ ar_setdrv:
 .r:
     pop si
     pop di
-    pop cx
-    pop bx
+    pop ax
     ret
 
 ar_s_dat:    db 'ARCADE.DAT', 0

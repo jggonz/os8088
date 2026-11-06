@@ -543,6 +543,16 @@ ar_romtry:
     inc di
     loop .name
     pop ax
+    mov si, [ar_lbd]                ; the length is the SET's (arcsets.inc),
+    mov si, [si+BD_ROMF]            ;   not merely the header's: a file whose
+    call ar_setfind                 ;   CRC agrees with a short image of its
+    jc .wrongf                      ;   own would have the board read past
+    mov cx, [bx+13]                 ;   its claim (ar_fill, BD_BUILD)
+    cmp cx, [es:16]
+    jne .wrongf
+    mov cx, [bx+15]
+    cmp cx, [es:18]
+    jne .wrongf
     mov cx, [es:16]                 ; the length: 1 to 128KB (Q*bert's with
     mov bx, [es:18]                 ;   its sound chips is 68KB), all read
     cmp bx, 1

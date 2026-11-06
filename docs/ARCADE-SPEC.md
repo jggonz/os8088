@@ -124,7 +124,9 @@ A set the user has given ARCADE is one file, named for MAME's set -
 `ar_romload` reads it whole from ARCADE's current folder (`OSAPI_FILE_READ`:
 a probe for its size, a claim, the read; the file may be packed on the
 disk) and refuses it, with a toast naming the file, unless the header is
-right, the name is the board's, and the image's CRC-32 is the header's
+right, the name is the board's, the length is the set's in `arcsets.inc` (a
+header that agrees with a SHORT image of its own would otherwise have
+`ar_fill` and `BD_BUILD` read past the claim), and the image's CRC-32 is the header's
 (`ar_crc32`, a table made at start). The recipe is then filled from it
 (`ar_fill`) and the board builds what it needs (`BD_BUILD`). `make
 arcaderoms` writes the files from the pinned sets (`getarcrom.py
