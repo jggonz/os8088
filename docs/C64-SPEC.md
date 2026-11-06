@@ -1217,7 +1217,7 @@ a block's exits jump STRAIGHT into the blocks they reach (4.9.4), and those
 jumps are only safe while every block dies together - invalidating one page
 would leave other blocks' jumps pointing into freed or rewritten cache. The
 volatile rule does what per-page invalidation was for: the page that keeps
-writing its own code is taken out of the recompiler after four flushes, and
+writing its own code is taken out of the recompiler after sixteen flushes, and
 the rest is translated again once and stays.
 
 #### 4.9.4 Chaining, batching, and the claim — BUILT
@@ -1568,6 +1568,26 @@ Four rules, each of which exists because getting it wrong is silent:
    scan reads two keys down as one of them or neither - measured on 86Box,
    `PRINT` typed at 12% came out `PRIT`. A key HELD on the host never waits
    and never blocks, so chords and game keys go in together as they are.
+6. **A tap keeps the Shift it was typed with.** Rules 4 and 5 keep a tap in
+   the matrix, or waiting in the ring, for a fifth of a second of the user's
+   time on a slow machine, and by then the host's Shift belongs to the NEXT
+   key: `4+` typed at speed came out `$+` (MartyPC, the VGA XT - the 4 still
+   fresh when the hand went to Shift for the `+`), and a shifted key whose
+   Shift was let go before its turn came out unshifted. So a down-list
+   entry whose host key is UP brings its OWN Shift to the matrix, never the
+   live one, and while a tap typed without Shift is shown the live Shift
+   waits. Its own Shift is the ASCII's where the ASCII can say: the BIOS
+   made `4` or `$`, `e` or `E` with the Shift as it stood at the make, so
+   a key whose entry is not optionally shifted (a number, a sign) and a
+   lower-case letter take none. Only the rest (an upper-case letter,
+   space, the scan-mapped keys) use the Shift `c64_key_push` recorded with
+   the press, in bit 7 of the ring's scan code - not alone, because
+   `os88_onkey` can arrive late, after the hand has gone to Shift for the
+   next key (measured: `e+` pushed the `e` with the `+`'s Shift down). A
+   key HELD on the host still takes the live Shift, so
+   SHIFT+letter held, and a bare Shift as a game's second button, are as
+   before. `c64uitest` holds both halves, red with the live Shift
+   unconditional.
 
 The **down-list is `C64K_DOWNMAX` = 16 entries** and its overflow path is
 bounded: the 17th simultaneous key is dropped, not written past the end. The
@@ -3129,7 +3149,9 @@ File dialog - puts a `.D64` on drive 8. `os88_onfile` tells a D64 from a
 64KB is refused anyway): 174,848 bytes (35 tracks) or 196,608 (40), each with
 or without its error bytes. Anything else in that size range is `Not a D64
 image.` The image is held WHOLE, in one claim (683 or 768 sectors, plus 512
-bytes for the last read's sector rounding), read once in 32KB chunks through
+bytes for the last read's sector rounding - 768 for 35 tracks, whose last
+read reaches into the error bytes and ends on the sector after them, at
+175,616), read once in 32KB chunks through
 `c64_read_at` - `OSAPI_FILE_READ_AT` into a far buffer, a package-local shim
 in `c64.asm` - and given back when another image is attached. `D64: no heap
 for it.` and `D64: cannot read it.` leave the drive as it was;
@@ -3219,6 +3241,10 @@ file-system device is a host directory. `ovl_fs_*` (`c64disk.c`):
   `BLOCKS FREE.` from the free kilobytes.
 - **A C64 name becomes an 8.3 name**: letters and digits kept (a shifted
   letter is its letter), anything else `_`, eight at most, `.PRG` after.
+  `*` and `?` are kept for LOAD's matching, so a SAVE name holding one is
+  refused (`Not saved: NAME*.PRG`, nothing written - a 1541's `33,
+  SYNTAX ERROR`): FAT would take the character and nothing could name the
+  file.
 
 `c64uitest` keeps a folder in memory and holds: a 10,000-byte SAVE across
 the staging's chunks with its address, the exists refusal, `@0:`, LOAD by
