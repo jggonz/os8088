@@ -2313,7 +2313,10 @@ section .vga
 ;      AH = its colour, [gfx_blit_x] = the block's left edge, [gfx_blit_ro] =
 ;      the row's base byte, GC1 already armed by gfx_blit4, ES = the CALLER's
 ;      source segment, DF clear
-; out: nothing; every register preserved, ES included
+; out: nothing; BX, DX, SI, BP and ES preserved - AX, CX and DI are NOT
+;      (kernel hot-paths pass 1): its one caller, gfx_blit4's run loop,
+;      reloads all three at .run before it reads them, so banking them cost
+;      three push/pop pairs, ~80 clocks, on EVERY coalesced run
 ;
 ; sw_blit_span's planar half, and the same argument: gfx_hline is a gfx_fill and
 ; a gfx_fill is SPEC.md 5.7's per-call floor before a byte is written, per RUN.
@@ -2328,12 +2331,9 @@ section .vga
 ; and hoisting it is the difference between two `out`s a run and three.
 ; -----------------------------------------------------------------------------
 vga_blit_span:
-    push ax
     push bx
-    push cx
     push dx
     push si
-    push di
     push es
     mov al, ah                  ; the documented contract: gfx_blit4 leaves
     mov [gfx_color], al         ; [gfx_color] holding the last colour drawn
@@ -2401,12 +2401,9 @@ vga_blit_span:
     xchg [es:di], al            ; latch load and masked write in ONE instruction
 .out:
     pop es
-    pop di
     pop si
     pop dx
-    pop cx
     pop bx
-    pop ax
     ret
 %endif                          ; ...end of the VGA span writer
 
