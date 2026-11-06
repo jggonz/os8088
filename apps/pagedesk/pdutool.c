@@ -152,9 +152,9 @@ static void ovl_prect(const struct os88_rect *s, struct pd_rect *p)
 
 /* one stroke is captured in SCREEN pixels straight into the edit store's
  * free gap - point k at ot_ib - 4(k + 1), ot_ib being the point heap's top -
- * so it lies, reversed, exactly where pdu_ed_new puts a record's points: it
- * is made page space in place and becomes the record with no copy and no
- * near buffer. Thinned as it goes (a point only when the pointer is 3 pixels
+ * so it lies, last point lowest, exactly where pdu_ed_new puts a record's
+ * points: it is made page space and turned round (a record is first point
+ * lowest) in place, and becomes the record with no copy and no near buffer. Thinned as it goes (a point only when the pointer is 3 pixels
  * from the last kept) and drawn as it grows. */
 static int ot_k;                        /* points in the stroke so far */
 static unsigned ot_ib;                  /* the point heap's top at the press */
@@ -164,6 +164,12 @@ static void ovl_ipt(int k)
 {
     ot_ix = (pd_pt)pd_fpeekw(ed_seg(), ot_ib - 4 - (k << 2));
     ot_iy = (pd_pt)pd_fpeekw(ed_seg(), ot_ib - 2 - (k << 2));
+}
+
+static void ovl_iput(int k, int x, int y)
+{
+    pd_fpokew(ed_seg(), ot_ib - 4 - (k << 2), x);
+    pd_fpokew(ed_seg(), ot_ib - 2 - (k << 2), y);
 }
 
 /* point k of the stroke as XOR: a dot, or the segment from k-1 without its
@@ -192,8 +198,7 @@ static void ovl_ink_add(int x, int y)
     }
     if (ot_k >= OT_NPTS - 2 || !ovl_ed_room(0, (ot_k + 1) << 2))
         return;                         /* the stroke limit, or the store's */
-    pd_fpokew(ed_seg(), ot_ib - 4 - (ot_k << 2), x);
-    pd_fpokew(ed_seg(), ot_ib - 2 - (ot_k << 2), y);
+    ovl_iput(ot_k, x, y);
     ovl_ink_seg(ot_k);
     ot_k++;
 }
@@ -217,20 +222,28 @@ static void ovl_pbox(int n)
         ovl_grow((int *)&ot_pr, ot_pts[k << 1], ot_pts[(k << 1) + 1]);
 }
 
-/* the stroke becomes page space in place; ot_r = its screen box (for a
- * refusal's repaint), ot_pr = its page box (the record's rect) */
+/* the stroke becomes page space in place, then is turned round so its
+ * first point is the record's first; ot_r = its screen box (for a refusal's
+ * repaint), ot_pr = its page box (the record's rect) */
 static void ovl_ink_done(void)
 {
-    int k;
+    int k, j, x, y;
     ot_r.x1 = ot_r.y1 = ot_pr.x0 = ot_pr.y0 = 32767;
     ot_r.x2 = ot_r.y2 = ot_pr.x1 = ot_pr.y1 = -32767;
     for (k = 0; k < ot_k; k++) {
         ovl_ipt(k);
         ovl_grow((int *)&ot_r, ot_ix, ot_iy);
         pdm_view_inv(&ot_px, &ot_py, &pdu_view, ot_ix, ot_iy);
-        pd_fpokew(ed_seg(), ot_ib - 4 - (k << 2), ot_px);
-        pd_fpokew(ed_seg(), ot_ib - 2 - (k << 2), ot_py);
+        ovl_iput(k, ot_px, ot_py);
         ovl_grow((int *)&ot_pr, ot_px, ot_py);
+    }
+    for (k = 0, j = ot_k - 1; k < j; k++, j--) {
+        ovl_ipt(k);
+        x = ot_ix;
+        y = ot_iy;
+        ovl_ipt(j);
+        ovl_iput(k, ot_ix, ot_iy);
+        ovl_iput(j, x, y);
     }
 }
 

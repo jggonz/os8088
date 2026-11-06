@@ -2511,14 +2511,14 @@ overlay's resident shim. Resident: `pdu_ed_seg`, `pdu_ed_count`,
 `pdu_dirty`, `pdu_saved`, `pdu_undo_can`, `pdu_redo_can`.
 
 **What it costs the primary** (measured at the cut, against the base before
-`edit` of 40,650 image + 3,969 bss = 44,619): **43,142 + 5,515 = 48,657 B**,
-+4,038 against a share of +4,096; the overlay 14,763. The near scratch is one
+`edit` of 40,650 image + 3,969 bss = 44,619): **43,146 + 5,515 = 48,661 B**,
++4,042 against a share of +4,096; the overlay 14,821. The near scratch is one
 set shared by the three files - `ed_pts` (96 points: a Line's two, a
 Highlight's quads, a page delta's copy in the history), `ed_xr` (a clip rect,
 and the history's 8-byte swap) and the three 48-byte record buffers - and
 everything bigger lives in the claims: an Ink or Sign stroke is captured
 STRAIGHT into the EDITS segment's gap below the point top and converted there
-in place (`pdu_ed_new` with `pts` NULL means the points are already in place),
+in place - converted, then turned round so the first point drawn is the first stored (`pdu_ed_new` with `pts` NULL means the points are already in place),
 and the history's command table is in `PDU_DC_UNDO` after its entries. Nothing
 in `edit` recurses, and its widest frame is 16 bytes of locals (`ovl_ed_set`; D21).
 
