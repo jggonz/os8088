@@ -199,3 +199,29 @@ PARITY pads keep the downstream list even on both kernels).
   segment in SECTION_SEG"); `os88sym.syms()` and `linear()` are fine. Not
   fixed (a tool outside this row).
 * None in `font.inc`.
+
+## 10. FOLLOW-UPS FROM gfxcall's NOTE (section 7), after the merge of kernel-hotpaths 8f85f95c
+
+* **(1) `.nosplit`'s GFXDENTERCD re-testing `[vid_ndisp]`**: already TAKEN as
+  part of text-5 (7dec8353): on one display the split test's `jbe` lands on
+  `.onedisp`, past the macro. Nothing further to do.
+* **(2) Inlining `gfx_nextrow` in font.inc's row loops**: font.inc has **no**
+  `call gfx_nextrow` left - every row loop already inlines it
+  (`FONT_RN_NEXTROW`, `font_char_bb`, `font_run_cell`, `fnt_rn_edge`), and
+  text-2 moved `font_char_bb`'s into registers. **font.inc's share of the
+  1.0-1.9 ms is 0.** The remaining callers are `icons.inc` (two: the 1bpp
+  icon pass's `.fnext` at :744 and the AND/OR row walk at :804) and
+  `softgfx.inc` (two, mono's file). CROSS-FILE for files: inlining the
+  three-instruction body at each `icons.inc` site is +14 bytes a site
+  (17 bytes of body against the 3-byte call) and saves the call and ret,
+  ~35 clocks plus ~3 bytes of fetch, ~45 cycles an icon row - for a 32-row
+  icon ~1,400 cycles, ~0.3 ms a pass on the XT, so ~4 ms across a Disk
+  window of a dozen icons if each pays one pass. PREDICTED; +28 bytes for
+  both sites.
+
+Rows run once after the merge: `disptext`, `dispseam`, `runclip` pass;
+**`glyphcost` FAILS** - `radio, set` through fills costs +3.295 ms over the
+bitmap against a 2 ms bound (FILLS 256,579 cycles). It passed at this
+branch's own tip (eb353e57, section 8), so it came in with the merge
+(pointer / gfxcall), not with font.inc: the check and radio glyphs are drawn
+with gfx fills, not text.
