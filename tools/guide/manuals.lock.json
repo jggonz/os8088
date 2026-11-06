@@ -1351,9 +1351,9 @@
   "sources": [
    "apps/wirechat"
   ],
-  "stamped": "24c3d243",
-  "strings": "fd2e07efd394d8ce",
-  "why": "credit line in About and the five-theme help line; the page already describes Wired, Mono-Dark, Blue, Green and Amber and the About card's credit"
+  "stamped": "8f688c2bb",
+  "strings": "6e00d17167409314",
+  "why": "claimed nicks (SPEC.md 113.6.6); reserved-name examples are ones the server lets through as nicks (help, wirebot)"
  },
  "WIREFLET_O88": {
   "sources": [

@@ -7,8 +7,9 @@
 ; start?". It is the only caller of wc_start.
 ;
 ; THE CONDUCTOR'S ORDER: nothing while a request is in flight or a wait is
-; owed; a JOIN when there is a nick and no session; then a queued FLAG, a
-; queued SAY, and otherwise a POLL. A message or a flag queued while a poll is
+; owed, or after a 410 (LK_GONE: the user decides); a JOIN when there is a
+; nick and no session; then a queued FLAG, a queued SAY, a queued CLAIM
+; (SPEC.md 113.6.6), and otherwise a POLL. A message or a flag queued while a poll is
 ; held does not wait 50 seconds for it: wc_kick abandons the poll (bump, close
 ; - SPEC.md 71.11) and the conductor starts the message on the same pass.
 ; =============================================================================
@@ -27,6 +28,8 @@ wc_next:
     je .out
     cmp byte [wc_link], LK_KEY
     je .out
+    cmp byte [wc_link], LK_GONE         ; signed in elsewhere: never by itself
+    je .out
     cmp byte [wc_nick], 0
     je .out
     mov al, RQ_JOIN
@@ -38,6 +41,9 @@ wc_next:
     jnz .go
     mov al, RQ_SAY
     cmp byte [wc_qsay], 0
+    jne .go
+    mov al, RQ_CLAIM
+    cmp byte [wc_qclaim], 0
     jne .go
     mov al, RQ_POLL
 .go:
@@ -111,7 +117,8 @@ wc_onwake:
 .fail:
     call wc_onfail
 .next:
-    call wc_next
+    call wc_menulabels                  ; the claim items follow the code and
+    call wc_next                        ; the link (SPEC.md 113.6.6)
     ; --- and paint what changed, under a lock of our own ---------------------
     cmp word [wc_dirty], 0
     je .out
@@ -133,6 +140,28 @@ wc_onwake:
 .unlock:
     call OSAPI_GFX_UNLOCK
 .out:
+    ; --- a K's code, in an alert (SPEC.md 113.6.6): an alert is raised under
+    ; the lock, which the parser does not hold. One already up refuses it, and
+    ; the notice line has the code anyway; [wc_askwhat] is only taken by an
+    ; alert that went up, so the one already up keeps its question
+    cmp byte [wc_kshow], 0
+    je .ret
+    mov byte [wc_kshow], 0
+    call OSAPI_GFX_LOCK
+    push es
+    mov ax, KERNEL_SEG                  ; os88ui_ask reads our window record
+    mov es, ax
+    mov al, OS88UI_AOK
+    mov bx, [wc_win]
+    mov si, wc_kbuf
+    mov di, wc_answer
+    call os88ui_ask
+    jc .kup
+    mov byte [wc_askwhat], 0            ; OK answers nothing
+.kup:
+    pop es
+    call OSAPI_GFX_UNLOCK
+.ret:
     ret
 
 ; --- wc_firststate - the file is read: a nick to join with, or ask for one --
@@ -184,6 +213,15 @@ wc_ondone:
     mov [wc_qflag], ax
     mov [wc_qflag+2], ax
 .nflag:
+    cmp byte [wc_rqdone], RQ_CLAIM
+    jne .ncl
+    xor al, al                          ; a claim's K has been taken by the
+    xchg al, [wc_qclaim]                ; parser; a release's N said so, and
+    cmp al, 2                           ; the code goes (SPEC.md 113.6.6)
+    jne .out
+    mov byte [wc_key], 0
+    jmp wc_wantsave
+.ncl:
     cmp byte [wc_rqdone], RQ_JOIN
     jne .out
     cmp byte [wc_rqnote], 0             ; the server said something of its own
@@ -191,6 +229,15 @@ wc_ondone:
     mov si, wc_s_joined
     jmp wc_setnote
 .er:
+    cmp ax, 410                         ; taken over by a join with the code:
+    jne .n410                           ; STOP. The text is on the line, and
+    mov byte [wc_tok], 0                ; the user rejoins or not - two
+    mov byte [wc_link], LK_GONE         ; machines with one code would take
+    mov word [wc_wait], 0               ; the nick from each other for ever
+    mov byte [wc_hist], 1               ; (SPEC.md 113.2.3)
+    mov byte [wc_qclaim], 0
+    ret
+.n410:
     cmp ax, 401                         ; the session is gone: join again,
     jne .n401                           ; quietly, with the same nick and
     mov byte [wc_tok], 0                ; whatever was queued
@@ -199,6 +246,11 @@ wc_ondone:
     mov byte [wc_hist], 1
     ret
 .n401:
+    cmp byte [wc_rqdone], RQ_CLAIM      ; a claim refused: its sentence is on
+    jne .ncl1                           ; the line and NOTHING else changes -
+    mov byte [wc_qclaim], 0             ; its 429 is hours and its 503 is the
+    ret                                 ; claim store's, not the session's
+.ncl1:
     cmp ax, 503
     jne .n503
     mov byte [wc_link], LK_REST         ; resting, or full: wait as asked, at
@@ -1488,14 +1540,18 @@ wc_onrclick:
     call wc_cbflush
     jmp wc_flagask
 .ask:
+    jmp wc_askit
+.out:
+    ret
+
+; --- wc_askit - ask Yes/No: the string at SI, wc_askn, the string at DI -----
+wc_askit:
     call wc_askcompose                  ; wc_askbuf = SI, the nick, DI
     mov al, OS88UI_AYESNO
     mov bx, [wc_win]
     mov si, wc_askbuf
     mov di, wc_answer
-    call os88ui_ask
-.out:
-    ret
+    jmp os88ui_ask
 
 ; --- wc_askcompose - wc_askbuf = the string at SI, wc_askn, the string at DI
 wc_askcompose:
@@ -1546,6 +1602,8 @@ wc_answer:
     je .add
     cmp al, 2
     je .rem
+    cmp al, 4
+    jae .claim
     cmp al, 3
     jne .out
     ; --- flag the selected message ------------------------------------------
@@ -1580,6 +1638,19 @@ wc_answer:
     call wc_frfind
     jc .out
     call wc_frdel
+    jmp wc_cbflush
+.claim:
+    ; --- claim (4) or release (5) the nick: queued like a flag (SPEC.md
+    ; 113.6.6), and a held poll is abandoned for it
+    sub al, 3
+    mov [wc_qclaim], al
+    mov si, wc_s_claiming
+    cmp al, 1
+    je .cl
+    mov si, wc_s_releasing
+.cl:
+    call wc_setnote
+    call wc_kick
     jmp wc_cbflush
 .out:
     ret
@@ -1732,10 +1803,46 @@ wc_oncmd:
     je .flag
     cmp al, 2
     je .notify
+    cmp al, 4
+    je .claim
+    cmp al, 5
+    je .release
     cmp al, 3
     jne .reconn
     mov al, PP_EMO                      ; the emoticons, above Send
     jmp wc_popup
+.claim:
+    ; --- Claim Nick... / New Code..., and Release Nick... (SPEC.md 113.6.6):
+    ; greyed without a session - and Release without a code - and refused
+    ; here too, a menu's grey being a picture
+    cmp byte [wc_link], LK_LIVE
+    jne .done
+    mov si, wc_s_askcl1
+    mov di, wc_s_askcl2
+    cmp byte [wc_key], 0
+    je .ask4
+    mov si, wc_s_asknew1
+    mov di, wc_s_asknew2
+.ask4:
+    mov al, 4
+    jmp short .asknick
+.release:
+    cmp byte [wc_link], LK_LIVE
+    jne .done
+    cmp byte [wc_key], 0
+    je .done
+    mov si, wc_s_askrel1
+    mov di, wc_s_askrel2
+    mov al, 5
+.asknick:
+    mov [wc_askwhat], al
+    mov bx, wc_nick
+    push di
+    mov di, wc_askn
+    mov cx, WC_NICKN
+    call wc_ncopy
+    pop di
+    jmp wc_askit
 .reconn:
     ; Reconnect: a fresh session, now
     call wc_abandon
@@ -1823,6 +1930,23 @@ wc_menulabels:
     mov ax, wc_it_noton
 .on:
     mov [wc_i_chat + 4], ax
+    ; Claim Nick... is New Code... while there is a code; Release Nick... is
+    ; greyed without one; both are greyed without a session. A greyed label is
+    ; the same string a byte earlier, at its MENU_DIS (wctxt.inc)
+    mov ax, wc_it_claim
+    mov bx, wc_it_rel - 1
+    cmp byte [wc_key], 0
+    je .k1
+    mov ax, wc_it_newcode
+    inc bx
+.k1:
+    cmp byte [wc_link], LK_LIVE
+    je .k2
+    dec ax
+    mov bx, wc_it_rel - 1
+.k2:
+    mov [wc_i_chat + 8], ax
+    mov [wc_i_chat + 10], bx
     mov di, wc_thmi
     xor bx, bx
 .t:

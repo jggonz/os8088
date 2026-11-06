@@ -1752,6 +1752,8 @@ wc_lamps:
     mov bl, GL_LKOFF
     cmp al, LK_NONICK
     je .act
+    cmp al, LK_GONE                     ; signed in elsewhere: nothing until
+    je .act                             ; the user asks (SPEC.md 113.6.6)
     mov bl, GL_LKBAD
     cmp al, LK_NODRV
     je .act

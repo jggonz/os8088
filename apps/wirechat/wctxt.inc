@@ -15,6 +15,8 @@ wc_s_join:      db 'join', 0
 wc_s_poll:      db 'poll', 0
 wc_s_say:       db 'say', 0
 wc_s_flag:      db 'flag', 0
+wc_s_claim:     db 'claim', 0
+wc_s_release:   db 'release', 0         ; ...its body, to give the claim up
 wc_q_t:         db '?t=', 0
 wc_q_jv:        db '?v=', 0
 wc_q_v:         db '&v=', 0
@@ -54,6 +56,9 @@ wc_s_selfirst:  db 'Click a message first, then flag it', 0
 wc_s_ownmsg:    db 'That message is your own', 0
 wc_s_flagging:  db 'Flagging...', 0
 wc_s_remhow:    db 'Open a friend to remove them', 0
+wc_s_claiming:  db 'Claiming...', 0
+wc_s_releasing: db 'Releasing...', 0
+wc_s_yourcode:  db 'Your code is ', 0   ; and the K's code (SPEC.md 113.6.6)
 
 ; --- the header, the panes and the bar --------------------------------------------
 wc_s_nonick:    db '(no nick yet)', 0
@@ -102,9 +107,10 @@ wc_lk_live:     db 'Connected', 0
 wc_lk_rest:     db 'Resting - trying again later', 0
 wc_lk_off:      db 'Offline - retrying in ', 0
 wc_lk_key:      db 'Enter the code for this nick', 0
+wc_lk_gone:     db 'Signed in elsewhere', 0
 wc_linkwords:   dw wc_lk_nonick, wc_lk_nodrv, wc_lk_join, wc_lk_live
-                dw wc_lk_rest, wc_lk_off, wc_lk_key
-%if LK_NONICK != 0 || LK_NODRV != 1 || LK_JOIN != 2 || LK_LIVE != 3 || LK_REST != 4 || LK_OFF != 5 || LK_KEY != 6
+                dw wc_lk_rest, wc_lk_off, wc_lk_key, wc_lk_gone
+%if LK_NONICK != 0 || LK_NODRV != 1 || LK_JOIN != 2 || LK_LIVE != 3 || LK_REST != 4 || LK_OFF != 5 || LK_KEY != 6 || LK_GONE != 7
   %error "wc_linkwords is indexed by LK_*"
 %endif
 
@@ -148,15 +154,30 @@ wc_s_askadd1:   db 'Add ', 0
 wc_s_askadd2:   db ' as a friend?', 0
 wc_s_askrem1:   db 'Remove ', 0
 wc_s_askrem2:   db ' from friends?', 0
+wc_s_askcl1:    db 'Claim ', 0          ; SPEC.md 113.6.6: a 12-letter nick
+wc_s_askcl2:    db ' with a code?', 0   ; makes each of these 34 at most
+wc_s_asknew1:   db 'Replace ', 0
+wc_s_asknew2:   db "'s code?", 0
+wc_s_askrel1:   db 'Release ', 0
+wc_s_askrel2:   db ' to anyone?', 0
 
 ; --- the menus (SPEC.md 113.6.4) ------------------------------------------------
 wc_m_chat:      db 'Chat', 0
-wc_i_chat:      dw wc_it_nick, wc_it_flag, wc_it_notoff, wc_it_emo, wc_it_reconn
+wc_i_chat:      dw wc_it_nick, wc_it_flag, wc_it_notoff, wc_it_emo
+                dw wc_it_claim, wc_it_rel, wc_it_reconn
 wc_it_nick:     db 'Change Nick...', 0
 wc_it_flag:     db 'Flag Message...', 0
 wc_it_notoff:   db 'Notifications Off', 0   ; what the item DOES: shown while
 wc_it_noton:    db 'Notifications On', 0    ; they are on, and the other while not
 wc_it_emo:      db 'Emoticons...', 0
+; SPEC.md 113.6.6's two: each label's GREYED form is the same string one byte
+; earlier, its MENU_DIS (wc_menulabels points at whichever it is)
+                db MENU_DIS
+wc_it_claim:    db 'Claim Nick...', 0
+                db MENU_DIS
+wc_it_newcode:  db 'New Code...', 0     ; ...while the nick has a code
+                db MENU_DIS
+wc_it_rel:      db 'Release Nick...', 0
 wc_it_reconn:   db 'Reconnect', 0
 wc_m_rooms:     db 'Rooms', 0
 wc_i_rooms:     dw wc_r0, wc_r1, wc_r2, wc_r3
