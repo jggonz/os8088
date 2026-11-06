@@ -781,14 +781,24 @@ font_char_bb:
     mov bl, [wm_clip_cm]        ; ...and BL, the plane counter it once was, is
 %endif                          ; the region's column mask (SPEC.md 11.3.4), a
                                 ; register where the rows read a memory word
+    push bp                     ; THE ROW ADVANCE IN REGISTERS (kernel hot-
+    mov dx, [vid_rowadd]        ; paths pass 1): gfx_nextrow's step and its
+    mov bp, [vid_wrapbit]       ; wrap test are a register `add` and `test`
+                                ; a row - 2 bytes and 3 clocks each - where
+                                ; the CS-overridden memory operands were 5
+                                ; and ~21. DX is dead from the row base on,
+                                ; and font_char's own frame does not hold BP,
+                                ; so the three exits below pop it. The wrap
+                                ; FIX stays a memory operand: it runs on the
+                                ; wrapping rows only, and no register is left
     mov ds, [vid_rseg]          ; DS = THE framebuffer to font_char's restore:
                                 ; the row loops' writes carry no override, and
-                                ; the two kernel words left are read through CS
+                                ; the kernel words left are read through CS
     test ch, 1                  ; this plane's ink, decided ONCE rather than
     jnz .srow                   ; once per row - and so is the disabled
     cmp byte [cs:font_dith], 0  ; dither, which is mono-only and therefore
     jne .dstart                 ; always on the clear-bits side
-    jmp .crow
+    jmp short .crow
 .srow:
     mov ah, [es:si]             ; glyph row in the window's high byte
 %ifdef KERN_BIG
@@ -805,13 +815,14 @@ font_char_bb:
     jz .snext                   ; at all when x is byte-aligned
     or [di+1], al
 .snext:
-    add di, [cs:vid_rowadd]     ; gfx_nextrow, inlined (see the note above)
-    test di, [cs:vid_wrapbit]
+    add di, dx                  ; gfx_nextrow, inlined (see the note above),
+    test di, bp                 ; out of DX and BP
     jz .snw
     add di, [cs:vid_wrapfix]
 .snw:
     dec bh
     jnz .srow
+    pop bp
     ret                         ; one plane, so the cell is finished
 .crow:
     mov ah, [es:si]
@@ -831,13 +842,14 @@ font_char_bb:
     not al
     and [di+1], al
 .cnext:
-    add di, [cs:vid_rowadd]
-    test di, [cs:vid_wrapbit]
+    add di, dx
+    test di, bp
     jz .cnw
     add di, [cs:vid_wrapfix]
 .cnw:
     dec bh
     jnz .crow
+    pop bp
     ret
 
 ; --- disabled text, mono only (SPEC.md 47) -----------------------------------
@@ -852,10 +864,10 @@ font_char_bb:
 ; both the glyph pointer and the screen row, and an unbiased seed would flip
 ; the checkerboard's phase against the rows drawn either side of it.
 .dstart:
-    mov dl, 0xAA                ; DL is the checkerboard: DX is dead here (the
-    test byte [cs:wm_clip_r0], 1 ; row base went through AX), so the mask
-    jz .drow                    ; a .bss byte used to carry is a register
-    mov dl, 0x55
+    mov ch, 0xAA                ; CH is the checkerboard: the ink was decided
+    test byte [cs:wm_clip_r0], 1 ; by the `test ch, 1` above and is not read
+    jz .drow                    ; again, and DX carries the row step now
+    mov ch, 0x55
 .drow:
     mov ah, [es:si]
 %ifdef KERN_BIG
@@ -867,8 +879,8 @@ font_char_bb:
     jz .dnext
     xor al, al
     shr ax, cl
-    and ah, dl                  ; ...and half of what is left goes too
-    and al, dl
+    and ah, ch                  ; ...and half of what is left goes too
+    and al, ch
     or ah, ah
     jz .dsecond                 ; the mask can empty a byte the glyph filled
     not ah
@@ -879,18 +891,17 @@ font_char_bb:
     not al
     and [di+1], al
 .dnext:
-    not dl                      ; every row, blank ones included, or the
+    not ch                      ; every row, blank ones included, or the
                                 ; checkerboard turns into stripes
-    add di, [cs:vid_rowadd]
-    test di, [cs:vid_wrapbit]
+    add di, dx
+    test di, bp
     jz .dnw
     add di, [cs:vid_wrapfix]
 .dnw:
     dec bh
     jnz .drow
-    ret                         ; ...and the third exit.  All three were
-                                ; `jmp .pnext` into `add dx,[vid_rpara] /
-                                ; shr ch,1 / dec bl / jnz .plane / ret`
+    pop bp
+    ret                         ; ...and the third exit
 
 ; -----------------------------------------------------------------------------
 ; font_ink - internal: font_char_bb's per-plane colour register
@@ -920,49 +931,40 @@ font_char_bb:
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
 font_ink:
-    push ax                     ; AT THE ENTRY, so AX is preserved on MORE
-                                ; paths than before rather than fewer - the
-                                ; VGA early-out below used to skip the pair.
-                                ; **AND IT IS SLOWER, not neutral**, which is
-                                ; worth writing down because the finding that
-                                ; produced it said the opposite: the mono path
-                                ; goes 54.9 -> 56.7 clocks (+1.8) and the VGA
-                                ; early-out pays the push and the pop it did
-                                ; not, +7.9. Against ~900 us for a glyph cell
-                                ; that is 0.04%, and the 5 bytes are worth it;
-                                ; a comment claiming a speed win that is a loss
-                                ; is how the next pass inherits a wrong fact
-    mov byte [font_dith], 0     ; cleared on EVERY path, VGA included: the
-                                ; glyph loop reads it per plane and .bss is
-                                ; not zeroed by -f bin
+    push ax                     ; AT THE ENTRY, so AX is preserved on every
+                                ; path, the VGA early-out's included
 %ifdef GFX_VGA                  ; (kern_small: ALWAYS mono - SPEC.md 39.27.1 -
     mov al, [vid_mono]          ; so the test is a VGA kernel's alone and the
     or al, [gfx_mono1]          ; small build goes straight to the reduction:
-    jz .out                     ; kernel size pass 13, -9 and faster a glyph)
+    jz .vga                     ; kernel size pass 13, -9 and faster a glyph)
 %endif                          ; MONO, OR THE WINDOW SAID SO (SPEC.md
                                 ; 11.96.17.1) - two booleans, so an OR of the
                                 ; bytes is non-zero on exactly that pair of
                                 ; conditions. A cache one plane deep cannot
-                                ; carry a third
-                                ; colour, and 47 rule 1's disabled pen is solid
-                                ; CDGRAY on a VGA - which an application cannot
-                                ; fix from outside, font_ink being the
-                                ; kernel's. The path below already answers it:
-                                ; it reduces the ink to 00h/FFh and stipples
-                                ; the disabled case, which IS the claim
-    mov al, ch
-    cmp byte [gfx_dis], 0       ; DISABLED IS ASKED FIRST (SPEC.md 76.6). It
-    je .ink                     ; used to be asked only after `cmp al, 0xFF`
-    mov byte [font_dith], 1     ; sent a WHITE pen straight to .white, which
-%ifndef DISINK0                 ; was sound while ink was black by definition
-    mov al, [gfx_disink]        ; (`make DISINK0=1` is the A/B: the reduction
-%endif                          ; below then sends every grey to black again)
+                                ; carry a third colour, and 47 rule 1's
+                                ; disabled pen is solid CDGRAY on a VGA -
+                                ; which an application cannot fix from
+                                ; outside, font_ink being the kernel's. The
+                                ; path below already answers it: it reduces
+                                ; the ink to 00h/FFh and stipples the disabled
+                                ; case, which IS the claim
+    mov al, [gfx_dis]           ; [font_dith] IS [gfx_dis] on this path - the
+    mov [font_dith], al         ; one reader asks it for non-zero, and the
+    or al, al                   ; flag is a boolean - so one store serves both
+    mov al, ch                  ; answers where a clear and a conditional set
+    jz .ink                     ; were two (kernel hot-paths pass 1)
+                                ; DISABLED IS ASKED FIRST (SPEC.md 76.6). It
+                                ; used to be asked only after `cmp al, 0xFF`
+                                ; sent a WHITE pen straight to .white, which
+                                ; was sound while ink was black by definition
                                 ; - and under the Dark theme the chrome's ink
                                 ; IS white, so a greyed caption came out
                                 ; SOLID and pixel-identical to a live one:
                                 ; SPEC.md 47 rule 1's own failure, arriving
-                                ; through the renderer rather than a caller
-                                ;
+                                ; through the renderer rather than a caller.
+%ifndef DISINK0                 ; `make DISINK0=1` is the A/B: the reduction
+    mov al, [gfx_disink]        ; below then sends every grey to black again
+%endif                          ;
                                 ; **AND THE STIPPLE IS APPLIED TO THE LIVE
                                 ; INK'S DIRECTION, NOT TO THE GREY** (SPEC.md
                                 ; 76.6.1). The reduction below sends anything
@@ -976,19 +978,31 @@ font_ink:
                                 ; is that pen's own live ink: black for the
                                 ; content pens, [thm_inkc] for the chrome's
 .ink:
-    call gfx_ink                ; CH is untouched by it - still the index
-    cmp al, 0xFF                ; only pure white lights a mono pixel
-    je .white
-    xor al, al
-.white:
-    mov ch, al
+    push bx                     ; gfx_ink, INLINE (kernel hot-paths pass 1):
+    mov bx, gfx_inktab          ; this runs once per glyph cell on the 1bpp
+    and al, 15                  ; adapters, and its call and ret were ~35
+    xlatb                       ; clocks of a ~60-clock body. DS is the
+    pop bx                      ; kernel's at both callers
+    add al, 1                   ; only pure white lights a mono pixel: CF = 1
+    sbb ch, ch                  ; on exactly AL = FF, and CH = 0 - 0 - CF is
+                                ; FF or 00 with no branch (the `cmp`/`je`/
+                                ; `xor` it replaces took one either way)
 .out:
     pop ax
     ret
+%ifdef GFX_VGA
+.vga:
+    mov [font_dith], al         ; AL = 0 on the `jz` here: cleared on the VGA
+    jmp short .out              ; path too - the glyph loop reads it and .bss
+%endif                          ; is not zeroed by -f bin
 %ifdef KERN_SMALL
     nop                         ; PARITY, never executed (kernel size pass
 %endif                          ; 13): font_ink's test and font_str leave font_run_x
                                 ; an odd 17 bytes up on kern_small
+%ifndef KERN_SMALL
+    nop                         ; PARITY, never executed (kernel hot-paths
+%endif                          ; pass 1): font_ink and font_char_bb came out
+                                ; an odd 7 bytes shorter on a VGA kernel
 
 %ifdef BOOT_PROFILE
 ; -----------------------------------------------------------------------------
