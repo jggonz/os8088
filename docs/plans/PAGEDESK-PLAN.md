@@ -77,34 +77,34 @@ Exploratory.
 
 | ID | story | label | wave | owner | status | notes |
 |---|---|---|---|---|---|---|
-| PD-01 | launch as a native application | XT | 1 | shell | - | |
-| PD-02 | full VGA workspace | XT | 1-2 | shell | - | |
-| PD-03 | CGA 200-line workspace | XT | 1-2 | shell | - | |
-| PD-04 | Hercules monochrome | XT | 1-2 | shell | - | |
-| PD-05 | self-contained fonts and graphics | XT | 1 | fonts | - | |
-| PD-06 | open real PDFs, bounded | XT | 1 | eng | - | |
-| PD-07 | render text, vectors, images | XT | 1 | rend | - | |
-| PD-08 | responsive and bounded rendering | XT | 1-2 | rend, shell | - | |
-| PD-09 | navigate and scale | XT | 2 | | - | |
-| PD-10 | select, copy, find | XT | 2 | | - | |
-| PD-11 | thumbnails, outlines, links | XT | 2 | | - | |
-| PD-12 | notes | XT | 2 | | - | |
-| PD-13 | highlight / area mark | XT | 2 | | - | |
-| PD-14 | text boxes | XT | 2 | | - | |
-| PD-15 | ink, shapes, signature | XT | 2 | | - | |
-| PD-16 | changes, undo/redo | XT | 2 | | - | |
-| PD-17 | save a real PDF | XT | 1-2 | wrt | - | wave 1: serialiser, appearances, fresh documents; wave 2: incremental save on PDENG |
-| PD-18 | reorder/rotate/delete/insert pages | XT | 2 | | - | |
-| PD-19 | extract / insert from another PDF | XT | 2-3 | | - | |
-| PD-20 | new document, recovery | XT | 2 | | - | |
-| PD-21 | reproducible samples | XT | 1 | fix | - | |
-| PD-22 | host preparation of complex PDFs | H | 3 | | - | |
-| PD-23 | keyboard and file workflows | XT | 1-2 | shell | - | |
-| PD-24 | package and disk images | XT | 1 | shell | - | |
-| PD-25 | more RAM, Flate | E | 3 | | - | |
-| PD-26 | AcroForm filling | E | 3 | | - | |
-| PD-27 | protected-mode decision/spike | X | 3 | | - | |
-| PD-28 | malformed input, failing storage | XT | 1-3 | eng, fix | - | |
+| PD-01 | launch as a native application | XT | 1 | shell | S | launch, dock icon, .PDF association, empty view: shell-report, shell-verify |
+| PD-02 | full VGA workspace | XT | 1-2 | shell | S | FULL layout on VGA 640x480: shell-verify, lead looks |
+| PD-03 | CGA 200-line workspace | XT | 1-2 | shell | S | COMPACT on CGA 640x200: shell-verify, nav-verify (real PDREND) |
+| PD-04 | Hercules monochrome | XT | 1-2 | shell | S | Hercules 720x348 (HERCSEG 0x7000): shell-report, rendfix-report |
+| PD-05 | self-contained fonts and graphics | XT | 1 | fonts | S | PDRES fonts and art: fonts-report |
+| PD-06 | open real PDFs, bounded | XT | 1 | eng | S | classic xref, incremental chains, bounded tables: eng-report, eng-verify |
+| PD-07 | render text, vectors, images | XT | 1 | rend | S | text, vectors, images, annotation appearances: rend, rendfix, annotr |
+| PD-08 | responsive and bounded rendering | XT | 1-2 | rend, shell | P | banded, cancellable, sliced (seen); the XT timings are PD-29's MartyPC pass |
+| PD-09 | navigate and scale | XT | 2 | | S | zoom/fit/go-to/history/scroll drag: nav-verify |
+| PD-10 | select, copy, find | XT | 2 | | S | selection, Copy, Find next/previous: nav-verify (VGA + CGA) |
+| PD-11 | thumbnails, outlines, links | XT | 2 | | S | thumbnails, outline, links: nav-verify (VGA) |
+| PD-12 | notes | XT | 2 | | S | note popover, panel, resolve/reopen: notes-report, lead look |
+| PD-13 | highlight / area mark | XT | 2 | | S | Highlight from a selection, area mark: edit-verify, nav-verify |
+| PD-14 | text boxes | XT | 2 | | S | text boxes, Text properties: edit-verify, notes-report |
+| PD-15 | ink, shapes, signature | XT | 2 | | S | ink, line/arrow, rect, ellipse, drawn signature (one stroke): edit-verify |
+| PD-16 | changes, undo/redo | XT | 2 | | S | undo/redo incl. page operations: edit-verify, lead look |
+| PD-17 | save a real PDF | XT | 1-2 | wrt | S | fresh + incremental save, D14 cross-folder, verified through PDENG and qpdf: wrt, pages |
+| PD-18 | reorder/rotate/delete/insert pages | XT | 2 | | S | reorder/rotate/delete/duplicate/blank, undo at the wake: pages-verify, lead look |
+| PD-19 | extract / insert from another PDF | XT | 2-3 | | P | Extract built and checked (pages-verify); Insert from another PDF is wave 3 (`insert`, 20.16) |
+| PD-20 | new document, recovery | XT | 2 | | P | File > New built; the recovery journal and PDSAVE.$$$ offer are wave 3 (`recov`, 20.17) |
+| PD-21 | reproducible samples | XT | 1 | fix | I | tools/os88pdfgen.py, samples/, MANIFEST: fix-report |
+| PD-22 | host preparation of complex PDFs | H | 3 | | I | tools/os88pdprep.py, row pdprep: host-report |
+| PD-23 | keyboard and file workflows | XT | 1-2 | shell | P | keys and menus built; Preferences is wave 3 (`prefs`, 20.18) |
+| PD-24 | package and disk images | XT | 1 | shell | I | PAGEDESK.O88 + parts, `make pagedeskdisk` in four geometries |
+| PD-25 | more RAM, Flate | E | 3 | | P | Flate + predictors drawn on the target with the D17 carve (lead look, flate-on-target.png); XMEM caches not built |
+| PD-26 | AcroForm filling | E | 3 | | P | read-only appearance via annotr; the forms-not-supported note is wave 3 (`prefs`); FILLING not selected this round (D24) |
+| PD-27 | protected-mode decision/spike | X | 3 | | I | docs/plans/PAGEDESK-PM-ADR.md: host-report |
+| PD-28 | malformed input, failing storage | XT | 1-3 | eng, fix | P | malformed input: eng fuzz, tests/pdfneg, pdefuzz; failing storage: wrt/pages refusals; the final pass runs the rows |
 | PD-29 | hardware, memory, responsiveness proof | XT | final | lead | - | |
 | PD-30 | documented working behaviour | XT | final | lead | - | |
 
@@ -155,7 +155,7 @@ Filled in as stories are SEEN; `planned` until then.
 |---|---|---|---|
 | classic xref, incremental chains | planned | planned | - |
 | ASCIIHex, RunLength | planned | planned | - |
-| Flate | refused (`PDE_FLATE`) | planned (PD-25) | normalised by PD-22 |
+| Flate | decoded when RAM holds a 43 KiB slot (D17, by RAM never by CPU), else refused `PDE_FLATE` | same | normalised by PD-22 |
 | base-14 Latin text | planned | planned | - |
 | other fonts | substituted, Incomplete | substituted | rasterised by PD-22 |
 | 1/8-bit grey images | planned | planned | - |
@@ -167,8 +167,14 @@ Filled in as stories are SEEN; `planned` until then.
 ## 7. Evidence
 
 Links to screenshots, host-check output and measurements, per story, as
-they are taken.
+they are taken. Until the final pass, the evidence is in the agents' reports
+and screenshots in the lead's log directory (`~/Repos/pagedesk-logs/`,
+`*-report.md`, `*-verify.md`, `shots/<key>/`); the PR body carries the
+selection that ships with the merge.
 
 ## 8. Log
 
 - 2026-11-05: contract and plan written; wave 1 launched.
+- 2026-11-05: wave 1 integrated (eng, wrt, math, fonts, fix, shell, rend); wave 2 launched.
+- 2026-11-05: wave 2 integrated (edit, notes, nav, pages, annotr, flate, host) with D23's private module stack (20.15) and the static stack gate (`pdstk`).
+- 2026-11-06: wave 3 launched: insert (PD-19), recov (PD-20), prefs (PD-23, PD-26's baseline), polish (carried defects). D24 budgets.
