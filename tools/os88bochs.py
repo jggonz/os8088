@@ -657,7 +657,16 @@ def _tail(path, n):
         return f.read().decode("latin-1")
 
 
-def session(out, cmds, timeout=20.0, pids=None, inp=None, interrupt=True,
+# THE DEBUGGER'S ANSWER HAS NO GUEST CLOCK TO WAIT ON: it is the host
+# process replying at all, so the bound is a LIVENESS one and a healthy
+# reply returns at its prompt in ~20 ms whatever the bound is. 20 s was
+# measured on an idle box; under a soak's lanes (Bochs four a core, MartyPC
+# beside it) a reply took longer, and `mega-a2move` died inside
+# os88ui.boot before its test began. 60 s costs nothing when Bochs answers.
+DBG_TIMEOUT = 60.0
+
+
+def session(out, cmds, timeout=DBG_TIMEOUT, pids=None, inp=None, interrupt=True,
             at_prompt=None):
     """Break in, run the debugger commands CMDS, continue - and answer the
     transcript of the commands, read off OUT/e9.out (the debugger writes to
@@ -1105,7 +1114,7 @@ class Box(object):
                 raise RuntimeError("os88bochs: %.2f guest seconds not run in "
                                    "%.0f host seconds" % (secs, 30 + 10 * secs))
 
-    def at_prompt(self, cmds, timeout=20.0):
+    def at_prompt(self, cmds, timeout=DBG_TIMEOUT):
         """`dbg` for a machine that is ALREADY at the debugger's prompt -
         stopped on a breakpoint (`lb`): run CMDS, continue, answer the
         transcript. No signal is sent."""
@@ -1115,7 +1124,7 @@ class Box(object):
             self.inp.regrab = True
         return t
 
-    def dbg(self, cmds, timeout=20.0):
+    def dbg(self, cmds, timeout=DBG_TIMEOUT):
         """`session` on this machine: the commands' transcript.
 
         A STOP RELEASES THE MOUSE: Bochs drops its capture whenever the
