@@ -13624,6 +13624,19 @@ refused claim as `bwin no 02`. The XMEM case is tests/megaxm's step 59h,
 which goes red at that step on the first version of this item (row
 `megaxmove`).
 
+**...nor a package's own CONVENTIONAL claim** (2026-11-06, found by the
+soak: megavidring's and vidrmbplay's `live` legs, and brmega - every 1MB
+leg whose claims are conventional). `mega_bown`'s conventional path
+compared `MC_OWN` with the bare slot, but a claim a package makes itself
+is recorded under its SEGMENT (`mem_own`, SPEC.md 50.2: `I_SPTR`), as
+`mega_fown` already knew. So `SEG_BWIN` refused every package's own
+conventional claim with AX = 3: the Video Player's resident Live play
+(`vp_rwmk`) said "Not enough memory to play it" at Space and never played,
+on a 1MB machine, where nothing is in the pool. The conventional path now
+takes the slot or that slot's `I_SPTR`. Red: the `live` legs on the tree
+before it; green after, megaown's `bwin` leg (the REGION still refused)
+unchanged.
+
 ### 14.140 A WIN16 program's fault closes WIN16, attributed by the code selector's base (2026-11-04)
 
 WIN16-NEXT-PLAN Q1. `mega_fkill` named the faulting package through

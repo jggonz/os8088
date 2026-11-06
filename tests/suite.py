@@ -18866,7 +18866,7 @@ SOAK = [
         needs=("86box", "ffmpeg"),
         wants=("build/mega.img", "build/megak/apps/video.o88",
                "build/megak/apps/video.map", "build/megak/kernel.map")),
-    Row("vidrmbtwice", "soak", py("tests/vidrmbtwice.py"), 60.0,
+    Row("vidrmbtwice", "soak", py("tests/vidrmbtwice.py"), 150.0,
         "SPEC.md 53.2.3, 98.1.8.2, 98.3.24, KERN-MEGA-PLAN 14.131-14.134: "
         "the owner's Victory's sound and text defects, on 86Box's mr286 with "
         "an SB2.0 captured: a Catch-shaped clip named CATCH.V88 (nine "
@@ -18879,9 +18879,14 @@ SOAK = [
         "taken its ring; key 0's frame-0 sound), frame 1 drawn at least 0.6 "
         "of a frame after the card opens, and on kern_mega the text's glyphs "
         "the kernel's and play 2's Paused box play 1's. Red four ways, one "
-        "per fix. 46 s measured with the clip made once (ffmpeg + os88venc) "
-        "and the FONTSLOW tree built",
-        needs=("86box", "ffmpeg"),
+        "per fix. 150s is 146 MEASURED COLD (2026-11-06, a soak's load on "
+        "four cores): the private FONTSLOW tree is built inside the row on "
+        "a soak's first use - 87 s wall and 98 CPU-s of make alone, and "
+        "the timeout is charged in CPU, which a parallel make spends faster "
+        "than the wall clock (the soak's 60s-declared row died at 270 "
+        "CPU-s 221 s in, every leg passing). Warm it is 60 s; the timeout "
+        "is set for the cold build, as atblit's and knobhd's are",
+        needs=("86box", "ffmpeg"), timeout=600,
         wants=("build/megaapps.img", "build/os8088.img", "build/video.o88",
                "build/video.map")),
     Row("vidrmbfrag", "soak", py("tests/vidrmb.py"), 50.0,
