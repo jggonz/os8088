@@ -43704,7 +43704,11 @@ offsets, its lock state, its SDK constants, its headers and every packed
 stream it shipped against this tree, and launches every package on its 360KB
 disks on THIS kernel with the release's own kernel as the control. An SDK
 constant changed without a bump is acknowledged in `tests/abicompat.txt` with
-its reason, and that file is cleared at each release.
+its reason, and that file is cleared at each release. A release `.DRV`
+whose header is `MOD_VER` and the release's build number is a kernel module
+(§2.8), not a driver: §2.8.2 locks it to the kernel it shipped beside, so
+no other build loads it and `DRV_VER` is not its question - the header leg
+reports those apart and judges only the rest against `DRV_VER`.
 
 **The dispatcher at +12 is the header's one piece of executable code**, and
 it is what makes a package's callbacks ordinary near procs. Every

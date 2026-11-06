@@ -36,6 +36,12 @@ recorded as a bump, which is the system working) or `FAIL`:
   D  Headers. Every package of the release carries this tree's `PKG_FMT`
      and every driver this tree's `DRV_VER` - or the difference is a
      recorded bump, and then the loader's refusal is the designed answer.
+     A `.DRV` whose header is the release's `MOD_VER` is a kernel MODULE
+     (SPEC.md 2.8), not a driver: it is stamped with the release kernel's
+     BUILD_NUM and refused by every other build at `mod_check` (2.8.2), so
+     it ships beside its own kernel and DRV_VER is not its question. The
+     leg holds each one to that - MOD_VER and the release's build number -
+     and judges only what is left as a driver.
   E  Streams. Every packed thing the release shipped - packages, drivers,
      `CZ` data files - expands to the same bytes with THIS tree's decoder
      as with the release's own. (`kernel/lz.inc` mirrors `tools/os88lz.py`;
@@ -57,7 +63,10 @@ disks takes that path at launch. Those are `tests/abicompat.txt`'s
 
 RED ARMS (docs/WRITING-TESTS.md 1): `--red-version` stamps one release
 package with another PKG_FMT on a scratch copy of the apps disk, and leg F
-must go red on it; `--red-cell` pretends one cell moved, and leg A must.
+must go red on it; `--red-cell` pretends one cell moved, and leg A must;
+`--red-drv` pretends DRV_VER moved with no bump, and leg D must name every
+real driver and no module; `--red-mod` pretends the release's modules carry
+another kernel's build, and leg D must judge them as drivers and go red.
 """
 import argparse
 import fcntl
@@ -352,14 +361,43 @@ def version_of(tree, rel, name):
     return int(m.group(1))
 
 
-def leg_d(base, files, bumps, theirs):
+def release_build(base):
+    """The release kernel's BUILD_NUM (SPEC.md 14.2), as its own build
+    generated it - the word every one of its modules carries at MOD_H_BUILD."""
+    m = re.search(r"^%define\s+BUILD_NUM\s+(\d+)",
+                  read(base, "build/buildnum.inc"), re.M)
+    return int(m.group(1))
+
+
+def leg_d(base, files, bumps, theirs, red_drv=False, red_mod=False):
     """The header read off the IMAGE the release's own tools unwrap, because
     a packed driver is a `CZ` file and its header is inside the stream."""
     pf = version_of(ROOT, "apps/os88api.inc", "PKG_FMT")
     dv = version_of(ROOT, "drivers/os88drv.inc", "DRV_VER")
+    # SPEC.md 2.8.2: a module is the release KERNEL's, by build number, and
+    # never DRV_VER's - only the release's own kernel will load it. Read both
+    # facts off the release tree, and hold a module to BOTH, so a real
+    # driver that merely carries a stray version byte is still judged below.
+    mv = version_of(base, "kernel/mod.inc", "MOD_VER")
+    bn = release_build(base)
+    if red_drv:
+        dv += 1
+        print("D    red arm: pretending DRV_VER moved to %d with no bump" % dv)
+    if red_mod:
+        bn += 1
+        print("D    red arm: pretending the release modules are from build "
+              "%d's neighbour" % (bn - 1))
+    mods = [p for p in files["drv"] if isinstance(theirs.get(p), list)
+            and theirs[p][1] == mv and mv != dv and theirs[p][2] == bn]
+    if mods:
+        say("D", "ok", "%d release .DRVs are kernel modules (MOD_VER %d, "
+            "build %d): build-locked to the kernel they ship beside "
+            "(SPEC.md 2.8.2), not DRV_VER's question: %s"
+            % (len(mods), mv, bn,
+               " ".join(os.path.basename(p) for p in mods)))
     for kind, want, guard in (("pkg", pf, "PKG_FMT"), ("drv", dv, "DRV_VER")):
         heads = [p for p in files[kind] if isinstance(theirs.get(p), list)
-                 and theirs[p][1] is not None]
+                 and theirs[p][1] is not None and p not in mods]
         off = [p for p in heads if theirs[p][1] != want]
         if not heads:
             say("D", "FAIL", "no %s header read - the leg would test nothing"
@@ -391,8 +429,10 @@ for kind, path in json.loads(sys.stdin.read()):
         u = {"pkg": os88pkg.image_unwrap, "drv": os88drv.image_unwrap,
              "cz": os88lz.cz_unwrap}[kind](b)
         u = bytes(u)
+        o8 = u[:2] == b"O8" and len(u) >= 6
         out[path] = [hashlib.sha256(u).hexdigest(),
-                     u[2] if u[:2] == b"O8" else None]
+                     u[2] if o8 else None,
+                     u[4] | u[5] << 8 if o8 else None]   # a module's build
     except BaseException as e:
         out[path] = "ERROR %s: %s" % (type(e).__name__, e)
 print(json.dumps(out))
@@ -634,6 +674,8 @@ def main():
                     help="launch only packages whose path contains this")
     ap.add_argument("--red-version", action="store_true")
     ap.add_argument("--red-cell", action="store_true")
+    ap.add_argument("--red-drv", action="store_true")
+    ap.add_argument("--red-mod", action="store_true")
     # the launch leg's own subprocess interface
     ap.add_argument("--leg", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--tools", help=argparse.SUPPRESS)
@@ -661,7 +703,7 @@ def main():
     items = [(k, p) for k in ("pkg", "drv", "cz") for p in files[k]]
     theirs = unwrap_all(os.path.join(base, "tools"), items)
     mine = unwrap_all(TOOLS, items)
-    leg_d(base, files, bumps, theirs)
+    leg_d(base, files, bumps, theirs, a.red_drv, a.red_mod)
     leg_e(base, files, theirs, mine)
     _, notes = allowlist()
     for n in notes:
