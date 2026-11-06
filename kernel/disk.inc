@@ -6806,22 +6806,6 @@ dsk_lbahi:   dw 0                ; the HIGH word of the next transfer's LBA
     %error "dsk_lbahi must follow dsk_rah_busy: dsk_xfer's cache gate reads them as one word"
 %endif
 %endif
-%ifndef KD_BUILD
-%ifndef KERN_MEGA
-  %define DSK_RAHINT            ; the loader's peek hint (dsk_rah_fill): not
-%endif                          ; kern_dos, whose image has no room, and not
-%endif                          ; kern_mega, whose store's landing is 9 sectors
-%ifdef DSK_RAHINT
-dsk_rah_hint: dw 0               ; SECTORS THE CALLER WILL READ from the one it
-                                 ; is asking for, armed by the loader across
-                                 ; its header peek alone (ld_run_body_x) and 0
-                                 ; otherwise: a fill it causes may then run to
-                                 ; the CYLINDER's end over several slots
-                                 ; instead of to the track's (kernel hot-paths
-                                 ; pass 1). .text with a real initialiser:
-                                 ; -f bin zeroes nothing. A BYTE, in a word so
-                                 ; that `.text` after it keeps an even shift
-%endif
 dsk_rah_cap:  db DSK_RAH_AUTO    ; A CEILING SOMEBODY ELSE SET (SPEC.md
                                  ; 18.95.8): DSK_RAH_AUTO = nobody has, which
                                  ; is the behaviour every machine that never
@@ -6985,42 +6969,8 @@ dsk_rah_fill:
     mov ax, di
     xor dx, dx
     div word [disk_spt]
-%ifdef DSK_RAHINT
-    xchg ax, cx                 ; CX = the track, for the hint below
-%endif
     mov ax, [disk_spt]
     sub ax, dx                  ; sectors left in DI's track, >= 1
-%ifdef DSK_RAHINT
-    ; --- THE LOADER'S PEEK: as far as the file goes (kernel hot-paths pass 1)
-    ; A package launch peeks its header - one sector - and then reads the
-    ; whole file. The peek's fill stopped at the track's end, so the read
-    ; behind it began a fresh int 13h at the next track, where the direct
-    ; path would have run on to the cylinder's end: MEASURED on the 360KB apps
-    ; disk, Note Pad, TexPad and Paint each took ONE CALL MORE than their
-    ; cylinders. So with the hint armed the fill runs to the same bound
-    ; dsk_xfer's own reads use - the cylinder on a floppy whose FDC was seen
-    ; to cross a head (SPEC.md 18.91.1), else the track - and to the hint,
-    ; across as many slots as that takes (.multi below).
-    cmp byte [dsk_rah_hint], 0
-    je .one
-    test byte [dsk_unit], 0x80
-    jnz .hcap                   ; a fixed disk: the track, as dsk_xfer reads
-    cmp byte [dsk_cylrun], 0
-    je .hcap
-    cmp word [disk_heads], 2    ; two heads (every floppy that has a second):
-    jne .hcap                   ; from head 0 the cylinder is this track's
-    test cl, 1                  ; remainder and the whole of head 1's, from
-    jnz .hcap                   ; head 1 the remainder alone
-    add ax, [disk_spt]
-.hcap:
-    mov cl, [dsk_rah_hint]
-    mov ch, 0
-    cmp ax, cx
-    jbe .vol
-    xchg ax, cx                 ; no further than the file goes
-    jmp short .vol
-.one:
-%endif
     cmp ax, DSK_RAH_SECS
     jbe .vol
     mov ax, DSK_RAH_SECS
@@ -7042,11 +6992,6 @@ dsk_rah_fill:
     cmp word [dsk_rah_bnc], 0   ; the store is above 1MB and its landing was
     je .nofill                  ; shed: serve what it holds, fill nothing
 .land:
-%endif
-%ifdef DSK_RAHINT
-    cmp ax, DSK_RAH_SECS
-    ja .multi                   ; a hinted fill longer than one slot
-.single:
 %endif
 
     ; --- spend a slot: round robin, a chunk having no better claim than its
@@ -7153,75 +7098,6 @@ dsk_rah_fill:
     pop es
     pop di
     jmp kretc_dx
-%ifdef DSK_RAHINT
-; --- .multi: ONE int 13h into SEVERAL slots, for the loader's peek ----------
-; AX = the fill, more than DSK_RAH_SECS sectors from DI. It takes the first m
-; slots and reads into them as one run - the slots ARE consecutive in the
-; claim, 4,608 bytes apiece - then stamps each record with its own nine (no
-; more than the claim holds, or it is a one-slot fill), so every slot is
-; still an ordinary one-chunk slot that a later fill evicts on its own and no
-; record ever describes storage another owns. A span across a 64KB page is
-; NOT refused, as one slot across one is (SPEC.md 18.95.7.1): dsk_runcap cuts
-; the read at the page as it cuts any, which is two calls - what the peek and
-; the read behind it cost anyway - and never a wrong byte. The spared-once mark
-; (18.95.10) is not consulted: a multi fill is a file read the loader has said
-; is coming, not a chunk competing for residence.
-.multi:
-    mov dx, ax                  ; DX = the length
-    add ax, DSK_RAH_SECS - 1
-    mov cl, DSK_RAH_SECS
-    div cl
-    cbw                         ; AX = m, the slots it takes (under 128)
-    cmp ax, [dsk_rah_runs]
-    jbe .mfit
-    mov ax, DSK_RAH_SECS        ; more than the claim holds: one slot's worth
-    jmp .single
-.mfit:
-    mov cx, ax                  ; CX = m: slots 0 .. m-1 are spent, and the
-    cmp ax, [dsk_rah_runs]      ; round robin goes on from m. From slot 0 and
-    jb .mnext                   ; not from the round robin's place, because
-    xor ax, ax                  ; that needs no wrap, and what it evicts is
-.mnext:                         ; no worse a guess: the file read behind the
-    mov [dsk_rah_next], ax      ; peek streams past the cache anyway
-    mov si, dsk_rah_tab         ; SI = record 0 (and BX = slot 0's offset in
-    xor bx, bx                  ; the claim, below)
-    push si                     ; record 0, the output
-.mzero:
-    and word [si+RAH_N], 0      ; nothing in any of them until the read works
-    add si, RAH_REC
-    loop .mzero
-    mov cx, dx                  ; CX = the run
-    mov es, [dsk_rah_seg]
-    mov ax, di
-    inc byte [dsk_rah_busy]     ; ...not itself cached
-    call disk_read_x
-    dec byte [dsk_rah_busy]     ; (dec leaves CF alone)
-    pop si                      ; SI = record 0, the output (pop: CF kept)
-    jc .out
-    mov bx, si
-    mov ax, di                  ; AX = the LBA each record starts at
-.mstamp:
-    mov [bx+RAH_LBA], ax
-    mov cx, DSK_RAH_SECS
-    cmp dx, cx
-    jae .mn
-    mov cx, dx                  ; the last slot's share
-.mn:
-    mov [bx+RAH_N], cx
-    push ax
-    mov al, [disk_drive]
-    cbw
-    mov [bx+RAH_VOL], ax        ; the volume, and RAH_HIT clear
-    mov byte [bx+RAH_END], 0    ; the stream's next sector is each one's first
-    mov ax, [dsk_sigcur]
-    mov [bx+RAH_SIG], ax
-    pop ax
-    add ax, cx
-    add bx, RAH_REC
-    sub dx, cx
-    jnz .mstamp                 ; (CF = 0 out of the last sub)
-    jmp .out
-%endif
 
 ; -----------------------------------------------------------------------------
 ; dsk_rah_flush - forget every cached chunk
