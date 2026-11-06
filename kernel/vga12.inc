@@ -2081,17 +2081,18 @@ gfx_blit4:
                                 ; is exactly the kind of luck a row cursor
                                 ; should not be resting on
     mov [gfx_blit_ro], ax
-    mov ax, bx                  ; ...and this row's pair table: the two pixels
-    add ax, [gfx_blit_x]        ; of a pair are always opposite parities, so
-    mov dx, gfx_pairtab0        ; (x + y) & 1 picks the table and the dither
-    test al, 1                  ; then costs the loop nothing (SPEC.md 39.4)
-    jz .par
-    mov dx, gfx_pairtab1
+    pop ax
+    cmp byte [gfx_blit_fst], 1  ; the pair table below is sw_blit_row's ALONE,
+    jne .rowd                   ; so the planar paths skip it (kernel hot-paths
+                                ; pass 1: ~100 clocks a row, the same bytes)
+    mov dx, bx                  ; ...and this row's pair table: the two pixels
+    add dx, [gfx_blit_x]        ; of a pair are always opposite parities, so
+    shr dx, 1                   ; (x + y) & 1 picks the table and the dither
+    mov dx, gfx_pairtab0        ; then costs the loop nothing (SPEC.md 39.4).
+    jnc .par                    ; CF is the parity: `mov` writes no flag, and
+    mov dx, gfx_pairtab1        ; AX is the caller's x again already
 .par:
     mov [gfx_blit_tb], dx
-    pop ax
-    cmp byte [gfx_blit_fst], 1
-    jne .rowd
     call sw_blit_row            ; THE WHOLE ROW, no run scan at all
 .jnextrow:
     jmp .nextrow                ; (near: the scan below is longer than 127)
