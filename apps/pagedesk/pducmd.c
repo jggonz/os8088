@@ -166,7 +166,7 @@ static void pdu_menusync(void)
     pdu_mview[MV_NOTES]  = pdu_want_notes[pdu_L.kind]
                            ? pdu_mi("\001Hide Notes panel", i)
                            : pdu_mi("\001Show Notes panel", i);
-    pdu_mview[MV_PREFS]  = pdu_mi("\001Preferences...", 0);
+    pdu_mview[MV_PREFS]  = pdu_mi("\001Preferences...", 1);   /* prefs */
     pdu_mdoc[0] = pdu_mi(pdu_mode == 0 ? "\001* Read mode  F5"
                                        : "\001  Read mode  F5", open);
     pdu_mdoc[1] = pdu_mi(pdu_mode == 1 ? "\001* Annotate mode  F6"
@@ -248,6 +248,8 @@ static int pdu_pop_rows(void)
         return pdu_nt_prows();          /* notes */
     if (pdu_pop == P_PAGES)
         return (pdu_npages + 7) / 8 + 1;
+    if (pdu_pop == P_PREFS)             /* prefs */
+        return 8;
     return 0;
 }
 
@@ -309,6 +311,10 @@ static void pdu_pop_paint(void)
     }
     if (pdu_pop == P_NOTES || pdu_pop == P_NOTE) {      /* notes */
         pdu_nt_ppaint();
+        return;
+    }
+    if (pdu_pop == P_PREFS) {           /* prefs */
+        ovl_pf_paint();
         return;
     }
     pdu_fill(p->x1, p->y1, p->x2, p->y2, OS88_WHITE);
@@ -381,6 +387,10 @@ static void pdu_pop_open(int kind, int src)
     if (kind == P_FIND) w = 30;
     if (kind == P_NOTES || kind == P_NOTE) w = pdu_nt_pw();  /* notes */
     if (kind == P_PAGES) w = 32;
+    if (kind == P_PREFS) {              /* prefs */
+        pdp_load();
+        w = 28;
+    }
     if (kind == P_HELP) {
         pdu_hpage = 0;
         w = ovl_card_size(pdu_helpw);
@@ -435,6 +445,7 @@ static void pdu_pop_shut(void)
     if (pdu_pop == P_NONE)
         return;
     pdu_nt_pclose();                    /* notes */
+    pdp_closed();                       /* prefs */
     pdu_pop = P_NONE;
     src = pdu_popsrc;
     pdu_popsrc = C_NONE;
@@ -673,7 +684,7 @@ void os88_oncmd(int item, int menu, void *win)
             pdu_want_notes[pdu_L.kind] = !pdu_want_notes[pdu_L.kind];
             pdu_reflow();
         } else
-            pdu_tell("Preferences are not in this build yet.");
+            pdu_pop_open(P_PREFS, C_NONE);      /* prefs */
     } else if (menu == 3) {
         if (item <= 3) pdu_set_mode(item);
         else if (item == MD_PREV) pdu_cmd(C_PREV);
@@ -890,6 +901,10 @@ void os88_onkey(int ascii, int scan, void *win)
         pdu_find_key(ascii);
         return;
     }
+    if (pdu_pop == P_PREFS) {           /* prefs: arrows are scan codes */
+        ovl_pf_key(ascii, scan);
+        return;
+    }
     if (pdu_pop == P_HELP) {
         if ((ascii == 13 || ascii == ' ') && ovl_card_more(pdu_helpw) != 2)
             pdu_pop_close();
@@ -982,6 +997,10 @@ static void pdu_pop_click(int x, int y)
         return;
     if (pdu_nt_pclick(x, y))            /* notes */
         return;
+    if (pdu_pop == P_PREFS) {           /* prefs */
+        ovl_pf_click(x, y);
+        return;
+    }
     p = &pdu_poprect;
     k = (y - p->y1 - 4) / PDU_POP_ROW;
     if (pdu_pop == P_ZOOM) {

@@ -20758,6 +20758,11 @@ pdnav: $(BUILD)/pde_srch $(BUILD)/pde_link
 # compiles, against a fake store); tests/unit/t_pdnotes.py is the same run.
 $(BUILD)/pagedesk.raw.asm: $(PDDIR)/pdovlnotes.c
 
+# ---- PageDesk: prefs ----
+# pdovlpref.c is #included by pdovl.c and the wildcard (pdu*.c) does not name it
+$(BUILD)/pagedesk.raw.asm: $(PDDIR)/pdovlpref.c
+# ---- end PageDesk: prefs ----
+
 $(BUILD)/pdu_nt: apps/pagedesk/hosttest/pdu_nt.c apps/pagedesk/pdunotes.c \
                  apps/pagedesk/pdu.h apps/pagedesk/pdabi.h | $(BUILD)
 	$(HOSTCC) -O1 -Wall -Wno-unused-function -DPD_HOST -Iapps/pagedesk \

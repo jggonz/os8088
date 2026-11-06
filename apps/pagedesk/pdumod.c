@@ -393,6 +393,8 @@ static int pdu_doc_claim(void)
         fl = 0;
         if (c) {                        /* B: the Flate slots ride its tail */
             big = os88_mem_largest_p();
+            if (pdp_cfg[9])             /* prefs: Flate cache Off */
+                big = 0;
             if (big >= tot + 2 * PDU_FL_PARA + PDU_FL_RESV)
                 fl = 2;
             else if (big >= tot + PDU_FL_PARA + PDU_FL_RESV)
