@@ -224,6 +224,23 @@ pm_on:
     call OSAPI_MEM_CLAIM
     jc .r
     mov [pm_shseg], dx
+    mov dx, [pm_shseg]              ; MOVABLE (SPEC.md 66): pm_shmv
+    mov ax, pm_shmv
+    call OSAPI_MEM_MOVABLE
+    clc                             ; (refused - a pool claim on kern_mega,
+.r:                                 ;   which moves by a rebase - it stays)
+    ret
+; pm_shmv / pm_rmv - Pac-Man's shadow of the glass and its built ROM part
+; (ar_rseg) moved: BX = was, DX = now. A play claims nothing, so neither
+; moves under the renderer (SPEC.md 66.3.1)
+pm_shmv:
+    mov [pm_shseg], dx
+    ret
+pm_rmv:
+    mov [pm_rclaim], dx
+    cmp [ar_rseg], bx
+    jne .r
+    mov [ar_rseg], dx
 .r:
     ret
 pm_off:
@@ -276,6 +293,9 @@ pm_build:
     call pmb_pals
     call pmb_geo
     pop ds
+    mov dx, [pm_rclaim]             ; built: MOVABLE (pm_rmv)
+    mov ax, pm_rmv
+    call OSAPI_MEM_MOVABLE
     pop bx
     clc
     ret

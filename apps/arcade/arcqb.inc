@@ -68,11 +68,18 @@ qb_on:
 %ifdef PKG_MEGA
     call qb_gcode
 %endif
+    mov dx, [qb_gseg]               ; MOVABLE (SPEC.md 66): qb_gmv
+    mov ax, qb_gmv
+    call OSAPI_MEM_MOVABLE
     mov ax, QB_SHPL * 4 / 1024      ; ...and the shadow of the glass
     call OSAPI_MEM_CLAIM
     jc .noshadow
     mov [qb_shseg], dx
-    ret
+    mov dx, [qb_shseg]
+    mov ax, qb_shmv
+    call OSAPI_MEM_MOVABLE
+    clc                             ; (refused - a pool claim on kern_mega,
+    ret                             ;   which moves by a rebase - it stays)
 .noshadow:
     mov dx, [qb_gseg]
     call OSAPI_MEM_FREE
@@ -103,6 +110,79 @@ qb_gcode:
     pop dx
     ret
 %endif
+
+; qb_yields - each yield in G (qbpatch.inc, kind 2) pointed at the N88 core
+; as it is NOW: [ar_core+2] and its header's AH_YIELD. qb_reset's, and
+; ar_partsmv's when the N88 part moves (SPEC.md 20.12.12). No G, nothing.
+; Clobbers AX, BX, DX, SI, DI, ES
+qb_yields:
+    mov ax, [qb_gseg]
+    or ax, ax
+    jz .r
+    mov es, ax
+    mov ax, [ar_core+2]             ; the N88 core: its segment, and its
+    mov [qb_n88], ax                ;   yield's offset from its header
+    push ds
+    mov ds, ax
+    mov ax, [ARC_HDR+AH_YIELD]
+    pop ds
+    mov [qb_n88y], ax
+    mov dx, [qb_n88]                ; DX:BX = the yield
+    mov bx, [qb_n88y]
+    mov si, qb_patches
+.y:
+    lodsb
+    cmp al, 0xFF
+    je .r
+    mov di, [si]
+    add si, 3
+    cmp al, 2
+    jne .y
+    mov [es:di+1], bx               ; call far n88:yield
+    mov [es:di+3], dx
+    jmp .y
+.r:
+    ret
+
+; qb_gmv - G moved (SPEC.md 66; never on kern_mega, where a move is a
+; rebase): BX = was, DX = now. G holds no segment of its own but one: the
+; game's stack, between runs, keeps the far return into its yield - CS = G
+; (the first run's frame too). That, the view's two words and ours. A play
+; claims nothing, so G moves only between runs
+qb_gmv:
+    mov [qb_gseg], dx
+    mov [qb_gcs], dx
+    mov es, [ar_vseg]
+    mov [es:NV_GSEG], dx
+    mov [es:NV_GCS], dx
+    mov si, [es:NV_GSP]
+    mov es, dx
+    cmp [es:si+18], bx              ; (FLAGS and seven registers, then IP:CS)
+    jne .r
+    mov [es:si+18], dx
+.r:
+    ret
+
+; qb_rmv / qb_smv / qb_shmv - Q*bert's built ROM part (ar_rseg), sprite part
+; (ar_aseg) and shadow of the glass moved: the word and the copy it is banked
+; in. BX = was, DX = now
+qb_rmv:
+    mov [qb_rclaim], dx
+    cmp [ar_rseg], bx
+    jne .r
+    mov [ar_rseg], dx
+.r:
+    ret
+qb_smv:
+    mov [qb_sclaim], dx
+    cmp [ar_aseg], bx
+    jne .r
+    mov [ar_aseg], dx
+.r:
+    ret
+qb_shmv:
+    mov [qb_shseg], dx
+    ret
 
 qb_off:
     call qbs_off                    ; (its sound board's memory, ARCADE-SPEC 13)
@@ -197,6 +277,12 @@ qb_build:
     call qbb_sprites
     pop ds
     call ar_freeimg
+    mov dx, [qb_rclaim]             ; built: both MOVABLE (qb_rmv, qb_smv)
+    mov ax, qb_rmv
+    call OSAPI_MEM_MOVABLE
+    mov dx, [qb_sclaim]
+    mov ax, qb_smv
+    call OSAPI_MEM_MOVABLE
     pop bx
     clc
     ret
@@ -356,15 +442,6 @@ qb_reset:
     mov cx, 0x8000
     cld
     rep stosw
-    mov ax, [ar_core+2]             ; the N88 core: its segment, and its
-    mov [qb_n88], ax                ;   yield's offset from its header
-    push ds
-    mov ds, ax
-    mov ax, [ARC_HDR+AH_YIELD]
-    pop ds
-    mov [qb_n88y], ax
-    mov dx, [qb_n88]                ; DX:BX = the yield
-    mov bx, [qb_n88y]
     push ds
     mov ds, [ar_rseg]
     xor si, si
@@ -372,19 +449,8 @@ qb_reset:
     mov cx, QB_PROGLEN / 2
     rep movsw
     pop ds
-    mov si, qb_patches              ; each yield (qbpatch.inc, kind 2): its
-.y:                                 ;   far pointer, the N88 core's
-    lodsb
-    cmp al, 0xFF
-    je .ydone
-    mov di, [si]
-    add si, 3
-    cmp al, 2
-    jne .y
-    mov [es:di+1], bx               ; call far n88:yield
-    mov [es:di+3], dx
-    jmp .y
-.ydone:
+    call qb_yields                  ; each yield: the N88 core's far pointer
+    mov es, [qb_gseg]
     mov di, QB_SP0                  ; the first run's frame: no registers,
     xor ax, ax                      ;   FLAGS with IF clear, and A000h - the
     mov cx, 7                       ;   reset's own `jmp B259h`

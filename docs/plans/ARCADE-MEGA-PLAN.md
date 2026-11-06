@@ -109,14 +109,19 @@ host and by looking. The rows run once, after the last wave (CLAUDE.md,
       `ar_at` (the `SEG_AT` door) is written and has no caller yet.
       MEASURED on Bochs: the arm opens, reads all seven sets READY, and
       plays Space Invaders on kern_mega in protected mode.
-- [ ] Every claim made MOVABLE, with a relocation proc that re-derives
-      through `ar_seg`: the `.ROM`, the pictures, Pac-Man's and Q*bert's
-      built parts and shadows, `qbs_seg`. `qb_gseg` and the code parts move
-      only between plays, so their procs check that no bracket is up. This
-      retires the twelve N lines in `tests/pins.txt`.
+- [x] Every claim made MOVABLE (ARCADE-SPEC 14): the carve and parts
+      (`OP_ONMOVE ar_partsmv`), the `.ROM`, the pictures, Pac-Man's and
+      Q\*bert's built parts and shadows, G, `qbs_seg`. No proc checks for a
+      bracket: a move happens only inside a UI-task claim and a bracket
+      freezes every other instance (SPEC.md 53.2, 66.3.1), so the owner's
+      reading - only while windowed - holds by construction. G's proc puts
+      right the CS its stack keeps between runs. The twelve N lines in
+      `tests/pins.txt` are gone; the import's two C lines and the ring's D
+      line stay.
 - **Verified by:** `arcbuilt`, `arcimport`, `arcface*`, `arcopt` and
-      `qbglass` unchanged, plus a compaction forced between two picks (a
-      new row, `arcmove`).
+      `qbglass` unchanged (the final pass), plus `arcmove` (soak, new):
+      11 moves, every word followed, each board plays on; red with
+      `qb_gmv` a bare `ret`.
 
 ### M2 - no stores through CS (shipped build too)
 
@@ -175,10 +180,10 @@ host and by looking. The rows run once, after the last wave (CLAUDE.md,
       PKG_MEGA user has an arm) applies.
 - [ ] `tests/megahigh.txt`'s two ARCADE lines removed, since the arm
       declares both bits. The gate turns one way.
-- [ ] MEASURED on the 286 (86Box `vm/286-mega`) and the 386 (Bochs): each
-      board's frame rate in protected mode against kern_big on the same
-      machine. Q*bert's live sound stays gated to a 386 (`CPU_386`), as
-      on kern_big.
+- [x] MEASURED on the 286 (86Box `vm/at286-port`, the mr286) and the 386
+      (Bochs): ARCADE-SPEC 14's tables. Against kern_big on the mr286,
+      protected mode costs nothing measurable. Q\*bert's live sound stays
+      gated to a 386 (`CPU_386`), as on kern_big.
 
 ### M5 - verification rows
 

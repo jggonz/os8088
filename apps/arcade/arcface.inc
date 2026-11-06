@@ -213,6 +213,31 @@ af_init:
     mov byte [af_sel], 0
     ret
 
+; af_pcmove / af_pcpin - the pictures' claim MOVABLE (SPEC.md 66), or pinned
+; again across a file call that reads into it or writes out of it (66.3 rule
+; 5's ordering: af_look's reads, af_snapsave's write). af_slot derives a
+; slot at each use, so the word is the proc's whole job. Kept: all
+af_pcmove:
+    push ax
+    mov ax, af_pcmv
+    jmp short af_pcdecl
+af_pcpin:
+    push ax
+    xor ax, ax
+af_pcdecl:
+    push dx
+    mov dx, [af_pclaim]
+    or dx, dx
+    jz .r
+    call OSAPI_MEM_MOVABLE
+.r:
+    pop dx
+    pop ax
+    ret
+af_pcmv:                            ; BX = was, DX = now
+    mov [af_pclaim], dx
+    ret
+
 ; af_quit - the pictures' claim given back
 af_quit:
     xor dx, dx
@@ -228,6 +253,7 @@ af_quit:
 ; a pick would look, the .PIC beside it read. No game is read. Kept: none
 ; =============================================================================
 af_look:
+    call af_pcpin                   ; (read into: pinned until the end)
     mov byte [af_n], 0
     mov byte [af_nready], 0
     mov si, ar_boards
@@ -256,6 +282,7 @@ af_look:
     inc byte [af_n]
     jmp .g
 .done:
+    call af_pcmove                  ; (the pictures read: movable again)
     cmp word [ar_win], 0            ; (at the entry: af_vgacheck, after the
     je .r                           ;   window)
     call af_vgacheck
@@ -1743,12 +1770,14 @@ af_snapsave:
     call OSAPI_FILE_GOTO_QM
     jc .home
     call af_picname
+    call af_pcpin                   ; (written out of: pinned across it)
     mov di, [af_sgame]
     call af_slot
     xor bx, bx
     mov cx, AF_PICSZ
     xor dx, dx
     call OSAPI_FILE_WRITE
+    call af_pcmove
 .home:
     call ar_gohome
     mov si, [ar_win]                ; (the desktop came back before it was

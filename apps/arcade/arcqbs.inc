@@ -77,6 +77,9 @@ qbs_prep:
     rep movsw
     pop es
     pop ds
+    mov dx, [qbs_seg]               ; filled: MOVABLE between plays (a play
+    mov ax, qbs_mv                  ;   claims nothing, SPEC.md 66.3.1)
+    call OSAPI_MEM_MOVABLE
     call qr_reset
     call m6_reset
     mov word [qbs_left], QBS_BOOT & 0xFFFF   ; its own power-on, quietly
@@ -101,6 +104,13 @@ qbs_prep:
     ret
 
 ; qbs_off - the board's memory given back (qb_off's)
+; qbs_mv - the sound board's memory moved (SPEC.md 66): BX = was, DX = now.
+; The 6503's memory is m6_seg, read at each m6_run
+qbs_mv:
+    mov [qbs_seg], dx
+    mov [m6_seg], dx
+    ret
+
 qbs_off:
     xor dx, dx
     xchg dx, [qbs_seg]

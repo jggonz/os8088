@@ -1530,7 +1530,42 @@ view over 20 guest seconds of play.
 | Pac-Man | 835 | 34 (its start) | 0 |
 
 Every log holds the same two #GPs BEFORE the switch to protected mode
-(`1058:1416`, `1058:142F`, DS = 0010h: the boot, not ARCADE). Not yet
-measured: the 286 (86Box `286-mega`), the import on kern_mega, and the
-frame rates against kern_big on one machine (ARCADE-MEGA-PLAN M4, M5).
+(`1058:1416`, `1058:142F`, DS = 0010h: the boot, not ARCADE).
+
+**On a 286** - 86Box's `vm/at286-port`, the owner's mr286 (MR BIOS, 16 MHz,
+4MB) - every board plays on kern_mega: in 20 guest seconds Invaders 1,205
+frames, Part II 1,039, Lunar Rescue 996, Gun Fight 1,269, Sea Wolf 1,237
+(at most one dropped), Q\*bert 896, Pac-Man 423 with 55 dropped at its
+start. Against kern_big ON THE SAME MACHINE, with a scratch build counting
+the loop's idle spins while the board is halted (86Box keeps no cycle
+time, so these are relative):
+
+| board | kern_big | kern_mega (protected mode) |
+|---|---|---|
+| Space Invaders | 60.15 frames/s, 0 dropped | 59.85, 0 dropped |
+| Q\*bert | 61.85 frames/s, 22,915 idle spins/s | 62.05, 22,931 idle spins/s |
+| Pac-Man | 50.70 frames/s, 70 dropped | 51.25, 64 dropped |
+
+Protected mode costs nothing measurable: Q\*bert's spare time is the same
+to 0.1%. Pac-Man is under its 60.61 Hz on this 286 on BOTH kernels - the
+board's own cost, not the mode's. Not yet measured: the import on kern_mega
+(ARCADE-MEGA-PLAN M5).
+
+**Every claim of ARCADE's MOVES** but the import's two (one chooser
+callback each) and the Sound Blaster's ring (the DMA reads it): the carve
+and every fetched part (`OP_ONMOVE ar_partsmv`: the view, the code part -
+its code half in the arm - the aux part, and Q\*bert's yields in G), the
+`.ROM` image (`ar_rimgmv`, once read and checked), the pictures
+(`af_pcmv`, pinned across `af_look`'s reads and `af_snapsave`'s write),
+Pac-Man's ROM part and shadow, Q\*bert's G, ROM part, sprites and shadow,
+and its sound board's memory. A move happens only inside a claim the UI
+task makes (SPEC.md 66.3.1), and in a bracket every other instance is
+frozen (53.2), so a play never sees one: ARCADE claims nothing between a
+pick's end and the bracket's. Between runs Q\*bert's G holds one segment
+of its own - the far return its stack keeps, CS = G - which `qb_gmv` puts
+right with the view's `NV_GSEG`/`NV_GCS`. On kern_mega a move is a rebase
+and no proc is called; a declaration refused there (a pool claim) leaves
+the claim as it was. `tests/arcmove.py` (soak) moves them on MartyPC's XT
+and plays on: 11 moves over Q\*bert and Pac-Man, each board at its rate
+after, red with `qb_gmv` a bare `ret`.
 

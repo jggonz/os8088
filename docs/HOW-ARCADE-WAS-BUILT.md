@@ -612,3 +612,24 @@ defects had been shipping silently, and each was fixed in both builds:
 seven boards, coined and played for 20 seconds each, at their own frame
 rates and with no fault from ARCADE. Bochs is a 386 that keeps no time, so
 the speed on a real 286 is still to be measured.
+
+**On a 286.** On 86Box's copy of the owner's 16 MHz mr286, every board
+plays under kern_mega. Against kern_big on the same machine, protected mode
+costs nothing that can be measured. Q\*bert's spare time, counted as idle
+turns of the loop, is the same to within 0.1%. Pac-Man falls about a sixth
+short of its frame rate there on both kernels, so that is the game's own
+cost.
+
+**Every block can move.** A pinned block is a wall in the heap, and ARCADE
+had twelve. The owner's reading was that they only need to move while the
+window is up, and the kernel's rules make that true by construction: only
+the window task compacts, and only inside a claim it makes. In a full-screen
+bracket every other program is frozen, and a game claims nothing. Each
+block now has a procedure that puts its words right. One of them has a
+twist: Q\*bert's suspended game keeps its own segment on its stack, as the
+return address from its last wait for the frame, and that word has to
+follow too. A new test moves eleven blocks under a paused Q\*bert and
+Pac-Man and plays on. With that one procedure emptied, the test goes red.
+Doing this also found a slip of my own: the declaration at ARCADE's entry
+overwrote the register holding the view's segment, a stray four-byte write
+on kern_big and a refused start on kern_mega.

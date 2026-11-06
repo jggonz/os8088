@@ -507,6 +507,8 @@ inv_sbprep:
     mov al, AR_P_INVSFX
     call op_fetch                   ; idempotent; CF=1 has toasted
     jc .r
+    mov al, AR_P_INVSFX             ; MOVABLE (op_lazymv): every use asks
+    call op_movable                 ;   op_seg again, the mix included
     mov al, AR_P_INVSFX
     call op_seg
     push es

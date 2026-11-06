@@ -43,6 +43,8 @@
 %ifdef PKG_MEGA
 %define OP_WANT_CSEG                ; op_cseg: a board's code part is far-
 %endif                              ;   called through its CODE selector
+%define OP_ONMOVE ar_partsmv          ; the parts' claims MOVE (SPEC.md
+                                        ;   20.12.12): ar_partsmv re-reads them
 %include "os88parts.inc"
 
 %ifdef ARC_PACMAN
@@ -191,6 +193,9 @@ ar_entry:
     mov word [ar_zclaim], 0
     mov word [ar_iclaim], 0
     mov byte [ar_datst], 0
+    mov al, OP_CARVE                ; the carve (the view) MOVABLE: ar_partsmv
+    call op_movable                 ;   asks for ar_vseg again (AL is the
+                                    ;   part: after the signature's ES = AX)
     call OSAPI_FILE_HERE            ; ARCADE's own folder and disk: for
     mov [ar_homedrv], bl            ;   ARCADE.DAT, and to come back to
     mov [ar_homecl], dx             ;   after the chooser has moved us
@@ -304,6 +309,13 @@ ar_select:
 .made:
     pop bx
     mov [ar_bd], bx
+    mov al, [bx+BD_CODE]            ; picked: its parts MOVABLE now, banked in
+    call op_movable                 ;   words ar_partsmv re-reads
+    mov al, [bx+BD_AUX]
+    cmp al, AR_P_NONE
+    je .aux0
+    call op_movable
+.aux0:
     pop es
     pop di
     pop si
@@ -558,6 +570,9 @@ ar_romtry:
     jne .wrongf
     cmp dx, bx
     jne .wrongf
+    mov dx, [ar_rimgc]              ; read and checked: MOVABLE from here on
+    mov ax, ar_rimgmv               ;   (SPEC.md 66.3 rule 5's order)
+    call OSAPI_MEM_MOVABLE
     call OSAPI_FILE_HERE            ; (the image is in: where it was, for its
     mov [ar_rfdrv], bl              ;   picture - ARCADE-SPEC 11.4)
     mov [ar_rfcl], dx
@@ -578,6 +593,53 @@ ar_romtry:
 .missing:
     xor al, al
     stc
+    ret
+
+; ar_rimgmv - the ROM image's claim moved (SPEC.md 66; never on kern_mega,
+; where a move is a rebase): BX = was, DX = now. ar_rimg is two paragraphs
+; into it, and ar_rseg IS ar_rimg on a board that builds no ROM part of its
+; own; everything else derives from these at each use
+ar_rimgmv:
+    mov [ar_rimgc], dx
+    mov bx, [ar_rimg]
+    mov ax, 2
+    call ar_sub
+    mov [ar_rimg], dx
+    cmp [ar_rseg], bx
+    jne .r
+    mov [ar_rseg], dx
+.r:
+    ret
+
+; ar_partsmv - OP_ONMOVE (SPEC.md 20.12.12): the carve or a fetched part
+; moved, and op_seg answers its new place already. Every segment banked from
+; it is asked again: the view, the picked board's code part (op_cseg's code
+; half in the arm) and its aux - and Q*bert's yields, which name the N88 part
+; inside G. Nothing is far-called under a claim: a run claims nothing
+ar_partsmv:
+    xor al, al
+    call op_seg
+    mov [ar_vseg], ax
+    mov bx, [ar_bd]
+    or bx, bx
+    jz .r
+    mov al, [bx+BD_CODE]
+%ifdef PKG_MEGA
+    call op_cseg
+%else
+    call op_seg
+%endif
+    mov [ar_core+2], ax
+    mov al, [bx+BD_AUX]
+    cmp al, AR_P_NONE
+    je .noaux
+    call op_seg
+    mov [ar_aseg], ax
+.noaux:
+    cmp bx, ar_bd_qb
+    jne .r
+    jmp qb_yields                   ; (the N88 part's new segment, in G)
+.r:
     ret
 
 ; ar_crc32 - DX:AX = the CRC-32 (zlib's) of CX bytes at DS:SI, CX = 0 being

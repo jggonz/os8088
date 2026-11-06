@@ -4757,6 +4757,16 @@ SOAK = [
         "is kept as it is left with Esc from a hold, and is back after Game > "
         "Reset. Red (0000) without the put-back",
         needs=("marty",), wants=("build/arcade720.img", "build/arcade.o88", "build/os8088-360.img")),
+    Row("arcmove", "soak", py("tests/arcmove.py"), 78.0,
+        "ARCADE's claims MOVE (SPEC.md 66, ARCADE-SPEC 14) on MartyPC's VGA XT: "
+        "Q*bert, Pac-Man and Space Invaders each picked, played and left, then a "
+        "compaction posted from outside (tests/pkgmove.py's door). Every word "
+        "names a live declared claim, the copies agree (ar_rseg, ar_aseg, the "
+        "view, the code part; Q*bert's G in qb_gcs, the view and the CS its stack "
+        "keeps, every yield naming the N88 part's new place), moved bytes are "
+        "unchanged, at least one claim moved, and Enter plays on at the board's "
+        "rate. Red with qb_gmv a bare `ret` (the stack's CS, the yields)",
+        needs=("marty",), wants=("build/arcade720.img", "build/arcade.o88", "build/os8088-360.img")),
     Row("m6502", "soak", py("tests/m6502.py"), 28.0,
         "ARCADE's 6502 core (apps/arcade/arc6502.inc, ARCADE-SPEC 13.2) under Unicorn "
         "against tools/qbsnd.py's CPU6502: every documented opcode from 300 random "
