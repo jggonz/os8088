@@ -1269,6 +1269,14 @@ DRV_HMA_SEG equ 0xF000
   %endif
 %endif
 
+; SPEC.md 39.31's bank walk replaces sw_plane_op/sw_col on kern_big. It rides
+; the same knob: NOCOLFAST=1 builds the old column-major body (with no
+; whole-column store), which is what keeps tests/swcolsame.py an A/B of two
+; different bodies drawing the same pixels.
+%ifdef GFX_COLFAST
+  %define SW_BANKWALK 1
+%endif
+
 ; ...AND THE DECODER IS A VGA THING, so it may not outlive the card. Its three
 ; bodies (vga_p4build, vga_blit_prow, vga_prow_emit) sit inside `%ifdef
 ; GFX_PLANE` alone rather than inside both gates, which is correct only while

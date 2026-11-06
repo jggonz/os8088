@@ -436,7 +436,241 @@ sw_ink:
 ; sw_col from sw_plane_op only, sw_plane_op from sw_rect_pl only, sw_rect_pl
 ; from sw_rect only, and nothing on that chain writes DS.
 ; -----------------------------------------------------------------------------
+%ifdef SW_BANKWALK
+; =============================================================================
+; SPEC.md 39.31 - THE RECT IS WALKED A BANK AT A TIME (kern_big)
+;
+; What follows replaces the three column-major passes below it on kern_big:
+; left edge column, right edge column, interior rows, each stepping rows with
+; gfx_nextrow's add, test and conditional wrap and toggling the dither
+; pattern on every row. On a banked framebuffer rows y, y+B, y+2B... (B =
+; [vid_bmask] + 1, two on CGA and four on Hercules) are [vid_stride] apart in
+; ONE bank, and B is even, so they also share a dither parity. So a rect is
+; walked as B "phases" - every row of bank phase j, top to bottom - and inside
+; a phase the row step is one `add di, si`, the pattern is constant and the
+; count is `loop`'s. No pixel is written twice and the settled picture is the
+; same byte for byte; what changes is the ORDER rows land in within one call.
+;
+; And a phase writes the whole ROW: the masked left byte, the whole bytes,
+; the masked right byte, in one pass, so the per-row loop is paid once and
+; not three times. A whole-byte edge (mask FF, which SPEC.md 11.94 makes the
+; common case) is folded into the run of whole bytes, so an aligned fill is
+; nothing but `rep stosw` a row. One-row rects - every hline - skip the phase
+; driver and jump straight into the row body.
+;
+; Each masked byte is still ONE store, `dest ^= (pat ^ dest) & mask`
+; (SPEC.md 39.25.1): an interrupt between the read and the store cannot have
+; the bits outside the mask rewritten.
+;
+; in/out/clobbers: sw_plane_op's contract below - everything but the segment
+; registers.
+; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; sw_walk - run the row body at [sw_kern] once per bank phase
+; in:  DI = the rect's first byte (row y1), AH = phase 0's pattern, BX/SI/BP
+;      the body's parameters, [sw_n0]/[sw_rp] the phase geometry
+; clobbers: AL, CX, DX, DI, flags. Every body preserves AH, BX, SI, BP and
+; ES, and takes its row count in DX.
+; -----------------------------------------------------------------------------
+sw_walk:
+    mov dx, [sw_n0]
+    mov cl, [sw_rp]
+    xor ch, ch
+    inc cx                      ; rp + 1 phases of n0 rows...
+    call .seg
+    mov cl, [vid_bmask]         ; ...then B - 1 - rp phases of n0 - 1 (rows
+    sub cl, [sw_rp]             ; never reach 0 there: the walk is only
+    jz .out                     ; taken from 9 rows, past 2B on both)
+    mov dx, [sw_n0]
+    dec dx
+.seg:
+    push cx
+    push dx
+    push di
+    call [sw_kern]
+    pop di
+    add di, [vid_rowadd]        ; the next phase starts one row down: the only
+    test di, [vid_wrapbit]      ; bank wrap a walk tests, once a PHASE
+    jz .nw
+    add di, [vid_wrapfix]
+.nw:
+    xor ah, [sw_altm]           ; ...and on the other dither parity
+    pop dx
+    pop cx
+    loop .seg
+.out:
+    ret
+
+sw_k_col:                       ; one masked byte column
+    mov cx, dx
+.r:
+    mov al, ah
+    xor al, [es:di]
+    and al, bl
+    xor [es:di], al
+    add di, si
+    loop .r
+    ret
+
+sw_k_colf:                      ; one whole byte column: nothing under it to
+    mov cx, dx                  ; keep, so one store (SPEC.md 39.25)
+.r:
+    mov [es:di], ah
+    add di, si
+    loop .r
+    ret
+
+sw_k_xcol:                      ; one XOR column - every drag outline's two
+    mov cx, dx                  ; sides, redrawn on every pointer step - TWO
+    shr cx, 1                   ; rows a `loop`: the odd row first, then pairs
+    jnc .r
+    xor [es:di], bl
+    add di, si
+    jcxz .o
+.r:
+    xor [es:di], bl
+    add di, si
+    xor [es:di], bl
+    add di, si
+    loop .r
+.o:
+    ret
+
+sw_k_i:                         ; whole bytes only: an aligned fill
+    mov al, ah                  ; AX = pattern:pattern, so stosw is safe for
+.r:                             ; the solid 00/FF and the AA/55 dither alike
+    mov cx, bp
+    shr cx, 1
+    rep stosw                   ; string ops leave the shr's CF alone, so the
+    adc cx, cx                  ; odd byte is CX = CF and one more rep, with
+    rep stosb                   ; no branch
+    add di, si
+    dec dx
+    jnz .r
+    ret
+
+sw_k_lir:                       ; masked left, whole bytes, masked right
+.r:
+    mov al, ah
+    xor al, [es:di]
+    and al, bl
+    xor [es:di], al
+    inc di
+    mov al, ah
+    mov cx, bp
+    shr cx, 1
+    rep stosw
+    adc cx, cx
+    rep stosb                   ; AL is still the pattern for the right edge
+    xor al, [es:di]
+    and al, bh
+    xor [es:di], al
+    add di, si
+    dec dx
+    jnz .r
+    ret
+
+sw_k_xrow:                      ; XOR: both edges xor their mask, the bytes
+.r:                             ; between are complemented a WORD at a time
+    xor [es:di], bl             ; (AH is no pattern here, so AX is free)
+    inc di
+    mov cx, bp
+    shr cx, 1
+    jnc .ev
+    not byte [es:di]
+    inc di
+.ev:
+    jcxz .rt
+.w:
+    mov ax, [es:di]
+    not ax
+    stosw
+    loop .w
+.rt:
+    xor [es:di], bh
+    add di, si
+    dec dx
+    jnz .r
+    ret
+sw_po_sel:
+    mov si, [vid_stride]        ; SI = the in-bank row step, less what a row
+    mov di, [gfx_roff]          ; advances DI by itself
+    mov bl, [gfx_lmsk]          ; (the combined mask, for one byte column)
+    mov ah, [sw_pat]            ; AH = phase 0's pattern (unused by XOR)
+    mov bp, [gfx_rspan]         ; BP = the run of whole bytes, set below
+    cmp byte [sw_mode], SWM_XOR
+    je .xor
+    or bp, bp                   ; ONE BYTE COLUMN - a pixel, a vline - first,
+    jnz .rows                   ; because it is the shortest call there is
+    mov cx, sw_k_colf
+    cmp bl, 0xFF
+    je .go
+    mov cx, sw_k_col
+.go:                            ; CX = the row body
+    or dx, dx                   ; one row: no phases, and the row body's own
+    jnz .walk                   ; `ret` is this routine's
+    inc dx
+    jmp cx
+.walk:
+    mov [sw_kern], cx
+    mov al, dl                  ; the phase geometry: phase j (row y1 + j)
+    and al, [vid_bmask]         ; has n0 rows for j <= rp and n0 - 1 after:
+    mov [sw_rp], al             ;   rp = (N - 1) & bmask
+    mov cl, [vid_bshift]        ;   n0 = ((N - 1) >> bshift) + 1
+    shr dx, cl
+    inc dx
+    mov [sw_n0], dx
+    jmp sw_walk
+.rows:
+    mov bh, [gfx_rmsk]
+    mov cx, sw_k_i
+    cmp bx, 0xFFFF              ; both edges whole: the row is S + 1 whole
+    je .whole                   ; bytes from the left one
+    sub si, bp                  ; else S - 1 whole bytes between two masked
+    dec bp                      ; ones; DI advances S across the row
+    mov cx, sw_k_lir
+    jmp short .go
+.whole:
+    inc bp
+    sub si, bp
+    jmp short .go
+.xor:
+    mov cx, sw_k_xcol
+    or bp, bp
+    jz .go
+    mov bh, [gfx_rmsk]
+    sub si, bp
+    dec bp
+    mov cx, sw_k_xrow
+    jmp short .go
+    db 0                        ; PARITY, never executed: the hot routines
+                                ; after this file keep their entry parity
+                                ; (tests/unit/t_hotpar.py)
+
+%endif
+%ifdef SW_BANKWALK
+sw_po_big:                      ; 9 rows or more (DX = N - 1): a rect with
+    cmp word [gfx_rspan], 0     ; whole bytes in its row walks; a single byte
+    jne sw_po_sel               ; column - whose per-row saving is smaller -
+    cmp dx, 24                  ; from 25 rows
+    jae sw_po_sel
+    jmp short sw_plane_cm
+
+; THE ENTRY. The walk pays ~250 cycles a PHASE, so a short rect keeps the
+; column-major body below and pays five instructions for the question. One
+; row (every hline, every pixel) takes its row body directly. Constants rather
+; than multiples of B, so the test stays this short; the break-evens, per
+; body and adapter, are in docs/plans/khp1/mono.md.
 sw_plane_op:
+    mov dx, [gfx_rrows]
+    dec dx
+    jz sw_po_sel
+    cmp dx, 8
+    jae sw_po_big
+sw_plane_cm:                    ; THE COLUMN-MAJOR BODY, for those short rects
+%else
+sw_plane_op:
+%endif
     mov ah, [gfx_lmsk]          ; left edge column (whole rect if 1 byte wide)
     mov di, [gfx_roff]
     call sw_col
@@ -1003,18 +1237,21 @@ sw_fill_pat:
     mov bx, [gfx_ry1]
     and bx, 7
     mov bp, [gfx_rrows]
+    mov dx, [vid_rowadd]        ; SPEC.md 39.34: the row step less the run's
+    sub dx, si                  ; own advance, so DI is never banked
 .irow:
     mov al, [gfx_patbuf+bx]
-    mov ah, al                  ; byte uniform across the row: stosw + odd
-    mov cx, si                  ; tail via the shr carry, like sw_plane_op
-    shr cx, 1
-    push di
+    mov ah, al                  ; byte uniform across the row: stosw, and the
+    mov cx, si                  ; odd byte as CX = CF and one more rep (string
+    shr cx, 1                   ; ops leave the shr's CF alone)
     rep stosw
-    jnc .ieven
-    stosb
-.ieven:
-    pop di
-    call gfx_nextrow
+    adc cx, cx
+    rep stosb
+    add di, dx                  ; gfx_nextrow, inlined
+    test di, [vid_wrapbit]
+    jz .inw
+    add di, [vid_wrapfix]
+.inw:
     inc bx
     and bx, 7
     dec bp
@@ -1048,18 +1285,23 @@ sw_patcol:
     mov bx, [gfx_ry1]
     and bx, 7
 .row:
-    mov al, [gfx_patbuf+bx]
-    mov ah, [es:di]
-    xor al, ah
-    and al, cl
-    xor al, ah
-    mov [es:di], al
+    mov al, [gfx_patbuf+bx]     ; dest ^= (pat ^ dest) & mask, ONE store
+    xor al, [es:di]             ; (SPEC.md 39.25.1's idiom: the bits outside
+    and al, cl                  ; the mask are never written back with a
+    xor [es:di], al             ; value read before an interrupt)
     inc bx
     and bx, 7
-    call gfx_nextrow
+    add di, [vid_rowadd]        ; gfx_nextrow, inlined (SPEC.md 39.34)
+    test di, [vid_wrapbit]
+    jz .nw
+    add di, [vid_wrapfix]
+.nw:
     dec bp
     jnz .row
     ret
+    db 0                        ; PARITY, never executed: the hot routines
+                                ; after this file keep their entry parity
+                                ; (tests/unit/t_hotpar.py)
 
 
 ; -----------------------------------------------------------------------------
@@ -1114,17 +1356,22 @@ sw_xfer:
     jne .rst
     push si                     ; save: plane -> buffer; caller SI untouched
     mov si, ax
-    mov ds, bx                  ; movsb source = this plane
+    mov ax, [vid_wrapbit]       ; SPEC.md 39.32: the row step lives in BX and
+    mov ds, bx                  ; AX (the plane segment and the walking
+    mov bx, [cs:vid_rowadd]     ; offset are spent once DS and SI hold them),
+    sub bx, bp                  ; less the bytes the copy advanced the row by
 .srow:
-    mov cx, bp
-    rep movsb                   ; buffer DI advances contiguously
-    sub si, bp
-    add si, [cs:vid_rowadd]     ; gfx_nextrow INLINED, on SI: the framebuffer
-    test si, [cs:vid_wrapbit]   ; pointer is SI here, so through the call it
-    jz .snw                     ; cost two xchg's as well as the call and the
-    add si, [cs:vid_wrapfix]    ; ret - on a loop whose body is a rep movsb of
-.snw:                           ; two or three bytes (PERFORMANCE.md Part 9
-    dec dx                      ; Set 3: inline it in every row loop)
+    mov cx, bp                  ; A WORD AT A TIME: `rep movsw` is 12.5 clocks
+    shr cx, 1                   ; a byte on an 8088 where `rep movsb` is 17,
+    rep movsw                   ; and the odd byte is CX = CF and one more rep
+    adc cx, cx                  ; (string ops leave the shr's CF alone), with
+    rep movsb                   ; no branch. Buffer DI advances contiguously
+    add si, bx                  ; gfx_nextrow INLINED, on SI, its step and wrap
+    test si, ax                 ; bit in registers (PERFORMANCE.md Part 9 Set
+    jz .snw                     ; 3: inline it in every row loop)
+    add si, [cs:vid_wrapfix]
+.snw:
+    dec dx
     jnz .srow
     pop si
     jmp .pnext
@@ -1135,19 +1382,22 @@ sw_xfer:
                                 ; caller's buffer
     push di                     ; restore: buffer -> plane; caller DI untouched
     mov di, ax
+    mov ax, [vid_wrapbit]       ; ...and the same two registers for DI's step
     push es
     pop ds                      ; movsb source = caller's buffer
     mov es, bx                  ; movsb dest = this plane
+    mov bx, [cs:vid_rowadd]
+    sub bx, bp
 .rrow:
     mov cx, bp
+    shr cx, 1
+    rep movsw
+    adc cx, cx
     rep movsb
-    add si, [cs:gfx_sub_rs]     ; CS: IS MANDATORY - DS is the BUFFER in here,
-                                ; which is why the row walk below reads
-                                ; [cs:vid_rowadd] too
-    sub di, bp
-    add di, [cs:vid_rowadd]     ; ...and here on DI, which is what gfx_nextrow
-    test di, [cs:vid_wrapbit]   ; takes, so this one saves only the call and
-    jz .rnw                     ; the ret
+    add si, [cs:gfx_sub_rs]     ; CS: IS MANDATORY - DS is the BUFFER in here
+    add di, bx
+    test di, ax
+    jz .rnw
     add di, [cs:vid_wrapfix]
 .rnw:
     dec dx
@@ -1183,6 +1433,11 @@ sw_dir          resb 1          ; xfer: 0 = save, 1 = restore
 sw_mode         resb 1          ; rect core: SWM_SOLID / SWM_GRAY / SWM_XOR
 sw_altm         resb 1          ; rect core: per-row pattern toggle (0 or FF)
 sw_pat          resb 1          ; rect core: plane value / dither pattern
+%ifdef SW_BANKWALK
+sw_n0           resw 1          ; rect walk: rows in each of the first phases
+sw_rp           resw 1          ; ...the last phase index that has sw_n0 rows
+sw_kern         resw 1          ; ...and the row body the phases run
+%endif
 %if (sw_pat - sw_altm) != 1
   %error "sw_col loads the pair as ONE word (`mov cx,[sw_altm]` -> CL = toggle, CH = pattern): they must stay adjacent, sw_altm first. Every other site reads them as bytes and does not care about the order"
 %endif

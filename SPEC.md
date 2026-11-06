@@ -81086,6 +81086,100 @@ case that matters being a cursor beside a fill's edge byte, outside the rect
 the lazy hide tested. `sw_spans`' two edge bytes take the same body. 0 of 16
 runs flash after it.
 
+### 39.31 The 1bpp rect is walked a bank at a time (`kern_big`)
+
+**`sw_plane_op` walked a rect three times and tested a bank wrap on every
+row of every pass.** The left edge column top to bottom (`sw_col`), the right
+edge column, then the interior rows, each step being `gfx_nextrow`'s add, test
+and conditional wrap, with the dither pattern toggled per row. On a banked
+framebuffer that is wasted work: rows `y`, `y+B`, `y+2B` (B = `[vid_bmask]`+1,
+two on CGA and four on Hercules) are `[vid_stride]` apart inside ONE bank, and
+because B is even they share a dither parity too.
+
+So on `kern_big` the rect is walked as B **phases** — every row of bank phase
+`j`, top to bottom — and inside a phase the row step is one `add di, si`, the
+pattern is a constant and the count is `loop`'s. Phase `j` has `n0` rows for
+`j <= rp` and `n0 - 1` after it, where `rp = (N-1) & bmask` and
+`n0 = ((N-1) >> bshift) + 1`, computed once a rect. A phase writes the whole
+ROW in one pass — masked left byte, whole bytes, masked right byte — and a
+whole edge (mask `FF`, the common case by §11.94) is folded into the run of
+whole bytes, so an aligned fill is `rep stosw` a row and nothing else. A
+one-row rect (every hline, every outline's top and bottom) skips the phase
+driver and jumps straight into the row body. XOR complements its interior a
+word at a time.
+
+**A phase costs about 250 cycles to set up, so a short rect does not walk.**
+Under 9 rows with whole bytes in the row, or under 25 rows of a single byte
+column (whose per-row saving is smaller), `sw_plane_op` falls through to the
+column-major body it replaced, kept as `sw_plane_cm`; the question is five
+instructions. The thresholds are constants rather than multiples of B so the
+test stays that short, and both sit at or past the break-even on CGA and
+Hercules. Measured on MartyPC (gfxbench, both adapters): `GFX_FILL 64x64`
+-51% / -48%, `GFX_FILL 256x128` -32% / -30%, `GFX_XOR_FILL 64x64` -34% /
+-32%, `GFX_HLINE 256px` -18%, `GFX_VLINE 128px` -23% / -19%, and the eight-row
+shapes that keep the old body +2% (`GFX_FILL 8x8`, `GFX_VLINE 8px`), which is
+the price of the question.
+
+**Every masked byte is still one store**, `dest ^= (pat ^ dest) & mask`
+(§39.25.1), and no pixel is written twice. The settled picture is identical
+byte for byte; what changes is the ORDER rows land in inside one call (CGA:
+the even rows of the rect, then the odd).
+
+**`NOCOLFAST=1` builds the old column-major body**, so `tests/swcolsame.py`
+stays an A/B of two different bodies drawing the same pixels. The row bodies
+are `sw_k_col`, `sw_k_colf`, `sw_k_xcol`, `sw_k_i`, `sw_k_lir` and
+`sw_k_xrow`; the driver is `sw_walk`. `sw_k_xcol` - both sides of every drag
+outline, redrawn on every pointer step - does two rows a `loop`, the odd row
+first. `kern_small` keeps the column-major
+body alone (§39.27.4's cut). It costs `kern_big` 338 bytes of `.text` and 6
+of `.bss`; docs/plans/khp1/mono.md has the operations.
+
+### 39.32 The 1bpp save and restore move words
+
+**`sw_xfer` is `gfx_save` and `gfx_restore` on a 1bpp adapter** — every
+raise cache, every menu save-under — and it was 35% of a CGA window raise's
+busy time (docs/reports/HOTPATH-BASE-2026-11-06.md). Each row was `rep movsb`
+plus `gfx_nextrow` inlined through three CS-overridden memory reads.
+
+Now each row is `rep movsw` for the pairs and the odd byte as `adc cx, cx`
+/ `rep movsb` — `CX = CF`, the `shr`'s carry surviving the string op, with no
+branch — because an 8088 moves a byte for 12.5 clocks that way against
+`rep movsb`'s 17. The row step less the copy's advance lives in BX and the
+wrap bit in AX (both spent once DS or ES and SI or DI hold what they
+carried), so the step is `add`/`test`/`jz` on registers. Buffer layout,
+sub-rect restore (§5.8), the registers each entry advances and the pixels
+are all unchanged. Both kernels, +16 bytes of `.text` each.
+
+### 39.33 The 1bpp scroll is walked a bank at a time
+
+§5.5.1 already noticed that when `dy` is a whole number of banks (a multiple
+of 2 on CGA, of 4 on Hercules) the source and destination of every row are a
+constant apart. `vgas_bankcopy` then walked the destination with
+`gfx_nextrow` through a `call bp` a row, `rep movsb`, a DS switch and a
+memory countdown.
+
+**Such a copy never leaves a bank**: a destination row and its source are in
+the same one. So it is walked as §39.31's phases — every destination row of
+bank phase `j`, top-down for a scroll up and bottom-up for a scroll down,
+each a direction-safe walk of its own, and two phases touch different banks
+so the order between them cannot matter. Inside a phase the step is one
+register add, DS stays the framebuffer, and the bytes go a word at a time
+(`rep movsw`, the odd byte by §39.32's `adc cx, cx`). The general form (`dy`
+not a whole number of banks) is unchanged. Its two scratch words follow the
+six `VXB_SCROLL` reads in order. Both kernels.
+
+### 39.34 The 1bpp pattern fill steps its rows inline
+
+`sw_fill_pat` (`gfx_fill_pat` on CGA and Hercules — Word's and Scribe's
+ruler ticks, the Disk window's fold chevrons, Task Manager, several faces)
+paid a near `call gfx_nextrow` a row in both edge columns, and a
+`push di`/`pop di` around the interior run as well. All three now step DI
+inline, the interior by the row step less the run's own advance, and the
+interior's odd byte is §39.32's `adc cx, cx` / `rep movsb`. The edge column's
+masked byte became §39.25.1's one-store `dest ^= (pat ^ dest) & mask`, which
+is also four bytes shorter than the load-modify-store it replaces. Pixels
+unchanged. Both kernels.
+
 ### 39.27 `kern_small` does not drive a VGA
 
 **A 128KB machine has no business with a VGA card in it, so `kern_small` does
