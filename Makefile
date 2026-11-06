@@ -11671,10 +11671,13 @@ $(BUILD)/arcade120.img: $(ARCADEDISK)
 	$(call ARCADEIMG,$@,1200)
 	@python3 tools/os88disk.py --verify $@
 
-# (360KB: no README - the package and seven sets fill it, Q*bert's with its
-# sound chips; the README is the RELEASE disk's, arcrel360.img)
+# (360KB: no README and no SYSTEM\APPDATA - the package and seven sets fill
+# it, Q*bert's with its sound chips, and the two folders were the last two
+# clusters (ARCADE-MEGA-PLAN's movable claims took one). No row on this disk
+# reads ARCADE.DAT or a picture back: arcopt and arcface use the 720KB one.
+# The README is the RELEASE disk's, arcrel360.img)
 $(BUILD)/arcade360.img: $(ARCADEDISK)
-	python3 tools/os88disk.py -o $@ --size 360 $(APPDATAFOLDER) $(BUILD)/arcade.o88 $(ARCROMS)
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/arcade.o88 $(ARCROMS)
 	@python3 tools/os88disk.py --verify $@
 
 # THE RELEASE FLOPPIES (docs/plans/ARCADE-RELEASE-PLAN.md R6): the package,

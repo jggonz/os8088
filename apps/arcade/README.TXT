@@ -15,8 +15,13 @@ Q*bert, whose CPU is an 8088 already, so its program runs as it is.
                             periscope.
     Q*bert                  Gottlieb (1982), its own 8088 program. VGA
                             only.
-    Pac-Man                 Namco's Z80 board (1980). VGA only, and a
-                            286 or faster for the board's full speed.
+    Pac-Man                 Namco's Z80 board (1980). VGA only: a
+                            frame or two a second on an XT, most of
+                            its speed on a 16 MHz 286.
+
+On kern_mega, os8088's kernel for a 286 or later, use the ARCADE disk
+made for kern_mega: the same program and games, keeping its memory above
+the first megabyte where the machine has it.
 
 YOUR ROMS
 ---------

@@ -12,8 +12,11 @@ them, and ARCADE checks each one and keeps it on a disk of your choosing.
 ## Starting ARCADE
 
 Double-click `ARCADE.O88`. It is on its own disk, and in the `ARCADE`
-folder of the everything disks. Opening it reads no game: it looks for each
-game's file and marks it in the list:
+folder of the everything disks. On kern_mega, os8088's kernel for a 286 or
+later, use the ARCADE disk made for kern_mega: the same program and games,
+keeping its memory above the first megabyte where the machine has it.
+Opening it reads no game: it looks for each game's file and marks it in the
+list:
 
 | Mark | Meaning |
 |---|---|
@@ -100,6 +103,8 @@ speaker plays one sound at a time.
 ## Good to know
 
 - The five 8080 games run at full speed on an IBM PC/XT on any display.
-  Pac-Man needs a 286 for its full speed.
+  Q*bert keeps its own pace there too, drawing fewer pictures a second.
+  Pac-Man plays a frame or two a second on an XT, and most of its speed on
+  a 16 MHz 286.
 - A 360KB disk holds ARCADE and several games' ROMs.
 - [[ARCADE.TXT]] is the same notes as a text file.
