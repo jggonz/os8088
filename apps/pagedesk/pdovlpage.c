@@ -99,6 +99,7 @@ static void ovl_pg_show(unsigned n)
     pdu_rwant = 0;
     pdu_page = n;
     pdu_changes = 1;
+    pdu_title_set();                    /* the "*" */
     pdu_pgwant = n + 1;
     if (n < (unsigned)pdu_sidetop || n >= (unsigned)pdu_sidetop + 2 * pdu_side_rows())
         pdu_sidetop = n - n % 2;
@@ -459,10 +460,6 @@ static int ovl_save_done(unsigned err)
         pdu_cat(pdu_line, pdu_target, sizeof(pdu_line));
         pdu_cat(pdu_line, ": ", sizeof(pdu_line));
         pdu_cat(pdu_line, pdu_errtext(err), sizeof(pdu_line));
-        os88_utoa(pdu_xsave.err_detail, pdu_num);          /* DEBUG */
-        os88_strcpy(pdu_line, "D=", sizeof(pdu_line)); pdu_cat(pdu_line, pdu_num, sizeof(pdu_line));
-        os88_utoa(err, pdu_num); pdu_cat(pdu_line, " E=", sizeof(pdu_line)); pdu_cat(pdu_line, pdu_num, sizeof(pdu_line));
-        os88_utoa(pdu_xsave.state, pdu_num); pdu_cat(pdu_line, " S=", sizeof(pdu_line)); pdu_cat(pdu_line, pdu_num, sizeof(pdu_line));
         pdu_wsay(pdu_line);
         if (reopen)
             pdu_reopen_begin();

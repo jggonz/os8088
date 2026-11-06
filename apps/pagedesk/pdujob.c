@@ -597,7 +597,7 @@ int os88_onclose(void *win)
 {
     if (win != pdu_win)
         return 1;
-    if (pdu_job == J_SAVE) {
+    if (pdu_job == J_SAVE || pdu_pk == PK_REPLACE) {         /* pages: a parked replace too */
         pdu_mcall(PDU_M_WRT, PDV_WRT_ABORT, 0, 0, 0);
         pdu_fsop_end();
         pdu_job = J_NONE;

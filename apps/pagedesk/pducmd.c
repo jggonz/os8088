@@ -841,6 +841,8 @@ void os88_onkey(int ascii, int scan, void *win)
         return;
     }
     ascii = ascii & 0xFF;
+    if (pdu_pg_key(ascii, scan))        /* pages: a prompt owns the keys */
+        return;
     /* Escape, in order (PD-03, 17.5): a running job, a popover, the page
      * field, the keyboard focus, then the tool */
     if (ascii == 27) {
@@ -860,8 +862,6 @@ void os88_onkey(int ascii, int scan, void *win)
             pdu_set_tool(C_T_SELECT);
         return;
     }
-    if (pdu_pg_key(ascii, scan))        /* pages: a prompt owns the keys */
-        return;
     if (pdu_fedit) {
         pdu_field_key(ascii);
         return;

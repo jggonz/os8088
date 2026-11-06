@@ -2085,3 +2085,143 @@ one interface (DECISIONS D15). `edit` owns `apps/pagedesk/pduedit.c` and
 Every mutating call records its undo delta itself, so a caller brackets a
 command with `pdu_undo_begin`/`end` and does nothing else for undo. Calls are
 made on the UI task only, never inside a module slice.
+
+### 20.11 Page operations, Extract, New and the save flows (`pages`, wave 2)
+
+Source: `apps/pagedesk/pdwmap.h` (the map's encoding, shared by both sides),
+`pdupage.c` (resident: the lookups, the greying, the doors), `pdovlpage.c`
+(the overlay: every command, prompt and job start/end), `pdwpg.c` (PDWRT: the
+flat page tree, duplicates, blanks), `pdwgc.c` (PDWRT: the graph copy). Host
+checks: `make pdwrt` (`hosttest/pdw_test.c`, byte copy, `PDE_CHANGED`, folders)
+and `make pdwrt-real` (`hosttest/pdw_real.c` against PDENG's own host build,
+`pdw_pgcheck.py` against qpdf and Poppler's pixels, `pdw_nest.py`'s nested tree).
+
+#### 20.11.1 The page map
+
+The map is the order of the pages the user SEES, one 16-bit word a view page
+in claim row `PDU_DC_PAGES` and, byte for byte, the `pages_seg` of
+`PDV_WRT_SAVE` / `PDV_WRT_EXTRACT`: bits 15-14 kind (`PDM_SRC` a page of the open
+document, `PDM_BLANK` a new empty page of the size of source page `idx`,
+`PDM_FOREIGN` reserved for Insert, 20.11.7), bits 13-12 quarter turns ADDED to
+the page's own `/Rotate`, bits 11-0 `idx`. `pages_count` = 0 is the source's own
+order. A map holds at most `PDM_MAXMAP` = 400 pages (page operations on a longer
+document are refused in words; Extract, which needs no map, is not limited by it).
+The second time `PDM_SRC` names a source page it is a **duplicate**; the first is
+the original and owns the page id's edit records (`pdu_pg_isdup(view)` tells the
+renderer's caller). `pdu_npages` is the VIEW's page count, so nothing else in the
+primary changes meaning; `pdu_pg_id(view)` is the one lookup from a view index to
+the page the engine knows (`pdu_pg_count()` = `pdu_npages`). The view shows the
+new order and rotation before the save: `pdu_page_load` asks PAGEINFO for
+`pdu_pg_id(n)` and turns `pdu_pinfo.rotate`; a blank page is paper (no render).
+A page operation is a delta of four words `{op, a, b, entry}` - 1 ROT, 2 DEL, 3 INS,
+4 MOVE - applied and reverted by `pdu_pg_apply(delta, len, undo)` (edit's undo
+calls it; `pdu_pg_record()` is the one line that becomes `pdu_undo_pageop(d, 8)`
+when edit lands, until then an operation applies without a history). When the
+map returns to the identity it is dropped (nothing to write).
+
+#### 20.11.2 The writer's page operations (13.7)
+
+An incremental save whose map is not the identity writes the root `/Pages` node
+again: its other keys kept, `/Kids` in the new order, `/Count`. A page that is
+rotated, is under a node other than the root, or has annotation edits is written
+again (one revision per page: `/Parent`, `/Rotate` and the annotation array
+merged); a page moved to the root gets `/MediaBox`, `/CropBox` and `/Resources`
+materialised from its nearest ancestor. The tree is treated as flat when the
+root's `/Count` equals the number of its `/Kids` (a single-page intermediate node
+is the one case this misjudges). A duplicate is a new page object sharing
+`/Contents` and `/Resources` by reference whose annotations are new objects
+(`/NM` new, `/P`, `/Popup`, `/Parent`, `/IRT` remapped); a blank is a new object
+with the source page's `MediaBox`. Edit records of a deleted page are not
+written. Limits: 16 annotations on a duplicated page (`err_detail` 12), a root
+or page object over `PDW_PGBUF` = 4,096 bytes (13), a map entry that is not
+`SRC`/`BLANK` (14). Numbers: new objects from the source's `/Size`, page-operation
+objects first (`pm_prep`), annotations after; the xref is the incremental one.
+
+#### 20.11.3 Save As beside nothing: byte copy, `PDE_CHANGED`, another folder (14.2, 14.4, D14)
+
+An incremental save with no live edit and the identity map is a **byte copy** of
+the source (no newline, no xref section; PDENG's check below still runs, and its
+`startxref` must be the source's own). The writer copies to the end of the source
+and compares the length with the fingerprint's size taken at the start: a source
+that moved answers `PDE_CHANGED`. The primary compares the directory's size with
+the one OPEN saw before it starts (`pdu_save_begin`). **`src_vol` is the source's
+volume PLUS ONE** (0 = one folder; volume 0 is A:, a legal source) and `src_clus`
+its folder: the writer stands in the source's folder for every PDENG call and
+source read and in the target's for every write, rename and delete (`pdw_cross`,
+`pdw_in_src`, `pdw_in_tgt`; the target's folder is "here" at the first call), so
+the primary stands in the TARGET's folder for a job's slices (`pdu_tgtplace`).
+
+#### 20.11.4 Extract (13.8)
+
+`PDV_WRT_EXTRACT` with the map as the page list (SRC and BLANK entries, a source
+page at most once, `err_detail` 15) writes a fresh document. `wbuf_kb` = 40: the
+output region, a 17 KiB bit-map block (one bit a source object number: `seen`,
+`scan`, and a prefix count a 128 numbers), then the object table. Phases: PAGEINFO
+of every chosen page (its object is a root); a fixpoint that reads every reachable
+object's references (an object whose `/Type` is Page, Pages or Catalog and is not
+a root is NOT copied and every reference to it becomes `null`, as does a reference
+to an object the source does not have); objects 1-3; every seen object in
+ascending source order, numbered by rank from 4 (a root page rewritten from its
+PAGEINFO: `/Parent` the new tree, `/Rotate` final, boxes and inherited
+`/Resources` materialised), the dictionary with every `n g R` rewritten by the one
+reference walker (`rs_walk`: strings, hex strings and names skipped by syntax) and
+the stream bytes from `stream` to `endobj` copied verbatim in buffer-sized pieces;
+then the blank pages. Over 2,432 objects `err_detail` 16, a dictionary over the
+buffer 14. Marks not yet saved are not extracted.
+
+#### 20.11.5 The jobs (primary)
+
+`pdu_save_begin(name, kind)` (kind 0 Save As, 1 New, 2 Extract; the code is the
+overlay's `ovl_save_begin`) claims the writer (12 KiB; 40 for an Extract), fills
+`pdxb_save` and starts `J_SAVE`; `pdu_save_step` runs the verb of the kind.
+`PDE_EXISTS` with `state` = `PDW_ST_CONFIRM` parks the job and asks in the status
+line (Enter replaces, Esc keeps and aborts). **The writer reads its output back
+through PDENG** (14.2 step 4: `PH_VFY` closes the source's document, opens
+`PDSAVE.$$$`, checks the file's size, the trailer's `startxref` and `/Size`, and
+the first, middle and last object written) and says so by ORing
+`PDW_OUT_REOPEN` (0x0100) into `pdxb_save.mode` (an ASK to the lead for a proper
+field). After the job the primary always gives PDENG a document: a saved Save As
+or New **opens the output** (the page, 1-based, and the "Saved X" line kept), a
+failed or cancelled job and an Extract re-open the source with `OPEN` alone (CLOSE
+keeps PDENG's claims; the edit store and the map are untouched). New writes
+`PDV_WRT_NEWDOC` with one `pd_newpage` (Letter, A4, either way) 512 bytes into
+the exchange block, written again before every slice. The prompts (`PK_*`: extract
+list, destination, delete confirmation, New's size, replace) live in the status
+line, so CGA does everything the other adapters do. Menu items: File New,
+Extract pages..., Insert from PDF..., Insert blank page; Edit Move earlier, later,
+to..., Duplicate, Delete page; Document Rotate left, right (a pull-down holds 11
+items, 12.4); the Pages-mode buttons are the same commands.
+
+#### 20.11.6 THE UI TASK'S STACK IS 384 BYTES
+
+PDWRT calls PDENG from the bottom of its own call chain, on the UI task's stack
+(`SCH_STACK` = 384, SPEC.md 8): the first page-operation save on the target died
+with `STACK OVERFLOW TASK 00` (the wave-1 writer had never run on one). Every
+frame between `job_slice` and `pdw_engcall` is therefore paid twice: `eng_get` is
+one function (no wrapper, arguments in file-scope words), the page-operation and
+graph-copy functions keep their locals in statics, and a new feature in PDWRT
+must be measured with `tools/stkwater.py` before it is believed. A deeper change
+(Insert from another PDF opens a second document in PDENG from inside the
+writer) needs the engine's requests made from the primary, which is why it is
+not built.
+
+#### 20.11.7 Not built, and deviations
+
+1. **Insert from another PDF** (13.8) is a greyed-in-words command: the map has
+   the `PDM_FOREIGN` kind and the writer refuses it (`err_detail` 14). Design: a
+   merge job that runs the Extract pipeline once per source document, numbering
+   from the previous round and writing the page tree last; it needs PDENG to
+   switch documents inside the job and so the 20.11.6 restructuring.
+2. **The recovery journal and the `PDSAVE.$$$` offer** (14.7, 14.3) are not built.
+3. Undo/redo of a page operation needs edit (20.11.1); the dirty flag is
+   `pdu_changes`.
+4. `pdu_side_sel()` (nav) is a commented line in `ovl_pg_tgt`: the command's page
+   is the current one until nav lands.
+5. Sizes at this writing: PDWRT 38,394 + 13,054 = 51,448 bytes (50.2 KiB; the
+   wave-2 share was 46 KiB: ASK), the primary 43,070 + 4,085 (+2.5 KiB of the
+   shell's 44.6 against a 1 KiB share: menu text, the doors and 700 bytes of
+   strings that an overlay cannot take), the overlay +4,000.
+6. 14.4's open-time reference is the file's SIZE (free at OPEN); the CRCs would
+   cost two uncached reads at every open.
+7. A foreign-folder Save As stands the primary in the target's folder, so
+   `pdu_at_doc` is not called during a save.
