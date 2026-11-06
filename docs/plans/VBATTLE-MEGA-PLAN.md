@@ -160,11 +160,20 @@ kern_big and kern_small keep the load on the desktop, where the window says
       with an end video attached, where Enter does nothing. Make the line
       editable in the builder, and the default, where the end does not hold
       its last frame for a key, just "Victory!".
-- [ ] **VGA tears.** Planar tearing: things shimmer and flicker where they
-      change. Write in bands, or use the second page - both cost speed - or
-      first look at what a clip that barely tears does differently: the
-      owner's `IKARU.V88` (kept in the session's scratch, not the tree),
-      which tears little and, as the owner recalls, uses neither.
+- [x] **VGA tears** (2026-11-06, SPEC.md 126.3.2). `IKARU.V88` turned out
+      to be PAGE FLIPPED (its title says "Page Flipped"; two pages): each
+      frame is drawn on the hidden page, and its few flashes at the tunnel
+      are its scene palette changes (frames 830, 845, 1046). The battle's
+      VGA4 wrote mask by mask over the whole visible frame, so a changing
+      pixel was a colour of neither frame for the whole decode. The builder
+      now writes the partial masks in bands of rows (`target.vga_bands`, 16
+      by default; the Battle tab's "VGA writes": whole frame, 32, 16, 8),
+      the engine unchanged. On 86Box's VGA XT with the owner's footage
+      (debug only): 308 flash pixels a sampled frame whole, 71 / 30 / 22 at
+      32 / 16 / 8 rows, for +6% / +12% / +24% record bytes. `vbtvgaflash`
+      is the row. Page flipping - none at all, for a two-frame delta and
+      the band drawn on both pages, and engine work - is the option left
+      if bands are not enough.
 - [ ] **VGA's colours.** The VGA rendition keeps to red, teal and greys. It
       should choose its palette the way Video Encoder's `colorX` does, and
       the CGA focus should stop being forced: one option among the rest.

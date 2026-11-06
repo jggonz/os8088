@@ -242477,6 +242477,23 @@ then sets the mode, the palette and the decode.
   (`target.vga_colours`). A record is sub-records, each its Map Mask and ten
   lists, a 0 after the last (`os88vid.vga4_subs`, planes wanting the same
   byte under one mask), which `vb_decode` plays with an OUT a sub-record.
+  **The sub-records are written in BANDS** (`target.vga_bands`, rows; 16
+  by default, 0 the whole frame; `os88vbt.vga_banded`): every partial
+  mask's writes to one band of rows, then the next band's, mask 0Fh (every
+  plane one value, one store a byte) whole and first. A pixel's planes are
+  separate stores, so between its first mask and its last it is a colour
+  of NEITHER frame; mask by mask over the whole frame that lasts the
+  frame's whole decode and the beam shows it - the owner's "VGA tears
+  constantly ... things shimmer and flicker where they change". In bands
+  it lasts a band's. The engine is unchanged (it plays any sequence of
+  sub-records). Measured on 86Box's VGA XT, flash pixels a sampled frame:
+  the owner's footage (debug only) 308 whole, 71 at 32 rows, 30 at 16, 22
+  at 8, for +6%, +12% and +24% record bytes (each extra sub-record ~17
+  bytes and an OUT); `vbtvgaflash`'s Life title 594 -> 114 at 16 rows. The
+  Video Player's flipped files never show it - its Ikaruga is page
+  flipped, each frame drawn on the hidden page; a flipped VGA4 rendition,
+  no flash at all at a frame's two-frame delta and the band drawn twice,
+  is not built.
 - **Hercules** is 720 x 348, the canvas 640 wide at byte 5 (`VB_HORG`, the
   decoder's BP), its rows `348 - 2 x the band's`: the band's every logical
   pixel two by two, so the band is the same 40 x 8 cells.

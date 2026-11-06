@@ -1123,6 +1123,19 @@ class BattleTab(object):
                                                   padx=12)
         self.rnote = ttk.Label(rf, text="", wraplength=900)
         self.rnote.grid(row=1, column=0, columnspan=4, sticky="w")
+        # VGA's WRITES IN BANDS (126.3.2): a pixel's planes are separate
+        # stores, and between them it is a colour of neither frame - the
+        # flashes. Bands cut how long; each costs bytes and OUTs
+        vb = ttk.Frame(rf)
+        vb.grid(row=3, column=0, columnspan=4, sticky="w", pady=(4, 0))
+        ttk.Label(vb, text="VGA writes:").pack(side="left")
+        self.rband = tk.StringVar()
+        cbb = ttk.Combobox(vb, textvariable=self.rband, state="readonly",
+                           values=[l for _, l in VGA_BANDS], width=24)
+        cbb.pack(side="left", padx=4)
+        cbb.bind("<<ComboboxSelected>>", lambda e: self._rends())
+        self.rbnote = ttk.Label(vb, text="", wraplength=640)
+        self.rbnote.pack(side="left", padx=6)
         # THE PICTURE'S SIZE, each rendition's: a smaller picture centred in
         # black is fewer bytes a frame - the black never changes - so a
         # heavy adapter (Hercules' 640 x 232) can be set down
@@ -1263,6 +1276,9 @@ class BattleTab(object):
         self.rherc.set(1 if "herc" in rs else 0)
         self.rcol.set(str(t.get("vga_colours", 8)))
         self.rnote.config(text=REND_NOTE.get(int(self.rcol.get()), ""))
+        vbn = t.get("vga_bands", VGA_BANDS_DEFAULT)
+        self.rband.set(dict(VGA_BANDS).get(vbn, str(vbn)))
+        self.rbnote.config(text=VGA_BAND_NOTE.get(vbn, ""))
         sc = t.get("scale") or {}
         bits = []
         for kind, (w, h) in (("cga4", (320, rows)), ("vga4", (320, rows)),
@@ -1309,6 +1325,10 @@ class BattleTab(object):
         n = int(self.rcol.get() or 8)
         if n != t.get("vga_colours", 8):
             self.app.edit("set", ("target", "vga_colours"), n)
+        lab = self.rband.get()
+        for v, l in VGA_BANDS:
+            if l == lab and v != t.get("vga_bands", VGA_BANDS_DEFAULT):
+                self.app.edit("set", ("target", "vga_bands"), v)
 
     def _scale(self):
         t = self.app.proj.d["target"]
@@ -2788,6 +2808,18 @@ REND_NOTE = {4: "Four colours: the band's own, about what CGA4 costs (x1.2).",
              16: "Sixteen: the band's four and twelve of the footage's - "
                  "about three times CGA4's data (x3.1): a fast disk, or "
                  "memory to hold it."}
+# VGA's write bands (target.vga_bands, rows; 0 the whole frame): measured on
+# 86Box's VGA XT with real footage - the flash pixels a sampled frame and
+# the records' bytes against the whole frame (SPEC.md 126.3.2)
+VGA_BANDS = ((0, "Whole frame (flashes)"), (32, "Bands of 32 rows"),
+             (16, "Bands of 16 rows"), (8, "Bands of 8 rows"))
+VGA_BANDS_DEFAULT = 16
+VGA_BAND_NOTE = {
+    0: "Smallest and fastest; a changing pixel shows a wrong colour while "
+       "the frame is written (~300 flash pixels a frame on real footage).",
+    32: "~4x fewer flashes for ~6% more data.",
+    16: "~10x fewer flashes for ~12% more data. The default.",
+    8: "~14x fewer flashes for ~24% more data: a fast disk or a hold."}
 BAYER4 = ((0, 8, 2, 10), (12, 4, 14, 6), (3, 11, 1, 9), (15, 7, 13, 5))
 HOW_LABELS = (("hold", "Hold its last frame"),
               ("fade", "Fade to its end clip"),

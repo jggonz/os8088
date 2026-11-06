@@ -18965,6 +18965,17 @@ SOAK = [
         needs=("86box",),
         wants=("build/mega.img", "build/megarmbe.o88", "build/megarmbe.bin",
                "build/ems.bin")),
+    Row("vbtvgaflash", "soak", py("tests/vbtvgaflash.py"), 60.0,
+        "SPEC.md 126.3.2: VGA4's FLASHES - a pixel's planes are separate "
+        "stores, and written mask by mask over the whole frame a changing "
+        "pixel shows a colour of neither frame for the frame's whole decode "
+        "(the owner's 'VGA tears constantly'). On 86Box's VGA XT, a title of "
+        "Conway's Life: whole-frame writes over 100 flash pixels a sampled "
+        "frame, the builder's 16-row bands (target.vga_bands) a third or "
+        "less, and the banded title the same frames on the host. Red with "
+        "vga_banded answering the frame unbanded. 60s is 49 measured",
+        needs=("86box", "ffmpeg", "numpy"),
+        wants=("build/vbattle.o88",)),
     Row("vbtmega", "soak", py("tests/vbtmega.py"), 240.0,
         "SPEC.md 126.4.5, VBATTLE-MEGA-PLAN W1-W3: the SHIPPED Video Battle "
         "on kern_mega (Bochs, VGA), in an FSXF_REAL bracket - [fsx_rmode] "

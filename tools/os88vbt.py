@@ -113,8 +113,9 @@ class Rend:
     frames are the project's same frames; only the bytes differ"""
     KIND = {"cga4": 0, "vga4": 1, "herc": 2}
 
-    def __init__(self, kind="cga4", rows=142, pal=None):
+    def __init__(self, kind="cga4", rows=142, pal=None, vband=0):
         self.kind, self.code = kind, self.KIND[kind]
+        self.vband = vband          # vga4: rows a BAND (0: the whole frame)
         self.w = 640 if kind == "herc" else 320
         self.full = 348 if kind == "herc" else 200
         self.rows = rows
@@ -164,8 +165,8 @@ class Rend:
         if g.planes == 1:
             return V.to_lists(ops)[0]
         body = bytearray()          # VGA4: sub-records, each its Map Mask
-        for mask, sub in ops:       # and ten lists, a 0 after the last
-            if sub:
+        for mask, sub in vga_banded(ops, self.vband, g.wb):  # and ten
+            if sub:                 # lists, a 0 after the last
                 body.append(mask)
                 body += V.to_lists(sub)[0]
         body.append(0)
@@ -192,6 +193,39 @@ class Rend:
 
 
 REND = Rend()
+VGA_BANDS = 16                  # target.vga_bands' default (126.3.2)
+
+
+def vga_banded(ops, rows, wb):
+    """VGA4's sub-records [(mask, spans)] in BANDS of ROWS rows (SPEC.md
+    126.3.2): every mask's writes to one band, then the next band's. The
+    planes of a pixel are separate stores, so between its first mask's
+    store and its last the screen shows a colour that is neither the old
+    nor the new; written mask by mask over the whole frame that lasts the
+    frame's whole decode, and the beam shows it - the VGA rendition's
+    flashes. In bands it lasts a band's. ROWS 0: the whole frame as one
+    band, as before. A span crossing a band's edge is cut there. Mask 0Fh
+    (every plane one value: one store a byte) cannot be half-written, so
+    it stays whole, first, and only the partial masks are banded"""
+    if not rows:
+        return ops
+    size = rows * wb
+    bands = {}
+    whole = [(m, sub) for m, sub in ops if m == 15]
+    for mask, sub in ops:
+        if mask == 15:              # ONE store a byte (every plane the same
+            continue                # value): never half-written - unbanded
+        for s, data, f in sub:
+            e = s + len(data)
+            while s < e:
+                cut = min(e, (s // size + 1) * size)
+                bands.setdefault(s // size, {}).setdefault(mask, []).append(
+                    (s, data[:cut - s], f))
+                data = data[cut - s:]
+                s = cut
+    order = [m for m, _ in ops]
+    return whole + [(m, bands[b][m]) for b in sorted(bands) for m in order
+                    if m in bands[b]]
 
 
 def surface_of(px, rows):
@@ -1115,7 +1149,7 @@ def battle_of(proj, progress=None, kind="cga4"):
                                (lambda *a: None))
         pal = [tuple(v >> 2 for v in c) for c in p8] + \
             [(0, 0, 0)] * (16 - len(p8))
-    b.rend = Rend(kind, rows_, pal)
+    b.rend = Rend(kind, rows_, pal, t.get("vga_bands", VGA_BANDS))
     if t.get("burst_cap", True):    # THE READER'S MODEL (126.4.1): the
         import os88venc as VE_      # profile's disk at three quarters,
         disk = VE_.PROFILES.get(t.get("profile"), {}).get("disk") or 119000

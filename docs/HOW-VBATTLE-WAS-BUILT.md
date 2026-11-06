@@ -824,6 +824,43 @@ the row judges the median of the first three samples, which sits on its
 2-frame line: it failed 2 runs in 7 on the merge's engine and 0 in 3 on the
 engine before it, with the same samples.
 
+## kern_mega, and VGA's flashes (2026-11-06)
+
+kern_mega is VBATTLE-MEGA-PLAN's five waves. The engine's first Play on
+kern_mega was closed by a #GP; it now plays the whole battle in a
+real-mode fullscreen bracket on Bochs and on 86Box's 286.
+
+The owner reported that on VGA "things shimmer and flicker where they
+change", and that Video Player's Ikaruga barely does. Reading Ikaruga's
+header answered the question before any emulator ran: it is PAGE FLIPPED,
+so each frame is drawn where nobody is looking. Its few flashes are its
+own palette changes at the tunnel. The battle's VGA rendition wrote a
+frame plane group by plane group across the whole screen, so every
+changing pixel spent most of a frame's decode in a colour of neither
+frame.
+
+The measurement needed real motion. On the demo's title nothing showed
+(12 KB of changes a loop), and a synthetic Mandelbrot through the
+8-colour quantizer barely did. A few seconds of Ikaruga's own frames,
+re-encoded as the battle's title in scratch, did: 308 flash pixels a
+sampled frame on 86Box's VGA XT, red streaks through every explosion.
+MartyPC's VGA showed none on the same build, so the row is 86Box's.
+
+The fix is the builder's alone: the partial masks are written in bands of
+rows, so a pixel is half-written only while its own band decodes. The
+engine already plays any sequence of masks. Measured on that footage:
+
+| band rows | flash px | bytes |
+|---|---|---|
+| whole frame | 308 | +0% |
+| 32 | 71 | +6% |
+| 16 | 30 | +12% |
+| 8 | 22 | +24% |
+
+The default is 16 rows, and the Battle tab offers the others. Page
+flipping, which would remove them entirely, is the option left: a
+two-frame delta, the band drawn on both pages, and engine work.
+
 ## Measured (MartyPC `os8088_5150_sb_gla`, 360 KB disk)
 
 | | |

@@ -14,7 +14,9 @@ A project file (version 1):
      "target":   {"profile", "palette" (the CGA4 byte), "fps", "rate",
                   "canvas": [x, y, w, h], "band": [cell, row, cells, rows],
                   "burst_cap": false to build a streamed clip's bursts
-                  as they are (SPEC.md 126.4.3; true when absent)},
+                  as they are (SPEC.md 126.4.3; true when absent),
+                  "vga_bands": VGA4's writes in bands of this many rows,
+                  0 the whole frame (SPEC.md 126.3.2; 16 when absent)},
      "sources":  {id: {"kind": "video", "path"} | {"kind": "scene", "name"}},
      "sounds":   {id: {"kind": "file", "path", "level"}
                     | {"kind": "scene", "name", "level"}
@@ -854,6 +856,10 @@ class Project:
         if t.get("clip") is not None and not (
                 isinstance(t["clip"], int) and 0 <= t["clip"] <= 96):
             err("target.clip", "clip %s: 0 to 96 levels" % t["clip"])
+        if t.get("vga_bands") is not None and not (
+                isinstance(t["vga_bands"], int) and 0 <= t["vga_bands"] <= 200):
+            err("target.vga_bands", "vga_bands %s: rows a band, 0 the whole "
+                "frame" % t["vga_bands"])
         bc, br, bn, bh = t["band"]
         if br < y + h and br + bh > y:
             err("target", "the band overlaps the canvas")
