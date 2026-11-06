@@ -247,8 +247,10 @@ copied: **T2-2** (section 10) is one, trading kern_big's 52-cycle inline
 | **V5** (addition, no bump) | A **batched rect call**: N fills or frames in one far call, the clip-region and display questions asked once | none (a new slot at the end) | per extra primitive the far cell (~165 cycles) and the head (~300): a Calc or Minesweeper redraw of ~30 cells **~14k cycles, ~3 ms**; ~60-80 bytes `.text`. PREDICTED | khp1/gfxcall.md 5 | **proposed as an addition** - wants a package that would use it first |
 | **V6** (recorded) | A length-counted `OSAPI_FONT_RUN` (CX = cells) instead of ASCIIZ | every text caller | ~14 cycles of ~150 a cell, under 1% of a run | khp1/text.md 5 | **refused by its finder** - not worth a cell contract |
 
-vga, pointer, wm and files found none. `disk`'s rows are added when its
-branch merges.
+vga, pointer, wm and files found none. disk found none worth proposing: carrying
+an image's and its bss's sizes outside the file would let the loader skip its
+header peek, but after disk-4 that peek already does the read's work
+(khp1/disk.md 5).
 
 ## 10. Rows from kern_mega size pass 2's agents
 
