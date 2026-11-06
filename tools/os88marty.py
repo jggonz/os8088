@@ -2228,6 +2228,85 @@ def _clone(src, dst):
     shutil.copyfile(src, dst)
 
 
+def _sha1(path):
+    import hashlib
+    h = hashlib.sha1()
+    with open(path, "rb") as f:
+        for b in iter(lambda: f.read(1 << 20), b""):
+            h.update(b)
+    return h.hexdigest()
+
+
+def _stage_floppy(src, dst):
+    """Copy one floppy into an instance, and answer the copy's sha1.
+
+    A COPY TAKEN WHILE SOMEBODY WRITES THE SOURCE IS A DISK NOBODY BUILT.
+    os88disk writes an image in place, so a `make` (or a QEMU row booting the
+    file writable) beside this copy can hand MartyPC a half-new floppy - and
+    that does not fail here, it boots into something that is not a desktop and
+    is reported six guest minutes later as a machine that never booted. So the
+    source is stat'ed either side of the copy and the copy is retaken while it
+    moved. Measured cost: one extra stat and a hash of 360KB-1.44MB, about a
+    millisecond.
+    """
+    for _ in range(5):
+        st0 = os.stat(src)
+        _clone(src, dst)
+        st1 = os.stat(src)
+        if (st0.st_mtime_ns, st0.st_size) == (st1.st_mtime_ns, st1.st_size) \
+                and os.path.getsize(dst) == st1.st_size:
+            return _sha1(dst)
+        time.sleep(0.2)
+    raise MartyError(
+        "%s kept changing while it was being copied into the instance: "
+        "something is WRITING it (a `make`, a QEMU row booting it writable). "
+        "A copy of it would be a disk nobody built." % src)
+
+
+def _boot_evidence(m, run_dir, staged):
+    """Keep what a failed boot booted, and say whether it was what was built.
+
+    Called before close() deletes the instance's floppies. Writes the last
+    rendered frame and the exact floppies the guest had into
+    `<run_dir>/bootfail/` - which close() leaves, and `reap()` prunes with the
+    rest of the record - and compares each copy with its source NOW: a source
+    that has moved since the copy names the cause outright.
+    """
+    import shutil
+    ev = os.path.join(run_dir, "bootfail")
+    os.makedirs(ev, exist_ok=True)
+    out = []
+    try:
+        w, h, px = m.fbuf(0)
+        write_png_rgb(os.path.join(ev, "screen.png"), w, h, px)
+        out.append("its last frame is %s" % os.path.join(ev, "screen.png"))
+    except Exception:
+        pass
+    moved = []
+    for d, src, dst, h in staged:
+        keep = os.path.join(ev, "fd%d.img" % d)
+        if os.path.exists(dst):
+            shutil.copyfile(dst, keep)
+        try:
+            now = _sha1(src)
+        except OSError:
+            now = None
+        if now != h:
+            moved.append("%s (fd:%d) %s since this machine copied it"
+                         % (src, d, "is GONE" if now is None
+                            else "has CHANGED"))
+    out.append("the floppies it booted are %s/fd*.img" % ev)
+    note = " Kept: " + "; ".join(out) + "."
+    if moved:
+        note += (" AND THE SOURCE MOVED: " + "; ".join(moved) + " - so the "
+                 "machine booted a disk that is not the one there now, and "
+                 "something wrote the build under this run.")
+    else:
+        note += (" Each source still matches the copy byte for byte, so the "
+                 "disk was the one built: boot the kept fd0.img to reproduce.")
+    return note
+
+
 def stage_run_dir(tag, fresh=True):
     """A run tree the CALLER owns, for two instances that must share a DISK.
 
@@ -3817,7 +3896,7 @@ def settle(m, quiet=1.0, stable=2, gate=None, limit=120.0, card=None,
                     "desktop's 93+/0/96. This machine never finished booting, "
                     "so nothing below would mean what it says. The budget is "
                     "the guest's own clock, so this is not the box being busy. "
-                    "See the MartyPC log." % (spent, host, seen))
+                    "See the MartyPC log." % (spent, host, seen)) from None
             if saver_running(m):
                 raise MartyError(
                     "the screen was still changing after %.0f GUEST seconds "
@@ -3825,14 +3904,14 @@ def settle(m, quiet=1.0, stable=2, gate=None, limit=120.0, card=None,
                     "is set. It draws, so this can never settle, and anything "
                     "else this gate armed is now watching the saver rather "
                     "than the machine. Call os88marty.no_saver(m) once after "
-                    "the desktop is up." % spent)
+                    "the desktop is up." % spent) from None
             raise MartyError(
                 "the screen was still changing after %.0f GUEST seconds "
                 "(%.0fs of host time at %.2fx real): the machine never "
                 "finished booting, or something on it is animating - in which "
                 "case pass boot=<seconds> instead. The budget is the guest's "
                 "own clock, so a loaded box does not shorten it."
-                % (spent, host, prog.rate()))
+                % (spent, host, prog.rate())) from None
         try:
             cur = _Screen(m, card)
         except MartyError:
@@ -4982,6 +5061,7 @@ def launch(image, apps=None, machine="os8088_5150_cga", addr=None,
     media = os.path.join(run_dir, "media", "floppies")
     os.makedirs(media, exist_ok=True)
     mounts = []
+    staged = []                         # (drive, resolved source, copy, sha1)
     for i, src in enumerate((image, apps)):
         if src is None:
             continue
@@ -4993,7 +5073,7 @@ def launch(image, apps=None, machine="os8088_5150_cga", addr=None,
         # running instance. Unset, it is the identity function.
         src = _build.at(src)
         dst = os.path.join(media, "run%d.img" % i)   # a copy per DRIVE, inside
-        _clone(src, dst)                             # a directory per INSTANCE
+        staged.append((i, src, dst, _stage_floppy(src, dst)))  # an INSTANCE
         mounts += ["--mount", "fd:%d:media/floppies/run%d.img" % (i, i)]
 
     # OS88_MARTY_BIN runs another build of the emulator in this instance's
@@ -5021,8 +5101,15 @@ def launch(image, apps=None, machine="os8088_5150_cga", addr=None,
 
     rec = {"pid": proc.pid, "pid_start": _proc_start(proc.pid),
            "port": None, "machine": machine,
-           "image": os.path.abspath(image) if image else None,
-           "apps": os.path.abspath(apps) if apps else None,
+           # THE FILE THAT WAS COPIED, not the string the caller passed: under
+           # a frozen run `build/os8088-360.img` is the tree's image, and a
+           # record naming the shared build/ sent a post-mortem (sheetsort,
+           # 2026-11-06) to a file this machine never read.
+           "image": next((os.path.abspath(s) for d, s, _, _ in staged
+                          if d == 0), None),
+           "apps": next((os.path.abspath(s) for d, s, _, _ in staged
+                         if d == 1), None),
+           "sha1": {str(d): h for d, _, _, h in staged},
            "run_dir": run_dir, "log": logpath, "label": label,
            "owner_pid": None if detach else os.getpid(),
            "detached": bool(detach), "started": time.time(),
@@ -5122,6 +5209,17 @@ def launch(image, apps=None, machine="os8088_5150_cga", addr=None,
                 settle(m, gate=desktop_up, card=card)
             else:
                 pace(m, boot)           # idle-box seconds, as guest time
+        except MartyError as e:
+            # A BOOT THAT FAILED KEEPS ITS EVIDENCE: close() deletes the
+            # floppies at once, and a post-mortem of excitebikeflow and
+            # sheetsort (both "the desktop never appeared", three minutes
+            # apart, neither reproducible) had nothing left to look at.
+            try:
+                note = _boot_evidence(m, run_dir, staged)
+            except Exception as why:             # never mask the real error
+                note = " (keeping the evidence failed: %s)" % why
+            m.close()
+            raise MartyError(str(e) + note) from None
         except BaseException:                    # ...or the caller never gets
             m.close()                            # the object that owns the
             raise                                # process, and it survives
