@@ -29,7 +29,7 @@ static unsigned ovl_pg_entry(unsigned v)
 static unsigned ovl_pg_tgt(void)
 {
     int s;
-    s = -1;                             /* nav: s = pdu_side_sel(); */
+    s = pdu_side_sel();                 /* nav: the Pages panel's cell */
     return (s >= 0 && s < (int)pdu_npages) ? (unsigned)s : pdu_page;
 }
 
@@ -123,11 +123,20 @@ static int ovl_pg_apply(const unsigned *d, int undo)
 
 static void ovl_pg_do(unsigned op, unsigned a, unsigned b, unsigned e)
 {
+    if (pdu_pgow_on) {                  /* one change at a time: the next
+                                         * command reads the map it makes */
+        pdu_tell("Still applying the last page change.");
+        return;
+    }
     pdu_pgd[0] = op; pdu_pgd[1] = a; pdu_pgd[2] = b; pdu_pgd[3] = e;
-    /* edit's undo records it (20.8, 20.11.1): undo/redo come back through
-     * pdu_pg_apply, which applies at the wake */
-    if (ovl_pg_apply(pdu_pgd, 0))
-        pdu_undo_pageop(pdu_pgd, 8);
+    /* applied at the wake, as undo/redo are (pdu_pg_apply): the apply
+     * repaints the Pages panel, and that chain does not fit on a key's
+     * UI stack (D21, t_pdstk). Mode 2 = a new change, which edit's undo
+     * records when it applies (20.8, 20.11.1) */
+    os88_memcpy(pdu_pgow, pdu_pgd, sizeof(pdu_pgow));
+    pdu_pgow_undo = 2;
+    pdu_pgow_on = 1;
+    pdu_kick();
 }
 
 /* the prompt line: "<what> <typed>_" */

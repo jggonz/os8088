@@ -28,11 +28,9 @@
  * before every slice and back after.
  * ==========================================================================*/
 
-static struct pdxb_open pdu_xopen;
 static struct pdxb_render pdu_xrend;
 static struct pdxb_rstatus pdu_xrst;
 static struct pdxb_save pdu_xsave;
-static struct pdxb_outline pdu_xout;
 
 /* the launch document (SPEC.md 54.10), opened from the first wake */
 static char pdu_argname[16];
@@ -135,6 +133,9 @@ static void pdu_job_abort(void)
         pdu_mcall(PDU_M_WRT, PDV_WRT_ABORT, 0, 0, 0);
         pdu_wrt_out();
         reopen = (pdu_xsave.mode & PDW_OUT_REOPEN) != 0;          /* pages */
+    } else if (pdu_job >= J_FIND) {     /* nav: find, text pass, thumbnail */
+        pdu_mcall(PDU_M_REND, PDV_REND_ABORT, 0, 0, 0);
+        pdu_tx_aborted();               /* nav: what the pass held goes back */
     }
     pdu_fsop_end();
     pdu_job = J_NONE;
@@ -208,7 +209,7 @@ static void pdu_open_begin(const char *name)
     pdu_changes = 0;
     pdu_nt_reset();                     /* notes */
     pdu_inc = 0;
-    pdu_outn = 0;
+    pdu_nav_reset();                    /* nav: history, selection, panels */
     pdu_rdonly = 0;
     pdu_npages = 0;
     pdu_pgmap = 0;                      /* pages */
@@ -253,27 +254,6 @@ static int pdu_open_first(void)
     return r;
 }
 
-static void pdu_outline_fetch(void)
-{
-    int k;
-    pdu_outn = 0;
-    os88_memset(&pdu_xout, 0, sizeof(pdu_xout));
-    for (k = 0; k < 12; k++) {
-        pd_fcopy_out(&pdu_xout, pdu_xb, 0, sizeof(pdu_xout));
-        pdu_mcall(PDU_M_ENG, PDV_ENG_OUTLINE, 0, 0, 0);
-        if (pdu_mcf)
-            break;
-        pd_fcopy_in(pdu_xb, 0, &pdu_xout, sizeof(pdu_xout));
-        os88_strcpy(pdu_outt[k], pdu_xout.title, sizeof(pdu_outt[k]));
-        pdu_outpg[k] = pdu_xout.dest_page;
-        pdu_outn = k + 1;
-        if (pdu_xout.next_num == 0)
-            break;
-        pdu_xout.objnum = pdu_xout.next_num;
-        pdu_xout.gen = pdu_xout.next_gen;
-    }
-}
-
 /* PAGEINFO for page n, then the view. 0 or a PDE_*. No lock: a disk read. */
 static int pdu_incpg;                   /* page + 1 whose incompleteness
                                          * was said; 0 = not yet */
@@ -292,6 +272,7 @@ static int pdu_page_load(int n)
     pdu_sy = 0;
     pdu_sx = 0;
     pdu_view_set();
+    pdu_nav_page();                     /* nav: selection kept or dropped, links */
     pdu_nt_srcload();                   /* notes: this page's source annots */
     return 0;
 }
@@ -345,8 +326,6 @@ static void pdu_open_step(void)
         pdu_dirty_all = 1;
         return;
     }
-    if (pdu_xopen.flags & PDO_OUTLINE)
-        pdu_outline_fetch();
     pdu_doc = D_OPEN;
     if (pdu_rdonly)
         pdu_say(pdu_errtext(PDE_SIGNED));
@@ -414,6 +393,7 @@ static void pdu_render_step(void)
         pdu_wsay(pdu_errtext(r));
         return;
     }
+    pdu_sel_after(&pdu_rrun);           /* nav: the selection back on the page */
     pdu_ed_xon();                       /* edit: the outline back on the new pixels */
     /* 10.6: say what was skipped, by name, or nothing at all */
     r = pdu_mcall(PDU_M_REND, PDV_REND_STATUS, 0, 0, 0);
@@ -535,6 +515,9 @@ void os88_onwake(void *win)
         os88_file_goto_q_mark(pdu_tgtplace.clus, pdu_tgtplace.vol);
     else
         pdu_at_doc();
+    if (pdu_job == J_THUMB && (pdu_rwant || pdu_pgwant || pdu_txwant || pdu_fwant
+                               || pdu_lkact))
+        pdu_job_abort();                /* nav: a picture waits for everything else */
     if (pdu_popcls) {                   /* a close a deep click asked for */
         pdu_popcls = 0;
         os88_gfx_lock();                /* a callback's paints run locked; */
@@ -580,7 +563,9 @@ void os88_onwake(void *win)
         pdu_open_step();
     else if (pdu_job == J_SAVE)
         pdu_save_step();
-    else if (pdu_job == J_RENDER) {
+    else if (pdu_job_nav()) {
+        /* nav: find, a text pass or a thumbnail took this slice */
+    } else if (pdu_job == J_RENDER) {
         if (pdu_pop != P_NONE || pdu_about)
             pdu_job_abort_render();     /* never draw under a popover */
         else
@@ -614,13 +599,16 @@ void os88_onwake(void *win)
     }
 
     if (pdu_job == J_NONE && pdu_rwant && pdu_doc == D_OPEN
-        && pdu_pop == P_NONE && !pdu_about)
+        && pdu_pop == P_NONE && !pdu_about && pdu_gs != 2)
         pdu_render_begin();
+    else if (pdu_job == J_NONE && !pdu_pgwant && !pdu_argp && !pdu_rwant
+             && pdu_nav_owed())
+        ovl_nav_work();                 /* nav: the idle ladder */
 
     if (pdu_job == J_NONE && pdu_nt_owed())     /* notes */
         pdu_nt_idle();
 
-    if (pdu_job != J_NONE || pdu_pgwant || pdu_argp)
+    if (pdu_job != J_NONE || pdu_pgwant || pdu_argp || pdu_nav_owed())
         pdu_kick();
 }
 

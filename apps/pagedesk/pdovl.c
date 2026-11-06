@@ -190,6 +190,7 @@ static int ovl_card_more(int which)
     return 2;
 }
 
+#include "pdovlnav.c"             /* nav: the outline (20.10.4) */
 #include "pdovlnotes.c"         /* notes: the cards, the popover, the inspector */
 #include "pdutool.c"            /* the annotation tools (edit) */
 #include "pdovlpage.c"          /* pages: the page-operation commands and prompts */

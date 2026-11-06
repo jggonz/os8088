@@ -163,6 +163,93 @@ struct pdu_lay {
 #define J_RENDER  2
 #define J_SAVE    3
 
+/* ---- nav: PD-09 navigation, PD-10 selection and Find, PD-11 thumbnails,
+ * outline and links (PAGEDESK-SPEC 20.10) ---------------------------------- */
+#define J_FIND    4             /* a Find across pages (15.1, D14c)          */
+#define J_TEXT    5             /* one text pass: pick, word, quads, copy    */
+#define J_THUMB   6             /* one thumbnail                             */
+
+/* the SCRATCH claim (PDU_DC_SCRATCH, 2 KiB) is cut in two */
+#define PDU_SC_QUADS   0        /* 96 selection quads, 16 bytes each         */
+#define PDU_SC_QMAX    96
+#define PDU_SC_LINKS   1536     /* 42 links of 12 bytes: rect, dest, index   */
+#define PDU_SC_LMAX    42
+#define PDU_TH_SLOTS   8        /* 8 cells of 512 bytes in PDU_DC_THUMB      */
+
+#ifndef PD_HOST
+#define PDU_NAV   1             /* pduedit.c's selection stand-ins go       */
+/* the cross-file calls nav makes and answers (all static, one TU) */
+static int  pdu_sel_active(void);
+static void ovl_sel_clear(void);
+static void pdu_sel_drop(void);
+static void pdu_tx_aborted(void);
+static void pdu_sel_after(struct os88_rect *r);
+static int  ovl_sel_quads(pd_pt *dst, unsigned cap);
+static int  ovl_sel_text(char *dst, unsigned cap);
+static int  pdu_side_sel(void);
+static void ovl_copy(void);
+static void ovl_selall(void);
+static void pdu_find_run(int again);
+static void ovl_find_prev(void);
+static int  pdu_nav_press(int x, int y);
+static int  pdu_nav_thumb(int y);
+static int  pdu_nav_owed(void);
+static void ovl_nav_work(void);
+static void pdu_nav_page(void);
+static void pdu_nav_noted(int n);
+static void ovl_side_click(int x, int y);
+static void ovl_side_wheel(int notches);
+static void ovl_back(void);
+static void ovl_forward(void);
+static void ovl_lk_load(void);
+static void pdu_th_reset(void);
+static int  pdu_job_nav(void);
+static void pdu_fill(int x1, int y1, int x2, int y2, int c);
+static void pdu_cutrun(int cx, int y, const char *s, int maxw);
+static void pdu_ctl_repaint(int id);
+static void pdu_scroll_to(int nsx, int nsy);
+static void pdu_goto(int n);
+static void pdu_tell(const char *s);
+static void pdu_say2(const char *a, const char *b);
+static void pdu_cat(char *d, const char *s, int cap);
+static int  pdu_isect(struct os88_rect *a, struct os88_rect *b, struct os88_rect *o);
+static void pdu_status_paint(void);
+static void pdu_progress(const char *verb, const char *what);
+static void pdu_wsay(const char *s);
+static int  pdu_cell(int k, struct os88_rect *r);
+static void pdu_side_paint(void);
+static void pdu_side_page(int old);
+static void pdu_ctl_paint(int i);
+static int  pdu_inr(struct os88_rect *r, int x, int y);
+static void pdu_nav_reset(void);
+static void pdu_job_start(int kind);
+static void pdu_job_abort_render(void);
+static void pdu_render_want(struct os88_rect *r);
+static int  ovl_th_pick(void);
+static void ovl_sel_points(int x0, int y0, int x1, int y1, int word);
+static void ovl_txwant_start(void);
+static void ovl_find_begin(void);
+static void ovl_sel_quads_owed(void);
+static void ovl_sel_show(void);
+static void ovl_sel_view(void);
+static void ovl_sel_set(int pg, unsigned lo, unsigned hi);
+static void ovl_th_begin(int pg);
+static void ovl_find_step(void);
+static void ovl_tx_step(void);
+static void ovl_th_step(void);
+static void ovl_lk_say(void);
+static void ovl_ol_paint(struct os88_rect *o);
+static void ovl_ol_click(int x, int y);
+static void ovl_ol_work(void);
+static void pdu_cell_paint(int k);
+static int  pdu_side_rows(void);
+static void pdu_side_list(struct os88_rect *o);
+/* the pdui.inc seam: os88ui.inc's scroll-bar thumb drag (nav) */
+int      pdu_sbgrab(int *blk, int y);
+int      pdu_sbtrack(int *blk, int y);
+int      pdu_sbdrop(int *blk);
+#endif
+/* ---- end nav ---- */
 /* ---- notes ---- */
 #define P_NOTE   7              /* the note popover / inspector (pdunotes.c) */
 #ifndef PD_HOST

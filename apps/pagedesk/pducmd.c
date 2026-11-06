@@ -25,20 +25,22 @@ static int pdu_hpage;
 #define MI_NEW     2
 #define MI_SAVEAS  3
 #define MI_CLOSE   4
-#define MI_EXTRACT 5                    /* pages: File 5-6, Edit 6-10, Document 9-10 (pdupage.c's pdu_pgmrow) */
+#define MI_EXTRACT 5                    /* pages: File 5-8, Edit 8-10, Document 9-10 (pdupage.c's pdu_pgmrow) */
 #define MI_BLANK   6
-static const char *pdu_mfile[7];
+#define MI_DUP     7
+#define MI_DELPG   8
+static const char *pdu_mfile[9];
 #define ME_UNDO    0
 #define ME_REDO    1
 #define ME_DEL     2
 #define ME_FIND    3
 #define ME_NEXT    4
 #define ME_PREV    5
-#define ME_MVUP    6
-#define ME_MVDN    7
-#define ME_MVTO    8
-#define ME_DUP     9
-#define ME_DELPG   10
+#define ME_COPY    6                    /* nav */
+#define ME_SELALL  7                    /* nav */
+#define ME_MVUP    8                    /* pages: 8-10 */
+#define ME_MVDN    9
+#define ME_MVTO    10
 static const char *pdu_medit[11];
 #define MV_ZIN     0
 #define MV_ZOUT    1
@@ -52,10 +54,12 @@ static const char *pdu_mview[8];
 #define MD_READ    0                /* ..MD_PAGES = 3: the four modes */
 #define MD_PREV    4
 #define MD_NEXT    5
-#define MD_FIRST   6
-#define MD_LAST    7
-#define MD_GOTO    8
-#define MD_ROTL    9
+#define MD_GOTO    6                /* First / Last are Home / End only: a
+                                     * pull-down holds 11 (12.4), and nav's
+                                     * history and pages' rotation took them */
+#define MD_BACK    7                    /* nav */
+#define MD_FWD     8                    /* nav */
+#define MD_ROTL    9                    /* pages */
 #define MD_ROTR    10
 static const char *pdu_mdoc[11];
 #define MH_KEYS    0
@@ -65,7 +69,7 @@ static const char *pdu_mhelp[3];
 
 static struct os88_menuset pdu_menus = {
     "PageDesk", 0, 5,
-    { { "File", pdu_mfile, 7 },
+    { { "File", pdu_mfile, 9 },
       { "Edit", pdu_medit, 11 },
       { "View", pdu_mview, 8 },
       { "Document", pdu_mdoc, 11 },
@@ -146,7 +150,9 @@ static void pdu_menusync(void)
     pdu_medit[ME_DEL]    = pdu_mi("\001Delete  Del", !pdu_why(C_E_DELETE));   /* edit */
     pdu_medit[ME_FIND]   = pdu_mi("\001Find...  ^F", open);
     pdu_medit[ME_NEXT]   = pdu_mi("\001Find next  F3", open && pdu_nlen);
-    pdu_medit[ME_PREV]   = pdu_mi("\001Find previous  Sh+F3", 0);
+    pdu_medit[ME_PREV]   = pdu_mi("\001Find previous  Sh+F3", open && pdu_nlen);
+    pdu_medit[ME_COPY]   = pdu_mi("\001Copy  ^C", pdu_sel_active());      /* nav */
+    pdu_medit[ME_SELALL] = pdu_mi("\001Select all  ^A", open);            /* nav */
     pdu_pg_msync(pdu_mfile, pdu_medit, pdu_mdoc);                     /* pages */
     pdu_mview[MV_ZIN]    = pdu_mi("\001Zoom in  +", !pdu_why(C_ZIN));
     pdu_mview[MV_ZOUT]   = pdu_mi("\001Zoom out  -", !pdu_why(C_ZOUT));
@@ -171,9 +177,9 @@ static void pdu_menusync(void)
                                        : "\001  Pages mode  F8", open);
     pdu_mdoc[MD_PREV]  = pdu_mi("\001Previous page  PgUp", !pdu_why(C_PREV));
     pdu_mdoc[MD_NEXT]  = pdu_mi("\001Next page  PgDn", !pdu_why(C_NEXT));
-    pdu_mdoc[MD_FIRST] = pdu_mi("\001First page  Home", open);
-    pdu_mdoc[MD_LAST]  = pdu_mi("\001Last page  End", open);
     pdu_mdoc[MD_GOTO]  = pdu_mi("\001Go to page...  ^G", open);
+    pdu_mdoc[MD_BACK]  = pdu_mi("\001Back  Alt+Left", open && pdu_hbn);    /* nav */
+    pdu_mdoc[MD_FWD]   = pdu_mi("\001Forward  Alt+Right", open && pdu_hfn); /* nav */
     pdu_mhelp[MH_KEYS]    = "Keyboard...";
     pdu_mhelp[MH_PROFILE] = "The XT PDF profile...";
     pdu_mhelp[MH_INFO]    = pdu_mi("\001Document info...", open);
@@ -537,52 +543,7 @@ static void pdu_set_tool(int id)
     pdu_tool_hint(id);                  /* edit */
 }
 
-/* the find job: PDV_ENG_SEARCH from the current page on, resumable */
-static struct pdxb_search pdu_xfind;
-static void pdu_find_run(int again)
-{
-    unsigned r;
-    if (pdu_doc != D_OPEN || pdu_nlen == 0)
-        return;
-    if (!again) {
-        os88_memset(&pdu_xfind, 0, sizeof(pdu_xfind));
-        os88_strcpy(pdu_xfind.needle, pdu_needle, sizeof(pdu_xfind.needle));
-        pdu_xfind.page = pdu_page;
-    } else
-        pdu_xfind.glyph = pdu_xfind.glyph_end;
-    pdu_xfind.last_page = pdu_npages - 1;
-    pdu_xfind.found = 0;
-    pdu_at_doc();
-    /* one call here; a long search is one more job kind in wave 2, and
-     * PDE_BUSY then re-posts like the others */
-    pd_fcopy_out(&pdu_xfind, pdu_xb, 0, sizeof(pdu_xfind));
-    r = pdu_mcall(PDU_M_ENG, PDV_ENG_SEARCH, 0, 0, 0);
-    pd_fcopy_in(pdu_xb, 0, &pdu_xfind, sizeof(pdu_xfind));
-    if (pdu_mcf) {
-        pdu_say2("Find: ", pdu_errtext(r));
-    } else if (pdu_xfind.found) {
-        os88_strcpy(pdu_line, "Found on page ", sizeof(pdu_line));
-        os88_utoa(pdu_xfind.page + 1, pdu_num);
-        pdu_cat(pdu_line, pdu_num, sizeof(pdu_line));
-        pdu_say(pdu_line);
-        if (pdu_xfind.page != pdu_page)
-            pdu_goto(pdu_xfind.page);
-    } else if (r == PDE_BUSY) {
-        /* D11: BUSY is CF=0 and means "more to do", never "no match" */
-        os88_strcpy(pdu_line, "Searched to page ", sizeof(pdu_line));
-        os88_utoa(pdu_xfind.page + 1, pdu_num);
-        pdu_cat(pdu_line, pdu_num, sizeof(pdu_line));
-        pdu_cat(pdu_line, " - F3 searches on", sizeof(pdu_line));
-        pdu_say(pdu_line);
-    } else {
-        os88_strcpy(pdu_line, "No match for \"", sizeof(pdu_line));
-        pdu_cat(pdu_line, pdu_needle, sizeof(pdu_line));
-        pdu_cat(pdu_line, "\"", sizeof(pdu_line));
-        pdu_say(pdu_line);
-    }
-    pdu_status_paint();
-    pdu_menusync();
-}
+/* Find is nav's J_FIND job: pdufind.c */
 
 static void pdu_cmd(int id)
 {
@@ -645,6 +606,7 @@ static void pdu_cmd(int id)
         return;
     case C_SB_PAGES: case C_SB_OUTL:
         pdu_sbtab = (id == C_SB_OUTL);
+        pdu_th_reset();                 /* nav: the claim changes hands */
         pdu_side_paint();
         return;
     case C_SB_HIDE:
@@ -693,6 +655,9 @@ void os88_oncmd(int item, int menu, void *win)
         else if (item == ME_REDO) pdu_cmd(C_REDO);
         else if (item == ME_FIND) pdu_cmd(C_FIND);
         else if (item == ME_NEXT) pdu_find_run(1);
+        else if (item == ME_PREV) ovl_find_prev();      /* nav */
+        else if (item == ME_COPY) ovl_copy();           /* nav */
+        else if (item == ME_SELALL) ovl_selall();       /* nav */
         else if (item == ME_DEL) pdu_cmd(C_E_DELETE);   /* edit */
         else pdu_tell("Nothing is selected.");
     } else if (menu == 2) {
@@ -713,9 +678,9 @@ void os88_oncmd(int item, int menu, void *win)
         if (item <= 3) pdu_set_mode(item);
         else if (item == MD_PREV) pdu_cmd(C_PREV);
         else if (item == MD_NEXT) pdu_cmd(C_NEXT);
-        else if (item == MD_FIRST) pdu_goto(0);
-        else if (item == MD_LAST) pdu_goto(pdu_npages - 1);
         else if (item == MD_GOTO) pdu_cmd(C_PAGE);
+        else if (item == MD_BACK) ovl_back();           /* nav */
+        else if (item == MD_FWD) ovl_forward();         /* nav */
     } else if (menu == 4) {
         pdu_helpw = item;
         pdu_pop_open(P_HELP, C_NONE);
@@ -862,6 +827,7 @@ static void pdu_field_key(int ascii)
 static void pdu_find_key(int ascii)
 {
     if (ascii == 13) {
+        pdu_pop_close_soon();           /* nav: the job runs under the page */
         pdu_find_run(0);
         return;
     }
@@ -908,7 +874,9 @@ void os88_onkey(int ascii, int scan, void *win)
             ch = pdu_focus;
             pdu_focus = C_NONE;
             pdu_ctl_repaint(ch);
-        } else if (pdu_tool != C_T_SELECT && pdu_mode != PDU_MODE_PAGES)
+        } else if (pdu_sel_active())
+            ovl_sel_clear();            /* nav: 17.5, then deselect */
+        else if (pdu_tool != C_T_SELECT && pdu_mode != PDU_MODE_PAGES)
             pdu_set_tool(C_T_SELECT);
         return;
     }
@@ -939,6 +907,8 @@ void os88_onkey(int ascii, int scan, void *win)
     case 26: pdu_cmd(C_UNDO); return;                    /* ^Z */
     case 25: pdu_cmd(C_REDO); return;                    /* ^Y */
     case 6:  pdu_cmd(C_FIND); return;                    /* ^F */
+    case 3:  ovl_copy(); return;                         /* ^C (nav) */
+    case 1:  ovl_selall(); return;                       /* ^A (nav) */
     case 7:  pdu_cmd(C_PAGE); return;                    /* ^G */
     case 9:  pdu_focus_move(1); return;                  /* Tab */
     case '+': case '=': pdu_cmd(C_ZIN); return;
@@ -978,7 +948,9 @@ void os88_onkey(int ascii, int scan, void *win)
     case K_RIGHT: pdu_scroll_by(16, 0); return;
     case K_DEL:   pdu_cmd(C_E_DELETE); return;     /* edit */
     case K_F3:    pdu_find_run(1); return;
-    case K_SF3:   pdu_tell("Find previous is not in this build yet."); return;
+    case K_SF3:   ovl_find_prev(); return;
+    case 0x9B:    ovl_back(); return;                    /* Alt+Left (nav) */
+    case 0x9D:    ovl_forward(); return;                 /* Alt+Right (nav) */
     }
     if (scan >= K_F5 && scan <= K_F8)
         pdu_set_mode(scan - K_F5);
@@ -986,7 +958,12 @@ void os88_onkey(int ascii, int scan, void *win)
 
 void os88_onwheel(int notches, void *win)
 {
-    pdu_scroll_by(0, notches * OS88_WHEEL_STEPS * 8);
+    static struct os88_mouse wm;
+    os88_mouse(&wm);                    /* nav: over the sidebar it scrolls the list */
+    if (pdu_inr(&pdu_L.side, wm.x, wm.y) && pdu_doc == D_OPEN)
+        ovl_side_wheel(notches);
+    else
+        pdu_scroll_by(0, notches * OS88_WHEEL_STEPS * 8);
 }
 
 /* ============================================================================
@@ -1079,29 +1056,15 @@ void os88_onclick(int x, int y, void *win)
         pdu_sb_fill();
         r = pdu_sbhit(pdu_sb, x, y);
         k = pdu_ch() - 16;
-        if (r == PDU_SB_UP) pdu_scroll_by(0, -16);
+        if (r == PDU_SB_THUMB) pdu_nav_thumb(y);         /* nav: the drag */
+        else if (r == PDU_SB_UP) pdu_scroll_by(0, -16);
         else if (r == PDU_SB_DOWN) pdu_scroll_by(0, 16);
         else if (r == PDU_SB_PGUP) pdu_scroll_by(0, -k);
         else if (r == PDU_SB_PGDN) pdu_scroll_by(0, k);
         return;
     }
     if (pdu_inr(&pdu_L.side, x, y) && pdu_doc == D_OPEN) {
-        o = &pdu_tr;
-        pdu_side_list(o);
-        if (!pdu_inr(o, x, y))
-            return;
-        if (pdu_sbtab == 1) {
-            k = (y - o->y1 - 6) / 12;
-            if (k >= 0 && k < pdu_outn && pdu_outpg[k] != 0xFFFF)
-                pdu_goto(pdu_outpg[k]);
-            return;
-        }
-        for (k = 0; k < pdu_side_rows() * 2; k++)
-            if (pdu_cell(k, &pdu_cr) && x >= pdu_cr.x1 && x <= pdu_cr.x2
-                && y >= pdu_cr.y1 && y <= pdu_cr.y2 + 10) {
-                pdu_goto(pdu_sidetop + k);
-                return;
-            }
+        ovl_side_click(x, y);           /* nav: cells, outline rows */
         return;
     }
     if (pdu_inr(&pdu_L.canvas, x, y) && pdu_doc == D_OPEN) {
@@ -1109,8 +1072,8 @@ void os88_onclick(int x, int y, void *win)
             return;
         if (pdu_mode == PDU_MODE_PAGES)
             pdu_tell("Pages mode: use the buttons above or the menus.");
-        else if (pdu_tool == C_T_SELECT)
-            pdu_tell("Selecting text is not in this build yet.");
+        else if (pdu_tool == C_T_SELECT || pdu_tool == C_T_HILITE)
+            pdu_nav_press(x, y);        /* nav: a link, or a text selection */
         else
             pdu_tell(pdu_why(pdu_tool) ? pdu_why(pdu_tool)
                                        : "That tool is not in this build yet.");

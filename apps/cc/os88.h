@@ -591,6 +591,13 @@ int os88_gfx_scroll(int x1, int y1, int x2, int y2, int dy);
 int os88_gfx_blit1(const void *bits, int stride, int x, int y,
                    int w, int rows);
 
+/* os88_gfx_blit1_seg - os88_gfx_blit1 with the band in a HEAP CLAIM, the way
+ * os88_clip_put_seg is os88_clip_put's: `seg:off` is the band's first byte. A
+ * cache of 1bpp pictures (PageDesk's page thumbnails) lives in a claim and is
+ * drawn from it, with no copy into the package's own segment. */
+int os88_gfx_blit1_seg(unsigned seg, unsigned off, int stride, int x, int y,
+                       int w, int rows);
+
 /* os88_gfx_blit4 - the same idea for a 4bpp image: two pixels per byte, high
  * nibble leftmost. Coalesces equal-coloured runs into horizontal lines. */
 void os88_gfx_blit4(const void *pix, int stride, int x, int y, int w, int h);

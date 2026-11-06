@@ -130,4 +130,5 @@ static int upc(int c) { return (c >= 'a' && c <= 'z') ? c - 32 : c; }
 #include "pdepage.c"
 #include "pdestrm.c"
 #include "pdeflate.c"
+#include "pdesrch.c"             /* nav: SEARCH (20.10.1) */
 #include "pdeverb.c"

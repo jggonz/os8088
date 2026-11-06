@@ -112,7 +112,11 @@ static void pdu_pg_wake(void)
     if (pdu_pgow_on) {
         pdu_pgow_on = 0;
         os88_gfx_lock();                /* a callback's paints run locked */
-        ovl_pg_apply(pdu_pgow, pdu_pgow_undo);
+        if (pdu_pgow_undo == 2) {       /* a new change (ovl_pg_do) */
+            if (ovl_pg_apply(pdu_pgow, 0))
+                pdu_undo_pageop(pdu_pgow, 8);
+        } else
+            ovl_pg_apply(pdu_pgow, pdu_pgow_undo);
         os88_gfx_unlock();
     }
 }
@@ -144,12 +148,12 @@ static const char *pdu_pg_why(int id)
 
 /* the page commands' menu rows (12.4): menu << 4 | item, the command, the
  * text - ONE table for both the sync and the dispatch. The items follow
- * pducmd.c's: File 5-6 after Close, Edit 6-10 after Find previous, Document
- * 9-10 after Go to page (a pull-down holds 11). Insert from another PDF
+ * pducmd.c's: File 5-8 after Close, Edit 8-10 after Select all, Document
+ * 9-10 after Forward (a pull-down holds 11). Insert from another PDF
  * (PGC_INSERT, 20.11.7) has no row until it is built. */
 #define PDU_PGMN 9
 static const unsigned char pdu_pgmrow[PDU_PGMN] = {
-    0x05, 0x06, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x39, 0x3A };
+    0x05, 0x06, 0x18, 0x19, 0x1A, 0x07, 0x08, 0x39, 0x3A };
 static const unsigned char pdu_pgmcmd[PDU_PGMN] = {
     C_P_EXTRACT, C_P_BLANK, PGC_UP, PGC_DOWN, PGC_MOVE, PGC_DUP,
     C_P_DELETE, C_P_ROTL, C_P_ROTR };

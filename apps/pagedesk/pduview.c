@@ -184,7 +184,7 @@ static void pdu_scroll_to(int nsx, int nsy)
     c = &pdu_L.canvas;
     if (pdu_sx != osx || pdu_pop != P_NONE || pdu_about
         || os88_wm_obscured(pdu_win) || dy >= ch || -dy >= ch
-        || os88_gfx_scroll(c->x1, c->y1, c->x2, c->y2, -dy) != 0) {
+        || os88_gfx_scroll(c->x1, c->y1, c->x2, c->y2, dy) != 0) {   /* + = content UP (nav: was -dy) */
         pdu_canvas_full();
         return;
     }
@@ -217,6 +217,7 @@ static void pdu_goto(int n)
 {
     if (pdu_doc != D_OPEN || n < 0 || n >= (int)pdu_npages)
         return;
+    pdu_nav_noted(n);                   /* nav: a jump is history */
     pdu_pgwant = n + 1;
     pdu_kick();
 }

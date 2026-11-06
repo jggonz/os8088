@@ -93,6 +93,16 @@ static char pdu_needle[40];             /* Find */
 static int pdu_nlen;
 
 static int pdu_sb[7];                   /* os88ui's scroll-bar block */
+static struct pdxb_open pdu_xopen;      /* (moved up from pdujob.c: nav reads it) */
+static struct pdxb_outline pdu_xout;    /* ...and so does the overlay's outline */
+static int pdu_thwant;                  /* nav: a Pages cell may lack its picture */
+static int pdu_hjump;                   /* nav: the next pdu_goto is a followed link, an
+                                         * outline entry or a hit - history even if
+                                         * the page is next door */
+static int pdu_gs;                      /* nav: a press is being tracked (the
+                                         * thumb 1, a selection 2); no page
+                                         * render runs while a selection's band
+                                         * is on the glass */
 
 /* the job (PAGEDESK-SPEC 15) */
 static int pdu_job;                     /* J_* */
@@ -164,6 +174,10 @@ static const char *pdu_abtext[] = {
 #include "pdudraw.c"            /* every pixel of the chrome */
 #include "pduview.c"            /* the page view: zoom, scroll, pages */
 #include "pdupage.c"            /* pages: 13.7, 20.11: the page map (resident part) */
+#include "pdusel.c"             /* nav: selection and Copy (20.10.3) */
+#include "pdufind.c"            /* nav: Find, a job (20.10.1) */
+#include "pduside.c"            /* nav: the Pages / Outline sidebar (20.10.4) */
+#include "pdunav.c"             /* nav: history, gestures, links (20.10) */
 #include "pdujob.c"             /* 15: the scheduler and its three jobs */
 #include "pduedit.c"            /* 13.1, 20.8: the edit store (edit) */
 #include "pduundo.c"            /* 13.6, 20.8: undo and redo (edit) */
@@ -221,6 +235,8 @@ void *os88_main(void)
     os88_wm_onwake(win);
     os88_wm_onclose(win);               /* a save is told to abort first */
     os88_wm_onwheel(win);
+    os88_wm_onmouseup(win);             /* nav: the gestures' release... */
+    os88_wm_ontimer(win);               /* ...and the poll that tracks them */
     os88_wm_cursor(win, OS88_CUR_ARROW);
     os88_about_set(win);
     os88_assoc_set("PDF", "PAGEDESK");

@@ -2798,6 +2798,368 @@ merge: **+2,030 B resident (1,441 image + 589 bss) and +11,775 B of overlay**.
 About 0.8 KB of the resident figure is string literals the overlay code names
 (SPEC.md 73.14 keeps them resident).
 
+### 20.10 Navigation, selection, Find, thumbnails, outline and links (`nav`, wave 2)
+
+Files: the primary's `pdunav.c` (history, gestures, links, the idle ladder),
+`pdusel.c` (selection, Copy), `pdufind.c` (Find), `pduside.c` (the sidebar and
+its thumbnail job), `pdovlnav.c` (the Outline, in the overlay); PDENG's
+`pdesrch.c` (SEARCH) and `pdelink.c` (links). Everything the primary does
+that is not on a keystroke's path is an `ovl_*` function (2.2, 73.14): of
+nav's compiled code the resident part is the glue (the press, the release and
+the poll, the hooks the render job and the page load call, the greying
+tests), the rest rides in the overlay. Host checks: `make pdnav`
+(`hosttest/pde_srch.py` differential-tests SEARCH against a reference over
+random pages and piece sizes; `pde_link` lists the sample guide's links).
+
+#### 20.10.1 Find is a job; SEARCH is the engine's matcher
+
+`J_FIND` is a resumable job stepped by the wake handler, one `PDV_REND_TEXTMAP`
+slice a wake (a text pass, 20.3.4: 74 `pdtm_glyph` records at most) and the
+`PDV_ENG_SEARCH` calls that consume it. PDREND does not know PDENG's matcher
+and PDENG has no vector to PDREND, so the primary carries the one to the other,
+and **the exchange block is the pipe**: the text map's `dseg:doff` is the XB at
+offset `PDE_SRCH_PIECE` = 128 (`dmax` 896), so a piece is not copied twice.
+`pdxb_search` is used as pinned, with these meanings:
+
+| field | in | out |
+|---|---|---|
+| `needle` | PD Latin, read when `state` = 0 | |
+| `page` | the page the piece belongs to | |
+| `glyph` | skip records whose `run` is below it (they were matched already, or are before the point a Find-next resumes from; they still feed the blank rule, never the matcher) | the run of the hit's first glyph |
+| `state` | 0 = a NEW page stream (the matcher is reset), 1 = the next piece of the same page | 1 |
+| `found` | the NUMBER of records in the piece (<= 74) | 1 = a hit completed in this piece |
+| `glyph_end` | | the run of the hit's last glyph |
+
+A hit ends the call; the primary calls again with the SAME piece and `glyph` =
+`glyph_end + 1` until `found` = 0 (the matcher resets on a hit, so hits never
+overlap). A piece with no hit is consumed whole. The matcher is
+case-insensitive over PD Latin (ASCII and the Latin-1 letters fold), keeps the
+last 64 symbols with their runs (so a hit's FIRST glyph is known without a
+table), and takes a needle of up to 63 symbols with leading and trailing blanks
+dropped. **Blanks are made**: a justified line moves its words with TJ numbers
+and a line ends with no space at all, so a glyph a line apart (`dy` > half the
+previous em) or a fifth of an em after the previous one counts as preceded by a
+blank, and runs of blanks collapse (the primary's `pdu_gapk` is the same rule,
+and Copy writes CR LF for a line and a space for a gap by it). A hit is a page
+and two glyph runs: it becomes the SELECTION (20.10.3), which is how it is
+shown, scrolled to and copied.
+
+Enter (from the top of this page), F3 / Find next (after the selection,
+wrapping past the last page, and once more over the start page for what the
+resume skipped) and Shift+F3 (the LAST hit that starts before the selection,
+wrapping the other way: the page is scanned forward and the last candidate
+kept) all start the job from the idle ladder; Esc cancels it at a slice. A
+second after it starts the status line says which page it is on (15.3). A page
+is searched from its start every time: a page's map is never kept (9.2).
+
+#### 20.10.2 Links (`PDP_HASLINKS`)
+
+`PDV_ENG_PAGEINFO` sets `PDP_HASLINKS` when one of the page's first 64
+annotations is a `/Link`. A link is the `PDV_ENG_ANNOTS` record, with these
+meanings for `subtype` "Link": `state` = 0 (no destination in this file) or
+the destination page index + 1; `nm` = the action's `/S` name ("GoTo", "URI",
+"Launch", ...) or "Named" for a `/Dest` the engine could not resolve;
+`contents_len`/`contents` = a `/URI`'s length and first 159 characters. A
+destination is `[page ...]` (direct, as `/Dest` or as `/A /D`) or a NAME looked
+up in the catalog's `/Dests` dictionary (PDF 1.1); the name TREE of later files
+is not read. **Nothing is ever run** (1.4): a click that lands on a link goes
+to its page (and is history, 20.10.5), a `/URI` is shown on the status line
+("Link: http://... - PageDesk never opens links."), and a `/Launch`,
+`/JavaScript` or `/Named` action is named and refused. The primary fetches a
+page's links when the page loads, into the SCRATCH claim (42 links of 12 bytes:
+rect, destination, annotation index), and a press tests them with
+`pdm_view_inv` and no disk read.
+
+#### 20.10.3 Selection and Copy
+
+A selection is a page and a range of glyph runs (`lo..hi`, inclusive); its
+boxes are derived and its text is not kept. The press tests links first, else
+starts a gesture (20.10.5): a rubber band is XORed while the button is down,
+and on release ONE text pass (`J_TEXT`, mode PICK) takes the two points to their
+nearest glyphs (a line weighs four times a column, so the nearest line wins
+before the nearest letter) in content order, then QUAD computes one box a line
+(UL UR LL LR, 13.1.1's order, page space, pt16) into the SCRATCH claim (96
+quads of 16 bytes) - a double-click grows the pick to its word (WORD) first.
+Select all (Ctrl+A) is `lo` 0 .. `hi` 0xFFFF. **On the glass** a selection is XOR
+inversion over its boxes (17.4: never saved), drawn only when the page under it
+is whole. A render of a region wipes the XOR there, so the render job calls
+`pdu_sel_after(&rect)` with the rect it finished and the XOR is put back inside
+it; the selection is taken off the glass by XOR when nothing is being drawn and
+by repainting its boxes when something is. The gfx lock is NOT re-entrant: the
+XOR is drawn under the caller's lock and the wake handler takes it around the
+call.
+
+**Copy** (Ctrl+C, Edit > Copy; 12) runs a COPY pass of its own: the selected
+glyphs as Windows-1252 bytes, CR LF between lines and a space for a gap, into
+a heap claim of three bytes a glyph (the THUMB claim's 4 KiB when there is no
+claim to be had - its pictures are then drawn again lazily - and truncated,
+saying so; an aborted Copy gives back whichever it held), then `OSAPI_CLIP_PUT_SEG` and
+the claim is freed. Over 32 KiB it is refused whole with the reason. This is the
+one transient claim nav makes (ASK: it is outside 16.2's table; the owner cap of
+8 holds because a copy never runs during a save - Copy refuses while a job
+runs).
+
+Interfaces for `edit`: `int pdu_sel_quads(pd_pt *dst, unsigned cap)` copies the
+CURRENT page's selection into `dst`, 8 `pd_pt` (4 points) a quad, **`cap` counted
+in quads** (edit's Highlight passes 12 for its 96-value buffer), and returns the quads (0 = none or still being computed);
+`int pdu_sel_text(char *dst, unsigned cap)` runs the COPY pass to its end on this
+call (slow on a dense page: never from a callback that holds the lock) and
+returns the characters. Esc clears the selection after the popover and the page
+field (17.5).
+
+#### 20.10.4 The Pages and Outline sidebar
+
+A Pages cell is a page's picture once `PDV_REND_THUMB` has drawn it (10.8): one
+56x72 1bpp cell per 512-byte slot of the THUMB claim (8 slots, so the panel
+shows at most 4 rows of 2 cells; `PD_THUMBS` = 12 is not reached), filled one at
+a time from the idle ladder - the current page first, then what is visible - and
+drawn by `os88_gfx_blit1_seg` (a new thunk, `apps/cc/os88thunk.asm`: the band is
+in a claim, not in the package). Until then a cell shows its number and "..."
+and a page the renderer refused shows " - " and is not retried. A job waits for
+the page: a render or a page owed aborts a running thumbnail. LRU by use.
+`int pdu_side_sel(void)` is the page last clicked in the panel, -1 for none
+(`pages`' interface); a click also goes to the page.
+
+The Outline tab reads `PDV_ENG_OUTLINE` a level at a time into the same claim
+as a flat array of 42-byte entries in display order (97 at most): the first
+level when the tab is shown, a twisty's children (up to 24) when it is clicked,
+and the collapse gives them back. A title goes to its page; an entry whose
+destination is not a page in the file says so. Switching tabs empties whichever
+the other had.
+
+#### 20.10.5 Gestures, history and the idle ladder
+
+The kernel has a tracking edge (`OSAPI_WM_ONDRAG`, SPEC.md 13.8.2) but the C
+SDK carries no callback for it (`crt0.asm` has no `CC_HAS_ONDRAG`; ASK, an SDK
+change outside nav's files), so a press that needs one arms the
+window's one-shot timer (`os88_wm_timer`, 1 tick) and POLLS `os88_mouse()` until
+the button is up (`os88_onmouseup` ends it too; a lost release is noticed by the
+poll). **The scroll bar's thumb** drags through `os88ui.inc`'s thumb drag
+(13.10.5; `pdu_sbgrab`/`pdu_sbtrack`/`pdu_sbdrop` in `pdui.inc`): the view
+follows every 2 ticks on a 286 or better and only at the release on an
+8086/8088, where one commit is a third of a second. While a selection's band is
+on the glass no page render runs.
+
+**History**: Back (Alt+Left, Document > Back) and Forward (Alt+Right) over the
+pages a JUMP left - a followed link, an outline entry, a Find hit, Go to, Home
+and End, a cell click; Prev/Next/PgUp/PgDn move by one and are not history. 8
+pages, a new jump forgets Forward.
+
+**The idle ladder** (`ovl_nav_work`): when no job runs, no page is owed and no
+render is wanted, nav's next piece of work starts, in the order the user waits
+for it: a text pass owed, a Find, the boxes of a selection, a selection owed to
+the glass, a link's message, the Outline's reading, a thumbnail. The wake
+handler keeps going while one is owed (`pdu_nav_owed`).
+
+Keys added: Ctrl+C Copy, Ctrl+A Select all, Shift+F3 Find previous, Alt+Left /
+Alt+Right Back / Forward. Menus: Edit > Copy, Select all (Find previous is
+live), Document > Back, Forward.
+
+#### 20.10.6 Sizes, deviations and what is open
+
+Measured by verify-nav against feat/pagedesk a9cc94d37 (edit and notes in):
+primary 47,800 + 6,207 = 54,007 bytes, **+3,160** of nav's +3,584 (feat:
+44,728 + 6,119); overlay part 37,306, **+10,585** of +10,752 (feat 26,721);
+PDENG.MOD +1,994 of +2.5 KiB. Every figure is an `os88pkg` line of `make
+pagedesk` (nav-verify.md). Stack (`tools/os88pdstk.py`, t_pdstk green): nav's
+deepest UI-task chain is the wake's text pass scrolling a Find hit into view,
+360 of 384 (`cc_onwake > ovl_tx_step > ovl_tx_done > ovl_sel_view >
+pdu_scroll_to > pdu_canvas_full`, the tail being the popover's paint); no
+recursion in pdesrch.c, pdelink.c or the primary's nav files. Deviations: (1) the Copy claim above; (2) `pdxb_search`
+and `pdxb_annot` carry the protocol above instead of new fields (no ABI
+change); (3) `os88_gfx_blit1_seg`, an SDK thunk. Open: reading order is the
+content stream's, so columns and tables copy in stream order; a name-tree
+destination is "Named" and not followed; no hand cursor over a link (the OS
+shows no hover - it has no move callback with no button down); no triple-click
+line selection.
+
+### 20.11 Page operations, Extract, New and the save flows (`pages`, wave 2)
+
+Source: `apps/pagedesk/pdwmap.h` (the map's encoding, shared by both sides),
+`pdupage.c` (resident: the lookups, the greying, the doors), `pdovlpage.c`
+(the overlay: every command, prompt and job start/end), `pdwpg.c` (PDWRT: the
+flat page tree, duplicates, blanks), `pdwgc.c` (PDWRT: the graph copy). Host
+checks: `make pdwrt` (`hosttest/pdw_test.c`, byte copy, `PDE_CHANGED`, folders)
+and `make pdwrt-real` (`hosttest/pdw_real.c` against PDENG's own host build,
+`pdw_pgcheck.py` against qpdf and Poppler's pixels, `pdw_nest.py`'s nested tree).
+
+#### 20.11.1 The page map
+
+The map is the order of the pages the user SEES, one 16-bit word a view page
+in claim row `PDU_DC_PAGES` and, byte for byte, the `pages_seg` of
+`PDV_WRT_SAVE` / `PDV_WRT_EXTRACT`: bits 15-14 kind (`PDM_SRC` a page of the open
+document, `PDM_BLANK` a new empty page of the size of source page `idx`,
+`PDM_FOREIGN` reserved for Insert, 20.11.7), bits 13-12 quarter turns ADDED to
+the page's own `/Rotate`, bits 11-0 `idx`. `pages_count` = 0 is the source's own
+order. A map holds at most `PDM_MAXMAP` = 240 pages: the row is 1 KiB, the map
+at byte 0, Extract's page list at `PDM_XLIST` = 480 and the prompt's names at
+`PDM_NAMES` = 960 (a 400-page cap put the list inside the map). Page operations
+on a longer document, and Duplicate or Insert blank page on a 240-page one, are
+refused in words ("Page operations handle up to 240 pages."); so is an Extract
+list of more than 240 pages, which is refused rather than cut short.
+The second time `PDM_SRC` names a source page it is a **duplicate**; the first is
+the original and owns the page id's edit records (`pdu_pg_isdup(view)` tells the
+renderer's caller). `pdu_npages` is the VIEW's page count, so nothing else in the
+primary changes meaning; `pdu_pg_id(view)` is the one lookup from a view index to
+the page the engine knows (`pdu_pg_count()` = `pdu_npages`). The view shows the
+new order and rotation before the save: `pdu_page_load` asks PAGEINFO for
+`pdu_pg_id(n)` and turns `pdu_pinfo.rotate`; a blank page is paper (no render).
+A page operation is a delta of four words `{op, a, b, entry}` - 1 ROT, 2 DEL, 3 INS,
+4 MOVE - applied and reverted by `pdu_pg_apply(delta, len, undo)` (edit's undo
+calls it; the commented `pdu_undo_pageop(pdu_pgd, 8)` in `ovl_pg_do` is the one
+line edit enables when it lands, until then an operation applies without a history). When the
+map returns to the identity it is dropped (nothing to write).
+
+#### 20.11.2 The writer's page operations (13.7)
+
+An incremental save whose map is not the identity writes the root `/Pages` node
+again: its other keys kept, `/Kids` in the new order, `/Count`. A page that is
+rotated, is under a node other than the root, or has annotation edits is written
+again (one revision per page: `/Parent`, `/Rotate` and the annotation array
+merged); a page moved to the root gets `/MediaBox`, `/CropBox` and `/Resources`
+materialised from its nearest ancestor. The tree is treated as flat when the
+root's `/Count` equals the number of its `/Kids` (a single-page intermediate node
+is the one case this misjudges). A duplicate is a new page object sharing
+`/Contents` and `/Resources` by reference whose annotations are new objects
+(`/NM` new, `/P`, `/Popup`, `/Parent`, `/IRT` remapped); a blank is a new object
+with the source page's `MediaBox`. Edit records of a deleted page are not
+written. Limits: 16 annotations on a duplicated page (`err_detail` 12), a root
+or page object over `PDW_PGBUF` = 4,096 bytes (13), a map entry that is not
+`SRC`/`BLANK` (14). Numbers: new objects from the source's `/Size`, page-operation
+objects first (`pm_prep`), annotations after; the xref is the incremental one.
+
+#### 20.11.3 Save As beside nothing: byte copy, `PDE_CHANGED`, another folder (14.2, 14.4, D14)
+
+An incremental save with no live edit and the identity map is a **byte copy** of
+the source (no newline, no xref section; PDENG's check below still runs, and its
+`startxref` must be the source's own). The writer copies to the end of the source
+and compares the length with the fingerprint's size taken at the start: a source
+that moved answers `PDE_CHANGED`. The primary compares the directory's size with
+the one OPEN saw before it starts (`ovl_save_begin`, the 4-byte fingerprint read back from the exchange block). **`src_vol` is the source's
+volume PLUS ONE** (0 = one folder; volume 0 is A:, a legal source) and `src_clus`
+its folder: the writer stands in the source's folder for every PDENG call and
+source read and in the target's for every write, rename and delete (`pdw_cross`,
+`pdw_in_src`, `pdw_in_tgt`; the target's folder is "here" at the first call), so
+the primary stands in the TARGET's folder for a job's slices (`pdu_tgtplace`).
+
+#### 20.11.4 Extract (13.8)
+
+`PDV_WRT_EXTRACT` with the map as the page list (SRC and BLANK entries, a source
+page at most once, `err_detail` 15) writes a fresh document. The output region,
+then three bit maps sized from the source's `/Size` (`gc_nw` = ((size >> 7) + 1)
+x 8 words each for `seen` and `scan`, a quarter of that for the prefix count a
+128 numbers; 1,048 bytes for a 1,000-object source, 17 KiB only at the 2^16
+ceiling), then the object table and the tail tables; a claim too small answers
+`PDE_NOMEM` with the KiB it needed in `err_detail`. The primary sizes the claim
+from PDENG's trailer: `wbuf_kb` = 16 + size/128 + size/2048, at most 40 (40 when
+the trailer cannot be read). A reference past `/Size` is not marked (it becomes
+`null`), a root page whose object number is past `/Size` answers `PDE_XREF`, and
+a root that cannot be read fails the job rather than being dropped. Phases: PAGEINFO
+of every chosen page (its object is a root); a fixpoint that reads every reachable
+object's references (an object whose `/Type` is Page, Pages or Catalog and is not
+a root is NOT copied and every reference to it becomes `null`, as does a reference
+to an object the source does not have); objects 1-3; every seen object in
+ascending source order, numbered by rank from 4 (a root page rewritten from its
+PAGEINFO: `/Parent` the new tree, `/Rotate` final, boxes and inherited
+`/Resources` materialised), the dictionary with every `n g R` rewritten by the one
+reference walker (`rs_walk`: strings, hex strings and names skipped by syntax) and
+the stream bytes from `stream` to `endobj` copied verbatim in buffer-sized pieces;
+then the blank pages. Over 2,432 objects `err_detail` 16, a dictionary over the
+buffer 14. Marks not yet saved are not extracted.
+
+#### 20.11.5 The jobs (primary)
+
+`ovl_save_begin(name, kind)` (kind 0 Save As, 1 New, 2 Extract; an overlay
+function, so a save needs the overlay part) claims the writer (18 KiB; an Extract
+sized from `/Size`, 20.11.4), fills
+`pdxb_save` and starts `J_SAVE`; `pdu_save_step` runs the verb of the kind.
+`PDE_EXISTS` with `state` = `PDW_ST_CONFIRM` parks the job and asks in the status
+line (Enter replaces, Esc keeps and aborts). **Esc does not say "Cancelled." from
+the key handler**: a key arrives with the gfx lock held, and the job's ending
+(`ovl_save_done` -> `pdu_wsay`) takes it again, which deadlocked the UI task in
+`gfx_lock` on the first build. Esc starts `J_SAVE` with `pdu_jcancel` set, and the
+onwake slice, lock free, takes the ordinary cancel path: "Cancelled." and the
+source re-opened. Escape during the re-open itself is ignored (`pdu_reopening`),
+since cancelling it would leave PDENG with no document. **The writer reads its output back
+through PDENG** (14.2 step 4: `PH_VFY` closes the source's document, opens
+`PDSAVE.$$$`, checks the file's size, the trailer's `startxref` and `/Size`, and
+the first, middle and last object written) and says so by ORing
+`PDW_OUT_REOPEN` (0x0100) into `pdxb_save.mode` (an ASK to the lead for a proper
+field). After the job the primary always gives PDENG a document: a saved Save As
+or New **opens the output** (the page, 1-based, and the "Saved X" line kept), a
+failed or cancelled job and an Extract re-open the source with `OPEN` alone (CLOSE
+keeps PDENG's claims; the edit store and the map are untouched). New writes
+`PDV_WRT_NEWDOC` with one `pd_newpage` (Letter, A4, either way) 512 bytes into
+the exchange block, written again before every slice. The prompts (`PK_*`: extract
+list, destination, delete confirmation, New's size, replace) live in the status
+line, so CGA does everything the other adapters do. Menu items: File New,
+Extract pages..., Insert blank page, Duplicate page, Delete page; Edit Move
+earlier, later, to... (after nav's Copy and Select all); Document Rotate left,
+right (after nav's Back and Forward). A pull-down holds 11 items (12.4) and the
+bar 5 menus, so Document has no First / Last page rows: Home and End are
+those, and the Pages panel's ends. The
+nine page rows are one table in `pdupage.c` (`pdu_pgmrow`/`pdu_pgmcmd`/
+`pdu_pgmtxt`) that both the menu sync and the command lookup read, and every
+command body is in the overlay (`ovl_pg_cmd`, `ovl_pg_key`, `ovl_pg_onfile`);
+Insert from another PDF has no row until it is built (20.11.7). The Pages-mode
+buttons are the same commands. A job's outcome line ("Saved X", "Extracted to
+X", "Could not save ...") is the last thing the job says: the re-open after it
+does not overwrite it with "Ready:".
+
+#### 20.11.6 The UI task's stack (D21)
+
+PDWRT calls PDENG from the bottom of its own call chain, on the UI task's stack
+(512 bytes, the kernel using up to 246; D21): the first page-operation save on the
+target died with `STACK OVERFLOW TASK 00` when the stack was believed to be 384.
+Rules kept: no recursion anywhere (`sc_val`, the value scanner, was recursive in
+wave 1 and is an explicit stack of 16 container kinds now; the graph copy, the
+page-tree rewrite and `rs_walk` are loops over the buffer), `eng_get` is one
+function (arguments in file-scope words), the page-operation and graph-copy
+functions keep their locals in statics, `pdw_ferr` is one function. The writer's
+tail tables are read through `tg`/`ts`, far peeks and pokes in the claim. A new
+feature in PDWRT must be measured with `tools/stkwater.py` (and, when it lands,
+`tools/os88pdstk.py`) before it is believed. **The output region is flushed at
+the top of the slice loop** whenever less than `PDW_ROOM` = 2,048 bytes of it is
+free (`job_slice`), so the file write happens one level below the door instead of
+at the bottom of `pb_*` -> `pw_n` -> `pw_flush` inside an appearance stream, which
+was 196 bytes of package frames plus the kernel's file code. Measured on the
+verifier's pass (cc8086 frames + pushes over the generated asm): every kernel call
+from PDWRT is within 122 bytes of the door, the PDENG door within 134, no
+recursion; a unit that writes more than 2,048 bytes still flushes where it is.
+D23's private module stack supersedes the byte budget; the flush stays because
+it is also fewer, larger writes. Insert from another PDF opens a
+second document in PDENG from inside the writer, which needs the engine's requests
+made from the primary, which is why it is not built.
+
+#### 20.11.7 Not built, and deviations
+
+1. **Insert from another PDF** (13.8) is a greyed-in-words command: the map has
+   the `PDM_FOREIGN` kind and the writer refuses it (`err_detail` 14). Design: a
+   merge job that runs the Extract pipeline once per source document, numbering
+   from the previous round and writing the page tree last; it needs PDENG to
+   switch documents inside the job and so the 20.11.6 restructuring.
+2. **The recovery journal and the `PDSAVE.$$$` offer** (14.7, 14.3) are not built.
+3. Undo/redo of a page operation needs edit (20.11.1); the dirty flag is
+   `pdu_changes`.
+4. `pdu_side_sel()` (nav) is a commented line in `ovl_pg_tgt`: the command's page
+   is the current one until nav lands.
+5. Sizes at this writing: PDWRT 45,194 bytes (44.1 KiB; D18's cap is 46 KiB,
+   `PDW_CAP` = 47,104, target 44: the page-op, edit and map tables went to the
+   claim's tail, the Extract bit maps are sized from `/Size` inside the claim,
+   the inherited-resources buffer shares the annotation text buffer and the
+   verify scratch the kept-identity buffer). The primary 42,484 + 4,057 = 46,541
+   against the wave-1 shell's 44,623: +1,918 against a +1.5 KiB share. What is
+   left is the overlay's cost, not the commands: ~280 bytes of shims and vectors
+   for the resident routines the overlay calls (shared with any later overlay
+   tenant), the overlay's literals (which stay resident, 73.14), the nine-row menu
+   table and the resident lookups. The overlay holds every command body: 6,171
+   bytes, pages' share about +3.9 KiB.
+6. 14.4's open-time reference is the file's SIZE (free at OPEN); the CRCs would
+   cost two uncached reads at every open.
+7. A foreign-folder Save As stands the primary in the target's folder, so
+   `pdu_at_doc` is not called during a save.
+
+
 ### 20.12 Annotations on screen (`annotr`, wave 2)
 
 PDREND draws what the user has marked up, in the same pass and the same bands as the page:
@@ -2988,190 +3350,6 @@ read 374 (376). `ed_text`'s 54-byte frame stays on the stack: the annotation pha
 strike read 160 bytes shallower than the page's own text does. **The class is not closed by
 this**: a PDREND chain into a PDENG cache miss is about 350 + 26 + 188 + the kernel's read, which
 is past 512 before `bez`; that is the lead's (DECISIONS, the kernel-.bss corruption of 21:38).
-### 20.11 Page operations, Extract, New and the save flows (`pages`, wave 2)
-
-Source: `apps/pagedesk/pdwmap.h` (the map's encoding, shared by both sides),
-`pdupage.c` (resident: the lookups, the greying, the doors), `pdovlpage.c`
-(the overlay: every command, prompt and job start/end), `pdwpg.c` (PDWRT: the
-flat page tree, duplicates, blanks), `pdwgc.c` (PDWRT: the graph copy). Host
-checks: `make pdwrt` (`hosttest/pdw_test.c`, byte copy, `PDE_CHANGED`, folders)
-and `make pdwrt-real` (`hosttest/pdw_real.c` against PDENG's own host build,
-`pdw_pgcheck.py` against qpdf and Poppler's pixels, `pdw_nest.py`'s nested tree).
-
-#### 20.11.1 The page map
-
-The map is the order of the pages the user SEES, one 16-bit word a view page
-in claim row `PDU_DC_PAGES` and, byte for byte, the `pages_seg` of
-`PDV_WRT_SAVE` / `PDV_WRT_EXTRACT`: bits 15-14 kind (`PDM_SRC` a page of the open
-document, `PDM_BLANK` a new empty page of the size of source page `idx`,
-`PDM_FOREIGN` reserved for Insert, 20.11.7), bits 13-12 quarter turns ADDED to
-the page's own `/Rotate`, bits 11-0 `idx`. `pages_count` = 0 is the source's own
-order. A map holds at most `PDM_MAXMAP` = 240 pages: the row is 1 KiB, the map
-at byte 0, Extract's page list at `PDM_XLIST` = 480 and the prompt's names at
-`PDM_NAMES` = 960 (a 400-page cap put the list inside the map). Page operations
-on a longer document, and Duplicate or Insert blank page on a 240-page one, are
-refused in words ("Page operations handle up to 240 pages."); so is an Extract
-list of more than 240 pages, which is refused rather than cut short.
-The second time `PDM_SRC` names a source page it is a **duplicate**; the first is
-the original and owns the page id's edit records (`pdu_pg_isdup(view)` tells the
-renderer's caller). `pdu_npages` is the VIEW's page count, so nothing else in the
-primary changes meaning; `pdu_pg_id(view)` is the one lookup from a view index to
-the page the engine knows (`pdu_pg_count()` = `pdu_npages`). The view shows the
-new order and rotation before the save: `pdu_page_load` asks PAGEINFO for
-`pdu_pg_id(n)` and turns `pdu_pinfo.rotate`; a blank page is paper (no render).
-A page operation is a delta of four words `{op, a, b, entry}` - 1 ROT, 2 DEL, 3 INS,
-4 MOVE - applied and reverted by `pdu_pg_apply(delta, len, undo)` (edit's undo
-calls it; the commented `pdu_undo_pageop(pdu_pgd, 8)` in `ovl_pg_do` is the one
-line edit enables when it lands, until then an operation applies without a history). When the
-map returns to the identity it is dropped (nothing to write).
-
-#### 20.11.2 The writer's page operations (13.7)
-
-An incremental save whose map is not the identity writes the root `/Pages` node
-again: its other keys kept, `/Kids` in the new order, `/Count`. A page that is
-rotated, is under a node other than the root, or has annotation edits is written
-again (one revision per page: `/Parent`, `/Rotate` and the annotation array
-merged); a page moved to the root gets `/MediaBox`, `/CropBox` and `/Resources`
-materialised from its nearest ancestor. The tree is treated as flat when the
-root's `/Count` equals the number of its `/Kids` (a single-page intermediate node
-is the one case this misjudges). A duplicate is a new page object sharing
-`/Contents` and `/Resources` by reference whose annotations are new objects
-(`/NM` new, `/P`, `/Popup`, `/Parent`, `/IRT` remapped); a blank is a new object
-with the source page's `MediaBox`. Edit records of a deleted page are not
-written. Limits: 16 annotations on a duplicated page (`err_detail` 12), a root
-or page object over `PDW_PGBUF` = 4,096 bytes (13), a map entry that is not
-`SRC`/`BLANK` (14). Numbers: new objects from the source's `/Size`, page-operation
-objects first (`pm_prep`), annotations after; the xref is the incremental one.
-
-#### 20.11.3 Save As beside nothing: byte copy, `PDE_CHANGED`, another folder (14.2, 14.4, D14)
-
-An incremental save with no live edit and the identity map is a **byte copy** of
-the source (no newline, no xref section; PDENG's check below still runs, and its
-`startxref` must be the source's own). The writer copies to the end of the source
-and compares the length with the fingerprint's size taken at the start: a source
-that moved answers `PDE_CHANGED`. The primary compares the directory's size with
-the one OPEN saw before it starts (`ovl_save_begin`, the 4-byte fingerprint read back from the exchange block). **`src_vol` is the source's
-volume PLUS ONE** (0 = one folder; volume 0 is A:, a legal source) and `src_clus`
-its folder: the writer stands in the source's folder for every PDENG call and
-source read and in the target's for every write, rename and delete (`pdw_cross`,
-`pdw_in_src`, `pdw_in_tgt`; the target's folder is "here" at the first call), so
-the primary stands in the TARGET's folder for a job's slices (`pdu_tgtplace`).
-
-#### 20.11.4 Extract (13.8)
-
-`PDV_WRT_EXTRACT` with the map as the page list (SRC and BLANK entries, a source
-page at most once, `err_detail` 15) writes a fresh document. The output region,
-then three bit maps sized from the source's `/Size` (`gc_nw` = ((size >> 7) + 1)
-x 8 words each for `seen` and `scan`, a quarter of that for the prefix count a
-128 numbers; 1,048 bytes for a 1,000-object source, 17 KiB only at the 2^16
-ceiling), then the object table and the tail tables; a claim too small answers
-`PDE_NOMEM` with the KiB it needed in `err_detail`. The primary sizes the claim
-from PDENG's trailer: `wbuf_kb` = 16 + size/128 + size/2048, at most 40 (40 when
-the trailer cannot be read). A reference past `/Size` is not marked (it becomes
-`null`), a root page whose object number is past `/Size` answers `PDE_XREF`, and
-a root that cannot be read fails the job rather than being dropped. Phases: PAGEINFO
-of every chosen page (its object is a root); a fixpoint that reads every reachable
-object's references (an object whose `/Type` is Page, Pages or Catalog and is not
-a root is NOT copied and every reference to it becomes `null`, as does a reference
-to an object the source does not have); objects 1-3; every seen object in
-ascending source order, numbered by rank from 4 (a root page rewritten from its
-PAGEINFO: `/Parent` the new tree, `/Rotate` final, boxes and inherited
-`/Resources` materialised), the dictionary with every `n g R` rewritten by the one
-reference walker (`rs_walk`: strings, hex strings and names skipped by syntax) and
-the stream bytes from `stream` to `endobj` copied verbatim in buffer-sized pieces;
-then the blank pages. Over 2,432 objects `err_detail` 16, a dictionary over the
-buffer 14. Marks not yet saved are not extracted.
-
-#### 20.11.5 The jobs (primary)
-
-`ovl_save_begin(name, kind)` (kind 0 Save As, 1 New, 2 Extract; an overlay
-function, so a save needs the overlay part) claims the writer (18 KiB; an Extract
-sized from `/Size`, 20.11.4), fills
-`pdxb_save` and starts `J_SAVE`; `pdu_save_step` runs the verb of the kind.
-`PDE_EXISTS` with `state` = `PDW_ST_CONFIRM` parks the job and asks in the status
-line (Enter replaces, Esc keeps and aborts). **Esc does not say "Cancelled." from
-the key handler**: a key arrives with the gfx lock held, and the job's ending
-(`ovl_save_done` -> `pdu_wsay`) takes it again, which deadlocked the UI task in
-`gfx_lock` on the first build. Esc starts `J_SAVE` with `pdu_jcancel` set, and the
-onwake slice, lock free, takes the ordinary cancel path: "Cancelled." and the
-source re-opened. Escape during the re-open itself is ignored (`pdu_reopening`),
-since cancelling it would leave PDENG with no document. **The writer reads its output back
-through PDENG** (14.2 step 4: `PH_VFY` closes the source's document, opens
-`PDSAVE.$$$`, checks the file's size, the trailer's `startxref` and `/Size`, and
-the first, middle and last object written) and says so by ORing
-`PDW_OUT_REOPEN` (0x0100) into `pdxb_save.mode` (an ASK to the lead for a proper
-field). After the job the primary always gives PDENG a document: a saved Save As
-or New **opens the output** (the page, 1-based, and the "Saved X" line kept), a
-failed or cancelled job and an Extract re-open the source with `OPEN` alone (CLOSE
-keeps PDENG's claims; the edit store and the map are untouched). New writes
-`PDV_WRT_NEWDOC` with one `pd_newpage` (Letter, A4, either way) 512 bytes into
-the exchange block, written again before every slice. The prompts (`PK_*`: extract
-list, destination, delete confirmation, New's size, replace) live in the status
-line, so CGA does everything the other adapters do. Menu items: File New,
-Extract pages..., Insert blank page; Edit Move earlier, later, to..., Duplicate,
-Delete page; Document Rotate left, right (a pull-down holds 11 items, 12.4). The
-nine page rows are one table in `pdupage.c` (`pdu_pgmrow`/`pdu_pgmcmd`/
-`pdu_pgmtxt`) that both the menu sync and the command lookup read, and every
-command body is in the overlay (`ovl_pg_cmd`, `ovl_pg_key`, `ovl_pg_onfile`);
-Insert from another PDF has no row until it is built (20.11.7). The Pages-mode
-buttons are the same commands. A job's outcome line ("Saved X", "Extracted to
-X", "Could not save ...") is the last thing the job says: the re-open after it
-does not overwrite it with "Ready:".
-
-#### 20.11.6 The UI task's stack (D21)
-
-PDWRT calls PDENG from the bottom of its own call chain, on the UI task's stack
-(512 bytes, the kernel using up to 246; D21): the first page-operation save on the
-target died with `STACK OVERFLOW TASK 00` when the stack was believed to be 384.
-Rules kept: no recursion anywhere (`sc_val`, the value scanner, was recursive in
-wave 1 and is an explicit stack of 16 container kinds now; the graph copy, the
-page-tree rewrite and `rs_walk` are loops over the buffer), `eng_get` is one
-function (arguments in file-scope words), the page-operation and graph-copy
-functions keep their locals in statics, `pdw_ferr` is one function. The writer's
-tail tables are read through `tg`/`ts`, far peeks and pokes in the claim. A new
-feature in PDWRT must be measured with `tools/stkwater.py` (and, when it lands,
-`tools/os88pdstk.py`) before it is believed. **The output region is flushed at
-the top of the slice loop** whenever less than `PDW_ROOM` = 2,048 bytes of it is
-free (`job_slice`), so the file write happens one level below the door instead of
-at the bottom of `pb_*` -> `pw_n` -> `pw_flush` inside an appearance stream, which
-was 196 bytes of package frames plus the kernel's file code. Measured on the
-verifier's pass (cc8086 frames + pushes over the generated asm): every kernel call
-from PDWRT is within 122 bytes of the door, the PDENG door within 134, no
-recursion; a unit that writes more than 2,048 bytes still flushes where it is.
-D23's private module stack supersedes the byte budget; the flush stays because
-it is also fewer, larger writes. Insert from another PDF opens a
-second document in PDENG from inside the writer, which needs the engine's requests
-made from the primary, which is why it is not built.
-
-#### 20.11.7 Not built, and deviations
-
-1. **Insert from another PDF** (13.8) is a greyed-in-words command: the map has
-   the `PDM_FOREIGN` kind and the writer refuses it (`err_detail` 14). Design: a
-   merge job that runs the Extract pipeline once per source document, numbering
-   from the previous round and writing the page tree last; it needs PDENG to
-   switch documents inside the job and so the 20.11.6 restructuring.
-2. **The recovery journal and the `PDSAVE.$$$` offer** (14.7, 14.3) are not built.
-3. Undo/redo of a page operation needs edit (20.11.1); the dirty flag is
-   `pdu_changes`.
-4. `pdu_side_sel()` (nav) is a commented line in `ovl_pg_tgt`: the command's page
-   is the current one until nav lands.
-5. Sizes at this writing: PDWRT 45,194 bytes (44.1 KiB; D18's cap is 46 KiB,
-   `PDW_CAP` = 47,104, target 44: the page-op, edit and map tables went to the
-   claim's tail, the Extract bit maps are sized from `/Size` inside the claim,
-   the inherited-resources buffer shares the annotation text buffer and the
-   verify scratch the kept-identity buffer). The primary 42,484 + 4,057 = 46,541
-   against the wave-1 shell's 44,623: +1,918 against a +1.5 KiB share. What is
-   left is the overlay's cost, not the commands: ~280 bytes of shims and vectors
-   for the resident routines the overlay calls (shared with any later overlay
-   tenant), the overlay's literals (which stay resident, 73.14), the nine-row menu
-   table and the resident lookups. The overlay holds every command body: 6,171
-   bytes, pages' share about +3.9 KiB.
-6. 14.4's open-time reference is the file's SIZE (free at OPEN); the CRCs would
-   cost two uncached reads at every open.
-7. A foreign-folder Save As stands the primary in the target's folder, so
-   `pdu_at_doc` is not called during a save.
-
-
 ### 20.13 FlateDecode and the predictors (`flate`, wave 2, PD-25)
 
 PDENG's `FlateDecode` is the Enhanced tier's decoder. It is a stage of the
