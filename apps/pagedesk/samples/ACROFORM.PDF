@@ -1,0 +1,103 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /FirstChar 32 /LastChar 126 /Widths [278 278 355 556 556 889 667 191 333 333 389 584 278 333 278 278 556 556 556 556 556 556 556 556 556 556 278 278 584 584 584 556 1015 667 667 722 722 667 611 778 722 278 500 667 556 833 722 778 667 778 722 667 611 722 667 944 667 667 611 278 278 278 469 556 333 556 556 500 556 556 278 556 556 222 222 500 222 833 556 556 556 556 333 500 278 556 500 722 500 500 500 334 260 334 584] /Encoding /WinAnsiEncoding >>
+endobj
+2 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /FirstChar 32 /LastChar 126 /Widths [278 333 474 556 556 889 722 238 333 333 389 584 278 333 278 278 556 556 556 556 556 556 556 556 556 556 333 333 584 584 584 611 975 722 722 722 722 667 611 778 722 278 556 722 611 833 722 778 667 778 722 667 611 722 667 944 667 667 611 333 278 333 584 556 333 556 611 556 611 556 333 611 611 278 278 556 278 889 611 611 611 611 389 556 333 611 556 778 556 556 500 389 280 389 584] /Encoding /WinAnsiEncoding >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Oblique /FirstChar 32 /LastChar 126 /Widths [278 278 355 556 556 889 667 191 333 333 389 584 278 333 278 278 556 556 556 556 556 556 556 556 556 556 278 278 584 584 584 556 1015 667 667 722 722 667 611 778 722 278 500 667 556 833 722 778 667 778 722 667 611 722 667 944 667 667 611 278 278 278 469 556 333 556 556 500 556 556 278 556 556 222 222 500 222 833 556 556 556 556 333 500 278 556 500 722 500 500 500 334 260 334 584] /Encoding /WinAnsiEncoding >>
+endobj
+4 0 obj
+<< /Type /Pages /Kids [5 0 R] /Count 1 /MediaBox [0 0 612 792] /Resources << /Font << /F1 1 0 R /F2 2 0 R /F3 3 0 R >> >> >>
+endobj
+5 0 obj
+<< /Type /Page /Parent 4 0 R /Contents 15 0 R /Annots [8 0 R 10 0 R 13 0 R 14 0 R] >>
+endobj
+6 0 obj
+<< /T (Contact) /Kids [8 0 R 10 0 R] >>
+endobj
+7 0 obj
+<< /Type /XObject /Subtype /Form /BBox [0 0 300 22] /Resources << /Font << /Helv 1 0 R >> >> /Length 62 >>
+stream
+/Tx BMC q BT /Helv 11 Tf 0 g 3 7 Td (Ada Lovelace) Tj ET Q EMC
+endstream
+endobj
+8 0 obj
+<< /Type /Annot /Subtype /Widget /FT /Tx /T (Name) /V (Ada Lovelace) /DA (/Helv 11 Tf 0 g) /Rect [150 640 450 662] /F 4 /P 5 0 R /Parent 6 0 R /MK << /BC [0] >> /AP << /N 7 0 R >> >>
+endobj
+9 0 obj
+<< /Type /XObject /Subtype /Form /BBox [0 0 300 22] /Resources << /Font << /Helv 1 0 R >> >> /Length 65 >>
+stream
+/Tx BMC q BT /Helv 11 Tf 0 g 3 7 Td (ada@example.org) Tj ET Q EMC
+endstream
+endobj
+10 0 obj
+<< /Type /Annot /Subtype /Widget /FT /Tx /T (Email) /V (ada@example.org) /DA (/Helv 11 Tf 0 g) /Rect [150 600 450 622] /F 4 /P 5 0 R /Parent 6 0 R /MK << /BC [0] >> /AP << /N 9 0 R >> >>
+endobj
+11 0 obj
+<< /Type /XObject /Subtype /Form /BBox [0 0 12 12] /Length 46 >>
+stream
+0 g 1 w 1 1 10 10 re S 2.5 6 m 5 3 l 9.5 9 l S
+endstream
+endobj
+12 0 obj
+<< /Type /XObject /Subtype /Form /BBox [0 0 12 12] /Length 22 >>
+stream
+0 g 1 w 1 1 10 10 re S
+endstream
+endobj
+13 0 obj
+<< /Type /Annot /Subtype /Widget /FT /Btn /T (Subscribe) /V /Yes /AS /Yes /Rect [250 565 262 577] /F 4 /P 5 0 R /MK << /CA (4) /BC [0] >> /AP << /N << /Yes 11 0 R /Off 12 0 R >> >> >>
+endobj
+14 0 obj
+<< /Type /Annot /Subtype /Widget /FT /Btn /T (Terms) /V /Off /AS /Off /Rect [250 525 262 537] /F 4 /P 5 0 R /MK << /CA (4) /BC [0] >> /AP << /N << /Yes 11 0 R /Off 12 0 R >> >> >>
+endobj
+15 0 obj
+<<  /Length 385 >>
+stream
+BT /F2 22 Tf 54 722 Td (Registration form) Tj ET
+BT /F3 10.5 Tf 54 702 Td (Real AcroForm widgets \(text and checkbox\) with appearance streams.) Tj ET
+BT /F1 11 Tf 54 650 Td (Name) Tj ET
+BT /F1 11 Tf 54 610 Td (Email) Tj ET
+BT /F1 11 Tf 54 570 Td (Subscribe to the newsletter) Tj ET
+BT /F1 11 Tf 54 530 Td (I accept the terms) Tj ET
+0.6 w
+0.4 G
+150 640 300 22 re S
+150 600 300 22 re S
+
+endstream
+endobj
+16 0 obj
+<< /Type /Catalog /Pages 4 0 R /AcroForm << /Fields [6 0 R 13 0 R 14 0 R] /DA (/Helv 11 Tf 0 g) /DR << /Font << /Helv 1 0 R >> >> /NeedAppearances false >> >>
+endobj
+17 0 obj
+<< /Title (Registration form) /Producer (os8088 os88pdfgen) /Creator (os88pdfgen) >>
+endobj
+xref
+0 18
+0000000000 65535 f 
+0000000015 00000 n 
+0000000531 00000 n 
+0000001051 00000 n 
+0000001575 00000 n 
+0000001715 00000 n 
+0000001816 00000 n 
+0000001871 00000 n 
+0000002073 00000 n 
+0000002271 00000 n 
+0000002476 00000 n 
+0000002679 00000 n 
+0000002824 00000 n 
+0000002945 00000 n 
+0000003145 00000 n 
+0000003341 00000 n 
+0000003779 00000 n 
+0000003954 00000 n 
+trailer
+<< /Size 18 /Root 16 0 R /Info 17 0 R /ID [<A6F523DE56B5D09F893B56E5A8FB2236> <A6F523DE56B5D09F893B56E5A8FB2236>] >>
+startxref
+4055
+%%EOF
