@@ -23504,32 +23504,6 @@ copied without its guard**: a rect argument spends four registers, and a
 routine whose contract names two of them is holding the other two for someone
 else.
 
-#### 11.96.10.2 …and its OUTLINE and SHADOW only where they were covered
-
-§11.96.10 cut a partial raise's CONTENT to the covered box and left the chrome
-as §11.90 drew it: the outline and the drop shadow WHOLE. But a window raised
-from behind another was visible, and every pixel of its outline and shadow that
-nothing covered is already on the glass in the colour a front window's chrome
-writes (`thm_ink` in both states — focus changes the title bar alone). On the
-5150 that is not small: a frame side or the shadow's long arm is a 1-px column
-the height of the window, ~5.3 ms on CGA for 158 rows, and a raise drew three
-of them where the occluder had covered one.
-
-So `wm_cov_rect` folds a second box in the same walk: the occluders' frames
-(shadow included) into `wm_cvf_x1..y2` uncut, and at the walk's end that box
-cut once to OUR frame (shadow included). A partial raise arms `[wm_cvf_on]`
-beside its `wm_su_sub`, and `wm_draw_win`'s chrome arm then seeds the region
-with that box instead of `wm_chrome_clip`'s (there is nothing above a raised
-window to subtract), draws the outline and the shadow through it, and disarms
-it before the title bar — which a raise changes whole and draws unclipped, so
-it keeps §11.92.2's run. An empty box (nothing over the frame) is an inverted
-fragment that every clipped primitive cuts to nothing. The flag is spent by
-the draw it was armed for, on every exit, a chromeless window's included.
-
-The box may over-claim — never under: every covered chrome pixel lies in some
-occluder's frame and in ours, so in the union's bounding box cut to our frame.
-What it over-claims is chrome that was visible, rewritten with its own value.
-
 #### 11.96.11 The app keeps a band, and the kernel banks it
 
 **Paint has no raise cache at all, and the reason is memory**: a cache over its
