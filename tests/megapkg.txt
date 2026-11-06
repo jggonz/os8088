@@ -35,8 +35,21 @@ apps/os88spk.inc 1              # THE SHIPPED BUILD REFUSING THE TIER:
 apps/vbattle/vbinp.inc 1        # THE BATTLE'S DECODE IN PLACE refused
     # under protected mode (vb_hipq, SPEC.md 125.4.2): a token is no address
     # there (50.6.10) and both borrows - LOADALL, a 386's loaded base - are
-    # real mode's. The copying hold plays instead. ~4 bytes; no kern_mega
-    # disk carries the package (125.7), so this is the fail-safe alone
+    # real mode's. The copying hold plays instead. ~4 bytes, the fail-safe:
+    # on kern_mega the play runs in a real-mode bracket (125.4.5), where
+    # this test answers real mode
+apps/vbattle/vbattle.asm 2      # VIDEO BATTLE PLAYS ON kern_mega IN THE
+    # SHIPPED BUILD - the owner's decision (docs/plans/VBATTLE-MEGA-PLAN.md,
+    # 2026-11-06): every battle disk, the builder's zip and every game
+    # "Make the games" embeds carries this one engine, and an arm would make
+    # each of them refuse there. vb_door's `and ah, CPU_F_PM` (the door
+    # learns the desktop is protected mode: claims there, sums inside an
+    # FSXF_REAL bracket) and vb_main's `test ah, CPU_F_PM` (the kernel fell
+    # back to protected mode: the play does nothing and the window says
+    # why). 125.4.5 is the account; W1 cost +550 bytes of image
+apps/os88real.inc 1             # os88real_swap's `test ah, CPU_F_PM`: a
+    # bracket the kernel ran in protected mode keeps its selectors. Shipped
+    # in Video Battle for the reason on the line above
 drivers/hdd/hdxms.inc 1         # HDD.DRV's fill straight into XMS refused
     # under protected mode (hd_xa_arm): its loaded-base trick loads DS =
     # FFFFh, which is a #GP there (KERN-MEGA-PLAN 14.16). A correctness

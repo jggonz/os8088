@@ -18398,6 +18398,18 @@ SOAK = [
         needs=("86box",),
         wants=("build/mega.img", "build/megarmbe.o88", "build/megarmbe.bin",
                "build/ems.bin")),
+    Row("vbtmega", "soak", py("tests/vbtmega.py"), 120.0,
+        "SPEC.md 125.4.5, VBATTLE-MEGA-PLAN W1: the SHIPPED Video Battle on "
+        "kern_mega (Bochs, VGA), in an FSXF_REAL bracket - [fsx_rmode] seen 1, "
+        "the demo's title exact in B8000, victory and its end loop, the play "
+        "again exact, back to the desktop with the rings given back, a second "
+        "play; and a bracket the kernel ran in PROTECTED mode (a list naming "
+        "DRVC_NET) refused with 'Needs real mode: a driver'. Broken (vb_door "
+        "blind to CPU_F_PM) the first Play is CLOSED by a #GP again. 120s is "
+        "106 measured",
+        needs=("bochs",),
+        wants=("build/mega.img", "build/megak/kernel.map",
+               "build/vbattle.o88")),
     Row("vidrmbplay", "soak", py("tests/vidrmbplay.py"), 120.0,
         "SPEC.md 98.3.24, MEGA-VIDEO-REALMODE-PLAN W5: WHICH bracket the "
         "Video Player's kern_mega arm plays in, read two ways that do not "

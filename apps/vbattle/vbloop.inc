@@ -466,7 +466,7 @@ vb_again:
     mov al, 0xFF
     mov bx, vb_rg1
     call vb_rreset
-    call vb_load
+    call vb_lread                   ; (the music again: claimed already)
     jc .fail
     call vb_rstart
     jc .fail

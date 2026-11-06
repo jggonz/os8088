@@ -175,6 +175,13 @@ VB_PIECE    equ 4096            ; a read: a cluster multiple, and under a
 VB_CRMIN    equ 48              ; a CLIP RING: as many KB as the machine has
                                 ; (125.4), split two ways - and at least this
 VB_RKEEP    equ 8               ; KB left free when the rings are sized
+VB_RKEEPM   equ 24              ; ...and on kern_mega this more: the real-mode
+                                ; bracket's own conventional claims, made
+                                ; inside OSAPI_FSX_RUN after the rings - its
+                                ; service area (3-4 KB) and a driver's low
+                                ; copy (SOUND.DRV 8, HDD.DRV 4; SPEC.md 53.2.3)
+VB_NRCLM    equ 10              ; vb_nrsay's own reason past the FSXR_*: a
+                                ; claim with no real-mode segment
 VB_CPGAIN   equ 16              ; KB a compaction must buy to be posted
 VB_RGROW    equ 32              ; ...and ring 0 claimed again over its run
                                 ; when that much is left beside it
@@ -640,6 +647,7 @@ vb_cvfree:
 ; resident claim MOVABLE until the next play pins it (SPEC.md 66.3, Video
 ; Player's 98.1.7.4). Preserves all but AX and DX
 vb_between:
+    call vb_rfree                   ; (the clip rings: the play's alone)
     xor dx, dx
     xchg dx, [vb_ring]
     or dx, dx
@@ -691,6 +699,97 @@ vb_reloc:
 vb_rltab:
     dw vb_vres, vb_sfxseg, vb_mring, vb_idseg, vb_iseg, vb_bseg, vb_cseg
 VB_RLN equ ($ - vb_rltab) / 2
+
+; vb_door - what a play's door must know first: whether the desktop is in
+; PROTECTED mode (kern_mega - [vb_pmd], VBATTLE-MEGA-PLAN), the room the
+; rings leave, and the adapter's modes (OSAPI_FSX_CAPS is not a cell a
+; real-mode bracket keeps). AX, BX, DX spent
+vb_door:
+    call OSAPI_CPU_INFO
+    and ah, CPU_F_PM
+    mov [vb_pmd], ah
+    mov ax, VB_RKEEP
+    jz .k
+    add ax, VB_RKEEPM
+.k:
+    mov [vb_rkeep], ax
+    mov bx, [vb_win]
+    call OSAPI_FSX_CAPS             ; AX = modes, DL = VID_*
+    mov [vb_capm], ax
+    mov [vb_vid], dl
+    ret
+
+; vb_mklist - kern_mega's door to a REAL-MODE bracket (SPEC.md 53.2.3, the
+; Video Player's 98.3.24): the claims' words banked as real segments
+; (os88real_prep), and the list of what the bracket reads - the bundle's
+; file by the name vb_load found it under, and SOUND.DRV when a card plays.
+; CF=1: a claim has no real-mode segment. AX spent
+vb_mklist:
+    push si
+    push di
+    push es
+    mov si, vb_rlst
+    mov di, vb_rlst_bank
+    call os88real_prep
+    jc .out
+    push ds
+    pop es
+    mov di, vb_fsxl
+    mov al, FSXL_FILE
+    stosb
+    mov si, [vb_namep]
+.c:
+    lodsb
+    stosb
+    or al, al
+    jnz .c
+    cmp word [vb_ring], 0
+    je .e
+    mov ax, FSXL_DRV | (DRVC_SOUND << 8)
+    stosw
+.e:
+    mov al, FSXL_END                ; (CF = 0 from the or)
+    stosb
+.out:
+    pop es
+    pop di
+    pop si
+    ret
+
+; vb_nrsay - [vb_err] the window's "Needs real mode:" and reason AX: an
+; FSXR_* (the kernel's) or VB_NRCLM (ours). AX spent
+vb_nrsay:
+    push si
+    push di
+    push es
+    push ds
+    pop es
+    cld
+    mov di, vb_nrbuf
+    mov si, vb_s_nrq                ; the reason's words first: .cp spends AL
+    cmp ax, VB_NRCLM
+    ja .s
+    xchg ax, si
+    shl si, 1
+    mov si, [si+vb_nrtab]
+.s:
+    push si
+    mov si, vb_s_nreal
+    call .cp
+    dec di                          ; (over the prefix's NUL)
+    pop si
+    call .cp
+    mov word [vb_err], vb_nrbuf
+    pop es
+    pop di
+    pop si
+    ret
+.cp:
+    lodsb
+    stosb
+    or al, al
+    jnz .cp
+    ret
 
 ; vb_cvpaint - vb_paint's, with a picture: it, centred, then the line - the
 ; window's status when it says something, else the battle's own line -
@@ -1098,7 +1197,7 @@ vb_play:
     call vb_cpask                   ; MORE ROOM IF WE MOVED TOO? posted: the
     jc .go                          ; play starts on the wake (vb_onwake)
     mov word [vb_status], vb_s_room
-    jmp short .paint
+    jmp .paint
 .go:
     mov byte [vb_cpq], 0
     mov word [vb_status], vb_s_load
@@ -1111,15 +1210,36 @@ vb_play:
     xor ax, ax
     call OSAPI_MEM_MOVABLE
 .ld:
+    call vb_door                    ; kern_mega's facts, and the room kept
     call vb_load
     jc .say
+    call vb_rclaim                  ; THE CLIP RINGS, at the door on every
+    jc .say                         ; kernel: a real-mode bracket refuses a
+                                    ; claim (SPEC.md 53.2.3)
+    push bp
+    xor bp, bp                      ; (no list: a real-mode kernel's)
+    mov cx, FSXF_RATE
+    cmp byte [vb_pmd], 0
+    je .run
+    call vb_mklist                  ; kern_mega: REAL MODE asked, with the
+    jc .nreal                       ; list of what the bracket reads and the
+    mov bp, vb_fsxl                 ; claims' real segments banked
+    mov cx, FSXF_RATE | FSXF_REAL
+.run:
     mov ax, vb_main
     mov bx, [vb_win]
-    mov cx, FSXF_RATE
     mov dx, VB_DIV
     mov di, vb_hook
+    xor si, si                      ; (FSXR_REAL: kept by a real-mode kernel)
     call OSAPI_FSX_RUN
+    pop bp
     pushf
+    jc .ran
+    or si, si                       ; kern_mega ran it in PROTECTED mode
+    jz .ran                         ; instead: vb_main did nothing, and the
+    xchg ax, si                     ; window says why (VBATTLE-MEGA-PLAN)
+    call vb_nrsay
+.ran:
     call vb_between                 ; (the claims a desktop window holds)
     popf
     mov al, [vb_cvon]               ; (the picture's as the desktop came
@@ -1128,6 +1248,7 @@ vb_play:
     mov word [vb_err], vb_s_norate
 .say:
     call vb_between
+.say2:
     mov ax, [vb_err]
     mov [vb_status], ax
     call vb_coverload               ; (back: the picture again)
@@ -1146,6 +1267,11 @@ vb_play:
 .out:
     pop si
     ret
+.nreal:
+    pop bp
+    mov ax, VB_NRCLM                ; (a claim with no real-mode segment)
+    call vb_nrsay
+    jmp short .say
 
 ; vb_cpask - THE COMPACTION DOOR (VBATTLE-RAM-PLAN R1, Video Player's
 ; vp_cptry, SPEC.md 66.4.3): what the arena would give if OUR OWN region
@@ -1441,9 +1567,9 @@ vb_p2kb:
 ; [vb_err] on failure
 vb_load:
     mov word [vb_err], 0
-    cmp byte [vb_loaded], 0
+    cmp word [vb_vres], 0           ; (claimed already: kept between plays)
     je .first
-    jmp .again
+    jmp .claimed
 .first:
     ; WHICH BUNDLE: this adapter's own rendition first (VBATTLE-MEMORY-PLAN
     ; 9) - BATTLEV.VBT on a VGA, BATTLEH.VBT on a Hercules - and on a VGA
@@ -1623,6 +1749,23 @@ vb_load:
                                     ; beside the run the rings are sized from,
                                     ; and the rings' claim sheds them into it
     mov [vb_vres], dx
+.claimed:
+    call vb_cardclaim               ; the card's ring, under the block: given
+                                    ; back at each play's end, its room joins
+                                    ; the rings' below (no hole on the desktop)
+    cmp byte [vb_pmd], 0            ; ON kern_mega THE BRACKET READS: no
+    je vb_lread                     ; paragraph is added to a selector
+    clc                             ; (VBATTLE-MEGA-PLAN W1)
+    ret
+.fail:
+    stc
+    ret
+
+; vb_derive - the resident claim's six parts, segments on from its base
+; [vb_vres] (vb_load's sizes). In real mode only: on kern_mega, inside the
+; bracket, after os88real_swap made the base a paragraph
+vb_derive:
+    mov dx, [vb_vres]
     mov ax, dx
     add ax, [vb_psfx]
     mov [vb_sfxseg], ax
@@ -1641,9 +1784,22 @@ vb_load:
     call vb_bpara
     add ax, cx
     mov [vb_cseg], ax
-    call vb_cardclaim               ; the card's ring, under the block: given
-                                    ; back at each play's end, its room joins
-                                    ; the rings' below (no hole on the desktop)
+    ret
+
+; vb_lread - what vb_load claimed, READ: the block, the effects, the idle
+; loop and the band's pictures once a session, then the music's head for
+; this play. On the desktop on a real-mode kernel; inside the bracket on
+; kern_mega, and inside it on every kernel for the play again (vb_again).
+; CF=1 and [vb_err] on failure
+vb_lread:
+    mov word [vb_err], 0
+    cmp byte [vb_loaded], 0
+    je .first
+    jmp .again
+.fail1:
+    jmp .fail
+.first:
+    call vb_derive
     ; the block and the menu's effects
     mov word [vb_err], vb_s_badread
     mov es, [vb_vres]
@@ -1681,12 +1837,13 @@ vb_load:
     call vb_read
     jc .fail1
 .noimg:
+    cmp byte [vb_pmd], 0            ; (kern_mega: no hold yet - VBATTLE-
+    jne .nohold                     ; MEGA-PLAN W3)
     call vb_hopen                   ; the hold, where there is a pool
+.nohold:
     mov byte [vb_loaded], 1
     call vb_fontload
 .again:
-    call vb_cardclaim               ; (the card's ring: freed at each play's
-                                    ; end, so a replay's own again)
     ; the music from where it comes in, its ring filled: it plays when the
     ; openings are over
     xor ax, ax
@@ -1837,7 +1994,7 @@ vb_cardclaim:
 ; CF=1 and [vb_err] when there is not room for VB_CRMIN each
 vb_rclaim:
     call OSAPI_MEM_AVAIL            ; THE ARENA PACKED FIRST: the whole of the
-    sub ax, VB_RKEEP                ; largest run claimed and given back. The
+    sub ax, [vb_rkeep]              ; largest run claimed and given back. The
     jc .no                          ; kernel can serve that only by shedding
     call OSAPI_MEM_CLAIM            ; the caches and packing what moves - a
     jc .pk                          ; claim that fits a free run as it stands
@@ -1851,7 +2008,9 @@ vb_rclaim:
                                     ; 298 KB said, 298 KB there)
 .room:
     call OSAPI_MEM_AVAIL            ; ROOM STILL: ring 1 went to another run
-    cmp ax, VB_RKEEP + VB_RGROW     ; (a used machine's second hole), and ring
+    mov dx, [vb_rkeep]
+    add dx, VB_RGROW
+    cmp ax, dx                      ; (a used machine's second hole), and ring
     jb .ok                          ; 0 is claimed again over all of its own
     mov ax, [vb_rkb]                ; (its size, to claim back if the
     push ax                         ; bigger one is refused)
@@ -1859,7 +2018,7 @@ vb_rclaim:
     xchg dx, [vb_rclm]
     call OSAPI_MEM_FREE
     call OSAPI_MEM_AVAIL
-    sub ax, VB_RKEEP
+    sub ax, [vb_rkeep]
     mov bx, vb_rg0
     call .claim
     pop ax
@@ -1880,14 +2039,14 @@ vb_rclaim:
     stc
     ret
 .pair:                              ; ring 0 half of AX KB, ring 1 the
-    sub ax, VB_RKEEP                ; largest left. CF=1 none claimed
+    sub ax, [vb_rkeep]              ; largest left. CF=1 none claimed
     jc .pno
     shr ax, 1
     mov bx, vb_rg0
     call .claim
     jc .pno
     call OSAPI_MEM_AVAIL
-    sub ax, VB_RKEEP
+    sub ax, [vb_rkeep]
     jc .pfree
     mov bx, vb_rg1
     call .claim
@@ -2571,10 +2730,40 @@ vb_fontload:
 ; the bracket's foreground (vb_main) - SI = window, DS = ours, ES = kernel
 ; =============================================================================
 vb_main:
+    cmp byte [vb_pmd], 0            ; a real-mode kernel's play: as it was
+    je vb_main1
+    call OSAPI_CPU_INFO             ; KERN_MEGA: in real mode, or nothing -
+    test ah, CPU_F_PM               ; the kernel fell back to protected mode
+    jnz .out                        ; and vb_play says why (SI, FSXR_*)
+    mov si, vb_rlst                 ; the claims' words made real segments
+    mov di, vb_rlst_bank
+    call os88real_swap
+    call vb_derive                  ; ...the resident claim's parts summed
+    mov bx, vb_rg0                  ; from it - and each ring's END and its
+    call .ring                      ; places, which vb_rclaim summed from the
+    mov bx, vb_rg1                  ; selector at the door
+    call .ring
+    call vb_lread                   ; ...and read (once a session)
+    jc .back
+    call vb_main1
+.back:
+    mov byte [vb_ready], 0          ; (the hook off before the words go
+    mov si, vb_rlst                 ; back to selectors)
+    mov di, vb_rlst_bank
+    call os88real_swap
+.out:
+    ret
+.ring:
+    mov ax, [bx+RG_SEG]
+    add ax, [bx+RG_PARA]
+    mov [bx+RG_END], ax
+    mov al, 0xFF
+    jmp vb_rreset
+
+vb_main1:
     mov word [vb_err], 0
-    mov bx, [vb_win]
-    call OSAPI_FSX_CAPS             ; AX = modes, DL = VID_*
-    mov [vb_vid], dl
+    mov ax, [vb_capm]               ; (FSX_CAPS at the door: not a cell a
+    mov dl, [vb_vid]                ; real-mode bracket keeps)
     mov cl, [vb_meta+VH_KIND]       ; the mode is the bundle's adapter's
     mov [vb_kind], cl
     mov ch, FSXM_VGA0D
@@ -2614,8 +2803,6 @@ vb_main:
     je .bt
     call vb_bptab
 .bt:
-    call vb_rclaim                  ; the clip rings, all there is (125.4)
-    jc .out
     call vb_rstart                  ; ...and the first opening's head
     jc .rout
     call vb_game_init
@@ -2658,8 +2845,10 @@ vb_main:
     mov byte [vb_ready], 0
     call vb_snd_close
 .rout:
-    call vb_rfree
-.out:
+    cmp byte [vb_pmd], 0            ; THE RINGS GIVEN BACK here on a real-mode
+    jne .out                        ; kernel: the title picture below needs
+    call vb_rfree                   ; their room (kern_mega frees them after
+.out:                               ; the bracket: vb_between)
     cmp byte [vb_cvwin], 0          ; THE TITLE PICTURE back while the screen
     je .o2                          ; is still the play's: read when the
     call vb_coverload               ; desktop came back, the window showed
@@ -4485,6 +4674,22 @@ vb_s_nofile:  db ' BATTLE.VBT not found', 0
 vb_s_notvbt:  db ' BATTLE.VBT is not a VBT1 file', 0
 vb_s_oldvbt:  db ' BATTLE.VBT is an older build: rebuild it', 0
 vb_s_nomem:   db ' Not enough memory', 0
+vb_s_nreal:   db ' Needs real mode: ', 0  ; (kern_mega: vb_nrsay)
+vb_nrtab:     dw vb_s_nrq, vb_s_nr1, vb_s_nrq, vb_s_nrq, vb_s_nrq, vb_s_nr5
+              dw vb_s_nr6, vb_s_nr7, vb_s_nr8, vb_s_nr9, vb_s_nr10
+vb_s_nr1:     db 'a worker kept', 0
+vb_s_nr5:     db 'no low memory', 0
+vb_s_nr6:     db 'its volume', 0
+vb_s_nr7:     db 'fragmented', 0
+vb_s_nr8:     db 'a driver', 0
+vb_s_nr9:     db 'no room for a driver', 0
+vb_s_nr10:    db 'a claim above 1MB', 0
+vb_s_nrq:     db '?', 0
+; THE CLAIMS' WORDS a real-mode bracket makes real segments (os88real.inc):
+; the resident claim's base (its parts are derived inside, vb_derive), the
+; card's ring and the two clip rings' segments
+%include "os88real.inc"
+OS88REAL_LIST vb_rlst, vb_vres, vb_ring, vb_rg0 + RG_SEG, vb_rg1 + RG_SEG
 vb_s_badread: db ' BATTLE.VBT: a read failed', 0
 vb_s_norate:  db ' Needs the full kernel (FSXF_RATE)', 0
 vb_s_nocga:   db ' Needs CGA, EGA or VGA', 0
@@ -4648,6 +4853,12 @@ VB_VAR vb_enext, 2
 VB_VAR vb_fsi, FSI_SIZE
 VB_VAR vb_vseg, 2
 VB_VAR vb_vid, 1
+VB_VAR vb_pmd, 1                    ; the desktop in PROTECTED mode at the
+                                    ; door: kern_mega (vb_door)
+VB_VAR vb_capm, 2                   ; OSAPI_FSX_CAPS's modes, at the door
+VB_VAR vb_rkeep, 2                  ; KB the rings leave free (vb_door)
+VB_VAR vb_fsxl, 24                  ; FSXF_REAL's list (vb_mklist)
+VB_VAR vb_nrbuf, 40                 ; "Needs real mode:" and why (vb_nrsay)
 VB_VAR vb_ffirst, 1
 VB_VAR vb_flast, 1
 VB_VAR vb_font, 95*8

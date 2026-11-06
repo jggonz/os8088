@@ -238461,6 +238461,53 @@ bracket returns. The clip rings are claimed and freed inside the bracket
 freed when the play ends (bucket D) and claimed again by the next load
 (`vb_cardclaim`, at `vb_load`'s `.again`).
 
+#### 125.4.5 kern_mega: the play in a REAL-MODE bracket (VBATTLE-MEGA-PLAN W1)
+
+**The shipped engine plays on kern_mega** (the owner's decision: one engine,
+since every battle disk, the builder's zip and every embedded game carries
+it). Under protected mode a claim is an LDT selector, and the engine adds
+paragraphs to its claims everywhere - the resident claim's six parts, a
+ring's records and end, the entries - so before this the first Play was
+CLOSED by a #GP (`vb_load`'s `mov es, [vb_sfxseg]`). The answer is the Video
+Player's (98.3.24): **claims at the door, sums inside an `FSXF_REAL`
+bracket** (SPEC.md 53.2.3).
+
+- **The door** (`vb_play`, every kernel). `vb_door` reads `CPU_F_PM` into
+  `[vb_pmd]`, the rings' kept room (`VB_RKEEP`, and on kern_mega
+  `VB_RKEEPM` 24 KB more for the bracket's own service area and drivers'
+  low copies) and `OSAPI_FSX_CAPS` (not a cell a real-mode bracket keeps).
+  `vb_load` claims the resident block once (kept between plays) and the
+  card's ring; on a real-mode kernel it goes on into `vb_lread`, the reads,
+  as before. **The clip rings are claimed at the door on every kernel**
+  (`vb_rclaim`, out of `vb_main`: a real-mode bracket refuses a claim) and
+  given back by `vb_between`.
+- **kern_mega's door** (`vb_mklist`): `os88real_prep` over `vb_rlst` - the
+  resident claim's base, the card's ring, both rings' `RG_SEG` - and the
+  list: `FSXL_FILE` and the name `vb_load` found the bundle under (the
+  rendition's, the document, or our own `.O88` with a battle embedded), and
+  `FSXL_DRV DRVC_SOUND` when a card plays. A claim with no real-mode
+  segment is refused before the bracket ("a claim above 1MB").
+- **Inside** (`vb_main`, under `[vb_pmd]`): in real mode, the swap; the six
+  parts summed (`vb_derive`); each ring's `RG_END` and places summed again
+  from its real segment (vb_rclaim summed them from the selector at the
+  door, and a ring's END is where its reads wrap - the first title fitted
+  before a wrap and played exact, the play again did not); the reads
+  (`vb_lread`, once a session for the block, the music each play); the
+  play, the play again (`vb_again` reads through `vb_lread` too); and the
+  swap back, the hook off first, on every way out.
+- **A bracket the kernel ran in protected mode** (its `FSXR_*` in SI) does
+  nothing inside, and the window says "Needs real mode:" and the reason
+  (`vb_nrsay`: `no low memory`, `its volume`, `fragmented`, `a driver`, `no
+  room for a driver`, `a claim above 1MB`). There is no protected-mode play.
+- **Not yet** (VBATTLE-MEGA-PLAN W2-W5): the hold is not opened under
+  `CPU_F_PM`; the title picture is read after the bracket returns (a
+  real-mode bracket refuses its claim), so the window shows its text layout
+  first there; a card's sound, the 286's reset path and CGA/Hercules under
+  kern_mega have not been heard or run.
+
+**What it cost** the shipped engine: image 24,337 -> 24,887 (+550), bss
++69, the packed file +451. `tests/vbtmega.py` (Bochs, VGA) is the gate.
+
 ### 125.5 The band
 
 The band is the rows from the header's band row (142 by default) to 199 of
@@ -238717,11 +238764,8 @@ kept.
 **Refusals.**
 - `kern_small` refuses `FSXF_RATE`, and the window says "Needs the full
   kernel".
-- **kern_mega is not supported.** The claims are carved by paragraph
-  arithmetic (125.4), which a selector does not allow (SPEC.md 20.18), and
-  no kern_mega disk carries the package. A refusal at the entry
-  (`OS88_MEGA_REFUSE`) wants a kern_mega arm beside it (`t_megapkg`), and
-  is for when the package ships.
+- **kern_mega plays in a real-mode bracket or refuses the play**
+  (125.4.5): where the kernel cannot give real mode, the window says why.
 
 **Other adapters.** The VGA4 and Hercules renditions (125.3.2) play on one
 page: like CGA's, a cut is drawn where it can be seen. Their second page is
