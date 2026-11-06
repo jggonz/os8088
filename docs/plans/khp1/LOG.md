@@ -48,6 +48,19 @@ weighted by how often the operation happens.
 | files-4 | files | `assoc_scan` (assoc.inc) | H4 (listing, harvest) | ES = DS and `cld` once in front of the walk, not per row | 0 | 0 (no OS88_ASSOC) | median 1,959 -> 1,530 cycles a call (os88hot cycles, opendisk, CGA) | first open of B:, ~31 calls: ~-2.8 ms | M | same | `31c9775e` | **FREE** |
 | sched-2 | sched | `ui_task` (the pass's first look at the event ring) | H2 (every pass) | enter the drain through `.yield`'s byte compare instead of a full `evq_pop` on an empty ring; `ui_drain` stored and decremented as a byte to pay for the near jump | 0 | 0 | ui_task + evq_pop ~2,180 -> ~1,870 a pass; idle tick 11,533 -> 11,205 on top of sched-1 | every UI pass, idle or event: ~300 cycles (0.06 ms) off the time from an event's wake to its handler | M | none | 31309aca | **FREE** |
 
+## 5. Decisions for the owner
+
+Collected from each note's WANTS THE OWNER, plus what the coordinator found
+at the merges. None of these is taken.
+
+| id | from | what | buys | costs / why it is the owner's |
+|---|---|---|---|---|
+| O1 | files | Remember `ASSOC.DAT` per volume (a one-byte bitmask) instead of for one volume at a time | 1 int 13h + ~84 ms CPU on every switch between an A: and a B: window | ~+10 B; changes which drive a document opens its program from when the program is on both disks |
+| O2 | sched | Move the ISR's per-tick accounting charge to `.pick` | ~500 cycles a tick, 0 B | changes SPEC.md 8.1's decision; opens a one-hour wrap for a task never switched away from |
+| O3 | pointer | Wake the UI task only on a button edge, a wheel notch or once a tick, not on every motion packet | ~1.5-2 ms a packet, 6-8% of the CPU while the mouse moves | up to 55 ms of lag in cursor-shape and hover feedback |
+| O4 | gfxcall | `gfx_rect_setup`'s unclipped head and `fnt_unlazy` ask `cur_lazyrect` before hiding the pointer (gfxcall-5, prototyped and reverted) | Note Pad typing on CGA 611.4 -> 553.9 ms busy, -1.85 ms a keystroke (-9.4%) | the arrow stays lit while drawing: the same question as the off-by-default `CURFIX` knob (SPEC.md 7.1.4.3/7.1.4.4) |
+| O5 | coordinator | **`glyphcost` is red on the merged tree, and no glyph got slower.** The shipped fill-drawn radio-set glyph went 266,587 -> 256,579 cycles (-3.8%), but the row's reference, the retired bitmap routine kept inside `tests/glyphbn`, went 216,576 -> 130,752 (-40%), mostly from files-3's word-wide 1bpp icon pass. The row's 2 ms margin is fills minus bitmap, so it now reads +3.295 ms where base read +1.310 ms. | - | The row now says something true: on this kernel the bitmap glyph would be 3.3 ms a call faster than the fills (SPEC.md 13.15.1's trade was taken on look and size, CTRL-GLYPH-PLAN.md 2). Either re-open that trade, re-state the margin against this kernel, or drop files-3 (which also costs PgDn its -10 to -25%). |
+
 ## 3. Where the time goes: the ranked profiles
 
 One sub-section per agent, copied from each note's WHERE THE TIME GOES.
