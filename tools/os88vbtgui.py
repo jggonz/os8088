@@ -1227,8 +1227,8 @@ class BattleTab(object):
         # VGA's WRITES IN BANDS (126.3.2): a pixel's planes are separate
         # stores, and between them it is a colour of neither frame - the
         # flashes. Bands cut how long; each costs bytes and OUTs
-        vb = ttk.Frame(rf)
-        vb.grid(row=3, column=0, columnspan=4, sticky="w", pady=(4, 0))
+        vb = ttk.Frame(rf)      # (rows 2..5 are the sizes, the fit and the
+        vb.grid(row=6, column=0, columnspan=4, sticky="w", pady=(4, 0))
         ttk.Label(vb, text="VGA writes:").pack(side="left")
         self.rband = tk.StringVar()
         cbb = ttk.Combobox(vb, textvariable=self.rband, state="readonly",
@@ -1245,11 +1245,11 @@ class BattleTab(object):
                         "take four of its colours; otherwise the band uses "
                         "the nearest four of the footage's)",
                         variable=self.rbcga, command=self._rends).grid(
-                            row=4, column=0, columnspan=4, sticky="w")
+                            row=7, column=0, columnspan=4, sticky="w")
         # EACH CLIP'S OWN COLOURS on VGA (126.3.2): the last of the K,
         # swapped into the DAC as a clip starts - the rest are shared
-        vo = ttk.Frame(rf)
-        vo.grid(row=5, column=0, columnspan=4, sticky="w", pady=(4, 0))
+        vo = ttk.Frame(rf)      # (title picture, below: these after them)
+        vo.grid(row=8, column=0, columnspan=4, sticky="w", pady=(4, 0))
         ttk.Label(vo, text="Each clip's own VGA colours:").pack(side="left")
         self.rown = tk.StringVar()
         cbo = ttk.Combobox(vo, textvariable=self.rown, state="readonly",
