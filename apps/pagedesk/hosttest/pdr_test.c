@@ -41,6 +41,7 @@ static pdw vcall(pdw verb, pdw bx, pdw cx, pdw dx)
 #define SEG_BANK 0x6000
 #define SEG_TXT  0x4800
 #define SEG_CELL 0x4C00
+#define SEG_EDIT 0x9000          /* the edit store (PAGEDESK-SPEC 13.1.1) when PDR_EDITS names a file */
 #define MEM(seg, off) (pd_host_mem + (((unsigned long)(seg) << 4) + (off)))
 pdw pdrh_xbseg(void) { return SEG_XB; }
 
@@ -136,7 +137,7 @@ int main(int argc, char **argv)
         int page = atoi(argv[3]), zoom = atoi(argv[4]), rot = atoi(argv[5]), bpp = atoi(argv[6]);
         int an = 1, ad = 1, W = atoi(argv[8]), H = atoi(argv[9]), ox = atoi(argv[10]), oy = atoi(argv[11]);
         int dlkb = argc > 14 ? atoi(argv[14]) : 29, kb, steps = 0, np;
-        struct pdxb_render rq; struct pdxb_pageinfo pi; pdw e;
+        struct pdxb_render rq; struct pdxb_pageinfo pi; pdw e; long esz = 0; static unsigned char ekeep[65536];
         sscanf(argv[7], "%d/%d", &an, &ad);
         np = pdrh_open(argv[2]);
         if (np <= 0) { fprintf(stderr, "cannot open %s\n", argv[2]); return 2; }
@@ -158,6 +159,20 @@ int main(int argc, char **argv)
         rq.view.ox = (pd_px)ox; rq.view.oy = (pd_px)oy;
         rq.view.clip_x0 = 0; rq.view.clip_y0 = 0; rq.view.clip_x1 = (pd_px)(W - 1); rq.view.clip_y1 = (pd_px)(H - 1);
         rq.page = (pdw)page; rq.win_off = 0x1234;
+        /* wave 2 (PAGEDESK-SPEC 20.12): PDR_RFLAGS = PDRF_* , PDR_EDITS = a store file (records at 0, then the
+         * heaps), PDR_ECOUNT its record count (default: the file's records), PDR_HIDE, PDR_MONO = mono_mark */
+        if (getenv("PDR_RFLAGS")) rq.rflags = (pdw)atoi(getenv("PDR_RFLAGS"));
+        if (getenv("PDR_HIDE")) rq.hide = (pdw)atoi(getenv("PDR_HIDE"));
+        if (getenv("PDR_MONO")) rq.mono_mark = (pdw)atoi(getenv("PDR_MONO"));
+        if (getenv("PDR_EDITS")) {
+            FILE *ef = fopen(getenv("PDR_EDITS"), "rb");
+            if (!ef) { fprintf(stderr, "cannot open the store %s\n", getenv("PDR_EDITS")); return 2; }
+            memset(MEM(SEG_EDIT, 0), 0, 65536);
+            esz = (long)fread(MEM(SEG_EDIT, 0), 1, 65536, ef); fclose(ef);
+            memcpy(ekeep, MEM(SEG_EDIT, 0), 65536);
+            rq.edits_seg = SEG_EDIT;
+            rq.edits_count = getenv("PDR_ECOUNT") ? (pdw)atoi(getenv("PDR_ECOUNT")) : (pdw)(esz / 48 > 255 ? 255 : esz / 48);
+        }
         memcpy(MEM(SEG_XB, 0), &rq, sizeof rq);
         e = vcall(PDV_REND_BEGIN, 0, 0, 0);
         if (e) { fprintf(stderr, "begin -> %u\n", e); return 3; }
@@ -166,6 +181,7 @@ int main(int argc, char **argv)
         printf("steps=%d reads=%ld readbytes=%ld\n", steps, pdrh_reads, pdrh_readbytes);
         report();
         if (canary_check()) return 5;
+        if (esz && memcmp(ekeep, MEM(SEG_EDIT, 0), 65536)) { fprintf(stderr, "EDITS: PDREND wrote into the edit store\n"); return 7; }
         write_ppm(argv[12], 0, 0, W, H);
         return 0;
     }

@@ -114,12 +114,14 @@ static void gs_pop(void)
 }
 
 static pdw g_pagex0, g_pagey0, g_pagex1, g_pagey1;
-static void gs_init(void)
+/* the state a stream starts in: the base matrix, the page and the canvas as the
+ * clip - everything but the clip pool, which lives for the whole PASS (so the
+ * annotation phases, 20.12, can start fresh states in the middle of one) */
+static void gs_reset(void)
 {
     struct pdr_gs *g;
     pdr_zero(&g_gcur, sizeof g_gcur);
     g_gsn = 0; g_gsfloor = 0; g_gsover = 0;
-    g_ncl = 0; g_cetop = 0;                 /* the clip pool lives for one pass */
     g = &g_gcur;
     pdr_cpy(&g->ctm, &g_base, sizeof g_base);
     pdm_fx_int(&g->lw, 1); pdm_fx_int(&g->miter, 10); pdm_fx_int(&g->tz, 100);
@@ -131,6 +133,7 @@ static void gs_init(void)
     g->cy1 = g_vcy1 < g_pgy1 ? g_vcy1 : g_pgy1;
     g_lstv = 0;
 }
+static void gs_init(void) { gs_reset(); g_ncl = 0; g_cetop = 0; }
 
 /* ============================================================================
  * TEXT
@@ -221,7 +224,6 @@ static void text_sync(void)
 /* ---- glyph runs ------------------------------------------------------------ */
 static pdw g_rn;                    /* glyphs in the open run                     */
 static pdb g_rfam, g_rsty, g_rpx, g_ropen;
-static pdb g_rbody[8 + PDR_NRUN * 5];
 static pdw g_rid, g_rscale, g_rext;
 static pdw g_rasc, g_rdesc, g_rrot;
 /* the text direction as a quadrant: 0 right, 1 down (90 cw), 2 left, 3 up */
@@ -453,6 +455,10 @@ static pdw dict_num(pdw obj, pdw gen, const char *k0, pdw idx, struct pd_fx *out
     return 0;
 }
 
+static pdw g_afm;                   /* drawing an annotation's appearance: pdra.c's ap_fit places the form in the /Rect */
+static pdw ap_fit(const struct pd_mat *m, const struct pd_fx *bx0, const struct pd_fx *by0,
+                  const struct pd_fx *bx1, const struct pd_fx *by1);
+static struct pd_mat g_am;          /* the matrix A of PDF 1.7 12.5.5 */
 static void do_form(pdw obj, pdw gen)
 {
     static struct pd_mat m;
@@ -470,6 +476,7 @@ static void do_form(pdw obj, pdw gen)
         if (dict_num(obj, gen, "BBox", i, p)) { hasbox = 0; break; }
     }
     hasres = (dict_get(obj, gen, "Resources", 0, 0) == 0 && g_dg.kind != PDK_NULL);
+    if (g_afm && (!hasbox || !ap_fit(&m, &bx0, &by0, &bx1, &by1))) return;
     if (strm_open(obj, gen, 0, 0)) { inc_note(PDF_INC_FILTER, "form stream"); return; }
     ressave_p = g_resp; ressave_o = g_reso; ressave_g = g_resg;
     g_nfr++;
@@ -479,19 +486,57 @@ static void do_form(pdw obj, pdw gen)
     if (hasres) { g_resp = 0xFFFF; g_reso = obj; g_resg = gen; }
     gs_push();
     g_gsfloor = g_gsn;
+    if (g_afm) pdm_mat_mul(&GS.ctm, &g_am, &GS.ctm);
     pdm_mat_mul(&GS.ctm, &m, &GS.ctm);
     if (hasbox) rect_clip_user(&bx0, &by0, &bx1, &by1);
 }
 
 /* ---- images ---------------------------------------------------------------- */
-static void do_image(pdw obj, pdw gen)
+/* Place an image on the page: the unit square under the CTM becomes the
+ * destination rectangle, and one DLR_IMAGE record names the picture (an XObject
+ * by number, or - with flag 16 - an inline image whose `extra` data bytes
+ * follow the body in the record). 0 = nothing to draw here (outside the group,
+ * clipped, or refused and noted), 1 = the record is begun. */
+static pdw image_place(pdw W, pdw H, pdw bpcv, pdw ncomp, pdw flags, pdw obj, pdw gen, pdw extra)
 {
     static pdb body[20];
-    static struct pd_fx w, h, bpc, one, zero, dec0;
-    pdw ncomp = 1, stencil = 0, inv = 0, flags = 0, bpcv;
-    pdi x00, y00, x10, y10, x01, y01, xl, xr, yt, yb, t;
+    static struct pd_fx one, zero;
+    pdi x00, y00, x10, y10, x01, y01, xl, xr, yt, yb;
     static pdi py0, py1, px0, px1;
-    pdi pa, pb, pc, pd;
+    pdi pa, pb;
+    pdm_fx_int(&zero, 0); pdm_fx_int(&one, 1);
+    to_dev(&zero, &zero); x00 = g_dx; y00 = g_dy;
+    to_dev(&one, &zero);  x10 = g_dx; y10 = g_dy;
+    to_dev(&zero, &one);  x01 = g_dx; y01 = g_dy;
+    pa = (pdi)pdr_abs((pdi)(y10 - y00)); pb = (pdi)pdr_abs((pdi)(x01 - x00));
+    if (pa > 1 || pb > 1) {
+        /* rotated by 90 degrees (or more): not drawn in this release */
+        inc_note(PDF_INC_IMAGE, "rotated image");
+        return 0;
+    }
+    xl = pdr_min(x00, x10); xr = pdr_max(x00, x10);
+    yt = pdr_min(y00, y01); yb = pdr_max(y00, y01);
+    if (x10 < x00) flags |= 4;                 /* mirrored left-right           */
+    if (y01 > y00) { inc_note(PDF_INC_IMAGE, "flipped image"); return 0; }
+    rect_px(xl, yt, xr, yb, &px0, &py0, &px1, &py1);
+    if (px1 < px0 || py1 < py0) return 0;
+    if (py1 < GS.cy0 || py0 > GS.cy1 || px1 < GS.cx0 || px0 > GS.cx1) return 0;
+    if (py1 < g_gy0 || py0 > g_gy1 || px1 < g_vcx0 || px0 > g_vcx1) return 0;
+    if (g_mode != PDR_INTERP) return 0;
+    if (extra && !dl_room((pdw)(DLH + 20 + extra))) { g_dlfull = 1; return 0; }
+    emit_state(PK_TEXT);
+    w16(body, xl); w16(body + 2, yt); w16(body + 4, xr); w16(body + 6, yb);
+    w16(body + 8, (pdi)W); w16(body + 10, (pdi)H);
+    w16(body + 12, (pdi)obj); w16(body + 14, (pdi)gen);
+    body[16] = (pdb)bpcv; body[17] = (pdb)ncomp; body[18] = (pdb)flags; body[19] = 0;
+    hdr_set(DLR_IMAGE, 0, (pdw)(DLH + 20 + extra), py0 < GS.cy0 ? GS.cy0 : py0, py1 > GS.cy1 ? GS.cy1 : py1);
+    return dl_put(g_hdr, DLH, body, 20);
+}
+
+static void do_image(pdw obj, pdw gen)
+{
+    static struct pd_fx w, h, bpc, dec0;
+    pdw ncomp = 1, stencil = 0, inv = 0, bpcv;
     if (dict_num(obj, gen, "Width", 0xFFFF, &w) || dict_num(obj, gen, "Height", 0xFFFF, &h)) return;
     if (dict_get(obj, gen, "ImageMask", 0, 0) == 0 && g_dg.kind == PDK_BOOL && (g_dg.num.hi || g_dg.num.lo)) stencil = 1;
     bpcv = 1;
@@ -509,38 +554,7 @@ static void do_image(pdw obj, pdw gen)
     if (dict_get(obj, gen, "SMask", 0, 0) == 0 && g_dg.kind != PDK_NULL) inc_note(PDF_INC_TRANSP, "soft mask");
     if (dict_get(obj, gen, "Mask", 0, 0) == 0 && g_dg.kind != PDK_NULL) inc_note(PDF_INC_TRANSP, "image mask");
     if (dict_num(obj, gen, "Decode", 0, &dec0) == 0 && dec0.hi >= 1) inv = 1;
-    pdm_fx_int(&zero, 0); pdm_fx_int(&one, 1);
-    to_dev(&zero, &zero); x00 = g_dx; y00 = g_dy;
-    to_dev(&one, &zero);  x10 = g_dx; y10 = g_dy;
-    to_dev(&zero, &one);  x01 = g_dx; y01 = g_dy;
-    pa = (pdi)pdr_abs((pdi)(y10 - y00)); pb = (pdi)pdr_abs((pdi)(x01 - x00));
-    pc = (pdi)pdr_abs((pdi)(x10 - x00)); pd = (pdi)pdr_abs((pdi)(y01 - y00));
-    if (pa > 1 || pb > 1) {
-        /* rotated by 90 degrees (or more): not drawn in this release */
-        inc_note(PDF_INC_IMAGE, "rotated image");
-        (void)pc; (void)pd;
-        return;
-    }
-    xl = pdr_min(x00, x10); xr = pdr_max(x00, x10);
-    yt = pdr_min(y00, y01); yb = pdr_max(y00, y01);
-    if (x10 < x00) flags |= 4;                 /* mirrored left-right           */
-    if (y01 > y00) flags |= 8;                 /* upside down                   */
-    if (flags & 8) { inc_note(PDF_INC_IMAGE, "flipped image"); return; }
-    if (stencil) flags |= 1;
-    if (inv) flags |= 2;
-    rect_px(xl, yt, xr, yb, &px0, &py0, &px1, &py1);
-    if (px1 < px0 || py1 < py0) return;
-    t = py1; (void)t;
-    if (py1 < GS.cy0 || py0 > GS.cy1 || px1 < GS.cx0 || px0 > GS.cx1) return;
-    if (py1 < g_gy0 || py0 > g_gy1 || px1 < g_vcx0 || px0 > g_vcx1) return;
-    if (g_mode != PDR_INTERP) return;
-    emit_state(PK_TEXT);
-    w16(body, xl); w16(body + 2, yt); w16(body + 4, xr); w16(body + 6, yb);
-    w16(body + 8, (pdi)pdm_fx_floor(&w)); w16(body + 10, (pdi)pdm_fx_floor(&h));
-    w16(body + 12, (pdi)obj); w16(body + 14, (pdi)gen);
-    body[16] = (pdb)bpcv; body[17] = (pdb)ncomp; body[18] = (pdb)flags; body[19] = 0;
-    hdr_set(DLR_IMAGE, 0, DLH + 20, py0 < GS.cy0 ? GS.cy0 : py0, py1 > GS.cy1 ? GS.cy1 : py1);
-    dl_put(g_hdr, DLH, body, 20);
+    image_place((pdw)pdm_fx_floor(&w), (pdw)pdm_fx_floor(&h), bpcv, ncomp, (pdw)((stencil ? 1 : 0) | (inv ? 2 : 0)), obj, gen, 0);
 }
 
 static void do_xobject(void)
@@ -591,7 +605,15 @@ static void op_re(void)
     path_close();
 }
 
-/* returns 1 when the operator was the inline-image data marker */
+/* a dash length or phase in quarter points, 0..255 */
+static pdb dash_q(const struct pd_fx *v)
+{
+    pdi k;
+    pdm_fx_int(&t1, 4); pdm_fx_mul(&t0, v, &t1);
+    k = pdm_fx_round(&t0);
+    return (pdb)(k < 0 ? 0 : k > 255 ? 255 : k);
+}
+
 static void exec_op(const char *s, pdw n)
 {
     pdw k = (pdw)((pdb)s[0] | (n > 1 ? ((pdb)s[1] << 8) : 0));
@@ -606,9 +628,14 @@ static void exec_op(const char *s, pdw n)
         case 'J': GS.cap = (pdb)pdm_fx_floor(opn(1)); break;
         case 'j': GS.join = (pdb)pdm_fx_floor(opn(1)); break;
         case 'M': setfx(&GS.miter, 1); break;
-        case 'd':                       /* dash patterns are NOT drawn (20.3.7): solid, and said so */
-            if (g_nop > 1 && (g_opn[0].hi || g_opn[0].lo)) inc_note(PDF_INC_OPER, "dash pattern");
-            break;
+        case 'd': {                     /* [lengths] phase: up to four, in quarter points (20.12.4) */
+            pdw ne = 0, j;
+            GS.dn = 0;
+            if (g_arrseen && g_nop > g_arr0) ne = g_nop - 1 - g_arr0;
+            if (ne > 4) { inc_note(PDF_INC_LIMIT, "dash array"); ne = 4; }
+            for (j = 0; j < ne; j++) GS.dash[j] = dash_q(&g_opn[g_arr0 + j]);
+            if (ne) { GS.dn = (pdb)ne; GS.dph = dash_q(opn(1)); }
+            break; }
         case 'i': break;
         case 'm': { to_dev(opn(2), opn(1)); path_move(g_dx, g_dy); break; }
         case 'l': { to_dev(opn(2), opn(1)); path_line(g_dx, g_dy); break; }
@@ -766,13 +793,18 @@ showdq:
  * ==========================================================================*/
 static pdw g_inl;                   /* 0; 1 in BI's dictionary; 2 skipping counted rows; 3 scanning for EI */
 static pdw g_ik, g_iw, g_ih, g_ibpc, g_ics, g_if, g_iad, g_irb, g_ileft, g_ist;
-/* Inline images are CONSUMED, not drawn (PAGEDESK-SPEC 20.3.7). PDENG cannot
- * push bytes back (20.2.5), so the bytes after ID are read EXACTLY: an
- * unfiltered image whose dictionary gives /W /H, a /BPC of 1, 2, 4 or 8 and a
- * device colour space (or /IM true) is W x components x BPC bits a row, rows
- * padded to the byte; anything else is scanned for white space, E, I one byte
- * at a time. Either is resumable - at most 4 KiB a call - so a large image is
- * read across slices. The page is marked Incomplete (image). */
+static pdw g_istn, g_idec, g_idn;   /* /IM true, /Decode starts at 1, its first number seen */
+static pdw g_icap, g_icapoff, g_icaprow, g_isrb, g_isg1;   /* capturing for the page: DL offset, rows done, stored row bytes, kept as 1 bit */
+/* Inline images (PAGEDESK-SPEC 20.12.5). PDENG cannot push bytes back (20.2.5),
+ * so the bytes after ID are read EXACTLY: an unfiltered image whose dictionary
+ * gives /W /H, a /BPC of 1, 2, 4 or 8 and a device colour space (or /IM true) is
+ * W x components x BPC bits a row, rows padded to the byte. Such an image whose
+ * row fits the row buffer and whose stored form fits 6 KiB is CAPTURED into its
+ * display-list record (1 bit kept as 1 bit, anything else as 8-bit grey) and
+ * drawn with the XObject images' row composer; any other is consumed by the
+ * same exact count, or - /F, a named space - scanned for white space, E, I one
+ * byte at a time, and is not drawn (Incomplete: image). Either is resumable, at
+ * most 4 KiB a slice, so a large image is read across slices. */
 /* the index of `name` in a table of NUL-ended words (ended by an empty one),
  * exactly; 0xFF when absent */
 static pdw kw_find(const char *tab, const char *name)
@@ -785,8 +817,8 @@ static pdw kw_find(const char *tab, const char *name)
     }
     return 0xFF;
 }
-/* abbreviation and full name in pairs: W H BPC CS F IM -> keys 1..6 */
-static const char inl_keys[] = "W\0Width\0H\0Height\0BPC\0BitsPerComponent\0CS\0ColorSpace\0F\0Filter\0IM\0ImageMask\0";
+/* abbreviation and full name in pairs: W H BPC CS F IM D -> keys 1..7 */
+static const char inl_keys[] = "W\0Width\0H\0Height\0BPC\0BitsPerComponent\0CS\0ColorSpace\0F\0Filter\0IM\0ImageMask\0D\0Decode\0";
 static const char inl_cs[] = "G\0DeviceGray\0RGB\0DeviceRGB\0CMYK\0DeviceCMYK\0";
 static const pdb inl_ncomp[3] = { 1, 3, 4 };
 static void inl_token(void)
@@ -794,7 +826,10 @@ static void inl_token(void)
     pdw k = g_ik, kind = g_tk.kind, v;
     if (kind == PDT_ARRB) { if (!g_iad && k == 5) g_if = 1; if (!g_iad && k == 4) g_ics = 0; g_iad++; return; }
     if (kind == PDT_ARRE) { if (g_iad) g_iad--; if (!g_iad) g_ik = 0; return; }
-    if (g_iad) return;                              /* inside an array value (/Decode, /F [...]) */
+    if (g_iad) {                                    /* inside an array value (/Decode, /F [...]) */
+        if (k == 7 && g_iad == 1 && kind == PDT_NUM && !g_idn) { g_idn = 1; g_idec = pdm_fx_floor(&g_tk.num) >= 1; }
+        return;
+    }
     if (kind == PDT_NAME && !k) {
         v = kw_find(inl_keys, g_tk.text);
         g_ik = v == 0xFF ? 9 : (v >> 1) + 1;
@@ -803,7 +838,7 @@ static void inl_token(void)
     /* a value: of the key before it, or of a key that does not matter */
     if (k == 4 && kind == PDT_NAME) { v = kw_find(inl_cs, g_tk.text); g_ics = v == 0xFF ? 0 : inl_ncomp[v >> 1]; }
     else if (k == 5) g_if = 1;
-    else if (k == 6 && kind == PDT_TRUE) { g_ics = 1; g_ibpc = 1; }
+    else if (k == 6 && kind == PDT_TRUE) { g_ics = 1; g_ibpc = 1; g_istn = 1; }
     else if (kind == PDT_NUM && k >= 1 && k <= 3) {
         pdi n = pdm_fx_floor(&g_tk.num);
         if (n < 0) n = 0;
@@ -811,11 +846,11 @@ static void inl_token(void)
     }
     g_ik = 0;
 }
-/* the ID operator: how the bytes that follow are got past */
+/* the ID operator: how the bytes that follow are got past, and whether they are kept */
 static void inl_start(void)
 {
-    pdw bits;
-    g_inl = 3; g_ist = 0;
+    pdw bits, extra;
+    g_inl = 3; g_ist = 0; g_icap = 0;
     if (!g_gseg) { g_inl = 0; return; }             /* no scratch: the lexer goes on in the data */
     if (!g_if && g_iw && g_ih && g_ics && g_iw <= 4096 &&
         (g_ibpc == 1 || g_ibpc == 2 || g_ibpc == 4 || g_ibpc == 8)) {
@@ -823,12 +858,63 @@ static void inl_start(void)
         g_irb = (pdw)((bits >> 3) * g_ibpc + (((bits & 7) * g_ibpc + 7) >> 3));
         g_ileft = g_irb;
         g_inl = 2;
+        g_isg1 = g_istn || (g_ics == 1 && g_ibpc == 1);
+        g_isrb = g_isg1 ? (pdw)((g_iw + 7) >> 3) : g_iw;
+        if (g_ics == 4 || g_irb > 1024 || g_ih > 6144u / g_isrb) { inc_note(PDF_INC_IMAGE, "inline image"); return; }
+        if (g_mode != PDR_INTERP) return;
+        extra = (pdw)(g_isrb * g_ih);
+        if (image_place(g_iw, g_ih, g_isg1 ? 1 : 8, 1, (pdw)(16 | (g_istn ? 1 : 0) | (g_idec ? 2 : 0)), 0, 0, extra)) {
+            g_icap = 1; g_icapoff = g_dllen; g_icaprow = 0;
+        }
+        return;
     }
+    inc_note(PDF_INC_IMAGE, "inline image");
+}
+/* the sample (c, x) of the raw row at g_gseg:0, scaled to 0..255 */
+static pdw inl_sample(pdw x, pdw c)
+{
+    pdw bp = (pdw)((x * g_ics + c) * g_ibpc), v;
+    v = (pdw)((pd_fpeekb(g_gseg, (pdw)(bp >> 3)) >> (8 - g_ibpc - (bp & 7))) & ((1u << g_ibpc) - 1));
+    if (g_ibpc == 4) return (pdw)((v << 4) | v);
+    if (g_ibpc == 2) return (pdw)((v << 6) | (v << 4) | (v << 2) | v);
+    if (g_ibpc == 1) return v ? 255 : 0;
+    return v;
+}
+/* one captured row: read it whole, keep it as 1 bit or as 8-bit grey (RGB by its
+ * luminance); 0 = the stream ended */
+static pdw inl_row(void)
+{
+    pdw got = 0, x, o = (pdw)(g_icapoff + g_icaprow * g_isrb), v;
+    while (got < g_irb) {
+        if (pdr_eng(PDV_ENG_STRM_READ, g_gseg, got, (pdw)(g_irb - got)) || !pdr_eng_ax || pdr_eng_ax > g_irb - got) return 0;
+        got += pdr_eng_ax;
+    }
+    if (g_isg1) pdr_fcopy(g_dls, o, g_gseg, 0, g_isrb);
+    else for (x = 0; x < g_iw; x++) {
+        v = inl_sample(x, 0);
+        if (g_ics == 3) v = (pdw)((v * 77u + inl_sample(x, 1) * 150u + inl_sample(x, 2) * 29u) >> 8);
+        pd_fpokeb(g_dls, (pdw)(o + x), (pdb)v);
+    }
+    g_icaprow++;
+    return 1;
 }
 /* one slice of an inline image's bytes; 1 when they are behind the lexer */
 static pdw inl_skip(void)
 {
     pdw budget = 4096, n, c;
+    if (g_inl == 2 && g_icap) {
+        while (budget) {
+            if (g_icaprow >= g_ih) break;
+            if (!inl_row()) {                         /* the stream ended early: the rows still owed are blank */
+                pd_ffill(g_dls, (pdw)(g_icapoff + g_icaprow * g_isrb), g_isg1 ? 0 : 255, (pdw)((g_ih - g_icaprow) * g_isrb));
+                break;
+            }
+            budget = budget > g_irb ? (pdw)(budget - g_irb) : 0;
+        }
+        if (g_icaprow < g_ih && budget == 0) return 0;     /* more next slice */
+        g_dllen += (pdw)(g_isrb * g_ih); g_icap = 0; g_inl = 0;
+        return 1;
+    }
     if (g_inl == 2) {
         while (budget) {
             if (!g_ileft) {
@@ -854,6 +940,21 @@ static pdw inl_skip(void)
     return 0;
 }
 
+/* ---- the annotation phases (PAGEDESK-SPEC 20.12.1): pdra.c ---------------- */
+static pdw g_aph;                   /* 0 page content, 1 source highlights, 2 other source annotations, 3 edits, 4 done */
+static pdw g_aidx;                  /* the next /Annots index of phase 1 or 2 */
+static pdw g_aflags;                /* PDRF_* in force: 0 for a thumbnail or the text map */
+static pdw g_pgopen;                /* the page's own content stream is open  */
+static pdw annot_next(void);        /* 1 = a stream is open and interpretation goes on */
+static void annot_edits(pdw post);
+/* the annotations are over, or the next one's stream is open */
+static pdw annot_go(void)
+{
+    if (annot_next()) return 1;
+    g_idone = 1;
+    return 0;
+}
+
 /* a frame ended: pop to its parent, or move to the next /Contents element */
 static pdw frame_end(void)
 {
@@ -864,19 +965,21 @@ static pdw frame_end(void)
         g_resp = g_fr[g_nfr].resp; g_reso = g_fr[g_nfr].reso; g_resg = g_fr[g_nfr].resg;
         g_nfr--;
         g_gsfloor = g_nfr > 0 && g_fr[g_nfr].isform ? g_fr[g_nfr].gsbase + 1 : 0;
+        if (!g_nfr && !g_pgopen) return annot_go();      /* an annotation's form: the next one */
         return 1;
     }
     /* the page: next element of /Contents */
     g_fr[0].cidx++;
     if (strm_open(0, 0, g_page, g_fr[0].cidx) == 0) return 1;
-    g_idone = 1;
-    return 0;
+    g_pgopen = 0;
+    return annot_go();
 }
 
 /* run at most `maxops` operators. Returns 1 when the page is finished */
 static pdw interp_run(pdw maxops)
 {
     pdw err, ops = 0, kind, toks = 0;
+    if (g_idone) return 1;
     while (ops < maxops) {
         if (g_dlfull) return 0;
         /* a slice is bounded in TOKENS too: a stream of a million numbers, or an
@@ -884,7 +987,7 @@ static pdw interp_run(pdw maxops)
         if (++toks > (pdw)(maxops << 4)) return 0;
         if (g_inl >= 2) { if (!inl_skip()) return 0; continue; }
         err = tok_next();
-        if (err) { g_ierr = err; inc_note(PDF_INC_LIMIT, "content stream error"); g_idone = 1; while (g_nfr) { strm_close(); g_nfr--; } strm_close(); return 1; }
+        if (err) { g_ierr = err; inc_note(PDF_INC_LIMIT, "content stream error"); g_idone = 1; while (g_nfr) { strm_close(); g_nfr--; } if (g_pgopen) strm_close(); g_pgopen = 0; return 1; }
         kind = g_tk.kind;
         if (g_inl) {                              /* inline image: read its dictionary, then its bytes */
             if (kind == PDT_OP) {
@@ -934,8 +1037,8 @@ static pdw interp_run(pdw maxops)
         case PDT_DICTE: break;
         case PDT_OP:
             if (g_tk.len == 2 && g_tk.text[0] == 'B' && g_tk.text[1] == 'I') {
-                inc_note(PDF_INC_IMAGE, "inline image");
-                g_inl = 1; g_ik = 0; g_iw = g_ih = g_ibpc = g_ics = g_if = g_iad = 0; op_clear(); break;
+                g_inl = 1; g_ik = 0; g_iw = g_ih = g_ibpc = g_ics = g_if = g_iad = 0;
+                g_istn = g_idec = g_idn = g_icap = 0; op_clear(); break;
             }
             exec_op(g_tk.text, g_tk.len);
             op_clear();
@@ -953,20 +1056,35 @@ static pdw interp_run(pdw maxops)
     return 0;
 }
 
+/* the page's own content: a fresh state, the page's resources, element 0 of /Contents */
+static pdw page_open(void)
+{
+    pdw err;
+    gs_reset();
+    g_resp = g_page; g_reso = 0; g_resg = 0;
+    g_fr[0].isform = 0; g_fr[0].cidx = 0;
+    err = strm_open(0, 0, g_page, 0);
+    if (!err) g_pgopen = 1;
+    return err;
+}
+
 /* start interpreting page `page`; g_mode is set by the caller */
 static pdw interp_start(pdw page)
 {
     pdw err;
-    op_clear(); g_tjlive = 0; g_inl = 0; g_dictd = 0; g_inbt = 0;
+    op_clear(); g_tjlive = 0; g_inl = 0; g_icap = 0; g_dictd = 0; g_inbt = 0;
     path_reset(); g_plimit = 0; g_nfr = 0; g_idone = 0; g_ierr = 0;
-    g_page = page; g_resp = page; g_reso = 0; g_resg = 0;
-    g_fr[0].isform = 0; g_fr[0].cidx = 0;
+    g_page = page;
     g_ops = 0;
     g_rn = 0; g_ropen = 0;
     g_cok = 0; g_fnnext = 0; pdr_zero(g_fk, sizeof g_fk); g_fwi = 0xFF; g_fwdirty = 0;
     g_pkfam = 0xFF;
+    g_pgopen = 0; g_aph = 0; g_aidx = 0;
     text_ident();
-    err = strm_open(0, 0, page, 0);
-    if (err) { g_idone = 1; return err == PDE_RANGE ? 0 : err; }
+    if (g_mode == PDR_INTERP) annot_edits(0);       /* the edit highlights go first: the page's own state is made after */
+    err = page_open();
+    if (err && err != PDE_RANGE) { g_idone = 1; return err; }
+    if (g_mode == PDR_INTERP && (g_aflags & PDRF_ANNOTS)) { if (g_pgopen) strm_close(); g_pgopen = 0; g_aph = 1; }
+    if (g_aph || !g_pgopen) annot_go();
     return 0;
 }

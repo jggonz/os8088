@@ -617,7 +617,10 @@ static void glyph_big(pdi x, pdi y, pdw rk, pdw sc, pdw wpx, pdw wb, pdw boff, p
 /* floor(v / 4) for either sign */
 static pdi pdr_fl4(pdi v) { return v >= 0 ? (pdi)(v >> 2) : (pdi)-((3 - v) >> 2); }
 
-static pdb g_gbuf[PDR_NRUN * 5];
+/* the glyph-run buffer: the interpreter builds a run in it, the walker reads one back; the two
+ * never overlap (interpretation of a group is over before its bands are drawn), so one serves */
+static pdb g_rbody[8 + PDR_NRUN * 5];
+#define g_gbuf g_rbody
 static void draw_glyphs(pdw off, pdw len, pdi ry0, pdi ry1)
 {
     pdw shear, n, i, idx, code, wb, swb, wpx, boff, rows, skip, nrow, rk, sc, big;

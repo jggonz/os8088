@@ -37,15 +37,16 @@ static void draw_image(pdw off, pdw len, pdi ry0, pdi ry1)
     static pdb b[20];
     static struct pd_u32 u, q;
     pdi xl, yt, xr, yb, wq, hq, y, sr, x0, x1, delta;
-    pdw W, H, bpc, ncomp, flags, rb, stencil, sm, obj, gen;
+    pdw W, H, bpc, ncomp, flags, rb, stencil, sm, obj, gen, inl;
     (void)len;
-    if (!g_gseg || g_gkb < 2) { inc_note(PDF_INC_IMAGE, "no image buffer"); return; }
     pd_fcopy_in(g_dls, off + DLH, b, 20);
     xl = r16(b); yt = r16(b + 2); xr = r16(b + 4); yb = r16(b + 6);
     W = (pdw)r16(b + 8); H = (pdw)r16(b + 10);
     obj = (pdw)r16(b + 12); gen = (pdw)r16(b + 14);
     bpc = b[16]; ncomp = b[17]; flags = b[18];
     stencil = flags & 1;
+    inl = flags & 16;                          /* an inline image: its rows follow the body in the list */
+    if (!inl && (!g_gseg || g_gkb < 2)) { inc_note(PDF_INC_IMAGE, "no image buffer"); return; }
     wq = (pdi)(xr - xl); hq = (pdi)(yb - yt);
     if (wq < 1) wq = 1;
     if (hq < 1) hq = 1;
@@ -57,7 +58,7 @@ static void draw_image(pdw off, pdw len, pdi ry0, pdi ry1)
     /* the stream stays open from band to band while the same image is drawn
      * further down: each band reads on from the row the last one stopped at,
      * instead of decoding the image from its first row again */
-    if (!g_iopen || g_iobj != obj || g_igen != gen || g_ibytes != rb) {
+    if (!inl && (!g_iopen || g_iobj != obj || g_igen != gen || g_ibytes != rb)) {
         g_iobj = obj; g_igen = gen; g_ibytes = rb;
         if (!img_reopen()) { inc_note(PDF_INC_FILTER, "image stream"); return; }
     }
@@ -81,15 +82,19 @@ static void draw_image(pdw off, pdw len, pdi ry0, pdi ry1)
         else if (qy >= yb) sr = (pdi)(H - 1);
         else sr = pdr_muldiv((pdi)(qy - yt), (pdi)H, hq);
         if (sr >= (pdi)H) sr = (pdi)(H - 1);
-        if (sr < g_icur) { if (!img_reopen()) return; }
-        while (g_icur < sr) if (!img_row()) { img_close(); return; }
-        if (g_icur < 0 && !img_row()) { img_close(); return; }
+        if (!inl) {
+            if (sr < g_icur) { if (!img_reopen()) return; }
+            while (g_icur < sr) if (!img_row()) { img_close(); return; }
+            if (g_icur < 0 && !img_row()) { img_close(); return; }
+        }
         {
             pdi s0 = pdr_muldiv(delta, (pdi)W, wq);
             pdr_ip.bseg = g_bseg;
             pdr_ip.boff = (pdw)(y - g_by0) * g_bstride;
             pdr_ip.x0 = (pdi)(x0 - g_bx0); pdr_ip.x1 = (pdi)(x1 - g_bx0);
-            pdr_ip.sseg = g_gseg; pdr_ip.soff = 0; pdr_ip.sw = W;
+            if (inl) { pdr_ip.sseg = g_dls; pdr_ip.soff = (pdw)(off + DLH + 20 + (pdw)sr * rb); }
+            else { pdr_ip.sseg = g_gseg; pdr_ip.soff = 0; }
+            pdr_ip.sw = W;
             pdr_ip.xlo = 0; pdr_ip.xhi = (pdw)s0;
             pdr_ip.slo = q.lo; pdr_ip.shi = q.hi;
             pdr_ip.smode = sm | ((flags & 4) ? 0x100 : 0);
@@ -118,8 +123,8 @@ static void close_streams(void)
 {
     img_close();
     while (g_nfr) { strm_close(); g_nfr--; }
-    if (!g_idone) strm_close();
-    g_idone = 1;
+    if (g_pgopen) strm_close();
+    g_pgopen = 0; g_idone = 1;
 }
 
 /* a pass interprets the content once for the rows of bands [g_b0, g_b1) */
@@ -158,7 +163,7 @@ static void mode_reset(void)
 {
     g_inc = 0; g_incname[0] = 0; g_ops = 0; g_passes = 0;
     g_ierr = 0; g_ndl = 0;
-    g_pkfam = 0xFF;
+    g_pkfam = 0xFF; g_aflags = 0;
 }
 
 static pd_px vb_w, vb_h;
@@ -170,6 +175,7 @@ static pdw verb_begin(void)
     close_streams();
     mode_reset();
     g_mode = PDR_INTERP; g_thumb = 0; g_bpp = g_ini.bpp == 4 ? 4 : 1;
+    g_aflags = g_rq.rflags;
     g_winoff = g_rq.win_off;
     g_vcx0 = g_rq.view.clip_x0; g_vcy0 = g_rq.view.clip_y0;
     g_vcx1 = g_rq.view.clip_x1; g_vcy1 = g_rq.view.clip_y1;
@@ -396,7 +402,7 @@ static pdw verb_init(pdw xbseg)
     g_bankok = 0; g_bankseg = 0; g_bk_seg[0] = g_bk_seg[1] = 0; g_pkfam = 0xFF;
     g_scn = 0; g_scbump = SC_BASE; g_fxok = 0;
     g_bpp = g_ini.bpp == 4 ? 4 : 1;
-    g_nfr = 0; g_idone = 1;
+    g_nfr = 0; g_idone = 1; g_pgopen = 0;
     return PDE_OK;
 }
 
