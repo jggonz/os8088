@@ -65,7 +65,10 @@ def bits(ui, blk):
     vseg = word(ui, blk, geom.FS_VSEG)
     if not vseg:
         return []
-    b = ui.m.read(vseg << 4, 8)          # every row this test touches is < 64
+    # through the machine's own resolver: under kern_mega FS_VSEG is an LDT
+    # SELECTOR, and `vseg << 4` reads some unrelated paragraph there
+    lin = getattr(ui.m, "lin", lambda s, o=0: (s << 4) + o)
+    b = ui.m.read(lin(vseg, 0), 8)       # every row this test touches is < 64
     return sorted(i for i in range(64) if b[i >> 3] & (1 << (i & 7)))
 
 
