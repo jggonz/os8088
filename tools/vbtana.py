@@ -462,13 +462,16 @@ def vga_plan(proj, progress=_nop):
     band = [tuple(c) for c in palette_rgb(t["palette"])]
     keep = bool(t.get("vga_band_cga"))
     streams = vga_streams(proj)
-    if not streams:
+    if not streams and not proj.d.get("images"):
         sh = (band + [(0, 0, 0)] * k)[:k - slots]
         return dict(k=k, slots=slots, shared=sh, own={})
     if keep and k <= 4:
         return dict(k=k, slots=0, shared=band[:k], own={})
     w, h, _ = rend_size(proj, "vga4")
-    key = json.dumps(["p2", t["palette"], k, slots, keep, w, h,
+    key = json.dumps(["p3", t["palette"], k, slots, keep, w, h,
+                      [(im.get("path"), os.path.exists(proj.here(im["path"]))
+                        and file_hash(proj.here(im["path"])))
+                       for im in proj.d.get("images", [])],
                       fit_of(proj), scale_of(proj, "vga4"),
                       [(x, file_hash(proj.here(proj.d["sources"][sid]
                                                ["path"])), a, b, wt)
@@ -493,8 +496,20 @@ def vga_plan(proj, progress=_nop):
         (max(0, k - 4) / 12.0) ** 2     # (the menu's own colours: two of
     #       16, about one of 8, none of 4 - the owner's plan. At 8 the full
     #       pull cost the footage: a title's error 11.1 -> 13.1)
+    bpx = list(band) * 64 if not keep else []   # THE BAND'S STREAM: its
+    for im in proj.d.get("images", []):         # four, and its PICTURES'
+        try:                                    # pixels - on VGA they are
+            from PIL import Image               # drawn in the shared colours
+            pim = Image.open(proj.here(im["path"])).convert("RGB")  # (126.5)
+            pim.thumbnail((96, 48))
+            bpx += [tuple(c) for c in np.asarray(pim).reshape(-1, 3)]
+        except OSError:
+            pass
+    if bpx and not bw:
+        bw = PLAN_IDLE_W * max(0, 200 - cr) / float(cr) * \
+            (max(1, k - 4) / 12.0) ** 2
     sh, own = plan_colours(samp, k, slots, fixed[:k - slots],
-                           None if keep else band, bw)
+                           bpx or None, bw)
     sh = (sh + [sh[-1]] * k)[:k - slots]
     out = dict(k=k, slots=slots, shared=sh, own=own)
     _PALS[key] = out
@@ -904,7 +919,7 @@ def memory(data, free_kb=None):
     import os88vbt as B
     b = B.Bundle(data)
     parts = resident_parts(len(b.vres), len(b.idle_r), len(b.uib), b.mlen,
-                           len(b.imgs), b.band[1])
+                           len(b.imgs), b.band[1], b.vlayer)
     res = sum(n for _, n in parts)
     ring = ring_of(res, b.maxrec, free_kb)
     emin = (max(c["esz"] for c in b.clips) + 1023) // 1024 + 16
@@ -915,7 +930,7 @@ def memory(data, free_kb=None):
                 VB_MRES)
 
 
-def resident_parts(vres, idle, ui, mlen, imgs, band_row):
+def resident_parts(vres, idle, ui, mlen, imgs, band_row, vlayer=False):
     """The resident claim's parts (vb_load), each its 4 KBs: from the
     sizes alone, so that the builder can ask before its clips are made"""
     mres = mlen <= VB_MRES
@@ -926,7 +941,16 @@ def resident_parts(vres, idle, ui, mlen, imgs, band_row):
              _r4k(mlen) if mres else VB_MR + VB_MPIECE),
             ("the band's pictures", _r4k(imgs)),
             ("the band's two buffers",      # (vb_bpara: the band's rows at
-             2 * _r4k((200 - band_row) * 80))]  # 80 bytes, VBATTLE-RAM R1)
+             _r4k((200 - band_row) * 80) +  # 80 bytes, VBATTLE-RAM R1;
+             _r4k(vband_bytes(band_row, vlayer)))]   # vb_gpara the ground's)
+
+
+def vband_bytes(band_row, vlayer):
+    """The band's GROUND buffer (vb_gpara): its rows at 80 bytes, and with
+    VGA's own pictures (126.5) their layer after it, from a paragraph -
+    four planes of 40 bytes a row"""
+    n = 200 - band_row
+    return ((n * 80 + 15) & ~15) + (n * 160 if vlayer else 0)
 
 
 def ring_of(res, maxrec, free_kb=None):

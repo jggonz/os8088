@@ -24,7 +24,7 @@ gives:
   pools     8 each       a count and up to 7 clips
   items     12 each      name, the party's count
   images    8 each       a band picture's place and its paragraph in the
-                         IMAGES region
+                         IMAGES region, then its VGA version's (or 0)
 
 THE RANDOM GENERATOR is a 16-bit xorshift (7, 9, 8), seeded from the
 header's seed when its flag says so (a test's battle is the same every
@@ -381,8 +381,9 @@ def compile_rules(proj, clip_index, images=(), preview=False):
         b += r
     table("item", b)
     b = bytearray()
-    for col, row, cells, rows, para in images:
-        b += struct.pack("<4BH2x", col, row, cells, rows, para)
+    for im in images:               # (126.5: a VGA version's paragraph, or 0)
+        b += struct.pack("<4BHH", *(tuple(im[:5]) + (
+            im[5] if len(im) > 5 else 0,)))
     table("img", b)
     # THE ENEMY'S FOLLOW-UPS (126.6.7): after its turn played AFTER, its
     # next turn plays THEN - at the same target (FOLLOW_SAME), or by a

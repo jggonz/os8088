@@ -133,6 +133,8 @@ VH_LEAVE    equ 331             ; FFh: the title is left by a fade
 VH_ENDS     equ 332             ; victory, defeat: (how, end loop) bytes
 VH_FSTEPS   equ 336             ; a fade's steps, 1..16
 VH_KIND     equ 337             ; the adapter: VK_CGA4, VK_VGA4, VK_HERC
+VH_VLAY     equ 351             ; VGA4: 1 when the band's pictures are in
+                                ; VGA's own colours too (126.5): a layer
 VH_BMAP     equ 352             ; VGA4: the band's four colours' pixel
                                 ; VALUES (126.3.2, format 9)
 VH_ELINE    equ 356             ; 2 x 2: VICTORY's and DEFEAT's LINES - each
@@ -1598,6 +1600,36 @@ vb_bpara:
     pop ax
     ret
 
+; vb_gpara - CX = the band's GROUND buffer's paragraphs: vb_bpara's, or
+; with VGA's own pictures (126.5, the header's VH_VLAY) its rows at 80 bytes
+; to a paragraph and their layer after them, four planes of 40 bytes a row
+vb_gpara:
+    cmp byte [vb_meta+VH_VLAY], 0
+    je vb_bpara
+    push ax
+    push dx
+    mov al, [vb_meta+VH_BAND+1]
+    xor ah, ah
+    mov cx, 200
+    sub cx, ax
+    mov ax, 80
+    mul cx
+    add ax, 15
+    and al, 0xF0
+    shl cx, 1                       ; (the layer: rows x 160)
+    push ax
+    mov ax, 80
+    mul cx
+    pop cx
+    add cx, ax
+    call vb_round
+    mov cl, 4
+    shr ax, cl
+    mov cx, ax
+    pop dx
+    pop ax
+    ret
+
 vb_p2kb:
     xor dx, dx
     mov cx, 4
@@ -1788,8 +1820,9 @@ vb_load:
     add ax, [vb_pimg]
     mov [vb_pbband], ax             ; ...and the band's two buffers, its
     call vb_bpara                   ; ground and its composition, each the
-    shl cx, 1                       ; band's rows and no more (they were 16
-    add ax, cx                      ; KB each for a 4.6 KB band: VBATTLE-
+    add ax, cx                      ; band's rows and no more (they were 16
+    call vb_gpara                   ; KB each for a 4.6 KB band: VBATTLE-
+    add ax, cx                      ; (the ground's: VGA's layer after it)
     call vb_p2kb                    ; RAM-PLAN R1)
     mov word [vb_err], vb_s_nomem
     xor cx, cx                      ; (the DMA door, no head: CONVENTIONAL on
@@ -1838,7 +1871,7 @@ vb_derive:
     mov ax, dx
     add ax, [vb_pbband]
     mov [vb_bseg], ax
-    call vb_bpara
+    call vb_gpara
     add ax, cx
     mov [vb_cseg], ax
     ret
@@ -5061,6 +5094,13 @@ VB_VAR vb_bpcn, 2                   ; ...and how many
 VB_VAR vb_vptab, 256                ; VGA4: a band byte's planes 0 and 1
 VB_VAR vb_vptab2, 256               ; ...and 2 and 3 (126.3.2's band map)
 VB_VAR vb_bmap, 4                   ; the band's four colours' pixel values
+VB_VAR vb_vlay, 1                   ; VGA4: the band's picture LAYER is on
+VB_VAR vb_loff, 2                   ; ...its offset in the ground's buffer
+VB_VAR vb_lstr, 2                   ; ...a plane's bytes (the band's rows x 40)
+VB_VAR vb_lpos, 2                   ; ...the row being presented's, plane 0
+VB_VAR vb_bz, 1                     ; (vb_bptab: a byte's ground pixels)
+VB_VAR vb_prow, 40                  ; vb_bpres: a plane row as the map has it
+VB_VAR vb_lrow, 40                  ; ...and as the layer has it
 VB_VAR vb_bp2, 1                    ; (vb_bptab's: planes 2 and 3 a pixel
 VB_VAR vb_bp3, 1                    ; at a time)
 VB_VAR vb_hptab, 512                ; Hercules: its even and odd rows

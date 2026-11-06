@@ -223,13 +223,16 @@ kern_big and kern_small keep the load on the desktop, where the window says
       (`target.vga_clip_colours`, the Battle tab, "auto" the default); at 4
       none, black and three from the footage, white not kept; "Keep the
       band's CGA colours" at 4 is CGA's own four.
-- [ ] **Step 5: band pictures in VGA's colours.** The owner's menu is a
-      band PICTURE - a blue window - and the band is CGA's two bits a
-      pixel on every adapter, so on VGA the window is dithered into the
-      band's four CGA colours (red and yellow) whatever VGA's palette
-      holds. Planned: a 16-colour picture layer for the band on VGA, shown
-      where the band's buffer is its ground (value 0), so text and the
-      cursor stay the band's and the window is its own colours.
+- [x] **Step 5: band pictures in VGA's colours** (SPEC.md 126.5). The
+      owner's menu is a band PICTURE - a blue window - and the band is
+      CGA's two bits a pixel on every adapter, so on VGA the window was
+      dithered into the band's four CGA colours (red and yellow). Now each
+      picture has a VGA version in the shared colours, kept in a layer
+      after the ground's rows; the present shows the layer wherever the
+      band's buffer is its ground, so text and the cursor stay the band's.
+      The pictures' pixels count in the shared colours' choice.
+      `vbtadapters` holds it on MartyPC's VGA (the window's mean DAC 8, 13,
+      35: blue); red with the layer off. +415 bytes of code, 88 of bss.
 - [x] **A palette viewer on the Build page** (2026-11-06, SPEC.md
       126.3.2): the battle's K colours, black the base and the band's four
       marked "menu", beside the memory lines; a clip picked in the budget

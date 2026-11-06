@@ -561,6 +561,7 @@ class Battle:
         self.any_key = False    # any key leaves the title (header 348)
         self.vga = None         # vga4: (K, a clip's own colours) (126.3.2)
         self.dac_base = None    # ...the idle loop's own, as a palette load
+        self.vlayer = False     # ...its band pictures in VGA's colours too
         self.cover = None       # (a PIL image, its line): the window's
         self.name = None        # the battle's name (the window's title)
         self.rend = Rend("cga4", rows)  # the adapter it is for
@@ -701,7 +702,7 @@ def build(b):
             sum(len(sfx_bytes(b.sfx[nm])) for nm in set(  # the cap holds a
                 v for v in b.ui.values() if v is not None)),  # clip to that
             len(music_bytes(b.music)), len(bytes(b.images)),  # ring, less
-            b.band[1])                          # the lead's share. It was
+            b.band[1], b.vlayer)                # the lead's share. It was
         b.cap_ring = A_.ring_of(sum(x for _, x in parts),   # 56 KB for
                                 REND.recmax)    # every bundle (CAP_HOLD)
         b.cap = dict(b.cap, hold=A_.cap_hold(
@@ -924,6 +925,7 @@ def build(b):
         h[352:356] = bytes(REND.bmap)   # colours' values), and the sixteen
         h[464:512] = bytes(v for c in REND.pal for v in c)  # by value
         h[349:351] = bytes(b.vga or (len(REND.codes), 0))   # K, a clip's own
+        h[351] = 1 if b.vlayer else 0   # the band's pictures in its colours
     struct.pack_into("<II", h, 338, idl_at, len(idle))
     for i, (nm, o, ln) in enumerate(ui_tab):    # 96: the menu's effects
         struct.pack_into("<IH", h, 96 + 6 * i, o, ln)
@@ -1055,6 +1057,7 @@ class Bundle:
                     else (0, 1, 2, 3))
         self.rend = REND
         self.vga = (data[349], data[350]) if kind == "vga4" else None
+        self.vlayer = bool(data[351]) if kind == "vga4" else False
         self.idl_at, ilen2 = struct.unpack_from("<II", data, 338)
         nh = struct.unpack_from("<H", data, 398)[0]
         self.hold = [struct.unpack_from("<HH", data, 400 + 4 * i)
@@ -1461,19 +1464,26 @@ def battle_of(proj, progress=None, kind="cga4"):
     # battle with none gets START at 0 (build) - then the rest
     opened = b.openings or [dict(name="start")]
     idx = {c["name"]: i for i, c in enumerate(opened + b.clips)}
-    b.images, places = images_of(proj)
+    b.images, places = images_of(proj, (
+        list(A_.vga_plan(proj)["shared"]), codes[:len(codes) - slots])
+        if kind == "vga4" else None)
+    b.vlayer = any(p_[5] for p_ in places)     # (126.5: VGA's own pictures)
     b.rules = vbtrules.compile_rules(proj, idx, places)
     return b
 
 
-def images_of(proj):
+def images_of(proj, vga=None):
     """The project's band pictures (its "images": name, path, col, row,
     dither) in its palette: CGA4 bytes, two a cell, a row after a row, each
-    on a paragraph of the IMAGES region. Returns (the region, [(col, row,
-    cells, rows, paragraph)])"""
+    on a paragraph of the IMAGES region. VGA (vga4: the shared colours and
+    their pixel values): each picture AGAIN in those colours, after them all
+    - four planes, a cell's byte a row, plane after plane (126.5, 126.3.2:
+    a blue window is no dither of CGA's four). Returns (the region,
+    [(col, row, cells, rows, paragraph, its VGA version's paragraph or 0)])"""
     out, places = bytearray(), []
     pal = proj.d["target"]["palette"]
-    for im in proj.d.get("images", []):
+    ims = proj.d.get("images", [])
+    for im in ims:
         px = band_picture(proj.here(im["path"]), pal, im.get("dither", True),
                           im.get("cells"), im.get("rows"))
         rows, w = px.shape
@@ -1483,9 +1493,37 @@ def images_of(proj):
         while len(out) % 16:
             out.append(0)
         places.append((im.get("col", 0), im.get("row", 0), cells, rows,
-                       len(out) >> 4))
+                       len(out) >> 4, 0))
         out += packed.astype(np.uint8).tobytes()
+    if vga and ims:
+        cols, vals = vga
+        for k, im in enumerate(ims):
+            col, row, cells, rows, para, _ = places[k]
+            px = band_picture_vga(proj.here(im["path"]), cols, cells, rows,
+                                  im.get("dither", True))
+            v = np.array(vals, np.uint8)[px]
+            while len(out) % 16:
+                out.append(0)
+            places[k] = (col, row, cells, rows, para, len(out) >> 4)
+            for p in range(4):
+                out += np.packbits((v >> p) & 1, axis=1).tobytes()
     return bytes(out), places
+
+
+def band_picture_vga(path, cols, cells, rows, dither=True):
+    """A band picture as indexes of COLS (8-bit RGB), CELLS x 8 by ROWS:
+    Video Player's pattern dither (vbtana.quant_vga) when DITHER, else the
+    nearest"""
+    from PIL import Image
+    import vbtana as A
+    im = Image.open(path).convert("RGB").resize((cells * 8, rows),
+                                                Image.LANCZOS)
+    x = np.asarray(im, np.uint8)
+    if dither:
+        return A.quant_vga(x[None], cols)[0]
+    c = np.array(cols, np.float32)
+    return ((x[:, :, None, :].astype(np.float32) - c[None, None]) ** 2).sum(
+        -1).argmin(-1).astype(np.uint8)
 
 
 BAYER4 = np.array([[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9],

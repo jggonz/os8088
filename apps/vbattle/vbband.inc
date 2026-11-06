@@ -126,6 +126,22 @@ vb_band_frame:
     xor ax, ax                      ; quarter of the 16 KB once cleared)
     cld
     rep stosw
+    cmp byte [vb_vlay], 0           ; VGA'S PICTURE LAYER (126.5): the
+    je .nl                          ; ground's value on every plane, where
+    mov di, [vb_loff]               ; no picture is
+    mov bl, [vb_bmap]
+    mov dx, 4
+.lp:
+    xor al, al
+    shr bl, 1
+    jnc .l0
+    dec al
+.l0:
+    mov cx, [vb_lstr]
+    rep stosb
+    dec dx
+    jnz .lp
+.nl:
     mov al, [RL+RH_BANDIMG]
     cmp al, NONE
     je .plain
@@ -414,6 +430,11 @@ vb_blit_img:
     add ax, [RL+RH_OIMG]
     mov si, ax
     add si, RL
+    cmp byte [vb_vlay], 0           ; VGA's own version, into the layer
+    je .cga                         ; (126.5)
+    cmp word [si+6], 0
+    jne vb_vblit
+.cga:
     mov al, [si+1]                  ; its row, its column: the buffer's
     mov ah, 80                      ; offset
     mul ah
@@ -443,6 +464,52 @@ vb_blit_img:
     add di, 80
     dec bx
     jmp .row
+.o:
+    pop ds
+    ret
+
+; vb_vblit - band picture SI (its table row) in VGA's own colours into the
+; layer: four planes of its rows, a byte a cell, plane after plane (126.5).
+; vb_blit_img's tail
+vb_vblit:
+    push ds
+    xor bh, bh
+    mov bl, [si]                    ; its column...
+    mov al, [si+1]                  ; ...and row: the layer's offset
+    mov ah, 40
+    mul ah
+    add ax, bx
+    add ax, [vb_loff]
+    mov di, ax
+    mov cl, [si+2]                  ; cells
+    xor ch, ch
+    mov bl, [si+3]                  ; rows
+    mov ax, [si+6]                  ; its VGA version's paragraph
+    add ax, [vb_iseg]
+    mov dx, [vb_lstr]
+    mov es, [vb_bseg]
+    mov ds, ax
+    xor si, si
+    or bx, bx
+    jz .o
+    mov ah, 4
+.pl:
+    push di
+    push bx
+.r:
+    push cx
+    push di
+    rep movsb
+    pop di
+    pop cx
+    add di, 40
+    dec bx
+    jnz .r
+    pop bx
+    pop di
+    add di, dx
+    dec ah
+    jnz .pl
 .o:
     pop ds
     ret
@@ -1070,18 +1137,22 @@ vb_bpres:
     add si, ax
     cmp byte [vb_kind], VK_VGA4
     jne .herc
+    mov ax, si                      ; (the layer's: the buffer's offset over
+    shr ax, 1                       ; two, after its ground's rows)
+    add ax, [vb_loff]
+    mov [vb_lpos], ax
     mov ax, 40                      ; VGA4: row DX, 40 bytes
     mul dx
     add ax, [vb_bpc0]
     mov di, ax
     mov bp, 0x0102                  ; plane 0 (vb_vptab's low nibbles)
-    call .vpl
+    call .vplane
     mov bp, 0x0202                  ; plane 1 (the high)
-    call .vpl
+    call .vplane
     mov bp, 0x0402                  ; planes 2 and 3: vb_vptab2's (the
-    call .vpl                       ; band's map, 126.3.2)
+    call .vplane                    ; band's map, 126.3.2)
     mov bp, 0x0802
-    call .vpl
+    call .vplane
     jmp short .next
 .herc:
     mov ax, dx                      ; Hercules: rows 2(y - band) + the
@@ -1105,6 +1176,73 @@ vb_bpres:
     pop bp
     pop di
     pop si
+    ret
+.vplane:                            ; plane BP: mapped, or WITH THE LAYER
+    cmp byte [vb_vlay], 0           ; (126.5) - mapped into vb_prow, then
+    je .vpl                         ; merged with the layer onto the screen
+    push es
+    push di
+    push ds
+    pop es
+    mov di, vb_prow
+    call .vpl
+    pop di
+    pop es
+    pushf
+    cli
+    push si
+    push di
+    push bp
+    push ds
+    pop es                          ; (the layer's row to vb_lrow)
+    mov si, [vb_lpos]
+    mov ax, [vb_lstr]
+    add [vb_lpos], ax               ; (the next plane's, next)
+    mov di, vb_lrow
+    mov cx, [vb_bpcn]
+    push ds
+    mov ds, [vb_bseg]
+    rep movsb
+    pop ds
+    mov es, [vb_vseg]
+    pop bp
+    pop di
+    pop si
+    push si
+    push di
+    push bp
+    mov dx, 0x3C4
+    mov ax, bp
+    mov al, 2
+    out dx, ax
+    mov cx, [vb_bpcn]
+    xor bp, bp
+    push ds
+    mov ds, [vb_cseg]
+.mg:
+    lodsb                           ; the buffer's ground pixels: the layer's
+    xor bh, bh                      ; there, the map's elsewhere
+    mov bl, al
+    mov dl, [cs:bx+vb_hptab]
+    lodsb
+    mov bl, al
+    or dl, [cs:bx+vb_hptab+256]
+    mov al, [cs:bp+vb_prow]
+    mov ah, [cs:bp+vb_lrow]
+    xor ah, al
+    and ah, dl
+    xor al, ah
+    stosb
+    inc bp
+    loop .mg
+    pop ds
+    mov dx, 0x3C4
+    mov ax, 0x0F02
+    out dx, ax
+    pop bp
+    pop di
+    pop si
+    popf
     ret
 .hrow:                              ; Hercules row AX, table half BP
     push ax
@@ -1210,6 +1348,7 @@ vb_bptab:
     xor cx, cx                      ; CL: plane 0's bits, CH: plane 1's
     mov [vb_bp2], cl                ; (and 2's and 3's)
     mov [vb_bp3], cl
+    mov [vb_bz], cl                 ; (and its GROUND pixels, value 0)
     mov al, bl
     mov si, 4
 .p:
@@ -1217,6 +1356,11 @@ vb_bptab:
     rol ah, 1
     rol ah, 1
     and ah, 3                       ; this pixel's band colour, 0..3
+    shl byte [vb_bz], 1
+    or ah, ah
+    jnz .nz
+    or byte [vb_bz], 1
+.nz:
     shl al, 1
     shl al, 1
     push bx
@@ -1267,9 +1411,33 @@ vb_bptab:
     mov [vb_vptab2+bx], al
     mov [vb_hptab+bx], dl
     mov [vb_hptab+256+bx], dh
+    cmp byte [vb_kind], VK_VGA4     ; VGA4: Hercules' tables are the GROUND
+    jne .nb                         ; MASKS instead (126.5) - a byte's
+    mov al, [vb_bz]                 ; pixels of value 0 as a nibble, high
+    mov [vb_hptab+256+bx], al       ; (its left cell's) and low
+    mov cl, 4
+    shl al, cl
+    mov [vb_hptab+bx], al
+.nb:
     inc bx
     cmp bx, 256
     jb .b
+    mov byte [vb_vlay], 0           ; THE PICTURE LAYER (126.5): VGA's own
+    cmp byte [vb_kind], VK_VGA4     ; colours for the band's pictures, where
+    jne .x                          ; the band's buffer is its ground
+    cmp byte [vb_meta+VH_VLAY], 0
+    je .x
+    mov al, 200
+    sub al, [vb_meta+VH_BAND+1]
+    mov ah, 40
+    mul ah
+    mov [vb_lstr], ax               ; a plane: the band's rows x 40
+    shl ax, 1
+    add ax, 15
+    and al, 0xF0
+    mov [vb_loff], ax               ; after the ground's rows (vb_gpara)
+    mov byte [vb_vlay], 1
+.x:
     ret
 
 vb_hve:       db 0, 2, 2, 3         ; a pixel's two on an even row...

@@ -242534,7 +242534,8 @@ then sets the mode, the palette and the decode.
   on the glass changes colour. `os88vbt.verify` plays every path and
   REFUSES a bundle where a load would recolour a pixel on the screen. The
   header's sixteen at 464 are the shared and the idle loop's own (the
-  palette at the play's start); 349 is K and 350 SLOTS, and a clip's own
+  palette at the play's start); 349 is K, 350 SLOTS and 351 1 when the
+  band's pictures have VGA versions (126.5), and a clip's own
   are in its clip-table row at 34 (a count, then three bytes each) for a
   reader - the engine takes them from the records. Each clip is quantized
   on its own in its own colours (`vbtana.rend_screens`' STREAM).
@@ -243132,6 +243133,29 @@ CGA, and palette register 2 on an EGA or a VGA). A picture is quantised to
 those four by the builder (`os88vbt.band_picture`: the nearest, after a
 4x4 ordered dither), and `tools/vbtband.py` draws the band from the same
 bytes for the builder's preview.
+
+**On VGA a picture is in VGA's own colours** (format 10, header 351): the
+builder makes each picture a second time, dithered to the SHARED colours
+(126.3.2) as the video is (`os88vbt.band_picture_vga`), four planes of a
+byte a cell, after the CGA ones in the images region - the picture's table
+row names it at 6 (its paragraph; 0 none). The engine keeps a LAYER of the
+band's rows in those colours after the ground's rows in the ground's
+buffer (`vb_gpara`: the band's rows x 160 more): `vb_band_frame` fills it
+with the ground's value and `vb_blit_img` puts a picture's VGA version
+into it instead of its CGA bytes into the ground, so the buffer is ground
+(0) where the picture is. `vb_bpres` maps a plane's row as before into
+`vb_prow`, then merges: where the buffer's pixel is 0 the layer's, the
+map's elsewhere (`vb_hptab`, Hercules' tables, holds the ground masks on
+VGA). So text, the cursor and the party's lines stay the band's four and
+the window behind them is its own colours - the owner's blue menu window,
+which as CGA bytes was red and yellow, the band's four having no blue.
+Letters of an INVERSE cursor (value 0 on the cursor's colour) show the
+picture through them. The pictures' pixels count in the choice of the
+shared colours, as the band's stream (126.3.2). +415 bytes of code and 88
+of bss in the package; the merge is a second pass a plane row, estimated
+(not measured) at ~0.1 s more for a whole band put on an XT. `vbtadapters`
+holds the glass to the buffer over the layer, the layer to the host's
+dither, and the window blue.
 
 **The music is fed while the band is drawn.** A band rebuilt keeps the
 reader - the UI task's - away for its whole length: on Hercules' XT the

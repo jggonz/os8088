@@ -62,15 +62,27 @@ def host_vga(surf, rows):
     return [bytes(surf[p * V.PLANE:p * V.PLANE + rows * 40]) for p in range(4)]
 
 
-def band_vga(cbuf, by, rows, bmap=(0, 1, 2, 3)):
+def planes_px(planes, rows):
+    """Four planes of ROWS x 40 bytes as pixel values"""
+    pl = [np.unpackbits(np.frombuffer(bytes(q), np.uint8)[:rows * 40])
+          .reshape(rows, 320) for q in planes]
+    return pl[0] | (pl[1] << 1) | (pl[2] << 2) | (pl[3] << 3)
+
+
+def band_vga(cbuf, by, rows, bmap=(0, 1, 2, 3), layer=None):
     """The band's buffer (80 bytes a row, 2 bits a pixel) as mode 0Dh's
     planes over rows BY..199, each colour its pixel VALUE through the
-    bundle's band map (header 352, SPEC.md 126.3.2)"""
+    bundle's band map (header 352, SPEC.md 126.3.2) - and where the buffer
+    is its ground (0), LAYER's pixel: the band's pictures in VGA's own
+    colours (126.5)"""
     a = np.frombuffer(cbuf, np.uint8)[:80 * (200 - by)].reshape(200 - by, 80)
     px = np.zeros((200 - by, 320), np.uint8)
     for k in range(4):
         px[:, k::4] = (a >> (6 - 2 * k)) & 3
+    raw = px
     px = np.array(bmap, np.uint8)[px]
+    if layer is not None:
+        px = np.where(raw == 0, layer, px)
     out = []
     for p in range(4):
         out.append(np.packbits((px >> p) & 1, axis=1).tobytes())
@@ -99,10 +111,28 @@ def run(tmp, kind, machine, code, syms):
     p = P.Project.load(vbp)
     p.set(("enemy", "hp"), 1)
     p.set(("target", "renditions"), ["cga4", kind])
+    win = None
+    if kind == "vga4":              # A BAND PICTURE (126.5): a blue window,
+        from PIL import Image, ImageDraw    # the owner's kind - on VGA in
+        by0 = p.d["target"]["band"][1]      # its own colours, not CGA's four
+        nr = 200 - by0
+        g = np.zeros((nr, 320, 3), np.uint8)
+        g[..., 2] = np.linspace(200, 60, nr, dtype=np.uint8)[:, None]
+        g[..., 1] = np.linspace(40, 10, nr, dtype=np.uint8)[:, None]
+        im = Image.fromarray(g)
+        ImageDraw.Draw(im).rectangle([1, 1, 318, nr - 2], outline=(230, 230,
+                                                                   230))
+        win = os.path.join(tmp, "win.png")
+        im.save(win)
+        p.d["images"] = [dict(name="win", path=win, col=0, row=0)]
+        p.d["band_image"] = "win"
     p.save()
     files = []
+    data_v = None
     for k in ("cga4", kind):
         data = B.build_project(p, kind=k)
+        if k == "vga4":
+            data_v = data
         f = os.path.join(tmp, B.BUNDLE_NAMES[k])
         open(f, "wb").write(data)
         files.append((B.BUNDLE_NAMES[k], f))
@@ -213,8 +243,13 @@ def run(tmp, kind, machine, code, syms):
             cbuf = m.read(cseg, 80 * (200 - by))
             quiet = rb("vb_tcomp") == 0 and rb("vb_dirty") == 0
             if kind == "vga4":
-                okb = m.planes(offset=by * 40, length=(200 - by) * 40) == \
-                    band_vga(cbuf, by, 200 - by, R.bmap)
+                bseg = rw("vb_bseg") << 4       # THE LAYER (126.5): the
+                loff = rw("vb_loff")            # engine's own, in the
+                nr = 200 - by                   # ground's buffer
+                lay = planes_px([m.read(bseg + loff + q * nr * 40, nr * 40)
+                                 for q in range(4)], nr) if win else None
+                glass = m.planes(offset=by * 40, length=(200 - by) * 40)
+                okb = glass == band_vga(cbuf, by, 200 - by, R.bmap, lay)
             else:
                 mem = m.read(0xB0000, 32768)
                 okb = all(mem[o:o + 80] == r for o, r in
@@ -253,6 +288,21 @@ def run(tmp, kind, machine, code, syms):
         ok(okb and any(c for c in cbuf), "%s: the band on the glass is the "
            "engine's band buffer as the host converts it, exactly (%.1f guest "
            "s after the menu)" % (kind, tries))
+        if win and os.environ.get("VBT_SHOT"):  # (a picture of it, asked)
+            from PIL import Image
+            fw, fh, fb = m.fbuf()
+            Image.frombytes("RGB", (fw, fh), fb).save(os.environ["VBT_SHOT"])
+        if win:                         # ...its picture the host's, and BLUE
+            pal = [tuple(data_v[464 + 3 * i:467 + 3 * i]) for i in range(16)]
+            want = np.array(B.vga_codes(len(R.codes)), np.uint8)[
+                B.band_picture_vga(win, list(A.vga_plan(p)["shared"]), 40, nr)]
+            gp = planes_px(glass, nr)
+            rgb = np.array(pal, float)[gp[2:nr - 2, 2:318]].mean((0, 1))
+            ok(lay is not None and (lay == want).all() and rgb[2] > rgb[0] +
+               20 and rgb[2] > rgb[1] + 10,
+               "vga4: the band's picture is VGA's own (the layer the host's "
+               "dither, %d px), and the window on the glass is blue (mean "
+               "%s of its 6-bit DAC)" % (want.size, rgb.round(1).tolist()))
         ok(canvas_ok, "%s: the canvas is one of the idle loop's frames"
            % kind)
         key("return")                   # Attack, at the 1-HP enemy

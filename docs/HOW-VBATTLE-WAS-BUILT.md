@@ -933,6 +933,18 @@ video's colours were never the problem there. The band is still CGA's
 two bits a pixel on every adapter, so a band picture is dithered into
 the band's four CGA colours, and VGA only maps those four to its own.
 
+So band pictures got a VGA layer. The builder makes each picture twice,
+the CGA version as before and a VGA version dithered to the shared
+colours. On VGA the engine draws the VGA version into a layer behind the
+band, and the band's 2-bit buffer keeps only what is drawn on top of it:
+the text, the cursor, the party's numbers. Where the buffer holds its
+ground colour, the screen shows the layer. A test window, a blue
+gradient across the whole band, came out blue on MartyPC's VGA with the
+demo's menu over it. The letters of the highlighted item show the window
+through them, which looks better than it sounds. It costs 415 bytes of
+engine code, and the ground buffer grows by the band's rows times 160
+bytes, only for a VGA bundle that has pictures.
+
 ## Measured (MartyPC `os8088_5150_sb_gla`, 360 KB disk)
 
 | | |
