@@ -504,6 +504,26 @@ of the source are NOT copied into the store; they are read per page from
 `/Annots` and only enter the store when the user edits one (a copy-on-edit
 record that names the source object).
 
+### 13.1.1 The edit store's layout (DECISIONS D9)
+
+The segment passed as `edits_seg` holds `edits_count` `struct pd_edit`
+records at offset 0, then the text heap and the point heap. `text_off` and
+`pts_off` are byte offsets from `edits_seg:0`. `pts_n` counts POINTS, each an
+`(x, y)` pair of pt16 words in canonical page space (5.1):
+
+| kind | points | other fields |
+|---|---|---|
+| Highlight | 4 per quad, in the order UL, UR, LL, LR (PDF 1.7 QuadPoints) | `rect` = the union |
+| Ink, Sign | each stroke's points, strokes separated by a point whose x is `PD_PENUP` | `size` = stroke width x 2 (half points) |
+| Line | 2 (start, end) | `align` = line ends: bit 0 arrow at start, bit 1 arrow at end; `style` = width in points |
+| Rect, Ellipse, Area | 0 (`rect` is the frame) | `style` = border width in points |
+| Note | 0 (`rect` is the icon box) | `text_*` = /Contents |
+| Text | 0 (`rect` is the frame) | `style` = family<<4 \| bold \| italic<<1, `size` = points, `align` = /Q, `text_*` = /Contents |
+
+`irt` is the parent note's `id` when the parent is a PageDesk record, or the
+parent's SOURCE object number when `flags` has `PDEF_IRTSRC`. `colour` is a
+`PDC_*` palette index (pdabi.h), mapped to RGB by the EGA 4-level triple.
+
 ### 13.2 Identity
 
 Every PageDesk-created annotation has `/NM (PD-<8 hex>-<4 hex>)`: a document
@@ -676,7 +696,7 @@ that exceeds a row is a change to this table first.
 | edit store + undo | primary | 16 KiB | open |
 | text/search scratch | primary | 2 KiB | search |
 | `PDWRT` image + bss | parts, lazy | <= 40 KiB | save/extract/new, freed after |
-| writer buffers | PDWRT | 8 KiB | save, freed after |
+| writer buffers | PDWRT | 12 KiB (4 KiB output + 1,024-object offset table); 36 KiB for an extract of up to 4,096 objects | save/extract, freed after |
 | overlay | parts, lazy | <= 24 KiB | dialog, freed when idle |
 
 Failure of an optional claim (thumbnails, a larger cache) degrades quality;

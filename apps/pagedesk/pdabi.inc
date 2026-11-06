@@ -141,6 +141,22 @@ PDS_COMPLETED            equ 1
 PDSV_INCREMENTAL         equ 0
 PDSV_FRESH               equ 1
 PDSV_EXTRACT             equ 2
+PDC_BLACK                equ 0
+PDC_BLUE                 equ 1
+PDC_GREEN                equ 2
+PDC_CYAN                 equ 3
+PDC_RED                  equ 4
+PDC_MAGENTA              equ 5
+PDC_BROWN                equ 6
+PDC_LGRAY                equ 7
+PDC_DGRAY                equ 8
+PDC_LBLUE                equ 9
+PDC_LGREEN               equ 10
+PDC_LCYAN                equ 11
+PDC_LRED                 equ 12
+PDC_LMAGENTA             equ 13
+PDC_YELLOW               equ 14
+PDC_WHITE                equ 15
 PDA_NOTE                 equ 1
 PDA_HIGHLIGHT            equ 2
 PDA_AREA                 equ 3
@@ -154,6 +170,7 @@ PDA_PAGEOP               equ 16
 PDEF_DELETED             equ 0x01
 PDEF_MOVED               equ 0x02
 PDEF_DIRTY               equ 0x04
+PDEF_IRTSRC              equ 0x08
 
 ; ---- struct pd_u32 (4 bytes) ----------------------------------------------
 PDXB_U32_LO                    equ 0
@@ -437,7 +454,18 @@ PDXB_RSTATUS_OPS               equ 34
 PDXB_RSTATUS_PASSES            equ 36
 PDXB_RSTATUS_BYTES             equ 38
 
-; ---- struct pdxb_save (36 bytes) -------------------------------------------
+; ---- struct pdxb_fontbank (26 bytes) ---------------------------------------
+PDXB_FONTBANK_PKGNAME          equ 0
+PDXB_FONTBANK_PKGNAME_N        equ 14
+PDXB_FONTBANK_PKGNAME_ESZ      equ 1
+PDXB_FONTBANK_PLACE_CLUS       equ 14
+PDXB_FONTBANK_PLACE_VOL        equ 16
+PDXB_FONTBANK_PART_OFF         equ 18
+PDXB_FONTBANK_INDEX_SEG        equ 22
+PDXB_FONTBANK_INDEX_LEN        equ 24
+PDXB_FONTBANK_BYTES            equ 26
+
+; ---- struct pdxb_save (122 bytes) -------------------------------------------
 PDXB_SAVE_TARGET               equ 0
 PDXB_SAVE_TARGET_N             equ 14
 PDXB_SAVE_TARGET_ESZ           equ 1
@@ -450,7 +478,16 @@ PDXB_SAVE_PAGES_COUNT          equ 24
 PDXB_SAVE_WRITTEN              equ 26
 PDXB_SAVE_TOTAL                equ 30
 PDXB_SAVE_ERR_DETAIL           equ 34
-PDXB_SAVE_BYTES                equ 36
+PDXB_SAVE_SOURCE               equ 36
+PDXB_SAVE_SOURCE_N             equ 14
+PDXB_SAVE_SOURCE_ESZ           equ 1
+PDXB_SAVE_DATE                 equ 50
+PDXB_SAVE_DATE_N               equ 24
+PDXB_SAVE_DATE_ESZ             equ 1
+PDXB_SAVE_AUTHOR               equ 74
+PDXB_SAVE_AUTHOR_N             equ 48
+PDXB_SAVE_AUTHOR_ESZ           equ 1
+PDXB_SAVE_BYTES                equ 122
 
 ; ---- struct pd_edit (48 bytes) ---------------------------------------------
 PDXB_EDIT_KIND                 equ 0
