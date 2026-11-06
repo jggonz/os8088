@@ -20210,3 +20210,25 @@ wireballtest: wireballdisk $(IMG)
 # Native WireBall art is reproducible from the committed imagegen source.
 apps/wireball/art/wbfront.inc: apps/wireball/art/splash-source.png tools/wbfront.py
 	python3 tools/wbfront.py
+
+# ---- PageDesk: fonts ----
+# PDRES.BIN (docs/PAGEDESK-SPEC.md 20.4): the document font banks, the Core14 width
+# tables and the icon atlas, packed from the COMMITTED sources under
+# apps/pagedesk/fonts/ and apps/pagedesk/art/.  Pure Python, no network, no Pillow.
+# `python3 tools/os88pdfont.py fetch|draw` is the one-time regeneration of the font
+# sources from the pinned TTFs/AFMs (never run by make).
+PD_RES_BIN   := $(BUILD)/PDRES.BIN
+PD_RES_SRC   := $(wildcard apps/pagedesk/fonts/*.t88) apps/pagedesk/fonts/widths.txt \
+                $(wildcard apps/pagedesk/art/*.art) tools/os88pdfont.py tools/os88pdart.py
+
+$(PD_RES_BIN): $(PD_RES_SRC)
+	@mkdir -p $(BUILD)
+	python3 tools/os88pdfont.py build -o $@
+	python3 tools/os88pdfont.py check --res $@
+	python3 tools/os88pdart.py build --inc-dir $(BUILD)
+
+.PHONY: pdfonts
+all: $(PD_RES_BIN)
+pdfonts: $(PD_RES_BIN)
+	python3 tools/os88pdart.py check
+# ---- end PageDesk: fonts ----

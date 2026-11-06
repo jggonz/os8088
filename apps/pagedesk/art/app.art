@@ -1,0 +1,48 @@
+# PageDesk package icon (16x16) and the .PDF document glyph (8x8), hand drawn, no
+# generated artwork (docs/PAGEDESK-SPEC.md 11.6).  Grid legend as toolbar.art.
+# The glyph block is 8 rows of 8: '#' ink, '.' paper; os88pdart.py emits it as eight db bytes.
+
+icon appicon 16 16
+................
+..#########.....
+..#ooooooo##....
+..#ooooooo#o#...
+..#ooooooo####..
+..#oooooooooo#..
+..#o#####oooo#..
+..#oooooooooo#..
+..#o##.###ooo#..
+..#oooooooooo#..
+..#o#####oooo#..
+..#oooooooooo#..
+..#oooooooooo#..
+..############..
+................
+................
+vga
+................
+..FFFFFFFFF.....
+..F7777777FF....
+..F7777777F7F...
+..F7777777FFFF..
+..F7777777777F..
+..F7111111777F..
+..F7777777777F..
+..F7111111777F..
+..F7777777777F..
+..F7111111777F..
+..F7777777777F..
+..F7777777777F..
+..FFFFFFFFFFFF..
+................
+................
+
+glyph docglyph 8 8
+.#####..
+.#...##.
+.#...#.#
+.#...###
+.#.....#
+.#.###.#
+.#.....#
+.#######

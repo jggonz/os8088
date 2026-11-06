@@ -776,6 +776,102 @@ plan's agent table and nowhere else.
 
 ### 20.4 Fonts, widths and art (`fonts`)
 
+`PDRES.BIN` is the package's one resource file (11.2, 11.3, 11.6): `tools/os88pdfont.py
+build` packs the committed sources under `apps/pagedesk/fonts/` and
+`apps/pagedesk/art/` into `$(BUILD)/PDRES.BIN`. Pure Python, no network, no Pillow, run
+by `make` (`make pdfonts` also validates). Nothing is looked up at run time. Part
+offsets are 16-byte aligned. All little-endian.
+
+#### 20.4.1 The directory
+
+```
++0  'PDRS'  magic
++4  u16 version (1)
++6  u16 entry count n
++8  n x 12-byte entries: +0 u16 kind, +2 u16 flags (0), +4 u32 offset, +8 u32 length
+```
+
+| kind | part | contents |
+|---|---|---|
+| 1 | `FONT_CORE` | a `PDFB` bank (11.2): sizes 8, 10, 12, all 12 face styles |
+| 2 | `FONT_MORE` | a `PDFB` bank: sizes 6, 7, 9, 14, 16, 20, 24 |
+| 3 | `WIDTHS` | the `PDWD` table (20.4.3) |
+| 4 | `ICONS` | the `PDIC` atlas (20.4.4) |
+
+Each bank is self-contained (its own strike records, offsets from the bank start). A
+size's four styles are always in the same bank. The renderer asks the directory for
+kind 1 first and 2 only when the nearest-size-at-or-below choice needs a size that is
+not in 1 (or when 1 alone is all that is present: a missing kind 2 is not an error,
+the largest core size at or below is used). Sizes: the 360KB disk carries the core
+bank and the widths/icons (about 75 KB); the full file is about 387 KB.
+
+#### 20.4.2 Strikes
+
+`PDFB` exactly as 11.2. Family 0/1/2 = sans/serif/mono (Liberation Sans/Serif/Mono
+2.1.5, OFL), style byte bit 0 bold, bit 1 italic. Per family and size there are four
+records (regular, bold, italic, bold italic). TRUE italic strikes exist at 14 and 16
+px only; at every other size the italic records carry flag bit 0 (`synthesise`) and
+share the upright strike's data (same offset and length), so the renderer slants it.
+Each strike has ascent/descent rows measured from the actual ink (a strike's cell
+height is `ascent+descent`, per strike), codes 32..255 in Windows-1252 (11.4); codes
+127, 129, 141, 143, 144 and 157 draw a bullet, code 160 is blank, 173 a hyphen. A
+glyph's bitmap is ink-trimmed horizontally (`width` = ink width, `left bearing` the
+signed distance from the pen origin; width 0 = no ink, no rows) and has the full
+`ascent+descent` rows; its glyph-record offset is from the bitmap base
+(`4*(last-first+1)` bytes into the strike). PDF placement uses the 20.4.3 widths or the
+PDF's own, never the bitmap.
+
+Strike sources: `apps/pagedesk/fonts/<family>-<style>-<size>.t88`
+(`sans|serif|mono`, `r|b|i|bi`), one readable text file each: header lines
+(`family`, `style`, `size`, `ascent`, `descent`), then per code
+`glyph <code> w <width> lb <left bearing> top <rows above the baseline of the first
+ink row>` and the ink rows (`#` ink, `.` paper). Comment lines start with `# `.
+The files ARE the source: hand-fix a glyph and `build` packs it. Legibility: 8 px and
+up read well; 6 and 7 px are for dense captions only (a 6 px lower-case is
+recognisable but not comfortable) and the renderer should prefer 8 when it can.
+
+#### 20.4.3 Width tables
+
+`PDWD`: `'PDWD'`, u16 version (1), u16 face count (12), then 12 x 224 u16 advance
+widths in 1/1000 em, codes 32..255. Face index = `family*4 + style`, style 0
+regular, 1 bold, 2 italic/oblique, 3 bold italic - sans = Helvetica, serif =
+Times-Roman, mono = Courier. Source `apps/pagedesk/fonts/widths.txt`, extracted from the
+Adobe Core 14 AFMs (11.3) by name through the Windows-1252 glyph-name list in
+`os88pdfont.py`; every name must exist in every AFM or `draw` refuses. The notice
+`AFM-NOTICE.txt` travels with it.
+
+#### 20.4.4 The icon atlas
+
+`PDIC`: `'PDIC'`, u16 version (1), u16 count n, then n x 20-byte entries:
+`name[12]` NUL padded, `u8 w, u8 h, u8 hot x, u8 hot y, u16 mono offset, u16 vga offset`
+(0 = none; offsets from the atlas start). Mono data of a 16-wide asset is `h` mask
+words then `h` data words (the order `OS88_ICON16` uses: mask = white underlay,
+data = black, bit 15 leftmost), so a CGA/Hercules asset has exactly two pixel values.
+An 8-wide asset (the document glyph) is `h` bytes. Optional VGA data is `h` words
+of opacity mask then `h` rows of `w/2` bytes (4bpp, high nibble left, VGA palette
+0..15).
+
+Assets (29, 16x16 unless noted): `open save undo redo prev next zoomout zoomin find
+select highlight note text mark ink line rect ellipse sign more close collapse
+resolve pages` (toolbar; `highlight` has a VGA variant), `appicon` (with VGA
+variant), `docglyph` (8x8), cursors `hand` (hot 6,0) `cross` (hot 7,7) `ibeam`
+(hot 7,7). Sources: `apps/pagedesk/art/{toolbar,app,cursors}.art`, hand-drawn text
+grids (`#` black, `o` white, `.` transparent; `vga` block with hex digits);
+`tools/os88pdart.py build` also writes `$(BUILD)/pdart_appicon.inc` (32 `dw` rows,
+between `OS88_ICON16` and `OS88_ICON16_END`) and `$(BUILD)/pdart_docglyph.inc` (8 `db`
+rows, between `OS88_DOCGLYPH8` and `OS88_DOCGLYPH8_END`). No generated artwork was
+used.
+
+#### 20.4.5 Licences and regeneration
+
+`apps/pagedesk/fonts/LICENSES.txt` is the attribution file; `OFL-Liberation.txt`,
+`AUTHORS-Liberation.txt` and `AFM-NOTICE.txt` sit beside it. The strikes are
+Modified Versions under the OFL and avoid the Reserved Font Name (called PD Sans,
+PD Serif, PD Mono). `os88pdfont.py fetch` downloads the pinned Liberation 2.1.5
+archive and the twelve AFMs (Apache PDFBox commit a0e38de6 raw URLs) into
+`build/pdfetch/`, SHA-256 verified; `draw` re-rasterises (and OVERWRITES hand fixes);
+`proof` writes PNG proofs. Neither runs at make time.
+
 ### 20.5 The writer (`wrt`)
 
 ### 20.6 The package and its interface (`shell`)
