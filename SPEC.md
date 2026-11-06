@@ -7217,6 +7217,28 @@ mostly irreducible: the far-call cell is the package ABI (§20.1), the eight
 push/pops in `sw_rect` are `gfx_fill`'s "clobbers flags" contract, and
 `vga_rect_setup`'s clipping is the clipping.
 
+Kernel hot-paths pass 1 (docs/plans/khp1/gfxcall.md) took three more off the
+same floor, each measured by single-stepping a real call on MartyPC's 5150:
+
+8. **`gfx_rect_setup` reads the row table itself** rather than calling
+   `gfx_rowbase` (the call, the ret, its push/pop and a reload of y1 were
+   ~70 clocks), takes its empty test from the `sub` that makes the row count,
+   and holds both edge masks in DL/DH so a one-byte rect combines them in a
+   register: 751 -> 639 clocks a call. A row past the table still takes
+   `gfx_rowbase_calc`.
+9. **`gfx_frame` asks `GFXCLIP`'s questions once an outline**, not once a
+   strip: unclipped and on one display, its four strips go straight to
+   `gfx_fill_raw`. A region, the open dock's hole and a second display keep
+   the per-strip public entry.
+10. **`fpg_finish` answers the unarmed unlock before its frame**: with no
+    widget up, warming or parked, the five pushes and the exchange of a zero
+    word changed nothing but `[cur_barok]`. `gfx_unlock` runs it on every
+    drawing burst, 483 -> 176 clocks.
+
+gfxbench on CGA, base against the pass's tip: `GFX_PIXEL` 539 -> 509 us,
+`GFX_HLINE 8px` 540 -> 508, `GFX_FILL 8x8` 666 -> 636, `GFX_FRAME 64x64`
+6,142 -> 5,895, the `GFX_UNLOCK+LOCK` pair 473 -> 403.
+
 ### 5.7.1 A string op already advanced DI — do not pay to undo it
 
 **A rect's interior walk must not bank DI around its own `rep`.** §5.7's
@@ -81857,7 +81879,7 @@ including the ones with no VESA card at all.
 So the boundary is cut **once per primitive** instead of tested once per row.
 `vbe_cut_run` splits a rect that straddles a bank into one rect per bank and
 runs the body once per piece, each piece a whole rect in its own right:
-`gfx_rect_setup`'s existing `gfx_rowbase` call then selects that piece's bank,
+`gfx_rect_setup`'s existing row-base lookup then selects that piece's bank,
 which is also its *only* bank, so no walker can cross a window inside its own
 loop.
 
