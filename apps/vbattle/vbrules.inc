@@ -17,6 +17,7 @@ RH_NCH      equ 1
 RH_NACT     equ 2
 RH_NMENU    equ 3
 RH_NST      equ 4
+RH_NPOOL    equ 5
 RH_NITEM    equ 6
 RH_OCH      equ 8
 RH_OACT     equ 10
