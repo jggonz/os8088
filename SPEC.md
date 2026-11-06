@@ -42675,6 +42675,12 @@ moves an entry only past a strictly greater one, so equal keys keep their
 order. `kern_small` keeps the selection sort: at 32 entries it is 496
 compares, and the bytes are that kernel's to keep.
 
+**The compare folds case only where two bytes DIFFER**, and the exchange
+moves words. Equal bytes need no fold, and most of a compare is the shared
+prefix of two names, so the two `dsk_upper` calls a byte were most of its
+cost; measured on MartyPC's XT, a 1,000-entry folder in reverse order sorted
+in **4.26 s** that way and sorts in **2.74 s** now, for 6 bytes of `.cold`.
+
 ### 19.5 `..` is an entry in the listing, not a menu command
 
 In a subdirectory the listing **opens with a `..` row** — folder icon, no
