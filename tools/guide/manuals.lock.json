@@ -733,6 +733,14 @@
   "strings": null,
   "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
  },
+ "MOUSECHK_O88": {
+  "sources": [
+   "apps/mousechk"
+  ],
+  "stamped": "c73f350a4",
+  "strings": "136e93b41c8fae3e",
+  "why": "Read the page against apps/mousechk strings and SPEC 126.3/126.8/126.9: section names, keys, probe refusal reasons, report/save behaviour, Y-splitter and BIOS checklist rows; shots taken on MartyPC XT (serial mouse, Probe greyed)"
+ },
  "NET_DRV": {
   "sources": [
    "drivers/net"

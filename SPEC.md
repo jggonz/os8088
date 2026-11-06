@@ -109623,7 +109623,7 @@ now (§45.21.1), so the gate kept its subject class and changed its subject.
 ## 57. The debug registry — how a test package reads kernel state
 
 **`0060:000E` is a word naming a list of published blocks. Nothing shipped may
-read it.** This is the mechanism for a *test* package — `tests/sysbench` and
+read it - but for the one named exception in §57.3 rule 1.** This is the mechanism for a *test* package — `tests/sysbench` and
 its kind — to see kernel internals that are not, and should not become, API
 slots.
 
@@ -109690,10 +109690,20 @@ Everything past that first word belongs to the section owning the block
 
 ### 57.3 The rules
 
-1. **Shipped software may not read a block.** No `.o88` on either floppy does.
-   A block is internals with no compatibility promise; a package that depends
-   on one is a package that breaks when the kernel is tidied. The tags live in
-   `apps/os88api.inc` because a test package needs them, not as an invitation.
+1. **Shipped software may not read a block, with ONE NAMED EXCEPTION.** No
+   `.o88` on either floppy does but MOUSECHK (§126). A block is internals with
+   no compatibility promise; a package that depends on one is a package that
+   breaks when the kernel is tidied. The tags live in `apps/os88api.inc`
+   because a test package needs them, not as an invitation.
+   **The exception (owner decision O1, 2026-11-05): MOUSECHK alone may read
+   `'MO'`, `'ID'` and `'VD'`.** What it was given instead of an API slot is a
+   discipline: it checks the kernel against the build it was MADE with - the
+   `'ID'` words (§57.6) against three the build generates from the kernel's own
+   map - and on a mismatch shows raw hex and says it cannot decode it; and any
+   change to the `'MO'` block changes MOUSECHK in the same commit, which the
+   fast-tier row `mousechk` (`tests/unit/t_mousechk.py`) enforces. It costs the
+   kernel zero bytes. The exception is that package's, not a precedent: a
+   second shipped reader is an owner decision of its own (§126.4).
 2. **A reader that cannot find its block says so and continues.** Never
    assume, never fail the run. `sysbench` prints `This kernel carries no disk
    instrument - build DISKCNT=1.` and skips the block — which is what lets one
@@ -211778,7 +211788,7 @@ ones a read cannot be made without, each named where it is made:
 - **The IVT under kern_mega.** It is not the table the CPU uses there.
 - **Which COM port the mouse is on, the RTC rung, a sound card's port, IRQ
   and DMA.** No slot publishes them, and the debug registry is closed to
-  shipped packages (§57.3).
+  shipped packages (§57.3; MOUSECHK alone is excepted, §126.4).
 
 #### 103.7.2 The module: a part of REDLINE.O88
 
@@ -227665,7 +227675,8 @@ hibernation image of this build, a volume that is not a hard disk.
 #### 118.1.1 What "this release" means, and the one thing it cannot know
 
 **No slot reports the running kernel's build** (§57.3 forbids a shipped
-package the registry, and §57.6 is deliberately not a content hash). So
+package the registry - MOUSECHK alone is excepted, §126.4, and System Check
+does not use that - and §57.6 is deliberately not a content hash). So
 "this release" is the release System Check was **built with**: its manifest
 (§118.2) is that release's file list, and its build number is
 `buildnum.inc`'s (§14.2). On an installed machine those agree with the
@@ -241676,3 +241687,936 @@ pentium-pciether`) is the 86Box profile.
    when a package opens one (§72.13).
 4. Open: the QEMU `rtl8139` model's handling of the dword accesses and of
    TSD's TOK/OWN timing has not been run; the harness's row is the first.
+
+
+## 126. MOUSECHK — Mouse Check, a mouse-connection diagnostic (`apps/mousechk/`)
+
+*Design record and story list: docs/plans/MOUSECHK-PLAN.md. Diary:
+docs/HOW-MOUSECHK-WAS-BUILT.md. Status per story is in the plan; this section
+is the contract and says per item whether it is pinned or shipped.*
+
+`MOUSECHK.O88` opens one window, *Mouse Check*, that shows every auto-detected
+value for every pointing device this system supports - COM1 to COM4 serial
+mice, the PS/2 auxiliary port, the VMware absolute pointer, the USB mouse
+driver and the keyboard mouse - with a lamp per section and one plain verdict
+at the top, and on a button **runs the PS/2 handshake again by itself, with a
+trace**. It is §9.4.6's `MOUDIAG=1` as a shipped package: a knob kernel needs
+somebody to build it and send a disk, and the person with a mouse that is not
+found has the disk they have (docs/plans/MOUSECHK-PLAN.md, *Why a package and
+not `MOUDIAG=1`*). Label prefix `mc_` for the shell and `sum_`, `ser_`, `p2_`,
+`oth_` for the sections. It runs on kern_big, kern_emu and kern_mega, from the
+keyboard alone, and **it changes no kernel byte**; it DECODES only on the kernel
+it was built against (§126.4), which is kern_big and kern_mega - a copy carried
+to kern_emu runs and shows raw hex (§126.12).
+
+### 126.1 What it shows (the section list)
+
+One scrolling list, in this order, each section a heading with a lamp and then
+label/value rows:
+
+| section | contract | owner | what |
+|---|---|---|---|
+| Summary | §126.5 | other | which pointer the kernel is using, its live position and buttons, the kernel and CPU and adapter, and **one verdict line** |
+| Serial mice | §126.6 | serial | per COM port: the UART, the kernel's identify burst and contest, the hot-plug poller, live line status |
+| PS/2 | §126.7 | ps2 | the boot record: how far §9.9.1's handshake got, the device ID, the 8042 command byte as the BIOS left it, the BIOS's own opinion, §9.9.6's decision table |
+| PS/2 probe | §126.8 | ps2 | after *Probe PS/2*, the handshake's trace, step by step |
+| Other pointers | §126.9 | other | VMware absolute, USB, the keyboard mouse |
+
+A lamp is one of five (`LP_*`): **Info** (a blue arrow), **OK** (a green tick),
+**Warning** (brown checks), **Problem** (red, solid), **Not applicable** (grey,
+hollow) - COLOUR carries it on a 4bpp display and the SHAPE on a 1bpp one,
+SYSCHECK's convention (§118.5), so it reads on Hercules and CGA where grey
+rounds to black. A section's lamp is the worst its rows raise (`mc_lamp`).
+
+*Pinned and shipped (wave 1): the list, the lamps, the order and the stub
+sections. Each section's content is its own subsection's.*
+
+### 126.2 The window, the row model, drawing and refresh
+
+#### 126.2.1 The row API: the contract between the shell and a section
+
+A section is a pair of procs in its own `.inc` - `xx_init`, called once at
+open, and `xx_rows`, called on **every rebuild** (at open, about every half
+second, after a probe and on Refresh) in this order with **ES = KERNEL_SEG and
+DS = the package**:
+
+```
+sum_rows   apps/mousechk/summary.inc   the Summary, the top section
+ser_rows   apps/mousechk/serial.inc
+p2_rows    apps/mousechk/ps2.inc       the boot record and, after a probe, its trace
+oth_rows   apps/mousechk/other.inc
+```
+
+`ps2.inc` additionally has `p2_canprobe` (out CF = 0 may probe, CF = 1 refused
+with SI = a NUL reason in DS, for the greyed button's toast, §47) and
+`p2_probe` (runs the live probe, synchronously on the UI task, then returns;
+its trace appears through `p2_rows`). A section never sees a window, a pixel or
+a segment other than ES. **A section owes the shell nothing back**: the shell
+puts ES on KERNEL_SEG and clears DF before every section call (`mc_kes`, the
+`xx_init`s, the `xx_rows`, `p2_canprobe` and `p2_probe` alike) and keeps nothing
+of its own in a register across one, so a section that leaves ES on the BIOS
+data area or moves BX costs nothing. The row procs (`apps/mousechk/rows.inc`) each keep
+every register except their documented outputs:
+
+| proc | in | does |
+|---|---|---|
+| `mc_head` | SI = NUL heading, AL = lamp | starts a **section** and its heading row |
+| `mc_lamp` | AL = lamp | raises the current section's lamp to AL when AL is worse (BAD > WARN > OK > INFO > NA) |
+| `mc_row` | SI = NUL label | starts a row: the label at column 0 (cut at `MC_VCOL` - 1), the cursor at `MC_VCOL` = 22 |
+| `mc_line` | SI = NUL text | starts a row whose text begins at column 2: a verdict, a trace step, an explanation |
+| `mc_put` / `mc_putc` | SI = NUL text / AL | append at the cursor |
+| `mc_hex8` / `mc_hex16` | AL / AX | append 2 / 4 hex digits |
+| `mc_dec` | AX | appends unsigned decimal |
+| `mc_bits` | AL = a byte, SI = eight NUL-free characters, bit 7 first | appends the byte as the letter where the bit is set and `.` where it is clear |
+
+A row holds at most **`MC_RW` = 60** characters; every helper truncates
+silently there. The list holds **`MC_MAXR` = 128** rows in **5,120** bytes of
+records; a section that overflows loses its tail and the last row shown says
+`(list full - more rows not shown)`. Lamp numbers: `LP_INFO` 0, `LP_OK` 1,
+`LP_WARN` 2, `LP_BAD` 3, `LP_NA` 4.
+
+#### 126.2.2 The rows being built
+
+`mc_buf` is a packed run of records, `kind` (0 heading, 1 row, 2 line), `lamp`
+(a heading's), then the NUL-terminated text; `mc_roff[i]` is record *i*'s
+offset. A rebuild writes it from nothing, so a section is a pure function from
+the machine's state to rows with no screen state of its own. Nothing in
+`rows.inc` draws.
+
+#### 126.2.3 The rows shown, and what a refresh redraws
+
+The shell keeps **two frames**: the rows being built, and the rows shown. The
+shown frame is one 16-bit hash per screen line, `mc_shown[k]`, of the kind,
+lamp and text the line last drew. After a rebuild `mc_drawdiff` hashes each
+visible row and draws **only the lines whose hash moved** - so moving the mouse
+changes the position row and nothing else is drawn, and an idle window redraws
+nothing (PERFORMANCE.md Part 5's rule: nothing repaints more than it changed).
+A hash is never 0 (a line that must draw) and never 1 (the blank a line with
+no row hashes to). A scroll - and a rebuild whose shorter list pulls the view
+back up - zeroes the table, so every line draws once; a paint, onto content
+the window manager has just filled white, marks every line that has a row 0
+and every line past the end 1, so only the rows draw. A list that merely
+shortens needs nothing: the lines past its new end hash 1 and draw blank. A stale hash costs one wrong line until
+the next change; a collision is a 1 in 65,534 chance per change and the
+refresh is twice a second.
+
+Every line is **one opaque `OSAPI_FONT_RUN`** of a fixed number of cells (the
+text, padded with spaces: the padding is the erase, §6.1), at a text x that is
+a multiple of 8 from a snapped content origin (§11.94). A heading is its lamp
+(one opaque 8x8 `OSAPI_GFX_BLIT1`) in the cell before a white-on-black text bar that starts at column 2, where the labels do, so no
+pixel is written twice. The line pitch is 12 on the VGA's content height, 10 on
+Hercules', 9 on CGA's; the layout derives every rect from `OSAPI_WM_CONTENT` and
+`_GEOM` at each paint and again, `mc_regeo`, at the top of every handler,
+because a title-bar drag replays the window and never calls `W_PAINT`
+(§11.96.12.0). The window's preferred size is 626x436 on a VGA, 712x330 on a
+Hercules and 632x300 on a CGA. The scroll bar is the standard one (§13.10).
+
+#### 126.2.4 Refresh
+
+A one-shot window timer (§13.9, `OSAPI_WM_TIMER`, **9 ticks**, about 0.5 s) that
+`mc_tick` re-arms before it does anything else - never a spin, never a worker.
+The tick rebuilds, arms the clip (the timer dispatch does not), and draws the
+diff. With the About card up the list is rebuilt and not drawn: the card is
+opaque over it and its dismissal repaints. `kern_small` answers the timer slot
+CF = 1 and carries no body; **the package is not shipped there** (§126.12), and
+on a build that did have no timer the Refresh button is the only refresh.
+
+### 126.3 Controls, the keyboard, the report and Copy
+
+Five buttons, the standard control (§20.5.1.3), in one record:
+
+| button | key | does |
+|---|---|---|
+| Refresh | R | rebuilds now and draws what moved |
+| Probe PS/2 | P | `p2_probe`, then a rebuild. **Greyed** (§47) when `p2_canprobe` answers CF = 1, and a press or the key then toasts its reason |
+| Save Report | S | the standard **Save dialog** (§38) with `MOUSECHK.TXT` in the name box |
+| Copy | C | the same text on the clipboard (§55) |
+| Quit | Q or Esc | closes |
+
+**The keys are chosen for the machine this package is FOR**, the one whose
+mouse is not found, which is the machine where the keyboard mouse (§9.6) is on.
+There `kbm_key` takes, before any window sees them: **Space**, **keypad 5** (by
+its scan, whatever `AL`), and **every `AL` = 0 key of scan 47h-53h** - the
+arrows, Home, End, PgUp, PgDn, Ins and Del, on the keypad AND on the grey
+pad of an enhanced keyboard, because the shell polls `int 16h AH = 00h/01h`
+and the BIOS hands the E0-prefixed keys to that function as `AL` = 0 with the
+keypad's own scan. (With NumLock on the keypad sends digits, which pass; with
+ScrollLock on nothing is taken, §9.6.2.) Reproduced on the glass: with the
+keyboard mouse on, PgDn, keypad 3 and End moved the pointer and the list stayed
+where it was. So the list scrolls on keys that always arrive, and these are
+**primary**:
+
+| key | scrolls |
+|---|---|
+| `N` / `B` | a page on / back |
+| `T` / `E` | to the top / the end |
+| `+` or `=`, `-` (either row's) | a line down / up |
+| Ctrl+PgDn / Ctrl+PgUp / Ctrl+Home / Ctrl+End | a page on / back, the top / the end - scans 76h/84h/77h/75h, which `kbm_tab` does not hold |
+
+The cursor keys - Up/Down, PgUp/PgDn, Home/End - and Space (a page on) still
+scroll whenever they arrive: once a real pointer has spoken (§9.6.1.1) or with
+ScrollLock on. The scroll bar takes a keyboard-mouse click like any other. The
+window says so on its own glass: **`N/B page  T/E ends  +/-`** is drawn once a
+paint in the button row, past Quit, cut to the cells that fit (one opaque
+`OSAPI_FONT_RUN`). Every button's key is its caption's initial (R P S C Q), and
+none of them is a key §9.6 takes. About (§12.2, `OSAPI_ABOUT_SET`) is the
+standard card; any key takes it down.
+
+**The report** is the list as text: a head (`Mouse Check report, os8088
+package build N`, the date from the clock, and the kernel's `'ID'` words with
+whether they matched, §126.4), then for every section a blank line and
+`[INFO|OK|WARN|PROBLEM|N/A] Heading`, then its rows indented two spaces, each
+line ending CR LF. It is composed from a rebuild made at that moment, into a
+transient claim of `nrows * 70 + 512` bytes, rounded up to a KB.
+
+**Where Save Report writes (decided by the foundation).** SYSCHECK writes to the
+root of the volume it checks and asks nothing; here the question is real,
+because the machine that needs this report is one whose boot disk may be
+read-only and whose useful destination is a second floppy. So it uses the
+standard Save dialog (`OSAPI_FILE_DLG`, mode 1), with `MOUSECHK.TXT` already in
+the name box. It opens where §38.10 says every chooser does: `MEDIA` at the root
+of the drive the package was launched from (the system disks carry one), or that
+root - so Enter saves it in `A:\MEDIA` on a floppy boot, and the dialog's own
+navigation reaches `B:`. The completion proc copies the chosen name, composes the
+report, writes it with `OSAPI_FILE_WRITE` on the folder the dialog left the volume
+on, toasts `Saved <name>`, `Save failed` or `Out of memory`, and repaints. A refusal (a dialog
+already up) is silently nothing. *Copy* needs no destination.
+
+### 126.4 Reading the kernel: the §57.3 exception and the build check
+
+**MOUSECHK is the one shipped package that reads the debug registry** (owner
+decision O1, 2026-11-05; §57.3 rule 1 names it). It reads three tags: `'MO'`
+(§9.4.2-9.4.4: the mouse block), `'ID'` (§57.6: which kernel is this) and
+`'VD'` (§57.4: the display). Zero resident kernel bytes: it is a package
+reading a block the kernel already publishes.
+
+**It decodes only a kernel it was made with.** `apps/mousechk/kread.inc` holds
+`mc_dbgfind` (in AX = a `DBG_TAG_*`, ES = KERNEL_SEG; out CF = 1 absent, else
+BX = the block's offset; it checks the tag twice, §57.2) and `mc_kinit`, which
+at open compares the `'ID'` block's three words with the three the package was
+built with. **`[mc_kok]` = 1** when they all match, and then the offsets in
+`apps/mousechk/moblk.inc` (`MOB_*` the descriptor's words, `MOS_*` the
+34-byte span, `MOP_*` the PS/2 7-byte span, `MOC_*` the cursor) may be decoded.
+**`[mc_kok]` = 0** when they do not - another release's kernel, a knob build, a
+package carried between kernels - and every section shows **raw hex** and says
+it cannot decode it (owner decision O1: never guess). The three words read are
+kept in `[mc_kid]` and printed in the report whether or not they matched.
+
+**The fingerprint is generated, never typed.** `tools/os88mousekid.py` reads
+`kbld_text`'s file offset from the kernel's NASM map and the three words from
+`kernel-full.bin` and writes `$(BUILD)/mousechk_kid.inc` (`MC_KID_A`, `_B`,
+`_C`; no path or date, so a rebuild of the same kernel writes the same bytes).
+`mousechk.bin` depends on it, so the package and the kernel it ships beside
+cannot disagree.
+
+**kern_big and kern_mega are different kernels** with different section
+lengths, so different `'ID'` words, and MOUSECHK ships on both. The simplest
+correct answer is **two builds of one source**: `build/mousechk.o88` against
+kern_big's image (the shipped system disks and the live media) and
+`build/megak/apps/mousechk.o88` against kern_mega's (`mega.img`, `mega120.img`),
+made after the sub-make that cuts kern_mega's kernel, MEGAINST's shape. Nothing
+in it is `-DPKG_MEGA`: only the three words differ. Carried to the other kernel
+the package opens, finds `[mc_kok]` = 0 and says so.
+
+**Any change to the `'MO'` block changes MOUSECHK in the same commit**, and
+`tests/unit/t_mousechk.py` (a fast-tier row, `mousechk`) is what enforces it: it
+holds every constant in `moblk.inc` to the kernel's real label distances from
+`build/kernel.map` (and `build/megak/kernel.map` when `make mega` has built
+it), reads the descriptor's four words off the image, and checks the generated
+fingerprint against the lengths worked out from the map by hand.
+
+### 126.5 The Summary section and its verdict
+
+`apps/mousechk/summary.inc` (`sum_init`, `sum_rows`). The top section, lamp
+Info raised by its verdict. It names what is happening; the detail is the
+sections below it. `sum_snap` reads the kernel's `'MO'` block (§9.4.2-§9.4.4)
+once per rebuild into statics (`sum_ok`, `sum_seen`, `sum_port`, `sum_p2`,
+`sum_st`, `sum_x`, `sum_y`, `sum_btn`, `sum_cpu`) that §126.9's section reads
+too: `sum_rows` runs first, so the two cannot disagree.
+
+| row | value |
+|---|---|
+| Pointer in use | by `[mou_port]` when `[mou_seen]`: 0 `COM1 serial mouse`, 2 `COM2 serial mouse`, 4 `PS/2 mouse`, 6 `VMware absolute pointer`, 8 `USB mouse (USBMOUSE.DRV)` (§9.12: `MOU_FEEDROW`, the row a `DRVC_POINT` driver's `OSAPI_MOUSE_FEED` settles); any other row `unknown source (row not recognised)`; not seen, a live PS/2 mouse (`[mou_p2]` with `[mou_p2st]` = 9) `PS/2 mouse found; no movement seen yet`, else a serial port that answered `mouse_init`'s identify window like a mouse (`[mou_ident]`, per port, §9.4.1; COM1 named first) `COM1 mouse found; no movement seen yet` (or `COM2`), else `none yet - the keyboard mouse is on` |
+| Position | the cursor words (§9.4.3), `x N  y N  buttons LR` with `-` for a button up. **It is the live row**: moving the mouse changes this row and no other, which is how §126.2.3's diff redraw is seen working |
+| Kernel | `kern_mega` when `OSAPI_CPU_INFO` says `CPU_F_PM`; else `kern_big` when the `'ID'` words match ([mc_kok], §126.4), because the shipped recipe makes this package against kern_big's own map and kern_mega's copy against kern_mega's; else `another real-mode build (not decoded)`. **No slot and no registry block names the kernel**: the `'ID'` match is the only discriminator, so kern_emu, kern_small, a knob build and another release all read the same. The `CPU_F_PM` test is display only and is registered in `tests/megapkg.txt` |
+| Kernel id | the three `'ID'` words (§57.6) and `matches this package` or `differs: raw` ([mc_kok], §126.4) |
+| CPU | `8086/8088`, `80286` or `80386 or later` (`OSAPI_CPU_INFO`), `, protected mode` on `CPU_F_PM` |
+| Display | `OSAPI_VIDEO`: adapter name, width x height, bits a pixel |
+
+**[mc_kok] = 0 decodes nothing** (§126.4, owner decision O1). The pointer row
+becomes `raw: port 04 seen 01 p2 01 st 09` (the four bytes, hex), the position
+row says `unknown`, and the verdict says so. A kernel that publishes no `'MO'`
+block (`mc_dbgfind` fails) says `unknown (no mouse record)`.
+
+**The verdict** is the section's last line, one of these EXACT strings (the
+gate asserts on them), with the lamp it raises:
+
+| state | verdict | lamp |
+|---|---|---|
+| a pointer has spoken (`[mou_seen]`, which nothing clears: it has worked THIS SESSION, and a mouse unplugged since still reads so) | `Your mouse is working: ` + the pointer's name from the table above (e.g. `Your mouse is working: PS/2 mouse`) | OK |
+| PS/2 answered, no packet yet | `A PS/2 mouse answered. Move it to confirm.` then `The keyboard mouse is on: arrows move, keypad 5 clicks.` | Warning |
+| a serial port answered the identify (`[mou_ident]`), no packet yet, no live PS/2 mouse | `A serial mouse answered on COM1. Move it to confirm.` (or `COM2`) then `The keyboard mouse is on: arrows move, keypad 5 clicks.` | Warning |
+| nothing answered anywhere | `No mouse found. See the sections below for why.` then `The keyboard mouse is on: arrows move, keypad 5 clicks.`, and, when the PS/2 handshake got somewhere between steps 1 and 8, `The PS/2 handshake stopped at step N` (§9.4.4's number) | Problem |
+| [mc_kok] = 0 | `Cannot decode the mouse record: a different kernel build.` | Warning |
+| no `'MO'` block | `This kernel publishes no mouse record to read.` | Warning |
+
+*Shipped (wave 2): `summary.inc`, 1.5 KB of image, no bss (statics live in the
+image, which is writable). Seen: QEMU, kern_big, the default serial mouse and
+`MOUSEPORT=ps2`; not seen: the other verdicts and an 8088.*
+
+### 126.6 Serial mice
+
+`apps/mousechk/serial.inc` (`ser_init`, `ser_rows`). Everything here is read:
+the kernel's `'MO'` block (§9.4.2, offsets in `moblk.inc`, decoded only while
+`[mc_kok]`), the BIOS's COM table, and each probed UART's MCR, MSR and, where
+§126.6.1 allows it, IIR. It owns **no bss** (its state is statics in the
+image) and costs 2,557 bytes of image (§126.6.2).
+
+**Rows.** Four rows, `COM1` to `COM4 (BIOS)`, give the base the BIOS data area
+(0040:0000, reached through an `OSAPI_SEG` `SEG_WIN` window so it is also legal
+under kern_mega) lists, `none` for a zero, and for COM1/COM2 whether the
+kernel's probe found a UART. **The kernel probes only 3F8 (IRQ4) and 2F8
+(IRQ3), whatever the BIOS says** (§9.5), so COM3/COM4 say *not probed by the
+kernel* and a UART there is invisible to it. Then, per probed row, a heading
+line (`COM1 at 03F8, IRQ4`, or `... no UART answered`) and, when there is a
+UART:
+
+| row | source | meaning |
+|---|---|---|
+| Identify burst | `mou_idn`, `mou_idb0` | bytes seen in §9.4.1's window and the first one as hex and, if printable, a character (`4D 'M'`); `stream` beyond `MOU_IDMAX` (the count saturates at 255) |
+| Last byte at | `mou_idlast` | `[ticks]` of the last byte, `12 ticks (~0 s) after boot`. **Absolute, and it has to be**: the window's open tick is kept only by a MOUDIAG kernel (`mdg_open`, §9.4.6), so the shipped kernel cannot say how far into the window the byte came, and rule 4's "quiet at the close" is given by the verdict line instead |
+| Answered as a mouse | `mou_ident` | §9.4.1's rules 1-4 |
+| Clean packets | `mou_run`, `mou_need` | the contest's run against what a port must manage (§9.5) |
+| MSR, MCR | the UART | live, flags named: `DCD RI DSR CTS` (pins in), `AFE LOOP OUT2 OUT1 RTS DTR` (pins out) |
+| IIR | the UART | live: the pending cause, or *not read: a serial link is open* (§126.6.1) |
+
+Then plain-language verdict lines, §9.4.6's table turned into words: nothing
+answered the reset (no mouse, or it is unpowered: a serial mouse takes its
+power from DTR/RTS); a stream rather than a burst; answered but not `'M'`
+(the kernel accepts only `'M'`); `'M'` that never went quiet; answered like a
+mouse; **this port won** (`[mou_seen]` and `[mou_port]` agree); **cross-wired**
+(§9.5.2.1: the winning line `[mou_line]` is not the one the base's convention
+says: 0x10 for 3F8, 0x08 for 2F8); **a received byte sits unread** (IIR shows
+received data, or its FIFO timeout, on two refreshes running: the interrupt
+is not arriving, a bad IRQ jumper or a line not wired. One refresh is not
+enough: a moving mouse is caught between a byte and its ISR now and then);
+and **DTR/RTS not both high** (unless the poller is holding them low on
+purpose, and not on a port another pointer beat). A closing group is the
+contest as a whole: `Contest winner` (`[mou_port]`: 0/2 serial, 4 PS/2, 6
+VMware, 8 a pointing driver; *none yet* until `[mou_seen]`), `Winning serial
+line` (`IRQ4`, `IRQ3`, *not a serial line* for `MOU_P2LINE`), whether any port
+was mouse-shaped (`[mou_idany]`, shown as *set: a pointer settled* once
+`[mou_seen]` is 1, because `MOU_SETTLE_STORES` writes it on EVERY backend's
+settle and it then says nothing about a UART; seen on kern_mega with a PS/2
+mouse and no serial port at all), the hot-plug poller's state and the AGE of its last act
+(`[ticks]` now less `[mou_hpt]`, §9.4, §9.4.8) and the identify drain.
+
+**The lamp** starts NA (a machine with no UART answering shows grey), becomes
+INFO as soon as a UART is found, OK when a serial mouse won, WARN for a
+cross-wired card or an unpowered mouse, BAD for the unread byte. When another
+pointer won the section stays INFO: the ports are reported, not judged (a
+loser's IER is 0 after `mou_lockon`, so its IIR can show no unread byte).
+
+**`[mc_kok]` = 0** (§126.4): the layout cannot be decoded, so the section
+shows the BIOS table (no kernel column), says so, and dumps the 34 bytes the
+`MO` block's span pointer names as hex. It reads no UART and asks no lease.
+If the kernel publishes no `MO` block at all, it says that.
+
+#### 126.6.1 Which UART registers it reads, and why not LSR
+
+It **never reads RBR** (that takes a byte from the ISR) and **never writes**
+a UART register. Of the rest, each read was weighed against who else's
+evidence lives in that register:
+
+- **MCR** has no read side effect. Read always.
+- **MSR**'s read clears its four delta bits and, where IER enables it, the
+  modem-status interrupt. Nothing on this machine uses either: no kernel path
+  reads MSR, the kernel's mouse ports run IER = RX only, and `SERIAL.DRV`
+  runs RX and THRE (§115.2) and reads only MSR's LEVEL bits (§115.1.1
+  rule 4), which a read does not change. Read always.
+- **LSR is not read at all.** Its read clears OE/PE/FE/BI, and two consumers
+  are built from exactly those bits: the ISR's §9.5.6 test, which stamps
+  `[mou_errt]` and keeps a port out of an UNSETTLED contest for `MOU_ERRQ`,
+  and a lease's sticky error byte, which a link's framer uses to drop a
+  partial message (§115.1, §115.2). The ISR consumes a port's flags at the
+  next interrupt on ANY hooked line (every line services every live port,
+  §9.5.2.1), so the bits are there to steal precisely when a port's own line
+  is dead or cross-wired, and the contest is unsettled precisely when a user
+  opens this window because the mouse does not work. A stolen FE lets a
+  wrong-rate peer's bytes count toward that port's run, which can change who
+  wins. What LSR would have shown is either already consumed (so the window
+  would almost never see an error) or stolen; and `[mou_errt]` itself is not
+  in the `'MO'` block. Its one other signal, DR, is IIR's received-data cause
+  below, which takes nobody's evidence.
+- **IIR**'s read retires a pending THRE cause. The kernel's mouse ports never
+  enable THRE (IER = 01h), so there it has no effect. A port leased to
+  `SERIAL.DRV` does enable THRE while it transmits, and a retired cause can
+  turn an IRQ already on its way into a spurious one, leaving the byte to the
+  link's next Read. So IIR is read only where no lease can be: the section
+  asks first with `OSAPI_SERIAL` AL = 1 (Close), which answers busy (CF = 1)
+  exactly when another instance holds a lease and is two compares and no disk
+  when none is held (§115.1: Close by anyone but the holder is refused and
+  changes nothing; MOUSECHK never opens one). With a lease, IIR is read on the
+  settled winner alone, which can never be leased (§115.1), and every other
+  port says *not read: a serial link is open*.
+
+#### 126.6.2 Cost
+
+2,557 bytes of image (1,186 code, 1,371 strings and statics), 0 bss, against
+the 2 KB section budget: 509 over. The verifier took it from 2,717 by removing
+the LSR read and its row, verdict, flags and per-port sticky state, folding
+the two-line `[mc_kok]` = 0 notice into one, and dropping the IRQ rows' "(the
+3F8 convention)" (the port heading already says it), less the lease query and
+its line. The rest is the verdict text, which is what the section is for; 2 KB
+would cost diagnostics rather than repetition, so it stands over budget.
+
+### 126.7 PS/2: the boot record
+
+*Shipped in wave 2 (`apps/mousechk/ps2.inc`, owner `ps2`). Seen on QEMU's
+i8042 with the kernel's PS/2 mouse live (`make test MOUSEPORT=ps2`).*
+
+The section *PS/2 mouse* shows what the kernel's own probe (§9.9.1) left in the
+`'MO'` block's PS/2 span (§9.4.4), what the BIOS thinks, and what the machine
+looks like now, and ends with one line from §9.9.6's decision table. **Nothing
+in it writes a port**: the three ports it reads (64h status, the master and the
+slave 8259's mask registers) are reads with no side effect, and **none of them
+is read on `CPU_8086`** (`OSAPI_CPU_INFO`), where there is no 8042 and 64h is
+not decoded (§9.9.2). There the section is one row, *Controller: none on an
+8088*, with the Not-applicable lamp.
+
+#### 126.7.1 The rows
+
+| row | from | what it says |
+|---|---|---|
+| Kernel probe | `[mou_p2st]` | `step N/9` and the step in words: `not run`, `no command byte`, `no aux port`, `command write failed`, `reset not ACKed`, `no self-test AA`, `no device ID`, `enable failed`, `armed` (§9.9.1's numbering, `mou_p2_init`'s stores) |
+| Device ID | `[mou_p2id]` | from step 7 on: the byte and `plain` (00), `wheel` (03) or `5-button` (04) |
+| Last byte 0 | `[mou_p2b0]` | at step 9: the last packet's byte 0. Its bit 3 is always set in a synced stream (§9.9.3), so `00` is *no packet has ever arrived* |
+| Command byte | `[mou_p2cmdr]` | from step 2 on: the byte **as the kernel read it** (bit 4, its own `0xAD`, cleared), in hex, then a line `IRQ1 on/off, IRQ12 on/off, xlate on/off, bit 5 on/off` and, when bit 5 is set, `(bit 5: aux off, or PC mode on an AT)`, §9.9.7's finding |
+| int 11h bit 2 | the BDA's equipment word | `1: a mouse at POST` or `0: none at POST` - the BIOS's own verdict, read from 0040:0010 rather than by calling `int 11h` |
+| EBDA, 26h 27h 22h | the EBDA, at 0040:000E's segment | the segment, the two pointing-device flag bytes at 26h and 27h and the far pointer at 22h, **raw**: that is IBM's PS/2 layout (27h bit 7 is "a handler is installed", the pointer is `int 15h C207`'s), and other BIOSes may keep it differently. Shown only when the segment lies in 4000h-9FFFh and only off `CPU_8086`, where 40:0E is LPT4's port |
+| int 74h | the IVT | IRQ12's vector and whose it is: `the kernel` (segment 0060h), `BIOS ROM` (F000h up), `option ROM` (C000h up), `RAM` |
+| IRQ 1, 2, 12 | ports 21h, A1h | `open` or `shut` for IRQ1, the cascade and IRQ12, read now |
+| Port 64h | port 64h | the status byte now and `IBF`, `OBF`, `aux` (OBF from the aux side), `idle`, or `no 8042` when it reads FFh |
+
+The IVT cell and the BDA are read through **one `OSAPI_SEG SEG_WIN` window**
+(paragraph 1Dh, 330h bytes: 01D0h-04FFh) and the EBDA through a second, both
+asked for once at open. A real-mode kernel answers the paragraph itself; on
+kern_mega the window is a data selector (§50.6.11), so the same code reads the
+same bytes there. Paragraph 0 is deliberately not asked for, being the null
+selector under protected mode.
+
+#### 126.7.2 `[mou_p2cmdr]`, and decoding only a known kernel
+
+The span §9.4.4 publishes ends with `[mou_p2cmd0]`, and that byte is the
+**doctored** one: bit 4 cleared and **bit 5 forced set** for `mou_p2_off`'s
+sake (§9.9.7). Its bit 5 says nothing about the machine. The raw byte is
+`[mou_p2cmdr]`, declared one byte past the span, outside the part §9.4.4 pins.
+MOUSECHK reads it at span + 7 **only when `[mc_kok]` = 1** (§126.4): the
+fingerprint says this is the exact kernel the package was made with, and in
+that kernel `mou_p2cmdr` follows `mou_p2cmd0` (kernel/mouse.inc declares it
+unconditionally on every build). On any other kernel the section is one row,
+*Boot record (raw)*, the seven span bytes in hex, and a Warning lamp: O1's rule.
+When the `'MO'` block is not found at all the row is *Boot record: not
+published*.
+
+Below step 2 the command byte was never read and the row is not shown; below
+step 7 the ID was never banked and its row is not shown either. A row that
+shows a zero the kernel never wrote would be the one thing a diagnostic may not
+do.
+
+#### 126.7.3 The verdict
+
+One line, and the section's lamp, from `[mou_p2st]` and `[mou_p2]`:
+
+| record | lamp | line |
+|---|---|---|
+| step 0 | Warning | `Probe not in this kernel, or 0xAD refused.` - kern_small and `NOPS2=1` never carry the probe (§9.9.2), and a controller that never took `0xAD` leaves the same 0. The shipped kernel cannot tell the two apart; *Probe PS/2* can |
+| 1 | Problem | `No command byte from the 8042.` |
+| 2 | Warning | `No aux port, or it is off in BIOS Setup.` |
+| 3 | Problem | `The 8042 refused a command write.` |
+| 4 | Warning | `No reply to the reset: is a mouse in?` - or §9.9.1's bit 4 rule broken on this controller and int 09h eating the replies (§9.9.6); the probe's leg 3 separates those |
+| 5, 6 | Problem | `Reset ACKed; its self-test failed.` / `Self-test passed; no ID came.` |
+| 7, 8 | Problem | `Reset OK; the IRQ12/0xF4 enable failed.` (7 is never left behind: nothing between it and 8 can fail) |
+| 9, live, byte 0 synced | OK | `The PS/2 mouse is the pointer.` |
+| 9, live, no packet | Warning | `Armed; no packet yet: move it.` - and none at all is §9.9.6's *the line never fires* |
+| 9, not live | Info | `It answered; a serial mouse won.` (§9.9.4) |
+
+**Then the cross-check that matters most for a field report**: when the record
+is below step 9 and the equipment word's bit 2 is set, a second line, `Yet the
+BIOS saw one at POST: report it.`, and the Problem lamp. The BIOS found a
+pointing device and the kernel did not, which is a kernel defect on that
+machine and exactly what the reporter's Advantech SBC looks like from here.
+
+### 126.8 PS/2: the live probe
+
+*Shipped in wave 2 (`apps/mousechk/probe.inc`, owner `ps2`; owner decision O2).
+Seen on QEMU's i8042 on a private `NOPS2=1` tree.*
+
+*Probe PS/2* (P) runs §9.9.1's handshake again, step by step, and then the
+roads §9.9.1 did not take, and records a **trace**: per step, the command, the
+8042's status at 64h before and after it, and each reply byte or the ticks it
+waited for one that never came. The trace appears under the boot record in the
+same section and is in the report and on the clipboard with everything else.
+
+#### 126.8.1 What it refuses, and why
+
+`p2_canprobe` answers CF = 1 with a reason (toasted on a press, and the button
+greyed, §47):
+
+| reason | when | why |
+|---|---|---|
+| `No 8042 on an 8088 PC` | `CPU_8086` | no 8042, and 64h is not decoded (§9.9.2) |
+| `No 8042: 64h reads FF` | port 64h reads FFh | no controller answers there: every bit set, IBF and the error bits included, is never an 8042's status, and nothing is written where nothing is listening |
+| `No kernel mouse record` | no `'MO'` block | the kernel's claim on the port cannot be known |
+| `Kernel's PS/2 mouse live` | `[mou_p2]` set | the device is the kernel's pointer: a probe would reset it under the ISR decoding its packets |
+| `Kernel already found it` | `[mou_p2st]` = 9 | the handshake completed. A serial mouse may have won since and `mou_p2_off` retired it, but the device is the kernel's, int 74h is the kernel's, and the boot record already says everything a probe could |
+| `Kernel's IRQ12 is armed` | int 74h's segment is 0060h **and** IRQ12 is open at the slave | read live, whatever the record says: the belt to the record's braces, and the only gate on a kernel whose record cannot be decoded |
+
+**Step 8 is allowed, and that is the exact rule.** `mouse_unhook` treats
+`[mou_p2st]` >= 8 as "int 74h is ours", because step 8 is the store that
+follows the vector's installation. But a step-8 record is a probe that
+installed the vector and then failed to arm or enable the device, and its
+`.fail` left IRQ12 **masked** (§9.9.1). The probe keeps IRQ12 masked for its
+whole length, never writes the vector and never sends `0xF4`, so the kernel's
+ISR cannot be entered - and a step-8 failure is exactly what a trace exists to
+explain. The live check above is what would refuse it if IRQ12 were open.
+
+**kern_mega is allowed.** kern_mega runs every package at ring 0 (docs/plans/KERN-MEGA-PLAN.md 2.5: "it also fixes the ring at 0", and 22 packages already program video ports inside fsx brackets), so a package's `in`/`out`
+is the port itself, untrapped. Its tick watchdog `mega_kwd` (§9.9.9)
+re-delivers a byte only on a line that is **unmasked**, and the probe masks
+both. A reflected BIOS call made by another task while the probe runs banks
+the masks it finds (the probe's) and puts those back, and a 286's reflection
+leaves protected mode by a triple fault rather than through the 8042, so it
+writes nothing to 64h; on a BIOS that re-initialises the 8259 on that path,
+`mega_kdrain` may take a reply out from under one step, which shows on the
+trace as `none` and changes nothing the restore depends on. What kern_mega
+does not get is the BIOS leg (§126.8.4).
+
+#### 126.8.2 The legs, in order, and why that order
+
+The discipline is the kernel's, step for step:
+
+- **IRQ1 masked at the master and IRQ12 at the slave for the whole probe**,
+  under `pushf`/`cli`, each banked and put back **bit by bit** (no other bit
+  of either byte is the probe's to restore). A BIOS `int 09h` or a BIOS IRQ12
+  handler reading 60h is what took the kernel's replies on real hardware for
+  six rounds (§9.9.1).
+- **`0xAD` first**, and every command byte written inside the window keeps
+  **bit 4 SET**, so the keyboard interface is never handed back mid-probe.
+- The command byte is banked as read with bit 4 cleared - **the raw byte**,
+  never one with bit 5 forced (§9.9.7: on an AT 8042 bit 5 is PC mode).
+- **Waits are ticks**, read through `OSAPI_GET_TICKS`: 2 ticks a step
+  (`MOU_P2TMO`), the reset's self-test the same short wait retried 5 times
+  (`MOU_P2BAT`). IRQ0 is never masked, so `[ticks]` advances while the UI task
+  sits in the callback, and no wait can hang.
+- **The keyboard stays live for 5 ticks first** (`P2X_KEYW`, about 275 ms).
+  The key that pressed *Probe* (P) is still down, and its release is a byte
+  the 8042 delivers a moment later. From the mask on, that byte would land in
+  `0xAD`'s flush instead of int 09h: a lost break code and a key the system
+  believes is held. It was seen on QEMU as `99` (P's set-1 release) on the
+  `AD` line before the pause went in, and not since. A key held longer
+  releases into the keyboard's own buffer behind `0xAD` and arrives at an
+  `0xAE` - leg 3 drains it, on its `AE` or `drain` line. **Keys typed
+  during a probe (about 1.5 s) are taken the same way**: the keyboard queues
+  them while it is held off, and leg 3's `AE` and drain read them onto the
+  trace, so they never reach the desktop - and a lost break is a key the BIOS
+  believes is still held until it is pressed again. Do not type during one.
+- Flushes after `0xAD` and after `0xA8` (§9.9.6: a mouse's queued power-on
+  BAT lands the instant the port is enabled), and **before** `0xAE` so a
+  keystroke arriving as the keyboard comes back is not drained away.
+- **`0xF4` is never sent and IRQ12 never armed** (command byte bit 1 is
+  cleared in every byte written inside the window): the device is not the
+  package's, and every reset leaves it with reporting off.
+- **A write the 8042 never takes** (IBF still set after 2 ticks) marks the
+  controller wedged: every later leg is skipped (`the 8042 stalled`) and only
+  the restore is attempted.
+
+The legs:
+
+| leg | what | why |
+|---|---|---|
+| 1, *kernel* | §9.9.1 exactly: `AD`, flush, `20` and the bank, the bit 1 / bit 5 evidence test and, with no evidence, `A8` + flush + `20` and bit 5; then `A8` + flush, `60` with the bank's bits 1 and 5 cleared and bit 4 set, `D4 FF` and its `FA`, the `AA` (5 short waits) and the ID. It stops where the kernel would commit (the wheel knock, the vector, `0xF4`); a reset that worked is followed by `D4 F2`, which is not the kernel's step | so the trace shows exactly where the kernel's road stops **on this machine**, in the kernel's terms |
+| 2, *reset, kbd off* | `60` (aux clock on, bit 4 set), `A8`, `D4 FF`, `D4 F2` - whatever the command byte said. **Skipped when leg 1 reached its own reset** (step 4 or later): it would be leg 1's reset again | does a mouse answer if asked anyway? When it does, the kernel's evidence test is what is wrong here |
+| 3, *reset, kbd on* | the same with the keyboard interface **on** (`AE` after the `60`), the keyboard's queued bytes drained first (the Probe key's release), then `AD` again | the one thing different from the kernel is step 1's bracket: does this 8042 pass `D4` only with the keyboard enabled? |
+| 4, *A8, reread* | `A8`, `20`, did bit 5 clear? **Skipped when the bank's bit 5 is already clear**: seeing `A8` work needs the bit set first, and setting it ourselves is PC mode on an AT 8042 (§9.9.7) | §9.9.1's fallback road on its own, and whether `A8` leaves the controller deaf (the Phoenix case) |
+| 5, *A9 test* | `A9` and its answer (`00` the lines test good, `01`-`04` a stuck clock or data line), then `20`: does it still answer? | **last**, because §9.9.1 records `A9` leaving a controller deaf, and a deaf one costs every leg after it |
+
+Every leg ends with **`A7`, the bank with bit 4 set, a flush** (the kernel's
+`.fail`, with the raw byte). The probe ends with one more `20` (the byte as
+it now stands), that same restore once more, a flush, **`0xAE` on every
+path**, and the two mask bits. **The bank goes back with bit 4 still set and
+`0xAE` alone clears it**, so the 8042 is left with the bank exactly and no
+flush ever runs with the keyboard interface on: writing the bank with bit 4
+clear and then flushing (the first build) would drain the keystrokes the
+keyboard queued during the probe the moment its clock came back. `0xAE`
+clearing bit 4 is what every AT BIOS's int 09h relies on for every keystroke,
+and what the kernel's own success path relies on (§9.9.1). A device that answered leg 1's `0xAA` in
+three-byte mode may have been a wheel mouse: no leg knocks, so it is left
+reset, three-byte and silent, and the kernel does not own it.
+
+Inside a leg a reply that came **without 64h's aux bit** (bit 5, which a PS/2
+8042 sets for the aux side's byte) is from the keyboard side. On a `D4 FF` or a
+`D4 F2` that is marked `k`, and it means §9.9.1 step 3's warning came true: the
+controller ignored `0xD4` and the keyboard answered `FA AA` as if it were a
+mouse. **Every other byte is marked `a` when it came WITH the aux bit**: a
+mouse byte read as a `20`'s or an `A9`'s answer, or a mouse's queued power-on
+`AA 00` drained by the flush after `A8` (§9.9.6). On an AT 8042, which has no
+aux side, status bit 5 is the transmit time-out instead, and an `a` there is
+that flag. QEMU's controller marks nothing on its own replies, so its trace
+carries no `a`.
+
+#### 126.8.3 What the trace looks like, and how to read a field report
+
+QEMU's i8042 on a private `NOPS2=1` tree, so the kernel never touched the
+controller, after a probe and then the BIOS leg, as the report writes the
+section (2026-11-05):
+
+```
+[PROBLEM] PS/2 mouse
+  Kernel probe          step 0/9 not run
+    Probe not in this kernel, or 0xAD refused.
+    Yet the BIOS saw one at POST: report it.
+  int 11h bit 2         1: a mouse at POST
+  EBDA, 26h 27h 22h     9FC0 00 03 0000:0000
+  int 74h               F000:D433 BIOS ROM
+  IRQ 1, 2, 12          open open open
+  Port 64h              1C idle
+    Trace: step, 64h before>after, replies, ticks
+    1 kernel: a device, ID 00
+    AD kbd off   1C>1C
+    20 read      1C>1C 71
+    A8 aux on    1C>1C
+    20 read      1C>1C 51
+    A8 aux on    1C>1C
+    60 cmd 51    1C>1C
+    D4 FF reset  1C>1C FA AA 00
+    D4 F2 ID     1C>1C FA 00
+    restore 71   1C>1C
+    2 reset, kbd off: skipped
+    3 reset, kbd on: a device, ID 00
+    60 cmd 51    1C>1C
+    AE kbd on    1C>1C
+    A8 aux on    1C>1C
+    drain        1C>1C 2t
+    D4 FF reset  1C>1C FA AA 00
+    D4 F2 ID     1C>1C FA 00
+    AD kbd off   1C>1C
+    restore 71   1C>1C
+    4 A8, reread: bit 5 cleared: a port
+    A8 aux on    1C>1C
+    20 read      1C>1C 51
+    restore 71   1C>1C
+    5 A9 test: 00, lines good
+    A9 test      1C>1C 00
+    20 read      1C>1C 71
+    restore 71   1C>1C
+    20 read      1C>1C 71
+    restore 71   1C>1C
+    AE kbd on    1C>1C
+    6 int 15h, AH BH BL: done
+    int15 C205   1C>1C 00 00 AA
+    int15 C201   1C>1C 00 00 AA
+    int15 C204   1C>1C 00 00 00
+    int15 C200   1C>1C 00 00 00
+    AD kbd off   1C>1C
+    20 read      1C>1C 71
+    restore 71   1C>1C
+    AE kbd on    1C>1C
+    Command byte 71>71: restored
+    Verdict: kernel's road works now, ID 00
+    So only the boot failed: report it.
+```
+
+SeaBIOS left the command byte at `61`: IRQ1 on, translate on, bit 5 set and
+bit 1 clear. That is §9.9.1's *no evidence* case, so leg 1 took the fallback
+road - `A8`, read again, `51`, bit 5 cleared - and the reset found a plain
+mouse. Leg 2 is skipped because leg 1 reached its own reset. On this machine
+the kernel's road works, so the verdict says the boot was the problem - true
+here, the boot having been `NOPS2=1`'s. The `03` in the EBDA's 27h is the BIOS
+leg's own doing (`C205`'s three-byte packet size, read back on the next
+rebuild): the BIOS's state, which the probe does not write.
+
+Each step line is `name[arg]  64h-before>64h-after  replies  ticks`: `none`
+means a reply was waited for and never came, `STALL` that the 8042 never took
+a write, `+` that more bytes came than three, `k` a device reply from the
+keyboard side, `a` any other byte from the aux side, and the ticks are how long the step waited in all (a reset's
+`AA` may take several of its 2-tick waits). Each leg's heading carries its
+result. Under them:
+
+- **`Command byte 55>55: restored`** is the proof the controller came back:
+  the byte read straight after `0xAD` against the byte read at the very end,
+  before the bank is written back. Both have bit 4 set (it is `0xAD`'s), so
+  they are equal exactly when every leg's restore took. `NOT RESTORED`, and
+  `never read` on a controller that stopped taking writes, add `The keyboard
+  may be off: restart now.` with the Problem lamp: the final `0xAE` may not
+  have landed, and nothing in a package can prove the keyboard came back.
+- **`Verdict:`** names the kernel's step where leg 1 stopped, in the boot
+  record's words, and then the first road that worked: leg 2 (`A plain reset
+  finds it`: the evidence test misreads this controller), leg 3 (`Found only
+  with kbd ON`: step 1's bracket is the difference), an aux port with no
+  device (leg 5's `00` or leg 4's bit 5 clearing: the cable, the mouse, the
+  Setup option), `Deaf after 0xA8` (§9.9.1's Phoenix 8042), or `No aux port,
+  or it is off in BIOS Setup.` When leg 1 succeeds the verdict is that the
+  kernel's road works **now** - so the boot was the problem (not ready yet,
+  or, on a step-8 record, the enable). A controller that never gave the command
+byte back is `The 8042 does not answer commands.`: no road was tried.
+
+Reading one from the field, in order: the boot record's step, then the
+equipment word (did the BIOS see a mouse?), then leg 1's last line (where the
+kernel's road stops here), then the first leg with `a device, ID`, then the
+`k` marks. A kernel fix for that machine is the difference between leg 1 and
+that leg.
+
+#### 126.8.4 The BIOS leg (opt-in)
+
+For ten seconds after a probe finishes, a line offers it and a second press
+of *Probe PS/2* runs **leg 6, the BIOS's own `int 15h` AX=C2xx interface**,
+which §9.9.5 rejects for the kernel and which is exactly the comparison a field
+report needs: `C205` BH=3 (initialise, three-byte packets), `C201` (reset; BH
+the ID), `C204` (device type; BH the ID), `C200` BH=0 (disable). Each line
+shows AH (the status), BH and BL, and `CF` when the BIOS set carry. It runs
+with the machine as the probe left it, which is as it found it: the keyboard
+on and both mask bits as they were, after the same `P2X_KEYW` pause as the
+probe's, so the second press's release reaches int 09h first (a BIOS in the
+middle of a pointing-device command may discard a keyboard byte; SeaBIOS's
+`ps2_recvbyte` does). **Never `C207`** (no handler is ours to
+give it) **and never `C200` BH=1** (enable). Then the controller is put back
+the probe's way: masks, `AD`, `20` (what the BIOS left, on the trace), `A7`
+and the bank with bit 4 set, `AE`, and the mask bits to the **probe's** bank,
+so whatever the BIOS did to them is undone.
+
+**This is ROM code, and nothing in a package can time it out.** A BIOS's own
+wait is the BIOS's: one that polls 64h for an aux byte with no limit (the
+Bochs BIOS's `get_mouse_data` is written so) waits forever on a controller
+that never answers `D4`, and the UI task, and with it the desktop, waits
+with it. So the line is **offered only where the probe has just shown those
+waits end**: a `D4 FF` in some leg was answered **from the aux side** (a
+reply with 64h bit 5 set, an `FA` or an `FE`), no write stalled, the
+controller gave the command byte back at the end exactly as it was found
+(`restored`), and int 74h is not the kernel's (on a step-8 record it is
+`mou_p2_isr`, and a BIOS that opens IRQ12 would hand its replies to a
+decoder that takes `FA AA 00` for a packet). Where any of those fails, no
+offer is drawn and a second press runs the probe again. What remains is a
+BIOS whose wait has no bound even when the device answers, which the leg
+cannot rule out; that is why it is a second press and never part of the
+probe.
+
+**IRQ12 is left as it was found, and on a shipped kernel that is SHUT.**
+`mou_p2_init` masks IRQ12 at the slave before its first question and opens
+it only on success (§9.9.1), so on every machine whose kernel probe failed -
+the reporter's SBC among them - the BIOS leg runs with IRQ12 masked. A BIOS
+that polls 64h answers as it would at DOS time; a BIOS that collects the
+device's replies through its own int 74h handler gets none and fails, or
+waits out its own timeout. **So a `CF` on every line with
+the `IRQ 1, 2, 12` row ending `shut` is not evidence that the BIOS cannot see the mouse.** The
+leg does not open the line, because that hands a power-cycled device to a
+handler the probe does not own; it is a `NOPS2=1` or kern_small machine
+(where the kernel never touched it) that shows the BIOS's interrupt-driven
+road.
+
+It is **not offered on kern_mega** (`CPU_F_PM`): a BIOS call there is
+reflected, on a 286 through a CPU reset, and the BIOS's IRQ12 handler would run
+reflected too, so the answer would not be about the same machine.
+
+#### 126.8.5 Cost and limits
+
+**Measured on the build of 2026-11-05** (`ps2.inc` and `probe.inc` against the
+foundation's stubs): **4,769 bytes of image** in the two files (code 2,612,
+strings and tables 2,157) and **449 bytes of bss** (the trace store 378, the
+per-probe state 20, the span copy, the windows and a line buffer), so **5,218
+bytes**; the verification pass (the BIOS leg's gate and pause, the `a` mark,
+the keyboard line, the `64h = FFh` refusal, the end restore) added **206 bytes
+of image and no bss**, measured as the whole package's image going from 14,951
+to 15,157 bytes, so **5,424 bytes**, inside the section's 6.5 KB (6,656) budget of the 24 KB package
+ceiling (plan decision D4, which raised it from 4.5 KB once the probe was
+measured; the first draft was 7.0 KB). If the ceiling ever needs it, the
+cheapest cuts are the BIOS leg (about 300 bytes), leg 4 (about 120) and the
+EBDA row (about 100). Zero kernel bytes.
+
+The trace store is 42 entries of 9 bytes (op, arg, status before, status
+after, flags, three replies, ticks) - 378 bytes of bss, enough for every leg
+and the BIOS leg in their longest forms (42 entries); a store that fills
+writes into one scratch entry, so nothing overruns. A probe on a machine
+whose every step times out costs about 25 waits of 2 ticks, under three
+seconds, during which the UI task is busy and the pointer still moves (it is
+the ISR's). **What QEMU cannot show**: its i8042 always has an aux port with a
+mouse on it, sets the aux bit on every aux byte and answers `A9` with `00`, so
+legs 2 and 4, the `k` mark, the `STALL` path and every failure verdict are
+read from the source here and need a field machine. **Other tasks keep running** while the UI task
+sits in the probe, and one write the probe cannot bracket is another task's
+`int 15h AH=87h` block move (XMEM.DRV's tier-1 transport, §41): an AT BIOS
+toggles A20 through the same 8042 (`D1`, then the output port), and a 286 AT
+BIOS leaves protected mode by the 8042's `FE`. The BIOS runs the whole move
+with interrupts off, so it can never split a pair of its own, but it can land
+between one of the probe's commands and its data byte: the pending `60` or
+`D4` is replaced, and the probe's data byte reaches the KEYBOARD instead (a
+command byte is never a keyboard command, being below `EDh`, and draws a
+`FE`; the `FF` of a `D4 FF` resets the keyboard). The trace shows it - a `k`,
+a `none` - and the restore line still says whether the controller came back.
+Nothing in a package can hold the scheduler off for a probe whose waits need
+the tick.
+
+### 126.9 VMware absolute, USB, the keyboard mouse
+
+`apps/mousechk/other.inc` (`oth_init`, `oth_rows`): three sections and, while
+no pointer has worked, a fourth. **Read-only, and no port I/O at all.** The
+section does not run `CHECK_EXIST` on a CH375 and does not do §34.10's `2A3h`
+counting read. §9.12.2 shows that the echo is a write of command `06h` to
+`0x261`, harmless on a CH375 and unknowable on anything else that answers at
+`0x260`, and the whole reason for this package is a machine nobody has seen
+(an ISA SBC with a super I/O and an unknown card cage). Not asking costs the
+answer "is a CH375 there while the driver is not loaded", which the Drivers
+page's own tick gives by loading the driver. **Decided, and written so it can
+be reversed.**
+
+*VMware absolute pointer* (§9.11, lamp Not applicable, OK when in use). `In
+use` is `[mou_port]` = 6 (`MOU_VMROW`, which exists only under `KERN_EMU`)
+with `[mou_seen]`. `CPU` says whether the tier is `CPU_386` (the attach's
+gate, §9.11.2). While it is not in use, two lines: `kern_emu only: Control
+Panel > Drivers > Absolute mouse.` (the row's title, `kernel/driver.inc`), then
+`This kernel is not kern_emu.` when that is a fact - `CPU_F_PM` (kern_mega has
+no `KERN_EMU` arm, `kernel/kernel.asm` refuses the pair) or an `'ID'` match
+(§126.5's Kernel row) - and otherwise `Nothing this package can read names
+this kernel.` `VMMOUSE.DRV` is `DRVC_OVL` with no class, so `OSAPI_DRV_CLASSK`
+cannot see it. **`SYSTEM.CFG` bit 5 is in no slot and no published block**;
+the FILE holds it (its `DW` record, §51.5, which SYSCHECK's `sc_p_cfg` reads),
+and this section does not read the file: `OSAPI_FILE_READ` reads a whole file
+or refuses (`FERR_BIG`), so it would cost a buffer the size of the largest
+`SYSTEM.CFG` (its Sticky Apps trailer grows) and a disk call on the UI task at
+open, for a tick the Drivers page itself shows. Bit 6 (below) is the same
+question. Recorded, reversible: §118's `sc_p_cfg` is the worked reader.
+
+*USB mouse* (§9.12, §9.12.7). `Driver`: `OSAPI_DRV_CLASSK` with `DRVC_POINT`,
+`CF` clear = `USBMOUSE.DRV is loaded` (lamp Info). `In use`: `[mou_port]` = 8,
+`MOU_FEEDROW`, which is what the first report accepted by `OSAPI_MOUSE_FEED`
+settles (OK). Which backend attached (the CH375 at `0x260`/`0x261` or a
+PicoMEM) is not published by the driver (`DRVC_POINT` has no package entry
+point, §9.12), and bit 6 is the file's alone (above), so while it is not in use
+two lines say where it is turned on and what it needs: `Control Panel >
+Drivers > USB Mouse (SYSTEM.CFG bit 6).` and `It needs a CH375 at 260h or a
+PicoMEM; neither is asked.`
+
+*Keyboard mouse* (§9.6, §9.6.1.1). `[mou_ptr]` is not in the `'MO'` block (§9.6.6:
+it sits below the span), so the state is **inferred from `[mou_seen]`**: seen
+means a pointer has proved itself and the keyboard mouse retired (`off: a
+pointer is in use`); not seen means it is on (lamp Warning, with the keys:
+arrows, keypad 5, Space or Ins click, Del right-clicks, ScrollLock gives the
+keys back). A PS/2 mouse that has answered but not yet moved reads `ON` here,
+which is true: `mou_ptr` is set at its first packet (§9.6.6).
+
+*If your mouse is not detected* (lamp Info), shown while `[mou_seen]` is 0 or
+the record is not decoded: five lines, each a fact this tree states: use the
+mouse socket and not the keyboard's, a one-mini-DIN board needs a Y-splitter
+cable, BIOS Setup's PS/2 mouse option and IRQ12 not reserved for ISA (§9.9.1's
+probe needs the aux port and its IRQ), a serial mouse needs a COM port and a
+PS/2 mouse a PS/2 port, then *Probe PS/2*.
+
+*Shipped (wave 2): `other.inc`, 1.3 KB of image. With `summary.inc` 2.8 KB
+against the 2.5 KB budget, the overshoot being the explanatory strings.*
+
+### 126.10 The gate
+
+`tests/mousechk.py`, registered as the soak row `mousechkgate` (the foundation's
+fast row `mousechk` is `tests/unit/t_mousechk.py`, which holds `moblk.inc` to
+the kernel's map). QEMU by name: the PS/2 legs need an 8042, which an XT (and
+so MartyPC) does not have.
+
+**How it reads the window.** The row boots a COPY of the system floppy with
+`\AUTOSTRT\MOUSECHK.LNK` written into it by mtools (26.10), so Mouse Check is
+open and in front before the first paint, and reads what the window says out of
+the package's own list in guest memory: `mc_nrows`, `mc_roff` and `mc_buf`
+(126.2), found through the window record's `W_SEG` and nasm's own map of the
+package (`tests/paintheld.py`'s recipe). The map is assembled against the
+build directory of the disk being booted, the shared one or a private tree's,
+and must come out **byte-identical** to that directory's `mousechk.bin`, or the
+row refuses it the way `tools/os88sym.py` refuses a kernel map. No OCR and no
+pixel comparison. The segment is read twice around every read, since a heap
+compaction moves a package (66). The list is rewritten in place about twice a
+second while each read is a separate monitor call, so a list is accepted only
+when two whole passes agree: a torn list is otherwise a "changed" row that
+followed nothing. Every expected string is one entry of the `EXPECT` table at
+the head of the file. A `sum_*` entry is matched against the Summary section
+alone, from its heading to the next one.
+
+**Two readings, not one.** Every verdict is checked beside the kernel's own
+`[mou_seen]` and `[mou_port]`, so a failure says whether Mouse Check
+misreported or the machine was not wired as the leg assumed. Where a section
+has a byte of its own, it is checked too: the Serial section's winner comes
+from `MOS_PORT`, like the Summary's verdict, but its winning line comes from
+`MOS_LINE`. The foundation's stub text is a **failure**, not a pass on the
+plumbing. A row run against a tree where the sections did not land comes back
+red.
+
+**The legs**, each its own QEMU:
+
+| leg | machine | what it proves |
+|---|---|---|
+| `serial` | serial mouse on COM1 | the pointer is moved three times, and after each move the Summary's `Position` row reads the kernel's own `mouse_x`/`mouse_y`. That is S2 with a row that can only change by following the device. The verdict is `Your mouse is working: COM1 serial mouse`, the Serial section says `serial COM1` on `IRQ4`, the kernel id matches the package (`[mc_kok]` 1), and the display reads `VGA 640x480, 4 bpp` |
+| `com2` | silent UART at 3F8, mouse at 2F8 (`MOUSEPORT=com2`) | the same verdict, pointer and serial rows, naming COM2 and IRQ3. On both straight wirings the Serial section's lamp is OK and it prints no cross-wired line: the negative control for the next leg |
+| `com2irq4` | the mouse on COM2's UART raising IRQ4 (`MOUSEPORT=com2irq4`, the Compaq Portable III of 9.5.2) | after a move the kernel still finds it and the Summary says working on COM2, while the Serial section prints `Cross-wired: data here, interrupt on the other IRQ.` with a WARN lamp, and its winning line is IRQ4. The lamp is the heading row's own byte, read out of the list |
+| `ps2` | `-serial none` (`MOUSEPORT=ps2`) | before any move the Summary is the WAIT verdict (`A PS/2 mouse answered. Move it to confirm.`), the one state that prints it. `[mc_pgrey]` is FF and the refusal row names the kernel's live PS/2 mouse; P starts no trace. After a move, the verdict names the PS/2 mouse and the kernel's `[mou_port]` is 4 |
+| `nops2` | a PRIVATE `NOPS2=1` kernel tree (`os88build.tree`, never `build/`), PS/2 mouse, no UART | the kernel has no pointer at all, so this is the leg that shows the no-mouse verdict and the keyboard-mouse line. Probe PS/2 is offered (`[mc_pgrey]` 00) and runs. Its trace header appears, its verdict says the device answered (ID 00), the command byte is `restored`, and the list did not overflow. The kernel's `mou_p2st`/`mou_p2`/`mou_p2id` read as before, and the keyboard still opens and closes the Save dialog |
+| `save` | default | after one move, Save Report goes through the standard dialog (Enter accepts `MOUSECHK.TXT`). The file is read back off the floppy image on the host, polled until it is complete: head line, date, kernel id, a `[LAMP] Summary` section line and the verdict row. The dialog's default folder is `MEDIA` on the boot floppy (38.10) |
+| `mono` | a PRIVATE `VIDEO=cga` kernel tree | `[mc_bpp]` is 1, `[mc_kok]` 1, the list begins with a heading, and the display reads `CGA 640x200, 1 bpp`. A screenshot is kept (`MOUSECHK_SHOTS=<dir>`) |
+
+**What it cannot prove.** The lamp *shapes* on 1bpp (118.5) are not asserted
+pixel by pixel: the picture is kept for a human to look at. "Nothing else
+redrew" is not measured, only that the rows' text follows the device. QEMU is
+exact about work and useless about time, so nothing here says the window is
+quick on an 8088 (MartyPC cannot host the PS/2 legs; the serial legs' cost is
+126.11's arithmetic, not a measurement). And no emulator is the machine this
+package was written for: QEMU's i8042 answers every command, where an STPC
+with a Winbond W83977's controller running AMI MEGAKEY firmware may not, so
+`nops2` shows the probe and its trace work on an 8042 that cooperates, and a
+real board is the only evidence that they report the one that does not. A
+kernel with no pointer is hosted (`nops2`), but a machine whose PS/2 DEVICE is
+absent is not: both emulated PS/2 paths always have a mouse on them, so the
+no-device verdicts of the trace are unseen here.
+
+### 126.11 Cost
+
+**Wave 1 (the shell, the row model, kread, and four stub sections), measured on
+the build of 2026-11-05:**
+
+| | bytes |
+|---|---|
+| `mousechk.bin` image | 4,940 (shell, rows, ui, kread and the stubs; the sections add to it) |
+| bss | 5,816 (`mc_buf` 5,120 on the first 512 boundary past the image, `OS88_BSS_ALIGNED`, with the row table 256, the shown hashes 96 and the rest of the state packed into the gap in front of it, §77.31 - so the image and the bss trade bytes and only their SUM is the figure) |
+| image + bss | **10,756** of the package's 20 KB (20,480) ceiling, raised from the plan's 16 KB when wave 2 started: 9,724 left for the four sections |
+| `MOUSECHK.O88`, lz4 | 4,382 |
+| kernel | **0**: no file under `kernel/`, `boot/`, `drivers/` or `apps/os88api.inc` changes; `kernel-full.bin` is the same size and differs from the previous build in the build number's digits only |
+
+Disk headroom after it landed (free clusters, `tools/os88disk.py --verify`):
+`os8088.img` 1.44 MB 1,502 of 2,847; `os8088-720.img` 22 of 713 (1 KB
+clusters); `os8088-120.img` 1.2 MB 1,026 of 2,371; `util360.img` 257 of 354;
+`mega.img` 1,726 and `mega120.img` 1,250. The 360 KB system disk does not carry
+it (§24.3.1.7, SYSCHECK's rule: it rides `util360.img`, §24.6). It is on the live
+media through `$(SYSTOOLS)` (`LIVEARGS`), so `tests/unit/t_livefull.py` is green.
+
+The refresh is a rebuild of the whole list and a hash per visible row about
+twice a second; PERFORMANCE.md's price for it on an 8088 is the section procs'
+own port reads plus roughly 28 rows x 40 bytes of hashing, which a measurement
+in wave 3 should replace. *(Not measured on the 4.77 MHz machine in wave 1.)*
+
+### 126.12 Limits, and what it deliberately does not do
+
+- **Not on kern_small's or kern_emu's images.** It rides `$(SYSTOOLS)`, the
+  list SYSCHECK rides (§118.10), which neither of those images carries: kern_small
+  has no `OSAPI_WM_TIMER` body (§13.9) and kern_emu's image ships no tools. The
+  package would run on both - on kern_small without the half-second refresh, the
+  Refresh button being then the only one - but a kern_emu copy would need its own
+  `'ID'` words (§126.4) and nothing builds it.
+- **It reads; it never writes, except in the probe.** Everything but §126.8 is a
+  read of kernel memory, of the BIOS data area or of a port with no side
+  effect. §126.8's rules are the PS/2 owner's.
+- **It cannot decode a kernel it was not made with** (§126.4): raw hex, and it
+  says so.
+- **A stale line is possible and bounded.** The hash that decides whether a line
+  redraws (§126.2.3) can collide, 1 in 65,534 per changed row; the next change
+  or Refresh repaints it.
+- **The list is bounded**: 128 rows, 60 characters a row. A section that needs
+  more shortens its text, it does not grow the buffer.
+- **No saved settings, no log, no network.** It shows the present and writes
+  one file when asked.
+- **It does not fix anything.** Its job is the report that makes a kernel fix
+  possible (docs/plans/MOUSECHK-PLAN.md, *Deferred*).

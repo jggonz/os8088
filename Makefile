@@ -3544,7 +3544,7 @@ STIKARGS := $(addprefix STIKAPPS:,$(STIKAPPS))
 # not into $(SYSAPPSARGS)'s gate disks, not onto an apps disk, and not onto
 # kern_small's or kern_emu's images, neither of which installs to a hard disk
 # (the browser's live image filters it back out, LIVENOTOOLS below).
-SYSTOOLS := $(BUILD)/syscheck.o88 $(FSCKMOD)
+SYSTOOLS := $(BUILD)/syscheck.o88 $(BUILD)/mousechk.o88 $(FSCKMOD)
 SYSTOOLSARGS := $(addprefix SYSTEM:,$(SYSTOOLS))
 # ...EXCEPT THE 360KB SYSTEM DISK (SPEC.md 24.3.1.7, the owner's of
 # 2026-10-22): there it rides util360.img, and an install from the 360KB pair
@@ -4098,6 +4098,31 @@ $(BUILD)/syscheck.bin: apps/syscheck/syscheck.asm apps/syscheck/scan.inc \
 
 $(BUILD)/syscheck.o88: $(BUILD)/syscheck.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/syscheck.bin -o $@
+
+# --- MOUSE CHECK (SPEC.md 126) -----------------------------------------------
+# The shell and its four sections. EVERY file is a dependency: a section is an
+# %include, so a make that listed only mousechk.asm would ship the shell with
+# yesterday's PS/2 section.
+MOUSECHK_SRC := apps/mousechk/mousechk.asm apps/mousechk/rows.inc \
+                apps/mousechk/ui.inc apps/mousechk/kread.inc \
+                apps/mousechk/moblk.inc apps/mousechk/summary.inc \
+                apps/mousechk/serial.inc apps/mousechk/ps2.inc \
+                apps/mousechk/probe.inc apps/mousechk/other.inc \
+                apps/os88api.inc apps/os88ui.inc apps/os88dec.inc
+# THE KERNEL FINGERPRINT (SPEC.md 126.4): the 'ID' block's three words, read
+# from the kernel image this tree just built, so the package decodes the 'MO'
+# block only on the kernel it was made with. kern_mega is a different kernel
+# with different section lengths, so its system disks carry their own copy of
+# the package, built from kern_mega's own image (MEGAMC, below).
+$(BUILD)/mousechk_kid.inc: $(BUILD)/kernel-full.bin tools/os88mousekid.py | $(BUILD)
+	python3 tools/os88mousekid.py $(BUILD)/kernel.map $(BUILD)/kernel-full.bin -o $@
+
+$(BUILD)/mousechk.bin: $(MOUSECHK_SRC) $(BUILD)/mousechk_kid.inc $(BUILDINC) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ -o $@ apps/mousechk/mousechk.asm
+	@echo "mousechk: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/mousechk.o88: $(BUILD)/mousechk.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/mousechk.bin -o $@
 
 $(BUILD)/fontview.bin: apps/fontview/fontview.asm apps/os88api.inc \
                        apps/os88type.inc apps/os88ui.inc | $(BUILD)
@@ -15333,7 +15358,22 @@ mega: $(BUILD)/mega.img $(BUILD)/mega120.img $(BUILD)/megaapps.img $(BUILD)/mega
 # sub-make in the recipe is what cuts it, and SYSCHECK.O88 is made by a sub-make
 # of its own with KMODDIR put back - as a prerequisite it would inherit the
 # target's KMODDIR and build its manifest from kern_mega's modules
-MEGATOOLSARGS = SYSTEM:$(BUILD)/syscheck.o88 SYSTEM:$(MEGADIR)/fscheck.drv
+MEGATOOLSARGS = SYSTEM:$(BUILD)/syscheck.o88 SYSTEM:$(MEGAMC) SYSTEM:$(MEGADIR)/fscheck.drv
+
+# MOUSE CHECK'S kern_mega COPY (SPEC.md 126.4): the same source, asking the mega
+# tree for its fingerprint - nothing in it is -DPKG_MEGA, only the 'ID' words
+# differ, so it rides the system disks by name (MEGAINST's shape) and not through
+# $(MEGAPKGS). Recipe-only on the two images, after the sub-make that cuts
+# kern_mega's kernel: its image does not exist before that.
+MEGAMC := $(MEGAAPPDIR)/mousechk.o88
+$(MEGAAPPDIR)/mousechk_kid.inc: $(MEGADIR)/kernel-full.bin tools/os88mousekid.py
+	@mkdir -p $(MEGAAPPDIR)
+	python3 tools/os88mousekid.py $(MEGADIR)/kernel.map $(MEGADIR)/kernel-full.bin -o $@
+$(MEGAAPPDIR)/mousechk.bin: $(MOUSECHK_SRC) $(MEGAAPPDIR)/mousechk_kid.inc $(BUILD)/mousechk_kid.inc $(BUILDINC)
+	$(NASM) -f bin -w+error -I apps/ -I $(MEGAAPPDIR)/ -I $(BUILD)/ -o $@ apps/mousechk/mousechk.asm
+	@echo "mousechk (kern_mega): $(call FILESIZE,$@) bytes"
+$(MEGAMC): $(MEGAAPPDIR)/mousechk.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(MEGAAPPDIR)/mousechk.bin -o $@
 
 # NO COLDHMA.SYS and no XMEM.DRV: the HMA and everything above it are
 # kern_mega's own (kernel/mega.inc), and xm_sniff never asks for either.
@@ -15352,10 +15392,11 @@ $(BUILD)/mega.img: KMODDIR := $(MEGADIR)
 # -DKD_MEGA, into $(MEGADIR)/kdos/, so the shipped $(SYSROOT) stays
 # byte-identical and a copy carried to the other kernel refuses in a sentence.
 $(BUILD)/mega.img: $(MEGADRIVERS) $(MEGAINST) $(call MEGASUB,$(SYSAPPS)) $(call MEGASUB,$(SYSOPTIONAL)) $(STIKAPPS) $(STIKNOTESTXT) $(call MEGASUB,$(COREAPPS)) $(SYSDOC) $(SYSLOGO) \
-                   $(FACES) $(FACELIC) tools/os88disk.py $(MEGASRC)
+                   $(FACES) $(FACELIC) tools/os88disk.py $(MEGASRC) $(MOUSECHK_SRC) tools/os88mousekid.py
 	@$(MAKE) BUILD=$(MEGADIR) KERN_MEGA=1 $(if $(NOKZIP),NOKZIP=1) $(MEGADIR)/boot.bin $(MEGADIR)/boothd.sys \
 		$(MEGADIR)/kdos/DOS.O88
 	@$(MAKE) KMODDIR=$(BUILD) $(BUILD)/syscheck.o88
+	@$(MAKE) $(MEGAMC)
 	python3 tools/os88disk.py -o $@ --size 1440 \
 		--boot $(MEGADIR)/boot.bin --kernel $(MEGADIR)/$(KERNNAME) \
 		$(MEGADRIVERS) $(MEGATOOLSARGS) $(MEGASYSAPPSARGS) $(MEGASYSOPTARGS) $(STIKARGS) $(STIKNOTESARG) $(MEGAINST) APPS:$(MEGADIR)/kdos/DOS.O88 $(MEGACOREARGS) $(SYSDOC) \
@@ -15372,10 +15413,11 @@ $(BUILD)/mega120.img: KMODDIR := $(MEGADIR)
 # reading a file the other is still writing reads it as 0 bytes)
 $(BUILD)/mega120.img: | $(BUILD)/mega.img
 $(BUILD)/mega120.img: $(MEGADRIVERS) $(MEGAINST) $(call MEGASUB,$(SYSAPPS)) $(call MEGASUB,$(SYSOPTIONAL)) $(STIKAPPS) $(STIKNOTESTXT) $(call MEGASUB,$(COREAPPS)) $(SYSDOC) $(SYSLOGO) \
-                   $(FACES) $(FACELIC) tools/os88disk.py $(MEGASRC)
+                   $(FACES) $(FACELIC) tools/os88disk.py $(MEGASRC) $(MOUSECHK_SRC) tools/os88mousekid.py
 	@$(MAKE) BUILD=$(MEGADIR) KERN_MEGA=1 $(if $(NOKZIP),NOKZIP=1) $(MEGADIR)/boot120.bin $(MEGADIR)/boothd.sys \
 		$(MEGADIR)/kdos/DOS.O88
 	@$(MAKE) KMODDIR=$(BUILD) $(BUILD)/syscheck.o88
+	@$(MAKE) $(MEGAMC)
 	python3 tools/os88disk.py -o $@ --size 1200 \
 		--boot $(MEGADIR)/boot120.bin --kernel $(MEGADIR)/$(KERNNAME) \
 		$(MEGADRIVERS) $(MEGATOOLSARGS) $(MEGASYSAPPSARGS) $(MEGASYSOPTARGS) $(STIKARGS) $(STIKNOTESARG) $(MEGAINST) APPS:$(MEGADIR)/kdos/DOS.O88 $(MEGACOREARGS) $(SYSDOC) \
@@ -17182,7 +17224,7 @@ $(GAMESIMG360): $(GAMES360) tools/os88disk.py
 # network360's convention and for its reason: a .COM at the root invites a
 # double-click on a machine it is not for. OS88NET.COM left apps360.img for
 # this disk; OS88CZ.COM had never fitted that one.
-UTIL_PKGS := $(BUILD)/syscheck.o88 $(BUILD)/redline.o88 $(BUILD)/taskmgr.o88
+UTIL_PKGS := $(BUILD)/syscheck.o88 $(BUILD)/mousechk.o88 $(BUILD)/redline.o88 $(BUILD)/taskmgr.o88
 UTIL_FSCK := $(FSCKMOD)
 UTIL_DOS := $(APPS_DOS) $(APPS_DOSCZ)
 UTIL360 := $(UTIL_PKGS) $(UTIL_FSCK) $(UTIL_DOS)

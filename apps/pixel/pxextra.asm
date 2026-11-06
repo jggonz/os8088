@@ -141,7 +141,7 @@ ex_head:
 .m:
     cmp al, PXF_MAC
     jne .n
-    jmp mc_head
+    jmp ex_mchead
 .n:
     mov ax, PXD_NOTPIC              ; (the resident sends only these four)
     jmp ex_hfail
@@ -1765,7 +1765,7 @@ lb_end:
 ; MacPaint (SPEC.md 106.25): 576 x 720, 1 bit, behind 512 bytes of header -
 ; and, when it carries 'PNTG' at 65, the 128 of a MacBinary one
 ; =============================================================================
-mc_head:
+ex_mchead:
     mov es, [di + PXK_HSEG]
     xor ax, ax                      ; the data's start
     cmp word [di + PXK_FSZ + 2], 0

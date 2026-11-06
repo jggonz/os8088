@@ -1593,6 +1593,16 @@ FAST = [
         "odd amount with every row green: passes 12 and 13 each found the "
         "whole list odd part-way through. Reads the kernel.map the build "
         "writes, so it assembles nothing"),
+    Row("mousechk", "fast", py("tests/unit/t_mousechk.py"), 0.1,
+        "SPEC.md 126.4: MOUSECHK reads the kernel's 'MO' debug block by "
+        "offset - the one shipped reader SPEC.md 57.3 names - so "
+        "apps/mousechk/moblk.inc must equal kernel/mouse.inc's real layout "
+        "(every MOS_*, MOP_*, MOC_* member, the descriptor's four words read "
+        "off the image) and the three 'ID' words build/mousechk_kid.inc "
+        "carries must be what the map says they are. A kernel change to the "
+        "block is then a MOUSECHK change in the same commit rather than a "
+        "wrong number on a disk in the field. Reads kernel.map and "
+        "kernel-full.bin, assembles nothing"),
     Row("sysman", "fast", py("tests/unit/t_sysman.py"), 0.3,
         "SPEC.md 118.2.1: System Check's manifest is written from the system "
         "disk's INPUTS (the image depends on SYSCHECK.O88), so every manifest "
@@ -16982,6 +16992,34 @@ SOAK = [
         needs=("qemu", "mtools"), serial=True, timeout=600,
         wants=("build/os8088.img", "build/apps.img", "build/syscheck.o88",
                "build/fscheck.drv", "build/mbr.bin", "build/boothd.bin")),
+    Row("mousechkgate", "soak", py("tests/mousechk.py"), 270.0,
+        "SPEC.md 126.10: MOUSE CHECK (SYSTEM\\MOUSECHK.O88) on the glass, read "
+        "out of the package's own row list in guest memory (W_SEG + nasm's "
+        "map, held byte-identical to the leg's mousechk.bin) rather than "
+        "pixels, every verdict beside the KERNEL's own mou_seen/mou_port. Seven "
+        "legs on QEMU, each booting the system floppy with an AUTOSTRT link: "
+        "COM1 (the Summary's Position row reads the kernel's mouse_x/y after "
+        "each move - S2 - and the verdict, the Serial section's winner and "
+        "line, the kernel id and VGA 4 bpp agree); MOUSEPORT=com2's wiring "
+        "(COM2, IRQ3), both with the Serial lamp OK and no cross-wired line; "
+        "MOUSEPORT=com2irq4's, the Compaq Portable III of SPEC.md 9.5.2 "
+        "(working on COM2, but the Serial section's Cross-wired verdict, a "
+        "WARN lamp and the winning line IRQ4); MOUSEPORT=ps2's (the WAIT verdict before a move, Probe "
+        "PS/2 greyed with the kernel's live mouse as its reason and P "
+        "tracing nothing, then the PS/2 verdict); a private NOPS2=1 kernel "
+        "tree (the no-mouse verdict; Probe offered, its trace says the device "
+        "answered and the command byte was restored, the kernel's PS/2 bytes "
+        "unchanged, the keyboard still opens and closes the Save dialog); "
+        "Save Report read back off the floppy image (head, date, kernel id, a "
+        "section line, the verdict); and a private VIDEO=cga tree ([mc_bpp] "
+        "1, Display CGA 640x200 1 bpp, a screenshot kept for the lamp "
+        "shapes). The two trees cost ~5 min each the first time and are "
+        "reused after. QEMU by name: the PS/2 legs need an 8042 and MartyPC's "
+        "XT has none. Proves nothing about an 8088's speed or a real "
+        "STPC/W83977 controller.",
+        needs=("qemu", "mtools", "nasm"), serial=True, timeout=1800,
+        wants=("build/os8088.img", "build/mousechk.o88",
+               "build/mousechk.bin")),
     Row("win16mines", "soak", py("tests/win16mines.py"), 60.0,
         "SPEC.md 124.15, WIN16-PLAN S8: Windows 3.1's Minesweeper (W31MINE, "
         "Microsoft's, in build/win16/ only where the win16-reference skill "
