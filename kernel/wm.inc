@@ -3552,6 +3552,7 @@ wm_raise:
     call rect_get               ; the rect -> AX..DX, four adjacent words
     dw wm_cov_x1
     call wm_su_sub
+    inc byte [wm_cvf_on]        ; ...and the CHROME too (SPEC.md 11.96.10.2)
     pop dx
     pop cx
     pop bx
@@ -8822,6 +8823,11 @@ wm_su_pcrp: dw 0                ; SPEC.md 11.96.16.2: a rect laid out like a
                                 ; because a resize has already written the new
                                 ; one where wm_obscured needs the old. 0 = ask
                                 ; about DI, which is every other caller
+wm_cvf_x1: dw 0                 ; ...and the covered box of our FRAME, drop
+wm_cvf_y1: dw 0                 ; shadow included (SPEC.md 11.96.10.2): the
+wm_cvf_x2: dw 0                 ; chrome a partial raise redraws. It outlives
+wm_cvf_y2: dw 0                 ; wm_cov_rect up to the draw, and
+wm_cvf_on: db 0                 ; 1 = the next wm_draw_win is that raise's
 wm_cov_x1: dw 0                 ; the covered box, accumulated
 wm_cov_y1: dw 0
 wm_cov_x2: dw 0
@@ -9050,6 +9056,8 @@ wm_cov_rect:
                                 ; "draw nothing", both correct. AX is dead: it
                                 ; was stored into wm_cov_c1 above; SI is loaded
                                 ; by wm_zabove below
+    mov si, wm_cvf_x1           ; ...and the frame's (SPEC.md 11.96.10.2)
+    call wm_rect_empty
     mov bx, di                  ; the walk takes the window in BX, and BX is
     call wm_zabove              ; scratch here - .scan reloads it per entry
     jc .out
@@ -9071,6 +9079,8 @@ wm_cov_rect:
     push si
     call wm_win_rect_bx
                                 ; AX..DX = its frame, shadow included
+    mov si, wm_cvf_x1           ; the occluders' bounding box, UNCUT - it is
+    call wm_runion              ; cut to our frame once, at .out
     mov si, wm_cov_c1
     call gfx_rect_isectcf       ; ...cut to our content, CF = 1 = nothing left
     jc .none
@@ -9081,6 +9091,12 @@ wm_cov_rect:
     pop cx
     jmp short .scan
 .out:
+    mov bx, di                  ; the occluders' box cut to OUR frame, shadow
+    call wm_win_rect_bx         ; included: bbox(union) AND frame holds every
+    mov si, wm_cvf_x1           ; pixel bbox(union of the cuts) does, and an
+    call gfx_rect_isect         ; empty box stays empty (7FFFh..-1 cut to
+    call rect_put               ; anything is still inverted)
+    dw wm_cvf_x1
     jmp kret_bp
 
 ; -----------------------------------------------------------------------------
@@ -10785,7 +10801,30 @@ wm_draw_win:
 
 .chrome:
 %ifndef REDRAWFULL
+    cmp byte [wm_cvf_on], 0     ; A PARTIAL RAISE (SPEC.md 11.96.10.2): the
+    je .cc                      ; outline and the shadow only inside the box of
+    push ax                     ; the frame something WAS on - the rest is on
+    push bx                     ; the glass already, in the pen a front
+    push cx                     ; window's chrome writes (one pen in both
+    push dx                     ; states). Nothing is above a raised window,
+    call cur_unlazy             ; so there is nothing to subtract; an EMPTY
+    call rect_get               ; box seeds an inverted fragment, which every
+    dw wm_cvf_x1                ; clipped primitive cuts to nothing
+    mov si, dx                  ; (gfx_rect_isectcf). The armed region stops
+    mov dx, bx                  ; the primitives spending the deferred hide,
+    call wm_clip_seed           ; so it is spent here (wm_chrome_clip's
+    pop dx                      ; reason), and the region is disarmed before
+    pop cx                      ; the title bar, which a raise changes whole
+    pop bx
+    pop ax
+%ifdef KERN_BIG
+    jmp short .chromed
+%else
+    jmp near .chromed           ; (a byte longer ON PURPOSE: kern_small's
+%endif                          ; ui_task parity is pinned, t_hotpar)
+.cc:
     call wm_chrome_clip         ; THE OUTLINE AND THE DROP SHADOW, and not where
+.chromed:
 %endif                          ; something above will cover them a moment from
                                 ; now (SPEC.md 11.97). Both are gfx_fill, which
                                 ; clips per PIXEL; the title bar below is not,
@@ -10827,6 +10866,12 @@ wm_draw_win:
                                 ; a window can owe its SHADOW and nothing else
                                 ; (SPEC.md 11.91.4)
 
+%ifndef REDRAWFULL
+    cmp byte [wm_cvf_on], 0     ; the partial raise's region was the chrome's
+    je .cvdone                  ; alone: gone before the title bar, which is
+    call wm_clip_clear          ; drawn whole (SPEC.md 11.96.10.2)
+.cvdone:
+%endif
 %ifndef REDRAWFULL
                                 ; ...BUT A STRIP WHOLLY COVERED IS NOT DRAWN AT
                                 ; ALL (SPEC.md 11.97.4), which saves the bar's
@@ -10958,6 +11003,8 @@ wm_draw_win:
                                 ; 11.96.4)
 %ifndef REDRAWFULL
     xor ax, ax                  ; (AX is banked: kret_di puts it back)
+    mov [wm_cvf_on], al         ; (a one-shot: a chromeless window never
+                                ; reached .chrome to spend it)
     mov [wm_su_son], ax         ; THE ONE-SHOT DIES WITH THE DRAW IT WAS ARMED
                                 ; FOR, at the one site every window in the system
                                 ; is drawn through. wm_su_srect spends it, but
