@@ -574,8 +574,12 @@ blk_relit:
     mov dx, 7FFFh               ; a byte longer than `mov dx, cx` ON PURPOSE:
 %endif                          ; kern_small's wm_paint_all and ui_task parity
     call wm_paint_dmg
-    jmp kret_dx                 ; once a relight: the shared ladder, 3 bytes
-.all:                           ; for 5 (kernel hot-paths pass 1, size)
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+.all:
     jmp wm_paint_all            ; a tail jump: both callers are near (fsx.inc
                                 ; is .text, and kernel.asm's cw_blk_relit is
                                 ; `call blk_relit / retf`), so wm_paint_all's
