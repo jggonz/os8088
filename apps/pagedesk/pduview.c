@@ -109,6 +109,7 @@ static void pdu_view_set(void)
  * scroll bar, the bar fields and the status line. Lock held. */
 static void pdu_canvas_full(void)
 {
+    pdu_ed_canvas();                    /* edit */
     pdu_job_abort_render();
     pdu_canvas_paint(&pdu_L.canvas);
     pdu_sbar_paint();
@@ -177,6 +178,7 @@ static void pdu_scroll_to(int nsx, int nsy)
     pdu_place();
     if (pdu_sx == osx && pdu_sy == osy)
         return;                         /* against an end: draw nothing */
+    pdu_ed_xoff_l();                    /* edit: the outline moves with the page */
     dy = pdu_sy - osy;
     ch = pdu_ch();
     c = &pdu_L.canvas;

@@ -171,7 +171,7 @@ static void pdu_title_set(void)
     if (pdu_doc == D_OPEN) {
         os88_strcpy(pdu_title, "PageDesk - ", sizeof(pdu_title));
         pdu_cat(pdu_title, pdu_name, sizeof(pdu_title));
-        if (pdu_changes)
+        if (pdu_dirty())                /* edit: the save point, not a count */
             pdu_cat(pdu_title, " *", sizeof(pdu_title));
         if (pdu_rdonly)
             pdu_cat(pdu_title, " (read-only)", sizeof(pdu_title));
@@ -192,6 +192,7 @@ static void pdu_open_begin(const char *name)
     pdu_rwant = 0;
     pdu_pgwant = 0;
     pdu_changes = 0;
+    pdu_nt_reset();                     /* notes */
     pdu_inc = 0;
     pdu_nav_reset();                    /* nav: history, selection, panels */
     pdu_rdonly = 0;
@@ -216,8 +217,10 @@ static int pdu_open_first(void)
     pdu_opfirst = 0;
     pdu_bank_load();                    /* a missing bank is not fatal */
     r = pdu_doc_claim();
-    if (r == 0)
+    if (r == 0) {
+        pdu_ed_init();                  /* edit */
         return 0;
+    }
     pdu_job = J_NONE;
     pdu_doc = D_FAILED;
     pdu_err = r;
@@ -250,6 +253,7 @@ static int pdu_page_load(int n)
     pdu_sx = 0;
     pdu_view_set();
     pdu_nav_page();                     /* nav: selection kept or dropped, links */
+    pdu_nt_srcload();                   /* notes: this page's source annots */
     return 0;
 }
 
@@ -321,6 +325,11 @@ static int pdu_render_begin(void)
     pdu_xrend.page = pdu_page;
     pdu_xrend.win_off = (unsigned)pdu_win;
     pdu_xrend.mono_mark = 0;
+    pdu_xrend.edits_seg = pdu_ed_seg();             /* edit (D15) */
+    pdu_xrend.edits_count = pdu_ed_count();
+    pdu_xrend.rflags = PDRF_ANNOTS | PDRF_EDITS;
+    pdu_xrend.hide = 0;
+    pdu_ed_xoff(&pdu_rrun);                         /* edit: the outline off first */
     pd_fcopy_out(&pdu_xrend, pdu_xb, 0, sizeof(pdu_xrend));
     r = pdu_mcall(PDU_M_REND, PDV_REND_BEGIN, 0, 0, 0);
     if (pdu_mcf) {
@@ -349,6 +358,7 @@ static void pdu_render_step(void)
         return;
     }
     pdu_sel_after(&pdu_rrun);           /* nav: the selection back on the page */
+    pdu_ed_xon();                       /* edit: the outline back on the new pixels */
     /* 10.6: say what was skipped, by name, or nothing at all */
     r = pdu_mcall(PDU_M_REND, PDV_REND_STATUS, 0, 0, 0);
     if (!pdu_mcf) {
@@ -422,6 +432,8 @@ static void pdu_save_begin(const char *name)
     os88_strcpy(pdu_xsave.source, pdu_name, sizeof(pdu_xsave.source));
     pdu_datestamp(pdu_xsave.date);
     pdu_xsave.mode = PDSV_INCREMENTAL;
+    pdu_xsave.edits_seg = pdu_ed_seg();             /* edit (13.1.1) */
+    pdu_xsave.edits_count = pdu_ed_count();
     pdu_say2("Saving ", name);
     pdu_status_paint();
     pdu_job_start(J_SAVE);
@@ -451,7 +463,8 @@ static void pdu_save_step(void)
         pdu_wsay(pdu_line);
         return;
     }
-    pdu_changes = 0;
+    pdu_saved();                        /* edit: the save point */
+    pdu_title_set();
     os88_strcpy(pdu_line, "Saved ", sizeof(pdu_line));
     pdu_cat(pdu_line, pdu_target, sizeof(pdu_line));
     pdu_wsay(pdu_line);
@@ -536,6 +549,9 @@ void os88_onwake(void *win)
     else if (pdu_job == J_NONE && !pdu_pgwant && !pdu_argp && !pdu_rwant
              && pdu_nav_owed())
         ovl_nav_work();                 /* nav: the idle ladder */
+
+    if (pdu_job == J_NONE && pdu_nt_owed())     /* notes */
+        pdu_nt_idle();
 
     if (pdu_job != J_NONE || pdu_pgwant || pdu_argp || pdu_nav_owed())
         pdu_kick();

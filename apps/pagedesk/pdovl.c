@@ -191,3 +191,5 @@ static int ovl_card_more(int which)
 }
 
 #include "pdovlnav.c"             /* nav: the outline (20.10.4) */
+#include "pdovlnotes.c"         /* notes: the cards, the popover, the inspector */
+#include "pdutool.c"            /* the annotation tools (edit) */

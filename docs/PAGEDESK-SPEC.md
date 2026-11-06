@@ -694,7 +694,7 @@ that exceeds a row is a change to this table first.
 | exchange block | primary | 1 KiB | launch |
 | block cache | PDENG | 16 KiB | open |
 | object arena + xref tables + page table | PDENG | 8 + 3 + 8 KiB | open |
-| display list + gstate | PDREND | 20 + 2 KiB | open |
+| display list + PDREND workspace | PDREND | 22 + 7 KiB (D13) | open |
 | band | PDREND | 1.25-5 KiB by adapter | open |
 | glyph cache | PDREND | 12 KiB | open |
 | thumbnails | primary | 4 KiB | panel shown |
@@ -702,7 +702,7 @@ that exceeds a row is a change to this table first.
 | text/search scratch | primary | 2 KiB | search |
 | `PDWRT` image + bss | parts, lazy | <= 40 KiB | save/extract/new, freed after |
 | writer buffers | PDWRT | 12 KiB (4 KiB output + 1,024-object offset table); 36 KiB for an extract of up to 4,096 objects | save/extract, freed after |
-| overlay | parts, lazy | <= 24 KiB | dialog, freed when idle |
+| overlay | parts, lazy | <= 48 KiB (D19; was 24) | dialog, inspector, menu command; freed when idle |
 
 Failure of an optional claim (thumbnails, a larger cache) degrades quality;
 failure of a required one refuses the open with the KB it wanted.
@@ -2498,6 +2498,305 @@ Every mutating call records its undo delta itself, so a caller brackets a
 command with `pdu_undo_begin`/`end` and does nothing else for undo. Calls are
 made on the UI task only, never inside a module slice.
 
+#### 20.8.1 As built (`edit`, wave 2)
+
+**Files.** `pduedit.c` (the store, the selection outline, typing), `pduundo.c`
+(the history), `pdutool.c` (the annotation tools: every function an `ovl_*`);
+`hosttest/pdu_ed_test.c` compiles the first two UNCHANGED on the host
+(`tests/unit/t_pded.py`). Everything but the hot path rides the overlay
+(SPEC.md 73.14): `pdu.h` renames the 20.8 calls with `#define pdu_ed_new
+ovl_ed_new` and so on, so every caller keeps the pinned name and reaches the
+overlay's resident shim. Resident: `pdu_ed_seg`, `pdu_ed_count`,
+`pdu_ed_selected`, `pdu_ed_init`, `pdu_ed_gone`, the outline's off/on hooks,
+`pdu_dirty`, `pdu_saved`, `pdu_undo_can`, `pdu_redo_can`.
+
+**What it costs the primary** (measured at the cut, against the base before
+`edit` of 40,650 image + 3,969 bss = 44,619): **43,146 + 5,515 = 48,661 B**,
++4,042 against a share of +4,096; the overlay 14,821. The near scratch is one
+set shared by the three files - `ed_pts` (96 points: a Line's two, a
+Highlight's quads, a page delta's copy in the history), `ed_xr` (a clip rect,
+and the history's 8-byte swap) and the three 48-byte record buffers - and
+everything bigger lives in the claims: an Ink or Sign stroke is captured
+STRAIGHT into the EDITS segment's gap below the point top and converted there
+in place - converted, then turned round so the first point drawn is the first stored (`pdu_ed_new` with `pts` NULL means the points are already in place),
+and the history's command table is in `PDU_DC_UNDO` after its entries. Nothing
+in `edit` recurses, and its widest frame is 16 bytes of locals (`ovl_ed_set`; D21).
+
+**The segment** (`pdu_dcseg(PDU_DC_EDITS)`, 16 KiB, never zeroed; `pdu_ed_init`
+sets the three tops when a document's claims exist):
+
+| bytes | what |
+|---|---|
+| 0 .. 6,143 | 128 records of 48 bytes, in z-order (index = z; a later record is on top) |
+| 6,144 .. `text top` | the text heap, grows up (one text is at most 1,024 bytes) |
+| `point top` .. 16,383 | the point heap, grows down (one record at most 2,000 points) |
+
+13.1's 256 records and swap file are NOT built: 128 records, and the 10 KiB the
+two heaps share, are refused with `PDE_LIMIT` / `PDE_NOMEM` (`pdu_ed_err`) and
+the caller keeps what was typed. A heap is a bump allocator. A replaced text or
+point list is a new block and the old one is abandoned (no compaction); typing
+extends the tail of the LAST text block in place, and a backspace gives that
+block's last byte back to the heap **when the current typing run wrote it** (a
+byte below the top the run began at is old text an undo restores, so it is
+only dropped from the length) - so typos cost nothing and only retyping into
+old text copies the block, which is the only reuse. **`rect` is the tight bounding box of the points** for every
+point-based kind (Highlight, Ink, Sign, Line); the renderer pads it.
+
+**Defaults** (13.3): Note 20 x 18 pt centred on the click, yellow; Highlight
+yellow; Area mark light red, 1 pt border; Text blue, Helvetica 12, left;
+Ink red, 2 pt (`size` 4); Sign black, 1.5 pt (`size` 3); Line red, 1 pt, **arrow
+at the end** (`align` 2; there is no plain-line gesture yet - the inspector
+clears the bit); Rect and Ellipse red, 1 pt.
+
+**Undo** (`pduundo.c`). A command is one `pdu_undo_begin`/`end` bracket (a
+mutating call outside one is its own command). 64 commands over a ring of 256
+twelve-byte entries in `PDU_DC_UNDO` (bytes 0..3,071; the 64 commands'
+first-entry and entry-count words follow at 3,072..3,327). Every entry is an involution (undo and
+redo are the same swap, walked in opposite orders): a FIELD swaps up to 8
+bytes of a record, TEXT and PTS swap a record's offset/length and a heap top,
+CREATE swaps the store's count and both tops, MOVE stores the translation (its
+undo is the negation, exact in pt16). Three things are not logged and why that
+is right: a change to a record born in the same command (undo truncates the
+store below it; redo restores the count and the record is back as it ended,
+because **truncation never erases a byte**), the second edit of a field in one
+command (the first old state is the one that matters, so a drag of fifty sets is
+one step - and a MOVE of a record folds into that command's last move of it only
+while no rectangle or points entry of the record came after that move, since a
+move does not commute with them), and a keystroke into the record the previous command typed into
+(coalescing, 13.6). A new command discards the redo branch. The oldest command
+falls off at the 65th and the status line says so once until the next save
+(`Undo history full: the oldest step is dropped.`); a command that cannot fit
+at all clears the history and says `Too large to undo: the history was
+cleared.`
+
+**Dirty** is "not at the save point". The save point is an absolute command
+number: undo back to it is clean, redo past it dirty, a new edit made from
+below it forgets it (that state is on a dead branch), and a history that has
+run past it never matches. Save calls `pdu_saved()` on success only, so a
+failed save stays dirty. The title's `*` and the greying of Undo/Redo follow it.
+
+**Page operations** (`pdu_undo_pageop`): the delta (at most 96 bytes) is chunked
+into the log and handed back to `pages` through `pdu_pg_apply(delta, len, undo)`
+- 1 on undo, 0 on redo - in order with the annotation commands. `pduundo.c`
+carries a stub of `pdu_pg_apply` guarded by `#ifndef PDU_PAGES`; `pages`
+defines `PDU_PAGES` (pdu.h's pages block) when it lands its own. A delta over
+96 bytes clears the history (said, not hidden).
+
+**What a mutation does to the screen.** Every mutating call hands the screen
+rectangle of the record before and after (through `pdm_view_fwd`, padded 6 px,
+cut to the canvas) to `pdu_render_want`, which keeps the union - nothing renders
+before the next wake, so a command is still ONE repaint of the union of its
+marks; the outermost `pdu_undo_end` refreshes Undo/Redo, the title,
+`pdu_changes` (the live count) and the menus. So a caller of 20.8 never asks for a repaint. The primary
+draws no annotation pixel (D15).
+
+**The selection** is an XOR outline with a 4 x 4 handle just OUTSIDE each
+corner on the shapes that resize (Text, Rect, Ellipse, Area mark) - outside, so
+no pixel is flipped twice. The strips actually drawn (8 at most) are
+remembered and taken off by replaying them; a render's BEGIN takes the outline
+off first, but only when one of its strips meets the render's rectangle (the
+page under it is still the page it was drawn on), and its END puts it back;
+`pdu_canvas_paint` takes it off before it paints (a closed dialog's damage) and
+puts it back itself when no render will; scrolling, zooming and a page change
+take it off before they move anything. `Esc` deselects; `Delete` deletes the selection (one undoable
+command); Enter on a selected text box opens it for typing. `pdu_ed_gen()` is bumped on every mutation, undo, redo and selection change (D19, for `notes`); `pdu_tbuf[1025]` is the one near text buffer shared with notes.
+
+**The tools** (`pdutool.c`; Annotate and Edit modes, never Read or Pages, never
+on a signed document). A gesture is modal: the OS delivers a press and a
+release but no motion (13.7), so it polls `os88_mouse()` and yields, holding
+the gfx lock until the button comes up (CWORD's menu and ruler do the same),
+bounded by a MINUTE of ticks - not a pass count, which ended a drag in well
+under a second on a fast machine. It draws an XOR band and takes it off again
+(an Ink or Sign stroke is left for PDREND's opaque bands to paint over, D4, so
+a stroke is not drawn twice; a refused stroke repaints its own strip); the
+record is made at the release,
+converted ONCE from screen to page space with `pdm_view_inv` (5.1), so zoom,
+scroll and rotation never touch a stored byte.
+
+| tool | gesture | result |
+|---|---|---|
+| Select | click a mark (a shape by its border, a note/text by its box, Ink/Sign/Line/Highlight by their bounding box); drag it; drag a corner handle; double-click or Enter a text box to type | moves by an exact pt16 translation, kept on the page; resize re-converts the corner |
+| Note | click | `pdu_nt_new(page, &rect)`: notes' popover (20.9) makes the Note (20x18 pt centred there) on Done with text; double-click a note calls `pdu_nt_open` |
+| Text | drag a frame (any direction), or click for 144 x 36 pt; click an existing box to edit it; a click in the margin is refused (`Click on the page.`) | Text record, then typing |
+| Highlight | with a selection, press Highlight | one record, up to 12 quads (`pdu_sel_quads`, 4 points each), `rect` = their union |
+| Mark / Rect / Ellipse | drag | Area mark / Rect / Ellipse over the dragged frame (4 pt minimum) |
+| Line | drag tail to head | Line with an arrow at the end |
+| Ink | draw with the button down | one Ink record per stroke: a point only when the pointer is 3 px from the last kept one, at most 126 per stroke (said when reached) |
+| Sign | draw one stroke | one Sign record placed on release; the status line says 13.9's `Drawn signature. This is not a certificate signature.` A multi-stroke capture is not built |
+
+**Typing** (`pdu_tx_*`): while a note or text box is open the printable keys,
+Backspace and Enter (a new line, LF) go to it; every other key and every command
+ends the session. Each keystroke is a command that coalesces into the one
+before, so one Undo removes a freshly made box with all its typing, and one
+Undo takes back a whole later typing run. 1,024 characters is the limit and is
+said; the typed text is never dropped.
+
+**Not built / ASKs.** (1) Source annotations are not hit-tested - `pdu_ed_copy_src`
+exists and is tested, but a click on one needs `PDV_ENG_ANNOTS` per page, which
+is `notes`' list; it calls `copy_src` then `pdu_ed_set`/`pdu_ed_move`/`pdu_ed_del`.
+(2) The Highlight tool's text drag is `nav`'s: its selection gesture, when the
+tool is Highlight, ends by calling `pdu_tool_hilite()`; until nav lands `pdu_sel_quads` answers 0 and the status
+line says `Select text first.`. (3) Line-end handles, a plain (arrow-less) Line
+gesture, text caret positioning and property editing are not here; properties
+are `notes`' inspector through `pdu_ed_set`. (4) Page ids are view indices until
+`pages` lands `pdu_pg_id` (`pdu_ed_pg()` is the one line to change). (5) Esc
+does not cancel a gesture while the button is down: no key event is delivered
+inside the held-button loop and `os88_key_down` would arm the kernel's key map
+for the whole session; Undo takes a finished gesture back in one step.
+
+**As measured (2026-11-05, QEMU VGA with the stand-in PDREND, `LATIN.PDF`;
+verify-edit).** An Area mark, a Line dragged up-left, a Rect, an Ellipse, an
+Ink stroke, a Sign stroke and a Text box typed `Hi there`, two backspaces,
+`re`, Enter, `Ok`; the Rect selected, moved by its border, resized by its
+lower-right handle, undone and redone; Save As into `LATIN2.PDF`: `qpdf
+--check` passes and `mutool draw` shows all seven (/Square x2, /Line with
+`/LE [/None /OpenArrow]` at the release end, /Circle, /Ink x2 - the Sign at
+`/BS /W 1.5` with `/Subj (Drawn signature)` - and /FreeText `(Hi there\nOk)`)
+where they were placed; the title's `*` goes at the save. Note and Highlight
+wait for `notes` and `nav`. Sizes: primary 43,398 + 6,239 bss (+4,999 over the
+44,619 base, of which 1,025 is `pdu_tbuf`, which `notes` drops from its own
+bss: +3,974 net of it); overlay 14,248 bytes against D19's +12 KiB share
+(14,547).
+
+
+### 20.9 Notes & edits, the note popover and Text properties (`notes`, wave 2)
+
+Stories PD-12 (notes), PD-14 (the inspector) and PD-16 (the changes list);
+13.4's review state. Files: `pdunotes.c` (resident state, pure model and hooks),
+`pdovlnotes.c` (the list, cards, Resolve, jump-to, the note popover - all
+`ovl_nt_*`), `pduinsp.c` (Text properties - control table resident, functions
+`ovl_nt_*`), and
+`hosttest/pdu_nt.c` + `tests/unit/t_pdnotes.py` (the model, on the host).
+
+#### 20.9.1 The list
+
+A virtual list: no card is kept. `ovl_nt_step` walks the store with one int of
+state and returns the next item - an edit-store index, or `PDU_NT_SBASE` + a
+slot of the source cache - and `ovl_nt_seek(k)`/`ovl_nt_find(id)` are the
+walk run to item k / to an id; the panel paints `vis` rows from `top`. Three
+filters on `pdu_npall`, cycled by the filter button: **This page** (records on
+the page id, then the page's source annotations), **All pages** (every record,
+then the shown page's source annotations - the source of other pages is not
+read, which would be a disk walk per page; so this filter follows the page
+too), **Changes** (every record the store
+holds, deleted ones and review replies included, each with its word: Added,
+Edited, Moved, Deleted, Resolved, Reopened; no source annotations). Deleted
+records and review replies are in no other filter.
+
+**Source annotations** (`ovl_nt_srcload`, once a page, when the panel or the
+popover shows it and no job runs - an `ANNOTS` call moves the engine's object
+state): the first 32 `/Annots` elements through `PDV_ENG_ANNOTS`, at most 8
+listed (Text, Highlight/Underline/Squiggly/StrikeOut, FreeText, Ink, Line,
+Square, Circle - `Link`, `Popup`, `Stamp`, `Widget`, `Caret`,
+`FileAttachment`, `TrapNet` and the rest are not), each with its
+object number, rect and the first 17 characters of `/Contents`; a reply
+(`/IRT`) is not listed and only sets its parent's state. The load runs from
+the page change (`pdu_page_load`) or the wake, **never from a paint**: a module
+verb at the bottom of a paint is the deepest stack PageDesk could build (D21),
+so a paint that finds the cache of another page empties it (the list never
+shows another page's annotations, and a selected source slot is dropped) and
+asks the wake (`pdu_nt_srcwant`), which loads it and repaints the rows that
+changed. The answer's head comes into `pdu_line` and the 17 characters straight
+into the cache - not `pdu_tbuf`, which may be holding `edit`'s open text box. A source annotation
+that a record replaces (`src_num`, 13.1's copy-on-edit) is listed once, as the
+record.
+
+**Review state** (13.4): resolved or reopened is a reply record: `PDA_NOTE`,
+`irt` = the parent's `id` (or, with `PDEF_IRTSRC`, its source object number),
+`state` `PDS_COMPLETED`/`PDS_NONE`. The newest reply wins, and a PageDesk reply
+is newer than one the source carries; up to 12 replies are kept for the lookup
+(`ovl_nt_sync`, one pass over the store when its count, the `pdu_ed_gen()` poll's
+generation, the page or the filter changed). `irt == 0` means "no parent":
+record ids are non-zero.
+
+#### 20.9.2 The panel
+
+Under the shell's header (title, close box, filter): cards 146 x 36 on a
+38-pixel pitch (title "Note - Page 3", the first 17 characters, then a 12-row
+band with the status word and, on a note, Resolve/Reopen), a strip
+`<  1-4/9  >` that pages by a screenful, and the Text properties button (grey
+until a text box is selected). A card's interior is 18 cells wide, so no sliver
+is written beside a row. Selection inverts the card (`pdu_cact`; black on 1bpp).
+**Click** a card: select it, jump to its page (`pdu_goto`; the wake loads it,
+`pdu_notes_page` then reveals the rect) and tell `edit` (`pdu_ed_select`);
+click the selected note again: its popover; the selected text box again: the
+inspector; the card's button: Resolve/Reopen as one undo command.
+
+**Row pictures.** Every visible row (up to 12), the strip and the Text
+properties button keep one word saying what they last showed - for a row a
+hash of its title, preview and status word with the selection, the review
+state and the button folded in; 1 for a blank row - and any repaint of the
+list compares before it draws: an unchanged row is no call at all. So a
+selection change paints two cards, a resolve one, a page change only the rows
+whose item moved, a `pdu_ed_gen()` change the rows it touched, and none of them
+the panel's chrome. The words are forgotten when the ground under the list was
+just filled (the panel's chrome, the popover) or its geometry moved. A button
+is its frame, the four slabs round its caption and the caption in one
+`font_run` (20.6.4's rule), so a toggled state does not flash the label.
+
+COMPACT: the Notes popover is the same list, one line a row (`Note p3 ok: the
+first words`), the same strip, a click picks, jumps and opens the note's
+popover or the inspector; Up/Down scroll, Enter/Esc close. A scroll or a store
+change repaints the list's rows over what they showed; only opening the popover
+fills it.
+
+#### 20.9.3 The note popover
+
+The CGA mockup: a title and `n/1024`, the last four 32-column lines of the text
+with a cursor, and Resolve/Reopen, Delete, Done. A bounded field: 13.1's 1,024
+bytes, a refused key says so and keeps what is typed; Esc discards the typing;
+Enter, Done, a click elsewhere or any other way of closing keeps it. A key
+redraws the counter and the one or two lines it touched (the character and the
+cursor); the four lines only when the text scrolls. **A new note
+is not in the store until it has text** (`pdu_nt_new(page, &rect)`, the Note
+tool's call): an empty or cancelled note is no change and does not dirty the
+document. The record is created with `pdu_ed_new` in one undo bracket, colour
+`PDC_YELLOW`; an existing note's text is `pdu_ed_text`. A note that came with the
+file is listed, jumped to and resolved but its text is the source's. A full
+store refuses Done with the popover still open and the text in it; a close by
+a click elsewhere cannot be refused (`pdu_pop_close` has many callers), so
+there the refused typing is lost with a toast - the one gap in 13.1's rule.
+
+#### 20.9.4 Text properties
+
+Family (Helvetica, Times, Courier), size (8 9 10 11 12 14 16 18 24, - and +),
+Bold, Italic, colour (Black, Blue, Red, Green, Magenta, Brown, Gray; a record
+in any other `PDC_*` shows its own colour labelled `Other`, and C moves it to
+Blue), alignment
+L/C/R, Delete and Done, for one `PDA_TEXT` record: in the panel's place (FULL,
+MID) or a popover (COMPACT, a hidden panel). Each control is one command -
+`pdu_undo_begin`, `pdu_ed_set`, `pdu_undo_end` - and the box is rendered again
+by its own rect (`pdu_render_want`). Keys: Esc/Enter Done, Del delete, B I + - F C
+L M R. `style` = family<<4 | bold | italic<<1 as 13.1.1. In the panel the
+inspector's keys yield to the page field while it is being typed in (and, once
+`edit` lands, must yield to its open text box: 20.9.5).
+
+#### 20.9.5 What the other agents call
+
+The panel polls `unsigned pdu_ed_gen(void)` (D19: `edit` bumps it on every
+mutation, undo, redo and selection change) when it paints and on the wake, and
+repaints only the rows that changed (20.9.2's row pictures); `edit` never
+calls `notes`. The note text is `edit`'s `char pdu_tbuf[1025]`.
+`edit` calls `void pdu_nt_new(unsigned page_id, const struct pd_rect *r)` (the
+Note tool), `void pdu_nt_open(int i)` and `void pdu_nt_inspect(int i)`: real
+resident functions in `pdunotes.c` with exactly the prototypes `edit`'s block of
+`pdu.h` declares, so the two blocks may sit in either order, and notes' block
+defines `PDU_NOTES`, which switches off `edit`'s stand-ins in `pduedit.c`.
+`pdu_ed_select(i)`/`pdu_ed_selected()` are `edit`'s, as are non-zero record ids.
+Notes reaches the store only through 20.8 (`edit`'s `pdu.h` block; the
+stand-in store `pdunt.h` went at the merge with `edit`), brackets each command
+with `edit`'s own undo labels (`UL_NOTE` for a new note and a review reply,
+`UL_TYPE` for a note's text, `UL_DELETE`, `UL_PROPS` for an inspector control),
+and its key hook in `os88_onkey` is `pdu_tx < 0 && pdu_nt_key(...)`: an open
+text box of `edit`'s keeps B, I, C, L, M, R, + and -.
+
+**Sizes (the lead's grant, 22:55):** notes' shares are 2 KiB of the primary
+(image + bss) and 11.5 KiB of the overlay over the wave-1 base (40,650 + 3,973;
+overlay 2,259). Measured at 983d3bc1b, less the stand-in store that went at the
+merge: **+2,030 B resident (1,441 image + 589 bss) and +11,775 B of overlay**.
+About 0.8 KB of the resident figure is string literals the overlay code names
+(SPEC.md 73.14 keeps them resident).
+
 ### 20.10 Navigation, selection, Find, thumbnails, outline and links (`nav`, wave 2)
 
 Files: the primary's `pdunav.c` (history, gestures, links, the idle ladder),
@@ -2600,7 +2899,7 @@ runs).
 
 Interfaces for `edit`: `int pdu_sel_quads(pd_pt *dst, unsigned cap)` copies the
 CURRENT page's selection into `dst`, 8 `pd_pt` (4 points) a quad, **`cap` counted
-in `pd_pt` values**, and returns the quads (0 = none or still being computed);
+in quads** (edit's Highlight passes 12 for its 96-value buffer), and returns the quads (0 = none or still being computed);
 `int pdu_sel_text(char *dst, unsigned cap)` runs the COPY pass to its end on this
 call (slow on a dense page: never from a callback that holds the lock) and
 returns the characters. Esc clears the selection after the popover and the page
@@ -2662,3 +2961,222 @@ change); (3) `os88_gfx_blit1_seg`, an SDK thunk. Open: reading order is the
 content stream's, so columns and tables copy in stream order; a name-tree
 destination is "Named" and not followed; no hand cursor over a link (the OS
 has no move callback); no triple-click line selection.
+
+### 20.14 Host preparation of complex PDFs (`host`, wave 2, PD-22)
+
+`tools/os88pdprep.py` is the optional host command for a PDF outside the XT
+profile (1.3). It is a Python 3.11 script over three independent programs,
+`qpdf` (the rewrite), `mutool` or `pdftoppm` (the raster) and nothing else:
+no pip package, no Microsoft or Adobe binary, no network. Every other part of
+PageDesk works without it; a prepared file is just a PDF.
+
+#### 20.14.1 Command
+
+```
+tools/os88pdprep.py IN.pdf OUT.pdf [--flate] [--raster none|auto|all|2,5-7]
+    [--fonts keep|raster] [--dpi N] [--bits 1|8] [--target vga|cga|herc]
+    [--strip-bytes N] [--no-text-layer] [--pages RANGE]
+    [--password PW | --password-file F] [--force] [--pde-test PATH] [--report FILE|-]
+```
+
+| exit | meaning |
+|---|---|
+| 0 | prepared and verified |
+| 1 | refused, with the reason on stderr (below) |
+| 2 | usage |
+| 3 | a needed tool is missing (`qpdf`; `mutool` or `pdftoppm` for `--raster`): nothing was written, and it is never reported as a pass |
+| 4 | the derivative was written and FAILED verification: it is left in place and the report says why |
+
+Refusals: IN is not a file or has no `%PDF-` in its first KiB; OUT is IN
+(`samefile`: not even with `--force`); OUT exists without `--force`; the file
+is encrypted and no password was given (`PDE_ENCRYPT`), or the password is
+wrong (a file with an EMPTY user password - owner restrictions only - is
+refused too, saying that `--password ""` decrypts it); OUT is a directory; the
+report would land on IN; no pages; more than 1,024 pages (`PDE_LIMIT`;
+`--pages 1-1024` prepares a range). The original is only ever read, and OUT
+appears only after qpdf finished: qpdf writes a fresh `mkstemp` name beside
+OUT, which is renamed over it (never `OUT.tmp`, which an input could be
+called). `--password-file` uses the file's first line.
+
+`--flate` is the Enhanced tier: Flate streams are kept (or re-made from LZW and
+ASCII85) for a build that has PD-25. The default is the XT tier: **no Flate
+at all**, which a 4.77 MHz machine with 640 KiB reads without a decoder, at the
+price of a larger file. `--raster` defaults to `none` so that nothing is
+destroyed unasked; the report names every page that will show *Incomplete
+rendering* and the command that would replace it.
+
+#### 20.14.2 What is rewritten
+
+One `qpdf` pass (`--object-streams=disable`, `--stream-data=uncompress` on the
+XT tier, `--newline-before-endstream`, `--deterministic-id` - on BOTH passes:
+an input with no `/ID` otherwise gets a random one from the first) gives, by
+construction, everything PDENG's profile lists:
+
+| input | derivative |
+|---|---|
+| xref stream, object streams, hybrid file, linearization | one classic `xref` of 20-byte entries in a single subsection, no `/ObjStm`, no `/XRef` |
+| incremental revisions (`/Prev`) | flattened to one revision (the report says how many there were) |
+| object numbers | renumbered 1..N (N is reported against `PD_MAX` 65,535, D8) |
+| `FlateDecode`, `LZWDecode`, `ASCII85Decode`, `ASCIIHex`, `RunLength` and predictors | decoded (XT tier), or Flate again (`--flate`) |
+| `/Encrypt` | decrypted only with a supplied password; the derivative has no encryption, no `/Perms`, no permissions |
+| `DCTDecode`, `JPXDecode`, `CCITTFaxDecode`, `JBIG2Decode` images | left as they are: their page is *incomplete* and is the raster's business |
+| `/Outlines` | kept; dropped with a warning when `--pages` selects a subset, because its targets are gone |
+| `/Names /Dests` name tree | kept when its keys are in order; REBUILT as a sorted two-level tree (leaves of 128 pairs) when they are not (a real producer's file had them out of order, which fails `qpdf --check` and a binary search), and pruned to the pages kept under `--pages` (31 pages of a 4,234-page manual kept 58 of 9,066 destinations) |
+| `/Perms`, signature byte ranges, XFA | kept as data, with a warning: rewriting invalidates a signature |
+
+A stream decoded past the engine's 1 MiB cut (7.5, 20.2.2) is not fixed by
+decoding; the classifier (below) names it.
+
+#### 20.14.3 What the classifier calls incomplete
+
+For each page the tool walks the page's content streams and the Form XObjects
+they draw (4 deep), with the page's inherited resources, and lists what 1.3
+refuses or draws with a stand-in. **Hard** (a reason to rasterise, named in
+the report): `sh`; a pattern colour or `/Pattern`; an ExtGState `/SMask`, a
+`/BM` other than Normal, `/ca` or `/CA` below 1; a colour space that is not
+DeviceGray/RGB/CMYK (ICCBased, Indexed, Separation, DeviceN, Cal*); an image
+with a filter PageDesk lacks, an `/SMask` or `/Mask`, a colour space other than
+DeviceGray/RGB, a depth other than 1 or 8, or a decoded size over 1 MiB; an
+inline image over 4,096 bytes or with such a filter or colour space; a Type 0
+(CID), Type 3, Symbol or ZapfDingbats font; a content stream or form over
+1 MiB; a page box outside +/-2,047 pt or empty. **Soft** (drawn with the
+substitute face, reported, rasterised only with `--fonts raster`): TrueType and
+non-base-14 Type 1 fonts; render modes 4-7.
+
+`--raster auto` takes the hard pages; `all` every page; a list (`2,5-7`,
+numbered after `--pages`) exactly those; `none` leaves every page vector.
+
+#### 20.14.4 A rasterised page
+
+The page is replaced in place - **its object number stays**, so outline and
+link targets still resolve - by `/Type /Page`, the parent, a new `/MediaBox
+[0 0 W H]`, `/CropBox` equal to it and `/Rotate 0` (both are INHERITABLE: left
+out, a `/Pages` node's would crop and turn a picture that has them baked in),
+with Annots, groups and the other boxes dropped, and new contents:
+the page as MuPDF (or Poppler, `pdftoppm -gray`) draws it, with `/Rotate`, the
+CropBox and the source's annotation appearances baked in, cut into horizontal
+**strips**, each an Image XObject (`DeviceGray`, `--bits` 1 or 8) of at most
+`--strip-bytes` decoded (default 60,000: inside one 64 KiB segment, far under the
+1 MiB cut). A row is at most 1,024 bytes, PDREND's image row buffer (20.3.2
+refuses a longer one), so a page wider than 1,024 px at 8 bits (8,192 px at 1)
+is cut into COLUMNS as well; the report names them. 1-bit strips are Bayer 4x4
+ordered-dithered; strips are RunLength-encoded when that is smaller (XT tier)
+or Flate (`--flate`). Each is placed by its own `q ... cm /Sn Do Q`. A page
+larger than 2,000 pt in either direction is shrunk so it fits +/-2,047 pt -
+rendered ONCE at the reduced resolution, from its box (a 14,400 pt page is not
+first drawn as a 20,000-pixel square) - and the report says by what factor.
+
+**Searchable text exists only when it genuinely did.** Where the source page
+had extractable text (MuPDF's `stext`), the page also carries an INVISIBLE
+layer - `BT 3 Tr`, one `Tj` per word in `Courier` with `Tz` set so the word's
+width equals its box in the picture (Courier's advance is 600/1000 em, so no
+width table is needed) - which Find, selection and Copy use as for any text. A
+word followed by another on the same line carries its space, stretched over the
+gap (`(two ) Tj (words) Tj`), so a reader that joins glyphs in content order
+gets the words apart.
+A word with a character outside WinAnsi is skipped and counted; a font with no
+widths gets half an em a letter. There is no layer on a scan, and the report
+says "searchable text: none". `--no-text-layer` omits it. Rotated lines are
+not given boxes.
+
+New annotations PageDesk adds to such a page are ordinary vector records
+(13.3); the source's annotations on it are part of the picture.
+
+#### 20.14.5 The stamp and what PageDesk can show from it
+
+The derivative's Info dictionary gains `/PageDeskPrep`, one text string:
+
+```
+os88pdprep 1.0; qpdf 12.4.2; src-size=N; src-sha256=<64 hex>; tier=xt|enhanced;
+  [raster=2,3; dpi=100; bits=1;] pages=N
+```
+
+(one line; the line break is for print). It is the only thing binding the
+derivative to its original: the original's size and SHA-256, the pages that
+are pictures, the tier. A reader that wants to show **Prepared copy** looks
+for the key through `PDV_ENG_TRAILER` and `DICT_GET`; a string starting
+`os88pdprep` is the signal, `raster=` says which pages are pictures and
+therefore whether the document has searchable text (a page in the list has it
+only if the report said so; the list does not say, by design - the report file
+does). PageDesk itself does not yet read it (open item 1).
+
+There is no side cache and no private container. PD-22 allowed "a
+documented versioned container with per-chunk offsets, sizes, checksums";
+that was written for a derivative that was NOT a PDF. This one is: the strips
+are image XObjects, the fingerprint is in the file, and a stale or wrong chunk
+cannot exist because there is no chunk to go stale (a damaged strip is an
+ordinary damaged stream, 7.5, and is refused by the engine like any other).
+The original is never edited and "restore the edits onto the complex original"
+is NOT offered (open item 2); a prepared copy is its own document.
+
+#### 20.14.6 Verification
+
+After writing, the tool re-reads the output with tools that share nothing
+with it and prints each verdict in the report: `qpdf --check` (any warning
+fails - except a warning the qpdf rewrite of the ORIGINAL gives word for word,
+path, object numbers and offsets aside: that defect was inherited, not made
+here, and is printed as such, e.g. a damaged JPEG the page still draws through),
+`tools/os88pdfcheck.py validate`, its own profile check (classic xref
+at `startxref`, every entry 20 bytes, no `/ObjStm` or `/XRef`, subsections at
+most `PD_MAXSUBSEC`, object numbers under 65,536, no `/Encrypt`, page count) and,
+when `build/pde_test` (or `--pde-test`, `$PDE_TEST`) exists, **PDENG itself**:
+`pde_test dump` must open the file with the right page count and decode and
+tokenize every content stream. A page that the report lists as still
+incomplete may be refused by the engine (the page-box case is `PDE_RANGE`) and
+is then expected; any other refusal fails the run (exit 4). The Enhanced tier
+is not run through PDENG (it has no Flate until PD-25).
+
+#### 20.14.7 Checks and numbers
+
+`tests/unit/t_pdprep.py` (fast, about 1.1 s, proposed row `pdprep`): the
+RunLength encoder round-trips; the dither's white, black and grey; the
+tokenizer through strings, arrays, hex, comments and an inline image whose
+data holds a false `EI`; page lists; then on a generated six-page file that
+qpdf has turned into an object-stream + Flate PDF - a native page, a shading,
+a transparent TrueType page, a 2,500 pt wide page, a JPEG page and a long inline
+image - the report's every verdict, no `/ObjStm` or `/XRef` or Flate in the
+output, the profile check, `qpdf --check`, strips under the cap, the Info
+stamp (the original's SHA-256), MuPDF extracting the invisible words, the
+output byte-identical on a second run, the refusals (in place, existing,
+encrypted without and with a wrong password), a decrypt with the right one (the first line of a `--password-file`), and
+a **negative control**: the profile check must fail the object-stream input.
+Then what the verifier found, each check failing on the first version (nine
+FAILs against it, 0cebd288e): the report never lands on the input; an input
+NAMED `OUT.tmp` is untouched; an input with no `/ID` still prepares
+byte-identically; a page under a `/Pages` node with `/Rotate 90` and a CropBox
+comes out with `/Rotate 0` and its own CropBox; an 8-bit raster 1,650 px wide
+is cut into columns of at most 1,024 bytes a row; an unsorted `/Dests` tree is
+rebuilt sorted and `qpdf --check` is clean; and the invisible words carry their
+spaces. It SKIPs, never passes, without `qpdf`.
+
+Measured on this host (qpdf 12.4.2, MuPDF 1.28.6): XTGUIDE.PDF as an
+object-stream/Flate file (9,555 bytes) becomes a 27,948-byte classic file
+PDENG opens (PDENG: XREFSTM before); an HTML page converted by MuPDF with CID
+fonts rasterises at 80 dpi, 1-bit, to one 3,861-byte strip with 22 invisible
+words. verify-host ran it over 25 more: six macOS system PDFs (ICC colour,
+transparency and blend modes, an 18-page Thai licence in CID fonts -> 36 strips,
+920 KB), the same guide linearized, with object streams, with three incremental
+revisions, and encrypted RC4-40/RC4-128/AES-128/AES-256/AES-256+object streams;
+a generated file with a Type 3, a CID, an Indexed + pattern, a Separation and a
+Symbol page and LZW+ASCII85 content and a PNG-predictor Flate image; posters of
+5,000 and 14,400 pt (0.9 s, 46 MB, scaled to 14%); 1,024 pages (2.9 s) and
+1,100 (refused); and pages 100-130 of a 209 MB, 4,234-page manual (17.7 s,
+530 MB resident - the original is read whole) -> 1.56 MB, `qpdf --check`
+clean. Every output passed `qpdf --check`, `os88pdfcheck validate`, the profile
+check and PDENG, and every raster row is at most 1,024 bytes and every strip at
+most 59,920.
+
+#### 20.14.8 Open items
+
+1. The shell/engine should read `/PageDeskPrep` and show **Prepared copy**
+   and the raster list (20.14.5): not done, it is the lead's to assign.
+2. No merge of a prepared copy's edits back onto the untouched original (PD-22
+   allows leaving it out; if wanted it is a separate host command that lifts the
+   `PDA_*` records out and re-applies them through qpdf).
+3. One scale and one depth per run; no multi-scale pyramid and no per-tile
+   checksum container (20.14.5 says why not).
+4. Colour (RGB/palette) rasters and CCITT/JBIG2 1-bit passthrough are not
+   produced; a 1-bit image whose filter is CCITT is a hard page like any other.
+5. Rotated text gets no layer; vertical writing is not recognised.
+6. Not run on a real XT: no host check can say how fast a strip draws (the
+   lead's final pass measures a prepared copy with MartyPC).

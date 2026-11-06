@@ -72,8 +72,8 @@ static int ovl_sel_quads(pd_pt *dst, unsigned cap)
     if (pdu_selpg != (int)pdu_page || pdu_selq <= 0 || !pdu_scr())
         return 0;
     n = pdu_selq;
-    if (n * 8 > cap)
-        n = cap / 8;
+    if (n > cap)
+        n = cap;
     pd_fcopy_in(pdu_scr(), PDU_SC_QUADS, dst, n * 16);
     return n;
 }
@@ -154,9 +154,10 @@ static void pdu_sel_after(struct os88_rect *r)
     }
 }
 
-/* the names `edit` calls (COMMON.md's interface); the work is the overlay's */
-static int pdu_sel_quads(pd_pt *dst, unsigned cap) { return ovl_sel_quads(dst, cap); }
-static int pdu_sel_text(char *dst, unsigned cap) { return ovl_sel_text(dst, cap); }
+/* the names `edit` calls (COMMON.md's interface, pdu.h's edit block); the
+ * work is the overlay's. `cap` counts QUADS for pdu_sel_quads (20.10.3) */
+int pdu_sel_quads(pd_pt *dst, unsigned cap) { return ovl_sel_quads(dst, cap); }
+int pdu_sel_text(char *dst, unsigned cap) { return ovl_sel_text(dst, cap); }
 
 /* take the selection off the glass. A page being drawn is repainted instead
  * of XORed: its pixels are not whole to invert back */
@@ -343,7 +344,7 @@ static int ovl_tx_glyph(struct pdtm_glyph *g)
 }
 
 /* a pass starts: the state its mode needs */
-static void ovl_tx_begin(int mode)
+static void ovl_txp_begin(int mode)
 {
     pdu_txm = mode;
     pdu_txst = 0;
@@ -375,7 +376,7 @@ static void ovl_sel_set(int pg, unsigned lo, unsigned hi)
 static void ovl_sel_quads_owed(void)
 {
     pdu_txpg = pdu_selpg;
-    ovl_tx_begin(TX_QUAD);
+    ovl_txp_begin(TX_QUAD);
 }
 
 static void ovl_cp_finish(void)
@@ -425,7 +426,7 @@ static void ovl_tx_done(void)
             pdu_pword = 0;
             pdu_wtgt = pdu_par;
             pdu_txpg = pdu_selpg;
-            ovl_tx_begin(TX_WORD);
+            ovl_txp_begin(TX_WORD);
             return;
         }
         ovl_sel_quads_owed();
@@ -532,7 +533,7 @@ static void ovl_txwant_start(void)
     m = pdu_txwant;
     pdu_txwant = 0;
     pdu_txpg = (m == TX_QUAD || m == TX_COPY) ? pdu_selpg : pdu_page;
-    ovl_tx_begin(m);
+    ovl_txp_begin(m);
 }
 
 /* a Find hit: scroll the first box into view, a third of the way down */
@@ -612,7 +613,7 @@ static int ovl_sel_text(char *dst, unsigned cap)
     pdu_cpcap = (unsigned)dst + cap - 1;
     pdu_cpsync = 1;
     pdu_txpg = pdu_selpg;
-    ovl_tx_begin(TX_COPY);
+    ovl_txp_begin(TX_COPY);
     while (pdu_job == J_TEXT)
         ovl_tx_step();
     n = pdu_cpoff - (unsigned)dst;
