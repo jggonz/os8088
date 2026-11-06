@@ -141,7 +141,7 @@ btngesture secs=60   # a standard button goes down, up on slide-off, down again;
 btncp secs=30   # the Control Panel's buttons through its FAR call
 ps2mouse secs=20   # the PS/2 handshake, an exact pointer and every bar title, and the keyboard intact (no UART: Bochs com1 off)
 wheelps2 secs=20   # the IntelliMouse knock and the wheel's Z summed and signed (Bochs imps2, m.wheel)
-c64move secs=80 @OS88_BOCHS_MEGS=1   # the C64's RAM and carve MOVE in a posted compaction on the 1MB kern_mega and the 6510 runs on (KERN-MEGA-PLAN 14.80: its ROM-bank windows had aliased)
+c64move secs=80 @OS88_BOCHS_MEGS=1   # the C64's RAM and carve MOVE on the 1MB kern_mega and the 6510 runs on (KERN-MEGA-PLAN 14.80: its ROM-bank windows had aliased); the RAM slides in heapfrag's suite there, the carve in the posted pass (emumove.py, WHERE THE RAM MOVES)
 a2move secs=80 @OS88_BOCHS_MEGS=1   # ...the Apple II's, the same
 
 # FILES, DIALOGS AND THE DESK
