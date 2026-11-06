@@ -2777,6 +2777,13 @@ with `edit`'s own undo labels (`UL_NOTE` for a new note and a review reply,
 and its key hook in `os88_onkey` is `pdu_tx < 0 && pdu_nt_key(...)`: an open
 text box of `edit`'s keeps B, I, C, L, M, R, + and -.
 
+**Sizes (the lead's grant, 22:55):** notes' shares are 2 KiB of the primary
+(image + bss) and 11.5 KiB of the overlay over the wave-1 base (40,650 + 3,973;
+overlay 2,259). Measured at 983d3bc1b, less the stand-in store that went at the
+merge: **+2,030 B resident (1,441 image + 589 bss) and +11,775 B of overlay**.
+About 0.8 KB of the resident figure is string literals the overlay code names
+(SPEC.md 73.14 keeps them resident).
+
 ### 20.14 Host preparation of complex PDFs (`host`, wave 2, PD-22)
 
 `tools/os88pdprep.py` is the optional host command for a PDF outside the XT
