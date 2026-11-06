@@ -76,7 +76,40 @@ weighted by how often the operation happens.
 
 ## 3. Where the time goes: the ranked profiles
 
-One sub-section per agent, copied from each note's WHERE THE TIME GOES.
+The pass's map is the baseline report,
+`docs/reports/HOTPATH-BASE-2026-11-06.md` (bench, every scenario on three
+adapters, with its `.json`). Each agent's note has its own ranked profile in
+its section 2, which is the authority for its subject. The ranking that drove
+the pass, as measured at the base (busy time of raise, drag, menu, pointer,
+type and scroll together, MartyPC):
+
+| rank | CGA | Hercules | VGA | owner | what the pass did |
+|---|---|---|---|---|---|
+| 1 | `sch_switch` 17.5% | `sch_switch` 17.3% | `vga_restore_vram_v` 16.7% | sched / vga | sched-1 and sched-4 stop the scans at `sch_top` and halt the idle task again (idle tick -43%); vga-1 moves the save and restore by words |
+| 2 | `sw_col` 12.1% | `sw_col` 12.3% | `vga_save_vram_v` 15.2% | mono / vga | mono-1's bank-major walk; vga-1 |
+| 3 | `sw_xfer` 7.2% | `sw_xfer` 9.3% | `sch_switch` 15.0% | mono / sched | mono-2 (`rep movsw`); `sw_xfer` is still ~33% of a CGA raise, near its byte-copy floor - the lever left is how much the raise cache moves (LOG O8) |
+| 4 | `font_run_x` 5.1% | `font_run_x` 5.4% | `vga_solid_rect_v` 7.9% | text / vga | text-3..7; vga-2, vga-3 |
+| 5 | `sw_plane_op` 4.7% | `sw_plane_op` 4.6% | `font_run_x` 4.2% | mono / text | mono-1 |
+| next | `cur_move_mono` 3.6%, `sch_account` 2.7%, `ui_task` 2.5%, `cur_put_mono` 2.1% | (similar) | `cur_draw`, `sch_account`, `gfx_rect_setup` | pointer / sched / gfxcall | pointer-1..5, sched-2, gfxcall-1 |
+
+Outside the interactive set: the lz4 decoder `lz_lzb` was 18% of a cached
+launch (disk-1, disk-2), the BIOS/drive 64% of opening a Disk window (disk-3
+to disk-5 cut the calls), `ico_pass_bb`/`ico_pass` 14-18% of a PgDn (files-3).
+An idle desktop was 94% halted, and its busy time was `sch_switch` 45% and
+`sch_account` 15%.
+
+**Per-operation splits worth keeping** (from the notes):
+
+* A mouse packet on CGA at the pass's base: cursor 4.3 ms, the rest of the
+  ISR 1.5, scheduling ~2.5, the UI task ~0.6. At the pointer merge: 2.28,
+  1.31, ~1.25, 0.78 (pointer.md 2).
+* An idle tick: 17,558 cycles at the base, 9,982 at sched's tip, single-
+  stepped (sched.md 2).
+* The `gfx_*` fixed part this pass owned turned out to be ~6-8% of a raise
+  and ~5% of a 1bpp PgDn (gfxcall.md 2): the 756 us figure is real, but most
+  of a redraw is pixel loops, glyph cells, the save-under and the scheduler.
+* A VGA raise was 70% save-under and restore (120 + 118 ms of 341).
+* A disk launch: the decode was 405 ms of Note Pad's, now 235 (disk.md 2).
 
 ## 4. Totals
 
