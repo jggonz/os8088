@@ -7471,31 +7471,35 @@ back.
 
 `vga_save_vram` and `vga_restore_vram` are the VGA's busiest bodies by time,
 not by calls: the window manager's save-under (§11.96) banks and returns whole
-window rects through them, and a menu's drop and dismissal are one each
-(§12.2). Measured on MartyPC's 4.77 MHz VGA XT at the base of kernel hot-paths
-pass 1, a raise of Paint over Note Pad spent 133 ms in saves and 53 in
-restores against 51 in every fill together. (The pointer's cell went through
-them too, on every mouse packet, until the same pass gave the planar pointer
-its own walks in mouse.inc - §7.1.)
+window rects through them, a menu's drop and dismissal are one each (§12.2),
+and the pointer's own cell is one of each on **every mouse packet** (§7.1) —
+measured on MartyPC's 4.77 MHz VGA XT at the base of kernel hot-paths pass 1,
+a raise of Paint over Note Pad spent 133 ms in saves and 53 in restores against
+51 in every fill together, and one pointer move 6,500 and 8,500 cycles in the
+two.
 
 Each plane's rows are copied as WORDS: `rep movsw` is 25 clocks a word on an
 8088 against `rep movsb`'s 17 a byte. A read in read mode 0 loads the latches
 and answers the Read Map's plane whatever its width, and with Set/Reset off and
 the Bit Mask FF a word write lands both CPU bytes through the Map Mask, so the
 bytes moved are exactly the bytes they were. **The odd byte is split off by
-choosing the LOOP, once a plane**, not by a per-row `jnc`: an even word count,
-or the same with a trailing `movsb` - so the word form wins at every width, a
-one-byte row included (it then runs a `rep` of no iteration and the `movsb`).
-The row steps are registers computed once a plane; the restore's sub-rect step
+choosing the LOOP, once a plane**, not by a per-row `jnc`: three loops — an even
+word count, the same with a trailing `movsb`, and the one-word loop that is the
+pointer's 8-pixel cell straddling two bytes, where a bare `movsw` replaces the
+count load and the `rep` — so the word form wins at every width, a one-byte row
+included (it then runs a `rep` of no iteration and the `movsb`). The row steps
+are registers computed once a plane; the restore's sub-rect step
 (`[gfx_sub_rs]`) is read into BP while DS is still `KERNEL_SEG`, which is what
 retired the `cs:`-overridden memory add every row paid. Neither body's
 contract, buffer layout or result changed.
 
 **Measured** (MartyPC `os8088_xt_vga`, exact guest cycles inside each body,
-the same scripted scene on both kernels; docs/plans/khp1/vga.md): a menu's
-drop save is 188,240 → 138,856 cycles (39.4 → 29.1 ms) and its dismissal's
-restore 199,357 → 145,101 (41.8 → 30.4 ms); a raise of Paint over Note Pad
-spent 132.9 → 99.4 ms in saves and 52.6 → 36.3 in restores.
+the same scripted scene on both kernels; docs/plans/khp1/vga.md): over twelve
+window, menu and pointer operations the saves went **536 → 406 ms (−24%)** and
+the restores **433 → 316 ms (−27%)**. A menu's drop save is 188,240 → 138,856
+cycles (39.4 → 29.1 ms) and its dismissal's restore 199,357 → 145,101 (41.8 →
+30.4 ms); the pointer's cell is 6,000 → 5,100 cycles to save and 8,020 → 6,250
+to restore, on every mouse packet.
 
 ### 5.9 `band.inc` — the 1bpp BAND COMPOSER (a knob: `BAND=1` compiles it in)
 
