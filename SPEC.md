@@ -39572,38 +39572,55 @@ It touches no claim: what is cached, the width solve, a requester's command
 (§18.95.8), the purge and every invalidation are exactly as they were - only
 which slot a fill spends moves.
 
-#### 18.95.11 …and two reads that know what follows them fill further
+#### 18.95.11 …and a listing mount reads LBA 0 as a fill of eight
 
-Kernel hot-paths pass 1 (docs/plans/khp1/disk.md). A fill reads forward from
-the sector that missed to the end of the TRACK, nine sectors at most, because
-a fill is a guess. Two reads in the system are not guessing, and for those
-the guess is replaced by what they know - through one byte, `[dsk_rah_hint]`,
-the sectors the caller will read from the one it asks for, armed across that
-one read and disarmed straight after it:
+Kernel hot-paths pass 1 (docs/plans/khp1/disk.md, LOG section L). A fill
+reads forward from the sector that missed to the end of the TRACK, nine
+sectors at most, because a fill is a guess. A LISTING mount (not quiet, and a
+store to list into) is the one read that does not have to guess: on 360KB
+and 720KB the boot sector, both FATs and the root's first sectors are the
+first eight sectors of track 0, and the mount is about to want all of them.
 
-- **The loader's header peek** (§21 step 2). The peek is one sector and the
-  whole file follows it, so with the hint set to the file's sectors the fill
-  runs to the bound `dsk_xfer`'s own reads use - the CYLINDER on a two-headed
-  floppy whose FDC was seen to cross a head (§18.91.1, `[dsk_cylrun]`), else
-  the track - and no further than the file. Longer than one slot, it is one
-  `int 13h` into the first *m* slots, each record then stamped with its own
-  nine, so every slot stays an ordinary chunk a later fill evicts alone.
-  Measured (FDC calls): Note Pad, TexPad and Paint each launch in one call
-  fewer on 360KB and on 1.44MB, Calc as before.
-- **A listing mount's LBA 0.** A full mount empties the cache at step 1, now
-  BEFORE the boot-sector read and not after the FAT window, and reads LBA 0
-  through it with the hint at **8** - the most every rule-11 geometry has on
-  its first track under the fallback 9/2. On 360KB, 720KB and 1.2MB those
-  eight are the boot sector, the FAT window and the root's first sectors, so
-  a navigation spends one call where it spent two or three. The rule the old
-  "never from the cache" stated is kept exactly: the boot sector is still the
-  first thing this mount read off the platter, and so is every byte served
-  after it. The chunk is re-tagged with the NEW disk's signature straight
-  after `dsk_bpb_sig`, before anything can look it up. A quiet mount reads
-  LBA 0 as it always did, around the cache.
+So a full mount **empties the cache first**, before the boot-sector read and
+before the banked-head check (so a fixed volume's listing mount drops it
+too), and reads LBA 0 THROUGH the empty cache with a one-byte cap,
+`[dsk_rah_hint]`, at **8**. `dsk_rah_fill` takes the smaller of the track's
+remainder and the cap. Eight because the read runs under the fallback 9/2,
+before the BPB says what the disk is, and eight is the most every geometry
+§18.2's rule 11 admits has on its first track: an 8-sector track 0 would
+refuse a ninth. The cap is disarmed straight after that read, before its
+failure test, and on the banked path, so no other fill ever sees it.
+
+**What the swap detector still guarantees, exactly as before.** The cache is
+empty when the read starts, so the boot sector necessarily comes off the
+platter, and everything the listing is then served came off in the SAME
+transfer. Nothing it shows is older than this mount's swap detector, which is
+the whole of what the old rule ("LBA 0 never from the cache") was for, and a
+swap between the boot-sector read and the FAT read can no longer mix two
+disks. The fill stamps its records with the signature of the disk mounted
+BEFORE, because the new one is not known until its boot sector is read, so
+every record is re-tagged with the new disk's signature straight after
+`dsk_bpb_sig`, before anything can look one up. **The flush is what makes
+that re-tag safe**: it is why every record it touches is one this mount
+read. Without it the re-tag would hand the old disk's chunks the new disk's
+key, and the next navigation would list the old disk - measured that way,
+broken on purpose. A quiet mount (a copy's volume switch) reads LBA 0 around
+the cache, as it always did, and keeps the cache.
+
+Calls (MartyPC FDC counters): 360KB and 720KB, open a root 4 -> 2, enter a
+folder 3 -> 2, Up 3 -> 1. 1.44MB is unchanged (its FATs run past sector 7);
+1.2MB is not measured.
+
+**The loader's header peek is NOT given a longer fill here.**
+`kernel-hotpaths` also carries one (disk-4, +208): the peek arms the cap at
+the file's length and the fill runs to the CYLINDER's end over several
+slots, saving one call on a multi-track launch. It was left out of this
+branch for its bytes, and if it is taken it is better spelled as an explicit
+prefetch call than as an armed byte.
 
 Not on kern_dos (no room in its image) and not on kern_mega (its store above
-1MB lands through a nine-sector bounce): `DSK_RAHINT` is undefined there.
+1MB lands through a nine-sector bounce): `DSK_RAHINT` is undefined there, and
+kern_mega drops the cache at step 2 instead (before the FAT window).
 
 ### 18.96 Formatting a floppy — the mount's verdict, run backwards
 

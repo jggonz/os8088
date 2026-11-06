@@ -20,7 +20,8 @@ trims that edit code those picks added (size-2 needs wm-4, size-12 needs
 disk-1, size-17 needs disk-4). It keeps **every free item** (the size agent's
 other fourteen included), the tools, the baseline report and the notes, and
 **the ten picks below, +108 bytes** chosen from section 0's tier A by
-user-visible time per byte:
+user-visible time per byte, **and, added after, disk-3 and a standalone
+disk-5 for +74** (section L.1):
 
 | id | commit | kern_big B | what it buys |
 |---|---|---:|---|
@@ -34,11 +35,11 @@ user-visible time per byte:
 | wm-1 | `9c64eaea` | +4 | a covered window put back whole is not re-saved: fullscreen exit CGA -106 ms |
 | vga-4 | `8b1de03b` | +3 | VGA XOR fill -36%: menu highlights, every drag-outline step |
 | text-9 | `499dfc5c` | +2 | VGA `font_char` -6% a glyph |
+| disk-3 | `6c8f8f05` | +14 | added later on the owner's ask: a listing mount drops the cache BEFORE the FAT window, so the window's own fill serves the root |
+| disk-5 standalone | `c5d1d8fe` | +60 | added later on the owner's ask: a listing mount reads LBA 0 as ONE 8-sector fill (boot sector, FATs, root head). 360KB and 720KB: open a root 4 -> 2 int 13h calls, enter a folder 3 -> 2, Up 3 -> 1 (~0.4 s a call, P) |
 
-**Left out, and why.** disk-5 (+40) is the largest single win of the pass
-(two int 13h calls fewer a navigation on 360 KB), but it needs disk-4 (+208),
-which is twice the whole allowance by itself; the pair is the obvious next
-pick if the allowance grows. wm-4 (+34, fullscreen exit) and the decoders
+**Left out, and why.** disk-4 (+208, one call fewer on a multi-track
+launch) is narrow: only the loader's header peek arms it (section L.1). wm-4 (+34, fullscreen exit) and the decoders
 (disk-1 +126, disk-2 +72) are next after it. Everything in tiers B and C is
 out.
 
@@ -92,12 +93,63 @@ base read 1,299, 1,354 and 1,409 ms across three runs, lean 1,381-1,401, with
 the same int 13h calls - unchanged within the rotational phase. Menu close
 on CGA (+2.4%) is the same tick phase the main pass found at -n 3.
 
-**Rows.** The union of every row the nine notes name (150, the same `-k`
+**Rows (before L.1).** The union of every row the nine notes name (150, the same `-k`
 set as `kernel-hotpaths`' section 4.3), once on this tree: **150 passed, 0
 failed, 0 skipped** - `glyphcost` included, files-3 being out (LOG O5).
 **`make test-full`: 85 passed, 0 failed, 3 skipped** (the same three fixture
 skips). `make`, `make small`, `make emu` and `make mega` build; `hotpar` is
 green on kern_big and kern_small.
+
+### L.1 disk-3 and disk-5 without disk-4 (+74)
+
+On `kernel-hotpaths` disk-5 sat on disk-4, and it took exactly one thing from
+it: the fill hint, armed to 8 so that the LBA 0 fill, which runs under the
+fallback 9/2, cannot ask an 8-sector track 0 for a ninth sector. Eight never
+exceeds one 9-sector slot, so disk-4's multi-slot fill, its cylinder bound and
+its per-slot stamping were never on that path. Here the hint is a plain CAP
+(`dsk_rah_fill` takes the smaller of the track's remainder and the cap):
+**+60 against disk-4 + disk-5's +248**, with disk-3 re-applied as it was
+(+14).
+
+One fix over the original: the cap is disarmed straight after the LBA 0 read,
+BEFORE its failure test. The original cleared it only on the success path, so
+a refused LBA 0 left the next unrelated fill capped at 8: harmless to the
+data, but state left armed. Two bytes of the +60 are parity (a never-executed
+`nop` after the mount arm's `jmp`, and `mov` over `xchg` in the cap) so that
+`dsk_next_clus_x` keeps its measured parity on both kernels.
+
+| | 360 KB, before -> after | 720 KB, before -> after |
+|---|---|---|
+| open B: (its root) | 4 -> **2** calls (19 -> 14 sectors) | 4 -> **2** (19 -> 16) |
+| enter APPS | 3 -> **2** (14 -> 13) | 3 -> **2** (18 -> 17) |
+| Up (`..`) to the root | 3 -> **1** (13 -> 8) | 3 -> **1** (11 -> 8) |
+
+MartyPC FDC counters, `os8088_5150_cga_gla` and the one 80-cylinder profile
+`os8088_5150_herc_sb_720_gla`, `0890820b` against `c5d1d8fe`: the same counts
+disk-4 + disk-5 gave on `kernel-hotpaths`. At ~400 ms a call on the 5150 that
+is **~0.8 s off opening a root, ~0.4 s off a folder, ~0.8 s off Up**
+(PREDICTED from calls). 1.44 MB is unchanged; 1.2 MB is not measured.
+
+**Swap safety, tested and broken on purpose.** A scratch driver opens B: on
+apps360, enters APPS, swaps B: for games360 under the open window (MartyPC
+`mount`, then three guest seconds for the motor to stop, as an XT gives no
+change signal), goes up with `..` and compares the listing with `mdir` of
+games360's root, then swaps back through a games360 folder and compares with
+apps360's. **Both comparisons pass on this branch and on its parent.** With
+the mount's cache flush removed on purpose, the navigation after the swap
+lists apps360's old root (`APPS`, `GAMES`) where games360's should be: the
+flush is what keeps the re-tag from handing the old disk's chunks the new
+disk's key, and the test can tell.
+
+Bytes, with L.1: kern_big resident **91,577** (+47 against the pass base),
+`KERN_SIZE` 96,768 -> **97,280** (one step; 3,584 spare); kern_small
+**57,333** (+75), `KERN_SIZE` 59,392 unchanged; kern_mega and kern_dos
+unchanged. SPEC.md 18.95.11 is rewritten for this branch: the listing mount's
+fill, the swap reasoning, and why the loader's peek is not here.
+
+Rows, once on `c5d1d8fe`: **the disk agent's 39 and the files agent's 13
+(50 selected): 50 passed**, `imgswap`, `stikswap`, `rdmount`, `fatwpin`,
+`dirwshed`, `curdisk`, `install` and the boot rows among them.
 
 ## 0. The owner's picks at a glance, ranked
 
