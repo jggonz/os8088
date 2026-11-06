@@ -62,7 +62,7 @@ greyed while WireChat is not connected.
 
 The server refuses some claims, and the line above the field says why: a nick
 that belongs to someone, a nick someone else has claimed, a few names such as
-`admin` and `sysop`, a machine that is muted, or a third claimed nick from
+`help` and `wirebot`, a machine that is muted, or a third claimed nick from
 the same machine. A machine can claim or get a new code three times, then once
 every 8 hours.
 

@@ -222725,8 +222725,9 @@ nick's code after lowercasing it and removing every `-` and space, so
 that form - it cannot tell anyone the code again, and the `K` record that
 carries it is the only time it is sent. A claim never expires. An owned
 nick is checked first and is never claimed; the server also keeps a short
-list of RESERVED nicks (`admin`, `sysop`, `wirechat` and the like) that may
-be used, as today, but never claimed.
+list of RESERVED nicks (`help`, `wirebot` and the like) that may be used,
+as today, but never claimed - most of the list (`admin`, `sysop`, ...) the
+language scanner refuses as a nick already, so it is never reached.
 
 - **`claim`, empty body** - the session's nick is claimed and a `K` record
   carries its code. When the nick is claimed already and this session joined

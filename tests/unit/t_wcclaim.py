@@ -190,7 +190,7 @@ def main():
        "a claimed nick held without its code cannot be claimed again")
     eq(req(h, "claim", tf, "release", B), ["ER 404 0 That nick is not claimed"],
        "...nor released by that session")
-    r, ts = join(h, "SysOp", addr=B)
+    r, ts = join(h, "HELP", addr=B)       # hub.js: one scanNick lets by
     check(r[0].startswith("OK"), "a reserved name may still be used")
     eq(req(h, "claim", ts, addr=B), ["ER 422 0 That nick cannot be claimed"],
        "a reserved name cannot be claimed, in any case")

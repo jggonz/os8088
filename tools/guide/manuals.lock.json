@@ -1351,9 +1351,9 @@
   "sources": [
    "apps/wirechat"
   ],
-  "stamped": "c13806ae4",
+  "stamped": "8f688c2bb",
   "strings": "6e00d17167409314",
-  "why": "claimed nicks (SPEC.md 113.6.6): Claim Nick.../New Code..., Release Nick..., the code's alert and Signed in elsewhere; the page gained Claiming your nick, three menu rows and a status-bar row"
+  "why": "claimed nicks (SPEC.md 113.6.6); reserved-name examples are ones the server lets through as nicks (help, wirebot)"
  },
  "WIREFLET_O88": {
   "sources": [
