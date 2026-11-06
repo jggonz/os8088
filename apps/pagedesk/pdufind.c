@@ -83,6 +83,8 @@ static void ovl_find_hit(unsigned lo, unsigned hi)
     pdu_cat(pdu_line, pdu_num, sizeof(pdu_line));
     if (pdu_fwrap)
         pdu_cat(pdu_line, " (wrapped)", sizeof(pdu_line));
+    os88_strcpy(pdu_selmsg, pdu_line, sizeof(pdu_selmsg));  /* the boxes' pass
+                                         * may put its progress over it */
     pdu_wsay(pdu_line);
     if (pdu_fpg != (int)pdu_page) {
         pdu_hjump = 1;

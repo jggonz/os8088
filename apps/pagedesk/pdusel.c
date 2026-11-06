@@ -35,6 +35,9 @@ static int pdu_selq;                    /* quads in scratch; -1 = owed */
 static int pdu_selvis;                  /* the quads are XORed on the glass */
 static int pdu_selshow;                 /* ...and owed to it when idle */
 static int pdu_selgoto;                 /* a Find hit: bring it into view */
+static int pdu_txsaid;                  /* the pass put "Reading the text" up */
+static char pdu_selmsg[32];             /* ...and what the status said before it */
+#define PDU_TXSAY_TICKS 18              /* = pdujob.c's PDU_PROGRESS_TICKS */
 static int pdu_selhl;                   /* a gesture made with Highlight armed:
                                          * its boxes become edit's record */
 
@@ -387,6 +390,7 @@ static void ovl_txp_begin(int mode)
     pdu_qn = 0;
     pdu_cpfirst = 1;
     pdu_cpover = 0;
+    pdu_txsaid = 0;
     if (pdu_job != J_TEXT)
         pdu_job_start(J_TEXT);
 }
@@ -472,6 +476,15 @@ static void ovl_tx_done(void)
         pdu_selq = pdu_qn;
         pdu_job = J_NONE;
         pdu_menusync();
+        if (pdu_txsaid || pdu_selmsg[0]) {  /* the progress line goes, and a
+                                         * Find hit says so again over the
+                                         * page load's "Page drawn.": the
+                                         * first build left "Reading the text
+                                         * N - Esc cancels" up for good */
+            pdu_txsaid = 0;
+            pdu_wsay(pdu_selmsg);
+            pdu_selmsg[0] = 0;
+        }
         if (pdu_selgoto) {
             pdu_selgoto = 0;
             ovl_sel_view();
@@ -535,6 +548,8 @@ static void ovl_tx_step(void)
         ovl_tx_done();
         return;
     }
+    if ((unsigned)(os88_ticks() - pdu_jt0) >= PDU_TXSAY_TICKS)
+        pdu_txsaid = 1;
     pdu_progress("Reading the text", "");
 }
 
@@ -545,6 +560,7 @@ static void ovl_sel_points(int x0, int y0, int x1, int y1, int word)
     pdm_view_inv(&pdu_pax, &pdu_pay, &pdu_view, x0, y0);
     pdm_view_inv(&pdu_pfx, &pdu_pfy, &pdu_view, x1, y1);
     pdu_pword = word;
+    pdu_selmsg[0] = 0;
     pdu_selhl = (pdu_tool == C_T_HILITE);
     pdu_txpg = pdu_page;
     pdu_txwant = TX_PICK;
@@ -557,6 +573,7 @@ static void ovl_selall(void)
     if (pdu_doc != D_OPEN)
         return;
     ovl_sel_clear();
+    pdu_selmsg[0] = 0;
     ovl_sel_set(pdu_page, 0, 0xFFFF);
     pdu_txwant = TX_QUAD;
     pdu_txpg = pdu_page;
