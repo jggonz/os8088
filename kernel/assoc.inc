@@ -407,7 +407,9 @@ assoc_find:
 ;      DX = the row stride
 ; out: CF=0 with BX -> the row and AL = its index; CF=1 = none (BX past the
 ;      table)
-; clobbers: AX, BX (the outputs), flags
+; clobbers: AX, BX (the outputs), flags. CX comes back as it came WITHOUT a
+;           bank: the one write to it, `xor ch, ch`, is inside the row's own
+;           push/pop (kernel hot-paths pass 1, size: -2)
 ;
 ; assoc_find's walk of the extension rows and assoc_app_of's of the stems were
 ; the same loop at two widths and two strides (kernel size pass 5). "In use"
@@ -415,7 +417,6 @@ assoc_find:
 ; row never matches, whatever the key.
 ; -----------------------------------------------------------------------------
 assoc_scan:
-    push cx
     push di
     push es                     ; ES = DS ONCE, not once a row (kernel
     push ds                     ; hot-paths pass 1): the key and the row are
@@ -442,7 +443,6 @@ assoc_scan:
 .out:
     pop es
     pop di
-    pop cx
     ret
 
 ; -----------------------------------------------------------------------------

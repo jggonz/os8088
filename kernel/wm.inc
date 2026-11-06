@@ -10397,9 +10397,11 @@ wm_su_edge:
 ;
 ; With no sub-rect armed [wm_su_pext] is 0 and [wm_su_srow] is every row, so
 ; this degenerates to the one flat walk it replaced.
+;
+; SI and DI come back WALKED, BX, CX and DH spent: wm_su_edge, the one
+; caller, reloads SI and DI before its second call and leaves by kret_bp after
+; either (kernel hot-paths pass 1, size: -4 - the bank was dead).
 wm_su_merge:
-    push si
-    push di
 %ifdef KERN_BIG                 ; (kern_small: one plane, so no plane loop -
     push bp                     ; the walk below runs once and the tail step
 %endif                          ; that only fed the next plane goes with it)
@@ -10427,8 +10429,6 @@ wm_su_merge:
     jnz .plane
     pop bp
 %endif
-    pop di
-    pop si
     ret
 
 ; wm_su_try - put window DI's content back from the cache

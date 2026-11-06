@@ -6010,7 +6010,10 @@ dsk_fatw_scan:
 ; -----------------------------------------------------------------------------
 ; dsk_fatw_demote - this volume's FAT window is being SHED (SPEC.md 18.8.4)
 ; in:  BX = the owner word, MEM_P_FATW + the volume
-; out: nothing (all registers preserved)
+; out: nothing; AX and BX are SPENT - the one caller, mem_pg_forget, pops
+;      both straight after, so the bank was dead and its two copies of the
+;      pops with it (kernel hot-paths pass 1, size: -10 kern_big, -4
+;      kern_small); every other register preserved
 ;
 ; mem_pg_forget hands the owner here instead of zeroing dsk_fatwc[v], because
 ; the purge protocol carries ONE naming word and the LIVE window has three.
@@ -6046,8 +6049,6 @@ dsk_fatw_scan:
 ; record goes, and the walk moves nothing over it until after.
 ; -----------------------------------------------------------------------------
 dsk_fatw_demote:
-    push ax
-    push bx
     mov ax, bx
     sub ax, MEM_P_FATW          ; AX = the volume this owner names
     call dsk_fatw_slota
@@ -6087,18 +6088,14 @@ dsk_fatw_demote:
     pop si
     pop cx
     mov word [dsk_fatseg], FAT_SEG  ; ...and only THEN does the live word name
-    pop bx                          ; the pin, [dsk_fatw0] kept as it stood.
-    pop ax                          ; Its own epilogue and not a `jmp short
-    ret                             ; .out`: one byte more keeps the arm EVEN,
-                                    ; so dsk_next_clus_x and the hot code
-                                    ; after it keep their parity (t_hotpar)
-.home:
-%endif
+.out:                               ; the pin, [dsk_fatw0] kept as it stood
+    ret
+.home:                              ; IF = 0: falls into dsk_fatw_home below
+%else
     call dsk_fatw_home
 .out:
-    pop bx
-    pop ax
     ret
+%endif
 
 ; dsk_fatw_home - the PIN is the live window again, with nothing resident in
 ; it: the two stores dsk_fatw_demote and dsk_fatw_drop both end on. Word
@@ -10324,7 +10321,9 @@ ico_ref_try:
 ; dsk_ico_stage - stage the body a REFERENCE names into dsk_ico
 ; in:       AL = a row, ICO_R_FOLDER or ICO_R_NONE
 ; out:      SI -> dsk_ico, holding 64 bytes (all-zero = no icon)
-; clobbers: SI (the output) and the flags
+; clobbers: SI (the output), AX and the flags. AX is not banked: both callers
+;           (dsk_get_icon_x, fmv_get_icon) pop their own straight after
+;           (kernel hot-paths pass 1, size: -2)
 ;
 ; THREE PLACES A BODY CAN BE, which is what the reference byte buys: the
 ; store's claim, the kernel segment for the one built-in body every folder
@@ -10340,7 +10339,6 @@ ico_ref_try:
 ; along: a whole frame, a call and a flag to hand over an address.
 ; -----------------------------------------------------------------------------
 dsk_ico_stage:
-    push ax
     push cx
     push dx
     push di
@@ -10380,7 +10378,6 @@ dsk_ico_stage:
     pop di
     pop dx
     pop cx
-    pop ax
     mov si, dsk_ico
     ret
 
