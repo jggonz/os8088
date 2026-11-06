@@ -57,6 +57,74 @@ def big_text(rng, n):
     return bytes(out[:n])
 
 
+class Bits:
+    """A deflate bit writer (LSB first; Huffman codes MSB first), for streams built by hand."""
+    def __init__(s): s.v = 0; s.n = 0
+    def put(s, val, n): s.v |= val << s.n; s.n += n
+    def code(s, val, n):
+        s.put(int(format(val, "0%db" % n)[::-1], 2), n)
+    def lit(s, c):                      # the fixed literal/length code
+        if c < 144: s.code(0x30 + c, 8)
+        elif c < 256: s.code(0x190 + c - 144, 9)
+        elif c < 280: s.code(c - 256, 7)
+        else: s.code(0xC0 + c - 280, 8)
+    def align(s): s.n = (s.n + 7) & ~7
+    def stored(s, data, final=0):
+        s.put(final, 1); s.put(0, 2); s.align()
+        s.put(len(data), 16); s.put(len(data) ^ 0xFFFF, 16)
+        s.v |= int.from_bytes(data, "little") << s.n; s.n += 8 * len(data)
+    def bytes(s): return s.v.to_bytes((s.n + 7) // 8, "little")
+
+
+def edge_streams(rng):
+    """Hand-built streams for the asm symbol loop's edges, each judged by Python's inflater
+    (verify-flate2): the two ways to code a length of 258, a literal/length or distance symbol
+    that does not exist, a distance before the first byte and one past the history after a
+    fill boundary (and the same distance one less, valid), distance 32,768 at exactly the
+    whole history, one past it, and history copies that straddle the ring's end."""
+    out = []
+    def fixed(prefix=b"", body=None):
+        # the history comes first as raw deflate, sync-flushed so the hand-built block starts on a
+        # byte; it is periodic (251, a prime) so it costs a few hundred bytes of the harness's PDF
+        # window, and a copy from a wrong offset is still caught unless it is off by a multiple of 251
+        head = b""
+        if prefix:
+            c = zlib.compressobj(9, zlib.DEFLATED, -15)
+            head = c.compress(prefix) + c.flush(zlib.Z_SYNC_FLUSH)
+        w = Bits()
+        w.put(1, 1); w.put(1, 2)
+        body(w)
+        w.lit(256)
+        return bytes([0x78, 0x9C]) + head + w.bytes()
+    def match(w, length, dist):
+        lb = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258]
+        le = [0] * 8 + [1] * 4 + [2] * 4 + [3] * 4 + [4] * 4 + [5] * 4 + [0]
+        db = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577]
+        de = [0, 0, 0, 0] + [i // 2 for i in range(2, 28)]
+        s = 285 if length == 258 else max(i for i in range(28) if lb[i] <= length) + 257
+        w.lit(s); w.put(length - lb[s - 257], le[s - 257])
+        d = max(i for i in range(30) if db[i] <= dist)
+        w.code(d, 5); w.put(dist - db[d], de[d])
+    def lits(w, data):
+        for c in data: w.lit(c)
+    out.append(fixed(body=lambda w: (lits(w, b"a"), match(w, 258, 1))))                     # 285
+    out.append(fixed(body=lambda w: (lits(w, b"a"), w.lit(284), w.put(31, 5), w.code(0, 5))))  # 284 + 31 = 258
+    out.append(fixed(body=lambda w: (lits(w, b"ab"), w.lit(286))))                           # no such length
+    out.append(fixed(body=lambda w: (lits(w, b"ab"), w.lit(257), w.code(30, 5))))            # no such distance
+    out.append(fixed(body=lambda w: (lits(w, b"a"), match(w, 3, 2))))                        # before the first byte
+    t300 = bytes(rng.randrange(97, 123) for _ in range(300))
+    out.append(fixed(body=lambda w: (lits(w, t300), match(w, 10, 300))))                     # the whole history, over a fill
+    out.append(fixed(body=lambda w: (lits(w, t300), match(w, 10, 301))))                     # one past it
+    per = bytes(rng.randrange(256) for _ in range(251))
+    r32 = (per * 131)[:32768]
+    out.append(fixed(r32, lambda w: match(w, 258, 32768)))                                   # dist 32768 = all of it
+    out.append(fixed(r32[:32767], lambda w: match(w, 258, 32768)))                           # one past it
+    r33 = (per[::-1] * 133)[:32768 + 256 + 50]
+    out.append(fixed(r33, lambda w: (match(w, 258, 400), match(w, 258, 32768), match(w, 258, 32768),
+                                     lits(w, b"end"), match(w, 7, 32700))))                  # straddles the ring's end
+    return out
+
+
 def make_pdf():
     rng = random.Random(5)
     text = (b"BT /F1 12 Tf 72 700 Td (Hello, PageDesk) Tj ET\n" * 30 + b"q 1 0 0 1 10 10 cm 0 0 100 100 re f Q\n" * 10 +
@@ -103,6 +171,7 @@ def make_pdf():
     for cut in (3, 10, 40, 90, 200, len(base) - 10):
         mal.append(base[:cut])
     mal.append(bytes([0x78, 0x9C, 0x07])); mal.append(bytes([0x78, 0x9C, 0x01, 5, 0, 0, 0, 1, 2, 3, 4, 5]))
+    mal += edge_streams(random.Random(9))
     pdf = fc.build_pdf([(b"/Filter /FlateDecode", z10),
                         (b"/Filter /FlateDecode /DecodeParms << /Predictor 15 /Columns %d >>" % cols, z11),
                         (b"/Filter /FlateDecode", bad),
@@ -211,6 +280,13 @@ def main():
     os.makedirs(build, exist_ok=True)
     pdf, text, raw, bad, bigs, corpus = make_pdf()
     want = (text, raw) + expect(bad)
+    # the PDF sits in memory at P_SEG and the flate slots at pde_fl_boot.c's SEG_FLATE: a PDF
+    # that grows into the slots is overwritten by the history while it is read (the boot then
+    # stops early with fewer result lines, which reads like a decoder fault)
+    flseg = int(re.search(r"#define SEG_FLATE\s+(0x[0-9A-Fa-f]+)", open(os.path.join(HERE, "pde_fl_boot.c")).read()).group(1), 16)
+    if ns["P_SEG"] * 16 + len(pdf) > flseg * 16:
+        raise SystemExit("pde_fl_boot: the PDF (%d bytes at %05X) runs into the flate slots at %05X"
+                         % (len(pdf), ns["P_SEG"] * 16, flseg * 16))
 
     mods = {"asm": open(os.path.join(build, "PDENG.MOD"), "rb").read(),
             "c": open(os.path.join(build, "flc", "PDENG.MOD"), "rb").read()}
@@ -253,6 +329,27 @@ def main():
           % (off, len(p), len(dd)))
     if not p or not dd:
         problems.append("NEGATIVE CONTROL DID NOT BITE: the comparison cannot see a broken asm")
+    # SECOND NEGATIVE CONTROL (verify-flate2): break the history copy's ring mask in flc_match
+    # (and si, 0x7FFF -> 0x7FFE: an odd source offset reads the byte before it). Only a match that
+    # reaches back before the 256-byte output buffer goes there, so this proves the corpus's
+    # history and ring-wrap streams reach the asm's history path and that the judge sees it.
+    start = next(i for i, l in enumerate(lst) if l.rstrip().endswith("flc_match:"))
+    off = None
+    for l in lst[start:start + 40]:
+        m = re.match(r"\s*\d+\s+([0-9A-F]{8})\s+81E6FF7F\s", l)
+        if m:
+            off = int(m.group(1), 16)
+            break
+    broken = bytearray(mods["asm"])
+    assert off is not None and broken[off:off + 4] == b"\x81\xE6\xFF\x7F", "listing and image disagree (ring mask)"
+    broken[off + 2] = 0xFE
+    out = run_boot(build, bytes(broken), pdf, False)
+    p, res, _, _ = judge("broken2", out, want, bigs, corpus)
+    dd = [k for k in results["c"] if results["c"][k] != res.get(k)]
+    print("negative control 2 (the history ring mask broken at image offset 0x%X): %d expected-value problems, %d differences from the C twin"
+          % (off, len(p), len(dd)))
+    if not p or not dd:
+        problems.append("NEGATIVE CONTROL 2 DID NOT BITE: the corpus does not reach the asm's history copy")
     for q in problems:
         print("FAIL", q)
     print("FAILURES: %d" % len(problems))
