@@ -10603,7 +10603,12 @@ Four things make the pair what it is.
   then `cur_pass_mono` again for black) read the same byte three times and
   wrote it twice, each through its own row walk and its own `gfx_nextrow`
   call. The masks compose: `(under | white) & ~black` is exactly what drawing
-  one pass on top of the other always produced.
+  one pass on top of the other always produced. Since kernel hot-paths pass 1
+  the row is a WORD: one read of both bytes under the arrow, one word banked,
+  the masks rotated (`ror`, not `shr`) so their bytes come out in the word's
+  own order, then the byte writes - 6,309 -> 5,234 cycles a show on the
+  5150's CGA, measured over 31 typed keys; `cur_get_mono` takes `lodsw` and
+  holds the row step in registers, 2,916 -> 2,215.
 - **And the PLANAR draw is one pass too, with no Set/Reset at all.** VGA used
   to paint the whole dilated body solid white and then punch the black arrow
   into it — two passes with a GC reprogram between them, and a window in which
@@ -10736,13 +10741,33 @@ against a 20 ms frame, so ~6.5% of every frame, on every mouse packet.
   overlap degenerate to the old behaviour by themselves: the skip never fires
   and the background always comes from the screen. There is nothing to bound
   and nothing to get wrong at the extremes.
-- **Which bytes those are is decided once, not per row.** `cur_mvcols` turns
-  the byte-column difference `d = newcol - oldcol` into four answers —
-  `mv_p1s0/1` (pass 1 must skip this old column) and `mv_p2s0/1` (pass 2's
-  offset into the old save, or `0FFh` for "read the screen") — because it is
-  the same answer for every row. Both halves fold in the *other* cell's edge
-  clip: pass 1 may only skip a byte pass 2 will really write, and pass 2 may
-  only source from a slot the old cell really saved.
+- **Which bytes those are is decided once, not per row.** Two numbers say
+  it: the byte-column difference `d = newcol - oldcol` and the row difference
+  `e = newtop - oldtop`. The columns meet only for `d` = -1, 0 or +1 (the
+  arrow spans two bytes), and then the rows that meet are **one contiguous
+  run**, so "does the other cell reach this row" is a range compare and never
+  a per-row search. Pass 1's two write answers for a covered row and for an
+  uncovered one, and how a covered row's saved bytes become the new
+  background, are packed into one register before either walk. Both fold in
+  the *other* cell's edge clip: pass 1 may only skip a byte the draw will
+  really write, and the new background may only come from a slot the old
+  cell really saved.
+- **The second pass is two walks, neither with a test per byte** (kernel
+  hot-paths pass 1). The new cell's background is first banked straight off
+  the screen - which is right for every byte except the overlap, where the
+  old arrow still stands - and pass 1, walking the old cell, patches the
+  overlap rows of that bank from the old save as it restores the rest. The
+  draw then composes from the bank: one read, one write a byte. Measured on
+  MartyPC (a 24-packet sweep, `cur_move` entry to return): **19,400 -> 12,000
+  cycles** (4.07 -> 2.51 ms) on the 5150's CGA, 19,300 -> 11,700 on
+  Hercules, and the serial ISR's share of the CPU while the pointer sweeps
+  falls from 20.0% to 14.1%. `cur_mvcols`, `cur_mvrow` and `cur_mvbg`, the
+  three per-row helpers the earlier shape called 36 times a move, are gone,
+  and the routine is 26 bytes smaller. Equivalence is proved against the
+  previous kernel's own bytes under unicorn - 36,000 random moves over CGA,
+  Hercules and linear 1bpp geometry and all three shapes, with the whole
+  framebuffer, the save buffer and the banked geometry compared after every
+  move and every framebuffer write counted (none twice).
 - **Two save buffers, swapped by a pointer.** Pass 2 reads the old background
   while filling the new, so they cannot be the same 24 bytes. `[cur_sptr]`
   names the live one; nothing is copied. `cur_sptr` lives in `.text` with a
@@ -10750,7 +10775,20 @@ against a 20 ms frame, so ~6.5% of every frame, on every mouse packet.
   a pointer at the API jump table.
 - **VGA keeps erase-then-draw.** Its save is four planes through Read Map
   Select and cannot take a background from a buffer. Its draw is one store
-  now (§7.1), which was the larger of the two windows there.
+  now (§7.1), which was the larger of the two windows there. **The save and
+  the restore are the cell's own walks** (`cur_saveu`/`cur_restoreu`, kernel
+  hot-paths pass 1), not `vga_save_vram`/`vga_restore_vram`: the cell is
+  already clipped by `cur_geom`, so `gfx_rect_setup`, the `rep movsb` row
+  loop and the one-plane and sub-rect arms were pure overhead. `cur_vspan`
+  derives the byte span exactly as `gfx_rect_setup` did (one byte when the
+  cell is byte-aligned, two otherwise unless the right edge took the second)
+  and the buffer keeps that routine's plane-major layout, so the glass is
+  identical - proved under unicorn with a four-plane model against the
+  previous kernel's bytes, 1,500 cells over 640x480 and 640x350, every shape.
+  MartyPC's XT VGA: `cur_move` **21,450 -> 15,100 cycles** a packet, the ISR's
+  share of a sweep 21.5% -> 16.4%. An armed sub-rect restore (§5.8) is now
+  never consumed by the pointer, which the shared routine's `gfx_sub_off`
+  used to do.
 
 Verified the only way a save-under can be: a dense walk of 37 moves — column
 deltas 0, ±1, ±2 and larger, every shift phase, plus the right and bottom
@@ -11390,7 +11428,7 @@ error. It addresses the row above the framebuffer.
 Left and top *clipping* is the correct fix and it is not a small one: a
 `cur_b0ok` beside `cur_b1ok`, a table start offset for the skipped rows, `sar`
 where the column shift is `shr`, and the two of those threaded through
-`cur_mvcols`/`cur_mvrow`/`cur_mvbg` — the four per-column answers §7.1.2 built
+`cur_move_mono`'s overlap answers — the per-column decisions §7.1.2 built
 to write every byte exactly once, whose cases double when either cell can lose
 its first column.
 
@@ -11407,8 +11445,8 @@ Three things follow and each broke first:
 
 - **`[cur_cellx]`/`[cur_celly]` are banked by `cur_geom`**, because the cell's
   top-left is no longer the pointer's position and `cur_move_mono` asks about
-  it three times — the old cell's byte column, pass 1's "will pass 2 cover
-  this row", and `cur_mvrow`. §7.1's rule applies unchanged: two derivations
+  it twice — the old cell's byte column and the row run where the two cells
+  meet. §7.1's rule applies unchanged: two derivations
   of a save-under's geometry are two chances to disagree by a byte, and a byte
   is a smear.
 - **`cur_lazyck` subtracts the hot spot too, and deliberately does NOT clamp.**
@@ -17688,9 +17726,14 @@ user, so `CL = buttons | (notches << 2)`. No new cell was needed, because every
 driver built before this masked CL to its two buttons (`and cl, 3`). An old
 binary therefore reports *no* wheel rather than a wrong one, and the contract
 grows with no `DRV_VER` bump (§20.2.0.1). The kernel decodes it once, in
-`mou_apply`'s shared tail: two `sar`s, §10.4's add, and `and cl, 3`. That is
-also where VMware's absolute arm joins (§9.11), so both backends share the
-same twelve bytes.
+`mou_whl_cl`: two `sar`s, `and cl, 3`, and §10.4's add. It is reached from
+`mou_apply_w`, the entry `OSAPI_MOUSE_FEED` and VMware's relative arm call,
+and from VMware's absolute arm (§9.11) before it joins `mou_apply`'s tail -
+so every backend whose CL can carry a wheel shares the same nine bytes. **The
+serial and PS/2 decoders enter `mou_apply` itself and skip it**: their CL is
+two clean bits and their wheels arrive in a fourth byte of their own, so the
+decode, its zero add and its second UI wake were ~240 cycles of every packet
+for nothing (kernel hot-paths pass 1; it was inline in the shared tail).
 
 **`VMMOUSE.DRV`'s private ABI is a different matter**, and `VMM_ABI_VER` went
 from 1 to 2 with it (`kernel/vmmabi.inc`, §9.11.2): an old kernel stores CL
