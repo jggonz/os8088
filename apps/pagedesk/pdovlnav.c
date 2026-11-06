@@ -133,35 +133,41 @@ static void ovl_ol_work(void)
     os88_gfx_unlock();
 }
 
-/* the rows that fit in the list rect o, from pdu_oltop. Lock held. */
+/* entry i's row in the list rect o, when it is on screen. Lock held. */
 static char ol_row[34];
-static void ovl_ol_paint(struct os88_rect *o)
+static void ovl_ol_row(struct os88_rect *o, int i)
 {
-    int r, rows, i, d, x, maxc, act;
+    int r, d, x, maxc, act;
     unsigned s;
 
+    r = i - pdu_oltop;
+    if (i < 0 || i >= pdu_oln || r < 0 || r >= (o->y2 - o->y1 - 4) / 12)
+        return;
     s = ovl_ol_seg();
+    d = pd_fpeekb(s, i * OL_SZ + 14);
+    x = o->x1 + 4 + d * 8;
+    maxc = (o->x2 - x - 2) / PDU_CW;
+    if (maxc > 30)
+        maxc = 30;
+    if (maxc < 3)
+        return;
+    ol_row[0] = ovl_ol_w(i, 4) ? ((pd_fpeekb(s, i * OL_SZ + 15) & 1) ? '-' : '+') : ' ';
+    ol_row[1] = ' ';
+    pd_fcopy_in(s, i * OL_SZ + 16, ol_row + 2, 26);
+    ol_row[maxc] = 0;
+    act = (i == pdu_olsel);
+    os88_font_run(x, o->y1 + 4 + r * 12, ol_row,
+                  act ? OS88_WHITE : OS88_BLACK,
+                  act ? pdu_cact : (pdu_mono ? OS88_WHITE : pdu_cbar));
+}
+
+/* the rows that fit in the list rect o, from pdu_oltop. Lock held. */
+static void ovl_ol_paint(struct os88_rect *o)
+{
+    int r, rows;
     rows = (o->y2 - o->y1 - 4) / 12;
-    for (r = 0; r < rows; r++) {
-        i = pdu_oltop + r;
-        if (i >= pdu_oln)
-            break;
-        d = pd_fpeekb(s, i * OL_SZ + 14);
-        x = o->x1 + 4 + d * 8;
-        maxc = (o->x2 - x - 2) / PDU_CW;
-        if (maxc > 30)
-            maxc = 30;
-        if (maxc < 3)
-            continue;
-        ol_row[0] = ovl_ol_w(i, 4) ? ((pd_fpeekb(s, i * OL_SZ + 15) & 1) ? '-' : '+') : ' ';
-        ol_row[1] = ' ';
-        pd_fcopy_in(s, i * OL_SZ + 16, ol_row + 2, 26);
-        ol_row[maxc] = 0;
-        act = (i == pdu_olsel);
-        os88_font_run(x, o->y1 + 4 + r * 12, ol_row,
-                      act ? OS88_WHITE : OS88_BLACK,
-                      act ? pdu_cact : (pdu_mono ? OS88_WHITE : pdu_cbar));
-    }
+    for (r = 0; r < rows && pdu_oltop + r < pdu_oln; r++)
+        ovl_ol_row(o, pdu_oltop + r);
 }
 
 /* a click in the list: the twisty toggles, the title goes to the page */
@@ -184,12 +190,14 @@ static void ovl_ol_click(int x, int y)
         return;
     }
     dest = ovl_ol_w(i, 12);
+    d = pdu_olsel;                      /* two rows change, not the panel */
     pdu_olsel = i;
+    ovl_ol_row(o, d);
+    ovl_ol_row(o, i);
     if (dest != 0xFFFF && dest < pdu_npages) {
         pdu_hjump = 1;
         pdu_goto(dest);
     }
     else
         pdu_tell("This entry does not go to a page in this file.");
-    pdu_side_paint();
 }

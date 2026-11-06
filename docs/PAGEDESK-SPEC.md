@@ -2890,8 +2890,9 @@ call.
 
 **Copy** (Ctrl+C, Edit > Copy; 12) runs a COPY pass of its own: the selected
 glyphs as Windows-1252 bytes, CR LF between lines and a space for a gap, into
-a heap claim of three bytes a glyph (the SCRATCH claim's 2 KiB when there is no
-claim to be had, and then truncated, saying so), then `OSAPI_CLIP_PUT_SEG` and
+a heap claim of three bytes a glyph (the THUMB claim's 4 KiB when there is no
+claim to be had - its pictures are then drawn again lazily - and truncated,
+saying so; an aborted Copy gives back whichever it held), then `OSAPI_CLIP_PUT_SEG` and
 the claim is freed. Over 32 KiB it is refused whole with the reason. This is the
 one transient claim nav makes (ASK: it is outside 16.2's table; the owner cap of
 8 holds because a copy never runs during a save - Copy refuses while a job
@@ -2927,7 +2928,9 @@ the other had.
 
 #### 20.10.5 Gestures, history and the idle ladder
 
-The OS has no pointer-move callback, so a press that needs one arms the
+The kernel has a tracking edge (`OSAPI_WM_ONDRAG`, SPEC.md 13.8.2) but the C
+SDK carries no callback for it (`crt0.asm` has no `CC_HAS_ONDRAG`; ASK, an SDK
+change outside nav's files), so a press that needs one arms the
 window's one-shot timer (`os88_wm_timer`, 1 tick) and POLLS `os88_mouse()` until
 the button is up (`os88_onmouseup` ends it too; a lost release is noticed by the
 poll). **The scroll bar's thumb** drags through `os88ui.inc`'s thumb drag
@@ -2960,7 +2963,8 @@ and `pdxb_annot` carry the protocol above instead of new fields (no ABI
 change); (3) `os88_gfx_blit1_seg`, an SDK thunk. Open: reading order is the
 content stream's, so columns and tables copy in stream order; a name-tree
 destination is "Named" and not followed; no hand cursor over a link (the OS
-has no move callback); no triple-click line selection.
+shows no hover - it has no move callback with no button down); no triple-click
+line selection.
 
 ### 20.14 Host preparation of complex PDFs (`host`, wave 2, PD-22)
 

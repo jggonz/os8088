@@ -119,10 +119,7 @@ static void pdu_job_abort(void)
         pdu_wrt_out();
     } else if (pdu_job >= J_FIND) {     /* nav: find, text pass, thumbnail */
         pdu_mcall(PDU_M_REND, PDV_REND_ABORT, 0, 0, 0);
-        if (pdu_job == J_TEXT && pdu_txm == TX_QUAD) {
-            pdu_selpg = -1;             /* its boxes will never come */
-            pdu_selq = 0;
-        }
+        pdu_tx_aborted();               /* nav: what the pass held goes back */
     }
     pdu_fsop_end();
     pdu_job = J_NONE;

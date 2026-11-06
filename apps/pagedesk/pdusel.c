@@ -35,6 +35,8 @@ static int pdu_selq;                    /* quads in scratch; -1 = owed */
 static int pdu_selvis;                  /* the quads are XORed on the glass */
 static int pdu_selshow;                 /* ...and owed to it when idle */
 static int pdu_selgoto;                 /* a Find hit: bring it into view */
+static int pdu_selhl;                   /* a gesture made with Highlight armed:
+                                         * its boxes become edit's record */
 
 /* the pass */
 static struct pdxb_textmap pdu_xtm;
@@ -132,8 +134,8 @@ static void ovl_sel_show(void)
     if (pdu_selq <= 0 || pdu_selvis || pdu_selpg != (int)pdu_page)
         return;
     if (ovl_sel_busy()) {
-        pdu_selshow = 1;
-        pdu_kick();
+        pdu_selshow = 1;                /* no kick: what makes it busy ends in a
+                                         * render, and the render's wake comes */
         return;
     }
     pdu_selshow = 0;
@@ -189,9 +191,36 @@ static void ovl_sel_clear(void)
     pdu_menusync();
 }
 
+/* pdu_job_abort stopped a nav job (Esc, a press on the page, a close). A
+ * QUAD pass's boxes will never come; a COPY pass gives back its claim, and
+ * one that wrote into the THUMB claim has spoiled the pictures in it - the
+ * first build did neither, so an Esc during a long Copy kept the claim until
+ * the window closed and left the Pages panel blitting text bytes. */
+static void pdu_tx_aborted(void)
+{
+    if (pdu_job != J_TEXT)
+        return;
+    if (pdu_txm == TX_QUAD || pdu_txm == TX_PICK || pdu_txm == TX_WORD) {
+        pdu_selhl = 0;
+        if (pdu_txm == TX_QUAD) {
+            pdu_selpg = -1;
+            pdu_selq = 0;
+        }
+    } else if (pdu_txm == TX_COPY && !pdu_cpsync) {
+        if (pdu_cpclaim) {
+            os88_mem_free(pdu_cpseg0);
+            pdu_cpclaim = 0;
+        } else {
+            pdu_th_reset();
+            pdu_thwant = 1;
+        }
+    }
+}
+
 /* the page is changing: the glass is about to be repainted whole */
 static void pdu_sel_drop(void)
 {
+    pdu_selhl = 0;
     pdu_selpg = -1;
     pdu_selq = 0;
     pdu_selvis = 0;
@@ -450,7 +479,14 @@ static void ovl_tx_done(void)
         ovl_sel_show();
         if (pdu_selq == 0) {
             pdu_selpg = -1;
+            pdu_selhl = 0;
             pdu_wsay("There is no text there.");
+        } else if (pdu_selhl) {         /* 20.8: Highlight from a selection */
+            pdu_selhl = 0;
+            os88_gfx_lock();
+            if (pdu_tool == C_T_HILITE && pdu_tool_hilite())
+                ovl_sel_clear();        /* the record is drawn in its place */
+            os88_gfx_unlock();
         }
         return;
     case TX_COPY:
@@ -509,6 +545,7 @@ static void ovl_sel_points(int x0, int y0, int x1, int y1, int word)
     pdm_view_inv(&pdu_pax, &pdu_pay, &pdu_view, x0, y0);
     pdm_view_inv(&pdu_pfx, &pdu_pfy, &pdu_view, x1, y1);
     pdu_pword = word;
+    pdu_selhl = (pdu_tool == C_T_HILITE);
     pdu_txpg = pdu_page;
     pdu_txwant = TX_PICK;
     pdu_kick();
@@ -560,9 +597,10 @@ static void ovl_sel_view(void)
 
 /* ---- Copy ----------------------------------------------------------------------- */
 /* Ctrl+C / Edit > Copy: the selected text to the OS clipboard (12), CR LF
- * between lines, a pass of its own (the text is not kept). The buffer is the
- * SCRATCH claim's 2 KiB or, for a longer run, a claim of the run's length
- * times three, given back at once. */
+ * between lines, a pass of its own (the text is not kept). The buffer is a
+ * claim of the run's length times three, given back at once, or - when no
+ * claim can be had - the THUMB claim's 4 KiB, whose pictures then come back
+ * lazily. */
 static void ovl_copy(void)
 {
     unsigned want, cap;
@@ -581,8 +619,11 @@ static void ovl_copy(void)
     pdu_cpseg0 = 0;
     pdu_cpsync = 0;
     cap = (want << 1) + want + 16;
-    if (cap > 4096)
-        pdu_cpseg0 = os88_mem_claim_p((cap + 15) >> 4);
+    /* a claim FIRST, whatever the size: the THUMB claim is the fallback only,
+     * because borrowing it costs every picture in the Pages panel a render
+     * again (the first build borrowed it for every Copy under 1,360
+     * characters) */
+    pdu_cpseg0 = os88_mem_claim_p((cap + 15) >> 4);
     if (pdu_cpseg0) {
         pdu_cpclaim = 1;
         pdu_cpseg = pdu_cpseg0;

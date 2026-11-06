@@ -1002,7 +1002,7 @@ void os88_onclick(int x, int y, void *win)
             return;
         if (pdu_mode == PDU_MODE_PAGES)
             pdu_tell("Page operations are not in this build yet.");
-        else if (pdu_tool == C_T_SELECT)
+        else if (pdu_tool == C_T_SELECT || pdu_tool == C_T_HILITE)
             pdu_nav_press(x, y);        /* nav: a link, or a text selection */
         else
             pdu_tell(pdu_why(pdu_tool) ? pdu_why(pdu_tool)

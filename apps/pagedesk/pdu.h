@@ -182,6 +182,7 @@ struct pdu_lay {
 static int  pdu_sel_active(void);
 static void ovl_sel_clear(void);
 static void pdu_sel_drop(void);
+static void pdu_tx_aborted(void);
 static void pdu_sel_after(struct os88_rect *r);
 static int  ovl_sel_quads(pd_pt *dst, unsigned cap);
 static int  ovl_sel_text(char *dst, unsigned cap);

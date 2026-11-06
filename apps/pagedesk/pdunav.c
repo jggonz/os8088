@@ -5,7 +5,8 @@
  *   history   Back / Forward over the pages a JUMP left (Alt+Left, Alt+Right,
  *             Document menu): a link, the outline, Go to, Home/End, a Find
  *             hit. Prev/Next and PgUp/PgDn step by one and are not history.
- *   gestures  the OS has no pointer-move callback, so a press that needs
+ *   gestures  the C SDK has no W_ONDRAG callback (the kernel's tracking
+ *             edge, OSAPI_WM_ONDRAG, has no crt0 thunk), so a press that needs
  *             one (the scroll bar's thumb, a text selection) arms the
  *             window's one-shot timer and POLLS os88_mouse() every tick until
  *             the button is up. Nothing is drawn by an idle window.
@@ -227,7 +228,7 @@ static int pdu_nav_press(int x, int y)
     }
     if (pdu_job == J_TEXT || pdu_job == J_THUMB)
         pdu_job_abort();
-    if (pdu_lkn && ovl_lk_press(x, y))
+    if (pdu_lkn && pdu_tool == C_T_SELECT && ovl_lk_press(x, y))
         return 1;
     t = os88_ticks();
     pdu_gdbl = (unsigned)(t - pdu_gt) < 8 && pdu_abs(x - pdu_gcx) < 5
@@ -340,7 +341,11 @@ static int pdu_nav_owed(void)
 {
     if (pdu_doc != D_OPEN || pdu_gs)
         return 0;
-    return pdu_txwant || pdu_fwant || pdu_selshow || pdu_lkact
+    /* a selection owed to the glass under a popover waits for the popover's
+     * repair render: counting it here re-posted the wake on every wake while
+     * the popover stayed open - a window spinning with nothing to do */
+    return pdu_txwant || pdu_fwant || pdu_lkact
+           || (pdu_selshow && pdu_pop == P_NONE && !pdu_about)
            || (pdu_selq < 0 && pdu_selpg >= 0)
            || (pdu_sbtab == 0 && pdu_thwant)
            || (pdu_sbtab == 1 && (pdu_olxp || (pdu_oln == 0 && (pdu_xopen.flags & PDO_OUTLINE))));
