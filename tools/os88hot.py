@@ -253,18 +253,66 @@ class Buckets(object):
                         self.pk.append((seg * 16, seg * 16 + size, t))
         except Exception:                                   # noqa: BLE001
             pass
-        self.mods = []
+        # ON-DEMAND MODULES (SPEC.md 2.8): a mod_tab row's claim, matched to
+        # its `.mod*` section by its CODE BYTES against kernel-full.bin (the
+        # sections are vstart=0, so a symbol's offset is its offset in the
+        # claim), and resolved by routine like the kernel. A row no section
+        # matches is bucketed whole, by file.
+        self.mods = []          # (lo, hi, file, [(off, name)])
         try:
             a, b = m.sym("mod_tab"), m.sym("mod_tab_end")
             raw = m.read(a, b - a)
+            groups = _mod_groups()
             for r in range(0, len(raw) - 3, 4):
                 seg, fp = u16(raw, r), u16(raw, r + 2)
-                if seg:
-                    nm = bytes(m.readseg(0x60, fp, 13)).split(b"\0")[0]
-                    self.mods.append((seg * 16, nm.decode("latin-1")))
+                if not seg:
+                    continue
+                nm = bytes(m.readseg(0x60, fp, 13)).split(b"\0")[0] \
+                    .decode("latin-1")
+                live = bytes(m.read(seg * 16 + 0x20, 0x40))
+                best, tab, size = 0, [], 0x10000
+                for g in groups:
+                    hit = sum(1 for x, y in zip(live, g["probe"]) if x == y)
+                    if hit > best:
+                        best, tab, size = hit, g["syms"], g["size"]
+                if best < 0x30:
+                    tab, size = [], 0x10000
+                self.mods.append((seg * 16, seg * 16 + size, nm, tab))
             self.mods.sort()
         except Exception:                                   # noqa: BLE001
             pass
+        # LOADED DRIVERS (SPEC.md 51): drv_tab rows, each image at its own
+        # segment for DRVR_PARA paragraphs, resolved through the driver's
+        # own map (tools/os88drvsym.py, the Makefile's own nasm line)
+        self.drv = []
+        try:
+            import os88sym
+            n = os88sym.equates().get("DRV_MAX", 0)
+            base = m.sym("drv_tab")
+            raw = m.read(base, n * 16)
+            for r in range(n):
+                seg = u16(raw, r * 16 + 2)
+                para = u16(raw, r * 16 + 8)
+                fp = u16(raw, r * 16 + 4)
+                if not seg:
+                    continue
+                nm = bytes(m.readseg(0x60, fp, 13)).split(b"\0")[0] \
+                    .decode("latin-1")
+                self.drv.append((seg * 16, seg * 16 + (para or 0x1000) * 16,
+                                 nm, _drv_syms(nm)))
+        except Exception:                                   # noqa: BLE001
+            pass
+
+    def _sub(self, kind, lo, nm, tab, ip):
+        if not tab:
+            return "%s %s" % (kind, nm)
+        off = ip - lo
+        i = bisect.bisect_right(tab, (off, "\xff")) - 1
+        if i < 0:
+            return "%s %s" % (kind, nm)
+        n = tab[i][1]
+        return "%s:%s" % (nm.split(".")[0].lower(),
+                          n if self.local else routine(n))
 
     def name(self, ip):
         for lo, hi, t in self.pk:
@@ -275,10 +323,71 @@ class Buckets(object):
         f = self.k.find(ip)
         if f is not None:
             return f[0] if self.local else routine(f[0])
-        for base, nm in reversed(self.mods):
-            if base <= ip < base + 0x10000:
-                return "mod " + nm
+        for lo, hi, nm, tab in self.mods:
+            if lo <= ip < hi:
+                return self._sub("mod", lo, nm, tab, ip)
+        for lo, hi, nm, tab in self.drv:
+            if lo <= ip < hi:
+                return self._sub("drv", lo, nm, tab, ip)
         return "other %05X" % (ip & 0xFFF00)
+
+
+_MODG = None
+
+
+def _mod_groups():
+    """[{probe, syms, size}] per on-demand module: its sections out of
+    build/kernel.map's segment table (a `.modX` and any section that follows
+    it at a nonzero vstart is one module), the bytes at +0x20 out of
+    kernel-full.bin, and its labels out of os88sym."""
+    global _MODG
+    if _MODG is not None:
+        return _MODG
+    import os88sym
+    mp = os.path.join(bdir(), "kernel.map")
+    full = open(os.path.join(bdir(), "kernel-full.bin"), "rb").read()
+    secs = []
+    for line in open(mp):
+        f = line.split()
+        if len(f) == 6 and f[4] == "progbits" and f[5].startswith(".mod") \
+                and f[5] != ".modmap":
+            secs.append((int(f[1], 16), int(f[0], 16), int(f[3], 16), f[5]))
+        if line.startswith("-- Symbols"):
+            break
+    off, sect = os88sym.syms(), os88sym.sections()
+    groups = []
+    for start, vstart, length, name in secs:
+        if vstart and groups:           # a follows= half of the one before
+            g = groups[-1]
+            g["names"].append(name)
+            g["size"] = max(g["size"], vstart + length)
+            continue
+        groups.append(dict(names=[name], size=length,
+                           probe=full[start + 0x20:start + 0x60]))
+    for g in groups:
+        g["syms"] = sorted((off[n], n) for n in off
+                           if sect.get(n) in g["names"])
+    _MODG = groups
+    return groups
+
+
+_DRVS = {}
+
+
+def _drv_syms(fname):
+    """[(offset, label)] for a loaded driver, or [] when its map cannot be
+    had (a knob arm, a build tree without its .bin)."""
+    key = fname.upper()
+    if key not in _DRVS:
+        tab = []
+        try:
+            import os88drvsym
+            d = os88drvsym.symbols(fname.split(".")[0].lower() + ".bin")
+            tab = sorted((v, k) for k, v in d.items())
+        except BaseException:                               # noqa: BLE001
+            tab = []
+        _DRVS[key] = tab
+    return _DRVS[key]
 
 
 # =============================================================================
