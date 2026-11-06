@@ -81194,52 +81194,6 @@ case that matters being a cursor beside a fill's edge byte, outside the rect
 the lazy hide tested. `sw_spans`' two edge bytes take the same body. 0 of 16
 runs flash after it.
 
-### 39.31 The 1bpp rect is walked a bank at a time (`kern_big`)
-
-**`sw_plane_op` walked a rect three times and tested a bank wrap on every
-row of every pass.** The left edge column top to bottom (`sw_col`), the right
-edge column, then the interior rows, each step being `gfx_nextrow`'s add, test
-and conditional wrap, with the dither pattern toggled per row. On a banked
-framebuffer that is wasted work: rows `y`, `y+B`, `y+2B` (B = `[vid_bmask]`+1,
-two on CGA and four on Hercules) are `[vid_stride]` apart inside ONE bank, and
-because B is even they share a dither parity too.
-
-So on `kern_big` the rect is walked as B **phases** — every row of bank phase
-`j`, top to bottom — and inside a phase the row step is one `add di, si`, the
-pattern is a constant and the count is `loop`'s. Phase `j` has `n0` rows for
-`j <= rp` and `n0 - 1` after it, where `rp = (N-1) & bmask` and
-`n0 = ((N-1) >> bshift) + 1`, computed once a rect. A phase writes the whole
-ROW in one pass — masked left byte, whole bytes, masked right byte — and a
-whole edge (mask `FF`, the common case by §11.94) is folded into the run of
-whole bytes, so an aligned fill is `rep stosw` a row and nothing else. A
-one-row rect (every hline, every outline's top and bottom) skips the phase
-driver and jumps straight into the row body. XOR complements its interior a
-word at a time.
-
-**A phase costs about 250 cycles to set up, so a short rect does not walk.**
-Under 9 rows with whole bytes in the row, or under 25 rows of a single byte
-column (whose per-row saving is smaller), `sw_plane_op` falls through to the
-column-major body it replaced, kept as `sw_plane_cm`; the question is five
-instructions. The thresholds are constants rather than multiples of B so the
-test stays that short, and both sit at or past the break-even on CGA and
-Hercules. Measured on MartyPC (gfxbench, both adapters): `GFX_FILL 64x64`
--51% / -48%, `GFX_FILL 256x128` -32% / -30%, `GFX_XOR_FILL 64x64` -34% /
--32%, `GFX_HLINE 256px` -18%, `GFX_VLINE 128px` -23% / -19%, and the eight-row
-shapes that keep the old body +2% (`GFX_FILL 8x8`, `GFX_VLINE 8px`), which is
-the price of the question.
-
-**Every masked byte is still one store**, `dest ^= (pat ^ dest) & mask`
-(§39.25.1), and no pixel is written twice. The settled picture is identical
-byte for byte; what changes is the ORDER rows land in inside one call (CGA:
-the even rows of the rect, then the odd).
-
-**`NOCOLFAST=1` builds the old column-major body**, so `tests/swcolsame.py`
-stays an A/B of two different bodies drawing the same pixels. The row bodies
-are `sw_k_col`, `sw_k_colf`, `sw_k_xcol`, `sw_k_i`, `sw_k_lir` and
-`sw_k_xrow`; the driver is `sw_walk`. `kern_small` keeps the column-major
-body alone (§39.27.4's cut). It costs `kern_big` 338 bytes of `.text` and 6
-of `.bss`; docs/plans/khp1/mono.md has the operations.
-
 ### 39.32 The 1bpp save and restore move words
 
 **`sw_xfer` is `gfx_save` and `gfx_restore` on a 1bpp adapter** — every
