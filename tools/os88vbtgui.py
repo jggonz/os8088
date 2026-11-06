@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """os88vbtgui - the Video Battle builder's window
-(docs/plans/VBATTLE-BUILDER-PLAN.md 2, 4; wave 2: the shell, the Battle tab
+(docs/plans/completed/VBATTLE-BUILDER-PLAN.md 2, 4; wave 2: the shell, the Battle tab
 and the Idle tab).
 
     python3 tools/os88vbtgui.py [PROJECT.vbp]

@@ -610,6 +610,9 @@ vb_coverload:
 .nn:
     mov byte [vb_cvon], 1
     mov byte [vb_cvwin], 1          ; (the window is a picture's from now)
+    mov dx, [vb_cvseg]              ; READ, so MOVABLE (SPEC.md 66.3): the
+    mov ax, vb_reloc                ; window holds it at the desktop between
+    call OSAPI_MEM_MOVABLE          ; plays, and only a paint reads it
     clc
     jmp short .out
 .free:
@@ -630,6 +633,64 @@ vb_cvfree:
     call OSAPI_MEM_FREE
 .out:
     ret
+
+; vb_between - THE PLAY OVER, back at the desktop: the card's ring given
+; back (the Sound Blaster DMAs out of it only while a play's stream is open,
+; and a page-safe claim is a wall the compactor cannot move), and the
+; resident claim MOVABLE until the next play pins it (SPEC.md 66.3, Video
+; Player's 98.1.7.4). Preserves all but AX and DX
+vb_between:
+    xor dx, dx
+    xchg dx, [vb_ring]
+    or dx, dx
+    jz .res
+    call OSAPI_MEM_FREE
+.res:
+    mov dx, [vb_vres]
+    or dx, dx
+    jz .out
+    mov ax, vb_reloc
+    call OSAPI_MEM_MOVABLE
+.out:
+    ret
+
+; vb_reloc - THE RELOCATION PROC (SPEC.md 66.3): BX = a claim's old base,
+; DX = its new; the bytes have moved, the words naming them are ours. Three
+; claims are declared, each between plays or once read: the title picture
+; and the hold's bounce (one word each), and the resident claim, whose six
+; parts are segments derived from its base (vb_load), all on by the delta.
+; Nothing else holds a segment inside them across a call that can compact
+vb_reloc:
+    push cx
+    push si
+    cmp bx, [vb_cvseg]
+    jne .r1
+    mov [vb_cvseg], dx
+    jmp short .out
+.r1:
+    cmp bx, [vb_hbnc]
+    jne .r2
+    mov [vb_hbnc], dx
+    jmp short .out
+.r2:
+    cmp bx, [vb_vres]
+    jne .out
+    sub dx, bx
+    mov si, vb_rltab
+    mov cx, VB_RLN
+    cld
+.w:
+    lodsw
+    xchg ax, bx
+    add [bx], dx
+    loop .w
+.out:
+    pop si
+    pop cx
+    ret
+vb_rltab:
+    dw vb_vres, vb_sfxseg, vb_mring, vb_idseg, vb_iseg, vb_bseg, vb_cseg
+VB_RLN equ ($ - vb_rltab) / 2
 
 ; vb_cvpaint - vb_paint's, with a picture: it, centred, then the line - the
 ; window's status when it says something, else the battle's own line -
@@ -1044,6 +1105,12 @@ vb_play:
     mov si, [vb_win]
     call vb_paint
     call vb_cvfree                  ; (the picture's claim: the play's now)
+    mov dx, [vb_vres]               ; THE RESIDENT CLAIM PINNED for the play:
+    or dx, dx                       ; the hook reads its music at interrupt
+    jz .ld                          ; time, where no relocation proc reaches
+    xor ax, ax
+    call OSAPI_MEM_MOVABLE
+.ld:
     call vb_load
     jc .say
     mov ax, vb_main
@@ -1052,11 +1119,15 @@ vb_play:
     mov dx, VB_DIV
     mov di, vb_hook
     call OSAPI_FSX_RUN
+    pushf
+    call vb_between                 ; (the claims a desktop window holds)
+    popf
     mov al, [vb_cvon]               ; (the picture's as the desktop came
     mov [vb_cvback], al             ; back: up already, no text flash - a
     jnc .back                       ; test's, vbtcover)
     mov word [vb_err], vb_s_norate
 .say:
+    call vb_between
     mov ax, [vb_err]
     mov [vb_status], ax
     call vb_coverload               ; (back: the picture again)
@@ -1570,8 +1641,9 @@ vb_load:
     call vb_bpara
     add ax, cx
     mov [vb_cseg], ax
-    call vb_cardclaim               ; the card's ring, before the rings are
-                                    ; sized out of what is left
+    call vb_cardclaim               ; the card's ring, under the block: given
+                                    ; back at each play's end, its room joins
+                                    ; the rings' below (no hole on the desktop)
     ; the block and the menu's effects
     mov word [vb_err], vb_s_badread
     mov es, [vb_vres]
@@ -1613,6 +1685,8 @@ vb_load:
     mov byte [vb_loaded], 1
     call vb_fontload
 .again:
+    call vb_cardclaim               ; (the card's ring: freed at each play's
+                                    ; end, so a replay's own again)
     ; the music from where it comes in, its ring filled: it plays when the
     ; openings are over
     xor ax, ax

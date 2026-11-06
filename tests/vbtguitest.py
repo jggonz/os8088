@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The Video Battle builder's WINDOW without a window
-(tools/os88vbtgui.py, docs/plans/VBATTLE-BUILDER-PLAN.md wave 2).
+(tools/os88vbtgui.py, docs/plans/completed/VBATTLE-BUILDER-PLAN.md wave 2).
 
     python3 tests/vbtguitest.py
 

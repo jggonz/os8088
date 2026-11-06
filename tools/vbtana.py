@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """vbtana - the analysis half of the Video Battle builder
-(docs/plans/VBATTLE-BUILDER-PLAN.md 2, 3, 4).
+(docs/plans/completed/VBATTLE-BUILDER-PLAN.md 2, 3, 4).
 
 Everything the builder RECOMMENDS or MEASURES, with no window and no build:
 

@@ -3,7 +3,8 @@
 **Status: M1, the renditions (9), M2, M3, M4 (the EMS hold, the board
 timed first) and M5's decode in place (EMS, and XMS on a 386 and a 286)
 BUILT (2026-11-04, format 7, SPEC.md 125.4.1-2); the 286 arm checked on
-86Box's 286, the Victory's own run still the field's.** The owner's
+86Box's 286, the Victory's own run still the field's. Complete; moved to
+completed/ at the merge to the integration branch (2026-11-06).** The owner's
 questions, ahead of the Hercules and VGA renditions: *"Could the openings
 and endings stream? ... we're about to get to vga and that is always more
 data hungry, even at the 320x200n we have planned (and likely not using all

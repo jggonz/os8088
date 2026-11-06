@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """THE VIDEO BATTLE BUILDER, PACKED FOR PEOPLE WITH NO os8088 TREE
-(docs/plans/VBATTLE-BUILDER-PLAN.md), the encoder bundle's shape (SPEC.md
+(docs/plans/completed/VBATTLE-BUILDER-PLAN.md), the encoder bundle's shape (SPEC.md
 98.2.13, tools/os88vbundle.py).
 
     make vbtbundle          # -> build/os8088-battle-builder.zip

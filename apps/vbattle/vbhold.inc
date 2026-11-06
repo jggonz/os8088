@@ -240,6 +240,8 @@ vb_xopen:
     call OSAPI_MEM_CLAIM
     jc .nob
     mov [vb_hbnc], dx
+    mov ax, vb_reloc                ; (MOVABLE: only the fill's foreground
+    call OSAPI_MEM_MOVABLE          ; copy reads it, inside one call)
     mov byte [vb_htype], 1
     jmp vb_hon1
 .nob:

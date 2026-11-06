@@ -672,6 +672,153 @@ at the hold's open, Video Player's table taken whole. MartyPC's Lo-tech
 reads at 1.0x; the two slower tiers are a poke away, and each plays as its
 row of the table says.
 
+## The owner's Hercules battle (2026-11-05)
+
+The owner built a battle from their own footage, at 100% and 75% size, and
+played it on 86Box's `pc5150` profile, an IBM 5150 with a Hercules card and
+an ST-225 behind an ST11M. It was the first real load the engine had
+carried, and most of this day's work came from it. The footage stayed on
+the owner's side: the bundles were used here to debug and measure, and
+none of them is in the tree.
+
+What it found, in the order it was found:
+
+- **The music went silent while the menus drew.** Rebuilding the band took
+  the reader away for about 2 s on Hercules, and the music's 3 s ring was
+  only refilled when it fell under half. Now the ring is topped up before a
+  rebuild and fed between the band's lines. `vbtsound` ran six turns
+  without the ring running dry; with the top-up taken out, it ran dry 23
+  times.
+- **The menus were slow** ("any way to draw the menus faster?"). Every menu
+  rebuilt the whole band. A rebuild whose background has not changed now
+  erases only the old menu's lines and redraws the text. A menu is up in
+  0.1 to 0.3 guest seconds, against about 0.9 s on CGA and 1.5 s on
+  Hercules. Two older defects that the full rebuilds had been hiding came
+  out with it.
+- **The fades took 8 to 10 seconds.** A fade advanced one step per pass of
+  the UI loop. Now it jumps to the step the hook's clock says, and takes
+  3 s.
+- **Joins to once-played clips froze, and openings started before their
+  heads were read.** Both are fixed. Each fix has a row (`vbtendingjf`,
+  `vbtendingop`) that goes red when the fix is taken out.
+- **The machine was spending as much time in the hook as in decoding.** At
+  582 Hz, the hook and the kernel's timer interrupt under it took 23% of
+  the machine, the same as decoding. At 72.8 Hz they take 8%. On the 100%
+  bundle the music ran dry 56 times before and 0 after. With 512-byte
+  blocks, the card was only 2 KB ahead, and one hook call's two heavy
+  frames could run past that and halt it. At 4 KB ahead it halted 0 times
+  in eight turns, against 8 before.
+- **Clips with bursts lost their own sound.** The clips' average rates hid
+  bursts: Bolt averages 74 KB/s, but its first 1.5 s run at 129 KB/s. Two
+  changes fixed it. The reader now follows the sound's cursor, the one that
+  runs ahead. And the builder holds a streamed clip to what the disk can
+  deliver, drawing a frame in parts when the model says it won't arrive in
+  time. On the same machine, Bolt, Scope and Search went from 51, 35 and 38
+  frames of late sound to 0, 0 and 0. The demo, which never overdraws,
+  builds byte for byte as before.
+- **A sound stream the driver ended froze the play for good.** Now it is
+  closed and opened again on the same timeline. `vbtsndend` fires the
+  driver's own watchdog under a battle, and the music comes back.
+
+The owner also asked for two builder features in this round: a 90% picture
+size, and a project's files saved relative to the project.
+
+## A machine that has been used (2026-11-05)
+
+The owner's battle at its first menu, mapped on MartyPC's Hercules 5150,
+showed two clip rings of 88 KB each. The desktop's 44.5 KB of caches sat
+stranded under the pinned resident block. The first plan was written for a
+fresh boot, and the owner sent it back: *"we can't treat 'straight out of a
+fresh boot' as a normal situation."* VBATTLE-RAM-PLAN was rewritten for a
+machine where other programs have been opened and closed, and it took four
+waves, R1 to R4:
+
+- **R1:** the resident block is claimed from the top of memory, the band's
+  buffers are the band's real size, and Play posts a compaction through
+  Video Player's door when moving the battle's own memory would buy 16 KB.
+  The rings are two claims made after the largest free run has been
+  claimed and given back once, which is what makes the kernel shed its
+  caches. Rings: 88 + 88 KB became 128 + 128.
+- **R2:** each action's entries ride at the front of its own clip (format
+  8), so the resident block no longer holds every action's entries for the
+  whole play. Rings: 168 + 172 KB at 100%, 172 + 172 at 75%.
+- **R3:** the menu reads nothing a key would wait on. A clip is fetched only
+  when its action can be taken and the cursor has rested about 0.5 s. A key
+  is taken in 0.12 s at most.
+- **R4:** the builder holds each clip to the ring this bundle will actually
+  get, not to a constant 56 KB.
+
+Format 8 then had to grow twice. The title's way out carried 55 KB of
+entries, and then 75 KB on Hercules, so a clip's entries may now be up to
+96 KB, and a ring must hold the largest of them.
+
+At the end, before the merge, the owner asked for nothing to be pinned
+without a reason. `t_pins` found six of the battle's claims pinned with no
+registered reason. Three of them are now movable through one relocation
+proc: the resident block between plays, the title picture, and the XMS
+hold's bounce buffer. The other three are now registered with their
+reasons: the clip rings are held only inside the play's bracket, the
+packing probe is freed inside its own call, and the card's DMA ring is
+freed when each play ends. `vbtram` checks this on MartyPC: it posts a
+compaction, the block moves up into the hole a second battle window left,
+its six derived segments move with it, and the next play reaches its menu.
+With the relocation table walk broken, the row goes red.
+
+## Sound with its picture (2026-11-05 to 06)
+
+Three timing bugs, each reported by the owner and each with a row that
+measures it on MartyPC:
+
+- **An action's sound about 2 s late, half the time on Bolt.** When an
+  anchor is nearer than the lead, the sound is booked for the loop's next
+  lap, but the picture went in on the first pass. Now the frames are
+  counted down. `vbtanchor` checks 14 turns, 5 of which take the lap: every
+  one is within two frames, against 22 to 23 frames out when broken.
+- **Openings and end clips with their own sound 0.3 to 0.5 s late.** Their
+  sound was booked at the frame's own time, which the ring, written a lead
+  ahead, had already passed. Now it is booked at the write position, and
+  the picture waits for the clock. `vbtownsnd` compares the record on the
+  glass with the record heard: within a frame and a half, against 3 to 4.5
+  frames out when broken.
+- **A card count that steps back.** SOUND.DRV steps its consumed count back
+  to the total after the card plays past it. Read unsigned, that step back
+  looked like 62,000 samples forward. Holding the count at its highest made
+  the play stand still. The hook now takes the count's changes signed.
+
+## Finishing (2026-11-05 to 06)
+
+The owner's list of demo polish and ship features:
+
+- Fit or stretch for footage that isn't quite the screen's shape.
+- A colour clip, so slow fades end in solid black instead of leaving dim
+  dots lit.
+- An item's count shown beside its action.
+- No silent frame before the music.
+- Full-screen seams that cover the band.
+- Missing-clip warnings only where the battle can actually go.
+- An overlap check based on the party's real values.
+
+Then the ship features:
+
+- Characters can be reordered.
+- "Any key" continues from the title.
+- A .VBT is a document that plays when double-clicked (`vbtdoc`).
+- A battle can be embedded in its own copy of the engine: one file per
+  adapter, named after the battle (`vbtgame`).
+- A title picture shows in the battle's window on the desktop, with the
+  battle's name, up to 31 letters, in its title bar (`vbtcover`, bit for
+  bit on CGA and Hercules). It is read back while the screen is still the
+  play's, so the window never shows its text layout first.
+- A new icon: a sword on a film frame. A document's own glyph is the sword
+  alone.
+
+The owner confirmed the timing, the title picture and the embedding on
+86Box's 5150 before the merge.
+
+Left open: one pause on a long title idle, which the owner saw once and
+neither side could reproduce (the signed count is a plausible cause), and
+`vbtmenu`'s Bolt check, which failed about one run in four.
+
 ## Measured (MartyPC `os8088_5150_sb_gla`, 360 KB disk)
 
 | | |
@@ -691,5 +838,8 @@ Second wave, MartyPC `os8088_xt_hdd_sb` with C::
 | a menu sound after its key | 69 to 96 ms free, about 240 ms behind a read |
 
 Tested: the boot, the battle, the sound and the read-ahead, all on MartyPC,
-from a floppy and from a hard disk; the owner's footage on 86Box's ST11M.
-Not tested: real hardware, a VGA, kern_mega.
+from a floppy and from a hard disk; Hercules and VGA renditions on MartyPC's
+Hercules 5150 and VGA XT; the hold on QEMU (XMS), MartyPC's Lo-tech EMS and
+86Box's 286 (LOADALL); the owner's footage on 86Box's `pc5150` (ST11M).
+Not tested: real hardware, a real VGA or Hercules card, kern_mega (the next
+round).

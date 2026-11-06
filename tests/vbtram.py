@@ -19,9 +19,21 @@ read off the machine (tools/heapmap.py's Map):
          compaction and starts on its wake ([vb_ncomp]), and its rings are
          within 16 KB of the fresh boot's.
 
+Both arms then leave the play: back on the desktop every claim the battle
+still holds is MOVABLE (125.4.4: the resident claim declared again as the
+bracket returns) and the card's page-safe ring has been given back. In the
+fresh arm a SECOND battle window then plays once, its resident claim from
+the top under the first's; the first closes, and a compaction posted from
+outside (tests/vidclmove.py's door) MOVES the second's resident claim up
+into the hole: its six derived segments move with it, its bytes are the
+same, and its next play reaches its menu.
+
 Broken on purpose (vb_cpask answering "not worth it" always) the used arm's
 play never waits on a wake and its rings come out smaller; the block claimed
-from the bottom again, the fresh arm's caches stay, stranded under it.
+from the bottom again, the fresh arm's caches stay, stranded under it; vb_between's declaration
+left out, the resident claim stays PINNED on the desktop (and does not
+move); vb_reloc's table walk left out, the derived segments name the old
+place.
 """
 import argparse
 import os
@@ -127,9 +139,31 @@ def run(arm, tmp, syms):
         m.run()
         key("Enter")
         # (a compaction moves the battle's region: its record says where)
+        cur = [w]
+
         def reb():
-            r = m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE, geom.WIN_SIZE)
+            r = m.read(ui._S("wm_wins") + cur[0].i * geom.WIN_SIZE,
+                       geom.WIN_SIZE)
             return struct.unpack_from("<H", r, geom.W_SEG)[0] << 4
+
+        def play_menu(what):
+            nonlocal base
+            key("Enter")
+            until(lambda: m.read(reb() + syms["vb_ready"], 1)[0] == 1,
+                  what)
+            base = reb()
+            until(lambda: rb("vb_tplay") == 1, what + "'s title")
+            key("Enter")
+            until(lambda: rb("vb_state") == 1 and rb("vb_dirty") == 0,
+                  what + "'s menu", guest=240.0)
+
+        def leave():
+            nonlocal base
+            key("Escape")
+            until(lambda: m.read(reb() + syms["vb_ready"], 1)[0] == 0,
+                  "back on the desktop", guest=30.0)
+            os88marty.ui_done(m)
+            base = reb()
         until(lambda: m.read(reb() + syms["vb_ready"], 1)[0] == 1,
               "the play")
         base = reb()
@@ -141,6 +175,72 @@ def run(arm, tmp, syms):
         mp = heapmap.Map(Q(m), heapmap.symbols())
         got = dict(r0=rw("vb_rkb"), r1=rw("vb_rkb2"), comp=rw("vb_ncomp"))
         m.run()
+        # BETWEEN PLAYS NOTHING PINNED (125.4.4, tests/pins.txt): back on
+        # the desktop, every claim the battle still holds MOVABLE (the
+        # resident claim declared again as the bracket returned) and the
+        # card's page-safe ring given back
+        key("Escape")
+        until(lambda: m.read(reb() + syms["vb_ready"], 1)[0] == 0,
+              "back on the desktop", guest=30.0)
+        os88marty.ui_done(m)
+        base = reb()
+        m.pause()
+        after = heapmap.Map(Q(m), heapmap.symbols())
+        mine = [c for c in after.claims
+                if c.own == base >> 4 and c.seg != base >> 4]
+        got["held"] = [(c.kb, c.pinned) for c in mine]
+        got["ring"] = rw("vb_ring")
+        got["vres"] = rw("vb_vres")
+        m.run()
+        if arm == "fresh":
+            # ...AND IT MOVES. A SECOND battle window B plays once, its
+            # resident claim from the top under A's; A closes, which leaves the
+            # hole above B's; a compaction posted from outside (vidclmove's
+            # door, MEM_PG_HIGH) packs B's up into it. Every word derived from
+            # it moves with it, its bytes are the same, and B's next play
+            # reaches its menu
+            cur[0] = ui.path("C:/VBATTLE.O88")
+            ui.raise_window(cur[0])
+            os88marty.ui_done(m)
+            base = reb()
+            play_menu("B's play")
+            leave()
+            a_seg = struct.unpack_from("<H", m.read(
+                ui._S("wm_wins") + w.i * geom.WIN_SIZE, geom.WIN_SIZE),
+                geom.W_SEG)[0]
+            ui.close(w)
+            until(lambda: not any(c.own == a_seg for c in heapmap.Map(
+                Q(m), heapmap.symbols()).claims), "A's claims to be freed",
+                  guest=30.0)
+            os88marty.ui_done(m)
+            base = reb()
+            m.pause()
+            mine = [c for c in heapmap.Map(Q(m), heapmap.symbols()).claims
+                    if c.own == base >> 4 and c.seg != base >> 4]
+            DER = ("vb_sfxseg", "vb_mring", "vb_idseg", "vb_iseg", "vb_bseg",
+                   "vb_cseg")
+            v0 = rw("vb_vres")
+            d0 = [rw(n) - v0 for n in DER]
+            rc = [c for c in mine if c.seg == v0]
+            size = (rc[0].para << 4) if rc else 0
+            h0 = m.read(v0 << 4, size)
+            m.write(ui._S("mem_cpq_lvl"), bytes([0xFE]))
+            m.write(ui._S("mem_cpq"), struct.pack(
+                "<H", geom.winptr(m, cur[0].i, ui._S)))
+            m.run()
+            until(lambda: struct.unpack_from(
+                "<H", m.read(ui._S("mem_cpq"), 2))[0] == 0,
+                  "the posted compaction", guest=30.0)
+            os88marty.ui_done(m)
+            base = reb()
+            m.pause()
+            v1 = rw("vb_vres")
+            got["moved"] = (v0, v1)
+            got["derived"] = [rw(n) - v1 for n in DER] == d0
+            got["same"] = m.read(v1 << 4, size) == h0 and size > 0
+            m.run()
+            play_menu("B's second play")
+            got["err2"] = rw("vb_err")
     finally:
         m.quit()
     left = [CACHES[c.own] for c in mp.claims if c.own in CACHES]
@@ -180,6 +280,23 @@ def main():
            "fresh: the caches (%s) gone for the play, nothing stranded "
            "(%.1f KB free), the rings %d + %d KB" % (
                ", ".join(g["had"]), g["free"], g["r0"], g["r1"]))
+    for arm, g in sorted(res.items()):
+        ok(g["vres"] and any(not p for _, p in g["held"]) and
+           not any(p for _, p in g["held"]) and g["ring"] == 0,
+           "%s: back on the desktop the battle holds %s, none pinned, the "
+           "card's ring given back (%04X)" % (
+               arm, ", ".join("%.1f KB" % k for k, _ in g["held"]) or
+               "nothing", g["ring"]))
+    for arm, g in sorted(res.items()):
+        if "moved" not in g:
+            continue
+        v0, v1 = g["moved"]
+        ok(v1 != v0, "%s: the posted compaction MOVED the resident claim "
+           "(%04X -> %04X)" % (arm, v0, v1))
+        ok(g["derived"] and g["same"], "%s: its six derived segments moved "
+           "with it, its bytes the same" % arm)
+        ok(g["err2"] == 0, "%s: the next play reached its menu after the "
+           "move (vb_err %04X)" % (arm, g["err2"]))
     if "used" in res:
         g = res["used"]
         ok(g["comp"] >= 1, "used: the play POSTED a compaction and started "

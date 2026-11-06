@@ -15,7 +15,7 @@ hidden in the delay AFTER they make the selection."*
 
 SPEC.md 125.4 is the reader and the rings as built, 125.4.3 the builder's
 reader's model (the burst cap) and 125.4.4 the map below as a fact.
-docs/plans/VBATTLE-MEMORY-PLAN.md is the earlier round (streaming loops,
+docs/plans/completed/VBATTLE-MEMORY-PLAN.md is the earlier round (streaming loops,
 XMS/EMS holds); this one is about **conventional memory on the owner's 5150**
 and the reading policy, which every machine shares.
 

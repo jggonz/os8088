@@ -14007,7 +14007,7 @@ $(BUILD)/os8088-encoder.zip: $(BUILD)/video.o88 $(VENCBOOT) tools/os88vbundle.py
 	python3 tools/os88vbundle.py $@ --player $(BUILD)/video.o88 --boot $(BUILD)
 
 # THE VIDEO BATTLE BUILDER FOR PEOPLE WITH NO os8088 TREE
-# (docs/plans/VBATTLE-BUILDER-PLAN.md): the builder's window, every tools/
+# (docs/plans/completed/VBATTLE-BUILDER-PLAN.md): the builder's window, every tools/
 # module it imports or runs (tools/os88vbtbundle.py computes the list with
 # os88vbundle's closure), VBATTLE.O88 and a README, in one folder of one
 # deterministic zip. On demand. `soak -k vbtbundle` unpacks it outside the

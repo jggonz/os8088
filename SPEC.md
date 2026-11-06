@@ -238279,14 +238279,27 @@ choice and its clip, as before. `vbtmenu`: on Limit with no gauge nothing
 wanted, on Bolt its clip; a key taken in under 0.3 s every time (0.12 at
 most measured; the owner's 100% battle's Ice <-> Bolt 0.05 - 0.35 s).
 
+**Between plays the window holds nothing pinned** (SPEC.md 66.3,
+docs/HEAP-CLAIMS.md, `tests/pins.txt`). One relocation proc, `vb_reloc`,
+covers three claims: the resident claim, whose six parts are segments
+derived from its base (`vb_rltab`, all moved by the delta); the title
+picture (`[vb_cvseg]`, declared once read); and the XMS hold's 32 KB fill
+bounce (`[vb_hbnc]`, read only by the fill's foreground copy). The resident
+claim is pinned again by `vb_play` before each load, because the hook reads
+its music at interrupt time, and declared again by `vb_between` when the
+bracket returns. The clip rings are claimed and freed inside the bracket
+(bucket C), and the card's DMA ring, which no compaction may move, is
+freed when the play ends (bucket D) and claimed again by the next load
+(`vb_cardclaim`, at `vb_load`'s `.again`).
+
 ### 125.5 The band
 
 The band is the rows from the header's band row (142 by default) to 199 of
 mode 4. It is outside the canvas, so no record writes there and nothing is
 saved or restored around it (`apps/vbattle/vbband.inc`).
 
-**It is composed in a buffer of its own** (16 KB in the resident claim,
-80 bytes a row): the band's PICTURE (the rules' band picture, at its
+**It is composed in a buffer of its own** (the band's rows and no more,
+in the resident claim: `vb_bpara`, 125.4.4's R1; 80 bytes a row): the band's PICTURE (the rules' band picture, at its
 place) or the plain look (black, a cyan rule at the band's second row and
 above the message line, a divider before the party), and over it the open
 menu's own picture. Text is drawn over the buffer's bytes - ground and
@@ -238548,7 +238561,7 @@ not used yet. An EGA takes the CGA4 bundle in mode 4.
 **Hardware not yet heard.** The PC speaker (VIDEO-BATTLE-PLAN 3.2) is not
 an output.
 
-**The builder** (docs/plans/VBATTLE-BUILDER-PLAN.md, waves 1 to 5):
+**The builder** (docs/plans/completed/VBATTLE-BUILDER-PLAN.md, waves 1 to 5):
 `tools/vbtproj.py` (a project), `tools/vbtana.py` (decoded screens,
 cached; loop and attachment points; the music's loop and its JOIN after
 the openings; the budget and this section's memory), `tools/vbtrules.py`

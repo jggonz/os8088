@@ -3,8 +3,11 @@
 **Status: all five waves BUILT, and the title and ending loops (6) (2026-11-04): the model, the analysis, the
 command line, the window's Battle, Idle, Clips, Openings, Actions,
 Characters & menus, Enemy and Build tabs, and the engine playing section
-11's rules (10.5). What is left is the owner's next round and the "Not in
-it" of each wave, so the plan stays here until that is decided.** `make
+11's rules (10.5). The owner's later rounds (2026-11-05/06: Hercules
+fixes, the RAM plan, fit and clip, the document, the embedded game, the
+title picture) were built on top of it, and the plan moved to completed/ at
+the merge to the integration branch; SPEC.md 125 and the builder are the
+authority now.** `make
 vbtbundle` zips the builder for a machine with no os8088 tree. It turns a battle's footage into a `.VBT` bundle (SPEC.md
 §125) through a window. Section 9 has the questions and their answers,
 section 10 what the answers changed, and section 11 the proposal for what an

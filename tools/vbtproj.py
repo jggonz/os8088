@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""vbtproj - a Video Battle PROJECT (docs/plans/VBATTLE-BUILDER-PLAN.md 2).
+"""vbtproj - a Video Battle PROJECT (docs/plans/completed/VBATTLE-BUILDER-PLAN.md 2).
 
 The project is the product; the builder's window and the command line are
 two faces of it. This module is the model: what a battle is made of, loaded
