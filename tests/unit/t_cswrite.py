@@ -19,11 +19,12 @@ the other build - silently, on a build nobody here can boot yet.
 
 So this counts the two idioms per file under kernel/ and drivers/ - and
 apps/pixel/, PiXEL's package and parts, which KERN-MEGA-PLAN 14.40 took to
-none, apps/pixelstein/, whose play 14.50 took to none, and what 14.150
-converted: apps/xtmp3/ (the XT backend's arm, the engine), apps/notepad/ and
-the speaker libraries every player includes (apps/os88spk.inc,
-apps/os88spkfx.inc) - and holds them to `tests/cswrites.txt`, textrules'
-shape:
+none, apps/pixelstein/, whose play 14.50 took to none, apps/lemmings/,
+whose blitters took ~3,000 a second until KERN-MEGA-PLAN 14.148 took them to
+none too, and what 14.150 converted: apps/xtmp3/ (the XT backend's arm, the
+engine), apps/notepad/ and the speaker libraries every player includes
+(apps/os88spk.inc, apps/os88spkfx.inc) - and holds them to
+`tests/cswrites.txt`, textrules' shape:
 
   * a FILE NOT IN THE REGISTRY using either idiom fails - the case that
     matters, because it is what new code hits;
@@ -61,8 +62,8 @@ from harness import check, done                           # noqa: E402
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
 REGISTRY = os.path.join(ROOT, "tests", "cswrites.txt")
-TREES = ("kernel", "drivers", "apps/pixel", "apps/pixelstein", "apps/xtmp3",
-         "apps/notepad")
+TREES = ("kernel", "drivers", "apps/pixel", "apps/pixelstein", "apps/lemmings",
+         "apps/xtmp3", "apps/notepad")
 FILES = ("apps/os88spk.inc", "apps/os88spkfx.inc")   # (shared, in apps/ itself)
 
 LABEL = r"(?:[A-Za-z_.$@?][\w.$@?#~]*:\s*)?"

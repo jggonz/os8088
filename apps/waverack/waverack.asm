@@ -2914,6 +2914,9 @@ WRB_SIZE0   equ 240 + WR_NB * 10 + WF_NKEYS * 2 + WD_BANDSZ
     WRV wt_rdsz, 2                  ; a play's bounded read, bytes
     WRV wt_csh, 2                   ; wt_plan: the streamed play's CPU share
     WRV wt_hseg, 2                  ; the hold's claim
+    WRV wt_hwin, 2                  ; ...its window: the claim itself in
+                                    ;   real mode, bound under CPU_F_PM
+                                    ;   (wt_hbwin)
     WRV wt_ht0, 2                   ; a load pass's first tick
     WRV wt_hlo, 4                   ; the hold: frames [hlo, hhi), loaded
     WRV wt_hhi, 4                   ; up to hpos

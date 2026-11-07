@@ -108,6 +108,7 @@ sheeteval secs=80   # what SHEET's evaluator answers, 102 checks by the host
 sheetxl2 secs=90   # SHEET opens Excel 2.1's own BIFF2 files (arm A; arm B skips without the archive, as on MartyPC)
 scsize secs=130   # SCRIBE's parts and claims (heapmap's kern_mega pool: the region and its three claims above 1MB), round trips, picture, TOOBIG, sort, undo
 gbsave secs=160   # RealDMG's ARM: battery RAM and MBC3 clock saved on close (GBSAVE.SAV) and read back on a second boot; red with rw_onclose answering without writing
+gbship secs=90   # RealDMG's ARM opens the SHIPPED packed MEDIA/GBDEMO.GB off megaapps.img and the game runs (rw_czprobe: a packed cart never takes the in-place bank cache's raw READ_SEQ); red with the base's megaapps.img (--apps): 'not a GB ROM', no frame
 wirefleetdeploy secs=60   # WireFleet deployment, refusals, rotation, removal, auto, Ready, button cancel, About - the VGA leg (Bochs has no CGA/Hercules)
 chartgal secs=600   # the Gallery draws seven different charts, unchanged on kern_mega's VGA (CHART above 1MB)
 

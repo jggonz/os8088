@@ -13995,6 +13995,130 @@ Cost: `.mega` +13 bytes (above 1MB); `MEGA_RESIDENT` 62,976 unchanged;
 kern_big byte-identical (`make build/kernel.bin` with and without, one
 commit).
 
+### 14.147 RealDMG refused the SHIPPED packed GBDEMO.GB (2026-11-07) - FIXED
+
+**Found by the mega-release hands-on pass** (h3, 86Box's mr286): double-click
+`MEDIA\GBDEMO.GB` on kern_mega's apps disk and RealDMG's arm says `REALDMG:
+not a GB ROM`; kern_big plays the same disk's copy, and the arm plays the
+cartridge stored plain. `os88disk` packs it (CZ, 1,095 bytes for 32KB). Under
+`CPU_F_PM` `rw_plan` asks `rw_xplan` first, which puts EVERY cartridge of 32KB
+or more in place above 1MB (REALDMG-SPEC 10.3.1), and the load reads the file
+a bank at a time with `OSAPI_FILE_READ_SEQ` - RAW (SPEC.md 20.14.3) - so bank 0
+was 1,095 bytes of LZ4 and the header check refused it. kern_big took the
+one-claim `OSAPI_FILE_READ`, which unpacks; its bank cache (10.3, over 256K or
+no room) has the same blind spot for a packed cartridge too big for one claim.
+
+**Fix, in the package, both builds** (`apps/realdmg/`): the size probe cannot
+tell a packed file - it answers what the file expands to - so `rw_czprobe`
+walks the folder with `OSAPI_FILE_FIND` for the file's record and keeps
+`OSAPI_FIND_CZ` (+22) in `[rw_czf]`, and `rw_plan` gives a packed file
+neither `rw_xplan` nor the cache: one claim if it fits, else the new toast
+`REALDMG: unpack the ROM` - a packed cartridge past one claim has no read that
+unpacks a bank at a time (20.14.3's reasons), and the same ROM stored plain
+goes to the cache as before. REALDMG-SPEC 19 says so.
+
+**Row**: `mega-gbship` (tests/megaport.txt): `gbship`'s C leg under
+`OS88_MEGA` boots mega.img with megaapps.img - the arm and the packed demo -
+and the game's frame counter must ADVANCE between two looks (a refused
+cartridge leaves the view claimed with whatever it held: the red run read
+39,810 there and the first spelling of the check passed on it). Green on
+Bochs, 121 frames; red with the base's megaapps.img (`--apps`): `never ran`.
+
+Cost: no kernel byte (kernsize's lines unchanged; nothing under kernel/ moved).
+REALDMG.O88 +144 bytes of image on kern_big (38,050 -> 38,194), the arm +152
+(39,206 -> 39,358), 25 of bss (`rw_czf`, `rw_fnd`); on the disk +144 / +80
+packed.
+
+### 14.148 Lemmings' blitters wrote through CS: ~3,000 #GP fixups a second (2026-11-07) - FIXED
+
+**Found by the mega-release hands-on pass** (h5): Lemmings ran at ~60% speed
+on kern_mega (VGA 61%, Hercules 63%; kern_big 100%). Every site is in the
+four hand-written files beside the C (`apps/lemmings/lemblit.inc`,
+`lemsprite.inc`, `lemmask.inc`, `lemfont.inc`): `push cs / pop es` before a
+`stosb` into the package's own scratch (`_lem_r_wpiece`'s `lb_mrow`,
+`lb_shrow`'s rows, `lb_orrow`'s `lb_sorb`), `mov [cs:lb_wi0], ax`, `or
+[cs:lb_mlatch], al`, and `push cs / pop ds` to put DS back after a bank -
+each a completed #GP (`mega_gpw`), the pairs once per call, the prefixed
+stores every time. Census on 86Box's mr286 (`faults`), the level's preview
+for 5 s and 10 s of play after the click:
+
+| | before | after |
+|---|---:|---:|
+| VGA preview, 5.7 guest-s | 14,404 (1104:4CFF, :4D1B, :4C16) | **0** |
+| VGA play, ~11 guest-s | 43,410 (:5A70 `lb_shrow`, :5AC2 `lb_orrow`, :4EFC) | **0** |
+| Hercules preview | 14,404 | **0** |
+| Hercules play | 28,508 | **0** |
+
+The game clock agrees: the same scripted play reached `TIME 4-44` before and
+`4-38` after, with one more lemming out.
+
+**Fix: the same instructions with another segment register.** ES = our DS
+(`push ds / pop es`) where a row is shifted into our scratch, the stores
+`[es:` instead of `[cs:`, and DS restored from the stack (`push ds` before
+it moves, `pop ds` after) or from ES, never from CS. `lb_msample` and
+`_lem_r_mlatch` drop their prefix (DS is ours at every caller: `lb_msvga`
+reads `lb_kind` through it), and `lb_pnib`'s `push cs / pop ds` before its
+`pop ds` is gone. **The 8088 runs every path in the same clocks or fewer**:
+`push ds` is `push cs`'s 14 cycles, an `es:` prefix a `cs:` one's 2, and the
+count of each is unchanged on every loop - the moved `push ds` in
+`_lem_r_wpiece`'s colour loop and `lb_compose`'s rows replaces the `push cs`
+that was there, once per row per plane, never inside a pixel loop; the two
+deleted instructions are pure gain. Not timed on MartyPC (the final pass's
+`lemmings` row); the image is **4 bytes smaller** (lemmings.trim.bin 32,322
+-> 32,318).
+
+**Row**: `cswrite` (fast) now walks `apps/lemmings/` (none registered, so
+any new site fails `make`); red with the base's lemblit.inc
+(`lemblit.inc:907 ... pair ... not in tests/cswrites.txt`). SPEC.md 116.4.
+
+### 14.149 WaveRack on kern_mega: the HOLD was paragraph arithmetic on a selector (2026-11-07) - FIXED
+
+**Found by the mega-release hands-on pass** (h5, D1): (a) Space on the 16-bit
+stereo PRELUDE.WAV (waverack.img) closed WaveRack, `WaveRack 0D at
+10EC:5462`; (b) on 8-bit clips the counter stayed 00:00.00 and Stop did
+nothing; (c) a take was 0.83 s where kern_big's was 2.75 s.
+
+**(a) is the defect.** A clip the floppy cannot stream plays from the HOLD
+(SPEC.md 123.6), one byte a frame in a conventional claim, and `wt_hoff`
+addressed frame n as `[wt_hseg] + n >> 4 : n & 15`. On kern_mega every claim
+is an LDT selector (KERN-MEGA-MEMORY-PLAN MC7), so from the 17th frame the
+sum named another descriptor: #GP at the first load pass. **Fix**: `wt_hbwin`
+asks `OSAPI_SEG` `SEG_BWIN` for a bound window over the hold at its claim,
+and `wt_hoff` re-aims it (`SEG_AIM`, CX:AX = the byte offset, 64KB of reach -
+every read into the hold and copy out of it is at most 32KB). A real-mode
+kernel answers `SEG_BWIN` with the claim itself, and `wt_hoff` keeps the sum
+whenever the window IS the claim: no `CPU_F_PM` test (t_megapkg counts
+none), no far call a frame on the 8088; no window (no LDT entry) means no
+hold. +66 bytes of image (43,872 -> 43,938), 2 of bss.
+
+**(b) and (c) are not kern_mega's** - measured, not guessed. (b): the play's
+first `W_ONWAKE` (`wt_onwake` -> `wt_refill`) makes up to `WT_FILLMAX` (8)
+reads in one pass, and the window's tick (playhead, meter) and every key wait
+for it - FURELISE's start took 8 reads, ~3 s on the mr286, and the first
+playhead tick came at t+3.5 s on kern_mega and kern_big alike; h5 pressed Stop
+at 4 s, inside or at the edge of that pass, and looked 1 s later. (c): the
+same latency at Record (`wc_go`'s DFREE, the take's file and header, the
+WAVERACK.TAK marker on A:): the card started 3.5 s after R on kern_mega, and
+a take is the time from the card's start to S - a 5.5 s script left 0.83 s.
+A sampled take of 10 s here was whole, written to the frame. Reported as a
+proposal (one read a wake, so Stop and the tick come between reads on every
+kernel - a behaviour change and a SPEC 123.6 sentence, the owner's call).
+
+**`wc_myslot`** (tests/megahigh.txt's `high` note) compares SSI_SEG with DS -
+a value, not a sum - and holds: the loader's I_SPTR is the region's data
+selector, which is DS. The exemption's text says so now; declaring OS88_HIGH
+is still the owner's full-tier call, and OS88_HIGHMEM keeps a reason (the
+I/O claim and the look-ahead are disk-read targets, which bounce sector by
+sector above 1MB).
+
+**Row**: `waverackmega` (soak, 86Box at286_vga_sb, a boot a leg). HOLD:
+PRELUDE.WAV plays from the hold under a bound window, loads all 33,075
+frames, holds `wrsim.hold_bytes()` byte for byte, plays to the end with the
+window still WaveRack's. SLOT: a take's `[wc_slot]` is the instance's
+inst_tab row. Red with the base's package (`--pkg`/`--src`): HOLD's window
+gone at the load (`WaveRack 0D at 10EC:5462`); SLOT passes on the base too,
+a guard. 34 s.
+
 ### 14.150 Writes through CS that cost a feature or speed: XT-MP3's XT backend, the speaker setup, the Shut Down spinner, Notepad, the installer (2026-11-07) - FIXED
 
 **Found by the mega-release hands-on pass** (h2's D1 and "Minor", h1's item
@@ -14071,12 +14195,12 @@ whose audio is 13 ms. The XT probe failed, and the ladder had nothing left.
 
 **The ratchet** (`tests/unit/t_cswrite.py`, fast) now walks apps/xtmp3/,
 apps/notepad/ and the two speaker libraries as well, and `--census DIR`
-prints any tree. `apps/` as a whole is **1,019 writes and 169 pairs in 101
-files** - not gated: the largest are SHEET (305), WEAVE's `wvm.inc` (152),
+prints any tree. `apps/` as a whole is **1,015 writes and 153 pairs in 97
+files** (after 14.148's Lemmings) - not gated: the largest are SHEET (305), WEAVE's `wvm.inc` (152),
 WIN16 (`w16mdi` 104, `w16lzver` 76, `w16task` 47, `w16syslib` 20), C64's JIT
 (59), DOS (`dos.asm` 28 + 18 pairs, `dosw` 21), the Video Player (20, the
-LOADALL path kern_mega refuses), REALDMG's PPU (12), VBATTLE's input (10),
-Lemmings' blitter (3 + 8 pairs, h5's D2) - and three host test programs
+LOADALL path kern_mega refuses), REALDMG's PPU (12), VBATTLE's input (10)
+- and three host test programs
 (`hosttest/`) that never run on the guest.
 
 **Harness:** `vm/386-mega-cdrom` carries a seeded CMOS now

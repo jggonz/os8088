@@ -792,6 +792,11 @@ wt_plan:
     call OSAPI_MEM_P                ; (exactly the size, not the run)
     jc .slow
     mov [wt_hseg], dx
+    call wt_hbwin                   ; its window (kern_mega's), or no hold
+    jnc .hw
+    call wt_hfree
+    jmp short .slow
+.hw:
     mov ax, [wt_nlo]
     mov dx, [wt_nlo+2]
     mov [wt_hlo], ax
@@ -1123,7 +1128,8 @@ wt_release:
     mov byte [wt_hload], 0
     ; (falls into wt_hfree)
 
-; wt_hfree - the hold given back. keeps all but DX
+; wt_hfree - the hold given back (a bound window over it goes with it,
+; SPEC.md 50.6.11). keeps all but DX
 wt_hfree:
     mov dx, [wt_hseg]
     call wo_free
@@ -1493,11 +1499,52 @@ wt_rd1:
     mov byte [wt_srcdone], 1
     ret
 
+; wt_hbwin - [wt_hwin] for the hold just claimed at [wt_hseg]: OSAPI_SEG's
+; SEG_BWIN (SPEC.md 50.6.11). Under CPU_F_PM (kern_mega) the claim's value is
+; an LDT SELECTOR, and wt_hoff's paragraph sum named some other descriptor
+; from the 17th frame on - a 16-bit stereo region loaded into the hold closed
+; WaveRack with a #GP at its first load pass (KERN-MEGA-PLAN 14.149) - so
+; there it is a BOUND WINDOW over the claim, which wt_hoff re-aims at each
+; address and which moves and goes with the claim. A real-mode kernel answers
+; the value itself, so [wt_hwin] = [wt_hseg] there and wt_hoff keeps the sum,
+; with no CPU_F_PM test and no far call a frame. CF = 1 no window: no hold.
+; keeps all
+wt_hbwin:
+    push bx
+    push dx
+    mov dx, [wt_hseg]
+    mov bl, SEG_BWIN
+    call OSAPI_SEG                  ; DX = the window (real mode: DX itself)
+    jc .out
+    mov [wt_hwin], dx
+.out:
+    pop dx
+    pop bx
+    ret
+
 ; wt_hoff - the hold's address of document frame DX:AX ([wt_hlo] <= it):
-; ES:DI, DI < 16 - one byte a frame. clobbers AX, DX
+; ES:DI - one byte a frame, and at least 64 KB of the hold from there: DI <
+; 16 by the paragraph sum, or DI = 0 in the bound window re-aimed (SEG_AIM)
+; where the window is not the claim itself (wt_hbwin). clobbers AX, DX
 wt_hoff:
     sub ax, [wt_hlo]
     sbb dx, [wt_hlo+2]
+    push bx
+    mov bx, [wt_hwin]
+    cmp bx, [wt_hseg]
+    je .sum                         ; (every real-mode kernel)
+    push cx
+    mov cx, dx                      ; CX:AX = the byte offset
+    mov dx, bx
+    mov bl, SEG_AIM
+    call OSAPI_SEG                  ; DX = the window there, AX = 0
+    mov es, dx
+    mov di, ax
+    pop cx
+    pop bx
+    ret
+.sum:
+    pop bx
     mov di, ax
     and di, 15
     push cx
