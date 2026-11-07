@@ -29,6 +29,9 @@ that mechanism rather than about the text:
      resume that lost or repeated an entry would still look like a listing.
   5  Esc ABANDONS it, and the prompt comes back.
 
+  and one about the footer: `DIR B:` typed at A> reports B:'s free space,
+  not the prompt's volume's (SPEC.md 96.33.9.3).
+
 **CGA, and that is the point of the machine choice**: a page is `[con_vrows] -
 1`, so 16 rows here against 24 on the adapters that fit all 25.  The system
 disk's root has more entries than 16 and fewer than 24, so this is also the
@@ -126,6 +129,18 @@ def count_of(lines):
     return None
 
 
+def free_of(lines):
+    """The LAST footer's `bytes free` figure, or None - the band still holds
+    the listings before it."""
+    for r in reversed(lines):
+        if "bytes free" in r:
+            try:
+                return int(r.split("File(s)")[-1].split("bytes free")[0])
+            except ValueError:
+                return None
+    return None
+
+
 def main():
     for p in (SYS, APPS):
         if not os.path.exists(p):
@@ -190,6 +205,32 @@ def main():
                  "pause here and assertion 3 would pass vacuously" % (total, page))
         if not any("bytes free" in r for r in plain):
             fail("the footer has no `bytes free` in it: %r" % plain[-3:])
+
+        # --- 0c: ...AND THE FREE SPACE IS THE LISTED VOLUME'S (SPEC.md
+        # 96.33.9.3). `DIR B:` typed at A> printed A:'s free bytes: the footer
+        # was written AFTER dsh_home had put the shell back on the prompt's
+        # volume, and OSAPI_FILE_DFREE answers for the volume you stand on.
+        # The two disks' figures are checked to DIFFER first, or the
+        # assertion would pass on a fixture whose volumes happen to agree.
+        # VERIFIED RED with dsh_dir_page's footer moved back under its
+        # dsh_home: `DIR B:` at A> printed A:'s figure.
+        bfree = free_of(plain)
+        bx.run("A:")
+        afree = free_of(bx.run("DIR"))
+        if bfree is None or afree is None:
+            fail("no `bytes free` figure to compare: B: %r, A: %r"
+                 % (bfree, afree))
+        if afree == bfree:
+            fail("A: and B: both report %d bytes free, so `DIR B:` from A> "
+                 "cannot say whose figure it printed" % afree)
+        cross = free_of(bx.run("DIR B:"))
+        if cross != bfree:
+            fail("`DIR B:` typed at A> reports %r bytes free; B: has %d and "
+                 "A: has %d - the footer measured the PROMPT's volume and not "
+                 "the listed one (SPEC.md 96.33.9.3)" % (cross, bfree, afree))
+        print("dosdirsw: `DIR B:` at A> reports B:'s %d bytes free, not A:'s "
+              "%d" % (bfree, afree))
+        bx.run("B:")
 
         # --- 1: a switch we have not got ------------------------------------
         for sw in ("/Z", "/B"):

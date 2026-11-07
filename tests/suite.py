@@ -2530,12 +2530,16 @@ FULL = [
         "out of build/hello.o88, build/mines.o88, a tier-3 WF_DISK entry and "
         "a WF_ARC one whose .WPK the test packs with --archive, and the "
         "machine fetches it because `make thewiretest`'s "
-        "SYSTEM/APPDATA/WIRE.CFG says to. Eighteen assertions: the catalog is "
+        "SYSTEM/APPDATA/WIRE.CFG says to. Nineteen assertions: the catalog is "
         "understood, the host saw the request it expected, the list is the "
         "catalog, the 8088/8086 filter cuts four rows to three, the predicate "
         "greys Load Program on a WF_DISK record and NOT Add to Disk, the "
         "picture matches the file pixel for pixel, Add to Disk writes both "
-        "files to B: byte-identical, Load Program runs one out of memory, "
+        "files to B: byte-identical, Load Program runs one out of memory - "
+        "and, LAST, a PACKED one (assertion 19, SPEC.md 21.5.1.2): MINES is "
+        "the shipped LZ4 build/mines.o88 and must open `Minesweeper`; red on "
+        "the old image arm, which copied the unpacked length of a shorter "
+        "file and ran LZ4 bytes as code - "
         "AN ARCHIVE'S WHOLE TREE lands on B: byte-identical - eight entries "
         "at three depths, an LZSS one, two INCOMPRESSIBLE ones that put the "
         "stream over 65,536 bytes so the dword Content-Length and the 32-bit "
@@ -6684,6 +6688,12 @@ SOAK = [
         "about one door rather than about the difference. Its parts really "
         "arrive: MSEG rewrites its own title to `MSEG 7/7 OK` and this reads "
         "it, so a launch that produced a window and no parts cannot pass. "
+        "AND G (SPEC.md 21.5.1.2): the SHIPPED MINES.O88, LZ4-packed as "
+        "every release package is, through the IMAGE form - it must run and "
+        "its region must be the UNPACKED image byte for byte; the arm used "
+        "to copy [ld_img] bytes of a shorter file to offset 0, which "
+        "crashed The Wire's Load Program on every release .O88. RED on the "
+        "old arm: 1,320 of 1,445 bytes differ. "
         "VERIFIED RED by downgrading the cell from OSAPI_NCELL to a plain "
         "slot - which is exactly 21.6.1's claim, that the N stub's staging "
         "and inst_vol_enter are what make the front half 14 resident bytes: "
@@ -6705,7 +6715,7 @@ SOAK = [
         "in the file's own header working and the shared build/ untouched "
         "mid-run",
         needs=("marty",),
-        wants=("build/hello.o88", "build/mseg.o88",
+        wants=("build/hello.o88", "build/mseg.o88", "build/mines.o88",
                "build/pkgrun360.img")),
     Row("heapmap", "soak", py("tests/heapmap.py"), 30.0,
         "What does the claim heap look like when the boot is over? (SPEC.md "
@@ -8903,6 +8913,23 @@ SOAK = [
         "lost clusters before 18.4.9.2.",
         needs=("marty",),
         wants=("build/os8088-360.img", "build/dosfull360.img")),
+    Row("doscopyhd", "soak", py("tests/doscopyhd.py"), 20.0,
+        "SPEC.md 96.30.7.3: COPY from the B:\\> prompt onto a 2KB-cluster "
+        "FAT16 C: (XT-IDE, booted off it) of 616, 1,380 and 5,170 bytes, the "
+        "three read back off the VHD on the host by an independent FAT16 "
+        "reader and compared byte for byte. The shell's buffer was sized on "
+        "the PROMPT's volume with AX left holding a directory cluster "
+        "number - one floppy KB - and WRITE_SEQ takes only whole "
+        "destination clusters, so every file past 1KB was `File creation "
+        "error` at its first append. VERIFIED RED with dsh_copy_go's "
+        "destination goto and DSH_CPKB taken out: 1,380 and 5,170 missing, "
+        "the 616-byte control copied. From C:\\> it cannot fail, the "
+        "destination being the prompt's volume - so the prompt is B:'s on "
+        "purpose. 16 s measured",
+        needs=("marty",),
+        wants=("build/kernel.sys", "build/boothd.bin", "build/mbr.bin",
+               "build/hiber.drv", "build/ctrl.drv", "build/hdd.drv",
+               "build/dos.o88")),
     Row("dosseq", "soak", py("tests/dosseq.py", "--hdd", "--kd"), 40.0,
         "A DOS PROGRAM'S SEQUENTIAL I/O COSTS THE SAME AT EVERY OFFSET "
         "(docs/plans/completed/DOS-STREAM-PLAN.md). SEQCOST.COM writes a "
@@ -9603,6 +9630,9 @@ SOAK = [
         needs=("marty",), serial=True, wants=("build/doscom360.img",)),
     Row("dosdirsw", "soak", py("tests/dosdirsw.py"), 30.0,
         "DIR's SWITCHES, AND THE PAUSE THAT MAY NOT BLOCK (SPEC.md 96.33.9). "
+        "Step 0c (96.33.9.3): `DIR B:` typed at A> reports B:'s bytes free "
+        "and not A:'s - the footer was printed after dsh_home; red with it "
+        "moved back. "
         "dsh_c_dir took a path and nothing else, so every switch was read as "
         "part of the file name; reported from the field as \"dir doesn't have "
         "most of its common command line args. Like /p\". WHAT THE SWITCHES "
@@ -9914,6 +9944,10 @@ SOAK = [
         "difference is three characters. Six spellings in one boot - bare, "
         "with the extension, with arguments, with both, fully qualified, and "
         "the .DAT - and the ones that run must report the exact argument text. "
+        "And `B:DOSARGS.COM /M`, a drive with no separator (SPEC.md "
+        "96.33.21): it ran `B:\\OSARGS.COM`, the name's first letter eaten; "
+        "the disk carries a root copy so either drive-only resolution "
+        "finds it, and it was red with the `dec di` out. "
         "VERIFIED RED with the pop put back: three of the six, all three "
         "dotted ones, while the search and the refusal stayed green.",
         needs=("marty",), serial=True,
@@ -10142,6 +10176,11 @@ SOAK = [
         needs=("marty",), serial=True),
     Row("ftpd", "soak", py("tests/ftpd.py"), 360.0,
         "SPEC.md 77: the FTP server driven by Python's own ftplib through "
+        "QEMU's forwarded ports. 8f (77.25.1): LIST and NLST of a folder that "
+        "is not there answer 550 inside the timeout with the control "
+        "connection in step - red on the old abort, which closed the PASV "
+        "LISTENER before the worker had accepted the client's connection, "
+        "so the client read an open, empty data socket for ever. The rest: "
         "QEMU's forwarded ports - login, PASV and active mode, LIST, STOR, "
         "RETR, the Setup page's controls, the window untouched by a log "
         "scrolling under it - and the upload and FTPD.CFG read back off the "
@@ -14190,6 +14229,19 @@ SOAK = [
         "trivially, and the alert must be on the glass at the end, or a dialog"
         "that failed to open reads as one that opened quietly",
         needs=("marty",), serial=True),
+    Row("paintbmpsave", "soak", py("tests/paintbmpsave.py"), 15.0,
+        "SPEC.md 42.13.5: a BMP saved off a PLANAR canvas is a BMP. On VGA "
+        "and EGA the canvas is four planes and the BMP save wrote it raw - "
+        "four quarter-width planes under a 4bpp header, the picture gone "
+        "from the disk. A sixteen-colour GIF made by the row is opened on "
+        "os8088_xt_vga ([pt_planar] = 1 asserted), saved as BMP and as GIF "
+        "off the same canvas, the floppy flushed and both decoded by PIL on "
+        "the host: they must agree pixel for pixel and map the sixteen "
+        "fixture colours one to one, and the canvas must be planar again "
+        "after the save. VERIFIED RED with pt_save's convert pair taken out: "
+        "11,996 of 12,800 pixels differ. 13 s measured",
+        needs=("marty",), serial=True,
+        wants=("build/paint.o88", "build/os8088-360.img")),
     Row("paintdirty", "soak", py("tests/paintdirty.py"), 40.0,
         "SPEC.md 42.16: does Paint ask before it throws a picture away? A"
         "FLAG and not Note Pad's checksum, so the places that set and clear it"
@@ -19815,7 +19867,10 @@ SOAK = [
         needs=("marty",), serial=True,
         wants=("build/chart.o88", "build/os8088-360.img")),
     Row("chartread", "soak", py("tests/chartread.py"), 300.0,
-        "SPEC.md 82.18: CHART's THREE readers are one reader. It opens SYLK, "
+        "SPEC.md 82.18: CHART's THREE readers are one reader. Check 0 "
+        "(82.14.2): before any file the canvas is WHITE - ct_entry copied "
+        "only the header into a claim nobody zeroes, so the window showed "
+        "heap noise; red with the clear taken out. It opens SYLK, "
         "DIF and BIFF, and until this row only SYLK had ever been executed "
         "by a test - chartname opens one .SLK and nothing else - so "
         "ct_read_dif, ct_read_biff and ct_rkdec were a few hundred bytes of "

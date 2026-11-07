@@ -63,7 +63,7 @@ CORE_ORG    equ 0x0080
 ; CORE alone spends, both hosts read, and whose slack is one number in one
 ; place. Measured at the wave, with the assertion in `apps/dos/doscore.asm`.
 %ifndef DOS_MEGA
-CORE_MAX    equ 16560            ; +512 for SPEC.md 96.7.2's stack swap and
+CORE_MAX    equ 16576            ; +512 for SPEC.md 96.7.2's stack swap and
                                 ; 96.12.5's name truncation, which are 214
                                 ; bytes between them against 89 of slack. The
                                 ; two are the Playroom's whole report: a gate
@@ -176,9 +176,14 @@ CORE_MAX    equ 16560            ; +512 for SPEC.md 96.7.2's stack swap and
                                 ; main's 1 of slack at #327's merge of #328
                                 ; at 16,568 and was cut back to 16,558 (36h's
                                 ; one tail, two shared jumps); kern_dos paid
-                                ; its kilobyte's worth back in kd_resume
+                                ; its kilobyte's worth back in kd_resume.
+                                ; +16 for COPY's buffer sized on the
+                                ; DESTINATION's cluster (SPEC.md 96.30.7.3,
+                                ; a goto and the KB asked for: 14 bytes
+                                ; against 2 of slack) and the drive-only
+                                ; path's colon (96.33.21, 1): 16,572 used
 %else                           ; **kern_mega's core is 67 bytes longer**:
-CORE_MAX    equ 17216            ; SPEC.md 96.15.4's extended-to-extended
+CORE_MAX    equ 17232            ; SPEC.md 96.15.4's extended-to-extended
 %endif                          ; move (dos_xms_move's `.bothx`), 15,409 used.
                                 ; +80, kept a multiple of 16, and paid ONLY by
                                 ; kern_mega's DOS.O88 - both of its hosts
@@ -218,6 +223,9 @@ CORE_MAX    equ 17216            ; SPEC.md 96.15.4's extended-to-extended
                                 ; cluster and WIN16's forward (dosw16.inc,
                                 ; 124.31.1) on this arm, met at #327's
                                 ; merge of #328: 17,208 used
+                                ; +16 for COPY's destination-sized buffer
+                                ; and the drive-only path, as on kern_big's
+                                ; arm (14 bytes against 8): 17,222 used
 ; ...and the core's bss sits directly above its code, at the same offset in
 ; every host, which is what SPEC.md 96.44.2 requires of every `DBSS` cell.
 ; --- THE CORE'S BLOCK IS A BUDGET, NOT A SUM (SPEC.md 96.44.2) --------------

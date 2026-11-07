@@ -152,7 +152,8 @@ FDLG_SAVE equ 1
 ; back before the callback returns (ct_stage), and an export needs no staging
 ; at all (ct_expdlg) - so an open Chart holds 19KB of heap where it held 51.
 ; The bss is loader-zeroed (SPEC.md 21 step 5), so nothing here clears the
-; value count or the name.
+; value count or the name - but a CLAIM is not, so the canvas's pixels are
+; cleared here (SPEC.md 82.14.2).
 ; -----------------------------------------------------------------------------
 ct_entry:
     push ax
@@ -179,6 +180,18 @@ ct_entry:
     mov cx, CH_HDRSZ                    ; it, and the export writes it as it
     cld                                 ; stands
     rep movsb
+    mov cx, CH_STRIDE * CH_H            ; ...AND THE PIXELS, WHITE: DI is
+    mov al, 0xFF                        ; CH_PXOFF now. Until a file is opened
+    rep stosb                           ; nothing renders, and ct_paint blitted
+                                        ; whatever the heap last held under the
+                                        ; claim - noise, on every adapter
+                                        ; (SPEC.md 82.14.2). White is what
+                                        ; ch_prep clears to for a chart with
+                                        ; no values, so the first file's
+                                        ; render changes only what it draws
+%if CH_PXOFF != CH_HDRSZ
+  %error "ct_entry clears the pixels from where the header copy leaves DI"
+%endif
     mov si, ct_tpl
     call OSAPI_WM_CREATE                ; BX = window ptr, CF on table full
     jc .fail
