@@ -14420,7 +14420,9 @@ from win16ref and the in-tree fixtures):
 | ...Ctrl+Tab x4 | 880 | **0** |
 | ...eight arrows in the Main group | 1,444 | **0** |
 | Write, File > Open of a 20 KB text file | 7,187 | **8** |
+| Notepad 3.0, File > Open of the same file | 465 | **8** |
 | LZT.EXE (LZEXPAND, VER; ~130 int 21h) | 2,524 | 154 |
+| TASKS.EXE (WinExec, cross-task sends, DDE) | 427 | 147 |
 | Solitaire, Cardfile: start | **CLOSED** | 226, 286 |
 | WinMine, Calc, Clock, Notepad: start | 76-235 | the same |
 | ...play, typing, idle | 0 | 0 |
