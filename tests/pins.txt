@@ -358,6 +358,16 @@ C apps/vbattle/vbattle.asm vb_rclm       # the two clip rings, claimed at the to
                                          # freed at its end (vb_rfree): the
                                          # reader's file calls hold them, and the
                                          # play draws out of them every frame
+D apps/vbattle/vbprof.inc vb_prseg       # VBATTLED's profile (SPEC.md 126.8): its
+                                         # frames' staging (4 KB with XMS, the
+                                         # whole log without) - the play's hook
+                                         # writes into it at interrupt time for
+                                         # the whole bracket; claimed as the
+                                         # play's rings are, freed at its end
+C apps/vbattle/vbprof.inc vb_prfseg      # VBATTLED's profile file at the play's
+                                         # end: claimed, filled, written with
+                                         # OSAPI_FILE_WRITE (its ES:BX) and freed
+                                         # inside vb_prend's one call (vb_prtgt)
 D apps/vbattle/vbattle.asm vb_ring       # the card's ring, page-safe: the Sound
                                          # Blaster DMAs out of it while a play's
                                          # stream is open; claimed for each play
