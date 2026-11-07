@@ -987,6 +987,12 @@ in docs/TESTING.md, per capability.
   that is minutes. So the page it wrote goes STALE, and
   `--selfcheck` - a second, no emulator - is what says whether the model
   still describes the tree. Run that first, always).
+  `os88intguide.py` (the interactive INTERRUPTS page - the first 1.5KB
+  of memory, how the 8088 takes an interrupt, all 256 vectors and which
+  ones os8088 and its DOS hook; ON DEMAND, no emulator. Every os8088
+  claim on it stands on a source anchor `--selfcheck` re-checks, and it
+  will not write a page whose anchors fail. Chapter 2, the BIOS data
+  area and the disk path, is docs/plans/INTERRUPT-GUIDE-PLAN.md).
 - `docs/` — **the directory says what a document is** (`docs/README.md`, and
   `docs/INDEX.md` lists every one under the same five headings). `docs/`
   itself is how the system works TODAY — instructions, contracts, maintained

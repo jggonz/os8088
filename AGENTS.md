@@ -689,7 +689,13 @@ in docs/TESTING.md, per capability.
   `setup-cc.sh` + `cc8086.py` (the C toolchain's fetch and its gate, §73);
   `stkwater.py`/`stkdepth.py` (how deep a task stack HAS been, and which
   call chain took it there - docs/KERNEL-MEMORY.md's "Task stacks");
-  `kfzread.py` (the KFZ heartbeat out of a field screenshot).
+  `kfzread.py` (the KFZ heartbeat out of a field screenshot);
+  `os88intguide.py` (the interactive INTERRUPTS page - the first 1.5KB
+  of memory, how the 8088 takes an interrupt, all 256 vectors and which
+  ones os8088 and its DOS hook; ON DEMAND, no emulator. Every os8088
+  claim on it stands on a source anchor `--selfcheck` re-checks, and it
+  will not write a page whose anchors fail. Chapter 2, the BIOS data
+  area and the disk path, is docs/plans/INTERRUPT-GUIDE-PLAN.md).
 - `docs/` — **the directory says what a document is** (`docs/README.md`, and
   `docs/INDEX.md` lists every one under the same five headings). `docs/`
   itself is how the system works TODAY — instructions, contracts, maintained
