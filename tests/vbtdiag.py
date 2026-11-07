@@ -9,7 +9,7 @@ build/vbattlev.img in B: (VBATTLED.O88 and the demo's BATTLEV.VBT):
 VBATTLED.O88 opened, played, the title watched a few guest seconds, Esc,
 and B: read back on the host:
 
-  1. B:VBPROF1.DAT is there: 'VBPR' version 2, VGA4, the bundle's name;
+  1. B:VBPROF1.DAT is there: 'VBPR' version 3, VGA4, the bundle's name;
   2. its frames are the play's: as many as the hook drew while it ran
      (vb_prn at the end), each with a decode time, the title's clip;
   3. tools/vbtprof.py reads it and prints the play.
@@ -109,7 +109,7 @@ def main():
         open(p, "wb").write(prof)
         good = prof[:4] == b"VBPR"
         h, fr, rd = vbtprof.read_prof(p) if good else ({}, [], [])
-        ok(good and h["ver"] == 2 and h["kind"] == "VGA4" and
+        ok(good and h["ver"] == 3 and h["kind"] == "VGA4" and
            h["name"] == "BATTLEV.VBT" and claimed,
            "1. B:VBPROF1.DAT: %r, version %s (the hold's line), %s, %r" % (
                prof[:4], h.get("ver"), h.get("kind"), h.get("name")))

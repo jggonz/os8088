@@ -2584,10 +2584,33 @@ vb_rpiece:
     jae .rb                         ; it moves (the owner's 286: 37 ms for
     push ax                         ; 4, 8 or 12 KB - 111 KB/s in 4s, 409 in
     push dx                         ; 32s), so the room waits for VB_RBATCH
-    mov ax, [ds:bp+RG_FILL]         ; unless the ring is LOW ahead of the
-    mov dx, [ds:bp+RG_FILL+2]       ; picture...
-    sub ax, [ds:bp+RG_VOFF]
-    sbb dx, [ds:bp+RG_VOFF+2]
+    push cx                         ; unless the ring is LOW ahead of its
+    push di                         ; LEADING cursor - the clip's SOUND runs
+    mov cx, [ds:bp+RG_VOFF]         ; the card's lead (0.37 s, ~50 KB of a
+    mov di, [ds:bp+RG_VOFF+2]       ; heavy clip) ahead of its picture, and
+    cmp byte [vb_snd], 0            ; measured from the picture the sound
+    je .rv                          ; reached records not yet read: the
+    cmp bp, [vb_aring]              ; owner's own-sound and effect clips
+    je .ra                          ; dropped their sound (the reader's
+    cmp bp, [vb_apring]             ; .low's rule, 126.4.3)...
+    jne .rv
+.ra:
+    cmp di, [ds:bp+RG_AOFF+2]
+    jb .ra1
+    ja .rv
+    cmp cx, [ds:bp+RG_AOFF]
+    jae .rv
+.ra1:
+    mov cx, [ds:bp+RG_AOFF]
+    mov di, [ds:bp+RG_AOFF+2]
+.rv:
+    mov ax, [ds:bp+RG_FILL]
+    mov dx, [ds:bp+RG_FILL+2]
+    sub ax, cx
+    sbb dx, di
+    pop di
+    pop cx
+    jb .rlow                        ; (the sound past what is read: now)
     jnz .rh
     cmp ax, VB_RLOW
     jb .rlow
@@ -5456,6 +5479,7 @@ VB_VAR vb_prfseg, 2                 ; ...the file's claim at the end
 VB_VAR vb_prsz, 4                   ; ...its size
 VB_VAR vb_prroom, 2                 ; ...the frames' room it says
 VB_VAR vb_prsnd, 1                  ; ...a card played
+VB_VAR vb_prlat, 2                  ; ...vb_alate at the last frame
 VB_VAR vb_prro, 4                   ; ...and its offset
 %endif
 VB_VAR vb_loff, 2                   ; ...its offset in the ground's buffer

@@ -44,14 +44,15 @@ def read_prof(path):
         h.update(hold=d[64], hfull=d[65],
                  holdkb=struct.unpack_from("<H", d, 66)[0],
                  hcopies=struct.unpack_from("<H", d, 68)[0], hranges=d[70],
-                 card=d[71])
+                 card=d[71], alate=struct.unpack_from("<H", d, 72)[0])
     fr = []
     for i in range(nf):
         o = hlen + pre * i
         t, gap, fl, clip, ahead, lead, feed = struct.unpack_from(
             "<HHBBBBH", d, o)
         fr.append(dict(t=t * PIT_US / 1000, gap=gap * PIT_US / 1000,
-                       stall=bool(fl & 1), mode=fl >> 4, clip=clip,
+                       stall=bool(fl & 1), slate=(fl >> 1) & 7,
+                       mode=fl >> 4, clip=clip,
                        ahead=ahead, lead=lead * 256, feed=feed * PIT_US /
                        1000))
     rd = []
@@ -93,6 +94,9 @@ def main():
         where = "room for %d in a %d KB claim%s" % (
             h["room"], h["claimkb"], ": the rest of the play was not"
             if len(fr) >= h["room"] else "")
+    if h["ver"] >= 3:
+        print("the sound: %d frames of it LATE - a record it reached before "
+              "the reader had it, skipped" % h["alate"])
     print("the play: %.1f s, %d frames profiled (%s), %d stalled, %d late "
           "(forgiven)" % (secs, len(fr), where, h["stall"], h["late"]))
     if "hold" in h:
@@ -113,17 +117,19 @@ def main():
     for f in fr:
         key = (MODES.get(f["mode"], f["mode"]), f["clip"])
         by.setdefault(key, []).append(f)
-    print("%-16s %6s %8s %8s %6s %6s %8s %8s" % (
+    sl = h["ver"] >= 3              # (version 3: the sound late, a frame's)
+    print("%-16s %6s %8s %8s %6s %6s %8s %8s%s" % (
         "what", "frames", "decode", "worst", "over", "stall", "ahead",
-        "lead min"))
+        "lead min", " snd late" if sl else ""))
     for (m, c), fs in sorted(by.items(), key=lambda x: str(x[0])):
         nm = m if c == 255 else (names[c] if names and c < len(names)
                                  else "clip %d" % c)
         ts = [f["t"] for f in fs if not f["stall"]]
-        print("%-16s %6d %6.1fms %6.1fms %6d %6d %6dKB %7dB" % (
+        print("%-16s %6d %6.1fms %6.1fms %6d %6d %6dKB %7dB%s" % (
             nm[:16], len(fs), sum(ts) / max(1, len(ts)), max(ts or [0]),
             sum(1 for t in ts if t > period), sum(f["stall"] for f in fs),
-            min(f["ahead"] for f in fs), min(f["lead"] for f in fs)))
+            min(f["ahead"] for f in fs), min(f["lead"] for f in fs),
+            " %8d" % sum(f["slate"] for f in fs) if sl else ""))
     feeds = [f["feed"] for f in fr]
     if feeds:
         print("\nthe sound feed: %.1f ms a frame on average, %.1f at most" % (

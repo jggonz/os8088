@@ -243000,9 +243000,15 @@ colours, 57 of 60 frames cut became none, the largest record 10 KB -> 16.
 moves: the owner's 286's profile (126.8) priced 4, 8 and 12 KB reads alike
 at ~37 ms - 111, 218 and 310 KB/s, against 409 KB/s in 32 KB - and the
 reader read whatever room a frame had freed, 4 to 12 KB, so a 448 KB/s
-disk gave 262. A ring's read now waits for `VB_RBATCH` (32 KB) of room,
-unless less than `VB_RLOW` (40 KB) is read ahead of the picture or the
-clip's rest is shorter (`vb_rpiece`).
+disk gave 262 - and 422 once they waited. A ring's read now waits for
+`VB_RBATCH` (32 KB) of room, unless less than `VB_RLOW` (40 KB) is read
+ahead of its LEADING cursor or the clip's rest is shorter (`vb_rpiece`).
+The leading cursor, as the reader's own "running low" has it: a clip's
+sound runs the card's lead (0.37 s) ahead of its picture, ~50 KB of a
+140 KB/s clip, so measured from the picture the sound reached records
+not yet read and skipped them - the first build of this rule dropped the
+owner's own-sound and effect clips' sound on the 286, the music (from the
+hold) untouched.
 
 #### 126.4.4 What a battle holds in 640 KB
 
@@ -243647,6 +243653,11 @@ BATTLEV.VBT] [--frames]` reads it.
   version 1 could not say whether a play used its XMS at all - and +71
   whether a card played (+51 is read at the end, the card closed: version
   1 said "no card" of a play with one). `tools/vbtprof.py` reads both.
+- **Version 3** counts the SOUND LATE (`vb_alate`: a record the clip's
+  sound reached before the reader had it, its frame of sound skipped): +72
+  the play's, and a frame's flags bits 1 to 3 those since the last frame -
+  version 2 could show a clip's sound breaking up only as the owner heard
+  it.
 - `vbtdiag` plays the demo on MartyPC's VGA XT, reads `VBPROF1.DAT` back
   off B: and holds it to the play; `vbtdiagx` the same on QEMU with XMS,
   500 frames through the staging, none dropped. Measured there: the title's VGA4 records

@@ -35,7 +35,9 @@
 ;          +60 1: kept in XMS, +62 frames dropped; version 2: +64 the
 ;          HOLD (vb_htype: 0 none, 1 XMS, 2 EMS), +65 it filled, +66 its
 ;          KB, +68 the reads it served (vb_hcopies), +70 its ranges, +71 a
-;          card played (+51 is vb_snd at the end, when the card is closed)
+;          card played (+51 is vb_snd at the end, when the card is closed),
+;          +72 sound frames LATE (vb_alate: a record the sound reached before
+;          it was read); a frame's flags bits 1-3 those since the last
 ; =============================================================================
 
 VB_PRH      equ 96                  ; (version 2: 64 before the hold's line)
@@ -64,6 +66,7 @@ vb_prtry:
     mov [vb_prti], ax
     mov [vb_prdrop], ax
     mov [vb_prsnd], al
+    mov [vb_prlat], ax
     cmp byte [vb_pmd], 0            ; (kern_mega: none)
     jne .conv
     call OSAPI_XMEM_CAPS            ; THE PROFILE IN XMS, when it is there:
@@ -353,6 +356,15 @@ vb_prmark:
     mov [es:di+2], dx
     mov ax, [vb_prtf]
     mov [vb_prta], ax
+    mov ax, [vb_alate]              ; THE SOUND LATE since the last frame
+    sub ax, [vb_prlat]              ; (bits 1-3, 7 at most): a record its
+    add [vb_prlat], ax              ; sound reached before it was read
+    cmp ax, 7
+    jbe .l7
+    mov ax, 7
+.l7:
+    shl al, 1
+    or cl, al
     mov al, [vb_mode]
     shl al, 1
     shl al, 1
@@ -515,7 +527,7 @@ vb_prend:
     jc .drop
     mov word [es:0], 'VB'
     mov word [es:2], 'PR'
-    mov word [es:4], 2
+    mov word [es:4], 3              ; (3: the sound late, +72 and the flags)
     mov ax, [vb_prn]
     mov [es:6], ax
     mov ax, [vb_prnl]
@@ -590,6 +602,8 @@ vb_prend:
     mov [es:70], al
     mov al, [vb_prsnd]
     mov [es:71], al
+    mov ax, [vb_alate]
+    mov [es:72], ax                 ; +72 sound frames late, all the play
     mov al, '1'
 .try:
     mov [vb_prfn + 6], al
