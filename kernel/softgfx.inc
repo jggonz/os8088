@@ -392,10 +392,13 @@ sw_ink:
     jne .set
 .dither:                        ; alternate it down the rows...
     mov byte [sw_altm], 0xFF
-    mov al, 0xAA                ; ...from the 50% dither byte for the rect's
-    test byte [gfx_ry1], 1      ; top row. This was sw_parity, its one call,
-    jz .set                     ; and it shares the solid arm's store
-    mov al, 0x55                ; (kernel size pass 16, -8)
+    mov al, [gfx_ry1]           ; ...from the 50% dither byte for the rect's
+    and al, 1                   ; top row: 0 or 1, NEGATED to 00 or FF, and
+    neg al                      ; XORed into AAh - AAh on an even row, 55h on
+    xor al, 0xAA                ; an odd one, with no branch (kernel size pass
+                                ; 18, -2; ~21 clocks against 25-41). This was
+                                ; sw_parity, its one call, and it shares the
+                                ; solid arm's store (kernel size pass 16, -8)
 .set:
     mov [sw_pat], al
     ret

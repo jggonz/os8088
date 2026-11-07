@@ -146,20 +146,42 @@ VID_LIVE_W  equ 9               ; words in the live block below
 ; broken by the two words that describe the DESKTOP. Here they are vid_cw and
 ; vid_ch - the active display's clip extent - and the desktop's own vid_w /
 ; vid_h are derived below, out of the run.
+; WHERE IT LIVES (kernel size pass 18). The four rows that never change are
+; read by vid_apply and NOTHING ELSE, and vid_apply has no resident copy: it is
+; expanded into the boot blob (bvs_apply), CTRL.DRV (vid_apply) and EXTD.DRV
+; (ext_apply) - so the rows can go WITH it, one copy per image, emitted by
+; VID_APPLY itself (VID_TAB_ROWS), and the kernel keep only the row that is
+; WRITTEN at run time: VESA.DRV's, vid_vxrow. That is what kern_small (-36
+; resident, two rows) and kern_emu (-72) do. Two kernels keep the whole table
+; resident (VID_TAB_RES):
+;   * kern_big, because its blob is FULL TO THE BYTE (boot2_end = BOOT2_PAD at
+;     13 sectors), so its copy would cost a fourteenth sector - which is the
+;     owner's decision (docs/plans/ksp18/draw.md, WANTS THE OWNER) and is all
+;     it would take: kern_emu is the same kernel with one sector more, and its
+;     build is this arm working;
+;   * kern_mega, whose switch rewrites the segment column into selectors in
+;     place (mega.inc) - an image's copy would still say A000h.
+%ifndef KERN_SMALL
+%ifndef KERN_EMU
+ %define VID_TAB_RES
+%endif
+%endif
+%ifdef KERN_MEGA
+ %define VID_TAB_RES
+%endif
+%macro VID_TAB_ROWS 0
 %ifdef GFX_VGA
-vid_tab:
     ;    seg     stride bmask bshift rowadd  wrapbit wrapfix    cw   ch
     dw VGA_SEG,      80,    0,     0,     80,       0,      0, 640, 480
-%else                           ; ...AND THE FIRST ROW IS kern_big's TOO, for the
-vid_tab equ $ - VID_REC         ; fourth's reason one row up: kern_small's walk
+%endif                          ; ...AND THE FIRST ROW IS kern_big's TOO, for the
+                                ; fourth's reason one row up: kern_small's walk
                                 ; ends at the equipment word, so [vid_kind] is
                                 ; VID_HERC or VID_CGA there before vid_apply
                                 ; first reads it (SPEC.md 39.27.1) and row 0 was
                                 ; read by nothing. The NAME stays where row 0
-                                ; would be, so vid_apply's `add ax, vid_tab`
-                                ; indexes the same rows on both kernels (kernel
+                                ; would be (vid_tab, %1_vtab), so vid_apply's index
+                                ; reaches the same rows on both kernels (kernel
                                 ; size pass 13, -18 on kern_small)
-%endif
     dw VID_HERC_SEG, 90,    3,     2, 0x2000,  0x8000, 0x805A, 720, 348
     dw  0xB800,      80,    1,     1, 0x2000,  0x4000, 0xC050, 640, VID_H_MIN
 %ifdef GFX_VGA                  ; THE FOURTH ROW IS kern_big's ALONE: a build
@@ -175,7 +197,20 @@ vid_tab equ $ - VID_REC         ; fourth's reason one row up: kern_small's walk
     ;   adapter test, exactly as on VGA (SPEC.md 39.3/39.24). 349*80 = 27,920,
     ;   well inside one 0x8000 plane, so nothing here needs the intra-bank
     ;   assertion the two mono rows do.
+%endif
+%endmacro
+%ifdef VID_TAB_RES
+%ifdef GFX_VGA                  ; indexed from its first row on a VGA kernel,
+vid_tab:                        ; one record before it on kern_small (no row 0)
+%else
+vid_tab equ $ - VID_REC
+%endif
+    VID_TAB_ROWS
+%endif
 %ifdef VID_EXT
+vid_vxrow:                      ; row VID_VESA: vid_tab's fifth where the table
+                                ; is resident, and the one resident row where
+                                ; it is not
     dw VGA_SEG,       0,    0,     0,      0,       0,      0,   0, 0
     ; ^ VID_VESA: WRITTEN BY THE DRIVER at attach (SPEC.md 120.4) - stride
     ;   and rowadd = the mode's BytesPerScanLine, cw/ch = its geometry - and
@@ -183,10 +218,17 @@ vid_tab equ $ - VID_REC         ; fourth's reason one row up: kern_small's walk
     ;   this kind, every one of them being hooked, and a 16-bit offset means
     ;   nothing above the window anyway. Zero until the driver speaks, so a
     ;   switch that somehow preceded it would publish a 0x0 display and draw
-    ;   nothing rather than something
+    ;   nothing rather than something. RESIDENT on every kernel: the driver
+    ;   rewrites it whenever the depth changes (vesa.asm's vx_geom)
+%ifdef VID_TAB_RES
+%if vid_vxrow - vid_tab != VID_VESA * VID_REC
+  %error "vid_vxrow must be vid_tab's row VID_VESA where the table is resident"
 %endif
 %endif
+%endif
+%ifdef VID_TAB_RES
 vid_tab_end:                    ; (kern_mega's switch walks the column)
+%endif
 %ifdef KERN_MEGA
 k_vsa       dw 0xA000           ; VSEG's words (kernel.asm): the segments
 k_vsb       dw 0xB000           ; themselves in real mode, the selectors
@@ -724,6 +766,7 @@ vid_depth_set:
     pop es                      ; calls this with the boot sector's: ES = DS =
                                 ; KERNEL_SEG (KES's answer, see above)
 
+%ifdef VID_TAB_RES
     mov al, [vid_kind]          ; AL * 18 -> the record. AH is 0 after the
     mov bl, VID_REC             ; mul (3 * 18 = 54 at worst), so the two
     mul bl                      ; accumulator forms below are the whole
@@ -733,6 +776,30 @@ vid_depth_set:
     mov cx, VID_LIVE_W
     cld
     rep movsw
+%endif
+%ifndef KERN_MEGA               ; (kern_mega is always VID_TAB_RES: tests/
+%ifndef VID_TAB_RES             ; unit/t_cswrite.py reads the gate lexically)
+    push ds                     ; THE ROW IS THIS IMAGE'S OWN (VID_TAB_ROWS,
+    mov al, [vid_kind]          ; at this macro's foot): read through CS, so DS
+%ifdef VID_EXT                  ; follows it for the copy - but VESA's row is
+    mov si, vid_vxrow           ; the KERNEL's (its driver writes it), so that
+    cmp al, VID_VESA            ; kind keeps DS. Not `cs rep movsw`: an
+    je %%src                    ; interrupt inside a prefixed rep loses the
+%endif                          ; prefix on an 8086
+    mov bl, VID_REC
+    mul bl
+    add ax, %1 %+ _vtab
+    xchg ax, si
+    push cs
+    pop ds
+%%src:
+    mov di, vid_seg
+    mov cx, VID_LIVE_W
+    cld
+    rep movsw
+    pop ds                      ; DS = KERNEL_SEG again for everything below
+%endif
+%endif
 
     ; --- the DISPLAY's extent first, then the DESKTOP's from it (SPEC.md
     ; 39.2.1). On one display they are the same numbers, and vid_tab has just
@@ -1031,6 +1098,14 @@ vid_depth_set:
     pop bx
     pop ax
     ret
+%ifndef VID_TAB_RES             ; ...and this image's copy of the four rows that
+%ifdef GFX_VGA                  ; never change (see vid_tab's header, above),
+%1 %+ _vtab:                    ; indexed as vid_tab is: from its first row on
+%else                           ; a VGA kernel, one record before it on
+%1 %+ _vtab equ $ - VID_REC     ; kern_small
+%endif
+    VID_TAB_ROWS
+%endif
 %endmacro
 %ifdef KERN_SMALL
     nop                         ; PARITY, never executed, kern_small only (kernel

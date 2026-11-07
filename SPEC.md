@@ -76008,6 +76008,19 @@ reordering one without the other silently corrupts all nine:
 `vid_seg`, `vid_stride`, `vid_bmask`, `vid_bshift`, `vid_rowadd`,
 `vid_wrapbit`, `vid_wrapfix`, `vid_cw`, `vid_ch`
 
+**Where the rows live (kernel size pass 18).** The four constant rows (VGA,
+Hercules, CGA, EGA - two on `kern_small`) are read by `vid_apply` and nothing
+else, and `vid_apply` has no resident copy: `VID_APPLY` is expanded into the
+boot blob (`bvs_apply`), CTRL.DRV and EXTD.DRV. So on `kern_small` and
+`kern_emu` each expansion carries its OWN copy of the rows (`VID_TAB_ROWS`,
+at the macro's foot, read through CS with DS following it for the one
+`rep movsw`), and the kernel keeps only `vid_vxrow`, the VESA row its driver
+rewrites (§120.4): -36 resident on `kern_small`, -72 on `kern_emu`. `kern_big`
+keeps the whole table resident (`VID_TAB_RES`) only because its blob is full
+to the byte at thirteen sectors - a fourteenth would buy it the same -72 - and
+`kern_mega` because its switch rewrites the segment column to selectors in
+place.
+
 **The width and height are the LAST two columns and they are the DISPLAY's**
 (§39.2.1). The desktop's `vid_w`/`vid_h` are derived from them below and sit
 outside the per-display run — this list read `vid_seg, vid_w, vid_h, …`
@@ -230098,7 +230111,9 @@ state that already exists (`vid_tab` row 4, `gfx_color`, `vga_xorm`,
 `cur_hx`, `cur_drawn_x`, the `ico_*` cells, `vid_kind`, `gfx_pat`, `vx_ep`
 itself, and the two kernel addresses `vx_kret` and `vx_null`). The driver
 banks the kernel's segment (ES) and COPIES the pointers, and **fills
-`vid_tab` row 4** from the chosen mode. The table lives in the boot blob
+`vid_tab` row 4** (`vid_vxrow`, which is that row where the table is
+resident and the one resident row where it is not, §39.2) from the chosen
+mode. The table lives in the boot blob
 beside `vx_boot_x`, its one sender, so it is given back with the blob (DX is
 the blob's segment). `kernel/vxabi.inc` is the layout, shared as source with the
 driver, and both ends assert their copy against it.
