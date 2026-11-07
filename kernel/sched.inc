@@ -683,12 +683,11 @@ sched_unhook:
                                 ; and neither has an instruction after it, so
                                 ; AX/SI/DI/ES need not come back either
 %endif
-    nop                         ; PARITY, never executed (kernel size pass 18):
-                                ; sch_pit_now -4 and sched_stop -5 above are
-                                ; odd together, and sch_isr / sch_switch
-                                ; below are pinned (tests/unit/t_hotpar.py).
-                                ; The next odd byte saved between cur_move_1
-                                ; and sch_isr takes this pad with it
+                                ; (The PARITY `nop` sys put here for
+                                ; sch_pit_now -4 and sched_stop -5 went with
+                                ; sch_account's odd -7 below: kernel size
+                                ; pass 18, sweep3. sch_isr / sch_switch keep
+                                ; their measured parity, tests/unit/t_hotpar.py)
 
 ; -----------------------------------------------------------------------------
 ; sch_wake_ui - make the UI task ready (PROBE, docs/plans/completed/SCHED-IDLE-PLAN.md 6.3)
@@ -1247,7 +1246,9 @@ task_exit:
 ;           which charges nothing but still answers the question. task_cycles
 ;           and task_debit used to re-derive this from the same [sch_cur]
 ;           under the same cli; now they do not.
-; clobbers: AX, BX, CX, DX, SI - on BOTH arms now; the early-out used to
+; clobbers: AX, BX, CX, DX, SI - on BOTH arms now (CX:DX the PREVIOUS stamp
+;           on the charging arm, and BX untouched on the early-out, since
+;           pass 18 - nothing reads either); the early-out used to
 ;           clobber nothing. Every call site already tolerated the list:
 ;           sch_isr holds a full frame, sch_switch's .pick pushes DX and BX,
 ;           task_exit banks the record pointer in DI first, task_cycles and
@@ -1269,13 +1270,16 @@ task_exit:
 ; that 0.02%, and the bytes win.
 ; -----------------------------------------------------------------------------
 sch_account:
-    mov bl, [sch_cur]           ; SI = &sch_cycles[sch_cur] - an OUTPUT, so it
-    xor bh, bh                  ; is computed before the early-out below and
-    shl bx, 1                   ; not after the charge. In BX, because CX
-    shl bx, 1                   ; carries the latched phase further down; and
-    mov si, bx                  ; hoisting it above the latch cannot change
-                                ; the reading, because nothing before the
-                                ; `out 0x43` affects it
+    mov al, [sch_cur]           ; SI = &sch_cycles[sch_cur] - an OUTPUT, so it
+    cbw                         ; is computed before the early-out below and
+    shl ax, 1                   ; not after the charge. Through AX, which the
+    shl ax, 1                   ; latch spends next anyway: `mov al, [mem]` is
+    xchg si, ax                 ; the accumulator form and [sch_cur] < 128, so
+                                ; cbw is the zero high byte - 10 bytes and
+                                ; faster where BX took 12 (kernel size pass
+                                ; 18, -3); hoisting it above the latch cannot
+                                ; change the reading, because nothing before
+                                ; the `out 0x43` affects it
     cmp byte [sch_fast], 0      ; the fsx sub-tick (SPEC.md 53.2.1) divides the
     jne .idle                   ; very period this arithmetic is built on, so
                                 ; accounting PAUSES for the bracket - here
@@ -1299,12 +1303,17 @@ sch_account:
     js .cohere                  ; latch - keep ticks
     inc dx                      ; reload before the latch: tick not yet in
 .cohere:
-    mov ax, cx                  ; elapsed = now - last, 32-bit
-    sub ax, [sch_pit_last]
-    mov bx, dx
-    sbb bx, [sch_pit_last+2]
-    mov [sch_pit_last], cx
-    mov [sch_pit_last+2], dx
+    mov ax, cx                  ; elapsed = now - last, 32-bit. The stamp is
+    xchg cx, [sch_pit_last]     ; stored and the old one read in ONE xchg a
+    sub ax, cx                  ; word, so CX/DX come back holding the LAST
+    mov bx, dx                  ; stamp rather than this one (clobbers either
+    xchg dx, [sch_pit_last+2]   ; way; no caller reads them) - 16 bytes where
+    sbb bx, dx                  ; six moves were 20, and 4 fewer clocks a word
+                                ; on the 8088 (xchg r,m 25+EA and sub r,r 3,
+                                ; against sub r,m and mov m,r at 13+EA each,
+                                ; EA 6): kernel size pass 18, -4, and 8
+                                ; clocks plus 16 of fetch floor off every
+                                ; tick's charge (H2)
     add [si+sch_cycles], ax     ; sch_cycles[sch_cur] += elapsed, at the SI
     adc [si+sch_cycles+2], bx
 .idle:
