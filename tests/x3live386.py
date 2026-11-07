@@ -9,7 +9,7 @@ under kern_big on the same machine (KERN-MEGA-PLAN 14.150, SPEC.md 121.5).
 and the defect was a protected-mode one that 86Box's fault log prints. The
 machine is vm/386-mega-cdrom (a Micronics 386DX-25, OTI-067, SB16 on IRQ 5)
 with its seeded CMOS (nvr-seed/), build/mega.img in A: and
-build/megaapps.img - kern_mega's apps disk, the PKG_MEGA arms - in B:.
+build/megaxtmp3.img - kern_mega's XTMP3 disk, the PKG_MEGA arm and its songs - in B:.
 
 XT-MP3's Auto (x3eng.inc x3l_run) MEASURES each rung on the worker and plays
 live on one that keeps 1.25 audio seconds a guest second. On this machine
@@ -57,8 +57,8 @@ X3_SAFETY = 125                 # x3eng.inc: a rung passes at 1.25
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--apps", default="build/megaapps.img",
-                    help="the B: disk (kern_mega's apps disk)")
+    ap.add_argument("--apps", default="build/megaxtmp3.img",
+                    help="the B: disk (kern_mega's XTMP3 disk)")
     ap.add_argument("--vm", default="386-mega-cdrom")
     a = ap.parse_args()
     os.environ["OS88_MEGA_VM"] = a.vm

@@ -50315,6 +50315,12 @@ through a run of selectors and its block decoder's protected-mode part
    `build/megaapps120.img` (1.2MB): the shipped apps disk with those builds
    substituted, `make smallapps`'s shape (§27.16). kern_mega's system disks
    take the same substitution for what they carry. `$(MEGAPKGS)` is the list.
+   **Three differences from the shipped apps disk** (the owner's, 2026-11-07):
+   WORD.O88 and `MEDIA\WELCOME.DOC` are on both, kern_mega having no
+   360KB `office360.img` to carry them; XTMP3 is on neither, riding
+   `build/megaxtmp3.img` / `megaxtmp3-120.img` with its songs, as WIN16 rides
+   `megawin16*.img` (§124.18.1); and the 1.2MB disk is otherwise the 1.44MB
+   one, the room XTMP3 left paying for Word there too.
    A mega arm calls the same API table at the same offsets as its shipped
    build: it is one package built twice, not a second ABI.
 2. **The shipped build must still be CORRECT on kern_mega**, because nothing
@@ -231710,7 +231716,8 @@ room: being curated onto a disk is a decision with a date on it.
 | `apps720.img` | **not on it** | 36 of 713 free; the package alone is 97. `make xtmp3disk`'s 720KB floppy carries it, and it is a candidate for the third 720KB disk the owner has planned (§121.13) |
 | `apps360.img` | **not on it** | 14 of 354 free |
 | `media360.img`, 360KB | XTMP3.O88 at the root, AFTERHRS in `MEDIA/` | 147 of 354 free before it; 97 + 30 leaves 20 |
-| `megaapps.img`, `megaapps120.img` | `megaapps.img` as the 1.44MB apps disk; `megaapps120.img` **not on it**, as `apps120.img` (it needed 2,408 of 2,371) | |
+| `megaapps.img`, `megaapps120.img` | **not on them** (the owner's, 2026-11-07): XTMP3 rides kern_mega's own XTMP3 disks below, as WIN16 rides `megawin16*.img` | the room went to Word (§20.18 item 1) |
+| `megaxtmp3.img`, `megaxtmp3-120.img` | the `PKG_MEGA` arm at the root, all three songs in `MEDIA/`, `SYSTEM/APPDATA/` - `make xtmp3disk`'s shape in kern_mega's two geometries; `make mega` builds them | 1.44MB: 1,206,784 bytes free |
 | the everything set | XTMP3.O88 in `APPS/`, no songs | MIDIRack's songs' reason (§105.10): the RunCPM fill would pay for them |
 | the live media | XTMP3.O88 in `APPS/`, all three songs in `MEDIA/` | `t_livefull` holds it to the 1.44MB apps disk |
 | `smallapps*.img`, `small*.img` | **not on them** (`$(SMALLOMIT)`) | |

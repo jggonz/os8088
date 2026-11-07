@@ -15848,14 +15848,14 @@ MEGASRC := $(KERNEL_SRC) $(KERNEL_INC) kerndos/kdos.asm $(KERNDOS_INC) \
 # and no budget binds a knob build (the KERN_BUDGET note above $(KNOBS))
 #> [Kernels] mega :: kern_mega (286+ protected mode) and its system and apps disks into build/megak/
 mega: $(BUILD)/mega.img $(BUILD)/mega120.img $(BUILD)/megaapps.img $(BUILD)/megaapps120.img \
-      $(BUILD)/megawin16.img $(BUILD)/megawin16-120.img \
+      $(BUILD)/megawin16.img $(BUILD)/megawin16-120.img $(BUILD)/megaxtmp3.img $(BUILD)/megaxtmp3-120.img \
       $(BUILD)/kernel.bin tests/megaseg.txt tools/os88megaseg.py
 ifeq ($(filter-out KERN_SMALL=% KERN_MEGA=%,$(KNOBS)),)
 	@python3 tools/os88megaseg.py --big $(BUILD)/kernel.map --mega $(MEGADIR)/kernel.map --check tests/megaseg.txt
 else
 	@python3 tools/os88megaseg.py --big $(BUILD)/kernel.map --mega $(MEGADIR)/kernel.map
 endif
-	@echo "mega: $< - kern_mega on 1.44MB, and build/mega120.img on 1.2MB. Pair them with build/megaapps.img / megaapps120.img, the apps disks with kern_mega's package arms (SPEC.md 20.18)."
+	@echo "mega: $< - kern_mega on 1.44MB, and build/mega120.img on 1.2MB. Pair them with build/megaapps.img / megaapps120.img, the apps disks with kern_mega's package arms (SPEC.md 20.18); WIN16 and XTMP3 ride megawin16*.img and megaxtmp3*.img."
 
 # SYSTEM CHECK, AND kern_mega's OWN FSCHECK.DRV BESIDE IT (SPEC.md 118.14.8):
 # the package is the shipped one - it carries no kern_mega code, the kernel's
@@ -17512,23 +17512,37 @@ MEGAAPPSARGS = $(addprefix APPS:,$(call MEGASUB,$(APPS_TOOLS))) \
                $(addprefix SYSTEM:,$(call MEGASUB,$(APPSYS))) \
                $(addprefix SYSTEM/DOS:,$(APPS_DOS) $(APPS_DOSCZ)) \
                $(APPDATAFOLDER)
-MEGAAPPS = $(call MEGASUB,$(APPS))
-# ...and XTMP3's songs as the shipped pair carries them (XTMP3MP3's note),
-# spliced ahead of $(APPDATAFOLDER) for the same argparse reason
-MEGAAPPSARGS144 = $(filter-out $(APPDATAFOLDER),$(MEGAAPPSARGS)) \
-                  $(addprefix MEDIA:,$(XTMP3MP3)) $(APPDATAFOLDER)
-# ...minus XTMP3 on the 1.2MB disk, the shipped 1.2MB disk's own decision
-# (APPS120's note, 2026-10-23): this one asked for 2408 of 2371 clusters
-MEGAAPPS120 = $(filter-out $(MEGAAPPDIR)/xtmp3.o88,$(MEGAAPPS))
-MEGAAPPSARGS120 = $(filter-out $(APPDATAFOLDER) APPS:$(MEGAAPPDIR)/xtmp3.o88,$(MEGAAPPSARGS)) \
-                  $(APPDATAFOLDER)
-$(BUILD)/megaapps.img: $(MEGAPKGS) $(MEGAAPPS) $(XTMP3MP3) $(LOGOVID) tools/os88disk.py
+# ...plus WORD and its WELCOME.DOC (the owner's, 2026-11-07), which kern_big
+# ships on office360.img and word.img alone - kern_mega has no 360KB disks.
+# The Video Player is already here ($(APPS_TOOLS) carries it; kern_big ships a
+# second copy on its system disk, $(SYSVIDARGS)). XTMP3 is NOT here: it and its
+# three songs ride a disk of their own, $(MEGAX3IMG) below, as WIN16 does.
+MEGAAPPSXTRA = APPS:$(BUILD)/word.o88 MEDIA:$(BUILD)/WELCOME.DOC
+MEGAAPPS = $(filter-out $(MEGAAPPDIR)/xtmp3.o88,$(call MEGASUB,$(APPS))) \
+           $(BUILD)/word.o88 $(BUILD)/WELCOME.DOC
+MEGAAPPSARGS144 = $(filter-out $(APPDATAFOLDER) APPS:$(MEGAAPPDIR)/xtmp3.o88,$(MEGAAPPSARGS)) \
+                  $(MEGAAPPSXTRA) $(APPDATAFOLDER)
+MEGAAPPSARGS120 = $(MEGAAPPSARGS144)
+$(BUILD)/megaapps.img: $(MEGAPKGS) $(MEGAAPPS) $(LOGOVID) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(MEGAAPPSARGS144)
 	@echo "megaapps: $@ - pair it with build/mega.img (\`make mega\`)"
 
-$(BUILD)/megaapps120.img: $(MEGAPKGS) $(MEGAAPPS120) $(LOGOVID) tools/os88disk.py
+$(BUILD)/megaapps120.img: $(MEGAPKGS) $(MEGAAPPS) $(LOGOVID) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1200 $(MEGAAPPSARGS120)
 	@echo "megaapps: $@ - pair it with build/mega120.img (\`make mega\`)"
+
+# kern_mega's XTMP3 DISKS (the owner's, 2026-11-07): `make xtmp3disk`'s shape -
+# the package at the root, all three songs in MEDIA/, SYSTEM/APPDATA/ for
+# XTMP3.DAT - with the kern_mega ARM in place of the shipped build, in
+# kern_mega's two geometries. 97 + 151KB of songs: both have room to spare
+MEGAX3IMG    := $(BUILD)/megaxtmp3.img
+MEGAX3IMG120 := $(BUILD)/megaxtmp3-120.img
+MEGAX3ARGS = $(MEGAAPPDIR)/xtmp3.o88 $(addprefix MEDIA:,$(XTMP3MP3)) \
+             --folder SYSTEM/APPDATA
+$(MEGAX3IMG): $(MEGAAPPDIR)/xtmp3.o88 $(XTMP3MP3) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(MEGAX3ARGS)
+$(MEGAX3IMG120): $(MEGAAPPDIR)/xtmp3.o88 $(XTMP3MP3) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1200 $(MEGAX3ARGS)
 
 $(APPSIMG720): $(APPS720) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 720 $(APPSARGS720)

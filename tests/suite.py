@@ -6904,7 +6904,7 @@ SOAK = [
         "XT-MP3 PLAYS LIVE ON A 386DX-25 UNDER kern_mega (KERN-MEGA-PLAN "
         "14.150, SPEC.md 121.5): 86Box's vm/386-mega-cdrom (Micronics "
         "386DX-25, SB16, its CMOS seeded) with build/mega.img and "
-        "megaapps.img, NEONDRV.MP3 opened from B:\\MEDIA. Auto measures "
+        "megaxtmp3.img, NEONDRV.MP3 opened from B:\\MEDIA. Auto measures "
         "Quarter STANDARD at 0.51 on both kernels and decides on XT "
         "Standard: kern_big plays it live at 1.79, and so must kern_mega - "
         "x3_md MD_LIVE on X3Q_XTSTD measured 1.25 or better, granules and "
@@ -6913,7 +6913,7 @@ SOAK = [
         "arm, stores through CS) - XT Standard 0.91, Decode First, 3,473 "
         "#GP at the part's selector. 30s is 27 measured",
         needs=("86box",),
-        wants=("build/mega.img", "build/megaapps.img",
+        wants=("build/mega.img", "build/megaxtmp3.img",
                "build/megak/apps/xtmp3.map", "build/megak/kernel.map")),
     Row("x3xtunitmega", "soak", py("tests/x3xtunit.py", "--mega"), 30.0,
         "x3xtunit on the XT part's kern_mega ARM (x3xt.asm -DPKG_MEGA, "
