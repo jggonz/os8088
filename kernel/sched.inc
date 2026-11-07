@@ -1212,10 +1212,11 @@ task_exit:
     je .lower                   ; sch_switch re-derives all three
     inc ax
     mov [sch_top], al
-    jmp sch_switch              ; explicit jump - placement-safe
-    nop                         ; PARITY PAD, never executed: the bound above
-                                ; is 25 bytes, and this keeps sch_isr at the
-                                ; parity it was measured at (t_hotpar)
+    jmp sch_switch              ; explicit jump - placement-safe. (The bound
+                                ; above is 25 bytes, and its parity pad went
+                                ; when cur_move_mono, above it, came down by
+                                ; an odd 7: kernel size pass 18. sch_isr is
+                                ; at its measured parity - t_hotpar)
 
 ; -----------------------------------------------------------------------------
 ; sch_account - charge the PIT cycles since the last measure point to the

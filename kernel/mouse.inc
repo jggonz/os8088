@@ -5602,8 +5602,11 @@ cur_move_1:
 %endif
 
 cur_move_mono:
-    push ax
-    push bx
+    mov [cur_drawn_x], ax       ; the NEW position, FIRST: nothing below reads
+    mov [cur_drawn_y], bx       ; these before cur_geom does, and AX/BX then
+                                ; need no bank across the one below (kernel
+                                ; size pass 18: a push and a pop each fewer,
+                                ; -4 bytes and ~30 clocks a packet)
     ; --- bank the OLD geometry, which cur_geom is about to overwrite ---------
     ; [cur_cellx]/[cur_celly] and NOT [cur_drawn_x/y]: with a hot spot the two
     ; differ, and everything below is about where the CELL is (SPEC.md 7.2.2).
@@ -5622,10 +5625,6 @@ cur_move_mono:
     add ax, cur_savex           ; [cur_sptr] is only ever one of the two, so
     mov [mv_nsave], ax          ; the other is their sum less it: no compare
     mov [cur_sptr], ax          ; and no branch
-    pop bx
-    pop ax
-    mov [cur_drawn_x], ax
-    mov [cur_drawn_y], bx
     call cur_geom               ; DI = the new cell's first byte, CL = its
                                 ; shift, and [cur_off], [cur_rows],
                                 ; [cur_b1ok], [cur_cellx/y] - all NEW now
@@ -5685,7 +5684,9 @@ cur_move_mono:
     mov bl, [mv_ob1ok]          ; 0 or 1: the old cell's column 1 on screen
     shl bl, 1                   ; ...as bit 1
     mov bh, bl
-    or bh, 1                    ; an uncovered old row, into bits 2-3
+    inc bh                      ; an uncovered old row, into bits 2-3 (`inc`:
+                                ; BL is even, so it is the `or 1` it was, a
+                                ; byte and a clock less - kernel size pass 18)
     shl bh, 1
     shl bh, 1
     inc ax                      ; d + 1: 0, 1 or 2 for the three that meet,
@@ -5718,8 +5719,11 @@ cur_move_mono:
     mov al, [mv_orows]          ; ...and r_hi = min(new rows, old rows - e),
     cbw                         ; signed: a cell far below is a negative
     sub ax, si                  ; reach and an empty run
-    mov cl, [cur_rows]
-    xor ch, ch
+    mov cl, [cur_rows]          ; CX = the new rows: CH is ALREADY 0, the
+                                ; background walk's count run out (or never
+                                ; started, `or ch, ch` having said 0) and
+                                ; nothing since writing it (kernel size pass
+                                ; 18: its `xor ch, ch` went, -2)
     cmp ax, cx
     jle .rhi
     xchg ax, cx

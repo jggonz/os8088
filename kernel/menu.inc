@@ -904,17 +904,21 @@ menu_draw_bar:
     mov al, MENU_SYS_TX + 2
     mov bx, MENU_LOGO_Y + 2
     mov cx, MENU_SYS_TX + 8
-    mov dx, MENU_LOGO_Y + 9
+%ifdef KERN_BIG
+    mov dl, MENU_LOGO_Y + 9     ; DH = 0: DX is the rule's MBAR_H - 1, and
+%else                           ; gfx_hline keeps it. (kern_small keeps the
+    mov dx, MENU_LOGO_Y + 9     ; word: ui_task's parity is pinned there, and
+%endif                          ; this is the bar's one odd byte - kernel size
+                                ; pass 18)
     call gfx_fill               ; the body
     mov dl, MENU_LOGO_Y + 1     ; (DH = 0: DX was MENU_LOGO_Y + 9)
     mov bx, MENU_SYS_TX + 4
     call gfx_hline              ; the notch row's left half...
     mov al, MENU_SYS_TX + 6
-%ifdef KERN_BIG
-    mov bx, MENU_SYS_TX + 8     ; (a byte longer than `mov bl` ON PURPOSE: the
-%else                           ; shorter bar let a jump in it relax on this
-    mov bl, MENU_SYS_TX + 8     ; build alone, and ui_task's parity is pinned)
-%endif
+    mov bl, MENU_SYS_TX + 8     ; (BH = 0 from the line above. kern_big's was
+                                ; a byte longer on purpose for ui_task's
+                                ; parity, until the `mov dl` above paired it:
+                                ; kernel size pass 18)
     call gfx_hline              ; ...and its right
     mov al, MENU_SYS_TX
     mov bl, MENU_SYS_TX + 10
