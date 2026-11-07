@@ -1218,9 +1218,11 @@ fmv_store:
     mov si, [dsk_doff]
 %if FV_DOFF
     mov di, FV_DOFF             ; entries after the bitmap, and the bitmap is
-    mov cx, bx                  ; NOT copied: it is the destination's own
-    sub cx, FV_DOFF             ; selection, which this routine has just
-%else                           ; emptied (SPEC.md 22.6.4)
+    lea cx, [bx-FV_DOFF]        ; NOT copied: it is the destination's own
+                                ; selection, which this routine has just
+                                ; emptied (one `lea`: the flags die at the
+                                ; copy - kernel size pass 18)
+%else                           ; (SPEC.md 22.6.4)
     xor di, di
     mov cx, bx
 %endif
@@ -6201,11 +6203,11 @@ fm_c_up:                        ; Nav > Up One Folder
                                 ; (fm_open_sel, fdlg_dive). The type test is
                                 ; what a missing link now looks like
 %ifdef KERN_BIG
-    push ax                     ; the cluster fm_go wants, across the pop
-    mov bx, [fm_vp]
-    add bx, FS_PATH
-    call pth_pop                ; SI = the folder we arrive in, or 0
-    pop ax
+    lea bx, [di+FS_PATH]        ; DI is still [fm_vp]: fmv_ishere, fmv_sync_x
+    call pth_pop                ; and fmv_get_dir keep it - and pth_pop keeps
+                                ; AX, the cluster fm_go wants, so there is no
+                                ; bank round it (kernel size pass 18, -6).
+                                ; SI = the folder we arrive in, or 0
 %else
     xor si, si                  ; the parent cannot be named without the
 %endif                          ; grandparent's listing (SPEC.md 22)
@@ -8090,8 +8092,10 @@ fm_draw_isel:                   ; fm_draw_rows' tail: the selection bar, drawn
     ; `[fm_rgt] - FM_SB_W + 1` into os88ui_ksb+0 two instructions later, so the
     ; word and the three instructions that fed it were both dead.
     call fm_sbset
-    call os88ui_sbar
-    jmp fm_more_mark           ; ...and the edge the bar is standing on
+    call os88ui_sbar            ; ...and on into the edge the bar is standing
+                                ; on: fm_more_mark is the next instruction, so
+                                ; the `jmp` that stood here went (kernel size
+                                ; pass 18, -2)
 
 ; -----------------------------------------------------------------------------
 ; fm_more_mark - the row area's bottom EDGE, and whether the list runs past it
