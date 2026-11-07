@@ -1,5 +1,9 @@
 # Kernel hot-paths pass 1: the patches kept outside the knobs
 
+`tools/README.md` beside this file indexes the agents' harnesses and
+instruments, parked here too: the equivalence check for each knob, the
+timers and tracers, and the size finders.
+
 Three of the pass's byte-costing items could not become `KHP_*` knobs in
 `kernel/kernel.asm`'s KHP block (docs/plans/khp1/LOG.md sections L.2 and
 L.3), so they are kept here as patches. They are **references for a re-do,

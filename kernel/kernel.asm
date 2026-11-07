@@ -250,6 +250,8 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 ; decoders' saving is CPU, the same on every medium, and on a hard disk it is
 ; most of a launch. kern_small carries none; its machines are floppy-only.
 ; Enabling another for kern_big is a %define below and a re-measure.
+; tools/os88knob.py is how a rewrite is put behind a knob (and checked);
+; docs/plans/khp1/patches/tools/equivalence/ holds each knob's harness.
 ;
 ;   KHP_VGASAVE   the planar save/restore by words and the VGA cursor's own
 ;                 walks (vga-1, pointer-2): ~70% of a VGA raise

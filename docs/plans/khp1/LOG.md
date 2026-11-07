@@ -290,6 +290,35 @@ the same in all three runs; a cold one 1,241 / 1,325 / 1,404 -> 1,285 / 1,200
 Rows, once: the twenty decoder and loader rows (`lz*`, `mseglzslack`,
 `ldcost`, `smalllaunch`, `tmload`, `kzboot`) **20 of 20 passed**.
 
+### L.5 What the pass's scratch tools became
+
+The owner's words: *"Bring in any generic tools to their appropriate places,
+and park any patch specific ones beside the patches, or otherwise out of the
+way (tools directory already needs to be cleaned up; we don't need to make the
+base of that even more cluttered with one-offs). Add the soak or as needed."*
+
+**Brought in** (one file at `tools/`'s base, three rows):
+
+* `tools/os88knob.py` - the knob merge (`view`, `merge`, `gate`), four scratch
+  scripts made one. It keeps the two rules its defects taught (every arm
+  balanced in NASM's conditionals; touching regions merged before widening)
+  and `gate` refuses a file that already holds arms, the case that put a hunk
+  in the wrong copy. `--selfcheck` fuzzes the merge (row `knobself`, full,
+  0.4 s; red, tried, with each defect put back: 9 and 28 wrong of 400).
+* `tests/navcalls.py` (row `navcalls`, soak, ~20 s): a navigation's int 13h
+  calls on 360KB and 720KB - open a root 2, a folder 2, Up 1 - asserted
+  exactly. The pass's base reads 4 / 3 / 3.
+* `tests/fdswap.py` (row `fdswap`, soak, ~10 s): a floppy swapped under an
+  open Disk window lists the new disk, as mtools reads it, and the old one
+  when swapped back. Red with the mount's flush removed.
+
+**Parked** in `docs/plans/khp1/patches/tools/` with a README mapping each to
+the knob or item it proves: the equivalence harnesses (unicorn, base bytes
+against tip), the instruments (`optime`, the per-instruction tracer,
+`fontpark`, `ptrbench`, the int 13h tracer, the decode profiler) and the size
+agent's finders. Paths into deleted worktrees and scratch were replaced; none
+has been re-run since. The rest of the scratch was one-offs and is dropped.
+
 ## 0. The owner's picks at a glance, ranked
 
 Every byte-costing item, in one place, ranked by user-visible time per

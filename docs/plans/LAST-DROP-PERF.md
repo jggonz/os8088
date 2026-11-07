@@ -565,7 +565,10 @@ on. Each is an `%ifdef` arm around the rewritten body, with the body it
 replaced in the `%else`, so with the knob undefined the source assembles to
 exactly what ships today (proved byte for byte at the commits that added
 them), and `tests/unit/t_khpknobs.py` (full tier) assembles kern_big and
-kern_small with every knob on, so no arm rots unseen. To take
+kern_small with every knob on, so no arm rots unseen. Before turning one on, re-run its
+equivalence harness (`docs/plans/khp1/patches/tools/README.md` maps each knob
+to the unicorn harness its agent proved it with); `tools/os88knob.py` is how
+a further rewrite is put behind a knob. To take
 one for kern_big: add its `%define` under `%ifdef KERN_BIG` in that block,
 re-measure with `tools/os88hot.py ab`, run its rows (the LOG's section 0 and
 the agent's note name them), and re-check `hotpar` (a knob moves the code
