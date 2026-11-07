@@ -1004,15 +1004,16 @@ fcp_step:
     jmp fcp_stop                ; a tail call: fcp_step has nothing of its own
                                 ; on the stack here, and fcp_stop leaves AL
 .ask:
-    call fcp_unbatch            ; the pause is a trip through the event loop,
+    mov al, FCPS_ASK            ; (first: fcp_unbatch and dskw_sync keep AX,
+    jmp fcp_unbatch             ; so its `ret` is ours - kernel size pass 18)
+                                ; the pause is a trip through the event loop,
                                 ; where anything else that writes must behave
                                 ; normally (fcp_step raises the batch again on
                                 ; the way back in) and where the listing must
                                 ; be this volume's again (SPEC.md 18.9) - the
                                 ; same pair, for the same two reasons, as the
-                                ; one in fcp_stop
-    mov al, FCPS_ASK            ; the buffer and the frames stay claimed:
-    ret                         ; this is a pause, not an end
+                                ; one in fcp_stop. The buffer and the frames
+                                ; stay claimed: this is a pause, not an end
 .fail:
     jmp fcp_run2.seterr         ; fcp_run2's own three-instruction exit (pass 16)
 
@@ -1691,10 +1692,13 @@ fcp_room:                       ; clobbers AX, BX, DX - its ONE caller reloads
 ; ignored: we are already failing, and there is nothing better to report.
 ; -----------------------------------------------------------------------------
 fcp_undo:
-    cmp byte [fcp_made], 0
-    je .out
+    shr byte [fcp_made], 1      ; CF = it was made, and the byte is 0 after
+    jnc .out                    ; either way: [fcp_made] is only ever 0 or 1
+                                ; (.bss is zero at boot, SPEC.md 2.5) - the
+                                ; test and the clear in one (kernel size pass
+                                ; 18, -6)
     push ax                     ; **AX AND NOTHING ELSE.** Its one caller is
-    mov byte [fcp_made], 0      ; fcp_xfer's `.err`, whose very next
+                                ; fcp_xfer's `.err`, whose very next
     call fcp_gofd               ; instructions pop BX, CX, DX, SI, DI and ES
                                 ; off the stack and whose `stc` sets the flags
                                 ; after this returns - so those are free and
@@ -2002,8 +2006,9 @@ FCPBODY fcp_door
     jmp fcp_x5
 .bad:
     mov al, FERR_NAME           ; "bad argument", which is the SDK's own
-    jmp short .ans              ; reading of that code
-.busy:
+    SKIPF2                      ; reading of that code (test ax, imm16 over
+.busy:                          ; the load below: .ans writes every flag it
+                                ; reads - kernel size pass 18, -1)
     mov al, FERR_NODISK         ; the nearest true thing: the machinery this
     jmp short .ans              ; needs is not available to you right now,
                                 ; which is fcp_pfail's own precedent

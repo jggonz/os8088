@@ -664,10 +664,9 @@ section .cold
 ; -----------------------------------------------------------------------------
 desk_zs:
     push bx
-    mov bl, al
-    xor bh, bh
-    mov al, [bx+desk_zslot]
-    pop bx
+    mov bx, desk_zslot          ; [desk_zslot + AL], AL a zone index below
+    xlatb                       ; DESK_NZ (kernel size pass 18, -4, and
+    pop bx                      ; fewer clocks)
     cmp al, DSL_GONE            ; GONE, and 0xFF, are "not shown": CF = 0
     cmc                         ; there, so complemented CF = 1 is the answer
     jc .no
