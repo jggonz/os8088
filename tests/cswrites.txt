@@ -101,3 +101,17 @@
 # wvm.inc stores through DS or ES = our segment, WEAVE.WSM's DS is the stamp
 # the package writes at WSS_MYDS. Nothing in the tree stores through CS.
 0 1 apps/weave/wwork.inc  # wsm_doframe: ES = KERNEL_SEG to READ our window's W_FLAGS before OSAPI_WM_CLIP_SET; nothing is stored through it
+
+# --- apps/sheet, apps/word, apps/scribe (KERN-MEGA-PLAN 14.162)
+# SHEET's modules write their own claims through CSDO / [CSEG x] (sheet.asm):
+# CS on the shipped build, byte for byte, the claim's DATA selector in kern_mega's
+# arm. WORD's and SCRIBE's stores go through DS back on the package (off the
+# stack) or ES = the package. What is left in all three is a READ through CS's
+# segment or the kernel's, legal through a code selector
+0 2 apps/sheet/sheet.asm  # ES = KERNEL_SEG to READ the launch file's name (sh_note_arg) and the window record's edges (shm_gw_rec, GET.WINDOW)
+0 1 apps/word/wddoc.inc  # wd_dstsh: DS = CS for the rep movsb that READS wd_d_normal into the image (ES the staging claim)
+0 3 apps/word/wdutil.inc  # wd_tclevel: DS = CS after each read of the text, the CHP and the PAP dictionary - nothing is stored through it
+0 1 apps/word/word.asm  # wd_arg: ES = KERNEL_SEG to READ the launch file's name
+0 1 apps/scribe/scdoc.inc  # sc_dstsh: DS = CS for the rep movsb that READS sc_d_normal into the image
+0 3 apps/scribe/scutil.inc  # sc_tclevel: DS = CS after each read, nothing stored through it
+0 1 apps/scribe/scribe.asm  # sc_arg: ES = KERNEL_SEG to READ the launch file's name

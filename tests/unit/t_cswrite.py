@@ -23,9 +23,11 @@ none, apps/pixelstein/, whose play 14.50 took to none, apps/lemmings/,
 whose blitters took ~3,000 a second until KERN-MEGA-PLAN 14.148 took them to
 none too, and what 14.150 converted: apps/xtmp3/ (the XT backend's arm, the
 engine), apps/notepad/ and the speaker libraries every player includes
-(apps/os88spk.inc, apps/os88spkfx.inc), and apps/weave/, whose VM staged
+(apps/os88spk.inc, apps/os88spkfx.inc), apps/weave/, whose VM staged
 every native call through CS at ~1,660 a second of PONG.WAB until 14.163
-took it to none - and holds them to
+took it to none, and the office packages 14.162 took to no store at all -
+apps/sheet/ (its two modules store through CSDO, the data selector in
+kern_mega's arm), apps/word/ and apps/scribe/ - and holds them to
 `tests/cswrites.txt`, textrules' shape:
 
   * a FILE NOT IN THE REGISTRY using either idiom fails - the case that
@@ -66,7 +68,8 @@ ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
 REGISTRY = os.path.join(ROOT, "tests", "cswrites.txt")
 TREES = ("kernel", "drivers", "apps/pixel", "apps/pixelstein", "apps/lemmings",
          "apps/xtmp3", "apps/notepad",
-         "apps/weave")    # WEAVE's VM and canvas core (KERN-MEGA-PLAN 14.163)
+         "apps/weave",    # WEAVE's VM and canvas core (KERN-MEGA-PLAN 14.163)
+         "apps/sheet", "apps/word", "apps/scribe")   # KERN-MEGA-PLAN 14.162
 FILES = ("apps/os88spk.inc", "apps/os88spkfx.inc")   # (shared, in apps/ itself)
 
 LABEL = r"(?:[A-Za-z_.$@?][\w.$@?#~]*:\s*)?"

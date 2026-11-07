@@ -647,9 +647,10 @@ wd_dattr:
     cmp al, dl
     je .scan
 .end:
-    mov [cs:wd_dend], bx
     mov al, dl
-    pop ds
+    pop ds                          ; the package's again: the store is DS's,
+    mov [wd_dend], bx               ; not CS's - a completed #GP a run on
+                                    ; kern_mega (KERN-MEGA-PLAN 14.162)
     pop dx
     pop cx
     pop bx
@@ -752,8 +753,8 @@ wd_dpara:
     mov al, [cs:wd_pap_tail]        ; the tail paragraph rides the mark this
     inc bx                          ; writer appends, at index [wd_len]
 .end:
-    mov [cs:wd_dend], bx
-    pop ds
+    pop ds                          ; (wd_dattr's: one #GP a paragraph)
+    mov [wd_dend], bx
     pop cx
     pop bx
     ret
@@ -1489,16 +1490,16 @@ wd_dpapin:
     call wd_sv6
     push ds
     push es
-    mov byte [cs:wd_pap_tail], 0
+    mov byte [wd_pap_tail], 0       ; DS = the package (the load's)
     xor si, si
     mov cx, [cs:wd_len]
 .scan:
     cmp si, cx
     jae .tail
-    mov ds, [cs:wd_dseg]
-    mov al, [si]
-    push cs
-    pop ds
+    push ds                         ; ...and back to it from the STACK, not
+    mov ds, [cs:wd_dseg]            ; from CS: wd_dpapat stores through DS,
+    mov al, [si]                    ; and a code selector made each one a
+    pop ds                          ; #GP on kern_mega (KERN-MEGA-PLAN 14.162)
     cmp al, 13
     jne .next
     mov ax, si
@@ -1516,7 +1517,7 @@ wd_dpapin:
     dec ax                          ; is inside it, and its PAPX is the one
     call wd_dpapat                  ; that covers it
     jc .done
-    mov [cs:wd_pap_tail], al
+    mov [wd_pap_tail], al
 .done:
     pop es
     pop ds
@@ -2013,9 +2014,11 @@ wd_dtrim:
     jne .out
     mov ds, [cs:wd_cseg]
     mov al, [bx]
-    mov [cs:wd_pap_tail], al
-    mov [cs:wd_len], bx
-.out:
+    pop ds                          ; the package's for the two stores, and
+    mov [wd_pap_tail], al           ; back on the stack for .out: the same
+    mov [wd_len], bx                ; nine bytes as two stores through CS,
+    push ds                         ; which were a #GP each a load on
+.out:                               ; kern_mega (KERN-MEGA-PLAN 14.162)
     pop ds
     jmp wd_rba
 

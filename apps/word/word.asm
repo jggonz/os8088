@@ -9240,8 +9240,9 @@ wd_ldscan:
     je .hn                      ; a mark's byte is an index, not attrs
     test byte [bx], WDAT_HID
     jz .hn
-    mov byte [cs:wd_hashid], 1
-    jmp short .hdone
+    pop ds                      ; the package's, then the flag: the same
+    mov byte [wd_hashid], 1     ; eight bytes as a store through CS, which
+    jmp short .out              ; kern_mega made a #GP (14.162)
 .hn:
     inc bx
     loop .h

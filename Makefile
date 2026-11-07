@@ -7233,11 +7233,12 @@ $(DOSNETSTAMP): | $(BUILD)
 # an edit to os88chart.inc rebuilt CHART.O88 and left SHEET.O88 stale - which
 # presents as a fix that did not work, on a binary that never contained it.
 # Four other rules had the same hole and were fixed with this one.
-$(BUILD)/sheet.bin: apps/sheet/sheet.asm apps/os88api.inc \
-                    apps/os88ui.inc apps/os88line.inc apps/os88text.inc \
-                    apps/os88chart.inc apps/os88chartbss.inc \
-                    apps/os88chartovl.inc apps/os88fp.inc apps/os88dec.inc \
-                    apps/os88parts.inc apps/os88partsbody.inc | $(BUILD)
+SHEET_SRC := apps/sheet/sheet.asm apps/os88api.inc \
+             apps/os88ui.inc apps/os88line.inc apps/os88text.inc \
+             apps/os88chart.inc apps/os88chartbss.inc \
+             apps/os88chartovl.inc apps/os88fp.inc apps/os88dec.inc \
+             apps/os88parts.inc apps/os88partsbody.inc
+$(BUILD)/sheet.bin: $(SHEET_SRC) | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/sheet/sheet.asm
 	@echo "sheet:  $(call FILESIZE,$@) bytes"
 
@@ -15657,7 +15658,8 @@ MEGAPKGS := $(MEGAAPPDIR)/video.o88 $(MEGAAPPDIR)/audio.o88 \
             $(MEGAAPPDIR)/tracker.o88 $(MEGAAPPDIR)/midirack.o88 \
             $(MEGAAPPDIR)/pixel.o88 $(MEGAAPPDIR)/xtmp3.o88 \
             $(MEGAAPPDIR)/realdmg.o88 $(MEGAAPPDIR)/taskmgr.o88 \
-            $(MEGAAPPDIR)/arcade.o88 $(MEGAAPPDIR)/win16.o88
+            $(MEGAAPPDIR)/arcade.o88 $(MEGAAPPDIR)/win16.o88 \
+            $(MEGAAPPDIR)/sheet.o88
 MEGABASE = $(patsubst $(MEGAAPPDIR)/%,$(BUILD)/%,$(MEGAPKGS))
 # ...and the substitution, ONE IDIOM for every list a kern_mega disk names
 # (SMALLSUB's): the mega arm of any package that has one, everything else as
@@ -15791,6 +15793,22 @@ $(MEGAAPPDIR)/realdmg.o88: $(MEGAAPPDIR)/realdmg.bin $(BUILD)/rdgcore0.bin $(BUI
                            $(MEGAAPPDIR)/rdgjitp.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(MEGAAPPDIR)/realdmg.bin -o $@ --part $(BUILD)/rdgcore0.bin \
 		--part $(BUILD)/rdgcore1.bin --part $(MEGAAPPDIR)/rdgjitp.bin --part-compress lz4
+
+# SHEET's arm (KERN-MEGA-PLAN 14.162): the same source with -DPKG_MEGA, so its
+# two modules store into their own claims through each claim's DATA selector
+# (sheet.asm's CSDO: `cs:` on the shipped build, byte for byte) - five a step
+# had been a completed #GP each, 1,024 for a 100-turn FOR loop. Cut and
+# packed exactly as $(BUILD)/sheet.o88 is; the resident image is the shipped
+# one, and the macro module's claim is 30KB there against 28 (SH_M2KB)
+$(MEGAAPPDIR)/sheet.bin: $(SHEET_SRC) | $(BUILD)
+	@mkdir -p $(MEGAAPPDIR)
+	$(NASM) -f bin -w+error -I apps/ -DPKG_MEGA -o $@ apps/sheet/sheet.asm
+	@echo "sheet (PKG_MEGA): $(call FILESIZE,$@) bytes"
+$(MEGAAPPDIR)/sheet.o88: $(MEGAAPPDIR)/sheet.bin tools/os88ovl.py tools/os88pkg.py $(PKGZSTAMP) $(PKGZBSTAMP)
+	python3 tools/os88ovl.py $(MEGAAPPDIR)/sheet.bin -o $(MEGAAPPDIR)/sheet.chart.bin \
+		--trim $(MEGAAPPDIR)/sheet.trim.bin --second $(MEGAAPPDIR)/sheet.macro.bin
+	$(OS88PKGB) $(MEGAAPPDIR)/sheet.trim.bin -o $@ \
+		--part $(MEGAAPPDIR)/sheet.chart.bin --part $(MEGAAPPDIR)/sheet.macro.bin
 
 # The Task Manager's arm (SPEC.md 28.4.15): the memory map's second part,
 # RAM above 1MB at its own scale beside conventional memory - kern_mega's
