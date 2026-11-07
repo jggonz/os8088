@@ -490,8 +490,11 @@ FAST = [
         "mou_p2_isr took its first ACK and the wheel came home 0) and the "
         "pointer moving. The failing case is the HIBER.DRV before 14.57 "
         "(--img): 2 and 3 red, verified. NEEDS QEMU 9, as hmahiber. 10s is "
-        "6.9 measured",
-        needs=("qemu", "qemu9", "nasm"),
+        "6.9 measured. timeout=240: its waits are GUEST-budgeted (120 + "
+        "180 guest s) and the default 70s wall backstop is tighter than "
+        "they are - a whole-tier soak's first minute, eight jobs on four "
+        "cores, killed it mid-resume at 70s; 7.1s alone",
+        needs=("qemu", "qemu9", "nasm"), timeout=240,
         wants=("build/os8088.img", "build/apps.img", "build/mbr.bin",
                "build/boothd.bin", "build/kernel.sys")),
     Row("hmadosret", "soak", py("tests/hmadosret.py"), 20.0,
