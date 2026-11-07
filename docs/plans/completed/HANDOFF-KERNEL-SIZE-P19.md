@@ -142,6 +142,10 @@ retire; and `OSAPI_SEG`'s refusal shares its exit only on kern_big.
   `mem_region_reloc` (-1 each, pass 17's), hot's `sch_resume` and `sch_isr
   .tres` pads, `font_width_x`'s pad, kern_small `menu_draw_bar`'s long
   `mov dx`. sweep2's `cbw` pairs with hot's `sch_resume` pad by range.
+- **The Hercules scroll's placement sensitivity** (section 7): PgDn moves
+  +-2.5% on MartyPC's Hercules machine with layout alone (125.0 base, 126.6
+  tip, 128.3 with 72 bytes of data put back). Worth understanding before the
+  next pass reads a Hercules timing as a regression or a win.
 - **CROSS-FILE, priced and free**: `str_len` into `toast_place` (-3 net,
   both halves odd; sweep2.md); `dsk_copy_in_x`'s `mov ax, ds` (-1;
   sweep.md); `mega_i21` (-1, only with another `.mega` cut across its
@@ -172,7 +176,51 @@ re-run). On the merged tip, the coordinator ran:
 - **`tools/os88hot.py ab --base c5a7b0f9`**, MartyPC, every scenario on CGA,
   Hercules and VGA (guest time off the cycle counter, 4.77 MHz):
 
-*(The base-against-tip timing table follows in the next commit; the run was in flight when this record was committed. First scenario: opening A:'s Disk window reads the same 3 int 13h calls, 18 sectors and 1 seek at base and tip on all three adapters.)*
+Median of 3 reps unless marked; `busy` is CPU time inside the window.
+
+| operation | CGA | Hercules | VGA |
+|---|---|---|---|
+| raise a window (ms) | 163.7 -> 161.8 (-1.2%) | 209.1 -> 209.2 (0.0%) | 360.7 -> 356.9 (-1.1%) |
+| drag, 8 packets (ms) | 497.0 -> 495.7 (-0.3%) | 519.0 -> 517.5 (-0.3%) | 660.0 -> 658.1 (-0.3%) |
+| PgDn / PgUp (ms) | 106.2 -> 106.0 (-0.2%) / -0.2% | **125.0 -> 126.6 (+1.2%) / +1.4%** - see below | 99.4 -> 99.2 (-0.2%) / -0.2% |
+| menu open (busy ms) | 31.0 -> 30.9 (-0.2%) | 30.8 -> 30.4 (-1.1%) | 35.1 -> 35.0 (-0.2%) |
+| menu close (ms, n=8) | 23.2 -> 23.3 (+0.2%) | - | - |
+| launch Calc, cached (ms) | 834.3 -> 832.4 (-0.2%) | 839.8 -> 838.7 (-0.1%) | 853.0 -> 851.5 (-0.2%) |
+| type 31 keys (busy ms) | 499.0 -> 489.5 (-1.9%) | 441.2 -> 430.7 (-2.4%) | 520.3 -> 512.7 (-1.5%) |
+| pointer sweep (busy ms) | 138.7 -> 139.3 (+0.4%) | 138.0 -> 139.4 (+1.0%) | 182.3 -> 179.5 (-1.5%) |
+| idle desktop 5 s (busy ms) | 179.7 -> 177.2 (-1.4%) | -1.4% | -1.4% |
+| open A:'s Disk window (ms; fastest of 3) | 1,184.3 -> 1,181.2 | med +3.8% | med -4.8% |
+| launch Calc, cold (ms) | med +5.5% | - | - |
+| boot to the desktop (ms) | 14,355 -> 14,559 (+1.4%) | +0.7% | +0.6% |
+
+**Disk calls are identical everywhere**: opening A: 3 reads, 18 sectors, 1
+seek at base and tip on all three adapters; boot 18 reads, 190 sectors, 24
+seeks; a cached launch none. The disk-bound rows' medians move with the
+platter's rotational phase (the khp1 LOG found the same; the fastest reps
+agree to 0.3%).
+
+**Boot's +100-200 ms is rotational, not code.** `tools/os88boot.py` phase
+by phase (CGA, GLaBIOS): every code phase is equal or FASTER (kernel load
+-33 ms, `mouse_init` -42 ms), with the same int 13h calls; the time is two
+phases waiting a revolution - `drv_boot_x` +90 ms (same 3 reads, 18
+sectors) and `as_boot` +189 ms. `KERNEL.SYS` is one cluster smaller
+(85,776 -> 85,168), so every file after it sits one sector earlier on its
+track (ASSOC.DAT LBA 182 -> 181), its read-ahead fill reads to the track's end
+(4 sectors, was 3), and the head now arrives just past the next sector. Any
+kernel-size change moves this by a revolution, in either direction.
+
+**Menu close's first reading (+3.4%, n=3) was tick phase**: at n=8 it is
++0.2%.
+
+**Hercules PgDn/PgUp +1.3% (+1.6 ms) is LAYOUT, not work - but not
+explained.** Bisected on the merge chain: flat through `28d2a265` (draw) and
+`750788df` (files), it appears at the sweep3 merge `1fabea63` and is flat
+after. It is NOT sweep3's `vid_tab` move: a probe of the tip with kern_big's
+`vid_tab` resident again (72 bytes of data read once a mode set, no
+instruction on the scroll path changed) reads **128.3 ms**, slower still.
+So the Hercules scroll on MartyPC moves +-2.5% with placement alone, CGA and
+VGA do not, and nothing in this pass made the PgDn path do more work. The
+mechanism is open - section 6.
 
 ## 8. METHOD LESSONS
 
