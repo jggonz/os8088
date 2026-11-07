@@ -225397,6 +225397,20 @@ once per call and the routine branches, which is the shape §39 asks of
 everything in this tree and is what lets the host harness model ONE interface
 (`apps/lemmings/hosttest/lemraster.c`).
 
+**Nothing in the four files writes through CS** (KERN-MEGA-PLAN 14.148,
+`tests/unit/t_cswrite.py` walks `apps/lemmings/`). The package's scratch -
+`lb_mrow`, `lb_srow`, `lb_sorb`, `lb_smk`, `lb_wi0`, `lb_mlatch`, `lb_dlo` -
+is its own DS-relative memory, and a routine that moves DS to a bank or a
+world claim puts OURS back from the stack (`push ds` ... `pop ds`) or from
+ES, never with `push cs` / `pop ds`; a row shifted into our scratch gets
+ES = DS, not CS. On kern_mega CS is a read-only code selector, and those
+idioms were ~2,500 completed #GP fixups a second in the preview and ~3,500
+in play (Lemmings at ~60% speed there). Every substitution is the same
+instruction with another segment register - `push ds` for `push cs`, an
+`es:` prefix for a `cs:` one - so the 8088 runs each path in the same
+clocks, and two were dropped outright: `lb_pnib`'s dead pair and
+`lb_msample`'s prefix.
+
 Two files stand beside it. `lemmask.inc` owns the **SOLID MASK** — one bit per
 world pixel, 200 bytes a row by 160 rows = 32,000, on every adapter including
 VGA (plane 3 carries the same information, but reading it back is a VRAM read

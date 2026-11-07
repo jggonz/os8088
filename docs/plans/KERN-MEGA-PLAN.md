@@ -14029,3 +14029,45 @@ REALDMG.O88 +144 bytes of image on kern_big (38,050 -> 38,194), the arm +152
 (39,206 -> 39,358), 25 of bss (`rw_czf`, `rw_fnd`); on the disk +144 / +80
 packed.
 
+### 14.148 Lemmings' blitters wrote through CS: ~3,000 #GP fixups a second (2026-11-07) - FIXED
+
+**Found by the mega-release hands-on pass** (h5): Lemmings ran at ~60% speed
+on kern_mega (VGA 61%, Hercules 63%; kern_big 100%). Every site is in the
+four hand-written files beside the C (`apps/lemmings/lemblit.inc`,
+`lemsprite.inc`, `lemmask.inc`, `lemfont.inc`): `push cs / pop es` before a
+`stosb` into the package's own scratch (`_lem_r_wpiece`'s `lb_mrow`,
+`lb_shrow`'s rows, `lb_orrow`'s `lb_sorb`), `mov [cs:lb_wi0], ax`, `or
+[cs:lb_mlatch], al`, and `push cs / pop ds` to put DS back after a bank -
+each a completed #GP (`mega_gpw`), the pairs once per call, the prefixed
+stores every time. Census on 86Box's mr286 (`faults`), the level's preview
+for 5 s and 10 s of play after the click:
+
+| | before | after |
+|---|---:|---:|
+| VGA preview, 5.7 guest-s | 14,404 (1104:4CFF, :4D1B, :4C16) | **0** |
+| VGA play, ~11 guest-s | 43,410 (:5A70 `lb_shrow`, :5AC2 `lb_orrow`, :4EFC) | **0** |
+| Hercules preview | 14,404 | **0** |
+| Hercules play | 28,508 | **0** |
+
+The game clock agrees: the same scripted play reached `TIME 4-44` before and
+`4-38` after, with one more lemming out.
+
+**Fix: the same instructions with another segment register.** ES = our DS
+(`push ds / pop es`) where a row is shifted into our scratch, the stores
+`[es:` instead of `[cs:`, and DS restored from the stack (`push ds` before
+it moves, `pop ds` after) or from ES, never from CS. `lb_msample` and
+`_lem_r_mlatch` drop their prefix (DS is ours at every caller: `lb_msvga`
+reads `lb_kind` through it), and `lb_pnib`'s `push cs / pop ds` before its
+`pop ds` is gone. **The 8088 runs every path in the same clocks or fewer**:
+`push ds` is `push cs`'s 14 cycles, an `es:` prefix a `cs:` one's 2, and the
+count of each is unchanged on every loop - the moved `push ds` in
+`_lem_r_wpiece`'s colour loop and `lb_compose`'s rows replaces the `push cs`
+that was there, once per row per plane, never inside a pixel loop; the two
+deleted instructions are pure gain. Not timed on MartyPC (the final pass's
+`lemmings` row); the image is **4 bytes smaller** (lemmings.trim.bin 32,322
+-> 32,318).
+
+**Row**: `cswrite` (fast) now walks `apps/lemmings/` (none registered, so
+any new site fails `make`); red with the base's lemblit.inc
+(`lemblit.inc:907 ... pair ... not in tests/cswrites.txt`). SPEC.md 116.4.
+

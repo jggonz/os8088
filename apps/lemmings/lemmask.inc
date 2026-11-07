@@ -415,14 +415,14 @@ _lem_m_apply:
     add ax, [bp+6]
     add ax, [lbp_i0]
     mov si, ax
-    push cs
-    pop es
+    push ds                         ; ES = OUR DATA, never CS: a store
+    pop es                          ;   through CS is a #GP on kern_mega
     mov di, lb_mrow
     mov cx, [lbp_s]
     mov ax, [bp+4]
     mov ds, ax
     call lb_shrow
-    push cs
+    push es                         ; (ours still: lb_shrow keeps ES)
     pop ds
     mov ax, [bp+10]
     add ax, [lbp_r0]
@@ -705,6 +705,7 @@ _lem_m_derive:
     call lem_rowoff
     mov si, di                      ; the mask row
     mov ax, [bp-4]
+    push ds                         ; (ours, back at .rowdone)
     mov ds, ax
     mov ax, [bp+4]
     mov es, ax
@@ -753,7 +754,6 @@ _lem_m_derive:
     loop .hloop
 
 .rowdone:
-    push cs
     pop ds
     inc word [bp-2]
     jmp .row
