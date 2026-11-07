@@ -995,6 +995,18 @@ class Private(object):
         self.b = os.path.join(work, "b.img")
         shutil.copy(a, self.a)
         shutil.copy(b, self.b)
+        if SERVED:
+            # KERN_MEGA UNDER BOCHS, or a kernel under 86Box: the same socket
+            # answered by tests/os88qmpmega.py, as the launcher above does -
+            # the system copy becomes its kern_mega twin there (mega_twin),
+            # an NE2000 on the emulator's slirp for `ether`. QEMU's `extra`
+            # arguments have no meaning on that machine
+            import os88qmpmega
+            self.pid = None
+            self.server = os88qmpmega.Server(self.sock, pidf, self.a, self.b,
+                                             hd=hd, ne2k=ether)
+            atexit.register(self.close)
+            return
         cmd = ["qemu-system-i386", "-machine", "pc,vmport=off",
                "-drive", "file=%s,format=raw,if=floppy" % self.a,
                "-boot", "c" if hd else "a",
@@ -1017,6 +1029,11 @@ class Private(object):
             time.sleep(0.2)             # the socket appearing is a HOST event
 
     def close(self):
+        srv = getattr(self, "server", None)
+        if srv is not None:
+            self.server = None
+            srv.close()
+            return
         if self.pid:
             try:
                 os.kill(self.pid, signal.SIGTERM)

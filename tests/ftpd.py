@@ -626,7 +626,8 @@ def run_gate(m, mo, fails):
         try:
             f = connect()
             break
-        except (OSError, ftplib.all_errors):
+        except ftplib.all_errors:       # a TUPLE (OSError in it): nested in
+                                        # another, the except is a TypeError
             gpace(1.0)
     if f is None:
         fails.append("nothing answered on port 21 - the server did not start, "

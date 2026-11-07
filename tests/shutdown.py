@@ -110,7 +110,8 @@ def run(card, machine, image):
                       if k.startswith("cpc_save.") and v >= at]
             assert not inside or min(inside) >= at + len(patch), \
                 "the injected writer would overwrite a label inside cpc_save"
-            m.write(seg() * 16 + at, patch)
+            m.write(m.lin(seg(), at) if getattr(m, "bochs", False)
+                    else seg() * 16 + at, patch)   # (a selector: kern_mega)
             m.key("Enter")
             cancelled()
             assert m.read(S.linear("cp_wdirty"), 1) == b"\x01", "Failed save was forgotten"
@@ -195,10 +196,14 @@ def main():
     if SMALL:
         run("cga", "os8088_5150_cga_128k", "build/small360.img")
     else:
+        # --card names ONE leg (kern_mega's Bochs has a VGA and nothing else)
+        only = sys.argv[sys.argv.index("--card") + 1] \
+            if "--card" in sys.argv else None
         for card, machine in (("vga", "os8088_xt_vga"),
                               ("cga", "os8088_5150_cga_gla"),
                               ("herc", "os8088_5150_herc_gla")):
-            run(card, machine, "build/os8088-360.img")
+            if only in (None, card):
+                run(card, machine, "build/os8088-360.img")
 
 
 if __name__ == "__main__":

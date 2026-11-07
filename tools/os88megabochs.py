@@ -1056,9 +1056,13 @@ class MegaBochs(MegaMixin, om.Marty):
         except om.MartyError:
             mode = 0x12
         text = mode in (0, 1, 2, 3, 7)
+        # `text` AS WELL AS `graphics`: os88marty.video_is_text reads `text`
+        # on a VGA, whose `graphics` is MartyPC's dead field - without it
+        # every wait for a text screen (the hibernated sentence, a resume's
+        # refusal) was false for ever under Bochs
         return {"type": "vga", "primary": True, "mode": "Mode%02X" % mode,
-                "graphics": not text, "field_w": 800, "field_h": 524,
-                "frames": 1}
+                "graphics": not text, "text": text, "field_w": 800,
+                "field_h": 524, "frames": 1}
 
     def _c_video(self, card=None, **_):
         return self._video()
