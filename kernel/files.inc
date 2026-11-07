@@ -888,13 +888,13 @@ fmv_get_dir:
 %if FV_DOFF                     ; (past the multi-selection's bitmap, SPEC.md
     add ax, FV_DOFF             ; 22.6.4)
 %endif
-    mov si, ax                  ; "clobbers SI"
+    xchg ax, si                 ; "clobbers SI" (AX is popped below)
     mov di, dsk_ent             ; CX is still DSK_DE_STRIDE: `mul` writes DX:AX
-    call fmv_copy_in
-    pop di
+    call fmv_copy_in            ; ...and keeps DI, so SI -> dsk_ent is DI's
+    mov si, di                  ; (kernel size pass 18: -1 each, the `xchg`
+    pop di                      ; and the register move under `mov si, imm`)
     pop cx
     pop ax
-    mov si, dsk_ent
     ret
 
 ; -----------------------------------------------------------------------------
@@ -971,9 +971,10 @@ fmv_get_icon:
                                 ; "all-zero = none"
     push ax
     push bx
-    push cx
-    push dx                     ; (no SI: it is the output)
-    push di
+    push cx                     ; (no SI: it is the output. No DX: nothing
+    push di                     ; below writes it - fmv_iofs, fmv_copy_in and
+                                ; dsk_ico_stage all keep it; kernel size pass
+                                ; 18, -2)
     ; fmv_viofs, written at its one call (kernel size pass 14 - SI is this
     ; routine's output, so it needs no bank here)
     mov si, [fm_vp]
@@ -992,7 +993,7 @@ fmv_get_icon:
 %if FV_ICOIX                    ; the whole of its icon region now
     add ax, FV_ICOIX
 %endif
-    mov si, ax
+    xchg ax, si                 ; (AX: reloaded below, popped at the end)
     mov di, dsk_ico             ; TWO bytes, because fmv_copy_in moves words.
     mov cx, 2                   ; The second is the next entry's reference, or
     call fmv_copy_in            ; the first byte past the array and still
@@ -1006,13 +1007,13 @@ fmv_get_icon:
                                 ; is mounted now. Staging it - the resolve,
                                 ; the 64-byte copy and the all-zero fallback -
                                 ; is disk.inc's routine and was written out a
-                                ; second time here
+                                ; second time here. It answers SI -> dsk_ico
+                                ; itself, on every exit (dsk_get_icon_x leans
+                                ; on that too): no `mov si` here (pass 18, -3)
     pop di
-    pop dx
     pop cx
     pop bx
     pop ax
-    mov si, dsk_ico
     ret
 ; -----------------------------------------------------------------------------
 ; fmv_winof - which window owns the state block in DI? (the inst_tab walk)
@@ -1187,8 +1188,11 @@ fmv_store:
                                 ; so nothing may bank them until it is redrawn
 .nowin:
     call fmv_fit                ; a window whose fm_kinit claim was refused
-    mov byte [di+FS_IOFH], 0    ; gets another chance before anything is copied
-    mov ax, [di+FS_VSEG]
+                                ; gets another chance before anything is copied
+    xor bx, bx                  ; BH = FS_IOFH's 0 for .none below: ONE store
+    mov ax, [di+FS_VSEG]        ; of the byte on both arms, where there was a
+                                ; zero first and the shape after it (kernel
+                                ; size pass 18, -2; nothing between reads it)
     or ax, ax
     jz .none                    ; no cache: nothing to write it into, and
                                 ; nothing but the GLOBAL shape to read it
@@ -1214,9 +1218,11 @@ fmv_store:
     mov si, [dsk_doff]
 %if FV_DOFF
     mov di, FV_DOFF             ; entries after the bitmap, and the bitmap is
-    mov cx, bx                  ; NOT copied: it is the destination's own
-    sub cx, FV_DOFF             ; selection, which this routine has just
-%else                           ; emptied (SPEC.md 22.6.4)
+    lea cx, [bx-FV_DOFF]        ; NOT copied: it is the destination's own
+                                ; selection, which this routine has just
+                                ; emptied (one `lea`: the flags die at the
+                                ; copy - kernel size pass 18)
+%else                           ; (SPEC.md 22.6.4)
     xor di, di
     mov cx, bx
 %endif
@@ -1244,13 +1250,13 @@ fmv_store:
 %ifdef DSK_BIGDIR
     shl bx, 1                   ; (in 128-byte units on this build, 22.6.4)
 %endif
+.none:
     mov [di+FS_IOFH], bh        ; was given, so the two halves can no longer
                                 ; name different segments
                                 ; ...AND THE SHAPE IT WAS FILLED WITH, which
                                 ; is this mount's and not whichever one paints
                                 ; it next (SPEC.md 22.6.1). BL is 0 by the
                                 ; assertion at fmv_viofs
-.none:
     jmp kretc_di
 
 ; -----------------------------------------------------------------------------
@@ -1298,14 +1304,17 @@ fmv_fit:
     call mem_claim_x
     jc .out                     ; refused: no cache, and that is a normal
     mov [di+FS_VSEG], dx        ; path (SPEC.md 50.3)
-    mov byte [di+FS_VKB], VIEW_KB
+    mov [di+FS_VKB], al         ; VIEW_KB: mem_claim_x keeps AX (and BX)
 %ifndef KERN_SMALL
     ; ...and DECLARED RELOCATABLE (SPEC.md 66.5.6) - purgeable on kern_small,
     ; so never movable there. It was fmv_movable, which banked AX, BX and the
     ; flags for this one caller; AX is kretc_di's to restore, .out rewrites
-    ; BX, and nothing that calls fmv_fit reads a flag (kernel size pass 14)
-    call fmv_owner              ; BX = the owning instance slot, which is what
-    mov ax, fm_reloc            ; the claim was made under (DX = the claim)
+    ; BX, and nothing that calls fmv_fit reads a flag (kernel size pass 14).
+    ; BX is STILL the owning instance slot the claim was made under: the
+    ; claim keeps every register but DX, and a compaction inside it moves
+    ; no instance record - so the second `call fmv_owner` that stood here is
+    ; gone, with the immediate store above (kernel size pass 18, -4)
+    mov ax, fm_reloc            ; (DX = the claim)
     call mem_movable_x
 %endif
 .out:
@@ -1569,12 +1578,20 @@ fmv_icorefs:
                                 ; because ico_demote cleared [ico_n] and
                                 ; SPEC.md 54.7.4's guard is a compare on it
 %endif
+%ifndef DSK_BIGDIR
     xor bx, bx                  ; (dsk_dest_x's offset below, and the zero the
-%ifdef OS88_ASSOC               ; store takes: kernel size pass 14, -1)
+%endif                          ; store takes: kernel size pass 14, -1. On
+                                ; DSK_BIGDIR the offset is FV_DOFF and the
+                                ; zero an immediate: pass 18, -1)
+%ifdef OS88_ASSOC
     cmp byte [di+FS_DIRTY], FSD_ICONS   ; ...AND THE READ MAY HAVE SHED THE
     jne .owes                   ; STORE ITSELF (SPEC.md 25.9.5.2): asc_use's
-    mov [di+FS_DIRTY], bl       ; 5KB claim compacts, the compactor dissolves
-.owes:                          ; the TRIV icon store, and ico_demote marks
+%ifdef DSK_BIGDIR               ; 5KB claim compacts, the compactor dissolves
+    mov byte [di+FS_DIRTY], 0   ; the TRIV icon store, and ico_demote marks
+%else
+    mov [di+FS_DIRTY], bl
+%endif
+.owes:
                                 ; every Disk window FSD_ICONS - THIS one too.
                                 ; The two passes below resolve against the
                                 ; store as it now stands, so this window's
@@ -1636,9 +1653,13 @@ fmv_load:
 
 
 
-    mov bl, al                  ; dsk_chdir wants the drive in DL and the
-    mov ax, dx                  ; cluster in AX
-    mov dl, bl
+    xchg ax, dx                 ; dsk_chdir wants the drive in DL and the
+                                ; cluster in AX. DH is the caller's AH now,
+                                ; and nothing reads it: disk_mount_x takes
+                                ; DL, and the grow's re-list below always
+                                ; came round with DH = FS_VSEG's high byte.
+                                ; BL, the copy this went through, was read
+                                ; by nobody (kernel size pass 18, -5)
 
     ; --- WHERE THE LISTING GOES (docs/plans/LISTING-HOME-PLAN.md 13) --------
     ; This window's own claim, which it has held since fm_kinit. The mount
@@ -1668,7 +1689,7 @@ fmv_load:
 %endif
     call fmv_fit
     push dx                     ; (AX: dsk_dest_x keeps it - kernel size
-    push bx                     ; pass 17)
+                                ; pass 17)
     mov dx, [di+FS_VSEG]        ; 0 = this window has NO store, and there is
 %ifdef DSK_BIGDIR               ; no floor to fall back to any more: the
     push ax                     ; mount goes quiet and the window paints
@@ -1683,8 +1704,13 @@ fmv_load:
 %else
     call dsk_dest_b0
 %endif
-    pop bx
-    pop dx
+    pop dx                      ; (and NO BX banked round the aim:
+                                ; dsk_chdir_x reads AX and DL alone, and the
+                                ; next reads of BX are the `lea` below and the
+                                ; retire's offset - [dsk_doff] with no
+                                ; segment, which held the caller's BX before
+                                ; and is read by nothing until the next aim.
+                                ; Kernel size pass 18, -2)
 
     call dsk_chdir_x              ; a remount with [dsk_keepcwd] raised
 
@@ -3571,11 +3597,12 @@ fm_onclick_x:
     push dx
     mov cx, [fm_pressx]         ; ABSOLUTE: fm_bhit is shared with the two
     mov dx, [fm_pressy]         ; edges, which have nothing else to give it
-    call fm_bhit
+    call fm_bhit                ; (keeps CX and DX)
+    or al, al
+    jz .sbar_abs                ; ...and the scroll bar wants the very same
+                                ; four words (kernel size pass 18, -6)
     pop dx
     pop cx
-    or al, al
-    jz .sbar
     xor ah, ah
     call os88ui_arm             ; near: this file and os88ui.inc are both
     call fm_setdown             ; .cold, one segment (SPEC.md 2.6)
@@ -3628,19 +3655,33 @@ fm_onclick_x:
 %endif
 
     ; --- scroll bar (present iff the row area is) ---
-.sbar:
-    cmp word [fm_fit], 0
-    je .rows
     ; SPEC.md 13.10: the shared element owns where the parts are, and this
     ; owns what they mean. A click ON the thumb pages DOWN here, which is what
     ; this window always did - the dialog does nothing there, and the element
     ; reports the thumb as a part of its own rather than choosing for them.
+    ; The element takes the point ABSOLUTE and this ladder is content-
+    ; relative with x in DX, so the relative pair is banked and the one
+    ; banked above, at the press, is loaded: CX + [fm_cy] was DX - the
+    ; content's y + the same y, which fm_layout stores out of the same
+    ; wm_content (kernel size pass 18, -4). kern_big has just done exactly
+    ; that for fm_bhit and arrives at .sbar_abs with it done (-6 more)
+%ifdef KERN_BIG
+.sbar_abs:
+    cmp word [fm_fit], 0
+    jne .sbar_go
+    pop dx
+    pop cx
+    jmp short .rows
+%else
+.sbar:
+    cmp word [fm_fit], 0
+    je .rows
     push cx
     push dx
-    mov ax, cx                  ; the element takes it ABSOLUTE and this
-    mov cx, [fm_pressx]         ; ladder is content-relative with x in DX
-    mov dx, ax
-    add dx, [fm_cy]
+    mov cx, [fm_pressx]
+    mov dx, [fm_pressy]
+%endif
+.sbar_go:
     call fm_sbset
     call os88ui_sbhit
 %ifdef OS88UI_SBDRAG
@@ -4495,9 +4536,12 @@ fm_delrep:
 fm_open_sel:
     call kentc_di
     mov di, [fm_vp]
-    call fmv_get_dir            ; SI -> the staged 32-byte entry
-    mov bx, [si+18]             ; its first cluster, banked before the mount
-    cmp word [si+16], 2         ; 2 = a folder, 3 = the parent link (19.5):
+    call fmv_gdtype             ; SI -> the staged 32-byte entry, and its
+    mov bx, [si+18]             ; type against 2 (a `mov` writes no flag).
+                                ; Its first cluster, banked before the mount
+                                ; (kernel size pass 18: the compare is
+                                ; fmv_gdtype's own, -4).
+                                ; 2 = a folder, 3 = the parent link (19.5):
     jae .folder                 ; both of them navigate, neither is loadable
     push ax                     ; a FILE in the Standard File chooser is its
     mov al, FDH_PICK            ; answer, or its Save box's name - never a
@@ -6159,11 +6203,11 @@ fm_c_up:                        ; Nav > Up One Folder
                                 ; (fm_open_sel, fdlg_dive). The type test is
                                 ; what a missing link now looks like
 %ifdef KERN_BIG
-    push ax                     ; the cluster fm_go wants, across the pop
-    mov bx, [fm_vp]
-    add bx, FS_PATH
-    call pth_pop                ; SI = the folder we arrive in, or 0
-    pop ax
+    lea bx, [di+FS_PATH]        ; DI is still [fm_vp]: fmv_ishere, fmv_sync_x
+    call pth_pop                ; and fmv_get_dir keep it - and pth_pop keeps
+                                ; AX, the cluster fm_go wants, so there is no
+                                ; bank round it (kernel size pass 18, -6).
+                                ; SI = the folder we arrive in, or 0
 %else
     xor si, si                  ; the parent cannot be named without the
 %endif                          ; grandparent's listing (SPEC.md 22)
@@ -7593,8 +7637,10 @@ fm_edit_end:
     mov byte [di+FS_EDIT], 0
     add di, FS_SIZE
     loop .clr
-    mov word [fm_elen], 0       ; ...and [fm_ebuf]'s first byte: an empty
-    jmp kretc_di                ; name of no length, in one store
+    mov [fm_elen], cx           ; ...and [fm_ebuf]'s first byte: an empty
+    jmp kretc_di                ; name of no length, in one store - of the
+                                ; zero the `loop` left in CX (kernel size
+                                ; pass 18, -2)
 
 ; -----------------------------------------------------------------------------
 ; fm_cfill - white-fill SI's own content box (the Note Pad idiom, SPEC.md 11)
@@ -8046,8 +8092,10 @@ fm_draw_isel:                   ; fm_draw_rows' tail: the selection bar, drawn
     ; `[fm_rgt] - FM_SB_W + 1` into os88ui_ksb+0 two instructions later, so the
     ; word and the three instructions that fed it were both dead.
     call fm_sbset
-    call os88ui_sbar
-    jmp fm_more_mark           ; ...and the edge the bar is standing on
+    call os88ui_sbar            ; ...and on into the edge the bar is standing
+                                ; on: fm_more_mark is the next instruction, so
+                                ; the `jmp` that stood here went (kernel size
+                                ; pass 18, -2)
 
 ; -----------------------------------------------------------------------------
 ; fm_more_mark - the row area's bottom EDGE, and whether the list runs past it

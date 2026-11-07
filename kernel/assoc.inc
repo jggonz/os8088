@@ -1295,6 +1295,7 @@ assoc_run_x:
     pop ax
     cmp al, ASSOC_FIND          ; an extension nothing here claimed (54.4.3):
     jne .known                  ; ask each volume's own ASSOC.DAT, in the
+.sweep:                         ; (.resweep's way back in, below)
     mov bp, assoc_tryext        ; program search's order, until one names a
     call assoc_sweep            ; program for it - AL = that slot
     jc .noassoc
@@ -1397,11 +1398,11 @@ assoc_run_x:
     jc .resweep                 ; whose program is gone protects nothing, so
     and byte [bx+3], ASSOC_IX   ; the merge may take it back
 .resweep:
-    pop ax
-    mov bp, assoc_tryext
-    call assoc_sweep            ; AL = the slot some volume names now
-    jc .noassoc                 ; (short: .noassoc is just above .nofile)
-    jmp .known
+    pop ax                      ; ...and the sweep above, AL = the slot some
+    jmp .sweep                  ; volume names now: the same three lines and
+                                ; the same `jc .noassoc` / `.known` after them
+                                ; were written out here again (kernel size
+                                ; pass 18, -8)
 .needs:
     call assoc_back
     mov si, assoc_pnbuf         ; 'Needs TRACKER.O88', because "Program not
@@ -1558,6 +1559,9 @@ assoc_dead:  resb 1             ; volumes whose mount failed in this locate,
   %error "assoc_run_x stores assoc_ddrv and clears assoc_dead as one word"
 %endif
 ASSOC_PWBANK equ 0xFFFF         ; [assoc_pwin]: no window, the locator banked
+%if ASSOC_PWBANK != 0xFFFF
+  %error "ld_pkg_byname stores ASSOC_PWBANK as `dec ax` of a zero, and assoc_run_x tests it with `inc di`"
+%endif
 assoc_pwin:  resw 1             ; the posting Disk window's STATE BLOCK, not
                                 ; its window record - FS_DRV/FS_CWD are read
                                 ; off it (SPEC.md 54.9.1), as ld_pwin is
