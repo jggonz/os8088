@@ -14297,7 +14297,7 @@ br_a_size:    db 'size', 0
 br_a_alt:     db 'alt', 0
 br_a_checked: db 'checked', 0
 br_s_post:    db 'post', 0
-br_s_posting: db 'POST request', 0
+TOASTSTR br_s_posting, 'POST request'
 br_s_postget: db 'History GET: POST body not replayed', 0
 br_s_password: db 'password', 0
 br_s_pwwarn: db ' HTTP NOT SECURE', 0
@@ -14342,8 +14342,8 @@ br_s_webbrowser: db 'os8088 Web Browser', 0
 br_s_titlesfx: db ' - os8088 Web Browser', 0
 br_s_titlesfx_end:
 
-br_s_big:   db 'Page too large', 0
-br_s_bad:   db 'Cannot open page', 0
+TOASTSTR br_s_big, 'Page too large'
+TOASTSTR br_s_bad, 'Cannot open page'
 
                                 ; OS88UI_SBDRAG is at the TOP of this file, not
                                 ; here: SPEC.md 13.10.7.4

@@ -657,7 +657,16 @@ def _tail(path, n):
         return f.read().decode("latin-1")
 
 
-def session(out, cmds, timeout=20.0, pids=None, inp=None, interrupt=True,
+# THE DEBUGGER'S ANSWER HAS NO GUEST CLOCK TO WAIT ON: it is the host
+# process replying at all, so the bound is a LIVENESS one and a healthy
+# reply returns at its prompt in ~20 ms whatever the bound is. 20 s was
+# measured on an idle box; under a soak's lanes (Bochs four a core, MartyPC
+# beside it) a reply took longer, and `mega-a2move` died inside
+# os88ui.boot before its test began. 60 s costs nothing when Bochs answers.
+DBG_TIMEOUT = 60.0
+
+
+def session(out, cmds, timeout=DBG_TIMEOUT, pids=None, inp=None, interrupt=True,
             at_prompt=None):
     """Break in, run the debugger commands CMDS, continue - and answer the
     transcript of the commands, read off OUT/e9.out (the debugger writes to
@@ -677,6 +686,12 @@ def session(out, cmds, timeout=20.0, pids=None, inp=None, interrupt=True,
     (inp or _input()).taken(stopped=None if interrupt else (lambda: True))
     n = os.path.getsize(e9)
     end = time.time() + timeout
+    if interrupt and _parked(e9, n):
+        # ALREADY STOPPED, by a breakpoint or a watchpoint (`lb`,
+        # `Box.watch_write`) nobody has answered yet: a SIGINT at the prompt
+        # is lost, so the prompt this would wait for never came and the
+        # stop died after TIMEOUT host seconds. Take the stop that is there.
+        interrupt = False
     if not interrupt:
         # ALREADY STOPPED (a breakpoint hit): the prompt it printed is the
         # one before n, so start the transcript there
@@ -692,6 +707,13 @@ def session(out, cmds, timeout=20.0, pids=None, inp=None, interrupt=True,
         if _PROMPT.search(text) and text.rstrip(" ").endswith(">"):
             break
         if interrupt and time.time() > kick:    # a signal lost at a prompt
+            if _parked(e9, os.path.getsize(e9)):
+                # ...because a breakpoint stopped it between the check
+                # above and the signal: that prompt is the stop
+                with open(e9, "rb") as f:
+                    k = f.read().decode("latin-1").rfind("<bochs:")
+                n, interrupt = (k if k >= 0 else n), False
+                continue
             for p in (pids if pids is not None else running()):
                 os.kill(p, 2)
             kick = time.time() + 1.0
@@ -729,6 +751,17 @@ def session(out, cmds, timeout=20.0, pids=None, inp=None, interrupt=True,
             break
         time.sleep(0.002)
     return text[stop_at:]
+
+
+_AT_PROMPT = re.compile(r"<bochs:\d+> $")
+
+
+def _parked(e9, size):
+    """Does E9's transcript end at an UNANSWERED debugger prompt - Bochs
+    stopped and waiting, the guest writing nothing meanwhile?"""
+    with open(e9, "rb") as f:
+        f.seek(max(0, size - 64))
+        return bool(_AT_PROMPT.search(f.read(size).decode("latin-1")))
 
 
 def xp_bytes(text):
@@ -807,6 +840,8 @@ class Box(object):
                     else IPS_N)
         self._map = None
         self.captured = False
+        self._wspans = None         # (watch_write)
+        self.watched = []
         self.inp.regrab = False
         self.out = out
         self.e9 = os.path.join(out, "e9.out")
@@ -1079,7 +1114,7 @@ class Box(object):
                 raise RuntimeError("os88bochs: %.2f guest seconds not run in "
                                    "%.0f host seconds" % (secs, 30 + 10 * secs))
 
-    def at_prompt(self, cmds, timeout=20.0):
+    def at_prompt(self, cmds, timeout=DBG_TIMEOUT):
         """`dbg` for a machine that is ALREADY at the debugger's prompt -
         stopped on a breakpoint (`lb`): run CMDS, continue, answer the
         transcript. No signal is sent."""
@@ -1089,18 +1124,44 @@ class Box(object):
             self.inp.regrab = True
         return t
 
-    def dbg(self, cmds, timeout=20.0):
+    def dbg(self, cmds, timeout=DBG_TIMEOUT):
         """`session` on this machine: the commands' transcript.
 
         A STOP RELEASES THE MOUSE: Bochs drops its capture whenever the
         debugger takes over, so after one the next move and click reach
         nobody. Once `capture` has been called this re-captures after every
         stop, so a read can sit between two moves."""
-        t = session(self.out, cmds, timeout, pids=[self.p.pid],
-                    inp=self.inp)
+        extra = ["xp /%dbx 0x%x" % (k, a) for a, k in self._wspans or ()]
+        t = session(self.out, list(cmds) + extra, timeout,
+                    pids=[self.p.pid], inp=self.inp)
         if self.captured:
             self.inp.regrab = True  # the next input re-captures first
+        if extra:
+            got = xp_bytes(t)
+            self.watched.append(tuple(got.get(a, b"")[:k]
+                                      for a, k in self._wspans))
         return t
+
+    def watch_write(self, name, spans):
+        """STOP THE GUEST at every write to kernel label NAME (a Bochs write
+        watchpoint, one byte), and from now on read SPANS - [(label or
+        linear, length)] - in EVERY stop of this Box, appending them to
+        `self.watched` as a tuple of bytes. A stop the watchpoint made waits
+        at its prompt, the guest frozen, until this Box's next stop takes it
+        (`session` answers an unanswered prompt rather than signalling), so
+        no write is ever missed however long the host takes to look: this is
+        how a row reads state the guest overwrites on its own clock - a
+        single-slot record polled on the HOST's clock missed every incident
+        that fell in a host stall (megaflt, 2026-11-06)."""
+        self._wspans = [(self.sym(a) if isinstance(a, str) else a, k)
+                        for a, k in spans]
+        self.dbg(["watch write 0x%x 1" % self.sym(name)])
+
+    def unwatch(self):
+        """`watch_write` undone: every watchpoint gone, in a stop that
+        takes one still waiting, before input the guest must run to take."""
+        self.dbg(["unwatch"])
+        self._wspans = None
 
     def reads(self, spans):
         """[bytes] for each (address or label, length) in SPANS, all in ONE

@@ -1846,30 +1846,33 @@ FAST = [
         "arriving as modules, a new mod_tab row is the one path every one of "
         "them takes, and the place to refuse it is the next `make`. It reads "
         "that a drop is WRITTEN; that it is reached is stiknodesk's G"),
-    Row("toast", "fast", py("tests/unit/t_toast.py"), 1.1,
-        "EVERY FIXED TOAST MESSAGE FITS THE BAR (SPEC.md 59.10). toast_show "
-        "copies at most TOAST_MAX = 24 characters and drops the rest "
-        "SILENTLY, and that cap is GEOMETRY rather than a budget: the clock's "
-        "field is 25 cells on every screen this runs on and 59.9.2's gap "
-        "takes one, so it cannot be raised without moving the toast back "
-        "somewhere a window can cover it. kernel/toast.inc claimed in as many "
-        "words that 'every message in the tree was revised to fit' - true of "
-        "the tree it was written on, held by nothing, and a bug report off an "
-        "86Box 286 found TWENTY-ONE over the cap in six files. Ten were in "
-        "HIBER.DRV, a MODULE the original sweep never walked, and the cut "
-        "lands on the word that carries the meaning: 'Hibernation file is "
-        "from another build' arrives as 'Hibernation file is from'. IT "
-        "OVER-APPROXIMATES ON PURPOSE - a toast argument arrives in SI, AX or "
-        "BX, through wrappers and shared jmp tails and sometimes composed at "
-        "run time, so this takes every db string any TOASTING procedure loads "
-        "and walks callers to a fixed point. That cannot MISS a fixed string, "
-        "which is the direction that matters; the false positives (a routine "
-        "that draws an About box and toasts one line of it) are registered in "
-        "tests/toastlong.txt as a ratchet that starts at two. The closure is "
-        "249 of 13,158 top-level labels - 1.9% - so it is not converging on "
-        "the whole program. TOAST_MAX is READ out of kernel/toast.inc, never "
-        "copied. VERIFIED RED three ways: a string put back to its old "
-        "length, a stale registry line, and lowering the cap.",
+    Row("toast", "fast", py("tests/unit/t_toast.py"), 2.0,
+        "EVERY STRING THAT CAN REACH A TOAST IS A TOASTSTR (SPEC.md 59.10.1). "
+        "toast_show keeps TOAST_MAX = 24 characters and drops the rest "
+        "SILENTLY, and the cap is geometry. The LENGTH is the assembler's: "
+        "TOASTSTR / TOASTRUN..TOASTEND (kernel.asm and apps/os88api.inc, held "
+        "identical here) emit the same bytes as the db they replaced and fail "
+        "the build at the line that wrote an over-long message. This row "
+        "proves nothing ELSE reaches a toast: from every call or jmp to "
+        "OSAPI_TOAST / toast_show / cw_toast_show / toast_say it walks the "
+        "argument register BACKWARDS - fall-through, every branch to a label "
+        "(so a wrapper's callers, by call, tail jmp or fall-in), every %if "
+        "arm, push/pop, register copies, callees that write it (from their "
+        "rets, filtered by the carry flag the caller branches on), word "
+        "tables and pointer variables - and every path must end at a "
+        "TOASTSTR, at a run-time value registered in tests/toastdyn.txt with "
+        "its reason (a ratchet), or it FAILS: a raw db, an unchecking macro, "
+        "an unknown label, an unmodelled instruction. Five earlier rounds "
+        "INFERRED toasts from their neighbourhood and passed what they did "
+        "not recognise; each missed a shape (colon-less labels, modules, a "
+        "package's .inc, a tail jmp) and shipped a cut message. The C half "
+        "measures every os88_toast literal, follows a parameter to its "
+        "callers and a local to its assignments. Also: TOASTRUN/TOASTEND "
+        "pairing (NASM says nothing of an unclosed context). TOASTDBG=<text> "
+        "prints the path to a registered source. VERIFIED RED: a TOASTSTR "
+        "turned back into a db, a string reached only through a new tail-jmp "
+        "wrapper, a stale toastdyn.txt line, an unclosed TOASTRUN, and the "
+        "two macro blocks made to differ. Measured at 1.9s",
         ),
     Row("textrules", "fast", py("tests/unit/t_textrules.py"), 0.7,
         "SPEC.md 6.6's ratchet: transparent text (font_char/font_str) draws every "
@@ -2424,6 +2427,26 @@ FULL = [
         "and not fast because the owner asked for it there; host-side, "
         "0.03s measured",
         needs=()),
+    Row("knobself", "full", py("tools/os88knob.py", "--selfcheck"), 0.5,
+        "tools/os88knob.py's merge, fuzzed: 400 random NASM-shaped files with "
+        "nested conditionals, two knobs' edits merged, and every knob "
+        "combination's view must equal its variant with every arm balanced. "
+        "Red, tried, twice: with regions that TOUCH widened instead of merged "
+        "(9 wrong), and with the balancing switched off (28 wrong) - the two "
+        "defects the merge had in kernel hot-paths pass 1. FULL: a tool's "
+        "own check, 0.4s measured",
+        needs=()),
+    Row("khpknobs", "full", py("tests/unit/t_khpknobs.py"), 4.0,
+        "every KHP_* knob in the kernel sources (kernel/kernel.asm's KHP "
+        "block: kernel hot-paths pass 1's rewrites of hot paths, eleven on "
+        "kern_mega and seven on NO kernel) assembles on kern_big and "
+        "kern_small with ALL of them on, so an arm no shipped build "
+        "assembles cannot rot unseen. Red, tried: one call in KHP_STRRUN's "
+        "arm aimed at a label that does not exist fails here while the "
+        "shipped kern_big still assembles. FULL and not fast: two kernel "
+        "assemblies, ~3.7s measured, and stkbalance's knobs-on walk already "
+        "reads these arms on every make",
+        needs=("nasm",)),
     Row("noovl", "full", py("tests/unit/t_noovl.py"), 0.1,
         "at the owner's word (SPEC.md 19.11): no shipped disk carries an "
         ".OVL beside a package - a program is one file, and anything it "
@@ -3231,9 +3254,11 @@ SOAK = [
     Row("assocflush", "soak", py("tests/assocflush.py"), 60.0,
         "SPEC.md 54.7.6: what the machine learns is written BACK to the "
         "volume's ASSOC.DAT. Five boots, every answer read off the floppy "
-        "the guest wrote: a cold B:\\APPS is ONE flush whose rows equal "
-        "os88disk's own builder; browsing it again is none; one new package "
-        "and seventeen cost the flush the same reads (the capture, 54.7.6.2); "
+        "the guest wrote: a cold B:\\APPS flushes rows that equal "
+        "os88disk's own builder, one flush per visit while 22.6.4's sixteen "
+        "peeks a listing are still learning APPS' 20 and none after; one new "
+        "package and sixteen cost the flush the same reads (the capture, "
+        "54.7.6.2); "
         "the next boot knows .TEX and .HTM from B:\\MEDIA and reads a third "
         "as much; a program found by a SWEEP has its row corrected; a full "
         "disk is tried once a session. Red with the harvest's asc_learn, the "
@@ -6911,8 +6936,12 @@ SOAK = [
         "THE C64'S 64KB RAM AND ITS PARTS CARVE MOVE and the 6510 keeps "
         "running (C64-SPEC 3.1.1, SPEC.md 73.14.2.1's CC_ONMOVE_PARTS): Note "
         "Pad, C64, then heapfrag; Note Pad closed and heapfrag's key-driven "
-        "region pass posted, which moves the RAM down, the region and the "
-        "ROM+overlay carve up. Asserts both MC_RLOCs, c64_m.ramseg on the new "
+        "region pass posted, which moves the region and the ROM+overlay "
+        "carve up and the RAM down - or the RAM across heapfrag's SUITE, from "
+        "a base read before heapfrag opens: on the 1MB kern_mega the suite's "
+        "compaction is the one that slides it (tests/emumove.py, WHERE THE "
+        "RAM MOVES). Asserts both MC_RLOCs, "
+        "c64_m.ramseg on the new "
         "claim, c64_m.romseg and cc_ovseg at the same distance above op_base, "
         "the ROM's first and last 16 bytes at the new romseg, c64_chr_seg on "
         "one of the two claims, and the cycle counter moving with no JAM. It "
@@ -13742,6 +13771,25 @@ SOAK = [
         "Delete QUESTION's row until the size pass took the alert out.",
         needs=("marty", "mtools"), timeout=600,
         wants=("build/os8088-360.img",)),
+    Row("navcalls", "soak", py("tests/navcalls.py"), 20.0,
+        "SPEC.md 18.95.11: a Disk-window navigation's int 13h CALLS, counted "
+        "off MartyPC's FDC (no time asserted; ~400 ms a call on the 5150). "
+        "A listing mount reads the boot sector, the FATs and the root's head "
+        "as one 8-sector fill, so on 360KB and 720KB: open a root 2, enter a "
+        "folder 2, Up 1. More is a regression worth ~0.4 s a call; fewer is "
+        "a change to explain. Red, tried: the pass's base (a7ee7fab) reads "
+        "4 / 3 / 3 on both geometries. 20.2s measured, both geometries",
+        needs=("marty",), wants=("build/os8088-720.img", "build/apps720.img")),
+    Row("fdswap", "soak", py("tests/fdswap.py"), 10.0,
+        "SPEC.md 18.95.11: a floppy SWAPPED under an open Disk window lists "
+        "the NEW disk at the next navigation, exactly as mtools reads it, "
+        "and the old one again when swapped back (MartyPC `mount`, three "
+        "guest seconds for the motor). The one-call listing mount empties "
+        "the cache before it reads LBA 0 through it, and that flush is what "
+        "keeps the re-tag from handing the old disk's chunks the new disk's "
+        "key. Red, tried: with the flush replaced by nops the swapped "
+        "listing is the old root (APPS, GAMES). 10.2s measured",
+        needs=("marty", "mtools")),
     Row("curdisk", "soak", py("tests/curdisk.py"), 50.0,
         "SPEC.md 7.4: the arrow TRACKS the hand through a disk transfer. It "
         "used to freeze with the machine and then LEAVE THE SCREEN - once an "
@@ -18957,7 +19005,7 @@ SOAK = [
         needs=("86box", "ffmpeg"),
         wants=("build/mega.img", "build/megak/apps/video.o88",
                "build/megak/apps/video.map", "build/megak/kernel.map")),
-    Row("vidrmbtwice", "soak", py("tests/vidrmbtwice.py"), 60.0,
+    Row("vidrmbtwice", "soak", py("tests/vidrmbtwice.py"), 150.0,
         "SPEC.md 53.2.3, 98.1.8.2, 98.3.24, KERN-MEGA-PLAN 14.131-14.134: "
         "the owner's Victory's sound and text defects, on 86Box's mr286 with "
         "an SB2.0 captured: a Catch-shaped clip named CATCH.V88 (nine "
@@ -18970,9 +19018,14 @@ SOAK = [
         "taken its ring; key 0's frame-0 sound), frame 1 drawn at least 0.6 "
         "of a frame after the card opens, and on kern_mega the text's glyphs "
         "the kernel's and play 2's Paused box play 1's. Red four ways, one "
-        "per fix. 46 s measured with the clip made once (ffmpeg + os88venc) "
-        "and the FONTSLOW tree built",
-        needs=("86box", "ffmpeg"),
+        "per fix. 150s is 146 MEASURED COLD (2026-11-06, a soak's load on "
+        "four cores): the private FONTSLOW tree is built inside the row on "
+        "a soak's first use - 87 s wall and 98 CPU-s of make alone, and "
+        "the timeout is charged in CPU, which a parallel make spends faster "
+        "than the wall clock (the soak's 60s-declared row died at 270 "
+        "CPU-s 221 s in, every leg passing). Warm it is 60 s; the timeout "
+        "is set for the cold build, as atblit's and knobhd's are",
+        needs=("86box", "ffmpeg"), timeout=600,
         wants=("build/megaapps.img", "build/os8088.img", "build/video.o88",
                "build/video.map")),
     Row("vidrmbfrag", "soak", py("tests/vidrmb.py"), 50.0,

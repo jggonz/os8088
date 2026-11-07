@@ -275,9 +275,9 @@ mega_hbs    dw 0, 0                 ; a run's source and what is left of it,
 mega_hbr    dw 0, 0                 ; the bounce's linear base and its fill
 mega_hbbl   dw 0, 0                 ; (hiber.inc's hbm_xwrite, hbm_xres)
 mega_hbf    dw 0
-mega_s_kbdos db "Use this disk's DOS.O88", 0 ; mega_pkgok's refusal
+TOASTSTR mega_s_kbdos, "Use this disk's DOS.O88" ; mega_pkgok's refusal
 %ifdef MEGA_DIAG
-mega_dstr   db "DOSP 0000K o 0000 b 0000", 0    ; the trip, on the menu bar:
+TOASTSTR mega_dstr, "DOSP 0000K o 0000 b 0000"  ; the trip, on the menu bar:
                                     ; KB parked, ms out, ms back (decimal;
                                     ; MEGADIAG=1, KERN-MEGA-PLAN 14.65)
 %endif

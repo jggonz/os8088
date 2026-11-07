@@ -612,7 +612,7 @@ static void w_gsay(const char *s)
     w_ls("Formula: ");
     w_ls(s);
     os88_strcpy(w_serr, w_line, sizeof(w_serr));
-    os88_toast("Formula refused - see Info", 0);
+    os88_toast("Formula bad - see Info", 0);
 }
 
 /* ============================================================================

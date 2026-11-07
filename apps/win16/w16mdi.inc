@@ -303,7 +303,7 @@ W16TSK w16i_exitwin
     xor dx, dx
     ret
 
-w16i_s_norst: db 'No restart is needed', 0       ; (short: a toast's box is)
+TOASTSTR w16i_s_norst, 'No restart is needed'    ; (short: a toast's box is)
 
 ; THE ATOMS (SPEC.md 124.25.10): one table of W16_NATOM names in this part,
 ; read and written through a data segment for it - Windows' clipboard

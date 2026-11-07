@@ -1546,9 +1546,9 @@ cc_ovbind:                          ; the thunk's retf in step - there is no
 %ifndef CC_OVL_PART                ; ...and a PART has none of the three: its
 section .data                       ; refusals are the parts standard's own
 cc_ovfile:  db CC_PKG_NAME, '.OVL', 0
-cc_ovm_mem: db 'No RAM: ', CC_PKG_NAME, 0
-cc_ovm_gone:db 'No ', CC_PKG_NAME, '.OVL', 0
-cc_ovm_stale: db 'Old ', CC_PKG_NAME, '.OVL', 0
+TOASTSTR cc_ovm_mem, 'No RAM: ', CC_PKG_NAME
+TOASTSTR cc_ovm_gone, 'No ', CC_PKG_NAME, '.OVL'
+TOASTSTR cc_ovm_stale, 'Old ', CC_PKG_NAME, '.OVL'
 section .text
 %endif                              ; (op_s_*, apps/os88partsbody.inc)
 %endif  ; CC_HAS_OVL

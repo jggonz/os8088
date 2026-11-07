@@ -815,7 +815,7 @@ TV_CLASSIC_X equ 91
 TV_CLASSIC_W equ 83
 tv_classic_box: dw 0, 0, 0, 0, tv_s_classic, 0
 tv_ostripes: db 0             ; [thm_cstrp] when the window opened (bits 0-2)
-tv_s_nowin: db 'Could not load WIN95.DRV', 0
+TOASTSTR tv_s_nowin, 'Could not load WIN95.DRV'
 tv_stripes: db 0
 tv_classic: db 0
 tv_live_style: db 0

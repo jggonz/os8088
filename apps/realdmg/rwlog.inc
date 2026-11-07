@@ -913,9 +913,13 @@ rw_s_levts:     db ' RESET', 0
                 db ' REC-', 0, 0
                 db ' PLAY+', 0
                 db ' PLAY-', 0
-rw_s_logon:     db 'Log on: written at close', 0
-rw_s_logok:     db 'Log: ', 0, '           ', 0
-rw_s_logrm:     db 'No room for the log', 0 ; (a toast shows 24 characters)
-rw_s_logwr:     db 'Log: no room to write', 0
-rw_s_logoff:    db 'Log is off (Machine)', 0
-rw_lerr:        db 'Log: ', 0, '                  ', 0 ; ...and a refusal's
+TOASTSTR rw_s_logon, 'Log on: written at close'
+TOASTRUN rw_s_logok
+                db 'Log: ', 0, '           ', 0
+TOASTEND
+TOASTSTR rw_s_logrm, 'No room for the log'  ; (a toast shows 24 characters)
+TOASTSTR rw_s_logwr, 'Log: no room to write'
+TOASTSTR rw_s_logoff, 'Log is off (Machine)'
+TOASTRUN rw_lerr
+                db 'Log: ', 0, '                  ', 0 ; ...and a refusal's
+TOASTEND

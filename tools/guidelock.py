@@ -57,7 +57,9 @@ SRC_EXT = (".asm", ".inc", ".c", ".h", ".py", ".md", ".txt", ".wtx")
 
 
 # --- the strings a user reads -----------------------------------------------
-_ASM_DB = re.compile(r"\bdb\b(.*)$", re.I)
+# `db`, and TOASTSTR - a toast's text is written with the macro (SPEC.md
+# 59.10), and it is as much a string a user reads as any `db`
+_ASM_DB = re.compile(r"\b(?:db|TOASTSTR)\b(.*)$", re.I)
 _QUOTED = re.compile(r"'([^']*)'|\"([^\"]*)\"")
 _C_STR = re.compile(r'"((?:[^"\\\n]|\\.)*)"')
 

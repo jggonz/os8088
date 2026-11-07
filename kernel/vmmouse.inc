@@ -234,7 +234,7 @@ vmm_poll:
     pushf
     cli
     MOUPRIV_ENTER
-    call mou_apply
+    call mou_apply_w            ; (CL bits 2-7 are the wheel, vmmabi.inc)
     MOUPRIV_LEAVE
     popf
 .more:

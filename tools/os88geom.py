@@ -332,10 +332,10 @@ _MIRROR = {
     "FM_CHCOLW": ("kernel/files.inc", 72),
     "FM_BTN_W": ("kernel/files.inc", 63),
     "FM_BTN_H": ("kernel/files.inc", 14),
-    # kernel/toast.inc - the strip's message (SPEC.md 59)
+    # kernel/kernel.asm, beside TOASTSTR - the strip's message (SPEC.md 59.10)
     # TOAST_MAX is the TIGHT one by its own comment, so a local copy that is
     # one short truncates exactly the message it was added to read.
-    "TOAST_MAX": ("kernel/toast.inc", 24),
+    "TOAST_MAX": ("kernel/kernel.asm", 24),
     "KERNEL_SEG": ("kernel/kernel.asm", 0x0060),
     # kernel/memory.inc - the claim table (SPEC.md 50)
     # PER ARM (docs/plans/KERN-SMALL-CUT-PLAN.md D1/D7): kern_small holds TWENTY claim records. The SDK

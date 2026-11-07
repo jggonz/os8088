@@ -407,7 +407,9 @@ assoc_find:
 ;      DX = the row stride
 ; out: CF=0 with BX -> the row and AL = its index; CF=1 = none (BX past the
 ;      table)
-; clobbers: AX, BX (the outputs), flags
+; clobbers: AX, BX (the outputs), flags. CX comes back as it came WITHOUT a
+;           bank: the one write to it, `xor ch, ch`, is inside the row's own
+;           push/pop (kernel hot-paths pass 1, size: -2)
 ;
 ; assoc_find's walk of the extension rows and assoc_app_of's of the stems were
 ; the same loop at two widths and two strides (kernel size pass 5). "In use"
@@ -415,24 +417,22 @@ assoc_find:
 ; row never matches, whatever the key.
 ; -----------------------------------------------------------------------------
 assoc_scan:
-    push cx
     push di
+    push es                     ; ES = DS ONCE, not once a row (kernel
+    push ds                     ; hot-paths pass 1): the key and the row are
+    pop es                      ; both the kernel's, and nothing in the walk
+    cld                         ; touches ES - the same bytes, out of the loop
     xor ax, ax                  ; AL = the row index
 .row:
     cmp byte [bx], 0
     je .next                    ; a free slot never matches
     push cx
     push si
-    push es
-    push ds
-    pop es                      ; the key and the row are both the kernel's
     mov di, bx
     xor ch, ch
-    cld
     repe cmpsb                  ; CL >= 1 bytes, so ZF = 1 and CF = 0 exactly
-    pop es                      ; when all CL matched (kernel size pass 10,
-    pop si                      ; -5); `pop` writes no flag
-    pop cx
+    pop si                      ; when all CL matched (kernel size pass 10,
+    pop cx                      ; -5); `pop` writes no flag
     je .out
 .next:
     add bx, dx
@@ -441,8 +441,8 @@ assoc_scan:
     jb .row
     stc
 .out:
+    pop es
     pop di
-    pop cx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1522,11 +1522,10 @@ assoc_s_games:  db 'GAMES', 0
 ; bytes read on into the name. It was assoc_progname writing a second copy
 ; of the same name into a 13-byte tail of its own (kernel size pass 5).
 ; 6 + 12 + 1 = 19 bytes, inside a toast's TOAST_MAX of 24.
-assoc_pnbuf:    db 'Needs '
+TOASTRUN assoc_pnbuf
+                db 'Needs '
 assoc_fnb:      times 13 db 0   ; '<STEM>.O88', built by assoc_fname
-%if 6 + 8 + 5 > TOAST_MAX + 1
-  %error "assoc_pnbuf's toast is longer than TOAST_MAX"
-%endif
+TOASTEND
 
 section .bss
 ; **THESE THREE CELLS ARE THE PUBLISHED LOCATOR, IN ITS OWN ORDER** (SPEC.md

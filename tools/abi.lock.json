@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "67a6fc9cb35f8d59c68cb4fed86c1c7e7f855a4bea7e9ab1350d6d8503d664b1",
+  "fingerprint": "9897275d1de41377ab98e82419e1204a163a6d1b14adc80ccb19a8387bead69f",
   "version": 12
  },
  "PKG_FMT": {
-  "fingerprint": "f8bf4f293edda3d74cab7cdd7fa67086d649321d002910a11c72586e25c1a237",
+  "fingerprint": "0970b202fca06bf2ed9667ff3c51121bce57e8bd16eaed6af18b931798dd2311",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -1778,6 +1778,20 @@
    "from": 12,
    "guard": "DRV_VER",
    "reason": "merge of WIN16-NEXT's O8 (SEG_TYPE CX=2/CX=3, SPEC 50.6.11) with main's PCIETHER.DRV round; additive, everything built before still runs - no bump",
+   "to": 12
+  },
+  {
+   "fingerprint": "0970b202fca06bf2ed9667ff3c51121bce57e8bd16eaed6af18b931798dd2311",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "TOAST_MAX and the TOASTSTR/TOASTRUN/TOASTEND macros (SPEC.md 59.10.1): assembly-time macros and a constant, no cell moved or re-contracted - everything built before still runs",
+   "to": 10
+  },
+  {
+   "fingerprint": "9897275d1de41377ab98e82419e1204a163a6d1b14adc80ccb19a8387bead69f",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "TOAST_MAX and the TOASTSTR/TOASTRUN/TOASTEND macros (SPEC.md 59.10.1): assembly-time macros and a constant, no cell moved or re-contracted - everything built before still runs",
    "to": 12
   }
  ]

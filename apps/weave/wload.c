@@ -286,8 +286,7 @@ static int ovl_open(void *win, const char *name, unsigned size_lo,
          *    kernel from the machine, which SPEC.md 47 forbids. See the
          *    report; it is a missing thunk, not a missing decision. */
         if ((w_flags & WABF_CANVAS) && !ovl_can_canvas()) {
-            w_fail("This app draws on a canvas (GFX_BLIT1); "
-                   "this kernel does not carry it.");
+            w_fail("Kernel has no canvas");   /* (GFX_BLIT1) */
             return 1;
         }
     } else {
@@ -331,8 +330,7 @@ static int ovl_open(void *win, const char *name, unsigned size_lo,
             return 1;
         }
         if ((w_flags & WABF_CANVAS) && !ovl_can_canvas()) {
-            w_fail("This app draws on a canvas (GFX_BLIT1); "
-                   "this kernel does not carry it.");
+            w_fail("Kernel has no canvas");   /* (GFX_BLIT1) */
             return 1;
         }
     }
@@ -366,7 +364,7 @@ static int ovl_open(void *win, const char *name, unsigned size_lo,
         return 1;
     }
     if (w_glderr == 2) {
-        w_fail("WEAVE could not load its overlay; no bundle can open.");
+        w_fail("WEAVE overlay won't load");
         return 1;
     }
 
@@ -382,11 +380,11 @@ static int ovl_open(void *win, const char *name, unsigned size_lo,
         return 1;
     }
     if (w_cldstate == 2) {
-        w_fail("WEAVE could not load its overlay; no bundle can open.");
+        w_fail("WEAVE overlay won't load");
         return 1;
     }
     if (w_cldstate == 3) {              /* op_fetch has toasted the reason */
-        w_fail("WEAVE could not load its canvas core.");
+        w_fail("Canvas core won't load");
         return 1;
     }
     w_lay_cw = -1;                      /* force the walk on the next paint */
@@ -585,7 +583,7 @@ static int ovl_find_open(void *win)
 
 static void w_ovlgone(void)
 {
-    w_fail("WEAVE could not load its overlay; no bundle can open.");
+    w_fail("WEAVE overlay won't load");
 }
 
 static void w_open(void *win, const char *name, unsigned size_lo,

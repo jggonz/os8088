@@ -623,7 +623,7 @@ void os88_onkey(int ascii, int scan, void *win)
         pmc_full = !pmc_full;
         if (os88_fullscreen(win, pmc_full) < 0) {
             pmc_full = 0;
-            os88_toast("Another window is full screen.", 36);
+            os88_toast("Other window full screen", 36);
         }
         return;
     }
@@ -632,7 +632,7 @@ void os88_onkey(int ascii, int scan, void *win)
         pmc_full = !pmc_full;
         if (os88_fullscreen(win, pmc_full) < 0) {
             pmc_full = 0;
-            os88_toast("Another window is full screen.", 36);
+            os88_toast("Other window full screen", 36);
         }
         return;                   /* the kernel repaints us either way */
     }
@@ -818,7 +818,7 @@ void os88_oncmd(int item, int menu, void *win)
         pmc_full = !pmc_full;
         if (os88_fullscreen(win, pmc_full) < 0) {
             pmc_full = 0;
-            os88_toast("Another window is full screen.", 36);
+            os88_toast("Other window full screen", 36);
         }                         /* refused or taken, the worker's next frame
                                    * puts back whatever the card covered - and
                                    * when it was taken the kernel repaints us

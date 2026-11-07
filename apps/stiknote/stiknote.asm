@@ -850,12 +850,12 @@ sn_dnotes:  db 'NOTES', 0
 sn_nname:   db 'NOTE00nn.TXT', 0        ; sn_new writes the number in
 sn_newtxt:  db 'New note', 13, 10       ; line 1, the title: a write wants a
 SN_NEWLEN   equ $ - sn_newtxt           ; byte, and Note Pad gets a line
-sn_s_full:  db 'Notes folder is full', 0
-sn_s_nos:   db 'Note not saved', 0
-sn_s_big:   db 'Note is over 16 KB', 0
-sn_s_qdel:  db 'Delete again to confirm', 0
+TOASTSTR sn_s_full, 'Notes folder is full'
+TOASTSTR sn_s_nos, 'Note not saved'
+TOASTSTR sn_s_big, 'Note is over 16 KB'
+TOASTSTR sn_s_qdel, 'Delete again to confirm'
 
-sn_s_about: db 'Sticky Note by jggonz', 0
+TOASTSTR sn_s_about, 'Sticky Note by jggonz'
 sn_empty:   db 0                    ; OSAPI_PKG_START's empty program name
 
 %include "sntext.inc"

@@ -1186,7 +1186,7 @@ int ovl_file_load(void *win, const char *name, unsigned lo, unsigned hi)
      * drive: 116KB off a floppy is ten seconds of motor, and a refusal after
      * the read is indistinguishable to the user from a load that worked. */
     if (hi != 0 || lo > (unsigned)CW_RTF_MAX) {
-        cw_toast("That file is too large for this program.");
+        cw_toast("That file is too large.");
         return 0;
     }
     cw_rtfn = (int)os88_file_read(name, cw_rtf, (unsigned)CW_RTF_MAX);
@@ -1197,7 +1197,7 @@ int ovl_file_load(void *win, const char *name, unsigned lo, unsigned hi)
      * which answers CW_RTF_NOTRTF for anything under five bytes, and the user
      * was told their RTF was not an RTF file. */
     if (cw_rtfn == 0 && os88_ferr() != OS88_FERR_OK) {
-        cw_toast("Could not read that file.");
+        cw_toast("Cannot read that file.");
         return 0;
     }
     r = ovl_rtf_parse(cw_rtfn);
@@ -1206,9 +1206,9 @@ int ovl_file_load(void *win, const char *name, unsigned lo, unsigned hi)
         return 0;
     }
     if (r == CW_RTF_TRUNC)
-        cw_toast("The document was truncated to fit.");
+        cw_toast("Truncated to fit.");
     else if (r == CW_RTF_DEEP)
-        cw_toast("That file nests too deeply.");
+        cw_toast("File nests too deeply.");
 
     cw_cur = 0;
     cw_top = 0;
@@ -1226,12 +1226,12 @@ int ovl_file_store(void *win, const char *name)
     int r;
 
     if (ovl_rtf_build() < 0 || cw_ovf) {
-        cw_toast("This document is too large to save as RTF.");
+        cw_toast("Too large to save as RTF");
         return 0;
     }
     r = os88_file_write(name, cw_rtf, (unsigned)cw_rtfn);
     if (r != 0) {
-        cw_toast("Could not write that file.");
+        cw_toast("Cannot write that file.");
         return 0;
     }
     os88_strcpy(cw_fname, name, sizeof(cw_fname));
@@ -1423,7 +1423,7 @@ int ovl_util(void *win, int which)
             cw_rtf[n++] = '\n';
         }
         if (n == 0) {
-            cw_toast("No headings found - a heading is a short paragraph.");
+            cw_toast("No headings found.");
             return 0;
         }
 
@@ -1451,7 +1451,7 @@ int ovl_util(void *win, int which)
                                          * m characters went in above it */
         if (cw_cur > cw_len)
             cw_cur = cw_len;
-        cw_toast("Table of contents inserted at the top.");
+        cw_toast("Contents put at the top.");
     }
 
     cw_touch();

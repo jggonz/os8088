@@ -2327,12 +2327,12 @@ mega_hexb:
     inc di
     ret
 section .text                   ; (KERN-MEGA-SEGMENTS-PLAN: back from .mega)
-mega_nmis   db "NMI ss xnn cccc:iiii", 0
-mega_nmid   db "NMI ss W llllll nn", 0
-mega_rsts   db "RST 3E aa>bb 3F cc>dd", 0
-mega_fdrs   db "FDC RESET R nn F nn", 0
-mega_rfs    db "RFL rrrr/s uuuu", 0
-mega_pms    db "Q cc ss oo bb vv rr", 0
+TOASTSTR mega_nmis, "NMI ss xnn cccc:iiii"
+TOASTSTR mega_nmid, "NMI ss W llllll nn"
+TOASTSTR mega_rsts, "RST 3E aa>bb 3F cc>dd"
+TOASTSTR mega_fdrs, "FDC RESET R nn F nn"
+TOASTSTR mega_rfs, "RFL rrrr/s uuuu"
+TOASTSTR mega_pms, "Q cc ss oo bb vv rr"
 mega_rfdiv  db 18                   ; ticks to the next mega_rfsec
 mega_fdpre  dw 0                    ; 40:3E/3F before a 286 reset...
 mega_fdpost dw 0                    ; ...and the first different after one
@@ -8501,8 +8501,8 @@ mega_fdlin  dw 0, 0                 ; the buffer's 24-bit address
 mega_fdcnt  dw 0                    ; bytes - 1
 mega_fdres  times 7 db 0            ; ST0 ST1 ST2 C H R N
 %ifdef MEGA_DIAG                    ; MEGADIAG=1's two toasts (14.65)
-mega_tfdoff db "Floppy: BIOS from now", 0
-mega_tfdfb  db "FD BIOS ss s0s1s2 Dmm", 0
+TOASTSTR mega_tfdoff, "Floppy: BIOS from now"
+TOASTSTR mega_tfdfb, "FD BIOS ss s0s1s2 Dmm"
 mega_fdtold db 0                    ; 1 = mega_tfdfb has been shown this boot
 mega_fdglab db " n t b c p f m.i.r e.g.j.v s.d.x" ; mega_fdgdraw's labels,
 mega_fdgbuf times 80 db 0           ; two bytes a field ('.' = no space)
@@ -13224,7 +13224,8 @@ mega_wbind:
 
 ; mega_bown - DX:AX = a base, BL = a window's owner (mega_segown's) -> CF = 0
 ; the block it lies in is that owner's: a conventional claim recorded under
-; the slot, a pool block under 0A0h | slot (a claim) or the bare slot (its
+; the slot or the package's segment (I_SPTR: mem_own records a package's
+; own claims under it), a pool block under 0A0h | slot (a claim) or the bare slot (its
 ; OSAPI_XMEM_ALLOC block), or a driver's pool block under its 0C0h | row. A
 ; REGION (80h | slot) is not a block a window binds into. CF = 1 someone
 ; else's, nobody's, or in no block - so neither mega_wset's re-bind nor
@@ -13279,12 +13280,18 @@ mega_bown:
     jmp short .no
 .f:
     xor bh, bh
-    cmp [ss:si+MC_OWN], bx
-    jne .no
-.yes:
-    clc
-.o:
-    pop es
+    mov ax, [ss:si+MC_OWN]          ; the slot (a claim the kernel made for
+    cmp ax, bx                      ; the instance)...
+    je .yes
+    cmp bl, INST_MAX
+    jae .no
+    shl bx, 5                       ; ...or THE PACKAGE'S SEGMENT, which is
+    cmp ax, [bx+inst_tab+I_SPTR]    ; what every claim it makes itself is
+    jne .no                         ; recorded under (mem_own, SPEC.md 50.2;
+.yes:                               ; mega_fown reads both): matched against
+    clc                             ; the slot alone, a package's own claim
+.o:                                 ; was nobody's and SEG_BWIN refused it
+    pop es                          ; on a 1MB machine (14.139's follow-up)
     pop si
     pop dx
     pop cx
@@ -14540,10 +14547,10 @@ mega_ldtd:                          ; the LDT's descriptor (GDT entry 3)
 mega_mrm    db "kern_mega: ", 0     ; ...the debug port's line is the toast's
 %endif
 %ifdef MEGA_DIAG                    ; the field build names the way BACK
-mega_mtoast db "protected, 286 reset", 0
-mega_mtoast3 db "protected, 386 CR0", 0
+TOASTSTR mega_mtoast, "protected, 286 reset"
+TOASTSTR mega_mtoast3, "protected, 386 CR0"
 %else                               ; ...a shipped one only that it got in,
-mega_mtoast db "Entered protected mode", 0 ; which is true on any CPU
+TOASTSTR mega_mtoast, "Entered protected mode" ; which is true on any CPU
 %endif
 
 section .mega
@@ -14555,10 +14562,10 @@ section .mega
 ; above 1MB with the rest of `.mega` and are never read. mega_gateb (the boot
 ; blob) and mega_enterf name them as offsets only, which os88ovlchk enforces
 ; ovlchk: rung data
-mega_t86    db "No PM: 8086-class CPU", 0
-mega_tmem   db "No PM: no table room", 0
-mega_ta20   db "No PM: A20 will not open", 0
-mega_ttask  db "No PM: an older task", 0
+TOASTSTR mega_t86, "No PM: 8086-class CPU"
+TOASTSTR mega_tmem, "No PM: no table room"
+TOASTSTR mega_ta20, "No PM: A20 will not open"
+TOASTSTR mega_ttask, "No PM: an older task"
 ; ovlchk: end rung data
                                 ; protected mode only from here
                                 ; (KERN-MEGA-SEGMENTS-PLAN)

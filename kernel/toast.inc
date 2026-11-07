@@ -82,7 +82,7 @@
 
 section .text
 
-TOAST_MAX   equ 24              ; characters, AND IT IS THE TIGHT ONE (SPEC.md
+; TOAST_MAX = 24 (kernel.asm, beside TOASTSTR) characters, AND IT IS THE TIGHT ONE (SPEC.md
                                 ; 59.8). The clock's field is ([vid_wm8] -
                                 ; [vid_clk_hx]) / 8 = 200/8 = 25 cells on
                                 ; every screen this runs on - 640 and 720 both
@@ -103,10 +103,13 @@ TOAST_MAX   equ 24              ; characters, AND IT IS THE TIGHT ONE (SPEC.md
                                 ; - and the sweep behind it found TWENTY-ONE
                                 ; over the cap in six files, ten of them in
                                 ; `HIBER.DRV`, which is a MODULE and was never
-                                ; walked. `tests/unit/t_toast.py` is the gate
-                                ; now: it reads this very `equ` rather than
-                                ; carrying a copy, and `tests/toastlong.txt`
-                                ; is the ratchet its false positives live in
+                                ; walked. Inferring which strings were toasts
+                                ; missed a shape every round after that, so
+                                ; the length is now the ASSEMBLER's: a fixed
+                                ; message is a TOASTSTR (kernel.asm), which
+                                ; fails the build at its own line when it is
+                                ; long, and tests/unit/t_toast.py proves every
+                                ; toast argument is one
 TOAST_TICKS equ 55              ; ~3.0 s at 18.2 Hz: long enough to read eight
                                 ; words on a 4.77MHz machine, short enough
                                 ; that it is gone before it becomes furniture
@@ -364,7 +367,8 @@ toast_say:
 ; toast_now - draw a staged toast on the spot, IF the caller provably holds
 ;             the gfx lock (SPEC.md 59.4)
 ; in:       a toast staged; called from toast_show only
-; out:      nothing (all registers preserved)
+; out:      nothing; AX is SPENT - toast_show leaves by kret_di straight after,
+;           which puts it back (kernel hot-paths pass 1, size: -2)
 ;
 ; A message put up BEFORE a long operation has to be on the glass before the
 ; machine goes quiet - Paint says `Encoding...` and then spends seconds on
@@ -385,7 +389,6 @@ toast_say:
 ; tick late, which is right for a background job and costs nothing.
 ; -----------------------------------------------------------------------------
 toast_now:
-    push ax
     cmp word [gfx_lock_flag], 1 ; HELD (flag = 1) **and owned by task 0** (own
     jne .outa                   ; = 0) in ONE word read: the two bytes are
                                 ; declared adjacent in vga12.inc and a 0-byte
@@ -422,7 +425,6 @@ toast_now:
     pop ax
     mov [gfx_color], al
 .outa:
-    pop ax
     ret
 
 toast_ad:                       ; toast_now's painter: arm, then the bar

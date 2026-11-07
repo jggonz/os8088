@@ -2101,7 +2101,7 @@ ct_i_data:   dw ct_it_auto
              dw ct_labels + 7 * (CT_NAME_MAX + 1)
 ct_it_auto:  db 'Automatic', 0
 ct_s_columnsp: db 'Column ', 0
-ct_s_nocol:  db 'No data in that column.', 0
+TOASTSTR ct_s_nocol, 'No data in that column.'
 
 ct_m_file:   db 'File', 0
 ct_i_file:   dw ct_it_open, ct_it_exp
@@ -2134,12 +2134,12 @@ ct_ab2:        db 'Charts a column of a sheet', 0
 ct_ab3:        db 0
 ct_ab4:        db 'Contributed by Koriban', 0
 ct_s_chartbmp: db 'CHART.BMP', 0
-ct_s_noexp:    db 'No chart to export.', 0
-ct_s_experr:   db 'Chart export failed.', 0
-ct_s_exported: db 'Chart exported.', 0
-ct_s_readerr:  db 'Could not read that file', 0
-ct_s_nomem:    db 'Not enough memory.', 0
-ct_s_noval:    db 'No numeric data found.', 0
+TOASTSTR ct_s_noexp, 'No chart to export.'
+TOASTSTR ct_s_experr, 'Chart export failed.'
+TOASTSTR ct_s_exported, 'Chart exported.'
+TOASTSTR ct_s_readerr, 'Could not read that file'
+TOASTSTR ct_s_nomem, 'Not enough memory.'
+TOASTSTR ct_s_noval, 'No numeric data found.'
 
 ; stage: shared rasterizer + BMP writer - see that file's own header
 ; comment for the CH_* constants and ch_* bss words it requires, both

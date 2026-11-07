@@ -169,7 +169,7 @@ static void lm_prev_on(void)
     ok = ovl_pack();
     if (!ok && !lm_failed()) {
         lm_pack_free();
-        lm_say("LOOM could not load its overlay; Preview cannot compile.");
+        lm_say("LOOM overlay won't load");
         return;
     }
     if (!ok) {
@@ -283,7 +283,7 @@ static void lm_prev_paint(void)
     int ok;
 
     lm_ed_caret_off();
-    lm_say("Preview: layout and controls only - Weave runs the app");
+    lm_say("Preview: layout only");
 
     if (lm_pvseg == 0) {
         lm_prev_note(lm_pv_why());

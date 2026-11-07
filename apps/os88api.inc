@@ -5871,8 +5871,10 @@ OSAPI_SAVEU_1BPP equ 2           ; ...and bit 1: "and my content is two
                                  ; is 25 cells on every screen this runs on,
                                  ; and one of them is the gap that keeps it
                                  ; off the progress widget. So WRITE THE
-                                 ; MESSAGE TO FIT - a fixed string that does
-                                 ; not is a message nobody can read, and
+                                 ; MESSAGE WITH TOASTSTR (below), which fails
+                                 ; the build when it does not fit - a fixed
+                                 ; string that does not is a message nobody
+                                 ; can read, and
                                  ; `Sent to the running Audio Player` arrived
                                  ; as `Sent to the running Au` for a year
                                  ; because this paragraph was not here. A name
@@ -5896,6 +5898,54 @@ OSAPI_SAVEU_1BPP equ 2           ; ...and bit 1: "and my content is two
                                  ; the UI task draws. So a worker may call it,
                                  ; and so may a callback holding the gfx lock.
                                  ; CF = 1 refused. Preserves all but the flags
+
+; TOAST_MAX / TOASTSTR / TOASTRUN..TOASTEND - how a FIXED toast message is
+; written (SPEC.md 59.10). OSAPI_TOAST shows TOAST_MAX characters and drops
+; the rest silently, so a message is never a bare `db`:
+;
+;   TOASTSTR label, 'text'      emits exactly `label: db 'text', 0`
+;   TOASTRUN label ... TOASTEND  a RUN of db lines (inner labels for fields
+;                                you poke at run time) whose bytes before the
+;                                LAST NUL must fit
+;
+; and an over-length message FAILS TO ASSEMBLE at the line that wrote it,
+; saying how long it is. tests/unit/t_toast.py proves every string that
+; reaches OSAPI_TOAST is one of these, or a buffer you build at run time that
+; tests/toastdyn.txt names with its reason. The kernel carries the same block
+; (kernel/kernel.asm), and t_toast.py holds the two identical.
+; ---- BEGIN TOAST MACROS (t_toast.py compares this block with kernel.asm's)
+TOAST_MAX   equ 24
+%macro TOASTSTR 1-2+
+%1:
+%if %0 > 1
+    db %2
+%endif
+%%end: db 0
+%assign %%n %%end - %1
+%assign %%cap TOAST_MAX
+%if %%n > TOAST_MAX
+  %error TOASTSTR %1 is %[%%n] characters and a toast shows TOAST_MAX = %[%%cap] (SPEC.md 59.10) - shorten it
+%endif
+%endmacro
+%macro TOASTRUN 1
+%push toastrun
+%define %$at %1
+%1:
+%endmacro
+%macro TOASTEND 0
+%ifnctx toastrun
+  %error TOASTEND without a TOASTRUN above it
+%else
+%assign %%n $ - %$at - 1
+%assign %%cap TOAST_MAX
+%if %%n > TOAST_MAX
+  %error TOASTRUN %$at holds %[%%n] characters before its last NUL and a toast shows TOAST_MAX = %[%%cap] (SPEC.md 59.10) - shorten it
+%endif
+%pop
+%endif
+%endmacro
+; ---- END TOAST MACROS
+
 %define OSAPI_EVQ_PENDING   KERNEL_SEG:0x027A   ; out AX = events still queued
                                  ; behind the one being dispatched (SPEC.md
                                  ; 13.4). "Am I about to be asked to do this

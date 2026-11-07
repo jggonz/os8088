@@ -288,8 +288,8 @@ def _carry_inputs(d):
                 os.path.realpath(os.path.join(d, sub)):
             continue
         for n in os.listdir(src):
-            if not n.upper().endswith(".EXE"):
-                continue
+            if not n.upper().endswith((".EXE", ".DLL")):
+                continue                # PBRUSH.EXE needs its PBRUSH.DLL
             s = os.path.join(src, n)
             t = os.path.join(d, sub, n)
             if os.path.isfile(s) and not os.path.exists(t):

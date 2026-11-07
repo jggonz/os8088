@@ -2616,9 +2616,9 @@ w16_tpl:
 
 w16_title:      db 'WIN16', 0
 %ifdef PKG_MEGA
-w16_s_pm:       db 'WIN16 needs kern_mega', 0
+TOASTSTR w16_s_pm, 'WIN16 needs kern_mega'
 %else
-w16_s_pm:       db 'WIN16 needs real mode', 0
+TOASTSTR w16_s_pm, 'WIN16 needs real mode'
 %endif
 w16_s_idle1:    db 'WIN16 runs Windows 3.x programs.', 0
 w16_s_idle2:    db 'Double-click one in a Disk window.', 0

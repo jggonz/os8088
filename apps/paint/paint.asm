@@ -16381,7 +16381,7 @@ pt_ab_4:     db 'Contributed by Elendilon', 0
 %endif
 pt_q_pre:     db 'Save changes to ', 0   ; SPEC.md 42.16, + a name + '?'
 pt_s_anon:    db 'this picture', 0
-pt_s_nowin:   db 'No LDT entry: damaged', 0
+TOASTSTR pt_s_nowin, 'No LDT entry: damaged'
 pt_s_defname: db 'PICTURE.'
 pt_s_ebmp:    db 'BMP', 0           ; the extension is the default name's tail
 %ifdef PTF_GIF
@@ -16390,23 +16390,23 @@ pt_s_egif:    db 'GIF', 0
 pt_gstep:     db 8, 8, 4, 2         ; the interlaced row passes: step...
 pt_gstart:    db 0, 4, 2, 1         ; ...and where each one starts
 %endif
-pt_s_crop:   db 'Would crop artwork', 0
-pt_s_noram:  db 'No memory to resize', 0
+TOASTSTR pt_s_crop, 'Would crop artwork'
+TOASTSTR pt_s_noram, 'No memory to resize'
 pt_s_wlab:   db 'W', 0
 pt_s_hlab:   db 'H', 0
 pt_s_apply:  db 'Apply', 0
 %ifdef PTF_FSX
-pt_s_nofsx:  db 'The screen is not free', 0
+TOASTSTR pt_s_nofsx, 'The screen is not free'
 %endif
-pt_s_nodlg:  db 'Leave Full Screen first', 0
+TOASTSTR pt_s_nodlg, 'Leave Full Screen first'
 %ifdef PTF_UNDO
-pt_s_nu:     db 'No RAM for undo here', 0
+TOASTSTR pt_s_nu, 'No RAM for undo here'
 %endif
 %ifdef PTF_CLIP
-pt_s_nc:     db 'No RAM for clipboard', 0
+TOASTSTR pt_s_nc, 'No RAM for clipboard'
 %endif
 %ifdef PTF_GIF
-pt_s_ng:     db 'No RAM for GIF here', 0
+TOASTSTR pt_s_ng, 'No RAM for GIF here'
 %endif
 
 ; --- the window template (SPEC.md 11; x/y/w/h patched by pt_geom) -------------
@@ -16506,38 +16506,40 @@ pt_i_full:   db 'Full Screen  ^F', 0
 
 ; --- the notice windows (indexed by [pt_mode] - 1) ---------------------------
 pt_notice:   dw pt_s_nomem, pt_s_small
-pt_s_nofill: db 'No RAM for flood fill', 0
+TOASTSTR pt_s_nofill, 'No RAM for flood fill'
 pt_s_nomem:  db 'Not enough memory.', 0
 pt_s_small:  db 'The screen is too small.', 0
 pt_s_note2:  db 'Close this window.', 0
 
 ; --- toasts ------------------------------------------------------------------
-pt_s_wrote:   db 'Saved', 0
-pt_s_opened:  db 'Opened', 0
-pt_s_decbmp:  db 'Decoding BMP', 0   ; SPEC.md 42.15: the half of an open that
+TOASTSTR pt_s_wrote, 'Saved'
+TOASTSTR pt_s_opened, 'Opened'
+TOASTSTR pt_s_decbmp, 'Decoding BMP' ; SPEC.md 42.15: the half of an open that
 %ifdef PTF_GIF
-pt_s_decgif:  db 'Decoding GIF', 0   ; SPEC.md 12.8's widget cannot see
-pt_s_encgif:  db 'Encoding GIF'      ; ...nor the encode before a save
-pt_s_none:    db 0                 ; an empty toast RETIRES one (59.3)
+TOASTSTR pt_s_decgif, 'Decoding GIF' ; SPEC.md 12.8's widget cannot see
+TOASTRUN pt_s_encgif               ; ...nor the encode before a save -
+              db 'Encoding GIF'    ; whose NUL is pt_s_none, the empty
+TOASTSTR pt_s_none                 ; toast that RETIRES one (59.3)
+TOASTEND
 %endif   ; PTF_GIF
 %ifdef PTF_GIF
-pt_s_nofmt:   db 'Only BMP and GIF', 0
+TOASTSTR pt_s_nofmt, 'Only BMP and GIF'
 %else
-pt_s_nofmt:   db 'Only BMP', 0      ; ...and it must SAY so (SPEC.md 42.22)
+TOASTSTR pt_s_nofmt, 'Only BMP'     ; ...and it must SAY so (SPEC.md 42.22)
 %endif
-pt_s_badpic:  db 'Unreadable picture', 0
-pt_s_bigpic:  db 'Picture too big', 0
-pt_s_nocomp:  db 'No compressed BMP', 0
-pt_s_nodepth: db 'Need 1/4/8/24-bit BMP', 0
+TOASTSTR pt_s_badpic, 'Unreadable picture'
+TOASTSTR pt_s_bigpic, 'Picture too big'
+TOASTSTR pt_s_nocomp, 'No compressed BMP'
+TOASTSTR pt_s_nodepth, 'Need 1/4/8/24-bit BMP'
 %ifdef PTF_GIF
-pt_s_toobig:  db 'GIF too big - try Bmp', 0
+TOASTSTR pt_s_toobig, 'GIF too big - try Bmp'
 %endif
-pt_s_nostage: db 'No memory to open file', 0
-pt_s_gifbig:  db 'GIF larger than 64KB', 0
-pt_s_trunc:   db 'Cropped - use Save As', 0
-pt_s_reduce:  db 'Reduced - use Save As', 0
+TOASTSTR pt_s_nostage, 'No memory to open file'
+TOASTSTR pt_s_gifbig, 'GIF larger than 64KB'
+TOASTSTR pt_s_trunc, 'Cropped - use Save As'
+TOASTSTR pt_s_reduce, 'Reduced - use Save As'
 %ifdef PTF_CLIP
-pt_s_bigsel:  db 'Selection too big', 0
+TOASTSTR pt_s_bigsel, 'Selection too big'
 %endif
 
 ; --- brush widths: the pencil's four, then the eraser's ----------------------

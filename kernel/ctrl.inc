@@ -800,8 +800,10 @@ CPV_FCLX  equ CPV_FCX + 18                  ; 128: label left, CP_PLX's gap
 ; string and a second table slot would have been 26 bytes of an image rung
 ; with 27 in it (docs/KERNEL-MEMORY.md), so this is also the affordable
 ; answer, and it is the right one first.
-cp_s_noload: db 'Needs Sys Disk '
+TOASTRUN cp_s_noload
+             db 'Needs Sys Disk '
 cp_s_nodrv:  db 'A:', 0         ; stamped by dsk_bootltr (SPEC.md 52.10.3)
+TOASTEND
 cp_opentab: dw 0, cp_s_noload
 CP_NOPEN  equ 2
 
@@ -3491,7 +3493,7 @@ cp_dock_click:
     pop ax
     ret
 
-cp_dock_fail: db 'Dock Module Unavailable', 0
+TOASTSTR cp_dock_fail, 'Dock Module Unavailable'
 
 %endif
 
@@ -5402,13 +5404,15 @@ cp_flush_x:
     pop si
     jmp kretm_cx
 cp_dsvt:    dw cp_s_dsok, cp_s_dserr, cp_s_dsdsk ; [cp_dsave] = 0, 2 and 1, read `cs:`
-cp_s_dsok:  db 'Settings Saved', 0
-cp_s_dserr: db 'Not saved: disk error', 0
-cp_s_dsdsk: db 'Not Saved: No Sys in '
+TOASTSTR cp_s_dsok, 'Settings Saved'
+TOASTSTR cp_s_dserr, 'Not saved: disk error'
+TOASTRUN cp_s_dsdsk
+            db 'Not Saved: No Sys in '
 cp_s_dsdrv: db 'A:', 0          ; the letter, copied in above: the system
                                 ; volume is not A: on a machine booted from a
                                 ; hard disk, and a message that names the
                                 ; wrong drive is worse than one that names none
+TOASTEND
 
 ; -----------------------------------------------------------------------------
 ; cp_flush_cfg - [cp_wdirty]'s half of cp_flush_close_x, and the SETTINGS
@@ -7402,7 +7406,9 @@ CPS cp_s_tdrk,  'Dark'
 %ifdef KERN_BIG
 CPS cp_s_tclr,  'Color'         ; ...and the third, VGA's alone (SPEC.md 76.12)
 CPS cp_s_twin,  'Windows'       ; ...and the fourth (SPEC.md 76.14)
-CPS cp_s_tnowin, 'WIN95.DRV not loaded'   ; ...and its refusal (76.14.1)
+TOASTSTR cp_s_tnowin, 'WIN95.DRV not loaded' ; ...and its refusal (76.14.1),
+                                ; a TOAST, so TOASTSTR's bound (24) and not
+                                ; CPS's (CP_SBUF 28, which it implies)
 %endif
 %ifdef WM_ANIM
 CPS cp_s_tanim, 'Window Animations'

@@ -14285,7 +14285,7 @@ vp_wmk:
     pop es
     stc
     ret
-vp_s_nowin: db 'No LDT entry free', 0
+TOASTSTR vp_s_nowin, 'No LDT entry free'
 .e:
     times ((.e - vp_wmk) & 1) nop   ; (what follows keeps its parity)
 
