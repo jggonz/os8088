@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "9897275d1de41377ab98e82419e1204a163a6d1b14adc80ccb19a8387bead69f",
+  "fingerprint": "63343e9acc62891e2a76d91d15f56aba3b292086003ca4a6130322ce376c5b34",
   "version": 12
  },
  "PKG_FMT": {
-  "fingerprint": "0970b202fca06bf2ed9667ff3c51121bce57e8bd16eaed6af18b931798dd2311",
+  "fingerprint": "0daf1607c08c2501190e88f1a2b42103bab8587a9f1c7d0c90b63b3eed2fa781",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -1792,6 +1792,20 @@
    "from": 12,
    "guard": "DRV_VER",
    "reason": "TOAST_MAX and the TOASTSTR/TOASTRUN/TOASTEND macros (SPEC.md 59.10.1): assembly-time macros and a constant, no cell moved or re-contracted - everything built before still runs",
+   "to": 12
+  },
+  {
+   "fingerprint": "0daf1607c08c2501190e88f1a2b42103bab8587a9f1c7d0c90b63b3eed2fa781",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "KERN-MEGA-PLAN 14.160: the KB DMA doors' contract says where an OS88_HIGHMEM package's head claim lands on kern_mega (a page-safe pool block), and OSAPI_MEM_P's that a head stays conventional - no cell moved, every package built before still runs",
+   "to": 10
+  },
+  {
+   "fingerprint": "63343e9acc62891e2a76d91d15f56aba3b292086003ca4a6130322ce376c5b34",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "KERN-MEGA-PLAN 14.160: the KB DMA doors' contract says where an OS88_HIGHMEM package's head claim lands on kern_mega (a page-safe pool block), and OSAPI_MEM_P's that a head stays conventional - no cell moved, every package built before still runs",
    "to": 12
   }
  ]

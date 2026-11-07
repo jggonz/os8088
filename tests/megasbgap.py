@@ -21,20 +21,29 @@ two costs a real-mode kernel has not, each a missed revolution a call:
   SETTLE  mega_fdgo sought and waited the head-settle time (15 ms) on every
           call, seek or not, and so lost the sector after the last call's.
 
-What must hold, from the capture: the play is there (at least 9.5 s from its
-first sound to its last), the FDC completed READ DATA commands during it, no
-silent stretch inside it is longer than 400 ms, and the silences inside it add
-up to under 1.5 s. kern_big on the same machine, measured: longest 100 ms,
-290 ms in all. This tree: longest 290-300 ms (the start, the ring's first
-pass), 880-940 ms in all. What is left is the look-ahead ring's own 64KB
-page: a pool claim crosses one, so one run a pass splits there (docs/plans/
-KERN-MEGA-PLAN.md 14.156 has the measurement and the choice it leaves).
+  PAGE    the look-ahead ring was a plain pool claim, which crossed a 64KB
+          physical page, so one run a pass split there and lost a
+          revolution. AUDIO claims it through the DMA door with all of it
+          the head (KERN-MEGA-PLAN 14.160), which on kern_mega is a pool
+          block below 16MB whose 32 KB lie inside one page.
 
-RED (docs/WRITING-TESTS.md 1), measured: the base tree (both costs) has a
-450-540 ms silence every 2.1 s, 3.57 s in all; SETTLE alone put back
-(OS88_MEGA_POKE='mega_fdgo.ss+0xD=9090', the head always sought) longest
-500 ms, 2.84 s; BOUNCE alone (OS88_MEGA_POKE='dsk_runcap.hi+0x10=9090')
-longest 450 ms, 2.24 s.
+What must hold: the ring, read off its DESCRIPTOR (AUDIO's [ap_la_seg]), is a
+pool block - based at or above 1MB, ending below 16MB, its 32 KB inside one
+64KB page; and from the capture, the play is there (at least 9.5 s from its
+first sound to its last), the FDC completed READ DATA commands during it, no
+silent stretch inside it is longer than 220 ms, and the silences inside it add
+up to under 700 ms. kern_big on the same machine, measured: longest 100 ms,
+290 ms in all. This tree, four runs: longest 90-150 ms, 290-530 ms in all.
+
+RED (docs/WRITING-TESTS.md 1), measured: PAGE put back - `--pkg` an
+AUDIO.O88 PKG_MEGA arm built from this tree with apengine.inc's base
+ap_ensure_bufs (the plain claim), `--src` that tree - the ring at 3C9C00,
+across 3D0000: the placement check fails, longest 290 and 350 ms, 870 and
+1,110 ms in all (each time check fails too). The base of 14.156 (both
+earlier costs) had a 450-540 ms silence every 2.1 s, 3.57 s in all; SETTLE
+alone put back (OS88_MEGA_POKE='mega_fdgo.ss+0xD=9090', the head always
+sought) longest 500 ms, 2.84 s; BOUNCE alone (OS88_MEGA_POKE=
+'dsk_runcap.hi+0x10=9090') longest 450 ms, 2.24 s.
 """
 import argparse
 import math
@@ -54,10 +63,12 @@ os.environ.setdefault("OS88_MEGA_EMU", "86box")
 import os88build  # noqa: E402
 import os88marty as M  # noqa: E402
 import os88ui  # noqa: E402
+import dispapps  # noqa: E402
+from cycweb import pkg_syms  # noqa: E402
 
 MACHINE = "at286_vga_sb"
 RATE, SECS, TONE = 22050, 10.0, 660.0
-LONGEST_MS, TOTAL_MS, MIN_PLAY = 400, 1500, 9.5
+LONGEST_MS, TOTAL_MS, MIN_PLAY = 220, 700, 9.5
 
 fails = []
 
@@ -121,8 +132,17 @@ def silences(path):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--keep", help="a directory to keep the capture in")
+    ap.add_argument("--pkg", help="an AUDIO.O88 (PKG_MEGA arm) to run instead of "
+                    "build/megak/apps/'s - the red leg's")
+    ap.add_argument("--src", default=ROOT,
+                    help="the tree whose apps/audio/ that package was built from")
     a = ap.parse_args()
-    pkg = os88build.at("build/megak/apps/audio.o88")
+    pkg = a.pkg or os88build.at("build/megak/apps/audio.o88")
+    syms, img = pkg_syms(os.path.join(a.src, "apps/audio/audio.asm"),
+                         (os.path.join(a.src, "apps") + "/",
+                          os.path.join(a.src, "apps/audio") + "/"), ("PKG_MEGA",))
+    if not a.pkg and img != open(os88build.at("build/megak/apps/audio.bin"), "rb").read():
+        sys.exit("megasbgap: build/megak/apps/audio.bin is not this source's - make mega")
     tmp = tempfile.mkdtemp(prefix="sbgap-")
     try:
         clip = os.path.join(tmp, "TONE22.WAV")
@@ -142,6 +162,16 @@ def main():
             reads = m.disk()["reads"] - r0
             check("the window is the Audio Player's",
                   any("Audio" in t for t in ui.titles()), "titles %s" % ui.titles())
+            got = dispapps.pkg_seg(m, 0)    # THE RING, off its descriptor
+            sel = got and int.from_bytes(m.readseg(int(got[1]), syms["ap_la_seg"], 2),
+                                         "little")
+            d = m.selector(sel) if sel else None
+            check("the look-ahead ring is a pool block, below 16MB, its 32 KB "
+                  "inside one 64KB page (the DMA door, 14.160)",
+                  d is not None and d[1] == 0x7FFF and 0x100000 <= d[0]
+                  and d[0] + d[1] < 0x1000000 and d[0] >> 16 == (d[0] + d[1]) >> 16,
+                  "selector %s, base, limit = %s" % (
+                      sel and "%04X" % sel, d and "%06X, %04X" % d))
         got = cap + ".sound_blaster.wav"
         if a.keep:
             os.makedirs(a.keep, exist_ok=True)

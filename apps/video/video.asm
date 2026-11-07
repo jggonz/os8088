@@ -17515,9 +17515,12 @@ vp_sndprep:
     call vp_rhave                   ; (real mode: the ring kept, 98.3.24)
     jnc .hwr
 %endif
-    mov ax, VP_RL / 1024 + 1        ; A CARD: the ring and its two control
-    mov cx, ax                      ; words, page-safe and never moved
-    call OSAPI_MEM_CLAIM_DMA_HI
+    push bx                         ; A CARD: the ring and its two control
+    mov ax, (VP_RL / 1024 + 1) * 64 ; words, page-safe and never moved, and
+    mov cx, ax                      ; CONVENTIONAL: the paragraph door with a
+    mov bl, MEMP_CLAIM_HI           ; head (vp_aseg is in vp_rlst, and
+    call OSAPI_MEM_P                ; kern_mega's KB DMA door would put it
+    pop bx                          ; above 1MB, KERN-MEGA-PLAN 14.160)
     jc .ret                         ; no room for it: the play is silent
 %ifdef PKG_MEGA
 .hwr:
@@ -23811,7 +23814,7 @@ vp_rclaim:
     jnz .s0                         ; (a gap: slot 0 and the slack)
     cmp ax, cx
     jb .s0
-    call OSAPI_MEM_CLAIM_DMA        ; every slot on the page grid...
+    call .p                         ; every slot on the page grid...
     jnc .r
 .s0:
     mov cx, bx                      ; ...or slot 0 at least
@@ -23820,9 +23823,29 @@ vp_rclaim:
     jbe .h
     mov cx, ax
 .h:
-    call OSAPI_MEM_CLAIM_DMA
+    call .p
 .r:
     pop cx
+    ret
+; .p - AX = KB, CX = the head's KB -> OSAPI_MEM_CLAIM_DMA's claim, but through
+; the PARAGRAPH door, which keeps a head conventional: kern_mega's KB DMA
+; door gives an OS88_HIGHMEM package a pool block for one (KERN-MEGA-PLAN
+; 14.160), and vp_ring is in vp_rlst - the real-mode bracket reads into it.
+; CF, DX; AX, BX and CX kept
+.p:
+    push ax
+    push bx
+    push cx
+    mov bx, cx
+    mov cl, 6
+    shl ax, cl                      ; paragraphs (SPEC.md 50.3.7)
+    shl bx, cl
+    mov cx, bx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; vp_rclk1 - vp_rclaim one slot fewer, for a COPYING BANK's ring, whose

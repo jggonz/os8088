@@ -14314,6 +14314,7 @@ constrains placement (an MC_DMA claim still moves when declared, SPEC.md
 because that door does not go high; (b) a page-safe pool door on kern_mega
 (`mega_claimhf` honouring a head below 16MB), so the DMA door's claims go
 high too - a change to the SB's and every other DMA claim's placement.
+**The owner chose (b); 14.160 is it.**
 
 **Row**: `megasbgap` (soak, 86Box at286_vga_sb): the play at least 9.5 s,
 the FDC reading during it, no silence inside it over 400 ms, under 1.5 s in
@@ -14460,6 +14461,130 @@ at 093400h, both region checks; no OS88_HIGHMEM - the six claim checks
 3C3000h; `wt_hoff` taking the sum always - HOLD, WaveRack closed at the
 load; `wc_myslot` comparing with CS (= DS on a real-mode kernel, DS - 8
 here) - SLOT, `[wc_slot]` FFh. Green: 37.5 s.
+
+### 14.160 The DMA door gives an OS88_HIGHMEM package a page-safe POOL block: AUDIO's look-ahead in one 64KB page (2026-11-07) - DONE
+
+**The owner's choice** of 14.156's two (2026-11-07): option (b) - the DMA
+door goes high too - over (a), AUDIO alone claiming its ring through a
+door that put 32KB back into conventional memory.
+
+**The design.** On kern_mega in protected mode both KB DMA doors
+(`OSAPI_MEM_CLAIM_DMA`, `_DMA_HI`) take a POOL arm when CX (the head) is not
+0: `mega_claimdf` (`.cold`) is `mega_claimhf`'s eligibility - 1..64KB, an
+`OS88_HIGHMEM` package (`0A0h | slot`) - narrowed to packages: a driver's
+head claim stays conventional whatever its header says (a driver's own 8237
+or bus-master code may not take a selector's base; SOUND.DRV's and HDD.DRV's
+are unchanged). It hands `mx_alloc` the head through a byte of the tables'
+tail (`mx_dmah`, set under `[sch_lock]`, cleared on every way out of
+`mx_alloc`); the top-down first fit moves a candidate whose head would
+straddle DOWN to end the head on the page's floor, and the take is
+`MX_FDMA | MX_FPIN` with the head's KB in `MX_AUX`. **Below 16MB by
+construction**: `mega_layoutf` caps the pool at 15MB above the first (the
+8237 and a 286 both stop at 16MB), so no test is needed and none was added -
+the brief's "machines with more than 16MB of pool" do not exist here.
+**Born pinned**, the pool's spelling of `MC_RLOC` = 0, because a ring a chip
+is armed on must not move under it and the pool has no proc to call;
+`OSAPI_MEM_MOVABLE` on such a block takes the pin off (AX not 0) and puts it
+back (AX = 0), calling no proc - the selector is the claim - where every
+other pool claim still refuses (`mega_dmamovf`). An unpinned one is moved by
+both pool passes only where its head stays inside a page (`mx_dmafit`:
+SPEC.md 66.4.2's bump, toward where the block is and no further, `mx_compactf`
+and `mx_packupf`), and an in-pool regrow that needs a new block carries the
+head (`mega_claimregrowf .grow`). CX = 0 is the plain claim and stays
+conventional (the carve, the overlay, every `xor cx, cx` caller), and
+`OSAPI_MEM_P` with a head stays conventional too - now the documented door
+for a page-safe buffer a real-mode path names (SPEC.md 50.3.7).
+
+**The chip side, proved by reading the driver.** SOUND.DRV turns an external
+ring into the 8237's address in `sbl_ring_phys`: `OSAPI_SEG SEG_LIN` on the
+selector (the descriptor's base: AX its low 16 bits, DL its page), plus the
+offset, a carry out of the low word being a page crossed (`jc` -> the open
+answers 7 for an external ring) - and `sbl_hw` writes the whole page byte to
+83h (or 8Bh/89h/8Ah, bit 0 ignored, for a 16-bit channel; a pool block is
+KB-aligned, so even). So a pool ring below 16MB is programmed exactly. The
+floppy's native path does its page arithmetic on the same base (`dsk_runcap`
+`.hi`, 14.156). A fixed disk's transfer into a pool block is still bounced a
+sector a call - the trade that decides the audit's two "kept low" rows.
+**And the router's gate had to learn it**: `osapi_snd_stream` refused every
+external ring above 1MB (`snd_ringhif`, AX = 2), because a plain pool claim
+may move under the chip. The first scoped pass found it - `mega-recorder`
+"Record did not open the input (ERROR 2)", `mega-midiracksb` "the output
+open did not happen", `waverackmega`'s play and take never starting: those
+are the change's red for the gate. `snd_ringhif` now takes a ring above 1MB
+when the pool block it starts is `MX_FDMA | MX_FPIN` - a DMA door's, pinned -
+and refuses every other as before (`.mega`, +64).
+
+**The audit** - every `OS88_HIGHMEM` package's KB DMA-door claim with a head
+(CX = 0 callers - RealDMG, Excitebike, WIN16's `w16sel`/`win16.asm`,
+`os88xgap.inc`, the Video Player's `vp_mclaim`/`vp_mclhi`, VBattle's
+`vb_rclaim`/`vbhold` - are unchanged):
+
+| package | claim | now | why |
+|---|---|---|---|
+| AUDIO | look-ahead, 32 KB, `OSAPI_MEM_CLAIM_DMA` CX = 32 (was `OSAPI_MEM_CLAIM`) | HIGH, page-safe | the point: every gulp one floppy run; the plain claim when no page-safe run exists; its MOVABLE toggles (`ap_rpin`/`ap_rdecl`) now pin and unpin it |
+| 1942 | PCM rings, 13 KB `_DMA_HI` | HIGH | SOUND.DRV's external ring (`sbl_ring_phys`); written through ES |
+| WireFleet | PCM rings, 13 KB `_DMA_HI` | HIGH | the same |
+| ARCADE | SB ring, `AR_SB_KB` `_DMA_HI` | HIGH | the same; born pinned, never declared |
+| Recorder | capture ring `RC_RKB` `_DMA_HI` | HIGH | an external capture ring, the same physical path |
+| XT-MP3 | external ring, 33 KB `_DMA_HI` | HIGH | the same; `x3_xseg` is only loaded into ES/DI |
+| MIDIRack | card ring `_DMA_HI` | HIGH | the same; `mrb_tc` reads it through ES |
+| WIN16 | waveIn ring (`w16mm_wimake`) `_DMA_HI` | HIGH | the same; `WI_RSEG` is only loaded into DS/DI |
+| PiXEL | `px_dmaclaim` (the ring, the head buffer) `_DMA` | HIGH | file reads through the kernel; the alignment test is on `SEG_LIN` (a pool block is KB-aligned); the second slot is a `SEG_SUB` |
+| `os88type.inc` (Word, Scribe, CWORD, WIN16, FontView) | a face, `_DMA` CX = its KB | HIGH | one `OSAPI_FILE_READ`; `SEG_LIN`'s alignment test passes; its MOVABLE now unpins it |
+| WaveRack (14.159, not edited here) | `wt_rseg`, `wc_rseg`, `_DMA_HI` | HIGH | SOUND.DRV external rings, the same path; `waverackmega` now expects the record ring above 1MB, page-safe |
+| VBattle | card ring `vb_ring` (2 sites) | KEPT LOW: `vb_ringclm`, `OSAPI_MEM_P` `MEMP_CLAIM_HI` with the head | `vb_ring` is in `vb_rlst`: the FSXF_REAL bracket feeds it in real mode, where a pool block has no segment (`os88real_prep` would refuse and the bracket fall back to protected mode) |
+| Video Player | card ring `vp_aseg` (`vp_sndprep`, `vcold`'s `vp_rclaims`), file ring `vp_ring` (`vp_rclaim`, PKG_MEGA) | KEPT LOW: `OSAPI_MEM_P` with the head | both in `vp_rlst`, the same reason |
+| SysCheck | the fsck workspace | KEPT LOW: `OSAPI_MEM_P` with the head | the engine moves a whole fixed disk through it, and a pool block there is bounced a call a sector |
+| `tests/megarmb` (megarmbs) | its rings | KEPT LOW: `OSAPI_MEM_P` | a real-mode bracket's rings, by design of the test |
+
+What WaveRack needs under the change: nothing - its two rings are
+`_DMA_HI` claims with a head that only SOUND.DRV turns into an address, so
+they go to the pool and play there; the one consequence is a Video Player
+`FSXF_REAL` bracket opened WHILE WaveRack streams falls back to protected
+mode (`fsx_rsndq`: SOUND.DRV's segment word then has no real segment) - as
+it would for any pool ring.
+
+**Bytes.** kern_big and kern_small are byte-identical (A/B at one commit:
+`make build/kernel.bin` and `make small` with mega-release's three kernel files,
+`cmp`). kern_mega: `.cold` 46,122 -> 46,232 (+110: `mega_claimdf`,
+`mega_dmahset`, `mega_dmamovf`, the two doors' arms, the regrow's head),
+`.mega` 23,264 -> 23,440 (+176: `mx_alloc`'s head and take, `mx_dmafit` and
+its two calls, `snd_ringhif`'s pool test) - both above 1MB; `.text`, `.bss`, `.lowbss` unchanged, the
+segment overhead 3,754 of 3,754, **MEGA_RESIDENT 62,976 before and after**.
+The tables' tail grew a byte inside its last 64-byte line (1,274 of 1,280).
+Packages (images): AUDIO 12,303 -> 12,315 (+12, even on purpose), its arm
+13,235 -> 13,247; the Video Player 60,307 -> 60,311, its arm 61,855 ->
+61,879; VBattle 28,421 -> 28,427; SysCheck 18,398 -> 18,406; megarmbs
+1,659 -> 1,661. The SDK's contract text changed (abilock recorded, no bump:
+no cell moved and everything built before still runs).
+
+**Measured** on 86Box's at286_vga_sb (the mr286, 4MB) by `megasbgap`: the
+ring at 3C8000h, limit 7FFFh - above 1MB, below 16MB, one page; four runs
+longest 90-150 ms, 290-530 ms in all (14.156's tree: 290-300 ms, 880-940 ms;
+kern_big 100 ms, 290 ms).
+
+**Row**: `megasbgap` gains the placement check (AUDIO's `[ap_la_seg]` off
+its descriptor) and its thresholds tighten to 220 ms and 700 ms. **RED**:
+`--pkg` an AUDIO arm built with the base `ap_ensure_bufs` (the plain claim) -
+the ring at 3C9C00h, across 3D0000h: placement FAIL, longest 290 and 350 ms,
+870 and 1,110 ms in all, both time checks over the new bars.
+`waverackmega` expects the record ring above 1MB and checks it below 16MB
+inside one page; **RED** `OS88_MEGA_POKE='mega_claimdf=f9cb'` (the pool arm
+refusing): the ring at 011200h, WHERE fails.
+
+**Rows run, scoped, all green after the gate's fix**: `megasbgap`,
+`waverackmega`, `mega-recorder`, `recorder`, `mega-midiracksb`,
+`mega-midiracksbmem`, `midiracksb`, `mega-audhand`, `mega-mixersb16`,
+`mega-dossnd`, `mega-dosirq`, `mega-vidsound`, `vidsnd`, `x3mega`,
+`megapixel`, `ringmove-audio`, `ringmove-audiospk`, `mega-ringmove-audio`,
+`ringmove-midirack`, `ringmove-wirefleet`, `vbtownsnd`, `vbt286`,
+`megarmb`, `megarmb286`, `megarmbref`, `megarmbext`, `syscheck`,
+`fsckmega`, `fsckdisk`, `fsckhd`, `mega-sndmove`, `mega-heapmap`,
+`mega-rdmove`, `mega-sheetmove`, `mega-paintmove`, `megahiber`,
+`megahibfull`. Not run: WIN16's waveIn on kern_mega (no row drives it),
+1942's, WireFleet's and ARCADE's SB rings on kern_mega (no row plays them
+there; the path is the Recorder's and MIDIRack's), `waverackrec` (2,400 s,
+WaveRack not edited).
 
 ### 14.162 The office packages' writes through CS: SHEET's macro and chart modules, WORD's and SCRIBE's documents (2026-11-07) - FIXED
 

@@ -117,9 +117,18 @@ ap_upcase:
 ap_ensure_bufs:
     cmp word [ap_la_seg], 0
     jne ap_rpin
+    push cx
     mov ax, 32                     ; AP_LA_SZ / 1024
-    call OSAPI_MEM_CLAIM           ; out CF, DX = base segment
-    jc .fail
+    mov cx, 32                     ; ALL OF IT PAGE-SAFE: the floppy's 8237
+    call OSAPI_MEM_CLAIM_DMA       ; writes every gulp straight into it, and
+    jnc .got                       ; a run across a 64KB page is split there,
+    call OSAPI_MEM_CLAIM           ; a revolution lost a pass (KERN-MEGA-PLAN
+.got:                              ; 14.160: on kern_mega a pool block). No
+    pop cx                         ; page-safe run: the plain claim, as before
+    jc .fail                       ; (out CF, DX = base segment; `mov cx, 32`
+                                   ; and not `mov cx, ax`: an EVEN +12, so
+                                   ; the player's code after it keeps its
+                                   ; word parity on a 16-bit bus)
     mov [ap_la_seg], dx
     jmp short ap_rpin              ; (born pinned; the speaker ring may not be)
 .fail:

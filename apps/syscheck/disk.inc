@@ -144,8 +144,13 @@ sc_dinit:
     call sc_fsk                     ; AX = the workspace's KB
     jc sc_dabort
     mov [sc_wkb], ax
-    mov cx, ax                      ; all of it page-safe: the engine moves
-    call OSAPI_MEM_CLAIM_DMA        ; sectors straight into it
+    mov cl, 6                       ; ALL OF IT PAGE-SAFE: the engine moves
+    shl ax, cl                      ; sectors straight into it - and
+    mov cx, ax                      ; CONVENTIONAL, the paragraph door with a
+    push bx                         ; head: kern_mega's KB DMA door would put
+    mov bl, MEMP_CLAIM              ; it above 1MB (KERN-MEGA-PLAN 14.160),
+    call OSAPI_MEM_P                ; where every fixed-disk sector of a
+    pop bx                          ; check is bounced a call each
     jnc .ws
     mov si, sc_t_nomem
     jmp sc_dfail
