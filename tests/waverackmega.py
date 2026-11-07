@@ -9,10 +9,13 @@
                                                   red leg: the base's)
 
 WaveRack has no PKG_MEGA arm: the shipped package runs on kern_mega as it
-is, with its region and claims in conventional memory (tests/megahigh.txt
-says why it declares neither OS88_HIGH nor OS88_HIGHMEM). Under CPU_F_PM
-every claim is an LDT SELECTOR all the same (KERN-MEGA-MEMORY-PLAN MC7), and
-two places treated a segment as a paragraph:
+is, and it declares OS88_HIGH and OS88_HIGHMEM (KERN-MEGA-PLAN 14.159), so
+its REGION and every claim of 64KB or less but two kinds are in the pool
+ABOVE 1MB there - the DMA rings, which the DMA door keeps conventional, and
+the I/O claim, which wo_ioclaim keeps conventional (MEMP_CONV) because every
+read of the document lands in it. Under CPU_F_PM every claim is an LDT
+SELECTOR wherever it is (KERN-MEGA-MEMORY-PLAN MC7), and two places were
+looked at for treating a segment as a paragraph:
 
   HOLD   wt_hoff addressed the playback HOLD - the region loaded first, one
          8-bit byte a frame, when the medium cannot keep up with the play
@@ -38,13 +41,31 @@ two places treated a segment as a paragraph:
          never FFh, which would leave the take's entry naming no recorder
          and Recover Take offering another window's live take.
 
-86Box's at286_vga_sb (the 286 with a Sound Blaster), build/mega.img in A:
-and a scratch B: of the package and the clip (OS88_MEGA_EMU=86box).
+  WHERE  the placement itself, read off the descriptors (m.selector: the
+         LDT entry's base), never off the class byte: in both legs the
+         REGION's selector is based at or above 1MB; in HOLD the hold, the
+         look-ahead, the waveform band, the view cache and the envelope are
+         too, and the I/O claim is below 640KB; in SLOT the take's staging
+         units are above 1MB, the record ring below 1MB, and the take is
+         written whole from them (no write failed, [wc_wrote] > 0). So the
+         row fails if the package stops declaring either bit, if a claim it
+         makes stops reaching the pool, if the I/O claim drifts up - and,
+         with everything high, if any of the code above takes a sum on a
+         selector, the hold's above all.
+
+86Box's at286_vga_sb (the 286 with a Sound Blaster, 4MB), build/mega.img in
+A: and a scratch B: of the package and the clip (OS88_MEGA_EMU=86box).
 
 RED (docs/WRITING-TESTS.md 1), measured: `--pkg` the base's WAVERACK.O88
-with `--src` the base tree - HOLD fails, the window gone at the load. SLOT
-passed on the base as well: it is a guard, the defect it watches for never
-having been there.
+with `--src` the base tree - HOLD fails, the window gone at the load
+(14.149's base). And on 14.159's tree, each broken on purpose and rebuilt
+(`--pkg`/`--src` a scratch copy): the class byte without OS88_HIGH - WHERE's
+region checks fail; without OS88_HIGHMEM - every claim check fails;
+wo_ioclaim's MEMP_CONV taken out - the I/O claim check fails; wt_hoff
+taking the paragraph sum always (14.149's defect, now on a pool claim) -
+HOLD fails, WaveRack closed at the load; wc_myslot comparing SSI_SEG with
+CS instead of DS (a real-mode identity: CS = DS for a package there) -
+SLOT fails, [wc_slot] FFh.
 """
 import argparse
 import os
@@ -71,6 +92,8 @@ CLIP = "PRELUDE.WAV"
 DEMO = os.path.join(ROOT, "apps", "waverack", "demo")
 WT_IDLE, WT_PLAY, WT_REC = 0, 1, 3
 I_STATE, I_SPTR, I_RECSZ = 0, 6, 32
+WS_ENV, WS_USED = 24, 27                # wrdoc.inc's source record
+ONE_MB, CONV_TOP = 0x100000, 0xA0000
 
 fails = []
 
@@ -92,11 +115,30 @@ class Rack(object):
         got = dispapps.pkg_seg(self.m, 0)
         return got and int(got[1])
 
-    def rd(self, name, n):
+    def rd(self, name, n, off=0):
         seg = self.seg()
         if not seg:
             return None
-        return int.from_bytes(self.m.readseg(seg, self.s[name], n), "little")
+        return int.from_bytes(self.m.readseg(seg, self.s[name] + off, n), "little")
+
+    def base(self, sel):
+        """the linear base of selector SEL, off its descriptor (None: none)"""
+        d = self.m.selector(sel) if sel else None
+        return d and d[0]
+
+
+def where(rk, what, sel, high):
+    """WHERE: selector SEL (a claim of WaveRack's, or its region) is based at
+    or above 1MB (HIGH) or below 640KB (not HIGH) - the descriptor's base"""
+    b = rk.base(sel)
+    if high:
+        ok = b is not None and b >= ONE_MB
+        side = "at or above 1MB"
+    else:
+        ok = b is not None and b < CONV_TOP
+        side = "conventional"
+    return check("WHERE: %s %s" % (what, side), ok,
+                 "selector %04X, base %s" % (sel or 0, "none" if b is None else "%06X" % b))
 
 
 def main():
@@ -162,6 +204,9 @@ def leg_slot(ui, w, rk):
     if not check("SLOT: Record starts a take", rk.rd("wt_state", 1) == WT_REC):
         return
     seg = rk.seg()
+    where(rk, "SLOT: the region", seg, True)
+    where(rk, "SLOT: the take's first staging unit", rk.rd("wc_useg", 2), True)
+    where(rk, "SLOT: the record ring (the DMA door's)", rk.rd("wc_rseg", 2), False)
     tab = m.read(m.sym("inst_tab"), 16 * I_RECSZ)
     want = None
     for i in range(16):
@@ -179,6 +224,9 @@ def leg_slot(ui, w, rk):
         if rk.rd("wt_state", 1) == WT_IDLE:
             break
     check("SLOT: Stop ends the take", rk.rd("wt_state", 1) == WT_IDLE)
+    check("SLOT: the take was written from the units above 1MB",
+          rk.rd("wc_dead", 1) == 0 and (rk.rd("wc_wrote", 4) or 0) > 0,
+          "[wc_dead] = %r, [wc_wrote] = %r" % (rk.rd("wc_dead", 1), rk.rd("wc_wrote", 4)))
 
 
 def leg_hold(ui, w, rk, data, r):
@@ -209,6 +257,17 @@ def leg_hold(ui, w, rk, data, r):
                  "titles %s, toast %r" % (ui.titles(), ui.toast())):
         return
     check("HOLD: the play took the hold", held == 1)
+    where(rk, "HOLD: the region", rk.seg(), True)
+    where(rk, "HOLD: the hold (wt_hseg)", rk.rd("wt_hseg", 2), True)
+    where(rk, "HOLD: the look-ahead (wt_laseg)", rk.rd("wt_laseg", 2), True)
+    where(rk, "HOLD: the waveform band (wr_bseg)", rk.rd("wr_bseg", 2), True)
+    where(rk, "HOLD: the view cache (we_vseg)", rk.rd("we_vseg", 2), True)
+    env = [rk.rd("wo_src", 2, i * 64 + WS_ENV) for i in range(4)
+           if rk.rd("wo_src", 1, i * 64 + WS_USED)]
+    check("HOLD: one live source", len(env) == 1, "envelopes %s" % env)
+    if env:
+        where(rk, "HOLD: its envelope (WS_ENV)", env[0], True)
+    where(rk, "HOLD: the I/O claim (wo_ioseg, MEMP_CONV)", rk.rd("wo_ioseg", 2), False)
     if "wt_hwin" in rk.s:
         check("HOLD: under a bound window (wt_hbwin)", win != 0, "[wt_hwin] = %04X" % (win or 0))
     lo = rk.rd("wt_hlo", 4)

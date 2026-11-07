@@ -56,7 +56,14 @@
 %include "wrart.inc"                ; its constants and the icon (the data
                                     ; half is included with the data, below)
 
-    OS88_HEADER 'WaveRack', wr_entry, OS88_F_ICON
+    OS88_HEADER 'WaveRack', wr_entry, OS88_F_ICON, OS88_HIGH | OS88_HIGHMEM
+                                    ; ABOVE 1MB on kern_mega, region and claims
+                                    ; (KERN-MEGA-PLAN 14.159): no sum on DS, CS
+                                    ; or a claim - the hold's is a bound window
+                                    ; (wt_hbwin), wc_myslot compares DS with
+                                    ; I_SPTR, which IS it - and the one disk
+                                    ; buffer, the I/O claim, stays conventional
+                                    ; (wo_iofit, MEMP_CONV)
     OS88_ICON16                     ; a rack panel with a wave on its LCD
     WRART_ICON16
     OS88_ICON16_END

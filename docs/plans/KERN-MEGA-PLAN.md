@@ -14383,3 +14383,80 @@ still finds its image. Resident cost none (the stub and the module).
 the base (no ordinary boot after the refusal), RED with each of 1 and 1+2
 alone (this item's probes: the key never taken; then 3 checks failed, the
 question asked again and both files kept), green with all three.
+
+### 14.159 WaveRack declares OS88_HIGH and OS88_HIGHMEM: the last two lines of megahigh.txt (2026-11-07) - DONE
+
+**The owner** (2026-11-07): *"we are ratcheting towards everything being
+high. If waverack isn't, yet, then set an agent to making it be able to
+be so."* WaveRack was the one package left in `tests/megahigh.txt`, once
+for each bit. Both lines go; the registry is empty.
+
+**What was looked at, and what it found.** Every claim WaveRack makes, every
+segment register it loads from a general register, every far pointer and
+every call that hands a segment out (`OSAPI_SND_STREAM`'s verbs, the file
+cells, the drawing slots):
+
+- **`high`'s line: `wc_myslot` (wrrec.inc) needs no change.** It compares
+  `SSI_SEG` with DS - a value, not a sum - and `ld_hi` publishes the high
+  pair's DATA selector as `I_SPTR` (loader step 9), which IS DS; the kernel's
+  own `inst_pkg_fence` makes the same identity test. Nothing else reads DS or
+  CS as a number: `wd_tseg` is loaded into ES and nothing more, and verb 6
+  (the grant's stage) is copied by the kernel from the caller's DS, as for
+  AUDIO, which has said OS88_HIGH since 14.44.
+- **`highmem`'s line named the wrong second buffer.** The look-ahead is not
+  a disk target: `wt_rd1` reads into the I/O claim and `wt_lacopy` copies
+  out of it, as `wt_hput` does into the hold and `ws_` into the save's
+  output claim. The disk transfers are three: reads into the I/O claim, and
+  writes from the take's staging units and the save's output claim.
+- **The hold** was the one sum (14.149's fix, `wt_hbwin`/`wt_hoff`), and a
+  pool claim takes a bound window as a conventional one does (`mega_bown`
+  matches `0A0h | slot`). `t_megagrid` now sees the package as OS88_HIGH and
+  counted `wt_hoff`'s real-mode `.sum`: registered in `tests/megagrid.txt`
+  with the reason (taken only while the window IS the claim, which only a
+  real-mode kernel answers), as x3hold's is.
+- **The rings** are `OSAPI_MEM_CLAIM_DMA_HI` claims and stay conventional by
+  that door; nothing else of WaveRack's reaches DMA or a BIOS call.
+
+**The change** (`apps/waverack/`): the class byte says `OS88_HIGH |
+OS88_HIGHMEM` (stack class unchanged, the default); and `wo_iofit` claims
+the I/O claim through `wo_ioclaim` - `OSAPI_MEM_P`, `CX = MEMP_CONV` - so it
+stays conventional: every read of the document lands there, the stream's
+against its deadline, and a fixed disk's transfer into a pool block is
+bounced nine sectors a call through the read-ahead's landing (10.3 item 85,
+14.156). Every other claim of 64KB or less goes to the pool: the band, the
+envelopes, the view cache, the history, the hold, the look-ahead, the take's
+units and the save's output claim - the writes from the last two have
+seconds in hand and a floppy's go natively since 14.156. **One choice for the
+owner, not taken**: the I/O claim could go high too. With `MEMP_CONV` taken
+out (the red leg below) HOLD still loaded PRELUDE.WAV whole and played it to
+its end on the mr286; a streamed play from a fixed disk was not measured.
+Conventional is the line's own retirement condition and the safe side, so
+it stays - noted, as 14.51 asks of every claim that stays low, against
+14.52.4's three tests: held while a document is open (not only in active
+use: test 1 open), claimed bottom-up (test 2 met), PINNED as it was before,
+as every WaveRack claim is (test 3 open). 16-33KB.
+
+**Bytes.** No kernel byte: kern_big, kern_small and kern_mega's kernels are
+untouched. `WAVERACK.O88`'s image 43,938 -> **43,955** (+17: `wo_ioclaim`'s 21
+bytes, its two near calls 2 bytes each shorter than the far ones they
+replace; and byte 15 changed), packed
+33,745 -> **33,776** (+31), bss unchanged (7,779). The one package runs on
+every kernel; on kern_big and kern_small the class bits are ignored and
+`MEMP_CONV` is read as no head - the claim it always made.
+
+**Measured** on 86Box's at286_vga_sb (the mr286, 4MB) by `waverackmega`,
+off the descriptors: the region's pair based at 3D1400h; the hold 3BCC00h,
+the look-ahead 3B4C00h, the band 3CEC00h, the view cache 3C5000h, the
+envelope 3C6000h, a take's unit 3BF400h - all above 1MB; the I/O claim at
+011200h and the record ring conventional. PRELUDE.WAV held and played whole,
+a take written from the high units, `[wc_slot]` the instance's row.
+
+**Row**: `waverackmega` gains WHERE - the placement read off the LDT
+descriptors (`m.selector`), not the class byte, in both legs, and the take
+written from the units (`[wc_dead]` 0, `[wc_wrote]` > 0). **RED, each built
+into a scratch tree and run with `--pkg`/`--src`**: no OS88_HIGH - the region
+at 093400h, both region checks; no OS88_HIGHMEM - the six claim checks
+(hold 019E00h, ...); `MEMP_CONV` out of `wo_ioclaim` - the I/O claim at
+3C3000h; `wt_hoff` taking the sum always - HOLD, WaveRack closed at the
+load; `wc_myslot` comparing with CS (= DS on a real-mode kernel, DS - 8
+here) - SLOT, `[wc_slot]` FFh. Green: 37.5 s.

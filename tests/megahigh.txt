@@ -32,29 +32,9 @@
 
 # --- high --------------------------------------------------------------------
 
-high apps/waverack/waverack.asm   # ITS OWN DS COMPARED WITH THE SNAPSHOT: wc_myslot
-    # (apps/waverack/wrrec.inc) finds the instance's slot - the recovery
-    # markers' name for the recorder (SPEC.md 123.7) - as the
-    # OSAPI_SYS_SNAPSHOT record whose SSI_SEG equals DS. A VALUE compared, not
-    # summed, and on kern_mega with the region in conventional memory it holds:
-    # `waverackmega`'s SLOT leg reads [wc_slot] = the instance's inst_tab row,
-    # I_SPTR being the region's data selector, which is DS (KERN-MEGA-PLAN
-    # 14.149). Not yet run with the region ABOVE 1MB, which is the one thing
-    # the bit changes. Retired by declaring OS88_HIGH with waverackmega passing
-    # there - the owner's full-tier gate.
-
+# (none: WaveRack's, the last, retired by KERN-MEGA-PLAN 14.159)
 
 # --- highmem -----------------------------------------------------------------
 
-highmem apps/waverack/waverack.asm   # ITS DISK BUFFERS ARE CLAIMS: the I/O claim (16KB,
-    # wrdoc.inc) and the look-ahead (32KB, wrxport.inc) are what every read
-    # of the document lands in, and under OS88_HIGHMEM a claim of 64KB or
-    # less goes above 1MB, where a floppy read BOUNCES sector by sector
-    # (RealDMG measured minutes for a 1MB load on a 286) - a stream that
-    # already cannot keep up on a floppy would never play. The hold, the
-    # other claim that was here, is no longer stepped by paragraph: under
-    # CPU_F_PM wt_hoff re-aims a bound window over it (SEG_BWIN/SEG_AIM,
-    # KERN-MEGA-PLAN 14.149, `waverackmega`), which a pool block takes as
-    # well. The rings are DMA claims and stay conventional by their cell.
-    # Retired by claiming the two read buffers MEMP_CONV and declaring
-    # OS88_HIGHMEM with waverackmega passing.
+# (none: WaveRack's, the last, retired by KERN-MEGA-PLAN 14.159)
+
