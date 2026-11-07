@@ -583,24 +583,6 @@ class App(object):
             if sc is not None and w is not sc.inner:
                 sc.see(w)
 
-    def _cover(self):
-        from tkinter import filedialog
-        f = filedialog.askopenfilename(
-            title="The title picture", filetypes=[
-                ("Pictures", "*.png *.jpg *.jpeg *.bmp *.gif"), ("All", "*")])
-        if f:
-            cv = dict(self.app.proj.d.get("cover") or {})
-            cv["image"] = f
-            self.app.edit("set", ("cover",), cv)
-
-    def _cover_line(self):
-        cv = self.app.proj.d.get("cover")
-        if not cv:
-            return
-        line = self.cvline.get()
-        if line != (cv.get("line") or ""):
-            self.app.edit("set", ("cover",), dict(cv, line=line))
-
     def _fit(self):
         """The window as tall as its tallest tab asks, so nothing is cut off
         below - no taller than the screen less its taskbar's room"""

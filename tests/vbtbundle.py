@@ -9,10 +9,12 @@ the tree: `os88vbt.py demo-project`, `build` and `verify` must work and
 give the tree's own demo bundle byte for byte, and `disk` a hard disk
 that boots, from the zip's own boot/; the window's module must
 import (no Tk needed to import it); `vbtana.py --help` must run; the zip
-must hold VBATTLE.O88 as built and a README; and two zips from the same
-tree must be the same bytes.
+must hold VBATTLE.O88 as built, a README, and the user's guide - GUIDE.HTML
+and every guide/ picture it names; and two zips from the same tree must be
+the same bytes.
 """
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -43,6 +45,12 @@ with tempfile.TemporaryDirectory() as t:
     ok(eng == open(os.path.join(ROOT, "build", "vbattle.o88"), "rb").read(),
        "VBATTLE.O88 is the one built")
     ok(os.path.exists(os.path.join(d, "README.TXT")), "a README")
+    gp = os.path.join(d, "GUIDE.HTML")
+    page = open(gp, encoding="utf-8").read() if os.path.exists(gp) else ""
+    pics = sorted(set(re.findall(r'(?:src|href)="(guide/[^"#?]+)"', page)))
+    gone = [n for n in pics if not os.path.exists(os.path.join(d, n))]
+    ok(page and pics and not gone, "the guide, GUIDE.HTML, and the %d "
+       "pictures it names (missing: %s)" % (len(pics), gone or "none"))
     for tool in ("os88vbtgui.py", "vbtana.py", "os88vbt.py", "vbtproj.py",
                  "os88venc.py"):
         ok(os.path.exists(os.path.join(d, tool)),

@@ -85,9 +85,9 @@ DOS
     OS88CZ.COM   joins, splits and expands the CZ tool's files
     OS88NET.COM  the DOS end of os8088's serial cable link
 
-Every Python tool here needs Python 3.8 or newer and nothing else unless its
-README names a package. The ROM and the tools are built from the same os8088
-tree as the disks in this release.
+Every Python tool here needs Python 3.8 or newer (BATTLE's, 3.11) and
+nothing else unless its README names a package. The ROM and the tools are
+built from the same os8088 tree as the disks in this release.
 """
 
 ROM_README = """os8088 IN ROM - IBM PC 5150

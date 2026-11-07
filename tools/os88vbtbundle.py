@@ -10,8 +10,10 @@ One folder, `os8088-battle-builder/`: the builder's window, everything it
 imports or runs as a process (the analysis, the bundle builder, the
 video encoder the analysis runs on footage, and the two disk makers),
 VBATTLE.O88 to play what it builds, with `--boot` what a hard disk BOOTS
-from in boot/ (the encoder bundle's own list, SPEC.md 98.2.13), and a
-README.TXT. The file list is COMPUTED by os88vbundle's own
+from in boot/ (the encoder bundle's own list, SPEC.md 98.2.13), a
+README.TXT, and GUIDE.HTML - the user's guide, docs/battle-guide/, with
+every guide/ picture the page names (os88vbundle.guide_files) and only
+those. The file list is COMPUTED by os88vbundle's own
 closure over every `import` from the ROOTS, so a module the builder starts
 to need is in the next zip with nothing to remember; a third-party import
 that is not expected stops the build. The zip is deterministic: sorted
@@ -32,6 +34,7 @@ ROOTS = ("os88vbtgui.py", "vbtana.py", "os88vbt.py", "vbtproj.py",
          "vbtprof.py")                      # (VBATTLED.O88's profiles, read)
 THIRD_PARTY = {"numpy", "PIL", "tkinterdnd2"}
 DATA = VB.DATA
+GUIDE = os.path.join(HERE, "..", "docs", "battle-guide")
 FOLDER = "os8088-battle-builder"
 
 README = """os8088 VIDEO BATTLE BUILDER
@@ -43,6 +46,10 @@ the characters and the enemy. VBATTLE.O88, in this folder, plays it on
 os8088: put the two side by side on a disk.
 
     python3 os88vbtgui.py [PROJECT.vbp]
+
+GUIDE.HTML, in this folder, is the full guide: open it in a web browser.
+It walks through making a battle, tab by tab, and says when and why to
+reach for each setting.
 
 The window: the Battle, Idle, Clips, Openings, Title & endings, Actions,
 Characters & menus, Enemy and Build tabs. Title & endings is a TITLE loop
@@ -128,6 +135,8 @@ def main():
                                             "rb").read(), 0o644))
     files.append(("README.TXT", README.replace("\n", "\r\n").encode(),
                   0o644))
+    for name, path in VB.guide_files(GUIDE):    # the guide and its pictures
+        files.append((name, open(path, "rb").read(), 0o644))
     tmp = a.out + ".part"
     with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
         for name, data, mode in sorted(files):

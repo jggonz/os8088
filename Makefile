@@ -14398,9 +14398,12 @@ $(BUILD)/os8088-encoder.zip: $(BUILD)/video.o88 $(VENCBOOT) tools/os88vbundle.py
 #> [Applications] vbtbundle :: zip the Video Battle builder for someone with no os8088 tree
 .PHONY: vbtbundle
 vbtbundle: $(BUILD)/os8088-battle-builder.zip
+# ...and the builder's guide, docs/battle-guide/GUIDE.HTML and the guide/
+# pictures it names (tools/os88vbtguide.py makes them again)
 $(BUILD)/os8088-battle-builder.zip: $(BUILD)/vbattle.o88 $(BUILD)/vbattled.o88 $(VENCBOOT) \
 	tools/os88vbtbundle.py tools/os88vbundle.py \
-	$(wildcard tools/os88*.py tools/vbt*.py)
+	$(wildcard tools/os88*.py tools/vbt*.py) \
+	$(wildcard docs/battle-guide/GUIDE.HTML docs/battle-guide/guide/*)
 	python3 tools/os88vbtbundle.py $@ --engine $(BUILD)/vbattle.o88 \
 	    --diag $(BUILD)/vbattled.o88 --boot $(BUILD)
 

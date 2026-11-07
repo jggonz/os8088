@@ -244335,6 +244335,15 @@ project by its name (`Project.here`). `vbtpaths` holds the four.
   `VBATTLE.O88` and `BATTLE.VBT` in the root of any of its seven disks, a
   hard disk booting when the boot files are at hand. A floppy too small is
   refused with the sizes before anything is written.
+- **The user's guide** is `docs/battle-guide/GUIDE.HTML`, which `make
+  vbtbundle` packs with every `guide/` picture it names (98.2.13's
+  `guide_files`): the walkthrough of making a battle, tab by tab, and when
+  and why to reach for each choice. Its pictures are made again by
+  `tools/os88vbtguide.py`, as 98.2.13's are by `os88vguide.py`, out of the
+  ORIGINAL demo alone: its scenes written as ordinary video, sound and
+  picture files, a project naming those, the window driven under X, and
+  os8088 under MartyPC. The release ships the zip in the tools zip as
+  `BATTLE/`, and the six vbattle disks in `PROGRAMS/VBATTLE/`.
 
 **Not yet built:**
 - a FULL-SCREEN title loop or end loop: theirs are the canvas's frames
