@@ -19444,6 +19444,19 @@ SOAK = [
         needs=("86box", "nasm", "rgbds"),
         wants=("build/mega.img", "build/megak/apps/realdmg.o88",
                "build/os8088-720.img")),
+    Row("megakbcodes", "soak", py("tests/megakbcodes.py"), 10.0,
+        "docs/plans/KERN-MEGA-PLAN.md 14.145: mega_k09, kern_mega's own int "
+        "09h, stores the ROM's words in the BIOS ring - Ctrl on the grey "
+        "cluster (73E0 for Ctrl+Left, the enhanced 8DE0-93E0) and on the "
+        "keypad (7300...9000, whatever Num Lock says), the ctrl letters as "
+        "before - and swallows Pause (86Box's E1 1D / E1 9D) and Ctrl+Break "
+        "(E0 46) whole, with 40:17 unturned and the key after them stored. "
+        "Read off the ring's slots at the tail each key found. RED on the "
+        "kernel before: every Ctrl key stored plain (4BE0 for Ctrl+Left) and "
+        "Ctrl+Break turned Scroll Lock on. 10s is 5 measured",
+        needs=("86box",),
+        wants=("build/mega.img", "build/megaapps.img",
+               "build/megak/kernel.map")),
     Row("mousess", "soak", py("tests/mousess.py"), 20.0,
         "SPEC.md 9.10.1: the mouse ISR's body runs on LOW_SEG whatever stack "
         "it interrupted. SeaBIOS serves int 13h and int 16h on a stack of its "

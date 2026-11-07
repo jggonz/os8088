@@ -13932,3 +13932,44 @@ owner's rule allows no rung to be crossed for it.
 Cost: `.text`, `.cold`, `.mega`, `.bss` +0 on kern_mega, and kern_big and
 kern_small are byte-identical (`tools/kernsize.py`). WIN16 is SPEC.md
 124.25.23.
+
+### 14.145 Ctrl on the grey keys and the keypad, Pause and Ctrl+Break, in protected mode (2026-11-07) - FIXED
+
+**Found by the mega-release audit** (reading `mega_k09`, then the row below
+on the kernel before). kern_big takes every key from the machine's ROM;
+kern_mega in protected mode takes them from `mega_k09` (`kernel/mega.inc`),
+which fills the BIOS ring `mega_i16` serves. Three things a ROM does it did
+not:
+
+1. **Ctrl on the grey cluster and the keypad was the plain key.** Alt + grey
+   had its arm (scan + 50h); Ctrl had none, so Ctrl+Left stored `4BE0`
+   where every AT ROM stores `73E0`, and Ctrl+keypad stored the navigation
+   code. Lemmings' fine scroll (`LEM_K_CLEFT`, `apps/lemmings/lemmings.c`)
+   reads 73h/74h and did nothing, and so did every Ctrl+arrow a Windows
+   program or a Telnet session reads.
+2. **Pause toggled Num Lock.** Only its `E1`s were swallowed; the `1D` and
+   `45` after each read as a Ctrl make and a Num Lock make.
+3. **Ctrl+Break toggled Scroll Lock.** It is `E0 46`, and the lock keys
+   were tested before the E0 flag.
+
+**Fix**: `mega_kctl` and its 13-byte table give Ctrl + 47h-53h the ROM's
+codes (`77 8D 84 8E 73 8F 74 90 75 91 76 92 93`), E0 ASCII kept on a grey
+key (`mega_i16`'s AH = 00h already reads it as 0) and 0 on the keypad. The
+ROM's E1 flag (40:96 bit 0) swallows the one `1D`/`9D` after an E1 and its
+pause bit (40:18 bit 3) the one `45`/`C5` after that - one byte each, so
+86Box's keyboard, which sends Pause as `E1 1D` / `E1 9D` with no `45`, loses
+no key after it. `E0 46` is swallowed. Alt+keypad character entry is still
+not done (nothing here reads it; a ROM builds the byte on Alt's release).
+
+**`megakbcodes` is the row** (86Box, `tests/megakbcodes.py`): sixteen keys'
+stored words read off the ring's slots, Pause and Ctrl+Break storing nothing
+with 40:17 unturned, and the key after them stored. On the kernel before it
+fails fourteen Ctrl keys (`ctrl+left stored 4BE0, wanted 73E0`) and
+`Ctrl+Break turned 40:17 00 into 10`. 86Box sends no `45`, so the Pause
+half is the one-byte rule's guard rather than a reproduction of the Num
+Lock toggle, which needs a keyboard that sends all six bytes.
+
+Cost: `.mega` +144 bytes (above 1MB); `MEGA_RESIDENT` 62,976 unchanged;
+kern_big and kern_small byte-identical (the change is `mega.inc`'s).
+Rows it reaches: `megakbcodes`, `mega-telansi` (the ctrl arm), `megaaltrdg`
+and `megakbtrip`.

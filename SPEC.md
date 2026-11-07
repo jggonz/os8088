@@ -15789,6 +15789,16 @@ Five things hold it up.
   keyboard's repeat rate - while inside a bracket the app's own `int 16h`
   drain took it for Enter. The latch alone carries the key there, as on an XT.
 
+  **Otherwise `mega_k09` stores what a ROM's int 09h stores** (KERN-MEGA-PLAN
+  14.145): Ctrl on the grey cluster is the ROM's code with the `E0` ASCII
+  (`73E0` Ctrl+Left, `74E0` Ctrl+Right, `77E0` Home, `75E0` End, `84E0` PgUp,
+  `76E0` PgDn, the enhanced `8DE0`-`93E0` for Up, Down, Ins and Del), Ctrl on
+  the keypad the same codes with ASCII 0 whatever Num Lock says (and `8E00`,
+  `8F00`, `9000` for `-`, `5`, `+`), and Pause (`E1 1D 45 E1 9D C5`) and
+  Ctrl+Break (`E0 46`) are swallowed whole: the ROM's E1 flag (40:96 bit 0)
+  and its pause bit (40:18 bit 3) take exactly the one byte each expects, so a
+  keyboard that sends no `45` loses no key. `tests/megakbcodes.py` is the row.
+
   **This replaced a `kbd_aeclaim` that decoded `AL` instead** (`AH = 1C` whose
   `AL` is neither `0Dh` typed-or-shifted nor `0Ah` with Ctrl), and the
   replacement is the same answer asked of something that was *already decided*:

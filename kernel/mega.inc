@@ -1650,8 +1650,27 @@ mega_k09:
     or byte [0x96], 0x02            ; the ROM's own E0 flag (40:96 bit 1)
     jmp .eoi
 .note0:
-    cmp al, 0xE1                    ; Pause: swallowed
+    cmp al, 0xE1                    ; Pause is E1 1D 45 E1 9D C5, whose 1D
+    jne .note1                      ; and 45 were a CTRL and a NUM LOCK make
+    or byte [0x96], 0x01            ; that toggled it. The ROM's E1 flag
+    jmp .eoi                        ; (40:96 bit 0) swallows a 1D / 9D right
+.note1:                             ; after an E1, and its pause bit (40:18
+    mov ah, al                      ; bit 3) the 45 / C5 right after THAT -
+    and ah, 0x7F                    ; each exactly one byte, so a keyboard
+    test byte [0x96], 0x01          ; that sends no 45 (86Box's) costs no key
+    jz .note15
+    and byte [0x96], 0xFE
+    cmp ah, 0x1D
+    jne .note2
+    or byte [0x18], 0x08
+    jmp .eoi
+.note15:
+    test byte [0x18], 0x08
+    jz .note2
+    and byte [0x18], 0xF7
+    cmp ah, 0x45
     je .eoi
+.note2:
     mov ah, [0x96]
     and byte [0x96], 0xFD           ; E0 is spent by this code either way
     mov bl, al
@@ -1670,6 +1689,11 @@ mega_k09:
     mov cl, 0x08                    ; alt, either
     cmp bl, 0x38
     je .shift
+    cmp bl, 0x46                    ; E0 46 / E0 C6 is CTRL+BREAK, not the
+    jne .notbrk                     ; scroll lock: swallowed, as the ROM's
+    test ah, 0x02                   ; (whose 1Bh nothing here hooks) puts
+    jnz .eoi                        ; nothing a reader could see either
+.notbrk:
     test al, 0x80
     jz .make
     mov cl, 0x40                    ; a LOCK key's break: no longer held
@@ -1717,6 +1741,9 @@ mega_k09:
     jmp .store
 .e0ctrl:
     mov ah, bl
+    test byte [0x17], 0x04          ; ctrl + grey: the ROM's 73h-93h codes,
+    jz .store                       ; E0 ASCII kept (int 16h AH=00h reads 0)
+    call mega_kctl
     jmp .store
 .shift:                             ; E0 2A / E0 AA are the keyboard's fake
     test ah, 0x02                   ; shifts around a grey key: ignored
@@ -1804,6 +1831,13 @@ mega_k09:
     jb .chars
     cmp bl, 0x53
     ja .chars
+    mov ah, bl
+    xor al, al
+    test dl, 0x04                   ; ctrl + keypad: its code, whatever the
+    jz .padnc                       ; num lock says - ASCII 0
+    call mega_kctl
+    jmp .store
+.padnc:
     mov dh, dl
     and dh, 0x20                    ; num lock...
     test dl, 0x03
@@ -1930,6 +1964,28 @@ mega_kshift:
     db 'ZXCVBNM<>?', 0, '*', 0, ' '
 mega_kpad:
     db '789-456+1230.'
+
+; mega_kctl - AH = a key 47h-53h (keypad or grey cluster) with CTRL held:
+; AH becomes the ROM's ctrl code for it (Ctrl+Left 73h, Ctrl+Right 74h,
+; Ctrl+End 75h, Ctrl+PgDn 76h, Ctrl+Home 77h, Ctrl+PgUp 84h, the enhanced
+; 8Dh-93h for the rest). Any other AH is kept, and so is every other
+; register.
+mega_kctl:
+    cmp ah, 0x47
+    jb .out
+    cmp ah, 0x53
+    ja .out
+    push bx
+    mov bl, ah
+    mov bh, 0
+    mov ah, [cs:mega_kctab + bx - 0x47]
+    pop bx
+.out:
+    ret
+
+mega_kctab:
+    db 0x77, 0x8D, 0x84, 0x8E, 0x73, 0x8F, 0x74, 0x90, 0x75, 0x91, 0x76
+    db 0x92, 0x93
 %if mega_kshift - mega_kbase != 0x3A || mega_kpad - mega_kshift != 0x3A
  %error "mega_k09's tables are one byte a scan code, 00h-39h"
 %endif
