@@ -34,7 +34,7 @@ WHAT THIS ASSERTS, and the first two are the point:
 `call asc_drop` out of `asc_use_x.out` and `gone` fails with the record still
 in `mem_tab`; take `call asc_absorb` out and `absorbed` fails with the store
 holding only the root's own entries; take the `cmp byte [ico_n], 0 / jne
-asc_use_out` out of `asc_use_x` and `stamp` fails, the re-mount trusting a
+.rfno` out of `asc_use_x` and `stamp` fails, the re-mount trusting a
 stamp for bodies that have been purged.
 """
 import os

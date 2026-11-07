@@ -1221,12 +1221,12 @@ mou_newround:
 ; the session. IER = 0 is what actually silences a loser; the mask is the half
 ; that needed to know which wire, and only the ISR can say.
 ; ins:  none (reads [mou_port] and [mou_line])
-; outs: none (all registers preserved)
+; outs: none; CLOBBERS AX, BX, CX and the flags. NO BANK OF ITS OWN (kernel
+;       size pass 18, -5): both callers own those three already -
+;       mou_hotplug's .have banks AX..DX and leaves by kret_dx, and
+;       vmmouse.inc's vmm_boot_x banks all eight and reloads the one it reads
 ; -----------------------------------------------------------------------------
 mou_lockon:
-    push ax
-    push bx
-    push cx
     xor bx, bx
 .port:
     cmp bl, [mou_port]
@@ -1261,7 +1261,7 @@ mou_lockon:
                                     ; port, so when IT won the loop above has
                                     ; just retired both UARTs on its behalf
 %endif
-    jmp kret_cx
+    ret
 
 ; -----------------------------------------------------------------------------
 ; mou_hotplug - keep offering a hot-plugged mouse its reset (SPEC.md 9.4)
@@ -1291,11 +1291,7 @@ mou_lockon:
 ; -----------------------------------------------------------------------------
 mou_hotplug:
     cmp byte [mou_hpst], 2      ; TERMINAL: the mouse exists and its ports are
-%ifdef KERN_BIG
     je mou_newround.ret         ; settled (.have, below). ONE compare a pass
-%else
-    je .out
-%endif
     push ax                     ; for the rest of the session - and state 2 is
     push bx                     ; reached only through .have, so it implies
     push cx                     ; [mou_seen], which nothing ever clears
@@ -1378,10 +1374,10 @@ mou_hotplug:
     call mou_lockon             ; ...and only then retire the ports the mouse
     mov byte [mou_hpst], 2      ; did not speak on. State 2 is terminal: this
     jmp short .done             ; is one compare per UI pass from here on
-%ifndef KERN_BIG                ; (kern_big's settled exit is mou_newround's
-.out:                           ; ret, -1, whose odd byte evens mou_claim's
-    ret                         ; move into mou_byte there; kern_small's
-%endif                          ; claim was an even size and keeps its own)
+                                ; (the settled exit is mou_newround's ret on
+                                ; BOTH kernels since kernel size pass 18: its
+                                ; -1 evens mou_lockon's -5 on kern_small, as
+                                ; it evened mou_claim's move on kern_big in 17)
 
 ; -----------------------------------------------------------------------------
 ; mouse_unhook - silence every UART we programmed (IER=0), mask its IRQ again,
@@ -1564,8 +1560,9 @@ osapi_mouse:
     xor di, di                      ; DI = the LINE's row: IRQ4 is row 0's
     cmp byte [mou_line], MOU_L4     ; int 0Ch and mou_isr, IRQ3 row 2's -
     je .row                         ; whichever base the card answered at
-    mov di, 2
-.row:
+    inc di                          ; (two `inc`s, not `mov di, 2`: a byte
+    inc di                          ; less and no slower on an 8088, kernel
+.row:                               ; size pass 18 - the re-hook arm only)
     mov si, [di+mou_ivecs]
 %ifdef KERN_MEGA
     MEGA_SEG0 es                  ; segment 0 is the NULL selector (and no
@@ -2331,25 +2328,30 @@ mou_p2_byte:
 %ifdef MOU_DIAG
     inc word [mou_p2pkt]        ; a WHOLE packet, past sync and past overflow
 %endif
-    mov al, bl                  ; --- dy, AND POSITIVE IS UP ON THIS WIRE -----
-    xor ah, ah                  ; FIRST, so that dx lands in AX and needs no
-    test dh, 0x20               ; bank: the old order built dx first and parked
-    jz .yp                      ; it in SI across this half (`mov si, ax` /
-    dec ah                      ; `mov ax, si`), and `xchg` is a byte shorter
-.yp:                            ; than `mov bx, ax` - 5 bytes and 5 clocks
-    neg ax                      ; (kernel size pass 10). ...so the screen's dy
-    xchg ax, bx                 ; is its negation, and this one line is the
-                                ; whole difference. Getting it wrong looks
-                                ; exactly like a working mouse. AX takes BL's
-                                ; old value and is overwritten at once
-
-    mov al, [mou_p2b1]          ; --- dx: 8 bits, sign in byte 0's bit 4 ------
-    xor ah, ah
-    test dh, 0x10
-    jz .xp
-    dec ah                      ; AH = 0FFh. Sign-extended BY HAND: an 8086 has
-.xp:                            ; no movsx, and cbw would take the magnitude's
-                                ; own top bit for the sign
+    ; THE SIGN BITS ARE SHIFTED TO BIT 7 AND `cbw` MAKES AH OF THEM (kernel
+    ; size pass 18, -4): an 8086 has no movsx, and cbw on the MAGNITUDE would
+    ; take its own top bit for the sign - so it is run on a copy of byte 0
+    ; first and the magnitude loaded over AL after. No branch on either axis
+    ; where each had a `test / jz / dec ah`: per packet 9 bytes and ~10 clocks
+    ; for dy against 11 and 15-25, and 10 bytes and ~38 for dx against 12 and
+    ; 23-33 plus a queue flush - no slower on an 8088 by max(clocks, 4 x
+    ; bytes). Every register out checked against the old form under unicorn,
+    ; 12,288 (byte 0, Y, X) cases
+    mov al, dh                  ; --- dy, AND POSITIVE IS UP ON THIS WIRE -----
+    shl al, 1                   ; FIRST, so that dx lands in AX and needs no
+    shl al, 1                   ; bank (kernel size pass 10). Byte 0's bit 5
+    cbw                         ; (Y's sign) to bit 7: AH = the sign
+    mov al, bl                  ; AX = dy, 9 bits two's complement
+    neg ax                      ; ...so the screen's dy is its negation, and
+    xchg ax, bx                 ; this one line is the whole difference.
+                                ; Getting it wrong looks exactly like a working
+                                ; mouse. AX takes BL's old value and is
+                                ; overwritten at once
+    mov al, dh                  ; --- dx: 8 bits, sign in byte 0's bit 4 ------
+    mov cl, 3                   ; (CL is the buttons' below, and free here)
+    shl al, cl                  ; bit 4 to bit 7...
+    cbw                         ; ...AH = X's sign
+    mov al, [mou_p2b1]          ; AX = dx
 
     mov cl, dh
     and cl, 0x03                ; bit 0 = left, bit 1 = right: already
@@ -2442,8 +2444,9 @@ KBM_NDIR    equ 8
 ; -----------------------------------------------------------------------------
 ; kbm_key - the UI task's keystroke, before anything else sees it
 ; in:  AL = ascii, AH = scan (as int 16h returned them)
-; out: CF = 1 if this key was the mouse and must not be dispatched
-;      (all registers preserved)
+; out: CF = 1 if this key was the mouse and must not be dispatched - and then
+;      AX is spent (kbm_move, kbm_btn, kbm_rclick: ui_task dispatches nothing
+;      after it and kbm_poll0 banks it); CF = 0, all registers preserved
 ; -----------------------------------------------------------------------------
 kbm_key:
     cmp byte [mou_ptr], 0
@@ -2553,8 +2556,12 @@ kbm_btn:
                                 ; opening and shutting in one press. int 16h
                                 ; is always looked at first, so cancelling the
                                 ; pending scancode here is what makes the hook
-                                ; a FALLBACK rather than a second opinion
-    push ax
+                                ; a FALLBACK rather than a second opinion.
+                                ; NO AX BANK (kernel size pass 18, -2): AX is
+                                ; spent on CF = 1, which is kbm_move's contract
+                                ; already, and both callers own it - ui_task
+                                ; dispatches nothing after a CF = 1 key, and
+                                ; kbm_poll0 and kbm_p5spend bank it themselves
     mov ax, [ticks]
     sub ax, [kbm_btick]         ; wrap-safe, like every other tick compare here
     cmp ax, KBM_GAP
@@ -2569,7 +2576,6 @@ kbm_btn:
 .held:
     mov ax, [ticks]
     mov [kbm_btick], ax
-    pop ax
     stc
     ret
 
@@ -2579,14 +2585,14 @@ kbm_btn:
 ; kbm_key has four of them (kernel size pass 8). mou_clamp, which used to
 ; stand here, went below kbm_move to make the room.
 kbm_rclick:                     ; latches too - menu_popup ends on a level poll
-    push ax                     ; of bit 1 exactly as menu_track does on bit 0
+                                ; of bit 1 exactly as menu_track does on bit 0
+                                ; (and spends AX on CF = 1 as kbm_btn does)
     xor byte [mouse_btn], 0x02
     test byte [mouse_btn], 0x02
     jz .out                     ; a release queues nothing (SPEC.md 9)
     mov ax, EVT_RDOWN
     call kbm_post
 .out:
-    pop ax
     stc
     ret
 
@@ -2631,8 +2637,11 @@ kbm_move:
     jbe .set
     mov dl, KBM_MAX
 .set:
-    mov [kbm_step], dl
-    mov [kbm_lastk], cl
+    mov dh, cl                  ; the step and the direction in ONE word store:
+    mov [kbm_step], dx          ; the pair is adjacent (the %if at kbm_step),
+                                ; DH was the old tick's high byte and dead, and
+                                ; imul below writes no DX (kernel size pass 18,
+                                ; -2)
     mov al, [bx+1]              ; DL is the step, and imul does not disturb
                                 ; it, so it serves both axes
     imul dl                     ; dx (-1, 0, +1) x the step -> AX, signed
@@ -2950,15 +2959,23 @@ kbm_isr:
     ; the whole test. Refusing costs the keystroke and an EOI the BIOS would
     ; otherwise have sent - a keyboard that has stopped working, on a machine
     ; that is still running, in a state this can no longer reach.
-    mov ax, cs
+%ifdef KERN_MEGA
+    mov ax, cs                  ; (a selector in protected mode: asked live)
     cmp [cs:kbm_old9+2], ax
+%else
+    cmp word [kbm_old9+2], KERNEL_SEG ; DS = CS = KERNEL_SEG here (KDS at the
+                                ; head; kbm_i15's head the same), so the
+                                ; segment is a constant: two bytes and ~8
+                                ; clocks a key under `mov ax, cs` and a
+                                ; CS-overridden compare (kernel size pass 18)
+%endif
     je .selfchain
 %ifdef KBD_DIAG
 %ifdef KBD_I15
     cmp byte [kbm_ivec], 0x54   ; hooked at int 15h (9.7.2): the ROM below is
     jne .dcall                  ; called with ITS AX - AH = 4Fh, AL = the byte
-    pop ds                      ; - and 4Fh's CF = 1, not with the CS the
-    pop ax                      ; self-chain test left in AX
+    pop ds                      ; - and 4Fh's CF = 1, not with whatever the
+    pop ax                      ; scan left in AX
     push ax
     push ds
     stc
@@ -2997,7 +3014,7 @@ kbm_isr:
     je .jmp9
 %endif
     pop ds                      ; the interrupted DS: nothing below reads one
-    in al, 0x21                 ; (AX is banked: the self-chain test's CS)
+    in al, 0x21                 ; (AX is banked: the scan's, spent)
     push ax                     ; the IMR as it was...
     or al, 0xFD                 ; ...and every line but the keyboard's shut
     out 0x21, al
@@ -3434,12 +3451,14 @@ kbm_p5spend:
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
 kbm_pollm:
-    mov byte [kbm_eat], 1
+    push ax
+    mov al, 1
     jmp short kbm_poll0
 kbm_poll:
-    mov byte [kbm_eat], 0
-kbm_poll0:
-    push ax
+    push ax                     ; THE BANK FIRST, so the flag is stored from AL
+    xor al, al                  ; - three bytes where an immediate store is five,
+kbm_poll0:                      ; and kbm_pollm's own bank is the same push
+    mov [kbm_eat], al           ; (kernel size pass 18, -2)
     mov ah, 0x01
     int 0x16
     jz .p5                      ; nothing waiting
@@ -3579,6 +3598,9 @@ kbm_kbyte   db 0                ; ...and kern_mega's protected mode: the byte
 kbm_p5      db 0                ; ...and a keypad-5 press it saw, not yet spent
 kbm_step    db KBM_MIN          ; px the current run of repeats is worth
 kbm_lastk   db 0                ; ...and which direction it is a run OF
+%if kbm_lastk - kbm_step != 1
+  %error "the keyboard mouse's step store writes kbm_step and kbm_lastk as one word"
+%endif
 kbm_last    dw 0                ; tick of the last movement key
 kbm_btick   dw 0                ; ...and of the last button key, for the repeat
 kbm_slast   db 0                ; the ScrollLock level kbm_ui last saw (9.6.2)
@@ -5602,8 +5624,11 @@ cur_move_1:
 %endif
 
 cur_move_mono:
-    push ax
-    push bx
+    mov [cur_drawn_x], ax       ; the NEW position, FIRST: nothing below reads
+    mov [cur_drawn_y], bx       ; these before cur_geom does, and AX/BX then
+                                ; need no bank across the one below (kernel
+                                ; size pass 18: a push and a pop each fewer,
+                                ; -4 bytes and ~30 clocks a packet)
     ; --- bank the OLD geometry, which cur_geom is about to overwrite ---------
     ; [cur_cellx]/[cur_celly] and NOT [cur_drawn_x/y]: with a hot spot the two
     ; differ, and everything below is about where the CELL is (SPEC.md 7.2.2).
@@ -5622,10 +5647,6 @@ cur_move_mono:
     add ax, cur_savex           ; [cur_sptr] is only ever one of the two, so
     mov [mv_nsave], ax          ; the other is their sum less it: no compare
     mov [cur_sptr], ax          ; and no branch
-    pop bx
-    pop ax
-    mov [cur_drawn_x], ax
-    mov [cur_drawn_y], bx
     call cur_geom               ; DI = the new cell's first byte, CL = its
                                 ; shift, and [cur_off], [cur_rows],
                                 ; [cur_b1ok], [cur_cellx/y] - all NEW now
@@ -5685,7 +5706,9 @@ cur_move_mono:
     mov bl, [mv_ob1ok]          ; 0 or 1: the old cell's column 1 on screen
     shl bl, 1                   ; ...as bit 1
     mov bh, bl
-    or bh, 1                    ; an uncovered old row, into bits 2-3
+    inc bh                      ; an uncovered old row, into bits 2-3 (`inc`:
+                                ; BL is even, so it is the `or 1` it was, a
+                                ; byte and a clock less - kernel size pass 18)
     shl bh, 1
     shl bh, 1
     inc ax                      ; d + 1: 0, 1 or 2 for the three that meet,
@@ -5718,8 +5741,11 @@ cur_move_mono:
     mov al, [mv_orows]          ; ...and r_hi = min(new rows, old rows - e),
     cbw                         ; signed: a cell far below is a negative
     sub ax, si                  ; reach and an empty run
-    mov cl, [cur_rows]
-    xor ch, ch
+    mov cl, [cur_rows]          ; CX = the new rows: CH is ALREADY 0, the
+                                ; background walk's count run out (or never
+                                ; started, `or ch, ch` having said 0) and
+                                ; nothing since writing it (kernel size pass
+                                ; 18: its `xor ch, ch` went, -2)
     cmp ax, cx
     jle .rhi
     xchg ax, cx

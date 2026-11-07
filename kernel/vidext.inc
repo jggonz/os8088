@@ -293,7 +293,7 @@ vx_boot_x:
 ; -----------------------------------------------------------------------------
 vx_blk:
     dw VX_ABI_VER                   ; VXB_VER
-    dw vid_tab + VID_VESA * VID_REC ; VXB_TABROW
+    dw vid_vxrow                    ; VXB_TABROW (viddet.inc: vid_tab's row 4)
     dw vx_ep                        ; VXB_EP (vx_bpp follows it)
     dw vid_avail                    ; VXB_AVAIL
     dw gfx_color                    ; VXB_COLOR

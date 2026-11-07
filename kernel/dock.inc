@@ -1042,10 +1042,8 @@ db_draw_tile:
 
     mov cx, ax                  ; icon at (left+4, top+2): 16x16 body, off the
     add cx, 4                   ; rect's own x1/y1, which gfx_frame gave back
-    mov dx, bx
-    inc dx
-    inc dx
-    push si
+    lea dx, [bx+2]              ; (a byte under `mov dx, bx / inc / inc`, and
+    push si                     ; no flag below is read: kernel size pass 18)
     call inst_icon_ptr          ; SI -> 64 bytes in OUR segment, staged if
     jnc .icon                   ; this instance's body lives in LOW_SEG
     mov si, ico_app16 + 2       ; generic fallback: skip the library
@@ -1098,10 +1096,11 @@ db_hit:
 %endif
 
     xor di, di                  ; in the strip, no tile yet
-    cmp cx, DOCK_X0             ; left of the first tile (unsigned for the
-    jb .in                      ; same reason, and byte-neutral)
     mov ax, cx
-    sub ax, DOCK_X0
+    sub ax, DOCK_X0             ; left of the first tile: the `sub`'s borrow
+    jb .in                      ; IS the unsigned compare (kernel size pass
+                                ; 18: the `cmp cx` was 3 bytes; AX is a
+                                ; clobber, and .in sets CF itself)
     mov bl, DOCK_STEP           ; slot = (x - DOCK_X0) / DOCK_STEP
     div bl                      ; AL = slot, AH = within-slot x
     cmp ah, DOCK_TILE_W         ; in the gap between tiles?

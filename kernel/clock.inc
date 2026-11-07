@@ -1691,10 +1691,12 @@ clk_tick:
     mov cx, 182
     div cx                      ; AX = whole seconds owed, DX = leftover
     mov [clk_acc], dx
-    mov cx, ax
-    xor ax, ax                  ; AL = the mask being built, AH = the minute
+    xchg cx, ax                 ; CX = the seconds (one byte: AX is zeroed
+    xor ax, ax                  ; next anyway - kernel size pass 18, -1);
+                                ; AL = the mask being built, AH = the minute
     jcxz .pend
-    or al, 1                    ; a second passed
+    inc ax                      ; a second passed (AX was 0: `inc ax` is the
+                                ; `or al, 1` in one byte, kernel size pass 18)
     mov ah, [clk_min]           ; the minute to compare against afterwards
     cmp cx, 60
     jb .adv
@@ -1879,8 +1881,9 @@ clk_fmt:
                                 ; it. (CX is not banked either - the length is
                                 ; an OUTPUT now)
     call clk_snapshot
-    mov si, clk_str             ; SI is an OUTPUT anyway, and clk_put_mon -
-    mov bx, si                  ; the only callee that touches it - banks it
+    mov bx, clk_str             ; SI is an OUTPUT, loaded at .end: clk_put_mon
+                                ; spends it, and so needs no bank of its own
+                                ; (kernel size pass 18, -1 net)
     mov al, [clk_sn_mon]
     call clk_put_mon
     mov byte [bx], ' '
@@ -1939,8 +1942,8 @@ clk_fmt:
 .end:
     mov byte [bx], 0
     mov cx, bx                  ; ...and the LENGTH, which is free here: BX is
-    sub cx, si                  ; the pointer the NUL just went through, and
-                                ; both callers walked the string again for it
+    mov si, clk_str             ; the pointer the NUL just went through, and
+    sub cx, si                  ; both callers walked the string again for it
     pop bx
     pop ax
     ret
@@ -1948,7 +1951,9 @@ clk_fmt:
 ; -----------------------------------------------------------------------------
 ; str_len - the length of an ASCIIZ string in the kernel segment
 ; in:  SI = the string
-; out: CX = its length, NUL excluded; SI and everything else preserved
+; out: CX = its length, NUL excluded; SI ONE PAST THE NUL; everything else
+;      preserved. Its one caller, toast_place, loads SI itself and reads it
+;      no further, so the bank that kept it went (kernel size pass 18, -1)
 ;
 ; The kernel's only strlen, and it is here rather than anywhere else because
 ; clk_fmt above is what created it. `.text` sites ONLY: a caller in `.modc` or
@@ -1956,16 +1961,13 @@ clk_fmt:
 ; the six-instruction loop it would be replacing.
 ; -----------------------------------------------------------------------------
 str_len:
-    push si
-    xor cx, cx
+    mov cx, si
+    not cx                      ; CX = -SI - 1...
 .l:
-    cmp byte [si], 0
-    je .d
-    inc si
-    inc cx
-    jmp short .l
-.d:
-    pop si
+    cmp byte [si], 1            ; CF = 1 on the NUL alone
+    inc si                      ; (`inc` leaves CF alone)
+    jnc .l
+    add cx, si                  ; ...+ (the NUL's address + 1) = the length
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2016,10 +2018,11 @@ clk_ampm:
 ; in:  AL = month 1..12, BX = destination
 ; out: BX advanced by 3
 ; clobbers: AX (kernel size pass 17: neither caller reads it after -
-;           clk_fmt loads AL afresh and clk_fld_str pops its own)
+;           clk_fmt loads AL afresh and clk_fld_str pops its own) and SI
+;           (pass 18: clk_fmt loads its SI output afterwards and CTRL.DRV's
+;           clk_fld_str reloads its at .done - the bank was nobody's)
 ; -----------------------------------------------------------------------------
 clk_put_mon:
-    push si
     mov ah, 3                   ; ONE CONSTANT, TWICE: the multiply's and the
     mul ah                      ; loop count's. AX = month * 3 (AH = 0, the
     xchg si, ax                 ; month being 1..12) - one cell PAST the one
@@ -2033,7 +2036,6 @@ clk_put_mon:
     jnz .c                      ; address is only ever formed with SI >= 3,
                                 ; and a month of 0 reads the same three bytes
                                 ; before the table that the old `dec al` did
-    pop si
     ret
 
 ; -----------------------------------------------------------------------------

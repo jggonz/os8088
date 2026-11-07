@@ -367,8 +367,9 @@ toast_say:
 ; toast_now - draw a staged toast on the spot, IF the caller provably holds
 ;             the gfx lock (SPEC.md 59.4)
 ; in:       a toast staged; called from toast_show only
-; out:      nothing; AX is SPENT - toast_show leaves by kret_di straight after,
-;           which puts it back (kernel hot-paths pass 1, size: -2)
+; out:      nothing; AX and BX are SPENT - toast_show leaves by kret_di
+;           straight after, which puts them back (kernel hot-paths pass 1,
+;           size: -2; kernel size pass 18, BX, -2)
 ;
 ; A message put up BEFORE a long operation has to be on the glass before the
 ; machine goes quiet - Paint says `Encoding...` and then spends seconds on
@@ -409,7 +410,7 @@ toast_now:
                                 ; glass
     mov al, [gfx_color]         ; the caller is mid-callback: its pen and its
     push ax                     ; clip region are ITS, and the bar is inside
-    push bx                     ; no window's region ever - drawn through an
+                                ; no window's region ever - drawn through an
     call fpg_bare               ; armed one the strip's cells would be dropped
     dw toast_ad                 ; on the glass while menu_bcell records them
                                 ; composed, and no later pass would repair it.
@@ -420,8 +421,11 @@ toast_now:
                                 ; Done now because the idle pass that would
                                 ; carry it to VRAM does not come until the
                                 ; operation this announces is over (SPEC.md
-                                ; 32) - fpg_begin's reasoning exactly
-    pop bx
+                                ; 32) - fpg_begin's reasoning exactly.
+                                ; BX, which fpg_bare spends, is NOT banked:
+                                ; toast_show leaves by kret_di straight after,
+                                ; which puts it back as it does AX (kernel
+                                ; size pass 18, -2)
     pop ax
     mov [gfx_color], al
 .outa:

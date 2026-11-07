@@ -39844,13 +39844,14 @@ first eight sectors of track 0, and the mount is about to want all of them.
 
 So a full mount **empties the cache first**, before the boot-sector read and
 before the banked-head check (so a fixed volume's listing mount drops it
-too), and reads LBA 0 THROUGH the empty cache with a one-byte cap,
-`[dsk_rah_hint]`, at **8**. `dsk_rah_fill` takes the smaller of the track's
-remainder and the cap. Eight because the read runs under the fallback 9/2,
+too), and reads LBA 0 THROUGH the empty cache with the fill's ceiling,
+`[dsk_rah_lim]` - the chunk's nine sectors at every other read - lowered to
+**8**. `dsk_rah_fill` takes the smaller of the track's remainder and that
+ceiling, one compare for the cap and the chunk (kernel size pass 18). Eight because the read runs under the fallback 9/2,
 before the BPB says what the disk is, and eight is the most every geometry
 §18.2's rule 11 admits has on its first track: an 8-sector track 0 would
-refuse a ninth. The cap is disarmed straight after that read, before its
-failure test, and on the banked path, so no other fill ever sees it.
+refuse a ninth. The ceiling is put back straight after that read, before its
+failure test, and on the banked path, so no other fill ever sees the cap.
 
 **What the swap detector still guarantees, exactly as before.** The cache is
 empty when the read starts, so the boot sector necessarily comes off the
@@ -43168,9 +43169,12 @@ on a 4.77 MHz 8088 by 256 entries. `kern_big`'s sort is an insertion sort
 over Knuth's gaps (h = 3h' + 1), kept in BYTES (h x 24) and re-found each
 pass by climbing the sequence under the last one, so it needs no divide and
 no table. The key is the one above, unchanged - folders first, then the
-case-folded, NUL-padded name - in a subroutine of its own, and insertion
-moves an entry only past a strictly greater one, so equal keys keep their
-order. `kern_small` keeps the selection sort: at 32 entries it is 496
+case-folded, NUL-padded name - written inside the insertion step (it was a
+subroutine of its own until kernel size pass 18; the step's own `j - gap`
+and `j` differ by the gap in BP, so one pointer walks both names), and
+insertion moves an entry only past a strictly greater one, so equal keys
+keep their order. A listing of 0 or 1 entries needs no test of its own: the
+first gap the climb finds is 0, so the sort ends before it reads an entry. `kern_small` keeps the selection sort: at 32 entries it is 496
 compares, and the bytes are that kernel's to keep.
 
 **The compare folds case only where two bytes DIFFER**, and the exchange
@@ -51685,7 +51689,7 @@ performance input, not a precondition.
 | `fmv_load` | in AL = drive, DX = cwd cluster, DI = state block; **no gfx lock requirement, but real floppy I/O**. `dsk_chdir` (DL = AL, AX = DX), then copy the fresh global snapshot into the block's slot and write back `FS_DRV`/`FS_CWD`/`FS_MOK`/`FS_N` from what the mount actually produced (a failed mount lands at the root with `FS_MOK` = 0 — §19.2). Clears `FS_SEL`/`FS_SCRL`/`FS_FERR`: every index into the old listing is meaningless. Preserves all registers. |
 | `fmv_sync` | in DI = state block. Returns immediately when `(FS_DRV, FS_CWD)` already equals `([disk_drive], [dsk_cwd])`; otherwise `fmv_load` on the block's own drive and cwd, **banking `FS_SEL` and `FS_SCRL` across it** — a sync is not navigation, the window is re-listed where it already was, and clearing them would scroll a background window back to the top on a double-click. **Every action calls this first.** Preserves all registers. |
 | `fmv_bcast` | after a successful metadata write, re-copies the (already correct, §18.4) global snapshot into **every** live file-manager window on the same `(drive, cwd)` — the acting one included, since its own cache is stale too — and clears their `FS_SEL`/`FS_SCRL`. Pure memory, no extra I/O. Clears `FS_DIRTY` for the acting window alone (§22.8): it is the one its caller repaints. |
-| `fmv_take` | in DI = state block, whose `(FS_DRV, FS_CWD)` the caller has already compared against the globals. The memory half of a re-list — the four stores `fmv_load` makes around its `dsk_chdir`, with no mount in it. Shared by `fmv_bcast` and `fm_focus`. Preserves all registers. |
+| `fmv_take` | **written at `fmv_bcast`, its one caller, since kernel size pass 18** - no longer a routine; the adopt step is still this contract: DI = a window whose `(FS_DRV, FS_CWD)` the caller has compared, given the acting window's listing with no mount in it. (The row once named `fm_focus` as a second caller; it has not been one since §22.8 moved its re-list to `fmv_load`.) |
 | `fmv_mark` | in nothing: `([disk_drive], [dsk_cwd])` are the folder that just changed. Sets `FS_DIRTY` on every live file-manager window showing it and raises `[fm_fchk]` (§22.8). Writes bytes only — the caller may hold the gfx lock. Called by `dskw_sync`. |
 | `fmv_gneed` | in nothing. Out: CF=1 = something on screen is drawn from the **global** listing, so §18.4's coherence remount must run now; CF=0 = record the debt instead. Only the Standard File dialog answers yes — a Disk window paints from its own cache (§22.1) and has just been marked. Clobbers flags. Called by `dskw_sync`. |
 | `fm_focus` | in BX = the window gaining the focus (0 = none), AL = 0 the caller draws it / 1 draw it here; **gfx lock held, UI task**. On a file-manager window owing a refresh: re-list (`fmv_take` where the globals allow, else `fmv_load`), clear `FS_DIRTY`, and either repaint or answer **CF = 1** so the caller draws it whole (§22.8). CF = 0 = nothing owed. Preserves all registers. |
@@ -52002,7 +52006,8 @@ rather than paid for:
 - **Left, up to 7px**: white margin, and **nothing else** — see §22.11.1.1,
   which is the reason that sentence is short now. It used to be white margin
   *plus up to three columns of the 16x16 icon*, erased and re-iconed by
-  `fm_draw_licon` and only when the rounding really did reach them.
+  `fm_draw_licon` and only when the rounding really did reach them (the pass
+  that did it is deleted now, kernel size pass 18 - §22.11.1.1).
 
   **The erase in front of that was not belt and braces, and leaving it out was
   the one bug this shipped before the pixel diff caught it** — worth keeping
@@ -52038,7 +52043,7 @@ draws nothing.
 ##### 22.11.1.1 The strip pass is unreachable, and the icon inset is why
 
 The row icon is **8px** into the content, not 4, and the name is at **32**, not
-24 (`fm_draw_lrow`). Both are §11.94.3's alignment work — and one of them is
+24 (the row painter in `fm_draw_lrows`). Both are §11.94.3's alignment work — and one of them is
 not, which is the part to read before moving either.
 
 **What alignment buys here is not a text pen.** `ico_pass` lands each 16-pixel
@@ -52055,9 +52060,13 @@ were.
 most 7 pixels, so an icon 8px in **cannot be cut by the strip at any window
 position** — and with §11.94.1's alignment default `x1 == fm_cx` exactly, so
 the strip is empty as well as harmless. `align_up(cx) > cx+8` is unsatisfiable.
-The pass is therefore dead code, and it is **kept** rather than deleted: it is
-four instructions of test that state the invariant, and moving the inset back
-would need it. Its residue is `wm_snap_ax`'s one refusal — a window **dragged**
+The pass was therefore dead code. It was kept for a while as four instructions
+of test that stated the invariant, and **kernel size pass 18 deleted it, test
+and all (-70 bytes resident, with its `fm_draw_licon`)**: the invariant is an
+assembly-time `%if` on `FM_PEN_X` (the inset `fm_pen8` adds) now, which fails
+the build if the inset
+goes below 7 - and moving it back there needs the pass back, which is the
+parent of that commit. Its residue is `wm_snap_ax`'s one refusal — a window **dragged**
 to x=0 at the full screen width, where 7 becomes the answer and those seven
 columns are margin. A **maximized** window is not that case, and §11.95.2 is
 why: it drops its left border, so its content starts at `W_X` = 0 and is
@@ -52641,7 +52650,7 @@ promise about forever.
 that window's raise cache. Every route in goes through it — `fm_focus`'s
 re-list on the way to the front, a paste's `fmv_reload_all`, a sibling
 adopting the snapshot in `fmv_bcast`, and every navigation — because
-`fmv_take` and `fmv_load` are the only two writers and both end there. So
+`fmv_bcast`'s adopt step (it was `fmv_take`) and `fmv_load` are the only two writers and both end there. So
 the promise is kept by construction, and a route added later inherits it
 rather than having to remember it.
 
@@ -53553,8 +53562,8 @@ is what lets the floor be 1KB - at 256 the pad alone pushed 32 entries to
 1,056 bytes. The bitmap ahead of entry 0 keeps even an empty listing's
 index off offset 0, which `FS_IOFH` spends on "none".
 
-**Thirty-two entries a KB**: `fmv_cap` = `FS_VKB` x 32 and `fmv_need(n)` =
-⌈n/32⌉ KB, never under `VIEW_KB` (**1KB** on these kernels) and never past
+**Thirty-two entries a KB**: the capacity is `FS_VKB` x 32 and the need of n
+entries is ⌈n/32⌉ KB, never under `VIEW_KB` (**1KB** on these kernels) and never past
 the ceiling's 32 - both a shift, no divide. It is safe because an entry costs
 25 bytes (its record and its reference byte), so 32 of them are 800 and the
 224 a KB left over covers `FV_FIX` - the 128-byte bitmap plus the most the
@@ -53588,7 +53597,7 @@ compact - §66.5.10.2, `tools/dsegaudit.py`), then:
   window holds memory for a folder it is not showing.
 - `[dsk_nover]` = 0, and the window NAVIGATED - the drive or folder it was
   asked for is not the one it already showed: `mem_regrow` it DOWN to
-  `fmv_need(FS_N)`. A shrink keeps the base and cannot fail. So a folder of
+  the need of `FS_N`. A shrink keeps the base and cannot fail. So a folder of
   32 or fewer entries comes and goes with no grow and no second mount at all.
 - `[dsk_nover]` = 0 on a re-list IN PLACE - a delete, a paste, a Refresh, a
   sync - keeps the claim it has. It was the size this folder needed a moment
@@ -53599,7 +53608,10 @@ compact - §66.5.10.2, `tools/dsegaudit.py`), then:
   redirected volume asks for is still cut back to fit. +18 bytes.
 - **A grow refused keeps the listing that fit** (§50.3: memory is a
   performance input). `mem_regrow` does not call the relocation proc
-  (§66.7), so `fmv_rsz` writes `FS_VSEG` and the `[fm_vseg]` mirror itself.
+  (§66.7), so `fmv_load` writes `FS_VSEG` itself and its re-list's `fmv_fit`
+  republishes the `[fm_vseg]` mirror. (The capacity, the need and the resize
+  were `fmv_cap`, `fmv_need` and `fmv_rsz` until kernel size pass 18 wrote
+  each at its one call in `fmv_load`.)
 
 `dsk_ioff` follows the entries STORED, not the room: the scan calls
 `dsk_ioffx` with its count at `.scan_done`, so the index starts on the
@@ -53608,8 +53620,8 @@ still owes. The bitmap ahead of them keeps an empty listing's index off
 offset 0, which `FS_IOFH` spends
 on "none".
 
-**A sibling adopts a listing only if it fits.** `fmv_take` (§22.1's
-`fmv_bcast`) copies the acting window's listing into every other window on
+**A sibling adopts a listing only if it fits.** `fmv_bcast`'s adopt step
+(§22.1; it was `fmv_take`) copies the acting window's listing into every other window on
 the same folder; a sibling whose claim is smaller than the source's keeps
 `FSD_CACHE` and re-lists when it next comes to the front (§22.8), rather
 than being grown from inside a broadcast.
@@ -76000,6 +76012,19 @@ reordering one without the other silently corrupts all nine:
 
 `vid_seg`, `vid_stride`, `vid_bmask`, `vid_bshift`, `vid_rowadd`,
 `vid_wrapbit`, `vid_wrapfix`, `vid_cw`, `vid_ch`
+
+**Where the rows live (kernel size pass 18).** The four constant rows (VGA,
+Hercules, CGA, EGA - two on `kern_small`) are read by `vid_apply` and nothing
+else, and `vid_apply` has no resident copy: `VID_APPLY` is expanded into the
+boot blob (`bvs_apply`), CTRL.DRV and EXTD.DRV. So on `kern_small` and
+`kern_emu` each expansion carries its OWN copy of the rows (`VID_TAB_ROWS`,
+at the macro's foot, read through CS with DS following it for the one
+`rep movsw`), and the kernel keeps only `vid_vxrow`, the VESA row its driver
+rewrites (§120.4): -36 resident on `kern_small`, -72 on `kern_emu`. `kern_big`
+keeps the whole table resident (`VID_TAB_RES`) only because its blob is full
+to the byte at thirteen sectors - a fourteenth would buy it the same -72 - and
+`kern_mega` because its switch rewrites the segment column to selectors in
+place.
 
 **The width and height are the LAST two columns and they are the DISPLAY's**
 (§39.2.1). The desktop's `vid_w`/`vid_h` are derived from them below and sit
@@ -108829,7 +108854,9 @@ bytes** in it. So the cluster costs the file **nothing**: 1,220 bytes before
 and after.
 
 `asc_seed` runs at the end of `asc_use`, after `asc_merge_ext`, and the two
-choices in it are the load-bearing ones:
+choices in it are the load-bearing ones. (Both are PARTS of `asc_use_x` since
+kernel size pass 18 - written at their one call, `asc_row_take` inside
+`asc_seed`'s walk - and keep their names as the comments that head them.)
 
 - **`assoc_app_of`, not `asc_slot_of` — find, never create.** A slot only
   matters if some extension points at it, and the kernel's table is
@@ -230091,7 +230118,9 @@ state that already exists (`vid_tab` row 4, `gfx_color`, `vga_xorm`,
 `cur_hx`, `cur_drawn_x`, the `ico_*` cells, `vid_kind`, `gfx_pat`, `vx_ep`
 itself, and the two kernel addresses `vx_kret` and `vx_null`). The driver
 banks the kernel's segment (ES) and COPIES the pointers, and **fills
-`vid_tab` row 4** from the chosen mode. The table lives in the boot blob
+`vid_tab` row 4** (`vid_vxrow`, which is that row where the table is
+resident and the one resident row where it is not, §39.2) from the chosen
+mode. The table lives in the boot blob
 beside `vx_boot_x`, its one sender, so it is given back with the blob (DX is
 the blob's segment). `kernel/vxabi.inc` is the layout, shared as source with the
 driver, and both ends assert their copy against it.
@@ -242475,7 +242504,7 @@ pentium-pciether`) is the 86Box profile.
    reflected `int 13h` from a high image the same way. (A boot attach runs in
    real mode before the image is moved, so there the calls are not reflected
    at all.) On a 386 the reflection is a CR0.PE clear and set; on a 286 it is a
-   CPU reset through the BIOS, which the CPU gate (`pci_gate`) means is never
+   CPU reset through the BIOS, which the CPU gate (`pci_probe`'s head) means is never
    made. A few hundred microseconds a call, at attach only. *Seen on a
    machine: no - the first run is the harness's (S8).* **On kern_big and
    kern_emu there is nothing to reflect**: the kernel is real mode

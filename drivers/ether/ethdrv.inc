@@ -8,7 +8,10 @@
 ;
 ; The includer defines, BEFORE including this file (SPEC.md 125.2):
 ;   NIC_BACKEND            the card's source file, "%include"d in place
-;   nic_init, nic_stop     routines: bring the card up / stop it, cannot fail
+;   nic_init, nic_stop     routines: bring the card up / stop it, cannot fail.
+;                          nic_init may spend AX, BX, CX, SI and DI and keeps
+;                          DX (eth_attach banks the five); nic_stop may spend
+;                          any register (eth_detach has banked them all)
 ;   nic_rx, nic_tx         the stack's two verbs (nic_rx: CF=1 = empty, CX =
 ;                          the length in eth_rxb; nic_tx: CX bytes of eth_txb)
 ;   NIC_FRAME              the largest frame, bytes
@@ -62,8 +65,8 @@ eth_svc:
                                 ; exact until DSV_SIZE next grows; the pad is
                                 ; what makes it stay exact.
 
-eth_name:   db 'Ethernet', 0
-eth_cpname: db 'Ethernet', 0
+eth_name:                       ; the sink name and the page name are ONE
+eth_cpname: db 'Ethernet', 0    ; string (kernel size pass 18: nine bytes)
 
     NIC_DATA                    ; the backend's own tables (nicne2k.inc: the
                                 ; I/O bases an ISA card is jumpered to)
@@ -137,22 +140,19 @@ eth_attach:
     mov byte [eth_mode], ECM_MAN
 %endif
     mov si, eth_svc
-    pop di
-    pop cx
-    pop bx
-    pop ax
-    clc
-    ret
+    db 0xA8                     ; `test al, 0xF9` - CF = 0, the answer, and
+                                ; the `stc` below is its operand: one exit
+                                ; for both (kernel size pass 18)
 .none:                          ; no card answered. Nothing is put back:
                                 ; a refused attach is handed straight back to
                                 ; the heap, so [eth_base] and [eth_up] are
                                 ; never read again
-    pop di
+    stc                         ; DRVE_NOHW: the Drivers page reports it
+    pop di                      ; (POP writes no flag)
     pop cx
     pop bx
-    pop ax
-    stc                         ; DRVE_NOHW: the Drivers page reports it
-    ret
+    pop ax                      ; ...AL the kernel's DRVV_ATTACH again, which
+    ret                         ; a refusal's AL reads as no DRVE_* (51.2)
 
 ; -----------------------------------------------------------------------------
 ; DRVV_READY - our services are published, so the API will take our calls

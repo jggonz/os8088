@@ -928,7 +928,10 @@ ld_run_body_x:
 
     ; --- 6. read the whole file into the region --------------------------------
 .read:
-    mov word [ld_roff], 0       ; where in the region the read lands
+    xor bx, bx                  ; BX = where in the region the read lands,
+                                ; stored once at .rdgo and HELD to the read:
+                                ; dsk_bytes_secs_x spends CL alone (kernel
+                                ; size pass 18, -10)
     mov ax, [ld_img]            ; THE IMAGE, NOT THE FILE. On a v3 package the
                                 ; two are equal and always were; on one
                                 ; carrying parts the region holds the primary
@@ -951,17 +954,16 @@ ld_run_body_x:
     ; compress anything for which R + file does not fit the region this
     ; loader was going to claim anyway - so the sizing at step 4 is untouched
     ; and this cannot overflow it.
+    mov bx, ax                  ; (AX = the image, just loaded)
     mov ax, [ld_fsz]
-    mov bx, [ld_img]
     sub bx, ax
     add bx, 511
     and bx, 0FE00h
-    mov [ld_roff], bx
 .rdgo:
+    mov [ld_roff], bx
     call dsk_bytes_secs_x       ; DX = ceil(AX/512)
     mov ax, [ld_clus]
     mov es, [ld_base]           ; the package's OWN segment
-    mov bx, [ld_roff]
     call dsk_read_chain_x ; in: AX=cluster, DX=sectors, ES:BX -> dest.
     jc .ret2                    ; on CF, AL is ALREADY the status: 1 =
                                 ; LD_EDISK (disk error), 2 = LD_EBAD (chain
@@ -1396,12 +1398,13 @@ ld_start:
                                 ; worker later (SPEC.md 20.6). The entry
                                 ; proc cannot: neither I_STATE nor
                                 ; wm_owner is published until right here.
-    mov ax, [ld_base]
-    mov [di+I_SPTR], ax         ; the region's base SEGMENT (SPEC.md 20.1)
-    mov ax, [ld_need]
-    mov [di+I_SIZE], ax         ; allocated bytes: pool occupancy + RAM sum
     push es
-    mov es, [ld_base]           ; the name field is in the package's image
+    mov ax, [ld_base]
+    mov es, ax                  ; the name field is in the package's image
+    mov [di+I_SPTR], ax         ; the region's base SEGMENT (SPEC.md 20.1)
+    mov ax, [ld_need]           ; (ES loaded from the register that already
+    mov [di+I_SIZE], ax         ; held it: kernel size pass 18, -2) -
+                                ; allocated bytes: pool occupancy + RAM sum
     mov si, 16
     mov bp, inst_set_name_x
     call ct_cw_mem_disp         ; ES:SI -> the 16-byte NUL-padded name
@@ -2000,7 +2003,10 @@ ld_pkg_byname:
     jc .nodoc
     mov [assoc_dapp], al
     xor ax, ax
-    mov word [assoc_pwin], ASSOC_PWBANK ; NO POSTER: assoc_run takes the
+    dec ax                      ; ASSOC_PWBANK, out of the zero the compare
+    mov [assoc_pwin], ax        ; below wants back (a byte under the
+    inc ax                      ; immediate store: kernel size pass 18)
+                                ; NO POSTER: assoc_run takes the
                                 ; document's home from the locator banked
                                 ; above, not from where the machine stands -
                                 ; on the POSTED arm below the caller has
@@ -2023,10 +2029,13 @@ ld_pkg_byname:
                                 ; (21.5), which is the context assoc_run
                                 ; wants - so there is nothing to defer to.
                                 ; FAR, because assoc_run far-returns, being
-                                ; ui.inc's own callee
-.posted:
-    xor al, al                  ; it reported its own verdict to the user
-    ret                         ; (ld_say_status) - 21.5.3's thinner answer
+                                ; ui.inc's own callee - and it preserves
+                                ; every register, so AX is still the 0 above
+.posted:                        ; AL = 0 = LD_OK on both arms (the `jne` was
+    ret                         ; taken off AX = 0): it reported its own
+                                ; verdict to the user (ld_say_status) -
+                                ; 21.5.3's thinner answer. The `xor al, al`
+                                ; that stood here is gone (kernel size pass 18)
 .nodoc:
 %ifdef OS88_SHORTCUTS
     call lnk_is                 ; ...but a LINK is opened by nothing, being

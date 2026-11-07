@@ -398,9 +398,9 @@
   "sources": [
    "drivers/ether"
   ],
-  "stamped": "1f75e2ed6",
-  "strings": "8acfc5bbc141884f",
-  "why": "NIC seam (SPEC 125.2) moved ether.asm's body into ethdrv.inc and the 8390 into nicne2k.inc; ETHER.DRV assembles byte-identical (four variants cmp'd), so nothing a user reads changed"
+  "stamped": "fed38237",
+  "strings": "dbf67e1a466a7b16",
+  "why": "kernel size pass 18: eth_name and eth_cpname became one 'Ethernet' string, so the string list lost a duplicate; every string a user reads is unchanged"
  },
  "EXTD_DRV": {
   "sources": [

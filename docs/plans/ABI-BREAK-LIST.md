@@ -273,6 +273,30 @@ Ids carry the kind's letter and a `2` so they cannot collide with the audit's.
 | **P2-1** | a module header word holding the image's DATA selector, so CSDO is `mov ds, [cs:MOD_H_DSEL]` - a read through CS, legal on a code alias | the module header (`MOD_VER`, `tools/os88mod.py`, every module - all built with the kernel, so no shipped package) | ~0 bytes, **~5x faster at every CSDO site** in every module on kern_mega | msp2/modcsdo.md | **proposed** - kernel-private (a module is versioned with its kernel), so it needs no `PKG_FMT` flag day at all |
 | **F2-1** | a call filter in the packed formats: `E8 rel16` stored as its absolute target before LZ, so near calls repeat and pack | the `'CZ'` container's decoder on every kernel, every packed package, driver and module (SPEC.md 20.13) | an unmeasured share of every call-heavy packed file; it is what made modcsdo refuse a near door per module (-611 image, +433 packed) | msp2/modcsdo.md | **proposed, unmeasured** - wants a host-side experiment over the shipped files first |
 
+### 10.1 Kernel size passes 17 and 18
+
+Pass 17's agents' rows (`docs/plans/completed/HANDOFF-KERNEL-SIZE-P18.md`
+section 4, folded in here by pass 18's coordinator). Every figure is an
+ESTIMATE from the finder's reading.
+
+| id | the break | kern_big | callers | source | status |
+|---|---|---:|---|---|---|
+| **K17-1** | **Five-byte rare cells** (`call api_rX / dw target`, the cell's `push bp` into the five stubs) | ~-90 net (-119 table, ~+30 stubs), ~+20 clocks a rare call | every package (renumbers the table) | ksp17/ui.md 1; pass 13 priced ~-105 and the owner declined it then | **refused once, re-priced** |
+| **K17-2** | **The seven window-flag setters as one `OSAPI_WM_FLAG`** (SIZABLE, SNAP, SAVEU, OWNBG, KEEPH, NOANIM, QUIET - 129 bytes of bodies measured) | ~-65 to -75, -36 more if the six retired cells are renumbered away | 113 source files under `apps/` | ksp17/wm.md 1 | **proposed** |
+| **K17-3** | **The ten handler setters as one cell** (ONSIZE, ONMOUSEUP, ONRESIZE, ONDRAG, ONTIMER, ONWAKE, ONCLOSE, ONRCLICK, ONCLICK, ONWHEEL - ~55 bytes of inline cells) | ~-40 to -48 if renumbered | 218 references in `apps/` and `drivers/`, plus `os88.h` | ksp17/sweep.md 1 | **proposed** - pairs with K17-2 as one window-field setter by index, ~-140 to -160 together |
+| **K17-4** | **Thirteen not-hot SLOT cells as rare cells** | -26, ~+85 clocks a call | those cells' callers; each wants a call-frequency reading first | ksp17/ui.md 2 | **proposed, low** |
+| **K17-5** | **Retire the duplicate `drv_pkg_call_x` SLOT at 0x038B** (the XCELL at 0x0348 is a second door) | -8 | that cell's callers | ksp17/ui.md 3 | **proposed, low** |
+| - | `OSAPI_FSX_CAPS` answering `VID_VESA` in DL | -7 | nine packages compare with `VID_VGA` | ksp17/draw.md | **refused by its finder** |
+
+**Pass 18** (`docs/plans/completed/ksp18/`): ten agents found **no new
+break**. Two notes against the rows above, from `ksp18/wmui.md`:
+
+* **OSAPI_WM_TIMER's kern_big target is now the body itself** (the
+  `wm_timer_c` wrapper is gone), so under K17-3 the timer setter joins with
+  no wrapper to retire.
+* **`OSAPI_SEG`'s refusal shares its exit only on kern_big**; a break that
+  reshapes it can give kern_small the same shape.
+
 ## 11. Defects and stale text found by the audit (none is an ABI change)
 
 * **SPEC.md 20.3's slot-contract block still gives `OSAPI_SND_PLAY` the

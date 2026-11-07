@@ -176,8 +176,9 @@ boot2_entry:
     push cs
     pop ds                      ; DS = us; the stack stays stage 1's
     cld                         ; ...and DF=0 for every string op below
-    mov [b2_drive], dl
-    mov [b2_heads], dh
+    mov [b2_drive], dx          ; ...and DH = the heads into [b2_heads], the
+                                ; byte after it: one word store (kernel size
+                                ; pass 18, -4; the %if at the foot says so)
     mov [b2_spt], cx
     mov [b2_lba0], si
     mov [b2_ksig], di
@@ -334,16 +335,8 @@ boot2_entry:
     ; one read.
     mov word [b2_left], KZ_HEADSEC
 .head_next:
-    mov es, [b2_dest]
-    call read_run               ; AX = sectors it moved
-    add [b2_lba], ax
-    sub [b2_left], ax
-    pushf                       ; the loop test, banked past the shift as
-    mov cl, 5                   ; .load_next banks it: three bytes under a
-    shl ax, cl                  ; `cmp word [b2_left], 0`
-    add [b2_dest], ax
-    popf
-    jne .head_next
+    call read_run               ; the run, and [b2_lba]/[b2_left]/[b2_dest]
+    jne .head_next              ; moved past it: ZF = nothing left
     add word [b2_dest], KZ_RPARA    ; ...and the packed tail lands R up, which
                                     ; os88kz.py rounds to a SECTOR: read_run's
                                     ; DMA-page bound divides the destination's
@@ -355,14 +348,8 @@ boot2_entry:
 %endif
 
 .load_next:
-    mov es, [b2_dest]
-    call read_run               ; AX = sectors it moved; BX is its own business
-    add [b2_lba], ax
-    sub [b2_left], ax
+    call read_run               ; ZF = [b2_left] reached 0 (BX its own business)
     pushf                       ; the loop test, banked past the splash call
-    mov cl, 5
-    shl ax, cl                  ; 0x20 paragraphs a sector...
-    add [b2_dest], ax           ; ...so the destination follows the run
 
 %ifndef BOOT_NOSPLASH
 %ifdef KZIP
@@ -598,8 +585,7 @@ kz_all:
     add ax, bp                  ; ...the next block's bytes
     add bx, KZ_BLK / 16         ; ...and where they go
     pop cx
-    dec cx
-    jnz .blk
+    loop .blk                   ; (pass 18: `dec cx / jnz`, a byte longer)
     ret
 
 ; -----------------------------------------------------------------------------
@@ -680,9 +666,9 @@ kz_expand:
     cmp al, 15
     jne .lits
 .lx:
-    lodsb                       ; ...and its extension bytes, 255 at a time
-    xor ah, ah
-    add cx, ax
+    lodsb                       ; ...and its extension bytes, 255 at a time:
+    add cx, ax                  ; AH is still the cbw's 0 (lodsb writes AL
+                                ; alone), so no `xor ah, ah` (pass 18, -2)
     cmp al, 255
     je .lx
 .lits:
@@ -698,8 +684,7 @@ kz_expand:
     cmp al, 15
     jne .mat
 .mx:
-    lodsb
-    xor ah, ah
+    lodsb                       ; AH = 0 from the cbw above, as at .lx
     add cx, ax
     cmp al, 255
     je .mx
@@ -724,9 +709,12 @@ kz_expand:
 ;            carry (SPEC.md 18.93). Retries three times, resetting the
 ;            controller between attempts, because floppy reads fail spuriously
 ;            often enough to matter.
-; in:  ES = destination segment, [b2_left] = sectors still wanted
-; out: AX = sectors actually transferred, 1..run
-; clobbers: ax, bx, cx, dx, si, di
+; in:  [b2_dest] = destination segment, [b2_left] = sectors still wanted
+; out: the run ACCOUNTED: [b2_lba] and [b2_dest] advanced past it and
+;      [b2_left] less it, with ZF = 1 when that left nothing - the two loops'
+;      shared bookkeeping, written once here since both callers did it word
+;      for word (kernel size pass 18, -21 of the full blob)
+; clobbers: ax, bx, cx, dx, si, di, es
 ;
 ; A run stops at the first of three bounds, and the third is the one that is
 ; easy not to think of:
@@ -737,6 +725,7 @@ kz_expand:
 ;      can, and the controller answers a straddle with error 09h
 ; -----------------------------------------------------------------------------
 read_run:
+    mov es, [b2_dest]
     ; --- 1 and 2: the run bound, and what is left to read --------------------
     mov di, [b2_left]           ; bound 2 first, so bound 1 only has to beat it
     mov ax, [b2_lba]
@@ -873,11 +862,21 @@ read_run:
 %endif
     mov ax, [b2_runsz]          ; the whole run: CF=0 is the contract
 .out:
+    add [b2_lba], ax            ; AX = the sectors it moved
+    sub [b2_left], ax
+    pushf                       ; the loop test, banked past the shift: three
+    mov cl, 5                   ; bytes under a `cmp word [b2_left], 0`
+    shl ax, cl                  ; 0x20 paragraphs a sector...
+    add [b2_dest], ax           ; ...so the destination follows the run
+    popf
     ret
 
 b2_msg_err:  db 'Disk error', 0
 b2_drive:    db 0
 b2_heads:    db 0
+%if b2_heads - b2_drive != 1
+  %error "boot2_entry stores DL:DH into b2_drive:b2_heads as one word"
+%endif
 b2_spt:      dw 0
 b2_runmax:   dw 0
 b2_runsz:    dw 0

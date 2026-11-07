@@ -714,12 +714,12 @@ gfx_disp_run:
 gfx_disp_enter:
     inc byte [gfx_dnest]
     cmp byte [gfx_dnest], 1
-    jne .out                    ; nested: an outer hook owns the translation
+    jne gfx_dent_out            ; nested: an outer hook owns the translation
+                                ; (gfx_disp_enter_n's `ret`, below: its own was
+                                ; one byte too many - kernel size pass 18)
     push ax                     ; vid_disp_of ANSWERS in AL, so x is banked
     call vid_disp_of            ; AL = the display holding (AX, BX); it cannot
     jmp short gfx_dent_act      ; fail - the dead zone answers with the primary
-.out:
-    ret
 
 ; ...and the same enter with the display NAMED rather than resolved, for
 ; SPEC.md 39.14.7.2's cut. DL = the display index.
@@ -1525,13 +1525,16 @@ gfx_points:
     jmp .hook
 %endif
 .out:
-    KSEGR ax                    ; DS back, by reload rather than by pop: kernel
-    mov ds, ax                  ; code always runs DS = CS = KERNEL_SEG, so
-    jmp kret_es                 ; there is nothing to remember. THE LEAVE IS
-                                ; NOT HERE - `.done` owns it, because only a
-                                ; pass can know whether another one follows.
-                                ; The shared ladder (size pass 10): eight pops
-                                ; and the ret, once a CALL and not a point
+    jmp kret_es                 ; THE LEAVE IS NOT HERE - `.done` owns it,
+                                ; because only a pass can know whether another
+                                ; one follows - AND NEITHER IS DS: every way in
+                                ; has it back already. `.done` reloads it
+                                ; before any jump here, and `.slow` never gave
+                                ; it away (gfx_pixel is called with the
+                                ; kernel's). The second `KSEGR ax / mov ds, ax`
+                                ; that stood here went (kernel size pass 18,
+                                ; -4). The shared ladder (size pass 10): eight
+                                ; pops and the ret, once a CALL and not a point
 
 ; --- the two wrappers the cold paths go through -----------------------------
 ; Both exist because the loop has given DS away. gfx_ls_box reaches the clip
@@ -3239,8 +3242,13 @@ gfx_blit_run:
     push bx
     push cx
     push dx
-    mov al, ah
-    mov [gfx_color], al
+%ifdef KERN_SMALL
+    mov al, ah                  ; (kern_small keeps the two-instruction form: its
+    mov [gfx_color], al         ; one byte more keeps font_run's measured parity)
+%else
+    mov [gfx_color], ah         ; AH's own store, a byte under `mov al, ah` and
+%endif                          ; AL's short form (kernel size pass 18, -1;
+                                ; ~4 clocks a run less on an 8088's fetch)
     mov ax, di                  ; x1 = the run's start
     mov cx, [gfx_blit_x]
     add cx, dx
@@ -3928,18 +3936,22 @@ osapi_gfx_fill_pat:
     push si
     push di
     mov di, gfx_patbuf          ; ...straight into the STAGING buffer, which
-    mov cx, 8                   ; is what api_pat was for: gfx_pat_stage below
-                                ; then copies the eight bytes onto themselves
+    mov [gfx_pat], di           ; is what api_pat was for: gfx_pat_stage below
+    mov cx, 8                   ; then copies the eight bytes onto themselves
                                 ; (SI = DI, harmless), and api_pat's 8 bytes of
                                 ; .bss go (size pass 9). Nothing else writes
                                 ; gfx_patbuf, and the one kernel caller of
-                                ; gfx_fill_pat (files.inc) names its own
+                                ; gfx_fill_pat (files.inc) names its own.
+                                ; [gfx_pat] is published from DI BEFORE the
+                                ; copy rather than as an immediate after it:
+                                ; one register store (kernel size pass 18, -2),
+                                ; and the lock is held, so nothing reads it in
+                                ; between
 .copy:
     es lodsb                    ; ES:SI, and SI walks itself (DF = 0, SPEC.md
     mov [di], al                ; 1 - gfx_pat_stage's movsw below leans on
     inc di                      ; the same contract in the same call)
     loop .copy
-    mov word [gfx_pat], gfx_patbuf
     pop di
     pop si
     pop cx
@@ -5042,13 +5054,18 @@ thm_pen_live:                   ; the flag down, then thm_ink's own door for
                                 ; touches the caller's
 thm_pen_dis:
     push ax
-    mov al, [thm_inkc]          ; CDGRAY on white is a legible grey and on
+    mov ax, [thm_inkc]          ; CDGRAY on white is a legible grey and on
     mov [gfx_disink], al        ; black is very nearly nothing, so Dark takes
-    mov al, [thm_disc]          ; CLGRAY. That is the VGA answer; on 1bpp the
+    mov al, ah                  ; CLGRAY. That is the VGA answer; on 1bpp the
     mov ah, 1                   ; flag buys a checkerboard and [gfx_disink]
     mov [gfx_color], ax         ; says what it is laid ON - this surface's own
     pop ax                      ; live ink, so black on Bright and white on
-    ret                         ; Dark (SPEC.md 76.6.1)
+    ret                         ; Dark (SPEC.md 76.6.1). ONE load for the
+                                ; pair: thm_disc is the byte after thm_inkc
+                                ; (the %if below; kernel size pass 18, -1)
+%if thm_disc - thm_inkc != 1
+  %error "thm_pen_dis loads thm_inkc and thm_disc as one word"
+%endif
 %endif
 
 ; -----------------------------------------------------------------------------

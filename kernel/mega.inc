@@ -898,9 +898,11 @@ mega_swc:                           ; ovlchk: builds its own far frame
     push bx
     push si
     push ax
-    mov bx, [ss:bp + 4]
-    sub bx, mega_swv
-    mov al, [cs:mega_swv + bx]      ; AL = the vector
+    mov bx, [ss:bp + 4]             ; the stub's return IS its vector byte
+    mov al, [cs:mega_swv + bx - mega_swv] ; AL = the vector: [cs:bx], spelt
+                                    ;   with the label os88ovlchk wants named
+                                    ;   (size pass 18: it was a `sub` of
+                                    ;   mega_swv then a read at +mega_swv, -6)
     mov bx, MEGA_SEL_LOW0
     mov ds, bx
     xor bh, bh
@@ -910,9 +912,16 @@ mega_swc:                           ; ovlchk: builds its own far frame
     mov bx, [bx]
     call mega_swok
     jc .sh
-    mov [ss:bp + 2], bx
+.st:
+    mov [ss:bp + 2], bx             ; SI:BX, the handler: into the slots
     mov [ss:bp + 4], si
-    jmp short .go
+.go:
+    pop ax
+    pop si
+    pop bx
+    pop ds
+    pop bp
+    retf
 .sh:
     push cx                         ; the gate mega_ivt_sync would build,
     push dx                         ;   into 8 bytes of this stack
@@ -927,23 +936,15 @@ mega_swc:                           ; ovlchk: builds its own far frame
     mov bl, al
     xor bh, bh
     call COLD_SEG:mega_idt_gatef    ; (clobbers AX, CX, DX, SI)
-    mov si, sp
-    mov bx, [ss:si + 2]             ; BX:SI = its selector and offset
-    mov si, [ss:si]
-    add sp, 8
+    pop bx                          ; the gate's offset...
+    pop si                          ; ...and its selector: SI:BX, as above
+    add sp, 4                       ; (the gate's other half)
     pop di
     pop es
     pop dx
     pop cx
-    mov [ss:bp + 2], si
-    mov [ss:bp + 4], bx
-.go:
-    pop ax
-    pop si
-    pop bx
-    pop ds
-    pop bp
-    retf
+    jmp short .st                   ; (size pass 18: popped, not read, and
+                                    ;   one store pair for both arms: -15)
 
 ; mega_i21 - IDT 21h (SPEC.md 124.31.2, (d1)): IRQ1 when the master PIC has
 ; it in service or the kernel raised it (mega_kwd); else a package's own
@@ -1013,13 +1014,11 @@ mega_swok:
     cmp ah, 0x98
     pop si
     pop ax
-    pop ds
-    je .yes
+    pop ds                          ; (POP writes no flag: the compare's
+    je .r                           ;   equal is CF = 0, the answer)
 .no:
     stc
-    ret
-.yes:
-    clc
+.r:
     ret
 mega_irv:
 %assign mega_q 0x0A
@@ -2668,12 +2667,9 @@ mega_fattr:
     call mega_cs2ds                 ; AX = S
     jc .b
     call mega_fown                  ; DI = the record, DX = its region
-    jnc .o
 .b:
-    pop ax
-    jmp short mega_fbown
-.o:
-    pop ax                          ; (POP keeps CF = 0)
+    pop ax                          ; (POP keeps CF: either miss is the
+    jc mega_fbown                   ;   block walk's to answer)
     ret
 mega_fattrf:                        ; (mega_fkivt's, from `.cold`)
     call mega_fattr
@@ -12792,7 +12788,8 @@ mega_segty:
     jae .no                         ; alias, a #GP in the kernel (mega_segh
     cmp bl, 0xFF                    ; bounds its DX the same way)
     je .no
-    MXT_ES
+    xchg ax, di                     ; AX = the descriptor's offset, across
+    MXT_ES                          ;   the walk (AX is banked)
     mov di, mega_wtab
 .l:
     cmp [es:di], dx
@@ -12800,10 +12797,14 @@ mega_segty:
     add di, 4
     cmp di, mega_wtab_end
     jb .l
-    mov di, dx                      ; not a window: a handle descriptor of
-    and di, 0xFFF8                  ; the caller's block (AVL set, based in
-    mov ax, MEGA_SEL_LDTD           ; a block the caller owns)
-    mov es, ax
+    stc                             ; not a window: a handle descriptor of
+.h:                                 ; the caller's block (AVL set, based in
+    xchg ax, di                     ; a block the caller owns). CF = 1 here,
+    mov ax, MEGA_SEL_LDTD           ; CF = 0 from .f's equal compare - and
+    mov es, ax                      ; neither `xchg` nor `mov` writes it: DI
+    jnc .set                        ; and ES are .set's either way (kernel
+                                    ; size pass 18: they were derived twice,
+                                    ; once on each arm, -10)
     test byte [es:di+6], MEGA_HAVL
     jz .no
     push dx
@@ -12823,11 +12824,8 @@ mega_segty:
 .f:
     cmp [es:di+2], bl
     jne .no
+    jmp short .h                    ; (equal: CF = 0)
 .set:
-    mov di, dx
-    and di, 0xFFF8
-    mov ax, MEGA_SEL_LDTD
-    mov es, ax
     mov al, 0xF2                    ; data at DPL 3, code CONFORMING at DPL
     jcxz .s                         ; 0 (KERN-MEGA-PLAN 14.144): a program
     mov al, 0x9E                    ; that flips its odd selector in place
@@ -12915,22 +12913,19 @@ mega_npx:                           ; ovlchk: builds its own far frame
     mov [bp+4], bx                  ;   handler's CS: a refusal above still
     mov bx, [es:mega_npo]           ;   hands mega_fault its 0Bh
     mov [bp+2], bx
-    pop es
-    pop ds
-    pop di
-    pop dx
+    SKIPF1                          ; (test al, 0F9h over the `stc`: CF = 0,
+.no:                                ;   AL kept) - ONE unwind for both arms,
+    stc                             ;   and CF says which (kernel size pass
+    pop es                          ;   18, -3). The handler is entered with
+    pop ds                          ;   the flags this leaves, as it was with
+    pop di                          ;   mega_bownf's: the faulting FLAGS are
+    pop dx                          ;   the CPU frame's, under the far return
     pop bx
     pop ax
     pop bp
+    jc .f
     retf                            ; into the handler
-.no:
-    pop es
-    pop ds
-    pop di
-    pop dx
-    pop bx
-    pop ax
-    pop bp
+.f:
     add sp, 2                       ; [SP] = 0Bh, the error: mega_fault's
     jmp MEGA_SEL_CODE:mega_fault
 section .mega

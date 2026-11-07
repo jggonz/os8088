@@ -486,21 +486,18 @@ section .text
 ; answer.  This clock is a pace, not an accounting.
 ; -----------------------------------------------------------------------------
 sch_pit_now:
-    push cx
     pushf
     cli
     mov al, 0x00                ; latch channel 0's count
     out 0x43, al
     in al, 0x40
-    mov cl, al
+    mov ah, al                  ; the LOW byte, parked in AH...
     in al, 0x40
-    mov ch, al
-    mov dx, [ticks]
-    popf
-    neg cx                      ; phase = 65536 - count, counting up from the
-    mov ax, cx                  ; tick
-    pop cx
-    ret
+    xchg al, ah                 ; ...and the pair put the right way round:
+    mov dx, [ticks]             ; the count is built in AX itself, so CX is
+    popf                        ; never borrowed (kernel size pass 18, -4,
+    neg ax                      ; and ~27 cycles a read faster). Phase =
+    ret                         ; 65536 - count, counting up from the tick
 
 ; -----------------------------------------------------------------------------
 sch_fast_on:
@@ -640,9 +637,7 @@ sch_rhook:
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
 sched_stop:
-    push ax
-    push si
-    push di
+    call kent_bp                ; KENT: push ax..bp (kernel size pass 18, -2)
     push es
 
 %ifdef KERN_MEGA
@@ -657,19 +652,14 @@ sched_stop:
     cli
     movsw
     movsw
-    popf
-
-    call mouse_unhook           ; restores int 0Ch, masks IRQ4
-    call snd_unhook             ; 61h bits 0-1 back to their boot state,
-                                ; ch2 quiescent (SPEC.md 34.7)
 
     ; PIT ch0 back to the BIOS default (mode 3, square wave, divisor
-    ; 65536). The vector is already restored so sch_isr can no longer read
-    ; the PIT mid-sequence, but keep the three OUTs atomic anyway - an
-    ; interleaved counter read between the two count-byte writes is
-    ; undefined on a real 8253 (SPEC.md 8.1).
-    pushf
-    cli
+    ; 65536), in the SAME window as the vector: the vector is restored so
+    ; sch_isr can no longer read the PIT mid-sequence, and the three OUTs
+    ; stay atomic anyway - an interleaved counter read between the two
+    ; count-byte writes is undefined on a real 8253 (SPEC.md 8.1). It was a
+    ; second window after the two unhooks, which touch neither channel 0 nor
+    ; its vector (kernel size pass 18, -3)
     mov al, 0x36
     out 0x43, al
     xor al, al
@@ -677,11 +667,10 @@ sched_stop:
     out 0x40, al
     popf
 
-    pop es
-    pop di
-    pop si
-    pop ax
-    ret
+    call mouse_unhook           ; restores int 0Ch, masks IRQ4
+    call snd_unhook             ; 61h bits 0-1 back to their boot state,
+                                ; ch2 quiescent (SPEC.md 34.7)
+    jmp kret_es
 
 sched_unhook:
     call sched_stop
@@ -694,6 +683,11 @@ sched_unhook:
                                 ; and neither has an instruction after it, so
                                 ; AX/SI/DI/ES need not come back either
 %endif
+                                ; (The PARITY `nop` sys put here for
+                                ; sch_pit_now -4 and sched_stop -5 went with
+                                ; sch_account's odd -7 below: kernel size
+                                ; pass 18, sweep3. sch_isr / sch_switch keep
+                                ; their measured parity, tests/unit/t_hotpar.py)
 
 ; -----------------------------------------------------------------------------
 ; sch_wake_ui - make the UI task ready (PROBE, docs/plans/completed/SCHED-IDLE-PLAN.md 6.3)
@@ -799,12 +793,11 @@ sch_idle_body:
                                 ; made ready waits for the next TICK, so the
                                 ; wake byte on its own buys nothing and input
                                 ; still lands up to 55 ms late. Costs one
-                                ; switch per WAKE taken while idle (8.1.2.5)
-%ifndef KERN_EMU
-    nop                         ; PARITY PAD, never executed: the halt-again
-                                ; arm is 3 bytes, and this keeps everything
-                                ; after it at t_hotpar's measured parity
-%endif
+                                ; switch per WAKE taken while idle (8.1.2.5).
+                                ; (The halt-again arm is 3 bytes; its parity
+                                ; pad went when task_spawn below came down by
+                                ; one: kernel size pass 18. kern_emu has
+                                ; neither, and t_hotpar does not pin it)
 
 ; in:  nothing.  out: CF=1 if no slot was free (the machine keeps the old
 ;      resume-the-outgoing fallback and nothing else changes)
@@ -1041,14 +1034,17 @@ task_spawn:
                                 ; BP - which is the addressing this already
                                 ; used
 
-    cmp cl, [sch_top]           ; RAISE THE BOUND BEFORE THE PUBLISH (SPEC.md
+    mov ax, cx                  ; AL = slot index (1..MAX_TASKS-1), the
+                                ; answer - and CH is 0, so AX is the slot
+    cmp al, [sch_top]           ; RAISE THE BOUND BEFORE THE PUBLISH (SPEC.md
     jb .intop                   ; 8.1.3): the scan stops at [sch_top], so a
-    mov al, cl                  ; slot made ready above it would never run.
-    inc ax                      ; AX is 0 from the zeroing above, so this is
-    mov [sch_top], al           ; slot + 1. Still IF=0 - the ISR cannot look
-.intop:                         ; between this store and the one below
+    inc ax                      ; slot made ready above it would never run:
+    mov [sch_top], al           ; slot + 1, and AL back to the slot. Still
+    dec ax                      ; IF=0 - the ISR cannot look between this
+.intop:                         ; store and the one below. (Off the answer's
+                                ; own load, a byte under its own `mov al, cl`:
+                                ; kernel size pass 18)
     mov byte [bx+T_STATE], 1    ; publish - MUST be the last record write
-    mov ax, cx                  ; AL = slot index (1..MAX_TASKS-1)
 
 .done:
     popf                        ; IF back - and the caller's CF with it, so
@@ -1212,10 +1208,11 @@ task_exit:
     je .lower                   ; sch_switch re-derives all three
     inc ax
     mov [sch_top], al
-    jmp sch_switch              ; explicit jump - placement-safe
-    nop                         ; PARITY PAD, never executed: the bound above
-                                ; is 25 bytes, and this keeps sch_isr at the
-                                ; parity it was measured at (t_hotpar)
+    jmp sch_switch              ; explicit jump - placement-safe. (The bound
+                                ; above is 25 bytes, and its parity pad went
+                                ; when cur_move_mono, above it, came down by
+                                ; an odd 7: kernel size pass 18. sch_isr is
+                                ; at its measured parity - t_hotpar)
 
 ; -----------------------------------------------------------------------------
 ; sch_account - charge the PIT cycles since the last measure point to the
@@ -1249,7 +1246,9 @@ task_exit:
 ;           which charges nothing but still answers the question. task_cycles
 ;           and task_debit used to re-derive this from the same [sch_cur]
 ;           under the same cli; now they do not.
-; clobbers: AX, BX, CX, DX, SI - on BOTH arms now; the early-out used to
+; clobbers: AX, BX, CX, DX, SI - on BOTH arms now (CX:DX the PREVIOUS stamp
+;           on the charging arm, and BX untouched on the early-out, since
+;           pass 18 - nothing reads either); the early-out used to
 ;           clobber nothing. Every call site already tolerated the list:
 ;           sch_isr holds a full frame, sch_switch's .pick pushes DX and BX,
 ;           task_exit banks the record pointer in DI first, task_cycles and
@@ -1271,13 +1270,16 @@ task_exit:
 ; that 0.02%, and the bytes win.
 ; -----------------------------------------------------------------------------
 sch_account:
-    mov bl, [sch_cur]           ; SI = &sch_cycles[sch_cur] - an OUTPUT, so it
-    xor bh, bh                  ; is computed before the early-out below and
-    shl bx, 1                   ; not after the charge. In BX, because CX
-    shl bx, 1                   ; carries the latched phase further down; and
-    mov si, bx                  ; hoisting it above the latch cannot change
-                                ; the reading, because nothing before the
-                                ; `out 0x43` affects it
+    mov al, [sch_cur]           ; SI = &sch_cycles[sch_cur] - an OUTPUT, so it
+    cbw                         ; is computed before the early-out below and
+    shl ax, 1                   ; not after the charge. Through AX, which the
+    shl ax, 1                   ; latch spends next anyway: `mov al, [mem]` is
+    xchg si, ax                 ; the accumulator form and [sch_cur] < 128, so
+                                ; cbw is the zero high byte - 10 bytes and
+                                ; faster where BX took 12 (kernel size pass
+                                ; 18, -3); hoisting it above the latch cannot
+                                ; change the reading, because nothing before
+                                ; the `out 0x43` affects it
     cmp byte [sch_fast], 0      ; the fsx sub-tick (SPEC.md 53.2.1) divides the
     jne .idle                   ; very period this arithmetic is built on, so
                                 ; accounting PAUSES for the bracket - here
@@ -1301,12 +1303,17 @@ sch_account:
     js .cohere                  ; latch - keep ticks
     inc dx                      ; reload before the latch: tick not yet in
 .cohere:
-    mov ax, cx                  ; elapsed = now - last, 32-bit
-    sub ax, [sch_pit_last]
-    mov bx, dx
-    sbb bx, [sch_pit_last+2]
-    mov [sch_pit_last], cx
-    mov [sch_pit_last+2], dx
+    mov ax, cx                  ; elapsed = now - last, 32-bit. The stamp is
+    xchg cx, [sch_pit_last]     ; stored and the old one read in ONE xchg a
+    sub ax, cx                  ; word, so CX/DX come back holding the LAST
+    mov bx, dx                  ; stamp rather than this one (clobbers either
+    xchg dx, [sch_pit_last+2]   ; way; no caller reads them) - 16 bytes where
+    sbb bx, dx                  ; six moves were 20, and 4 fewer clocks a word
+                                ; on the 8088 (xchg r,m 25+EA and sub r,r 3,
+                                ; against sub r,m and mov m,r at 13+EA each,
+                                ; EA 6): kernel size pass 18, -4, and 8
+                                ; clocks plus 16 of fetch floor off every
+                                ; tick's charge (H2)
     add [si+sch_cycles], ax     ; sch_cycles[sch_cur] += elapsed, at the SI
     adc [si+sch_cycles+2], bx
 .idle:
@@ -2459,6 +2466,14 @@ sch_switch:
                                 ; nothing reads CL again. DL = [sch_cur] from
                                 ; the park, and nothing between writes DX
     mov dh, ch                  ; scan cur+1, cur+2, ... (cur itself last)
+    xor bh, bh                  ; BH = 0 ONCE: a slot * 8 is under 256, so
+                                ; every `shl` below leaves it 0, and the
+                                ; fallback's index after the loop too (kernel
+                                ; size pass 18: out of the loop, -2 bytes and
+                                ; 3 clocks a slot scanned)
+%if MAX_TASKS * T_SIZE > 256
+  %error "sch_switch zeroes BH once for the scan: a slot's record offset must stay under 256"
+%endif
 .scan:                          ; over the [sch_top] slots that can be live,
     inc dl                      ; not MAX_TASKS (SPEC.md 8.1.3): the ones above
     cmp dl, ch                  ; are free, and a free slot was never picked.
@@ -2466,16 +2481,18 @@ sch_switch:
     xor dl, dl                  ; the bound under its OWN slot arrives with
 .nowrap:                        ; DL >= CH, and wraps to 0 on the first step
     mov bl, dl
-    xor bh, bh
     shl bx, cl                  ; CL = 3, set once above the scan
     cmp byte [bx+sch_tasks+T_STATE], 1
     jne .skip
     cmp dl, [sch_idleslot]      ; the idle task is picked at the fallback
     je .skip                    ; below and never by the scan (6.2)
-    cmp byte [fsx_task], 0xFF   ; the fsx freeze (SPEC.md 53.2): off means
-    je .pick                    ; every ready task is eligible; armed, only
-    cmp dl, [fsx_task]          ; the exclusive task itself...
-    je .pick
+    mov al, [fsx_task]          ; the fsx freeze (SPEC.md 53.2): off means
+    cmp al, 0xFF                ; every ready task is eligible; armed, only
+    je .pick                    ; the exclusive task itself... (through AL,
+    cmp dl, al                  ; which is free here: the same five bytes
+    je .pick                    ; and two clocks less than the immediate
+                                ; compare, and the second compare a register
+                                ; one - kernel size pass 18, -2)
     cmp dl, [fsx_worker]        ; ...its kept worker (FSXF_KEEPWORKER)...
     je .pick
     test byte [bx+sch_tasks+T_FLAGS], TF_SERVICE
@@ -2495,8 +2512,7 @@ sch_switch:
     jne .idlepick               ; starts it - the old behaviour stands, which
     mov dl, [sch_cur]           ; is to resume the outgoing task
 .idlepick:
-    mov bl, dl
-    xor bh, bh
+    mov bl, dl                  ; (BH = 0, the scan's: see above it)
     shl bx, cl                  ; CL = 3, set once above the scan
 .pick:
     ; --- charge the OUTGOING task, and ONLY on a real change (SPEC.md 8.1.1)
