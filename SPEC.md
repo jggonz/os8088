@@ -241523,6 +241523,13 @@ arm loads its data selector instead. A part that reaches its own data with
 in the arm, the same two instructions in real mode. A far address WIN16
 hands out for its own code - an import stub's (`w16_stubs`, `w16_proc`),
 LibMain's trampoline - is the image's code half (`W16ICS`), never `ds`.
+**So is one WIN16 hands ITSELF**: a callback frame naming one of its own
+stubs as the callee - MDICLIENT's WM_MDICREATE and WM_MDIDESTROY, which
+call back through `W16_CWROW` and `W16_DWROW` (124.27.2) - is entered by
+`w16_cbenter`'s `retf`, and a data half there is a `#GP` with that
+selector as its error code. kern_mega's far-transfer fixup (`mega_gpfix`)
+completes one - a fault each time - and until KERN-MEGA-PLAN 14.165 closed
+MDI.EXE and File Manager there instead (§20.18.2's `mega_codesel` row).
 
 The system-library and task parts (9 and 10) keep the word that holds
 WIN16's data selector, which their thunks load DS from, in their headers.

@@ -1963,8 +1963,8 @@ w16i_mdicreate:
     mov [es:di + 6], ax             ; hMenu: its ID
     call w16i_defpos
     mov ax, w16_stubs + W16_STUBSZ * W16_CWROW
-    mov dx, ds
-    ICALL w16_cbcall
+    W16ICS dx                       ; the IMAGE's code: in the arm DS is its
+    ICALL w16_cbcall                ;   data half (KERN-MEGA-PLAN 14.165)
     xor ax, ax
     cwd
     ret
@@ -2302,7 +2302,7 @@ w16i_mdidestroy:
     pop ax
     ICALL w16_ppush                 ; DestroyWindow's one argument
     mov ax, w16_stubs + W16_STUBSZ * W16_DWROW
-    mov dx, ds
+    W16ICS dx                       ; (the image's code, as WM_MDICREATE's)
     ICALL w16_cbcall
 .none:
     xor ax, ax

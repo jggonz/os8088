@@ -14866,6 +14866,7 @@ now: **+2 bytes on both builds** (the one change to the shipped WIN16).
 File Manager are CLOSED next at `w16_cbenter`'s `retf` (`10E4:0B2F`, error
 code 10ECh, WIN16's own DATA selector as the far return's CS) - the same
 frame Program Manager takes three completed `xfer` fixups through.
+(Fixed: 14.165.)
 
 **Bytes.** kern_big's and kern_small's kernels are not touched (no kernel
 source changed). Shipped WIN16 (kern_big): `win16.bin` 164,165 -> 164,167
@@ -14885,3 +14886,69 @@ with one `CSDO` taken off a line of `w16mdi.inc`. `t_w16xsec` (fast) takes
 `CSEG` for `cs:` in its rule 3, and `seg0` (fast), which walks t_cswrite's
 trees, now walks apps/win16/ too: its two sites, a NULL far pointer and a
 false one, are registered in tests/seg0.txt.
+
+### 14.165 MDI.EXE and File Manager CLOSED at `w16_cbenter`'s `retf`: part 10 named WIN16's stubs by their DATA half, and `mega_codesel` read the LDT's end through the program's SS (2026-11-07) - FIXED
+
+**What 14.164 left.** On kern_mega, WIN16 running the in-tree MDI fixture
+(MDI.EXE, `make win16fixtures`) or Windows 3.0's File Manager was CLOSED
+before either painted: `kern_mega CLOSED MDI 0D at 10E4:0B2F err 10EC` -
+`w16_cbenter`'s `retf`, WIN16's own DATA selector as the far return's CS.
+Program Manager went through the same `retf` three times and had each
+completed by `mega_gpfix` (an `xfer` line in the census).
+
+**Why the frame held the data selector.** A temporary `mega_tlog` that
+also printed the faulting stack (SS 119C: FLAGS 0202, then `138C 10EC`,
+then `0B64 10E4`) named the callee: `10EC:138C` is `w16_stubs + 4 x
+W16_CWROW`, WIN16's CreateWindow stub, and `10E4:0B64` is `w16_cbret`
+(the code half, right: `w16_cbcall` pushes `cs`). MDICLIENT's
+WM_MDICREATE makes the child by calling back into WIN16's own CreateWindow
+through that stub, as Windows' MDICLIENT calls CreateWindow - and part 10
+(`w16mdi.inc`, `w16i_mdicreate`) built the callee's segment with `mov dx,
+ds`. In real mode DS is the image's segment and so its code; in the arm DS
+is the pair's data half and the code is DS - 8, which is SPEC.md 124.31.5's
+rule (`W16ICS`) and which these two sites missed. WM_MDIDESTROY's call back
+into DestroyWindow (`W16_DWROW`, `w16i_mdidestroy`) had the same line. They
+are the only far pointers to WIN16's code built from DS (every
+`w16_cbcall` and every `w16_stubs` reference walked): now `W16ICS dx`,
+which is `mov dx, ds` off the arm, so the shipped WIN16 assembles byte for
+byte what it did (`cmp` of `win16.bin`, 164,167 both).
+
+**Why it was fatal for two programs and a fixup for one.** `mega_gpfix`
+takes a far transfer whose error code is an LDT selector to `.pairq`, which
+asks `mega_codesel` whether the selector is a pair's data half - and
+`mega_codesel` began `cmp ax, [ss:mega_ldte]`. A `#GP` at CPL 0 does not
+switch stacks, so SS was the Windows program's own (119C, its DGROUP), and
+the test read whatever the program kept at `mega_ldte`'s offset (1348h).
+Program Manager's word there happened to be above 10ECh, so the pair was
+recognised and the `retf` completed; MDI.EXE's and File Manager's was not,
+so `mega_codesel` said "no pair", `.stale` found the entry in use, and the
+fault was reported - `mega_fkill` closed WIN16. It is SPEC.md 20.18.2's
+defect again, in the one `.mega` routine that table had not listed: the
+read is `ES = LOW_SEG` by name now, as `mega_ldt2ds` and `.stale` already
+do. With the kernel half alone fixed (the WIN16.O88 of before on the new
+kernel) MDI.EXE runs to "MDI OK" through six completed fixups and File
+Manager through one - which is what proves the second cause, and why the
+first is still a defect: a fault per MDI child made or destroyed.
+
+**Bytes.** kern_big and kern_small: `kernel.bin` byte-identical (`cmp`,
+built before and after at one commit; `kernel/mega.inc` is kern_mega's
+alone). kern_mega: `mega_codesel` 87 -> 92 bytes (+5: `mov bx, LOW_SEG /
+mov es, bx` and an ES override where the SS one was, inside the pushes it
+already made), in `.mega`, whose length is unchanged at 5B90h - the `align
+16` before `rms_lo` absorbs the five - and `kernel.bin` 139,664 both;
+`kernsize --release`'s resident line 62,976 of 68,096 both. The shipped
+WIN16: byte-identical. The arm: `win16.bin` 188,970 -> 188,976 (+6, the
+two `sub dx, 8`), WIN16.O88 162,029 both on the disk (lz4).
+
+**Row.** `win16megatrap` (soak) gains two legs and a check on every leg:
+`mdi` (MDI.EXE runs its own checks - an MDICLIENT and three children,
+tile, cascade, minimize, maximize, WM_MDIDESTROY - and its MessageBox,
+read off its stack while WIN16 serves it, must say "MDI OK") and `winfile`
+(win16ref's File Manager, its drive window, Window > Tile and > Cascade, up;
+a SKIP without win16ref, as `pm` and `sol` are); and no leg may take an
+`xfer` fixup at WIN16's own code selector (the instance's data selector -
+8). Red with the WIN16.O88 of before (`--pkg/--map`) on the new kernel: pm
+3, mdi 6, winfile 1 fixups at `10E4:0B2F`; on the kernel of before as well,
+`MDI never started - kern_mega CLOSED MDI 0D at 10E4:0B2F`. Green after:
+none on any leg, "MDI OK", lz/pm/sol as 14.164 measured (0 and 123, 0, up).
+Five legs at once, 77 s.

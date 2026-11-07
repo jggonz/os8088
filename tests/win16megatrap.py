@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """WIN16 on kern_mega with no completed #GP in its hot paths
-(docs/plans/KERN-MEGA-PLAN.md 14.164, SPEC.md 124.31.5, 124.31.7).
+(docs/plans/KERN-MEGA-PLAN.md 14.164, 14.165, SPEC.md 124.31.5, 124.31.7).
 
-    python3 tests/win16megatrap.py              the row: both legs
-    python3 tests/win16megatrap.py --leg lz     one leg (lz or pm)
+    python3 tests/win16megatrap.py              the row: every leg
+    python3 tests/win16megatrap.py --leg mdi    one leg (lz, pm, sol, mdi
+                                                or winfile; repeatable)
     python3 tests/win16megatrap.py --pkg F.O88 --map F.MAP
                                                 census another kern_mega
                                                 WIN16.O88 (the one before a
@@ -37,17 +38,30 @@ arm), its DOS.O88 and a fixture with an \\AUTOSTRT link to it, in two legs:
         Cascade, Ctrl+Tab four times and eight arrows in the Main group -
         part 10's MDI frames, captions, icons, tile and cascade. It must
         stay up with no fault, and the traps charged to part 10's code
-        selector ([w16_tseg + 4]) must be none. (MDI.EXE, the in-tree MDI
-        fixture, is CLOSED on kern_mega at w16_cbenter's far return
-        before it paints, an open defect 14.164 names - so it is not the
-        leg's program)
+        selector ([w16_tseg + 4]) must be none
   sol   Windows 3.0's Solitaire (SOL.EXE, win16ref's too): its window has
         WS_CLIPCHILDREN, so its first paint walks w16_clipkids, whose
         w16_cutkid lost the walk's CX - the walk ran past the window table
         and read past WIN16's data limit, and kern_mega CLOSED Solitaire
         (and Cardfile, and MDI.EXE) at 10xx:9E26 before 14.164. It must be
         up, its instance alive, with no fault, ten guest seconds after
+  mdi   MDI.EXE (`make win16fixtures`, tests/win16/mdi.c): an MDICLIENT and
+        three children by WM_MDICREATE, tiled, cascaded, minimized,
+        maximized and destroyed by WM_MDIDESTROY, all checked by the
+        program - its MessageBox, read off its own stack while WIN16
+        serves it, must say "MDI OK"
+  winfile Windows 3.0's File Manager (WINFILE.EXE, win16ref's; a SKIP
+        without it): its drive window, Window > Tile and > Cascade, up
 
+EVERY leg must also take no far-transfer fixup (an `xfer` line: a #GP
+whose error code is a selector) at WIN16's own code selector - the
+instance's data selector - 8. Part 10's MDICLIENT made each WM_MDICREATE
+and WM_MDIDESTROY a call back into WIN16's CreateWindow and DestroyWindow
+stubs, and named the stubs' segment `ds`, the image's DATA half in the arm,
+so w16_cbenter's retf loaded a data selector into CS (14.165): kern_mega's
+mega_gpfix completed it for Program Manager (three) and CLOSED MDI.EXE and
+File Manager there, because its pair check read the LDT's end through SS -
+the program's stack - and took whatever the program kept at that offset.
 The selectors are read off WIN16's own data (its instance's I_SPTR is its
 data selector; the offsets are the tree's megak/apps/win16.map), so a trap
 is charged by the kernel's own bookkeeping, not by an address that moves
@@ -57,7 +71,10 @@ THE FAILING CASE (docs/WRITING-TESTS.md 1): --pkg/--map with the WIN16.O88
 from before 14.164 (and its map) - the lz leg charged 1,959 traps to the DOS
 block (12 at the gate, 2 in the host, 1 in the handler, an int 21h) and 534
 to part 9, and the pm leg 4,838 to part 10, and the sol leg was CLOSED: measured red
-when this was written, against 0, 123, 0 and up after.
+when this was written, against 0, 123, 0 and up after. And with the
+WIN16.O88 from before 14.165: pm 3, mdi 6 and winfile 1 xfer fixups at
+w16_cbenter's retf (10E4:0B2F) on 14.165's kernel, and on the kernel before
+it MDI.EXE CLOSED there ("MDI never started"); none and "MDI OK" after.
 
 It writes only under its private tree's win16megatrap/ directory.
 """
@@ -85,7 +102,8 @@ LZ_SYS = 140                    # part 9's cold residue in the lz leg: 123
 LIMIT = 300                     # guest seconds a leg's program may take
 SAMPLES = os.path.join(ROOT, "win16ref", "samples", "w3-archive", "WINDOWS")
 GROUPS = ("ACCESSOR.GRP", "GAMES.GRP", "MAIN.GRP")
-TRAP = re.compile(r"^T [0-9A-F]{4} ([0-9A-F]{4}):[0-9A-F]{4} ")
+TRAP = re.compile(r"^T ([0-9A-F]{4}) ([0-9A-F]{4}):([0-9A-F]{4}) ")
+W16F_ARGS = 12                  # a waiting call's arguments, above its frame
 
 
 def mt_env():
@@ -95,7 +113,11 @@ def mt_env():
 def win16_syms(path):
     """{name: offset} for the WIN16 data words the row reads, off PATH (a
     win16.bin's nasm map: the package's own, since the words move with it)"""
-    want = {"w16_dhent", "w16_sseg", "w16_tseg"}
+    import win16fpu
+    global MSGBOX
+    MSGBOX = win16fpu.row_handler(win16fpu.msgrow())   # MessageBox's handler
+    want = {"w16_dhent", "w16_sseg", "w16_tseg", "w16_inprog", "w16_idx",
+            "w16_bind", "w16_pss", "w16_psp_", MSGBOX}
     out = {}
     with open(path) as f:
         for line in f:
@@ -175,6 +197,12 @@ def leg(t, syms, name, win16, keep, display, res):
     elif name == "sol":
         exe = os.path.join(SAMPLES, "SOL.EXE")
         extra = []
+    elif name == "mdi":
+        exe = os.path.join(ROOT, "build", "win16", "MDI.EXE")
+        extra = []
+    elif name == "winfile":
+        exe = os.path.join(SAMPLES, "WINFILE.EXE")
+        extra = []
     else:
         exe = os.path.join(SAMPLES, "PROGMAN.EXE")
         ini = os.path.join(out, "PROGMAN.INI")
@@ -189,7 +217,7 @@ def leg(t, syms, name, win16, keep, display, res):
     box = os88bochs.Box(out, [], cimg=c, cgeom=os88bochs.GEOM, noa=True,
                         bootc=True, build=t.dir, display=display)
     prog = os.path.splitext(os.path.basename(exe))[0]
-    sel = {}
+    sel, csel = {}, None
     try:
         box.up()
         last = [0.0]
@@ -204,6 +232,7 @@ def leg(t, syms, name, win16, keep, display, res):
             return False
         box.until(started, prog + "'s instance", LIMIT)
         dsel = [p for _, n, p, _ in box.instances() if n.upper() == prog][0]
+        csel = dsel - 8                 # its code half (W16ICS, 124.31.4)
         base = box.sel_base(dsel)
         if name == "lz":
             import win16lz
@@ -217,6 +246,43 @@ def leg(t, syms, name, win16, keep, display, res):
                     win16lz.second():
                 fails.append("SECOND.DAT is not SECOND.DA_ expanded")
             words = {"dos": syms["w16_dhent"] + 2, "sys": syms["w16_sseg"] + 4}
+        elif name == "mdi":
+            def u16(a):
+                b = box.read(a, 2)
+                return b[0] | b[1] << 8
+
+            def at_box():               # WIN16 serving MessageBox, the
+                if not any(n.upper() == prog for _, n, _, _ in
+                           box.instances()):
+                    raise RuntimeError("MDI's WIN16 is gone")
+                if box.read(base + syms["w16_inprog"], 1)[0]:
+                    return False        #   program waiting in it
+                slot = u16(base + syms["w16_idx"])
+                return u16(base + syms["w16_bind"] + 4 * slot + 2) == \
+                    syms[MSGBOX]
+            box.until(at_box, "MDI.EXE's MessageBox", LIMIT, poll=1.0)
+            # MessageBox(hwnd, text, caption, type), pascal: the text's far
+            # pointer is at +6 of the waiting call's arguments (W16F_ARGS)
+            a = box.sel_base(u16(base + syms["w16_pss"])) + \
+                u16(base + syms["w16_psp_"]) + W16F_ARGS + 6
+            off, tsel = u16(a), u16(a + 2)
+            got = box.read(box.sel_base(tsel) + off, 120).split(b"\0")[0]
+            say("its MessageBox: %r" % got.decode("latin-1"))
+            if got != b"MDI OK":
+                fails.append("MDI.EXE's MessageBox says %r, not 'MDI OK'"
+                             % got.decode("latin-1"))
+            words = {}
+        elif name == "winfile":
+            box.capture()
+            box.guest_sleep(10)
+            box.ui_done("File Manager's drive window", secs=120)
+            for keys in (("alt+w",), ("t",), ("alt+w",), ("c",)):
+                box.key(*keys, delay=120)
+                box.guest_sleep(1)
+                box.ui_done("File Manager after %s" % keys[0], secs=120)
+            if not any(n.upper() == prog for _, n, _, _ in box.instances()):
+                fails.append("File Manager's WIN16 is gone")
+            words = {}
         elif name == "sol":
             box.guest_sleep(10)
             box.ui_done("Solitaire's first paint", secs=120)
@@ -249,11 +315,27 @@ def leg(t, syms, name, win16, keep, display, res):
         box.stop()
     with open(box.e9, "rb") as f:
         text = os88bochs._unsplit(f.read().decode("latin-1"))
-    per = collections.Counter()
+    per, xfer = collections.Counter(), collections.Counter()
     for line in text.splitlines():
         m = TRAP.match(line)
         if m:
-            per[int(m.group(1), 16)] += 1
+            per[int(m.group(2), 16)] += 1
+            if int(m.group(1), 16) and int(m.group(2), 16) == csel:
+                xfer["%s:%s" % (m.group(2), m.group(3))] += 1
+    # a far transfer out of WIN16's own code to a DATA selector - a callback
+    # frame naming one of WIN16's stubs by its data half (KERN-MEGA-PLAN
+    # 14.165): kern_mega's xfer fixup completes it at best, and closes the
+    # program when the fixup refuses
+    if csel is not None:
+        say("%d far transfers fixed up out of WIN16's code %04X%s" % (
+            sum(xfer.values()), csel, (" (" + ", ".join(
+                "%s x%d" % kv for kv in sorted(xfer.items())) + ")")
+            if xfer else ""))
+        if xfer:
+            fails.append("%d #GP xfer fixups out of WIN16's code selector "
+                         "%04X at %s: a far return to a DATA selector (none "
+                         "allowed)" % (sum(xfer.values()), csel,
+                                       ", ".join(sorted(xfer))))
     for k, s in sorted(sel.items()):
         n = per.get(s, 0)
         allow = LZ_SYS if k == "sys" else 0
@@ -270,20 +352,23 @@ def leg(t, syms, name, win16, keep, display, res):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--leg", choices=("lz", "pm", "sol"), action="append")
+    ap.add_argument("--leg", choices=("lz", "pm", "sol", "mdi", "winfile"), action="append")
     ap.add_argument("--pkg", help="the kern_mega WIN16.O88 to census "
                     "(default: the tree's megak/apps/win16.o88)")
     ap.add_argument("--map", help="--pkg's own win16.map (nasm's, of the "
                     "same win16.bin): the words the row reads move with it")
     ap.add_argument("--keep", action="store_true")
     a = ap.parse_args()
-    legs = a.leg or ["lz", "pm", "sol"]
-    if "lz" in legs and not os.path.exists(os.path.join(
-            ROOT, "build", "win16", "LZT.EXE")):
-        print("win16megatrap: SKIP - LZT.EXE is not built (make "
-              "win16fixtures)")
-        return 77
-    for lg, need in (("pm", ("PROGMAN.EXE",) + GROUPS), ("sol", ("SOL.EXE",))):
+    legs = a.leg or ["lz", "pm", "sol", "mdi", "winfile"]
+    for fx in ("LZT.EXE", "MDI.EXE"):
+        if (fx == "LZT.EXE" and "lz" in legs or fx == "MDI.EXE" and "mdi" in
+                legs) and not os.path.exists(os.path.join(
+                    ROOT, "build", "win16", fx)):
+            print("win16megatrap: SKIP - %s is not built (make "
+                  "win16fixtures)" % fx)
+            return 77
+    for lg, need in (("pm", ("PROGMAN.EXE",) + GROUPS), ("sol", ("SOL.EXE",)),
+                     ("winfile", ("WINFILE.EXE",))):
         if lg in legs and not all(os.path.exists(os.path.join(SAMPLES, f))
                                   for f in need):
             print("win16megatrap: the %s leg is a SKIP - no %s in %s (the "
