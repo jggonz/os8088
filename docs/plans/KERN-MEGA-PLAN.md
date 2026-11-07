@@ -35,6 +35,12 @@ measured and its source is named.
 The inventory taken before the branch merged back. Each item names the 14.x
 entry that owns it once work starts.
 
+**The release audit of 2026-11-07 is docs/plans/MEGA-RELEASE-PLAN.md** (branch
+`mega-release`): every program driven on 86Box, the regressions it found and
+fixed (14.145-14.152), the critical soak rows ported, and what is left -
+the owner's decisions, the Victory session and the final pass. The list
+below is the one it started from.
+
 **To make work (the owner, 2026-10-26) - ALL BUILT the same day:**
 - [x] **VESA** (SPEC.md 120.3.4) - VESA.DRV runs every `int 10h` on its own
   stack and is armed for protected mode by `VXV_PM`; banked window A through
