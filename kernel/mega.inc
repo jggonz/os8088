@@ -898,9 +898,11 @@ mega_swc:                           ; ovlchk: builds its own far frame
     push bx
     push si
     push ax
-    mov bx, [ss:bp + 4]
-    sub bx, mega_swv
-    mov al, [cs:mega_swv + bx]      ; AL = the vector
+    mov bx, [ss:bp + 4]             ; the stub's return IS its vector byte
+    mov al, [cs:mega_swv + bx - mega_swv] ; AL = the vector: [cs:bx], spelt
+                                    ;   with the label os88ovlchk wants named
+                                    ;   (size pass 18: it was a `sub` of
+                                    ;   mega_swv then a read at +mega_swv, -6)
     mov bx, MEGA_SEL_LOW0
     mov ds, bx
     xor bh, bh
@@ -910,9 +912,16 @@ mega_swc:                           ; ovlchk: builds its own far frame
     mov bx, [bx]
     call mega_swok
     jc .sh
-    mov [ss:bp + 2], bx
+.st:
+    mov [ss:bp + 2], bx             ; SI:BX, the handler: into the slots
     mov [ss:bp + 4], si
-    jmp short .go
+.go:
+    pop ax
+    pop si
+    pop bx
+    pop ds
+    pop bp
+    retf
 .sh:
     push cx                         ; the gate mega_ivt_sync would build,
     push dx                         ;   into 8 bytes of this stack
@@ -927,23 +936,15 @@ mega_swc:                           ; ovlchk: builds its own far frame
     mov bl, al
     xor bh, bh
     call COLD_SEG:mega_idt_gatef    ; (clobbers AX, CX, DX, SI)
-    mov si, sp
-    mov bx, [ss:si + 2]             ; BX:SI = its selector and offset
-    mov si, [ss:si]
-    add sp, 8
+    pop bx                          ; the gate's offset...
+    pop si                          ; ...and its selector: SI:BX, as above
+    add sp, 4                       ; (the gate's other half)
     pop di
     pop es
     pop dx
     pop cx
-    mov [ss:bp + 2], si
-    mov [ss:bp + 4], bx
-.go:
-    pop ax
-    pop si
-    pop bx
-    pop ds
-    pop bp
-    retf
+    jmp short .st                   ; (size pass 18: popped, not read, and
+                                    ;   one store pair for both arms: -15)
 
 ; mega_i21 - IDT 21h (SPEC.md 124.31.2, (d1)): IRQ1 when the master PIC has
 ; it in service or the kernel raised it (mega_kwd); else a package's own
@@ -1013,13 +1014,11 @@ mega_swok:
     cmp ah, 0x98
     pop si
     pop ax
-    pop ds
-    je .yes
+    pop ds                          ; (POP writes no flag: the compare's
+    je .r                           ;   equal is CF = 0, the answer)
 .no:
     stc
-    ret
-.yes:
-    clc
+.r:
     ret
 mega_irv:
 %assign mega_q 0x0A
@@ -2668,12 +2667,9 @@ mega_fattr:
     call mega_cs2ds                 ; AX = S
     jc .b
     call mega_fown                  ; DI = the record, DX = its region
-    jnc .o
 .b:
-    pop ax
-    jmp short mega_fbown
-.o:
-    pop ax                          ; (POP keeps CF = 0)
+    pop ax                          ; (POP keeps CF: either miss is the
+    jc mega_fbown                   ;   block walk's to answer)
     ret
 mega_fattrf:                        ; (mega_fkivt's, from `.cold`)
     call mega_fattr

@@ -177,4 +177,10 @@
 #             decoders, blk_relit) is above 1MB and not counted here. This is
 #             the knobs' whole price on kern_mega: 399 bytes of kern_big's
 #             growth room in the segment (13,815 left at this figure)
-3682
+# 2026-11-07: +2, kernel size pass 18 (ksp18/main.md): kbm_isr's self-chain
+#             test is `cmp word [kbm_old9+2], KERNEL_SEG` on every real-mode
+#             kernel, two bytes under `mov ax, cs / cmp [cs:...], ax`, which
+#             kern_mega keeps - CS is a selector in protected mode, so the
+#             constant is not its answer. Nothing kern_mega had grew; the
+#             figure moves because kern_big's .text got smaller under it
+3684

@@ -242475,7 +242475,7 @@ pentium-pciether`) is the 86Box profile.
    reflected `int 13h` from a high image the same way. (A boot attach runs in
    real mode before the image is moved, so there the calls are not reflected
    at all.) On a 386 the reflection is a CR0.PE clear and set; on a 286 it is a
-   CPU reset through the BIOS, which the CPU gate (`pci_gate`) means is never
+   CPU reset through the BIOS, which the CPU gate (`pci_probe`'s head) means is never
    made. A few hundred microseconds a call, at attach only. *Seen on a
    machine: no - the first run is the harness's (S8).* **On kern_big and
    kern_emu there is nothing to reflect**: the kernel is real mode

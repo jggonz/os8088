@@ -1209,8 +1209,11 @@ drv_f_usbm:  db 'USBMOUSE.DRV', 0 ; SPEC.md 9.12's CH375 mouse. kern_big's and
                                 ; with a CH375 has no disk that carries the file
 %endif
 %ifdef DRV_PCIETH
-drv_f_pcieth: db 'PCIETHER.DRV', 0 ; SPEC.md 125's PCI NICs: the big builds'
-%endif
+drv_f_pcieth: db 'PCI'          ; SPEC.md 125's PCI NICs: the big builds'.
+%endif                          ; 'PCIETHER.DRV' - ITS TAIL IS THE NEXT NAME,
+                                ; DRV_TITLES' 'PCI Ethernet' shape: ten bytes
+                                ; (kernel size pass 18). Nothing may come
+                                ; between the two lines
 drv_f_eth:   db 'ETHER.DRV', 0   ; ...and the card's, on BOTH builds: the store
                                 ; a RAM disk is made of is what kern_small has
                                 ; none of, and a network card is not

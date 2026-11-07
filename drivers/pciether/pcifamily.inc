@@ -18,37 +18,31 @@ pce_stop:   jmp [pce_vt + PCEV_STOP]
 ; pce_find - probe the bus, take the first card pce_tab knows, load its
 ; vectors and let it claim what it needs (DRVV_ATTACH's half)
 ; out: CF=0 and [eth_base] = its I/O base; CF=1 = no card, or no memory for it
+; clobbers: AX, BX, CX, DI - eth_attach, NIC_ATTACH_FIND's one caller, banks
+; all four. SI is kept (a refused attach hands the kernel its own back) and
+; DX is too: the attach's caller holds it
+;
+; A REFUSED CLAIM LEAVES [eth_base] SET, and that is the attach's own rule
+; (ethdrv.inc, .none): a refused attach is handed straight back to the heap,
+; so nothing reads the image's state again
 ; -----------------------------------------------------------------------------
 pce_find:
-    push ax
-    push bx
-    push cx
     push si
-    push di
     call pci_probe              ; BX = bus/devfn, AX = base, SI = the row
     jc  .out
     mov [eth_base], ax
-    mov [pce_bdf], bx
     mov ax, [si+4]
     mov [pce_name], ax
     mov si, [si+6]              ; the backend's vectors...
-    mov di, pce_vt
-    mov cx, 5
+    xor bx, bx
 .cp:
-    mov ax, [si]
-    mov [di], ax
-    add si, 2
-    add di, 2
-    loop .cp
+    mov ax, [si+bx]
+    mov [pce_vt+bx], ax
+    inc bx
+    inc bx
+    cmp bl, PCEV_STOP + 2
+    jb  .cp
     call [pce_vt + PCEV_CLAIM]  ; ...and its memory
-    jnc .out
-    mov word [eth_base], 0
-    stc
 .out:
-    pop di
     pop si
-    pop cx
-    pop bx
-    pop ax
     ret
-

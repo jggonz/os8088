@@ -2950,15 +2950,23 @@ kbm_isr:
     ; the whole test. Refusing costs the keystroke and an EOI the BIOS would
     ; otherwise have sent - a keyboard that has stopped working, on a machine
     ; that is still running, in a state this can no longer reach.
-    mov ax, cs
+%ifdef KERN_MEGA
+    mov ax, cs                  ; (a selector in protected mode: asked live)
     cmp [cs:kbm_old9+2], ax
+%else
+    cmp word [kbm_old9+2], KERNEL_SEG ; DS = CS = KERNEL_SEG here (KDS at the
+                                ; head; kbm_i15's head the same), so the
+                                ; segment is a constant: two bytes and ~8
+                                ; clocks a key under `mov ax, cs` and a
+                                ; CS-overridden compare (kernel size pass 18)
+%endif
     je .selfchain
 %ifdef KBD_DIAG
 %ifdef KBD_I15
     cmp byte [kbm_ivec], 0x54   ; hooked at int 15h (9.7.2): the ROM below is
     jne .dcall                  ; called with ITS AX - AH = 4Fh, AL = the byte
-    pop ds                      ; - and 4Fh's CF = 1, not with the CS the
-    pop ax                      ; self-chain test left in AX
+    pop ds                      ; - and 4Fh's CF = 1, not with whatever the
+    pop ax                      ; scan left in AX
     push ax
     push ds
     stc
@@ -2997,7 +3005,7 @@ kbm_isr:
     je .jmp9
 %endif
     pop ds                      ; the interrupted DS: nothing below reads one
-    in al, 0x21                 ; (AX is banked: the self-chain test's CS)
+    in al, 0x21                 ; (AX is banked: the scan's, spent)
     push ax                     ; the IMR as it was...
     or al, 0xFD                 ; ...and every line but the keyboard's shut
     out 0x21, al
