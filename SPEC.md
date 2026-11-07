@@ -149119,8 +149119,9 @@ macro module's image +1,310 (18,904 -> 20,214), so its claim is **30 KB** in
 the arm against 28 (`SH_M2KB`) and the text files' tail (§81.91.1) keeps more
 than its shipped room - two channels of 5,248 bytes against 4,880.
 `SHEET.O88` on kern_mega's disks 87,663 -> 87,924. kern_big pays nothing.
-`tests/officetrap.py --leg sheet` is the row: 0 #GP for the run, the save
-and the BIFF reload, against 1,097 with the shipped build.
+`tests/officetrap.py --leg sheet` is the row: 0 #GP for two macro runs
+(tests/sheetmacro.py's COUNT and a 100-turn FOR), the save and the BIFF
+reload, against 1,725 with the shipped build.
 
 ### 81.93 What the macro language does not do, and where the module stands
 

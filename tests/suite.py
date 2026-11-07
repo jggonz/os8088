@@ -6920,12 +6920,15 @@ SOAK = [
         "SHEET IN REAL USE UNDER kern_mega, NO STORE THROUGH CS (KERN-MEGA-PLAN "
         "14.162): 86Box's at286 port with build/mega.img, MAC.SLK and kern_mega's "
         "arm (sheet.asm -DPKG_MEGA, its modules' stores through CSDO and each "
-        "claim's data selector). Macro > Run LOOP, a 100-turn FOR; Save As "
-        "BIFF and the host reads H2 = 5050; the BIFF opened again (the chart "
+        "claim's data selector). Macro > Run sheetmacro's COUNT (FOR, WHILE, "
+        "SELECT, FORMULA, IF/GOTO/BREAK, COPY/PASTE, CLEAR, SET.VALUE by "
+        "name, RETURN) and LOOP, a 100-turn FOR; Save As BIFF and the host "
+        "reads every answer (J2 = 5050); the BIFF opened again (the chart "
         "module's formula decoder); and the fault log charges nothing to a "
         "loaded image. RUN RED: --sheet build/sheet.o88, the shipped build - "
-        "1,097 #GP, five a macro step at the macro module's selector and "
-        "three a formula at the chart module's. 35s is 33 measured",
+        "1,725 #GP at 34 sites, five a macro step at the macro module's "
+        "selector and three a formula at the chart module's. 35s is 30 "
+        "measured",
         needs=("86box",),
         wants=("build/mega.img", "build/megak/apps/sheet.o88",
                "build/megak/kernel.map")),

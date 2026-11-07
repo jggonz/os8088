@@ -14457,10 +14457,12 @@ clocks. WORD's image 53,801 -> 53,797 (WORD.O88 43,635 -> 43,638), SCRIBE's
 52,955 -> 52,947 (42,947 -> 42,944). What is left in either is five
 `push cs` pairs that only READ (`tests/cswrites.txt`).
 
-**Rows.** `officetrap-sheet` (soak, 86Box): Macro > Run LOOP, Save As BIFF
-(H2 = 5050 read on the host), MAC.BIF reopened, nothing charged to a loaded
-image - RED with the shipped build in the arm's place (`--sheet
-build/sheet.o88`: 1,097 #GP at 23 sites). `officetrap-word` (soak, 86Box):
+**Rows.** `officetrap-sheet` (soak, 86Box): Macro > Run tests/sheetmacro.py's
+COUNT (FOR, WHILE, SELECT, FORMULA, IF/GOTO/BREAK, COPY/PASTE, CLEAR,
+SET.VALUE through a name, RETURN) and LOOP, Save As BIFF (every answer read
+on the host, J2 = 5050), MAC.BIF reopened, nothing charged to a loaded image -
+RED with the shipped build in the arm's place (`--sheet build/sheet.o88`:
+1,725 #GP at 34 sites). `officetrap-word` (soak, 86Box):
 Word loads, saves, sorts and renumbers WELCOME.DOC, Scribe SCWELCOM.DOC and
 .RTF, the saved .DOCs say what the originals say (tools/wordfmt.py) and the
 .RTF keeps its 32 `\pard`, nothing charged - RED with the packages of before

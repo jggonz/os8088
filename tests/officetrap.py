@@ -19,10 +19,13 @@ after a file call is the kernel's, KERN-MEGA-PLAN's census, not this row's.)
 SHEET (kern_mega's ARM, build/megak/apps/sheet.o88 - sheet.asm -DPKG_MEGA,
 whose two modules store into their claims through each claim's DATA
 selector, CSDO):
-  1. MAC.SLK (the host writes it) opens; Macro > Run LOOP, a 100-turn
-     FOR(H1,1,100) / SET.VALUE(H2,H2+H1) / NEXT();
-  2. File > Save As, Normal (BIFF): the macro's answer is in the file - H2 =
-     5050, read by the host (tools/os88sheetfmt.py);
+  1. MAC.SLK (the host writes it) opens; Macro > Run COUNT - tests/
+     sheetmacro.py's macro, FOR/NEXT, WHILE, SELECT, FORMULA, IF with GOTO
+     and BREAK, COPY/PASTE, CLEAR, MESSAGE, SET.VALUE through a name, RETURN
+     - and then LOOP, a 100-turn FOR(J1,1,100) / SET.VALUE(J2,J2+J1);
+  2. File > Save As, Normal (BIFF): both macros' answers are in the file,
+     read by the host (tools/os88sheetfmt.py) - J2 = 5050 and sheetmacro's
+     own answers for COUNT, cell by cell;
   3. the sheet closed and MAC.BIF opened again - the BIFF decoder's formula
      path (sh_dc_*, the chart module) - and its title says so;
   4. no exception charged to a loaded image from the first open to here.
@@ -38,10 +41,11 @@ they are - their conversions are shared source):
   4. no exception charged to a loaded image.
 
 THE FAILING CASE (docs/WRITING-TESTS.md 1): `--sheet build/sheet.o88` (the
-SHIPPED Sheet, its modules storing through CS) fails SHEET 4 with 1,024
-#GP at the macro module's selector for the run (shm_mstep .exec, shm_mesc,
-shm_pmacro .act, five a step) and 75 more at the chart module's for the
-BIFF load (sh_biff_dcrpn, sh_dc_index, three a formula); `--word`/
+SHIPPED Sheet, its modules storing through CS) fails SHEET 4 with 1,725
+#GP at 34 sites: the macro module's selector for the two runs (shm_mstep
+.exec, shm_mesc, shm_pmacro .act, five a step - 1,024 of them LOOP's) and
+the chart module's for the BIFF load (sh_biff_dcrpn, sh_dc_index, three a
+formula); `--word`/
 `--scribe` with the packages of before 14.162 fail WORD 4 - 29 at Word's
 load (wd_dpapin's `push cs / pop ds`, a #GP a mark in wd_dfkfind), 28 a
 Sort and a Renumber (wd_plist, one a paragraph), 51 at its save (wd_dattr,
@@ -62,7 +66,7 @@ os.environ["OS88_MEGA"] = "1"
 os.environ["OS88_MEGA_EMU"] = "86box"
 sys.path[:0] = [os.path.join(ROOT, "tools"), HERE]
 
-LOOP = ['FOR(H1,1,100)', 'SET.VALUE(H2,H2+H1)', 'NEXT()', 'RETURN()']
+LOOP = ['FOR(J1,1,100)', 'SET.VALUE(J2,J2+J1)', 'NEXT()', 'RETURN()']
 
 
 def main():
@@ -150,13 +154,18 @@ def main():
         om.guest_sleep(ui.m, then)
 
     if a.leg == "sheet":
-        cells = {(r, 0): ('formula', f, 0.0) for r, f in enumerate(LOOP)}
+        import sheetmacro                 # its COUNT macro: the language's
+        cells = {(r, 0): ('formula', f, 0.0)       # breadth, column A
+                 for r, f in enumerate(sheetmacro.COUNT)}
+        cells.update({(0, 2): 10.0, (1, 2): 20.0, (2, 2): 30.0})   # C1:C3
+        cells.update({(r, 5): ('formula', f, 0.0)  # LOOP, column F: the
+                      for r, f in enumerate(LOOP)})  # steps, J1/J2
         for r in range(20):                       # the BIFF load's formulas
-            cells[(r, 1)] = float(r + 1)
-            cells[(r, 2)] = ('formula', 'B%d*2+SQRT(B%d)' % (r + 1, r + 1),
-                             0.0)
+            cells[(r, 11)] = float(r + 1)
+            cells[(r, 12)] = ('formula', 'L%d*2+SQRT(L%d)' % (r + 1, r + 1),
+                              0.0)
         body = F.write_sylk(cells).decode('latin-1').split('\r\n')
-        body[1:1] = ['NN;NLOOP;ER1C1']
+        body[1:1] = ['NN;NCOUNT;ER1C1', 'NN;NTOTAL;ER14C8', 'NN;NLOOP;ER1C6']
         src = os.path.join(work, "MAC.SLK")
         open(src, "wb").write('\r\n'.join(body).encode('latin-1'))
         mkdisk([a.sheet, src])
@@ -167,16 +176,18 @@ def main():
             f0 = len(ui.m.faults())
             w = ui.path("B:/MAC.SLK")
             idle(ui, 2)
-            for _ in range(3):
-                ui.mo.menu(macro[0], macro[1], *run)
-                idle(ui, 1)
-                if any(t == "Run" for t in ui.titles()):
-                    break
-            want(any(t == "Run" for t in ui.titles()),
-                 "1: Macro > Run... opened its dialog (%r)" % ui.titles())
-            slow(ui, "\b" * 8 + "LOOP")
-            ui.m.key("Enter")
-            idle(ui, 4)
+            for name in ("COUNT", "LOOP"):
+                for _ in range(3):
+                    ui.mo.menu(macro[0], macro[1], *run)
+                    idle(ui, 1)
+                    if any(t == "Run" for t in ui.titles()):
+                        break
+                want(any(t == "Run" for t in ui.titles()),
+                     "1: Macro > Run... opened its dialog for %s (%r)"
+                     % (name, ui.titles()))
+                slow(ui, "\b" * 8 + name)
+                ui.m.key("Enter")
+                idle(ui, 4)
             ui.mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0],
                        SF.SAVE_AS[1])
             idle(ui, 1)
@@ -188,9 +199,25 @@ def main():
             idle(ui, 4)
             got = readback(ui, ["MAC.BIF"])["MAC.BIF"]
             v = F.read_biff(got) if got else {}
-            h2 = F.scalar(v.get((1, 7))) if v else None
-            want(h2 == 5050.0, "2: the macro's answer saved: H2 = %r, 5050 "
-                 "wanted" % (h2,))
+            g = lambda r, c: F.scalar(v.get((r, c))) if v else None
+            want(g(1, 9) == 5050.0, "2: LOOP's 100 turns saved: J2 = %r, "
+                 "5050 wanted" % (g(1, 9),))
+            # sheetmacro's own answers for COUNT (its checks, by cell)
+            for (r, c), x, what in (
+                    ((1, 7), 15.0, "FOR/NEXT: H2"),
+                    ((2, 7), 60.0, "WHILE(ACTIVE.CELL()<>0) and SELECT: H3"),
+                    ((3, 7), 30.0, "FORMULA(\"=H2*2\",H4): H4"),
+                    ((3, 2), 'done', "FORMULA(\"done\") at the active cell: C4"),
+                    ((7, 7), 3.0, "IF(H7=3,BREAK()): H8"),
+                    ((11, 7), 12.0, "a FOR stepping -3 in a FOR: H12"),
+                    ((0, 4), 10.0, "COPY() and PASTE(): E1"),
+                    ((13, 7), 99.0, "SET.VALUE(TOTAL,99): H14"),
+                    ((22, 7), 'top', "SELECT(range) then FORMULA: H23")):
+                want(g(r, c) == x, "2: COUNT saved %s = %r (%r wanted)"
+                     % (what, g(r, c), x))
+            want((1, 2) not in v and (4, 7) not in v and (8, 7) not in v,
+                 "2: CLEAR() emptied C2, GOTO skipped H5, RETURN() ended "
+                 "before H9")
             ui.close(w)
             idle(ui, 1)
             w = ui.path("B:/MAC.BIF")
