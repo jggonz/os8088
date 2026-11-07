@@ -243738,6 +243738,15 @@ BATTLEV.VBT] [--frames]` reads it.
   rings given a clip in place, +90 the slots evicted, +92 the clips whole in
   it at the end, +94 the rings' guard in KB and +95 the idle loop in the
   block. The owner's "nearly instant on 286" is a number there now.
+- **Version 5** (a 128-byte header) times what holds interrupts off: +96
+  the XMS copies (`VB_XCOPY`: the cache's fills and the hold's reads; an
+  `int 15h AH=87h` copy holds them off for all of it, the hook's clock with
+  them), +98 the longest in channel 2's counts, +100 their sum. And a
+  frame's +2 is now the HOOK'S PERIODS since the last frame: channel 2
+  laps at 55 ms, under a 15 fps frame, so a frame shown for 8 periods read
+  exactly as one shown for 4 - the owner's "stutters exactly once" was in
+  no column. `vbtprof.py` lists the frames HELD (a gap two periods past the
+  frame's own).
 - `vbtdiag` plays the demo on MartyPC's VGA XT, reads `VBPROF1.DAT` back
   off B: and holds it to the play; `vbtdiagx` the same on QEMU with XMS,
   500 frames through the staging, none dropped - and the cache on, the

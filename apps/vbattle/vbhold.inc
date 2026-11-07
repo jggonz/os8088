@@ -510,7 +510,7 @@ vb_hread:
     push cx
     push bx
     mov di, 1                       ; in, from extended
-    call OSAPI_XMEM_COPY
+    VB_XCOPY
     pop bx
     pop cx
     pop dx

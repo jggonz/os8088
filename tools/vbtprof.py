@@ -51,19 +51,26 @@ def read_prof(path):
         h.update(keys=kn, kmax=kmax, ksum=ksum, pool=pool, cache=cmode,
                  cfix=cfix, cfkb=cfkb, irings=irings, cev=cev,
                  cwhole=cwhole, guard=gkb, iinp=iinp)
+    if ver >= 5:                # THE COPIES (version 5), and a frame's gap
+        hlen = 128              # in the hook's periods
+        cn, cmax, csum = struct.unpack_from("<HHI", d, 96)
+        h.update(copies=cn, cmax=cmax * PIT_US / 1000,
+                 csum=csum * PIT_US / 1000)
+    per_ms = div * PIT_US / 1000
     fr = []
     for i in range(nf):
         o = hlen + pre * i
         t, gap, fl, clip, ahead, lead, feed = struct.unpack_from(
             "<HHBBBBH", d, o)
-        fr.append(dict(t=t * PIT_US / 1000, gap=gap * PIT_US / 1000,
+        fr.append(dict(t=t * PIT_US / 1000, gap=gap * per_ms if ver >= 5
+                       else gap * PIT_US / 1000, periods=gap if ver >= 5
+                       else None,
                        stall=bool(fl & 1), slate=(fl >> 1) & 7,
                        mode=fl >> 4, clip=clip,
                        ahead=ahead, lead=lead * 256, feed=feed * PIT_US /
                        1000))
     rd = []
     base = hlen + pre * prmax
-    per_ms = div * PIT_US / 1000
     for i in range(nr):
         p0, dp, n, off = struct.unpack_from("<HHHH", d, base + 8 * i)
         rd.append(dict(at=p0 * per_ms / 1000, ms=dp * per_ms, kb=n / 1024.0,
@@ -130,6 +137,10 @@ def main():
                       h["keys"], h["ksum"] * per / h["keys"],
                       h["kmax"] * per, per))
         print("the rings' guard: %d KB" % h["guard"])
+    if h["ver"] >= 5:
+        print("the XMS copies: %d, %.1f ms at the longest (interrupts off "
+              "for an int 15h copy - the hook's clock with them), %.0f ms "
+              "in all" % (h["copies"], h["cmax"], h["csum"]))
     print("the reader: %d calls, %.0f KB, %.1f s of the hook's periods "
           "(%.0f KB/s while reading)" % (
               h["rcalls"], h["rbytes"] / 1024.0,
@@ -165,6 +176,21 @@ def main():
               "%.0f ms (%.1f KB)" % (len(rd), tot, ms / 1000, tot / max(
                   1e-6, ms / 1000), max(r["ms"] for r in rd),
                   max(rd, key=lambda r: r["ms"])["kb"]))
+    if h["ver"] >= 5 and fr and h["fps"]:
+        # A FRAME HELD: on the glass a frame's time and more - its gap in
+        # whole hook periods past the frame's own, rounded up, and one more
+        due = -(-1000.0 / h["fps"] // (h["div"] * PIT_US / 1000))
+        held = [i for i, f in enumerate(fr[1:], 1)
+                if f["periods"] >= due + 2 and f["mode"] == CLIP_MODE and
+                fr[i - 1]["mode"] == CLIP_MODE]
+        nm = lambda f: "idle" if f["clip"] == 255 else (
+            names[f["clip"]] if names and f["clip"] < len(names)
+            else "clip %d" % f["clip"])
+        print("\nframes HELD on the glass (a gap of %d periods or more, a "
+              "frame's being %d): %d%s" % (due + 2, due, len(held), "".join(
+                  "\n  #%d %s %.0f ms (the frame before it: decode %.1f ms)"
+                  % (i, nm(fr[i]), fr[i]["gap"], fr[i - 1]["t"])
+                  for i in held[:20])))
     bad = sorted(range(len(fr)), key=lambda i: -fr[i]["t"])[:5]
     if bad:
         print("\nthe slowest frames: " + ", ".join(

@@ -9,7 +9,7 @@ build/vbattlev.img in B: (VBATTLED.O88 and the demo's BATTLEV.VBT):
 VBATTLED.O88 opened, played, the title watched a few guest seconds, Esc,
 and B: read back on the host:
 
-  1. B:VBPROF1.DAT is there: 'VBPR' version 4, VGA4, the bundle's name;
+  1. B:VBPROF1.DAT is there: 'VBPR' version 5, VGA4, the bundle's name;
   2. its frames are the play's: as many as the hook drew while it ran
      (vb_prn at the end), each with a decode time, the title's clip;
   3. tools/vbtprof.py reads it and prints the play.
@@ -109,7 +109,7 @@ def main():
         open(p, "wb").write(prof)
         good = prof[:4] == b"VBPR"
         h, fr, rd = vbtprof.read_prof(p) if good else ({}, [], [])
-        ok(good and h["ver"] == 4 and h["kind"] == "VGA4" and
+        ok(good and h["ver"] == 5 and h["kind"] == "VGA4" and
            h["name"] == "BATTLEV.VBT" and claimed,
            "1. B:VBPROF1.DAT: %r, version %s (the hold's line), %s, %r" % (
                prof[:4], h.get("ver"), h.get("kind"), h.get("name")))
@@ -254,7 +254,7 @@ def xms():
            "the clips' each with a time), and %d reads" % (
                len(fr), drawn, drop, len(rd)))
         per = h.get("div", 0) * vbtprof.PIT_US / 1000
-        ok(good and h["ver"] == 4 and h.get("cache") == 1 and
+        ok(good and h["ver"] == 5 and h.get("cache") == 1 and
            h.get("iinp") == 1 and h.get("pool", 0) > 1024 and
            h.get("irings", 0) >= 1 and h.get("keys", 0) >= 1 and
            h["kmax"] * per < 2000,
@@ -263,6 +263,16 @@ def xms():
            "band's redraw, %.0f ms at most" % (
                h.get("pool"), h.get("cfkb"), h.get("irings"), h.get("iinp"),
                h.get("keys"), h.get("kmax", 0) * per))
+        cf = [f["periods"] for f in fr[1:] if f["mode"] == vbtprof.CLIP_MODE
+              and f["periods"] is not None]
+        mean = sum(cf) / float(max(1, len(cf)))
+        due = 1000.0 / h.get("fps", 15) / max(1e-6, per)
+        ok(good and h.get("copies", 0) > 0 and h.get("cmax", 0) > 0 and
+           cf and abs(mean - due) < 0.5,
+           "x4. version 5: %s XMS copies timed (%.2f ms at the longest), and "
+           "a clip frame's gap in the hook's periods, %.2f on average "
+           "against the frame's %.2f" % (h.get("copies"), h.get("cmax", 0),
+                                         mean, due))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     if fails:

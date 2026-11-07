@@ -42,10 +42,13 @@
 ;          periods), +78 their sum (dword), +82 the pool's KB, +84 the
 ;          cache on, +85 the whole file, +86 KB it filled, +88 rings in
 ;          place, +90 slots evicted, +92 clips whole at the end, +94 the
-;          guard's KB, +95 the idle loop in the block (126.4.6)
+;          guard's KB, +95 the idle loop in the block (126.4.6); version 5
+;          (a 128-byte header): a frame's +2 is the hook's PERIODS since
+;          the last frame, +96 the XMS copies timed, +98 the longest in
+;          channel 2's counts, +100 their sum (dword)
 ; =============================================================================
 
-VB_PRH      equ 96                  ; (version 2: 64 before the hold's line)
+VB_PRH      equ 128                 ; (version 5; 96 to 4, 64 to 1)
 VB_PRE      equ 10
 VB_PRKB     equ 48                  ; the claim tried first, halved to 6
 ; IN XMS (the owner: "a system with plenty of XMS ... so its more accurate
@@ -77,6 +80,10 @@ vb_prtry:
     mov [vb_prksum], ax
     mov [vb_prksum+2], ax
     mov [vb_prkon], al
+    mov [vb_prcn], ax               ; (the copies: none timed yet)
+    mov [vb_prcmax], ax
+    mov [vb_prcsum], ax
+    mov [vb_prcsum+2], ax
     cmp byte [vb_pmd], 0            ; (kern_mega: none)
     jne .conv
     call OSAPI_XMEM_CAPS            ; THE PROFILE IN XMS, when it is there:
@@ -361,11 +368,11 @@ vb_prmark:
     mov dx, [vb_prtf]
     sub dx, ax                      ; a down-counter: before - after
     mov [es:di], dx
-    mov dx, [vb_prta]
-    sub dx, [vb_prtf]
-    mov [es:di+2], dx
-    mov ax, [vb_prtf]
-    mov [vb_prta], ax
+    mov dx, [vb_hper]               ; +2 (version 5): the HOOK'S PERIODS
+    mov ax, dx                      ; since the last frame - channel 2 laps
+    sub dx, [vb_prpa]               ; at 55 ms, under a 15 fps frame, so a
+    mov [es:di+2], dx               ; frame shown twice as long read as one
+    mov [vb_prpa], ax               ; shown on time
     mov ax, [vb_alate]              ; THE SOUND LATE since the last frame
     sub ax, [vb_prlat]              ; (bits 1-3, 7 at most): a record its
     add [vb_prlat], ax              ; sound reached before it was read
@@ -537,7 +544,7 @@ vb_prend:
     jc .drop
     mov word [es:0], 'VB'
     mov word [es:2], 'PR'
-    mov word [es:4], 4              ; (4: the cache and the keys, +74..95)
+    mov word [es:4], 5              ; (5: the copies, +96..; gaps in periods)
     mov ax, [vb_prn]
     mov [es:6], ax
     mov ax, [vb_prnl]
@@ -650,6 +657,14 @@ vb_prend:
     mov al, [vb_cgkb]               ; +94 the rings' guard, KB
     mov ah, [vb_iinp]               ; +95 the idle loop in the block
     mov [es:94], ax
+    mov ax, [vb_prcn]               ; VERSION 5: +96 the XMS copies timed,
+    mov [es:96], ax                 ; +98 the longest (channel 2's counts),
+    mov ax, [vb_prcmax]             ; +100 their sum (dword)
+    mov [es:98], ax
+    mov ax, [vb_prcsum]
+    mov [es:100], ax
+    mov ax, [vb_prcsum+2]
+    mov [es:102], ax
     mov al, '1'
 .try:
     mov [vb_prfn + 6], al
@@ -882,4 +897,37 @@ vb_prkend:
     mov [vb_prkmax], ax
 .m:
     pop ax
+    ret
+
+; vb_prc0 / vb_prc1 - an XMS copy timed (VB_XCOPY, version 5): channel 2 as
+; it starts, and after it its counts summed and the longest kept. Every
+; register and the copy's flags kept
+vb_prc0:
+    cmp word [vb_prseg], 0
+    je .r
+    push ax
+    call vb_prpit
+    mov [vb_prc], ax
+    pop ax
+.r:
+    ret
+
+vb_prc1:
+    pushf
+    cmp word [vb_prseg], 0
+    je .r
+    push ax
+    call vb_prpit
+    neg ax
+    add ax, [vb_prc]                ; (a down-counter: before - after)
+    inc word [vb_prcn]
+    add [vb_prcsum], ax
+    adc word [vb_prcsum+2], 0
+    cmp ax, [vb_prcmax]
+    jbe .m
+    mov [vb_prcmax], ax
+.m:
+    pop ax
+.r:
+    popf
     ret

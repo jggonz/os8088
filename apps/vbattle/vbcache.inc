@@ -778,7 +778,7 @@ vb_hup:
     push cx
     mov es, [vb_hbnc]
     xor di, di                      ; out, to extended
-    call OSAPI_XMEM_COPY
+    VB_XCOPY
     pop cx
     pop dx
     pop ax

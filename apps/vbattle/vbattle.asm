@@ -280,6 +280,18 @@ VC_LAPK     equ 22              ; ...and its length in 4 KB
 
 ; VB_STRM ring, row - ZF=0 (jnz) when clip ROW in ring RING is a loop too big
 ; to be held in its ring, which the reader reads round. AX, DX spent
+; VB_XCOPY - OSAPI_XMEM_COPY, timed by VBATTLED (126.8 version 5: a copy
+; by int 15h holds interrupts off for all of it, the hook's clock with them)
+%macro VB_XCOPY 0
+%ifdef VB_DIAG
+    call vb_prc0
+%endif
+    call OSAPI_XMEM_COPY
+%ifdef VB_DIAG
+    call vb_prc1
+%endif
+%endmacro
+
 %macro VB_STRM 2
     test word [%2+VC_FLAGS], CF_LOOP
     jz %%out
@@ -5627,6 +5639,11 @@ VB_VAR vb_prkon, 1                  ; ...a key waits for its band
 VB_VAR vb_prkn, 2                   ; ...keys timed
 VB_VAR vb_prkmax, 2                 ; ...the longest
 VB_VAR vb_prksum, 4                 ; ...their sum
+VB_VAR vb_prpa, 2                   ; ...the last frame's hook period
+VB_VAR vb_prc, 2                    ; ...an XMS copy's start (PIT 2)
+VB_VAR vb_prcn, 2                   ; ...copies timed
+VB_VAR vb_prcmax, 2                 ; ...the longest
+VB_VAR vb_prcsum, 4                 ; ...their sum
 %endif
 VB_VAR vb_loff, 2                   ; ...its offset in the ground's buffer
 VB_VAR vb_lstr, 2                   ; ...a plane's bytes (the band's rows x 40)

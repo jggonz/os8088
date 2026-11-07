@@ -86,3 +86,19 @@ in the HMA):
 Not measured here: the owner's 286 (the profile's key latency and sound
 late are the field's numbers), and an 8088 with a Lo-tech board running
 the cache (`vbtems`, in the final pass).
+
+## The owner's next profile (2026-11-07) and what is queued
+
+VBPROF1.DAT on the 286 (a 2,678 KB pool): 0 sound frames late, 0 stalls,
+16 slots evicted, menu keys 97 ms to their band on average and 247 at
+most ("feels fine"). One video-only stutter in the scopes and the potion
+that version 4 could not show - its frame gaps lapped at 55 ms - so
+version 5 counts gaps in the hook's periods and times every XMS copy,
+the suspect being an `int 15h` copy's interrupts-off window.
+
+Queued after performance (the owner): **a clip that joins by a FADE, or
+that goes to black itself, may have colours of its own.** The title fades
+out through the engine's fade, so it could pick its own palette
+automatically; 01-Opening fades to black itself, so it could too (or by a
+setting). Victory into its ending does NOT fade and keeps the shared
+palette though it joins the menu to full screen.
