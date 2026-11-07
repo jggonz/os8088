@@ -1647,9 +1647,13 @@ fmv_load:
 
 
 
-    mov bl, al                  ; dsk_chdir wants the drive in DL and the
-    mov ax, dx                  ; cluster in AX
-    mov dl, bl
+    xchg ax, dx                 ; dsk_chdir wants the drive in DL and the
+                                ; cluster in AX. DH is the caller's AH now,
+                                ; and nothing reads it: disk_mount_x takes
+                                ; DL, and the grow's re-list below always
+                                ; came round with DH = FS_VSEG's high byte.
+                                ; BL, the copy this went through, was read
+                                ; by nobody (kernel size pass 18, -5)
 
     ; --- WHERE THE LISTING GOES (docs/plans/LISTING-HOME-PLAN.md 13) --------
     ; This window's own claim, which it has held since fm_kinit. The mount
@@ -3591,11 +3595,12 @@ fm_onclick_x:
     push dx
     mov cx, [fm_pressx]         ; ABSOLUTE: fm_bhit is shared with the two
     mov dx, [fm_pressy]         ; edges, which have nothing else to give it
-    call fm_bhit
+    call fm_bhit                ; (keeps CX and DX)
+    or al, al
+    jz .sbar_abs                ; ...and the scroll bar wants the very same
+                                ; four words (kernel size pass 18, -6)
     pop dx
     pop cx
-    or al, al
-    jz .sbar
     xor ah, ah
     call os88ui_arm             ; near: this file and os88ui.inc are both
     call fm_setdown             ; .cold, one segment (SPEC.md 2.6)
@@ -3648,22 +3653,33 @@ fm_onclick_x:
 %endif
 
     ; --- scroll bar (present iff the row area is) ---
-.sbar:
-    cmp word [fm_fit], 0
-    je .rows
     ; SPEC.md 13.10: the shared element owns where the parts are, and this
     ; owns what they mean. A click ON the thumb pages DOWN here, which is what
     ; this window always did - the dialog does nothing there, and the element
     ; reports the thumb as a part of its own rather than choosing for them.
+    ; The element takes the point ABSOLUTE and this ladder is content-
+    ; relative with x in DX, so the relative pair is banked and the one
+    ; banked above, at the press, is loaded: CX + [fm_cy] was DX - the
+    ; content's y + the same y, which fm_layout stores out of the same
+    ; wm_content (kernel size pass 18, -4). kern_big has just done exactly
+    ; that for fm_bhit and arrives at .sbar_abs with it done (-6 more)
+%ifdef KERN_BIG
+.sbar_abs:
+    cmp word [fm_fit], 0
+    jne .sbar_go
+    pop dx
+    pop cx
+    jmp short .rows
+%else
+.sbar:
+    cmp word [fm_fit], 0
+    je .rows
     push cx
     push dx
-    mov cx, [fm_pressx]         ; the element takes it ABSOLUTE and this
-    mov dx, [fm_pressy]         ; ladder is content-relative with x in DX -
-                                ; and the absolute point is the one banked
-                                ; above: CX + [fm_cy] was DX - the content's
-                                ; y + the same y, which fm_layout stores
-                                ; out of the same wm_content (kernel size
-                                ; pass 18, -4)
+    mov cx, [fm_pressx]
+    mov dx, [fm_pressy]
+%endif
+.sbar_go:
     call fm_sbset
     call os88ui_sbhit
 %ifdef OS88UI_SBDRAG
