@@ -3936,18 +3936,22 @@ osapi_gfx_fill_pat:
     push si
     push di
     mov di, gfx_patbuf          ; ...straight into the STAGING buffer, which
-    mov cx, 8                   ; is what api_pat was for: gfx_pat_stage below
-                                ; then copies the eight bytes onto themselves
+    mov [gfx_pat], di           ; is what api_pat was for: gfx_pat_stage below
+    mov cx, 8                   ; then copies the eight bytes onto themselves
                                 ; (SI = DI, harmless), and api_pat's 8 bytes of
                                 ; .bss go (size pass 9). Nothing else writes
                                 ; gfx_patbuf, and the one kernel caller of
-                                ; gfx_fill_pat (files.inc) names its own
+                                ; gfx_fill_pat (files.inc) names its own.
+                                ; [gfx_pat] is published from DI BEFORE the
+                                ; copy rather than as an immediate after it:
+                                ; one register store (kernel size pass 18, -2),
+                                ; and the lock is held, so nothing reads it in
+                                ; between
 .copy:
     es lodsb                    ; ES:SI, and SI walks itself (DF = 0, SPEC.md
     mov [di], al                ; 1 - gfx_pat_stage's movsw below leans on
     inc di                      ; the same contract in the same call)
     loop .copy
-    mov word [gfx_pat], gfx_patbuf
     pop di
     pop si
     pop cx

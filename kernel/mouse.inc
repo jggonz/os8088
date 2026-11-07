@@ -2637,8 +2637,11 @@ kbm_move:
     jbe .set
     mov dl, KBM_MAX
 .set:
-    mov [kbm_step], dl
-    mov [kbm_lastk], cl
+    mov dh, cl                  ; the step and the direction in ONE word store:
+    mov [kbm_step], dx          ; the pair is adjacent (the %if at kbm_step),
+                                ; DH was the old tick's high byte and dead, and
+                                ; imul below writes no DX (kernel size pass 18,
+                                ; -2)
     mov al, [bx+1]              ; DL is the step, and imul does not disturb
                                 ; it, so it serves both axes
     imul dl                     ; dx (-1, 0, +1) x the step -> AX, signed
@@ -3587,6 +3590,9 @@ kbm_kbyte   db 0                ; ...and kern_mega's protected mode: the byte
 kbm_p5      db 0                ; ...and a keypad-5 press it saw, not yet spent
 kbm_step    db KBM_MIN          ; px the current run of repeats is worth
 kbm_lastk   db 0                ; ...and which direction it is a run OF
+%if kbm_lastk - kbm_step != 1
+  %error "the keyboard mouse's step store writes kbm_step and kbm_lastk as one word"
+%endif
 kbm_last    dw 0                ; tick of the last movement key
 kbm_btick   dw 0                ; ...and of the last button key, for the repeat
 kbm_slast   db 0                ; the ScrollLock level kbm_ui last saw (9.6.2)
