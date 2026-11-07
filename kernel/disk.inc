@@ -6092,8 +6092,10 @@ dsk_fatw_demote:
     pop di
     pop si
     pop cx
-    mov word [dsk_fatseg], FAT_SEG  ; ...and only THEN does the live word name
-.out:                               ; the pin, [dsk_fatw0] kept as it stood
+    mov [dsk_fatseg], bx        ; ...and only THEN does the live word name
+.out:                           ; the pin, [dsk_fatw0] kept as it stood - BX
+                                ; still the FAT_SEG that was ES's (kernel size
+                                ; pass 18: a register store, -2)
     ret
 .home:                              ; IF = 0: falls into dsk_fatw_home below
 %else
