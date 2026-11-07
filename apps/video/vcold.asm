@@ -252,9 +252,10 @@ vp_rclaims:
     VPC vp_scaps
     test ax, SND_CAP_PCM_BG
     jz .spk
-    mov ax, VP_RL / 1024 + 1        ; a card's: vp_sndprep's .hw
-    mov cx, ax
-    call OSAPI_MEM_CLAIM_DMA_HI
+    mov ax, (VP_RL / 1024 + 1) * 64 ; a card's: vp_sndprep's .hw, and
+    mov cx, ax                      ; conventional as it is there (the
+    mov bl, MEMP_CLAIM_HI           ; paragraph door with a head)
+    call OSAPI_MEM_P
     jc .o
     jmp short .got
 .spk:

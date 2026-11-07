@@ -10,10 +10,13 @@
 
 WaveRack has no PKG_MEGA arm: the shipped package runs on kern_mega as it
 is, and it declares OS88_HIGH and OS88_HIGHMEM (KERN-MEGA-PLAN 14.159), so
-its REGION and every claim of 64KB or less but two kinds are in the pool
-ABOVE 1MB there - the DMA rings, which the DMA door keeps conventional, and
-the I/O claim, which wo_ioclaim keeps conventional (MEMP_CONV) because every
-read of the document lands in it. Under CPU_F_PM every claim is an LDT
+its REGION and every claim of 64KB or less but one kind is in the pool
+ABOVE 1MB there - the I/O claim, which wo_ioclaim keeps conventional
+(MEMP_CONV) because every read of the document lands in it. The DMA rings
+are in the pool too since KERN-MEGA-PLAN 14.160: the DMA door gives an
+OS88_HIGHMEM package's claim with a head a pool block below 16MB whose head
+lies inside one 64KB page, which SOUND.DRV's 8237 reaches (sbl_ring_phys
+reads the base off the descriptor, page and all). Under CPU_F_PM every claim is an LDT
 SELECTOR wherever it is (KERN-MEGA-MEMORY-PLAN MC7), and two places were
 looked at for treating a segment as a paragraph:
 
@@ -46,8 +49,10 @@ looked at for treating a segment as a paragraph:
          REGION's selector is based at or above 1MB; in HOLD the hold, the
          look-ahead, the waveform band, the view cache and the envelope are
          too, and the I/O claim is below 640KB; in SLOT the take's staging
-         units are above 1MB, the record ring below 1MB, and the take is
-         written whole from them (no write failed, [wc_wrote] > 0). So the
+         units are above 1MB, the record ring too - below 16MB, all of it
+         inside one 64KB page (14.160), and the card RECORDS into it, the
+         take written whole from the units (no write failed, [wc_wrote] >
+         0). So the
          row fails if the package stops declaring either bit, if a claim it
          makes stops reaching the pool, if the I/O claim drifts up - and,
          with everything high, if any of the code above takes a sum on a
@@ -206,7 +211,13 @@ def leg_slot(ui, w, rk):
     seg = rk.seg()
     where(rk, "SLOT: the region", seg, True)
     where(rk, "SLOT: the take's first staging unit", rk.rd("wc_useg", 2), True)
-    where(rk, "SLOT: the record ring (the DMA door's)", rk.rd("wc_rseg", 2), False)
+    rsel = rk.rd("wc_rseg", 2)
+    where(rk, "SLOT: the record ring (the DMA door's, 14.160)", rsel, True)
+    d = m.selector(rsel) if rsel else None
+    check("SLOT: the record ring is below 16MB and inside one 64KB page",
+          d is not None and d[0] + d[1] < 0x1000000
+          and d[0] >> 16 == (d[0] + d[1]) >> 16,
+          "base, limit = %s" % (d and "%06X, %04X" % d))
     tab = m.read(m.sym("inst_tab"), 16 * I_RECSZ)
     want = None
     for i in range(16):

@@ -2426,12 +2426,29 @@ vb_cardclaim:
     call OSAPI_SND_CAPS
     test ax, SND_CAP_PCM_BG
     jz .out
-    mov ax, VB_RL / 1024 + 1
-    mov cx, ax
-    call OSAPI_MEM_CLAIM_DMA_HI
+    call vb_ringclm
     jc .out
     mov [vb_ring], dx
 .out:
+    ret
+
+; vb_ringclm - the card's ring and its words, all of it the page-safe head,
+; from the top, CONVENTIONAL on every kernel: the paragraph door with a head.
+; kern_mega's KB DMA door gives an OS88_HIGHMEM package a pool block for a
+; head (KERN-MEGA-PLAN 14.160), and vb_ring is in vb_rlst - FSXF_REAL's
+; bracket feeds it in real mode, where a pool block has no segment.
+; out: CF = 1 refused, else DX = the ring. Every other register kept
+vb_ringclm:
+    push ax
+    push bx
+    push cx
+    mov ax, (VB_RL / 1024 + 1) * 64 ; paragraphs (SPEC.md 50.3.7)
+    mov cx, ax
+    mov bl, MEMP_CLAIM_HI
+    call OSAPI_MEM_P
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; vb_rclaim - the two CLIP RINGS, EACH ITS OWN CLAIM (VBATTLE-RAM-PLAN R1):
@@ -4789,9 +4806,7 @@ vb_snd_open:
     mov [vb_dmin], ax
     cmp word [vb_ring], 0
     jne .have
-    mov ax, VB_RL / 1024 + 1
-    mov cx, ax
-    call OSAPI_MEM_CLAIM_DMA_HI
+    call vb_ringclm                 ; (conventional: vb_ringclm says why)
     jc vb_snd_start.out
     mov [vb_ring], dx
 .have:

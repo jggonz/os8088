@@ -19541,22 +19541,25 @@ SOAK = [
         "check. 40s is 37.5 measured",
         needs=("86box", "nasm"),
         wants=("build/mega.img", "build/waverack.o88", "build/waverack.bin")),
-    Row("megasbgap", "soak", py("tests/megasbgap.py"), 20.0,
-        "docs/plans/KERN-MEGA-PLAN.md 14.156: a 10 s 22,050 Hz 8-bit WAV in "
-        "AUDIO from a scratch 1.44MB B: on 86Box's at286_vga_sb (the mr286, a "
-        "Sound Blaster 2.0), the card's DAC captured ($MARTYPC_WAV): the "
-        "floppy is read all through the play, and no silence inside it may "
-        "be over 400 ms, nor its silences 1.5 s in all. Two costs kern_mega "
-        "had and a real-mode kernel has not, each a revolution lost a call: "
-        "dsk_runcap bounced the look-ahead ring (a pool claim above 1MB) "
-        "nine sectors a call through the read-ahead's landing, and "
-        "mega_fdgo sought and waited 15 ms of head settle on every call. RED "
-        "on the base, measured: 540 ms silences every 2.1 s, 3.57 s in all; "
-        "OS88_MEGA_POKE='mega_fdgo.ss+0xD=9090' (always seek) 500 ms, "
-        "'dsk_runcap.hi+0x10=9090' (bounce) 450 ms. 20s is 15 measured",
-        needs=("86box", "numpy"),
+    Row("megasbgap", "soak", py("tests/megasbgap.py"), 25.0,
+        "docs/plans/KERN-MEGA-PLAN.md 14.156, 14.160: a 10 s 22,050 Hz 8-bit "
+        "WAV in AUDIO from a scratch 1.44MB B: on 86Box's at286_vga_sb (the "
+        "mr286, a Sound Blaster 2.0), the card's DAC captured "
+        "($MARTYPC_WAV): the look-ahead ring, off its descriptor, is a pool "
+        "block below 16MB with its 32 KB inside one 64KB page (the DMA "
+        "door, 14.160), the floppy is read all through the play, and no "
+        "silence inside it may be over 220 ms, nor its silences 700 ms in "
+        "all (measured 90-150 ms, 290-530 ms). Three costs kern_mega had and "
+        "a real-mode kernel has not, each a revolution lost a call: "
+        "dsk_runcap bounced the ring nine sectors a call, mega_fdgo sought "
+        "and waited 15 ms of head settle on every call, and the ring, a "
+        "plain pool claim, crossed a page. RED, measured: --pkg an AUDIO arm "
+        "with the plain claim - placement fails, 290/350 ms, 870/1,110 ms; "
+        "14.156's base 540 ms, 3.57 s; OS88_MEGA_POKE='mega_fdgo.ss+0xD=9090' "
+        "500 ms, 'dsk_runcap.hi+0x10=9090' 450 ms. 25s is 22 measured",
+        needs=("86box", "numpy", "nasm"),
         wants=("build/mega.img", "build/megak/apps/audio.o88",
-               "build/megak/kernel.map")),
+               "build/megak/apps/audio.bin", "build/megak/kernel.map")),
     Row("megakbcodes", "soak", py("tests/megakbcodes.py"), 15.0,
         "docs/plans/KERN-MEGA-PLAN.md 14.145: mega_k09, kern_mega's own int "
         "09h, stores the ROM's words in the BIOS ring - Ctrl on the grey "

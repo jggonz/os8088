@@ -5252,6 +5252,12 @@ mmf_osapi_mem_claim_dma:        ; THE DMA DOOR'S FAR ENTRY IS THE BODY: AX =
     push cx                     ; KB, CX = the head's KB, ES = the caller.
 .pushed:                        ; Every register kept but DX
     push bx
+%ifdef KERN_MEGA
+    jcxz .conv                  ; A HEAD, FROM AN OS88_HIGHMEM PACKAGE: a
+    call COLD_SEG:mega_claimdf  ; pool block below 16MB with the head inside
+    jnc .out                    ; one 64KB page, born pinned (KERN-MEGA-PLAN
+.conv:                          ; 14.160). No head - the plain door, a carve,
+%endif                          ; an overlay - stays conventional, as before
     call mem_own                ; BX = owner word = the calling segment
     jc .fail
     call mem_claim_dma_x
@@ -5294,6 +5300,12 @@ mmf_osapi_mem_claim_dma_hi:     ; ...and the top-down DMA door's, the same
     push cx                     ; body down to the claim and the same tail
 .pushed:
     push bx
+%ifdef KERN_MEGA
+    jcxz .conv                  ; (the same pool arm: "from the top" means
+    call COLD_SEG:mega_claimdf  ; nothing to a pool block, and a head here
+    jnc mmf_osapi_mem_claim_dma.out ; is taken bottom-up anyway, 14.55)
+.conv:
+%endif
     call mem_own
     jc mmf_osapi_mem_claim_dma.fail
     call mem_claim_dma_hi_x
@@ -5516,7 +5528,9 @@ osapi_mem_p:
     ; does not take - so this arm only ADDS the pool, never removes the
     ; paragraph door. The pool counts in KB, so a pool claim is granted the
     ; KB that covers it: conventional memory is what the granule is for. A
-    ; DMA head stays conventional, as it does through the KB doors.
+    ; DMA head stays conventional: THE door for a page-safe buffer a
+    ; real-mode path names, where the KB DMA doors give an OS88_HIGHMEM
+    ; package's head a pool block (KERN-MEGA-PLAN 14.160).
     cmp bl, MEMP_AVAIL
     jae .gen
     cmp bl, MEMP_REGROW
@@ -5671,10 +5685,10 @@ osapi_mem_movable_x:
     call mem_movable_x
 %ifdef KERN_MEGA
     jmp short .out
-.hi:
-    stc
-%endif
-.out:
+.hi:                            ; above 1MB: a region never moves, and of the
+    call COLD_SEG:mega_dmamovf  ; pool's claims only a DMA door's is ever
+%endif                          ; pinned, so only its pin is the caller's to
+.out:                           ; take off or put back (KERN-MEGA-PLAN 14.160)
 %ifdef KERN_MEGA
     pop dx
 %endif
