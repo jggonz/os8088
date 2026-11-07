@@ -799,12 +799,11 @@ sch_idle_body:
                                 ; made ready waits for the next TICK, so the
                                 ; wake byte on its own buys nothing and input
                                 ; still lands up to 55 ms late. Costs one
-                                ; switch per WAKE taken while idle (8.1.2.5)
-%ifndef KERN_EMU
-    nop                         ; PARITY PAD, never executed: the halt-again
-                                ; arm is 3 bytes, and this keeps everything
-                                ; after it at t_hotpar's measured parity
-%endif
+                                ; switch per WAKE taken while idle (8.1.2.5).
+                                ; (The halt-again arm is 3 bytes; its parity
+                                ; pad went when task_spawn below came down by
+                                ; one: kernel size pass 18. kern_emu has
+                                ; neither, and t_hotpar does not pin it)
 
 ; in:  nothing.  out: CF=1 if no slot was free (the machine keeps the old
 ;      resume-the-outgoing fallback and nothing else changes)
@@ -1041,14 +1040,17 @@ task_spawn:
                                 ; BP - which is the addressing this already
                                 ; used
 
-    cmp cl, [sch_top]           ; RAISE THE BOUND BEFORE THE PUBLISH (SPEC.md
+    mov ax, cx                  ; AL = slot index (1..MAX_TASKS-1), the
+                                ; answer - and CH is 0, so AX is the slot
+    cmp al, [sch_top]           ; RAISE THE BOUND BEFORE THE PUBLISH (SPEC.md
     jb .intop                   ; 8.1.3): the scan stops at [sch_top], so a
-    mov al, cl                  ; slot made ready above it would never run.
-    inc ax                      ; AX is 0 from the zeroing above, so this is
-    mov [sch_top], al           ; slot + 1. Still IF=0 - the ISR cannot look
-.intop:                         ; between this store and the one below
+    inc ax                      ; slot made ready above it would never run:
+    mov [sch_top], al           ; slot + 1, and AL back to the slot. Still
+    dec ax                      ; IF=0 - the ISR cannot look between this
+.intop:                         ; store and the one below. (Off the answer's
+                                ; own load, a byte under its own `mov al, cl`:
+                                ; kernel size pass 18)
     mov byte [bx+T_STATE], 1    ; publish - MUST be the last record write
-    mov ax, cx                  ; AL = slot index (1..MAX_TASKS-1)
 
 .done:
     popf                        ; IF back - and the caller's CF with it, so
