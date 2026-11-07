@@ -692,10 +692,11 @@ in docs/TESTING.md, per capability.
   `kfzread.py` (the KFZ heartbeat out of a field screenshot);
   `os88intguide.py` (the interactive INTERRUPTS page - the first 1.5KB
   of memory, how the 8088 takes an interrupt, all 256 vectors and which
-  ones os8088 and its DOS hook; ON DEMAND, no emulator. Every os8088
+  ones os8088 and its DOS hook, and every field after them; ON DEMAND, no emulator. Every os8088
   claim on it stands on a source anchor `--selfcheck` re-checks, and it
-  will not write a page whose anchors fail. Chapter 2, the BIOS data
-  area and the disk path, is docs/plans/INTERRUPT-GUIDE-PLAN.md).
+  will not write a page whose anchors fail. Chapter 2 is the BIOS data
+  area byte by byte, the 0500h page and one floppy read followed through
+  them; docs/plans/completed/INTERRUPT-GUIDE-PLAN.md is how it was built).
 - `docs/` — **the directory says what a document is** (`docs/README.md`, and
   `docs/INDEX.md` lists every one under the same five headings). `docs/`
   itself is how the system works TODAY — instructions, contracts, maintained

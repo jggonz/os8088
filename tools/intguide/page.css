@@ -7,6 +7,12 @@
   --o-rom:#8b939c; --o-os:#1f7a58; --o-dos:#15497f; --o-pgm:#b8560a;
   --o-none:#dde2e7;
   --c-ivt:#15497f; --c-bda:#6a37bd; --c-low:#0c6f86; --c-kern:#1f7a58;
+  --f-ports:#0c6f86; --f-sys:#15497f; --f-kbd:#b8560a; --f-flp:#1f7a58;
+  --f-vid:#6a37bd; --f-time:#b03a48; --f-hdd:#6b6f1e; --f-comm:#9a7a12;
+  --f-dos:#4b6a88; --f-os:#a3237a; --f-rsv:#dde2e7;
+  --u-write:#1f7a58; --u-read:#15497f; --u-mega:#8b939c; --u-none:#dde2e7;
+  --d-put:#1f7a58; --d-zero:#b03a48; --d-live:#b8560a; --d-out:#dde2e7;
+  --w-swap:#6a37bd; --w-shared:#dde2e7;
   --on-pale:#5d656e; --on-acc:#fff;
 }
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
@@ -18,6 +24,12 @@
   --o-rom:#767e88; --o-os:#42bf95; --o-dos:#5a9bef; --o-pgm:#f2a552;
   --o-none:#232830;
   --c-ivt:#5a9bef; --c-bda:#ab8cf7; --c-low:#2fbdd4; --c-kern:#42bf95;
+  --f-ports:#2fbdd4; --f-sys:#5a9bef; --f-kbd:#f2a552; --f-flp:#42bf95;
+  --f-vid:#ab8cf7; --f-time:#e5727f; --f-hdd:#bfc35a; --f-comm:#d6b54a;
+  --f-dos:#8fb1d4; --f-os:#ee7ac8; --f-rsv:#232830;
+  --u-write:#42bf95; --u-read:#5a9bef; --u-mega:#767e88; --u-none:#232830;
+  --d-put:#42bf95; --d-zero:#e5727f; --d-live:#f2a552; --d-out:#232830;
+  --w-swap:#ab8cf7; --w-shared:#232830;
   --on-pale:#8a929c; --on-acc:#0e1217;
   color-scheme:dark;
 }}
@@ -30,6 +42,12 @@
   --o-rom:#767e88; --o-os:#42bf95; --o-dos:#5a9bef; --o-pgm:#f2a552;
   --o-none:#232830;
   --c-ivt:#5a9bef; --c-bda:#ab8cf7; --c-low:#2fbdd4; --c-kern:#42bf95;
+  --f-ports:#2fbdd4; --f-sys:#5a9bef; --f-kbd:#f2a552; --f-flp:#42bf95;
+  --f-vid:#ab8cf7; --f-time:#e5727f; --f-hdd:#bfc35a; --f-comm:#d6b54a;
+  --f-dos:#8fb1d4; --f-os:#ee7ac8; --f-rsv:#232830;
+  --u-write:#42bf95; --u-read:#5a9bef; --u-mega:#767e88; --u-none:#232830;
+  --d-put:#42bf95; --d-zero:#e5727f; --d-live:#f2a552; --d-out:#232830;
+  --w-swap:#ab8cf7; --w-shared:#232830;
   --on-pale:#8a929c; --on-acc:#0e1217;
   color-scheme:dark;
 }
@@ -299,4 +317,27 @@ a:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-off
 @media (min-width:1280px){
   .split{grid-template-columns:minmax(0,1fr) minmax(0,1.08fr)}
   .split .detail{grid-template-columns:1fr;gap:10px}
+}
+
+/* ---- chapter 2's byte map: 0400h..05FFh, 16 bytes a row ------------------ */
+.bmap{display:grid;grid-template-columns:40px repeat(16,minmax(0,1fr));gap:2px;
+  font-family:"IBM Plex Mono",ui-monospace,monospace}
+.bmap .hd{font-size:9.5px;color:var(--dim);text-align:center;align-self:end}
+.bmap .rh{font-size:9.5px;color:var(--dim);align-self:center;text-align:right;
+  padding-right:4px}
+.bmap .brk{margin-top:7px}
+.fseg{appearance:none;border:0;margin:0;font:inherit;height:20px;border-radius:2px;
+  cursor:pointer;color:var(--on-acc);padding:0 4px;text-align:left;overflow:hidden;
+  white-space:nowrap;text-overflow:ellipsis;font-size:9.5px;line-height:20px;
+  transition:opacity .25s,background .25s,box-shadow .13s;min-width:0;
+  font-family:"IBM Plex Sans Condensed","IBM Plex Sans",ui-sans-serif,sans-serif}
+.fseg span{pointer-events:none}
+.fseg.cont{border-top-left-radius:0;border-bottom-left-radius:0}
+.fseg.pale{color:var(--on-pale)}
+.fseg.dim{opacity:.26}
+.fseg.hot{box-shadow:inset 0 0 0 2px var(--sel), inset 0 0 0 3.5px var(--panel);opacity:1}
+@media (max-width:760px){
+  .bmap{grid-template-columns:32px repeat(16,minmax(0,1fr));gap:1px}
+  .fseg{font-size:0;height:16px}
+  .bmap .rh{font-size:8.5px}
 }

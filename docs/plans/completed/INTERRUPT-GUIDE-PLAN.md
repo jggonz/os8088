@@ -1,13 +1,15 @@
 # The Interrupts page, and its second chapter
 
-A PROPOSAL for the half not yet written (docs/README.md). Chapter 1 has shipped:
-`tools/os88intguide.py` writes `build/interrupts.html`, an interactive page in
-the boot ladder's hand (`tools/os88ladder.py`) covering the interrupt table,
-how the 8088 takes an interrupt, every conventional vector, and which ones
-os8088 and its DOS install. **Chapter 2, the BIOS data area and the disk path
-through low memory, is planned and not started.** This file is that plan.
+**COMPLETED, 2026-11-07: both chapters have landed.** This is the design record
+(docs/README.md), not a description of the page. The page is
+`tools/os88intguide.py`'s output, `build/interrupts.html`. Chapter 1 covers the
+interrupt table, how the 8088 takes an interrupt, every conventional vector, and
+which ones os8088 and its DOS install. Chapter 2 covers the BIOS data area, the
+0500h page and one floppy read. The generator's own header is the current
+account. The stories below were the plan for chapter 2, and "As built" at the
+end records how each one landed.
 
-## What is there now
+## What was there before chapter 2
 
 - **The generator** - `tools/os88intguide.py`, with the page's stylesheet and
   script in `tools/intguide/`. On demand, like the ladder: nothing in `make`
@@ -80,3 +82,37 @@ through low memory, is planned and not started.** This file is that plan.
 - When chapter 2 lands, drop `planned` from its `CHAPTERS` entry and remove
   the hatching. Then move this file to `docs/plans/completed/` in the same
   commit, with its status line fixed.
+
+## As built
+
+Each story above landed. The details differ from the plan in these places:
+
+- **Story 1, the fields.** They are `FIELDS` in the generator, not a `fields`
+  list on the region. They tile 0400h-05FFh exactly, which the selfcheck
+  enforces, and they are drawn as a byte map of 16 bytes a row. A field that
+  runs past the end of a row is split at the row boundary.
+- **Story 2, what is saved and what is put back.** This is the byte map's
+  colour-by switch, with views for "os8088 uses", "After a DOS program" and
+  "Windowed DOS". There is also a rung, *What is put back*, with one step for
+  each of the full-screen run, the windowed run and hibernation. Hibernation
+  is not a colouring, because the BIOS data area is never restored: on resume
+  it is the new boot's. The rung says so.
+- **Story 3, the 0500h page.** This is its own rung. DOS's floppy-table copy
+  at 0522h is included as "many versions of DOS", from period references, not
+  from this tree.
+- **Story 4, one floppy read.** This is a 13-frame walk: cylinder 5 of a
+  360 KB disk into 2E80:0000. The run is cut to 12 sectors at the 30000h
+  boundary, and the walk shows the head flipping at sector 9. The firmware's
+  side (the DMA mode 46h, READ DATA E6h, the timing table's values and
+  `RET 2`) is the IBM PC's own. The one measured figure is the 400 ms a call.
+  It comes from CLAUDE.md's 5150 table (PERFORMANCE.md) and is labelled
+  measured. The 270 ms streaming figure is arithmetic on the rotation.
+- **Story 5, boot's own use.** This is a six-note rung. It links to the boot
+  ladder by name rather than repeat it.
+- **Extra: The rules a disk call obeys.** This rung covers counting in calls,
+  the 64 KB line, the cylinder rule for reads against the track rule for
+  writes, retries, and the pointer moving during a call.
+
+The walk renderer became generic for this: each box is text, bits, kv, list or
+code, and unchanged boxes carry forward. Chapter 1's key-press walk was moved
+onto the same shape. The anchor count went from 57 to 99.

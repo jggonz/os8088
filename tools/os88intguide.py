@@ -2,7 +2,8 @@
 """The INTERRUPTS page: the first 1.5 KB of an IBM PC's memory, what an
 interrupt is, how the 8088 takes one, every vector in the table - the ones a
 PC has and the ones os8088 and its DOS install - walkable, beside the boot
-ladder (tools/os88ladder.py) in the same hand.
+ladder (tools/os88ladder.py) in the same hand - and, in chapter 2, the
+BIOS data area after the table and one floppy read followed through it.
 
     python3 tools/os88intguide.py                  # -> build/interrupts.html
     python3 tools/os88intguide.py --selfcheck      # ...is it still TRUE?
@@ -31,13 +32,13 @@ in GLOSS, in words that need no further looking up (a definition may not mark
 another term). And no page text cites a specification section, a source file
 or a symbol - the reader has none of those. The anchors carry that.
 
-THE PAGE HAS ROOM FOR A SECOND CHAPTER. The bar across the top is the whole
-first 1,536 bytes - the table, the BIOS data area and the 0500h page - and
-chapter 2, the BIOS's own state and the disk path through it, is the rest of
-that bar. It is here as a PLANNED chapter (CHAPTERS, the `low` rung): its
-regions are drawn hatched and its rung says what it will cover. Adding it is
-adding rungs with `chapter="low"` and region steps; nothing in the page
-script is chapter-specific.
+TWO CHAPTERS, ONE SCRIPT. Chapter 1 is the table (VEC, RUNGS, the key-press
+WALK); chapter 2 is the 512 bytes after it (FIELDS, which must tile 0400h-
+05FFh exactly, RUNGS2, the floppy-read DISK_WALK). The bar across the top is
+the whole first 1,536 bytes for both. Nothing in tools/intguide/page.js is
+chapter-specific: a rung's steps are vectors, fields, regions, walk frames
+or notes, and a third chapter would be more of the same. A chapter marked
+`planned` in CHAPTERS is drawn hatched on the bar.
 """
 
 import json
@@ -204,7 +205,8 @@ def esc(s):
 
 TERM = re.compile(r"\[\[([^\]|]+)(?:\|([^\]]+))?\]\]")
 JUMP = re.compile(r"\{\{([0-9A-Fa-f]{2})(?:\|([^}]+))?\}\}")
-RUNG = re.compile(r"\{\{@([a-z0-9-]+)\|([^}]+)\}\}")
+FIELDJ = re.compile(r"\{\{@f-([0-9A-Fa-f]{4})\|([^}]+)\}\}")
+RUNG = re.compile(r"\{\{@([a-z0-9]+)\|([^}]+)\}\}")
 CODE = re.compile(r"`([^`]+)`")
 
 
@@ -221,6 +223,8 @@ def inline(text, who):
             esc(key), esc(m.group(2) or m.group(1)))
     s = esc(text)
     s = TERM.sub(term, s)
+    s = FIELDJ.sub(lambda m: '<button type="button" class="jump" onclick="igField'
+                   '(%d)">%s</button>' % (int(m.group(1), 16), m.group(2)), s)
     s = RUNG.sub(lambda m: '<button type="button" class="jump" onclick="igRung'
                  "('%s')\">%s</button>" % (m.group(1), m.group(2)), s)
     s = JUMP.sub(lambda m: '<button type="button" class="jump" onclick="igJump'
@@ -659,8 +663,8 @@ the operating system's - goes through here. os8088 cuts each run at the
 reset between, and drops to one sector at a time before it gives up. A disk
 that is write-protected is not retried.
 
-Chapter 2 of this guide follows that path through the low memory it
-uses.
+{{@disk|One floppy read, step by step}}, in chapter 2, follows that path
+through the low memory it uses.
 """, dos="""
 Full-screen, a DOS program reaches the firmware's service directly. In a
 window, it is refused, because a program writing raw sectors under a disk
@@ -1061,11 +1065,11 @@ the keyboard fills it, the disk service leaves its last status in it.
 
 os8088 reads much of it and writes a little: the keyboard buffer when it
 overflows, the warm-restart word before a restart, the equipment word's
-display bits. **Chapter 2 of this guide walks it field by field** - what
-each byte is for, and which of them os8088 relies on.
+display bits. {{@low|Chapter 2}} walks it field by field - what each byte
+is for, and which of them os8088 relies on.
 """,
          "facts": [["Segment", "0040h"], ["Size", "256 bytes"],
-                   ["Chapter", "2 · planned", 1]]},
+                   ["Chapter", "2", 1]]},
         {"id": "low", "lo": 0x500, "hi": 0x600, "col": "low", "chapter": "low",
          "name": "The 0500h page",
          "text": """
@@ -1075,11 +1079,11 @@ is spare.
 
 os8088 uses one piece of it, during boot: the boot sector copies the
 firmware's floppy timing table to 0000:0580 and points {{1E}} at the copy,
-so that it can change one number in it. **Chapter 2** covers why.
+so that it can change one number in it. {{@p500|Chapter 2}} covers why.
 """,
          "facts": [["0500h", "Print Screen status", 1],
                    ["0580h", "os8088's boot-time floppy table", 1],
-                   ["Chapter", "2 · planned", 1]],
+                   ["Chapter", "2", 1]],
          "anchors": [A("boot/boot.asm", r"DPT_AT\s+equ\s+0x0580"),
                      A("boot/boot2.asm", r"DPT_AT\s+equ\s+0x0580")]},
     ],
@@ -1288,9 +1292,8 @@ CHAPTERS = [
     {"id": "int", "n": "Chapter 1", "name": "Interrupts",
      "hint": "the table, the hardware lines, the firmware, DOS - and os8088"},
     {"id": "low", "n": "Chapter 2", "name": "BIOS data & the disk",
-     "planned": True,
      "hint": "the BIOS data area, the 0500h page, and the disk path through "
-             "them - planned"},
+             "them"},
 ]
 
 
@@ -1326,7 +1329,7 @@ number is for, or by whose code would answer it at power-on, on os8088's
 desktop, and under a DOS program.
 """, "steps": []},
     {"id": "take", "grp": "Basics", "title": "One interrupt, step by step",
-     "sub": "a key press on an IBM PC", "chapter": "int", "walk": True,
+     "sub": "a key press on an IBM PC", "chapter": "int", "walk": "key",
      "intro": """
 From a key going down to the program carrying on: the ten things that happen
 in between, with the processor's registers, the controller's three
@@ -1554,26 +1557,1090 @@ machines; the PC and XT kernel never touches the controller's numbering.
 """, "steps": [],
      "anchors": [A("kernel/mega.inc", r"^mega_pic_pm\s*:"),
                  A("kernel/mega.inc", r"MEGA_PIC_BASE\s+equ\s+0x20")]},
-
-    {"id": "low", "grp": "Chapter 2 · planned",
-     "title": "BIOS data and the disk", "sub": "the rest of the first 1.5 KB",
-     "chapter": "low", "region": "bda", "intro": """
-**This chapter is planned, not yet written.** It will cover the other third
-of the bar at the top of the page:
-
-- the [[BIOS]] data area, 0400h-04FFh, field by field - the ports, the
-  equipment word, the keyboard buffer, the floppy's motor and status bytes,
-  the [[tick]] count and the warm-restart word - and which of them os8088
-  reads, writes or puts back;
-- the 0500h page, and the floppy timing table os8088 keeps there during
-  boot;
-- one disk read followed all the way down - from os8088 through {{13}}, the
-  timing table at {{1E}}, the floppy controller, [[DMA]] and {{0E|IRQ 6}} -
-  with the bytes in low memory each step touches, and why every run is cut
-  at the 64 KB boundary and the end of the track.
-""", "steps": [{"region": "bda"}, {"region": "low"}]},
 ]
 
+
+# -----------------------------------------------------------------------------
+# 6b. CHAPTER 2 - THE BYTES AFTER THE TABLE. Every field from 0400h to 05FFh,
+#     contiguous (the selfcheck refuses a gap or an overlap), each with the
+#     group it belongs to and, per moment the byte map can be coloured by,
+#     what os8088 does with it.
+#
+#     use    - what os8088 itself does: write / read / mega (only its
+#              protected-mode kernel) / none
+#     dosfs  - leaving a FULL-SCREEN DOS program: put (back from the copy) /
+#              zero / live (left as it now stands - it describes the
+#              hardware) / out (never saved: outside the BIOS data area)
+#     doswin - a WINDOWED DOS program: swap (its own copy, swapped in while
+#              it runs) / shared
+# -----------------------------------------------------------------------------
+
+FKINDS = {
+    "ports": "Ports",
+    "sys":   "System and memory",
+    "kbd":   "Keyboard",
+    "flp":   "Floppy drive",
+    "vid":   "Display",
+    "time":  "Time, restart, waiting",
+    "hdd":   "Hard disk",
+    "comm":  "For programs",
+    "dos":   "DOS and BASIC",
+    "os":    "os8088's own",
+    "rsv":   "Reserved",
+}
+FKIND_ORDER = ["ports", "sys", "kbd", "flp", "vid", "time", "hdd", "comm",
+               "dos", "os", "rsv"]
+FVIEWS = [
+    {"id": "kind", "name": "What it holds",
+     "hint": "the group each field belongs to",
+     "keys": FKIND_ORDER, "names": FKINDS, "pre": "f",
+     "cap": "The BIOS data area as IBM laid it out, with the AT's and later "
+            "machines' additions, and the 0500h page after it. Hover a field "
+            "for its name; click it for what it is for."},
+    {"id": "use", "name": "os8088 uses", "fact": "os8088",
+     "hint": "which fields os8088 itself reads or writes",
+     "keys": ["write", "read", "mega", "none"], "pre": "u",
+     "names": {"write": "os8088 writes it", "read": "os8088 reads it",
+               "mega": "only os8088's 286 kernel", "none": "left alone"},
+     "cap": "Most of the area is the firmware's business and os8088 leaves it "
+            "so. What it touches, it touches for a reason that is written in "
+            "the field's own entry."},
+    {"id": "dosfs", "name": "After a DOS program", "fact": "After a DOS program",
+     "hint": "what os8088's DOS does to each field when a full-screen program ends",
+     "keys": ["put", "zero", "live", "out"], "pre": "d",
+     "names": {"put": "put back", "zero": "cleared",
+               "live": "left as it stands", "out": "not saved"},
+     "cap": "Before a full-screen DOS program starts, os8088's DOS copies the "
+            "whole area. After it, a named list comes back from the copy, the "
+            "held-key bytes are cleared, and everything that describes the "
+            "hardware as it is NOW is left alone - a copy of the floppy "
+            "motor's state from before the program would be a lie."},
+    {"id": "doswin", "name": "Windowed DOS", "fact": "Windowed DOS program",
+     "hint": "what a DOS program in a window gets a private copy of",
+     "keys": ["swap", "shared"], "pre": "w",
+     "names": {"swap": "its own copy", "shared": "shared with the desktop"},
+     "cap": "A DOS program in a window shares the machine with the desktop, "
+            "so it gets a private copy only of what it would otherwise fight "
+            "the desktop over: the memory size and the display's block. They "
+            "are swapped in when it gets the processor and out when it loses "
+            "it."},
+]
+
+FIELDS = []
+
+DOS_PUT = [(0x400, 16), (0x410, 2), (0x413, 2), (0x41A, 4), (0x472, 2),
+           (0x480, 4), (0x498, 10)]
+DOS_ZERO = [(0x417, 2), (0x496, 2)]
+WIN_SWAP = [(0x413, 2), (0x449, 30), (0x484, 6)]
+
+
+def _within(off, ln, runs):
+    return any(a <= off and off + ln <= a + n for a, n in runs)
+
+
+def F(off, ln, name, tag, kind, text="", os="", use="none", anchors=(),
+      dos=""):
+    if off >= 0x500:
+        dosfs = "out"
+    elif _within(off, ln, DOS_ZERO):
+        dosfs = "zero"
+    elif _within(off, ln, DOS_PUT):
+        dosfs = "put"
+    else:
+        dosfs = "live"
+    FIELDS.append({"off": off, "len": ln, "name": name, "tag": tag,
+                   "kind": kind, "text": text, "os": os, "dos": dos,
+                   "own": {"kind": kind, "use": use, "dosfs": dosfs,
+                           "doswin": "swap" if _within(off, ln, WIN_SWAP)
+                           else "shared"},
+                   "anchors": list(anchors)})
+
+
+def RSV(off, ln, text="Reserved: nothing standard is kept here."):
+    F(off, ln, "Reserved", "", "rsv", text)
+
+
+# --- ports and the machine ---------------------------------------------------
+F(0x400, 8, "Serial port addresses", "COM1-4", "ports", """
+Four words: the I/O addresses of the serial ports COM1 to COM4 as the
+firmware found them at power-on - 3F8h and 2F8h for the first two - with
+zero for a port that is not fitted. The firmware's serial service {{14}}
+looks its port up here, so swapping two entries swaps the ports.
+""", os="""
+os8088's mouse looks for its port at the two standard addresses directly,
+rather than through this table, because it has to know which interrupt line
+each one drives.
+""", anchors=[A("kernel/mouse.inc", r"^mou_bases\s+dw 0x3F8, 0x2F8")])
+F(0x408, 6, "Printer port addresses", "LPT1-3", "ports", """
+Three words: the addresses of the printer ports LPT1 to LPT3 - commonly
+378h, 278h and 3BCh - in the order the firmware found them.
+""", os="""
+os8088's printer-port sound output and its printer-cable network link both
+find their port here.
+""", use="read", anchors=[A("drivers/sound/covox.inc", r"0040:0008")])
+F(0x40E, 2, "LPT4 / extended data", "LPT4", "ports", """
+A fourth printer port on a PC or XT. On a PS/2 and many later machines,
+the segment of an "extended BIOS data area" carved out of the top of
+conventional memory - which is why such machines report 639 KB rather than
+640.
+""")
+F(0x410, 2, "Equipment word", "Equip", "sys", """
+The bits {{11}} returns: whether floppy drives are fitted and how many, the
+display the machine started on (bits 4-5: colour 40 columns, colour 80, or
+monochrome), how many serial and printer ports, and whether a maths
+coprocessor is present. On a PC these are read from switches on the
+motherboard; later machines find out for themselves.
+""", os="""
+os8088 reads it at boot, and rewrites the two display bits to describe the
+display it actually chose - so that the firmware's services, and DOS
+programs asking later, agree with it.
+""", use="write", anchors=[A("kernel/vidsel.inc", r"mov \[0x0410\], al")])
+F(0x412, 1, "Self-test flag", "Test", "sys", """
+Used during the power-on self-test; on the original PC, a flag for IBM's
+factory test equipment.
+""")
+F(0x413, 2, "Memory size", "Mem KB", "sys", """
+Conventional memory in kilobytes - the number {{12}} returns, and the one
+everything that sizes itself to the machine reads. Software that wanted to
+hide memory from everything loaded after it - a RAM disk, or famously a
+boot-sector virus - simply lowered it.
+""", os="""
+The first thing os8088's boot sector asks, so as to move itself to the top
+of whatever memory there is.
+""", dos="""
+os8088's DOS lowers it to the top of the memory it gave the program, so that
+asking the firmware and asking DOS give the same answer, and puts it back
+afterwards. A program in a window gets its own copy.
+""", use="write", anchors=[A("boot/boot.asm", r"int 0x12"),
+                           A("apps/dos/dosw.inc", r"dw 0x0040, 0x0013, 1")])
+F(0x415, 2, "Reserved", "", "rsv",
+  "On the PC, used by the factory test; reserved since.")
+
+# --- the keyboard ------------------------------------------------------------
+F(0x417, 1, "Shift flags", "Shift", "kbd", """
+One bit each for Right Shift, Left Shift, Ctrl and Alt, and for the four
+toggles - Scroll Lock, Num Lock, Caps Lock, Insert - kept by the keyboard
+handler {{09}} as keys go down and up.
+""", os="""
+os8088 reads it to know whether Shift or Ctrl is held when you click.
+""", dos="""
+Cleared when a program ends, rather than put back: the honest answer on
+the way out is that no key is held. A restored phantom Ctrl would make
+every menu misbehave until the key happened to be pressed again.
+""", use="read", anchors=[A("kernel/mouse.inc", r"mov al, \[0x417\]"),
+                          A("apps/dos/dos.asm", r"mov \[es:0x17\], ax")])
+F(0x418, 1, "Shift flags 2", "Shift2", "kbd", """
+The other half: which shift keys are physically down right now (left Ctrl,
+left Alt, the toggle keys while held), and whether Pause is in effect.
+""", dos="Cleared with {{@f-0417|the first shift byte}} when a program ends.")
+F(0x419, 1, "Alt+keypad number", "Alt#", "kbd", """
+Holding Alt and typing digits on the keypad enters a character by its code;
+the number so far accumulates here.
+""")
+F(0x41A, 2, "Buffer read position", "Head", "kbd", """
+The keyboard buffer is a ring of 16 two-byte entries. This is the offset,
+from 0040:0000, of the oldest key - the one {{16}} returns next.
+""", dos="Put back when a program ends, with the write position beside it.",
+  use="read", anchors=[A("kernel/mouse.inc", r"^kbd_ovflow\s*:")])
+F(0x41C, 2, "Buffer write position", "Tail", "kbd", """
+Where the keyboard handler puts the next key. Equal to the read position:
+empty. One entry behind it: full, and the next key is refused with a beep -
+which is why a 16-entry ring holds only fifteen keys.
+""", os="""
+os8088's keyboard hook watches for the ring filling. When it does, it winds
+this position back one entry itself, so that the ring can never overrun,
+and beeps so the user knows a key was lost.
+""", use="write", anchors=[A("kernel/mouse.inc", r"mov \[es:0x41C\], ax")])
+F(0x41E, 32, "Keyboard buffer", "Key ring", "kbd", """
+The ring itself: sixteen entries of two bytes, each the character code and
+the {{09|scan code}} of a key waiting to be read.
+""")
+
+# --- the floppy drive ----------------------------------------------------------
+F(0x43E, 1, "Recalibrate / interrupt flag", "Seek", "flp", """
+Bits 0-3: which drives have been recalibrated - stepped back to track 0 -
+since the last reset. Bit 7: set by the floppy controller's interrupt
+handler {{0E}}, which is the only thing that handler does. The disk service
+watches this bit, and that is how {{13}} learns a command has finished.
+""", os="""
+os8088's drive probe talks to the controller directly, once, at start-up.
+Afterwards it clears the bit its own probe raised, so the firmware is not
+fooled by an interrupt it did not ask for.
+""", use="write", anchors=[A("kernel/disk.inc", r"and byte \[es:0x3E\], 0x7D")])
+F(0x43F, 1, "Motor status", "Motor", "flp", """
+Which drive motors are running (bits 0-3), and whether the operation in
+progress is a write (bit 7). The controller's motor register can be written
+but not read back, so this byte is the only record of what it holds.
+""", os="""
+Which is exactly why os8088's drive probe reads it: to put the motors back
+as it found them.
+""", use="read", anchors=[A("kernel/disk.inc", r"mov al, \[es:0x3F\]")])
+F(0x440, 1, "Motor-off countdown", "MotorT", "flp", """
+Ticks until the motor is switched off. The disk service sets it from the
+floppy timing table as it finishes - typically 37 ticks, two seconds - and
+the timer handler {{08}} counts it down and stops the motor at zero. That
+two-second linger is why a second read soon after the first does not wait
+for the disk to spin up again.
+""")
+F(0x441, 1, "Last disk status", "Status", "flp", """
+The result of the last floppy operation: 00h for success, otherwise an
+error - 01h bad command, 02h no address mark, 03h write-protected, 04h
+sector not found, 08h DMA overrun, 09h across a 64 KB boundary, 10h bad
+data, 20h controller failure, 40h seek failed, 80h timeout (usually: no
+disk in the drive).
+""", os="""
+os8088 takes the same code from the AH register when a call fails, turns
+it into a message, and never retries 03h - a write-protected disk will not
+change its mind.
+""", anchors=[A("kernel/disk.inc", r"je \.wpfail")])
+F(0x442, 7, "Controller result bytes", "Result", "flp", """
+The seven bytes the floppy controller reports when a command ends: three
+status registers, then the cylinder, head, sector and sector size where it
+stopped. The disk service copies them here and works out the status above
+from them.
+""")
+
+# --- the display -----------------------------------------------------------------
+F(0x449, 1, "Display mode", "Mode", "vid", """
+The current display mode, as last set through {{10}}: 03h colour text,
+07h monochrome text, 06h CGA 640x200, 10h EGA, 12h VGA 640x480. Programs
+read it to learn what the screen is.
+""", os="""
+os8088 sets its display mode through the firmware, which keeps this whole
+block up to date.
+""", dos="""
+A DOS program in a window gets its own copy of the whole display block,
+0449h-0466h, swapped in while it runs - it believes it has a text screen
+of its own, and the desktop's settings are not disturbed.
+""", anchors=[A("apps/dos/dosw.inc", r"dw 0x0040, 0x0049, 15")])
+F(0x44A, 2, "Columns", "Cols", "vid", "Characters per row in the current mode: 40 or 80.")
+F(0x44C, 2, "Screen buffer size", "Size", "vid",
+  "Bytes of display memory one page of the current mode takes.")
+F(0x44E, 2, "Page start", "Start", "vid",
+  "Where in display memory the page being shown begins.")
+F(0x450, 16, "Cursor positions", "Cursors", "vid", """
+Row and column of the cursor for each of eight text pages - the firmware
+keeps one per page so that switching pages brings each one's cursor back.
+""")
+F(0x460, 2, "Cursor shape", "Shape", "vid", """
+The cursor's first and last scan lines within the character cell. Setting
+a first line past the last hides it.
+""", os="os8088's loader hides the text cursor that way while it works.",
+  anchors=[A("boot/boot2.asm", r"mov cx, 0x2000")])
+F(0x462, 1, "Shown page", "Page", "vid", "Which text page is on the screen.")
+F(0x463, 2, "Display controller port", "CRTC", "vid", """
+3D4h on a colour card, 3B4h on a monochrome one - so software can reach
+the card's registers without first working out which card it is.
+""")
+F(0x465, 1, "Mode register copy", "ModeReg", "vid", """
+A copy of the last byte written to the CGA's or monochrome card's
+mode-select register, which cannot be read back.
+""", os="os8088 reads it while setting the display up.", use="read",
+  anchors=[A("kernel/viddet.inc", r"mov al, \[es:0x0465\]")])
+F(0x466, 1, "Colour register copy", "Palette", "vid", """
+A copy of the CGA's colour-select register: border colour and which of its
+two four-colour palettes is in use.
+""")
+
+# --- restart, time and the AT's additions ------------------------------------------
+F(0x467, 4, "Restart address", "Reset", "time", """
+On an AT, a far address to carry on at after the processor has been reset
+by software - which on a 286 is the only way back from {{08|protected
+mode}}. A byte in the clock chip tells the firmware's start-up code to jump
+here instead of starting afresh. On the original PC, working storage for
+the cassette interface.
+""", os="""
+os8088's protected-mode kernel uses it in exactly that way: it puts its own
+address here, resets the processor, and is back in the 8088's own mode
+before the firmware has done anything else.
+""", use="mega", anchors=[A("kernel/mega.inc", r"mov word \[es:0x467\]")])
+F(0x46B, 1, "Last stray interrupt", "Stray", "sys", """
+Where the firmware's stand-in handler - the one behind every vector nothing
+else claimed - records which interrupt arrived unexpectedly.
+""")
+F(0x46C, 4, "Tick count", "Ticks", "time", """
+[[tick|Ticks]] since midnight, counted by the timer handler {{08}}:
+1,573,040 make a day. {{1A}} reads it, and so does every program that wants
+the time cheaply.
+""", os="""
+os8088's boot sector reads it first thing, to time its own boot. Because
+os8088 always lets the firmware's timer handler run, the count stays exact
+under it - and after a resume from hibernation, how far it moved while the
+machine was away is what os8088 sets its own clock forward by.
+""", use="read", anchors=[A("boot/boot.asm", r"mov bp, \[0x046C\]"),
+                          A("kernel/hiber.inc", r"0040:006C")])
+F(0x470, 1, "Midnight passed", "Midnt", "time", """
+Set when the tick count passes midnight and starts again. Whoever reads the
+time next is meant to add a day and clear it - DOS does, and that is how the
+date advances on a machine with no clock chip.
+""")
+F(0x471, 1, "Ctrl+Break pressed", "Break", "kbd",
+  "Bit 7 is set by the keyboard handler when Ctrl+Break is pressed.")
+F(0x472, 2, "Warm restart flag", "Warm", "time", """
+1234h here tells the firmware's start-up code that this is a restart rather
+than a power-on, so it skips the memory test. Ctrl+Alt+Del writes it.
+""", os="""
+os8088 writes it before jumping into the firmware to restart, for the same
+reason.
+""", use="write", anchors=[A("kernel/disk.inc", r"mov word \[es:0x472\], 0x1234")])
+F(0x474, 1, "Hard disk status", "HDstat", "hdd",
+  "The hard-disk service's last result, as the floppy one's is at 0441h.")
+F(0x475, 1, "Hard disks fitted", "HDs", "hdd", "How many hard disks the firmware found.")
+F(0x476, 1, "Hard disk control", "HDctl", "hdd", "XT hard-disk controller settings.")
+F(0x477, 1, "Hard disk port", "HDport", "hdd", "XT hard-disk controller port offset.")
+F(0x478, 4, "Printer timeouts", "LPT t/o", "ports",
+  "How long the printer service waits for each printer port before giving up.")
+F(0x47C, 4, "Serial timeouts", "COM t/o", "ports",
+  "The same for each serial port.")
+F(0x480, 4, "Keyboard buffer bounds", "Ring", "kbd", """
+On the AT and later, the offsets of the start and the end of the keyboard
+ring - so that a program can move it somewhere bigger.
+""", dos="""
+Put back after a program. A resident utility that moved the ring into its
+own memory would otherwise leave the firmware writing keystrokes into
+memory that is about to be given to something else.
+""")
+F(0x484, 1, "Text rows - 1", "Rows", "vid", "On an EGA or VGA, the number of text rows less one.")
+F(0x485, 2, "Character height", "ChrH", "vid", "On an EGA or VGA, the height of a character in scan lines.")
+F(0x487, 3, "EGA/VGA settings", "EGA", "vid", """
+How the EGA or VGA is set up: whether the monitor is colour or monochrome,
+the card's switch settings, and whether colours are summed to greys.
+""", os="""
+os8088's VGA support sets these to say "colour monitor, no grey-scale", so
+that later mode changes through the firmware come out in colour.
+""", use="write", anchors=[A("kernel/driver.inc", r"and byte \[0x487\], 0xFD")])
+F(0x48A, 1, "Display combination", "DCC", "vid",
+  "On a VGA, which entry of the firmware's display-combination table is in use.")
+F(0x48B, 1, "Floppy data rate", "Rate", "flp", """
+On an AT, the last data rate sent to the floppy controller: 250, 300 or 500
+thousand bits a second. An AT reads 360 KB, 1.2 MB and 1.44 MB disks at
+different rates, and switching costs time, so the firmware remembers.
+""", os="os8088's protected-mode kernel drives the floppy itself and keeps this up to date.",
+  use="mega", anchors=[A("kernel/mega.inc", r"^mega_fdisr\s*:")])
+F(0x48C, 3, "Hard disk controller", "HDC", "hdd",
+  "On an AT, the hard-disk controller's status and error registers and its interrupt flag.")
+F(0x48F, 1, "Floppy controller info", "FDC", "flp",
+  "On an AT, what the floppy controller and drives can do.")
+F(0x490, 2, "Floppy media state", "Media", "flp", """
+For each of two drives: the data rate that worked and whether it was
+confirmed - which is how an AT tells a 360 KB disk in a 1.2 MB drive.
+""")
+F(0x492, 2, "Floppy start state", "Start", "flp",
+  "The media state each drive started an operation with, for retries.")
+F(0x494, 2, "Floppy cylinders", "Cyl", "flp", """
+Where each drive's head is, so the firmware can skip a seek it does not
+need.
+""")
+F(0x496, 1, "Keyboard flags 3", "Kbd3", "kbd", """
+On the 101-key keyboard: whether the last byte was one of the extended
+prefixes, E0h or E1h, and whether the keyboard is the enhanced kind.
+""", os="Kept by os8088's protected-mode kernel, which runs a keyboard handler of its own.",
+  dos="Cleared with the next byte when a program ends, as the shift bytes are.",
+  use="mega", anchors=[A("apps/dos/dos.asm", r"mov \[es:0x96\], ax"),
+                       A("kernel/mega.inc", r"or byte \[0x96\], 0x02")])
+F(0x497, 1, "Keyboard lights", "LEDs", "kbd",
+  "Which of the keyboard's lights are on, and whether an update is in flight.",
+  os="Kept by os8088's protected-mode kernel when it sets the lights itself.",
+  use="mega", anchors=[A("kernel/mega.inc", r"^mega_leds\s*:")])
+F(0x498, 4, "Wait: flag address", "WaitP", "time", """
+The AT's "call me in N microseconds" service ({{15}}, function 83h) keeps
+here the address of the byte it will set when the time is up.
+""", dos="""
+Put back after a program, with the wait count and flag beside it: left
+pointing into a program's memory, the firmware would go on writing there
+after the memory had been reused.
+""")
+F(0x49C, 4, "Wait: count", "WaitN", "time", "How many microseconds the wait above has left.")
+F(0x4A0, 1, "Wait: active", "WaitF", "time", "Whether a wait is in progress.")
+RSV(0x4A1, 1)
+RSV(0x4A2, 6, "Reserved; some network adapters' firmware uses it.")
+F(0x4A8, 4, "Video tables", "VidPtr", "vid", """
+On an EGA or VGA, the address of a table of further tables - alternative
+fonts and palettes the card's firmware should load with each mode.
+""")
+RSV(0x4AC, 68)
+F(0x4F0, 16, "Inter-application area", "Mailbox", "comm", """
+Sixteen bytes IBM set aside for one program to leave information for the
+next. Nothing else writes them - not even the firmware when the machine
+restarts.
+""", os="""
+Which makes them os8088's mailbox across a restart. When it hands the whole
+machine to a DOS program, the program's exit code is left here; the machine
+restarts, os8088 resumes from hibernation, reads the code, and clears the
+box so that nothing ever reads it twice.
+""", use="write", anchors=[A("kernel/hiber.inc", r"KDB_OFF\s+equ 0x00F0"),
+                           A("kernel/hiber.inc", r"^hbm_dosbda\s*:")])
+
+# --- the 0500h page -------------------------------------------------------------
+F(0x500, 1, "Print Screen status", "PrtSc", "sys", """
+Written by {{05|Print Screen}}: 00h ready, 01h printing, FFh the last one
+failed. It also stops a second Shift+PrtSc starting while one is printing.
+""", os="""
+os8088's protected-mode kernel borrows this byte to test the "A20 line" -
+whether memory above 1 MB wraps round to zero. It compares this byte with
+the one exactly 1 MB higher.
+""", use="mega", anchors=[A("kernel/mega.inc", r"0000:0500 and FFFF:0510")])
+RSV(0x501, 3)
+F(0x504, 1, "Single-drive letter", "A/B", "dos", """
+On a machine with one floppy drive, DOS pretends to have two, A: and B:,
+and asks you to swap disks between them. This says which letter the drive
+is playing.
+""")
+RSV(0x505, 11, "Reserved for DOS.")
+F(0x510, 2, "BASIC's segment", "DefSeg", "dos",
+  "IBM BASIC's default segment for its memory-poking commands.")
+F(0x512, 4, "BASIC: saved timer hook", "B-1C", "dos",
+  "IBM BASIC's copy of {{1C}}, put back when it exits.")
+F(0x516, 4, "BASIC: saved Ctrl+Break", "B-23", "dos",
+  "IBM BASIC's copy of {{23}}.")
+F(0x51A, 4, "BASIC: saved error handler", "B-24", "dos",
+  "IBM BASIC's copy of {{24}}.")
+RSV(0x51E, 4)
+F(0x522, 11, "DOS's floppy table", "DOS tab", "dos", """
+Many versions of DOS copy the firmware's floppy timing table here and point
+{{1E}} at the copy, so that they can change it. os8088 does the same thing
+for the same kind of reason, at {{@f-0580|0580h}}.
+""")
+RSV(0x52D, 83)
+F(0x580, 11, "os8088's floppy table (boot)", "os8088", "os", """
+os8088's own copy of the floppy timing table, used only while it boots.
+""", os="""
+The boot sector copies the firmware's eleven bytes here, changes ONE - byte
+4, the last sector on a track - and points {{1E}} at the copy. The IBM PC's
+and XT's firmware says 8, from the eight-sector disks of the first DOS; a
+360 KB disk has nine, and a read that runs to the end of a track would
+otherwise stop one sector short and report success.
+
+Once the operating system is running it keeps the table inside itself
+instead, and from then on these bytes are dead.
+""", use="write", anchors=[A("boot/boot.asm", r"mov word \[es:0x0078\], DPT_AT"),
+                           A("boot/boot.asm", r"DPT_AT\s+equ\s+0x0580"),
+                           A("kernel/disk.inc", r"^dsk_dpt_init_x\s*:")])
+RSV(0x58B, 117, """
+Spare. The next byte after it, 0600h, is the first byte of os8088's kernel.
+""")
+
+
+# -----------------------------------------------------------------------------
+# 6c. THE SECOND WALK: one floppy read, from os8088's request to the motor
+#     turning off. The firmware's side is the IBM PC's own; os8088's side is
+#     what its disk code does on every call.
+# -----------------------------------------------------------------------------
+
+def kv(rows, note="", chg=()):
+    return {"k": "kv", "rows": [[a, b, 1 if a in chg else 0] for a, b in rows],
+            "note": note}
+
+
+def lst(rows):
+    return {"k": "list", "rows": rows}
+
+
+def code(rows, on):
+    return {"k": "code", "rows": rows, "on": on}
+
+
+def text(big, sm, wire=None, wl=""):
+    return {"k": "text", "big": big, "sm": sm, "wire": wire, "wl": wl}
+
+
+DPT = ["CF", "02", "25", "02", "08", "2A", "FF", "50", "F6", "19", "04"]
+DPT_LBL = ["step rate", "head load", "motor off", "size", "last sector", "gap",
+           "data len", "fmt gap", "fill", "settle", "spin-up"]
+
+
+def dpt(eot="08", hi=()):
+    return lst([["+%d" % i, eot if i == 4 else v, DPT_LBL[i],
+                 "on" if i in hi else ""] for i, v in enumerate(DPT)])
+
+
+def bda(seek="01", motor="00", cnt="00", st="00", res="…", hi=()):
+    rows = [["043E", seek, "seek / IRQ"], ["043F", motor, "motors"],
+            ["0440", cnt, "motor-off"], ["0441", st, "status"],
+            ["0442", res, "results"]]
+    return lst([r + ["on" if r[0] in hi else ""] for r in rows])
+
+
+FW = [["motor on (port 3F2h)", 0], ["seek to the cylinder", 0],
+      ["wait for 0040:003E bit 7", 0], ["program the DMA chip", 0],
+      ["send READ DATA", 0], ["wait for 0040:003E bit 7", 0],
+      ["7 result bytes → 0040:0042", 0], ["status, motor-off count", 0],
+      ["ret 2  ; keeps CF, drops FLAGS", 0]]
+
+REQ0 = [["AH  op", "02 read"], ["AL  run", "—"], ["CH  cyl", "05"],
+        ["CL  sector", "01"], ["DH  head", "00"], ["DL  drive", "00 (A:)"],
+        ["ES:BX", "2E80:0000"]]
+
+
+def req(run="—", chg=(), note=""):
+    rows = [list(r) for r in REQ0]
+    rows[1][1] = run
+    return kv(rows, note, chg)
+
+
+DMA0 = [["mode", "—"], ["page", "—"], ["address", "—"],
+        ["count", "—"]]
+DMAP = [["mode", "46h  disk → memory"], ["page", "02h"],
+        ["address", "E800h"], ["count", "17FFh"]]
+
+DISK_BOXES = [
+    {"id": "req", "title": "os8088's request", "right": "registers"},
+    {"id": "tab", "title": "Floppy table", "right": "via 0000:0078"},
+    {"id": "bda", "title": "BIOS data", "right": "0040:003E"},
+    {"id": "dma", "title": "DMA chip", "right": "8237 · ch 2"},
+    {"id": "fdc", "title": "Floppy controller", "right": "765"},
+    {"id": "fw", "title": "Firmware", "right": "INT 13h"},
+]
+
+DISK_WALK = [
+    {"short": "ask", "t": "os8088 wants a cylinder",
+     "on": ["req"], "b": {
+         "req": req(note="the whole of cylinder 5: 18 sectors"),
+         "tab": dpt(), "bda": bda(), "dma": kv(DMA0),
+         "fdc": text("idle", "motor off; the head is wherever the last "
+                     "read left it", 0, "IRQ 6"),
+         "fw": code(FW, -1)},
+     "h": """
+os8088 wants to read the whole of cylinder 5 of a 360 KB floppy - both
+sides, 18 sectors, 9 KB - into memory at 2E80:0000. It will ask the
+firmware's disk service, {{13}}, for it in as few calls as it can, because
+on a real IBM PC one call costs about 400 milliseconds almost whatever it
+moves: the cost of a disk is counted in calls, not sectors.
+
+A cylinder rather than a track because the controller can turn a read onto
+the second side by itself, at the end of the first - the "multi-track" mode
+the firmware asks for on every read.
+""", "facts": [["Wanted", "cyl 5, both heads"], ["Sectors", "18 × 512"],
+               ["Into", "2E80:0000"]]},
+    {"short": "cut", "t": "Cut the run at the 64 KB line",
+     "on": ["req"], "b": {
+         "req": req("0Ch (12)", chg=["AL  run"],
+                    note="2E800h + 12 sectors ends exactly at 30000h")},
+     "h": """
+Memory at 2E80:0000 is physical address 2E800h. The [[DMA]] chip that will
+carry the data can count only within one 64 KB block of memory - its upper
+address bits are a separate register that does not advance - so a transfer
+must not cross a multiple of 10000h. The next one is at 30000h, 6,144 bytes
+away: twelve sectors.
+
+So os8088 asks for 12, not 18. Asking for all 18 would be refused with
+status 09h, "DMA boundary error", and nothing read. The other six sectors
+will be the next call's.
+""", "facts": [["Physical", "2E800h"], ["Next 64 KB line", "30000h"],
+               ["Room", "6,144 bytes = 12 sectors"]]},
+    {"short": "EOT", "t": "Set the last sector on a track",
+     "on": ["tab"], "b": {"tab": dpt("09", hi=(4,))},
+     "h": """
+Before every call, os8088 writes the mounted disk's sectors-per-track into
+byte 4 of the floppy timing table - the table {{1E}} points at, which the
+firmware reads afresh on every call. That byte tells the controller where a
+track ends: at sector 9 on this disk, it will turn to the other side.
+
+The IBM PC's own table says 8, left over from the eight-sector disks of the
+first DOS. Unpatched, a read reaching sector 9 stops after sector 8 - and
+reports success. And because one table serves every disk, but the disk in
+the drive can change, os8088 writes the byte every time rather than once.
+""", "facts": [["Byte 4", "08 → 09"], ["Why every call", "one table, many disks"]]},
+    {"short": "INT 13h", "t": "Into the firmware",
+     "on": ["req", "fw"], "b": {"fw": code(FW, 0)},
+     "h": """
+`INT 13h` with AH = 02h (read), AL = 12, CH = cylinder 5, CL = sector 1,
+DH = head 0, DL = drive 0, and ES:BX the buffer - taken through the table
+exactly as {{@take|the key press in chapter 1}} was, but with the number
+coming from the instruction.
+
+Just before it, os8088 marks that the mouse pointer may now be redrawn
+from the timer's interrupt: from here to the return, the processor is going
+to spend most of its time waiting, and that is time the pointer can have.
+""", "facts": [["Call", "AX = 020Ch"], ["", "CX = 0501h · DX = 0000h"]]},
+    {"short": "motor", "t": "Motor on",
+     "on": ["fw", "bda", "fdc"], "b": {
+         "bda": bda(motor="01", cnt="FF", hi=("043F", "0440")),
+         "fdc": text("spinning up", "drive A selected, motor on", 0, "IRQ 6"),
+         "fw": code(FW, 0)},
+     "h": """
+The firmware turns drive A's motor on through the controller's output
+register at [[port]] 3F2h, and records it in 0040:003F - that register
+cannot be read back, so the byte in memory is the only record. It sets the
+motor-off countdown at 0040:0040 to FFh, so the timer cannot switch the
+motor off in the middle of the operation.
+
+If the motor was already running, from a read a moment ago, there is no
+wait. Otherwise the firmware waits for it to reach speed: the last byte of
+the timing table, half a second on the IBM PC.
+""", "facts": [["0040:003F", "00 → 01"], ["0040:0040", "→ FF (hold)"]]},
+    {"short": "seek", "t": "Seek, and wait for line 6",
+     "on": ["fw", "fdc", "bda"], "b": {
+         "bda": bda(seek="81", motor="01", cnt="FF", hi=("043E",)),
+         "fdc": text("SEEK → cyl 5", "the head steps; the controller "
+                     "raises its line when it arrives", 1, "IRQ 6"),
+         "fw": code(FW, 2)},
+     "h": """
+The firmware tells the controller to move the head to cylinder 5 and waits,
+with interrupts on, testing bit 7 of 0040:003E over and over. When the head
+arrives the controller raises [[IRQ]] 6; the firmware's tiny handler on
+{{0E}} sets that bit and sends the [[end of interrupt]]; the waiting loop
+sees it, clears it, and asks the controller how the seek went. Then it waits
+the head-settle time from the table (byte 9) for the head to stop
+vibrating.
+
+Interrupts are on for the whole of that wait. The timer keeps ticking -
+which is how os8088's mouse pointer, its clock and its other programs keep
+going while the drive works.
+""", "facts": [["0040:003E", "01 → 81 → 01"], ["Settle", "byte 9 of the table"]]},
+    {"short": "DMA", "t": "Program the DMA chip",
+     "on": ["fw", "dma"], "b": {
+         "bda": bda(motor="01", cnt="FF"),
+         "fdc": text("on cylinder 5", "waiting for a command", 0, "IRQ 6"),
+         "dma": kv(DMAP, "the page register does not count", ["mode", "page",
+                                                             "address", "count"]),
+         "fw": code(FW, 3)},
+     "h": """
+The data will not pass through the processor. The firmware sets channel 2
+of the [[DMA]] chip to move bytes from the controller to memory: the mode
+(46h, device to memory), the low 16 bits of the address (E800h), the count
+less one (12 × 512 - 1 = 17FFh), and - in a separate register at port 81h
+- the page, 02h, the address's top four bits.
+
+That separate register is the whole reason for the 64 KB rule. The chip
+counts the low 16 bits up from E800h; when they wrap, the page does not
+change, and the next byte would land at 20000h instead of 30000h. The
+firmware checks for exactly that and refuses with status 09h.
+""", "facts": [["Address", "2E800h = page 2, E800h"], ["Count", "6,144 bytes"]]},
+    {"short": "READ", "t": "Send READ DATA",
+     "on": ["fw", "fdc"], "b": {
+         "fdc": text("READ DATA", "E6h: multi-track · cyl 5 head 0 "
+                     "sector 1 · 512-byte sectors · last 9", 0, "IRQ 6"),
+         "fw": code(FW, 5)},
+     "h": """
+Nine command bytes go to the controller: READ DATA with the multi-track bit
+set (E6h), then cylinder 5, head 0, sector 1, the sector size code (2 = 512
+bytes), the last sector on the track - the 9 os8088 put in the table - and
+two gap lengths from the table.
+
+Then the firmware goes back to waiting on bit 7 of 0040:003E, interrupts
+on.
+""", "facts": [["Command", "E6h"], ["Last sector", "09 (from the table)"]]},
+    {"short": "stream", "t": "Sectors stream into memory",
+     "on": ["fdc", "dma"], "b": {
+         "fdc": text("head 0: 1…9 · head 1: 1…3",
+                     "at sector 9 it turns to head 1 by itself", 0, "IRQ 6"),
+         "dma": kv([["mode", "46h  disk → memory"], ["page", "02h"],
+                    ["address", "E800h → FFFFh"], ["count", "17FFh → done"]],
+                   "one byte per request from the controller",
+                   ["address", "count"])},
+     "h": """
+The disk turns at 300 revolutions a minute - a fifth of a second a turn -
+and as each sector passes under the head the controller hands its bytes to
+the DMA chip one at a time, which writes them into memory, stealing a few
+bus cycles from the processor for each.
+
+Sectors 1 to 9 come off side 0. At sector 9, the "last sector" from the
+table, the controller turns to side 1 by itself and carries on from sector
+1 there. After sector 3 of side 1 the DMA chip's count runs out, and the
+controller stops. Twelve sectors in about a revolution and a third.
+""", "facts": [["Side 0", "sectors 1–9"], ["Side 1", "sectors 1–3"],
+               ["Time", "≈ 270 ms (derived)"]]},
+    {"short": "IRQ 6", "t": "Line 6: finished",
+     "on": ["fdc", "bda"], "b": {
+         "bda": bda(seek="81", motor="01", cnt="FF", hi=("043E",)),
+         "fdc": text("result phase", "seven result bytes waiting", 1, "IRQ 6"),
+         "dma": kv([["mode", "46h  disk → memory"], ["page", "02h"],
+                    ["address", "0000h"], ["count", "FFFFh (done)"]])},
+     "h": """
+The controller raises IRQ 6 once more. The firmware's handler on {{0E}}
+sets bit 7 of 0040:003E, sends the end of interrupt, and returns - into the
+waiting loop, which sees the bit.
+""", "facts": [["0040:003E", "bit 7 set"]]},
+    {"short": "results", "t": "Results, status, and back",
+     "on": ["fw", "bda"], "b": {
+         "bda": bda(motor="01", cnt="25", st="00", res="04 00 00 05 01 04 02",
+                    hi=("0440", "0441", "0442")),
+         "fdc": text("idle", "head 1, cylinder 5; next sector 4", 0, "IRQ 6"),
+         "fw": code(FW, 8)},
+     "h": """
+The firmware reads the controller's seven result bytes into 0040:0042 -
+three status registers, all clear, and where it stopped: cylinder 5, head
+1, sector 4. It writes the status, 00h, at 0040:0041, and sets the motor-off
+count from the table: 25h, 37 [[tick|ticks]], two seconds.
+
+It returns with AH = 00h and the carry flag clear. It returns with `RET 2`,
+not [[IRET]]: an IRET would restore the caller's flags and lose the carry
+flag that carries the answer, so the firmware drops the saved flags
+instead.
+""", "facts": [["0040:0041", "00 (success)"], ["0040:0040", "25h = 37 ticks"],
+               ["Returns", "AH = 00, CF = 0"]]},
+    {"short": "retry", "t": "...or, when it fails",
+     "on": ["req"], "b": {"req": req("0Ch (12)", note="CF set? reset, then try again")},
+     "h": """
+Had the carry flag come back set, os8088 would look at the status in AH. A
+write-protected disk (03h) is final. Anything else gets a controller reset
+(AH = 00h) and another try - a floppy often fails once while the motor
+comes up to speed - three times, and then the run is taken one sector at a
+time before os8088 gives up and says so.
+
+Success here, so it moves on: the next call reads the remaining six sectors
+of the cylinder into 3000:0000, the far side of the line.
+""", "facts": [["Tries", "3, with a reset between"], ["Then", "one sector at a time"],
+               ["Never retried", "03h write-protected"]]},
+    {"short": "motor off", "t": "Two seconds later",
+     "on": ["bda", "fdc"], "b": {
+         "bda": bda(motor="00", cnt="00", st="00", res="04 00 00 05 01 04 02",
+                    hi=("043F", "0440")),
+         "fdc": text("motor off", "the timer turned it off", 0, "IRQ 6"),
+         "fw": code(FW, -1), "dma": kv(DMA0)},
+     "h": """
+If nothing else is read, the timer's handler on {{08}} counts 0040:0040
+down by one every tick. At zero it switches the motor off and clears
+0040:003F - the firmware's housekeeping, which still happens under os8088
+because os8088's own timer handler always passes the tick on.
+""", "facts": [["0040:0040", "25h → 00"], ["0040:003F", "01 → 00"]]},
+]
+
+def fr(a, b):
+    """The offsets of every field starting in [a, b]."""
+    return [f["off"] for f in FIELDS if a <= f["off"] <= b]
+
+
+def NOTE(t, h, facts=None, fields=None, vecs=None, fview=None):
+    return {"note": 1, "t": t, "h": h, "facts": facts, "fields": fields,
+            "vecs": vecs, "fview": fview}
+
+
+CH2 = "Chapter 2 · low memory"
+CH2D = "Chapter 2 · os8088 and the disk"
+
+RUNGS2 = [
+    {"id": "low", "grp": CH2, "title": "The firmware's notebook",
+     "sub": "0400h–05FFh, after the table", "chapter": "low",
+     "region": "bda", "intro": """
+After the [[interrupt table]] come 512 more bytes with fixed addresses -
+the second third of the bar at the top of the page, drawn byte by byte in
+the map beside this.
+
+The first 256, from 0400h, are the [[BIOS]] data area: what the firmware
+found at power-on and what its handlers keep up to date as the machine
+runs. The interrupt handlers of chapter 1 live in it - the timer counts in
+it, the keyboard fills it, the disk service leaves its last status in it -
+and any program can read it at segment 0040h, which is why so much PC
+software does. The next 256, from 0500h, were left for DOS and BASIC and
+are mostly spare.
+
+The rungs that follow walk the area group by group. Every field says what
+it is for, who writes it, and what os8088 does with it - colour the map by
+**os8088 uses** to see the few it touches.
+""", "steps": [{"region": "bda"}, {"region": "low"}],
+     "facts": [["BIOS data", "0400h–04FFh · 0040:0000"],
+               ["Spare page", "0500h–05FFh"],
+               ["os8088 kernel", "from 0600h"]]},
+    {"id": "ports", "grp": CH2, "title": "Ports and equipment",
+     "ms": "0400–0416", "kind": "ports", "sub": "what the machine has",
+     "chapter": "low", "fields": fr(0x400, 0x416) + [0x478, 0x47C],
+     "intro": """
+The area opens with the firmware's inventory of the machine, taken once at
+power-on: where the serial and printer ports are, what is fitted, and how
+much memory there is. Programs are meant to read these rather than probe
+the hardware themselves - and changing an entry is a recognised way to
+re-arrange what software sees.
+"""},
+    {"id": "kbd", "grp": CH2, "title": "The keyboard", "ms": "0417–043D",
+     "kind": "kbd", "sub": "the shift state and the ring", "chapter": "low",
+     "fields": fr(0x417, 0x43D) + [0x471, 0x480, 0x496, 0x497], "intro": """
+The keyboard handler on {{09}} turns key presses into characters, and this
+is where they wait: a ring of sixteen entries with a read position and a
+write position, beside the bytes that say which shift keys are held.
+{{16}} reads from the ring; nothing else needs to know about the keyboard.
+
+os8088 reads the shift state, watches the ring for overflow, and - when a
+DOS program ends - clears the held-key bytes rather than restoring them.
+"""},
+    {"id": "flp", "grp": CH2, "title": "The floppy drive", "ms": "043E–0448",
+     "kind": "flp", "sub": "the disk service's working state",
+     "chapter": "low", "fields": fr(0x43E, 0x448) + [0x48B] + fr(0x48F, 0x495),
+     "intro": """
+These bytes are how three separate pieces of firmware cooperate on one
+floppy drive: the disk service {{13}}, the floppy controller's interrupt
+handler {{0E}}, and the timer handler {{08}}. The interrupt handler sets a
+bit the disk service is waiting for; the disk service sets a countdown the
+timer handler runs down; the timer handler turns the motor off when it
+reaches zero.
+
+{{@disk|One floppy read, step by step}} watches all of them change.
+"""},
+    {"id": "vid", "grp": CH2, "title": "The display", "ms": "0449–0466",
+     "kind": "vid", "sub": "the video service's notes", "chapter": "low",
+     "fields": fr(0x449, 0x466) + fr(0x484, 0x48A) + [0x4A8], "intro": """
+The video service {{10}} records the mode, the screen's size, and a cursor
+position for every text page here, so that any program can find out what
+the screen is without asking the card - and so that the service itself can
+carry on where it left off.
+
+os8088 sets its display up through the firmware and then draws for itself,
+so it leaves this block to the firmware. A DOS program in a window is given
+a private copy of the whole block: it believes it has a text screen of its
+own.
+"""},
+    {"id": "time", "grp": CH2, "title": "Time and restart", "ms": "0467–0473",
+     "kind": "time", "sub": "the tick count and the warm restart",
+     "chapter": "low", "fields": [0x467, 0x46B, 0x46C, 0x470, 0x472]
+     + fr(0x498, 0x4A0), "intro": """
+The [[tick]] count is the machine's clock on a PC with no clock chip: 18.2
+a second since midnight, counted by {{08}}, with a flag for midnight
+passing. Beside it is the restart word that lets Ctrl+Alt+Del skip the
+memory test, and - on an AT - the address a 286 resumes at after a software
+reset.
+"""},
+    {"id": "misc", "grp": CH2, "title": "Hard disks and the rest",
+     "ms": "0474–04FF", "kind": "hdd", "sub": "disks, room, and a mailbox",
+     "chapter": "low", "fields": fr(0x474, 0x477) + [0x48C, 0x4A1, 0x4A2,
+                                                     0x4AC, 0x4F0],
+     "intro": """
+The hard-disk service keeps its own status here, as the floppy one does.
+Much of the rest of the area was never assigned - and its last sixteen
+bytes were set aside on purpose, for programs to leave notes for one
+another. os8088 is one of the few that does.
+"""},
+    {"id": "p500", "grp": CH2, "title": "The 0500h page", "ms": "0500–05FF",
+     "kind": "dos", "sub": "left for DOS and BASIC", "chapter": "low",
+     "region": "low", "fields": fr(0x500, 0x5FF), "intro": """
+IBM gave the first byte to {{05|Print Screen}}, DOS took one for its
+single-drive trick, IBM BASIC kept three saved vectors here, and DOS often
+put its copy of the floppy timing table at 0522h. The rest of the page is
+spare.
+
+os8088 uses one piece of it, for a few seconds at boot: its own copy of the
+floppy timing table, at 0580h - for the same reason DOS kept one.
+"""},
+
+    {"id": "back2", "grp": CH2D, "title": "What is put back",
+     "sub": "a DOS program, a window, a hibernation", "chapter": "low",
+     "home": False, "fview": "dosfs", "intro": """
+A program that has the machine to itself can write anything in this area,
+and DOS programs do. So whenever os8088 lends the machine out, it has to
+decide - field by field - what to take back afterwards. Three cases, one a
+step.
+""", "steps": [
+        NOTE("A full-screen DOS program", """
+Before the program starts, os8088's DOS copies the whole BIOS data area,
+with the interrupt table. When it ends, three things happen:
+
+- **A named list is put back from the copy**: the port tables, the
+  equipment word, the memory size, the keyboard ring's positions and
+  bounds, the warm-restart word, and the AT wait service's pointer. Each is
+  there because a program that changed it would leave os8088 - or the
+  firmware - acting on its value.
+- **The held-key bytes are cleared**, not restored. No key is held on the
+  way back, and a restored phantom Ctrl would make every menu misbehave.
+- **Everything else is left as it stands.** The motor-off countdown, the
+  tick count, the controller's results describe the hardware NOW; putting
+  back a copy from before the program would be a lie the firmware then acts
+  on.
+""", fview="dosfs", fields=[f["off"] for f in FIELDS
+                            if f["own"]["dosfs"] in ("put", "zero")],
+            facts=[["Saved", "all 256 bytes"], ["Put back", "7 runs"],
+                   ["Cleared", "0417h, 0496h"]]),
+        NOTE("A DOS program in a window", """
+In a window the program shares the machine with the desktop, so there is no
+"afterwards" to tidy - there are thousands of moments when it gains or
+loses the processor. At each, os8088 swaps three runs in or out: the
+memory-size word, the display block (0449h-0466h) and the EGA/VGA block
+(0484h-0489h). The program sees its own small text screen and its own
+memory size; the desktop's are untouched.
+
+Everything else is shared, live, between the two.
+""", fview="doswin", fields=[f["off"] for f in FIELDS
+                             if f["own"]["doswin"] == "swap"],
+            facts=[["Swapped", "3 runs, 38 bytes"], ["When", "every time it gets the processor"]]),
+        NOTE("Hibernation", """
+Hibernation writes memory to disk and, later, reads it back - from 0600h
+up. The interrupt table is saved and put back, last, but the BIOS data area
+is not: on resume it is what the firmware made of this boot, which is the
+truth about the machine as it now is.
+
+Two fields get special attention. The tick count has kept running across
+the restart, so how far it moved is how far os8088 sets its own clock
+forward. And the sixteen-byte mailbox at 04F0h survives the restart
+untouched, which is how a DOS program's exit code gets from before the
+restart to after it.
+""", fview="use", fields=[0x46C, 0x4F0],
+            facts=[["Restored", "0600h up, and the table"], ["BIOS data", "the new boot's"]]),
+    ], "anchors": [A("apps/dos/dos.asm", r"^dos_bdalist\s*:"),
+                   A("apps/dos/dosw.inc", r"^dvw_runs\s*:"),
+                   A("kernel/hiber.inc", r"KD_SEG\s+equ 0x0060")]},
+    {"id": "boot2", "grp": CH2D, "title": "Boot's own use of low memory",
+     "sub": "power-on to the kernel", "chapter": "low", "home": False,
+     "fview": "use", "intro": """
+Before anything of os8088's runs, the firmware has already filled all three
+regions on the bar. Here is what os8088's boot then reads and writes in
+them, in order - the Boot Ladder page tells the rest of the story, the
+memory above 0600h.
+""", "steps": [
+        NOTE("The firmware fills it in", """
+At power-on the firmware tests memory, then writes the first 32 entries of
+the [[interrupt table]] and the BIOS data area: the ports it found, the
+equipment word, the memory size, an empty keyboard ring, the [[tick]] count
+from zero. It sets up the [[interrupt controller]] and its [[mask]], and
+finally calls {{19}}, which reads the floppy's first sector to 0000:7C00 and
+jumps to it.
+""", fields=[0x400, 0x408, 0x410, 0x413, 0x41A, 0x41C, 0x46C]),
+        NOTE("Start the clock", """
+The boot sector's first act is to read the tick count at 0040:006C, so that
+the whole boot can be timed from this instant. It holds the value in a
+register until the kernel has arrived, and then stores it in the kernel's
+own first bytes.
+""", fields=[0x46C]),
+        NOTE("Move out of the way", """
+It asks {{12}} how much memory there is - the word at 0040:0013 - refuses
+a machine too small to run on, and copies itself to the last 512 bytes of
+memory, taking its stack with it. 7C00h is in the middle of where the
+kernel is about to go.
+""", fields=[0x413]),
+        NOTE("Take over the floppy table", """
+Before its first read it copies the firmware's eleven-byte floppy timing
+table - found through {{1E}}, at 0000:0078 - to 0000:0580, changes byte 4
+(the last sector on a track) from the firmware's 8 to the disk's own 9, and
+points {{1E}} at the copy.
+
+The field taught this one. With the firmware's table, a read reaching
+sector 9 stopped after sector 8 and reported success, and the loader
+arrived one sector short.
+""", fields=[0x580]),
+        NOTE("Read, with the table in force", """
+It resets the drive and reads the loader; the loader reads the kernel to
+0600h, in runs as long as a whole cylinder - nine sectors a side, both
+sides, one disk call - because the patched table lets the controller turn
+to the second side by itself. The loader sets the text display through
+{{10}}, and borrows {{08}} to turn its logo while the disk works.
+""", fields=[0x580, 0x449, 0x43E, 0x43F, 0x440, 0x441]),
+        NOTE("The kernel takes over", """
+The kernel copies the table into itself and points {{1E}} there instead,
+with interrupts off so the firmware never sees half an address. From then
+on 0580h is dead and the 0500h page is unused. It hooks the timer, the
+keyboard and the serial lines - {{@os|chapter 1's list}} - and the desktop
+appears.
+""", fields=[0x580], vecs=[0x08, 0x09, 0x0B, 0x0C, 0x1E]),
+    ], "anchors": [A("boot/boot.asm", r"mov bp, \[0x046C\]"),
+                   A("boot/boot.asm", r"^\s*retf"),
+                   A("kernel/disk.inc", r"mov word \[0x0078\], dsk_dpt")]},
+    {"id": "disk", "grp": CH2D, "title": "One floppy read, step by step",
+     "sub": "cylinder 5 of a 360 KB disk", "chapter": "low", "walk": "disk",
+     "home": False, "fields": [0x43E, 0x43F, 0x440, 0x441, 0x442, 0x580],
+     "steps": [{"walk": i} for i in range(len(DISK_WALK))],
+     "intro": """
+One call to the firmware's disk service, followed from os8088's request to
+the motor switching off: the registers, the floppy timing table, the BIOS
+data bytes, the DMA chip and the floppy controller, as they stand at each
+step. The firmware's side is the IBM PC's own.
+""", "anchors": [A("kernel/disk.inc", r"mov \[dsk_dpt\+4\], al"),
+                 A("kernel/disk.inc", r"^dsk_runcap\s*:"),
+                 A("kernel/disk.inc", r"to the end of the CYLINDER"),
+                 A("kernel/disk.inc", r"failed: reset the controller and retry"),
+                 A("kernel/disk.inc", r"CURXFER_ON")]},
+    {"id": "rules", "grp": CH2D, "title": "The rules a disk call obeys",
+     "sub": "why os8088 cuts its reads where it does", "chapter": "low",
+     "home": False, "intro": """
+Everything os8088 does around a floppy read follows from a handful of
+facts about the hardware under it. One a step.
+""", "steps": [
+        NOTE("Count in calls, not sectors", """
+On a real IBM PC one disk call costs about 400 milliseconds - a revolution
+or two of the disk - almost whatever it moves. Reading a whole cylinder in
+one call rather than nine sectors at a time is most of what makes os8088
+load quickly, so every rule below is about making each call as long as the
+hardware allows.
+""", facts=[["One call", "≈ 400 ms (measured, IBM PC)"]]),
+        NOTE("Never across a 64 KB line", """
+The [[DMA]] chip's top address bits do not count, so no transfer may cross
+a multiple of 64 KB in physical memory - the firmware refuses with status
+09h. os8088 works out how many sectors fit before the next line and asks
+for no more; the rest is the next call's. It is also why every buffer os8088
+gives the disk starts on a 512-byte boundary: a sector that starts on one
+can never straddle a line by itself.
+""", fields=[0x441]),
+        NOTE("To the end of the cylinder - for reads", """
+With the last-sector byte of the table set right, a read that reaches the
+end of side 0 carries on onto side 1 by itself. So a read may run to the
+end of the cylinder, not just the track: eighteen sectors on a 360 KB disk.
+
+Writes may not. os8088 found by measurement that a write crossing onto the
+second side fails with a timeout on the IBM firmware, so a write stops at
+the end of the track.
+""", fields=[0x580]),
+        NOTE("Three tries, then one sector at a time", """
+A floppy may fail once for no lasting reason - the motor not yet at speed,
+a speck of dust. os8088 resets the controller and tries again, three times,
+and then takes the run one sector at a time, so that a single bad sector
+costs only itself. A write-protected disk (status 03h) is reported at once.
+While it retries, the busy pointer is shown, so a failing disk says so
+rather than looking like a hang.
+""", fields=[0x441]),
+        NOTE("Keep the pointer moving", """
+The firmware's disk service spends almost all of a call waiting, with
+interrupts on, for the controller's line. os8088 marks the call so that its
+timer interrupt may redraw the mouse pointer while it is in there - the
+processor was going to spend that time idle anyway.
+""", fields=[0x43E]),
+    ], "anchors": [A("kernel/disk.inc", r"READS ONLY")]},
+]
+
+RUNGS += RUNGS2
+
+
+# -----------------------------------------------------------------------------
+# 6d. BOTH WALKS IN ONE SHAPE: boxes, and per frame what each box holds. A
+#     frame names only the boxes that changed; the rest carry forward.
+# -----------------------------------------------------------------------------
+
+def key_walk():
+    out = []
+    for w in WALK:
+        p, c = w["pic"], w["cpu"]
+        b = {"dev": text(w["dev"]["big"], w["dev"]["sm"], w["dev"]["line"],
+                         "request line"),
+             "pic": {"k": "bits", "rows": [["IRR", p["irr"]], ["IMR", p["imr"]],
+                                           ["ISR", p["isr"]]],
+                     "hi": WALK_DEV["irq"], "wire": p["intr"],
+                     "wl": "to the CPU: INTR"},
+             "cpu": kv([["CS:IP", c["cs"] + ":" + c["ip"]],
+                        ["SS:SP", c["ss"] + ":" + c["sp"]],
+                        ["FLAGS", c["fl"]], ["IF", c["iff"]]], c["note"], c["chg"]),
+             "stk": lst([[r[0], r[1], r[2], ("new" if r[3] else "") +
+                          (" sp" if r[4] else "")] for r in w["stk"]]),
+             "ivt": lst([[r[0], r[1], r[2], "on" if (w["ivt"] and r[3]) else ""]
+                         for r in WALK_IVT]),
+             "isr": code(WALK_CODE, w["code"])}
+        out.append({"short": w["short"], "t": w["t"], "h": w["h"],
+                    "facts": w.get("facts"), "on": w["on"], "b": b})
+    return out
+
+
+def carried(steps):
+    out, prev = [], {}
+    for w in steps:
+        b = dict(prev)
+        b.update(w["b"])
+        prev = b
+        x = dict(w)
+        x["b"] = b
+        out.append(x)
+    return out
+
+
+WALKS = {
+    "key": {"title": "One interrupt, taken",
+            "hint": "a key press on an IBM PC \u00b7 orange is what this step changed",
+            "boxes": [{"id": "dev", "title": WALK_DEV["name"], "right": WALK_DEV["port"]},
+                      {"id": "pic", "title": "Interrupt controller", "right": "8259A"},
+                      {"id": "cpu", "title": "Processor", "right": "8088"},
+                      {"id": "stk", "title": "Stack", "right": "grows down"},
+                      {"id": "ivt", "title": "Interrupt table", "right": "0000:0020"},
+                      {"id": "isr", "title": "Handler", "right": WALK_DEV["isr"]}],
+            "steps": key_walk(), "vec": WALK_DEV["vec"]},
+    "disk": {"title": "One floppy read",
+             "hint": "cylinder 5 of a 360 KB disk, on an IBM PC \u00b7 orange is "
+                     "what this step changed",
+             "boxes": DISK_BOXES, "steps": carried(DISK_WALK), "vec": 0x13},
+}
 
 # -----------------------------------------------------------------------------
 # 7. CHECK, then BUILD.
@@ -1600,31 +2667,77 @@ def selfcheck():
             if v["own"][view] not in OWNERS:
                 raise Stale("INT %02Xh has owner %r" % (n, v["own"][view]),
                             "VEC", "use one of %s" % ", ".join(OWNERS))
+    # THE FIELDS TILE 0400h-05FFh EXACTLY: no gap, no overlap, every byte one
+    # field's - the byte map draws from this and would silently drop a hole.
+    at = 0x400
+    offs = set()
+    for f in sorted(FIELDS, key=lambda f: f["off"]):
+        if f["off"] != at:
+            raise Stale("the fields %s 0x%03X" % ("skip to" if f["off"] > at
+                        else "overlap at", f["off"]), "FIELDS",
+                        "make the fields contiguous from 0400h to 05FFh")
+        at += f["len"]
+        offs.add(f["off"])
+        for a in f["anchors"]:
+            check_anchor(a, "field %03Xh" % f["off"])
+        if f["own"]["use"] in ("write", "read", "mega") and not f["anchors"]:
+            raise Stale("field %03Xh says os8088 uses it, with no anchor"
+                        % f["off"], "FIELDS", "anchor it to the code")
+        for w in FVIEWS:
+            if f["own"][w["id"]] not in w["names"]:
+                raise Stale("field %03Xh has %s=%r" % (f["off"], w["id"],
+                            f["own"][w["id"]]), "FIELDS", "use a listed key")
+    if at != 0x600:
+        raise Stale("the fields end at 0x%03X, not 0x600" % at, "FIELDS",
+                    "cover up to 05FFh")
     for g in LOW["regions"]:
         for a in g.get("anchors", []):
             check_anchor(a, "region %s" % g["id"])
     ids = set(r["id"] for r in RUNGS)
-    for r in RUNGS:
-        for a in r.get("anchors", []):
-            check_anchor(a, "rung %s" % r["id"])
-        for s in r.get("steps", []):
-            if "region" in s and s["region"] not in [g["id"] for g in LOW["regions"]]:
-                raise Stale("rung %s names region %s" % (r["id"], s["region"]),
-                            "RUNGS", "name a region in LOW")
+    if len(ids) != len(RUNGS):
+        raise Stale("two rungs share an id", "RUNGS", "rename one")
     texts = [(k, v) for k, v in GLOSS.items()]
     for n, v in VEC.items():
         texts += [("INT %02Xh" % n, v["text"] + v["os"] + v["dos"] + v["name"])]
+    for f in FIELDS:
+        texts.append(("field %03Xh" % f["off"], f["text"] + f["os"] + f["dos"]
+                      + f["name"]))
     for r in RUNGS:
+        for a in r.get("anchors", []):
+            check_anchor(a, "rung %s" % r["id"])
         texts.append(("rung " + r["id"], r["intro"] + r["title"]))
-        for m in RUNG.finditer(r["intro"]):
-            if m.group(1) not in ids:
-                raise Stale("rung %s links to rung %s" % (r["id"], m.group(1)),
-                            "RUNGS", "link to a rung that exists")
-    for w in WALK:
-        texts.append(("walk " + w["t"], w["h"]))
+        for s in r.get("steps") or []:
+            if "region" in s and s["region"] not in [g["id"] for g in LOW["regions"]]:
+                raise Stale("rung %s names region %s" % (r["id"], s["region"]),
+                            "RUNGS", "name a region in LOW")
+            if s.get("note"):
+                texts.append(("rung %s: %s" % (r["id"], s["t"]), s["h"] + s["t"]))
+            for o in (s.get("fields") or []) + ([s["field"]] if "field" in s else []):
+                if o not in offs:
+                    raise Stale("rung %s names field %03Xh" % (r["id"], o),
+                                "RUNGS", "name a field's first byte")
+        for o in r.get("fields") or []:
+            if o not in offs:
+                raise Stale("rung %s names field %03Xh" % (r["id"], o),
+                            "RUNGS", "name a field's first byte")
+    for key, W in WALKS.items():
+        for w in W["steps"]:
+            texts.append(("walk %s: %s" % (key, w["t"]), w["h"]))
+            for bx in W["boxes"]:
+                if bx["id"] not in w["b"]:
+                    raise Stale("walk %s step `%s` has no %s box" % (key, w["t"],
+                                bx["id"]), "WALKS", "give its first step every box")
     for g in LOW["regions"]:
         texts.append(("region " + g["id"], g["text"]))
     for who, t in texts:
+        for m in RUNG.finditer(t):
+            if m.group(1) not in ids:
+                raise Stale("%s links to rung %s" % (who, m.group(1)),
+                            "the prose", "link to a rung that exists")
+        for m in FIELDJ.finditer(t):
+            if int(m.group(1), 16) not in offs:
+                raise Stale("%s links to field %s" % (who, m.group(1)),
+                            "the prose", "link to a field's first byte")
         for rx, what in BANNED:
             m = rx.search(t)
             if m:
@@ -1639,6 +2752,10 @@ def bold(s):
     return re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", s)
 
 
+def prose(t, who):
+    return bold(md(t, who))
+
+
 def model():
     vec = []
     for n in range(256):
@@ -1647,42 +2764,59 @@ def model():
         vec.append({
             "name": v["name"], "tag": v["tag"], "kind": v["kind"],
             "by": v["by"], "irq": v["irq"],
-            "html": bold(md(v["text"], who)) if v["text"] else
+            "html": prose(v["text"], who) if v["text"] else
             "<p>%s. Nothing standard is assigned here.</p>" % esc(KINDS[v["kind"]]),
-            "os": bold(md(v["os"], who)), "dos": bold(md(v["dos"], who)),
+            "os": prose(v["os"], who), "dos": prose(v["dos"], who),
             "own": v["own"], "mark": v["quiet"],
         })
+    fields = []
+    for f in sorted(FIELDS, key=lambda f: f["off"]):
+        who = "field %03Xh" % f["off"]
+        fields.append({"off": f["off"], "len": f["len"], "name": f["name"],
+                       "tag": f["tag"], "own": f["own"],
+                       "html": prose(f["text"], who), "os": prose(f["os"], who),
+                       "dos": prose(f["dos"], who)})
     rungs = []
     for r in RUNGS:
         vecs = r.get("vecs")
         steps = r.get("steps")
         if steps is None:
-            steps = [{"vec": n} for n in vecs]
+            steps = ([{"vec": n} for n in vecs] if vecs else
+                     [{"field": o} for o in r.get("fields") or []])
+        out = []
+        for st in steps:
+            st = dict(st)
+            if st.get("note"):
+                st["h"] = prose(st["h"], r["id"])
+            out.append(st)
         rungs.append({
             "id": r["id"], "grp": r["grp"], "title": r["title"],
             "ms": r.get("ms", ""), "kind": r.get("kind"), "sub": r["sub"],
-            "chapter": r["chapter"], "intro": bold(md(r["intro"], r["id"])),
-            "steps": steps, "vecs": vecs or [s["vec"] for s in steps if "vec" in s],
-            "walk": r.get("walk", False), "view": r.get("view"),
+            "chapter": r["chapter"], "intro": prose(r["intro"], r["id"]),
+            "steps": out, "vecs": vecs or [s["vec"] for s in steps if "vec" in s],
+            "fields": r.get("fields") or [], "walk": r.get("walk") or None,
+            "view": r.get("view"), "fview": r.get("fview"),
             "region": r.get("region"), "facts": r.get("facts"),
             "home": r.get("home", True),
         })
-    walk = []
-    for w in WALK:
-        x = dict(w)
-        x["h"] = bold(md(w["h"], "walk"))
-        walk.append(x)
+    walks = {}
+    for key, W in WALKS.items():
+        w2 = dict(W)
+        w2["steps"] = []
+        for w in W["steps"]:
+            x = dict(w)
+            x["h"] = prose(w["h"], "walk " + key)
+            w2["steps"].append(x)
+        walks[key] = w2
     low = {"top": LOW["top"], "ticks": LOW["ticks"], "regions": []}
     for g in LOW["regions"]:
         low["regions"].append({k: g[k] for k in
                                ("id", "lo", "hi", "col", "chapter", "name", "facts")})
-        low["regions"][-1]["html"] = bold(md(g["text"], g["id"]))
-    views = [dict((k, v) for k, v in w.items()) for w in VIEWS]
-    return {"vec": vec, "rungs": rungs, "walk": walk, "low": low,
-            "walkDev": WALK_DEV, "walkIvt": WALK_IVT, "walkCode": WALK_CODE,
-            "kinds": KINDS, "kindOrder": KIND_ORDER, "owners": OWNERS,
-            "ownOrder": OWN_ORDER, "views": views, "chapters": CHAPTERS,
-            "gloss": _GLOSS_LC}
+        low["regions"][-1]["html"] = prose(g["text"], g["id"])
+    return {"vec": vec, "fields": fields, "rungs": rungs, "walks": walks,
+            "low": low, "kinds": KINDS, "kindOrder": KIND_ORDER,
+            "owners": OWNERS, "ownOrder": OWN_ORDER, "views": VIEWS,
+            "fviews": FVIEWS, "chapters": CHAPTERS, "gloss": _GLOSS_LC}
 
 
 FONTS = ('<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
@@ -1713,8 +2847,9 @@ def render(fragment=False):
    <h1>os8088 <span class="sub">Interrupts</span></h1>
    <p class="lede">How an IBM PC stops what it is doing to answer a key, a
     clock or a disk — the table in the first kilobyte of memory that
-    says where every answer is, all 256 of its entries, and which of them
-    os8088 and its DOS take over.
+    says where every answer is, the firmware's notebook after it, and one
+    floppy read followed all the way down — with what os8088 and its
+    DOS do to every byte of it.
     <span class="kbd">&larr;</span><span class="kbd">&rarr;</span> walk it a
     step at a time; <span class="kbd">&uarr;</span><span class="kbd">&darr;</span>
     move a whole rung. Underlined words define on hover.</p>
@@ -1731,16 +2866,13 @@ def render(fragment=False):
 
  <div class="panel">
   <p class="ph"><span>Memory — the first 1,536 bytes, drawn to scale</span>
-   <span class="hint">os8088's kernel starts at 0600h · click a region ·
-   hatched regions are chapter 2's</span></p>
+   <span class="hint">os8088's kernel starts at 0600h · click a region</span></p>
   <div class="lbar" id="lbar"></div>
   <div class="lrule" id="lrule"></div>
  </div>
 
  <div class="panel" id="mechp" hidden>
-  <p class="ph"><span>One interrupt, taken</span>
-   <span class="hint">a key press on an IBM PC · orange is what this step
-   changed</span></p>
+  <p class="ph"><span id="mechT"></span><span class="hint" id="mechH"></span></p>
   <div class="mech" id="mech"></div>
   <div class="flow" id="flow"></div>
  </div>
@@ -1751,7 +2883,7 @@ def render(fragment=False):
   <div class="facts" id="dfacts"></div>
  </div>
 
- <div class="panel">
+ <div class="panel" id="ivtp">
   <p class="ph"><span>The interrupt table \u2014 256 entries of 4 bytes, at
    0000:0000</span><span class="hint">row = first hex digit, column =
    second \u00b7 click any entry</span></p>
@@ -1759,6 +2891,15 @@ def render(fragment=False):
   <div class="grid" id="grid"></div>
   <div class="legend" id="legend"></div>
   <p class="gcap" id="gcap"></p>
+ </div>
+
+ <div class="panel" id="bytp" hidden>
+  <p class="ph"><span>Low memory — 0400h to 05FFh, byte by byte</span>
+   <span class="hint">16 bytes a row · click any field</span></p>
+  <div class="views" id="fviews"></div>
+  <div class="bmap" id="bmap"></div>
+  <div class="legend" id="flegend"></div>
+  <p class="gcap" id="fcap"></p>
  </div>
  </div>
  </main>
@@ -1772,8 +2913,9 @@ def render(fragment=False):
   the table is checked against its source every time the page is made: a
   vector it stops hooking makes the page refuse to build rather than go on
   describing it.</p>
-  <p>The two timings in the walk-through are arithmetic on the 8088's
-  published instruction timings, not measurements, and are marked so.
+  <p>The timings marked "derived" are arithmetic on the 8088's published
+  instruction timings or the disk's rotation, not measurements. The one
+  marked "measured" was taken on a real IBM PC.
   Everything about os8088 describes its desktop on an IBM PC or XT unless it
   says otherwise.</p>
   <p class="stamp">Checked against source <b>%(commit)s</b></p>
