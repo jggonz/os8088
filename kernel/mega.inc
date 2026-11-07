@@ -9579,10 +9579,12 @@ mega_codesel:
     jnz .no                         ; RPL 0 only
     cmp ax, MEGA_LDT_FREE0 * 8
     jb .no                          ; below the allocator's: the GDT's own
-    cmp ax, [ss:mega_ldte]
-    jae .no
     push bx
     push es
+    mov bx, LOW_SEG                 ; LOW_SEG by name, not SS: mega_gpfix's
+    mov es, bx                      ;   .pairq calls this on the faulting
+    cmp ax, [es:mega_ldte]          ;   stack, a program's own (SPEC.md
+    jae .popno                      ;   20.18.2, KERN-MEGA-PLAN 14.165)
     mov bx, MEGA_SEL_LDTD
     mov es, bx
     mov bx, ax

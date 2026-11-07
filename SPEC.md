@@ -50398,6 +50398,7 @@ program's. Three reads met it, and each now names its segment:
 | `MEGA_CSELTOP`'s `.cold` arm (a driver's tick returning through `drv_svc_call`) | `cmp byte [ss:mega_pm], 0` | `smsw ax` and its PE bit (the CPU's own fact; kern_mega needs a 286) |
 | `mega_ldt2ds` (`mega_gpw`'s check that a code selector has a data twin) | `cmp bx, [ss:mega_ldtl]` | ES = `LOW_SEG` by name |
 | `mega_gpfix`'s `.stale` arm | `cmp ax, [ss:mega_ldte]` | ES = `LOW_SEG` by name |
+| `mega_codesel` (`mega_gpfix`'s `.pairq`: a far transfer through a pair's data half) | `cmp ax, [ss:mega_ldte]` | ES = `LOW_SEG` by name (KERN-MEGA-PLAN 14.165) |
 
 The first faulted a sound tick's `retf` while a Windows program played
 (`FAULT 0D err 118C`, QEMU with an SB16). The second refused every store
@@ -50406,6 +50407,12 @@ program's stack, which is where WIN16's DOS host makes its first
 (`FAULT 0D err 0000`, Write 3.0 on 86Box's 386; QEMU never traps the store).
 The cost is `.mega` +18 bytes and `.cold` +4, no rung crossed; kern_big and
 kern_small assemble byte-identical, and `tests/megaseg.txt`'s 4,381 holds.
+The fourth, `mega_codesel`, refused a pair's data half - so `mega_gpfix`
+reported the far transfer it exists to complete - whenever the program's
+own stack held a small word at `mega_ldte`'s offset: WIN16's
+`w16_cbenter` `retf` CLOSED MDI.EXE and File Manager and was completed for
+Program Manager, the same frame (KERN-MEGA-PLAN 14.165; +5 bytes of
+`.mega`, which the `align 16` before `rms_lo` absorbs).
 The `[ss:mega_*]` reads that remain are in the allocator and the
 far helpers `.cold` calls from kernel paths on the UI task, where SS is
 `LOW_SEG` by the §2.1 convention.
