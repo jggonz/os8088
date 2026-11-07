@@ -615,8 +615,42 @@ fcp_run2:
     jz .none
 .there:
 
-    call fcp_selfchk            ; a folder may not be pasted into itself
-    jc .loop_err
+    ; A FOLDER MAY NOT BE PASTED INTO ITSELF. It was fcp_selfchk, called from
+    ; here alone and written here (kernel size pass 18, -7): its refusal is
+    ; .loop_err itself and its pass falls through. Its header:
+    ; fcp_selfchk - refuse a folder pasted into itself or into its own subtree
+    ; out: CF=1 = refuse
+    ; clobbers: AX, BX, CX, DX, flags (fcp_run's free set - see fcp_run)
+    ;
+    ; Without it the walk creates a copy inside the directory it is reading and
+    ; then finds that copy, forever - a loop bounded only by the disk filling up.
+    ; The test is a walk UP from the destination looking for the source folder's
+    ; cluster, which is the cheapest way to ask "is the source an ancestor of the
+    ; destination" on a file system with no paths. Same drive only; across drives
+    ; the two trees cannot touch.
+    cmp word [fcp_type], 2      ; only a FOLDER can contain anything
+    jb .selfok
+    mov al, [fcp_drv]
+    cmp al, [fcp_ddrv]
+    jne .selfok
+    call fcp_srcclus            ; BX = the source folder's own cluster
+    jc .selfok                  ; unreadable: the copy will fail honestly
+    mov dx, bx
+    call fcp_godst
+    jc .selfok
+    mov cx, FCP_MAXD + 2        ; the walk up is bounded like every other
+.selfup:
+    mov ax, [dsk_cwd]
+    cmp ax, dx
+    je .loop_err                ; the destination IS the source, or is under
+    or ax, ax                   ; it: either way the copy would eat itself
+    jz .selfok                  ; reached the root without meeting it
+    FCPX dsk_dotdot_x
+    jc .selfok
+    mov [dsk_cwd], ax
+    loop .selfup
+    jmp short .loop_err         ; the walk ran out: refused, as it was
+.selfok:
 
 %if FERR_OK != 0
   %error "fcp_run2 stores FERR_OK out of a zeroed AX"
@@ -649,46 +683,6 @@ fcp_run2:
                                 ; what keeps "every path back to the event
                                 ; loop pays" true of the NEXT caller too
 
-; -----------------------------------------------------------------------------
-; fcp_selfchk - refuse a folder pasted into itself or into its own subtree
-; out: CF=1 = refuse
-; clobbers: AX, BX, CX, DX, flags (fcp_run's free set - see fcp_run)
-;
-; Without it the walk creates a copy inside the directory it is reading and
-; then finds that copy, forever - a loop bounded only by the disk filling up.
-; The test is a walk UP from the destination looking for the source folder's
-; cluster, which is the cheapest way to ask "is the source an ancestor of the
-; destination" on a file system with no paths. Same drive only; across drives
-; the two trees cannot touch.
-; -----------------------------------------------------------------------------
-fcp_selfchk:
-    cmp word [fcp_type], 2      ; only a FOLDER can contain anything
-    jb .ok
-    mov al, [fcp_drv]
-    cmp al, [fcp_ddrv]
-    jne .ok
-    call fcp_srcclus            ; BX = the source folder's own cluster
-    jc .ok                      ; unreadable: the copy will fail honestly
-    mov dx, bx
-    call fcp_godst
-    jc .ok
-    mov cx, FCP_MAXD + 2        ; the walk up is bounded like every other
-.up:
-    mov ax, [dsk_cwd]
-    cmp ax, dx
-    je .bad                     ; the destination IS the source, or is under
-    or ax, ax                   ; it: either way the copy would eat itself
-    jz .ok                      ; reached the root without meeting it
-    FCPX dsk_dotdot_x
-    jc .ok
-    mov [dsk_cwd], ax
-    loop .up
-.bad:
-    stc
-    ret
-.ok:
-    clc
-    ret
 
 ; -----------------------------------------------------------------------------
 ; fcp_srcclus - the clipboard entry's own first cluster
