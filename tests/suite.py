@@ -2427,6 +2427,26 @@ FULL = [
         "and not fast because the owner asked for it there; host-side, "
         "0.03s measured",
         needs=()),
+    Row("knobself", "full", py("tools/os88knob.py", "--selfcheck"), 0.5,
+        "tools/os88knob.py's merge, fuzzed: 400 random NASM-shaped files with "
+        "nested conditionals, two knobs' edits merged, and every knob "
+        "combination's view must equal its variant with every arm balanced. "
+        "Red, tried, twice: with regions that TOUCH widened instead of merged "
+        "(9 wrong), and with the balancing switched off (28 wrong) - the two "
+        "defects the merge had in kernel hot-paths pass 1. FULL: a tool's "
+        "own check, 0.4s measured",
+        needs=()),
+    Row("khpknobs", "full", py("tests/unit/t_khpknobs.py"), 4.0,
+        "every KHP_* knob in the kernel sources (kernel/kernel.asm's KHP "
+        "block: kernel hot-paths pass 1's rewrites of hot paths, eleven on "
+        "kern_mega and seven on NO kernel) assembles on kern_big and "
+        "kern_small with ALL of them on, so an arm no shipped build "
+        "assembles cannot rot unseen. Red, tried: one call in KHP_STRRUN's "
+        "arm aimed at a label that does not exist fails here while the "
+        "shipped kern_big still assembles. FULL and not fast: two kernel "
+        "assemblies, ~3.7s measured, and stkbalance's knobs-on walk already "
+        "reads these arms on every make",
+        needs=("nasm",)),
     Row("noovl", "full", py("tests/unit/t_noovl.py"), 0.1,
         "at the owner's word (SPEC.md 19.11): no shipped disk carries an "
         ".OVL beside a package - a program is one file, and anything it "
@@ -13751,6 +13771,25 @@ SOAK = [
         "Delete QUESTION's row until the size pass took the alert out.",
         needs=("marty", "mtools"), timeout=600,
         wants=("build/os8088-360.img",)),
+    Row("navcalls", "soak", py("tests/navcalls.py"), 20.0,
+        "SPEC.md 18.95.11: a Disk-window navigation's int 13h CALLS, counted "
+        "off MartyPC's FDC (no time asserted; ~400 ms a call on the 5150). "
+        "A listing mount reads the boot sector, the FATs and the root's head "
+        "as one 8-sector fill, so on 360KB and 720KB: open a root 2, enter a "
+        "folder 2, Up 1. More is a regression worth ~0.4 s a call; fewer is "
+        "a change to explain. Red, tried: the pass's base (a7ee7fab) reads "
+        "4 / 3 / 3 on both geometries. 20.2s measured, both geometries",
+        needs=("marty",), wants=("build/os8088-720.img", "build/apps720.img")),
+    Row("fdswap", "soak", py("tests/fdswap.py"), 10.0,
+        "SPEC.md 18.95.11: a floppy SWAPPED under an open Disk window lists "
+        "the NEW disk at the next navigation, exactly as mtools reads it, "
+        "and the old one again when swapped back (MartyPC `mount`, three "
+        "guest seconds for the motor). The one-call listing mount empties "
+        "the cache before it reads LBA 0 through it, and that flush is what "
+        "keeps the re-tag from handing the old disk's chunks the new disk's "
+        "key. Red, tried: with the flush replaced by nops the swapped "
+        "listing is the old root (APPS, GAMES). 10.2s measured",
+        needs=("marty", "mtools")),
     Row("curdisk", "soak", py("tests/curdisk.py"), 50.0,
         "SPEC.md 7.4: the arrow TRACKS the hand through a disk transfer. It "
         "used to freeze with the machine and then LEAVE THE SCREEN - once an "

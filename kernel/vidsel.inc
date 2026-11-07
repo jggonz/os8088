@@ -1815,10 +1815,11 @@ vid_disp_planes:
 ; vid_pt_clamp - the nearest virtual point inside display CL (SPEC.md 39.15.4)
 ; in:       AX = x, BX = y virtual, CL = the display to clamp into
 ; out:      AX/BX inside it
-; clobbers: AX, BX, flags
+; clobbers: AX, BX, CX, flags - CX is NOT banked: the one caller (mouse.inc's
+;           seam correction) pops its own CX straight after (kernel hot-paths
+;           pass 1, size: -2)
 ; -----------------------------------------------------------------------------
 vid_pt_clamp:
-    push cx
     push dx
     push di
     push si
@@ -1848,7 +1849,6 @@ vid_pt_clamp:
     pop si
     pop di
     pop dx
-    pop cx
     ret
 
 ; -----------------------------------------------------------------------------

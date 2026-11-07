@@ -240,6 +240,62 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
   %define KERN_BIG
  %endif
 %endif
+; --- KHP_* - kernel hot-paths pass 1's optimisations, ONE KNOB A GROUP ------
+; (docs/plans/khp1/LOG.md section L.2, docs/plans/LAST-DROP-PERF.md section 7.)
+; Each knob selects the rewritten body of a hot path; undefined, the source
+; assembles to the body it replaced, byte for byte. kern_mega carries the
+; first eleven: it runs on a 286 or 386, almost always with VGA or EGA, its
+; `.cold` lives above 1MB, and its conventional budget had room. kern_big (and
+; kern_emu, which is kern_big) carries KHP_LZ alone, at the owner's word: the
+; decoders' saving is CPU, the same on every medium, and on a hard disk it is
+; most of a launch. kern_small carries none; its machines are floppy-only.
+; Enabling another for kern_big is a %define below and a re-measure.
+; tools/os88knob.py is how a rewrite is put behind a knob (and checked);
+; docs/plans/khp1/patches/tools/equivalence/ holds each knob's harness.
+;
+;   KHP_VGASAVE   the planar save/restore by words and the VGA cursor's own
+;                 walks (vga-1, pointer-2): ~70% of a VGA raise
+;   KHP_VGAFILL   the planar solid and grey fill interiors by words (vga-2)
+;   KHP_VGAEDGE   vga_solid_rect's edge columns two rows a pass (vga-3)
+;   KHP_VGABLITP  gfx_blitp's wide rows by words (vga-5)
+;   KHP_FRAME     gfx_frame's clip questions once a frame (gfxcall-3)
+;   KHP_FPG       fpg_finish's unarmed unlock answered first (gfxcall-4)
+;   KHP_RELIT     blk_relit by the damage pass: fullscreen exit (wm-4)
+;   KHP_CAPTION   the title bar's caption: no gap fill on an inactive bar,
+;                 one font_run_x when unclipped (wm-2, wm-3)
+;   KHP_DMGSTALE  a vacated strip under another window draws nothing (wm-6)
+;   KHP_RAISEOL   a partial raise's outline only where covered (wm-7)
+;   KHP_LZ        the lz4 and LZB decoders' inline paths (disk-1, disk-2)
+;
+; ...and seven BUILT AND OFF ON EVERY KERNEL, kept as knobs so they outlive
+; the branch they were measured on (kernel-hotpaths). Their gains are the
+; 1bpp adapters' (CGA, Hercules), which kern_mega's machines rarely have, or
+; they wait on a decision (LOG O4, O5). tests/unit/t_khpknobs.py assembles
+; kern_big and kern_small with every knob on, so they cannot rot unseen.
+;
+;   KHP_MONORECT   the 1bpp rect walked a bank at a time, and its XOR column
+;                  kernel two rows a loop (mono-1, mono-5; kern_big only)
+;   KHP_MONOSCROLL the 1bpp gfx_scroll walked a bank at a time (mono-3)
+;   KHP_MONOPAT    the 1bpp pattern fill's rows inline (mono-4)
+;   KHP_ICONWORD   the 1bpp icon pass a word at a time (files-3; turns the
+;                  glyphcost row red, LOG O5)
+;   KHP_STRRUN     font_str_run, a transparent string in one pass (text-6)
+;   KHP_LAZYEND    cur_lazyend's early "not moved" (pointer-6; pays with O4)
+%ifdef KERN_MEGA
+ %define KHP_VGASAVE
+ %define KHP_VGAFILL
+ %define KHP_VGAEDGE
+ %define KHP_VGABLITP
+ %define KHP_FRAME
+ %define KHP_FPG
+ %define KHP_RELIT
+ %define KHP_CAPTION
+ %define KHP_DMGSTALE
+ %define KHP_RAISEOL
+%endif
+%ifdef KERN_BIG                 ; kern_big, kern_emu and kern_mega
+ %define KHP_LZ                 ; (+190 .cold: LAST-DROP-PERF.md 7.1 row 1)
+%endif
 ; MEGA_DIAG (MEGADIAG=1) is kern_mega's FIELD READINGS on the menu bar - the
 ; NMI, the 286 reset's floppy bytes, the 765 resets, the IRQ reflections' rate,
 ; the PicoMEM's queue, the DOS trip's times, the native floppy's fallbacks and
@@ -1312,10 +1368,26 @@ DRV_HMA_SEG equ 0xF000
 ; takes it out of kern_big too - that is the A/B, and it is the only thing that
 ; exercises the general body on an ordinary build, because a chrome fill is
 ; byte-aligned (11.94) and never reaches it.
+%ifdef KHP_MONORECT
 %ifdef KERN_BIG
   %ifndef NOCOLFAST
     %define GFX_COLFAST 1
   %endif
+%endif
+
+; SPEC.md 39.31's bank walk replaces sw_plane_op/sw_col on kern_big. It rides
+; the same knob: NOCOLFAST=1 builds the old column-major body (with no
+; whole-column store), which is what keeps tests/swcolsame.py an A/B of two
+; different bodies drawing the same pixels.
+%ifdef GFX_COLFAST
+  %define SW_BANKWALK 1
+%endif
+%else
+%ifdef KERN_BIG
+  %ifndef NOCOLFAST
+    %define GFX_COLFAST 1
+  %endif
+%endif
 %endif
 
 ; ...AND THE DECODER IS A VGA THING, so it may not outlive the card. Its three

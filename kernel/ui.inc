@@ -297,13 +297,23 @@ ui_task:
                                 ; pass is dispatched by this pass - and ONCE
                                 ; per pass, so it belongs above .evloop rather
                                 ; than inside SPEC.md 10.2's drain
-    mov word [ui_drain], EVQ_CAP    ; SPEC.md 10.2: this pass will empty the
-                                ; ring, not sip one record from it - bounded
-                                ; at the ring's own size, because the mouse
-                                ; ISR can push while we dispatch and an
+    mov byte [ui_drain], EVQ_CAP + 1 ; SPEC.md 10.2: this pass will empty
+                                ; the ring, not sip one record from it -
+                                ; bounded at the ring's own size, because the
+                                ; mouse ISR can push while we dispatch and an
                                 ; unbounded drain would starve .tail's ladder
-    jmp short .evloop           ; over the handlers that sit ABOVE the
-                                ; dispatch, in short reach of its `jz`s
+    jmp .yield                  ; ...and the FIRST look goes through .yield's
+                                ; byte compare too, not through evq_pop: the
+                                ; queue is empty on nearly every pass, and an
+                                ; evq_pop that finds it so is ~200 cycles of
+                                ; pushes and pops where the compare is ~30
+                                ; (kernel hot-paths pass 1, sched-2). The +1
+                                ; above is the dec .yield takes on the way
+                                ; in, so the drain still allows EVQ_CAP pops.
+                                ; A BYTE store and a byte `dec` (the count is
+                                ; at most EVQ_CAP + 1, and the word's high
+                                ; byte is never read): the near jump's extra
+                                ; byte is paid by the store's immediate
 
 .mup:
     ; The release. Two species, and they differ in exactly one way:
@@ -695,7 +705,7 @@ ui_task:
 
     ; --- 3. deferred work (SPEC.md 13/21/29): OUTSIDE the gfx lock ------------
 .yield:                         ; SPEC.md 10.2 - every dispatch above lands here,
-    dec word [ui_drain]         ; and the ring is asked again before the tail
+    dec byte [ui_drain]         ; and the ring is asked again before the tail
     jz .tail                    ; runs. Two words of work when the queue is
     cmp byte [evq_count], 0     ; empty, which is nearly every pass. A
                                 ; BYTE (events.inc's .bss): the word form read
@@ -1998,9 +2008,8 @@ ui_drag:
     mov bx, [ui_origy]
     mov dx, bx
     add dx, [ui_dragh]
-    mov si, [ui_dragwin]        ; ...AGAIN: wm_dg_precover's banner says it
-                                ; preserves every register, and its
-                                ; wm_rz_precover spends SI (tests/dockmark.py
+    mov si, [ui_dragwin]        ; ...AGAIN: wm_dg_precover spends SI, AX,
+                                ; BX and CX (its banner; tests/dockmark.py
                                 ; went red on a straddle without this reload)
     call wm_dmg_vacate          ; WHERE IT WAS is the whole of what can have
                                 ; gone stale (SPEC.md 11.91.2) - recorded
@@ -3249,7 +3258,9 @@ ui_armw:    resw 1              ; SPEC.md 13.5: the window a chrome press is
                                 ; is never 0, so 0 is the sentinel and .bss
                                 ; arrives zeroed (kernel.asm) - ui_tclkw's
                                 ; convention exactly
-ui_drain:   resw 1              ; SPEC.md 10.2: dispatches left in this pass
+ui_drain:   resw 1              ; SPEC.md 10.2: dispatches left in this pass -
+                                ; read and written as its LOW BYTE only (a
+                                ; word for ui_dragx's alignment below)
 %ifdef KERN_BIG
 ui_dragx:   resw 1              ; SPEC.md 13.8.2: the point W_ONDRAG was last
 ui_dragy:   resw 1              ; delivered at, seeded at the press with the

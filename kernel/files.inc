@@ -3463,7 +3463,9 @@ fm_sbset:
 ; -----------------------------------------------------------------------------
 ; fm_clamp_scroll - clamp fm_lscr into [0, max(total - fit, 0)], then commit
 ; in:  fm_total/fm_fit valid (fm_layout ran)
-; out: nothing (all registers preserved)
+; out: AX = the committed scroll, [fm_lscr]; every other register preserved.
+;      AX is not banked: fm_layout leaves by kretc_di straight after, and
+;      fm_scroll_by reloads AX from [fm_lscr] (kernel hot-paths pass 1, size)
 ; Signed on purpose: click paths subtract a page first and clamp after.
 ;
 ; This is the ONE write-back of the scroll mirror into the window's own state
@@ -3472,7 +3474,6 @@ fm_sbset:
 ; scan codes, and the shrink-resize self-heal above.
 ; -----------------------------------------------------------------------------
 fm_clamp_scroll:
-    push ax
     push di
     mov ax, [fm_total]
     sub ax, [fm_fit]
@@ -3493,7 +3494,6 @@ fm_clamp_scroll:
     mov di, [fm_vp]
     mov [di+FS_SCRL], ax
     pop di
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -6167,9 +6167,17 @@ fm_c_up:                        ; Nav > Up One Folder
     cmp word [di+FS_CWD], 0
     je .none                    ; already at the root: nothing is above it,
                                 ; and saying so is not worth an error line
-    call fmv_sync_x             ; so the cache below - or the globals it falls
-                                ; back to when a window has none - is OUR
-                                ; folder (SPEC.md 22.1)
+    call fmv_ishere             ; ONLY A WINDOW THE GLOBALS DO NOT DESCRIBE
+    je .synced                  ; is synced (kernel hot-paths pass 1). Where
+    call fmv_sync_x             ; they do, the sync's whole work is
+.synced:                        ; dsk_chdir_q_x's media check - a boot-sector
+                                ; read once the motor has stopped - and fm_go
+                                ; below remounts through dsk_chdir, which
+                                ; reads the boot sector again regardless: a
+                                ; second isolated int 13h on every Up One
+                                ; Folder (~250 ms on a 5150), whose answer
+                                ; nothing here reads. The '..' below comes
+                                ; out of the WINDOW'S OWN cache either way
     xor ax, ax                  ; SLOT 0 OF A SUBDIRECTORY'S LISTING IS THE
     call fmv_get_dir            ; PARENT LINK (SPEC.md 19.5), and dsk_up_open
     cmp word [si+16], 3         ; filled it for whichever volume kind this is:
@@ -7970,9 +7978,6 @@ fm_draw_core:
 
     jmp kretc_bp
 
-fm_draw_none:                   ; fm_draw_rows with no row that fits: nothing
-    ret
-
 ; -----------------------------------------------------------------------------
 ; fm_draw_rows - the row area, the selection and the scroll bar
 ; in:  fm_layout already run for the acting window; the content under this
@@ -7985,12 +7990,17 @@ fm_draw_none:                   ; fm_draw_rows with no row that fits: nothing
 ; header, of either button or of the status line, so the paths that scroll
 ; call this and leave those alone - and cannot drift from the full painter,
 ; because there is only the one body.
+;
+; The rows themselves are fm_draw_rcore, which the scroll's middle tier
+; (fm_scroll_by) calls without the selection and the bar: a jump of a
+; windowful moves the THUMB and nothing else on the bar, so that tier moves it
+; with fm_scrollpaint's own tail rather than erase and redraw the whole bar
+; (kernel hot-paths pass 1).
 ; -----------------------------------------------------------------------------
-fm_draw_rows:
-    ; --- rows / grid + scroll bar (only when at least one row fits) ---
-    cmp word [fm_fit], 0
-    je fm_draw_none             ; (a `ret` just above: in reach of a short jump)
-
+; fm_draw_rcore - fm_draw_rows' rows or grid alone; [fm_fit] is NOT zero.
+; Clobbers what fm_draw_rows does. (fm_draw_rows itself is below it, so that
+; it falls into its own tail.)
+fm_draw_rcore:
     mov ax, [fm_total]          ; shown = min(total - scroll, fit)
     sub ax, [fm_lscr]
     jns .sh
@@ -8009,11 +8019,7 @@ fm_draw_rows:
     mov [fm_rhi], ax            ; every visible row of them: AX is still
     xor ax, ax                  ; [fm_shown]
     mov [fm_rlo], ax
-    call fm_draw_lrows
-.toisel:                        ; (and the grid's own `jae`, which cannot reach)
-    jmp .isel                   ; the selection bar, drawn by the same proc a
-                                ; selection CHANGE uses (SPEC.md 22.2) - the
-                                ; grid's own tail below
+    jmp fm_draw_lrows           ; ...whose `ret` is this routine's
 
     ; --- icon grid ---
 .icons:
@@ -8022,7 +8028,7 @@ fm_draw_rows:
 .irow:
     mov ax, [fm_vrow]
     cmp ax, [fm_shown]
-    jae .toisel
+    jae .done
     xor ax, ax                  ; (.icell reloads AX)
     mov [fm_vcol], ax
 .icell:
@@ -8031,7 +8037,7 @@ fm_draw_rows:
     mul word [fm_cols]
     add ax, [fm_vcol]           ; AX = directory index
     cmp ax, [fm_lnf]
-    jae .isel                   ; past the last entry: grid done
+    jae .done                   ; past the last entry: grid done
     push ax
     mov ax, [fm_vrow]
     mov cx, [fm_vcol]
@@ -8066,9 +8072,18 @@ fm_draw_rows:
     jb .icell
     inc word [fm_vrow]
     jmp .irow
+.done:
+    ret
 
-.isel:
-    call fm_lsel_bar            ; the selection cell, same proc as the bar
+fm_draw_rows:
+    ; --- rows / grid + scroll bar (only when at least one row fits) ---
+    cmp word [fm_fit], 0
+    je fm_draw_rcore.done       ; (a `ret` just above: in reach of a short jump)
+    call fm_draw_rcore          ; ...and into the selection, the bar and the
+                                ; edge
+fm_draw_isel:                   ; fm_draw_rows' tail: the selection bar, drawn
+    call fm_lsel_bar            ; by the same proc a selection CHANGE uses
+                                ; (SPEC.md 22.2) - the cell in the grid
 
     ; --- the scroll bar, through the SHARED element (SPEC.md 13.10) ---
     ; It was 139 bytes of frame, two rules, two hand-plotted arrows, a grey
@@ -8077,7 +8092,6 @@ fm_draw_rows:
     ; blit band fm_scrollpaint measures for itself; fm_sbset computes the same
     ; `[fm_rgt] - FM_SB_W + 1` into os88ui_ksb+0 two instructions later, so the
     ; word and the three instructions that fed it were both dead.
-.bar:
     call fm_sbset
     call os88ui_sbar
     jmp fm_more_mark           ; ...and the edge the bar is standing on
@@ -8891,9 +8905,18 @@ fm_scroll_by:
     call ct_cw_wm_clip_test
     jc .no
 
-    call fm_wfill
-    call fm_draw_rows
-    jmp short .same
+    sub cx, FM_SB_W             ; THE BAR IS NOT ERASED (kernel hot-paths pass
+    call fm_wfill               ; 1): the band stops left of it, exactly as
+    call fm_draw_rcore          ; fm_scrollpaint's exposed rows do, and its
+    call fm_scrollpaint.thumb   ; tail moves the THUMB, draws the edge and puts
+    jmp short .same             ; the selection back on. A scroll changes no
+                                ; total and no fit, so the frame, the rules,
+                                ; the arrows and the track it did not cover
+                                ; are already right: 3 calls for the bar where
+                                ; os88ui_sbar was 16. Every way in here left
+                                ; the bar as the OLD position drew it -
+                                ; fm_scrollpaint refuses before it touches the
+                                ; bar - which is os88ui_sbmove's contract
 .no:
     stc
     SKIPAL1                     ; mov al, imm8 over the clc: no flag written,

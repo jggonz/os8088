@@ -6056,6 +6056,25 @@ the first Live pass, every primitive after it believing it was nested and
 `gfx_blitp` refusing every block. It leaves past the teardown now;
 `vidlivext` is the gate (every sample 255 before, none above 1 after).
 
+#### 5.4.3.7 A WIDE row on the fast path is copied as words; a narrow one stays bytes
+
+> **kern_mega only on `kernel-hotpaths-lean`**, behind `KHP_VGABLITP` (`kernel/kernel.asm`'s KHP block): kern_big and kern_small assemble the body this replaced. docs/plans/LAST-DROP-PERF.md section 7 is the record of what turning it on for kern_big would buy and cost.
+
+`gfx_blitp`'s plane-major fast path (§5.4.3.5) moves **words when the row is
+8 bytes or wider**, and bytes below that. `rep movsw` is 25 clocks a word on
+an 8088 against `rep movsb`'s 17 a byte, and a Map Mask'd plane with Set/Reset
+off and the Bit Mask open takes a word write's two CPU bytes exactly as two
+byte writes. The threshold is what keeps the earlier measurement true: a word
+copy was built for every row once and REFUSED, because on Gorillas' 2-byte
+rows the shift and the odd tail cost more than the one word saved (71.7 ms
+against 68.3 on MartyPC's XT VGA, over `tests/gorillasmenu.py`'s 75 ms
+budget). A row under 8 bytes now pays one compare a PLANE and nothing else.
+The loop is picked once a plane and the odd byte is the shift's carry, which
+no `rep` writes. Measured (gfxbench, MartyPC `os8088_xt_vga`, kernel
+hot-paths pass 1): `GFX_BLITP 256x16` (32-byte rows) 9.48 → 7.97 ms, and
+`GFX_BLITP 64x64` (8-byte rows, the break-even) 12.38 → 12.43 ms. The masked
+rows `vga_prow_emit` writes were left as bytes: nothing measured them.
+
 ### 5.5 `gfx_scroll` — move a rect instead of redrawing it
 
 **in** AX/BX/CX/DX = x1/y1/x2/y2 inclusive, absolute screen coordinates;
@@ -7217,6 +7236,28 @@ mostly irreducible: the far-call cell is the package ABI (§20.1), the eight
 push/pops in `sw_rect` are `gfx_fill`'s "clobbers flags" contract, and
 `vga_rect_setup`'s clipping is the clipping.
 
+Kernel hot-paths pass 1 (docs/plans/khp1/gfxcall.md) took three more off the
+same floor, each measured by single-stepping a real call on MartyPC's 5150:
+
+8. **`gfx_rect_setup` reads the row table itself** rather than calling
+   `gfx_rowbase` (the call, the ret, its push/pop and a reload of y1 were
+   ~70 clocks), takes its empty test from the `sub` that makes the row count,
+   and holds both edge masks in DL/DH so a one-byte rect combines them in a
+   register: 751 -> 639 clocks a call. A row past the table still takes
+   `gfx_rowbase_calc`.
+9. **`gfx_frame` asks `GFXCLIP`'s questions once an outline**, not once a
+   strip: unclipped and on one display, its four strips go straight to
+   `gfx_fill_raw`. A region, the open dock's hole and a second display keep
+   the per-strip public entry.
+10. **`fpg_finish` answers the unarmed unlock before its frame**: with no
+    widget up, warming or parked, the five pushes and the exchange of a zero
+    word changed nothing but `[cur_barok]`. `gfx_unlock` runs it on every
+    drawing burst, 483 -> 176 clocks.
+
+gfxbench on CGA, base against the pass's tip: `GFX_PIXEL` 539 -> 509 us,
+`GFX_HLINE 8px` 540 -> 508, `GFX_FILL 8x8` 666 -> 636, `GFX_FRAME 64x64`
+6,142 -> 5,895, the `GFX_UNLOCK+LOCK` pair 473 -> 403.
+
 ### 5.7.1 A string op already advanced DI — do not pay to undo it
 
 **A rect's interior walk must not bank DI around its own `rep`.** §5.7's
@@ -7286,6 +7327,50 @@ whole win is proportional to height. It is the *opposite* lever from
 §11.90/§11.91, which cut calls because calls are where the money is — worth
 having because a fill is usually tall, and not worth quoting as a figure for
 drawing in general.
+
+### 5.7.2 The planar fill's inner loops: what kernel hot-paths pass 1 changed in them
+
+Each paragraph below is one change to `vga_solid_rect` or `gfx_fill_gray` on
+VGA/EGA, priced on MartyPC's `os8088_xt_vga` (gfxbench, guest time). None of
+them changes a pixel, a register contract or a refusal.
+
+**The XOR interior is `rep movsb` with SI = DI and DS = ES = the framebuffer**,
+which keeps §5's rule — every target byte read immediately before it is written,
+because the ALU XORs against the latches — in the form that rule always
+allowed: each iteration's read is that byte's latch load and its write is the
+same byte, whose CPU value Set/Reset ignores. 17 clocks a byte where `mov al,
+[es:di]` / `stosb` / `loop` was about 45. What §5 forbids is `rep stosb`, which
+writes without reading; nothing else about the rule changed. Measured as above:
+`GFX_XOR_FILL 64x64` 6.75 → 4.35 ms, `GFX_XOR_RECT 256x1` (one drag-outline
+edge) 1.09 → 0.88 ms.
+
+**The two masked edge COLUMNS of `vga_solid_rect` take two rows a pass.** A
+column is a latch load and a masked write per row, one `xchg [es:di], al`, and
+the loop around it was most of its cost: `inc si / shr si, 1` makes SI the row
+pairs rounded up and an odd count enters at the second row, so the loop's
+branch is paid once a pair, and the row step lives in CX for both columns
+(`add di, cx` is a byte shorter than the immediate). It is a trade with a
+shape and it is taken on purpose: a column of ONE row pays the entry, about
+45 cycles, so `GFX_HLINE 8px` measured 488.7 → 498.2 µs (+1.9%) while
+`GFX_VLINE 128px` went 2.08 → 1.64 ms (−21%), `GFX_FILL 64x64` 3.32 → 2.88 ms
+(−13%) and `GFX_FRAME 64x64` −11%; over a scripted scene's window raises the
+mean fill fell 4–16% (docs/plans/khp1/vga.md).
+
+**The replace-mode interiors of `vga_solid_rect` and `gfx_fill_gray` store
+words.** `rep stosw` is 14 clocks a word on an 8088 against `rep stosb`'s 10 a
+byte, and nothing about a planar byte makes a word store different from two
+byte stores: with Set/Reset on all four planes the CPU value is ignored, and
+the gray fill's row is one dither byte, so `AL = AH` is the word. The odd byte
+is split off by choosing the LOOP once a call (`shr bx,1` then one of two row
+loops, the second ending in a `stosb`), never by a per-row test, so a one-byte
+interior is a `rep` of no iteration and a `stosb` and costs what it did. §5.7.1's
+fold is untouched: DI still ends each row `count` bytes on, so `add di, dx`
+still ends it. **On a 16-bit bus** the word may straddle (the interior starts
+at whatever parity `x1/8 + 1` has); a straddling word is two bus cycles, which
+is the byte loop's bus traffic with fewer instructions, so it is never slower.
+Measured (gfxbench, MartyPC `os8088_xt_vga`, kernel hot-paths pass 1):
+`GFX_FILL 256x128` 13.37 → 10.67 ms, `GFX_FILL 64x64` 3.56 → 3.32 ms,
+`GFX_FILL_GRAY 64x64` 4.08 → 3.89 ms; `GFX_FILL 8x8` does not move.
 
 ### 5.8 `gfx_restore` can put back PART of its buffer
 
@@ -7383,6 +7468,38 @@ it. The principle that decides between the two consumers stands and is
 unaffected: **who already holds the pixels** — if only the kernel can, that is
 `WF_SAVEU`; if the application already does, it needs telling which part to put
 back.
+
+#### 5.8.1 The planar save and restore move WORDS, in a loop chosen once a plane
+
+> **kern_mega only on `kernel-hotpaths-lean`**, behind `KHP_VGASAVE` (`kernel/kernel.asm`'s KHP block): kern_big and kern_small assemble the body this replaced. docs/plans/LAST-DROP-PERF.md section 7 is the record of what turning it on for kern_big would buy and cost.
+
+`vga_save_vram` and `vga_restore_vram` are the VGA's busiest bodies by time,
+not by calls: the window manager's save-under (§11.96) banks and returns whole
+window rects through them, and a menu's drop and dismissal are one each
+(§12.2). Measured on MartyPC's 4.77 MHz VGA XT at the base of kernel hot-paths
+pass 1, a raise of Paint over Note Pad spent 133 ms in saves and 53 in
+restores against 51 in every fill together. (The pointer's cell went through
+them too, on every mouse packet, until the same pass gave the planar pointer
+its own walks in mouse.inc - §7.1.)
+
+Each plane's rows are copied as WORDS: `rep movsw` is 25 clocks a word on an
+8088 against `rep movsb`'s 17 a byte. A read in read mode 0 loads the latches
+and answers the Read Map's plane whatever its width, and with Set/Reset off and
+the Bit Mask FF a word write lands both CPU bytes through the Map Mask, so the
+bytes moved are exactly the bytes they were. **The odd byte is split off by
+choosing the LOOP, once a plane**, not by a per-row `jnc`: an even word count,
+or the same with a trailing `movsb` - so the word form wins at every width, a
+one-byte row included (it then runs a `rep` of no iteration and the `movsb`).
+The row steps are registers computed once a plane; the restore's sub-rect step
+(`[gfx_sub_rs]`) is read into BP while DS is still `KERNEL_SEG`, which is what
+retired the `cs:`-overridden memory add every row paid. Neither body's
+contract, buffer layout or result changed.
+
+**Measured** (MartyPC `os8088_xt_vga`, exact guest cycles inside each body,
+the same scripted scene on both kernels; docs/plans/khp1/vga.md): a menu's
+drop save is 188,240 → 138,856 cycles (39.4 → 29.1 ms) and its dismissal's
+restore 199,357 → 145,101 (41.8 → 30.4 ms); a raise of Paint over Note Pad
+spent 132.9 → 99.4 ms in saves and 52.6 → 36.3 in restores.
 
 ### 5.9 `band.inc` — the 1bpp BAND COMPOSER (a knob: `BAND=1` compiles it in)
 
@@ -9393,11 +9510,16 @@ no second glyph set, and **§6.1.5's compose, §6.1.7's glyph-pointer table and
 §6.1.6's once-per-run prologue are all unchanged** — the phase is the only thing
 this path knows that the aligned one does not.
 
-**`CX` carries the shift in `CL` and the previous composed byte in `CH`**, so
-there is no register left to count cells with: the walk ends on `SI` reaching
-the glyph table's end (`[font_rn_send]`) instead. That is a real constraint and
-not a stylistic one — every other register is spoken for (`DL`/`DH` the masks,
-`SI` the table, `DI` the framebuffer, `BP` the row, `AX`/`BX` the compose).
+**`CL` carries the shift and `CH` counts the cells; the previous composed byte
+rides in `BH`** (kernel hot-paths pass 1). `BX` is the glyph pointer only until
+the row byte is loaded, so the composed byte is parked in `BH` and the next
+cell's `xchg ax, bx` hands it back as `AH`, exactly where the shift wants it.
+This used to say there was no register left to count with — the previous byte
+rode in `CH` — and the walk compared `SI` against the table's end in memory
+(`[font_rn_send]`) every cell row; the `BH` arrangement drops that compare and
+two moves, and a skewed run measures **−15% (10 cells) to −19% (78)** on all
+three adapters (`DL`/`DH` the masks, `SI` the table, `DI` the framebuffer,
+`BP` the row, as before).
 
 ##### The two edge bytes are COLUMN-major, and that is the design
 
@@ -9540,6 +9662,35 @@ is the site that gives it up (§12.2.1).
 **On a planar adapter none of this runs.** `font_ink`'s checkerboard is mono-only
 (§39.5) — VGA greys with a colour — so `[font_rn_dt]` is set to zero on the
 common path before either prologue and the planar one never looks at it.
+
+#### 6.1.13 …and the TRANSPARENT string is a run too — `font_str_run`
+
+> **Built and OFF on every kernel**, behind `KHP_STRRUN` (`kernel/kernel.asm`'s KHP block): no shipped kernel defines it, and kern_big, kern_small and kern_mega assemble the body this replaced. It is kept as a knob so it can be turned on without its branch: docs/plans/LAST-DROP-PERF.md section 7 is the record of what it buys and costs.
+
+`font_str_x` letters a string through `font_char` one cell at a time, and on a
+1bpp adapter almost all of a cell is overhead: the frame, the edge and clip
+tests, the glyph arithmetic, `gfx_rowbase`, `font_ink` and eight row
+advances, ~3,300 cycles against ~800 of row work. **`font_str_run` pays them
+once a string** (kernel hot-paths pass 1): §6.1.7's pass 1 into
+`font_rn_tab` (the same +8 bias and on-screen prefix), then one ROW of the
+whole string at a time, and at an unaligned x a byte two cells straddle takes
+both cells' bits in ONE merge (§6.1.11's `shr ax, cl` with the previous glyph
+row in `CH`). OR and AND-NOT are commutative and idempotent, so the merged
+byte is the byte the two merges left, and a byte with no bits is not written.
+
+It takes the string only where the result is provably `font_char`'s:
+`[vid_mono]` (a planar or packed display keeps `font_char`'s VRAM writer),
+one display, `[gfx_dis]` clear, the row on screen, a non-negative x, a
+string within `FONT_RN_MAX` cells, and either no armed region or one whose
+single fragment holds the whole string with the cull off (§11.3.3) - inside
+one fragment every cell's own `wm_clip_rows` answers all eight rows and every
+column, which §6.1.7's single test already relies on. Anything else returns
+CF = 1 having drawn nothing, and `font_str_x` walks the cells as before. The
+cursor's deferred hide is spent once, as the first `font_char` would.
+MEASURED (MartyPC, the routine parked): ten cells 35,853 → 16,103 cycles on
+CGA, a 17-cell title 62,728 → 26,523 (2.4×), framebuffer byte-identical on
+CGA, Hercules and VGA; a string a region cuts pays its pass 1 and falls
+back, +4%. `make SNAPAUDIT=1` leaves it out, §11.94.2 counting cells.
 
 ### 6.2 `BAKED_FONT` — a typeface the build carries, instead of one it borrows
 
@@ -10603,7 +10754,12 @@ Four things make the pair what it is.
   then `cur_pass_mono` again for black) read the same byte three times and
   wrote it twice, each through its own row walk and its own `gfx_nextrow`
   call. The masks compose: `(under | white) & ~black` is exactly what drawing
-  one pass on top of the other always produced.
+  one pass on top of the other always produced. Since kernel hot-paths pass 1
+  the row is a WORD: one read of both bytes under the arrow, one word banked,
+  the masks rotated (`ror`, not `shr`) so their bytes come out in the word's
+  own order, then the byte writes - 6,309 -> 5,234 cycles a show on the
+  5150's CGA, measured over 31 typed keys; `cur_get_mono` takes `lodsw` and
+  holds the row step in registers, 2,916 -> 2,215.
 - **And the PLANAR draw is one pass too, with no Set/Reset at all.** VGA used
   to paint the whole dilated body solid white and then punch the black arrow
   into it — two passes with a GC reprogram between them, and a window in which
@@ -10736,13 +10892,33 @@ against a 20 ms frame, so ~6.5% of every frame, on every mouse packet.
   overlap degenerate to the old behaviour by themselves: the skip never fires
   and the background always comes from the screen. There is nothing to bound
   and nothing to get wrong at the extremes.
-- **Which bytes those are is decided once, not per row.** `cur_mvcols` turns
-  the byte-column difference `d = newcol - oldcol` into four answers —
-  `mv_p1s0/1` (pass 1 must skip this old column) and `mv_p2s0/1` (pass 2's
-  offset into the old save, or `0FFh` for "read the screen") — because it is
-  the same answer for every row. Both halves fold in the *other* cell's edge
-  clip: pass 1 may only skip a byte pass 2 will really write, and pass 2 may
-  only source from a slot the old cell really saved.
+- **Which bytes those are is decided once, not per row.** Two numbers say
+  it: the byte-column difference `d = newcol - oldcol` and the row difference
+  `e = newtop - oldtop`. The columns meet only for `d` = -1, 0 or +1 (the
+  arrow spans two bytes), and then the rows that meet are **one contiguous
+  run**, so "does the other cell reach this row" is a range compare and never
+  a per-row search. Pass 1's two write answers for a covered row and for an
+  uncovered one, and how a covered row's saved bytes become the new
+  background, are packed into one register before either walk. Both fold in
+  the *other* cell's edge clip: pass 1 may only skip a byte the draw will
+  really write, and the new background may only come from a slot the old
+  cell really saved.
+- **The second pass is two walks, neither with a test per byte** (kernel
+  hot-paths pass 1). The new cell's background is first banked straight off
+  the screen - which is right for every byte except the overlap, where the
+  old arrow still stands - and pass 1, walking the old cell, patches the
+  overlap rows of that bank from the old save as it restores the rest. The
+  draw then composes from the bank: one read, one write a byte. Measured on
+  MartyPC (a 24-packet sweep, `cur_move` entry to return): **19,400 -> 12,000
+  cycles** (4.07 -> 2.51 ms) on the 5150's CGA, 19,300 -> 11,700 on
+  Hercules, and the serial ISR's share of the CPU while the pointer sweeps
+  falls from 20.0% to 14.1%. `cur_mvcols`, `cur_mvrow` and `cur_mvbg`, the
+  three per-row helpers the earlier shape called 36 times a move, are gone,
+  and the routine is 26 bytes smaller. Equivalence is proved against the
+  previous kernel's own bytes under unicorn - 36,000 random moves over CGA,
+  Hercules and linear 1bpp geometry and all three shapes, with the whole
+  framebuffer, the save buffer and the banked geometry compared after every
+  move and every framebuffer write counted (none twice).
 - **Two save buffers, swapped by a pointer.** Pass 2 reads the old background
   while filling the new, so they cannot be the same 24 bytes. `[cur_sptr]`
   names the live one; nothing is copied. `cur_sptr` lives in `.text` with a
@@ -10750,7 +10926,21 @@ against a 20 ms frame, so ~6.5% of every frame, on every mouse packet.
   a pointer at the API jump table.
 - **VGA keeps erase-then-draw.** Its save is four planes through Read Map
   Select and cannot take a background from a buffer. Its draw is one store
-  now (§7.1), which was the larger of the two windows there.
+  now (§7.1), which was the larger of the two windows there. **On kern_mega
+  (`KHP_VGASAVE`) the save and the restore are the cell's own walks** (`cur_saveu`/`cur_restoreu`, kernel
+  hot-paths pass 1), not `vga_save_vram`/`vga_restore_vram`: the cell is
+  already clipped by `cur_geom`, so `gfx_rect_setup`, the `rep movsb` row
+  loop and the one-plane and sub-rect arms were pure overhead. `cur_vspan`
+  derives the byte span exactly as `gfx_rect_setup` did (one byte when the
+  cell is byte-aligned, two otherwise unless the right edge took the second)
+  and the buffer keeps that routine's plane-major layout, so the glass is
+  identical - proved under unicorn with a four-plane model against the
+  previous kernel's bytes, 1,500 cells over 640x480 and 640x350, every shape.
+  MartyPC's XT VGA: `cur_move` **21,450 -> 15,100 cycles** a packet, the ISR's
+  share of a sweep 21.5% -> 16.4%. An armed sub-rect restore (§5.8) is now
+  never consumed by the pointer, which the shared routine's `gfx_sub_off`
+  used to do. kern_big and kern_small still save and restore the cell
+  through the shared routine on `kernel-hotpaths-lean`.
 
 Verified the only way a save-under can be: a dense walk of 37 moves — column
 deltas 0, ±1, ±2 and larger, every shift phase, plus the right and bottom
@@ -11390,7 +11580,7 @@ error. It addresses the row above the framebuffer.
 Left and top *clipping* is the correct fix and it is not a small one: a
 `cur_b0ok` beside `cur_b1ok`, a table start offset for the skipped rows, `sar`
 where the column shift is `shr`, and the two of those threaded through
-`cur_mvcols`/`cur_mvrow`/`cur_mvbg` — the four per-column answers §7.1.2 built
+`cur_move_mono`'s overlap answers — the per-column decisions §7.1.2 built
 to write every byte exactly once, whose cases double when either cell can lose
 its first column.
 
@@ -11407,8 +11597,8 @@ Three things follow and each broke first:
 
 - **`[cur_cellx]`/`[cur_celly]` are banked by `cur_geom`**, because the cell's
   top-left is no longer the pointer's position and `cur_move_mono` asks about
-  it three times — the old cell's byte column, pass 1's "will pass 2 cover
-  this row", and `cur_mvrow`. §7.1's rule applies unchanged: two derivations
+  it twice — the old cell's byte column and the row run where the two cells
+  meet. §7.1's rule applies unchanged: two derivations
   of a save-under's geometry are two chances to disagree by a byte, and a byte
   is a smear.
 - **`cur_lazyck` subtracts the hot spot too, and deliberately does NOT clamp.**
@@ -12510,8 +12700,8 @@ no-op. Three callers:
 wrong: only IRQ0 falls into `sch_switch`; every other ISR `iret`s straight back
 to what it interrupted, so a task an ISR has just made ready would wait for the
 next tick. The idle task's `task_yield` after its `hlt` (§8.1.2) is what closes
-that — any interrupt ends the halt and the yield re-enters the scheduler at
-once. Measured: from the mouse ISR finishing a packet to the next `ui_task`
+that — any interrupt ends the halt and, when it posted a wake (§8.1.2.5),
+the yield re-enters the scheduler at once. Measured: from the mouse ISR finishing a packet to the next `ui_task`
 pass, **5.14 ms median against a spinning kernel's 4.99, with a lower worst
 case (5.22 against 6.41)**; without the yield the same figure is 32.4 ms
 median and 54.5 max.
@@ -12582,6 +12772,79 @@ on a deadline of its own (§79.5) — everything below `.posted_done` is
 tick-driven, where coalescing is a feature and not a cost (§13.12) — so it is
 the only rung that needs to say so.
 
+
+#### 8.1.2.5 A halt no wake ended is halted again
+
+Until kernel hot-paths pass 1 the idle task yielded after EVERY interrupt
+that ended its `hlt` (8.1.2.2's yield), and with nothing ready that yield
+was a switch that resumed the idle task: one a serial BYTE (three a mouse
+packet, of which only the third wakes anything) and one a tick (IRQ0 had
+already switched to the woken UI task and back). Now the idle task goes back
+round its loop after its `hlt` (`popf`, then `.loop`'s fail-safe test and the
+guard's `pushf` / `cli` / test of `[sch_idlewake]`), halts again if the byte is
+clear, and yields only when it is set. The loop's head is still passed after
+every interrupt, which tests/dskwstage.py's quiet point relies on.
+That is exact because every event that makes a task READY now posts the
+byte:
+
+- `sch_wake_ui`, as before (the mouse, the keyboard, `evq_push`);
+- **`sch_isr`'s wake loop**, for each sleeper it wakes - the case where the
+  tick cannot switch (`sch_lock`, a nested tick, the cooperative mode)
+  leaves the woken task to the idle task's yield;
+- `task_spawn` publishes from a running task, never from an interrupt, so
+  a spawned task is never ready while the idle task is the one running.
+
+And **`sch_switch`'s "nothing ready" fallback clears it** (`mov
+[sch_idlewake], dh`, DH being the spent count): when the scan found nothing
+eligible every wake posted before it has been looked at, so the byte means
+exactly "something became ready since the scheduler last looked". The scan
+and the store are one IF = 0 window. Under the fsx freeze a ready but
+ineligible UI task still costs one yield per wake, as 8.1.2 describes.
+
+**kern_emu keeps the old loop** (`%ifndef KERN_EMU`): its VMware pointer is
+POLLED in `task_yield` (SPEC.md 9.11.3), and the interrupt that ended the
+halt is how a moving absolute pointer reaches that poll.
+
+Measured on MartyPC's 4.77 MHz 8088, CGA, kern_big: an idle tick 11,205 ->
+9,941 cycles; over 30 mouse packets the idle task's yields fell from 218 to
+29 and the hand-off to the UI task stayed 1,794 cycles. 12 bytes (one a
+parity pad) - docs/plans/khp1/sched.md item sched-4.
+
+### 8.1.3 `sch_top` — the scan stops at the last slot that can be live
+
+`sch_top` (a `.bss` byte) is **one past the highest task slot that can be
+non-free**: every slot at or above it has `T_STATE` = 0. The two loops that
+walk the task table on the hot path - `sch_isr`'s wake scan, every tick, and
+`sch_switch`'s round-robin scan, every switch - run over slots `0 ..
+[sch_top]-1` instead of `0 .. MAX_TASKS-1`. A free slot was never woken and
+never picked, so **the pick is the same task in every case**; only the count
+of free slots looked at changes.
+
+- `sched_init` seeds it to 1 (only slot 0, the UI task, is live) in the same
+  word store that seeds `sch_idleslot` = 0xFF, the byte below it.
+- `task_spawn` raises it to slot + 1 when the slot it found is at or above it,
+  **before the publish** and inside the routine's own IF = 0 window, so no
+  tick can see a ready slot past the bound.
+- `task_exit` lowers it past every free slot at the top, after it frees its
+  own record and still under its `cli`. The walk stops at slot 0 at the
+  latest, because the UI task never exits.
+- The scan's wrap is `jb`, not `jne`: a `task_exit` that lowered the bound
+  under its OWN slot reaches `sch_switch` with `[sch_cur]` >= `[sch_top]`, and
+  the first step wraps to slot 0. The count is `[sch_top]`, so the scan visits
+  every slot below the bound exactly once, the outgoing task last when it is
+  below it.
+
+It pays because slots are allocated by stack CLASS, smallest first (§8.7),
+so the slots in use cluster at the bottom: an idle desktop has two live
+slots (the UI task and the idle task in slot 1) out of fourteen, and a
+package with a 192-byte worker raises the bound to 5. Measured on MartyPC's
+4.77 MHz 8088 (CGA, kern_big, idle desktop): **an idle tick fell from 17,558
+to 11,533 cycles (3.68 to 2.42 ms; 6.7% to 4.4% of the machine)**, a
+yield-to-self from ~2,630 to ~1,100 cycles, and the scheduler's share of the
+mouse-to-UI-task hand-off (idle task's `hlt` to the UI task's pass) from
+3,520 to 1,791 cycles. It costs 47 resident bytes on kern_big (three of them
+parity pads, `tests/unit/t_hotpar.py`) - docs/plans/khp1/sched.md item
+sched-1.
 
 ### 8.2 Scheduler modes — pre-emptive and cooperative
 
@@ -17615,9 +17878,14 @@ user, so `CL = buttons | (notches << 2)`. No new cell was needed, because every
 driver built before this masked CL to its two buttons (`and cl, 3`). An old
 binary therefore reports *no* wheel rather than a wrong one, and the contract
 grows with no `DRV_VER` bump (§20.2.0.1). The kernel decodes it once, in
-`mou_apply`'s shared tail: two `sar`s, §10.4's add, and `and cl, 3`. That is
-also where VMware's absolute arm joins (§9.11), so both backends share the
-same twelve bytes.
+`mou_whl_cl`: two `sar`s, `and cl, 3`, and §10.4's add. It is reached from
+`mou_apply_w`, the entry `OSAPI_MOUSE_FEED` and VMware's relative arm call,
+and from VMware's absolute arm (§9.11) before it joins `mou_apply`'s tail -
+so every backend whose CL can carry a wheel shares the same nine bytes. **The
+serial and PS/2 decoders enter `mou_apply` itself and skip it**: their CL is
+two clean bits and their wheels arrive in a fourth byte of their own, so the
+decode, its zero add and its second UI wake were ~240 cycles of every packet
+for nothing (kernel hot-paths pass 1; it was inline in the shared tail).
 
 **`VMMOUSE.DRV`'s private ABI is a different matter**, and `VMM_ABI_VER` went
 from 1 to 2 with it (`kernel/vmmabi.inc`, §9.11.2): an old kernel stores CL
@@ -20120,6 +20388,73 @@ pixels), without the nothing-uncovered stores (the window redrawn, a title
 promoted), and on `kern_small` without the skip (both cells drawn).
 
 
+#### 11.91.8 …and a window whose vacated part is under somebody else draws nothing
+
+> **kern_mega only on `kernel-hotpaths-lean`**, behind `KHP_DMGSTALE` (`kernel/kernel.asm`'s KHP block): kern_big and kern_small assemble the body this replaced. docs/plans/LAST-DROP-PERF.md section 7 is the record of what turning it on for kern_big would buy and cost.
+
+§11.91.2 marks a window that overlapped the rect the mover **vacated**, and
+asks only one question about what is left of that overlap: is it inside the
+mover's NEW frame? It never asked about the other windows. On a cascaded
+desktop that is the common case it got wrong: deskbench's Control Panel sits
+under the Disk window, and the strip Paint vacated when it moved crossed the
+Control Panel only where the Disk window already covers it. The panel was
+marked and drew its visible column — frame, shadow, title, a restore —
+**~35 ms on the 5150/CGA for a column whose every pixel was already right.**
+
+So `wm_dmg_stale` asks the question properly: the vacated rect cut to the
+window's rect (drop shadow included) is seeded as a region and every visible
+window ABOVE it subtracted **by its frame** (`wm_clip_occlf`, so the two
+corners a shadow's L never paints stay the window's, §11.96.15.1). An empty
+list means nothing of what it lost is on the glass: clean, CF = 1, and the
+window goes on to the pass's other questions (its shadow, a zone, the strip, a
+marked window below it) exactly as a window the vacated rect never reached. An
+overflow is "exposed", the answer before this existed.
+
+**It loses no pixel.** Take any pixel of the vacated rect inside such a window.
+The topmost visible window over it is either the mover (always drawn) or a
+window above this one whose vacated part contains that pixel, uncovered — so
+that window's own test finds it non-empty and it is marked, and its draw covers
+its visible region. The dither subtracts every visible frame, so it does not
+touch the pixel either. The cost is a region walk per window whose vacated part
+was otherwise exposed — §11.91.3's "several hundred bytes" was for keying the
+marking on REDRAWN regions; this keys it on the vacated rect, which is a rect,
+against occluders that do not move, and is 36 bytes.
+
+#### 11.91.7 A screen given back is the damage pass over the whole band
+
+> **kern_mega only on `kernel-hotpaths-lean`**, behind `KHP_RELIT` (`kernel/kernel.asm`'s KHP block): kern_big and kern_small assemble the body this replaced. docs/plans/LAST-DROP-PERF.md section 7 is the record of what turning it on for kern_big would buy and cost.
+
+Leaving an exclusive bracket (§53.6) and waking from the saver (§79.6) owe the
+whole desktop, and both reached `wm_paint_all` through `blk_relit`: the dither
+under the bar, every zone, and then every window back to front **whole**. With
+four overlapping windows a pixel under the top one was written once per layer —
+deskbench's fullscreen exit read **7.03 transient pixels per changed one** on
+CGA, 8.01 on Hercules, 7.65 on VGA (PERFORMANCE.md's deskbench table) — and
+every covered window put its whole content back off its cache for the windows
+above it to paint over.
+
+None of that is needed to answer "what does the screen look like now", because
+the damage pass already answers it for any rect: `blk_relit` hands
+`wm_paint_dmg` the band, `(0, MBAR_H)` to the far corner (clamped onto the live
+screen there). `[wm_dmg_stwin]` is 0 — nothing was vacated — so every window
+the rect touches is marked; each draws its chrome where nothing above covers it
+(§11.97), its cache in the pieces nothing above covers (§11.96.15) and its
+`W_PAINT` under the cull (§11.3.3); the dither lays only the ground no window
+holds (§11.91.1) and keeps to the bands (§39.16.2.1); the bar and the strip are
+forced first and drawn by the pass, and a window over the strip owes it through
+`[wm_dmg_dk]` as on every other pass. The settled screen is the one
+`wm_paint_all` leaves — the incremental-equals-full property every damage path
+rests on (`tests/dispcorner.py`).
+
+**Two cases keep `wm_paint_all`.** A second display (`kern_big`, `[vid_ndisp]`
+above 1): its desktop is `EXT_DESK`'s, drawn whole in that routine and nowhere
+in the damage pass. And a fullscreen window still up (`wm_fs_vis`), whose walk
+starts at the fullscreen window (`.fswins`). Both are tested before anything is
+drawn.
+
+Measured on MartyPC's 5150/CGA, deskbench's scene, Paint's fullscreen bracket
+left with `f`: see docs/plans/khp1/wm.md for the figures on each adapter.
+
 ### 11.92 Retitling costs a strip — `wm_title_set`
 
 A caption changes on an **event** — a folder was entered, a document was
@@ -20172,6 +20507,50 @@ callers are a mixed set: `fm_go`, `fm_mount` and `fm_view` hold the lock,
 folder-vanished path reaches it from `ld_run`, which deliberately holds no
 lock across a mount (§21). A pointer cannot be spent on whichever window
 happened to repaint in between.
+
+#### 11.92.1 An inactive bar has no gap to cut
+
+> **kern_mega only on `kernel-hotpaths-lean`**, behind `KHP_CAPTION` (`kernel/kernel.asm`'s KHP block): kern_big and kern_small assemble the body this replaced. docs/plans/LAST-DROP-PERF.md section 7 is the record of what turning it on for kern_big would buy and cost.
+
+`wm_draw_title` letters the caption on a **gap** — a `gfx_fill` six pixels
+either side of the text, rows `y+2 .. y+15` — whose whole purpose is to cut the
+active bar's pinstripes back from the glyphs. An inactive bar has no stripes:
+its interior fill (`y+1 .. y+16`, the bar's span) has already laid that rect in
+the same pen (`wm_tpen_bg`), clipped by the same region, and nothing between
+the two writes it. So on an inactive bar the gap is **not drawn** — one
+primitive call fewer per background caption, every raise (the outgoing front),
+every damage pass and every `wm_paint_all`.
+
+**Unless the caption is wider than the bar.** Centring is signed, so a title
+wider than its window puts the gap past the frame; there the fill paints over
+the border and that is what the glass has always shown. The skip therefore
+also requires the gap's left edge to be right of `W_X` — which, by the
+centring's symmetry (the gap is `tw + 11` wide around the text, the bar `w - 2`
+around the same centre), is the right edge's condition as well.
+
+Measured on MartyPC's 5150/CGA, deskbench's scene: the fill was ~2 ms of each
+inactive caption.
+
+#### 11.92.2 …and an unclipped caption is a RUN (`kern_big`)
+
+> **kern_mega only on `kernel-hotpaths-lean`**, behind `KHP_CAPTION` (`kernel/kernel.asm`'s KHP block): kern_big and kern_small assemble the body this replaced. docs/plans/LAST-DROP-PERF.md section 7 is the record of what turning it on for kern_big would buy and cost.
+
+The caption was `font_str_x` — a transparent `font_char` call per glyph, ~0.8
+ms a cell on the 5150 — over the gap (active) or the interior (inactive). Its
+eight rows, `y+5 .. y+12`, and its width lie wholly inside that ground, which
+is the paper `wm_tpen_bg` names. So an opaque `font_run_x` in the bar's pair —
+paper from `wm_tpen_bg`, ink from `wm_tpen_ink`, both read back off the pen as
+a kernel may (§6.6.5) — writes exactly the pixels the glyphs leave, in one
+call: on an unaligned pen (seven captions in eight, §11.94) §6.1.11's two
+merges and whole stores.
+
+**Only with no region armed.** A run a region cuts goes cell by cell, and an
+unaligned one through `font_run_scell`, which is a fill *and* a glyph per cell
+— dearer than the transparent pass — and draws the same pixels; so a caption
+under a region (a covered window's, on a damage pass) stays `font_str_x`.
+`kern_small` has no unaligned run at all (its `.slow` is fill-and-letter), so
+the change is `kern_big`'s. The site stays in `tests/textsites.txt`: the
+transparent call is still there for the clipped case and the small build.
 
 ### 11.93 `WF_KEEPH` — a fixed layout hangs over the dock rather than be cut
 
@@ -22593,6 +22972,30 @@ about 5.7KB of framebuffer for a mono Disk window against §11.96's measured
 machine with no room declines and behaves exactly as it did before any of
 this existed.
 
+##### 11.96.4.1 …but a window put back WHOLE from its cache is not banked again
+
+"Takes everybody else's" re-took a cache that had just been spent in the same
+draw. A covered window that `wm_su_try` puts back **whole** — every fragment,
+no sub-rect, the bands-only case aside — has on the glass exactly the bytes its
+claim holds: they were copied out of it a moment ago and nothing has drawn into
+the content since (the grow box is the front window's, and the front window's
+cache is dropped, not taken). `wm_su_bank`'s `.take` then dropped the claim,
+claimed a new one and `gfx_save`d the same pixels back into it.
+
+So the whole-hit arm of `wm_draw_win` marks the draw **partial**
+(`[wm_dw_part]`), which sends `wm_su_bank` down §11.96.9's arm: an existing
+cache is kept (`wm_su_ck`), and this one exists by construction. The front
+window's drop does not read the flag. The one difference a reader could find is
+a window restored only in PART because it hangs off its display (§11.96.14):
+the re-take there refused (`wm_su_take` banks only a rect wholly on one
+display) and left the window with no cache, where now it keeps the one it has
+— whose pixels are still its content, which is the promise the cache was taken
+under.
+
+Measured on MartyPC's 5150/CGA, deskbench's four-window scene, leaving Paint's
+fullscreen bracket (`wm_paint_all` entry to return): the three covered windows
+each re-saved their content, **~31 ms apiece**, and do not now.
+
 #### 11.96.5 …including the moment a window is minimized
 
 `wm_hide` **dropped** the cache, on §11.96.1's reasoning that a hidden
@@ -23111,6 +23514,34 @@ instead of 130 and 60.
 copied without its guard**: a rect argument spends four registers, and a
 routine whose contract names two of them is holding the other two for someone
 else.
+
+#### 11.96.10.2 …and its OUTLINE and SHADOW only where they were covered
+
+> **kern_mega only on `kernel-hotpaths-lean`**, behind `KHP_RAISEOL` (`kernel/kernel.asm`'s KHP block): kern_big and kern_small assemble the body this replaced. docs/plans/LAST-DROP-PERF.md section 7 is the record of what turning it on for kern_big would buy and cost.
+
+§11.96.10 cut a partial raise's CONTENT to the covered box and left the chrome
+as §11.90 drew it: the outline and the drop shadow WHOLE. But a window raised
+from behind another was visible, and every pixel of its outline and shadow that
+nothing covered is already on the glass in the colour a front window's chrome
+writes (`thm_ink` in both states — focus changes the title bar alone). On the
+5150 that is not small: a frame side or the shadow's long arm is a 1-px column
+the height of the window, ~5.3 ms on CGA for 158 rows, and a raise drew three
+of them where the occluder had covered one.
+
+So `wm_cov_rect` folds a second box in the same walk: the occluders' frames
+(shadow included) into `wm_cvf_x1..y2` uncut, and at the walk's end that box
+cut once to OUR frame (shadow included). A partial raise arms `[wm_cvf_on]`
+beside its `wm_su_sub`, and `wm_draw_win`'s chrome arm then seeds the region
+with that box instead of `wm_chrome_clip`'s (there is nothing above a raised
+window to subtract), draws the outline and the shadow through it, and disarms
+it before the title bar — which a raise changes whole and draws unclipped, so
+it keeps §11.92.2's run. An empty box (nothing over the frame) is an inverted
+fragment that every clipped primitive cuts to nothing. The flag is spent by
+the draw it was armed for, on every exit, a chromeless window's included.
+
+The box may over-claim — never under: every covered chrome pixel lies in some
+occluder's frame and in ours, so in the union's bounding box cut to our frame.
+What it over-claims is chrome that was visible, rewritten with its own value.
 
 #### 11.96.11 The app keeps a band, and the kernel banks it
 
@@ -25812,6 +26243,21 @@ operation to prove it. The **logo** is on the bar and changes never. And the
 file-activity widget (§12.8) changes an 88px span and used to force all of it.
 Granularity by *cell* is indeed useless here; granularity by **segment** is
 the whole feature.
+
+#### 12.05.1 The logo is seven rects
+
+Segment 1 — the field, the rule and the logo — is drawn only after an overdraw
+(`[menu_bovr]`): every fullscreen exit, every saver wake, the first paint. Its
+logo, the 11×11 DIP-chip silhouette at `MENU_SYS_TX`, was a bitmap walked a bit
+at a time with **one `gfx_pixel` call per lit pixel — 78 calls**, ~0.5 ms each
+on the 5150/CGA, so ~39 ms of every forced bar was the logo. Its rows are only
+two shapes and a notch: a 7-wide body (`x+2 .. x+8`) on rows `y+2 .. y+9`, an
+11-wide pin row across it on `y+2`, `y+4`, `y+6` and `y+8`, and the top row's
+two 3-wide halves either side of the notch. So it is one `gfx_fill` and six
+`gfx_hline`s in the same pen, over the field just filled: the same pixels,
+the pins rewriting seven body pixels each in the colour they already hold, and
+the bitmap's 18 bytes and its decoding loop go — 6 bytes smaller on both
+kernels.
 
 ### 12.1 The menu-bar clock
 
@@ -38514,7 +38960,9 @@ caller had already coalesced. Slots are a knee rather than a slope: 1 → 156,
   disks made identical somewhere other than this machine.
 - **A full mount drops everything and a quiet one does not.** A full mount is
   a navigation or a **Refresh**, and Refresh answered out of a cache is a
-  no-op, which is the one thing it must never be.
+  no-op, which is the one thing it must never be. The drop is the mount's
+  first act, before its boot-sector read (§18.95.11), so what it may still be
+  served is what it has itself just read off the platter.
 - **The fill re-enters `dsk_xfer`**, with `[dsk_rah_busy]` stopping it caching
   its own fill. That is why it needs no CHS conversion, no retry ladder and no
   EOT handling of its own. The claim is page-safe by construction
@@ -39384,6 +39832,56 @@ resident, on both kernels** (`kern_big` 37,632 -> 37,644, `kern_small` 21,529
 It touches no claim: what is cached, the width solve, a requester's command
 (§18.95.8), the purge and every invalidation are exactly as they were - only
 which slot a fill spends moves.
+
+#### 18.95.11 …and a listing mount reads LBA 0 as a fill of eight
+
+Kernel hot-paths pass 1 (docs/plans/khp1/disk.md, LOG section L). A fill
+reads forward from the sector that missed to the end of the TRACK, nine
+sectors at most, because a fill is a guess. A LISTING mount (not quiet, and a
+store to list into) is the one read that does not have to guess: on 360KB
+and 720KB the boot sector, both FATs and the root's first sectors are the
+first eight sectors of track 0, and the mount is about to want all of them.
+
+So a full mount **empties the cache first**, before the boot-sector read and
+before the banked-head check (so a fixed volume's listing mount drops it
+too), and reads LBA 0 THROUGH the empty cache with a one-byte cap,
+`[dsk_rah_hint]`, at **8**. `dsk_rah_fill` takes the smaller of the track's
+remainder and the cap. Eight because the read runs under the fallback 9/2,
+before the BPB says what the disk is, and eight is the most every geometry
+§18.2's rule 11 admits has on its first track: an 8-sector track 0 would
+refuse a ninth. The cap is disarmed straight after that read, before its
+failure test, and on the banked path, so no other fill ever sees it.
+
+**What the swap detector still guarantees, exactly as before.** The cache is
+empty when the read starts, so the boot sector necessarily comes off the
+platter, and everything the listing is then served came off in the SAME
+transfer. Nothing it shows is older than this mount's swap detector, which is
+the whole of what the old rule ("LBA 0 never from the cache") was for, and a
+swap between the boot-sector read and the FAT read can no longer mix two
+disks. The fill stamps its records with the signature of the disk mounted
+BEFORE, because the new one is not known until its boot sector is read, so
+every record is re-tagged with the new disk's signature straight after
+`dsk_bpb_sig`, before anything can look one up. **The flush is what makes
+that re-tag safe**: it is why every record it touches is one this mount
+read. Without it the re-tag would hand the old disk's chunks the new disk's
+key, and the next navigation would list the old disk - measured that way,
+broken on purpose. A quiet mount (a copy's volume switch) reads LBA 0 around
+the cache, as it always did, and keeps the cache.
+
+Calls (MartyPC FDC counters): 360KB and 720KB, open a root 4 -> 2, enter a
+folder 3 -> 2, Up 3 -> 1. 1.44MB is unchanged (its FATs run past sector 7);
+1.2MB is not measured.
+
+**The loader's header peek is NOT given a longer fill here.**
+`kernel-hotpaths` also carries one (disk-4, +208): the peek arms the cap at
+the file's length and the fill runs to the CYLINDER's end over several
+slots, saving one call on a multi-track launch. It was left out of this
+branch for its bytes, and if it is taken it is better spelled as an explicit
+prefetch call than as an armed byte.
+
+Not on kern_dos (no room in its image) and not on kern_mega (its store above
+1MB lands through a nine-sector bounce): `DSK_RAHINT` is undefined there, and
+kern_mega drops the cache at step 2 instead (before the FAT window).
 
 ### 18.96 Formatting a floppy — the mount's verdict, run backwards
 
@@ -48357,7 +48855,11 @@ That is not a hedge:
 
 **The disks stay LZ4** (§20.13.5), and the trade is still the one §12.7 of
 `docs/plans/O88-COMPRESSION-PLAN.md` states: LZ4 is 50.6 cycles an output byte and
-LZB is 207, against about ten points of ratio. A disk saving happens once and
+LZB is 207, against about ten points of ratio. (Kernel hot-paths pass 1 took
+both arms' plain symbol inline, `docs/plans/khp1/disk.md`: measured at
+launch on MartyPC's 5150, filter included, Note Pad's LZ4 went 109.7 -> 63.8
+cycles an output byte and Calc's LZB 303 -> 191 - the trade's two sides moved
+together, and its shape did not.) A disk saving happens once and
 a launch cost happens for ever. §20.13.5 records the packages that ship
 LZB anyway and what a launch was measured to cost.
 
@@ -80754,6 +81256,106 @@ case that matters being a cursor beside a fill's edge byte, outside the rect
 the lazy hide tested. `sw_spans`' two edge bytes take the same body. 0 of 16
 runs flash after it.
 
+### 39.31 The 1bpp rect is walked a bank at a time (`kern_big`)
+
+> **Built and OFF on every kernel**, behind `KHP_MONORECT` (`kernel/kernel.asm`'s KHP block): no shipped kernel defines it, and kern_big, kern_small and kern_mega assemble the body this replaced. It is kept as a knob so it can be turned on without its branch: docs/plans/LAST-DROP-PERF.md section 7 is the record of what it buys and costs.
+
+**`sw_plane_op` walked a rect three times and tested a bank wrap on every
+row of every pass.** The left edge column top to bottom (`sw_col`), the right
+edge column, then the interior rows, each step being `gfx_nextrow`'s add, test
+and conditional wrap, with the dither pattern toggled per row. On a banked
+framebuffer that is wasted work: rows `y`, `y+B`, `y+2B` (B = `[vid_bmask]`+1,
+two on CGA and four on Hercules) are `[vid_stride]` apart inside ONE bank, and
+because B is even they share a dither parity too.
+
+So on `kern_big` the rect is walked as B **phases** — every row of bank phase
+`j`, top to bottom — and inside a phase the row step is one `add di, si`, the
+pattern is a constant and the count is `loop`'s. Phase `j` has `n0` rows for
+`j <= rp` and `n0 - 1` after it, where `rp = (N-1) & bmask` and
+`n0 = ((N-1) >> bshift) + 1`, computed once a rect. A phase writes the whole
+ROW in one pass — masked left byte, whole bytes, masked right byte — and a
+whole edge (mask `FF`, the common case by §11.94) is folded into the run of
+whole bytes, so an aligned fill is `rep stosw` a row and nothing else. A
+one-row rect (every hline, every outline's top and bottom) skips the phase
+driver and jumps straight into the row body. XOR complements its interior a
+word at a time.
+
+**A phase costs about 250 cycles to set up, so a short rect does not walk.**
+Under 9 rows with whole bytes in the row, or under 25 rows of a single byte
+column (whose per-row saving is smaller), `sw_plane_op` falls through to the
+column-major body it replaced, kept as `sw_plane_cm`; the question is five
+instructions. The thresholds are constants rather than multiples of B so the
+test stays that short, and both sit at or past the break-even on CGA and
+Hercules. Measured on MartyPC (gfxbench, both adapters): `GFX_FILL 64x64`
+-51% / -48%, `GFX_FILL 256x128` -32% / -30%, `GFX_XOR_FILL 64x64` -34% /
+-32%, `GFX_HLINE 256px` -18%, `GFX_VLINE 128px` -23% / -19%, and the eight-row
+shapes that keep the old body +2% (`GFX_FILL 8x8`, `GFX_VLINE 8px`), which is
+the price of the question.
+
+**Every masked byte is still one store**, `dest ^= (pat ^ dest) & mask`
+(§39.25.1), and no pixel is written twice. The settled picture is identical
+byte for byte; what changes is the ORDER rows land in inside one call (CGA:
+the even rows of the rect, then the odd).
+
+**`NOCOLFAST=1` builds the old column-major body**, so `tests/swcolsame.py`
+stays an A/B of two different bodies drawing the same pixels. The row bodies
+are `sw_k_col`, `sw_k_colf`, `sw_k_xcol`, `sw_k_i`, `sw_k_lir` and
+`sw_k_xrow`; the driver is `sw_walk`. `sw_k_xcol` - both sides of every drag
+outline, redrawn on every pointer step - does two rows a `loop`, the odd row
+first. `kern_small` keeps the column-major
+body alone (§39.27.4's cut). It costs `kern_big` 338 bytes of `.text` and 6
+of `.bss`; docs/plans/khp1/mono.md has the operations.
+
+### 39.32 The 1bpp save and restore move words
+
+**`sw_xfer` is `gfx_save` and `gfx_restore` on a 1bpp adapter** — every
+raise cache, every menu save-under — and it was 35% of a CGA window raise's
+busy time (docs/reports/HOTPATH-BASE-2026-11-06.md). Each row was `rep movsb`
+plus `gfx_nextrow` inlined through three CS-overridden memory reads.
+
+Now each row is `rep movsw` for the pairs and the odd byte as `adc cx, cx`
+/ `rep movsb` — `CX = CF`, the `shr`'s carry surviving the string op, with no
+branch — because an 8088 moves a byte for 12.5 clocks that way against
+`rep movsb`'s 17. The row step less the copy's advance lives in BX and the
+wrap bit in AX (both spent once DS or ES and SI or DI hold what they
+carried), so the step is `add`/`test`/`jz` on registers. Buffer layout,
+sub-rect restore (§5.8), the registers each entry advances and the pixels
+are all unchanged. Both kernels, +16 bytes of `.text` each.
+
+### 39.33 The 1bpp scroll is walked a bank at a time
+
+> **Built and OFF on every kernel**, behind `KHP_MONOSCROLL` (`kernel/kernel.asm`'s KHP block): no shipped kernel defines it, and kern_big, kern_small and kern_mega assemble the body this replaced. It is kept as a knob so it can be turned on without its branch: docs/plans/LAST-DROP-PERF.md section 7 is the record of what it buys and costs.
+
+§5.5.1 already noticed that when `dy` is a whole number of banks (a multiple
+of 2 on CGA, of 4 on Hercules) the source and destination of every row are a
+constant apart. `vgas_bankcopy` then walked the destination with
+`gfx_nextrow` through a `call bp` a row, `rep movsb`, a DS switch and a
+memory countdown.
+
+**Such a copy never leaves a bank**: a destination row and its source are in
+the same one. So it is walked as §39.31's phases — every destination row of
+bank phase `j`, top-down for a scroll up and bottom-up for a scroll down,
+each a direction-safe walk of its own, and two phases touch different banks
+so the order between them cannot matter. Inside a phase the step is one
+register add, DS stays the framebuffer, and the bytes go a word at a time
+(`rep movsw`, the odd byte by §39.32's `adc cx, cx`). The general form (`dy`
+not a whole number of banks) is unchanged. Its two scratch words follow the
+six `VXB_SCROLL` reads in order. Both kernels.
+
+### 39.34 The 1bpp pattern fill steps its rows inline
+
+> **Built and OFF on every kernel**, behind `KHP_MONOPAT` (`kernel/kernel.asm`'s KHP block): no shipped kernel defines it, and kern_big, kern_small and kern_mega assemble the body this replaced. It is kept as a knob so it can be turned on without its branch: docs/plans/LAST-DROP-PERF.md section 7 is the record of what it buys and costs.
+
+`sw_fill_pat` (`gfx_fill_pat` on CGA and Hercules — Word's and Scribe's
+ruler ticks, the Disk window's fold chevrons, Task Manager, several faces)
+paid a near `call gfx_nextrow` a row in both edge columns, and a
+`push di`/`pop di` around the interior run as well. All three now step DI
+inline, the interior by the row step less the run's own advance, and the
+interior's odd byte is §39.32's `adc cx, cx` / `rep movsb`. The edge column's
+masked byte became §39.25.1's one-store `dest ^= (pat ^ dest) & mask`, which
+is also four bytes shorter than the load-modify-store it replaces. Pixels
+unchanged. Both kernels.
+
 ### 39.27 `kern_small` does not drive a VGA
 
 **A 128KB machine has no business with a VGA card in it, so `kern_small` does
@@ -81863,7 +82465,7 @@ including the ones with no VESA card at all.
 So the boundary is cut **once per primitive** instead of tested once per row.
 `vbe_cut_run` splits a rect that straddles a bank into one rect per bank and
 runs the body once per piece, each piece a whole rect in its own right:
-`gfx_rect_setup`'s existing `gfx_rowbase` call then selects that piece's bank,
+`gfx_rect_setup`'s existing row-base lookup then selects that piece's bank,
 which is also its *only* bank, so no walker can cross a window inside its own
 loop.
 
@@ -106648,9 +107250,11 @@ The app's proc returning is the only exit. In order:
    the game must not land in the desktop ladder. The §34.4 click-abort
    drain is the precedent.
 3. Disarm: `[fsx_task]` = `[fsx_worker]` = 0xFF, under `cli`.
-4. Bring the desktop back under the still-held lock: a full
-   `wm_paint_all` with `[menu_bdirty]` forced (the save-under-overdraw
-   precedent, §12.05). With `[bb_dbl]` armed the repaint renders into the
+4. Bring the desktop back under the still-held lock: a full repaint
+   with the bar and the strip forced (the save-under-overdraw precedent,
+   §12.05) — `blk_relit`, which on kern_mega (`KHP_RELIT`) with one
+   display and no fullscreen window up is the damage pass over the whole
+   band (§11.91.7) and otherwise `wm_paint_all`. With `[bb_dbl]` armed the repaint renders into the
    buffer and the callback epilogue's flush carries it to VRAM; without,
    it writes VRAM direct.
 
@@ -140404,10 +141008,12 @@ of them draws.
 
 **The desktop is owed a full repaint and there is no cheaper answer.** A
 session has drawn over the menu bar, the drive column, the dock and every
-window, so there is no damage rect to be clever with — `wm_paint_all` *is* the
+window, so there is no damage rect to be clever with — the whole band *is* the
 damage. It is PERFORMANCE.md rule 1's legitimate exemption, because the whole
 screen really did change, and it is paid once per wake on the far side of a
-period measured in minutes. `[blk_sv]` is cleared **before** the repaint runs,
+period measured in minutes. On kern_mega (`KHP_RELIT`) it is paid through
+the damage pass rather than `wm_paint_all` (§11.91.7), which writes each pixel about once instead of
+once per window layer. `[blk_sv]` is cleared **before** the repaint runs,
 so nothing inside a UI pass's worth of drawing still believes the overlay owns
 the screen.
 

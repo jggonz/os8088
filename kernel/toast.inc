@@ -367,7 +367,8 @@ toast_say:
 ; toast_now - draw a staged toast on the spot, IF the caller provably holds
 ;             the gfx lock (SPEC.md 59.4)
 ; in:       a toast staged; called from toast_show only
-; out:      nothing (all registers preserved)
+; out:      nothing; AX is SPENT - toast_show leaves by kret_di straight after,
+;           which puts it back (kernel hot-paths pass 1, size: -2)
 ;
 ; A message put up BEFORE a long operation has to be on the glass before the
 ; machine goes quiet - Paint says `Encoding...` and then spends seconds on
@@ -388,7 +389,6 @@ toast_say:
 ; tick late, which is right for a background job and costs nothing.
 ; -----------------------------------------------------------------------------
 toast_now:
-    push ax
     cmp word [gfx_lock_flag], 1 ; HELD (flag = 1) **and owned by task 0** (own
     jne .outa                   ; = 0) in ONE word read: the two bytes are
                                 ; declared adjacent in vga12.inc and a 0-byte
@@ -425,7 +425,6 @@ toast_now:
     pop ax
     mov [gfx_color], al
 .outa:
-    pop ax
     ret
 
 toast_ad:                       ; toast_now's painter: arm, then the bar

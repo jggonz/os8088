@@ -407,7 +407,9 @@ assoc_find:
 ;      DX = the row stride
 ; out: CF=0 with BX -> the row and AL = its index; CF=1 = none (BX past the
 ;      table)
-; clobbers: AX, BX (the outputs), flags
+; clobbers: AX, BX (the outputs), flags. CX comes back as it came WITHOUT a
+;           bank: the one write to it, `xor ch, ch`, is inside the row's own
+;           push/pop (kernel hot-paths pass 1, size: -2)
 ;
 ; assoc_find's walk of the extension rows and assoc_app_of's of the stems were
 ; the same loop at two widths and two strides (kernel size pass 5). "In use"
@@ -415,24 +417,22 @@ assoc_find:
 ; row never matches, whatever the key.
 ; -----------------------------------------------------------------------------
 assoc_scan:
-    push cx
     push di
+    push es                     ; ES = DS ONCE, not once a row (kernel
+    push ds                     ; hot-paths pass 1): the key and the row are
+    pop es                      ; both the kernel's, and nothing in the walk
+    cld                         ; touches ES - the same bytes, out of the loop
     xor ax, ax                  ; AL = the row index
 .row:
     cmp byte [bx], 0
     je .next                    ; a free slot never matches
     push cx
     push si
-    push es
-    push ds
-    pop es                      ; the key and the row are both the kernel's
     mov di, bx
     xor ch, ch
-    cld
     repe cmpsb                  ; CL >= 1 bytes, so ZF = 1 and CF = 0 exactly
-    pop es                      ; when all CL matched (kernel size pass 10,
-    pop si                      ; -5); `pop` writes no flag
-    pop cx
+    pop si                      ; when all CL matched (kernel size pass 10,
+    pop cx                      ; -5); `pop` writes no flag
     je .out
 .next:
     add bx, dx
@@ -441,8 +441,8 @@ assoc_scan:
     jb .row
     stc
 .out:
+    pop es
     pop di
-    pop cx
     ret
 
 ; -----------------------------------------------------------------------------
