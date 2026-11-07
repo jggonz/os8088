@@ -233,7 +233,7 @@ connect; `viddisk.py`, `hibernate.py` and `fsckhd.py` build C: from
 
 | row | why |
 |---|---|
-| `paintmove` | checks 1-4 pass; 5 fails because heapfrag draws text below its own window onto Paint and kern_mega's raise does not erase it - kern_big under MartyPC VGA passes the same check. **Unexplained; a candidate defect** |
+| `paintmove` | checks 1-4 pass; 5 fails because heapfrag draws text below its own window onto Paint and kern_mega's raise does not erase it - kern_big under MartyPC VGA passes the same check. **Unexplained; a candidate defect** - *(2026-11-07: settled, NOT a kernel defect, and landed - item 9)* |
 | `memp` | 8 of 11: memp.asm checks alignment on what is a selector here (check 7 passes by accident). The test, not the kernel |
 | `ftpd` | Bochs's slirp takes 5 forward rules, the row needs 9, and the launcher drops the host forwards (T2) |
 | `hibernatem` | the 86Box backend reports a Hercules as graphics, so the text-mode wait never ends (T6) |
@@ -304,6 +304,20 @@ peer).
    too. Measured with (a) as an experiment: longest 150 ms, kern_big's figure.
 9. **`paintmove` check 5 on kern_mega** (6.1): text heapfrag draws below its
    window is left on Paint after a raise. Worth one look before a release.
+   *(2026-11-07: settled - the FIXTURE, on both kernels, and the port
+   landed.)* The text is HEAPFRAG's: once its posted pass has recorded
+   checks 17 and 18 a repaint lays out 18 rows and six figure lines, and
+   the last line starts at y=284, below a frame that ends at 276. The raise
+   that the row uses to reach heapfrag's close box runs W_PAINT through
+   `wm_front_b` with no region armed (SPEC.md 11.3.3 arms one only in
+   `wm_dmg_wins`), so the line lands on Paint, and heapfrag's close repairs
+   its own frame and nothing below it. kern_big under MartyPC's VGA draws
+   the SAME pixels (traced: `font_run_x` at CX=154 DX=284, `wm_clip_n` 0,
+   on both) and fails the same check at the same x 154..191, y 284..290;
+   "kern_big passes" was the row reading `m.vram("cga")` on a VGA machine,
+   0xB8000 blank in both captures. Fixed in the fixture (heapfrag's paint
+   stops at its content box, figures on one line) and in the row (`glass`,
+   the card asked rather than named).
 
 ## 9. Release mechanics (if the owner says yes)
 
