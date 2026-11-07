@@ -8994,13 +8994,13 @@ fm_scrollpaint:
 
     ; --- the columns the rounding put out of the blit's reach: NONE ---
     ; The strip pass that erased and re-iconed them is DELETED (kernel size
-    ; pass 18, -67), having been dead since the icon inset went to 8: fm_tiles
-    ; rounds fm_cx UP by at most 7, so fm_bx1 <= fm_cx + 7 and its own test
-    ; (`cmp [fm_bx1], fm_cx + 8 / jle`) could never fail (SPEC.md 22.11.1.1).
-    ; Moving the inset back below 8 needs it back; the %if below holds the
+    ; pass 18, -70 with fm_draw_licon), having been dead since the icon inset
+    ; went to 8: fm_tiles rounds fm_cx UP by at most 7, so fm_bx1 <= fm_cx + 7
+    ; and its own test (`cmp [fm_bx1], fm_cx + 8 / jle`) could never fail
+    ; (SPEC.md 22.11.1.1). An inset below 7 would need it back; the %if holds the
     ; line, and `git show` of this commit's parent has it whole
 %if FM_PEN_X < 7
-  %error "a row icon less than 8px in can be cut by fm_scrollpaint's inward rounding: restore the strip pass (SPEC.md 22.11.1.1)"
+  %error "a row icon less than 7px in can be cut by fm_scrollpaint's inward rounding: restore the strip pass (SPEC.md 22.11.1.1)"
 %endif
     ; --- and the rows it exposed, and only those ---
 .expfill:

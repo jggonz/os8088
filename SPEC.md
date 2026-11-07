@@ -52058,8 +52058,9 @@ position** — and with §11.94.1's alignment default `x1 == fm_cx` exactly, so
 the strip is empty as well as harmless. `align_up(cx) > cx+8` is unsatisfiable.
 The pass was therefore dead code. It was kept for a while as four instructions
 of test that stated the invariant, and **kernel size pass 18 deleted it, test
-and all (-67 bytes resident)**: the invariant is an assembly-time `%if` on
-`FM_PEN_X` (the inset `fm_pen8` adds) now, which fails the build if the inset
+and all (-70 bytes resident, with its `fm_draw_licon`)**: the invariant is an
+assembly-time `%if` on `FM_PEN_X` (the inset `fm_pen8` adds) now, which fails
+the build if the inset
 goes below 7 - and moving it back there needs the pass back, which is the
 parent of that commit. Its residue is `wm_snap_ax`'s one refusal — a window **dragged**
 to x=0 at the full screen width, where 7 becomes the answer and those seven
