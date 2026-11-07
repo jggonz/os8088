@@ -48509,6 +48509,13 @@ proved `image > file`. Every byte off a disk is hostile (§19) and `os88pkg.py`
 is not a gate on a foreign `.O88` — the same rule, and the same class of
 defect, as the `image + bss` carry fence one test along (§21 step 4).
 
+**And `file` is whatever the loader was handed, on both of its arms**: the
+directory entry's size on the disk path, the caller's `DX:CX` on
+`OSAPI_PKG_START`'s image arm (§21.5). The same ladder therefore lets a packed
+image through on both, and both expand it - the image arm copies the file to
+`R` and enters step 6a where the read would have left it (§21.5.1.2). It used
+to copy `image` bytes to offset 0, which no packed file has.
+
 #### 20.13.3 `OSAPI_DECOMP` (0x03D3) — a plain cell, and why
 
 ```
@@ -50967,6 +50974,36 @@ with PARTS is refused on the image arm, and the decode claim is held across
 the whole tree is `Load Program` on a plain `.O88` — bytes that were never a
 file and are never going to be one.
 
+#### 21.5.1.2 ...and what it holds is the FILE, which is usually PACKED
+
+**Every release `.O88` is compressed** (`PKGZ=lz4`, §20.13.5), and the image
+arm used to copy `[ld_img]` bytes to offset 0 whatever the header's flags
+said. On a packed package that is the UNPACKED length read out of a buffer
+holding the shorter packed file: an over-read of the caller's claim, and a
+region whose code is an LZ4 stream. kern_mega faulted on the copy's own limit
+(`kern_mega FAULT 0D` inside the `rep movsb`, or `#GP limit` on the new
+instance's first call); kern_big far-called the stream and halted on `STACK
+OVERFLOW TASK`. The Wire's Load Program (§92.8) crashed the machine on every
+real package, while `tests/thewire.py` Load-Programmed `hello.o88` - too
+small to gain from packing, so it ships plain - and passed.
+
+The header check had never refused it: `ld_check_hdr`'s `.over` arm accepts
+an image longer than the file exactly when bits 3/4 say compressed, which is
+right for a file the disk path then reads high and expands. So the fix is the
+disk path's, not a refusal: the image arm copies the FILE to `R` and enters
+step 6a (`ld_run_body_x.expand`), which expands it downward in the region and
+re-checks the header - the same bytes, the same decoder and the same
+`.ret2`/`ld_unreserve` on a stream that does not decode. +4 resident bytes of
+`.cold` on all three kernels (`ld_where`, the shared half of step 6). The
+region-fit question §20.13.8.1 leaves open applies to this arm exactly as to
+the disk one, and the copy here moves `file` bytes rather than
+`roundup512(file)`, so its worst case is the smaller of the two.
+
+`tests/pkgrun.py`'s G hands the shipped, packed `MINES.O88` to the image form
+and compares the running instance's region with `os88pkg.image_unwrap` of it;
+`tests/thewire.py`'s assertion 19 is Load Program on the same file. Both were
+red on the old arm.
+
 #### The split, which is what makes the body one routine and not two loaders
 
 `ld_run_body_x` gave up two routines, both entered by the disk path exactly
@@ -50984,14 +51021,19 @@ where they used to be inline:
 
 So the file arm is `ld_run_name` (§21.4) — the same routine `ui.inc` launches
 the Task Manager through and `assoc.inc` opens a document with — and the image
-arm is `ld_check_hdr` → `ld_alloc` → **a far `rep movsb`** → `ld_start`.
-Nothing about the arithmetic, the fences or the entry contract moved.
+arm is `ld_check_hdr` → `ld_alloc` → **a far `rep movsb`** → the disk path's
+step 6a, entered where its read would have left it → `ld_start`. Nothing about
+the arithmetic, the fences or the entry contract moved.
 
-**No disk-swap re-check on the image path**, and it is not an omission: the
-bytes came out of memory the caller owns and `ld_check_hdr` read *those very
-bytes*, so there is nothing that could have been swapped underneath them. The
-copy count is `[ld_img]` and not the file length, which `ld_check_hdr` has
-just proved equal — parts being refused above.
+**Where the copy lands and how much it moves are step 6's own answers**, out
+of one routine both arms call (`ld_where`): offset 0 and the image for a plain
+package, where `ld_check_hdr` has just proved image and file equal — parts
+being refused above — and `R = roundup512(image − file)` and the FILE for a
+compressed one (§20.13). §21.5.1.2 is what the second half cost before it
+existed. The in-region `ld_check_hdr` after 6a then runs on this arm too: it
+guards no disk swap here, since the bytes came out of memory the caller owns,
+but it is the check a compressed image owes after its expansion, and a plain
+one pays a few hundred cycles for sharing the path.
 
 **The source is banked in `[ld_msrc]`** (offset, then segment) rather than
 kept in `ES:DI`, because `ld_alloc`'s chain reaches `mem_compact` and a
@@ -86994,7 +87036,10 @@ unchanged.
 **The file formats cost nothing at all**, which is what made this affordable.
 Every codec in the program already goes through `pt_line_get` and
 `pt_line_put` — one byte per column in `pt_line` — so BMP and GIF, load and
-save, are two routines away from the canvas and neither of them changed. What
+save, are two routines away from the canvas and neither of them changed.
+**All but one**, and that sentence shipped wrong: the BMP SAVE writes the
+canvas as the file, so it is the codec that had to change, and §42.13.5 is
+what it did on every VGA and EGA until it did. What
 those two routines do changed completely: eight pixels now build four bytes by
 shifting each colour index right and rolling the carry into a plane, and the
 reverse pulls eight pixels out of four bytes the same way.
@@ -87451,6 +87496,40 @@ only the first.
 the nibble twice, and bit *k* of `n | n << 4` is bit *k* of the nibble for
 every *k* the four-iteration loop reaches. Two bytes smaller than the line it
 replaces.
+
+#### 42.13.5 The BMP save is the one codec that never went through `pt_line_get`
+
+**Before §42.13 the canvas WAS the BMP**, a 118-byte DIB header and packed
+4bpp rows, so saving one was a single `OSAPI_FILE_WRITE` of the canvas from
+offset 0 (§18.4.1). The planar change left the header a 4bpp one and made the
+rows four bit-planes - so on VGA and EGA `Save as Bmp` wrote four
+quarter-width planes under a 4bpp header, and the picture reopened as four
+squeezed copies with fringes. **Data loss**: the user's picture was gone from
+the disk while the window still showed it. GIF saves were right (they read
+rows through `pt_line_get`), and CGA and Hercules were right (one bit,
+packed); every BMP row in `tests/` ran on a 1bpp machine.
+
+So `pt_save`'s BMP arm puts the canvas PACKED for the write and back after it,
+in place, through §42.13.1.2's fused converters - `pt_topacked`, the write,
+`pt_toplanar`. No claim: a staging copy of the file would be a new way for a
+save to fail on a full heap, and the in-place pair cannot fail. Undo's row
+marks (`[pt_uy1]`/`[pt_uy2]`) are banked across it, because each converter
+drops them and the undo image itself is never touched - it is planar again by
+the time anything reads them - and the clipboard was always kept by both. A
+packed canvas makes the pair two byte tests.
+
+**The cost is two conversions**, 1,165 ms each for the 466 x 110 canvas on a
+4.77 MHz 8088 (§42.13.1.2's measurement), on top of a floppy write that is
+seconds itself - paid only by a BMP save on a colour adapter, and a 286 pays
+a quarter of it. The alternative, a row-at-a-time pack into a streamed write
+(`apps/os88wseq.inc`), is one conversion but a cluster-sized buffer in
+Paint's segment and a file left half-written on a mid-save failure, where
+the one-call write replaces the old file whole or not at all.
+
+`tests/paintbmpsave.py` opens a sixteen-colour picture it generates on
+`os8088_xt_vga`, saves it as BMP and as GIF off the same planar canvas, reads
+both back off the flushed floppy and compares them pixel for pixel; red on the
+old arm at 11,996 of 12,800 pixels.
 
 #### 42.13.4 `pt_screen` does not preserve `BX`, and `pt_sucache` believed it did
 
@@ -136715,6 +136794,24 @@ session after it until a minute passes or the app is restarted, which is what
 made this look like a server that breaks rather than a transfer that was too
 slow.
 
+#### 77.25.1 ...and a LIST of a folder that is not there is an EMPTY listing
+
+`LIST NOSUCH` sends its `150` before the walk, because the walk runs on the
+UI task (§20.6 rule 7) and the 150 is the worker's. The walk then failed to
+reach the folder and answered the mid-transfer way - abort the data
+connection, then `550` - but on PASV the worker ACCEPTS the data connection
+only when it first sends (`fd_data_ready`), so there was no data socket yet:
+the abort closed the LISTENER, and the client's connection, which `ftplib`
+and most clients open before they send the command, was left established and
+empty. The client read it until its own timeout and never saw the 550.
+
+So a missing folder is an empty stage and a flag (`[fd_lfail]`): the worker
+accepts, sends nothing, CLOSES - the client's end-of-file - and `fd_xdone`
+answers `550` where it would have said `226`. `tests/ftpd.py`'s 8f sends
+`LIST NOSUCH` and `NLST NOSUCH` and wants `550` from both inside the timeout
+and the control connection still in step; red on the old arm with a data-
+socket timeout.
+
 ### 77.26 The longest silence, which is the number that decides it
 
 The field read WinSCP's documentation and asked the right question: it holds
@@ -153348,6 +153445,15 @@ and nothing it calls while holding ES claims - except the export's
 call (§66.3 rule 5, bucket C). The read's staging claim stays undeclared: it
 lives inside one callback and is a file read's target throughout. +59 bytes of
 image. `pkgmove-chart` is the gate, red with `ct_reloc` a bare `ret`.
+
+#### 82.14.2 ...and a CLAIM is not zeroed, so the pixels are cleared at entry
+
+`ct_entry` copied the 118-byte header into the canvas claim and nothing else,
+and nothing renders until a file is opened - so the window showed whatever
+the heap last held under the claim, noise on every adapter. The pixels are
+cleared to WHITE there (`0xFF`, what `ch_prep` clears to for a chart with no
+values), 7 bytes. `tests/chartread.py`'s check 0 reads the canvas before any
+file and wants every byte white.
 
 ### 82.18 Keeping Chart in step with what Sheet writes
 
@@ -178874,6 +178980,32 @@ no copy — true of a stream, false of a whole-file read, which answers
 asks, compares what it got against what it asked for, and hands back a short
 block rather than reading into it.
 
+###### 96.30.7.3 ...and the buffer is sized on the DESTINATION's cluster
+
+`COPY` reads every chunk with `READ_SEQ` and APPENDS every chunk but the
+first with `WRITE_SEQ` (§96.53), and the append takes only whole clusters of
+the volume it writes (§18.4.9). The buffer was sized by `dsh_bufget` on the
+volume the PROMPT stood on - and asked for `AX` KB with `AX` still holding
+`dsh_bank`'s `[dos_curdir]`, a directory cluster number, where TYPE asks for
+`DSH_CPKB`. At a root that is 0, so one cluster of the prompt's volume: a
+floppy's 1KB. `COPY` of anything past 1KB from `A>` onto a FAT16 `C:` (2KB
+clusters at the smallest, §18.7.5) created the file with its first chunk -
+any length is legal there - and was refused at the first 1KB append: `File
+creation error`, and the half-copy deleted (§96.30.6's undo). 13 and 616
+bytes copied; so did the desktop's copy and a copy to `A:`.
+
+So `dsh_copy_go` stands on the destination before it asks, and asks
+`DSH_CPKB`: the block is 8KB, halved under pressure to no less than one
+destination cluster - a multiple of every floppy's cluster too, the sizes
+being powers of two. What is still not asked is the SOURCE's cluster when it
+is the larger and memory forces the halving below it (a hard disk copied onto
+a floppy on a full arena); that is `READ_SEQ`'s refusal, as it always was.
++14 bytes of the core, against 2 of `CORE_MAX`'s slack: `CORE_MAX` +16 on
+each arm, so 16 bytes off both hosts (`apps/dos/doscall.inc`).
+`tests/doscopyhd.py` copies 616, 1,380 and 5,170 bytes from the `B:\>` prompt
+onto a 2KB-cluster FAT16 `C:` and reads all three back off the VHD on the host;
+red on the old sizing with the two larger missing.
+
 ##### 96.30.8 A relative path prefix was dropped, and `DIR <folder>` listed the wrong one
 
 Two more the same tester found on the next pass, both **older than 96.30.7** —
@@ -179912,6 +180044,15 @@ of  A:\` (two spaces, which is `COMMAND.COM`'s own `%S` format) above the
 listing, and `%9d File(s) %9ld bytes free` under it. os8088 DOS printed
 `N file(s)` — lower case, no byte count, no header.
 
+##### 96.33.9.3 ...and its `bytes free` is the LISTED volume's
+
+`OSAPI_FILE_DFREE` answers for the volume the instance stands on (§19.2.1),
+and `dsh_dir_page` printed the footer after `dsh_home` had put the shell back
+on the PROMPT's - so `DIR B:` typed at `A>` listed B: and reported A:'s free
+space. The footer is printed before the walk home now, standing on the volume
+that was listed; the order is the whole of it. `tests/dosdirsw.py`'s step 0c
+checks the two disks' figures differ and that `DIR B:` from `A>` prints B:'s.
+
 ##### 96.33.3 Line input is the console's, and Esc is the way out of full screen
 
 A keystroke on the main page with **no field focused** is the console's: a
@@ -180286,6 +180427,16 @@ of that and answers in cells of its own.
 starts the package, and then stands where the prompt is again — because a
 path may have moved the machine to another volume and every later DOS call
 resolves where DOS thinks it is.
+
+**A drive with no separator** - `B:DOSHELLO.COM` - takes the folder part
+EMPTY, which `dos_walk_pbuf` reads as that volume's root, and the name from
+just past the COLON. It took it from one past the name's first character, the
+separator pointer having been set to the name itself, so the line ran
+`B:\OSHELLO.COM`. Real DOS resolves the drive-only form against that drive's
+CURRENT directory rather than its root; this DOS does not, and a program not
+at the root is then `Bad command or file name` - recorded, not changed here.
+`tests/dosext.py`'s `B:DOSARGS.COM /M` runs it with a copy at the root and one
+in `BIN\`, so either resolution passes and only the eaten letter fails.
 
 ###### 96.33.21.1 `PROGRAM DOCUMENT` — the double-click, with the program named
 

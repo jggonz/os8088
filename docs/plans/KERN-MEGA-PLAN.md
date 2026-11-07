@@ -13994,3 +13994,26 @@ that kernel, which is what says the detector sees a reboot.
 Cost: `.mega` +13 bytes (above 1MB); `MEGA_RESIDENT` 62,976 unchanged;
 kern_big byte-identical (`make build/kernel.bin` with and without, one
 commit).
+
+### 14.152 The Wire's Load Program on a PACKED .O88 faulted the machine (2026-11-07) - FIXED
+
+**Found by the mega-release hands-on pass** (h4, 86Box): Load Program on
+MINES closed it with `#GP limit` (112C:0060, "would not start (4)"), and on
+CALC took the whole machine - `kern_mega FAULT 0D at 0F98:6E7A`, the image
+arm's `rep movsb`. kern_big halted on `STACK OVERFLOW TASK` for the same
+click, so this is not a kern_mega defect but one a kern_mega release ships.
+`OSAPI_PKG_START`'s image arm copied `[ld_img]` - the UNPACKED length - to
+offset 0 out of a caller's buffer holding the shorter LZ4 file; every
+release `.O88` is packed, and `tests/thewire.py` only loaded the plain HELLO.
+
+**Fix** (SPEC.md 21.5.1.2, 20.13.2): the arm copies the FILE to step 6's
+`R = roundup512(image - file)` and enters step 6a where the disk read would
+have left it, so the disk path's expansion - its `mega_s2segc`/`mega_oddsegc`
+selector arithmetic included - and its re-check run on held bytes too. One
+routine, `ld_where`, answers the offset and count for both arms.
+
+Rows: `pkgrun`'s G (MartyPC, the region byte-equal to the unpacked image)
+and `mega-pkgrun` (Bochs, green on this kernel), `thewire`'s assertion 19
+(QEMU, Load Program opens `Minesweeper`); both MartyPC and QEMU legs red on
+the old arm. Cost: `.cold` +4 bytes on kern_big, kern_small and kern_mega
+alike; kern_mega's `.boot2` +1 (transient); `MEGA_RESIDENT` 62,976 unchanged.

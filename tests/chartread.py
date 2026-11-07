@@ -40,6 +40,8 @@ has - and 82.18 says it must be SKIPPED. If it is not, `ct_valcnt` is five
 and a NaN's mantissa is charted as a data point. That arm was "verified
 against a file Sheet wrote and the host decoded" and had no gate.
 
+  0 BLANK      before any file, the canvas is WHITE - a claim is not zeroed,
+               and ct_entry copied only the header into it (82.14.2)
   1 SYLK       the baseline reader, and the only one with a test before this
   2 DIF        the same four values, from the text format
   3 BIFF       the same four again - and this file alone exercises ct_rkdec
@@ -92,6 +94,7 @@ COLB = [7.0, 3.0, 9.0, 1.0]
 # and a fifth cell that is a formula answering text, which must be skipped.
 BIFF_A_KIND = ["number", "formula", "rk", "number"]
 BIFF_DEAD = (len(COLA), 0)              # row 4, column A: '#DIV/0!' cached
+CH_PXOFF, CH_STRIDE, CH_H = 118, 120, 160   # os88chart.inc's geometry
 CH_MAXBARS = 40                         # chart.asm's own, mirrored: a plain
                                         # `equ` is not in the symbol map
 
@@ -285,6 +288,22 @@ def main():
             ui.chooser_open(doc)
             ui.settle()
             return published()
+
+        # --- 0 BLANK: the canvas, before any file (SPEC.md 82.14.2) --------
+        # ct_entry copied the 118-byte header into a fresh CLAIM and nothing
+        # else, and a claim is not zeroed - so until a file was opened the
+        # window showed whatever the heap last held there, noise on every
+        # adapter. The pixels must be WHITE (0xFF, ch_prep's own clear) when
+        # the window first opens. VERIFIED RED with ct_entry's clear taken
+        # out: the canvas read back as the heap's old bytes.
+        cseg = rd("ct_chartseg")
+        px = bytes(m.readseg(cseg, CH_PXOFF, CH_STRIDE * CH_H))
+        check(px == b"\xff" * len(px), "0 BLANK",
+              "a Chart with no file open is a WHITE canvas, not the heap's "
+              "old contents (SPEC.md 82.14.2)",
+              got="%d of %d bytes not white" % (sum(1 for c in px if c != 0xFF),
+                                               len(px)),
+              want="all %d bytes 0xFF" % len(px))
 
         slk = load(SLK)
         check(slk[0] == len(COLA) and slk[1] == 0, "1 SYLK",

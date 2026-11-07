@@ -7858,8 +7858,12 @@ dos_pt_body:
                                     ; `OTEPAD` (SPEC.md 96.33.21)
                                     ; ...none, and no drive either: the folder
     mov di, bx                      ; we stand in. A DRIVE with no separator
-                                    ; makes the directory part EMPTY, which
+    dec di                          ; makes the directory part EMPTY, which
                                     ; dos_walk_pbuf reads as that volume's root
+                                    ; - and DI is the COLON, so `.name`'s `inc`
+                                    ; lands on the name's first character. It
+                                    ; was the name itself, and `B:DOSHELLO.COM`
+                                    ; ran `B:\OSHELLO.COM` (SPEC.md 96.33.21)
 .name:
     mov si, di
     inc si                          ; the name starts one past the separator

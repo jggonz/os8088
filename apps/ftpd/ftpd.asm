@@ -3585,6 +3585,7 @@ fd_reset_xfer:
     mov byte [fd_created], 0
     mov word [fd_lord], 0
     mov byte [fd_lmore], 0
+    mov byte [fd_lfail], 0
     mov word [fd_xbytes], 0
     mov word [fd_xbytes+2], 0
     jmp fd_wdog_stamp              ; LAST, so the stamp records the counters
@@ -4121,8 +4122,12 @@ fd_xdone:
 .close:
     call fd_data_drop
 .dropped:
-    call fd_reset_xfer
     mov si, fd_r226
+    cmp byte [fd_lfail], 0          ; a LIST of a folder that is not there
+    je .reply                       ; ends here too, its data connection
+    mov si, fd_r550                 ; closed empty (SPEC.md 77.25.1)
+.reply:
+    call fd_reset_xfer              ; (moves no SI)
     call fd_reply
     pop si
     ret
@@ -5391,9 +5396,22 @@ fd_do_list:
     mov [fd_sfill], di
     jmp short .out
 .nodir:
-    mov si, fd_r550                 ; the 150 is already out, so this is the
-    call fd_xfail                   ; mid-transfer shape: abort the data
-                                    ; connection WITH the refusal (77.25)
+    mov byte [fd_lfail], 1          ; **AN EMPTY LISTING THAT ENDS IN 550**
+                                    ; (SPEC.md 77.25.1). The 150 is out, and
+                                    ; this used to abort the data connection
+                                    ; WITH the refusal - but this runs on the
+                                    ; UI task, and the worker ACCEPTS a PASV
+                                    ; connection only when it first sends
+                                    ; (fd_data_ready), so there was no data
+                                    ; socket yet: the abort took the LISTENER,
+                                    ; and the client's connection - made
+                                    ; before it sent LIST - was left open
+                                    ; with nothing on it. The client read it
+                                    ; for ever and never saw the 550. Now the
+                                    ; stage is simply empty: the worker
+                                    ; accepts, sends nothing, CLOSES (the
+                                    ; client's end-of-file) and fd_xdone
+                                    ; answers 550 where it would say 226
 .out:
     call fd_unbank                  ; every path: a no-op unless fd_split
     jmp fd_x7                       ; moved us this pass
@@ -8333,6 +8351,8 @@ fd_havern   equ os88_image_end + 60  ; byte: RNFR has been accepted
 fd_pasvn    equ os88_image_end + 61  ; byte: the rotating passive port
 fd_page     equ os88_image_end + 62  ; byte: FP_* - which face is drawn
 fd_pfoc     equ os88_image_end + 63  ; byte: the Setup field has the caret
+fd_lfail    equ os88_image_end + 64  ; byte: this LIST's folder is not there,
+                                     ; so its end is a 550 (SPEC.md 77.25.1)
 fd_lsdir    equ os88_image_end + 70  ; byte: LIST/NLST carried a path, banked
                                      ; in fd_xname with a '/' appended - each
                                      ; fd_do_list pass walks it (SPEC.md 77.16)

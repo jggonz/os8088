@@ -836,6 +836,58 @@ ld_take:
 .big:                           ; second copy of each (size pass 10); they
     jmp ld_hdr_size.toobig      ; are out of short reach of the jcc's here
 
+; -----------------------------------------------------------------------------
+; ld_where - step 6's WHERE and HOW MUCH, for both arms that fill a region
+;           (module-internal; SPEC.md 20.13, 21.5)
+; in:  [ld_img], [ld_fsz] and [ld_cfmt], as ld_check_hdr left them
+; out: BX = [ld_roff] = where in the region the bytes land - 0 for a plain
+;      image, R = roundup512(image - file) for a compressed one - and
+;      AX = how many: the IMAGE plain, the FILE compressed
+; clobbers: flags
+;
+; TWO CALLERS, and the second is the reason this is a routine. The disk path
+; reads the file here; OSAPI_PKG_START's image arm COPIES it here (SPEC.md
+; 21.5) and then enters step 6a exactly where the read would have - so a
+; compressed image a caller is holding is expanded by the same body a
+; compressed file on a disk is. The image arm used to copy [ld_img] bytes to
+; offset 0 whatever the flags said: on a packed .O88 that is the unpacked
+; length read out of a buffer holding the packed one, which is an over-read
+; of the caller's claim and a region of LZ4 bytes far-called as code - The
+; Wire's Load Program on any release package (SPEC.md 21.5.1.2).
+; -----------------------------------------------------------------------------
+ld_where:
+    xor bx, bx                  ; BX = where in the region the bytes land
+    mov ax, [ld_img]            ; THE IMAGE, NOT THE FILE. On a v3 package the
+                                ; two are equal and always were; on one
+                                ; carrying parts the region holds the primary
+                                ; alone and the rest is the package's to read
+                                ; (SPEC.md 20.12)
+%ifdef KERN_BIG
+    test byte [ld_cfmt], 3      ; the FORMAT bits (bit 3 is the desk flag)
+    jz .rdgo
+%else
+    cmp byte [ld_cfmt], 0
+    je .rdgo
+%endif
+    ; COMPRESSED (SPEC.md 20.13): the FILE, and HIGH, so step 6a
+    ; can expand it DOWNWARDS into the same region - no second buffer and no
+    ; second claim, which is what makes this admissible on a 128KB machine.
+    ;   R = roundup512(image - file)
+    ; and 512 because that is what int 13h needs of a destination. There is no
+    ; margin in it: the stream's own raw tail makes image - file exactly
+    ; enough (SPEC.md 20.13.7). os88pkg.py computes the same R and REFUSES to
+    ; compress anything for which R + file does not fit the region this
+    ; loader was going to claim anyway - so the sizing at step 4 is untouched
+    ; and this cannot overflow it.
+    mov bx, ax                  ; (AX = the image, just loaded)
+    mov ax, [ld_fsz]
+    sub bx, ax
+    add bx, 511
+    and bx, 0FE00h
+.rdgo:
+    mov [ld_roff], bx
+    ret
+
 ld_run_body_x:
     ; --- 1. validate the directory entry --------------------------------------
     ; **THE ENTRY IS STAGED BY THE CALLER**, and so is the bound it was
@@ -928,39 +980,11 @@ ld_run_body_x:
 
     ; --- 6. read the whole file into the region --------------------------------
 .read:
-    xor bx, bx                  ; BX = where in the region the read lands,
-                                ; stored once at .rdgo and HELD to the read:
-                                ; dsk_bytes_secs_x spends CL alone (kernel
-                                ; size pass 18, -10)
-    mov ax, [ld_img]            ; THE IMAGE, NOT THE FILE. On a v3 package the
-                                ; two are equal and always were; on one
-                                ; carrying parts the region holds the primary
-                                ; alone and the rest is the package's to read
-                                ; (SPEC.md 20.12)
-%ifdef KERN_BIG
-    test byte [ld_cfmt], 3      ; the FORMAT bits (bit 3 is the desk flag)
-    jz .rdgo
-%else
-    cmp byte [ld_cfmt], 0
-    je .rdgo
-%endif
-    ; COMPRESSED (SPEC.md 20.13): read the FILE, and read it HIGH so step 6a
-    ; can expand it DOWNWARDS into the same region - no second buffer and no
-    ; second claim, which is what makes this admissible on a 128KB machine.
-    ;   R = roundup512(image - file)
-    ; and 512 because that is what int 13h needs of a destination. There is no
-    ; margin in it: the stream's own raw tail makes image - file exactly
-    ; enough (SPEC.md 20.13.7). os88pkg.py computes the same R and REFUSES to
-    ; compress anything for which R + file does not fit the region this
-    ; loader was going to claim anyway - so the sizing at step 4 is untouched
-    ; and this cannot overflow it.
-    mov bx, ax                  ; (AX = the image, just loaded)
-    mov ax, [ld_fsz]
-    sub bx, ax
-    add bx, 511
-    and bx, 0FE00h
-.rdgo:
-    mov [ld_roff], bx
+    call ld_where               ; BX = where in the region the read lands and
+                                ; AX = how many bytes (ld_where, above: the
+                                ; image arm asks the same two questions) -
+                                ; BX HELD to the read: dsk_bytes_secs_x spends
+                                ; CL alone (kernel size pass 18, -10)
     call dsk_bytes_secs_x       ; DX = ceil(AX/512)
     mov ax, [ld_clus]
     mov es, [ld_base]           ; the package's OWN segment
@@ -971,6 +995,10 @@ ld_run_body_x:
                                 ; SPEC.md 21 step 6
 
     ; --- 6a. expand it, if it came compressed (SPEC.md 20.13) -----------------
+.expand:                        ; ...OSAPI_PKG_START's image arm enters HERE,
+                                ; its copy standing in for the read above
+                                ; (SPEC.md 21.5.1.2): ES = [ld_base], and AL
+                                ; is not an input - .ret2 below sets it
 %ifdef KERN_BIG
     test byte [ld_cfmt], 3      ; (the format bits alone, as at step 6)
     jz .expanded
@@ -1869,12 +1897,20 @@ ld_pkg_start_x:
     call ld_alloc               ; steps 4 and 5: the record and the region
     jc .fail                    ; AL = LD_ENOMEM
 
-    ; --- step 6, without a disk: the image, copied into the region ----------
-    ; [ld_img] and not the file length: ld_check_hdr has just proved them
-    ; equal, parts being refused above, and it is the value step 7 zeroes from.
-    ; NO DISK-SWAP RE-CHECK - the bytes came from memory the caller owns and
-    ; ld_check_hdr read those very bytes, so there is nothing that could have
-    ; been swapped underneath them.
+    ; --- step 6, without a disk: the file, copied where the read would put it
+    ; ld_where answers what the disk path's step 6 asks: offset 0 and the
+    ; image for a plain package (ld_check_hdr has just proved image and file
+    ; equal, parts being refused above), R = roundup512(image - file) and the
+    ; FILE for a compressed one. It used to be [ld_img] to offset 0 whatever
+    ; the flags said, and on a packed .O88 - every release package, PKGZ=lz4
+    ; (SPEC.md 20.13.5) - that read the UNPACKED length out of a buffer
+    ; holding the packed bytes: kern_mega faulted on the copy's limit, and
+    ; kern_big far-called a region of LZ4 stream as code (SPEC.md 21.5.1.2).
+    ; Then step 6a, ENTERED where the read would have left it: the same
+    ; expansion, and the same in-region re-check after it. Here that re-check
+    ; guards no swap - the bytes came from memory the caller owns - but it is
+    ; the one ld_check_hdr a compressed image owes after its expansion, and
+    ; a plain one pays a few hundred cycles for sharing the path.
     ; **EVERY KERNEL WORD IS READ WHILE DS STILL NAMES THE KERNEL**, and the
     ; `mov si` below is the load-bearing one. It used to sit UNDER the
     ; `mov ds`, so it read [ld_msrc] out of the CALLER'S segment - a kernel
@@ -1883,17 +1919,11 @@ ld_pkg_start_x:
     ; cleanly, it passes ld_check_hdr (which read the RIGHT bytes, before
     ; this), and what it produces is a region full of something else whose
     ; PKG_DISP is not a dispatcher: step 8's far call lands at CS=0000
-    ; IP=0003, in the interrupt vector table.
-    ;
-    ; It was INTERMITTENT, which is what made it expensive. `ld_msrc`'s offset
-    ; is past the end of a small package's image and bss, so the stray read
-    ; lands in whatever the HEAP has next to the caller's region - and the
-    ; same fixture wedged or worked according to whether a Disk window was
-    ; open, because a listing claim is what sits there. Six runs differing
-    ; only in that; the answer was two instructions in the wrong order.
-    mov es, [ld_base]           ; ES:DI = the region at offset 0
-    xor di, di
-    mov cx, [ld_img]
+    ; IP=0003, in the interrupt vector table (SPEC.md 21.5.2).
+    call ld_where               ; BX = where in the region, AX = how many
+    mov es, [ld_base]           ; ES:DI = the region at that offset
+    mov di, bx
+    xchg cx, ax                 ; CX = the count (AX is spent)
     mov si, [ld_msrc]           ; ...the source OFFSET, first and through the
                                 ; kernel's own DS
     push ds
@@ -1901,10 +1931,11 @@ ld_pkg_start_x:
     cld                         ; the last thing this block may read
     rep movsb
     pop ds
-    jmp ld_start                ; 7, 8 and 9 - and ES is the region, which is
-                                ; what that routine's step 7 wants. It answers
-                                ; in AL and frees the region itself when the
-                                ; entry proc aborts (a tail jump: pass 17, -1)
+    jmp ld_run_body_x.expand    ; 6a, the re-check, then 7, 8 and 9 - ES is
+                                ; the region, which is what all of them want.
+                                ; It answers in AL, gives the region back
+                                ; itself on a stream that does not decode
+                                ; (.ret2) and when the entry proc aborts
 .badpop:
     pop si
 .bad:

@@ -8461,9 +8461,13 @@ $(BUILD)/DOSARGS.COM: tests/dosargs/args.asm | $(BUILD)
 $(BUILD)/DOSARGS.DAT: $(BUILD)/DOSARGS.COM | $(BUILD)
 	cp $< $@
 
+# ...and DOSARGS.COM at the ROOT as well, for tests/dosext.py's
+# `B:DOSARGS.COM`: a drive with no separator resolves against that volume's
+# root here (SPEC.md 96.33.21) and against its current directory on DOS, and
+# with a copy in both a working resolution of either kind finds the program.
 $(BUILD)/dosargs360.img: $(BUILD)/DOSARGS.COM $(BUILD)/DOSARGS.DAT tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 BIN:$(BUILD)/DOSARGS.COM \
-	        BIN:$(BUILD)/DOSARGS.DAT
+	        BIN:$(BUILD)/DOSARGS.DAT $(BUILD)/DOSARGS.COM
 
 # --- the shortcut gate's disk (SPEC.md 96.21) --------------------------------
 # A SCRATCH image, because the row WRITES to it: Save Shortcut puts a .LNK on
@@ -10362,16 +10366,24 @@ $(BUILD)/pkgrun.o88: $(BUILD)/pkgrun.bin tools/os88pkg.py
 # image it is holding, and the name - and reads two different answers. It is
 # tests/multiseg's package and not a fixture, for HELLO.O88's reason one line
 # up.
+#
+# ...AND MINES.O88, for the same reason again: it is the shipped one and it is
+# PACKED (PKGZ=lz4, SPEC.md 20.13.5), as HELLO.O88 - too small to gain - is
+# not. The image form has to expand a compressed image the way the disk path
+# does (SPEC.md 21.5.1.2), and The Wire's Load Program on any release package
+# crashed the machine until it did.
 $(BUILD)/pkgrun.img: $(BUILD)/pkgrun.o88 $(BUILD)/hello.o88 $(BUILD)/mseg.o88 \
-                     tools/os88disk.py
+                     $(BUILD)/mines.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 \
-		$(BUILD)/pkgrun.o88 $(BUILD)/hello.o88 $(BUILD)/mseg.o88
+		$(BUILD)/pkgrun.o88 $(BUILD)/hello.o88 $(BUILD)/mseg.o88 \
+		$(BUILD)/mines.o88
 	@python3 tools/os88disk.py --verify $@
 
 $(BUILD)/pkgrun360.img: $(BUILD)/pkgrun.o88 $(BUILD)/hello.o88 \
-                        $(BUILD)/mseg.o88 tools/os88disk.py
+                        $(BUILD)/mseg.o88 $(BUILD)/mines.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
-		$(BUILD)/pkgrun.o88 $(BUILD)/hello.o88 $(BUILD)/mseg.o88
+		$(BUILD)/pkgrun.o88 $(BUILD)/hello.o88 $(BUILD)/mseg.o88 \
+		$(BUILD)/mines.o88
 	@python3 tools/os88disk.py --verify $@
 
 #   make pkgrun                            builds both images
