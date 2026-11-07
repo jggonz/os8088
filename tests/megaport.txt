@@ -112,6 +112,7 @@ wirefleetdeploy secs=60   # WireFleet deployment, refusals, rotation, removal, a
 chartgal secs=600   # the Gallery draws seven different charts, unchanged on kern_mega's VGA (CHART above 1MB)
 
 # WINDOW MANAGER AND INPUT
+dispclose secs=45   # closing ASKS: W_ONCLOSE, the deferred OSAPI_WM_CLOSE, os88ui_ask's alert through every branch, NOTES.TXT read off the floppy (VGA leg); red: Note Pad re-assembled with np_onclose's `jnc .go` a `jmp .go` (a dirty note closes unasked)
 bptrace secs=70   # os88ui driven with breakpoints ARMED (bp_trace) - the shim's bp_exec, pump and stepped double-click
 sizesnap secs=20   # the SIZE snap keeps a maximized window at x=0, w=[vid_pw]
 btnmove secs=30   # a standard button answers where its window IS after a drag
@@ -235,6 +236,8 @@ vesashut secs=40   # Shut Down on the VESA desktop: every driver detached (vx_de
 # (KERN-MEGA-MEMORY-PLAN MC7.4) - so "it moved" and "nothing names the old
 # block" are asked of the paragraph under each word (sheetmove.seg_key).
 regmove secs=100 @OS88_BOCHS_MEGS=1   # Note Pad's REGION moves in the descending pass: its selector rebased, W_SEG/I_SPTR/owners naming the new paragraph, image and picture intact (found tests/filler's BX: 14.90)
+rdmove secs=90 @OS88_BOCHS_MEGS=1   # the RAM disk's STORE ([rd_arena], a selector: its paragraph read through the LDT) slides DOWN into the hole heapfrag A leaves, bytes hashed the same, and D: still mounts; red on a HEAPCOMPACT=0 kern_mega (OS88_MEGA_BUILD=its tree): 'arena moved NO'
+sheetmove secs=95 @OS88_BOCHS_MEGS=1   # a LIVE Sheet's six declared claims (~99KB, the tree's largest holder) slide down under it: every word follows (the paragraph under each selector), hashes, sh_noteseg's carve, the staging, the repaint and the grow box; red on a HEAPCOMPACT=0 kern_mega: 'a declared claim moved NO'
 drvmove secs=45 @OS88_BOCHS_MEGS=1   # the RAM disk's IMAGE moves; no kernel word names the old paragraph, and int 33h planted as a REAL vector follows it (mem_ivt_relocf, 14.90)
 sndmove secs=70 @OS88_BOCHS_MEGS=1   # SOUND.DRV's image moves on Bochs's SB16: the IVT's IRQ5 rows (0Dh and 25h) follow it - they did not before 14.90 - and the IDT gate lands the image's distance on
 regpin secs=110 @OS88_BOCHS_MEGS=1   # a worker-owning region with no restart point does NOT move (mem_can_move's pin, unchanged on kern_mega), Calc's beside it does

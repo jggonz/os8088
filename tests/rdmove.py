@@ -171,6 +171,24 @@ def main():
         def hmap(tag):
             heap_map(m, S, tag)
 
+        mega = getattr(m, "bochs", False)
+
+        def lin(seg, off=0):
+            """SEG:OFF linear - an LDT selector's base on kern_mega, where a
+            region, a driver image and a claim are each named by one
+            (docs/BOCHS.md, *Rows ported from MartyPC*)"""
+            return m.lin(seg, off) if mega else seg * 16 + off
+
+        def key(v):
+            """A segment WORD as mem_tab keys its block. On kern_mega
+            (KERN-MEGA-MEMORY-PLAN MC7.4) [rd_arena] is an LDT selector that
+            a move REBASES and never changes, so "it moved" is asked of the
+            PARAGRAPH under it, read at the moment the row means"""
+            if mega and v and 0x100 <= v < 0xA000 and v & 4:
+                b = m.selector(v)
+                return b[0] >> 4 if b else v
+            return v
+
         def rd_seg():
             return u16(m.read(S("drv_tab") + RD_ROW * DRVR_SZ + DRVR_SEG, 2))
 
@@ -194,8 +212,8 @@ def main():
             sg = u16(m.read(os88geom.winptr(m, slot, S) + os88geom.W_SEG, 2))
             if not sg:
                 return None
-            img = u16(m.read(sg * 16 + 8, 2))
-            return m.read(sg * 16 + img + off, n)
+            img = u16(m.read(lin(sg, 8), 2))
+            return m.read(lin(sg, img + off), n)
 
         def heap_wins():
             return [w for w in os88geom.windows(m, S)
@@ -292,7 +310,7 @@ def main():
         try:            # the mount claims the arena (rd_store_get), bounded
             os88marty.until(        # by what an idle box's pause gave it
                 m, lambda _: rd_seg() and u16(m.read(
-                    rd_seg() * 16 + R["rd_arena"], 2)),
+                    lin(rd_seg(), R["rd_arena"]), 2)),
                 "the RAM disk's arena", poll=0.1,
                 guest=6 * os88marty.GUEST_PACE)
         except os88marty.MartyError:
@@ -312,7 +330,7 @@ def main():
         # that had done everything right (docs/WRITING-TESTS.md 13, #29's
         # shape). `drv_tab` is the kernel's own answer and the move updates it.
         def arena():
-            return u16(m.read(rd_seg() * 16 + R["rd_arena"], 2))
+            return key(u16(m.read(lin(rd_seg(), R["rd_arena"]), 2)))
 
         # --- ...and PACKED onto A's survivors before B opens ----------------
         # The driver's load leaves two PURGEABLE caches between A's survivors
@@ -338,9 +356,9 @@ def main():
                             "the posted pass", poll=0.05, limit=10.0)
             os88marty.settle(m)
         for _ in range(4):
-            was = u16(m.read(rd_seg() * 16 + R["rd_arena"], 2))
+            was = arena()
             post_top()
-            if u16(m.read(rd_seg() * 16 + R["rd_arena"], 2)) == was:
+            if arena() == was:
                 break
         hmap("the store packed onto A")
 
@@ -450,7 +468,7 @@ def main():
         # ASK THE DRIVER which volume it got rather than guessing a letter:
         # the kernel assigns the index (SPEC.md 26.1) and a machine whose B:
         # was retired by 18.97's probe numbers them differently.
-        vol = m.read(rd_seg() * 16 + R["rd_vol"], 1)[0]   # ...and here, for
+        vol = m.read(lin(rd_seg(), R["rd_vol"]), 1)[0]   # ...and here, for
                                                          # arena()'s reason
         letter = chr(ord("A") + vol) if vol != 0xFF else None
         n3 = 3
