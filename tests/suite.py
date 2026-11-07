@@ -17272,6 +17272,18 @@ SOAK = [
         "opening at frame 17 of 19, its ring the title's",
         needs=("marty", "ffmpeg"),
         wants=("build/vbattle.o88",)),
+    Row("vbtownpal", "soak", py("tests/vbtownpal.py"), 60.0,
+        "SPEC.md 126.3.3: a clip's OWN PALETTE on VGA - the demo with video "
+        "for its title (colour bars, left by the fade), a full-screen "
+        "opening that fades to black and an action: the title and the "
+        "opening their own automatically, the action not; each flagged "
+        "CF_PAL, its first record loading all 15 colours but black, the "
+        "seam onto the idle loop putting the shared back (verify); the "
+        "title's own nearer its footage; the clip's choice (shared, own) "
+        "honoured; an opening with the menu never automatic; the Build "
+        "tab's viewer showing the clip's own. Broken on purpose (the "
+        "seam's load left out) the build refuses",
+        needs=("ffmpeg",)),
     Row("vbtcadence", "soak", py("tests/vbtcadence.py"), 5.0,
         "SPEC.md 126.2.5: a 60 fps capture of a 15 fps original, drifting "
         "(three and a stray part-drawn frame, five), with a genuine "

@@ -446,6 +446,103 @@ def vga_slots(proj, k=None):
     return max(0, min(int(n), k - 4))
 
 
+# --- A CLIP'S OWN PALETTE (126.3.3): every colour its own, where it is
+# entered and left through BLACK and no band is on the glass ---------------
+
+PAL_MODES = ("auto", "own", "shared")   # a clip's "palette" (absent: auto)
+DARK_MEAN = 10          # a frame is BLACK when its mean brightness is under
+DARK_HI = 32            # this and nearly all of it (98%) under this
+
+
+def _dark(proj, cid, which):
+    """Clip CID's first (WHICH 0) or last (-1) frame is black, near enough"""
+    c = proj.d["clips"][cid]
+    s = proj.d["sources"][c["source"]]
+    if s["kind"] == "scene":
+        return False
+    w, _, fh = rend_size(proj, "vga4")
+    fr = rgb_frames(proj, c["source"], w, fh, "vga4")
+    k = c["in"] if which == 0 else min(c["out"], len(fr) - 1)
+    if not 0 <= k < len(fr):
+        return False
+    y = fr[k].astype(float).mean(axis=2)
+    return y.mean() < DARK_MEAN and np.percentile(y, 98) < DARK_HI
+
+
+def own_auto(proj, cid):
+    """May clip CID have every colour its own (126.3.3)? (yes, why): only
+    where the screen is BLACK as it starts and as it ends - its colours are
+    loaded over black and the next stream's put back over black, so nothing
+    on the glass changes colour - and where no band is up (the band is drawn
+    in the shared colours). By role: the TITLE, left by the fade (not a
+    leaving clip); a FULL-SCREEN OPENING entered from black (the first after
+    the title's fade, or after an opening that ends black) whose own last
+    frame is black; an END LOOP an ending FADES to over the whole screen.
+    An action, an end clip, a title's leaving clip, an opening with the
+    menu: played over the band or a picture - never"""
+    d = proj.d
+    t = d.get("title") or None
+    roles = []
+    if t and t["clip"] == cid:
+        if t.get("leave"):
+            return False, "the title is left by a clip, not the fade"
+        roles.append("the title, left by the fade")
+    if t and t.get("leave") == cid:
+        return False, "it leaves the title (no fade)"
+    ops = d["openings"]
+    for i, o in enumerate(ops):
+        if o["clip"] != cid:
+            continue
+        if not o.get("full"):
+            return False, "an opening with the menu: the band is up"
+        if o.get("enter"):
+            return False, "entered at the title's frames"
+        if i == 0:
+            if t and t.get("leave"):
+                return False, "the title's leaving clip comes before it"
+        elif not _dark(proj, ops[i - 1]["clip"], -1):
+            return False, "the opening before it does not end black"
+        if not _dark(proj, cid, -1):
+            return False, "its last frame is not black"
+        roles.append("a full-screen opening, from black to black")
+    for k, en in d["endings"].items():
+        lp = en.get("loop") or {}
+        if lp.get("clip") != cid:
+            continue
+        if not en.get("full") or en.get("how") != "fade" or \
+                en.get("then") == "join":
+            return False, "the %s ending does not fade to it over the " \
+                "whole screen" % k
+        roles.append("the %s's end loop, faded to" % k)
+    played = set(proj.clips_used())
+    other = [o["clip"] for o in ops] + ([t["clip"]] if t else []) + [
+        (en.get("loop") or {}).get("clip") for en in d["endings"].values()]
+    if cid in played and (not roles or proj.clips_used().count(cid) >
+                          other.count(cid)):
+        return False, "played from the menu"
+    if not roles:
+        return False, "not played"
+    return True, "; ".join(roles)
+
+
+def own_palettes(proj):
+    """{clip: (on, why)} for every clip a build plays, its "palette" ("own",
+    "shared", or "auto" - the default - by own_auto)"""
+    out = {}
+    for cid in sorted(set(proj.clips_used())):
+        c = proj.d["clips"].get(cid)
+        if c is None or proj.d["sources"][c["source"]]["kind"] == "scene":
+            continue
+        mode = c.get("palette") or "auto"
+        if mode == "own":
+            out[cid] = (True, "chosen")
+        elif mode == "shared":
+            out[cid] = (False, "chosen")
+        else:
+            out[cid] = own_auto(proj, cid)
+    return out
+
+
 def vga_streams(proj):
     """What VGA's colours are chosen over: (key, source, first, end, weight)
     for the idle loop ("idle") and every video clip a build plays. A clip's
@@ -457,9 +554,11 @@ def vga_streams(proj):
     if d["sources"].get(i["source"], {}).get("kind") not in (None, "scene"):
         a, b = i["loop"]
         out.append(("idle", i["source"], a, b, PLAN_IDLE_W))
-    for cid in sorted(set(proj.clips_used())):
+    iso = own_palettes(proj)        # (a clip with its own palette is
+    for cid in sorted(set(proj.clips_used())):  # no stream of the shared)
         c = d["clips"].get(cid)
-        if c is None or d["sources"][c["source"]]["kind"] == "scene":
+        if c is None or d["sources"][c["source"]]["kind"] == "scene" or \
+                iso.get(cid, (False,))[0]:
             continue
         out.append((cid, c["source"], c["in"], c["out"] + 1, 1.0))
     return out
@@ -626,11 +725,15 @@ def vga_plan(proj, progress=_nop):
     streams = vga_streams(proj)
     if not streams and not proj.d.get("images"):
         sh = (band + [(0, 0, 0)] * k)[:k - slots]
-        return dict(k=k, slots=slots, shared=sh, own={})
+        return dict(k=k, slots=slots, shared=sh, own={},
+                    iso=iso_plan(proj, k, progress))
     if keep and k <= 4:
-        return dict(k=k, slots=0, shared=band[:k], own={})
+        return dict(k=k, slots=0, shared=band[:k], own={},
+                    iso=iso_plan(proj, k, progress))
     w, h, _ = rend_size(proj, "vga4")
     key = json.dumps(["p5", t["palette"], k, slots, keep, w, h,
+                      sorted((c, on) for c, (on, _) in
+                             own_palettes(proj).items()),
                       [(im.get("path"), os.path.exists(proj.here(im["path"]))
                         and file_hash(proj.here(im["path"])))
                        for im in proj.d.get("images", [])],
@@ -703,9 +806,32 @@ def vga_plan(proj, progress=_nop):
         if x.endswith("*"):
             own[x[:-1]] = own.pop(x)
     sh = (sh + [sh[-1]] * k)[:k - slots]
-    out = dict(k=k, slots=slots, shared=sh, own=own)
+    out = dict(k=k, slots=slots, shared=sh, own=own,
+               iso=iso_plan(proj, k, progress))
     _PALS[key] = out
     return out
+
+
+def iso_plan(proj, k, progress=_nop):
+    """EVERY COLOUR ITS OWN (126.3.3): {clip: its K colours} for each clip
+    own_palettes says has them - chosen over its own frames alone, black
+    first (the fade's and a black screen's colour 0 under every palette)"""
+    iso = {}
+    w, _, full = rend_size(proj, "vga4")
+    for cid, (on, _) in sorted(own_palettes(proj).items()):
+        if not on:
+            continue
+        c = proj.d["clips"][cid]
+        fr = rgb_frames(proj, c["source"], w, full, "vga4", progress)[
+            c["in"]:c["out"] + 1]
+        if not len(fr):
+            continue
+        px = fr.reshape(-1, 3)
+        r2 = np.random.RandomState(2)
+        ip, _ = plan_colours({cid: (px[r2.randint(0, len(px), min(
+            len(px), 4 * PLAN_SAMPLES))], 1.0)}, k, 0, [(0, 0, 0)])
+        iso[cid] = (ip + [ip[-1]] * k)[:k]
+    return iso
 
 
 def battle_palette(proj, k=None, progress=_nop):
@@ -722,6 +848,8 @@ def clip_palette(proj, cid, progress=_nop):
     shared ALONE for a stream with none (the idle loop, a scene), so its
     frames never use an own slot (126.3.2)"""
     p = vga_plan(proj, progress)
+    if cid in p.get("iso", {}):     # (every colour its own: 126.3.3)
+        return list(p["iso"][cid])
     own = p["own"].get(cid)
     if not own:
         return list(p["shared"])

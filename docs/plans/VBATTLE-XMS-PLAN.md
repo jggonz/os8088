@@ -96,8 +96,8 @@ that version 4 could not show - its frame gaps lapped at 55 ms - so
 version 5 counts gaps in the hook's periods and times every XMS copy,
 the suspect being an `int 15h` copy's interrupts-off window.
 
-Queued after performance (the owner): **a clip that joins by a FADE, or
-that goes to black itself, may have colours of its own.** The title fades
+Built (SPEC.md 126.3.3): **a clip that joins by a FADE, or that goes to
+black itself, may have colours of its own.** The title fades
 out through the engine's fade, so it could pick its own palette
 automatically; 01-Opening fades to black itself, so it could too (or by a
 setting). Victory into its ending does NOT fade and keeps the shared

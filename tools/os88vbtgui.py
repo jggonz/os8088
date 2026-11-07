@@ -1902,6 +1902,24 @@ class IdleTab(object):
 
 # --- the Clips tab (4.3, 10.2) --------------------------------------------------------
 
+PAL_LABELS = (("auto", "Automatic"), ("own", "Its own palette"),
+              ("shared", "The battle's shared colours"))
+
+
+def pal_note(proj, cid, mode):
+    """What the Clips tab says under a clip's colours (126.3.3)"""
+    if mode == "own":
+        return ("Every colour its own, loaded as it starts. Over a picture "
+                "that is not black, or with the menu up, the colours on the "
+                "glass change as it starts and as it ends.")
+    if mode == "shared":
+        return "The battle's shared colours, as the idle loop's."
+    return ("Its own palette where it starts and ends on black over the "
+            "whole screen - the title left by the fade, a full-screen "
+            "opening that ends black, an end loop an ending fades to - "
+            "else the shared colours. The build says which.")
+
+
 class ClipsTab(object):
     """A clip: its source and range, whether the battle ends on it, its
     ANCHORS and EXIT against the idle loop's filmstrip (each frame's score
@@ -1958,6 +1976,15 @@ class ClipsTab(object):
         ttk.Checkbutton(left, text="The battle ends on it (held, no exit)",
                         variable=self.ends, command=self._ends
                         ).pack(anchor="w")
+        ttk.Label(left, text="Its colours on VGA").pack(anchor="w",
+                                                        pady=(6, 0))
+        self.palv = tk.StringVar(value=PAL_LABELS[0][1])     # (126.3.3)
+        pc = ttk.Combobox(left, textvariable=self.palv, state="readonly",
+                          width=30, values=[l for _, l in PAL_LABELS])
+        pc.pack(anchor="w")
+        pc.bind("<<ComboboxSelected>>", lambda e: self._palmode())
+        self.pal_l = ttk.Label(left, text="", wraplength=220)
+        self.pal_l.pack(anchor="w")
         ttk.Button(left, text="Recommend", command=self._show_rec
                    ).pack(anchor="w", pady=(8, 0))
         self.rec_l = ttk.Label(left, text="", wraplength=200)
@@ -2086,6 +2113,9 @@ class ClipsTab(object):
         self.cin.set(c["in"])
         self.cout.set(c["out"])
         self.ends.set(1 if c.get("ends") else 0)
+        pm = c.get("palette") or "auto"
+        self.palv.set(dict(PAL_LABELS)[pm])
+        self.pal_l.config(text=pal_note(self.app.proj, cid, pm))
         self.scrub.config(to=c["out"] - c["in"])
         n = c["out"] - c["in"]
         if not self.oto.get() or self.oto.get() > n:
@@ -2385,6 +2415,17 @@ class ClipsTab(object):
     def _ends(self):
         if self.cid():
             self.app.edit("set_ends", self.cid(), self.ends.get())
+
+    def _palmode(self):
+        """The clip's colours on VGA (126.3.3): automatic, its own palette,
+        or the battle's shared colours"""
+        cid = self.cid()
+        if not cid:
+            return
+        m = dict((l, k) for k, l in PAL_LABELS).get(self.palv.get(), "auto")
+        if m != (self.app.proj.d["clips"][cid].get("palette") or "auto"):
+            self.app.edit("set", ("clips", cid, "palette"),
+                          None if m == "auto" else m)
 
     def _show_rec(self):
         self._pick()
@@ -3516,6 +3557,15 @@ def vga_colours(path, k=None, clip=None):
     has = bool(c is not None and c["own"])
     if has:
         pal[k - slots:] = c["own"][:slots]
+    whole = bool(c is not None and c["flags"] & B.CF_PAL)   # EVERY COLOUR
+    if whole:                       # ITS OWN (126.3.3): the load its first
+        r0 = (B.Bundle.entry(bd, c, c["anch"][0][1]) if c["anch"] else
+              bd.stream(c)[0])[B.REC_HDR:]  # record (an action's: an entry)
+        if r0 and r0[0] & B.DAC_SUB:        # carries, in index order
+            for j in range(r0[0] & 0x7F):
+                e = r0[1 + 4 * j:5 + 4 * j]
+                if e[0] in codes:
+                    pal[codes.index(e[0])] = tuple(e[1:4])
     drawn = (0, 3) if bd.vlayer else (0, 1, 3)  # (the band's roles VGA
     #   draws: its ground and white - red is a grey-out, 126.5 - and the
     #   plain look's rules without a picture; red's role pointed at the
@@ -3523,11 +3573,12 @@ def vga_colours(path, k=None, clip=None):
     role = {v: r for r, v in enumerate(bmap) if r in drawn}
     out = dict(cols=[dict(rgb=tuple((v << 2) | (v >> 4) for v in pal[i]),
                           value=codes[i],
-                          band=role.get(codes[i]) if i < k - slots else None,
-                          own=i >= k - slots,
-                          free=i >= k - slots and not has)
+                          band=role.get(codes[i]) if i < k - slots and
+                          not whole else None,
+                          own=i >= k - slots or (whole and i > 0),
+                          free=i >= k - slots and not has and not whole)
                      for i in range(k)], usage=None, clip=None,
-               slots=slots, has_own=has)
+               slots=slots, has_own=has, whole=whole)
     if c is not None:
         rows = B.REND.rows
         surf = B.REND.blank()
@@ -3585,53 +3636,47 @@ XMS_LABELS = ((0, "none (an XT)"), (896, "896 KB (1 MB)"),
 
 
 def cache_lines(holds, nclips):
-    """What the CLIP CACHE (126.4.6) holds with each pool - a 286's common
-    1 and 3 MB, and the target's own (XMS on the target, the Build tab)"""
+    """What the CLIP CACHE (126.4.6) holds with each pool - a 1 MB and a
+    4 MB machine's, and the target's own (XMS on the target, the Build
+    tab): a line each, short (the palette is beside them)"""
     out = []
     for pool, hh in sorted(holds.items(), key=lambda x: int(x[0])):
         c = hh.get("cache")
-        who = "With %s of XMS%s: " % (
-            "%d MB" % (int(pool) // 1024) if int(pool) % 1024 == 0 else
-            "%d KB" % int(pool), " (the target's)" if hh.get("target") else "")
+        who = "XMS %d KB%s: " % (int(pool), " (the target's)"
+                                 if hh.get("target") else "")
         if c is None:
-            out.append(who + "no cache (no room for the idle loop and 256 KB "
-                       "of clips) - %d KB held, the hold order's first of its "
-                       "%d, copied out" % (hh["kb"], hh["order_kb"]))
+            out.append(who + "no cache; %d KB of the hold order copied"
+                       % hh["kb"])
         elif c["whole"]:
-            out.append(who + "the whole bundle cached - every clip played "
-                       "from XMS, none read twice")
+            out.append(who + "the whole bundle cached")
         else:
-            out.append(who + "%d KB of clips cached at once (the largest "
-                       "%d KB), %d of %d clips fit%s; the idle loop in XMS%s" % (
-                           c["room"] // 1024, c["big"] // 1024, len(c["fits"]),
-                           nclips, "" if len(c["fits"]) == nclips else
-                           " - the rest stream through a ring",
-                           ", the music too" if c["music"] else ""))
+            out.append(who + "%d KB of clips at once, %d of %d fit%s" % (
+                c["room"] // 1024, len(c["fits"]), nclips,
+                ", the music too" if c["music"] else ""))
     return out
 
 
 def memory_lines(mem):
     kb = lambda n: (n + 1023) // 1024
-    out = ["The resident claim, held while the window is open: %d KB" %
-           kb(mem["resident"])]
-    out += ["    %-24s %4d KB" % (n, kb(b)) for n, b in mem["parts"]]
-    out.append("The card's ring: %d KB" % kb(mem["card"]))
+    short = {"the block (its tables)": "tables", "the menu's sounds":
+             "menu sounds", "the music's ring": "music ring",
+             "the music, all of it": "music", "the idle loop": "idle loop",
+             "the band's pictures": "band pictures",
+             "the band's two buffers": "band buffers"}
+    out = ["Resident %d KB: %s" % (kb(mem["resident"]), ", ".join(
+        "%s %d" % (short.get(n, n), kb(b)) for n, b in mem["parts"]))]
+    ring = "%d KB" % kb(mem["ring"]) if mem["ring"] else \
+        "NOT ENOUGH - Play would say Not enough memory"
     if mem.get("cache"):
-        out.append("Two clip rings, only for a clip the cache has no slot "
-                   "for: %s, and the least beside it (guards %d KB)" % (
-                       "%d KB" % kb(mem["ring"]) if mem["ring"] else
-                       "NOT ENOUGH - Play would say Not enough memory",
-                       kb(mem.get("guard", 0))))
+        out.append("Card's ring %d KB; rings %s and the least, only for a "
+                   "clip the cache has no slot for" % (kb(mem["card"]), ring))
         return out
-    out.append("Two clip rings, a play's, out of what is left: %s%s" % (
-        "%d KB each" % kb(mem["ring"]) if mem["ring"] else
-        "NOT ENOUGH - Play would say Not enough memory",
-        " (guards %d KB)" % kb(mem["guard"]) if mem.get("guard") else ""))
+    out.append("Card's ring %d KB; two clip rings, %s each%s" % (
+        kb(mem["card"]), ring, " (guards %d KB)" % kb(mem["guard"])
+        if mem.get("guard") else ""))
     if mem["ring"] and mem["ring"] < 96 * 1024:     # (VBATTLE-RAM-PLAN R4:
-        out.append("    SMALL: a ring is what rides out a clip faster "
-                   "than the disk, and the build holds clips to it - "
-                   "a smaller resident claim (the idle loop, the music, "
-                   "the band's pictures) is a larger ring")   # told so)
+        out.append("  SMALL: a smaller resident claim (the idle loop, the "
+                   "music, the band's pictures) is a larger ring")
     return out
 
 
@@ -3673,7 +3718,7 @@ class BuildTab(object):
         cf = ttk.LabelFrame(f, text="What is wrong (ERROR stops a build; "
                             "double-click to go there)", padding=4)
         cf.pack(fill="x", pady=4)
-        self.chk = ttk.Treeview(cf, columns=("where", "text"), height=5,
+        self.chk = ttk.Treeview(cf, columns=("where", "text"), height=3,
                                 selectmode="browse")
         self.chk.heading("#0", text="")
         self.chk.heading("where", text="Where")
@@ -3710,14 +3755,13 @@ class BuildTab(object):
         self.tv.pack(fill="x")
         mf = ttk.Frame(bf)
         mf.pack(fill="x")
-        self.mem_l = ttk.Label(mf, text="", font=("TkFixedFont", 9),
-                               justify="left")
+        self.mem_l = ttk.Label(mf, text="", justify="left", wraplength=520)
         self.mem_l.pack(side="left", anchor="n", pady=4)
         self.tv.bind("<<TreeviewSelect>>", lambda e: self._pal())
         pf = ttk.LabelFrame(mf, text="VGA's colours", padding=4)
         pf.pack(side="left", anchor="n", padx=12, pady=4)
         self.pal_l = ttk.Label(pf, text="Build a VGA rendition to see its "
-                               "colours.", wraplength=16 * 33)
+                               "colours.", wraplength=16 * 36)
         self.pal_l.pack(anchor="w")
         self.pal_c = tk.Canvas(pf, height=96, width=16 * 36 + 4,
                                highlightthickness=0)
@@ -3828,19 +3872,17 @@ class BuildTab(object):
             self.pal_l.config(text="Cannot read %s: %s" % (rs[0]["out"], e))
             return
         sl = v.get("slots", 0)
-        self.pal_l.config(text=(
-            "The battle's %d: %d shared by every clip (\"menu\" marks the "
-            "ones the band draws)%s. " % (len(v["cols"]), len(v["cols"]) - sl,
-                                  ", and %d each clip's OWN, loaded as it "
-                                  "starts%s" % (sl, " - %s's" % name if
-                                                v.get("has_own") else
-                                                " (the idle loop and the "
-                                                "scenes use the shared "
-                                                "alone)")
-                                  if sl else "")) + (
-            "Bars: each one's share of %s's pixels, all its frames." %
-            (name or v["clip"]) if v["usage"] else
-            "Click a clip above to see what it draws with."))
+        if v.get("whole"):
+            head = "%s's OWN %d, every colour, loaded over black. " % (
+                name, len(v["cols"]))
+        else:
+            head = "The battle's %d (\"menu\": the band's)%s. " % (
+                len(v["cols"]), ", the last %d %s" % (
+                    sl, "%s's own" % name if v.get("has_own") else
+                    "each clip's own") if sl else "")
+        self.pal_l.config(text=head + (
+            "Bars: %s's pixels, all its frames." % (name or v["clip"])
+            if v["usage"] else "Click a clip for what it draws with."))
         top = max(v["usage"] or [0]) or 1.0
         for i, x in enumerate(v["cols"]):
             x0 = 2 + i * 36
@@ -3872,9 +3914,11 @@ class BuildTab(object):
         self.rendv.set(pick[0]["kind"])
         res = dict(res, out=pick[0]["out"], bytes=pick[0]["bytes"],
                    budget=pick[0]["budget"], capped=pick[0].get("capped") or {},
-                   cadenced=pick[0].get("cadenced") or 0)
+                   cadenced=pick[0].get("cadenced") or 0,
+                   own_pal=pick[0].get("own_pal") or [])
         bud = self.bud = res["budget"]
-        self.out_l.config(text="%s - %d KB" % (res["out"], res["bytes"] // 1024))
+        self.out_l.config(text="%s - %d KB" % (os.path.basename(res["out"]),
+                                               res["bytes"] // 1024))
         self.tv.delete(*self.tv.get_children())
         for vals, tag in budget_rows(bud):
             self.tv.insert("", "end", text=vals[0], values=vals[1:],
@@ -3894,11 +3938,13 @@ class BuildTab(object):
                 res["capped"].items())) if res["capped"] else "") + (
             "\n%d capture(s) read by the frames their footage had, not by "
             "time (Captures by their cadence)." % res["cadenced"]
-            if res["cadenced"] else ""))
+            if res["cadenced"] else "") + (
+            "\nTheir own palette (VGA, every colour): %s." % "; ".join(
+                "%s - %s" % tuple(x) for x in res["own_pal"])
+            if res["own_pal"] else ""))
         hl = cache_lines(bud.get("hold", {}), len(bud["clips"]))
         self.mem_l.config(text="\n".join(memory_lines(bud["memory"]) + hl + [
-            "(on a 640 KB machine: %d KB free to the engine, measured on "
-            "MartyPC's XT; 86Box's 5150 left about 20 KB more)" %
+            "(a 640 KB machine: %d KB free to the engine, measured)" %
             (bud["memory"]["free"] // 1024)]))
         self._pal()
 

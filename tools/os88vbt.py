@@ -84,6 +84,9 @@ CF_LOOP = 32        # a title or end loop: record 0 from black, the last the
                     # seam onto frame 0, records 1.. round until a key
 CF_ENTER = 64       # opening 0, entered at the title loop's frames (anchors)
 CF_NOMUS = 128      # an end clip played once: no music after its own sound
+CF_PAL = 256        # vga4: EVERY colour its own, loaded over black by its
+#                     first record (126.3.3) - the builder's and its
+#                     verifier's; the engine takes the loads as they come
 ENDING_HOW = {"hold": 0, "fade": 1, "join": 2, "again": 3}
 # AFTER AN ENDING'S CLIP THAT PLAYS ONCE (126.3.1, header 346/347): hold its
 # last frame, fade and play again from the title, or JOIN the title - its
@@ -796,12 +799,13 @@ def build(b):
                 at = b.music_at
                 seam_snd = (b"\x80" * max(0, spf - at) +
                             mb[max(0, at - spf):at])[:spf]
-            recs.append(rec(prev, surface_of(full_of(b.idle[exit_to]),
-                                             REND.full), rw, seam_snd))
+            recs.append(with_dac(rec(prev, surface_of(full_of(
+                b.idle[exit_to]), REND.full), rw, seam_snd), b.seam_dac))
         scr = o["frames"][-1] if not fr else fr[-1]
         scr = full_of(scr)
         wasfull = bool(o.get("full"))
         regions.append(with_entries(ents, recs, o["name"]))
+        flags |= CF_PAL if o.get("iso") else 0
         clip_rows.append(dict(name=o["name"], nrec=len(recs), flags=flags,
                               exit=exit_to, anch=anch, esz=len(ents) >> 4,
                               dac=o.get("dac")))
@@ -848,8 +852,10 @@ def build(b):
         exit_to = c.get("exit", 0)
         flags = CF_ENDS if c.get("ends") else 0
         if c.get("joins"):
-            flags |= CF_JOINS
-            recs.append(rec(last, idle_s[exit_to], rows))
+            flags |= CF_JOINS                   # (a clip with every colour
+            recs.append(with_dac(rec(last, idle_s[exit_to], rows),  # its
+                                 b.seam_dac if c.get("iso") else None))  # own
+            #                     puts the shared back as it seams: 126.3.3)
         elif c.get("join_loop") is not None:    # an ending that JOINS its
             if c.get("join_full"):                  # end clip: the seam onto
                 fl = bytearray(surface_of(full_of(c["frames"][-1]),
@@ -861,6 +867,7 @@ def build(b):
             else:                                   # whole screen when it
                 recs.append(with_dac(rec(last, surface_of(  # is full screen
                     c["join_loop"], rows), rows), c.get("join_dac")))
+        flags |= CF_PAL if c.get("iso") else 0
         regions.append(with_entries(ents, recs, c["name"]))
         clip_rows.append(dict(name=c["name"], nrec=len(recs), flags=flags,
                               exit=exit_to, anch=anch, esz=len(ents) >> 4,
@@ -900,6 +907,7 @@ def build(b):
             raise ValueError("loop %s: no room to pad its lap" % lp["name"])
         flags = CF_LOOP | (CF_FULL if full else 0) | \
             (CF_OWNSND if lp.get("sound") is not None else 0)
+        flags |= CF_PAL if lp.get("iso") else 0
         regions.append(stream(recs))
         clip_rows.append(dict(name=lp["name"], nrec=len(recs), flags=flags,
                               exit=0, anch=[], lap=(len(recs[0]),
@@ -934,6 +942,7 @@ def build(b):
             (CF_OWNSND if lp.get("sound") is not None else 0) | \
             (CF_NOMUS if lp.get("sound") is not None and
              not lp.get("music_after") else 0)
+        flags |= CF_PAL if lp.get("iso") else 0
         regions.append(stream(recs))
         clip_rows.append(dict(name=lp["name"], nrec=len(recs), flags=flags,
                               exit=0, anch=[], dac=lp.get("dac")))
@@ -1053,6 +1062,9 @@ def build(b):
         struct.pack_into("<IH", h, 96 + 6 * i, o, ln)
         h[192 + 8 * i:200 + 8 * i] = nm.upper().encode()[:8].ljust(8, b" ")
 
+    own_vals = set()                # (the own slots' values, 126.3.2)
+    if b.vga and b.vga[1]:
+        own_vals = set(REND.codes[b.vga[0] - b.vga[1]:b.vga[0]].tolist())
     ct = bytearray(SCRIPT_AT - CLIP_TAB)
     if len(clip_rows) * CLIP_SZ > len(ct):
         raise ValueError("%d clips" % len(clip_rows))
@@ -1064,10 +1076,13 @@ def build(b):
         if c.get("lap"):            # a loop's lap: where, and its 4 KBs
             struct.pack_into("<IH", ct, at + 18, *c["lap"])
         struct.pack_into("<H", ct, at + 32, c.get("esz", 0))  # its entries
-        if c.get("dac"):            # vga4: its own colours (126.3.2; for a
-            ct[at + 34] = len(c["dac"])     # reader - the engine takes them
-            ct[at + 35:at + 35 + 3 * len(c["dac"])] = bytes(  # from the
-                v for e in c["dac"] for v in e[1:])     # records' loads)
+        own = [e for e in c.get("dac") or () if e[0] in own_vals] \
+            if not c["flags"] & CF_PAL else []
+        if own:                     # vga4: its own colours (126.3.2; for a
+            ct[at + 34] = len(own)  # reader - the engine takes them from
+            ct[at + 35:at + 35 + 3 * len(own)] = bytes(     # the records'
+                v for e in own for v in e[1:])  # loads); a whole palette's
+            #                         (126.3.3) is the flag, and its loads
         ct[at + 24:at + 32] = name8(c["name"])
 
     at = len(h) + len(ct) + len(b.rules)    # THE ENDINGS' LINES (126.3.1),
@@ -1255,7 +1270,7 @@ def verify(data, quiet=False):
         """Screen S after a record of clip C (None: the idle loop): a pixel
         in an own slot only under C's own colours, loaded - a load missed or
         out of place draws a clip in another's (126.3.2)"""
-        if not own_v:
+        if not own_v or (c is not None and c["flags"] & CF_PAL):
             return
         on = np.isin(REND.pixels(s), own_v)
         if not on.any():
@@ -1354,6 +1369,36 @@ def verify(data, quiet=False):
             idle[i] = cv
             if lap == 1:            # (the screens, for a test's glass:
                 LAST_IDLE[i] = bytes(scr[:16384])   # tests/vbthold.py)
+    # EVERY COLOUR ITS OWN (126.3.3): such a clip's first record loads all
+    # but black, and - one being in the battle - every opening's and loop's
+    # first record, and the last opening's seam onto the idle loop, put
+    # their whole palette back: a load missed is a clip in another's colours
+    if b.vga and any(c["flags"] & CF_PAL for c in b.clips):
+        def loads(r):
+            body = r[REC_HDR:]
+            return body[0] & 0x7F if body and body[0] & DAC_SUB else 0
+        k = b.vga[0]
+        for c in b.clips:
+            rs = b.stream(c)
+            want = c["flags"] & (CF_PAL | CF_OPENING | CF_LOOP) and \
+                not c["flags"] & CF_ENTER
+            if c["flags"] & CF_PAL and c["anch"]:   # (an action's: its
+                for _, o in c["anch"]:              # ENTRIES draw frame 0)
+                    if loads(b.entry(c, o)) != k - 1:
+                        raise ValueError("%s's entry at %d loads %d colours,"
+                                         " not its whole palette's %d "
+                                         "(126.3.3)" % (c["name"], o, loads(
+                                             b.entry(c, o)), k - 1))
+                want = False
+            if want and loads(rs[0]) != k - 1:
+                raise ValueError("%s's first record loads %d colours, not "
+                                 "its whole palette's %d (126.3.3)" % (
+                                     c["name"], loads(rs[0]), k - 1))
+            if c["flags"] & (CF_OPENING | CF_PAL) and \
+                    c["flags"] & CF_JOINS and loads(rs[-1]) != k - 1:
+                raise ValueError("%s's seam onto the idle loop does not put "
+                                 "the shared colours back (126.3.3)"
+                                 % c["name"])
     paths = 0
     vic, dft = b.rules.victory, b.rules.defeat
     ending_name = {"victory": b.clips[vic]["name"] if vic not in (None, NO_SFX)
@@ -1468,11 +1513,21 @@ def battle_of(proj, progress=None, kind="cga4"):
     b.rend = Rend(kind, rows_, pal, t.get("vga_bands", VGA_BANDS), codes,
                   bmap)
 
-    def dac_of(cid):
-        """Stream CID's own colours as a palette load: (value, r, g, b)"""
-        if not slots:
+    iso = set(plan.get("iso", {})) if kind == "vga4" else set()  # (126.3.3)
+
+    def dac_of(cid, follow=False):
+        """Stream CID's own colours as a palette load: (value, r, g, b) - or,
+        a clip with EVERY colour its own (126.3.3), or with FOLLOW one a
+        stream that may come after such a clip (an opening, a loop), its
+        whole palette but black: loaded over black, or over the same values"""
+        if kind != "vga4":
             return None
         cp = A_.clip_palette(proj, cid)
+        if cid in iso or (follow and iso):
+            return [(codes[i],) + tuple(v >> 2 for v in cp[i])
+                    for i in range(1, len(codes))]
+        if not slots:
+            return None
         if len(cp) < len(codes):    # (the shared alone: the idle loop, a
             return None             # scene - nothing to load)
         sh = len(cp) - slots
@@ -1480,6 +1535,8 @@ def battle_of(proj, progress=None, kind="cga4"):
                 for j in range(slots)]
 
     b.dac_base = dac_of("idle")
+    b.seam_dac = dac_of("idle", True) if iso else None  # (the last opening's
+    #                   seam onto the idle loop puts the shared back, 126.3.3)
     b.xms_kb = t.get("xms_kb") or 0     # (126.4.6: the cache's pool)
     if t.get("burst_cap", True):    # THE READER'S MODEL (126.4.1): the
         import os88venc as VE_      # profile's disk at three quarters,
@@ -1499,7 +1556,8 @@ def battle_of(proj, progress=None, kind="cga4"):
         b.openings.append(dict(name=o["clip"], frames=A.frames_of(
             proj, o["clip"], pg, kind, full=full),
             sound=b.sfx[o["sound"]] if o.get("sound") else None,
-            exit=c["exit"], full=full, dac=dac_of(o["clip"])))
+            exit=c["exit"], full=full, dac=dac_of(o["clip"], True),
+            iso=o["clip"] in iso))
     # a clip only a loop or the title's way out plays is not an action's
     tt = d.get("title") or {}
     loops_only = {tt.get("clip"), tt.get("leave")} | {
@@ -1525,6 +1583,7 @@ def battle_of(proj, progress=None, kind="cga4"):
         joins = c["joins"] and cid not in ending_clips
         fr = A.frames_of(proj, cid, pg, kind, seed=True)
         b.clips.append(dict(name=cid, frames=fr, dac=dac_of(cid),
+                            iso=cid in iso,
                             # (THE ENEMY'S VICTORY AND DEFEAT CLIPS are
                             # endings, whatever their own flags: they end
                             # the battle and never go back to the idle
@@ -1562,7 +1621,8 @@ def battle_of(proj, progress=None, kind="cga4"):
         if lp.get("sound"):
             x = b.sfx[lp["sound"]]
         return dict(name=("%s%d" % (tag, lp["loop"][0]))[:8], frames=fr,
-                    sound=x, dac=dac_of(lp["clip"]), src=(lp["clip"], tuple(lp["loop"]),
+                    sound=x, dac=dac_of(lp["clip"], True),
+                    iso=lp["clip"] in iso, src=(lp["clip"], tuple(lp["loop"]),
                                   lp.get("sound"), c["in"]))
     t = d.get("title")
     if t:
@@ -1637,6 +1697,7 @@ def battle_of(proj, progress=None, kind="cga4"):
                 for kk in ("dac", "join_dac"):
                     if x.get(kk):
                         x[kk] = re(x[kk])
+        b.seam_dac = re(b.seam_dac)
     b.images, places = images_of(proj, (
         list(A_.vga_plan(proj)["shared"]), codes[:len(codes) - slots])
         if kind == "vga4" else None)
@@ -2111,12 +2172,17 @@ def cmd_build(a):
             f.write(data)
         bud = A.budget(proj, data)
         cad = sorted(set(A.CADENCED.values()))  # (captures read by their
+        own = [(c, why) for c, (on, why) in sorted(A.own_palettes(
+            proj).items()) if on] if kind == "vga4" else []     # (126.3.3)
         res.append(dict(kind=kind, out=out, bytes=len(data), budget=bud,
                         capped=dict(LAST_CAPPED), cadenced=len(  # cadence)
-                            A.CADENCED)))
+                            A.CADENCED), own_pal=own))
         if not a.json:
             print("%s (%s): %d bytes; idle loop %d bytes, entries %d" % (
                 out, kind, len(data), bud["idle_bytes"], bud["entries"]))
+            if own:
+                print("  every colour their own (126.3.3): %s" % "; ".join(
+                    "%s (%s)" % x for x in own))
             if cad:
                 print("  %d capture(s) read by their cadence (126.2.5): %s"
                       % (len(A.CADENCED), ", ".join("%d fps of %d" % x

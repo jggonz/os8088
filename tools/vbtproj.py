@@ -44,8 +44,10 @@ A project file (version 1):
      "idle":     {"source", "loop": [a, b]} - source frames a..b-1, looped,
      "clips":    {id: {"source", "in", "out", "anchors": [k...], "exit",
                        "joins", "ends", "cues": [{"frame", "sound",
-                       "level", "until"?}]}} - a cue with "until" stops at
-                       that frame of the clip,
+                       "level", "until"?}], "palette"?: "auto" (absent) |
+                       "own" | "shared" - on VGA every colour its own,
+                       loaded over black (SPEC.md 126.3.3)}} - a cue with
+                       "until" stops at that frame of the clip,
      "openings": [{"clip", "sound", "full"?}] - in turn; the last joins the
                  loop; "full" (absent: false) plays it over the WHOLE screen,
                  the menu not yet there - the full ones first, the last with
@@ -944,6 +946,8 @@ class Project:
                 err(w, "no source %s" % c["source"])
             if c["out"] < c["in"]:
                 err(w, "out before in")
+            if c.get("palette") not in (None, "auto", "own", "shared"):
+                err(w, "palette %r: auto, own or shared" % (c["palette"],))
             opening = any(o["clip"] == cid for o in d["openings"]) or \
                 cid in looped
             # (an anchor is where an ACTION's clip joins from the idle loop:

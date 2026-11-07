@@ -84,7 +84,9 @@ def bundle(tmp, bands, mp4, gray=False):
     c = p.d["clips"]["title"]
     c["source"], c["in"], c["out"] = "life", 0, 47
     p.d["title"]["loop"] = [0, 47]
-    p.save()
+    c["palette"] = "shared"     # (this row's subject is the SHARED colours'
+    p.save()                    # values: a title the fade leaves is its own
+    #                             palette by default, SPEC.md 126.3.3)
     keep = B.vga_order
     if gray:                            # (darkest first in Gray order, as
         B.vga_order = lambda st, c, fixed=(0,): list(c)     # before)

@@ -242721,6 +242721,52 @@ against the engine's own buffer converted by the host, the idle frames,
 and victory to its end loop. Measured on the owner's H3 battle: CGA4 3.0
 MB, VGA4 at eight colours 4.0 MB, Hercules 4.1 MB.
 
+#### 126.3.3 A clip's own palette: every colour its own, over black
+
+**A clip that starts and ends on BLACK over the whole screen may have all
+K colours its own** (the owner, 2026-11-07: "the title fades via our
+fadeout, and so could pick its own palette automatically; 01-Opening
+fades to black itself"). Its colours are loaded over a black screen and
+the next stream's are put back over a black screen, so nothing on the
+glass changes colour; the band, drawn in the shared colours, is never up
+while it plays. The engine is unchanged: a load sub-record (126.3.2) takes
+any number of entries, and the fade draws colour 0, black under every
+palette.
+
+- **Automatic** (`vbtana.own_auto`; a clip's `palette`, absent "auto"):
+  the TITLE when the fade leaves it (not a leaving clip); a FULL-SCREEN
+  OPENING entered from black - the first after the title's fade, or after
+  an opening whose last frame is black - whose own last frame is black
+  (`DARK_MEAN` 10, 98% under `DARK_HI` 32); an END LOOP an ending FADES
+  to over the whole screen (not "then": "join"). Never an action, an end
+  clip an action joins, the title's leaving clip, or an opening with the
+  menu (the last opening is one: it joins the idle loop with the menu
+  up). The Clips tab's "Its colours on VGA": Automatic, Its own palette,
+  The battle's shared colours; forced on a clip the screen is not black
+  around, its colours change on the glass as it starts and ends.
+- **Its palette** (`vbtana.iso_plan`): K colours chosen over its own
+  frames alone, black first; the shared are chosen over the other streams
+  without it (`vga_streams`).
+- **The loads** (`os88vbt.dac_of`): its first record - an action's every
+  entry - loads all K but black; and, one such clip being in the battle,
+  EVERY opening's and loop's first record loads its whole palette too, and
+  the last opening's seam onto the idle loop (and a forced clip's) the
+  shared - over black, or the same values over themselves.
+- **The flag** `CF_PAL` (clip flags 0100h): the builder's and its
+  verifier's; the clip table's own colours stay the slots' (126.3.2).
+  `verify` refuses a CF_PAL clip whose first record (or entry) loads fewer
+  than K - 1, and, with one in the battle, an opening or loop that does
+  not load its whole palette or a seam that does not put the shared back.
+- The build's report and the Build tab name each clip with its own and
+  why; the palette viewer shows such a clip's own colours.
+
+`vbtownpal`: the demo with colour bars for its title, a full-screen
+opening fading to black and an action on video - the title and the
+opening automatic, the action not, each first record 15 colours, the
+title's own 0.6 against the shared's 39 (CIELAB, from its footage), the
+choices honoured, an opening with the menu never; broken on purpose (the
+seam's load out) the build refuses.
+
 ### 126.4 Reading, and memory
 
 **Three claims** (an owner may hold eight, `MEM_OWNER_MAX`, §50):
