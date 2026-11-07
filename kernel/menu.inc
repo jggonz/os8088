@@ -500,8 +500,11 @@ menu_relayout:
     jnz .app
     mov si, menu_loc_set        ; no window owns the bar: Locator does, and
     mov [menu_set], si          ; its set is kernel data - so its name is
-    mov si, [cs:si + AM_NAME]   ; read through CS and .kseg below makes the
-    jmp short .kseg             ; label's segment ours (it is never 0)
+    mov si, [si + AM_NAME]      ; read through DS - the kernel's here, as the
+    jmp short .kseg             ; `mov bx, [menu_win]` above already assumes;
+                                ; the `cs:` it wore was a byte (kernel size
+                                ; pass 18) - and .kseg below makes the
+                                ; label's segment ours (it is never 0)
 
 .app:
     mov di, bx                  ; the owner's segment, once, for every read
@@ -540,8 +543,11 @@ menu_relayout:
     jnz .have_name
     mov si, menu_loc_name
 .kseg:                          ; ...the ONE place the three kernel-data
-    mov word [menu_seg], 0      ; names set the segment (kernel size pass 9:
-    KES                         ; it was written out three times)
+    and word [menu_seg], 0      ; names set the segment (kernel size pass 9:
+    KES                         ; it was written out three times). `and`, -1:
+                                ; no flag survives to a reader - the cell
+                                ; copy's `inc cx` below is the next to write
+                                ; them (kernel size pass 18)
 .have_name:
     mov [menu_namep], si
 
@@ -721,7 +727,9 @@ menu_relayout:
                                 ; number of cells wide, like the app's own
                                 ; (SPEC.md 12.9), and its pen x comes back
                                 ; out of MB_XL as MENU_NAME_X exactly
-    mov word [ss:di + MB_SEG], 0   ; every string it names is kernel data
+    and word [ss:di + MB_SEG], 0   ; every string it names is kernel data
+                                ; (`and`, -1: `inc word` below sets the
+                                ; flags - kernel size pass 18)
     mov ax, [menu_nbar]
     mov [menu_abcell], ax
     inc word [menu_nbar]
@@ -1359,36 +1367,6 @@ menu_bemit:
     ret
 
 ; -----------------------------------------------------------------------------
-; menu_bent - compose bar cell BX's title at its own pen x
-; in:  BX = bar index, DI = the running cell index
-; out: DI advanced
-; clobbers: DI, AX, CX, SI, ES (flags). Its two calls are both menu_bt_raw's,
-;           which banked all four at its entry and reads none of them across
-;           a call - the `.cell` walk keeps only BX, which this never writes
-;           (kernel size pass 17: the five pushes and pops it made, -10)
-; -----------------------------------------------------------------------------
-menu_bent:
-    mov al, MB_ENTSZ            ; `mul bl` is byte by byte, so AL alone
-    mul bl                      ; needs loading. BX <= MENU_BARMAX, so BL is
-    add ax, menu_bar            ; the whole index; the base goes on before the
-    xchg ax, si                 ; one-byte move into SI (size pass 10: 2).
-                                ; (menu_bar is .lowbss: read through SS)
-    cmp word [ss:si + MB_TITLE], 0
-    je menu_bpadc.d             ; the logo cell has no text (that `ret`)
-    mov ax, [ss:si + MB_XL]
-    add ax, MENU_TITLE_PAD / 2  ; the cell's pen x (SPEC.md 12.2: no MB_TX)
-    call menu_bpad              ; spaces up to this cell's pen (SI it keeps)
-    mov cx, [ss:si + MB_SEG]
-    mov si, [ss:si + MB_TITLE]  ; read last, into the register it is used
-    KES                         ; from: no AX bank (pass 14: 2 bytes)
-                                ; this cell's own segment (SPEC.md 12.2)
-    or cx, cx
-    jz .seg
-    mov es, cx
-.seg:
-    jmp short menu_bstr         ; a tail: its `ret` is ours
-
-; -----------------------------------------------------------------------------
 ; menu_bpad  - spaces up to absolute x AX  |  menu_bpadc - up to cell index AX
 ; menu_bstr  - a NUL string at ES:SI       |  menu_bput  - one cell, AL
 ; in:  DI = the running cell index
@@ -1419,7 +1397,43 @@ menu_bpadc:
                                 ; any caller, so the clamp and its re-read
                                 ; went (7 bytes; SPEC.md 59.7.2)
 
+; -----------------------------------------------------------------------------
+; menu_bent - compose bar cell BX's title at its own pen x
+; in:  BX = bar index, DI = the running cell index
+; out: DI advanced
+; clobbers: DI, AX, CX, SI, ES (flags). Its two calls are both menu_bt_raw's,
+;           which banked all four at its entry and reads none of them across
+;           a call - the `.cell` walk keeps only BX, which this never writes
+;           (kernel size pass 17: the five pushes and pops it made, -10)
+; -----------------------------------------------------------------------------
+menu_bent:
+    mov al, MB_ENTSZ            ; `mul bl` is byte by byte, so AL alone
+    mul bl                      ; needs loading. BX <= MENU_BARMAX, so BL is
+    add ax, menu_bar            ; the whole index; the base goes on before the
+    xchg ax, si                 ; one-byte move into SI (size pass 10: 2).
+                                ; (menu_bar is .lowbss: read through SS)
+    cmp word [ss:si + MB_TITLE], 0
+    je menu_bpadc.d             ; the logo cell has no text (that `ret`,
+                                ; just above)
+    mov ax, [ss:si + MB_XL]
+    add ax, MENU_TITLE_PAD / 2  ; the cell's pen x (SPEC.md 12.2: no MB_TX)
+    call menu_bpad              ; spaces up to this cell's pen (SI it keeps)
+    mov cx, [ss:si + MB_SEG]
+    mov si, [ss:si + MB_TITLE]  ; read last, into the register it is used
+    KES                         ; from: no AX bank (pass 14: 2 bytes)
+                                ; this cell's own segment (SPEC.md 12.2)
+    or cx, cx
+    jz .seg
+    mov es, cx
+.seg:                           ; ...and FALLS INTO menu_bstr, a tail whose
+                                ; `ret` is ours: it sits after the pads now,
+                                ; where its `jmp short` was (kernel size pass
+                                ; 18, -2)
+
 menu_bstr:
+%if menu_bstr - menu_bent.seg != 0
+  %error "menu_bent falls into menu_bstr: nothing may sit between them"
+%endif
 .n:
     es lodsb                    ; AX and SI clobbered: its two callers (the
     or al, al                   ; bare name and menu_bent's tail) read
@@ -1628,8 +1642,10 @@ menu_popup:
                                 ; to fit on the screen (menu_relayout's rule),
                                 ; and how many fit depends on the adapter:
                                 ; 16 at 480 or 348 rows, 11 at CGA's 200
-    mov word [menu_dseg], 0     ; every popup descriptor in the tree is the
-                                ; kernel's own (SPEC.md 12.4)
+    and word [menu_dseg], 0     ; every popup descriptor in the tree is the
+                                ; kernel's own (SPEC.md 12.4). `and`: the
+                                ; flags are dead - menu_widest's menu_des sets
+                                ; them first (kernel size pass 18, -1)
 
     ; --- width, and the left shift off the right edge ------------------------
     call menu_widest            ; AX = the menu's width, px (BX = the
@@ -1959,7 +1975,9 @@ menu_drop:
 .drawn:
 
     ; --- follow the mouse while the button is down ----------------------------
-    mov word [menu_sel], 0xFFFF ; nothing highlighted yet
+    or word [menu_sel], -1      ; nothing highlighted yet (`or`, -1: .poll's
+                                ; `test` writes the flags first - kernel size
+                                ; pass 18)
 %ifdef OS88_THEME
     mov al, [thm_xorm]          ; the bar's XOR mask, ONCE per menu (SPEC.md
     mov [menu_xorm], al         ; 76.14.14): a theme change while it is down
