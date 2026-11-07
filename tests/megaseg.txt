@@ -183,4 +183,13 @@
 #             kern_mega keeps - CS is a selector in protected mode, so the
 #             constant is not its answer. Nothing kern_mega had grew; the
 #             figure moves because kern_big's .text got smaller under it
-3684
+# 2026-11-07: +70, kernel size pass 18 (ksp18/sweep3.md): vid_tab's four
+#             fixed rows (72 bytes, viddet.inc VID_TAB_ROWS) left kern_big's
+#             .text for its boot blob, as they had already left kern_emu's
+#             and kern_small's; kern_mega keeps them resident (VID_TAB_RES:
+#             its switch rewrites the segment column into selectors in
+#             place). Nothing kern_mega had grew - its .text is 10 bytes
+#             SMALLER (sch_account, clk_tick, clk_put_mon, which both kernels
+#             share) - the figure moves because kern_big's got the rows' 72
+#             smaller under it; 3,754 is os88megaseg's own reading
+3754

@@ -4782,6 +4782,9 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
 ; self-describing. What a key the file does not carry falls back to is
 ; whatever this left behind, and at boot the live state IS the defaults - so
 ; there is no second copy of them to keep in step.
+%if CFG_NB > 128
+  %error "%1_pack/_unpack/_deser read a struct offset with cbw: every CFG_* field must sit under 128"
+%endif
 %1 %+ _pack:
     push ax
     push bx
@@ -4791,12 +4794,13 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
     mov si, %1 %+ _map          ; the table is the IMAGE's (51.5.3); the
     mov cx, DRV_CFG_MAPN        ; ADDRESSES in it are the kernel's, and DS
 %%p:                            ; still names the kernel - so the `mov [di]`
-    mov bl, [cs:si]             ; below is the store it always was
-    xor bh, bh
-    mov di, [cs:si+1]
-    mov al, [di]
-    mov [bx+drv_cfg], al
-    add si, 3
+    cs lodsb                    ; below is the store it always was. The row
+    cbw                         ; is READ `cs lodsb` / `cs lodsw`: the
+    xchg bx, ax                 ; struct offset (under 128, the %if below:
+    cs lodsw                    ; so cbw is BH = 0) and then the live byte's
+    xchg di, ax                 ; address - 4 bytes under the indexed loads
+    mov al, [di]                ; and `add si, 3` (kernel size pass 18; the
+    mov [bx+drv_cfg], al        ; blob's copy is the one that had to shrink)
     loop %%p
 
     ; The WANT bytes as one bitmap word, bit %1_bit[row] set = that row is
@@ -4947,12 +4951,13 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
     mov si, %1 %+ _map
     mov cx, DRV_CFG_MAPN
 %%up_u:
-    mov bl, [cs:si]
-    xor bh, bh
-    mov di, [cs:si+1]
+    cs lodsb                    ; the row, as %1_pack reads it
+    cbw
+    xchg bx, ax
+    cs lodsw
+    xchg di, ax
     mov al, [bx+drv_cfg]
     mov [di], al
-    add si, 3
     loop %%up_u
 %ifdef OS88_THEME
     mov al, [thm_kind]          ; the map above stored the theme; resolving
@@ -5013,15 +5018,12 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
     mov cx, CFG_NKEY
 %%scan:
     cmp [cs:di], ax
-    je %%hit
-    add di, CFG_KESZ
-    loop %%scan
-    pop cx
+    je %%hit                    ; ...where CF = 0 already: the compare was
+    add di, CFG_KESZ            ; EQUAL (kernel size pass 18: the `clc` and
+    loop %%scan                 ; the second `pop cx / ret` went, -3)
     stc
-    ret
 %%hit:
     pop cx
-    clc
     ret
 
 ; %1_deser - the file's records into the struct.
@@ -5056,13 +5058,12 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
     mov si, %1 %+ _buf
     mov di, %1 %+ _sig
     mov cx, CFG_SIGN
-%%sig:
-    mov al, [cs:si]
-    cmp al, [cs:di]
+    push ds                     ; the signature against the image's own copy,
+    push es                     ; ONE `repe cmpsb`: both are the image's, and
+    pop ds                      ; ES IS the image's data here - %1_load set it
+    repe cmpsb                  ; (PUSH_CSDATA) and is the only caller - so
+    pop ds                      ; DS borrows it for the compare (pass 18, -4)
     jne %%bad                   ; a foreign file of that name: left alone
-    inc si
-    inc di
-    loop %%sig
     cmp word [cs:%1 %+ _buf+CFG_GEN], CFG_GEN_V
     jne %%bad                   ; another generation's SHAPE: the records are
                                 ; not records. Defaults, and the next save
@@ -5096,8 +5097,8 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
     jne %%ds_next                  ; right key, DIFFERENT MEANING: the default
                                 ; stands, which is the whole point of ver
     push si
-    mov al, [cs:di+4]           ; where it lives in the struct
-    xor ah, ah
+    mov al, [cs:di+4]           ; where it lives in the struct: under 128
+    cbw                         ; (the %if at %1_pack), so AH = 0
     mov di, ax
     add di, drv_cfg
     lea si, [bx+%1 %+ _buf+CFR_DAT]
@@ -5111,12 +5112,12 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
 %%ds_next:
     pop si                      ; ...the next record, bounded above
     jmp %%rec
-%%ds_done:
-    clc
-    jmp short %%dout
 %%bad:
-    stc
-%%dout:
+    stc                         ; (a `jb` reaches here with CF = 1 already,
+                                ; the two `jne`s with it either way)
+%%ds_done:                      ; CF = 0 on all three ways in: two `ja`s
+%%dout:                         ; and the terminator's EQUAL compare (pass
+                                ; 18: the `clc / jmp short` went, -3)
     pop di
     pop si
     pop dx
@@ -5172,10 +5173,8 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
     jc %%ld_out
     call %1 %+ _unpack
     clc
-    jmp short %%ld_done
-%%ld_out:
-    stc
-%%ld_done:
+%%ld_out:                       ; CF = 1 already on both ways in (two `jc`s:
+%%ld_done:                      ; pass 18, the `jmp short / stc` went, -3)
     pop es
     pop di
     pop si
