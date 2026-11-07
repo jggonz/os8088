@@ -140,6 +140,12 @@ TOOLS = [
                 "sized and dithered for the machine it will play on.",
      "files": [("tools/os88venc.py", "The encoder, run from a terminal."),
                ("tools/os88vencgui.py", "The same encoder with a window, previews and presets.")]},
+    {"id": "tool-vbattle", "title": "Video Battle builder",
+     "summary": "Makes a Video Battle out of your own footage: the idle loop, "
+                "the actions' clips joined to it, the music, the menus and "
+                "the enemy, built into a .VBT file and a disk to play it from.",
+     "files": [("tools/os88vbtgui.py", "The builder's window. GUIDE.HTML beside it in the tools zip walks through making a battle."),
+               ("tools/os88vbt.py", "The same builder, run from a terminal.")]},
     {"id": "tool-proxy", "title": "Web proxy",
      "summary": "Runs on your modern computer so the os8088 Browser can reach "
                 "today's web, including secure (https) sites.",

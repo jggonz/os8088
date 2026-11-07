@@ -12,13 +12,14 @@ One folder, `os8088-tools/`:
                       against THIS tree's kernels (`make rom-big rom-small`),
                       and the socket-check ROM (`make socketrom`)
   ENCODER/            `make vencbundle`'s folder - the video encoder
+  BATTLE/             `make vbtbundle`'s folder - the Video Battle builder
   GBSTATIC/           `make gbaotbundle`'s folder - the Game Boy precompiler
   CZ/                 `make czbundle`'s folder - the file splitter
   PROXY/              the Browser's HTTPS proxy, os88proxygui.py and what it
                       imports (os88vbundle.closure, standard library only)
   DOS/                OS88CZ.COM and OS88NET.COM, for a PC running DOS
 
-The three bundles are taken AS BUILT, their own top folder renamed, so each
+The four bundles are taken AS BUILT, their own top folder renamed, so each
 keeps its own README and its own computed file list and this file restates
 none of them. osrom-big pairs with the release's ordinary system disks and
 osrom-small with its 128K-RAM ones (SPEC.md 24.5.7). The zip is DETERMINISTIC:
@@ -58,6 +59,12 @@ ENCODER
   The video encoder: turns a video into a .V88 file for os8088's Video
   Player, and makes floppies or bootable hard disks with it.
   python3 os88vencgui.py - see ENCODER/README.TXT.
+
+BATTLE
+  The Video Battle builder: makes a battle out of your own footage - an
+  idle loop, the actions' clips joined to it, the music and the menus -
+  and a disk that plays it with VBATTLE.O88, which is in the folder too.
+  python3 os88vbtgui.py - GUIDE.HTML walks through making one.
 
 GBSTATIC
   The Game Boy precompiler: turns a Game Boy cartridge you own into an
@@ -171,6 +178,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("out")
     ap.add_argument("--encoder", required=True, help="build/os8088-encoder.zip")
+    ap.add_argument("--battle", required=True,
+                    help="build/os8088-battle-builder.zip")
     ap.add_argument("--gbstatic", required=True, help="build/os8088-gbaot.zip")
     ap.add_argument("--cz", required=True, help="build/os8088-cz.zip")
     ap.add_argument("--rom", required=True, help="build/rom")
@@ -180,6 +189,7 @@ def main():
 
     files = []
     files += rebase(a.encoder, "os8088-encoder", "ENCODER")
+    files += rebase(a.battle, "os8088-battle-builder", "BATTLE")
     files += rebase(a.gbstatic, "os8088-gbaot", "GBSTATIC")
     files += rebase(a.cz, "os8088-cz", "CZ")
 

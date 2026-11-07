@@ -430,6 +430,23 @@ ITEMS = [
      "they are written to the disk you choose.",
      [("arcrel.img", "1.44MB", ""), ("arcrel120.img", "1.2MB", ""),
       ("arcrel720.img", "720KB", ""), ("arcrel360.img", "360KB", "")]),
+    ("progs", "Video Battle", False,
+     "A turn-based battle whose picture is video: a loop plays while you "
+     "choose a command from the menu under it, and each command's clip "
+     "joins the loop and returns to it, over the battle's music. Each disk "
+     "carries the program and an original demo battle, drawn and scored for "
+     "this project. The four sizes are for CGA; the 720KB and 360KB disks "
+     "carry a shorter battle, without its longest clip and with two bars of "
+     "its music. VBATV144.IMG is the demo in VGA colours and VBATH144.IMG "
+     "the demo for Hercules, both 1.44MB; the VGA disk also carries "
+     "VBATTLED.O88, the program that writes a record of each play for "
+     "finding out why a machine stutters. A hard disk plays a battle best: "
+     "copy the program and the battle onto one. The battle builder in the "
+     "tools zip makes a battle out of your own footage.",
+     [("vbattle.img", "1.44MB", ""), ("vbattle120.img", "1.2MB", ""),
+      ("vbattle720.img", "720KB", ""), ("vbattle360.img", "360KB", ""),
+      ("vbattlev.img", "1.44MB", "the demo for a VGA"),
+      ("vbattleh.img", "1.44MB", "the demo for a Hercules card")]),
     ("progs", "Weave", False,
      "Web-style programs -- markup, script and formulas -- compiled into one "
      "bundle file and run natively. Carries the runtime, three demo "
@@ -466,6 +483,10 @@ DEST = {
     # the live zip's, which has no folders
     "os8088-usb.img": "LIVEUSB.IMG",
     "os8088.iso": "OS8088.ISO",
+    # Video Battle's VGA and Hercules demos: 1.44MB like its CGA disk, so
+    # the size alone cannot name them
+    "vbattlev.img": "PROGRAMS/VBATTLE/VBATV144.IMG",
+    "vbattleh.img": "PROGRAMS/VBATTLE/VBATH144.IMG",
 }
 
 # The everything sets: disk N of a list goes in the folder of its size.
@@ -489,6 +510,7 @@ PROGRAMS = {
     "PiXEL": ("PIXEL", "PIXEL"),
     "XTMP3": ("XTMP3", "XTMP3"),
     "Weave": ("WEAVE", "WEAVE"),
+    "Video Battle": ("VBATTLE", "VBAT"),
     "Windows 3.x programs": ("WIN16", "WIN16"),
 }
 SIZE_TAG = {"1.44MB": "144", "1.2MB": "120", "720KB": "720", "360KB": "360"}
@@ -584,8 +606,9 @@ BESIDE = {
     "videos": "three ready-to-run 86Box machines with the video demos on "
               "their hard disks",
     "tools": "the firmware and the utilities: the PicoMEM firmware, the "
-             "kernel ROMs for an IBM PC, the video encoder, the Game Boy "
-             "precompiler, the file splitter, the Browser's proxy and the DOS "
+             "kernel ROMs for an IBM PC, the video encoder, the Video "
+             "Battle builder, the Game Boy precompiler, the file splitter, "
+             "the Browser's proxy and the DOS "
              "tools",
 }
 

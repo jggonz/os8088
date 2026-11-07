@@ -20,7 +20,7 @@ them, all written by `mkzip.py` in step 3a:
 | `os8088-<version>.zip` | every floppy, in a folder per disk size (`1440K/`, `1200K/`, `720K/`, `360K/`, with `128K-RAM/` inside the last two) and `PROGRAMS/<APP>/` for the one-program disks, every image and folder named 8.3; a `README.md` that explains every file, grouped by what the reader is trying to do; a `SHA256SUMS` |
 | `os8088-<version>-live.zip` | the live USB image and CD as `LIVEUSB.IMG` and `OS8088.ISO`, the Mac burner as `burn-usb-macos.py`, its own README and SHA256SUMS |
 | `os8088-<version>-videos.zip` | the three 86Box machines with the Video Player demos (`make viddemozip`) |
-| `os8088-<version>-tools.zip` | the PicoMEM firmware, the kernel ROMs cut against this build, the encoder, the Game Boy precompiler, the file splitter, the Browser's proxy and the DOS tools (`make toolszip`) |
+| `os8088-<version>-tools.zip` | the PicoMEM firmware, the kernel ROMs cut against this build, the encoder, the Video Battle builder, the Game Boy precompiler, the file splitter, the Browser's proxy and the DOS tools (`make toolszip`) |
 
 The main zip is the one every release has; the other three are written when
 their on-demand targets were built, and named as skipped when not. Eleven
@@ -330,6 +330,10 @@ make runcpm-src && make runcpmdisk    # runcpm*.img
 make scribedisk paccmandisk           # scribe*.img, paccman*.img
 make 1942disk midirackdisk            # 1942*.img, midirack*.img
 make waverackdisk                     # waverack*.img -- WaveRack and its clips
+make vbattledisk                      # vbattle*.img -- Video Battle and its
+                                      # demo battle, the four sizes for CGA
+                                      # plus vbattlev (VGA) and vbattleh
+                                      # (Hercules), all in PROGRAMS/VBATTLE
 make pixeldisk                        # pixel.img -- PiXEL with its whole
                                       # gallery, which no software disk has
                                       # room for; the 1.44MB disk alone is
@@ -350,7 +354,8 @@ make viddemo viddemozip               # the three 86Box machines with the Video
 make toolszip                         # the firmware and utilities -- the tools
                                       # zip: it cuts the kernel ROMs (`make
                                       # rom`, `socketrom`) against THIS tree
-                                      # and packs the encoder, the Game Boy
+                                      # and packs the encoder, the Video
+                                      # Battle builder, the Game Boy
                                       # precompiler and the splitter bundles
 make usb-emu                          # os8088-emu-usb.img -- THE WEBSITE'S DEMO
                                       # DISK (SPEC.md 80.7), the same volume on

@@ -6645,15 +6645,16 @@ $(BUILD)/os8088-cz.zip: tools/os88czbundle.py tools/os88czgui.py tools/os88cz.py
 # release's other archive - firmware/picomem1/, the kern_big, kern_small and
 # socket-check ROMs (`make rom-big rom-small socketrom`, cut against THIS
 # tree's kernels, so build it from the tree whose disks it ships beside), the
-# encoder, the Game Boy precompiler (as GBSTATIC/) and the splitter bundles
-# as built, the Browser's proxy and the two DOS tools
+# encoder, the Video Battle builder (as BATTLE/), the Game Boy precompiler
+# (as GBSTATIC/) and the splitter bundles as built, the Browser's proxy and
+# the two DOS tools
 #> [Media and bundles] toolszip :: the release's firmware and utilities zip
 .PHONY: toolszip
-toolszip: $(BUILD)/os8088-encoder.zip $(BUILD)/os8088-gbaot.zip $(BUILD)/os8088-cz.zip \
-          rom-big rom-small socketrom $(BUILD)/os88cz.com $(BUILD)/os88net.com \
+toolszip: $(BUILD)/os8088-encoder.zip $(BUILD)/os8088-battle-builder.zip $(BUILD)/os8088-gbaot.zip \
+          $(BUILD)/os8088-cz.zip rom-big rom-small socketrom $(BUILD)/os88cz.com $(BUILD)/os88net.com \
           tools/os88toolszip.py tools/os88proxy.py tools/os88proxygui.py tools/htmsim.py
 	python3 tools/os88toolszip.py $(BUILD)/os8088-tools.zip \
-		--encoder $(BUILD)/os8088-encoder.zip --gbstatic $(BUILD)/os8088-gbaot.zip \
+		--encoder $(BUILD)/os8088-encoder.zip --battle $(BUILD)/os8088-battle-builder.zip --gbstatic $(BUILD)/os8088-gbaot.zip \
 		--cz $(BUILD)/os8088-cz.zip --rom $(BUILD)/rom --picomem firmware/picomem1 \
 		--dos $(BUILD)/os88cz.com $(BUILD)/os88net.com
 
