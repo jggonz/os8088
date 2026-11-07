@@ -100677,7 +100677,18 @@ was - by a selector - and not by its segment:
   1MB. Every claim is an LDT selector now, so the bit says nothing about
   where the memory is.
 - `dsk_runcap` does its DMA-page arithmetic on a selector's base: a
-  conventional claim is a direct transfer and only memory above 1MB bounces.
+  conventional claim is a direct transfer and only memory above 1MB bounces
+  - **except a floppy's** (BIOS unit 0 or 1, the base below 16MB, the native
+  path not switched off): `mega_fd13` programs all 24 bits of the 8237, so a
+  run into a pool claim is one native call in place, capped by the 64KB page
+  as a low one is, and a call the native path hands back is bounced by
+  `mega_svc` itself (`mega_hibnc`). Bounced here, a 22 kHz stream's
+  look-ahead ring was read nine sectors a call and ran dry
+  (KERN-MEGA-PLAN 14.156). The native path also seeks only when the head is
+  not already there: after its own seek it leaves 80h + the cylinder in the
+  BIOS's cylinder byte (40:94 + the unit; never a number the BIOS seeks to)
+  and believes it only while it is still there - a BIOS call that moves the
+  head writes its own, a recalibrate and every native failure write FFh.
 - **Frame buffers and ROMs too** (`mega_vfixall`): every real segment at or
   above A000h the kernel holds - the video tables, each display's context,
   the full-screen modes' rows, `font_seg` - becomes one data selector over

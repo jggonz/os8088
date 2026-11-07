@@ -2564,8 +2564,8 @@ dsk_runcap:
                                 ; file doors load (ODD, SLD) and every
     call MEGA_SEL_CODE:mega_selbasef ; claim's value in protected mode
     cmp dx, 0x0F                ; (KERN-MEGA-MEMORY-PLAN MC7.4). Above 1MB (a
-    ja .hma                     ; window, a pool claim) the ROM's int 13h
-    jmp short .lin              ; cannot reach it at all: 0 bounces it
+    ja .hi                      ; window, a pool claim) the ROM's int 13h
+    jmp short .lin              ; cannot reach it at all: 0 bounces it...
 .seg:
 %endif
     mov cl, 4                   ; the carry out of this is the page number,
@@ -2606,6 +2606,15 @@ dsk_runcap:
  %define DSK_RCHMA
 %endif
 %ifdef DSK_RCHMA
+%ifdef KERN_MEGA
+.hi:                            ; ...BUT A FLOPPY'S 8237 CAN (KERN-MEGA-PLAN
+    or dh, dh                   ; 14.156): mega_fd13 programs all 24 bits,
+    jnz .hma                    ; so below 16MB a run into a pool claim goes
+    cmp byte [dsk_unit], 1      ; native as one track - the page math on its
+    ja .hma                     ; linear base - and a call the native path
+    cmp byte [mega_fdoff], 0    ; hands back is bounced by mega_svc itself
+    je .lin                     ; (mega_hibnc). Bounced here, nine sectors a
+%endif                          ; call missed a revolution each: 22 kHz ran dry
 .hma:                           ; ...the IBM AT's diskette code keeps four
     xor bp, bp                  ; page bits, so a transfer there lands under
     jmp short .out              ; 1MB. 0 bounces it through dsk_secbuf, a
