@@ -14194,6 +14194,36 @@ vidpm: $(BUILD)/vidbench.o88 $(BUILD)/viddisk.o88 $(BUILD)/vidsnd.o88 \
 	python3 tools/os88disk.py --verify $(BUILD)/vidpm-1440.img
 	@ls -l $(BUILD)/vidpm $(BUILD)/vidpm-1440.img
 
+# THE 5150 + PICOMEM 2 KIT (docs/reports/PICOMEM2-STUTTER-2026-11-07.md): the
+# first real numbers for the `5150-picomem2` profile - vidpm's benches less
+# the 286's - and the two questions about Video Battle's stuttering sound:
+# VIDSND's T rows (a tone, recorded and counted by tools/vstone.py) and
+# VBATTLED's play profile (tools/vbtprof.py). Loose in build/pm2kit/ for FTP,
+# and on build/pm2kit-360.img for the card's floppy or drive A.
+.PHONY: pm2kit
+#> [Applications] pm2kit :: the 5150 + PicoMEM 2 field kit: its video profile, and Video Battle's stutter (VIDSND T)
+pm2kit: $(BUILD)/vidbench.o88 $(BUILD)/viddisk.o88 $(BUILD)/vidsnd.o88 \
+	$(BUILD)/videodiag.o88 $(BUILD)/vbattled.o88 tools/os88vid.py tools/os88disk.py \
+	tests/vidbench/FIELDPM2.TXT
+	rm -rf $(BUILD)/pm2kit && mkdir -p $(BUILD)/pm2kit/src
+	python3 tools/os88vid.py synthxdv $(BUILD)/pm2kit/src/SYNTH.XDV >/dev/null
+	python3 tools/os88vid.py benchdat --synth $(BUILD)/pm2kit/VIDBENCH.DAT \
+	    $(BUILD)/pm2kit/src/SYNTH.XDV >/dev/null
+	rm -rf $(BUILD)/pm2kit/src
+	cp tests/vidbench/FIELDPM2.TXT $(BUILD)/pm2kit/README.TXT
+	cp $(BUILD)/vidbench.o88 $(BUILD)/pm2kit/VIDBENCH.O88
+	cp $(BUILD)/viddisk.o88 $(BUILD)/pm2kit/VIDDISK.O88
+	cp $(BUILD)/vidsnd.o88 $(BUILD)/pm2kit/VIDSND.O88
+	cp $(BUILD)/videodiag.o88 $(BUILD)/pm2kit/VIDEOD.O88
+	cp $(BUILD)/vbattled.o88 $(BUILD)/pm2kit/VBATTLED.O88
+	python3 tools/os88disk.py -o $(BUILD)/pm2kit-360.img --size 360 \
+	    $(BUILD)/pm2kit/README.TXT $(BUILD)/pm2kit/VIDBENCH.O88 \
+	    $(BUILD)/pm2kit/VIDBENCH.DAT $(BUILD)/pm2kit/VIDDISK.O88 \
+	    $(BUILD)/pm2kit/VIDSND.O88 $(BUILD)/pm2kit/VIDEOD.O88 \
+	    $(BUILD)/pm2kit/VBATTLED.O88
+	python3 tools/os88disk.py --verify $(BUILD)/pm2kit-360.img
+	@ls -l $(BUILD)/pm2kit $(BUILD)/pm2kit-360.img
+
 # THE GALLERY (SPEC.md 106.7). Committed, and pinned by tools/pixsamples.py
 # --check, which also compares these three lists with its own - so a picture
 # added here and not there, or there and not here, fails the build. PLAIN on
