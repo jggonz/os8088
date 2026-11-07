@@ -242,6 +242,10 @@ and kern_mega build at the tip; `os88megaseg` unchanged at 3,682.
    is wanted back, revert the hunk of `e332ac7b` in `fm_scrollpaint` (the
    parent commit has it whole).
 
+   **The owner's decision (2026-11-07): KEEP THE SAVING.** *"70 bytes saved
+   to something never run seems like a bargain, keep the savings."* The
+   deletion stands; the assembly-time `%if` is the invariant's statement.
+
 ## WANTS AN ABI BREAK
 
 None found on this row. Everything changed is kernel-internal (local labels,
