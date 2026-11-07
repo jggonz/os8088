@@ -284,25 +284,26 @@ peer).
 
 ## 8. For the owner
 
-1. **The release decision itself** (KERN-MEGA-PLAN 14.126: *"not 'released'
-   yet - so we're not building disks in the release zip/skill"*). If yes:
-   the mechanics in section 9.
-2. **Old binaries on kern_mega** (4.3): a loader refusal for pre-MC7
-   packages (a header flag the post-MC7 SDK sets - an ABI note under
-   SPEC.md 20.2.0.1) or accept it and say *"use only this release's disks
-   with the 286 system"* in the notes and the guide.
-3. **The Victory session** (section 10) - one visit, one list.
-4. **WaveRack's first wake** (4.2): one read per wake, so the playhead and
-   Stop are served between reads on both kernels - a visible change.
-5. **WaveRack `OS88_HIGH`**: its exemption's reason is gone; declaring it
-   wants `test-full`'s gate.
-6. **Word on kern_mega**: WORD.O88 ships only on `office360.img`, and kern_mega
-   has no 360KB disks, so no kern_mega disk carries Word (it runs from
-   `word.img`). Likewise the Video Player is not on kern_mega's system disk,
-   XTMP3 is not on `megaapps120.img`, and `nettree/mega` has no WIN16 (its
-   Makefile comment, "it refuses there", is out of date).
-7. **The 1,015 writes through CS left in `apps/`**: a speed pass per
-   package, measured, or release notes.
+**Answered 2026-11-07** (the owner, items 1-7):
+
+1. **Released.** *"We'll add kern mega to the shipped set."* Done as
+   `emu.img` is: required by `mkzip.py`, built by `make mega` rather than by
+   `all`, in `1440K/286-PLUS/` and `1200K/286-PLUS/` (section 9).
+2. **Old binaries: accepted, no loader refusal.** *"Mega's main goal is to
+   run mega's apps; anything else is a bonus."* The README's 286 section
+   says to use the 286-PLUS software disks with that system.
+3. **The Victory session** (section 10) - still owed.
+4. **WaveRack's first wake** - not asked for; stands as 4.2 has it.
+5. **WaveRack `OS88_HIGH` / `OS88_HIGHMEM`**: *"we are ratcheting towards
+   everything being high"* - an agent is making it so (`mega-wrhigh`).
+6. **Disks**: the Video Player was already on `megaapps*.img`; Word joins
+   both; XTMP3 and WIN16 each have kern_mega disks of their own
+   (`megaxtmp3*.img`, `megawin16*.img`), under `286-PLUS/PROGRAMS/`.
+7. **The writes through CS**: *"Do the speed pass, remove as many traps as it
+   is useful to remove"* - three agents, by package family
+   (`mega-trapoffice`, `mega-trapvm`, `mega-trapsys`).
+
+Still open:
 
 8. **M6's last 300 ms** (KERN-MEGA-PLAN 14.156): (a) AUDIO claims its
    look-ahead through `OSAPI_MEM_CLAIM_DMA` on every kernel - it IS a DMA
@@ -326,27 +327,34 @@ peer).
    stops at its content box, figures on one line) and in the row (`glass`,
    the card asked rather than named).
 
-## 9. Release mechanics (if the owner says yes)
+## 9. Release mechanics (done 2026-11-07 unless marked)
 
-- `make mega` already builds six images; `make arcrelmega` adds two and is
-  not part of it.
-- The images are in no release artefact: not in `$(SHIPIMGS)`, not in mkzip's
-  ITEMS. Adding them to `$(SHIPIMGS)` needs boot-signature slots (SPEC
-  18.8.2.2) and puts `make mega` into `all`, as kern_small's disks are; the
-  image gates (`t_image`, `t_diskverify`, `t_canary`, `t_blobruns`) each hold
-  their own list (`t_canary` skips megak on purpose today).
-- mkzip: a new group with 8.3 names, and a second freshness reference
-  (`build/megak/kernel.sys`).
-- User documentation: none exists. A guide disk page and a README section
-  (which machines, what to expect, which disks pair with which); several
-  manuals already describe "the protected-mode build for the 286", which a
-  user cannot get. Whether the live USB/CD gets a kern_mega option is
-  SPEC.md 80's first.
-- `budget-check` already measures kern_mega; the release skill's prose says
-  three kernels and should say four.
-- `test-full` never boots kern_mega, so a first release owes the scoped
-  `mega-*` and `box-*` union once in its final pass.
-- Fork rule 3's disk list (CLAUDE.md) should name the kern_mega disks.
+- **The zip** (`.claude/skills/release-os8088/mkzip.py`): a `mega` group,
+  *A 286 or later: the protected-mode system*, and three REQUIRED items -
+  the system and software pair at both sizes, the XTMP3 disk, the WIN16
+  disk - placed `1440K/286-PLUS/OS88-144.IMG`, `APPS-144.IMG`,
+  `PROGRAMS/XTMP3/XTMP3144.IMG`, `PROGRAMS/WIN16/WIN16144.IMG`, and the same
+  under `1200K/286-PLUS/`. A kern_mega system disk older than
+  `build/megak/kernel.sys`, or that kernel older than `build/kernel.sys`,
+  is refused. Dry-run at 1a37e25e+: 83 entries, the README's 286 section
+  as written. (The same run found ARCADE's item had no `PROGRAMS` entry since
+  8ed115f8, so the base's mkzip refused to pack at all; fixed beside it.)
+- **The skill** (`SKILL.md`): `make mega` in step 2's build line, the thirty
+  images listed, `budget-check`'s four kernels with kern_mega's 68,096.
+- **The guide** (`tools/os88guide.py`): the group in the main section.
+- **The README**: one row in *Four geometries of everything*.
+- **Not done, by choice**: the images are NOT in `$(SHIPIMGS)` and `all`
+  does not build them - `emu.img`'s precedent, which keeps every `make` the
+  speed it is. So the image gates (`t_image`, `t_diskverify`, `t_canary`,
+  `t_blobruns`) do not walk them; `t_megapkg` (fast) checks every armed
+  package is its arm on them, XTMP3's and WIN16's twins included, whenever
+  they are current. Putting `make mega` into `all` is the step that would
+  bring them under those gates, at the cost of the mega build in every
+  `make`.
+- **Still open**: whether the live USB/CD gets a kern_mega option (SPEC.md
+  80's first); fork rule 3's disk list (CLAUDE.md) names no kern_mega disk.
+- `test-full` never boots kern_mega, so a release owes the scoped `mega-*`
+  and `box-*` union once in its final pass (section 11's list).
 
 ## 10. Field runs owed (the Victory 286, one session)
 
