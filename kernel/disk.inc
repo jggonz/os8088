@@ -8460,6 +8460,11 @@ dsk_goto:
 ; [dsk_nover] starts again at every aim, because every loud mount is aimed.
 ; in:  DX = the store's segment (0 = none), BX = entry 0's offset in it,
 ;      AX = the entries it can hold (or holds, for an existing listing)
+; dsk_dest_0 - the same with DX = 0: NOWHERE, the retire every fmv_* aim
+; ends in, which its three sites spelt `xor dx, dx` at the call (kernel size
+; pass 18). DX is 0 on the way out too, as it was
+dsk_dest_0:
+    xor dx, dx
 dsk_dest_x:
     mov [dsk_dseg], dx
     mov [dsk_doff], bx
@@ -8478,6 +8483,9 @@ dsk_ioffx:
     pop ax
     ret
 %else
+dsk_dest_0:                     ; (dsk_dest_0: DX = 0, as above - a jump here,
+    xor dx, dx                  ; because dsk_dest_b0 is the fall-through)
+    jmp short dsk_dest_x
 dsk_dest_b0:
     xor bx, bx
 dsk_dest_x:

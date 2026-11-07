@@ -1585,15 +1585,18 @@ fmv_icorefs:
 %ifdef DSK_BIGDIR
     mov bx, FV_DOFF             ; ...at the shape it was filled with: entries
     mov ax, [di+FS_N]           ; past the bitmap, the index past FS_N of them
-%endif                          ; (SPEC.md 22.6.4)
+    call dsk_dest_x             ; (SPEC.md 22.6.4)
+    mov bp, ax                  ; (dsk_dest_x keeps AX: FS_N, read once)
+%else
     call dsk_dest_x             ; (BX is 0 already, from above)
     mov bp, [di+FS_N]
+%endif
     call dsk_icopass
 %ifdef OS88_ASSOC
     call dsk_docpass
 %endif
-    xor dx, dx                  ; ...and retire it with the walk, which is
-    call dsk_dest_x             ; fmv_load's own manner (NOWHERE is the
+                                ; ...and retire it with the walk, which is
+    call dsk_dest_0             ; fmv_load's own manner (NOWHERE is the
                                 ; default): the destination is an argument and
                                 ; belongs to one caller at a time
     CLC_OR_STC .no              ; (kernel size pass 15: the one caller's `jc`)
@@ -1734,8 +1737,8 @@ fmv_load:
 %ifdef DSK_BIGDIR
     mov cx, [dsk_nover]         ; (read before the aim below zeroes it)
 %endif
-    xor dx, dx                  ; NOWHERE, which is now the default: the
-    call dsk_dest_x             ; floor listing is gone and a mount with no
+                                ; NOWHERE, which is now the default: the
+    call dsk_dest_0             ; floor listing is gone and a mount with no
                                 ; store is quiet (13.1); BX/DX come back
 %ifdef DSK_BIGDIR               ; off the ladder
     ; --- THE CLAIM FOLLOWS THE FOLDER (SPEC.md 22.6.4) ---------------------
@@ -2217,8 +2220,8 @@ fmv_bcast:
     call dsk_dest_b0            ; entry 0 at the base of the source's claim
 %endif
     call fmv_store              ; ...which copies it into DI's own
-    xor dx, dx                  ; and the destination goes back to NOWHERE,
-    call dsk_dest_x             ; for fmv_load's reason: a `.bss` word may not
+                                ; and the destination goes back to NOWHERE,
+    call dsk_dest_0             ; for fmv_load's reason: a `.bss` word may not
                                 ; name a claim across arbitrary time
     call fm_measure             ; a write moved both figures: the file that
                                 ; arrived is in the folder AND off the free
@@ -3827,9 +3830,7 @@ fm_onclick_x:
 .mctrl:                         ; Ctrl: THIS row in or out, one band
     call fm_menter
     xchg ax, dx                 ; AX = the index
-    call fm_mbit                ; (BX is spent: nothing below reads it)
-    mov cl, ch
-    call fm_mxor
+    call fm_mflip               ; (BX is spent: nothing below reads it)
     call fm_sel_bar
     mov [fm_anch], ax           ; ...and the next Shift run starts here
     call fm_mfocus              ; the focus is the row clicked
@@ -7987,11 +7988,10 @@ fm_draw_rcore:
     ; --- icon grid ---
 .icons:
     xor ax, ax
-    mov [fm_vrow], ax
-.irow:
-    mov ax, [fm_vrow]
-    cmp ax, [fm_shown]
-    jae .done
+.irow:                          ; AX = the row: stored HERE, so the step
+    mov [fm_vrow], ax           ; below is a register `inc` and not one of
+    cmp ax, [fm_shown]          ; memory reloaded (kernel size pass 18: -3,
+    jae .done                   ; and ~8 cycles a row the faster)
     xor ax, ax                  ; (.icell reloads AX)
     mov [fm_vcol], ax
 .icell:
@@ -8033,7 +8033,8 @@ fm_draw_rcore:
     mov ax, [fm_vcol]
     cmp ax, [fm_cols]
     jb .icell
-    inc word [fm_vrow]
+    mov ax, [fm_vrow]
+    inc ax
     jmp .irow
 .done:
     ret
@@ -8442,8 +8443,13 @@ fm_mdiff:
     pop ds
     and cl, ch
     ret
-; fm_mxor - the bitmap's byte BX ^= CL; every register and flag but those
-; the `xor` writes preserved
+; fm_mflip - AX's bit flipped (BX, CX clobbered): fm_mbit and the `xor`, the
+; shape fm_onclick_x's Ctrl+click and fm_menter both spelt out (kernel size
+; pass 18). fm_mxor - the bitmap's byte BX ^= CL; every register and flag but
+; those the `xor` writes preserved
+fm_mflip:
+    call fm_mbit
+    mov cl, ch
 fm_mxor:
     push ds
     mov ds, [di+FS_VSEG]
@@ -8471,12 +8477,11 @@ fm_many:
     push cx
     push di
     push es
-    mov ax, [di+FS_VSEG]
-    or ax, ax
-    jz .out                     ; no claim: no set (ZF = 1)
-    mov es, ax
-    xor di, di
     xor ax, ax
+    cmp [di+FS_VSEG], ax
+    je .out                     ; no claim: no set (ZF = 1)
+    mov es, [di+FS_VSEG]
+    mov di, ax                  ; ES:DI = the bitmap, AX = 0
     mov cx, FM_MSELB/2
     cld
     or bl, bl
@@ -8550,9 +8555,7 @@ fm_menter:
     inc ax                      ; 0FFFFh: nothing selected, no bit
     jz .none
     dec ax
-    call fm_mbit
-    mov cl, ch                  ; (the set is empty: XOR is OR)
-    call fm_mxor
+    call fm_mflip               ; (the set is empty: XOR is OR)
 .none:
     pop cx
     pop bx
