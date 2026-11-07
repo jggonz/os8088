@@ -1,11 +1,11 @@
 # ksp18 agent "sweep2" - a second look at the `wmui` row's files
 
-Kernel size pass 18 (`docs/plans/ksp18/BRIEF.md`), second wave: a fresh reader
+Kernel size pass 18 (`docs/plans/completed/ksp18/BRIEF.md`), second wave: a fresh reader
 over the `wmui` row's files as they stand after that agent merged -
 `kernel/wm.inc`, `instance.inc`, `clip.inc`, `events.inc`, `dock.inc`,
 `apps.inc`, `ui.inc`, `menu.inc`, `toast.inc`, `fprog.inc`, `snd.inc`,
 `ctrl.inc`'s resident half and `kernel.asm` (the API shims, `kmain`), except
-the routines `docs/plans/ksp18/fresh-routines.md` gives to `hot` (`ui_task`,
+the routines `docs/plans/completed/ksp18/fresh-routines.md` gives to `hot` (`ui_task`,
 `menu_draw_bar`, `wm_draw_win`, `wm_su_bank`, `wm_su_merge`,
 `wm_dg_precover`, `wm_rz_swap`, `clip_drop`) or `dir` (`toast_now`, the
 `cp_*` strings) - none of which was edited. Branch `ksp18-sweep2`, base

@@ -10,7 +10,7 @@ everything after it is unsized.
 
 Each agent works in a git worktree of its own, created by the coordinator at
 `/home/user/wt/<name>` on a branch `ksp18-<name>` cut from the commit that
-adds this file, and writes its record to `docs/plans/ksp18/<name>.md`. The
+adds this file, and writes its record to `docs/plans/completed/ksp18/<name>.md`. The
 coordinator merges the branches; **agents do not push**.
 
 Read before writing any code, in this order:
@@ -19,7 +19,7 @@ Read before writing any code, in this order:
 2. **`docs/plans/completed/ksp14/BRIEF.md` sections 1, 2, 3 and 4** - the
    rules, the method, the environment and the note's shape carry over
    UNCHANGED except where this file says otherwise. Substitute `ksp18` for
-   `ksp14`, `docs/plans/ksp18/` for its note directory, and
+   `ksp14`, `docs/plans/completed/ksp18/` for its note directory, and
    `(kernel size pass 18)` for the commit suffix everywhere;
 3. `docs/plans/completed/ksp17/BRIEF.md` section 2 (still holds, with the
    agent count and ABI base below);
@@ -105,7 +105,7 @@ across 186 routines**. Three sources:
   kern_mega).
 
 The full per-routine list, with the agent that owns each, is
-`docs/plans/ksp18/fresh-routines.md`. Regenerate the diff yourself with
+`docs/plans/completed/ksp18/fresh-routines.md`. Regenerate the diff yourself with
 `tools/os88rdiff.py kernel d323a9a6 aede17b1` (add `-D KERN_SMALL` for
 kern_small).
 
@@ -173,7 +173,7 @@ routine in your files.
   HEAD -- apps/os88api.inc drivers/os88drv.inc apps/cc/os88.h` is the list of
   what is NOT frozen; everything else in those files is.
 * Commit messages end in `(kernel size pass 18)`. Each agent's note goes in
-  `docs/plans/ksp18/<name>.md`; run `python3 tools/os88index.py` and commit
+  `docs/plans/completed/ksp18/<name>.md`; run `python3 tools/os88index.py` and commit
   `docs/INDEX.md` with it. (The coordinator moves the directory to
   `docs/plans/completed/` at the close.)
 * MartyPC: `mkdir -p build && ln -sfn /home/user/os8088/build/martypc

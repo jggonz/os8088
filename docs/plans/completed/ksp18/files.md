@@ -1,6 +1,6 @@
 # ksp18 agent "files" - a general finder over the file manager
 
-Kernel size pass 18 (`docs/plans/ksp18/BRIEF.md`, row `files`): every
+Kernel size pass 18 (`docs/plans/completed/ksp18/BRIEF.md`, row `files`): every
 routine of `files.inc`, `fdlg.inc`, `filecp.inc`, `desk.inc`, `desksc.inc`'s
 resident half, `assoc.inc`, `icons.inc`, `dskwin.inc`, `diskops.inc`'s and
 `fsck.inc`'s resident halves, except the routines `fresh-routines.md` gives

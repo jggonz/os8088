@@ -1,7 +1,7 @@
 # ksp18 agent "main" - the work that arrived from main, and PCIETHER.DRV
 
-Kernel size pass 18 (`docs/plans/ksp18/BRIEF.md`, row `main`): every routine
-`docs/plans/ksp18/fresh-routines.md` assigns `main` - `f113f3f7` (`kbm_isr`'s
+Kernel size pass 18 (`docs/plans/completed/ksp18/BRIEF.md`, row `main`): every routine
+`docs/plans/completed/ksp18/fresh-routines.md` assigns `main` - `f113f3f7` (`kbm_isr`'s
 IRQ1-only ROM handoff, the splash's driver message in `.boot2`, MOUDIAG),
 `d7ac8738` (WIN16 Phase B/C: `assoc_ownex`, `assoc_run_x`'s ASSOC_PWBANK
 arm), `4faf9339` / `eb1caa77` (PCIETHER.DRV's kernel rows: `drv_f_pcieth`,

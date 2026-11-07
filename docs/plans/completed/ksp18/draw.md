@@ -1,6 +1,6 @@
 # ksp18 agent "draw" - the drawing, cursor, mouse and video files
 
-Kernel size pass 18 (`docs/plans/ksp18/BRIEF.md`), section 2's `draw` row: a
+Kernel size pass 18 (`docs/plans/completed/ksp18/BRIEF.md`), section 2's `draw` row: a
 general finder over `vga12.inc`, `softgfx.inc`, `font.inc`, `mouse.inc` (the
 cursor code with it), `mouproto.inc`, `vmmouse.inc`, `moudiag.inc`,
 `viddet.inc`, `vidsel.inc`, `vidext.inc`, `blank.inc`, `fsx.inc`, `band.inc`,

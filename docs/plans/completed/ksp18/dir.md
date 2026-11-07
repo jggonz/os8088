@@ -226,7 +226,7 @@ one.
 ## DEFECTS FOUND
 
 1. **`docs/INDEX.md` was stale at the brief's commit** (`c5a7b0f9` added
-   `docs/plans/ksp18/`), so the first `make` in this worktree failed at
+   `docs/plans/completed/ksp18/`), so the first `make` in this worktree failed at
    `checkdocs` - pass 17's lesson again. Regenerated in the first commit.
 2. **SPEC.md 22's routine table said `fmv_take` was shared by `fmv_bcast`
    and `fm_focus`**; `fm_focus` stopped calling it when its re-list became

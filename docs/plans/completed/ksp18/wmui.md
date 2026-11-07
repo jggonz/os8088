@@ -1,11 +1,11 @@
 # ksp18 agent "wmui" - the window manager, the UI task's helpers, the menu bar and the API shims
 
-Kernel size pass 18 (`docs/plans/ksp18/BRIEF.md`), section 2's `wmui` row: a
+Kernel size pass 18 (`docs/plans/completed/ksp18/BRIEF.md`), section 2's `wmui` row: a
 general, whole-file finder over `kernel/wm.inc`, `instance.inc`, `clip.inc`,
 `events.inc`, `dock.inc`, `apps.inc`, `ui.inc`, `menu.inc`, `toast.inc`,
 `fprog.inc`, `snd.inc`, `ctrl.inc`'s resident half and `kernel.asm` (the API
 table's shims, `kmain`), except the routines
-`docs/plans/ksp18/fresh-routines.md` gives to `hot`, `dir` or `main`
+`docs/plans/completed/ksp18/fresh-routines.md` gives to `hot`, `dir` or `main`
 (`ui_task`, `menu_draw_bar`, `wm_draw_win`, `wm_su_bank`, `wm_su_merge`,
 `wm_dg_precover`, `wm_rz_swap`, `clip_drop`, `toast_now`, the `cp_*` strings
 and handlers among them - none of which was edited). Branch `ksp18-wmui`,

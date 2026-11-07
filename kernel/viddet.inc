@@ -160,7 +160,7 @@ VID_LIVE_W  equ 9               ; words in the live block below
 ; (boot2_end = BOOT2_PAD at 13 sectors) and the copy wants 83 bytes there.
 ; Kernel size pass 18's sweep3 freed 87 of them in the blob's own code
 ; (boot2.asm's read_run, spinner.inc, CFG_SHARED/CFG_BOOT), so kern_big takes
-; this arm at thirteen sectors (docs/plans/ksp18/sweep3.md) - -72 resident,
+; this arm at thirteen sectors (docs/plans/completed/ksp18/sweep3.md) - -72 resident,
 ; no sector added. kern_emu is the same kernel and was this arm's first.
 %ifdef KERN_MEGA
  %define VID_TAB_RES
