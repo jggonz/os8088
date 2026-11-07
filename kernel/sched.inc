@@ -2460,6 +2460,14 @@ sch_switch:
                                 ; nothing reads CL again. DL = [sch_cur] from
                                 ; the park, and nothing between writes DX
     mov dh, ch                  ; scan cur+1, cur+2, ... (cur itself last)
+    xor bh, bh                  ; BH = 0 ONCE: a slot * 8 is under 256, so
+                                ; every `shl` below leaves it 0, and the
+                                ; fallback's index after the loop too (kernel
+                                ; size pass 18: out of the loop, -2 bytes and
+                                ; 3 clocks a slot scanned)
+%if MAX_TASKS * T_SIZE > 256
+  %error "sch_switch zeroes BH once for the scan: a slot's record offset must stay under 256"
+%endif
 .scan:                          ; over the [sch_top] slots that can be live,
     inc dl                      ; not MAX_TASKS (SPEC.md 8.1.3): the ones above
     cmp dl, ch                  ; are free, and a free slot was never picked.
@@ -2467,16 +2475,18 @@ sch_switch:
     xor dl, dl                  ; the bound under its OWN slot arrives with
 .nowrap:                        ; DL >= CH, and wraps to 0 on the first step
     mov bl, dl
-    xor bh, bh
     shl bx, cl                  ; CL = 3, set once above the scan
     cmp byte [bx+sch_tasks+T_STATE], 1
     jne .skip
     cmp dl, [sch_idleslot]      ; the idle task is picked at the fallback
     je .skip                    ; below and never by the scan (6.2)
-    cmp byte [fsx_task], 0xFF   ; the fsx freeze (SPEC.md 53.2): off means
-    je .pick                    ; every ready task is eligible; armed, only
-    cmp dl, [fsx_task]          ; the exclusive task itself...
-    je .pick
+    mov al, [fsx_task]          ; the fsx freeze (SPEC.md 53.2): off means
+    cmp al, 0xFF                ; every ready task is eligible; armed, only
+    je .pick                    ; the exclusive task itself... (through AL,
+    cmp dl, al                  ; which is free here: the same five bytes
+    je .pick                    ; and two clocks less than the immediate
+                                ; compare, and the second compare a register
+                                ; one - kernel size pass 18, -2)
     cmp dl, [fsx_worker]        ; ...its kept worker (FSXF_KEEPWORKER)...
     je .pick
     test byte [bx+sch_tasks+T_FLAGS], TF_SERVICE
@@ -2496,8 +2506,7 @@ sch_switch:
     jne .idlepick               ; starts it - the old behaviour stands, which
     mov dl, [sch_cur]           ; is to resume the outgoing task
 .idlepick:
-    mov bl, dl
-    xor bh, bh
+    mov bl, dl                  ; (BH = 0, the scan's: see above it)
     shl bx, cl                  ; CL = 3, set once above the scan
 .pick:
     ; --- charge the OUTGOING task, and ONLY on a real change (SPEC.md 8.1.1)
