@@ -1496,6 +1496,7 @@ endif
 # 39.14.7's mechanism and gives up 5.4.1's fast path on all of the block's
 # pixels rather than only on the seam. The A/B the cut is measured by, and
 # the only thing keeping the whole-virtual path assembling.
+#> [Knobs] MEMGRAN=16 :: the heap on a 256-byte granule, a measurement build (SPEC.md 50.2.1.1)
 # MEMGRAN=16 builds the heap on a 256-byte GRANULE (SPEC.md 50.2.1.1): the
 # DISK class (kernel/memory.inc MEM_ALIGN_CLASS) keeps every int 13h base
 # 512-aligned while a CPU-only claim (OSAPI_MEM_P's MEMP_CPU) may land on any
@@ -15955,6 +15956,7 @@ $(BUILD)/pciethertest.img: $(BUILD)/mega.img $(BUILD)/pciethercfg/system.cfg
 		$(MEGADRIVERS) $(MEGASYSAPPSARGS) $(MEGASYSOPTARGS) $(STIKARGS) $(MEGAINST) APPS:$(MEGADIR)/kdos/DOS.O88 $(MEGACOREARGS) $(SYSDOC) \
 		$(SYSLOGOARG) $(FACESARG) $(BUILD)/pciethercfg/system.cfg $(APPDATAFOLDER)
 
+#> [Gate disks] pciethertest :: kern_mega with PCIETHER.DRV already wanted in SYSTEM.CFG (QEMU's RTL8139)
 .PHONY: pciethertest
 pciethertest: $(BUILD)/pciethertest.img
 	@echo "pciethertest: build/pciethertest.img - kern_mega, PCIETHER.DRV already wanted"
@@ -15974,6 +15976,7 @@ $(BUILD)/pcibigtest.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(S
 		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
 		$(BUILD)/pciethercfg/system.cfg --folder SYSTEM/APPDATA
 
+#> [Gate disks] pcibigtest :: the same PCIETHER.DRV gate on kern_big's 1.44MB system disk
 .PHONY: pcibigtest
 pcibigtest: $(BUILD)/pcibigtest.img
 	@echo "pcibigtest: build/pcibigtest.img - kern_big, PCIETHER.DRV already wanted"
