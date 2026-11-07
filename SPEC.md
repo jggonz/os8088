@@ -39844,13 +39844,14 @@ first eight sectors of track 0, and the mount is about to want all of them.
 
 So a full mount **empties the cache first**, before the boot-sector read and
 before the banked-head check (so a fixed volume's listing mount drops it
-too), and reads LBA 0 THROUGH the empty cache with a one-byte cap,
-`[dsk_rah_hint]`, at **8**. `dsk_rah_fill` takes the smaller of the track's
-remainder and the cap. Eight because the read runs under the fallback 9/2,
+too), and reads LBA 0 THROUGH the empty cache with the fill's ceiling,
+`[dsk_rah_lim]` - the chunk's nine sectors at every other read - lowered to
+**8**. `dsk_rah_fill` takes the smaller of the track's remainder and that
+ceiling, one compare for the cap and the chunk (kernel size pass 18). Eight because the read runs under the fallback 9/2,
 before the BPB says what the disk is, and eight is the most every geometry
 §18.2's rule 11 admits has on its first track: an 8-sector track 0 would
-refuse a ninth. The cap is disarmed straight after that read, before its
-failure test, and on the banked path, so no other fill ever sees it.
+refuse a ninth. The ceiling is put back straight after that read, before its
+failure test, and on the banked path, so no other fill ever sees the cap.
 
 **What the swap detector still guarantees, exactly as before.** The cache is
 empty when the read starts, so the boot sector necessarily comes off the
@@ -52005,7 +52006,8 @@ rather than paid for:
 - **Left, up to 7px**: white margin, and **nothing else** — see §22.11.1.1,
   which is the reason that sentence is short now. It used to be white margin
   *plus up to three columns of the 16x16 icon*, erased and re-iconed by
-  `fm_draw_licon` and only when the rounding really did reach them.
+  `fm_draw_licon` and only when the rounding really did reach them (the pass
+  that did it is deleted now, kernel size pass 18 - §22.11.1.1).
 
   **The erase in front of that was not belt and braces, and leaving it out was
   the one bug this shipped before the pixel diff caught it** — worth keeping
@@ -52041,7 +52043,7 @@ draws nothing.
 ##### 22.11.1.1 The strip pass is unreachable, and the icon inset is why
 
 The row icon is **8px** into the content, not 4, and the name is at **32**, not
-24 (`fm_draw_lrow`). Both are §11.94.3's alignment work — and one of them is
+24 (the row painter in `fm_draw_lrows`). Both are §11.94.3's alignment work — and one of them is
 not, which is the part to read before moving either.
 
 **What alignment buys here is not a text pen.** `ico_pass` lands each 16-pixel
@@ -52058,9 +52060,13 @@ were.
 most 7 pixels, so an icon 8px in **cannot be cut by the strip at any window
 position** — and with §11.94.1's alignment default `x1 == fm_cx` exactly, so
 the strip is empty as well as harmless. `align_up(cx) > cx+8` is unsatisfiable.
-The pass is therefore dead code, and it is **kept** rather than deleted: it is
-four instructions of test that state the invariant, and moving the inset back
-would need it. Its residue is `wm_snap_ax`'s one refusal — a window **dragged**
+The pass was therefore dead code. It was kept for a while as four instructions
+of test that stated the invariant, and **kernel size pass 18 deleted it, test
+and all (-70 bytes resident, with its `fm_draw_licon`)**: the invariant is an
+assembly-time `%if` on `FM_PEN_X` (the inset `fm_pen8` adds) now, which fails
+the build if the inset
+goes below 7 - and moving it back there needs the pass back, which is the
+parent of that commit. Its residue is `wm_snap_ax`'s one refusal — a window **dragged**
 to x=0 at the full screen width, where 7 becomes the answer and those seven
 columns are margin. A **maximized** window is not that case, and §11.95.2 is
 why: it drops its left border, so its content starts at `W_X` = 0 and is
@@ -76006,6 +76012,19 @@ reordering one without the other silently corrupts all nine:
 
 `vid_seg`, `vid_stride`, `vid_bmask`, `vid_bshift`, `vid_rowadd`,
 `vid_wrapbit`, `vid_wrapfix`, `vid_cw`, `vid_ch`
+
+**Where the rows live (kernel size pass 18).** The four constant rows (VGA,
+Hercules, CGA, EGA - two on `kern_small`) are read by `vid_apply` and nothing
+else, and `vid_apply` has no resident copy: `VID_APPLY` is expanded into the
+boot blob (`bvs_apply`), CTRL.DRV and EXTD.DRV. So on `kern_small` and
+`kern_emu` each expansion carries its OWN copy of the rows (`VID_TAB_ROWS`,
+at the macro's foot, read through CS with DS following it for the one
+`rep movsw`), and the kernel keeps only `vid_vxrow`, the VESA row its driver
+rewrites (§120.4): -36 resident on `kern_small`, -72 on `kern_emu`. `kern_big`
+keeps the whole table resident (`VID_TAB_RES`) only because its blob is full
+to the byte at thirteen sectors - a fourteenth would buy it the same -72 - and
+`kern_mega` because its switch rewrites the segment column to selectors in
+place.
 
 **The width and height are the LAST two columns and they are the DISPLAY's**
 (§39.2.1). The desktop's `vid_w`/`vid_h` are derived from them below and sit
@@ -108835,7 +108854,9 @@ bytes** in it. So the cluster costs the file **nothing**: 1,220 bytes before
 and after.
 
 `asc_seed` runs at the end of `asc_use`, after `asc_merge_ext`, and the two
-choices in it are the load-bearing ones:
+choices in it are the load-bearing ones. (Both are PARTS of `asc_use_x` since
+kernel size pass 18 - written at their one call, `asc_row_take` inside
+`asc_seed`'s walk - and keep their names as the comments that head them.)
 
 - **`assoc_app_of`, not `asc_slot_of` — find, never create.** A slot only
   matters if some extension points at it, and the kernel's table is
@@ -230097,7 +230118,9 @@ state that already exists (`vid_tab` row 4, `gfx_color`, `vga_xorm`,
 `cur_hx`, `cur_drawn_x`, the `ico_*` cells, `vid_kind`, `gfx_pat`, `vx_ep`
 itself, and the two kernel addresses `vx_kret` and `vx_null`). The driver
 banks the kernel's segment (ES) and COPIES the pointers, and **fills
-`vid_tab` row 4** from the chosen mode. The table lives in the boot blob
+`vid_tab` row 4** (`vid_vxrow`, which is that row where the table is
+resident and the one resident row where it is not, §39.2) from the chosen
+mode. The table lives in the boot blob
 beside `vx_boot_x`, its one sender, so it is given back with the blob (DX is
 the blob's segment). `kernel/vxabi.inc` is the layout, shared as source with the
 driver, and both ends assert their copy against it.

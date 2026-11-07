@@ -928,7 +928,10 @@ ld_run_body_x:
 
     ; --- 6. read the whole file into the region --------------------------------
 .read:
-    mov word [ld_roff], 0       ; where in the region the read lands
+    xor bx, bx                  ; BX = where in the region the read lands,
+                                ; stored once at .rdgo and HELD to the read:
+                                ; dsk_bytes_secs_x spends CL alone (kernel
+                                ; size pass 18, -10)
     mov ax, [ld_img]            ; THE IMAGE, NOT THE FILE. On a v3 package the
                                 ; two are equal and always were; on one
                                 ; carrying parts the region holds the primary
@@ -951,17 +954,16 @@ ld_run_body_x:
     ; compress anything for which R + file does not fit the region this
     ; loader was going to claim anyway - so the sizing at step 4 is untouched
     ; and this cannot overflow it.
+    mov bx, ax                  ; (AX = the image, just loaded)
     mov ax, [ld_fsz]
-    mov bx, [ld_img]
     sub bx, ax
     add bx, 511
     and bx, 0FE00h
-    mov [ld_roff], bx
 .rdgo:
+    mov [ld_roff], bx
     call dsk_bytes_secs_x       ; DX = ceil(AX/512)
     mov ax, [ld_clus]
     mov es, [ld_base]           ; the package's OWN segment
-    mov bx, [ld_roff]
     call dsk_read_chain_x ; in: AX=cluster, DX=sectors, ES:BX -> dest.
     jc .ret2                    ; on CF, AL is ALREADY the status: 1 =
                                 ; LD_EDISK (disk error), 2 = LD_EBAD (chain
@@ -1396,12 +1398,13 @@ ld_start:
                                 ; worker later (SPEC.md 20.6). The entry
                                 ; proc cannot: neither I_STATE nor
                                 ; wm_owner is published until right here.
-    mov ax, [ld_base]
-    mov [di+I_SPTR], ax         ; the region's base SEGMENT (SPEC.md 20.1)
-    mov ax, [ld_need]
-    mov [di+I_SIZE], ax         ; allocated bytes: pool occupancy + RAM sum
     push es
-    mov es, [ld_base]           ; the name field is in the package's image
+    mov ax, [ld_base]
+    mov es, ax                  ; the name field is in the package's image
+    mov [di+I_SPTR], ax         ; the region's base SEGMENT (SPEC.md 20.1)
+    mov ax, [ld_need]           ; (ES loaded from the register that already
+    mov [di+I_SIZE], ax         ; held it: kernel size pass 18, -2) -
+                                ; allocated bytes: pool occupancy + RAM sum
     mov si, 16
     mov bp, inst_set_name_x
     call ct_cw_mem_disp         ; ES:SI -> the 16-byte NUL-padded name

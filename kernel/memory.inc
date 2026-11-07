@@ -6171,13 +6171,16 @@ osapi_sys_kb_x:
                                 ; machine, so both subtractions above are made
                                 ; once, on AX, and BX is not spent on a second
                                 ; copy of them (kernel size pass 12)
-    mov ax, SK_FAT_KB
+    mov al, SK_FAT_KB           ; AH IS 0: the image row just stored is the
+    stosw                       ; kernel's KB less constants, under 256 on
+    mov al, SK_STK_KB           ; every kernel (the `cbw` / `mov ah, 0` above
+    stosw                       ; is the same fact, and kernel.asm's guard
+                                ; beside KBUF_KB holds all five under 256), so
+                                ; each constant row is a byte load (kernel
+                                ; size pass 18, -4)
+    mov al, SK_STK0_KB
     stosw
-    mov ax, SK_STK_KB
-    stosw
-    mov ax, SK_STK0_KB
-    stosw
-    mov ax, KBUF_KB             ; SK_BUF, FAT + stacks together
+    mov al, KBUF_KB             ; SK_BUF, FAT + stacks together
     stosw
     mov ax, [mem_top]           ; SK_HEAP - mem_total_kb's other half, inline
     sub ax, [mem_base]

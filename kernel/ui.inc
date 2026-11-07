@@ -1653,7 +1653,9 @@ section .text
 ;
 ; A window pointer is never 0, so 0 is the "nothing recorded" sentinel - and
 ; .bss arrives zeroed (the overlay note in kernel.asm), so the machine's very
-; first title-bar press takes .first like any other.
+; first title-bar press takes .first like any other. A SPENT pair stores the
+; delta it measured instead, which is below UI_TDBLT and so no more a window
+; pointer than 0 is: every value below wm_wins reads "nothing recorded".
 ; -----------------------------------------------------------------------------
 ui_tdbl:
     mov ax, [ui_click_t]
@@ -1662,8 +1664,10 @@ ui_tdbl:
     sub ax, [ui_tclkt]          ; wrap-safe - the difference is what matters
     cmp ax, UI_TDBLT
     jae .first                  ; too slow: it restarts the pair below
-    mov word [ui_tclkw], 0
-    ret
+    mov [ui_tclkw], ax          ; SPENT: the delta, below UI_TDBLT, and so no
+    ret                         ; window's pointer - a 3-byte accumulator store
+                                ; for the 6-byte immediate 0 (kernel size pass
+                                ; 18, -3). CF = 1 is still the `cmp`'s
 .first:
     mov ax, [ui_click_t]
     mov [ui_tclkt], ax
@@ -2303,7 +2307,8 @@ ui_grow:
     ; window and before the union arithmetic below spends it; AX is the old
     ; last row and that comparison is still to come.
     push ax
-    mov word [wm_dmg_rzwin], 0
+    xor ax, ax                  ; (AX is banked and reloaded next: a 3-byte
+    mov [wm_dmg_rzwin], ax      ; accumulator store, kernel size pass 18, -1)
     mov ax, [bx + W_X]
     cmp ax, [ui_rzx]
     jne .norz                   ; the origin moved: the content went with it
@@ -2360,15 +2365,18 @@ ui_grow:
 .uw:
     mov bx, [bx + W_Y]          ; (the read completes before BX changes)
     call wm_paint_dmg           ; caller-held lock, per the wm contract
-    mov word [wm_dmg_rzwin], 0  ; a one-shot, and its life is that one call
-    jmp gfx_unlock              ; NO second gfx_lock here - already held (§7)
+    and word [wm_dmg_rzwin], 0  ; a one-shot, and its life is that one call
+    jmp gfx_unlock              ; NO second gfx_lock here - already held (§7).
+                                ; (`and`, -1: gfx_unlock's first act on every
+                                ; kernel is a compare, so no flag left here is
+                                ; read - kernel size pass 18)
 
 .nodmg:                         ; nothing moved and nothing changed size, so
     pop ax                      ; no window owes a pixel - this one included,
                                 ; which wm_dmg_wins would have marked by
                                 ; POINTER whatever the rect said (11.91.2).
                                 ; The AX the rz block pushed is still owed
-    mov word [wm_dmg_stwin], 0  ; ...and the vacated rect is a one-shot whose
+    and word [wm_dmg_stwin], 0  ; ...and the vacated rect is a one-shot whose
                                 ; keeper is wm_dmg_wins, which this path is the
                                 ; first to arm and never reach: left set it
                                 ; would describe a window to the NEXT damage
@@ -2523,8 +2531,8 @@ ui_dispatch:
     jae .ret                    ; kern_small, SPEC.md 14.6); a set with more
                                 ; cells must have had a handler
     shl bx, 1
-    xor ah, ah
-    add ax, [ui_loc_base + bx]
+    cbw                         ; AH = 0: AL is an item index, below the
+    add ax, [ui_loc_base + bx]  ; 16 a popup holds (kernel size pass 18, -1)
     jmp ui_cmd
 .ret:
     ret
@@ -2786,13 +2794,14 @@ ui_sys_open:
     ; (kernel size pass 17). kent_bp banked every register it writes.
     mov bx, [ui_desc]           ; BX = the name to match, hoisted out of the
     mov bx, [bx+UO_NAME]        ; scan: nothing in the loop writes it
-    mov di, inst_tab
-    mov cx, INST_MAX
-.scan:
+    mov di, inst_tab - I_RECSZ  ; ...over inst_next, the table's own walk: off
+.scan:                          ; the end is CF = 1, none open, the load
+    call inst_next              ; (kernel size pass 18, -1 against the CX
+    jc .load                    ; count and the `add` / `loop` tail)
     cmp byte [di+I_STATE], 1
-    jne .next
+    jne .scan
     test byte [di+I_KIND], KIND_PKG
-    jz .next
+    jz .scan
     push di
     mov si, bx
     add di, I_NAME
@@ -2812,9 +2821,7 @@ ui_sys_open:
                                 ; below is what can push it past 127)
 .nomatch:
     pop di
-.next:
-    add di, I_RECSZ
-    loop .scan                  ; ...and none open falls into the load
+    jmp short .scan
 .load:
 %ifdef ROM_PKG
     ; THE ROM'S COPY FIRST (docs/plans/ROM-PLAN.md 4.3, SPEC.md 2.10.5): a
@@ -2898,7 +2905,7 @@ ui_sys_open:
                                 ; into SYSTEM's cluster on the FLOPPY
     mov bx, [ui_desc]
 
-    mov word [ld_pwin], 0       ; no poster: this is not a Disk window's load,
+    and word [ld_pwin], 0       ; no poster: this is not a Disk window's load,
     mov si, [bx+UO_FILE]        ; and so not loader_run either - there is no
     call COLD_SEG:ldf_ld_run_name ; BY NAME (SPEC.md 21.4): no listing to build
                                 ; and none to refresh, and no status line to
@@ -2927,11 +2934,13 @@ ui_sys_open:
                                 ; the sector ld_res_name has just read.
 .code:                          ; dwf_dskw_stat is a far call and answers in
     pop ax                      ; BX, so the descriptor is re-read after it
-    xor ah, ah                  ; SPEC.md 20.12.4: the entry proc's own toast
+    cbw                         ; SPEC.md 20.12.4: the entry proc's own toast
     xchg ah, [ld_said]          ; is up and names the reason better - say
     or ah, ah                   ; nothing, as ld_say_status does for a Disk
     jnz .back                   ; window's load. Read-and-clear in one, and
                                 ; it leaves AH = 0 for the index below
+                                ; (`cbw` for the zero: AL is an LD_E* code,
+                                ; 1..6 - kernel size pass 18, -1)
     mov bx, ax
     shl bx, 1
     mov si, [bx+fm_stattab]     ; the Disk window's verdicts (SPEC.md 21)

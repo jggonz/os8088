@@ -309,10 +309,11 @@ clip_reloc:
                                 ; that
 %else
 clip_reloc  equ mem_rr_none
-    db 0                        ; PARITY PAD, never executed or read (kernel
-                                ; size pass 15): the five bytes that went
-                                ; leave ui_task, the one hot `.text` routine
-                                ; after this, at an odd shift otherwise
+                                ; (the PARITY PAD that stood here - a `db 0`,
+                                ; kernel size pass 15 - went in kernel size
+                                ; pass 18: wm_an_open's -8 and inst_park_req's
+                                ; -1 are that pass's kern_big-only bytes ahead
+                                ; of ui_task, an odd count this byte pairs)
 %endif
 %endif                          ; OS88_COMPACT
 

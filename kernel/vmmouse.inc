@@ -339,9 +339,11 @@ vmm_boot_x:
     mov [mou_idany], al         ; ...so mou_hotplug stands down too
     call KERNEL_SEG:ovw_mou_lockon  ; retire both UARTs: IER 0, both lines
                                     ; masked, and mou_p2_off for the aux side
-    mov [vmm_on], al            ; LAST, and deliberately so: it is the gate
-    jmp short .out              ; every poll site reads. AL survives the
-                                ; thunk: mou_lockon preserves every register
+    mov byte [vmm_on], 1        ; LAST, and deliberately so: it is the gate
+    jmp short .out              ; every poll site reads. An immediate store
+                                ; and not AL's: mou_lockon spends AX..CX since
+                                ; kernel size pass 18 (this is `.boot2`, given
+                                ; back, so the two bytes are nobody's)
 
 .refuse:
     mov bx, vmm_row             ; RE-ESTABLISHED: drv_call's callee may spend

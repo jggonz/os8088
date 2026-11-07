@@ -6834,10 +6834,10 @@ osapi_file_goto_qm:
 ; is vga12.inc's and this file's top half comes before it.
 
 osapi_video:
-    mov ax, [vid_pwm1]          ; THE PRIMARY, NOT THE DESKTOP UNION (39.2.1).
-    inc ax                      ; [vid_w]/[vid_h] are the whole virtual
-    mov bx, [vid_phm1]          ; desktop once a second display is extended,
-    inc bx                      ; and a package has no use for that number:
+    mov ax, [vid_pw]            ; THE PRIMARY, NOT THE DESKTOP UNION (39.2.1).
+    mov bx, [vid_ph]            ; [vid_w]/[vid_h] are the whole virtual
+                                ; desktop once a second display is extended,
+                                ; and a package has no use for that number:
                                 ; windows open on the primary, wm_fit confines
                                 ; a frame to one display, and everything a
                                 ; package draws is window-relative. Answering
@@ -6850,7 +6850,12 @@ osapi_video:
                                 ; is the primary's - so it was mixing the two
                                 ; and could not have been right either way.
                                 ; Identical on every one-display machine, where
-                                ; [vid_pwm1]+1 IS [vid_w].
+                                ; [vid_pw] IS [vid_w]. ([vid_pw]/[vid_ph] and
+                                ; not [vid_pwm1]+1/[vid_phm1]+1: vid_apply
+                                ; writes all four in ONE copy from vid_w..
+                                ; vid_hm1, and nothing else writes them, so
+                                ; they are the same two numbers - kernel size
+                                ; pass 18, -2)
     mov cx, [vid_dock_y0]
     mov dl, [vid_kind]
     mov dh, [vid_planes]        ; the bpp IS the plane count: 4 on a planar
@@ -8191,9 +8196,8 @@ wm_ondrag_c:          call wm_ondrag
                   clc             ; CF = 0 is the ANSWER, not the caller's own
                   ret             ; carry coming back: the bodies write no flag
 %endif
-wm_timer_c:           call wm_timer
-                  clc             ; the arm path's is worse - it is the carry
-                  ret             ; out of [ticks] + delay
+wm_timer_c equ wm_timer         ; ...and the timer's states its CF = 0 itself
+                                ; (wm.inc; kernel size pass 18, -4)
 %ifdef KERN_MEGA
 wm_ontimer_c:         call wm_ontimer
                   clc
@@ -9326,6 +9330,9 @@ SK_IMG_KB  equ SK_R(SK_CUM4) - SK_R(SK_CUM3)
 ; admits to, and a legend square keying a row to a band it is not in is worse
 ; than no square at all (SPEC.md 28).
 KBUF_KB    equ SK_R(SK_CUM3)
+%if KERN_KB > 255 || SK_FAT_KB > 255 || SK_STK_KB > 255 || SK_STK0_KB > 255 || KBUF_KB > 255
+  %error "osapi_sys_kb_x (memory.inc) loads SK_FAT/STK/STK0/BUF into AL alone, AH being the image row's high byte: every one must stay under 256 KB"
+%endif
 ; ...and what a machine with NO VGA gives back, taken off SK_KERN and SK_IMG
 ; together so the parts go on summing (SPEC.md 39.22). Derived from the same
 ; rounding as the rows rather than written out as a KB constant of its own:
