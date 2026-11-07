@@ -232872,7 +232872,10 @@ added (WAVERACK-PLAN.md's Wave 4b section says when one would earn it):
   keeps the sum wherever the window IS the claim - so no `CPU_F_PM` test and
   no far call a frame on the 8088, 66 bytes of image on every kernel.
   `waverackmega` plays PRELUDE.WAV from the hold on 86Box's 286 and holds its
-  bytes to `wrsim.hold_bytes()`.
+  bytes to `wrsim.hold_bytes()`. Since WaveRack declares `OS88_HIGHMEM`
+  (§123.13, KERN-MEGA-PLAN 14.159) the hold is a pool claim ABOVE 1MB there
+  whenever it is 64 KB or less, a lone data selector, and the window binds
+  into it all the same.
 - **The d = 1 8-bit loops** (`wt_cv8m1`, `wt_cv8s1`): no box, so a sample is
   the load, the extremes, the table and the store, and the peak and the rails
   are derived from the extremes once a call (`wt_cvx`) - the same values the
@@ -233640,6 +233643,25 @@ standing in that folder with `OSAPI_FILE_GOTO_QM`.
 | WaveRack's disk (wave 7) | `make waverackdisk`, all four geometries, on demand like `midirackdisk`: WAVERACK.O88 at the root, the demo clips RAW in MEDIA/ (WaveRack reads with READ_SEQ/READ_AT, which deliver a file as it lies), CREDITS.TXT, CLIPS.TXT per geometry, SYSTEM/APPDATA. **1.44 MB 1,975 of 2,847 clusters** (all six clips); **1.2 MB 1,975 of 2,371** (all six); **720 KB 605 of 713** (FURELISE, MAPLELF, NOCTURNE, PRELUDE: every format shown); **360 KB 302 of 354** (two). THE CLIPS (`apps/waverack/demo/`, committed, 970 KB): excerpts of Wikimedia Commons recordings whose pages say Public Domain or CC0, read 2026-10-28 - FURELISE (Beethoven, V Gao, PD/CC0), MAPLELF (Joplin, US Marine Band 1906, PD-USGov), GYMNO (Satie, Teknopazzo, CC0), MARCH (Sousa, USAF Band of Mid-America, PD-USGov), all 8-bit mono 11,025 Hz, 12 s (MARCH 24 s); NOCTURNE (Chopin, Peter Johnston for Musopen, CC0) 8-bit mono 22,050 Hz, 8 s; PRELUDE (Bach, Kimiko Ishizaka, CC0) 16-bit stereo 11,025 Hz, 3 s - held in memory on an 8088. `tools/os88wrdemo.py` fetches each source at a pinned SHA-256, decodes it with lame and cuts, decimates, normalises (peak 0.9) and dithers it deterministically; the fast `wrsim` row holds the committed clips and CREDITS.TXT to its table. The live media carries the six in MEDIA/ (XTMP3's songs' ground, §80.6); `make waverackhd`'s disk too |
 | final pass (wave 6b) | `waverackrec` on the final code: XT-IDE 60 s at 11,025 and 15,000 Hz, high water 3,072 / 4,096; 204 s beside a second WaveRack's 2 MB scan 16,384; 32 KB clusters 5,120 / 6,656; floppy 8,000 Hz 27,648; 0 overruns, every take = the card's count. The copy 97.8 cycles a byte. Drawing on the 5150 + Hercules (`calls`): idle 0 a tick, recording 0.99, playing at Fit 1.02, one cut 16, a full repaint 1,122-1,459 ms (77-90 primitives); `wr_redraw` while recording 60.4 ms a tick median. Image **43,625** bytes after the review's fixes (packed 34,249 - 34 clusters at 1 KB), bss **7,774** |
 | record rate, measured | XT-IDE (2 KB and 32 KB clusters): 60 s at 11,025 and 15,000 Hz with no overrun, the ring's high water 3,072-6,656 bytes of 32,256; 203 s at 11,025 Hz while a second WaveRack launched, opened and scanned 2 MB, high water 8,704. 1.44 MB floppy: 8,000 Hz, 30 s, high water 27,648; 11,025 Hz refused there (§123.7's write-time rule) |
+
+**On kern_mega** (KERN-MEGA-PLAN 14.149, 14.159): WaveRack has no `PKG_MEGA`
+arm and declares `OS88_HIGH | OS88_HIGHMEM` (its class byte, §20.18), so in
+protected mode its REGION is a code/data pair above 1MB and every claim of
+64 KB or less is a pool block there - the band, the envelopes, the view
+cache, the history, the hold, the look-ahead, the take's staging units and
+the save's output claim. Two kinds stay conventional, each by its door: the
+DMA rings (`OSAPI_MEM_CLAIM_DMA_HI`, the card's), and the **I/O claim**,
+which `wo_ioclaim` makes with `OSAPI_MEM_P` and `CX = MEMP_CONV` (§50.3.7)
+because every read of the document lands in it, the stream's against its
+deadline, and a fixed disk's transfer into a pool block is bounced nine
+sectors a call; every other kernel reads `MEMP_CONV` as no head, the claim
+it always made. Nothing in WaveRack sums a segment: the hold's addressing is
+the bound window above, and `wc_myslot` (§123.7) compares `SSI_SEG` with its
+own DS, which is the region's data selector the loader publishes as
+`I_SPTR` wherever the region is. `waverackmega` reads the placement off the
+descriptors, not the class byte. On kern_big and kern_small the bits are
+ignored and `MEMP_CONV` reads as no head: the same claims as before, 17
+bytes of image (43,955).
 
 ## 124. WIN16 — Windows 3.x programs in an os8088 window (`apps/win16/`, `WIN16.O88`)
 

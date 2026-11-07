@@ -19530,9 +19530,15 @@ SOAK = [
         "#GP at the load; it must take the hold under a bound window "
         "(SEG_BWIN/SEG_AIM), load it whole, hold tools/wrsim.py's "
         "hold_bytes() byte for byte, play to the end and keep its window. "
-        "SLOT: a take's wc_myslot names this instance's inst_tab row. RED "
-        "with the base's package (--pkg/--src): HOLD's window gone, 'WaveRack "
-        "0D'; SLOT passes there too (a guard). 40s is 34 measured",
+        "SLOT: a take's wc_myslot names this instance's inst_tab row. WHERE "
+        "(14.159: WaveRack is OS88_HIGH | OS88_HIGHMEM): off the descriptors, "
+        "the region, hold, look-ahead, band, view cache, envelope and take "
+        "units above 1MB, the I/O claim (MEMP_CONV) and the record ring "
+        "conventional, the take written from the high units. RED with the "
+        "base's package (--pkg/--src): HOLD's window gone, 'WaveRack 0D'; "
+        "and each of 14.159's breaks - no OS88_HIGH, no OS88_HIGHMEM, no "
+        "MEMP_CONV, wt_hoff's sum always, wc_myslot on CS - fails its "
+        "check. 40s is 37.5 measured",
         needs=("86box", "nasm"),
         wants=("build/mega.img", "build/waverack.o88", "build/waverack.bin")),
     Row("megasbgap", "soak", py("tests/megasbgap.py"), 20.0,
