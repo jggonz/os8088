@@ -6834,10 +6834,10 @@ osapi_file_goto_qm:
 ; is vga12.inc's and this file's top half comes before it.
 
 osapi_video:
-    mov ax, [vid_pwm1]          ; THE PRIMARY, NOT THE DESKTOP UNION (39.2.1).
-    inc ax                      ; [vid_w]/[vid_h] are the whole virtual
-    mov bx, [vid_phm1]          ; desktop once a second display is extended,
-    inc bx                      ; and a package has no use for that number:
+    mov ax, [vid_pw]            ; THE PRIMARY, NOT THE DESKTOP UNION (39.2.1).
+    mov bx, [vid_ph]            ; [vid_w]/[vid_h] are the whole virtual
+                                ; desktop once a second display is extended,
+                                ; and a package has no use for that number:
                                 ; windows open on the primary, wm_fit confines
                                 ; a frame to one display, and everything a
                                 ; package draws is window-relative. Answering
@@ -6850,7 +6850,12 @@ osapi_video:
                                 ; is the primary's - so it was mixing the two
                                 ; and could not have been right either way.
                                 ; Identical on every one-display machine, where
-                                ; [vid_pwm1]+1 IS [vid_w].
+                                ; [vid_pw] IS [vid_w]. ([vid_pw]/[vid_ph] and
+                                ; not [vid_pwm1]+1/[vid_phm1]+1: vid_apply
+                                ; writes all four in ONE copy from vid_w..
+                                ; vid_hm1, and nothing else writes them, so
+                                ; they are the same two numbers - kernel size
+                                ; pass 18, -2)
     mov cx, [vid_dock_y0]
     mov dl, [vid_kind]
     mov dh, [vid_planes]        ; the bpp IS the plane count: 4 on a planar
@@ -8191,9 +8196,8 @@ wm_ondrag_c:          call wm_ondrag
                   clc             ; CF = 0 is the ANSWER, not the caller's own
                   ret             ; carry coming back: the bodies write no flag
 %endif
-wm_timer_c:           call wm_timer
-                  clc             ; the arm path's is worse - it is the carry
-                  ret             ; out of [ticks] + delay
+wm_timer_c equ wm_timer         ; ...and the timer's states its CF = 0 itself
+                                ; (wm.inc; kernel size pass 18, -4)
 %ifdef KERN_MEGA
 wm_ontimer_c:         call wm_ontimer
                   clc

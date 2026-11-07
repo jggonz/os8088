@@ -593,9 +593,9 @@ inst_park_req:                  ; FAR-ENTERED (SPEC.md 2.6.1): no near caller
     push dx                     ; and NOT CX: this body never writes it, and
     push di                     ; task_yield banks it through the whole frame
     mov byte [inst_parkreq], 1
-    mov ax, [ticks]
-    add ax, INST_PARKW
-    mov dx, ax                  ; DX = the deadline
+    mov dx, [ticks]             ; DX = the deadline, built in DX itself (AX
+    add dx, INST_PARKW          ; is not read before .wait's reload: kernel
+                                ; size pass 18, -1)
 .wait:
     ; HAS EVERY LIVE PACKAGE WORKER PARKED? (this walk was inst_park_all, a
     ; routine with this one caller - inline since size pass 9). Off the end
@@ -1227,7 +1227,7 @@ inst_fhome_idx:
 ; in:  DI = record, SI = source: NUL-terminated OR NUL-padded (a package
 ;      header's 16-byte name field is safe); at most 15 chars are taken
 ; out: nothing (all registers preserved); byte I_NAME+15 is always 0, written
-;      before the copy rather than by a zero-fill before it
+;      after the copy rather than by a zero-fill before it
 ; -----------------------------------------------------------------------------
 ; -----------------------------------------------------------------------------
 ; inst_set_name_x - inst_set_name with the source at ES:SI (SPEC.md 20.1)
@@ -1241,9 +1241,8 @@ inst_fhome_idx:
 inst_set_name_x:
     call kent_di                ; (kernel size pass 15)
     add di, I_NAME
-    mov byte [di+15], 0         ; the terminator FIRST, so a 16-byte source
-    mov cx, 15                  ; with no room for a NUL still terminates
-.copy:                          ; ...and then ONE loop rather than a zero-fill
+    mov cx, 15                  ; 15 characters, and the terminator after them
+.copy:                          ; ONE loop rather than a zero-fill
     mov al, [es:si]             ; and a copy: once AL reads 0 the source stops
     or al, al                   ; advancing and the same loop NUL-pads the
     jz .pad                     ; tail. It always runs 15 (~95us at launch
@@ -1252,7 +1251,13 @@ inst_set_name_x:
     mov [di], al
     inc di
     loop .copy
-    jmp kret_di
+    mov [di], cl                ; ...I_NAME+15 = 0, so a 16-byte source with no
+    jmp kret_di                 ; room for a NUL still terminates: CL is the
+                                ; spent `loop` count's 0, a 2-byte store where
+                                ; the 4-byte immediate one stood first (kernel
+                                ; size pass 18, -2). The record is not
+                                ; published yet (I_STATE), so the order of the
+                                ; two writes is nobody's to see
 
 ; -----------------------------------------------------------------------------
 ; inst_bind_win - attach a window to a record and claim wm_owner
