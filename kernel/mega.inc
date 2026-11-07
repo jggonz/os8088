@@ -12788,7 +12788,8 @@ mega_segty:
     jae .no                         ; alias, a #GP in the kernel (mega_segh
     cmp bl, 0xFF                    ; bounds its DX the same way)
     je .no
-    MXT_ES
+    xchg ax, di                     ; AX = the descriptor's offset, across
+    MXT_ES                          ;   the walk (AX is banked)
     mov di, mega_wtab
 .l:
     cmp [es:di], dx
@@ -12796,10 +12797,14 @@ mega_segty:
     add di, 4
     cmp di, mega_wtab_end
     jb .l
-    mov di, dx                      ; not a window: a handle descriptor of
-    and di, 0xFFF8                  ; the caller's block (AVL set, based in
-    mov ax, MEGA_SEL_LDTD           ; a block the caller owns)
-    mov es, ax
+    stc                             ; not a window: a handle descriptor of
+.h:                                 ; the caller's block (AVL set, based in
+    xchg ax, di                     ; a block the caller owns). CF = 1 here,
+    mov ax, MEGA_SEL_LDTD           ; CF = 0 from .f's equal compare - and
+    mov es, ax                      ; neither `xchg` nor `mov` writes it: DI
+    jnc .set                        ; and ES are .set's either way (kernel
+                                    ; size pass 18: they were derived twice,
+                                    ; once on each arm, -10)
     test byte [es:di+6], MEGA_HAVL
     jz .no
     push dx
@@ -12819,11 +12824,8 @@ mega_segty:
 .f:
     cmp [es:di+2], bl
     jne .no
+    jmp short .h                    ; (equal: CF = 0)
 .set:
-    mov di, dx
-    and di, 0xFFF8
-    mov ax, MEGA_SEL_LDTD
-    mov es, ax
     mov al, 0xF2                    ; data at DPL 3, code CONFORMING at DPL
     jcxz .s                         ; 0 (KERN-MEGA-PLAN 14.144): a program
     mov al, 0x9E                    ; that flips its odd selector in place
@@ -12911,22 +12913,19 @@ mega_npx:                           ; ovlchk: builds its own far frame
     mov [bp+4], bx                  ;   handler's CS: a refusal above still
     mov bx, [es:mega_npo]           ;   hands mega_fault its 0Bh
     mov [bp+2], bx
-    pop es
-    pop ds
-    pop di
-    pop dx
+    SKIPF1                          ; (test al, 0F9h over the `stc`: CF = 0,
+.no:                                ;   AL kept) - ONE unwind for both arms,
+    stc                             ;   and CF says which (kernel size pass
+    pop es                          ;   18, -3). The handler is entered with
+    pop ds                          ;   the flags this leaves, as it was with
+    pop di                          ;   mega_bownf's: the faulting FLAGS are
+    pop dx                          ;   the CPU frame's, under the far return
     pop bx
     pop ax
     pop bp
+    jc .f
     retf                            ; into the handler
-.no:
-    pop es
-    pop ds
-    pop di
-    pop dx
-    pop bx
-    pop ax
-    pop bp
+.f:
     add sp, 2                       ; [SP] = 0Bh, the error: mega_fault's
     jmp MEGA_SEL_CODE:mega_fault
 section .mega
