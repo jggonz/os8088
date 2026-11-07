@@ -209,6 +209,12 @@ receive path is no deeper and the attach/detach paths are shallower
    Panel's transmit count true - but it changes a number a user reads, so it
    is the owner's.
 
+   **The owner's decision (2026-11-07): TAKEN, it is a bug.** *"That sounds
+   like a bug? Changing the display to be accurate sounds like a good thing
+   to do."* The coordinator took the second `inc` out of `eth_v_rawtx`:
+   ETHER.DRV 17,383 -> 17,379, PCIETHER.DRV 17,057 -> 17,053; `ethernet`,
+   `pciether` and `dospkt` green.
+
 ## WANTS AN ABI BREAK
 
 None found in this row. (`DQ_MAXREC` 11 -> 12 came in with `eb1caa77` and is

@@ -47,8 +47,9 @@ kern_big at the tip: `.text` 40,340, `.bss` 5,366, `.cold` 37,562,
 section 6). `tests/megaseg.txt` is 3,754 (sweep3: kern_mega keeps the
 `vid_tab` rows kern_big moved into the blob).
 
-Off the system disk: **PCIETHER.DRV -208 assembled, -138 packed** (17,265 ->
-17,057; first size pass); ETHER.DRV -14 assembled; FILECP.DRV -15. kern_small
+Off the system disk: **PCIETHER.DRV -212 assembled** (17,265 -> 17,053;
+first size pass, -4 of it the owner's `[eth_ntx]` fix, section 4); ETHER.DRV
+-18 assembled; FILECP.DRV -15. kern_small
 CTRL.DRV +40 and kern_emu CTRL.DRV/EXTD.DRV +83 each (draw's `vid_tab` copy;
 no sector count or claim moved).
 
@@ -108,15 +109,24 @@ removed coming back*. What held it:
 
 ## 4. WANTS THE OWNER (open)
 
-1. **The raw-frame double count in `[eth_ntx]`** (main.md): both network
-   drivers count each raw frame twice (nic_tx, then `eth_v_rawtx`). Removing
-   the second is -4 on each driver AND makes the Control Panel's transmit
-   count true - but it changes a number the user sees.
-2. **`assoc_run_x`'s `.noassoc` falling into `.fwd`** (sweep.md, REFUSED):
-   -5, but the toast starts its timer before the volume is put back.
-3. Pass 17's section 3 items (one write generation per machine, -13; draw
+1. Pass 17's section 3 items (one write generation per machine, -13; draw
    item 7's fixed CR11 unlock, revertible +7) and pass 16's three (shortcut
    open, its popup, the About box into modules) still stand undecided.
+
+Decided this pass, after the record was first written (both 2026-11-07):
+
+* **The raw-frame double count in `[eth_ntx]`: TAKEN as a bug fix.** *"That
+  sounds like a bug? Changing the display to be accurate sounds like a good
+  thing to do."* Both network drivers counted each raw frame twice (nic_tx,
+  then `eth_v_rawtx`); the second `inc` is gone and the Control Panel's
+  transmit count is now true. ETHER.DRV and PCIETHER.DRV -4 each;
+  `ethernet`, `pciether`, `dospkt` green.
+* **`assoc_run_x`'s `.noassoc` falling into `.fwd` (-5): DECLINED for now.**
+  *"It would depend on how actually visible the change was (humans don't
+  count in ms), but for 5 bytes its probably not worth chasing tonight."* The
+  toast would start its timer before the volume is put back; re-propose only
+  with a measurement of how much later it starts.
+
 
 ## 5. WANTS AN ABI BREAK
 

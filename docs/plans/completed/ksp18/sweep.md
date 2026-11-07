@@ -218,6 +218,11 @@ TOASTSTR rows (messages: a reworded one is a function change).
 None taken. (REFUSED's `.noassoc` reorder, -5, is one if anyone wants a
 toast that starts its clock before the volume is put back.)
 
+**The owner (2026-11-07): not tonight.** *"It would depend on how actually
+visible the change was (humans don't count in ms), but for 5 bytes its
+probably not worth chasing tonight."* Left as it is; re-propose only with a
+measurement of how late the toast's clock starts.
+
 ## WANTS AN ABI BREAK
 
 None: nothing here is in `apps/os88api.inc`, `drivers/os88drv.inc` or
