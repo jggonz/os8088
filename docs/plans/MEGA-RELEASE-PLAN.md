@@ -374,6 +374,14 @@ peer).
 
 ## 11. The final pass
 
+**Run, 2026-11-07, at 1a37e25e** - the union below in ONE scoped call (87
+rows, kern_big's and kern_mega's, `build/soak/20261107-204757`): **87 passed,
+0 failed, 0 skipped** in 28 minutes. Then `make test-full` once: 87 passed, 1
+failed, 2 skipped (`w16cens`, `w16censall`: the WIN16 fixtures, not on this
+box). The failure was `guidelock-full`, RealDMG's page owing 14.147's new
+refusal; paid in bcf768f1 and the row re-run alone, green. Nothing in it moved
+a kernel or a package.
+
 Run ONCE after the last batch, in one call (CLAUDE.md, Testing):
 
 ```
