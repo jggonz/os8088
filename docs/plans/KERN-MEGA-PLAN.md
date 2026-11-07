@@ -14418,7 +14418,11 @@ ds, [sh_m2dseg] | [ch_ovseg] / insn / pop ds`, the section picking the
 module, and CSDO_ON/CSDO_OFF for 52 runs of adjacent stores (140 of the 305).
 Neither module loads DS anywhere, so DS is the package at every site; no
 site stores DS, SP or a pop. On a 286 in protected mode each is ~45 clocks
-where the trap was ~884. Arm bytes: resident image identical, chart part
+where the trap was ~884. **Timed** on the same 86Box machine (the MR BIOS
+286 at 16 MHz; 86Box is not cycle-exact, so a ratio and not a promise), a
+1,000-turn FOR (2,002 steps, `[sh_macro_running]` polled): **8.21 guest s
+and 10,024 #GP with the shipped build, 7.06 s and 0 with the arm** - 14%
+off the run; the rest is the evaluator's own ~3.5 ms a step. Arm bytes: resident image identical, chart part
 +30, macro module image +1,310, its claim 28 -> 30 KB (`SH_M2KB`) so the text
 files' channels keep more than their shipped room (5,248 against 4,880);
 SHEET.O88 on kern_mega's disks 87,663 -> 87,924. kern_big and kern_small pay
