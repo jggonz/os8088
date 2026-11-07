@@ -9330,6 +9330,9 @@ SK_IMG_KB  equ SK_R(SK_CUM4) - SK_R(SK_CUM3)
 ; admits to, and a legend square keying a row to a band it is not in is worse
 ; than no square at all (SPEC.md 28).
 KBUF_KB    equ SK_R(SK_CUM3)
+%if KERN_KB > 255 || SK_FAT_KB > 255 || SK_STK_KB > 255 || SK_STK0_KB > 255 || KBUF_KB > 255
+  %error "osapi_sys_kb_x (memory.inc) loads SK_FAT/STK/STK0/BUF into AL alone, AH being the image row's high byte: every one must stay under 256 KB"
+%endif
 ; ...and what a machine with NO VGA gives back, taken off SK_KERN and SK_IMG
 ; together so the parts go on summing (SPEC.md 39.22). Derived from the same
 ; rounding as the rows rather than written out as a KB constant of its own:

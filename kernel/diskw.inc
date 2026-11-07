@@ -770,11 +770,14 @@ dskw_mkbody:
 ; -----------------------------------------------------------------------------
 ; dskw_zerobuf - fill dsk_secbuf with 512 zero bytes
 ; in:  nothing
-; out: nothing (all registers preserved)
+; out: ES = LOW_SEG (SS's, SPEC.md 2.1), which both callers want next
+; clobbers: AX, CX, DI, flags. Its two callers are dskw_mkbody, between a
+;      dskw_dotents (which spends all four itself) and a reload of AX and CX,
+;      and dskw_dotents, which spends them - so the KENT bank that was here
+;      preserved nothing anybody read (kernel size pass 18, -6, and -2 more
+;      in dskw_dotents, whose own `push ss / pop es` it now does)
 ; -----------------------------------------------------------------------------
 dskw_zerobuf:
-    call kentc_bp
-    push es
     push ss
     pop es
     mov di, dsk_secbuf
@@ -782,7 +785,7 @@ dskw_zerobuf:
     xor ax, ax
     cld
     rep stosw
-    jmp kretc_es
+    ret
 
 ; -----------------------------------------------------------------------------
 ; dskw_dotents - build a new directory's first sector in dsk_secbuf
@@ -800,10 +803,8 @@ dskw_zerobuf:
 ; for the root, so nothing has to translate.
 ; -----------------------------------------------------------------------------
 dskw_dotents:
-    call dskw_zerobuf
+    call dskw_zerobuf           ; ...and ES = LOW_SEG, which dskw_now keeps
     call dskw_now               ; [dskw_date] / [dskw_time] (SPEC.md 37)
-    push ss
-    pop es
     ; '.' IS BUILT ONCE AND '..' IS ITS COPY. The two links differ in two
     ; bytes - the second dot and the cluster - so the slot is written by
     ; string stores in field order, then moved 32 bytes along and patched.
@@ -3140,22 +3141,23 @@ dskw_read_at_x:
 %endif                          ; SECTORS (18.4.4.2), kern_small's CLUSTERS
     test [dwr_off], cx          ; - the rule this was written to, and a 32 KB
     jnz .badarg                 ; cluster then made a 1.8 KB read cost 64 KB
-    test [dwr_cap], cx          ; of disk and of RAM. A chunk must end where
-    jnz .badarg                 ; the next one starts. (Only the offset's LOW
-    mov ax, [dwr_cap]           ; word can carry a remainder: the mask is
-    test ax, ax                 ; under 65,536.)
-    jz .badarg                  ; a capacity under one cluster reads nothing
-
+    mov si, [dwr_cap]           ; of disk and of RAM. A chunk must end where
+    test si, cx                 ; the next one starts. (Only the offset's LOW
+    jnz .badarg                 ; word can carry a remainder: the mask is
+    test si, si                 ; under 65,536.) SI, the stat's name, is
+    jz .badarg                  ; spent: the capacity is held in it to the
+                                ; take (kernel size pass 18, -4). A capacity
+                                ; under one cluster reads nothing
     mov ax, [dwr_sz]            ; take = min(size - offset, capacity)
     mov dx, [dwr_sz+2]
     sub ax, [dwr_off]
     sbb dx, [dwr_off+2]
     or dx, dx
     jnz .wholecap               ; more than 64KB left: the buffer is the bound
-    cmp ax, [dwr_cap]
+    cmp ax, si
     jbe .take
 .wholecap:
-    mov ax, [dwr_cap]
+    mov ax, si
 .take:
     mov [dwr_take], ax
 
@@ -4483,17 +4485,16 @@ dskw_hit:
 ;                  unless one is recorded already
 ; in:  [dskw_cursec] and [dsk_c2hi], SI -> the entry inside dsk_secbuf
 ; out: ZF = 1 and [dskw_fsec] / [dskw_foff] set; ZF = 0 = an earlier slot won
-; clobbers: flags
+; clobbers: AX, DI, flags. Both calls are dskw_find's, where neither holds
+;      anything: DI is loaded afresh for each entry's name compare, and AX is
+;      either the entry byte the loop reloads or answered over at .noent - so
+;      the bank that was here kept nothing (kernel size pass 18, -4)
 ; -----------------------------------------------------------------------------
 dskw_mark_free:
     cmp word [DSKW_FNONE], 0xFFFF   ; the FIRST free slot wins: both callers
     jne .out                    ; asked this before calling (size pass 10, -3)
-    push ax
-    push di
     mov di, dskw_fsec
     call dskw_here
-    pop di
-    pop ax
     cmp ax, ax                  ; ZF = 1: this slot was taken
 .out:
     ret
@@ -5036,8 +5037,12 @@ dskw_ioerr:
 ; -----------------------------------------------------------------------------
 ; dskw_wone / dskw_rone - ONE sector through dsk_secbuf, at [dskw_clba]
 ; in:  CX = the live bytes (1..512), at [dskw_wseg]:[dskw_src]
-; out: CF = 1 an I/O error (dskw_ioerr maps it); CX and SI preserved
-; clobbers: AX, BX, DI, ES, flags
+; out: CF = 1 an I/O error (dskw_ioerr maps it); SI and DX preserved
+; clobbers: AX, BX, CX, DI, ES, flags. Both callers are dskw_xclus's: .stg
+;      banks its own CX round the call (the loop count), and .tail reads none
+;      after it, so the CX this kept went (kernel size pass 18, -4); and the
+;      zero-fill counts off DI, which the copy leaves at the live bytes' end,
+;      so DX is not borrowed for it (-4)
 ;
 ; The staged-sector arm of dskw_wdata and dskw_rdata, and each one's partial
 ; final sector: four sites that each loaded the caller's segment and offset,
@@ -5057,12 +5062,8 @@ dskw_one:                       ; ...whichever [dskw_fop] says (dskw_xclus)
     cmp byte [dskw_fop], 0
     je dskw_rone
 dskw_wone:
-    push cx
-    push dx
     push si
     push ds
-    mov dx, 512
-    sub dx, cx                  ; DX = bytes to zero after the copy
     mov si, [dskw_src]          ; (read through the KERNEL's DS, before...)
 %ifdef KERN_MEGA
     DSKW_WSEG ds                ; ...DS:SI = the caller's bytes
@@ -5074,14 +5075,13 @@ dskw_wone:
     mov di, dsk_secbuf
     cld
     rep movsb
-    mov cx, dx
+    mov cx, dsk_secbuf + 512
+    sub cx, di                  ; CX = the bytes past the live ones, to zero
     xor al, al
     rep stosb
     pop ds
     DSK_WR1D dskw_clba          ; ES = LOW_SEG already: the scratch goes out
     pop si
-    pop dx
-    pop cx
     ret
 
 dskw_rone:
@@ -5092,7 +5092,6 @@ dskw_rone:
     pop cx
     jc .out
     push si
-    push cx
 %ifdef KERN_MEGA
     DSKW_WSEG es                ; ES:DI = the caller's destination
 %else
@@ -5106,7 +5105,6 @@ dskw_rone:
     cld
     rep movsb                   ; DS:SI -> ES:DI
     pop ds
-    pop cx
     pop si                      ; CF = 0 from the `jc`, which nothing since
 .out:                           ; has touched
     ret

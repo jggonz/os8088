@@ -1694,7 +1694,8 @@ clk_tick:
     mov cx, ax
     xor ax, ax                  ; AL = the mask being built, AH = the minute
     jcxz .pend
-    or al, 1                    ; a second passed
+    inc ax                      ; a second passed (AX was 0: `inc ax` is the
+                                ; `or al, 1` in one byte, kernel size pass 18)
     mov ah, [clk_min]           ; the minute to compare against afterwards
     cmp cx, 60
     jb .adv
@@ -1948,7 +1949,9 @@ clk_fmt:
 ; -----------------------------------------------------------------------------
 ; str_len - the length of an ASCIIZ string in the kernel segment
 ; in:  SI = the string
-; out: CX = its length, NUL excluded; SI and everything else preserved
+; out: CX = its length, NUL excluded; SI ONE PAST THE NUL; everything else
+;      preserved. Its one caller, toast_place, loads SI itself and reads it
+;      no further, so the bank that kept it went (kernel size pass 18, -1)
 ;
 ; The kernel's only strlen, and it is here rather than anywhere else because
 ; clk_fmt above is what created it. `.text` sites ONLY: a caller in `.modc` or
@@ -1956,16 +1959,13 @@ clk_fmt:
 ; the six-instruction loop it would be replacing.
 ; -----------------------------------------------------------------------------
 str_len:
-    push si
-    xor cx, cx
+    mov cx, si
+    not cx                      ; CX = -SI - 1...
 .l:
-    cmp byte [si], 0
-    je .d
-    inc si
-    inc cx
-    jmp short .l
-.d:
-    pop si
+    cmp byte [si], 1            ; CF = 1 on the NUL alone
+    inc si                      ; (`inc` leaves CF alone)
+    jnc .l
+    add cx, si                  ; ...+ (the NUL's address + 1) = the length
     ret
 
 ; -----------------------------------------------------------------------------
