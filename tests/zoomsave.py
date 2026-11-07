@@ -171,9 +171,22 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     # --- BANK --------------------------------------------------------------
     b = dispcells.Bp(m, mo, {"wm_su_take": "di", "wm_su_try.occl": "di",
                              "wm_su_precover": "di"}, ours)
-    b.dblclick(d.x + 60, d.y + 9)               # zoom it over everything
-    b.pump(900, 4)
-    n = b.take()
+    # THE ZOOM RETRIES ON THE RECT, as RESTORE's un-zoom below does and for
+    # its reason: with breakpoints armed the pump services between the four
+    # edges, and a double-click whose presses fall outside the window zooms
+    # nothing. A whole-tier soak lost it here (mega-zoomsave, 2026-11-07):
+    # the window stayed at its own size and every later leg read that.
+    n = {}
+    for _ in range(3):
+        b.dblclick(d.x + 60, d.y + 9)           # zoom it over everything
+        b.pump(900, 4)
+        for k, v in b.take().items():
+            n[k] = n.get(k, 0) + v
+        cur = [x for x in os88geom.windows(m) if x.i == disk][0]
+        if (cur.x, cur.y, cur.w, cur.h) != (d.x, d.y, d.w, d.h):
+            break
+        for _ in range(4):
+            tick(m)
     b.close()
     mo.to(*dispcorner.PARK)
     os88marty.settle(m, limit=120)

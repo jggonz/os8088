@@ -378,7 +378,14 @@ def listen(box, cond, what, secs):
 def leg_tracker(leg, out, pkg, mapsyms, mod, check_wide=False):
     box, d = boot(leg, out, [mod, pkg])
     try:
-        row(box, listed([mod, pkg], mod), "the module's open", lock=False)
+        # NO ui_done AFTER THIS ONE: Tracker PLAYS what it opens, and a
+        # playing Tracker redraws its pattern view every row, so "the UI idle
+        # at two reads a quarter HOST second apart" is a race with the music
+        # that a loaded box loses - `wide` waited out 60 guest s for it in a
+        # whole-tier soak (2026-11-07) with the module open and playing. The
+        # wait below is on the state the leg means, [mp_playing].
+        box.goto(ROW_X, ROW0_Y + ROW_H * listed([mod, pkg], mod))
+        box.dblclick()
         t = Pkg(box, "TRACKER", mapsyms)
         box.until(lambda: bad_lines(box) or (box.pkg_base("TRACKER") and
                                             t.b("mp_playing") == 1),

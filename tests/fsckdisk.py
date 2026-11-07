@@ -636,16 +636,24 @@ def leg3(work, fails):
         m.key("Digit2")                                 # Check the disk
         os88marty.guest_sleep(m, 0.5)
         m.key("Enter")
-        for _ in range(16):                             # "somebody wrote B:",
-            os88marty.guest_sleep(m, 0.25)              # again and again: one
-            g = m.read(gen, 1)[0]                       # before the run's
-            m.write(gen, bytes([(g + 1) & 0xFF]))       # BEGIN is harmless,
-        before = m.read(gen, 1)[0]                      # one inside it is not
+        # "somebody wrote B:", again and again - one before the run's BEGIN
+        # is harmless, one inside it is not - AND FOR AS LONG AS THE RUN
+        # COULD BE GOING, not for a fixed 4 guest seconds: a whole-tier
+        # soak's load put the run's first step after the sixteenth bump, so
+        # the run finished clean and the row failed a check that works
+        # (2026-11-07). run_task_wait calls `between` every quarter guest
+        # second, until the report says what it was asked to.
+        def bump():
+            g = m.read(gen, 1)[0]
+            m.write(gen, bytes([(g + 1) & 0xFF]))
         text = run_task_wait(ui, flush, "Check the disk", fails,
-                             also="the disk changed")
+                             also="the disk changed", between=bump)
         print(text)
         need(fails, text, ["the disk changed - scan again"],
              "a write mid-run")
+        before = m.read(gen, 1)[0]                      # no more bumps: one
+        m.key("KeyR")                                   # more Save Report is
+        os88marty.guest_sleep(m, 3.0)                   # the only writer now
         if m.read(gen, 1)[0] == before:
             fails.append("saving SYSCHECK.TXT onto B: did not move B:'s write "
                          "generation - disk_write_x does not bump it")
@@ -739,13 +747,18 @@ def leg5(work, fails):
         fails.append("%s's bytes changed in a refused defragment" % live)
 
 
-def run_task_wait(ui, flush, task, fails, also=None, limit=300.0):
-    """run_task's waiting half, for a run already started."""
+def run_task_wait(ui, flush, task, fails, also=None, limit=300.0,
+                  between=None):
+    """run_task's waiting half, for a run already started. BETWEEN, if
+    given, is called every quarter GUEST second while the run goes on."""
     import os88marty
     m = ui.m
     waited = 0.0
     while waited < limit:
-        os88marty.guest_sleep(m, 4.0)
+        for _ in range(16):
+            if between:
+                between()
+            os88marty.guest_sleep(m, 0.25)
         waited += 4.0
         m.key("KeyR")
         os88marty.guest_sleep(m, 2.0)

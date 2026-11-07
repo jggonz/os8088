@@ -152,7 +152,10 @@ def main():
 
         # --- one click ------------------------------------------------------
         clear(m, p)
-        mo.click(px, py, settle=0.5)
+        # STEPPED (os88mouse.tap): the gun repeats while the button is
+        # down, so a press whose length is the host's read 2 shots at a
+        # soak's load
+        mo.tap(px, py, settle=0.5)
         os88marty.pace(m, 1.0)
         one = shots(m, p)
         held = mheld(p)

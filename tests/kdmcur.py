@@ -59,6 +59,7 @@ answer is checkable against CTMOUSE.  With no driver `INT 33h` is not
 installed, function 0 answers AX != FFFF and it prints SKIP.
 """
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
@@ -86,7 +87,10 @@ def verdict(m, limit=240.0):
 
     def reported(_):
         seen["rows"] = [r.rstrip() for r in (m.screen() or []) if r.strip()]
-        return any("MCURSOR" in r for r in seen["rows"])
+        # THE WHOLE VERDICT LINE, not the word: a poll landing while the
+        # probe is mid-line read 'MCURSOR' with no verdict after it and
+        # failed a passing run (a whole-tier soak, 2026-11-07)
+        return any(re.match(r"\s*MCURSOR (PASS|FAIL|SKIP)\b", r) for r in seen["rows"])
     try:                                # `limit` becomes a GUEST budget
         os88marty.until(m, reported, "MCURSOR.COM to report", poll=0.5,
                         limit=limit)

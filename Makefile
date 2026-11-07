@@ -15812,12 +15812,20 @@ MEGASRC := $(KERNEL_SRC) $(KERNEL_INC) kerndos/kdos.asm $(KERNDOS_INC) \
 # kern_big's may not grow past tests/megaseg.txt's figure. Code that runs only
 # in protected mode belongs in `.mega`; the figure is raised, with a reason,
 # only for code that has to run in real mode after the switch. It needs
-# kern_big's map as well as kern_mega's, hence the kernel.bin prerequisite
+# kern_big's map as well as kern_mega's, hence the kernel.bin prerequisite.
+# A KNOB build only REPORTS it (no --check): the ratchet is about the shipped
+# pair, a knob moves the two kernels by different amounts - NOSEAMCUT=1 by 2
+# bytes, which failed `mega-dispseam`'s private tree in a whole-tier soak -
+# and no budget binds a knob build (the KERN_BUDGET note above $(KNOBS))
 #> [Kernels] mega :: kern_mega (286+ protected mode) and its system and apps disks into build/megak/
 mega: $(BUILD)/mega.img $(BUILD)/mega120.img $(BUILD)/megaapps.img $(BUILD)/megaapps120.img \
       $(BUILD)/megawin16.img $(BUILD)/megawin16-120.img \
       $(BUILD)/kernel.bin tests/megaseg.txt tools/os88megaseg.py
+ifeq ($(filter-out KERN_SMALL=% KERN_MEGA=%,$(KNOBS)),)
 	@python3 tools/os88megaseg.py --big $(BUILD)/kernel.map --mega $(MEGADIR)/kernel.map --check tests/megaseg.txt
+else
+	@python3 tools/os88megaseg.py --big $(BUILD)/kernel.map --mega $(MEGADIR)/kernel.map
+endif
 	@echo "mega: $< - kern_mega on 1.44MB, and build/mega120.img on 1.2MB. Pair them with build/megaapps.img / megaapps120.img, the apps disks with kern_mega's package arms (SPEC.md 20.18)."
 
 # SYSTEM CHECK, AND kern_mega's OWN FSCHECK.DRV BESIDE IT (SPEC.md 118.14.8):
