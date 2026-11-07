@@ -662,18 +662,20 @@ snd_unhook:
 ; -----------------------------------------------------------------------------
 osapi_snd_caps:
 %ifdef OS88_SNDCARD
+    mov dx, [drv_svc+DSV_CAPS]  ; ONE read of the driver's word, for both
     mov ax, SND_CAP_TONE | SND_CAP_PCM_EXCL
-    or ax, [drv_svc+DSV_CAPS]   ; ...plus whatever a loaded driver adds
+    or ax, dx                   ; ...plus whatever a loaded driver adds
     call snd_rt_card            ; BL = where a tone would go RIGHT NOW: 0 the
     sbb bl, bl                  ; speaker (CF = 1: -1 + 1), 1 the driver's
     inc bl                      ; own sink (CF = 0) - the setting and the
-                                ; hardware, folded (34.8). BH untouched
-    mov dx, 1                   ; DX bit 0 = the speaker, always present
-    cmp word [drv_svc+DSV_CAPS], 0
-    je .out
-    mov dl, 3                   ; bit 1 = a sound driver is loaded (DX is 1
-                                ; three instructions up, so DH is already 0)
-.out:
+                                ; hardware, folded (34.8). BH untouched, and
+                                ; DX too (snd_rt_card reads two bytes)
+    neg dx                      ; CF = 1: a sound driver is loaded
+    sbb dx, dx                  ; 0 or 0FFFFh...
+    and dx, 2                   ; ...bit 1 = a driver (CF = 0 out, as the
+    inc dx                      ; compare left it); bit 0 = the speaker,
+                                ; always present (kernel size pass 18: the
+                                ; second read, its compare and the jump, -2)
 %else
     mov ax, SND_CAP_TONE        ; ...and no PCM_EXCL here: kern_small plays no
     xor bl, bl                  ; clip (SPEC.md 34.4.1). SPEC.md 34.0: the
@@ -967,10 +969,12 @@ osapi_snd_play:
 .busyd:
     pop dx
     mov al, 1                   ; busy
-.err:
-    xor ah, ah                  ; (xor clears CF, so it goes ABOVE the stc)
-    stc
-    ret
+.err:                           ; AH IS ALREADY 0 on all three arms: `mov ax,
+    stc                         ; 4` above wrote it, and nothing between
+    ret                         ; writes AH - snd_req_inst is DH's, snd_str_busy
+                                ; and snd_town_off bank AX, and the priority is
+                                ; built in AL (kernel size pass 18: the
+                                ; `xor ah, ah` here was 2 bytes)
 .rel:
     jbe .idle                   ; AL = 1: played out
     push di                     ; AL = 2: the aborting click, and everything

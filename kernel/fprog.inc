@@ -567,8 +567,12 @@ fpg_busy:
 fpg_arm:
 %ifdef FPG_PARK
     mov dl, [fpg_on]            ; armed? - and DL keeps the byte for the
-    test dl, 1                  ; parked test below (DX is a clobber; nothing
-    jne .yes                    ; between writes DL: kernel size pass 16)
+    shr dl, 1                   ; parked test below (DX is a clobber; nothing
+    jc .yes                     ; between writes DL: kernel size pass 16). The
+                                ; bit is shifted OUT, so DL is [fpg_on] >> 1 -
+                                ; non-zero there exactly when [fpg_on] is, its
+                                ; bit 0 being clear on that path (kernel size
+                                ; pass 18: `test dl, 1` was a byte more)
 %else
     FPG_ARMED
     jne .yes
