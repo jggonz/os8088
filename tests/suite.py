@@ -6915,6 +6915,34 @@ SOAK = [
         needs=("86box",),
         wants=("build/mega.img", "build/megaapps.img",
                "build/megak/apps/xtmp3.map", "build/megak/kernel.map")),
+    Row("officetrap-sheet", "soak", py("tests/officetrap.py", "--leg",
+                                       "sheet"), 35.0,
+        "SHEET IN REAL USE UNDER kern_mega, NO STORE THROUGH CS (KERN-MEGA-PLAN "
+        "14.162): 86Box's at286 port with build/mega.img, MAC.SLK and kern_mega's "
+        "arm (sheet.asm -DPKG_MEGA, its modules' stores through CSDO and each "
+        "claim's data selector). Macro > Run LOOP, a 100-turn FOR; Save As "
+        "BIFF and the host reads H2 = 5050; the BIFF opened again (the chart "
+        "module's formula decoder); and the fault log charges nothing to a "
+        "loaded image. RUN RED: --sheet build/sheet.o88, the shipped build - "
+        "1,097 #GP, five a macro step at the macro module's selector and "
+        "three a formula at the chart module's. 35s is 33 measured",
+        needs=("86box",),
+        wants=("build/mega.img", "build/megak/apps/sheet.o88",
+               "build/megak/kernel.map")),
+    Row("officetrap-word", "soak", py("tests/officetrap.py", "--leg",
+                                      "word"), 30.0,
+        "WORD AND SCRIBE IN REAL USE UNDER kern_mega, NO STORE THROUGH CS "
+        "(KERN-MEGA-PLAN 14.162): Word loads and saves WELCOME.DOC, sorts and "
+        "renumbers it; Scribe loads and saves SCWELCOM.DOC and SCWELCOM.RTF, "
+        "sorts and renumbers; the .DOCs read back through tools/wordfmt.py say "
+        "what the originals say and the .RTF keeps its 32 \\pard; the fault "
+        "log charges nothing to a loaded image. RUN RED: --word/--scribe with "
+        "the packages of before - 352 #GP at 28 sites (a mark a load, a "
+        "paragraph a Sort, a run and a paragraph a save). 30s is 25 measured",
+        needs=("86box",),
+        wants=("build/mega.img", "build/megak/kernel.map", "build/word.o88",
+               "build/scribe.o88", "build/WELCOME.DOC", "build/SCWELCOM.DOC",
+               "build/SCWELCOM.RTF")),
     Row("x3xtunitmega", "soak", py("tests/x3xtunit.py", "--mega"), 30.0,
         "x3xtunit on the XT part's kern_mega ARM (x3xt.asm -DPKG_MEGA, "
         "KERN-MEGA-PLAN 14.150) in a protected-mode-shaped map: the part's "

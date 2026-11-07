@@ -7700,8 +7700,9 @@ sc_ldscan:
     je .hn                      ; a mark's byte is an index, not attrs
     test byte [bx], SCAT_HID
     jz .hn
-    mov byte [cs:sc_hashid], 1
-    jmp short .hdone
+    pop ds                      ; the package's, then the flag: the same
+    mov byte [sc_hashid], 1     ; eight bytes as a store through CS, which
+    jmp short .out              ; kern_mega made a #GP (14.162)
 .hn:
     inc bx
     loop .h
@@ -20288,12 +20289,10 @@ TOASTSTR sc_e_cbig, 'Too big to copy'   ; over CLIP_MAXKB, or the heap could
 %macro PKG_CMP 2                    ; cmp %1, [the package's %2]
     cmp %1, [cs:%2]
 %endmacro
-%macro PKG_ST 2                     ; [the package's %1] = %2
-    mov [cs:%1], %2
-%endmacro
-%macro PKG_STB 2                    ; ...and the byte-sized store
-    mov byte [cs:%1], %2
-%endmacro
+; There is no STORE form any more (KERN-MEGA-PLAN 14.162): on kern_mega CS
+; is part 1's CODE selector, read-only, and each `mov [cs:x]` was a completed
+; #GP - one a run and a paragraph on a save. Every store to a package
+; variable is made with DS back on the package, off the stack
 ; =============================================================================
 
 ; --- the search pattern and the Utilities commands (SPEC.md 68.7/68.9) -------

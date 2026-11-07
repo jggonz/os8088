@@ -206,9 +206,9 @@ wd_rpap:
     mov ds, [cs:wd_pseg]
     mov ax, [si]
     mov bx, [si+2]
-    push cs
-    pop ds
-    mov [wd_rpp], ax                ; the four PAP bytes are BANKED, not held
+    pop ds                          ; the package's, off the stack - DS = CS
+    push ds                         ; made every store below a #GP on
+    mov [wd_rpp], ax                ; kern_mega (KERN-MEGA-PLAN 14.162)                ; the four PAP bytes are BANKED, not held
     mov [wd_rpp+2], bx              ; in registers: SI is the string pointer
                                     ; every emit below needs
     mov al, [wd_rpp]

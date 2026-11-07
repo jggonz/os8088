@@ -14383,3 +14383,89 @@ still finds its image. Resident cost none (the stub and the module).
 the base (no ordinary boot after the refusal), RED with each of 1 and 1+2
 alone (this item's probes: the key never taken; then 3 checks failed, the
 question asked again and both files kept), green with all three.
+
+### 14.162 The office packages' writes through CS: SHEET's macro and chart modules, WORD's and SCRIBE's documents (2026-11-07) - FIXED
+
+**The owner's speed pass (item 5)**: "remove as many traps as it is useful to
+remove". The census (`t_cswrite.py --census`) is static - SHEET 305 writes,
+WORD 13 and 9 pairs, SCRIBE 9 and 9 - so each package was MEASURED in real use
+on 86Box's at286 port (build/mega.img, the shipped kern_mega; its fault log
+names every #GP's CS:IP, `ui.m.faults()`), sites resolved against the
+packages' maps. Each trap is a completed store (`mega_gpw`, ~77 us on 86Box,
+~884 clocks on a 286, 14.150).
+
+| SHEET (MAC.SLK, the shipped build) | before | after (the arm) |
+|---|---:|---:|
+| open; type 10 cells and a formula; F9 | 0 | 0 |
+| Macro > Run LOOP, a 100-turn FOR (~200 steps) | **1,024** | **0** |
+| 30 arrows, 5 PgDn and 5 PgUp | 0 | 0 |
+| Save As BIFF | 0 | 0 |
+| open MAC.BIF again (25 formulas) | **75** | **0** |
+
+The run's 1,024 are five a STEP - `shm_mesc`'s Esc edge (`[cs:shm_escwas]`),
+`shm_mstep .exec`'s three, `shm_pmacro .act`'s `shm_rrnew` - and fourteen
+once (`shm_mresume .start`); the BIFF load's are three a formula in the
+chart module (`sh_biff_dcrpn`'s `sh_dc_cept`, `sh_dc_index`'s two). Typing,
+recalculation, scrolling and the grid store nothing through CS. **Every
+store in the macro module is on a per-step path** - any command may be in a
+user's loop - so all 300 were converted, and the chart module's five.
+
+**SHEET: a `PKG_MEGA` arm** (SPEC.md 81.94.5, 20.18; `$(MEGAAPPDIR)/sheet.o88`
+in `$(MEGAPKGS)`). Every module store is `CSDO insn` with `[CSEG x]` - the
+instruction with `cs:` on the shipped build, which is **byte-identical**
+(`build/sheet.bin` cmp'd against the base) - and in the arm `push ds / mov
+ds, [sh_m2dseg] | [ch_ovseg] / insn / pop ds`, the section picking the
+module, and CSDO_ON/CSDO_OFF for 52 runs of adjacent stores (140 of the 305).
+Neither module loads DS anywhere, so DS is the package at every site; no
+site stores DS, SP or a pop. On a 286 in protected mode each is ~45 clocks
+where the trap was ~884. Arm bytes: resident image identical, chart part
++30, macro module image +1,310, its claim 28 -> 30 KB (`SH_M2KB`) so the text
+files' channels keep more than their shipped room (5,248 against 4,880);
+SHEET.O88 on kern_mega's disks 87,663 -> 87,924. kern_big and kern_small pay
+nothing: the shipped package is the same bytes.
+
+| WORD (WELCOME.DOC, 24 paragraphs) | before | after |
+|---|---:|---:|
+| open WELCOME.DOC | **28** | **0** |
+| type 46 characters, 12 pages and 20 lines of scrolling, Undo | 0 | 0 |
+| Utilities > Sort over the document | **28** | **0** |
+| Utilities > Renumber | **28** | **0** |
+| File > Save | **50** | **0** |
+
+| SCRIBE | before | after |
+|---|---:|---:|
+| open SCWELCOM.DOC | **35** | **0** |
+| Sort / Renumber | **35** / **35** | **0** / **0** |
+| save SCWELCOM.DOC | **82** | **0** |
+| open / save SCWELCOM.RTF | 0 / **35** | 0 / **0** |
+
+(Each file call also logs the kernel's own `api_x.done` #GP at 0060:0525,
+which is not a package's and not this item's.) A mark a load (`push cs /
+pop ds` in `wd_dpapin`'s scan, then `wd_dpapat`'s stores through it), a
+paragraph a Sort or Renumber (`wd_plist`'s array), a run and a paragraph a
+save (`wd_dattr`, `wd_dpara`), a paragraph an RTF save (`wd_rpap`'s and
+`sc_rpap`'s `push cs / pop ds`), and two a load (`wd_dtrim`). **Shared
+source, no arm**: DS comes back from the stack, not from CS (`push ds` /
+`pop ds` round the borrow, which is `push cs / pop ds`'s two bytes and
+clocks; `pop ds / push ds` where the routine's own frame holds it), a store
+moves after the routine's `pop ds` and loses its prefix, and `wd_plist` /
+`sc_plist` store through ES = the package (`es:` for `cs:`). SCRIBE's
+`PKG_ST`/`PKG_STB` forms are deleted (SPEC.md 95.8.9) and `sc_dattr` banks
+its picture flag in DH. Every per-character, per-run and per-paragraph loop
+runs in the same 8088 clocks or fewer; once a command or a load pays 22-26
+clocks. WORD's image 53,801 -> 53,797 (WORD.O88 43,635 -> 43,638), SCRIBE's
+52,955 -> 52,947 (42,947 -> 42,944). What is left in either is five
+`push cs` pairs that only READ (`tests/cswrites.txt`).
+
+**Rows.** `officetrap-sheet` (soak, 86Box): Macro > Run LOOP, Save As BIFF
+(H2 = 5050 read on the host), MAC.BIF reopened, nothing charged to a loaded
+image - RED with the shipped build in the arm's place (`--sheet
+build/sheet.o88`: 1,097 #GP at 23 sites). `officetrap-word` (soak, 86Box):
+Word loads, saves, sorts and renumbers WELCOME.DOC, Scribe SCWELCOM.DOC and
+.RTF, the saved .DOCs say what the originals say (tools/wordfmt.py) and the
+.RTF keeps its 32 `\pard`, nothing charged - RED with the packages of before
+(352 at 28 sites). **The ratchet**: `tests/unit/t_cswrite.py` (fast) walks
+apps/sheet/, apps/word/ and apps/scribe/ at 0 writes (the pairs as read-only
+residue), and SHEET's 52 runs are held to CSDO_ON's rules; put one store
+back - `mov [cs:shm_escwas], al`, or `mov [cs:wd_us0], ax` - and `make`
+fails naming the file.

@@ -50315,6 +50315,9 @@ through a run of selectors and its block decoder's protected-mode part
    `build/megaapps120.img` (1.2MB): the shipped apps disk with those builds
    substituted, `make smallapps`'s shape (§27.16). kern_mega's system disks
    take the same substitution for what they carry. `$(MEGAPKGS)` is the list.
+   An arm may be the SPEED path alone: SHEET's stores into its modules'
+   own claims through each claim's data selector rather than through CS
+   (§81.94.5), the same bytes otherwise.
    A mega arm calls the same API table at the same offsets as its shipped
    build: it is one package built twice, not a second ABI.
 2. **The shipped build must still be CORRECT on kern_mega**, because nothing
@@ -124053,6 +124056,29 @@ heap claims to shrink part 0. Neither is needed yet. `tests/wdparts.py` is the
 gate: the association launch, I_SIZE, the claim covering part 1, part 1's
 bytes at `WD_P1ORG`, and a search whose pattern compiler is part-1 code.
 
+#### 68.10.1 No store through CS, on any kernel
+
+Part 1 being in the program's own segment made `CS` the package again, and
+the Utilities commands and the `.DOC` engines took the old resident spelling
+back: `mov [cs:wd_x]` while DS was the text, the CHP or the PAP dictionary,
+and `push cs / pop ds` to put DS back. **Both are wrong on kern_mega**, where
+`CS` is the region's CODE selector, read-only: each store was a completed #GP
+(`mega_gpw`, ~884 clocks on a 286) - a mark a `.DOC` load, a run and a
+paragraph a save, a paragraph a Sort or Renumber, 352 in one session of
+`tests/officetrap.py` (KERN-MEGA-PLAN 14.162). Since then **every store to a
+package variable goes through DS back on the package or ES = the package**:
+DS from the STACK (`push ds` before the text is borrowed, `pop ds` after,
+or the store moved after the routine's own `pop ds`), never from CS, and
+`wd_plist`'s per-paragraph array through `ES` (`push ds / pop es` at its
+head, `es:` where `cs:` was - the same length and clocks). On the 8088 every
+changed per-character, per-run and per-paragraph loop runs in the same clocks
+or fewer; what pays is once a command or a load - `wd_plist`'s head 26 clocks
+a Sort, `wd_dtrim`'s `pop ds / push ds` 22 a load - and the image is 4 bytes
+SMALLER (53,801 -> 53,797). READS through
+CS stay (`tests/cswrites.txt` names the five pairs that remain, each a read):
+a code selector is readable. `tests/unit/t_cswrite.py` walks `apps/word/`, so
+a new store fails `make`.
+
 ### 68.11 View > Page — the sheet
 
 Draft view (§68.1) wraps to the window, because the window is what the reader
@@ -149063,6 +149089,38 @@ the table, which is a wild far jump with no diagnostic.
 Both carry `times` pairs now, assembled rather than preprocessed, and both
 were proven by mutation: raising either count alone fails the build with
 `TIMES value -1 is negative` on the assertion's own line.
+
+#### 81.94.5 kern_mega's arm: each module stores through its claim's DATA selector
+
+Both modules keep their state in their own claim and write it `[cs:x]`,
+which real mode allows and protected mode does not: under kern_mega `CS` is
+the claim's CODE selector, read-only, and kern_mega COMPLETES each such store
+as a #GP (`mega_gpw`, ~884 clocks on a 286). The macro engine wrote five a
+STEP (`shm_mstep`'s `.exec`, `shm_mesc`, `shm_pmacro`'s `.act`) - 1,024 for
+a 100-turn `FOR` - and the chart module's BIFF formula decoder three a
+formula (`sh_biff_dcrpn`, `sh_dc_index`). And any macro command may be in a
+loop, so every store in the macro module is on a per-step path.
+
+**So SHEET has a `PKG_MEGA` arm** (§20.18, KERN-MEGA-PLAN 14.162): every
+store into a module is `CSDO insn` with `[CSEG x]`. On the shipped build
+that is the instruction with `cs:`, **byte for byte - `build/sheet.bin` is
+unchanged**. In the arm `CSDO` loads DS for the one instruction with the
+claim's DATA selector - the package's own word naming it, `[sh_m2dseg]` for
+the macro module and `[ch_ovseg]` for the chart module, picked by the
+SECTION (a `CSDO` in `.text` is an `%error`) - and `CSDO_ON ... CSDO_OFF`
+does it once for a run of adjacent stores (kernel/kernel.asm's rules, which
+`tests/unit/t_cswrite.py` holds the runs to). Neither module ever loads DS,
+so DS is the package at every site. Three loops' short jumps out of reach in
+the arm are `SH_JMPF`/`SH_JCXZF`, short on the shipped build.
+
+**The arm's bytes**: the resident image is the shipped one
+(`sheet.trim.bin` identical); the chart part +30 (52,339 -> 52,369); the
+macro module's image +1,310 (18,904 -> 20,214), so its claim is **30 KB** in
+the arm against 28 (`SH_M2KB`) and the text files' tail (§81.91.1) keeps more
+than its shipped room - two channels of 5,248 bytes against 4,880.
+`SHEET.O88` on kern_mega's disks 87,663 -> 87,924. kern_big pays nothing.
+`tests/officetrap.py --leg sheet` is the row: 0 #GP for the run, the save
+and the BIFF reload, against 1,097 with the shipped build.
 
 ### 81.93 What the macro language does not do, and where the module stands
 
@@ -176410,6 +176468,23 @@ assertion at `OS88_IMAGE_END` fires.
 claim runs past part 1's end, the bytes at `program:SC_P1ORG` are
 `build/scribe.p1.bin`, the claim is movable, and the program holds exactly the
 document's three claims — and every leg after it runs part 1's code.
+
+#### 95.8.9 ...and no store through CS: the `PKG_ST` forms are gone
+
+§95.8.8's `PKG_*` macros became one `cs:`-overridden instruction each, which
+is right for a READ and wrong for a STORE on kern_mega: there `CS` is part 1's
+CODE selector, read-only, and `PKG_ST sc_dend` (a run and a paragraph on a
+`.DOC` save), `PKG_STB sc_dpicrun` (a run), the `.DOC` load's `push cs / pop
+ds` (a mark, through `sc_dpapat`'s stores) and `sc_rpap`'s (a paragraph on an
+`.RTF` save) were each a completed #GP - WORD's sites one for one, and
+§68.10.1's account and fix (KERN-MEGA-PLAN 14.162). **There is no store
+form any more**: `PKG_ST` and `PKG_STB` are deleted, every store to an
+`SCVAR` is made with DS back on the package (off the stack, or after the
+routine's own `pop ds`), `sc_dattr` banks its picture flag in DH until it
+has, and `sc_plist` stores through `ES` = the package. §95.8.8's sentence
+that `push cs / pop ds` "is right again" holds for real mode only, and the
+tree no longer uses it to store. The image is 8 bytes smaller (52,955 ->
+52,947); `tests/unit/t_cswrite.py` walks `apps/scribe/`.
 
 ### 95.9 Insert ▸ Picture — the document model
 

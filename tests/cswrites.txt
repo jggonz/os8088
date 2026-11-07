@@ -96,3 +96,17 @@
 0 2 apps/notepad/notepad.asm  # ES = KERNEL_SEG for os88ui_ask's READ of our caption and for np_adopt's read of the launch record (the callback convention); np_save's push cs / pop ds went in 14.150
 16 0 apps/os88spk.inc  # the POLLED Covox (OS88SPK_POLL, MIDIRack's alone): os88spk_pout runs inside the producer's loops with the PRODUCER's DS, and os88spk_pgo refuses anything but CPU_8086 - so none of it runs under kern_mega. The setup calls (lpt, init, go) store through DS since 14.150
 1 0 apps/os88spkfx.inc  # emit's sub-block store in the REAL-MODE copy of OS88SPKFX_EMIT (%2 = 0); kern_mega aims the protected-mode copy (os88spkfx_pmset, 14.18), which stores through [os88spkfx_dsel]
+
+# --- apps/sheet, apps/word, apps/scribe (KERN-MEGA-PLAN 14.162)
+# SHEET's modules write their own claims through CSDO / [CSEG x] (sheet.asm):
+# CS on the shipped build, byte for byte, the claim's DATA selector in kern_mega's
+# arm. WORD's and SCRIBE's stores go through DS back on the package (off the
+# stack) or ES = the package. What is left in all three is a READ through CS's
+# segment or the kernel's, legal through a code selector
+0 2 apps/sheet/sheet.asm  # ES = KERNEL_SEG to READ the launch file's name (sh_note_arg) and the window record's edges (shm_gw_rec, GET.WINDOW)
+0 1 apps/word/wddoc.inc  # wd_dstsh: DS = CS for the rep movsb that READS wd_d_normal into the image (ES the staging claim)
+0 3 apps/word/wdutil.inc  # wd_tclevel: DS = CS after each read of the text, the CHP and the PAP dictionary - nothing is stored through it
+0 1 apps/word/word.asm  # wd_arg: ES = KERNEL_SEG to READ the launch file's name
+0 1 apps/scribe/scdoc.inc  # sc_dstsh: DS = CS for the rep movsb that READS sc_d_normal into the image
+0 3 apps/scribe/scutil.inc  # sc_tclevel: DS = CS after each read, nothing stored through it
+0 1 apps/scribe/scribe.asm  # sc_arg: ES = KERNEL_SEG to READ the launch file's name
