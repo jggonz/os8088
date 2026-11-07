@@ -5044,8 +5044,10 @@ dsk_bpb_check:                  ; (no frame: its one caller, disk_mount_x,
     je .r10
     cmp al, 0xF8
     jae .r10
-.jfail1:                        ; relay: the early rules' jumps land here
-    jmp .fail
+.jfail1:                        ; relay: the early rules' jumps land here,
+    stc                         ; and rule 9 falls in - and a relay to a
+    ret                         ; `stc / ret` IS one, a byte shorter than the
+                                ; jump to it (kernel size pass 18, -1)
 .r10:
     ; rule 10: FATSz16 >= 1, and on a FLOPPY <= DSK_FAT_SECS. On a
     ; DRIVER-BACKED volume there is no cap at all - the FAT is a WINDOW now
@@ -5112,8 +5114,8 @@ dsk_bpb_check:                  ; (no frame: its one caller, disk_mount_x,
     mul cx                          ; AX = spt*heads*80 (<= 5760)
     jmp short .r13c             ; ...and the SAME compare as a driver's
 .jfail2:                        ; the second relay, .jfail1 having gone out of
-    jmp .fail                   ; range half way down. Reached only by a jump,
-                                ; like .jfail1: nothing falls into it
+    stc                         ; range half way down - the answer itself, as
+    ret                         ; there (-1). Reached only by a jump
 .r13d:
     mov ax, [dsk_vsecs]
     test ax, ax
@@ -5381,10 +5383,9 @@ dsk_synth_x:
     ;     a garbage entry can never reach the loader as type 1
     cmp byte [es:si+DSK_R_EXT], 'O'
     jne .size
-    cmp byte [es:si+DSK_R_EXT+1], '8'
-    jne .size
-    cmp byte [es:si+DSK_R_EXT+2], '8'
-    jne .size
+    cmp word [es:si+DSK_R_EXT+1], '88'  ; both 8s in one compare (kernel
+    jne .size                   ; size pass 18, -6, and a compare less an
+                                ; entry)
     cmp dh, PKG_FILE_HI >> 8    ; the file must be under 32MB (DH: the same
                                 ;   3 bytes as `cmp dx, imm8`, so nothing hot
                                 ;   moves - PKG_FILE_HI a multiple of 256,
@@ -5452,16 +5453,14 @@ dsk_up_open:
     mov word [dsk_ent+16], 3    ; type 3 = the parent link (SPEC.md 19)
 %ifdef OS88_REDIR
     cmp byte [dsk_vkind], DVK_FILE
-    je .fsup                    ; a REDIRECTED volume carries no '..' entry on
-%endif                          ; a disk to read one out of, so FSV_CHDIR
+    mov ax, [dsk_fsup]          ; (loaded either way - `mov` writes no flag -
+    je .have                    ; and dsk_dotdot_x answers over it: kernel
+                                ; size pass 18, -2) a REDIRECTED volume
+%endif                          ; carries no '..' entry on a disk to read
+                                ; one out of, so FSV_CHDIR
     call dsk_dotdot_x           ; answered it and disk_mount banked it in
     jnc .have                   ; [dsk_fsup] (SPEC.md 62.9.1). The handle is
     xor ax, ax                  ; opaque, so this is the ONLY source there is
-%ifdef OS88_REDIR
-    jmp short .have
-.fsup:
-    mov ax, [dsk_fsup]
-%endif
 .have:
     mov [dsk_ent+18], ax
     pop di
