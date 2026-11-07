@@ -8347,12 +8347,10 @@ fm_lsel_bar:                    ; ...the band of [fm_lsel], the mirror's own
     call fm_manyvp              ; of it (SPEC.md 22.27): the three callers -
                                 ; the painter, the scroll's lift and its relay
     jz .one                     ; - each mean "the whole selection"
-    pop di                      ; EVERY BAND OF THE SET: fm_mset's walk over
-    call kentc_di               ; the empty run 0FFFFh..0, so no bit changes
-    mov ax, 0FFFFh              ; and every band is drawn - under its own
-    xor dx, dx                  ; ladder frame, which fm_mset.go's exit pops.
-    jmp fm_mset.go              ; It was fm_mdraw, called from here alone
-                                ; (kernel size pass 18, -4)
+    call fm_mdraw               ; (with DI = [fm_vp], fm_manyvp's: NOT written
+    pop di                      ; in here - the walk needs that DI and the
+    ret                         ; caller's DI is banked under the ladder it
+                                ; would push, so in line it cost a reload)
 .one:
     pop di
 %endif
@@ -8493,11 +8491,17 @@ fm_many:
 ; fm_mset - MAKE DI's selection the run of indices AX..DX, AX <= DX (an end
 ; past the listing is simply not reached, so 0FFFFh..0FFFFh is the empty
 ; run), inverting the band of every index whose bit CHANGES and no other -
-; every target a gesture has is one run. AX > DX is fm_lsel_bar's: no index
-; is in it, so every band of the set is drawn, and the bits are LEFT ALONE. fm_mset ENTERS the bitmap first (fm_menter:
+; every target a gesture has is one run. AX > DX is fm_mdraw's: no index is
+; in it, so every band of the set is drawn, and the bits are LEFT ALONE -
+; which is what fm_lsel_bar wants. fm_mset ENTERS the bitmap first (fm_menter:
 ; a single selection becomes its first bit), so a caller with one entry up
 ; needs no call of its own; .nm is the entry that skips it. All registers
 ; preserved
+fm_mdraw:
+    call kentc_di               ; KENT: push ax..di (a gesture's, never a
+    mov ax, 0FFFFh              ; pixel's: kernel size pass 11) - and
+    xor dx, dx                  ; 0FFFFh..0: no run, and draw only
+    jmp short fm_mset.go
 fm_mset:
     call fm_menter              ; FROM a single selection: fm_mone's three
 .nm:                            ; callers enter here, fm_mto (which entered
