@@ -1181,9 +1181,14 @@ hf_paint:
     pop si
 .draw:
     mov bx, si
-    call OSAPI_WM_CONTENT       ; AX = content left, DX = content top
-    add ax, 6
-    mov [hf_x], ax
+    call OSAPI_WM_GEOM          ; DX = content height. A W_PAINT outside a
+    mov cx, dx                  ; damage pass runs with NO clip armed (SPEC.md
+    call OSAPI_WM_CONTENT       ; 11.3.3), so a line past the content box lands
+    add cx, dx                  ; on whatever is under it and nothing repairs
+    sub cx, 8                   ; it: tests/paintmove.py's check 5 read the
+    mov [hf_ylim], cx           ; raise's 18-row paint as a stale Paint
+    add ax, 6                   ; repaint. [hf_ylim] = the last y a whole
+    mov [hf_x], ax              ; 8-row cell fits at, past which no line goes
     add dx, 6
     mov bp, dx
     mov al, CBLACK
@@ -1192,6 +1197,8 @@ hf_paint:
 .row:
     cmp di, [hf_n]
     jae .figs
+    cmp bp, [hf_ylim]
+    jg .done                    ; the box is full: drop the rest, not draw it
     mov ax, di
     inc ax
     call hf_num2
@@ -1223,12 +1230,17 @@ hf_paint:
     jmp short .row
 .figs:
     add bp, 4
-    mov si, hf_s_kb             ; the four figures the suite turns on
+    cmp bp, [hf_ylim]
+    jg .done
+    mov si, hf_s_kb             ; the five figures the suite turns on
     mov cx, [hf_x]
     mov dx, bp
     mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = this window's ground
     call OSAPI_FONT_RUN
     add bp, 10
+    cmp bp, [hf_ylim]           ; ...on ONE line, under the label: a line each
+    jg .done                    ; put the last two below a 250-tall frame once
+    mov cx, [hf_x]              ; the wake had recorded checks 17 and 18
     mov ax, [hf_l0]
     call hf_fig
     mov ax, [hf_s]
@@ -1239,6 +1251,7 @@ hf_paint:
     call hf_fig
     mov ax, [hf_nmoved]
     call hf_fig
+.done:
     pop bp
     pop di
     pop si
@@ -1248,22 +1261,18 @@ hf_paint:
     pop ax
     ret
 
-; hf_fig - one figure per line, in: AX; uses BP as the pen y
+; hf_fig - one figure, in: AX, CX = its x (advanced past it); BP = the pen y
 hf_fig:
-    push cx
     push dx
     push si
     call hf_num5
-    mov cx, [hf_x]
-    add cx, 12
     mov dx, bp
     mov si, hf_num
     mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = this window's ground
     call OSAPI_FONT_RUN
-    add bp, 10
-    pop si
-    pop dx
-    pop cx
+    add cx, 48                  ; five digits and a space, 8px a cell: five
+    pop si                      ; figures end 232px in, inside the 248 of a
+    pop dx                      ; 250-wide frame's content
     ret
 
 ; hf_num2 / hf_num5 - AX to hf_num, NUL-terminated, right-aligned
@@ -1323,12 +1332,18 @@ hf_l_rel:  db 'told once', 0
 hf_l_ceil: db 'ceiling up', 0
 hf_l_dma:  db 'dma page', 0
 hf_l_none: db '-', 0
+hf_l_post: db 'posted', 0
+hf_l_wake: db 'woke', 0
+hf_l_exact:db 'exact', 0
 
 ; one label per check, in the order hf_run records them
 hf_lbl_t:
     dw hf_l_wrk, hf_l_room, hf_l_claim, hf_l_fill, hf_l_decl, hf_l_free
     dw hf_l_frag, hf_l_big, hf_l_vfy, hf_l_pin, hf_l_move, hf_l_rel
-    dw hf_l_ceil, hf_l_dma, hf_l_none
+    dw hf_l_ceil, hf_l_dma, hf_l_none, hf_l_post, hf_l_wake, hf_l_exact
+%if ($ - hf_lbl_t) / 2 != HF_ROWS
+  %error "hf_lbl_t needs one label per row: rows past it read a word of the image as a string"
+%endif
 
     OS88_BSS HF_BSS_TOTAL
     OS88_IMAGE_END
@@ -1361,6 +1376,7 @@ hf_avwake  equ os88_image_end + 44   ; word: ...and plain avail ON THE WAKE,
                                   ; own model of the claim map (SPEC.md 66.4.3)
 hf_posted  equ os88_image_end + 46   ; byte: the compaction was posted
 hf_woke    equ os88_image_end + 47   ; byte: ...and the wake arrived
+hf_ylim    equ os88_image_end + 48   ; word: hf_paint's last whole-cell y
 hf_rres    equ os88_image_end + 148  ; HF_RROWS region-suite bytes, 0 = PASS
 hf_rn      equ os88_image_end + 152  ; word: region checks recorded
 hf_rseg0   equ os88_image_end + 154  ; word: our region's base BEFORE the post

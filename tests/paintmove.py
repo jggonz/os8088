@@ -138,6 +138,27 @@ def park(mo, m):
     os88marty.settle(m)
 
 
+def glass(m):
+    """The screen as rows of one byte a pixel, on ANY card this row boots.
+
+    `m.vram("cga")` NAMES the card rather than asking it, so on MartyPC's
+    VGA machine it read 0xB8000 - unmapped under mode 12h - and handed back
+    the same blank screen twice: check 5 was green by construction there,
+    and that is how "kern_big passes on os8088_xt_vga" was reported for a
+    picture that differed. `vram()` asks the card and refuses a planar one,
+    and that refusal is the cue for `fbuf`, the rendered frame (a pixel's
+    colour packed into a byte, so a change of colour is a change). On the
+    kern_mega shim `vram()` is already the glass (docs/TEST-INCIDENTS.md 81).
+    """
+    try:
+        return m.vram()
+    except os88marty.MartyError:
+        w, h, px = m.fbuf()
+        pk = bytes((px[i] >> 6) << 4 | (px[i + 1] >> 6) << 2 | px[i + 2] >> 6
+                   for i in range(0, w * h * 3, 3))
+        return w, h, [pk[y * w:(y + 1) * w] for y in range(h)]
+
+
 def pkg_seg(m, S, title):
     for w in os88geom.windows(m, S):
         if w.title.startswith(title):
@@ -299,7 +320,7 @@ def main():
         d0 = rowdeltas(cbase)
         h0 = hashlib.md5(m.read(cbase * 16, canvas[1] * 16)).hexdigest()
         park(mo, m)
-        shot0 = m.vram("cga")
+        shot0 = glass(m)
         print("canvas [pt_base]=%04x %dKB rows=%d  md5 %s"
               % (cbase, canvas[1] // 64, nrows, h0[:12]))
 
@@ -395,7 +416,7 @@ def main():
         mo.click(*pt)
         os88marty.settle(m)
         park(mo, m)
-        shot1 = m.vram("cga")
+        shot1 = glass(m)
 
         def band(v):
             """The window's content rectangle, ONE BYTE PER PIXEL.
