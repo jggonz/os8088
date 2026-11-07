@@ -13973,3 +13973,24 @@ Cost: `.mega` +144 bytes (above 1MB); `MEGA_RESIDENT` 62,976 unchanged;
 kern_big and kern_small byte-identical (the change is `mega.inc`'s).
 Rows it reaches: `megakbcodes`, `mega-telansi` (the ctrl arm), `megaaltrdg`
 and `megakbtrip`.
+
+### 14.146 Ctrl+Alt and the GREY Delete did not reboot in protected mode (2026-11-07) - FIXED
+
+**Found by the mega-release hands-on pass** (h1, 86Box's mr286): Ctrl+Alt+Del
+at the kern_mega desktop rebooted with the KEYPAD's Del (53h alone) and did
+nothing with the grey one (E0 53), where kern_big - the ROM's int 09h -
+reboots on both. `mega_k09`'s `.make` sends every E0 key to the grey arm
+before `.plain`'s Ctrl+Alt+Del test, and the grey arm's Alt branch typed it
+as A300.
+
+**Fix**: the grey arm asks the same question first - Ctrl and Alt held and
+the key 53h - and takes the same warm boot (`.cad`, `mega_svc.warm`).
+`megakbcodes` gained the leg, LAST because it ends the session: after the
+keys the machine must leave protected mode for a whole second in a row (a
+reflected BIOS call leaves it for milliseconds). Red on the kernel before
+(`longest real-mode run 000 ms`); the keypad's Del passes the same leg on
+that kernel, which is what says the detector sees a reboot.
+
+Cost: `.mega` +13 bytes (above 1MB); `MEGA_RESIDENT` 62,976 unchanged;
+kern_big byte-identical (`make build/kernel.bin` with and without, one
+commit).

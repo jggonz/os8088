@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """kern_mega: `mega_k09`, kern_mega's own int 09h, stores the ROM's codes for
 the keys a ROM's int 09h would - Ctrl on the grey cluster and the keypad,
-Pause and Ctrl+Break swallowed whole (docs/plans/KERN-MEGA-PLAN.md 14.145).
+Pause and Ctrl+Break swallowed whole (docs/plans/KERN-MEGA-PLAN.md 14.145),
+and Ctrl+Alt with the GREY Del rebooting as the keypad's does (14.146).
 
     OS88_MEGA=1 OS88_MEGA_EMU=86box python3 tests/megakbcodes.py
 
@@ -92,12 +93,25 @@ def main():
         if got != 0x1E61:
             bad.append("the key after them stored %s, wanted 1E61" % (
                 "nothing" if got is None else "%04X" % got))
+        # LAST, because it ends the session: Ctrl+Alt and the GREY Del is
+        # the warm boot as much as the keypad's (14.146). A reflected BIOS
+        # call leaves protected mode for milliseconds; a reboot leaves it
+        # for good, so a second of real mode in a row is the boot
+        m.b.tap("ctrl+alt+delete")
+        run = best = 0
+        for _ in range(40):
+            m.b.cmd("step 100")
+            run = 0 if m.protected() else run + 1
+            best = max(best, run)
+        if best < 10:
+            bad.append("Ctrl+Alt+grey Del did not reboot (longest real-mode "
+                       "run %d00 ms)" % best)
     for b in bad:
         print("megakbcodes: FAIL " + b)
     if bad:
         return 1
-    print("megakbcodes: PASS - %d keys stored as the ROM's, %d swallowed"
-          % (len(STORED), len(SWALLOWED)))
+    print("megakbcodes: PASS - %d keys stored as the ROM's, %d swallowed, "
+          "Ctrl+Alt+grey Del rebooted" % (len(STORED), len(SWALLOWED)))
     return 0
 
 

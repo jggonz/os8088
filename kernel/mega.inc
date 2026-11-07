@@ -1733,6 +1733,13 @@ mega_k09:
     mov ax, 0xE02F
     jmp .store
 .e0grey:
+    mov dh, [0x17]                  ; Ctrl+Alt + the GREY Del is the warm
+    and dh, 0x0C                    ; boot as much as the keypad's is - it
+    cmp dh, 0x0C                    ; went to the alt arm below and was typed
+    jne .e0alt                      ; as A300 (KERN-MEGA-PLAN 14.146)
+    cmp bl, 0x53
+    je .cad
+.e0alt:
     test byte [0x17], 0x08          ; alt + grey = (scan + 50h) << 8
     jz .e0ctrl
     add bl, 0x50
@@ -1779,6 +1786,7 @@ mega_k09:
     jne .noreset
     cmp bl, 0x53
     jne .noreset
+.cad:
     push ds                         ; (mega_svc's int 19h tail, ES = the
     pop es                          ; BDA: no CMOS shutdown byte here, the
     jmp mega_svc.warm               ; ROM's Ctrl-Alt-Del clears none)
