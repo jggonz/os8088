@@ -43168,9 +43168,12 @@ on a 4.77 MHz 8088 by 256 entries. `kern_big`'s sort is an insertion sort
 over Knuth's gaps (h = 3h' + 1), kept in BYTES (h x 24) and re-found each
 pass by climbing the sequence under the last one, so it needs no divide and
 no table. The key is the one above, unchanged - folders first, then the
-case-folded, NUL-padded name - in a subroutine of its own, and insertion
-moves an entry only past a strictly greater one, so equal keys keep their
-order. `kern_small` keeps the selection sort: at 32 entries it is 496
+case-folded, NUL-padded name - written inside the insertion step (it was a
+subroutine of its own until kernel size pass 18; the step's own `j - gap`
+and `j` differ by the gap in BP, so one pointer walks both names), and
+insertion moves an entry only past a strictly greater one, so equal keys
+keep their order. A listing of 0 or 1 entries needs no test of its own: the
+first gap the climb finds is 0, so the sort ends before it reads an entry. `kern_small` keeps the selection sort: at 32 entries it is 496
 compares, and the bytes are that kernel's to keep.
 
 **The compare folds case only where two bytes DIFFER**, and the exchange
@@ -51685,7 +51688,7 @@ performance input, not a precondition.
 | `fmv_load` | in AL = drive, DX = cwd cluster, DI = state block; **no gfx lock requirement, but real floppy I/O**. `dsk_chdir` (DL = AL, AX = DX), then copy the fresh global snapshot into the block's slot and write back `FS_DRV`/`FS_CWD`/`FS_MOK`/`FS_N` from what the mount actually produced (a failed mount lands at the root with `FS_MOK` = 0 — §19.2). Clears `FS_SEL`/`FS_SCRL`/`FS_FERR`: every index into the old listing is meaningless. Preserves all registers. |
 | `fmv_sync` | in DI = state block. Returns immediately when `(FS_DRV, FS_CWD)` already equals `([disk_drive], [dsk_cwd])`; otherwise `fmv_load` on the block's own drive and cwd, **banking `FS_SEL` and `FS_SCRL` across it** — a sync is not navigation, the window is re-listed where it already was, and clearing them would scroll a background window back to the top on a double-click. **Every action calls this first.** Preserves all registers. |
 | `fmv_bcast` | after a successful metadata write, re-copies the (already correct, §18.4) global snapshot into **every** live file-manager window on the same `(drive, cwd)` — the acting one included, since its own cache is stale too — and clears their `FS_SEL`/`FS_SCRL`. Pure memory, no extra I/O. Clears `FS_DIRTY` for the acting window alone (§22.8): it is the one its caller repaints. |
-| `fmv_take` | in DI = state block, whose `(FS_DRV, FS_CWD)` the caller has already compared against the globals. The memory half of a re-list — the four stores `fmv_load` makes around its `dsk_chdir`, with no mount in it. Shared by `fmv_bcast` and `fm_focus`. Preserves all registers. |
+| `fmv_take` | **written at `fmv_bcast`, its one caller, since kernel size pass 18** - no longer a routine; the adopt step is still this contract: DI = a window whose `(FS_DRV, FS_CWD)` the caller has compared, given the acting window's listing with no mount in it. (The row once named `fm_focus` as a second caller; it has not been one since §22.8 moved its re-list to `fmv_load`.) |
 | `fmv_mark` | in nothing: `([disk_drive], [dsk_cwd])` are the folder that just changed. Sets `FS_DIRTY` on every live file-manager window showing it and raises `[fm_fchk]` (§22.8). Writes bytes only — the caller may hold the gfx lock. Called by `dskw_sync`. |
 | `fmv_gneed` | in nothing. Out: CF=1 = something on screen is drawn from the **global** listing, so §18.4's coherence remount must run now; CF=0 = record the debt instead. Only the Standard File dialog answers yes — a Disk window paints from its own cache (§22.1) and has just been marked. Clobbers flags. Called by `dskw_sync`. |
 | `fm_focus` | in BX = the window gaining the focus (0 = none), AL = 0 the caller draws it / 1 draw it here; **gfx lock held, UI task**. On a file-manager window owing a refresh: re-list (`fmv_take` where the globals allow, else `fmv_load`), clear `FS_DIRTY`, and either repaint or answer **CF = 1** so the caller draws it whole (§22.8). CF = 0 = nothing owed. Preserves all registers. |
@@ -52641,7 +52644,7 @@ promise about forever.
 that window's raise cache. Every route in goes through it — `fm_focus`'s
 re-list on the way to the front, a paste's `fmv_reload_all`, a sibling
 adopting the snapshot in `fmv_bcast`, and every navigation — because
-`fmv_take` and `fmv_load` are the only two writers and both end there. So
+`fmv_bcast`'s adopt step (it was `fmv_take`) and `fmv_load` are the only two writers and both end there. So
 the promise is kept by construction, and a route added later inherits it
 rather than having to remember it.
 
@@ -53553,8 +53556,8 @@ is what lets the floor be 1KB - at 256 the pad alone pushed 32 entries to
 1,056 bytes. The bitmap ahead of entry 0 keeps even an empty listing's
 index off offset 0, which `FS_IOFH` spends on "none".
 
-**Thirty-two entries a KB**: `fmv_cap` = `FS_VKB` x 32 and `fmv_need(n)` =
-⌈n/32⌉ KB, never under `VIEW_KB` (**1KB** on these kernels) and never past
+**Thirty-two entries a KB**: the capacity is `FS_VKB` x 32 and the need of n
+entries is ⌈n/32⌉ KB, never under `VIEW_KB` (**1KB** on these kernels) and never past
 the ceiling's 32 - both a shift, no divide. It is safe because an entry costs
 25 bytes (its record and its reference byte), so 32 of them are 800 and the
 224 a KB left over covers `FV_FIX` - the 128-byte bitmap plus the most the
@@ -53588,7 +53591,7 @@ compact - §66.5.10.2, `tools/dsegaudit.py`), then:
   window holds memory for a folder it is not showing.
 - `[dsk_nover]` = 0, and the window NAVIGATED - the drive or folder it was
   asked for is not the one it already showed: `mem_regrow` it DOWN to
-  `fmv_need(FS_N)`. A shrink keeps the base and cannot fail. So a folder of
+  the need of `FS_N`. A shrink keeps the base and cannot fail. So a folder of
   32 or fewer entries comes and goes with no grow and no second mount at all.
 - `[dsk_nover]` = 0 on a re-list IN PLACE - a delete, a paste, a Refresh, a
   sync - keeps the claim it has. It was the size this folder needed a moment
@@ -53599,7 +53602,10 @@ compact - §66.5.10.2, `tools/dsegaudit.py`), then:
   redirected volume asks for is still cut back to fit. +18 bytes.
 - **A grow refused keeps the listing that fit** (§50.3: memory is a
   performance input). `mem_regrow` does not call the relocation proc
-  (§66.7), so `fmv_rsz` writes `FS_VSEG` and the `[fm_vseg]` mirror itself.
+  (§66.7), so `fmv_load` writes `FS_VSEG` itself and its re-list's `fmv_fit`
+  republishes the `[fm_vseg]` mirror. (The capacity, the need and the resize
+  were `fmv_cap`, `fmv_need` and `fmv_rsz` until kernel size pass 18 wrote
+  each at its one call in `fmv_load`.)
 
 `dsk_ioff` follows the entries STORED, not the room: the scan calls
 `dsk_ioffx` with its count at `.scan_done`, so the index starts on the
@@ -53608,8 +53614,8 @@ still owes. The bitmap ahead of them keeps an empty listing's index off
 offset 0, which `FS_IOFH` spends
 on "none".
 
-**A sibling adopts a listing only if it fits.** `fmv_take` (§22.1's
-`fmv_bcast`) copies the acting window's listing into every other window on
+**A sibling adopts a listing only if it fits.** `fmv_bcast`'s adopt step
+(§22.1; it was `fmv_take`) copies the acting window's listing into every other window on
 the same folder; a sibling whose claim is smaller than the source's keeps
 `FSD_CACHE` and re-lists when it next comes to the front (§22.8), rather
 than being grown from inside a broadcast.

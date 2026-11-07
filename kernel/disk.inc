@@ -3741,11 +3741,8 @@ osapi_fs_ent_x:
     mov ax, [dsk_fsn]
     cmp ax, [dsk_nmax]
 %ifdef DSK_BIGDIR
-    jb .room                    ; full: SAY there was more (SPEC.md 22.6.4).
-    inc word [dsk_nover]        ; Every shipped driver stops at its first
-    jmp short .no               ; refusal, so this counts 1 and not the rest,
-.room:                          ; and fmv_load grows by DOUBLING for that
-%else
+    jae .full                   ; full: SAY there was more (SPEC.md 22.6.4),
+%else                           ; at .full - on into .no's refusal
     jae .no                     ; SPEC.md 19's cap for this volume: the extras
 %endif
                                 ; are invisible, exactly as they are on a FAT
@@ -3777,6 +3774,10 @@ osapi_fs_ent_x:
     pop cx
     pop bx
     retf
+%ifdef DSK_BIGDIR
+.full:                          ; Every shipped driver stops at its first
+    inc word [dsk_nover]        ; refusal, so this counts 1 and not the rest,
+%endif                          ; and fmv_load grows by DOUBLING for that
 .no:
     xor ax, ax
     stc
@@ -4404,9 +4405,14 @@ disk_mount_x:
     ; 4.77 MHz 8088 by 256. Knuth's gaps h = 3h'+1, kept in BYTES (h x 24):
     ; each one is found again by climbing the sequence under the last, so
     ; there is no divide and no table. Insertion within a gap only moves an
-    ; entry past a STRICTLY greater one, so equal keys keep their order
-    cmp cx, 2
-    jb .sd_out                  ; 0 or 1 entries are already in order
+    ; entry past a STRICTLY greater one, so equal keys keep their order.
+    ; 0 OR 1 ENTRIES NEED NO TEST of their own: the span is then 0 or one
+    ; entry, the gap climb's first step (one entry) is not below it, so the
+    ; first gap is 0 and .sh_done is taken before any entry is read. It was
+    ; a `cmp cx, 2 / jb .sd_out`, which the compare written inline pushed
+    ; out of short reach (kernel size pass 18); every register the test
+    ; would have kept is one the sort spends on every other count, so
+    ; nothing past .sd_out reads it
     push bp                     ; BP = the gap, in bytes: disk_mount_x's
     mov ax, DSK_DE_STRIDE       ; count is banked across the sort
     mul cx                      ; DX:AX, DX 0: count <= DSK_NENT
@@ -4437,7 +4443,39 @@ disk_mount_x:
     jc .sh_next
     cmp di, bx                  ; ...unless that is before the first entry
     jb .sh_next
-    call dsk_sdcmp
+    ; --- THE KEY COMPARE (it was dsk_sdcmp, this its one caller - kernel
+    ; size pass 18): CF = 1 exactly when [ES:SI] sorts before [ES:DI].
+    ; Folders first (19.4 - the type word's bit 1, set for type 2 alone;
+    ; compared REVERSED, so a folder at SI reads as below a file at DI), then
+    ; the 16-byte display name, case-folded and NUL-padded, so PAINT.O88
+    ; sorts before PAINT2.O88. SI IS DI + BP HERE, so [es:bp+di] reads SI's
+    ; byte and only DI walks: SI needs no bank and no `inc`, and the walk
+    ; lost a call and a ret besides. `loop` writes no flag, so sixteen equal
+    ; bytes fall out with the last `cmp` - equal - still in them
+    push cx
+    push di
+    mov al, [es:di+16]
+    mov ah, [es:bp+di+16]       ; [SI]'s type word
+    and ax, 0x0202
+    cmp al, ah
+    jne .cdone
+    mov cx, 16
+.ncmp:
+    mov al, [es:bp+di]          ; [SI]'s byte
+    mov ah, [es:di]
+    cmp al, ah                  ; EQUAL BYTES NEED NO FOLD - the common case
+    je .neq                     ; down a shared prefix, and two calls a byte
+    call dsk_upper              ; were most of the compare (measured: 4.3 s
+    xchg al, ah                 ; of sort at 1,000 entries on the XT)
+    call dsk_upper              ; AH = [SI]'s byte, AL = [DI]'s, both folded
+    cmp ah, al
+    jne .cdone
+.neq:
+    inc di                      ; (`inc` writes no CF: sixteen equal bytes
+    loop .ncmp                  ; fall out with the last compare's CF = 0)
+.cdone:
+    pop di
+    pop cx
     jae .sh_next                ; [j] does not sort before [j - gap]
     push cx                     ; --- exchange [SI] and [DI] ---
     push di
@@ -5514,47 +5552,6 @@ dsk_up_open:
 ; in:  AL = a byte
 ; out: AL = it, with 'a'..'z' folded
 ; clobbers: AL (the output), flags
-%ifdef DSK_BIGDIR
-; -----------------------------------------------------------------------------
-; dsk_sdcmp - the Shell sort's key compare (SPEC.md 19.4.1), disk_mount_x's
-; alone, out of line so the sort's stack shape is one routine's
-dsk_sdcmp:
-    ; CF = 1 exactly when [ES:SI] sorts before [ES:DI]: folders first
-    ; (19.4 - the type word's bit 1, set for type 2 alone; compared REVERSED,
-    ; so a folder at SI reads as below a file at DI), then the 16-byte display
-    ; name, case-folded and NUL-padded, so PAINT.O88 sorts before PAINT2.O88.
-    ; AX and the flags clobbered; `loop` writes no flag, so sixteen equal
-    ; bytes fall out with the last `cmp` - equal - still in them
-    push cx
-    push si
-    push di
-    mov al, [es:di+16]
-    mov ah, [es:si+16]
-    and ax, 0x0202
-    cmp al, ah
-    jne .cdone
-    mov cx, 16
-.ncmp:
-    mov al, [es:si]
-    mov ah, [es:di]
-    cmp al, ah                  ; EQUAL BYTES NEED NO FOLD - the common case
-    je .neq                     ; down a shared prefix, and two calls a byte
-    call dsk_upper              ; were most of the compare (measured: 4.3 s
-    xchg al, ah                 ; of sort at 1,000 entries on the XT)
-    call dsk_upper              ; AH = [SI]'s byte, AL = [DI]'s, both folded
-    cmp ah, al
-    jne .cdone
-.neq:
-    inc si                      ; (`inc` writes no CF: sixteen equal bytes
-    inc di                      ; fall out with the last compare's CF = 0)
-    loop .ncmp
-.cdone:
-    pop di
-    pop si
-    pop cx
-    ret
-%endif
-
 ; -----------------------------------------------------------------------------
 dsk_upper:
     cmp al, 'a'
