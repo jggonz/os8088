@@ -152,20 +152,16 @@ VID_LIVE_W  equ 9               ; words in the live block below
 ; (ext_apply) - so the rows can go WITH it, one copy per image, emitted by
 ; VID_APPLY itself (VID_TAB_ROWS), and the kernel keep only the row that is
 ; WRITTEN at run time: VESA.DRV's, vid_vxrow. That is what kern_small (-36
-; resident, two rows) and kern_emu (-72) do. Two kernels keep the whole table
-; resident (VID_TAB_RES):
-;   * kern_big, because its blob is FULL TO THE BYTE (boot2_end = BOOT2_PAD at
-;     13 sectors), so its copy would cost a fourteenth sector - which is the
-;     owner's decision (docs/plans/ksp18/draw.md, WANTS THE OWNER) and is all
-;     it would take: kern_emu is the same kernel with one sector more, and its
-;     build is this arm working;
+; resident, two rows), kern_emu and kern_big (-72 each) do. One kernel keeps
+; the whole table resident (VID_TAB_RES):
 ;   * kern_mega, whose switch rewrites the segment column into selectors in
 ;     place (mega.inc) - an image's copy would still say A000h.
-%ifndef KERN_SMALL
-%ifndef KERN_EMU
- %define VID_TAB_RES
-%endif
-%endif
+; kern_big was the second until its blob had room: it was FULL TO THE BYTE
+; (boot2_end = BOOT2_PAD at 13 sectors) and the copy wants 83 bytes there.
+; Kernel size pass 18's sweep3 freed 87 of them in the blob's own code
+; (boot2.asm's read_run, spinner.inc, CFG_SHARED/CFG_BOOT), so kern_big takes
+; this arm at thirteen sectors (docs/plans/ksp18/sweep3.md) - -72 resident,
+; no sector added. kern_emu is the same kernel and was this arm's first.
 %ifdef KERN_MEGA
  %define VID_TAB_RES
 %endif
