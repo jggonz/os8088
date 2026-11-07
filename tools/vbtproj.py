@@ -24,7 +24,11 @@ A project file (version 1):
                   clip's own, swapped in as it starts (SPEC.md 126.3.2;
                   absent: 4 of 16, 1 of 8, none of 4),
                   "xms_kb": the XMS the battle may count on (SPEC.md
-                  126.4.6: the clip cache; 0 or absent none)},
+                  126.4.6: the clip cache; 0 or absent none),
+                  "cadence": false to read a CAPTURE (a source at a whole
+                  multiple of the target's rate) by time, not by the
+                  frames its footage had (true when absent: SPEC.md
+                  126.2.5)},
      "sources":  {id: {"kind": "video", "path"} | {"kind": "scene", "name"}},
      "sounds":   {id: {"kind": "file", "path", "level"}
                     | {"kind": "scene", "name", "level"}
@@ -891,6 +895,8 @@ class Project:
                                    isinstance(vo, bool) and 0 <= vo <= 4):
             err("target.vga_clip_colours", "vga_clip_colours %r: 0 to 4"
                 % (vo,))
+        if t.get("cadence") not in (None, True, False):
+            err("target.cadence", "cadence: true or false")
         xk = t.get("xms_kb")
         if xk is not None and not (isinstance(xk, int) and not
                                    isinstance(xk, bool) and 0 <= xk <= 65535):

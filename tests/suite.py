@@ -17272,6 +17272,14 @@ SOAK = [
         "opening at frame 17 of 19, its ring the title's",
         needs=("marty", "ffmpeg"),
         wants=("build/vbattle.o88",)),
+    Row("vbtcadence", "soak", py("tests/vbtcadence.py"), 5.0,
+        "SPEC.md 126.2.5: a 60 fps capture of a 15 fps original, drifting "
+        "(three and a stray part-drawn frame, five), with a genuine "
+        "two-frame hold: read by time two frames are no original; by its "
+        "cadence (vbtana.vid_path) all 48 are the original's exactly; a "
+        "source at its own rate is not a capture; cadence false reads by "
+        "time. Broken on purpose (each run's last frame taken) 41 of 48",
+        needs=("ffmpeg",)),
     Row("vbtcap", "soak", py("tests/vbtcap.py"), 15.0,
         "SPEC.md 126.4.3: a streamed clip HELD TO THE DISK, host side - the "
         "demo's ARI attack given two seconds changing all over (~140 KB/s, "

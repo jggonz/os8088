@@ -2103,17 +2103,24 @@ def cmd_build(a):
     kinds = [a.rendition] if a.rendition else renditions_of(proj)
     res = []
     for kind in kinds:
+        A.CADENCED.clear()
         data = build_project(proj, progress, kind)
         out = a.out if a.out and len(kinds) == 1 else os.path.join(
             os.path.dirname(proj.path), BUNDLE_NAMES[kind])
         with open(out, "wb") as f:
             f.write(data)
         bud = A.budget(proj, data)
+        cad = sorted(set(A.CADENCED.values()))  # (captures read by their
         res.append(dict(kind=kind, out=out, bytes=len(data), budget=bud,
-                        capped=dict(LAST_CAPPED)))
+                        capped=dict(LAST_CAPPED), cadenced=len(  # cadence)
+                            A.CADENCED)))
         if not a.json:
             print("%s (%s): %d bytes; idle loop %d bytes, entries %d" % (
                 out, kind, len(data), bud["idle_bytes"], bud["entries"]))
+            if cad:
+                print("  %d capture(s) read by their cadence (126.2.5): %s"
+                      % (len(A.CADENCED), ", ".join("%d fps of %d" % x
+                                                    for x in cad)))
             if LAST_CAPPED:
                 print("  held to the disk (126.4.1): %s" % ", ".join(
                     "%s %d frames" % kv for kv in sorted(LAST_CAPPED.items())))

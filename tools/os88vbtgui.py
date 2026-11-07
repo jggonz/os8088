@@ -3578,9 +3578,10 @@ FIT_LABELS = {"fill": "Fill (crop the edges to the shape)",
               "stretch": "Stretch (the whole picture, squeezed)"}
 
 
-XMS_LABELS = ((0, "none (an XT)"), (1024, "1 MB"), (2048, "2 MB"),
-              (3072, "3 MB"), (4096, "4 MB"), (8192, "8 MB"),
-              (15360, "15 MB"))
+XMS_LABELS = ((0, "none (an XT)"), (896, "896 KB (1 MB)"),
+              (2944, "2944 KB (4 MB)"), (7040, "7040 KB (8 MB)"),
+              (15232, "15232 KB (16 MB)"))     # (the Video Player's pools:
+#                         a machine's XMS less 128 KB, os88venc.POOL_KB)
 
 
 def cache_lines(holds, nclips):
@@ -3657,6 +3658,10 @@ class BuildTab(object):
         self.capv = app.tk.IntVar(value=1)      # (126.4.1: on, unless asked)
         ttk.Checkbutton(top, text="Hold clips to the disk", variable=self.capv,
                         command=self._cap).pack(side="left", padx=6)
+        self.cadv = app.tk.IntVar(value=1)      # (vbtana.vid_path)
+        ttk.Checkbutton(top, text="Captures by their cadence",
+                        variable=self.cadv, command=self._cad
+                        ).pack(side="left", padx=6)
         ttk.Label(top, text="XMS on the target").pack(side="left", padx=(8, 2))
         self.xmsv = tk.StringVar(value=XMS_LABELS[0][1])    # (126.4.6)
         xc = ttk.Combobox(top, textvariable=self.xmsv, state="readonly",
@@ -3748,6 +3753,15 @@ class BuildTab(object):
         if kb != (self.app.proj.d["target"].get("xms_kb") or 0):
             self.app.edit("set", ("target", "xms_kb"), kb)
 
+    def _cad(self):
+        """A CAPTURE (a source at a whole multiple of the target's rate)
+        read by the frames its footage had (vbtana.vid_path, 126.2.5), or
+        by time - every Nth frame - as any other source is"""
+        on = bool(self.cadv.get())
+        if on != (self.app.proj.d["target"].get("cadence", True)
+                  is not False):
+            self.app.edit("set", ("target", "cadence"), on)
+
     def _cap(self):
         """THE READER'S MODEL (126.4.1) on or off: a streamed clip's burst
         drawn in part where the disk would not have it in time"""
@@ -3758,6 +3772,7 @@ class BuildTab(object):
     def refresh(self):
         P_ = self.app.proj
         self.capv.set(1 if P_.d["target"].get("burst_cap", True) else 0)
+        self.cadv.set(0 if P_.d["target"].get("cadence") is False else 1)
         xk = P_.d["target"].get("xms_kb") or 0
         self.xmsv.set(dict(XMS_LABELS).get(xk, "%d KB" % xk))
         self.chk.delete(*self.chk.get_children())
@@ -3856,7 +3871,8 @@ class BuildTab(object):
         pick = [r for r in rs if r["kind"] == self.rendv.get()] or rs[:1]
         self.rendv.set(pick[0]["kind"])
         res = dict(res, out=pick[0]["out"], bytes=pick[0]["bytes"],
-                   budget=pick[0]["budget"], capped=pick[0].get("capped") or {})
+                   budget=pick[0]["budget"], capped=pick[0].get("capped") or {},
+                   cadenced=pick[0].get("cadenced") or 0)
         bud = self.bud = res["budget"]
         self.out_l.config(text="%s - %d KB" % (res["out"], res["bytes"] // 1024))
         self.tv.delete(*self.tv.get_children())
@@ -3875,7 +3891,10 @@ class BuildTab(object):
             "\nHeld to the disk where they ran faster than it (a frame drawn "
             "in part, the rest on the frames after; the sound whole): %s." %
             ", ".join("%s %d frames" % kv for kv in sorted(
-                res["capped"].items())) if res["capped"] else ""))
+                res["capped"].items())) if res["capped"] else "") + (
+            "\n%d capture(s) read by the frames their footage had, not by "
+            "time (Captures by their cadence)." % res["cadenced"]
+            if res["cadenced"] else ""))
         hl = cache_lines(bud.get("hold", {}), len(bud["clips"]))
         self.mem_l.config(text="\n".join(memory_lines(bud["memory"]) + hl + [
             "(on a 640 KB machine: %d KB free to the engine, measured on "

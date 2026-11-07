@@ -242133,6 +242133,42 @@ A captured battle's clips are lossy V88 encodes. Their DECODED screens are
 what the records are made between, so the joins stay exact
 (VBATTLE-BUILDER-PLAN 3).
 
+#### 126.2.5 A capture read by its cadence
+
+**A source recorded off a screen is read by the frames its footage had,
+not by time** (`vbtana.vid_path`, the Build tab's "Captures by their
+cadence", `target.cadence`, on unless false). The owner's footage is 15
+fps captured at 60: four captured frames to an original, but the capture
+drifts - a run of three and a stray part-drawn frame, or five - and
+ffmpeg's `fps` filter, taking every fourth captured frame by its time, now
+and then took the stray: most of it the frame before, so a near repeat,
+and the next frame a jump of two (2026-11-07: "it stutters exactly once,
+always the exact same spot"; 12-Char1's frame 72 changed 1.5 KB between
+13 and 20 KB).
+
+- A source is a CAPTURE when its rate is a whole multiple M (2 or more) of
+  the target's and at least `CAD_SHARE` x (M - 1) / M of its captured
+  frames change by under `CAD_STILL` (a mean gray difference of 0.1) -
+  footage at its own rate, a 30 fps video of distinct frames, is read by
+  time as before.
+- `cadence_picks`: each original frame's start placed where the picture
+  changes, by the best path whose starts are M - 2 to M + 2 captured
+  frames apart (M the cheapest, `CAD_PEN`), and in each the STEADIEST
+  captured frame - the least change into and out of it - taken. A
+  picture held for two originals stays two frames.
+- The frames go to a lossless file in the project's cache (FFV1, the
+  source's size and sample aspect), and every rendition's encode reads it:
+  CGA4's encoder and VGA's and Hercules' frames alike. The sound is the
+  source's.
+- A project's frame numbers are unchanged in count (the captures measured:
+  79, 179, 173 frames by time and by cadence); a frame may show its
+  neighbour's original where the capture drifted.
+
+`vbtcadence`: a synthetic 15 fps original with a genuine two-frame hold,
+captured at 60 with the drift: read by time, two of 48 frames are no
+original (the strays); by its cadence, all 48 exactly the original's;
+broken on purpose (each run's LAST captured frame), 41 of 48.
+
 #### 126.2.4 The rules block
 
 At 4096, to the first region's end, little-endian; `tools/vbtrules.py` is

@@ -57,8 +57,10 @@ VB_PRKB     equ 48                  ; the claim tried first, halved to 6
 ; (vb_prdrain), a read goes up as it is logged, and the play's end brings
 ; it all down into a claim of its own, the rings given back by then
 VB_PRSN     equ 400                 ; frames staged
-VB_PRXF     equ 30000               ; frames in XMS (~33 min at 15 a second)
-VB_PRXR     equ 4096                ; reads in XMS
+VB_PRXF     equ 4000                ; frames in XMS (~4.4 min at 15 a second)
+VB_PRXR     equ 2048                ; reads in XMS (the two ~56 KB: a pool's
+                                    ; 64 KB left for debugging, the owner's
+                                    ; Video Player rule - it was 326 KB)
 VB_PRXRB    equ VB_PRH + VB_PRE * VB_PRXF   ; (the reads' first)
 VB_PRXSZ    equ VB_PRXRB + 8 * VB_PRXR
 VB_PRXKB    equ (VB_PRXSZ + 1023) / 1024

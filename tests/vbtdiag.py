@@ -241,9 +241,9 @@ def xms():
         open(p, "wb").write(prof)
         good = prof[:4] == b"VBPR"
         h, fr, rd = vbtprof.read_prof(p) if good else ({}, [], [])
-        ok(good and kept == 1 and prof[60] == 1 and h["claimkb"] > 300,
+        ok(good and kept == 1 and prof[60] == 1 and 40 < h["claimkb"] < 64,
            "x1. VBPROF1.DAT kept in XMS: the play's flag %d, the file's +60 "
-           "%s, a %s KB block" % (kept, prof[60] if good else None,
+           "%s, a %s KB block (under the 64 KB a pool keeps for debugging)" % (kept, prof[60] if good else None,
                                   h.get("claimkb")))
         drop = struct.unpack_from("<H", prof, 62)[0] if good else -1
         clipf = [f for f in fr if f["mode"] == vbtprof.CLIP_MODE and

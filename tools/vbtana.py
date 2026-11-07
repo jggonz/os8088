@@ -146,6 +146,7 @@ def screens_npy(proj, sid, full=False):
     pct = scale_of(proj, "cga4")
     key = hashlib.sha1(json.dumps(
         [ENC_KEY, file_hash(proj.here(s["path"])), rows, t["fps"],
+         "cad1" if cadence_on(proj) else None,
          t["profile"], t["palette"]] + ([pct] if pct < 100 else []) +
         ([fit_of(proj)] if fit_of(proj) != "fill" else []) +
         ([clip_of(proj)] if clip_of(proj) != CLIP_DEFAULT else [])).encode()
@@ -163,7 +164,7 @@ def screens(proj, sid, progress=_nop, full=False):
     rows = 200 if full else t["canvas"][3]
     pct = scale_of(proj, "cga4")
     pw, ph, x0, y0 = boxed(320, rows, pct)
-    path = proj.here(s["path"])
+    path = vid_path(proj, sid, progress)
     npy = screens_npy(proj, sid, full)
     key = os.path.basename(npy)[:-4]
     if os.path.exists(npy):
@@ -224,6 +225,156 @@ def screens(proj, sid, progress=_nop, full=False):
 #   herc: 640 x (348 - twice the band's rows): every logical band pixel two
 #         by two, so the band is the same 40 x 8 cells; one bit a pixel
 
+# --- A CAPTURE'S CADENCE: the frames its footage had --------------------------
+#
+# The owner's footage is CAPTURED: a 15 fps original recorded at 60, each of
+# its frames four captured ones - but the capture drifts against it, three
+# and a stray one, five, so taking every fourth captured frame by its time
+# (ffmpeg's fps filter) now and then takes one original frame twice and
+# steps over the next: the owner's "stutters exactly once, always the exact
+# same spot" (2026-11-07; 07-Scope's frame 84 changed 455 bytes between
+# frames of 14 KB). A source whose rate is a whole multiple of the target's
+# and that changes on about one captured frame in that many is read by its
+# CADENCE instead (cadence_picks): each original frame's start found where
+# the picture changes, three to five captured frames apart, and its
+# steadiest captured frame taken - written once to a lossless file the
+# encodes read (vid_path). Every other source is read by time, as before.
+
+CAD_PEN = {-2: 1.0, -1: 0.3, 0: 0.0, 1: 0.3, 2: 1.0}  # a gap off the
+#                         multiple: what it costs against a change found
+CAD_STILL = 0.1         # a captured frame changing under this (mean |gray|
+#                         difference) is the same picture...
+CAD_SHARE = 0.45        # ...and a capture has at least this share of them
+
+
+def cadence_on(proj):
+    return proj.d["target"].get("cadence", True) is not False
+
+
+def cadence_picks(d, m):
+    """D[i]: how much captured frame I changed from I - 1 (D[0] any);
+    M: captured frames to an original one. The captured frame chosen for
+    each original frame, in order: its starts placed on the changes, M - 2
+    to M + 2 apart (M the cheapest), by the best path through them; then in
+    each the steadiest frame, the least change into and out of it"""
+    n = len(d)
+    dn = np.minimum(np.asarray(d, float) / (np.percentile(d, 90) + 1e-6),
+                    1.5)
+    gaps = [(m + k, p) for k, p in CAD_PEN.items() if m + k >= 1]
+    best = np.full(n + 1, -1e18)
+    prev = np.zeros(n + 1, int)
+    best[0] = 0.0
+    for b in range(1, n + 1):
+        sc = dn[b] if b < n else 0.0
+        for g, p in gaps:
+            a = b - g
+            if a >= 0 and best[a] - p + sc > best[b]:
+                best[b] = best[a] - p + sc
+                prev[b] = a
+    end = max(range(max(1, n - m - 2), n + 1), key=lambda b: best[b])
+    bs = []
+    b = end
+    while b > 0:
+        bs.append(b)
+        b = prev[b]
+    bs = [0] + bs[::-1]
+    if bs[-1] < n:
+        bs.append(n)
+    picks = []
+    for a, b in zip(bs[:-1], bs[1:]):
+        sc = [(d[i] if i > a else 0) + (d[i + 1] if i + 1 < b else 0) +
+              (1e9 if i == a and b - a > 1 else 0) for i in range(a, b)]
+        picks.append(a + int(np.argmin(sc)))
+    return picks
+
+
+def _probe(path):
+    """(rate as a Fraction, width, height, sample aspect "n:d") of PATH's
+    video, or None"""
+    from fractions import Fraction
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                        "-show_entries", "stream=r_frame_rate,width,height,"
+                        "sample_aspect_ratio", "-of", "json", path],
+                       capture_output=True, text=True)
+    try:
+        st = json.loads(r.stdout)["streams"][0]
+        sar = st.get("sample_aspect_ratio") or "1:1"
+        return (Fraction(st["r_frame_rate"]), int(st["width"]),
+                int(st["height"]), sar if sar != "0:1" else "1:1")
+    except (ValueError, KeyError, IndexError, ZeroDivisionError):
+        return None
+
+
+CADENCED = {}           # source path -> (captured fps, the target's), the
+#                         sources the last reads took by their cadence
+
+
+def vid_path(proj, sid, progress=_nop):
+    """The file source SID's VIDEO is read from: the source, or - a capture
+    at a whole multiple of the target's rate - its original frames, picked
+    by its cadence, in a lossless file in the cache"""
+    path = proj.here(proj.d["sources"][sid]["path"])
+    if not cadence_on(proj):
+        return path
+    fps = proj.d["target"]["fps"]
+    key = hashlib.sha1(json.dumps(["cad1", file_hash(path), fps]).encode()
+                       ).hexdigest()[:20]
+    out = os.path.join(cache_dir(proj), key + ".cad.mkv")
+    no = os.path.join(cache_dir(proj), key + ".nocad")
+    if os.path.exists(out):
+        CADENCED[path] = tuple(json.load(open(out + ".json")))
+        return out
+    if os.path.exists(no):
+        return path
+    pr = _probe(path)
+    m = pr and pr[0] / fps
+    if not pr or m < 2 or abs(m - round(m)) > 0.01:
+        open(no, "w").close()
+        return path
+    m = int(round(m))
+    progress("encode", 0, 0, "%s (its cadence)" % sid)
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", path, "-an", "-vf",
+                          "scale=80:45:flags=area", "-f", "rawvideo",
+                          "-pix_fmt", "gray", "-"], capture_output=True
+                         ).stdout
+    g = np.frombuffer(raw, np.uint8).reshape(-1, 45, 80).astype(np.int16)
+    if len(g) < 2 * m:
+        open(no, "w").close()
+        return path
+    d = np.r_[255.0, np.abs(g[1:] - g[:-1]).mean(axis=(1, 2))]
+    if (d < CAD_STILL).mean() < CAD_SHARE * (m - 1) / m:
+        open(no, "w").close()       # (its own frames: no cadence to find)
+        return path
+    picks = set(cadence_picks(d, m))
+    _, w, h, sar = pr
+    tmp = out + ".part.mkv"
+    enc = subprocess.Popen(["ffmpeg", "-v", "error", "-y", "-f", "rawvideo",
+                            "-pix_fmt", "rgb24", "-s", "%dx%d" % (w, h),
+                            "-r", str(fps), "-i", "-", "-vf",
+                            "setsar=%s" % sar.replace(":", "/"),
+                            "-c:v", "ffv1", tmp], stdin=subprocess.PIPE)
+    dec = subprocess.Popen(["ffmpeg", "-v", "error", "-i", path, "-an",
+                            "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+                           stdout=subprocess.PIPE)
+    size = w * h * 3
+    i = 0
+    while True:
+        f = dec.stdout.read(size)
+        if len(f) < size:
+            break
+        if i in picks:
+            enc.stdin.write(f)
+        i += 1
+    dec.wait()
+    enc.stdin.close()
+    if enc.wait() != 0:
+        raise RuntimeError("could not write %s's frames by its cadence" % sid)
+    json.dump([int(pr[0]), fps], open(out + ".json", "w"))
+    os.replace(tmp, out)
+    CADENCED[path] = (int(pr[0]), fps)
+    return out
+
+
 REND_KINDS = ("cga4", "vga4", "herc")
 HOLD_LUM = 10           # Hercules: a pixel keeps its bit while its brightness
 #                         moves less (VGA4's hold is Knoll's own, quant_vga)
@@ -251,12 +402,14 @@ def rgb_frames(proj, sid, w, h, kind, progress=_nop):
     fit = fit_of(proj)
     key = hashlib.sha1(json.dumps(["rgb1", file_hash(path), w, h, kind,
                                    t["fps"], t["rate"]] +
+                                  (["cad1"] if cadence_on(proj) else []) +
                                   ([fit] if fit != "fill" else [])).encode()
                        ).hexdigest()[:20]
     npy = os.path.join(cache_dir(proj), key + ".rgb.npy")
     if os.path.exists(npy):
         return np.load(npy)
     progress("encode", 0, 0, "%s (%s)" % (sid, kind))
+    path = vid_path(proj, sid, progress)
     spf = t["rate"] // t["fps"]
     fr = np.stack(list(E.ffmpeg_video(path, w, h, _src_crop(kind, w, h)
                                       if fit == "fill" else None,
@@ -759,6 +912,7 @@ def rend_screens(proj, sid, kind, progress=_nop, full=False, stream=None,
          KNOLL_STABLE, KNOLL_HOLD, KNOLL_SCORE, KNOLL_CAP, HOLD_LUM, pal,
          list(rng) if rng and kind == "vga4" else None,
          seed[2] if seed is not None else None] +
+        (["cad1"] if cadence_on(proj) else []) +
         ([pct] if pct < 100 else []) +
         ([fit_of(proj)] if fit_of(proj) != "fill" else []) +
         [clip_of(proj)]).encode()).hexdigest()[:20]
@@ -1004,7 +1158,7 @@ def budget(proj, data):
     order = [n * 4 for _, n in getattr(b, "hold", [])]     # KB, in order
     holds = {}
     lens = [c["len"] for c in b.clips]
-    for pool in sorted({1024, 3072} | ({xms} if xms else set())):
+    for pool in sorted({896, 2944} | ({xms} if xms else set())):
         whole = len(data) // 1024 <= pool - 4   # (a 286's common pools,
         got, left = 0, pool - 4                 # 98.3.18.2.1, and the
         for kb in order:                        # target's own)
