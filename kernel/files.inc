@@ -1183,8 +1183,11 @@ fmv_store:
                                 ; so nothing may bank them until it is redrawn
 .nowin:
     call fmv_fit                ; a window whose fm_kinit claim was refused
-    mov byte [di+FS_IOFH], 0    ; gets another chance before anything is copied
-    mov ax, [di+FS_VSEG]
+                                ; gets another chance before anything is copied
+    xor bx, bx                  ; BH = FS_IOFH's 0 for .none below: ONE store
+    mov ax, [di+FS_VSEG]        ; of the byte on both arms, where there was a
+                                ; zero first and the shape after it (kernel
+                                ; size pass 18, -2; nothing between reads it)
     or ax, ax
     jz .none                    ; no cache: nothing to write it into, and
                                 ; nothing but the GLOBAL shape to read it
@@ -1240,13 +1243,13 @@ fmv_store:
 %ifdef DSK_BIGDIR
     shl bx, 1                   ; (in 128-byte units on this build, 22.6.4)
 %endif
+.none:
     mov [di+FS_IOFH], bh        ; was given, so the two halves can no longer
                                 ; name different segments
                                 ; ...AND THE SHAPE IT WAS FILLED WITH, which
                                 ; is this mount's and not whichever one paints
                                 ; it next (SPEC.md 22.6.1). BL is 0 by the
                                 ; assertion at fmv_viofs
-.none:
     jmp kretc_di
 
 ; -----------------------------------------------------------------------------
@@ -3654,10 +3657,13 @@ fm_onclick_x:
     ; reports the thumb as a part of its own rather than choosing for them.
     push cx
     push dx
-    mov ax, cx                  ; the element takes it ABSOLUTE and this
-    mov cx, [fm_pressx]         ; ladder is content-relative with x in DX
-    mov dx, ax
-    add dx, [fm_cy]
+    mov cx, [fm_pressx]         ; the element takes it ABSOLUTE and this
+    mov dx, [fm_pressy]         ; ladder is content-relative with x in DX -
+                                ; and the absolute point is the one banked
+                                ; above: CX + [fm_cy] was DX - the content's
+                                ; y + the same y, which fm_layout stores
+                                ; out of the same wm_content (kernel size
+                                ; pass 18, -4)
     call fm_sbset
     call os88ui_sbhit
 %ifdef OS88UI_SBDRAG
@@ -4514,9 +4520,12 @@ fm_delrep:
 fm_open_sel:
     call kentc_di
     mov di, [fm_vp]
-    call fmv_get_dir            ; SI -> the staged 32-byte entry
-    mov bx, [si+18]             ; its first cluster, banked before the mount
-    cmp word [si+16], 2         ; 2 = a folder, 3 = the parent link (19.5):
+    call fmv_gdtype             ; SI -> the staged 32-byte entry, and its
+    mov bx, [si+18]             ; type against 2 (a `mov` writes no flag).
+                                ; Its first cluster, banked before the mount
+                                ; (kernel size pass 18: the compare is
+                                ; fmv_gdtype's own, -4).
+                                ; 2 = a folder, 3 = the parent link (19.5):
     jae .folder                 ; both of them navigate, neither is loadable
     push ax                     ; a FILE in the Standard File chooser is its
     mov al, FDH_PICK            ; answer, or its Save box's name - never a

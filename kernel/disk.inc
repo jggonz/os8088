@@ -3731,11 +3731,9 @@ osapi_vol_add_x:
 ; every caller is refused, driver or not.
 ; -----------------------------------------------------------------------------
 osapi_fs_ent_x:
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    push cx                     ; (NO BX or SI bank: nothing below writes
+    push dx                     ; either - dsk_copy_seg_x and dsk_put_dir keep
+    push di                     ; every register. Kernel size pass 18, -4)
     cmp byte [dsk_fslist], 0
     je .no
     mov ax, [dsk_fsn]
@@ -3769,10 +3767,8 @@ osapi_fs_ent_x:
     clc                         ; (`inc` leaves CF alone, so it is said here)
 .out:
     pop di
-    pop si
     pop dx
     pop cx
-    pop bx
     retf
 %ifdef DSK_BIGDIR
 .full:                          ; Every shipped driver stops at its first
