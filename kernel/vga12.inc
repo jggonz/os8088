@@ -714,12 +714,12 @@ gfx_disp_run:
 gfx_disp_enter:
     inc byte [gfx_dnest]
     cmp byte [gfx_dnest], 1
-    jne .out                    ; nested: an outer hook owns the translation
+    jne gfx_dent_out            ; nested: an outer hook owns the translation
+                                ; (gfx_disp_enter_n's `ret`, below: its own was
+                                ; one byte too many - kernel size pass 18)
     push ax                     ; vid_disp_of ANSWERS in AL, so x is banked
     call vid_disp_of            ; AL = the display holding (AX, BX); it cannot
     jmp short gfx_dent_act      ; fail - the dead zone answers with the primary
-.out:
-    ret
 
 ; ...and the same enter with the display NAMED rather than resolved, for
 ; SPEC.md 39.14.7.2's cut. DL = the display index.

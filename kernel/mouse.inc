@@ -2328,25 +2328,30 @@ mou_p2_byte:
 %ifdef MOU_DIAG
     inc word [mou_p2pkt]        ; a WHOLE packet, past sync and past overflow
 %endif
-    mov al, bl                  ; --- dy, AND POSITIVE IS UP ON THIS WIRE -----
-    xor ah, ah                  ; FIRST, so that dx lands in AX and needs no
-    test dh, 0x20               ; bank: the old order built dx first and parked
-    jz .yp                      ; it in SI across this half (`mov si, ax` /
-    dec ah                      ; `mov ax, si`), and `xchg` is a byte shorter
-.yp:                            ; than `mov bx, ax` - 5 bytes and 5 clocks
-    neg ax                      ; (kernel size pass 10). ...so the screen's dy
-    xchg ax, bx                 ; is its negation, and this one line is the
-                                ; whole difference. Getting it wrong looks
-                                ; exactly like a working mouse. AX takes BL's
-                                ; old value and is overwritten at once
-
-    mov al, [mou_p2b1]          ; --- dx: 8 bits, sign in byte 0's bit 4 ------
-    xor ah, ah
-    test dh, 0x10
-    jz .xp
-    dec ah                      ; AH = 0FFh. Sign-extended BY HAND: an 8086 has
-.xp:                            ; no movsx, and cbw would take the magnitude's
-                                ; own top bit for the sign
+    ; THE SIGN BITS ARE SHIFTED TO BIT 7 AND `cbw` MAKES AH OF THEM (kernel
+    ; size pass 18, -4): an 8086 has no movsx, and cbw on the MAGNITUDE would
+    ; take its own top bit for the sign - so it is run on a copy of byte 0
+    ; first and the magnitude loaded over AL after. No branch on either axis
+    ; where each had a `test / jz / dec ah`: per packet 9 bytes and ~10 clocks
+    ; for dy against 11 and 15-25, and 10 bytes and ~38 for dx against 12 and
+    ; 23-33 plus a queue flush - no slower on an 8088 by max(clocks, 4 x
+    ; bytes). Every register out checked against the old form under unicorn,
+    ; 12,288 (byte 0, Y, X) cases
+    mov al, dh                  ; --- dy, AND POSITIVE IS UP ON THIS WIRE -----
+    shl al, 1                   ; FIRST, so that dx lands in AX and needs no
+    shl al, 1                   ; bank (kernel size pass 10). Byte 0's bit 5
+    cbw                         ; (Y's sign) to bit 7: AH = the sign
+    mov al, bl                  ; AX = dy, 9 bits two's complement
+    neg ax                      ; ...so the screen's dy is its negation, and
+    xchg ax, bx                 ; this one line is the whole difference.
+                                ; Getting it wrong looks exactly like a working
+                                ; mouse. AX takes BL's old value and is
+                                ; overwritten at once
+    mov al, dh                  ; --- dx: 8 bits, sign in byte 0's bit 4 ------
+    mov cl, 3                   ; (CL is the buttons' below, and free here)
+    shl al, cl                  ; bit 4 to bit 7...
+    cbw                         ; ...AH = X's sign
+    mov al, [mou_p2b1]          ; AX = dx
 
     mov cl, dh
     and cl, 0x03                ; bit 0 = left, bit 1 = right: already

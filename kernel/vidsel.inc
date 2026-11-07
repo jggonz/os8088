@@ -498,7 +498,11 @@ section .text
 ; -----------------------------------------------------------------------------
 vid_reboot:
 %ifndef GFX_VGA
-    jmp vid_text                ; no VGA: vid_text is the whole of it
+    jmp near vid_text           ; no VGA: vid_text is the whole of it. NEAR on
+                                ; purpose (it would reach short): the odd byte
+                                ; keeps kern_small's hot routines at their
+                                ; measured parity against vid_bk's -1 above
+                                ; (kernel size pass 18), and this runs once
 %else
     call vid_text                ; (without a VGA in the build the tail could
                                 ; never run - [vid_avail]'s VGA bit is never
@@ -1228,19 +1232,22 @@ vid_bk:
 .mono:
     or dh, dh                   ; the two directions are NOT symmetric here
     mov al, 0x02                ; and the merge keeps both exactly: `mov`
-    jz .m8                      ; touches no flag, so blanking writes 3B8h
+    mov dx, 0x3BF               ; touches no flag (so DX may be loaded for
+    jz .m8                      ; both arms above the test, and the shared
+                                ; tail is a DL move - kernel size pass 18, -1),
+                                ; so blanking writes 3B8h
                                 ; alone - graphics + page 0, video OFF, byte
                                 ; for byte what vid_setmode's blank-first
                                 ; sequence writes (SPEC.md 39.6) - and leaves
                                 ; 3BFh alone, because the graphics LOCK is a
                                 ; second piece of state the unblank would then
                                 ; owe and the gated signal makes it pointless
-    mov dx, 0x3BF               ; unblanking: allow graphics FIRST (the order
+                                ; unblanking: allow graphics FIRST (the order
     mov al, 1                   ; vid_setmode uses), then video on
     out dx, al
     mov al, 0x0A
 .m8:
-    mov dx, 0x3B8
+    mov dl, 0xB8                ; 3B8h: DH is 3 on both arms
     out dx, al
 %ifdef GFX_VGA                  ; (without the planar arm .out is the next
     jmp short .out              ; instruction, and the jump is not assembled)
