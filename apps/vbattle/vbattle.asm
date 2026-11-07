@@ -407,7 +407,14 @@ vb_entry:
     mov ax, vb_onwake               ; us: VBATTLE-RAM-PLAN R1)
     call OSAPI_WM_ONWAKE
     mov word [vb_status], vb_s_ready
+    cmp byte [vb_found], 0          ; NO BATTLE beside us, none embedded, no
+    jne .some                       ; document: the window says to open one,
+    mov byte [vb_none], 1           ; and Enter plays nothing (the owner)
+    call vb_t4set
+.some:
     mov bx, [vb_win]
+    mov si, vb_menus                ; File > Open... (and Close)
+    call OSAPI_MENU_SET
     clc
 .out:
     ret
@@ -488,6 +495,7 @@ vb_coverload:
 .go:
     push si
     push bp
+    mov byte [vb_found], 0
     cmp byte [vb_loaded], 0         ; (a play read the header: it is ours)
     jne .have
     xor ax, ax
@@ -540,6 +548,7 @@ vb_coverload:
     xor dx, dx
     call vb_read
     jc .tno
+    mov byte [vb_found], 1          ; (a file there: its own error at Play)
     cmp word [vb_meta+VH_MAGIC], 'VB'
     jne .tno
     cmp word [vb_meta+VH_MAGIC+2], 'T1'
@@ -552,6 +561,7 @@ vb_coverload:
     stc
     ret
 .have:
+    mov byte [vb_found], 1
     mov cx, [vb_meta+VH_COVER+4]    ; its length: none, or past a claim's
     jcxz .no                        ; piece (60 KB)
     cmp word [vb_meta+VH_COVER+6], 0
@@ -1172,6 +1182,10 @@ vb_paint:
 .line:
     mov bx, bp
     mov si, [vb_lines+bx]
+    cmp byte [vb_none], 0           ; (no battle: what to do instead)
+    je .ln
+    mov si, [vb_lines0+bx]
+.ln:
     cmp bx, 6                       ; (the fourth: the file this window
     jne .l4                         ; plays, or wants - vb_t4set)
     mov si, [vb_t4p]
@@ -1266,15 +1280,97 @@ vb_paint:
 
 ; vb_onkey - Enter plays; anything else is the window's
 vb_onkey:
+    cmp byte [vb_none], 0           ; (no battle: nothing to play)
+    jne .r
     cmp al, 13
     je vb_play
     cmp al, ' '
     je vb_play
+.r:
     ret
 vb_onclick:
+    cmp byte [vb_none], 0
+    jne .r
     push si
     call vb_play
     pop si
+.r:
+    ret
+
+; vb_oncmd - the menu bar: AL = the item, AH = the menu (File: Open...,
+; Close). SI = the window
+vb_oncmd:
+    or ah, ah
+    jnz .r
+    cmp al, VB_CMD_OPEN
+    jne .c
+    mov al, FDLG_OPEN               ; THE FILE DIALOG: its answer comes to
+    mov bx, [vb_win]                ; vb_onfile
+    mov di, vb_onfile
+    xor si, si
+    call OSAPI_FILE_DLG
+    ret
+.c:
+    cmp al, VB_CMD_CLOSE
+    jne .r
+    mov bx, [vb_win]
+    call OSAPI_WM_CLOSE
+.r:
+    ret
+
+; vb_onfile - File > Open's answer (AL the mode, ES:DI the chosen name, the
+; current folder its): the battle this window had let go (vb_unload), and
+; the file taken as the window's DOCUMENT - as a .VBT double-clicked is
+; (vb_docnames: its own name, then its renditions'). The gfx lock is held
+vb_onfile:
+    mov ax, dx                      ; (no such file - a folder, a name
+    or ax, cx                       ; typed: nothing done)
+    jz .r
+    push es
+    push di
+    call vb_unload
+    call OSAPI_FILE_HERE            ; DX = the folder, BL = the drive
+    pop si
+    pop es                          ; ES:SI = the name (the kernel's)
+    call vb_docnames
+    push ds
+    pop es
+    mov byte [vb_none], 0
+    mov word [vb_status], vb_s_ready
+    call vb_t4set
+    jmp vb_paint
+.r:
+    ret
+
+; vb_unload - whatever a battle read into this window given back, so that
+; another may be opened in it: the title picture, the resident claim, the
+; hold (XMS or EMS), and every "read once" mark. Between plays only (the
+; menu bar is not reachable during one)
+vb_unload:
+    call vb_cvfree
+    mov byte [vb_cvwin], 0
+    xor dx, dx
+    xchg dx, [vb_vres]
+    or dx, dx
+    jz .h
+    call OSAPI_MEM_FREE
+.h:
+    cmp byte [vb_hon], 0
+    je .f
+    call vb_hfree
+.f:
+    xor ax, ax
+    mov [vb_loaded], al
+    mov [vb_hopd], al
+    mov [vb_mread], al
+    mov [vb_cmode], al
+    mov [vb_iinp], al
+    mov [vb_hinp], al
+    mov [vb_hon], al
+    mov [vb_htype], al
+    mov [vb_doc], al
+    mov [vb_embat], ax
+    mov [vb_embat+2], ax
     ret
 
 ; vb_play - load what the play needs before it starts (the window says so),
@@ -5154,6 +5250,11 @@ vb_errname:
 ; it needs BATTLE.VBT
 vb_t4set:
     mov word [vb_t4p], vb_s_t4
+    cmp byte [vb_none], 0
+    je .t4
+    mov word [vb_t4p], vb_s_n3
+    ret
+.t4:
     mov si, [vb_namep]
     cmp byte [vb_loaded], 0         ; (played: the one it read)
     jne .n
@@ -5245,6 +5346,19 @@ vb_namev:     db 'BATTLEV.VBT', 0     ; the VGA rendition's (format 7)
 vb_nameh:     db 'BATTLEH.VBT', 0     ; ...and Hercules'
 vb_s_noherc:  db ' on a Hercules', 0      ; (vb_errname: ' Needs ' and [vb_nph])
 vb_lines:     dw vb_s_t1, vb_s_t2, 0, vb_s_t4
+vb_lines0:    dw vb_s_t1, vb_s_n1, vb_s_n2, vb_s_n3  ; (no battle to play)
+vb_s_n1:      db ' No battle loaded', 0
+vb_s_n2:      db ' File > Open... a battle (.VBT)', 0
+vb_s_n3:      db ' or put BATTLE.VBT beside the player', 0
+    OS88_MENUSET vb_menus, vb_title, vb_oncmd
+        OS88_MENU vb_m_file, vb_i_file, 2
+    OS88_MENUSET_END vb_menus
+vb_m_file:    db 'File', 0
+vb_i_file:    dw vb_it_open, vb_it_close
+VB_CMD_OPEN   equ 0
+VB_CMD_CLOSE  equ 1
+vb_it_open:   db 'Open...', 0
+vb_it_close:  db 'Close', 0
 vb_s_t1:      db ' VIDEO BATTLE', 0
 vb_s_t2:      db ' Enter or click: play (Esc leaves)', 0
 vb_s_t4:      db ' Needs BATTLE.VBT beside it', 0
@@ -5596,6 +5710,8 @@ VB_VAR vb_cpool, 2                  ; ...the pool's KB at the open
 VB_VAR vb_cmin, 2                   ; ...a gate's least slots, 4 KBs (0:
                                     ; VB_CMIN4 - a test's poke)
 VB_VAR vb_ccsr, FSEQ_SIZE           ; ...its prefetch's file cursor
+VB_VAR vb_found, 1                  ; a battle's file answered (coverload)
+VB_VAR vb_none, 1                   ; ...none did: the window says to open
 VB_VAR vb_iinp, 1                   ; THE IDLE LOOP in the block, in place
 VB_VAR vb_ixb, 4                    ; ...its first byte there
 VB_VAR vb_kind, 1                   ; the bundle's adapter (VK_*)

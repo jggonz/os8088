@@ -17272,6 +17272,15 @@ SOAK = [
         "opening at frame 17 of 19, its ring the title's",
         needs=("marty", "ffmpeg"),
         wants=("build/vbattle.o88",)),
+    Row("vbtopen", "soak", py("tests/vbtopen.py"), 60.0,
+        "SPEC.md 126.2.4: VBATTLE.O88 with NO BATTLE beside it (MartyPC's "
+        "VGA XT, the battle in a folder of B:): the window says to open one, "
+        "Enter plays nothing, File > Open... BATTLES/BATTLEV.VBT plays it, "
+        "and opening it again after a play (the battle read before let go) "
+        "plays it again. Broken on purpose (the answer leaving the window "
+        "without a battle) the play never comes",
+        needs=("marty",),
+        wants=("build/vbattle.o88", "build/vbattlev.img")),
     Row("vbtownpal", "soak", py("tests/vbtownpal.py"), 60.0,
         "SPEC.md 126.3.3: a clip's OWN PALETTE on VGA - the demo with video "
         "for its title (colour bars, left by the fade), a full-screen "

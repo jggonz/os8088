@@ -242190,8 +242190,23 @@ naming a pool past the pools is refused as *NAME.VBT is damaged*
 could bring. Every refusal names the file it was about - the document,
 its rendition beside it, or the game's own `.O88` (`vb_errname`) - and a
 file shorter than a header *is not a VBT1 file*, not *not found*; the
-text window's fourth line is the file it plays (*Plays MYFIGHT.VBT*), or
-*Needs BATTLE.VBT beside it* when it has none (`vb_t4set`).
+text window's fourth line is the file it plays (*Plays MYFIGHT.VBT*).
+**With no battle at all** - no document, none embedded, and no file of
+this adapter's names beside the player (`vb_coverload`'s probe,
+`[vb_found]`) - the window says *No battle loaded*, *File > Open... a
+battle (.VBT)*, *or put BATTLE.VBT beside the player* (`vb_lines0`), and
+Enter and a click play nothing (`[vb_none]`; the owner, 2026-11-07).
+**File > Open...** (the window's menu bar, `vb_menus`: Open..., Close)
+puts up the Standard File chooser (SPEC.md 38); its answer
+(`vb_onfile`) lets go of whatever a battle read into the window - its
+resident claim, its hold, its title picture, every "read once" mark
+(`vb_unload`) - and takes the file as the window's DOCUMENT, as a
+double-clicked one is (`vb_docnames`: its renditions by its name). A
+folder or a name with no file does nothing. `vbtopen` (MartyPC's VGA XT):
+the player alone at B:'s root and the battle in a folder - the window
+says so, Enter plays nothing, File > Open... plays it, and opening it
+again after a play plays it again; broken on purpose (the answer leaving
+the window without a battle) the play never comes.
 A 64-byte header gives the counts and each table's offset from the block's
 start, the enemy, and the seed:
 
