@@ -108833,7 +108833,9 @@ bytes** in it. So the cluster costs the file **nothing**: 1,220 bytes before
 and after.
 
 `asc_seed` runs at the end of `asc_use`, after `asc_merge_ext`, and the two
-choices in it are the load-bearing ones:
+choices in it are the load-bearing ones. (Both are PARTS of `asc_use_x` since
+kernel size pass 18 - written at their one call, `asc_row_take` inside
+`asc_seed`'s walk - and keep their names as the comments that head them.)
 
 - **`assoc_app_of`, not `asc_slot_of` — find, never create.** A slot only
   matters if some extension points at it, and the kernel's table is
