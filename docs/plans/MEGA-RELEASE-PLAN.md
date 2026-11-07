@@ -272,6 +272,13 @@ peer).
   opening are dropped on both kernels.
 - **T6** the 86Box backend reports a Hercules in a text mode as graphics, so
   a row that waits for a text screen (`hibernatem`) never ends there.
+- **T8** (kern_big's, not kern_mega's) ~40 rows capture with
+  `m.vram("cga")`, which on a MartyPC VGA machine reads an unmapped B8000
+  and compares two blank frames - `paintmove` passed that way on
+  `os8088_xt_vga` (docs/TEST-INCIDENTS.md 81). Harmless on each row's own CGA
+  machine; a row run with `--machine` on a VGA one wants `paintmove.py`'s
+  `glass()`. The kern_mega ports are NOT affected: the Bochs shim's `vram()`
+  ignores the card and reads the glass.
 - **T7** Bochs's slirp holds 5 port forwards and the kern_mega launcher drops
   the host's, so FTPD end to end cannot run on kern_mega (QEMU-only rows).
 
