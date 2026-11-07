@@ -28,7 +28,8 @@ import os88vbundle as VB    # noqa: E402
 
 ROOTS = ("os88vbtgui.py", "vbtana.py", "os88vbt.py", "vbtproj.py",
          "vbtrules.py", "vbtband.py", "os88venc.py",
-         "os88disk.py", "os88hdd.py")       # (the disks, run as processes)
+         "os88disk.py", "os88hdd.py",       # (the disks, run as processes)
+         "vbtprof.py")                      # (VBATTLED.O88's profiles, read)
 THIRD_PARTY = {"numpy", "PIL", "tkinterdnd2"}
 DATA = VB.DATA
 FOLDER = "os8088-battle-builder"
@@ -66,6 +67,9 @@ from is in boot/). Everything it does is also a command:
                                                  play yet
     python3 vbtana.py --help                     the analysis, one command
                                                  each
+    python3 vbtprof.py VBPROF1.DAT               what a play with
+                                                 VBATTLED.O88 recorded:
+                                                 where a machine stuttered
 
 It builds BATTLE.VBT for CGA, and BATTLEV.VBT (VGA, 4, 8 or 16 colours)
 and BATTLEH.VBT (Hercules) when the Battle tab asks: put the one for your
