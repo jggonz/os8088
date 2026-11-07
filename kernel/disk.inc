@@ -10265,8 +10265,10 @@ dsk_ico_stage:
     mov dx, es
     mov di, dsk_ico             ; (the copy falls in from the row arm now,
     mov cx, DSK_ICO_SIZE        ; .built below it: pass 17, -2)
-    mov ax, KERNEL_SEG
-    call dsk_copy_seg_x
+    mov ax, ds                  ; the kernel's, out of DS (`.cold`: CS is
+    call dsk_copy_seg_x         ; COLD_SEG) - a byte under the immediate, and
+                                ; kern_mega's writable alias as it stands
+                                ; (kernel size pass 18, -1)
     jmp short .out
 .built:
     ja .none                    ; 0xFF: SPEC.md 25's generic icon

@@ -2000,7 +2000,10 @@ ld_pkg_byname:
     jc .nodoc
     mov [assoc_dapp], al
     xor ax, ax
-    mov word [assoc_pwin], ASSOC_PWBANK ; NO POSTER: assoc_run takes the
+    dec ax                      ; ASSOC_PWBANK, out of the zero the compare
+    mov [assoc_pwin], ax        ; below wants back (a byte under the
+    inc ax                      ; immediate store: kernel size pass 18)
+                                ; NO POSTER: assoc_run takes the
                                 ; document's home from the locator banked
                                 ; above, not from where the machine stands -
                                 ; on the POSTED arm below the caller has
@@ -2023,10 +2026,13 @@ ld_pkg_byname:
                                 ; (21.5), which is the context assoc_run
                                 ; wants - so there is nothing to defer to.
                                 ; FAR, because assoc_run far-returns, being
-                                ; ui.inc's own callee
-.posted:
-    xor al, al                  ; it reported its own verdict to the user
-    ret                         ; (ld_say_status) - 21.5.3's thinner answer
+                                ; ui.inc's own callee - and it preserves
+                                ; every register, so AX is still the 0 above
+.posted:                        ; AL = 0 = LD_OK on both arms (the `jne` was
+    ret                         ; taken off AX = 0): it reported its own
+                                ; verdict to the user (ld_say_status) -
+                                ; 21.5.3's thinner answer. The `xor al, al`
+                                ; that stood here is gone (kernel size pass 18)
 .nodoc:
 %ifdef OS88_SHORTCUTS
     call lnk_is                 ; ...but a LINK is opened by nothing, being
