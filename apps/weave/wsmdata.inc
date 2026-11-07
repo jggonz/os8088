@@ -47,6 +47,8 @@ wsm_pen:    dw CWHITE               ; 6.10.7: low byte the canvas's PAPER
                                     ; colour, high byte `colored`. The default
                                     ; IS the wave-5 composer - white paper,
                                     ; colour off, not one GFX_BLIT1_PEN call
+wsm_myds:   dw 0                    ; our own DATA segment: the package's
+                                    ; stamp, and the DS every verb runs with
 
 %if (wsm_run    - wsm_state) != WSS_RUN
   %error "WEAVE.WSM state block: WSS_RUN moved"
@@ -86,6 +88,9 @@ wsm_pen:    dw CWHITE               ; 6.10.7: low byte the canvas's PAPER
 %endif
 %if (wsm_pen    - wsm_state) != WSS_PEN
   %error "WEAVE.WSM state block: WSS_PEN moved"
+%endif
+%if (wsm_myds   - wsm_state) != WSS_MYDS
+  %error "WEAVE.WSM state block: WSS_MYDS moved"
 %endif
 
 ; --- the dispatcher's banked arguments, and the composer's scratch -----------

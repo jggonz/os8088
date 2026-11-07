@@ -96,3 +96,8 @@
 0 2 apps/notepad/notepad.asm  # ES = KERNEL_SEG for os88ui_ask's READ of our caption and for np_adopt's read of the launch record (the callback convention); np_save's push cs / pop ds went in 14.150
 16 0 apps/os88spk.inc  # the POLLED Covox (OS88SPK_POLL, MIDIRack's alone): os88spk_pout runs inside the producer's loops with the PRODUCER's DS, and os88spk_pgo refuses anything but CPU_8086 - so none of it runs under kern_mega. The setup calls (lpt, init, go) store through DS since 14.150
 1 0 apps/os88spkfx.inc  # emit's sub-block store in the REAL-MODE copy of OS88SPKFX_EMIT (%2 = 0); kern_mega aims the protected-mode copy (os88spkfx_pmset, 14.18), which stores through [os88spkfx_dsel]
+
+# --- apps/weave: WEAVE's VM and its canvas core (KERN-MEGA-PLAN 14.163) ---
+# wvm.inc stores through DS or ES = our segment, WEAVE.WSM's DS is the stamp
+# the package writes at WSS_MYDS. Nothing in the tree stores through CS.
+0 1 apps/weave/wwork.inc  # wsm_doframe: ES = KERNEL_SEG to READ our window's W_FLAGS before OSAPI_WM_CLIP_SET; nothing is stored through it

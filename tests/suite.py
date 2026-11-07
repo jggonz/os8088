@@ -19557,6 +19557,20 @@ SOAK = [
         needs=("86box", "numpy"),
         wants=("build/mega.img", "build/megak/apps/audio.o88",
                "build/megak/kernel.map")),
+    Row("megaweavetrap", "soak", py("tests/megaweavetrap.py"), 25.0,
+        "docs/plans/KERN-MEGA-PLAN.md 14.163: WEAVE on kern_mega with NO "
+        "write through CS on its hot paths. 86Box's at286_vga_sb, kern_mega, "
+        "build/weave.img in B:: PONG.WAB served and steered on a and z for 20 "
+        "guest seconds - the ball found at two places - and SHEET.WAB's two "
+        "buttons clicked, its grid changed; not one completed #GP write "
+        "fixup (86Box's `faults`, error 0000) in either, and WEAVE still "
+        "open. wvm.inc stores through DS or ES = its own segment and "
+        "WEAVE.WSM's DS is the package's WSS_MYDS stamp. RED, measured: the "
+        "WEAVE disk of the commit before, 45,282 fixups in the PONG window "
+        "(2,200 a second) and 221 in SHEET's; one `mov [cs:wvm_pc], si` put "
+        "back in wvm_nat, 1,743 at that CS:IP alone. 25s is 22 measured",
+        needs=("86box",),
+        wants=("build/mega.img", "build/weave.img", "build/megak/kernel.map")),
     Row("megakbcodes", "soak", py("tests/megakbcodes.py"), 15.0,
         "docs/plans/KERN-MEGA-PLAN.md 14.145: mega_k09, kern_mega's own int "
         "09h, stores the ROM's words in the BIOS ring - Ctrl on the grey "
