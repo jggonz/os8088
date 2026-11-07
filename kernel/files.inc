@@ -611,8 +611,7 @@ fm_kinit_x:
                                 ; never declared: mem_can_move refuses a cache
                                 ; outright, and the shed gives it back
 
-    mov ax, si
-    add ax, I_NAME              ; the record's 16-byte name field, which
+    lea ax, [si+I_NAME]         ; the record's 16-byte name field, which
     mov [bx + W_TITLE], ax      ; inst_set_name zero-filled and NUL-capped
 %ifndef REDRAWFULL              ; the reference build (SPEC.md 22.14) leaves
                                 ; the Disk window off the raise cache, which
@@ -1454,8 +1453,7 @@ fmv_demote:
     push ax
     push dx
     push si
-    mov ax, bx
-    sub ax, MEM_P_VIEW          ; AX = the fm_pool slot
+    lea ax, [bx-MEM_P_VIEW]     ; AX = the fm_pool slot
     mov dl, FS_SIZE
     mul dl
     add ax, fm_pool
@@ -7113,8 +7111,8 @@ fm_dgxor:
     mov bx, [fm_dgy]            ; pointer is now: XOR only erases what it drew,
     mov cx, ax                  ; and the pointer moves between the two calls
     add cx, 95                  ; a 96 x FM_ROW_H ghost: wide enough to read
-    mov dx, bx                  ; as "a row", narrow enough not to swamp a
-    add dx, FM_ROW_H - 1        ; 320px window
+    lea dx, [bx+FM_ROW_H-1]     ; as "a row", narrow enough not to swamp a
+                                ; 320px window
     call KERNEL_SEG:cw_vga_xor_rect_vram ; clips, so the screen edges are free
     jmp kretc_di
 
@@ -8377,8 +8375,7 @@ fm_sel_bar:                     ; comes back holding it)
     mul cx
     call fm_rowy
     mov bx, ax                  ; y1 = row band top
-    mov dx, ax
-    add dx, FM_ROW_H - 1        ; y2
+    lea dx, [bx+FM_ROW_H-1]     ; y2
     call fm_cxrgt
     sub cx, 15
     call ct_cw_gfx_xor_fill
@@ -8387,8 +8384,7 @@ fm_sel_bar:                     ; comes back holding it)
 .icon:
     call fm_cellxy              ; the painter's own cell arithmetic
     mov bx, ax                  ; y1 = cell top
-    mov dx, ax
-    add dx, FMI_CELL_H - 1
+    lea dx, [bx+FMI_CELL_H-1]
     mov ax, [fm_cellx]
     mov cx, ax
     add cx, FMI_CELL_W - 1

@@ -2174,12 +2174,11 @@ asc_use_x:
     mov si, di                  ; halves of the key the LISTING will ask with
     call ico_key_stem
     mov dx, [asc_seg]           ; ...and the body, out of the claim it is
-    mov bx, di                  ; still sitting in
-    add bx, ASC_ROWICO
+    lea bx, [di+ASC_ROWICO]     ; still sitting in (lea: kernel size pass 18)
     call ico_add                ; a hit is idempotent, so a package on two
     jc .taken                   ; mounted volumes takes one row
-    mov si, di                  ; ...and the row's glyph goes WITH the body
-    add si, ASC_ROWGLY          ; (all zero = ships none, which the store
+    lea si, [di+ASC_ROWGLY]     ; ...and the row's glyph goes WITH the body
+                                ; (all zero = ships none, which the store
     mov dx, [asc_seg]           ; keeps as the unresolved sentinel), which
     call ico_glyph_put          ; is what lets a later hit answer as well as
 .taken:                         ; the seed did (54.7.4)
@@ -2205,8 +2204,8 @@ asc_use_x:
     ; until the folder the program lives in had been browsed. Every program
     ; on the shipped apps disk is one folder down (19.2) and the documents
     ; are in MEDIA/, so that was every .HTM and .TEX on the disk.
-    mov si, di                  ; (BX is still the slot: the word index is
-    add si, ASC_ROWICO          ; BX+SI's) the cached body
+    lea si, [di+ASC_ROWICO]     ; the cached body (BX is still the slot: the
+                                ; word index is BX+SI's)
     call asc_gly_pair           ; ES = [asc_seg], per this routine's contract
 .snext:
     pop si
