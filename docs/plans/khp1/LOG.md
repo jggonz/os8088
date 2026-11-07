@@ -219,7 +219,7 @@ fixtures this box has no rule to build: **56 passed, 2 failed, 1 skipped**
 leg) and `brmega` (a page's layout), miss a 240-guest-second deadline under
 Bochs - **and fail identically on lean without the knobs (`5d419969`) and at
 the pass's base (`a7ee7fab`)**, run alone each time: they predate the pass,
-and are not diagnosed here. `make test-full` and the fast tier pass.
+and are not diagnosed here. **Both pass on `elendilon` after this branch's merge** (the 207-row run below): `elendilon`'s `705680d9` made the Bochs debugger's reply bound a 60-second liveness bound, which is the likeliest cure; not confirmed row by row. `make test-full` and the fast tier pass.
 LAST-DROP-PERF.md section 7 is the ranked list of what kern_big could still
 turn on.
 
@@ -621,4 +621,16 @@ at the merges. None of these is taken.
    own items**: files' disk.inc finds became disk-3..5 (two int 13h calls a
    navigation), and sched's single-stepped packet split told pointer where
    85% of a packet went.
+
+## 7. Merged into `elendilon`
+
+`kernel-hotpaths-lean` merged into `elendilon` (which had moved 19 commits
+since the branch was cut: the toast-message sweep, a kern_mega `SEG_BWIN` fix,
+the soak's frozen kernel SOURCE, the Bochs reply bound and five rows' fixes)
+with no conflict, and no `elendilon` edit landed inside a `KHP_*` arm. On the
+merged tree: `make`, `make small`, `make emu` and `make mega` build; the fast
+tier and `hotpar` pass; **`make test-full` 88 passed, 0 failed, 2 skipped**
+(the WIN16 fixtures); and **the branch's whole soak scope - the 150-row union,
+`navcalls`, `fdswap` and the kern_mega rows, 207 in all - 206 passed, 0
+failed, 1 skipped** (`megaaltrdg`, rgbds).
 
