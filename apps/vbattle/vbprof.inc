@@ -102,9 +102,9 @@ vb_prtry:
     mov word [vb_prkb], VB_PRXKB
     call vb_rclaim
     jnc .ok
-    call vb_prxfree                 ; (no rings: none of it, the play's own
-    stc                             ; refusal)
-    ret
+    call vb_prxfree                 ; (no rings beside it: the ladder below,
+    jmp short .conv                 ; down to no profile - the play itself
+                                    ; refused only where VBATTLE.O88 is)
 .xno:
     mov ax, [vb_prxt]
     mov dx, [vb_prxt+2]

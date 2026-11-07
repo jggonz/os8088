@@ -201,6 +201,10 @@ def xms():
 
         def rw(n):
             return struct.unpack_from("<H", q.read(base + syms[n], 2))[0]
+        if os.environ.get("VBTD_HCAP"):     # (a pool under the bundle: the
+            from pxswin import qpoke        # cache in SLOTS)
+            qpoke(q, [(base + syms["vb_hcap"], struct.pack(
+                "<H", int(os.environ["VBTD_HCAP"])))])
         q.hmp("sendkey ret")
         if os.environ.get("VBTD_DBG"):
             import time

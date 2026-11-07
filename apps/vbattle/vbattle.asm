@@ -2373,11 +2373,14 @@ vb_rclaim:
     shr ax, 1                       ; 0 the run, ring 1 the least beside it
     jmp short .p0
 .pc:
-    mov dx, VB_CRMIN
-    cmp dx, [vb_rmin]
-    jae .pc1
-    mov dx, [vb_rmin]
+    mov dx, VB_CRMIN                ; ring 1: its least - VB_CRMIN, or the
+    cmp dx, [vb_rmin]               ; bundle's own (vb_rmin) UP to whole 4
+    jae .pc1                        ; KB, since a ring is cut to them (62
+    mov dx, [vb_rmin]               ; cut to 60 refused the owner's VGA
+    add dx, 3                       ; battle under VBATTLED, 2026-11-07)
+    and dl, 0xFC
 .pc1:
+    add dx, 4                       ; ...a 4 KB step of slack, its guard
     add dl, [vb_cgkb]
     adc dh, 0
     sub ax, dx

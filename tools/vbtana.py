@@ -1143,7 +1143,8 @@ def ring_of(res, maxrec, free_kb=None, cache=False, rmin=0):
     left = free_kb - (res + 1023) // 1024 - VB_CARD - VB_RKEEP
     guard = guard_kb(maxrec)
     if cache:
-        ring = (left - max(VB_CRMIN, rmin) - 2 * guard) // 4 * 4
+        ring = (left - (max(VB_CRMIN, rmin) + 3) // 4 * 4 - 4 -
+                2 * guard) // 4 * 4     # (ring 1's least, up to 4 KB, slack)
     else:
         ring = (left // 2 - guard) // 4 * 4
     return ring * 1024 if ring >= VB_CRMIN else None
