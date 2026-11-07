@@ -2175,7 +2175,11 @@ menu_kbnav:
     mov di, [menu_cnt]
     jmp short .step
 .noj:                           ; ...and the two swallows above, at 2 bytes
-    jmp .no                     ; each instead of NASM's inverted pair (-3)
+    stc                         ; each instead of NASM's inverted pair (-3).
+    retf                        ; THE REFUSAL ITSELF, here in their reach: it
+                                ; was a `jmp short .no` to the same two bytes
+                                ; at the foot, so the foot's copy went (kernel
+                                ; size pass 18, -2)
 .inx:
     mov ax, [mouse_y]
     sub ax, [menu_y1]           ; the top frame row is not a cell (menu_hover):
@@ -2226,9 +2230,10 @@ menu_kbnav:
     inc byte [ui_post]          ; ...and SAY SO once (SPEC.md 13.13)
     clc
     jmp kretfc_di               ; FAR: kbm_move reaches this across the segment
-.no:                            ; boundary now, and no thunk stands in between
-    stc                         ; (SPEC.md 2.6.1)
-    retf
+                                ; boundary now, and no thunk stands in between
+                                ; (SPEC.md 2.6.1). (The `.no: stc / retf` that
+                                ; stood here is .noj's now: -2, even, so the
+                                ; pad below keeps its job)
     nop                         ; PARITY, never executed or read (kernel size
                                 ; pass 15): `.cold` between here and dsk_xfer
                                 ; came out an odd number of bytes shorter

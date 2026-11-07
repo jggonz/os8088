@@ -2531,8 +2531,8 @@ ui_dispatch:
     jae .ret                    ; kern_small, SPEC.md 14.6); a set with more
                                 ; cells must have had a handler
     shl bx, 1
-    xor ah, ah
-    add ax, [ui_loc_base + bx]
+    cbw                         ; AH = 0: AL is an item index, below the
+    add ax, [ui_loc_base + bx]  ; 16 a popup holds (kernel size pass 18, -1)
     jmp ui_cmd
 .ret:
     ret
@@ -2794,13 +2794,14 @@ ui_sys_open:
     ; (kernel size pass 17). kent_bp banked every register it writes.
     mov bx, [ui_desc]           ; BX = the name to match, hoisted out of the
     mov bx, [bx+UO_NAME]        ; scan: nothing in the loop writes it
-    mov di, inst_tab
-    mov cx, INST_MAX
-.scan:
+    mov di, inst_tab - I_RECSZ  ; ...over inst_next, the table's own walk: off
+.scan:                          ; the end is CF = 1, none open, the load
+    call inst_next              ; (kernel size pass 18, -1 against the CX
+    jc .load                    ; count and the `add` / `loop` tail)
     cmp byte [di+I_STATE], 1
-    jne .next
+    jne .scan
     test byte [di+I_KIND], KIND_PKG
-    jz .next
+    jz .scan
     push di
     mov si, bx
     add di, I_NAME
@@ -2820,9 +2821,7 @@ ui_sys_open:
                                 ; below is what can push it past 127)
 .nomatch:
     pop di
-.next:
-    add di, I_RECSZ
-    loop .scan                  ; ...and none open falls into the load
+    jmp short .scan
 .load:
 %ifdef ROM_PKG
     ; THE ROM'S COPY FIRST (docs/plans/ROM-PLAN.md 4.3, SPEC.md 2.10.5): a
@@ -2935,11 +2934,13 @@ ui_sys_open:
                                 ; the sector ld_res_name has just read.
 .code:                          ; dwf_dskw_stat is a far call and answers in
     pop ax                      ; BX, so the descriptor is re-read after it
-    xor ah, ah                  ; SPEC.md 20.12.4: the entry proc's own toast
+    cbw                         ; SPEC.md 20.12.4: the entry proc's own toast
     xchg ah, [ld_said]          ; is up and names the reason better - say
     or ah, ah                   ; nothing, as ld_say_status does for a Disk
     jnz .back                   ; window's load. Read-and-clear in one, and
                                 ; it leaves AH = 0 for the index below
+                                ; (`cbw` for the zero: AL is an LD_E* code,
+                                ; 1..6 - kernel size pass 18, -1)
     mov bx, ax
     shl bx, 1
     mov si, [bx+fm_stattab]     ; the Disk window's verdicts (SPEC.md 21)
