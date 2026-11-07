@@ -71791,7 +71791,15 @@ What differs from a grant ring (§34.5.2):
   the same call places it from the BOTTOM** (§50.3.2, KERN-MEGA-PLAN 14.55):
   a claim with a head there is a ring held while it plays, and is claimed
   low with the same page guarantee; kern_big and kern_small take it from
-  the top as before. A package changes nothing for it;
+  the top as before. A package changes nothing for it. **And for an
+  `OS88_HIGHMEM` package it is a POOL block** (§50.3, KERN-MEGA-PLAN 14.160):
+  below 16MB, the ring inside one page and born pinned, which the 8237
+  reaches through the base `sbl_ring_phys` reads (`SEG_LIN`'s low word and
+  page). The router's gate (`snd_ringhif`) refuses an external ring above
+  1MB unless the pool block it starts is a DMA door's and pinned
+  (`MX_FDMA | MX_FPIN`) - a plain pool claim may move under the chip - and
+  answers 2 as before. A ring a real-mode bracket feeds stays conventional
+  through `OSAPI_MEM_P` with a head (§50.3.7);
 - **verb 1 only RESUMES.** The total arrives through memory; an underrun
   still halts the card, and verb 1 is still what restarts it, with the same
   bound;

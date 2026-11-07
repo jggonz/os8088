@@ -14505,6 +14505,14 @@ KB-aligned, so even). So a pool ring below 16MB is programmed exactly. The
 floppy's native path does its page arithmetic on the same base (`dsk_runcap`
 `.hi`, 14.156). A fixed disk's transfer into a pool block is still bounced a
 sector a call - the trade that decides the audit's two "kept low" rows.
+**And the router's gate had to learn it**: `osapi_snd_stream` refused every
+external ring above 1MB (`snd_ringhif`, AX = 2), because a plain pool claim
+may move under the chip. The first scoped pass found it - `mega-recorder`
+"Record did not open the input (ERROR 2)", `mega-midiracksb` "the output
+open did not happen", `waverackmega`'s play and take never starting: those
+are the change's red for the gate. `snd_ringhif` now takes a ring above 1MB
+when the pool block it starts is `MX_FDMA | MX_FPIN` - a DMA door's, pinned -
+and refuses every other as before (`.mega`, +64).
 
 **The audit** - every `OS88_HIGHMEM` package's KB DMA-door claim with a head
 (CX = 0 callers - RealDMG, Excitebike, WIN16's `w16sel`/`win16.asm`,
@@ -14537,11 +14545,11 @@ mode (`fsx_rsndq`: SOUND.DRV's segment word then has no real segment) - as
 it would for any pool ring.
 
 **Bytes.** kern_big and kern_small are byte-identical (A/B at one commit:
-`make build/kernel.bin` and `make small` with the two kernel files stashed,
+`make build/kernel.bin` and `make small` with mega-release's three kernel files,
 `cmp`). kern_mega: `.cold` 46,122 -> 46,232 (+110: `mega_claimdf`,
 `mega_dmahset`, `mega_dmamovf`, the two doors' arms, the regrow's head),
-`.mega` 23,264 -> 23,376 (+112: `mx_alloc`'s head and take, `mx_dmafit` and
-its two calls) - both above 1MB; `.text`, `.bss`, `.lowbss` unchanged, the
+`.mega` 23,264 -> 23,440 (+176: `mx_alloc`'s head and take, `mx_dmafit` and
+its two calls, `snd_ringhif`'s pool test) - both above 1MB; `.text`, `.bss`, `.lowbss` unchanged, the
 segment overhead 3,754 of 3,754, **MEGA_RESIDENT 62,976 before and after**.
 The tables' tail grew a byte inside its last 64-byte line (1,274 of 1,280).
 Packages (images): AUDIO 12,303 -> 12,315 (+12, even on purpose), its arm
@@ -14560,3 +14568,20 @@ its descriptor) and its thresholds tighten to 220 ms and 700 ms. **RED**:
 `--pkg` an AUDIO arm built with the base `ap_ensure_bufs` (the plain claim) -
 the ring at 3C9C00h, across 3D0000h: placement FAIL, longest 290 and 350 ms,
 870 and 1,110 ms in all, both time checks over the new bars.
+`waverackmega` expects the record ring above 1MB and checks it below 16MB
+inside one page; **RED** `OS88_MEGA_POKE='mega_claimdf=f9cb'` (the pool arm
+refusing): the ring at 011200h, WHERE fails.
+
+**Rows run, scoped, all green after the gate's fix**: `megasbgap`,
+`waverackmega`, `mega-recorder`, `recorder`, `mega-midiracksb`,
+`mega-midiracksbmem`, `midiracksb`, `mega-audhand`, `mega-mixersb16`,
+`mega-dossnd`, `mega-dosirq`, `mega-vidsound`, `vidsnd`, `x3mega`,
+`megapixel`, `ringmove-audio`, `ringmove-audiospk`, `mega-ringmove-audio`,
+`ringmove-midirack`, `ringmove-wirefleet`, `vbtownsnd`, `vbt286`,
+`megarmb`, `megarmb286`, `megarmbref`, `megarmbext`, `syscheck`,
+`fsckmega`, `fsckdisk`, `fsckhd`, `mega-sndmove`, `mega-heapmap`,
+`mega-rdmove`, `mega-sheetmove`, `mega-paintmove`, `megahiber`,
+`megahibfull`. Not run: WIN16's waveIn on kern_mega (no row drives it),
+1942's, WireFleet's and ARCADE's SB rings on kern_mega (no row plays them
+there; the path is the Recorder's and MIDIRack's), `waverackrec` (2,400 s,
+WaveRack not edited).
