@@ -7231,7 +7231,9 @@ fm_dgdrop:
 ; -----------------------------------------------------------------------------
 ; fm_paste_res - spend a Cut/Copy/Paste step's answer (SPEC.md 22.3)
 ; in:  AL = FCPS_*; [fm_vp] published; gfx lock held
-; out: nothing; clobbers AX, BX, CX, SI, DI (fm_docmd saved them all)
+; out: nothing; clobbers BX, CX, DX, SI (every caller's frame or contract
+;      covers them: fm_docmd clobbers everything, fm_editkey and fm_drag are
+;      ladders, and DESK.DRV's drop returns through its own); AX and DI kept
 ;
 ; Three outcomes, and only one of them is a pause. A pause arms FS_EDIT = 4
 ; on the acting window - the Delete confirmation's mechanism, with a third
@@ -7243,22 +7245,9 @@ fm_paste_res:
     push ax
     push di
     cmp al, FCPS_ASK
-    je .ask
-    call fm_edit_end            ; whatever was armed is spent
-    call fmv_reload_all         ; the coherence pass this operation owes
-    cmp al, FCPS_ERR
-    jne .all
-    mov al, [fcp_err]
-    call fm_sayerr              ; SPEC.md 59
-.all:
-    call fmv_repaint_all        ; fmv_reload_all moved every window's CACHE;
-    jmp short .out              ; their PIXELS are still the old listing, and
-                                ; a paste is the one operation that can change
-                                ; three windows at once - so it owes those
-                                ; windows, and nothing else on the screen. The
-                                ; caller's own repaint then lands on top of
-                                ; ours, which is one window against the disk
-                                ; I/O this operation has already done
+    jne .done                   ; (the pause FIRST: the pass below is too long
+                                ; for a short jump over it - kernel size
+                                ; pass 18)
 .ask:                           ; SI and CX unbanked (kernel size pass 18,
     mov si, fcp_fname           ; -4): the header says they are clobbered, and
     mov di, fm_onam             ; no caller reads either - fm_docmd reloads SI,
@@ -7271,118 +7260,44 @@ fm_paste_res:
 .arm:                           ; the operation it is re-asking about
     mov al, 4                   ; the replace question (SPEC.md 22.3)
     call fm_edit_arm
-.out:
     pop di
     pop ax
     ret
-
-; -----------------------------------------------------------------------------
-; fmv_repaint_all - put the PIXELS of every Disk window fmv_reload_all just
-;                   re-listed where it put their caches (SPEC.md 22.3)
-; in:  the gfx lock HELD - both callers are inside one (the drag loop keeps
-;      it to the end, and the replace answer is a W_ONKEY callback), which is
-;      also why the wm_paint_all this replaced was called bare
-; out: nothing (all registers preserved)
-;
-; One wm_paint_dmg per Disk window (SPEC.md 11.91), and it replaced a
-; wm_paint_all. An operation that changed three listings owes three windows
-; and whatever overlaps them - not the desktop dither, not the drive zones,
-; not every other application on screen. On the measured case, a file dragged
-; between two Disk windows, that is 245 glyphs down to 96.
-;
-; **ONE call over their union, not one call per window**, and the difference
-; is not subtle: wm_paint_dmg redraws a marked window WHOLE, so a per-window
-; loop redraws each overlapping neighbour once per pass - two overlapping Disk
-; windows cost four window paints, which measured WORSE than the wm_paint_all
-; it was meant to replace. Inside one call the marking is transitive and every
-; window is painted exactly once.
-;
-; **wm_dmg_wins and not wm_paint_dmg**, because a paste REVEALS nothing: no
-; window moved, none was hidden, only contents changed. So there is no
-; desktop to put back, no drive zone to redraw and no chrome to correct -
-; only windows. wm_dmg_wins is 11.91's mark-and-draw pass on its own, the
-; same one wm_dock_under borrows, and skipping the other three steps is what
-; takes the union of two Disk windows from "very nearly a wm_paint_all" to
-; the windows themselves.
-;
-; The windows are still redrawn WHOLE rather than in place, and that is the
-; granularity rule (SPEC.md 11.3) rather than laziness: fm_repaint is one big
-; fill plus ~40 font_strs, the fill clips per pixel and the glyphs per cell,
-; so a window partly covered by another would come back with blank rows
-; wherever a clip edge crossed it.
-;
-; **THE UNION IS fmv_reload_all's**, and there is no walk here any more
-; (SPEC.md 22.3.1). This walked wm_zord for every visible Disk window, which
-; was right while the reload re-listed every one of them; once it re-lists
-; only the windows the operation could have changed, a separate walk would
-; have to re-derive that predicate - after the reload had already cleared the
-; FS_DIRTY half of it. So the reload folds each visible window it re-lists
-; into the union as it goes, and this commits it. A window the paste did not
-; touch is not repainted, and it keeps exactly the pixels it had.
-; -----------------------------------------------------------------------------
-fmv_repaint_all:
-    call kentc_di               ; KENT: push ax..di
-
-
-
-
-
 .done:
-    cmp word [fmv_uy2], 0       ; still fmv_reload_all's EMPTY union: no
-    je .out                     ; window's bottom edge is row 0 - the menu bar
-    push es                     ; is there - so 0 means nothing folded in
-    push ds
-    pop es
-    mov si, fmv_ux1             ; seed 11.91's rect directly: the pass below
-    mov di, wm_dmg_x1           ; is the only part of it we want, so there is
-    mov cx, 4                   ; no wm_paint_dmg to do the clamping for us -
-    rep movsw                   ; and none is needed, because every rect
-    pop es                      ; folded in came from wm_win_rect and a window
-                                ; is already on the screen (SPEC.md 11)
-    call KERNEL_SEG:cw_wm_dmg_wins
-.out:
-    jmp kretc_di
-%if wm_dmg_y1 != wm_dmg_x1+2 || wm_dmg_x2 != wm_dmg_x1+4 || wm_dmg_y2 != wm_dmg_x1+6
-  %error "fmv_repaint_all moves its union into wm_dmg_x1..y2 as FOUR WORDS in that order"
-%endif
-
-; -----------------------------------------------------------------------------
-; fmv_reload_all - re-list every Disk window the operation COULD have changed,
-;                  each from its own (drive, folder)
-; in:  the operation record (fcp_op, [fcp_drv], [fcp_ddrv]) still describes
-;      the paste that just ended - fm_paste_res is the one caller
-; out: nothing (all registers preserved); the pending union (fmv_ux1..) holds
-;      the frames of the VISIBLE ones, for fmv_repaint_all
-;
-; The coherence pass a multi-file operation owes (SPEC.md 22.3). fmv_bcast
-; reaches only the windows on the CURRENT (drive, cwd), which after a tree
-; walk is wherever the walk happened to stop - and a paste changes the
-; destination folder, a Cut's source folder, and every folder it created on
-; the way down.
-;
-; **NOT EVERY WINDOW, THOUGH** (SPEC.md 22.3.1). It re-listed them all, and a
-; COPY writes nothing on its source volume - so the Disk window the file was
-; copied FROM paid a full mount for a listing that could not have changed,
-; which on a floppy is the FAT and the root read again, a seek back to
-; cylinder 0 and an icon harvest: measured, the two slowest `int 13h` of a
-; floppy-to-C: paste after its data. A window is re-listed when either
-;   - it is DIRTY: fmv_mark marked it, which dskw_sync does for every folder
-;     any write of this operation touched - and for any write before it that
-;     no refresh has collected yet, so a debt the old pass paid by accident is
-;     still paid; or
-;   - it shows a VOLUME THIS OPERATION WROTE: the destination, and the source
-;     too when it was a Cut. Not the folder, the volume: the status line's
-;     Free figure (SPEC.md 22.7) is the volume's, so a window on another
-;     folder of it is stale too.
-; A window neither describes is left exactly as it was, cache and pixels.
-; -----------------------------------------------------------------------------
-fmv_reload_all:
-    call kentc_di               ; KENT: push ax..di
-
-
-
-
-
+    call fm_edit_end            ; whatever was armed is spent
+    push ax                     ; the FCPS_*, across the pass below
+    ; THE COHERENCE PASS THIS OPERATION OWES, and then its pixels: both were
+    ; routines called from here alone (fmv_reload_all, fmv_repaint_all) and
+    ; are written here (kernel size pass 18, -16) - two ladder frames for a
+    ; caller that banks AX and DI itself and clobbers the rest. Their headers:
+    ; fmv_reload_all - re-list every Disk window the operation COULD have changed,
+    ;                  each from its own (drive, folder)
+    ; in:  the operation record (fcp_op, [fcp_drv], [fcp_ddrv]) still describes
+    ;      the paste that just ended - fm_paste_res is the one caller
+    ; out: nothing (all registers preserved); the pending union (fmv_ux1..) holds
+    ;      the frames of the VISIBLE ones, for fmv_repaint_all
+    ;
+    ; The coherence pass a multi-file operation owes (SPEC.md 22.3). fmv_bcast
+    ; reaches only the windows on the CURRENT (drive, cwd), which after a tree
+    ; walk is wherever the walk happened to stop - and a paste changes the
+    ; destination folder, a Cut's source folder, and every folder it created on
+    ; the way down.
+    ;
+    ; **NOT EVERY WINDOW, THOUGH** (SPEC.md 22.3.1). It re-listed them all, and a
+    ; COPY writes nothing on its source volume - so the Disk window the file was
+    ; copied FROM paid a full mount for a listing that could not have changed,
+    ; which on a floppy is the FAT and the root read again, a seek back to
+    ; cylinder 0 and an icon harvest: measured, the two slowest `int 13h` of a
+    ; floppy-to-C: paste after its data. A window is re-listed when either
+    ;   - it is DIRTY: fmv_mark marked it, which dskw_sync does for every folder
+    ;     any write of this operation touched - and for any write before it that
+    ;     no refresh has collected yet, so a debt the old pass paid by accident is
+    ;     still paid; or
+    ;   - it shows a VOLUME THIS OPERATION WROTE: the destination, and the source
+    ;     too when it was a Cut. Not the folder, the volume: the status line's
+    ;     Free figure (SPEC.md 22.7) is the volume's, so a window on another
+    ;     folder of it is stale too.
+    ; A window neither describes is left exactly as it was, cache and pixels.
     xor ax, ax                  ; the repaint owes exactly what is re-listed:
     mov [fmv_ux2], ax           ; the union starts EMPTY - x1/y1 at the top
     mov [fmv_uy2], ax           ; of the unsigned range and x2/y2 at its
@@ -7390,7 +7305,7 @@ fmv_reload_all:
     mov [fmv_ux1], ax           ; all four by the same compares as the rest
     mov [fmv_uy1], ax           ; (fmv_repaint_all reads y2 = 0 as empty)
     call fmv_ifirst
-    jc .done
+    jc .rdone
 .scan:
     mov di, [si+I_SPTR]
     cmp byte [di+FS_DIRTY], 0
@@ -7437,8 +7352,81 @@ fmv_reload_all:
 .next:
     call fmv_inext
     jnc .scan
-.done:
-    jmp kretc_di
+.rdone:
+    pop ax
+    cmp al, FCPS_ERR
+    jne .all
+    mov al, [fcp_err]
+    call fm_sayerr              ; SPEC.md 59
+.all:
+    ; ...THE PIXELS. The reload moved every window's CACHE; their PIXELS are
+    ; still the old listing, and a paste is the one operation that can change
+    ; three windows at once - so it owes those windows, and nothing else on
+    ; the screen. The caller's own repaint then lands on top of ours, which is
+    ; one window against the disk I/O this operation has already done.
+    ; fmv_repaint_all - put the PIXELS of every Disk window fmv_reload_all just
+    ;                   re-listed where it put their caches (SPEC.md 22.3)
+    ; in:  the gfx lock HELD - both callers are inside one (the drag loop keeps
+    ;      it to the end, and the replace answer is a W_ONKEY callback), which is
+    ;      also why the wm_paint_all this replaced was called bare
+    ; out: nothing (all registers preserved)
+    ;
+    ; One wm_paint_dmg per Disk window (SPEC.md 11.91), and it replaced a
+    ; wm_paint_all. An operation that changed three listings owes three windows
+    ; and whatever overlaps them - not the desktop dither, not the drive zones,
+    ; not every other application on screen. On the measured case, a file dragged
+    ; between two Disk windows, that is 245 glyphs down to 96.
+    ;
+    ; **ONE call over their union, not one call per window**, and the difference
+    ; is not subtle: wm_paint_dmg redraws a marked window WHOLE, so a per-window
+    ; loop redraws each overlapping neighbour once per pass - two overlapping Disk
+    ; windows cost four window paints, which measured WORSE than the wm_paint_all
+    ; it was meant to replace. Inside one call the marking is transitive and every
+    ; window is painted exactly once.
+    ;
+    ; **wm_dmg_wins and not wm_paint_dmg**, because a paste REVEALS nothing: no
+    ; window moved, none was hidden, only contents changed. So there is no
+    ; desktop to put back, no drive zone to redraw and no chrome to correct -
+    ; only windows. wm_dmg_wins is 11.91's mark-and-draw pass on its own, the
+    ; same one wm_dock_under borrows, and skipping the other three steps is what
+    ; takes the union of two Disk windows from "very nearly a wm_paint_all" to
+    ; the windows themselves.
+    ;
+    ; The windows are still redrawn WHOLE rather than in place, and that is the
+    ; granularity rule (SPEC.md 11.3) rather than laziness: fm_repaint is one big
+    ; fill plus ~40 font_strs, the fill clips per pixel and the glyphs per cell,
+    ; so a window partly covered by another would come back with blank rows
+    ; wherever a clip edge crossed it.
+    ;
+    ; **THE UNION IS fmv_reload_all's**, and there is no walk here any more
+    ; (SPEC.md 22.3.1). This walked wm_zord for every visible Disk window, which
+    ; was right while the reload re-listed every one of them; once it re-lists
+    ; only the windows the operation could have changed, a separate walk would
+    ; have to re-derive that predicate - after the reload had already cleared the
+    ; FS_DIRTY half of it. So the reload folds each visible window it re-lists
+    ; into the union as it goes, and this commits it. A window the paste did not
+    ; touch is not repainted, and it keeps exactly the pixels it had.
+    cmp word [fmv_uy2], 0       ; still fmv_reload_all's EMPTY union: no
+    je .out                     ; window's bottom edge is row 0 - the menu bar
+    push es                     ; is there - so 0 means nothing folded in
+    push ds
+    pop es
+    mov si, fmv_ux1             ; seed 11.91's rect directly: the pass below
+    mov di, wm_dmg_x1           ; is the only part of it we want, so there is
+    mov cx, 4                   ; no wm_paint_dmg to do the clamping for us -
+    rep movsw                   ; and none is needed, because every rect
+    pop es                      ; folded in came from wm_win_rect and a window
+                                ; is already on the screen (SPEC.md 11)
+    call KERNEL_SEG:cw_wm_dmg_wins
+%if wm_dmg_y1 != wm_dmg_x1+2 || wm_dmg_x2 != wm_dmg_x1+4 || wm_dmg_y2 != wm_dmg_x1+6
+  %error "fm_paste_res moves its union into wm_dmg_x1..y2 as FOUR WORDS in that order"
+%endif
+.out:
+    pop di
+    pop ax
+    ret
+
+
 
 ; -----------------------------------------------------------------------------
 ; fm_stage_onam - capture the entry Rename/Delete is about to act on
@@ -8361,9 +8349,12 @@ fm_lsel_bar:                    ; ...the band of [fm_lsel], the mirror's own
     call fm_manyvp              ; of it (SPEC.md 22.27): the three callers -
                                 ; the painter, the scroll's lift and its relay
     jz .one                     ; - each mean "the whole selection"
-    call fm_mdraw
-    pop di
-    ret
+    pop di                      ; EVERY BAND OF THE SET: fm_mset's walk over
+    call kentc_di               ; the empty run 0FFFFh..0, so no bit changes
+    mov ax, 0FFFFh              ; and every band is drawn - under its own
+    xor dx, dx                  ; ladder frame, which fm_mset.go's exit pops.
+    jmp fm_mset.go              ; It was fm_mdraw, called from here alone
+                                ; (kernel size pass 18, -4)
 .one:
     pop di
 %endif
@@ -8506,17 +8497,11 @@ fm_many:
 ; fm_mset - MAKE DI's selection the run of indices AX..DX, AX <= DX (an end
 ; past the listing is simply not reached, so 0FFFFh..0FFFFh is the empty
 ; run), inverting the band of every index whose bit CHANGES and no other -
-; every target a gesture has is one run. AX > DX is fm_mdraw's: no index is
-; in it, so every band of the set is drawn, and the bits are LEFT ALONE -
-; which is what fm_lsel_bar wants. fm_mset ENTERS the bitmap first (fm_menter:
+; every target a gesture has is one run. AX > DX is fm_lsel_bar's: no index
+; is in it, so every band of the set is drawn, and the bits are LEFT ALONE. fm_mset ENTERS the bitmap first (fm_menter:
 ; a single selection becomes its first bit), so a caller with one entry up
 ; needs no call of its own; .nm is the entry that skips it. All registers
 ; preserved
-fm_mdraw:
-    call kentc_di               ; KENT: push ax..di (a gesture's, never a
-    mov ax, 0FFFFh              ; pixel's: kernel size pass 11) - and
-    xor dx, dx                  ; 0FFFFh..0: no run, and draw only
-    jmp short fm_mset.go
 fm_mset:
     call fm_menter              ; FROM a single selection: fm_mone's three
 .nm:                            ; callers enter here, fm_mto (which entered
@@ -9221,9 +9206,12 @@ fm_draw_status:
 .fs_stat_drawn:
     mov dx, [fm_cy]
     add dx, [fm_staty]
-    call fm_stat_line
-.fs_done:
-    jmp kretc_di
+    jmp fm_stat_line.inframe    ; ...and the line's ladder exit is OURS: this
+                                ; routine's frame is the same kentc_di frame
+                                ; fm_stat_line would push, so its body runs
+                                ; under ours and its `jmp kretc_di` returns to
+                                ; our caller (kernel size pass 18, -3: the
+                                ; call and our own exit)
 
     ; THE SWAP PROMPT IS PAST THE EXIT (kernel size pass 11): in line it
     ; put Delete's and the space line's arms out of the ladder's short
@@ -9313,6 +9301,7 @@ fm_stat_row:
     jmp short fm_stat_line.l0   ; a line drawn in the ROW AREA, where the
 fm_stat_line:                   ; scroll bar is (it was a .text byte, written
     call kentc_di               ; at both entries and read once)
+.inframe:                       ; (fm_draw_status's own frame enters here)
     xor bx, bx
 .l0:
     mov ax, [fm_cw]
