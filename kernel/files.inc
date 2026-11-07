@@ -687,10 +687,12 @@ fm_kinit_x:
 %endif                          ; cleared rather than assumed empty (.bss gets
                                 ; no image bytes and nothing zeroes it)
     call fm_settitle
-    mov word [fm_tdirty], 0     ; app_launch's wm_show draws this window whole
+    and word [fm_tdirty], 0     ; app_launch's wm_show draws this window whole
                                 ; a moment from now, caption included - do not
                                 ; leave the first self-repaint owing a strip
-                                ; that is already correct
+                                ; that is already correct (`and`: app_launch
+                                ; reads no flag after KD_INIT - kernel size
+                                ; pass 18, -1)
     jmp kretfc_di
 
 ; =============================================================================
@@ -3939,12 +3941,10 @@ fm_onup_x:
 .fire:
     cmp al, FM_BVIEW            ; a chooser's column (SPEC.md 38.3): let the
     jbe .hdr                    ; button up - its answer repaints nothing of
-    push ax                     ; its own, and a refusal must not leave it
-    xor al, al                  ; drawn pressed - and hand the id over
-    call fm_setdown
-    pop ax
-    mov ah, al
-    mov al, FDH_BTN
+    mov ah, al                  ; its own, and a refusal must not leave it
+    xor al, al                  ; drawn pressed - and hand the id over, in
+    call fm_setdown             ; AH: fm_setdown keeps AX and reads AL alone
+    mov al, FDH_BTN             ; (kernel size pass 18, -2)
     call fdlg_hook
     jmp short .out
 .hdr:
