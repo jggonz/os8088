@@ -243,11 +243,13 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 ; --- KHP_* - kernel hot-paths pass 1's optimisations, ONE KNOB A GROUP ------
 ; (docs/plans/khp1/LOG.md section L.2, docs/plans/LAST-DROP-PERF.md section 7.)
 ; Each knob selects the rewritten body of a hot path; undefined, the source
-; assembles to the body it replaced, byte for byte. kern_big and kern_small
-; carry none of them on this branch - their resident bytes were the price -
-; and kern_mega carries all of them: it runs on a 286 or 386, almost always
-; with VGA or EGA, its `.cold` lives above 1MB, and its conventional budget had
-; room. Enabling one for kern_big is a %define here and a re-measure.
+; assembles to the body it replaced, byte for byte. kern_mega carries the
+; first eleven: it runs on a 286 or 386, almost always with VGA or EGA, its
+; `.cold` lives above 1MB, and its conventional budget had room. kern_big (and
+; kern_emu, which is kern_big) carries KHP_LZ alone, at the owner's word: the
+; decoders' saving is CPU, the same on every medium, and on a hard disk it is
+; most of a launch. kern_small carries none; its machines are floppy-only.
+; Enabling another for kern_big is a %define below and a re-measure.
 ;
 ;   KHP_VGASAVE   the planar save/restore by words and the VGA cursor's own
 ;                 walks (vga-1, pointer-2): ~70% of a VGA raise
@@ -288,7 +290,9 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
  %define KHP_CAPTION
  %define KHP_DMGSTALE
  %define KHP_RAISEOL
- %define KHP_LZ
+%endif
+%ifdef KERN_BIG                 ; kern_big, kern_emu and kern_mega
+ %define KHP_LZ                 ; (+190 .cold: LAST-DROP-PERF.md 7.1 row 1)
 %endif
 ; MEGA_DIAG (MEGADIAG=1) is kern_mega's FIELD READINGS on the menu bar - the
 ; NMI, the 286 reset's floppy bytes, the 765 resets, the IRQ reflections' rate,
