@@ -14383,3 +14383,94 @@ still finds its image. Resident cost none (the stub and the module).
 the base (no ordinary boot after the refusal), RED with each of 1 and 1+2
 alone (this item's probes: the key never taken; then 3 checks failed, the
 question asked again and both files kept), green with all three.
+
+### 14.163 The VMs and emulators' writes through CS: WEAVE's VM and canvas core took ~2,300 #GP fixups a second; the C64, RealDMG and VBattle take none in play (2026-11-07) - FIXED
+
+**The owner's speed pass (item 5), the VM and emulator share.** A store
+through a code selector is one kern_mega completes (`mega_gpw`, ~77 us on
+86Box, ~884 clocks on a 286, 14.150), and `t_cswrite --census` counts sites in
+every arm, so each package was MEASURED in real use first - 86Box's
+at286_vga_sb (the mr286), `build/mega.img`, the package's own disk in B:,
+`faults` counting every `#GP ... err 0000` by CS:IP (its log stops at 100,000
+lines, so a window that would pass that is cut shorter):
+
+| package, what was done | sites (census) | fixups before | after |
+|---|---:|---:|---:|
+| WEAVE, PONG.WAB served and steered, 30.2 guest s | `wvm.inc` 152, WEAVE.WSM 1 + 7 pairs | **70,566 = 2,333/s** | **0** |
+| WEAVE, the PONG.WAB open | | 71 | 0 |
+| WEAVE, SHEET.WAB: three clicks and a typed cell a round, 62 s | | 1,574 (25/s, ~75 a handler) | 0 |
+| WEAVE, FORM.WAB: typing and both buttons, 68 s | | 853 (13/s) | 0 |
+| C64: a `PRINT I;:I=I+1:GOTO 10` loop 60 s, then a POKE program 60 s | `c64jit.asm` 59 + 4 pairs | **0** (the open: 0) | - |
+| RealDMG: GBDEMO.GB played 61 s windowed and 30 s full screen | `rdgppu` 12, `rwbank` 5, 8 more | **0** in play; 94 at the cartridge's load | - |
+| VBattle: the demo battle's title and 60 s of rounds | `vbinp.inc` 10 + 3 pairs | **0** | - |
+
+PONG before, by routine: `wvm_nat` 21,920, `wvm_getp` 17,577, WEAVE.WSM's
+`wsm_entry` 9,101, `_wvm_begin` 7,414, `_wvm_argi` 2,217, `wsm_mkcolmap`
+2,162, `_wvm_slice` and `wvm_ret` 2,022 each, `wsm_drawspr` 1,564,
+`wvm_x_done` and `wvm_exit` 1,348 each, `wvm_setp` 1,183, `wsm_flush` 596,
+CALLM and BUILT the rest. That is ~180 ms of every second on 86Box and,
+predicted, ~2.1 M clocks a second on an 8 MHz 286 - a quarter of it.
+
+**WEAVE, converted at the source - shared, because WEAVE ships one build on
+one disk (`weave.img`) that kern_mega runs too; no arm.**
+
+- **`wvm.inc` stores nothing through CS.** Its variables are READ `cs:` as
+  before and WRITTEN through a data segment: DS-relative in the C entries,
+  where DS is ours (`_wvm_bind`, `_argi`, `_begin` - which now keeps DS ours
+  and writes the frame through ES = the claim - `_slice`'s entry, `_abort`,
+  `_unbind`, `_str_make`), and inside a slice through ES = OUR segment
+  (`mov es, [cs:wvm_ourds]`), the bundle put back in ES before the next
+  fetch: the native requests (GETP/SETP/CALLM/BUILT stage with ES = ours and
+  `wvm_nat` writes the block the same way, then `push es / pop ds` where it
+  was `mov ds, [cs:wvm_ourds]`), the four exits (`wvm_exit` takes the answer
+  in AX), CALL and RET, the string descriptors, the arena tops, `str()`'s
+  digits. Temporaries that were stores and reloads in one op ride the CPU
+  stack or a register instead (RET's value, `mkstr`'s handle, `rand`'s n,
+  `array`'s count and handle, `loadState`'s array count). The dispatch loop
+  is untouched. **8088 cost**: an ES load is ~20 clocks where no removed
+  store or reload pays for it - per native call ~+25, per CALL ~+25, per RET
+  about even, per string helper call ~+45, per slice end ~+20 - never per op.
+- **WEAVE.WSM took DS from CS** at every verb (`mov [cs:wsm_cds], ds`, then
+  `push cs / pop ds`: two fixups a verb, the pair's first store swapping DS
+  to the data alias) and ES from CS for five `rep stos`/`movs` into its own
+  scratch. Its DS is now `[cs:wsm_myds]`, a new state-block word
+  (`WSS_MYDS`, **WSM_ABI 2 -> 3**, WEAVE-SPEC 1.2.2) that the package's
+  `wcv_bindmod` stamps with the claim's segment - CS's value on a real-mode
+  kernel, the claim's DATA selector on kern_mega - before the first verb and
+  from the relocation proc whenever the claim moves; ES = `push ds / pop es`.
+- **Found on the way, a WEAVE bug on every kernel**: a refusal taken inside a
+  helper left `_wvm_slice` with the helper's return address still on the
+  stack, and `.out` popped it as ES and returned through a saved register -
+  an eval-stack overflow (`too deep.` from `wvm_pushv` inside CALL's fill of
+  the locals) hung the machine. `.out` puts SP back to the depth the entry
+  banked (`wvm_ssp`; not from BP, which a native may lose) first. New corpus case `tests/weave/vmcorpus/12errstk.wjs`
+  (WEAVE-SPEC 4.7): the `weavevm` row hangs on it at the base (`.N..........`
+  then the 120 s timeout) and passes with the fix.
+
+**Left, with the measured cost:** RealDMG's `rdg_lpatch` (44 + 44 + 6 at
+each cartridge's load: it patches the PPU's code for the cartridge, the
+store IS the program) - ~7 ms once, not worth an arm's bytes. The C64's
+recompiler (`c64jit.asm`, 59 writes): **it does not run on kern_mega at
+all** - `ovl_jit_init` sets it up only where the claim's code selector is
+its segment, so kern_mega runs the fast core, whose banked DS (10.3's census) already
+made trap-free; a kern_mega JIT writing through the claim's data alias is a
+feature of its own, not a trap. VBattle's `vbinp.inc` writes are its
+LOADALL / unreal borrow, which only real mode takes. LOOM's preview module
+(`lmpvmod.asm`) keeps WEAVE.WSM's old idiom, two fixups per Preview paint -
+an action, not a frame - and LOOM's image is byte-identical.
+
+**Bytes.** No kernel byte: kern_big, kern_small and kern_mega's kernels are
+untouched. `WEAVE.O88`: image 59,566 -> 59,610 (+44, two of them
+`wvm_ssp`), resident (trimmed) 43,906 -> 43,950 (+44), its overlay the same
+15,660; on the floppy 40,411 -> 40,528 (packed). `WEAVE.WSM` 5,087 -> 5,093 (+6, two of them the new word).
+`LOOM.O88` byte-identical. No shipped disk carries WEAVE (it is the
+on-demand `weavedisk`/`loomdisk`), so `$(SHIPIMGS)` is unchanged.
+
+**Rows.** `megaweavetrap` (soak, 86Box, new): PONG served and steered for
+20 guest s with the ball found at two places and SHEET's two buttons
+changing its grid, NOT ONE fixup in either. RED: the commit before's
+`weave.img`, 45,282 in the PONG window and 221 in SHEET's; one `mov
+[cs:wvm_pc], si` put back in `wvm_nat`, 1,743 at that one CS:IP. And the
+static ratchet: `cswrite` (fast) walks apps/weave/ now (one registered
+residue, `wwork.inc`'s ES = KERNEL_SEG read), red with that same line
+put back.

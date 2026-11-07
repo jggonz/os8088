@@ -172,6 +172,14 @@ _wcv_bindmod:
     mov ax, [bp+4]
     or ax, ax                       ; 0 = forget it, and stays 0: the callers'
     jz .set                         ; test for "no module"
+    push es
+    mov es, ax                      ; THE MODULE'S OWN DATA SEGMENT, stamped
+    mov bx, [es:WSM_H_STATE]        ; into its state block (WSS_MYDS): every
+    mov [es:bx+WSS_MYDS], ax        ; verb loads its DS from there - here and
+    pop es                          ; from the relocation proc, so a moved
+                                    ; module names where it IS. On kern_mega
+                                    ; the claim's data selector, the one a
+                                    ; store may go through (14.163)
     OS88_CODESEL ax, byte [cc_cpuf] ; THE CODE SELECTOR, not the claim's data
                                     ; segment - the same word off kern_mega,
                                     ; and a fault per far call through it on

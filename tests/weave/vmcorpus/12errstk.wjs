@@ -1,0 +1,10 @@
+// the EVAL stack's 64 cells are `too deep.` before the 16 frames are (4.7):
+// a frame of rec() is its argument and five locals, so some ten calls in, the
+// locals overflow it - inside CALL's fill, which is two words down the CPU
+// stack when it refuses
+var reached;
+function rec(n) { var a; var b; var c; var d; var e; reached = n; return rec(n + 1); }
+function main() {
+  reached = 0;
+  rec(1);
+}

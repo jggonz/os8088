@@ -34,9 +34,12 @@
 ; need not change a size - and it is why the stamp here is three words rather
 ; than two.
 ; -----------------------------------------------------------------------------
-WSM_ABI     equ 2                   ; 2: WEAVE-SPEC 6.10.7's palette - the
+WSM_ABI     equ 3                   ; 2: WEAVE-SPEC 6.10.7's palette - the
                                     ; BIND block's colour word, WSMF_COLOR,
-                                    ; and the sprite flags' top nibble
+                                    ; and the sprite flags' top nibble.
+                                    ; 3: WSS_MYDS, the module's own DATA
+                                    ; segment, stamped by the package - the
+                                    ; entry's DS (KERN-MEGA-PLAN 14.163)
 
 WSM_MAGIC   equ 0x5357              ; 'W','S' little-endian
 
@@ -220,7 +223,19 @@ WSS_PEN     equ WSS_RING + WSM_RING * WSM_REC
                                     ; neighbours, so not one existing offset
                                     ; moves and the package's w_b/w_w reads
                                     ; are the same bytes they were
-WSS_SIZE    equ WSS_PEN + 2
+WSS_MYDS    equ WSS_PEN + 2         ; word: the module's OWN DATA SEGMENT,
+                                    ; which every verb loads into DS. The
+                                    ; package stamps it (wcv_bindmod) before
+                                    ; the first verb and again whenever the
+                                    ; claim moves: the claim's segment - the
+                                    ; same word as CS on a real-mode kernel,
+                                    ; and on kern_mega the claim's DATA
+                                    ; selector, where CS is a read-only code
+                                    ; alias and `push cs / pop ds` cost a
+                                    ; #GP fixup per call (KERN-MEGA-PLAN
+                                    ; 14.163). Appended after the pen, for
+                                    ; the pen's own reason
+WSS_SIZE    equ WSS_MYDS + 2
 
 WSM_RING    equ 32                  ; slots; 31 usable, head == tail is empty
 WSM_REC     equ 6                   ; comp byte, atom byte, data1 word, data2
