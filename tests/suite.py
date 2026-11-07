@@ -19444,6 +19444,20 @@ SOAK = [
         needs=("86box", "nasm", "rgbds"),
         wants=("build/mega.img", "build/megak/apps/realdmg.o88",
                "build/os8088-720.img")),
+    Row("waverackmega", "soak", py("tests/waverackmega.py"), 40.0,
+        "WaveRack on kern_mega (docs/plans/KERN-MEGA-PLAN.md 14.149, SPEC.md "
+        "123.13), 86Box's at286_vga_sb, build/mega.img and a scratch B: of "
+        "WAVERACK.O88 and PRELUDE.WAV, one boot a leg. HOLD: a 16-bit stereo "
+        "clip a floppy cannot stream plays from the hold, whose claim is an "
+        "LDT selector there - wt_hoff's paragraph sum closed WaveRack with a "
+        "#GP at the load; it must take the hold under a bound window "
+        "(SEG_BWIN/SEG_AIM), load it whole, hold tools/wrsim.py's "
+        "hold_bytes() byte for byte, play to the end and keep its window. "
+        "SLOT: a take's wc_myslot names this instance's inst_tab row. RED "
+        "with the base's package (--pkg/--src): HOLD's window gone, 'WaveRack "
+        "0D'; SLOT passes there too (a guard). 40s is 34 measured",
+        needs=("86box", "nasm"),
+        wants=("build/mega.img", "build/waverack.o88", "build/waverack.bin")),
     Row("megakbcodes", "soak", py("tests/megakbcodes.py"), 15.0,
         "docs/plans/KERN-MEGA-PLAN.md 14.145: mega_k09, kern_mega's own int "
         "09h, stores the ROM's words in the BIOS ring - Ctrl on the grey "

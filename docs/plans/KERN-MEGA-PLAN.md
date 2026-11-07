@@ -14071,3 +14071,50 @@ deleted instructions are pure gain. Not timed on MartyPC (the final pass's
 any new site fails `make`); red with the base's lemblit.inc
 (`lemblit.inc:907 ... pair ... not in tests/cswrites.txt`). SPEC.md 116.4.
 
+### 14.149 WaveRack on kern_mega: the HOLD was paragraph arithmetic on a selector (2026-11-07) - FIXED
+
+**Found by the mega-release hands-on pass** (h5, D1): (a) Space on the 16-bit
+stereo PRELUDE.WAV (waverack.img) closed WaveRack, `WaveRack 0D at
+10EC:5462`; (b) on 8-bit clips the counter stayed 00:00.00 and Stop did
+nothing; (c) a take was 0.83 s where kern_big's was 2.75 s.
+
+**(a) is the defect.** A clip the floppy cannot stream plays from the HOLD
+(SPEC.md 123.6), one byte a frame in a conventional claim, and `wt_hoff`
+addressed frame n as `[wt_hseg] + n >> 4 : n & 15`. On kern_mega every claim
+is an LDT selector (KERN-MEGA-MEMORY-PLAN MC7), so from the 17th frame the
+sum named another descriptor: #GP at the first load pass. **Fix**: `wt_hbwin`
+asks `OSAPI_SEG` `SEG_BWIN` for a bound window over the hold at its claim,
+and `wt_hoff` re-aims it (`SEG_AIM`, CX:AX = the byte offset, 64KB of reach -
+every read into the hold and copy out of it is at most 32KB). A real-mode
+kernel answers `SEG_BWIN` with the claim itself, and `wt_hoff` keeps the sum
+whenever the window IS the claim: no `CPU_F_PM` test (t_megapkg counts
+none), no far call a frame on the 8088; no window (no LDT entry) means no
+hold. +66 bytes of image (43,872 -> 43,938), 2 of bss.
+
+**(b) and (c) are not kern_mega's** - measured, not guessed. (b): the play's
+first `W_ONWAKE` (`wt_onwake` -> `wt_refill`) makes up to `WT_FILLMAX` (8)
+reads in one pass, and the window's tick (playhead, meter) and every key wait
+for it - FURELISE's start took 8 reads, ~3 s on the mr286, and the first
+playhead tick came at t+3.5 s on kern_mega and kern_big alike; h5 pressed Stop
+at 4 s, inside or at the edge of that pass, and looked 1 s later. (c): the
+same latency at Record (`wc_go`'s DFREE, the take's file and header, the
+WAVERACK.TAK marker on A:): the card started 3.5 s after R on kern_mega, and
+a take is the time from the card's start to S - a 5.5 s script left 0.83 s.
+A sampled take of 10 s here was whole, written to the frame. Reported as a
+proposal (one read a wake, so Stop and the tick come between reads on every
+kernel - a behaviour change and a SPEC 123.6 sentence, the owner's call).
+
+**`wc_myslot`** (tests/megahigh.txt's `high` note) compares SSI_SEG with DS -
+a value, not a sum - and holds: the loader's I_SPTR is the region's data
+selector, which is DS. The exemption's text says so now; declaring OS88_HIGH
+is still the owner's full-tier call, and OS88_HIGHMEM keeps a reason (the
+I/O claim and the look-ahead are disk-read targets, which bounce sector by
+sector above 1MB).
+
+**Row**: `waverackmega` (soak, 86Box at286_vga_sb, a boot a leg). HOLD:
+PRELUDE.WAV plays from the hold under a bound window, loads all 33,075
+frames, holds `wrsim.hold_bytes()` byte for byte, plays to the end with the
+window still WaveRack's. SLOT: a take's `[wc_slot]` is the instance's
+inst_tab row. Red with the base's package (`--pkg`/`--src`): HOLD's window
+gone at the load (`WaveRack 0D at 10EC:5462`); SLOT passes on the base too,
+a guard. 34 s.

@@ -232640,6 +232640,19 @@ added (WAVERACK-PLAN.md's Wave 4b section says when one would earn it):
   held play's meter reads the mixed sample**, not each channel - a rail on
   one channel of a stereo file does not light PEAK there; that is the trade
   for holding four times as much.
+  **A frame's address in the hold is never a paragraph sum on kern_mega**
+  (KERN-MEGA-PLAN 14.149): there the claim is an LDT selector (§50.6.11), and
+  `wt_hoff`'s `[wt_hseg]` + offset >> 4 named some other descriptor from the
+  17th frame on - a 16-bit stereo clip a floppy cannot stream closed
+  WaveRack with a #GP at its first load pass. Under `CPU_F_PM` the claim gets
+  a BOUND WINDOW (`wt_hbwin`, `OSAPI_SEG` `SEG_BWIN`), which `wt_hoff`
+  re-aims at each frame's byte offset (`SEG_AIM`: 64 KB of reach, which every
+  read and copy of the hold fits); with none to be had the play does not hold.
+  A real-mode kernel answers `SEG_BWIN` with the claim itself, and `wt_hoff`
+  keeps the sum wherever the window IS the claim - so no `CPU_F_PM` test and
+  no far call a frame on the 8088, 66 bytes of image on every kernel.
+  `waverackmega` plays PRELUDE.WAV from the hold on 86Box's 286 and holds its
+  bytes to `wrsim.hold_bytes()`.
 - **The d = 1 8-bit loops** (`wt_cv8m1`, `wt_cv8s1`): no box, so a sample is
   the load, the extremes, the table and the store, and the peak and the rails
   are derived from the extremes once a call (`wt_cvx`) - the same values the
