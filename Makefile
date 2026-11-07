@@ -15734,14 +15734,31 @@ $(MEGAINST): $(MEGAAPPDIR)/install.bin tools/os88pkg.py $(PKGZSTAMP)
 
 # XTMP3's arm (SPEC.md 121): the PC speaker's and the Covox's protected-mode
 # ISR copies, which it carries as the Audio Player's own source
-# (apps/os88spk.inc through apps/audio/apspk.inc, SPEC.md 86.21)
+# (apps/os88spk.inc through apps/audio/apspk.inc, SPEC.md 86.21) - and the XT
+# BACKEND's own arm, x3xt.asm with -DPKG_MEGA: every store into the part goes
+# through its data selector (x3xt.asm's CSDO) where the shipped part's go
+# through CS, a completed #GP each under kern_mega - ~140 a granule, which
+# halved XT Standard's measured speed on a 386DX-25 and sent a song kern_big
+# plays live to Decode First (KERN-MEGA-PLAN 14.150). The front, art and
+# STANDARD parts store nothing through CS and are the shipped ones
+X3PARTARGSMEGA := --part $(BUILD)/x3front.bin --part $(BUILD)/x3art.bin \
+                  --part $(BUILD)/x3stdp.bin --part $(MEGAAPPDIR)/x3xt.bin
+$(MEGAAPPDIR)/x3xt.bin: apps/xtmp3/x3xt.asm apps/xtmp3/x3gran.inc $(BUILD)/x3xtk.inc \
+                        $(BUILD)/XTGEN.BIN apps/os88api.inc | $(BUILD)
+	@mkdir -p $(MEGAAPPDIR)
+	$(NASM) -f bin -w+error -I apps/xtmp3/ -I apps/ -I $(BUILD)/ -DPKG_MEGA \
+	    -o $@ apps/xtmp3/x3xt.asm
+	python3 tools/x3xtgen.py --seal $@
+	@echo "x3xt (PKG_MEGA): $(call FILESIZE,$@) bytes"
 $(MEGAAPPDIR)/xtmp3.bin: $(XTMP3_SRC) apps/os88mega.inc | $(BUILD)
 	@mkdir -p $(MEGAAPPDIR)
 	$(NASM) -f bin -w+error $(STKLST) -I apps/ -I apps/xtmp3/ -I apps/audio/ \
 	    -I drivers/sound/ -I $(BUILD)/ -DPKG_MEGA -o $@ apps/xtmp3/xtmp3.asm
 	@echo "xtmp3 (PKG_MEGA): $(call FILESIZE,$@) bytes"
-$(MEGAAPPDIR)/xtmp3.o88: $(MEGAAPPDIR)/xtmp3.bin $(X3PARTS) tools/os88pkg.py $(PKGZSTAMP)
-	$(OS88PKG) $(MEGAAPPDIR)/xtmp3.bin -o $@ $(X3PARTARGS) --part-compress lz4
+$(MEGAAPPDIR)/xtmp3.o88: $(MEGAAPPDIR)/xtmp3.bin $(BUILD)/x3front.bin $(BUILD)/x3art.bin \
+                         $(BUILD)/x3stdp.bin $(MEGAAPPDIR)/x3xt.bin \
+                         tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(MEGAAPPDIR)/xtmp3.bin -o $@ $(X3PARTARGSMEGA) --part-compress lz4
 
 # RealDMG's arm (docs/REALDMG-SPEC.md section 10.3.1): under CPU_F_PM a
 # cartridge's banks live above 1MB and are addressed IN PLACE through

@@ -57,7 +57,7 @@
 0 7 kernel/fsx.inc  # the real-mode bracket's two real-mode entries (SPEC.md 53.2.3): fsx_rland, where mega_down lands with CR0.PE clear, and fsx_rtick, the IRQ0 handler IVT 20h holds only while that bracket runs - both load DS = KERNEL_SEG in REAL mode, where it IS the segment; protected mode never reaches either. And three in W3's service-area twins (rms_rseq, rms_xfer, rms_xcopy: DS = CS, their own data): assembled in .mega and only ever run from a COPY below 1MB, in real mode And two in W4's (rms_spk's DS = KERNEL_SEG, the speaker door's kernel state, and rms_sstr's ES = KERNEL_SEG, which the driver reads as drv_svc_call hands it): real mode, the same copy
 0 5 kernel/megares.inc  # kern_mega's streaming resume stub (KERN-MEGA-MEMORY-PLAN MC4.1 (b)): staged into the text page from HIBER.DRV and run in REAL MODE, at the top of conventional memory, with no kernel left at all
 0 1 kernel/disk.inc  # the boot overlay (.ovl): mount-time setup, before mega_enter
-5 1 kernel/spinner.inc  # the boot spinner's %macro state, drawn from IRQ0 inside int 13h (SPEC.md 15.3.8) during the boot. NOT A CONVERSION: kernel size pass 18 dropped the `cs:` from the row composer, which runs with DS = CS (the pair counted here) - so eight of the thirteen writes are now through that DS rather than through CS, the same stores to the same code segment, and kern_mega's M1 still owes them
+5 1 kernel/spinner.inc  # the boot spinner's %macro state, drawn from IRQ0 inside int 13h (SPEC.md 15.3.8) during the boot: the PLAIN arm, which only splash.inc's two copies assemble - stage 2, real mode, before mega_enter. The row composer runs with DS = CS (the pair counted here). CTRL.DRV's copy on the Shut Down screen (shutdown.inc, OS88_SPINNER's third parameter) is the MODULE arm since KERN-MEGA-PLAN 14.150 - CSDO and PUSH_CSDATA, ~99 completed #GPs a second before
 37 3 kernel/splash.inc  # the loading screen's state, all of it in stage 2 (SPEC.md 2.9.4)
 3 1 kernel/vidsel.inc  # the adapter pick, in stage 2 and the boot overlay
 0 1 kernel/desksc.inc  # the boot half's scan (.boot2), in real mode before mega_enter; CTRL.DRV's half is PUSH_CSDATA/CSDO now, and AUTOSTART's walk is `.cold` on kern_mega with no CS idiom in it (KERN-MEGA-MEMORY-PLAN MC8) - the blob's three stay in its %else arm, which kern_mega does not assemble
@@ -67,7 +67,7 @@
 0 1 kernel/megados.inc  # mega_dropr, kern_mega's DOS park: REAL MODE, between leaving protected mode and the loader stub, with no kernel left to run
 
 # --- drivers: DS/ES = the driver's own image (no driver writes through CS) ---
-0 5 drivers/hdd/inst.inc  # ES = the installer's own buffer for int 13h; a driver-SDK answer for kern_mega is a drivers/os88drv.inc decision (tools/abi.lock.json)
+0 2 drivers/hdd/inst.inc  # hd_bn_find and hd_bn_kern: ES = KERNEL_SEG to READ the kernel's 'DD' block (SPEC.md 57); nothing stored through it. The three buffers the kernel FILLS or reads - hd_find_di's FILE_FIND_RAW record (~1,700 completed #GPs an install), hd_ivbr_get's boot sector, the bench log - are ES = our DS since KERN-MEGA-PLAN 14.150
 0 1 drivers/hdd/ipkg.inc  # hd_il_send: ES = KERNEL_SEG for INSTALL's log proc, the package callback convention. On kern_mega 0x0060 is the kernel's CODE selector, readable and not writable, and in_onlog reads through ES and stores nothing; HDDTOOL.DRV has no way to name MEGA_SEL_KDATA, which is inst.inc's os88drv.inc decision again (KERN-MEGA-PLAN 14.67)
 0 3 drivers/net/pktdrv.inc  # pk_recv: DS = the driver's own receive buffer, for a packet driver calling in
 0 1 drivers/net/lplink.inc  # ES = the driver's own buffer
@@ -87,3 +87,12 @@
 # only where CS IS the data: a real-mode kernel, or an instrument build.
 3 0 apps/pixelstein/pxgen.inc  # px_drv_tpl's two patch stores (`mov byte [cs:bp]`), which px_gen_init lays only when [px_gencs] is part 1's data segment - every real-mode kernel; kern_mega gets px_drvpm_post over them - and PXPROBE's `inc word [cs:px_pr_lad]`, tests/pxsperf.py --probe's instrument build, which nothing ships
 0 2 apps/pixelstein/pxwin.inc  # px_lock_clip and px_w4_clip: ES = KERNEL_SEG to READ the window's W_FLAGS and hand OSAPI_WM_CLIP_SET the window; nothing is stored through it
+
+# --- apps/xtmp3, apps/notepad, the speaker libraries (KERN-MEGA-PLAN 14.150)
+# XT-MP3's XT backend writes its state through CSDO / [CSEG x] (x3xt.asm):
+# CS on the shipped part, its data selector in kern_mega's arm. What is left
+# here is DS = CS for READS, legal through a code selector
+0 3 apps/xtmp3/x3xt.asm  # DS = CS to READ: STATS' copy out of the counters, OPEN's Fletcher over the tail and its kernel copy's SOURCE (the destination is ES = [cs:x3x_dsel] in the arm); the stores in between are CSDO's
+0 2 apps/notepad/notepad.asm  # ES = KERNEL_SEG for os88ui_ask's READ of our caption and for np_adopt's read of the launch record (the callback convention); np_save's push cs / pop ds went in 14.150
+16 0 apps/os88spk.inc  # the POLLED Covox (OS88SPK_POLL, MIDIRack's alone): os88spk_pout runs inside the producer's loops with the PRODUCER's DS, and os88spk_pgo refuses anything but CPU_8086 - so none of it runs under kern_mega. The setup calls (lpt, init, go) store through DS since 14.150
+1 0 apps/os88spkfx.inc  # emit's sub-block store in the REAL-MODE copy of OS88SPKFX_EMIT (%2 = 0); kern_mega aims the protected-mode copy (os88spkfx_pmset, 14.18), which stores through [os88spkfx_dsel]

@@ -72897,6 +72897,16 @@ chain**, the kernel's own IRQ0 (`KERNEL_SEG:sch_isr`, KERNEL_SEG being a
 code selector there). The close and `fsx_restore` put the gate back to
 `sch_isr` and leave the IVT's cell alone. Only kern_mega answers AL = 2.
 
+**The setup calls store through DS, on every kernel** (KERN-MEGA-PLAN
+14.150). `os88spk_lpt`, `os88spk_init`, `os88spk_go`, `os88spkfx_init` and
+`os88spkfx_ratchet` are made with DS = the package's own - every caller's
+is, and the Video Player's shaper part hands its data segment - and write the
+library's state, and the ISRs' patched immediates, through it; they still
+READ through CS. Through CS they were 80-100 completed #GPs a play under
+kern_mega, and each such store was one byte longer on every kernel. The
+polled Covox (`OS88SPK_POLL`), which runs inside the producer's loops with
+the producer's DS and on an 8088 alone, still stores through CS.
+
 **The ISR cannot write its state through CS there**: a package's CS in
 protected mode is a read-only code alias, so every `mov [cs:x], ...` traps
 into `mega_gpw`, which once a sample would be most of the machine. So
@@ -230613,6 +230623,23 @@ Refusals are `X3E_*`: `CHAN`, `DIV`, `MEM`, `RECORD`, `TABLE`, `NOTOPEN`.
 Every verb keeps every register but AX and its outputs, leaves DF clear,
 never calls the kernel, never touches IF, and uses at most 64 bytes of the
 caller's stack (measured deepest: STANDARD about 32, XT 50).
+
+**The XT part has a kern_mega ARM** (§20.18, KERN-MEGA-PLAN 14.150). It
+keeps its state in its own image and READS it through CS, which a code
+selector allows; it STORES it through `CSDO insn` with `[CSEG x]`
+(`x3xt.asm`): `cs:` in the shipped part, byte for byte what it always was,
+and in the arm (`build/megak/apps/x3xt.bin`, `-DPKG_MEGA`, which kern_mega's
+XTMP3.O88 carries as row 3) DS = the part's data selector for the one
+instruction, banked from DS at every verb's entry (`x3x_dsel`) - one DS
+switch for a run of them (`CSDO_ON`), and the generated kernels' clip count
+too (`tools/x3xtgen.py`, `X3X_KSLOT` per arm). The shipped part's stores were
+~140 completed #GPs a granule under kern_mega and halved XT Standard's
+measured speed on a 386DX-25 (1.79 -> 0.91 audio seconds a second), which
+sent a song kern_big plays live on the same machine to Decode First; the arm
+measures 1.77. It costs the arm 1,920 image bytes (60,618) and 816 resident
+after OPEN's shrink; the shipped part, the STANDARD part and FRONT store
+nothing through CS. `tests/x3xtunit.py --mega` runs the arm bit-exact with
+its code view mapped read-only, and `x3live386` plays the song live.
 
 ### 121.4 Numerics (shipped; `tools/x3sim.py` and `tools/x3simxt.py` are the authority)
 

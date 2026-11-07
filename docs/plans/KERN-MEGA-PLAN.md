@@ -13994,3 +13994,98 @@ that kernel, which is what says the detector sees a reboot.
 Cost: `.mega` +13 bytes (above 1MB); `MEGA_RESIDENT` 62,976 unchanged;
 kern_big byte-identical (`make build/kernel.bin` with and without, one
 commit).
+
+### 14.150 Writes through CS that cost a feature or speed: XT-MP3's XT backend, the speaker setup, the Shut Down spinner, Notepad, the installer (2026-11-07) - FIXED
+
+**Found by the mega-release hands-on pass** (h2's D1 and "Minor", h1's item
+5). Every one is a store kern_mega COMPLETES - `mega_gpw`, ~77 us on 86Box,
+~884 clocks predicted on a real 286 - so nothing faulted, and what it cost
+was speed, or a feature.
+
+**XT-MP3 could not play live on a 386DX-25** (86Box's Micronics 386DX-25,
+SB16) where kern_big plays the same NEONDRV.MP3 live on the same machine.
+Auto's ladder (SPEC.md 121.5) measures each rung on the worker, and read off
+the package's own `x3l_meas`:
+
+| rung | kern_big | kern_mega before | kern_mega after |
+|---|---:|---:|---:|
+| Quarter STANDARD | 0.51 | 0.51 | 0.51 |
+| XT Standard | **1.79**: live | **0.91**: Decode First | **1.77**: live |
+
+So the brief's suspect, the STANDARD part, was not it: it stores nothing
+through CS, and it measures the same on both kernels (it is too slow on that
+386 under either). All **3,473** fault lines of the probe were the XT part's
+(`x3xt.asm`, 100 sites: `inc word [cs:x3x_slot]` and `dec word [cs:x3x_t]`
+450 each, the short-block sfb widths' copy 325, the stats counters, the run
+table, the level map at OPEN) - about 140 a granule, ~11 ms of a granule
+whose audio is 13 ms. The XT probe failed, and the ladder had nothing left.
+
+- **The XT part's kern_mega ARM** (`build/megak/apps/x3xt.bin`,
+  `-DPKG_MEGA`, row 3 of kern_mega's XTMP3.O88): every store into the part
+  is `CSDO insn` with `[CSEG x]` - `cs:` in the shipped part, which stays
+  byte-identical (58,698 bytes, `cmp`), and in the arm `push ds / mov ds,
+  [cs:x3x_dsel] / insn / pop ds`, `x3x_dsel` banked from DS at every verb's
+  entry (the ABI's DS is the part's data segment). The run table
+  (`x3x_mkruns`) is one `CSDO_ON` run, the dword counters one switch per
+  pair, the two `push cs / pop es` destinations ES = `[cs:x3x_dsel]`, and
+  the generated kernels' clip count goes through CSDO too
+  (`tools/x3xtgen.py`, which now emits `X3X_KSLOT` per arm). The arm: 60,618
+  bytes (+1,920), 30,512 resident after OPEN's shrink (+816); XTMP3.O88 on
+  kern_mega's disk 96,399 -> 96,504.
+- **`x3_bvcall`** (`x3eng.inc`, both builds) stored a verb's vector through
+  CS once a CAPS/OPEN/RESET; it is stored through our DS now (+4 bytes).
+- Per granule the arm pays ~140 DS loads where it paid ~140 traps - on a 286
+  in protected mode `mov ds, m16` is 19 clocks and `pop ds` 20, against the
+  trap's ~884. kern_big pays NOTHING: the shipped part is the same bytes.
+
+**The rest:**
+
+- **`apps/os88spk.inc` / `apps/os88spkfx.inc`**, 80-100 traps a speaker play
+  (Audio, Tracker, MIDIRack, the Video Player): `os88spk_lpt`, `_init`,
+  `_go`, `os88spkfx_init` and `_ratchet` are called with DS = the package's
+  own - every caller checked, and VFX's part hands its data segment - and
+  store through it on every kernel: one byte shorter a site (Audio's image
+  -35, Tracker -35, MIDIRack -20, the Video Player -35, XTMP3 -35 with the
+  bvcall's +4). `os88spk_go`'s real-mode IVT exchange keeps both words in
+  registers and stores them after `pop ds`. The polled Covox (MIDIRack's
+  `OS88SPK_POLL`, 16 sites) stays: it runs with the producer's DS, and only
+  on an 8088. SPEC.md 34.11.1.1.
+- **CTRL.DRV's Shut Down spinner** (~990 traps in 10 s, h1): `OS88_SPINNER`
+  expanded outside `.boot2` is a module's copy and stores through CSDO and
+  `PUSH_CSDATA` (kernel/spinner.inc) - the SECTION decides, so no instance
+  can forget. 0 fault lines in 10 s of the spinning screen on 86Box's mr286
+  after. kern_big's and kern_small's CTRL.DRV byte-identical; kern_mega's
+  15,522 -> 15,541, and its kernel.bin moves only the two immediates that
+  carry that size.
+- **Notepad's save** (`np_save .staged`, one trap a save): DS comes back from
+  the stack rather than from `push cs / pop ds`. Same size.
+- **The installer's find buffer** (~1,700 traps an install, `dsk_find_x
+  .staged` filling HDDTOOL.DRV's record through ES = its CS):
+  `hd_find_di`, `hd_ivbr_get` and the bench log's write take ES = our DS.
+  HDDTOOL.DRV 12,268 -> 12,263 on the disk, its image the same size.
+- **Left by design: SOUND.DRV's `sbl_unhook`** restores its IRQ vector
+  through ES = 0, two traps a Restart. That is `mega_null0`'s designed path:
+  it runs the store and re-reads the IVT into the IDT (`mega_ivt_sync`),
+  which is what keeps a hook written after `mega_enter` in force. Not a CS
+  write, and not worth a door.
+
+**The ratchet** (`tests/unit/t_cswrite.py`, fast) now walks apps/xtmp3/,
+apps/notepad/ and the two speaker libraries as well, and `--census DIR`
+prints any tree. `apps/` as a whole is **1,019 writes and 169 pairs in 101
+files** - not gated: the largest are SHEET (305), WEAVE's `wvm.inc` (152),
+WIN16 (`w16mdi` 104, `w16lzver` 76, `w16task` 47, `w16syslib` 20), C64's JIT
+(59), DOS (`dos.asm` 28 + 18 pairs, `dosw` 21), the Video Player (20, the
+LOADALL path kern_mega refuses), REALDMG's PPU (12), VBATTLE's input (10),
+Lemmings' blitter (3 + 8 pairs, h5's D2) - and three host test programs
+(`hosttest/`) that never run on the guest.
+
+**Harness:** `vm/386-mega-cdrom` carries a seeded CMOS now
+(`nvr-seed/micronics386.nvr`, h2's), so the kern_mega 86Box port boots it
+(`OS88_MEGA_VM=386-mega-cdrom`) instead of stopping in BIOS setup.
+
+**Rows:** `x3live386` (soak, 86Box): Auto plays NEONDRV.MP3 live on XT
+Standard measured >= 1.25, frames counting, nothing charged to a loaded
+image - red with the XTMP3.O88 of before (Decode First, 3,473 #GP at the
+part's selector). `x3xtunitmega` (soak, Unicorn): the arm bit-exact with its
+code view mapped read-only - red with the shipped part, or with one CSDO
+taken off a line. The ratchet is the source-shape guard for the rest.

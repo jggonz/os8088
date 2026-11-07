@@ -4,6 +4,10 @@
 
     python3 tests/unit/t_cswrite.py           the gate
     python3 tests/unit/t_cswrite.py --list    every site, by file and SECTION
+    python3 tests/unit/t_cswrite.py --census DIR ...
+                                              writes and pairs per file of any
+                                              tree, gated or not (the worklist
+                                              for a tree not yet in TREES)
 
 In real mode a code segment is ordinary memory, so `mov [cs:x], ax` and
 `push cs / pop ds` are free ways to say "my own data".  In 286 PROTECTED MODE
@@ -15,7 +19,11 @@ the other build - silently, on a build nobody here can boot yet.
 
 So this counts the two idioms per file under kernel/ and drivers/ - and
 apps/pixel/, PiXEL's package and parts, which KERN-MEGA-PLAN 14.40 took to
-none, and apps/pixelstein/, whose play 14.50 took to none - and holds them to `tests/cswrites.txt`, textrules' shape:
+none, apps/pixelstein/, whose play 14.50 took to none, and what 14.150
+converted: apps/xtmp3/ (the XT backend's arm, the engine), apps/notepad/ and
+the speaker libraries every player includes (apps/os88spk.inc,
+apps/os88spkfx.inc) - and holds them to `tests/cswrites.txt`, textrules'
+shape:
 
   * a FILE NOT IN THE REGISTRY using either idiom fails - the case that
     matters, because it is what new code hits;
@@ -53,7 +61,9 @@ from harness import check, done                           # noqa: E402
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
 REGISTRY = os.path.join(ROOT, "tests", "cswrites.txt")
-TREES = ("kernel", "drivers", "apps/pixel", "apps/pixelstein")
+TREES = ("kernel", "drivers", "apps/pixel", "apps/pixelstein", "apps/xtmp3",
+         "apps/notepad")
+FILES = ("apps/os88spk.inc", "apps/os88spkfx.inc")   # (shared, in apps/ itself)
 
 LABEL = r"(?:[A-Za-z_.$@?][\w.$@?#~]*:\s*)?"
 WRITE = re.compile(
@@ -275,13 +285,15 @@ def scan(path):
     return out
 
 
-def sources():
-    for sub in TREES:
-        for base, _dirs, files in os.walk(os.path.join(ROOT, sub)):
-            for f in sorted(files):
+def sources(trees=TREES, files=FILES):
+    for sub in trees:
+        for base, _dirs, names in os.walk(os.path.join(ROOT, sub)):
+            for f in sorted(names):
                 if f.endswith((".asm", ".inc")):
                     yield os.path.relpath(os.path.join(base, f),
                                           ROOT).replace("\\", "/")
+    for f in files:
+        yield f
 
 
 def registry():
@@ -310,6 +322,19 @@ def main():
         sites = scan(os.path.join(ROOT, p))
         if sites:
             found[p] = sites
+
+    if "--census" in sys.argv:
+        trees = sys.argv[sys.argv.index("--census") + 1:] or ["apps"]
+        tw = tq = n = 0
+        for p in sources(trees, ()):
+            sites = scan(os.path.join(ROOT, p))
+            if sites:
+                w = sum(1 for s in sites if s[1] == "write")
+                q = len(sites) - w
+                tw, tq, n = tw + w, tq + q, n + 1
+                print("%4d %3d  %s" % (w, q, p))
+        print("%d writes and %d pairs in %d files" % (tw, tq, n))
+        return
 
     if "--list" in sys.argv:
         for p in sorted(found):

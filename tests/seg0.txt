@@ -41,3 +41,4 @@
 1 drivers/hdd/hdxms.inc  # hd_xa_a20, HDD.DRV's XMS ring: its own A20 probe through 0000 and FFFF
 3 drivers/xmem/xmem.asm  # XMEM.DRV, which kern_mega does not ship (its A20 and HMA work is mega_enter's)
 1 kernel/megados.inc  # mega_wrprobe's A20 test through 0000 and FFFF: the boot blob, REAL MODE, before mega_enter has switched
+2 apps/os88spk.inc  # IRQ0's IVT cell exchanged through DS = 0 inside the door's IF = 0 window, by os88spk_go's REAL-MODE kernel arm (under CPU_F_PM the door writes the GATE, AL = 2, and kern_mega's real-mode bracket refuses AL = 0 first: 34.11.1.1) and by os88spk_pgo, the polled Covox, which refuses anything but CPU_8086

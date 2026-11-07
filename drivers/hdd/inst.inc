@@ -804,7 +804,7 @@ hd_bn_save:
     mov cx, [hd_bp]
     sub cx, hd_bbuf
     xor dx, dx
-    push cs
+    push ds
     pop es
     mov bx, hd_bbuf
     mov si, hd_s_bfile
@@ -2526,8 +2526,8 @@ hd_isd_add:
 hd_ivbr_get:
     call os88_ent
     push es
-    push cs
-    pop es
+    push ds                     ; (our DATA segment: under kern_mega CS is a
+    pop es                      ; read-only code alias, KERN-MEGA-PLAN 14.150)
     mov bx, hd_vbrtpl
     mov cx, 512
     xor dx, dx
@@ -2570,9 +2570,9 @@ hd_ifind_cx:
     mov di, hd_ifind
 hd_find_di:
     push es
-    push cs
-    pop es
-    call OSAPI_FILE_FIND_RAW
+    push ds                     ; ES = our DATA segment, which the kernel's
+    pop es                      ; copy writes: through CS it was ~1,700
+    call OSAPI_FILE_FIND_RAW    ; completed #GPs an install under kern_mega
     pop es
     ret
 

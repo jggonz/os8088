@@ -6890,6 +6890,31 @@ SOAK = [
         wants=("build/mega.img", "build/megak/kernel.map",
                "build/megarun.o88", "build/megak/apps/xtmp3.o88",
                "build/megak/apps/xtmp3.bin")),
+    Row("x3live386", "soak", py("tests/x3live386.py"), 30.0,
+        "XT-MP3 PLAYS LIVE ON A 386DX-25 UNDER kern_mega (KERN-MEGA-PLAN "
+        "14.150, SPEC.md 121.5): 86Box's vm/386-mega-cdrom (Micronics "
+        "386DX-25, SB16, its CMOS seeded) with build/mega.img and "
+        "megaapps.img, NEONDRV.MP3 opened from B:\\MEDIA. Auto measures "
+        "Quarter STANDARD at 0.51 on both kernels and decides on XT "
+        "Standard: kern_big plays it live at 1.79, and so must kern_mega - "
+        "x3_md MD_LIVE on X3Q_XTSTD measured 1.25 or better, granules and "
+        "frames counting, and no exception charged to a loaded image. RUN "
+        "RED: --apps with the pre-14.150 XTMP3 (the shipped XT part in the "
+        "arm, stores through CS) - XT Standard 0.91, Decode First, 3,473 "
+        "#GP at the part's selector. 30s is 27 measured",
+        needs=("86box",),
+        wants=("build/mega.img", "build/megaapps.img",
+               "build/megak/apps/xtmp3.map", "build/megak/kernel.map")),
+    Row("x3xtunitmega", "soak", py("tests/x3xtunit.py", "--mega"), 30.0,
+        "x3xtunit on the XT part's kern_mega ARM (x3xt.asm -DPKG_MEGA, "
+        "KERN-MEGA-PLAN 14.150) in a protected-mode-shaped map: the part's "
+        "CODE view read and execute only and its DATA a second view of the "
+        "same bytes handed as DS - so every expanded table, granule, clip "
+        "count and stat must be bit-exact AND no store may go through CS "
+        "(Unicorn's write fault, named at its CS:IP). RUN RED: --mega "
+        "--shipped faults at OPEN's first store, and so does the arm with "
+        "one CSDO taken off a line. 30s is 26 measured",
+        needs=("unicorn", "nasm", "numpy")),
     Row("megasheet", "soak", py("tests/megasheet.py"), 80.0,
         "SHEET ABOVE 1MB UNDER kern_mega (KERN-MEGA-MEMORY-PLAN MC7): it "
         "far-calls code in two claims - the chart and macro modules, parts "

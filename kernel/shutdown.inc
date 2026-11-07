@@ -301,7 +301,7 @@ sd_spinadr:
     mov es, [vid_seg]
     ret
 
-OS88_SPINNER sd, 0
+OS88_SPINNER sd, 0                   ; (a module's copy: CSDO on kern_mega)
 
 sd_question db 'Shut down os8088?', 0
 sd_save     db 'Save your work before continuing.', 0
