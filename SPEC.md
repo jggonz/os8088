@@ -39844,13 +39844,14 @@ first eight sectors of track 0, and the mount is about to want all of them.
 
 So a full mount **empties the cache first**, before the boot-sector read and
 before the banked-head check (so a fixed volume's listing mount drops it
-too), and reads LBA 0 THROUGH the empty cache with a one-byte cap,
-`[dsk_rah_hint]`, at **8**. `dsk_rah_fill` takes the smaller of the track's
-remainder and the cap. Eight because the read runs under the fallback 9/2,
+too), and reads LBA 0 THROUGH the empty cache with the fill's ceiling,
+`[dsk_rah_lim]` - the chunk's nine sectors at every other read - lowered to
+**8**. `dsk_rah_fill` takes the smaller of the track's remainder and that
+ceiling, one compare for the cap and the chunk (kernel size pass 18). Eight because the read runs under the fallback 9/2,
 before the BPB says what the disk is, and eight is the most every geometry
 §18.2's rule 11 admits has on its first track: an 8-sector track 0 would
-refuse a ninth. The cap is disarmed straight after that read, before its
-failure test, and on the banked path, so no other fill ever sees it.
+refuse a ninth. The ceiling is put back straight after that read, before its
+failure test, and on the banked path, so no other fill ever sees the cap.
 
 **What the swap detector still guarantees, exactly as before.** The cache is
 empty when the read starts, so the boot sector necessarily comes off the

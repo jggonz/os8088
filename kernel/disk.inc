@@ -4137,7 +4137,7 @@ disk_mount_x:
     cmp word [dsk_dseg], 0
     je .nolist
     call dsk_rah_flush
-    mov byte [dsk_rah_hint], 8
+    mov byte [dsk_rah_lim], 8   ; the fill's ceiling, lowered to the cap
 .nolist:
 %endif
     call dsk_bpb_bank_get
@@ -4150,7 +4150,7 @@ disk_mount_x:
     pop es
     xor ax, ax                  ; LBA 0
 %ifdef DSK_RAHINT
-    cmp [dsk_rah_hint], al
+    cmp byte [dsk_rah_lim], DSK_RAH_SECS
     jne .thru                   ; a listing mount: the cache is empty (above)
 %endif
     inc byte [dsk_rah_busy]     ; NEVER from §18.95's cache: this read is the
@@ -4167,29 +4167,29 @@ disk_mount_x:
                                 ; the banked path never filled - the bank
                                 ; restored the signature along with the head
 %ifdef DSK_RAHINT
-    jmp short .bpb_staged
-    nop                         ; PARITY, never executed (kernel hot-paths
-                                ; pass 1): this arm is an odd 59 bytes, and
-                                ; dsk_next_clus_x below keeps its measured
-                                ; parity on both kernels
+    jmp short .bpb_staged       ; (the arm is an even 58 bytes since kernel
+                                ; size pass 18, so the parity pad that kept
+                                ; dsk_next_clus_x at its measured parity is
+                                ; gone)
 .thru:
     call dsk_rd1_x              ; ...so this misses and fills, off the platter
-    mov byte [dsk_rah_hint], 0  ; disarmed at once, BEFORE the failure test
-    jc .jfail                   ; (mov leaves CF): a refused LBA 0 must not
-                                ; leave the next unrelated fill capped
+    inc byte [dsk_rah_lim]      ; disarmed at once, 8 back to DSK_RAH_SECS,
+    jc .jfail                   ; BEFORE the failure test (inc leaves CF): a
+                                ; refused LBA 0 must not leave the next
+                                ; unrelated fill capped
     call dsk_bpb_sig
-    mov si, dsk_rah_tab         ; .resig: every live chunk is the one that
+    mov si, dsk_rah_tab + RAH_SIG ; .resig: every live chunk is the one that
     mov cx, DSK_RAH_RUNS        ; read filled - the cache was emptied for it -
 .resig:                         ; so every record takes THIS disk's signature,
-    mov [si+RAH_SIG], ax        ; which dsk_bpb_sig leaves in AX. The fill
+    mov [si], ax                ; which dsk_bpb_sig leaves in AX. The fill
     add si, RAH_REC             ; stamped the one mounted before, and a chunk
     loop .resig                 ; of the new disk under the old disk's key is
                                 ; the one thing this cache must never hold
 %endif
 .bpb_staged:
 %ifdef DSK_RAHINT
-    mov byte [dsk_rah_hint], 0  ; ...and on the banked path, which never read
-%endif
+    mov byte [dsk_rah_lim], DSK_RAH_SECS ; ...and on the banked path, which
+%endif                          ; never read
     call dsk_bpb_check          ; fills the 18.1 vars + disk_spt/disk_heads
     jc .jfail
     call desk_learn_x           ; ...which is what settles a floppy drive's
@@ -6864,17 +6864,21 @@ dsk_lbahi:   dw 0                ; the HIGH word of the next transfer's LBA
 %endif
 %endif
 %ifdef DSK_RAHINT
-dsk_rah_hint: dw 0               ; A FILL'S CAP, in sectors, armed by a LISTING
-                                 ; MOUNT across its LBA 0 read alone
-                                 ; (disk_mount_x step 1) and 0 otherwise. That
-                                 ; read fills under the fallback 9/2, before
-                                 ; the BPB says what the disk is, and 8 is the
-                                 ; most every floppy geometry SPEC.md 18.2 rule
-                                 ; 11 admits has on track 0 (kernel hot-paths
-                                 ; pass 1, SPEC.md 18.95.11). .text with a real
-                                 ; initialiser: -f bin zeroes nothing. A BYTE,
-                                 ; in a word so `.text` after it keeps an even
-                                 ; shift
+dsk_rah_lim: dw DSK_RAH_SECS     ; A FILL'S CEILING, in sectors: the chunk,
+                                 ; except across a LISTING MOUNT's LBA 0 read
+                                 ; (disk_mount_x step 1), which lowers it to 8
+                                 ; and puts it back. That read fills under the
+                                 ; fallback 9/2, before the BPB says what the
+                                 ; disk is, and 8 is the most every floppy
+                                 ; geometry SPEC.md 18.2 rule 11 admits has on
+                                 ; track 0 (kernel hot-paths pass 1, SPEC.md
+                                 ; 18.95.11). .text with a real initialiser:
+                                 ; -f bin zeroes nothing. A WORD whose high
+                                 ; byte stays 0, because dsk_rah_fill compares
+                                 ; it with AX and the mount writes its low byte
+%if DSK_RAH_SECS != 9
+  %error "disk_mount_x disarms dsk_rah_lim's listing cap of 8 with an `inc`: DSK_RAH_SECS is assumed 9, one above it"
+%endif
 %endif
 dsk_rah_cap:  db DSK_RAH_AUTO    ; A CEILING SOMEBODY ELSE SET (SPEC.md
                                  ; 18.95.8): DSK_RAH_AUTO = nobody has, which
@@ -7042,18 +7046,19 @@ dsk_rah_fill:
     mov ax, [disk_spt]
     sub ax, dx                  ; sectors left in DI's track, >= 1
 %ifdef DSK_RAHINT
-    mov cx, [dsk_rah_hint]      ; A LISTING MOUNT'S LBA 0 (kernel hot-paths
-    jcxz .nohint                ; pass 1): no more than the cap. Its fill runs
-    cmp ax, cx                  ; under the fallback 9/2, and an 8-sector
-    jbe .nohint                 ; track 0 would refuse a ninth. CX is free:
-    mov ax, cx                  ; .vol loads it next. `mov`, not `xchg`: the
-                                ; extra byte keeps what follows at an even
-                                ; shift
-.nohint:
-%endif
+    cmp ax, [dsk_rah_lim]       ; ...and no more than the CEILING: the chunk,
+    jbe .vol                    ; DSK_RAH_SECS - or 8 across a listing mount's
+    mov ax, [dsk_rah_lim]       ; LBA 0 (kernel hot-paths pass 1), whose fill
+                                ; runs under the fallback 9/2, where an
+                                ; 8-sector track 0 would refuse a ninth. ONE
+                                ; word, so the cap and the chunk are one
+                                ; compare where they were two (kernel size
+                                ; pass 18, -11, and faster on every fill)
+%else
     cmp ax, DSK_RAH_SECS
     jbe .vol
     mov ax, DSK_RAH_SECS
+%endif
 .vol:
     mov cx, [dsk_totsec]
     sub cx, di                  ; ...and how many the volume has left. At or
@@ -7125,7 +7130,15 @@ dsk_rah_fill:
                                 ; == DSK_RAH_SECS making slot*512 it, with CL
                                 ; still the 9 the multiply was given
     pop dx                      ; DX = the chunk length again
-    and word [si+RAH_N], 0      ; it holds nothing until the read works
+    mov [si+RAH_N], ch          ; it holds nothing until the read works: CH
+                                ; is 0 (CX = 9, the multiply's), and a byte is
+                                ; the whole count - RAH_N is a length of at
+                                ; most DSK_RAH_SECS, its high byte 0 from the
+                                ; flush every claim starts with to every word
+                                ; store below (kernel size pass 18, -1)
+%if DSK_RAH_SECS > 255
+  %error "dsk_rah_fill clears RAH_N with a BYTE store: a chunk must stay under 256 sectors"
+%endif
     mov [si+RAH_LBA], di
     mov cx, dx
     mov es, [dsk_rah_seg]
