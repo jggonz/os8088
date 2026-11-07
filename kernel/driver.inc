@@ -3571,13 +3571,12 @@ drv_load_at:
                                 ; INSIDE the volume bracket, as it always ran.
                                 ; BP is the file size and is spent by now
     jc .fail
-%ifdef KERN_BIG
     jmp short .out
+
+%ifdef KERN_BIG
 .ovl:                           ; `je` here off an equal compare: CF = 0
     mov byte [bx+DRVR_ERR], DRVE_OK
-%endif                          ; (with no .ovl - kern_small - the attach
-                                ; falls into .already's jump: kernel size
-                                ; pass 18, -2 there)
+%endif
 .already:                       ; ...and `jne` here off `cmp word [x], 0`,
     jmp short .out              ; which cannot borrow: CF = 0 both ways in
 .nodisk:
