@@ -435,18 +435,23 @@ ITEMS = [
      "choose a command from the menu under it, and each command's clip "
      "joins the loop and returns to it, over the battle's music. Each disk "
      "carries the program and an original demo battle, drawn and scored for "
-     "this project. The four sizes are for CGA; the 720KB and 360KB disks "
-     "carry a shorter battle, without its longest clip and with two bars of "
-     "its music. VBATV144.IMG is the demo in VGA colours and VBATH144.IMG "
-     "the demo for Hercules, both 1.44MB; the VGA disk also carries "
-     "VBATTLED.O88, the program that writes a record of each play for "
-     "finding out why a machine stutters. A hard disk plays a battle best: "
-     "copy the program and the battle onto one. The battle builder in the "
-     "tools zip makes a battle out of your own footage.",
+     "this project, for CGA; the 720KB and 360KB disks carry a shorter "
+     "battle, without its longest clip and with two bars of its music. A "
+     "hard disk plays a battle best: copy the program and the battle onto "
+     "one. The battle builder in the tools zip makes a battle out of your "
+     "own footage.",
      [("vbattle.img", "1.44MB", ""), ("vbattle120.img", "1.2MB", ""),
-      ("vbattle720.img", "720KB", ""), ("vbattle360.img", "360KB", ""),
-      ("vbattlev.img", "1.44MB", "the demo for a VGA"),
-      ("vbattleh.img", "1.44MB", "the demo for a Hercules card")]),
+      ("vbattle720.img", "720KB", ""), ("vbattle360.img", "360KB", "")]),
+    ("progs", "Video Battle for VGA", False,
+     "The demo battle in VGA colours, with the program, on one 1.44MB disk. "
+     "It also carries VBATTLED.O88, the program that writes a record of "
+     "each play, for finding out why a machine stutters; the battle "
+     "builder's vbtprof.py reads it.",
+     [("vbattlev.img", "1.44MB", "")]),
+    ("progs", "Video Battle for Hercules", False,
+     "The demo battle for a Hercules card, with the program, on one 1.44MB "
+     "disk.",
+     [("vbattleh.img", "1.44MB", "")]),
     ("progs", "Weave", False,
      "Web-style programs -- markup, script and formulas -- compiled into one "
      "bundle file and run natively. Carries the runtime, three demo "

@@ -110,6 +110,9 @@ BLURB = {
     "XTMP3": "An MP3 player for every PC, with three demo songs.",
     "Weave": "Weave apps, ready to run.",
     "Windows 3.x programs": "WIN16, with room for your Windows 3.0 and 3.1 programs.",
+    "Video Battle": "A battle played as joined video clips, with the CGA demo battle.",
+    "Video Battle for VGA": "The demo battle in VGA colours, and the program that records a play.",
+    "Video Battle for Hercules": "The demo battle for a Hercules card.",
     "Weave editor": "The Weave editor, with the demo apps' sources.",
     "Video demo": "A ready-installed hard disk with demo videos: CGA and "
                   "Hercules for an XT, VGA for a 286.",
@@ -144,7 +147,7 @@ TOOLS = [
      "summary": "Makes a Video Battle out of your own footage: the idle loop, "
                 "the actions' clips joined to it, the music, the menus and "
                 "the enemy, built into a .VBT file and a disk to play it from.",
-     "files": [("tools/os88vbtgui.py", "The builder's window. GUIDE.HTML beside it in the tools zip walks through making a battle."),
+     "files": [("tools/os88vbtgui.py", "The builder's window, with a guide."),
                ("tools/os88vbt.py", "The same builder, run from a terminal.")]},
     {"id": "tool-proxy", "title": "Web proxy",
      "summary": "Runs on your modern computer so the os8088 Browser can reach "

@@ -107,6 +107,15 @@
   "strings": null,
   "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
  },
+ "BATTLE_VBT": {
+  "sources": [
+   "tools/os88vbt.py",
+   "tools/vbtscene.py"
+  ],
+  "stamped": "05aa6e2c",
+  "strings": "0848db46e848836d",
+  "why": "the demo as demo_project builds it (full and --floppy), the four disks' versions"
+ },
  "BEVERLY_MOD": {
   "sources": [],
   "stamped": "e4576a70",
@@ -1206,6 +1215,15 @@
   "strings": "3238a0f33fee57d6",
   "why": "the start-up line and the window label name File > Open Location..., the Browser's real menu item; the page quotes the new start-up line"
  },
+ "TOOL_VBATTLE": {
+  "sources": [
+   "tools/os88vbtgui.py",
+   "tools/os88vbt.py"
+  ],
+  "stamped": "05aa6e2c",
+  "strings": "23d8f003319c2003",
+  "why": "written against the builder's README in os88vbtbundle.py, os88vbtgui.py's tabs and Build tab labels, and os88vbt.py's commands"
+ },
  "TOOL_VENC": {
   "sources": [
    "tools/os88venc.py",
@@ -1242,6 +1260,22 @@
   "stamped": "e4576a70",
   "strings": null,
   "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "VBATTLED_O88": {
+  "sources": [
+   "apps/vbattle"
+  ],
+  "stamped": "05aa6e2c",
+  "strings": "9ce2b7f5173e96ca",
+  "why": "written against vbprof.inc (VBPROF1-9.DAT, XMS or conventional record) and SPEC.md 126.8"
+ },
+ "VBATTLE_O88": {
+  "sources": [
+   "apps/vbattle"
+  ],
+  "stamped": "05aa6e2c",
+  "strings": "9ce2b7f5173e96ca",
+  "why": "written against apps/vbattle (window strings, File menu, keys in vbgame.inc/vb_keys, adapter choice in vb_load) and SPEC.md 126; shots taken on the VGA XT"
  },
  "VESA_DRV": {
   "sources": [

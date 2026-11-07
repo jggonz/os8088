@@ -407,6 +407,18 @@ kind = "program"
 summary = "Plays full-motion .V88 videos, in a window or full screen, with sound on a Sound Blaster or the PC speaker."
 short = "Plays .V88 videos"
 
+["VBATTLE.O88"]
+title = "Video Battle"
+kind = "program"
+summary = "A turn-based battle whose picture is video: an idle loop plays while you pick commands from a menu, and each command's clip joins the loop and returns to it, over the battle's music."
+short = "Battles made of video clips"
+
+["VBATTLED.O88"]
+title = "Video Battle, with a play record"
+kind = "program"
+summary = "Video Battle built to write a record of each play, VBPROF1.DAT, beside itself, for finding out why a battle stutters on a machine."
+short = "Video Battle that logs each play"
+
 ["INSTALL.O88"]
 title = "Install"
 kind = "program"
@@ -767,6 +779,24 @@ title = "Logo video"
 kind = "video"
 summary = "A short looping animation of the os8088 logo burning into a computer chip. Plays in the Video Player."
 short = "Looping logo animation"
+
+["BATTLE.VBT"]
+title = "Demo battle"
+kind = "video"
+summary = "The demo battle for CGA: ARI and BRAM against the BEETLE, drawn and scored for this project. The 1.44MB and 1.2MB disks carry the whole battle; the 720KB and 360KB disks a shorter one, without the Limit clip and with two bars of its music. Double-click it to play it in Video Battle."
+short = "Demo battle, CGA"
+
+["BATTLEV.VBT"]
+title = "Demo battle, VGA"
+kind = "video"
+summary = "The demo battle in eight VGA colours. Video Battle plays it on a VGA in place of BATTLE.VBT when the two are side by side."
+short = "Demo battle, VGA colours"
+
+["BATTLEH.VBT"]
+title = "Demo battle, Hercules"
+kind = "video"
+summary = "The demo battle for a Hercules card, in its 720 x 348 black and white. Video Battle needs it on a Hercules; a CGA battle does not play there."
+short = "Demo battle, Hercules"
 
 # --- music --------------------------------------------------------------------
 

@@ -410,8 +410,8 @@ vb_entry:
     cmp byte [vb_found], 0          ; NO BATTLE beside us, none embedded, no
     jne .some                       ; document: the window says to open one,
     mov byte [vb_none], 1           ; and Enter plays nothing (the owner)
-    call vb_t4set
 .some:
+    call vb_t4set                   ; (else the file it found: Plays ...)
     mov bx, [vb_win]
     mov si, vb_menus                ; File > Open... (and Close)
     call OSAPI_MENU_SET
@@ -5264,8 +5264,9 @@ vb_errname:
     ret
 
 ; vb_t4set - the window's fourth line: the file it plays - the document,
-; the battle embedded in us, or after a play the one it read - else that
-; it needs BATTLE.VBT
+; the battle embedded in us, after a play the one it read, or the one the
+; title picture's read found beside us (vb_coverload's [vb_namep]) - else
+; that it needs BATTLE.VBT
 vb_t4set:
     mov word [vb_t4p], vb_s_t4
     cmp byte [vb_none], 0
@@ -5282,7 +5283,10 @@ vb_t4set:
     mov si, vb_selfname
     mov ax, [vb_embat]
     or ax, [vb_embat+2]
-    jz .out
+    jnz .n
+    mov si, [vb_namep]              ; (found beside us, not yet played)
+    cmp byte [vb_found], 0
+    je .out
 .n:
     push si
     mov si, vb_s_plays
