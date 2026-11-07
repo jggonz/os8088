@@ -615,8 +615,42 @@ fcp_run2:
     jz .none
 .there:
 
-    call fcp_selfchk            ; a folder may not be pasted into itself
-    jc .loop_err
+    ; A FOLDER MAY NOT BE PASTED INTO ITSELF. It was fcp_selfchk, called from
+    ; here alone and written here (kernel size pass 18, -7): its refusal is
+    ; .loop_err itself and its pass falls through. Its header:
+    ; fcp_selfchk - refuse a folder pasted into itself or into its own subtree
+    ; out: CF=1 = refuse
+    ; clobbers: AX, BX, CX, DX, flags (fcp_run's free set - see fcp_run)
+    ;
+    ; Without it the walk creates a copy inside the directory it is reading and
+    ; then finds that copy, forever - a loop bounded only by the disk filling up.
+    ; The test is a walk UP from the destination looking for the source folder's
+    ; cluster, which is the cheapest way to ask "is the source an ancestor of the
+    ; destination" on a file system with no paths. Same drive only; across drives
+    ; the two trees cannot touch.
+    cmp word [fcp_type], 2      ; only a FOLDER can contain anything
+    jb .selfok
+    mov al, [fcp_drv]
+    cmp al, [fcp_ddrv]
+    jne .selfok
+    call fcp_srcclus            ; BX = the source folder's own cluster
+    jc .selfok                  ; unreadable: the copy will fail honestly
+    mov dx, bx
+    call fcp_godst
+    jc .selfok
+    mov cx, FCP_MAXD + 2        ; the walk up is bounded like every other
+.selfup:
+    mov ax, [dsk_cwd]
+    cmp ax, dx
+    je .loop_err                ; the destination IS the source, or is under
+    or ax, ax                   ; it: either way the copy would eat itself
+    jz .selfok                  ; reached the root without meeting it
+    FCPX dsk_dotdot_x
+    jc .selfok
+    mov [dsk_cwd], ax
+    loop .selfup
+    jmp short .loop_err         ; the walk ran out: refused, as it was
+.selfok:
 
 %if FERR_OK != 0
   %error "fcp_run2 stores FERR_OK out of a zeroed AX"
@@ -649,46 +683,6 @@ fcp_run2:
                                 ; what keeps "every path back to the event
                                 ; loop pays" true of the NEXT caller too
 
-; -----------------------------------------------------------------------------
-; fcp_selfchk - refuse a folder pasted into itself or into its own subtree
-; out: CF=1 = refuse
-; clobbers: AX, BX, CX, DX, flags (fcp_run's free set - see fcp_run)
-;
-; Without it the walk creates a copy inside the directory it is reading and
-; then finds that copy, forever - a loop bounded only by the disk filling up.
-; The test is a walk UP from the destination looking for the source folder's
-; cluster, which is the cheapest way to ask "is the source an ancestor of the
-; destination" on a file system with no paths. Same drive only; across drives
-; the two trees cannot touch.
-; -----------------------------------------------------------------------------
-fcp_selfchk:
-    cmp word [fcp_type], 2      ; only a FOLDER can contain anything
-    jb .ok
-    mov al, [fcp_drv]
-    cmp al, [fcp_ddrv]
-    jne .ok
-    call fcp_srcclus            ; BX = the source folder's own cluster
-    jc .ok                      ; unreadable: the copy will fail honestly
-    mov dx, bx
-    call fcp_godst
-    jc .ok
-    mov cx, FCP_MAXD + 2        ; the walk up is bounded like every other
-.up:
-    mov ax, [dsk_cwd]
-    cmp ax, dx
-    je .bad                     ; the destination IS the source, or is under
-    or ax, ax                   ; it: either way the copy would eat itself
-    jz .ok                      ; reached the root without meeting it
-    FCPX dsk_dotdot_x
-    jc .ok
-    mov [dsk_cwd], ax
-    loop .up
-.bad:
-    stc
-    ret
-.ok:
-    clc
-    ret
 
 ; -----------------------------------------------------------------------------
 ; fcp_srcclus - the clipboard entry's own first cluster
@@ -1004,15 +998,16 @@ fcp_step:
     jmp fcp_stop                ; a tail call: fcp_step has nothing of its own
                                 ; on the stack here, and fcp_stop leaves AL
 .ask:
-    call fcp_unbatch            ; the pause is a trip through the event loop,
+    mov al, FCPS_ASK            ; (first: fcp_unbatch and dskw_sync keep AX,
+    jmp fcp_unbatch             ; so its `ret` is ours - kernel size pass 18)
+                                ; the pause is a trip through the event loop,
                                 ; where anything else that writes must behave
                                 ; normally (fcp_step raises the batch again on
                                 ; the way back in) and where the listing must
                                 ; be this volume's again (SPEC.md 18.9) - the
                                 ; same pair, for the same two reasons, as the
-                                ; one in fcp_stop
-    mov al, FCPS_ASK            ; the buffer and the frames stay claimed:
-    ret                         ; this is a pause, not an end
+                                ; one in fcp_stop. The buffer and the frames
+                                ; stay claimed: this is a pause, not an end
 .fail:
     jmp fcp_run2.seterr         ; fcp_run2's own three-instruction exit (pass 16)
 
@@ -1691,10 +1686,13 @@ fcp_room:                       ; clobbers AX, BX, DX - its ONE caller reloads
 ; ignored: we are already failing, and there is nothing better to report.
 ; -----------------------------------------------------------------------------
 fcp_undo:
-    cmp byte [fcp_made], 0
-    je .out
+    shr byte [fcp_made], 1      ; CF = it was made, and the byte is 0 after
+    jnc .out                    ; either way: [fcp_made] is only ever 0 or 1
+                                ; (.bss is zero at boot, SPEC.md 2.5) - the
+                                ; test and the clear in one (kernel size pass
+                                ; 18, -6)
     push ax                     ; **AX AND NOTHING ELSE.** Its one caller is
-    mov byte [fcp_made], 0      ; fcp_xfer's `.err`, whose very next
+                                ; fcp_xfer's `.err`, whose very next
     call fcp_gofd               ; instructions pop BX, CX, DX, SI, DI and ES
                                 ; off the stack and whose `stc` sets the flags
                                 ; after this returns - so those are free and
@@ -2002,8 +2000,9 @@ FCPBODY fcp_door
     jmp fcp_x5
 .bad:
     mov al, FERR_NAME           ; "bad argument", which is the SDK's own
-    jmp short .ans              ; reading of that code
-.busy:
+    SKIPF2                      ; reading of that code (test ax, imm16 over
+.busy:                          ; the load below: .ans writes every flag it
+                                ; reads - kernel size pass 18, -1)
     mov al, FERR_NODISK         ; the nearest true thing: the machinery this
     jmp short .ans              ; needs is not available to you right now,
                                 ; which is fcp_pfail's own precedent

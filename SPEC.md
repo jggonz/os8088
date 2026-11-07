@@ -52006,7 +52006,8 @@ rather than paid for:
 - **Left, up to 7px**: white margin, and **nothing else** — see §22.11.1.1,
   which is the reason that sentence is short now. It used to be white margin
   *plus up to three columns of the 16x16 icon*, erased and re-iconed by
-  `fm_draw_licon` and only when the rounding really did reach them.
+  `fm_draw_licon` and only when the rounding really did reach them (the pass
+  that did it is deleted now, kernel size pass 18 - §22.11.1.1).
 
   **The erase in front of that was not belt and braces, and leaving it out was
   the one bug this shipped before the pixel diff caught it** — worth keeping
@@ -52042,7 +52043,7 @@ draws nothing.
 ##### 22.11.1.1 The strip pass is unreachable, and the icon inset is why
 
 The row icon is **8px** into the content, not 4, and the name is at **32**, not
-24 (`fm_draw_lrow`). Both are §11.94.3's alignment work — and one of them is
+24 (the row painter in `fm_draw_lrows`). Both are §11.94.3's alignment work — and one of them is
 not, which is the part to read before moving either.
 
 **What alignment buys here is not a text pen.** `ico_pass` lands each 16-pixel
@@ -52059,9 +52060,13 @@ were.
 most 7 pixels, so an icon 8px in **cannot be cut by the strip at any window
 position** — and with §11.94.1's alignment default `x1 == fm_cx` exactly, so
 the strip is empty as well as harmless. `align_up(cx) > cx+8` is unsatisfiable.
-The pass is therefore dead code, and it is **kept** rather than deleted: it is
-four instructions of test that state the invariant, and moving the inset back
-would need it. Its residue is `wm_snap_ax`'s one refusal — a window **dragged**
+The pass was therefore dead code. It was kept for a while as four instructions
+of test that stated the invariant, and **kernel size pass 18 deleted it, test
+and all (-70 bytes resident, with its `fm_draw_licon`)**: the invariant is an
+assembly-time `%if` on `FM_PEN_X` (the inset `fm_pen8` adds) now, which fails
+the build if the inset
+goes below 7 - and moving it back there needs the pass back, which is the
+parent of that commit. Its residue is `wm_snap_ax`'s one refusal — a window **dragged**
 to x=0 at the full screen width, where 7 becomes the answer and those seven
 columns are margin. A **maximized** window is not that case, and §11.95.2 is
 why: it drops its left border, so its content starts at `W_X` = 0 and is
@@ -108849,7 +108854,9 @@ bytes** in it. So the cluster costs the file **nothing**: 1,220 bytes before
 and after.
 
 `asc_seed` runs at the end of `asc_use`, after `asc_merge_ext`, and the two
-choices in it are the load-bearing ones:
+choices in it are the load-bearing ones. (Both are PARTS of `asc_use_x` since
+kernel size pass 18 - written at their one call, `asc_row_take` inside
+`asc_seed`'s walk - and keep their names as the comments that head them.)
 
 - **`assoc_app_of`, not `asc_slot_of` — find, never create.** A slot only
   matters if some extension points at it, and the kernel's table is
