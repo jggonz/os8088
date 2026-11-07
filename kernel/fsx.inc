@@ -726,6 +726,7 @@ fsx_mode:
     mov al, [vid_kind]          ; read ONCE, accumulator form - AL is spent
     cmp al, VID_HERC            ; here (the mul's product went into SI four
     jne .f2                     ; instructions above) and the caller's AX is
+                                ; on the stack - and so is AH, below
 %ifdef KERN_MEGA
     VSEG ax, 0xB000             ; kern_mega: the row holds B800h's SELECTOR
     mov [es:di+FSI_SEG-FSI_SIZE], ax ; after the switch, so B000h's whole
@@ -734,12 +735,14 @@ fsx_mode:
                                 ; FSXM_TEXT80 row's segment has a zero low
                                 ; byte, so its HIGH byte is the whole edit
 %endif
-    mov byte [es:di+FSI_PAGES-FSI_SIZE], 1
-    jmp short .f3
-.f2:
-    cmp al, VID_CGA             ; ...on the stack
+    mov ah, 1                   ; the PAGE COUNT through AH, one register store
+    jmp short .fp               ; for both arms where each carried a five-byte
+.f2:                            ; immediate one (kernel size pass 18, -2)
+    cmp al, VID_CGA
     jne .f3
-    mov byte [es:di+FSI_PAGES-FSI_SIZE], 4
+    mov ah, 4
+.fp:
+    mov [es:di+FSI_PAGES-FSI_SIZE], ah
 .f3:
     mov [fsx_cur], ch
     clc

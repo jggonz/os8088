@@ -474,7 +474,10 @@ section .text
 ;
 ; in:       -
 ; out:      -
-; clobbers: flags
+; clobbers: AX and the flags (kernel size pass 18, -2: its callers are the
+;           reboot path's - ui_cmd_reboot, which never comes back, and
+;           HIBER.DRV's hbm_bye and hbm_down through cw_mem_disp, neither of
+;           which reads AX before writing it - so the bank went)
 ;
 ; vid_text names the PRIMARY's card. int 19h is a bootstrap and not a POST -
 ; it re-reads the boot sector and jumps, resetting no video at all - so what
@@ -494,12 +497,13 @@ section .text
 ; an empty text screen, which is the one thing that path exists to prevent.
 ; -----------------------------------------------------------------------------
 vid_reboot:
-    push ax
-    call vid_text
-%ifdef GFX_VGA                  ; without a VGA in the build the tail cannot
-                                ; run: [vid_avail]'s VGA bit is never set, so
-                                ; the test below always jumps - vid_text alone
-                                ; is already the whole of this routine there
+%ifndef GFX_VGA
+    jmp vid_text                ; no VGA: vid_text is the whole of it
+%else
+    call vid_text                ; (without a VGA in the build the tail could
+                                ; never run - [vid_avail]'s VGA bit is never
+                                ; set there - so that build is the tail jump
+                                ; above, and nothing banks AX for it)
     cmp byte [vid_kind], VID_HERC   ; the mono card is the ONLY primary int 10h
     jne .out                    ; does not drive - and on a VGA machine the CGA
                                 ; row IS the VGA doing mode 6, so vid_text has
@@ -510,9 +514,8 @@ vid_reboot:
     mov ax, 0x0003              ; refuse on a machine flagged mono
     int 0x10
 .out:
-%endif
-    pop ax
     ret
+%endif
 
 ; =============================================================================
 ; THE BOOT STATUS LINE (SPEC.md 15.6) - ENTIRELY IN THE BOOT OVERLAY
@@ -1563,19 +1566,22 @@ vid_ctx_act:
                                 ; kernel size pass 17)
     mov si, di                  ; ...and the record is
     mov di, vid_seg             ; the SOURCE this way round
-    rep movsw
-    sub si, VID_CTX_W*2         ; ...and rep movsw left SI exactly that far
-    mov di, si                  ; PAST the record it read, so the pointer is
-                                ; recovered rather than derived a second time
+    rep movsw                   ; ...and it leaves SI exactly VID_CTX_W*2 past
+                                ; the record - which is VID_CTX_VX, the word
+                                ; read next, so the three below are addressed
+                                ; off SI as it stands: no `sub si` / `mov di,
+                                ; si` to recover the pointer, and [si] is a
+                                ; byte shorter than [di+32] (kernel size pass
+                                ; 18, -6)
     mov [vid_cur], al           ; ...published here, because AL is about to
                                 ; become the record's KIND below and nothing
                                 ; between reads [vid_cur]
                                 ; ...and republish the origin every hook reads
-    mov ax, [di+VID_CTX_VX]
+    mov ax, [si+VID_CTX_VX-VID_CTX_W*2]
     mov [vid_ox], ax
-    mov ax, [di+VID_CTX_VY]
+    mov ax, [si+VID_CTX_VY-VID_CTX_W*2]
     mov [vid_oy], ax
-    mov al, [di+VID_CTX_KIND]   ; ...and HOW DEEP this display is, which is not
+    mov al, [si+VID_CTX_KIND-VID_CTX_W*2]   ; ...and HOW DEEP this display is, which is not
     call vid_depth_set          ; in the sixteen-word run and is what every
                                 ; primitive dispatches on. Two 1bpp displays
                                 ; agree about it and a VGA beside a Hercules

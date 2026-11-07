@@ -1221,12 +1221,12 @@ mou_newround:
 ; the session. IER = 0 is what actually silences a loser; the mask is the half
 ; that needed to know which wire, and only the ISR can say.
 ; ins:  none (reads [mou_port] and [mou_line])
-; outs: none (all registers preserved)
+; outs: none; CLOBBERS AX, BX, CX and the flags. NO BANK OF ITS OWN (kernel
+;       size pass 18, -5): both callers own those three already -
+;       mou_hotplug's .have banks AX..DX and leaves by kret_dx, and
+;       vmmouse.inc's vmm_boot_x banks all eight and reloads the one it reads
 ; -----------------------------------------------------------------------------
 mou_lockon:
-    push ax
-    push bx
-    push cx
     xor bx, bx
 .port:
     cmp bl, [mou_port]
@@ -1261,7 +1261,7 @@ mou_lockon:
                                     ; port, so when IT won the loop above has
                                     ; just retired both UARTs on its behalf
 %endif
-    jmp kret_cx
+    ret
 
 ; -----------------------------------------------------------------------------
 ; mou_hotplug - keep offering a hot-plugged mouse its reset (SPEC.md 9.4)
@@ -1291,11 +1291,7 @@ mou_lockon:
 ; -----------------------------------------------------------------------------
 mou_hotplug:
     cmp byte [mou_hpst], 2      ; TERMINAL: the mouse exists and its ports are
-%ifdef KERN_BIG
     je mou_newround.ret         ; settled (.have, below). ONE compare a pass
-%else
-    je .out
-%endif
     push ax                     ; for the rest of the session - and state 2 is
     push bx                     ; reached only through .have, so it implies
     push cx                     ; [mou_seen], which nothing ever clears
@@ -1378,10 +1374,10 @@ mou_hotplug:
     call mou_lockon             ; ...and only then retire the ports the mouse
     mov byte [mou_hpst], 2      ; did not speak on. State 2 is terminal: this
     jmp short .done             ; is one compare per UI pass from here on
-%ifndef KERN_BIG                ; (kern_big's settled exit is mou_newround's
-.out:                           ; ret, -1, whose odd byte evens mou_claim's
-    ret                         ; move into mou_byte there; kern_small's
-%endif                          ; claim was an even size and keeps its own)
+                                ; (the settled exit is mou_newround's ret on
+                                ; BOTH kernels since kernel size pass 18: its
+                                ; -1 evens mou_lockon's -5 on kern_small, as
+                                ; it evened mou_claim's move on kern_big in 17)
 
 ; -----------------------------------------------------------------------------
 ; mouse_unhook - silence every UART we programmed (IER=0), mask its IRQ again,
@@ -1564,8 +1560,9 @@ osapi_mouse:
     xor di, di                      ; DI = the LINE's row: IRQ4 is row 0's
     cmp byte [mou_line], MOU_L4     ; int 0Ch and mou_isr, IRQ3 row 2's -
     je .row                         ; whichever base the card answered at
-    mov di, 2
-.row:
+    inc di                          ; (two `inc`s, not `mov di, 2`: a byte
+    inc di                          ; less and no slower on an 8088, kernel
+.row:                               ; size pass 18 - the re-hook arm only)
     mov si, [di+mou_ivecs]
 %ifdef KERN_MEGA
     MEGA_SEG0 es                  ; segment 0 is the NULL selector (and no
@@ -2442,8 +2439,9 @@ KBM_NDIR    equ 8
 ; -----------------------------------------------------------------------------
 ; kbm_key - the UI task's keystroke, before anything else sees it
 ; in:  AL = ascii, AH = scan (as int 16h returned them)
-; out: CF = 1 if this key was the mouse and must not be dispatched
-;      (all registers preserved)
+; out: CF = 1 if this key was the mouse and must not be dispatched - and then
+;      AX is spent (kbm_move, kbm_btn, kbm_rclick: ui_task dispatches nothing
+;      after it and kbm_poll0 banks it); CF = 0, all registers preserved
 ; -----------------------------------------------------------------------------
 kbm_key:
     cmp byte [mou_ptr], 0
@@ -2553,8 +2551,12 @@ kbm_btn:
                                 ; opening and shutting in one press. int 16h
                                 ; is always looked at first, so cancelling the
                                 ; pending scancode here is what makes the hook
-                                ; a FALLBACK rather than a second opinion
-    push ax
+                                ; a FALLBACK rather than a second opinion.
+                                ; NO AX BANK (kernel size pass 18, -2): AX is
+                                ; spent on CF = 1, which is kbm_move's contract
+                                ; already, and both callers own it - ui_task
+                                ; dispatches nothing after a CF = 1 key, and
+                                ; kbm_poll0 and kbm_p5spend bank it themselves
     mov ax, [ticks]
     sub ax, [kbm_btick]         ; wrap-safe, like every other tick compare here
     cmp ax, KBM_GAP
@@ -2569,7 +2571,6 @@ kbm_btn:
 .held:
     mov ax, [ticks]
     mov [kbm_btick], ax
-    pop ax
     stc
     ret
 
@@ -2579,14 +2580,14 @@ kbm_btn:
 ; kbm_key has four of them (kernel size pass 8). mou_clamp, which used to
 ; stand here, went below kbm_move to make the room.
 kbm_rclick:                     ; latches too - menu_popup ends on a level poll
-    push ax                     ; of bit 1 exactly as menu_track does on bit 0
+                                ; of bit 1 exactly as menu_track does on bit 0
+                                ; (and spends AX on CF = 1 as kbm_btn does)
     xor byte [mouse_btn], 0x02
     test byte [mouse_btn], 0x02
     jz .out                     ; a release queues nothing (SPEC.md 9)
     mov ax, EVT_RDOWN
     call kbm_post
 .out:
-    pop ax
     stc
     ret
 
@@ -3434,12 +3435,14 @@ kbm_p5spend:
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
 kbm_pollm:
-    mov byte [kbm_eat], 1
+    push ax
+    mov al, 1
     jmp short kbm_poll0
 kbm_poll:
-    mov byte [kbm_eat], 0
-kbm_poll0:
-    push ax
+    push ax                     ; THE BANK FIRST, so the flag is stored from AL
+    xor al, al                  ; - three bytes where an immediate store is five,
+kbm_poll0:                      ; and kbm_pollm's own bank is the same push
+    mov [kbm_eat], al           ; (kernel size pass 18, -2)
     mov ah, 0x01
     int 0x16
     jz .p5                      ; nothing waiting
