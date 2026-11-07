@@ -19535,6 +19535,22 @@ SOAK = [
         "0D'; SLOT passes there too (a guard). 40s is 34 measured",
         needs=("86box", "nasm"),
         wants=("build/mega.img", "build/waverack.o88", "build/waverack.bin")),
+    Row("megasbgap", "soak", py("tests/megasbgap.py"), 20.0,
+        "docs/plans/KERN-MEGA-PLAN.md 14.156: a 10 s 22,050 Hz 8-bit WAV in "
+        "AUDIO from a scratch 1.44MB B: on 86Box's at286_vga_sb (the mr286, a "
+        "Sound Blaster 2.0), the card's DAC captured ($MARTYPC_WAV): the "
+        "floppy is read all through the play, and no silence inside it may "
+        "be over 400 ms, nor its silences 1.5 s in all. Two costs kern_mega "
+        "had and a real-mode kernel has not, each a revolution lost a call: "
+        "dsk_runcap bounced the look-ahead ring (a pool claim above 1MB) "
+        "nine sectors a call through the read-ahead's landing, and "
+        "mega_fdgo sought and waited 15 ms of head settle on every call. RED "
+        "on the base, measured: 540 ms silences every 2.1 s, 3.57 s in all; "
+        "OS88_MEGA_POKE='mega_fdgo.ss+0xD=9090' (always seek) 500 ms, "
+        "'dsk_runcap.hi+0x10=9090' (bounce) 450 ms. 20s is 15 measured",
+        needs=("86box", "numpy"),
+        wants=("build/mega.img", "build/megak/apps/audio.o88",
+               "build/megak/kernel.map")),
     Row("megakbcodes", "soak", py("tests/megakbcodes.py"), 15.0,
         "docs/plans/KERN-MEGA-PLAN.md 14.145: mega_k09, kern_mega's own int "
         "09h, stores the ROM's words in the BIOS ring - Ctrl on the grey "

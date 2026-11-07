@@ -14242,3 +14242,81 @@ and `mega-pkgrun` (Bochs, green on this kernel), `thewire`'s assertion 19
 (QEMU, Load Program opens `Minesweeper`); both MartyPC and QEMU legs red on
 the old arm. Cost: `.cold` +4 bytes on kern_big, kern_small and kern_mega
 alike; kern_mega's `.boot2` +1 (transient); `MEGA_RESIDENT` 62,976 unchanged.
+
+### 14.156 A 22 kHz Sound Blaster stream from a floppy ran dry: a revolution lost a call (2026-11-07) - FIXED, and one choice left
+
+**Found by the mega-release hands-on pass** (h2, D2): a 22,050 Hz 8-bit WAV
+in AUDIO on a Sound Blaster had 0.40 s of silence about 1.7 s in, 5 of 5, on
+the mr286 (SB 2.0), a 386 and a Pentium (SB16); kern_big on the mr286 played
+it whole, and an 11,025 Hz file had no gap. The reading offered with it -
+the refill read REFLECTED, SOUND.DRV's block IRQ parked in `mega_cap2` for
+the length of a BIOS call - **is not what happens**, measured on 86Box with
+exec breakpoints on `mega_fd13`, `mega_fdgo` and `mega_svc_lo` and on the
+card's IRQ 7 gate: every read of the play is NATIVE (the one reflection is
+the mount's first read, before the play: its 250 kbps guess at the 9-sector
+fallback geometry, which the 765 refuses by design), the card's IRQ
+arrives every 92 ms all through them, and the silence is SOUND.DRV's
+underrun pause (`sbl_under` counts it): the feed had nothing to give,
+because the look-ahead ring's 16KB gulps came slower than 22 KB/s. The
+throughput, not an interrupt, is kern_mega's: 22,050 bytes a second is half
+what a 1.44MB disk delivers at one call a track, and every call that misses
+the sector after the last one's waits a revolution.
+
+Two costs a real-mode kernel has not, each a revolution a call:
+
+1. **The ring was bounced** (`dsk_runcap`). AUDIO's 32KB look-ahead is a
+   pool claim above 1MB on kern_mega, and `dsk_runcap` answered 0 for any
+   buffer there, so `dsk_xfer` read it through the read-ahead's 9-sector
+   landing - a call per 9 sectors, two a track. The native path's 8237 is
+   programmed with all 24 bits (`mega_fd13` refuses only above 16MB), so for
+   a floppy unit (0/1) below 16MB with the path not switched off, the page
+   arithmetic is now done on the linear base as for a low claim, and the run
+   goes down as it is. A call the native path hands back is bounced by
+   `mega_svc` (`.refl2` -> `mega_hibnc`, a run at a time through the same
+   landing), as it always was for a program's own int 13h from a high
+   window. A fixed disk's high buffer is bounced in `dsk_xfer` as before.
+   +18 bytes of `.cold` (above 1MB on kern_mega; nothing conventional).
+2. **Every call sought and settled** (`mega_fdgo`). "A seek to where it
+   already is is one IRQ" was true, but the 15 ms head-settle wait after it
+   (`dsk_dpt+9`) is not free: it lost the next sector of a sequential read.
+   The path now leaves 80h + the physical cylinder in the BIOS's own
+   cylinder byte (40:94 + the unit) after its seek - never a number the
+   BIOS seeks to, so the BIOS's next call still seeks, as it did for the FFh
+   written there before - and skips seek and settle while that byte is still
+   there. A BIOS call that moved the head wrote its own cylinder; a
+   recalibrate (the change line, a reset found by `mm_fdrprobe`, the BIOS's
+   cleared 40:3E bit) and every failure of the path write FFh. A wrong belief
+   would read the wrong cylinder, which READ DATA refuses on the ID's C, and
+   the call falls back to the BIOS as any failure does. +32 bytes of `.mega`;
+   no `.text` byte (no new variable), conventional footprint unchanged
+   (62,976 of 68,096).
+
+kern_big and kern_small are byte-identical (A/B at one commit).
+
+**Measured** on the mr286 only (the fix is no CPU's; h2's 386 and Pentium
+runs were not repeated) - tests/megasbgap.py, a 10 s 22,050 Hz clip, 10 ms
+cells: the
+base had a 450-540 ms silence every 2.1 s, 3.57 s in all; either fix alone
+still 450-500 ms; both: longest 290-300 ms, 880-940 ms in all. kern_big on
+the same machine: longest 100 ms, 290 ms in all.
+
+**What is left, and the choice it needs (a proposal, not done).** The longest
+silence that remains is at the start of the play, the ring's first pass:
+the pool claim crosses a 64KB physical page (the ring's offset 6400h in the
+run measured), so one run a pass splits there and loses a revolution. With
+the ring claimed page-safe (an experiment: `OSAPI_MEM_CLAIM_DMA`, CX = 32, in
+`ap_ensure_bufs`) kern_mega measured longest 150 ms, 90 ms at the start -
+kern_big's figures. Two ways to have that, both the owner's to weigh:
+(a) AUDIO claims its look-ahead through the DMA door on every kernel - it IS
+a DMA target, the floppy's 8237 writes into it - which on kern_big only
+constrains placement (an MC_DMA claim still moves when declared, SPEC.md
+66.4.2) but on kern_mega moves 32KB from the pool into conventional memory,
+because that door does not go high; (b) a page-safe pool door on kern_mega
+(`mega_claimhf` honouring a head below 16MB), so the DMA door's claims go
+high too - a change to the SB's and every other DMA claim's placement.
+
+**Row**: `megasbgap` (soak, 86Box at286_vga_sb): the play at least 9.5 s,
+the FDC reading during it, no silence inside it over 400 ms, under 1.5 s in
+all. RED on the base (540 ms, 3.57 s), and with each fix poked out:
+`OS88_MEGA_POKE='mega_fdgo.ss+0xD=9090'` (always seek) 500 ms, 2.84 s;
+`'dsk_runcap.hi+0x10=9090'` (bounce) 450 ms, 2.24 s. 15 s.

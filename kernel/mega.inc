@@ -5668,9 +5668,12 @@ mega_bhex2:
 ;              read-ahead's landing, nine page-safe sectors that are scratch
 ;              between fills, or dsk_secbuf when the landing is shed - each
 ;              run a NESTED int 13h, which goes native or is reflected like
-;              any other. The file layer bounces its own (dsk_xfer's
-;              `.bounce`) and never reaches this; a program that issues its
-;              own int 13h from a high window does
+;              any other. The file layer bounces a fixed disk's own
+;              (dsk_xfer's `.bounce`); a FLOPPY run into a pool claim it
+;              hands down as it is, for the native path to read in place
+;              (dsk_runcap, KERN-MEGA-PLAN 14.156), so it arrives here only
+;              when that path hands the call back - as does a program that
+;              issues its own int 13h from a high window
 ; in:  BP = mega_svc's frame (ES restored to the caller's selector), DS = KDATA,
 ;      IF = 0
 ; out: the frame's AH = the status, AL = sectors moved, CF in its FLAGS
@@ -7015,6 +7018,9 @@ mega_fdgo:
 .uncal:
     not dl
     and [es:0x3E], dl               ; the BIOS's view too: not calibrated
+    mov bl, cl                      ; ...and where the head is, nobody's to
+    mov bh, 0                       ; say: the cylinder byte unknown (FFh),
+    mov byte [es:0x94+bx], 0xFF     ; not the place .cal below would believe
     mov si, 2                       ; twice: a 765 steps 77 tracks at most
 .recal:
     and byte [es:0x3E], 0x7F
@@ -7052,21 +7058,36 @@ mega_fdgo:
     or [es:0x3E], dl
 .cal:
     mov byte [mega_fdstep], 4
-    ; --- seek, every call: the 765 knows where it is, and a seek to where
-    ; it already is is one IRQ. The cylinder is PHYSICAL - doubled for a
-    ; 360KB disk in a 1.2MB drive (40:90 bit 5)
-    mov bl, [mega_fdc]
+    ; --- seek, unless the head is THERE (KERN-MEGA-PLAN 14.156). The
+    ; cylinder is PHYSICAL - doubled for a 360KB disk in a 1.2MB drive (40:90
+    ; bit 5). A seek to where the head already is is one IRQ, but the settle
+    ; after it is not free: 15 ms lost the next sector of a sequential read,
+    ; so every call cost a revolution and a 22 kHz stream ran dry. So after
+    ; its seek this path leaves 80h + the cylinder in the BIOS's own byte for
+    ; the drive (40:94) - never a number the BIOS seeks to, so ITS next call
+    ; seeks as it did for the FFh written here before - and believes it only
+    ; while it is still there: a BIOS call that moved the head wrote its own
+    ; cylinder, a recalibrate and every failure here write FFh. A wrong
+    ; belief would read the wrong cylinder, which READ DATA refuses (the ID's
+    ; C), and the BIOS then does the call as ever
+    mov al, [mega_fdc]
     test byte [mega_fdms], 0x20
     jz .ss
-    shl bl, 1
+    shl al, 1
 .ss:
+    mov bl, [mega_fdd]
+    mov bh, 0
+    or al, 0x80
+    cmp [es:0x94+bx], al            ; there already, and nobody moved it?
+    je .placed
+    mov [es:0x94+bx], al
+    and al, 0x7F
+    xchg ax, bx                     ; BL = the cylinder, AL = the drive
     call mega_fdseek
     jc .fall
-    xor bh, bh                      ; ...and the BIOS's cylinder byte made
-    mov bl, [mega_fdd]              ; unknown, so its next call seeks rather
-    mov byte [es:0x94+bx], 0xFF     ; than trusting a number of ours
     mov cl, [dsk_dpt+9]             ; head settle, ms
     call mega_fdms_wait
+.placed:
     ; --- the 8237, channel 2 ---------------------------------------------
     cli
     mov al, 0x06
@@ -7139,6 +7160,9 @@ mega_fdgo:
     xor ah, ah                      ; (CF = 0)
     ret
 .fall:
+    mov bl, [mega_fdd]              ; where the head is now is nobody's to
+    mov bh, 0                       ; say (mov: no flag; ES is the BDA here,
+    mov byte [es:0x94+bx], 0xFF     ; mega_fdlj's way in too)
     stc
     ret
 
