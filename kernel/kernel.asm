@@ -4760,9 +4760,9 @@ api_rn:  ; STKBALANCE-OK: pops the rare cell's return address - it IS the target
     push cs                     ; COLD_SEG:BP, the cold file door (the far
     call api_far                ; frame as api_rxc's)
     pop si
-    pop ds
-    pop bp
-    retf
+    jmp short api_rs.tail       ; pop ds / pop bp / retf: api_rs's own (kernel
+                                ; size pass 18, -1, paired with kmain's -1 for
+                                ; gfx_blit4's parity; a file call is ~400 ms)
 
 ; -----------------------------------------------------------------------------
 ; api_fdlg_open - slot 0x0124. The N stub's shape with ONE difference, and it
@@ -6129,8 +6129,9 @@ kmain:
     ; HERE, not after cursor_show: the question is when the first desktop
     ; FRAME is finished, and gfx_unlock is what puts it on the glass. The
     ; cursor is not the desktop.
-    cmp word [boot_ticks], 0xFFFF   ; unstamped: leave it saying unknown
-    je .nobt
+    mov ax, [boot_ticks]        ; unstamped (0FFFFh): leave it saying unknown
+    inc ax                      ; - AX is dead on both arms (kernel size pass
+    jz .nobt                    ; 18: the `cmp word` immediate was a byte more)
     push ds
     xor ax, ax
     mov ds, ax

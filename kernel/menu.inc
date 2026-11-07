@@ -1156,7 +1156,11 @@ menu_bt_raw:
                                 ; ours): pass 14, 2 bytes
 
 .cells:                         ; --- the app's own menus, left to right ----
-    mov bx, 1                   ; cell 0 is the logo: a bitmap, no text
+    mov bl, 1                   ; cell 0 is the logo: a bitmap, no text. BH
+                                ; is 0 on both arms: BX is [menu_abcell] (a
+                                ; bar index, menu_relayout's [menu_nbar]) or
+                                ; 0, and menu_bent/menu_bstr keep it (kernel
+                                ; size pass 18, -1)
 .cell:
     cmp bx, [menu_nbar]
     jae .tail
@@ -1883,11 +1887,16 @@ menu_drop:
     jc .noclaim                 ; refused: the restore repaints instead
     mov [menu_sseg], dx
 %ifdef OS88_COMPACT
-    push ax                     ; ...and MOVABLE (SPEC.md 66.5.6). It is only
+                                ; ...and MOVABLE (SPEC.md 66.5.6). It is only
     mov ax, menu_reloc          ; 20KB and only lives for one menu - but that
-    mov bx, MEM_P_MSAVE         ; is 20KB sitting mid-arena at exactly the
+                                ; is 20KB sitting mid-arena at exactly the
     call COLD_SEG:mmf_mem_movable ; moment a MENU COMMAND claims, which is one of
-    pop ax                      ; the commonest ways a claim happens at all
+                                ; the commonest ways a claim happens at all.
+                                ; BX is still MEM_P_MSAVE (mem_claim keeps
+                                ; every register but DX) and AX is dead - the
+                                ; rect_get below writes it - so neither is
+                                ; loaded or banked again (kernel size pass 18,
+                                ; -5)
 %endif                          ; ...and on kern_small nothing moves (SPEC.md
                                 ; 66.0), where this one is 3.0KB measured and
                                 ; alive for exactly as long as a menu is down
@@ -1995,17 +2004,10 @@ menu_drop:
     cmp ax, [menu_sel]
     je .same
     xchg ax, [menu_sel]         ; highlight moved: erase old, draw new - the
-    inc ax                      ; new one stored and the old one taken in ONE
-    jz .no_old                  ; exchange, and 0FFFFh ("none") asked as `inc
-    dec ax                      ; / jz` with the `dec` only where it is not
-    call menu_item_xor          ; (kernel size pass 10: 3 bytes). Nothing reads
-.no_old:                        ; [menu_sel] before the second test below, and
-    mov ax, [menu_sel]          ; menu_item_xor preserves every register
-    inc ax
-    jz .same
-    dec ax
-    call menu_item_xor
-.same:
+    call menu_item_xor          ; new one stored and the old one taken in ONE
+    mov ax, [menu_sel]          ; exchange, and 0FFFFh ("none") a no-op of
+    call menu_item_xor          ; menu_item_xor's own (kernel size pass 18: the
+.same:                          ; two `inc / jz / dec` tests here were 8 bytes)
                                 ; no flush: the highlights are VRAM-direct and
                                 ; nothing else draws while we hold the lock,
                                 ; a transient overlay (SPEC.md 32)
@@ -2314,15 +2316,25 @@ menu_item_dis:
     pop es
     pop si
     pop bx
+.ret:
     ret
 
 ; -----------------------------------------------------------------------------
 ; menu_item_xor - toggle the highlight on one item cell (xor is its own undo)
-; in:  AX = item index; [menu_x1]/[menu_x2]/[menu_y1] set up as above
+; in:  AX = item index, or 0FFFFh for none (a no-op);
+;      [menu_x1]/[menu_x2]/[menu_y1] set up as above
 ; out: nothing
-; clobbers: nothing (flags only)
+; clobbers: flags; AX on the 0FFFFh no-op alone, which comes back 0 - both of
+;           menu_drop's sites reload AX straight after, and WIN95.DRV's wn_sel
+;           never passes it
+;
+; THE "NONE" TEST IS HERE, once, where it was menu_drop's twice (kernel size
+; pass 18, -4).
 ; -----------------------------------------------------------------------------
 menu_item_xor:
+    inc ax                      ; 0FFFFh: nothing highlighted
+    jz menu_item_dis.ret
+    dec ax
     call kent_di                ; (kernel size pass 15)
     mov cl, 4
     shl ax, cl                  ; index * 16

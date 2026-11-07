@@ -521,16 +521,14 @@ inst_park_mk:
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
 inst_parksafe_set:
-    push ax
-    push bx
-    push di
-    call inst_es_slot           ; BX = the caller's slot, CF = 0 - or CF = 1
-    jc .no                      ; (the scan and the index, said once)
+    push bx                     ; ...and NOT AX: nothing here writes it, and
+    push di                     ; inst_es_slot keeps it (inst_of_seg walks DI,
+    call inst_es_slot           ; inst_fhome_idx banks AX round inst_idx) -
+    jc .no                      ; kernel size pass 18, -2 for the pair
     mov [bx+inst_parksafe], al  ; ...and CF is still inst_es_slot's 0
 .no:                            ; ...and the CF=1 arm arrives carrying its own
     pop di
     pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -552,15 +550,14 @@ inst_parksafe_set:
 ; it can: that the caller owns the instance whose worker it is arming.
 ; -----------------------------------------------------------------------------
 inst_restart_set:
-    push ax
-    push bx
+    push bx                     ; (AX read, never written: as above)
     push di
     call inst_es_slot
     jc .no
     shl bx, 1                   ; doubled here alone, this being the only WORD
     mov [bx+inst_restart], ax   ; table among them - and CF = 0 is the shl's:
 .no:                            ; BX < INST_MAX has a clear top bit
-    jmp short inst_parksafe_set.no  ; the same three pops, one routine up
+    jmp short inst_parksafe_set.no  ; the same two pops, one routine up
 
 ; -----------------------------------------------------------------------------
 ; inst_park_req - ask every package worker to stand still, and wait for them
@@ -656,22 +653,23 @@ inst_wk_parked:
 ; -----------------------------------------------------------------------------
 inst_seg_parked:
     push di
-    call inst_of_seg
-    jc .drv
+    push bx                     ; ONE bank for both arms: the .drv walk and the
+    call inst_of_seg            ; [mem_cp_pl] arm's arithmetic both write BX, and
+    jc .drv                     ; the two answers below were .drv's tail anyway
     cmp byte [di+I_TASK], 0xFF
-    je .free                    ; no worker at all
+    je .svcok                   ; no worker at all
     call inst_wk_parked
-    jne .free                   ; parked: it is standing at the top of its own
+    jne .svcok                  ; parked: it is standing at the top of its own
                                 ; loop and holds nothing derived
     cmp byte [mem_cp_pl], 0     ; ...OR mem_avail IS PLANNING (SPEC.md 66.4.3.5):
-    je .busy                    ; the claim it answers for parks every package
+    je .svcbusy                 ; the claim it answers for parks every package
                                 ; worker before it moves anything (mem_compact
                                 ; .nowt, inst_park_req), so a worker merely
                                 ; RUNNING now is one that claim will find
                                 ; standing. Never true inside mem_compact's
                                 ; own plan, whose answer is followed by moves. A
                                 ; driver's task is not asked about here
-    push bx                     ; ...and NOT AX: DI is spent once the slot is
+                                ; ...and NOT AX: DI is spent once the slot is
     mov bl, [di+I_TASK]         ; read, so the arithmetic below takes it
     xor bh, bh
     shl bx, 1
@@ -686,11 +684,11 @@ inst_seg_parked:
                                 ; worker sleeps 9): inst_park_req wakes nobody,
                                 ; so the claim will find it where it is now
     jmp short .svcok            ; ...not asleep: it reaches ALIVE in the park.
-                                ; Both answers are .drv's own tail below, which
-                                ; pops the same BX (size pass 10)
-.free:
-    CLC_OR_STC .busy            ; CF = 0 free, or (.busy) CF = 1
-    jmp short .cf
+                                ; Every answer is .drv's own tail below, which
+                                ; pops the BX the entry banked (size pass 10;
+                                ; the instance arm's own .free/.busy pair and
+                                ; its second `push bx` went in kernel size pass
+                                ; 18, -5)
 .drv:
     ; NO INSTANCE OWNS IT, so it is a DRIVER image (SPEC.md 51.3) - and a
     ; driver's workers are the TF_SERVICE tasks (SPEC.md 66.5.5). Has every
@@ -698,8 +696,7 @@ inst_seg_parked:
     ; had this one caller and is inline since size pass 9, walking the record
     ; and the sch_parked byte side by side instead of re-deriving one from a
     ; slot count. The byte walks in DI, which inst_of_seg's refusal left as
-    ; nothing and the `pop di` below puts back.)
-    push bx
+    ; nothing and the `pop di` below puts back. BX was banked at the entry.)
 %ifdef OS88_COMPACT
     cmp byte [wm_tcnt], 0       ; A PACKAGE WORKER INSIDE A DRIVER VERB (K9):
     jne .svcbusy                ; ETHER.DRV's run on FTPD's, Telnet's and the
@@ -721,7 +718,6 @@ inst_seg_parked:
 .svcok:
     CLC_OR_STC .svcbusy         ; CF = 0 all parked, or (.svcbusy) CF = 1
     pop bx
-.cf:
     pop di
     retf
 %ifdef KERN_MEGA
@@ -930,29 +926,32 @@ inst_find_kind:
 ; dock_paint, the snapshot - skips a free row, and both callers write
 ; I_TASK = 0xFF before the record publishes.
 ; -----------------------------------------------------------------------------
-%ifdef KERN_BIG
-; inst_alloc_di - inst_alloc's zeroing tail on a record the CALLER chose
-; in: DI = a FREE record (I_STATE = 0); out: inst_alloc's, CF = 0
-; The loader's top-down pick for a package with header flag OS88_F_DESK
-; (SPEC.md 11.103.9, 30): the widget takes the LAST free slot, so its empty
-; tile position is at the strip's far end. Three bytes: the scan is the
-; caller's, and everything a reused record must lose is this tail's.
-inst_alloc_di:
-    push cx
-    jmp short inst_alloc.hit
-%endif
 inst_alloc:
     push cx
     mov di, inst_tab
     mov cx, INST_MAX
 .scan:
     cmp byte [di+I_STATE], 0
-    je .hit
+    je inst_alloc.hit
     add di, I_RECSZ
     loop .scan
     stc
-    jmp .out
-.hit:
+    pop cx                      ; (.out's two, written here: the tail below
+    ret                         ; is inst_alloc_di's scope from its label on)
+%ifdef KERN_BIG
+; inst_alloc_di - inst_alloc's zeroing tail on a record the CALLER chose
+; in: DI = a FREE record (I_STATE = 0); out: inst_alloc's, CF = 0
+; The loader's top-down pick for a package with header flag OS88_F_DESK
+; (SPEC.md 11.103.9, 30): the widget takes the LAST free slot, so its empty
+; tile position is at the strip's far end. ONE byte: the scan is the caller's,
+; and everything a reused record must lose is this tail's, which it FALLS INTO
+; - it sits between the scan's refusal and the tail, where its `jmp short
+; inst_alloc.hit` was two bytes (kernel size pass 18, -2). The tail's label
+; is spelled in full because this global ends inst_alloc's scope.
+inst_alloc_di:
+    push cx
+%endif
+inst_alloc.hit:
     push ax                     ; a reused record never inherits a dead
     push bx                     ; instance's CPU tally (SPEC.md 8.1), nor
     push si                     ; anything else it left: the whole 32 bytes
@@ -988,7 +987,6 @@ inst_alloc:
     pop bx
     pop ax
     clc
-.out:
     pop cx
     ret
 

@@ -2795,6 +2795,7 @@ ui_sys_open:
     mov bx, [ui_desc]           ; BX = the name to match, hoisted out of the
     mov bx, [bx+UO_NAME]        ; scan: nothing in the loop writes it
     mov di, inst_tab - I_RECSZ  ; ...over inst_next, the table's own walk: off
+    cld                         ; (the name compare's lodsb, below)
 .scan:                          ; the end is CF = 1, none open, the load
     call inst_next              ; (kernel size pass 18, -1 against the CX
     jc .load                    ; count and the `add` / `loop` tail)
@@ -2806,10 +2807,9 @@ ui_sys_open:
     mov si, bx
     add di, I_NAME
 .cmp:
-    mov al, [si]
-    cmp al, [di]
-    jne .nomatch
-    inc si
+    lodsb                       ; DS:SI, the kernel's name (kernel size pass
+    cmp al, [di]                ; 18: `mov al, [si]` and its `inc si` were a
+    jne .nomatch                ; byte more than this and the `cld` above)
     inc di
     or al, al
     jnz .cmp
@@ -2847,11 +2847,15 @@ ui_sys_open:
     jnc .out                    ; may inherit the ES a failure leaves)
 .disk:
 %endif
-    call osapi_file_here        ; bank where the user was: DX = the directory
-    mov [ui_tm_cwd], dx         ; cluster, BL = the drive. Two module words
-    mov [ui_tm_drv], bl         ; rather than the stack, because this is
+    call inst_where             ; bank where the user was: AX = the directory
+    mov [ui_tm_cwd], ax         ; cluster, DL = the drive. Two module words
+    mov [ui_tm_drv], dl         ; rather than the stack, because this is
                                 ; UI-task-only and one load at a time, like
-                                ; ld_fp
+                                ; ld_fp. (inst_where is osapi_file_here's own
+                                ; question, without the slot's register
+                                ; shuffle: kernel size pass 18, -1. DH is the
+                                ; caller's instance after it, and nothing
+                                ; below reads DH)
 
     mov dl, [dsk_bootvol]       ; the disk we booted from - A: on a floppy
                                 ; machine, where this byte is 0 and this is
