@@ -17274,11 +17274,14 @@ SOAK = [
         wants=("build/vbattle.o88",)),
     Row("vbtopen", "soak", py("tests/vbtopen.py"), 60.0,
         "SPEC.md 126.2.4: VBATTLE.O88 with NO BATTLE beside it (MartyPC's "
-        "VGA XT, the battle in a folder of B:): the window says to open one, "
-        "Enter plays nothing, File > Open... BATTLES/BATTLEV.VBT plays it, "
-        "and opening it again after a play (the battle read before let go) "
-        "plays it again. Broken on purpose (the answer leaving the window "
-        "without a battle) the play never comes",
+        "VGA XT, a battle with a title picture in a folder of B:): the "
+        "window says to open one, Enter plays nothing, File > Open... "
+        "BATTLES/BATTLEV.VBT sizes the window to its picture and plays it, "
+        "Enter after Esc plays it again (the owner's 'Not enough memory'), "
+        "the window holding what it draws, and opening it again does the "
+        "same. Broken on purpose (the answer leaving the window without a "
+        "battle) the play never comes; without the resize the window is "
+        "322 x 72 for a 320 x 240 picture",
         needs=("marty",),
         wants=("build/vbattle.o88", "build/vbattlev.img")),
     Row("vbtownpal", "soak", py("tests/vbtownpal.py"), 60.0,

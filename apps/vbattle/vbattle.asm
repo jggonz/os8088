@@ -1338,7 +1338,25 @@ vb_onfile:
     mov byte [vb_none], 0
     mov word [vb_status], vb_s_ready
     call vb_t4set
-    jmp vb_paint
+    ; ITS TITLE PICTURE, as at the window's open (vb_entry): read now, and
+    ; the window made its size - a play's end brings the picture back, and
+    ; drawn in the text window's 72 rows it ran out over the desktop (the
+    ; owner, 2026-11-07); with none, the text window's size again
+    call vb_coverload
+    mov cx, 320 - 2                 ; (the text window: vb_tpl's 320 x 72)
+    mov dx, 72
+    jc .rs
+    mov cx, [vb_cvw]
+    cmp cx, 320
+    jae .cw
+    mov cx, 320
+.cw:
+    mov dx, [vb_cvh]
+    add dx, CV_TEXTH + TITLE_H + 1
+.rs:
+    add cx, 2
+    mov bx, [vb_win]
+    call OSAPI_WM_RESIZE            ; (which repaints the window)
 .r:
     ret
 

@@ -14,12 +14,17 @@ player:
   1. the window opens with NO BATTLE ([vb_none]) and says so - its lines
      the "no battle" set (to open one, or put BATTLE.VBT beside it);
   2. Enter plays nothing: no "Loading...", no play;
-  3. File > Open... -> BATTLES/BATTLEV.VBT: the window has its document, and
-     Enter plays it - the title on the glass ([vb_tplay]);
-  4. after the play, File > Open... again - the battle read before let go
-     (vb_unload) - and Enter plays it again.
+  3. File > Open... -> BATTLES/BATTLEV.VBT (the demo with a TITLE PICTURE):
+     the window has its document and is resized to the picture, Enter
+     plays it - the title on the glass ([vb_tplay]) - and after Esc, Enter
+     plays it AGAIN, the window at the desktop holding what it draws (the
+     owner's: the picture drawn over the desktop past a 72-row window, and
+     "Not enough memory");
+  4. after the plays, File > Open... again - the battle read before let go
+     (vb_unload) - and the same again.
 BROKEN ON PURPOSE (vb_onfile leaving [vb_none] set) step 3's play never
-starts.
+starts; without the resize (the build the owner tested) the window is
+322 x 72 for a 320 x 240 picture.
 """
 import os
 import shutil
@@ -50,9 +55,20 @@ def main():
     syms, _ = pkg_syms("apps/vbattle/vbattle.asm", ("apps/",))
     tmp = tempfile.mkdtemp(dir=os.path.join(ROOT, "build"))
     try:
+        import os88vbt as B
+        import vbtproj as P
+        from PIL import Image, ImageDraw
+        vbp = os.path.join(tmp, "o.vbp")    # THE DEMO WITH A TITLE PICTURE
+        B.demo_project(vbp, bars=2)         # (the owner's battles have
+        im = Image.new("RGB", (640, 480), (0, 0, 0))    # one: a play's end
+        ImageDraw.Draw(im).ellipse((100, 80, 540, 440),  # brings it back)
+                                   fill=(220, 160, 40))
+        im.save(os.path.join(tmp, "cover.png"))
+        p = P.Project.load(vbp)
+        p.set(("cover",), {"image": "cover.png", "line": "Press Enter"})
+        p.save()
         vbt = os.path.join(tmp, "BATTLEV.VBT")
-        subprocess.run(["mcopy", "-n", "-i", os88build.at("build/vbattlev.img"),
-                        "::BATTLEV.VBT", vbt], check=True)
+        open(vbt, "wb").write(B.build_project(p, kind="vga4"))
         b = os.path.join(tmp, "b.img")
         subprocess.run([sys.executable, "tools/os88disk.py", "-o", b, "--size",
                         "1440", os88build.at("build/vbattle.o88"),
@@ -94,20 +110,40 @@ def main():
                 os88marty.until(m, lambda mm: rb("vb_doc") == 1 and  # close)
                                 rb("vb_none") == 0, "the answer", poll=0.05,
                                 limit=120, guest=10)
+                ui.still()              # (...and its picture read, sized)
                 ok(rb("vb_none") == 0 and rb("vb_doc") == 1 and
                    text("vb_docname") == b"BATTLEV.VBT",
                    "%d. File > Open... %s: the window's document (%r)"
                    % (n, spec, text("vb_docname")))
-                m.key("Enter")
-                os88marty.until(m, lambda mm: rb("vb_tplay") == 1,
-                                "the title", poll=0.1, limit=600, guest=120)
-                ok(True, "%d. ...and Enter plays it: the title on the glass"
-                   % n)
-                m.key("Escape")
-                os88marty.until(m, lambda mm: rb("vb_ready") == 0,
-                                "Esc to leave", poll=0.1, limit=300,
-                                guest=60)
-                ui.still()
+                ww = [o for o in geom.windows(m, ui._S) if o.i == w.i][0]
+                ok(rb("vb_cvwin") == 1 and ww.w >= rw("vb_cvw") and
+                   ww.h >= rw("vb_cvh") + geom.TITLE_H,
+                   "%d. ...the window sized to its title picture (%dx%d for "
+                   "%dx%d)" % (n, ww.w, ww.h, rw("vb_cvw"), rw("vb_cvh")))
+                for k in range(2):      # (Enter AGAIN after Esc: the owner's
+                    m.key("Enter")      # "Not enough memory")
+                    try:                # (vb_err keeps the file's name
+                        os88marty.until(m, lambda mm: rb("vb_tplay") == 1,
+                                        "the title", poll=0.1, limit=600,
+                                        guest=120)  # after a play: the title
+                    except os88marty.MartyError:    # or the time is the test)
+                        pass
+                    ok(rb("vb_tplay") == 1, "%d. ...and Enter plays it%s: the "
+                       "title on the glass (%r)" % (n, " AGAIN" if k else "",
+                                                     m.read(base + rw(
+                                                         "vb_status"), 30)
+                                                     .split(b"\0")[0]))
+                    m.key("Escape")
+                    os88marty.until(m, lambda mm: rb("vb_ready") == 0,
+                                    "Esc to leave", poll=0.1, limit=300,
+                                    guest=60)
+                    ui.still()
+                    ww = [o for o in geom.windows(m, ui._S) if o.i == w.i][0]
+                    ok(rb("vb_cvwin") == 0 or (ww.w >= rw("vb_cvw") and
+                                               ww.h >= rw("vb_cvh")),
+                       "%d. ...back at the desktop the window holds what it "
+                       "draws (%dx%d, the picture %dx%d)" % (
+                           n, ww.w, ww.h, rw("vb_cvw"), rw("vb_cvh")))
             play(3, "BATTLES/BATTLEV.VBT")
             play(4, "BATTLEV.VBT")      # (the chooser opens where it was
             #                             left; the battle read before let go)

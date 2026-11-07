@@ -242201,11 +242201,19 @@ puts up the Standard File chooser (SPEC.md 38); its answer
 (`vb_onfile`) lets go of whatever a battle read into the window - its
 resident claim, its hold, its title picture, every "read once" mark
 (`vb_unload`) - and takes the file as the window's DOCUMENT, as a
-double-clicked one is (`vb_docnames`: its renditions by its name). A
-folder or a name with no file does nothing. `vbtopen` (MartyPC's VGA XT):
-the player alone at B:'s root and the battle in a folder - the window
-says so, Enter plays nothing, File > Open... plays it, and opening it
-again after a play plays it again; broken on purpose (the answer leaving
+double-clicked one is (`vb_docnames`: its renditions by its name) - and
+reads its TITLE PICTURE then and there, the window resized to it
+(`OSAPI_WM_RESIZE`; with none, back to the text window's 320 x 72), as the
+window's open does. Read only when a play ended, it was drawn into the
+text window's 72 rows and ran out over the desktop, and its claim, made
+after the battle's, cost the next play its rings: "Not enough memory"
+(the owner, 2026-11-07; reproduced on QEMU with their battle in a folder,
+and gone). A folder or a name with no file does nothing. `vbtopen` (MartyPC's VGA XT):
+the player alone at B:'s root and a battle with a title picture in a
+folder - the window says so, Enter plays nothing, File > Open... sizes
+the window to the picture and plays it, Enter after Esc plays it again
+with the window still holding what it draws, and opening it again after
+a play does the same; broken on purpose (the answer leaving
 the window without a battle) the play never comes.
 A 64-byte header gives the counts and each table's offset from the block's
 start, the enemy, and the seed:
