@@ -331,12 +331,23 @@ def main():
         with open(stream, "wb") as f:           # every dword its own offset,
             array.array("I", range(0, STREAM, 4)).tofile(f)     # as W writes
         vhd = os.path.join(tmp, "viddisk.vhd")
+        # THE KERNEL C: BOOTS is the one under test: kern_mega's own
+        # kernel.sys and boot sector under $OS88_MEGA (tests/megaport.txt),
+        # where the BIOS boots this disk with A: empty, as MartyPC's does
+        kdir = (os.path.join(os88build.mega_build(), "megak")
+                if os.environ.get("OS88_MEGA")
+                else os.path.dirname(os88build.at("build/kernel.sys")))
         hdd = (["python3", "tools/os88hdd.py", "--template", TEMPLATE,
-                "--out", vhd, "--kernel", os88build.at("build/kernel.sys"),
-                "--vbr", os88build.at("build/boothd.bin"),
+                "--out", vhd, "--kernel", os.path.join(kdir, "kernel.sys"),
+                "--vbr", os.path.join(kdir, "boothd.bin"),
                 "--mbr", os88build.at("build/mbr.bin"),
-                "--file", "HDD.DRV=" + os88build.at("build/hdd.drv"),
                 "--file", "VIDDISK.O88=" + os88build.at("build/viddisk.o88")] +
+               # --ioerr fails the BIOS's answer at dsk_xfer's int 13h, so
+               # C: must stay a BIOS volume: on a 286 or better (Bochs's 386
+               # under kern_mega) HDD.DRV's rung 1 TAKES an ATA disk and its
+               # PIO never comes through there (tests/hdtake.py)
+               ([] if a.ioerr and os.environ.get("OS88_MEGA") else
+                ["--file", "HDD.DRV=" + os88build.at("build/hdd.drv")]) +
                ([] if a.no_stream else
                 ["--file", a.stream_name + "=" + stream]))
         subprocess.run(hdd, check=True, capture_output=True)
@@ -368,7 +379,9 @@ def main():
             w = ui.path("B:/VIDDISK.O88" if a.floppy else "C:/VIDDISK.O88")
             rec = m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE,
                          geom.WIN_SIZE)
-            base = u16(rec, geom.W_SEG) << 4
+            seg = u16(rec, geom.W_SEG)          # an LDT selector under
+            base = (m.lin(seg, 0) if getattr(m, "bochs", False)   # kern_mega
+                    else seg << 4)
             return base, lambda name: u16(m.read(base + syms[name], 2))
 
         wtxt = None

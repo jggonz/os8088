@@ -147,6 +147,7 @@ a2move secs=80 @OS88_BOCHS_MEGS=1   # ...the Apple II's, the same
 
 # FILES, DIALOGS AND THE DESK
 fpgnotch secs=30   # dsk_xfer asks once a run whether a bar is live; its .cold breakpoints run above 1MB here
+fdswap secs=70   # a floppy swapped under an open Disk window (the shim's `mount`) lists the NEW disk at `..`, and the old one swapped back, as mtools reads them; red: LBA 0's swap detector served from the read-ahead (dsk_rah_busy's inc/dec out) AND the listing mount's flush out - the base row's break alone (the flush) stays green here, kern_mega's chunks being keyed by the signature its uncached LBA 0 read takes (no DSK_RAHINT)
 deskmodal secs=40   # a widget DELETE with a Disk window in front; scratch system disk off mega.img
 deskcalgrid secs=40   # the Desk Calendar grid out of its bss, the clock set through clk_*
 msel secs=150   # multi-select and set operations; the listing segment is a selector here
@@ -185,6 +186,9 @@ hdnoclaim secs=50   # a mounted hard-disk partition costs no heap - on kern_mega
 # through so an install in one launch is what the next one boots. Their red
 # checks broke HDDTOOL.DRV, HDD.DRV, INSTALL.O88 or kern_dos on a throwaway
 # mega.img (KERN-MEGA-PLAN 14.95).
+wseqfull secs=40   # a HELD stream (OSAPI_FILE_WRITE_SEQ) into a VHD with 4MB free: one call refused FERR_FULL at chunk 128, the 128 before it kept byte for byte, the VHD fscks clean - C: boots kern_mega's own kernel.sys and boothd (viddisk.py's kdir); red: the held rollback's `jnc .rbkept` out (diskw.inc), so a refusal loses the stream - 32 KB left
+wseqcut secs=40   # a POWER CUT mid-hold (the Bochs killed once W has written 150 chunks): STREAM.DAT its committed first 32KB, byte for byte, and the VHD fscks clean; red: dwf_dskw_write_seq's mask without WSQF_HELD, so every call links - 4.9MB after the cut
+wseqioerr secs=40   # a DYING disk under a held stream (every data write's int 13h answered AH=10h CF=1 from chunk 100 on): the refused call loses itself, STREAM.DAT keeps every chunk before it and fscks clean - C: a BIOS volume here, HDD.DRV left off it (on a 386 its rung 1 PIO bypasses dsk_xfer's int 13h); red: the held rollback's `jz .rbdrop` a `jmp` (diskw.inc), 34KB and a 17-cluster chain under a 3.7MB entry
 install secs=110   # the wizard erase-installs off mega.img, its progress widget ON THE GLASS (VGA via fbuf), gives HDDTOOL back, upgrades from C:, and C: boots
 instdeep secs=40   # the installed volume carries the whole tree and README.TXT's packed bytes (14.95: mega.img had no SYSTEM/APPDATA/NOTES)
 instassoc secs=40   # the installed ASSOC.DAT describes C: - every row's cluster a folder of that volume
