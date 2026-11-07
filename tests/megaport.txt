@@ -55,6 +55,7 @@ ftpdfocus secs=120   # FTPD's Setup page keeps no caret it cannot type into
 modstr secs=70   # DISKOPS.DRV and FORMAT.DRV letter their own strings through CS, and the formatted 1.44MB B: mounts
 rdcz secs=60   # a compressed README.TXT with its directory hint struck still reaches Note Pad unpacked, off FAT and off the RAM disk
 rdboot secs=150   # RAMDISK.DRV attached AT BOOT, before mega_enter, reads its seed out of its own image (14.112: CPU_F_PM banked at a real-mode attach)
+shutdown secs=90 +--card +vga   # confirmed Shut Down: cancellation, the settings flush, halted tasks under the live spinner, Ctrl-Alt-Del back in; on kern_mega the handover is IDT gate 20h naming sch_old08 and IVT 08h the BIOS's; red at the base, [ticks] still counting (KERN-MEGA-PLAN 14.157)
 cpup secs=40   # the Control Panel acts on the RELEASE (sch_coop), and the held radio draws pressed on the VGA glass
 cpnames secs=50 +hdd   # every Control Panel list name and page heading letters (CTRL.DRV strings through CS), plus HDD.DRV's row ticked in on a Bochs ATA disk - cpnameshdd's whole run
 dtwrite secs=40   # the RTC write is spent by the panel's CLOSE - and on Bochs's MC146818 the stepped year reaches the CHIP at the close and not before
@@ -179,7 +180,8 @@ deskcalremind secs=150   # reminders ring on card 3, the clock set through clk_*
 deskclock secs=120   # the Desk Clock desk window, its faces, settings, alarm, and its relaunch after a reset (a power cycle under Bochs)
 stikboot secs=40   # a Sticky App comes back at boot; stikrestore360.img rebuilt on mega.img (tests/megafix.py)
 stikmenu secs=90   # Locator's Sticky Apps menu (STIKMENU.DRV, whose image is a selector here)
-hibsumok secs=45   # the programs' sum's POSITIVE CONTROL off C: (kern_mega's kernel.sys, boothd, HIBER.DRV and CTRL.DRV): Mines open, hibernate, power off, resume, Mines back where it was; red: megares.inc's extended-section sum compare inverted (`je .fail`), a clean image refused. (hibsumbad does NOT land: its refusal's 'Press any key to restart' is answered by nothing - IRQ1 left masked by mega_hbgor)
+hibsumok secs=45   # the programs' sum's POSITIVE CONTROL off C: (kern_mega's kernel.sys, boothd, HIBER.DRV and CTRL.DRV): Mines open, hibernate, power off, resume, Mines back where it was; red: megares.inc's extended-section sum compare inverted (`je .fail`), a clean image refused.
+hibsumbad secs=150   # the programs' sum's REFUSAL: Mines's region damaged in the image's EXTENDED SECTION on the host, megares.inc's streaming stub refuses, a key restarts into an ordinary desktop and both files are gone; red at the base and with IRQ1 unmasked alone - the key never taken, the 8042's one buffer held by a masked PS/2 mouse's byte (KERN-MEGA-PLAN 14.158)
 stikhiber secs=40   # a pending RESUME stands the Sticky App relaunch down: HIBERNAT.PTR on the shim's C:, stik_boot asked for after mega_enter
 hdnoclaim secs=50   # a mounted hard-disk partition costs no heap - on kern_mega the image and any claim are XMEM-pool blocks, read off mx_tab
 

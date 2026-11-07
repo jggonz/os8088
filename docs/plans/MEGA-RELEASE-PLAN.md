@@ -96,6 +96,9 @@ memory seen to come back; "faults" means only the designed ones (the boot's
 | 14.149 | WaveRack closed with a #GP on a 16-bit clip (paragraph arithmetic on a selector) | mega | the hold through a bound window | `waverackmega` |
 | 14.150 | XTMP3 could not play live on a 386DX-25 (~3,470 traps); ~80-100 traps a speaker play; ~990 a Shut Down screen; Notepad's save; ~1,700 an install | mega | an XT-part arm with a data selector; DS stores in the speaker setup, the spinner, Notepad and the installer | `x3live386`, `x3xtunitmega`, `cswrite` |
 | 14.152 | **The Wire's Load Program crashed the machine on any packed .O88** - every release package | both | the image arm expands a packed image through the disk path's step 6a (+4 bytes `.cold`) | `pkgrun` G, `mega-pkgrun`, `thewire` 19 |
+| 14.156 | A 22 kHz Sound Blaster stream from a floppy had a 0.45-0.54 s silence every 2.1 s (3.57 s in a 10 s clip) | mega | floppy DMA in place below 16MB (`dsk_runcap .hi`, +18 bytes `.cold`), and `mega_fdgo` skips the seek and settle while the cylinder is unchanged (+32 bytes `.mega`) | `megasbgap` (longest 290-300 ms; kern_big 100) |
+| 14.157 | Shut Down left the scheduler ticking under the BIOS clock (IDT gate 20h still `sch_isr`) and a selector in IVT 08h | mega | CTRL.DRV puts `mega_t08` in the gate and the BIOS's tick back in the IVT | `mega-shutdown` |
+| 14.158 | A resume refused by the streaming stub (a damaged image) never took its restart key, and once it did, asked the same question again | mega | the stub switches the 8042's AUX off, drains it, unmasks IRQ1, and leaves `'MRF1'` in the BDA mailbox for `hbm_ask` to drop the pair | `mega-hibsumbad` |
 | - | Paint's BMP save wrote a corrupt file on VGA/EGA (planar canvas written raw) - data loss | both | packed in place for the write | `paintbmpsave` |
 | - | DOS COPY of >~1KB to a FAT16 C: failed; `DIR B:` printed A:'s free bytes; `B:NAME.COM` lost a letter | both | the copy sized on the destination; footer before `dsh_home`; one `dec di` | `doscopyhd`, `dosdirsw`, `dosext` |
 | - | FTPD stalled on LIST/NLST of a missing folder | both | an empty listing answered 550 | `ftpd` 8f |
@@ -114,14 +117,9 @@ The patch is kept for whoever writes the 86Box rows.
 
 ### 4.1 kern_mega regressions still open
 
-- **M6 - a 22 kHz Sound Blaster stream has a 0.4 s gap at its first floppy
-  refill** (Audio; 5 of 5 on the mr286, a 386 and a Pentium; kern_big plays
-  it whole; 11 kHz is immune). Under investigation (`mega-sbgap`): while a
-  BIOS call is reflected, every IRQ2-7 vector naming protected-mode code is a
-  capture stub replayed only when the BIOS returns (`mega_capon`), so a
-  block-end IRQ that lands inside a floppy read waits for it. Whether the
-  refill was reflected at all (kern_mega has a native floppy path) is the
-  first question. *Result: see 4.1.1 when it lands.*
+- **M6's last 300 ms** - 14.156 fixed the gap (section 3); what is left is
+  the ring's first pass, where the pool claim crosses a 64KB physical page
+  and one run loses a revolution. A choice for the owner (section 8, item 8).
 - **Write-through-CS cost, the rest of the census** (14.150's `--census`):
   `apps/` holds 1,015 writes through CS in 97 files - Sheet 305 (164 a macro
   run), WEAVE's VM 152 (~10,000 a second in PONG.WAB, no visible slowdown on
@@ -210,8 +208,38 @@ four DOS-comes-home-changed rows, WIN16 file I/O), and for most games
 extended: `cswrite`, `pkgrun`, `thewire`, `dosdirsw`, `dosext`, `ftpd`,
 `chartread`.
 
-**Ports of the 28**: *in progress (`mega-soakport`); results in 6.1 when
-they land.*
+**Ports of the 28** (6.1).
+
+### 6.1 The soak ports (`mega-soakport`, merged)
+
+**Landed in `tests/megaport.txt`**, each passed through `os88test.py soak -k
+mega-<row>` and seen RED on a kern_mega with one source line broken (Bochs
+has no POKE): `dispclose`, `rdmove` and `sheetmove` (on a 1MB machine; red on
+a `HEAPCOMPACT=0` kern_mega), `fdswap` (red with the swap detector served
+from the read-ahead; the base row's own break stays green here, the cache's
+chunks being keyed by disk signature), `wseqfull`, `wseqcut`, `wseqioerr`,
+`dosfcbwr`, `stk0water` (a MEASUREMENT: 276 of 512 bytes, 238 on kern_big),
+`hibsumok`, `fsckhd`; and, with their defects fixed on this branch,
+`shutdown` (14.157) and `hibsumbad` (14.158).
+
+**Harness fixed on the way**: `os88megabochs._video` reports text, so a wait
+for a text screen ends under Bochs; `os88qemu.Private` goes through the
+kern_mega server rather than starting kern_big; `ftpd.py`/`ftpkeep.py`'s
+`except (OSError, ftplib.all_errors)` was a TypeError on the first refused
+connect; `viddisk.py`, `hibernate.py` and `fsckhd.py` build C: from
+`megak/`'s kernel files (they put kern_big's there, which Bochs booted).
+
+**Not landed**, each for a reason:
+
+| row | why |
+|---|---|
+| `paintmove` | checks 1-4 pass; 5 fails because heapfrag draws text below its own window onto Paint and kern_mega's raise does not erase it - kern_big under MartyPC VGA passes the same check. **Unexplained; a candidate defect** |
+| `memp` | 8 of 11: memp.asm checks alignment on what is a selector here (check 7 passes by accident). The test, not the kernel |
+| `ftpd` | Bochs's slirp takes 5 forward rules, the row needs 9, and the launcher drops the host forwards (T2) |
+| `hibernatem` | the 86Box backend reports a Hercules as graphics, so the text-mode wait never ends (T6) |
+| `dospkt` | N/A: the DOS trip greys Network on kern_mega - no packet driver |
+| `kdreturngfx`, `kdreturnpit` | N/A as ports (kern_big's hibernate handoff); a scratch probe of the trip came home clean, exit code 042, ticks at 18.2 Hz |
+| `kbd4f`, `kbdpreempt`, `sndfmt`, `dskwstage`, `kdreturnm`, `kdreturnmode` | not attempted, harness reasons in the agent's report |
 
 **Still uncovered after this branch**: a 1bpp-adapter kern_mega row (Bochs
 is VGA only; the 86Box port reaches CGA and Hercules and no row asks it);
@@ -242,6 +270,10 @@ peer).
   which reads as a leak to a test that keys on it.
 - **T5** `os88ui`'s typing is unpaced: keys typed within ~1 s of a program
   opening are dropped on both kernels.
+- **T6** the 86Box backend reports a Hercules in a text mode as graphics, so
+  a row that waits for a text screen (`hibernatem`) never ends there.
+- **T7** Bochs's slirp holds 5 port forwards and the kern_mega launcher drops
+  the host's, so FTPD end to end cannot run on kern_mega (QEMU-only rows).
 
 ## 8. For the owner
 
@@ -264,6 +296,14 @@ peer).
    Makefile comment, "it refuses there", is out of date).
 7. **The 1,015 writes through CS left in `apps/`**: a speed pass per
    package, measured, or release notes.
+
+8. **M6's last 300 ms** (KERN-MEGA-PLAN 14.156): (a) AUDIO claims its
+   look-ahead through `OSAPI_MEM_CLAIM_DMA` on every kernel - it IS a DMA
+   target - which on kern_mega moves 32KB from the pool into conventional
+   memory; or (b) a page-safe pool door on kern_mega, so DMA claims go high
+   too. Measured with (a) as an experiment: longest 150 ms, kern_big's figure.
+9. **`paintmove` check 5 on kern_mega** (6.1): text heapfrag draws below its
+   window is left on Paint after a raise. Worth one look before a release.
 
 ## 9. Release mechanics (if the owner says yes)
 
@@ -294,6 +334,14 @@ peer).
   Manager on an empty drive, an empty drive right after a Video Player play;
   `make megadiag`'s disk if it freezes. IR15 (77h) has the same exposure and
   is not covered.
+- **14.156's seek skip** touches 14.125's native floppy path: `mega_fdgo`
+  now skips the seek and head settle while 40:94+unit says the cylinder is
+  unchanged. A 22 kHz SB play off a floppy, an install, and a disk swap
+  between two reads of the same cylinder (which the media-change line, not
+  the cylinder, must catch).
+- **14.158's resume refusal**: a damaged image, the key, the next boot
+  ordinary - and a PS/2 mouse working on it (the stub's A7h is undone by
+  `mou_p2_init`'s A8h; a serial mouse is untouched).
 - VESA on a real VBE card, above 800x600.
 - The PicoMEM: its USB mouse through a boot, a play and a DOS trip; its IRQ
   reflections; T69/LASTX.
@@ -323,5 +371,19 @@ python3 tools/os88test.py soak \
   -k ftpd -k chartread
 ```
 
-plus the rows `mega-soakport` lands and `mega-sbgap`'s, then `make
-test-full` once (14.152 moved every kernel by 4 bytes).
+and the kern_mega rows this branch added or ported last:
+
+```
+python3 tools/os88test.py soak \
+  -k megasbgap -k mega-fcpcopy -k mega-diskclone -k mega-imgmount -k mega-imgswap -k mega-fdlgchoose \
+  -k mega-dispclose -k mega-rdmove -k mega-sheetmove -k mega-fdswap \
+  -k mega-wseqfull -k mega-wseqcut -k mega-wseqioerr -k mega-dosfcbwr -k mega-stk0water \
+  -k mega-hibsumok -k mega-hibsumbad -k mega-stikhiber -k megahiber -k megahibfull \
+  -k mega-fsckhd -k mega-shutdown
+```
+
+plus the eleven kern_big base rows the soak port's harness edits touched
+(`dispclose`, `rdmove`, `sheetmove`, `fdswap`, `wseqfull`, `wseqcut`,
+`wseqioerr`, `hibsumok`, `hibsumbad`, `fsckhd`, `shutdown`; they passed
+11/11 on MartyPC in the port's own run), then `make test-full` once (14.152
+moved every kernel by 4 bytes).

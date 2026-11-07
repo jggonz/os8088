@@ -14320,3 +14320,66 @@ the FDC reading during it, no silence inside it over 400 ms, under 1.5 s in
 all. RED on the base (540 ms, 3.57 s), and with each fix poked out:
 `OS88_MEGA_POKE='mega_fdgo.ss+0xD=9090'` (always seek) 500 ms, 2.84 s;
 `'dsk_runcap.hi+0x10=9090'` (bounce) 450 ms, 2.24 s. 15 s.
+
+### 14.157 Shut Down left the scheduler ticking under the BIOS clock (2026-11-07) - FIXED
+
+Found by `mega-shutdown`'s port (MEGA-RELEASE-PLAN 6.1). Every check up to
+the halt passed and then *"OS tasks still run after shutdown"*: `[ticks]`
+went on counting behind the terminal screen. `sched_stop` puts `sch_old08`
+back at 0:20h - IVT 08h, IRQ0's vector in REAL mode - and the PIT to 65536.
+In protected mode IRQ0 arrives through IDT gate 20h (`MEGA_PIC_BASE`), which
+still named `sch_isr`, so the scheduler ran on at 18.2 Hz with its tasks;
+and IVT 08h, which `mega_pmtail` keeps as the BIOS's own tick FOR A
+REFLECTION, was left holding `mega_t08`:`MEGA_SEL_CODE` - a selector as a
+segment - which any later reflected call taking IRQ0 in real mode would
+have jumped into.
+
+**Fix** (`kernel/shutdown.inc`, CTRL.DRV, kern_mega only): in protected mode
+the gate gets `sch_old08` (`mega_t08`, the ROM's half - 40:6C and the motor
+count, an `iret` of its own) and IVT 08h gets `mega_old08` back. Not in
+`sched_stop`, which is `.text` and would have taken 16 bytes past
+`tests/megaseg.txt`'s allowance for code that also runs in protected mode:
+kern_mega's reboot is a warm reset, so Shut Down is the one caller that runs
+on after it, and CTRL.DRV costs the kernel segment nothing. kern_big and
+kern_small byte-identical.
+
+**Row**: `mega-shutdown` (Bochs, `--card vga`). On kern_mega its handover
+check is the GATE naming `sch_old08` and IVT 08h the BIOS's, and its
+Ctrl-Alt-Del leg waits for gate 20h to name `sch_isr` again. RED at the base
+("OS tasks still run after shutdown", the soak port's run); green with the
+fix, the Ctrl-Alt-Del restart included. 75 s.
+
+### 14.158 A refused resume could never be restarted, and asked again when it was (2026-11-07) - FIXED
+
+Found by `mega-hibsumbad`'s port. A hibernate image damaged in its extended
+section was refused correctly - *"Resume failed: the image could not be read
+back. Press any key to restart."* - and then no key was ever taken: the CPU
+sat in the ROM's `int 16h` with IMR BAh. Three causes, found one under the
+other:
+
+1. `mega_hbgor` masks IRQ1 (and the mice) for the streaming stub's run, and
+   the stub's `.fail` waited on `int 16h` with it still masked.
+2. Unmasked, still no key (IMR B8h): port 64h read **39h** - the output
+   buffer full with an **AUX** byte. The row answers the question with the
+   mouse; IRQ12 is masked for the stub, so the PS/2 mouse's bytes sat in the
+   8042's one output buffer and every key queued behind them. Draining once
+   is not enough, the mouse refills it.
+3. With the key taken, the restart asked the SAME question again and both
+   files stayed: on kern_big this refusal is `hbm_wake`'s, inside a kernel
+   that can `hbm_forget` the pair; on kern_mega the extended section's sum is
+   checked by the stub after that kernel is gone.
+
+**Fix.** `kernel/megares.inc`'s `.fail` writes `'MRF1'` into the BDA mailbox
+at 0040:00F0 (the DOS trip's cell, which `int 19h` does not touch), and its
+`.key` switches the AUX interface off (8042 A7h, ignored by a controller
+without one - `mou_p2_init`'s A8h enables it again on the next boot), drops
+what is waiting and unmasks IRQ1. `hbm_ask` (HIBER.DRV, kern_mega only) finds
+the signature, spends it, and drops the pointer as `.stale` does: the
+existing *"Hibernation: unreadable"* toast, `hbm_forget`, an ordinary
+desktop. No disk write before the stub, so a power cut during a good resume
+still finds its image. Resident cost none (the stub and the module).
+
+**Row**: `mega-hibsumbad` (Bochs, `tests/hibernate.py --sum damaged`). RED at
+the base (no ordinary boot after the refusal), RED with each of 1 and 1+2
+alone (this item's probes: the key never taken; then 3 checks failed, the
+question asked again and both files kept), green with all three.

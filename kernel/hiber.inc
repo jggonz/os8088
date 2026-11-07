@@ -277,6 +277,11 @@ KDB_OFF     equ 0x00F0          ; ...and its intra-application area
 KDB_SIG     equ 0x3158444B      ; 'KDX1', little-endian
 KDB_CODE    equ 4               ; dw the program's exit code, behind the magic
 KDB_AKB     equ 6               ; dw ...and the arena it was given, in KB
+%ifdef KERN_MEGA
+MRF_SIG     equ 0x3146524D      ; 'MRF1' in the same cell: kernel/megares.inc's
+                                ; stub REFUSED the image it was streaming back
+                                ; (KERN-MEGA-PLAN 14.158) - hbm_ask drops it
+%endif
 %if HS_EXT + HS_XMAX*HS_XSTRIDE > HS_STACK - 512
   %error "hiber: the extent list would run into the stub's stack"
 %endif
@@ -2429,6 +2434,26 @@ hbm_ask:
     call hbm_post               ; ...unless a restart already stands
     jmp short .out
 .askit:
+%ifdef KERN_MEGA
+    ; A REFUSAL THE LAST BOOT COULD NOT ACT ON (KERN-MEGA-PLAN 14.158): the
+    ; streaming stub (megares.inc) checks the extended section's sum after
+    ; this kernel is gone, so it cannot forget the pair itself - it leaves
+    ; 'MRF1' in the BDA mailbox, which its int 19h does not touch, and the
+    ; pointer is dropped here as hbm_wake's own refusal drops it: the next
+    ; boot ordinary rather than the same refusal again
+    mov ax, KDB_SEG
+    mov es, ax
+    cmp word [es:KDB_OFF], MRF_SIG & 0xFFFF
+    jne .ask2
+    cmp word [es:KDB_OFF + 2], MRF_SIG >> 16
+    jne .ask2
+    xor ax, ax
+    mov [es:KDB_OFF], ax        ; spent, as hbm_dosbda spends its own
+    mov [es:KDB_OFF + 2], ax
+    mov si, hbm_s_lost          ; 'Hibernation: unreadable'
+    jmp short .drop
+.ask2:
+%endif
     mov byte [hb_down], 0
     call hbm_kbdrain            ; a key held at the hibernate's own prompt
                                 ; repeats through int 19h into this boot, and

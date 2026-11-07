@@ -230,6 +230,10 @@ mrs_stub:
     dw MR_TAIL, 0
 .fail:
     cli
+    mov ax, KDB_SEG                 ; THE REFUSAL, for the next boot to act
+    mov es, ax                      ; on (KERN-MEGA-PLAN 14.158): hbm_ask
+    mov word [es:KDB_OFF], MRF_SIG & 0xFFFF ; finds 'MRF1' in the BDA mailbox
+    mov word [es:KDB_OFF + 2], MRF_SIG >> 16 ; and forgets the pair
     mov ah, 0x02                    ; the cursor to row 8: rows 0-2 of the
     xor bh, bh                      ; text page are the stage's cells
     mov dx, 0x0800
@@ -246,6 +250,22 @@ mrs_stub:
     inc si
     jmp short .ch
 .key:
+    cli                             ; THE KEYBOARD BACK (KERN-MEGA-PLAN
+    call mr_a20.kbw                 ; 14.158): mega_hbgor masked IRQ1 and the
+    mov al, 0xA7                    ; mice for the stub's run, and the ROM's
+    out 0x64, al                    ; int 16h waits on a buffer only IRQ1
+    mov cx, 64                      ; fills - so a refused resume never
+.kdr:                               ; restarted. And the 8042 has ONE output
+    in al, 0x64                     ; buffer: a PS/2 mouse's byte, its IRQ12
+    test al, 1                      ; masked, held it against every key. So
+    jz .kun                         ; the AUX interface is switched off (A7h,
+    in al, 0x60                     ; ignored by a controller without one;
+    loop .kdr                       ; mou_p2_init's A8h enables it again) and what
+.kun:                               ; is waiting dropped - it is no answer to
+    in al, 0x21                     ; the sentence on the screen - before
+    and al, 0xFD                    ; IRQ1 is unmasked. A key arriving in
+    out 0x21, al                    ; between is latched by the 8259 while
+    sti                             ; masked and delivered on the unmask
     xor ah, ah
     int 0x16
     int 0x19

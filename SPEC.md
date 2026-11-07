@@ -158721,6 +158721,27 @@ row, no fault. A byte of the section flipped on the host is refused,
 `Hibernation: unreadable`. HIBER.DRV is 6,987
 bytes on the disk on kern_mega against 5,137 on kern_big.
 
+**The streaming resume** (`hbm_xres` as built, KERN-MEGA-MEMORY-PLAN MC4.1
+(b), `kernel/megares.inc`) is the path the code takes today, replacing the
+staged copy above: everything that can refuse with the fresh session intact
+is asked first (the section's head and runs against this machine, the
+extents, the geometry), then the stage goes into the text page and
+`mega_hbgor` leaves protected mode by the DOS handover's route, with IRQ1
+and the mice masked. The stub reads the whole image back through the BIOS
+in real mode, summing the section as it comes. **Its refusal comes after
+the fresh kernel is gone**, so it is a sentence, a key and a restart, as
+kern_big's stub's is - and two things make that work on kern_mega
+(KERN-MEGA-PLAN 14.158). The key: the stub switches the 8042's AUX interface
+off (A7h; `mou_p2_init`'s A8h enables it again on the next boot), drops what
+is waiting in the controller's one output buffer (a PS/2 mouse's bytes, IRQ12
+masked, held it against every key) and unmasks IRQ1 before the ROM's
+`int 16h`. The restart: the stub leaves **`'MRF1'`** in the `0040:00F0`
+mailbox (§96.41's cell, which `int 19h` does not touch), and `hbm_ask` on the
+next boot spends it and drops the pointer as it drops a stale one -
+`Hibernation: unreadable`, `hbm_forget`, an ordinary desktop - rather than
+asking the same question again. No disk write precedes the stub, so a power
+cut during a good resume still finds its image.
+
 ## 88. CLEAR SKIES — a filled-polygon flight simulator in a foreign mode (`apps/skies/`)
 
 A simple three-dimensional flight simulator: take off from an airport, fly
@@ -187913,6 +187934,9 @@ Five things the round trip needs, each the cheapest answer to its own question:
   **Measured on the machine**, byte for byte at a settled desktop. `hbm_res`
   reads it once, as it stages the code, and clears the magic, so a second
   reader gets nothing rather than a code from a session two boots ago.
+  kern_mega's streaming resume stub uses the same four bytes for a second
+  magic, `'MRF1'` - *the resume was refused after the kernel was gone* - which
+  `hbm_ask` spends the same way (§87.9, KERN-MEGA-PLAN 14.158).
 - **`HS_DOSCODE`**, a word in the staging area. It needs **no stub code at
   all**: `hbm_wake` already reads that segment for `HS_CLK`, and the stub never
   writes into it.

@@ -21,6 +21,8 @@ import os88marty as M
 import os88sym as S
 import os88ui
 
+MEGA = bool(os.environ.get("OS88_MEGA"))
+
 
 def word(m, name):
     return int.from_bytes(m.read(S.linear(name), 2), "little")
@@ -125,8 +127,18 @@ def run(card, machine, image):
         else:
             ui.mo.click(left + 96, top + 72)
         old08 = m.read(S.linear("sch_old08"), 4)
-        M.until(m, lambda _: m.read(0x20, 4) == old08,
-                "BIOS timer handover", limit=60)
+        if MEGA:
+            # kern_mega in protected mode takes IRQ0 through IDT gate 20h, so
+            # the handover is the GATE naming sch_old08 (mega_t08, the ROM's
+            # half) - and IVT 08h holding the BIOS's own tick, for a
+            # reflection, rather than a selector:offset (KERN-MEGA-PLAN 14.157)
+            rom08 = m.read(S.linear("mega_old08"), 4)
+            gate = m.lin(eq["MEGA_SEL_IDT"], eq["MEGA_PIC_BASE"] * 8)
+            M.until(m, lambda _: m.read(gate, 4) == old08 and
+                    m.read(0x20, 4) == rom08, "BIOS timer handover", limit=60)
+        else:
+            M.until(m, lambda _: m.read(0x20, 4) == old08,
+                    "BIOS timer handover", limit=60)
         M.guest_sleep(m, 1)
         frozen = word(m, "ticks")
         assert m.read(S.linear("cp_wdirty"), 1) == b"\x00", "Settings not flushed"
@@ -176,6 +188,15 @@ def run(card, machine, image):
         isr = S.linear("sch_isr")
 
         def reborn(_):
+            if MEGA:
+                # back in protected mode, with gate 20h the scheduler's again
+                try:
+                    v = m.read(m.lin(eq["MEGA_SEL_IDT"],
+                                     eq["MEGA_PIC_BASE"] * 8), 4)
+                except Exception:       # mid-reset: no GDT to resolve it by
+                    return False
+                return (int.from_bytes(v[:2], "little") == offsets["sch_isr"]
+                        and word(m, "ticks") != frozen)
             v = m.read(0x20, 4)
             at = int.from_bytes(v[2:], "little") * 16 + int.from_bytes(v[:2], "little")
             return at == isr and word(m, "ticks") != frozen
