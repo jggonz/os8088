@@ -1868,12 +1868,12 @@ wm_display:
                                 ; its own width and height, no dock and no
                                 ; menu bar, its kind - and DI kept
 .prim:                          ; display 0 IS the primary, so this arm is
-    mov ax, [vid_pw]            ; the two-display answer for a window on the
-    mov bx, [vid_ph]            ; near card too
-    mov cx, [vid_dock_y0]
-    mov si, MBAR_H
-    mov dl, [vid_kind]
-.bpp:
+    mov si, MBAR_H              ; the two-display answer for a window on the
+    call osapi_video            ; near card too - and OSAPI_VIDEO's own loads,
+.bpp:                           ; as kern_small's arm above: AX/BX/CX/DL are
+                                ; the same four, and the DH it answers is
+                                ; computed again below (kernel size pass 18,
+                                ; -12, for a call on a rare slot)
 %ifdef VID_EXT
     cmp dl, VID_VESA
     jne .nvx

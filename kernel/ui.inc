@@ -2216,8 +2216,9 @@ ui_grow:
     xor di, di                  ; DI = 0, the width...
     call ui_grow_clamp
     push cx                     ; the width is settled and CX is the only
-    mov di, 2                   ; register free to hold it across the call
-    call ui_grow_clamp          ; ...DI = 2, the height
+    inc di                      ; register free to hold it across the call
+    inc di                      ; ...DI = 2, the height: ui_grow_clamp and
+    call ui_grow_clamp          ; wm_min_axd keep DI (kernel size pass 18, -1)
     mov dx, cx
     pop cx
 
@@ -2433,7 +2434,10 @@ ui_grow_clamp:
 ; ui_loc_gate - point Locator's conditional items at their live or disabled
 ;               string, just before a menu can be dropped (SPEC.md 47 rule 5)
 ; in:  nothing
-; out: nothing (all registers preserved)
+; out: nothing; clobbers AX, BX and the flags - and NOTHING ELSE: its one
+;      caller is ui_task's press arm holding x and y in CX/DX for menu_track,
+;      which writes AX and BX before it reads them, as fm_bar_gate_x and
+;      ui_dispatch do (kernel size pass 18: the AX/BX bank was -4)
 ;
 ; 'Close Window' with nothing open used to be a live item that answered with a
 ; beep. Whether a window is there is a stable, cheap fact - `wm_top` - so it is
@@ -2459,8 +2463,6 @@ ui_grow_clamp:
 ; Disk is not in the list - fm_choose counts FM_MAXWIN itself (§22.1).
 ; -----------------------------------------------------------------------------
 ui_loc_gate:
-    push ax
-    push bx
     mov ax, menu_s_close        ; live: the plain string
     call wm_top                 ; BX = frontmost visible, 0 = nothing to close
     or bx, bx
@@ -2480,8 +2482,6 @@ ui_loc_gate:
                                 ; the only reader its answer ever had, and the
                                 ; three movs are .cold bytes there
 %endif
-    pop bx
-    pop ax
     ret
 
 ui_dispatch:
@@ -2541,11 +2541,13 @@ ui_dispatch:
     ; The menu handler is a window callback reached through the bar, so it
     ; gets the W_ONCLICK treatment verbatim (SPEC.md 12.2): gfx lock, the
     ; owning instance stamped for sound grants (SPEC.md 34.3) and billed
-    ; for the cycles it spends (SPEC.md 8.1). The selection parks in .bss
-    ; rather than on the stack because task_cycles answers in DX:AX and
-    ; the UI task is the only thing that can ever be in here.
+    ; for the cycles it spends (SPEC.md 8.1). The selection STAYS IN AX:
+    ; it parked in .bss (ui_menusel) while task_cycles, which answers in
+    ; DX:AX, was called here - it is ui_bill's now, and ui_bill banks AX
+    ; round it. Nothing below writes AX: gfx_lock's clobber is the flags,
+    ; and wm_strseg's KES is push cs / pop es (kernel size pass 18: the
+    ; store, the reload and the word, -6 .text -2 .bss)
     dec ah                      ; cell -> the app's own 0-based menu index
-    mov [ui_menusel], ax
     call gfx_lock
     mov bx, [menu_win]          ; the lock dropped between menu_track and
     or bx, bx                   ; here, so re-check the owner before calling
@@ -2596,7 +2598,7 @@ ui_dispatch:
     pop es                      ; DI is ui_bill's to clobber below (kernel
 .cbok:                          ; size pass 10, -3)
     jcxz .app_done              ; a handler withdrawn while the lock was down
-    mov ax, [ui_menusel]        ; (wm_about_set 0 / MENU_SET in the gap) must
+                                ; (wm_about_set 0 / MENU_SET in the gap) must
     mov bp, cx                  ; not be called at offset 0 (SPEC.md 12.2).
     call ui_bill                ; The resolution above is OUTSIDE the billing
                                 ; bracket now, so a withdrawn handler is
@@ -3035,12 +3037,14 @@ ui_cmd:
                                 ; transfer, so EVERY ENTRY HERE MUST BE .text
                                 ; and is
 %ifdef OS88_SHORTCUTS
-    dw .about, .ctrl, .tasks, .done, .hiber, .reboot, .shutdown, .close, .scdel, .files, .stik
+    dw .about, .ctrl, ui_tm_open, .done, .hiber, .reboot, .shutdown, .close, .scdel, .files, .stik
 %elifdef KERN_BIG
-    dw .about, .ctrl, .tasks, .done, .hiber, .reboot, .shutdown, .close, .files, .stik
+    dw .about, .ctrl, ui_tm_open, .done, .hiber, .reboot, .shutdown, .close, .files, .stik
 %else
-    dw .about, .ctrl, .tasks, .done, .reboot, .shutdown, .close, .files
-%endif
+    dw .about, .ctrl, ui_tm_open, .done, .reboot, .shutdown, .close, .files
+%endif                          ; (Task Manager is ui_tm_open itself: a package
+                                ; on the system disk now, SPEC.md 28 - its
+                                ; `.tasks: jmp` went, kernel size pass 18, -3)
 
 %ifdef KERN_BIG
 .hiber:
@@ -3067,9 +3071,6 @@ ui_cmd:
                                 ; retf and ui_cmd does not, so the retf would
                                 ; pop a NEAR frame as CS:IP - a wild jump, and
                                 ; os88ovlchk refuses it
-.tasks:
-    jmp ui_tm_open              ; not a kind any more: it is a package on the
-                                ; system disk (SPEC.md 28)
 .about:                         ; THE ONE KIND ui_cmd LAUNCHES - Timer and
                                 ; Bounce are packages on the apps disk (SPEC.md
                                 ; 14.8) - and AL is ALREADY it: CMD_ABOUT - 1,
@@ -3233,8 +3234,6 @@ ui_rebootq: resb 1              ; 0 = nothing owed, else UI_RBQ_* - a restart
                                 ; the way out (SPEC.md 20.10)
 
 ui_ev:      resb 8              ; popped event record (EV_TYPE/A/B/C)
-ui_menusel: resw 1              ; ui_dispatch scratch: AH = menu, AL = item,
-                                ; held across the billing calls (SPEC 12.2)
 ui_click_t: resw 1              ; EV_C of the event being dispatched: the
                                 ; click's birth tick (valid during dispatch,
                                 ; which always stores before handlers read)
