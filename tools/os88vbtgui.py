@@ -4616,9 +4616,9 @@ class PartyTab(object):
         ttk.Button(bb, text="Remove", command=self._remove).pack(side="left")
         bm = ttk.Frame(left)
         bm.pack(fill="x")
-        ttk.Button(bm, text="Up", command=lambda: self._move(-1)
+        ttk.Button(bm, text="Up", command=lambda: self._move_char(-1)
                    ).pack(side="left")
-        ttk.Button(bm, text="Down", command=lambda: self._move(1)
+        ttk.Button(bm, text="Down", command=lambda: self._move_char(1)
                    ).pack(side="left")
         self.side = ttk.Frame(left)
         self.side.pack(fill="x", pady=8)
@@ -4649,9 +4649,12 @@ class PartyTab(object):
         if self.ci() is not None:
             self.app.edit("remove_character", self.ci())
 
-    def _move(self, by):
+    def _move_char(self, by):
         """The selected character a place up or down the party - the turns'
-        order and the band's lines - and still selected after"""
+        order and the band's lines - and still selected after. (It was
+        `_move`, and the menu rows' mover below of the same name replaced it
+        in the class: the party's Up and Down did nothing - the owner,
+        2026-11-07)"""
         i = self.ci()
         if i is None:
             return

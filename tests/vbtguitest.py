@@ -312,6 +312,24 @@ with tempfile.TemporaryDirectory() as tdir:
                                  "characters.0")] ==
        ["clips", "openings", "battle", "enemy", "party"],
        "a check's place sends the window to its tab")
+    # NO METHOD DEFINED TWICE IN ONE CLASS: the second replaces the first
+    # without a word - the party tab's Up and Down called the menu rows'
+    # mover of the same name, and did nothing (the owner, 2026-11-07)
+    import ast
+    import glob
+    twice = []
+    for fn in sorted(glob.glob(os.path.join(ROOT, "tools", "*vbt*.py"))):
+        for c in ast.walk(ast.parse(open(fn).read())):
+            if isinstance(c, ast.ClassDef):
+                seen = set()
+                for n in c.body:
+                    if isinstance(n, ast.FunctionDef):
+                        if n.name in seen:
+                            twice.append("%s %s.%s" % (os.path.basename(fn),
+                                                       c.name, n.name))
+                        seen.add(n.name)
+    ok(not twice, "no class of the builder's defines a method twice (%s)"
+       % twice)
     # THE MEMORY: the engine's own arithmetic (vb_load, vb_rclaim) out of
     # VB_FREE, MEASURED on MartyPC's Hercules 5150 (VB_FREE_SRC): at format
     # 8 the entries ride in their clips, the band's buffers are the band's

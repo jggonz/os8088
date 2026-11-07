@@ -318,6 +318,33 @@ def inner(tmp):
     pt._lay("msg_row", "")
     ok(not app.proj.d.get("band_layout"), "C. ...and back to as it was")
 
+    # THE PARTY'S ORDER, by its own Up and Down beside the list - the
+    # buttons themselves, invoked: a method of the same name further down
+    # the class (the menu rows' mover) had replaced the one they called,
+    # and they did nothing (the owner, 2026-11-07)
+    def walk(w):
+        yield w
+        for c in w.winfo_children():
+            yield from walk(c)
+    btn = dict((w.cget("text"), w) for w in walk(pt.lb.master)
+               if w.winfo_class() == "TButton")
+    names0 = [c["name"] for c in app.proj.d["characters"]]
+    pt.mrow = None
+    pt.lb.selection_clear(0, "end")
+    pt.lb.selection_set(0)
+    pt.show()
+    btn["Down"].invoke()
+    app.root.update()
+    names1 = [c["name"] for c in app.proj.d["characters"]]
+    sel1 = pt.lb.curselection()
+    btn["Up"].invoke()
+    app.root.update()
+    names2 = [c["name"] for c in app.proj.d["characters"]]
+    ok(len(names0) > 1 and names1 == [names0[1], names0[0]] + names0[2:]
+       and sel1 == (1,) and names2 == names0,
+       "C. the party's Down moves the selected character down (%s -> %s, "
+       "still selected), and Up back (%s)" % (names0, names1, names2))
+
     # THE MENU'S SOUNDS: chosen on the Sounds tab, one from a file
     st = app.sounds_tab
     app.nb.select(st.f)
