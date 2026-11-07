@@ -1521,7 +1521,36 @@ dsk_xfer:
                                 ; that number happens to name
 %endif                          ; kind, and it is OS88_DRIVERS's (SPEC.md
                                 ; 62.9.2.3, 51.0.2)
-    call dsk_geom_pick          ; [dsk_base] and [dsk_cylmax] for this volume
+    ; --- the volume's partition base and cylinder bound -------------------
+    ; Properties of the VOLUME, so once per dsk_xfer and not once a sector:
+    ; the run loop below rereads both from memory. On a floppy this stores a
+    ; zero base and 80, which is what the transfer assumed when both were
+    ; constants (SPEC.md 52.10.3). The bound is taken from the UNIT and not
+    ; from the kind, because that is the thing it is a fact about: 80 is a
+    ; floppy's last cylinder plus one, and int 13h drive numbers >= 80h are
+    ; the fixed disks (a driver-backed volume left through .drv above).
+    ; It was dsk_geom_pick, this routine's one caller's: written here it
+    ; banks nothing - BP is not read before .sector's arms set it, and AX
+    ; and the flags are spent - and indexes through BP rather than banking
+    ; the caller's BX (kernel size pass 18, -7; -8 with dsk_vol_fixed_x's
+    ; `clc`, which keeps the routines from here to dsk_next_clus_x even).
+    ; 38 bytes, an EVEN count, so the per-sector loop below keeps the parity
+    ; it was measured at (tests/unit/t_hotpar.py pins this routine's entry)
+    mov al, [disk_drive]
+    cbw                         ; (a volume index, 0..DVOL_MAX-1)
+    xchg bp, ax
+    shl bp, 1
+    shl bp, 1                   ; volume * 4: dsk_vbase is dwords
+    mov ax, [ds:bp+dsk_vbase]   ; (BP names SS by default: SS != DS)
+    mov [dsk_base], ax
+    mov ax, [ds:bp+dsk_vbase+2]
+    mov [dsk_base+2], ax
+    mov ax, 80                  ; the floppy bound, and the corrupt-LBA net
+    test byte [dsk_unit], 0x80  ; that has caught bad directory entries since
+    jz .gset                    ; before there was a hard disk to ask about
+    mov ax, 1024                ; CHS's own ceiling: 10 bits of cylinder
+.gset:
+    mov [dsk_cylmax], ax
 %if %isdef(KERN_MEGA) && %isdef(FPG_OPS)
     jmp .sector                 ; (the driver arm's bar, below, pushed it past
 %else                           ; a short jump on kern_mega alone)
@@ -2960,43 +2989,6 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
                                 ; so the DATA stays in .text at every toggle
 
 
-; -----------------------------------------------------------------------------
-; dsk_geom_pick - bank the current volume's partition base and cylinder bound
-; in:  [disk_drive] = the volume, [dsk_unit] already set from its row
-; out: [dsk_base] (32-bit) and [dsk_cylmax]; every register kept, FLAGS NOT -
-;      the caller is dsk_xfer's entry sequence and .sector opens with its own
-;      `test si, si`, so there is nothing in flight to preserve
-;
-; Called once per dsk_xfer, not once per sector: both answers are properties
-; of the VOLUME and the run loop below rereads them from memory. On a floppy
-; it stores a zero base and 80, which is what the transfer assumed when both
-; were constants (SPEC.md 52.10.3).
-;
-; The cylinder bound is taken from the UNIT and not from the kind, because
-; that is the thing it is a fact about: 80 is a floppy's last cylinder plus
-; one, and int 13h drive numbers >= 80h are the fixed disks. A driver-backed
-; volume never reaches here at all - it left through .drv.
-; -----------------------------------------------------------------------------
-dsk_geom_pick:
-    push ax
-    push bx
-    mov bl, [disk_drive]
-    xor bh, bh
-    add bx, bx
-    add bx, bx                  ; volume * 4: dsk_vbase is dwords
-    mov ax, [dsk_vbase+bx]
-    mov [dsk_base], ax
-    mov ax, [dsk_vbase+bx+2]
-    mov [dsk_base+2], ax
-    mov ax, 80                  ; the floppy bound, and the corrupt-LBA net
-    test byte [dsk_unit], 0x80  ; that has caught bad directory entries since
-    jz .set                     ; before there was a hard disk to ask about
-    mov ax, 1024                ; CHS's own ceiling: 10 bits of cylinder
-.set:
-    mov [dsk_cylmax], ax
-    pop bx
-    pop ax
-    ret
 
 ; -----------------------------------------------------------------------------
 ; dsk_flop_add - register a BIOS floppy beyond A: and B: (SPEC.md 18.98)
@@ -3146,8 +3138,11 @@ dsk_vol_fixed_x:
     dec ax                      ; own test, in the one place that owns it.
                                 ; AL 1 -> 0 and AH (VT_BIOS) untouched: no
 %endif                          ; borrow out of a 1 (size pass 10, -3)
-.out:
-    clc
+.out:                           ; CF = 0 ALREADY on every way in: `sbb al, 0`
+                                ; on a 1 cannot borrow, `cmp ah, DVK_BIOS` is
+                                ; a compare with 0 and `test` clears it - so
+                                ; the `clc` that stood here went (kernel size
+                                ; pass 18, -1)
     SKIPBL1                     ; mov bl over the stc: BL is popped (pass 17)
 .no:
     stc
