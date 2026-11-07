@@ -18951,7 +18951,7 @@ SOAK = [
         "(ECHO 62, DIR 87, TYPE 802). 80s is 56 measured alone, 73 in three lanes",
         needs=("bochs", "nasm")),
     Row("win16megatrap", "soak", py("tests/win16megatrap.py"), 90.0,
-        "docs/plans/KERN-MEGA-PLAN.md 14.164: WIN16 on kern_mega with no "
+        "docs/plans/KERN-MEGA-PLAN.md 14.164, 14.165: WIN16 on kern_mega with no "
         "completed #GP on its hot paths. MEGATRAP=1's census (a private "
         "tree) under Bochs, WIN16's arm on C:, each trap charged to the "
         "selector WIN16's own data names: LZT.EXE (LZEXPAND, VER, a few "
@@ -18962,9 +18962,15 @@ SOAK = [
         "Program Manager (win16ref's, a SKIP without it) with its groups, "
         "tiled, cascaded and cycled, NONE to part 10's (the MDI paint, ~180 "
         "a key); Solitaire (a WS_CLIPCHILDREN window, CLOSED at its first "
-        "paint while w16_cutkid lost the walk's count) up. No kern_mega "
+        "paint while w16_cutkid lost the walk's count) up; MDI.EXE's own "
+        "MDI checks answered 'MDI OK'; File Manager (win16ref's) tiled and "
+        "cascaded, up. Every leg: NO xfer fixup at WIN16's own code "
+        "selector (WM_MDICREATE/WM_MDIDESTROY's call back into WIN16's "
+        "stubs named their DATA half, and kern_mega's fixup CLOSED MDI.EXE "
+        "and File Manager at w16_cbenter's retf). No kern_mega "
         "FAULT or CLOSED. Red with the WIN16.O88 from before (--pkg/--map): "
-        "1,959, 534, 4,838 and CLOSED. 77s measured, three legs at once",
+        "1,959, 534, 4,838 and CLOSED; before 14.165, 3, 6 and 1 xfer "
+        "fixups (CLOSED on the kernel before). 77s measured, five legs at once",
         needs=("bochs", "mtools", "nasm", "win16fixtures")),
     Row("rdgaotmega", "soak", py("tests/rdgaotmega.py"), 250.0,
         "docs/REALDMG-SPEC.md 20.15: a PRECOMPILED cartridge on kern_mega. "
