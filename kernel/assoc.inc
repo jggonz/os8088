@@ -1258,11 +1258,6 @@ assoc_run_x:
                                 ; assoc_back comes back to what is banked
                                 ; here, and files_refresh paints from the
                                 ; WINDOW's cache (SPEC.md 22.1)
-.banked:                        ; A PROGRAM'S OWN REQUEST (21.5.3.3): the
-    mov [assoc_pwin], di        ;   locator it handed over says where, and
-    mov dx, [assoc_dclus]       ;   no window posted it (DI = 0). A POSTED
-    mov al, [assoc_ddrv]        ;   one (21.5.4) runs after the caller has
-    jmp short .located          ;   unwound, standing anywhere by then
 .curvol:
     mov dx, [dsk_cwd]           ; no poster and no locator, so the
     mov al, [disk_drive]        ; volume the machine is on IS the home
@@ -1276,6 +1271,19 @@ assoc_run_x:
                                 ; ONCE A RUN and not once a locate, so an
                                 ; empty drive the search below found empty is
                                 ; not asked again by the locate after it
+    jmp short .home
+.banked:                        ; A PROGRAM'S OWN REQUEST (21.5.3.3): the
+    mov [assoc_dead], di        ;   locator it handed over says where, and
+    mov [assoc_pwin], di        ;   no window posted it (DI = 0). A POSTED
+                                ;   one (21.5.4) runs after the caller has
+                                ;   unwound, standing anywhere by then. The
+                                ;   locator is banked ALREADY, so only what
+                                ;   .located's word store did beside it is
+                                ;   done here: assoc_dead cleared - and the
+                                ;   word's high byte is [assoc_pwin]'s low,
+                                ;   which the store after it writes whole
+                                ;   (kernel size pass 18: -3)
+.home:
 %ifdef OS88_SHORTCUTS
     call lnk_is                 ; A LINK opens what it names, and no program
     jne .notlnk                 ; at all (SPEC.md 26.10.3): every door to a
@@ -1365,11 +1373,11 @@ assoc_run_x:
     ; ASSOC.DAT. Bit 7 of [assoc_dead] is the once: volumes are 0..5 there
     test byte [assoc_dead], 0x80
     jnz .needs
-    call assoc_ownex            ; ONLY FOR THE EXTENSION'S OWN PROGRAM
-    jc .needs                   ; (54.4.2.4)
-    or byte [assoc_dead], 0x80
     pop ax                      ; the slot the extension named...
     push ax
+    call assoc_ownex            ; ONLY FOR THE EXTENSION'S OWN PROGRAM
+    jc .needs                   ; (54.4.2.4) - AL the slot still
+    or byte [assoc_dead], 0x80
     cbw                         ; (a slot is < ASSOC_NAPP: AH = 0. One byte
     mov bx, ax                  ; under `xor ah, ah`, which is what keeps
                                 ; this addition EVEN - dsk_xfer and its hot
@@ -1459,23 +1467,25 @@ assoc_run_x:
 ; replace: DOS names WIN16 for an .EXE, the sweep answered DOS, and DOS
 ; forwarded again, a DOS a round on the UI stack until it overflowed
 ; (SPEC.md 54.4.2.4). Out of line so the short jumps across .nofile stay
-; short - inline, two of them became five-byte pairs. Clobbers AX, BX, SI
+; short - inline, two of them became five-byte pairs.
+; in:  AL = the slot the caller banked (its `pop ax / push ax`)
+; out: CF as above, AX as it came in. Clobbers BX, SI, DI
 assoc_ownex:
+    push ax
     mov si, assoc_doc
     call assoc_slot_of          ; AL = the extension's slot
+    pop bx                      ; BL = the caller's (POP keeps CF)
     jc .r
-    mov bx, sp
-    cmp al, [ss:bx+2]           ; ...against the caller's banked one
+    cmp al, bl
     je .r                       ; (equal: CF = 0)
     stc
 .r:
-    ret
-    nop                         ; PARITY PAD, never executed: dsk_xfer and
-                                ; its hot neighbours behind it in .cold keep
-                                ; their parity (t_hotpar)
-%ifndef KERN_SMALL
-    nop                         ; ...and on kern_big since ASSOC_PWBANK's
-%endif                          ;   .banked arm (SPEC.md 54.9.1)
+    xchg ax, bx                 ; AX = the caller's again (XCHG keeps CF)
+    ret                         ; (NO PARITY PAD: the two that stood here, for
+                                ; dsk_xfer and its hot neighbours behind this
+                                ; in .cold, went with .banked's -3 and this
+                                ; routine's -1 - an even -6 in all, kernel
+                                ; size pass 18. t_hotpar holds the parity)
 
 ; assoc_back - put the user's volume back where the document is. A failed
 ; remount leaves that volume mount-failed at its root with the write gate
@@ -1551,6 +1561,9 @@ ASSOC_PWBANK equ 0xFFFF         ; [assoc_pwin]: no window, the locator banked
 assoc_pwin:  resw 1             ; the posting Disk window's STATE BLOCK, not
                                 ; its window record - FS_DRV/FS_CWD are read
                                 ; off it (SPEC.md 54.9.1), as ld_pwin is
+%if assoc_pwin - assoc_dead != 1
+  %error "assoc_run_x's .banked clears assoc_dead by a word whose high byte is assoc_pwin's"
+%endif
 section .cold                   ; ...and back to cold code
 
 ; =============================================================================
