@@ -607,7 +607,8 @@ cache could not be claimed and the game ran interpreted (its log has no J).
   which that wording denied). The probe answers a KB over
   an exact size (SPEC.md 20.14.6.3), so the plan takes whole banks; bank 0's
   header must then say the same size, which a compressed file - read raw
-  here - does not. The log's head gives the heap the plan saw.
+  here - does not, so a packed file never comes here (section 19,
+  `rw_czprobe`). The log's head gives the heap the plan saw.
 - **The load** (`rw_bload`, the UI task): the slots, one `OSAPI_XMEM_ALLOC`
   for banks 1 on, then the file through `OSAPI_FILE_READ_SEQ` a bank at a
   time - bank 0 straight into the view's 0000-3FFF (so `rdg_init` is handed
@@ -3654,9 +3655,22 @@ and the frames drawn a second.
   SPEC.md 24.6's `emu360.img` with the cartridge in its `MEDIA/`. There the
   cartridge is LZ4-packed, 32,768 bytes to 1,110: a ROM of up to 256KB is
   read in ONE `OSAPI_FILE_READ` into a single claim (section 10), which is the
-  transparent read's condition (SPEC.md 20.14.3), and only a cartridge in the
-  XMS bank cache (section 10.3, over 256K) is read raw. The 720KB apps disk
+  transparent read's condition (SPEC.md 20.14.3). The 720KB apps disk
   does not carry it: it has 98 clusters free and is being re-curated.
+- **A PACKED cartridge is always ONE claim** (`rw_czprobe`, KERN-MEGA-PLAN
+  14.147). The bank cache (10.3) and kern_mega's banks in place (10.3.1)
+  both read the file a bank at a time through `OSAPI_FILE_READ_SEQ`, which
+  is RAW, so a packed file handed them its LZ4 bytes as bank 0 and the
+  header check said `not a GB ROM`. The size probe cannot tell - it answers
+  what the file EXPANDS to either way - so the load walks the folder with
+  `OSAPI_FILE_FIND` for the file's own record and reads `OSAPI_FIND_CZ` off
+  +22, and `rw_plan` gives a packed file neither the cache nor
+  `rw_xplan`: one claim if it fits, else `REALDMG: unpack the ROM`. That
+  was not a corner on kern_mega: its arm puts EVERY cartridge of 32KB or
+  more in place, so the shipped demo itself was refused there while
+  kern_big played it (`mega-gbship`). A packed cartridge over one claim has
+  no read that unpacks it a bank at a time (SPEC.md 20.14.3's reasons), so
+  the refusal is the answer; the same ROM stored plain goes to the cache.
 - **No game ships.** A cartridge is the user's own.
 
 **`make realdmghd GBROMS=<dir>`** writes a HARD DISK, `build/REALDMG-HD.VHD`,

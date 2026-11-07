@@ -13994,3 +13994,38 @@ that kernel, which is what says the detector sees a reboot.
 Cost: `.mega` +13 bytes (above 1MB); `MEGA_RESIDENT` 62,976 unchanged;
 kern_big byte-identical (`make build/kernel.bin` with and without, one
 commit).
+
+### 14.147 RealDMG refused the SHIPPED packed GBDEMO.GB (2026-11-07) - FIXED
+
+**Found by the mega-release hands-on pass** (h3, 86Box's mr286): double-click
+`MEDIA\GBDEMO.GB` on kern_mega's apps disk and RealDMG's arm says `REALDMG:
+not a GB ROM`; kern_big plays the same disk's copy, and the arm plays the
+cartridge stored plain. `os88disk` packs it (CZ, 1,095 bytes for 32KB). Under
+`CPU_F_PM` `rw_plan` asks `rw_xplan` first, which puts EVERY cartridge of 32KB
+or more in place above 1MB (REALDMG-SPEC 10.3.1), and the load reads the file
+a bank at a time with `OSAPI_FILE_READ_SEQ` - RAW (SPEC.md 20.14.3) - so bank 0
+was 1,095 bytes of LZ4 and the header check refused it. kern_big took the
+one-claim `OSAPI_FILE_READ`, which unpacks; its bank cache (10.3, over 256K or
+no room) has the same blind spot for a packed cartridge too big for one claim.
+
+**Fix, in the package, both builds** (`apps/realdmg/`): the size probe cannot
+tell a packed file - it answers what the file expands to - so `rw_czprobe`
+walks the folder with `OSAPI_FILE_FIND` for the file's record and keeps
+`OSAPI_FIND_CZ` (+22) in `[rw_czf]`, and `rw_plan` gives a packed file
+neither `rw_xplan` nor the cache: one claim if it fits, else the new toast
+`REALDMG: unpack the ROM` - a packed cartridge past one claim has no read that
+unpacks a bank at a time (20.14.3's reasons), and the same ROM stored plain
+goes to the cache as before. REALDMG-SPEC 19 says so.
+
+**Row**: `mega-gbship` (tests/megaport.txt): `gbship`'s C leg under
+`OS88_MEGA` boots mega.img with megaapps.img - the arm and the packed demo -
+and the game's frame counter must ADVANCE between two looks (a refused
+cartridge leaves the view claimed with whatever it held: the red run read
+39,810 there and the first spelling of the check passed on it). Green on
+Bochs, 121 frames; red with the base's megaapps.img (`--apps`): `never ran`.
+
+Cost: no kernel byte (kernsize's lines unchanged; nothing under kernel/ moved).
+REALDMG.O88 +144 bytes of image on kern_big (38,050 -> 38,194), the arm +152
+(39,206 -> 39,358), 25 of bss (`rw_czf`, `rw_fnd`); on the disk +144 / +80
+packed.
+

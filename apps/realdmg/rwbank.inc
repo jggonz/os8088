@@ -55,6 +55,11 @@ rw_plan:
     jae .whole                      ; it all fits: one claim
 .cache:
     mov si, rw_s_big                ; (the refusal, should it come to one)
+    cmp byte [rw_czf], 0            ; A PACKED FILE HAS NO BANK CACHE: its
+    jne .nocache                    ;   bank reads (rw_bread, READ_SEQ) are
+                                    ;   RAW and would hand the packed bytes
+                                    ;   (SPEC.md 20.14.3); OSAPI_FILE_READ
+                                    ;   alone unpacks, into one claim
 %ifdef PKG_MEGA
     cmp byte [rw_pm], 0             ; NO BANK CACHE UNDER CPU_F_PM: slot
     jne .nocache                    ;   0's segment is 400h BELOW its claim
@@ -104,7 +109,12 @@ rw_plan:
 .nocache:
     mov cx, [rw_romkb]              ; one claim without the room the rest
     cmp cx, RW_ROMMAX_KB + 2        ;   wanted, if it fits at all
-    ja .no
+    jbe .nc1
+    cmp byte [rw_czf], 0            ; (packed and past one claim: said so -
+    je .no                          ;   the same cartridge unpacked goes to
+    mov si, rw_s_cz                 ;   the cache)
+    jmp short .no
+.nc1:
     mov si, rw_s_room
     call OSAPI_MEM_AVAIL
     cmp ax, cx
@@ -131,6 +141,8 @@ rw_xplan:
 %endif
     cmp byte [rw_pm], 0
     je .no
+    cmp byte [rw_czf], 0            ; packed: one claim, OSAPI_FILE_READ's
+    jne .no                         ;   (rw_plan's .cache says why)
     mov cx, [rw_romkb]
     and cx, 0FFF0h                  ; whole banks
     cmp cx, 32
@@ -394,6 +406,65 @@ rw_xput:
     pop ds
     ret
 %endif
+
+; rw_czprobe - rw_name, in the current folder: is it stored PACKED (SPEC.md
+; 20.14.3)? [rw_czf] = OSAPI_FIND_CZ if so, else 0. The size probe cannot
+; tell - it answers what the file expands to either way - and only
+; OSAPI_FILE_READ unpacks: rw_bread's READ_SEQ is raw, so a packed cartridge
+; in the bank cache read its packed bytes as bank 0 and was "not a GB ROM"
+; (the shipped MEDIA\GBDEMO.GB on kern_mega, whose arm caches every cart of
+; 32KB or more: KERN-MEGA-PLAN 14.147). Keeps every register
+rw_czprobe:
+    push ax
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    push ds
+    pop es
+    mov byte [rw_czf], 0
+    xor cx, cx                      ; ordinal 0
+.f:
+    mov di, rw_fnd
+    call OSAPI_FILE_FIND            ; CX = the next ordinal
+    jc .r                           ; (not found: a plain read finds out)
+    cmp word [rw_fnd + 14], OSAPI_FT_DIR
+    jae .f
+    mov si, rw_name
+    mov di, rw_fnd
+.c:
+    mov al, [si]                    ; the names, any case
+    mov ah, [di]
+    cmp al, 'a'
+    jb .c1
+    cmp al, 'z'
+    ja .c1
+    sub al, 20h
+.c1:
+    cmp ah, 'a'
+    jb .c2
+    cmp ah, 'z'
+    ja .c2
+    sub ah, 20h
+.c2:
+    cmp al, ah
+    jne .f
+    inc si
+    inc di
+    or al, al
+    jnz .c
+    mov al, [rw_fnd + 22]
+    and al, OSAPI_FIND_CZ
+    mov [rw_czf], al
+.r:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
 
 ; rw_bread - the file's next 16KB into DX:0000. CF = 1 unless it all came
 rw_bread:
