@@ -6564,7 +6564,6 @@ dsk_dirw_start_x:
     ret
 
 dsk_dirw_next_x:
-    push bx
     cmp word [dsk_wguard], 0
     je .end                     ; a looped chain stops here, not never
     dec word [dsk_wguard]
@@ -6582,10 +6581,12 @@ dsk_dirw_next_x:
     jmp short .step             ; arm's step: base + [dsk_wsec], one on
 
 .sub:                           ; a subdirectory: spc sectors per cluster
-    mov bl, [dsk_spc]
-    xor bh, bh
-    cmp [dsk_wsec], bx
-    jb .have
+    mov al, [dsk_spc]           ; AL is free (the cluster is reloaded either
+    cmp [dsk_wsec], al          ; way), and a BYTE compare is exact: inside a
+    jb .have                    ; cluster [dsk_wsec] runs 0..spc, and spc is
+                                ; at most 128 - so BX is not borrowed and the
+                                ; bank round the routine went (kernel size
+                                ; pass 18, -5)
     mov ax, [dsk_wclus]
     call dsk_next_clus_x          ; CF=1 only if the CURRENT link is invalid
     jc .end
@@ -6598,16 +6599,12 @@ dsk_dirw_next_x:
 .step:
     add ax, [dsk_wsec]
 %ifdef OS88_BIGVOL
-    adc word [dsk_c2hi], 0      ; (SPEC.md 18.7.5) - and CF = 0 out of it: an
-%else                           ; LBA's high word is a byte, so it cannot wrap
-    clc
-%endif
-    inc word [dsk_wsec]         ; (`inc` leaves CF alone)
-    SKIPBL1                     ; over the stc, BL being popped (pass 16)
-.end:
-    stc
-.out:
-    pop bx
+    adc word [dsk_c2hi], 0      ; (SPEC.md 18.7.5): an LBA's high word is a
+%endif                          ; byte, so it cannot wrap
+    inc word [dsk_wsec]
+    SKIPF1                      ; over the stc - and CF = 0 out of it, the
+.end:                           ; answer (kern_small's `clc` went with it);
+    stc                         ; ZF/SF/PF are no caller's on this path
     ret
 
 ; =============================================================================
@@ -8824,8 +8821,9 @@ dsk_read_chain_x:
     mul cx                      ; and holds no finer figure, so the byte count
     mov cx, ax                  ; is exact to the sector and the last partial
     call ct_fpg_begin                         ; one rounds up here exactly as it used to
-    pop dx                      ; round up inside the widget (12.8.1)
-    pop ax                      ; ...AX is the first cluster either side
+                                ; round up inside the widget (12.8.1) - and
+                                ; fpg_begin keeps every register, so DX:CX is
+                                ; still the byte count below
 
     ; --- a REDIRECTED volume: ONE FSV_READ, by the handle in AX (62.9.1) ----
     ; This is the loader's and assoc's path, and it is the one caller that
@@ -8835,7 +8833,14 @@ dsk_read_chain_x:
     ; sector count as its scale, which is as true of a cable as of a floppy.
 %ifdef OS88_REDIR               ; SPEC.md 62.9.2.3: the chain reader's
     cmp byte [dsk_vkind], DVK_FILE
-    jne .walk
+    jne .walk0
+    mov di, dx                  ; DI:CX = the 32-bit capacity: the scale's own
+                                ; DX:CX, exactly DX sectors, so the driver can
+                                ; clamp against it and can never overrun (it
+                                ; was multiplied out a second time here:
+                                ; kernel size pass 18, -9)
+    pop dx                      ; (the sector count, spent)
+    pop ax                      ; AX = the first cluster: the HANDLE here
     mov [dsk_chain_end], ax     ; the handle, where .done's own store would
                                 ; have put it: SI is READAT's OFFSET below,
                                 ; so it cannot bank it any more. Nothing has
@@ -8844,14 +8849,8 @@ dsk_read_chain_x:
                                 ; branches to its own redirected arm long
                                 ; before here - and it is kept rather than
                                 ; dropped at three bytes (SPEC.md 62.9.18)
-    push ax                     ; the handle, across the arithmetic
-    mov ax, dx                  ; the capacity is exactly what was asked for:
-    mov cx, 512                 ; DX sectors, in 32 bits, so the driver can
-    mul cx                      ; clamp against it and can never overrun
-    mov di, dx                  ; DI:CX = the 32-bit capacity
-    mov cx, ax
     mov dx, es                  ; DX:BX = the destination - DX and not ES,
-    pop ax                      ; because ES is KERNEL_SEG inside a driver
+                                ; because ES is KERNEL_SEG inside a driver
     push bp
     ; **THE VERB IS READAT AND NOT READ** (SPEC.md 62.9.18). This routine's
     ; contract is `read DX SECTORS`, which the FAT walk below does by simply
@@ -8876,7 +8875,10 @@ dsk_read_chain_x:
     jmp short .done2            ; the shared tail: fpg_end, the pops, CF=0 -
                                 ; joined BELOW the chain-end store, which
                                 ; this arm has already made
+.walk0:
 %endif                          ; OS88_REDIR
+    pop dx                      ; DX = the sectors, AX the first cluster
+    pop ax
 .walk:
     ; THE RUN IS KEPT IN CLUSTERS, NOT LBAs (SPEC.md 18.7.5). A run is
     ; contiguous exactly when each cluster is the one after the last - every
@@ -10305,10 +10307,12 @@ dsk_get_icon_x:
     push es
     mov si, ax
     add si, [dsk_ioff]          ; ...and reads it back out of the same store
-    mov es, [dsk_dseg]          ; (ico_ref_set above)
+    mov ax, [dsk_dseg]          ; (ico_ref_set above), the segment tested in
+    mov es, ax                  ; the register it came through (kernel size
+    or ax, ax                   ; pass 18, -2: `mov` writes no flag)
     mov al, ICO_R_NONE          ; **NO STORE, NO REFERENCE**: a mount with no
-    cmp word [dsk_dseg], 0      ; destination built no listing, so there is
-    je .none                    ; nothing to have a reference IN - and the
+    jz .none                    ; destination built no listing, so there is
+                                ; nothing to have a reference IN - and the
     mov al, [es:si]             ; segment this would read is 0, which is the
 .none:                          ; interrupt vector table drawn as an icon
     pop es

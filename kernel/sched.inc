@@ -486,21 +486,18 @@ section .text
 ; answer.  This clock is a pace, not an accounting.
 ; -----------------------------------------------------------------------------
 sch_pit_now:
-    push cx
     pushf
     cli
     mov al, 0x00                ; latch channel 0's count
     out 0x43, al
     in al, 0x40
-    mov cl, al
+    mov ah, al                  ; the LOW byte, parked in AH...
     in al, 0x40
-    mov ch, al
-    mov dx, [ticks]
-    popf
-    neg cx                      ; phase = 65536 - count, counting up from the
-    mov ax, cx                  ; tick
-    pop cx
-    ret
+    xchg al, ah                 ; ...and the pair put the right way round:
+    mov dx, [ticks]             ; the count is built in AX itself, so CX is
+    popf                        ; never borrowed (kernel size pass 18, -4,
+    neg ax                      ; and ~27 cycles a read faster). Phase =
+    ret                         ; 65536 - count, counting up from the tick
 
 ; -----------------------------------------------------------------------------
 sch_fast_on:
@@ -640,9 +637,7 @@ sch_rhook:
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
 sched_stop:
-    push ax
-    push si
-    push di
+    call kent_bp                ; KENT: push ax..bp (kernel size pass 18, -2)
     push es
 
 %ifdef KERN_MEGA
@@ -657,19 +652,14 @@ sched_stop:
     cli
     movsw
     movsw
-    popf
-
-    call mouse_unhook           ; restores int 0Ch, masks IRQ4
-    call snd_unhook             ; 61h bits 0-1 back to their boot state,
-                                ; ch2 quiescent (SPEC.md 34.7)
 
     ; PIT ch0 back to the BIOS default (mode 3, square wave, divisor
-    ; 65536). The vector is already restored so sch_isr can no longer read
-    ; the PIT mid-sequence, but keep the three OUTs atomic anyway - an
-    ; interleaved counter read between the two count-byte writes is
-    ; undefined on a real 8253 (SPEC.md 8.1).
-    pushf
-    cli
+    ; 65536), in the SAME window as the vector: the vector is restored so
+    ; sch_isr can no longer read the PIT mid-sequence, and the three OUTs
+    ; stay atomic anyway - an interleaved counter read between the two
+    ; count-byte writes is undefined on a real 8253 (SPEC.md 8.1). It was a
+    ; second window after the two unhooks, which touch neither channel 0 nor
+    ; its vector (kernel size pass 18, -3)
     mov al, 0x36
     out 0x43, al
     xor al, al
@@ -677,11 +667,10 @@ sched_stop:
     out 0x40, al
     popf
 
-    pop es
-    pop di
-    pop si
-    pop ax
-    ret
+    call mouse_unhook           ; restores int 0Ch, masks IRQ4
+    call snd_unhook             ; 61h bits 0-1 back to their boot state,
+                                ; ch2 quiescent (SPEC.md 34.7)
+    jmp kret_es
 
 sched_unhook:
     call sched_stop
@@ -694,6 +683,12 @@ sched_unhook:
                                 ; and neither has an instruction after it, so
                                 ; AX/SI/DI/ES need not come back either
 %endif
+    nop                         ; PARITY, never executed (kernel size pass 18):
+                                ; sch_pit_now -4 and sched_stop -5 above are
+                                ; odd together, and sch_isr / sch_switch
+                                ; below are pinned (tests/unit/t_hotpar.py).
+                                ; The next odd byte saved between cur_move_1
+                                ; and sch_isr takes this pad with it
 
 ; -----------------------------------------------------------------------------
 ; sch_wake_ui - make the UI task ready (PROBE, docs/plans/completed/SCHED-IDLE-PLAN.md 6.3)
