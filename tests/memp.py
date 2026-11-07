@@ -63,8 +63,10 @@ def main():
                 if (w.title or "") == "MEMP":
                     seg = u16(m.read(os88geom.winptr(m, w.i, S)
                                      + os88geom.W_SEG, 2))
-                    img = u16(m.read(seg * 16 + 8, 2))
-                    return bytes(m.read(seg * 16 + img, 40))
+                    lin = (m.lin if getattr(m, "bochs", False)   # a selector
+                           else lambda sg, o: sg * 16 + o)      # on kern_mega
+                    img = u16(m.read(lin(seg, 8), 2))
+                    return bytes(m.read(lin(seg, img), 40))
             return None
         got = {}
 
