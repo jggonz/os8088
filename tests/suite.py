@@ -18950,6 +18950,22 @@ SOAK = [
         "kern_mega FAULT. Red with the `push cs / pop ds` put back "
         "(ECHO 62, DIR 87, TYPE 802). 80s is 56 measured alone, 73 in three lanes",
         needs=("bochs", "nasm")),
+    Row("win16megatrap", "soak", py("tests/win16megatrap.py"), 90.0,
+        "docs/plans/KERN-MEGA-PLAN.md 14.164: WIN16 on kern_mega with no "
+        "completed #GP on its hot paths. MEGATRAP=1's census (a private "
+        "tree) under Bochs, WIN16's arm on C:, each trap charged to the "
+        "selector WIN16's own data names: LZT.EXE (LZEXPAND, VER, a few "
+        "hundred int 21h) must charge NONE to the DOS block's code half "
+        "(its gate and host stored through CS, fifteen an int 21h) and at "
+        "most 140 to part 9's (its per-byte copy, 279 a run, is CSDO now), "
+        "and leave SAMPLE.TXT and SECOND.DAT expanded byte for byte; "
+        "Program Manager (win16ref's, a SKIP without it) with its groups, "
+        "tiled, cascaded and cycled, NONE to part 10's (the MDI paint, ~180 "
+        "a key); Solitaire (a WS_CLIPCHILDREN window, CLOSED at its first "
+        "paint while w16_cutkid lost the walk's count) up. No kern_mega "
+        "FAULT or CLOSED. Red with the WIN16.O88 from before (--pkg/--map): "
+        "1,959, 534, 4,838 and CLOSED. 77s measured, three legs at once",
+        needs=("bochs", "mtools", "nasm", "win16fixtures")),
     Row("rdgaotmega", "soak", py("tests/rdgaotmega.py"), 250.0,
         "docs/REALDMG-SPEC.md 20.15: a PRECOMPILED cartridge on kern_mega. "
         "tools/gbaot.py translates blargg's cpu_instrs squeezed (--squeeze: "

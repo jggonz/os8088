@@ -115,3 +115,24 @@
 0 1 apps/scribe/scdoc.inc  # sc_dstsh: DS = CS for the rep movsb that READS sc_d_normal into the image
 0 3 apps/scribe/scutil.inc  # sc_tclevel: DS = CS after each read, nothing stored through it
 0 1 apps/scribe/scribe.asm  # sc_arg: ES = KERNEL_SEG to READ the launch file's name
+
+# --- apps/win16: WIN16, the image and its parts (KERN-MEGA-PLAN 14.164) -----
+# A part's own words go through CSDO / [CSEG x] (w16pm.inc: the part's data
+# half at W16S_SELF) where they are on a per-key, per-paint or per-byte path:
+# all of part 10's MDI code (w16mdi.inc: none left), LZEXPAND's and VER's
+# copies. The DOS host's int 21h words go through the core's data selector
+# (w16dosh.asm, DOS_PMGATE). What is left was measured COLD on kern_mega:
+# once a load, a WinExec, a dialog or a call, completed by the kernel, or a
+# segment register loaded with a code segment and only READ through
+0 2 apps/win16/w16core.inc  # w16_cbenter's and w16_cbret's ES = KERNEL_SEG, a callback's convention (os88ui and the window records READ through it); nothing stored
+3 0 apps/win16/w16file.inc  # w16_i21dos's two stack words (once a fetch onto the UI task's stack, one a Program Manager start measured) and w16_xerr, once a DOS error
+0 1 apps/win16/w16i21.inc  # the arm's own: ES = CS for an IRET of ours to stand in for a real-mode vector - an address, never stored through
+5 1 apps/win16/w16load.inc  # the loader part's bind cache (w16l_rowslot, w16l_missslot): one store per import a program binds, 25-180 at a program's load and none after it; and DS = CS to READ the part's bytes for its kept copy
+66 0 apps/win16/w16lzver.inc  # LZEXPAND's and VER's per-call cells in part 9 - the LZ handle table at LZOpen/LZClose, VerFindFile's and VerInstallFile's parameters: a few a call. Their per-byte and per-block stores (w16v_cpy, w16v_join, w16z_read, w16z_copy) are CSDO
+2 1 apps/win16/w16progm.inc  # Program Manager's DDE server (part 10): a group's name and its index, once a DDE command; ES = CS to READ its own string
+0 1 apps/win16/w16sys.inc  # DS = CS to READ the class names out of the dialog part, put back after the copy
+20 1 apps/win16/w16syslib.inc  # part 9's COMMDLG, SHELL and REG cells: once a file dialog, a ShellExecute, a RegSetValue; and ES = KERNEL_SEG for a window's READ
+47 3 apps/win16/w16task.inc  # part 10's WinExec, ShellExecute and LoadModule parameters and the turns' busy byte: once a program start (~40 in TASKS.EXE's whole run); ES = CS or KERNEL_SEG to READ a toast or a record
+0 3 apps/win16/w16user.inc  # ES = KERNEL_SEG for a callback's or os88ui's READ of a window record; nothing stored through it
+0 3 apps/win16/w16wnd.inc  # ES (and CX) = KERNEL_SEG for READS of the window records; nothing stored through it
+0 1 apps/win16/win16.asm  # the dialog part's ES = KERNEL_SEG for os88ui's READ of a window record

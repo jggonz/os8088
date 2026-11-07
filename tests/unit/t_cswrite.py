@@ -27,7 +27,8 @@ engine), apps/notepad/ and the speaker libraries every player includes
 every native call through CS at ~1,660 a second of PONG.WAB until 14.163
 took it to none, and the office packages 14.162 took to no store at all -
 apps/sheet/ (its two modules store through CSDO, the data selector in
-kern_mega's arm), apps/word/ and apps/scribe/ - and holds them to
+kern_mega's arm), apps/word/ and apps/scribe/ - and apps/win16/, whose MDI part, LZ/VER
+copies and DOS host KERN-MEGA-PLAN 14.164 took to none - and holds them to
 `tests/cswrites.txt`, textrules' shape:
 
   * a FILE NOT IN THE REGISTRY using either idiom fails - the case that
@@ -69,7 +70,8 @@ REGISTRY = os.path.join(ROOT, "tests", "cswrites.txt")
 TREES = ("kernel", "drivers", "apps/pixel", "apps/pixelstein", "apps/lemmings",
          "apps/xtmp3", "apps/notepad",
          "apps/weave",    # WEAVE's VM and canvas core (KERN-MEGA-PLAN 14.163)
-         "apps/sheet", "apps/word", "apps/scribe")   # KERN-MEGA-PLAN 14.162
+         "apps/sheet", "apps/word", "apps/scribe",   # KERN-MEGA-PLAN 14.162
+         "apps/win16")    # its MDI part, LZ/VER copies, DOS host (14.164)
 FILES = ("apps/os88spk.inc", "apps/os88spkfx.inc")   # (shared, in apps/ itself)
 
 LABEL = r"(?:[A-Za-z_.$@?][\w.$@?#~]*:\s*)?"

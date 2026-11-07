@@ -20070,8 +20070,11 @@ win16: $(BUILD)/win16.o88
 # THE kern_mega ARM (SPEC.md 124.31.1, 20.18): the same sources assembled
 # again with -DPKG_MEGA into $(MEGAAPPDIR), every part of it that is code -
 # the image and its cut parts, the DOS host - and kern_mega's own DOS core
-# (-DDOS_MEGA) as its DOS part; the fonts and the icons are the shipped
-# build's. On kern_mega's WIN16 disks only, never on a shipped one.
+# (-DDOS_MEGA) as its DOS part, with the int 21h gate's protected-mode arm
+# (-DDOS_PMGATE: DS = the core's data selector, not a #GP a cell; KERN-MEGA-
+# PLAN 14.164) - so it is not kern_mega DOS.O88's core, whose every program
+# call is real mode; the fonts and the icons are the shipped build's. On
+# kern_mega's WIN16 disks only, never on a shipped one.
 $(MEGAAPPDIR)/win16.bin: $(WIN16ASM) apps/os88api.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88data.inc \
                          apps/os88ui.inc apps/os88mega.inc apps/dos/doscall.inc $(W16STAMP) | $(BUILD)
 	@mkdir -p $(MEGAAPPDIR)
@@ -20088,11 +20091,11 @@ $(MEGAAPPDIR)/doscore.bin: apps/dos/doscore.asm apps/dos/dos.asm apps/dos/dosbe.
                            kerndos/kdlaunch.inc drivers/net/netpkg.inc | $(BUILD)
 	@mkdir -p $(MEGAAPPDIR)
 	$(NASM) -f bin -w+error -I apps/ -I apps/dos/ -I drivers/net/ \
-	        -I kerndos/ -DDOS_MEGA -o $@ apps/dos/doscore.asm
+	        -I kerndos/ -DDOS_MEGA -DDOS_PMGATE -o $@ apps/dos/doscore.asm
 $(MEGAAPPDIR)/win16/w16dcore.inc: $(MEGAAPPDIR)/doscore.bin tools/w16dcmap.py
 	@mkdir -p $(@D)
 	python3 tools/w16dcmap.py --nasm "$(NASM)" --core $< -o $@ \
-	        -I apps/ -I apps/dos/ -I drivers/net/ -I kerndos/ -DDOS_MEGA
+	        -I apps/ -I apps/dos/ -I drivers/net/ -I kerndos/ -DDOS_MEGA -DDOS_PMGATE
 $(MEGAAPPDIR)/win16/w16dosh.bin: apps/win16/w16dosh.asm apps/win16/w16dos.inc $(MEGAAPPDIR)/win16/w16dcore.inc \
                         apps/dos/dosbe.inc apps/dos/dos.asm apps/dos/doscall.inc \
                         apps/dos/doscents.inc apps/os88api.inc apps/os88rseq.inc \

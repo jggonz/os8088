@@ -17,7 +17,8 @@ This row does, off WIN16's own listing and symbol map:
      handed to the image is a part offset with no segment - other than the
      DCALL/LCALL vector store, `mov word [w16_pfv]/[w16_lfn]/[w16_lbv], name`;
   3. inside a part, a memory operand naming the part's own DATA without
-     `cs:`: DS is WIN16's image, so `[table]` reads the image at that offset.
+     `cs:` (or `CSEG`, w16pm.inc's CSDO spelling of it): DS is WIN16's
+     image, so `[table]` reads the image at that offset.
      The same for an immediate address of the part's own data (`mov si,
      string`), which the code then reads through DS.
 
@@ -220,7 +221,10 @@ def walk(lstfile, syms):
             here = "%s:%s %s" % (num, sec, code.strip())
             inmem = "[" in ops[:mm.start()] and "]" in ops[mm.end():] and \
                 ops[:mm.start()].rfind("[") > ops[:mm.start()].rfind("]")
-            cs = inmem and "cs:" in ops[ops[:mm.start()].rfind("["):mm.start()]
+            # `CSEG` is w16pm.inc's CSDO spelling of the part's own segment:
+            # `cs:` in the shipped build, the part's DATA half in the arm
+            seg = ops[ops[:mm.start()].rfind("["):mm.start()]
+            cs = inmem and ("cs:" in seg or "CSEG" in seg)
             far = "far" in ops.split()
             why = None
             if mnem in MACROS and mm.start() == len(ops) - len(ops.lstrip()):
