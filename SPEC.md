@@ -241372,6 +241372,21 @@ and before the gate at `W16S_GATE` = 12. The fetch the two parts share
 need one: the loader's kept copy, parts 9 and 10, the x87 part and the
 DOS host's block.
 
+**A part's stores into its OWN bytes go through `CSDO` where they are hot**
+(KERN-MEGA-PLAN 14.164). Parts 9, 10 and 11 keep their scratch in the
+part and write it `mov [cs:x], reg`; in the arm CS is the read-only code
+half, so each such store is a `#GP` that kern_mega completes. Part 10's MDI
+code (`w16mdi.inc`: the frame and caption paint, the icons, the tile and
+cascade, the move and size outline) did ~180 of them a key in Program
+Manager's group and ~850 a Tile. Every store there is written `CSDO
+<instruction with [CSEG x]>` (`w16pm.inc`): in the shipped build that is
+the same instruction with `cs:`, byte for byte, and in the arm DS is the
+part's DATA half for that one instruction - the word at `W16S_SELF` = 17,
+after the gate, in all three headered parts' arms, which `w16_ptin` writes
+with the code half's pair (+ 8) when it fetches the part. The rest of the
+parts' CS stores are cold - once a program's load, a `WinExec`, an LZ or
+VER call - and stay completed by the kernel.
+
 #### 124.31.6 What the program is told
 
 - **`GetWinFlags`** answers `WF_PMODE | WF_STANDARD` and the CPU's bit
@@ -241465,14 +241480,25 @@ DOS host's block.
 #### 124.31.7 DOS
 
 The DOS core WIN16 hosts (§124.21.1) is kern_mega's own core,
-`$(MEGAAPPDIR)/doscore.bin` (`-DDOS_MEGA`), **unchanged**: the core has one
-byte of `CORE_MAX` to spare, and the forwarded file calls need none of it.
-What the arm does is all on WIN16's side of the door:
+`$(MEGAAPPDIR)/doscore.bin` (`-DDOS_MEGA`), with **one arm of its own**:
+`-DDOS_PMGATE`, the int 21h gate for a core that runs in protected mode
+(KERN-MEGA-PLAN 14.164). Its other two hosts run every program's int 21h in
+real mode, so DOS.O88's and kern_dos's cores are not this assembly and are
+byte for byte what they were. The gate banked the program's registers in
+`[cs:dos_g*]` cells and set DS with `push cs / pop ds`: under WIN16 fifteen
+completed `#GP`s an int 21h, 7,187 for Write's open of a 20 KB file. Under
+`DOS_PMGATE` it loads DS from `dos_csel`, a word in the core's code that
+the host writes once (`w16dh_init`, through the block's data half;
+`tools/w16dcmap.py` publishes its address as `W16_DOSCSEL`), keeps it to
+the `iret`, and banks the program's DS in `dos_gds` (the spare
+`DOS_B_GSP` cell) - one word on the program's stack for a moment, where
+WIN16's host has just had one. That arm is 17,232 bytes, `CORE_MAX` to the
+byte. What else the arm does is on WIN16's side of the door:
 
 - **The block's far entry** (`w16_dhent`) is the block's `SEG_SUBC` code
-  half. The core and the host keep their state through CS, which kern_mega
-  completes by trap (§20.18); the hot one is the host's two stack words at
-  every call.
+  half. The core and the host keep their cold state through CS, which
+  kern_mega completes by trap (§20.18); the host's two stack words at every
+  call go through `W16_DOSCSEL` in the arm.
 - **The PSP** handed to `W16DH_INIT` is the program's selector (`W16PSP`):
   the core keeps the JFT at PSP:0018 and the DTA at PSP:0080 through it.
 - **The read window** is still laid out by the core's own arithmetic, from

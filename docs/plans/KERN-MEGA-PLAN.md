@@ -14383,3 +14383,118 @@ still finds its image. Resident cost none (the stub and the module).
 the base (no ordinary boot after the refusal), RED with each of 1 and 1+2
 alone (this item's probes: the key never taken; then 3 checks failed, the
 question asked again and both files kept), green with all three.
+
+### 14.164 WIN16's, DOS's and the Video Player's writes through CS, measured in use; WIN16's three hot paths converted (2026-11-07) - FIXED
+
+**The owner's speed pass (item 5), for three packages.** Each was measured
+doing what a user does, under Bochs on `make megatrap`'s kern_mega (16MB,
+one E9 line per completed `#GP`), and every trap charged to the selector
+that took it. The static census (`t_cswrite.py --census`) had WIN16 at 278
+writes and 24 pairs, DOS at 55 and 30, the Video Player at 26 and 7; what
+matters is how many of them a user's action reaches.
+
+**The Video Player: nothing to do.** The demo's `08-WILLY.V88` from C:
+(VGA), opened, played 20 s, paused, resumed 10 s and stopped: **0 traps**
+in the player (one at the stop, the kernel's `0060:432A`). The 26 sites are
+the LOADALL path kern_mega refuses, `vblk.asm`'s part 0 (the arm fetches
+part 1, `vblkpm`, SPEC.md 98.3.23.2; `megavidv2` holds it) and the profiler.
+
+**DOS: nothing to do.** DOS.O88 from B:, double-clicked, then ECHO, DIR,
+TYPE of a 20,000-byte file (the window scrolling 250 lines), a .COM that
+prints twenty lines (a kern_dos trip and back, twice), VER and CLS: **0 at
+the launch, ECHO, DIR, VER and CLS; 2 for the TYPE** (14.52.3's `.stale`
+pair, left); **1 a trip** (the kernel's `0060:0525`). `dosw.inc`'s 21 and
+`doswp.asm`'s 4 are the windowed host kern_mega has not got (DVW is
+`%ifndef DOS_MEGA`), and every program's int 21h runs under kern_dos in
+real mode (14.54.1). **But the same core's int 21h gate is hot under
+WIN16**, below.
+
+**WIN16** (base 290c585d, its kern_mega arm; Windows 3.0's own programs
+from win16ref and the in-tree fixtures):
+
+| program, action | before | after |
+|---|---:|---:|
+| Program Manager, start with its three groups | 1,282 | 157 |
+| ...Window > Tile | 852 | **0** |
+| ...Window > Cascade | 835 | **0** |
+| ...Ctrl+Tab x4 | 880 | **0** |
+| ...eight arrows in the Main group | 1,444 | **0** |
+| Write, File > Open of a 20 KB text file | 7,187 | **8** |
+| LZT.EXE (LZEXPAND, VER; ~130 int 21h) | 2,524 | 154 |
+| Solitaire, Cardfile: start | **CLOSED** | 226, 286 |
+| WinMine, Calc, Clock, Notepad: start | 76-235 | the same |
+| ...play, typing, idle | 0 | 0 |
+
+Three paths carried all of it, each converted on the ARM only - the
+shipped WIN16 assembles byte for byte what it did (`cmp` of `win16.bin`
+with every change in but the fix at the end):
+
+- **Part 10's MDI code** (`w16mdi.inc`, 104 stores): the frame and caption
+  paint, the icons, tile and cascade, the move and size outline, keeping
+  their scratch in the part. Every store is `CSDO <insn with [CSEG x]>`
+  (`w16pm.inc`): `cs:` off the arm, and in it DS = the part's DATA half for
+  the instruction - the word at `W16S_SELF` = 17, after the gate in parts
+  9, 10 and 11's arm headers (`W16SELF`), which `w16_ptin` writes with the
+  code half's pair (+ 8) at the fetch. ~45 clocks and 7 bytes a site where
+  a fixup was ~884 clocks. SPEC.md 124.31.5.
+- **The DOS core's int 21h gate** - the core WIN16 hosts runs in protected
+  mode, and its gate banked the program's registers in `[cs:dos_g*]`
+  cells and set `push cs / pop ds`: twelve fixups at the gate, two in
+  WIN16's host (`w16dh_i21`'s `[cs:dos_sv_ss]` / `[cs:dos_dstk]`), one at
+  the handler's first DS store - fifteen an int 21h. The core WIN16's arm
+  assembles is now `-DDOS_MEGA -DDOS_PMGATE` (the Makefile's
+  `$(MEGAAPPDIR)/doscore.bin`, and w16dcmap's map of it): the gate loads
+  DS from `dos_csel` (written once by `w16dh_init` through the block's data
+  half; `tools/w16dcmap.py` publishes it as `W16_DOSCSEL`) and keeps it to
+  the `iret`, the program's DS banked in the spare `DOS_B_GSP` cell
+  (`dos_gds`). DOS.O88's and kern_dos's cores are not that assembly and are
+  byte-identical (`cmp`, both arms). SPEC.md 124.31.7.
+- **Part 9's VER and LZ copies** (`w16lzver.inc`, 10 of 76): `w16v_cpy`'s
+  per-byte store (279 a LZT run), `w16v_join`, `w16z_read`'s (one an
+  LZRead; DS is the value there, so `push ds / CSDO pop word [CSEG x]`) and
+  `w16z_copy`'s per block. The other 66 are per-call cells, 1-5 apiece
+  (123 a run, measured) - left.
+
+**Left, with their measured cost:** the loader part's bind cache
+(`w16l_rowslot`, one store per import bound: 26-178 at a program's load,
+none after); the Windows program's OWN C start-up, which scans PSP:2Ch's
+environment while WIN16 hands it 0 (SPEC.md 124.25.21) - `repne scasb`
+through segment 0, `mega_null0`'s two exceptions a byte, ~126 at a start
+(Microsoft's code; WIN16 could hand an empty environment, a behaviour
+choice not taken here); part 10's WinExec/ShellExecute parameters (~40 in
+TASKS.EXE's whole run); `dos_find_step`'s DS store (8 a directory listing:
+the WIN16 arm's core is at `CORE_MAX` exactly, 17,232 - DOS.O88's and
+kern_dos's keep their 10 bytes of slack, but a DOS_MEGA core change on
+the gate's path now fails the WIN16 arm first); the image's
+`w16_i21dos` stack words (1 a fetch). tests/cswrites.txt names each.
+
+**And a crash the census walked into** - Solitaire, Cardfile and MDI.EXE
+were CLOSED at their first paint on kern_mega (`10xx:9E26`,
+`w16_clipkids.kid`): `w16_cutkid` destroyed CX, which is the caller's
+`loop` count, so a WS_CLIPCHILDREN window's walk ran on past the window
+table - cutting garbage records into the clip on every kernel, and on
+kern_mega reading past WIN16's data limit (FDFFh), a `#GP`. It keeps CX
+now: **+2 bytes on both builds** (the one change to the shipped WIN16).
+**Not fixed, and named for whoever takes it:** MDI.EXE and Windows 3.0's
+File Manager are CLOSED next at `w16_cbenter`'s `retf` (`10E4:0B2F`, error
+code 10ECh, WIN16's own DATA selector as the far return's CS) - the same
+frame Program Manager takes three completed `xfer` fixups through.
+
+**Bytes.** kern_big's and kern_small's kernels are not touched (no kernel
+source changed). Shipped WIN16 (kern_big): `win16.bin` 164,165 -> 164,167
+(w16_cutkid), WIN16.O88 144,571 -> 144,555 on the disk (lz4). The arm:
+`win16.bin` 188,145 -> 188,970 (+825: part 10 +738, the headers' three
+words, `w16_ptin` +9, the LZ/VER CSDOs), its core 17,222 -> 17,232, its
+host 522 -> 537; WIN16.O88 on kern_mega's WIN16 disks 161,883 -> 162,029.
+DOS.O88 (both kernels) and the Video Player: byte-identical.
+
+**Rows.** `win16megatrap` (soak, new; Bochs, a private MEGATRAP=1 tree):
+LZT.EXE charges none to the DOS block's code half and at most 140 to part
+9's and leaves its files expanded byte for byte; Program Manager, tiled,
+cascaded and cycled, none to part 10's; Solitaire up with no fault - red
+with the WIN16.O88 of before (1,959, 534, 4,838 and CLOSED). `cswrite`
+(fast) walks apps/win16/ now, its residue registered file by file - red
+with one `CSDO` taken off a line of `w16mdi.inc`. `t_w16xsec` (fast) takes
+`CSEG` for `cs:` in its rule 3, and `seg0` (fast), which walks t_cswrite's
+trees, now walks apps/win16/ too: its two sites, a NULL far pointer and a
+false one, are registered in tests/seg0.txt.
