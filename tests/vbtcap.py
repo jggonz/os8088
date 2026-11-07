@@ -117,6 +117,24 @@ def main():
            "against %d)" % (small["ring"] and small["ring"] // 1024,
                             held_s.get("ari_attack", 0),
                             held.get("ari_attack", 0)))
+        p.d["target"]["xms_kb"] = 4096  # THE CLIP CACHE (126.4.6): a
+        A.VB_FREE = 330                 # target with XMS streams a clip
+        try:                            # into a slot its own length - the
+            B.build_project(p, kind="herc")     # burst is the pool's, not
+            xc = dict(B.LAST_CAP)       # a ring's, however small the
+            held_x = dict(B.LAST_CAPPED)    # machine's conventional memory
+        finally:
+            A.VB_FREE = free
+            p.d["target"]["xms_kb"] = 0
+        ok(xc["ring"] > 3 * 1024 * 1024 and xc["hold"] > used["hold"] and
+           held_x.get("ari_attack", 0) < held_s.get("ari_attack", 0) and
+           held_x.get("ari_attack", 0) <= held.get("ari_attack", 0),
+           "126.4.6: the small machine with 4 MB of XMS on the target "
+           "streams into a slot (%d KB ahead), and ARI's attack is held only "
+           "to the disk - %d frames, against %d in its 84 KB ring and %d in "
+           "the 640 KB machine's" % (
+               xc["hold"] // 1024, held_x.get("ari_attack", 0),
+               held_s.get("ari_attack", 0), held.get("ari_attack", 0)))
         p.d["target"]["burst_cap"] = False
         off = B.build_project(p, kind="herc")
         low_off, _, big_off = worst(off, "ari_attack", cap)

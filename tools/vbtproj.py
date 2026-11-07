@@ -22,7 +22,9 @@ A project file (version 1):
                   footage's),
                   "vga_clip_colours": how many of VGA4's colours are each
                   clip's own, swapped in as it starts (SPEC.md 126.3.2;
-                  absent: 4 of 16, 1 of 8, none of 4)},
+                  absent: 4 of 16, 1 of 8, none of 4),
+                  "xms_kb": the XMS the battle may count on (SPEC.md
+                  126.4.6: the clip cache; 0 or absent none)},
      "sources":  {id: {"kind": "video", "path"} | {"kind": "scene", "name"}},
      "sounds":   {id: {"kind": "file", "path", "level"}
                     | {"kind": "scene", "name", "level"}
@@ -889,6 +891,10 @@ class Project:
                                    isinstance(vo, bool) and 0 <= vo <= 4):
             err("target.vga_clip_colours", "vga_clip_colours %r: 0 to 4"
                 % (vo,))
+        xk = t.get("xms_kb")
+        if xk is not None and not (isinstance(xk, int) and not
+                                   isinstance(xk, bool) and 0 <= xk <= 65535):
+            err("target.xms_kb", "xms_kb %r: 0 to 65535 KB" % (xk,))
         if t.get("vga_bands") is not None and not (
                 isinstance(t["vga_bands"], int) and 0 <= t["vga_bands"] <= 200):
             err("target.vga_bands", "vga_bands %s: rows a band, 0 the whole "

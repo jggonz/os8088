@@ -42,17 +42,22 @@ vb_hopen:
     jne .x
     call vb_eopen
     jnc .ok
-    jmp vb_xopen
+    call vb_xopen
+    jnc .ok
+    ret
 .x:
     call vb_xopen
     jnc .ok
     cmp byte [vb_eslow], 2          ; (too slow to hold in at all)
     je .no
-    jmp vb_eopen
+    call vb_eopen
+    jnc .ok
+    ret
 .no:
     stc
-.ok:
     ret
+.ok:
+    jmp vb_ctry                     ; THE CACHE, where it may be (vbcache)
 
 VB_EFAST    equ 15              ; the frame's read time in tenths of RAM's:
 VB_ESLOW    equ 40              ; to 1.5x as RAM, to 4x copied, then none
@@ -203,6 +208,35 @@ vb_hplan:
     stc
     ret
 
+; vb_hsz - after vb_hplan (its CF): [vb_hpno] 1 when the order had nothing,
+; and [vb_hblk] the block to take - the whole pool, or the file when that
+; is less, and never under the plan's: the cache (vbcache.inc) lays itself
+; out in it when the hold may be read in place, and the copying hold uses
+; the plan's part. CF=1 nothing to take
+vb_hsz:
+    sbb al, al
+    and al, 1
+    mov [vb_hpno], al
+    mov ax, [vb_meta+VH_TOTAL]
+    mov dx, [vb_meta+VH_TOTAL+2]
+    call vb_b4k
+    cmp ax, [vb_hpool]
+    jbe .f
+    mov ax, [vb_hpool]
+.f:
+    cmp ax, [vb_hkb4]
+    jae .k
+    mov ax, [vb_hkb4]
+.k:
+    mov [vb_hblk], ax
+    or ax, ax
+    jz .no
+    clc
+    ret
+.no:
+    stc
+    ret
+
 ; vb_hon1 - the hold taken: its fill from the start, its own cursor
 vb_hon1:
     mov byte [vb_hi], 0
@@ -229,13 +263,15 @@ vb_xopen:
 %endif
     or ax, ax
     jz .no
+    mov [vb_cpool], ax              ; (the profile's: what the pool had)
     mov cl, 2                       ; in 4 KBs, one kept for the round-up
     shr ax, cl
     dec ax
     jz .no
     call vb_hplan
+    call vb_hsz
     jc .no
-    mov ax, [vb_hkb4]
+    mov ax, [vb_hblk]
     call vb_h4k
     call OSAPI_XMEM_ALLOC
     jc .no
@@ -272,9 +308,13 @@ vb_eopen:
     jle .no
     shl ax, 1
     shl ax, 1                       ; 16 KB pages to 4 KBs
+    mov [vb_cpool], ax
+    shl word [vb_cpool], 1
+    shl word [vb_cpool], 1
     call vb_hplan
+    call vb_hsz
     jc .no
-    mov ax, [vb_hkb4]
+    mov ax, [vb_hblk]
     add ax, 3
     shr ax, 1
     shr ax, 1
@@ -640,47 +680,10 @@ vb_hstep:
     jc .fail
     mov ax, [si+HT_XOFF]            ; up into the block: (xoff + have) x 4 KB
     add ax, [si+HT_HAVE]
-    call vb_h4k
-    add ax, [vb_htok]
-    adc dx, [vb_htok+2]
-    mov bx, [vb_hk]                 ; 4 KBs to go
+    mov bx, [vb_hk]
     push si
-    xor si, si
-.up:
-    or bx, bx
-    jz .upd
-    call vb_hpiece                  ; a call's most, in 4 KBs: 8 or 1
-    mov cl, ch
-    xor ch, ch
-    shr cl, 1
-    shr cl, 1
-    shr cl, 1
-    shr cl, 1
-    cmp bx, cx
-    jae .u1
-    mov cx, bx
-.u1:
-    sub bx, cx
-    push bx
-    mov bx, cx
-    mov cl, 12
-    shl bx, cl
-    mov cx, bx                      ; its bytes
-    push ax
-    push dx
-    push cx
-    mov es, [vb_hbnc]
-    xor di, di                      ; out, to extended
-    call OSAPI_XMEM_COPY
-    pop cx
-    pop dx
-    pop ax
-    pop bx
+    call vb_hup
     jc .ufail
-    add si, cx
-    add ax, cx
-    adc dx, 0
-    jmp .up
 .upd:
     pop si
     mov ax, [vb_hk]
@@ -691,7 +694,10 @@ vb_hstep:
 .ufail:
     pop si
 .fail:
-    mov byte [vb_hon], 0            ; the disk serves from here
+    cmp byte [vb_cmode], 0          ; (the cache keeps its hold: the idle
+    jne .f1                         ; loop lives there - a failed read is
+    mov byte [vb_hon], 0            ; the reader's, tried again) the disk
+.f1:                                ; serves from here
     stc
     ret
 
@@ -705,8 +711,24 @@ vb_hstepe:
     and bx, 3                       ; its 4 KB in the page: the window's
     shr ax, 1                       ; offset
     shr ax, 1
+    mov dx, [vb_efseg]
+    cmp byte [vb_hinp], 0           ; IN PLACE (the cache): QUARTER 3, a
+    je .two                         ; page at most - the hook maps 0-2
+    mov cx, 4
+    sub cx, bx
+    cmp [vb_hk], cx
+    jbe .k3
+    mov [vb_hk], cx
+.k3:
+    call vb_emap3
+    jc .fail
+    add dx, EMS_PAGE * 3 / 16
+    jmp short .m
+.two:
     call vb_emap
     jc .fail
+.m:
+    mov [vb_hes], dx
     mov ax, bx
     call vb_h4k
     mov bx, ax                      ; ES:BX = the window at it
@@ -720,7 +742,7 @@ vb_hstepe:
     shl ax, cl
     mov cx, ax
     pop ax
-    mov es, [vb_efseg]
+    mov es, [vb_hes]
     mov word [vb_rcur], vb_hcur
     mov byte [vb_hbyp], 1
     call vb_read
@@ -733,7 +755,10 @@ vb_hstepe:
     clc
     ret
 .fail:
+    cmp byte [vb_cmode], 0
+    jne .f1
     mov byte [vb_hon], 0
+.f1:
     stc
     ret
 

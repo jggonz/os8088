@@ -151,9 +151,11 @@ def main():
         if a.noinp:
             ok(rb("vb_hinp") == 0, "2. --noinp: the copying hold")
         else:
-            ok(rb("vb_tier") == CPU_286 and rb("vb_hinp") == 1,
+            ok(rb("vb_tier") == CPU_286 and rb("vb_hinp") == 1 and
+               rb("vb_cmode") == 1 and rb("vb_iinp") == 1,
                "2. IN PLACE through LOADALL on this 286 (tier %d): probed "
-               "with INT 6 hooked, 16 bytes matched the driver's copy"
+               "with INT 6 hooked, 16 bytes matched the driver's copy - the "
+               "CLIP CACHE (126.4.6), the idle loop in the block"
                % rb("vb_tier"))
         i0, y0 = rw("vb_icalls"), rw("vb_iyc")
         b.tap("return")                 # the fade, then the openings

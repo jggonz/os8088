@@ -17054,7 +17054,9 @@ SOAK = [
         "down at the end - VBPROF1.DAT says so (+60), 500 frames (the "
         "staging's 400 round once) none dropped, each clip frame a time, "
         "the reads with them. Broken on purpose (the play loop's drain "
-        "out) the staging fills and the frames stop at 400",
+        "out) the staging fills and the frames stop at 400. Version 4 "
+        "(126.4.6): the clip cache on, the idle loop in its block, rings in "
+        "place, and a key at the menu timed to its band's redraw",
         needs=("qemu",),
         wants=("build/vbattled.o88", "build/os8088.img")),
     Row("vbtdiag", "soak", py("tests/vbtdiag.py"), 60.0,
@@ -17081,18 +17083,19 @@ SOAK = [
         needs=("marty",),
         wants=("build/vbattle.o88",)),
     Row("vbthold", "soak", py("tests/vbthold.py"), 20.0,
-        "VBATTLE-MEMORY-PLAN 4: the Video Battle's bundle HELD WHOLE in XMS "
-        "(QEMU: the closed list's entry 1). The demo with a 1-HP enemy on "
-        "B:; the hold one range, the whole bundle, filled while the title "
-        "goes round and byte for byte the file; then B: changed to a BLANK "
-        "floppy and the play runs on - the fade, the menu, victory, its end "
-        "loop, Enter and the title again - out of the hold alone. Broken on "
-        "purpose (vb_read skipping the hold) it stalls before victory. "
-        "VBATTLE-MEMORY-PLAN 12 (M5): from the fill on the rings are read IN "
-        "PLACE through a 386's loaded base (vbinp.inc), the yield step poked "
-        "to 256 bytes so the decode yields (~130 times), and the title again "
-        "is the host's decode on the glass, B8000 byte for byte. Broken on "
-        "purpose (a yield re-borrowing a byte on) the guest stops",
+        "SPEC.md 126.4.6: the Video Battle's CLIP CACHE over the whole "
+        "bundle in XMS (QEMU: the closed list's entry 1). The demo with a "
+        "1-HP enemy on B:; in place from the open through a 386's loaded "
+        "base, the idle loop in the block byte for byte, every clip filled "
+        "into its own place while the title goes round and each slot byte "
+        "for byte its clip; then B: changed to a BLANK floppy and the play "
+        "runs on - the fade, the menu, victory, its end loop, Enter and the "
+        "title again - with not one disk read. The yield step poked to 256 "
+        "bytes so the decode yields (~160 times); the idle loop at the menu "
+        "and the title again are the host's decode on the glass, going "
+        "round. Broken on purpose: a fill read from the file's start (every "
+        "slot wrong, the play hangs), the idle loop read from the block's "
+        "start (the menu frozen: one frame)",
         needs=("qemu",),
         wants=("build/vbattle.o88",)),
     Row("vbtholdcopy", "soak", py("tests/vbthold.py", "--arm", "copy"), 20.0,
@@ -17102,10 +17105,20 @@ SOAK = [
         needs=("qemu",),
         wants=("build/vbattle.o88",)),
     Row("vbtholdpart", "soak", py("tests/vbthold.py", "--arm", "part"), 20.0,
-        "VBATTLE-MEMORY-PLAN 5: the pool held under the bundle (a gate's cap, "
-        "[vb_hcap]): the hold is the builder's HOLD ORDER's ranges in order, "
-        "it fills while the title goes round, and the play runs with the "
-        "disk serving the rest and the hold answering reads",
+        "SPEC.md 126.4.6: the pool held to the idle loop and 100 KB (a "
+        "gate's cap, [vb_hcap], and the slots' least poked, [vb_cmin]): the "
+        "cache in SLOTS - clips taken FIFO and EVICTED for the next, the "
+        "Limit longer than the room never given one - the play to victory "
+        "and again, every slot whole at the end byte for byte its clip",
+        needs=("qemu",),
+        wants=("build/vbattle.o88",)),
+    Row("vbtholdorder", "soak", py("tests/vbthold.py", "--arm", "order"),
+        20.0,
+        "VBATTLE-MEMORY-PLAN 5: the pool held under the bundle with the "
+        "decode in place gated off: the copying hold takes the builder's "
+        "HOLD ORDER's ranges in order, fills while the title goes round, "
+        "and the play runs with the disk serving the rest and the hold "
+        "answering reads",
         needs=("qemu",),
         wants=("build/vbattle.o88",)),
     Row("vbtholdnox", "soak", py("tests/vbthold.py", "--arm", "nox"), 20.0,

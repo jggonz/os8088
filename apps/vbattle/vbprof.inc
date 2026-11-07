@@ -37,7 +37,12 @@
 ;          KB, +68 the reads it served (vb_hcopies), +70 its ranges, +71 a
 ;          card played (+51 is vb_snd at the end, when the card is closed),
 ;          +72 sound frames LATE (vb_alate: a record the sound reached before
-;          it was read); a frame's flags bits 1-3 those since the last
+;          it was read); a frame's flags bits 1-3 those since the last;
+;          version 4: +74 keys timed, +76 the longest key-to-band (hook
+;          periods), +78 their sum (dword), +82 the pool's KB, +84 the
+;          cache on, +85 the whole file, +86 KB it filled, +88 rings in
+;          place, +90 slots evicted, +92 clips whole at the end, +94 the
+;          guard's KB, +95 the idle loop in the block (126.4.6)
 ; =============================================================================
 
 VB_PRH      equ 96                  ; (version 2: 64 before the hold's line)
@@ -67,6 +72,11 @@ vb_prtry:
     mov [vb_prdrop], ax
     mov [vb_prsnd], al
     mov [vb_prlat], ax
+    mov [vb_prkn], ax               ; (the keys: none timed yet)
+    mov [vb_prkmax], ax
+    mov [vb_prksum], ax
+    mov [vb_prksum+2], ax
+    mov [vb_prkon], al
     cmp byte [vb_pmd], 0            ; (kern_mega: none)
     jne .conv
     call OSAPI_XMEM_CAPS            ; THE PROFILE IN XMS, when it is there:
@@ -527,7 +537,7 @@ vb_prend:
     jc .drop
     mov word [es:0], 'VB'
     mov word [es:2], 'PR'
-    mov word [es:4], 3              ; (3: the sound late, +72 and the flags)
+    mov word [es:4], 4              ; (4: the cache and the keys, +74..95)
     mov ax, [vb_prn]
     mov [es:6], ax
     mov ax, [vb_prnl]
@@ -604,6 +614,42 @@ vb_prend:
     mov [es:71], al
     mov ax, [vb_alate]
     mov [es:72], ax                 ; +72 sound frames late, all the play
+    mov ax, [vb_prkn]               ; VERSION 4: +74 keys timed to their
+    mov [es:74], ax                 ; band's redraw, +76 the longest, +78
+    mov ax, [vb_prkmax]             ; their sum (dword) - in the hook's
+    mov [es:76], ax                 ; periods
+    mov ax, [vb_prksum]
+    mov [es:78], ax
+    mov ax, [vb_prksum+2]
+    mov [es:80], ax
+    mov ax, [vb_cpool]              ; +82 the pool's KB at the open
+    mov [es:82], ax
+    mov al, [vb_cmode]              ; +84 the CACHE (126.4.6), +85 the whole
+    mov ah, [vb_cfix]               ; file in it
+    mov [es:84], ax
+    mov ax, [vb_cfkb]               ; +86 KB it filled
+    mov [es:86], ax
+    mov ax, [vb_irings]             ; +88 rings given a clip in place
+    mov [es:88], ax
+    mov ax, [vb_cev]                ; +90 slots evicted
+    mov [es:90], ax
+    xor ax, ax                      ; +92 clips held whole at the end
+    xor bx, bx
+    mov cx, [vb_meta+VH_NCLIPS]
+.cw:
+    cmp word [vb_cx+bx], 0xFFFF
+    je .cw1
+    mov dx, [vb_chave+bx]
+    cmp dx, [vb_cl4+bx]
+    jb .cw1
+    inc ax
+.cw1:
+    add bx, 2
+    loop .cw
+    mov [es:92], ax
+    mov al, [vb_cgkb]               ; +94 the rings' guard, KB
+    mov ah, [vb_iinp]               ; +95 the idle loop in the block
+    mov [es:94], ax
     mov al, '1'
 .try:
     mov [vb_prfn + 6], al
@@ -793,3 +839,47 @@ vb_prtgt:
     ret
 
 vb_prfn:    db 'VBPROF1.DAT', 0
+
+; vb_prkey - a key taken (vb_keys) AT A MENU: its time noted, for its
+; band's redraw (version 4; the title's Enter is the openings' wait, not
+; a menu's). Every register kept
+vb_prkey:
+    cmp byte [vb_state], GS_MENU
+    je .k
+    cmp byte [vb_state], GS_TARGET
+    je .k
+    ret
+.k:
+    push ax
+    pushf
+    cli
+    mov ax, [vb_hper]
+    popf
+    mov [vb_prk0], ax
+    mov byte [vb_prkon], 1
+    pop ax
+    ret
+
+; vb_prkend - the band redrawn (vb_band): the key before it, timed. Every
+; register kept
+vb_prkend:
+    cmp byte [vb_prkon], 0
+    jne .go
+    ret
+.go:
+    push ax
+    mov byte [vb_prkon], 0
+    pushf
+    cli
+    mov ax, [vb_hper]
+    popf
+    sub ax, [vb_prk0]
+    inc word [vb_prkn]
+    add [vb_prksum], ax
+    adc word [vb_prksum+2], 0
+    cmp ax, [vb_prkmax]
+    jbe .m
+    mov [vb_prkmax], ax
+.m:
+    pop ax
+    ret

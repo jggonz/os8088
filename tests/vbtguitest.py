@@ -318,12 +318,42 @@ with tempfile.TemporaryDirectory() as tdir:
     import vbtrulesdemo as D
     rdata, _ = D.bundle(D.make_project())
     mem = A.memory(rdata)
-    ok(mem["resident"] == 72 * 1024 and mem["ring"] == 180 * 1024,
-       "the rules battle: a 72 KB resident claim, rings of 180 KB (format "
-       "8; it was 120 and 140 at format 7) (%s, %s)"
-       % (mem["resident"], mem["ring"]))
+    ok(mem["resident"] == 72 * 1024 and mem["ring"] == 188 * 1024 and
+       mem["guard"] == 8 * 1024,
+       "the rules battle: a 72 KB resident claim, rings of 188 KB beside "
+       "guards of 8 KB - its largest record in 4 KB (126.4.6; 180 beside "
+       "16 KB guards before, 120 and 140 at format 7) (%s, %s, %s)"
+       % (mem["resident"], mem["ring"], mem["guard"]))
     ok(A.memory(rdata, free_kb=200)["ring"] is None,
        "...and with 200 KB free, no ring of 48 KB: Not enough memory")
+    # THE CLIP CACHE (126.4.6): the target's XMS keeps the idle loop out of
+    # the resident claim, gives ring 0 the run, and says what it holds
+    mx = A.memory(rdata, xms_kb=1024)
+    rb = B2.Bundle(rdata)
+    idle_kb = (len(rb.idle_r) + 4095) // 4096 * 4
+    ok(mx["cache"] and mx["cache"]["whole"] and
+       mx["resident"] == mem["resident"] - idle_kb * 1024 and
+       mx["ring"] > mem["ring"] and
+       not any(n == "the idle loop" for n, _ in mx["parts"]),
+       "with 1 MB of XMS on the target: the whole bundle cached, the idle "
+       "loop's %d KB out of the resident claim (%d KB), ring 0 %d KB"
+       % (idle_kb, mx["resident"] // 1024, mx["ring"] // 1024))
+    mh = A.memory(rdata, xms_kb=512)
+    big = max(c["len"] for c in rb.clips)
+    ok(mh["cache"] and not mh["cache"]["whole"] and
+       (big in mh["cache"]["fits"]) == (mh["cache"]["room"] >= big) and
+       len(mh["cache"]["fits"]) >= len(rb.clips) - 1,
+       "...with 512 KB: SLOTS, %d KB of them, %d of %d clips fit"
+       % (mh["cache"]["room"] // 1024, len(mh["cache"]["fits"]),
+          len(rb.clips)))
+    ok(A.memory(rdata, xms_kb=128)["cache"] is None,
+       "...with 128 KB: no room for the idle loop and 256 KB of slots - "
+       "no cache, the hold order copied out")
+    ml = "\n".join(G.memory_lines(mx) + G.cache_lines(
+        A.budget(D.make_project(), rdata)["hold"], len(rb.clips)))
+    ok("only for a clip the cache has no slot for" in ml and
+       "the whole bundle cached" in ml,
+       "the Build tab's memory lines say so")
     pr = P.Project.load(vbp)
     data = B2.build_project(pr)
     pr.set(("target", "profile"), "floppy")

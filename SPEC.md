@@ -243094,6 +243094,78 @@ bracket returns. The clip rings are claimed and freed inside the bracket
 freed when the play ends (bucket D) and claimed again by the next load
 (`vb_cardclaim`, at `vb_load`'s `.again`).
 
+#### 126.4.6 The clip cache: whole clips in extended memory, played there (VBATTLE-XMS-PLAN)
+
+**The hold's order was the limit, not the pool.** The owner's 286 (the
+mrbios profile, 2026-11-07) held 2,336 KB of a 15.3 MB VGA battle: the
+hold order's 16 ranges - the idle loop and the music, 1.5 MB, and 40 KB of
+each action's head - and then stopped, "filled", with the pool's rest
+unused; every heavy clip streamed off the disk through a 104 KB ring, and
+46 frames of their sound were late. **Wherever a hold may be read in place
+(126.4.2's check), it is now a CACHE OF WHOLE CLIPS** (`[vb_cmode]`,
+`apps/vbattle/vbcache.inc`):
+
+- **The check is made at the hold's open**, not at a fill's end
+  (`vb_hipok`, 126.4.2's conditions less "the whole file"): XMS on a 286 or
+  later in real mode, LOADALL probed, the first 16 bytes read in place
+  against the driver's; or EMS with the frame's four quarters and a board as
+  fast as RAM. Refused (an 8088 with no board, kern_mega, a closed gate,
+  `[vb_noinp]`) the hold is 126.4.1's, unchanged.
+- **The block's first part is PINNED**: the IDLE LOOP's records (format 7,
+  `VH_IDLE`), read into it at the load - so the resident claim loses the
+  loop (72 KB of the owner's VGA battle) and the idle frames decode in place
+  (`vb_frame`'s idle, `vb_bat`); then the MUSIC when it streams and the pool
+  has room to spare (at least twice the largest clip after it), filled by
+  `vb_hstep` as before and copied out of into its ring.
+- **The rest is SLOTS, one per clip as it is wanted** (`vb_cget`): a run of
+  the block the clip's own length, taken at the cache's pointer and the
+  pointer on past it - FIFO; at the block's end the pointer goes back to the
+  slots' start, and every slot the new one overlaps is EVICTED, unless its
+  clip is playing (a ring's `RG_PLAY`), pending, the next opening or the end
+  loop - then the run starts past it, four tries. A clip longer than the
+  slots' whole room gets none. A ring given a clip with a slot is IN PLACE
+  (`vb_iring`): `RG_HB` its slot, `RG_FILL` what has arrived there.
+- **The stream fills the slot.** A ring in place whose slot is not whole is
+  read by `vb_cfill` - the disk into the bounce and up (XMS), or straight
+  into quarter 3 of the frame (EMS; the hook maps 0-2) - and every ring
+  holding that clip has its `RG_FILL` published after it. So a clip's
+  stream has no ring to fill: the reader runs ahead as far as the disk
+  lets it, and what the hook and the sound read is wherever the slot has
+  it. **A clip played once plays again with no read at all.** `vb_rrec`
+  and `vb_aframe` check a record in place against what has arrived, as
+  `vb_anext` did.
+- **When the whole file fits, the slots are the file** (`[vb_cfix]`): a
+  clip's slot is its own offset, nothing is ever evicted, and the play
+  fills clip by clip in the order below rather than front to back.
+- **What it reads, in the reader's order** (`vb_reader`): a ring in place
+  is LOW under `VB_ILOW` (128 KB) ahead of its leading cursor, and "to the
+  top" is its whole clip. After the enemy's head (step 7): the clip under
+  the cursor WHOLE, then the enemy's; after the music and the pinned
+  ranges' fill, every other clip in the table's order, into room the
+  pointer has never passed (`vb_cget` without eviction) - so a pool the
+  size of the battle ends up holding all of it.
+- **A menu waits behind no more than it did**: a fill while a menu waits on
+  a key is 16 KB on a 286 or later and 4 KB on an 8088 (an EMS board's),
+  as a ring's piece was (126.4.3), against 32 KB elsewhere; after a key
+  nothing for `VB_KQUIET`, as before. The profile (126.8 version 4) times
+  each key to its band's redraw.
+- **The conventional rings** stay two - ring 0 the largest run, ring 1
+  `VB_CRMIN` beside it - for the clips the cache has no slot for (a slot
+  refused, a clip longer than the pool), the title's and the openings'
+  fixed rings. A clip in place uses none of its ring's memory.
+- **A guard is the largest record, in 4 KB** (`[vb_cgkb]`), where it was 16
+  or 32 KB: 24 KB of the owner's VGA battle.
+
+What a VGA battle holds, the owner's 565 KB machine: the window 46 KB, the
+resident claim 92 (tables 4, menu sounds 12, music ring 36, band buffers
+24, band pictures 16; the idle loop's 72 gone to the block), the card's 17,
+the bounce 32, 8 kept free, and the rings the rest. The builder's target
+says how much XMS the battle may count on (`target.xms_kb`, the Build
+tab's "XMS on the target"): with room for the idle loop and two of the
+largest clips, an action's stream is priced with no ring limit
+(`cap["ring"]` the clip's own length), and the Build tab says what the
+cache holds.
+
 #### 126.4.5 kern_mega: the play in a REAL-MODE bracket (VBATTLE-MEGA-PLAN W1)
 
 **The shipped engine plays on kern_mega** (the owner's decision: one engine,
@@ -243658,7 +243730,16 @@ BATTLEV.VBT] [--frames]` reads it.
   the play's, and a frame's flags bits 1 to 3 those since the last frame -
   version 2 could show a clip's sound breaking up only as the owner heard
   it.
+- **Version 4** (126.4.6) says what the CLIP CACHE did and how a menu
+  answered: +74 the keys taken at a menu that were timed to their band's
+  redraw (`vb_prkey`, `vb_prkend`), +76 the longest and +78 their sum (a
+  dword), both in the hook's periods; +82 the pool's KB at the hold's open,
+  +84 the cache on, +85 the whole file in it, +86 the KB it filled, +88 the
+  rings given a clip in place, +90 the slots evicted, +92 the clips whole in
+  it at the end, +94 the rings' guard in KB and +95 the idle loop in the
+  block. The owner's "nearly instant on 286" is a number there now.
 - `vbtdiag` plays the demo on MartyPC's VGA XT, reads `VBPROF1.DAT` back
   off B: and holds it to the play; `vbtdiagx` the same on QEMU with XMS,
-  500 frames through the staging, none dropped. Measured there: the title's VGA4 records
+  500 frames through the staging, none dropped - and the cache on, the
+  idle loop in its block, a key at the menu timed to its band. Measured there: the title's VGA4 records
   (8 colours) decode in 6.4 ms a frame against a 66.7 ms frame.

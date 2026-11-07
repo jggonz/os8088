@@ -9,7 +9,7 @@ build/vbattlev.img in B: (VBATTLED.O88 and the demo's BATTLEV.VBT):
 VBATTLED.O88 opened, played, the title watched a few guest seconds, Esc,
 and B: read back on the host:
 
-  1. B:VBPROF1.DAT is there: 'VBPR' version 3, VGA4, the bundle's name;
+  1. B:VBPROF1.DAT is there: 'VBPR' version 4, VGA4, the bundle's name;
   2. its frames are the play's: as many as the hook drew while it ran
      (vb_prn at the end), each with a decode time, the title's clip;
   3. tools/vbtprof.py reads it and prints the play.
@@ -109,7 +109,7 @@ def main():
         open(p, "wb").write(prof)
         good = prof[:4] == b"VBPR"
         h, fr, rd = vbtprof.read_prof(p) if good else ({}, [], [])
-        ok(good and h["ver"] == 3 and h["kind"] == "VGA4" and
+        ok(good and h["ver"] == 4 and h["kind"] == "VGA4" and
            h["name"] == "BATTLEV.VBT" and claimed,
            "1. B:VBPROF1.DAT: %r, version %s (the hold's line), %s, %r" % (
                prof[:4], h.get("ver"), h.get("kind"), h.get("name")))
@@ -217,6 +217,10 @@ def xms():
         wait(lambda: rw("vb_prn") >= 500, "500 frames of it (the staging's "
              "400 round once)", 300)
         kept = rb("vb_prx")
+        q.hmp("sendkey ret")            # (the menu, and a key timed to its
+        wait(lambda: rb("vb_state") == 1, "the menu", 240)  # band: x3)
+        q.hmp("sendkey down")
+        wait(lambda: rw("vb_prkn") >= 1, "the key timed to its band", 60)
         q.hmp("sendkey esc")
         wait(lambda: rw("vb_prseg") == 0 and rb("vb_prx") == 0,
              "the profile written", 120)
@@ -245,6 +249,16 @@ def xms():
            "x2. every frame the hook drew is in it (%d of %d, %d dropped, "
            "the clips' each with a time), and %d reads" % (
                len(fr), drawn, drop, len(rd)))
+        per = h.get("div", 0) * vbtprof.PIT_US / 1000
+        ok(good and h["ver"] == 4 and h.get("cache") == 1 and
+           h.get("iinp") == 1 and h.get("pool", 0) > 1024 and
+           h.get("irings", 0) >= 1 and h.get("keys", 0) >= 1 and
+           h["kmax"] * per < 2000,
+           "x3. version 4: the CACHE on (pool %s KB, %s KB filled, %s rings "
+           "in place, the idle loop in the block %s), %s key(s) to their "
+           "band's redraw, %.0f ms at most" % (
+               h.get("pool"), h.get("cfkb"), h.get("irings"), h.get("iinp"),
+               h.get("keys"), h.get("kmax", 0) * per))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     if fails:

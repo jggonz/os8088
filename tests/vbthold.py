@@ -2,7 +2,7 @@
 """The Video Battle's bundle HELD IN XMS (VBATTLE-MEMORY-PLAN 4 and 5,
 SPEC.md 126.4.1), on QEMU.
 
-    make && python3 tests/vbthold.py [--arm whole|copy|part|nox]
+    make && python3 tests/vbthold.py [--arm whole|copy|part|order|nox]
 
 WHY QEMU: docs/TESTING.md's closed list, entry 1 - XMS is a 286-and-up
 store and every MartyPC machine is an 8088. Nothing here is timed: every
@@ -11,21 +11,27 @@ wait is on the guest's own state.
 THE INSTRUMENT IS A DISK SWAP, as tests/vidxms.py's is. The demo battle
 (its enemy at 1 HP) on B:, the engine on B:, QEMU's own 128 MB:
 
-  whole: the play starts and the title goes round while the reader fills
-         the hold with the WHOLE bundle (one range, `[vb_hfull]`); then B:
-         is changed to a BLANK floppy. Enter: the fade, the openings, the
-         menu, an Attack, victory and its end loop, Enter and the title
-         again - every read after the swap the hold's (`[vb_hcopies]`
-         counts them), none the disk's, which has nothing to find.
-         From the fill on the rings are read IN PLACE (SPEC.md 126.4.2)
+  whole: THE CACHE over the whole file (SPEC.md 126.4.6, `[vb_cfix]`):
+         in place from the open, the idle loop in the block, and every clip
+         filled into its own place while the title goes round - each slot
+         byte for byte its clip; then B: is changed to a BLANK floppy.
+         Enter: the fade, the openings, the menu, an Attack, victory and
+         its end loop, Enter and the title again - nothing read off the
+         disk, which has nothing to find. The rings are read IN PLACE
          through a 386's loaded base, the decode yielding (the step poked
          to 256 bytes), and the title again is the host's decode in B8000.
-  copy:  whole, with the decode in place gated off ([vb_noinp]): the
-         copying hold, M2's, still plays.
-  part:  the pool held to less than the bundle (a hold order of the
-         builder's): the ranges come from the bundle's own HOLD ORDER, the
-         hold fills to its last, and the play runs with the disk serving
-         the rest - copies AND disk reads both counted.
+  copy:  the decode in place gated off ([vb_noinp]): the copying hold of
+         126.4.1, the whole bundle one range, M2's, still plays - every
+         read after the swap to a blank floppy the hold's.
+  part:  the pool held to the idle loop and 100 KB (`[vb_hcap]`, and the
+         slots' least poked down, `[vb_cmin]`): the cache in SLOTS - the
+         idle loop pinned, clips taken FIFO and EVICTED to make room for
+         the next, a clip longer than the room (the Limit) never given
+         one - every slot whole at the end byte for byte its clip, and
+         the play to victory and again.
+  order: part, gated off in place: the copying hold takes the bundle's own
+         HOLD ORDER, fills to its last, and the play runs with the disk
+         serving the rest - copies AND disk reads both counted.
   nox:   `-m 1`, no pool: no hold, and the play the disk's as before.
 """
 import argparse
@@ -66,7 +72,8 @@ def u16(b, i=0):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--arm", choices=("whole", "copy", "part", "nox"),
+    ap.add_argument("--arm", choices=("whole", "copy", "part", "order",
+                                      "nox"),
                     default="whole")
     a = ap.parse_args()
     os.chdir(ROOT)
@@ -134,13 +141,18 @@ def main():
         def rw(n, off=0):
             return u16(q.read(base + syms[n] + off, 2))
         whole = a.arm in ("whole", "copy")
-        if a.arm == "whole":    # the yield step down to 256 record bytes:
+        cache = a.arm in ("whole", "part")
+        if cache:               # the yield step down to 256 record bytes:
             qpoke(q, [(base + syms["vb_xyb"], struct.pack("<H", 256))])
-        if a.arm == "copy":     # the A/B gate: the copying hold, as M2 built
+        if a.arm in ("copy", "order"):  # the A/B gate: the copying hold
             qpoke(q, [(base + syms["vb_noinp"], b"\x01")])
-        if a.arm == "part":     # the pool held under the bundle: the
+        if a.arm == "order":    # the pool held under the bundle: the
             cap = len(data) // 4096 * 6 // 10   # gate's cap, in 4 KBs
             qpoke(q, [(base + syms["vb_hcap"], struct.pack("<H", cap))])
+        if a.arm == "part":     # the idle loop and 100 KB of slots
+            cap = (len(bd.idle_r) + 4095) // 4096 + 25
+            qpoke(q, [(base + syms["vb_hcap"], struct.pack("<H", cap)),
+                      (base + syms["vb_cmin"], struct.pack("<H", 8))])
         q.hmp("sendkey ret")
         wait(lambda: rb("vb_ready") == 1, "the play to start", 60)
         hon = rb("vb_hon")
@@ -154,41 +166,120 @@ def main():
             ok(hon == 1 and rb("vb_hrn") >= 1,
                "%s: the hold is taken (%d range(s), %d KB)"
                % (a.arm, rb("vb_hrn"), rw("vb_hkb4") * 4))
-            if whole:
+            ok(rb("vb_cmode") == int(cache),
+               "%s: the clip CACHE %s" % (a.arm, "on, in place from the "
+                                          "open" if cache else "off"))
+            if cache:
+                ok(rb("vb_hinp") == 1 and rb("vb_iinp") == 1,
+                   "%s: the hold in place, the idle loop in its block"
+                   % a.arm)
+                ok(rb("vb_cfix") == int(a.arm == "whole"),
+                   "%s: %s" % (a.arm, "the whole file: every slot its own "
+                               "place" if a.arm == "whole" else
+                               "SLOTS, the pool under the bundle"))
+            elif whole:
                 ok(rb("vb_hrn") == 1 and rw("vb_hkb4") * 4096 >= len(data),
-                   "whole: ONE range, the whole bundle (%d KB of %d)"
+                   "copy: ONE range, the whole bundle (%d KB of %d)"
                    % (rw("vb_hkb4") * 4, len(data) // 1024))
             wait(lambda: rb("vb_tplay") == 1, "the title", 60)
-            wait(lambda: rb("vb_hfull") == 1, "the hold to fill, while the "
-                 "title goes round", 240)
-            ok(True, "%s: the hold filled while the title went round" % a.arm)
-            # the hold is the file, byte for byte
+            wait(lambda: rb("vb_hfull") == 1, "the hold's ranges to fill, "
+                 "while the title goes round", 240)
+            ok(True, "%s: the hold's ranges filled while the title went "
+               "round" % a.arm)
             tok = struct.unpack_from("<I", q.read(base + syms["vb_htok"], 4))[0]
-            if whole:
-                got = q.read(tok, len(data))
-                ok(got == data, "whole: the hold is the bundle, byte for byte")
-            c0 = rw("vb_hcopies")
-            inp = rb("vb_hinp")
+            nclips = len(bd.clips)
+
+            def slots():
+                def tab(n):
+                    return struct.unpack_from("<%dH" % nclips, q.read(
+                        base + syms[n], 2 * nclips))
+                return tab("vb_cx"), tab("vb_cl4"), tab("vb_chave")
+
+            def slot_bytes(what):
+                cx, cl, ch = slots()
+                good = bad = 0
+                for k, c in enumerate(bd.clips):
+                    if cx[k] == 0xFFFF or ch[k] < cl[k]:
+                        continue
+                    got = q.read(tok + cx[k] * 4096, c["len"])
+                    if got == data[c["off"]:c["off"] + c["len"]]:
+                        good += 1
+                    else:
+                        bad += 1
+                ok(good > 0 and bad == 0, "%s: %s - %d slots whole, each "
+                   "byte for byte its clip (%d not)" % (a.arm, what, good, bad))
             if a.arm == "whole":
-                ok(inp == 1, "whole: IN PLACE from the fill on (a 386's "
-                   "loaded base, checked against the driver's copy)")
-            else:
-                ok(inp == 0, "%s: not in place (%s)" % (a.arm, "the gate"
-                   if a.arm == "copy" else "a part hold"))
+                def allin():
+                    cx, cl, ch = slots()
+                    return all(cx[k] != 0xFFFF and ch[k] >= cl[k]
+                               for k in range(nclips))
+                wait(allin, "every clip into the cache", 240)
+                ok(True, "whole: every clip filled into its place while "
+                   "the title went round")
+                slot_bytes("the cache")
+            if cache:
+                ix = struct.unpack_from("<I", q.read(base + syms["vb_ixb"], 4))[0]
+                ht = struct.unpack_from("<HHHH", q.read(base + syms["vb_htab"], 8))
+                ok(ht[1] > 0 and ht[3] >= ht[1] and q.read(tok + ix, ht[1] * 4096)
+                   == data[ht[0] * 4096:(ht[0] + ht[1]) * 4096],
+                   "%s: the idle loop in its block, byte for byte (%d KB)"
+                   % (a.arm, ht[1] * 4))
+            if a.arm == "copy":
+                got = q.read(tok, len(data))
+                ok(got == data, "copy: the hold is the bundle, byte for byte")
+            c0 = rw("vb_hcopies")
+            r0 = rw("vb_rcalls")
+            inp = rb("vb_hinp")
+            if a.arm in ("copy", "order"):
+                ok(inp == 0, "%s: not in place (the gate)" % a.arm)
             i0, y0 = rw("vb_icalls"), rw("vb_iyc")
             if whole:
                 q.hmp("change floppy1 %s raw" % blank)
                 print("   B: is blank now")
-            else:
+            if a.arm == "order":
                 ok(rb("vb_hrn") >= 2 and rw("vb_hkb4") * 4096 < len(data),
-                   "part: the pool under the bundle - the HOLD ORDER's %d "
+                   "order: the pool under the bundle - the HOLD ORDER's %d "
                    "ranges, %d KB of %d" % (rb("vb_hrn"), rw("vb_hkb4") * 4,
                                             len(data) // 1024))
                 first = struct.unpack_from("<HH", q.read(base + syms["vb_htab"], 4))
                 ok(first == tuple(bd.hold[0]),
-                   "part: ...its first range the order's first")
+                   "order: ...its first range the order's first")
         q.hmp("sendkey ret")                 # the fade, then the openings
         wait(lambda: rb("vb_state") == GS_MENU, "the menu", 240)
+        if cache:
+            # THE IDLE LOOP in the cache's block, decoded where it lies
+            # (126.4.6): the canvas above the band is one of its frames as
+            # the host decodes them
+            rows = bd.band[1]
+
+            def canvas(buf):
+                return b"".join(bytes(buf[(y >> 1) * 80 + (y & 1) * 8192:]
+                                      [:80]) for y in range(rows))
+            B.verify(data, quiet=True)      # (its idle loop's screens: from
+            frames = set(canvas(x) for x in B.LAST_IDLE.values())  # the
+                                            # openings' end, as the engine)
+            hits, seen = 0, set()
+            for _ in range(16):
+                q.hmp("stop")
+                cv = canvas(q.read(0xB8000, 16384))
+                q.hmp("cont")
+                if cv in frames:
+                    hits += 1
+                    seen.add(cv)
+                time.sleep(0.15)
+            if os.environ.get("VBTH_DBG"):
+                q.hmp("stop")
+                open(os.path.join(os.environ.get("VBTH_DIR", "."),
+                                  "glass-%s.bin" % a.arm), "wb").write(
+                    q.read(0xB8000, 16384))
+                open(os.path.join(os.environ.get("VBTH_DIR", "."),
+                                  "frames-%s.bin" % a.arm), "wb").write(
+                    b"".join(sorted(frames)))
+                q.hmp("cont")
+            ok(hits >= 8 and len(seen) >= 3, "%s: the IDLE LOOP read in "
+               "place from the block is the host's decode on the glass, and "
+               "it goes round (%d of 16 looks exact, %d frames)"
+               % (a.arm, hits, len(seen)))
         q.hmp("sendkey ret")                 # Attack, at the 1-HP enemy
         wait(lambda: rb("vb_eplay") == 1, "victory's end loop", 240)
         ok(rb("vb_over") == 1 and rb("vb_quit") == 0,
@@ -197,19 +288,23 @@ def main():
         wait(lambda: rb("vb_tplay") == 1 and rb("vb_over") == 0,
              "the play again, at the title", 240)
         ok(rb("vb_quit") == 0, "%s: ...and again, from the title" % a.arm)
-        if a.arm == "whole":
+        if cache:
             # THE BYTES: the title again, its ring given it in place, its
             # every record read through a loaded base and decoded across
             # yields - on the glass as the host decodes it
             title = screens_of(bd, bd.title)
-            hits = 0
+            hits, seen = 0, set()
             for _ in range(16):
                 q.hmp("stop")
-                hits += q.read(0xB8000, 16384) in title
+                g = q.read(0xB8000, 16384)
                 q.hmp("cont")
+                if g in title:
+                    hits += 1
+                    seen.add(g)
                 time.sleep(0.15)
-            ok(hits >= 8, "whole: the title read IN PLACE is the host's "
-               "decode on the glass (%d of 16 looks exact)" % hits)
+            ok(hits >= 8 and len(seen) >= 3, a.arm + ": the title read IN "
+               "PLACE is the host's decode on the glass, going round (%d of "
+               "16 looks exact, %d frames)" % (hits, len(seen)))
         if a.arm != "nox":
             n = rw("vb_hcopies") - c0
             if os.environ.get("VBTH_DBG"):
@@ -221,10 +316,19 @@ def main():
                     [q.read(base + x, 2).hex() for x in sites]))
             ni = (rw("vb_icalls") - i0) & 0xFFFF
             ny = (rw("vb_iyc") - y0) & 0xFFFF
-            if a.arm == "whole":
+            nr = (rw("vb_rcalls") - r0) & 0xFFFF
+            if cache:
                 ok(ni > 0 and ny > 0 and rw("vb_irings") >= 3,
-                   "whole: records read IN PLACE after the fill: %d, the "
-                   "decode yielding %d times, %d copies" % (ni, ny, n))
+                   "%s: records read IN PLACE: %d, the decode yielding %d "
+                   "times, %d rings in place, %d copies, %d disk reads"
+                   % (a.arm, ni, ny, rw("vb_irings"), n, nr))
+                if a.arm == "whole":
+                    ok(nr == 0, "whole: nothing read off the (blank) disk "
+                       "from the swap on")
+                else:
+                    slot_bytes("after the play")
+                    ok(rw("vb_cev") > 0, "part: slots EVICTED to make room "
+                       "(%d)" % rw("vb_cev"))
             else:
                 ok(n > 0 and ni == 0,
                    "%s: reads the hold answered after it filled: %d copies"

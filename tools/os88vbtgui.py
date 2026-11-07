@@ -3578,15 +3578,54 @@ FIT_LABELS = {"fill": "Fill (crop the edges to the shape)",
               "stretch": "Stretch (the whole picture, squeezed)"}
 
 
+XMS_LABELS = ((0, "none (an XT)"), (1024, "1 MB"), (2048, "2 MB"),
+              (3072, "3 MB"), (4096, "4 MB"), (8192, "8 MB"),
+              (15360, "15 MB"))
+
+
+def cache_lines(holds, nclips):
+    """What the CLIP CACHE (126.4.6) holds with each pool - a 286's common
+    1 and 3 MB, and the target's own (XMS on the target, the Build tab)"""
+    out = []
+    for pool, hh in sorted(holds.items(), key=lambda x: int(x[0])):
+        c = hh.get("cache")
+        who = "With %s of XMS%s: " % (
+            "%d MB" % (int(pool) // 1024) if int(pool) % 1024 == 0 else
+            "%d KB" % int(pool), " (the target's)" if hh.get("target") else "")
+        if c is None:
+            out.append(who + "no cache (no room for the idle loop and 256 KB "
+                       "of clips) - %d KB held, the hold order's first of its "
+                       "%d, copied out" % (hh["kb"], hh["order_kb"]))
+        elif c["whole"]:
+            out.append(who + "the whole bundle cached - every clip played "
+                       "from XMS, none read twice")
+        else:
+            out.append(who + "%d KB of clips cached at once (the largest "
+                       "%d KB), %d of %d clips fit%s; the idle loop in XMS%s" % (
+                           c["room"] // 1024, c["big"] // 1024, len(c["fits"]),
+                           nclips, "" if len(c["fits"]) == nclips else
+                           " - the rest stream through a ring",
+                           ", the music too" if c["music"] else ""))
+    return out
+
+
 def memory_lines(mem):
     kb = lambda n: (n + 1023) // 1024
     out = ["The resident claim, held while the window is open: %d KB" %
            kb(mem["resident"])]
     out += ["    %-24s %4d KB" % (n, kb(b)) for n, b in mem["parts"]]
     out.append("The card's ring: %d KB" % kb(mem["card"]))
-    out.append("Two clip rings, a play's, out of what is left: %s" % (
+    if mem.get("cache"):
+        out.append("Two clip rings, only for a clip the cache has no slot "
+                   "for: %s, and the least beside it (guards %d KB)" % (
+                       "%d KB" % kb(mem["ring"]) if mem["ring"] else
+                       "NOT ENOUGH - Play would say Not enough memory",
+                       kb(mem.get("guard", 0))))
+        return out
+    out.append("Two clip rings, a play's, out of what is left: %s%s" % (
         "%d KB each" % kb(mem["ring"]) if mem["ring"] else
-        "NOT ENOUGH - Play would say Not enough memory"))
+        "NOT ENOUGH - Play would say Not enough memory",
+        " (guards %d KB)" % kb(mem["guard"]) if mem.get("guard") else ""))
     if mem["ring"] and mem["ring"] < 96 * 1024:     # (VBATTLE-RAM-PLAN R4:
         out.append("    SMALL: a ring is what rides out a clip faster "
                    "than the disk, and the build holds clips to it - "
@@ -3618,6 +3657,12 @@ class BuildTab(object):
         self.capv = app.tk.IntVar(value=1)      # (126.4.1: on, unless asked)
         ttk.Checkbutton(top, text="Hold clips to the disk", variable=self.capv,
                         command=self._cap).pack(side="left", padx=6)
+        ttk.Label(top, text="XMS on the target").pack(side="left", padx=(8, 2))
+        self.xmsv = tk.StringVar(value=XMS_LABELS[0][1])    # (126.4.6)
+        xc = ttk.Combobox(top, textvariable=self.xmsv, state="readonly",
+                          width=16, values=[l for _, l in XMS_LABELS])
+        xc.pack(side="left")
+        xc.bind("<<ComboboxSelected>>", lambda e: self._xms())
         self.out_l = ttk.Label(top, text="")
         self.out_l.pack(side="left", padx=8)
         cf = ttk.LabelFrame(f, text="What is wrong (ERROR stops a build; "
@@ -3695,6 +3740,14 @@ class BuildTab(object):
         self.game_l = ttk.Label(gf, text="", wraplength=700)
         self.game_l.pack(side="left", padx=8)
 
+    def _xms(self):
+        """THE CLIP CACHE's pool (126.4.6): the XMS the battle may count on
+        - the cap prices a stream into its slot, and the memory lines say
+        what the cache holds"""
+        kb = dict((l, k) for k, l in XMS_LABELS).get(self.xmsv.get(), 0)
+        if kb != (self.app.proj.d["target"].get("xms_kb") or 0):
+            self.app.edit("set", ("target", "xms_kb"), kb)
+
     def _cap(self):
         """THE READER'S MODEL (126.4.1) on or off: a streamed clip's burst
         drawn in part where the disk would not have it in time"""
@@ -3705,6 +3758,8 @@ class BuildTab(object):
     def refresh(self):
         P_ = self.app.proj
         self.capv.set(1 if P_.d["target"].get("burst_cap", True) else 0)
+        xk = P_.d["target"].get("xms_kb") or 0
+        self.xmsv.set(dict(XMS_LABELS).get(xk, "%d KB" % xk))
         self.chk.delete(*self.chk.get_children())
         for k, x in enumerate(P_.check()):
             self.chk.insert("", "end", iid=str(k), text=x.level,
@@ -3821,13 +3876,7 @@ class BuildTab(object):
             "in part, the rest on the frames after; the sound whole): %s." %
             ", ".join("%s %d frames" % kv for kv in sorted(
                 res["capped"].items())) if res["capped"] else ""))
-        hl = []
-        for pool, hh in sorted(bud.get("hold", {}).items(), key=lambda x: int(x[0])):
-            hl.append("With %d MB of XMS: %s" % (int(pool) // 1024,
-                      "the whole bundle held - every read a copy" if hh["whole"]
-                      else "%d KB held, the hold order's first (the music, the "
-                      "loops, every action's start...) of its %d" % (
-                          hh["kb"], hh["order_kb"])))
+        hl = cache_lines(bud.get("hold", {}), len(bud["clips"]))
         self.mem_l.config(text="\n".join(memory_lines(bud["memory"]) + hl + [
             "(on a 640 KB machine: %d KB free to the engine, measured on "
             "MartyPC's XT; 86Box's 5150 left about 20 KB more)" %

@@ -45,6 +45,12 @@ def read_prof(path):
                  holdkb=struct.unpack_from("<H", d, 66)[0],
                  hcopies=struct.unpack_from("<H", d, 68)[0], hranges=d[70],
                  card=d[71], alate=struct.unpack_from("<H", d, 72)[0])
+    if ver >= 4:                # THE CACHE AND THE KEYS (version 4, 126.4.6)
+        (kn, kmax, ksum, pool, cmode, cfix, cfkb, irings, cev, cwhole, gkb,
+         iinp) = struct.unpack_from("<HHIHBBHHHHBB", d, 74)
+        h.update(keys=kn, kmax=kmax, ksum=ksum, pool=pool, cache=cmode,
+                 cfix=cfix, cfkb=cfkb, irings=irings, cev=cev,
+                 cwhole=cwhole, guard=gkb, iinp=iinp)
     fr = []
     for i in range(nf):
         o = hlen + pre * i
@@ -106,6 +112,24 @@ def main():
                 {1: "XMS", 2: "EMS"}.get(h["hold"], h["hold"]), h["holdkb"],
                 h["hranges"], " (filled)" if h["hfull"] else
                 " (not yet filled)", h["hcopies"])))
+    if h["ver"] >= 4:
+        per = h["div"] * PIT_US / 1000          # a hook period, in ms
+        if h["cache"]:
+            print("the cache: the pool %d KB, %s; %d KB filled, %d clips "
+                  "whole at the end, %d rings in place, %d slots evicted%s"
+                  % (h["pool"], "the whole file" if h["cfix"] else
+                     "slots of whole clips", h["cfkb"], h["cwhole"],
+                     h["irings"], h["cev"], "; the idle loop in the block"
+                     if h["iinp"] else ""))
+        else:
+            print("the cache: off (the pool %d KB)%s" % (
+                h["pool"], " - no pool" if not h["pool"] else ""))
+        if h["keys"]:
+            print("the keys: %d timed to their band's redraw, %.0f ms on "
+                  "average, %.0f at most (to the hook's %.1f ms)" % (
+                      h["keys"], h["ksum"] * per / h["keys"],
+                      h["kmax"] * per, per))
+        print("the rings' guard: %d KB" % h["guard"])
     print("the reader: %d calls, %.0f KB, %.1f s of the hook's periods "
           "(%.0f KB/s while reading)" % (
               h["rcalls"], h["rbytes"] / 1024.0,

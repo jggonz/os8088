@@ -962,6 +962,63 @@ a fifth of the pixels changed every frame, each change a write of
 several planes. Video Encoder's measured setting (hold 24, score 60) cut
 that to about 1%, for almost no loss of colour accuracy.
 
+## The memory, all at once (2026-11-07)
+
+The owner's 286 profiles kept saying the same thing in different ways.
+The music never dropped, the video mostly kept up, and the heavy clips'
+own sound stuttered: 46 frames of it late in one play. The engine had a
+profile build by then (VBATTLED, SPEC.md 126.8), and its hold line gave
+the reason away. The XMS hold held 2,336 KB of a 15.3 MB bundle and
+called itself "filled". It was full, but of the builder's hold order,
+not of the pool: 16 ranges, the idle loop and the music and 40 KB of
+each clip's head. Every heavy clip still streamed off the disk through a
+104 KB ring. The sound runs about 50 KB ahead of the picture in a clip
+like that, so a ring that size has almost nothing left to ride out a
+burst with.
+
+The owner asked for every memory change in one go, conventional memory
+included: *"I'd like to do all our memory rework at once, so we don't
+have to keep coming back to it."* Their 86Box machine has 565 KB free
+with half the kernel in the HMA, and the battle used it as 46 KB of
+window, a 164 KB resident claim (72 KB of it the idle loop), the card's
+ring, a 32 KB bounce, and two 104 KB rings with a 32 KB guard each.
+
+The engine already knew how to decode a clip where extended memory held
+it (126.4.2), but only once the whole file had arrived. So the change
+was to stop waiting for the whole file. Wherever that in-place check
+passes, it now runs when the hold opens, and the hold becomes a cache of
+whole clips. Each clip, when it is wanted, gets a slot its own length.
+The slots go in FIFO order, and a new slot evicts what it overlaps,
+unless that clip is playing, pending or about to be. A ring given a
+clip with a slot plays from the slot, on whatever has arrived so far,
+and the clip's stream fills the slot. The reader is no longer bounded
+by a ring, only by the disk. A clip played once plays again with no
+read at all. The idle loop moved into the cache too, read at the load
+and decoded in place, which took its 72 KB out of the resident claim.
+
+The owner's other condition was the menu: *"as long as we can do that
+without going back to making the menu sluggish."* Everything the cache
+reads ahead goes after the menu's own wants. It reads in 16 KB at a
+286's menu and 4 KB at an 8088's, the same sizes as before, and waits
+the usual half second after a key. The profile now times each key at a
+menu to its band's redraw, so "nearly instant" can be a number in the
+next profile instead of an impression.
+
+Two smaller things went in with it. A ring's guard is now the largest
+record rounded to 4 KB rather than a fixed 16 or 32 KB. And the builder
+gained an "XMS on the target" setting. With room for the idle loop and
+the clips, it prices a stream with no ring limit. On a machine with 330
+KB free and 4 MB of XMS, the demo's attack is then held only to the
+disk (12 frames cut) instead of to an 84 KB ring (22 frames cut).
+
+The tests have to see things that a picture can hide, so they were each
+broken on purpose. A fill read from the file's start fails the
+byte-for-byte check on every slot. The idle loop read from the block's
+start showed the check's own weakness first. The openings end on an
+idle frame, so a frozen screen still "matched", and the check passed.
+It now requires the loop to go round: at least three distinct exact
+frames.
+
 ## Measured (MartyPC `os8088_5150_sb_gla`, 360 KB disk)
 
 | | |

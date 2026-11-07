@@ -1806,14 +1806,18 @@ vb_load:
     ja .fail1
     cmp word [vb_meta+VH_NOPEN], VB_MAXOPEN
     ja .fail1
-    mov ax, [vb_meta+VH_MAXREC]     ; the rings' GUARD: 16 KB, or 32 for a
-    mov byte [vb_cgkb], VB_CGUARD / 1024    ; rendition whose whole-screen
-    cmp ax, VB_CGUARD               ; record is more (VGA's planes, Hercules')
-    jbe .g16
-    mov byte [vb_cgkb], 2 * VB_CGUARD / 1024
-    cmp ax, 2 * VB_CGUARD
-    ja .fail1                       ; (a record past the guard: not ours)
-.g16:
+    mov ax, [vb_meta+VH_MAXREC]     ; the rings' GUARD: the largest record
+    cmp ax, 2 * VB_CGUARD           ; in 4 KB (126.4.6; it was 16 or 32 KB),
+    ja .fail1                       ; at most 32 (a record past: not ours)
+    add ax, 4095
+    mov cl, 12
+    shr ax, cl
+    jnz .g4
+    inc ax
+.g4:
+    shl ax, 1
+    shl ax, 1
+    mov [vb_cgkb], al
     cmp byte [vb_meta+VH_BAND+1], 191   ; THE BAND'S FIRST ROW, at most the
     ja .fail1                       ; message line's (a band buffer is 200
                                     ; less it, in rows: past 200 it is
@@ -1889,11 +1893,23 @@ vb_load:
 .ring:
     add ax, (VB_MR + VB_MPIECE) / 16
 .rings:
+    push ax                         ; THE HOLD, opened here once a session
+    cmp byte [vb_pmd], 0            ; (kern_mega: at .claimed, below): a
+    jne .rh                         ; CACHE keeps the idle loop in its block
+    cmp byte [vb_hopd], 0           ; (126.4.6), and the claim has no part
+    jne .rh                         ; for it
+    mov byte [vb_hopd], 1
+    call vb_hopen
+.rh:
+    pop ax
     mov [vb_pidl], ax               ; the idle loop's records, the same way
-    mov di, VH_IDLE                 ; (format 7)
+    cmp byte [vb_iinp], 0           ; (format 7)
+    jne .noidl
+    mov di, VH_IDLE
     call vb_entpara
     add ax, [vb_pidl]
     jc .fail1
+.noidl:
     mov [vb_pimg], ax               ; the band's pictures (126.5)
     mov cx, [vb_meta+VH_IMG+4]
     call vb_round
@@ -2123,10 +2139,23 @@ vb_lread:
     call vb_read
     jc .fail1
 .read:
-    mov di, VH_IDLE                 ; the idle loop
+    cmp byte [vb_iinp], 0           ; the idle loop: into the CACHE's block,
+    jne .iblk                       ; its range 0 (126.4.6)...
+    mov di, VH_IDLE                 ; ...or the resident claim
     mov ax, [vb_idseg]
     call vb_entload
     jc .fail1
+    jmp short .img
+.iblk:
+    mov ax, [vb_htab+HT_HAVE]
+    cmp ax, [vb_htab+HT_LEN]
+    jae .img
+    call vb_hstep
+    jc .fail1
+    or al, al
+    jnz .iblk
+    jmp .fail
+.img:
     mov cx, [vb_meta+VH_IMG+4]      ; the band's pictures
     jcxz .noimg
     call vb_round
@@ -2138,11 +2167,7 @@ vb_lread:
     call vb_read
     jc .fail1
 .noimg:
-    cmp byte [vb_pmd], 0            ; (kern_mega: no hold yet - VBATTLE-
-    jne .nohold                     ; MEGA-PLAN W3)
-    call vb_hopen                   ; the hold, where there is a pool
-.nohold:
-    mov byte [vb_loaded], 1
+    mov byte [vb_loaded], 1         ; (the hold: opened by vb_load)
     call vb_fontload
 .again:
     ; the music from where it comes in, its ring filled: it plays when the
@@ -2343,7 +2368,21 @@ vb_rclaim:
 .pair:                              ; ring 0 half of AX KB, ring 1 the
     sub ax, [vb_rkeep]              ; largest left. CF=1 none claimed
     jc .pno
-    shr ax, 1
+    cmp byte [vb_cmode], 0          ; THE CACHE (126.4.6): a ring is only
+    jne .pc                         ; for a clip it has no slot for - ring
+    shr ax, 1                       ; 0 the run, ring 1 the least beside it
+    jmp short .p0
+.pc:
+    mov dx, VB_CRMIN
+    cmp dx, [vb_rmin]
+    jae .pc1
+    mov dx, [vb_rmin]
+.pc1:
+    add dl, [vb_cgkb]
+    adc dh, 0
+    sub ax, dx
+    jc .pno
+.p0:
     mov bx, vb_rg0
     call .claim
     jc .pno
@@ -2471,6 +2510,8 @@ vb_headof:
     mov ax, [si+VC_LEN]
     mov dx, [si+VC_LEN+2]
 .l:
+    cmp byte [bx+RG_INP], 0         ; (in place: its slot, not its ring)
+    jne .r
     cmp dx, [bx+RG_BYTES+2]
     jb .r
     ja .b
@@ -2531,6 +2572,21 @@ vb_entcur:
 ; record is always whole at its cursor (126.4) - that tail and nothing
 ; else. Out AL = 1 a piece was read, 0 nothing to read; CF=1 a read failed
 vb_rpiece:
+    cmp byte [bx+RG_INP], 0         ; IN PLACE (the cache): its clip's slot
+    je .conv                        ; filled, on the ring's own cursor
+    mov al, [bx+RG_CLIP]
+    cmp al, 0xFF
+    je .inone
+    push di
+    lea di, [bx+RG_CUR]
+    call vb_cfill
+    pop di
+    ret
+.inone:
+    xor al, al
+    clc
+    ret
+.conv:
     push si
     push di
     push bp
@@ -3330,6 +3386,9 @@ vb_keys:
     call OSAPI_GET_TICKS            ; when: the reader waits a moment on it
     mov [vb_ktick], ax
     pop ax
+%ifdef VB_DIAG
+    call vb_prkey                   ; (the profile: the key to its band)
+%endif
 .none:
     ret
 
@@ -3358,11 +3417,15 @@ vb_rrec:
     mov dx, es
     clc
     ret
-.inp:                               ; IN PLACE: all of it is there
-    mov ax, [bx+RG_VOFF]
+.inp:                               ; IN PLACE: where the hold has it, once
+    push dx                         ; it has ARRIVED (the cache's slot fills
+    mov ax, [bx+RG_VOFF]            ; as the clip streams, 126.4.6)
     mov dx, [bx+RG_VOFF+2]
     call vb_iat
     call vb_ilen
+    pop ax
+    cmp cx, ax
+    ja .no
     clc
     ret
 .no:
@@ -3780,8 +3843,24 @@ vb_frame:
     add si, [vb_meta+VH_IDLETAB]
     mov es, [vb_vres]
     mov dx, [es:si]                 ; its record's paragraph (format 7)
+    cmp byte [vb_iinp], 0
+    jne .iinp
     add dx, [vb_idseg]
     xor si, si
+    call vb_decode
+    clc
+    ret
+.iinp:                              ; IN THE CACHE'S BLOCK (126.4.6): where
+    mov ax, dx                      ; it lies, as a ring's in place
+    xor dx, dx
+    mov cx, 4
+.ip:
+    shl ax, 1
+    rcl dx, 1
+    loop .ip
+    add ax, [vb_ixb]
+    adc dx, [vb_ixb+2]
+    call vb_bat
     call vb_decode
     clc
     ret
@@ -4337,9 +4416,16 @@ vb_aframe:
     pop cx
     ret
 .inp:                               ; IN PLACE: the record where the hold
-    mov ax, [bx+RG_AOFF]            ; has it (all of it is there), DS it
-    mov dx, [bx+RG_AOFF+2]          ; through a borrow on XMS - the hook's
-    call vb_iat                     ; interrupts are off already here
+    push cx                         ; has it, once it has arrived (126.4.6),
+    push dx                         ; DS it through a borrow on XMS - the
+    mov ax, [bx+RG_AOFF]            ; hook's interrupts are off already here
+    mov dx, [bx+RG_AOFF+2]
+    call vb_iat
+    call vb_ilen
+    pop ax
+    cmp cx, ax
+    pop cx
+    ja .late
     push ds
     VB_DSDX
     mov ax, [si+RH_LEN]
@@ -4860,11 +4946,24 @@ vb_reader:
     call vb_rhead
     jnc .read
 .top:
+    cmp byte [vb_cmode], 0          ; 7b. THE CACHE: the clip under the
+    je .top1                        ; cursor whole, then the enemy's
+    call vb_cpre1                   ; (126.4.6)
+    jc .rerr
+    or al, al
+    jnz .rok
+.top1:
     call vb_mpiece                  ; 8. the music
     jc .rerr
     or al, al
     jnz .rok
-    jmp vb_hstep                    ; 9. the HOLD's fill (VBATTLE-MEMORY 4)
+    call vb_hstep                   ; 9. the HOLD's fill (VBATTLE-MEMORY 4)
+    jc .rerr
+    or al, al
+    jnz .rok
+    cmp byte [vb_cmode], 0          ; 10. THE CACHE: every other clip, into
+    je .rok                         ; room never used
+    jmp vb_cpre2
 .rok:
     clc
     ret
@@ -4943,6 +5042,15 @@ vb_reader:
 .lv:
     mov ax, [bx+RG_FILL]            ; (twice what it holds, against all
     mov dx, [bx+RG_FILL+2]          ; of the ring)
+    cmp byte [bx+RG_INP], 0         ; IN PLACE: under VB_ILOWH 64 KBs ahead
+    je .lr                          ; (its slot has no top short of the clip)
+    sub ax, cx
+    sbb dx, si
+    jc .lyes                        ; (the cursor past what has arrived: now)
+    cmp dx, VB_ILOWH
+    jb .lyes
+    jmp short .lno
+.lr:
     sub ax, cx
     sbb dx, si
     shl ax, 1
@@ -4989,6 +5097,7 @@ vb_reader:
 %include "vbattle/vbgame.inc"
 %include "vbattle/vbloop.inc"
 %include "vbattle/vbhold.inc"
+%include "vbattle/vbcache.inc"
 %include "vbattle/vbinp.inc"
 %ifdef VB_DIAG
 %include "vbattle/vbprof.inc"
@@ -5445,6 +5554,35 @@ VB_VAR vb_irings, 2                 ; ...rings given a clip in place
 VB_VAR vb_htok, 4                   ; ...the block's token
 VB_VAR vb_hcur, FSEQ_SIZE           ; ...the fill's own file cursor
 VB_VAR vb_htab, 28 * 8              ; ...the ranges (HT_*)
+VB_VAR vb_hpno, 1                   ; ...its hold order had nothing
+VB_VAR vb_hblk, 2                   ; ...the block taken, in 4 KBs
+VB_VAR vb_hes, 2                    ; ...vb_hstepe's window segment
+VB_VAR vb_cmode, 1                  ; THE CLIP CACHE (vbcache.inc) is on
+VB_VAR vb_cfix, 1                   ; ...the whole file: every slot its own
+VB_VAR vb_cx, 2 * VB_MAXCLIP        ; ...a clip's slot, 4 KB in the block
+VB_VAR vb_cl4, 2 * VB_MAXCLIP       ; ...its 4 KBs
+VB_VAR vb_chave, 2 * VB_MAXCLIP     ; ...and what has arrived
+VB_VAR vb_cbase, 2                  ; ...the slots' room: its first 4 KB,
+VB_VAR vb_ctop, 2                   ; ...past its last
+VB_VAR vb_cptr, 2                   ; ...and the next slot's place
+VB_VAR vb_cl, 2                     ; ...(vb_cget's: the clip's 4 KBs,
+VB_VAR vb_ctries, 1                 ; ...and its tries)
+VB_VAR vb_cevict, 1                 ; ...vb_cget may evict
+VB_VAR vb_ck, 2                     ; ...vb_cfill's 4 KBs this time
+VB_VAR vb_ctier, 1                  ; ...the CPU (a menu's fill size)
+VB_VAR vb_cf4, 2                    ; ...the file's 4 KBs
+VB_VAR vb_ci4, 2                    ; ...the idle loop's
+VB_VAR vb_cm4, 2                    ; ...the music's, when it streams
+VB_VAR vb_cbig4, 2                  ; ...the largest clip's
+VB_VAR vb_cgen, 1                   ; ...(spare)
+VB_VAR vb_cfkb, 2                   ; ...KB filled (the profile's)
+VB_VAR vb_cev, 2                    ; ...slots evicted (the profile's)
+VB_VAR vb_cpool, 2                  ; ...the pool's KB at the open
+VB_VAR vb_cmin, 2                   ; ...a gate's least slots, 4 KBs (0:
+                                    ; VB_CMIN4 - a test's poke)
+VB_VAR vb_ccsr, FSEQ_SIZE           ; ...its prefetch's file cursor
+VB_VAR vb_iinp, 1                   ; THE IDLE LOOP in the block, in place
+VB_VAR vb_ixb, 4                    ; ...its first byte there
 VB_VAR vb_kind, 1                   ; the bundle's adapter (VK_*)
 VB_VAR vb_tcol0, 2                  ; a text's first cell (vb_text)
 VB_VAR vb_bpc0, 2                   ; vb_bpres: the first cell...
@@ -5481,6 +5619,11 @@ VB_VAR vb_prroom, 2                 ; ...the frames' room it says
 VB_VAR vb_prsnd, 1                  ; ...a card played
 VB_VAR vb_prlat, 2                  ; ...vb_alate at the last frame
 VB_VAR vb_prro, 4                   ; ...and its offset
+VB_VAR vb_prk0, 2                   ; ...a key's time (hook periods)
+VB_VAR vb_prkon, 1                  ; ...a key waits for its band
+VB_VAR vb_prkn, 2                   ; ...keys timed
+VB_VAR vb_prkmax, 2                 ; ...the longest
+VB_VAR vb_prksum, 4                 ; ...their sum
 %endif
 VB_VAR vb_loff, 2                   ; ...its offset in the ground's buffer
 VB_VAR vb_lstr, 2                   ; ...a plane's bytes (the band's rows x 40)

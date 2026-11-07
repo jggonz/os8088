@@ -152,12 +152,32 @@ def main():
             ok(rb("vb_hon") == 1 and rb("vb_htype") == 2,
                "below a 386 the hold is EXPANDED memory (htype %d)"
                % rb("vb_htype"))
-            ok(rb("vb_hrn") == 1 and rw("vb_hkb4") * 4096 >= len(data),
-               "...one range, the whole bundle (%d KB of %d)"
-               % (rw("vb_hkb4") * 4, len(data) // 1024))
+            if a.eslow == 1:
+                ok(rb("vb_hrn") == 1 and rw("vb_hkb4") * 4096 >= len(data),
+                   "...one range, the whole bundle (%d KB of %d)"
+                   % (rw("vb_hkb4") * 4, len(data) // 1024))
+            else:               # THE CLIP CACHE (126.4.6), in place from
+                ok(rb("vb_cmode") == 1 and rb("vb_cfix") == 1 and  # the open
+                   rb("vb_iinp") == 1 and rw("vb_hkb4") * 4096 >= len(data),
+                   "...THE CLIP CACHE over the whole bundle (%d KB of %d), "
+                   "the idle loop in the board" % (rw("vb_hkb4") * 4,
+                                                   len(data) // 1024))
             until(lambda: rb("vb_tplay") == 1, "the title")
             until(lambda: rb("vb_hfull") == 1, "the hold to fill while "
                   "the title goes round", guest=300.0)
+            if a.eslow != 1:
+                nc = len(B.Bundle(data).clips)
+
+                def allin():
+                    t = m.read(base + syms["vb_cx"], 2 * nc)
+                    l4 = m.read(base + syms["vb_cl4"], 2 * nc)
+                    h = m.read(base + syms["vb_chave"], 2 * nc)
+                    return all(struct.unpack_from("<H", t, 2 * k)[0] != 0xFFFF
+                               and struct.unpack_from("<H", h, 2 * k)[0] >=
+                               struct.unpack_from("<H", l4, 2 * k)[0]
+                               for k in range(nc))
+                until(allin, "every clip into the board while the title "
+                      "goes round", guest=300.0)
             rc0, c0 = rw("vb_rcalls"), rw("vb_hcopies")
             ok(True, "the hold filled while the title went round (%d disk "
                "reads so far)" % rc0)

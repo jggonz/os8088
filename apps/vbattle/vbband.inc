@@ -545,6 +545,12 @@ vb_band:
     jnz .go
     ret
 .go:
+%ifdef VB_DIAG
+    call .go1                       ; (the profile: a key's time to here)
+    jmp vb_prkend
+.go1:
+    mov al, [vb_dirty]
+%endif
     test al, 8
     jz .t
     call vb_needrb                  ; (the ground the same: no rebuild - the

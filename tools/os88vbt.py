@@ -677,6 +677,7 @@ class Battle:
                                 # bytes; None: no cap
         self.capped = {}        # ...and what it did: clip -> frames capped
         self.cap_ring = None    # ...and the ring it took the engine to have
+        self.xms_kb = 0         # ...the XMS its target counts on (126.4.6)
         self.any_key = False    # any key leaves the title (header 348)
         self.vga = None         # vga4: (K, a clip's own colours) (126.3.2)
         self.dac_base = None    # (unused: the idle loop has no colours of
@@ -814,14 +815,21 @@ def build(b):
         import vbtana as A_         # R4): what the engine will be given
         nanch = sum(len(c.get("anchors", b.anchors)) for c in b.clips) + \
             sum(len(o.get("anchors", ())) for o in openings)  # beside this
+        xkb = b.xms_kb              # (THE CACHE, 126.4.6: a target with
+        cache = xkb and xkb // 4 - 1 >= (len(idle) + 4095) // 4096 + \
+            A_.VB_CMIN4             # XMS keeps the idle loop in its block)
         parts = A_.resident_parts(  # bundle's resident claim, on the 640 KB
-            4 * nanch + 2 * n, len(idle),       # machine vbtana measured -
+            4 * nanch + 2 * n, 0 if cache else len(idle),   # machine vbtana
             sum(len(sfx_bytes(b.sfx[nm])) for nm in set(  # the cap holds a
                 v for v in b.ui.values() if v is not None)),  # clip to that
             len(music_bytes(b.music)), len(bytes(b.images)),  # ring, less
             b.band[1], b.vlayer)                # the lead's share. It was
         b.cap_ring = A_.ring_of(sum(x for _, x in parts),   # 56 KB for
                                 REND.recmax)    # every bundle (CAP_HOLD)
+        if cache:                   # WITH THE CACHE a clip streams into a
+            b.cap_ring = xkb * 1024 - len(idle)     # slot its own length:
+                                    # the run ahead is the pool's, not a
+                                    # ring's (126.4.6)
         b.cap = dict(b.cap, hold=A_.cap_hold(
             b.cap_ring or A_.VB_CRMIN * 1024, b.cap["rate"], b.cap["fps"],
             b.rate), ring=b.cap_ring or A_.VB_CRMIN * 1024, srate=b.rate)
@@ -1334,6 +1342,7 @@ def verify(data, quiet=False):
     elif not b.clips[b.openings[-1]]["flags"] & CF_JOINS:
         raise ValueError("the last opening does not join the loop")
     idle = [None] * b.nidle
+    LAST_IDLE.clear()
     for lap in range(2):            # two laps: lap 2 must be lap 1
         for k in range(b.nidle):
             i = (cur + 1 + k) % b.nidle
@@ -1343,6 +1352,8 @@ def verify(data, quiet=False):
             if lap == 1 and idle[i] != cv:
                 raise ValueError("the idle loop's frame %d differs on lap 2" % i)
             idle[i] = cv
+            if lap == 1:            # (the screens, for a test's glass:
+                LAST_IDLE[i] = bytes(scr[:16384])   # tests/vbthold.py)
     paths = 0
     vic, dft = b.rules.victory, b.rules.defeat
     ending_name = {"victory": b.clips[vic]["name"] if vic not in (None, NO_SFX)
@@ -1469,6 +1480,7 @@ def battle_of(proj, progress=None, kind="cga4"):
                 for j in range(slots)]
 
     b.dac_base = dac_of("idle")
+    b.xms_kb = t.get("xms_kb") or 0     # (126.4.6: the cache's pool)
     if t.get("burst_cap", True):    # THE READER'S MODEL (126.4.1): the
         import os88venc as VE_      # profile's disk at three quarters,
         disk = VE_.PROFILES.get(t.get("profile"), {}).get("disk") or 119000
@@ -1742,6 +1754,7 @@ def build_project(proj, progress=None, kind="cga4"):
 
 LAST_CAPPED = {}
 LAST_CAP = {}
+LAST_IDLE = {}      # verify's idle loop: frame -> the screen's 16 KB
 
 
 def demo_project(path, bars=16, floppy=False):

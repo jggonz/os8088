@@ -994,7 +994,8 @@ def budget(proj, data):
         if c["loop"]:
             c["id"] = "%s (a loop)" % ("the title" if b.clips.index(bc) ==
                                        b.title else "an end loop")
-    mem = memory(data)
+    xms = proj.d["target"].get("xms_kb") or 0
+    mem = memory(data, xms_kb=xms)
     mrate = 0 if mem["music_resident"] else b.rate * 1.0   # 8-bit mono
     for c in clips:
         c["with_music"] = (c["rate"] + mrate) / disk
@@ -1002,15 +1003,19 @@ def budget(proj, data):
         c["fits_ring"] = mem["ring"] is not None and c["bytes"] <= mem["ring"]
     order = [n * 4 for _, n in getattr(b, "hold", [])]     # KB, in order
     holds = {}
-    for pool in (1024, 3072):       # a 286's common pools (98.3.18.2.1)
-        whole = len(data) // 1024 <= pool - 4
-        got, left = 0, pool - 4
-        for kb in order:
+    lens = [c["len"] for c in b.clips]
+    for pool in sorted({1024, 3072} | ({xms} if xms else set())):
+        whole = len(data) // 1024 <= pool - 4   # (a 286's common pools,
+        got, left = 0, pool - 4                 # 98.3.18.2.1, and the
+        for kb in order:                        # target's own)
             take = min(kb, max(0, left))
             got += take
             left -= take
         holds[pool] = dict(whole=whole, kb=len(data) // 1024 if whole
-                           else got, order_kb=sum(order))
+                           else got, order_kb=sum(order),
+                           cache=cache_plan(pool, len(data), len(b.idle_r),
+                                            b.mlen, lens),
+                           target=pool == xms)
     return dict(clips=clips, idle_bytes=len(b.idle_r), entries=b.ents_len,
                 hold=holds,
                 music=b.mlen, ui=len(b.uib), file=len(data), disk=disk,
@@ -1039,23 +1044,65 @@ def _r4k(n):
     return min((n + 4095) & ~4095, 0xF000)
 
 
-def memory(data, free_kb=None):
+VB_CMIN4 = 64           # the cache's least room for slots, 4 KBs (vbcache.inc)
+
+
+def cache_plan(xms_kb, file_len, idle_len, mlen, clip_lens):
+    """THE CLIP CACHE (SPEC.md 126.4.6) in a pool of XMS_KB, as vb_xopen
+    and vb_cplan lay it out: None when it is off (no pool, or no room for
+    the idle loop and VB_CMIN4 of slots); else its block, whether it is the
+    whole file, the music held, the slots' room, and which clips (their
+    lengths) fit it. Bytes throughout"""
+    if not xms_kb:
+        return None
+    k4 = lambda n: (n + 4095) // 4096
+    pool4 = xms_kb // 4 - 1
+    if pool4 <= 0:
+        return None
+    blk4 = min(pool4, k4(file_len))
+    idle4, mus4 = k4(idle_len), 0 if mlen <= VB_MRES else k4(mlen)
+    big4 = max([k4(n) for n in clip_lens] or [0])
+    if blk4 >= k4(file_len):
+        return dict(block=blk4 * 4096, whole=True, music=bool(mus4),
+                    room=blk4 * 4096, fits=list(clip_lens), big=big4 * 4096)
+    if blk4 < idle4 + VB_CMIN4:
+        return None
+    base = idle4
+    left = blk4 - idle4 - mus4
+    music = bool(mus4) and left >= max(2 * big4, VB_CMIN4)
+    if music:
+        base += mus4
+    room4 = blk4 - base
+    return dict(block=blk4 * 4096, whole=False, music=music,
+                room=room4 * 4096, big=big4 * 4096,
+                fits=[n for n in clip_lens if k4(n) <= room4])
+
+
+def memory(data, free_kb=None, xms_kb=0):
     """What the engine claims for bundle DATA (126.4), in bytes: the
     resident claim's parts, the card's ring, and the two clip rings a play
     is given out of FREE_KB (the largest run once it is loaded). "rings" is
-    None when they would be under VB_CRMIN: Play says Not enough memory"""
+    None when they would be under VB_CRMIN: Play says Not enough memory.
+    With XMS_KB of XMS and room for the CACHE (126.4.6) the idle loop is
+    in its block, not the claim, ring 0 takes the run and ring 1 the least
+    - the rings only for a clip the cache has no slot for"""
     import os88vbt as B
     b = B.Bundle(data)
-    parts = resident_parts(len(b.vres), len(b.idle_r), len(b.uib), b.mlen,
-                           len(b.imgs), b.band[1], b.vlayer)
+    cache = cache_plan(xms_kb, len(data), len(b.idle_r), b.mlen,
+                       [c["len"] for c in b.clips])
+    parts = resident_parts(len(b.vres), 0 if cache else len(b.idle_r),
+                           len(b.uib), b.mlen, len(b.imgs), b.band[1],
+                           b.vlayer)
+    if cache:
+        parts = [p for p in parts if p[0] != "the idle loop"]
     res = sum(n for _, n in parts)
-    ring = ring_of(res, b.maxrec, free_kb)
     emin = (max(c["esz"] for c in b.clips) + 1023) // 1024 + 16
+    ring = ring_of(res, b.maxrec, free_kb, cache=bool(cache), rmin=emin)
     if ring is not None and ring < emin * 1024:   # (vb_rmin: the largest
         ring = None                     # clip's entries and 16 KB past them)
     return dict(parts=parts, resident=res, card=VB_CARD * 1024,
                 ring=ring, free=(free_kb or VB_FREE) * 1024, music_resident=b.mlen <=
-                VB_MRES)
+                VB_MRES, cache=cache, guard=guard_kb(b.maxrec) * 1024)
 
 
 def resident_parts(vres, idle, ui, mlen, imgs, band_row, vlayer=False):
@@ -1081,15 +1128,24 @@ def vband_bytes(band_row, vlayer):
     return ((n * 80 + 15) & ~15) + (n * 160 if vlayer else 0)
 
 
-def ring_of(res, maxrec, free_kb=None):
+def guard_kb(maxrec):
+    """A ring's GUARD (vb_load): the largest record, in 4 KB (126.4.6)"""
+    return max(4, (maxrec + 4095) // 4096 * 4)
+
+
+def ring_of(res, maxrec, free_kb=None, cache=False, rmin=0):
     """A clip ring's bytes (the smaller of the two, its guard out) beside
     a resident claim of RES bytes, out of FREE_KB - or None under VB_CRMIN,
-    when Play says Not enough memory (vb_rclaim)"""
+    when Play says Not enough memory (vb_rclaim). With the CACHE (126.4.6)
+    ring 0's: the run less ring 1's least and both guards"""
     if free_kb is None:
         free_kb = VB_FREE
     left = free_kb - (res + 1023) // 1024 - VB_CARD - VB_RKEEP
-    guard = VB_CGUARD if maxrec <= 16384 else 2 * VB_CGUARD
-    ring = (left // 2 - guard) // 4 * 4
+    guard = guard_kb(maxrec)
+    if cache:
+        ring = (left - max(VB_CRMIN, rmin) - 2 * guard) // 4 * 4
+    else:
+        ring = (left // 2 - guard) // 4 * 4
     return ring * 1024 if ring >= VB_CRMIN else None
 
 

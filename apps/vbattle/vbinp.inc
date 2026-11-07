@@ -58,6 +58,8 @@ vb_iring:
     mov al, [bx+RG_CLIP]
     cmp al, 0xFF
     je .r
+    cmp byte [vb_cmode], 0          ; THE CACHE (vbcache.inc): its slot, on
+    jne .cache                      ; what has arrived there
     push si
     push cx
     push bx
@@ -79,6 +81,28 @@ vb_iring:
     pop si
 .r:
     ret
+.cache:
+    mov byte [vb_cevict], 1
+    call vb_cget                    ; (every register kept)
+    jc .r
+    push dx
+    push cx
+    push di
+    xor ah, ah
+    mov di, ax
+    shl di, 1
+    mov ax, [vb_cx+di]
+    call vb_h4k
+    mov [bx+RG_HB], ax
+    mov [bx+RG_HB+2], dx
+    mov byte [bx+RG_INP], 1
+    inc word [vb_irings]
+    mov al, [bx+RG_CLIP]
+    call vb_cpub                    ; (RG_FILL: what the slot has)
+    pop di
+    pop cx
+    pop dx
+    ret
 
 ; vb_iat - BX = a ring in place, DX:AX = an offset in its clip -> DX:SI =
 ; the record there. EMS: its pages mapped into quarters 0-2, DX the frame
@@ -87,6 +111,9 @@ vb_iring:
 vb_iat:
     add ax, [bx+RG_HB]
     adc dx, [bx+RG_HB+2]            ; DX:AX = its offset in the block
+; vb_bat - DX:AX = an offset in the block -> DX:SI the record there, as
+; vb_iat's (the idle loop's in the cache, vb_frame)
+vb_bat:
     inc word [vb_icalls]
     cmp byte [vb_htype], 2
     je .ems
@@ -245,6 +272,8 @@ vd_yield:
 ; vb_hipq - the hold has just filled: may a ring be read in place from now
 ; on? [vb_hinp] 1 and, on XMS, the yield sites live; else 0. The UI task's
 vb_hipq:
+    cmp byte [vb_cmode], 0          ; (the cache: in place from its open)
+    jne .keep
     mov byte [vb_hinp], 0
     cmp byte [vb_noinp], 0          ; (the A/B gate: the copying hold)
     jne .no
@@ -260,57 +289,12 @@ vb_hipq:
     cmp ax, [vb_meta+VH_TOTAL]
     jb .no
 .w:
-    cmp byte [vb_htype], 2
-    jne .x
-    cmp byte [vb_eq], 0x0F          ; EMS: the four quarters ours
-    jne .no
-    cmp byte [vb_eslow], 0          ; ...and the board as fast as RAM: the
-    jne .no                         ; decode is the hook's time (98.3.18.8)
-    jmp short .yes
-.x:
-    call OSAPI_CPU_INFO             ; AL = the tier, AH = CPU_F_*
-    test ah, CPU_F_PM               ; (kern_mega: a token is no address,
-    jnz .no                         ; and neither borrow is real mode's)
-    mov [vb_tier], al
-    cmp al, CPU_286
-    jb .no
-    ja .chk
-    mov byte [la_csacc], 0x93       ; a 286: LOADALL, probed
-    call la_capture
-    call la_probe
+    call vb_hipok                   ; (126.4.2's check: vbcache.inc)
     jc .no
-.chk:
-    push ds                         ; the hold's first 16 bytes, by the
-    pop es                          ; driver...
-    mov si, vb_xsig
-    mov ax, [vb_htok]
-    mov dx, [vb_htok+2]
-    mov cx, 16
-    mov di, 1
-    call OSAPI_XMEM_COPY
-    jc .no
-    mov ax, [vb_htok]               ; ...and in place
-    mov dx, [vb_htok+2]
-    mov [vb_xpc], ax
-    mov [vb_xpc+2], dx
-    mov dx, VB_XH
-    xor si, si
-    mov di, vb_xsig
-    mov cx, 8
-    push ds
-    VB_DSDX
-    cld
-    repe cmpsw
-    lahf
-    VB_DSEND
-    pop ds
-    test ah, 0x40                   ; ZF: every word the same
-    jz .no
-    mov al, 1
-    call vd_ypatch                  ; the yield sites live
 .yes:
     mov byte [vb_hinp], 1
 .no:
+.keep:
     ret
 
 LA_DATA                             ; (os88la.inc's, in the image)
