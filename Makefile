@@ -916,6 +916,11 @@ BOOT2_SECS := $(shell sed -n 's/^BOOT2_SECS  *equ  *\([0-9][0-9]*\).*/\1/p' kern
 # of `.text`.
 BOOT2_PAD  := $(shell echo $$(( $(BOOT2_SECS) * 512 )))
 
+# THE PARAGRAPHS FROM HERE TO KSIGGEOM ARE THE HISTORY OF A HAND-SET KSIG_OFF.
+# Since the big review's boot-10 (2026-11-08) tools/os88ksig.py chooses it per
+# arm into $(BUILD)/ksig.inc ("AND SO THE BUILD CHOOSES IT NOW" below); where
+# they say the constant "has to move", read that as what the generator does.
+#
 # IT IS A MEMORY OFFSET, AND THE FILE SECTOR IS BOOT2_SECS FURTHER IN (SPEC.md
 # 2.9). Stage 2 sits in front of the image now, so the sector this names in
 # KERNEL.SYS is KSIG_OFF/512 + BOOT2_SECS - which is why KSIGDEF2 below adds
@@ -1033,8 +1038,9 @@ BOOT2_PAD  := $(shell echo $$(( $(BOOT2_SECS) * 512 )))
 # 86, 90, 69 and 69 on the six system disks - past the flip of a run that
 # began before it on every one. Its memory address under KZIP is KSIG_OFF + R
 # (boot/boot2.asm), so the segment bump that the head/tail split once needed
-# is gone. kern_small (+1024 below) is 23552 and kern_mega and the knob arms
-# (-512) 22016: file sector 57 everywhere. t_canary now models the loader's
+# is gone. kern_small (then +1024, by hand) was 23552 and kern_mega and the
+# knob arms (-512) 22016: file sector 57 everywhere, until boot-10 below gave
+# each arm its own band. t_canary now models the loader's
 # own cuts - head split, tail restart, the DMA page - per kernel.
 #
 # THERE IS NO MARGIN: 57 IS THE ONLY COMMON SECTOR (build, 2026-11-08). Walked
@@ -1045,8 +1051,10 @@ BOOT2_PAD  := $(shell echo $$(( $(BOOT2_SECS) * 512 )))
 # 90 is the flip of the run 72..107). File sector 36, an earlier position, sat
 # mid-band with three sectors of margin; this has none. So a BPB that moves, a
 # change to KZ_HEADSEC, R or the DMA cut, or a blob length change on ANY one
-# kernel turns the `canary` row red - that is the gate working, and the answer is to re-walk the band and
-# move KSIG_OFF (here and in boot/boot2.asm), not to loosen t_canary.
+# kernel turned the `canary` row red - that was the gate working, and the
+# answer then was to re-walk the band and move KSIG_OFF by hand, not to loosen
+# t_canary. Nobody types KSIG_OFF any more (next paragraph): the same event now
+# makes tools/os88ksig.py pick another sector for that arm, or fail the build.
 #
 # **AND SO THE BUILD CHOOSES IT NOW** (the big review's boot-10, 2026-11-08).
 # Every paragraph above is a hand re-derivation, and the last one found the

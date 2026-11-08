@@ -417,7 +417,7 @@ boot2_entry:
     ; KZ_RPARA is 0 on pass 1 (SPEC.md 2.9.13.4), which moves the value of a
     ; `mov si, imm16` and never its length.
   %if KSIG_OFF < KZ_HEADSEC * 512
-    %error "KSIG_OFF is in the KZIP plain head: the canary must sit in the packed tail, where `+ KZ_RPARA*16` names it - move it (the Makefile's KSIG_OFF, SPEC.md 18.93.1)"
+    %error "KSIG_OFF is in the KZIP plain head: the canary must sit in the packed tail, where `+ KZ_RPARA*16` names it - tools/os88ksig.py chose it, so the generator or $(BUILD)/ksig.inc is wrong (SPEC.md 18.93.1)"
   %endif
   %if KSIG_OFF + KZ_RPARA * 16 + 512 > 0x10000
     %error "the canary's sector at KSIG_OFF + KZ_RPARA*16 leaves the 64KB the handoff's ES names - it needs the segment arm back (SPEC.md 2.9.13.3)"

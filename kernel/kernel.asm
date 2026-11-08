@@ -2071,11 +2071,17 @@ XM_MAX_BLKS equ 8               ; the pool's fixed block table, entries: a
 ; all four sit at the top of `.text`; the single-length band is seven wide and
 ; reaches memory 6,656. A second blob length pinned the canary to the part of
 ; `.text` a size pass eats first, which is how it came to have thirty bytes of
-; headroom left. The Makefile's KSIG_OFF block is the other end of this.
+; headroom left. The other end of this is no longer a Makefile constant:
+; since the big review's boot-10 (2026-11-08) tools/os88ksig.py CHOOSES
+; KSIG_OFF per build arm into $(BUILD)/ksig.inc, walking the runs stage 2 cuts
+; on that arm's own system disks (the Makefile's KSIGGEOM) at the blob length
+; that arm HAS, and fails the build if no sector crosses a head on all of them.
 ; The whole blob is freed before the desktop, so its length is no term of
-; KERN_BUDGET. kern_small's is BOOT2_SMALLSEC shorter and a knob's BOOT2_KNOBSEC longer;
-; KSIG_OFF moves by the same sectors in the other direction, so the canary's
-; FILE sector is the same on every kernel.
+; KERN_BUDGET. kern_small's is BOOT2_SMALLSEC shorter and a knob's BOOT2_KNOBSEC
+; longer, and the canary's FILE sector is whatever each arm's band gives: at
+; the 2026-11-08 build 57 on kern_big, kern_emu, kern_mega and a knob, 33 on
+; kern_small (KSIG_OFF 22528, 22016, 22016, 22016 and 11264). The paragraphs
+; below that move KSIG_OFF by hand are the history of that constant.
 ; ELEVEN since SPEC.md 26.10.5: the eleventh is AUTOSTART's walk, which was
 ; CTRL.DRV's and cost a machine with an empty \AUTOSTRT 1.2 s of module load on
 ; every boot. It is free for stage 1 on every geometry and costs stage 2 one
@@ -2092,8 +2098,8 @@ XM_MAX_BLKS equ 8               ; the pool's fixed block table, entries: a
 ; 9 bytes short. The literal stays FIRST on the line: the Makefile, os88layout,
 ; t_blobruns and kzboot all read the shipped figure off it, and the Makefile
 ; adds the knob's sector in the same block that defines KERN_KNOB, so the two
-; cannot disagree. KSIG_OFF is derived from the total there, so the canary
-; stays on the same file sector (57 today) at either length.
+; cannot disagree. KSIG_OFF used to be derived from the total there by hand;
+; os88ksig.py now chooses it for whichever length the arm has (see above).
 ; ...AND ELEVEN ON kern_emu (SPEC.md 9.11.2.1), for the knob's reason one step
 ; along: it is a shipped kernel, but only an emulator boots it - its probe is
 ; 386 code - so its stage 1 reading one sector more costs no period machine
@@ -2105,9 +2111,10 @@ XM_MAX_BLKS equ 8               ; the pool's fixed block table, entries: a
 ; are the one caller they have outside the panel. KSIG_OFF moved one memory
 ; sector down again (5120 -> 4608), file sector 21; t_blobruns priced the
 ; sector at no int 13h on any geometry. kern_small has no such copy - no
-; drv_boot, no second display - so it STAYS at eleven, and its KSIG_OFF at
-; 5120: BOOT2_SMALLSEC takes the sector back off, and the Makefile does the
-; same in the block that reads this line. The literal stays kern_big's.
+; drv_boot, no second display - so it STAYS at eleven: BOOT2_SMALLSEC takes
+; the sector back off. (Its KSIG_OFF stayed at 5120 then, by a matching hand
+; adjustment in the Makefile; os88ksig.py chooses it since boot-10.) The
+; literal stays kern_big's.
 ; THIRTEEN since kernel size pass 14 (docs/plans/completed/ksp14/vesa.md): the
 ; thirteenth is VESA.DRV's attach (vx_boot_x) and the block of kernel pointers
 ; it hands over (vx_blk), which were resident `.cold` and `.text` for want of
