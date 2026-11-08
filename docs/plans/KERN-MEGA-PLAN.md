@@ -16813,3 +16813,71 @@ case, `[aph_off]`), `megajw` (a WAV opened and paused beside Sheet: the hold
 claimed at the open now), `mega-audhand`, `mega-ringmove-audio`,
 `mega-sndmove` - every row that loads AUDIO on kern_mega. Fast tier green in
 `make`; `make mega` builds.
+
+### 14.187 The Video Battle's rings charged the door's room TWICE: `megaparvb`'s check 6 red at the bookmarks' merge (2026-11-08) - FIXED
+
+**The failure**: 00dba777 (elendilon merged into mega-release: the
+bookmarks, SPEC.md 126.4.8) turned `megaparvb` red on one check - *the
+largest free conventional run in the play 14.0 KB, at most `VB_RKEEP` 8 + a
+4 KB unit* - kern_mega's runs [5.0, 14.0], rings 356 KB; the parent
+(aa3d527d) [5.0, 11.0], rings 360.
+
+**Measured, not guessed** (`tests/megapar.py --map`, the demo bundle,
+86Box `at286_vga_sb_hdd` at 640K + 384K, both trees built whole). The two
+heaps in the play are the same claims in the same order but two:
+
+| | parent aa3d527d | 00dba777 |
+|---|---|---|
+| the region (inst 1, top-down) | 48.0 KB at 94000 | **49.0** at 93C00 |
+| ring 0 | 320 KB, 32400..82400 | **316**, 32400..81400 |
+| free over ring 0 | 11.0 KB | **14.0** |
+| the card ring's page gap, 1E000..20000 | 8 KB: the door's 3 KB service area (inst 1, 1E000) + 5 free | the same |
+
+The image's +660 bytes and the bookmarks' bss took the region across one
+KB; ring 0's run lost that KB, and because ring 0 is the run less
+`[vb_rkeep]` cut to whole 4 KB, it lost a whole unit. `[vb_rkeep]` is
+`VB_RKEEP` + FSXF_PREP's answer = 8 + 3 = **11**, and the run's remainder
+went from 0 (11 + 0 = 11 free) to 3 (11 + 3 = 14). Neither the bookmarks'
+scratch claim (claimed and freed inside `vb_bmbuild`, at load, with nothing
+claimed between) nor the run map (bss) left a hole: the heap has none that
+was not in the parent.
+
+**The defect** (it was (a), and older than the merge): the door claims its
+KB with `fsx_rlowclaim` - plain, BOTTOM-UP FIRST FIT - and the lowest hole
+that fits is the 8 KB gap `vb_cardclaim`'s 64 KB-page-safe ring leaves under
+itself at 20000, not ring 0's run. So the 3 KB `vb_rclaim` left in ring 0's
+run for the door were never the door's: idle in the play, beside the 3 the
+door really took. The parent was green only because its remainder was 0 -
+the same 3 KB idle, inside the bound by accident; one KB more of region made
+it a lost ring unit and the check saw it.
+
+**The fix** (`apps/vbattle/vbattle.asm`, `vb_rclaim`; SPEC.md 126.4.5 and
+53.2.3.1 first): after the arena is packed, the door's room - `[vb_rkeep]`
+less `VB_RKEEP` - is HELD in one plain conventional claim
+(`OSAPI_MEM_CLAIM_DMA`, CX = 0: bottom-up first fit, the door's own
+placement), `[vb_rkeep]` is `VB_RKEEP` while the pair is sized (the old body,
+now `vb_rcpair`), and the claim is freed and `[vb_rkeep]` restored before
+the bracket. Where it lands is where the door's claims will (one claim of
+the sum dominates the door's several); in a hole no ring is sized from the
+rings leave `VB_RKEEP` alone, in the rings' own run what they left before.
+Refused, the old sum stands. kern_big and kern_small: `[vb_rkeep]` is
+`VB_RKEEP`, nothing is held, the path is a compare.
+
+**Bytes**: VBATTLE.O88's image 29,247 -> **29,297 (+50)**, bss 20,692
+unchanged, the file 23,435 -> 23,463 packed (+28). Nothing resident in the
+kernel.
+
+**Red/green** (`megaparvb`, the demo bundle): 00dba777 - FAIL 6, runs
+[5.0, 14.0], conv 356; this fix - ok, runs **[5.0, 10.0]**, conv **360**
+(ring 0 320), kern_big unchanged (392 KB of rings, [11.5] free). The owner's
+battles (`$OS88_VBT_TARGET`, `$OS88_VBT_PKG`, not in the tree): the CGA4
+`BATTLE.VBT` - 8/8, kern_mega rings 336, runs [5.0, 10.0], kern_big 368;
+the VGA battle inside `FF7BATTV-286.O88` - 8/8, rings 224, runs [5.0,
+10.0], kern_big 256. SPEC.md 126.4.7 carries the figures.
+
+**Rows run, scoped** (`os88test.py soak --marty-jobs 1`, 408 s, **14 of 14
+green**): `megaparvb`, `megaparvp`, `vbtmega`, `vbtmega86`, `vbtdiag`,
+`vbtsound`, `vbtloops`, `vbtgame`, `vbthold`, `vbtholdcopy`,
+`vbtholdpart`, `vbtholdorder`, `vbtholdnox`, `vbtseam` - no row names
+`vb_bmbuild` or `vbbm.inc`. Fast tier green in `make` (73 passed); `make
+mega` builds.
