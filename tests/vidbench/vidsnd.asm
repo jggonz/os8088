@@ -124,17 +124,20 @@ vs_onkey:
     je .tone
     call bl_key
     jc .out
-    call bl_paint
-    jmp short .out
-.run:
-    mov byte [vs_tmode], 0
-    call vs_run
+    mov si, [vs_win]                ; bl_paint's SI is the WINDOW, and a run
+    call bl_paint                   ; spends SI: with it the window manager
+    jmp short .out                  ; was asked about whatever SI held, and
+.run:                               ; the report went down at (269, 5) - a
+    mov byte [vs_tmode], 0          ; white block over the menu bar and the
+    call vs_run                     ; title, at the end of every tone test
+    mov si, [vs_win]                ; (the owner's 5150, 2026-11-08)
     call bl_paint
     jmp short .out
 .tone:
     mov byte [vs_tmode], 1
     call vs_run
     mov byte [vs_tmode], 0
+    mov si, [vs_win]
     call bl_paint
 .out:
     pop di
@@ -153,6 +156,7 @@ vs_onclick:
     push si
     push di
     call vs_run
+    mov si, [vs_win]
     call bl_paint
     pop di
     pop si
@@ -630,7 +634,10 @@ vs_tones:
 ; in a recording by these gaps
 vs_tsil:
     push ax
+    push si
+    mov si, [vs_win]                ; (bl_paint's SI: the window)
     call bl_paint                   ; the rows so far, inside the gap
+    pop si
     call OSAPI_GET_TICKS
     mov [vs_t0], ax
 .w:
