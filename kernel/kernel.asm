@@ -5505,9 +5505,10 @@ api_sysfp:  dw dwf_dskw_write_sys  ; which verb the shared fenced cell runs:
 ; **IT IS NOT A NEW KIND OF ENTRY** - it expands to OVLCALL or to B3CALL and
 ; nothing else, so there is nothing new at the site to get wrong. What it
 ; buys is that the arms are written ONCE, here, rather than at every call
-; site. Every site is in kmain_o, in the blob, and costs no resident byte (it
-; was SPLGATE1 from `.text`, four resident bytes a site, until SPEC.md
-; 2.5.3.3; then BLOBCALL, a byte shorter than B3CALL, until wave 1).
+; site. Every site is in kmain_o, in `.boot3` since BOOT3-PLAN wave 4 (the
+; blob's before it), and costs no resident byte (it was SPLGATE1 from `.text`,
+; four resident bytes a site, until SPEC.md 2.5.3.3; then BLOBCALL, a byte
+; shorter than B3CALL, until wave 1).
 ; mouse_init's arm reads MOU_IN_BLOB rather than KERN_SMALL, for the knob
 ; builds' reason given where that symbol is defined.
 ;
@@ -5548,11 +5549,14 @@ api_sysfp:  dw dwf_dskw_write_sys  ; which verb the shared fenced cell runs:
 %endmacro
 
 
-; BLOBCALL / MARKW / BPMARKW - the entries, spelled for a caller that
-; is itself IN THE BLOB (kmain_o). The blob is one segment, so a
-; blob entry is `push cs` + a near call - the far frame its `retf` wants -
-; with no pointer and no liveness guard: the caller is executing in the blob,
-; so the blob is aboard by construction.
+; BLOBCALL - a blob entry, spelled for a caller that is itself IN THE BLOB
+; (since BOOT3-PLAN wave 4 the shipped kernels' only sites are splash.inc's
+; and viddet.inc's vid_detect calls, plus EXTD.DRV's extmod.inc, where the
+; same two instructions reach a far entry inside the module's own image; from
+; `.boot3`, where kmain_o now is, the way into the blob is B2CALL). The blob is
+; one segment, so a blob entry is `push cs` + a near call - the far frame its
+; `retf` wants - with no pointer and no liveness guard: the caller is
+; executing in the blob, so the blob is aboard by construction.
 %macro BLOBCALL 1
     push cs
     call %1
@@ -5627,11 +5631,14 @@ section .boot3
 %endif
     mov %1, cs
 %endmacro
+; MARKW / BPMARKW - MARK and BPMARK spelled for kmain_o, a caller outside
+; `.text` (in `.boot3` since BOOT3-PLAN wave 4, the blob's before it)
 %macro MARKW 1
 %ifdef BOOT_MARK
     call kmo_mark               ; MARK's own four-byte shape: the index rides
 %if ((%1) % 5) == 0             ; in the instruction stream, read `cs:` by a
-    db (%1) | 0x80              ; stub that is itself in the blob
+    db (%1) | 0x80              ; stub in `.boot3` beside kmain_o (the blob's
+                                ; until BOOT3-PLAN wave 4)
 %else
     db (%1)
 %endif
@@ -5885,12 +5892,14 @@ kmain_o:
     pop bx
     pop ax
 %endif
-    mov di, mod_fp              ; mod_init, WRITTEN OUT IN THE BLOB (kernel
+    mov di, mod_fp              ; mod_init, WRITTEN OUT IN THE BOOT (kernel
     mov cx, MOD_NSLOT           ; size pass 13 on kern_small, pass 14 on
 .modinit:                       ; kern_big once its blob had the room: 10
-    mov word [di], mod_gone     ; resident bytes of `.cold` for 15 of blob).
-    mov word [di+2], COLD_SEG   ; The segment is the cold one by NAME - a blob
-    add di, 4                   ; word tools/os88rom.py moves with it - where
+    mov word [di], mod_gone     ; resident bytes of `.cold` for 15 of blob;
+    mov word [di+2], COLD_SEG   ; `.boot3`'s with kmain_o since BOOT3-PLAN
+    add di, 4                   ; wave 4). The segment is the cold one by NAME
+                                ; - a `.boot3` word tools/os88rom.py moves
+                                ; with it (rt_b3) - where
     loop .modinit               ; mod_disarm, running in `.cold`, takes it
                                 ; from CS
                                 ; on-demand modules (SPEC.md 2.8): point every
@@ -7078,9 +7087,11 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 ; Dock page's dock_apply/dock_reflow are `.modu` there too, written ONCE as a
 ; macro each (VSW_AVAIL, VSW_SWITCH, VSW_DISP, WM_REFIT, DOCK_APPLY) because
 ; the BOOT reaches them as well - drv_boot applies SYSTEM.CFG's adapter and
-; Dock setting and kmain_o arranges the displays - and so the blob carries a
+; Dock setting and kmain_o arranges the displays - and so the boot carries a
 ; second expansion of each (driver.inc, `bvs_`), reaching the kernel through
-; BSWK/BSWC: the same hop, KGO_PAIR, expanded in the blob. DRV_ATTACH's
+; BSWK/BSWC: the same hop, `.boot3`'s KGO_PAIR b3 (b3_kgo/b3_cgo). It was the
+; blob's, with a pair of its own (KGO_PAIR bvs), until BOOT3-PLAN wave 4; only
+; bvs_apply, the splash's first tick's, stays there. DRV_ATTACH's
 ; trade (SPEC.md 51): copies in images that come and go, against one in a
 ; segment every machine pays for.
 ; -----------------------------------------------------------------------------
@@ -7115,8 +7126,10 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 ; preserved both ways (MOV, LEA, PUSH, POP and RETF write none), so the kernel
 ; routine sees exactly what the site handed it. ONE tail for both: they differ
 ; in the segment slot and the retf. DS must be KERNEL_SEG at the site - the
-; kernel half's segment slot is PUSHED from it. Expanded TWICE: `cp` in
-; CTRL.DRV (ctrl.inc) and `bvs` in the boot blob (driver.inc). The CS it
+; kernel half's segment slot is PUSHED from it. Expanded once an image: `cp`
+; in CTRL.DRV (ctrl.inc), `hbg` in HIBER.DRV (hiber.inc), and the boot's in
+; `.boot3` - `b3` (driver.inc) and kern_small's `bvw` (desk.inc); the blob's
+; `bvs` went in BOOT3-PLAN wave 4. The CS it
 ; stores is the far return's, on the stack, spent before the hop returns - not
 ; a published segment, which is what os88ovlchk's CS rule is about.
 %macro HBGC 1                   ; HIBER.DRV's CPXC (hiber.inc): its own far hop

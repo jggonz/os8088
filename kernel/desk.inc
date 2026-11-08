@@ -471,10 +471,11 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
 ; was `desk_rowcalc_x`, a resident `.cold` far body, and nothing resident ever
 ; called it. Its callers are the BOOT - kmain_o (which runs it right after
 ; desk_init returns, where desk_init used to far-call it as its last step from
-; the overlay, and again after drv_boot), the blob's bvs_switch and
+; the overlay, and again after drv_boot), the boot's bvs_switch and
 ; bdk_reflow - and CTRL.DRV: Set Primary's vid_switch, the Dock page's
-; dock_reflow and the arrangement row. So it is `bvw_rowcalc` in the blob
-; (driver.inc on kern_big, below on kern_small) and `wm_rowcalc` in CTRL.DRV
+; dock_reflow and the arrangement row. So it is `bvw_rowcalc` in `.boot3`
+; (driver.inc on kern_big, below on kern_small; the blob's until BOOT3-PLAN
+; wave 4) and `wm_rowcalc` in CTRL.DRV
 ; (below), named for the WM_REFIT prefix VSW_SWITCH and DOCK_APPLY already
 ; carry. %2 is the image's hop into a near `.cold` routine (BSWC, KSWC). On
 ; kern_small desk_reflow and desk_live are written in as well: there the
@@ -484,8 +485,10 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
 ; THE BLOB HAD NINE BYTES on kern_big and kern_emu, so there the boot's copy
 ; of the GEOMETRY (DESK_GRID) is `cfx_grid`, in `.boot3` past b3_live (boot3.inc
 ; - transient, like the slide beside it, and past the RAM `.vgabuf` shares
-; with it), and the blob's bvw_rowcalc is a far call to it and the reflow.
-; kern_mega has no `.boot3` yet and a blob with room, so it takes the whole copy.
+; with it), and bvw_rowcalc is a call to it and the reflow - `push cs` + a
+; near call (B3CALL) since BOOT3-PLAN wave 4 put bvw_rowcalc in `.boot3` too,
+; on every KERN_BIG kernel, kern_mega's included. kern_small's DESK_ROWCALC
+; bvw (below) is the whole copy.
 ; -----------------------------------------------------------------------------
 %macro DESK_GRID 0             ; the geometry: AX, BX, CX, DX, SI, flags
     ; --- which ICON, and therefore how tall a zone is (SPEC.md 26.4) --------

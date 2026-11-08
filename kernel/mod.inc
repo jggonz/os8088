@@ -887,7 +887,7 @@ mod_disarm:
                                 ; (its parity pad cancelled memory.inc's at
                                 ; mem_bytes_kb_x, kernel size pass 14)
 .slot:                          ; a CALLED loop, not a fall-through:
-    mov word [di], mod_gone     ; (kmain_o's blob loop is this, written out)
+    mov word [di], mod_gone     ; (kmain_o's `.boot3` loop is this, written out)
     COLDSEG_TO word [di+2]      ; mod_gone is .cold's own (ROM-PLAN 3.2)
     add di, 4
     loop .slot
@@ -989,8 +989,9 @@ mod_drop:
 ; 0. mod_need cannot be trusted to be the only door, because a thunk with the
 ; test written the wrong way round still assembles.
 ; -----------------------------------------------------------------------------
-; (mod_init_x is gone: kmain_o writes its loop out in the blob on every
-; kernel - kernel size pass 13 on kern_small, pass 14 on kern_big)
+; (mod_init_x is gone: kmain_o writes its loop out on every kernel - kernel
+; size pass 13 on kern_small, pass 14 on kern_big - in the blob then, in
+; `.boot3` since BOOT3-PLAN wave 4)
 
 section .cold                   ; the far entry, for kmain
 

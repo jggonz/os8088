@@ -2524,11 +2524,41 @@ ARCADE disk in all its geometries (`apps*.img`, `more720.img`,
 `office360`/`network360`/`games360`/`emu360.img`, `media360.img`,
 `win16*.img`, `arcrel*.img`) and kern_mega's own apps, WIN16 and XTMP3 disks
 (`megaapps*.img`, `megawin16*.img`, `megaxtmp3*.img`). `util360.img` differs
-only in `SYSCHECK.O88` (14,712 -> 14,713 bytes, every other entry's size and
-cluster the same - section 16.4's note: it is kern_big's system disk's
-manifest). Every kernel, its boot sectors, `boothd.bin`, `COLDHMA.SYS`,
-`CTRL.DRV` and the nine system disks differ, as this wave means them to: no
-kernel was claimed byte-identical.
+in `SYSCHECK.O88` (section 16.4's note: it is kern_big's system disk's
+manifest) **and in `FSCHECK.DRV`**, every other entry's size and cluster the
+same - see the correction below. Every kernel, its boot sectors,
+`boothd.bin`, `COLDHMA.SYS`, every kernel module and the nine system disks
+differ, as this wave means them to: no kernel was claimed byte-identical.
+
+*Correction (build, 2026-11-08, verifier round 1).* The paragraph above, and
+commit `8695fa9e`'s message, first said `util360.img` differs "only in
+`SYSCHECK.O88`" and named `COLDHMA.SYS, CTRL.DRV` as the modules that move.
+Both were wrong, and the one-commit `cmp` that settles it (worktrees of
+`56052c57` and `8695fa9e`, both `make` and `make mega` with
+`OS88_BUILDNUM=969`) says: `util360.img` differs in sector 0 (the BPB volume
+serial, bytes 39-42, and nothing else), in `SYSCHECK.O88` (sectors 25, 27, 45
+and 46; 14,713 bytes in both at that build number) and in `FSCHECK.DRV`
+(sectors 162-172; 5,278 bytes in both, 60 of them differ). `FSCHECK.DRV` is
+a kern_big module that `os88mod -m 10=` cuts out of the kernel image, so it
+moves whenever the kernel does - expected, and missed by the record. And
+EVERY kernel module differs, not two: kern_big's `CTRL`, `DESK`, `DISKOPS`,
+`DOCK`, `EXTD`, `FORMAT`, `FSCHECK`, `HIBER`, `SERIAL`, `STIKMENU` and
+`WIN95.DRV`, with `KERNEL.SYS`, `BOOTHD.SYS` and `COLDHMA.SYS`; kern_small's
+`CTRL`, `DISKOPS`, `FDLG`, `FILECP`, `FORMAT` and `SERIAL.DRV`, with its
+`KERNEL.SYS`; kern_mega's thirteen (the same eleven modules as kern_big's,
+with its `KERNEL.SYS` and `BOOTHD.SYS`). Every non-kernel driver (`CDROM`,
+`EMS`, `ETHER`, `HDD`, `HDDTOOL`, `HTTPFS`, `HTTPPAGE`, `NET`, `PCIETHER`,
+`RAMDISK`, `RAMPAGE`, `SAVER`, `SOUND`, `THMPAL`, `USBMOUSE`, `VESA`, `XMEM`)
+is byte-identical. The round-1 fix commit is comments only (the six stale
+"kmain_o is in the blob" comments the verifier named, and the same claim in
+desk.inc, hiber.inc, the KGO_PAIR header, VSW_SWITCH's and VID_CTXCAP's
+headers, kmain_o's mod_init loop and os88ovlchk's TEXP note), and its own
+one-commit `cmp` (a worktree of `8695fa9e` against the fixed tree, `make` and
+`make mega` at `OS88_BUILDNUM=969`) found every built
+`.img`/`.bin`/`.sys`/`.drv`/`.o88`/`.rom` file under `build/` identical - 406
+of 408 by name, the other two WIN16 build caches whose names carry a
+path-keyed hash, identical in content under their own names - and every
+`kernsize` line the same on all three kernels.
 
 **Deviations.**
 

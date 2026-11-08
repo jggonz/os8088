@@ -969,7 +969,7 @@ section .text
   %error "vid_blank, vid_blank_kind and vid_unblank_kind decide WHICH CARD by comparing against VID_HERC BY NAME and then treating `kind-1 >= 2` as PLANAR and everything else as the CGA (SPEC.md 39.18.1), vga12.inc's thm_set spells the same `kind-1 >= 2` for `is the primary a colour adapter` (SPEC.md 76.12.1), and vid_avail_test's `cmp al, VID_KIND_MAX` is the range that rests on it. A FIFTH kind is silently PLANAR to the dispatch and to the theme, and silently a CGA to vid_blank. Give it an arm in each of them before raising VID_KIND_MAX"
 %endif
 ; VSW_SWITCH %1, %2, %3 - %1_blank and %1_switch, written once (KSW_SECT,
-; kernel.asm): %1 the prefix (`vid` in CTRL.DRV, `bvs` in the boot blob), %2
+; kernel.asm): %1 the prefix (`vid` in CTRL.DRV, `bvs` in the boot's `.boot3`), %2
 ; the hop a RESIDENT callee is reached through (KSWK / BSWK), %3 the prefix of
 ; the wm_refit it calls (`wm` / `bvw`)
 %macro VSW_SWITCH 3
@@ -1523,8 +1523,8 @@ vid_ctx_ptr:
 ; WRITTEN ONCE AND EXPANDED WHERE ITS CALLERS ARE (kernel size pass 15): it
 ; was a resident `.text` body nothing resident called. Its callers are the
 ; Control Panel's vid_disp_init (`vid_ctxcap`, CTRL.DRV), EXTD.DRV's Extend
-; (`ext_ctxcap`), the blob's bvs_disp_init (`cfx_ctxcap` in `.boot3` on
-; kern_big and kern_emu, whose blob is full, `bvs_ctxcap` in kern_mega's) and
+; (`ext_ctxcap`), the boot's bvs_disp_init (`cfx_ctxcap`, in `.boot3` beside
+; it since BOOT3-PLAN wave 4, on kern_big, kern_emu and kern_mega alike) and
 ; the boot overlay's vid_ctx_init, which writes it in. %1 is the label, %2
 ; the return (`ret`, or `retf` in `.boot3`). The vid_ctx_pre it shared with
 ; vid_ctx_act is written into vid_ctx_act now, its one caller left.
@@ -1980,9 +1980,10 @@ vid_dual_ok:
 ; VGA when there is one.
 ; -----------------------------------------------------------------------------
 ; VSW_DISP %1, %2 - %1_disp_other and %1_disp_init, written once: CTRL.DRV's
-; `vid` and the boot blob's `bvs` (KSW_SECT, kernel.asm), %2 the hop a
-; resident callee is reached through. kmain_o and drv_boot reach the blob's,
-; the Display page and vid_switch the panel's
+; `vid` and the boot's `bvs` (KSW_SECT, kernel.asm), %2 the hop a
+; resident callee is reached through. kmain_o and drv_boot reach the boot's,
+; in `.boot3` since BOOT3-PLAN wave 4 (the blob's before it), the Display page
+; and vid_switch the panel's
 %macro VSW_DISP 2
 %1 %+ _disp_other:
     mov al, VID_HERC            ; on a colour card: the other one is the mono
@@ -2095,8 +2096,9 @@ vid_dual_ok:
     ; and sizes itself from its kind (vid_disp_planes).
     ;
     ; So .cap is .single's own capture and not a second copy of it, because
-    ; the boot blob carries an expansion of this macro (driver.inc's bvs_)
-    ; and has no byte to spare. vid_desk_union runs too and is idempotent
+    ; the boot carries an expansion of this macro (driver.inc's bvs_, in
+    ; `.boot3` since BOOT3-PLAN wave 4, in the blob before it), and a second
+    ; copy is bytes stage 2 reads and expands on every boot. vid_desk_union runs too and is idempotent
     ; here: one display at the origin, so it writes back the vid_w/vid_h that
     ; vid_apply has just set from vid_cw/vid_ch.
 .paired:
