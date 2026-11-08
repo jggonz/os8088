@@ -37164,7 +37164,7 @@ is the value every widget entry already leaves there. A DVK_DRV volume
 (HDD.DRV's rung 1) never runs this loop at all. `tests/fpgnotch.py` is the
 gate that a LIVE bar still moves.
 
-#### 18.91.7 …and a PicoMEM 2's disk is read ONE sector a call, IRQ0 masked for it (kern_big, kern_emu)
+#### 18.91.7 …and a PicoMEM 2's disk is read FOUR sectors a call at most, IRQ0 masked for it (kern_big, kern_emu)
 
 **On a PicoMEM 2 the card's sound goes silent whenever an interrupt holds
 the PC inside the card's int 13h** (docs/reports/PICOMEM2-STUTTER-2026-11-07.md).
@@ -37174,9 +37174,10 @@ mixing nothing, with 5 ms of sound mixed ahead. A hook that decodes a frame
 inside that copy (Video Battle's, Video Player's: SPEC.md 126.3, 98.3) is a
 hole in the card's output as long as the hook. Measured on 5150 #1 with
 PM2-10-4-26, VIDSND's T rows: tracks read under a 4-16 ms hold broke the
-tone 228-508 times in 5 s; one sector a call with IRQ0 masked for the call
-broke it 0 times. That is the owner's "short, repeated stuttering" during
-heavy actions.
+tone 228-508 times in 5 s; tracks read with NO hold broke it 0 times, and so
+did one sector a call with IRQ0 masked for the call. That is the owner's
+"short, repeated stuttering" during heavy actions - and it says what the
+cure needs: not short calls, but no hook inside one.
 
 So the transfer loop reads such a disk that way:
 
@@ -37191,17 +37192,26 @@ So the transfer loop reads such a disk that way:
   FFh = none). A 1.x is not matched: its firmware (`firmware/picomem1/`)
   mixes while it waits, and its machine is a 286 whose disk rate this would
   cost.
-- **`dsk_xfer`**, for a unit at or above `[dsk_pmhd]`, takes the run as 1
-  and sets IRQ0's bit in the 8259's mask before the int 13h, clearing it
-  after. The card's disks follow the PC's own (an ST-225 is 80h, the card's
-  first image 81h), so a real disk below them keeps its runs. An IRQ0 that
-  falls in the masked call waits in the IRR: one sector is 1.8 ms on the
-  field machine, under Video Battle's 13.7 ms period (`VB_DIV`) and the
-  18.2 Hz tick.
-- **Its price**: VIDDISK on the field machine, a sector a call 1.83 ms
-  against 1.53 ms a sector by whole tracks - **about 20% of the card's
-  disk rate**, which `5150-picomem2`'s 135,000 (98.2) does not yet charge.
-  Resident: **34 bytes of `.cold`** in `dsk_xfer` and the byte in `.text`.
+- **`dsk_xfer`**, for a unit at or above `[dsk_pmhd]`, cuts the run to
+  **`DSK_PMRUN` = 4** sectors at most and sets IRQ0's bit in the 8259's mask
+  before the int 13h, clearing it after. The card's disks follow the PC's
+  own (an ST-225 is 80h, the card's first image 81h), so a real disk below
+  them keeps its runs. An IRQ0 that falls in the masked call waits in the
+  IRR: four sectors are ~6-8 ms on the field machine, under Video Battle's
+  13.7 ms period (`VB_DIV`) and the 18.2 Hz tick. The cap is the hook's
+  latency, not the card's: the card keeps up with an unheld run of any
+  length.
+- **ONE sector a call was the first build, and the field priced it at
+  half the disk**: VIDDISK on 5150 #1 read 125.2 / 98.0 / 68.1 / 35.6 KB/s
+  under its hook at 0 / 25 / 50 / 75% against 294.3 / 223.9 / 147.1 / 72.8
+  multi-sector. The raw int 13h said 20% (a sector a call 1.83 ms, 1.53 a
+  sector in a track); through the kernel each one-sector run paid the
+  transfer loop's whole per-run cost, 64 calls and ~5.1 ms a sector for
+  32 KB - too slow to feed a clip encoded for the ST-225's 119 KB/s. Four a
+  call is that cost a quarter as often. Its own rate is VIDDISK R's to
+  measure on the iron, and `5150-picomem2`'s 135,000 (98.2) charges none
+  of it until then.
+- Resident: **40 bytes of `.cold`** in `dsk_xfer` (its parity pad among them) and the byte in `.text`.
   The probe is window-half code and costs no resident byte - but the window
   half was full (5,119 of 5,120), so the DSK_PMHD builds drop four of
   `sched_init`'s zero stores (its slot-clearing and cycle-clearing loops,

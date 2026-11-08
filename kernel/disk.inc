@@ -895,6 +895,9 @@ dsk_dbg_raw:
 %endif
 section .text                   ; DATA, so back to the kernel segment
 %ifdef DSK_PMHD
+DSK_PMRUN     equ 4             ; sectors a call on the card's disk, IRQ0
+                                ; masked: ~6-8 ms on 5150 #1, under Video
+                                ; Battle's 13.7 ms hook period (18.91.7)
 dsk_pmhd:     db 0xFF           ; the first int 13h unit a PicoMEM 2 serves,
                                 ; FFh none (drv_sniff; SPEC.md 18.91.7)
 %endif
@@ -1940,13 +1943,16 @@ dsk_xfer:
                                 ; transfer, for A/B-ing this on real iron
 %endif
 %ifdef DSK_PMHD
-    mov al, [dsk_unit]          ; A PICOMEM 2's DISK (SPEC.md 18.91.7): one
-    cmp al, [dsk_pmhd]          ; sector a call, IRQ0 masked for it, so no
-    jb .nopm                    ; timer hook lands inside the card's copy
-    mov bp, 1                   ; wait - where its sound goes silent. AX is
-    in al, 0x21                 ; the run the track allowed, spent by now
-    or al, 1                    ; (the head is popped over it below). Taken
-    out 0x21, al                ; off again after the int 13h
+    mov al, [dsk_unit]          ; A PICOMEM 2's DISK (SPEC.md 18.91.7): at
+    cmp al, [dsk_pmhd]          ; most DSK_PMRUN sectors a call, IRQ0 masked
+    jb .nopm                    ; for it, so no timer hook lands inside the
+    cmp bp, DSK_PMRUN           ; card's copy wait - where its sound goes
+    jbe .pmrun                  ; silent - and the hook is held off a few ms
+    mov bp, DSK_PMRUN           ; at most. AX is the run the track allowed,
+.pmrun:                         ; spent by now (the head is popped over it
+    in al, 0x21                 ; below). Taken off again after the int 13h
+    or al, 1
+    out 0x21, al
 .nopm:
 %endif
     mov [dsk_run], bp
@@ -2506,12 +2512,11 @@ dsk_xfer:
     jmp short .ijf              ; CF = 0 off the `or`, and .success's one test
                                 ; - [dsk_bnc_si] - is 0 by the note above, so
                                 ; it is skipped rather than taken
-%ifndef DSK_PMHD
     nop                         ; PARITY PAD, never executed: the exits above
                                 ; are 3 bytes shorter, and dsk_runcap and
                                 ; dsk_next_clus_x keep an EVEN shift
-                                ; (t_hotpar.py). DSK_PMHD's 35 bytes in
-%endif                          ; dsk_xfer are odd, so there it goes
+                                ; (t_hotpar.py). DSK_PMHD's 40 bytes in
+                                ; dsk_xfer are even, so it stays there too
 
 
 

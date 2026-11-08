@@ -222,6 +222,31 @@ does, it sounds on both firmwares.)
 VIDDISK R on the new kernel re-measures `5150-picomem2`, which until then
 still charges the multi-sector 135,000.
 
+## One sector a call was half the disk; four a call (2026-11-08)
+
+The owner's VIDDISK on the one-sector kernel (`d501d9bc`), the same C::
+
+| hook | multi-sector (2026-11-07) | one sector a call | |
+|---|---:|---:|---:|
+| 0% | 294.3 KB/s | 125.2 | -57% |
+| 25% | 223.9 | 98.0 | -56% |
+| 50% | 147.1 | **68.1** | -54% |
+| 75% | 72.8 | 35.6 | -51% |
+
+`int13 calls, 8 x 32K`: 512, a sector each; 32 KB in 329.6 ms, ~5.1 ms a
+sector against 2.7 for a raw one-sector int 13h the same run. The kernel's
+per-run cost, paid 64 times for 32 KB, not the card's - and 68 KB/s cannot
+feed a 54-64 KB/s clip with its 11 KB/s of music. The 20% the report
+predicted came from the raw int 13h alone.
+
+Row C of the tone test had already said what the cure needs: tracks read
+with **no** hold were clean on the iron. So the run is cut to **four**
+sectors (`DSK_PMRUN`), IRQ0 still masked for the call - a few ms of hook
+latency, under Video Battle's 13.7 ms period - and the per-run cost is paid
+a quarter as often. Emulated, the battle A/B above reads 27 holes / 124.2
+ms on both firmwares with it, as with one sector. Its rate on the iron is
+the next VIDDISK R.
+
 ## The field kit: `make pm2kit`
 
 `build/pm2kit/` (and `build/pm2kit-360.img`): VIDSND (T and R), VIDBENCH and
