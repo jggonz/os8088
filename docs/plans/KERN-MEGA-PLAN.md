@@ -15745,8 +15745,10 @@ promise outlives a regrow with no flag; only a bridge may come back a bridge).
 - `mega_hugecrgf` (the `.conv` arm in protected mode, and `MEMP_REGROW`'s):
   a conventional claim over 64KB whose window 1 is based 64KB past window 0
   (the access byte compared less its ACCESSED bit - the first build compared
-  92h exactly, and a window once loaded reads 93h) is regrown with
-  `mega_hgcpr`; a 32KB/16KB-window run is refused as in the pool; anything
+  92h exactly, and a window once loaded reads 93h) AND every later window
+  of its size present data 64KB on from the last (`mega_hcrun` - a plain
+  claim with a SUB that happens to sit after its pair is not taken for a
+  run) is regrown with `mega_hgcpr`; a 32KB/16KB-window run is refused as in the pool; anything
   else is the plain regrow. A run claimed at 64KB or less is a run of one,
   indistinguishable from the heap's ordinary claim, and regrows as one -
   SPEC.md says so.
@@ -15759,7 +15761,8 @@ promise outlives a regrow with no flag; only a bridge may come back a bridge).
   `OSAPI_MEM_FREE` frees it, the old conventional piece's `MC_RLOC` declared
   on the new (`mem_hrecf` reads it; `osapi_mem_movable_x` declares).
 
-**Bytes.** kern_mega `.cold` +694 (46,794 -> 47,488), `.text` and `.mega`
+**Bytes.** kern_mega `.cold` +755 (46,794 -> 47,549 on e6e7930c's tree; 694
+and then 61 for `mega_hcrun`), `.text` and `.mega`
 +0, resident 62,976 unchanged, megaseg's overhead untouched (3,754). kern_big
 and kern_small `kernel.bin` byte-identical at one commit (A/B). ABI: a
 contract widened (refusals granted), `tools/abilock.py --update` with no
@@ -15769,7 +15772,11 @@ contract widened (refusals granted), `tools/abilock.py --update` with no
 640K + 384K, 11s; a 286 - Bochs's CPU is a 386): a 128KB pool run regrown to
 256KB past a pool filled with XMEM blocks, a 256KB heap run to 384KB and
 160KB, the largest bridge's conventional piece shrunk by 128KB and grown back
-by 64KB, then the bridge below its cut. RED on mega-release e6e7930c on both
+by 64KB, then the bridge below its cut. (On Bochs every leg passes and the
+machine then takes `kern_mega FAULT 0D` in the disk layer - which mega-release
+b7374eaf does with the probe and no F8 at all, a pool-fill regression of its
+own being bisected on mega-poolfault; megargw is blocked on that, not red.)
+RED on mega-release e6e7930c on both
 machines, measured: L1 refused, L2's windows 4 and 5 not the claim's and
 window 2's limit FFFFh, L3's first regrow refused. (The 86Box run first
 "lost" the probe after its last leg: the probe returned CF = 1 out of its

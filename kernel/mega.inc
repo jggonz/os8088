@@ -6679,17 +6679,22 @@ mega_hugecrgf:
     cmp si, 0x9200                  ; CPU sets on a load)...
     jne .nw
     mov si, [es:di+8+2]
-    sub si, ax                      ; ...based SI past window 0, and AH
-    mov ah, [es:di+8+4]             ; the high byte of that
-    sbb ah, dl
+    sub si, ax                      ; ...based SI past window 0
+    jnz .s32
+    mov si, [es:di+8+4]
+    sub si, dx
+    and si, 0xFF                    ; (the high byte's difference)
+    cmp si, 1
+    jne .nw
+    push cx                         ; A RUN OF 64KB WINDOWS - every one of
+    call mega_hgcnt                 ; them, or it is the heap's claim with a
+    call mega_hcrun                 ; SUB that happens to sit after its pair
+    pop cx
     pop es
     pop dx
-    cmp ah, 1
-    jne .s32
-    or si, si
-    jnz .s32
-    mov ax, bx                      ; A RUN OF 64KB WINDOWS: regrown with
-    mov si, dx                      ; them, its first window the claim
+    jc .not
+    mov ax, bx                      ; regrown with them, its first window
+    mov si, dx                      ; the claim
     call mega_hgcpr
     jnc .o
     mov bx, HUGE_NOBRIDGE           ; ...else claimed again, one run
@@ -6700,13 +6705,14 @@ mega_hugecrgf:
     stc
     jmp short .o
 .s32:
-    or ah, ah                       ; a window every 32KB or 16KB: refused
-    jnz .not
-    cmp si, 0x8000
-    je .ref
-    cmp si, 0x4000
-    je .ref
-    jmp short .not
+    cmp si, 0x8000                  ; a window every 32KB or 16KB (in the
+    je .r32                         ; same 64KB): never regrown, as in the
+    cmp si, 0x4000                  ; pool
+    jne .nw
+.r32:
+    pop es
+    pop dx
+    jmp short .ref
 .nw:
     pop es
     pop dx
@@ -6721,6 +6727,43 @@ mega_hugecrgf:
     pop bx
     pop ax
     retf
+
+; mega_hcrun - ES:DI = window 0's entry (ES = the LDT), DL:AX = its base, CX
+; = the windows a run of the claim's size has -> CF = 0 entries 1..CX-1 after
+; it are each a present data descriptor based 64KB on from the last: the run
+; mega_hugec made; CF = 1 they are not. Keeps every register
+mega_hcrun:
+    push ax
+    push cx
+    push dx
+    push si
+    push di
+    dec cx
+    jz .ok
+.l:
+    add di, 8
+    inc dl                          ; 64KB on
+    mov si, [es:di+4]
+    and si, 0xFE00
+    cmp si, 0x9200
+    jne .no
+    cmp [es:di+2], ax
+    jne .no
+    cmp [es:di+4], dl
+    jne .no
+    loop .l
+.ok:
+    clc
+    jmp short .o
+.no:
+    stc
+.o:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
 
 ; mega_hgcpr - a run's CONVENTIONAL piece regrown and its windows refitted:
 ; DX = the piece's value (a claim of the caller's), SI = the selector of the
