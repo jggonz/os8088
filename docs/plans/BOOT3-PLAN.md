@@ -1321,6 +1321,13 @@ rows under fast or full; corrected by the verifier), with `blobruns` moved:
 
 ## 15. Open questions for the owner
 
+**All answered (owner, 2026-11-08, third round):** question 2 - fine, the plan
+ships as one deliverable so a temporary loss between waves does not matter;
+question 8 - move the clock ladder whole; question 9 - the 5-byte
+`call BLOB_SEG_AT:x` with the `t_bootfloor` fence. The text below is kept as
+the record of what was asked.
+
+
 Questions 1, 3, 4, 5, 6, 7 and 10 were answered (owner, 2026-11-08) and are
 folded into the body: the name (section 1), kern_mega (sections 5.2 and 8,
 wave 3), kern_small (section 5.1), no kern_big 128KB row (sections 6, 9 and

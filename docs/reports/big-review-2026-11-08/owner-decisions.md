@@ -130,3 +130,19 @@ these; this file is the record of what was said.
   in task context (kbm_poll0, kbm_ui, menu.inc's kbm_pollm), so the claim
   needs no ISR pin and its callers need the one-compare gate a module's
   callers already have.
+
+## Third round: the last BOOT3-PLAN questions, and the go-ahead
+
+- **Q2, wave 2's boot-time RAM:** fine - the plan is one deliverable and
+  ships all at once, so a temporary loss between waves does not matter.
+- **Q8, the clock ladder:** move related things together; left to the
+  implementer's discretion. Taken as: wave 3 moves the ladder whole.
+- **Q9, how `.boot3` and the kernel reach the blob:** whatever eats fewer
+  bytes, provided it costs no user-visible performance and stays easy to
+  maintain - taken as the 5-byte `call BLOB_SEG_AT:x` with the
+  `t_bootfloor` build-time fence.
+- **Build it.** BOOT3 is built out as one deliverable alongside the doc
+  round and the plan, then the branch is cleaned up and merged into the
+  integration branch in a shippable state. BR-1's canary fix, boot-7,
+  item E and wave 4's preconditions (boot-4, boot-10) are built with it,
+  because they are the same code and wave 4 depends on them.
