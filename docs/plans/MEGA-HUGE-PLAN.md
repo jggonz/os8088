@@ -122,4 +122,7 @@ target), the Task Manager.
 | (found) | **done** - a plain file over 64KB was refused FERR_IO into any claim above 1MB (`dskw_rbody` -> `dskw_tolo`); it now takes the selector arm's own walk. Through a BRIDGE that walk is F1's | 14.168 |
 | Frotz | **done** - a story over 64KB is one `OSAPI_MEM_HUGE` claim, BX = 8000h, its page table the claim's run (`zm_run`) | SPEC.md 61.4; megafrotz, megafrotz-low |
 | F1, F2, F9 | another branch (mega-hugebridge) | |
-| F4, F5, F8 | open | |
+| F4 | **done** - a packed file past 64KB into a huge claim of any shape, a bridge's cut included (a read across a cut starts on a 64KB window of the claim, FERR_PROT otherwise); the decoder aimed by X, the seam for a stream across the cut | KERN-MEGA-PLAN 14.171; SPEC.md 20.14.5.4; megahpk |
+| Tracker | **done** - the arm's module in the pool, one run (`HUGE_NOBRIDGE`), up to the format's 960KB | SPEC.md 45.3.1.2; megamod trkarm, trkbig |
+| RealDMG | **done** - a packed cartridge in place, past 256KB; cartridge RAM of 64/128KB NOT done (the core's RAM addressing, REALDMG-SPEC 10.3.1 says why) | REALDMG-SPEC 10.3.1; megagbpk |
+| F5, F8 | F5 another branch (mega-hugewalk); F8 open | |

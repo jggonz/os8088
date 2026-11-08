@@ -15398,3 +15398,80 @@ five callers). WIN16's arm +1 byte.
 table says and green here; `win16megahugega`. The interface the next steps
 build on (F4 packed reads, F5 the walker include): SPEC.md 50.3.5's *The
 cut*.
+
+### 14.171 A PACKED file past 64KB reads whole into a huge claim of any shape, a bridge's cut included; Tracker's module and RealDMG's packed cartridges go above 1MB on it (2026-11-08) - FIXED
+
+MEGA-HUGE-PLAN F4, and the two adopters it unblocks. **Every shipped data
+file is lz4-packed** (SPEC.md 20.13.5), and `OSAPI_FILE_READ` of one whose
+expansion passed 64KB into a selector claim above 1MB was refused FERR_IO
+(`dskw_rbody`'s `.czfb`): the segment arm cannot name memory above 1MB, and
+the decoder's motions - the output's 64KB bump, a match's source a window
+back, the input's 32KB slides - were base arithmetic, which past a bridge's
+cut is another program's memory. **Measured on mega-release d433871c**
+(tests/megahpk, Bochs 4MB): 150,000 bytes into a one-run pool claim, 620,000
+into two bridges, and a read 4096 bytes into a bridge - all four `refused
+0002`.
+
+**The file layer** (`kernel/diskw.inc`, `.cold`, kern_mega only):
+`dskw_hzwalk` walks the destination from X = 0 to U by `OSAPI_SEG` SUB
+stepping before any data I/O - each 64KB window full but the last, the last
+reaching U (else FERR_BIG, DX = U's KB), a cut only on the 64KB grid of X
+(else FERR_PROT) - and records X 0's base, the cut and the conventional
+piece's base (`.lowbss`: `mega_hzb0`, `mega_hzcut`, `mega_hzcb`). The packed
+bytes are read at R = U - P as before (the 14.169 stepping). A stream that
+itself straddles the cut gets THE SEAM: 64KB, `MEM_K_SEAM` conventional else
+a pool block (`dskw_hzseam`), claimed before the read (FERR_BIG, DX = U + 64
+KB, without it), filled with X C-32KB..C+32KB after it (`dskw_hzfill`,
+`mx_lcopyf`), freed on the way out of every read (`dskw_hzfree`, in
+`dskw_read_x`). `dskw_czexp` re-walks (the seam's claim may have moved the
+claim), aims ODD at X 0 and SLD at R's 32KB view, and names ODD in
+`[mega_hzes]`.
+
+**The decoder** (`kernel/lz.inc`, kern_mega only): its entry, finding ES =
+`[mega_hzes]`, sets `LZ_HZ` (40h) in the frame's format byte and spends the
+name; `lz_dbump`, `lz_match`'s window back and its BACK re-aim, and `lz_at`
+and `lz_cross`'s slides go to `mega_hzbump` / `mega_hzback` /
+`mega_hzbkaim` / `mega_hzslide` (`kernel/mega.inc`, `.cold`), which keep
+each scratch's X (`mega_hzxo`, `_hzxb`, `_hzxs`, 32KB units) and aim it
+through `mega_hzmap`: X past the cut is the conventional piece's, the 32KB
+input view across it is the seam's. Output and BACK windows sit at 64KB
+multiples of X, inside one piece by the walk's grid rule.
+
+**Bytes**: `kern_big` and `kern_small` byte-identical (A/B at one commit, a
+clean tree each side). kern_mega `.cold` +834 (46,794 to 47,628, above 1MB
+after the switch; its boot-time rung crosses to 48,128, KERN_SIZE 135,680 to
+136,704 at boot), `.lowbss` +26 (5,574 to 5,600, the low rung 32 left), the
+kernel segment unchanged (os88megaseg's 3,754, at tests/megaseg.txt's
+allowance) and MEGA_RESIDENT's 62,976 unchanged.
+
+**Tracker** (SPEC.md 45.3.1.2, the arm only): the module is an
+`OSAPI_MEM_HUGE` claim, `HUGE_NOBRIDGE` - a sample window is a SEG_SUB,
+whose reach stops at a cut - when the pool's best run holds it
+(`trk_hzfits`), and the door's conventional claim as before otherwise; a
+claim the cell put in the heap after all is given back. No
+`OSAPI_MEM_MOVABLE` (a pool block moves by its descriptors), no trim (F8).
++128 bytes of the arm (32,796 to 32,924); the shipped build byte-identical.
+
+**RealDMG** (REALDMG-SPEC 10.3.1, the arm only): `rw_xplan` takes a packed
+cartridge in place, and `rw_bload` reads it with one `OSAPI_FILE_READ` into
+its 16KB-window claim (`rw_xread`) - the cartridge byte for byte - and copies
+bank 0 into the view. Cartridge RAM of 64/128KB stays 32KB: the core's
+`rdg_rambank` is an offset into one selector (8 banks at most), and 64KB
+needs the save length, the state format and the clock's trailer to change
+with it (REALDMG-SPEC 10.3.1 says each).
+
+**kern_big's own packed reads past 64KB** needed nothing: its huge claim is
+one conventional block, which the segment arm decodes by paragraph - the
+path `BEVERLY.MOD` (116,085 bytes) has always taken into Tracker's claim -
+and on kern_mega the same arm took tests/megahpk's 400,000-byte files into a
+conventional huge claim correctly on the way to this fix (the cell put them
+in the heap). Not booted on kern_big itself for this entry.
+
+**Rows.** `megahpk` (new, Bochs 4MB): red on d433871c as above, green here,
+and red again with the seam taken out of `mega_hzmap` (HP2 refused 0002: the
+straddling view read past the pool piece). `megamod`'s `trkarm` asserts the
+blob above 1MB and its new `trkbig` leg loads a generated 700KB module stored
+packed: red with d433871c's arm (trkarm's blob at 12400h, trkbig never
+plays), green here. `megagbpk` (new, Bochs 16MB): GBBANK.GB (1MB, 64 banks)
+packed - 14,636 switches checked, none wrong, bank 1 = `[rw_xsel]` at
+EA2C00h; red with d433871c's arm (never runs).

@@ -785,6 +785,10 @@ trk_do_open:
 ; exactly those bytes cannot narrow what it may look at.
 ; -----------------------------------------------------------------------------
 trk_trim:
+%ifdef PKG_MEGA
+    cmp byte [trk_hz], 0            ; a huge claim does not regrow (MEGA-HUGE-
+    jne .out                        ; PLAN F8): under 1KB of slack, kept
+%endif
     mov ax, [mp_bloblen_lo]
     mov dx, [mp_bloblen_hi]
     call trk_topara                 ; round UP: a truncating divide would
@@ -807,6 +811,34 @@ trk_trim:
     mov [trk_capp], ax
 .out:
     ret
+
+%ifdef PKG_MEGA
+; trk_hzfits - AX = paragraphs -> CF = 0 when the POOL's best run holds them
+; (OSAPI_MEM_HUGE's MEMH_AVAIL ask, DX its KB), CF = 1 not - kern_big's
+; answer, a 1MB machine's, a pool too small - and the module goes to the
+; conventional heap through the KB door exactly as before (SPEC.md
+; 45.3.1.2). Every register kept
+trk_hzfits:
+    push ax
+    push bx
+    push cx
+    push dx
+    add ax, 63
+    mov cl, 6
+    shr ax, cl                      ; KB, rounded up
+    xchg ax, cx
+    xor ax, ax
+    mov bx, MEMH_AVAIL
+    call OSAPI_MEM_HUGE             ; DX = the pool's best run, KB
+    jc .o
+    cmp dx, cx                      ; CF = 1 under it
+.o:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+%endif
 
 ; trk_topara - DX:AX bytes -> AX = PARAGRAPHS, rounded UP; ZF from the
 ; answer. DX:AX must be under 960KB (DX <= 14), which both callers guarantee.
@@ -1037,6 +1069,10 @@ trk_fdone:
                                     ; word
     call trk_topara                 ; AX = PARAGRAPHS needed (SPEC.md 50.3.7):
     mov [trk_needp], ax             ; the module pays the heap's granule, not
+%ifdef PKG_MEGA
+    call trk_hzfits                 ; kern_mega's ARM: the POOL holds it
+    jnc .sizeok                     ; whole (SPEC.md 45.3.1.2)
+%endif
     xchg ax, dx                     ; a whole KB. In DX, which MEMP_AVAIL keeps
     mov bl, MEMP_AVAIL
     call OSAPI_MEM_P                ; AX = the LARGEST claim, in paragraphs
@@ -1100,12 +1136,50 @@ trk_fdone:
                                     ; claim, never a verdict on a file - the
                                     ; refusals above no longer borrow it
 .sized:
+%ifdef PKG_MEGA
+    mov byte [trk_hz], 0
+    cmp word [trk_needp], 0         ; (the speculative claim stays a door's)
+    je .door
+    call trk_hzfits
+    jc .door
+    push ax                         ; THE POOL (SPEC.md 45.3.1.2): one run of
+    add ax, 63                      ; selectors above 1MB of the KB the module
+    mov cl, 6                       ; needs - never a bridge, because a sample
+    shr ax, cl                      ; window is a SEG_SUB, whose reach stops
+    mov bx, HUGE_NOBRIDGE           ; at a cut - read by the packed read past
+    call OSAPI_MEM_HUGE             ; 64KB (MEGA-HUGE-PLAN F4) and walked by
+    jc .hzno                        ; the same windows as ever
+    push ax                         ; ...IN THE POOL: the cell takes the
+    push dx                         ; heap when the pool refuses (an LDT run
+    mov bl, SEG_LIN                 ; short), and a module there is the
+    call OSAPI_SEG                  ; door's, movable by trk_reloc
+    cmp dx, 0x10                    ; DX:AX = its base: CF = 1 under 1MB
+    pop dx
+    pop ax
+    jae .inpool
+    call OSAPI_MEM_FREE
+    jmp short .hzno
+.inpool:
+    pop cx                          ; (the paragraphs asked: AX is the KB)
+    mov [trk_modseg], dx
+    mov cl, 6
+    shl ax, cl                      ; ...its paragraphs
+    mov [trk_capp], ax
+    mov byte [trk_hz], 1
+    jmp short .granted
+.hzno:
+    pop ax                          ; refused: the paragraphs, for the door
+.door:
+%endif
     xor cx, cx                      ; AX = paragraphs, no DMA head (SPEC.md
     mov bl, MEMP_CLAIM              ; 50.3.7) -> DX = base segment, AX = what
     call OSAPI_MEM_P                ; was GRANTED, CF=1 refused (the answer
     jc .nomem                       ; moves register too)
     mov [trk_modseg], dx
     mov [trk_capp], ax
+%ifdef PKG_MEGA
+.granted:
+%endif
 
     call trk_ring_probe             ; RESERVE the ring before the floppy turns
     jc .noring                      ; (SPEC.md 45.18): the module is claimed,
@@ -1138,6 +1212,10 @@ trk_fdone:
     call mp_load                    ; CF=1, AX = offset of a NUL error string
     inc byte [tw_gen]               ; a new title either way (inc keeps CF)
     jc .lderr
+%ifdef PKG_MEGA
+    cmp byte [trk_hz], 0        ; a pool block moves by its descriptors, the
+    jne .moved                  ; windows' with it (SPEC.md 45.3.1.2)
+%endif
     mov dx, [trk_modseg]        ; ONLY NOW is it movable (SPEC.md 66.2). Not
     mov ax, trk_reloc           ; at the claim, and the ordering is the whole
     call OSAPI_MEM_MOVABLE      ; safety argument rather than a tidiness:
@@ -1153,6 +1231,9 @@ trk_fdone:
                                 ; reason (66.3 rule 5) - this ordering does not
                                 ; NEED that guard, and having both is how a
                                 ; rule survives the next author
+%ifdef PKG_MEGA
+.moved:
+%endif
     call OSAPI_SND_CAPS             ; NO CARD: the samples filtered for the
     test ax, SND_CAP_PCM_BG         ; speaker now, once, rather than per
     jnz .card                       ; output sample (SPEC.md 45.25)
@@ -3734,6 +3815,10 @@ trk_reloc:
     TRKW trk_fsize_hi               ; (SPEC.md 38.6); 0 = it had none
     TRKW trk_needp                  ; ...as paragraphs, rounded up; 0 = unknown
     TRKW trk_capp                   ; its size in paragraphs, as granted
+%ifdef PKG_MEGA
+    TRKB trk_hz                     ; 1 = the grant is an OSAPI_MEM_HUGE
+                                    ; claim in the POOL (SPEC.md 45.3.1.2)
+%endif
     TRKB trk_cpq                    ; 1 = we posted OSAPI_MEM_COMPACT for
                                     ; the load in trk_fname and the wake owes
                                     ; us the retry (SPEC.md 66.4.3). It is one

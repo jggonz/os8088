@@ -726,6 +726,33 @@ cartridge in one claim, and no bank is ever fetched (`rw_xplan`,
   is the claim's first window (`[rw_xsel]`, 0 on the one-claim leg, which
   the step no longer tells apart): green on 2026-10-30, cpu_instrs passing
   under the recompiler with its banks in the one claim.
+- **A PACKED cartridge goes in place too** (MEGA-HUGE-PLAN F4, 2026-11-08).
+  Its bank reads cannot be `OSAPI_FILE_READ_SEQ`'s, which is RAW (SPEC.md
+  20.14.3), so `rw_czprobe` sent it to ONE claim, and past `RW_ROMMAX_KB`
+  (256KB) that is refused - "packed and past one claim" (KERN-MEGA-PLAN
+  14.147). Since the kernel expands a packed file past 64KB into a claim
+  above 1MB of any shape (SPEC.md 20.14.5.4), `rw_xplan` takes it, and
+  `rw_bload` reads it with ONE `OSAPI_FILE_READ` into the 16KB-window
+  claim (`rw_xread`) - which is the cartridge byte for byte, bank n at
+  window n - 1's 4000h exactly as `rw_xput` lays a plain one - then copies
+  bank 0, its first 16KB, down into the view and checks the header there.
+  No slot is read through; the claim is still never a bridge (16KB windows
+  never are, KERN-MEGA-PLAN 14.168). The read goes straight into the pool,
+  so on a 286 a large packed cartridge loads at the pool bounce's pace
+  (16.2.6) rather than through the slot's conventional landing - packed
+  cartridges are the shipped demo's size, and the plain ones keep the slot.
+  `tests/megagbpk.py` is the gate: GBBANK.GB (1MB, 64 banks) packed, every
+  switch checked and none wrong, bank 1 `[rw_xsel]` above 1MB; red with the
+  arm before, which refused it.
+- **Cartridge RAM of 64KB or 128KB is still kept as 32KB** (`rw_ramsetup`),
+  and that is not the claim's to lift: `rdg_rambank` addresses a bank as an
+  OFFSET into ONE selector (`and ax, 7`, x 2000h - 8 banks, 64KB, at most),
+  so 128KB (16 banks) needs the core to hold a second segment for the RAM;
+  and 64KB, which that offset does reach, needs `rw_savelen` (a word: 65,536
+  does not fit), the save state's RAM part (rwstate.inc, sized for 8 or
+  32KB) and the MBC3 clock's 1KB trailer past the bank data (which would sit
+  past the one selector) to change with it. None of those is a huge claim's
+  question.
 
 ### 10.3.2 A bank switched to lazily
 
