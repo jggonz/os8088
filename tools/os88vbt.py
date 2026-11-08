@@ -617,6 +617,71 @@ def frame_sound(track, nframes, spf, own):
     return out
 
 
+SEAMS = ("auto", "trim", "shift", "none")
+SEAM_QUIET = 1.0 / 128      # frame_sound's own "no sound" level
+
+
+def seam_join(a, na, b, nb, spf, how, black_b):
+    """Two openings' own sounds A (NA frames) and B (NB frames) - one cut
+    from a whole, joined end to start - with the silence at the cut taken
+    out (the owner's Demo Battle 2: 17.1 ms at 01's end and 10.2 at 02's
+    start, from two exports of one clip; heard as a drop between them).
+    TRIM drops B's leading frames that are silent and, by BLACK_B(k), black;
+    SHIFT closes what is left under a frame by moving B's sound EARLIER - the
+    start of B's sound into A's last silent samples - so B is up to a frame
+    ahead of its picture. AUTO does both. Answers (a, b, frames dropped from
+    B's head, samples shifted)"""
+    if how == "none" or a is None or b is None:
+        return a, b, 0, 0
+    ea = np.zeros(na * spf)
+    ea[:min(len(a), na * spf)] = a[:na * spf]
+    loud = np.flatnonzero(np.abs(ea) > SEAM_QUIET)
+    t = len(ea) - (loud[-1] + 1) if len(loud) else 0
+    loud = np.flatnonzero(np.abs(b) > SEAM_QUIET)
+    lead = int(loud[0]) if len(loud) else 0
+    drop = 0
+    if how in ("auto", "trim"):
+        while (drop + 1) * spf <= lead and drop < nb - 1 and black_b(drop):
+            drop += 1
+        b, lead = b[drop * spf:], lead - drop * spf
+    shift = 0
+    if how in ("auto", "shift") and 0 < t + lead <= spf:
+        shift = t + lead
+        ea = np.concatenate([ea[:len(ea) - t], b[lead:lead + t]])
+        b = b[lead + t:]
+    return ea, b, drop, shift
+
+
+def seam_openings(b, d, proj, spf):
+    """Every opening's own sound joined to the one before it (seam_join),
+    as its project entry's "seam" says (absent: auto). A dropped frame goes
+    from the opening's frames too, so picture and sound stay together"""
+    import vbtana as A
+    for k in range(1, len(b.openings)):
+        o, p = b.openings[k], b.openings[k - 1]
+        how = d["openings"][k].get("seam", "auto")
+        if how not in SEAMS:
+            raise ValueError("opening %s: seam %r, not one of %s"
+                             % (o["name"], how, ", ".join(SEAMS)))
+        if p.get("sound") is None or o.get("sound") is None:
+            continue
+        c = d["clips"][o["name"]]
+
+        def black(i, c=c):
+            return A.dark_at(proj, c, c["in"] + i)
+        sa, sb, drop, shift = seam_join(p["sound"], len(p["frames"]),
+                                        o["sound"], len(o["frames"]), spf,
+                                        how, black)
+        p["sound"], o["sound"] = sa, sb
+        if drop:
+            o["frames"] = o["frames"][drop:]
+        if drop or shift:
+            print("os88vbt: the seam %s -> %s: %d silent black frame(s) "
+                  "trimmed, its sound %.1f ms earlier" % (
+                      p["name"], o["name"], drop, shift * 1000.0 / b.rate),
+                  file=sys.stderr)
+
+
 def place(effects, nframes, spf, sfx):
     """An action's sound: its effects placed at their frames, mixed.
     EFFECTS is {frame: name} or a list of (frame, name)"""
@@ -1558,6 +1623,7 @@ def battle_of(proj, progress=None, kind="cga4"):
             sound=b.sfx[o["sound"]] if o.get("sound") else None,
             exit=c["exit"], full=full, dac=dac_of(o["clip"], True),
             iso=o["clip"] in iso))
+    seam_openings(b, d, proj, t["rate"] // t["fps"])
     # a clip only a loop or the title's way out plays is not an action's
     tt = d.get("title") or {}
     loops_only = {tt.get("clip"), tt.get("leave")} | {

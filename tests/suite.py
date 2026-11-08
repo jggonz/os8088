@@ -17072,6 +17072,15 @@ SOAK = [
         "at a score of 0. A model or build that goes wrong here writes a "
         "bundle that verifies and plays the wrong battle",
         needs=("pil",)),
+    Row("vbtseam", "soak", py("tests/unit/t_vbtseam.py"), 1.0,
+        "SPEC.md 126.2.6: an opening's SEAM with the one before it - two "
+        "openings cut from one clip, each exported with its own silence at "
+        "the cut (the owner's Demo Battle 2: 17.1 + 10.2 ms, a drop heard "
+        "between them), joined by os88vbt.seam_join: auto closes it whole "
+        "(no quiet sample across it, 301 samples shifted), a silent BLACK "
+        "head frame is trimmed and one not black left, and none / trim / "
+        "shift do only their own part. Broken on purpose (seam_join a "
+        "no-op) it FAILS"),
     Row("vbtrules", "soak", py("tests/vbtrules.py"), 8.0,
         "SPEC.md 126.6: the Video Battle RULES' reference (tools/vbtrules.py), "
         "host-side - the 16-bit xorshift's full period, the damage and heal "

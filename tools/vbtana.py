@@ -454,6 +454,19 @@ DARK_MEAN = 10          # a frame is BLACK when its mean brightness is under
 DARK_HI = 32            # this and nearly all of it (98%) under this
 
 
+def dark_at(proj, c, k):
+    """Clip C's source frame K is black, near enough (_dark's test)"""
+    s = proj.d["sources"][c["source"]]
+    if s["kind"] == "scene":
+        return False
+    w, _, fh = rend_size(proj, "vga4")
+    fr = rgb_frames(proj, c["source"], w, fh, "vga4")
+    if not 0 <= k < len(fr):
+        return False
+    y = fr[k].astype(float).mean(axis=2)
+    return y.mean() < DARK_MEAN and np.percentile(y, 98) < DARK_HI
+
+
 def _dark(proj, cid, which):
     """Clip CID's first (WHICH 0) or last (-1) frame is black, near enough"""
     c = proj.d["clips"][cid]

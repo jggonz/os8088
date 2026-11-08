@@ -243243,6 +243243,30 @@ The tables, a record after a record:
 - **a picture, 8 bytes**: its column and row in the band, its cells and
   rows, its paragraph in the PICTURES region.
 
+#### 126.2.6 An opening's SEAM: the silence at a cut taken out (`os88vbt.seam_join`)
+
+Openings cut from one clip on one frame are exported as files of their own,
+and each export can carry a few milliseconds of silence at the cut - the
+owner's Demo Battle 2: **17.1 ms** at `01-Opening`'s end, **10.2 ms** at
+`02-Opening`'s start, and the card on the PicoMEM 2 twin played **26.8 ms of
+exact silence** where the source has none: "the small music drop between the
+two opening clips". The engine's hand-over is exact (126.3: the next
+opening's sound starts at the write position the moment the last one's
+ends); the gap is in the records.
+
+So the builder joins every opening's own sound to the one before it, as the
+project's `"seam"` on the later opening says (`vbtproj.set_opening`):
+
+| seam | |
+|---|---|
+| `auto` (absent) | trim, then shift |
+| `trim` | the later opening's head frames dropped while each is wholly silent AND black (`vbtana.dark_at`, the palette rules' own test) - picture and sound together |
+| `shift` | what is left of the silence, when it is under a frame, closed: the later sound's first samples fill the earlier one's silent tail and the later sound moves EARLIER by that much - at most a frame ahead of its picture (27.3 ms in Demo Battle 2, under half a frame at 15 fps) |
+| `none` | as exported |
+
+The build says what it did on stderr. `tests/unit/t_vbtseam.py` (row
+`vbtseam`) holds the cases.
+
 ### 126.3 The engine
 
 Three pieces, the Video Player's own shape (98.3):

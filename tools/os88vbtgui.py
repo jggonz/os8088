@@ -2610,6 +2610,19 @@ class OpeningsTab(object):
                         command=self._set_full).pack(side="left", padx=6)
         self.exit_l = ttk.Label(of, text="", wraplength=380)
         self.exit_l.grid(row=4, column=0, columnspan=4, sticky="w")
+        # ITS SEAM with the opening before it (126.2.6): the silence an
+        # export leaves at a cut taken out
+        ttk.Label(of, text="Seam").grid(row=5, column=0, sticky="w")
+        self.seamv = tk.StringVar()
+        self.seamcb = ttk.Combobox(of, textvariable=self.seamv,
+                                   state="readonly", width=10,
+                                   values=("auto", "trim", "shift", "none"))
+        self.seamcb.grid(row=5, column=1, sticky="w")
+        self.seamcb.bind("<<ComboboxSelected>>", lambda e: self.app.edit(
+            "set_opening", self.i(), seam=self.seamv.get()))
+        ttk.Label(of, text="with the one before: the silence at the cut "
+                  "trimmed (black frames) or shifted out", wraplength=260
+                  ).grid(row=5, column=2, columnspan=2, sticky="w")
         # the music coming in
         mf = ttk.LabelFrame(left, text="The music comes in", padding=6)
         mf.pack(anchor="w", fill="x", pady=4)
@@ -2677,6 +2690,8 @@ class OpeningsTab(object):
             self.exitv.set(c["exit"] if c else 0)
             self.fullv.set(1 if o.get("full") else 0)
             self.full_rb.config(state="disabled" if last else "normal")
+            self.seamv.set(o.get("seam", "auto"))
+            self.seamcb.config(state="disabled" if i == 0 else "readonly")
             st = "normal" if last else "disabled"
             self.exitsp.config(state=st)
             if not last:
