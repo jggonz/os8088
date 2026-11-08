@@ -1,7 +1,10 @@
 # BIG-REVIEW-PLAN - the two phases of the 2026-11-08 kernel review, as sessions
 
-**Status: A PROPOSAL. Nothing in it is taken, nothing is scheduled, and no
-session below has started.** Written on 2026-11-08 on the branch
+**Status: IN PROGRESS.** The `.boot3` deliverable - BOOT3-PLAN waves 0-5
+(S03's BOOT3 line, S30, S31 and S11's keyboard mouse), BR-1 parts 1 and 2,
+boot-7, item E, boot-4 and boot-10 - is built and merged into `elendilon`,
+with the review's doc-accuracy rounds; section 6 ticks those lines. No other
+session has started. Written on 2026-11-08 on the branch
 `the-big-review`, from the review's final synthesis. This is the plan for
 the work. The review itself is the report under
 `docs/reports/big-review-2026-11-08/`. A finding's evidence, mechanism and
@@ -17,7 +20,7 @@ five follow-ups re-checked what the answers turned on (listed in section 1's
 inputs). This plan is brought into line with them, in place: every changed
 item is marked "(owner, 2026-11-08)" or "(follow-up, 2026-11-08)". In short:
 S10 (WP2b) is withdrawn; S03's blob work routes through
-`docs/plans/BOOT3-PLAN.md`, whose waves 2-4 become S30 and S31; S06's fault
+`docs/plans/completed/BOOT3-PLAN.md`, whose waves 2-4 become S30 and S31; S06's fault
 panel is built behind a knob; the six package fences leave S07, S08 and S14;
 BR-1's 0-byte half and its gate move to wave 1 as urgent; KBMOUSE and text-7
 are taken; and 2.6 is split into what is decided and what is still open.
@@ -95,7 +98,7 @@ both comment and documentation only:
 | `followup-decisions-6-8.md` | rt-7, text-7 and rt-5 explained and re-priced | S11's and S12's figures |
 | `followup-already-exists.md` | recommendations for things the tree already has (six withdrawn or reworded, five that missed an existing piece) | S03's, S05's, S06's, S11's and S12's items and rows |
 | `areas/gap-bss-zeroing.md` | `.bss` is zero at `kmain` on every shipped path since PR #61; the `t_bsszero` gate | S01's gate, S02's rule |
-| `docs/plans/BOOT3-PLAN.md` | the `.boot3` design that replaces the refused 14th blob sector (a proposal; its section 11 places each blob and `.ovl` want, its section 15 lists ten questions) | S03's blob room, S30, S31 |
+| `docs/plans/completed/BOOT3-PLAN.md` | the `.boot3` design that replaces the refused 14th blob sector (a proposal; its section 11 places each blob and `.ovl` want, its section 15 lists ten questions) | S03's blob room, S30, S31 |
 
 **Where each of the owner's questions is answered.** This plan answers the
 last four. The report answers the first four, from `keep.md` and
@@ -140,7 +143,7 @@ last four. The report answers the first four, from `keep.md` and
 Phase 1 is **29 sessions in 7 waves**, the seventh taken in two steps (7,
 then 7b). **After the owner's answers it is 30** (owner, 2026-11-08): S10 is
 withdrawn (its id and heading are kept, so nothing renumbers), and
-`docs/plans/BOOT3-PLAN.md`'s waves become work in three places, S03 (its
+`docs/plans/completed/BOOT3-PLAN.md`'s waves become work in three places, S03 (its
 waves 0 and 1), S30 (waves 2 and 3, in wave 5) and S31 (wave 4, in wave 6).
 Each session is one of:
 
@@ -309,7 +312,7 @@ Why the merge orders are what they are:
 Both homes are full today. Figures are MEASURED from the maps
 (`bugs.md:1192`); the wants are ESTIMATED. **Re-drawn after the owner's
 answers** (owner and follow-up, 2026-11-08): there is no 14th blob sector, and
-the room comes from `docs/plans/BOOT3-PLAN.md`, whose spans are MEASURED off
+the room comes from `docs/plans/completed/BOOT3-PLAN.md`, whose spans are MEASURED off
 the same map and whose section 11 places each want below.
 
 **The blob (`.boot2`): 0x19FC of 0x1A00, 4 bytes free.** kern_small has 702
@@ -376,7 +379,7 @@ round is in force). The ids are kept, so a reference to O1..O18 still lands.
 
 | id | the question | the answer | what it changes |
 |---|---|---|---|
-| **O1** | A 14th blob sector on kern_big? | **NO.** It delays the progress bar by 0.4-0.8 s (one or two more int 13h). Design a third boot-time section at the tail of KERNEL.SYS instead, read while the splash is up, dropped before the `.vga` drop and heap compaction: `docs/plans/BOOT3-PLAN.md`. Second round on its questions: generic across the kernels (kern_small unless it truly does not need it); the name is whatever confuses a new session least; wave 4 YES; no kern_big 128KB boot row; `blobruns` into fast if really quick (or full); the earlier bar without wave 4 only if less complex than wave 4 | S03 takes BOOT3 waves 0-1 and lands BR-6 in that room; S30 and S31 are new; 2.5 is re-drawn |
+| **O1** | A 14th blob sector on kern_big? | **NO.** It delays the progress bar by 0.4-0.8 s (one or two more int 13h). Design a third boot-time section at the tail of KERNEL.SYS instead, read while the splash is up, dropped before the `.vga` drop and heap compaction: `docs/plans/completed/BOOT3-PLAN.md`. Second round on its questions: generic across the kernels (kern_small unless it truly does not need it); the name is whatever confuses a new session least; wave 4 YES; no kern_big 128KB boot row; `blobruns` into fast if really quick (or full); the earlier bar without wave 4 only if less complex than wave 4 | S03 takes BOOT3 waves 0-1 and lands BR-6 in that room; S30 and S31 are new; 2.5 is re-drawn |
 | **O2** | gfce-2: the fault panel's behaviour | kern_mega keeps closing the faulting package. In real mode the panel (the ~174-byte package answer included) waits behind a build KNOB, off in shipped kernels, until a field report says it is being hit. **The same weighing applies to every diagnostic panel for a failure nobody has met** | S06's WP8 panel half is a knob item, 0 shipped (2.2). The follow-up applies the weighing to the other diagnostics for a failure no machine has met: BR-84's table bound (with the panel), BR-80's `task_sleep` guard and `gfx_lock` tripwire, BR-82's ISR-stack canary (S06) and BR-68's `[mega_kfix]` counter (S13) are knob-only, out of the totals (follow-up, 2026-11-08) |
 | **O3** | The "packages are trusted" ruling on six fixes | **Not taken as retail code**; at most an `APICHK`-style knob. Real mode cannot defend against a hostile package, so defend against our own mistakes at build time | BR-8 (doors and bound), BR-173 leave S07; BR-29, BR-30 leave S08; BR-22, BR-37 leave S14; their optional `APICHK=1` arms go to S04. The follow-up applies the same weighing to BR-85's code half, BR-107 and BR-109's optional doors (follow-up, 2026-11-08); BR-104 is uncounted while it stays open (O14) |
 | **O4** | WP2b: FILECP and FDLG on kern_big as modules cached at boot | **REFUSED**, in any form ("20+ times now"). Open and copy are not system-management actions, and a boot-time cache is not a saving either. Recorded in CLAUDE.md, AGENTS.md and SPEC.md 38 | S10 withdrawn; -2,468..-2,508 leaves the totals |
@@ -724,7 +727,7 @@ not open a PR. The orchestrator integrates.
 - **Branch:** `big-review/s03-boot`. **Wave 2**, in parallel with S05.
   Cut after S01 and S02 have merged: it needs S02's blob and `.ovl` room,
   S01's tally and S01's BR-1 part 1.
-- **Depends on `docs/plans/BOOT3-PLAN.md`** (owner, 2026-11-08). O1 is
+- **Depends on `docs/plans/completed/BOOT3-PLAN.md`** (owner, 2026-11-08). O1 is
   decided: no 14th blob sector. The blob's room comes from BOOT3-PLAN's waves
   0 and 1, which this session takes first; its waves 2-3 are S30 and its wave
   4 is S31. Read BOOT3-PLAN in full before starting: sections 3-4 (where
@@ -2331,7 +2334,7 @@ shape for that needs no cache (3.12).
 
 ### 3.31 S30 - `.boot3` waves 2 and 3: the boot driver loader, the SYSTEM.CFG reader, the `.ovl` relief (BOOT3-PLAN)
 
-New (owner, 2026-11-08: O1's answer is `docs/plans/BOOT3-PLAN.md`).
+New (owner, 2026-11-08: O1's answer is `docs/plans/completed/BOOT3-PLAN.md`).
 
 - **Branch:** `big-review/s30-boot3`. **Wave 5.** First in the merge order.
   Cut after S03 (`.boot3` and its wave 1) and S12 (`driver.inc`, `boot2.asm`'s
@@ -2850,7 +2853,7 @@ ticked with its date.
 
 **Phase 1, wave 1**
 
-- [x] **S01 URGENT: BR-1 part 1** (KSIG_OFF 22528, the segment arm dropped: 0 bytes big/mega, -11 small) **and the `t_canary` rewrite**, red on all four 9-sector images at 4096; SPEC.md 2.9.13.3 and 18.93.1; rdiag fixed or retired (follow-up, 2026-11-08). **Built (build, 2026-11-08)** with part 2, boot-7 and BOOT3 item E in one commit: docs/plans/BOOT3-PLAN.md 16.6. rdiag's texts are fixed; the instrument was not given a cylinder define
+- [x] **S01 URGENT: BR-1 part 1** (KSIG_OFF 22528, the segment arm dropped: 0 bytes big/mega, -11 small) **and the `t_canary` rewrite**, red on all four 9-sector images at 4096; SPEC.md 2.9.13.3 and 18.93.1; rdiag fixed or retired (follow-up, 2026-11-08). **Built (build, 2026-11-08)** with part 2, boot-7 and BOOT3 item E in one commit: docs/plans/completed/BOOT3-PLAN.md 16.6. rdiag's texts are fixed; the instrument was not given a cylinder define
 - [ ] S01 gates: WP10; BR-74, BR-75, BR-76, BR-171, BR-172, BR-177; the kernsize home tally; `t_bsszero` (fast), red once on a private tree with `.ovl`'s `start=` removed (follow-up, 2026-11-08)
 - [ ] S02 free bytes and `.bss`: WP1 (with BR-110), WP7 (the rule is settled: zero since PR #61; the comment fixes checked in); `.ovl` at 46 free, blob at 17
 - [ ] S04 contracts and tags: WP14, WP19, the APICHK knob; one lock update
@@ -2859,7 +2862,7 @@ ticked with its date.
 **Phase 1, wave 2**
 
 - [ ] S03 boot: WP6 (BR-153 first, with `resident` named), BR-1 part 2, BR-14, BR-25, BR-55, BR-56, BR-63; BR-155, BR-156. (BR-1 part 2 and boot-7 are built, with S01's line: BOOT3-PLAN 16.6, build, 2026-11-08)
-- [ ] S03 BOOT3-PLAN wave 0 (with boot-18, BR-154) and wave 1 (blob -504); `.boot3` generic across the kernels (owner, 2026-11-08)
+- [x] S03 BOOT3-PLAN wave 0 (with boot-18, BR-154) and wave 1 (blob -504); `.boot3` generic across the kernels (owner, 2026-11-08). **Built (build, 2026-11-08) on `the-big-review`, merged into `elendilon` with BOOT3-PLAN as one deliverable**: docs/plans/completed/BOOT3-PLAN.md 16.4, 16.5
 - [x] S03 O1, the 14th blob sector: **NO** (owner, 2026-11-08); the route is BOOT3-PLAN
 - [ ] S03 BR-6, in BOOT3's room, with the owner's rule: an MDA alone prints a message and halts; an MDA beside a CGA switches to the CGA
 - [ ] S05 WP26's contract text (without ui-8, isr-3 and gi-7's 53.2.1 sentence, already in the tree); R9's doc half; histsys-17
@@ -2905,7 +2908,7 @@ ticked with its date.
 
 **Phase 1, wave 5**
 
-- [ ] S30 BOOT3-PLAN wave 2 (the SYSTEM.CFG reader, the boot driver loader, `ovc_buf`) and wave 3 (`.ovl` -176), with kern_mega's arm
+- [x] S30 BOOT3-PLAN wave 2 (the SYSTEM.CFG reader, the boot driver loader, `ovc_buf`) and wave 3 (`.ovl` -176), with kern_mega's arm. Wave 3 moved the clock ladder whole (O19 question 8), so S21's `.ovl` relief line below is moot. **Built (build, 2026-11-08) on `the-big-review`, merged into `elendilon` with BOOT3-PLAN as one deliverable**: docs/plans/completed/BOOT3-PLAN.md 16.7, 16.8
 - [ ] S21 the `.ovl` relief, only if S30's wave 3 has not landed (`clk_probe`'s RTC rungs, or the clock ladder per O19)
 - [ ] S21 batch G services: BR-10, BR-15, BR-38, BR-39, BR-40, BR-43, BR-44, BR-26, BR-72
 - [ ] S21 batch G low: BR-96..BR-103, BR-157..BR-160
@@ -2922,10 +2925,10 @@ ticked with its date.
 - [ ] S23 WP34: BR-180, BR-181, BR-206, BR-207, BR-208, BR-211
 - [ ] S24 WP28: the engine prototype, `modhop.inc`, the scanner that sees macros
 - [ ] S11 rt-3, the PS/2 overlay, with input-10
-- [ ] S11 the keyboard mouse (**O6** TAKEN): the pointer half in `.boot3`, copied into a heap claim only on a mouseless machine, dropped when a late mouse speaks (the owner's shape)
+- [x] S11 the keyboard mouse (**O6** TAKEN): the pointer half in `.boot3`, copied into a heap claim only on a mouseless machine, dropped when a late mouse speaks (the owner's shape). -346 resident on kern_big/kern_small, -352 conventional on kern_mega; the new soak row `kbmadopt`. **Built (build, 2026-11-08) on `the-big-review`, merged into `elendilon` with BOOT3-PLAN as one deliverable**: docs/plans/completed/BOOT3-PLAN.md 16.11
 - [ ] S11 text-7 (**O7** TAKEN)
 - [ ] S18 the KHP round, row by row, each with the owner's answer (**O8**: per row); O8b
-- [ ] S31 BOOT3-PLAN wave 4 (owner: YES): `.boot2` back to the loader, splash, first-tick probe and status line; the `blobbodies` ratchet; BOOT2_SECS down
+- [x] S31 BOOT3-PLAN wave 4 (owner: YES): `.boot2` back to the loader, splash, first-tick probe and status line; the `blobbodies` ratchet; BOOT2_SECS down (to 7 on every kernel), with its preconditions boot-4 and boot-10. **Built (build, 2026-11-08) on `the-big-review`, merged into `elendilon` with BOOT3-PLAN as one deliverable**: docs/plans/completed/BOOT3-PLAN.md 16.9, 16.10
 
 **Phase 1, wave 7**
 

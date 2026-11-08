@@ -3280,7 +3280,7 @@ mou_evfill:
 
 ; =============================================================================
 ; THE POINTER HALF - `.boot3m`, a module image with no file (SPEC.md 9.6.7, 2.8.8,
-; docs/plans/BOOT3-PLAN.md wave 5)
+; docs/plans/completed/BOOT3-PLAN.md wave 5)
 ;
 ; What only a machine with NO pointer runs: the direction table, the key test,
 ; the button, the right button, the step and paint, keypad 5's spend and the

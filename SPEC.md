@@ -3899,7 +3899,7 @@ blob for convenience fails `make` until somebody writes down why.
 
 #### 2.9.15 `.boot3`: the boot's third home
 
-**The contract for docs/plans/BOOT3-PLAN.md.** The boot has three boot-only
+**The contract for docs/plans/completed/BOOT3-PLAN.md.** The boot has three boot-only
 homes, and each answers one question about a body:
 
 | home | where it lands | dead at | the question it answers |

@@ -1115,7 +1115,7 @@ assembled ahead of `boot/boot2.asm`, which is included at the foot.
 
 ### The third boot-only home: `.boot3`
 
-SPEC.md §2.9.15 (docs/plans/BOOT3-PLAN.md). KERNEL.SYS's LAST section, read
+SPEC.md §2.9.15 (docs/plans/completed/BOOT3-PLAN.md). KERNEL.SYS's LAST section, read
 with the kernel after the splash is up rather than ahead of it as the blob
 is, landing under the blob at a constant segment (`B3_SEG`; on kern_big
 `VGABUF_RAM`, over `.vgabuf`'s RAM and the lift) and given back at
@@ -1148,7 +1148,7 @@ The big
 review's canary fix, boot-7 and item E then took the shipped blob down **21
 bytes on kern_big, kern_emu and kern_mega and 32 on kern_small** (MEASURED off
 the maps: kern_big 6,148 -> 6,127 of 6,656; kern_small 3,495 -> 3,463 of
-5,632; kern_mega 5,887 -> 5,866 of 7,168; docs/plans/BOOT3-PLAN.md 16.6).
+5,632; kern_mega 5,887 -> 5,866 of 7,168; docs/plans/completed/BOOT3-PLAN.md 16.6).
 
 **Wave 2 took the SYSTEM.CFG reader and the boot driver loader** -
 `drv_boot_x` and its cone, `bxf_sync`, a KGO pair of `.boot3`'s own - out of

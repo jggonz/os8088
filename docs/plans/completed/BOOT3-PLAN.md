@@ -1,10 +1,13 @@
 # `.boot3` — boot-only code that rides in KERNEL.SYS
 
-> **Status: BUILT, host-checked; the final pass is owed. Waves 0, 1, 2, 3, 4
-> and 5 are built (2026-11-08, sections 16.4, 16.5, 16.7, 16.8, 16.10 and
-> 16.11), and so are item E with the big review's canary fix (BR-1) and boot-7
-> (section 16.6), and wave 4's two preconditions boot-4 and boot-10 (section
-> 16.9). Section 13's union of rows runs once, in the final pass.** Written 2026-11-08 at the owner's
+> **Status: COMPLETE (2026-11-08).** Waves 0-5 are built (sections 16.4,
+> 16.5, 16.7, 16.8, 16.10, 16.11), with item E, the big review's canary fix
+> (BR-1) and boot-7 (16.6), wave 4's preconditions boot-4 and boot-10 (16.9)
+> and the `b3poison` knob (16.12). The final pass ran once (16.15): section
+> 13's deduplicated soak union and `test-full`, the failures fixed (16.13,
+> 16.14 and the end of 16.11) and only those rows re-run green. This file is
+> now the record of how `.boot3` was built; SPEC.md 2.9.15 and
+> docs/KERNEL-MEMORY.md are what it is. Written 2026-11-08 at the owner's
 > request, after the big review's size ledger asked for a 14th blob sector
 > and the owner refused it (docs/reports/BIG-REVIEW-2026-11-08.md section 7,
 > docs/reports/big-review-2026-11-08/synth/phase1.md "Both boot-time homes
@@ -3044,3 +3047,29 @@ the fix in private copies at one commit count (974): all four kernels'
 are identical. The foot's `%if` can no longer fire on its own - the
 derivation covers the byte by construction - so it guards an edit to the two
 `equ`s, not the window.
+
+### 16.15 The final pass (2026-11-08)
+
+One scoped soak union of the 70 soak rows the waves named (section 13 and
+each wave's "Rows to name"; Bochs, qemu9 and 86Box installed first so that
+none skipped), then `test-full` once.
+
+- **Soak, 68 of 70 passed.** `buildmatrix` (`BOOTPROF=1` no longer
+  assembled; fixed by deriving SPL_RESIDENT over `[vid_cgamode]` too, 16.14)
+  and `kzboot-off` (the NOKZIP 720KB system disk one cluster over; NOKZIP
+  exempted from `KERN_KNOB`'s pads, 16.13). Both were the branch's.
+- **`test-full`, 88 passed, 3 failed, 2 skipped.** `small128` and
+  `kernresident` read wave 5's 512-byte keyboard-mouse claim on their
+  mouseless machines by ADDRESS; they now charge that one claim by size and
+  still refuse any other pinned claim (end of 16.11). `guidelock-full` failed
+  identically at `origin/elendilon`: the first run with archive.org's stories
+  on the live volume found them, and two live-only programs, without guide
+  entries - paid separately, not by this plan.
+- **Re-run, on the integrated tree, of only what failed:** `buildmatrix`,
+  `kzboot-off`, `small128`, `kernresident` - all four passed. Every fix moved
+  no shipped byte, so `test-full` was not run again.
+
+`NO_ROM_COLD` + `KERN_KNOB` still does not assemble, on `mou_p2knock`'s
+window guard; that failure predates this plan (16.5, deviation 6) and the knob
+is in no row's roster.
+

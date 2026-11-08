@@ -1,6 +1,6 @@
 ; =============================================================================
 ; boot3.inc - `.boot3`, THE THIRD BOOT-ONLY HOME (SPEC.md 2.9.15,
-; docs/plans/BOOT3-PLAN.md)
+; docs/plans/completed/BOOT3-PLAN.md)
 ;
 ; A HOME, NOT A STAGE. Nothing jumps here and there is no boot/boot3.asm:
 ; `boot/boot.asm` (stage 1) reads `.boot2` (boot/boot2.asm, the blob), `.boot2`

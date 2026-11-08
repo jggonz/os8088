@@ -68,7 +68,7 @@ The owner answered the review the same day (`../owner-decisions.md`, binding).
 Five follow-ups re-read what the answers touched (`../followup-canary.md`,
 `../followup-purgeable.md`, `../followup-decisions-6-8.md`,
 `../followup-already-exists.md`, `../areas/gap-bss-zeroing.md`), and
-`docs/plans/BOOT3-PLAN.md` replaces the refused 14th blob sector. For this
+`docs/plans/completed/BOOT3-PLAN.md` replaces the refused 14th blob sector. For this
 view:
 
 - **"Packages are trusted" is a recorded principle, not an open ruling**

@@ -1168,7 +1168,7 @@ TOAST_MAX   equ 24
   %endif
 %endif
 ; `.boot3` - EVERY KERNEL has the third boot-only home (SPEC.md 2.9.15,
-; docs/plans/BOOT3-PLAN.md): the file's last section, landing under the blob,
+; docs/plans/completed/BOOT3-PLAN.md): the file's last section, landing under the blob,
 ; dropped at mem_unblob. kernel/boot3.inc is its frame and B3SECT / B3CALL /
 ; B2CALL (beside BLOBCALL) its macros. kern_big and kern_emu took it over from
 ; `.cfx` in wave 0; kern_small, kern_mega and the NO_COLD_SLIDE / NO_ROM_COLD
@@ -5570,7 +5570,7 @@ api_sysfp:  dw dwf_dskw_write_sys  ; which verb the shared fenced cell runs:
 %endmacro
 
 ; B3SECT / B3CALL / B2CALL - `.boot3`, the third boot-only home (SPEC.md
-; 2.9.15.2, docs/plans/BOOT3-PLAN.md 4), which every kernel has. A body marked
+; 2.9.15.2, docs/plans/completed/BOOT3-PLAN.md 4), which every kernel has. A body marked
 ; B3SECT is in `.boot3`; its callers reach it with B3CALL, which is
 ; `call B3_SEG:x` (5 bytes; OVLCALL's shape - a constant segment, nothing
 ; published, nothing retired) or, inside `.boot3`, `push cs` + a near call.

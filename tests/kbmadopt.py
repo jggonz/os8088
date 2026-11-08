@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The keyboard mouse's pointer half: ADOPTED on a machine no pointer has
 spoken on, live out of its claim, and DROPPED when one first does (SPEC.md
-9.6.7, 2.8.8; docs/plans/BOOT3-PLAN.md wave 5).
+9.6.7, 2.8.8; docs/plans/completed/BOOT3-PLAN.md wave 5).
 
     python3 tests/kbmadopt.py [--break key|drop]
 

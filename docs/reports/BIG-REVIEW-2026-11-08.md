@@ -24,7 +24,7 @@ follow-ups re-checked what the answers turned on, all under
 - `areas/gap-bss-zeroing.md`: `.bss` is zero on every shipped path since PR #61.
 
 The design that replaces the refused 14th blob sector is
-`docs/plans/BOOT3-PLAN.md`. Every passage below that one of these changed is
+`docs/plans/completed/BOOT3-PLAN.md`. Every passage below that one of these changed is
 marked "(owner, 2026-11-08)" or "(follow-up, 2026-11-08)"; section 10 is now
 split into what is decided and what is still open. The plan,
 `docs/plans/BIG-REVIEW-PLAN.md`, carries the same changes as sessions.
@@ -72,7 +72,7 @@ The live risks that matter most:
 Two facts constrain the plans more than any byte total:
 - **kern_big's two transient homes are full.** The blob has 4 bytes free and
   `.ovl` has 1 (MEASURED). The owner refused a 14th blob sector; the route is
-  `docs/plans/BOOT3-PLAN.md`, which moves boot-only code into a third section
+  `docs/plans/completed/BOOT3-PLAN.md`, which moves boot-only code into a third section
   at the tail of KERNEL.SYS and frees about 508 blob bytes (its wave 1) and 176
   `.ovl` bytes (its wave 3) for 0 resident (owner, 2026-11-08).
 - **Phase 1 is a net resident saving on kern_big only if the owner takes
@@ -432,7 +432,7 @@ from `synth/phase1.md` inserted where it binds.
    WP6 (-41 blob) and WP7 (-45 `.ovl`) come first. Even after them, kern_big
    needs a 14th blob sector or boot-17's table, and `.ovl` bodies have to move
    out. **The owner refused the 14th sector** (it delays the progress bar by
-   0.4-0.8 s); `docs/plans/BOOT3-PLAN.md` is the route: boot-only code moves
+   0.4-0.8 s); `docs/plans/completed/BOOT3-PLAN.md` is the route: boot-only code moves
    into a `.boot3` section at the tail of KERNEL.SYS, read while the splash is
    already up and dropped before the `.vga` drop. Its wave 1 frees ~504 blob
    bytes and its wave 3 frees 176 of `.ovl`, for 0 resident (owner,
@@ -937,7 +937,7 @@ early. Even then:
   (clk_probe's RTC rungs first).
 
 **Decided (owner, 2026-11-08): no 14th sector.** The route is
-`docs/plans/BOOT3-PLAN.md` (a proposal, nothing built): a `.boot3` section at
+`docs/plans/completed/BOOT3-PLAN.md` (a proposal, nothing built): a `.boot3` section at
 the tail of KERNEL.SYS, read while the splash is already up, dropped before the
 `.vga` drop and the heap compaction. Its wave 0 is the mechanism (and takes
 boot-18, BR-154); wave 1 moves three closed clusters and frees ~504 blob bytes;
@@ -1044,7 +1044,7 @@ Outside the resident totals:
   -1,500..-3,000 (WP28, unprototyped); HDD.DRV ~-45; XMEM.DRV ~-17;
   HIBER.DRV/DISKOPS.DRV +54..+74.
 - **Packages:** mem-17 -10..-19 per image; DOS.O88 +150..+165 (WP34).
-- **Boot:** `docs/plans/BOOT3-PLAN.md` costs 0 resident through its wave 3
+- **Boot:** `docs/plans/completed/BOOT3-PLAN.md` costs 0 resident through its wave 3
   and -8 at wave 4 (PREDICTED, not counted above). KERNEL.SYS grows about
   +450 at its wave 1 and +1,950 by its wave 2 (+1 and +4 sectors), read after
   the bar: about +24 ms for wave 1 and +80 ms more for wave 2 on 360KB
@@ -1344,7 +1344,7 @@ the first version of this list, because the plan and the follow-ups cite them.
 - **2. A 14th blob sector on kern_big: NO** (owner, 2026-11-08). It delays the
   progress bar by 0.4-0.8 s, one or two more int 13h. Options (b) boot-17's
   table and (c) `vid_memchk` into `.boot2` fall with it. The route is
-  `docs/plans/BOOT3-PLAN.md`: a third boot-time section at the tail of
+  `docs/plans/completed/BOOT3-PLAN.md`: a third boot-time section at the tail of
   KERNEL.SYS, read while the splash is already up and dropped before the
   `.vga` drop and the heap compaction, so that `.boot2` goes back to "draw the
   splash and load kernel.sys". **Its own questions, second round:** generic
@@ -1457,7 +1457,7 @@ the first version of this list, because the plan and the follow-ups cite them.
   needed level is ABOVE the kernel's, because cells are only appended and an
   older package runs on a newer kernel. Confirm which is meant before session
   5 builds it.
-- **BOOT3-PLAN's remaining questions** (`docs/plans/BOOT3-PLAN.md` section
+- **BOOT3-PLAN's remaining questions** (`docs/plans/completed/BOOT3-PLAN.md` section
   15, not copied here). The second round answered questions 1, 3, 4 (kern_small
   opts in unless it truly does not need it, which is a finding the work has to
   make), 5, 6, 7 and 10. Open: 2 (wave 2's boot-time RAM), 8 (the clock ladder

@@ -4325,7 +4325,7 @@ from the code and `git log`, nothing booted):
   apart afterwards.
 - **The canary was inert on the 360KB and 720KB system disks** from
   2026-09-05 (KZIP the default) until the big review's BR-1 moved it to file
-  sector 57 (2026-11-08, docs/plans/BOOT3-PLAN.md 16.6) - but a LYING ROM
+  sector 57 (2026-11-08, docs/plans/completed/BOOT3-PLAN.md 16.6) - but a LYING ROM
   booting one of those disks would not have booted fine in that window: the
   corrupt tail would have been expanded, most likely hanging the decoder. So
   the report is consistent with an erroring ROM on any disk, or a lying ROM

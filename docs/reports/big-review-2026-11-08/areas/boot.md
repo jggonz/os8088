@@ -149,7 +149,7 @@ first mount), "boot sector" is stage 1 or `boothd.asm` (not RAM at all).
   kernel the canary has been inert on the 9-sector disks since 2026-09-05,
   and the 12 -> 13 step broke only the `NOKZIP=1` arm,
   `../followup-canary.md` section 3. Fixed (build, 2026-11-08):
-  docs/plans/BOOT3-PLAN.md section 16.6.)
+  docs/plans/completed/BOOT3-PLAN.md section 16.6.)
 
 **Recommendation.** Re-derive the band under the real partition (runs start at
 `data + BOOT2_SECS`, cylinder-bounded). Over all six shipped system images and
@@ -296,7 +296,7 @@ or 25 its comments claim.
 
 ### boot-7 (size, MEDIUM, now) Stage 2's copy of the DPT patch is dead, in a blob with four bytes free
 
-**Fixed (build, 2026-11-08)**: the block and stage 2's `DPT_AT` are deleted, -41 blob on every kernel (docs/plans/BOOT3-PLAN.md 16.6).
+**Fixed (build, 2026-11-08)**: the block and stage 2's `DPT_AT` are deleted, -41 blob on every kernel (docs/plans/completed/BOOT3-PLAN.md 16.6).
 
 **Evidence.** `boot.asm` 300-334 patches int 1Eh before stage 1's first
 multi-sector read (SPEC.md 2.9.8); the header comment says stage 2's copy is

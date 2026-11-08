@@ -38,7 +38,7 @@ The owner answered the review the same day (`../owner-decisions.md`, binding),
 and five follow-ups re-read what those answers touched
 (`../followup-canary.md`, `../followup-purgeable.md`,
 `../followup-decisions-6-8.md`, `../followup-already-exists.md`,
-`../areas/gap-bss-zeroing.md`). `docs/plans/BOOT3-PLAN.md` replaces the
+`../areas/gap-bss-zeroing.md`). `docs/plans/completed/BOOT3-PLAN.md` replaces the
 refused 14th blob sector. Each WP that moved says so in place, marked
 **(owner, 2026-11-08)** or **(follow-up, 2026-11-08)**. What moved:
 
@@ -917,7 +917,7 @@ bytes the bug pass's boot fixes need. No resident byte moves.
   worth taking but is no longer load-bearing; boot-18 (BR-154, guard 5 counts
   BLOB_LIFT) lands in BOOT3 wave 0; boot-4 and boot-10 gate BOOT3 wave 4's
   shrink of the blob (13 -> 7 or 8 sectors), not waves 0-3
-  (docs/plans/BOOT3-PLAN.md section 11).
+  (docs/plans/completed/BOOT3-PLAN.md section 11).
 
 **Sequencing with BR-1 (fit lens).** BR-1 keeps b2_runmax at the track bound
 "until SPL_RESIDENT sectors are aboard". boot-4 lowers SPL_RESIDENT from 9 to 5.

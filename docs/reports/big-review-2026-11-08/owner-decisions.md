@@ -21,7 +21,7 @@ these; this file is the record of what was said.
   third boot-time section at the tail of `kernel.sys`, read while the splash
   is already up and dropped before the `.vga` drop and heap compaction, so
   `.boot2` can go back to "draw the splash and load kernel.sys":
-  `docs/plans/BOOT3-PLAN.md`.
+  `docs/plans/completed/BOOT3-PLAN.md`.
 - **Packages are trusted (decision 3).** Real mode cannot defend against a
   hostile package (and on kern_mega an FSX real-mode bracket hands it real
   mode anyway), so the only thing worth defending against is our own
