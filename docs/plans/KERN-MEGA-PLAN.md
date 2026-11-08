@@ -16008,7 +16008,7 @@ the bracket's low copies - the owner's to trade, below - and no program can
 recover it.
 
 **What is left, for the owner** (not built):
-1. **The clip cache under kern_mega** (16 KB conventional for the CGA4
+1. **The clip cache under kern_mega** - BUILT in 14.179 (16 KB conventional for the CGA4
    battle at 640K + 384K, 72 KB for the VGA battle at 4 MB, and whole clips
    played in place where the copying hold copies). The cache needs the hold
    read in place in every bracket; on kern_mega a token is the block's
@@ -16053,3 +16053,137 @@ mega-release (the file run in its tree): the battle's region 48 KB in the
 pool, its hold 232 of 285; the player's region 64 KB, its bank 192 of 285.
 Green here. `$OS88_VBT_TARGET` / `$OS88_VBT_PKG` point the battle leg at the
 owner's battles; unset, the demo bundle.
+
+### 14.179 Video Battle's CLIP CACHE in kern_mega's real-mode bracket: the hold read where the pool has it NOW (`OSAPI_XMEM_COPY` CX = 0) (2026-11-08) - FIXED
+
+14.178's proposal 1, the owner's parity ask (*"this whole session is about
+make real have parity so we can actually release it"*): on kern_big the
+Video Battle's hold is a CACHE of whole clips played where they lie, its
+idle loop inside it (SPEC.md 126.4.6); kern_mega's `vb_ctry` refused the
+cache under `[vb_pmd]` and ran the copying hold, the idle loop in the
+resident claim - 16 KB of conventional memory for the owner's CGA4 battle
+and 72 for the VGA one at 4 MB, and every clip copied into a ring where
+kern_big's plays in place.
+
+**Why it was refused, and the one thing it needed.** The cache reads its
+block IN PLACE through a borrowed DS base (LOADALL on a 286, a loaded base
+on a 386, 126.4.2), which only real mode can do - kern_mega's play runs in
+a real-mode bracket (53.2.3), so that half was there - at the block's
+linear address, which on kern_big is its token. On kern_mega the token is
+a name: the pool MOVES a token's block (50.6.10: every block moves, a
+claim that does not fit packs the pool up) between brackets, never inside
+one. The hold opens at the door, in protected mode, where neither borrow
+can be tried, and the bracket had no way to ask where the block is. The
+whole-hold read in place (126.4.2) already ran on kern_mega by trusting the
+token, its 16-byte check catching a move and falling back to the copy - a
+fallback the cache cannot have, its idle loop having no resident room.
+
+**The kernel: `OSAPI_XMEM_COPY` CX = 0 is WHERE, inside the real-mode
+bracket** (`rms_xcopy`, the cell's twin in the service area, `.mega`;
+SPEC.md 53.2.3). No byte moved: CF = 0 and DX:AX = the LINEAR address the
+extended end is at NOW - `rms_xchk`'s translation through the bracket's
+copy of `mx_tab`'s rows, which the copy already made for every transfer,
+answered instead of used; AX = 1 / 2 as for a copy (no store, not a block
+of yours). Every other kernel and kern_mega in protected mode answer CX = 0
+AX = 3, a bad length, as they always have (kern_big's XMEM.DRV `.e3`,
+kern_mega's `mx_copy`, kern_small's no store), so the answer is a
+refusal turned into an answer and nothing built before changes:
+`PKG_FMT` 10 and `DRV_VER` 12 kept, `tools/abilock.py --update` (the
+SDK's comment says so, `apps/os88api.inc`). A protected-mode answer was
+not added: a linear address is of no use to code that cannot borrow a
+base, and on a real-mode kernel the token IS the address.
+
+**The engine** (`apps/vbattle/`, the shipped one - VBATTLE-MEGA-PLAN's
+one engine):
+- `[vb_hlin]`, the base every in-place read is aimed from (`vb_bat`, and
+  `vb_hipok`'s 16 bytes): the token on a real-mode kernel; in kern_mega's
+  bracket the twin's answer, asked by `vb_hipok` each time it checks.
+- `vb_hipok` under `CPU_F_PM` (kern_mega's door) answers the tier alone -
+  XMS on a 286 or later (EMS as everywhere: the four quarters and the
+  board's speed) - so `vb_ctry` plans the cache there (`vb_cplan`, pure
+  arithmetic), and the hold opens BEFORE the resident claim is sized
+  (`vb_load`'s `.rings`, a real-mode kernel's place since the cache was
+  built), so the claim has no part for the idle loop.
+- `vb_main` checks the cache first thing in every bracket (`vb_hipok` in
+  real mode: the twin's WHERE, LOADALL probed with INT 6 hooked on a 286,
+  the 16 bytes); refused - a 286 with no LOADALL, a gate a BIOS closed -
+  it returns at once (`[vb_cnope]`), and `vb_play` shuts the A/B gate
+  (`[vb_noinp]`, the window's life), unloads and plays again from the door
+  with the copying hold: the play still happens, as kern_big's would on
+  that machine. Seen working by forcing the refusal: the copying hold,
+  the title reached, `[vb_noinp]` 1.
+- **The cache's rings: ring 1 claimed first.** On Bochs's kern_mega the
+  first build said "Not enough memory": ring 0 was sized as
+  `OSAPI_MEM_AVAIL`'s run less ring 1's least and 4 KB of slack, and AVAIL
+  counted free a 9 KB cache (kern_mega's pinned read-ahead) that a claim
+  which fits a free run does not shed - so ring 1 found 9 KB less than it
+  was left (traced: AVAIL 435, ring 0 340, AVAIL after 86 where 95 was
+  planned). Ring 1 at its least now goes first and ring 0 takes the largest
+  run left (`vb_rclaim`'s `.pair`), on every kernel: kern_big's rings
+  measure as before (368 / 332 KB below), and a used kern_big machine with
+  a cache standing apart from its run was open to the same failure.
+
+**Measured** - 86Box's `at286_vga_sb_hdd` (the mr286, VGA, SB 2.0, IDE),
+both kernels on the one machine, the battle on C:, read at the title
+(`tests/megapar.py`), the owner's two battles (supplied for profiling,
+never in the tree) and the demo. Hold KB in extended memory / the two
+conventional rings, guards aside:
+
+| battle, machine | kern_big | kern_mega before (mega-release) | kern_mega after |
+|---|---|---|---|
+| CGA4 6.3 MB, 640K + 384K | 316 / 368, cache | 280 / 320, copying | 280 / 336, cache |
+| CGA4, 2 MB | 956 / 368, cache | 920 / 320, copying | 920 / 336, cache |
+| CGA4, 4 MB | 3,004 / 368, cache | 2,964 / 320, copying | 2,964 / 336, cache |
+| VGA 16.0 MB, 640K + 384K | 316 / 260, none | 280 / 224, copying | 280 / 224, copying (kern_big's has no cache either) |
+| VGA, 4 MB | 3,004 / 332, cache | 2,964 / 224, copying | 2,964 / 296, cache |
+| demo, 640K + 384K | 316 / 396, cache | 280 / 348, copying | 280 / 360, cache |
+
+CLIPS IN PLACE, at the title: kern_mega before 0 rings and 0 records read in
+place in every row; after, wherever kern_big's is a cache, 1-2 rings given
+their clip in place and 406-425 records read there (kern_big 391-411), the
+idle loop in the block. The hold KB are unchanged (the cache is a use of the
+same block); the conventional rings gain exactly the idle loop - 16 KB for
+the CGA4 battle and 12 for the demo, 72 for the VGA battle. What kern_mega
+still holds less: 36 KB of extended memory and 32 of conventional (CGA4,
+640K + 384K) - 14.178's kernel-side residue, the bracket's 18 and the
+rest's 14, none of it the program's; proposals 2 and 3 there are the
+owner's.
+
+**A move between plays costs nothing**, held to the glass: `vbtmega`'s and
+`vbtmega86`'s hold legs (Bochs's 386, 86Box's 286) move the cache's block
+between the two plays as the pool's pack moves one - the bytes a reader
+reaches written under the lowest pool block, its `mx_tab` row's `MX_OFF`
+pointed there, the token kept, the old place scrambled - and the second
+bracket reads it where it is (`[vb_hlin]` the new base, the title exact,
+12 of 12 looks), by a loaded base and by LOADALL. The EMS hold (86Box's
+Lo-tech board) is the cache too.
+
+Rows - each RED on mega-release (its tree, the new file run there) and
+green here:
+- `megaparvb` (and the owner's battles through `$OS88_VBT_TARGET` /
+  `$OS88_VBT_PKG`): its new check 5, kern_mega's hold the CLIP CACHE
+  wherever kern_big's is - the idle loop in its block, rings and records
+  in place, the gate open. Red on mega-release for the demo and the owner's
+  CGA4 (both sizes) and VGA (4 MB) battles: kern_big's cache, kern_mega's
+  copying hold, 0 records in place.
+- `vbtmega` / `vbtmega86` hold legs: the cache (red on mega-release), every
+  clip filled before the battle's disk reads are counted, and the move.
+  BROKEN ON PURPOSE (`vb_hipok` aiming at the token instead of the twin's
+  answer): the moved block's check fails, the battle reloads with the
+  copying hold, and the move leg goes red (`[vb_hlin]` the old base, the
+  cache 0).
+
+Bytes: kern_mega `.mega` 24,160 -> 24,176 (+16: `rms_xcopy`'s WHERE exit;
+the copy's own `jcxz` is gone, CX = 0 passing the length test into the
+translation), `.text` +0 and `.cold` +0 (`tests/megaseg.txt` unchanged),
+resident 62,976 unchanged; the service area's conventional claim +16 for
+a bracket. kern_big's and kern_small's `kernel.bin` and `kernel.sys`
+byte-identical (`cmp` at one commit). VBATTLE.O88 image 28,443 -> 28,505
+(+62), bss +5, the packed file 22,743 -> 22,801 (+58), all kernels' one
+engine (tests/megapkg.txt's allowance for `vbcache.inc` unchanged, its
+reason rewritten).
+
+**Next, not built:** the Video Player's arm keeps a play in protected mode
+when its XMS bank has MOVED (98.3.24's MOVED reason: "real mode reads a
+bank at its token's address"); the same WHERE answer would let that
+bracket read the bank where it is instead.

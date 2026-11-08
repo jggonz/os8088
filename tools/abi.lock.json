@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "21ca0722f0583976b9c5107db252d61c76c5b108f682ffb577a66077f26c121b",
+  "fingerprint": "1de7b23ac1205c3f46ac3c96b633f2773c7022d61acce1d4b81b50b984528e8b",
   "version": 12
  },
  "PKG_FMT": {
-  "fingerprint": "b17dfe3075902ee596997aa22421a316ed306324db1f1e5543fbc30d65101bd8",
+  "fingerprint": "384bdaff9353a174d8a2d1f2d70e78504b915d419293c1c62b11339416646eed",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -1869,6 +1869,20 @@
    "from": 12,
    "guard": "DRV_VER",
    "reason": "merge of mega-fsxpar (KERN-MEGA-PLAN 14.178): OSAPI_SEG verb SEG_LOW (14) added past SEG_TYPE on top of F8's regrow - an addition, every older verb as it was, real-mode kernels refuse it as an unknown verb; no PKG_FMT or DRV_VER bump",
+   "to": 12
+  },
+  {
+   "fingerprint": "384bdaff9353a174d8a2d1f2d70e78504b915d419293c1c62b11339416646eed",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_XMEM_COPY: CX = 0 answers WHERE (the extended end's linear address now) inside kern_mega's real-mode bracket; a bad length (refused) everywhere else, as before - an answer where there was a refusal, nothing built before changes (KERN-MEGA-PLAN 14.179)",
+   "to": 10
+  },
+  {
+   "fingerprint": "1de7b23ac1205c3f46ac3c96b633f2773c7022d61acce1d4b81b50b984528e8b",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_XMEM_COPY: CX = 0 answers WHERE (the extended end's linear address now) inside kern_mega's real-mode bracket; a bad length (refused) everywhere else, as before - an answer where there was a refusal, nothing built before changes (KERN-MEGA-PLAN 14.179)",
    "to": 12
   }
  ]

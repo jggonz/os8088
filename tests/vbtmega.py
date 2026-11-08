@@ -48,13 +48,24 @@ inside an FSXF_REAL bracket:
           and its play again with no disk read, the decode yielding, the
           title again exact; and a second bracket checks in place again.
           BROKEN ON PURPOSE (the door's vb_hopen left out) no hold opens and
-          this goes red. A block the pool MOVED between plays fails that
-          check and the hold copies instead - not provoked here.
+          this goes red. KERN-MEGA-PLAN 14.179: the hold is the CLIP CACHE
+          (126.4.6) - the idle loop in its block, every slot its own place,
+          every clip filled before the battle's disk reads are counted - and
+          before the second bracket the block is MOVED as the pool's pack
+          moves one (the bytes a reader reaches written under the lowest
+          pool block, its mx_tab row's MX_OFF pointed there, the token
+          kept, the old place scrambled): the second bracket asks where it
+          is (OSAPI_XMEM_COPY CX = 0) and reads it there, the cache kept and
+          the title exact. RED on mega-release (no cache under kern_mega);
+          BROKEN ON PURPOSE (vb_hipok aiming at the token rather than the
+          twin's answer) the moved block fails the check, the battle
+          reloads with the copying hold, and the move leg goes red.
   ems     W4: the hold in EXPANDED memory - a Lo-tech board added to 86Box's
           mr286 (the name's _ems) and kern_mega's system disk given a
           SYSTEM.CFG wanting EMS.DRV: the hold opened at the door through
           EMS.DRV, the list carrying DRVC_EMS, filled through the twin and
-          READ IN PLACE through the frame; no disk read from the fill on.
+          READ IN PLACE through the frame - the clip cache too, the board
+          as fast as RAM; no disk read from the fill on.
   refuse  the kernel made to fall back: at OSAPI_FSX_RUN's call the list
           gains FSXL_DRV DRVC_NET, a class the real-mode bracket does not
           carry (FSXR_DRV) - so the bracket runs in PROTECTED mode: vb_main
@@ -418,6 +429,23 @@ def hold(m, S, rb, rw, until, key, bd, data, sel, htype):
        "READ IN PLACE (tier %d: %s) - its 16 bytes in place matched the "
        "twin's copy" % (rb("vb_tier"), "a 286's LOADALL" if rb("vb_tier")
                         == 1 else "a 386's loaded base"))
+    nclips = len(bd.clips)
+
+    def tab(n):
+        return struct.unpack_from("<%dH" % nclips,
+                                  m.readseg(sel(), SYMS[n], 2 * nclips))
+    # KERN-MEGA-PLAN 14.179: THE CLIP CACHE on kern_mega as on kern_big
+    # (SPEC.md 126.4.6) - XMS planned at the door on the tier and checked in
+    # the bracket, EMS on the frame's four quarters and a board as fast as
+    # RAM; the bundle fits, so every slot its own place
+    ok(rb("vb_cmode") == 1 and rb("vb_iinp") == 1 and rb("vb_cfix") == 1
+       and rb("vb_noinp") == 0,
+       "hold: the CLIP CACHE (126.4.6), the idle loop in its block, "
+       "every slot its own place - as kern_big's")
+    if rb("vb_cmode"):
+        until(lambda: all(c != 0xFFFF and h >= l for c, l, h in
+                          zip(tab("vb_cx"), tab("vb_cl4"), tab("vb_chave"))),
+              "every clip into the cache", 240)
     r0, i0, y0 = rw("vb_rcalls"), rw("vb_icalls"), rw("vb_iyc")
     key("Enter")
     until(lambda: rb("vb_state") == GS_MENU, "the menu", 240)
@@ -444,14 +472,67 @@ def hold(m, S, rb, rw, until, key, bd, data, sel, htype):
     key("Escape")
     until(lambda: rb("vb_ready") == 0, "Esc to the desktop", 60)
     os88marty.ui_done(m)
+    moved = None
+    if htype == 1 and rb("vb_cmode"):
+        moved = move_hold(m, rb, rw, sel, bd, data)
     key("Enter")
     until(lambda: rb("vb_ready") == 1 and rb("vb_tplay") == 1,
           "the second play's title")
     ok(rb("vb_hinp") == 1 and rw("vb_err") == 0,
        "hold: a SECOND bracket checks the read in place again and keeps it")
+    if moved is not None:
+        hlin = struct.unpack("<I", m.readseg(sel(), SYMS["vb_hlin"], 4))[0]
+        hits = 0
+        for _ in range(12):
+            hits += glass(m) in title
+            until(lambda: True, "a look", guest=0.15)
+        ok(hlin == moved and rb("vb_cmode") == 1 and rb("vb_noinp") == 0
+           and hits >= 6,
+           "hold: the pool MOVED the block between plays (to %06X, its old "
+           "place scrambled) and the second bracket reads it IN PLACE where "
+           "it is now - [vb_hlin] %06X, OSAPI_XMEM_COPY's twin's CX = 0 "
+           "answer; the cache kept (%d), the title exact (%d of 12)"
+           % (moved, hlin, rb("vb_cmode"), hits))
     key("Escape")
     until(lambda: rb("vb_ready") == 0, "Esc again", 60)
     ok(not faults(m, S), "hold: no kern_mega FAULT or CLOSED")
+
+
+def move_hold(m, rb, rw, sel, bd, data):
+    """KERN-MEGA-PLAN 14.179: the hold's block MOVED, between plays, as
+    the pool's pack moves one (SPEC.md 50.6.10): what a reader of the block
+    reaches - its first 4 KB (the in-place check's 16 bytes) and the title's
+    clip, each at its own offset (the cache holds the whole file) - written
+    under the lowest pool block, its mx_tab row's MX_OFF pointed there and
+    its TOKEN kept, and the old place scrambled. Answers the block's new
+    linear base"""
+    MX_NBLK, MX_BLKSZ = 96, 10
+    tok = struct.unpack("<I", m.readseg(sel(), SYMS["vb_htok"], 4))[0]
+    aux = (tok - 0x100000) >> 10
+    t = m.tail("mx_tab")
+    raw = m.read(t, MX_NBLK * MX_BLKSZ)
+    rows = [(i, u16(raw, i * MX_BLKSZ), u16(raw, i * MX_BLKSZ + 2),
+             raw[i * MX_BLKSZ + 4], u16(raw, i * MX_BLKSZ + 8))
+            for i in range(MX_NBLK) if u16(raw, i * MX_BLKSZ + 2)]
+    mine = [r for r in rows if r[3] < 0x80 and r[4] == aux]
+    if len(mine) != 1:
+        raise SystemExit("vbtmega: the hold's row in mx_tab: %r" % mine)
+    i, off, kb = mine[0][:3]
+    new = min(r[1] for r in rows) - kb - 8
+    if new < 128:
+        raise SystemExit("vbtmega: no room under the pool's blocks to move "
+                         "the hold to (%d KB)" % new)
+    old_lin, new_lin = 0x100000 + off * 1024, 0x100000 + new * 1024
+    c = bd.clips[bd.title]
+    spans = [(0, 4096), (c["off"], c["len"])]
+    for o, n in spans:
+        m.write(new_lin + o, data[o:o + n])
+    m.write(t + i * MX_BLKSZ, struct.pack("<H", new))
+    for o, n in spans:
+        m.write(old_lin + o, bytes((0xA5 + k) & 0xFF for k in range(n)))
+    print("   the hold moved: %06X -> %06X (%d KB, token %06X)"
+          % (old_lin, new_lin, kb, tok), flush=True)
+    return new_lin
 
 
 def music_heard(cap, bd):

@@ -3007,6 +3007,13 @@ KIND_PKG   equ 0x80             ; SSI_KIND bit 7: this instance is a package
                                  ; from extended. out CF=0 done; CF=1 and AX =
                                  ; 1 no store / 2 the range is not inside a
                                  ; block you own / 3 bad length. ES is restored.
+                                 ; CX = 0 is a bad length (3) everywhere but
+                                 ; INSIDE kern_mega's REAL-MODE bracket
+                                 ; (FSXF_REAL, SPEC.md 53.2.3), whose twin
+                                 ; answers WHERE: no byte moved, CF=0 and DX:AX
+                                 ; = the LINEAR address the extended end is at
+                                 ; NOW - a token's block moves on kern_mega
+                                 ; between brackets, never inside one.
 %define OSAPI_XMEM_WALK     KERNEL_SEG:0x04BF   ; ES:DI = room for CX records
                                  ; of XMW_SIZE bytes; out CF=0 and AX = the
                                  ; extended pool's blocks written, each
