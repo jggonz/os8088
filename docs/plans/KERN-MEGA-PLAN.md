@@ -15553,7 +15553,9 @@ are assembled against its map (`tools/pxlink.py -D PKG_MEGA`). And with F4
 merged (14.171) the PACKED whole-file read (`px_rflat`) past 64KB is one
 `OSAPI_MEM_HUGE` claim too, `HUGE_NOBRIDGE` (its readers aim by `SEG_SUB`),
 in the pool where it has the run: a packed picture whose expansion the heap
-could not hold beside its master did not open at all before.
+could not hold beside its master did not open at all before - on 4MB the
+largest packed 1024-wide 8-bit BMP opened at 1/1 was 1024 x 512 (513 KB
+expanded), and is 1024 x 992 (993 KB, the readers' 1MB of paragraphs).
 
 Measured on 86Box's at286_vga_sb (`tests/megapxhuge.py --find`, a 2048-wide
 8-bit PCX, heights to 32 rows; mega-release's arm against this one):

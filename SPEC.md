@@ -215035,7 +215035,10 @@ holds free. What the arm does:
   selector, whose reach a cut stops - which the pool takes when it has the
   run and the kernel expands the file into whole (MEGA-HUGE-PLAN F4,
   KERN-MEGA-PLAN 14.171); refused, the paragraph door as before. Still at most
-  1MB of file: the readers' offsets are 16-bit paragraphs.
+  1MB of file: the readers' offsets are 16-bit paragraphs. Measured on 4MB
+  (`megapxhuge.py --bmp --find`, a packed 1024-wide 8-bit BMP): the largest
+  opened at 1/1 1024 x 512 (513 KB expanded) -> 1024 x 992 (993 KB, the 1MB
+  of paragraphs).
 
 **The arm's resident is its own now**, so its bss is not the shipped one's:
 `$(MEGAAPPDIR)/pixel.bin` is pixel.asm assembled `-DPKG_MEGA`, `tools/pxlink.py
