@@ -274,7 +274,8 @@ def main():
         # THE PLAIN HEAD'S LENGTH IN BYTES, for os88kz.py --head (the big
         # review's boot-4): max(SPL_RESIDENT, KZ_HEADMIN), SPL_RESIDENT read
         # off the map pass 1 just wrote - kernel.asm's foot derives it from
-        # spw_resident_end, and the map lists every absolute equ
+        # spw_resident_end and [vid_cgamode], and the map lists every
+        # absolute equ
         m = re.search(r"^([0-9A-F]+)\s+SPL_RESIDENT\s*$",
                       open(a.map, errors="replace").read(), re.M)
         if not m:

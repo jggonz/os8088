@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 """Does anything the splash's first tick runs JUMP into sectors not yet aboard?
-(SPEC.md 15's `SPL_RES_SIZE` guard, SPEC.md 15.1.2's ladder)
+(SPEC.md 15's derived `SPL_RESIDENT` window, SPEC.md 15.1.2's ladder)
 
     python3 tests/unit/t_resident.py [-v]
 
 Stage 2 ticks the loading screen once the image's first `SPL_RESIDENT` sectors
 have landed, and that first tick PROBES THE ADAPTER - `vid_detect`,
 `vid_apply`, `vid_setmode`, `gfx_rowbase`, through four far shims that end at
-`spw_resident_end`. kernel.asm already asserts that those shims END inside the
-window:
+`spw_resident_end`. kernel.asm DERIVES the window so that those shims (and
+the first tick's `[vid_cgamode]` store) END inside it:
 
     SPL_RES_SIZE equ spw_resident_end - $$
-    %if SPL_RES_SIZE > SPL_RESIDENT * 512
+    SPL_RES_TICK equ vid_cgamode + 1 - $$
+    SPL_RESIDENT equ (max(SPL_RES_SIZE, SPL_RES_TICK) + 511) / 512
 
 **That is a SIZE check, and size is not reach.** A routine can sit wholly
 inside the window and still jump to a helper at the far end of `.text`, and
@@ -61,7 +62,9 @@ OTHER route - `test-full` is what catches that, as it did here.
 THE SECOND CHECK IS ABOUT DATA, and it is what made SPL_RESIDENT safe to
 DERIVE rather than argue (the big review's boot-4, BR-153). kernel.asm's foot
 computes SPL_RESIDENT from spw_resident_end now - 5 sectors where the hand rung
-said 9 - and a label measures where the CODE ends, not what the code NAMES.
+said 9 - and from [vid_cgamode], the one first-tick store past it that must
+survive, whichever ends later (BOOT3-PLAN 16.14); and a label measures where
+the CODE ends, not what the code NAMES.
 The ticks read and write kernel words further up `.text` (vid_setmode's
 [vid_cgamode], its VESA arm's [vx_ep]) and in `.bss` ([ui_post]), and a store
 there on the first tick lands in a sector stage 2 has not read - or, under

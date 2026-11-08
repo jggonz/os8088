@@ -2495,14 +2495,19 @@ below `[spl_live]`, `[blk_on]`, `[spl_busy]` and `[spl_quiet]`: the ticks
 store the first and third and read the last, and this section's own rule is
 that a first-tick store belongs in the head or the blob, never past it — the
 label stopped four bytes short of them. And `SPL_RESIDENT` is no longer typed:
-the foot of `kernel.asm` computes `SPL_RESIDENT equ (SPL_RES_SIZE + 511) / 512`
-from the label — **5 sectors on kern_big, kern_small and kern_emu, 6 on
-kern_mega** (whose `spw_resident_end` is 0xA13). It reaches only the NOKZIP
-arm's tick-gate immediate and the foot's `%if`s, so no byte of `.text` moves
-with it. A label measures where the CODE ends, not what the code NAMES, so two
-more fences cover the rest: an `%if` holds `[vid_cgamode]` — the one store
-`vid_setmode` makes on the first tick that is not re-made before anything reads
-it — inside the window, and `tests/unit/t_resident.py` walks the ticks' code
+the foot of `kernel.asm` computes it from the label and from `[vid_cgamode]`
+— the one store `vid_setmode` makes on the first tick that is not re-made
+before anything reads it, which `vidsel.inc` puts past the label — as the
+sectors that cover WHICHEVER ENDS LATER, `max(SPL_RES_SIZE, SPL_RES_TICK)`
+rounded up: **5 sectors on kern_big, kern_small and kern_emu, 6 on
+kern_mega** (whose `spw_resident_end` is 0xA0F). It reaches only the NOKZIP
+arm's tick-gate immediate, the plain head's length and the foot's `%if`s, so
+no byte of `.text` moves with it. The byte was an `%if` of its own against the
+label's window until `make BOOTPROF=1` tripped it (BOOT3-PLAN 16.14): it sits
+0xC3 bytes past the label, so the check held only while the label fell that
+far short of a sector boundary - a rung's answer - and the `%if` that stays
+now checks the derivation. A label measures where the CODE ends, not what the
+code NAMES, so `tests/unit/t_resident.py` covers the rest: it walks the ticks' code
 (from `spl_tick` and `spl_isr`, through near calls, `BLOBCALL` and
 `spw_near`'s BP target) for every DS reference, failing one past the window or
 in `.bss` that `tests/tickrefs.txt` does not explain. A `cs:` override is a DS
@@ -33065,7 +33070,9 @@ item E, §2.9.13.1), with AX = 0. Contract: AX = sectors loaded so far, DX = tot
 `spl_tick` preserves every register, runs on stage 1's stack with DS =
 `KERNEL_SEG` and its own data `cs:`, and returns with `ret`. `SPL_RESIDENT`
 is **derived**, at the foot of `kernel.asm`, from `spw_resident_end` - which
-`viddet.inc` puts after the four bytes the ticks touch - and is typed nowhere;
+`viddet.inc` puts after the four bytes the ticks touch - and from
+`[vid_cgamode]`, the first tick's one surviving store past it, and is typed
+nowhere;
 the Makefile reads it off pass 1's map for the plain head's length (§2.9.4,
 §2.9.13.1), and `tests/unit/t_resident.py` walks the ticks for the data they
 name past it. The

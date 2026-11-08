@@ -1313,7 +1313,10 @@ vid_cgamode db 0x1E             ; THE CGA'S OWN 3D8h VALUE (SPEC.md 39.18.1.1),
                                 ; the other card at boot) is at least
                                 ; self-consistent. OUTSIDE this file's
                                 ; %ifdef KERN_BIG: the idle blanker is not a
-                                ; dual-display feature, and neither is this
+                                ; dual-display feature, and neither is this.
+                                ; The first tick STORES it, so it is one of
+                                ; the two ends SPL_RESIDENT is derived over
+                                ; (kernel.asm's foot, BOOT3-PLAN 16.14)
 
 
 ; -----------------------------------------------------------------------------

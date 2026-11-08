@@ -45,7 +45,9 @@ section .boot2                  ; ...and it lives in STAGE 2 (SPEC.md 2.9.4).
 ; slots; nothing in this file had grown either time) - and the last of them
 ; left it four sectors bigger than what it measures. kernel.asm's foot derives
 ; it from spw_resident_end, which viddet.inc puts after the bytes the ticks
-; touch: 5 on kern_big, kern_small and kern_emu, 6 on kern_mega. Under KZIP the
+; touch, and from [vid_cgamode], the first tick's one lasting store past that
+; label (whichever ends later): 5 on kern_big, kern_small and kern_emu, 6 on
+; kern_mega. Under KZIP the
 ; plain head is max(SPL_RESIDENT, the Makefile's KZ_HEADMIN) - never shorter,
 ; and the foot refuses a build where it is. What the ticks reach past that label -
 ; data further up `.text` - is tests/unit/t_resident.py's to walk.

@@ -2329,7 +2329,8 @@ would have left vid_setmode reading unloaded memory on any arm that could
 reach the VESA kind early; `vid_rowtab` is a `.lowbss` store through
 `[ss:si]`. The one first-tick store that IS made and must survive,
 `[vid_cgamode]` (0x09E9 on kern_big - 23 bytes inside the window), is
-past `spw_resident_end`, so it gets its own `%if` at kernel.asm's foot.
+past `spw_resident_end`, so it gets its own `%if` at kernel.asm's foot
+(until 16.13 counted it into the derivation).
 **Broken on purpose**: the registry less `mouse_x` is red on all four kernels;
 a line nothing needs is red; `inc byte [evq_head]` planted in spl_tick in
 place of `inc byte [spl_busy]` is red on every kernel; both foot `%if`s were
@@ -2982,3 +2983,35 @@ exactly when the shipped 720KB system disk has the unpack's 21 clusters free.
 instead of the BOOT2_SECS literal plus a knob sector. No shipped byte moved:
 kern_big, kern_small, kern_emu, kern_mega and every SHIPIMGS image were
 `cmp`-identical before and after, at commit count 974 (uncommitted).
+
+### 16.14 `BOOTPROF=1` and `[vid_cgamode]` (final pass, 2026-11-08)
+
+The final pass's scoped soak had `buildmatrix` red on one check: `make
+bootprof assembles` (`BOOTPROF=1` on kern_big) died on the foot's
+`vid_cgamode is past the resident window`. That `%if` is boot-4's (16.9), so
+`origin/elendilon`, where SPL_RESIDENT was still a typed 9, builds the same knob
+cleanly: the failure is this branch's. `bootprof-small` assembled on both. The
+cause was a rung-shaped guard. SPL_RESIDENT was derived from `spw_resident_end`
+alone, and `[vid_cgamode]` (vidsel.inc, included after viddet.inc) sits 0xC3
+bytes past that label on kern_big. So the `%if` held only while the label fell
+at least 0xC3 bytes short of a sector boundary. On the shipped kernel it did,
+by 27 bytes (label 0x922, byte 0x9E5, window 0xA00). BOOTPROF's 28 bytes
+ahead of the label put the label at 0x93E and the byte at 0xA01, while the
+window stayed at 5 sectors: the first tick's CGA shadow store would land on
+the packed tail. **The fix counts the byte into the derivation**:
+`SPL_RES_TICK equ vid_cgamode + 1 - $$`, and SPL_RESIDENT is the sectors
+covering whichever of it and SPL_RES_SIZE ends later. The `%if` stays and now
+checks the derivation. Moving the byte below the label, which is what the old
+message advised, would have shifted vid_text..vid_bk by a byte in every
+shipped kernel. On the shipped kernels the derived count is unchanged (5 / 5 /
+5 / 6 on kern_big / kern_small / kern_emu / kern_mega; the byte ends at 0x9E6
+/ 0x8AB / 0x9EA / 0xAD4). The BOOTPROF kernel now gets 6 sectors and a
+6-sector plain head (`kernel.kz.json` headsecs 6), so its store survives
+rather than just assembling. t_resident's rungs check still ends at
+`spw_resident_end`, so vid_text's ladder exit stays outside the window it
+refuses. **Byte identity**: an independent verifier built the starting commit and
+the fix in private copies at one commit count (974): all four kernels'
+`kernel.bin`/`kernel.sys`, all 25 `$(SHIPIMGS)` images and the mega images
+are identical. The foot's `%if` can no longer fire on its own - the
+derivation covers the byte by construction - so it guards an edit to the two
+`equ`s, not the window.

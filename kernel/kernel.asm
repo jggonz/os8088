@@ -8751,19 +8751,35 @@ SPL_RES_SIZE equ spw_resident_end - $$
 ; thing tying the number to what it measured - so it moved only when the %if
 ; fired, and the last raise left it at 9 against a need of 5. The label is
 ; past the four bytes the ticks store and read (viddet.inc), so this is the
-; whole of the window by construction. What it does not count is DATA further
-; up `.text` that tick code names: tests/unit/t_resident.py walks for that,
-; and the one store that must survive the first tick has a line of its own
-; below. It reaches only an immediate in `.boot2` (the NOKZIP arm's tick
-; gate) and the %ifs below, so no byte of `.text` can move with it.
-SPL_RESIDENT equ (SPL_RES_SIZE + 511) / 512
+; whole of the CODE window by construction. What it does not count is DATA
+; further up `.text` that tick code names: tests/unit/t_resident.py walks for
+; that, and the one store that must survive the first tick is counted in by
+; name just below. It reaches only an immediate in `.boot2` (the NOKZIP arm's
+; tick gate), the plain head's length (tools/os88ksig.py head) and the %ifs
+; below, so no byte of `.text` can move with it.
 ;
 ; vid_setmode's one store that is NOT re-made before anything reads it: the
 ; CGA's 3D8h shadow, banked on the first tick (vidsel.inc). It is past
-; spw_resident_end, so the window above does not cover it by construction -
-; this does.
+; spw_resident_end - vidsel.inc is included after viddet.inc - so the label
+; does not cover it, and SPL_RESIDENT is derived from WHICHEVER ENDS LATER.
+; It was a %if of its own against the label's window until a knob tripped it
+; (`make BOOTPROF=1`, BOOT3-PLAN 16.14): vid_cgamode sits 0xC3 bytes past
+; spw_resident_end on kern_big, so the check held only while the label landed
+; at least that far short of a sector boundary - 27 bytes of rung slack on the
+; shipped kernel, and BOOTPROF's 28 bytes ahead of the label spent them.
+; A guard whose answer is where padding falls is the banner's wrong question;
+; counting the byte in is the derivation finishing its job. On every shipped
+; kernel the answer is the same sector count as the label's (5 / 5 / 5 / 6 on
+; kern_big / kern_small / kern_emu / kern_mega), so nothing shipped moves; a
+; knob that pushes the byte over gets the sector it needs.
+SPL_RES_TICK equ vid_cgamode + 1 - $$
+SPL_RESIDENT equ ((SPL_RES_SIZE > SPL_RES_TICK ? SPL_RES_SIZE : SPL_RES_TICK) + 511) / 512
+;
+; ...and the line that keeps the derivation honest about it: an edit to the two
+; equs above that drops vid_cgamode out of the window fails here rather than as
+; a CGA that comes back from its first fsx bracket in 80x25 text with blink on.
 %if vid_cgamode - $$ >= SPL_RESIDENT * 512
-%error "vid_cgamode is past the resident window: the first tick's store into it would land in a sector stage 2 has not read (or the packed tail), and the CGA's 3D8h shadow would be lost - move it below spw_resident_end (SPEC.md 15, 2.9.4)"
+%error "vid_cgamode is past the resident window: the first tick's store into it would land in a sector stage 2 has not read (or the packed tail), and the CGA's 3D8h shadow would be lost - SPL_RESIDENT must be derived over it as well as over spw_resident_end (SPEC.md 15, 2.9.4)"
 %endif
 ;
 ; ...AND THE PLAIN HEAD MUST HOLD IT (SPEC.md 2.9.13.1). Under KZIP the first

@@ -1749,8 +1749,9 @@ section .text                   ; ...and back, so the next include lands right
 ; calls are ABOARD, and the cw_ block is at the end of `.text` - the last
 ; sector of the image. Here it lands in `.text` sector 4 (0x91F on kern_big,
 ; 0x83F on kern_small, 0xA0C on kern_mega), and SPL_RESIDENT is DERIVED from
-; where the window ends (kernel.asm's foot, the big review's boot-4): 5
-; sectors on kern_big, kern_small and kern_emu, 6 on kern_mega.
+; where the window ends and from [vid_cgamode], whichever is later
+; (kernel.asm's foot, the big review's boot-4, BOOT3-PLAN 16.14): 5 sectors
+; on kern_big, kern_small and kern_emu, 6 on kern_mega.
 ; =============================================================================
 spw_near:   call bp
             retf
@@ -1810,7 +1811,9 @@ spl_quiet   db 0
 ; [spl_live] and [spl_busy] and read [spl_quiet] on every tick, and SPEC.md
 ; 2.9.4's rule is that a first-tick store belongs in the head or in the blob,
 ; never past it - so the label that measures the head covers them now, and
-; SPL_RESIDENT (kernel.asm's foot) is derived from it. What the ticks reach
+; SPL_RESIDENT (kernel.asm's foot) is derived from it - and from vidsel.inc's
+; [vid_cgamode], the one first-tick store past it, whichever ends later
+; (BOOT3-PLAN 16.14). What the ticks reach
 ; FURTHER up `.text` is not measured by any label: tests/unit/t_resident.py
 ; walks the ticks' code for every DS reference and refuses one past the
 ; window that tests/tickrefs.txt does not explain.
