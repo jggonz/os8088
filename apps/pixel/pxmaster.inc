@@ -45,9 +45,9 @@ px_htail:
     rcr ax, 1
     loop .p
     add ax, 7                       ; ...up to a multiple of 8 (the layout
-    and al, 0xF8                    ; KERN-MEGA-PLAN 14.40 made it)
-    mov dx, [px_cur + PXR_MSEG]
-    PXSUB
+    PX_ADC                          ; KERN-MEGA-PLAN 14.40 made it)
+    and al, 0xF8
+    PX_TAILAT [px_cur + PXR_MSEG]
     mov es, dx
     pop dx
     pop cx
@@ -163,11 +163,27 @@ px_mwbuild:
     xor dx, dx
     jcxz .st
     mov dx, di
+%ifdef PKG_MEGA
+    cmp word [px_hrun], 0           ; THE ARM's huge master: window k is the
+    je .ps                          ; claim's own run, the claim + AX (AX
+    add dx, ax                      ; stepping by [px_hrun] below)
+    jmp short .pd
+.ps:
+%endif
     PXSUB
+.pd:
     dec cx
 .st:
     mov [bx + MWT_WIN + si], dx
+%ifdef PKG_MEGA
+    cmp word [px_hrun], 0
+    je .a8
+    add ax, [px_hrun]
+    jmp short .an
+.a8:
+%endif
     add ax, 0x800
+.an:
     inc si
     inc si
     cmp si, 2 * PX_MWN
@@ -648,7 +664,7 @@ px_claims:
                                     ; never costs a compaction that drags it
     call px_scfloor                 ; a JPEG's floor (SPEC.md 106.19)
 .again:
-    call OSAPI_MEM_AVAIL            ; AX = largest run, BX = total, KB
+    PX_AVAIL px_avail               ; AX = largest run, BX = total, KB
     call px_capavl
     call px_pickscale               ; CL = the scale, CF = none fits
     jnc .fits
@@ -683,7 +699,7 @@ px_claims:
     jne .nomem
 .free:
     call px_freeprev
-    call OSAPI_MEM_AVAIL
+    PX_AVAIL px_avail
     call px_capavl
     call px_pickscale
     jc .nomem
@@ -704,7 +720,17 @@ px_claims:
     mov [px_cur + PXR_MW], bx
     mov bx, [px_tmh]
     mov [px_cur + PXR_MH], bx
+%ifdef PKG_MEGA
+    push bx                         ; the master first: the largest - on the
+    push cx                         ; ARM one huge claim, a window every 32KB
+    mov bx, 0x8000                  ; (SPEC.md 106.8.1)
+    call OSAPI_MEM_HUGE
+    PX_HRUN
+    pop cx
+    pop bx
+%else
     call OSAPI_MEM_CLAIM            ; the master first: the largest
+%endif
     jc .nomem
     mov [px_cur + PXR_MSEG], dx
     call px_mwinval                 ; (its segment may be one a table was of)
@@ -810,6 +836,31 @@ px_prevmv:
                                     ; added above is an odd count, and the
                                     ; emitter, the quantiser and the renderer
                                     ; below keep their even shift (os88rdiff)
+
+; px_avail - AX = the largest claim a master is granted, BX = the KB free in
+; all: OSAPI_MEM_AVAIL's, and on the ARM the master's own shape asked
+; (SPEC.md 106.8.1; pxrec.inc says why). Preserves all else
+%ifdef PKG_MEGA
+px_avail:
+    push cx
+    push dx
+    xor ax, ax
+    mov bx, MEMH_AVAIL
+    call OSAPI_MEM_HUGE             ; BX = the total, the pool counted
+    jc .conv
+    push bx
+    xor ax, ax
+    mov bx, 0x8000
+    call OSAPI_MEM_HUGE             ; AX = the most one master is granted
+    pop bx
+    jnc .o
+.conv:
+    call OSAPI_MEM_AVAIL
+.o:
+    pop dx
+    pop cx
+    ret
+%endif
 
 ; px_capavl - AX/BX = OSAPI_MEM_AVAIL's answers into [px_avl] [px_avt], the
 ; largest run cut to [px_mcap] when a test has set one (tests/pxdecode.py's

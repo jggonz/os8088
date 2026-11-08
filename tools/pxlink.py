@@ -2,6 +2,8 @@
 """pxlink: the package's variables, by name, for a LINKED part (SPEC.md 106.20).
 
     python3 tools/pxlink.py build/pixel.bin -o build/pxlink.inc
+    python3 tools/pxlink.py build/megak/apps/pixel.bin -D PKG_MEGA \
+        -o build/megak/apps/pxlink.inc      (the kern_mega ARM's package)
 
 PiXEL's SIMPLE part (apps/pixel/pxsimp.asm) is the five simple formats'
 readers moved out of the resident package and still reading and writing the
@@ -39,6 +41,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("bin")
     ap.add_argument("-o", required=True)
+    ap.add_argument("-D", action="append", default=[], metavar="NAME",
+                    help="assembled with -DNAME, as the package was (the "
+                    "kern_mega arm's PKG_MEGA, SPEC.md 106.8.1)")
     a = ap.parse_args()
     want = open(a.bin, "rb").read()
     image, bss = struct.unpack_from("<HH", want, 8)
@@ -49,7 +54,8 @@ def main():
         open(src, "w").write(
             open(os.path.join(ROOT, "apps", "pixel", "pixel.asm")).read()
             + "\n[map symbols %s]\n" % mp)
-        subprocess.run(["nasm", "-f", "bin", "-w+error",
+        subprocess.run(["nasm", "-f", "bin", "-w+error"] +
+                       ["-D" + n for n in a.D] + [
                         "-I", os.path.join(ROOT, "apps") + "/",
                         "-I", os.path.join(ROOT, "apps", "pixel") + "/",
                         "-o", out, src], check=True)
