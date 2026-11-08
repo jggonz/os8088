@@ -99481,9 +99481,13 @@ The FLOOR end is never free for a ring after the boot - caches and programs'
 spills stand there - and on a machine with a pool the TOP end is, from the
 boot until a program wants a conventional CS. So `mem_ringtop` (`.cold`, from
 `mem_claim_x`'s retry) asks where the top-down first fit would put a claim
-WITH A HEAD - a package's ring, a driver's, and the read-ahead's 9KB LANDING
-(§18.95), which KERN-MEGA-PLAN 14.167 re-takes mid-session when it was shed
-(`dsk_bnc_want`) - and when everything above that place is a ring too, or the
+WITH A HEAD from a package or a driver - never the kernel's own: the
+read-ahead's 9KB LANDING (§18.95) is pinned and page-safe and KERN-MEGA-PLAN
+14.167 re-takes it mid-session (`dsk_bnc_want`), but it is a CACHE, which
+every claim sheds and every planner dissolves, so wherever it lands it cuts
+nothing a claim can have; sent to the top it stood above the rings and
+stranded its own 9KB there once shed (measured: 679KB where 688KB is the
+answer) - and when everything above that place is a ring too, or the
 kernel's own (the low tables, a boot driver's image), it sends the claim
 through the top door, which takes exactly that place; when a
 claim with no head stands above it (a carve, an overlay, a region), the top

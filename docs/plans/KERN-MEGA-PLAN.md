@@ -14995,7 +14995,7 @@ scratch twin read every step):
 | pool | the Audio Player's look-ahead, 32KB, a DMA door's block (14.160) | 105C00 on 1408 (23K free under it, 217K over it); 198000 on 2MB (608K / 272K); 398000 on 4MB (2,656K / 271K) | born `MX_FPIN`, pinned for a play: the chip and every refill's ES:BX | **FROM THE FLOOR UP** (`mx_alloc .bot`): 100000 on every machine |
 | conventional | SOUND.DRV's staging pool, 16KB, `OSAPI_MEM_P` with the whole pool its head | 25800 on every machine with a pool (86K free under it - what Sheet's spill had held - 474K over it) | pinned while the card plays out of it (SPEC.md 34.5.2) | **AT THE TOP END** (`mem_ringtop`): 9C000..A0000 |
 | conventional | the Audio Player's look-ahead when the pool is full (1408 with Sheet, Paint and Note Pad open: 50000, 95.5K under it) | the same, a conventional ring | the same | top end when free for it, else as before |
-| conventional | the read-ahead's landing, 4.5KB then (9KB since 14.167), page-safe | 10000, the floor, at the boot - and since 14.167 re-taken mid-session by `dsk_bnc_want` when it was shed, on the fill point | page-safe is pinned (`dsk_rah_land`); a cache, which every claim sheds and every planner counts as free | **the same rule as a ring** (`mem_ringtop` takes any owner): at the top end when that is free for it, so a re-take lands at an end too. `dsk_rah_land` itself unchanged |
+| conventional | the read-ahead's landing, 4.5KB then (9KB since 14.167), page-safe | 10000, the floor, at the boot - and since 14.167 re-taken mid-session by `dsk_bnc_want` when it was shed, on the fill point | page-safe is pinned (`dsk_rah_land`); a cache, which every claim sheds and every planner counts as free | **kept bottom-up**, deliberately: it is a CACHE, which every claim sheds and every planner (mem_avail's walk, the compactor's) dissolves, so a re-take on the fill point cuts nothing a claim can have - the stretches the row reads count it free. Tried at the top end (`mem_ringtop` taking it): at the boot it went to 9DC00..A0000, SOUND.DRV's ring stacked under it, and once shed its 9KB stood above the ring - the one claim 679K where 688K is the answer. `dsk_rah_land` unchanged |
 | conventional | window save-unders, the menu's, the icon store, when the pool is full (FB10/FB12/FB13, pinned caches) | in the bottom stack | caches | kept: dissolved by the shed, counted free by mem_avail |
 | conventional | `MEM_K_MTBL`, the tables of a machine with no extended memory, 12KB | 9B800, under one 6KB driver image | pinned | kept: at the top end but for that image (HEAP-CLAIMS.md's K3) |
 | conventional, no pool | the rings on a machine with NO extended memory: the Audio Player's 32KB at 65400, SOUND.DRV's 16KB at 70000 | 271K under, 139.5K over | pinned while playing | **NOT FIXED** - below, for the owner |
@@ -15027,8 +15027,8 @@ end is never free for a ring (the landing is born there), and on a machine
 with a pool the TOP end is free from the boot until a program wants a
 conventional CS. `mem_ringtop` (`.cold`, called from `mem_claim_x`'s retry,
 both `.cold`) asks where the top-down first fit would put a claim with a head
-from a package, a driver or the kernel (the read-ahead's landing too, which
-14.167 re-takes mid-session) - the same bumps going down: the DISK class's 512-byte line, the head
+from a package or a driver (never the kernel's own: the landing is a cache,
+above) - the same bumps going down: the DISK class's 512-byte line, the head
 inside its page, an overlap just under the claim - and when everything above
 that place is a ring too, or the kernel's own (the low tables, a boot
 driver's image), it sends the claim through the top door, which takes

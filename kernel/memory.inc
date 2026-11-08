@@ -6500,13 +6500,13 @@ mem_bytes_kb_x:
 ; mem_ringtop - from mem_claim_x's retry, both `.cold` (kern_mega, KERN-MEGA-PLAN
 ; 14.166, SPEC.md 50.3.2): A RING GOES TO THE TOP END of conventional memory
 ; when the top end is free for it. in: AX = paragraphs (granule-rounded), SI
-; = the page-safe head in paragraphs, DI = the door's bits (BX the owner,
-; unread: a package's ring, a driver's, the kernel's landing alike).
+; = the page-safe head in paragraphs, DI = the door's bits, BX = the owner.
 ; out: DI | MC_DMA_HI when the top-down first fit would put the claim where
 ; nothing above it but other RINGS and the kernel's own claims (0xFFxx: the
 ; low descriptor tables, a boot driver's image) stands - so mem_claim_1 then takes exactly
 ; that place - and DI as it was otherwise: no head (no ring), the top door
-; already, real mode, or a claim with no head above the candidate (a carve, an
+; already, a kernel claim, real mode, or a claim with no head above the
+; candidate (a carve, an
 ; overlay, a region: the top is not free, and a ring under them would be in
 ; the middle - bottom-up first fit, 14.55's, stands). Everything else kept.
 ;
@@ -6518,10 +6518,15 @@ mem_bytes_kb_x:
 ; Sheet's spill had held, the heap's best run 474KB of 560KB free). The
 ; floor end is never free for it after the boot - caches and spills stand
 ; there - and the top end is, on a machine with a pool, from the boot until
-; a program wants a conventional CS. The read-ahead's landing is the same
-; shape (pinned, page-safe) and since 14.167 it comes back mid-session, so
-; it takes the same rule: at the boot it goes to the top, and the rings
-; stack under it. A ring at the top has only free memory
+; a program wants a conventional CS.
+;
+; NOT THE READ-AHEAD'S LANDING, though it is pinned and page-safe and since
+; KERN-MEGA-PLAN 14.167 comes back mid-session (dsk_bnc_want): it is a CACHE,
+; which every claim sheds and every planner (mem_avail's walk, the
+; compactor's) dissolves rather than walks round, so wherever it lands it
+; cuts nothing a claim can have. Sent to the top it stood ABOVE the rings
+; and stranded its own 9KB there once shed - measured, the one claim 679KB
+; where 688KB is the answer bottom-up A ring at the top has only free memory
 ; under it, and what is later taken top-down stacks under the ring and
 ; frees back into that run. Idle (declared movable) it came in by the top
 ; door, so the descending pass packs it back to the top (SPEC.md 66.4.1)
@@ -6531,9 +6536,11 @@ mem_ringtop:
     jz .r                       ; no head: not a ring
     test di, MC_DMA_HI
     jnz .r
-    cmp byte [ss:mega_pm], 0    ; (any owner: the read-ahead's LANDING too,
-    je .r                       ; which dsk_bnc_want re-takes mid-session
-    push ax                     ; when it was shed - KERN-MEGA-PLAN 14.167)
+    cmp byte [ss:mega_pm], 0
+    je .r
+    cmp bh, MEM_PG_MIN          ; a kernel cache (0xFBxx..0xFExx: the
+    jae .r                      ; read-ahead's landing) or a kernel tag
+    push ax                     ; (0xFFxx): its own place - below
     push bx
     push cx
     push dx
