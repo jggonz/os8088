@@ -1847,14 +1847,14 @@
    "fingerprint": "b89d4ba965edc87688bc5e965ee07429382c9542d9a2f7fef309251f30c16041",
    "from": 10,
    "guard": "PKG_FMT",
-   "reason": "MEGA-HUGE-PLAN F8 (KERN-MEGA-PLAN 14.172): OSAPI_MEM_REGROW of a huge claim now regrows a bridge, a pool run the pool cannot hold, and a conventional run with its windows, keeping the claim's shape - a contract widened (CF=1 cases now granted), nothing built before stops running, no PKG_FMT bump",
+   "reason": "MEGA-HUGE-PLAN F8 (KERN-MEGA-PLAN 14.174): OSAPI_MEM_REGROW of a huge claim now regrows a bridge, a pool run the pool cannot hold, and a conventional run with its windows, keeping the claim's shape - a contract widened (CF=1 cases now granted), nothing built before stops running, no PKG_FMT bump",
    "to": 10
   },
   {
    "fingerprint": "b1d48f7a750aa67e4aa18dcd681357cef392ee4318b5b461ae7324aaaa45b562",
    "from": 12,
    "guard": "DRV_VER",
-   "reason": "MEGA-HUGE-PLAN F8 (KERN-MEGA-PLAN 14.172): OSAPI_MEM_REGROW of a huge claim now regrows a bridge, a pool run the pool cannot hold, and a conventional run with its windows, keeping the claim's shape - a contract widened (CF=1 cases now granted), nothing built before stops running, no PKG_FMT bump",
+   "reason": "MEGA-HUGE-PLAN F8 (KERN-MEGA-PLAN 14.174): OSAPI_MEM_REGROW of a huge claim now regrows a bridge, a pool run the pool cannot hold, and a conventional run with its windows, keeping the claim's shape - a contract widened (CF=1 cases now granted), nothing built before stops running, no PKG_FMT bump",
    "to": 12
   }
  ]

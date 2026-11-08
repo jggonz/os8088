@@ -6531,7 +6531,7 @@ mega_hgfree:
 
 ; -----------------------------------------------------------------------------
 ; THE REGROW OF A HUGE CLAIM THE POOL'S OWN DID NOT TAKE (docs/plans/
-; MEGA-HUGE-PLAN.md F8, KERN-MEGA-PLAN 14.172, SPEC.md 50.3.5). Three routes,
+; MEGA-HUGE-PLAN.md F8, KERN-MEGA-PLAN 14.174, SPEC.md 50.3.5). Three routes,
 ; the cheapest first, and none ever changes what a refusal leaves:
 ;   * a BRIDGE regrown to its pool piece or less gives its conventional piece
 ;     back and is the pool's one run, cut where it stands;

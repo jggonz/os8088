@@ -19652,7 +19652,7 @@ SOAK = [
         needs=("86box",),
         wants=("build/mega.img", "build/megabrdg.o88")),
     Row("megargw", "soak", py("tests/megargw.py"), 35.0,
-        "docs/plans/KERN-MEGA-PLAN.md 14.172, SPEC.md 50.3.5 (MEGA-HUGE-PLAN "
+        "docs/plans/KERN-MEGA-PLAN.md 14.174, SPEC.md 50.3.5 (MEGA-HUGE-PLAN "
         "F8): A HUGE CLAIM REGROWS, every shape. Bochs at 4MB: MEGARGW puts "
         "a pattern in by the step walk and reads it back after each regrow - "
         "a 128KB pool run regrown to 256KB past a pool filled with XMEM blocks "
@@ -19668,7 +19668,7 @@ SOAK = [
         wants=("build/mega.img", "build/megargw.o88", "build/megarun.o88",
                "build/mbr.bin")),
     Row("megargw86", "soak", py("tests/megargw.py") + ["--box"], 30.0,
-        "docs/plans/KERN-MEGA-PLAN.md 14.172: megargw on 86Box's at286_vga_sb "
+        "docs/plans/KERN-MEGA-PLAN.md 14.174: megargw on 86Box's at286_vga_sb "
         "with 640K + 384K above 1MB - a 286, where Bochs's 386 is not, and "
         "the 14.166 machine whose largest bridge is 768K here (256K of pool, "
         "512K of heap, cut at window 4). The same legs and the same RED, "

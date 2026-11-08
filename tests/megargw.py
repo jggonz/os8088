@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """kern_mega: A HUGE CLAIM REGROWS, every shape (docs/plans/MEGA-HUGE-PLAN.md
-F8, KERN-MEGA-PLAN 14.172, SPEC.md 50.3.5).
+F8, KERN-MEGA-PLAN 14.174, SPEC.md 50.3.5).
 
     python3 tests/megargw.py            the row: Bochs, a 4MB machine
     python3 tests/megargw.py --box      ...86Box's at286_vga_sb, 640K + 384K

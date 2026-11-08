@@ -3,7 +3,7 @@
 ;
 ; MEGARGW, a TEST instrument (nothing under tests/ ships): A HUGE CLAIM
 ; REGROWS, every shape OSAPI_MEM_HUGE gives (docs/plans/MEGA-HUGE-PLAN.md F8,
-; KERN-MEGA-PLAN 14.172, SPEC.md 50.3.5). On kern_mega in protected mode a
+; KERN-MEGA-PLAN 14.174, SPEC.md 50.3.5). On kern_mega in protected mode a
 ; huge claim is one run of LDT selectors stepped by 8 over a pool block, over
 ; a conventional claim (mega_hugec), or over one piece of each (a BRIDGE).
 ; Before F8 only the first regrew: a bridge was refused, a pool claim the pool

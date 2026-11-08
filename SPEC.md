@@ -99455,7 +99455,7 @@ window, and the rules are:
   called for its moves, and every selector over it follows them, so a proc
   that is a `ret` is the usual one.
 
-**THE REGROW** (docs/plans/MEGA-HUGE-PLAN.md F8, KERN-MEGA-PLAN 14.172):
+**THE REGROW** (docs/plans/MEGA-HUGE-PLAN.md F8, KERN-MEGA-PLAN 14.174):
 `OSAPI_MEM_REGROW` with DX = a huge claim (64KB windows) and AX = the new KB
 answers CF = 0 and DX = its first selector NOW, the step still 8, every byte
 up to the smaller size where it was in the walk, and keeps the claim's SHAPE:
