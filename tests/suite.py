@@ -6926,8 +6926,10 @@ SOAK = [
         "out of the look-ahead claim and the conventional hold's reads, both "
         "converted (SEG_SUB, x3h_at's SEG_AT). Bochs at 16MB with an SB16, "
         "the kern_mega arm and an MP3 on B:. play: region and look-ahead "
-        "claim above 1MB, Auto plays live on the card out of an XMS hold. "
-        "conv: XMEM_CAPS answered 0 for the open, so the hold is a 30 KB "
+        "claim above 1MB, Auto plays live on the card out of a HUGE hold "
+        "(MEGA-HUGE-PLAN 3, apps/os88huge.inc's copies). conv: OSAPI_MEM_HUGE "
+        "pointed at mod_gone and XMEM_CAPS answered 0 for the open, so the "
+        "hold is the fallback 30 KB "
         "claim above 1MB read through a window based inside it; XT Standard "
         "Decode First onto C:: the stage a selector exactly x3_lasz + 2,560 "
         "into the claim, the WAV x3simxt's to the byte, then played. No "
@@ -19574,6 +19576,53 @@ SOAK = [
         "the odd-offset write a #GP (limit) in dskw_wone. 40s is 24 measured",
         needs=("86box",),
         wants=("build/mega.img", "build/megabrdg.o88")),
+    Row("megahw", "soak", py("tests/megahw.py"), 30.0,
+        "SPEC.md 50.3.8 (MEGA-HUGE-PLAN F5): apps/os88huge.inc IN A GUEST, "
+        "across a real bridge's cut. Bochs at 4MB: MEGAHW claims the largest "
+        "64KB-step claim through hw_claim (3,454 KB, the cut at window 46), "
+        "puts and gets spans across the cut, from its last byte, at odd "
+        "lengths and the claim's ends; hw_aim's reach one byte before it and "
+        "a window after; the 64KB about it written by the kernel's own "
+        "OSAPI_FILE_WRITE and by hw_fwrite, both files read back to the "
+        "pattern; then zeroed and read back by hw_fread with HW_FOFF. RED: "
+        "--break nowin (hw_aim's window's-end cap out) - kern_mega CLOSED "
+        "MEGAHW 0D, a #GP at the window's limit. 30s is 22 measured",
+        needs=("bochs", "nasm"),
+        wants=("build/mega.img", "build/megahw.o88", "build/megarun.o88",
+               "build/mbr.bin")),
+    Row("megahw86", "soak", py("tests/megahw.py") + ["--box"], 30.0,
+        "megahw on 86Box's at286_vga_sb with 640K + 384K above 1MB: the "
+        "largest claim a bridge of 768 KB, the cut at window 4, every leg "
+        "the pattern and no exception charged to MEGAHW. RED: --break nowin "
+        "- a #GP (limit) at hw_mov's rep movsw and MEGAHW never answers. 30s is 21 "
+        "measured",
+        needs=("86box", "nasm"),
+        wants=("build/mega.img", "build/megahw.o88")),
+    Row("megahwbig", "soak", py("tests/megahw.py") + ["--big"], 30.0,
+        "megahw on kern_big, MartyPC's 5150 with 360KB disks: the SAME "
+        "MEGAHW build, the ask refused (CF=1) so 200 KB, one run of "
+        "paragraphs (step 1000h, no cut), B = window 2 - every leg the "
+        "pattern: the walker needs no test of where it runs. RED: --break "
+        "nowin fails the aim (B - 1's reach not one byte; the spans, put "
+        "and got back through the same 16-bit wrap, cannot see it on one "
+        "contiguous run). 30s is 21 measured",
+        needs=("marty", "nasm"),
+        wants=("build/os8088-360.img", "build/megahw.o88")),
+    Row("x3huge", "soak", py("tests/x3huge.py"), 30.0,
+        "SPEC.md 121.6.1 (MEGA-HUGE-PLAN 3): XTMP3's kern_mega arm holds a "
+        "song in ONE OSAPI_MEM_HUGE claim, a bridge allowed. 86Box's "
+        "at286_vga_sb, 640K + 384K above 1MB, the arm and a 480 KB MPEG-1 "
+        "song (NEONDRV's frames repeated) on B:: held whole (x3h_kind "
+        "X3HK_HUGE, x3h_on), a bridge of 544 KB cut at window 3, every byte "
+        "of the hold read window by window the file's, Auto's probe copying "
+        "out of it, no exception charged to XTMP3. RED: the arm of "
+        "mega-release (--pkg/--map) - kind 0, the song streams (the XMS "
+        "block the pool's best run, the conventional hold capped at 192 KB). "
+        "--find measures the largest held: 192 -> 608 KB here, 2,848 -> "
+        "3,232 KB at --megs 4. 30s is 13 measured",
+        needs=("86box",),
+        wants=("build/mega.img", "build/megak/apps/xtmp3.o88",
+               "build/megak/apps/xtmp3.map", "build/mbr.bin")),
     Row("megacaps", "soak", py("tests/megacaps.py"), 60.0,
         "docs/plans/KERN-MEGA-PLAN.md 14.122, SPEC.md 41.8: "
         "OSAPI_XMEM_CAPS ANSWERS WHAT A CLAIM IS THEN GIVEN. kern_mega "
@@ -21421,6 +21470,19 @@ SOAK = [
         "separator every two digits fails 939 calls, the signed entry not "
         "restoring AX 66, the 32-bit divide not carrying 4,270, the field "
         "padding one short runs away and fails every field call",
+        needs=("nasm", "unicorn")),
+    Row("os88huge", "soak", py("tests/os88huge.py"), 1.5,
+        "SPEC.md 50.3.8 (MEGA-HUGE-PLAN F5): apps/os88huge.inc, the huge "
+        "claim's walker, every arm run under Unicorn against a model on four "
+        "shapes - windows 96KB APART with guards between (a bridge's shape: a "
+        "reach past a window's end reads a guard, never the claim's next "
+        "byte), the paragraph step, a window every 32KB and every 16KB - "
+        "hw_claim's record, hw_aim's pointer and reach, hw_get/hw_put spans, "
+        "hw_fread's one os88_rseq a window (HW_FOFF 0, positive, negative), "
+        "hw_fwrite's one put a window, refusals, every register. 3,431 checks. "
+        "Broken on purpose (--break): the window's cap out fails 227, the "
+        "window's index out 462, the length's cap 47, the 32KB step's "
+        "doubling 4, HW_FOFF ignored 290. Host-only",
         needs=("nasm", "unicorn")),
     Row("m83", "soak", py("tests/m83.py"), 1.0,
         "SPEC.md 77.20: apps/os88m83.inc's m83_mangle - the ONE 8.3 mangle "

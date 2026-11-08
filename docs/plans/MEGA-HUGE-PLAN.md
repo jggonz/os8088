@@ -121,5 +121,7 @@ target), the Task Manager.
 | F7 | **done** - `os88_mem_huge` BX = 0; `os88_mem_huge_w`, `os88_mem_huge_ask`, `os88_file_read_huge`/`_write_huge`/`os88_file_hi`, `os88_file_read_at_seg`, `os88_seg_get`/`_put` (SPEC.md 73.9.2) | 14.168; chuge-mega, chuge-big |
 | (found) | **done** - a plain file over 64KB was refused FERR_IO into any claim above 1MB (`dskw_rbody` -> `dskw_tolo`); it now takes the selector arm's own walk. Through a BRIDGE that walk is F1's | 14.168 |
 | Frotz | **done** - a story over 64KB is one `OSAPI_MEM_HUGE` claim, BX = 8000h, its page table the claim's run (`zm_run`) | SPEC.md 61.4; megafrotz, megafrotz-low |
-| F1, F2, F9 | another branch (mega-hugebridge) | |
-| F4, F5, F8 | open | |
+| F1, F2, F9 | **done** (mega-hugebridge) | KERN-MEGA-PLAN 14.169 |
+| F5 | **done** - `apps/os88huge.inc`: a record and `hw_aim`, `hw_get`/`hw_put`, `hw_claim`, `hw_fread`, `hw_fwrite`, every piece split where a window ends (SPEC.md 50.3.8) | KERN-MEGA-PLAN 14.170; os88huge, megahw, megahw86, megahwbig |
+| XTMP3 | **done** - the arm's hold is one huge claim, a bridge allowed: 192 -> 608 KB held at 640K + 384K, 2,848 -> 3,232 KB at 4MB | SPEC.md 121.6.1; 14.170; x3huge, x3mega |
+| F4, F8 | open | |

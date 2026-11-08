@@ -99335,7 +99335,9 @@ window, and the rules are:
   FFFFh, never the first window's base plus X, which on a bridge is pool
   memory past the cut (another program's, or free). That rule is the same
   arithmetic on every kernel (CX = 1000h there), so code written to it needs
-  no test of where it runs.
+  no test of where it runs - and `apps/os88huge.inc` is that code, written
+  once (§50.3.8): copy in and out, aim with the reach, read and write a file
+  in pieces, every piece split where a window ends.
 - **`OSAPI_SEG` follows the pieces** (§50.6.11, `mega_bfmap`): `SEG_SUB`,
   `SEG_SUBC`, `SEG_AT` and `SEG_HND` from a selector in the pool piece at an
   offset past the cut answer the same offset past the cut in the
@@ -99497,6 +99499,90 @@ path must reach - a ring in an `FSXF_REAL` list (VBattle's `vb_ring`, the
 Video Player's `vp_ring` and `vp_aseg`, `tests/megarmb`'s rings), or a
 workspace a fixed disk is read through a call a run rather than a call a
 sector (SysCheck's, §118.14). The head is in paragraphs, `KB × 64`.
+
+### 50.3.8 `apps/os88huge.inc` — walking a huge claim by its step, written once
+
+§50.3.5's rule is one line of arithmetic - byte X of an `OSAPI_MEM_HUGE`
+claim is at offset `X & FFFFh` of window `DX + CX × (X >> 16)` - and every
+program that holds more than 64KB was going to write the loop around it:
+split a copy where a window ends, aim a pointer and know how far it reaches,
+read a file in pieces that never cross a window. Written wrong, the loop is
+right on a paragraph step (one contiguous run, where a reach past a window's
+end lands on the next byte anyway) and wrong on kern_mega, where the next
+window is another selector and a bridge's cut lies between two of them
+(docs/plans/MEGA-HUGE-PLAN.md F5). So the loop is SOURCE, shared the way
+§20.5.2's decimal formatter is: `apps/os88huge.inc`, prefix `hw_`, one
+`%define` an arm, 8086, no kernel call but the claim and the file doors it
+names.
+
+**The record** (`HW_SIZE` = 14 bytes, in the caller's DS; every routine takes
+BX -> it):
+
+| field | what |
+|---|---|
+| `HW_SEG` +0 | window 0, the cell's DX |
+| `HW_STEP` +2 | the step to the window 64KB on: the cell's CX, ×2 for a claim given a window every 32KB (BX = 8000h asked, 0 answered), ×4 for 16KB (4000h) - the 64KB-apart windows are every second / fourth one |
+| `HW_LEN` +4 | dword: the bytes the walk may reach; nothing at or past it is touched. `hw_claim` writes KB × 1024 - set it lower to bound the walk by what is held |
+| `HW_CUT` +8 | the bridge's pool windows (the cell's out BX for BX = 0 asked), 0 one run. Information only: the walk never needs it, because the cut is at a 64KB boundary of the claim and every piece already ends at one |
+| `HW_FOFF` +10 | dword, added modulo 2^32: `hw_fread`'s FILE offset of claim byte 0 (44: a WAV's data from the claim's start; negative: a file's start part-way in). A cluster multiple. `hw_claim` writes 0 |
+
+**The routines** (near; each keeps every register but its outputs):
+
+```
+always   hw_aim    DX:AX = a claim offset, CX = bytes wanted (1..FFFFh)
+                   -> CF=0 ES:DI = that byte, CX = how many of them lie in
+                      its window (never past the window's 64KB - so never
+                      across a cut - nor HW_LEN); CX = FFFFh asks the reach
+                      (a whole window answers FFFFh). CF=1: at/past HW_LEN
+                      or CX = 0, ES DI CX kept. Keeps AX BX DX SI BP DS
+         hw_span   CF=1 when DX:AX + CX runs past HW_LEN. Keeps all
+HW_CLAIM hw_claim  AX = KB, CX = the cell's BX (0, HUGE_NOBRIDGE, 8000h,
+                   4000h) -> CF=0 the record filled, DX = the claim (for
+                   OSAPI_MEM_FREE / _MOVABLE); CF=1 refused, HW_SEG = 0
+HW_GET   hw_get    DX:AX, CX bytes OUT of the claim to ES:DI (any segment)
+HW_PUT   hw_put    ...INTO it from ES:DI. Both: CF=1 a span past HW_LEN,
+                   nothing copied; movsw, a byte for an odd count, cld own
+HW_RSEQ  hw_fread  SI = a name, DS:DI = an os88_rseq cursor, DX:AX = the
+                   claim offset, CX = the most bytes (a cluster multiple)
+                   -> CF=0 DX:AX = delivered (fewer: the file's end or
+                      HW_LEN); CF=1 AX = FERR_*. One os88_rseq a window the
+                   span touches, straight into it. Needs apps/os88rseq.inc
+HW_WSEQ  hw_fwrite DS:DI = an open os88_wseq stream, DX:AX, CX bytes of the
+                   claim put on it, one os88_wseq_put a window -> CF=1 AX =
+                   FERR_* (FERR_BIG: past HW_LEN, nothing put). Needs
+                   apps/os88wseq.inc
+```
+
+`hw_get`, `hw_put`, `hw_fread` and `hw_fwrite` keep a frame on the stack and
+address it with BP - SS, which is where the frame is; nothing reads DS
+through BP. A window is a segment register loaded for the walk: a caller
+does not keep ES across anything of its own that could move the claim, it
+aims again (§50.3.5: the run follows a move, a loaded register does not).
+The file routines are the UI task's (§20.6 rule 7); the rest run anywhere.
+**The kernel's own single calls stay the answer where they fit**:
+`OSAPI_FILE_READ` / `_WRITE` already step a whole file across windows and a
+cut (§50.3.5); `hw_fread` is for a file read in PIECES (a load spread over
+timer passes, a seek) and `hw_fwrite` for one appended in pieces.
+
+The cost on a package is what it takes: `hw_aim` and `hw_span` 91 bytes,
+`hw_get` 73 more (the copy loop with it), `hw_put` 61 beside that,
+`hw_claim` 92, `hw_fread` 87, `hw_fwrite` 64 - XTMP3's three arms (claim,
+get, fread) 343. XTMP3's kern_mega arm is the first user (§121.6.1);
+WaveRack, PiXEL, Audio,
+VBattle, the Browser and the Video Player are next (MEGA-HUGE-PLAN 3).
+
+`tests/os88huge.py` (`os88huge`, host) runs every routine under Unicorn
+against a model on four shapes - windows 96KB APART with guards between (a
+reach past a window's end reads a guard, never the claim's next byte), the
+paragraph step, and a window every 32KB and 16KB - every register checked;
+`--break` takes the window's cap, the window's index, the length's cap, the
+32KB step's doubling or `HW_FOFF` out, and each fails it. `tests/megahw`
+(MEGAHW.O88, `megahw` on Bochs at 4MB, `megahw86` on 86Box's 640K + 384K,
+`megahwbig` on MartyPC's 5150 under kern_big) runs them in a guest, from ONE
+build: spans across a bridge's cut (kern_mega) or window 2 (kern_big), the
+aim's reach either side of it, the 64KB about it written by the kernel's own
+`OSAPI_FILE_WRITE` and by `hw_fwrite` and both files held to the pattern,
+then read back by `hw_fread` with `HW_FOFF`.
 
 ### 50.3.2 …and the top-down doors a driver never had
 
@@ -231486,6 +231572,7 @@ whole MP3** into a hold:
 
 | hold | when | how |
 |---|---|---|
+| ONE huge claim (`X3HK_HUGE`), kern_mega's arm only | `OSAPI_MEM_HUGE` with a 64KB step gives the file's KB, rounded to 32 KB, in protected mode (a step of 8): the pool's, the heap's or a BRIDGE of both - and the heap keeps `X3H_MARGKB` beside it (below) | 32 KB `READ_SEQ` chunks straight into it and the gulps copied out, both through `apps/os88huge.inc` (§50.3.8: `hw_fread`, `hw_get`), split where a window ends - so never across a bridge's cut |
 | one XMS block (`X3HK_XMS`) | `OSAPI_XMEM_CAPS` has the file's KB | 32 KB `READ_SEQ` chunks into the look-ahead's claim, each `OSAPI_XMEM_COPY`'d up |
 | a conventional claim (`X3HK_CONV`) | no pool, the file at most `X3H_CAPKB` = 192 KB, the heap's largest run holds it and `X3H_MARGKB` = 96 KB stay free beside it, and the CPU is not an 8086 | the chunks read straight into it |
 | none | otherwise, and on every 8088 | the track streams as before (§121.6's 4 KB gulps) |
@@ -231502,6 +231589,29 @@ Audio Player leaves `os88_rseq` (AUDIO.O88 is byte-identical) and XTMP3
 makes `x3_rseq`, a copy out of the hold for the held file and the disk for
 anything else (a finished WAV, `x3_readat`'s header and fingerprint reads).
 `[x3_nrseq]` counts the disk's gulps and `[x3h_ncopy]` the hold's.
+
+**The huge hold** (`x3h_huge`, `PKG_MEGA`; docs/plans/MEGA-HUGE-PLAN.md 3,
+KERN-MEGA-PLAN 14.170) is tried first on kern_mega's arm, so a file the
+pool's best run cannot hold alone is held all the same where the pool and
+the heap together can. The kernel places a claim in the pool alone, else the
+heap alone, else the bridge (§50.3.5); where the HEAP ALONE took it and
+`X3H_MARGKB` is not left beside it, it is claimed once more at 32 KB past
+the heap's largest run - which the heap cannot hold alone, so the kernel
+bridges it and the conventional piece is the smaller by the pool piece (the
+hold then longer than the file, which no read passes). Short again, or a
+paragraph step (kern_mega in real mode, where `X3H_CAPKB` stands as on
+every other kernel), and the old ladder goes on. A hold with conventional
+memory in it (`[x3h_hcv]`) is declared movable with a `ret` proc - its
+windows follow a move - pinned across each read into it as the
+conventional hold is, and given up by `x3_plan` as the conventional hold
+is. `x3h_at` stays the conventional hold's: `SEG_AT` maps across a cut but
+its reach stops there (KERN-MEGA-PLAN 14.169), which the walker never asks
+it to cross. Measured on 86Box's at286_vga_sb, the largest song held whole
+(`tests/x3huge.py --find`, to 32 KB): **192 KB -> 608 KB** with 640K + 384K
+above 1MB, **2,848 KB -> 3,232 KB** at 4MB - the bridge's pool piece plus
+the heap down to `X3H_MARGKB`, where the XMS block was the pool's best run
+after the package's own claims had taken their share of it. The shipped
+build is byte-identical.
 
 **The key** is the file's folder, volume and name. A track that opens with
 the same key keeps its hold (a replay, a seek, a step, a Decode first after
