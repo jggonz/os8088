@@ -37164,7 +37164,7 @@ is the value every widget entry already leaves there. A DVK_DRV volume
 (HDD.DRV's rung 1) never runs this loop at all. `tests/fpgnotch.py` is the
 gate that a LIVE bar still moves.
 
-#### 18.91.7 …and a PicoMEM 2's disk is read SIX sectors a call at most, IRQ0 masked for it (kern_big, kern_emu)
+#### 18.91.7 …and a PicoMEM 2's disk is read EIGHT sectors a call at most, IRQ0 masked for it (kern_big, kern_emu)
 
 **On a PicoMEM 2 the card's sound goes silent whenever an interrupt holds
 the PC inside the card's int 13h** (docs/reports/PICOMEM2-STUTTER-2026-11-07.md).
@@ -37193,12 +37193,13 @@ So the transfer loop reads such a disk that way:
   mixes while it waits, and its machine is a 286 whose disk rate this would
   cost.
 - **`dsk_xfer`**, for a unit at or above `[dsk_pmhd]`, cuts the run to
-  **`DSK_PMRUN` = 6** sectors at most and sets IRQ0's bit in the 8259's mask
+  **`DSK_PMRUN` = 8** sectors at most and sets IRQ0's bit in the 8259's mask
   before the int 13h, clearing it after. The card's disks follow the PC's
   own (an ST-225 is 80h, the card's first image 81h), so a real disk below
   them keeps its runs. An IRQ0 that falls in the masked call waits in the
-  IRR: six sectors are ~9-10 ms on the field machine, under Video Battle's
-  13.7 ms period (`VB_DIV`) and the 18.2 Hz tick. The cap is the hook's
+  IRR: eight sectors are ~12-13 ms on the field machine, just under Video
+  Battle's 13.7 ms period (`VB_DIV`) and well under the 18.2 Hz tick; a
+  call that runs past the period merges two of its ticks. The cap is the hook's
   latency, not the card's: the card keeps up with an unheld run of any
   length.
 - **ONE sector a call was the first build, and the field priced it at
@@ -37212,7 +37213,10 @@ So the transfer loop reads such a disk that way:
   (VBPROF: 15 stalls, 50 frames of sound late, against 148 and 115 at one)
   and TakeOnMe stalled 11 times: a clip's SPIKES, not its average, are what
   the reader must cover, and a battle's rings are smaller than a play's.
-  Six a call is the per-run cost a sixth as often. Its own rate is VIDDISK R's to
+  Six a call is the per-run cost a sixth as often. SIX (2026-11-08, with
+  the bookmarks of 126.4.7) read 111 KB/s while reading and still dropped
+  sound in the heavy clips - the reader busy 63-77% of their time at
+  78-82 KB/s - so EIGHT is the next try. Its own rate is VIDDISK R's to
   measure on the iron, and `5150-picomem2`'s 135,000 (98.2) charges none
   of it until then.
 - Resident: **40 bytes of `.cold`** in `dsk_xfer` (its parity pad among them) and the byte in `.text`.
