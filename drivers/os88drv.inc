@@ -568,6 +568,17 @@ FSV_SIZE     equ 30
 ;   out  CF = 0 done; CF = 1 and AL = an int 13h status byte (03h = write
 ;             protected, anything else = a hard error)
 ;
+; A DRVC_DISK driver's own DSV_CAPS bit (SPEC.md 51.8.1, KERN-MEGA-PLAN
+; 14.167). Set it when your DSV_BLK loads DX into a segment register as it is
+; and walks only BX - no paragraph arithmetic on it - and kern_mega hands you
+; a buffer that is an LDT SELECTOR (above 1MB: a pool claim, a FAT window) as
+; it is, instead of bouncing the call a run at a time through a low landing.
+; A transport of yours that cannot reach such a buffer (a ROM's DMA, which
+; stops at 1MB) answers CF = 1 and AL = 09h having MOVED NOTHING, and the
+; kernel then bounces that call as it would have. No other kernel reads it,
+; and a driver that leaves it clear is bounced as every driver was
+BLKCAP_SEL   equ 4              ; my DSV_BLK takes a selector as it is
+;
 ; A volume is capped by FAT16 itself - 65,524 clusters of at most 32KB, just
 ; under 2GB (SPEC.md 18.7.5). It was 65,535 sectors (31.99MB) while an LBA was
 ; a word. A volume past 32MB is registered with OSAPI_VOL_ADD's CX = 0,
