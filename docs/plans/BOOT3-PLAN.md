@@ -2073,10 +2073,22 @@ only in `SYSCHECK.O88` (section 16.4's note).
 6. **The NOKZIP read-end guard** (section 13) was not in the tree; it is now,
    after `MODC_START` in kernel.asm. Both it and the `.boot3b` alignment
    guard were made to fire by hand, and NOKZIP, `NO_COLD_SLIDE`,
-   `NO_HMA_DRV`, `DRVDIAG=1` and kern_mega/kern_emu `BOOTMARK=1` assemble.
-   kern_big's `-DBOOT_MARK` alone fails `.ovl`'s window guard at the
-   starting commit as well (the Makefile's knob arm adds what makes it fit),
-   so that is not this wave's.
+   `NO_HMA_DRV` and `DRVDIAG=1` assemble. **`BOOTMARK=1` through the
+   Makefile assembles on all four kernels** (kern_big, kern_emu, kern_mega,
+   kern_small; `kernel-full.bin` into private trees), and did at the
+   starting commit `dafa327b` on kern_big and kern_emu as well. What makes it
+   fit is NOT the `BOOTMARK` arm (Makefile, `ifneq ($(BOOTMARK),)`), which
+   adds `-DBOOT_MARK` and nothing else: it is the generic `$(KNOBS)` arm
+   beside `BOOT2_XSEC := 1`, which puts `-DKERN_KNOB` on any knob build but
+   the exempt ones, and `KERN_KNOB` gives `DSK_OVLPAD` 1,024
+   (kernel/dskwin.inc). So a raw `nasm -DBOOT_MARK` WITHOUT `-DKERN_KNOB`
+   fails `.ovl`'s window guard (kernel.asm, "the boot overlay's window half
+   has outgrown the FAT window plus dsk_secbuf") on kern_big AND kern_emu -
+   identically at `dafa327b` (the wave-2 verifier's test) - and assembles on
+   kern_mega and kern_small; with `-DKERN_KNOB` all four assemble. Neither
+   half is this wave's. (The first draft of this item said only kern_big
+   failed and credited "the Makefile's knob arm"; corrected after the
+   wave-2 verifier, round 1.)
 7. **`vmm_boot_x` (kern_emu) did not move**: the plan's "may join". It shares
    the blob's `bvs_cgo` with `xm_boot_x`'s shape and is wave 4's to take with
    the rest of the adapter bodies.
