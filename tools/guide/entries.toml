@@ -1061,6 +1061,12 @@ kind = "document"
 summary = "A sample document introducing the word processor. Open it from the program's File menu, or double-click it once the program has run."
 short = "Sample welcome document"
 
+["SCRIBE/"]
+title = "Scribe"
+kind = "folder"
+summary = "Scribe and its welcome document, as a Word .DOC and as an .RTF."
+short = "Scribe and its welcome files"
+
 ["SCRIBE.O88"]
 title = "Scribe"
 kind = "program"
@@ -1090,6 +1096,143 @@ title = "Frotz"
 kind = "program"
 summary = "Plays interactive fiction: text adventures in the Infocom story format."
 short = "Text adventure player"
+
+# --- the story library (the live USB image and CD only) -----------------------
+# Fetched at build time and never committed (tools/getstories.py's MANIFEST),
+# so these lines are owed only when a built image carries the stories, which
+# every live release does. Titles, authors and notes are the manifest's.
+
+["STORIES/"]
+title = "Stories"
+kind = "folder"
+summary = "A library of free text adventures for Frotz, sorted into INFOCOM, CLASSIC and MODERN, with CATALOG.TXT saying what each one is. Double-click a story to play it."
+short = "Text adventures for Frotz"
+
+["INFOCOM/"]
+title = "Infocom stories"
+kind = "folder"
+summary = "Stories Infocom and Activision gave away: Mini-Zork I, the two Infocom Samplers and Zork: The Undiscovered Underground."
+short = "Infocom's free stories"
+
+["CLASSIC/"]
+title = "Classic stories"
+kind = "folder"
+summary = "Freely distributable classics and Inform's own games: Colossal Cave Adventure in two versions, Zork: A Troll's Eye View, Balances and Curses."
+short = "Classic text adventures"
+
+["MODERN/"]
+title = "Modern stories"
+kind = "folder"
+summary = "Stories their authors released free: Photopia, 9:05, A Bear's Night Out, Lost Pig, Bronze and The Dreamhold."
+short = "Newer free text adventures"
+
+["ART/"]
+title = "Story pictures"
+kind = "folder"
+summary = "Pictures that go with the stories: the cover of Bronze."
+short = "Pictures for the stories"
+
+["SAVES/"]
+title = "Saved games"
+kind = "folder"
+summary = "A place to keep the games you save in Frotz."
+short = "Folder for saved stories"
+
+["MINIZORK.Z3"]
+title = "Mini-Zork I"
+kind = "document"
+summary = "Infocom's cut-down Zork I, given away on a UK magazine cover disk. A version 3 story; double-click it to play it in Frotz."
+short = "Infocom's cut-down Zork I"
+
+["SAMPLER1.Z3"]
+title = "Infocom Sampler I"
+kind = "document"
+summary = "Infocom's free demo disk: the openings of Zork I, Planetfall and Infidel. A version 3 story; double-click it to play it in Frotz."
+short = "Three Infocom openings"
+
+["SAMPLER2.Z3"]
+title = "Infocom Sampler II"
+kind = "document"
+summary = "Infocom's second free demo disk. A version 3 story; double-click it to play it in Frotz."
+short = "Infocom's second demo"
+
+["ZTUU.Z5"]
+title = "Zork: The Undiscovered Underground"
+kind = "document"
+summary = "By Michael Berlyn and Marc Blank, released free by Activision in 1997 to promote Zork Grand Inquisitor. A version 5 story; double-click it to play it in Frotz."
+short = "Activision's free 1997 Zork"
+
+["ADVENT.Z3"]
+title = "Colossal Cave Adventure"
+kind = "document"
+summary = "Crowther and Woods' 350-point original, ported by Graham Nelson. A version 3 story; double-click it to play it in Frotz."
+short = "The original Adventure"
+
+["ADVENT5.Z5"]
+title = "Colossal Cave Adventure (v5)"
+kind = "document"
+summary = "The same game as ADVENT.Z3, ported by Graham Nelson as a version 5 story. Double-click it to play it in Frotz."
+short = "Adventure, version 5"
+
+["ZORK285.Z5"]
+title = "Zork: A Troll's Eye View"
+kind = "document"
+summary = "Dean Menezes' port of the 285-point version of the 1977 MIT Zork. A version 5 story; double-click it to play it in Frotz."
+short = "The 1977 MIT Zork"
+
+["BALANCES.Z5"]
+title = "Balances"
+kind = "document"
+summary = "Graham Nelson's demonstration game for Inform, with spell puzzles in the style of Enchanter. A version 5 story; double-click it to play it in Frotz."
+short = "Inform's spell-puzzle demo"
+
+["CURSES.Z5"]
+title = "Curses"
+kind = "document"
+summary = "Graham Nelson's game, the one Inform was written to produce. A version 5 story; double-click it to play it in Frotz."
+short = "Graham Nelson's Curses"
+
+["PHOTOPIA.Z5"]
+title = "Photopia"
+kind = "document"
+summary = "Adam Cadre's winner of the 1998 Interactive Fiction Competition: a story more than a puzzle, with colours that change as it goes. A version 5 story; double-click it to play it in Frotz."
+short = "Adam Cadre's Photopia"
+
+["905.Z5"]
+title = "9:05"
+kind = "document"
+summary = "A short story by Adam Cadre, known for its ending. A version 5 story; double-click it to play it in Frotz."
+short = "Adam Cadre's short 9:05"
+
+["BEAR.Z5"]
+title = "A Bear's Night Out"
+kind = "document"
+summary = "David Dyte's freeware story. A version 5 story; double-click it to play it in Frotz."
+short = "David Dyte's freeware story"
+
+["LOSTPIG.Z8"]
+title = "Lost Pig"
+kind = "document"
+summary = "Admiral Jota's winner of the 2007 Interactive Fiction Competition. A version 8 story; double-click it to play it in Frotz."
+short = "Admiral Jota's Lost Pig"
+
+["BRONZE.Z8"]
+title = "Bronze"
+kind = "document"
+summary = "Emily Short's retelling of Beauty and the Beast. A version 8 story; double-click it to play it in Frotz. Its cover picture is BRONZE.PIX, in ART."
+short = "Emily Short's Bronze"
+
+["DREAMHLD.Z8"]
+title = "The Dreamhold"
+kind = "document"
+summary = "Andrew Plotkin's story written to teach newcomers how to play, with hints built in. The largest story in the library. A version 8 story; double-click it to play it in Frotz."
+short = "Andrew Plotkin's tutorial story"
+
+["BRONZE.PIX"]
+title = "Bronze cover"
+kind = "picture"
+summary = "The cover picture of the story Bronze, in os8088's own .PIX picture format. Double-click it to see it in PiXEL. Frotz draws pictures only for version 6 stories, so it does not show this one."
+short = "Cover of the story Bronze"
 
 ["PACCMAN.O88"]
 title = "PaccMan"
@@ -1168,6 +1311,7 @@ title = "Recorder"
 kind = "program"
 summary = "Records sound from a Sound Blaster and plays it back, with a picture of the wave as it goes."
 short = "Sound recording"
+needs = "SOUND.DRV with a Sound Blaster"
 
 ["CONTENTS.TXT"]
 title = "Contents"
@@ -1262,8 +1406,8 @@ short = "Weave editor and sources"
 ["CATALOG.TXT"]
 title = "Catalog"
 kind = "document"
-summary = "What each Weave app on this disk is, and how to open it."
-short = "List of Weave apps here"
+summary = "What is here and how to open it. On the Weave disk it lists each Weave app; in the STORIES folder of the live USB stick and CD it lists each story, with its author and size."
+short = "List of what is here"
 
 ["FORM.WAB"]
 title = "Greeter demo"

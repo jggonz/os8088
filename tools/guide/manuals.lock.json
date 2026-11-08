@@ -188,9 +188,9 @@
  },
  "CATALOG_TXT": {
   "sources": [],
-  "stamped": "9deeee7d",
+  "stamped": "5e4740bb",
   "strings": null,
-  "why": "checked: the Weave disk's CATALOG.TXT says how a user puts their own bundle on a disk (copy it, double-click it) instead of naming the Makefile's BUNDLES="
+  "why": "covers the live volume's STORIES/CATALOG.TXT (tools/getstories.py write_catalog) beside the Weave disk's"
  },
  "CAT_GIF": {
   "sources": [],
@@ -564,6 +564,14 @@
   "strings": "e6fb502f9e95b17d",
   "why": "HDDTOOL.DRV-side change only; nothing the page describes"
  },
+ "HELLO_O88": {
+  "sources": [
+   "apps/hello"
+  ],
+  "stamped": "5e4740bb",
+  "strings": "c96da6e079e0172e",
+  "why": "first page, written from apps/hello/hello.asm and SPEC.md 27: the window, File's Greeting/About pages, the About card"
+ },
  "HELV_F88": {
   "sources": [],
   "stamped": "e4576a70",
@@ -925,6 +933,14 @@
   "stamped": "1a37e25e",
   "strings": "7a12d506e63a5b3b",
   "why": "077bf46d (14.147) added one user-visible refusal, 'REALDMG: unpack the ROM' for a packed cartridge over 256K; the Good to know list names it. The packed shipped demo now plays on kern_mega, which the page never said it did not. The toast and replay edits below the page's level."
+ },
+ "RECORDER_O88": {
+  "sources": [
+   "apps/recorder"
+  ],
+  "stamped": "5e4740bb",
+  "strings": "231b245f664b1611",
+  "why": "first page, written from apps/recorder/recorder.asm and SPEC.md 35: the buttons, Sound menu, status lines and every message"
  },
  "REDLINE_O88": {
   "sources": [
