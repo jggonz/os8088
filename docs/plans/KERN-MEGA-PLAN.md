@@ -16564,3 +16564,85 @@ Green after: every hold 0 wrong on all three plays. And the clip itself on
 0 stalls, no error (157 s against 92.5 - the 286 cannot keep up with a 486's
 clip, as its text says); kern_mega in the real-mode bracket the same, 681
 pauses.
+
+### 14.184 `mega-heapcheck`'s check 14 was the FIXTURE's layout, and `mem_avail` plans no page bump (2026-11-08) - FIXED (the row), FOUND (the plan)
+
+**Found by the full mega soak** (`build/soak/20261108-140119`): `mega-heapcheck`
+red at check 14, *"dma lands page-safe"*, alone - 1..13, 15..18 and R1..R4
+green - printing *"dma landed at page offset 0 paragraphs"*: `hf_dmaoff` never
+written, so the check stopped before measuring.
+
+**Which branch, read off the machine** (a scratch heapfrag recording each
+stage, the 1MB Bochs kern_mega): `.dmapop` - the ask was REFUSED. The block,
+42KB with a head of all of it, was claimed above the big claim at 7000h
+(bumped off 6C00h, where its head would straddle); freeing the big claim
+opened 5600h..7000h, 104KB, and the ask was 105KB. The only legal landing past
+5600h is 6000h (5600h's offset 600h + A80h crosses the page), and there the
+two runs are 40KB and 87KB - SMALLER than the 104KB already standing - so no
+legal move could fund the ask on this arena. The compactor moved the block to
+6000h page-safely (the map read with the guest spun at the refusal) and
+refused rightly. A kernel that IGNORED `MC_DMA` would have landed it at 5600h
+and been refused nothing - and failed the address test - so the check was red
+on both kernels and said nothing about either. **Not** 14.160 (the claim is a
+non-HIGHMEM package's: conventional) and **not** 14.166 (`mem_ringtop` did not
+fire: the 38KB hole above check 10's pin is under the 42KB, so the top-down
+candidate stood under the pin). The arena's luck, which kern_big's 640KB has
+(60KB at 6000h to 5000h, its fill point at offset A00h) and kern_mega's 1MB
+machine has not got - green in 14.166's pass, so the layout has moved since;
+what moved it was not bisected, the check being wrong on any layout of this
+shape.
+
+**The fix: the layout is BUILT** (heapfrag.asm, SPEC.md 66.8). From the big
+claim's base B, F = the first B + n KB with a page offset >= F00h (no block
+over 4KB may start there), G = the next page's floor, D = the first such place
+past G. The big claim regrows to end at D, a ROOF the block's size goes on
+top-down (so `mem_ringtop` cannot send the block to the top end - 14.166 - on
+a machine where only rings stand there), the block is claimed and must land AT
+D, the big claim shrinks back to F, every other block of the suite is pinned,
+and the ask is one KB past the largest run - which only the slide from D to G
+funds. Each stage records a reason (`hf_dmawhy`) the harness names, with F, D,
+where the block stood and both `mem_avail` answers. (Two smaller fixes on the
+way: `.dmadone` went `je .done` when no block was claimed, skipping 15 to 18
+unrecorded; `hf_lin`, shared by `hf_para` and `hf_mypara`.)
+
+**Red and green, measured** (both kernels from one tree, `mem_cp_dest`'s
+`jz .out` made `jmp .out` - the bump gone - and built back): green, kern_mega
+F=5F20h D=6060h, the block to 6000h (offset 0), 43K pinned; kern_big F=4F20h
+D=5060h, to 5000h, 95K pinned; both VERDICT OK. Red, the block at 5F20h and
+4F20h, **offset F20h, stage 11 "landed with its head ACROSS a page"**, check 14
+alone red on each. Kernels rebuilt after: `kernel.bin`, `megak/kernel.bin`,
+`os8088-360.img`, `mega.img` md5-identical to before.
+
+**Found on the way, NOT fixed: `mem_avail` over-reports a movable `MC_DMA`
+block** (SPEC.md 66.4.3.1's second open mismatch). The first fix asked
+`mem_avail` with only the block movable (check 13's form), and the claim of
+its answer was refused on BOTH kernels: 48K promised, 45K produced (kern_mega);
+100K against 97K (kern_big). `mem_avail_lvl_x`'s inline `mem_cp_both` packs a
+floor mover onto the fill point and never asks `mem_cp_dest`, so it plans the
+block AT F where the run bumps it to G. With the bump removed the plan was
+exact (48K, 100K granted and the block at F) - the plan is the run but for
+this. The dangerous direction (the claimant sheds its caches and is refused
+anyway); it reaches the movable `MC_DMA` claims in the tree - the typeface
+cache, the Audio Player's idle look-ahead - by less than the block's head. The
+fix is `mem_cp_dest` at the walk's floor arm (the gap kept, the fill point
+past the destination), the ceiling arm charging a `MC_DMA` mover as a barrier
+(the safe under-report), and `tools/heapwhatif.py` / `both_passes()` with it -
+it moves `kern_big`, so it is the owner's to schedule. The row records the
+figure (`hf_dmaaw`) and prints it beside the pinned one; asserting it would be
+a check on 66.4.3.1, not 66.4.2.
+
+**Bytes**: no kernel source touched - kern_big, kern_small and kern_mega
+unchanged. HEAPFRAG (never shipped) 2,382 -> 2,650 bytes, its bss 176 -> 188.
+
+**Rows run, scoped** (`os88soak.py start`, one emulator lane, 29 min): every
+row that opens HEAPFRAG, whose suite - check 14 with it - runs on its first
+paint and leaves the heap the rows after it build on, and their kern_mega
+ports. 37 of 37 green: `heapcheck`, `mega-heapcheck`, `paintmove`,
+`mega-paintmove`, `rdmove`, `mega-rdmove`, `editmove`, `editmove-frotz`,
+`mega-editmove`, `mega-editmove-frotz`, `c64move`, `mega-c64move`, `a2move`,
+`mega-a2move`, `rcmove`, `mega-rcmove`, `regmove`, `mega-regmove`, `regwork`,
+`mega-regwork`, `sheetmove`, `sheetmove-rt`, `mega-sheetmove`, `trackmove`,
+`mega-trackmove`, `wdheapmove`, `wdheapmove-sc`, `mega-wdheapmove`,
+`weavemove`, `loommove`, `mega-weavemove`, `cmemmove`, `ovlmove`, `cpcost`,
+`pathcost`, `fatwpin`, `doswpart`. No kernel byte moved, so no other row can
+see the change.
