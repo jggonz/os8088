@@ -103,6 +103,13 @@ SECTION_SEG = {".text": "KERNEL_SEG", ".bss": "KERNEL_SEG",
                # neither card `.cold` slides over it and these addresses
                # name `.cold`'s bytes, which is m.sym()'s problem, not this
                ".vga": "KERNEL_SEG",
+               # ...and the third boot-only home (SPEC.md 2.9.15): the file's
+               # last section, at a constant segment from the moment kz_all
+               # expands it until mem_unblob gives it back - so a label in it
+               # names live code only during kmain_o, as `.ovl`'s do until the
+               # mount. It was `.cfx` and missing here, which filed cfx_slide
+               # nowhere
+               ".boot3": "B3_RAM",
                # kern_mega's own segment (docs/plans/completed/KERN-MEGA-SEGMENTS-PLAN.md):
                # its RUNG, which is where it is until mega_enter copies it
                # above 1MB with `.cold` and where it stays on a machine with
@@ -556,7 +563,7 @@ def _load(defines=(), check=True):
         mine = open(binf, "rb").read()
         mine = mine[:_modcut(mine)]
         theirs = open(built, "rb").read()
-        # ...less the blob's cfx_tab, which tools/os88cfx.py stamps AFTER the
+        # ...less `.boot3`'s cfx_tab, which tools/os88cfx.py stamps AFTER the
         # assembly (docs/plans/MOVABLE-COLD-PLAN.md 4): zeros in this one
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         import os88cfx

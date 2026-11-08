@@ -1,6 +1,7 @@
 # `.boot3` — boot-only code that rides in KERNEL.SYS
 
-> **Status: a PROPOSAL. Nothing is built.** Written 2026-11-08 at the owner's
+> **Status: BEING BUILT. Wave 0 is built (2026-11-08, section 16.4); waves 1-5
+> and item E are not.** Written 2026-11-08 at the owner's
 > request, after the big review's size ledger asked for a 14th blob sector
 > and the owner refused it (docs/reports/BIG-REVIEW-2026-11-08.md section 7,
 > docs/reports/big-review-2026-11-08/synth/phase1.md "Both boot-time homes
@@ -516,6 +517,11 @@ Result:
   commit proves it.
 - kern_big and kern_emu: `.boot3` = `.cfx` + 6.
 - Resident: 0.
+
+**Built (build, 2026-11-08)**, with the deviations section 16.4 lists: `.boot3`
+is `.cfx` + **5** (535 bytes), resident 0, BLOB_LIFT 96 (the bound gives 64),
+kern_small's and kern_mega's `kernel.bin` and `kernel.sys` byte-identical at
+one commit.
 
 ### Wave 1: closed clusters, per kernel
 
@@ -1608,3 +1614,91 @@ wall, rc 0) and t_blobruns' own `runs()` and `stage2_calls()` as a library.
 Nothing found. The two checks 16.2 left for wave 5's commit stand
 (`mega_modhif`'s code half readable through `cs:`; no worker calling
 OSAPI_MOUSE on a mouseless machine).
+
+### 16.4 Wave 0 as built (build, 2026-11-08)
+
+Built against this tree's code; where the code disagreed with the plan the
+code won, and each deviation is listed here. Host checks only (CLAUDE.md's
+Testing rule): no emulator ran.
+
+**What was measured.** kern_big: `.boot3` 535 bytes at file 0x191A0
+(`.cfx` was 530), `B3_RAM` 0x17DA, BLOB_LIFT 96 (the derived bound is 64 and
+the floor wins), `kernel.bin` 103,351 (+5), KERNEL.SYS 85,184 (+16, 167
+sectors, unchanged), the kernel's `.text`, `.ovl`, `.cold` and `.vga`
+byte-identical to the starting commit, and the blob different only in three
+`call B3_SEG:` offsets (`cfx_grid`, `cfx_ctxcap` and `cfx_cfgname` moved 5
+bytes down the section). `cfx_tab` 195 of 256 bytes (93 + 3 + 25 + 0).
+`kernsize`: guard 5 headroom 22,016 (it read 23,552, the lift uncounted; kern_small 62,464 -> 60,928, kern_mega 509,440 -> 507,904),
+boot arena at 128KB 24,064, `.boot3` 523 bytes before the lift steps;
+kern_small 60,928 and 63,488; kern_mega's arena 509,952 at 640KB.
+
+**Deviations.**
+
+1. **The fourth group is `mov ax, cs`, not `mov ax, B3_SEG`**: two bytes
+   against three, so `.boot3` is `.cfx` + 5, not + 6. DS and CS are both
+   `B3_SEG` at that point.
+2. **B3_ON is COLD_SLIDE in wave 0** - kern_big and kern_emu, where `.cfx`
+   was. The NO_COLD_SLIDE and NO_ROM_COLD knob arms (section 5) take the
+   fallback, as kern_small and kern_mega do, until wave 1 moves a body:
+   they had no `.cfx`, nothing moves in wave 0, and turning the section on
+   there would change two knob layouts with nothing in them that only
+   `buildmatrix` (soak) could see.
+3. **`.boot3b` is not created yet.** `B3_RES equ 0`, and every guard and
+   term that names it is written; the nobits section arrives with its first
+   user, `ovc_buf`, in wave 2.
+4. **The macros take a kind word.** `B3SECT [ovl|ovb]` and
+   `B3CALL x [, ovl|ovb]` carry the body's old home, so the fallback arm is
+   chosen at the body and at each call; rule B8 holds the two words to each
+   other. `B2CALL`'s fallback is BLOBCALL (the plan's column said "-"): in
+   that arm the caller is in the blob.
+5. **`os88ovlchk`'s walk no longer reads a `section` line inside a `%macro`
+   body as the definition's switch.** B3SECT's four arms are four such
+   lines, and read that way they filed the rest of kernel.asm in `.boot2`
+   (rule 2c reported `kmo_mark` stale). `tools/os88modcost.py` had the same
+   defect in its source scan and its listing pass and is fixed the same way.
+   `os88modcost --ovl` was already failing at the starting commit (`ovl`
+   attributed 3,441 of 5,119) and still does: not this wave's, not fixed.
+6. **Rule exceptions are markers on the line** for B3 (`; ovlchk: B3
+   hand-down - why`) and B5 (`; ovlchk: B5 blob offset - why`); B1 uses
+   `tests/ovlrefs.txt` as planned. The expander behind B1-B9 evaluates
+   `%ifidn` on a macro's known arguments (VSW_SWITCH's `.boot3` call is
+   `bvs`'s alone; CTRL.DRV expands it as `vid`), and keeps every arm of any
+   other condition.
+7. **The fixtures run inside `os88ovlchk` on every invocation** (17 trees,
+   ~0.02 s), not as a row: a rule whose fixture stops failing fails `make`.
+   The rules cost ~0.45 s, paid back by a `%` byte test in front of the
+   eighteen loops' macro regexes, so the tool's CPU is unchanged (4.3 s
+   against 4.3 s at the starting commit; the `ovlchk` row's registered 1.4
+   s is stale on this box at both).
+8. **The `t_bootfloor` fence is a fast row of its own, `bootfence`**
+   (`t_bootfloor.py --fence`): `bootfloor` is soak and re-assembles the
+   kernel (3.5 s), and the owner asked for a BUILD-time fence. It reads the
+   sectors' encodings against each tree's map, 0.04 s. `t_bootfloor`'s own
+   `boot2_secs()` had the literal-13 defect too and now reads the map.
+9. **`kernsize`'s new fields are a second `%warning`, `ksb:`**, because its
+   parser reads the first `ks:` line only. `b2res=` is there with `boot3=`,
+   `b3ram=`, `b3res=` and `blift=`.
+10. **`blobruns`' small360/small720 ratchet moves 2 -> 3.** That is the
+    model fixed, not a change: at kern_small's own 11 sectors and with the
+    page bound, stage 1's read is 6 + 1 + 4. PREDICTED until `os88boot` on
+    small360 confirms it in the final pass. `--tail N` is added. **kern_mega
+    rows are not**: they need `make mega`'s images, which `all` does not
+    build and a fast row cannot rest on; they land with kern_mega's wave 1.
+11. **`tests/coldslide.py` counts the fourth group and does not read it**:
+    `.boot3` is the heap's by the time the desktop is up, so a live read
+    needs a stop before `mem_unblob`, which matters once the group is
+    non-empty (kern_big wave 1). **`tests/bootstatus.py` and
+    `tools/os88boot.py` needed nothing** beyond a comment: nothing in them
+    names the section, and `B3CALL cfx_slide` lists as an ordinary call.
+12. **The SPEC section is 2.9.15** (2.9.15.1-2.9.15.4), with pointers from
+    2.5.1.1, 2.5.3.1, 2.5.3.2, 2.9.6, 2.9.13.1, 2.10.3, 2.10.4, 2.10.9,
+    15.3.8.5, 39.22 and 52.10.2.1.
+
+
+**Found on the way, not this wave's to fix.** `build/mega.img` and
+`mega120.img` carry `build/syscheck.o88` - the SYSCHECK.O88 whose manifest
+is written from kern_big's system disk (SPEC.md 118.2.1) - so they change
+whenever kern_big's KERNEL.SYS or COLDHMA.SYS does, though kern_mega's own
+kernel is byte-identical; `util360.img` carries the same file, by design.
+Whether kern_mega's disk should carry a manifest of its own is SPEC.md
+118's question.

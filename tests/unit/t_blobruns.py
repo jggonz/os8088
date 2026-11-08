@@ -2,9 +2,11 @@
 """How many int 13h calls does stage 1 spend on the blob - and stage 2 on the
 kernel behind it? (SPEC.md 15.3.8.5, 2.9.14)
 
-    python3 tests/unit/t_blobruns.py [--sectors N]
+    python3 tests/unit/t_blobruns.py [--sectors N] [--tail N]
 
-`--sectors N` prices a blob this file's kernel does not have, which is what
+`--tail N` prices N more PACKED sectors in stage 2's tail - what a body moved
+into `.boot3`, KERNEL.SYS's last section, costs after the bar (SPEC.md
+2.9.15, BOOT3-PLAN 10.2). `--sectors N` prices a blob this file's kernel does not have, which is what
 somebody about to spend a byte of `.boot2` wants to know: `--sectors 14` is
 SPLSTARS' blob and shows the 720KB disk taking a third call for one sector.
 It prices BOTH reads, because a longer blob moves every kernel sector behind
@@ -43,7 +45,15 @@ and then THAT GEOMETRY's row moves with a reason beside it - what it may not be
 is a thing nobody noticed.
 
 Host-side and exact: it reads the images `make` just built, finds KERNEL.SYS
-in the root directory, and walks the runs the way the sector does. No emulator
+in the root directory, and walks the runs the way the sector does - bounded
+at the track AND at the 64KB DMA page of the destination, which is the blob's
+own segment (HEAP_PARA, the map's BLOB_SEG_AT: boot.asm's two bounds), and
+for EACH KERNEL'S OWN blob length, read off its kernel.kz.json. Both were
+missing until BOOT3-PLAN wave 0 moved this row to the FAST tier: it read the
+literal 13 out of `BOOT2_SECS equ 13 + ...` for every kernel, so it priced
+kern_small's 11-sector blob as 13, and it walked no page, so it reported
+small360's blob - 0xF200..0x10800, across the page at 0x10000 - as two calls
+where stage 1 makes three. No emulator
 - and MartyPC cannot host a 720KB drive with the ROM sets in this tree anyway,
 which is precisely how the boundary got missed.
 """
@@ -74,39 +84,63 @@ ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
 # 21 on 1.44MB, so a growth that is free on the release geometry can still buy
 # a call on the other three - and 720KB is still the one that binds.
 IMAGES = {
-    "os8088-360.img": (2, "6 + 2 at 8 sectors; it was 6 + 9 + 4 at 19, and "
-                          "the third call arrived with the 16th sector"),
-    "os8088-720.img": (2, "4 + 4 at 8; 13 is this geometry's last two-call "
-                          "blob and the 14th sector was the price"),
-    "os8088-120.img": (2, "1 + 7 at 8 - the data area starts one sector "
+    "os8088-360.img": (2, "4 + 9 at 13 sectors (it was 6 + 2 at 8 and 6 + "
+                          "9 + 4 at 19); the 14th costs a third call"),
+    "os8088-720.img": (2, "4 + 9 at 13, this geometry's last two-call "
+                          "blob: the 14th sector was the price"),
+    "os8088-120.img": (2, "1 + 12 at 13 - the data area starts one sector "
                           "short of a cylinder end here, so the first call "
                           "is a single sector and 16 is the last two-call "
                           "blob"),
-    "os8088.img":     (2, "3 + 5 at 8, and 21 is the last size that is two "
+    "os8088.img":     (2, "3 + 10 at 13, and 21 is the last size that is two "
                           "calls here - the next one is not free"),
     # the 128KB machine's (SPEC.md 24.5.7): kern_small's disks put KERNEL.SYS
     # at LBA 12, two sectors earlier than the 360KB and 720KB disks above
-    "small360.img":   (2, "6 + 7 at 13: the data area starts at LBA 12"),
-    "small720.img":   (2, "6 + 7 at 13, the 360KB small disk's shape"),
+    # ...and at kern_small's OWN length, 11, with stage 1's page bound: its
+    # blob is read to 0xF200 and the 64KB page ends at 0x10000, 7 sectors in,
+    # so the second track's run splits - 6 + 1 + 4. The row read 2 while the
+    # model priced a 13-sector blob and walked no page (BOOT3-PLAN 12, "found
+    # on the way"); the model now walks what boot.asm does, and the count is
+    # PREDICTED until os88boot on small360 confirms it (the final pass).
+    # BOOT3-PLAN wave 4's 7-sector blob, kept off the page, gives one back
+    "small360.img":   (3, "6 + 1 + 4 at 11: the data area starts at LBA 12, "
+                          "and the blob at 0xF200 crosses the DMA page at "
+                          "0x10000 seven sectors in"),
+    "small720.img":   (3, "6 + 1 + 4 at 11, the 360KB small disk's shape"),
 }
 # ...whose kernel is build/smallk's, so its stage-2 read is priced off that
 # kernel's own packed layout and not the big one's
 SMALL = {"small360.img", "small720.img"}
 
 
-def boot2_secs():
-    """The kernel's own constant, not a copy - the Makefile reads it the same
-    way and kernel.asm asserts stage 2 fits inside it."""
-    path = os.path.join(ROOT, "kernel", "kernel.asm")
-    for line in open(path, encoding="utf-8"):
-        if line.startswith("BOOT2_SECS ") or line.startswith("BOOT2_SECS\t"):
-            head = line.split(";")[0].split()
-            if len(head) >= 3 and head[1] == "equ" and head[2].isdigit():
-                return int(head[2])
-    raise SystemExit("t_blobruns: no BOOT2_SECS in kernel/kernel.asm")
+def boot2_secs(sub=""):
+    """The blob's length IN THE KERNEL ON THAT DISK: kernel.kz.json's `blob`
+    (BOOT2_PAD), which tools/os88kz.py writes off the assembly itself. It was
+    the literal `13` read out of `BOOT2_SECS equ 13 + BOOT2_KNOBSEC -
+    BOOT2_SMALLSEC`, which is kern_big's and was applied to kern_small's 11."""
+    k = kz(sub)
+    if k is None:
+        raise SystemExit("t_blobruns: no build/%skernel.kz.json - run make "
+                         "first" % (sub + "/" if sub else ""))
+    if k["blob"] % 512:
+        raise SystemExit("t_blobruns: %s's blob is %d bytes, not whole sectors"
+                         % (sub or "build", k["blob"]))
+    return k["blob"] // 512
 
 
-def runs(path, nsec):
+def blobseg(sub=""):
+    """Where stage 1 reads the blob - HEAP_PARA, the map's BLOB_SEG_AT - for
+    its DMA-page bound."""
+    import re
+    path = os.path.join(ROOT, "build", sub, "kernel.map")
+    m = re.search(r"^([0-9A-F]{8})\s+BLOB_SEG_AT\s*$",
+                  open(path, errors="replace").read(), re.M)
+    if not m:
+        raise SystemExit("t_blobruns: no BLOB_SEG_AT in %s" % path)
+    return int(m.group(1), 16)
+
+
+def runs(path, nsec, dest=None):
     """The (cyl, head, sector, count) runs stage 1 asks for, off the image."""
     d = open(path, "rb").read()
     bps = struct.unpack("<H", d[11:13])[0]
@@ -141,6 +175,11 @@ def runs(path, nsec):
         cyl, rem = divmod(lba, spt * heads)
         head, sec = divmod(rem, spt)
         run = min(spt - sec, left)          # sec is 0-based here
+        if dest is not None:                # ...and boot.asm's second bound,
+            page = (-((dest << 4) & 0xFFFF)) & 0xFFFF   # the 64KB DMA page
+            if page:
+                run = min(run, page >> 9)
+            dest += run * 32
         out.append((cyl, head, sec + 1, run))
         lba += run
         left -= run
@@ -168,12 +207,13 @@ def kz(sub=""):
     return json.load(open(path))
 
 
-def stage2_calls(start, spt, heads, nsec_blob, k):
+def stage2_calls(start, spt, heads, nsec_blob, k, tail=0):
     runmax = spt * heads                    # an 8088's bound: the cylinder
     lba = start + nsec_blob
     dest = KERNEL_SEG
     if k:
-        parts = [(k["headsecs"], 0), (k["ksecs"] - k["headsecs"], k["rpara"])]
+        parts = [(k["headsecs"], 0),
+                 (k["ksecs"] - k["headsecs"] + tail, k["rpara"])]
     else:
         return None
     calls = 0
@@ -213,22 +253,32 @@ STAGE2 = {
     "os8088-720.img": 11,
     "os8088-120.img": 8,
     "os8088.img": 7,
-    "small360.img": 7,      # kern_small, 108 sectors packed
-    "small720.img": 7,
+    "small360.img": 7,      # kern_small, 108 sectors packed, read after its
+    "small720.img": 7,      # OWN 11-sector blob (it was priced after 13)
 }
 
 
 def main():
-    nsec = boot2_secs()
     argv = sys.argv[1:]
-    if argv[:1] == ["--sectors"] and len(argv) > 1:
-        nsec = int(argv[1])
-        print("  (asked for %d sectors, not the kernel's own %d)"
-              % (nsec, boot2_secs()))
+    asked = tail = None
+    while argv:
+        if argv[0] in ("--sectors", "--tail") and len(argv) > 1:
+            if argv[0] == "--sectors":
+                asked = int(argv[1])
+            else:
+                tail = int(argv[1])
+            argv = argv[2:]
+        else:
+            raise SystemExit("usage: t_blobruns.py [--sectors N] [--tail N]")
+    if asked is not None:
+        print("  (asked for %d blob sectors, not each kernel's own)" % asked)
+    if tail:
+        print("  (and %d more packed sectors in stage 2's tail)" % tail)
     fail = []
     seen = []
-    print("  stage 1 reads BOOT2_SECS = %d sectors of KERNEL.SYS" % nsec)
     for img, (cap, why) in IMAGES.items():
+        sub = "smallk" if img in SMALL else ""
+        nsec = asked if asked is not None else boot2_secs(sub)
         path = os.path.join(ROOT, "build", img)
         if not os.path.exists(path):
             # a FAILURE, not a skip: this row used to print "not built" and
@@ -238,10 +288,10 @@ def main():
                         "this geometry (%s) cannot be read off a disk that "
                         "is not there" % (img, why))
             continue
-        spt, r, (start, heads) = runs(path, nsec)
+        spt, r, (start, heads) = runs(path, nsec, blobseg(sub))
         seen.append(len(r))
-        print("  %-16s SPT=%-2d  %d call(s) of %d: %s"
-              % (img, spt, len(r), cap,
+        print("  %-16s SPT=%-2d  %d call(s) of %d for %d sectors: %s"
+              % (img, spt, len(r), cap, nsec,
                  " + ".join("%d@C%dH%dS%d" % (n, c, h, s) for c, h, s, n in r)))
         if len(r) > cap:
             fail.append("%s: the blob takes %d int 13h calls and this "
@@ -253,8 +303,8 @@ def main():
                         "(SPEC.md 15.3.8.5, 2.9.12)"
                         % (img, len(r), cap, why, r[-1][3]))
 
-        k = kz("smallk" if img in SMALL else "")
-        n2 = stage2_calls(start, spt, heads, nsec, k)
+        k = kz(sub)
+        n2 = stage2_calls(start, spt, heads, nsec, k, tail or 0)
         if n2 is not None:
             cap2 = STAGE2[img]
             print("  %-16s stage 2 reads the kernel in %d call(s) of %d"

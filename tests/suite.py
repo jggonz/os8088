@@ -353,16 +353,21 @@ FAST = [
         "the same numbers the assembler reads. It found the editor's table "
         "still in an old record format on its first run. SOAK: one "
         "package's subject"),
-    Row("blobruns", "soak", py("tests/unit/t_blobruns.py"), 0.1,
-        "how many int 13h calls stage 1 spends on the blob, per geometry "
-        "(SPEC.md 15.3.8.5) - the count is NOT a function of BOOT2_SECS "
-        "alone, because a run is bounded by the track and KERNEL.SYS starts "
-        "where each BPB puts the data area. 13 is the last sector that fits "
-        "two calls on a 720KB disk, and the 14th costs a whole revolution to "
-        "move one sector. "
-        "SOAK and not fast: the blob's shape is stage 1's and the BPB's, "
-        "which no package can reach - it belongs beside a boot or geometry "
-        "change",
+    Row("blobruns", "fast", py("tests/unit/t_blobruns.py"), 0.1,
+        "how many int 13h calls stage 1 spends on the blob, and stage 2 on "
+        "the kernel behind it, per geometry (SPEC.md 15.3.8.5) - the count "
+        "is NOT a function of BOOT2_SECS alone, because a run is bounded by "
+        "the track and the 64KB DMA page and KERNEL.SYS starts where each "
+        "BPB puts the data area. 13 is the last sector that fits two calls "
+        "on a 720KB disk, and the 14th costs a whole revolution to move one "
+        "sector. Each kernel at its OWN blob length (kernel.kz.json), and "
+        "small360's blob across the page at 0x10000 is three calls, not "
+        "the two the old model said. "
+        "FAST (the owner's, 2026-11-08; BOOT3-PLAN 10.2): `.boot3` grows "
+        "the tail every wave, and a stage-2 call spent after the bar must "
+        "fail `make` rather than a field boot. A host read of the six "
+        "system disks and two kz.json files, ~0.04s - WRITING-TESTS 2.1's "
+        "shipped-artifacts family, beside image and canary",
         needs=("nasm",)),
     Row("romsmall", "soak", py("tests/romsmall.py"), 45.0,
         "docs/plans/ROM-PLAN.md 3.4, wave 2: `make small`'s disks boot the same "
@@ -1602,6 +1607,18 @@ FAST = [
         "odd amount with every row green: passes 12 and 13 each found the "
         "whole list odd part-way through. Reads the kernel.map the build "
         "writes, so it assembles nothing"),
+    Row("bootfence", "fast", py("tests/unit/t_bootfloor.py", "--fence"),
+        0.1,
+        "B2CALL's fence (SPEC.md 2.9.15.2): `.boot3` calls back into the "
+        "blob as `call BLOB_SEG_AT:x`, a constant, so every shipped stage-1 "
+        "sector must jump to and bound on the map's BLOB_SEG_AT and boothd "
+        "load it as BLOB_SEG - read off the sectors' own encodings against "
+        "each kernel tree's map, no assembly. FAST because it is the "
+        "build-time half of a choice the owner made over SPLCALL's 19 bytes "
+        "a site (BOOT3-PLAN 15 q9): a loader built from another define set "
+        "would send every `.boot3` call into the wrong RAM with no error. "
+        "Breaks red with one byte of boot360.bin's far jump changed",
+        needs=("nasm",)),
     Row("sysman", "fast", py("tests/unit/t_sysman.py"), 0.3,
         "SPEC.md 118.2.1: System Check's manifest is written from the system "
         "disk's INPUTS (the image depends on SYSCHECK.O88), so every manifest "

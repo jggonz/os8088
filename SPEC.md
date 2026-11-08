@@ -623,7 +623,9 @@ one place that can give it.
 What remains is the standing cost, and it is the same one stated the same way:
 **the kernel's minimum RAM now includes the blob's rung**, and it moves when
 the blob does. Guard 5 in `kernel.asm` is that as an assertion —
-`KERNEL_SEG*16 + KERN_SIZE + BOOT2_PAD` against `MIN_RAM_KB` less the boot
+`BLOB_SEG_AT*16 + BOOT2_PAD`, the blob's own end, lift included (§2.9.15.3;
+it read `KERNEL_SEG*16 + KERN_SIZE + BOOT2_PAD` and missed the lift until
+BOOT3-PLAN wave 0), against `MIN_RAM_KB` less the boot
 sector and its stack — and since the overlay joined the blob it is the
 **binding** guard, ahead of `KERN_BUDGET`: 4,096 bytes of headroom against the
 budget's 5,120. Anything moved *into* the overlay to save resident bytes raises
@@ -777,6 +779,11 @@ last two was written against a defect it then found:
   canary caught the wreckage. Nothing named the overlay, which is the whole
   reason these are rules and not review.
 
+**A third home has a third deadline** (§2.9.15): `.boot3` is dead at
+`mem_unblob_x`, like the blob, but it is NOT ALIVE until `kz_all` has
+expanded the tail - so its rules (B1-B9, §2.9.15.4) ask about the start of
+its life as well as the end, which neither half here has to.
+
 ##### 2.5.3.2 …and on `kern_small` the halves are a BUILD CHOICE, because the window half is the LISTING's
 
 §2.5.3 splits the overlay by **deadline**, and most of what is in it does not
@@ -879,6 +886,16 @@ Three rules bind a body that takes this:
 - **`OVBCALL` is held to the blob arm by rule 2d**, so aiming it at a body
   that did *not* move fails the build, and aiming a plain `OVLCALL` at one
   that did fails it the other way. Both were verified by breaking them.
+
+**`B3SECT` and `B3CALL` are the same pattern for the third home**
+(§2.9.15.2), and transitional in the same way: on a kernel without `.boot3`
+yet they take the body's old arm - the blob, `.ovl` (`B3SECT ovl`), or
+OVBCALL's choice (`B3SECT ovb`) - and `os88ovlchk` models the `.boot3` arm,
+with rule B8 holding the two macros' words to each other. Unlike a
+conditional `section`, the arms are inside the MACRO, so the scanner reads
+`B3SECT` as one switch and does not depend on which arm is written last; it
+also stopped reading a `section` line inside any `%macro` body as the
+definition's switch, which B3SECT's four arms would otherwise have been.
 
 ##### 2.5.3.3 `kmain`'s own boot half is a blob body, and a knob build is given the room it costs
 
@@ -2609,6 +2626,10 @@ thing somebody writes on purpose.
 
 #### 2.9.6 …and the boot overlay joins it, so there is one transient
 
+*(There are three boot-only homes now - the blob, `.ovl` and `.boot3` - and
+§2.9.15's table is which question puts a body in which. The history below is
+the first of them.)*
+
 The blob is 2KB held at a fixed address for the whole boot and released in one
 line. **That is exactly the lifetime `.ovl` had been paying a heap claim for.**
 
@@ -3277,6 +3298,11 @@ unbounded decision below is worth about 200 ms of it.
     [ ...          LZ4 blocks     ]  what stage 2 expands into where the head ends
 ```
 
+**The LZ4 blocks END WITH `.boot3`** on a kernel that has it (§2.9.15): the
+file's last section, so its bytes are the last block's tail and arrive after
+the bar is up, priced by `t_blobruns --tail N` (fast tier). Before the
+modules, as every section is.
+
 **The head cannot be packed**, and that is §15's constraint rather than a
 choice: `spl_tick` far-calls `viddet.inc` while the rest of the kernel is
 still landing, so those sectors have to be at their linked addresses *during*
@@ -3481,6 +3507,135 @@ not**: a stale branch calling a window body through the blob's macro, or the
 reverse, fails `os88ovlchk.py` rule 2d; dated prose is not rewritten, and
 §2.5's note says which name meant which half when.
 
+#### 2.9.15 `.boot3`: the boot's third home
+
+**The contract for docs/plans/BOOT3-PLAN.md.** The boot has three boot-only
+homes, and each answers one question about a body:
+
+| home | where it lands | dead at | the question it answers |
+|---|---|---|---|
+| `.boot2`, the blob (§2.9.14) | stage 1's read, at `BLOB_SEG_AT` | `mem_unblob_x` | is it the loader or the splash, or does the first tick need it? |
+| `.ovl`, the window half (§2.5.3) | the kernel's own read, at `FAT_SEG` | `drv_boot`'s first mount | is it dead before the mount? |
+| `.boot3`, the third home | the kernel's own read, KERNEL.SYS's LAST section, at `B3_SEG` | `mem_unblob_x` | is it boot-only, and called after the tail is expanded? |
+
+`.boot2` is paid for BEFORE the progress bar - every byte of it is stage 1's
+read, ahead of the first splash pixel - and is full on kern_big. `.boot3` is
+read with the kernel, after the splash is up, so it can grow without
+delaying it; `.ovl` costs no boot RAM at all but dies at the mount. The owner's
+rule for the 14th blob sector (it costs 1-2 more `int 13h` before the bar) is
+why the third home exists.
+
+**A HOME, NOT A STAGE.** Nothing jumps to `.boot3`, it has no entry of its
+own, and there is no `boot/boot3.asm`: the name says *what `.boot2` loads*,
+as `.boot2` is what stage 1 loads, and it names a lifetime rather than a job.
+Its frame is `kernel/boot3.inc` (`cfx_slide`, `cfx_grp`, `cfx_tab`, the
+guards and the lifetime table in its header); its bodies stay in the modules
+that own them, under `B3SECT`.
+
+##### 2.9.15.1 Where it sits, and when it is alive
+
+It is the file's last section (`MODC_START = B3_START + B3_SIZE`), so
+`B2_KSECS`, `KZ_SECS`, `kz_all`, `kz_hd` and boothd's read cover it with no
+loader change, and it is LZ4-packed as the end of the last block. It lands
+at `B3_RAM` = `B3_SEG`, a constant:
+
+| kernel | `B3_RAM` | it covers | since |
+|---|---|---|---|
+| kern_big, kern_emu | `VGABUF_RAM` (0x17DA at wave 0) - the paragraph past `.cold` | `.vgabuf`'s 336 bytes, `LADDER_PACK`'s rounding to `KERN_END`, the blob's lift | wave 0: the section took `.cfx` over (§2.10.9) |
+| kern_small, kern_mega, the `NO_COLD_SLIDE` / `NO_ROM_COLD` knobs | (not yet) | - | the wave that first moves a body there (BOOT3-PLAN 5) |
+
+| moment | what is in `.boot3`'s RAM |
+|---|---|
+| stage 1, the first tick, the tail's read | packed bytes or nothing: **not callable** |
+| `kz_all` returns (stage 2's end, after the canary; boothd's `kz_hd`) | expanded and aboard |
+| `kmain` → `SPLGATE1 kmain_o` → its calls | live: `mem_init_x` raised `[mem_base]` past the blob and `BOOT2_RES`, so no claim lands on it |
+| `kmain` zeroes `[spl_fseg]`, then `mem_unblob_x` | **dropped**, by the one store that gives back the blob and its lift: 0 new instructions |
+
+`kmain_o` is entered only through `SPLGATE1`'s `[spl_fseg]` test, so
+`.boot3` is aboard exactly when the blob is. **On a VGA or an EGA machine
+the planar decoder owns `.boot3`'s first `KVGABUF_SIZE` bytes** (§39.22):
+only the slide prefix, which runs only on a machine with neither card, may
+sit there, and every other entry follows `b3_live`, which is asserted past
+them.
+
+##### 2.9.15.2 The contract and the macros
+
+A `.boot3` body has a `.boot2` body's contract: CS = `B3_SEG`, DS =
+KERNEL_SEG, SS = LOW_SEG, far-entered, `retf`, its own data through `cs:`,
+`.text` through the KERNEL_SEG shims, `.cold` by a plain `call COLD_SEG:x`.
+
+- **`B3SECT [ovl|ovb]`** places a body: `section .boot3` on a kernel with the
+  section (`B3_ON`), and on one without it the body's old home - the blob,
+  `.ovl`, or OVBCALL's choice (§2.5.3.2).
+- **`B3CALL x [, ovl|ovb]`** calls one: `call B3_SEG:x` (5 bytes, OVLCALL's
+  shape - nothing published, nothing retired), `push cs` + a near call from
+  inside `.boot3`, and on a kernel without the section the old home's entry.
+  The word after the comma must be the body's `B3SECT` word (rule B8).
+- **`B2CALL x`** is the way back into the blob from `.boot3`:
+  `call BLOB_SEG_AT:x`, the constant stage 1 (`HEAP_PARA`) and boothd
+  (`BLOB_SEG`) are built with. It is a NEW ASSUMPTION - before it, nothing in
+  the kernel assumed where the blob is (`[spl_fseg]` says) - taken by the
+  owner over `SPLCALL`'s 19 bytes a site, and fenced at build time: the fast
+  row `bootfence` (`t_bootfloor.py --fence`) reads every shipped loader's
+  encodings against each kernel's map. Its target ends in `retf`.
+
+The fallback arms are transitional, OVBCALL's dual-arm pattern: once every
+kernel has the section they go, and a `B3SECT` body is in `.boot3`
+everywhere.
+
+##### 2.9.15.3 The lift is derived
+
+`BLOB_LIFT` was a hand-set 96 paragraphs (§2.10.3). On a kernel with
+`.boot3` it is the largest of three, every term in bytes of linear address:
+
+```
+CEIL512(x) = (x + 511) & ~511
+BLOB_LIFT  = max(96,
+                 CEIL512(B3_RAM*16 + B3_SIZE + KZ_MARGIN + 1022)/16 - HEAP_SEG,
+                 CEIL512(B3_RAM*16 + B3_SIZE + B3_RES)/16          - HEAP_SEG)
+```
+
+The 1,022 is R's sector rounding and the tail's own (511 each); a last block
+that GROWS adds to R past this bound, so boot2.asm's `KZIP` guard stays the
+exact pass-2 check. `KZ_MARGIN_K` mirrors `KZ_MARGIN` under a guard. The
+floor keeps a section that fits under 96 paragraphs from moving anything:
+kern_big's bound is 64 at wave 0, and `.boot3` may grow by `kernsize`'s
+`boot3` margin (523 bytes at wave 0) before the lift steps. A step is 512
+bytes of BOOT RAM, never a resident byte - and an installed hard disk's
+volume boot record must be refreshed with the kernel (§52.10).
+
+**Guard 5 counts the lift, on every kernel**: it sums `BLOB_SEG_AT*16 +
+BOOT2_PAD`, the blob's own end. It summed `KERNEL_SEG*16 + KERN_SIZE +
+BOOT2_PAD` - `HEAP_SEG`'s - and missed the lift's 1,536 bytes on every
+ROM_COLD kernel since §2.10.3 (BR-154 of the 2026-11-08 review); `kernsize`'s
+`boot` line counts it too and prints the BOOT ARENA at `MIN_RAM_KB`, from the
+blob's nobits floor (`BLOB_SEG_AT*16 + BOOT2_RES`) to the top of RAM -
+24,064 bytes on kern_big at 128KB, the host figure that stands in for a
+kern_big 128KB boot row.
+
+##### 2.9.15.4 The fences: all at build time
+
+There is nothing to retire at the drop and no run-time guard (§1's rule: a
+resident guard is for our catastrophic mistakes, and these are caught at
+build time). `tools/os88ovlchk.py` holds every kernel's source to nine rules,
+each with a fixture that must fail it on every run:
+
+| rule | refuses |
+|---|---|
+| B1 | a reference into `.boot3` from anywhere but the blob or `.boot3`, unless `tests/ovlrefs.txt` says what runs it between `kz_all` and `mem_unblob` |
+| B2 | the load-time cone - `boot2_entry`, `read_run`, `kz_all`, `kz_hd`, `kz_expand`, `spl_tick`, `spl_chrome`, `vid_detect`, `bvs_apply`, `spl_isr`, `spl_anim` and what they reach - naming `.boot3`; and `boot/boot2.asm` or `kernel/splash.inc` naming it at all |
+| B3 | a CS store in `.boot3`, or `B3_SEG` stored in memory, unless the line says `; ovlchk: B3 hand-down - why` |
+| B4 | a near transfer, or a blob macro (`BLOBCALL`, `SPLCALL`, ...), across `.boot2` and `.boot3` |
+| B5 | a `cs:` read in `.boot3` of a label outside it, and a blob label carried as an immediate (`; ovlchk: B5 blob offset - why` excuses one) |
+| B6 | a `KZ_*`, `b2_*` or post-`boot2_entry` name in `.boot3` (§2.9.13.4's identity), and a `B3CALL` after `drv_boot_x` to a body that reaches `.ovl` |
+| B7 | `.boot3` in a file `kerndos/kdos.asm` includes, unless `kerndos/kdlayout.inc` declares it |
+| B8 | `B3CALL` at a non-`.boot3` target or with the other fallback word, `B2CALL` outside `.boot3` or at a non-blob target, either macro outside `kernel/` |
+| B9 | any transfer into `.boot3m`, which is copied and never run in place (BOOT3-PLAN wave 5) |
+
+The kernel's own guards (boot3.inc, kernel.asm): `b3_live - $$ >=
+KVGABUF_SIZE`, `B3_SIZE + B3_RES <= 0xFFF0`, `.boot3` and its scratch below
+the blob, `KZ_MARGIN_K == KZ_MARGIN`.
+
 ### 2.10 The ROM — `.cold` in a 5150's spare sockets
 
 **The contract for docs/plans/ROM-PLAN.md waves 0–3.** An IBM 5150 has six
@@ -3583,7 +3738,9 @@ paragraphs (`BLOB_LIFT`):
 - the packed tail is read in whole sectors and ends up to `KZ_MARGIN` + 1,022
   bytes past the image, and with `.cold` on top that reached the blob;
 - `.boot2`'s guard proves the read clears it on every build;
-- `mem_unblob` gives the lift back with the blob.
+- `mem_unblob` gives the lift back with the blob;
+- on a kernel with `.boot3` (§2.9.15.3) 96 is the FLOOR of a derived lift,
+  and `.boot3`, not `.cold`, is the file's last section.
 
 #### 2.10.4 Adoption: the ROM decides, the kernel only rings
 
@@ -3652,6 +3809,15 @@ tests pass:
 Then it re-points every listed word at F400, the `.vgabuf` words at
 `COLD_RAM`, and writes `rom_mfp`. A NO is
 CF = 1 and an untouched kernel, so a wrong ROM is no ROM.
+**The lists are per segment**: `rt_text` (`.text`), `rt_win` (`.ovl` at
+`FAT_SEG`, skipped by the HMA kind, which runs after the mount), `rt_blob`
+(the blob at `[spl_fseg]`) and, on a kernel with `.boot3` (§2.9.15),
+`rt_b3` at `RT_B3SEG` - walked by BOTH kinds, `.boot3` outliving the mount.
+A ROM cut from a kernel without the section carries no walk over it
+(`RT_HASB3`), so kern_small's ROM is unchanged until its `.boot3` lands.
+`os88rom.py` compares `.boot3` with `cfx_tab` blanked (`os88cfx.blank`)
+rather than skipping it: the list is stamped after the assembly, and the
+rest of the section is code the ROM re-points.
 `tools/os88rom.py kernel` derives the lists by assembling the kernel with
 `.cold`'s segment moved, and again with `.vgabuf`'s. It assembles with the
 defines the build's `kernel-full.bin` was LAST made with - a packed kernel's
@@ -3954,20 +4120,24 @@ gives the kernel its own, so it can move `.cold` itself.
   **kern_small keeps the ROM's lists and `ROMF_FIX`** (`RT_MODFIX`): it has
   no slide, and §39.27.4 spends nothing there - its `.text` and `.cold` are
   byte-identical to the kernel before this section.
-- **The kernel's own list: `.cfx`.** The words in `.text`, the window half
-  and the blob that name `.cold`'s segment (93 + 4 + 32 at build 470) are
-  stamped by `tools/os88cfx.py` into `cfx_tab`, `CFX_MAX` (256) bytes of
-  zeros in a section of its own straight after `.cold` in the FILE. The tool
-  re-assembles with kernel.asm's `COLD_CS` hook at two values and diffs, as
-  os88rom.py does, after each of the build's two passes; the passes must
-  pack the same bytes past `.boot2` (§2.9.13), so both are stamped. Stage
-  2's one read lands `.cfx` on the RAM just past the kernel, under the
-  blob's lift (§2.10.3), which nothing claims before `mem_unblob`; a guard
-  keeps it off the blob. **It costs no resident byte and no blob sector**:
-  the blob was the first home, and its 14th sector cost the 360KB and 720KB
-  disks a whole `int 13h` call each (`t_blobruns --sectors 14`). The format:
-  three groups (`.text`, `.ovl`, `.boot2`), each a stream of offset steps
-  from the last site - a byte 1-255, or 0 and a word - ended by a word of 0.
+- **The kernel's own list: `cfx_tab`, in `.boot3`** (§2.9.15; the section
+  was `.cfx` until BOOT3-PLAN wave 0 made it the third boot-only home and
+  kept its labels' names). The words in `.text`, the window half, the blob
+  and `.boot3` itself that name `.cold`'s segment (93 + 3 + 25 + 0 at wave
+  0, 195 of the table's 256 bytes) are stamped by `tools/os88cfx.py` into
+  `cfx_tab`, `CFX_MAX` (256) bytes of zeros in the section straight after
+  `.cold` in the FILE. The tool re-assembles with kernel.asm's `COLD_CS`
+  hook at two values and diffs, as os88rom.py does, after each of the
+  build's two passes; the passes must pack the same bytes past `.boot2`
+  (§2.9.13), so both are stamped. Stage 2's one read lands the section on
+  the RAM just past the kernel, under the blob's lift, which nothing claims
+  before `mem_unblob`; a guard keeps it off the blob. **It costs no resident
+  byte and no blob sector**: the blob was the first home, and its 14th
+  sector cost the 360KB and 720KB disks a whole `int 13h` call each
+  (`t_blobruns --sectors 14`). The format: four groups (`.text`, `.ovl`,
+  `.boot2`, `.boot3`), each a stream of offset steps from the last site - a
+  byte 1-255, or 0 and a word - ended by a word of 0. The fourth is
+  re-pointed through CS (`mov ax, cs`, +5 transient bytes).
   `tools/os88sym.py` compares its assembly with the stamped kernel through
   `os88cfx.blank`.
 - **The HMA image is a delta mover.** `rom_patch` (kind 3) reads where
@@ -33702,7 +33872,16 @@ next `int 13h` gets bought.
 `tests/unit/t_blobruns.py` is the ratchet, in the fast tier, and it exists
 because nothing here could have caught this: it walks the runs out of the
 images `make` just built, and `--sectors N` prices a blob the tree does not
-have. MartyPC cannot host a 720KB drive with the ROM sets in this tree at all,
+have. *(This sentence said "fast" for a long time while the row was
+registered `soak`, so the ratchet failed nothing; BOOT3-PLAN wave 0 moved it
+there for real, at the owner's word, because `.boot3` grows stage 2's tail
+every wave and a call spent after the bar must fail `make`. It now walks
+each kernel at its OWN blob length, off kernel.kz.json - it had read the
+literal 13 out of `BOOT2_SECS equ 13 + ...` and priced kern_small's 11 as
+13 - and bounds stage 1's runs at the 64KB DMA page as boot.asm does, which
+makes small360's blob, 0xF200..0x10800, three calls (6 + 1 + 4, PREDICTED
+until os88boot confirms it), not two. `--tail N` prices N more packed
+sectors in stage 2's tail.)* MartyPC cannot host a 720KB drive with the ROM sets in this tree at all,
 which is exactly how the boundary was missed.
 
 The Makefile reads the sector count out of this file with a `sed` so the two
@@ -80567,6 +80746,14 @@ rung is simply never reserved and the heap starts under it.** Since §39.22.1
 the rung holds `vga_pbuf` alone - 336 bytes, a 512-byte rung - because the
 table moved back into `.lowbss` as a UNION with the mono pair tables.
 
+**The rung's RAM is shared at boot with `.boot3`** (§2.9.15.1, kern_big and
+kern_emu): `B3_RAM` is `VGABUF_RAM`, so KERNEL.SYS's last section lands over
+these 336 bytes and is dead at `mem_unblob_x`. On a VGA or an EGA machine the
+decoder owns them during `kmain_o` too, so only the slide - which runs on a
+machine with neither card, before the decoder's first use - may sit in
+`.boot3`'s first `KVGABUF_SIZE` bytes, and boot3.inc asserts `b3_live` past
+them.
+
 **Why this rung and not some other.** `.lowbss` is the LAST rung before the
 heap — `HEAP_SEG = KERN_END` — so a byte that leaves it lowers the heap floor
 *directly*: there is nothing above it to relocate. Anything lower in the
@@ -104445,6 +104632,16 @@ commit.
 design working: stage 2 publishes the segment it actually relocated itself to,
 so it is a measurement rather than a prediction. A constant baked into a sector
 is a prediction, and this is what a wrong one costs.
+
+**Two consequences of §2.9.15, the third boot-only home.** `BLOB_SEG` is
+`BLOB_SEG_AT` (the heap floor plus the blob's lift), and the lift is DERIVED
+from `.boot3`'s size there: every step of it (512 bytes) changes the number
+the volume boot record carries, so **an installed hard disk's boothd must be
+refreshed with its KERNEL.SYS** - the installer writes both, and a kernel
+copied over by hand onto an old volume boot record reads its tail over its
+own blob. And `.boot3`'s `B2CALL` assumes the blob is at that constant, so
+the fast row `bootfence` (`t_bootfloor.py --fence`) holds every shipped
+loader, boothd included, to the map's value on every build.
 
 #### 52.10.3.1 CLOSED: the paragraph above was true and the code was not
 

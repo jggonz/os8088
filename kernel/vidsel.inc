@@ -1505,10 +1505,10 @@ vid_ctx_ptr:
 ; WRITTEN ONCE AND EXPANDED WHERE ITS CALLERS ARE (kernel size pass 15): it
 ; was a resident `.text` body nothing resident called. Its callers are the
 ; Control Panel's vid_disp_init (`vid_ctxcap`, CTRL.DRV), EXTD.DRV's Extend
-; (`ext_ctxcap`), the blob's bvs_disp_init (`cfx_ctxcap` in `.cfx` on
+; (`ext_ctxcap`), the blob's bvs_disp_init (`cfx_ctxcap` in `.boot3` on
 ; kern_big and kern_emu, whose blob is full, `bvs_ctxcap` in kern_mega's) and
 ; the boot overlay's vid_ctx_init, which writes it in. %1 is the label, %2
-; the return (`ret`, or `retf` in `.cfx`). The vid_ctx_pre it shared with
+; the return (`ret`, or `retf` in `.boot3`). The vid_ctx_pre it shared with
 ; vid_ctx_act is written into vid_ctx_act now, its one caller left.
 ; -----------------------------------------------------------------------------
 %macro VID_CTXCAP 2
@@ -2096,8 +2096,8 @@ vid_dual_ok:
 .cap:
     xor al, al                  ; the pointer onto display 0 - which is what
 %ifidn %1, bvs                  ; a shrinking desktop owes it - through this
- %ifdef COLD_SLIDE              ; image's own copy (VID_CTXCAP): the blob's
-    call CFX_RAM:cfx_ctxcap     ; is in `.cfx` where there is one, its own
+ %ifdef B3_ON                   ; image's own copy (VID_CTXCAP): the blob's
+    B3CALL cfx_ctxcap           ; is in `.boot3` where there is one, its own
  %else                          ; where there is not
     call bvs_ctxcap
  %endif

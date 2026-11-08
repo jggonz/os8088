@@ -377,6 +377,11 @@ def measure(nasm_args=()):
     for pair in m.group(1).split():
         k, _, v = pair.partition("=")
         vals[k] = int(v)
+    m = re.search(r"\bksb: (.*?)(?: \[|$)", r.stderr, re.M)
+    if m:                               # the third boot-only home and the
+        for pair in m.group(1).split():  # blob's floor (SPEC.md 2.9.15)
+            k, _, v = pair.partition("=")
+            vals[k] = int(v)
     m = re.search(r"\bksm: (.*?)(?: \[|$)", r.stderr, re.M)
     if m:                               # kern_mega's own rung (kernel.asm)
         for pair in m.group(1).split():
@@ -663,7 +668,9 @@ def report(cur, base, variant="big", out=sys.stdout):
         room = boot - cur["ksize"]
         p(f"{tag} boot       KERN_SIZE {kb(cur['ksize'])} of {kb(boot)}"
           f" -> {kb(room)} before it cannot BOOT on"
-          f" {cur['minramkb']}KB (guard 5)")
+          f" {cur['minramkb']}KB (guard 5, the blob's lift counted)"
+          + arena(cur))
+    boot3_line(p, tag, cur)
 
     # THE BUDGET MOVING IS THE ONE THING HERE THAT IS A DECISION, and it was
     # the one thing this report could not see: it compared SPARE, which is
@@ -831,7 +838,8 @@ def report_mega(cur, base, p, tag):
       f" `.mega` rungs, {kb(hi)}, go to the heap at the switch)"
       + (f" of {kb(cur['bootmax'])} -> {kb(cur['bootmax'] - cur['ksize'])}"
          f" before it cannot BOOT in {cur['minramkb']}KB of conventional"
-         f" memory (guard 5)" if cur.get("bootmax") else ""))
+         f" memory (guard 5)" if cur.get("bootmax") else "") + arena(cur))
+    boot3_line(p, tag, cur)
     if base is not None and base.get("budget") not in (None, cur["budget"]):
         steps = (cur["budget"] - base["budget"]) // 512
         p(f"{tag} *** KERN_BUDGET MOVED: {kb(base['budget'])} ->"
@@ -850,6 +858,40 @@ def report_mega(cur, base, p, tag):
         p(tag + " no baseline for this variant in docs/KERNEL-MEMORY.md"
                 " - run `--bless` on it")
     return []
+
+
+def arena(cur):
+    """`; boot arena N` - what the boot's own claims have at MIN_RAM_KB:
+    from the blob's nobits top (BLOB_SEG_AT + BOOT2_RES, mem_init_x's floor)
+    to the top of RAM. The boot sector and its stack are dead by kmain_o.
+    The host figure that stands in for a kern_big 128KB boot row (the
+    owner's, 2026-11-08; BOOT3-PLAN 13)."""
+    if not (cur.get("blobseg") and cur.get("b2res") and cur.get("minramkb")):
+        return ""
+    top = cur["blobseg"] * 16 + cur["b2res"]
+    return (f"; boot arena {kb(cur['minramkb'] * 1024 - top)} at"
+            f" {cur['minramkb']}KB (blob's floor {top:#07x})")
+
+
+def boot3_line(p, tag, cur):
+    """The third boot-only home (SPEC.md 2.9.15): `.boot3`'s bytes, what is
+    left under the blob, and how far it can grow before the derived lift
+    steps - the CERTAIN bound, `blob - KZ_MARGIN - 1,022 - B3_RAM*16`
+    (BOOT3-PLAN 3.3). Boot RAM and load time, never a resident byte."""
+    if not cur.get("b3ram"):
+        if "b3ram" in cur:
+            p(f"{tag} boot3      no `.boot3` on this kernel yet (BOOT3-PLAN"
+              f" 5); blob lift {cur.get('blift', 0) * 16:,} bytes")
+        return
+    start = cur["b3ram"] * 16
+    end = start + cur["boot3"] + cur["b3res"]
+    blob = cur["blobseg"] * 16
+    margin = blob - 64 - 1022 - start - cur["boot3"]
+    p(f"{tag} boot3      .boot3 {kb(cur['boot3'])}"
+      + (f" + {kb(cur['b3res'])} nobits" if cur["b3res"] else "")
+      + f" at {cur['b3ram']:#06x} -> {kb(blob - end)} free under the blob,"
+      f" {kb(margin)} before the derived lift steps"
+      f" (lift {cur['blift'] * 16:,} bytes; 0 resident)")
 
 
 def read_descriptions():

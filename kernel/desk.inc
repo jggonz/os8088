@@ -482,10 +482,10 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
 ; volume after the boot), so all three leave resident together.
 ;
 ; THE BLOB HAD NINE BYTES on kern_big and kern_emu, so there the boot's copy
-; of the GEOMETRY (DESK_GRID) is `cfx_grid`, in `.cfx` past cfx_tab (kernel.asm
+; of the GEOMETRY (DESK_GRID) is `cfx_grid`, in `.boot3` past b3_live (boot3.inc
 ; - transient, like the slide beside it, and past the RAM `.vgabuf` shares
 ; with it), and the blob's bvw_rowcalc is a far call to it and the reflow.
-; kern_mega has no `.cfx` and a blob with room, so it takes the whole copy.
+; kern_mega has no `.boot3` yet and a blob with room, so it takes the whole copy.
 ; -----------------------------------------------------------------------------
 %macro DESK_GRID 0             ; the geometry: AX, BX, CX, DX, SI, flags
     ; --- which ICON, and therefore how tall a zone is (SPEC.md 26.4) --------

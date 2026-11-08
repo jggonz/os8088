@@ -262,9 +262,10 @@ def ladder(build="build", defines=()):
                                         (k["vgas"], "vgabuf")]
                                        + ([(k["vga_seg"], "vga")]
                                           if k["vgapara"] else []))]
-    # `.cfx`, the kernel's own list of the words naming `.cold`'s segment and
-    # the slide that rewrites them (SPEC.md 2.10.9). It has no rung: it is
-    # the FILE's last section before the modules, so stage 2's one read lands
+    # `.boot3`, the third boot-only home (SPEC.md 2.9.15; it was `.cfx`):
+    # the kernel's own list of the words naming `.cold`'s segment, the slide
+    # that rewrites them (SPEC.md 2.10.9) and what else rides with them. It
+    # has no rung: it is the FILE's last section before the modules, so stage 2's one read lands
     # it straight past `.cold`, across `.vgabuf`'s RAM and the top's slack,
     # where nothing claims it until mem_unblob. Placed out of the build's own
     # map and equates; a kernel without it (kern_small, kern_mega,
@@ -278,21 +279,21 @@ def ladder(build="build", defines=()):
     except Exception as e:                              # noqa: BLE001
         raise Stale("tools/os88sym.py would not give the kernel's equates "
                     "(%s)" % e, "tools/os88sym.py equates()",
-                    "run `make` first; the page places `.cfx` and reads "
+                    "run `make` first; the page places `.boot3` and reads "
                     "COLD_HOME through it")
     k["cold_home"] = eq.get("COLD_HOME")
     if k["vgapara"] and os.path.exists(mapf):
-        sec = os88cfx.sections(open(mapf).read()).get(".cfx")
-        if sec and "CFX_RAM" in eq:
-            k["cfx_seg"], k["cfx"] = eq["CFX_RAM"], sec[1] - sec[0]
+        sec = os88cfx.sections(open(mapf).read()).get(os88cfx.B3)
+        if sec and "B3_RAM" in eq:
+            k["cfx_seg"], k["cfx"] = eq["B3_RAM"], sec[1] - sec[0]
             # ...and how many words the list names, read off the stamped
-            # table itself (its three groups: `.text`, `.ovl`, the blob)
+            # table itself (its groups: `.text`, `.ovl`, the blob, `.boot3`)
             mt = open(mapf).read()
-            t0 = os88cfx.symbol(mt, ".cfx", "cfx_tab")
+            t0 = os88cfx.symbol(mt, os88cfx.B3, "cfx_tab")
             full = os.path.join(ROOT, build, "kernel-full.bin")
             if t0 is not None and os.path.exists(full):
                 img, at, n = open(full, "rb").read(), sec[0] + t0 - sec[2], []
-                for _ in range(3):
+                for _ in os88cfx.GROUPS:
                     offs, at = os88cfx.decode(img, at)
                     n.append(len(offs))
                 k["cfx_words"] = n
@@ -1364,7 +1365,7 @@ def regions(stage_id, lad, cons, vol, ram_kb, heap, loaded_sectors, spl_first,
                 continue
             add(a, min(b, img_end) if not since("kernel") else b,
                 rid, lab, cls, note)
-        # THE SLIDE'S LIST, ON A LAYER OF ITS OWN. `.cfx` is the file's last
+        # THE SLIDE'S LIST, ON A LAYER OF ITS OWN. `.boot3` is the file's last
         # section before the modules, so it lands straight past `.cold` -
         # across the graphics scratch and the top's rounding, onto memory the
         # pool does not hand out until the loader's space comes back. It is
@@ -2145,7 +2146,7 @@ SECTION_REGION = {
     ".text": "ktext", ".bss": "ktext", ".cold": "kcold",
     ".ovl": "ovl", ".boot2": "blob",
     ".lowbss": "lowbss", ".vgabuf": "vgabuf",
-    ".vga": "kvga", ".cfx": "cfx",
+    ".vga": "kvga", ".boot3": "cfx",
 }
 
 
@@ -3994,7 +3995,7 @@ def selfcheck(image, defines, build="build"):
          lambda: "%d found" % len(constants(build)))
     try_("the ladder, out of tools/kernsize.py",
          lambda: "KERNEL %04X  FAT %04X  LOW %04X  VGA %04X  COLD %04X  "
-                 "VGABUF %04X  HEAP %04X  BLOB %04X  .cfx %04X+%d"
+                 "VGABUF %04X  HEAP %04X  BLOB %04X  .boot3 %04X+%d"
                  % tuple(ladder(build, defines)[k] for k in
                          ("kseg", "fat_seg", "low_seg", "vga_seg", "cold_ram",
                           "vgabuf_seg", "kend", "blob_seg", "cfx_seg", "cfx")))

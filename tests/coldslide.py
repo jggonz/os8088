@@ -11,9 +11,13 @@ at boot and the heap floor falls by it. Two boots of the shipped 360KB disks:
      * the bytes at the new home are kernel.bin's `.cold`, every one - the
        copy is the whole of the move, so a short or misaligned one is a
        kernel that runs garbage;
-     * every `.text` word the kernel's own list (`.cfx`) holds names the new
-       segment - read out of the guest, against the two-assembly diff
-       tools/os88rom.py takes, not against the list itself;
+     * every `.text` word the kernel's own list (cfx_tab, in `.boot3`) holds
+       names the new segment - read out of the guest, against the
+       two-assembly diff tools/os88rom.py takes, not against the list itself.
+       (The list's fourth group, `.boot3`'s own words, is counted below and
+       not read: the section is the heap's by the time the desktop is up, so
+       a read of it needs a stop before mem_unblob - it is empty until
+       BOOT3-PLAN wave 1 moves a body that names `.cold` there);
      * [mem_base] = MONO_FLOOR, and the Task Manager's kernel row
        ([vga_skkern]) has both rungs off it;
      * the Control Panel opens, and CTRL.DRV - loaded AFTER the slide - has
@@ -81,8 +85,9 @@ def main():
     cold = coldimage()
     kbase = EQ["KERNEL_SEG"] << 4
     want(vpara > 0 and tsites and csites,
-         "the rung is %d paragraphs; %d `.text` words and %d in CTRL.DRV name "
-         "`.cold`" % (vpara, len(tsites), len(csites)))
+         "the rung is %d paragraphs; %d `.text` words, %d in `.boot3` and %d "
+         "in CTRL.DRV name `.cold`" % (vpara, len(tsites),
+                                       len(t["lists"]["b3"]), len(csites)))
 
     print("A: Hercules, no VGA and no EGA")
     with os88ui.boot(SYS, apps=APPS, machine=HERC, label="coldslide") as ui:

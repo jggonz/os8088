@@ -46,8 +46,11 @@ docs/history/KERN-BUDGET-LEDGER.md.
 **Booting on a machine and residing in one are different questions.** Guard 5
 asks whether stage 1 can put its 512-byte sector and its 2,048-byte stack at
 the top of that machine and still read the kernel **and the stage-2 blob** in
-underneath (`KERNEL_SEG*16 + KERN_SIZE + BOOT2_PAD <= MIN_RAM_KB*1024 -
-BOOT_SECT - BOOT_STACK`) — a *reach* at one instant of boot. Rules 1 and 2 ask
+underneath (`BLOB_SEG_AT*16 + BOOT2_PAD <= MIN_RAM_KB*1024 - BOOT_SECT -
+BOOT_STACK`: the blob's own end, which is the heap floor PLUS the blob's
+lift - the guard read `KERNEL_SEG*16 + KERN_SIZE + BOOT2_PAD` and missed the
+lift's 1,536 bytes on every ROM_COLD kernel until BOOT3-PLAN wave 0, SPEC.md
+§2.9.15.3) — a *reach* at one instant of boot. Rules 1 and 2 ask
 what is still occupied once the desktop is up: every non-purgeable byte, **no
 drivers loaded, no XMS, on VGA** (the adapter that does not drop a rung of its
 own, so the rule is stated against the configuration that costs the most).
@@ -232,7 +235,15 @@ line:
 - **`accrued`** — how much of each current rung changes have already spent
   without crossing it. Read this before believing any spare figure.
 - **`footprint`** — `KERN_SIZE` against guard 1, in bytes and 512-byte steps.
-- **`boot`** — the same size against guard 5.
+- **`boot`** — the same size against guard 5, the blob's lift counted, and
+  the **boot arena** at `MIN_RAM_KB`: from the blob's nobits floor
+  (`BLOB_SEG_AT*16 + BOOT2_RES`) to the top of RAM, what the boot's own
+  claims have. 24,064 bytes on kern_big at 128KB and 63,488 on kern_small
+  (BOOT3-PLAN wave 0); it is the host figure that stands in for a kern_big
+  128KB boot row, which the owner took out.
+- **`boot3`** — the third boot-only home (SPEC.md §2.9.15): `.boot3`'s bytes,
+  what is free under the blob, and how far it can grow before the derived
+  lift steps (the certain bound). Boot RAM, never a resident byte.
 - **`segment`** — `.text` + `.bss` against guard 2.
 - **`ladder`** — every segment base, and the line every RAM figure in the
   project falls out of: **heap KB = int 12h − 110.5** on `kern_big`
@@ -1068,6 +1079,35 @@ the splash and the overlay's blob half alike. Offset 0 is a `jmp boot2_entry`
 emitted at the declaration, because the overlay's blocks and `splash.inc` are
 assembled ahead of `boot/boot2.asm`, which is included at the foot.
 
+### The third boot-only home: `.boot3`
+
+SPEC.md §2.9.15 (docs/plans/BOOT3-PLAN.md). KERNEL.SYS's LAST section, read
+with the kernel after the splash is up rather than ahead of it as the blob
+is, landing under the blob at a constant segment (`B3_SEG`; on kern_big
+`VGABUF_RAM`, over `.vgabuf`'s RAM and the lift) and given back at
+`mem_unblob_x` with the blob. So it is the blob's lifetime without the
+blob's price - the blob's every byte delays the first splash pixel, and on
+kern_big its 13 sectors are full.
+
+**`.boot3` is NOT `.cold`**, and the two names will be confused the way
+`.cold` and `.boot2` are: it costs **boot RAM and load time, never a
+resident byte**. What it costs is (a) its packed sectors in stage 2's tail,
+after the bar - `t_blobruns --tail N` prices them, in the fast tier - and
+(b) once it outgrows the floor of 96 paragraphs under the blob, the blob's
+DERIVED lift (SPEC.md §2.9.15.3): 512 bytes of boot RAM a step, which guard
+5 counts. `kernsize`'s `boot3` line is the room left before that step (523
+bytes at wave 0) and its `boot` line carries the boot arena at 128KB.
+
+| kernel | `.boot3` (wave 0) | where | lift |
+|---|---|---|---|
+| kern_big, kern_emu | 535 bytes (`.cfx`'s 530, + 5 for the slide's fourth group) | `VGABUF_RAM` 0x17DA | 96, the floor (the bound is 64) |
+| kern_small, kern_mega | none yet - `B3SECT`/`B3CALL` take their fallback arms | - | 96 |
+
+A body goes there with `B3SECT` and is called with `B3CALL`; it calls back
+into the blob with `B2CALL`. Rules B1-B9 of `tools/os88ovlchk.py` are the
+fences (SPEC.md §2.9.15.4); the one that matters when spending is B2: **a
+body the first tick reaches cannot go there** - it is still packed then.
+
 ---
 
 ## Cold code: resident, but not in the segment
@@ -1136,8 +1176,9 @@ memory here:
   in, and `%ifdef GFX_VGA` is not such a test (kern_big defines it on every
   machine).
 - **The rung may not name `.cold`'s segment.** The slide re-points only the
-  words in the kernel's own list (`.cfx`), and `tools/os88cfx.py` refuses a
-  build with one in the rung; a `.text` shim makes the far call instead.
+  words in the kernel's own list (`cfx_tab`, in `.boot3`), and
+  `tools/os88cfx.py` refuses a build with one in the rung; a `.text` shim
+  makes the far call instead.
 
 ---
 

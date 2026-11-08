@@ -108,7 +108,7 @@ def callsites(defines=("KERN_BIG",), build="build"):
             cmd += ["-D" + d]
         cmd += ["-l", lst, "-o", binf, src]
         subprocess.run(cmd, check=True, cwd=ROOT)
-        # ...less `.cfx`'s cfx_tab, which tools/os88cfx.py stamps AFTER the
+        # ...less `.boot3`'s cfx_tab, which tools/os88cfx.py stamps AFTER the
         # assembly (SPEC.md 2.10.9): zeros in this one, os88sym's rule.
         theirs = open(built, "rb").read()
         mapf = os.path.join(ROOT, build, "kernel.map")

@@ -467,10 +467,15 @@ def kernel_tables(build, variant):
     if len(a) != len(full):
         fail(f"{full_path} is {len(full):,} bytes and this tree assembles "
              f"{len(a):,} - rebuild that kernel from this tree first")
+    # ...`.boot3` WITH cfx_tab BLANKED, not skipped: tools/os88cfx.py stamps
+    # the list after the assembly, and the section carries code this ROM
+    # re-points (rt_b3, SPEC.md 2.9.15) - so the rest of it is compared
+    import os88cfx
+    fullb = os88cfx.blank(full, amap)
     for name, (st, en) in secs.items():
-        if name in (".boot2", ".cfx"):      # .cfx: stamped after the assembly
-            continue                        # (tools/os88cfx.py)
-        if a[st:en] != full[st:en]:
+        if name == ".boot2":
+            continue
+        if a[st:en] != fullb[st:en]:
             fail(f"{name} differs between this tree's assembly and "
                  f"{full_path} - rebuild that kernel from this tree first")
 
@@ -492,8 +497,16 @@ def kernel_tables(build, variant):
     coldseg = coldram - vst // 16       # what every far reference names
     fatseg = kseg + (wst - tst) // 16
 
+    # THE THIRD BOOT-ONLY HOME (SPEC.md 2.9.15): `.boot3`'s own `call
+    # COLD_SEG:` sites, offsets into its segment B3_RAM (the section's file
+    # start is B3_RAM's paragraph). A kernel with no `.boot3` has no list and
+    # its ROM no walk over one (RT_HASB3)
+    b3 = secs.get(".boot3")
+    b3seg = kseg + (b3[0] - tst) // 16 if b3 else 0
+    if b3 and (b3[0] - tst) % 16:
+        fail("`.boot3` does not start on a paragraph past `.text`")
     _mapoff, rows = os88mod.read_map(a)
-    lists = {"text": [], "win": [], "blob": [], "mods": {}}
+    lists = {"text": [], "win": [], "blob": [], "b3": [], "mods": {}}
     i = 0
     while i < len(f1):
         if f1[i] == f2[i]:
@@ -513,6 +526,8 @@ def kernel_tables(build, variant):
             lists["win"].append(i - wst)
         elif i < secs[".boot2"][1]:
             lists["blob"].append(i)         # `.boot2`, the blob: blob offsets
+        elif b3 and b3[0] <= i < b3[1]:
+            lists["b3"].append(i - b3[0])   # `.boot3`: B3_RAM offsets
         elif cst <= i < cen:
             fail(f"`.cold` names its own segment at +{i - cst:#x} - "
                  f"`tools/os88romfix.py --check` (ROM-PLAN 3.2)")
@@ -660,7 +675,7 @@ def kernel_tables(build, variant):
             st[o], st[o + 1] = slidseg & 0xFF, slidseg >> 8
         hslid = text_hash(st, spans)
     return {"coldram": coldram, "coldseg": coldseg, "fatseg": fatseg,
-            "kseg": kseg, "vst": vst,
+            "kseg": kseg, "vst": vst, "b3seg": b3seg,
             "vgabram": vgabram,
             "cold": a[cst:cen], "hash": h, "spans": spans, "lists": lists,
             "slidseg": slidseg, "hslid": hslid,
@@ -743,6 +758,9 @@ def write_romtab(t, path, held=None, pkg=None, hdrv=(), drvorg=0):
            f"RT_NTEXT    equ {len(L['text'])}",
            f"RT_NWIN     equ {len(L['win'])}",
            f"RT_NBLOB    equ {len(L['blob'])}",
+           f"RT_HASB3    equ {1 if t['b3seg'] else 0}",
+           f"RT_B3SEG    equ 0x{t['b3seg']:04X}",
+           f"RT_NB3      equ {len(L['b3'])}",
            f"RT_VGABRAM  equ 0x{t['vgabram']:04X}",
            f"RT_NVGAB    equ {len(L['vgab'])}",
            f"RT_NMODS    equ {len(t['rowimg'])}",
@@ -774,6 +792,7 @@ def write_romtab(t, path, held=None, pkg=None, hdrv=(), drvorg=0):
     words("rt_text", L["text"])
     words("rt_win", L["win"])
     words("rt_blob", L["blob"])
+    words("rt_b3", L["b3"])
     words("rt_vgab", L["vgab"])
     out.append("%endmacro")
     out.append("%macro RT_RES_DATA 0")
@@ -892,9 +911,11 @@ def model_adopt(img, kernel, blob, t):
     if text_hash(kernel, t["spans"]) != t["hash"]:
         return False
     fat = (t["fatseg"] - t["kseg"]) * 16
+    b3 = (t["b3seg"] - t["kseg"]) * 16
     sites = ([(kernel, o) for o in t["lists"]["text"]]
              + [(kernel, fat + o) for o in t["lists"]["win"]]
-             + [(blob, o) for o in t["lists"]["blob"]])
+             + [(blob, o) for o in t["lists"]["blob"]]
+             + [(kernel, b3 + o) for o in t["lists"]["b3"]])
     if any(b[o] | b[o + 1] << 8 != t["coldseg"] for b, o in sites):
         return False
     if any(kernel[o] | kernel[o + 1] << 8 != t["vgabram"]
@@ -1110,8 +1131,12 @@ def model_hma(img, at, kernel, blob, t):
         return False
     if text_hash(kernel, t["spans"]) != t["hash"]:
         return False
+    # ...and `.boot3`, which unlike the window half is NOT skipped: it
+    # outlives the mount, which is when this image runs (SPEC.md 2.9.15)
+    b3 = (t["b3seg"] - t["kseg"]) * 16
     sites = ([(kernel, o) for o in t["lists"]["text"]]
-             + [(blob, o) for o in t["lists"]["blob"]])
+             + [(blob, o) for o in t["lists"]["blob"]]
+             + [(kernel, b3 + o) for o in t["lists"]["b3"]])
     if any(b[o] | b[o + 1] << 8 != t["coldseg"] for b, o in sites):
         return False
     if any(kernel[o] | kernel[o + 1] << 8 != t["vgabram"]

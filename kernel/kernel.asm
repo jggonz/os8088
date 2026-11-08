@@ -1156,9 +1156,9 @@ TOAST_MAX   equ 24
 ; COLD_SLIDE - the kernel moves `.cold` BY ITSELF (docs/plans/MOVABLE-COLD-
 ; PLAN.md): down over the VGA rung on a machine with neither a VGA nor an EGA,
 ; which can never use it. It needs the kernel's own list of the words that
-; name `.cold`'s segment - cfx_tab, which tools/os88cfx.py stamps into the
-; blob after the assembly - and ROM_ADOPT's mod_cfix for the modules. kern_big
-; alone: kern_small drives no VGA at all (MONO-RECLAIM-PLAN 2), so it has no
+; name `.cold`'s segment - cfx_tab, which tools/os88cfx.py stamps into
+; `.boot3` (boot3.inc) after the assembly - and ROM_ADOPT's mod_cfix for the
+; modules. kern_big alone: kern_small drives no VGA at all (MONO-RECLAIM-PLAN 2), so it has no
 ; rung to slide over. NO_COLD_SLIDE is the A/B
 %ifdef ROM_ADOPT
   %ifdef KERN_BIG
@@ -1166,6 +1166,17 @@ TOAST_MAX   equ 24
       %define COLD_SLIDE 1
     %endif
   %endif
+%endif
+; B3_ON - this kernel has `.boot3`, the third boot-only home (SPEC.md 2.9.15,
+; docs/plans/BOOT3-PLAN.md): the file's last section, landing under the blob,
+; dropped at mem_unblob. kernel/boot3.inc is its frame and B3SECT / B3CALL /
+; B2CALL (beside BLOBCALL) its macros. ON WHERE `.cfx` WAS - kern_big and
+; kern_emu, which slide `.cold` - and the section took `.cfx` over (wave 0).
+; kern_small, kern_mega and the NO_COLD_SLIDE / NO_ROM_COLD knobs switch it on
+; in the wave that first moves a body there; until then the macros take their
+; fallback arms and those kernels assemble the bytes they did before
+%ifdef COLD_SLIDE
+  %define B3_ON 1
 %endif
 ; LADDER_PACK - the TOP of the ladder in paragraphs, not 512-byte rungs
 ; (docs/plans/MOVABLE-COLD-PLAN.md 5). Guard 6 names every base an int 13h
@@ -1948,7 +1959,27 @@ HEAP_SEG    equ KERN_END        ; the claim heap (SPEC.md 50) starts where
 ; is lost: mem_init raises [mem_base] over the blob wherever [spl_fseg] says it
 ; is, and mem_unblob drops the floor back under it, lift and all. The guard
 ; below `kz_all` proves the read clears it on every build.
-%ifdef ROM_COLD
+; ...AND ON A KERNEL WITH A `.boot3` THE LIFT IS DERIVED (SPEC.md 2.9.15.3,
+; BOOT3-PLAN 3.3), because that section is the file's last and lands under the
+; blob: every term in bytes of linear address, the result in paragraphs, and
+; the larger of three - the floor of 96 (what every kernel had, so a `.boot3`
+; that fits under it moves nothing), the read's end (the section's end plus
+; KZ_MARGIN plus R's sector rounding and the tail's own, 511 each, rounded to a
+; sector because the blob is a read target) and the nobits scratch's end.
+; HEAP_SEG is already a multiple of 32 paragraphs. `%if` cannot choose on a
+; forward reference, so the max is arithmetic: a relational operator is 0 or 1
+; in an ordinary NASM expression. BLOB_SEG_AT reaches the code only as an
+; immediate (DSK_HCYLSEG, B2CALL), whose size does not depend on its value, so
+; the forward reference creates no size cycle. boot2.asm's KZIP guard stays the
+; EXACT check - a last block that GROWS adds to R past this bound
+KZ_MARGIN_K equ 64              ; boot2.asm's KZ_MARGIN (boot3.inc's guard)
+%ifdef B3_ON
+B3_END      equ B3_RAM * 16 + B3_SIZE + B3_RES
+B3_LIFT_RD  equ ((B3_RAM * 16 + B3_SIZE + KZ_MARGIN_K + 1022 + 511) & ~511) / 16 - HEAP_SEG
+B3_LIFT_RS  equ ((B3_END + 511) & ~511) / 16 - HEAP_SEG
+B3_LIFT_F   equ 96 + (B3_LIFT_RD - 96) * (B3_LIFT_RD > 96)
+BLOB_LIFT   equ B3_LIFT_F + (B3_LIFT_RS - B3_LIFT_F) * (B3_LIFT_RS > B3_LIFT_F)
+%elifdef ROM_COLD
 BLOB_LIFT   equ 96
 %else
 BLOB_LIFT   equ 0
@@ -2160,8 +2191,10 @@ section .lowbss  nobits vstart=0
 section .bss     nobits vfollows=.text valign=1
 section .text    start=BOOT2_PAD vstart=0
 section .cold    start=COLD_START vstart=COLD_VSTART
-%ifdef COLD_SLIDE               ; the kernel's own list of the words naming
-section .cfx     start=CFX_START vstart=0 ; `.cold` (MOVABLE-COLD-PLAN 4)
+%ifdef B3_ON                    ; the third boot-only home, the file's last
+section .boot3   start=B3_START vstart=0 ; section (SPEC.md 2.9.15), which
+%endif                          ; holds the slide's own list (MOVABLE-COLD-PLAN 4)
+%ifdef COLD_SLIDE
 section .vga     start=VGA_START vstart=VGA_VSTART ; ...and the VGA rung (2)
 %endif
 %ifdef KERN_MEGA                ; kern_mega's own segment: protected-mode code
@@ -5515,6 +5548,66 @@ api_sysfp:  dw dwf_dskw_write_sys  ; which verb the shared fenced cell runs:
     call %1
 %endmacro
 
+; B3SECT / B3CALL / B2CALL - `.boot3`, the third boot-only home (SPEC.md
+; 2.9.15.2, docs/plans/BOOT3-PLAN.md 4). A body marked B3SECT is in `.boot3`
+; on a kernel that has one (B3_ON) and keeps its old home on one that does not
+; yet: the blob by default, or the `.ovl` half's (`B3SECT ovl`) or OVBCALL's
+; choice (`B3SECT ovb`) for a body that came from there. Its callers say the
+; same word: `B3CALL x` / `B3CALL x, ovl` / `B3CALL x, ovb`, which is
+; `call B3_SEG:x` (5 bytes; OVLCALL's shape - a constant segment, nothing
+; published, nothing retired) or, inside `.boot3`, `push cs` + a near call -
+; and on a kernel with no `.boot3`, the old home's own entry. The two words must
+; agree, which nasm cannot see across a file and tools/os88ovlchk.py's rule B8
+; does. The fallback arms are TRANSITIONAL (OVBCALL's dual-arm pattern): once
+; every kernel is on they go, and a B3SECT body is in `.boot3` everywhere.
+; B2CALL is the way back INTO THE BLOB from `.boot3`: `call BLOB_SEG_AT:x`, the
+; very constant stage 1 (HEAP_PARA) and boothd (BLOB_SEG) are built with - a
+; new assumption that the blob is where it was read (the owner's choice over
+; SPLCALL's 19 bytes a site, BOOT3-PLAN 15 q9), fenced by tests/unit/
+; t_bootfloor.py --fence on every build. Its target must end in `retf`. With
+; no `.boot3` the caller is in the blob, and it is BLOBCALL.
+%macro B3SECT 0-1
+%ifdef B3_ON
+section .boot3
+%elifidn %1, ovl
+section .ovl
+%elifidn %1, ovb
+ %ifdef KERN_SMALL
+section .boot2
+ %else
+section .ovl
+ %endif
+%else
+section .boot2
+%endif
+%endmacro
+%macro B3CALL 1-2
+%ifdef B3_ON
+ %ifidn __?SECT?__, [section .boot3]
+    push cs
+    call %1
+ %else
+    call B3_SEG:%1
+ %endif
+%elifidn %2, ovl
+    OVLCALL %1
+%elifidn %2, ovb
+    OVBCALL %1
+%else
+    BLOBCALL %1
+%endif
+%endmacro
+%macro B2CALL 1
+%ifdef B3_ON
+ %ifnidn __?SECT?__, [section .boot3]
+  %error "B2CALL outside .boot3 - from the blob itself it is BLOBCALL"
+ %endif
+    call BLOB_SEG_AT:%1
+%else
+    BLOBCALL %1
+%endif
+%endmacro
+
 ; COLDCALL / COLDSEG_TO - `.cold` reaching its OWN segment without NAMING it
 ; (docs/plans/ROM-PLAN.md 3.2). A far entry in `.cold` called from `.cold` is
 ; BLOBCALL's shape - `push cs` + a near call builds the far frame its `retf`
@@ -5760,12 +5853,12 @@ kmain_o:
     ; `.cold` out of RAM already, and its floor falls past both rungs anyway.
     ; HERE because nothing has stored `.cold`'s segment yet that the kernel's
     ; own list does not hold (mod_fp is filled below, from a listed word), and
-    ; nothing claims the RAM `.cfx` landed on until mem_unblob
+    ; nothing claims the RAM `.boot3` landed on until mem_unblob
     test byte [vid_avail], VID_A_VGA | VID_A_EGA
     jnz .noslide
     cmp word [api_coldseg], COLD_HOME
     jne .noslide
-    call CFX_RAM:cfx_slide      ; (in `.cfx`, beside its list: transient)
+    B3CALL cfx_slide            ; (in `.boot3`, beside its list: transient)
 .noslide:
 %endif
     MARKW 11
@@ -8758,141 +8851,12 @@ VGA_SIZE equ vga_end - $$
   %error "`.vga` and `.cold` overlap in the file"
 %endif
 section .cold
-; --- .cfx: THE KERNEL'S OWN LIST of the words outside `.cold` that name its
-; segment - in `.text`, the window half and the blob - which the slide
-; re-points (docs/plans/MOVABLE-COLD-PLAN.md 4). ZEROS AS ASSEMBLED:
-; tools/os88cfx.py finds the words by moving COLD_CS and stamps them in, so
-; the list is always this assembly's own. AFTER `.cold` IN THE FILE, so stage
-; 2's one read lands it on the RAM just past the kernel - the cold rung's
-; slack, `.vgabuf`, and the heap floor under the blob's lift - which nothing
-; claims until mem_unblob. It is wanted once, at the boot, before mem_init;
-; a resident copy would be the bytes the slide exists to give back, and the
-; blob had no sector for it that did not cost 360KB and 720KB a whole int 13h
-; call (tests/unit/t_blobruns.py --sectors 14).
-CFX_MAX     equ 256
-CFX_START   equ (COLD_START + COLD_SIZE + 15) & ~15  ; on a paragraph...
-CFX_RAM     equ KERNEL_SEG + (CFX_START - BOOT2_PAD) / 16 ; ...so a segment
-section .cfx
-; -----------------------------------------------------------------------------
-; cfx_slide - move `.cold` down over the VGA rung (MOVABLE-COLD-PLAN 2, 4)
-; in:  far-called from kmain_o (CS = CFX_RAM: this is `.cfx`, transient like
-;      the list beside it), DS = KERNEL_SEG, `.cold` at home, `.cfx` stamped
-; out: `.cold` runs at COLD_SEG - VGA_PARA, and every word outside it that
-;      named its segment - [api_coldseg] among them - names the new one;
-;      every register preserved
-;
-; IN `.cfx` AND NOT THE BLOB: the blob had 78 bytes and this needs ~100, so it
-; rides beside its own list in the RAM nothing claims until mem_unblob.
-; ~105 ms on a 4.77 MHz 8088, the `rep movsw` of `.cold` (ESTIMATED off
-; PERFORMANCE.md Set 117.2's 13.3 cycles a byte). Downward and overlapping,
-; so DF = 0 copies it correctly. The list is read where stage 2 left it,
-; above the kernel, which the copy - going DOWN - cannot reach.
-; -----------------------------------------------------------------------------
-cfx_slide:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    push ds
-    push es
-    mov bp, [spl_fseg]          ; the blob's segment, for its own group
-    mov ax, COLD_RAM
-    mov ds, ax
-    mov ax, COLD_RAM - VGA_PARA
-    mov es, ax
-    xor si, si
-    xor di, di
-    mov cx, (COLD_SIZE + 1) / 2
-    cld
-    rep movsw
-    mov ax, CFX_RAM
-    mov ds, ax                  ; DS:SI = cfx_tab, the three groups in order
-    mov si, cfx_tab
-    mov dx, -VGA_PARA           ; what every listed word gains
-    mov ax, KERNEL_SEG          ; `.text`...
-    call cfx_grp
-    mov ax, FAT_SEG             ; ...the window half...
-    call cfx_grp
-    mov ax, bp                  ; ...and this blob
-    call cfx_grp
-    pop es
-    pop ds
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    retf
-
-; cfx_grp - one group of cfx_tab: AX = its segment, DS:SI = its stream, DX =
-; the delta. A byte 1-255 is the step to the next word, a 0 is followed by the
-; step as a word, and a word of 0 ends it (tools/os88cfx.py's format). Leaves
-; SI past the group; clobbers AX, BX, ES
-cfx_grp:
-    mov es, ax
-    xor bx, bx
-.n:
-    lodsb
-    or al, al
-    jz .w
-    xor ah, ah
-    jmp short .a
-.w:
-    lodsw
-    or ax, ax
-    jz .done
-.a:
-    add bx, ax
-    add [es:bx], dx
-    jmp short .n
-.done:
-    ret
-cfx_tab:    times CFX_MAX db 0
-cfx_tab_end:
-; -----------------------------------------------------------------------------
-; cfx_grid - desk_rowcalc's geometry for the BOOT (desk.inc's DESK_GRID): the
-;            blob's bvw_rowcalc far-calls it and then reflows (kernel size pass
-;            15). All registers preserved but flags.
-;
-; HERE because the blob had nine bytes and `.cfx` is the RAM nothing claims
-; until mem_unblob - which is after kmain_o's last call - and PAST cfx_tab
-; because the first KVGABUF_SIZE bytes of this section are `.vgabuf`'s RAM
-; too (VGABUF_RAM is COLD_RAM + COLD_PARA): the slide is done with them
-; before the planar decoder's first use, and this is called long after. It
-; names no segment, so os88cfx has nothing to stamp in it.
-; -----------------------------------------------------------------------------
-cfx_grid:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    DESK_GRID
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    retf
-; cfx_ctxcap - vid_ctx_capture for the blob's bvs_disp_init (vidsel.inc's
-; VID_CTXCAP), here for cfx_grid's reason
-VID_CTXCAP cfx_ctxcap, retf
-; cfx_cfgname - SYSTEM.CFG's name staged for the blob's ovc_load (driver.inc's
-; CFGN_STAGE), here for cfx_grid's reason (kernel size pass 16)
-CFGN_STAGE cfx_cfgname, retf
-%if cfx_grid - $$ < KVGABUF_SIZE
-  %error "cfx_grid lies in the RAM `.vgabuf` shares with `.cfx`"
 %endif
-cfx_end:
-CFX_SIZE    equ cfx_end - $$
-%if (CFX_RAM * 16 + CFX_SIZE) > BLOB_SEG_AT * 16
-  %error "`.cfx` lands on stage 2's blob - raise BLOB_LIFT (MOVABLE-COLD-PLAN 4)"
-%endif
+; --- `.boot3`, THE THIRD BOOT-ONLY HOME (SPEC.md 2.9.15): the file's last
+; section, its frame - the slide's own list among it - in a file of its own
+; so that `ls kernel/` finds it beside boot2's loader (BOOT3-PLAN 1)
+%ifdef B3_ON
+%include "boot3.inc"
 section .cold
 %endif
 %if COLD_VSTART + COLD_SIZE > 0xFF00
@@ -8977,8 +8941,8 @@ OVL_SIZE equ ovl_end - $$     ; `$$` is 0 here: `.ovl` has a vstart of its
 %ifdef KERN_MEGA
 MEGA_START   equ COLD_START + COLD_PARA * 16 ; `.mega` on its rung, over the
 MODC_START   equ MEGA_START + MEGA_SIZE ; cold one - the file's last section
-%elifdef COLD_SLIDE
-MODC_START   equ CFX_START + CFX_SIZE ; `.cfx` is the file's last section
+%elifdef B3_ON
+MODC_START   equ B3_START + B3_SIZE ; `.boot3` is the file's last section
 %elifdef ROM_COLD
 MODC_START   equ COLD_START + COLD_SIZE ; `.cold` is the file's last section
 %else
@@ -9440,10 +9404,29 @@ SK_MEGA_KB equ SK_R(SK_CUM4) - SK_R(SK_CUM4 - MEGA_PARA * 16) ; rungs when they
  %else
   %assign KS_MINRAM MIN_RAM_KB   ; ...and guard 5's ceiling, because a report
  %endif
-  %assign KS_BOOTMX KS_MINRAM*1024 - BOOT_SECT - BOOT_STACK - KERNEL_SEG*16 - BOOT2_PAD
+  %assign KS_BOOTMX KS_MINRAM*1024 - BOOT_SECT - BOOT_STACK - KERNEL_SEG*16 - BLOB_LIFT*16 - BOOT2_PAD
+                                 ; (the LIFT counted, as guard 5 counts it:
+                                 ; the KERN_SIZE that puts the blob's end at
+                                 ; the ceiling, BOOT3-PLAN wave 0)
                                  ; that names one guard teaches everybody to
                                  ; steer by it, and for a while the one it
                                  ; named was the looser of the two
+  %assign KS_BLIFT  BLOB_LIFT    ; ...and the third boot-only home (SPEC.md
+ %ifdef B3_ON                    ; 2.9.15): its size, segment and scratch, and
+  %assign KS_B3     B3_SIZE      ; the blob's nobits floor, which is what a
+  %assign KS_B3RAM  B3_RAM       ; 128KB machine's boot arena is measured
+  %assign KS_B3RES  B3_RES       ; from (kernsize's boot3 and boot lines)
+ %else
+  %assign KS_B3     0
+  %assign KS_B3RAM  0
+  %assign KS_B3RES  0
+ %endif
+ %ifdef KERN_SMALL
+  %assign KS_B2RES  BOOT2_PAD    ; (mem_init_x's floor: kern_small has no
+ %else                           ; ovc_buf past the blob)
+  %assign KS_B2RES  BOOT2_RES
+ %endif
+  %warning ksb: boot3=KS_B3 b3ram=KS_B3RAM b3res=KS_B3RES b2res=KS_B2RES blift=KS_BLIFT
   %warning ks: text=KS_TEXT bss=KS_BSS cold=KS_COLD lowbss=KS_LOW vgabuf=KS_VGAB ovl=KS_OVL boot2=KS_BOOT2 stk0=KS_STK0 imgpara=KS_IMGP coldpara=KS_COLDP fatpara=KS_FATP lowpara=KS_LOWP vgabufpara=KS_VGABP ksize=KS_SIZE budget=KS_BUDGET codemax=KS_CODEM kend=KS_END kseg=KS_KSEG colds=KS_COLDS fats=KS_FATS lows=KS_LOWS vgas=KS_VGAS blobseg=KS_BLOB minramkb=KS_MINRAM bootmax=KS_BOOTMX grace=KS_GRACE toppara=KS_TOPP vga=KS_VGA vgars=KS_VGARS
   %ifdef KERN_MEGA              ; ...and kern_mega's own rung, on a line of
     %assign KS_MEGA  MEGA_SIZE  ; its own (tools/kernsize.py's `mega`
@@ -9700,7 +9683,7 @@ SK_MEGA_KB equ SK_R(SK_CUM4) - SK_R(SK_CUM4 - MEGA_PARA * 16) ; rungs when they
 ;    own constraint instead of borrowing the shipped kernel's.
 %ifndef KERN_KNOB
 %ifndef KERN_MEGA
-%if KERNEL_SEG*16 + KERN_SIZE + BOOT2_PAD > MIN_RAM_KB*1024 - BOOT_SECT - BOOT_STACK
+%if BLOB_SEG_AT*16 + BOOT2_PAD > MIN_RAM_KB*1024 - BOOT_SECT - BOOT_STACK
 %error "the kernel cannot BOOT on MIN_RAM_KB - see docs/KERNEL-MEMORY.md"
 %endif
 %endif
@@ -9720,12 +9703,17 @@ SK_MEGA_KB equ SK_R(SK_CUM4) - SK_R(SK_CUM4 - MEGA_PARA * 16) ; rungs when they
 ;    and whether to hold it to a smaller machine (a 256KB IBM 5170) is the
 ;    owner's (docs/plans/completed/msp1/megabudget.md)
 %ifdef KERN_MEGA
-%if KERNEL_SEG*16 + KERN_SIZE + BOOT2_PAD > MEGA_BOOT_KB*1024 - BOOT_SECT - BOOT_STACK
+%if BLOB_SEG_AT*16 + BOOT2_PAD > MEGA_BOOT_KB*1024 - BOOT_SECT - BOOT_STACK
 %error "kern_mega cannot BOOT on its 1MB floor machine's 640KB - see docs/KERNEL-MEMORY.md"
 %endif
 %endif
 ; 5b. ...and BOOT2_PAD is in that sum because STAGE 2 SITS ON THE HEAP'S FLOOR
-;    (SPEC.md 2.9.5), which is the kernel's own last paragraph. It is given
+;    (SPEC.md 2.9.5), which is the kernel's own last paragraph - LIFTED by
+;    BLOB_LIFT on every ROM_COLD kernel (SPEC.md 2.10.3), and derived from
+;    `.boot3` where there is one (2.9.15.3). The sum is the blob's own end,
+;    BLOB_SEG_AT*16 + BOOT2_PAD, on every kernel: it was KERNEL_SEG*16 +
+;    KERN_SIZE + BOOT2_PAD, which is HEAP_SEG's and missed the lift's 1,536
+;    bytes (BR-154 / boot-18 of the 2026-11-08 review, BOOT3-PLAN wave 0). It is given
 ;    back at spl_finish and the arena is compacted onto it, so it is not
 ;    footprint in KERN_BUDGET's sense - but it IS occupied at the same moment
 ;    the boot sector and its stack are, which is exactly what guard 5 asks

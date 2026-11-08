@@ -1346,7 +1346,7 @@ drv_svcix:   db 0*DRV_SVCH+1, 1*DRV_SVCH+1, 0, 2*DRV_SVCH+1
 ; SYSTEM.CFG's and KERNEL.SYS's NAMES are not resident (kernel size pass
 ; 16): the file API reads a name through DS, so each image STAGES its own copy
 ; into cp_sbuf - CTRL.DRV through cp_stage (cpc_cfgname, cpc_sysname) and the
-; boot through CFGN_STAGE below, in `.cfx` where there is one.
+; boot through CFGN_STAGE below, in `.boot3` where there is one.
 ;
 ; CFGN_STAGE <label>, <ret|retf> - 'SYSTEM.CFG' into cp_sbuf; out: SI =
 ; cp_sbuf. DS = KERNEL_SEG; every other register and DF kept, flags not. The
@@ -5155,8 +5155,8 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
     mov bx, %1 %+ _buf          ; the read takes ES:BX, which is what makes
     mov cx, CFG_FBUF            ; that free rather than awkward
     xor dx, dx
-%ifdef COLD_SLIDE               ; ...but the NAME is read through DS, so it is
-    call CFX_RAM:cfx_cfgname    ; STAGED, into cp_sbuf: the copy is in `.cfx`
+%ifdef B3_ON                    ; ...but the NAME is read through DS, so it is
+    B3CALL cfx_cfgname          ; STAGED, into cp_sbuf: the copy is in `.boot3`
 %else                           ; where there is one (kernel size pass 16),
     call %1 %+ _cfgname         ; this image's own where there is not
 %endif
@@ -5401,8 +5401,8 @@ CFG_DATA   ovc
 ovc_buf     equ BOOT2_PAD       ; .boot2 is vstart 0: its end IS this offset
 CFG_SHARED ovc
 CFG_BOOT   ovc
-%ifndef COLD_SLIDE
-CFGN_STAGE ovc_cfgname, ret     ; (.cfx's cfx_cfgname on kern_big and kern_emu)
+%ifndef B3_ON
+CFGN_STAGE ovc_cfgname, ret     ; (.boot3's cfx_cfgname on kern_big and kern_emu)
 %endif
 
 ; -----------------------------------------------------------------------------
@@ -6047,13 +6047,13 @@ WM_REFIT bvw, BSWK
 DOCK_APPLY bdk, BSWK, BSWC, bvw
 %endif
 EXF_SYNC bxf, BSWC              ; ...and EXTD.DRV's sync (extmod.inc)
-%ifdef COLD_SLIDE               ; ...and the desktop grid's (desk.inc): the
-bvw_rowcalc:                    ; geometry from `.cfx` (cfx_grid, kernel.asm),
-    call CFX_RAM:cfx_grid       ; which costs this blob nothing, and the
+%ifdef B3_ON                    ; ...and the desktop grid's (desk.inc): the
+bvw_rowcalc:                    ; geometry from `.boot3` (cfx_grid, boot3.inc),
+    B3CALL cfx_grid             ; which costs this blob nothing, and the
     BSWC desk_reflow            ; reflow - desk_rowcalc's two halves, in its
     ret                         ; order
 %else
-DESK_ROWCALC bvw, BSWC          ; (kern_mega: no `.cfx`, and blob to spare)
+DESK_ROWCALC bvw, BSWC          ; (kern_mega: no `.boot3` yet, and blob to spare)
 VID_CTXCAP bvs_ctxcap, ret      ; ...and bvs_disp_init's capture (vidsel.inc)
 %endif
 KGO_PAIR bvs

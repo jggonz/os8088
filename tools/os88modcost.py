@@ -118,7 +118,8 @@ MODS = {False: ('.modc', '.modf', '.modl', '.modh', '.modk', '.modx',
                 '.modj',          # ...and DESK.DRV (SPEC.md 11.103.10)
                 '.modn'),         # ...and STIKMENU.DRV (SPEC.md 110.12)
         True:  ('.modc', '.modf', '.modl', '.modp', '.modd')}
-OVLS = ('.blob', '.ovl')   # `.blob` = the overlay's `.boot2` blocks (SPEC.md 2.9.14)
+OVLS = ('.blob', '.ovl',   # `.blob` = the overlay's `.boot2` blocks (SPEC.md 2.9.14)
+        '.boot3')          # ...and the third boot-only home (SPEC.md 2.9.15)
 RESIDENT = ('.text', '.bss', '.cold')
 
 # The far shims a module leaves the kernel through (SPEC.md 2.6's cw_* and
@@ -177,7 +178,15 @@ def scan_source():
             if re.match(r'\s*%endmacro\b', raw, re.I):
                 macro[0] = max(0, macro[0] - 1)
                 continue
-            m = SECT.match(raw)
+            # a `section` inside a %macro body is the EXPANSION's switch, not
+            # the definition's - B3SECT (kernel.asm) holds one per arm, and
+            # read as the definition's they filed the rest of the file in the
+            # last arm's section - and B3SECT itself is `.boot3`, the arm the
+            # tree is moving to (SPEC.md 2.9.15.2)
+            if not macro[0] and re.match(r'\s*B3SECT\b', raw):
+                sec[0] = '.boot3'
+                continue
+            m = SECT.match(raw) if not macro[0] else None
             if m:
                 sec[0] = m.group(1)
                 if sec[0] == '.boot2' and rel not in ('boot/boot2.asm',
@@ -239,11 +248,19 @@ def listing(defines):
         sizes = collections.Counter()
         persec = collections.Counter()
         cur, sec = {}, '.text'
+        indef = False                   # inside a %macro DEFINITION (depth 0)
         for raw in open(lst, encoding='utf-8', errors='replace'):
             # column-based: line no, address at 7, bytes at 16, a 4-wide
             # <depth> field at 36 that is BLANK at depth 0, source at 40
             body = raw[40:].rstrip('\n') if len(raw) > 40 else ''
-            m = SECT.match(body)
+            if not raw[36:40].strip():
+                if re.match(r'\s*%macro\b', body, re.I):
+                    indef = True
+                elif re.match(r'\s*%endmacro\b', body, re.I):
+                    indef = False
+            # (B3SECT's arms are `section` lines in a DEFINITION: only an
+            # expansion, which carries a depth, switches - SPEC.md 2.9.15.2)
+            m = SECT.match(body) if not indef else None
             if m:
                 sec = m.group(1)
                 continue
