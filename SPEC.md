@@ -119344,6 +119344,25 @@ in the tree builds that layout; a plan of the floor-first order needs the
 next ceiling-run's gap charged *below* the floor mover, which is a second
 deferred quantity and is left for whoever meets it.
 
+**A SECOND open mismatch: the plan has no page bump** (KERN-MEGA-PLAN 14.184,
+found by `heapfrag`'s rebuilt check 14). `mem_cp_both`'s walk packs a floor
+mover onto the fill point and a ceiling mover into its deferred sum, and
+neither asks `mem_cp_dest` — so a MOVABLE claim carrying `MC_DMA` (§66.4.2)
+whose head would straddle a 64KB page at the fill point is planned AT the
+fill point, where the run bumps it to the next page's floor. The plan then
+OVER-reports by the distance between the two, the dangerous direction:
+measured, a 42KB block over a fill point at offset F20h of its page, 48K
+promised and 45K produced on a 1MB kern_mega, 100K against 97K for a 60KB block
+on kern_big, the claim of the promise refused both times (and granted
+exactly, the bump removed: the plan IS the run but for it). Who it reaches is
+whoever declares such a block movable - the typeface cache (`os88type.inc`)
+and the Audio Player's idle look-ahead - by less than the block's head. The floor arm's fix is `mem_cp_dest` at `.lo` (the gap it opens kept,
+the fill point resumed past the destination, as `mem_cp_walk`'s `.stay`
+does); the ceiling arm's deferred sum cannot place a block before it reaches
+the barrier, and charging a ceiling `MC_DMA` mover as a barrier is the safe
+under-report. Neither is made yet: it moves `kern_big`, and the models
+(`heapwhatif.py`, `both_passes()`) move with it.
+
 **PLAN ONLY.** There is no `mem_cp_both_run` and there must not be: one walk
 may plan both directions and may **not** run them, because packing a top-down
 claim up inside an ascending walk writes onto claims the walk has not visited
@@ -121293,6 +121312,24 @@ afterthought.
   descending pass is reached from. **Verified by amputation**: with `.flip`
   patched to `jmp .undo` and nothing else changed, checks 1–12 pass and only 13
   goes red.
+- **`tests/heapfrag` check 14 is §66.4.2's gate**, and it BUILDS its layout
+  rather than finding one (KERN-MEGA-PLAN 14.184): from the big claim's base B
+  it names F, the first place a whole number of KB on whose page offset is at
+  least F00h (no block over 4KB may start there), G, the next page's floor,
+  and D, the first such place past G. The big claim is regrown to end at D, a
+  roof the block's size is claimed top-down (so kern_mega's `mem_ringtop` does
+  not send the block to the top end), the block - a 4..60KB `MC_DMA` claim
+  whose head is all of it - is claimed and must land AT D, the big claim
+  shrinks back to end at F, and with every other block of the suite pinned the
+  ask is one KB past the largest run, which only the block's slide from D to G
+  funds. It asserts the contents came, the base moved, and the head is inside
+  one page. **Red both ways it can be broken**: `mem_cp_dest`'s bump removed,
+  the block lands at F, offset F20h, and only 14 goes red on kern_big and
+  kern_mega; a pin on `MC_DMA` would refuse the ask (stage 8 - reasoned, not
+  run). The check it replaced claimed
+  the block above the big claim and freed it, and whether a legal landing
+  could fund its ask was the layout's luck: on a 1MB kern_mega it could not,
+  and the check was red on a correct kernel.
 - **The Task Manager's memory map** already draws every claim at its real
   address and is the cheapest visual confirmation there is.
 - **The field sequence** (docs/FIELD-NOTES.md 2) end to end on a

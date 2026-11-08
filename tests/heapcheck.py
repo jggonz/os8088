@@ -47,6 +47,16 @@ import os88marty, os88mouse, os88sym, os88geom, dispcp
 from os88fixture import need
 
 KERNEL_SEG = 0x0060
+HF_BSS = 188            # heapfrag.asm's HF_BSS_TOTAL
+DMA_WHY = {1: "no big claim, or no room to say anything",
+           2: "the plug and spacer did not stand at the big claim's base",
+           3: "the roof was refused", 4: "the block was refused",
+           5: "the block did not land at D (first fit found a lower place, "
+              "or the top door took it)",
+           6: "the big claim did not shrink back to F",
+           7: "moving the block buys nothing (the fixture's premise)",
+           8: "the ask was refused", 9: "the contents did not come with it",
+           10: "it did not move", 11: "it landed with its head ACROSS a page"}
 MC_SIZE = os88geom.MC_SIZE
 MEM_MAX = 32
 # every window-record offset comes from os88geom, which checks itself
@@ -234,7 +244,7 @@ def main():
                 if now is None:
                     return None
                 return bytes(m.read(LIN(m, now, u16(m.read(LIN(m, now, 8), 2))),
-                                    176))
+                                    HF_BSS))
             except Exception:
                 return None
         try:
@@ -260,7 +270,7 @@ def main():
 
         # its bss, at the offsets heapfrag.asm's own table declares
         img = u16(m.read(LIN(m, seg, 8), 2))       # +8 = image size (the header)
-        b = m.read(LIN(m, seg, img), 176)
+        b = m.read(LIN(m, seg, img), HF_BSS)
         n = u16(b, 0)
         res = b[128:128 + n]
         nmoved, nrel, nbad = u16(b, 20), u16(b, 16), u16(b, 18)
@@ -270,7 +280,17 @@ def main():
             print("   block %d  %04x -> %04x%s"
                   % (i, u16(b, 72 + i * 2), u16(b, 56 + i * 2),
                      "   (freed)" if u16(b, 56 + i * 2) == 0 else ""))
-        print("dma landed at page offset %d paragraphs" % u16(b, 114))
+        # check 14's fixture (heapfrag.asm, KERN-MEGA-PLAN 14.184): the
+        # block is claimed at D over a hole whose floor F no block over 4KB
+        # may start at, so its only legal landing is the next page's floor
+        why = b[184]
+        print("dma: %dKB, F=%04x D=%04x, claimed at D: %s, now %04x "
+              "(page offset %03xh), avail %dK pinned / %dK with it movable%s"
+              % (u16(b, 112), u16(b, 178), u16(b, 180),
+                 "yes" if u16(b, 108) == u16(b, 180) else "NO (%04x)" % u16(b, 108),
+                 u16(b, 182), u16(b, 114), u16(b, 174), u16(b, 176),
+                 "" if not why else "  - stopped at stage %d: %s"
+                 % (why, DMA_WHY.get(why, "?"))))
         print("L0=%dK S=%dK L1=%dK want=%dK  moved=%d told=%d stranger=%d"
               % (u16(b, 6), u16(b, 4), u16(b, 8), u16(b, 10),
                  nmoved, nrel, nbad))
@@ -353,7 +373,7 @@ def main():
                                     + os88geom.W_SEG, 2))
                     if sg:
                         now = sg
-                return now, m.read(LIN(m, now, img), 176)
+                return now, m.read(LIN(m, now, img), HF_BSS)
             try:                # ...on the GUEST's clock
                 os88marty.until(m, lambda _: u16(rbss()[1], 152)
                                 >= len(RLABELS),
