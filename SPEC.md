@@ -2379,7 +2379,10 @@ more fences cover the rest: an `%if` holds `[vid_cgamode]` — the one store
 it — inside the window, and `tests/unit/t_resident.py` walks the ticks' code
 (from `spl_tick` and `spl_isr`, through near calls, `BLOBCALL` and
 `spw_near`'s BP target) for every DS reference, failing one past the window or
-in `.bss` that `tests/tickrefs.txt` does not explain. Its first run found seven
+in `.bss` that `tests/tickrefs.txt` does not explain. A `cs:` override is a DS
+reference too everywhere but the blob's own sections: behind `spw_near`'s far
+door CS = KERNEL_SEG = DS, and `gfx_rowbase` reads `[cs:vid_rowmax]`,
+`[cs:vid_stride]`, `[cs:vid_bmask]` and `[cs:vid_bshift]` on every tick. Its first run found seven
 on kern_big (`vx_ep` and `vx_bpp` behind the VESA kind, and `cur_shchk`,
 `cur_disp`, `mouse_x`, `vid_rowtab` and `ui_post` behind `bvs_apply`'s stack
 test), all of them arms the first tick cannot take; the walk over-approximates

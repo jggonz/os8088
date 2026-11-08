@@ -2309,8 +2309,8 @@ BP target and fall-through, over a `-Le` listing so macro expansions are what
 they assemble to) on every built kernel and collects every DS memory operand
 and every `mov si/di/bx, label` naming a kernel label. One in `.text` at or
 past SPL_RESIDENT * 512, or in `.bss`/`.lowbss`, fails unless
-`tests/tickrefs.txt` explains it. On kern_big it walks 42 procs and 153
-references, and finds **seven** past the 5-sector window: `vx_ep` and `vx_bpp`
+`tests/tickrefs.txt` explains it. On kern_big it walks 42 procs and 161
+references (153 before the verifier's round 1, below), and finds **seven** past the 5-sector window: `vx_ep` and `vx_bpp`
 (0x0C57, 0x0C5B - READS, behind the VESA kind, which no first tick has) and
 `cur_shchk`, `cur_disp`, `mouse_x`, `vid_rowtab` and `ui_post` (stores behind
 `bvs_apply`'s stack test, `jne .homed`, which the first tick takes). All seven
@@ -2326,6 +2326,22 @@ past `spw_resident_end`, so it gets its own `%if` at kernel.asm's foot.
 a line nothing needs is red; `inc byte [evq_head]` planted in spl_tick in
 place of `inc byte [spl_busy]` is red on every kernel; both foot `%if`s were
 made to fire by hand.
+
+**Verifier round 1 (build, 2026-11-08): `cs:` is DS in `.text`.** The first
+draft skipped every `[cs:...]` operand, which is right in `.boot2`/`.boot3`
+(CS is the blob's segment there) and wrong in the `.text` procs behind
+`spw_near`'s far door, where CS = KERNEL_SEG = DS - and those are what the
+tick code reads most: `gfx_rowbase`/`gfx_rowbase_calc` read `[cs:vid_rowmax]`,
+`[cs:vid_bmask]`, `[cs:vid_bshift]` and `[cs:vid_stride]` on every kernel,
+and kern_mega's `vid_setmode`/`vid_cga_equip` read `[cs:k_vsa]`, `[cs:k_vsc]`
+and `[cs:k_seg0]`. The walk now exempts `cs:` only in a proc whose own
+section is `.boot2` or `.boot3`. Every one of those words is inside the window
+today (0x755-0x834), so the reference counts rose (kern_big 153 -> 161,
+kern_small 142 -> 150, kern_mega 152 -> 164, kern_emu 153 -> 161) and nothing
+new failed: `tests/tickrefs.txt` is unchanged. **Broken on purpose**:
+`cmp ax, [cs:gfx_ln_ink]` (`.bss`) and `cmp ax, [cs:wm_paint_all]` (`.text`
+far past the window) planted at the head of `gfx_rowbase` are red on all four
+kernels; the source was restored.
 
 **What moved (boot-4).**
 

@@ -71,7 +71,10 @@ KZIP, on the packed tail lying where `.text` and `.bss` will be: SPEC.md
 So this walks the ticks' code - everything reachable from spl_tick and spl_isr
 through near calls, jumps, BLOBCALL and the spw_near door (whose target is the
 BP loaded before it), plus fall-through - and collects every DS memory operand
-naming a kernel label. One that lands in `.text` at or past SPL_RESIDENT * 512,
+naming a kernel label. A `cs:` override counts as DS in every proc outside
+`.boot2`/`.boot3`: behind spw_near's far door CS = KERNEL_SEG = DS, and the
+geometry words gfx_rowbase reads through CS on every tick ([cs:vid_stride],
+kern_mega's [cs:k_vsa]) are exactly the words a moved label would strand. One that lands in `.text` at or past SPL_RESIDENT * 512,
 or in `.bss`/`.lowbss`, FAILS unless tests/tickrefs.txt names it with the
 reason no tick reaches it on a partial kernel. The walk OVER-approximates (an
 arm the boot never takes is still an edge), which is the safe direction for a
@@ -248,6 +251,12 @@ def tick_refs(lines, sym):
     """Every DS data reference the ticks can make: [(proc, label, store?,
     text)], and the set of procs walked."""
     body, order = procs(lines, sym)
+    # a `cs:` override is the BLOB's own data only in the blob's sections
+    # (CS = the blob's segment there). Everywhere else the ticks reach - the
+    # `.text` procs behind spw_near's far door - CS = KERNEL_SEG = DS, so
+    # `[cs:vid_stride]` is a KERNEL_SEG reference like any other and is
+    # checked like one (gfx_rowbase reads four such words on every tick)
+    psec = dict(order)
     nxt = {}
     for i, (p, sc) in enumerate(order[:-1]):
         if order[i + 1][1] == sc:
@@ -278,7 +287,10 @@ def tick_refs(lines, sym):
                 refs.append((p, mm.group(2), True, st))
             for mo in MEM.finditer(st):
                 op = mo.group(1).replace(" ", "").lower()
-                if op.startswith(("cs:", "es:", "ss:")) or \
+                if op.startswith("cs:") and \
+                        psec.get(p) in (".boot2", ".boot3"):
+                    continue            # the blob's own segment
+                if op.startswith(("es:", "ss:")) or \
                         (op.startswith("bp") and "ds:" not in op):
                     continue
                 ops = st.split(None, 1)
