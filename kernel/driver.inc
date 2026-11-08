@@ -5666,6 +5666,10 @@ drv_sniff:
     pop ax                      ; AL = 3: no DX test needed)
     jne .pmx
     add al, 0x80 - 2
+    cmp bx, 0x8088              ; BX = 8088h: OUR firmware, which mixes while
+    jne .pmst                   ; it waits on the PC (18.91.7.1) - the unit
+    or al, 0x40                 ; + 40h, which no transfer is at or above:
+.pmst:                          ; no hold, no cap, and still no fill (18.95.12)
     mov [dsk_pmhd], al          ; through DS, KERNEL_SEG here (SPEC.md 2.5)
 .pmx:
     pop es

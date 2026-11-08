@@ -37232,6 +37232,32 @@ So the transfer loop reads such a disk that way:
   kern_small** (no room in its boot halves, and a 128KB machine with a PicoMEM 2 is not one
   anybody runs), and not the card's floppy images, which nothing streams.
 
+#### 18.91.7.1 …unless the card runs OUR firmware, which mixes while it waits, and says so in BX
+
+The hold above exists only because the stock firmware stops mixing while it
+waits on the PC. `firmware/picomem2/` is the June source (`be7b2e6`, the
+firmware PM2-6-21-26 shipped) with `pm1x-pr`'s fixes, which are board-
+independent: the card mixes in every PC-command wait of an int 13h
+(`pm_pccmd_wait_hook`) and in the SD driver's waits, reads a call's sectors
+in runs with ONE copy command a run, and waits for the PC's copy however long
+it takes. It also sets the firmware-revision word the card BIOS's function
+3 hands back in `BX` to **8088h** (`tools/picomem/patches/fw/02-os8088-rev.patch`;
+the stock firmware leaves it 0).
+
+`drv_sniff` reads `BX` beside `AL` = 11 and, at 8088h, stores the unit
+**plus 40h** in `[dsk_pmhd]`. No unit is at or above it, so `dsk_xfer`
+neither masks IRQ0 nor cuts the run: a call reads as far as the track and
+the cylinder let it, and the timer hook decodes while the card reads its
+SD. §18.95.12's no-fill test masks the 40h off, so the cache still never
+fills from the card's disk - a fill is a second copy on either firmware. 8
+bytes of the window half (5,120 of 5,120 now) and 3 of `.cold`.
+
+On the CGA twin running that firmware (libpmhost v2 with both patches),
+6 s of Bolt: **33 int 13h calls against 100** with the stock firmware's
+behaviour (the same build without the wait hook, which reads 8088h nowhere),
+sound frames late 5 -> 3; §18.91.7's VIDSND rows had already shown the wait
+hook clean in every row, a 16 ms hold inside a copy included.
+
 ### 18.92 The diskette parameter table is OURS, and EOT is why
 
 **int 1Eh is not an interrupt.** It is a far pointer to an 11-byte table the
