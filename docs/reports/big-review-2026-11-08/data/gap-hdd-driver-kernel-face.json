@@ -1,0 +1,441 @@
+{
+ "area": "gap-hdd-driver-kernel-face",
+ "title": "HDD.DRV's kernel-facing half beyond the entry: hddabi, hdcom, mount, hdsvc, hdxms",
+ "summary": "The kernel-facing contract holds up, and it is better defended than it first appears. Every partition BPB goes through the kernel's rules 3-16. hd_blk's 32-bit HDV_LEN fence is the one bound that knows where a partition ends. Base plus offset cannot wrap. The DRVV_READY system-volume bank is closed by drv_nostamp. The gaps are at the trust edges and in transport retries. First, HDV_ARM takes the caller's segment unchecked. Nothing disarms an arm whose owner died, so a later rung-1 read into a reused claim goes to XMS. Second, rung 0 fails an ECC-corrected read (int 13h status 11h). Third, rung 1 never retries. Fourth, the partition table is trusted on type and length alone, and hd_chs bounds at cylinder 1,024 rather than at the drive's own count. Fifth, HSV_MOUNT skips hd_mount's duplicate guard. On size, about 386 resident bytes serve only the tool. There are three free savings: -11, -4 and -2. The image is 4,096 bytes with 2 spare. Verification refuted none of the 14 findings. It corrected two. hdk-1's proposed DX>=ES fence is unsound, because the Video Player arms a separate heap claim. hdk-2's door widening is SPEC 117.4's deliberate design, so only the stale verb counts remain. Of the 26 doc mismatches, 24 are carried with corrected text. A 25th fix is added: mount.inc's hd_vol_of citation, which the reviewer noted but did not carry. Two are dropped. SPEC 52.11.1's 'twelve verbs' is accurate for shipped builds. os88api.inc:3490 sits inside OSAPI_DRV_CALL's fingerprinted contract and needs an abilock --update.",
+ "strengths": [
+  {
+   "title": "hd_blk's HDV_LEN fence is the one bound that knows where a partition ends",
+   "why": "The kernel is told 'unknown' past 32MB, so its rule 13 checks nothing there. Below 32MB rule 13 trusts DV_SECS, which is the table entry. The driver compares the transfer's 32-bit end against the partition's whole length before it adds the base, so an overstated BPB can never reach the next partition.",
+   "evidence": "drivers/hdd/hdd.asm:200-210; kernel/disk.inc:5219-5229; drivers/hdd/mount.inc:143-151"
+  },
+  {
+   "title": "HMB_BAD and HMB_NONE are different answers",
+   "why": "A failed LBA 0 read and a missing signature both leave a blank buffer, but only the second permits a commit. That prevents a marginal LBA 0 from formatting through live partitions.",
+   "evidence": "drivers/hdd/hdcom.inc:165-223; drivers/hdd/hddabi.inc:80-85"
+  },
+  {
+   "title": "The twin take is proved, not assumed, and an ambiguous match pairs with nothing",
+   "why": "Pairing is keyed on geometry. The proof is LBA 0 read through both rungs plus a 55AA check, and more than one candidate cancels the pairing. This is Windows 3.1 WDCTRL's take-from-the-BIOS idea, with a stronger proof.",
+   "evidence": "drivers/hdd/hdd.asm:906-994 (hd_at_dup), 1056-1114 (hd_twins); kernel/disk.inc:3737-3780 (the take is one word store)"
+  },
+  {
+   "title": "The run-once code is the partition buffer",
+   "why": "508 bytes of attach and ready code live in hd_mbr's 512-byte window, and assembly asserts keep hd_cfgbuf clear of hd_ready. That puts the 4KB claim where it is.",
+   "evidence": "drivers/hdd/hdd.asm:1120-1590; build/hdd.hma.map CE00-CFFC"
+  },
+  {
+   "title": "Everything that crosses the seam is treated as hostile",
+   "why": "Every device index the tool passes is checked by hd_dev_row_ck. HSV_MSG range-checks its code. The tool image is validated as it arrived: magic, format, link base, dispatcher bytes and HD_ABI_VER.",
+   "evidence": "drivers/hdd/hdcom.inc:103-112; drivers/hdd/hdtool.inc:165-180, 646-652"
+  },
+  {
+   "title": "IDE waits are bounded in seconds and a floating bus is answered at once",
+   "why": "This avoids Linux's pre-5.11 hang and also survives a drive spinning up from standby.",
+   "evidence": "drivers/hdd/hdd.asm:672-715"
+  },
+  {
+   "title": "A saved geometry does not travel between machines; a mount preference does",
+   "why": "The probe's answer wins unless the record says the user typed the geometry, which closes FIELD-NOTES 33.",
+   "evidence": "drivers/hdd/hdd.asm:1450-1489"
+  },
+  {
+   "title": "The XMS read's map is exact",
+   "why": "A sector that reached the buffer by any other road leaves its bit clear. The range test is a signed segment difference plus a whole-sector check, so a sector below the armed buffer is refused.",
+   "evidence": "drivers/hdd/hdxms.inc:170-211"
+  }
+ ],
+ "findings": [
+  {
+   "id": "hdk-1",
+   "kind": "hazard",
+   "severity": "medium",
+   "title": "HDV_ARM redirects any rung-1 read into the armed segment, including the kernel's own metadata reads",
+   "detail": "hd_xa_arm validates the CPU, CX and A20 but never checks DX, the segment, against the caller. hd_xfer_ide asks hd_xa_read about every rung-1 read, which includes the FAT window, directory sectors, dsk_secbuf and the cache. With a wrong DX, a FAT-window load lands in XMS while dsk_fatw0 names the new range, and the next dskw_flush writes the stale window back as that range's FAT. The door's stated safety, 'writes are never redirected', misses that a redirected metadata read becomes a wrong write. Separately, an arm outlives its owner: nothing disarms on instance teardown, and a fault between ARM and DISARM leaves a freed segment armed. The one in-tree caller (vp_harm) passes the right DX.",
+   "evidence": [
+    "drivers/hdd/hdxms.inc:72-106",
+    "drivers/hdd/hdd.asm:489-492",
+    "drivers/hdd/hdxms.inc:34-36",
+    "kernel/diskw.inc:4955-4982",
+    "apps/video/video.asm:7475-7505"
+   ],
+   "recommendation": "Do NOT fence DX against ES. The buffer is a separate heap claim and may sit below the package. For the wrong-DX half, the kernel should tag its user-data DSV_BLK reads with a spare AL bit and the driver should redirect only those (a DSV_BLK contract change, recorded for the flag day). For the stale arm, the kernel's instance teardown should send the driver a disarm, or an arm should expire when the READ_SEQ that it brackets returns.",
+   "phase": "now",
+   "bytes_est": "record: a DSV_BLK contract change; a teardown disarm is a few bytes of kernel plus a DSV verb",
+   "prior_art": "OS/2 1.x DevHlp Lock/VirtToPhys: the kernel, not the client, establishes that a buffer is the requester's",
+   "verdict": "corrected",
+   "verify_note": "Confirmed in code: hd_xa_arm (hdxms.inc:72-106) validates the CPU, CX and A20, never DX. hd_xa_on is cleared only by ARM and DISARM, with no teardown path, and hd_xfer_ide consults it on every rung-1 read (hdd.asm:482). The proposed `cmp dx, es` fence is UNSOUND. The Video Player's buffer is a separate heap claim, not its own segment: video.asm:6501 says 'DX:BX = the claim', and :7344 says vp_ring is 'placed at THE GAP from the bank'. A heap claim may lie below the package's segment, so the fence would refuse legitimate arms. The record form, where the kernel vouches for the buffer, still stands for the wrong-DX half. Neither form closes the stale arm left by a dead owner. That needs a kernel-side disarm at instance teardown, or an arm that expires. Not in either queue."
+  },
+  {
+   "id": "hdk-2",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "The package door now reaches a partition erase, and five places still say it reaches no sector",
+   "detail": "HDV_TOOL forwards to HDT_PKG. Its HDI_GO with CH bit 0 erases and reformats a partition (MBR, FATs, VBR) through hd_raw, and any .O88 can call it. The real fence is the engine's hd_iact_ok together with the wizard's own confirm, not the verb list. hdxms.inc:34-36, hdd.asm:1569-1572, os88api.inc:3490-3493 and 3550, and SPEC 52.1.4 (103347) all still argue 'two verbs, no sector'.",
+   "evidence": [
+    "drivers/hdd/hdxms.inc:53-65",
+    "apps/os88api.inc:3564-3600",
+    "SPEC.md:228735-228810 (117.4)",
+    "SPEC.md:103347-103350"
+   ],
+   "recommendation": "Rewrite the five passages (mismatches 14-18). Decide explicitly whether a package may erase without a confirm owned by the tool. The cheap strengthening is in HDDTOOL rather than the resident: HDI_GO with erase requires a token returned by HDI_SLOTS.",
+   "phase": "now",
+   "bytes_est": "0 resident; ~+10 tool for a confirm token",
+   "verdict": "corrected",
+   "verify_note": "The door does reach HDI_GO's erase (hdxms.inc:58-61; os88api.inc HDV_TOOL/HDI_GO). But this is SPEC 117.4's DELIBERATE design: 'It reaches a third now, and still no sector', and 'refuses with HDG_FAIL whatever hd_iact_ok refuses ... the confirm is the wizard's Confirm page'. So the finding is a stale-count consistency issue, severity low rather than medium. The places that still say two verbs are hdxms.inc:34-36, hdd.asm:1569-1572, os88api.inc:3490 and 3550, and SPEC 52.1.4. All but os88api.inc:3490 are fixed below. That line sits inside OSAPI_DRV_CALL's indented contract, so tools/abilock.py fingerprints it, and a fix needs `abilock.py --update` (no bump). It is dropped from the auto-applied set for that reason. Whether a package may erase without a tool-owned confirm remains a policy question."
+  },
+  {
+   "id": "hdk-3",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "Rung 0 fails a read the controller ECC-corrected (int 13h status 11h)",
+   "detail": "hd_xfer's rung 0 retries any CF=1 three times with an AH=00h reset between attempts, then fails. Status 11h means the buffer holds corrected data, and DOS-era fixed-disk code accepts it. On an MFM drive behind an ST-11M or WD1002, which is the owner's 5150 class, a weak sector that is corrected every time is unreadable through HDD.DRV. The kernel's BIOS path for an un-taken boot partition has no 11h handling either. Marked PLAUSIBLE: the exact XT-controller behaviour on a multi-sector command needs the field machine.",
+   "evidence": [
+    "drivers/hdd/hdd.asm:337-364",
+    "kernel/disk.inc (no 0x11 status handling anywhere)"
+   ],
+   "recommendation": "On AH=11h, accept a one-sector run as done. For a longer run, re-issue one sector at a time so the corrected sector is accepted on its own. Raise the same rule for the kernel's BIOS loop with diskread.",
+   "phase": "now",
+   "bytes_est": "+12 resident (+5 for the one-sector-only form)",
+   "prior_art": "MS-DOS IBMBIO fixed-disk path treats ECC-corrected as success; RBIL int 13h status 11h",
+   "verdict": "confirmed",
+   "verify_note": "Rung 0's .attempt loop retries every CF=1 three times with an AH=00h reset and then fails (hdd.asm:336-364). AH=11h is never examined. kernel/disk.inc has no 11h handling either: grep finds only int 11h equipment-word hits. Whether an XT controller stops at the corrected sector on a multi-sector command is still a field-machine question, as the report says."
+  },
+  {
+   "id": "hdk-4",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "Rung 1 has no retry and no reset",
+   "detail": "A select timeout, a DRQ wait that saw ERR or timed out, or an end-of-command ERR/DWF all fail the transfer on the first attempt. Rung 0 gets three attempts and the floppy ladder gets more. hd_buf_step has already left hd_lba and hd_bofs on the failing sector, so a retry is just a re-entry at .run.",
+   "evidence": [
+    "drivers/hdd/hdd.asm:423-522"
+   ],
+   "recommendation": "Add one re-issue from the failing sector, with a counter. Optionally add SRST through base+206h plus a re-issue of hd_ide_setparams between attempts.",
+   "phase": "now",
+   "bytes_est": "+10 resident (+12 more with SRST)",
+   "prior_art": "Linux libata EH (reset, retry); DOS Abort/Retry/Ignore",
+   "verdict": "confirmed",
+   "verify_note": "Every failure in hd_xfer_ide goes to hd_xfer_fail4, or to the 0Ah exit after the end-of-command check (hdd.asm:449-527), with no counter and no re-issue. hd_buf_step has advanced hd_lba/hd_bofs only past completed sectors, so re-entering at .run is a valid retry point."
+  },
+  {
+   "id": "hdk-5",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "The partition table is trusted by type and length alone: no status-byte, duplicate or overlap checks",
+   "detail": "Two gaps. First, a superfloppy's LBA 0 (FAT at LBA 0) carries 55AA, so it reads as HMB_OK and its boot code becomes four garbage entries. A plausible one can be Deleted or Formatted, which writes a table over a live filesystem. Second, hd_vol_find keys on (device, slot), so two slots with the same base mount twice: two icons and two FAT caches over the same sectors.",
+   "evidence": [
+    "drivers/hdd/hdcom.inc:188-223, 331-399",
+    "drivers/hdd/mount.inc:44-91, 359-376"
+   ],
+   "recommendation": "In hd_part_load (hdcom.inc, so both images), treat any entry whose status byte is not 00h or 80h as HMB_BAD. In hd_mount_one, refuse a base equal to a live row's HDV_BASE on the same device.",
+   "phase": "now",
+   "bytes_est": "+14 both images (status) + ~+20 resident (base duplicate)",
+   "prior_art": "Linux block/partitions/msdos.c boot-indicator test",
+   "verdict": "confirmed",
+   "verify_note": "hd_part_load accepts any LBA 0 carrying 55AA as HMB_OK (hdcom.inc:204-207). hd_part_isfat/hd_part_used check only the type and a non-zero length, never the 1BE+16n status byte. hd_vol_find keys on (HDV_DEV, HDV_PART), so two slots with the same HP_LBA mount twice."
+  },
+  {
+   "id": "hdk-6",
+   "kind": "bug",
+   "severity": "low",
+   "title": "hd_chs bounds the cylinder at 1,024, not at the drive's own count, though its contract says 'past the drive'",
+   "detail": "An LBA between the drive's last cylinder and 1,023 goes to the ROM or the task file as it is. The result depends on the controller: a seek error, an IDNF, or a wrap. A partition entry that overstates its length is therefore refused nowhere until a write near the end fails.",
+   "evidence": [
+    "drivers/hdd/hdcom.inc:117, 142"
+   ],
+   "recommendation": "Replace cmp ax,1024 with cmp ax,[di+HDD_CYL] (both 3 bytes). Caveat: a rung-1 row taken from the BIOS keeps the BIOS's cylinder count, which may be one short of IDENTIFY's. Either set HDD_CYL from IDENTIFY in hd_twins on success, or accept and document the lost last cylinder.",
+   "phase": "now",
+   "bytes_est": "0 (both images)",
+   "verdict": "confirmed",
+   "verify_note": "hd_chs is `cmp ax, 1024 / jae .bad` (hdcom.inc:142) and never reads HDD_CYL, while its header says 'past the drive'. The kernel's own BIOS path uses the same 1,024 ceiling (disk.inc dsk_cylmax), so the two agree with each other but not with the drive. The 0-byte swap and its BIOS-cylinder caveat are right. The header text is fixed below."
+  },
+  {
+   "id": "hdk-7",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "HSV_MOUNT does not refuse a partition that is already mounted",
+   "detail": "hd_mount guards with hd_vol_find and hd_kvol before calling hd_mount_one. hd_svc_mount calls hd_mount_one directly, and hd_mount_one repeats neither guard. Both installer call sites unmount first, so nothing misbehaves today. But the resident owns the volume table, and its rule depends on the tool's call order.",
+   "evidence": [
+    "drivers/hdd/mount.inc:56-72, 124-188",
+    "drivers/hdd/hdtool.inc:597-625",
+    "drivers/hdd/inst.inc:2789, 2837, 2860, 2872"
+   ],
+   "recommendation": "Move the guard into hd_mount_one; hdk-5's base check subsumes it. Then delete hd_mount's own hd_vol_find test.",
+   "phase": "now",
+   "bytes_est": "~+10 net resident",
+   "verdict": "confirmed",
+   "verify_note": "hd_svc_mount (hdtool.inc:597-624) calls hd_part_load, hd_part_ent and then hd_mount_one directly. hd_mount_one (mount.inc:124-188) repeats neither hd_vol_find nor the HDK_IDE gate that hd_mount applies before a kernel-volume take. So HSV_MOUNT on a rung-0 partition the kernel already adopted would also TAKE it, which hd_mount refuses. Harmless today, because the installer unmounts first."
+  },
+  {
+   "id": "hdk-8",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "hd_mount_one's CF is read as a verdict but is undocumented and partly accidental; the read is redundant",
+   "detail": "The header says 'clobbers: flags'. hd_svc_mount nevertheless branches on CF. On the .badvol path that CF is OSAPI_VOL_DEL's. The answer is right only because hd_vol_of runs next and supplies both the index and CF.",
+   "evidence": [
+    "drivers/hdd/mount.inc:110-113, 175-177",
+    "drivers/hdd/hdtool.inc:619-620"
+   ],
+   "recommendation": "Delete jc hd_svc_out at hdtool.inc:620 so that hd_vol_of is the whole answer, and correct the header.",
+   "phase": "now",
+   "bytes_est": "-2 resident",
+   "verdict": "confirmed",
+   "verify_note": "Spot-check. hd_mount_one's .badvol exit leaves hd_unmount_row's OSAPI_VOL_DEL CF and sets no hd_msgc, and hd_svc_mount branches on it (hdtool.inc:619-620). hd_vol_of answers 0FFh/CF itself, so the jc is redundant. It is a 2-byte short jcc. The header is fixed below."
+  },
+  {
+   "id": "hdk-9",
+   "kind": "size",
+   "severity": "low",
+   "title": "DSV_CPNAME publishes a copy of the name the header already holds at +16",
+   "detail": "hd_s_page 'Hard Drive',0 (11 bytes) duplicates OS88_DRIVER's NUL-padded name field in the same segment. RAM DISK's rd_name (9 bytes) and NET's net_cpname (8 bytes) are the same pattern.",
+   "evidence": [
+    "drivers/hdd/hdd.asm:838, 1555",
+    "drivers/os88drv.inc:806-811",
+    "drivers/ramdisk/ramdisk.asm:149",
+    "drivers/net/net.asm:223-224"
+   ],
+   "recommendation": "Publish dw DRV_ORG+16 (correct in the HMA copy too) and delete the string. Add a note in os88drv.inc that the header's name is a NUL string to publish rather than copy.",
+   "phase": "now",
+   "bytes_est": "-11 HDD.DRV resident; -28 across three drivers",
+   "verdict": "confirmed",
+   "verify_note": "Spot-check. hd_s_page 'Hard Drive',0 (11 bytes, hdd.asm:838) is referenced only by DSV_CPNAME (hdd.asm:1555). OS88_DRIVER emits the same name NUL-padded at +16. Byte 31 is DRV_H_BSSP, but the 10-character name's NUL at +26 terminates it first, so `dw DRV_ORG+16` works in both images."
+  },
+  {
+   "id": "hdk-10",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "Ask OSAPI_VOL_SYS for the system volume instead of banking one at DRVV_READY",
+   "detail": "hd_ready banks OSAPI_FILE_HERE into hd_tvol/hd_tcwd. That depends on the drv_nostamp kernel fix and on DRVV_READY being sent inside drv_load's bracket. OSAPI_VOL_SYS answers the question directly, the banked directory is always the root, and the tool's own page already uses the cell.",
+   "evidence": [
+    "drivers/hdd/hdd.asm:1414-1416",
+    "drivers/hdd/hdtool.inc:66-67, 125-130",
+    "apps/os88api.inc:3282",
+    "drivers/hdd/cppage.inc:1014",
+    "kernel/drvvol.inc:54"
+   ],
+   "recommendation": "Replace the two loads with xor dx,dx / call OSAPI_VOL_SYS and delete hd_tvol/hd_tcwd.",
+   "phase": "now",
+   "bytes_est": "-4 resident",
+   "verdict": "confirmed",
+   "verify_note": "drv_mounted stands at [dsk_bootvol]'s ROOT, cluster 0 (drvvol.inc:46-56), so the banked hd_tcwd is always 0. OSAPI_VOL_SYS answers BL = the boot volume with no I/O. The resident saving is the 8 bytes of loads at hdtool.inc:128-129 plus 3 of data, less the 7 for `xor dx,dx`/call: -4. The 13 bytes saved in hd_ready are in the run-once hd_mbr window, not resident."
+  },
+  {
+   "id": "hdk-11",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "The seam copies resident state through six verbs; publish pointers to it at HDT_INIT instead",
+   "detail": "HSV_SYNC, STATE, SEL, MSG and VOLOF, plus hd_vol_of, exist only to copy bytes the resident owns. HSV_PAGE and HSV_CTRS are table entries pointing at hd_svc_unk. About 386 resident bytes in all serve only the tool. The row layouts are already a written ABI (hddabi.inc), and HD_ABI_VER refuses a mismatched pair. Handing over five separate far pointers keeps declaration order meaningless and ends the sync-before-act discipline.",
+   "evidence": [
+    "build/hdd.hma.map C476-C5E4 (366 bytes), C768-C77C (20)",
+    "drivers/hdd/hdtool.inc:496-698",
+    "drivers/hdd/hdsvc.inc:101-132",
+    "SPEC.md 52.11.2"
+   ],
+   "recommendation": "HDT_INIT returns far pointers to hd_devs, hd_vols, hd_ndev, hd_sel and hd_msgc. The tool reads them directly and writes SEL and MSG directly. Only the verbs with side effects keep handlers: RAW, MOUNT/UNMOUNT(+DEV), GEOM and CFGMARK. Bump HD_ABI_VER to 8.",
+   "phase": "now",
+   "bytes_est": "~-100 resident, ~+40 tool",
+   "listed_as": "ABI-BREAK-LIST P2 (HD_ABI_VER private, moves freely); touches L3 (mega_gpfix serves HDD<->HDDTOOL)",
+   "verdict": "confirmed",
+   "verify_note": "Spot-check. The map's seam span C476-C5E4 is 366 bytes, and hd_vol_of is C768-C77C (20). The copy-only handlers (sync, state, volof, msg, sel and their table slots) are roughly 100 of that, so ~-100 is a fair ESTIMATE. HD_ABI_VER is private (ABI-BREAK-LIST P2), and the kern_mega far-call fixup L3 applies as noted."
+  },
+  {
+   "id": "hdk-12",
+   "kind": "perf",
+   "severity": "low",
+   "title": "Rung 1 writes one word at a time where it reads with rep insw",
+   "detail": "The write loop is mov ax,[es:di] / out dx,ax / inc / inc / loop: 8 bytes and about 20 clocks a word on a 286. Banking DS and SI around rep outsw takes 10 bytes and about 5 clocks a word. Writes are multi-sector (data runs and FAT ranges), and an install writes megabytes.",
+   "evidence": [
+    "drivers/hdd/hdd.asm:503-508",
+    "kernel/diskw.inc:1806-1829, 4974-4979"
+   ],
+   "recommendation": "Use push ds / push si / mov si,di / push es / pop ds / rep outsw / pop si / pop ds. The +2 bytes fit the 2-byte pad before align 512. Measure it on 86Box mr286 in the final pass.",
+   "phase": "now",
+   "bytes_est": "+2 resident",
+   "verdict": "confirmed",
+   "verify_note": "Spot-check. The write loop is 8 bytes (mov ax,[es:di] 3, out 1, inc 1, inc 1, loop 2). The rep outsw form is 10. Nothing after .write reads DI (hd_buf_step uses hd_bofs). The 2 spare bytes are CDFE-CDFF, between hd_mbrok (CDFD) and hd_mbr (CE00)."
+  },
+  {
+   "id": "hdk-13",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "hd_raw's bounce copies CL x 256 words, silently dropping a count's high byte",
+   "detail": "mov ch,cl / mov cl,al builds the copy count modulo 256 sectors. HSV_RAW passes HRQ_CNT from the tool unchecked, so a run of 256 sectors or more into an HMA or selector buffer moves every sector and copies fewer back. Today's callers use 1-3 sectors.",
+   "evidence": [
+    "drivers/hdd/mount.inc:511-551",
+    "drivers/hdd/hdtool.inc:533-551"
+   ],
+   "recommendation": "Refuse CX > 127 in the bounce path (cmp cx,127 / ja with CF set), or state the bound in HSV_RAW's ABI line.",
+   "phase": "now",
+   "bytes_est": "+4 resident",
+   "verdict": "confirmed",
+   "verify_note": "Spot-check. `mov ch, cl / mov cl, al` (mount.inc:525-526) builds sectors x 256 words modulo 256 sectors. The claim size, (CX+1)/2 KB, is computed from the full CX, so a long run copies short without any refusal. Only HMA or selector buffers take the bounce."
+  },
+  {
+   "id": "hdk-14",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "hd_buf_step walks DX on an offset wrap, while BLKCAP_SEL promises it walks only BX",
+   "detail": "hd_buf_step does add [hd_bseg],0x1000 when the offset wraps, which is meaningless on a selector. It is unreachable: a selector's run cannot cross its own 64KB limit, and a run ending exactly at 0x10000 wraps only after its last sector.",
+   "evidence": [
+    "drivers/hdd/hdd.asm:659-666",
+    "SPEC.md:102787-102790 (51.8.1)"
+   ],
+   "recommendation": "Add a one-line note on hd_buf_step and in 51.8.1 saying why the carry is dead under a selector.",
+   "phase": "record",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "Spot-check. hd_buf_step adds 1000h to [hd_bseg] on an offset carry (hdd.asm:659-666). Under a selector, the run cannot wrap before its last sector, so the carry is dead there. A record note is the right size of fix."
+  }
+ ],
+ "doc_fixes": [
+  {
+   "file": "drivers/hdd/hdd.asm",
+   "old_text": "; controller card's own ROM, and CHS-only IDE. Everything the user can see is\n; here - the Control Panel's Hard Drive page, the disk tool that partitions\n; and formats, and the Mount button - because the kernel's half of this is four\n; API slots and a volume table, and nothing above them belongs in a kernel\n; that boots machines with no hard disk at all.",
+   "new_text": "; controller card's own ROM, and CHS-only IDE: the transport, the volume\n; table and mounting, because the kernel's half of this is four API slots and\n; a volume table, and nothing above them belongs in a kernel that boots\n; machines with no hard disk at all. Everything the user can see - the Control\n; Panel's Hard Drive page with its Mount button, the disk tool that partitions\n; and formats, the installer - is HDDTOOL.DRV's, read off the system volume on\n; demand (SPEC.md 52.11, 52.13).",
+   "why": "The page, disk tool, formatter and installer are assembled into HDDTOOL.DRV (hddtool.asm includes cppage/partw/fmt/tool/inst); the resident keeps the probe, both rungs, the volume table and mounting (SPEC.md 52.13)."
+  },
+  {
+   "file": "drivers/hdd/hdd.asm",
+   "old_text": "; WHAT THE KERNEL KEEPS AND WHY. A volume is a small index with 16-bit\n; VOLUME-RELATIVE LBAs (SPEC.md 18.7), so the FAT layer, the directory\n; walker and the write path are the floppy's, unchanged, and a partition is\n; capped at 65,535 sectors - 31.99MB, which is exactly the DOS 3.3 limit\n; these machines ran.",
+   "new_text": "; WHAT THE KERNEL KEEPS AND WHY. A volume is a small index with\n; VOLUME-RELATIVE LBAs (SPEC.md 18.7), so the FAT layer, the directory\n; walker and the write path are the floppy's, unchanged. They were 16 bits,\n; which capped a partition at 31.99MB; since SPEC.md 18.7.5 DSV_BLK takes a\n; 32-bit one in DI:SI and the cap is FAT16's own (HP_MAXHI:HP_MAXLO,\n; 2,047.9MB).",
+   "why": "hd_blk takes the LBA's high word in DI (banked in BP) on every kernel that ships HDD.DRV (OS88_BIGVOL; kern_small ships none), and hd_part_big bounds a partition at HP_MAXHI:HP_MAXLO = 3FFED0h sectors, not 65,535."
+  },
+  {
+   "file": "drivers/hdd/hdd.asm",
+   "old_text": "; Prefix hd_. Sub-modules: part.inc (the partition table and the allocator),\n; fmt.inc (the FAT formatter), tool.inc (the one window both of those are\n; reached through), page.inc (the Control Panel page). All near procs with\n; near rets, like any package (SPEC.md 51.1).",
+   "new_text": "; Prefix hd_. Sub-modules: hddabi.inc (the contract with HDDTOOL.DRV),\n; hdcom.inc (code both images assemble), cfg.inc (the settings blob),\n; hdtool.inc (loading and calling the tool), mount.inc (the volume table),\n; hdxms.inc (the read into XMS) and hdsec.inc (the buffers); fmt.inc and\n; tool.inc are HDDTOOL.DRV's. All near procs with near rets, like any package\n; (SPEC.md 51.1).",
+   "why": "part.inc and page.inc do not exist; hdd.asm includes hddabi, hdcom, cfg, hdtool, mount, hdxms and hdsec, and fmt.inc/tool.inc are included only by hddtool.asm."
+  },
+  {
+   "file": "drivers/hdd/hdd.asm",
+   "old_text": "; hd_cap MOVED to page.inc, beside the strings",
+   "new_text": "; hd_cap MOVED to cppage.inc, beside the strings",
+   "why": "hd_cap is defined at drivers/hdd/cppage.inc:1130; there is no page.inc."
+  },
+  {
+   "file": "drivers/hdd/hdd.asm",
+   "old_text": "; is 3,584 bytes whenever the resident above stays under 3,072 and the run\n; under 512",
+   "new_text": "; is 4,096 bytes whenever the resident above stays under 3,584 and the run\n; under 512",
+   "why": "build/hdd.bin is 4,096 bytes and hd_mbr sits at image offset 0xE00 (hdd.hma.map CE00); SPEC.md 117.4: 'still 4,096 bytes and a 4KB claim'."
+  },
+  {
+   "file": "drivers/hdd/hdd.asm",
+   "old_text": "; status has never been looked at. Every write\n                                ; in this driver is one sector, so without this\n                                ; a write fault is reported to the kernel as\n                                ; success",
+   "new_text": "; status has never been looked at. A write is\n                                ; a whole run - a data run or a FAT range, one\n                                ; command - so without this a fault on its last\n                                ; sector is reported to the kernel as\n                                ; success",
+   "why": "The kernel hands DSV_BLK multi-sector writes (dskw_flushrun's run, dskw_flush_x's FAT range, kernel/diskw.inc) and rung 1 issues each as one command of up to 255 sectors; only the last sector's completion status is unchecked by hd_ide_drq."
+  },
+  {
+   "file": "drivers/hdd/hdd.asm",
+   "old_text": "; DSV_PKGCALL - THE DOOR, and it reaches two\n                                ; verbs, neither a sector: HDV_ARM and\n                                ; HDV_DISARM (52.1.4). No package reaches\n                                ; DSV_BLK through it",
+   "new_text": "; DSV_PKGCALL - THE DOOR, and it reaches three\n                                ; verbs, none naming a sector: HDV_ARM and\n                                ; HDV_DISARM (52.1.4) and HDV_TOOL (117.4),\n                                ; whose HDI_GO can erase a partition through\n                                ; the install engine. No package reaches\n                                ; DSV_BLK through it",
+   "why": "hd_pkg (hdxms.inc:53-65) also forwards HDV_TOOL to HDT_PKG; SPEC.md 117.4 documents the third verb and HDI_GO's erase bit."
+  },
+  {
+   "file": "drivers/hdd/hdxms.inc",
+   "old_text": "; WRITES ARE NEVER REDIRECTED, and that is the door's whole safety\n; argument: DSV_PKGCALL reaches two verbs, neither of them a sector, so no\n; package can reach DSV_BLK through it (SPEC.md 20.11).",
+   "new_text": "; WRITES ARE NEVER REDIRECTED, and no package can reach DSV_BLK through\n; DSV_PKGCALL (SPEC.md 20.11): its three verbs - these two and HDV_TOOL\n; (SPEC.md 117.4) - name no sector. HDV_TOOL's HDI_GO can still ERASE a\n; partition through the install engine, so for that verb the fence is\n; hd_iact_ok and the wizard's Confirm page, not the verb list.",
+   "why": "hd_pkg, a few lines below, dispatches a third verb, HDV_TOOL, to HDT_PKG, whose HDI_GO (CH bit 0) erases and reformats; SPEC.md 117.4 says the refusal is hd_iact_ok's and the confirm the wizard's."
+  },
+  {
+   "file": "drivers/hdd/hdtool.inc",
+   "old_text": "; and a driver has no way to ask which. It does not need one: drv_load",
+   "new_text": "; and OSAPI_VOL_SYS would name it (SPEC.md 19.8). It does not need to: drv_load",
+   "why": "OSAPI_VOL_SYS (slot 0x0328, apps/os88api.inc:3282) answers the boot volume and the tool's own page calls it (cppage.inc:1014); the bank's reasoning still holds."
+  },
+  {
+   "file": "drivers/hdd/hdtool.inc",
+   "old_text": "                                ; the HMA: assembled at DRV_ORG = E000h there\n                                ; (SPEC.md 2.10.8), so it is E00Ch.",
+   "new_text": "                                ; the HMA: assembled at DRV_ORG = C000h there\n                                ; (SPEC.md 2.10.8), so it is C00Ch.",
+   "why": "Makefile:4545 DRV_HMA_ORG := 0xC000; SPEC.md 2.10.8 says the origin was E000 before SOUND.DRV outgrew its window."
+  },
+  {
+   "file": "drivers/hdd/hddabi.inc",
+   "old_text": "                                ; in it (DRV_ORG + PKG_DISP: E00Ch from the",
+   "new_text": "                                ; in it (DRV_ORG + PKG_DISP: C00Ch from the",
+   "why": "Makefile:4545 DRV_HMA_ORG := 0xC000, so the HMA dispatcher is C00Ch."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "from the HMA is DRV_HMA_ORG + PKG_DISP (E00Ch) and not PKG_DISP.",
+   "new_text": "from the HMA is DRV_HMA_ORG + PKG_DISP (C00Ch) and not PKG_DISP.",
+   "why": "The same section (2.10.8) gives DRV_HMA_ORG as 0xC000 a few lines up; Makefile:4545 agrees."
+  },
+  {
+   "file": "drivers/hdd/hdsec.inc",
+   "old_text": "; that was already there and the image is exactly 5,120. Nothing else moved.",
+   "new_text": "; that was already there and the image was exactly 5,120. Nothing else moved.\n; (It is 4,096 now - SPEC.md 52.13.6, 117.4 - and the byte still sits in\n; front of the align.)",
+   "why": "build/hdd.bin is 4,096 bytes; hd_mbrok is at CDFD, in front of hd_mbr at CE00 (hdd.hma.map)."
+  },
+  {
+   "file": "drivers/hdd/hddabi.inc",
+   "old_text": "                                ; desktop icon (SPEC.md 52.4). It matches the\n                                ; kernel's own spare rows (DVOL_MAX - 2)",
+   "new_text": "                                ; desktop icon (SPEC.md 52.4). The kernel's\n                                ; DVOL_MAX (8) holds them beside the floppies",
+   "why": "DVOL_MAX is 8 on every kernel that ships HDD.DRV (kernel/disk.inc:227: the floppies plus one per partition), so DVOL_MAX - 2 is 6, not 4."
+  },
+  {
+   "file": "drivers/hdd/hdcom.inc",
+   "old_text": "; out: CF = 0 and [hd_cyl]/[hd_head]/[hd_sec]; CF = 1 = past the drive",
+   "new_text": "; out: CF = 0 and [hd_cyl]/[hd_head]/[hd_sec]; CF = 1 = past what CHS can\n;      name (cylinder 1,024 and up) - not the drive's own HDD_CYL",
+   "why": "hd_chs refuses `cmp ax, 1024 / jae .bad`; it never reads HDD_CYL."
+  },
+  {
+   "file": "drivers/hdd/hdcom.inc",
+   "old_text": "; (SPEC.md 52.12). Nothing in here crosses the segment boundary: each image",
+   "new_text": "; (SPEC.md 52.11.1). Nothing in here crosses the segment boundary: each image",
+   "why": "SPEC.md 52.12 is 'Every label on both surfaces is one opaque run'; hdcom.inc's duplication rule is 52.11.1's 'The pure helpers are duplicated, not called across'."
+  },
+  {
+   "file": "drivers/hdd/mount.inc",
+   "old_text": "; hd_vol_of - which kernel volume is mounted on one partition (SPEC.md 52.12)",
+   "new_text": "; hd_vol_of - which kernel volume is mounted on one partition (SPEC.md 52.10.4.2)",
+   "why": "52.12 is about text runs; hd_vol_of behind HSV_VOLOF is 52.10.4.2's ('which is hd_vol_of behind four instructions')."
+  },
+  {
+   "file": "drivers/hdd/mount.inc",
+   "old_text": "; out: nothing; [hd_msg] says what happened",
+   "new_text": "; out: nothing; [hd_msgc] (an HDM_*) says what happened",
+   "why": "There is no hd_msg; the byte is hd_msgc, an HDM_* code (the file's own banner says so)."
+  },
+  {
+   "file": "drivers/hdd/mount.inc",
+   "old_text": "; out: [hd_nmnt] incremented on success; [hd_msg] set on a failure\n; clobbers: flags",
+   "new_text": "; out: [hd_nmnt] incremented on success; [hd_msgc] set on a full table or a\n;      refused add. CF = 1 there too, but a partition the mount rejects\n;      leaves OSAPI_VOL_DEL's CF - hd_svc_mount's answer is hd_vol_of's\n; clobbers: flags",
+   "why": "hd_svc_mount branches on CF after hd_mount_one; on .badvol that CF is hd_unmount_row's OSAPI_VOL_DEL's, and hd_msgc is not set on that path. hd_msg does not exist."
+  },
+  {
+   "file": "drivers/hdd/hdsvc.inc",
+   "old_text": "; out: AL = the kernel's volume index, 0FFh = none (or a resident too old to\n;      know the verb, which refuses it and leaves the 0FFh standing)",
+   "new_text": "; out: AL = the kernel's volume index, 0FFh = none (a resident too old to know\n;      the verb never gets here: HD_ABI_VER refuses the pair at load)",
+   "why": "hd_tool_need refuses a tool whose header HD_ABI_VER differs (hdtool.inc:179-180), and SPEC.md 52.10.4.2 says HSV_VOLOF came with a version bump for that reason."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "direction, so the resident→tool vocabulary is **four verbs** (`HDT_INIT`,\n`HDT_FORMAT`, `HDT_INSTALL`, `HDT_SHUT`) carried in `BP` through the\ndispatcher — `BP` is a verb rather than a proc offset because the resident has\nno way to know an offset in an image it has only just read.",
+   "new_text": "direction, so the resident→tool vocabulary was **four verbs** (`HDT_INIT`,\n`HDT_FORMAT`, `HDT_INSTALL`, `HDT_SHUT`); `HDT_BUSY`, the five page verbs\n(§52.13) and `HDT_PKG` (§117.4) make it eleven. The verb rides `AL`; `BP` is\nthe tool's entry offset, read out of its own header at +6, because the\ndispatcher is `call bp` and `BP` is therefore an address.",
+   "why": "hd_tool_call loads BP = [hd_tent] (the image's word at +6) and the verb in AL (hdtool.inc:262-277); hddabi.inc defines HDT_* 0..10."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "the boot partition on an installed one (§52.10.3) — and a driver cannot ask\n  which. It does not need to:",
+   "new_text": "the boot partition on an installed one (§52.10.3) — and `OSAPI_VOL_SYS`\n  (§19.8) would name it. It does not need to:",
+   "why": "OSAPI_VOL_SYS (0x0328) answers the boot volume, and the tool's own page uses it (cppage.inc:1014); the bank's reasoning is unchanged."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "package may reach DSV_BLK and write a raw sector (20.11) - still holds.",
+   "new_text": "package may reach DSV_BLK and write a raw sector (20.11) - still holds.\n§117.4 added a third, `HDV_TOOL`, which names no sector either but reaches\nthe install engine's erase (`HDI_GO`), so for that verb the fence is\n`hd_iact_ok` and the wizard's Confirm page.",
+   "why": "hd_pkg dispatches HDV_TOOL to HDT_PKG (hdxms.inc:58-61), and 117.4's HDI_GO erases with CH bit 0; this section still reads as if the door had two verbs."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "**`HDD.DRV`'s claim is 4KB, not 5**: image + bss **5,120 → 3,584**, the",
+   "new_text": "**`HDD.DRV`'s claim is 4KB, not 5**: image + bss **5,120 → 3,584** (4,096\nsince §117.4 spent the pad; the claim is still 4KB), the",
+   "why": "build/hdd.bin is 4,096 bytes today; 117.4 says 'still 4,096 bytes and a 4KB claim'."
+  },
+  {
+   "file": "apps/os88api.inc",
+   "old_text": "                                ; Its package door reaches TWO verbs and no\n                                ; sector (SPEC.md 52.1.4) - a read of YOURS\n                                ; sent straight into XMS on a 386:",
+   "new_text": "                                ; Its package door reaches THREE verbs and no\n                                ; sector (SPEC.md 52.1.4, 117.4) - a read of\n                                ; YOURS sent straight into XMS on a 386, and\n                                ; the installer:",
+   "why": "HDV_TOOL (3) follows HDV_ARM/HDV_DISARM in this very list. The comment follows a plain equ, not an OSAPI_* %define, so it is outside tools/abilock.py's fingerprint."
+  }
+ ]
+}

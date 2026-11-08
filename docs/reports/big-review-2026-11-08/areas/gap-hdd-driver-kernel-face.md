@@ -589,3 +589,73 @@ in 51.8.1 saying why the carry is dead under a selector.
 Without hdk-11 the batch crosses the 4,096 rung, and the claim becomes
 4,608. The batch is correct on its own; this line only says what it costs.
 With hdk-11 it gives bytes back.
+
+## Verification
+
+Adversarial pass, 2026-11-08. I re-read every hazard, bug and medium
+finding in the code (hdd.asm, hdxms.inc, hdcom.inc, mount.inc, hdtool.inc,
+hdsvc.inc, and the kernel's disk.inc, diskw.inc and drvvol.inc), and
+spot-checked the rest. HDD.DRV ships only where `OS88_BIGVOL` is defined
+(kern_big, kern_mega and kern_dos). kern_small ships no HDD.DRV, so there is
+no second arm to diverge. No finding is refuted. Neither ABI-BREAK-LIST.md
+nor KERNEL-BYTE-QUEUE.md lists any of them, except hdk-11's own note that
+`HD_ABI_VER` is private (P2), with L3 for kern_mega's fixup. The corrected
+fields are in `data/gap-hdd-driver-kernel-face.json`.
+
+Findings:
+- **hdk-1** corrected. The hazard is real: `hd_xa_arm` never checks DX, and
+  only ARM and DISARM ever clear `hd_xa_on`, so an arm outlives a dead
+  owner. But the proposed `cmp dx, es` fence is unsound. The Video Player
+  arms a separate heap claim ("DX:BX = the claim", `vp_ring` "at THE GAP
+  from the bank"), and a claim may lie below the package's segment. The
+  record form (the kernel tags user-data reads) answers a wrong DX. A stale
+  arm needs a kernel-side disarm at instance teardown, or an arm that
+  expires with its READ_SEQ.
+- **hdk-2** corrected, medium to low. The erase reach is SPEC.md 117.4's
+  deliberate design: "still no sector", the refusal is `hd_iact_ok`'s, and
+  the confirm is the wizard's. What is left is stale verb counts. Four are
+  fixed below. The fifth, os88api.inc:3490, is inside `OSAPI_DRV_CALL`'s
+  indented contract, which `tools/abilock.py` fingerprints, so it needs
+  `abilock.py --update` (no bump) and is left out of the auto-applied set.
+- **hdk-3** confirmed. Rung 0 retries any CF=1 and never reads AH=11h. The
+  kernel has no 11h handling either. The multi-sector controller behaviour
+  is still the 5150's to answer.
+- **hdk-4** confirmed. Every rung-1 failure exits on the first attempt.
+- **hdk-5** confirmed. 55AA alone makes HMB_OK, the status byte is never
+  read, and `hd_vol_find` keys on (device, slot).
+- **hdk-6** confirmed. `cmp ax, 1024`, with HDD_CYL never read. The kernel's
+  BIOS path uses the same ceiling.
+- **hdk-7** confirmed, and a little wider than stated. `hd_mount_one` also
+  skips `hd_mount`'s HDK_IDE gate. So HSV_MOUNT on a rung-0 partition the
+  kernel adopted would TAKE it, which `hd_mount` refuses.
+- **hdk-8 to hdk-14** confirmed (spot-checks). The bytes check out:
+  - hdk-8: a 2-byte short jcc.
+  - hdk-9: the header's NUL at +26 terminates the name.
+  - hdk-10: -4 resident; the 13 bytes in `hd_ready` are in the run-once window.
+  - hdk-11: the map span is 366 + 20.
+  - hdk-12: 8 bytes to 10, with the spare pad at CDFE-CDFF.
+  - hdk-13: the count is taken modulo 256.
+  - hdk-14: the carry is dead under a selector.
+
+Doc mismatches. 24 of the 26 are carried, with corrected text. One more fix
+is added: mount.inc's `hd_vol_of` cites 52.12, and should cite 52.10.4.2.
+That makes 25 fixes, each `old_text` checked unique in the current file.
+Every new § reference resolves. Two are dropped:
+- **SPEC 52.11.1's "twelve verbs the other way."** HSV_* runs 0..13, and
+  without HSV_PAGE (never implemented) and HSV_CTRS (INSTBENCH only) that is
+  exactly twelve implemented in a shipped build. The sentence is accurate.
+- **os88api.inc:3490.** It is fingerprinted, as described under hdk-2.
+
+Refinements against the reviewer's proposed text:
+- hdd.asm:11 now drops the "DOS 3.3 limit" clause. Left in, it would
+  contradict the new cap.
+- hdd.asm:5 keeps its reasoning about the kernel's four slots.
+- The SPEC 52.11.1 four-verbs paragraph keeps its historical "was". It also
+  explains BP from `hd_tool_call`'s own reason (`call bp`).
+- The hdcom.inc:117 replacement drops "(or apply hdk-6)".
+- mount.inc:110 states the real CF behaviour rather than "CF is NOT an
+  answer". That claim would be false while `hd_svc_mount` still branches
+  on CF.
+- hdsvc.inc:312 names the `HD_ABI_VER` load refusal.
+- The os88api.inc:3550 fix follows a plain `equ`, so it is outside the
+  fingerprint.
