@@ -8,7 +8,7 @@ were not a text fix: each is a code defect already in synth/bugs.md, or a rule t
 
 2. The comment records a real defect in code and test. On 360KB and 720KB the canary at file sector 21 lands in a run that crosses no head, so it does nothing there, and t_canary still passes. Fixing it means moving KSIG_OFF or changing the test, which is the owner's call.
 
-3. The tree contradicts itself in dozens of places: '.bss arrives zeroed' (§10, SPEC 18120, kernel.asm, ui.inc:1661) against '-f bin zeroes no .bss' (§13.3 step 3, ui.inc's ui_pcmd/ui_tm_drv/menu_dropd, SPEC 12671, 54571). Under ROM_COLD the .bss gap is shipped as padding and read by stage 2. Whether code may rely on that on every load path (ROM, HMA and hard-disk loaders) is a design rule to settle before sweeping either side.
+3. The tree contradicts itself in dozens of places: '.bss arrives zeroed' (SPEC section 10, SPEC line 18120, kernel.asm, ui.inc:1661) against '-f bin zeroes no .bss' (section 13.3 step 3, ui.inc's ui_pcmd/ui_tm_drv/menu_dropd, SPEC 12671, 54571). Under ROM_COLD the .bss gap is shipped as padding and read by stage 2. Whether code may rely on that on every load path (ROM, HMA and hard-disk loaders) is a design rule to settle before sweeping either side.
 
 4. Real error: SPL_RESIDENT is defined only in splash.inc. But it is inside an %error string, not a comment after ';', so a text-only pass cannot touch it. It needs a code-string edit.
 
