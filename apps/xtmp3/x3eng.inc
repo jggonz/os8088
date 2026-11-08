@@ -1469,7 +1469,19 @@ x3_lset:
     mov dx, [ap_la_seg]
     call OSAPI_MEM_MOVABLE
     cmp byte [x3h_kind], X3HK_CONV
+%ifdef PKG_MEGA
+    je .c
+    cmp byte [x3h_kind], X3HK_HUGE  ; a HUGE hold with conventional memory in
+    jne .o                          ; it (x3hold.inc x3h_huge): that piece the
+    cmp byte [x3h_hcv], 0           ; same way, its proc a `ret` - its windows
+    je .o                           ; follow a move, x3h_base names window 0
+    or ax, ax                       ; still (SPEC.md 50.3.5)
+    jz .c
+    mov ax, x3_ret
+.c:
+%else
     jne .o
+%endif
     mov dx, [x3h_base]
     call OSAPI_MEM_MOVABLE
 .o:
@@ -3939,7 +3951,16 @@ x3_plan:
     call x3_plan0                   ; THE CEILING STANDS (SPEC.md 121.10): a
     jnc .o                          ; plan that does not fit beside a
     cmp byte [x3h_kind], X3HK_CONV  ; CONVENTIONAL hold gives the hold up,
+%ifdef PKG_MEGA
+    je .give                        ; and the track streams - and so does a
+    cmp byte [x3h_kind], X3HK_HUGE  ; HUGE hold with conventional memory in
+    jne .no                         ; it (the heap alone, or a bridge's
+    cmp byte [x3h_hcv], 0           ; piece): x3_curkb counts the heap
+    je .no
+.give:
+%else
     jne .no                         ; and the track streams
+%endif
     call x3h_free
     call x3_plan0
 .o:
@@ -5836,6 +5857,10 @@ X3_FPSZ     equ 12                  ; a fingerprint: size, two CRC-32s
     X3B x3h_t0, 4                   ; ...a pass's start
     X3B x3h_tw, 2                   ; ...an odd last byte's word
     X3B x3h_ncopy, 2                ; gulps copied out of it
+%ifdef PKG_MEGA
+    X3B x3h_hw, HW_SIZE             ; ...a HUGE hold's walker record
+    X3B x3h_hcv, 2                  ; ...1: conventional memory holds part of it
+%endif
     X3B x3_nrseq, 2                 ; gulps read off the disk (aplook's)
     X3B x3_laxkb, 2                 ; ...and a conversion's stage after it
     X3B x3_bseg, 2                  ; ...its segment...

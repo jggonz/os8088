@@ -22,6 +22,15 @@
 ; The conventional hold is only ever the first thing given up: x3_plan,
 ; asked for an XT plan the 400,000-byte ceiling cannot hold beside it, frees
 ; it and plans again (the ceiling stands; the hold is a convenience).
+;
+; KERN_MEGA'S ARM (PKG_MEGA, apps/os88mega.inc; docs/plans/MEGA-HUGE-PLAN.md
+; 3) holds the file in ONE OSAPI_MEM_HUGE claim first (X3HK_HUGE, x3h_huge):
+; the pool's, the heap's or a BRIDGE of both - all of the file the machine
+; can hold, where the XMS block was the pool's best run alone - read in and
+; copied out through apps/os88huge.inc's walker, window by window, so a
+; bridge's cut is never reached past (KERN-MEGA-PLAN 14.169: SEG_AT maps
+; across it but its reach stops there, which is why x3h_at is the
+; conventional hold's alone). The shipped build carries none of it.
 ; =============================================================================
 
 X3H_CAPKB   equ 192                 ; the conventional hold's most
@@ -33,6 +42,14 @@ X3H_PASSHI  equ 2                   ; a pass's load: chunks until 2 x 65,536
 X3HK_NONE   equ 0
 X3HK_XMS    equ 1
 X3HK_CONV   equ 2
+X3HK_HUGE   equ 3                   ; kern_mega's arm: one OSAPI_MEM_HUGE claim
+
+%ifdef PKG_MEGA
+%define HW_CLAIM                    ; apps/os88huge.inc: the walker
+%define HW_GET
+%define HW_RSEQ
+%include "os88huge.inc"
+%endif
 
 X3OP_HOLD   equ 1                   ; [x3_fsop]: whose OSAPI_FS_OP is open -
 X3OP_CONV   equ 2                   ; the hold's or a Decode First's
@@ -64,6 +81,10 @@ x3h_begin:
     or dx, dx
     jnz .now
     mov bx, ax
+%ifdef PKG_MEGA
+    call x3h_huge                   ; kern_mega: ONE huge claim, a bridge
+    jnc .go                         ; allowed (MEGA-HUGE-PLAN 3)
+%endif
     push bx
     call OSAPI_XMEM_CAPS            ; AX = KB the pool can hand out (and BL,
     pop bx                          ; CX, DX its other answers: BX banked)
@@ -208,6 +229,21 @@ x3h_read1:
     cmp ax, [x3h_size]
 .more:
     jae .in
+%ifdef PKG_MEGA
+    cmp byte [x3h_kind], X3HK_HUGE  ; A HUGE HOLD: straight into it, one
+    jne .nh                         ; READ_SEQ a window the chunk touches
+    mov cx, 32768                   ; (hw_fread: never across a window's end,
+    mov si, x3_fname                ; so never across a bridge's cut)
+    mov di, x3h_cur
+    mov bx, x3h_hw
+    call x3_lpin
+    call hw_fread                   ; DX:AX = delivered (no more than CX)
+    call x3_ldecl
+    jc .bad
+    mov cx, ax
+    jmp short .got
+.nh:
+%endif
     mov es, [ap_la_seg]             ; THE BOUNCE: the look-ahead's claim (32
     xor bx, bx                      ; KB at a track's open), copied up after
     cmp byte [x3h_kind], X3HK_CONV
@@ -327,6 +363,17 @@ x3_rseq:
     jz .eof
     push ax
     push dx
+%ifdef PKG_MEGA
+    cmp byte [x3h_kind], X3HK_HUGE  ; A HUGE HOLD: the walker's copy, split
+    jne .nh                         ; where a window ends (os88huge.inc)
+    mov di, bx                      ; ES:DI = the buffer
+    mov cx, bp
+    mov bx, x3h_hw
+    call hw_get                     ; keeps every register
+    jc .xbad
+    jmp short .ok
+.nh:
+%endif
     cmp byte [x3h_kind], X3HK_XMS
     jne .conv
     mov si, bx                      ; ES:SI = the buffer
@@ -521,13 +568,113 @@ x3h_free:
     jmp short .o
 .c:
     cmp al, X3HK_CONV
+%ifdef PKG_MEGA
+    je .cf
+    cmp al, X3HK_HUGE               ; (both pieces of a bridge, SPEC.md 50.3.5)
+%endif
     jne .o
+.cf:
     mov dx, [x3h_base]
     call OSAPI_MEM_FREE
 .o:
     pop dx
     pop ax
     ret
+
+%ifdef PKG_MEGA
+; -----------------------------------------------------------------------------
+; x3h_huge - kern_mega's arm: BX = the file's KB, held in ONE OSAPI_MEM_HUGE
+; claim with a window every 64KB, a bridge allowed (SPEC.md 50.3.5, 121.6.1;
+; MEGA-HUGE-PLAN 3). The heap keeps X3H_MARGKB beside it, as beside the
+; conventional hold: the card's DMA grant and the ladder's parts are
+; claimed after it. The kernel takes the pool alone, else the heap alone,
+; else the bridge (osapi_mem_huge) - so where the heap ALONE took it and the
+; margin is short, it is claimed once more past the heap's largest run,
+; which the heap cannot hold alone: a bridge, its conventional piece the
+; smaller by the pool piece (the hold then longer than the file, which
+; x3_rseq never reads past). Every size is a 32 KB multiple, so each of the
+; load's 32 KB chunks is a whole READ_SEQ capacity (a cluster multiple)
+; however the file ends. A paragraph step (real mode)
+; gives it back: the old ladder's rules, X3H_CAPKB and all, stand there.
+; out: CF = 0 held - x3h_kind X3HK_HUGE, x3h_base the claim, x3h_hw its
+;      walker's record, x3h_hcv 1 when conventional memory holds part of it
+;      (declared movable, a `ret` its proc: its windows follow a move);
+;      CF = 1 nothing claimed. Keeps every register
+; -----------------------------------------------------------------------------
+x3h_huge:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    mov si, bx                      ; SI = the KB to claim, a 32 KB multiple:
+    add si, 31                      ; every chunk a whole 32 KB capacity
+    jc .no                          ; (READ_SEQ's is a cluster multiple)
+    and si, 0xFFE0
+    xor bp, bp                      ; BP = 1 on the second claim
+.claim:
+    xor dx, dx
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P                ; BX = the heap's free paragraphs
+    mov di, bx                      ; DI = ...before the claim
+    mov ax, si
+    xor cx, cx                      ; BX = 0 asked: a 64KB step, a bridge
+    mov bx, x3h_hw                  ; allowed
+    call hw_claim                   ; DX = the claim
+    jc .no
+    cmp word [x3h_hw+HW_STEP], 0x1000
+    je .back                        ; real mode: a paragraph step
+    push dx
+    xor dx, dx
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P                ; BX = the heap's free paragraphs after
+    pop dx
+    mov byte [x3h_hcv], 0
+    cmp bx, di                      ; the heap fell: conventional memory
+    jae .m                          ; holds part of it
+    mov byte [x3h_hcv], 1
+.m:
+    cmp bx, X3H_MARGKB * 64
+    jae .ok
+    cmp byte [x3h_hcv], 0           ; SHORT: once, and only where the heap
+    je .back                        ; alone took it (no cut), claimed again
+    cmp word [x3h_hw+HW_CUT], 0     ; past the heap's largest run
+    jne .back
+    or bp, bp
+    jnz .back                       ; (the second time: refused)
+    inc bp
+    call OSAPI_MEM_FREE
+    xor dx, dx
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P                ; AX = the heap's largest run, paragraphs
+    mov cl, 6
+    shr ax, cl
+    add ax, 32                      ; ...past it, in 32 KB
+    and ax, 0xFFE0
+    xchg si, ax
+    jmp short .claim
+.ok:
+    mov [x3h_base], dx
+    mov byte [x3h_kind], X3HK_HUGE
+    call x3_ldecl                   ; its conventional piece MOVABLE
+    clc
+    jmp short .o
+.back:
+    call OSAPI_MEM_FREE
+.no:
+    stc
+.o:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+%endif
 
 ; x3_opbeg - AL = the site (X3OP_*), DX:CX = the bytes its operation moves:
 ; OSAPI_FS_OP begun, and [x3_fsop] = AL only when it was TAKEN (SPEC.md

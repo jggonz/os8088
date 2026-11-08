@@ -15398,3 +15398,60 @@ five callers). WIN16's arm +1 byte.
 table says and green here; `win16megahugega`. The interface the next steps
 build on (F4 packed reads, F5 the walker include): SPEC.md 50.3.5's *The
 cut*.
+
+### 14.170 One walker for a huge claim, in source (`apps/os88huge.inc`), and XTMP3 holds a song the pool's best run cannot (2026-11-08) - FIXED
+
+MEGA-HUGE-PLAN step 3's F5 and step 4's first adopter. No kernel byte: a
+SHARED INCLUDE and a package arm.
+
+**F5, the walker** (SPEC.md 50.3.8): `apps/os88huge.inc`, prefix `hw_`, a
+14-byte record (`HW_SEG`, `HW_STEP` - the cell's CX, doubled / quadrupled for
+a 32KB / 16KB window given - `HW_LEN`, `HW_CUT`, `HW_FOFF`) and, one
+`%define` an arm: `hw_aim` (a 32-bit offset as ES:DI and how many of the
+wanted bytes its window holds), `hw_span`, `hw_claim` (the cell and the
+record), `hw_get` / `hw_put` (spans to and from ES:DI), `hw_fread` (a file
+read into the claim, one `os88_rseq` a window, file offset = claim offset +
+`HW_FOFF`) and `hw_fwrite` (one `os88_wseq_put` a window). Every piece ends
+where a window ends, so it never crosses 14.169's cut, and the arithmetic is
+§50.3.5's step rule, so one build runs on every kernel. 91 bytes always,
+343 for XTMP3's three arms. `tests/os88huge.py` (host, Unicorn, a model with
+windows 96KB apart and guards between) and `tests/megahw` (MEGAHW.O88, one
+build: Bochs 4MB - a 3,454 KB bridge cut at window 46; 86Box 640K + 384K - a
+768 KB bridge cut at window 4; kern_big on MartyPC's 5150 - 200 KB of
+paragraphs) are its rows; both go red with hw_aim's window cap taken out
+(on kern_mega a #GP (limit) at `hw_mov`'s `rep movsw`, MEGAHW CLOSED).
+
+**XTMP3** (SPEC.md 121.6.1, its arm only - `apps/xtmp3/x3hold.inc`'s
+`x3h_huge` and the walker's calls under `PKG_MEGA`): the hold is ONE
+`OSAPI_MEM_HUGE` claim first, BX = 0 (a bridge allowed), rounded to 32 KB so
+every load chunk is a whole `READ_SEQ` capacity; read in by `hw_fread` and
+copied out by `hw_get`; the heap keeps `X3H_MARGKB` beside it, and where
+the kernel put it in the heap ALONE short of that it is claimed once more
+past the heap's largest run, which the kernel must bridge. A paragraph step
+(real mode) falls back to the old ladder, `X3H_CAPKB` intact. Its
+conventional memory (`x3h_hcv`) is declared movable with a `ret` proc,
+pinned per read, and given up by `x3_plan` as the conventional hold is.
+`x3h_at`'s `SEG_AT` stays the conventional hold's alone - never asked past a
+cut. tests/x3mega's conv leg now also points `OSAPI_MEM_HUGE`'s dispatch
+word at `mod_gone` to reach that fallback; its play leg plays live on
+Bochs out of a huge hold.
+
+**Measured** (86Box at286_vga_sb, `tests/x3huge.py --find`, to 32 KB; the
+arm of mega-release d433871c against this one):
+
+| machine | largest song held whole before | after |
+|---|---|---|
+| 640K + 384K above 1MB | 192 KB (224 not; the XMS block, the pool's best run after XTMP3's own claims) | **608 KB** (640 claimed, the margin short) |
+| 4MB | 2,848 KB (2,880 not) | **3,232 KB** (3,264 claimed, the margin short) |
+
+14.166's predictions (688K, 3,376K) are the kernel's ask with 64 KB of heap
+left; the hold keeps 96 KB and XTMP3's own claims are in.
+
+**Bytes.** No kernel byte: kern_big, kern_small and kern_mega unchanged.
+The SHIPPED XTMP3 byte-identical (`build/xtmp3.bin` and `.o88` `cmp` equal
+to mega-release's), so no kern_big row can see this. The arm: image 46,375
+-> 46,985 (+610: the walker 343, `x3h_huge` 159, the read, copy, free, pin
+and plan sites), XTMP3.O88 96,504 -> 97,032, bss +16.
+
+**Rows.** `os88huge`, `megahw`, `megahw86`, `megahwbig`, `x3huge` (red on
+the arm of before: the 480 KB song streams, kind 0) and `x3mega`.
