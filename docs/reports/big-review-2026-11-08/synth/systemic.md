@@ -233,7 +233,7 @@ self-healing posted-work byte are cleaner than Win16's flags. kern_mega's
   release byte, the `.orphan` precedent at `kernel/instance.inc:2234-2235`),
   so the UI task can never free a record whose task is still running. The UI
   task runs the deep half - `inst_unwin`, `mem_free_rec`, `desk_drop_x`,
-  `I_STATE` = 0 - on its 1KB stack, under `gfx_lock`, skipping `wm_ask_close`
+  `I_STATE` = 0 - on its 512-byte stack (`STK0_SIZE`), under `gfx_lock`, skipping `wm_ask_close`
   and re-testing `I_STATE` = 2 and `I_TASK` = 0xFF first so a stale post
   cannot hit a reused slot [truth]. It must not reuse `app_close_win`'s entry
   as is: that runs the package's close negotiator and sends an `I_STATE` = 2

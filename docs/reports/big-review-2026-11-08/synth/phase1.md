@@ -2327,8 +2327,9 @@ row.
 
 Following gap ul-11, how each kind of figure this plan quotes stands:
 
-- MEASURED: the 21,450-cycle VGA pointer, the 86 ms per 32KB regrow (the
-  kernel's own figure), and RELIT's -42 ms increment.
+- MEASURED: the 21,450-cycle VGA pointer and RELIT's -42 ms increment.
+- ARITHMETIC, not measured: the 86 ms per 32KB regrow (a figure worked out in
+  a `kernel/memory.inc` comment, ul-11).
 - Derived from a MEASURED rate: kern_mega's ~16 ms IF-off figure (mc-5), from
   the Victory 286's 0.257 ms/KB.
 - PREDICTED: every cycle figure for the door (+150..+215), the boost, the
