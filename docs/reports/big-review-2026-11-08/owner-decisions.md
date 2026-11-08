@@ -118,3 +118,15 @@ these; this file is the record of what was said.
   - `blobruns` into the fast tier if it is really quick (or full);
   - the earlier bar without wave 4 (show the bar after the plain head, then
     read on): an option only if it is less complex than wave 4.
+- **The keyboard mouse's shape (owner's proposal, preferred over a
+  module):** move the pointer half into `.boot3`, and before `.boot3` is
+  dropped copy it into a heap claim when no mouse has been found - so no
+  disk read, no cluster on any disk, no system-disk dependency, and still
+  there to drop later when a mouse that only speaks after boot (USBMOUSE.DRV,
+  a late serial mouse) appears. Checked against the code: only the POINTER
+  half can go - `kbm_isr` is the keyboard ISR for every machine (it wakes the
+  UI task on a key and guards the BIOS buffer, mouse.inc:2893), while
+  `kbm_key`/`kbm_move`/`kbm_btn`/`kbm_rclick`/`kbm_p5spend` are reached only
+  in task context (kbm_poll0, kbm_ui, menu.inc's kbm_pollm), so the claim
+  needs no ISR pin and its callers need the one-compare gate a module's
+  callers already have.
