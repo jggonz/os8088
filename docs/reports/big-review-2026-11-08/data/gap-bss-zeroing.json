@@ -1,0 +1,477 @@
+{
+ "area": "gap-bss-zeroing",
+ "title": "Does .bss arrive zeroed? (follow-up to the big review)",
+ "summary": "Yes, since PR #61 (2e8e2924, 2026-08-08): the kernel's .bss is zero at kmain on every shipped load path, by layout and not by instruction (KIMG_PARA includes KBSS_SIZE and .ovl's start= makes NASM emit the .bss range as zero padding; stage 2, kz_all or kz_hd lands it), checked on all three built kernels and their packed kernel.sys. Before kmain it is not zero (under KZIP it holds the packed stream), .lowbss is zero except dsk_secbuf's .ovl spill on shipped kernels and unloaded on NO_ROM_COLD, and .vgabuf is not zero. Module, driver and package bss each have their own (working) mechanism. The tree's behaviour is uniform; its wording is mixed: 65 false or arm-blind statements get exact fixes. No code defect; the gap is that nothing gates the zero range, and a fast-tier host check of kernel.bin over [text+bss_vstart, +bss_len) is recommended at 0 resident bytes.",
+ "findings": [
+  {
+   "id": "bss-1",
+   "kind": "verdict",
+   "severity": "info",
+   "claim": "Kernel .bss is zero at kmain on every shipped load path (kern_big/small/mega/emu; KZIP and NOKZIP; floppy, hard disk, live media; ROM/HMA .cold; every warm restart).",
+   "evidence": "kernel.asm:1679 (KIMG_PARA includes KBSS_SIZE), kernel.asm:2183 (.ovl start=OVL_START); build/*/kernel-full.bin has 0 non-zero bytes over the .bss range (0xB788..0xCC7E big, 0x8B53..0x96CB small, 0xCFFC..0xE518 mega); kernel.sys tails decode back to kernel.bin; boot2.asm:488 kz_all before :514 jmp; boothd.asm:293 via kz_hd; only three jmp KERNEL_SEG:0 sites.",
+   "since": "2e8e2924 (PR #61, 2026-08-08)"
+  },
+  {
+   "id": "bss-2",
+   "kind": "verdict",
+   "severity": "medium",
+   "claim": "Before kmain .bss is NOT zero: under KZIP it holds the packed LZ4 tail (KERNEL_SEG:0x5A00..0x17AB0 on kern_big) until kz_all; on NOKZIP it is unlanded RAM. Stage-2/splash state must live in the plain head (KERNEL_SEG:0..KZ_HEADSEC*512 = 4,608 B).",
+   "evidence": "build/kernel.kz.json rpara=1152, head=4608; viddet.inc:1022-1078 refuses stores past the head on the splash's first tick after the kern_small 1.44MB ui_post defect; boot2.asm:393 writes spl_fseg (0x669, head) before kz_all."
+  },
+  {
+   "id": "bss-3",
+   "kind": "verdict",
+   "severity": "low",
+   "claim": ".lowbss is mixed: zero padding on shipped ROM_COLD kernels except dsk_secbuf (.ovl overruns the FAT window by 511/450/510 bytes on big/small/mega); not loaded at all on NO_ROM_COLD. Nothing promises it.",
+   "evidence": "kernel.asm:1687-1699 COLD_RAM=LOW_SEG+LOW_PARA; map: .ovl 0x13FF vs FAT 0x1200 (big), 0x5C2 vs 0x400 (small)."
+  },
+  {
+   "id": "bss-4",
+   "kind": "verdict",
+   "severity": "info",
+   "claim": ".vgabuf is not zero: .cfx's bytes on kern_big (by design), stale RAM on kern_mega; its only reader fills it first.",
+   "evidence": "kernel.asm:1852, 8772, 8980."
+  },
+  {
+   "id": "bss-5",
+   "kind": "verdict",
+   "severity": "info",
+   "claim": "Sibling bss: module bss zero per fresh load via MODB_TAIL except CTRL.DRV's core-only read and a still-resident module; driver bss zeroed by drv_bss; package bss zeroed by ld_start step 7 (re-home path carries its own zeros in the part); kerndos zeroes its own .bss/.lowbss.",
+   "evidence": "kernel.asm:9013-9030, mod.inc:650, driver.inc:3739, loader.inc:1306-1311/1343, kerndos/kdentry.inc:59-84."
+  },
+  {
+   "id": "bss-6",
+   "kind": "settled-disagreement",
+   "severity": "info",
+   "claim": "Investigator B's C-package off-by-one (last .bss byte unzeroed) is already fixed: CC_IMAGE_END's `align 2` before cc_image_end; B read crt0.asm's header describing the pre-fix bug.",
+   "evidence": "apps/cc/crt0.asm:1920-1930."
+  },
+  {
+   "id": "bss-7",
+   "kind": "settled-disagreement",
+   "severity": "info",
+   "claim": "NOKZIP .bss is fully zero (B's 'partly' refuted): no splash write lands in .bss during the load; bvs_apply's SS test refuses it and the splash's own state is cs:-relative or in the head.",
+   "evidence": "viddet.inc:1022-1078; map: spl_live 0x922, spl_busy 0x924, spl_fseg 0x669."
+  },
+  {
+   "id": "bss-8",
+   "kind": "reliance",
+   "severity": "medium",
+   "claim": "Code relies on zero .bss with no init: sch_chbusy, evq_head/tail/count (no evq_init), loader state (no loader_init), clip_kb/clip_bytes, ui_tclkw, ui_armw, mem_cp_msk, fcp_made, dock_ck, mod_fp slots before kmain_o.",
+   "evidence": "sched.inc:2163/2201/2228/610, events.inc:62, kernel.asm:5904/5820, clip.inc:263/321, ui.inc:1661/3276, memory.inc:4059, filecp.inc:1695, dock.inc:140."
+  },
+  {
+   "id": "bss-9",
+   "kind": "gap",
+   "severity": "medium",
+   "claim": "No gate checks that kernel.bin is zero over .bss; t_bsssentinel (soak) checks only non-zero sentinels. A layout that left .bss as the file's tail would silently restore pre-#61 behaviour, visible only on real hardware (emulators power on zeroed).",
+   "recommendation": "Add tests/unit/t_bsszero.py (fast tier): per built kernel, parse kernel.map for .text file start and .bss vstart/len, assert kernel.bin covers the range and every byte is 0; rely on os88kz.py:76-79's existing round-trip check for kernel.sys. Break it on purpose once in a private tree. Cost: 0 resident and 0 image bytes, ~40 lines, ~50 ms per make."
+  },
+  {
+   "id": "bss-10",
+   "kind": "test-design",
+   "severity": "low",
+   "claim": "tests/tickzero.py guards a hazard that cannot occur on today's layout: dirty power-on RAM never reaches [ticks] (the load overwrites it) and nothing writes [ticks] between kz_all and sched_init. The row still detects the store's deletion because it plants junk after the load. Premise text corrected; the row itself is not wrong.",
+   "evidence": "sched.inc:345; grep of [ticks] writers."
+  },
+  {
+   "id": "bss-11",
+   "kind": "doc",
+   "severity": "low",
+   "claim": "About 40 comments and SPEC passages still give pre-#61 rationale. 65 statements that are FALSE ('not zeroed', 'garbage', 'previous session's bytes', 'no image bytes', two that cite §12.8.5.1 for its opposite) or that name one arm's mechanism as the rule are fixed exactly; ~30 bare '-f bin zeroes nothing' rationales are literally true and harmless and are listed in the report, not fixed.",
+   "evidence": "see doc_fixes"
+  }
+ ],
+ "doc_fixes": [
+  {
+   "file": "kernel/fsx.inc",
+   "old_text": "; owed: .bss is NOT zeroed (SPEC.md 12.8.5.1).",
+   "new_text": "; owed, stored per bracket rather than assumed\n                                ; (.bss is zero only at boot, SPEC.md 12.8.5.1).",
+   "why": "Cites 12.8.5.1 for the opposite of what it says: .bss arrives zero. The kernel's .bss arrives zero on every shipped load path since PR #61 (2026-08-08): the next start= section (.ovl at FAT_SEG) makes NASM emit the .bss range as zero padding, and stage 2 / kz_all / kz_hd land it before kmain."
+  },
+  {
+   "file": "kernel/fsx.inc",
+   "old_text": "; (`.lowbss` is not zeroed: .no reads these)",
+   "new_text": "; (`.lowbss` is promised nothing: .no reads these)",
+   "why": "Arm-blind: on shipped kernels .lowbss is zero padding above dsk_secbuf's .ovl spill (fsx_rlow is lowbss 0x15A8 on kern_mega); only NO_ROM_COLD leaves it unloaded. Nothing PROMISES it, which is the true reason."
+  },
+  {
+   "file": "kernel/kbddiag.inc",
+   "old_text": "; .text and INITIALISED, not .bss: .bss is not zeroed (SPEC.md 12.8.5.1) and\n; a knob kernel's budget is not billed (docs/KERNEL-MEMORY.md), so the zeroes\n; are cheaper than an init routine and a call to it",
+   "new_text": "; .text and INITIALISED, not .bss. Either would be zero at boot (.bss is the\n; image's zero padding, SPEC.md 12.8.5.1), and a knob kernel's budget is not\n; billed (docs/KERNEL-MEMORY.md), so the placement costs nothing either way",
+   "why": "Cites 12.8.5.1 for the opposite of what it says. The kernel's .bss arrives zero on every shipped load path since PR #61 (2026-08-08): the next start= section (.ovl at FAT_SEG) makes NASM emit the .bss range as zero padding, and stage 2 / kz_all / kz_hd land it before kmain."
+  },
+  {
+   "file": "kernel/hiber.inc",
+   "old_text": "; module BSS is not zeroed: only hbm_wrimg",
+   "new_text": "; stored, not assumed (a module that stays loaded keeps its bss): only hbm_wrimg",
+   "why": "Stale since MODB_TAIL (d323a9a6, 2026-11-02): a module's bss is zeros in its own file and every load delivers them (mod.inc 'NO ZEROING HERE'). The store still matters for a module that stays resident between verbs."
+  },
+  {
+   "file": "kernel/stkdiag.inc",
+   "old_text": "; `-f bin` zeroes nothing and .bss is the previous session's bytes on a warm\n; restart, which for a MAXIMUM is the difference between a reading and a lie.",
+   "new_text": "; a MAXIMUM must start from a stated 0, and here it is stated in the image\n; (.bss would arrive zero too: every restart is int 19h and a full reload).",
+   "why": "False: no path re-enters kmain without a fresh load (the only jmp KERNEL_SEG:0 sites are boot2.asm, boothd.asm and boot.asm's FLAT_PAYLOAD), so .bss is never the previous session's bytes. The kernel's .bss arrives zero on every shipped load path since PR #61 (2026-08-08): the next start= section (.ovl at FAT_SEG) makes NASM emit the .bss range as zero padding, and stage 2 / kz_all / kz_hd land it before kmain."
+  },
+  {
+   "file": "kernel/vmmouse.inc",
+   "old_text": "A .bss byte\n; survives an int 19h warm boot with the previous kernel's value in it; a .text\n; one is re-read from the disk.",
+   "new_text": "A warm boot\n; re-reads either from the disk (int 19h is a full reload, and .bss comes back\n; as the image's zero padding); .text states the 0 where it is read.",
+   "why": "False: int 19h reloads KERNEL.SYS and the load lands zero padding over .bss, so no .bss byte survives a warm boot."
+  },
+  {
+   "file": "kernel/sched.inc",
+   "old_text": "; .bss: nothing else zeroes it, and the stamp",
+   "new_text": "; .bss arrives zero (SPEC.md 8); stored, as the stamp",
+   "why": "No instruction zeroes it, but the load does: [ticks] (.bss 0x9F21) is the image's zero padding at kmain. The kernel's .bss arrives zero on every shipped load path since PR #61 (2026-08-08): the next start= section (.ovl at FAT_SEG) makes NASM emit the .bss range as zero padding, and stage 2 / kz_all / kz_hd land it before kmain."
+  },
+  {
+   "file": "kernel/sched.inc",
+   "old_text": "; the comment above by accident, which only a\n                                ; machine whose RAM is not zero at power-on\n                                ; could show",
+   "new_text": "; the comment above by accident, and no\n                                ; machine could show it: the load's zero\n                                ; padding lands on [ticks] whatever RAM held",
+   "why": "False: power-on RAM never reaches [ticks]; the load overwrites it with padding, and nothing writes [ticks] between kz_all and sched_init."
+  },
+  {
+   "file": "kernel/vidsel.inc",
+   "old_text": "; .text and not .bss, like everything else that has to be right before the\n; kernel has zeroed anything: -f bin zeroes nothing at all.",
+   "new_text": "; .text and not .bss, though .bss would serve: vid_probe_avail ORs bits into\n; it from kmain, and by then .bss is the image's zero padding (SPEC.md 10).",
+   "why": "False: no instruction zeroes .bss, the load does, and vid_probe_avail runs in kmain (memory.inc: 'vid_probe_avail runs before mem_init in kmain'), after .bss is zero."
+  },
+  {
+   "file": "kernel/vidsel.inc",
+   "old_text": "; .text with REAL INITIALISERS, not .bss, and for the reason vid_avail above\n; is: -f bin zeroes nothing at all, so a byte in .bss holds whatever the\n; machine left there until something writes it. These two are read before\n; vid_ctx_init runs on any path that ever grows one - and a garbage [vid_ndisp]\n; is a loop bound, while a garbage [vid_cur] is a display index that indexes\n; past the array. cur_sptr and dsk_fatwc are the two this tree has already been\n; caught by.",
+   "new_text": "; .text with REAL INITIALISERS, not .bss: [vid_ndisp] rests at 1, which\n; .bss's load-time zero cannot give, and both are read before vid_ctx_init\n; runs on any path that ever grows one - [vid_ndisp] is a loop bound and\n; [vid_cur] a display index into the array. cur_sptr and dsk_fatwc's\n; 0xFFFF neighbours are the non-zero defaults this tree has been caught by.",
+   "why": "False: a .bss byte does not hold 'whatever the machine left there' - it is the load's zero. The real requirement is vid_ndisp's non-zero resting value."
+  },
+  {
+   "file": "kernel/viddet.inc",
+   "old_text": "; .text with a REAL initialiser, not .bss: -f bin zeroes nothing, and",
+   "new_text": "; .text with a REAL initialiser, not .bss: .bss is not zero until the load\n; ends (under KZIP it holds the packed stream until kz_all), and",
+   "why": "Right placement, wrong reason: during the splash's first tick .bss is unlanded RAM or packed LZ4 bytes (packed tail at KERNEL_SEG:0x5A00 on kern_big), and kz_all would overwrite a .bss store anyway; vid_rowmax sits in the plain head (0x7C0)."
+  },
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": "slots are reachable before anything clears\n                                ; .bss, and -f bin clears nothing)",
+   "new_text": "slots are not reached before kmain, and\n                                ; by then .bss is zero as well)",
+   "why": "False: nothing reaches a file slot before kmain, and from kmain .bss is the image's zero padding. The kernel's .bss arrives zero on every shipped load path since PR #61 (2026-08-08): the next start= section (.ovl at FAT_SEG) makes NASM emit the .bss range as zero padding, and stage 2 / kz_all / kz_hd land it before kmain."
+  },
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": "It is .text and not .bss for the\n; reason api_name is: `-f bin` zeroes nothing.",
+   "new_text": "It is .text and not .bss because stage 2\n; writes the segment half BEFORE kz_all, into the plain head kz_all leaves\n; alone: a .bss word would be expanded over (SPEC.md 2.9.13).",
+   "why": "The stated reason (api_name's) is stale; the real one is stronger: boot2.asm stores [es:spl_fseg] before `call kz_all`, spl_fseg is at KERNEL_SEG:0x669 inside the 4,608-byte plain head, and a .bss home would be overwritten by the expansion."
+  },
+  {
+   "file": "kernel/mod.inc",
+   "old_text": "; `.bss` is `nobits vfollows=.text` and `.cold`'s file position is padded past\n; it, so NASM emits at least KBSS_SIZE zero bytes and stage 2's one contiguous\n; read lands them.",
+   "new_text": "; `.bss` is `nobits vfollows=.text` and the next section's file position\n; (`.ovl`'s at FAT_SEG; `.cold`'s under NO_ROM_COLD) is padded past it, so NASM\n; emits at least KBSS_SIZE zero bytes and the load lands them (kz_all under\n; KZIP, stage 2's read on NOKZIP).",
+   "why": "Arm-blind mechanism: since ROM_COLD (#268) the section after .bss in the file is .ovl, and under KZIP (shipped) kz_all writes the zeros, not the read."
+  },
+  {
+   "file": "kernel/events.inc",
+   "old_text": "NASM emits the file\n; bytes between .text's end and .cold's start as padding, and stage 2's single\n; contiguous read lands that run over the whole of .bss",
+   "new_text": "NASM emits the file\n; bytes between .text's end and .ovl's start (.cold's on NO_ROM_COLD) as\n; padding, and the load (kz_all under KZIP) lands that run over all of .bss",
+   "why": "Arm-blind mechanism: under the shipped ROM_COLD the next section is .ovl at FAT_SEG, and under KZIP kz_all writes the run."
+  },
+  {
+   "file": "kernel/blank.inc",
+   "old_text": "(kernel.asm: the image's gap\n; to COLD_START is emitted as zeros and stage 2's one contiguous read\n; lands them)",
+   "new_text": "(kernel.asm: the image's gap\n; to OVL_START, COLD_START on NO_ROM_COLD, is emitted as zeros and the load\n; lands them)",
+   "why": "Arm-blind mechanism (pre-ROM_COLD, pre-KZIP wording)."
+  },
+  {
+   "file": "kernel/mouse.inc",
+   "old_text": "; arrives zeroed (kernel.asm - NASM pads the\n                                ; gap to COLD_START), and 0 here",
+   "new_text": "; arrives zeroed (kernel.asm - NASM pads the\n                                ; gap to OVL_START), and 0 here",
+   "why": "Arm-blind mechanism: COLD_START is the NO_ROM_COLD knob's; shipped kernels pad to OVL_START."
+  },
+  {
+   "file": "kernel/mouse.inc",
+   "old_text": "; reason - -f bin zeroes nothing, and drv_boot\n                                ; reads the disk before any init routine of\n                                ; ours could run, so a garbage byte here would\n                                ; let IRQ4 draw during the splash",
+   "new_text": "; reason - IRQ4 reads it from the moment the\n                                ; mouse is hooked, so its 0 is stated where it\n                                ; is read (a .bss byte would be the load's 0 too)",
+   "why": "False: drv_boot runs after kmain, when .bss is already the load's zero, so no garbage byte could reach IRQ4."
+  },
+  {
+   "file": "kernel/wm.inc",
+   "old_text": "; 10 - the image's .text/.cold gap is zero",
+   "new_text": "; 10 - the image's .text/.ovl gap is zero",
+   "why": "Arm-blind mechanism: under ROM_COLD (shipped) the gap ends at .ovl."
+  },
+  {
+   "file": "kernel/ui.inc",
+   "old_text": "; [ui_pcmd] lives in .text, not .bss: ui_task reads it on its first pass and\n; -f bin gives .bss no image bytes (the dsk_cwd lesson, SPEC.md 1).",
+   "new_text": "; [ui_pcmd] lives in .text, not .bss: ui_task reads it on its first pass,\n; though .bss would read 0 there too (SPEC.md 10: the image's zero padding).",
+   "why": "False: since PR #61 .bss HAS image bytes - the padding up to .ovl - and they are zero."
+  },
+  {
+   "file": "kernel/ui.inc",
+   "old_text": "; walk. -f bin zeroes no .bss and it does not\n                                ; matter: garbage here costs one walk.",
+   "new_text": "; walk. It arrives 0 (SPEC.md 10), and a\n                                ; stray non-zero would cost one walk.",
+   "why": "Implies boot garbage; ui_post (.bss 0xA824) is the load's zero at kmain, and the splash's first tick is refused this store by bvs_apply's SS test."
+  },
+  {
+   "file": "kernel/ui.inc",
+   "old_text": "; .text: -f bin zeroes no .bss, and A:'s root",
+   "new_text": "; .text, though .bss would give the same 0: A:'s root",
+   "why": "False reason: a .bss byte arrives 0, which is exactly A:'s root."
+  },
+  {
+   "file": "kernel/vga12.inc",
+   "old_text": "; Initialized data, NOT .bss (nothing zeroes\n                                ; .bss), and gfx_unlock clears it for the",
+   "new_text": "; Initialized data, NOT .bss (a choice:\n                                ; .bss arrives zero), and gfx_unlock clears it for the",
+   "why": "False: the load lands .bss as zero padding (SPEC.md 10)."
+  },
+  {
+   "file": "kernel/vga12.inc",
+   "old_text": "; the routine. In .bss it holds whatever the\n                                ; machine left there until the first blit, and\n                                ; a stale non-zero is a display INDEX handed",
+   "new_text": "; the routine. In .bss it would be the load's\n                                ; 0 (SPEC.md 10); stated here, because a\n                                ; stale non-zero is a display INDEX handed",
+   "why": "False: a .bss byte is the load's zero at kmain, not 'whatever the machine left there'."
+  },
+  {
+   "file": "kernel/fdlg.inc",
+   "old_text": "; Both live HERE, in .text with an initialiser, and not in .bss: `-f bin`\n; gives .bss no image bytes and nothing zeroes it at boot, and fdlg_grab\n; reads the first on the very first mouse press the machine ever sees, while\n; fm_layout reads the second (through fdlg_hook) on the very first Disk\n; window paint. As garbage either one is a chooser that does not exist.",
+   "new_text": "; Both live HERE, in .text with an initialiser, and not in .bss - a choice,\n; since .bss arrives zero (SPEC.md 10): fdlg_grab reads the first on the very\n; first mouse press the machine ever sees, while fm_layout reads the second\n; (through fdlg_hook) on the very first Disk window paint, and a non-zero in\n; either one is a chooser that does not exist.",
+   "why": "False: .bss has image bytes (zero padding) and both defaults are 0. Several other comments cite 'fdlg_win's reason', so this one sets the precedent."
+  },
+  {
+   "file": "kernel/instance.inc",
+   "old_text": "because .bss is not zeroed at boot and app_launch reads it on every launch.",
+   "new_text": "though .bss would arrive 0 too (SPEC.md 10); app_launch reads it on every launch.",
+   "why": "False: .bss is zero at boot. The kernel's .bss arrives zero on every shipped load path since PR #61 (2026-08-08): the next start= section (.ovl at FAT_SEG) makes NASM emit the .bss range as zero padding, and stage 2 / kz_all / kz_hd land it before kmain."
+  },
+  {
+   "file": "kernel/files.inc",
+   "old_text": "; .bss is not zeroed by the loader: every state variable is set here.",
+   "new_text": "; Every state variable is set here rather than assumed from .bss's zero.",
+   "why": "False: the load lands .bss as zero padding."
+  },
+  {
+   "file": "kernel/files.inc",
+   "old_text": "(.bss gets\n                                ; no image bytes and nothing zeroes it)",
+   "new_text": "(a reused\n                                ; block keeps its last owner's bytes)",
+   "why": "The block is a KD_POOL heap block, not .bss; heap claims are not zeroed (SPEC.md 15), which is the real reason the path is cleared."
+  },
+  {
+   "file": "kernel/font.inc",
+   "old_text": "- the glyph loop reads it and .bss",
+   "new_text": "- the glyph loop reads it, so it",
+   "why": "False reason (first half of a two-line comment): .bss arrives zero; the store is needed because font_dith is set per call and an earlier call can leave it non-zero."
+  },
+  {
+   "file": "kernel/font.inc",
+   "old_text": "; is not zeroed by -f bin",
+   "new_text": "; is stored on every path, not assumed",
+   "why": "Second half of the same comment: .bss is zero at boot (SPEC.md 10)."
+  },
+  {
+   "file": "kernel/band.inc",
+   "old_text": "; -f bin: .bss is not zeroed, and a band opened",
+   "new_text": "; stored rather than assumed, and a band opened",
+   "why": "False: .bss is zero at boot. The kernel's .bss arrives zero on every shipped load path since PR #61 (2026-08-08): the next start= section (.ovl at FAT_SEG) makes NASM emit the .bss range as zero padding, and stage 2 / kz_all / kz_hd land it before kmain."
+  },
+  {
+   "file": "kernel/menu.inc",
+   "old_text": "; [menu_bovr] too. .bss is not zeroed at\n                                ; boot (-f bin), and the",
+   "new_text": "; [menu_bovr] too. Both rest at 1, which\n                                ; .bss's load-time 0 is not, and the",
+   "why": "False: .bss is zero at boot; the store is needed because the resting value is 0x0101."
+  },
+  {
+   "file": "kernel/mega.inc",
+   "old_text": "; .lowbss is NOT zeroed, so kmain stores",
+   "new_text": "; nothing promises .lowbss, so kmain stores",
+   "why": "Arm-blind: mega_pm (lowbss 0x1347) arrives zero on the shipped kern_mega, above dsk_secbuf's .ovl spill; only NO_ROM_COLD leaves .lowbss unloaded. The explicit store is still the right defence."
+  },
+  {
+   "file": "kernel/snd.inc",
+   "old_text": "; snd_init runs and nothing clears .bss at boot, so snd_tick's first",
+   "new_text": "; snd_init runs, when .bss holds only the load's zeros, so snd_tick's first",
+   "why": "False as stated: the load lands zero padding over .bss; the gate is needed because snd_tick must not act on zeros it would misread before snd_init."
+  },
+  {
+   "file": "kernel/snd.inc",
+   "old_text": "; reads (nothing clears .bss at boot, SPEC.md 8) - it runs no probe: the",
+   "new_text": "; reads (stored, not assumed from the load's zero) - it runs no probe: the",
+   "why": "False: the load zeroes .bss (SPEC.md 10)."
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "; .text, and not in .bss for a reason worth stating: -f bin gives .bss no\n; image bytes, so it boots as whatever the RAM held, and the very first\n; disk_mount reads [dsk_keepcwd] to decide whether to reset [dsk_cwd].\n; Left in .bss, one garbage byte at boot sends the mount walking a garbage\n; cluster chain and the volume lists two lines of noise.",
+   "new_text": "; .text, and not in .bss. The very first disk_mount reads [dsk_keepcwd] to\n; decide whether to reset [dsk_cwd]; when this was written .bss booted as\n; whatever the RAM held, and one garbage byte sent the mount walking a\n; garbage cluster chain. Since 2026-08-08 .bss arrives zero (SPEC.md 10).",
+   "why": "Stale since 2e8e2924 (2026-08-08): .bss is now the image's zero padding, not 'whatever the RAM held'."
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "WITH REAL INITIALISERS, and that is load-bearing rather than tidy: -f bin\n; zeroes no .bss, dsk_fatw_pick reads dsk_fatwc as a SEGMENT, and volumes 0\n; and 1 are reached before anything could have written them. Garbage there\n; aims the FAT window at whatever paragraph the bytes happen to name. It has\n; never bitten because a cold machine's RAM is usually zero and only driver\n; volumes had claims - both of which stop being true below.",
+   "new_text": "WITH REAL INITIALISERS, and that is load-bearing rather than tidy: dsk_fatww\n; rests at 0xFFFF, which .bss's zero cannot give, dsk_fatw_pick reads\n; dsk_fatwc as a SEGMENT, and volumes 0 and 1 are reached before anything\n; has written them. (Before 2026-08-08 .bss booted as RAM garbage, which\n; would have aimed the FAT window at whatever paragraph it named.)",
+   "why": "False today: .bss has arrived zero since 2e8e2924, so 'garbage' and 'a cold machine's RAM is usually zero' no longer describe any load; dsk_fatww's 0xFFFF is the load-bearing default."
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "; that is established: .bss arrives at whatever\n                                ; -f bin left there, and dsk_rah_serve would\n                                ; read it as chunks over random LBAs.",
+   "new_text": "; that is established: the table is not\n                                ; trusted to arrive empty, and dsk_rah_serve\n                                ; would read stale records as chunks.",
+   "why": "False: .bss (dsk_rah_tab, 0xA9B6) arrives zero at boot; the flush is still needed because it is the one place the empty state is established for any later arm."
+  },
+  {
+   "file": "kernel/diskw.inc",
+   "old_text": "hard-won reason, as [dsk_keepcwd] in disk.inc. -f bin gives .bss no image\n; bytes and nothing zeroes it, so an uninitialised .bss byte reads back as\n; whatever the machine left there - reliably NON-ZERO on the hardware this\n; was found on.",
+   "new_text": "hard-won reason, as [dsk_keepcwd] in disk.inc. When this was written (before\n; 2026-08-08) .bss had no image bytes and read back as whatever the machine\n; left there - reliably NON-ZERO on the hardware this was found on. It\n; arrives zero now (SPEC.md 10).",
+   "why": "Present tense is false since 2e8e2924: .bss is the image's zero padding; the history is kept."
+  },
+  {
+   "file": "kernel/driver.inc",
+   "old_text": "; SETTINGS start empty in the same run: -f bin\n                                ; zeroes no .bss, a garbage driver blob is one\n                                ; a driver would be entitled to believe\n                                ; (SPEC.md 51.9), and a key a SYSTEM.CFG has\n                                ; no record for and _map does not seed - 'VC',\n                                ; 'FD' - must read 0, not the last session's\n                                ; byte (SPEC.md 39.28)",
+   "new_text": "; SETTINGS start empty in the same run, stated\n                                ; rather than assumed: a driver blob is one\n                                ; a driver would be entitled to believe\n                                ; (SPEC.md 51.9), and a key a SYSTEM.CFG has\n                                ; no record for and _map does not seed - 'VC',\n                                ; 'FD' - must read 0 (.bss arrives zero, and\n                                ; a restart reloads it - SPEC.md 39.28)",
+   "why": "False: drv_cfg (.bss 0xB1FA) is never 'the last session's byte' - every restart is int 19h and a full reload over zero padding."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "4. **Large buffers go in `section .bss`** (NASM `-f bin` allocates .bss after\n   the file image; it costs no disk space).",
+   "new_text": "4. **Large buffers go in `section .bss`** (`nobits`: NASM emits nothing for\n   it, but the next section's `start=` pads the file over its range with\n   zeros, which KZIP packs to almost nothing - §2.5, §10).",
+   "why": "False since PR #61: .bss is no longer after the file image; it is covered by zero padding up to .ovl's start=, which costs file bytes (near nothing once LZ4-packed)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`drv_cfg` is `.bss` and nothing zeroed\n`.bss`, so those bytes were the previous session's on a warm restart and the\nmachine's power-on RAM on a cold one (`drv_init` zeroes the struct now, for\n§39.30's `VC` byte).",
+   "new_text": "`drv_cfg` is `.bss`, so those bytes\nwere the load's zero padding on every boot, cold or warm (`drv_init` zeroes\nthe struct now, for §39.30's `VC` byte).",
+   "why": "False: written 2026-10-14, after PR #61. drv_cfg (.bss 0xB1FA) arrives zero, and every warm restart is int 19h and a full reload. The defect it records (reading an undeserialised struct) was real; the bytes read were 0."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "; .bss (sched_init stores 0 to all three — nothing clears .bss at boot, §8)",
+   "new_text": "; .bss (sched_init stores 0 to all three rather than assume the load's zero, §8)",
+   "why": "No instruction clears .bss, but it arrives zero (§10, §12.8.5.1); 'nothing clears' reads as garbage."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "before `snd_init` runs and nothing clears `.bss` at boot (§8).",
+   "new_text": "before `snd_init` runs, while `.bss` holds only the load's zeros (§8, §10).",
+   "why": "False as stated: the load lands zero padding over .bss."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`snd_init` runs seconds of ticks later, and\n  nothing clears `.bss` at boot (§8).",
+   "new_text": "`snd_init` runs seconds of ticks later, and\n  until then `.bss` holds only the load's zeros (§8, §10).",
+   "why": "False as stated: the load lands zero padding over .bss."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "**`.bss` arrives zeroed** (the boot image's `.text`/`.cold` gap is emitted as\npadding and stage 2's one contiguous read lands it over the whole section)",
+   "new_text": "**`.bss` arrives zeroed** (the image's `.text` is followed in the file by a\nsection placed with an explicit `start=` past the image rung - `.ovl` at\n`FAT_SEG` on every shipped kernel, `.cold` under `NO_ROM_COLD` - so NASM emits\nthe `.bss` range as zero padding, and the load lands it before `kmain`:\n`kz_all`'s expansion under KZIP, `kz_hd` on a hard disk, stage 2's read on\n`NOKZIP`)",
+   "why": "Arm-blind mechanism: the .text/.cold gap and one contiguous read are the NO_ROM_COLD + NOKZIP arm. This is the section the tree cites for the rule, so it should carry every arm."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`menu_init` sets it too, because `-f bin` zeroes no\n`.bss`.",
+   "new_text": "`menu_init` sets it too, because its resting value is\nnon-zero and `.bss` arrives zero.",
+   "why": "Wrong reason: menu_bdirty rests at 0x0101; .bss arrives zero (§10)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`-f bin` zeroes nothing, `drv_boot` reads\n  the disk before any init routine could run, and a garbage `[fpg_on]` would\n  have the widget drawing into the splash.",
+   "new_text": "`drv_boot` reads the disk before any init\n  routine could run, and the 0 is stated where it is read (`.bss` would give\n  the same 0 - the load's zero padding, §10).",
+   "why": "False: [fpg_on] in .bss would be the load's 0, not garbage; drv_boot is after kmain."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "because ui_task reads it on its very first\n   pass and `-f bin` gives `.bss` no image bytes (§1).",
+   "new_text": "because ui_task reads it on its very first\n   pass (`.bss` would read 0 there too: the image's zero padding, §10).",
+   "why": "False: .bss has image bytes (zero padding) since PR #61."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`-f bin` zeroes no `.bss`, but this is an\n**equality** test against a free-running word: garbage costs one extra pass and\nnothing else",
+   "new_text": "`.bss` arrives zero, and this is an\n**equality** test against a free-running word: any stale value costs one extra\npass and nothing else",
+   "why": "Implies boot garbage; [ui_lastt] (.bss 0xA826) arrives 0."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`-f bin` gives `.bss` no image bytes and nothing zeroes\nit, so an uninitialised `.bss` byte reads back as whatever the machine left\nthere — reliably **non-zero** on the hardware this was found on.",
+   "new_text": "When this was found (2026-08-04) `.bss` had no image bytes\nand nothing zeroed it, so an uninitialised `.bss` byte read back as whatever\nthe machine left there — reliably **non-zero** on that hardware. It arrives\nzero now (§10).",
+   "why": "Present tense false since 2e8e2924 (2026-08-08); the history is kept."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "worth restating: `-f bin` gives `.bss` no image bytes, so it boots as\nwhatever the RAM held, and the very first `disk_mount` reads\n`[dsk_keepcwd]` to decide whether to reset `[dsk_cwd]`. Left in `.bss`, one\ngarbage byte at boot sends the mount walking a garbage cluster chain and\nthe volume lists two lines of noise.",
+   "new_text": "worth restating: the very first `disk_mount` reads `[dsk_keepcwd]` to\ndecide whether to reset `[dsk_cwd]`, and when this was written `.bss` booted\nas whatever the RAM held - one garbage byte sent the mount walking a garbage\ncluster chain. Since 2026-08-08 `.bss` arrives zero (§10).",
+   "why": "Present tense false since 2e8e2924: .bss is the image's zero padding."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "a real initialiser, because `.bss` is not zeroed and `fm_status_only` reads it\nbefore anything has written one.",
+   "new_text": "a real initialiser, although `.bss` would arrive zero and `fm_status_only`\nreads it before anything has written one.",
+   "why": "False: .bss is zero at boot (§10)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`-f bin` zeroes\nnothing and `gfx_rowbase` is called by the **splash**",
+   "new_text": "the load has not\nlanded `.bss`'s zeros yet (under KZIP it holds the packed stream) and\n`gfx_rowbase` is called by the **splash**",
+   "why": "Right conclusion, wrong reason: during the splash's first tick .bss is unlanded RAM or packed LZ4 bytes; after kmain it is zero."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`-f bin` zeroes nothing, and a garbage `[vid_ndisp]` is a loop bound while a\n  garbage `[vid_cur]` is an index past the array.",
+   "new_text": "`[vid_ndisp]` rests at 1, which `.bss`'s load-time zero cannot give, and it is\n  a loop bound while `[vid_cur]` is an index into the array.",
+   "why": "False: .bss is not garbage at kmain; the real requirement is vid_ndisp's non-zero resting value."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "**And the stack has to START empty.** `-f bin` zeroes no `.bss` and `int 19h`\nzeroes none either, so a warm boot inherits the *previous* kernel's `[wm_pkgd]`\n— past `WM_PKGD_MAX` that pins every region and image for the rest of the\nsession, below it the walk compares garbage segments.",
+   "new_text": "**And the stack has to START empty.** It does: `int 19h` is a full reload, so\na warm boot lands the image's zero padding over `[wm_pkgd]` (§10) — and a\nstale depth past `WM_PKGD_MAX` would pin every region and image for the rest\nof the session, below it the walk would compare garbage segments.",
+   "why": "False: a warm boot reloads KERNEL.SYS; nothing is inherited in .bss. wm_init's zeroing is the backstop wm.inc itself calls it."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "with a real initialiser because `.bss` is not zeroed, and the default is **On**,",
+   "new_text": "with a real initialiser because the default is **On**, which `.bss`'s zero is not,",
+   "why": "False reason: .bss is zero; the non-zero default is why it is .text."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "- **a package's bss is NOT zero at load.** `-f bin` zeroes nothing and\n  nothing else does it either, so an added counter starts as whatever was\n  there.",
+   "new_text": "- **an added counter can read as garbage.** The loader zeroes the declared\n  bss (`ld_start` step 7, §21), so a counter outside it - or one read through\n  a stale segment, the trap above - starts as whatever was there.",
+   "why": "False: loader.inc ld_start step 7 rep-stosb's [ld_img, ld_img+ld_bss) on every normal load; the readings are better explained by the dead-segment trap the preceding paragraph records."
+  },
+  {
+   "file": "docs/KERNEL-MEMORY.md",
+   "old_text": "`.bss` follows `.text` immediately and is uninitialised by definition, so it\ncosts nothing on the floppy and everything in RAM;",
+   "new_text": "`.bss` follows `.text` immediately and is `nobits`, so NASM emits nothing for\nit - the next section's `start=` pads its range with zeros, which KZIP packs\nto almost nothing on the floppy - and it costs everything in RAM;",
+   "why": "Stale since PR #61: the .bss range is file padding (zero), not absent."
+  },
+  {
+   "file": "docs/KERNEL-MEMORY.md",
+   "old_text": "**The whole\nof `.bss` is zeroed before `kmain` runs**; `nasm -f bin` zeroes nothing, which\nis why anything read before that point (`[fdlg_win]`, the splash's state)\nlives in `.text` as a `dw 0`.",
+   "new_text": "**The whole\nof `.bss` is zero when `kmain` runs** - no instruction clears it; the load\nlands the padding - and it is NOT zero before then (under KZIP it holds the\npacked stream until `kz_all`), which is why the splash's state lives in the\nplain head of `.text`.",
+   "why": "[fdlg_win] is first read on the machine's first mouse press, long after kmain; the real pre-kmain constraint is the splash's, and under KZIP .bss holds packed bytes until kz_all."
+  },
+  {
+   "file": "docs/KERNEL-MEMORY.md",
+   "old_text": "The file on disk runs past the image rung, and the gap is where `.cold`\nlands: it is declared with an explicit `start=` at the rung boundary, so NASM\nemits the padding as zeros and stage 2's single contiguous read puts it on\n`COLD_SEG`.",
+   "new_text": "The file on disk runs past the image rung, and the section after the gap is\ndeclared with an explicit `start=` at the rung boundary - `.ovl` at `FAT_SEG`\non every shipped kernel, `.cold` at `COLD_SEG` under `NO_ROM_COLD` - so NASM\nemits the padding as zeros and the load (`kz_all` under KZIP) puts it there.",
+   "why": "Arm-blind: describes NO_ROM_COLD + NOKZIP. Under ROM_COLD (#268) .cold is above the LOW rung and .ovl sits at the image rung."
+  },
+  {
+   "file": "tests/tickzero.py",
+   "old_text": "`ticks` is `.bss`, and nothing clears `.bss`: `sched_init`'s\n`mov word [ticks], 0` is the whole of what makes the count start at 0, and",
+   "new_text": "`ticks` is `.bss`, which the load lands as the image's zero padding\n(SPEC.md 10); `sched_init`'s `mov word [ticks], 0` repeats that zero, and",
+   "why": "False premise: no instruction clears .bss, but the load does, so [ticks] is 0 at kmain whatever RAM held."
+  },
+  {
+   "file": "tests/tickzero.py",
+   "old_text": "the comment above it, and no row noticed, because every emulator here powers\non with ZEROED RAM - the defect needs a machine whose memory is not.",
+   "new_text": "the comment above it, and no row noticed - nor could any machine, because\nthe load's padding lands on [ticks] whatever RAM held; the store matters only\nif something writes [ticks] between kz_all and sched_init, which nothing does.",
+   "why": "False: dirty power-on RAM never reaches [ticks]. The row still checks that the store runs, by planting junk after the load."
+  },
+  {
+   "file": "tests/suite.py",
+   "old_text": "\"Does the boot ZERO [ticks]? It is .bss, nothing clears .bss, and \"",
+   "new_text": "\"Does the boot ZERO [ticks]? It is .bss (the load's zero padding), and \"",
+   "why": "False premise; see tests/tickzero.py's docstring."
+  },
+  {
+   "file": "tests/suite.py",
+   "old_text": "\"folded that store into a comment and no row saw it, because every \"\n        \"emulator here powers on with zeroed RAM. So this plants 0x8000 at \"",
+   "new_text": "\"folded that store into a comment and no row saw it - the load's \"\n        \"padding zeroes [ticks] on any machine. So this plants 0x8000 at \"",
+   "why": "False: dirty RAM cannot reach [ticks]; the load overwrites it."
+  }
+ ]
+}
