@@ -579,3 +579,83 @@ ALLOC/FREE/COPY prose, which states no context today (doc item D22).
 4. The Task Manager attributes a kern_big driver's pool block (the RAM disk)
    to FFh, "outside any instance". Is that the wording the owner wants until
    xm-6 lands?
+
+## Verification
+
+An adversarial pass on 2026-11-08 checked this against the current tree. I
+reassembled `drivers/xmem/xmem.asm` with the Makefile's command line, and the
+result is byte-identical to `build/xmem.bin` at 2,041 bytes. Its listing gives
+the region `xm_once` 0x718 to `xm_once_end` 0x7F9 (225 bytes) and puts the
+A20 gate and its probe at 0x6A0, so they are resident. `build/kernel.map`
+gives `xm_copy` 0BDA..0C2D, which is 83 bytes. Neither ABI-BREAK-LIST.md nor
+KERNEL-BYTE-QUEUE.md has a row for any finding here. The one related row is
+V3, which is the opposite of xm-11.
+
+**Findings: 12 confirmed, 2 of them corrected, 0 refuted.**
+
+- **xm-1 confirmed (medium).** `dos_ivtab` has no 15h row. The tree's only
+  int 15h filter is `kerndos/kdxms.inc`'s `kdx_i15`, and that file is
+  "kern_mega ONLY, AND THE WHOLE FILE IS". So neither the windowed DOS.O88 nor
+  kern_big's kern_dos filters int 15h. HMA-PLAN.md section 3 records only the
+  shut-gate half.
+- **xm-2 confirmed (medium).** The tier-2 branch (`je .unreal`) reaches
+  `xm_ucopy` with no probe. `xm_a20_reopen` is resident, and `xm_ucopy` reads
+  only `[xm_src]`/`[xm_dst]` and BP, so the hoist is sound. The hoist turns
+  the LOADALL arm's "shut gate -> BIOS path" into "re-open, then LOADALL".
+  Both are correct.
+- **xm-3 corrected.** The scratch arithmetic holds: 208 bytes today, 222 with
+  13 entries at stride 6, inside 225. Two corrections:
+  - `kernel/fsx.inc:3567` is a third `XM_MAX_BLKS` reader, kern_mega's
+    no-store answer. The kernel constant is shared by every build, so the
+    change moves kern_mega's figure too. It is an immediate, so no byte moves.
+  - xm-3 and xm-8 both spend the same region. With `xm_arm` gone the region is
+    135 bytes, and a 222-byte scratch would grow the image by 87.
+- **xm-4, xm-5 confirmed (spot-checked).** The largest-run answer and
+  `dos_xms_fits` exist only under `DOS_MEGA` and kern_mega's `kdxms.inc`.
+- **xm-6 confirmed.** `rdstore.inc` documents its own 0xFF stamp, and
+  `xm_release_rec` is kern_big's only `XMV_RELINST` dispatch.
+- **xm-7 confirmed, PREDICTED.** At 4 clocks a word, 16K words take about
+  11 ms at 6 MHz, and one 1200-baud 7N1 byte takes 7.5 ms. This needs a field
+  run.
+- **xm-8 corrected.** `tests/vidxms.py:339-345` is a second `CPU_F_UNREAL`
+  reader: it uses the bit as the `bios` arm's tier-1 witness. Bytes:
+  - -17 for the region, plus -3 for the resident `call xm_arm`, which makes
+    about -20. These are ESTIMATED from the listing.
+  - The only other FS writer is `apps/video/video.asm:7937`, which is under
+    `LA_SIM` (a test build).
+  - The stale GDTR is harmless, because every later `lgdt` loads its own.
+- **xm-9 confirmed.** Leaving the length to the image is a deliberate choice
+  (`xmem.inc:604-606`), but the image checks only the extended end.
+- **xm-10 confirmed.** The 83 + 12 bytes are as measured. The -54 is a hand
+  estimate.
+- **xm-11 confirmed (spot-checked).** It is a flagday item and is phased as
+  one.
+- **xm-12 confirmed.** The SDK prose fix (D22) is **not** carried as a doc
+  fix. Those lines are the contract comments of `OSAPI_*` `%define`s, which
+  `tools/abilock.py` fingerprints, so an unchecked edit fails `make` until
+  `abilock.py --update` runs. SPEC.md 41.8's side is carried.
+
+**Doc mismatches: 21 of 22 confirmed, carried as 25 exact-match fixes.**
+Each `old_text` was checked to occur exactly once in the current file.
+
+Refinements against the reviewer's proposals:
+
+- **SPEC.md 41.4:** the FS/GS rule now names the Video Player's `LA_SIM`
+  writer.
+- **SPEC.md 41.9 rule 1:** adds kern_mega's `mega_a20` and kern_dos's HMA
+  trampolines to the list of A20 writers.
+- **SPEC.md 41.12.3 and 41.12.6:** reworded as records with the current
+  figure beside them, because both are dated sections.
+- **`os88ub.inc`'s A20 premise:** now states that nothing on the tier-2 path
+  re-proves the gate. The reviewer's "so a caller proves it first" was false
+  today.
+- **`os88xgap.inc`'s `xg_s0`:** says ES:0 rather than introducing "mod 16 KB".
+- **One fix added:** the same "two transports" in `xm_copy`'s own header
+  (xmem.asm:804).
+
+All fixes were applied to a scratch copy of the tree:
+
+- `xmem.asm` reassembled byte-identical.
+- The four source files differ only in comment text.
+- `tools/checkdocs.py` reported 0 problems.
+- No test or tool greps any of the replaced phrases.
