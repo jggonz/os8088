@@ -3102,7 +3102,13 @@ dskw_read_at_x:
     mov al, [disk_drive]
     cmp al, [dwr_c+RSQ_VOL]
     jne .dwname
-    inc di                      ; hot: DI = 1, one link
+    mov ax, [dwr_off]           ; HOT, and FORWARD (18.4.8.2): the links from
+    mov dx, [dwr_off+2]         ; +6 are the offset's cluster index less +4's,
+    div word [dwr_clb]          ; plus one - ONE when the caller left +12
+    sub ax, [dwr_c+RSQ_IDX]     ; where the last call put it, more when it
+    js .dwname                  ; moved it on. Back past +6: from the name, as
+    inc ax                      ; a cold cursor is (a misaligned offset is
+    xchg di, ax                 ; refused below either way). DI = the links
     mov bx, [dwr_c+RSQ_CUR]
     mov cx, [dwr_c+RSQ_SIZE]
     mov dx, [dwr_c+RSQ_SIZE+2]
@@ -3250,7 +3256,8 @@ dskw_read_at_x:
 %ifdef DSK_STREAM
 RSQ_GEN     equ 0               ; the mount generation it was seeded under
 RSQ_VOL     equ 2               ; the volume
-RSQ_CUR     equ 6               ; the cluster holding FSEQ_OFF
+RSQ_IDX     equ 4               ; FSEQ_OFF's cluster index (18.4.8.2)
+RSQ_CUR     equ 6               ; the cluster before FSEQ_OFF's
 RSQ_SIZE    equ 8               ; the file's size
 FSEQ_OFF    equ 12              ; the offset: the caller's to set (SDK)
 FSEQ_SIZE   equ 16
@@ -3315,6 +3322,12 @@ dwf_dskw_read_seq:
     mov [dwr_c+RSQ_GEN], ax     ; is already in the cursor: [dwr_sz] IS its
     mov al, [disk_drive]        ; field on kern_big, stored by READ_AT from
     mov [dwr_c+RSQ_VOL], al     ; the stat, whichever way it answered. After a
+    push dx                     ; ...and +4, the cluster INDEX of +12's
+    mov ax, [dwr_c+FSEQ_OFF]    ; offset, which dwr_stat measures a forward
+    mov dx, [dwr_c+FSEQ_OFF+2]  ; seek from (18.4.8.2). Non-zero after any
+    div word [dwr_clb]          ; read that moved a cluster: a caller's sign
+    mov [dwr_c+RSQ_IDX], ax     ; that this kernel walks forward
+    pop dx
     pop ax                      ; call that delivered nothing the cluster is
     clc                         ; stale and unread: READ_AT answers the end
 .out:                           ; before it walks

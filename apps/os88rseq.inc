@@ -42,8 +42,11 @@ os88_rseq:
     cmp dx, [di+FSEQ_OFF+2]
     je .go
 .seed:
-    call os88_rseq_new
-    mov [di+FSEQ_OFF], ax
+    cmp word [di+4], 0          ; +4 set: this kernel walks a MOVED cursor
+    jne .move                   ; from where it stands, forward, and goes
+    call os88_rseq_new          ; cold by itself for one moved back (SPEC.md
+.move:                          ; 18.4.8.2). Unset - an older kernel, or a
+    mov [di+FSEQ_OFF], ax       ; cold cursor - zeroed, as it always was
     mov [di+FSEQ_OFF+2], dx
 .go:
     push dx                     ; the offset, for the small kernel's READ_AT

@@ -37597,7 +37597,7 @@ is the kernel's and its layout may change:
 | 0 | 2 | the mount generation it was seeded under; **0 = not seeded** |
 | 2 | 1 | the volume |
 | 3 | 1 | 0 |
-| 4 | 2 | 0 |
+| 4 | 2 | `+12`'s cluster index, as the last call left it - non-zero after a read on a kernel that seeks forward (18.4.8.2) |
 | 6 | 2 | the last cluster the previous call read, one FAT link before `+12`'s |
 | 8 | 4 | the file's size |
 | 12 | 4 | **the offset**: where the next call reads. A cluster multiple |
@@ -37692,7 +37692,9 @@ customer while seven other loops read a file a chunk at a time through
 now, and none of them changed shape to become one, because the offset
 **stays the caller's**: a helper takes `READ_AT`'s own registers plus a
 cursor, compares the cursor's `+12` with the offset asked for, and re-seeds
-the cursor there when they differ. A seek, a restart, a rewind and a retry
+the cursor there when they differ - or, since 18.4.8.2, MOVES it there when
+its `+4` says the kernel walks forward, so a seek ahead costs the links it
+skips and a seek back the walk it always did. A seek, a restart, a rewind and a retry
 after an error therefore need nothing at the call site - the conversion is
 the call and a 16-byte cursor.
 
@@ -37738,6 +37740,52 @@ slower for the change:
 bytes of cursor per reader and 76 bytes of helper (`os88_rseq`, measured) per
 package or driver that carries one, `OP_BSS` included in every package with
 parts.
+
+#### 18.4.8.2 …and a cursor MOVED forward walks from where it stands; a copy of one is a bookmark
+
+**A seek used to be a walk from the front, whatever it cost.** The cursor
+knew only "the next call reads one link past `+6`", so a caller moving `+12`
+had to zero the cursor (§18.4.8's rule) and pay the stat and the whole chain
+again. Measured on 5150 #1 (2 KB clusters, PicoMEM 2): **~330 µs a link,
+140 ms a MB** - Video Battle's clip heads 5.8 MB into a 6.5 MB bundle cost
+961-1,153 ms to start, every time (docs/reports/PICOMEM2-STUTTER-2026-11-07.md),
+and an ST-225 pays the same walk plus its seeks.
+
+So the kernel now keeps, in the cursor's own reserved word, **`+4` = the
+cluster index of `+12`'s offset** (`RSQ_IDX`), written by every call that
+read. On a valid cursor, `dwr_stat` walks **`(+12 / cluster) - [+4] + 1`
+links from `+6`**: one when the caller left `+12` where the last call put it
+(the stream, as before), more when the caller moved it FORWARD. Moved BACK
+past `+6`, it goes from the name, as a cold cursor does. A misaligned `+12`
+is refused as before. 34 bytes of `.cold`.
+
+What that gives a caller, with no new slot and nothing changed for one that
+zeroes its cursor as before:
+- **A forward seek costs the links it skips, not the links before it.**
+  Move `+12`, keep the rest.
+- **A copy of a cursor is a BOOKMARK.** The 16 bytes as a call left them
+  name a place in the file: copied back later, the next call walks one link
+  from there - **a clip 5.8 MB in starts as if it were 32 KB in**. A
+  bookmark goes stale exactly when a cursor does (§18.4.8's generation and
+  volume), and then the kernel re-seeds it from the name, silently, at its
+  `+12`: never wrong, only slow once.
+- **A backward seek is a bookmark and a forward one.** The chain only links
+  forward, so nothing can walk back; a caller that keeps bookmarks behind it
+  - a player, one a MB as it plays - reaches any earlier place by copying
+  the nearest one at or before it and moving `+12` on. No kernel memory per
+  stream, which is what a kernel-kept index would have cost.
+- **Which kernel it is: `+4` non-zero after a read.** An older kernel never
+  writes it (a cursor is born zeroed), and an older kernel MUST NOT be
+  handed a moved `+12` - it walks one link and reads the wrong cluster. So a
+  caller moves a cursor only when `+4` is set, and zeroes it otherwise.
+  `os88_rseq` does exactly that (§18.4.8.1).
+
+`tests/vidkern.py`'s row G holds it: hot at 1 MB, moved forward to 3 MB, a
+chunk skipped, moved back to 2 MB, every byte checked; then a bookmark taken
+at 12 MB, a read at 0 between, the bookmark copied back - its read 439 ms
+against the cold seek's 1,813 on MartyPC's XT-IDE, one FAT-area int 13h call.
+Broken on purpose (the old one-link walk with `+4` still written) the moved
+cursor reads two chunks from the wrong offset.
 
 ### 18.4.9 `OSAPI_FILE_WRITE_SEQ` — a streaming append, whose place the KERNEL keeps (`kern_big`)
 
@@ -208042,6 +208090,33 @@ ring is up to 80 KB smaller for it. +60 bytes of the arm's image (63,832;
 `tests/megarmbext.py`'s player legs are the gate: both plays real on an
 extended desktop, and `FSXR_ROOM` on both without it.
 
+#### 98.3.25 Bookmarks: a seek walks from the nearest place it has, not the front (2026-11-08)
+
+A seek (the bar, Left and Right, a key's re-entry, the hold handing the
+stream back) zeroed `vp_cur` and set its offset, so its first read walked
+the file's chain from the first cluster: 142 ms a MB on the W0 machine,
+**up to ~2 s** at 12 MB on 5150 #1 - a jump BACK cost that every time,
+and a jump forward as much as a jump from the start. On a kernel that walks
+a moved cursor forward (18.4.8.2):
+- **`vp_bmrec`, after every fill** (`vp_fill` is a wrapper now; the body is
+  `vp_fillb`, which `vp_tpat`'s two-tier jump patches), copies `vp_cur` into
+  the slot of the MB its offset is in, when that slot is empty: the first
+  place seen in each MB, the nearest to its start. 32 slots, 16 bytes each
+  (`vp_bm`, 512 bytes of image, zeros); `vp_open` clears them, a bookmark
+  naming no file.
+- **`vp_curseek`, at both seeks**, starts the cursor from the nearest place
+  at or before the target - itself, when it walks forward and is not past
+  it, or a bookmark - and moves `+12` there; nothing: zeroed, as before. A
+  jump forward walks the links it skips; a jump back into what has played,
+  at most a MB of them (~140 ms on 5150 #1). A stale bookmark (a write, a
+  remount) the kernel re-seeds from the name: never wrong, slow once.
+- A kernel without the forward walk leaves `+4` 0 and records nothing.
+- **The table is the shipped player's** (`VP_BMN` 32). The VPDIAG builds and
+  kern_mega's arm were each within a few hundred bytes of `APP_MAX_SIZE`
+  and have `VP_BMN` 0: their seeks walk forward from the cursor itself, and
+  a jump back is the walk it was. Margins after: shipped 1,326, VIDEOD 200,
+  VIDEOR 274, kern_mega 391 bytes.
+
 ### 98.4 The window: the Preview (wave 6)
 
 **The window IS the Preview** (VIDEO-PLAN 3.3): the file's poster in a
@@ -244099,6 +244174,39 @@ bracket** (SPEC.md 53.2.3).
 `tests/vbtmega.py` on Bochs and, `--emu 86box`, on the mr286 (rows
 `vbtmega`, `vbtmega86`) are the gates. **What it cost** the shipped engine: W1 image 24,337 -> 24,887 (+550),
 bss +69, the packed file +451; W3 +76, +1, +49; W5 +48, +1, +34.
+
+#### 126.4.7 Bookmarks: every clip head one FAT link away (`vbbm.inc`)
+
+**A clip's head was a walk from the bundle's first cluster.** `vb_dread`
+seeked by zeroing its cursor (18.4.8), so every clip started, every head
+the menu's cursor asked for and every ring re-filled from its clip's start
+paid the chain from the front: ~330 us a link on 5150 #1 (2 KB clusters),
+**961-1,153 ms** for the owner's heads 4.8-5.8 MB into a 6.5 MB bundle -
+the Ice, Bolt and Scope sound drops of docs/reports/PICOMEM2-STUTTER-2026-11-07.md,
+on a PicoMEM 2 and, with its seeks on top, an ST-225.
+
+So, on a kernel that walks a moved cursor forward (18.4.8.2):
+- **`vb_bmbuild`, at load** (`vb_load`'s `.sized`), makes ONE forward pass
+  over the bundle: for each clip head and the music, in table order, the
+  build's cursor is moved to the cluster BEFORE the head's and that one
+  cluster read into a scratch claim, which leaves the cursor standing at the
+  head. Its `+4` and `+6` are the bookmark (4 bytes, `vb_bmk`, a clip's slot
+  and the music's last); one 16-byte template keeps what they share. One
+  walk of the chain in all and a cluster a head: ~1 s more load on the
+  field machine's 6.5 MB bundle. Not built - and every seek what it was -
+  when `+4` is 0 after the first read (an older kernel), when clusters are
+  past 16 KB (`VB_BMMAX`: a chain of them is short), or when a read fails.
+- **`vb_bmseek`, at every seek**, any stream's: of the stream's own cursor
+  (when it walks forward and stands at or before the target) and the
+  bookmarks, the one nearest at or before the target is loaded and `+12`
+  moved to it - the kernel walks the links between. None: zeroed, as before.
+- **298 bytes of bss** (`vb_bmk` 260, the build's cursor and the template
+  32) and the code in `vbbm.inc`.
+
+Measured on MartyPC's CGA PicoMEM 2 twin with the owner's bundle (2026-11-08):
+the head 5,772 KB in read in **96 ms where it took 1,002**, the reader at
+194 KB/s while reading where it was 140; on the kernel before 18.4.8.2 the
+same engine built nothing (`[vb_bmok]` 0) and read as it did.
 
 ### 126.5 The band
 
