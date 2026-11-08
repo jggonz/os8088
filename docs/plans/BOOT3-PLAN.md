@@ -12,8 +12,17 @@
 > from this tree's `build/kernel.map`, `build/smallk/`, `build/megak/` and
 > `build/*kernel.kz.json`. PREDICTED figures are arithmetic and have not been
 > booted. An adversarial verifier then checked it against the code the same
-> day. Its corrections are made in place, and section 16 lists what it
+> day. Its corrections are made in place, and section 16.1 lists what it
 > checked and what it changed.
+>
+> **Revised the same day for the owner's second round**
+> (docs/reports/big-review-2026-11-08/owner-decisions.md, *Second round*):
+> the section is GENERIC across the four kernels, wave 4 is part of the plan,
+> the keyboard mouse's pointer half rides it as wave 5, `blobruns` moves to
+> the fast tier, and the earlier bar without wave 4 is item E. The answered
+> questions are folded into the body, each marked "(owner, 2026-11-08)".
+> Section 16.2 lists what the revision measured and derived, and section
+> 16.3 what a second adversarial pass checked and corrected.
 
 ## The owner's words
 
@@ -38,33 +47,67 @@ defending against is our own mistakes ... better to defend against those by
 finding the issues and guarding them at build time rather than spending
 resident bytes."*
 
-## 1. The name: `.boot3`
+The second round, the same day, as relayed and recorded in owner-decisions.md:
 
-The owner's name is kept, for three reasons.
+> On the kernels: "it buys them all space, and the same boot ladder which
+> means we make less mistakes that affect another kernel. Unless small truly
+> doesn't need it." On the name: "whatever is going to confuse a new session,
+> looking at how we boot, the least." On wave 4: "why keep something bigger
+> than it needs to be? The quicker splash is a benefit." On `blobruns`: the
+> fast tier "if it's REALLY quick" (or full). On the earlier bar without
+> wave 4: an option only "if it is less complex than wave 4".
 
-- **It is literally the third piece of boot-only code by arrival.** Stage 1
-  (`boot.asm`) reads `.boot2`. `.boot2` draws the splash and reads
-  KERNEL.SYS, which carries `.boot3`.
+And the keyboard mouse, the owner's own shape: its pointer half rides
+`.boot3`; before the section is dropped, when no mouse has been found, it is
+copied into a heap claim; and that claim is dropped when a mouse first speaks.
+No disk read, no file on any disk, no system-disk dependency (wave 5).
+
+## 1. The name: `.boot3` (owner, 2026-11-08: the least confusing to a new session)
+
+The name is kept. The test is the owner's: what a new session, reading how
+this OS boots, will misread least.
+
+- **It is the reading order the file names already teach.** `boot/boot.asm`
+  (stage 1) reads `.boot2` (`boot/boot2.asm`, the blob). `.boot2` reads
+  KERNEL.SYS, whose last section is `.boot3`. "N is what N−1 loads" is the
+  owner's own description, and a session that has read the first two needs
+  no new idea for the third.
+- **It names a lifetime, not a job.** Everything in it is dead at
+  `mem_unblob_x`. That is the one fact a caller must know before calling in,
+  and the name says it. `.init` or `.kinit` say what the code does, and a
+  session would reasonably call an "init" routine from anywhere at any time.
+- **It is unique.** `grep -w boot3` finds this plan and the review today,
+  nothing in code. `.init` collides with more than a hundred `*_init`
+  routines, most of them (`menu_init`, `inst_init`, `dock_init`) in `.ovl`;
+  `kinit` already occurs in three files; `.btail` collides with KZIP's
+  "tail", the whole packed remainder (SPEC.md 2.9.13.1), of which this
+  section is only the last part; `.late` says nothing about what it is late
+  relative to.
 - **In the end state (wave 4) its entry point is `kmain_o`**, the kernel's
-  one-time bring-up. Stage 3 *is* that bring-up.
-- **`grep boot[23]` finds every boot-only body in the tree.**
+  one-time bring-up.
 
-The rejected names:
+**The one trap, and how it is closed.** A session that has matched `.boot2`
+to `boot/boot2.asm` will look for `boot/boot3.asm`, and `.boot3` is not a
+loader stage: nothing jumps to it, it has no entry of its own, and its bodies
+stay in the modules that own them (`font.inc`, `hiber.inc`, `driver.inc`,
+`mouse.inc`). So:
 
-- `.init` collides with more than a hundred `*_init` routines. Most of them
-  (`menu_init`, `inst_init`, `dock_init`) are in `.ovl` and would stay there.
-- `.late` says nothing about what the section is late relative to.
-- `.btail` collides with KZIP's "tail", which is the whole packed remainder
-  of the file (SPEC.md 2.9.13.1), of which this section is only the last
-  part.
+- SPEC and the code call it **"the third boot-only home"**, never "stage 3".
+- Its frame gets one file, **`kernel/boot3.inc`**, `%include`d where today's
+  `.cfx` block sits at kernel.asm's foot. It holds `cfx_slide`, `cfx_grp`
+  and `cfx_tab` (moved, names kept), the keyboard mouse's adoption door
+  (wave 5) and the macros' notes, under a header that is section 3.2's
+  lifetime table. `ls boot/ kernel/` then finds it, and `grep boot[23]`
+  finds every boot-only body in the tree.
 
-**The section takes over `.cfx`; it is not a new one.** `.cfx` is already a
-`.boot3`: 530 bytes (MEASURED, 0x191A0..0x193B2 in the file). It is the last
-section of KERNEL.SYS, expanded by stage 2 into RAM nothing claims until
-`mem_unblob_x`, and three blob bodies already far-call it
-(`call CFX_RAM:cfx_grid/cfx_ctxcap/cfx_cfgname`). The section is renamed; its
-labels keep their names (`cfx_slide`, `cfx_grp`, `cfx_tab`), and so does
-`tools/os88cfx.py`.
+**On kern_big and kern_emu the section takes over `.cfx`; it is not a new
+one.** `.cfx` is already a `.boot3`: 530 bytes (MEASURED, 0x191A0..0x193B2 in
+the file). It is the last section of KERNEL.SYS, expanded by stage 2 into RAM
+nothing claims until `mem_unblob_x`, and three blob bodies already far-call
+it (`call CFX_RAM:cfx_grid/cfx_ctxcap/cfx_cfgname`). The section is renamed;
+its labels keep their names (`cfx_slide`, `cfx_grp`, `cfx_tab`), and so does
+`tools/os88cfx.py`. kern_small and kern_mega have no `.cfx` (MEASURED: neither
+map has the section), so there it is new.
 
 Names used below:
 
@@ -75,17 +118,20 @@ Names used below:
 | `B3_SIZE` | its length |
 | `.boot3b` | its nobits scratch |
 | `B3_RES` | the length of `.boot3b` |
+| `.boot3m` | the keyboard mouse's module image, the section after `.boot3` (wave 5) |
 | `B3CALL`, `B3SECT`, `B2CALL` | the macros (section 4) |
 
 ## 2. What the code settled between the three designs
 
 | question | answer | from the code |
 |---|---|---|
-| Room under the blob today (kern_big) | **1,024 bytes**, not 768 | the packed read ends at 0x600 + 4,608 + R 18,432 + 145 × 512 = **0x18200**; the blob is at BLOB_SEG_AT = 0x1800 + 96 = **0x18600** (kernel.kz.json; kernel.asm BLOB_LIFT). The 768 figure mixed a kernel-relative end with a linear blob address |
+| Room under the blob today | **kern_big 1,024 bytes**, not 768; kern_small 1,536; kern_mega 2,048 | kern_big's packed read ends at 0x600 + 4,608 + R 18,432 + 145 × 512 = **0x18200**; the blob is at BLOB_SEG_AT = 0x1800 + 96 = **0x18600** (kernel.kz.json; kernel.asm BLOB_LIFT). The 768 figure mixed a kernel-relative end with a linear blob address. kern_small: 0x600 + 4,608 + R 10,240 + 86 × 512 = **0xEC00**, which is its KERN_END, against the blob at 0xF200. kern_mega: 0x600 + 4,608 + R 24,064 + 204 × 512 = **0x20E00**, against the blob at 0x21600 (all from each tree's kernel.kz.json and map) |
+| Generic, or kern_big only? | **Generic (owner, 2026-11-08)**: every kernel, each switching on in the first wave that moves a body there | section 5 |
+| Does kern_small truly not need it? | **It does not need the room, and it gains three things the room does not measure** (section 5.1), so it opts in | its `.boot2` has 702 free and its `.ovl` 62 (MEASURED), enough for its wants; the gains are wave 5's resident bytes against the 64KB rule, one ladder, and wave 4's shorter blob |
 | Is `ovl_sc_*` a closed cluster? | **No.** It writes `ovc_buf` through CS: desksc.inc's `ovl_sc_load` does `push cs / pop es / mov di, ovc_buf / rep movsb` | moved alone, CS is `B3_SEG`, and the copy lands at `B3_SEG:ovc_buf` = 0x17DA0 + 0x1A00 = **0x197A0, inside the running blob**. So it moves in wave 2 with `ovc_buf` and the `ovc_*` family, not in wave 1 |
-| Ban COLD_SEG in `.boot3`, hop through `[api_coldseg]`, or re-point a fourth group? | **A fourth group.** | Every useful closed cluster names COLD_SEG. Decoding `cfx_tab` (MEASURED): 93 sites in `.text`, 3 in `.ovl`, **25 in the blob**, 192 of 256 bytes used. Wave 1 alone has 11. A ban moves nothing worth having. A hop costs 56 bytes of pair plus dual-arm macros at about 17 sites in shared source. The group costs 6 transient bytes and about 13 ROM bytes |
-| Fold `.cfx`, or a separate section at HEAP_SEG? | **Fold.** | The head constraint already exists and is guarded: `%if cfx_grid - $$ < KVGABUF_SIZE`. The slide prefix (`cfx_slide` 71 + `cfx_grp` 26 + `cfx_tab` 256 = **353**, MEASURED) more than covers `.vgabuf`'s **336**. One section means one MODC_START, one tool classification, and no 78-byte gap |
-| Guard 5's headroom once BLOB_LIFT is counted | **22,016 bytes** (43 sectors), not 22,272 | 128 × 1,024 − 2,560 − 0x18600 − 6,656 |
+| Ban COLD_SEG in `.boot3`, hop through `[api_coldseg]`, or re-point a fourth group? | **A fourth group** (kern_big, kern_emu), the ROM's `rt_b3` (kern_big, kern_small), nothing (kern_mega) | Every useful closed cluster names COLD_SEG. Decoding `cfx_tab` (MEASURED): 93 sites in `.text`, 3 in `.ovl`, **25 in the blob**, 192 of 256 bytes used. Wave 1 alone has 11. A ban moves nothing worth having. A hop costs 56 bytes of pair plus dual-arm macros at about 17 sites in shared source. The group costs 6 transient bytes and about 13 ROM bytes. kern_mega's COLD_SEG is a selector-compatible constant (kernel.asm's LADDER_PACK note: "COLD_SEG is a selector there, a multiple of 8 paragraphs") and nothing moves `.cold` before the drop |
+| Fold `.cfx`, or a separate section at HEAP_SEG? | **Fold** (kern_big, kern_emu) | The head constraint already exists and is guarded: `%if cfx_grid - $$ < KVGABUF_SIZE`. The slide prefix (`cfx_slide` 71 + `cfx_grp` 26 + `cfx_tab` 256 = **353**, MEASURED) more than covers `.vgabuf`'s **336**. One section means one MODC_START, one tool classification, and no 78-byte gap |
+| Guard 5's headroom once BLOB_LIFT is counted | kern_big **22,016 bytes** (43 sectors), not 22,272; kern_small **60,928** | 128 × 1,024 − 2,560 − BLOB_SEG_AT × 16 − BOOT2_PAD: 0x18600 and 6,656 on kern_big, 0xF200 and 5,632 on kern_small |
 | Merge `.ovl` into `.boot3`? | **No.** | `.ovl` lands on the FAT window and `dsk_secbuf`, so it is the one transient that costs no boot RAM, and per byte it costs the same read. It sheds bodies (wave 3); it does not move |
 | Does `bvs_apply` move? | **No.** | splash.inc:525-528 runs `BLOBCALL vid_detect` and `call bvs_apply` in the first tick, which is before `.boot3` has been expanded |
 
@@ -93,14 +139,17 @@ Names used below:
 
 ### 3.1 On disk and in the packed stream
 
-`.boot3` is KERNEL.SYS's last section:
-`MODC_START equ B3_START + B3_SIZE`. That replaces the `.cfx` arm at
-kernel.asm:8981. With the section last:
+`.boot3` is KERNEL.SYS's last section on every kernel (with `.boot3m` after
+it from wave 5): `MODC_START equ B3_START + B3_SIZE` (+ `.boot3m`'s size).
+That replaces the `.cfx` arm at kernel.asm:8981 on kern_big and kern_emu,
+the ROM_COLD arm (`COLD_START + COLD_SIZE`) on kern_small, and the
+`MEGA_START + MEGA_SIZE` arm on kern_mega. With the section last:
 
 - `B2_KSECS` (NOKZIP) and `KZ_SECS` cover it with no loader change.
-- **It is LZ4-packed** as the end of the last block. kern_big's block 2 is
-  30,642 of KZ_BLK 61,440 unpacked (MEASURED), so there are about 30KB before
-  a third block.
+- **It is LZ4-packed** as the end of the last block. Room before a new block
+  (MEASURED, kz.json): kern_big's block 2 is 30,642 of KZ_BLK 61,440
+  unpacked, about 30KB; kern_small's one block is 54,119, about 7.1KB;
+  kern_mega's block 3 is 5,136, about 55KB.
 - `os88kz.py` recomputes R.
 - `kz_all`, `kz_expand`, `kz_hd` and the plain head (KZ_HEADSEC 9) are
   unchanged.
@@ -112,60 +161,65 @@ refuses that loudly.
 
 ### 3.2 In RAM
 
-```
-B3_START equ (COLD_START + COLD_SIZE + 15) & ~15     ; today's CFX_START
-B3_SEG   equ KERNEL_SEG + (B3_START - BOOT2_PAD) / 16 ; today's CFX_RAM, 0x17DA
-```
+| kernel | `B3_RAM` | what it covers, in order | blob at |
+|---|---|---|---|
+| kern_big, kern_emu | `VGABUF_RAM`, today's `CFX_RAM`, 0x17DA (linear **0x17DA0**): `B3_START equ (COLD_START + COLD_SIZE + 15) & ~15`, `B3_SEG equ KERNEL_SEG + (B3_START - BOOT2_PAD) / 16` | `.vgabuf`'s rung (336 bytes); the LADDER_PACK rounding up to KERN_END (0x18000); the blob's lift (0x18000..0x18600) | 0x18600; with `ovc_buf` to 0x1A200 |
+| kern_small | `.cold`'s end, to the paragraph: 0xEB7 (linear **0xEB70**; `.cold` ends at 0xEB67, MEASURED from the map: file 0xA940 + 0x5227 at COLD_RAM 0x994) | KERN_END's rounding (0xEB70..0xEC00, 144 bytes); the lift (0xEC00..0xF200). There is no `.vgabuf` (VGABUF_PARA 0: no planar decoder on kern_small) and no slide | 0xF200 |
+| kern_mega | **KERN_END**, 0x2100 (linear **0x21000**), behind a zero gap in the file from `.mega`'s end (0x20C10) that packs to almost nothing | the lift (0x21000..0x21600). It sits past `.mega`'s park scratch and `.vgabuf` rather than over them, so no `b3_live` rule applies there | 0x21600 |
 
-On kern_big this is linear **0x17DA0**. It covers, in order:
-
-1. `.vgabuf`'s rung (336 bytes);
-2. the LADDER_PACK rounding up to KERN_END (0x18000);
-3. the blob's lift (0x18000..0x18600).
-
-The blob and `ovc_buf` sit above it, at 0x18600..0x1A200.
+The lifetime is the same on all four:
 
 | moment | what is in `.boot3`'s RAM |
 |---|---|
 | stage 1, the splash's first tick, the tail read | packed bytes, or nothing yet. **Not callable** |
 | `kz_all` returns (end of stage 2, after the canary) | `.boot3`, expanded and aboard |
-| kmain → `SPLGATE1 kmain_o` → every kmain_o call | live. `mem_init_x` raises `[mem_base]` past the blob + BOOT2_RES (memory.inc:622-631), so no claim, read-ahead, DIRTYRAM fill or DSK_HCYLSEG buffer can land on it |
-| kmain zeroes `[spl_fseg]`, then `mem_unblob_x` | **dropped**: `mov [mem_base], ax` (memory.inc:686) gives back `.boot3`, the lift, the blob and, on a mono machine, the `.vgabuf`/`.vga` rungs, in one store. Then `mem_compact` runs |
+| kmain → `SPLGATE1 kmain_o` → every kmain_o call | live. `mem_init_x` raises `[mem_base]` past the blob + BOOT2_RES (memory.inc:622-631), so no claim, read-ahead, DIRTYRAM fill or DSK_HCYLSEG buffer can land on it. The one deliberate claim is wave 5's adoption, which lands at the TOP of the heap and copies out of `.boot3m` before the drop |
+| kmain zeroes `[spl_fseg]`, then `mem_unblob_x` | **dropped**: `mov [mem_base], ax` (memory.inc:686) gives back `.boot3`, the lift, the blob and, on a mono kern_big, the `.vgabuf`/`.vga` rungs, in one store. Then `mem_compact` runs |
+| kern_mega's `mega_enter` (kernel.asm:6204) | after the drop: every `.boot3` body is real mode, and no selector ever names it |
 
 That store is the owner's "dropped right before we start dropping the
 .vgabuf and other .vga stuff ... and compacting". It is one store, and it
-costs **0 new instructions**.
+costs **0 new instructions** on every kernel.
 
-**`.vgabuf` overlap.** On a VGA or EGA machine at home, the planar decoder
-owns `.boot3`'s first 336 bytes during kmain_o. The `cfx_grid` comment says
-the decoder is used before `cfx_grid` runs. So only the slide prefix may live
-there, and it runs only on a machine with neither a VGA nor an EGA. Every
-other entry follows a `b3_live` label, asserted `>= KVGABUF_SIZE`. On a
-ROM-adopted machine, `rp_walk` has already moved `.vgabuf` to COLD_RAM at
-kmain_o's start, so the overlap does not arise there. On a COLDHMA.SYS
-machine the same move happens only inside `drv_boot_x`, so until then the
-overlap stands exactly as at home; the `b3_live` rule covers both.
+**`.vgabuf` overlap (kern_big and kern_emu only).** On a VGA or EGA machine
+at home, the planar decoder owns `.boot3`'s first 336 bytes during kmain_o.
+The `cfx_grid` comment says the decoder is used before `cfx_grid` runs. So
+only the slide prefix may live there, and it runs only on a machine with
+neither a VGA nor an EGA. Every other entry follows a `b3_live` label,
+asserted `>= KVGABUF_SIZE`. On a ROM-adopted machine, `rp_walk` has already
+moved `.vgabuf` to COLD_RAM at kmain_o's start, so the overlap does not arise
+there. On a COLDHMA.SYS machine the same move happens only inside
+`drv_boot_x`, so until then the overlap stands exactly as at home; the
+`b3_live` rule covers both. kern_small has no `.vgabuf`; kern_mega's `.boot3`
+starts above it.
 
 ### 3.3 The lift is derived, not hand-set
 
 Today `BLOB_LIFT equ 96` (kernel.asm:1952, under `%ifdef ROM_COLD`) is a
 guess, and the guard at boot2.asm:546 checks it on pass 2. As `.boot3`
-grows, each wave would fight that `%error`. Instead, on the B3 arms only
-(kern_small and kern_mega keep today's literal 96, so they stay
-byte-identical), with every term in BYTES of linear address and the result
-in paragraphs:
+grows, each wave would fight that `%error`. Instead, on every kernel whose
+`.boot3` is switched on (until then kern_small and kern_mega keep today's
+literal 96 and stay byte-identical), with every term in BYTES of linear
+address and the result in paragraphs:
 
 ```
 CEIL512(x)  = (x + 511) & ~511
-B3_END      = B3_RAM*16 + B3_SIZE
+B3_END      = B3_RAM*16 + B3_SIZE (+ .boot3m's size from wave 5)
 BLOB_LIFT   = max(96, CEIL512(B3_END + KZ_MARGIN_K + 1022)/16 - HEAP_SEG,
                       CEIL512(B3_END + B3_RES)/16          - HEAP_SEG)
 ```
 
 CEIL512 keeps the blob 512-aligned (it is a read target), and HEAP_SEG is a
-multiple of 32 paragraphs already (KERN_END's LADDER_PACK rounding). Checked
-against today's map: B3_END = 0x17FB2, + 1,086 = 0x183F0, CEIL512 = 0x18400,
-so the bound gives 0x1840 - 0x1800 = 64 paragraphs and the floor of 96 wins.
+multiple of 32 paragraphs already (KERN_END's rounding). Checked against
+today's kern_big map: B3_END = 0x17FB2, + 1,086 = 0x183F0, CEIL512 =
+0x18400, so the bound gives 0x1840 - 0x1800 = 64 paragraphs and the floor of
+96 wins.
+
+**What fits under the floor of 96**, the certain bound
+`blob - 1,086 - B3_RAM*16` (PREDICTED arithmetic on MEASURED addresses):
+kern_big 1,058 bytes (of which `.cfx` is 530 today), kern_small **594**,
+kern_mega **450**. Past that, each 512 bytes of `.boot3` costs 32 paragraphs
+of boot RAM, never a resident byte.
 
 - The 1,022 is the worst case of R's sector rounding plus the tail's.
   os88kz.py's `r = (tail - body + margin + extra + 511) & ~511` and the
@@ -188,10 +242,20 @@ so the bound gives 0x1840 - 0x1800 = 64 paragraphs and the floor of 96 wins.
 - boot2.asm:546 stays as the exact pass-2 check.
 - Stage 1's MEMFIT and boothd's BLOB_SEG already read `blobseg` off the `ks:`
   line, so neither changes.
+- **kern_small's page term (PREDICTED; confirm before acting).** kern_small's
+  11-sector blob, at 0xF200..0x10800, straddles the 64KB DMA page 7 sectors
+  in (section 12, *Found on the way*), which probably costs stage 1 a third
+  call. On kern_small alone the derived lift also rounds the blob up to
+  0x10000 when `[blob, blob + BOOT2_PAD)` would cross it: at most
+  BOOT2_PAD of boot RAM, against guard 5's 60,928 bytes of headroom at
+  128KB. It is a term only if `tools/os88boot.py` on small360 confirms the
+  third call. kern_big's and kern_mega's blobs straddle no page in any wave
+  (0x18600..0x1A800 and 0x21600..0x23C00 at their largest).
 
 ## 4. How code calls it, and how calls are fenced
 
-**Contract.** A `.boot3` body has exactly a `.boot2` body's contract:
+**Contract.** A `.boot3` body has exactly a `.boot2` body's contract, on every
+kernel:
 
 - CS = `B3_SEG`, DS = KERNEL_SEG, SS = LOW_SEG.
 - It is far-entered and ends in `retf`.
@@ -199,13 +263,19 @@ so the bound gives 0x1840 - 0x1800 = 64 paragraphs and the floor of 96 wins.
 - It reaches `.text` through the existing KERNEL_SEG shims (`ovw_*`,
   `spw_near`, `cw_*`).
 - It reaches `.cold` by a plain `call COLD_SEG:x`, re-pointed by the fourth
-  group (section 4.1).
+  group and `rt_b3` where `.cold` can move (section 4.1).
 
-| macro | on a B3 arm | on every other arm |
+| macro | once the kernel's `.boot3` is on | before that (kern_small and kern_mega until their wave 1) |
 |---|---|---|
 | `B3SECT` | `section .boot3` | `section .boot2`, or for a former `.ovl` body whatever its arm used: `mem_init_x` is `.ovl` on kern_mega and `.boot2` on kern_small (OVBCALL's arms), so its fallback is OVBCALL's choice, not a fixed `.ovl` |
 | `B3CALL x` | `call B3_SEG:x` (5 bytes; OVLCALL's shape: a constant segment, nothing published, nothing retired). Inside `.boot3` it is `push cs / call x` | BLOBCALL (4) or OVLCALL (5), whichever matches the body's home |
 | `B2CALL x` | from `.boot3` into a blob entry: `call BLOB_SEG_AT:x` (5). A target that kmain_o reaches by BLOBCALL already ends in `retf`. A target the blob only NEAR-calls ends in `ret` and needs a `retf` (a single-caller body) or a 4-byte `call x / retf` door (a body with near callers that stay, such as `bvs_disp_init`). BLOB_SEG_AT is the very constant stage 1 (HEAP_PARA) and boothd (BLOB_SEG) are built with | — |
+
+**Once every kernel is on, the fallback column is deleted**, and with it the
+per-kernel arms of `B3SECT` and `B3CALL`. That is the owner's "same boot
+ladder": a body marked `B3SECT` is in `.boot3` on all four kernels and is
+fenced by the same `os88ovlchk` rules everywhere. What still differs by
+kernel is only which bodies a kernel assembles at all.
 
 **`B2CALL` is a new assumption, and it is a trade.** Today nothing in the
 kernel assumes where the blob is: `[spl_fseg]` is what stage 2 published,
@@ -220,18 +290,19 @@ it banks the flags, so a CF answer needs `SPLCALLC`). The plan takes
 the constant and puts the fence in `t_bootfloor`'s HEAP_PARA/BLOB_SEG check
 (section 13). Section 15 question 9 asks the owner.
 
-Every arm that does not carry `.boot3` assembles today's bytes, so kern_small
-and kern_mega stay byte-identical. This is OVBCALL/OVSCALL's dual-arm pattern
-(kernel.asm's OVBCALL).
+Until a kernel's own wave 1, its arm assembles today's bytes, so kern_small
+and kern_mega stay byte-identical through wave 0. This is OVBCALL/OVSCALL's
+dual-arm pattern (kernel.asm's OVBCALL), kept only for the transition.
 
-### 4.1 The fourth group: who re-points `.boot3`'s COLD_SEG words
+### 4.1 Who re-points `.boot3`'s COLD_SEG words
 
-| who | when | change |
-|---|---|---|
-| `cfx_slide` | kmain_o MARK 10, mono machine at home | after the blob's group: `mov ax, B3_SEG / call cfx_grp`, **+6 transient bytes**. `os88cfx.py` emits a fourth group; `cfx_tab` stays about 195 of 256 |
-| `rp_walk`, ROM kind (osrom.asm:553) | kmain_o's `call far [10]` (rom_patch), its second act, right after `OVLCALL dsk_boot_from_x` and long after `kz_all`, so `.boot3` is aboard | one more `rp_list` over `rt_b3` at `RT_B3SEG`: `mov ax / mov si / mov cx / call rp_list / jc` is 14 ROM bytes (by encoding), 0 RAM. The site words move from `rt_blob` to `rt_b3`, so the lists' total is unchanged. kern_small's ROM has `RT_NB3 = 0` and assembles no call. No ROM_FMT bump: the lists are the ROM's own, and the ROM accepts only the kernel it was cut from (SPEC.md 2.10.4) |
-| `rp_walk`, HMA kind (COLDHMA.SYS) | inside `drv_boot_x`, while `.boot3` is live | the same list. Unlike `rt_win`, it is **not** skipped: `.boot3` outlives the mount |
-| `os88rom.py` | build | classifies `.boot3` sites into `rt_b3`. Today it skips `.cfx` whole in its identity compare (os88rom.py:471) because `cfx_tab` is stamped after the assembly; once `.boot3` carries code the ROM re-points, that skip would leave it unchecked, so compare `.boot3` with `cfx_tab` blanked (`os88cfx.blank()` already exists) |
+| who | kernel | when | change |
+|---|---|---|---|
+| `cfx_slide` | kern_big, kern_emu | kmain_o MARK 10, mono machine at home | after the blob's group: `mov ax, B3_SEG / call cfx_grp`, **+6 transient bytes**. `os88cfx.py` emits a fourth group; `cfx_tab` stays about 195 of 256 |
+| `rp_walk`, ROM kind (osrom.asm:553) | kern_big, kern_small | kmain_o's `call far [10]` (rom_patch), its second act, right after `OVLCALL dsk_boot_from_x` and long after `kz_all`, so `.boot3` is aboard | one more `rp_list` over `rt_b3` at `RT_B3SEG`: `mov ax / mov si / mov cx / call rp_list / jc` is 14 ROM bytes (by encoding), 0 RAM. On kern_big the site words move from `rt_blob` to `rt_b3`, so the lists' total is unchanged. kern_small's ROM gains the same 14 bytes in its wave 1, when `font_init`'s one site moves (`romsmall` is the row). No ROM_FMT bump: the lists are the ROM's own, and the ROM accepts only the kernel it was cut from (SPEC.md 2.10.4) |
+| `rp_walk`, HMA kind (COLDHMA.SYS) | kern_big | inside `drv_boot_x`, while `.boot3` is live | the same list. Unlike `rt_win`, it is **not** skipped: `.boot3` outlives the mount |
+| `os88rom.py` | kern_big, kern_small | build | classifies `.boot3` sites into `rt_b3`. Today it skips `.cfx` whole in its identity compare (os88rom.py:471) because `cfx_tab` is stamped after the assembly; once `.boot3` carries code the ROM re-points, that skip would leave it unchecked, so compare `.boot3` with `cfx_tab` blanked (`os88cfx.blank()` already exists). `.boot3m` (wave 5) is classified as a MODULE image, not as `.boot3` code: it is never run in place, only copied, and the copy is fixed the way every module is (wave 5) |
+| — | kern_mega | — | nothing: no ROM or HMA image is cut from it, its `.cold` stays at COLD_RAM until `mega_enter`, after the drop, and COLD_SEG is the same number in both modes |
 
 A site nobody re-points cannot ship. `os88cfx.py` ("a site ... in no
 section") and `os88rom.py` ("in no section the ROM can reach") already fail
@@ -251,93 +322,193 @@ stage 2 has finished:
 `kmain_o` is entered only through `SPLGATE1`'s `[spl_fseg]` test, and kmain
 zeroes `[spl_fseg]` one instruction before `mem_unblob_x`.
 
-The static half is new `tools/os88ovlchk.py` rules. Each lands with a
-break-it-on-purpose fixture (docs/WRITING-TESTS.md).
+The static half is new `tools/os88ovlchk.py` rules, run on every kernel's
+build. Each lands with a break-it-on-purpose fixture (docs/WRITING-TESTS.md).
 
 | rule | refuses | catches |
 |---|---|---|
 | B1 | any reference into `.boot3` except from `.boot2` outside the load-time cone, from `.boot3` itself, or a `tests/ovlrefs.txt` line that answers *"what runs this after `kz_all` and before `mem_unblob`"* | a resident, `.cold`, `.ovl`, module, ISR or CTRL.DRV/HIBER.DRV expansion of a shared macro calling dead RAM |
 | B2 | the **load-time cone**: anything reachable from `boot2_entry`, `read_run`, `kz_all`, `kz_hd`, `kz_expand`, `spl_tick` (with `spl_chrome`, `vid_detect`, `bvs_apply` and the `spw_near` targets), `spl_isr` or `spl_anim` naming `.boot3`. Also, `boot/boot2.asm` and `kernel/splash.inc` may not name it at all | first-tick code running packed bytes, the SPEC.md 2.9.4 class. `bvs_apply` is the trap: it looks like "display, not splash" |
-| B3 | a CS store, an IVT write or an emitted far pointer naming `B3_SEG` (rule 2b's shape) that outlives the call it is handed to. Two transient hand-downs are legitimate and need a registered exception, not a refusal: DRV_ATTACH's `mov di, %1_att / mov si, cs` (drv_load_at far-calls the hook through DI:SI and returns), and AS_WALK's `push cs / pop es` buffers, which `cw_toast_show` copies and `dsk_find_x` fills | something that outlives kmain |
+| B3 | a CS store, an IVT write or an emitted far pointer naming `B3_SEG` (rule 2b's shape) that outlives the call it is handed to. Two transient hand-downs are legitimate and need a registered exception, not a refusal: DRV_ATTACH's `mov di, %1_att / mov si, cs` (drv_load_at far-calls the hook through DI:SI and returns), and AS_WALK's `push cs / pop es` buffers, which `cw_toast_show` copies and `dsk_find_x` fills. Wave 5's `[rom_mfp]` swap is a third, restored by the same routine before it returns | something that outlives kmain |
 | B4 | a near call or BLOBCALL across `.boot2`/`.boot3`. `.boot3` becomes the fifth address space in the existing near-call check, beside `.text`/`.vga`, `.cold`, `.blob` and `.ovl`. This includes the KGO_PAIR hops (`call bvs_cgo / dw target`), which read their inline word through CS and so must be in the caller's segment | two segments sharing offsets |
 | B5 | a `cs:` reference in `.boot3` naming a label outside `.boot3`/`.boot3b`; and an IMMEDIATE in `.boot3` naming a `.boot2` label that is then read through the blob's CS (`drv_boot_x`'s `add si, bdt_base`, handed to `ovl_spl_msg_drv`, whose `spl_mcs` reads `[cs:si]`), unless registered | the `ovc_buf` trap (section 2), and its mirror, a blob offset carried across |
 | B6 | `OVLCALL` from a `.boot3` body that runs after `drv_boot_x`'s mount (rule 2e, extended); a `KZ_*`, `b2_*` or post-`boot2_entry` label in `.boot3` | the forfeited window half; the two-pass identity |
 | B7 | `section .boot3` in a file `kerndos/kdos.asm` includes (`disk.inc`, `diskw.inc`, `dskwin.inc`, `hbstage.inc`), unless `kerndos/kdlayout.inc` declares it | an undeclared section, placed silently in the DOS core under `-f bin` |
-| B8 | `B3CALL`/`B3SECT` outside the arms that define B3, MACHALF-style | a macro arm that `os88ovlchk` cannot evaluate |
+| B8 | `B3CALL`/`B3SECT` outside the arms that define B3, MACHALF-style. It retires with the fallback column once all four kernels are on | a macro arm that `os88ovlchk` cannot evaluate |
+| B9 | any call or jump into `.boot3m`, from anywhere: it is copied, never run in place, and resident code reaches its copy only through `mod_fp` slots behind the row's segment test (wave 5) | running the image out of the dying section |
 
 **Runtime half: a knob, not shipped.** Under `B3POISON=1`, `mem_unblob_x`
 fills `[floor, blob top)` with a trapping pattern before it compacts, so a
 late call faults at a known CS:IP. The new soak row `b3poison` boots it in a
-private tree and drives a menu, a file open, a Control Panel round and a
-Display switch on MartyPC. To break it on purpose, call a `.boot3` body from
-kmain after `mem_unblob_x` and watch the row go red.
+private tree, on kern_big and on kern_small, and drives a menu, a file open,
+a Control Panel round and a Display switch on MartyPC. To break it on
+purpose, call a `.boot3` body from kmain after `mem_unblob_x` and watch the
+row go red.
 
-## 5. Per arm
+## 5. Per arm (owner, 2026-11-08: generic)
 
-B3 is defined iff `KERN_BIG && !KERN_MEGA`, which covers kern_big, kern_emu
-and all their knob arms.
+B3 is defined on every kernel. kern_big and kern_emu switch it on in wave 0
+(it replaces `.cfx`); kern_small and kern_mega switch it on in their wave 1,
+so wave 0 stays byte-identical on both.
 
 | arm | `.boot3` | where |
 |---|---|---|
-| kern_big, kern_emu (COLD_SLIDE) | yes | B3_RAM = VGABUF_RAM, with the slide prefix at the head |
+| kern_big, kern_emu (COLD_SLIDE) | yes, from wave 0 | B3_RAM = VGABUF_RAM, with the slide prefix at the head |
 | NO_COLD_SLIDE knob | yes | same address. The head is a KVGABUF_SIZE zero pad, which packs to nothing. It needs the section anyway: from wave 1 on, the knob sector (SPEC.md 2.5.3.3.1) is not enough to hold what moved |
 | NO_ROM_COLD knob (the A/B) | yes | B3_RAM = KERN_END. The file gap spans LOW and `.vgabuf` as zeros: they pack to a few bytes, and nothing in LOW is live during the load. BLOB_LIFT is derived there too, so it stops being 0. `buildmatrix` is the row |
-| kern_small | **no**, until the owner says otherwise. `.boot2` has 702 free (MEASURED 4,930 of 5,632), and its disks are only 8 packed sectors from an extra stage-2 call | bodies assemble into `.boot2` through `B3SECT`; `kernel.bin` byte-identical |
-| kern_mega | **no**, for now. `.boot2` has 285 free (6,883 of 7,168), enough for BR-1 and BR-6 | byte-identical. Should it opt in, B3_RAM = KERN_END, past `.mega`'s park scratch and `.vgabuf`, and every `.boot3` body is real mode: `mega_enter` runs after `mem_unblob_x` (kmain's order, kernel.asm:6106-6210), so no selector ever names it |
+| kern_small | **yes, from its wave 1** (section 5.1) | B3_RAM = `.cold`'s end (0xEB7). No slide prefix, no `b3_live` rule; the ROM kind walks `rt_b3` |
+| kern_mega | **yes, from its wave 1** (section 5.2) | B3_RAM = KERN_END (0x2100), behind a zero gap. Every body is real mode: `mega_enter` runs after `mem_unblob_x` (kmain's order, kernel.asm:6106-6210) |
+
+### 5.1 kern_small: it does not need the room, and it opts in anyway
+
+The owner's condition was "unless small truly doesn't need it". Read off the
+code and `build/smallk/kernel.map`:
+
+**What kern_small does NOT need.** Room. Its `.boot2` is 4,930 of 5,632
+(702 free) and its `.ovl` 1,474 of 1,536 (62 free), MEASURED. Its blob wants
+are BR-1 (−3..+1 net) and BR-6 (+25..+65), and BR-6 runs in the first tick,
+so it could not use `.boot3` anyway. Its 128KB boot is not short of RAM:
+guard 5's headroom is 60,928 bytes there (section 2).
+
+**What it gains, which the room question does not measure.**
+
+1. **Resident bytes against the 64KB rule.** Wave 5 takes about **310**
+   static resident bytes out of kern_small (section 8, wave 5), the kernel
+   where a resident byte is dearest and the budget is met exactly at a
+   release. Without a `.boot3` there is nowhere boot-time to carry the
+   pointer half from.
+2. **One ladder.** `font_init` is shared source, today `.boot2` on
+   kern_small and `.boot2` on kern_big, and would become `.boot3` on one and
+   `.boot2` on the other: two homes for one body, under two sets of rules
+   (B2's cone on one, B1-B6 on the other). That divergence is exactly the
+   class of mistake the owner named. Generic, the fallback arm is deleted.
+3. **A shorter blob, which also clears its DMA-page split.** kern_small's
+   non-splash residue (MEASURED spans): the mouse probe (`mouse_init` 365,
+   `mou_idbyte`/`mou_idquiet`/`mou_idjudge` 204, `mou_uart` 42 and the three
+   `mou_ov_*` doors 17: 628), `font_init` + `fi_time` + `fi_pit` 236,
+   `sched_init` 190, `mem_init_x` 66, `snd_init` 59, then `kmain_o` 175 and
+   the `bvw_rowcalc`/`bvw_cgo`/`bvw_kgo` instance 179: **1,533**. Moved, the
+   residue is about 3,396 and the blob falls from 11 sectors to **7** with
+   about 150 free after BR-1 and BR-6. A 7-sector blob at 0xF200 ends
+   exactly at 0x10000, so stage 1's PREDICTED third call (6 + 1 + 4,
+   section 12) goes, provided the derived lift keeps the blob off the page
+   (section 3.3's page term).
+
+**What it costs (PREDICTED).**
+
+- Boot RAM at 128KB: the lift rises to about 160 paragraphs after waves 1
+  and 4 and 192 after wave 5 (B3_END about 0xF329 with the image, + 1,086,
+  rounded up to 0xF800), or 320 with the page term (blob at 0x10000). Only
+  the page term keeps a 7-sector blob off 0x10000: at 160 or 192 paragraphs
+  it straddles the page again, 5 or 4 sectors in. Guard 5's
+  headroom goes from 60,928 to about 59,392 at worst.
+- Load: about 1,700 bytes into the packed tail, about **3.1** packed sectors
+  after the bar, against **8** free before an extra stage-2 int 13h at
+  blob 11 and **10** at blob 7 (t_blobruns' `stage2_calls`, walked by this
+  revision). 0 extra calls.
+- The mouseless 128KB machine: wave 5's claim holds a 512-byte granule for
+  the session, about **+202** heap net of the static saving (section 8,
+  wave 5). That is the one real price, and it lands on kern_small's own
+  machine.
+
+**Recommendation: opt in, with waves 1, 4 and 5.** Waves 2 and 3 have
+nothing to move on kern_small: its blob has no SYSTEM.CFG reader or boot
+driver loader (`drv_boot_x` is a 1-byte `ret`, MEASURED), and its `.ovl` has
+no want named. kern_small's `kernel.bin` is no longer byte-identical from
+its wave 1; `small128` (full) and `smallboot`, `romsmall` (soak) are the rows.
+
+### 5.2 kern_mega: the same gains as kern_big, at no conventional cost
+
+- **`.boot2`**: 6,883 of 7,168, 285 free (MEASURED). The same clusters as
+  kern_big move, minus `as_boot` (kern_mega's is `as_bootc` in `.cold`) and
+  plus `mega_wrprobe` (479) with `mega_gateb` (34) and `mega_gwset` (6),
+  which kmain_o reaches by `BLOBCALL mega_wrprobe` (kernel.asm:5941), if
+  `os88ovlchk` certifies their closure.
+- **`.ovl`**: 5,118, 2 free (MEASURED), and the same WP7/WP8 wants as
+  kern_big. Wave 3's 176 bytes (`vid_ctx_init` 63, `sch_idle_start` 35,
+  `mem_init_x` 78, all in kern_mega's `.ovl`, MEASURED) give it 178 free.
+  **This answers the plan's former question 3 (owner, 2026-11-08): yes.**
+- **`BOOT2_RES` stops being a special case.** The first draft kept kern_mega's
+  `ovc_buf` past its blob and made BOOT2_RES (driver.inc:1054) and
+  `mem_init_x`'s non-small arm B3-conditional. With kern_mega on, `ovc_buf`
+  moves into `.boot3b` there too, BOOT2_RES equals BOOT2_PAD on every kernel
+  that has it, and the conditional disappears.
+- **Costs.** Boot RAM only, on a machine whose floor is 640KB (guard 5's
+  mega arm, `MEGA_BOOT_KB`). Load on a 286 is track-bounded (boot2.asm:311),
+  which t_blobruns does not model yet (section 13 adds kern_mega rows).
+- kern_mega's `kernel.bin` is no longer byte-identical from its wave 1;
+  `megaovl`, `megamod`, `megahiber` (soak) and `megahigh` (full) are the rows.
+
+### 5.3 kern_emu
+
+As kern_big, with its 14-sector blob (the knob sector, kernel.asm's
+BOOT2_KNOBSEC) and `vmm_boot_x` (about 100, PREDICTED) joining wave 2. There
+is no emuk tree here, so its figures are PREDICTED.
 
 ## 6. Per load path
 
 | path | how `.boot3` arrives | note |
 |---|---|---|
-| Floppy at all four geometries | stage 2's packed read, inside its existing runs | priced in section 8 |
+| Floppy at all four geometries | stage 2's packed read, inside its existing runs | priced in section 10 |
 | Hard disk, live USB, live CD (El Torito floppy emulation is the floppy path) | boothd reads `[ksecs]` to KERNEL_SEG + R, and the blob's `kz_hd` expands it in place: the same addresses | **an existing hazard, now more frequent**: an installed disk whose VBR (BLOB_SEG, KZ_RPARA, KZ_HD) predates a KERNEL.SYS with a different lift. Every lift step needs a VBR refresh. Rows: `install`, `hdboot`, `hdtakeboot` |
 | NOKZIP | the plain flat read; B2_KSECS follows MODC_START | the `.boot3` guard covers the read's 511-byte rounding |
-| FLAT_PAYLOAD | none | no stage 2, so `[spl_fseg]` = 0, kmain_o never runs, and nothing calls `.boot3` |
-| 5150 ROM (ROM_COLD, ROM_ADOPT) | always off the disk: the ROM holds only `.cold` | `rp_walk` walks `rt_b3` |
-| COLDHMA.SYS / HMA_DRV | off the disk | the HMA kind walks `rt_b3` inside `drv_boot_x` |
-| Canary reload (`.rerun`) | re-read and re-expanded with everything else | KSIG_OFF stays put (section 7) |
-| Hibernate resume | — | `hb_probe_x` only probes inside kmain_o. The resume runs from `ui_task` long after the drop, and HIBER.DRV's FONT_PICK is its own copy |
-| kern_mega's protected-mode switch | — | off on kern_mega. Even on, the switch comes after the drop |
+| FLAT_PAYLOAD | none | no stage 2, so `[spl_fseg]` = 0, kmain_o never runs, and nothing calls `.boot3`. Wave 5's row stays at segment 0, so its gates send every key through: that knob build has no keyboard mouse from wave 5 on, which is the safe direction (a slot answering `mod_gone` would eat every key) |
+| 5150 ROM (ROM_COLD, ROM_ADOPT), kern_big and kern_small | always off the disk: the ROM holds only `.cold` | `rp_walk` walks `rt_b3` |
+| COLDHMA.SYS / HMA_DRV, kern_big | off the disk | the HMA kind walks `rt_b3` inside `drv_boot_x` |
+| Canary reload (`.rerun`) | re-read and re-expanded with everything else | KSIG_OFF stays put until wave 4 (section 7) |
+| kern_small's 128KB boot | the floppy path | the derived lift costs at most about 3.5KB of guard 5's 60,928 headroom (section 5.1); `small128` (full) boots it. **No kern_big 128KB row (owner, 2026-11-08)**: kern_big boots there and should keep doing so, but nobody runs it that way, and the row that existed was taken out. Its boot arena is a host-side figure instead (section 13) |
+| Hibernate resume, kern_big and kern_emu | — | `hb_probe_x` only probes inside kmain_o. The resume runs from `ui_task` long after the drop, and HIBER.DRV's FONT_PICK is its own copy. Wave 5's claim is in the image like any module (wave 5) |
+| kern_mega's protected-mode switch | — | after the drop. Wave 5's claim is moved above 1MB at the switch like every module the boot loaded (`mod_hiboot`) |
 | Knob loaders (BOOTDIAG, TRACKRUN, CYLRUN) | the same file | the same rules |
 
 ## 7. The canary, BLOBSUM, and integrity
 
-- **KSIG_OFF stays put.** It is 4,096 on kern_big, inside the 4,608-byte
-  plain head, at file sector 21. `.boot3` appends at the far end, and
-  BOOT2_SECS stays 13 until wave 4. `t_canary` is unchanged, and so is
-  BR-1's fix.
-- **The canary moves only if BOOT2_SECS falls.** That is wave 4, and it rides
-  boot-10's derived KSIG_OFF (synth/bugs.md BR-1, step 4).
+- **KSIG_OFF stays put through wave 3.** It is 4,096 on kern_big, inside the
+  4,608-byte plain head, at file sector 21. `.boot3` appends at the far end,
+  and BOOT2_SECS does not change before wave 4. `t_canary` is unchanged by
+  waves 0-3 and 5, and so is BR-1's fix.
+- **The canary moves when BOOT2_SECS falls, on every kernel.** That is wave 4:
+  13 → 7 on kern_big, 11 → 7 on kern_small, 14 → 7 or 8 on kern_emu and
+  kern_mega. BR-1's fix (1) puts KSIG_OFF at 22,528 and was checked at blob
+  lengths 13, 14 and 15 only (synth/bugs.md BR-1), so wave 4 rides boot-10's
+  derived KSIG_OFF (synth/bugs.md BR-1, step 4; phase1.md WP6), which emits
+  each arm's value.
 - **A body that moves out of the blob leaves stage 1's BLOBSUM**
   (SPEC.md 2.9.7). Like `.text`, it is then checked by nothing but the decode.
   That is the same exposure the rest of the kernel has: a misread tail sector
-  runs bad boot code once. This is stated, not fixed.
+  runs bad boot code once. This is stated, not fixed. Wave 5's image is
+  checked once more, by `mod_need`'s header compare, on the copy.
 
 ## 8. What moves, in waves
 
-Spans are MEASURED off `build/kernel.map`'s `.boot2` and `.ovl` symbols.
-Call-site costs are by encoding: BLOBCALL is 4 bytes and a far call 5; a near
-call is 3. Each wave is one reviewable commit. Per CLAUDE.md's Testing rule,
-no wave runs a soak row: each names its rows, and section 13's union runs
-once after the last wave.
+Spans are MEASURED off each kernel's map (`.boot2`, `.ovl` and `.text`
+symbols). Call-site costs are by encoding: BLOBCALL is 4 bytes and a far call
+5; a near call is 3. Each wave is one reviewable commit per kernel it
+reaches. Per CLAUDE.md's Testing rule, no wave runs a soak row: each names
+its rows, and section 13's union runs once after the last wave.
 
 ### Wave 0: the mechanism, with nothing moved
 
-- `.cfx` becomes `.boot3`: the section line, `MODC_START`, the guards
-  (section 13), and the `b3_live` label (today's `cfx_grid` guard).
-- Add the macros `B3SECT`, `B3CALL` and `B2CALL`.
+- On kern_big and kern_emu, `.cfx` becomes `.boot3`: the section line,
+  `MODC_START`, the guards (section 13), and the `b3_live` label (today's
+  `cfx_grid` guard). The `.cfx` block moves into `kernel/boot3.inc`
+  (section 1).
+- Add the macros `B3SECT`, `B3CALL` and `B2CALL` on all four kernels, with
+  the fallback arm on kern_small and kern_mega.
 - Add the fourth group: `cfx_slide` +6, plus `os88cfx.py`, `rt_b3`,
   `os88rom.py` and `rp_walk` in both kinds.
-- Derive the lift (section 3.3).
-- **Guard 5 counts the lift.** Fix BR-154 / boot-18: the sum at
-  kernel.asm:9703 and `KS_BOOTMX` at :9443 become
+- Derive the lift (section 3.3) on the kernels that are on.
+- **Guard 5 counts the lift, on every kernel.** Fix BR-154 / boot-18: the
+  sum at kernel.asm:9703 and `KS_BOOTMX` at :9443 become
   `BLOB_SEG_AT*16 + BOOT2_PAD`. 0 bytes.
-- Add the `os88ovlchk` rules B1-B8.
-- Add the `kernsize` line: `boot3=` used, free under the blob, and the
-  read-end margin. This is WP31's tally, with a third home.
+- Add the `os88ovlchk` rules B1-B9.
+- Add the `kernsize` line: `boot3=` used, free under the blob, the read-end
+  margin, and the boot arena at 128KB (section 13). This is WP31's tally,
+  with a third home.
 - Teach the tools the section: `os88sym` SEGMENTS (`'.boot3': 'B3_RAM'`),
   `os88hot`, `os88ladder`, `os88boot`, `os88modcost`, `tests/coldslide.py`
   and `tests/bootstatus.py`.
+- Move `blobruns` to the fast tier and fix its two model gaps (section 13).
 
 Result:
 
@@ -346,7 +517,9 @@ Result:
 - kern_big and kern_emu: `.boot3` = `.cfx` + 6.
 - Resident: 0.
 
-### Wave 1: three closed clusters (kern_big, kern_emu)
+### Wave 1: closed clusters, per kernel
+
+**kern_big, kern_emu:**
 
 | body | span | its own data, through `cs:` | COLD_SEG sites | caller |
 |---|---:|---|---:|---|
@@ -359,14 +532,72 @@ The blob frees **504 net**. `.boot3` gains 507. That puts its end at about
 0x181B3, 15 bytes inside the lift's certain bound of 0x181C2
 (0x18600 − 64 − 1,022), so the lift stays 96. If the crossings or wave 0's
 growth spend those 15 bytes, the derived lift takes +32 paragraphs: 512 bytes
-of boot RAM, 0 resident. kern_small also has `font_init`, but it assembles into
-its `.boot2` (`B3SECT`) and stays byte-identical.
+of boot RAM, 0 resident.
 
-### Wave 2: the SYSTEM.CFG reader and the boot driver loader, with `ovc_buf`
+**kern_small** (its `.boot3` switches on here, so this is its wave 0 too):
+`font_init` + `fi_time` + `fi_pit` (236), the mouse probe cluster (628),
+`sched_init` (190), `snd_init` (59) and `mem_init_x` (66, OVBCALL's
+kern_small arm): **1,179**, each only if `os88ovlchk` certifies its closure
+(`mouse_init`'s doors and `sched_init`'s callers are the ones to check). The
+blob goes to about 3,751 used, 1,881 free. `.boot3` about 1,190 with
+crossings; the lift goes 96 → about **160** (B3_END about 0xF016, + 1,086,
+rounded to 0xF600), PREDICTED. `rt_b3` gains `font_init`'s site. This wave
+buys kern_small nothing by itself: it is what lets wave 4 shrink the blob.
+
+**kern_mega** (switches on here): `hb_probe_x` (76) and `font_init` +
+`fi_time` + `fi_pit` (238), and `mega_wrprobe` + `mega_gateb` + `mega_gwset`
+(519) if their closure certifies: **314..833**. `.boot2` goes to about
+6,050..6,569 used, 599..1,118 free. `.boot3` sits at KERN_END; the lift stays
+96 at 314 bytes and becomes about 128 at 833 (B3_END 0x21341, + 1,086,
+rounded to 0x21800), PREDICTED.
+
+### Item E: one tick right after the plain head (recommended)
+
+The owner's condition (owner, 2026-11-08): an option only "if it is less
+complex than wave 4". **It is, by a wide margin, and it buys more**, so this
+plan recommends it as its own small change, independent of wave 4.
+
+**What it is.** In `boot/boot2.asm`, after the KZIP head loop (`.head_next`)
+and before the tail loop, one call: `xor ax, ax / mov dx, KZ_SECS -
+KZ_HEADSEC / call spl_tick` (8 bytes by encoding, all in the loader). The
+first tick, which draws the splash, probes the adapter and shows the bar at
+0, then happens as soon as the head is aboard instead of after the first
+tail run. `spl_tick` clamps and stores whatever count it is given
+(splash.inc:235-241), so 0 is a legal first count.
+
+**Why it is legal.** The first tick needs exactly the `SPL_RESIDENT` sectors
+aboard, and under KZIP `KZ_HEADSEC` *is* `SPL_RESIDENT` (boot2.asm's own
+comment at the tail loop). Today the gate is satisfied one tail run late, not
+by necessity: the packed tail is not expanded until `kz_all`, so nothing the
+first tick may use lives in it. The store rule does not change: a first-tick
+store past the head lands where the packed tail will be read, which today
+corrupts packed bytes and after item E is merely overwritten; both are
+forbidden, and boot-4's audit (phase1.md WP6) is the check either way.
+
+**Code touched and risks, against wave 4.**
+
+| | item E | wave 4 |
+|---|---|---|
+| code touched | 8 bytes in `boot2.asm`, one site | about 1,200 bytes of bodies on kern_big (KSW_SECT, `vx_boot_x`, `xm_boot_x`, `wm_init`, `ovd_geom`, `kmain_o`), doors, a second KGO pair's users, `dkb_geom`, kmain's gate |
+| constants it moves | none | BOOT2_SECS, KSIG_OFF (boot-10), the canary's sector, t_blobruns' IMAGES and STAGE2 rows, the VBR on installed disks |
+| preconditions | blob room for 8 bytes: on kern_big wave 1 or boot-7's −41; kern_small (702 free) and kern_mega (285) have it today. Inside the same `%ifndef BOOT_NOSPLASH` as the tail loop's tick | boot-4 and boot-10, waves 1-2 |
+| risks | the bar shows at 0 for one tail run longer; a canary `.rerun` re-ticks at 0, which is the bar's existing "climbs from 0 again" behaviour (splash.inc:239-241) | every risk in section 12 that names wave 4, and a stage-2 call after the bar on 360KB/720KB (section 10) |
+| BR-1's track-bounded head | independent: the tick goes after BR-1's `pop word [b2_runmax]`, outside the widening block, so `.rerun`'s one-shot guarantee is untouched | interacts: a 7-sector blob makes the 360KB/720KB head cross a track (one call more there) and stops it crossing on 1.2MB/1.44MB (one call fewer) |
+| NOKZIP | not applicable: the SPL_RESIDENT gate stays as it is | the same |
+| rows | `splashbar`, `splashspin`, `kzboot`, `canary` | section 13's whole wave-4 list |
+
+What each buys before the bar is section 10's table. In short (PREDICTED):
+item E shows the bar 4 to 18 sectors and one int 13h call sooner on every
+disk; wave 4 alone, 18 sectors sooner on 360KB/720KB and nothing on
+1.2MB, 1.44MB or small360 (where it removes the DMA-split call instead).
+Together they reach 16 sectors and 3 calls before the bar on all five disks.
+
+### Wave 2: the SYSTEM.CFG reader and the boot driver loader, with `ovc_buf` (kern_big, kern_emu, kern_mega)
 
 `drv_boot_x`'s cone, apart from the status line, `xm_boot_x`, the
 adapter-switch bodies it reaches (`bvs_switch`, `bvs_disp_init`, which move in
-wave 4) and the title table `bdt_*` (all four are explained below the table):
+wave 4) and the title table `bdt_*` (all four are explained below the table).
+kern_big's spans:
 
 | body | span |
 |---|---:|
@@ -379,6 +610,12 @@ wave 4) and the title table `bdt_*` (all four are explained below the table):
 | `bxf_sync` (EXF_SYNC's blob instance; `drv_boot_x` is its one caller, driver.inc:5867), if `os88ovlchk` certifies its closure | 50 |
 | **total moved out of the blob** | **1,649** |
 | **added in `.boot3`: `KGO_PAIR b3`**, a second instance of the hop pair (`bvs_cgo` + `bvs_kgo` span 0x170E..0x1746 in the blob, MEASURED) | **56** |
+
+kern_mega's cone is the same list without `bdl_hma` (no HMA kind there) and
+with its own `ovc_cfgname` (36) in the blob: about **1,630** (MEASURED spans
+from build/megak/kernel.map: `ovc_*` 660, `ovl_sc_*` 283, `drv_boot_x` +
+`drv_boot_want` 262, `ovl_fdd_apply` 99, `bdl_*` 272, `bxf_sync` 50,
+`ovl_cfg_load` 4).
 
 **What does NOT move, and why (found by the verifier).**
 
@@ -403,17 +640,17 @@ wave 4) and the title table `bdt_*` (all four are explained below the table):
   (+4 in `.boot2`) and `B2CALL` (+2) here; `SPLCALL spl_reset` goes through
   `[spl_fp]` and works from any segment unchanged.
 
-- **`ovc_buf` moves with them**, into `.boot3b`. On the B3 arms BOOT2_RES
-  then equals BOOT2_PAD. kern_mega is not a B3 arm and keeps `ovc_buf` past
-  its blob, so BOOT2_RES (driver.inc:1054) and `mem_init_x`'s non-small arm
-  stay; they become B3-conditional rather than retired. `ovc_buf` is a
-  `dwf_dskw_read` destination (`ovc_load`, ES:BX). The disk layer bounces a
-  sector that straddles a 64KB page through `dsk_secbuf` (disk.inc's
-  `.drvcut`), so alignment is not a correctness rule here, but start
-  `.boot3b` on a linear 512-byte boundary anyway (SPEC.md 1's rule, and no
-  bounce).
-- The 11 COLD_SEG sites move into group 4: `ovl_sc_load` 4, `ovl_sc_free` 1,
-  `ovc_unpack` 2, `ovc_load` 1, `drv_boot_x` 1, `bdl_publish` 1, `bdl_hma` 1.
+- **`ovc_buf` moves with them**, into `.boot3b`, on every kernel that runs
+  this wave. BOOT2_RES then equals BOOT2_PAD everywhere, and BOOT2_RES
+  (driver.inc:1054) and `mem_init_x`'s non-small arm reduce to that (section
+  5.2). `ovc_buf` is a `dwf_dskw_read` destination (`ovc_load`, ES:BX). The
+  disk layer bounces a sector that straddles a 64KB page through `dsk_secbuf`
+  (disk.inc's `.drvcut`), so alignment is not a correctness rule here, but
+  start `.boot3b` on a linear 512-byte boundary anyway (SPEC.md 1's rule, and
+  no bounce).
+- The 11 COLD_SEG sites move into group 4 on kern_big: `ovl_sc_load` 4,
+  `ovl_sc_free` 1, `ovc_unpack` 2, `ovc_load` 1, `drv_boot_x` 1, `bdl_publish`
+  1, `bdl_hma` 1. kern_mega re-points none (section 4.1).
 - Crossings, PREDICTED:
   - kmain_o → `drv_boot_x`: +1 in `.boot2`.
   - `drv_boot_x` → `ovl_spl_msg_cfg/drv/boot`, which stay with the status
@@ -421,30 +658,35 @@ wave 4) and the title table `bdt_*` (all four are explained below the table):
     kmain_o's other status-line calls already expect `retf`.
   - `drv_boot_x` → `xm_boot_x`: `B2CALL`, +1. `xm_boot_x` stays, because it
     shares `bvs_cgo` with `vx_boot_x`.
-  - `ovc_load` → `cfx_cfgname` is now near: −2.
+  - `ovc_load` → `cfx_cfgname` is now near: −2 (kern_big, kern_emu).
   - kern_emu's `vmm_boot_x` may join (about 100, PREDICTED).
 - `os88ovlchk` B1-B6 must certify the closure before the commit. A body it
   rejects stays in `.boot2`.
 
-Result (corrected by the verifier; the first draft moved `bdt_*` and missed
-the pair and the doors): `.boot2` frees about **1,640** (1,649 moved, less
-kmain_o's +1 and the `bvs_disp_init` door's +4). `.boot3` grows about
-**1,715** (1,649 + the 56-byte pair + about +10 of crossings: three status-line
-`B2CALL`s +6, `xm_boot_x` +1, `bvs_switch` +1, `bvs_disp_init` +2, with
-`cfx_cfgname` near −2), plus 512 nobits. The derived lift goes 96 → **224**
-paragraphs (PREDICTED). It is bound by the read: about 0x181B3 + 1,715 =
-0x18866, + 1,086 = 0x18CA4, rounded up to 0x18E00.
+Result on kern_big (corrected by the verifier; the first draft moved `bdt_*`
+and missed the pair and the doors): `.boot2` frees about **1,640** (1,649
+moved, less kmain_o's +1 and the `bvs_disp_init` door's +4). `.boot3` grows
+about **1,715** (1,649 + the 56-byte pair + about +10 of crossings: three
+status-line `B2CALL`s +6, `xm_boot_x` +1, `bvs_switch` +1, `bvs_disp_init` +2,
+with `cfx_cfgname` near −2), plus 512 nobits. The derived lift goes 96 →
+**224** paragraphs (PREDICTED). It is bound by the read: about 0x181B3 +
+1,715 = 0x18866, + 1,086 = 0x18CA4, rounded up to 0x18E00. On kern_mega the
+lift goes to about **256** (B3_END about 0x219E2, + 1,086, rounded to
+0x22000), PREDICTED.
 
-### Wave 3: relieve `.ovl` (kern_big, kern_emu)
+### Wave 3: relieve `.ovl` (kern_big, kern_emu, kern_mega)
 
-| body | span | caller |
+| body | span (kern_big; kern_mega the same, MEASURED) | caller |
 |---|---:|---|
 | `vid_ctx_init` | 63 | `OVLCALL` → `B3CALL`, 0 bytes |
 | `sch_idle_start` | 35 | `OVLCALL` → `B3CALL`, 0 bytes |
 | `mem_init_x` (OVBCALL's kern_big arm; its one `wm_cbd` site leaves group 2 for group 4; it runs after the slide, which re-points both) | 78 | OVBCALL, 0 bytes |
 | **total** | **176** | |
 
-All three run before the mount. `.ovl` goes from 1 free to **177**.
+All three run before the mount. `.ovl` goes from 1 free to **177** on
+kern_big and from 2 to **178** on kern_mega (owner, 2026-11-08: kern_mega
+opts in; the plan's former question 3). kern_small's `.ovl` has 62 free and
+no want named, so it has no wave 3.
 
 **Option**, if BR-157/158 and WP8 want more: the clock ladder from `clk_init`
 (one OVLCALL entry, MARK 6). It is **1,782 bytes, MEASURED**: one contiguous
@@ -455,9 +697,28 @@ from outside `clk_init`'s cone (they are `.ovl` today, so none is reached after
 the mount, but B1 asks the same of the drop). Load time: moving `.ovl` bytes
 costs about 0 read. `.ovl` is in the same packed stream (file 0xCE00, MEASURED),
 and the zeros it leaves behind pack to almost nothing. The lift absorbs about
-1.0 byte of R per byte moved.
+1.0 byte of R per byte moved. Whole or in part is question 8, still open.
 
-### Wave 4: the owner's call — `.boot2` back to its original purpose
+### Wave 4: `.boot2` back to its original purpose, on every kernel (owner, 2026-11-08)
+
+The owner's answer: *"why keep something bigger than it needs to be? The
+quicker splash is a benefit."* It is part of the plan proper.
+
+**Preconditions.**
+
+- **boot-4** (BR-153, phase1.md WP6): SPL_RESIDENT derived from
+  `SPL_RES_SIZE`, after its audit of every first-tick store for an address in
+  sectors 5-8. It lowers SPL_RESIDENT, and with it KZ_HEADSEC, from 9 to 5,
+  so the head the canary and item E sit on changes shape.
+- **boot-10** (phase1.md WP6): KSIG_OFF computed per build arm by a generator
+  `t_canary` does not import, because wave 4 moves every blob length and BR-1's
+  sector 57 was checked only at 13-15 (section 7).
+- Waves 1 and 2 on that kernel, so that what remains in `.boot2` is the
+  residue below.
+- `blobruns` in the fast tier with its model gaps fixed (section 13), so the
+  STAGE2 ratchet fails `make` if the new layout spends a stage-2 call.
+
+**kern_big and kern_emu.**
 
 1. **The adapter switch's boot instance (KSW_SECT) moves, apart from
    `bvs_apply`.** That is `bvs_avail_test` through `bvs_kgo`: **614,
@@ -490,63 +751,344 @@ and the zeros it leaves behind pack to almost nothing. The lift absorbs about
    - the first-tick probe, 407 (`vid_detect`, `vid_init`, `bvs_apply`,
      `bvs_vtab`);
    - the status line, 415.
+
+   With `bdt_*` (92) and the doors, about **3,330**. BOOT2_SECS falls from 13
+   to **7** (kern_emu from 14 to 7 or 8), with about 254 free for BR-1's head bound (+12),
+   BR-6 (+60..+110), item E (+8) and BR-147 (+7).
 6. **Then `.boot2` is a ratchet.** A new host gate keeps the list of
    non-splash `.boot2` bodies in `tests/blobbodies.txt`, and that list only
    shrinks. That is the owner's "original purpose", enforced by the build.
-7. **Then BOOT2_SECS can fall from 13 to 7 or 8.** That needs boot-4 and
-   boot-10 (synth/phase1.md WP6), and `t_blobruns`' IMAGES and STAGE2 rows
-   move with reasons. On 360KB it is 5-6 fewer sectors before the bar, about
-   110-130 ms (PREDICTED). It is still two stage-1 calls there: KERNEL.SYS
-   starts at LBA 14 (C0 H1 S6) on os8088-360 and -720, so only a blob of **4**
-   sectors or fewer is one call (`t_blobruns.py --sectors 4`, run by the
-   verifier). The "6 or fewer" figure is small360's, where KERNEL.SYS starts
-   at LBA 12.
+7. **The blob is one stage-1 call only at 4 sectors or fewer** on
+   os8088-360 and -720, where KERNEL.SYS starts at LBA 14 (C0 H1 S6);
+   `t_blobruns.py --sectors 4`, run by the verifier. A 7-sector blob is still
+   two calls there (4 + 3, walked by this revision). The "6 or fewer" figure
+   is small360's, where KERNEL.SYS starts at LBA 12.
+
+**kern_small.** `kmain_o` (175) and the `bvw_rowcalc` + `bvw_cgo` + `bvw_kgo`
+instance (179; a KGO pair, so it moves with every caller or stays whole):
+about **355**. Residue about 3,396, BOOT2_SECS 11 → **7** (section 5.1),
+with the page term keeping the blob off 0x10000.
+
+**kern_mega.** `vx_boot_x` + `vx_blk` (199), `wm_init` (34), `ovl_dock_geom`
++ `ovd_geom` (75), KSW_SECT less `bxf_sync` (699, MEASURED from
+build/megak/kernel.map) and `kmain_o` (189): about **1,196**. Residue about
+3,240 with `mega_wrprobe` moved in wave 1, BOOT2_SECS 14 → **7**; about
+3,760 and **8** if it stayed.
+
+**The earlier bar it buys, quantified (PREDICTED; section 10 has the
+table).** On the 8088's cylinder-bounded read, the first tick waits for the
+end of the cylinder the head ends in. Wave 4 alone therefore shows the bar
+**18 sectors sooner on 360KB and 720KB (about 0.4 s)**, because today's head
+ends exactly on a cylinder boundary there and the first tail run is a whole
+cylinder; on **1.2MB, 1.44MB and small360 it shows it no sooner**, because
+the first tail run grows by what the blob lost. On small360 it removes the
+DMA-split call instead (about 0.2 s, if the page term lands). With item E in
+place, wave 4 adds the sectors the blob lost: 6 on kern_big's disks, about
+**0.13 s** on 360KB/720KB and **0.07 s** on 1.2MB/1.44MB, and 4 on small360,
+about 0.09 s.
+
+### Wave 5: the keyboard mouse's pointer half (owner, 2026-11-08)
+
+The owner's shape, preferred over a `KBMOUSE.DRV` module: the pointer half of
+the keyboard mouse rides `.boot3`; before the section is dropped, when no
+mouse has been found, it is copied into a heap claim; the claim is dropped
+when a mouse first speaks. **No disk read, no file on any disk, no
+system-disk dependency**, and so none of rt-2's boot cache
+(followup-decisions-6-8.md item 6's first dependency is gone). It needs only
+wave 0's section on that kernel and is independent of waves 2-4, with one
+transient cost if it lands before wave 2: `.boot3` reaches `mod_need`, a near
+`.cold` body, only through a KGO hop, and `KGO_PAIR b3` arrives in wave 2.
+Before that, and on kern_small, which has no wave 2, wave 5 brings the pair
+itself (56 transient bytes, 0 resident; found by the second verifier).
+
+**What moves (MEASURED spans, identical on all three maps).** Read off
+kernel/mouse.inc:2451-3632 and build/kernel.map, build/smallk/kernel.map,
+build/megak/kernel.map:
+
+| moves into `.boot3m` | span | why it can |
+|---|---:|---|
+| `kbm_tab` (the eight directions) | 24 | read-only; read through `cs:` in the image (+1 byte at each of five sites, in the image: `.find`'s `[bx]`, and `kbm_move`'s `[bx+2]` twice, `[bx]` and `[bx+1]`). `menu_kbnav`, called with BX on the row, reads no table byte |
+| `kbm_key`'s body | 60 | entered only from `ui_task` (ui.inc:214) and `kbm_poll0`, task context |
+| `kbm_btn` | 43 | from `kbm_key` and `kbm_p5spend` only |
+| `kbm_rclick` | 20 | from `kbm_key` only |
+| `kbm_move` | 147 | from `kbm_key` only |
+| `kbm_p5spend` | 16 | from `kbm_poll0` and `kbm_ui`'s tail only |
+| `kbm_ui` | 69 | from ui.inc:722, behind `[mou_ptr]` |
+| `kbm_post` | 9 | from `kbm_btn`, `kbm_rclick` and `kbm_ui` only |
+| **total** | **388** | |
+
+**What stays resident, and why.**
+
+- `kbm_isr` and `KBM_SCAN`: IRQ1's handler for every machine. It wakes the
+  UI task on a key and guards the BIOS buffer (mouse.inc:2893-2950).
+- `kbm_shf` (10): read by `kbm_isr`'s keypad-5 test as well.
+- `kbm_pollm`/`kbm_poll`/`kbm_poll0` (39): `menu_track`, `ui_drag`,
+  `ui_grow` and `osapi_mouse` call them on every machine, because they eat the
+  keys a modal loop would leave wedged in the BIOS buffer and tail-jump to
+  `kbd_ovspend` (followup-decisions-6-8.md's correction to WP3).
+- `kbm_pass` (2), the `kbm_key` stub's refusal.
+- `mou_clamp` and `mou_evfill`: shared with the serial and PS/2 paths.
+- **The state, 15 bytes plus `kbm_p5`, `kbm_eat`, `kbm_old9`, `kbm_ivec`
+  and `kbd_ae`**. `kbm_ev` (8) must be DS-addressed, because `kbm_post`
+  hands it to `evq_push` as DS:SI. `kbm_step`, `kbm_lastk`, `kbm_last`,
+  `kbm_btick` and `kbm_slast` (7) are written by the moved code, and on
+  kern_mega the image runs as a module's CODE half above 1MB, which cannot be
+  written. Moving them would also cost a segment load per access, for 7 bytes.
+  So "their data" here is the table; the state stays in DS on all four
+  kernels, the module convention (kernel/mod.inc: "DATA stays in the kernel
+  segment").
+
+**The mechanism: a module row adopted from memory.** It reuses kernel/mod.inc
+whole: its row, its slots, its thunks' gate, its header check, its fixups and
+its drop.
+
+1. **The image.** `.boot3m`, a section of its own at vstart=0 after `.boot3`
+   in the file (before MODC_START, so it is in KERNEL.SYS and in
+   `kernel.bin`, and `os88mod.py` does not cut it). It begins with a module
+   header (MOD_H_*: 12 bytes, plus 2 per entry, 18 with three entries) and
+   holds the 388 bytes above with their crossings: about **443** bytes, an
+   upper estimate (header 18, far calls out at +2 each, 20, the five `cs:`
+   prefixes, entry exits 6, and a `[mou_ptr]` test in `kbm_ui`, 7).
+   An assembly-time guard keeps it at or under 512.
+   - **The exits, checked by the second verifier.** The three entries are
+     far-entered, so every exit `kbm_key`'s body can take (`kbm_pass`,
+     `kbm_btn`, `kbm_rclick`, `kbm_move`) and `kbm_p5spend`'s become `retf`
+     for 0 bytes; `kbm_ui`'s tail `jmp kbm_p5spend` then still works. The one
+     body with two contracts is `kbm_btn`: `kbm_key` tail-jumps to it and
+     `kbm_p5spend` near-calls it, so that call becomes `push cs / call
+     kbm_btn` (+1). No door is needed, so the 6 above is slack.
+   - The image's labels need names of their own (the flat namespace):
+     the resident stub keeps the name `kbm_key`, so ui.inc:214 and
+     `kbm_poll0` are not edited.
+2. **The row.** `MOD_KBM`, after every existing id (MOD_SETS's precedent: a
+   row that is not an image of its own goes last, so no image's id moves),
+   with a `MODFP KBFP, MOD_KBM, 3` block. Its file name is one no disk
+   carries, `'KBMOUSE',0`, which the RAM view shows as the claim's name
+   (`osapi_img_name`).
+3. **The adoption, in `kernel/boot3.inc` (0 resident bytes).** At kmain_o's
+   end, after every boot-time probe (`mouse_init`, the PS/2 reset, `drv_boot_x`
+   and its USBMOUSE.DRV, kern_emu's `vmm_boot_x`) and before kmain zeroes
+   `[spl_fseg]`: if `[mou_ptr]` is 0, install a door in `[rom_mfp]` for one
+   call, `mov al, MOD_KBM / call b3_cgo / dw mod_need`, and put the saved
+   door back. `mod_need` is a near `.cold` body (it leaves through
+   `kretc_es`), so `.boot3` reaches it through its own KGO hop, the way the
+   blob's `drv_boot_x` does today (`call bvs_cgo / dw mod_need`,
+   driver.inc:5829).
+   The door answers ROMF_SIZE and ROMF_COPY for MOD_KBM's row out of
+   `.boot3m` (the same "a door that has the bytes" `mod_need` already asks
+   first, SPEC.md 2.10.5) and forwards every other verb, ROMF_FIX included,
+   to the door it replaced, so a ROM machine's ROM still re-points.
+   `mod_need` then claims top-down (`mem_claimp_hi_x`, MEM_K_MOD, never
+   moves), copies, compares the header, arms the three slots and runs the
+   kernel's own fixup: `mod_cfix` on kern_big and kern_emu (COLD_SLIDE), the
+   ROM's ROMF_FIX on kern_small, `mod_hi` at the switch on kern_mega.
+   - The predicate is `[mou_ptr]`, "has a pointer SPOKEN", not `[mou_idany]`:
+     a mouse that answered identify but never sends a packet still needs the
+     keyboard mouse (SPEC.md 9.6.6). The price is that a machine whose serial
+     mouse has not been touched by the end of the boot holds the claim until
+     its first packet, a few seconds.
+   - kern_mega has no ROM_ADOPT and so no `[rom_mfp]` and no `rom_none`
+     (kernel.asm:4693-4711 are under `%ifdef ROM_ADOPT`). It gets the door
+     word for this one use: **+4 bytes of conventional `.text`**, initialised
+     data and not `.bss`, because `mod_need` far-calls it on every load for
+     the rest of the session and a zero seed is a call to 0000:0000. Its seed
+     is `COLD_SEG:mod_gone`, which refuses SIZE and COPY with every register
+     kept, as `rom_none` does, and is valid in protected mode, COLD_SEG being
+     selector-compatible there (KERNEL_SEG, `rom_none`'s seed segment, is
+     not). And **about +16 of `.cold`**, by encoding: the ROMF_SIZE and
+     ROMF_COPY arms that `mod_need` assembles only under ROM_ADOPT. That
+     `.cold` runs above 1MB after the switch. (Corrected by the second
+     verifier; the first figure was +4 of `.bss` and +3 of `.cold`.)
+4. **The gates, resident.** A slot that is not armed answers `mod_gone`,
+   CF = 1, and for `kbm_key` CF = 1 means "spent": it would eat every key. So
+   every resident entry tests the ROW, not `[mou_ptr]`:
+   - `kbm_key` becomes a 12-byte stub: `cmp word [row], 0 / je kbm_pass /
+     call far [KBFP] / ret`. The image's own `kbm_key` keeps the
+     `[mou_ptr]` test, for the passes between a settle and the drop.
+   - `kbm_poll0`'s `call kbm_p5spend` becomes the same gate inline (+8).
+   - ui.inc:720's site tests the row and far-calls slot 1 (+1).
+5. **The drop.** `mou_hotplug`'s `.have` arm (mouse.inc:1380), which runs
+   once, on the UI task, on the first pass after `[mou_seen]` is set by any
+   backend (`mou_settle` for serial, PS/2 and the OSAPI feed USBMOUSE.DRV and
+   VMMOUSE.DRV use; kern_emu's `vmm_boot_x` sets it directly,
+   vmmouse.inc:338): **11 resident bytes**. `mou_hotplug` is `.text`, which
+   has no KGO hop (KGO_PAIR is expanded only in CTRL.DRV, HIBER.DRV and the
+   blob), and `mod_drop` is a near `.cold` body, so the site is `call
+   COLD_SEG:kbm_dropf` (5, and one more COLD_SEG word for the slide, the ROM
+   and the HMA image to re-point) into a 6-byte `.cold` door, `mov al,
+   MOD_KBM / call mod_drop / retf`. (Corrected by the second verifier: the
+   first figure, 7 "through the KGO hop", assumed a hop `.text` does not
+   have.) A drop of an empty row is a no-op (mod_free_row's first compare),
+   so a machine that never adopted pays one call, once.
+   - **Every setter of `[mou_ptr]`, found by the second verifier**, and each
+     sets `[mou_seen]` in the same store run, so `.have` follows each one:
+     `MOU_SETTLE_STORES` (mouse.inc:1170), reached through `mou_settle`
+     (:1184) from the serial byte path (:3939), the PS/2 packet path
+     (:2331) and the OSAPI feed USBMOUSE.DRV and VMMOUSE.DRV use (:4046),
+     and inline in kern_small's serial path (:3941); and `vmm_boot_x`
+     (vmmouse.inc:338-339), in the blob, which never adopts. Nothing clears
+     it, and hibernate brings it back with the image (hiber.inc touches
+     neither byte).
+   - All but `vmm_boot_x` run in interrupt or worker context, where nothing
+     may free a claim, so the drop cannot sit at the stores themselves.
+
+**Price, per kernel (ESTIMATED: nothing is built).**
+
+| | kern_big | kern_emu | kern_small | kern_mega |
+|---|---|---|---|---|
+| static resident out | 388 | 388 | 388 | 388 (364 if the code half cannot be read, and `kbm_tab` stays in DS) |
+| resident glue in: the `kbm_key` stub 12, `kbm_poll0` +8, ui.inc +1, five `retf` shims for the image's calls out (`kbm_shf`, `cur_move`, `sch_wake_ui`, `mou_evfill`, `wm_front`; `mou_clamp`, `gfx_lock`, `gfx_unlock`, `wm_hit` already have doors) 20, the row 4, the name 8, three slots 12 (`.bss`), the `mod_fpt` word 2, the drop 11 (its `.text` site 5 and `.cold` door 6) | 78 | 78 | 78 | 82 (the door word; and about +16 of `.cold` above 1MB, not conventional) |
+| **net static resident** | **−310** (KERN_BUDGET, and every adapter class, the code being `.text`) | **−310** | **−310** against the 64KB rule | **−306** conventional (MEGA_RESIDENT), −282 with the table in DS |
+| a machine with a mouse that speaks during the boot | −310 for the session; nothing is ever claimed | the same; with the VMware pointer (vmm_boot_x) it is never adopted | −310 | −306 |
+| a machine whose mouse first speaks after the boot (USBMOUSE.DRV, a late serial mouse) | 512 held until `.have`, then −310 | the same | the same | the same, in extended memory after the switch |
+| **a mouseless machine** | **+202** net for the session: one 512-byte granule (MEM_GRAN 32 paragraphs, memory.inc:468-469) against 310 out | +202 | **+202 on the 128KB machine** | **0 conventional** after `mega_enter` (512 held above 1MB as an `mx_tab` block); 512 conventional only between the adoption and the switch. If `mod_hi` refuses (no XMEM block), it stays low as an LDT selector pair and the cost is +206 |
+| packed sectors after the bar | about +0.25: the 388 bytes move within the same packed stream (`.text` to `.boot3m`), so KERNEL.SYS grows only by the header, the growth and the glue, about +133 unpacked | the same | the same, of its 8-10 free | the same |
+| boot time | 0 before the bar; about 1 ms more decode and, on a mouseless machine, about 1-2 ms of copy at 4.77 MHz | | | |
+
+The granule is the one structural cost, and it is the followup's correction
+again: any image up to 512 bytes holds 512 for the session, and one past 512
+holds two (about +700 net). The `%error` at 512 makes that growth a decision,
+not an accident.
+
+**Hibernate resume.** kern_big and kern_emu write conventional memory whole,
+`0000:0000` to `[mem_top]` (SPEC.md 87.3), so the claim, its row in
+`mod_tab` and its slots in `.bss` are all in the image, and a resume puts them
+back together. The pointer's BUILD_NUM, MOD_STAMP and `[api_coldseg]` fields
+guarantee the same kernel with `.cold` in the same place, so the image's
+re-pointed COLD_SEG words are right on wake. A mouseless session resumed on a
+machine that now has a mouse is found by `mou_hotplug` and dropped at `.have`,
+as at any boot. On kern_mega the claim is above 1MB, an `mx_tab` block, which
+the extended section carries like every module (SPEC.md 87.9). kern_small has
+no hibernate.
+
+**kern_mega, an LDT selector claim.** The adoption runs in real mode, so the
+claim is a segment and `mod_need` arms the slots with it. At the switch,
+`mega_mods_fix` gives the slots the conventional code alias and `mod_hiboot`
+moves the image above 1MB like every module the boot loaded, which needs
+`MOD_KBM`'s bit in `MOD_HIOK`. The image's far calls name KERNEL_SEG and
+COLD_SEG, which are selector-compatible constants on kern_mega, so nothing in
+it needs converting. `mod_free_row`'s kern_mega arm already frees an
+above-1MB pair. What must be checked before the commit: that the code half
+`mega_modhif` builds can be READ, since `kbm_tab` is read through `cs:`; if
+not, the table stays in DS on kern_mega (+24 there).
+
+**Risks particular to it** are R15-R18 (section 12). The rows are section 13's
+wave-5 list, with one new row.
 
 ## 9. The ledger, per kernel
 
 Today's figures are MEASURED. After-wave figures are PREDICTED. "Free" is
-inside the fixed rung.
+inside the fixed rung. Guard 5's headroom is at 128KB:
+128 × 1,024 − 2,560 − BLOB_SEG_AT × 16 − BOOT2_PAD.
 
 **kern_big** (kern_emu the same, with its 14-sector blob; there is no emuk
 tree here, so its figures are PREDICTED):
 
-| | `.boot2` used / free (of 6,656) | `.ovl` free (of 5,120) | `.boot3` (+ nobits) | BLOB_LIFT (para) | guard 5 headroom | resident | KERNEL.SYS |
+| | `.boot2` used / free | `.ovl` free (of 5,120) | `.boot3` (+ nobits) | BLOB_LIFT (para) | guard 5 headroom | resident | KERNEL.SYS |
 |---|---|---:|---|---:|---:|---:|---|
-| today | 6,652 / **4** | **1** | 530 (`.cfx`) | 96 | 22,016 | — | 85,168 (167 sectors) |
+| today | 6,652 / **4** of 6,656 | **1** | 530 (`.cfx`) | 96 | 22,016 | — | 85,168 (167 sectors) |
 | wave 0 | 6,652 / 4 | 1 | 536 | 96 | 22,016 | 0 | ~same |
 | wave 1 | ~6,148 / **~508** | 1 | ~1,043 | 96 | 22,016 | 0 | ~+450 (+1 sector) |
+| item E | ~6,156 / ~500 | 1 | ~1,043 | 96 | 22,016 | 0 | ~same |
 | wave 2 | ~4,508 / **~2,148** | 1 | ~2,758 + 512 | ~224 | ~19,968 | 0 | ~+1,950 (+4 sectors) |
 | wave 3 | same | **177** | ~2,934 + 512 | ~224 | ~19,968 | 0 | ~+1,950 |
-| wave 4 | ~3,330 / ~3,326 at 13 sectors (the status line, the loader, the splash, the first-tick probe, and `bdt_*` 92, which stays) | 177 | ~4,170 + 512 | ~320 | grows as BOOT2_SECS falls | **−8** | about net 0 against today once the blob is 7 sectors |
+| wave 4 | ~3,330 / **~254** of 3,584 (7 sectors) | 177 | ~4,170 + 512 | ~320 | ~21,504 (the blob is 3,072 shorter) | **−8** | about net 0 against today (~167 sectors) |
+| wave 5 | same | 177 | ~4,170 + 512, and `.boot3m` ~443 | ~320 | ~21,504 | **−318** | ~+130 bytes (0..1 sector) |
 
 The wave 2 and 3 rows are the verifier's correction (section 8 wave 2):
 `bdt_*` stays in the blob, `bxf_sync` moves, and `.boot3` gains its own
-56-byte KGO_PAIR. The wave 4 row was not re-derived beyond that.
+56-byte KGO_PAIR. The wave 4 row is re-derived by this revision: the residue
+is 3,215 MEASURED plus `bdt_*` and the doors; the lift is bound by the read
+(B3_END about 0x18DEA, + 1,086 = 0x19228, rounded to 0x19400); and the 6
+blob sectors given back pay for the lift's extra 96 paragraphs. Wave 5's
+image fits under the same rounding (B3_END about 0x18FA5, + 1,086 = 0x193E3),
+so the lift does not move.
 
-- **Boot-time arena at 128KB** (from the blob's nobits top, 0x1A200, to the
-  top of RAM; the boot sector and its stack are dead by kmain_o): 24,064
-  today. After wave 2 it is about 22,528: the lift is +2,048 and
-  `ovc_buf`'s move gives back 512. `small128` covers kern_small only, so
-  there is no kern_big 128KB row (section 15, question 5).
-- **Disk:** the freed blob bytes become zero padding inside the fixed rung,
-  so there is no disk saving until wave 4. The cost is 0..1 cluster on a
-  system disk per wave.
+- **The boot-time arena at 128KB, as a host figure, not a row (owner,
+  2026-11-08).** From the blob's nobits top to the top of RAM (the boot sector
+  and its stack are dead by kmain_o): 24,064 today (0x1A200); about 22,528
+  after wave 2 (the lift +2,048, `ovc_buf`'s move −512); about 24,064 again
+  after waves 4-5 (0x19400 + 3,584 = 0x1A200). `kernsize` prints it (section
+  13). There is no kern_big 128KB boot row and none is proposed.
+- **Disk:** the freed blob bytes are zero padding inside the fixed rung until
+  wave 4 shortens it. The cost is 0..1 cluster on a system disk per wave.
 
-**kern_small:** `.boot2` 4,930 / 702 free, `.ovl` 1,474 / 62 free. No
-section, 0 resident, 0 disk, `kernel.bin` byte-identical in every wave.
+**kern_small** (BOOT2_SECS 11; `.ovl` window 1,536):
 
-**kern_mega:** `.boot2` 6,883 / 285 free, `.ovl` 5,118 / 2 free. No section,
-0 conventional and 0 above 1MB, byte-identical. Its `.ovl` will want the
-same relief as kern_big's (question 3).
+| | `.boot2` used / free | `.ovl` free | `.boot3` | BLOB_LIFT (para) | guard 5 headroom | resident | KERNEL.SYS |
+|---|---|---:|---|---:|---:|---:|---|
+| today | 4,930 / **702** of 5,632 | 62 | — | 96 | 60,928 | — | 54,224 (106 sectors) |
+| wave 0 | same, byte-identical | 62 | — | 96 | 60,928 | 0 | same |
+| wave 1 | ~3,751 / ~1,881 | 62 | ~1,190 | ~160 | ~59,904 | 0 | ~+1,100 (+2 sectors) |
+| item E | +8 | 62 | | | | 0 | same |
+| wave 4 | ~3,400 / ~150 of 3,584 (7 sectors), after BR-1 and BR-6 | 62 | ~1,545 | ~160, or 320 with the page term | ~61,952, or ~59,392 with the page term | 0 | ~−600 against today (~−1 sector) |
+| wave 5 | same | 62 | ~1,545, and `.boot3m` ~443 | ~192 / 320 | ~61,440 / ~59,392 | **−310** | ~+130 (0..1 sector) |
 
-## 10. Load time after the bar (PREDICTED)
+Its boot arena at 128KB: from the blob plus BOOT2_PAD (0x10800 today) to
+128KB, 63,488; about 61,952 (page term) to 64,512 after wave 4, and 64,000
+without the page term after wave 5 (host figures).
 
-**Before the bar, nothing changes in waves 0-3.**
+**kern_mega** (BOOT2_SECS 14; boots on 286+, floor 640KB):
 
-- Stage 1 still reads the fixed 13-sector rung.
-- The first tick still follows the 9-sector plain head.
-- `.boot3` is the end of the packed tail, which the bar already measures (its
-  total is KZ_SECS − KZ_HEADSEC, so it counts the new sectors itself).
+| | `.boot2` used / free (of 7,168) | `.ovl` free | `.boot3` | BLOB_LIFT (para) | resident | KERNEL.SYS |
+|---|---|---:|---|---:|---:|---|
+| today | 6,883 / **285** | **2** | — | 96 | — | 115,872 (227 sectors) |
+| wave 0 | same, byte-identical | 2 | — | 96 | 0 | same |
+| wave 1 | ~6,569..~6,050 / ~599..~1,118 | 2 | ~314..~833 | 96..~128 | 0 | ~+300..+800 (+1..2 sectors) |
+| wave 2 | ~4,430 / ~2,738 (from 6,050) | 2 | ~2,530 + 512 | ~256 | 0 | ~+1,900 |
+| wave 3 | same | **178** | ~2,706 + 512 | ~256 | 0 | same |
+| wave 4 | ~3,240 / ~344 of 3,584 (7 sectors), or ~3,760 of 4,096 (8) if `mega_wrprobe` stayed | 178 | ~3,900 + 512 | ~320 | 0 conventional | about net 0 |
+| wave 5 | same | 178 | + `.boot3m` ~443 | ~320 | **−306** conventional (MEGA_RESIDENT) | ~+130 |
+
+Guard 5's mega arm (MEGA_BOOT_KB) has room for all of it; its figure is not
+re-derived here.
+
+## 10. Load time (PREDICTED)
+
+### 10.1 Before the bar
+
+**Waves 0-3 and 5 change nothing before the bar.** Stage 1 still reads the
+fixed rung, the first tick still follows the plain head, and `.boot3` is the
+end of the packed tail, which the bar already measures (its total is KZ_SECS −
+KZ_HEADSEC, so it counts the new sectors itself).
+
+**Item E and wave 4 do.** On an 8088 stage 2 bounds each run at the cylinder,
+so the first tick today waits for the end of the cylinder the head ends in.
+Sectors and int 13h calls before the first tick, walked with t_blobruns' own
+`runs()` and `stage2_calls()` logic over the shipped images (PREDICTED until
+`tools/os88boot.py` confirms; kern_small's stage-1 DMA split is not in the
+model and would add a call to its "today" and item-E cells):
+
+| disk | today (blob 13; small 11) | item E | wave 4 (blob 7) | both | with BR-1's track-bounded head: today / E / wave 4 / both |
+|---|---|---|---|---|---|
+| os8088-360 | 40 / 4 | 22 / 3 | 22 / 4 | **16 / 3** | 40/4, 22/3, 22/5, 16/4 |
+| os8088-720 | 40 / 4 | 22 / 3 | 22 / 4 | **16 / 3** | 40/4, 22/3, 22/5, 16/4 |
+| os8088-120 | 31 / 4 | 22 / 3 | 31 / 4 | **16 / 3** | 31/5, 22/4, 31/4, 16/3 |
+| os8088 (1.44MB) | 39 / 4 | 22 / 3 | 39 / 4 | **16 / 3** | 39/5, 22/4, 39/4, 16/3 |
+| small360 | 24 / 4 | 20 / 3 | 24 / 4 | **16 / 3** | 24/5, 20/4, 24/5, 16/4 |
+
+Converted at 22.2 ms a sector inside a run on 360KB/720KB and 11.1 ms on
+1.2MB/1.44MB, and about one revolution (167-200 ms) for each call saved
+(PERFORMANCE.md prices a call at 1-2 revolutions whatever it moves):
+
+| | 360KB / 720KB | 1.2MB | 1.44MB | small360 |
+|---|---:|---:|---:|---:|
+| item E alone | ~0.6 s | ~0.27 s | ~0.39 s | ~0.29 s |
+| wave 4 alone | ~0.4 s | ~0 | ~0 | ~0, or ~0.2 s with the page term |
+| both | ~0.73 s | ~0.33 s | ~0.46 s | ~0.4-0.6 s |
+| what wave 4 adds once item E is in | ~0.13 s (6 sectors) | ~0.07 s (6) | ~0.07 s (6) | ~0.09 s (4), + the page call |
+
+So the recommendation is **both**, item E first: it is the cheaper change and
+the larger share of the benefit, and wave 4 is taken anyway for the owner's
+reason, a `.boot2` no bigger than it needs to be. boot-4's 5-sector head
+moves the first tick 4 sectors earlier again under item E (the head is one
+call at either blob length).
+
+BR-1's track-bounded head interacts with wave 4 and not with item E: at
+blob 7 the 360KB/720KB head no longer starts on a track boundary and crosses
+one (one call more), while on 1.2MB/1.44MB it stops crossing (one call fewer).
+
+### 10.2 After the bar
 
 **Cost per 512 unpacked bytes moved into `.boot3`.** Each one costs 0.89 to
 0.95 packed sectors: 0.886 is the risk design's measurement for blob code
@@ -554,31 +1096,42 @@ packed after the kernel's history, and 0.95 is block 2's own ratio
 (29,096 / 30,642, MEASURED). On top of the read it costs 4.3 ms of LZ4
 decode (39.9 cycles a byte, SPEC.md 2.9.13, at 4.77 MHz).
 
-| geometry | ms per sector inside a run | ms per 512 bytes moved | wave 1 (~507) | wave 2 (~1,700) | extra packed sectors before one more int 13h |
+| geometry | ms per sector inside a run | ms per 512 bytes moved | wave 1 (~507) | wave 2 (~1,700) | extra packed sectors before one more stage-2 int 13h, at blob 13 / 7 (kern_small 11 / 7) |
 |---|---:|---:|---:|---:|---:|
-| 360KB (300 rpm, 9 spt) | 22.2 | ~24 | ~+24 | ~+80 | 17 |
-| 720KB (300 rpm, 9 spt) | 22.2 | ~24 | ~+24 | ~+80 | 17 |
-| 1.2MB (360 rpm, 15 spt) | 11.1 | ~14 | ~+14 | ~+47 | 14 |
-| 1.44MB (300 rpm, 18 spt) | 11.1 | ~14 | ~+14 | ~+47 | 16 |
+| 360KB (300 rpm, 9 spt) | 22.2 | ~24 | ~+24 | ~+80 | 17 / **5** |
+| 720KB (300 rpm, 9 spt) | 22.2 | ~24 | ~+24 | ~+80 | 17 / **5** |
+| 1.2MB (360 rpm, 15 spt) | 11.1 | ~14 | ~+14 | ~+47 | 14 / 20 |
+| 1.44MB (300 rpm, 18 spt) | 11.1 | ~14 | ~+14 | ~+47 | 16 / 22 |
+| small360, small720 | 22.2 | ~24 | | | 8 / 10 |
 
-- **The last column** is all three designers' walk of `t_blobruns`' own
-  `stage2_calls` model over the shipped images, from today's file. On
-  360KB and 720KB the last run is a single sector at LBA 180.
-- **Waves 0-3 together use about 4-5 of those sectors**, so there are 0 extra
-  calls on every geometry. The 18th sector on 360KB/720KB would cost a call
-  (about 170-400 ms, PERFORMANCE.md's per-call price). `t_blobruns`' STAGE2
-  ratchet names it at that point, **but it does not fail the build**:
-  `blobruns` is registered in the **soak** tier (tests/suite.py), so `make`
-  never runs it. It is a 0.1 s host check, so every wave runs
-  `python3 tests/unit/t_blobruns.py` by hand with its other host checks
-  (allowed per batch under CLAUDE.md's Testing rule: it boots nothing).
-  Promoting it to `fast` would make the ratchet the gate this section
-  assumed; that tier move is section 15 question 10. The verifier re-walked
-  `stage2_calls` with R moved by 0, 1 and 2 sectors as well, and the
-  thresholds (17, 17, 14, 16 free) do not move.
-- **The room is shared.** Any later kernel growth spends the same 17 sectors.
+- **The last column** is t_blobruns' `stage2_calls` walked over the shipped
+  images from today's file: the three designers' walk at blob 13, and this
+  revision's at the wave-4 lengths. On 360KB and 720KB the last run is a
+  single sector at LBA 180 today; at blob 7 the read ends inside cylinder 9
+  and the cylinder boundary is 5 sectors away.
+- **kern_big's tail grows by about 6.3 packed sectors over all the waves**:
+  about 4 for waves 0-3, about 2.1 for wave 4's ~1,200 bytes, about 0.25 for
+  wave 5. At blob 13 that is well inside 17. **At blob 7 it is on the edge
+  on 360KB and 720KB**: about 6.3 against 5, so wave 4 is likely to cost one
+  stage-2 call AFTER the bar there (about 0.2-0.4 s), unless the tail is
+  about a sector shorter. 1.2MB, 1.44MB and both small disks have room.
+- **boot-4 moves these thresholds too.** With a 5-sector head and its −1
+  sector (phase1.md WP6's cost lens), the walk gives 0 free at blob 13 and 6
+  at blob 7 on 360KB/720KB (15/21 on 1.2MB, 17/23 on 1.44MB, 9/11 on
+  small360). So boot-4 with waves 1-2 alone already costs that call on the
+  two 9-sector disks; wave 4 does not make it worse. Both cases sit within a
+  sector of a boundary, which is why the ratchet, not this table, decides.
+- **`blobruns` is now the gate that refuses it (owner, 2026-11-08).** It is
+  a host check that boots nothing, timed by this revision at **0.032, 0.037
+  and 0.052 s wall** (three runs, MEASURED), so it goes to the **fast**
+  tier, in the *shipped artifacts* family beside `image` and `canary`
+  (docs/WRITING-TESTS.md 2.1): it reads the six system disks' BPBs and root
+  directories. A wave that spends a stage-2 call then fails `make`, and the
+  STAGE2 row moves only with a reason beside it. Two model gaps are fixed
+  with the move (section 13).
+- **The room is shared.** Any later kernel growth spends the same sectors.
 - **On a 286 the read is track-bounded** (boot2.asm:311), which this model
-  does not cover. kern_mega has no rows here.
+  does not cover. kern_mega gets rows (section 13).
 - **For contrast**, the refused 14th blob sector costs +1 sector *before* the
   bar on every geometry, and on 720KB a whole stage-1 call (4 + 9 + 1).
 
@@ -586,13 +1139,14 @@ decode (39.9 cycles a byte, SPEC.md 2.9.13, at 4.77 MHz).
 
 | item (docs/reports/big-review-2026-11-08/synth/) | where it lands |
 |---|---|
-| **BR-6**, MDA vs Hercules (bugs.md), alias-test form +60..+110 | **stays in `.boot2`**: it runs in `vid_detect`'s mono arm in the first tick, before `.boot3` exists. `vid_memchk` is written once as a macro and expanded in `.boot2` and `.ovl`. Paid from wave 1's ~508 free (~549 after boot-7). The 3BAh form is no longer forced by room |
-| **BR-1**, the canary (bugs.md), +19..+23 | loader: `.boot2`. Fits after wave 1 |
+| **BR-6**, MDA vs Hercules (bugs.md), alias-test form +60..+110 | **stays in `.boot2`** on every kernel: it runs in `vid_detect`'s mono arm in the first tick, before `.boot3` exists. `vid_memchk` is written once as a macro and expanded in `.boot2` and `.ovl`. On kern_big it is paid from wave 1's ~508 free (~549 after boot-7); kern_small (702) and kern_mega (285) have room today. The 3BAh form is no longer forced by room |
+| **BR-1**, the canary (bugs.md), +19..+23 | loader: `.boot2`. Fits after wave 1. Its canary sector moves with wave 4's blob lengths (section 7) |
 | **BR-147** (bugs.md), +7 per VID_APPLY expansion | `bvs_apply` is the first tick's copy: `.boot2`. Fits |
 | **shell-8** (phase1.md, WP27), +10 | the shortcut reader: `.boot2` until wave 2, `.boot3` from then on |
 | **boot-17**, kmain_o as a table (phase1.md, WP6) | no longer a byte item. Its −30..−60 were blob bytes only while kmain_o is in the blob. It rides wave 4 for its diagnostics, if wanted |
-| **WP6** (phase1.md) | boot-7's −41 is still worth taking, but is no longer load-bearing. boot-18 (BR-154) lands in wave 0. boot-4 and boot-10 gate wave 4's shrink, not waves 0-3 |
-| **WP7** (phase1.md), `.ovl` −45 | still lands. With wave 3's 176, `.ovl` covers the +93..+103 wants (WP8 install and gfce-6, BR-18, BR-88, BR-141, BR-157, BR-158, BR-25) with about 120 to spare |
+| **WP6** (phase1.md) | boot-7's −41 is still worth taking, but is no longer load-bearing. boot-18 (BR-154) lands in wave 0. boot-4 and boot-10 are wave 4's preconditions, not waves 0-3's |
+| **WP7** (phase1.md), `.ovl` −45 | still lands. With wave 3's 176, `.ovl` covers the +93..+103 wants (WP8 install and gfce-6, BR-18, BR-88, BR-141, BR-157, BR-158, BR-25) with about 120 to spare, **on kern_big and on kern_mega** |
+| **rt-7**, the keyboard mouse (the review's item 6; followup-decisions-6-8.md) | **wave 5**, in the owner's shape: −310 static resident on kern_big, kern_emu and kern_small, −306 conventional on kern_mega. It no longer depends on rt-2's boot cache or on any file |
 | phase1.md's "14th sector or boot-17" choice | **gone.** The blob wants (+66..+85, or +101..+160 with BR-6's alias form) fit after wave 1 |
 
 ## 12. Risks, and what catches each
@@ -600,148 +1154,195 @@ decode (39.9 cycles a byte, SPEC.md 2.9.13, at 4.77 MHz).
 | # | risk | silent? | caught by |
 |---|---|---|---|
 | R1 | a body reached from the load-time cone runs packed bytes | yes, and it can show on one geometry only | `os88ovlchk` B2; `splashbar`, `splashspin`, `kzboot` |
-| R2 | a missed re-pointer: the slide, the ROM or the HMA leaves a `.boot3` COLD_SEG word stale (a crash on mono after the slide; a call that works by accident after HMA adoption) | yes | `os88cfx` and `os88rom` refuse an unclassified site; `rp_walk`'s look pass; `coldslide`, `rombig`, `romnodisk`, `hmacold`, `hmadrv`, `hmahiber` |
-| R3 | a call after the drop (resident code, a module, a stored pointer) | yes | `os88ovlchk` B1 and B3; the `b3poison` knob row |
+| R2 | a missed re-pointer: the slide, the ROM or the HMA leaves a `.boot3` COLD_SEG word stale (a crash on mono after the slide; a call that works by accident after HMA adoption) | yes | `os88cfx` and `os88rom` refuse an unclassified site; `rp_walk`'s look pass; `coldslide`, `rombig`, `romsmall`, `romnodisk`, `hmacold`, `hmadrv`, `hmahiber` |
+| R3 | a call after the drop (resident code, a module, a stored pointer) | yes | `os88ovlchk` B1, B3 and B9; the `b3poison` knob row |
 | R4 | the packed read, or `.boot3b`, overlaps the blob | it dies at once | the derived lift; boot2.asm:546; the new `.boot3b` and NOKZIP read-end guards (section 13) |
-| R5 | guard 5 blind to the lift (BR-154, already there today) | yes | wave 0's fix; `small128`, `bootfloor`, `bootfloor-ab` |
+| R5 | guard 5 blind to the lift (BR-154, already there today) | yes | wave 0's fix on every kernel; `small128`, `bootfloor`, `bootfloor-ab` |
 | R6 | the two-pass identity: a KZ number or a loader label inside `.boot3` | no (the check refuses it) | `os88ovlchk` B6 |
 | R7 | CS-addressed data left behind (`ovc_buf`) | yes, and it corrupts the blob | `os88ovlchk` B5; wave 2 moves `ovc_buf` with its users |
 | R8 | a near call between `.boot2` and `.boot3` | yes | `os88ovlchk` B4. MARKW under BOOTMARK=1 near-calls `kmo_mark`, so a body containing one cannot move until MARKW has a `.boot3` arm |
-| R9 | `.vgabuf` overlap: a live entry in the first 336 bytes, rewritten by the planar decoder on a VGA machine | yes, and VGA only | the `b3_live` guard; `vgadrop`, `coldpic` |
+| R9 | `.vgabuf` overlap: a live entry in the first 336 bytes, rewritten by the planar decoder on a VGA machine (kern_big, kern_emu) | yes, and VGA only | the `b3_live` guard; `vgadrop`, `coldpic` |
 | R10 | a `.boot3` block in a file kern_dos includes | yes | `os88ovlchk` B7; `kerndos` |
 | R11 | installed hard disks: the VBR's BLOB_SEG goes stale on each lift step | it fails at boot | already there today. `install`, `hdtakeboot`; say so in SPEC.md 52.10 |
-| R12 | the boot heap at 128KB on kern_big shrinks about 1.5KB by wave 2 | no | `bootfloor-ab` (relative to the floor, so invariant); question 5 |
+| R12 | kern_big's boot arena at 128KB shrinks about 1.5KB by wave 2 and recovers by wave 4 | no | no row, by the owner's decision (owner, 2026-11-08); `kernsize`'s host figure (section 13); `bootfloor-ab` is floor-relative and so invariant |
 | R13 | a tool that does not know the section resolves a `.boot3` label against the blob | sometimes | `os88sym` raises on an unnamed section; the others are fixed in wave 0. `os88ladder --selfcheck` is on demand |
 | R14 | NO_ROM_COLD and NO_COLD_SLIDE overflow their blob once wave 1 lands | no (`%error`) | the per-arm placement in section 5; `buildmatrix` |
+| R15 | wave 5: a resident entry reaches an unarmed or dropped slot (`mod_gone` answers CF = 1, which `kbm_key`'s callers read as "spent", so every key would be eaten) | yes | the gates test the ROW, not `[mou_ptr]`; FLAT_PAYLOAD and a refused adoption leave the row 0; the new `kbmadopt` row (section 13), broken on purpose by gating on `[mou_ptr]` instead |
+| R16 | wave 5: the drop frees the claim while a task is still inside it. `[mou_ptr]` is set from interrupt or worker context, so the drop is deferred to `.have` on the UI task; `osapi_mouse` stops entering the keyboard mouse once `[mou_ptr]` is set (mouse.inc:1559), but a task other than the UI task (a worker) preempted inside `kbm_move` at that instant would resume in freed RAM. The path such a task can be on (`kbm_poll` → `kbm_key` → `kbm_move`/`kbm_btn`/`kbm_rclick`: `cur_move`, `sch_wake_ui`, `evq_push`) makes no blocking call; `gfx_lock` is only on `kbm_ui`'s raise path, which only the UI task runs. So a task is inside the image only if it was preempted there, and it leaves on its next slice | yes | the same exposure every module drop carries (mod.inc's `mod_drop` banner; BR-4's DESK.DRV race). Before the commit, confirm that no worker calls OSAPI_MOUSE on a mouseless machine; if one may, defer the drop until every task has been scheduled once since `[mou_ptr]` was set. One more UI pass alone does not bound it |
+| R17 | wave 5: the image grows past 512 bytes and silently takes two granules (about +700 net on a mouseless machine) | yes | the `%error` at 512 |
+| R18 | wave 5: the `[rom_mfp]` swap is left installed, or does not forward ROMF_FIX, so a ROM machine's later module loads read `.boot3m`'s dead RAM | yes | B3's registered exception, restored in the same routine; `romsmall`, `rombig`, `hmadrv` with a mouseless profile |
+| R19 | wave 4 spends a stage-2 call after the bar on 360KB/720KB (section 10.2) | no, once `blobruns` is fast | `blobruns` (fast), its STAGE2 row |
+| R20 | kern_small's derived lift moves the blob onto the 64KB page, re-creating a stage-1 split it was meant to remove | yes | `blobruns` once it models the page bound (section 13); `smallboot` |
 
-**Found on the way, and not this plan's to fix.** By map arithmetic,
-kern_small's blob straddles the 64KB DMA page: linear 0xF200..0x10800, with
-the page bound 7 sectors in. Stage 1 bounds its runs at the page
-(boot.asm:406-418), but `t_blobruns`' stage-1 model does not. So small360
-probably pays 3 stage-1 calls (6 + 1 + 4), not the 2 the row reports
-(PREDICTED). The plan's gate change: `t_blobruns` models stage 1's page bound.
-Confirm the count with `tools/os88boot.py` on small360 before acting on it.
+**Found on the way, and not this plan's to fix.**
+
+- By map arithmetic, kern_small's blob straddles the 64KB DMA page: linear
+  0xF200..0x10800, with the page bound 7 sectors in. Stage 1 bounds its runs
+  at the page (boot.asm:406-418), but `t_blobruns`' stage-1 model does not.
+  So small360 probably pays 3 stage-1 calls (6 + 1 + 4), not the 2 the row
+  reports (PREDICTED). Confirm the count with `tools/os88boot.py` on small360
+  before acting on it; section 3.3's page term is the fix if it holds.
+- **`t_blobruns` models the wrong blob length on two kernels** (found by this
+  revision). Its `boot2_secs()` reads the literal `13` off
+  `BOOT2_SECS  equ 13 + BOOT2_KNOBSEC - BOOT2_SMALLSEC`, so it prices
+  small360 and small720 at a 13-sector blob when kern_small's is 11
+  (BOOT2_PAD 0x1600 in build/smallk/kernel.map, MEASURED), and would price
+  kern_emu's 14 as 13. Its IMAGES comment ("6 + 7 at 13") records the wrong
+  length. The fix reads each kernel's own `blob` field from its
+  kernel.kz.json (5,632 on kern_small: 11 sectors).
 
 ## 13. Gates and rows
 
 **Assembly-time guards** (kernel.asm, at the foot where the `.cfx` guards are
-now):
+now), on every kernel whose `.boot3` is on:
 
-- `.boot3` is the file's last section: `MODC_START = B3_START + B3_SIZE`.
+- `.boot3` (then `.boot3m`) is the file's last section:
+  `MODC_START = B3_START + B3_SIZE` (+ `.boot3m`).
 - `B3_RAM*16 + B3_SIZE + B3_RES <= BLOB_SEG_AT*16`, the nobits scratch.
 - NOKZIP's plain read, rounded as the read rounds it: the whole file past the
   blob, not `.boot3` alone, so
   `KERNEL_SEG*16 + ((MODC_START - BOOT2_PAD + 511) & ~511) <= BLOB_SEG_AT*16`.
   (The first draft's `B3_RAM*16 + roundup512(B3_SIZE)` rounds the wrong
   length: B3_RAM is paragraph-aligned, not sector-aligned in the read.)
-- On wave 2's arm, `.boot3b` starts on a linear 512-byte boundary
+- On wave 2's arms, `.boot3b` starts on a linear 512-byte boundary
   (`(B3_RAM*16 + ovc_buf) % 512 == 0`), since `ovc_buf` is a disk-read
   destination.
-- `b3_live - $$ >= KVGABUF_SIZE`.
+- `b3_live - $$ >= KVGABUF_SIZE` (COLD_SLIDE arms).
 - `B3_SIZE + B3_RES <= 0xFFF0`.
 - `KZ_MARGIN_K == KZ_MARGIN`.
-- Guard 5 and `KS_BOOTMX` on BLOB_SEG_AT.
+- Guard 5 and `KS_BOOTMX` on BLOB_SEG_AT, on all four kernels.
+- Wave 5: the `.boot3m` image is at most 512 bytes; its header's entry count
+  equals `MODFP KBFP`'s.
 - boot2.asm:546 is unchanged.
 
 **Host gates**, new or extended:
 
-- `os88ovlchk` B1-B8, with fixtures.
-- `os88cfx`'s fourth group.
-- `os88rom`'s `rt_b3`, and `romtool --selfcheck` (`model_adopt`/`model_hma`).
-- `t_blobruns`:
+- `os88ovlchk` B1-B9, with fixtures, on every kernel's build.
+- `os88cfx`'s fourth group, and `.boot3m` classified as a module image.
+- `os88rom`'s `rt_b3` on kern_big and kern_small, `.boot3m` cut as a module
+  image's list for ROMF_FIX, and `romtool --selfcheck`
+  (`model_adopt`/`model_hma`).
+- `t_blobruns`, **moved to the fast tier (owner, 2026-11-08)**, 0.03-0.05 s
+  MEASURED (section 10.2):
+  - each kernel's own blob length, read from its kernel.kz.json, not the
+    literal 13 (section 12);
   - the stage-1 page bound;
   - `--tail N` to price N extra packed sectors;
-  - kern_mega rows, so that its thresholds are ratcheted rather than
-    predicted.
+  - kern_mega rows, track-bounded as a 286 reads, so that its thresholds are
+    ratcheted rather than predicted.
 - `t_bootfloor`: the injected HEAP_PARA and BLOB_SEG equal the map's
   BLOB_SEG_AT, which is what `B2CALL` rests on.
-- `kernsize`'s `boot3=` line.
-- In wave 4, the `tests/blobbodies.txt` ratchet.
+- `kernsize`'s `boot3=` line, and the **boot arena at 128KB** on its `boot`
+  line, per kernel: 128KB less the blob's nobits top. It needs one more
+  field on the `-DKERNSIZE` `%warning` (`b2res=`), which changes no byte of
+  the kernel. This is the host-side figure that replaces a kern_big 128KB row
+  (owner, 2026-11-08).
+- In wave 4, the `tests/blobbodies.txt` ratchet, per kernel.
 - In wave 0, a `cmp` of `build/smallk` and `build/megak` `kernel.bin` against
   the starting commit, at one commit.
 
 **Rows to NAME** for the single final pass. Run them as one deduplicated
-`os88test.py soak -k ...` union, then `test-full` once:
+`os88test.py soak -k ...` union, then `test-full` once.
 
 Tiers as tests/suite.py registers them (the first draft filed thirteen soak
-rows under fast or full; corrected by the verifier):
+rows under fast or full; corrected by the verifier), with `blobruns` moved:
 
 - **fast:** `ovlchk`, `canary`, `romtool`, `image`, `diskverify`,
-  `livefull`.
-- **full:** `small128`, `bootsmoke`.
+  `livefull`, **`blobruns`** (moved by wave 0).
+- **full:** `small128`, `bootsmoke`, `megahigh`, `ps2mouse`.
 - **soak, host-only and cheap** (run by hand as each wave's host checks,
-  then again in the union): `blobruns` (0.1 s), `bootfloor` (3.5 s),
-  `coldpic` (`os88romfix.py --check`).
+  then again in the union): `bootfloor` (3.5 s), `coldpic`
+  (`os88romfix.py --check`), `resident`.
 - **soak, emulator:** `coldslide`, `rombig`, `romsmall`, `romnodisk`,
   `hmacold`, `hmadrv`, `hmahiber`, `smallboot`, `vgadrop`, `buildmatrix`,
   `kzboot`, `kzboot-off`, `hdboot`, `hdtakeboot`, `install`, `cylrun`,
   `splashbar`, `splashspin`, `bootstatus`, `blobsum`, `bootfloor-ab`,
   `autostart`, `hibernate`, `fontpick`, `desksc`, `postboot`, `heapmap`,
-  `v20boot`, `pravetzboot`.
+  `v20boot`, `pravetzboot`, and for kern_mega `megaovl`, `megamod`,
+  `megahiber`.
+- **item E adds** nothing new: `splashbar`, `splashspin`, `kzboot`, `canary`.
 - **wave 4 adds:** `vesablitd`.
-- **new:** `b3poison` (soak, private tree, knob).
+- **wave 5 adds:** `usbmouse` (a mouse that first speaks after the boot, through
+  USBMOUSE.DRV's feed), `vmmouse` (kern_emu, never adopted),
+  `wirefleetnomouse` and `kdnomouse` (driven on the keyboard mouse),
+  `curshape`, `hibernate` and `megahiber` with a mouseless image, `small128`.
+- **new:** `b3poison` (soak, private tree, knob, on kern_big and kern_small);
+  **`kbmadopt`** (soak, MartyPC, a mouseless profile): read MOD_KBM's row live
+  and its claim at 512 bytes; open a menu and pick an item on the keypad and
+  Space; then bring a serial mouse up, move it, and see the row go to 0 and
+  the claim freed. Break it on purpose twice: gate `kbm_key` on `[mou_ptr]`
+  instead of the row, and remove the drop; the row must go red both times.
+  There is no keyboard-mouse row in the suite today (a search of
+  tests/suite.py for one finds only rows driven on it).
 
 ## 14. SPEC.md sections to update first
 
 - **SPEC.md 2.9:** a new subsection, "`.boot3`: the boot's third home". It
-  covers the lifetime table of section 3.2, the contract and the macros, the
-  arms, the fences, and the derived lift.
+  covers the lifetime table of section 3.2 per kernel, the contract and the
+  macros, the arms, the fences, the derived lift with kern_small's page term,
+  and the name's one rule (a home, not a stage).
 - **SPEC.md 2.9.6:** "one transient" becomes three homes, with the question
   each one answers.
 - **SPEC.md 2.5.3 and 2.5.3.1:** the rules per half gain `.boot3`'s
   deadline, which is the drop, not the mount.
-- **SPEC.md 2.5.3.2:** OVBCALL/OVSCALL arms, and B3SECT.
+- **SPEC.md 2.5.3.2:** OVBCALL/OVSCALL arms, and B3SECT's, until the fallback
+  is deleted.
 - **SPEC.md 2.5.3.3 and 2.5.3.3.1:** where kmain_o's body lives; why the
   knob arms no longer need the knob sector for moved bodies.
 - **SPEC.md 2.5.1.1 and 2.9.5:** the blob's floor and the derived BLOB_LIFT.
-  Guard 5 counts it.
+  Guard 5 counts it on every kernel.
 - **SPEC.md 2.9.5.3:** `[spl_fseg]` now also says `.boot3` is aboard.
-- **SPEC.md 2.9.13.1:** the file's parts, with `.boot3` last.
-- **SPEC.md 2.9.14:** `.boot2` is the loader and the splash, and the
-  non-splash residue is a ratchet.
-- **SPEC.md 2.10.4, 2.10.7 and 2.10.9:** `rt_b3`, the HMA kind walking it,
-  and the slide's fourth group (`.cfx` subsumed).
+- **SPEC.md 2.9.13.1:** the file's parts, with `.boot3` and `.boot3m` last,
+  per kernel.
+- **SPEC.md 2.9.14 and 2.9.12:** `.boot2` is the loader and the splash, the
+  non-splash residue is a ratchet, and the blob lengths after wave 4.
+- **SPEC.md 15 and 15.3:** the first tick after the plain head (item E).
+- **SPEC.md 15.3.8.5:** `blobruns` in the fast tier, and what its ratchet now
+  models.
+- **SPEC.md 18.93.1:** the canary's sector after wave 4, from boot-10's
+  generator.
+- **SPEC.md 2.8, 2.8.1 and 2.8.3:** a module row ADOPTED FROM MEMORY:
+  MOD_KBM, no file, the one-call door, and a drop owned by the first pointer.
+- **SPEC.md 2.10.4, 2.10.5, 2.10.7 and 2.10.9:** `rt_b3` on both ROM kernels,
+  the HMA kind walking it, the slide's fourth group (`.cfx` subsumed), and the
+  door that forwards ROMF_FIX.
+- **SPEC.md 9.6, 9.6.1.1 and 9.6.6:** the keyboard mouse's two halves, where
+  each lives, and why `[mou_ptr]` decides the adoption.
+- **SPEC.md 50.2.1:** the granule a mouseless machine pays.
+- **SPEC.md 87.3 and 87.9:** hibernate carries the adopted claim as it carries
+  any module.
+- **SPEC.md 24.5.7:** kern_small's system disks after wave 4.
 - **SPEC.md 39.22:** the `.vgabuf` overlap.
-- **SPEC.md 15:** the boot sequence's drop point.
 - **SPEC.md 52.10:** the VBR-refresh hazard.
 - **docs/KERNEL-MEMORY.md**, "The boot overlay" and "Cold code": the third
   boot-only home. `.boot3` is NOT `.cold`: it costs boot RAM and load time,
-  never a resident byte.
+  never a resident byte. Wave 5's claim is heap, and a mouseless machine's
+  only standing cost.
 
 ## 15. Open questions for the owner
 
-1. **The name.** `.boot3`, kept for the reasons in section 1, or something
-   else?
-2. **Wave 2's boot-time RAM.** Is wave 2's lift of about 4 sectors acceptable?
-   It costs 0 resident bytes, about 80 ms on 360KB after the bar, and about
-   1.5KB of kern_big's boot-time heap at 128KB.
-3. **kern_mega's `.ovl`.** kern_mega has 2 bytes of `.ovl` free and the same
-   WP7/WP8 wants. Should it opt into `.boot3` in wave 3, at B3_RAM = KERN_END?
-4. **kern_small.** Leave it out, as here, or opt in for one shape in shared
-   source? Its packed read is 8 sectors from an extra call.
-5. **A kern_big 128KB boot row.** There is none: `small128` is kern_small
-   only, and `bootfloor-ab` is floor-relative. Should one be added before
-   wave 2?
-6. **Wave 4.** Take it, and with it a shorter blob and an earlier bar, once
-   boot-4 and boot-10 land? Or stop at wave 3 with the blob at 13 sectors and
-   about 2.2KB free?
-7. **An earlier bar without wave 4.** The re-homing design observed that on
-   360KB/720KB the 9-sector plain head ends on a cylinder boundary. So the
-   first tick waits for a full 18-sector tail run, and one `spl_tick` right
-   after the head (about 8 blob bytes) would show the bar about 18 sectors
-   sooner at any blob length (PREDICTED). Should it be pursued separately?
-   It interacts with BR-1's track-bounded head.
+Questions 1, 3, 4, 5, 6, 7 and 10 were answered (owner, 2026-11-08) and are
+folded into the body: the name (section 1), kern_mega (sections 5.2 and 8,
+wave 3), kern_small (section 5.1), no kern_big 128KB row (sections 6, 9 and
+13), wave 4 (section 8), the earlier bar (section 8, item E, and section
+10.1), and `blobruns` (sections 10.2 and 13). Three stay open, under their
+old numbers:
+
+2. **Wave 2's boot-time RAM.** Is wave 2's lift of about 4 sectors
+   acceptable? It costs 0 resident bytes and about 80 ms on 360KB after the
+   bar. On kern_big the 128KB boot arena goes from 24,064 to about 22,528
+   bytes until wave 4 gives it back (a host figure; there is no row); on
+   kern_mega the lift is about 5 sectors on a 640KB floor.
 8. **The clock ladder.** Should wave 3 move it whole (1,782, MEASURED) or
    only the two clock-card rungs BR-157 and BR-158 touch?
 9. **`B2CALL`'s constant segment** (section 4). Take the 5-byte
    `call BLOB_SEG_AT:x` and the `t_bootfloor` fence, or pay `SPLCALL`'s 19
    bytes a site and keep "the blob is wherever `[spl_fseg]` says" true for
    `.boot3` as well?
-10. **`blobruns` to the fast tier.** It is 0.1 s and the only gate on "no
-    extra stage-2 int 13h after the bar". It is soak today, so a wave that
-    spends the 17th or 18th tail sector is not refused by `make`.
 
 ## 16. Verification
+
+### 16.1 The adversarial pass
 
 An adversarial pass on 2026-11-08, against this tree's code and its
 `build/kernel.map`, `build/smallk/kernel.map`, `build/megak/kernel.map` and
@@ -749,7 +1350,7 @@ An adversarial pass on 2026-11-08, against this tree's code and its
 source, a map, or a host model (`t_blobruns`' own functions). Everything
 labelled PREDICTED above is still PREDICTED.
 
-### What was checked and held
+#### What was checked and held
 
 - **No extra int 13h before the bar.** Stage 2 reads the 9-sector plain head,
   then the tail in runs, and calls `spl_tick` only after each tail run
@@ -796,7 +1397,7 @@ labelled PREDICTED above is still PREDICTED.
   fail today on a COLD_SEG site in a section they do not classify.
 - **`bvs_apply`** is in the first tick (splash.inc:525-528), as the plan says.
 
-### What was changed in this file
+#### What was changed in this file
 
 1. **Wave 2's closure was wrong, and it is corrected.** The first draft
    moved `drv_boot_x` and its cone without noticing three things:
@@ -812,7 +1413,8 @@ labelled PREDICTED above is still PREDICTED.
    The figures, the ledger rows for waves 2-4 and the lift arithmetic are
    re-derived. The lift still comes out at 224.
 2. **kern_mega keeps BOOT2_RES** and `mem_init_x`'s non-small arm. They
-   become B3-conditional, not retired.
+   become B3-conditional, not retired. (Superseded by 16.2: with kern_mega
+   on, the conditional disappears.)
 3. **Section 3.3's lift formula** is restated in consistent units and checked
    against today's map (it gives 64 and the floor of 96 wins). It is scoped
    to the B3 arms, and the `extra` term of os88kz.py's R is named as the case
@@ -832,8 +1434,8 @@ labelled PREDICTED above is still PREDICTED.
 9. **The suite tiers in section 13** were wrong for thirteen rows: `blobruns`,
    `bootfloor`, the ROM and HMA rows, `coldslide`, `coldpic`, `smallboot`,
    `vgadrop` and `buildmatrix` are soak. As a result, **`t_blobruns`'
-   STAGE2 ratchet does not fail `make`**. Section 10 says so, and question
-   10 asks for its promotion.
+   STAGE2 ratchet does not fail `make`**. Section 10 said so, and the former
+   question 10 asked for its promotion (answered in 16.2).
 10. **Wave 4:** a one-call stage-1 blob on 360KB/720KB is 4 sectors, not 6.
     kmain's −4 drops `spl_gate`'s test, which is now said and registered.
     `dkb_geom`'s −4 is confirmed. The KSW_SECT span (614) and the clock
@@ -842,15 +1444,160 @@ labelled PREDICTED above is still PREDICTED.
     the wording is fixed. Line citations are corrected (BLOB_LIFT is
     kernel.asm:1952).
 
-### What makes it infeasible
+#### What makes it infeasible
 
 Nothing found. Every wave the verifier could check against the code is
 buildable as corrected. Wave 2 is the one that changed shape (a 56-byte
 second hop pair, `bdt_*` left behind, two doors), and it still frees about
-1,640 blob bytes for 0 resident bytes and 0 calls before the bar. Two things
-stay open and are not refutations:
+1,640 blob bytes for 0 resident bytes and 0 calls before the bar. Open, and
+not refutations: whether `bxf_sync`'s EXF_SYNC closure certifies, for which a
+door is the fallback.
 
-- whether `bxf_sync`'s EXF_SYNC closure certifies, for which a door is the
-  fallback;
-- the size of kern_big's boot arena at 128KB after wave 2, for which there is
-  no row (question 5).
+### 16.2 The owner's second round (the same day)
+
+The revision applied the owner's answers and checked each new figure against
+this tree's three maps, their kz.json files, the shipped images and the
+source. It booted nothing and ran no emulator; the one program it ran was
+`tests/unit/t_blobruns.py` (a host check), and t_blobruns' own functions as a
+library for the walks.
+
+**Measured or read off artefacts.**
+
+- `t_blobruns.py`: 0.032, 0.037 and 0.052 s wall over three runs, rc 0.
+- kern_small's ladder: `.cold` at file 0xA940, 0x5227 long, COLD_RAM 0x994,
+  so its end is linear 0xEB67; KERN_END 0xEC0; BLOB_SEG_AT 0xF20; BOOT2_PAD
+  0x1600 (11 sectors); no `.cfx`, no `.vga`, `.vgabuf` 0 bytes.
+- kern_mega's: `.mega` at file 0x1C600, 0x5C10 long, ending at linear
+  0x20C10; its packed read ending at 0x20E00; no `.cfx`.
+- The keyboard mouse's spans, identical on all three maps: 388 bytes moving,
+  and the state, shims and callers in kernel/mouse.inc, ui.inc, menu.inc and
+  vmmouse.inc as cited in wave 5.
+- kern_small's and kern_mega's `.boot2` and `.ovl` partitions, from each
+  map's per-section symbol list (not the interleaved one, where `.lowbss` and
+  `.vgabuf` labels fall among the blob's).
+- `mod_need`'s ROM-first door, `mod_check`'s arming, `mod_hi`/`mod_hiboot`,
+  `mod_free_row`'s kern_mega arm and `MOD_HIOK` (kernel/mod.inc), and
+  `mou_hotplug`'s `.have` (mouse.inc:1380), which the wave-5 mechanism reuses.
+
+**Derived (PREDICTED).** The first-tick table (section 10.1) and the
+stage-2 thresholds at the wave-4 blob lengths and with boot-4's head
+(section 10.2), walked over the shipped images with t_blobruns' `runs()` and
+`stage2_calls()`; every lift, headroom and arena figure for kern_small and
+kern_mega; wave 5's glue and image sizes, by encoding.
+
+**What changed in this file.**
+
+1. Generic: sections 2, 3, 5 (with 5.1-5.3), 6, 9 and 13 per kernel; the
+   fallback arm becomes transitional; B9 added.
+2. kern_small's verdict: it does not need the room and opts in for the
+   ladder, wave 5's resident bytes and wave 4's shorter blob.
+3. The name kept, with the reason stated as the owner's test and the one
+   trap closed (`kernel/boot3.inc`, "home, not stage").
+4. Wave 4 is in the plan, with its preconditions and its earlier bar
+   quantified. The first draft's "5-6 fewer sectors before the bar, about
+   110-130 ms" counted only the blob: the first tail run moves with it, so on
+   360KB/720KB the bar comes about 18 sectors (~0.4 s) sooner, and on 1.2MB,
+   1.44MB and small360 no sooner.
+5. Item E (one tick after the head) is compared with wave 4 and recommended.
+6. Wave 5, the keyboard mouse, priced per kernel, with hibernate and
+   kern_mega covered.
+7. The kern_big 128KB row is gone; its arena is a `kernsize` figure.
+8. `blobruns` goes to fast, and two gaps in its model are named: the literal
+   13 it reads for every kernel, and the stage-1 page bound.
+9. Wave 4 is found likely to cost a stage-2 call after the bar on
+   360KB/720KB (R19), within a sector either way.
+
+**What makes it infeasible.** Nothing found. Two things to check before
+wave 5's commit, neither a refutation: that `mega_modhif`'s code half can be
+read through `cs:` (else `kbm_tab` stays in DS on kern_mega), and that no
+worker calls OSAPI_MOUSE on a mouseless machine (R16).
+
+### 16.3 The second adversarial pass (the same day)
+
+A second verifier checked the revision against this tree's code, the three
+maps and kz.json files and the shipped images. It booted nothing and ran no
+emulator. It ran `tests/unit/t_blobruns.py` (five runs: 0.029 to 0.049 s
+wall, rc 0) and t_blobruns' own `runs()` and `stage2_calls()` as a library.
+
+#### What was checked and held
+
+- **The first-tick table (section 10.1)**, re-walked cell by cell over the
+  six shipped system disks, with kern_small's real 11-sector blob, with and
+  without a track-bounded head: every cell matches. So do the stage-2
+  thresholds (17/5 on 360KB and 720KB, 14/20, 16/22, 8/10 on both small
+  disks) and the boot-4 variants (0/6, 15/21, 17/23, 9/11).
+- **Stage 1's DMA-page bound** (boot.asm:406-418) is real, so small360's
+  6 + 1 + 4 stands as PREDICTED, and a 7-sector blob at 0xF200 needs no
+  page split while one lifted to 0xF600 needs one: the page term is right.
+- **`blobruns`' timing and tier.** 0.03-0.05 s and it boots nothing; it reads
+  the six system disks and two kz.json files, which `all` builds. The fast
+  tier, in WRITING-TESTS 2.1's *shipped artifacts* family beside `image` and
+  `canary` (both fast), is right. Its literal-13 gap is real: it walks
+  small360 and small720 at 6 + 7.
+- **Item E.** The head loop ticks nothing, the tail loop ticks after each
+  run, `spl_tick` clamps and stores any count (splash.inc:237-241), and the
+  canary's `.rerun` re-enters at `.reload`, above the head loop, so it
+  re-ticks at 0. The comparison with wave 4 is honest, and the
+  recommendation (both, item E first) stands.
+- **Wave 4's preconditions.** phase1.md WP6 (lines 880-924) makes boot-4 and
+  boot-10 gates on wave 4's shrink. boot-10 is needed outright (the canary
+  sector is a function of BOOT2_SECS, and BR-1's 57 was checked at 13-15
+  only); boot-4 is needed because it moves the same function's other input,
+  KZ_HEADSEC, so the generator is run once against the final pair.
+- **The kern_small verdict.** Its residue is 1,533 bytes (MEASURED, adjacent
+  symbols of build/smallk's `.boot2`; the plan said 1,534), and every
+  candidate (`sched_init` MARK 4, `mem_init_x` 11, `font_init` 13,
+  `mouse_init` 18, `snd_init`) runs after `rom_patch`, kmain_o's second act,
+  so the ROM kind's `rt_b3` re-points them in time. Opt in, as recommended.
+- **The keyboard-mouse split.** The 388 bytes are exact on all three maps.
+  No moved routine is reached from an ISR: `kbm_isr` and `KBM_SCAN` only set
+  `[kbm_p5]` and call `kbm_shf`, `kbd_track`, `sch_wake_ui` and
+  `kbd_ovflow`, all resident; `mou_isr` shares only `mou_evfill`. The
+  callers of the moved half are exactly ui.inc:214 (`kbm_key`), ui.inc:722
+  (`kbm_ui`) and `kbm_poll0` (`kbm_key`, `kbm_p5spend`); every other user
+  (`menu_track`, `ui_drag`, `ui_grow`, `osapi_mouse`, WIN95.DRV's WNK,
+  STIKMENU.DRV's SMK) calls `kbm_poll`/`kbm_pollm`, which stay. On a machine
+  with a mouse, after the drop, the row is 0 and the stub answers
+  `kbm_pass` (CF = 0, registers kept), which is what today's `[mou_ptr]`
+  test answers. kerndos includes no part of mouse.inc. The four shims the
+  plan says exist (`cw_mou_clamp`, `cw_gfx_lock`, `cw_gfx_unlock`,
+  `cw_wm_hit`) are on all three maps; the five it adds are on none.
+- **The claim.** `mod_need` asks `[rom_mfp]` for SIZE first and skips the
+  disk on CF = 0, copies by COPY, arms from the header, and then fixes by
+  `mod_cfix` (COLD_SLIDE) or ROMF_FIX (kern_small); `mod_hi` waits for
+  `[mega_pm]` and `mod_hiboot` moves every boot-loaded row at the switch;
+  `mod_free_row` frees an above-1MB pair. The granule is 512.
+- **Hibernate.** Resume restores the mouse state with the image and resets
+  neither `[mou_ptr]` nor `[mou_seen]`, so a session comes home with its own
+  answer, as it does today.
+
+#### What was changed in this file
+
+1. **The drop costs 11 resident bytes, not 7.** `.text` has no KGO hop, so
+   `mou_hotplug`'s `.have` far-calls a 6-byte `.cold` door. The glue is 78
+   (82 on kern_mega); the net is **−310** on kern_big, kern_emu and
+   kern_small and **−306** conventional on kern_mega (−282 with the table in
+   DS); a mouseless machine pays **+202** (+206 on kern_mega when `mod_hi`
+   refuses). Section 5.1, wave 5's price table, the ledgers and section 11
+   follow.
+2. **kern_mega's door word** is initialised `.text`, seeded
+   `COLD_SEG:mod_gone`, not `.bss`; and `mod_need`'s two ROM-first arms are
+   about +16 of `.cold`, not +3.
+3. **The adoption reaches `mod_need` through a KGO hop**, `b3_cgo`; wave 5
+   brings `KGO_PAIR b3` itself when it lands before wave 2, and on
+   kern_small (56 transient bytes).
+4. **`kbm_tab` is read at five sites, not four**; the exits become `retf`
+   with one `push cs` for `kbm_btn`'s second contract, and no door.
+5. **Every `[mou_ptr]` setter is listed** at the drop, each with
+   `[mou_seen]` beside it.
+6. **R16** is sharpened: the path a non-UI task can be on makes no blocking
+   call, so the fix if one may call OSAPI_MOUSE is to wait one scheduler
+   round, not one UI pass.
+7. **Item E's precondition** is kern_big's alone, and its tick sits inside
+   `%ifndef BOOT_NOSPLASH`.
+
+#### What makes it infeasible
+
+Nothing found. The two checks 16.2 left for wave 5's commit stand
+(`mega_modhif`'s code half readable through `cs:`; no worker calling
+OSAPI_MOUSE on a mouseless machine).
