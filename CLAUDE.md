@@ -380,6 +380,19 @@ user gives a different workflow. `apps/wirefleet/` and its SPEC.md section
   rung may not name `.cold`'s segment (a `.text` shim makes that call), and
   a row reading a `.cold` label on a mono machine goes through `m.sym()`,
   which follows the slide.
+- **Packages are trusted; a resident guard is for OUR catastrophic,
+  visible mistakes** (the owner's rule; SPEC.md 34.11.1,
+  docs/plans/LAST-DROP-BYTES.md). A real-mode kernel cannot defend itself
+  from a hostile package - and on kern_mega an FSX real-mode bracket hands
+  the package real mode anyway - so no resident byte is spent validating a
+  package's arguments against the package. The kernel's own mistakes are
+  caught at BUILD time wherever that is possible (a gate, a knob kernel). A
+  resident guard earns its bytes only where the failure is catastrophic and
+  user-visible and what it prints gives the owner something to act on, as
+  the stack-overflow panel does. Bytes read off a disk or out of
+  `SYSTEM.CFG` are still hostile and still fenced (§19). On kern_mega, where
+  the kernel can afford not to crash, closing the faulting package beats
+  stopping the machine.
 - **Every disk-visible base is 512-byte aligned.** int 13h answers a transfer
   straddling a 64KB physical boundary with error 09h, and only starting
   512-aligned prevents it. The symptom is "Disk error" on a large save.
@@ -428,6 +441,16 @@ user gives a different workflow. `apps/wirefleet/` and its SPEC.md section
   item, the greying predicate and the thunks; everything else goes in the
   module. Moving code to `.cold` or the boot overlay relieves `KERN_CODE_MAX`
   but not `KERN_BUDGET` — a module relieves both.
+  **FILECP and FDLG fail that test on kern_big, and are REFUSED as modules
+  there** - the owner has said no over twenty times, almost once per size
+  pass, so do not propose it again in any shape that reloads them from the
+  system disk, a boot-time cache included (a cache is still resident memory,
+  so it is not a saving either). Open and Copy are not system-management
+  actions: on kern_big the user has a DOS, office or utility disk in the
+  drive, and cannot be made to fetch the system disk and wait every time
+  they open or copy a file. kern_small takes them as modules because it is a
+  one-disk system with no hard disk, drivers or DOS, where being able to run
+  a program at all beats managing files faster.
   **"Freed when it is done" is GATED**: `tests/unit/t_moddrop.py` (fast)
   fails `make` for a `mod_tab` row nothing drops, unless
   `tests/moddrop.txt` says why it is held until restart - `DESK.DRV` held

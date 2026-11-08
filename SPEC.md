@@ -108258,6 +108258,11 @@ that becomes a module. **On `kern_big` the glue is NOT a module, on purpose**:
 `mod.inc`'s own test (docs/plans/completed/ONDEMAND-PLAN.md §1) is that a
 module may require the system disk only where the feature already does, and
 a Save As onto a data floppy in a one-drive machine would become a disk swap.
+The same holds for `FILECP.DRV`, and the owner has refused both as kern_big
+modules over twenty times, a boot-time cache included: a cache is still
+resident memory, and once purged it is the system-disk swap again. Open and
+Copy are not system-management actions; kern_small takes the trade because it
+is a one-disk system with no hard disk, drivers or DOS.
 
 **Two shapes the split's history taught, both still binding.** The register
 epilogue is the IMAGE's own `fdk_di`, because a module may not `jmp
