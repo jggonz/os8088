@@ -2038,10 +2038,11 @@ XM_MAX_BLKS equ 8               ; the pool's fixed block table, entries: a
 ; SIZES, and stage 2 reads the kernel's remainder to KERNEL_SEG:0000, so
 ; `cold_entry` lands where it always did.
 ;
-; ITS SIZE IS A RUNG, not a measurement, for SPL_RESIDENT's reason: the boot
-; sector has to know how many sectors to read before anything has told it, so
-; the number is a constant both ends share and an assertion at the bottom of
-; this file is what keeps them honest.
+; ITS SIZE IS A RUNG, not a measurement: the boot sector has to know how many
+; sectors to read before anything has told it, so the number is a constant
+; both ends share and an assertion at the bottom of this file is what keeps
+; them honest. (SPL_RESIDENT used to be the same kind of constant; since the
+; big review's boot-4 it is derived at the foot of this file.)
 ; THE BLOB IS ONE SECTION (SPEC.md 2.9.14). `.boot2` is the loader, the loading
 ; screen AND the boot overlay's blob half - every boot-only body that has to
 ; outlive drv_boot's first mount. The overlay used to be a section of its own
@@ -2053,10 +2054,10 @@ XM_MAX_BLKS equ 8               ; the pool's fixed block table, entries: a
 ; that splash.inc already needed is emitted where the section is declared.
 ;
 ; ONE RUNG, hand-set and asserted at the foot of this file: BOOT2_SECS is how
-; long the blob is. Stage 1 has to know it before anything has told it -
-; SPL_RESIDENT's reason - and the Makefile reads it out of this file with one
-; `sed` so the two cannot disagree.
-; THERE IS ONE BLOB LENGTH NOW, AND THAT IS WHAT KSIG_OFF RESTS ON.
+; long the blob is. Stage 1 has to know it before anything has told it, and
+; the Makefile reads it out of this file with one `sed` so the two cannot
+; disagree.
+; THERE WAS ONE BLOB LENGTH, AND UNTIL boot-10 THAT IS WHAT KSIG_OFF RESTED ON.
 ; `BOOT2_SECS_STARS equ 9` stood here, with a second `sed` in the Makefile to
 ; find it, because SPLSTARS' twinkle wanted 4,193 bytes of a 4,096-byte blob -
 ; over by 97, WHEREVER OVL_AT fell, so moving the split alone could not pay for
