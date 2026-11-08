@@ -5818,7 +5818,7 @@ mega_vrm:
 
 mega_hibnc:
     xor bx, bx                      ; ES:BX = the landing: the read-ahead's
-    mov di, DSK_RAH_SECS << 8       ; nine sectors...
+    mov di, DSK_BNC_SECS << 8       ; DSK_BNC_SECS sectors (14.167)...
     mov ax, [dsk_rah_bnc]
     or ax, ax
     jnz .have

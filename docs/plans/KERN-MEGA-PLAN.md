@@ -14995,7 +14995,7 @@ scratch twin read every step):
 | pool | the Audio Player's look-ahead, 32KB, a DMA door's block (14.160) | 105C00 on 1408 (23K free under it, 217K over it); 198000 on 2MB (608K / 272K); 398000 on 4MB (2,656K / 271K) | born `MX_FPIN`, pinned for a play: the chip and every refill's ES:BX | **FROM THE FLOOR UP** (`mx_alloc .bot`): 100000 on every machine |
 | conventional | SOUND.DRV's staging pool, 16KB, `OSAPI_MEM_P` with the whole pool its head | 25800 on every machine with a pool (86K free under it - what Sheet's spill had held - 474K over it) | pinned while the card plays out of it (SPEC.md 34.5.2) | **AT THE TOP END** (`mem_ringtop`): 9C000..A0000 |
 | conventional | the Audio Player's look-ahead when the pool is full (1408 with Sheet, Paint and Note Pad open: 50000, 95.5K under it) | the same, a conventional ring | the same | top end when free for it, else as before |
-| conventional | the read-ahead's landing, 4.5KB, page-safe | 10000, the floor | page-safe is pinned (`dsk_rah_land`) | **kept**: it is at the floor end already and it is a cache, which every claim sheds and every planner counts as free. No change to `dsk_rah_land` (mega-hdbnc owns its size) |
+| conventional | the read-ahead's landing, 4.5KB then (9KB since 14.167), page-safe | 10000, the floor, at the boot - and since 14.167 re-taken mid-session by `dsk_bnc_want` when it was shed, on the fill point | page-safe is pinned (`dsk_rah_land`); a cache, which every claim sheds and every planner counts as free | **the same rule as a ring** (`mem_ringtop` takes any owner): at the top end when that is free for it, so a re-take lands at an end too. `dsk_rah_land` itself unchanged |
 | conventional | window save-unders, the menu's, the icon store, when the pool is full (FB10/FB12/FB13, pinned caches) | in the bottom stack | caches | kept: dissolved by the shed, counted free by mem_avail |
 | conventional | `MEM_K_MTBL`, the tables of a machine with no extended memory, 12KB | 9B800, under one 6KB driver image | pinned | kept: at the top end but for that image (HEAP-CLAIMS.md's K3) |
 | conventional, no pool | the rings on a machine with NO extended memory: the Audio Player's 32KB at 65400, SOUND.DRV's 16KB at 70000 | 271K under, 139.5K over | pinned while playing | **NOT FIXED** - below, for the owner |
@@ -15027,8 +15027,8 @@ end is never free for a ring (the landing is born there), and on a machine
 with a pool the TOP end is free from the boot until a program wants a
 conventional CS. `mem_ringtop` (`.cold`, called from `mem_claim_x`'s retry,
 both `.cold`) asks where the top-down first fit would put a claim with a head
-from a package or a driver (never a kernel cache's, so the landing keeps the
-floor) - the same bumps going down: the DISK class's 512-byte line, the head
+from a package, a driver or the kernel (the read-ahead's landing too, which
+14.167 re-takes mid-session) - the same bumps going down: the DISK class's 512-byte line, the head
 inside its page, an overlap just under the claim - and when everything above
 that place is a ring too, or the kernel's own (the low tables, a boot
 driver's image), it sends the claim through the top door, which takes
@@ -15091,3 +15091,104 @@ its reserve, the claim granted and read back and one KB more refused, and the
 hold granted. **RED** on the tree before, measured: the pool ring at 105C00
 (23K / 217K), SOUND.DRV's at 25800 (86K / 474K), 602K where 688K is free,
 the hold refused. **GREEN** after, 15 s.
+
+### 14.167 A fixed-disk read into a claim moved ONE SECTOR A CALL through HDD.DRV, and nine through the kernel's BIOS path: a driver that takes a selector says so (`BLKCAP_SEL`), the landing is 18 sectors and comes back when shed (2026-11-08) - FIXED
+
+**The owner's question** (2026-11-08): *"For the hard drive transfers: why
+are those moving one sector at a time? Can we fix that?"* Two earlier
+agents had written "bounced one sector per call" and "nine sectors a call";
+both were true, of different paths, and the first was worse than either
+said.
+
+**Measured first** (`tests/hdbounce.py`, new: kern_mega booted off a 16 x 63
+IDE C: on 86Box's mr286 profile, `at286_vga_hdd`; tests/megard's MEGARD
+reading a 120-sector BIG.DAT into its OS88_HIGHMEM pool claim and into a
+conventional one, timed by the guest's PIT, then counted by breakpoints on
+`drv_blk_call_x` and `mega_fd13` - every driver call and every int 13h
+transfer reflected in protected mode). C: has one of three transports; the
+row checks which off the volume table and HDD.DRV's device row:
+
+| path | before: pool block | before: conventional | after: pool block | after: conventional | kern_big, same machine |
+|---|---|---|---|---|---|
+| HDD.DRV rung 1 (the BIOS sniff loads it, 52.1.1 takes C:) | 122 driver calls of 1 sector, 83.8 ms | the same, 83.8 ms | 3 calls (1, 1, 120), 58.0 ms | the same, 58.0 ms | 60.9 ms |
+| HDD.DRV rung 0 (the device row put on the BIOS) | 122 calls, 122 int 13h of 1, 156.7 ms | the same, 156.5 ms | int 13h 18 x 6 + 12, 75.7 ms | 110 + 10, 63.8 ms | 64.6 ms |
+| the kernel's BIOS row (no HDD.DRV) | int 13h 9 x 12, 72.8 ms | one of 114, 59.1 ms | 18 x 6, 68.4 ms | 105 + 10, 60.0 ms | 60.7 ms |
+| ...with the landing shed first | 115 int 13h of 1, 150.6 ms | 60.0 ms | 18 x 6, 68.8 ms, the landing re-taken | 60.0 ms | - |
+
+(60KB a read; best of three; the rest of each row's calls are the directory
+and the FAT.) Under Bochs (a 386, its ATA disk) the same legs: rung 1 33.6 ->
+15.2 ms, rung 0 74.6 -> 25.8 high and 15.8 low, BIOS 26.3 -> 23.6 high
+(14.8 low), shed 71.7 -> 23.8.
+
+**Where one sector a call really happened.** `dsk_xfer`'s `.drv` arm sent
+any `DSV_BLK` whose `DX` was an LDT selector to `.drvhi`, which moved it a
+sector at a time through `dsk_secbuf` (decision 3, item 77, written when
+only a HIGH buffer was a selector). Since MC7.4 **every claim is an LDT
+selector** (SPEC.md 50.6.12), so on a machine whose C: HDD.DRV serves -
+every IDE AT, by 51.3.2's sniff and 52.1.1's take - every read into ANY
+package claim, a conventional one included, was one IDE command, or one
+reflected int 13h (a CPU reset on a 286) on rung 0, per 512 bytes. The
+NINE-sector figure is the kernel's own BIOS path (`.bounce`, item 85): the
+landing's size, and **one sector a call** there too once the landing was
+shed - it came back only at the next mount (`dsk_rah_want`), and only while
+the read-ahead store was above 1MB.
+
+**The fix.**
+- **`BLKCAP_SEL` = 4 in a `DRVC_DISK` driver's `DSV_CAPS`** (SPEC.md
+  51.8.1, `drivers/os88drv.inc`, mirrored in kernel/driver.inc): *my
+  `DSV_BLK` loads DX as it is*. `.drvhi` hands such a driver the selector
+  as it is; its answer **09h** means "no transport of mine reaches this
+  buffer, nothing moved" and is bounced; any other is the answer. HDD.DRV
+  sets it: rung 1 is `rep insw` through ES, and rung 0's `hd_bios_run`
+  refusal of a buffer above 1MB (before the first int 13h) now answers 09h
+  where it answered 04h (`hd_xfer_fail9`). A selector below 1MB reaches
+  rung 0's int 13h as it is (`mega_svc` converts it).
+- **A driver without the bit, and the 09h, are bounced a RUN at a time**
+  through the landing (`.drvhi`'s loop, `.bcp` the copier, `.dhcp` gone),
+  `dsk_secbuf` only when no landing can be had. Measured with HDD.DRV's
+  `DSV_CAPS` put back to 0: 9 calls a read (18 x 6 + 12), 67.1 ms.
+- **The landing is `DSK_BNC_SECS` = 18 sectors** (was `DSK_RAH_SECS`, 9),
+  in `dsk_rah_land`, the BIOS bounce's cap and `mega_hibnc`'s. Measured on
+  the mr286 profile, the high read off the kernel's BIOS row: **9 -> 72.8
+  ms, 18 -> 68.4, 36 -> 66.2, 63 -> 67.8** (conventional 60.0); rung 0's
+  bounce 75.7 / 73.5 / 72.1 for 18 / 36 / 63. A reflected int 13h costs
+  ~0.8 ms there ((156.6 - 63.8) / 118 extra calls), and what is left past
+  18 is the copy, not the calls - so 18, 9KB, +4.5KB of pinned purgeable
+  conventional memory over the old landing. 36 would buy ~2 ms more per
+  60KB for 9KB more; a real 286's reset may cost more than 86Box's, and
+  that is the number a field run would settle (docs/FIELD-MACHINES.md).
+- **A shed landing is taken back** at the next transfer that needs it:
+  `dsk_bnc_want`, at `dsk_xfer`'s head, before `[sch_lock]` is raised and
+  only when it is 0 (an ordinary claim from the caller's task), for an LDT
+  selector whose base is above 1MB, in protected mode. It no longer
+  depends on the store being above 1MB.
+
+**What changed in `dsk_rah_land`, for mega-memjw's merge** (that branch owns
+WHERE pinned claims go): only its SIZE - `mov ax, DSK_BNC_SECS * 32` where
+it was `DSK_RAH_SECS * 32` (the head, CX, the same) - and it has a third
+caller, `dsk_bnc_want`. Its claim call (`mem_claimp_dma_x`, `MEM_P_RAHB`)
+and its lifetime rules at the store's drop (`dsk_rah_redo`,
+`dsk_rah_want`'s `.hgone`) are untouched; a drop now means the next high
+transfer re-takes it rather than the next mount.
+
+**HDD.DRV as kern_mega's default for an IDE disk** was a candidate: it
+already IS (51.3.2's sniff wants it whenever the BIOS knows a fixed disk,
+and 52.1.1 takes an IDE drive of 16 heads or fewer onto rung 1) - the row's
+`ide` leg confirms it loads and takes C: on the mr286 profile. What remains
+on the kernel's BIOS path is a drive HDD.DRV does not pair (an XT-IDE, SCSI
+or ESDI ROM's, more than 16 heads, an ambiguous pairing) and one the BIOS
+does not know; those are the `bios` and `rom` legs.
+
+**Bytes.** kern_mega: `.cold` +98 (B498h -> B4FAh: `.drvhi` with its loop
+154 bytes against the old `.drvhi` and `.dhcp`'s 104, +50; `dsk_bnc_want`
+45; its call at `dsk_xfer`'s head 3), `.text`, `.bss`
+and `.mega` unchanged - **MEGA_RESIDENT 62,976 unchanged** (`.cold` goes
+above 1MB), KERN_SIZE's boot transient +98. kern_big and kern_small:
+byte-identical (built at one commit; the two bytes that differ are the
+build number). HDD.DRV: image 4,080 -> 4,080 (the 4 bytes of
+`hd_xfer_fail9` in its padding), packed 3,580 -> 3,586. Conventional
+memory: the landing 4.5KB -> 9KB while held.
+
+**Rows.** `hdbounce` (soak, 86Box, ~55 s): the four legs and their bounds
+(SPEC.md 51.8.1); red on the base tree in all four, red in `ide` alone
+with HDD.DRV's DSV_CAPS 0, green after.

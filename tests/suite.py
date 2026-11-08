@@ -19617,6 +19617,24 @@ SOAK = [
         "check. 40s is 37.5 measured",
         needs=("86box", "nasm"),
         wants=("build/mega.img", "build/waverack.o88", "build/waverack.bin")),
+    Row("hdbounce", "soak", py("tests/hdbounce.py"), 60.0,
+        "docs/plans/KERN-MEGA-PLAN.md 14.167, SPEC.md 51.8.1: kern_mega off "
+        "a 16x63 IDE C: on 86Box's at286_vga_hdd (the mr286), tests/megard's "
+        "MEGARD reading a 120-sector BIG.DAT into its OS88_HIGHMEM pool "
+        "block and into a conventional claim, timed by the guest's PIT and "
+        "then COUNTED - drv_blk_call_x and mega_fd13 breakpoints, every "
+        "DSV_BLK call and every int 13h transfer reflected in protected "
+        "mode. Four legs: ide (HDD.DRV's rung 1 takes C:, 52.1.1): the high "
+        "read no more driver calls than the low one and no int 13h; rom "
+        "(the device row put on rung 0): bios (no HDD.DRV, the kernel's own "
+        "BIOS row): and shed (bios after a squeeze that sheds the landing): "
+        "the high read's int 13h runs DSK_BNC_SECS long but at a track or "
+        "the request's end, and in shed the landing back after it. RED on "
+        "the base tree: ide 120 driver calls against 1, rom and shed 120 "
+        "one-sector int 13h, bios runs of nine",
+        needs=("86box", "nasm"),
+        wants=("build/megak/kernel.sys", "build/megak/boothd.bin", "build/hddtool.bin", "build/hdd.bin",
+               "build/megak/ctrl.drv", "build/hdd.drv", "build/mbr.bin")),
     Row("megasbgap", "soak", py("tests/megasbgap.py"), 25.0,
         "docs/plans/KERN-MEGA-PLAN.md 14.156, 14.160: a 10 s 22,050 Hz 8-bit "
         "WAV in AUDIO from a scratch 1.44MB B: on 86Box's at286_vga_sb (the "

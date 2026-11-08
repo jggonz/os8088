@@ -6500,13 +6500,13 @@ mem_bytes_kb_x:
 ; mem_ringtop - from mem_claim_x's retry, both `.cold` (kern_mega, KERN-MEGA-PLAN
 ; 14.166, SPEC.md 50.3.2): A RING GOES TO THE TOP END of conventional memory
 ; when the top end is free for it. in: AX = paragraphs (granule-rounded), SI
-; = the page-safe head in paragraphs, DI = the door's bits, BX = the owner.
+; = the page-safe head in paragraphs, DI = the door's bits (BX the owner,
+; unread: a package's ring, a driver's, the kernel's landing alike).
 ; out: DI | MC_DMA_HI when the top-down first fit would put the claim where
 ; nothing above it but other RINGS and the kernel's own claims (0xFFxx: the
 ; low descriptor tables, a boot driver's image) stands - so mem_claim_1 then takes exactly
 ; that place - and DI as it was otherwise: no head (no ring), the top door
-; already, a kernel cache's owner (the landing stays at the floor it is born
-; at), real mode, or a claim with no head above the candidate (a carve, an
+; already, real mode, or a claim with no head above the candidate (a carve, an
 ; overlay, a region: the top is not free, and a ring under them would be in
 ; the middle - bottom-up first fit, 14.55's, stands). Everything else kept.
 ;
@@ -6516,9 +6516,12 @@ mem_bytes_kb_x:
 ; cache shed), and their KB then stand UNDER the pin as a run of their own
 ; (measured on a 1MB kern_mega: SOUND.DRV's 16KB staging pool over 86KB that
 ; Sheet's spill had held, the heap's best run 474KB of 560KB free). The
-; floor end is never free for it - the read-ahead's landing is born there -
-; and the top end is, on a machine with a pool, from the boot until a
-; program wants a conventional CS. A ring at the top has only free memory
+; floor end is never free for it after the boot - caches and spills stand
+; there - and the top end is, on a machine with a pool, from the boot until
+; a program wants a conventional CS. The read-ahead's landing is the same
+; shape (pinned, page-safe) and since 14.167 it comes back mid-session, so
+; it takes the same rule: at the boot it goes to the top, and the rings
+; stack under it. A ring at the top has only free memory
 ; under it, and what is later taken top-down stacks under the ring and
 ; frees back into that run. Idle (declared movable) it came in by the top
 ; door, so the descending pass packs it back to the top (SPEC.md 66.4.1)
@@ -6528,11 +6531,9 @@ mem_ringtop:
     jz .r                       ; no head: not a ring
     test di, MC_DMA_HI
     jnz .r
-    cmp byte [ss:mega_pm], 0
-    je .r
-    cmp bh, MEM_PG_MIN          ; a kernel cache (0xFBxx..0xFExx) or a
-    jae .r                      ; kernel tag (0xFFxx): its own place
-    push ax
+    cmp byte [ss:mega_pm], 0    ; (any owner: the read-ahead's LANDING too,
+    je .r                       ; which dsk_bnc_want re-takes mid-session
+    push ax                     ; when it was shed - KERN-MEGA-PLAN 14.167)
     push bx
     push cx
     push dx

@@ -99477,13 +99477,15 @@ is freed meanwhile (a program closed, a cache shed) stands under the pin as a
 run of its own. Measured on a 1MB kern_mega (640K and 384K above 1MB, the
 86Box mr286): SOUND.DRV's 16KB staging pool over the 86KB Sheet's spill had
 held, the heap's best run 474KB of 560KB free, `OSAPI_MEM_HUGE` 86KB short.
-The FLOOR end is never free for a ring - the read-ahead's landing is born at
-it (§18.95) - and on a machine with a pool the TOP end is, from the boot until
-a program wants a conventional CS. So `mem_ringtop` (`.cold`, from
+The FLOOR end is never free for a ring after the boot - caches and programs'
+spills stand there - and on a machine with a pool the TOP end is, from the
+boot until a program wants a conventional CS. So `mem_ringtop` (`.cold`, from
 `mem_claim_x`'s retry) asks where the top-down first fit would put a claim
-WITH A HEAD from a package or a driver (never the kernel's own: the landing
-keeps the floor), and when everything above that place is a ring too it
-sends the claim through the top door, which takes exactly that place; when a
+WITH A HEAD - a package's ring, a driver's, and the read-ahead's 9KB LANDING
+(§18.95), which KERN-MEGA-PLAN 14.167 re-takes mid-session when it was shed
+(`dsk_bnc_want`) - and when everything above that place is a ring too, or the
+kernel's own (the low tables, a boot driver's image), it sends the claim
+through the top door, which takes exactly that place; when a
 claim with no head stands above it (a carve, an overlay, a region), the top
 is not an end and the ring goes bottom-up as 14.55 put it. A ring at the top
 end has only free memory under it; a top-down claim taken later stacks under
@@ -102600,6 +102602,56 @@ volumes, and it went stale twice: the `DRVC_FILE` arm was missing (unticking
 the RAM disk left a mounted volume over a freed image), and §62.9.19's
 `DRVC_FILE2` had to be taught to it again. A mounted `.IMG` (§18.101) is
 `DRVC_IMG`, `0x41`, which no driver's class can equal.
+
+#### 51.8.1 A driver whose `DSV_BLK` takes a selector says so (`BLKCAP_SEL`), and kern_mega stops bouncing it (KERN-MEGA-PLAN 14.167)
+
+On kern_mega in protected mode **every claim is an LDT selector** (§50.6.12),
+and `dsk_xfer` used to send any `DSV_BLK` whose `DX` was one through
+`dsk_secbuf` **a sector a call** (`.drvhi`): one IDE command per 512 bytes on
+HDD.DRV's rung 1, one reflected int 13h - on a 286 a CPU reset - per 512
+bytes on rung 0, for a pool block above 1MB and a conventional claim alike.
+The reason was a driver's paragraph arithmetic on `DX`, which a selector
+does not survive, and a ROM's DMA, which cannot reach above 1MB.
+
+So a `DRVC_DISK` driver may set **`BLKCAP_SEL` = 4 in `DSV_CAPS`** (the bit
+`FSCAP_SEL` is to a file driver, §62.9.2.4): *my `DSV_BLK` loads `DX` into a
+segment register as it is and walks only `BX`*. Then:
+
+- **the selector goes to the driver as it is** - one call for the whole run,
+  as a conventional segment does on every real-mode kernel;
+- **a transport of the driver's that cannot reach the buffer answers `CF` =
+  1, `AL` = 09h having moved nothing** (the ROM's own "DMA boundary"), and
+  that one answer is bounced after all, a RUN at a time through the landing
+  below. Any other `CF` = 1 is the transfer's answer;
+- **a driver that leaves the bit clear is bounced a run at a time** through
+  the landing too - no longer a sector at a time - and through `dsk_secbuf`
+  only when no landing can be had.
+
+HDD.DRV sets it. Rung 1 is `rep insw` / `out` through `ES`, which a selector
+serves as a segment does; rung 0's `hd_bios_run` refuses a buffer above 1MB
+before its first int 13h (§2.10.8's HMA rule, which kern_mega's pool falls
+under) and now answers that refusal **09h** rather than 04h. A buffer below
+1MB that is a selector reaches rung 0's int 13h as it is: `mega_svc` hands
+the ROM the paragraph its descriptor is based on.
+
+**The landing** (`dsk_rah_bnc`, `MEM_P_RAHB`) is the read-ahead's and the
+bounce's both: page-safe, purgeable, `DSK_BNC_SECS` sectors - a bounce's
+run through it is one reflected int 13h, so it is sized for the BIOS call
+and not for the read-ahead's nine-sector chunk. **A shed one is taken back
+at the next transfer that needs it** (`dsk_bnc_want`, at `dsk_xfer`'s head
+before `[sch_lock]` is raised and only when it is 0, for a buffer whose
+base is above 1MB): it used to come back only at the next mount, and every
+high transfer until then went a sector a call. No other kernel reads the
+bit, and no real-mode kernel ever hands a driver a selector.
+
+**Measured** on 86Box's mr286 profile (`tests/hdbounce.py`, 60KB off a 16 x
+63 IDE C:): through HDD.DRV's rung 1 a read into a pool block or a
+conventional claim was 122 one-sector driver calls, 83.8 ms, and is now one
+call for the data, 58.0 ms (kern_big on the same machine: 60.9); through
+rung 0, 122 reflected one-sector int 13h, 156.7 ms, now 75.7 ms high and
+63.8 low; through the kernel's own BIOS row 72.8 -> 68.4 ms high (60.0
+low), and 150.6 -> 68.8 with the landing shed first. KERN-MEGA-PLAN 14.167
+has the table and the landing sizes measured (9, 18, 36, 63 sectors).
 
 ### 51.9 A driver's own settings, inside SYSTEM.CFG
 

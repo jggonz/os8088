@@ -382,6 +382,17 @@ Still open:
 
 ## 11. The final pass
 
+**Second run, 2026-11-08, at 749e8d5b** - after the owner's second round
+(the disks, the release zip, WaveRack high, the DMA door above 1MB, the
+three trap passes, WIN16's two crashes): one scoped call of 183 rows, the
+first pass's 87 and every row the six branches named
+(`build/soak/20261107-235723`): **183 passed, 0 failed, 0 skipped** in 45
+minutes. Then `make test-full` once: 88 passed, 1 failed (`pins`: a
+registry line 14.160 left behind, deleted in f714918c, the row re-run alone
+green), 1 skipped (`w16censall`, its samples). Two pieces of work run after
+it and owe their own rows: the memory-placement audit (`mega-memjw`) and the
+fixed-disk transfer path (`mega-hdbnc`).
+
 **Run, 2026-11-07, at 1a37e25e** - the union below in ONE scoped call (87
 rows, kern_big's and kern_mega's, `build/soak/20261107-204757`): **87 passed,
 0 failed, 0 skipped** in 28 minutes. Then `make test-full` once: 87 passed, 1
