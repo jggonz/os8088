@@ -71874,6 +71874,18 @@ What differs from a grant ring (§34.5.2):
 - verbs 3 and 9 are unchanged, and the teardown is: an instance's sound is
   released before its memory (`inst_rel_rec`), so a player that dies stops
   the card before its ring is freed.
+- **the stream's end forgets the ring** (KERN-MEGA-PLAN 14.182):
+  `sbl_stop_stream` zeroes `[sbl_rseg]` and the control words' segment
+  `[sbl_extctl+2]` in the same `cli` window that clears `[sbl_str_act]`,
+  as `sbl_dma_put` and `sbl_pool_put` zero `[sbl_seg]` and
+  `[sbl_poolseg]`. Both are words of `SNDV_RMODE`'s list (§53.2.3), so a
+  word naming a ring the package has since freed was a SELECTOR outliving
+  its claim on kern_mega: once another claim took that LDT entry above 1MB
+  the next real-mode door read "no real segment" off it and refused with
+  `FSXR_DRV` for a stream that no longer existed (the VGA demo videos' 04,
+  08, 09 and 10 played protected after an earlier clip's window closed).
+  6 bytes; kern_big's and kern_small's driver plays nothing differently,
+  a segment word there being read only by the open that sets it.
 
 **ADPCM4** is `SND_OPENF_ADPCM4` on the same verb: the start byte after
 `48h` is **7Dh** (auto-init 4-bit ADPCM, with a reference byte) instead of
@@ -107614,7 +107626,12 @@ for the exit (a tone is not the bracket's: the speaker is the door's).
   at or below 60h, `SNDV_MIXPOP`'s test), answers SI = the offset in the driver's segment of
   a list of word offsets and CX = its count - SOUND.DRV's are the ring's
   segment, an external ring's control-word segment, the staging pool and
-  the double buffer. At the drop each word is banked and made the real
+  the double buffer. **Each word is 0 while it names nothing** - the pool
+  and the buffer when they are freed, the ring's two when its stream ends
+  (§34.5.3, KERN-MEGA-PLAN 14.182) - because the DOOR asks every word for a
+  real segment and refuses the bracket, `FSXR_DRV`, for one above 1MB, and
+  a word left naming a freed claim answers for whichever claim takes its
+  LDT entry next. At the drop each word is banked and made the real
   segment with its base; at the return a word still holding what the drop
   wrote gets its selector back, and a word the bracket WROTE - a stream
   OPENED inside, which stores real segments - gets the selector of the claim
