@@ -7,6 +7,26 @@ branch `the-big-review`, cut from that commit.
 This is a dated measurement of one tree, not a maintained document. SPEC.md and
 the code stay the authority. Every line number and byte figure below can move.
 
+**After the review (owner and follow-up, 2026-11-08).** The owner has answered
+the first round of section 10. The answers, in the owner's words where it
+matters, are `big-review-2026-11-08/owner-decisions.md`, and they bind. Five
+follow-ups re-checked what the answers turned on, all under
+`docs/reports/big-review-2026-11-08/`:
+
+- `followup-canary.md`: BR-1 corrected (inert since 2026-09-05, part 1 of the
+  fix costs 0 bytes, the harm is crossing READS);
+- `followup-purgeable.md`: package-purgeable claims are not needed now;
+- `followup-decisions-6-8.md`: rt-7, text-7 and rt-5 explained and re-priced;
+- `followup-already-exists.md`: six recommendations withdrawn or reworded, five
+  that missed an existing piece;
+- `areas/gap-bss-zeroing.md`: `.bss` is zero on every shipped path since PR #61.
+
+The design that replaces the refused 14th blob sector is
+`docs/plans/BOOT3-PLAN.md`. Every passage below that one of these changed is
+marked "(owner, 2026-11-08)" or "(follow-up, 2026-11-08)"; section 10 is now
+split into what is decided and what is still open. The plan,
+`docs/plans/BIG-REVIEW-PLAN.md`, carries the same changes as sessions.
+
 ## 1. Verdict
 
 The kernel's mechanisms are, area by area, better than the period systems they
@@ -27,10 +47,15 @@ kernel's own best pattern missing one routine away:
 
 So the cheapest high-value work in this tree is not new design. It is copying
 the kernel's own patterns to the sites they have not reached, and turning the
-rules that are held by care into gates.
+rules that are held by care into gates. The owner's first reading agreed:
+"most of the agents seemed to like our current structure, overall" (owner,
+2026-11-08).
 
 The live risks that matter most:
-- the boot canary protects one of the six shipped system disks (BR-1);
+- the boot canary protects one of the six shipped system disks (BR-1). On
+  the 360KB and 720KB disks it has been inert since the packed kernel became
+  the default on 2026-09-05, and the half of the fix that re-arms it costs 0
+  bytes (follow-up, 2026-11-08);
 - a kern_small shed during a mount writes the directory listing into the FAT
   window (BR-2);
 - `gfx_blit4` overwrites 64KB of heap on a negative width, and the fix is 0
@@ -38,13 +63,23 @@ The live risks that matter most:
 - a dying worker tears down and repaints on its own 128-byte slice (BR-4);
 - nothing handles INT 0, so one divide overflow kills the machine on the 1981
   IBM ROM, re-executes for ever on a 286+, and continues with garbage on the
-  10/27/82 ROM and GLaBIOS (BR-9).
+  10/27/82 ROM and GLaBIOS (BR-9). No machine has met it yet, so the
+  panel that answers it waits behind a build knob, off in shipped kernels
+  (owner, 2026-11-08).
 
 Two facts constrain the plans more than any byte total:
 - **kern_big's two transient homes are full.** The blob has 4 bytes free and
-  `.ovl` has 1 (MEASURED).
+  `.ovl` has 1 (MEASURED). The owner refused a 14th blob sector; the route is
+  `docs/plans/BOOT3-PLAN.md`, which moves boot-only code into a third section
+  at the tail of KERNEL.SYS and frees about 508 blob bytes (its wave 1) and 176
+  `.ovl` bytes (its wave 3) for 0 resident (owner, 2026-11-08).
 - **Phase 1 is a net resident saving on kern_big only if the owner takes
-  WP2's FILECP/FDLG trade.**
+  WP2's FILECP/FDLG trade.** The owner refused that trade (owner,
+  2026-11-08). With it gone, and with the package fences and the fault
+  panel out of the shipped kernels, Phase 1 GROWS kern_big by about
+  +0.09..+0.54KB with its open owner items taken and +0.17..+0.52KB without
+  them (ESTIMATED, section 7). Correctness costs bytes, and the review's
+  biggest saving is no longer on offer.
 
 The flag day saves about **-1,170 resident on kern_big, -515 on kern_small and
 -770 conventional on kern_mega** (ESTIMATED). It moves `PKG_FMT` 10 -> 13 and
@@ -126,8 +161,8 @@ comments and SPEC text describing retired designs as current.
 
 | area | code | docs | biggest risk |
 |---|---|---|---|
-| abi | the call surface's mechanics are the best part of the kernel | contracts kept in up to four places, which disagree (abi-10) | no runtime API level: a new package on an old kernel calls past the table (abi-6; WP9) |
-| boot | one of the best-reasoned parts; boot-only code costs no resident byte | 40+ comments state history as current values | canary inert on four of the six system disks, and the splash's first tick runs code ahead of it on three (BR-1) |
+| abi | the call surface's mechanics are the best part of the kernel | contracts kept in up to four places, which disagree (abi-10) | no runtime API level: a new package on an old kernel calls past the table (abi-6; WP9). The Wire already fences the packages it serves, so the gap is a hand-copied package (follow-up, 2026-11-08) |
+| boot | one of the best-reasoned parts; boot-only code costs no resident byte | 40+ comments state history as current values | canary inert on four of the six system disks since 2026-09-05, and the splash's first tick runs code ahead of it on three (BR-1) |
 | bytes | close to the floor of routine-by-routine work | SPEC.md 2.6 and KERNEL-MEMORY.md tables stale | no live defect; the remaining levers are structural (theme 7, T5) |
 | diskread | one transfer routine, divide safety by arithmetic, a measured cache | the worst drift found: headers of deleted routines, SPEC 18's mount sequence (dr-16) | the boot partition is mounted with AH=08h geometry but addressed with the BPB's; FIELD-NOTES 33 is still live (dr-1, BR-25) |
 | diskwrite | the best-argued subsystem: one commit order, shadow replace | SPEC 18.4 describes a kernel several passes old | hostile FileSize divides (BR-23); the multi-window FAT16 chain leak (BR-17) |
@@ -199,9 +234,9 @@ is already proven (`synth/keep.md` Part 3):
 
 | kern_mega already does | kern_big/kern_small still | finding | bytes |
 |---|---|---|---|
-| releases a lock the dying task held (`mega_fkill`) | deadlock when a worker dies holding the gfx lock | BR-173 | +12 `.text`, -24 `.mega` |
+| releases a lock the dying task held (`mega_fkill`) | deadlock when a worker dies holding the gfx lock | BR-173 | +12 `.text`, -24 `.mega`; not taken as retail code: a package fence (owner, 2026-11-08) |
 | posts callback-fault teardown to `ui_task` | tear down on the dying worker's slice | BR-4 | -6..+50 by route |
-| closes the faulting package on a CPU fault | hand INT 0 to the BIOS dummy handler | BR-9, gfce-2 | ~+55 big / ~+40 small for the halting panel (BR-9); closing the package is gfce-2's +45..+65 more (OWNER) |
+| closes the faulting package on a CPU fault | hand INT 0 to the BIOS dummy handler | BR-9, gfce-2 | ~+55 big / ~+40 small for the halting panel (BR-9); closing the package is gfce-2's +45..+65 more. Decided: kern_mega keeps closing the package; the real-mode panel waits behind a build knob, off in shipped kernels (owner, 2026-11-08) |
 | restores the image's own 8259 masks at wake | wake with the fresh boot's masks | hiber-1, hiber-14 | +10..+14 HIBER.DRV |
 | unwinds the DOS-handoff refusals | leak the extent claim | BR-38 | +20 HIBER.DRV |
 | ships the XT redraw knobs RELIT/DMGSTALE/CAPTION/RAISEOL | run without them on the XT they were measured for | WP11 | owner's round |
@@ -236,14 +271,14 @@ corrected.
 
 | # | BR | defect | kernels | fix bytes | batch |
 |---|---|---|---|---|---|
-| 1 | BR-1 | The boot canary is inert on kern_big's 360/720KB and kern_small's 360/720KB disks, and the splash's first tick runs `.text` ahead of it on kern_small 360/720 and kern_big 1.2MB. Only kern_big 1.44MB is protected. `t_canary` passed because it modelled the runs from the wrong origin | big, small | 0 resident; `.boot2` +19..+23 big (needs WP6's -41 first), +8..+12 small; +1 int 13h per 8088 boot on four disks (~170-400 ms, PREDICTED) | A |
+| 1 | BR-1 | The boot canary is inert on kern_big's 360/720KB and kern_small's 360/720KB disks, and the splash's first tick runs `.text` ahead of it on kern_small 360/720 and kern_big 1.2MB. Only kern_big 1.44MB is protected. `t_canary` passed because it modelled the runs from the wrong origin. **Corrected (follow-up, 2026-11-08):** inert on the 9-sector disks since **2026-09-05** (`175926d5`, KZIP the default, which read the plain head in runs of its own), not since the 12 -> 13 blob change, which re-armed 1.2MB and 1.44MB. The harm is a crossing **read** that returns the other head's sectors (cylinder runs are reads only, SPEC.md 18.91.3), not a write. The Pravetz record is the int 15h freeze (#343), not a cylinder-read report | big, small | 0 resident. **Part 1** (KSIG_OFF 22528, the segment arm dropped): **0** `.boot2` big and mega, **-11** small. **Part 2** (the head at the track bound): +12 `.boot2` on each kernel, big in BOOT3's room; +1 int 13h per 8088 boot on small360/720, 1.2MB and 1.44MB, none on kern_big 360/720 (PREDICTED). Part 1 and the `t_canary` rewrite are urgent | A |
 | 2 | BR-2 | kern_small: a shed during a Disk-window mount hands the listing's destination to the read-ahead or FAT window, and the next write puts it on the disk | small | +9..+10 `.cold` | D |
 | 3 | BR-3 | `gfx_blit4` trusts the sign of its width: 64KB from the 336-byte `vga_pbuf` into the heap on VGA, ~8KB a row on 1bpp. `gfx_blitp` already has the fix | all | **0** (`jz` -> `jle`, same encoding) | B |
 | 4 | BR-4 | A dying worker runs `gfx_lock`, `wm_destroy` and its repaint chain, and `desk_drop_x`, on its own 128/192-byte slice; DESK.DRV can be freed under the UI task. A posted close as first written does not work (`app_close_win` re-hides a state-2 record) | all | -6..+50 by route (+22 big / +27 small in the batch) | C |
-| 5 | BR-9 | No divide-error or invalid-opcode handler. The 1981 IBM ROM masks the 8259 (a dead machine); the 10/27/82 ROM and GLaBIOS continue with garbage in AX; a 286+ re-executes the `div` for ever | big, small | ~+55 big / ~+40 small resident, +12..+20 `.ovl` (no room today) | F (owned by WP8) |
-| 6 | BR-6 | A plain MDA primary is programmed with Hercules graphics CRTC timings: ~33.4 kHz horizontal against the 5151's 18.4 kHz. An MDA+CGA machine leaves the usable CGA idle | big, small, mega | +60..+110 `.boot2` big/mega (a 14th blob sector becomes certain on big), +25..+65 small | A |
-| 7 | BR-7 | The loader trusts a package header against its own region. An image shorter than its clear prefix wraps the decoder's bound and writes ~64KB past the region; The Wire feeds this path network bytes | all | +32..+36 `.cold` (0 conv on mega) | D |
-| 8 | BR-8 | `wm_ptr2idx` divides an unvalidated window pointer (INT 0). A bound alone trades the dead machine for a write into another package's window, so the door refusals go with it | all | +1..+2 the bound; +29..+46 with the doors | C (owned by WP8) |
+| 5 | BR-9 | No divide-error or invalid-opcode handler. The 1981 IBM ROM masks the 8259 (a dead machine); the 10/27/82 ROM and GLaBIOS continue with garbage in AX; a 286+ re-executes the `div` for ever | big, small | ~+55 big / ~+40 small resident, +12..+20 `.ovl` (no room today). **Decided: behind a build knob, off in shipped kernels, 0 shipped bytes**, until a field report says it is being hit (owner, 2026-11-08) | F (owned by WP8) |
+| 6 | BR-6 | A plain MDA primary is programmed with Hercules graphics CRTC timings: ~33.4 kHz horizontal against the 5151's 18.4 kHz. An MDA+CGA machine leaves the usable CGA idle. **Decided: os8088 does not run on an MDA; an MDA alone prints a message and halts, and an MDA beside a usable CGA switches to the CGA** (owner, 2026-11-08: "this can damage the monitor") | big, small, mega | +60..+110 `.boot2` big/mega, +25..+65 small. On kern_big it is paid from BOOT3-PLAN's wave 1 room, in `vid_detect`'s first-tick arm; no 14th sector (owner, 2026-11-08) | A |
+| 7 | BR-7 | The loader trusts a package header against its own region. An image shorter than its clear prefix wraps the decoder's bound and writes ~64KB past the region; The Wire feeds this path network bytes | all | +32..+36 `.cold` (0 conv on mega). Kept: a fence on a damaged FILE, which `synth/bugs.md` puts outside the packages-are-trusted class | D |
+| 8 | BR-8 | `wm_ptr2idx` divides an unvalidated window pointer (INT 0). A bound alone trades the dead machine for a write into another package's window, so the door refusals go with it | all | +1..+2 the bound; +29..+46 with the doors. **Not taken as retail code**: the doors are a package fence, and the bound goes only with them (owner, 2026-11-08) | C (owned by WP8) |
 | 9 | BR-10 | Esc on the Resume face deletes the hibernated session without asking | big | +0..+4 HIBER.DRV | G |
 | 10 | BR-11 | The purge floor is one word, stamped with a task that names nobody and lifted by any teardown: a paste can stop part-way and report success | big, small | +8..+18 `.cold` | D |
 | 11 | BR-12 | `mem_regrow`'s path-3 move copies the whole block at IF=0, where the compactor copies the same bytes at IF=1 (~86 ms per 32KB, ~170 ms per 64KB, PREDICTED) | big, small | +10..+16 `.cold` | D |
@@ -252,7 +287,7 @@ corrected.
 | 14 | BR-14 | kern_small's `fsx_page` enables Hercules page 1 on a machine that also has a CGA, because the dual-card guard is `%ifdef KERN_BIG` | small | +13 small, +2 big | B |
 | 15 | BR-15 | The system clock gains about 31 s a day | all | 0 | G |
 | 16 | BR-5 | One global `drv_wcnt`: with USBMOUSE's worker running (the Book8088/CH375 arm), every other driver's unload stalls ~5 s and leaves it detached but still published. This is NO-PINNING K1b, whose stated condition is now met | big, mega | +20..+35 `.cold`, +11 `.bss` | G |
-| 17 | BR-173 | A worker that dies holding the gfx lock deadlocks the desktop (`gfx_lock`'s retry never compares the owner) | big, small | +12 `.text` | C |
+| 17 | BR-173 | A worker that dies holding the gfx lock deadlocks the desktop (`gfx_lock`'s retry never compares the owner) | big, small | +12 `.text`; not taken as retail code (owner, 2026-11-08) | C |
 | 18 | BR-181 | XMEM.DRV's tier-2 copy never re-proves A20 | big (386) | ~+2 XMEM.DRV | I |
 | 19 | BR-182 | `HDV_ARM` redirects every rung-1 read, the kernel's own FAT reads included, and an arm outlives its owner | big | disarm unpriced; its DSV_BLK tag is flag day | I |
 | 20 | BR-16 | Media-changed status 06h, the AT's free disk-swap signal, is retried as a generic error and thrown away | all | +16 `.cold` | E |
@@ -264,7 +299,7 @@ corrected.
 
 | batch | kern_big | kern_small | kern_mega conv | transient |
 |---|---|---|---|---|
-| A boot, detection, the build's gates | 0 / 0 | 0 / 0 | 0 / 0 | `.boot2` +78 big and mega, +27 small (after WP6's -41); `.ovl` +4 |
+| A boot, detection, the build's gates | 0 / 0 | 0 / 0 | 0 / 0 | `.boot2` +78 big and mega, +27 small (after WP6's -41); +69 and +18 with BR-1 re-priced (follow-up, 2026-11-08); `.ovl` +4 |
 | B display, FSX, drawing | +41 / +106 | +21 / +33 | +41 / ~+104 | `.ovl` +8, `.boot2` +7 (big) |
 | C WM, UI, instance teardown | +108 / +185 | +92 / +146 | ~+98 / ~+162 | - |
 | D loader and heap | +94 / +164 | +104 / +137 | 0 / 0 | - |
@@ -274,11 +309,32 @@ corrected.
 | H kern_mega | - | - | +20 / +20 | above 1MB +19 / ~+141 |
 | I HDD.DRV, XMEM.DRV, DOS.O88's XMS | 0 / 0 | - | - | DOS.O88 +52 / +157; HDD.DRV +12 / +58 |
 | **total** | **~+508 / ~+945** | **~+372 / ~+586** | **~+232..+241 / ~+420..+429** | `.ovl` +82 big against 1 byte free |
+| **total after the owner's answers** (owner and follow-up, 2026-11-08) | **~+341 / ~+762** | **~+220 / ~+418** | **~+179 / ~+355** | `.ovl` +62 big; `.boot2` A +69 big and mega, +18 small |
 
-Two notes on these totals:
-- **The owner's "packages are trusted" ruling** decides ~107 of the core bytes
-  on each kernel (BR-8's doors, BR-22, BR-29, BR-30, BR-37, BR-173). If it is
-  applied, the core falls to **~+401 kern_big / ~+265 kern_small**.
+Notes on these totals:
+- **The owner's "packages are trusted" ruling is applied** (owner,
+  2026-11-08). The six package fences (BR-8's doors +36, BR-22 +12, BR-29
+  +13, BR-30 +18, BR-37 +16, BR-173 +12: 107 core bytes on each kernel) are
+  not taken as retail code; at most they go into an `APICHK`-style knob.
+  BR-8's +2 bound goes with its doors (`synth/bugs.md`'s own rule).
+- **The fault panel waits behind a build knob** (owner, 2026-11-08): BR-9's
+  +55 kern_big / +40 kern_small and its `.ovl` install (+12, +8 for vector 6)
+  leave the shipped totals. kern_mega keeps closing the faulting package, as
+  it does today.
+- **The same weighing, applied by the follow-up** to the other guards whose
+  failure no machine has met: BR-84 (+4, the panel's own table bound) leaves
+  with the panel; BR-85's code half (+3: "latent unless a package IRQ handler
+  calls WAKE, and none was traced") is held, because the SDK already states
+  the precondition; BR-107 (+4) and BR-109's optional doors (+12), which
+  `synth/bugs.md` calls "the same kind" as the six, take their documented
+  form. The fences against hostile FILES (BR-7, BR-23, BR-44, BR-59) are NOT
+  in this class and stay.
+- **BR-1 is re-priced** (follow-up, 2026-11-08): batch A's `.boot2` falls by
+  9 on every kernel (BR-1's midpoint was +21 big and +10 small; it is now +12
+  big and mega, part 1 at 0 and part 2 +12, and +1 small, part 1 -11 and
+  part 2 +12).
+- kern_mega also loses BR-173's -24 `.mega`: that saving came from sharing
+  the fix, and without the retail fix kern_mega keeps its own release.
 - Several items reclaim bytes inside their batch: BR-27 -12, BR-185/BR-186
   -43 `.mega`, BR-204 -10 `.mega`, BR-69 -12 module.
 
@@ -295,12 +351,20 @@ from `synth/phase1.md` inserted where it binds.
    lock with six meanings and about forty takers. The context rules are two
    prose lists (SPEC.md 20.6 rule 7 and the SDK's) that disagree, and nothing
    enforces either (ctx-7). This one gap is the root of BR-4, BR-173, hm-3,
-   mem-10's worker arm and the worker reset of `[mem_pg_floor]`.
+   mem-10's worker arm and the worker reset of `[mem_pg_floor]`. **The owner
+   (2026-11-08):** it has caused one or two problems in the field, none of
+   them at shutdown: a sound interrupt arriving on a package already near its
+   stack's edge drives it over. The mouse and idle already have stacks of
+   their own, and more work here is not needed immediately.
 2. **There is no fatal path, and refusal has no common meaning** (theme 4).
    One panel exists, for one cause (stack overflow: 174 bytes on kern_big, 173
    on kern_small, MEASURED). CF is the only shared refusal signal. AX means
    whatever each cell decided; kern_small's stubs leave it undefined in three
-   places (gi-6, abi-2, dw-8).
+   places (gi-6, abi-2, dw-8). **The owner (2026-11-08):** a resident guard
+   pays where the failure is catastrophic, user-visible, and its printout
+   tells the owner something, as the stack-overflow panel does. A divide
+   fault has not been met in production, so its panel waits behind a build
+   knob.
 3. **The hostile-input line is drawn site by site** (theme 5). The BPB is
    validated once by the reader that owns its domain. The loader, the
    directory-entry stage, the settings unpack and the partition table are not.
@@ -317,7 +381,11 @@ from `synth/phase1.md` inserted where it binds.
    None of these is the window SPEC names.
 5. **Packages cannot ask the kernel's API level** (theme 9). `PKG_FMT` is an
    equality test with no minor number. A newer apps disk in an older machine
-   is the ordinary case, and only The Wire's own cell fence guards it.
+   is the ordinary case. **Narrowed (follow-up, 2026-11-08):** The Wire
+   already computes exactly the level the review proposed (`WIRE_LEVEL` and
+   `WIRE_CELL_LEVELS` in `tools/os88wire.py`, SPEC.md 92.2) and greys a
+   too-new package, so the gap left is a package copied by hand. The owner:
+   a run-time level must prove its worth before it spends bytes.
 6. **The kernels drift apart through one-arm fixes, and test coverage runs
    inverse to importance** (theme 11). 32 of the 64 code bugs live on one
    kernel or kernel group, but only 5 are true divergence. The 128KB floor
@@ -331,7 +399,9 @@ from `synth/phase1.md` inserted where it binds.
      MEASURED) stay resident on every machine;
    - every module use is a disk read;
    - `KERN_BUDGET` reads a VGA machine, so a win on the mono 8088 target never
-     shows on the gauge (rt-5).
+     shows on the gauge (rt-5). The mono figure is already computed inside
+     the assembly: `MONO_FLOOR`, 94,208 bytes against the gauge's 96,768,
+     MEASURED (follow-up, 2026-11-08).
 8. **Lifetimes are kept by hope, not by count** (themes 7 and 10). One global
    driver worker count stands for all drivers (BR-5); nothing counts the
    callers inside a driver (BR-31). The Sticky App library's lifetime is keyed
@@ -344,7 +414,12 @@ from `synth/phase1.md` inserted where it binds.
 
    WP6 (-41 blob) and WP7 (-45 `.ovl`) come first. Even after them, kern_big
    needs a 14th blob sector or boot-17's table, and `.ovl` bodies have to move
-   out.
+   out. **The owner refused the 14th sector** (it delays the progress bar by
+   0.4-0.8 s); `docs/plans/BOOT3-PLAN.md` is the route: boot-only code moves
+   into a `.boot3` section at the tail of KERNEL.SYS, read while the splash is
+   already up and dropped before the `.vga` drop. Its wave 1 frees ~504 blob
+   bytes and its wave 3 frees 176 of `.ovl`, for 0 resident (owner,
+   2026-11-08).
 10. **A task can block only on time, and every int 13h freezes every task for
     ~400 ms** (theme 3). `dsk_xfer` raises `sch_lock` across the BIOS call
     (`kernel/disk.inc:1462`). `gfx_lock`'s waiters spin through yield.
@@ -367,19 +442,19 @@ no ABI break: an appended cell or a contract clarification is an
 
 | rank | theme | the change of approach | now | flag day |
 |---|---|---|---|---|
-| 1 | 1. contexts and locks | teardown runs on the UI task; a dying owner releases its lock; the context rules become `; @ctx` tags plus a call-graph gate | **+11..+48** (teardown -6..+50 by route, ~+43 for the cheapest working shape; ui-3 -19) | none (deferred damage recorded at +150..+200) |
-| 2 | 4. faults and errors | every CPU fault reaches one named stop; CF is the refusal and AX means something only inside a named family; errors carry DOS-3-style classes | **+45..+60** `.text` big, +35..+55 small; +20..+30 transient (no room yet) | R9's universal value (open: AX=0 or the doc half only) |
-| 3 | 7. residency and lifetime | a third lifetime (a dropped module becomes a purgeable cache); init-lifetime code held from boot and dropped at settle; class code in owner-loaded overlays, not more rungs | **~-2,380..-2,450** (FILECP/FDLG, OWNER), **-290..-380** (keyboard mouse, OWNER), **-220** (PS/2 overlay) | - |
-| 4 | 9. versioning | a runtime API LEVEL at `KERNEL_SEG:0006`, padding that is free today | **0** for the word, +7..+12 `.cold` for the load check | dissolves abi-6's flag-day half |
-| 5 | 2. interrupts | one owner for the IVT, the IMR and int 15h; a written IF=0 budget with a ratchet and rows | **+77..+91** (+100..+150 more for the full `OSAPI_IRQ` cell, OWNER) | the IRQ cell mandatory for drivers (D8) |
-| 6 | 5. validation | hostile FILES are fenced by the reader that owns the domain; package POINTERS are checked only in an `APICHK=1` build | **+41..+55** (about half `.cold`) | - |
+| 1 | 1. contexts and locks | teardown runs on the UI task; a dying owner releases its lock; the context rules become `; @ctx` tags plus a call-graph gate | **+11..+48** (teardown -6..+50 by route, ~+43 for the cheapest working shape; ui-3 -19); about **-1..+36** with BR-173 out under decision 3. Not needed immediately (owner, 2026-11-08) | none (deferred damage recorded at +150..+200) |
+| 2 | 4. faults and errors | every CPU fault reaches one named stop; CF is the refusal and AX means something only inside a named family; errors carry DOS-3-style classes | **0 shipped** (owner, 2026-11-08): the panel and stubs (+45..+60 `.text` big, +35..+55 small, +20..+30 transient) are built only behind a knob | R9's universal value (open: AX=0 or the doc half only) |
+| 3 | 7. residency and lifetime | a third lifetime (a dropped module becomes a purgeable cache); init-lifetime code held from boot and dropped at settle; class code in owner-loaded overlays, not more rungs | FILECP/FDLG (-2,380..-2,450) **refused** (owner, 2026-11-08); rt-1's drop-to-cache **+60..+85** `.cold`; **-300..-320** (keyboard mouse, OWNER; corrected by the follow-up), **-220** (PS/2 overlay) | - |
+| 4 | 9. versioning | a runtime API LEVEL at `KERNEL_SEG:0006`, padding that is free today | **0** for the word, +7..+12 `.cold` for the load check. **Must prove its worth first** (owner, 2026-11-08): The Wire already computes the level, so the load check covers only hand-copied packages (follow-up, 2026-11-08) | dissolves abi-6's flag-day half |
+| 5 | 2. interrupts | one owner for the IVT, the IMR and int 15h; a written IF=0 budget with a ratchet and rows | **+74..+88** (+77..+91 less ctx-5's +3, held: follow-up, 2026-11-08; the IVT scan probably costs less, walking `mem_rr_ivt`) (+100..+150 more for the full `OSAPI_IRQ` cell, OWNER) | the IRQ cell mandatory for drivers (D8) |
+| 6 | 5. validation | hostile FILES are fenced by the reader that owns the domain; package POINTERS are checked only in an `APICHK=1` build | **+33..+47** (+41..+55 less wm-2's +4 and hm-14's +4, which are package fences: owner and follow-up, 2026-11-08; about half `.cold`) | - |
 | 7 | 11. the kernel matrix | kernels fork, packages must not; arm honesty enforced by gates | **+5** `.cold`, +~20 HIBER.DRV; gates 0 shipped | L3, staged |
-| 8 | 6. memory | keep claims and the relocation proc; add package-purgeable claims through that proc, a shared sub-allocator in source, and parts init-drop | **+64..+119** `.cold`; hm-11 saves 0.8-1.5KB per running parts instance at 0 kernel bytes | C1 (-45..-69 kernel) |
+| 8 | 6. memory | keep claims and the relocation proc; add package-purgeable claims through that proc, a shared sub-allocator in source, and parts init-drop | **+29..+39** `.cold` with package-purgeable claims parked (+64..+119 with them; follow-up, 2026-11-08); hm-11 saves 0.8-1.5KB per running parts instance at 0 kernel bytes | C1 (-45..-69 kernel) |
 | 9 | 3. waiting and I/O | block on events, not on time; a disk wait that freezes nothing (after four preconditions); a file layer that uses what it already knows | **+40..+55** `.text` +6 cell (`task_wake`) | a caller-held write cursor (C9, recorded) |
 | 10 | 12. the documentation system | one source per fact, the rest generated; a committed heading lock | **0** | 0 |
 | 11 | 8. dispatch | rare cells behind one index door; the handler table in a window class | -40..-60 (the `cw_` rehearsal, once the vector is chosen) | T5 **-325..-385**, R14 **~-320** |
 | 12 | 10. the kernel-driver contract | read service tables in place; a request block only where the registers ran out | **-90..-140** big, 0 small | D6 (recorded) |
-| 13 | 13. API shape and the includes | a stateless kernel whose efficiency is won back by caller-held tokens; fix the leaks in that shape, do not build a library | **+34..+36** (granule cell, cursor name stamp) | a `READ_AT`-shaped stream cell; `os88_rseq` withdrawn |
+| 13 | 13. API shape and the includes | a stateless kernel whose efficiency is won back by caller-held tokens; fix the leaks in that shape, do not build a general library (STIKLIB, the one that pays, stays) | **+34..+36** (granule cell, cursor name stamp) | a `READ_AT`-shaped stream cell; `os88_rseq` withdrawn |
 
 Theme 8's flag-day figures are `synth/flagday.md`'s, which re-derived them
 after `synth/systemic.md` was written (systemic's own table still says T5
@@ -404,10 +479,20 @@ What each theme means concretely:
 - **The same diff also takes:**
   - liveness tested once at `ui_bill`'s head (BR-28);
   - Locator identity from `[menu_win]` instead of a package byte (-19);
-  - the lock order numbered in SPEC.md 7, with `sch_lock` as a nestable
-    Forbid inside which nothing yields, sleeps or takes `gfx_lock`;
+  - number SPEC.md 7's existing `sch_lock` rule and write the lock order
+    (`gfx_lock`, `sch_lock`, `mem_cp_busy`, the module lock). SPEC.md 7
+    already says `sch_lock` is a nestable count under which nothing may wait
+    on another task (follow-up, 2026-11-08: the review's doc pass wrote that
+    sentence, so only the number and the order are missing);
   - the `@ctx` tags with a host gate over `stkdepth`'s call graph (WP19,
     0 shipped).
+- **The owner's weighing (2026-11-08).** Not needed immediately. The field
+  problems the owner knows of were not at shutdown: a sound interrupt arriving
+  on a package already near its stack's edge drives it over. The mouse and
+  idle already have stacks of their own. BR-173, the dying owner's lock
+  release, is one of decision 3's six package fences and is not taken as
+  retail code. BR-4 stays in the register, its urgency waiting on `stkdie`
+  (section 11).
 
 **4. Faults and errors.**
 - **The panel.** Generalise `sch_diepanel` into a system-error panel that
@@ -418,6 +503,17 @@ What each theme means concretely:
 - **The stated behaviour change.** On an 8088 a package divide that today
   continues with garbage would halt the machine. So the stubs ship with the
   package-close half (gfce-2, owner) or with a kernel-CS test.
+- **Decided (owner, 2026-11-08).** On kern_mega, where the kernel can afford
+  not to crash, closing the faulting package beats killing the OS, and it
+  already does. In real mode a divide fault deserves at least a
+  stack-overflow-style message where it cannot be recovered from, because a
+  picture of it lets the owner trace who divided. But no machine has met it,
+  so the panel, the stubs and the ~174-byte package answer wait behind a
+  build KNOB, off in shipped kernels, until a field report says it is being
+  hit: "that is a balancing act". The same weighing applies to every
+  diagnostic panel for a failure nobody has met. The divide ratchet (0
+  shipped bytes, a build-time gate) is unaffected, and so are the two DOS-side
+  changes below, which are DOS.O88's.
 - **Two DOS-side changes ride with it**:
   - DOS gives its world its own int 0 ("Divide overflow" ends the program);
   - windowed DOS banks vector 06h (+6 DOS.O88).
@@ -438,8 +534,20 @@ What each theme means concretely:
 - **Purge ranks per module**: FILECP and FDLG at the highest rank, the
   system-disk modules LOW.
 - **Then the owner's two residency trades:**
-  - FILECP/FDLG cached at boot on kern_big;
-  - the keyboard mouse dropped at the first `[mou_ptr]` store.
+  - FILECP/FDLG cached at boot on kern_big. **REFUSED** (owner, 2026-11-08),
+    as it has been "20+ times now": on kern_big the user has swapped in a DOS,
+    office or utility disk and cannot be made to insert the system disk and
+    wait every time a file is opened or copied, and a boot-time cache is not
+    a saving either. Now recorded in CLAUDE.md, AGENTS.md and SPEC.md 38 so
+    it is not proposed again. kern_small, a one-disk machine, keeps them as
+    modules; the owner finds rt-6's "keep FDLG as purgeable" there
+    interesting (section 10).
+  - the keyboard mouse dropped at the first `[mou_ptr]` store. Re-priced
+    (follow-up, 2026-11-08): about **-300..-320** resident (`kbm_poll0` must
+    stay); on a machine that never settles a pointer the module holds a whole
+    512-byte heap granule, so **+130..+220** for the session, not +85..+165;
+    and its "load at boot" rode on WP2b's boot cache, which is not built, so
+    without it the boot pays a file read (~0.4-1.2 s on an XT, PREDICTED).
 - **Do not generalise the rung** (rt-4). A rung can be given back only as a
   contiguous suffix under `.cold`, and mono and VGA are complementary. The
   working split is:
@@ -462,6 +570,18 @@ What each theme means concretely:
 - **Old kernels.** Every `PKG_FMT`-10 kernel reads 0 at 0006 and refuses
   `OS88_NEED` as designed. The mouse-instrument word left that address before
   `PKG_FMT` 10 arrived.
+- **What already exists (follow-up, 2026-11-08).** The level computation
+  proposed here is The Wire's existing code: `WIRE_LEVEL` = 7 and
+  `WIRE_CELL_LEVELS` in `tools/os88wire.py`, checked against each package's
+  calls, with The Wire greying a too-new package (SPEC.md 92.2, 20.2.0.1) and
+  `abicompat` testing the old-kernel case. So the kernel half (the word at
+  0006 and the load check, ~8 `.cold`) covers only a package copied by hand.
+  That gap is real: SPEC.md 20.2.0.1 says a new package calling a cell an old
+  kernel lacks loads at the same `PKG_FMT` and far-calls past the table.
+- **The owner (2026-11-08).** Liked in general, but packages and drivers
+  already carry versions checked before anything runs, so a run-time level
+  would catch only a mistake in that versioning, and the same mistake could
+  break the new number. **It must prove its worth before it spends bytes.**
 
 **2. Interrupts.**
 - **Write the budget and gate it** (WP13): `tests/ifwin.txt` registers every
@@ -469,9 +589,20 @@ What each theme means concretely:
 - **Long copies at IF=1 under `sch_lock`** (BR-12, BR-54).
 - **One generic in-service rule**: `sch_isr` refuses a switch while any IRQ
   other than IRQ0 is in service (OCW3 0Bh). This is the rule AmigaOS, OS/2
-  and well-behaved TSRs obeyed (BR-19, +14..+16, 55-65 cycles PREDICTED).
-- **The ISR-door preconditions at the door** (ctx-5, BR-36).
+  and well-behaved TSRs obeyed (BR-19, +14..+16, 55-65 cycles PREDICTED). It
+  reuses the OCW3 in-service read the heartbeat's stop reading already makes
+  (`khb_pisr`, `kernel/sched.inc`), and sits beside `[sch_chbusy]`, which
+  already refuses the switch for a nested IRQ0; only the test for an IRQ other
+  than IRQ0 is new (follow-up, 2026-11-08).
+- **The ISR-door preconditions at the door** (ctx-5, BR-36). ctx-5's
+  `evq_push` half (BR-85, +3) is held: the SDK already states SS = LOW_SEG,
+  and no package IRQ handler that calls WAKE was traced (follow-up,
+  2026-11-08, applying decision 3's weighing).
 - **The IMR shadow** (+~25) and the IVT scan at driver release (+25 `.cold`).
+  The scan walks `mem_rr_ivt` (`kernel/memory.inc`), which already lists every
+  IVT row a driver can own for the region-reloc walk, rather than a second
+  hand-written list, and probably costs less than +25 (follow-up,
+  2026-11-08).
 - **DOS.O88 is an IMR owner too**, so the shadow re-syncs from port 21h after
   every DOS bracket.
 - **Measure first**: moving the cursor after the EOI. It breaks `mou_isr`'s
@@ -492,6 +623,15 @@ What each theme means concretely:
   BX, hm-2's exact fence, dw-4's worker refusal) go into an `APICHK=1` knob
   build with one soak row. Windows 3.1's debug KERNEL, without 3.1's retail
   cost.
+- **Decided (owner, 2026-11-08): packages are trusted.** Real mode cannot
+  defend against a hostile package (and on kern_mega an FSX real-mode bracket
+  hands it real mode anyway), so the only thing worth defending against is our
+  own mistakes, and those are better found and guarded at BUILD time than with
+  resident bytes. BR-8's doors and bound, BR-22, BR-29, BR-30, BR-37 and
+  BR-173 are not taken as retail code; at most they are `APICHK=1` arms. The
+  follow-up applies the same weighing to BR-107 and BR-109's optional doors,
+  which `synth/bugs.md` names as the same kind. Now recorded in CLAUDE.md and
+  AGENTS.md.
 - **Not adopted**: window handles in place of record pointers. The breakage
   would be ~121 field reads in 33 asm files (ul-8), and the checked build gets
   the validation without a break.
@@ -513,7 +653,17 @@ What each theme means concretely:
 - **Purgeable claims for packages** (`MEMP_PURGEABLE`, +35..+80 `.cold`). The
   proc is called with DX = 0 at IF=1 under `sch_lock`, as `mem_reloc_call`
   does. `MC_DMA_HEAD` narrows to 0x1FFF to free bit 13. kern_small refuses
-  the verb (+4..+6).
+  the verb (+4..+6). **Parked (follow-up, 2026-11-08), after the owner asked
+  for the real use cases.** It is not needed now. Of the two consumers cited
+  here, Skies' title art is already solved (SPEC.md 88.10.7.1), and Tracker's
+  9.5KB shadow is real but small. The one large case is Sheet's two modules,
+  ~80KB held from launch to exit, whose recovery code already exists. The
+  kernel already keeps the largest package-content cache purgeable on the
+  package's behalf (`MEM_P_WSAVE`). If it is ever built, it is justified by
+  Sheet and by keeping lazy parts until the heap needs them, with the rank in
+  AL; measure first on a 256KB profile with Sheet behind a second
+  application. The zero-kernel-byte alternative is Sheet dropping its modules
+  after each use, at a ~1-2 s re-read each time.
 - **A system sub-allocator as an include**: WIN16's arena lifted into
   `apps/os88lmem.inc`. That is GEOS LMem, Win16 `LocalAlloc` and OS/2
   `DosSubAlloc` as source; 0 kernel bytes.
@@ -568,15 +718,22 @@ What each theme means concretely:
   counting the whole FAT: ~105 ms on a 20MB disk, MEASURED.
 - **The `READ_SEQ` cursor names its file**: an 8-bit name sum plus a folder
   byte (+20 `.cold`).
-- **`pit_now`'s bracket limitation** stated in the include and in
-  SPEC.md 53.2.1.
+- **`pit_now`'s bracket limitation** is already stated in `apps/os88pit.inc`
+  and SPEC.md 53.2.1 (the review's own doc pass wrote both); only SPEC.md
+  72.15.1's sentence is still owed (follow-up, 2026-11-08).
 - **The kernel button draws each pixel once** (BR-176).
-- **Not adopted**: a shared-library tier. Shared include code is real, at
-  least 60.6KB duplicated across 35 measured listings (MEASURED, rt-8). But
-  RAM pays only for packages that run together, ~3-5KB in a typical trio.
+- **Not adopted**: a GENERAL shared-library tier. Shared include code is
+  real, at least 60.6KB duplicated across 35 measured listings (MEASURED,
+  rt-8). But RAM pays only for packages that run together, ~3-5KB in a
+  typical trio. The one shape that already pays is in the tree: the Sticky
+  App library, `apps/stiklib.asm` (SPEC.md 110.15), assembled once, carried
+  in DESK.DRV's image and far-called by every `STIK_LIB` widget, a library
+  riding a module that is resident anyway (follow-up, 2026-11-08).
 
 **What we would NOT copy**, recorded so nobody re-derives it as an improvement
-(`synth/systemic.md`, *What we would NOT copy*):
+(`synth/systemic.md`, *What we would NOT copy*). Each entry refuses a MODEL;
+where os8088 already has the feature in another shape, the entry names it
+(follow-up, 2026-11-08):
 - **Automatic demand loading and LRU discard of package code.** On one floppy,
   every reload can be a swap prompt mid-gesture.
 - **Master pointers on every access.** A per-access tax on an 8088, and `HLock`
@@ -587,7 +744,8 @@ What each theme means concretely:
 - **One renumbered error space.**
 - **A request packet for every driver verb.**
 - **Trap patching.**
-- **A shared-library tier.**
+- **A general shared-library tier.** The one library that already pays,
+  STIKLIB carried by DESK.DRV (SPEC.md 110.15), stays.
 - **A general rung mechanism.**
 - **Run-time kernel unification.**
 - **A full priority field in the scheduler.**
@@ -595,7 +753,12 @@ What each theme means concretely:
 - **Proportional fonts.**
 - **Write-behind on removable media.**
 - **Delayed clipboard rendering.**
-- **`.LNK` desktop shortcuts.**
+- **A desktop that is a folder of `.LNK` files** (Windows 95), read back by a
+  directory walk at every boot. os8088 already has both shortcuts (SPEC.md
+  26.8: SYSTEM.CFG records with their picture cached, made by dragging
+  anything runnable onto the desk) and `.LNK` links (SPEC.md 26.10); only the
+  per-boot directory-walk storage is refused (owner and follow-up,
+  2026-11-08).
 - **Settings in CMOS.**
 - **GEOS-style state files instead of hibernate.**
 - **OS/2's no-copy DOS box.**
@@ -614,7 +777,7 @@ which features it shipped.
 | waiting | single task; the AT BIOS added int 15h AH=90h/91h so a multitasker could block on the floppy | cooperative: a task gives way inside `GetMessage`; idle spins, except that 386 enhanced mode offers int 2Fh 1680h to give the slice back | `DosSemWait`, owner-died semaphores, priority classes with foreground and I/O boosts | cooperative under MultiFinder; every File Manager call takes a ParamBlock with `ioCompletion`, which is how the Mac got async I/O; System 6's event loop (`GetNextEvent`/`SystemTask`) spun | pre-emptive threads with priorities | the UI task really halts (96.9% at idle, MEASURED); everything else can wait only on time; every int 13h freezes all tasks (theme 3) |
 | memory that moves | an in-band MCB chain with owner = PSP; nothing moves | handles over a moveable/discardable global heap, lock counts, LRU discard, `GMEM_NOTIFY`; real mode walks BP chains to move code | LDT selectors; `DosAllocSeg`/`DosReallocSeg`/`DosSubAlloc`; motion is transparent, and every descriptor is owned by an explicit record | master pointers; `HLock`, `HPurge`, `MoveHHi`; a `GrowZone` proc; purgeable resources | a handle table for everything; movable, discardable and swappable blocks; LMem chunk heaps; VM files; swap drivers | an out-of-band claim table; relocation by the holder's own callback; a pinned default; purge ranks owned only by the kernel (theme 6) |
 | system code residency | COMMAND.COM's transient portion, reloaded from COMSPEC with a checksum; TSRs keep only their resident paragraphs | discardable code segments reloaded through thunks; one DISPLAY/KEYBOARD/MOUSE.DRV per machine, every primitive a far call | init code discarded after boot | the toolbox in ROM; purgeable CODE resources; `LoadSeg`/`UnloadSeg` | a small fixed kernel, everything else in movable, discardable resources; one video driver resident per adapter | on-demand modules behind one-compare gates; a boot blob at the heap floor; the `.vga` slide; only two lifetimes (theme 7) |
-| versioning | int 21h AH=30h | the NE header's expected-Windows version; ordinal imports fail the LOAD; the NE `PROTMODE` flag lets a converted binary declare itself | - | `Gestalt` (System 6.0.4) | each geode carries a protocol number per imported library: the major must match, the minor must be at least the one built against | a major number only: an equality test (theme 9) |
+| versioning | int 21h AH=30h | the NE header's expected-Windows version; ordinal imports fail the LOAD; the NE `PROTMODE` flag lets a converted binary declare itself | - | `Gestalt` (System 6.0.4) | each geode carries a protocol number per imported library: the major must match, the minor must be at least the one built against | a major number at load, an equality test; plus The Wire's per-cell level for every package it serves, which greys a too-new one (SPEC.md 92.2; corrected, follow-up, 2026-11-08) (theme 9) |
 | validation at the API | trusts the MZ header and every BPB field | 3.0 validated almost nothing; 3.1 added retail parameter validation at the USER/GDI door (`IsWindow` on every HWND) | full, behind the protection boundary | none: a bad handle is a bomb | - | hostile files mostly fenced (the BPB better than DOS); package pointers trusted by ruling (theme 5) |
 | paint and teardown | - | a per-window update region; `WM_PAINT` synthesised only when the queue is empty, on the owner's queue | PM defers `WM_PAINT` by default; a window class opts into synchronous painting with `CS_SYNCPAINT` | `updateRgn` accumulated; `updateEvt` delivered after every other event | - | repaint is synchronous and nested; teardown runs on the dying worker (theme 1) |
 | drivers | the `DEVICE=` chain, strategy/interrupt entries, a request header at ES:BX, `INIT` returning the break address | installable drivers (`DriverProc`) with open counts; MMSYSTEM device IDs (many devices per type); `SYSTEM.INI` keeps unknown keys | request packets through a strategy routine; `DevHlp` services | the Device Manager unit table: Open/Prime/Control/Status/Close; cdev Control Panels | drivers are geodes with reference counts; a refusable `DR_SUSPEND` with a reason | loaded and unloaded at run time, typed classes, `DRV_H_KEEP` (DOS's break address); lifetimes kept by hope (BR-5) |
@@ -724,6 +887,20 @@ early. Even then:
 - **`.ovl`'s** wants exceed its room by tens of bytes, so bodies move out of it
   (clk_probe's RTC rungs first).
 
+**Decided (owner, 2026-11-08): no 14th sector.** The route is
+`docs/plans/BOOT3-PLAN.md` (a proposal, nothing built): a `.boot3` section at
+the tail of KERNEL.SYS, read while the splash is already up, dropped before the
+`.vga` drop and the heap compaction. Its wave 0 is the mechanism (and takes
+boot-18, BR-154); wave 1 moves three closed clusters and frees ~504 blob bytes;
+wave 2 moves the SYSTEM.CFG reader and the boot driver loader (~1,640 more);
+wave 3 frees 176 of `.ovl`; wave 4, the owner's call, takes `.boot2` back to
+"draw the splash and load KERNEL.SYS". Every wave is 0 resident (wave 4 -8).
+Its section 11 places each want: BR-6, BR-1 and BR-147 in `.boot2` once wave 1
+has landed; shell-8 in `.boot3` from wave 2; the `.ovl` wants with about 120 to
+spare after wave 3. phase1.md's "14th sector or boot-17" choice is gone, and
+boot-17 rides wave 4 for its diagnostics alone. The plan carries waves 0-1 in
+session 3 and waves 2-4 as sessions of their own.
+
 kern_small's installs go in `.boot2`, which has 702 bytes free.
 
 **The work packages, in session order.** Bytes are resident, signed and
@@ -733,16 +910,16 @@ marks a WP whose bytes wait on a decision.
 | session | WP (and batch) | what | WP bytes: kern_small | kern_big | kern_mega conv / high |
 |---|---|---|---:|---:|---|
 | 1 | WP10 | gates that catch wrong facts: four-kernel `t_api_abi`, `t_mirror` over `kerndos/` and `os88.h`, a heading lock, `t_sections`, the four measurement rows | 0 | 0 | 0 |
-| 2 | WP1 + WP7 | free bytes (dead code, dead data, redundant tests); `.bss` arrives zeroed, one rule and a gate | -165..-208 | -144..-166 (`.ovl` -45, `.boot2` -4) | -87..-121 / -49 |
-| 3 | WP6 + batch A | boot: KSIG_OFF and SPL_RESIDENT derived by the build; blob room; then BR-1, BR-6, BR-25, BR-55, BR-56, BR-63 | 0 (`.boot2` +27) | 0 (blob -41 first, then +78; KERNEL.SYS ~-403) | 0 |
+| 2 | WP1 + WP7 | free bytes (dead code, dead data, redundant tests); `.bss` arrives zeroed: settled, zero on every shipped path since PR #61, the comments corrected, and `t_bsszero` proposed as the gate (owner and follow-up, 2026-11-08) | -165..-208 | -144..-166 (`.ovl` -45, `.boot2` -4) | -87..-121 / -49 |
+| 3 | WP6 + BOOT3 waves 0-1 + batch A | boot: KSIG_OFF and SPL_RESIDENT derived by the build; blob room through BOOT3-PLAN, not a 14th sector (owner, 2026-11-08); then BR-1, BR-6, BR-25, BR-55, BR-56, BR-63 | 0 (`.boot2` +18) | 0 (blob -41 and BOOT3 wave 1's -504 first, then +69; KERNEL.SYS ~-403, then ~+450 for `.boot3`) | 0 |
 | 4 | WP14 + WP19 | a routine header grammar and a liveness lint; `@ctx` tags, the call-graph gate, the `APICHK=1` checked build | 0 | 0 | 0 |
-| 5 | WP9 + WP26 | the API level; every contract sentence in one `abilock --update` | 0..+5 | 0..+5 | -4..-8 / +8..+9 |
-| 6 | WP8 + batch F | the fault panel, int 0/6 stubs, divide ratchet, window doors, CFG_MAP domain; then input, ISR and scheduler fixes | +70..+101 | +75..+106 (`.ovl` +42..+52) | +30..+46 |
+| 5 | WP9 + WP26 | the API level (held until it proves its worth: owner, 2026-11-08); every contract sentence in one `abilock --update` | -4..-8 | -4..-8 | -4..-8 / 0 |
+| 6 | WP8 + batch F | the fault panel, int 0/6 stubs (behind a build knob, owner, 2026-11-08), divide ratchet, window doors (not retail, owner), CFG_MAP domain; then input, ISR and scheduler fixes | 0 | 0 (`.ovl` +22, gfce-6 only) | 0 |
 | 7 | batch C + WP21 | BR-4 teardown on the UI task with BR-173, BR-28, BR-42, BR-47..BR-50, BR-176; the damage-pass convention | -10 | -10 | -10 |
 | 8 | batch D + WP17 + WP13 | BR-2, BR-7, BR-11, BR-12, BR-53 (WP2's prerequisite); heap placement; the IF=0 rule, gate and instrument | 0 | +8 | 0 / +8 |
 | 9 | WP2a | rt-1 drop-to-cache, rt-9 ranks, shell-2's two users (MOD_SETS 3,180 bytes MEASURED, STIKMENU 7,876) | 0 | +60..+85 `.cold` | 0 / +60..+85 |
-| 10 | WP2b (OWNER) | FILECP and FDLG on kern_big as modules cached at boot | 0 | **-2,468..-2,508** (-2,568 MEASURED movable spans, +60..+100 glue; 0 where `.cold` is ROM/HMA-adopted) | 0 (not applied) |
-| 11 | WP3 (OWNER: KBMOUSE, text-7) | the keyboard mouse at init lifetime; the PS/2 runtime as an owner-loaded overlay; `font_run_x`'s VGA prologue into `.vga` | -290..-380 | -494..-599 (mono XT -675..-800) | -290..-380 / 0 |
+| 10 | WP2b | FILECP and FDLG on kern_big as modules cached at boot. **REFUSED** (owner, 2026-11-08), in any form; the session is withdrawn | 0 | 0 (was -2,468..-2,508) | 0 |
+| 11 | WP3 (OWNER: KBMOUSE, text-7) | the keyboard mouse at init lifetime; the PS/2 runtime as an owner-loaded overlay; `font_run_x`'s VGA prologue into `.vga` | -290..-380 (KBMOUSE corrected to about -300..-320 by the follow-up) | -494..-599 (mono XT -675..-800) | -290..-380 / 0 |
 | 12 | WP4 + WP22 + batch G (driver half) + WP31 | driver tables read in place; contract text; the IMR shadow; gkm-1's one-arm fixes; matrix gates | +15..+19 | -62..-122 | -156..-166 / +40..+100 |
 | 13 | WP5 + batch H | kern_dos images (-560 kern_big's, -1,585 each kern_mega's) and kern_mega's own dead weight | 0 | 0 | -40 / -145..-165 |
 | 14 | batch E + WP16 | the disk hazards; a linear directory walk, `FILE_GRAIN`, F3's dual-mark reader | +22..+27 | +77..+88 | +6..+12 / +70..+80 |

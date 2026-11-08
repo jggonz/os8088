@@ -32,6 +32,53 @@ They also reshape WP2 (drop-to-cache), WP3 (an init-lifetime keyboard mouse
 and a PS/2 overlay instead of an AT rung), WP8 (the fault panel and a divide
 ratchet) and WP9 (a LEVEL, not a table end).
 
+## After the owner's first answers (2026-11-08)
+
+The owner answered the review the same day (`../owner-decisions.md`, binding),
+and five follow-ups re-read what those answers touched
+(`../followup-canary.md`, `../followup-purgeable.md`,
+`../followup-decisions-6-8.md`, `../followup-already-exists.md`,
+`../areas/gap-bss-zeroing.md`). `docs/plans/BOOT3-PLAN.md` replaces the
+refused 14th blob sector. Each WP that moved says so in place, marked
+**(owner, 2026-11-08)** or **(follow-up, 2026-11-08)**. What moved:
+
+- **WP2b is REFUSED** (owner): FILECP and FDLG stay resident on kern_big, in
+  any form, a boot-time cache included. WP2a (rt-1's drop-to-cache, rt-9's
+  ranks and shell-2's two users) is unaffected and stays: **WP2 is now
+  +60..+85 `.cold` on kern_big**, not -2,383..-2,448. rt-6 (kern_small keeping
+  FDLG purgeable, +60..+85 there) is one the owner likes; it stays an owner
+  item, uncounted.
+- **No 14th blob sector** (owner). WP6's and WP7's transient room now comes
+  through BOOT3-PLAN: wave 1 frees ~508 blob bytes, wave 3 gives `.ovl` 177
+  free (its section 11).
+- **Packages are trusted** (owner) is a recorded principle: WP8's window doors,
+  the wake fence, the bound before the div and DESK.DRV's `.make` bound are not
+  taken; they belong to WP19's APICHK knob at most.
+- **A diagnostic for a failure nobody has met goes behind a build knob, off in
+  shipped kernels** (owner). WP8's INT 0/#UD panel, its stubs and its install
+  are a knob; kern_mega closes the faulting package (gfce-2 answered). The same
+  weighing moves WP18's `gfx_lock` tripwire, BR-82's ISR-stack canary and
+  mc-10's `[mega_kfix]` counter behind knobs (follow-up).
+- **WP3's figures are corrected** (follow-up): rt-7 saves -300..-320 (not
+  -290..-380) and costs a mouseless machine +130..+220 of heap (not +85..+165),
+  and its boot-cache dependency fell with WP2b; text-7 is +16 on VGA and -177
+  on mono, priced at 0.048% of a full Note Pad repaint (0.78% worst case); the
+  mono kern_big resident figure is 94,208 MEASURED and `MONO_FLOOR` already
+  computes it (rt-5).
+- **WP9's API level must prove its worth before it spends bytes** (owner):
+  parked, 0 counted. Its one argument is the hand-copied package
+  (`../followup-already-exists.md` M5).
+- **The package purgeable claim (hm-9) is parked** (follow-up): not needed
+  now; its real case is Sheet's ~80KB of modules, and a zero-kernel-byte
+  alternative exists.
+- **`.bss` is settled**: zero on every shipped path since PR #61; WP7 adds
+  `t_bsszero.py` to the fast tier.
+- **Withdrawn as already done** (follow-up): WP26's `ui-8` and `isr-3` rows,
+  WP15's and WP26's `gi-7` (narrowed to SPEC 72.15.1); WP3's "no `kbm*` row"
+  and WP6's missing `resident` row are corrected.
+
+The phase totals at the end are recomputed per kernel.
+
 ## How to read this
 
 - **Scope.** Weaknesses, performance, size, consistency, rethinks that land
@@ -79,7 +126,7 @@ rule:
 | finding (BR) | owner | remove from `bugs.md` |
 |---|---|---|
 | ui-3 (BR-110) | WP1 | batch C "all": -19 |
-| histsys-2, isr-8 (BR-9); wm-1, wm-13, histsys-11 (BR-8) | WP8 | batch F core: +30 res, +12 `.ovl`; batch C core: BR-8's +5 and the wake fence |
+| histsys-2, isr-8 (BR-9); wm-1, wm-13, histsys-11 (BR-8) | WP8 | batch F core: +30 res, +12 `.ovl`; batch C core: BR-8's +5 and the wake fence. **Now 0 on both sides** (owner, 2026-11-08): BR-9 is a knob and BR-8 is not taken |
 | boot-4 (BR-153), boot-18 (BR-154), boot-6 (BR-25's boothd half) | WP6 | batch A: KERNEL.SYS -400, boothd -9 |
 | abi-3 (BR-62's gate half), abi-4 (BR-146), engsys-2/-8/-12/-15 (BR-75/-76/-171/-172), gfx-7 (BR-152), md-12 (BR-170), shell-6 (BR-117), ui-4 (BR-111) | WP10 | batch A's host gates; batch B's BR-152 `.ovl` +8 (now 0: an assembly-time check) |
 | abi-8 (BR-22's gate half) | WP19 | none (BR-22's dw-4 fence stays in batch E) |
@@ -99,14 +146,14 @@ high. "Batch" is the `bugs.md` batch it travels with.
 | # | work package | kern_small | kern_big (gauge) | kern_mega conv / high | risk | batch |
 |---|---|---:|---:|---|---|---|
 | 1 | Free bytes: dead code, dead data, redundant tests | -165..-188 | -144..-146 | -87..-101 / -49 | low | - |
-| 2 | Module lifetimes: drop-to-cache; FILECP/FDLG cached at boot (**OWNER**) | 0 | **-2,383..-2,448** | 0 / +60..+85 | high | C, D first |
-| 3 | Residency by hardware: init-lifetime KBMOUSE (**OWNER**), PS/2 overlay, text-7 (**OWNER**) | -290..-380 | -494..-599 (mono XT -675..-800) | -290..-380 / 0 | medium | F |
+| 2 | Module lifetimes: drop-to-cache (WP2a); FILECP/FDLG cached at boot (WP2b **REFUSED**, owner, 2026-11-08) | 0 | **+60..+85** (was -2,383..-2,448) | 0 / +60..+85 | medium | C, D first |
+| 3 | Residency by hardware: init-lifetime KBMOUSE (**OWNER**), PS/2 overlay, text-7 (**OWNER**) (figures corrected, follow-up, 2026-11-08) | -300..-320 | -504..-539 (mono XT -697..-732) | -300..-320 / 0 | medium | F |
 | 4 | Driver tables diet and contract text | -10 | -87..-147 | -195..-205 / +40..+100 | medium | G |
 | 5 | kern_dos images and kern_mega's own dead weight | 0 | 0 (kern_dos image -560) | -40 / -145..-165 | low-med | H |
 | 6 | Boot: derived constants and blob room | 0 | 0 (blob -41, boothd -9, KERNEL.SYS ~-403) | 0 | low | A |
-| 7 | .bss arrives zeroed: one rule, a gate, the dead stores | 0..-20 | 0..-20 (`.ovl` -45) | 0..-20 / 0 | low | - |
-| 8 | Fault panel, divide ratchet, window-pointer doors | +70..+101 | +75..+106 | +30..+46 / 0 | low-med | F, C |
-| 9 | A runtime API LEVEL | +8..+9 | +8..+9 | 0 / +8..+9 | low | - |
+| 7 | .bss arrives zeroed: one rule, a gate (`t_bsszero`, fast), the dead stores | 0..-20 | 0..-20 (`.ovl` -45) | 0..-20 / 0 | low | - |
+| 8 | Fault panel (a KNOB, owner, 2026-11-08), divide ratchet, window-pointer doors (not taken, owner) | 0 (was +70..+101) | 0 (was +75..+106) | 0 / 0 (was +30..+46) | low | F, C |
+| 9 | A runtime API LEVEL (must prove its worth first, owner, 2026-11-08: parked) | 0 (+8..+9 if taken) | 0 (+8..+9 if taken) | 0 / 0 (+8..+9 high if taken) | low | - |
 | 10 | Gates that catch wrong facts; suite hygiene | 0 | 0 | 0 | low | A (host gates) |
 | 11 | The KHP round (**OWNER**) | 0 | +286..+289 | 0 | low | B |
 | 12 | FAT write path: free count, runs, bracketed flush | 0..+3 | +160..+255 | 0 / +160..+255 | med-high | E (after) |
