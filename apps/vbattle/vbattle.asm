@@ -694,13 +694,13 @@ vb_coverload:
 ; SEG_REAL has no paragraph for it) and the hold is sized already, where it
 ; is kept, so the window is the picture again the moment the play returns.
 ; Before the hold opens it goes either way: a pool block kept there was the
-; hold's 12 KB (KERN-MEGA-PLAN 14.174)
+; hold's 12 KB (KERN-MEGA-PLAN 14.178)
 vb_cvplay:
     mov dx, [vb_cvseg]
     or dx, dx
     jz vb_cvfree
     cmp byte [vb_hopd], 0           ; (the hold not yet sized: the pool's
-    je vb_cvfree                    ; KB are its, as kern_big's are - 14.174)
+    je vb_cvfree                    ; KB are its, as kern_big's are - 14.178)
     mov bl, SEG_REAL
     call OSAPI_SEG
     jnc vb_cvfree
@@ -809,7 +809,7 @@ vb_door:
 
 ; vb_low - kern_mega in protected mode: OUR REGION, which OS88_HIGH put
 ; above 1MB, brought DOWN to conventional memory for good (OSAPI_SEG
-; SEG_LOW, KERN-MEGA-PLAN 14.174) - at the entry, before anything is sized
+; SEG_LOW, KERN-MEGA-PLAN 14.178) - at the entry, before anything is sized
 ; or a window exists, and again at a play's door if the entry was refused.
 ; Every real-mode bracket copies the region into conventional memory, so
 ; above 1MB its pool block only sat idle beside the copy and the hold was

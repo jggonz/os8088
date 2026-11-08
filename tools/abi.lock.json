@@ -1847,14 +1847,14 @@
    "fingerprint": "094a869e477b80b270615814c86eabad12dd82b4002a84a7ee6636aa7032e147",
    "from": 10,
    "guard": "PKG_FMT",
-   "reason": "OSAPI_SEG verb SEG_LOW (14) added past SEG_TYPE: kern_mega brings a caller's own region above 1MB down to conventional memory, selectors kept; every older verb as it was, real-mode kernels refuse it as any unknown verb - no PKG_FMT bump (KERN-MEGA-PLAN 14.174)",
+   "reason": "OSAPI_SEG verb SEG_LOW (14) added past SEG_TYPE: kern_mega brings a caller's own region above 1MB down to conventional memory, selectors kept; every older verb as it was, real-mode kernels refuse it as any unknown verb - no PKG_FMT bump (KERN-MEGA-PLAN 14.178)",
    "to": 10
   },
   {
    "fingerprint": "1e76ed2fc4791d0a24f14b9ca74612730e9c1c8400ec8ef58b0a9a7b5fde2427",
    "from": 12,
    "guard": "DRV_VER",
-   "reason": "OSAPI_SEG verb SEG_LOW (14) added past SEG_TYPE: kern_mega brings a caller's own region above 1MB down to conventional memory, selectors kept; every older verb as it was, real-mode kernels refuse it as any unknown verb - no PKG_FMT bump (KERN-MEGA-PLAN 14.174)",
+   "reason": "OSAPI_SEG verb SEG_LOW (14) added past SEG_TYPE: kern_mega brings a caller's own region above 1MB down to conventional memory, selectors kept; every older verb as it was, real-mode kernels refuse it as any unknown verb - no PKG_FMT bump (KERN-MEGA-PLAN 14.178)",
    "to": 12
   }
  ]

@@ -13241,7 +13241,7 @@ mega_segf:
     retf
 
 ; mega_seglow - FAR (jumped to from mega_segf): SEG_LOW's body (SPEC.md
-; 50.6.11, KERN-MEGA-PLAN 14.174). ES = the caller's DS, DX = it - its OWN
+; 50.6.11, KERN-MEGA-PLAN 14.178). ES = the caller's DS, DX = it - its OWN
 ; region and nothing else - AX = a relocation proc of its or 0. A region
 ; ld_hi put ABOVE 1MB (OS88_HIGH) moves into a conventional claim at the
 ; arena's TOP owned by its slot, as a region loaded low is: the bytes copied,

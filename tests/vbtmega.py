@@ -254,16 +254,16 @@ def run(arm, tmp, syms):
             ok(rbase < 0xA0000 and cbase >= 0x100000 and rb("vb_cvon"),
                "W5: the title picture above 1MB (%06X), up in the window - "
                "and the region CONVENTIONAL from the entry (%06X: SEG_LOW, "
-               "KERN-MEGA-PLAN 14.174)" % (cbase, rbase))
+               "KERN-MEGA-PLAN 14.178)" % (cbase, rbase))
         key("Enter")
         until(lambda: rb("vb_ready") == 1, "the play")
         if arm == "play":
-            # KERN-MEGA-PLAN 14.174: a picture above 1MB is the HOLD's KB
+            # KERN-MEGA-PLAN 14.178: a picture above 1MB is the HOLD's KB
             # until the hold is sized - given back at the first play's door
             # when a hold opened there, kept through every play after
             if rb("vb_hon"):
                 ok(rw("vb_cvseg") == 0,
-                   "14.174: the picture given back at the first play's door "
+                   "14.178: the picture given back at the first play's door "
                    "- its pool KB the hold's, sized after it")
             else:
                 ok(rw("vb_cvseg") == cv0 and rb("vb_cvon"),

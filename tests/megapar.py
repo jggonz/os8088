@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """THE REAL-MODE BRACKET'S PARITY with kern_big: what the Video Battle and the
 Video Player hold, measured on BOTH kernels on the same machine
-(KERN-MEGA-PLAN 14.174, SPEC.md 53.2.3, 126.4.7, 98.3.24.2).
+(KERN-MEGA-PLAN 14.178, SPEC.md 53.2.3, 126.4.7, 98.3.24.2).
 
     make && make mega && make vbattle && python3 tests/megapar.py --prog vb|vp
         [--megs 1.375] [--kern both|big|mega]
@@ -43,7 +43,7 @@ driver's image, the kernel's, a module) and the instance's. Then:
 
 The table prints the conventional side as well (the rings, the free runs),
 which kern_mega pays the bracket's service area and the drivers' low copies
-out of (SPEC.md 53.2.3) - reported, not asserted: see KERN-MEGA-PLAN 14.174
+out of (SPEC.md 53.2.3) - reported, not asserted: see KERN-MEGA-PLAN 14.178
 for the accounting of every KB.
 
 RED on mega-release (its tree, this file run there): vb - the region (48 KB)

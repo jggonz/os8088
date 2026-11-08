@@ -15725,7 +15725,7 @@ full tier) green. NOT run, by the build: every kern_big and kern_small row
 AUDIO are byte-identical to mega-release's, so those rows would boot the
 same bytes.
 
-### 14.174 The real-mode bracket's parity with kern_big: a region above 1MB was held twice, and the Video Battle's picture took the hold's KB; `OSAPI_SEG` `SEG_LOW` (2026-11-08) - FIXED (the double count), MEASURED (the rest), PROPOSAL (the clip cache)
+### 14.178 The real-mode bracket's parity with kern_big: a region above 1MB was held twice, and the Video Battle's picture took the hold's KB; `OSAPI_SEG` `SEG_LOW` (2026-11-08) - FIXED (the double count), MEASURED (the rest), PROPOSAL (the clip cache)
 
 The owner (2026-11-08): *"Video player/vbattle ... the actual targets fully
 use conv memory AND xms when available. Why would it be getting any less, in

@@ -100920,7 +100920,7 @@ verb:
 | `SEG_LEND` 11 | DX = the real paragraph of a claim of the caller's below 1MB (`SEG_REAL`'s answer for its base), CX = the top of a stack in it; or DX = 0 | the stack is LENT: a BIOS `int 10h`-`1Fh` made on a stack that is not `LOW_SEG`'s runs on it (§124.31.2), entered through the claim's selector in protected mode and its paragraph in real mode - the GDT's identity map stops at `.cold`, so no selector is both. The last lender's is the one used; DX = 0 takes the caller's back, and its instance's end does. CF = 1 when DX is no live claim's base |
 | `SEG_HND` 12 | SI = a selector based in a claim or a pool block, AX = a paragraph offset into it, CX = bytes (0 = 64KB), DX = a HANDLE descriptor to re-aim, or 0 for a new one; SI = 0 frees DX | DX = a handle descriptor based there, its reach CX clipped at that block's end (§124.31.3) |
 | `SEG_TYPE` 13 | DX = a WINDOW of the caller's (made by `SEG_WIN`, `SEG_WINL` or `SEG_AT`) or a HANDLE descriptor (`SEG_HND`) based in a block of the caller's own, CX = 0 data / 1 code / 2 code NOT PRESENT; **CX = 3: DX:SI = the caller's `#NP` handler** (0 in DX takes it back) | the descriptor's type set in place, F2h (data, DPL 3) / 9Eh (code, conforming, DPL 0) / 1Ah since KERN-MEGA-PLAN 14.144 (92h / 9Ah / 1Ah before it); base, limit and selector kept (§124.31.6). CF = 1, AX = 4 for anything that is not the caller's own window or handle descriptor (a SUB, a pair, a tile, another's window or handle descriptor, a DX that is no allocator LDT entry). CX = 3 needs only a caller that is somebody (CF = 1, AX = 4 otherwise) |
-| `SEG_LOW` 14 | DX = the caller's OWN DS (its region), AX = a relocation proc of its (`OSAPI_MEM_MOVABLE`'s AX) or 0 | the region, when kern_mega put it above 1MB (`OS88_HIGH`), MOVED into a conventional claim at the arena's top owned by its slot - as a region loaded low is - with every selector KEPT: the bytes copied and every LDT descriptor based inside the old block rebased by the drop, as a pool move rebases them (a window excepted), in one step with interrupts off and `[sch_lock]` held; the claim's mem_sel row made the region's pair, MC_RLOC = AX (movable with a proc, pinned with 0), and the pool block freed (KERN-MEGA-PLAN 14.174). DS and CS read the new base as the cell returns; a caller reloads ES itself. Conventional already: CF = 0 and nothing done. CF = 1, AX = 1 no conventional room, AX = 3 DX is not the caller's own region - nothing moved either way. For a real-mode bracket's package (SPEC.md 53.2.3), asked BEFORE it sizes its extended memory |
+| `SEG_LOW` 14 | DX = the caller's OWN DS (its region), AX = a relocation proc of its (`OSAPI_MEM_MOVABLE`'s AX) or 0 | the region, when kern_mega put it above 1MB (`OS88_HIGH`), MOVED into a conventional claim at the arena's top owned by its slot - as a region loaded low is - with every selector KEPT: the bytes copied and every LDT descriptor based inside the old block rebased by the drop, as a pool move rebases them (a window excepted), in one step with interrupts off and `[sch_lock]` held; the claim's mem_sel row made the region's pair, MC_RLOC = AX (movable with a proc, pinned with 0), and the pool block freed (KERN-MEGA-PLAN 14.178). DS and CS read the new base as the cell returns; a caller reloads ES itself. Conventional already: CF = 0 and nothing done. CF = 1, AX = 1 no conventional room, AX = 3 DX is not the caller's own region - nothing moved either way. For a real-mode bracket's package (SPEC.md 53.2.3), asked BEFORE it sizes its extended memory |
 
 **Every real-mode kernel answers what the caller's own arithmetic was** -
 `DX x 16`, `DX`, `DX`, `DX + AX` (`SEG_SUB` and `SEG_SUBC` alike), `DX` for
@@ -107307,7 +107307,7 @@ pinned for it, and a door that compacted nothing of the caller's is exactly
 as before.
 
 **A region above 1MB is held TWICE for a bracket's life, so a package that
-sizes extended memory brings it down first** (KERN-MEGA-PLAN 14.174). The
+sizes extended memory brings it down first** (KERN-MEGA-PLAN 14.178). The
 copy below is a conventional claim of the region's size while its pool block
 stands idle above 1MB - and a package that takes "the whole pool" for a hold
 or a bank at its door took it without those KB, which kern_big's XMS never
@@ -208843,7 +208843,7 @@ ring is up to 80 KB smaller for it. +60 bytes of the arm's image (63,832;
 extended desktop, and `FSXR_ROOM` on both without it.
 
 **And the region comes down before the pool is sized** (KERN-MEGA-PLAN
-14.174): the arm's entry proc asks `OSAPI_SEG` `SEG_LOW` (50.6.11, `vp_low`),
+14.178): the arm's entry proc asks `OSAPI_SEG` `SEG_LOW` (50.6.11, `vp_low`),
 and `vp_xopen` again before it sizes a hold or a bank when that was refused,
 so the 64 KB pool block the region held - idle in
 every real-mode play, whose copy of it was conventional - is the bank's,
@@ -208874,7 +208874,7 @@ conventional side holds the same ring on both, with MORE left free on
 kern_mega (its floor is 3.5 KB higher and the bracket's service area and
 low drivers 18 KB, against kern_big's 59.5 KB floor and XMEM.DRV's 2 KB -
 and the region's 64 KB conventional on both). `tests/megapar.py --prog vp`
-is the gate (KERN-MEGA-PLAN 14.174).
+is the gate (KERN-MEGA-PLAN 14.178).
 
 ### 98.4 The window: the Preview (wave 6)
 
@@ -245167,7 +245167,7 @@ bracket** (SPEC.md 53.2.3).
   packing probe, the hold's bounce, the card's ring - so on kern_mega the
   only claim that goes above 1MB is the title picture, and the region
   itself. **The region comes DOWN in the entry proc** (`vb_low`, `OSAPI_SEG`
-  `SEG_LOW`, KERN-MEGA-PLAN 14.174; asked again by `vb_door` when refused
+  `SEG_LOW`, KERN-MEGA-PLAN 14.178; asked again by `vb_door` when refused
   there) before anything is sized, so the hold's pool has its 48 KB and the
   bracket copies nothing; refused at the door too, it leaves
   the region's room as well (`VB_REGKB`) for the bracket's copy down, as
@@ -245196,7 +245196,7 @@ battles (not in the tree): `BATTLE.VBT`, a CGA4 battle of 6.3 MB, and the
 VGA battle inside `FF7BATTV-286.O88` (16.0 MB), played by this tree's
 engine. "Rings" is the two conventional clip rings, guards aside:
 
-| battle, machine | kern_big hold / rings | kern_mega before | kern_mega after (14.174) |
+| battle, machine | kern_big hold / rings | kern_mega before | kern_mega after (14.178) |
 |---|---|---|---|
 | CGA4, 640K + 384K | 316 / 368 (cache) | 220 / 320 | 280 / 320 |
 | CGA4, 2 MB | 956 / 368 (cache) | 860 / 320 | 920 / 320 |
@@ -245225,7 +245225,7 @@ Neither kernel holds a whole battle there. **Every KB of the difference,
   (`vb_ctry` refuses the cache under `[vb_pmd]`: the in-place check needs
   real mode, and a token is the block's address only while the pool leaves
   it where it is), so the idle loop is in the resident claim. KERN-MEGA-PLAN
-  14.174 has the proposal;
+  14.178 has the proposal;
 - **the bracket's own conventional memory, 18 KB - the kernel's**: its
   service area (3 KB) and the low copies of HDD.DRV (4) and SOUND.DRV (11),
   where kern_big runs both drivers from the HMA (53.2.3);

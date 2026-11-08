@@ -19679,7 +19679,7 @@ SOAK = [
         wants=("build/mega.img", "build/megak/apps/pixel.o88",
                "build/megak/apps/pixel.map")),
     Row("megaparvb", "soak", py("tests/megapar.py", "--prog", "vb"), 30.0,
-        "KERN-MEGA-PLAN 14.174, SPEC.md 53.2.3/126.4.7: the Video Battle's "
+        "KERN-MEGA-PLAN 14.178, SPEC.md 53.2.3/126.4.7: the Video Battle's "
         "hold on kern_big AND kern_mega on the same 86Box machine "
         "(at286_vga_sb_hdd, 640K + 384K, the battle on C:): kern_mega's "
         "play in a real-mode bracket, NO pool block of the instance's but "
@@ -19694,7 +19694,7 @@ SOAK = [
         wants=("build/mega.img", "build/os8088.img", "build/vbattle.o88",
                "build/BATTLE.VBT")),
     Row("megaparvp", "soak", py("tests/megapar.py", "--prog", "vp"), 30.0,
-        "KERN-MEGA-PLAN 14.174, SPEC.md 98.3.24.3: the Video Player's bank "
+        "KERN-MEGA-PLAN 14.178, SPEC.md 98.3.24.3: the Video Player's bank "
         "on kern_big AND kern_mega's arm on the same 86Box machine "
         "(at286_vga_sb_hdd, 640K + 384K, 08-WILLY.V88 on C:, read in the "
         "play): legs 1-4 as megaparvb's at a 32 KB slot's granule. RED on "
