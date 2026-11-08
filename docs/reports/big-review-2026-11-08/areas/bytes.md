@@ -685,3 +685,33 @@ entries.)
 4. **bytes-5:** is a register-liveness gate worth building, so that the
    kernel-internal convention can change and the "dead callee-save" class
    stops being re-found every pass?
+
+---
+
+## Verification
+
+Adversarial pass, 2026-11-08, against `build/kernel.map`, `build/smallk/kernel.map`,
+`build/megak/kernel.map` and `tools/kernsize.py` on this tree. No finding was refuted.
+
+- **bytes-1 - CORRECTED.** Table re-measured at 1,259 bytes (0x10..0x4FB), the same on all three maps; 6-byte rare cells and ~7,000 package call sites confirmed. Correction: K17-4 is not moot - under the door a demoted SLOT saves 6 bytes instead of 2, so it becomes worth more.
+- **bytes-2 - CORRECTED.** The PS/2 .text span is 251 bytes, as stated. The XMS half is overstated: most of the 247-byte `xm_` span is data, the tier-0 refusal answers that every 8088 runs, and `xm_release_rec`'s EMS and NET releases, which run on every machine. About 110-130 bytes could slide. The estimate is now ~-250 to -320 on an 8088 with neither VGA nor EGA.
+- **bytes-3 - confirmed.** The `FCP_MOD`/`FDLG_MOD` gating and the ~4.0KB spans (filecp .cold 1,657, fdlg .cold 2,080) were re-measured. The pin is designed and unbuilt (SPEC.md 2.8.3).
+- **bytes-4 - confirmed.** The ct_ count (17 names, 16 per kernel), the 19,842 bytes left in the segment and kern_small's 54,002 bytes were verified. The per-site census was not re-derived (there is no kernel listing in build/). The shim count is 45 bodies in the block, plus 2 elsewhere.
+- **bytes-5 - unchecked.** This is a low-severity record and needs a kernel listing.
+- **bytes-6 - confirmed.** No package code (only comments) names a handler field through the record.
+- **bytes-7 - confirmed.** The price was spot-checked: 9 against 7 for a single site, 5 against 7 for each extra site, and a ~25-30 byte trampoline.
+- **bytes-8 - CORRECTED.** There are nine names on kern_big (DOCK..HIBER, 36 bytes of `.DRV`), not eleven, and five on kern_small (20 bytes). The estimate is now ~-25 / ~-10.
+- **bytes-9 - CORRECTED.** The header is accurate: `--bless` writes the JSON block, which carries the sections, rungs and ladder, and the header calls the rest prose. The defect is the hand-copied ladder table that calls itself "as blessed", plus the Task Manager table.
+- **bytes-10 - confirmed.** All four paragraphs are present in CLAUDE.md (1 grep match each) and missing from AGENTS.md (0 each).
+
+Doc mismatches: all 13 were confirmed and turned into 20 exact replacements in `data/bytes.json`. Several were refined:
+
+- **M1 / M2 (SPEC.md 2.6):** in-voice rewrites. M2 adds a movability parenthetical rather than an ellipsis.
+- **M3 / M4 (SPEC.md 2.6.2):** M4's paragraph is rewritten rather than deleted, because the per-build `%define` rule and the font_run tail exception belong there.
+- **M6 (KERNEL-MEMORY.md):** the whole ladder table is rewritten in ladder order with today's kernsize figures, and its "as blessed" label is dropped.
+- **M7 (KERNEL-MEMORY.md):** the stale "on this tree the two AGREE" becomes "when it was last taken, at 71,168".
+- **M8 (KERNEL-MEMORY.md, Task Manager table):** Code+data becomes 88,832 / 87.
+- **M9 (`.boot2` and `.ovl`):** they use the kernsize sections figures (6,478 / 5,119), not an unverified 6,652.
+- **M10 (`kernel.asm` comment):** the count is 21 `cw_X equ apic_X` lines on kern_big, not 20. This changes comment text only.
+- **KERNEL-BYTE-QUEUE.md:** a status paragraph is inserted. The historical census is not overwritten.
+- **AGENTS.md:** the four ports are exact insertions, carrying M12's ROM/HMA correction.

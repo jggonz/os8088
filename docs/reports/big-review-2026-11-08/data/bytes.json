@@ -1,0 +1,356 @@
+{
+ "area": "bytes",
+ "title": "LENS: bytes - duplication and resident-size leverage across modules",
+ "summary": "Eighteen size passes have brought the kernel close to the floor of what routine-by-routine work can reach. A mechanical search over two complete kernel listings (kern_big and kern_small), attributed per routine through the maps, found almost nothing in the old shapes. There are no duplicated routines except the kent/kret prologue twins, which exist because .cold has its own CS. No repeated instruction sequence is worth a helper except register-save runs and graphics loops, and those were already priced. About 700 bytes of cross-segment plumbing is spread over 74 and 81 distinct targets with at most a few sites each. What remains is structural:\n- Put the 112 rare API cells (672 bytes) behind one software-interrupt door with an inline index byte. This saves about 400 bytes resident on kern_big and kern_mega, takes 2 bytes off every rare call site in every package, and turns a call to a cell newer than the running kernel into a refusal. It is a flag-day change and supersedes T1.\n- Add an \"AT rung\" for the PS/2 runtime and the XMS bodies, using the VGA rung's slide. This saves about 250-320 bytes on an 8088 with neither VGA nor EGA, with no ABI break (most of the XMS half is tier-0 refusal code an 8088 runs, so it stays).\n- Preload FILECP and FDLG into a purgeable claim during the boot read on kern_big, as DOS did with COMMAND.COM's transient part. This removes ONDEMAND-PLAN's swap objection and makes about 3.6KB reclaimable.\n- The \"preserve every register\" convention generates the dead-callee-save class that every recent pass harvested: 4,791 bytes of push/pop in resident code.\nThe documentation in this lens's territory has drifted: SPEC.md 2.6 describes the old ladder, KERNEL-MEMORY.md presents stale prose tables as generated output, SPEC.md 20.3's table count is behind the code, and AGENTS.md has lost CLAUDE.md's byte rules.",
+ "strengths": [
+  {
+   "title": "Shared epilogue ladders and prologue helpers, gated",
+   "evidence": "kernel/kernel.asm:8449-8560 (kent_bp/kent_di, kret_*, kentc_*, kretc_*, kretfc_*); 144 prologue and 174 epilogue sites",
+   "why": "3 bytes per site instead of 6-8, and fail-closed: stkbalance walks a rung as a continuation and t_asmrules' crossed_pops reads the rung->pop map out of the ladder. This is the pattern any 8086 project without pusha should copy."
+  },
+  {
+   "title": "The cell is the door",
+   "evidence": "kernel/kernel.asm:7808-8066, 21 cw_X equ apic_X aliases",
+   "why": "Shims cost zero bytes wherever a published cell already does the job, and the rule for when this is allowed (per operation, never per draw) is written where it applies."
+  },
+  {
+   "title": "ct_ trampolines priced per build",
+   "evidence": "kernel/kernel.asm:8066-8136 and the %define fallback at 6952-6956",
+   "why": "Each trampoline pays 2N-6 bytes and falls back to the plain far call when a build's site count drops, so the trade re-evaluates itself per build."
+  },
+  {
+   "title": "The VGA rung and its run-time door registry",
+   "evidence": "cfx_slide kernel/kernel.asm:8771-8854; tests/vgarefs.txt; os88ovlchk rule 2f",
+   "why": "Code that only one class of hardware can run costs nothing on other machines, for about 100 transient bytes. It is the template for bytes-2."
+  },
+  {
+   "title": "Modules assembled with the kernel and cut out afterwards",
+   "evidence": "SPEC.md 2.8; tools/os88mod.py; t_moddrop",
+   "why": "There is no second ABI between the kernel and its own modules, and dropping a module when done is enforced by a gate."
+  },
+  {
+   "title": "One source, several images",
+   "evidence": "kernel/driver.inc:894-1000 (CFG_MAP/CFG_DATA)",
+   "why": "The parser tables are emitted into the boot overlay and into CTRL.DRV from one macro. They are edited once and resident in neither."
+  },
+  {
+   "title": "Inline cells",
+   "evidence": "SPEC.md 20.3; kernel.asm OSAPI_ICELL",
+   "why": "The smallest and the fastest cell shape at the same time: SET_COLOR takes 52-57 cycles against 159-162."
+  },
+  {
+   "title": "Generated seeds",
+   "evidence": "kernel/assoc.inc:85-87 (14 bytes for a 64-byte icon); icons.inc:878 IRUN; boot-built row and pair tables in .lowbss",
+   "why": "Regular data is stored as a seed rather than as an image."
+  }
+ ],
+ "findings": [
+  {
+   "id": "bytes-1",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "Rare API cells behind one software-interrupt door with an inline index byte",
+   "detail": "MEASURED by decoding build/kernel.bin with t_api_abi's decoder: the kern_big table is 1,259 bytes. It holds 44 SLOT (352), 11 X (77), 112 rare cells (672: RSLOT 50, RCXCELL 24, RCSLOT 19, RNCELL 12, RXCELL 7), 20 inline (108), 6 jump, 1 far, 1 far-jump and 3 fixed refusals. Each rare cell is push bp / call api_r<kind> / dw target, 6 bytes. Packages make about 7,000 source-level call OSAPI_* sites at 5 bytes each.\n\nProposal, the DOS AH and Mac A-trap model: a rare call becomes 'int VEC / db index' (3 bytes) and the kernel keeps a 2-byte word per rare cell. The kinds are sorted into index ranges at the flag day, so no kind byte is stored. The door:\n- fetches the index through the caller's CS:IP and bumps the return IP;\n- range-selects the kind;\n- runs the existing api_rs/api_rxc/... bodies unchanged;\n- returns with retf 2 so CF/ZF answers survive;\n- re-enables interrupts only if the caller's IF was set.\n\nAn index past this kernel's table is one compare away from CF=1. That closes loader-6's 'newer cell on an older kernel' hole at run time. Hot SLOTs and inline cells are untouched.\n\nCost: about +80-100 cycles (~20 us) per rare call. Hazards: vector ownership against windowed DOS programs, a kern_mega IDT gate plus a readable code alias, and IF preservation.",
+   "evidence": [
+    "kernel/kernel.asm:2501-2521 rare cell macros",
+    "kernel/kernel.asm:4596-4660 api_rs/api_rsc/api_rx/api_rxc bodies",
+    "build/kernel.map:3136,3229 osapi_table .. osapi_table_end 0x04FB",
+    "grep: ~7,000 'call OSAPI_*' sites under apps/ and drivers/"
+   ],
+   "recommendation": "Price this at the next flag day as the table row, instead of T1. Keep the hot SLOTs and inline cells as they are.",
+   "phase": "flagday",
+   "bytes_est": "~-400 .text kern_big, ~-400 kern_mega (conventional), ~-250 kern_small; -2 per rare call site in every package (ESTIMATED from MEASURED counts)",
+   "listed_as": "ABI-BREAK-LIST T1 / K17-1 (supersedes); K17-4 (becomes worth more: 8->2 a cell)",
+   "prior_art": "MS-DOS int 21h (AH, one table word, unknown-function refusal); Mac A-line trap dispatcher (2-byte site, patchable table); AmigaOS LVO tables with SetFunction",
+   "verdict": "corrected",
+   "verify_note": "Table re-measured: build/kernel.map osapi_table 0x10..osapi_table_end 0x4FB = 1,259 bytes, identical on smallk and megak maps (the ABI fixes it). Rare cells are 6 bytes (push bp / call api_r<kind> / dw, kernel.asm:2502-2521); 6,998 'call OSAPI_*' source sites under apps/ and drivers/. Arithmetic holds: ~4 bytes a rare cell minus a door of a few dozen bytes. No prior rejection of an INT door in SPEC. One correction: K17-4 (13 not-hot SLOTs demoted to rare) is NOT moot under this design - a demoted cell would save 6 bytes instead of 2, so the door makes K17-4 more valuable, not less."
+  },
+  {
+   "id": "bytes-2",
+   "kind": "size",
+   "severity": "medium",
+   "title": "An AT rung: the PS/2 runtime and the XMS bodies, slid over on an 8088",
+   "detail": "The PS/2 runtime is about 251 bytes of .text: mou_p2_byte 114, mou_p2_isr 51, mou_p2_off 32, mou_p2wr 29, plus the cw/dw/wcmd helpers 25. The file's own banner says nothing in it runs on the target machine. The XMS bodies are about 250 bytes (xm_copy 83, xm_release_rec 42, xm_dsp 27, xm_caps 23, xm_free 20, xm_alloc 16, ...), and every one already opens with call xm_have. On every 8088 running kern_big these bytes are resident and dead.\n\nUse the VGA rung's mechanism a second time, with the layout [image][FAT][LOW][AT][VGA][COLD][VGABUF]. cfx_slide's delta becomes VGA_PARA + AT_PARA on an 8088 with no VGA/EGA. Putting AT below VGA means every common machine slides a contiguous top: an 8088 with mono slides both, a 286 with mono slides VGA only, a 286 with VGA slides nothing. An 8088 with VGA keeps the AT bytes, no worse than today. The HMA's RT_SLIDES hashes are unaffected because an 8088 never loads COLDHMA.SYS.\n\nResident doors that stay:\n- mou_p2_off's first cmp/je, since it is called unconditionally at mouse.inc:1264 and 1437;\n- one call xm_have / jz refusal front per XMS entry;\n- nothing for the ISR, which only mou_p2_init on a 286 installs.\n\nA tests/atrefs.txt registry would do vgarefs.txt's job.",
+   "evidence": [
+    "kernel/mouse.inc:1642-1646 banner; 1839-1841 mou_p2_init's cpu_tier gate",
+    "kernel/mouse.inc:2189-2274 mou_p2_off/isr/byte",
+    "kernel/xmem.inc:414-730 xm_have and the bodies",
+    "kernel/kernel.asm:5757-5760 the slide decision; 8771-8854 cfx_slide",
+    "kernsize window line: 6,946 bytes of the 64KB window left"
+   ],
+   "recommendation": "Build the AT rung below .vga, gated on [cpu_tier], with a registry of its entry doors. Pair it with video-17 and input-12 as a 'machine-shaped residency' rule.",
+   "phase": "now",
+   "bytes_est": "~-250 to -320 resident on an 8088 with neither VGA nor EGA (PS/2 ~215 + XMS ~110-130, less ~20-30 of resident fronts); 0 on the KERN_BUDGET gauge (taken on VGA) (ESTIMATED)",
+   "listed_as": "",
+   "prior_art": "IBMBIO/IO.SYS per OEM; Windows 3.x per-machine driver DLLs (KEYBOARD.DRV, MOUSE.DRV)",
+   "verdict": "corrected",
+   "verify_note": "PS/2 .text span re-measured: mou_p2wr 0x28EE .. kbm_tab 0x29E9 = 251 bytes, and mou_p2_off is called unconditionally (its front stays). The XMS figure is overstated: the 247-byte xm_ span (0xB46..0xC57) includes xm_fname/xm_row/xm_kb data, the TIER-0 refusal answers every 8088 RUNS (xmem.inc banner: 'The four cells answer TIER 0's answers when nothing is loaded'), and xm_release_rec, which is mostly the EMS and NET releases that run on every machine (an XT can have EMS). What could slide is roughly xm_copy's post-gate body, xm_dsp, xm_ownbl and the dispatch tails, ~110-130 bytes. The PS/2 bytes in .cold (mou_p2_init/knock/rd/dev/flush) could join the rung too. Corrected estimate below."
+  },
+  {
+   "id": "bytes-3",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "FILECP and FDLG on kern_big as boot-preloaded purgeable images (the COMMAND.COM transient model)",
+   "detail": "kern_big keeps filecp.inc (1,657 .cold + 152 .bss) and fdlg.inc (35 .text + 2,080 .cold + 84 .bss) resident, about 4.0KB. kern_small already ships the same bodies as FILECP.DRV and FDLG.DRV, with resident halves of only about 85+91 .cold, 36 .text and 83 .bss.\n\nONDEMAND-PLAN 1.2 and 1.3 refused on-demand loading on kern_big because the load needs the system disk at exactly the moment the user's disk is in the drive. That objection applies only to loading on demand. The proposal:\n- leave both images in KERNEL.SYS's one contiguous boot read (about 6 packed sectors, roughly +120 ms on a 5150, ESTIMATED);\n- copy them into a MEM_PG_LOW claim at mem_unblob;\n- pin while entered (ONDEMAND-PLAN 7.1's nesting count, held open-to-close for the dialog and across a copy);\n- re-read only after a shed, through the refusal path kern_small already has.\n\nNo disk read happens on any machine with heap to spare, and under pressure the heap gets about 4KB back before it refuses a package. KERN_BUDGET counts non-purgeable bytes, so the gauge moves honestly. The same tier would let the existing modules be shed instead of dropped (7.2).",
+   "evidence": [
+    "kernel/kernel.asm:1093-1103 FCP_MOD/FDLG_MOD defined only on KERN_SMALL",
+    "map spans: big fcp .cold 1,658, fdlg .cold ~2,080; small fcp .modp 1,835, fdlg .modd 1,191",
+    "docs/plans/completed/ONDEMAND-PLAN.md 1.2, 1.3, 7.1, 7.2",
+    "SPEC.md 2.8.3 ('Making it purgeable needs a pin ... it is not built')"
+   ],
+   "recommendation": "Build the module pin once (it also serves mem-10 and mem-15/hm-9). Then move FILECP and FDLG on kern_big to boot-preloaded purgeable claims, and consider shed-not-drop for the other modules.",
+   "phase": "now",
+   "bytes_est": "~-3,600 resident kern_big (becomes a purgeable heap claim); +60-100 .cold for the pin and boot copy; +~6 sectors in the boot read (ESTIMATED)",
+   "listed_as": "ONDEMAND-PLAN 1.2/1.3 (refused, new argument), 7.1/7.2 (designed, unbuilt)",
+   "prior_art": "MS-DOS COMMAND.COM transient portion reloaded from COMSPEC; Windows 3.x discardable segments (INT 3Fh reload thunks); Mac purgeable CODE resources; AmigaOS library expunge at open count 0",
+   "verdict": "confirmed",
+   "verify_note": "kernel.asm:1093-1103 define FCP_MOD/FDLG_MOD only under KERN_SMALL. Spans re-measured on build/kernel.map: filecp .cold 1,657 (fcp_arm..fdlg_ref) + .bss 152; fdlg .cold 2,080 (fdlg_ref..desk_zs) + .bss 28 + a small .text part - ~3.9-4.0KB, as stated. SPEC.md 2.8.3 and ONDEMAND-PLAN 7.1/7.2 confirm the pin is designed and unbuilt; mem_unblob_x and MEM_PG_LOW exist. The new argument against ONDEMAND-PLAN 1.2/1.3 is sound for the load; under pressure a purge brings the swap objection back, which the finding acknowledges (refusal path)."
+  },
+  {
+   "id": "bytes-4",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "The two-segment tax, measured: ~700 bytes on kern_big, ~540 on kern_small, too thinly spread to cut",
+   "detail": "Listing census for kern_big:\n- .text->.cold: 27 thunks (6 bytes each) and 63 inline far calls/jumps;\n- .cold->.text: 112 far calls (5 bytes each) and 94 near calls into 16 ct_ trampolines;\n- about 47 real cw_ shim bodies, 45 of them in kernel.asm's block (plus 23 zero-byte aliases);\n- the duplicated kentc/kretc ladder.\nAs near calls in one segment these would cost about 700 bytes less. kern_small: 12 thunks, 34 inline, 67 far, 67 ct_ calls, about 540 bytes. The targets are spread over 74 and 81 names, the busiest with 13 sites, so per-routine migration is at its floor.\n\nThe reason for the split has changed. .text+.bss has 19,842 bytes of KERN_CODE_MAX left. What .cold buys now is movability: the ROM, the HMA (38KB back on a 286) and the slide. On kern_small, .text+.bss+.cold = 54,002 bytes would fit one 64KB segment, so every ROM-less 128KB machine pays about 540 bytes for the ROM option.",
+   "evidence": [
+    "census: .text 90 COLD_SEG sites (27 thunks, 61 calls, 2 jmps); .cold 112 KERNEL_SEG far calls; 94 ct_ near calls",
+    "kernel/kernel.asm:8066-8136 ct_ trampolines; 7823-8066 cw_ block",
+    "kernsize: segment 19,842 left; window 6,946 left; small .text+.bss 32,971, .cold 21,031"
+   ],
+   "recommendation": "Record the trade in SPEC.md 2.6 (M2) and restate the placement rule in terms of movability and cadence. Do not spend a size pass on per-site migration.",
+   "phase": "record",
+   "bytes_est": "0 (a measurement; ~700 big / ~540 small is what the split costs, ESTIMATED)",
+   "listed_as": "",
+   "prior_art": "Mac Toolbox ROM/RAM split; os8088's ROM adoption is the cleaner version (the ROM checks it is the same kernel)",
+   "verdict": "confirmed",
+   "verify_note": "Verified: 17 ct_ names, 16 per kernel (kernel.asm:8104-8135 with the per-build %define at 6952-6956); kernsize segment 19,842 left; kern_small .text+.bss 32,971 + .cold 21,031 = 54,002. The per-site census counts (27 thunks, 112 far calls, ...) were not re-derived - there is no kernel listing in build/ - but they are a measurement record, not an action. Shim count: 45 bodies in kernel.asm's block assemble on kern_big (47 in source, 2 kern_small-only) plus cw_ui_svc_open/cw_vid_span_wh elsewhere."
+  },
+  {
+   "id": "bytes-5",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "The 'preserve every register' convention is the largest systematic tax left",
+   "detail": "Push/pop of GP and segment registers in resident code is 4,791 bytes (.text 2,438, .cold 2,203, .vga 150), about 6% of resident code. Pushes per register: AX 514, CX 363, BX 347, SI 299, DX 276, DI 276, BP 222, ES 183, DS 176. Passes 16, 17 and 18 all found 'callee-saves no caller reads' to be the bulk of their bytes, which means the convention is generating the class. A kernel-internal default of 'AX and flags are scratch unless the header says preserves', kept for the API boundary as today, would stop it at the source. It is only safe behind a register-liveness gate (every caller checked against the callee's header), which does not exist in tools/.",
+   "evidence": [
+    "listing census: push/pop counts per section and register",
+    "docs/plans/completed/HANDOFF-KERNEL-SIZE-P19.md section 1 (lesson 4 'held a third time')",
+    "CLAUDE.md hard rules: 'Public routines preserve every register but their documented outputs'"
+   ],
+   "recommendation": "Record it. Revisit only together with a liveness gate in the stkbalance mould.",
+   "phase": "record",
+   "bytes_est": "unpriced without the gate; plausibly a few hundred over time, mostly as 'the next pass finds nothing'",
+   "listed_as": "",
+   "prior_art": "Microsoft C / Windows 3.x (AX,BX,CX,DX,ES scratch); Mac Pascal (D0-D2/A0-A1 scratch); GEOS 'destroyed:' lists",
+   "verdict": "unchecked",
+   "verify_note": "Low-severity record; the push/pop census needs a kernel listing that is not in build/. The CLAUDE.md rule it cites exists as quoted."
+  },
+  {
+   "id": "bytes-6",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "Window handler words: new evidence that moving them breaks no package code",
+   "detail": "There are 13 handler words per window record (312 .bss on kern_big, 132 on kern_small). No package reads or writes one through the record: a grep for '+W_(PAINT|ONKEY|ONCLICK|ONSIZE|ONMOUSEUP|ONDRAG|ONTIMER)' over apps/, drivers/ and tests/ finds nothing. Packages reach these words only through the 8-word template copy and the setter cells. Inside the kernel there are 28 dispatch reads in 6 files (wm.inc 17, kernel.asm 4, ui.inc 3, ctrl.inc 2, files.inc 1, fdlg.inc 1), which could go through one helper. So histsys-9's class-table move is bounded on the kernel side and affects packages only through templates and setters.",
+   "evidence": [
+    "kernel/wm.inc:14-131 handler fields",
+    "grep: 0 package operand uses; 28 kernel read sites"
+   ],
+   "recommendation": "Decide it together with histsys-9, K17-2 and K17-3 at the flag day. This evidence lowers its risk; it does not change the price.",
+   "phase": "flagday",
+   "bytes_est": "as histsys-9: ~-150 to -250 net resident (ESTIMATED)",
+   "listed_as": "histsys-9; ABI-BREAK-LIST K17-2, K17-3",
+   "prior_art": "Windows WNDCLASS lpfnWndProc; GEOS class method tables",
+   "verdict": "confirmed",
+   "verify_note": "grep for any non-comment use of W_PAINT/ONKEY/ONCLICK/ONSIZE/ONMOUSEUP/ONDRAG/ONTIMER/ONWAKE/ONCLOSE/ONRCLICK/ONWHEEL/ONRESIZE under apps/, drivers/ and tests/ (outside the os88api.inc definitions) finds only comments. Kernel read-site count (28) not re-counted."
+  },
+  {
+   "id": "bytes-7",
+   "kind": "size",
+   "severity": "low",
+   "title": "KERNEL-BYTE-QUEUE's unpriced inline-word trampoline, priced: about zero",
+   "detail": "'call far cw_call_imm / dw body' is 7 bytes per site. The trampoline must preserve every register and flag and read its word through the caller's CS, roughly 25-30 bytes. Each single-site shim then nets -2 and each extra site +2. With about 47 shim bodies left and perhaps 20 single-site ones (ESTIMATED), the total is about -15 to +10 bytes, for about +100 cycles per call.",
+   "evidence": [
+    "docs/plans/KERNEL-BYTE-QUEUE.md section 1 'The alternative nobody has priced'",
+    "kernel/kernel.asm:7823-8066 (shim bodies)"
+   ],
+   "recommendation": "Close the row with this price. The shim sweep is done.",
+   "phase": "record",
+   "bytes_est": "~-15 to +10 .text (ESTIMATED)",
+   "listed_as": "KERNEL-BYTE-QUEUE.md item 1",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked: today a single-site shim costs 5 (far call) + 4 (call/retf body) = 9 against 7 for the inline-word form, and each extra site 5 against 7; with a ~25-30 byte trampoline the net is about zero, as stated. KERNEL-BYTE-QUEUE.md:85-93 is the unpriced row."
+  },
+  {
+   "id": "bytes-8",
+   "kind": "size",
+   "severity": "low",
+   "title": "The module names' '.DRV' suffix",
+   "detail": "Nine mod_f_* names on kern_big (mod.inc:175-197: DOCK, EXTD, WIN95, DESK, STIKMENU, CTRL, FORMAT, DISKOPS, HIBER) and five on kern_small are handed by mod_need to drv_find (mod.inc:431-432): 36 and 20 bytes of the same four characters. drivers-10 proposes staging the driver-row names into a buffer. If that buffer exists, mod_need can stage through it too and store only the stems.",
+   "evidence": [
+    "kernel/mod.inc:175-197, 431-432",
+    "listing: 22 '*.DRV' strings in kern_big .text, 6 in kern_small"
+   ],
+   "recommendation": "Fold this into drivers-10 rather than doing it alone.",
+   "phase": "now",
+   "bytes_est": "~-25 .text kern_big, ~-10 kern_small, net of the staging call (ESTIMATED)",
+   "listed_as": "drivers-10 (adjacent)",
+   "verdict": "corrected",
+   "verify_note": "mod.inc:175-197: the names are DOCK, EXTD, WIN95, DESK, STIKMENU, CTRL, FORMAT, DISKOPS and HIBER on kern_big (9, not 11 - 36 bytes of '.DRV') and CTRL, FORMAT, DISKOPS, FILECP, FDLG on kern_small (5, 20 bytes; DOCK_OPT is kern_big's). mod_need hands [bx+MODR_FILE] to drv_find at mod.inc:431-432 as stated."
+  },
+  {
+   "id": "bytes-9",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "KERNEL-MEMORY.md's hand-copied ladder and Task Manager tables are ~9KB stale",
+   "detail": "The ladder table at KERNEL-MEMORY.md:466-475 introduces itself as 'as blessed (kernsize --json ...)' but is hand-written: it gives KERN_SIZE 105,984 against 96,768 today and the pre-ROM_COLD order (COLD under FAT). The Task Manager table (495-509) has the same staleness. --bless writes only the JSON block, the theme table and the module table; the header's own words about prose are correct.",
+   "evidence": [
+    "docs/KERNEL-MEMORY.md:9-14, 304-438, 466-509",
+    "tools/kernsize.py:196-198, 1135-1136"
+   ],
+   "recommendation": "Have --bless emit both tables between markers. Fix the prose in the meantime (M5-M8).",
+   "phase": "now",
+   "bytes_est": "0",
+   "listed_as": "",
+   "verdict": "corrected",
+   "verify_note": "KERNEL-MEMORY.md's header is accurate about what is generated: --bless rewrites the JSON block (304-438, which carries the section sizes, rungs and ladder paragraphs), the theme table and the module table, and the header says the rest is prose that goes stale. The defect is the hand-copied ladder table (466-475), which calls itself 'as blessed' and is ~9KB and one layout stale, and the Task Manager table (495-509). Both get doc fixes below."
+  },
+  {
+   "id": "bytes-10",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "AGENTS.md has lost CLAUDE.md's byte rules",
+   "detail": "CLAUDE.md:5 says both files carry the same guidance. AGENTS.md (786 lines against 1,370) lacks four items that CLAUDE.md has, each confirmed by grep (1 match in CLAUDE.md, 0 in AGENTS.md):\n- the RUNGS ARE TEMPORARY banner;\n- the 'Design for BYTES, never for rungs' bullet;\n- the '.cold IS RESIDENT' paragraph;\n- the 'A PACKAGE'S OWN REGION ... RATCHET' bullet.\nA Codex agent is therefore never told the rules this lens enforces.",
+   "evidence": [
+    "CLAUDE.md:5, 307, 432-442, 448, 491",
+    "AGENTS.md:382 (where the module paragraph is, without its neighbours)"
+   ],
+   "recommendation": "Port the paragraphs (M11). Add a checkdocs gate that diffs the shared sections of the two files.",
+   "phase": "now",
+   "bytes_est": "0",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "grep -cF: 'RUNGS ARE TEMPORARY', 'Design for BYTES, never for rungs', '.cold` IS RESIDENT' and 'OWN REGION is that rule' are 1 in CLAUDE.md and 0 in AGENTS.md; AGENTS.md:5-7 claims the same guidance. Four port fixes are below (the .cold paragraph carries this review's ROM/HMA correction)."
+  }
+ ],
+ "doc_fixes": [
+  {
+   "file": "SPEC.md",
+   "old_text": "It sits between the image rung and the FAT window, so it\nrides the same contiguous boot read, and it is live for the whole session.",
+   "new_text": "It sits at the top of the kernel's ladder - above the FAT window, `.lowbss`\nand kern_big's VGA rung, just under `.vgabuf`, which is `ROM_COLD`'s layout\n(docs/plans/ROM-PLAN.md 3.4.2) and every shipped kernel's - so it rides the\nsame contiguous boot read, after the zero gap, and it is live for the whole\nsession.",
+   "why": "ROM_COLD is defined unless NO_ROM_COLD (kernel.asm:1121-1123); COLD_RAM = VGA_RAM + VGA_PARA / LOW_SEG + LOW_PARA (1674-1676); kernsize ladder KERNEL 0x0060 FAT 0x0ba0 LOW 0x0cc0 VGA 0x0e2f COLD 0x0eae VGABUF 0x17da."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "What it buys is `KERN_CODE_MAX` and nothing else: cold code is inside\n`KERN_BUDGET`'s span (§15.1) and outside the kernel's own 64KB segment.",
+   "new_text": "What it buys against the budgets is `KERN_CODE_MAX` and nothing else: cold\ncode is inside `KERN_BUDGET`'s span (§15.1) and outside the kernel's own 64KB\nsegment. (What its own CS buys a MACHINE is movability - the 5150 ROM, the\nHMA and the slide, §2.10, §2.10.7, §2.10.9 - which no budget counts, because\n`KERN_BUDGET` bills the RAM ladder as built.)",
+   "why": "SPEC.md 2.10 / 2.10.7 / 2.10.9 run .cold from ROM, the HMA (38.0KB back) or slid over the VGA rung; mem_floor_ax (memory.inc:715ff) drops the heap floor for each; KERN_SIZE is the assembled ladder (kernel.asm:1898)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`kernel.asm` carries eighteen, every target with at least four `.cold` sites\non `kern_big`: **`.cold` −182 on `kern_big` and −115 on `kern_small`**,\nnothing else moved.",
+   "new_text": "`kernel.asm` carries seventeen names, sixteen on each kernel\n(`ct_cw_snd_beep` is kern_big's alone and `ct_cw_wm_clip_test` kern_small's).\nWhen they landed they bought **`.cold` −182 on `kern_big` and −115 on\n`kern_small`**, nothing else moved.",
+   "why": "17 ct_ labels at kernel.asm:8104-8135; the %ifdef KERN_BIG block at 6952-6956 gives each kernel the plain far call for one of them; ct_cw_font_run is 2 sites on kern_big and five more are at 3, so 'at least four' no longer holds."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "A trampoline is **billed by site count and the count moves**. Five of the\neighteen are break-even or worse on `kern_small` (`cw_snd_beep` has two\n`.cold` sites there, so it costs that kernel two bytes); the figure beside\neach in `kernel.asm` is the count it was taken at, and a target that falls to\nthree sites on `kern_big` should go back to the plain far call.",
+   "new_text": "A trampoline is **billed by site count and the count moves**, per build. The\nfigure beside each in `kernel.asm` is the count it was taken at, kern_big's /\nkern_small's; a target whose CALL sites fall to two on one build takes the\nplain far call there instead, through the `%define` block above the includes\n(`cw_snd_beep` on `kern_small`, `cw_wm_clip_test` on `kern_big`), and three is\na wash. `ct_cw_font_run` stays at two on `kern_big` because its sites are\nmostly tail jumps, which a far call cannot replace for less.",
+   "why": "kernel.asm:6940-6956 is the per-build %define fallback ('at 2 sites it costs 2 and at 3 it is a wash'), and 8086-8090 states the font_run tail exception; cw_snd_beep no longer costs kern_small a byte."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`OSAPI_MEM_P` (§50.3.7) at `0x04E9` is a 117th and `OSAPI_FS_OP` (§12.8.10)\nat `0x04EF` a 118th, **1,253 bytes**, and `osapi_table_end` is `0x04F5`.",
+   "new_text": "`OSAPI_MEM_P` (§50.3.7) at `0x04E9` is a 117th and `OSAPI_FS_OP` (§12.8.10)\nat `0x04EF` a 118th, 1,253 bytes, and `OSAPI_VOL_CHECK` (§118.14.2) at\n`0x04F5` follows, an RCSLOT where `OS88_FSCK` is built and a refusal\nelsewhere - **1,259 bytes**, and `osapi_table_end` is `0x04FB`.",
+   "why": "kernel.asm:4441-4449 puts OSAPI_VOL_CHECK at 0x04F5 and osapi_table_end at 0x04FB; build/kernel.map osapi_table 0x10 .. osapi_table_end 0x4FB = 1,259 bytes."
+  },
+  {
+   "file": "docs/KERNEL-MEMORY.md",
+   "old_text": "`kern_big`, as blessed (`kernsize --json`; the `.text`/`.bss`/`.cold`/\n`.lowbss` figures are the `sections` line and the rungs are `kernel.asm`'s):\n\n| rung | segment | size | what it is |\n|---|---|---:|---|\n| image (`.text` 47,333 + `.bss` 5,525) | `KERNEL_SEG` 0x0060 | 53,248 | resident code in the kernel's own segment, its read-only data and its scratch |\n| `.cold` (40,432) | `COLD_SEG` 0x0D60 | 40,448 | resident code with a CS of its own (SPEC.md §2.6): the file system, the Standard File dialog, associations, drivers, the heap, the desktop and the on-demand modules' thunks |\n| FAT window | `FAT_SEG` 0x1740 | 4,608 | `DSK_FAT_SECS` = 9 sectors of the mounted volume's FAT (SPEC.md §18.8); 2 sectors = 1,024 bytes on `kern_small` |\n| `.lowbss` (6,366) + task 0's stack (512) | `LOW_SEG` 0x1860 | 7,168 | the mount-owned disk buffers, every task stack, the two private ISR stacks, and the tables that left the segment |\n| `.vgabuf` (336) | `VGABUF_SEG` 0x1A20 | 512 | `vga_pbuf`, SPEC.md §5.4.1.3's planar decoder's plane rows (`vga_p4tab` is a union with the mono pair tables in `.lowbss` since §39.22.1). **The only rung a machine can decline**: `mem_floor_ax` seeds the heap floor UNDER it when `[vid_avail] & VID_A_VGA` is clear, so a mono machine's heap starts 512 bytes lower (§39.22). 0 on `kern_small` and on `NOPLANE` builds |\n| **`KERN_SIZE`** | heap at `HEAP_SEG` 0x1A40 | **105,984** | 105.0 KB on VGA, 104.0 on a 1bpp adapter, whose heap starts under the `.vgabuf` rung |",
+   "new_text": "`kern_big`, as `kernsize` printed it on 2026-11-08 (the `.text`/`.bss`/`.vga`/`.cold`/\n`.lowbss` figures are the `sections` line and the segments its `ladder` line;\nrun the tool for today's):\n\n| rung | segment | size | what it is |\n|---|---|---:|---|\n| image (`.text` 40,328 + `.bss` 5,366) | `KERNEL_SEG` 0x0060 | 46,080 | resident code in the kernel's own segment, its read-only data and its scratch |\n| FAT window | `FAT_SEG` 0x0BA0 | 4,608 | `DSK_FAT_SECS` = 9 sectors of the mounted volume's FAT (SPEC.md §18.8); 2 sectors = 1,024 bytes on `kern_small` |\n| `.lowbss` (5,358) + task 0's stack (512) | `LOW_SEG` 0x0CC0 | 5,872 | the mount-owned disk buffers, every task stack, the two private ISR stacks, and the tables that left the segment |\n| `.vga` (2,030) | `VGA_RAM` 0x0E2F | 2,032 | code only a VGA or an EGA runs, inside `KERNEL_SEG`'s 64KB window (SPEC.md §2.10.9); on a machine with neither, `kmain_o` slides `.cold` down over it (`cfx_slide`). 0 on `kern_small` |\n| `.cold` (37,566) | `COLD_SEG` 0x0EAE | 37,568 | resident code with a CS of its own (SPEC.md §2.6): the file system, the Standard File dialog, associations, drivers, the heap, the desktop and the on-demand modules' thunks |\n| `.vgabuf` (336) | `VGABUF_SEG` 0x17DA | 608 | `vga_pbuf`, SPEC.md §5.4.1.3's planar decoder's plane rows (`vga_p4tab` is a union with the mono pair tables in `.lowbss` since §39.22.1), plus the pad to `KERN_END`'s one 512-byte rounding (`LADDER_PACK`). `mem_floor_ax` seeds the heap floor UNDER it when `[vid_avail] & VID_A_VGA` is clear (§39.22). 0 on `kern_small` and on `NOPLANE` builds |\n| **`KERN_SIZE`** | heap at `HEAP_SEG` 0x1800 | **96,768** | 96.0 KB on VGA; lower on a machine without one - under `.vgabuf` with no VGA, and with neither a VGA nor an EGA just past `.cold` slid down onto the VGA rung (`mem_floor_ax`) |",
+   "why": "kernsize[big] today: sections text 40,328 bss 5,366 vga 2,030 cold 37,566 lowbss 5,358 vgabuf 336; ladder KERNEL 0x0060 FAT 0x0ba0 LOW 0x0cc0 VGA 0x0e2f COLD 0x0eae VGABUF 0x17da HEAP 0x1800; KERN_SIZE 96,768; COLD_SLIDE arm of mem_floor_ax (memory.inc:715-735)."
+  },
+  {
+   "file": "docs/KERNEL-MEMORY.md",
+   "old_text": "`kern_small`'s ladder is `KERNEL 0x0060  COLD 0x0a00  FAT 0x1060  LOW 0x10a0\nHEAP 0x11c0` — `KERN_SIZE` **71,168 bytes**, the heap starting at 71.0 KB — so\na 128KB machine has 57.0 KB of heap by arithmetic; `tests/small128.py` boots\none under MartyPC and reads what is actually free after the boot-time claims,\nand on this tree the two AGREE: **58,368 bytes = 57.0 KB, with no pinned\nclaim standing**.",
+   "new_text": "`kern_small`'s ladder is `KERNEL 0x0060  FAT 0x0880  LOW 0x08c0  COLD 0x0994\nHEAP 0x0ec0` — `KERN_SIZE` **58,880 bytes**, the heap starting at 59.0 KB — so\na 128KB machine has 69.0 KB of heap by arithmetic; `tests/small128.py` boots\none under MartyPC and reads what is actually free after the boot-time claims,\nand when it was last taken, at `KERN_SIZE` 71,168, the two AGREED: **58,368\nbytes = 57.0 KB, with no pinned claim standing**.",
+   "why": "kernsize --build build/smallk: ladder KERNEL 0x0060 FAT 0x0880 LOW 0x08c0 COLD 0x0994 VGABUF 0x0eb7 HEAP 0x0ec0 = 59.0 KB, KERN_SIZE 58,880 (ROM_COLD puts COLD above LOW)."
+  },
+  {
+   "file": "docs/KERNEL-MEMORY.md",
+   "old_text": "stage 2's blob (`.boot2`, 4,751 bytes: the loader, the",
+   "new_text": "stage 2's blob (`.boot2`, 6,478 bytes: the loader, the",
+   "why": "kernsize[big] sections line: boot2 6,478, ovl 5,119."
+  },
+  {
+   "file": "docs/KERNEL-MEMORY.md",
+   "old_text": "(`.ovl`, 5,075 bytes loaded onto the FAT window and `dsk_secbuf`)",
+   "new_text": "(`.ovl`, 5,119 bytes loaded onto the FAT window and `dsk_secbuf`)",
+   "why": "kernsize[big] sections line: ovl 5,119."
+  },
+  {
+   "file": "docs/KERNEL-MEMORY.md",
+   "old_text": "**104** on `kern_big`, with one indented row per span the ladder declares",
+   "new_text": "**95** on `kern_big`, with one indented row per span the ladder declares",
+   "why": "KERN_KB = (KERN_SIZE + 1023) / 1024 (kernel.asm:9239) = 95 at KERN_SIZE 96,768."
+  },
+  {
+   "file": "docs/KERNEL-MEMORY.md",
+   "old_text": "| `Code+data` | `SKB_IMG` = the rest | 98,048 | 96 |",
+   "new_text": "| `Code+data` | `SKB_IMG` = the rest | 88,832 | 87 |",
+   "why": "SKB_IMG = KERN_SIZE - SKB_FAT - SKB_STK - SKB_STK0 = 96,768 - 4,608 - 2,816 - 512 (kernel.asm:9272-9275; sch_stacks 0xB00 in the map); SK_IMG_KB = SK_R(96,768) - SK_R(7,936) = 95 - 8."
+  },
+  {
+   "file": "docs/KERNEL-MEMORY.md",
+   "old_text": "| **`System`** | **`KERN_SIZE`** | **105,984** | **104** |",
+   "new_text": "| **`System`** | **`KERN_SIZE`** | **96,768** | **95** |",
+   "why": "KERN_SIZE 96,768 (kernsize footprint line); KERN_KB = 95."
+  },
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": "; Thirteen shims below are `cw_X equ apic_X`: the name stays, so not one far",
+   "new_text": "; Twenty-one shims below (kern_big's count) are `cw_X equ apic_X`: the name stays, so not one far",
+   "why": "21 'cw_X equ apic_X' lines in kernel.asm (7879..8066), all assembled on kern_big."
+  },
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": "; drawing shims a repaint calls by the dozen (gfx_fill/lock/unlock/frame,\n; font_run), nor",
+   "new_text": "; drawing shims a repaint calls by the dozen (gfx_fill/frame/fill_pat,\n; font_run - the lock pair joined in size pass 13, a lock being per OPERATION), nor",
+   "why": "cw_gfx_lock/cw_gfx_unlock are 'equ apic_gfx_lock/unlock' since size pass 13 (kernel.asm:7908-7914); cw_gfx_fill, cw_gfx_fill_pat, cw_gfx_frame, cw_font_run remain bodies."
+  },
+  {
+   "file": "docs/plans/KERNEL-BYTE-QUEUE.md",
+   "old_text": "Numbers are against the tree at the end of that pass:",
+   "new_text": "**Status at 2026-11-08 (big review, bytes lens):** item 1's census now reads\n45 shim bodies in `kernel.asm`'s block and 23 zero-byte aliases (21 of them\n`cw_X equ apic_X`) on kern_big, and its inline-word alternative is priced at\nabout zero net (big-review bytes-7); item 2 is TAKEN - `hb_probe_x` is a\n`BLOBCALL` into the boot blob; item 3 is superseded (it says so); item 4's\nrung arithmetic is moot under `LADDER_PACK`, which rounds `LOW`'s top and\n`.cold` to the paragraph. Everything below is the tree it was written on.\n\nNumbers are against the tree at the end of that pass:",
+   "why": "kernel.asm:5966 BLOBCALL hb_probe_x (map: in .boot2); 45 cw_ bodies + 23 equ aliases assemble on kern_big; kernel.asm:1151-1166 LADDER_PACK."
+  },
+  {
+   "file": "CLAUDE.md",
+   "old_text": "a cold LIFETIME. Those bytes are in RAM from boot to power-off exactly like\n  `.text`'s and are billed by `KERN_BUDGET` exactly like `.text`'s",
+   "new_text": "a cold LIFETIME. Those bytes are in RAM from boot to power-off exactly like\n  `.text`'s on the machine the budget describes (a 5150's ROM or a 286's HMA\n  can take them out of RAM, SPEC.md 2.10 and 2.10.7, and no budget counts\n  that) and are billed by `KERN_BUDGET` exactly like `.text`'s",
+   "why": "SPEC.md 2.10.7: kern_big runs .cold from the HMA and the heap gets the cold rung back (38.0KB); 2.10: a ROM'd .cold leaves its rung to the heap (mem_floor_ax ROM_COLD arm). The billing point stands: KERN_SIZE is the assembled ladder."
+  },
+  {
+   "file": "AGENTS.md",
+   "old_text": "## Hard rules (§1 — these break silently if violated)\n\n- **8086 only.**",
+   "new_text": "## Hard rules (§1 — these break silently if violated)\n\n> ### RUNGS ARE TEMPORARY. BYTES ARE FOREVER.\n>\n> The footprint moves in 512-byte steps, so a change that adds 400 bytes often\n> reports as costing nothing and a change that saves 300 often reports as\n> buying nothing. **Both readings are wrong and neither is a rounding error —\n> they are the wrong question.** The right one is always *how many BYTES, and\n> what do they buy?*, and it is asked against the byte and not against the\n> step. This project will keep optimising and will keep spending; every rung\n> gets crossed eventually, and the byte that crossed it is charged to whoever\n> was standing there rather than to whoever spent it.\n>\n> **A rounded figure will actively hide the thing you are deciding about.**\n> Worked example, this tree: `gfx_points` was built with one inner loop and\n> with three, and `kern_small`'s `kernel.bin` is **75,493 bytes either way** —\n> section padding swallowed the difference whole. The symbol span says what the\n> file could not: **472 bytes against 215**. Measure the SPAN, or `kernsize`'s\n> sum and its accrued line; never a step count, and never a padded artefact.\n>\n> **The question that replaces it has a shape**: *do we spend N resident bytes\n> for M cycles?* — and it may answer differently per build. The same\n> `gfx_points` split is **yes on `kern_big` and no on `kern_small`**: 257 bytes\n> for 92 cycles a point is worth it on the machine with memory and is not on\n> the machine with 128KB (SPEC.md 5.6.9.3, PERFORMANCE.md Set 143.3.2).\n\n\n- **8086 only.**",
+   "why": "CLAUDE.md:5 says the two files carry the same guidance; CLAUDE.md:307-329 has this banner and AGENTS.md has no 'RUNGS ARE TEMPORARY' (grep 1 vs 0)."
+  },
+  {
+   "file": "AGENTS.md",
+   "old_text": "  both. Check `tools/kernsize.py` before and after: a byte costs a byte.\n  **Code `mod_need` itself reaches cannot be a module**",
+   "new_text": "  both. Check `tools/kernsize.py` before and after: a byte costs a byte.\n  **`.cold` IS RESIDENT, and the name is the trap**: it means a cold PATH, not\n  a cold LIFETIME. Those bytes are in RAM from boot to power-off exactly like\n  `.text`'s on the machine the budget describes (a 5150's ROM or a 286's HMA\n  can take them out of RAM, SPEC.md 2.10 and 2.10.7, and no budget counts\n  that) and are billed by `KERN_BUDGET` exactly like `.text`'s — all\n  `COLD_SEG` buys is a CS of its own, which relieves the 64KB near-addressing\n  window and nothing else (docs/KERNEL-MEMORY.md, *Where it goes*). **`.boot2`\n  (the boot blob) and `.ovl` are the sections that really do go away**, and the two get\n  conflated constantly: *\"+N bytes of `.cold`, nothing resident\"* is a\n  sentence several sessions have now written and it is wrong every time. The\n  honest form is *\"+N bytes of `.cold`, resident, no rung crossed\"* — and per\n  the banner above, the rung is not the point anyway.\n  **Code `mod_need` itself reaches cannot be a module**",
+   "why": "CLAUDE.md:432-441 has the '.cold IS RESIDENT' paragraph (with this review's HMA/ROM correction); AGENTS.md has none (grep 1 vs 0)."
+  },
+  {
+   "file": "AGENTS.md",
+   "old_text": "  drop rule. A new module needs its drop on the day it lands.\n- **kern_mega-only package code is the ARM's, never the shipped build's**",
+   "new_text": "  drop rule. A new module needs its drop on the day it lands.\n- **Design for BYTES, never for rungs** — the banner at the top of this\n  section is the rule; this is its mechanics. The amortised price of a byte is\n  a byte, so a change that crosses no rung has not cost nothing: it spent slack\n  belonging to whoever comes next, and the guard bills *them* the whole 512.\n  **A rung is not a design input.** Do not size a feature, shave a table, or\n  justify an addition against where the next crossing falls; take a rung-shaped\n  answer only when it is the clean one anyway. Two arguments are refused\n  outright: *\"it adds 400 bytes and crosses no rung, so it is free\"* and *\"it\n  saves 500 and uncrosses no rung, so it buys nothing.\"* The one moment a rung\n  is the point is when a crossing means the kernel no longer FITS — and that is\n  a discussion to have with whoever asked for the feature, never a build fix\n  and never a reason to quietly cut the design down. Slack here\n  has never gone unspent, so its expected cost is 100%.\n- **kern_mega-only package code is the ARM's, never the shipped build's**",
+   "why": "CLAUDE.md:448-460 has the 'Design for BYTES, never for rungs' bullet; AGENTS.md has none (grep 1 vs 0)."
+  },
+  {
+   "file": "AGENTS.md",
+   "old_text": "  the next compaction, which by construction happens on a busy heap.\n- **The package boundary is solved once, not per call site**",
+   "new_text": "  the next compaction, which by construction happens on a busy heap.\n- **A PACKAGE'S OWN REGION is that rule's biggest instance, and it is a\n  RATCHET now** (§66.6.1.1). Every package under `apps/` declares\n  `OS88_REGION_MOVABLE` where its window exists — and, if it hires a worker,\n  `OS88_WORKER_RESTARTABLE` at the spawn, because §66.6.2's frame pins the\n  region however it is declared and a region declaration alone is **inert**.\n  `tests/unit/t_movable.py` (fast tier) fails the build otherwise; the way out\n  is a line in `tests/movable.txt` with a reason, and the list only turns one\n  way. **Before declaring, ask what segment words the package holds that point\n  INSIDE itself** — almost always none, which is why the proc is a `ret`; the\n  two shapes where it is not are a segment the package **stamped** somewhere\n  (scribe did, into its pre-parts `.ovl`, until SPEC.md 95.8.8 made it a part) and a **re-homed** program whose assets\n  live in its own carve (skies), and for those the bare form is silent\n  corruption rather than a missed optimisation.\n- **The package boundary is solved once, not per call site**",
+   "why": "CLAUDE.md:491-503 has the region-ratchet bullet that t_movable.py enforces; AGENTS.md has none (grep 1 vs 0)."
+  }
+ ]
+}
