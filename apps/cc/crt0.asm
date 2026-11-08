@@ -192,7 +192,8 @@ CC_OVDEPTH  equ 32
 ; ...and CC_OVL_PLAIN takes OP_COMP off the row, for a module LZ4 does not
 ; shrink (os88pkg.py refuses an OP_COMP part that grows). Without CC_OVL_PART
 ; nothing below changes by a byte: the <NAME>.OVL file, its stamp and its
-; three refusals are exactly what every unconverted package ships.
+; three refusals are exactly what an unconverted package ships (none in the
+; shipped set; tests/cfsx is the last).
 ;
 ; THE MAKEFILE HAS TO AGREE, and it cannot disagree silently: CC_PACKAGE's
 ; fifth argument `part` appends the cut module as the LAST --part, and
@@ -702,8 +703,8 @@ cc_ontimer:
 ; THE ANSWER RIDES IN CF, which is why this is not a copy of cc_ontimer:
 ; `wm_ask_close` calls us and branches on the carry with nothing in between
 ; that touches the flags (SPEC.md 75.1), so the flags this `ret` leaves ARE
-; the answer. SPEC.md 73.4 pins the shape - "pops, then `or ax, ax`, then
-; stc/clc, then ret", because a `pop` does not write FLAGS and AX is the one
+; the answer. SPEC.md 73.4 pins the shape - "pops, then `cmp ax, 1`, then
+; `ret`", because a `pop` does not write FLAGS and AX is the one
 ; register a thunk deliberately does not save.
 ;
 ; The C returns non-zero to LET IT CLOSE and zero to REFUSE. A refusal now
@@ -1255,10 +1256,11 @@ cc_ovneed:
     mul cx                          ; DX:AX - the claim is under 64KB by
     mov cx, ax                      ; construction (it is a segment), so DX is
     xor dx, dx                      ; 0 and the count is CX alone
-    mov si, cc_ovfile               ; the name resolves in THIS INSTANCE's
-    call OSAPI_FILE_READ            ; directory - the folder it was launched
-    jc .noread                      ; from (SPEC.md 19.2.1), so no visit is
-                                    ; needed and none is made
+    mov si, cc_ovfile               ; the name resolves where THIS INSTANCE
+    call OSAPI_FILE_READ            ; STANDS (SPEC.md 19.2.1), which the file
+    jc .noread                      ; dialog moves: the hole CC_OVL_LAZY's
+                                    ; go-home bracket closes. No shipped
+                                    ; package takes this arm (tests/cfsx)
     mov es, [cc_ovseg]
     cmp word [es:0], cc_modc_end    ; the stamp: the module's size...
     jne .stale

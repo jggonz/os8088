@@ -59,8 +59,9 @@ asserted by booting, not only by guard 5's arithmetic.
 **kern_mega is rule 4: a budget of its own, on a different quantity.** It was
 a knob build until kern_mega size pass 1, so nothing bound it but guard 2;
 the owner then made it *"a normal build with its own budget"*
-(docs/plans/completed/msp1/megabudget.md) - a step towards a general release
-that is not one yet, so no release artefact carries its disks. What it is held
+(docs/plans/completed/msp1/megabudget.md) - a step towards a general release,
+which came on 2026-11-07: the release zip now requires its disks
+(docs/plans/MEGA-RELEASE-PLAN.md 8 and 9), though `all` does not build them. What it is held
 to is **`MEGA_RESIDENT`**: `KERN_SIZE` less the `.cold` and `.mega` rungs,
 which are copied above 1MB at the switch and handed to the heap, so it is
 what a running kern_mega keeps of the conventional 640KB a user's programs
@@ -132,7 +133,9 @@ to a package (see "The levers that move both guards" below).
 
 ### Which guard binds
 
-As blessed (`tools/kernsize.py`, `-DKERN_SMALL` for the second row):
+As blessed at an earlier commit and not re-taken since (`tools/kernsize.py`,
+`-DKERN_SMALL` for the second row; the kernsize block below is the latest
+bless, `ksize` 96,768 on kern_big and 59,392 on kern_small):
 
 | | `KERN_SIZE` | of `KERN_BUDGET` | spare | `.text`+`.bss` | of `KERN_CODE_MAX` | left | before guard 5 |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -476,7 +479,8 @@ run the tool for today's):
 | `.vgabuf` (336) | `VGABUF_SEG` 0x17DA | 608 | `vga_pbuf`, SPEC.md §5.4.1.3's planar decoder's plane rows (`vga_p4tab` is a union with the mono pair tables in `.lowbss` since §39.22.1), plus the pad to `KERN_END`'s one 512-byte rounding (`LADDER_PACK`). `mem_floor_ax` seeds the heap floor UNDER it when `[vid_avail] & VID_A_VGA` is clear (§39.22). 0 on `kern_small` and on `NOPLANE` builds |
 | **`KERN_SIZE`** | heap at `HEAP_SEG` 0x1800 | **96,768** | 96.0 KB on VGA; lower on a machine without one - under `.vgabuf` with no VGA, and with neither a VGA nor an EGA just past `.cold` slid down onto the VGA rung (`mem_floor_ax`) |
 
-`kern_small`'s ladder is `KERNEL 0x0060  FAT 0x0880  LOW 0x08c0  COLD 0x0994
+`kern_small`'s ladder, as `kernsize -DKERN_SMALL` printed it the same day (the
+kernsize block above, at 59,392, is an older bless), is `KERNEL 0x0060  FAT 0x0880  LOW 0x08c0  COLD 0x0994
 HEAP 0x0ec0` — `KERN_SIZE` **58,880 bytes**, the heap starting at 59.0 KB — so
 a 128KB machine has 69.0 KB of heap by arithmetic; `tests/small128.py` boots
 one under MartyPC and reads what is actually free after the boot-time claims,
@@ -751,11 +755,14 @@ straddle with error 09h. The symptom is a **"Disk error" toast on any save
 larger than the distance from the buffer to the next 64KB boundary**: Paint's
 63KB BMP hits it immediately, a Note Pad text file never does.
 
-Every base in the ladder is an int 13h target — the FAT window, `dsk_secbuf`,
-a package image being loaded, a package's file buffer out of the heap — so
-the image rounds to a whole 512 bytes rather than to a paragraph, `FAT_PARA`
-and `LOW_PARA` are multiples of 32 paragraphs, and `VGABUF_PARA` is too so
-that the mono floor under it stays aligned. Guard 6 proves the ladder, guard
+Every base an int 13h transfer can land on — the FAT window, `dsk_secbuf`,
+a package image being loaded, a package's file buffer out of the heap — has
+to be 512-aligned, so the image rung and the FAT window stay whole 512-byte
+steps (`FAT_PARA` is a multiple of 32 paragraphs) and `FAT_SEG` and `LOW_SEG`
+sit on them. Above that, `LADDER_PACK` (every kernel but kern_mega) rounds the
+top of `.lowbss`, `.vga`, `.cold` and `.vgabuf` only to the paragraph, none of
+them being a transfer target, `KERN_END` alone rounds to 512, and
+`mem_floor_ax` rounds a lower heap floor up at run time. Guard 6 proves the ladder, guard
 2d the decoder rung, and guard 6b the heap: `mem_claim` rounds every size to
 `MEM_GRAN` paragraphs (512 bytes), so every base it hands out is the floor,
 the top or a claim edge — `HEAP_SEG` + n·`MEM_GRAN` paragraphs.

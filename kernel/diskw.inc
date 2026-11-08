@@ -476,8 +476,9 @@ dskw_wrap7:
 ; -----------------------------------------------------------------------------
 ; dskw_dfree - free space on the mounted volume (SPEC.md 18.4, slot 0x0118)
 ; in:  nothing
-; out: CF=0, DX:AX = free bytes, BX = SECTORS per cluster (spc*512 overflows
-;      16 bits at the SPEC.md 18.2-legal spc = 128); CF=1, AX = FERR_*
+; out: CF=0, DX:AX = free bytes, BX = SECTORS per cluster (1..64 by mount
+;      rule 4, so spc*512 fits a word; the cell answers sectors and callers
+;      multiply); CF=1, AX = FERR_*
 ; clobbers: AX/BX/DX (the outputs), CF
 ;
 ; Answered by counting the FAT - no disk I/O on a floppy, whose FAT is wholly
@@ -522,10 +523,11 @@ dskw_dfree_x:
 ; clobbers: AX/BX/CX/DX (the outputs), CF
 ;
 ; DOS AH=36h's own register shape, and that is not an accident: DOS.O88
-; is this slot's only caller and it forwards these four to the program
-; unchanged. It used to be a twelve-byte RECORD with eight fields and a
-; "the size you pass is the request" rule, so that a short buffer skipped
-; the FAT walk - and no caller ever passed a short buffer, or read any field
+; forwards these four to the program unchanged, and the other callers
+; (SysCheck, PIXEL, XTMP3, REDLINE's inspector, os88wseq.inc, HDD.DRV's
+; installer) take the same four. It used to be a twelve-byte RECORD with
+; eight fields and a "the size you pass is the request" rule, so that a
+; short buffer skipped the FAT walk - and no caller ever passed a short buffer, or read any field
 ; but these four (SPEC.md 18.4.6.1). The record cost 147 bytes; this is 26.
 ;
 ; Bytes per sector is a constant here because the mount makes it one - rule 3
@@ -1285,7 +1287,7 @@ dskw_rt_scan:
     mov [dskw_cursec], dx       ; ...and its high word is the walker's
 
     call dskw_hit               ; the WHOLE entry, and where it is - exactly
-                                ; as dskw_find does, so rtbody's .lfn can
+                                ; as dskw_find does, so dskw_rtbody's .lfn can
                                 ; rewrite the slot without a name lookup
                                 ; (dskw_find refuses to match an LFN entry at
                                 ; all, by design)
@@ -3247,12 +3249,14 @@ dskw_read_at_x:
 ; READ_AT without the walk. The cursor caches what READ_AT recomputes every
 ; call - the stat by name and the chain walk to the offset, 142 ms a MB on the
 ; W0 machine - and is TRUSTED ONLY UNDER THE MOUNT GENERATION it was seeded
-; in: every snapshot the kernel builds bumps [dsk_mgen] in disk_mount_x, so a
-; navigation, a media change, a write's remount or another instance moving
-; the volume all make the next call re-seed from the name, silently, at the
-; offset the cursor holds. The token is the caller's, so the copy loop's
-; writes that §18.4.4 kept statelessness for cannot destroy it - they only
-; cost one re-walk.
+; in: a committed write and every mount that READS a boot sector bump
+; [dsk_mgen] (disk.inc), so a media change, a write, or a navigation on a
+; floppy outside a batch make the next call re-seed from the name, silently,
+; at the offset the cursor holds. A banked mount (a fixed disk, a quiet hop a
+; batch vouches for) does not, and the cursor names no file - which is why
+; the caller zeroes it when the file changes (SPEC.md 18.4.8.1). The token
+; is the caller's, so the copy loop's writes that §18.4.4 kept statelessness
+; for cannot destroy it - they only cost one re-walk.
 ; -----------------------------------------------------------------------------
 %ifdef DSK_STREAM
 RSQ_GEN     equ 0               ; the mount generation it was seeded under
@@ -6816,10 +6820,12 @@ dwf_dskw_write_seq:             ; SPEC.md 18.4.9: kern_big's alone too
 dwf_dskw_read_seq:  mov ax, FERR_NAME   ; SPEC.md 18.4.8: kern_big's alone, and
                                         ; the cell is in both kernels (20.8
                                         ; rule 4) - falling into the refusal
-dwf_dskw_write_at:  stc         ; DOS.O88 is the one caller (SPEC.md
-                    retf        ; 18.4.7.4) and it does not ship on the small
-                                ; disks: the INSIDE arm, dsk_write_chain and
-                                ; this door are kern_big's, and an append
+dwf_dskw_write_at:  stc         ; every caller tests CF (SPEC.md 18.4.7.4):
+                    retf        ; DOS.O88 does not ship on the small disks,
+                                ; and os88data.inc's od_write takes its full
+                                ; arm (SPEC.md 19.9.1). The INSIDE arm,
+                                ; dsk_write_chain and this door are
+                                ; kern_big's, and an append
                                 ; still has the whole body. Cold, because the
                                 ; N cell reaches the far entry by name
                                 ; (SPEC.md 20.3.2)

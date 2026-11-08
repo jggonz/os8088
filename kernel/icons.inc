@@ -65,7 +65,9 @@ ICO_IBUF_SZ equ 2 * ICO_IBUF_H * (ICO_IBUF_WW * 2)  ; mask table + data table
 ; the first point both constants exist: kernel.asm includes fdlg.inc (and with
 ; it apps/os88ui.inc, which sets OS88UI_GW) one line above icons.inc.
 ;
-; os88ui_glyph hands icon_draw_x the constant record `db 1, OS88UI_GW` and has
+; os88ui_glyph used to hand icon_draw_x the constant record `db 1, OS88UI_GW`;
+; it draws with fills now (SPEC.md 13.15.1) and reaches no icon routine, so the
+; guard below holds only for a glyph moved back onto the sprite pass. It had
 ; NO fallback - the branch that used to stand in for one could not draw a
 ; glyph, so it went rather than being kept (SPEC.md 25.6.1). Of the three
 ; shapes icon_draw_x refuses - a kind above ICO_STAGE_WW (ICON_SOLID = 0 and
@@ -548,7 +550,7 @@ ico_core.none:                  ; (spelled out: ico_core_v above is the last
 ; -----------------------------------------------------------------------------
 ; ico_core_bb - the software renderer's icon body (SPEC.md 32/39.5): the white underlay
 ;               ORs the shifted mask-row bits into the one 1bpp plane, the
-;               black pass AND-NOTs the data-row bits out of them - color
+;               black pass AND-NOTs the data-row bits out of it - color
 ;               15 under the mask, 0 under the data, like the VRAM passes.
 ; in:       DI = row offset, CL/CH = shift pair, ico_* vars set by ico_core
 ; out:      returns to icon_draw/icon_draw16's epilogue (ico_core contract)

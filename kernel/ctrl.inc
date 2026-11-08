@@ -10,8 +10,9 @@
 ;
 ; The two panes are joined only by the item table (cp_items, SPEC.md 31.1):
 ; one CP_ISTRIDE-byte record per item (8 on kern_big, 6 on kern_small)
-; holding its list name and its page's paint and click procs. cp_paint and cp_onclick know nothing about scheduling; they
-; draw the list, the divider, and whatever the selected record points at.
+; holding its list name and its page's paint and click procs. cp_paint and
+; cp_onclick know nothing about scheduling; they draw the list, the divider,
+; and whatever the selected record points at.
 ; Adding a second item is a table row plus a paint/click pair - no change to
 ; the pane machinery.
 ;
@@ -5189,8 +5190,9 @@ clk_fld_str:
 ; that moves by 12, and either sign of the step flips it. Any edit restarts
 ; the sub-second accumulator from now (setting the seconds to a value and
 ; having it advance a tenth of a second later would be wrong), posts
-; [clk_dirty], which the panel's close spends on the RTC (SPEC.md 37.94), and posts
-; [clk_barq] so the menu bar follows even when it is not showing seconds.
+; [clk_dirty], which the panel's close spends on the RTC (SPEC.md 37.94),
+; and posts [clk_barq] so the menu bar follows even when it is not showing
+; seconds.
 ; -----------------------------------------------------------------------------
 clk_fld_adj:
     push ax
@@ -5260,8 +5262,9 @@ clk_fld_adj:
     mov [clk_last], ax
     mov word [clk_acc], 0
     mov byte [clk_dirty], 1     ; the panel's close writes the RTC (SPEC.md 37.94)
-    mov byte [clk_barq], 1      ; ...and step 4 refreshes the bar, which may
-                                ; otherwise be a minute from noticing
+    mov byte [clk_barq], 1      ; ...and ui_task step 4 refreshes the bar,
+                                ; which may otherwise be a minute from
+                                ; noticing
     popf
     jmp kretm_dx
 
@@ -5316,14 +5319,13 @@ section .modc                   ; the on-demand image (SPEC.md 2.8): a segment
 ; a page that changed something sets [cp_wdirty] and returns (SPEC.md 31.8, and
 ; the flag's own comment for why that is a rule rather than a default). It is
 ; a near call inside the module's core (.modc) with no .text thunk in front of
-; it, so a page, a
-; driver's page or an API cell cannot reach it even by naming it.
+; it, so a page, a driver's page or an API cell cannot reach it even by naming
+; it.
 ;
 ; It is one write of one small file (CFG_FBUF bytes, every key in
 ; driver.inc's CFG_DATA), and the file carries the whole panel - the driver
 ; list, the sound route, the clock options, the scheduler mode, the theme and
-; the rest - so there
-; is no per-setting bookkeeping to keep in step.
+; the rest - so there is no per-setting bookkeeping to keep in step.
 ;
 ; It writes ONCE, when the panel closes, rather than on every click. A floppy
 ; write is ~a second on the floor machine and the panel is frozen for it, so

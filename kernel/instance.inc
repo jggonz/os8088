@@ -646,8 +646,10 @@ inst_wk_parked:
 ; clobbers: flags
 ;
 ; mem_can_move's question, asked of instance.inc because inst_tab is this
-; module's (SPEC.md 29). A segment that matches no instance answers CF = 1:
-; a driver's image matches none, and "I cannot tell" has to mean "it is busy".
+; module's (SPEC.md 29). A segment that matches no instance is a driver's
+; image, and answers for the driver's TF_SERVICE tasks: CF = 0 only once every
+; one of them has parked (the .drv arm below), all or nothing, since a task
+; cannot say which driver it runs in.
 ;
 ; Like inst_park_req's walk above, it keeps "clobbers: flags" by writing only
 ; DI and BX, both banked: the [mem_cp_pl] arm's arithmetic and its exhaust
@@ -1981,10 +1983,11 @@ inst_task_die:
 ;
 ; The two routines below are the first API slots that hand a package-supplied
 ; pointer to inst_of_win, and inst_of_win is not defensive: wm_ptr2idx's
-; `div cl` FAULTS (int 0, no handler installed) once BX - wm_wins exceeds
-; 255*WIN_SIZE (its clamp bounds the index it returns, so the `wm_owner+si`
-; load is bounded; the fault is not), and a pointer that is in range but not
-; a window names the last one. This is that test. The loader does not need
+; `div cl` FAULTS (int 0, no handler installed) once BX - wm_wins reaches
+; 256*WIN_SIZE, taken unsigned, so a BX below the table faults too (its
+; clamp bounds the index it returns, so the `wm_owner+si` load is bounded;
+; the fault is not), and a pointer that is in range but not a window names
+; the last one. This is that test. The loader does not need
 ; it on an aborting entry - its abort path never consults BX, sweeping by
 ; W_SEG instead (SPEC.md 20.2).
 ; -----------------------------------------------------------------------------

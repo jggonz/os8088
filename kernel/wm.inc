@@ -2294,7 +2294,7 @@ wm_close_req:
 ; silently when full (SPEC.md 10), and a package that kicks from every
 ; callback - which is what SPEC.md 71 tells it to do, so a dropped wake cannot
 ; stall it - would otherwise be the thing that fills the ring and drops the
-; mouse. The flag is per SLOT (wm_wkq), set here and cleared by wm_wake_disp
+; mouse. The flag is per WINDOW (W_WKQ, in the record), set here and cleared by wm_wake_disp
 ; BEFORE the handler runs, so a handler that re-posts itself gets exactly one
 ; more record.
 ;
@@ -2401,7 +2401,7 @@ wm_wake_disp:
 ;
 ; The same dispatch with no queued promise to spend: the caller is not a
 ; popped EVT_WAKE but the kernel itself, standing where SPEC.md 74.1 says the
-; handler stands. So [wm_wkq] is deliberately NOT touched - a wake this window
+; handler stands. So W_WKQ is deliberately NOT touched - a wake this window
 ; really did post is still owed after this one, and clearing the flag here
 ; would leave a record in the ring with nothing saying it is coming.
 ;
@@ -3042,8 +3042,7 @@ wm_zoom:
 ; Clears W_FLAGS (used + visible), resets the slot's wm_owner entry to 0xFF,
 ; removes the window's index from wm_zord (compacting the byte array over
 ; it, decrementing wm_zn), then wm_paint_dmg over the rect it vacated
-; (SPEC.md 11.91). The record slot becomes
-; reusable by wm_create.
+; (SPEC.md 11.91). The record slot becomes reusable by wm_create.
 ; -----------------------------------------------------------------------------
 wm_destroy:
     call kent_di                ; = push ax/bx/cx/dx/si/di
@@ -3209,8 +3208,8 @@ wm_destroy_seg:
 ; player's W_PAINT, twice - once to show the dialog and once to take it away.
 ; -----------------------------------------------------------------------------
 ; -----------------------------------------------------------------------------
-; wm_lk / wm_unlk - THE DRAWING MUTEX, FOR THE THREE ENTRIES A PACKAGE REACHES
-;                   WITH IT FREE (SPEC.md 11.101.2)
+; wm_lk - THE DRAWING MUTEX, FOR THE FOUR ENTRIES A PACKAGE REACHES WITH IT
+;         FREE (show, hide, front, resize: SPEC.md 11.101.2, 11.1.2)
 ;
 ; `wm_show`, `wm_hide` and `wm_front` are API slots (0x0080/0x0088/0x0090), and
 ; a package's ENTRY PROC runs with the gfx lock free (SPEC.md 20.2) - which is
@@ -3237,10 +3236,10 @@ wm_destroy_seg:
 ; It is a RECURSIVE-AWARE take and not a bare gfx_lock, because every kernel
 ; caller already holds it and gfx_lock is not reentrant: ours is a no-op,
 ; anybody else's waits, free is taken. Unlike fprog's (12.8.4) this one may
-; block - all three run on the UI task and never inside dsk_xfer's [sch_lock].
+; block - all four run on the UI task and never inside dsk_xfer's [sch_lock].
 ;
-; in:  nothing;  out: wm_lk: AL = 1 we took it and owe wm_unlk, 0 it was ours.
-;      wm_unlk: AL as wm_lk answered. Neither touches another register.
+; in:  nothing;  out: AL = 1 we took it and owe gfx_unlock (wm_lk_go pays it),
+;      0 it was ours. Touches no other register.
 ; -----------------------------------------------------------------------------
 wm_lk:
     cmp byte [gfx_lock_flag], 0
@@ -3250,7 +3249,7 @@ wm_lk:
     jne wm_lk_take              ; nothing: `mov al,[sch_cur]` writes AL and not
                                 ; AH, and AL is overwritten on every path out
                                 ; (wm_lk_take's `mov al,1`, or the `xor al,al`
-                                ; below). The header's "Neither touches another
+                                ; below). The header's "Touches no other
                                 ; register" is about AH and is unaffected.
                                 ; SOMEBODY ELSE'S: gfx_lock waits for them,
                                 ; which is what a mutex is for.
@@ -5671,8 +5670,8 @@ wm_paint_all:
 ; -----------------------------------------------------------------------------
 ; wm_content - content-area origin of a window
 ; in:  BX = window ptr
-; out: AX = content left (W_X+1, or W_X for a window flush with the screen's
-;      left edge, SPEC.md 11.95.2), DX = content top (W_Y+TITLE_H);
+; out: AX = content left (W_X+1, or W_X for a window that spans the
+;      screen, SPEC.md 11.95.2), DX = content top (W_Y+TITLE_H);
 ;      WF_FULL set: AX = W_X, DX = W_Y - no border, no title bar (SPEC 11.2)
 ; -----------------------------------------------------------------------------
 wm_content:
@@ -6115,10 +6114,11 @@ wm_clip_set:
     ; the whole refresh. This is the one place that can prove that, and it is
     ; already on the path of all twelve background painters.
     ;
-    ; The region and not the window: the fragments are the content rect minus
-    ; the windows ON TOP of it, so a pointer over the window in FRONT of this
-    ; one is unreachable while the frame this used to test says otherwise
-    ; (SPEC.md 7.1.4.2).
+    ; Under CURFIX=1 the region and not the window: the fragments are the
+    ; content rect minus the windows ON TOP of it, so a pointer over the
+    ; window in FRONT of this one is unreachable while the frame says
+    ; otherwise (SPEC.md 7.1.4.2). A default build still asks about the
+    ; window's FRAME, read from [wm_clipwin] (SPEC.md 7.1.4.4).
     ;
     ; The FAILURE path above deliberately does not check: with no region armed
     ; every primitive falls to its own unconditional cur_unlazy, which is the
@@ -8148,7 +8148,7 @@ wm_chrome_rect_x:
 ;      `call` / `retf` entry, the layer the block below the body describes)
 ;
 ; [ui_armlit] is the authority and the glass has to agree with it, which is
-; what lets ui_lit_set be a plain XOR of the difference. Two answers, and the
+; what lets ui_lit_go be a plain XOR of the difference. Two answers, and the
 ; second is the one that is easy to leave out:
 ;
 ;   - the armed window was drawn WITH its boxes (frontmost, not fullscreen):

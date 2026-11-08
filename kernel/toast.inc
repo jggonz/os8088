@@ -60,11 +60,12 @@
 ; TWO ENTRY POINTS FOR CALLERS and they are on opposite sides of a lock:
 ; toast_show STAGES, and draws on the spot only for a caller that provably
 ; holds the lock (toast_now, SPEC.md 59.4); toast_pass (the UI task's idle
-; pass) draws the rest. That is what makes the context rule `any` - a window callback holds
-; the gfx lock, a worker holds nothing, kernel file code holds it too, and
-; gfx_lock is not reentrant. Deferring gives ONE expiry site, which is also
-; the drawing site for every caller that does not hold the lock, and puts it where this tree already spends deferred
-; flags ([fm_fchk], [cp_dirty], [desk_zdirty]). The cost is up to one pass of
+; pass) draws the rest. That is what makes the context rule `any` - a window
+; callback holds the gfx lock, a worker holds nothing, kernel file code holds
+; it too, and gfx_lock is not reentrant. Deferring gives ONE expiry site,
+; which is also the drawing site for every caller that does not hold the
+; lock, and puts it where this tree already spends deferred flags
+; ([fm_fchk], [cp_dirty], [desk_zdirty]). The cost is up to one pass of
 ; latency - a tick - on a three-second message.
 ;
 ; The string is COPIED. Not an optimisation: a toast outlives the operation
@@ -631,7 +632,8 @@ toast_pass:
 .out:                           ; bar rather than straight to the field is
                                 ; what keeps wm_fs_vis's guard in front of it:
                                 ; a fullscreen window is over these pixels and
-                                ; the strip is not drawn while it is covered, and its seconds still run
+                                ; the strip is not drawn while it is covered,
+                                ; and its seconds still run
     pop ax
     ret
 

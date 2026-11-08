@@ -5,8 +5,10 @@
 ; with save-under. The ISR decodes the 3-byte Microsoft packet, keeps
 ; mouse_x/mouse_y/mouse_btn fresh, queues EVT_MDOWN/EVT_MUP on left-button
 ; changes and EVT_RDOWN on the right button's PRESS edge, and moves the
-; cursor itself only when the gfx lock is free and the cursor is
-; refcount-visible (SPEC 7); otherwise it just sets cur_dirty.
+; cursor itself only when nothing can be drawing under it - the gfx lock
+; free and no progress widget armed (SPEC.md 7, 12.8.4), or its holder parked
+; in int 13h (SPEC.md 7.4) - and the cursor refcount-visible; otherwise the
+; next cursor_show or cur_lazyend catches up from the position.
 ;
 ; Which port the mouse is on is not asked and not configured: both are probed
 ; for a UART, every one that answers is programmed, hooked and listened to at
@@ -16,14 +18,16 @@
 ;
 ; cursor_show/cursor_hide are refcounted via cur_level (-1 = hidden at boot,
 ; classic Show/HideCursor style) and guard their draw/restore sections with
-; pushf/cli ... popf so the ISR never sees a half-drawn cursor. Both are
-; called with the gfx lock held (from gfx_lock/gfx_unlock) or at boot.
+; pushf/cli ... popf so the ISR never sees a half-drawn cursor. gfx_lock
+; calls neither: the hide is reached through cur_unlazy (its deferred hide,
+; SPEC.md 7.1.4) and the show from gfx_unlock - and both from the lock-free
+; owners of the glass too (fprog's bar, the screen saver, the busy clock).
 ;
-; The hotspot is the drawn position (0,0 of the cell); at the right and
-; bottom screen edges the cell is clipped, never shifted;
-; mouse_x/mouse_y themselves range over the live screen, 0..[vid_wm1] /
-; 0..[vid_hm1] - or both displays' union on a two-display kern_big
-; (mou_clamp, SPEC.md 39.15.4).
+; The hot spot is the shape's own (SPEC.md 7.2.2): cur_geom places the cell
+; off it, clamped at the display's top and left edges and clipped at its
+; right and bottom; mouse_x/mouse_y themselves range over the live screen,
+; 0..[vid_wm1] / 0..[vid_hm1] - or both displays' union on a two-display
+; kern_big (mou_clamp, SPEC.md 39.15.4).
 ; =============================================================================
 
 ; UART register offsets from a port's base: +1 IER, +2 IIR, +3 LCR, +4 MCR,
@@ -2414,10 +2418,11 @@ mou_p2_byte:
 ; About 456 bytes resident on kern_big today (build/kernel.map, 2026-11-08:
 ; kbm_tab..kbm_isr less mou_clamp 306, kbm_p5spend 16, kbm_pollm..kbm_ui 108,
 ; kbm_post 9, state 17). It was 520 bytes of .text when it landed, two
-; 512-byte steps of KERN_BUDGET: the spare went 4,096 -> 3,584 -> 3,072. The first was decided on when the budget was
-; at its OLD ceiling and that step was half the slack rather than an eighth of
-; it, on the grounds that this is the difference between a usable machine and
-; an unusable one at exactly the moment the mouse fails. The second bought
+; 512-byte steps of KERN_BUDGET: the spare went 4,096 -> 3,584 -> 3,072.
+; The first was decided on when the budget was at its OLD ceiling and that
+; step was half the slack rather than an eighth of it, on the grounds that this
+; is the difference between a usable machine and an unusable one at exactly
+; the moment the mouse fails. The second bought
 ; 9.6.1 and 9.6.2, and it is 114 bytes of code for a whole step: the image
 ; rung had ONE byte of slack (.text + .bss = 49,151 against a 49,152
 ; ceiling), so any addition at all cost the same 512 and trimming could not
@@ -2803,7 +2808,10 @@ mou_clamp:
 ;
 ; So the kernel reads the SCANCODE rather than the BIOS's translation of it.
 ; This is the kernel's only int 09h hook (the PS/2 half reaches the same 8042
-; through port 64h, SPEC.md 9.9), and it does the least a hook can do: it
+; through port 64h, SPEC.md 9.9; and on kern_big, where the ROM says its
+; int 09h calls int 15h AH=4Fh, kbm_i15 is hooked there instead and this is
+; not hooked at all until kern_mega's switch puts it back, SPEC.md 9.7.2),
+; and it does the least a hook can do: it
 ; PEEKS port 60h and chains. On the 8088's 8255 the
 ; byte is latched in port A until the BIOS acknowledges it with bit 7 of port
 ; 61h, so reading it early is not consuming it - the real handler below reads
@@ -4371,7 +4379,7 @@ mou_apply:
                                 ; under mou_isr_body, which now falls into it)
 
 %ifdef GFXAUDIT
-; cur_logput - one ring entry: the tag, the refcount, and where the pixels are
+; cur_logput - one log entry: the tag, the refcount, and where the pixels are
 ; in:  AL = tag;  clobbers: AX, SI (the macro banks them)
 cur_logput:
     pushf
@@ -4464,9 +4472,10 @@ cur_vis:
     mov si, cur_get_1
 ; --- the display bracket (SPEC.md 39.15.2) -----------------------------------
 ; The cursor owns this itself rather than inheriting it, because a hide is
-; reached from gfx_lock's deferred hide AND from the mouse ISR - neither of
-; which is inside a 39.14 drawing hook, so the display live at either moment is
-; whatever the last primitive left. The outgoing display is banked on the
+; reached from gfx_lock's deferred hide AND from the lock-free owners of the
+; glass (fprog, the saver) - none of which is inside a 39.14 drawing hook, so
+; the display live at any of those moments is whatever the last primitive
+; left. The outgoing display is banked on the
 ; stack for the length of the one call.
 .draw:
     mov al, [vid_cur]
@@ -4500,8 +4509,8 @@ cur_vis:
 ;          be read, banked, painted and written back in ONE pass - where the
 ;          old path made three, through the generic rect machinery, twice.
 ;   VGA    cur_saveu + cur_draw / cur_restoreu, unchanged in shape: the save
-;          is four planes through Read Map Select and the draw is Set/Reset
-;          through the Bit Mask, so there is no single byte to fuse.
+;          is four planes through Read Map Select and the draw is one masked
+;          store through the Bit Mask, so there is no single byte to fuse.
 ;
 ; Internal; the caller guarantees IF = 0 or the gfx lock.
 ; clobbers: ax, bx, cx, dx, si, di, bp, es
@@ -4691,7 +4700,7 @@ section .text
 ; -----------------------------------------------------------------------------
 ; cur_get_mono - put cur_put_mono's bytes back, replaying its geometry
 ;
-; [cur_off], [cur_shift], [cur_rows] and [cur_b1ok] are not recomputed: the
+; [cur_off], [cur_rows] and [cur_b1ok] are not recomputed: the
 ; cursor cannot have moved between the two, because every caller that moves it
 ; (the ISR's .redraw path) erases at the OLD position before it writes the new
 ; one. Recomputing would be a second answer to a question that already has one.
@@ -4988,6 +4997,9 @@ cur_unlazy:
 
 ; cur_lazyck - spend the deferred hide unless the ARMED REGION provably cannot
 ;              reach the cursor.
+;
+; UNDER CURFIX=1 (SPEC.md 7.1.4.4) - a default build tests the window's FRAME
+; instead, through cur_lazyrect's test, the behaviour that shipped for years.
 ;
 ; THE TEST IS THE REGION, NOT THE WINDOW'S FRAME, and that distinction is the
 ; whole of SPEC.md 7.1.4.2. The frame is the cheaper question and it answers a
@@ -5315,7 +5327,8 @@ cur_lazyend:
 ; -----------------------------------------------------------------------------
 
 ; cur_shape_set - wear shape AL from now on.
-; in:  AL = CUR_*SH; the gfx lock held by the caller
+; in:  AL = CUR_*SH; the gfx lock held by the caller, or the arrow already
+;      hidden (cur_busy_on's lock-free LIT arm)
 ; out: nothing (all registers preserved)
 ;
 ; The picture may only change while the cursor is OFF THE GLASS, and
@@ -5877,11 +5890,12 @@ section .vga
 %endif
 ; -----------------------------------------------------------------------------
 ; cur_draw - paint the arrow at (cur_drawn_x, cur_drawn_y) on a PLANAR screen:
-;            white pass with the cur_and outline mask, black pass with the
-;            cur_data body. Set/Reset supplies the color; the Bit Mask register
-;            carries the row bits, shifted across the cell's two VRAM bytes; a
-;            read of each target byte loads the latches before the masked
-;            write. Leaves the GC in the default state (SPEC 1 rule 7).
+;            ONE masked store a byte. The Bit Mask carries the live shape's
+;            white row, shifted across the cell's two VRAM bytes, and the CPU
+;            data is white & ~black with Set/Reset off, so outline pixels land
+;            15 and body pixels 0; a read of each target byte loads the
+;            latches before the masked write. Leaves the GC in the default
+;            state (SPEC 1 rule 7).
 ;            Internal; caller guarantees IF=0 and default GC state on entry.
 ; clobbers: ax, bx, cx, dx, si, di, bp, es
 ; -----------------------------------------------------------------------------
@@ -6048,8 +6062,9 @@ section .text
 ; It is SELF-CONTRASTING, which is what replaces the rim the other two shapes
 ; are built with: on a white window the bezel and the hands read, and on a
 ; dark one the bezel disappears into the ground and the white FACE reads - the
-; same clock either way, and no ground it can vanish into. Twelve of the
-; cell's ninety-six pixels are left transparent and the table is still 24
+; same clock either way, and no ground it can vanish into. The twelve pixels
+; round the dial's corners are left transparent - with the four empty rows
+; below it, forty-four of the cell's ninety-six - and the table is still 24
 ; bytes.
 ;
 ; It is also CHEAPER TO DRAW than the arrow, where the tile it replaces was
@@ -6174,8 +6189,8 @@ cur_shhot   db 0, 0,          CUR_XHX, CUR_XHY, CUR_BHX, CUR_BHY
 ; -----------------------------------------------------------------------------
 ; module state (small - stays inline)
 ; -----------------------------------------------------------------------------
-mouse_x     dw SCREEN_W/2       ; public: cursor position, 0..639
-mouse_y     dw SCREEN_H/2       ; public: 0..479
+mouse_x     dw SCREEN_W/2       ; public: cursor position, 0..[vid_wm1]
+mouse_y     dw SCREEN_H/2       ; public: 0..[vid_hm1]
 mouse_btn   db 0                ; public: bit 0 = left, bit 1 = right
 %if mouse_y - mouse_x != 2
   %error "mouse_x and mouse_y are no longer an adjacent pair - viddet.inc's vid_apply homes the pointer with one stosw pair over both"
@@ -6320,9 +6335,10 @@ mou_evrec   times 8 db 0        ; scratch event record for evq_push (ISR only).
 
 ; --- the published diagnostic block (SPEC.md 9.4.2) --------------------------
 ; Everything from mou_run to mou_dstamp is one contiguous span that a test
-; package reads through 0060:0006. The offsets are asserted at the bottom of
-; this file, because a reordering here would silently republish the block as
-; a different thing and the reader has no way to notice.
+; package finds through the debug registry at 0060:000E (DBG_TAG_MOUSE,
+; SPEC.md 57). The offsets are asserted at the bottom of this file, because a
+; reordering here would silently republish the block as a different thing and
+; the reader has no way to notice.
 mou_dbg_blk:
     dw 0x4F4D                   ; 'MO' - the magic, dsk_dbg_blk's 0x4444 idiom
     dw mou_bases                ; -> the probed bases, 2 words, 0 = no UART
@@ -6470,8 +6486,11 @@ mou_p2ph    db 0                ; packet state: 0 idle, 1 got b0, 2 got b1,
                                 ; 3 a wheel mouse's Z byte owed (SPEC.md 9.9.8)
 mou_p2b0    db 0                ; byte 0: YV XV YS XS 1 MB RB LB
 mou_p2b1    db 0                ; byte 1: the X magnitude
-mou_p2cmd0  db 0                ; the 8042's command byte AS THE BIOS LEFT IT,
-                                ; which every failure path above puts back and
+mou_p2cmd0  db 0                ; the 8042's command byte as the BIOS left it,
+                                ; bit 4 clear and bit 5 (the aux clock) forced
+                                ; SET: what mou_p2_off puts back. The failure
+                                ; paths put back mou_p2cmdr below instead. The
+                                ; BIOS's own value is what
                                 ; which no reading of this source can supply
 ; --- ...and here THAT span ends. Scratch below it ---------------------------
 mou_p2cmdr  db 0                ; ...and the RAW one, bit 4 alone cleared: what
@@ -6611,7 +6630,7 @@ cur_savex   equ cur_save + CUR_SPAN * CUR_GH    ; ...and on a build WITH a VGA
 %endif
 %endif
 %ifdef GFXAUDIT
-CURLOG_N    equ 64              ; a WRAPPING ring of cursor events, for the
+CURLOG_N    equ 64              ; a log that STOPS when full, for the
 CURLOG_SZ   equ 6               ; sessions where the question is "which draw
                                 ; had no erase".
                                 ;
@@ -6621,12 +6640,12 @@ CURLOG_SZ   equ 6               ; sessions where the question is "which draw
                                 ; (kernel.asm guard 1) - true, and it says
                                 ; nothing about guard 2, the 64KB SEGMENT,
                                 ; which nobody can raise and which .bss spends.
-                                ; 386 bytes of ring is a third of what the
+                                ; 386 bytes of log is a third of what the
                                 ; shipped kernel has left there, and adding it
                                 ; to .text+.bss is what put `make GFXAUDIT=1`
                                 ; 189 bytes over the segment. .lowbss costs the
                                 ; segment nothing (SPEC.md 2.1), is not zeroed
-                                ; either way so the ring behaves identically,
+                                ; either way so the log behaves identically,
                                 ; and os88sym.linear already answers LOW_SEG
                                 ; for it, so tools/os88snap.py and the CURLOG
                                 ; readers need no change.
@@ -6685,7 +6704,9 @@ cur_celly   resw 1              ; hot-spot-relative (SPEC.md 7.2.2). Banked
 absolute gfx_u                  ; ...and cur_move_mono's working set is a
                                 ; member of vga12.inc's PRIMITIVE UNION (size
                                 ; pass 9). cur_move runs from the mouse ISR and
-                                ; kbm_move only with the gfx lock FREE, and
+                                ; kbm_move only with the gfx lock FREE (or, in
+                                ; the ISR, held by the task parked in int 13h,
+                                ; SPEC.md 7.4), and
                                 ; from gfx_unlock's cur_lazyend after every
                                 ; primitive of the hold has returned - so it is
                                 ; never inside one of the union's five, which is

@@ -4,11 +4,11 @@
 ; BIOS int 13h floppy reads and the FAT12/FAT16 mount (SPEC.md 18-19). The
 ; data floppy is a standard FAT volume written by foreign machines, so every
 ; byte read off it is hostile: the BPB runs the 17-rule validation table
-; (SPEC.md 18.2) before any derived number is trusted, the FAT is
-; reached through a window of up to DSK_FAT_SECS sectors (SPEC.md 18.8),
-; and the root directory is re-shaped
-; into 32-byte SYNTHESIZED entries (SPEC.md 19) so no consumer ever sees an
-; on-disk layout. Only the UI task touches the disk. Task switching is
+; (SPEC.md 18.2) before any derived number is trusted, the FAT is reached
+; through a window of up to DSK_FAT_SECS sectors (SPEC.md 18.8), and the
+; root directory is re-shaped into 32-byte SYNTHESIZED entries (SPEC.md 19)
+; so no consumer ever sees an on-disk layout. Only the UI task touches the
+; disk. Task switching is
 ; paused around all int 13h activity by inc/dec of [sch_lock] - the timer
 ; ISR still chains the BIOS tick (the floppy motor logic needs it), it just
 ; stops switching. Interrupts stay ON during int 13h. The gfx lock is NOT
@@ -24,10 +24,10 @@
 ; not in the kernel's own 64KB window; a listing is written into the store its
 ; caller supplied through dsk_dest_x, and icon bodies into the machine-wide
 ; store (SPEC.md 25.9). int 13h writes through ES:BX and needs no help.
-; Everything that READS a listing goes through
-; dsk_get_dir / dsk_get_icon below, which stage one entry at a time into a
-; kernel-segment buffer, so consumers keep the plain DS:SI pointer they
-; always had and no drawing or parsing code learns about segments. The FAT
+; Everything that READS a listing goes through dsk_get_dir / dsk_get_icon
+; below, which stage one entry at a time into a kernel-segment buffer, so
+; consumers keep the plain DS:SI pointer they always had and no drawing or
+; parsing code learns about segments. The FAT
 ; window lives at [dsk_fatseg] - a per-volume claim or the FAT_SEG pin (SPEC.md
 ; 18.8) - reached via ES only, never DS. dsk_next_clus is not its only
 ; reader: dsk_free_clus and the write side (diskw.inc) reach it the same way.
@@ -1246,10 +1246,10 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
 ; in:  AX = start LBA, CX = sector count, ES:BX -> destination / source
 ;      (the internal pointer advances 512 bytes per sector - the caller's
 ;       ES:BX budget must cover count*512). Drive from [disk_drive].
-; out: CF=1 on unrecoverable error (a run failed 3 attempts and then its first sector 3 more, or
-;      the media is write-protected); [dsk_ioerr] = the last int 13h status
-;      byte, which is how diskw.inc tells 03h (write-protected) from a real
-;      failure
+; out: CF=1 on unrecoverable error (a run failed 3 attempts and then its
+;      first sector 3 more, or the media is write-protected); [dsk_ioerr] =
+;      the last int 13h status byte, which is how diskw.inc tells 03h
+;      (write-protected) from a real failure
 ; clobbers: nothing but CF (and the two module bytes above)
 ;
 ; ONE transfer routine, entered with [dsk_op] = the int 13h function: the
@@ -1897,12 +1897,11 @@ dsk_xfer:
     ; one-sector transfer of the scratch (512-aligned, so it cannot
     ; straddle) and .success puts the caller's buffer back. NOT a recursive
     ; dsk_xfer: its head calls fpg_busy, which may draw, and the head's own
-    ; rule is that no draw lands inside this sch_lock with ES:BX pinned
-    ; (fpg_arm refuses, rather than waits, when another task holds the gfx
-    ; lock; the read-ahead fill and the .img arm DO re-enter, so that rule is
-    ; not kept everywhere). dsk_secbuf
-    ; is free: no caller of a transfer on a buffer of its own holds a live
-    ; sector there across it.
+    ; rule is that no draw lands inside this sch_lock with ES:BX pinned.
+    ; (fpg_arm refuses rather than waits when another task holds the gfx
+    ; lock, and the read-ahead fill and the .img arm DO re-enter, so the rule
+    ; is not kept everywhere.) dsk_secbuf is free: no caller of a transfer on
+    ; a buffer of its own holds a live sector there across it.
 .bounce:
 %ifdef KERN_MEGA
     mov bp, ax                  ; the run the track allows (dsk_runcap banks AX)
@@ -2801,8 +2800,8 @@ dsk_boot_from_x:
     ; FIRST of them fetches the BPB, so it cannot come from there.
     ; boot/boothd.asm NO LONGER asks this question - since FIELD-NOTES 33 it
     ; reads with the BPB's own spt/heads - so where the two differ this read
-    ; is the one that disagrees. AH=08h spends BX, CX, DX,
-    ; DI and ES, so everything live crosses it on the stack.
+    ; is the one that disagrees. AH=08h spends BX, CX, DX, DI and ES, so
+    ; everything live crosses it on the stack.
     push cx
     push dx
     push di
@@ -5937,8 +5936,9 @@ dsk_bpb_sig:                    ; (no bank: dsk_bpb_check runs straight
 ; directory (SPEC.md 54.7's ASSOC.DAT already answers the icon harvest).
 ;
 ; Gated on DSK_FATW_MINK - twice the claim's KB, free at this cache's own
-; rank (SPEC.md 18.8.4; it was 128KB of FREE HEAP): this is a comfort, and a machine that is short of memory should spend what it has on
-; the user's application. Retried at every mount rather than latched, so a
+; rank (SPEC.md 18.8.4; it was once 128KB of FREE HEAP): this is a
+; comfort, and a machine that is short of memory should spend what it has
+; on the user's application. Retried at every mount rather than latched, so a
 ; machine that frees the heap later gets its window - one mem_avail walk
 ; (~1,000 cycles) against a floppy mount measured in seconds.
 ; -----------------------------------------------------------------------------
@@ -6263,7 +6263,7 @@ dsk_fatw_claim:
 ; live window has a SECOND naming word, [dsk_fatseg]; dsk_fatw_demote below is
 ; where that now lives.
 ; dsk_dseg_reloc lived here: the KERNEL's half of a DONATED claim's move
-; (SPEC.md 66.5.10.2), later two rows of mem_rr_tab, and now NOTHING - SPEC.md
+; (SPEC.md 66.5.10.2), later two rows of mem_rr_tab, and now one - SPEC.md
 ; 22.6 retired the donation, so no listing is ever in a DRIVER's claim and its
 ; row is out of mem_rr_tab. [dsk_dseg] is 0 at rest and the CALLER's store
 ; during a loud mount (SPEC.md 22.6.3), and keeps a MEM_RR_ONE row of its own
@@ -6423,8 +6423,10 @@ dsk_free_clus_x:
     mov es, [dsk_fatseg]        ; 18.8.4), and ES is banked for the whole walk
     mov bx, 3                   ; below. While it was MEM_K_FATW nothing could
                                 ; move or shed it and the bank was safe; a
-                                ; purgeable one is shed by any ordinary claim
-                                ; from any other task, and mem_fatw_dirty does
+                                ; purgeable one is shed by an ordinary claim
+                                ; from another task (kern_small; a compacting
+                                ; kernel sheds and moves on the UI task alone,
+                                ; SPEC.md 66.3.1), and mem_fatw_dirty does
                                 ; not cover a COUNT - [dsk_fatd0] is 0xFFFF
                                 ; here. So the count would be read out of
                                 ; whatever took the paragraphs, and it is the
@@ -6644,9 +6646,9 @@ dsk_dirw_next_x:
     mov al, [dsk_spc]           ; AL is free (the cluster is reloaded either
     cmp [dsk_wsec], al          ; way), and a BYTE compare is exact: inside a
     jb .have                    ; cluster [dsk_wsec] runs 0..spc, and spc is
-                                ; at most 64 (rule 4) - so BX is not borrowed and the
-                                ; bank round the routine went (kernel size
-                                ; pass 18, -5)
+                                ; at most 64 (rule 4) - so BX is not borrowed
+                                ; and the bank round the routine went (kernel
+                                ; size pass 18, -5)
     mov ax, [dsk_wclus]
     call dsk_next_clus_x          ; CF=1 only if the CURRENT link is invalid
     jc .end

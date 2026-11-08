@@ -19,7 +19,7 @@
 >   FIELD-NOTES 44), whichever first.
 >   An idle-then-move user's first motion is read at once (was a fixed 505 ms);
 >   continuous motion stays bounded at the ceiling exactly as before.
-> * Verified on both adapters: `mou_hpbase` stamped, `mou_hpt` 0; idle-then-move
+> * Verified on both adapters, as built: `mou_hpbase` stamped, `mou_hpt` 0; idle-then-move
 >   read at once; continuous bounded at +10 ticks. 31 bytes of `.text`, no rung.
 >
 > **Still owed** is one reading off the machine that shows the freeze (§4): the

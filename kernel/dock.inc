@@ -27,9 +27,9 @@
 ; Raising a window, showing one, dragging one - each of those repaints the
 ; chrome because the chrome MIGHT have changed, and most of the time the only
 ; thing that did is which tile wears the active mark. So each tile carries a
-; key (db_key, DOCK.DRV's dkx_key: its icon in the high bits, live/minimized/active in bits
-; 0..2) and a tile whose key still matches what was drawn is left alone. A
-; focus change costs two tiles; nothing changing costs no pixels at all, and
+; key (db_key, DOCK.DRV's dkx_key: its icon in the high bits,
+; live/minimized/active in bits 0..2) and a tile whose key still matches
+; what was drawn is left alone. A focus change costs two tiles; nothing changing costs no pixels at all, and
 ; dock_paint says so in CF, which is what lets wm_dock_under skip putting the
 ; windows back.
 ;
@@ -206,8 +206,9 @@ DK_NENT       equ 2             ; DOCK.DRV's mod_fp entries: hook, unhook
 %endmacro
 
                                 ; entry 0 is dkx_hook and entry 1 dkx_unhook
-                                ; (SPEC.md 30.5), and DOCK_APPLY (dock_apply, bdk_apply) is their only
-                                ; caller - mod_disarm rests both on mod_gone,
+                                ; (SPEC.md 30.5), and DOCK_APPLY (dock_apply,
+                                ; bdk_apply) is their only caller -
+                                ; mod_disarm rests both on mod_gone,
                                 ; so calling one with nothing mounted refuses
 
 dkb_geom:
@@ -518,9 +519,10 @@ db_paint:
     mov al, [gfx_color]         ; byte-only read: gfx_lock_flag lives next
     push ax                     ; door. ON THE STACK, not in .bss, and that
                                 ; rests on db_paint having EXACTLY ONE EXIT
-                                ; below `.go` - the pen's `pop` and kret_di's six at the bottom.
-                                ; The wm_fs_vis refusal returns ABOVE this, and
-                                ; the CF answer is after the pops. A second
+                                ; below `.go` - the pen's `pop` and kret_di's
+                                ; six at the bottom. The wm_fs_vis refusal
+                                ; returns ABOVE this, and the CF answer is set
+                                ; between the two. A second
                                 ; early return added below here leaks a word
                                 ; onto the UI task's stack on every db_paint,
                                 ; which is a slow death nothing in the tree

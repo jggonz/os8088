@@ -104,7 +104,8 @@ DRV_MAX     equ 9 + DRV_VX + DRV_PX ; ...and kern_big stops at HTTPFS.DRV (SPEC.
                                 ; reverse direction simply leaves it clear.
                                 ; That is the SAME disk being readable by both
                                 ; builds, which kern_small's row COUNT change
-                                ; explicitly could not manage (below).
+                                ; once could not manage - before SPEC.md 51.0
+                                ; took its driver layer out (below).
                                 ;
                                 ; The settings word carries one bit per row, so
                                 ; the FILE FORMAT allows 16 - and the CONTROL
@@ -2157,9 +2158,13 @@ section .cold
 ; nobody, and it was carried only to reach `jcxz` - so the refusal is
 ; `cmp ax, 1` instead: CF = 1 exactly when AX = 0, and AX = 0 exactly when no
 ; row of the class is loaded, because drv_load writes DRVR_SEG and DRVR_PARA
-; together and a driver image is never under a kilobyte (drv_load's own
-; `cmp ax, DRV_HDR_SZ / jb .bad`). Four bytes for eight, and one fewer
-; register in the contract.
+; together, a driver image is never empty (drv_load's own `cmp ax,
+; DRV_HDR_SZ / jb .bad`) and .row rounds its paragraphs UP to the KB. Four
+; bytes for eight, and one fewer
+; register in the contract. **NOT where an image has left the heap**: kern_big's
+; %1_hma and kern_mega's drv_hi_move both zero DRVR_PARA on a loaded row, so
+; the KB can be 0 for a class that is up. kern_mega counts rows for that
+; (below); kern_big, which assembles the `cmp ax, 1`, answers CF = 1 there.
 ; -----------------------------------------------------------------------------
 osapi_drv_classk_x:
     push bx
@@ -2384,8 +2389,9 @@ drv_call_ent:                   ; ...and the same thing for a caller that has
                                 ; label, so nothing is re-parented. DRV_ATTACH's
                                 ; %1_call loads BP itself and enters at drv_call
                                 ; through its image's hop, as do hiber.inc,
-                                ; vidext.inc, vmmouse.inc, xmem.inc and :3327
-                                ; (which passes [drv_dlg_cb] in BP)
+                                ; vidext.inc, vmmouse.inc, xmem.inc and
+                                ; drv_dlg_done_x (which passes [drv_dlg_cb]
+                                ; in BP)
 drv_call:
     cmp bx, drv_tab             ; ...AND BX MUST BE A ROW AT ALL. This one is
     jb .stray                   ; checked FIRST and on BX itself, because it is
@@ -3299,7 +3305,8 @@ osapi_drv_dlg_x:                ; THE BODY IS CTRL.DRV's, modc_e_dlg (ctrl.inc,
 ;
 ; Called by fdlg_reap_x's commit half as an ordinary kernel near proc:
 ; wm_pkgcall takes a W_SEG 0 window into `.cold` (SPEC.md 2.6.3), so no
-; thunk stands between (kernel.asm, beside drv_svc_call). The gfx lock is held and the dialog is already down.
+; thunk stands between (kernel.asm, beside drv_svc_call). The gfx lock is
+; held and the dialog is already down.
 ;
 ; DISARMED BEFORE THE CALL, not after: a page may legitimately open the next
 ; dialog from inside this one's completion, and clearing afterwards would
@@ -6585,8 +6592,8 @@ drv_pkg_call_x:
 .door:
     or bp, bp
     jz .none                    ; ...and 0 is THE FENCE: not published, so not
-                                ; reachable. (HDD.DRV's reaches two verbs and
-                                ; no sector: SPEC.md 52.1.4)
+                                ; reachable. (HDD.DRV's reaches three verbs and
+                                ; no sector: SPEC.md 52.1.4, 117.4)
     mov al, bh
     cbw                         ; BH is 1..DRVC_MAX here, so AH = 0
     dec ax

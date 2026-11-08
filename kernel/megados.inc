@@ -17,10 +17,10 @@
 ;                   point hbm_dosrun frees the claims and jumps to hbm_wake
 ;   mega_dosgo      at the handover: the staged launch block's kern_mega tail,
 ;                   the IVT's tick, keyboard and int 15h back to the BIOS's,
-;                   and out of
-;                   protected mode - CR0 on a 386, the shutdown-0Ah reset on a
-;                   286 (mega_r286's one branch) - into mega_dropr, which puts
-;                   the 8259 back at 08h and enters the existing loader stub
+;                   and out of protected mode - CR0 on a 386, the shutdown-0Ah
+;                   reset on a 286 (mega_r286's one branch) - into mega_dropr,
+;                   which puts the 8259 back at 08h and enters the existing
+;                   loader stub
 ;
 ; THE WAY BACK is kern_dos's `kd_unpark` (kerndos/kdpark.inc, -DKD_MEGA): it
 ; fetches the park stub out of the park's header with `int 15h AH=87h` into

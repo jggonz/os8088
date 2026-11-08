@@ -38,13 +38,16 @@
 ; single section toggle, and a `db`/`dw` added below it is read at the wrong
 ; segment with no diagnostic.
 ;
-; **MEASURING THIS FILE: `kernsize --modules` OVERSTATES IT BY ~1,600 BYTES.**
+; **MEASURING THIS FILE: `kernsize --modules` OVERSTATES IT BY ~1,150 BYTES**
+; (kern_big; ~500 on kern_small - os88ui.inc's .cold and .bss spans in the
+; kernel map, 2026-11-08).
 ; That tool brackets the `%include` in kernel.asm, and `%include "os88ui.inc"`
 ; is NESTED INSIDE this one, at the foot below the section toggle - so
 ; os88ui.inc's kernel copy is billed here. NONE of it is this module's: it is
-; the shared control, resident on BOTH kernels, and files.inc, ctrl.inc and
-; apps.inc reach it as well. Quote the dialog's own symbols, and say which
-; figure you mean.
+; the shared control - its button and scroll bar resident in `.cold` on
+; kern_big, its scroll bar alone on kern_small, its glyph in CTRL.DRV on both -
+; and files.inc, ctrl.inc, shutdown.inc and hiber.inc reach it as well. Quote
+; the dialog's own symbols, and say which figure you mean.
 ; =============================================================================
 
 FD_NAMEMAX  equ 12              ; an 8.3 name, dot included
@@ -1252,12 +1255,14 @@ section .cold                   ; far entries (SPEC.md 2.6): the resident
                                 ; routine here keeps its ordinary near `ret`
 
 ; --- os88ui.inc IS RESIDENT, and that is what makes the split possible ------
-; Its kernel copy is SHARED: apps.inc stages os88ui_krect, files.inc and
-; ctrl.inc draw with it, and os88ui_btn / _arm / _armed / _fire / _krect are
-; used by five other files between them. Moving it into FDLG.DRV would take
-; the standard controls off every one of them, so it stays here, the image
-; far-calls in through fdx_go (and os88ui_btn_f), and tools/os88ovlchk.py's own
-; `EXTRA` table - which files this include as `.cold` - stays true.
+; Its kernel copy is SHARED: files.inc, ctrl.inc, shutdown.inc and hiber.inc
+; stage os88ui_krect and draw through os88ui_kbtn, and files.inc, ctrl.inc and
+; this file use os88ui_bhit / _arm / _armed / _fire between them (files.inc the
+; scroll bar too). Moving it into FDLG.DRV would take the standard controls off
+; every one of them, so it stays here - on kern_small the button is expanded
+; into CTRL.DRV and this image instead (below) - and tools/os88ovlchk.py's own
+; `EXTRA` table, which files this include as `.cold`, stays true for every
+; block but the glyph (OS88UI_KGLYPH).
 %define OS88UI_KERNEL
 %ifdef FDLG_MOD
  %define OS88UI_KBTNIMG        ; kern_small: the BUTTON is expanded into the two

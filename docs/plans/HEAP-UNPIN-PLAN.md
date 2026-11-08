@@ -824,9 +824,9 @@ a way nothing would catch.
 docs/plans/completed/ONDEMAND-PLAN.md §7.1 already specified it: *"a one-byte
 nesting count per module, pinned while non-zero, incremented by the stub before
 the far call. Per module and not one flag, because a module can re-enter itself
-through a callback."* `resb MOD_MAX` in `.bss` (4 on kern_big, 5 on kern_small),
+through a callback."* `resb MOD_MAX` in `.bss` (4 on kern_big, 5 on kern_small when this was priced; 11 and 6 at 2026-11-08),
 incremented in `mod_need` — which already holds the id — and decremented by a
-small `mod_leave` that each of the **29 thunk sites** (over seven far-pointer bases in seven files — `CMZFP` is `CLFP+4`, the compressor riding in `DISKOPS.DRV`) calls after its
+small `mod_leave` that each of the **29 thunk sites** (over seven far-pointer bases in seven files — `CMZFP` is `CLFP+4`, the compressor riding in `DISKOPS.DRV`; 49 sites over 14 bases at 2026-11-08, so the per-site cost has grown with the modules since) calls after its
 `call far [XXFP + K*4]`.
 
 That is the pin `mod_drop`'s banner says nothing can supply, and with it

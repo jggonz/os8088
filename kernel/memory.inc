@@ -2,10 +2,10 @@
 ; os8088 - memory.inc
 ;
 ; The claim heap (SPEC.md 50): every paragraph of conventional memory from
-; the heap floor up, handed out in MEM_GRAN-granular (512-byte), segment-aligned blocks to
-; whoever asks - a package through the API slots, or the kernel itself for
-; the things it uses speculatively (the menu save-under, a Disk window's
-; listing cache, the clipboard).
+; the heap floor up, handed out in MEM_GRAN-granular (512 bytes as shipped),
+; segment-aligned blocks to whoever asks - a package through the API slots,
+; or the kernel itself for the things it uses speculatively (the menu
+; save-under, a Disk window's listing cache, the clipboard).
 ;
 ; Why this exists. Before it, memory outside the pool was carved up by
 ; CONSTANTS - SND_SEG, SAVE_SEG, VIEW_SEG, BB_SEG - each claimed whole from
@@ -702,7 +702,10 @@ mem_unblob_x:
 
 ; -----------------------------------------------------------------------------
 ; mem_floor_ax - the heap's lowest paragraph (module internal)
-; out: AX = HEAP_SEG, or one VGABUF rung below it on a machine with no VGA
+; out: AX = the heap's first paragraph (onto 512 bytes under LADDER_PACK):
+;      past `.vgabuf` on a VGA, under it without one, and with neither a VGA
+;      nor an EGA (COLD_SLIDE) on the VGA rung itself - past `.cold` when it
+;      slid there, at the rung when `.cold` is in a ROM or the HMA
 ; clobbers: AX and the flags
 ;
 ; `.vgabuf` is the planar decoder's two buffers and nothing else, sitting in a
@@ -2327,9 +2330,9 @@ mem_is_region:
 ;                             inst_seg_parked IS "no worker, or one that has
 ;                             parked at OSAPI_TASK_ALIVE"; mem_can_move's
 ;                             .busy arm raises [mem_wpin] when it refuses.
-;                             This used to be two tests of
-;                             I_TASK and [sch_parked] written out here, which
-;                             had to keep agreeing with the ones next door
+;                             This used to be two tests of I_TASK and
+;                             [sch_parked] written out here, which had to
+;                             keep agreeing with the ones next door
 ;
 ; WHAT MAKES THE COUNTER SAFE IS ALREADY THERE: mem_compact raises [sch_lock]
 ; across the plan AND the moves, so no task can raise the depth between this
@@ -2396,8 +2399,8 @@ mem_is_region:
                                 ; exactly what 66.6.2 needs once the
                                 ; declaration above is in hand - and the .busy
                                 ; arm it shares raises [mem_wpin], so a region
-                                ; asks for the
-                                ; park on the same terms a data claim does
+                                ; asks for the park on the same terms a data
+                                ; claim does
                                 ; THE WHAT-IF EXCUSES BOTH REMAINING TESTS, and
                                 ; the worker is the half that was missed: at
                                 ; ui_task's service point the asker's callback
@@ -2618,8 +2621,8 @@ mem_in_xfer:                    ; TWO WORDS (docs/plans/NO-PINNING-PLAN.md
 ; SPEC.md 66.10. The compactor's third outcome, and the one that costs nothing
 ; to execute: a purgeable block that declared no relocation proc is never
 ; relocated (one that did moves - mem_can_move, SPEC.md 50.6.7) - but it can
-; be made to STOP BEING A BARRIER,
-; which is the whole of what it was doing wrong.
+; be made to STOP BEING A BARRIER, which is the whole of what it was doing
+; wrong.
 ;
 ; [mem_pg_rank] IS THE "ONLY UNDER PRESSURE" RULE, and it is a parameter that
 ; already existed: mem_compact takes the size of the pending claim, and 0
@@ -3102,10 +3105,9 @@ mem_cp_walk:
 ; the PIC holding one pending; about two serial mouse packets, the 8250 keeping
 ; one byte of the ~six a 1200-baud mouse sends meanwhile, which mou_isr resyncs
 ; on the framing bit rather than corrupting; and a sound refill IRQ ~50 ms late.
-; It cannot land inside a floppy transfer -
-; dsk_xfer holds [sch_lock] and claims nothing - and it cannot land inside IRQ
-; discovery, which runs on the UI task with a frame in the image that
-; mem_in_nest already refuses on.
+; It cannot land inside a floppy transfer - dsk_xfer holds [sch_lock] and
+; claims nothing - and it cannot land inside IRQ discovery, which runs on the
+; UI task with a frame in the image that mem_in_nest already refuses on.
 ;
 ; Ordinary compaction is untouched: every other block takes this path with the
 ; flag unchanged. And no PACKAGE code runs inside it, a driver image's holder
@@ -4062,9 +4064,11 @@ mem_compact:
     inc byte [sch_lock]         ; pause task switching across the PLAN as well
                                 ; as the moves - the dsk_xfer bargain (SPEC.md
                                 ; 18.9), where the tick, the mouse and any
-                                ; sound IRQ keep running. The plan is pure
-                                ; arithmetic over 32 records and costs
-                                ; microseconds, and taking it inside the same
+                                ; sound IRQ keep running. The plan is
+                                ; arithmetic over 32 records - a MEM_MAX scan
+                                ; per live claim in mem_cp_next, so some
+                                ; milliseconds on the 8088 (predicted, not
+                                ; measured) - and taking it inside the same
                                 ; window is what stops the map changing
                                 ; between deciding a move is worth making and
                                 ; making it
@@ -5724,8 +5728,8 @@ osapi_mem_movable_x:
 ; -----------------------------------------------------------------------------
 ; osapi_mem_compact - API slot 0x0443: MY OWN REGION IN THE PASS (SPEC.md 66.4.3)
 ; in:  AH = the verb, ES = the caller's segment (the X stub's own contract):
-;        MEMC_WHATIF (0): AL = a purge level, exactly as OSAPI_MEM_AVAIL's at
-;                         that level
+;        MEMC_WHATIF (0): AL = a purge level, answered as OSAPI_MEM_AVAIL
+;                         would answer at that level
 ;        MEMC_POST   (1): BX = a window of yours, AL = the shed rank the pass
 ;                         is to respect
 ;        MEMC_WHATIF_P (2): the what-if, in PARAGRAPHS

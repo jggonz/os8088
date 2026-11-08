@@ -5,10 +5,11 @@
 ; calls spl_tick NEAR (both are `.boot2`, SPEC.md 2.9.4) after every run that
 ; lands, once SPL_RESIDENT sectors of `.text` are aboard. State is the blob's,
 ; read `cs:`, except spl_live/spl_busy/spl_quiet, which are `.text` bytes in
-; viddet.inc because the IRQ0 handlers read them through DS. The first tick switches to mode 12h and draws the
-; welcome dialog; every tick advances a pixel-granular progress bar, a
-; percentage, and a spinning vector "8088" - stroke digits coin-flipped
-; about their vertical axis through a 16-entry cosine table.
+; viddet.inc because the IRQ0 handlers read them through DS. The first tick
+; switches to mode 12h and draws the welcome dialog; every tick advances a
+; pixel-granular progress bar, a percentage, and a spinning vector "8088" -
+; stroke digits coin-flipped about their vertical axis through a 16-entry
+; cosine table.
 ;
 ; This module runs before ANY other module is resident, so it is entirely
 ; self-contained: BIOS int 10h for mode set and text, its own planar
@@ -498,8 +499,9 @@ spl_reset:
                                 ; that wipes the framebuffer under a live line
                                 ; is the one that has to put it back, at the
                                 ; NEW geometry. After kmain gives the blob
-                                ; back this reaches spl_dead and returns
-                                ; (2.9.5), which is the right answer: by then
+                                ; back, [spl_fseg] is 0 and the SPLCALL that
+                                ; reaches spl_reset skips the call (2.9.5.3),
+                                ; which is the right answer: by then
                                 ; the desktop owns the screen and [spl_live]
                                 ; would have refused anyway
     dec byte [spl_busy]

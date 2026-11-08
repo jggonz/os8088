@@ -1082,7 +1082,8 @@ wm_reflows:
 ; (SPEC.md 30.5) and its own height as the floor. A secondary has no menu bar
 ; and no dock, so its whole extent is desktop, and DX IS AN OUTPUT TOO (SPEC.md
 ; 11.93) - the bottom a window that will not fit the band may hang down to,
-; which there is that display's own bottom (VY + CH). Two displays at most, so "not the primary" is display 1.
+; which on a secondary is that display's own bottom (VY + CH). Two displays
+; at most, so "not the primary" is display 1.
 ; -----------------------------------------------------------------------------
 wm_fit_box:
     push ax                     ; (NO ext_one: with one display - a collapsed

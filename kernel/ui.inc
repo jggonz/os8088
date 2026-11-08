@@ -3,18 +3,17 @@
 ;
 ; The UI task (SPEC.md 13): task 0's forever-loop. Each pass polls the BIOS
 ; keyboard, drains the system event ring (up to EVQ_CAP records a pass,
-; SPEC.md 10.2), runs any deferred
-; instance launch, any pending package load, any deferred kernel menu command
-; and any posted full repaint (all outside the gfx lock - app_launch,
-; loader_run and ui_cmd manage their own locking), and yields.
+; SPEC.md 10.2), runs any deferred instance launch, any pending package load,
+; any deferred kernel menu command and any posted full repaint (all outside
+; the gfx lock - app_launch, loader_run and ui_cmd manage their own locking),
+; and yields.
 ;
 ; That deferral channel is what lets a handler running UNDER the gfx lock
-; ask for work that needs the lock: inst_launch_post for launches,
-; a [ui_pcmd] store and a [ui_post] bump for the kernel's own CMD_*
-; (SPEC.md 13). The lock is a
-; non-recursive spin only this task releases, so the alternative is a hang.
-; Step 4 is the system clock (SPEC.md 37): clk_tick on every pass that sees
-; [ticks] move (SPEC.md 13.12) - it is cheap
+; ask for work that needs the lock: inst_launch_post for launches, a
+; [ui_pcmd] store and a [ui_post] bump for the kernel's own CMD_*
+; (SPEC.md 13). The lock is a non-recursive spin only this task releases, so
+; the alternative is a hang. Step 4 is the system clock (SPEC.md 37):
+; clk_tick on every pass that sees [ticks] move (SPEC.md 13.12) - it is cheap
 ; and keeps time whether or not anything is drawn - and, on the second, one
 ; gfx_lock around the menu bar's clock cell plus any open Date/Time page.
 ; Mouse-downs in the menu bar run menu_track and route the returned
@@ -29,7 +28,8 @@
 ; hands the press whole to a front window that installed W_ONRC (SPEC.md
 ; 13.11), and otherwise pops a context menu (SPEC.md 12.4) on the frontmost
 ; file-manager window's content, a DOCK TILE, whose one item is Close
-; (SPEC.md 30.2), and with OS88_SHORTCUTS a desktop shortcut (SPEC.md 26.8.5). It never stamps [ui_click_t], which is what keeps a
+; (SPEC.md 30.2), and with OS88_SHORTCUTS a desktop shortcut (SPEC.md
+; 26.8.5). It never stamps [ui_click_t], which is what keeps a
 ; right-click from composing with the next left click into a double-click.
 ; Mouse-downs on windows also hand the clicked window the menu bar
 ; (SPEC.md 12 - the raise paths repaint anyway, but a click on the window
@@ -1218,8 +1218,8 @@ ui_task:
 ; what wm_pkgcall wants and what the record already holds.
 ;
 ; Stack: +4 bytes deeper at the moment a package callback runs, against
-; STK0_SIZE 512 and SPEC.md 15.1's measured 246-byte watermark - it was +8 until the
-; start stamp took over the payload's own slots (kernel size pass 10).
+; STK0_SIZE 512 and SPEC.md 2.1's measured 246-byte watermark - it was +8
+; until the start stamp took over the payload's own slots (kernel size pass 10).
 ; -----------------------------------------------------------------------------
 ui_bill:
     push bp                     ; the handler...
@@ -1257,7 +1257,7 @@ ui_bill:
 ;      ui_arm_trk both), so this body does not
 ; out: nothing (all registers preserved; flags clobbered)
 ;
-; a full ring (16 records) loses its OLDEST input (SPEC.md 10.1), so a
+; A full ring (16 records) loses its OLDEST input (SPEC.md 10.1), so a
 ; release can still be lost, and ui_drag,
 ; ui_grow and fm_drag each carry the same fallback in as many words - "the
 ; EVT_MUP was dropped (queue full) - the level still says so". Here the failure
@@ -2578,8 +2578,8 @@ ui_dispatch:
     ; SPEC.md 13 reached from the bar, and the same routine answers both.
     ; It runs inline rather than through ui_post_cmd because ui_dispatch is
     ; reached with NO lock held - menu_track's was released before the call -
-    ; which is exactly why the close box's release (.mup) takes its own lock too. The guard
-    ; above is the one it always made, for the same reasons.
+    ; which is exactly why the close box's release (.mup) takes its own lock
+    ; too. The guard above is the one it always made, for the same reasons.
     call app_close_win          ; in: BX; lock held, UI task (SPEC.md 29.4).
                                 ; Unbilled, like the close box - and here it
                                 ; could not be billed anyway: the record the
@@ -3295,8 +3295,9 @@ ui_armlit:  resb 1              ; SPEC.md 13.8.1: is that box currently DRAWN
                                 ; down? THE GLASS ALWAYS SHOWS THIS BYTE - that
                                 ; is the invariant the whole feature rests on,
                                 ; and wm_chrome_relit is what keeps it true
-                                ; across a repaint. ui_lit_go (ui_lit_on/off's body) is the only
-                                ; writer that also draws
+                                ; across a repaint. ui_lit_go, the body of
+                                ; ui_lit_on/off, is the only writer that
+                                ; also draws
 %endif                          ; KERN_BIG
 ui_dragwin: resw 1              ; window being dragged
 ui_startx:  resw 1              ; mousedown position (drag origin)

@@ -20,8 +20,9 @@
 ; left is the renderer, which was always the load-bearing half.
 ;
 ; RAM has no latches or Set/Reset, so these routines do the VGA ALU's work in
-; software, one plane at a time: solid ops or/and the edge masks per the
-; [gfx_color] plane bit (interiors are rep stosb of FF/00), XOR ops xor the
+; software, one plane at a time: solid ops reduce [gfx_color] through
+; gfx_inktab to 00h, FFh or the 50% dither and merge it under the edge masks
+; (interiors are rep stosw of that pattern), XOR ops xor the
 ; edge masks and `not` whole interior bytes. Plane p lived at segment
 ; [vid_rseg] + p*<plane stride> with the same rows as VRAM, so gfx_rect_setup's
 ; masks and offsets serve both worlds; every solid/XOR primitive here funnels
@@ -941,7 +942,7 @@ sw_pairbuild:
 ;           grepped over kernel/, apps/, drivers/, tools/ and tests/); it is
 ;           reached only when [gfx_blit_fst] == 1, and its only successor is
 ;           `jmp .nextrow`:
-;             AX  .row banks it round gfx_rowbase, nothing else reads dead
+;             AX  .row banks it round gfx_rowbase; nothing reads it   dead
 ;             SI  .row opens `mov si,[gfx_blit_sv]`, every iteration  dead
 ;             DX  gfx_rowbase, called earlier in the SAME iteration, ends
 ;                 in a `mul` and so WRITES DX; .par then loads it with a
@@ -950,11 +951,10 @@ sw_pairbuild:
 ;             DI  never read on the fst == 1 path, and sw_blit_row loads
 ;                 it itself from [gfx_blit_ro] at every entry          dead
 ;           and when the row loop ends all five come off gfx_blit4's OWN
-;           prologue at .pops. BX (`inc bx` at .nextrow) and BP (`add
-;           [gfx_blit_sv],bp`)
-;           are LIVE and stay saved; DS and ES are mandatory - the routine
-;           swaps both. A second caller would inherit a contract that no
-;           longer holds: read this list before adding one.
+;           prologue at .pops. BX (`inc bx` at .nextrow) and BP
+;           (`add [gfx_blit_sv],bp`) are LIVE and stay saved; DS and ES are
+;           mandatory - the routine swaps both. A second caller would inherit
+;           a contract that no longer holds: read this list before adding one.
 ;
 ; The accumulator is 16-bit and carries `AH` bits, seeded with the `x & 7` bits
 ; of the first destination byte that belong to the SCREEN - so the first store

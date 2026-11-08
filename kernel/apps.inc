@@ -115,7 +115,9 @@ app_about_paint_x:
     xchg si, ax                 ; string anyway, rather than borrowing BX -
     add si, si                  ; that is the window ptr app_about_center
     mov si, [si + app_about_vid]   ; wants. cbw is safe because [vid_kind] is
-    call app_about_center_x        ; 0..3 (kernel/viddet.inc) - but 4, VID_VESA, under VID_EXT, has no row here (SPEC.md 39.29.4). xchg, not
+    call app_about_center_x        ; 0..3 (kernel/viddet.inc) - but 4,
+                                   ; VID_VESA under VID_EXT, has no row here
+                                   ; (SPEC.md 39.29.4). xchg, not
                                    ; mov: AX is the helper's to write next
                                    ; (kernel size pass 17, -1)
 

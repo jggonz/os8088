@@ -19,8 +19,9 @@
 ;     contents. rep stosb is only used for the interior of replace-mode
 ;     fills, where the latches are irrelevant.
 ;   - Every routine clips to the live screen, 0..[vid_cwm1] / 0..[vid_chm1],
-;     and leaves the GC/Sequencer in the default state on return: Set/Reset enable = 0, Bit Mask = FF,
-;     function = replace, rotate 0, Map Mask = 0Fh, Read Map = 0, mode 0.
+;     and leaves the GC/Sequencer in the default state on return: Set/Reset
+;     enable = 0, Bit Mask = FF, function = replace, rotate 0, Map Mask = 0Fh,
+;     Read Map = 0, mode 0.
 ;   - Drawing routines run with the gfx lock held (SPEC.md 1.6), so the
 ;     module-private scratch variables below need no interrupt guard: the
 ;     mouse ISR never draws while the lock is set.
@@ -1597,7 +1598,7 @@ gfx_ls_box:
     ; (SPEC.md 5.6.9.5) - which on display 0, and on every one-card machine,
     ; is the screen exactly as it always was.
 %ifdef KERN_BIG
-    je .oobck                   ; ...and on kern_big gfx_pt_resolve has ALREADY
+    je .oobck                   ; ...and on kern_big gfx_points' .pass has ALREADY
                                 ; written it, at this pass's head (size pass
                                 ; 10: once a pass rather than at every call
                                 ; here). Nothing can have moved it since: a
@@ -1790,9 +1791,6 @@ vga_b4out:
 ; no pixel of difference. A caller that wants a blit to be cheap makes its
 ; art flat; a caller that must draw detail should expect ~0.5 ms per colour
 ; change per row, and budget accordingly.
-;
-; A plane-parallel VGA fast path would attack exactly that, since it costs
-; one write per 8 pixels regardless of flatness - see below.
 ;
 ; A plane-parallel VGA fast path (build a byte-per-8-pixels mask per plane
 ; and write it through the Map Mask) would beat this on detailed pictures and
@@ -4158,8 +4156,8 @@ gfx_xor_rect_d:
 ; Each pixel is touched exactly ONCE, which is what keeps the XOR forms
 ; self-inverting.
 ;
-; BP CARRIES THE FILL. It
-; survives every callee: gfx_fill and gfx_xor_fill document "clobbers: flags";
+; BP CARRIES THE FILL, and it survives every callee: gfx_fill and gfx_xor_fill
+; document "clobbers: flags";
 ; vga_solid_rect names no BP at all; gfx_clip_run, gfx_disp_run,
 ; gfx_rect_setup and vga_gc_reset name none either (and the inline GC arms
 ; that replaced vga_set_color and vga_set_xor touch AX/DX only); sw_rect
@@ -5080,7 +5078,7 @@ thm_pen_dis:
 %endif
 
 ; -----------------------------------------------------------------------------
-; gfx_lock - acquire the drawing mutex, then hide the cursor (SPEC.md 7)
+; gfx_lock - acquire the drawing mutex, then PROMISE the hide (SPEC.md 7.1.4)
 ;
 ; Spins with task_yield while another task holds it, so background tasks
 ; keep running. Task-level only - never call from an ISR. Non-reentrant:
@@ -5143,7 +5141,8 @@ gfx_lock:
                                 ; something is about to draw over it
 
 ; -----------------------------------------------------------------------------
-; gfx_unlock - show the cursor, then release the mutex (SPEC.md 7)
+; gfx_unlock - put the cursor back, then release the mutex (SPEC.md 7.1.4): a
+;              show if the hide was spent, cur_lazyend's catch-up move if not
 ;
 ; Order is binding: cursor_show redraws at the latest mouse position while we
 ; still own the screen; only then may the ISR draw again.
@@ -5736,7 +5735,7 @@ gfx_pt_cseg     resw 1          ; SPEC.md 5.6.9: gfx_points' array segment.
 %ifdef KERN_BIG
 gfx_ls_d2   resw 1              ; the box's right and bottom edges in VIRTUAL
 gfx_ls_d4   resw 1              ; space (gfx_ls_d1/d3 are vid_ox/vid_oy), and
-gfx_pt_rmax resw 1              ; gfx_pt_resolve's rebased row table: all five
+gfx_pt_rmax resw 1              ; gfx_points' rebased row table: all five
 gfx_pt_rtab resw 1              ; recomputed at every call's .pass, so a union
 gfx_pt_kx   resw 1              ; member like the rest
 gfx_pt_f    resb 1

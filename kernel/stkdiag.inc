@@ -33,8 +33,9 @@
 ;
 ; WHAT IT COSTS THE MEASUREMENT. The diagnostic task below takes a slot and a
 ; slice of its own, so a STKDIAG kernel has one fewer worker slot than a
-; shipped one (this one's - the idle task holds a slot on both). It does NOT perturb the number:
-; the floor is read off the IDLE task's slice, which this code only ever reads.
+; shipped one (this one's - the idle task holds a slot on both). It does NOT
+; perturb the number: the floor is read off the IDLE task's slice, which this
+; code only ever reads.
 ;
 ; Prefix sd_.
 ; =============================================================================
@@ -168,9 +169,9 @@ sd_slice_base:
                                 ; is STK0's 512 bytes rather than a slice
                                 ; task_spawn filled, so the 0xCC scan below
                                 ; would read whatever is there. Nothing here
-                                ; measures on it anyway: the two tasks below
-                                ; are spun precisely so the ticks land
-                                ; somewhere whose free space is known. Filling
+                                ; measures on it anyway: the floor is read
+                                ; off the IDLE task's slice (the file's
+                                ; header), which task_spawn did fill. Filling
                                 ; below ui_task's SP was tried and left the
                                 ; panel half-drawn
     cmp al, MAX_TASKS
@@ -192,29 +193,6 @@ sd_slice_base:
     stc
     ret
 
-; in:       BP = SP at the chain, taken by sch_isr BEFORE either call;
-;           DS = KERNEL_SEG, IF = 0
-; out:      [sd_rom08] raised if this pass was the deepest yet
-; clobbers: nothing (every register and the flags are restored)
-;
-; THE ANCHOR IS PASSED IN, and that is the whole of what the first version got
-; wrong: it read SP inside itself, where `call` had already moved it, so the
-; window sat two bytes below where the chain actually writes and the ROM's
-; frames landed above it. The dump said so in the end - `00 F0` segments on the
-; slice with the sentinel untouched underneath them.
-;
-; ONLY ON THE IDLE TASK'S SLICE. Its own footprint is at most 4 bytes
-; (task_yield's `pushf` is followed by `cli`), so the bytes below the anchor are
-; free by construction and there is always room for the window. The floor is
-; read off sd_victim's slice instead, which this never writes to - an
-; instrument that scrubs the fill the measurement reads is measuring itself.
-;
-; What it reports is the WHOLE chain - our `pushf`, the far call's own return
-; frame, the ROM's handler, and anything that nested inside it because a real
-; BIOS `sti`s before int 1Ch. That is deliberate: it is what the A/B in
-; docs/plans/completed/STACK-SLOTS-PLAN.md 2 removed, so the two numbers answer the same
-; question and can be compared.
-; -----------------------------------------------------------------------------
 ; -----------------------------------------------------------------------------
 ; sd_water - the high water of slot AL's slice, from task_spawn's 0xCC fill
 ; in:       AL = slot;  DS = KERNEL_SEG

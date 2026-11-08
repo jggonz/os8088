@@ -71,10 +71,10 @@ PKG_DISP     equ 12
 ;
 ;     mov word [DRV_H_KEEP], my_keep    ; my_keep: everything past it is dead
 ;
-; and the kernel shrinks the image's claim to that offset rounded up to the heap's
-; 512-byte granule,
-; right after the attach and before any other verb is sent. So put what may be
-; dropped LAST, its zeroed state after its code, and never reach it again:
+; and the kernel shrinks the image's claim to that offset rounded up to the
+; heap's 512-byte granule, right after the attach and before any other verb is
+; sent. So put what may be dropped LAST, its zeroed state after its code, and
+; never reach it again:
 ; the bytes are gone from under you, and a test of a byte BEFORE the offset is
 ; what guards every way in. Ignored by a kernel that does not know it, and by
 ; one whose image is not a heap claim (the HMA, kern_mega above 1MB).
@@ -366,9 +366,10 @@ DSV_CPDRAG   equ 32             ; near proc: the TRACKING edge - the pointer
 DSV_PKGCALL  equ 34             ; dw: near proc reached by OSAPI_DRV_CALL -
                                 ; THE FENCE (SPEC.md 20.11). Publish it and a
                                 ; package can call you; leave it 0 and it
-                                ; cannot. HDD.DRV's reaches HDV_ARM and
-                                ; HDV_DISARM and no sector (52.1.4), so no
-                                ; package can reach DSV_BLK through it.
+                                ; cannot. HDD.DRV's reaches HDV_ARM,
+                                ; HDV_DISARM and HDV_TOOL and no sector
+                                ; (52.1.4, 117.4), so no package can reach
+                                ; DSV_BLK through it.
                                 ;
                                 ;   in  BL = a verb YOU define, BH = your class
                                 ;       - except DRVC_EMS, which gets the

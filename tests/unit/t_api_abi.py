@@ -144,8 +144,8 @@ CELL = 8                # the LONGEST cell: the decode window, not the stride
 
 # Cells that exist in the kernel and are deliberately NOT published by this
 # branch's SDK go in COMPAT, which is EMPTY. COMPAT_OLD is its record and
-# nothing reads it: kernel size pass 4 deleted every cell on it and moved the
-# table down (SPEC.md 20.3.1), so none of these numbers is a cell any more.
+# nothing reads it: every cell on it is gone and kernel size pass 4 renumbered
+# the table (SPEC.md 20.3.1), so none of these numbers names its contract any more.
 COMPAT_OLD = {0x01B8: "main's OSAPI_MEM_ALLOC (paragraphs)",
           0x01C0: "main's OSAPI_MEM_FREE (paragraphs)",
           0x01C8: "main's OSAPI_MEM_AVAIL (paragraphs)",

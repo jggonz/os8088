@@ -124,9 +124,10 @@
 # --- the kernel: its own arm (SPEC.md 13.8.3), through os88ui_kbtn ----------
 1 kernel/files.inc                 # the Disk window's (SPEC.md 22.18)
 1 kernel/fdlg.inc                  # the Standard File dialog's column
-                                   # (SPEC.md 38) - kern_small's image, which
-                                   # far-calls os88ui_btn_f (os88ui_kbtn's own
-                                   # far entry) since its xd_ thunk went.
+                                   # (SPEC.md 38) - on kern_small FDLG.DRV draws
+                                   # through its own expansion, fdb_kbtn
+                                   # (OS88UI_KBTNIMG); on kern_big the .cold
+                                   # dialog near-calls os88ui_kbtn.
                                    # IT WAS IN NEITHER LIST UNTIL IT BROKE:
                                    # `FDX <name>` is `call <name>` on kern_big
                                    # and `call fdx_go`/`dw <name>` on

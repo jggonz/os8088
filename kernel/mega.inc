@@ -9850,7 +9850,8 @@ MX_KDRV     equ 0xFD                ; ...and for a DRIVER'S IMAGE (drv_hi_move):
 
 ; mega_ldt_alloc - DX:AX = a 24-bit base, CX = the limit (bytes - 1), BL = the
 ; access byte (0x92 data, 0x9A code) -> CF = 0 and AX = the selector (TI = 1,
-; RPL 0); CF = 1 and AX kept when every allocator entry is taken. Clobbers nothing else
+; RPL 0); CF = 1 and AX kept when every allocator entry is taken. Clobbers
+; nothing else
 mega_ldt_alloc:
     push di
     push es
@@ -10000,8 +10001,8 @@ mega_ldt_free:
     mov word [es:di+6], 0
     popf
     push si                         ; ...and a WINDOW naming it is no longer
-    push word MEGA_SEL_MXT          ; one: a block's free takes a window
-    pop es                          ; based in it (mega_cdfree, mx_dfree),
+    push word MEGA_SEL_MXT          ; one: a block's free takes a bound
+    pop es                          ; window in it (mega_cdfree, mx_dfree),
     mov si, mega_wtab               ; and its owner's end must not free the
 .wt:                                ; entry again once it is somebody else's
     mov di, [es:si]
@@ -12240,9 +12241,10 @@ section .text
 
 ; mega_pkghif - FAR (ld_hi, `.cold`): a just-loaded PACKAGE region ABOVE 1MB
 ; (KERN-MEGA-PLAN 13.3 step 4). AX = its conventional segment, CX = its bytes
-; (the region, image and bss, 1..65534), DL = the instance slot -> CF = 0 and
-; AX = the DATA selector of a pair holding a copy of it all, its code half
-; being AX - 8; CF = 1 and nothing taken. The block's owner is 80h | slot:
+; (the region, image and bss, 1..65534, or FFFFh = 64KB: mega_imghif), DL =
+; the instance slot -> CF = 0 and AX = the DATA selector of a pair holding a
+; copy of it all, its code half being AX - 8; CF = 1 and nothing taken. The
+; block's owner is 80h | slot:
 ; mx_relall at the instance's teardown frees the slot's OWN XMEM blocks and
 ; not this one, and no cell will hand it to a package, both matching the
 ; owner byte exactly. The copy runs under sch_lock, which serializes
@@ -14601,7 +14603,7 @@ mega_vxpm:
     ret
 %endif
 
-; mega_cdin -ES:DI = a present descriptor, DL:AX = a block's base, CX = its
+; mega_cdin - ES:DI = a present descriptor, DL:AX = a block's base, CX = its
 ; paragraphs -> CF = 0 the descriptor's base lies in the block; CF = 1 not.
 ; Clobbers nothing
 mega_cdin:

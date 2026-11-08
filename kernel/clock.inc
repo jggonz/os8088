@@ -1521,9 +1521,9 @@ clk_rp_year:
 
 ; -----------------------------------------------------------------------------
 ; clk_bios_dnone - the refusal trampoline the first four of clk_bios_read's
-; validations share (clk_at_dcno's shape, above): -9.  Cold by construction - a BIOS
-; that answers int 1Ah at all passes every one of them, and one that does not
-; costs the tier, not a redraw.
+; validations share (clk_at_dcno's shape, above): -9.  Cold by construction -
+; a BIOS that answers int 1Ah at all passes every one of them, and one that
+; does not costs the tier, not a redraw.
 ; -----------------------------------------------------------------------------
 clk_bios_dnone:
     jmp clk_bios_read.none

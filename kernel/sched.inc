@@ -17,8 +17,8 @@
 ; 1..MAX_TASKS-1 are dynamic (task_spawn / task_exit), each with a stack
 ; from SCH_PARTITION's fixed list (128..SCH_STACK bytes) in .lowbss.
 ;
-; All tasks run SS = LOW_SEG (SPEC.md 1/2.1) - and CS = DS = KERNEL_SEG,
-; except a package's worker, whose CS = DS is its own segment (SPEC.md 20.6): the
+; All tasks run SS = LOW_SEG (SPEC.md 1/2.1), and CS = DS = KERNEL_SEG except
+; a package's worker, whose CS = DS is its own segment (SPEC.md 20.6). The
 ; stacks live in low memory, outside the kernel's 64KB window, and a context
 ; switch is still nothing more than swapping SP because every task shares the
 ; one SS. SS is therefore NOT saved in the frame below and never changes
@@ -113,8 +113,8 @@ SCH_STACK   equ 384             ; per-task stack bytes. It was 1,536 when the
                                 ; slice's base with a byte swap. The base is
                                 ; a lookup in sch_stkbase now (SPEC.md 8.6),
                                 ; so changing SCH_PARTITION and MAX_TASKS is
-                                ; the whole of
-                                ; the change (docs/KERNEL-MEMORY.md, "Task
+                                ; the whole of the change
+                                ; (docs/KERNEL-MEMORY.md, "Task
                                 ; stacks"). apps/taskmgr's bss map used to be
                                 ; hand-chained literals and was the other half
                                 ; of why nobody could; it derives now
@@ -285,7 +285,8 @@ SCH_WD_TICKS equ 18             ; cooperative mode: the watchdog forces a
 ; clobbers: flags
 ;
 ; IT IS IN THE BOOT OVERLAY (SPEC.md 2.5, docs/plans/LAST-DROP-BYTES.md row 3), which
-; is 166 bytes of `.text` that stop existing when kmain gives the blob back.
+; is 166 bytes that stop existing once the boot is done: kern_small's go back
+; with the blob, and kern_big's are FAT_SEG's, which the first mount takes.
 ; kmain's OVBCALL is its ONE caller and there is no second entry: nothing
 ; re-initialises the scheduler, the reboot path is sched_unhook - which RESTORES
 ; the old vector and is a different routine - and sch_fast_on/sch_fast_off
@@ -297,9 +298,9 @@ SCH_WD_TICKS equ 18             ; cooperative mode: the watchdog forces a
 ; as a CONSTANT. On kern_big this body is `.ovl` and CS is FAT_SEG, whose bytes
 ; the first mount takes (SPEC.md 2.5); on kern_small it is `.boot2` and CS is
 ; the BLOB's, which is about to become somebody's heap claim. Either way
-; `mov [es:0x22], cs` would install a vector into
-; freed memory and the machine would die later at an address with no connection
-; to this file. tools/os88ovlchk.py rule 2b refuses that spelling outright now.
+; `mov [es:0x22], cs` would install a vector into freed memory and the machine
+; would die later at an address with no connection to this file.
+; tools/os88ovlchk.py rule 2b refuses that spelling outright now.
 ; -----------------------------------------------------------------------------
 %ifndef KERN_SMALL
 section .ovl                   ; kern_big: the WINDOW half (SPEC.md 2.5.3),
@@ -889,7 +890,7 @@ section .text
 ; would be handed the same slot number - one task lost, one instance record
 ; leaked for the session. The window is the slice's 0xCC fill - one `rep
 ; stosw` of the whole slice, ~0.7 ms on a 384-byte one at PERFORMANCE.md's
-; 1.76 us a byte - plus ~30 stores, no I/O; longer than task_exit's.
+; 1.76 us a byte - plus ~30 stores, no I/O.
 ;
 ; The frame is built through ES, not DS: sch_stacks is in LOW_SEG (.lowbss),
 ; which DS does not address. The task record itself is ordinary kernel .bss
@@ -979,7 +980,7 @@ task_spawn:
     ; meant the only kernel whose margin could be measured was one nobody runs -
     ; and the margin is the thing this project has just spent a week being
     ; wrong about (docs/FIELD-NOTES.md 29.6). It costs ONE `rep stosw` of the
-    ; slice per SPAWN - a few hundred microseconds, once, against a launch that
+    ; slice per SPAWN - ~0.7 ms on a 384-byte slice, once, against a launch that
     ; has already been through int 13h - and it turns tests/stackprobe from a
     ; probe of its own slice into one that can read EVERY task's high water on
     ; the shipping kernel, on the real machine, while the thing under suspicion
@@ -996,7 +997,7 @@ task_spawn:
     mov ax, 0xCCCC
     cld
     rep stosw                   ; ES:DI = the slice base, upwards - words,
-                                ; 12.5 clocks a byte against stosb's 17, and
+                                ; 1.76 us a byte measured (PERFORMANCE.md), and
                                 ; this whole fill runs inside the spawn's cli
     pop ax                      ; the size...
     pop di                      ; ...the base...
@@ -1442,7 +1443,8 @@ sched_mode_get:                 ; FAR-ENTERED (SPEC.md 2.6.1): no near caller
 ; EOI - we must not), then bumps [ticks], wakes due sleepers, and switches
 ; round-robin if the tail's two tests allow it: sch_lock must be clear, and
 ; in cooperative mode only the watchdog switches (SPEC.md 8.2). Runs with
-; IF=0 throughout, except inside sch_rhook on kern_big while a sample ISR is
+; IF=0 throughout, except inside the ROM's int 08h on the chain, which sti's
+; (SPEC.md 8.5.1), and inside sch_rhook on kern_big while a sample ISR is
 ; open (SPEC.md 34.11), where the hook runs at IF=1; calls no BIOS service
 ; beyond the chain, and sch_isr itself never sti's.
 ;
@@ -2198,7 +2200,8 @@ sch_isr:
 %ifndef NO_CHAINPRIV
     cmp byte [sch_chbusy], 0    ; NESTED? (SPEC.md 8.5.1) The ROM stis and runs
     jne .chskip                 ; int 1Ch before its EOI, and a second IRQ0 can
-                                ; re-enter this ISR after that EOI - and that one may not chain again
+                                ; re-enter this ISR after that EOI - and that
+                                ; one may not chain again
                                 ; on the private stack (the saved SP is one
                                 ; register), and it is ALREADY on that stack, so
                                 ; the switch below is refused for it too: a
@@ -2600,7 +2603,8 @@ sch_resume:
 sch_stkdie:
 %ifdef KFZTRACE
     ; --- SAY SO (KFZ only) ---------------------------------------------------
-    ; This is the only cli+hlt in the kernel, so it is the only thing that can
+    ; This is the only cli+hlt in kern_big and kern_small (SPEC.md 8.8 names
+    ; kern_mega's and the knobs' own), so it is the only thing that can
     ; stop the heartbeat - and a stopped heartbeat is exactly what the field
     ; reports. Silent, it is indistinguishable from a wild jump; one solid bar
     ; and a task number turn it into a diagnosis a photograph can carry.
@@ -2902,15 +2906,15 @@ SCH_NCLASS  equ ($ - sch_clsbytes) / 2
 ; resumes it. (This header describes sch_switch:, which is above, after
 ; sch_isr - not sch_clsbytes, which it follows.)
 ;
-; RE-ARMING sch_hold is the first thing done once SS is known to be ours, and deliberately on the
-; routine's single entry point rather than at each caller: the counter means
-; "ticks of watchdog budget left since the running task last reached the switch
-; path", so every one of the three ways in - fall-through from sch_isr, the
-; explicit jmp from task_yield's save path, the explicit jmp from task_exit -
-; must re-arm it (SPEC.md 8.2). Hence a task that yields voluntarily can never
-; trip the watchdog however long it runs in total; the "nothing ready"
-; fallback re-arms it too, so an idle single-task
-; system manufactures no watchdog hits; and a dying task re-arms it for its
+; RE-ARMING sch_hold is the first thing done once SS is known to be ours, and
+; deliberately on the routine's single entry point rather than at each caller:
+; the counter means "ticks of watchdog budget left since the running task last
+; reached the switch path", so every one of the three ways in - fall-through
+; from sch_isr, the explicit jmp from task_yield's save path, the explicit jmp
+; from task_exit - must re-arm it (SPEC.md 8.2). Hence a task that yields
+; voluntarily can never trip the watchdog however long it runs in total; the
+; "nothing ready" fallback re-arms it too, so an idle single-task system
+; manufactures no watchdog hits; and a dying task re-arms it for its
 ; successor.
 
 ; -----------------------------------------------------------------------------

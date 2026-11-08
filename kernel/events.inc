@@ -108,7 +108,11 @@ evq_push:
                                 ; the word being loaded a second time below
     cmp word [ss:di + EV_TYPE], EVT_WAKE ; `ss:` because the ring is in LOW_SEG
                                 ; now (SPEC.md 10.1.1), which SS names for
-                                ; every kernel task and every ISR on one
+                                ; every kernel task and for an ISR that
+                                ; interrupted one - NOT for one that landed
+                                ; while a ROM was on its own stack (sch_switch's
+                                ; SS test, SPEC.md 8.5), which is why mou_isr
+                                ; loads its own SS (MOUPRIV)
     je .full                    ; DISPATCH clears, so discarding one hangs
                                 ; that window's handshake for the session.
                                 ; A ring full of input has input at its head,
@@ -270,9 +274,9 @@ evq_pop:
     pop ds                      ; the copy wearing four `ss` prefixes - the same
     movsw                       ; bytes. Either is correct here: the 8086 loses
     movsw                       ; a prefix only when an interrupted REP string
-    movsw                       ; op restarts, and these four have no REP. EVQ_RECSIZE / 2 = 4, unrolled -
-    movsw                       ; GROW THE RECORD AND THIS TRUNCATES SILENTLY.
-    pop ds
+    movsw                       ; op restarts, and these four have no REP.
+    movsw                       ; EVQ_RECSIZE / 2 = 4, unrolled - GROW THE
+    pop ds                      ; RECORD AND THIS TRUNCATES SILENTLY.
 
     add al, EVQ_RECSIZE
     and al, EVQ_MASK           ; AL alone - see the %if beside EVQ_MASK

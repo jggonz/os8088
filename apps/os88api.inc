@@ -74,6 +74,10 @@
 ; position-independent: there are no relocations, and two instances of one
 ; package differ only in the segment they run in.
 KERNEL_SEG   equ 0x0060     ; where the kernel is, and what ES holds on entry.
+                            ; It is baked into every OSAPI_* far call, so a
+                            ; package built against a different value calls
+                            ; into empty memory: rebuild EVERY .o88 (and the
+                            ; apps floppies) whenever the kernel moves
 
 ; =============================================================================
 ; DRAW FROM THE CONTENT ORIGIN. ALWAYS. (SPEC.md 11.96.12)
@@ -147,10 +151,6 @@ VT_FILE      equ 2               ; AH: a REDIRECTED volume (SPEC.md 62.9) -
                                  ; hb_pick does. The slot has answered this
                                  ; value since SPEC.md 62.9 and the SDK named
                                  ; only the other two
-                            ; KERNEL_SEG (above) is baked into every OSAPI_* far call, so a
-                            ; package built against a different value calls
-                            ; into empty memory: rebuild EVERY .o88 (and the
-                            ; apps floppies) whenever the kernel moves
 APP_MAX_SIZE equ 0xFE00     ; image + bss budget: 63.5KB (SPEC.md 20.1.1).
                             ; The ceiling is the SEGMENT, not a pool: a
                             ; package links at org 0 and addresses itself
@@ -1741,8 +1741,9 @@ MEMC_WHATIF_P equ 2              ; AH: MEMC_WHATIF in PARAGRAPHS - the same
                                  ; CF FIRST - kern_big's what-if hands back
                                  ; the flags it was called with
 %define OSAPI_MEM_COMPACT   KERNEL_SEG:0x0443   ; AH = MEMC_WHATIF: AL = a
-                                 ; purge level, out AX/BX as OSAPI_MEM_AVAIL at that level
-                                 ; planned as if YOUR OWN REGION could move;
+                                 ; purge level, out AX/BX as OSAPI_MEM_AVAIL
+                                 ; at that level, planned as if YOUR OWN
+                                 ; REGION could move;
                                  ; AH = MEMC_POST: BX = a window of yours, AL =
                                  ; the rank, out CF=0 posted (an EVT_WAKE
                                  ; follows the pass) / CF=1 a post of yours is
@@ -3547,9 +3548,10 @@ DRVM_CEIL_NET_PCI equ 39       ; ...and DRVC_NET's on kern_big, kern_emu and
                                 ; quotes this one
 DRVC_SOUND   equ 1
 DRVC_DISK    equ 2              ; block volumes: hard disks (SPEC.md 51.8).
-                                ; Its package door reaches TWO verbs and no
-                                ; sector (SPEC.md 52.1.4) - a read of YOURS
-                                ; sent straight into XMS on a 386:
+                                ; Its package door reaches THREE verbs and no
+                                ; sector (SPEC.md 52.1.4, 117.4) - a read of
+                                ; YOURS sent straight into XMS on a 386, and
+                                ; the installer:
 HDV_ARM      equ 1              ; DX = a buffer's segment (offset 0), CX =
                                 ; its bytes (whole sectors, <= 32768), DI:SI
                                 ; = the XMS linear address its first byte
@@ -3980,8 +3982,8 @@ EMS_PAGE     equ 16384          ; bytes a page, and a quarter of the frame
 ;     OSAPI_MOUSE, OSAPI_SRAND/RAND, OSAPI_SND_CAPS, OSAPI_SND_TONE,
 ;     OSAPI_TASK_SLEEP, OSAPI_TASK_YIELD, OSAPI_WM_WAKE and
 ;     OSAPI_TASK_ALIVE. OSAPI_WM_WAKE is not a new permission - its own
-;     cell below has always said "any context - ISR-safe and worker-safe,
-;     no lock needed" - and it is on this list because a list of what a
+;     cell below has always called it worker-safe in any context, with
+;     no lock needed - and it is on this list because a list of what a
 ;     worker MAY call is read as exhaustive, so a worker-safe slot missing
 ;     from it reads as forbidden. It is the carrier of every
 ;     worker-stages/UI-task-commits handshake in the tree (SPEC.md 77,
@@ -4001,8 +4003,8 @@ EMS_PAGE     equ 16384          ; bytes a page, and a quarter of the frame
 ;     it runs the whole clip with the scheduler locked, so a worker calling
 ;     it freezes the desktop instead of merely misattributing something.
 ;
-; The kernel's own app_bounce_task is the reference implementation of all
-; of this.
+; apps/bounce/bounce.asm's bn_worker (SPEC.md 112.2) is the reference
+; implementation of all of this.
 
 ; file error codes, pinned (SPEC.md 18.4): returned in AX with CF set
 FERR_OK      equ 0
@@ -4015,7 +4017,9 @@ FERR_FULL    equ 6               ; no free clusters
 FERR_DIRFULL equ 7               ; the current directory has no free slot
 FERR_PROT    equ 8               ; read-only/hidden/system/label/directory
 FERR_WPROT   equ 9               ; the media is write-protected
-FERR_BIG     equ 10              ; larger than the buffer (or than 64KB)
+FERR_BIG     equ 10              ; larger than the buffer - or, on a write,
+                                 ; than the 32MB a 16-bit sector count can
+                                 ; hold (SPEC.md 18.4.1)
 %define OSAPI_FERR_TEXT     KERNEL_SEG:0x0467   ; AX = a FERR_* above, out
                                  ; ES:SI = the KERNEL'S own NUL text for it
                                  ; (SPEC.md 18.4.11) - the Disk window's
@@ -6106,7 +6110,9 @@ CLIP_MAXKB equ 32                ; the clipboard's ceiling, KB. A put longer
                                  ; the bytes delivered, 0 meaning you are at
                                  ; or past the end - which is how the loop
                                  ; terminates. Offset AND capacity must each
-                                 ; be a cluster multiple; FERR_NAME if not.
+                                 ; be a cluster multiple (whole SECTORS on
+                                 ; kern_big, SPEC.md 18.4.4.2); FERR_NAME if
+                                 ; not.
                                  ; **THIS ONE IS RAW** (SPEC.md 20.14.3): a
                                  ; compressed file is delivered as it sits on
                                  ; the disk, wrapper and all, and the sizes it
@@ -6121,19 +6127,24 @@ CLIP_MAXKB equ 32                ; the clipboard's ceiling, KB. A put longer
                                  ; CF=1 FERR_NAME). SI = the name ON EVERY
                                  ; CALL, DX:BX = buffer (NOT ES:BX, as the
                                  ; other file slots take it), CX = its
-                                 ; capacity (a cluster multiple, READ_AT's
-                                 ; rule), ES:DI = YOUR 16-byte cursor, in any
-                                 ; segment. To start or seek: zero it and set
-                                 ; FSEQ_OFF (a cluster multiple). Out CF=0 and
+                                 ; capacity (whole SECTORS, READ_AT's kern_big
+                                 ; rule, SPEC.md 18.4.4.2; a cluster multiple
+                                 ; keeps the cursor hot), ES:DI = YOUR 16-byte
+                                 ; cursor, in any segment. To start or seek:
+                                 ; zero it and set FSEQ_OFF (a sector
+                                 ; multiple). Out CF=0 and
                                  ; DX:AX = bytes delivered, 0 at the end, the
                                  ; cursor advanced; CF=1 AX = FERR_*. It is
                                  ; READ_AT without the walk: READ_AT re-walks
                                  ; the chain from the front every call (142 ms
                                  ; a MB of offset, measured on a fixed disk),
                                  ; this reads from where the cursor stands.
-                                 ; Anything that remounts or writes makes the
-                                 ; next call re-seed from the name silently,
-                                 ; so a stale cursor is never an error. Only
+                                 ; A write, or a mount that reads a boot
+                                 ; sector, makes the next call re-seed from
+                                 ; the name silently, so a stale cursor is
+                                 ; never an error - but the cursor NAMES NO
+                                 ; FILE: zero it whenever the name or the
+                                 ; folder changes (SPEC.md 18.4.8.1). Only
                                  ; FSEQ_OFF is yours to write
 FSEQ_OFF    equ 12              ; the cursor's offset field (dword)
 FSEQ_SIZE   equ 16              ; ...and the cursor's size

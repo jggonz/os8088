@@ -16,8 +16,9 @@ modk_hdr:
 
 ; -----------------------------------------------------------------------------
 ; dkx_hook / dkx_unhook - take dock.inc's dkv over, and give it back
-; in:  nothing; the graphics lock is held by dock_apply's caller (bdk_apply's is the boot), so no
-;      operation can be executing while the table is rewritten (SPEC.md 30.5)
+; in:  nothing; the graphics lock is held by dock_apply's caller (bdk_apply's
+;      is the boot), so no operation can be executing while the table is
+;      rewritten (SPEC.md 30.5)
 ; out: CF = 0; every register preserved
 ;
 ; THE TABLE IS WRITTEN FROM HERE BECAUSE THE BASIC ADDRESSES ARE KNOWN HERE.
@@ -534,8 +535,9 @@ dkx_paint:
     mov al, [gfx_color]         ; byte-only read: gfx_lock_flag lives next
     push ax                     ; door. ON THE STACK, not in .bss, and that
                                 ; rests on dkx_paint having EXACTLY ONE EXIT
-                                ; below `.go` - the pen's, the region's and the hole's pops and
-                                ; dkx_ret_di's six at the bottom.
+                                ; below `.go` - the pen's, the region's and
+                                ; the hole's pops and dkx_ret_di's six at the
+                                ; bottom.
                                 ; The wm_fs_vis refusal returns ABOVE this, and
                                 ; the CF answer is after the pops. A second
                                 ; early return added below here leaks a word

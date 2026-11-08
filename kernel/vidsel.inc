@@ -385,8 +385,9 @@ section .text                   ; ...and the overlay's three end here
                                 ; otherwise reach the ror below, and the 8086
                                 ; does not mask a rotate count - kind 8 would
                                 ; rotate by 9 and answer for kind 0. cmp sets
-                                ; CF = 1 for AL <= VID_KIND_MAX, i.e. IN range, so one cmc
-                                ; makes CF = 1 mean "refuse" and the jump
+                                ; CF = 1 for AL <= VID_KIND_MAX, i.e. IN
+                                ; range, so one cmc makes CF = 1 mean
+                                ; "refuse" and the jump
                                 ; carries it straight out (jc and pop touch no
                                 ; flag). Setting CF before the compare would
                                 ; not work - cmp overwrites it.
@@ -398,9 +399,9 @@ section .text                   ; ...and the overlay's three end here
     inc cl                      ; ROR by n leaves bit n-1 of the original in
     mov al, [vid_avail]         ; CF, so n = kind+1 puts bit KIND there - which
     ror al, cl                  ; is what `test [vid_avail], 1 << kind` was.
-    cmc                         ; CL is 1..VID_KIND_MAX+1, never 0. Then invert to this
-.out:                           ; routine's published polarity: CF = 0 is yes
-    pop cx
+    cmc                         ; CL is 1..VID_KIND_MAX+1, never 0. Then
+.out:                           ; invert to this routine's published
+    pop cx                      ; polarity: CF = 0 is yes
     pop ax                      ; pop touches no flag
     ret
 %endmacro
@@ -2237,8 +2238,8 @@ vid_span_one:
 ; anywhere.
 ;
 ; The union's ORIGIN is (0, 0) by construction: display 0 sits there and every
-; other display is placed to its right or below it, so a bounding box needs only the far
-; corner.
+; other display is placed to its right or below it, so a bounding box needs
+; only the far corner.
 ; -----------------------------------------------------------------------------
 ; VSW_UNION %1, %2 - %1_desk_union, written once (kernel size pass 13): its
 ; callers are vid_disp_init, in CTRL.DRV (`vid`) and the boot blob (`bvs`),

@@ -2371,8 +2371,8 @@ desk_zx      resw 1             ; ...and its left column (SPEC.md 26.1)
 ; and SS is not DS on this system (SPEC.md 1), so a caption staged on the
 ; stack is unreachable by either and each site would need a kernel buffer of
 ; its own anyway. [desk_svc_seg] is the registering driver's segment and 0 is
-; "no zone": one compare in desk_live (its .svc arm) is the whole of what a machine with no
-; such driver pays at runtime.
+; "no zone": one compare in desk_live (its .svc arm) is the whole of what a
+; machine with no such driver pays at runtime.
 desk_svc_seg  resw 1            ; the driver that registered, 0 = none
 desk_svc_rec:                   ; ...and the record itself, IN THE RECORD'S
 desk_svc_cap  resb DSV_CAPMAX   ; OWN ORDER, so the copy is one `rep movsb`
@@ -2388,8 +2388,8 @@ desk_svc_cell resb 1            ; the cell it asked for (SPEC.md 26.9)
 %endif
 %endif
 desk_zdrv    resb 1             ; desk_draw_zone: current ZONE index - a
-                                ; BYTE, because DESK_NZ bounds it (24, 4 on kern_small) and
-                                ; every reader wants AL or BL. The saved
-                                ; [gfx_color] that used to sit here is on the
-                                ; routine's own stack now
+                                ; BYTE, because DESK_NZ bounds it (24; 4 on
+                                ; kern_small) and every reader wants AL or
+                                ; BL. The saved [gfx_color] that used to sit
+                                ; here is on the routine's own stack now
 section .text

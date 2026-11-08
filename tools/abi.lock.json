@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "2f0c55b8ccad8075c68853729b7707c0077cc55d61fc156affdc8b88c3c9f85c",
+  "fingerprint": "8ee8ec9d82a343ecaee04fe6089eb2f4da70f7b025cafb2f8b566be86d42cf46",
   "version": 12
  },
  "PKG_FMT": {
-  "fingerprint": "1f1fd60b3543677d42c972a5ee1984ade5e006d17e56f62bc33431865884c872",
+  "fingerprint": "f11a45b52a9cbd5f4717109f78ebf403b557f6adabef044ca7a97638de11abf9",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -1827,6 +1827,20 @@
    "from": 12,
    "guard": "DRV_VER",
    "reason": "big review 2026-11-08: contract COMMENTS corrected to match the code (worker register state, clipboard context, pen state after font_run/gfx_blit4, slot cross-references); no cell moved or re-contracted, so no bump",
+   "to": 12
+  },
+  {
+   "fingerprint": "f11a45b52a9cbd5f4717109f78ebf403b557f6adabef044ca7a97638de11abf9",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "big review 2026-11-08 round 2: contract COMMENTS corrected to match the code (gap reviews and coherence pass); no cell moved or re-contracted, so no bump",
+   "to": 10
+  },
+  {
+   "fingerprint": "8ee8ec9d82a343ecaee04fe6089eb2f4da70f7b025cafb2f8b566be86d42cf46",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "big review 2026-11-08 round 2: contract COMMENTS corrected to match the code (gap reviews and coherence pass); no cell moved or re-contracted, so no bump",
    "to": 12
   }
  ]

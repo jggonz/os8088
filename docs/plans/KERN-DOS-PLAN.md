@@ -729,7 +729,7 @@ reads back byte for byte after the ROM's bootstrap, after stage 2, and at a
 settled desktop.
 
 So `kd_bda` writes `'KDX1'`, the code word (its high byte the refusal
-reason, SPEC.md 96.40.7) and the arena in KB (96.41.1) there, and no checksum, `hbm_ask` reads
+reason, SPEC.md 96.40.7) and the arena in KB (96.41.1) there, with no checksum; `hbm_ask` reads
 them beside the pointer, and `hbm_res` stages the code for the stub to hand to
 `hbm_wake` in a register. The window then finds `DST_RAN` with a number.
 

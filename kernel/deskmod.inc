@@ -16,9 +16,9 @@
 ; QUERY first, inside its ENTRY PROC, where it is about to read its own state
 ; file off the system disk - so the disk is already required, and QUERY is the
 ; load point - or the loader's step 5 just before it, for an OS88_F_DESK
-; package being read off a disk anyway (desk_need's second caller). No verb
-; loads it: DRAG and RELEASE only follow a MAKE that
-; succeeded, the hover, show and key arms only ever act on a WF_DESK window,
+; package being read off a disk anyway (desk_need's second caller). No other
+; verb loads it: DRAG and RELEASE only follow a MAKE that succeeded, the
+; hover, show and key arms only ever act on a WF_DESK window,
 ; and only MAKE, in this image, sets WF_DESK. With no image every slot is
 ; mod_gone (CF = 1, registers kept), which is the right answer for each.
 ;
@@ -50,9 +50,8 @@ section .cold
 ;
 ; QUERY IS THE LOAD (SPEC.md 11.103.10): AL = 0 is desk_need's answer - CF =
 ; 0 the layer is resident from here until the last widget goes (desk_drop_x),
-; CF = 1 it is not (no
-; DESK.DRV on the system disk, no heap, a stale stamp), and the Sticky App takes the
-; titled path as on kern_small. Every other verb is the image's dkd_verb, and
+; CF = 1 it is not (no DESK.DRV on the system disk, no heap, a stale stamp),
+; and the Sticky App takes the titled path as on kern_small. Every other verb is the image's dkd_verb, and
 ; with no image the slot is mod_gone's refusal. A package carrying
 ; OS88_F_DESK has normally been given the image already, by the loader's
 ; step 5 (desk_need's banner says why there), so its QUERY is mod_need's
@@ -375,8 +374,8 @@ dkd_key:
 ; package-side binary of its own and carried here, on a paragraph, because
 ; this image's lifetime is the one it needs: loaded by the first Sticky App's
 ; QUERY (or the loader's step 5 for it), pinned, held until the last widget
-; goes (desk_drop_x). No
-; kernel code calls it and it calls no kernel code but the API cells; every
+; goes (desk_drop_x). No kernel code calls it and it calls no kernel code but
+; the API cells; every
 ; Sticky App built STIK_LIB far-calls it with its own DS. It costs the kernel
 ; nothing resident: LIB above is the only line that knows it is here
 ; -----------------------------------------------------------------------------

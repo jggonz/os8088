@@ -4,11 +4,11 @@
 ; The Disk window - a minimal file manager for the FAT data floppy
 ; (SPEC.md 22). FOUR of the user's windows may be open at once, each on its
 ; own drive and its own folder (KIND_FILES, cap VIEW_SLOTS + 1: the fifth pool
-; block is the Standard File chooser's, SPEC.md 38.1). No boot-time window; app_launch
-; creates one on demand (fm_kinit is the KD_INIT), and CMD_FILES dispatch /
-; desk_click reach it through files_open / files_open_drive, which front an
-; existing window on the target, or create one, or - at the cap - move the
-; frontmost one there.
+; block is the Standard File chooser's, SPEC.md 38.1). No boot-time window;
+; app_launch creates one on demand (fm_kinit is the KD_INIT), and CMD_FILES
+; dispatch / desk_click reach it through files_open / files_open_drive, which
+; front an existing window on the target, or create one, or - at the cap -
+; move the frontmost one there.
 ;
 ; THE RULE THE WHOLE MODULE RESTS ON (SPEC.md 22): paints read the window's
 ; own cache, and a listing mount writes straight into it. There is no global
@@ -20,8 +20,8 @@
 ; one currently mounted.
 ;
 ; Per-window state is an FS_SIZE-byte KD_POOL block (fm_pool, FM_NSLOT x
-; FS_SIZE: the user's four and the chooser's)
-; that app_launch allocates and hands to fm_kinit in DI. fm_vp_set
+; FS_SIZE: the user's four and the chooser's) that app_launch allocates and
+; hands to fm_kinit in DI. fm_vp_set
 ; publishes the acting window's block, cache segment and instance record
 ; into [fm_vp] / [fm_vseg] / [fm_vinst], and fm_layout mirrors the fields
 ; the 400-line painter reads on its hot path - it uses every register

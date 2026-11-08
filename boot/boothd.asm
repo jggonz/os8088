@@ -8,11 +8,11 @@
 ; starts its own loading screen (SPEC.md 2.9.9).
 ;
 ; **THIS IS A SECOND SECTOR AND NOT A KNOB, AND THAT IS MEASURED.** The floppy
-; sector's last non-zero byte is at offset 492, so there are seventeen bytes
-; between it and the signature, and what a hard disk needs does not fit in
-; seventeen bytes. SPEC.md 52.9 predicted a second variant and this is it.
+; sector's last non-zero byte was at offset 492 when this was decided, so there
+; were seventeen bytes between it and the signature (472 and thirty-seven
+; today), and what a hard disk needs does not fit in either. SPEC.md 52.9 predicted a second variant and this is it.
 ;
-; It is a second loader, not a variant: it does stage 1's AND stage 2's job
+; It is a second LOADER as well as a second sector: it does stage 1's AND stage 2's job
 ; for a hard disk (SPEC.md 2.9.9), with no canary, no blob sum and no video
 ; setup, and it never enters stage 2. Three things differ in the ARITHMETIC
 ; it shares with boot/boot.asm:
@@ -53,12 +53,14 @@
 ; BPB_RootEntCnt rather than from a format. A FAT16 partition needs no new
 ; code in it at all.
 ;
-; And KERNEL.SYS must still be FIRST and CONTIGUOUS from cluster 2, because
+; And KERNEL.SYS must still be CONTIGUOUS - from cluster 2, or from the data
+; offset in [kofs] - because
 ; this reads it as a flat run rather than walking a cluster chain - which is
 ; what makes it fit in 512 bytes (SPEC.md 19.3). os88disk.py guarantees that
-; on a floppy at image-build time; the installer guarantees it here by
+; on a floppy at image-build time; the installer guarantees it here, by
 ; formatting the partition and writing KERNEL.SYS before anything else
-; (SPEC.md 52.10.4).
+; (SPEC.md 52.10.4) or by putting it in the first free run long enough
+; (SPEC.md 52.10.15).
 ;
 ; Assembled with BOOT2_SECS, BLOB_SEG and SPL_FSEG (and KZ_HD/KZ_RPARA under
 ; KZIP) from the kernel's own build; the kernel's length and start are the
@@ -430,7 +432,8 @@ chs:
 ; fail - print AL and stop. Three ways to get here and each names itself with
 ; ONE LETTER, because a dark screen is what the MBR's old stub existed to
 ; prevent and because three words do not fit - this sector has 512 bytes and
-; a hard disk's geometry probe and 32-bit arithmetic to pay for out of them.
+; a hard disk's BPB geometry checks and 32-bit arithmetic to pay for out of
+; them.
 ; The same trade BOOTDIAG=1 made in the floppy sector before stage 2 took its
 ; two status digits (SPEC.md 2.9.10):
 ;
@@ -476,9 +479,9 @@ section .text
 ; The floppy sector takes KERNEL_SECTORS as a -D at build time, because the
 ; Makefile measures the kernel it is about to put on the image. This sector is
 ; built long before it knows which KERNEL.SYS it will boot - it ships as
-; BOOTHD.SYS on the system disk (SPEC.md 52.10.16) - so the count is a word the installer writes when it writes the
-; VBR, having just written KERNEL.SYS and knowing exactly how big it was
-; (SPEC.md 52.10.4).
+; BOOTHD.SYS on the system disk (SPEC.md 52.10.16) - so the count is a word
+; the installer writes when it writes the VBR, having just written KERNEL.SYS
+; and knowing exactly how big it was (SPEC.md 52.10.4).
 ;
 ; PINNED AT OFFSET 508, immediately below the signature, and that is the whole
 ; reason it is placed by hand rather than left with the other variables: a

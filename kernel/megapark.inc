@@ -155,8 +155,8 @@ mpk_stub:
     ; --- THE COPIES, before the restore (MPK_NCPY) ----------------------------
     ; the banked table bytes back into the kernel's tables (MPK_PCPY), a runs
     ; park's later runs out of the image, and the HMA's 64KB (MC4). This stub
-    ; runs on its own GDT
-    ; with IF = 0 and NMI off, so the kernel's GDT, LDT and IDT are only data
+    ; runs on its own GDT with IF = 0 and NMI off, so the kernel's GDT, LDT
+    ; and IDT are only data
     mov bp, [MPK_NCPY]
     mov si, [MPK_NREG]
     shl si, 3

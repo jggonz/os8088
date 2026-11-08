@@ -18,8 +18,9 @@
 ;
 ; The region goes with the instance record (SPEC.md 29.2 rule 7): both
 ; teardown sites call mem_free_rec, which releases every claim the slot owns,
-; region included, just before the store that frees the record. Only the UI task loads (loader_run runs on it exclusively), so
-; the claim never races itself.
+; region included, just before the store that frees the record. Only the
+; UI task loads (loader_run runs on it exclusively), so the claim never races
+; itself.
 ;
 ; loader_run is called only from the UI task (ui.inc step 3) with the gfx
 ; lock NOT held - it takes and releases the lock itself around wm_destroy /
@@ -287,7 +288,8 @@ ld_unreserve:
 ; It fails two of these five by design, which is SPEC.md 51.1's two
 ; independent gates working, and merging it would delete them.
 ;
-; All three callers are .cold and so is this (SPEC.md 2.6), so the call is near.
+; All three call sites - two in this file, drv_check's in driver.inc - are
+; .cold and so is this (SPEC.md 2.6), so the call is near.
 ; -----------------------------------------------------------------------------
 ld_hdr_ok:
     cmp word [es:si+LD_H_MAGIC], 0x384F      ; 'O','8'

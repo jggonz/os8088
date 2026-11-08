@@ -16,7 +16,7 @@
 ; takes HDDTOOL.DRV's shape (SPEC.md 52.11): a driver-format image with class
 ; DRVC_OVL, no row in drv_tab, no publication slot and no Control Panel page,
 ; loaded and attached by its OWNER - which for HDDTOOL is HDD.DRV and here is
-; the kernel. It takes no drv_tab row, so DRV_MAX and DRVC_MAX do not count it.
+; the kernel. Neither DRV_MAX nor DRVC_MAX counts it.
 ;
 ; WHAT IT BOUGHT, and it is the whole reason: a machine with no XMS - which is
 ; every 8088, and the machine this project is calibrated against - was
@@ -685,7 +685,7 @@ xm_copy:
 ; instance.inc's inst_rel_rec does the record -> slot conversion once for the
 ; sound release and this one together and TAIL-JUMPS in, so this entry is
 ; reached at the same depth it always was. The fourth is ld_unreserve
-; (loader.inc, ld_unreserve), SPEC.md 41.5.1's abort sweep, which owes the blocks and
+; (loader.inc), SPEC.md 41.5.1's abort sweep, which owes the blocks and
 ; not a sound grant and comes in far through cw_xm_release_rec.
 ;
 ; That fourth caller is why the two releases are not simply one body: it is in

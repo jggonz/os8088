@@ -116,7 +116,8 @@ KSIG_OFF    equ 4096 - BOOT2_KNOBSEC * 512 + BOOT2_SMALLSEC * 512 ; SPEC.md 18.9
                                 ; sectors 57 and 106..110. 21, where this
                                 ; sits, crosses no head on kern_big's 360KB
                                 ; and 720KB disks: t_canary walks runs from
-                                ; the data area and does not see it. The Makefile's KSIG_OFF block carries the
+                                ; the data area and does not see it. The
+                                ; Makefile's KSIG_OFF block carries the
                                 ; whole derivation
 B2_KSECS    equ ((MODC_START + 511) / 512) - BOOT2_SECS  ; what is left to read
 

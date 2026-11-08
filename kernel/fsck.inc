@@ -307,9 +307,10 @@ FSK_NENT    equ 1
 ;
 ; **ES IS THE WORKSPACE, FROM fsk_entry's `mov es, dx` TO ITS RETURN** -
 ; except inside fsk_delsys, which spends ES on its name compares and on
-; the caller's buffer - and nothing else loads it again: KC banks it round every kernel routine, and the two
-; DS swaps (fsk_qpop, fsk_ph_fatcmp) copy it and leave it alone. So no
-; routine here reloads it, and the kernel holds no [fsk_ws] (kernel size pass
+; the caller's buffer - and nothing else loads it again: KC banks it round
+; every kernel routine, and the two DS swaps (fsk_qpop, fsk_ph_fatcmp) copy
+; it and leave it alone. So no other routine reloads it, and the kernel
+; holds no [fsk_ws] (kernel size pass
 ; 17: fourteen reloads of a value ES already had). FSK_SIZE is the one verb
 ; that has no workspace, and it touches none.
 

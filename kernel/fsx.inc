@@ -190,10 +190,10 @@ fsx_capstab:                    ; indexed by VID_* (VGA 0, HERC 1, CGA 2, EGA 3)
 ; fsx_run - the bracket (SPEC.md 53.1, slot 0x0235 via X stub)
 ;
 ; in:       AX = near entry inside the caller's image, BX = the caller's own
-;           window ptr, CX = flags (bit 0 = FSXF_KEEPWORKER, bit 1 =
+;           window ptr, CL = flags (bit 0 = FSXF_KEEPWORKER, bit 1 =
 ;           FSXF_FASTTICK, bit 2 = FSXF_RATE with DX/DI - kern_big, never
-;           with FASTTICK - bit 3 = FSXF_REAL, accepted and stripped on every
-;           kernel; others refuse), CH = the display (0 the window's, n
+;           with FASTTICK - bit 3 = FSXF_REAL, which every kernel accepts
+;           and only kern_mega acts on; others refuse), CH = the display (0 the window's, n
 ;           display n-1 on kern_big; kern_small takes 0 alone);
 ;           ES = the CALLER's DS (the X stub) - the ownership fence reads it.
 ;           UI-task window-callback context, gfx lock held.
@@ -1238,8 +1238,8 @@ fsx_wdisp: resb 1               ; the display the running bracket's window is
                                 ; boot-time init either - and STILL CORRECT
                                 ; after the byte above lost the same argument
                                 ; (SPEC.md 12.8.5.1), because both are legal
-                                ; only inside the bracket.
-                                ; SET OF READERS, so a new one reached from
+                                ; only inside the bracket. The claim is about
+                                ; the SET OF READERS, so a new one reached from
                                 ; desktop code falsifies it - and it is the
                                 ; ONE fact fsx_run still establishes about
                                 ; displays, the acting on it having moved to
@@ -1519,7 +1519,7 @@ fsx_rprepf:
     jb .para                    ; conventional: it runs where it is
     mov [ss:fsx_rhi], ax        ; ABOVE 1MB (OS88_HIGH): a copy, low
     mov [ss:fsx_rhi+2], dx
-    mov ax, [di+I_SIZE]         ; image + bss, FFFFh for a whole 64KB
+    mov ax, [di+I_SIZE]         ; image + bss, at most 0xFE00 (SPEC.md 20.1.1)
     mov cx, ax
     inc cx
     and cx, -2                  ; the copy moves words (mega_imghif's sum): CX,
@@ -1978,7 +1978,7 @@ fsx_rxrows:
 ; service area - its DSV_BLK and DSV_PKGCALL (SOUND: its DSV_TICK and
 ; DSV_STREAM too), and the REAL paragraph it runs at: its own when its image
 ; is conventional, else a conventional claim's, the image and bss copied down
-; and back up (fsx_rcopyf; SOUND's at the drop and the return, fsx_rsndf).
+; and back up (fsx_rcopyf; SOUND's at the drop and the return, fsx_rsnddn and fsx_rsndup).
 ; SOUND's paragraph must be a multiple of 20h - SBL_DSCS derives DS = CS
 ; only there - and its SNDV_RMODE words must each have a real segment.
 ; CF = 1: AL = FSXR_DROOM no room, FSXR_DRV a word with no segment. PM, DS =
@@ -2207,7 +2207,7 @@ fsx_rcopyf:
     jz .o
     mov es, bx
     mov bx, rms_drv - rms_lo
-    mov dx, RMD_NA              ; (not SOUND's: fsx_rsndf, at IF = 0)
+    mov dx, RMD_NA              ; (not SOUND's: fsx_rsnddn / fsx_rsndup, at IF = 0)
 .d:
     call fsx_rcprow
 .dn:
@@ -2868,7 +2868,9 @@ fsx_rupf:
     sti                         ; the copy back at IF = 1: no other task runs
     mov al, 1                   ; (frozen) and the rate is off, so nothing
     call MEGA_SEL_CODE:fsx_rcopyf ; in protected mode writes the window's
-                                ; copy meanwhile - nor a low driver's image
+                                ; copy meanwhile - but the package's own
+                                ; SERIAL.DRV lease's ring (fsx_rserdn's
+                                ; known limit) - nor a low driver's image
     call fsx_rfree              ; ...and every claim back: the copies', the
     pop es                      ; service area's
     popa
@@ -2907,7 +2909,7 @@ FSX_RSR     equ 0               ; the scratch: the rows...
 FSX_RSN     equ FSXL_NMAX * RMS_SSZ ; ...the runs
 FSX_RSV     equ FSX_RSN + FSXL_RUNS * RMR_SIZE ; ...and its counters:
 FSV_NSTR    equ 0               ; db: rows written
-FSV_DMSK    equ 1               ; db: the classes asked (1 DISK, 2 EMS)
+FSV_DMSK    equ 1               ; db: the classes asked (1 DISK, 2 EMS, 4 SOUND)
 FSV_NRUN    equ 2               ; dw: runs written
 %if FSX_RSV + 4 > MPS_SIZE
   %error "the extent list's scratch is the park's: MPS_SIZE must hold FSXL_NMAX rows and FSXL_RUNS runs"
@@ -3143,7 +3145,7 @@ cpu 286
 ; data is in the same copy, read through CS: and written with DS = CS; the
 ; kernel's through KERNEL_SEG (a real segment in the bracket), and the pool's
 ; table as fsx_rsvcf copied what of it they need (mx_tab itself is above 1MB,
-; in the tables' tail). WHY NOT RESIDENT `.text`: these are ~1.6 KB that a
+; in the tables' tail). WHY NOT RESIDENT `.text`: these are ~2.3 KB that a
 ; machine needs only inside a real-mode bracket, and `.text` is conventional
 ; memory on every kern_mega machine for ever; a module would be a system-disk
 ; read at every Play (W1's decision 1). Copied out of `.mega` they cost the

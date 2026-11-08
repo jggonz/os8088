@@ -394,14 +394,17 @@ user gives a different workflow. `apps/wirefleet/` and its SPEC.md section
   CONVENTIONAL memory** once it has switched - `MEGA_RESIDENT`, `KERN_SIZE`
   less the `.cold` and `.mega` rungs that go above 1MB, and NOT `KERN_SIZE`,
   which is a boot-time transient there - and BOOTS on its 1MB floor machine's
-  640KB (guard 5's mega arm, `MEGA_BOOT_KB`); budgeted is not RELEASED, and no
-  release artefact carries its disks. **A budget is met EXACTLY at an upstream merge or a release;
+  640KB (guard 5's mega arm, `MEGA_BOOT_KB`); budgeted and, since 2026-11-07,
+  RELEASED: the release zip requires its disks (`mkzip.py`'s `mega` group),
+  which `make mega` builds and `all` does not. **A budget is met EXACTLY at an upstream merge or a release;
   branch and integration work may run up to 2KB over it** (`KERN_GRACE` —
   features land whole and are size-passed after), and `make budget-check` is
   where that grace ends, on all four budgeted kernels. Over a budget at that point is a conversation with
   the owner and a rework of the budgets, never a quiet raise.
   `KERN_CODE_MAX` is separate and absolute: `.text` + `.bss` inside one 64KB
-  window because offsets are 16 bits. **Booting on a machine and residing in
+  window because offsets are 16 bits - and on kern_big the near-called VGA
+  rung shares that window above the FAT window and LOW, so its guard binds
+  first (`kernsize`'s `window` line, docs/KERNEL-MEMORY.md). **Booting on a machine and residing in
   one are different questions** — the 128KB boot is where overlays and boot
   order broke machines whose resident size was well under it. `kernsize`
   prints both lines; quote the one you mean. **None of the rules binds a KNOB

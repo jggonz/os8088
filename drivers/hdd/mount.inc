@@ -17,7 +17,7 @@
 ; -----------------------------------------------------------------------------
 ; hd_mount - mount the selected device's first FAT partition
 ; in:  nothing; the gfx lock is HELD (a page click)
-; out: nothing; [hd_msg] says what happened
+; out: nothing; [hd_msgc] (an HDM_*) says what happened
 ; clobbers: flags
 ;
 ; It mounts the FIRST FAT partition and stops; the loop that takes all four is
@@ -109,7 +109,9 @@ hd_mount:
 ; -----------------------------------------------------------------------------
 ; hd_mount_one - mount the partition [hd_pslot] names (module internal)
 ; in:  SI = its entry, [hd_sel] = the device; the gfx lock is HELD
-; out: [hd_nmnt] incremented on success; [hd_msg] set on a failure
+; out: [hd_nmnt] incremented on success; [hd_msgc] set on a full table or a
+;      refused add. CF = 1 there too, but a partition the mount rejects
+;      leaves OSAPI_VOL_DEL's CF - hd_svc_mount's answer is hd_vol_of's
 ; clobbers: flags
 ;
 ; NO LISTING CLAIM (SPEC.md 22.6). This used to claim 6KB and hand it over
@@ -449,7 +451,7 @@ hd_unmount_row:
     ret
 
 ; -----------------------------------------------------------------------------
-; hd_vol_of - which kernel volume is mounted on one partition (SPEC.md 52.12)
+; hd_vol_of - which kernel volume is mounted on one partition (SPEC.md 52.10.4.2)
 ; in:  AL = the device index, AH = the partition slot
 ; out: AL = the kernel's volume index, or 0FFh if nothing is mounted there
 ; clobbers: AX (the output), flags

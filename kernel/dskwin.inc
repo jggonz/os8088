@@ -18,10 +18,10 @@
 ;     +           512   dsk_secbuf  FIRST: the one int 13h TARGET here, so it
 ;                                   takes the rung's 512-aligned base
 ;     +    DSK_OVLPAD   0 on every shipped build
-;     (disk_dir, 768, and disk_icons, 2,048, sat here and made it 7,936;
-;     both are gone.) LOW_SEG is
-;                       a rung base (guard 6); dsk_secbuf is aligned because it
-;                       is the rung's first bytes, and the %if below holds it
+;
+; disk_dir (768) and disk_icons (2,048) sat after dsk_secbuf and made it
+; 7,936; both are gone. LOW_SEG is a rung base (guard 6); dsk_secbuf is
+; aligned because it is the rung's first bytes, and the %if below holds it.
 ;
 ; That is what the boot overlay is meant to land in and spill through
 ; (docs/plans/completed/BOOT-LADDER-PLAN.md stage B): `.ovl`, the window half of the
@@ -191,7 +191,7 @@ DSK_OVLPAD   equ 0              ; a plain kern_big: the region is 5,120 and
 ; machine-wide store's size and is the only body count left. DSK_ICO_SIZE is
 ; still the width of one.
 DSK_ICOIX_N  equ DSK_NENT        ; one REFERENCE byte per entry, and DSK_NENT
-                                 ; on every build: one byte per entry, in the
+                                 ; on every build. The bytes sit in the
                                  ; caller's store beside the entries (SPEC.md
                                  ; 22.6.3, 25.9) - there is no `.lowbss`
                                  ; floor any more. It was DSK_VENT here while
@@ -215,7 +215,7 @@ DSK_ICOIX_N  equ DSK_NENT        ; one REFERENCE byte per entry, and DSK_NENT
 ; busier than ours ever were: LEMMINGS 68 entries, F15 66, TD1 41" - and
 ; kern_small has no DOS: the plan to run one there was not realised, and
 ; `build/small.img` / `build/small360.img` carry 12 root entries with 8 in the
-; busiest folder. So on that kernel the second 768 bytes of `disk_dir` list
+; busiest folder. So on that kernel the second 768 bytes of `disk_dir` listed
 ; nothing any disk it ships has, while `.lowbss` is the tightest rung in the
 ; kernel and its bottom 2,112 bytes are what the boot overlay's window half
 ; spills through.
@@ -272,18 +272,17 @@ DSK_NENT     equ 32
 ; `disk_icons` WAS **2,048 bytes of `.lowbss`** - SPEC.md 25.9 replaced it
 ; with a machine-wide store and one reference byte per entry - and step 4 of
 ; `disk_mount` is what fills the references: a 16x16 body per new package,
-; read with one `int 13h` each. It is the DISK WINDOW's, and `kern_dos` has no window, no
-; `fm_draw_icon16` and no file manager - MEASURED on the guest after a
-; handoff, the array held 192 non-zero bytes and every reader of it in that
-; root was inside the mount that wrote it.
+; read with one `int 13h` each. It is the DISK WINDOW's, and `kern_dos` has
+; no window, no `fm_draw_icon16` and no file manager - MEASURED on the guest
+; after a handoff, the array held 192 non-zero bytes and every reader of it in
+; that root was inside the mount that wrote it.
 ;
 ; **`disk_dir` STAYED, and that was a correction** - until
 ; docs/plans/LISTING-HOME-PLAN.md 13 took the listing out of `.lowbss`
-; altogether (below). The listing looked equally
-; dead and is not: SPEC.md 96.47's live resume finds `HIBERNAT.IMG` with
-; `dsk_find_name_x`, which walks `[disk_nfiles]` entries through
-; `dsk_get_dir_x` - so the 768-byte half has a real consumer and only the
-; 2,048-byte half does not. The two were one switch for a day and the resume
+; altogether (below). The listing looked equally dead and was not: SPEC.md
+; 96.47's live resume found `HIBERNAT.IMG` with `dsk_find_name_x`, which
+; walked `[disk_nfiles]` entries through `dsk_get_dir_x` - so the 768-byte
+; half had a real consumer and only the 2,048-byte half did not. The two were one switch for a day and the resume
 ; row is what said so.
 %ifndef KD_BUILD
   %define DSK_WANT_ICONS        ; the kernel, either size

@@ -2196,8 +2196,9 @@ hbm_hfree:
 ; clobbers: AX, BX, DX, DI, BP
 ;
 ; THE SKIP LIST: DRVC_DISK is memory and the ROM's int 13h, DRVC_FILE the
-; cable and DRVC_FILE2 the RAM disk, things a DOS program WANTS rather than fights -
-; neither owns a chip anyone is about to take. The caller's third is 96.23.6.
+; cable and DRVC_FILE2 the RAM disk, things a DOS program WANTS rather than
+; fights - none of them owns a chip anyone is about to take. The caller's own
+; extra class (DL) is 96.23.6.
 ; DRVC_EMS is a board's memory with packages holding pages of it (107.6).
 ; DRVC_CD is a read-only volume a DOS program may be reading (119.1).
 ;
@@ -3235,7 +3236,7 @@ hbm_dosrun:
     xor bh, bh                  ; **[mou_port] IS ALREADY A BYTE OFFSET** and
                                 ; not a row number: `mou_isr` walks the table
                                 ; with `inc bx`/`inc bx` against MOU_PEND and
-                                ; the settle banks that same BX, which is why
+                                ; mou_settle banks that same BX, which is why
                                 ; MOU_P2ROW is 4 on a two-port machine rather
                                 ; than 2. Scaling it again reads past the end
                                 ; of `mou_bases` and hands kern_dos whatever

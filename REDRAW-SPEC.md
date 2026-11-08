@@ -34,7 +34,7 @@ PERFORMANCE.md §1 on why the distinction is worth keeping.)
 ### Why — two facts, neither of them the app's choice
 
 1. **The kernel erases before every paint.** `wm_draw_win` fills the whole
-   content area with white and *then* calls `W_PAINT`. This is
+   content area with white and *then* calls `W_PAINT`. This was
    unconditional, for every window, and there was no "do not erase me" flag.
    By the time the app was asked to paint, its pixels were already gone.
    Part 1 did not change it; SPEC.md §11.90.1's `WF_OWNBG` has since made the
@@ -399,8 +399,8 @@ edge). Neither says *"here is the rect you owe"*.
 #### What consumer 2 is actually blocked on, measured
 
 **`wm_draw_win` white-fills the whole content before every `W_PAINT`** — Part
-1's point 1, true when this was measured (SPEC.md §11.90.1's `WF_OWNBG` is
-the opt-out since), and `apps/paint`'s own `pt_fsbed`
+1's point 1, true when this was measured (SPEC.md §11.90.1's `WF_OWNBG` has
+been the opt-out since), and `apps/paint`'s own `pt_fsbed`
 comment documents it. So a slot that tells Paint which rect it owes achieves
 **nothing** until the kernel stops erasing the rest, and that is a change to the
 kernel's erase contract rather than an optimisation: every application depends

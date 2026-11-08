@@ -23,9 +23,10 @@
 ; mouse_x/mouse_y/mouse_btn directly (the ISR keeps them fresh; the cursor
 ; stays hidden - the highlight is the feedback). The pixels under the
 ; dropped menu are saved to a heap claim sized from its rect ([menu_sseg],
-; menu_drop) and put back on release - or repainted, if the claim is refused. It returns
-; a (cell, item) pair rather than a flat command, because item numbering
-; now has to mean something inside a menu set the kernel has never seen.
+; menu_drop) and put back on release - or repainted, if the claim is refused.
+; It returns a (cell, item) pair rather than a flat command, because item
+; numbering now has to mean something inside a menu set the kernel has never
+; seen.
 ;
 ; Only the bar-specific half of that is menu_track's own. The tracker is
 ; menu_drop, anchored by variables rather than by MBAR_H and polling
@@ -1732,9 +1733,9 @@ menu_popup:
 ; needs no allocator of its own. It IS a heap claim (SPEC.md 50.2), and it is
 ; claimed HERE and released before this routine returns - sized from the
 ; menu's rect, at most MENU_SAVE_KB (the ceiling the clamps below hold and
-; kernel.asm asserts), for exactly as long as a menu is on screen. It used to be taken once at menu_init and
-; held for the session, which is 20KB a 128KB machine was paying for at every
-; instant it was not looking at a menu.
+; kernel.asm asserts), for exactly as long as a menu is on screen. It used to
+; be taken once at menu_init and held for the session, which is 20KB a 128KB
+; machine was paying for at every instant it was not looking at a menu.
 ;
 ; **The claim can now fail**, where before it could only fail at boot. That
 ; needs no new failure path: `[menu_sseg]` = 0 already means "no buffer", the
@@ -2573,7 +2574,8 @@ MENU_LOGO_N equ 6               ; ...and menu_relayout stamps this into cell
 menu_items_file:
     dw menu_s_close
 %ifdef OS88_SHORTCUTS
-    dw sc_s_remx                ; item 1, swapped by desk_select / desk_unsel_x / sc_m_del (SPEC.md 26.8.5)
+    dw sc_s_remx                ; item 1, swapped by desk_select /
+                                ; desk_unsel_x / sc_m_del (SPEC.md 26.8.5)
 MENU_FILE_N equ 2
 %else
 MENU_FILE_N equ 1

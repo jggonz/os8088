@@ -166,11 +166,11 @@ MODR_SHIFT  equ 2               ; ...still a power of two, so the id -> row
 section .text
 ; DATA stays in the kernel segment, reached through DS, exactly as a cold
 ; module's own data does (SPEC.md 2.6). The CODE below is .cold, and that is
-; not a tidiness choice: in .text it would be ~430 bytes against the 438 this
-; kernel has left under KERN_CODE_MAX, and that guard cannot be raised by
-; anybody. Being cold also means the module thunks that call mod_need are in
-; the same segment and reach it with a NEAR call, so the pair of cw_* shims
-; the first draft needed does not exist.
+; not a tidiness choice: in .text it would have been ~430 bytes against the
+; 438 the kernel had left under KERN_CODE_MAX when this was written, and that
+; guard cannot be raised by anybody. Being cold also means the module thunks
+; that call mod_need are in the same segment and reach it with a NEAR call,
+; so the pair of cw_* shims the first draft needed does not exist.
 
 %ifdef DOCK_OPT
 mod_f_dock: db 'DOCK.DRV', 0
@@ -982,7 +982,7 @@ mod_drop:
 ; read lands them. `.bss` IS zero at boot, which is precisely why clip.inc
 ; needs no init entry point.
 ;
-; What this routine is for is the OTHER thing: a row's resting value is not
+; What this routine is for is the OTHER thing: a slot's resting value is not
 ; zero. Every mod_fp slot must read mod_gone before the first thunk runs, or a
 ; thunk that reaches its far call ahead of its own mod_need jumps to segment
 ; 0. mod_need cannot be trusted to be the only door, because a thunk with the
