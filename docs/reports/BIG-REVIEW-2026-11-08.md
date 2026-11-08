@@ -153,6 +153,8 @@ scratch directory, to read a listing.
 | `synth/doc-owner-questions.md` | the seven concerns the doc pass could not settle as a text fix | which comments record a live defect or a rule to decide |
 | `areas/*.md` | the 25 first-round reports and the 12 gap reports | evidence, code citations, rethinks |
 | `data/*.json` | the verified findings, strengths and doc fixes behind each report | the verdict on any one finding |
+| `owner-decisions.md` | the owner's two rounds of answers, 2026-11-08 (binding) | what is decided (section 10) |
+| `followup-*.md` | the follow-ups the answers asked for: canary, purgeable, decisions 6-8, already-exists | the corrected figures marked "(follow-up, 2026-11-08)" |
 
 ## 3. Where we stand
 
@@ -312,7 +314,7 @@ corrected.
 | H kern_mega | - | - | +20 / +20 | above 1MB +19 / ~+141 |
 | I HDD.DRV, XMEM.DRV, DOS.O88's XMS | 0 / 0 | - | - | DOS.O88 +52 / +157; HDD.DRV +12 / +58 |
 | **total** | **~+508 / ~+945** | **~+372 / ~+586** | **~+232..+241 / ~+420..+429** | `.ovl` +82 big against 1 byte free |
-| **total after the owner's answers** (owner and follow-up, 2026-11-08) | **~+341 / ~+762** | **~+220 / ~+418** | **~+179 / ~+355** | `.ovl` +62 big; `.boot2` A +69 big and mega, +18 small |
+| **total after the owner's answers** (owner and follow-up, 2026-11-08) | **~+341 / ~+744** | **~+220 / ~+400** | **~+179 / ~+342** | `.ovl` +62 big; `.boot2` A +69 big and mega, +18 small |
 
 Notes on these totals:
 - **The owner's "packages are trusted" ruling is applied** (owner,
@@ -325,13 +327,19 @@ Notes on these totals:
   leave the shipped totals. kern_mega keeps closing the faulting package, as
   it does today.
 - **The same weighing, applied by the follow-up** to the other guards whose
-  failure no machine has met: BR-84 (+4, the panel's own table bound) leaves
-  with the panel; BR-85's code half (+3: "latent unless a package IRQ handler
-  calls WAKE, and none was traced") is held, because the SDK already states
-  the precondition; BR-107 (+4) and BR-109's optional doors (+12), which
-  `synth/bugs.md` calls "the same kind" as the six, take their documented
-  form. The fences against hostile FILES (BR-7, BR-23, BR-44, BR-59) are NOT
-  in this class and stay.
+  failure no machine has met. Diagnostics, behind knobs with the panel (the
+  owner's decision 1): BR-84 (+4, the panel's own table bound); BR-80's
+  `task_sleep` guard and `gfx_lock` tripwire (+7 each, or ctx-7's static
+  gate); BR-82's ISR-stack canary and its panel (+9..+12, STKDIAG's knob);
+  BR-68's `[mega_kfix]` counter (+8 `.mega`, +2 `.bss`); BR-173's optional
+  self-take panel. Package fences, held under decision 3: BR-85's code half
+  (+3: "latent unless a package IRQ handler calls WAKE, and none was traced",
+  and the SDK already states the precondition); BR-107 (+4) and BR-109's optional
+  doors, which `synth/bugs.md` calls "the same kind" as the six, take their
+  documented form; BR-104 (+5) is uncounted while it stays the owner's open
+  item 11. All of them are out
+  of the totals above. The fences against hostile FILES (BR-7, BR-23, BR-44,
+  BR-59) are NOT in this class and stay.
 - **BR-1 is re-priced** (follow-up, 2026-11-08): batch A's `.boot2` falls by
   9 on every kernel (BR-1's midpoint was +21 big and +10 small; it is now +12
   big and mega, part 1 at 0 and part 2 +12, and +1 small, part 1 -11 and
@@ -402,7 +410,9 @@ from `synth/phase1.md` inserted where it binds.
    - the mono renderer stays resident on VGA-only machines (~1,108 bytes,
      MEASURED span);
    - the PS/2 runtime (~265) and the keyboard mouse (`kbm_*` 599 `.text`,
-     MEASURED) stay resident on every machine;
+     MEASURED) stay resident on every machine; the keyboard mouse's pointer
+     half is taken out, kept only on a machine with no mouse (owner,
+     2026-11-08);
    - every module use is a disk read;
    - `KERN_BUDGET` reads a VGA machine, so a win on the mono 8088 target never
      shows on the gauge (rt-5). The mono figure is already computed inside
@@ -559,10 +569,19 @@ What each theme means concretely:
     "instead of" form** (owner, 2026-11-08, second round): the keyboard mouse
     IS resident on every kernel today (`kbm_tab` .. `kbm_ev`, `.text`), and one
     cluster on disk for a decent amount of resident RAM is a good trade, but
-    no boot may get longer. So `KBMOUSE.DRV` is loaded ONLY when no mouse is
-    found; a machine with a mouse never reads it, and the boot-cache
-    dependency goes. The mouseless machine pays the read (~0.4-1.2 s on an
-    XT, PREDICTED) and the heap granule.
+    no boot may get longer. So it is loaded ONLY when no mouse is found, and
+    the boot-cache dependency goes. **The shape the owner then proposed, and
+    prefers over a module** (owner, 2026-11-08): the POINTER half moves into
+    `.boot3` (BOOT3-PLAN) and, before `.boot3` is dropped, is copied into a
+    heap claim only when no mouse has been found. So there is no disk read,
+    no cluster on any disk and no system-disk dependency, and the claim can
+    still be dropped later when a mouse that speaks only after boot
+    (USBMOUSE.DRV, a late serial mouse) appears. Only the pointer half can go:
+    `kbm_isr` is the keyboard ISR on every machine, while `kbm_key`,
+    `kbm_move`, `kbm_btn`, `kbm_rclick` and `kbm_p5spend` are reached only in
+    task context, so the claim needs no ISR pin and its callers need the
+    one-compare gate a module's callers already have. A mouseless machine pays
+    the heap claim; nobody pays a read.
 - **text-7, `font_run_x`'s VGA prologue into `.vga`: TAKEN** (owner,
   2026-11-08, second round), at +16 on the VGA gauge and about -177 on a mono
   kern_big, and 0.048% of a full Note Pad repaint (0.78% in the absolute worst
@@ -956,7 +975,7 @@ marks a WP whose bytes wait on a decision.
 | 8 | batch D + WP17 + WP13 | BR-2, BR-7, BR-11, BR-12, BR-53 (WP2's prerequisite); heap placement; the IF=0 rule, gate and instrument | 0 | +8 | 0 / +8 |
 | 9 | WP2a | rt-1 drop-to-cache, rt-9 ranks, shell-2's two users (MOD_SETS 3,180 bytes MEASURED, STIKMENU 7,876) | 0 | +60..+85 `.cold` | 0 / +60..+85 |
 | 10 | WP2b | FILECP and FDLG on kern_big as modules cached at boot. **REFUSED** (owner, 2026-11-08), in any form; the session is withdrawn | 0 | 0 (was -2,468..-2,508) | 0 |
-| 11 | WP3 (KBMOUSE and text-7 TAKEN: owner, 2026-11-08, second round) | the keyboard mouse as `KBMOUSE.DRV`, loaded only when no mouse is found; the PS/2 runtime as an owner-loaded overlay; `font_run_x`'s VGA prologue into `.vga` | -300..-320 (KBMOUSE re-priced by the follow-up; was -290..-380) | -504..-539 (mono XT about -685..-740) | -300..-320 / 0 |
+| 11 | WP3 (KBMOUSE and text-7 TAKEN: owner, 2026-11-08, second round) | the keyboard mouse's pointer half in `.boot3`, copied into a heap claim only when no mouse is found (the owner's shape, over a module); the PS/2 runtime as an owner-loaded overlay; `font_run_x`'s VGA prologue into `.vga` | -300..-320 (KBMOUSE re-priced by the follow-up; was -290..-380) | -504..-539 (mono XT about -697..-732) | -300..-320 / 0 |
 | 12 | WP4 + WP22 + batch G (driver half) + WP31 | driver tables read in place; contract text; the IMR shadow; gkm-1's one-arm fixes; matrix gates | +15..+19 | -62..-122 | -156..-166 / +40..+100 |
 | 13 | WP5 + batch H | kern_dos images (-560 kern_big's, -1,585 each kern_mega's) and kern_mega's own dead weight | 0 | 0 | -40 / -145..-165 |
 | 14 | batch E + WP16 | the disk hazards; a linear directory walk, `FILE_GRAIN`, F3's dual-mark reader | +22..+27 | +77..+88 | +6..+12 / +70..+80 |
@@ -988,9 +1007,9 @@ taken. The one owner item left to split on is WP11, now per row:
 
 | kernel | without WP11 | with WP11's six recommended rows | context |
 |---|---:|---:|---|
-| kern_small | **-218..-426** | -218..-426 | KERN_SIZE 59,392 of 64,000 |
-| kern_big (VGA gauge) | **-95..-469** | **-183..+194** | KERN_SIZE 96,768 of 100,864 |
-| kern_big on a mono 8088 | about -356..-760 | about -249..-656 | `MONO_FLOOR` 94,208, MEASURED |
+| kern_small | **-249..-426** | -249..-426 | KERN_SIZE 59,392 of 64,000 |
+| kern_big (VGA gauge) | **-469..-95** | **-183..+194** | KERN_SIZE 96,768 of 100,864 |
+| kern_big on a mono 8088 | about -752..-368 | about -648..-261 | `MONO_FLOOR` 94,208, MEASURED |
 | kern_mega conventional | **-443..-596** | -443..-596 | budget 68,096 |
 | kern_mega above 1MB | +166..+389 | +166..+389 | not budgeted |
 
@@ -1009,9 +1028,9 @@ BR-8 and BR-9 are out of the shipped kernels. The whole of Phase 1 is
 therefore about:
 
 - **kern_big:** -0.13..+0.25KB without the KHP round; +0.16..+0.54KB with its
-  six recommended rows; on a mono 8088 about -0.42..-0.02KB and
-  -0.32..+0.09KB.
-- **kern_small:** -0.21..0KB.
+  six recommended rows; on a mono 8088 about -0.41..-0.03KB and
+  -0.31..+0.08KB.
+- **kern_small:** -0.21..-0.03KB.
 - **kern_mega conv:** about -0.26..-0.42KB.
 
 The first review's figures were kern_big -1.7..-2.3KB with the owner items
@@ -1019,15 +1038,17 @@ and +0.27..+0.63KB without, kern_small -0.12..+0.16KB and +0.26..+0.45KB,
 and kern_mega about -0.19..-0.43KB. All of it is ESTIMATED.
 
 Outside the resident totals:
-- **Modules:** KBMOUSE.DRV +400..+450 (a cluster on every system disk, read
-  only on a machine where no mouse is found); a PS/2 overlay ~+265; CTRL.DRV
+- **Modules:** no KBMOUSE.DRV in the owner's preferred shape: its ~+400 bytes
+  ride `.boot3` inside KERNEL.SYS instead, and become a heap claim only on a
+  machine where no mouse was found (owner, 2026-11-08); a PS/2 overlay ~+265; CTRL.DRV
   -1,500..-3,000 (WP28, unprototyped); HDD.DRV ~-45; XMEM.DRV ~-17;
   HIBER.DRV/DISKOPS.DRV +54..+74.
 - **Packages:** mem-17 -10..-19 per image; DOS.O88 +150..+165 (WP34).
 - **Boot:** `docs/plans/BOOT3-PLAN.md` costs 0 resident through its wave 3
   and -8 at wave 4 (PREDICTED, not counted above). KERNEL.SYS grows about
   +450 at its wave 1 and +1,950 by its wave 2 (+1 and +4 sectors), read after
-  the bar: about +24 and +80 ms on 360KB (PREDICTED). Those figures are
+  the bar: about +24 ms for wave 1 and +80 ms more for wave 2 on 360KB
+  (PREDICTED). Those figures are
   kern_big's; the second round makes `.boot3` generic, so they are re-priced
   per kernel there.
 - **Disk:** WP2b's +4 clusters per kern_big system disk are gone with it.
@@ -1315,6 +1336,11 @@ the first version of this list, because the plan and the follow-ups cite them.
   "that is a balancing act". **The same weighing applies to every diagnostic
   panel for a failure nobody has met** (recorded in CLAUDE.md and AGENTS.md).
   Shipped bytes: 0 (was ~+55 big / ~+40 small resident, +12..+20 `.ovl`).
+  The follow-up applies that weighing to the review's other diagnostics for
+  failures no machine has met - BR-84's table bound, BR-80's tripwires,
+  BR-82's ISR-stack canary, BR-68's `[mega_kfix]` counter and BR-173's
+  optional panel - which go behind knobs and out of the totals (section
+  4.1).
 - **2. A 14th blob sector on kern_big: NO** (owner, 2026-11-08). It delays the
   progress bar by 0.4-0.8 s, one or two more int 13h. Options (b) boot-17's
   table and (c) `vid_memchk` into `.boot2` fall with it. The route is
@@ -1337,9 +1363,9 @@ the first version of this list, because the plan and the follow-ups cite them.
   doors +36, BR-22 +12, BR-29 +13, BR-30 +18, BR-37 +16, BR-173 +12) are not
   taken as retail code**: at most an `APICHK`-style knob (option (b)). BR-8's
   bound goes only with its doors, by this item's own rule, so the `div` stays
-  as it is in retail. The follow-up applies the same weighing to BR-84 (with
-  the panel), BR-85's code half, BR-107 and BR-109's optional doors (section
-  4.1). The fences against hostile FILES (BR-7, BR-23, BR-44, BR-59) are not
+  as it is in retail. The follow-up applies the same weighing to BR-85's code
+  half, BR-107 and BR-109's optional doors, and leaves BR-104 out of the
+  sums while it stays open (item 11; section 4.1). The fences against hostile FILES (BR-7, BR-23, BR-44, BR-59) are not
   in this class (`synth/bugs.md`). Recorded in CLAUDE.md and AGENTS.md.
 - **4. WP2b, FILECP and FDLG on kern_big as modules cached at boot:
   REFUSED** (owner, 2026-11-08), in any form, as it has been "20+ times now
@@ -1354,13 +1380,18 @@ the first version of this list, because the plan and the follow-ups cite them.
 - **6. rt-7, the keyboard mouse: TAKEN, as "instead of", not "always, then
   dropped"** (owner, 2026-11-08, second round). The keyboard mouse is
   resident on every kernel today; one cluster on disk for a decent amount of
-  resident RAM is a good trade, but no boot may get longer, so `KBMOUSE.DRV`
-  is loaded ONLY when no mouse is found and a machine with a mouse never reads
-  it. Figures (follow-up, 2026-11-08): about **-300..-320** static resident
-  (not -290..-380: `kbm_poll0` stays); `KBMOUSE.DRV` +400..+450, one cluster
-  on every system disk; a mouseless machine holds a whole 512-byte heap
-  granule, about **+130..+220** for the session (not +85..+165), and pays the
-  file read at boot (1-3 int 13h, ~0.4-1.2 s on an XT, PREDICTED).
+  resident RAM is a good trade, but no boot may get longer, so it is loaded
+  ONLY when no mouse is found. **The preferred shape** (owner, 2026-11-08,
+  over a `KBMOUSE.DRV` module): the pointer half rides `.boot3` and is copied
+  into a heap claim before `.boot3` is dropped, only on a machine where no
+  mouse was found, and dropped later if a late mouse speaks. No disk read, no
+  cluster, no system-disk dependency; `kbm_isr` stays resident. Figures
+  (follow-up, 2026-11-08, priced for the module shape): about **-300..-320**
+  static resident (not -290..-380: `kbm_poll0` stays); a mouseless machine
+  holds the claim in whole 512-byte heap granules, about **+130..+220** for
+  the session (not +85..+165), PREDICTED. The module's +400..+450 on disk
+  becomes about the same bytes inside KERNEL.SYS's `.boot3`, read after the
+  bar; the shape's own glue (the copy, the gate) is for S11 to measure.
 - **7. text-7, `font_run_x`'s VGA prologue into `.vga`: TAKEN** (owner,
   2026-11-08, second round). About -177 on a mono kern_big, +16 on the VGA
   gauge; Note Pad's real aligned runs gain ~+5..+15 clocks, and a full
@@ -1541,7 +1572,8 @@ today. Register them and run their union once, in the final pass:
   and drives every gesture with the keypad and Space, and `mouerrq` covers
   the keyboard mouse retiring. What is missing is a row named for the
   keyboard mouse, a CGA leg, the after-resume leg, and now a boot with a
-  mouse that proves `KBMOUSE.DRV` is never read;
+  mouse that proves no claim is made, plus a late mouse (USBMOUSE.DRV) that
+  drops the claim;
 - shed FILECP, then Save As (WP2b): withdrawn with WP2b (owner,
   2026-11-08);
 - Sticky Apps pressed twice gives one disk load (WP2a);

@@ -163,7 +163,9 @@ changes:
 - Each item has one owner. Five items move from where `phase1.md` placed them:
   - WP13 goes with batch F, not batch D. Its "Travels with" line says so, and
     its IFLAT knob is in `sched.inc`.
-  - WP8's door half (BR-8) goes to batch C, as its own text allows.
+  - WP8's door half (BR-8) goes to batch C, as its own text allows (and,
+    after the owner's O3, out of retail into S04's optional `APICHK` arms:
+    owner, 2026-11-08).
   - WP22's IMR shadow goes to batch F, so that batch F's four IMR
     read-modify-writes use it: "the shadow first" (WP22 (`phase1.md:1738`)).
   - BR-195 goes from batch F to batch C.
@@ -197,7 +199,7 @@ gives the full table.
 | S19 | SDK-side work in packages | WP15 | 5 | S30, S16, S20, S21 | S08, S14 | +42..+60 | +24..+32 | +30..+40 |
 | S20 | desk, dialogs, menus | WP27 | 5 | S30, S16, S19, S21 | S07, S14 | -15..-25 | -21..+9 | -21..-31 |
 | S21 | hibernate, clock, services | WP29, WP30, batch G services half | 5 | S30, S16, S19, S20 | S12, S13 | -8..+12 | -8..+12 | -8..+12 |
-| S11 | keyboard mouse, PS/2 overlay, text-7 (O6 and O7 TAKEN) | WP3, input-10 | 6 | S18, S22, S23, S24, S31 | S09, S12, S16 | **-504..-539** (mono about -685..-740) | **-300..-320** | **-300..-320** |
+| S11 | keyboard mouse, PS/2 overlay, text-7 (O6 and O7 TAKEN) | WP3, input-10 | 6 | S18, S22, S23, S24, S31 | S09, S12, S16 | **-504..-539** (mono about -697..-732) | **-300..-320** | **-300..-320** |
 | S18 | the KHP round, per row (O8 decided) | WP11 | 6 | S11, S22, S23, S24, S31 | S17 | 0..+289 by row (the six: +286..+289) | 0 | 0 |
 | S22 | HDD.DRV | WP33, batch I's HDD half | 6 | S11, S18, S23, S24, S31 | S13, S14 | 0 | 0 | 0 |
 | S23 | XMEM.DRV and DOS.O88's XMS | WP34, batch I's XMEM half | 6 | S11, S18, S22, S24, S31 | S13, S21 | -54 | 0 | 0 |
@@ -247,30 +249,36 @@ handoffs count each item once.
 ### 2.3 Waves at a glance
 
 ```
-wave 1  S01 gates ........ S02 free bytes ........ S04 contracts/tags
+wave 1  S01 gates + BR-1's urgent half ........ S02 free bytes ........ S04 contracts/tags
             \___________________|______________________/
-wave 2  S03 boot (needs S02's blob/.ovl room) .... S05 API level + contract text (needs S04)
+wave 2  S03 boot + BOOT3 waves 0-1 (needs S02's room) .... S05 API level + contract text (needs S04)
             \_____________________________________/
 wave 3  S07 WM/teardown   S08 loader/heap   S06 faults/ISR   S14 disk/files   S13 kern_mega
             merge order:  S07 -> S08 -> S06 -> S14 -> S13
 wave 4  S12 drivers   S09 drop-to-cache   S15 FAT write   S17 display
             merge order:  S12 -> S09 -> S15 -> S17
-wave 5  S21 hiber/clock   S16 scheduler   S19 SDK includes   S20 desk/dialogs   [S10, owner-gated]
-            merge order:  S21 -> S16 -> S19 -> S20 -> S10
-wave 6  S22 HDD.DRV   S23 XMEM/DOS XMS   S24 CP engine   S11 KBMOUSE/PS2   [S18, owner-gated]
-            merge order:  S22 -> S23 -> S24 -> S11 -> S18
+wave 5  S30 .boot3 waves 2-3   S21 hiber/clock   S16 scheduler   S19 SDK includes   S20 desk/dialogs
+            merge order:  S30 -> S21 -> S16 -> S19 -> S20      (S10 withdrawn)
+wave 6  S22 HDD.DRV   S23 XMEM/DOS XMS   S24 CP engine   S11 KBMOUSE/PS2   S18 KHP per row   S31 .boot3 wave 4
+            merge order:  S22 -> S23 -> S24 -> S11 -> S18 -> S31
 wave 7  S25 OSCALL + cw_ door (ALONE among code sessions)   S26 docs front matter
 wave 7b S27 SPEC split   S28 Makefile split   S29 comment sweep
 then    the phase-1 final pass, once (section 5.5); then phase 2 (section 4)
 ```
 
-The widest wave is five sessions. Why the merge orders are what they are:
+The widest wave is six sessions (wave 6, with S31 added: owner, 2026-11-08).
+Why the merge orders are what they are:
 
 - **Wave 3.** S07's BR-4 and S08's BR-53 unblock S09 earliest. S06 then takes
   its `.ovl` bytes before S14 takes BR-141's. S13 is kern_mega-only and the
   least likely to conflict.
-- **Wave 5.** S21 provides the `.ovl` relief (2.5) before anyone else's
-  overlay want lands.
+- **Wave 5.** S30 merges first: BOOT3-PLAN's wave 3 is the `.ovl` relief
+  (2.5), and its wave 2 moves the boot driver loader and the SYSTEM.CFG reader
+  that S21's and S20's wants then land beside. S21 provides the relief itself
+  only if S30's wave 3 has not landed (follow-up, 2026-11-08).
+- **Wave 6.** S31 goes last: BOOT3-PLAN's wave 4 moves `kmain_o`, `wm_init`,
+  the dock geometry and the adapter switch's boot instance, which S11's
+  `kernel.asm` and S18's `.vga` arms sit beside.
 
 ### 2.4 Hotspot files: who touches them and how to sequence it
 
@@ -278,7 +286,7 @@ The widest wave is five sessions. Why the merge orders are what they are:
 |---|---|---|
 | `SPEC.md` | every session | Edit only the sections your handoff names. A new numbered heading goes only under a parent your session owns. A new top-level number is assigned by the orchestrator in `DECISIONS.md` (5.3), never "the next free". S27 moves the package sections, so no other session edits SPEC.md while S27 runs (S28 and S29 do not touch it) |
 | `apps/os88api.inc` + `tools/abi.lock.json` | S01 (re-records inputs), S04, S05, S06, S07, S12 (via `drivers/os88drv.inc`), S14, S16, S19, S20, S25 | **Never hand-merge `abi.lock.json`.** On a conflict, take either side, then run `python3 tools/abilock.py --update "<both reasons>"` on the merged tree. Cells are **appended in merge order**: a session never numbers a cell before it merges, and a cell-adding session rebases on the latest cell-adding merge first |
-| `kernel/kernel.asm` | S02, S03, S04, S05, S06, S10, S11, S12, S14, S16, S19, S20, S21, S23, S25 | Different regions (guards, cells, install, stubs), so a conflict is textual. The API table's end is the one serial point: see the row above |
+| `kernel/kernel.asm` | S02, S03, S04, S05, S06, S11, S12, S14, S16, S19, S20, S21, S23, S25, S30, S31 (S10 withdrawn) | Different regions (guards, cells, install, stubs), so a conflict is textual. The API table's end is the one serial point: see the row above |
 | `kernel/wm.inc` | S02, S06, S07, S18 | S06 edits only the INT 0 stub (wm.inc:8268-8275 per WP8 (`phase1.md:782`)). S07 edits `wm_ptr2idx`, the doors, the damage pass and teardown. S02's dead stores land first (wave 1) |
 | `kernel/sched.inc` | S02, S06, S16, S19, S21 | S06 (the panel, stubs, IFLAT, the shadow's sched half) merges before S16 is cut. S19 touches only the `%error` at sched.inc:2891-2893 (the class mask), and S21 only the skip count; both merge in wave 5's order around S16 |
 | `kernel/mouse.inc` | S02, S06, S11, S12, S16, S17, S18 | S06 (IMR, ISR doors) before S12 and S16. S17 takes the cursor drawing routines only. S11 extracts the keyboard mouse, so it is cut after S16 merges. S18 touches only its VGASAVE arms in `.vga` |
@@ -286,20 +294,23 @@ The widest wave is five sessions. Why the merge orders are what they are:
 | `kernel/disk.inc`, `diskw.inc`, `files.inc` | S02, S03 (`.ovl` `dsk_boot_from_x` only), S14, S15, S16 (histsys-5, optional) | S14 owns them in wave 3. S15 is cut after S14 merges. S16's histsys-5 goes last, behind its preconditions |
 | `kernel/fsx.inc` | S02, S03 (BR-14), S06 (`fsx_rtick`'s `cld`), S13 (BR-184's real-mode door), S16, S17, S18 | Each session touches a named routine. S17 owns `fsx_page` after S03 |
 | `kernel/ctrl.inc` (CTRL.DRV) | S02, S06 (CFG_MAP, gfce-6 if taken there), S12, S20 (shell-3, ui-11's Mouse page), S21, S24 | S21 and S20 share wave 5 and merge in that order. S24's engine rewrite is last (wave 6), on top of every earlier ctrl.inc change |
-| `kernel/fdlg.inc` (FDLG.DRV on kern_small) | S02, S14, S10, S20, S24 | S14 owns it in wave 3. In wave 5, S20 (files-17's callback) merges before S10 (the kern_big module arm). S24 is last |
-| `kernel/driver.inc` | S02, S06 (CFG_MAP), S12 | S12 owns it |
+| `kernel/fdlg.inc` (FDLG.DRV on kern_small) | S02, S14, S20, S24 | S14 owns it in wave 3. In wave 5, S20 (files-17's callback). S24 is last. (S10's kern_big module arm is withdrawn: owner, 2026-11-08) |
+| `kernel/driver.inc` | S02, S06 (CFG_MAP), S12, S30 (`drv_boot_x`, `bdl_*`, the `ovc_*` reader into `.boot3`) | S12 owns it in wave 4. S30 moves whole bodies after S12 has merged |
 | `kernel/hiber.inc` (HIBER.DRV) | S02, S12, S13, S21 | S21 is cut after S13 merges (BR-69, BR-71, md-19) |
-| `boot/boot2.asm` | S03, S10, S12 | S03 owns the blob in wave 2. S12's `%1_call` and S10's `mem_unblob` copy come after it |
+| `boot/boot2.asm` | S01 (BR-1 part 1), S03, S12, S30, S31 | S01's KSIG_OFF change lands first. S03 owns the blob in wave 2 (BOOT3 waves 0-1). S12's `%1_call` comes after it, then S30's and S31's moves. (S10's `mem_unblob` copy is withdrawn) |
 | `apps/os88ui.inc` | S02, S07, S17, S24 | S07 (BR-176, BR-196) before S17's button order (os88ui:F1) |
 | `apps/os88partsbody.inc` | S08 (BR-59), S14 (BR-191) | Same wave, so the routines are split: S08 takes the lazy part re-fetch, S14 the size read. Merge S08 first |
-| `Makefile` | S03, S10, S11, S12 (if O10), S28 | S28 (the split) is last |
+| `Makefile` | S01 (KSIG_OFF), S03, S11, S12 (if O10), S30, S31, S28 | S28 (the split) is last |
 | `tests/suite.py` | every session that adds a row | Add rows in your own block. Conflicts are textual |
 | `docs/INDEX.md` | generated | Re-run `python3 tools/os88index.py` after every merge. Never hand-merge it |
 
 ### 2.5 The two transient homes on kern_big: the cross-session ledger
 
 Both homes are full today. Figures are MEASURED from the maps
-(`bugs.md:1192`); the wants are ESTIMATED.
+(`bugs.md:1192`); the wants are ESTIMATED. **Re-drawn after the owner's
+answers** (owner and follow-up, 2026-11-08): there is no 14th blob sector, and
+the room comes from `docs/plans/BOOT3-PLAN.md`, whose spans are MEASURED off
+the same map and whose section 11 places each want below.
 
 **The blob (`.boot2`): 0x19FC of 0x1A00, 4 bytes free.** kern_small has 702
 free and kern_mega 285, so this is kern_big's problem alone.
@@ -307,23 +318,24 @@ free and kern_mega 285, so this is kern_big's problem alone.
 | session | frees | wants | running free |
 |---|---|---|---:|
 | start | | | 4 |
+| S01 | BR-1 part 1: 0 (KSIG_OFF 22528; the segment arm goes, -11 on kern_small only) | | 4 |
 | S02 | drivers-12 -4, hiber-17 -9 | | 17 |
-| S03 | boot-7 -41 | BR-1 +19..+23, BR-6 **+60..+110**, BR-55 +8..+12, BR-56 +4, BR-63 -1, BR-155 +6 (optional) | **-32..-96**: does not fit |
-| S12 | | drivers-5 +2..+4 | |
-| S17 | | BR-147 +7 | |
-| S20 | | shell-8 +10 | |
+| S03 | BOOT3 wave 1 **-504** net (`hb_probe_x`, `as_boot`'s walk, `font_init`), then boot-7 -41 | BR-1 part 2 +12, BR-6 **+60..+110**, BR-55 +8..+12, BR-56 +4, BR-63 -1, BR-155 +6 (optional) | **419..479**: fits |
+| S12 | | drivers-5 +2..+4 | 415..477 |
+| S17 | | BR-147 +7 | 408..470 |
+| S30 | BOOT3 wave 2 about **-1,640** (the SYSTEM.CFG reader, `drv_boot_x`, `bdl_*`, `ovc_buf` to `.boot3b`) | | about 2,050..2,110 |
+| S20 | | shell-8 +10, in `.boot3` once S30's wave 2 has landed (BOOT3-PLAN section 11), else in the blob | unchanged, or -10 |
+| S31 | BOOT3 wave 4: what stays is the loader, the splash, the first-tick probe, the status line and `bdt_*` (about 3,330, MEASURED parts) | | about 3,326 at 13 sectors, until BOOT2_SECS falls to 7 or 8 |
 
-**BR-6 cannot land in the blob without a 14th blob sector (owner decision
-O1).** That sector costs +512 bytes of guard 5's boot footprint and about
-+22 ms of load on a 360KB disk (PREDICTED), and no resident byte. `phase1.md`'s
-alternative, boot-17's `kmain_o` table (-30..-60, measure first), was sized
-against BR-6's superseded +25..+35 and does not cover the corrected figure.
-Without BR-6, `bugs.md`'s own blob items fit after boot-7 (`bugs.md:1192`).
-`phase1.md`'s two (drivers-5 +2..+4, shell-8 +10) are not in that sum. With
-them, the 58 bytes of room against every other want in this table run from
-9 free down to 7 short (1 short without the optional BR-155). That is why O1
-also blocks S17's BR-147 and S20's shell-8: the last two to land read the
-tally first.
+**BR-6 lands in the blob after BOOT3's wave 1, in `vid_detect`'s first-tick
+arm** (BOOT3-PLAN section 11: it runs before `.boot3` exists, so it stays in
+`.boot2`; `vid_memchk` is written once as a macro and expanded in `.boot2` and
+`.ovl`). The 3BAh form is no longer forced by room. Before BOOT3, the old
+reading was: BR-6 could not land without a 14th blob sector (O1), and
+`phase1.md`'s alternative, boot-17's `kmain_o` table (-30..-60), did not cover
+the corrected +60..+110. O1 is now decided (no), boot-17 is no longer a byte
+item and rides S31 for its diagnostics alone, and S17's BR-147 and S20's
+shell-8 no longer wait on anything but S03.
 
 **The boot overlay's window half (`.ovl`): OVL_SIZE 5,119 of 5,120, 1 byte
 free.** The `%error` is at kernel.asm:8939. kern_mega has 2 free. `phase1.md`
@@ -334,47 +346,70 @@ quotes 5,116; the map says 5,119.
 | start | | | 1 |
 | S02 | WP7 -45 (sched-12 -30, sysmisc-10 -15) | | 46 |
 | S03 | dr-13 -2 | BR-25 +6 | 42 |
-| S06 | | WP8 install +20..+30, BR-18 +6, BR-88 +5 | 1..11 |
-| S14 | | BR-141 +10 | -9..+1 |
-| S21 | **relief: move `clk_probe`'s RTC rungs out of `.ovl`** (the first candidate `phase1.md` names; SPEC.md 2.5.3.2 is the rule) | BR-44 +5 (or gfce-6's +22), BR-157 +8, BR-158 +16 | needs about 30..55 of relief |
+| S06 | | BR-18 +6, BR-88 +5. WP8's install (+20..+30) is in the knob build only (owner, 2026-11-08) | 31 |
+| S14 | | BR-141 +10 | 21 |
+| S30 | **BOOT3 wave 3: -176** (`vid_ctx_init`, `sch_idle_start`, `mem_init_x`) | | 197 |
+| S21 | relief only if S30's wave 3 has not landed: `clk_probe`'s RTC rungs, or BOOT3's clock-ladder option (its question 8) | BR-44 +5 (or gfce-6's +22, which replaces it), BR-157 +8, BR-158 +16 | 168 (151 with gfce-6) |
 
 Rules that follow from the ledger:
 
-- S06 and S14 land their overlay bytes in that order.
-- S21 lands its relief in its own first commit, before its own wants.
-- If the owner takes O1, S03 may instead take BR-6's cheaper shape: move
-  `vid_memchk` from `.ovl` to `.boot2`. That frees 55 bytes of `.ovl` and
-  costs about +85 of blob, which the new sector covers. The S21 relief then
-  shrinks or goes.
+- S06 and S14 land their overlay bytes in that order. Without WP8's install
+  they fit before any relief.
+- S30 merges first in wave 5, so S21's wants land on its 176. If S30 slips, S21
+  lands its own relief in its own first commit, before its own wants.
+- **kern_mega's `.ovl` (2 free) gets the same relief**: the owner's second
+  round makes `.boot3` generic across the kernels (BOOT3-PLAN question 3),
+  so S30 carries the kern_mega arm too, priced by BOOT3-PLAN.
 - Every session that touches either home quotes the `kernsize` tally line
-  that S01 adds.
+  that S01 adds, which BOOT3's wave 0 extends with a `boot3=` third home.
 
-### 2.6 Owner decisions: blocked until decided
+### 2.6 Owner decisions: decided, and still open
 
 A blocked item does not stop its session. The session builds everything else
 and leaves the item open in the checklist. A decision taken goes into
-`DECISIONS.md` (5.3) and into this plan's checklist.
+`DECISIONS.md` (5.3) and into this plan's checklist. **The owner answered in
+two rounds on 2026-11-08** (`docs/reports/big-review-2026-11-08/owner-decisions.md`,
+binding; where the second round revisits a first-round answer, the second
+round is in force). The ids are kept, so a reference to O1..O18 still lands.
+
+**Decided** (owner, 2026-11-08, unless marked):
+
+| id | the question | the answer | what it changes |
+|---|---|---|---|
+| **O1** | A 14th blob sector on kern_big? | **NO.** It delays the progress bar by 0.4-0.8 s (one or two more int 13h). Design a third boot-time section at the tail of KERNEL.SYS instead, read while the splash is up, dropped before the `.vga` drop and heap compaction: `docs/plans/BOOT3-PLAN.md`. Second round on its questions: generic across the kernels (kern_small unless it truly does not need it); the name is whatever confuses a new session least; wave 4 YES; no kern_big 128KB boot row; `blobruns` into fast if really quick (or full); the earlier bar without wave 4 only if less complex than wave 4 | S03 takes BOOT3 waves 0-1 and lands BR-6 in that room; S30 and S31 are new; 2.5 is re-drawn |
+| **O2** | gfce-2: the fault panel's behaviour | kern_mega keeps closing the faulting package. In real mode the panel (the ~174-byte package answer included) waits behind a build KNOB, off in shipped kernels, until a field report says it is being hit. **The same weighing applies to every diagnostic panel for a failure nobody has met** | S06's WP8 panel half is a knob item, 0 shipped (2.2). The follow-up applies the weighing to the other diagnostics for a failure no machine has met: BR-84's table bound (with the panel), BR-80's `task_sleep` guard and `gfx_lock` tripwire, BR-82's ISR-stack canary (S06) and BR-68's `[mega_kfix]` counter (S13) are knob-only, out of the totals (follow-up, 2026-11-08) |
+| **O3** | The "packages are trusted" ruling on six fixes | **Not taken as retail code**; at most an `APICHK`-style knob. Real mode cannot defend against a hostile package, so defend against our own mistakes at build time | BR-8 (doors and bound), BR-173 leave S07; BR-29, BR-30 leave S08; BR-22, BR-37 leave S14; their optional `APICHK=1` arms go to S04. The follow-up applies the same weighing to BR-85's code half, BR-107 and BR-109's optional doors (follow-up, 2026-11-08); BR-104 is uncounted while it stays open (O14) |
+| **O4** | WP2b: FILECP and FDLG on kern_big as modules cached at boot | **REFUSED**, in any form ("20+ times now"). Open and copy are not system-management actions, and a boot-time cache is not a saving either. Recorded in CLAUDE.md, AGENTS.md and SPEC.md 38 | S10 withdrawn; -2,468..-2,508 leaves the totals |
+| **O6** | rt-7: the keyboard mouse as a module | **TAKEN, as "instead of"** (second round): never loaded on a machine with a mouse, so no boot gets longer. **The owner's preferred shape, over a module:** the pointer half rides `.boot3` and is copied into a heap claim before `.boot3` is dropped, only when no mouse was found, and dropped when a late mouse speaks; no disk read, no cluster, no system-disk dependency; `kbm_isr` stays resident. Re-priced (follow-up, 2026-11-08, for the module shape): -300..-320 static resident on every kernel; a mouseless machine holds the claim in 512-byte granules (+130..+220 net, not +85..+165) | S11 (after S03's `.boot3`) |
+| **O7** | text-7: `font_run_x`'s VGA prologue into `.vga` | **TAKEN** (second round). +16 gauge, about -177 mono kern_big; +5..+15 clocks a Note Pad run, 0.048% of a full repaint (0.78% worst case, one run per cell), PREDICTED (follow-up, 2026-11-08) | S11 |
+| **O8** | WP11: the KHP round on kern_big | **Per row**: waiting to be revived; each row is reviewed on whether it earns its space | S18 runs row by row; 0..+289 on the gauge by row |
+| **O18 (rt-5)** | gate the mono residency figure, or only print it | **Print it** (second round): mono gains are pure gains for mono. A `classes` line in `kernsize`, 0 shipped bytes. `MONO_FLOOR` already computes it: 94,208 against the gauge's 96,768, MEASURED (follow-up, 2026-11-08) | S12 |
+| - | `.bss` zeroing (S02's rule; `doc-owner-questions.md` item 3) | Settled: zero at `kmain` on every shipped path since PR #61, by the file layout; the comments are corrected (`areas/gap-bss-zeroing.md`) | S02's WP7 needs no rule decision; `t_bsszero.py` joins S01's gates |
+| - | BR-6: an MDA driven with Hercules timings | It can damage the monitor. os8088 does not run on an MDA: **print an MDA message and halt, or switch to the usable CGA when one is present** | S03's BR-6 |
+| - | The run-time API level (A4, abi-6, gfr-5) | First round: must prove its worth. **Second round: TAKE IT IF IT IS CHEAP**, because the loaders gate on `<=` PKG_FMT, so a newer package can call a cell an older kernel lacks. The level computation already exists as The Wire's (follow-up, 2026-11-08) | S05 |
+| - | Theme 1's further context work | Not needed immediately. The mouse and idle already have stacks; the known field case is a sound interrupt on a package already near its stack's edge, not shutdown | S07 keeps BR-4 as a defect fix, its urgency read off `stkdie` |
+| - | `.LNK` and a desktop that is a folder | Shortcuts and `.LNK` links exist (SPEC.md 26.8, 26.10). The refusal of a desktop folder stands, reworded: not a bad idea at its core, too expensive in disk reads and resident bytes here | the report's section 5 only |
+| - | Package-purgeable claims (hm-9) | **Parked** (follow-up, 2026-11-08, on the owner's request for use cases): not needed now; if built, justified by Sheet's ~80KB of modules and the lazy-part keep, not by the review's two consumers (one of which, Skies, is already solved) | S09's optional hm-9 is not built |
+
+**Still open:**
 
 | id | the question | bytes | blocks |
 |---|---|---|---|
-| **O1** | A 14th blob sector on kern_big? | +512 boot footprint (guard 5), ~+22 ms on a 360KB disk PREDICTED, 0 resident | S03's BR-6; S17's BR-147 and S20's shell-8 (blob room) |
-| **O2** | gfce-2: does the fault panel (a) halt as a bug report, (b) close the faulting package and keep the desk, as `mega_fkill` does, or (c) halt only for a kernel CS and IRET otherwise on an 8088? (a) alone halts on package divides that continue today on later 8088 ROMs, so theme 4 ships the stubs with (b) or (c) (`systemic.md:62`) | (b) is about +45..+65 more, plus a skip decoder on the 286+ | S06's panel (WP8 (`phase1.md:782`)) |
-| **O3** | The "packages are trusted" ruling (docs/plans/LAST-DROP-BYTES.md:1135-1140) applied to six fixes: ship them, put them behind APICHK=1 only, or make them named exceptions? | BR-8 +36, BR-22 +12, BR-29 +13, BR-30 +18, BR-37 +16, BR-173 +12: **+107 / +107** big / small (`bugs.md:1192`) | parts of S07, S08, S14 |
-| **O4** | WP2b: FILECP and FDLG on kern_big as modules cached at boot. Put with the three quotes in WP2 (`phase1.md:254`) (ONDEMAND-PLAN 1.2, KERN-SMALL-MODULE-SPLIT.md:13-15, SPEC.md 38.0), **not as settled** | **-2,468..-2,508** kern_big res (-2,568 movable MEASURED, +60..+100 glue); +4 clusters per kern_big system disk; a reload is 1-2 int 13h (0.4-0.8 s PREDICTED) | S10 |
-| **O5** | rt-6: kern_small's own module caching | +60..+85 kern_small | S09's kern_small arm |
-| **O6** | rt-7: the keyboard mouse as an init-lifetime module (KBMOUSE.DRV) | -290..-380 static res every kernel; KBMOUSE.DRV +400..+450, one cluster on every system disk (small360 included); a machine with NO mouse keeps the image claimed all session, **+85..+165 of RAM in use for ever** on exactly the mouseless 128KB 5150 (cost lens, WP3 (`phase1.md:419`)) | S11 |
-| **O7** | text-7: `font_run_x`'s VGA prologue into `.vga` | +16 gauge; -165..-185 on a mono machine; ~30-40 clocks a run on VGA PREDICTED | S11 |
-| **O8** | WP11: take the KHP round (LAST-DROP-PERF 7.1's measured knobs) on kern_big | +286..+289 gauge (+104..+107 every machine, +182 `.vga`) | S18 |
+| **O5** | rt-6: kern_small's own module caching ("keep FDLG as purgeable"). The owner finds it interesting, "might be worth ~100 bytes" (owner, 2026-11-08); not yet a yes | +60..+85 kern_small | S09's kern_small arm |
+| **O8b** | WP11's other half: delete kern_small's losing KHP arms, or keep them under `%else` | +74 kern_small if deleted (source only otherwise) | S18 |
 | **O9** | dw-14: rewrite SPEC 18.4's "no attempt to defragment while writing" as a dated decision, and allocate contiguous runs | +100..+160 `.cold` kern_big | S15's dw-14 |
 | **O10** | gkm-6: retire kern_emu (VMMOUSE.DRV as a DRVC_POINT worker driver); prototype first | about +40 kern_big, -385 kern_emu-only, one kernel build retired | S12's gkm-6 |
 | **O11** | hdk-2 (BR-197): may a package erase a partition without a tool-owned confirm? | ~+10 HDDTOOL for the token form | S22's BR-197 policy |
 | **O12** | ctx-6 (BR-188): kern_small lets any task's claim shed | +14 `.text` kern_small | S08's BR-188 |
 | **O13** | BR-60: subdirectories grow | +90 kern_big | S14's BR-60 |
-| **O14** | BR-104: the policy reversal on OSAPI_MEM_FREE/_REGROW of the caller's own live region (if reversed, it is a flag-day row) | +5 (the no-break form) | S08's BR-104 |
+| **O14** | BR-104: the policy reversal on OSAPI_MEM_FREE/_REGROW of the caller's own live region (if reversed, it is a flag-day row). O3's weighing reads on it (a package harming its own region), but the owner has not answered it | +5 (the no-break form) | S08's BR-104 |
 | **O15** | BR-65: form (c) now; form (a) on the owner's word | (a) +128..+192 kern_mega `.lowbss`, +20 more high | S13's BR-65(a) |
 | **O16** | D8: the appended `OSAPI_IRQ` cell now, or only at the flag day? | +100..+150 kern_big; SOUND.DRV -60..-100 | S12's cell |
 | **O17** | Fork rule 3 in a multi-session run: does each child send the thirteen disks at every commit, or once at its last commit, with the orchestrator sending after each merge? | - | the cadence of every session (5.5). Until answered, the rule as written stands |
-| **O18** | The smaller calls the report also lists: engsys-15's threshold for a scoped soak that counts as the whole tier (~90% proposed; S01's BR-172); rt-5, gate the mono residency figure or only print it (S12); hm-12a, `MEM_OWNER_MAX` 8 -> 10 on kern_big against SPEC.md 50.2's reason for 8 (S19); wm-19, retire `band.inc`'s `BAND=1` knob (S18); hiber-19, keep `HIBERNAT.IMG` allocated (S21, unchecked) | 0 each, except as the session prices it | the named session's item only |
+| **O18** | The smaller calls the report also lists: engsys-15's threshold for a scoped soak that counts as the whole tier (~90% proposed; S01's BR-172); hm-12a, `MEM_OWNER_MAX` 8 -> 10 on kern_big against SPEC.md 50.2's reason for 8 (S19); wm-19, retire `band.inc`'s `BAND=1` knob (S18); hiber-19, keep `HIBERNAT.IMG` allocated (S21, unchecked). rt-5 is decided (above) | 0 each, except as the session prices it | the named session's item only |
+| **O19** | **BOOT3-PLAN's remaining questions** (its section 15; a pointer, not copied). The second round answered 1, 3, 4, 5, 6, 7 and 10 (under O1). Open: **2** (wave 2's boot-time RAM, about 1.5KB of kern_big's boot heap at 128KB), **8** (wave 3 moves the clock ladder whole, 1,782 MEASURED, or only BR-157/BR-158's two rungs) and **9** (`B2CALL`'s constant segment, or `SPLCALL`'s 19 bytes a site). Question 4's "unless kern_small truly does not need it" is a finding S03 makes | 0 resident each | 9: S03's wave 0; 2: S30's wave 2; 8: S30's wave 3 |
+| **O20** | The API level's comparison. The owner's second round speaks of "an `==` check on an API level ... refusing to crash on an old apps disk in a new kernel, or the reverse". The review's design refuses only a package whose needed level is ABOVE the kernel's (cells are only appended, so an older package runs on a newer kernel). Confirm which is meant | 0 either way | S05's WP9 |
+| **O21** | The Pravetz report: which disk did that machine boot? No record says (`followup-canary.md` section 1). One extended `pravetzboot` run on 86Box tells an erroring ROM from a lying one; then ask the reporter | 0 | nothing; it settles BR-1's field question |
 
 Phase 2's own questions are in 4.4.
 
@@ -471,7 +506,10 @@ that wrote this plan.
 - Keep the lock to one update per session where you can: batch your text
   changes.
 - A cell-adding session needs WP9's level first (S05). New cells are guarded
-  by `OS88_NEED` in the packages that call them.
+  by `OS88_NEED` in the packages that call them. WP9 is "take it if it is
+  cheap" (owner, 2026-11-08): if S05 stops at the measurement, a new cell is
+  fenced as today, by the `WIRE_CELL_LEVELS` row and `WIRE_LEVEL` the
+  release that first publishes it adds (SPEC.md 92.2).
 
 **Fork rules that bind every session** (CLAUDE.md, *Working in this fork*):
 
@@ -534,6 +572,47 @@ not open a PR. The orchestrator integrates.
   - **Moved in from WP31:** a `tools/kernsize.py` tally line for kern_big's
     blob and `.ovl` (free bytes, from the map), so 2.5's ledger is printed
     rather than kept by hand (`phase1.md:139`).
+  - **Moved in from S02's WP7: `tests/unit/t_bsszero.py`, fast tier**
+    (`areas/gap-bss-zeroing.md`, *Recommendation: a gate*; owner and
+    follow-up, 2026-11-08). For each built kernel with a `kernel.map`
+    (`build/`, `build/smallk/`, `build/megak/`, any `$(BUILD)`): parse `.text`'s
+    file start and `.bss`'s vstart and length, assert `kernel.bin` covers that
+    range and every byte in it is 0. Leave the packed image alone
+    (`os88kz.py` already refuses a tail that does not round-trip). Break it
+    once on purpose: a private tree with `.ovl`'s `start=` removed must go
+    red. 0 shipped bytes, about 40 lines, about 50 ms a `make`; measure the
+    row's `secs` when it is registered. The optional second row (no symbol
+    stage 2 writes before `kz_all` lies at or past `KZ_HEADSEC*512`) may ride
+    with it.
+  - **Moved in from S03, URGENT: BR-1's 0-byte half and its gate**
+    (`followup-canary.md` section 5; follow-up, 2026-11-08). The canary has
+    been inert on the 360KB and 720KB disks since 2026-09-05 (`175926d5`,
+    KZIP the default), and nothing waits on room for this half:
+    1. **Part 1, the canary moved and the segment arm dropped.**
+       `KSIG_OFF := 22528` on kern_big; the Makefile's `-512`/`+1024` arms
+       carry it to every other arm (kern_small becomes 23552, also file
+       sector 57). Replace the `%if KSIG_OFF >= KZ_HEADSEC * 512` arm in
+       `boot/boot2.asm` with `mov si, KSIG_OFF + KZ_RPARA*16` under KZIP (the
+       same 3-byte `mov si, imm16`) and an assemble-time `%error` if that sum
+       plus 512 passes 65536. **0 bytes on kern_big and kern_mega, -11 on
+       kern_small.** MODELLED, it lands at LBAs 71/71/86/90/69/69, after the
+       flip of its run on all six system images.
+    2. **The `t_canary` rewrite.** `crosses()` must model what stage 2 really
+       does: start at KERNEL.SYS + `BOOT2_SECS`, read `KZ_HEADSEC` (from
+       `kernel.kz.json`) in runs of its own, restart the tail there, apply the
+       DMA-page bound. Keep it an independent reader (boot-10): a gate that
+       imports the generator's model agrees with it by construction. **Break
+       it on purpose: `KSIG_OFF` back at 4096 must turn all four 9-sector
+       images red** (`os8088-360.img`, `os8088-720.img`, `small360.img`,
+       `small720.img`), then go green on part 1.
+    3. **The records that go with it**: SPEC.md 2.9.13.3's "the canary is
+       unmoved" becomes the run-start rule; `rdiag` either gets the cylinder
+       bound behind a define in stage 1's flat arm or is retired, with
+       `tests/rdiag.asm:6-8` and docs/MARTYPC-DEBUG.md's recommendation fixed in
+       the same change; SPEC.md 18.93.1's blast radius says crossing READS
+       (cylinder runs are reads only, SPEC.md 18.91.3), not writes.
+
+    Part 2 (the head at the track bound, +12 `.boot2`) stays in S03.
 - **Files:**
   - tools: `checkdocs.py`, `abilock.py`, `os88test.py`, `os88soak.py`,
     `os88ovlchk.py`, `kernsize.py`;
@@ -542,23 +621,38 @@ not open a PR. The orchestrator integrates.
   - `tests/suite.py`, CLAUDE.md and AGENTS.md (both, per their own rule);
   - the `%if`-level touches WP10 names: `kernel/ui.inc`, `desk.inc`,
     `desksc.inc`, `fprog.inc`, `viddet.inc`, `megados.inc`;
-    `kerndos/kdpark.inc`; `apps/os88pit.inc`.
+    `kerndos/kdpark.inc`; `apps/os88pit.inc`;
+  - for the moved-in items (follow-up, 2026-11-08): a new
+    `tests/unit/t_bsszero.py`; `tests/unit/t_canary.py`; `boot/boot2.asm`
+    (the canary's sum only) and the Makefile's `KSIG_OFF` arms;
+    `tests/rdiag.asm` (or its retirement); docs/MARTYPC-DEBUG.md's rdiag
+    paragraph; SPEC.md 2.9.13.3 and 18.93.1.
 - **Neighbours:**
   - S02 edits `ui.inc` (ui-3) and `viddet.inc` (text-2). Your touches there
     are guards and `%if`s only.
+  - S03 (wave 2) owns the rest of `boot2.asm` and `t_canary`'s callers; your
+    canary change merges first.
   - S04 owns `os88index.py`, `stkdepth.py` and `t_apictx.py`.
-- **SPEC first:** none of substance. SPEC.md 20.2.0.1's list of fingerprinted
-  files gains the C SDK and the private versions.
-- **Bytes:** 0 shipped on every kernel. Prove it with `cmp` over every image
-  at one commit.
+- **SPEC first:** none of substance for the gates. SPEC.md 20.2.0.1's list of
+  fingerprinted files gains the C SDK and the private versions. For BR-1's
+  part 1: SPEC.md 2.9.13.3 and SPEC.md 18.93.1 (follow-up, 2026-11-08).
+- **Bytes:** 0 shipped on every kernel for the gates. Prove it with `cmp`
+  over every image at one commit. **BR-1's part 1 is the one exception**: it
+  moves the canary in every system image and the blob's bytes (0 net on
+  kern_big and kern_mega, -11 on kern_small `.boot2`), so it lands as its own
+  commit and the disks are sent (fork rule 3).
 - **ABI / lock:** engsys-11 and drivers-16 re-record the lock's inputs (no
   bump). After this, WP34's XM_ABI_VER 3 and WP33's HD_ABI_VER 8 are checked.
 - **Rows to name:** the gates are rows: `checkdocs`, `docindex`, `mirror`,
   `api-abi`, `abilock`, `registry`, `asmrules`, `kernbudget`, `canary` (fast);
-  the new `sections` (fast); api-abi's per-kernel mode (full).
+  the new `sections` and `bsszero` (fast); api-abi's per-kernel mode (full);
+  for BR-1's part 1, soak `blobsum`, `kzboot`, `smallboot`, `pravetzboot`,
+  `v20boot` (named, run in the final pass).
 - **Done when:** each new or changed gate is shown red on a deliberately
-  broken input, then green (docs/WRITING-TESTS.md section 1), and every
-  shipped image is byte-identical to the base at one commit.
+  broken input, then green (docs/WRITING-TESTS.md section 1); `t_canary` is
+  red on all four 9-sector images at `KSIG_OFF` 4096 and green at 22528;
+  every shipped image is byte-identical to the base at one commit except for
+  BR-1's part 1, whose commit is the one that moves them.
 
 ### 3.3 S02 - Free bytes and the `.bss` rule (WP1, WP7)
 
@@ -566,7 +660,12 @@ not open a PR. The orchestrator integrates.
   and S04. Merges second.
 - **Goal:** take every saving that needs no design (WP1 (`phase1.md:198`)), and settle
   whether `.bss` arrives zeroed: one rule, a gate, the dead stores
-  (WP7 (`phase1.md:746`)). This is also the `.ovl` room (-45) that S03, S06, S14 and S21
+  (WP7 (`phase1.md:746`)). **The rule is settled** (owner and follow-up,
+  2026-11-08): kernel `.bss` is zero at `kmain` on every shipped path since
+  PR #61, by the file layout (`areas/gap-bss-zeroing.md`, *What code may
+  assume*). So WP7 here is the dead stores, the SPEC text, and checking that
+  the comment fixes (`data/gap-bss-zeroing.json`) have landed; the gate,
+  `t_bsszero`, is S01's. This is also the `.ovl` room (-45) that S03, S06, S14 and S21
   spend (2.5).
 - **Items:**
   - **WP1:** text-2, ui-3 (BR-110 (`bugs.md:1101`), which is also its hazard fix),
@@ -575,9 +674,12 @@ not open a PR. The orchestrator integrates.
     cursor:mc-4, cursor:mc-7, os88ui:F3, F4, F6 (hoist the clear above
     `call cpf_vidok` at ctrl.inc:4302), and the dead `%else` arms (drivers-11,
     wm-14, text-13).
-  - **WP7:** the `.bss` rule; the gate (`t_bsssentinel`, promoted); the dead
-    stores; sched-12 (-30 `.ovl`), sysmisc-10 (-15 `.ovl`), hiber-17 (-9
-    blob).
+  - **WP7:** the `.bss` rule, written as `gap-bss-zeroing.md` states it
+    (zero from `kmain` on; nothing before `kmain` touches `.bss`; `.lowbss`
+    and `.vgabuf` promise nothing); `t_bsssentinel` promoted to fast for the
+    non-zero sentinels; the dead stores; sched-12 (-30 `.ovl`), sysmisc-10
+    (-15 `.ovl`), hiber-17 (-9 blob). `t_bsszero` itself moved to S01
+    (follow-up, 2026-11-08).
   - loader-8 is NOT here: it is S08's (BR-11).
 - **Files:**
   - kernel/: `font.inc`, `ui.inc`, `wm.inc`, `viddet.inc`, `menu.inc`,
@@ -620,75 +722,140 @@ not open a PR. The orchestrator integrates.
 ### 3.4 S03 - Boot: derived constants, the room, and the boot defects (WP6, batch A core, BR-14)
 
 - **Branch:** `big-review/s03-boot`. **Wave 2**, in parallel with S05.
-  Cut after S01 and S02 have merged: it needs S02's blob and `.ovl` room and
-  S01's tally.
+  Cut after S01 and S02 have merged: it needs S02's blob and `.ovl` room,
+  S01's tally and S01's BR-1 part 1.
+- **Depends on `docs/plans/BOOT3-PLAN.md`** (owner, 2026-11-08). O1 is
+  decided: no 14th blob sector. The blob's room comes from BOOT3-PLAN's waves
+  0 and 1, which this session takes first; its waves 2-3 are S30 and its wave
+  4 is S31. Read BOOT3-PLAN in full before starting: sections 3-4 (where
+  `.boot3` sits, how calls cross and are fenced), 8 (the waves), 12-13 (risks,
+  gates and rows) and 14 (SPEC.md sections to update first). The owner's
+  second round makes it **generic across the kernels**: kern_mega opts in,
+  and kern_small opts in unless the work shows it truly does not need it
+  (BOOT3-PLAN question 4); its name is whatever confuses a new session
+  reading the boot least (question 1). Question 9 (`B2CALL`'s constant
+  segment) is open and bears on wave 0 (2.6, O19).
 - **Goal:** make three hand-typed boot constants derived, free blob and
-  boothd bytes (WP6 (`phase1.md:674`)), then fix the boot and detection defects in that room
-  (batch A (`bugs.md:1279`)). Theme 11's divergence and theme 4's "one fatal path" begin
-  here (theme 11 (`systemic.md:1533`)).
+  boothd bytes (WP6 (`phase1.md:674`)), build `.boot3` and move its first three
+  clusters out of the blob, then fix the boot and detection defects in that
+  room (batch A (`bugs.md:1279`)). Theme 11's divergence and theme 4's "one
+  fatal path" begin here (theme 11 (`systemic.md:1533`)).
 - **Items, in this order:**
-  1. WP6's boot-4 audit first (BR-153 (`bugs.md:1144`): the SPL_RESIDENT guard).
-  2. boot-18 (BR-154 (`bugs.md:1145`): guard 5 and BLOB_LIFT).
-  3. boot-7 (blob -41).
-  4. boot-6 (boothd -9, BR-25's boothd half).
-  5. boot-17 (optional; measure first).
-  6. Then batch A core: BR-1 (`bugs.md:148`), BR-6 (`bugs.md:198`) (**blocked on O1**), BR-14 (`bugs.md:278`)
-     (batch B's, landing with BR-6 so that `[vid_avail]`'s CGA bit means one
-     thing on both kernels), BR-63 (`bugs.md:768`), BR-25 (`bugs.md:388`), BR-55 (`bugs.md:688`), BR-56 (`bugs.md:698`).
-  7. Low: BR-155 (`bugs.md:1146`) (measure first), BR-156 (`bugs.md:1147`) (doc).
+  1. WP6's boot-4 audit first (BR-153 (`bugs.md:1144`): the SPL_RESIDENT
+     guard). Its existing gate is `t_resident` (soak row `resident`): it
+     fails a `jmp kret*` below `spw_resident_end`, with the size guard beside
+     it. What is new is the derivation and the audit of DATA stores into
+     sectors 5-8, which `t_resident` does not check (follow-up, 2026-11-08).
+  2. **BOOT3-PLAN wave 0, the mechanism with nothing moved** (its section 8).
+     It takes boot-18 (BR-154 (`bugs.md:1145`): guard 5 counts the lift,
+     `BLOB_SEG_AT*16 + BOOT2_PAD`), the `os88ovlchk` rules B1-B8, the
+     `boot3=` line beside S01's kernsize tally, and the tools taught the
+     section. `kernel.bin` byte-identical on every kernel that has not opted
+     in, `cmp`-proved at one commit.
+  3. **BOOT3-PLAN wave 1, three closed clusters**: `hb_probe_x`, `as_boot`'s
+     walk and `font_init` (507 bytes, MEASURED) into `.boot3`, **-504 net
+     in the blob**. Watch the lift's 15-byte margin (BOOT3-PLAN section 8).
+  4. boot-7 (blob -41). It is no longer load-bearing, and still worth taking.
+  5. boot-6 (boothd -9, BR-25's boothd half).
+  6. boot-17 is no longer a byte item: its -30..-60 were blob bytes only while
+     `kmain_o` is in the blob, and S31 moves `kmain_o`. Take it there for its
+     diagnostics if wanted (BOOT3-PLAN section 11).
+  7. Then batch A core: BR-1 part 2 (`bugs.md:148`), BR-6 (`bugs.md:198`),
+     BR-14 (`bugs.md:278`) (batch B's, landing with BR-6 so that
+     `[vid_avail]`'s CGA bit means one thing on both kernels), BR-63
+     (`bugs.md:768`), BR-25 (`bugs.md:388`), BR-55 (`bugs.md:688`), BR-56
+     (`bugs.md:698`).
+  8. Low: BR-155 (`bugs.md:1146`) (measure first), BR-156 (`bugs.md:1147`) (doc).
 
   Notes on the core items:
-  - **BR-1 is the review's rank-1 defect.** The boot canary protects one of the
-    six shipped system disks. The fix moves KSIG_OFF per arm. `t_canary`'s
-    `crosses()` must model the KZ head split. The fix costs +1 int 13h per
-    8088 boot on four of the six system disks (PREDICTED).
-  - **BR-6.** The MDA primary is driven with Hercules CRTC timings. Write 3BFh
-    = 1 first, then discriminate with Wilton's 3BAh toggle or the 0x1000
-    alias test. An MDA alone halts with a message.
+  - **BR-1 is the review's rank-1 defect.** S01 has already moved the canary
+    (part 1, 0 bytes) and rewritten `t_canary`. **Part 2 is here**: keep the
+    plain head at the track bound, for the splash, which matters on 1.2MB and
+    both kern_small disks (`followup-canary.md` section 5 (2)): `mov
+    ax,[b2_spt] / xchg ax,[b2_runmax] / push ax` before the head loop and
+    `pop word [b2_runmax]` after it, keeping `.rerun`'s one-shot property.
+    +12 `.boot2` on each kernel; kern_big's lands in wave 1's room. One more
+    int 13h per 8088 boot on small360/720, 1.2MB and 1.44MB, none on kern_big
+    360/720 (PREDICTED). WP6 then derives KSIG_OFF (the new `os88ksig.py`)
+    from S01's 22528, rather than moving it again. Its blast radius is
+    crossing READS, not writes.
+  - **BR-6, decided** (owner, 2026-11-08): os8088 does not run on an MDA. An
+    MDA alone prints an MDA message and halts; an MDA beside a usable CGA
+    switches to the CGA. Write 3BFh = 1 first, then discriminate with Wilton's
+    3BAh toggle or the 0x1000 alias test; with BOOT3's room the 3BAh form is no
+    longer forced by size. It runs in `vid_detect`'s mono arm in the first tick,
+    before `.boot3` exists, so it stays in `.boot2` (BOOT3-PLAN section 11);
+    `vid_memchk` is written once as a macro and expanded in `.boot2` and
+    `.ovl`.
 - **Files:**
   - `boot/boot2.asm`, `boothd.asm`, `boot.asm`;
   - kernel/: `splash.inc`, `viddet.inc` (`vid_detect`), `vidsel.inc`
     (`vid_memchk` if it moves), `disk.inc` (`dsk_boot_from_x`, `.ovl` only),
     `fsx.inc` (BR-14's kern_small `fsx_page`), `kernel.asm` (guard 5; the SPL
-    guard at 8650-8653);
-  - Makefile (SPL_RESIDENT, KSIGDEF2, KSIG_OFF per arm, KZ_HEAD);
-  - `tests/unit/t_canary.py`, a new `tools/os88ksig.py`, `docs/history/`.
+    guard at 8650-8653; the `.cfx` section that becomes `.boot3`);
+  - BOOT3 wave 1's bodies: `hiber.inc` (`hb_probe_x`), `desksc.inc`
+    (`as_boot` and its walk), `font.inc` (`font_init`, `fi_time`, `fi_pit`);
+  - Makefile (SPL_RESIDENT, KSIGDEF2, KSIG_OFF per arm, KZ_HEAD; `MODC_START`
+    and the section's guards);
+  - `tests/unit/t_canary.py` (S01's rewrite, only as WP6's derivation needs),
+    a new `tools/os88ksig.py`, `docs/history/`;
+  - tools BOOT3-PLAN wave 0 names: `os88ovlchk.py`, `kernsize.py`,
+    `os88sym.py`, `os88hot`, `os88ladder.py`, `os88boot.py`, `os88modcost`,
+    `os88cfx.py`, `os88rom.py`; `tests/coldslide.py`, `tests/bootstatus.py`.
 - **Neighbours:** S05 edits `kernel.asm` at KERNEL_SEG:0006 and the loader.
-  You touch only the guards and the boot path.
+  You touch only the guards, the section and the boot path.
 - **SPEC first:** SPEC.md 39.1's MDA cut, and SPEC.md 39.11.1's closing
-  sentence (BR-6); SPEC.md 18.93.1 (the canary).
-- **Bytes:**
+  sentence (BR-6); SPEC.md 18.93.1 (the canary, part 2); the sections
+  BOOT3-PLAN section 14 lists for waves 0 and 1.
+- **Bytes** (recomputed, owner and follow-up, 2026-11-08):
 
   | | kern_small | kern_big | kern_mega |
   |---|---:|---:|---:|
   | resident | +13 (BR-14) | +2 (BR-14) | 0 |
   | `.boot2`, WP6 | -41 | -41 | -41 |
-  | `.boot2`, batch A core | +68 (+44..+92) | +119 (+90..+148) | +119 |
-  | `.boot2`, net | +27, fits in 702 | **+78 against 17 free: needs O1** | +78, fits in 285 |
+  | `.boot2`, BOOT3 wave 1 | priced by BOOT3-PLAN if it opts in | **-504** | priced by BOOT3-PLAN (it opts in) |
+  | `.boot3` | as above | +6 (wave 0) +507 (wave 1) over `.cfx`'s 530 | as above |
+  | `.boot2`, batch A core | +59 (+37..+81) | +110 (+83..+137) | +110 |
+  | `.boot2`, net | +18, fits in 702 | **-435 (-462..-408): 425..479 free** | +69, fits in 285 |
   | `.ovl` | 0 | +4 (BR-25 +6, dr-13 -2), fits in 46 | as kern_big |
   | boothd | - | -1 (+8, then -9) | - |
-  | KERNEL.SYS | -383 | -403 | -383 |
-  | boot time | +1 int 13h per 8088 boot | +1 int 13h per 8088 boot on the 1.2MB and 1.44MB disks; ~+22 ms with a 14th sector (PREDICTED) | - |
+  | KERNEL.SYS | -383 | -403, then about +450 (+1 sector) for wave 1 | -383 |
+  | boot time | +1 int 13h per 8088 boot (BR-1 part 2) | +1 int 13h per 8088 boot on the 1.2MB and 1.44MB disks (BR-1 part 2); about +24 ms after the bar on 360KB for wave 1 (PREDICTED) | - |
 
-- **Owner:** **O1** blocks BR-6. Land everything else, and leave BR-6 open
-  with its two shapes priced. If O1 is yes, prefer the shape that moves
-  `vid_memchk` into `.boot2`: `.ovl` -55 (2.5).
+  Batch A core is the register's figure as the follow-up re-priced it: BR-1
+  is +12 on kern_big and kern_mega (part 2 alone, in its safe form; part 1 is
+  S01's 0) and +1 on kern_small (part 1's -11 is S01's; part 2 +12), against
+  the first register's +21 and +10. BR-6 is
+  unchanged at +60..+110 / +25..+65. The old net was +78 against 17 free
+  ("needs O1") and +27 on kern_small.
+
+- **Owner:** O1 is decided (no 14th sector; BOOT3). BR-6 is decided. Open:
+  O19's question 9 (wave 0). If wave 1 cannot land (a B-rule rejects a body),
+  BR-6 waits, and the session reports what blocked it rather than spending a
+  sector.
 - **Rows to name:**
-  - fast: `canary`, `api-abi`, `image`, `diskverify`;
-  - soak: `blobruns`, `blobsum`, `splashbar`, `splashspin`, `smallboot`,
-    `kzboot`, `hdboot`, `hddgeom`, `bootfloor`, `bootfloor-ab`,
-    `hdtakeboot`, `pravetzboot`, `v20boot`;
+  - fast: `canary`, `api-abi`, `image`, `diskverify`, `ovlchk`;
+  - soak: `resident` (follow-up, 2026-11-08: the existing gate on the first
+    tick's window, missing from this list), `blobruns` (host, 0.1 s: run
+    `python3 tests/unit/t_blobruns.py` by hand with the host checks, as
+    BOOT3-PLAN section 10 says; the owner wants it in fast if it is really
+    quick, or full), `blobsum`, `splashbar`, `splashspin`, `smallboot`,
+    `kzboot`, `hdboot`, `hddgeom`, `bootfloor`, `bootfloor-ab`, `coldslide`,
+    `bootstatus`, `hdtakeboot`, `pravetzboot`, `v20boot`;
   - full: `bootsmoke`, `small128`;
   - 86Box: the `box-` twins of `hdboot` for FN33's images;
   - the `make` gate itself for BR-177;
-  - new: an MDA-primary boot, an MCGA profile and a 64KB EGA profile, if
-    MartyPC or 86Box carries one. None is in the suite today; say which
-    exist.
+  - BOOT3-PLAN section 13's gates and rows for waves 0 and 1;
+  - new: an MDA-primary boot (halt with the message), an MDA+CGA boot (the
+    CGA taken), an MCGA profile and a 64KB EGA profile, if MartyPC or 86Box
+    carries one. None is in the suite today; say which exist. No kern_big
+    128KB boot row: the owner said no (BOOT3-PLAN question 5).
 - **Done when:**
-  - `t_canary` passes on all six system disks, with `crosses()` modelling the
-    head split;
+  - `t_canary` (S01's rewrite) passes on all six system disks with part 2 in;
   - KSIG_OFF, SPL_RESIDENT and KZ_HEAD are derived;
-  - BR-6 has landed or is open on O1.
+  - `.boot3` exists and BOOT3 wave 1 has landed, with the blob's free bytes
+    quoted off the tally line;
+  - BR-6 has landed with the owner's MDA rule.
 
 ### 3.5 S04 - Routine contracts, context tags and the checked build (WP14, WP19)
 
@@ -700,6 +867,12 @@ not open a PR. The orchestrator integrates.
   (WP19 (`phase1.md:1574`)). This is theme 1's model (theme 1 (`systemic.md:134`)). The fences that refuse a
   violation are the batches': BR-22 and BR-37 (S14), BR-30 and BR-107 (S08),
   BR-28 and BR-73 (S07), BR-86 (S06). This session is the model they fence.
+  **Packages are trusted** (owner, 2026-11-08, decision O3): BR-22, BR-37,
+  BR-29, BR-30, BR-8's doors and bound, and BR-173 are not taken as retail
+  code, and the follow-up puts BR-107 and BR-109's optional doors in the same
+  class. If they are built at all, they are `APICHK=1` arms, and this is the
+  session that owns that knob. The tags and the knob are exactly the
+  build-time defence the owner prefers to resident bytes.
 - **Items:**
   - WP14: `tools/os88contract.py` (the grammar), `tools/os88live.py` (the
     lint), the generated reference in `docs/`, and the header fixes the lint
@@ -709,6 +882,15 @@ not open a PR. The orchestrator integrates.
     `tools/os88index.py`.
   - abi-15 / engsys-20 / gfce-9: the `APICHK=1` knob (cell macros in
     `kernel/kernel.asm`).
+  - **Optional, 0 shipped bytes: the package fences as `APICHK=1` arms**
+    (moved here from S07, S08 and S14: owner, 2026-11-08). BR-8's doors,
+    the wake fence and its bound, BR-173's owner compare, BR-29's returned-BX
+    check, BR-30's nested-start refusal, BR-22's worker refusal at the file
+    cells, BR-37's batch-bracket door, BR-107's unknown-verb refusal and
+    BR-109's optional doors. Each arm assembles to nothing in a shipped
+    kernel; `cmp` proves it. Their rows (a wild-pointer WM call, a worker
+    calling a file cell, a TASK_ALIVE under the lock) run against the
+    `APICHK` kernel only.
   - The tags also answer phase 2's IF question (4.4).
 - **Files:** as above.
 - **Neighbours:** S05 is cut after you merge. It needs your tags, so that
@@ -738,6 +920,21 @@ not open a PR. The orchestrator integrates.
   end (WP9 (`phase1.md:903`)). Then make the SDK and SPEC say what the code does, in as few
   lock updates as possible (WP26 (`phase1.md:1885`)). Theme 9 (theme 9 (`systemic.md:1336`)) is the cheapest item
   in the review, and the precondition for every appended cell.
+- **The owner on WP9** (owner, 2026-11-08). First round: it must prove its
+  worth before it spends bytes, because packages and drivers already carry
+  versions checked before anything runs. Second round, in force: **take it
+  if it is cheap**, because the loaders gate on `<=` PKG_FMT, so a package
+  newer than the kernel can still call a cell the kernel lacks. **What
+  already exists** (follow-up, 2026-11-08, `followup-already-exists.md` M5):
+  the level computation and its per-cell table are The Wire's
+  (`WIRE_LEVEL` = 7 and `WIRE_CELL_LEVELS` in `tools/os88wire.py`, checked
+  against each package's calls; SPEC.md 92.2; `abicompat` tests the
+  old-kernel case). So the kernel half (the word and the load check) covers
+  only a package copied by hand, and the table is The Wire's, not a new one.
+  Bring the measured cost back with the work: if it is not cheap, stop at the
+  measurement and report it. **Before building, confirm O20**: the owner's
+  words say "an `==` check"; this design refuses only a package whose needed
+  level is above the kernel's.
 - **Items:**
   - **WP9, in the form flag-day row A4 requires**
     (`abilist-section.md:50`, `abilist-section.md` row A4):
@@ -747,15 +944,24 @@ not open a PR. The orchestrator integrates.
       capped at 14 when it is set;
     - `ld_check_hdr` refuses with `LD_EVER`;
     - `OS88_NEED level`;
-    - one level table shared with The Wire's `WIRE_CELL_LEVELS`;
+    - one level table: The Wire's existing `WIRE_CELL_LEVELS`, read rather
+      than duplicated (follow-up, 2026-11-08);
     - `t_abilock` fails an appended cell that does not raise the level.
-  - **WP26's contract sentences** (WP26 (`phase1.md:1885`)), plus the text halves of BR-22
-    (ui-8), BR-77 (`bugs.md:1068`), BR-78 (`bugs.md:1069`), BR-85 (isr-3: OSAPI_WM_WAKE from an ISR
-    requires SS = LOW_SEG), BR-104 (`bugs.md:1095`), BR-115 (`bugs.md:1106`) (ui-9's "unless the ring
+  - **WP26's contract sentences** (WP26 (`phase1.md:1885`)), plus the text halves of
+    BR-77 (`bugs.md:1068`), BR-78 (`bugs.md:1069`), BR-104 (`bugs.md:1095`), BR-115 (`bugs.md:1106`) (ui-9's "unless the ring
     overflowed" weakens a promise: say so in the lock reason), BR-122 (`bugs.md:1113`),
     BR-145 (`bugs.md:1136`) (abi-5; its `os88drv.inc` half is S12's), cursor:mc-5's GFX_LOCK
     wording, xm-12's context rule, hdk-2's os88api.inc:3490, and gfce-8's
     class sentence.
+  - **Withdrawn from WP26, already in the tree** (follow-up, 2026-11-08,
+    `followup-already-exists.md` E2-E4): BR-22's text half (ui-8, "the
+    clipboard is not worker-safe": `apps/os88api.inc` and SPEC.md 55.4
+    already say so); BR-85's text half (isr-3, "OSAPI_WM_WAKE from an ISR
+    requires SS = LOW_SEG": `apps/os88api.inc` already says so); and gi-7's
+    `pit_now` sentence, already in `apps/os88pit.inc` and SPEC.md 53.2.1,
+    narrowed to SPEC.md 72.15.1's sentence alone. All three were written by
+    the review's own doc pass. What SPEC.md 7 still lacks is a rule NUMBER
+    and the lock ORDER (S16), not the Forbid sentence (E5).
   - **histsys-17** (-4..-8 code, `vga12.inc`).
   - **R9's doc half** (flag-day 3.1): CF=1 is the only universal refusal
     sign; AX means something only inside a named family; SPEC 18.4 gets a
@@ -778,13 +984,14 @@ not open a PR. The orchestrator integrates.
   at 0006 and in the loader.
 - **SPEC first:**
   - SPEC.md 20.2 and 20.2.0.1 (the level);
-  - the sentences WP26 lists, in SPEC.md 7, 8, 13.9, 18.4, 20.3, 41.8, 53.2.1,
-    55.4 and 66, and in SPEC 21.5 and 72.15.1.
+  - the sentences WP26 lists, in SPEC.md 7, 8, 13.9, 18.4, 20.3, 41.8 and 66,
+    and in SPEC 21.5 and 72.15.1 (53.2.1's and 55.4's are already there:
+    follow-up, 2026-11-08).
 - **Bytes:**
 
   | | kern_small | kern_big | kern_mega |
   |---|---:|---:|---:|
-  | WP9 | +8..+9 `.cold` | +8..+9 `.cold` | +8..+9 high, 0 conv |
+  | WP9 (if cheap: owner, 2026-11-08) | +8..+9 `.cold` | +8..+9 `.cold` | +8..+9 high, 0 conv |
   | histsys-17 | -4..-8 | -4..-8 | -4..-8 conv |
   | packages | about +9..+10 per opting package | | |
 
@@ -796,32 +1003,50 @@ not open a PR. The orchestrator integrates.
   - new host cases in `t_pkg`: a too-new package is refused with `LD_EVER`;
     a 14-character name with byte 31 set round-trips through `os88disk.py`.
 - **Done when:**
-  - the level is readable at 0006 on all four kernels;
-  - a too-new package is refused at load;
+  - O20 is answered, and either the level is readable at 0006 on all four
+    kernels and a too-new package is refused at load, or the measured cost is
+    reported as not cheap and WP9 stops there (owner, 2026-11-08);
   - every WP26 sentence has landed with one lock update;
-  - every cell-adding session can now start.
+  - every cell-adding session can now start. Without WP9, a cell-adding
+    session's guard is what the tree already does: the release that first
+    publishes the cell adds its `WIRE_CELL_LEVELS` row and raises
+    `WIRE_LEVEL` (SPEC.md 92.2).
 
 ### 3.7 S06 - Faults, ISRs and input (WP8 panel, WP13, WP22's shadow, batch F)
 
+**The fault panel is a knob item** (owner, 2026-11-08, decision O2). It is
+built here, behind a build knob that is off in every shipped kernel, until a
+field report says a divide fault is being hit. So S06's shipped bytes are
+batch F's and the shadow's alone, and the panel is a knob build's.
+
 - **Branch:** `big-review/s06-faults`. **Wave 3**, in parallel with S07, S08,
   S13 and S14. Third in the merge order.
-- **Goal:** one fatal path. Today one divide overflow is a dead machine on an
+- **Goal:** one fatal path, in a knob build. Today one divide overflow is a dead machine on an
   IBM 5150/5160 ROM, the DIV re-runs for ever on a 286+, and GLaBIOS continues
-  with garbage (WP8 (`phase1.md:782`), BR-9 (`bugs.md:228`)). Also: a written IF=0 budget with a ratchet
+  with garbage (WP8 (`phase1.md:782`), BR-9 (`bugs.md:228`)). No production
+  machine has met it, so the shipped kernels keep today's behaviour; kern_mega
+  keeps closing the faulting package, as it does (owner, 2026-11-08). Also: a written IF=0 budget with a ratchet
   and an instrument (WP13 (`phase1.md:1202`), BR-178 (`bugs.md:958`)); one kernel-side IMR shadow
   (WP22 (`phase1.md:1738`)); and the input and ISR defects (batch F (`bugs.md:1355`)). Themes 4 and 2
   (theme 4 (`systemic.md:560`), theme 2 (`systemic.md:301`)). **Implement with Opus from the start:** these are fault
   paths and re-entry (the story-fanout skill's rule).
 - **Items:**
-  - **WP8's panel half:**
+  - **WP8's panel half, behind a build knob** (owner, 2026-11-08):
     - gfce-1: the generalised panel and the INT 0 / INT 6 stubs, installed in
-      `sched_init`. The panel must not trust the scheduler tables
-      (BR-84 (`bugs.md:1075`)).
+      `sched_init`, all under one knob (name it in the session, register it
+      with a `#>` marker as every knob is, and add it to `buildmatrix`). The
+      panel must not trust the scheduler tables (BR-84 (`bugs.md:1075`)),
+      which rides inside the knob with it. In a shipped kernel the knob
+      assembles to nothing: `cmp` every image against the base at one commit.
+    - The panel's purpose is decided: a stack-overflow-style message where
+      the fault cannot be recovered from, so a picture of it names who divided.
     - gfce-3: the divide ratchet, `tests/unit/t_divsites.py` plus
       `tests/divsites.txt`. Register every div/idiv with a reason; "trusted by
-      ruling" is one reason.
+      ruling" is one reason. This is a build-time gate, 0 shipped bytes, and
+      stays exactly as planned.
     - DOS.O88's vector exchange must round-trip.
-    - **O2 decides the panel's behaviour before it ships.**
+    - DOS's own int 0 ("Divide overflow" ends the program) and windowed DOS's
+      06h bank (+6 DOS.O88) are DOS.O88's and do not depend on the knob.
   - **WP13:** the IF=0 rule in SPEC, `tests/unit/t_ifwin.py` plus
     `tests/ifwin.txt`, the IFLAT knob in `sched.inc`, and the `ifoff` row.
     BR-12 (`bugs.md:258`) is its first catch, and S08 fixes it. S08 merges
@@ -833,12 +1058,25 @@ not open a PR. The orchestrator integrates.
     vector scan and SOUND.DRV's sites are S12's. input-10 (PS/2 sync) is
     S11's.
   - **Batch F core:** BR-18 (`bugs.md:318`), BR-19 (`bugs.md:328`), BR-20 (`bugs.md:338`), BR-36 (`bugs.md:498`), BR-51 (`bugs.md:648`),
-    BR-85 (`bugs.md:1076`) (its code: the ES load and the SS-independent `evq_push`),
     BR-86 (`bugs.md:1077`) (the `cld`s), BR-178 (`bugs.md:958`).
+    - **BR-19's in-service rule reuses what exists** (follow-up, 2026-11-08,
+      `followup-already-exists.md` M4): the OCW3 in-service read is already
+      written in the heartbeat's stop reading (`khb_pisr`, `kernel/sched.inc`),
+      and a nested IRQ0 already refuses the switch through `[sch_chbusy]`.
+      Only the test for an IRQ other than IRQ0 is new; put it beside
+      `[sch_chbusy]`'s and share the read.
+    - **BR-85's code half is held** (follow-up, 2026-11-08, applying O3's
+      weighing): the ES load and the SS-independent `evq_push` (+3) defend
+      against a package IRQ handler that calls WAKE with a foreign SS, "and
+      none was traced". The SDK cell already states SS = LOW_SEG. Fix only
+      the kernel comment at events.inc:109-111.
     - BR-21 (`bugs.md:348`) is measure first: serlease at divisor 12 with the mouse
       moving, taken once by whoever decides.
-  - **Batch F low:** BR-79 (`bugs.md:1070`), BR-80 (`bugs.md:1071`) (the code; WP18's lock text rides
-    S16), BR-81 (`bugs.md:1072`), BR-82 (`bugs.md:1073`), BR-83 (`bugs.md:1074`), BR-87 (`bugs.md:1078`), BR-88 (`bugs.md:1079`), BR-89 (`bugs.md:1080`),
+  - **Batch F low:** BR-79 (`bugs.md:1070`), BR-80 (`bugs.md:1071`) (WP18's lock text rides S16; its
+    `task_sleep` guard and `gfx_lock` tripwire are knob-only, follow-up,
+    2026-11-08), BR-81 (`bugs.md:1072`), BR-82 (`bugs.md:1073`) (the texts
+    and the STKDIAG reading; the canary and its panel are knob-only, follow-up,
+    2026-11-08), BR-83 (`bugs.md:1074`), BR-87 (`bugs.md:1078`), BR-88 (`bugs.md:1079`), BR-89 (`bugs.md:1080`),
     BR-90 (`bugs.md:1081`), BR-91 (`bugs.md:1082`), BR-92 (`bugs.md:1083`), BR-93 (`bugs.md:1084`), BR-94 (`bugs.md:1085`), BR-175 (`bugs.md:928`)
     (optional: +122 `.vga`), BR-192 (`bugs.md:1168`) (text), BR-194 (`bugs.md:1170`).
     - BR-95 (`bugs.md:1086`) is optional (+25): measure how often it happens first.
@@ -853,7 +1091,7 @@ not open a PR. The orchestrator integrates.
   - `apps/os88pit.inc`;
   - tests: `t_divsites.py`, `divsites.txt`, `t_ifwin.py`, `ifwin.txt`;
   - docs/TESTING.md: `int0sweep` changes meaning, from "detector" to "the
-    panel appears";
+    panel appears", in the knob build only (owner, 2026-11-08);
   - PERFORMANCE.md (the IF=0 rule).
 - **Neighbours:**
   - S07 owns the rest of `wm.inc`: the doors, `wm_ptr2idx` (BR-8), the damage
@@ -868,15 +1106,21 @@ not open a PR. The orchestrator integrates.
 
   | | kern_small | kern_big | kern_mega |
   |---|---:|---:|---:|
-  | WP8 panel and stubs | +40..+55 | +45..+60 | 0 (the IDT handles it) |
-  | batch F core without BR-9 | +40 | +59 | ~+60 conv |
+  | WP8 panel and stubs (BR-84 inside) | **0 shipped**; +40..+55 in the knob build | **0 shipped**; +45..+60 in the knob build | 0 (the IDT handles it) |
+  | batch F core without BR-9 and BR-85 | +37 | +56 | ~+57 conv |
   | WP22 shadow | +25 | +25 | +39 conv |
-  | batch F low (if all taken; includes BR-34's IMR +8) | +49 | +61 | ~+61 |
-  | transient | `.boot2` +31..+41 (install +20..+30, BR-18 +6, BR-88 +5), fits in 702 | **`.ovl` +31..+41 against 46** (the same three) | `.ovl` as kern_big, against 2 free plus whatever S02's WP7 frees there |
+  | **session, shipped** | **+62** | **+81** | **~+96 conv** |
+  | batch F low (if all taken; includes BR-34's IMR +8; BR-80's +7 and BR-82's +11 are the knob's, follow-up, 2026-11-08) | +31 | +43 | ~+43 |
+  | transient | `.boot2` +11 (BR-18 +6, BR-88 +5), fits in 702; the knob build adds the install's +20..+30 | **`.ovl` +11 against 42** (the same two; the knob build adds the install) | `.ovl` as kern_big, against 2 free plus whatever S02's WP7 frees there, and BOOT3's relief in S30 |
   | modules | | SERIAL.DRV +20 (BR-87); DESK.DRV +5; CTRL.DRV +22 if gfce-6 lands here | |
 
-- **Owner:** **O2** (the panel), **O3** does not apply here: BR-9 reports
-  every fault, the kernel's own included (`bugs.md:1192`).
+  Recomputed (owner and follow-up, 2026-11-08): the old shipped figures were
+  +105..+120 kern_small, +129..+144 kern_big and ~+99 kern_mega, with the
+  panel, the stubs and BR-85 in them.
+
+- **Owner:** O2 is decided: the panel is a knob item (owner, 2026-11-08).
+  O3's ruling does not reach BR-9, which reports every fault, the kernel's own
+  included (`bugs.md:1192`); O2's knob is what keeps it out of retail.
 - **Rows to name:**
   - fast: `mirror`, the new `divsites`, the new `ifwin`;
   - soak: `serlease`, `dosmouse`, `doswmouse`, `kdmouse`, `usbmouse`,
@@ -889,11 +1133,13 @@ not open a PR. The orchestrator integrates.
   - full: `ps2mouse`;
   - 86Box AT-BIOS twins for BR-19.
   - New: a `tests/` package that divides by zero in a callback gets the
-    panel on a 5150 `_gla` profile, and as a `box-<row>` on 86Box's 286.
-    Break the install and watch it time out. Also `iflat` and
-    `ifoff --mouse`.
+    panel on a 5150 `_gla` profile, and as a `box-<row>` on 86Box's 286,
+    **against the knob build** (a private tree). Break the install and watch
+    it time out. `int0sweep` keeps its meaning on shipped kernels. Also
+    `iflat` and `ifoff --mouse`.
 - **Done when:**
-  - INT 0 and INT 6 reach the panel on kern_big and kern_small;
+  - in the knob build, INT 0 and INT 6 reach the panel on kern_big and
+    kern_small; in a shipped build the knob assembles to nothing (`cmp`);
   - every div is registered;
   - the IF=0 rule is in SPEC with its ratchet;
   - the shadow is in place;
@@ -905,21 +1151,33 @@ not open a PR. The orchestrator integrates.
   order.
 - **Goal:** teardown runs on the UI task, a dying owner releases its lock,
   and window pointers from packages are refused at the door. Theme 1's one
-  move (theme 1 (`systemic.md:134`)) removes the root of five findings. Batch C (batch C (`bugs.md:1310`));
+  move (theme 1 (`systemic.md:134`)) removes the root of five findings.
+  **Changed by the owner (2026-11-08):** packages are trusted (O3), so the
+  door refusals, BR-8's bound and BR-173's owner compare leave this session
+  for S04's optional `APICHK=1` arms; and theme 1's further context work is
+  not needed immediately (the mouse and idle already have stacks; the field
+  case the owner knows of is a sound interrupt on a package already near its
+  stack's edge, not shutdown). BR-4's teardown stays as a defect fix, its
+  urgency read off the new `stkdie` row. Batch C (batch C (`bugs.md:1310`));
   the damage pass's calling convention (WP21 (`phase1.md:1702`)). **Implement with Opus from
   the start** (re-entry, "the wrong package closed").
 - **Items:**
   - **Core:**
-    - BR-4 (`bugs.md:178`) with BR-173 (`bugs.md:908`). There are two working routes, -6..+50. The
+    - BR-4 (`bugs.md:178`). There are two working routes, -6..+50. The
       posted-close form as first written does not work: `app_close_win`
       re-hides a dying record.
-    - BR-8 (`bugs.md:218`): the bound before the div, plus WP8's door refusals and the
-      wake fence, +29..+46. A bound alone trades a dead machine for a write
-      into another package's window.
+    - **Out of this session** (owner, 2026-11-08, O3): BR-173
+      (`bugs.md:908`), a worker dying under its own gfx lock, +12; and BR-8
+      (`bugs.md:218`), the bound before the div, WP8's door refusals and the
+      wake fence, +29..+46 (+38 in the batch sum). A bound alone trades a dead
+      machine for a write into another package's window, so the bound goes
+      only with the doors (`bugs.md`'s own rule) and the `div` stays as it is
+      in retail. Both are S04's optional `APICHK=1` arms.
     - BR-28 (`bugs.md:418`), BR-47 (`bugs.md:608`) (with WP21's wm-17 in the same commit), BR-48 (`bugs.md:618`),
       BR-49 (`bugs.md:628`), BR-50 (`bugs.md:638`), BR-42 (`bugs.md:558`), BR-176 (`bugs.md:938`).
   - **Low:** BR-73 (`bugs.md:868`) (the resize mode and its lint), BR-108 (`bugs.md:1099`),
-    BR-109 (`bugs.md:1100`), BR-112 (`bugs.md:1103`), BR-113 (`bugs.md:1104`), BR-114 (`bugs.md:1105`), BR-115 (`bugs.md:1106`) (code),
+    BR-109 (`bugs.md:1100`) (its optional doors are the same kind as O3's six:
+    `APICHK=1` only, follow-up, 2026-11-08), BR-112 (`bugs.md:1103`), BR-113 (`bugs.md:1104`), BR-114 (`bugs.md:1105`), BR-115 (`bugs.md:1106`) (code),
     BR-116 (`bugs.md:1107`), BR-118 (`bugs.md:1109`), BR-119 (`bugs.md:1110`), BR-195 (`bugs.md:1171`) (moved from batch F),
     BR-196 (`bugs.md:1172`).
   - **WP21:** wm-17, the damage-pass tidy, and gfx-15's region sort (S17's
@@ -944,17 +1202,21 @@ not open a PR. The orchestrator integrates.
 
   | | kern_small | kern_big | kern_mega |
   |---|---:|---:|---:|
-  | batch C core | +92 (+55..+128), +1 `.bss` | +108 (+69..+146), +1 `.bss` | ~+98 conv, +1 `.bss`; high +10 (BR-176) -24 (BR-173) |
+  | batch C core, less BR-8 and BR-173 (O3) | **+42 (+14..+70)**, +1 `.bss` | **+58 (+28..+88)**, +1 `.bss` | **~+48** conv, +1 `.bss`; high +10 (BR-176) |
   | WP21 | -10 | -10 | -10 conv |
-  | batch C low (if all taken) | +54 | +77 | ~+64 |
-  | under O3 | BR-8 +36 and BR-173 +12 of the core | the same | |
+  | **session, shipped** | **+32 (+4..+60)** | **+48 (+18..+78)** | **~+38** conv |
+  | batch C low (if all taken), less BR-109's doors | +42 | +65 | ~+52 |
+  | out under O3 (owner, 2026-11-08) | BR-8 +38 (+29..+46: doors +36, bound +2) and BR-173 +12; BR-109 +12 | the same | BR-8 and BR-173 conv; BR-173's -24 `.mega` saving is lost too, because without the shared fix kern_mega keeps its own release |
+
+  The old figures were batch C core +92 / +108 / ~+98 and the session +82 /
+  +98 / ~+88, with the fences in.
   | modules | CTRL.DRV and FDLG.DRV os88ui copies +8..+12 each | DESK.DRV +11; every os88ui copy +8..+12 | |
 
   wm-2 for BR-8's bound is not taken: it needs +10..+15 of blob or `.ovl`,
   and neither has room.
-- **Owner:** **O3** for BR-8's door refusals and BR-173. If O3 applies the
-  ruling, take BR-8's bound only with its doors. Otherwise leave the div to
-  S06's panel (`bugs.md:1192`).
+- **Owner:** O3 is decided: not retail (owner, 2026-11-08). BR-8's bound
+  goes with its doors; with S06's panel behind a knob as well, a wild
+  pointer's `div` behaves in retail exactly as it does today.
 - **Rows to name:**
   - fast: `stkclass`, `stkapps`, `stik`, `stikcard`, `toast`, `hotpar`,
     `chromesites`;
@@ -964,13 +1226,13 @@ not open a PR. The orchestrator integrates.
     `deskitem`, `toastbar`, `dispfsx`, `btnall`, `dispclose`, `dispzoom`,
     `dispband`, `sizesnap`, `deskzoom`, `zoomsave`, `dispapps`, and the
     `mega-` twins;
-  - new: `stkdie` (BR-4); a clickrace row on `timerrace`'s model (BR-28); a
-    TASK_ALIVE-under-the-lock row (BR-173); a wild-pointer WM call under
-    `int0sweep`, refused (BR-8).
+  - new: `stkdie` (BR-4: it decides the urgency); a clickrace row on
+    `timerrace`'s model (BR-28). The TASK_ALIVE-under-the-lock row (BR-173)
+    and the wild-pointer WM call (BR-8) are S04's `APICHK` rows now.
 - **Done when:**
   - no window teardown or DESK.DRV drop runs on a worker's slice;
-  - a dying lock holder releases;
-  - the doors refuse a bad BX (or the bound alone, per O3).
+  - BR-28's liveness test is at `ui_bill`'s head;
+  - BR-8 and BR-173 are recorded as `APICHK`-only (owner, 2026-11-08).
 
 ### 3.9 S08 - Loader and heap (batch D, WP17, C1's internal callers)
 
@@ -982,14 +1244,20 @@ not open a PR. The orchestrator integrates.
   (`flagday.md:546`). Theme 6 (theme 6 (`systemic.md:825`)). **Implement with Opus from the start** (the
   heap is everyone's).
 - **Items:**
-  - **Core:** BR-2 (`bugs.md:158`), BR-7 (`bugs.md:208`) (+32..+36 `.cold`), BR-11 (`bugs.md:248`) (with
+  - **Core:** BR-2 (`bugs.md:158`), BR-7 (`bugs.md:208`) (+32..+36 `.cold`; kept: a damaged FILE is
+    outside the packages-are-trusted class, `bugs.md`), BR-11 (`bugs.md:248`) (with
     loader-8, counted here), BR-12 (`bugs.md:258`) (S06 merges after you and drops
-    its `tests/ifwin.txt` entry; remove it here only if S06 merged first), BR-29 (`bugs.md:428`), BR-30 (`bugs.md:438`).
+    its `tests/ifwin.txt` entry; remove it here only if S06 merged first).
+  - **Out of this session** (owner, 2026-11-08, O3): BR-29 (`bugs.md:428`),
+    the entry proc's returned BX, +13, and BR-30 (`bugs.md:438`), no nested
+    `OSAPI_PKG_START`, +18. Both are S04's optional `APICHK=1` arms.
   - **Then:** BR-35 (`bugs.md:488`), BR-52 (`bugs.md:658`), BR-53 (`bugs.md:668`) (**S09's prerequisite**),
     BR-54 (`bugs.md:678`) (measure first), BR-59 (`bugs.md:728`).
-  - **Low:** BR-104 (`bugs.md:1095`) (**O14**), BR-105 (`bugs.md:1096`) (the DMA-head guard and
-    kern_dos's twin: C1's correctness half), BR-106 (`bugs.md:1097`), BR-107 (`bugs.md:1098`) (it must
-    land before S09's optional MEMP_PURGEABLE), BR-120 (`bugs.md:1111`), BR-121 (`bugs.md:1112`),
+  - **Low:** BR-104 (`bugs.md:1095`) (**O14**, open), BR-105 (`bugs.md:1096`) (the DMA-head guard and
+    kern_dos's twin: C1's correctness half), BR-106 (`bugs.md:1097`), BR-107 (`bugs.md:1098`) in
+    its documented form, 0 bytes: an unknown verb refusing a package is the
+    same kind as O3's six (follow-up, 2026-11-08); its `stc/retf` form is an
+    `APICHK=1` arm; S09's MEMP_PURGEABLE, which it had to precede, is parked. BR-120 (`bugs.md:1111`), BR-121 (`bugs.md:1112`),
     BR-188 (`bugs.md:1164`) (**O12**), BR-189 (`bugs.md:1165`), BR-193 (`bugs.md:1169`). BR-122's text is S05's.
   - **WP17:** heap placement by the two-ends rule; the sorted-table prototype
     (mem-14, 0 shipped); the ~20 internal KB callers moved to the paragraph
@@ -1011,14 +1279,18 @@ not open a PR. The orchestrator integrates.
 
   | | kern_small | kern_big | kern_mega |
   |---|---:|---:|---:|
-  | batch D core | +104 (+83..+119) | +94 `.cold` (+73..+109) | 0 conv (+0..+2 `.bss` in BR-7's fold); core above 1MB |
-  | batch D rest (all) | +33 | +70 | 0; +4 high (BR-106) |
+  | batch D core, less BR-29 and BR-30 (O3) | **+73 (+52..+88)** | **+63 `.cold` (+42..+78)** | 0 conv (+0..+2 `.bss` in BR-7's fold); core above 1MB |
+  | batch D rest (all), BR-107 documented | +29 | +66 | 0; +4 high (BR-106) |
   | WP17 | 0 | +8 | +8 high |
   | loader-8 | | -3 `.cold` | -20 high |
-  | under O3 | BR-29 +13, BR-30 +18 | the same | |
+  | **session, shipped core** | **+73** | **+68** | 0 conv |
+  | out under O3 (owner, 2026-11-08) | BR-29 +13, BR-30 +18; BR-107 +4 | the same | |
+
+  The old figures were batch D core +104 / +94 and the session +104 / +99.
   | modules / packages | FILECP.DRV a few bytes (BR-11) | +20 in EVERY parts package's image (BR-59); kern_dos +1..+4 (BR-105) | |
 
-- **Owner:** O3 (BR-29, BR-30), O12 (BR-188), O14 (BR-104).
+- **Owner:** O3 is decided (BR-29, BR-30 out). Open: O12 (BR-188), O14
+  (BR-104; O3's weighing reads on it, but the owner has not answered).
 - **Rows to name:**
   - fast: `heapgran`, `drvmem`;
   - soak: `lzfence`, `lzload`, `lzload-lz4`, `lzfmt-all`, `lzbig`, `lzcomp`,
@@ -1048,12 +1320,22 @@ not open a PR. The orchestrator integrates.
   - rt-1 drop-to-cache;
   - rt-9's ranks;
   - shell-2's two users;
-  - optionally hm-9 `MEMP_PURGEABLE`:
-    - it needs BR-107 (`bugs.md:1098`) (S08) first, and `OS88_NEED` in callers;
-    - every shipped kernel answers an unknown `OSAPI_MEM_P` verb as
-      `MEMP_AVAIL` with CF clear;
-    - the proc call runs at IF=1 under `sch_lock` (WP2 (`phase1.md:254`)).
-  - rt-2 (FILECP and FDLG) is NOT here: it is S10's, on O4.
+  - **hm-9 `MEMP_PURGEABLE` is PARKED** (follow-up,
+    2026-11-08, `followup-purgeable.md`, on the owner's request for real use
+    cases). It is not needed now: the memory comes back only on a machine
+    that runs out, one of the review's two cited consumers (Skies' title art)
+    is already solved (SPEC.md 88.10.7.1), and the kernel already keeps the
+    largest package-content cache purgeable on the package's behalf
+    (`MEM_P_WSAVE`). When it is built, it is justified by Sheet's two
+    modules (~80KB held from launch to exit, recovery code already there) and
+    by keeping lazy parts until the heap needs them (an `op_keep` in
+    `os88partsbody.inc`), with the rank taken in AL; measure first on a 256KB
+    profile with Sheet behind a second application (`tools/heapmap.py`). The
+    zero-kernel-byte alternative, Sheet dropping its modules after use at a
+    ~1-2 s re-read, is the comparison to put to the owner first. Build
+    nothing here.
+  - rt-2 (FILECP and FDLG) is NOT here, and not anywhere: O4 refused it
+    (owner, 2026-11-08), and S10 is withdrawn.
 - **Files:** kernel/`mod.inc`, `memory.inc` (`mem_pg_own`, `mem_shed_one`),
   `desksc.inc`, `stikmenu.inc`; `tests/moddrop.txt`,
   `tests/unit/t_moddrop.py` (it must recognise the cache as a drop).
@@ -1063,9 +1345,13 @@ not open a PR. The orchestrator integrates.
   | | kern_small | kern_big | kern_mega |
   |---|---:|---:|---:|
   | rt-1 + rt-9 | 0 (**O5**: +60..+85) | +60..+85 `.cold` | 0 conv, +60..+85 high (conventional-heap modules only) |
-  | optional hm-9 | +4..+6 (the refusal) | +50..+80 `.cold` | +50..+80 high |
+  | hm-9 | parked: 0 (was +4..+6) | parked: 0 (was +50..+80 `.cold`) | parked |
 
-- **Owner:** O5 for the kern_small arm.
+- **Owner:** O5 for the kern_small arm, still open. The owner finds it
+  interesting: "keep FDLG as purgeable" might be worth ~100 bytes (owner,
+  2026-11-08). Leave the arm open, as 2.6 says of a blocked item, with its
+  price ready to put to the owner; on kern_small FILECP and FDLG stay modules
+  either way (O4).
 - **Rows to name:**
   - fast: `moddrop`, `stik`;
   - full: `kernresident`, `small128`, `bootsmoke`;
@@ -1080,90 +1366,125 @@ not open a PR. The orchestrator integrates.
 
 ### 3.11 S10 - FILECP and FDLG cached at boot on kern_big (WP2b, **owner decision O4**)
 
-- **Branch:** `big-review/s10-fcpcache`. **Wave 5.** Cut after S09 has
-  merged, and **only on the owner's word**.
-- **Goal:** rt-2 with bytes-3 (WP2 (`phase1.md:254`)). kern_big's two largest resident
-  bodies become modules cached at boot. The boot read does not grow, because
-  the bytes are already in the cylinder run. The refusal narrows to a purged
-  image under pressure, and the gap review proposes the existing swap prompt
-  for that case, COMMAND.COM's answer, instead of a refusal.
-- **Items:**
-  - the FILECP/FDLG arm on kern_big and kern_emu only;
-  - the ROM/HMA skip, because the cache saves nothing where `.cold` is
-    ROM- or COLDHMA-adopted;
-  - the swap prompt;
-  - **do not apply on kern_mega**: its `.cold` is already above 1MB.
-- **Files:** kernel/`filecp.inc`, `fdlg.inc`, `kernel.asm`
-  (FCP_MOD/FDLG_MOD on kern_big); `boot/boot2.asm` (the copy at
-  `mem_unblob`); `tools/os88mod.py`; Makefile (the four kern_big system
-  disks).
-- **SPEC first:** SPEC.md 38.0 ("On kern_big the glue is NOT a module, on
-  purpose" is the sentence being reversed) and SPEC.md 2.8.3.
-- **Bytes:**
-  - kern_big **-2,468..-2,508 resident**: -2,568 movable, MEASURED spans
-    (FILECP about 1,657, FDLG about 911), plus +60..+100 glue and prompt.
-  - 1,089 bytes of the kernel's `os88ui` copy stay resident.
-  - With S09's rt-1 the WP2 core is -2,383..-2,448.
-  - Disk: about +4 clusters on each kern_big system disk.
-  - Runtime: a reload is 1-2 int 13h (0.4-0.8 s PREDICTED) on a path that
-    today never touches the disk.
-- **Rows to name:**
-  - soak: `fcpapi`, `fcpcopy`, `fcpsmall`, `fcproom`, `fdlggrey`,
-    `fdlgsmall`, `fdlgdrop`, `fdlgup`, `fdlgchoose`;
-  - full: `kernresident`, `bootsmoke`;
-  - new: shed FILECP under pressure, then Save As shows the prompt; the same
-    on a COLDHMA machine, with no preload claim.
-- **Done when:** the trade was put to the owner with the three quotes, and
-  either it landed with its rows named, or the decision "no" is written in
-  `DECISIONS.md` and the checklist.
+**WITHDRAWN (owner, 2026-11-08). Do not start this session.** O4 is decided:
+FILECP and FDLG stay resident on kern_big, in any form, as they have been
+"20+ times now (almost once per size pass)". On kern_big the user has swapped
+in a DOS, office or utility disk and cannot be made to insert the system disk
+and wait every time a file is opened or copied: "open and copy file are not
+'system management' actions". A boot-time cache is not a saving either.
+kern_small, a one-disk machine with no hard disk, drivers or DOS, keeps them
+as modules. The refusal is recorded in CLAUDE.md, AGENTS.md and SPEC.md 38 so
+that it is not proposed again. The id and heading stay so that nothing
+renumbers.
+
+What it would have been, for the record: rt-2 with bytes-3 (WP2
+(`phase1.md:254`)), kern_big **-2,468..-2,508 resident** (-2,568 movable,
+MEASURED spans, FILECP about 1,657 and FDLG about 911, plus +60..+100 glue and
+a swap prompt), about +4 clusters on each kern_big system disk, and a reload
+of 1-2 int 13h (0.4-0.8 s PREDICTED) on a path that today never touches the
+disk. Its files (`filecp.inc`, `fdlg.inc`'s kern_big arm, `boot/boot2.asm`'s
+`mem_unblob` copy, `tools/os88mod.py`, the Makefile's kern_big disks) and its
+rows are released to the sessions that own them. Its boot-cache mechanism
+(rt-2) had one other planned user, S11's keyboard mouse, and the owner's
+shape for that needs no cache (3.12).
+
+- **Done when:** the decision "no" is written in `DECISIONS.md` and the
+  checklist (done: this plan, 2026-11-08).
 
 ### 3.12 S11 - Residency by hardware: keyboard mouse, PS/2 overlay, text-7 (WP3, input-10)
 
-- **Branch:** `big-review/s11-residency`. **Wave 6.** Cut after S09 (the boot
-  cache), S12 and S16 have merged, because `mouse.inc` is busy until then.
+- **Branch:** `big-review/s11-residency`. **Wave 6.** Cut after S03 (`.boot3`
+  exists), S09 (the module cache), S12 and S16 have merged, because
+  `mouse.inc` is busy until then.
 - **Goal:** code for hardware this machine lacks, or code needed only until
   something happens, should not stay resident (WP3 (`phase1.md:419`)). Rungs serve nested
   machine classes only (rt-4), so class code goes in owner-loaded overlays,
   not in more rungs (theme 7 (`systemic.md:984`)).
+- **Decided** (owner, 2026-11-08, second round): **O6 and O7 are TAKEN.** The
+  keyboard mouse is resident on every kernel today (`kbm_tab` .. `kbm_ev` in
+  `.text`; size passes 16-18 trimmed it but never made it droppable). One
+  cluster on disk for a decent amount of resident RAM is a good trade, **but
+  no boot may get longer**, so it is never loaded on a machine that has a
+  mouse. text-7 is worthwhile at 0.048% of a full Note Pad repaint (0.78% in
+  the absolute worst case).
 - **Items:**
-  - rt-7: KBMOUSE as an init-lifetime module, held from boot and dropped at
-    settle (**O6**).
+  - **rt-7, in the owner's shape** (owner, 2026-11-08, preferred over a
+    `KBMOUSE.DRV` module): move the keyboard mouse's POINTER half into
+    `.boot3` (BOOT3-PLAN, built by S03), and before `.boot3` is dropped copy
+    it into a heap claim **only when no mouse has been found**. So there is
+    no disk read, no cluster on any disk and no system-disk dependency, and
+    the claim is still there to drop later when a mouse that speaks only after
+    boot (USBMOUSE.DRV, a late serial mouse) appears. The owner's check
+    against the code: only the pointer half can go. `kbm_isr` is the keyboard
+    ISR on every machine (it wakes the UI task on a key and guards the BIOS
+    buffer, mouse.inc:2893) and stays resident, with the keypad-5 latch and
+    `kbm_p5`, `kbm_key`'s gates, `kbm_shf`, `kbm_pass` and `kbm_poll0`
+    (follow-up, 2026-11-08: `kbm_poll0` is called on every machine by
+    `menu_track`, `ui_drag` and `ui_grow`). `kbm_key`, `kbm_move`, `kbm_btn`,
+    `kbm_rclick` and `kbm_p5spend` are reached only in task context
+    (`kbm_poll0`, `kbm_ui`, menu.inc's `kbm_pollm`), so the claim needs no ISR
+    pin, and its callers need the one-compare gate a module's callers already
+    have. The drop sites are every `[mou_ptr]` store: `mou_settle`,
+    kern_small's inline copy and `vmm_boot_x`.
   - rt-3: the PS/2 runtime as an owner-loaded overlay, with its door registry
     on `tests/vgarefs.txt`'s shape (not owner-gated).
-  - text-7 (**O7**).
+  - **text-7** (taken): `.planar` and `fnt_rn_edge`'s VGA arm (187 bytes,
+    MEASURED) into the `.vga` rung, each door a jcc over a near `jmp` (5 bytes
+    in `.text`) with a 3-byte `jmp` back in `.vga`. A `tests/vgarefs.txt` row
+    for the door, guarded by the `[vid_planes]` test `font_run_x` already
+    makes; the parity pad at font.inc:1839 moves (`t_hotpar`).
   - WP22's input-10: PS/2 sync, which now lives in the overlay.
   - Refused: bytes-2's AT rung.
 - **Files:**
   - kernel/: `mouse.inc`, `vmmouse.inc`, `font.inc` (the parity pad at
-    font.inc:1839 and `t_hotpar` move with text-7), `mod.inc` (mod_tab rows),
-    `kernel.asm` (the slide decision; the boot-cache copy);
+    font.inc:1839 and `t_hotpar` move with text-7), `menu.inc` and `ui.inc`
+    (the gates at `kbm_pollm` and `kbm_ui`), `kernel.asm` (the slide
+    decision; the copy out of `.boot3` before it is dropped);
+  - BOOT3-PLAN's `.boot3` section (S03's), for the pointer half;
   - a new `drivers/ps2mouse/` (or a DRVC_OVL row beside XMEM's);
-  - `tests/vgarefs.txt`, `tests/moddrop.txt` (an "init lifetime" reason);
-  - Makefile (KBMOUSE.DRV on every system disk).
-- **SPEC first:** SPEC.md 9.6.1.1, 9.12 and 2.10.9 (rt-4's nesting rule).
-- **Bytes:**
+  - `tests/vgarefs.txt`; `tests/moddrop.txt` only if the claim is a
+    `mod_tab` row, which the owner's shape does not need.
+  - Not needed in the owner's shape: a `KBMOUSE.DRV` image, its `mod_tab` row,
+    and the Makefile's copy onto every system disk.
+- **SPEC first:** SPEC.md 9.6.1.1 (the keyboard mouse's lifetime: kept only
+  on a machine with no pointer, and dropped when one speaks), 9.12 and 2.10.9
+  (rt-4's nesting rule); BOOT3-PLAN section 14's `.boot3` text for the copy.
+- **Bytes** (follow-up, 2026-11-08: `followup-decisions-6-8.md`; its figures
+  were priced for the module shape, so this session measures the owner's):
 
   | | kern_small | kern_big | kern_mega |
   |---|---:|---:|---:|
-  | rt-7 KBMOUSE (O6) | -290..-380 (gross of the boot copy) | -290..-380 | -290..-380 conv |
+  | rt-7 keyboard mouse, resident | -300..-320 | -300..-320 | -300..-320 conv |
+  | rt-7 on a machine with no mouse | the claim, in whole 512-byte granules: about +130..+220 net for the session (+190..+210 against the corrected saving), PREDICTED | the same | the same, where its heap is conventional |
   | rt-3 PS/2 overlay | n/a | **-220..-235 on every machine** (+14 inside the overlay for input-10) | 0 (kept resident) |
-  | text-7 (O7) | n/a | +16 gauge; -165..-185 mono | 0 |
-  | total | -290..-380 | -494..-599 gauge; -675..-800 mono XT | -290..-380 conv |
-  | modules | KBMOUSE.DRV +400..+450 | KBMOUSE.DRV +400..+450; PS/2 overlay ~+265 | KBMOUSE.DRV +400..+450 |
+  | text-7 | n/a | +16 gauge; about -177 mono | 0 |
+  | **total** | **-300..-320** | **-504..-539 gauge; about -697..-732 mono XT** | **-300..-320 conv** |
+  | disk and boot | about +375 inside KERNEL.SYS's `.boot3`, read after the bar; no extra file | the same; PS/2 overlay ~+265 | the same |
 
-- **Risk:** the drop sites must cover every `[mou_ptr]` store on every
-  kernel.
+  The old figures were rt-7 -290..-380 (whose -380 top was optimistic,
+  because `kbm_poll0` must stay), KBMOUSE.DRV +400..+450 on every system disk,
+  +85..+165 on a mouseless machine (a granule is 512 bytes, not a paragraph),
+  and a total of -494..-599 gauge, -675..-800 mono.
+- **Risk:** the drop must follow every `[mou_ptr]` store on every kernel; the
+  copy must happen before `.boot3` is dropped and only after the probe has
+  had its say (a serial mouse can take seconds to settle; say in SPEC what a
+  mouse that speaks later does to the claim).
 - **Rows to name:**
-  - fast: `ovlchk`, `moddrop`;
+  - fast: `ovlchk`, `moddrop`, `hotpar`;
   - full: `ps2mouse` (QEMU: the PS/2 mouse is on the closed list),
     `kernresident`;
-  - soak: `wheelps2`, `mega-ps2mouse`, `vmmouse`, `vidresidentcga`,
-    `vidresidentvga`, `disptext`, `glyphcost`, `hibernate`,
-    `box-ps2mouse`;
-  - new: a pointerless desktop driven by arrow keys on a CGA `_gla` machine
-    (no `kbm*` row exists), and the same after a hibernate resume.
-- **Done when:** rt-3 has landed; O6 and O7 are answered and landed or
-  declined; `t_moddrop` knows the init lifetime.
+  - soak: `wirefleetnomouse` (follow-up, 2026-11-08: it already drives every
+    gesture with the keypad and Space after putting the probe back to
+    "nobody has spoken"), `mouerrq` (the keyboard mouse retiring),
+    `wheelps2`, `mega-ps2mouse`, `vmmouse`, `usbmouse`, `vidresidentcga`,
+    `vidresidentvga`, `disptext`, `glyphcost`, `hibernate`, `box-ps2mouse`;
+  - new: a row named for the keyboard mouse, with a CGA `_gla` leg and an
+    after-hibernate-resume leg (the claim "no `kbm*` row exists" was wrong:
+    `wirefleetnomouse` covers the keypad half); a boot WITH a mouse that
+    proves no claim is made; a late USBMOUSE.DRV that drops the claim.
+- **Done when:** rt-3 and text-7 have landed; the keyboard mouse's pointer
+  half is out of `.text` and held only on a mouseless machine; a boot with a
+  mouse makes no claim and no extra read.
 
 ### 3.13 S12 - Drivers, the IRQ scan and the matrix gates (WP4, WP22's driver half, batch G's driver half, WP31)
 
@@ -1190,7 +1511,11 @@ not open a PR. The orchestrator integrates.
     - BR-145 (`bugs.md:1136`)'s `os88drv.inc` half.
   - **WP22's driver half:**
     - drivers-6: the release-time IVT scan (BR-34's vector scan, +25
-      `.cold`);
+      `.cold`). **Walk `mem_rr_ivt`** (`kernel/memory.inc`), which already
+      lists every IVT row a driver can own (IRQ0-7 at int 08h-0Fh, IRQ8-15 at
+      int 70h-77h, int 33h) for the region-reloc walk, rather than a second
+      hand-written list; it probably costs less than +25 (follow-up,
+      2026-11-08, `followup-already-exists.md` M3);
     - SOUND.DRV's IMR (+6) and OCW3 (+8) through the shadow;
     - the optional `OSAPI_IRQ` cell (**O16**).
   - **Batch G's driver half:**
@@ -1202,7 +1527,19 @@ not open a PR. The orchestrator integrates.
       `tests/smallport.txt` (beside `megaport.txt` and `box86port.txt`);
     - `OSAPI_XREFUSE`;
     - the `diskw.inc` and `snd.inc` stubs;
-    - `tests/kernresident.py`'s mono row;
+    - **rt-5, decided: PRINT the mono figure** (owner, 2026-11-08, second
+      round: mono gains are pure gains for mono). A `classes` line in
+      `tools/kernsize.py` beside `footprint` and `boot` (VGA, EGA, mono, mono
+      with `.cold` in a ROM or the HMA), fed from the `ks:` line's `vgars`,
+      `coldpara`, `vgabufpara` and `kseg`, or a `mono=MONO_FLOOR` field on
+      that `-DKERNSIZE`-only `%warning`; bless it into docs/KERNEL-MEMORY.md's
+      baseline. 0 shipped bytes. Today's figure is MEASURED: mono kern_big
+      resides in **94,208** (`MONO_FLOOR`) against the gauge's 96,768
+      (follow-up, 2026-11-08). No `KERN_MONO_BUDGET` and no gate;
+    - `tests/kernresident.py`'s mono row is optional now. If it is written, it
+      must read the running floor, `[mem_base]`: line 78's `span = KERN_END *
+      16` reads the VGA figure on a Hercules machine and passes, green and
+      testing nothing (follow-up, 2026-11-08);
     - gkm-1's two fixes and its rule in docs/plans/KERN-MEGA-PLAN.md's
       checklist;
     - gkm-6 (**O10**, prototype against `vmmouse` first).
@@ -1237,7 +1574,9 @@ not open a PR. The orchestrator integrates.
   no bump. N1 and D4 need no bump (flag-day 3.1).
 - **Rows to name:**
   - fast: `drvovl`, `drvmem`, `mirror`, `abilock`, `hotpar`, `api-abi`;
-  - full: `kernresident` (plus its new mono row);
+  - full: `kernresident` (plus a mono row only if written, reading
+    `[mem_base]`);
+  - host: `kernsize`'s new `classes` line, blessed (rt-5);
   - soak: `drvcall`, `drvmove`, `drvclaim`, `hmadrv`, `lzdrv`, `heapdrv`,
     `vidsound`, `arcsound`, `midiracksb`, `usbmouse`, `hibernatedrv`,
     `cpnames`, `extdmod`, `dockmodule`, `hddcp`, `irqgrab`, `dosirq`,
@@ -1259,13 +1598,16 @@ not open a PR. The orchestrator integrates.
   with Opus from the start** (descriptor races, selectors).
 - **Items:**
   - **WP5:** md-8, md-19, md-20, md-21; gms-5, gms-8, gms-9; gms-R2 (after
-    gms-4); L7 (mc-19's bit in LD_H_CLASS bit 5); mc-10's `[mega_kfix]`; the
+    gms-4); L7 (mc-19's bit in LD_H_CLASS bit 5); mc-10's `[mega_kfix]`
+    (in a knob build only: a diagnostic for a failure no machine has met,
+    follow-up, 2026-11-08); the
     shared A20 include (S22 and S23 depend on it); the kern_dos image savings.
     md-15's park-header sum is optional: KDL_VER 6 -> 7, kern_mega arm only.
   - **Batch H core:** BR-13 (`bugs.md:268`), BR-64 (`bugs.md:778`), BR-67 (`bugs.md:808`) (0 bytes), BR-69 (`bugs.md:828`),
     BR-70 (`bugs.md:838`), BR-71 (`bugs.md:848`), BR-184 (`bugs.md:1018`), BR-185 (`bugs.md:1028`), BR-186 (`bugs.md:1038`), BR-187 (`bugs.md:1048`).
   - **Then:** BR-65 (`bugs.md:788`) (form (c) now; form (a) is **O15**), BR-66's LDT half
-    (with gms-10's walkers), BR-68 (`bugs.md:818`).
+    (with gms-10's walkers), BR-68 (`bugs.md:818`) (its counter is the knob's,
+    as mc-10 above).
   - **Low:** BR-144 (`bugs.md:1135`), BR-161 (`bugs.md:1152`) through BR-170 (`bugs.md:1161`), BR-204 (`bugs.md:1180`),
     BR-205 (`bugs.md:1181`). BR-66's compaction model is a flag-day row.
 - **Files:**
@@ -1292,8 +1634,9 @@ not open a PR. The orchestrator integrates.
   |---|---:|---:|---|
   | WP5 | -40 | -145..-165 | each kern_mega kern_dos image -1,585..-1,588; kern_big's kern_dos image -560; HIBER.DRV +~40 |
   | batch H core | +20 `.text` (BR-64, unless placed in `.mega`) | +19 | HIBER.DRV -13; HMA kern_dos +7; `.boot2` +8 (fits in 285 after S03) |
-  | batch H all | +20 (+128..+192 `.lowbss` only with O15's form (a)) | ~+141 | HIBER.DRV -9 |
-  | L7, mc-10 | +2 `.bss` | +12, +8 `.mega` | |
+  | batch H all | +20 (+128..+192 `.lowbss` only with O15's form (a)) | ~+133 (was ~+141; BR-68's +8 to a knob) | HIBER.DRV -9 |
+  | L7 | 0 | +12 `.mega` | |
+  | mc-10 (knob build only, follow-up, 2026-11-08) | 0 shipped (+2 `.bss` in the knob) | 0 shipped (+8 `.mega` in the knob) | |
 
 - **Rows to name:**
   - fast: `mirror` (once S01's md-5 covers kerndos), `megagrid`, `megapkg`;
@@ -1321,9 +1664,13 @@ not open a PR. The orchestrator integrates.
   theme 5 (`systemic.md:702`)).
 - **Items:**
   - **Core:** BR-16 (`bugs.md:298`) (plus BR-183's kernel half, int 13h status 11h in the
-    BIOS loop, unpriced), BR-17 (`bugs.md:308`), BR-22 (`bugs.md:358`) (**O3**: retail, or APICHK=1
-    only), BR-23 (`bugs.md:368`), BR-24 (`bugs.md:378`), BR-27 (`bugs.md:408`) (-12), BR-37 (`bugs.md:508`) (**O3**),
+    BIOS loop, unpriced), BR-17 (`bugs.md:308`), BR-23 (`bugs.md:368`), BR-24 (`bugs.md:378`), BR-27 (`bugs.md:408`) (-12),
     BR-41 (`bugs.md:548`).
+  - **Out of this session** (owner, 2026-11-08, O3): BR-22 (`bugs.md:358`),
+    the file cells refusing a worker caller, +12, and BR-37
+    (`bugs.md:508`), a package-opened batch bracket, +16. Both are S04's
+    optional `APICHK=1` arms. BR-23's hostile FileSize stays: a hostile FILE
+    is outside the class (`bugs.md`).
   - **BR-62's stub halves:** dw-8's label move, gi-6's VOL_STAT stub (+4
     kern_small, also flag-day 3.1's kern_small VOL_STAT tail), abi-2's SDK
     text. Land them with BR-179 (`bugs.md:968`).
@@ -1356,13 +1703,17 @@ not open a PR. The orchestrator integrates.
 
   | | kern_small | kern_big | kern_mega |
   |---|---:|---:|---:|
-  | batch E core | +73 (+68..+76) | +68 (+63..+71) | 0..+9 conv; the rest high |
+  | batch E core, less BR-22 and BR-37 (O3) | **+45 (+40..+48)** | **+40 (+35..+43)** | 0 conv (BR-22's N-stub was the 0..+9); the rest high |
   | WP16 | +22..+27 | +77..+88 | +6..+12 conv, +70..+80 high |
+  | **session, shipped core** | **+67..+72** | **+117..+128** | **+6..+12 conv** |
   | batch E low (if all taken) | +66 | +152 | |
   | O13 BR-60 | optional | +90 | |
   | `.ovl` | | +10 (BR-141), after S06 in the ledger | |
   | modules | FDLG.DRV +8 | FSCHECK.DRV +6 +10; FORMAT.DRV +10; os88wseq carriers +2 | |
-  | under O3 | BR-22 +12, BR-37 +16 | the same | |
+  | out under O3 (owner, 2026-11-08) | BR-22 +12, BR-37 +16 | the same | |
+
+  The old figures were batch E core +73 / +68 / 0..+9 and the session
+  +95..+100 / +145..+156 / +6..+21.
 
 - **ABI / lock:** two appended cells and the SDK texts: one
   `abilock --update`, no bump, after S05's level. Callers use `OS88_NEED`.
@@ -1376,8 +1727,9 @@ not open a PR. The orchestrator integrates.
     `assocflush`, `cdromsim`, `deskfdd`, `hddgeom`, `assocfind`, `rdmount`,
     `imgmount`, `fmarrows`, `navcalls`, `dirwsize`, `shedrelist`,
     `fddpage`, `bigvol`, `lzload`;
-  - new: a worker calling a file cell (it must refuse, under O3's answer); a
-    hostile FileSize entry; an unreadable FAT; a 15th file in a kernel-made
+  - new: a worker calling a file cell (it must refuse) against the `APICHK`
+    kernel only, since O3 keeps the refusal out of retail; a hostile FileSize
+    entry; an unreadable FAT; a 15th file in a kernel-made
     folder; a kern_small REDLINE save; a packed file listing in upper case on
     a Linux vfat mount (a host check).
 - **Done when:**
@@ -1485,8 +1837,8 @@ not open a PR. The orchestrator integrates.
 - **Items:**
   - **Batch B core:** BR-3 (`bugs.md:168`), BR-45 (`bugs.md:588`), BR-46 (`bugs.md:598`), BR-57 (`bugs.md:708`), BR-174 (`bugs.md:918`)
     (texts, and the GFXAUDIT knob).
-  - **Low:** BR-58 (`bugs.md:718`), BR-131 (`bugs.md:1122`), BR-132 (`bugs.md:1123`), BR-147 (`bugs.md:1138`) (blob +7: **after
-    O1**), BR-148 (`bugs.md:1139`), BR-149 (`bugs.md:1140`), BR-151 (`bugs.md:1142`) (FSIF_FLIP: CLAUDE.md and
+  - **Low:** BR-58 (`bugs.md:718`), BR-131 (`bugs.md:1122`), BR-132 (`bugs.md:1123`), BR-147 (`bugs.md:1138`) (blob +7: in S03's BOOT3 wave 1 room, so no longer
+    blocked; O1 is decided, owner, 2026-11-08), BR-148 (`bugs.md:1139`), BR-149 (`bugs.md:1140`), BR-151 (`bugs.md:1142`) (FSIF_FLIP: CLAUDE.md and
     AGENTS.md's WireBall section change with it).
   - Already done elsewhere: BR-14 (S03), BR-77 (S05), BR-152 (S01).
   - **WP20:** gfx-9, gfx-8, gfx-15 (on S07's region sort), gfx-4, shell-9, os88ui:F1
@@ -1507,7 +1859,7 @@ not open a PR. The orchestrator integrates.
   | batch B core without BR-14 | +8 | +39 (+2 `.cold` if gfx_blit1 is taken) | +39 conv |
   | batch B low | +12 | +65 | ~+63 |
   | WP20 | +32..+44 | +120..+146 gauge (+24..+36 `.text`, +8 `.cold`, os88ui:F1 +8..+12 `.cold`, +80..+90 `.vga`); a mono machine +40..+56 | +24..+36 conv, +16..+20 high |
-  | transient | | `.boot2` +7 (BR-147, after O1) | |
+  | transient | | `.boot2` +7 (BR-147, in BOOT3's room) | |
   | modules | CTRL.DRV and FDLG.DRV +8..+12 each | WIN95.DRV +6; VID_APPLY's expansions +14; GFXAUDIT knob ~+40 | |
 
   The `.vga` part counts against kern_big's 6,946-byte VGA window.
@@ -1532,15 +1884,20 @@ not open a PR. The orchestrator integrates.
 
 ### 3.19 S18 - The KHP round (WP11, **owner decision O8**)
 
-- **Branch:** `big-review/s18-khp`. **Wave 6.** Cut after S17, and only on
-  the owner's word.
+- **Branch:** `big-review/s18-khp`. **Wave 6.** Cut after S17. **O8 is
+  decided: per row** (owner, 2026-11-08). The round is waiting to be revived,
+  and each row is reviewed individually on whether it earns its space; the
+  session is not blocked, but it puts each row to the owner with its own
+  measured bytes and A/B, rather than taking the six as a block. O8b
+  (kern_small's losing arms) is still open.
 - **Goal:** no indefinite shelf (WP11 (`phase1.md:1058`)). LAST-DROP-PERF 7.1 measured these
   knobs on the 4.77 MHz XT. kern_mega carries rows 1-11; kern_big, the XT's
   build, carries none but KHP_LZ. This is a request to the owner for a bigger
   round, not the review's default. The owner's bar for khp1 was "around 100b"
   (docs/plans/khp1/LOG.md).
 - **Items:**
-  - take each knob, or move it to `docs/plans/khp1/patches/`;
+  - for each knob, one at a time: its bytes, its measured win, and the
+    owner's yes or no; then take it, or move it to `docs/plans/khp1/patches/`;
   - date each decision in `docs/plans/LAST-DROP-PERF.md`;
   - keep the kern_small arms under KERN_SMALL;
   - wm-19 (band.inc's BAND=1 knob) retires under the same rule, if the owner
@@ -1548,8 +1905,10 @@ not open a PR. The orchestrator integrates.
 - **Files:** `kernel/kernel.asm:252-307` (the KHP block), `wm.inc`,
   `softgfx.inc`, `vga12.inc`, `mouse.inc` (the VGASAVE arms in `.vga`),
   `blank.inc:540-582`, `fsx.inc:500`; SPEC.md 5.7.
-- **Bytes:** kern_big **+104..+107 on every machine and +182 `.vga`, so
-  +286..+289 on the gauge**; kern_small 0; kern_mega 0.
+- **Bytes:** by row. The six recommended (RELIT, DMGSTALE, CAPTION, VGASAVE,
+  VGAFILL, VGAEDGE) are kern_big **+104..+107 on every machine and +182
+  `.vga`, so +286..+289 on the gauge**; kern_small 0; kern_mega 0. A row the
+  owner declines costs 0.
 - **Rows to name:**
   - full: `khpknobs`, `knobself`, `kernresident`;
   - soak: `buildmatrix`, `glyphcost`, `dispsaver`, `dispfsx`, `dispfsxcga`,
@@ -1557,7 +1916,8 @@ not open a PR. The orchestrator integrates.
     `vgadirty`;
   - a `m.flicker()` pointer sweep on `os8088_xt_vga` for VGASAVE;
   - the A/B leg in the final pass.
-- **Done when:** every knob is taken or patched, with a date.
+- **Done when:** every knob is taken or patched, each with the owner's
+  answer and a date.
 
 ### 3.20 S19 - SDK-side work in packages (WP15)
 
@@ -1580,6 +1940,12 @@ not open a PR. The orchestrator integrates.
     0 kernel bytes.
   - gi-3 (on S14's gi-2).
   - The parts init-drop.
+  - Not here: gi-7's `pit_now` sentence, which `phase1.md`'s WP15 lists. It
+    is already in `apps/os88pit.inc` and SPEC.md 53.2.1 (follow-up,
+    2026-11-08, `followup-already-exists.md` E2); only SPEC.md 72.15.1's
+    sentence is owed, and that is S05's.
+  - hm-11's sub-allocator is unaffected by hm-9's parking: it is source in
+    the packages, 0 kernel bytes.
 - **Files:**
   - apps/: `os88partsbody.inc`, `os88parts.inc`, `os88pself.inc`,
     `os88wseq.inc`, `os88pit.inc`, `cc/crt0.asm`, `os88api.inc`;
@@ -1624,7 +1990,10 @@ not open a PR. The orchestrator integrates.
   - **shell-3**: `OSAPI_DESK_ITEM`'s `AH = 0FEh`, the additive half of
     flag-day row C10. Check what an older kernel does with AH=0FEh before
     shipping a caller;
-  - shell-8 (blob +10: **after O1**, or in a form that leaves the blob);
+  - shell-8 (+10): in `.boot3` once S30's BOOT3 wave 2 has moved the shortcut
+    reader there, otherwise in the blob, where S03's BOOT3 wave 1 has made
+    room (BOOT3-PLAN section 11). No longer blocked: O1 is decided (owner,
+    2026-11-08);
   - the WIN16 shortcut row.
 - **Files:** kernel/`apps.inc`, `fdlg.inc`, `desk.inc`, `desksc.inc`,
   `ctrl.inc`, `ui.inc`, `clip.inc`; `apps/os88api.inc`;
@@ -1637,7 +2006,7 @@ not open a PR. The orchestrator integrates.
   |---|---:|---:|---:|
   | WP27 | -21..+9 | -15..-25 (ui-10 -30..-40, files-17 +6, ui-11 +9) | -21..-31 conv, +6 high |
   | optional cells | +34..+44 | +34..+44 | |
-  | modules / transient | | CTRL.DRV +12; `.boot2` +10 (shell-8) | |
+  | modules / transient | | CTRL.DRV +12; `.boot2` or `.boot3` +10 (shell-8) | |
 
 - **ABI / lock:** one update, no bump; callers use `OS88_NEED`.
 - **Rows to name:**
@@ -1649,19 +2018,24 @@ not open a PR. The orchestrator integrates.
 
 ### 3.22 S21 - Hibernate, the clock and system services (WP29, WP30, batch G's services half)
 
-- **Branch:** `big-review/s21-services`. **Wave 5.** First in the merge
-  order. Cut after S12 (`driver.inc`) and S13 (HIBER.DRV's kern_mega changes)
-  have merged.
+- **Branch:** `big-review/s21-services`. **Wave 5.** Second in the merge
+  order, after S30 (follow-up, 2026-11-08; it was first). Cut after S12
+  (`driver.inc`) and S13 (HIBER.DRV's kern_mega changes) have merged.
 - **Goal:**
   - the rest of batch G (batch G (`bugs.md:1370`)), among them rank-9 BR-10 (`bugs.md:238`) (Esc on
     the Resume face deletes the hibernated session) and rank-15 BR-15 (`bugs.md:288`)
     (the clock gains about 31 seconds a day);
   - the module-side hibernate work (WP29 (`phase1.md:2018`));
   - the one-clock prototype (WP30 (`phase1.md:2052`));
-  - **the `.ovl` relief kern_big needs** (2.5).
+  - **the `.ovl` relief kern_big needs** (2.5), now normally S30's
+    (BOOT3-PLAN wave 3: -176), which merges first in this wave.
 - **Items, in this order:**
-  1. **The `.ovl` relief**: move `clk_probe`'s RTC rungs out of `.ovl` (SPEC.md
-     2.5.3.2). Do it first, in its own commit, and quote the tally line.
+  1. **The `.ovl` relief, only if S30's wave 3 has not landed** (follow-up,
+     2026-11-08): move `clk_probe`'s RTC rungs out of `.ovl` (SPEC.md
+     2.5.3.2), or, if O19's question 8 says so, the whole clock ladder into
+     `.boot3` (1,782 bytes, MEASURED, one contiguous run of `clk_*` in
+     `.ovl`). Do it first, in its own commit, and quote the tally line. With
+     S30's 176 in, 2.5's ledger has your +29 (or +46) with room to spare.
   2. Batch G services core: BR-10 (`bugs.md:238`), BR-15 (`bugs.md:288`), BR-38 (`bugs.md:518`), BR-39 (`bugs.md:528`),
      BR-40 (`bugs.md:538`), BR-43 (`bugs.md:568`), BR-44 (`bugs.md:578`) (in its +5 form, or gfce-6's +22 form,
      which replaces it).
@@ -1686,7 +2060,7 @@ not open a PR. The orchestrator integrates.
   | batch G services core | +2 (BR-43; BR-15 is 0) | +2 | +2 conv |
   | BR-159 | | +12 | |
   | WP30 | -10..+10 | -10..+10 | -10..+10 |
-  | `.ovl` | 0 | **relief first**, then +29 (BR-44 +5, BR-157 +8, BR-158 +16), or +46 with gfce-6's form | as kern_big |
+  | `.ovl` | 0 | +29 (BR-44 +5, BR-157 +8, BR-158 +16), or +46 with gfce-6's form, on S30's relief (or your own, first) | as kern_big, on S30's kern_mega arm |
   | HIBER.DRV | | ~+100 (batch G) +14 (WP29) | +20 more (WP29) |
   | other modules | | DISKOPS.DRV +48 (BR-72 +30, BR-101 +18) +40 (WP29); CTRL.DRV +40..+60 (BR-26), +22 (gfce-6's form); SAVER.DRV +15 | |
 
@@ -1702,7 +2076,7 @@ not open a PR. The orchestrator integrates.
   - new: Esc on the Resume face keeps the files (BR-10); a DOS TIME read after
     a panel Set (BR-26).
 - **Done when:**
-  - the `.ovl` relief leaves room for the rest of the ledger;
+  - the `.ovl` wants fit, on S30's relief or your own;
   - batch G's services core has landed;
   - the one-clock prototype is measured, then landed or recorded.
 
@@ -1955,6 +2329,111 @@ not open a PR. The orchestrator integrates.
 - **Rows to name:** fast: `checkdocs`. No emulator row can see a comment.
 - **Done when:** the gate holds, and `cmp` passes over every image.
 
+### 3.31 S30 - `.boot3` waves 2 and 3: the boot driver loader, the SYSTEM.CFG reader, the `.ovl` relief (BOOT3-PLAN)
+
+New (owner, 2026-11-08: O1's answer is `docs/plans/BOOT3-PLAN.md`).
+
+- **Branch:** `big-review/s30-boot3`. **Wave 5.** First in the merge order.
+  Cut after S03 (`.boot3` and its wave 1) and S12 (`driver.inc`, `boot2.asm`'s
+  `%1_call`) have merged.
+- **Goal:** take BOOT3-PLAN's waves 2 and 3 (its section 8). Wave 2 moves
+  the SYSTEM.CFG reader and the boot driver loader, with `ovc_buf`, out of
+  the blob; wave 3 relieves `.ovl`, which the wave-5 wants land on. Both are 0
+  resident. The handoff is BOOT3-PLAN itself: read its sections 3, 4, 8, 9,
+  12, 13 and 14 first. Its figures are kern_big's; the owner's second round
+  makes `.boot3` generic, so this session takes kern_mega's arm too (BOOT3
+  question 3: its `.ovl` has 2 bytes free and the same wants), and
+  kern_small's if S03 found it needs one.
+- **Items:**
+  - **Wave 2**, as BOOT3-PLAN section 8 corrects it: the `ovc_*` reader,
+    `ovl_cfg_load`, the `ovl_sc_*` shortcut reader (shell-8's +10 lands here
+    afterwards), `drv_boot_x` and `drv_boot_want`, `ovl_fdd_apply`, the
+    `bdl_*` loader, `bxf_sync` if `os88ovlchk` certifies its closure: 1,649
+    out of the blob; `KGO_PAIR b3` (+56) in `.boot3`; `bdt_*` STAYS in the blob
+    (the status line reads it through `[cs:si]`); `ovc_buf` into `.boot3b`,
+    on a linear 512-byte boundary. The blob frees about 1,640; the lift goes
+    to about 224 paragraphs (PREDICTED).
+  - **Wave 3**: `vid_ctx_init`, `sch_idle_start` and `mem_init_x` (176,
+    MEASURED) out of `.ovl`, 0 bytes at the call sites. `.ovl` goes from S14's
+    21 free to about 197.
+  - **The clock ladder** is O19's question 8 (whole, 1,782 MEASURED, or only
+    BR-157 and BR-158's two rungs). Until it is answered, leave it in `.ovl`;
+    the 176 already cover S21's wants (2.5).
+- **Files:** BOOT3-PLAN section 8's: kernel/`driver.inc` and `desksc.inc`
+  (the `ovc_*` reader and the `ovl_sc_*` shortcut reader), `kernel.asm` (the lift, the guards), `boot/boot2.asm` (the
+  crossings and the `bvs_disp_init` door), `memory.inc` (`mem_init_x`'s
+  group-4 site), `sched.inc` (`sch_idle_start`), `vidsel.inc` (`vid_ctx_init`);
+  `tools/os88ovlchk.py` and the other wave-0 tools as they need new entries.
+- **Neighbours:** S21 (same wave) merges after you and lands its `.ovl` and
+  CTRL.DRV wants on your relief. S20's shell-8 lands in `.boot3` after you.
+  S12 (wave 4) has finished `driver.inc`; move its merged bodies whole.
+- **SPEC first:** BOOT3-PLAN section 14's sections for waves 2 and 3.
+- **Bytes** (BOOT3-PLAN section 9, kern_big; PREDICTED):
+
+  | | kern_small | kern_big | kern_mega |
+  |---|---:|---:|---:|
+  | resident | 0 | 0 | 0 conv |
+  | `.boot2` | only if it opts in | about -1,640 (wave 2) | priced by BOOT3-PLAN |
+  | `.boot3` | as above | about +1,715 + 512 nobits (wave 2), +176 (wave 3) | priced by BOOT3-PLAN |
+  | `.ovl` | - | **-176** | priced by BOOT3-PLAN |
+  | boot RAM | - | the lift 96 -> about 224 paragraphs; the 128KB arena about 22,528 (O19 question 2) | |
+  | KERNEL.SYS | - | about +1,500 more (+3 sectors) than after wave 1, read after the bar: about +80 ms on 360KB for wave 2 | |
+
+- **Owner:** O19's questions 2 (wave 2's boot-time RAM) and 8 (the clock
+  ladder) are open. Question 5 is answered: no kern_big 128KB boot row.
+- **Rows to name:** BOOT3-PLAN section 13's rows for waves 2 and 3, and:
+  - fast: `ovlchk`, `drvovl`, `drvmem`; `blobruns` by hand as a host check
+    (and in fast or full if S01 or S03 moved it, as the owner asked);
+  - soak: `cfgtrip`, `desksc`, `drvcall`, `hibernatedrv`, `bootfloor`,
+    `bootfloor-ab`, `coldslide`, `bootstatus`, `splashbar`, `kzboot`,
+    `smallboot`, the `mega-` twins for kern_mega's arm;
+  - full: `bootsmoke`, `small128`.
+- **Done when:** both waves have landed on kern_big (and kern_mega's arm),
+  `.ovl`'s free bytes are quoted off the tally, and `os88ovlchk` certifies
+  every moved closure.
+
+### 3.32 S31 - `.boot3` wave 4: `.boot2` back to its original purpose (BOOT3-PLAN)
+
+New (owner, 2026-11-08, second round: wave 4 YES, "nothing should stay
+bigger than it needs to be, and the quicker splash is a benefit").
+
+- **Branch:** `big-review/s31-boot2`. **Wave 6.** Last in the merge order.
+  Cut after S30 has merged, and after S03's boot-4 and boot-10 (WP6), which
+  gate the blob's shrink.
+- **Goal:** BOOT3-PLAN's wave 4 (its section 8): the adapter switch's boot
+  instance (apart from `bvs_apply`), `vx_boot_x` and `vx_blk`, `xm_boot_x`,
+  `wm_init`, the dock geometry, and `kmain_o` itself move to `.boot3`. What
+  stays in `.boot2` is the loader, the splash, the first-tick probe and the
+  status line (3,215 bytes, MEASURED, plus `bdt_*`). Then `.boot2` is a
+  ratchet (`tests/blobbodies.txt`, which only shrinks) and BOOT2_SECS falls
+  from 13 to 7 or 8, an earlier bar: about 110-130 ms on 360KB (PREDICTED).
+- **Items:** BOOT3-PLAN wave 4's steps 1-7, in order; boot-17's `kmain_o`
+  table rides along for its diagnostics if wanted (no longer a byte item).
+  Verify first that VXV_INIT copies `vx_blk` and keeps no DX:SI.
+- **The earlier bar without wave 4** (BOOT3 question 7) is an option only if
+  it is less complex than this wave (owner, 2026-11-08); with wave 4 taken it
+  is not pursued separately. It interacts with BR-1's track-bounded head.
+- **Files:** BOOT3-PLAN wave 4's: `kernel.asm` (`kmain`'s `SPLGATE1`,
+  `spl_gate`), `dock.inc` (`dkb_geom`), `wm.inc` (`wm_init`), the adapter
+  switch's `KSW_SECT` bodies, `vesa`'s `vx_boot_x`, `xmem.inc`'s
+  `xm_boot_x`; the Makefile's BOOT2_SECS; `tests/unit/t_blobruns.py`'s
+  IMAGES and STAGE2 rows (moved with reasons); a new `tests/blobbodies.txt`
+  and its host gate.
+- **SPEC first:** SPEC.md 2.9.5.3 (the dropped `[spl_fseg]` test) and
+  BOOT3-PLAN section 14's sections for wave 4.
+- **Bytes** (BOOT3-PLAN section 9, kern_big, PREDICTED): **-8 resident**
+  (`dkb_geom`'s and `kmain`'s `SPLGATE1`s, -4 each); `.boot2` about 3,330
+  used at 13 sectors before the shrink, then 7 or 8 sectors; `.boot3` about
+  +4,170 + 512 in all; KERNEL.SYS about net 0 against today once the blob is 7
+  sectors. kern_small and kern_mega: priced by BOOT3-PLAN.
+- **Rows to name:** BOOT3-PLAN section 13's; the new `blobbodies` gate
+  (fast); `blobruns` (fast or full, per the owner), `blobsum`, `splashbar`,
+  `splashspin`, `bootstatus`, `kzboot`, `smallboot`, `bootfloor`, `vesa`,
+  `vesacp`, `dockpos`, `dockmodule`, `xmla`; full: `bootsmoke`, `small128`.
+- **Done when:** `.boot2` holds only the four parts BOOT3-PLAN names (plus
+  `bdt_*`), the ratchet runs, and BOOT2_SECS has fallen with `t_blobruns`'
+  rows moved.
+
 ## 4. Phase 2: the flag day
 
 ### 4.1 What must be true before it starts
@@ -1971,13 +2450,13 @@ pieces must have merged first (`flagday.md:546`):
 | the C SDK in `PKG_FMT`'s fingerprint (engsys-11) | section 0 item 4 says the C SDK moves in the same commit; no gate fails today when it does not | S01 |
 | the VX/XM/HD private versions fingerprinted (drivers-16) | a flag day that moves a private ABI then notices | S01 |
 | `API_RN_DSOFF` (abi-4) | T5 moves the frame by FLAGS | S01 |
-| `@ctx` tags (abi-8) and the `APICHK=1` knob (abi-15) | the rebuilt tree is checked; the tags answer T5's IF question; the flag day's soak can run a checked kernel once | S04 |
-| the API level (A4) | the only guard for hot cells after T5 | S05 |
+| `@ctx` tags (abi-8) and the `APICHK=1` knob (abi-15) | the rebuilt tree is checked; the tags answer T5's IF question; the flag day's soak can run a checked kernel once, with the package fences O3 keeps out of retail | S04 |
+| the API level (A4), if it is cheap (owner, 2026-11-08) | the only guard for hot cells after T5; if S05 found it is not cheap, P0 puts the question again with T5's numbers | S05 |
 | R9's doc half | the additive half of R9 | S05 |
 | T6's mechanism, byte-identical, with the gates; V7's reading; P4's door on `cw_` | T5 becomes a flip; the renumber's sort; the door proved on kernel-private traffic | S25 |
 | N1, D4 (the floor written down), histsys-7 | make D1 and drivers-9 moot without a renumber | S12 |
 | C1's correctness half: BR-105 and the ~20 internal KB callers moved to paragraphs | C1's KB shifts can then go with the cells | S08 |
-| L7 (the clean bit, with `os88pkg.py` and the `%error`), mc-10 | L3's staged road | S13 |
+| L7 (the clean bit, with `os88pkg.py` and the `%error`), mc-10 (its counter in a knob build) | L3's staged road | S13 |
 | D8 phase 1: the IMR shadow and drivers-6's scan (and the cell if O16 is yes) | lets the flag day make the cell mandatory | S06, S12 |
 | F3 phase 1, the dual-mark reader | lets the flag day drop the old mark | S14 |
 | shell-3 (`AH = 0FEh`), and kern_small's `VOL_STAT` tail | the additive half of C10; R9's stub | S20, S14 |
@@ -2150,7 +2629,7 @@ none is answered here.
 ## 5. Running it as several cloud sessions
 
 **The honest trade first.** Several sessions buy wall-clock: seven waves
-instead of 29 serial sessions. They pay for it in tokens and coordination:
+instead of 30 serial sessions (29 before the owner's answers). They pay for it in tokens and coordination:
 
 - Every session re-reads CLAUDE.md, this plan and its synth sections.
 - Every container runs `make deps` and a full `make` of its own.
@@ -2274,7 +2753,8 @@ The orchestrator:
   every session has its own branch and only the orchestrator merges.
 - A cold container spends `make deps` plus a full `make` before it does any
   work.
-- Sessions run on the account's own limits. This plan's widest wave is five.
+- Sessions run on the account's own limits. This plan's widest wave is six
+  (wave 6, since S31 joined it: owner, 2026-11-08).
 
 ### 5.4 The alternative inside ONE session: the story-fanout skill
 
@@ -2292,14 +2772,15 @@ skill (`.claude/skills/story-fanout/SKILL.md`).
 - **Models:** the skill's rule is that cheaper models build and Opus
   verifies. This plan marks the handoffs where Opus should implement from the
   start: S06, S07, S08, S13 and S15 (fault paths, re-entry, the heap,
-  descriptors, the FAT write path).
+  descriptors, the FAT write path), and S03, S30 and S31 for `.boot3`'s
+  segment crossings (follow-up, 2026-11-08).
 - **What it saves:** cold containers. Worktrees share one clone and one
   `make deps`.
 - **What it costs:** one container's four cores for every agent's `make`.
   Hold a wave to three or four agents, or the builds contend.
 - **The fan-out bins:** the skill's three bins are already drawn here.
   - Fan out: every session not marked owner-gated.
-  - Owner decision: 2.6's table.
+  - Owner decision: 2.6's *Still open* table.
   - Defer: the waves after the current one.
 
 ### 5.5 The merge protocol, and the one final pass
@@ -2363,65 +2844,76 @@ Until the owner answers, the rule as written binds every session.
 Tick a line when its work has merged into `big-review/phase1` (phase 1) or
 `big-review/flagday` (phase 2), with the commit. An owner-gated line is
 ticked only when it has landed, or when the owner's "no" is recorded beside
-it.
+it. **Updated for the owner's answers** (owner and follow-up, 2026-11-08):
+the lines the answers changed say so, and a refusal already recorded is
+ticked with its date.
 
 **Phase 1, wave 1**
 
-- [ ] S01 gates: WP10; BR-74, BR-75, BR-76, BR-171, BR-172, BR-177; the kernsize home tally
-- [ ] S02 free bytes and `.bss`: WP1 (with BR-110), WP7; `.ovl` at 46 free, blob at 17
+- [ ] **S01 URGENT: BR-1 part 1** (KSIG_OFF 22528, the segment arm dropped: 0 bytes big/mega, -11 small) **and the `t_canary` rewrite**, red on all four 9-sector images at 4096; SPEC.md 2.9.13.3 and 18.93.1; rdiag fixed or retired (follow-up, 2026-11-08)
+- [ ] S01 gates: WP10; BR-74, BR-75, BR-76, BR-171, BR-172, BR-177; the kernsize home tally; `t_bsszero` (fast), red once on a private tree with `.ovl`'s `start=` removed (follow-up, 2026-11-08)
+- [ ] S02 free bytes and `.bss`: WP1 (with BR-110), WP7 (the rule is settled: zero since PR #61; the comment fixes checked in); `.ovl` at 46 free, blob at 17
 - [ ] S04 contracts and tags: WP14, WP19, the APICHK knob; one lock update
+- [ ] S04 (optional) the package fences as `APICHK=1` arms only: BR-8's doors and bound, BR-173, BR-29, BR-30, BR-22, BR-37, BR-107, BR-109's doors (owner, 2026-11-08: not retail)
 
 **Phase 1, wave 2**
 
-- [ ] S03 boot: WP6 (BR-153, BR-154 first), BR-1, BR-14, BR-25, BR-55, BR-56, BR-63; BR-155, BR-156
-- [ ] S03 BR-6 (**O1**: the 14th blob sector)
-- [ ] S05 the API level (A4) and WP26's contract text; R9's doc half; histsys-17
+- [ ] S03 boot: WP6 (BR-153 first, with `resident` named), BR-1 part 2, BR-14, BR-25, BR-55, BR-56, BR-63; BR-155, BR-156
+- [ ] S03 BOOT3-PLAN wave 0 (with boot-18, BR-154) and wave 1 (blob -504); `.boot3` generic across the kernels (owner, 2026-11-08)
+- [x] S03 O1, the 14th blob sector: **NO** (owner, 2026-11-08); the route is BOOT3-PLAN
+- [ ] S03 BR-6, in BOOT3's room, with the owner's rule: an MDA alone prints a message and halts; an MDA beside a CGA switches to the CGA
+- [ ] S05 WP26's contract text (without ui-8, isr-3 and gi-7's 53.2.1 sentence, already in the tree); R9's doc half; histsys-17
+- [ ] S05 the API level (A4), if it is cheap (owner, 2026-11-08), after O20 (`==` or above-the-kernel)
 
 **Phase 1, wave 3**
 
-- [ ] S07 batch C core: BR-4, BR-173, BR-8, BR-28, BR-42, BR-47, BR-48, BR-49, BR-50, BR-176; WP21
-- [ ] S07 batch C low: BR-73, BR-108, BR-109, BR-112..BR-116, BR-118, BR-119, BR-195, BR-196
-- [ ] S07 BR-8's doors and BR-173 under **O3**
-- [ ] S08 batch D core: BR-2, BR-7, BR-11 (with loader-8), BR-12, BR-29, BR-30
-- [ ] S08 batch D rest: BR-35, BR-52, BR-53, BR-54, BR-59, BR-105, BR-106, BR-107, BR-120, BR-121, BR-189, BR-193; WP17 and C1's callers
-- [ ] S08 owner items: BR-104 (**O14**), BR-188 (**O12**), BR-29/BR-30 under **O3**
-- [ ] S06 the fault panel and stubs (BR-9, BR-84) (**O2**); the divide ratchet
+- [ ] S07 batch C core: BR-4, BR-28, BR-42, BR-47, BR-48, BR-49, BR-50, BR-176; WP21
+- [ ] S07 batch C low: BR-73, BR-108, BR-109 (its doors `APICHK` only), BR-112..BR-116, BR-118, BR-119, BR-195, BR-196
+- [x] S07 BR-8's doors and bound, and BR-173, under **O3**: not retail (owner, 2026-11-08); optional `APICHK` arms in S04
+- [ ] S08 batch D core: BR-2, BR-7, BR-11 (with loader-8), BR-12
+- [ ] S08 batch D rest: BR-35, BR-52, BR-53, BR-54, BR-59, BR-105, BR-106, BR-107 (documented form), BR-120, BR-121, BR-189, BR-193; WP17 and C1's callers
+- [ ] S08 owner items: BR-104 (**O14**), BR-188 (**O12**)
+- [x] S08 BR-29 and BR-30 under **O3**: not retail (owner, 2026-11-08)
+- [ ] S06 the fault panel and stubs (BR-9, BR-84) **behind a build knob**, 0 shipped bytes, `cmp`-proved (O2 decided: owner, 2026-11-08); the divide ratchet
 - [ ] S06 WP13: the IF=0 rule, `t_ifwin`, IFLAT, `ifoff`
 - [ ] S06 WP22's IMR shadow; BR-34's IMR read-modify-writes
-- [ ] S06 batch F core: BR-18, BR-19, BR-20, BR-21 (measured), BR-36, BR-51, BR-85, BR-86, BR-178
+- [ ] S06 batch F core: BR-18, BR-19 (beside `[sch_chbusy]`, on `khb_pisr`'s read), BR-20, BR-21 (measured), BR-36, BR-51, BR-85 (comment only; the code half held), BR-86, BR-178
 - [ ] S06 batch F low: BR-79..BR-83, BR-87..BR-95, BR-175, BR-192, BR-194
-- [ ] S14 batch E core: BR-16, BR-17, BR-22, BR-23, BR-24, BR-27, BR-37, BR-41; BR-62's stubs with BR-179; BR-183's kernel half
+- [ ] S14 batch E core: BR-16, BR-17, BR-23, BR-24, BR-27, BR-41; BR-62's stubs with BR-179; BR-183's kernel half
+- [x] S14 BR-22 and BR-37 under **O3**: not retail (owner, 2026-11-08)
 - [ ] S14 batch E rest: BR-61, BR-123..BR-130, BR-133..BR-143, BR-190, BR-191
 - [ ] S14 BR-60 (**O13**)
 - [ ] S14 WP16: FIND_SEQ, GRAIN, F3's dual-mark reader, dr-10, dr-11, dw-21, files-5
-- [ ] S13 WP5 (with L7, mc-10, the A20 include)
+- [ ] S13 WP5 (with L7, mc-10 in a knob build, the A20 include)
 - [ ] S13 batch H core: BR-13, BR-64, BR-67, BR-69, BR-70, BR-71, BR-184..BR-187
-- [ ] S13 batch H rest: BR-65(c), BR-66's LDT half, BR-68, BR-144, BR-161..BR-170, BR-204, BR-205
+- [ ] S13 batch H rest: BR-65(c), BR-66's LDT half, BR-68 (its counter a knob's), BR-144, BR-161..BR-170, BR-204, BR-205
 - [ ] S13 BR-65 form (a) (**O15**)
 
 **Phase 1, wave 4**
 
 - [ ] S12 WP4 (histsys-7, N1, D4, drivers-5, drivers-14, bytes-8, isr-11, BR-145's driver half)
-- [ ] S12 BR-34's vector scan; SOUND.DRV's IMR and OCW3; BR-5, BR-31, BR-32, BR-33
-- [ ] S12 WP31's gates; gkm-1's two fixes
+- [ ] S12 BR-34's vector scan (walking `mem_rr_ivt`); SOUND.DRV's IMR and OCW3; BR-5, BR-31, BR-32, BR-33
+- [ ] S12 WP31's gates; gkm-1's two fixes; rt-5's `classes` line in `kernsize` (O18: print it, owner, 2026-11-08)
 - [ ] S12 `OSAPI_IRQ` (**O16**); gkm-6 (**O10**)
-- [ ] S09 drop-to-cache: rt-1, rt-9, shell-2; hm-9 (optional); kern_small arm (**O5**)
+- [ ] S09 drop-to-cache: rt-1, rt-9, shell-2; kern_small arm (**O5**, liked, still open)
+- [x] S09 hm-9 `MEMP_PURGEABLE`: parked (follow-up, 2026-11-08, `followup-purgeable.md`)
 - [ ] S15 WP12: histsys-3, dw-13, dw-15, dw-16, dw-17, dw-20
 - [ ] S15 dw-14 (**O9**)
 - [ ] S17 batch B core: BR-3, BR-45, BR-46, BR-57, BR-174
-- [ ] S17 batch B low: BR-58, BR-131, BR-132, BR-148, BR-149, BR-151; BR-147 (after **O1**)
+- [ ] S17 batch B low: BR-58, BR-131, BR-132, BR-148, BR-149, BR-151; BR-147 (in S03's BOOT3 room)
 - [ ] S17 WP20 (gfx-4, gfx-8, gfx-9, gfx-15, shell-9, os88ui:F1, cursor:mc-9) and WP23
 
 **Phase 1, wave 5**
 
-- [ ] S21 the `.ovl` relief (`clk_probe`'s RTC rungs out of `.ovl`)
+- [ ] S30 BOOT3-PLAN wave 2 (the SYSTEM.CFG reader, the boot driver loader, `ovc_buf`) and wave 3 (`.ovl` -176), with kern_mega's arm
+- [ ] S21 the `.ovl` relief, only if S30's wave 3 has not landed (`clk_probe`'s RTC rungs, or the clock ladder per O19)
 - [ ] S21 batch G services: BR-10, BR-15, BR-38, BR-39, BR-40, BR-43, BR-44, BR-26, BR-72
 - [ ] S21 batch G low: BR-96..BR-103, BR-157..BR-160
 - [ ] S21 WP29 and WP30
 - [ ] S16 WP18: the boost (measured), `OSAPI_TASK_WAKE`, the lock rules; histsys-5 (optional)
 - [ ] S19 WP15: mem-17, text-15, text-16, hm-11, gi-3, the parts init-drop
-- [ ] S20 WP27: ui-10, files-17, ui-11, shell-3, shell-8 (after **O1**); ui-12, ui-19 (optional)
-- [ ] S10 FILECP/FDLG cached on kern_big (**O4**)
+- [ ] S20 WP27: ui-10, files-17, ui-11, shell-3, shell-8 (in `.boot3` after S30, or the blob); ui-12, ui-19 (optional)
+- [x] S10 FILECP/FDLG cached on kern_big (**O4**): **REFUSED** (owner, 2026-11-08); session withdrawn
 
 **Phase 1, wave 6**
 
@@ -2430,8 +2922,10 @@ it.
 - [ ] S23 WP34: BR-180, BR-181, BR-206, BR-207, BR-208, BR-211
 - [ ] S24 WP28: the engine prototype, `modhop.inc`, the scanner that sees macros
 - [ ] S11 rt-3, the PS/2 overlay, with input-10
-- [ ] S11 KBMOUSE (**O6**); text-7 (**O7**)
-- [ ] S18 the KHP round (**O8**)
+- [ ] S11 the keyboard mouse (**O6** TAKEN): the pointer half in `.boot3`, copied into a heap claim only on a mouseless machine, dropped when a late mouse speaks (the owner's shape)
+- [ ] S11 text-7 (**O7** TAKEN)
+- [ ] S18 the KHP round, row by row, each with the owner's answer (**O8**: per row); O8b
+- [ ] S31 BOOT3-PLAN wave 4 (owner: YES): `.boot2` back to the loader, splash, first-tick probe and status line; the `blobbodies` ratchet; BOOT2_SECS down
 
 **Phase 1, wave 7**
 
@@ -2445,7 +2939,7 @@ it.
 
 **Phase 1, close**
 
-- [ ] every owner decision O1..O18 answered and recorded
+- [ ] every owner decision O1..O21 answered and recorded (decided so far: O1, O2, O3, O4, O6, O7, O8, rt-5, the `.bss` rule, BR-6, the API level, theme 1, `.LNK`; hm-9 parked: owner and follow-up, 2026-11-08)
 - [ ] the deduplicated soak union, once, with the A/B leg (15-minute reports)
 - [ ] failures fixed; only those rows re-run
 - [ ] `make test-full` once; `make budget-check` recorded

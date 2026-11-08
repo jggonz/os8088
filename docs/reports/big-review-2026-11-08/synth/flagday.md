@@ -112,8 +112,9 @@ what the code supports.
    package call sites**. The price is **+150 to +300 clocks a rare call**,
    PREDICTED. The door must own its vector against DOS (a named vector in
    81h-FFh, virtualised in DOS's AH=25h/35h), and its run-time refusal covers
-   rare cells only, so A4's load-time level is still the guard for hot cells.
-   T1 stays the fallback.
+   rare cells only, so A4's load-time level is still the guard for hot cells
+   (A4 is taken if it is cheap: owner, 2026-11-08, second round; the first
+  round said it must prove its worth). T1 stays the fallback.
 2. **The window-handler row is a class table in the package (R14), not one
    indexed setter (K17-3).** About **-320 kern_big** (13 words a record, not
    10), **-95 to -120 kern_small**, **~-350 conv kern_mega**, and +40 to +90
@@ -258,7 +259,8 @@ Phase 2. Status: proposed, the table row.
 - **Refusal.** An index past this kernel's end answers CF=1, AX=1 (what
   `OSAPI_XREFUSE` answers today). This covers **rare indices only**: a newer
   HOT cell on an older kernel is still a wild far call past `osapi_table_end`,
-  so A4 remains the guard for hot cells. [Lt] [Lc]
+  so A4 remains the guard for hot cells (A4 is taken if it is cheap, owner,
+  2026-11-08, second round). [Lt] [Lc]
 - **Bytes, re-derived.** Cells: 112 x (6 - 2) = -448 on kern_big and kern_small,
   119 x 4 = -476 on kern_mega (MEASURED counts). The door: an instruction
   sketch (bank DS and SI, `lds` the return, bump the IP, fetch and bound the
@@ -498,10 +500,33 @@ mechanism, Phase 2 for the renames. Status: proposed.
 
 | id | what | buys | bump | source | status |
 |---|---|---|---|---|---|
-| **A4** | **A run-time API LEVEL: `PKG_FMT`'s minor number.** See below | load-time refusal of a package that needs newer cells | none | abi-6 [c], loader-6 [k], gfr-5 [g], abi-16 [c]; [Lt] [Lc] [Lf] | **proposed - NEEDS NO FLAG DAY; take it first** |
+| **A4** | **A run-time API LEVEL: `PKG_FMT`'s minor number.** See below | load-time refusal of a package that needs newer cells | none | abi-6 [c], loader-6 [k], gfr-5 [g], abi-16 [c]; [Lt] [Lc] [Lf] | **must prove its worth before spending bytes (owner, 2026-11-08)**; second round the same day: **take it if it is cheap** - needs no flag day; was "take it first" |
 | **A5** | **The appended cells the flag day makes cheaper, recorded so none waits for it:** sched-15's `task_wake`, dr-5's `FILE_FIND_SEQ`, hm-9/mem-15's purgeable claims, ui-11's double-click byte, ui-12's clipboard generation, ui-19's `W_ONMENU`, video-12's `FSIF_FLIP`, shell-3's `AH = 0FEh`, D8's `OSAPI_IRQ` | under T5 an appended rare cell is 2 bytes; under R14 a new callback is a class slot | none | sched-15 [c], dr-5 [c], hm-9 [k], ui-11 [c], ui-12 [u], ui-19 [u], video-12 [c], shell-3 [c] | **recorded** |
 
 **A4 in full.**
+
+- **The owner's answer (owner, 2026-11-08): it must prove its worth before
+  it spends bytes.** Liked in general, but packages and drivers already carry
+  versions checked before anything runs, so a run-time API level would only
+  catch a mistake in that versioning - and the same mistake could break the
+  new number. **The one argument for it** (follow-up, 2026-11-08,
+  `../followup-already-exists.md` M5): the level and the per-cell table already
+  exist as The Wire's `WIRE_LEVEL` = 7 and `WIRE_CELL_LEVELS`, checked against
+  each package's calls, and The Wire greys a too-new package (SPEC.md
+  20.2.0.1, with `abicompat` testing the old-kernel case). What is left is a
+  package **copied by hand**: it reaches the same `PKG_FMT` without The Wire
+  and far-calls past the table, which the version check does not cover. The
+  kernel half for that case is the ~8 `.cold` below. The design is kept as the
+  record of what would be built.
+- **Second round (owner, 2026-11-08): take it if it is cheap.** "The loaders
+  gate on `<=` PKG_FMT rather than `==`, so a package newer than the kernel can
+  still call a cell the kernel lacks. An `==` check on an API level keeps the
+  `<=` PKG_FMT gate (rather than a list of supported formats per kernel) while
+  refusing to crash on an old apps disk in a new kernel, or the reverse." The
+  owner names an `==` on the level where **Load** below says a level above the
+  kernel's is refused; and today's `ld_hdr_ok` tests PKG_FMT for equality
+  (`cmp`/`jne`, `kernel/loader.inc:297`), so the gate's shape is confirmed with
+  the owner before the compare is written. Nothing else in this file moves.
 
 - **Kernel.** `dw OS88_API_LEVEL` at **`KERNEL_SEG:0006`**: free padding
   today (`kernel.asm:2349-2352`), 0 resident. Never written as a literal
@@ -531,7 +556,9 @@ mechanism, Phase 2 for the renames. Status: proposed.
   changed to the level before it lands**, or every `OS88_NEED` compiled into
   packages changes meaning at T5. [Lf]
 - **Scope.** It protects kernels that carry it, from then on. T5's run-time
-  refusal covers rare cells only, so A4 is the only guard for hot cells.
+  refusal covers rare cells only, so A4 is the only guard for hot cells -
+  against a package that bypassed The Wire, which is the case the owner's
+  test asks it to prove.
 
 ### 2.V Speed
 
@@ -555,13 +582,13 @@ the break. Each SDK-text item is an `abilock.py --update` without a bump.
 | **drivers-16** (P2): VX/XM/HD versions fingerprinted | A flag day that moves a private ABI then notices | 0 (host) |
 | **abi-8**: `@ctx` tags on every contract | Lets the rebuilt tree be checked; answers T5's IF question | 0 shipped |
 | **abi-4**: `API_RN_DSOFF` | T5 moves the frame by FLAGS | 0 |
-| **A4**: the API level, with WP9 changed to match | Every kernel from then on refuses a too-new package, across T5's reshape | +~8 `.cold` big/small, 0 conv mega |
+| **A4**: the API level, with WP9 changed to match - **must prove its worth before spending bytes (owner, 2026-11-08)**; its one argument is the hand-copied package; second round: **take it if it is cheap** | Every kernel from then on refuses a too-new package, across T5's reshape | +~8 `.cold` big/small, 0 conv mega |
 | **T6**'s mechanism, byte-identical; the source gates taught it and broken on purpose; the surviving-far-call gate | T5 becomes a flip; `cmp` proves the images | 0 shipped |
 | **V7**'s reading: a counter in the rare path | The renumber's sort | 0 shipped |
 | **P4**: the door on the `cw_` shims | Proves the door, the IF rule and kern_mega's gate on kernel-private traffic | -45 to -90 `.text` kern_big |
 | **N1**, **D4** (the floor written down), **histsys-7** | Make D1 and drivers-9 moot without a renumber | N1 -7 resident (+ -4 a `DRV_ATTACH` copy, not resident); D4 0; histsys-7 -90 to -140 kern_big, -36 kern_small |
 | **C1's correctness half**: BR-105 (the DMA-head guard; kern_dos's twin) and the ~20 internal KB callers moved to the paragraph entries | The bug is fixed whatever happens to C1, and C1's KB shifts can then go with the cells | BR-105 0 to +3 `.cold`, +1 to +4 kern_dos; the conversion about neutral, unmeasured |
-| **L7** (clean bit, with `os88pkg.py` and the `%error`), **mc-10** (`[mega_kfix]`) | L3's staged road | +12 and +8 `.mega`, +2 `.bss` |
+| **L7** (clean bit, with `os88pkg.py` and the `%error`), **mc-10** (`[mega_kfix]`) | L3's staged road | +12 and +8 `.mega`, +2 `.bss`; mc-10's counter in a knob build, not the shipped kernel (follow-up, 2026-11-08: the owner's weighing for a diagnostic of a failure nobody has met; MEGATRAP=1's #GP census is its natural home) |
 | **D8 phase 1**: the IMR shadow (with the DOS re-sync) and drivers-6's scan; the `OSAPI_IRQ` cell if the owner takes it | Lets the flag day make the cell mandatory | +~50; +100 to +150 kern_big more with the cell |
 | **F3 phase 1** (dual-mark reader) | Lets the flag day drop the old mark | +6 `.cold` |
 | **shell-3** (`AH = 0FEh`), **R9**'s doc half and class table, kern_small's `VOL_STAT` tail | Additive halves of C10 and R9 | +12 CTRL.DRV; 0; +3 to +4 kern_small |

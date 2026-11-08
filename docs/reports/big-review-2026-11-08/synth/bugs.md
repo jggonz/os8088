@@ -26,11 +26,14 @@ re-sums every batch per kernel. What moved the most:
   the splash; the new KSIG_OFF newly assembles an 11-byte KZIP ES adjustment on
   kern_big (.boot2 +19..+23, not +8); `crosses()` must model the KZ head split;
   the fix costs one more int 13h per 8088 boot on four of the six system disks.
+  (The byte figure and the date are superseded by the follow-up - next
+  section.)
 - **BR-4**: the posted-close fix does not work as first written
   (app_close_win re-hides a dying record); two working routes, -6..+50 bytes.
 - **BR-5**: the stall is a Book8088/CH375 machine's, not a PicoMEM's.
 - **BR-6**: +60..+110 .boot2 on kern_big and kern_mega, and a 14th blob sector
-  is certain on kern_big.
+  is certain on kern_big. (Superseded: the owner refused that sector, and
+  BOOT3-PLAN's wave 1 pays BR-6 instead - next section.)
 - **BR-7**: +32..+36 .cold, not ~+24. **BR-8**: a bound alone trades a dead
   machine for a write into another package's window; the door refusals join
   the fix (+29..+46).
@@ -41,7 +44,7 @@ re-sums every batch per kernel. What moved the most:
   register asks it for +82..+99). See *Cross-cutting constraints*.
 - **The owner's "packages are trusted" ruling** reads on about 107 core bytes
   (BR-8's doors, BR-22, BR-29, BR-30, BR-37, BR-173), which become the owner's
-  call.
+  call. (Answered: not taken - next section.)
 - **New Batch I** (HDD.DRV, XMEM.DRV and DOS.O88's extended-memory face) holds
   the driver-side gap items. Core totals are now about **+508 resident on
   kern_big and +372 on kern_small** (were ~+420/~+300); all-items about
@@ -65,7 +68,10 @@ where it moved. In short:
   sum. BR-8's bound is not taken alone either (its own fix text says why).
   Three low rows the register already called "the same kind" (BR-104, BR-107,
   BR-109's doors) leave the sums too, as follow-up applications of the same
-  principle; each stays open to the owner as a named exception.
+  principle; each stays open to the owner as a named exception. So does
+  BR-85's code half (+3, the SS-independent `evq_push`): it defends against a
+  package IRQ handler calling WAKE on a foreign SS, "and none was traced", and
+  the SDK already states the precondition; its comment fix stays.
 - **A diagnostic for a failure nobody has met goes behind a build knob, off in
   shipped kernels** (owner, decision 1). BR-9's INT 0/#UD panel (its stubs,
   install and the generalised panel) is a knob; kern_mega already closes the
@@ -81,9 +87,15 @@ where it moved. In short:
 - **BR-6** follows the owner's rule: an MDA alone prints a message and halts;
   with a CGA present the machine switches to it. Its blob bytes are paid from
   BOOT3-PLAN wave 1, so **no 14th blob sector** (owner, decision 2).
-- The core totals become about **+344 resident on kern_big and +223 on
-  kern_small** (were ~+508/~+372), all-items about **+747 / +403** (were
-  ~+945/~+586); kern_mega conventional ~+182 core, ~+345 all. The side-by-side
+- A second round of answers the same day (`../owner-decisions.md`, "Second
+  round") moves no register item: it takes the keyboard mouse, text-7, the
+  mono figure and the API level (phase1's and systemic's), and asks for
+  `.boot3` to be generic across the kernels, which only widens BOOT3-PLAN's
+  room for BR-1 and BR-6 on kern_small and kern_mega, both of which already
+  fit.
+- The core totals become about **+341 resident on kern_big and +220 on
+  kern_small** (were ~+508/~+372), all-items about **+744 / +400** (were
+  ~+945/~+586); kern_mega conventional ~+179 core, ~+342 all. The side-by-side
   table at the end carries the per-batch figures.
 
 ## How to read it
@@ -1117,7 +1129,7 @@ spend a byte now). ABI is `none` unless stated.
 | BR-82 | The two private ISR stacks have no canary and sit back to back; SCH_CHSTK's sizing text has the ROM's EOI order backwards (sched-7 corrected, isr-9 confirmed) | big, small | mou_pstack LOW_SEG:06D6..0756 then sch_chstack at 0756 (build/kernel.map; sched.inc:80-89, 2937; mouse.inc:6624-6635); SPEC.md:13125-13130 and sched.inc:2187-2188 say EOI-then-sti, the IBM listing and SeaBIOS run int 1Ch BEFORE the EOI | SCH_MAGIC at sch_chstack's base checked once per TICK after the chain's `mov sp,bx`, with its own panel; seed in a resident init (the .ovl is 5,119 of 5,120); correct both texts; a STKDIAG field reading before shrinking SCH_CHSTK. **Follow-up (2026-11-08):** the canary and its panel are a diagnostic for a failure no machine has met, so under the owner's weighing they go behind a knob (STKDIAG's own is the natural one); the text corrections and the STKDIAG reading stay | 0 shipped (the canary +9..+12 .text in the knob build only, out of batch F's sums); 0 for the texts | stk0water, stkpanel (soak) |
 | BR-83 | STKDIAG's private-stack high waters scan from the wrong end (sched-8 confirmed) | knob only | sd_cwater/sd_mwater scan down for the first 0xE5 (stkdiag.inc:303-389) while sd_water scans up (230-273); the result sizes SCH_CHSTK and MOU_PSTK | scan bottom-up; re-take any field number that came from the panel | 0 shipped | no row |
 | BR-84 | The death panel trusts the table it calls suspect (sched-9 confirmed) | big, small | sch_diepanel indexes inst_ptr with no bound and prints I_NAME to a NUL (sched.inc:2692-2721; instance.inc:786-797); draws into an fsx bracket's foreign mode | `cmp al,INST_MAX / jae .name` if touched (take it with BR-9's panel rework, which is now a knob: owner, 2026-11-08; on its own it is +4 in the retail stack-overflow panel, still record) | rec; +4 .text | stkpanel (soak) |
-| BR-85 | Every ISR-callable door assumes SS = LOW_SEG, which the kernel itself says is false; OSAPI_WM_WAKE's "ISR-safe" is the visible case (isr-3 confirmed; ctx-5 confirmed, which raises it to MEDIUM and moves it to batch F's core) | all | evq_push writes the ring through SS, `[ss:di+EV_TYPE]` and push ss/pop es (events.inc:80-128; wm.inc:2343-2369); sch_switch's SS test records SeaBIOS hopping stacks for int 16h, which ui_task polls with sch_lock clear, so an IRQ there lands on the ROM's SS (sched.inc:2408-2437); DOS.O88's dvw_irq0 moves to a LOW_SEG slice first (apps/dos/dosw.inc:267-276); latent unless a package IRQ handler calls WAKE, and none was traced | the SDK cell already reads "ISR-safe given SS = LOW_SEG" after the review's doc pass (os88api.inc:6619-6622, ctx-5's verifier); fix the kernel comment at events.inc:109-111 and load ES from a constant in evq_push (`mov ax,LOW_SEG / mov es,ax` for push ss/pop es, es: for ss:; AX is already banked), checking kern_mega's spelling; state the rule that an ISR-callable door may assume DS and nothing else | +3 .text res | dosmouse, evqfull (soak) |
+| BR-85 | Every ISR-callable door assumes SS = LOW_SEG, which the kernel itself says is false; OSAPI_WM_WAKE's "ISR-safe" is the visible case (isr-3 confirmed; ctx-5 confirmed, which raises it to MEDIUM and moves it to batch F's core) | all | evq_push writes the ring through SS, `[ss:di+EV_TYPE]` and push ss/pop es (events.inc:80-128; wm.inc:2343-2369); sch_switch's SS test records SeaBIOS hopping stacks for int 16h, which ui_task polls with sch_lock clear, so an IRQ there lands on the ROM's SS (sched.inc:2408-2437); DOS.O88's dvw_irq0 moves to a LOW_SEG slice first (apps/dos/dosw.inc:267-276); latent unless a package IRQ handler calls WAKE, and none was traced | the SDK cell already reads "ISR-safe given SS = LOW_SEG" after the review's doc pass (os88api.inc:6619-6622, ctx-5's verifier); fix the kernel comment at events.inc:109-111 and load ES from a constant in evq_push (`mov ax,LOW_SEG / mov es,ax` for push ss/pop es, es: for ss:; AX is already banked), checking kern_mega's spelling; state the rule that an ISR-callable door may assume DS and nothing else. **Follow-up (2026-11-08):** the code half is held under the owner's trust ruling (it defends against a package IRQ handler calling WAKE on a foreign SS, and none was traced; the SDK cell already states SS = LOW_SEG); the events.inc comment fix stays | 0 counted (+3 .text res if taken) | dosmouse, evqfull (soak) |
 | BR-86 | DF is not cleared at the IRQ0 callback boundary, and clip_put/clip_get trust it (isr-4 confirmed, ui-7 corrected) | all | sch_isr has no cld but calls the splash rep movsb, DSV_TICK and the FSXF_RATE hook (sched.inc:1892-2400, 2349-2353; splash.inc:1024-1029); fsx_rtick likewise (fsx.inc:1364-1446); a std package's clip_put writes clip_seg:0000 then wraps and walks down from FFFF, up to 64KB past the claim (clip.inc:150-151, 196-198) while toast_show defends (toast.inc:204-209) | one cld in sch_isr after KDS and in fsx_rtick; cld in clip_put and clip_get; write "DF is the interrupted code's" into the DSV_TICK and hook contracts | +1 .text res (+1 mega fsx_rtick); +1..+2 clip | clipkeep, clipgrow (soak) |
 | BR-87 | The serial lease trusts its caller to pin the region the ISR writes into (input-4 corrected) | big | srl_open validates I_SPTR and bounds but not MC_RLOC (serial.inc:226-243, 272, 423-470); SPEC.md:225404-225405 makes the pin the caller's duty and WireFleet complies (apps/wirefleet/wflink.inc:118-121) | SERIAL.DRV refuses Open with AX=5 when the region's MC_RLOC != 0; or move the ring into the driver's own image | +~20 SERIAL.DRV, 0 res | serlease, wirefleetlink, ringmove-wirefleet (soak) |
 | BR-88 | Shift+PrtSc runs the ROM's Print Screen inside kbm_isr's IRQ mask (input-5 confirmed) | big, small | the ROM is called with every IRQ but IRQ1 masked (mouse.inc:3021-3031) and nothing hooks int 05h: seconds with no printer, tens of seconds printing, ticks lost | set the print-screen status byte at 0500h to 1 in mouse_init and after a hibernate resume (also disables PrtSc for DOS programs); or hook int 05h to an iret (~+12) | +5 .ovl/.boot2, 0 res | kbdburst (soak) |
@@ -1139,7 +1151,7 @@ spend a byte now). ABI is `none` unless stated.
 | BR-104 | OSAPI_MEM_FREE and _REGROW act on the caller's own live region, and the damage lands on the next claimant (hm-2 corrected, mem-6 corrected) | big, small | mem_find_own's self arm (memory.inc:4415-4422) fences mem_free_x (4459) and mem_regrowp (4576); REGROW path 3 calls no relocation; DELIBERATE per loader.inc:1690-1695 and SPEC 66.6.1.1 | owner's call: refuse a region record in the package doors mmf_osapi_mem_free and osapi_mem_regrow_x (NOT in mem_find_own, which mem_owner_of_x needs); allow the shrink. **Follow-up (2026-11-08):** the same class as the six fences the owner declined (it defends the kernel from a trusted caller, and SPEC 66.6.1.1 accepts it as self-harm), so it is not counted; the checked build (phase1 WP19) or a named exception | 0 counted; +3..+8 .cold res if named; a contract change | memp (soak) |
 | BR-105 | KB-to-paragraph shifts trust CF, which holds only the last bit out (hm-6 corrected, mem-5 confirmed, md-16 confirmed) | big, small; kern_dos | mem_claim_dma_x's head: CX=2048 gives SI=0 and a claim with no page constraint (memory.inc:860-868; package door 5254-5266); kerndos mem_claim_x the same (kerndos/kdshim.inc:409-412); mem_regrow's sibling already fixed (4562-4565); md-16 is kern_dos's private mem_claim_x, reached from kerndos/kdgate.inc:97, not a package door (flagday fit lens on C1) | `cmp cx,64 / ja <refuse>` before the shift; `cmp ax,0x400 / jae` in kdshim | 0..+3 .cold; +1..+4 kern_dos | memp (soak) |
 | BR-106 | kern_mega osapi_mem_regrow_x's move copies the OLD size into the NEW claim (mem-19 corrected) | mega | the .move arm copies old KB << 9 (memory.inc:5440-5468) and mega_claimregrowf sends EVERY huge-block regrow there, shrinks included (mega.inc:12052-12056, 12084): an overrun, a 0-length copy at 128KB+, or an offset past 64KB | copy min(old, new) and refuse (or segment-step) past 64KB | +4 .cold (above 1MB) | megahigh (full) |
-| BR-107 | OSAPI_MEM_P treats an unknown verb as MEMP_AVAIL and hands back the caller's CF (hm-14 confirmed) | big, small | `cmp bl,MEMP_AVAIL / jae .avail` (memory.inc:5582-5583) and pushf/popf (4927, 5023) | `cmp bl,MEMP_KPARTS / ja <stc/retf>`, or document. **Follow-up (2026-11-08):** the register already called it the same kind as the six package fences, and the fit lens argues it as forward compatibility (an old kernel answering a newer verb), which is the API level's question - and the owner's answer there is that it must prove its worth first. So document (0 bytes), and take the refusal with the first new `OSAPI_MEM_P` verb, if one is ever added (the purgeable verb is parked, `../followup-purgeable.md`) | 0 (document); +4 .cold with a new verb | memp (soak) |
+| BR-107 | OSAPI_MEM_P treats an unknown verb as MEMP_AVAIL and hands back the caller's CF (hm-14 confirmed) | big, small | `cmp bl,MEMP_AVAIL / jae .avail` (memory.inc:5582-5583) and pushf/popf (4927, 5023) | `cmp bl,MEMP_KPARTS / ja <stc/retf>`, or document. **Follow-up (2026-11-08):** the register already called it the same kind as the six package fences, and the fit lens argues it as forward compatibility (an old kernel answering a newer verb), which is the API level's question (the owner: prove its worth first, then, in the second round, take it if it is cheap - phase1 WP9). So document (0 bytes), and take the refusal with the first new `OSAPI_MEM_P` verb, if one is ever added (the purgeable verb is parked, `../followup-purgeable.md`) | 0 (document); +4 .cold with a new verb | memp (soak) |
 | BR-108 | wm_su_drop ignores mem_free's refusal and loses the claim (wm-9 corrected) | big, small | zeroes the slot then calls mem_free, which refuses under mem_cp_busy (wm.inc:9866-9888; memory.inc:4446-4453); needs a relocation proc to break SPEC 66.3 rule 3 | clear the slot only on CF=0 | +3 .text | no row |
 | BR-109 | OSAPI_WM_FULLSCREEN draws a HIDDEN window whole, and the destroy/fullscreen lock texts are stale (wm-7 corrected) | big, small | no visible test before wm_raise (wm.inc:4316-4345); both require the caller to hold the lock (kernel.asm:2724, 3228; os88api.inc:304, 892-894) but the SDK's "as OSAPI_WM_HIDE wants it" is no longer true; wm_lk_go's `or al,al` would clobber CF | refuse or defer the raise for a hidden window; fix the SDK text; doors optional (wm_lk_go needs pushf/popf to carry CF). **Follow-up (2026-11-08):** the doors are the package-fence class the owner declined, so only the raise fix is counted | +~5 .text; the doors (+6..+19 in all) not counted | dispfsx (soak) |
 | BR-110 | ui_dispatch decides "is this Locator" by an unlocked read of AM_ONCMD = 0, and .oncmd reads through BX = 0 (ui-3 confirmed) | big, small | ui.inc:2512-2536, 2586-2600; menu_win_set takes no lock (menu.inc:448-457); SPEC 12.2 reserves 0 for Locator but the SDK's AM_ONCMD line does not (os88api.inc:4072) | `cmp word [menu_win],0 / jne .app`; `or bx,bx / jz .app_done` in .oncmd; reserve 0 in the SDK | -19 .text res, both (owned by phase1 WP1, which prices it too; not counted in batch C) | no row |
@@ -1306,7 +1318,8 @@ BR-8's bound (+2) goes with its doors: taken alone it swaps a dead machine for
 a write into another package's window, so it is not taken either. BR-104,
 BR-107 and BR-109's optional doors are the same kind in the low rows and leave
 the "all" sums as follow-up applications of the principle (each stays open as
-a named exception). NOT in this class: the fixes against hostile FILES (BR-7,
+a named exception), and BR-85's +3 code half leaves batch F's core the same
+way (follow-up, 2026-11-08). NOT in this class: the fixes against hostile FILES (BR-7,
 BR-23, BR-44, BR-59), which SPEC 19's threat model covers whatever the caller.
 BR-9 is not in it either - it reports every fault, the kernel's own included -
 but it goes behind a knob for the owner's other reason (decision 1: a panel
@@ -1357,9 +1370,9 @@ inferred from kern_big's sections.
 | | kern_big | kern_small | kern_mega |
 |---|---|---|---|
 | resident | 0 (BR-155 would be ~-10 .text) | 0 (same) | 0 |
-| .boot2, core, on its own (follow-up, 2026-11-08: BR-1's canary move is 0 big/mega, -11 small) | **+108** (+79..+137): BR-1 +10, BR-6 +85, BR-55 +10, BR-56 +4, BR-63 -1 | **+57** (+33..+81): BR-1 -1, BR-6 +45, the rest the same | +108 (+79..+137) |
-| .boot2, core, after WP6's -41 | **+67** (+38..+96) against 4 free: paid from BOOT3-PLAN wave 1's ~508 (owner: no 14th sector) | **+16** (-8..+40), fits in 702 | +67, fits in 285 |
-| .boot2, all | +73, plus BR-147's +7 from batch B | +22 | +73 |
+| .boot2, core, on its own (follow-up, 2026-11-08: BR-1's canary move is 0 big/mega, -11 small) | **+110** (+83..+137): BR-1 +12 (part 2 in its safe form; +8 with a rerun guard), BR-6 +85, BR-55 +10, BR-56 +4, BR-63 -1 | **+59** (+37..+81): BR-1 +1 (part 1 -11, part 2 +12), BR-6 +45, the rest the same | +110 (+83..+137) |
+| .boot2, core, after WP6's -41 | **+69** (+42..+96) against 4 free: paid from BOOT3-PLAN wave 1's ~508 (owner: no 14th sector) | **+18** (-4..+40), fits in 702 | +69, fits in 285 |
+| .boot2, all | +75, plus BR-147's +7 from batch B | +24 | +75 |
 | boot sector | boothd **-1** (+8 -9) | - | - |
 | .ovl (transient) | **+4** (BR-25 +6, dr-13 -2) against 1 free; -28 once AH=08h goes; BR-6's vid_memchk move would free 55 | 0 | as kern_big, against 2 free |
 | disk and boot time | KERNEL.SYS ~-400 (BR-153); no blob sector (owner); BOOT3-PLAN wave 1's ~+450 of KERNEL.SYS and ~+24 ms after the bar on 360KB are that plan's, not this batch's; BR-1 +1 int 13h per 8088 boot on the 1.2MB and 1.44MB disks (PREDICTED) | BR-1 +1 int 13h per 8088 boot on both disks (PREDICTED) | - |
@@ -1383,7 +1396,7 @@ inferred from kern_big's sections.
 ### Batch C - window manager, UI and instance teardown
 
 - **Files:** kernel/wm.inc, kernel/ui.inc, kernel/instance.inc (inst_task_die, app_close_win's tail), kernel/toast.inc, kernel/deskmod.inc and DESK.DRV, kernel/desk.inc/desksc.inc (one equ), apps/os88ui.inc (BR-176, BR-196), apps/os88api.inc texts, SPEC 11, 20.6 and 11.103.10 first.
-- **Items:** core BR-4 with BR-173, BR-8, BR-28, BR-47, BR-48, BR-49, BR-50, BR-42, BR-176. Low: BR-73 (the resize mode and its lint), BR-108, BR-109, BR-111..BR-119, BR-195, BR-196; BR-110 is phase1 WP1's. (BR-85 moves to batch F with the rest of the ISR doors.)
+- **Items:** core BR-4, BR-28, BR-47, BR-48, BR-49, BR-50, BR-42, BR-176; BR-173 and BR-8 are not taken (packages are trusted, owner, 2026-11-08). Low: BR-73 (the resize mode and its lint), BR-108, BR-109, BR-111..BR-119, BR-195, BR-196; BR-110 is phase1 WP1's. (BR-85 moves to batch F with the rest of the ISR doors.)
 
 | | kern_big | kern_small | kern_mega |
 |---|---|---|---|
@@ -1398,7 +1411,7 @@ inferred from kern_big's sections.
 ### Batch D - loader and heap
 
 - **Files:** kernel/loader.inc, kernel/memory.inc, kernel/filecp.inc (floor sites; FILECP.DRV on kern_small), kernel/compress.inc (cmz_wclaim's first try, cmz_jsayx), apps/os88partsbody.inc (BR-59), apps/cc/crt0.asm (BR-193), kerndos/kdshim.inc (BR-105's kern_dos half), SPEC 20.13.8.1 first.
-- **Items:** core BR-2, BR-7, BR-11, BR-12, BR-29, BR-30. Then BR-35, BR-52, BR-53, BR-54 (measure first), BR-59. Low: BR-104 (owner's call), BR-105, BR-106, BR-107, BR-120, BR-121, BR-122 (doc), BR-188, BR-189, BR-193.
+- **Items:** core BR-2, BR-7, BR-11, BR-12; BR-29 and BR-30 are not taken (packages are trusted, owner, 2026-11-08). Then BR-35, BR-52, BR-53, BR-54 (measure first), BR-59. Low: BR-104 (owner's call), BR-105, BR-106, BR-107, BR-120, BR-121, BR-122 (doc), BR-188, BR-189, BR-193.
 
 | | kern_big | kern_small | kern_mega |
 |---|---|---|---|
@@ -1413,7 +1426,7 @@ inferred from kern_big's sections.
 ### Batch E - disk and file layer
 
 - **Files:** kernel/disk.inc, kernel/diskw.inc, kernel/files.inc, kernel/fdlg.inc (FDLG.DRV on kern_small), kernel/fsck.inc (FSCHECK.DRV), kernel/assoc.inc, kernel/ascw.inc (FORMAT.DRV), kernel/filecp.inc (BR-128's doc only), kernel/kernel.asm (kern_small's refusal stubs), apps/os88wseq.inc (BR-179), apps/os88partsbody.inc and apps/os88pself.inc (BR-191), apps/os88rseq.inc and os88api.inc texts.
-- **Items:** core BR-16, BR-17, BR-22, BR-23, BR-24, BR-27, BR-37, BR-41; BR-62's stub halves (dw-8's label move, gi-6's VOL_STAT stub, abi-2's SDK text) with BR-179. Then BR-61, and BR-60 only on the owner's word (90 bytes). Low: BR-123..BR-130, BR-133..BR-143, BR-190, BR-191. BR-183's kernel half (int 13h status 11h in the BIOS loop) lands here too, unpriced.
+- **Items:** core BR-16, BR-17, BR-23, BR-24, BR-27, BR-41 (BR-22's and BR-37's fences are not taken, packages are trusted, owner, 2026-11-08; BR-22's SDK texts stay); BR-62's stub halves (dw-8's label move, gi-6's VOL_STAT stub, abi-2's SDK text) with BR-179. Then BR-61, and BR-60 only on the owner's word (90 bytes). Low: BR-123..BR-130, BR-133..BR-143, BR-190, BR-191. BR-183's kernel half (int 13h status 11h in the BIOS loop) lands here too, unpriced.
 
 | | kern_big | kern_small | kern_mega |
 |---|---|---|---|
@@ -1428,12 +1441,12 @@ inferred from kern_big's sections.
 ### Batch F - input, ISRs and the scheduler
 
 - **Files:** kernel/mouse.inc, kernel/sched.inc (the INT 0/INT 6 stubs and the system-error panel), kernel/events.inc, kernel/serial.inc (SERIAL.DRV), kernel/clip.inc (one cld), kernel/fsx.inc (fsx_rtick's cld only), kernel/ui.inc (BR-195's popup, if not taken in C), kernel/kbddiag.inc and kernel/stkdiag.inc (knobs), apps/os88pit.inc (BR-192's text), SPEC 7 for BR-178's bounds.
-- **Items:** core BR-18, BR-19, BR-20, BR-36, BR-51, BR-85, BR-86 (the cld), BR-178; BR-9 is a knob build's (owner, 2026-11-08), as are BR-80's tripwires and BR-82's canary (follow-up). BR-21 is MEASURE first. Low: BR-78 (doc), BR-79, BR-80, BR-81, BR-82, BR-83, BR-84 (rides with BR-9), BR-87..BR-95, BR-175, BR-192, BR-194; BR-34's four IMR read-modify-writes (its vector scan is batch G).
+- **Items:** core BR-18, BR-19, BR-20, BR-36, BR-51, BR-85 (its comment only: the +3 code half is held, follow-up, 2026-11-08), BR-86 (the cld), BR-178; BR-9 is a knob build's (owner, 2026-11-08), as are BR-80's tripwires and BR-82's canary (follow-up). BR-21 is MEASURE first. Low: BR-78 (doc), BR-79, BR-80, BR-81, BR-82, BR-83, BR-84 (rides with BR-9), BR-87..BR-95, BR-175, BR-192, BR-194; BR-34's four IMR read-modify-writes (its vector scan is batch G).
 
 | | kern_big | kern_small | kern_mega |
 |---|---|---|---|
-| resident, core (owner, 2026-11-08: BR-9 a knob) | **+59**: BR-18 +6, BR-19 +15, BR-20 +13, BR-36 +13, BR-51 +8, BR-86 +1, BR-85 +3; BR-178 0 (was +114) | **+40**: BR-19 +15, BR-20 +13, BR-51 +8, BR-86 +1, BR-85 +3 (was +80) | **~+60** conventional (BR-18..BR-85's .text, +1 for fsx_rtick); BR-9 is a knob, and kern_mega's IDT handles INT 0 after the switch |
-| resident, all | **+102**: adds BR-92 +12, BR-93 +14, BR-34 IMR +8, BR-86 clip +2, BR-194 +7 (was +175; BR-82 +11 and BR-80 +7 to the knob, follow-up) | **+71**: adds BR-93 +14, BR-34 IMR +8, BR-86 clip +2, BR-194 +7 (was +129) | ~+103 (was ~+121) |
+| resident, core (owner, 2026-11-08: BR-9 a knob; follow-up: BR-85's +3 held) | **+56**: BR-18 +6, BR-19 +15, BR-20 +13, BR-36 +13, BR-51 +8, BR-86 +1; BR-178 0 (was +114) | **+37**: BR-19 +15, BR-20 +13, BR-51 +8, BR-86 +1 (was +80) | **~+57** conventional (BR-18..BR-51's .text, +1 for fsx_rtick); BR-9 is a knob, and kern_mega's IDT handles INT 0 after the switch |
+| resident, all | **+99**: adds BR-92 +12, BR-93 +14, BR-34 IMR +8, BR-86 clip +2, BR-194 +7 (was +175; BR-82 +11 and BR-80 +7 to the knob, follow-up) | **+68**: adds BR-93 +14, BR-34 IMR +8, BR-86 clip +2, BR-194 +7 (was +129) | ~+100 (was ~+121) |
 | optional on top | BR-95 +25; BR-21's rethink +30..+40, plus +6 to leave MOUPRIV before the sti or +64..+128 .lowbss for a bigger MOU_PSTK (the owner: more stack work is not needed immediately - the mouse and idle already have stacks, and the known case is a sound interrupt on a near-full package stack, owner, 2026-11-08); BR-175 +122 .vga (VGA/EGA machines); BR-80's second guard +7 in the knob only | the same, less BR-175 | |
 | knob build only (owner, 2026-11-08; follow-up) | BR-9 ~+55 res and .ovl +20 (+12, vector 6 +8); BR-82 +11; BR-80 +7..+14 | BR-9 ~+40 res and .ovl +12; BR-82 +11; BR-80 +7..+14 | |
 | transient | .ovl **+11** (BR-18 +6, BR-88 +5) against 1 free (was +31 with BR-9) | .boot2 +11 (BR-18 +6, BR-88 +5) | as kern_big, against 2 free |
@@ -1464,7 +1477,7 @@ inferred from kern_big's sections.
 
 | | conventional (MEGA_RESIDENT) | above 1MB (.cold/.mega) | modules / other |
 |---|---|---|---|
-| core | **+20** .text (BR-64, unless placed in .mega) | **+19**: BR-13 +28, BR-67 0, BR-184 +10, BR-185 -18, BR-186 -25, BR-187 +24 | HIBER.DRV -13 (BR-69 -12, BR-71 -1); HMA kern_dos +7 (BR-70 +8, BR-71 -1); .boot2 +8 (BR-71), which fits after batch A's +67 in the 285 free |
+| core | **+20** .text (BR-64, unless placed in .mega) | **+19**: BR-13 +28, BR-67 0, BR-184 +10, BR-185 -18, BR-186 -25, BR-187 +24 | HIBER.DRV -13 (BR-69 -12, BR-71 -1); HMA kern_dos +7 (BR-70 +8, BR-71 -1); .boot2 +8 (BR-71), which fits after batch A's +69 in the 285 free |
 | all | +20; **+128..+192 .lowbss** only if BR-65's form (a) is chosen | **~+133** (was ~+141; BR-68's +8 to a knob): adds BR-66 +25, BR-161 +6, BR-162 +16, BR-163 +6, BR-164 +20, BR-165 +20, BR-166 +4, BR-168 +8, BR-169 +5, BR-144 +8, BR-204 -10, BR-205 +6; BR-65(a) +20 more if chosen | HIBER.DRV -9 (adds BR-169 +4) |
 
 - **Rows:** megagrid, megapkg (fast); megahigh (full); megatrap0, megadosp, megadosroom, megahibfull, megap2hiber, megahiber, kdmouse, dosmouse, lzload, win16mega* (soak). These run on QEMU, which checks no segment limit and cannot fail BR-13, BR-64 or BR-65: those rows belong on Bochs (docs/BOCHS.md) - a lent-stack int 10h probe, a 3-byte-slack canvas, a foreign-stack option-ROM IRQ. BR-184..BR-187 are logic and descriptor races that QEMU can run once a row drives them.
@@ -1487,32 +1500,33 @@ New in this revision: the gap reviews' driver-side defects, none of which costs 
 
 | batch | kern_big resident | kern_small resident | kern_mega conventional | transient | modules and packages |
 |---|---|---|---|---|---|
-| A boot and detection | 0 / 0 | 0 / 0 | 0 / 0 | .boot2 +67 big and mega, +16 small (after WP6; big paid from BOOT3 wave 1); .ovl +4; boothd -1 | KERNEL.SYS ~-400; no blob sector (owner) |
+| A boot and detection | 0 / 0 | 0 / 0 | 0 / 0 | .boot2 +69 big and mega, +18 small (after WP6; big paid from BOOT3 wave 1); .ovl +4; boothd -1 | KERNEL.SYS ~-400; no blob sector (owner) |
 | B display | +41 / +106 | +21 / +33 | +41 / ~+104 | .ovl +8, .boot2 +7 (big) | +14; GFXAUDIT knob |
 | C WM and UI | +58 / +128 | +42 / +89 | ~+48 / ~+105 | - | DESK.DRV +6; os88ui copies +8..+12 each |
 | D loader and heap | +63 / +124 | +73 / +97 | 0 / 0 | - | parts packages +20 each |
 | E disk and files | +40 / +192 (+90 BR-60) | +45 / +111 | 0 / 0 | .ovl +10 | FDLG/FSCHECK/FORMAT +8/+6/+10 |
-| F input, ISR, sched | +59 / +102 | +40 / +71 | ~+60 / ~+103 | .ovl +11 big; .boot2 +11 small | SERIAL.DRV +20 |
+| F input, ISR, sched | +56 / +99 | +37 / +68 | ~+57 / ~+100 | .ovl +11 big; .boot2 +11 small | SERIAL.DRV +20 |
 | G drivers, hiber, services | +83 / +95 | +2 / +2 | +13 / +13 | .ovl +29 | HIBER ~+100, DISKOPS +48, CTRL ~+50, SAVER +15, SOUND +14 |
 | H kern_mega | - | - | +20 / +20 (+128..+192 if BR-65a) | .boot2 +8 | HIBER -13 / -9, HMA kern_dos +7; above 1MB +19 / ~+133 |
 | I drivers' side | 0 / 0 (+21 record) | - | - | - | DOS.O88 +52 / +157, XMEM.DRV +2 / +14, HDD.DRV +12 / +58 |
-| **total, core** (owner, 2026-11-08) | **~+344** (was ~+508) | **~+223** (was ~+372) | **~+182** (was ~+232..+241) | kern_big .ovl +62 against 1 free (177 after BOOT3 wave 3) | |
-| **total, all** | **~+747** (+90 with BR-60; was ~+945) | **~+403** (was ~+586) | **~+345** (was ~+420..+429) | | |
+| **total, core** (owner, 2026-11-08) | **~+341** (was ~+508) | **~+220** (was ~+372) | **~+179** (was ~+232..+241) | kern_big .ovl +62 against 1 free (177 after BOOT3 wave 3) | |
+| **total, all** | **~+744** (+90 with BR-60; was ~+945) | **~+400** (was ~+586) | **~+342** (was ~+420..+429) | | |
 | not counted: knob builds | BR-9 ~+55, BR-82 +11, BR-80 +7..+14 | BR-9 ~+40, BR-82 +11, BR-80 +7..+14 | BR-68 +8 .mega, +2 .bss | BR-9 .ovl +20 big, +12 small | |
-| not counted: packages are trusted | BR-8 +38, BR-22 +12, BR-29 +13, BR-30 +18, BR-37 +16, BR-173 +12 = **+109**; BR-104 +5, BR-107 +4, BR-109's doors +7 | the same **+109**, and BR-104/107 | BR-8 +38, BR-173 +12 conventional | - | DESK.DRV +5 |
+| not counted: packages are trusted | BR-8 +38, BR-22 +12, BR-29 +13, BR-30 +18, BR-37 +16, BR-173 +12 = **+109**; BR-104 +5, BR-107 +4, BR-109's doors +7; BR-85's code half +3 (follow-up) | the same **+109**, and BR-104/107 and BR-85's +3 | BR-8 +38, BR-173 +12 conventional; BR-85's +3 | - | DESK.DRV +5 |
 
 Read the totals against the owner's brief ("not huge byte growths") and the
 budgets, not against a rung. **After the owner's answers (2026-11-08), about
-344 resident bytes on kern_big and 223 on kern_small buy every high and medium
+341 resident bytes on kern_big and 220 on kern_small buy every high and medium
 defect the register still takes** (they were ~+508 and ~+372; the first
 register said ~+420 and ~+300). The fall is the owner's two principles, not a
 re-pricing: the six package-argument fences and BR-8's bound are not taken
 (packages are trusted: -109 on each kernel), and BR-9's panel goes behind a
 knob (a diagnostic for a failure nobody has met: -55 kern_big, -40
 kern_small), with BR-80's tripwires, BR-82's canary and BR-68's counter
-following it out of the "all" sums. What the core still carries is real
+following it out of the "all" sums, and BR-85's +3 code half held under the
+same trust ruling (follow-up). What the core still carries is real
 defects with a mechanism: BR-7's in-place guards, BR-12's kernel-tag
-refinement, BR-176, BR-85's ES load and kern_small's VOL_STAT stub among them.
+refinement, BR-176 and kern_small's VOL_STAT stub among them.
 kern_small's figure is still the one to argue about, since its budget is 64KB
 resident; batches D and E now carry most of it, and they are defects that
 corrupt data on exactly that machine (BR-2, BR-7, BR-17). Several items
