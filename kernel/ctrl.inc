@@ -2835,7 +2835,8 @@ cp_krect:
 
 ; --- cp_kgo / cp_cgo - CPXK's and CPXC's far hop, built by hand (kernel.asm's
 ; KGO_PAIR, which says how; the boot blob carries the same pair as bvs_kgo /
-; bvs_cgo for its copies of the adapter switch)
+; bvs_cgo for its copies of the adapter switch, and `.boot3` as b3_kgo /
+; b3_cgo for drv_boot_x's cone, BOOT3-PLAN wave 2)
 KGO_PAIR cp
 %ifdef KERN_BIG
 EXF_SYNC cxf, CPXC              ; the arrangement row's EXTD.DRV sync (extmod.inc)

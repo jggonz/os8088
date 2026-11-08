@@ -3626,6 +3626,26 @@ called by `B3CALL` from `kmain_o`:
 | kern_mega | `mega_wrprobe`, `mega_gateb`, `mega_gwset` |
 | kern_small | OVBCALL's six bodies (§2.5.3.2): `vid_probe_avail`, `sched_init`, `mem_init_x`, the serial probe, `snd_init` and, under `BAKED_FONT`, `ovl_font_init` |
 
+**...and since wave 2, the SYSTEM.CFG reader and the boot driver loader**
+(kern_big, kern_emu, kern_mega; kern_small has neither - its `drv_boot_x` is
+the blob's one-byte `retf` rung): `drv_boot_x` and `drv_boot_want` (B3CALL
+from `kmain_o`, MARK 28), the reader's `ovc_*` expansion of `CFG_MAP`,
+`CFG_DATA`, `CFG_SHARED` and `CFG_BOOT` with `ovl_cfg_load`, `ovl_fdd_apply`
+(§31.14), the shortcuts' boot read `ovl_sc_*` (§26.8.6), `DRV_ATTACH`'s
+`bdl_*` instance, `bxf_sync` (EXTD.DRV's sync, §39.19.6) and a KGO pair of its
+own, `b3_cgo`/`b3_kgo`: KGO_PAIR's hop reads its inline target word through
+CS, so it must be in its caller's segment - CTRL.DRV's `cp_` and HIBER.DRV's
+`hbg_` precedent. **What stays in the blob**, each reached by `B2CALL`: the
+status line (`ovl_spl_msg_cfg`, `_drv`, `_boot`, `retf`-bodied since), because
+`spl_mcs` reads every string through the blob's CS - the driver titles
+`bdt_*` included, so they stay too and `drv_boot_x` hands over a BLOB offset;
+`xm_boot_x`, which shares `bvs_cgo` with `vx_boot_x`; the adapter switch's
+boot instance (`bvs_switch`, `bdk_apply`, and `bvs_disp_init` through a 4-byte
+far door, `bvs_disp_far`, since `kmain_o` near-calls the body); and the
+loader's `b2_cylok`, which `ovl_fdd_apply` reads through `ovl_fdd_cylok`, a
+6-byte door - a name past `boot2_entry` is rule B6's, and it is the blob's
+CS's.
+
 ##### 2.9.15.1 Where it sits, and when it is alive
 
 It is the file's last section (`MODC_START = B3_START + B3_SIZE`), so
@@ -3640,11 +3660,21 @@ at `B3_RAM` = `B3_SEG`, a constant:
 | kern_small | `.cold`'s end, to the paragraph (0x0EB7; `.vgabuf` is empty there) | `KERN_END`'s rounding and the lift | wave 1 |
 | kern_mega, the `NO_ROM_COLD` knob | `KERN_END` (kern_mega 0x2140), behind a zero gap in the file from `.mega`'s end (`.ovl`'s) that packs to almost nothing - past `.mega`'s park scratch and `.vgabuf` rather than over them | the lift | wave 1. Every kern_mega body is REAL mode: `mega_enter` runs after `mem_unblob_x` |
 
+**`.boot3b` is its nobits scratch** (wave 2), on every kernel that reads
+SYSTEM.CFG: the settings file's buffer `ovc_buf`, `CFG_FBUF` rounded up to a
+sector, at `B3B_AT` - the next LINEAR 512-byte boundary past `.boot3`'s last
+byte, `B3_SEG`-relative (it is a disk-read destination, §1, and its readers
+reach it through CS). `B3_RES` counts the pad and the buffer (926 bytes on
+kern_big, 914 on kern_mega). Until wave 2 the buffer was the paragraphs past
+the blob and `BOOT2_RES` (`BOOT2_PAD` + 512) was the heap's floor at boot;
+now the floor is the blob alone, `BOOT2_PAD`, on every kernel, and
+`BOOT2_RES` is gone.
+
 | moment | what is in `.boot3`'s RAM |
 |---|---|
 | stage 1, the first tick, the tail's read | packed bytes or nothing: **not callable** |
 | `kz_all` returns (stage 2's end, after the canary; boothd's `kz_hd`) | expanded and aboard |
-| `kmain` → `SPLGATE1 kmain_o` → its calls | live: `mem_init_x` raised `[mem_base]` past the blob and `BOOT2_RES`, so no claim lands on it |
+| `kmain` → `SPLGATE1 kmain_o` → its calls | live: `mem_init_x` raised `[mem_base]` past the blob, which the lift holds above `.boot3` and `.boot3b`, so no claim lands on it |
 | `kmain` zeroes `[spl_fseg]`, then `mem_unblob_x` | **dropped**, by the one store that gives back the blob and its lift: 0 new instructions |
 
 `kmain_o` is entered only through `SPLGATE1`'s `[spl_fseg]` test, so
@@ -3695,10 +3725,14 @@ that GROWS adds to R past this bound, so boot2.asm's `KZIP` guard stays the
 exact pass-2 check. `KZ_MARGIN_K` mirrors `KZ_MARGIN` under a guard. The
 floor keeps a section that fits under 96 paragraphs from moving anything:
 kern_big's bound is 64 at wave 0, and `.boot3` may grow by `kernsize`'s
-`boot3` margin (523 bytes at wave 0, 16 at wave 1) before the lift steps.
+`boot3` margin (523 bytes at wave 0, 16 at wave 1, 352 at wave 2 on
+kern_big) before the lift steps.
 At wave 1 kern_big's lift is still 96; kern_small's is 160 (`.boot3` 1,441
 bytes from 0xEB70) and kern_mega's 160 (1,010 bytes from KERN_END, where
-only 450 fit under the floor). A step is 512
+only 450 fit under the floor). At wave 2 (the SYSTEM.CFG reader and the
+driver loader) kern_big's and kern_emu's go to **224** (`.boot3` 2,754 and
+2,755 bytes) and kern_mega's to **256** (2,670): the read's term binds on
+all three, and `.boot3b` fits under it. A step is 512
 bytes of BOOT RAM, never a resident byte - and an installed hard disk's
 volume boot record must be refreshed with the kernel (§52.10).
 
@@ -3707,9 +3741,10 @@ BOOT2_PAD`, the blob's own end. It summed `KERNEL_SEG*16 + KERN_SIZE +
 BOOT2_PAD` - `HEAP_SEG`'s - and missed the lift's 1,536 bytes on every
 ROM_COLD kernel since §2.10.3 (BR-154 of the 2026-11-08 review); `kernsize`'s
 `boot` line counts it too and prints the BOOT ARENA at `MIN_RAM_KB`, from the
-blob's nobits floor (`BLOB_SEG_AT*16 + BOOT2_RES`) to the top of RAM -
-24,064 bytes on kern_big at 128KB, the host figure that stands in for a
-kern_big 128KB boot row.
+blob's top (`BLOB_SEG_AT*16 + BOOT2_PAD`, `mem_init_x`'s floor) to the top
+of RAM - 24,064 bytes on kern_big at 128KB until wave 2's lift took it to
+22,528 (wave 4 is planned to give it back), the host figure that stands in
+for a kern_big 128KB boot row.
 
 ##### 2.9.15.4 The fences: all at build time
 
@@ -3733,8 +3768,10 @@ each with a fixture that must fail it on every run:
 The kernel's own guards (boot3.inc, kernel.asm): `b3_live - $$ >=
 KVGABUF_SIZE` where the slide shares `.vgabuf`'s RAM, and no overlap with
 `.vgabuf` where nothing does; `B3_SIZE + B3_RES <= 0xFFF0`; `.boot3` and its
-scratch below the blob; `.boot3` past `.cold`, `.ovl`, `.vga` and `.mega` in
-the file, so that it is the last section `MODC_START` follows; `KZ_MARGIN_K
+scratch below the blob; `.boot3b` on a linear 512-byte boundary past
+`.boot3`; `.boot3` past `.cold`, `.ovl`, `.vga` and `.mega` in the file, so
+that it is the last section `MODC_START` follows; NOKZIP's flat read, rounded
+to whole sectors as `B2_KSECS` rounds it, below the blob (wave 2); `KZ_MARGIN_K
 == KZ_MARGIN`.
 
 ### 2.10 The ROM — `.cold` in a 5150's spare sockets
@@ -59690,8 +59727,10 @@ read: it went to nobody.
   the write is REFUSED rather than made without them, because a file without
   the trailer deletes every shortcut at the next boot. `[cp_wdirty]` keeps
   the save owed.
-- **The reader is in `.ovl`**, so it costs no resident byte and no disk read.
-  `ovl_sc_load` runs before `ovc_load`'s own read and passes it through
+- **The reader is boot-only** (`.ovl` when this was written; the blob after
+  that; `.boot3` since BOOT3-PLAN wave 2, §2.9.15, beside its one caller
+  `ovc_load`, with the buffer `ovc_buf` it copies the head into through CS),
+  so it costs no resident byte and no disk read. `ovl_sc_load` runs before `ovc_load`'s own read and passes it through
   untouched for a file of `CFG_FBUF` or less, which is every file with no
   trailer. A bigger file is read whole into the shortcut claim; a valid
   trailer's rows move down to the claim's base with every string
@@ -71253,8 +71292,12 @@ the disk.) So the setting is TWO bytes, one per reader:
 `b2_cylok` joins them, a byte of stage 2's own: `FF` in the image, taken to
 `FE` on stage 2's entry, and back to `FF` only by the canary's PASS. It lives
 in the BLOB because the reload overwrites the kernel image, and the blob is
-one segment until `mem_unblob`, so `ovl_fdd_apply` — which runs in it — reads
-it `cs:` as a MASK: Cylinder's 1 AND it, one instruction. So Cylinder comes
+one segment until `mem_unblob`, so it is read `cs:` in the blob, as a MASK:
+Cylinder's 1 AND it, one instruction. `ovl_fdd_apply` ran in the blob and
+did that itself; since BOOT3-PLAN wave 2 it is `.boot3`'s (§2.9.15), where
+CS is not the blob's and a name past `boot2_entry` may not appear (rule B6,
+§2.9.13.4's two-pass identity), so it `B2CALL`s the instruction's 6-byte
+door `ovl_fdd_cylok`, which is the blob's. So Cylinder comes
 out 1 on a floppy boot whose canary passed (the finding was already non-zero)
 and on a hard-disk boot (`FF`, never touched), and 0 on a fallback AND on a
 286 that never looked — `SYSTEM.CFG` saying Cylinder over a boot sector that
@@ -80639,7 +80682,8 @@ refused both times, naming the line.
 
 One routine, **`exf_sync`**, reconciles the image with `[vid_dmode]` - since
 kernel size pass 14 NOT resident: it is the `EXF_SYNC` macro (extmod.inc),
-expanded as `cxf_sync` in CTRL.DRV and `bxf_sync` in the boot blob, its two
+expanded as `cxf_sync` in CTRL.DRV and `bxf_sync` in `.boot3` beside
+`drv_boot_x` (the boot blob until BOOT3-PLAN wave 2, §2.9.15), its two
 kernel calls through each image's own `KGO_PAIR` hop (−46 resident, it was 46
 bytes of far `.cold`) - `dock_apply`'s shape: Extend → `mod_need(MOD_EXT)`,
 and a refusal puts `[vid_dmode]` back to Single and answers CF = 1; Single →
@@ -102533,12 +102577,16 @@ autoload at 0.2-0.4 s and priced only the read
 
 A `drv_tab` row's display name - 'Sound', 'Hard Drive', 'USB Mouse' - has
 exactly two readers, and neither is resident: the loading screen's `Loading
-Driver n/N (Title)` (§15.6, `drv_boot_x` in the blob) and the Drivers page
+Driver n/N (Title)` (§15.6, `drv_boot_x`'s - `.boot3` since BOOT3-PLAN wave
+2, §2.9.15 - drawn by the blob's status line) and the Drivers page
 (`cp_drv_paint` and `cp_drv_mempar`, in `CTRL.DRV`). So since kernel size
 pass 14 the names are not in `.text` at all: `driver.inc`'s `DRV_TITLES`
 macro is ONE block of them, expanded twice - beside `drv_memk` in CTRL.DRV's
 image, read `cs:` and staged through `cp_stage` like every image string, and
-beside `drv_boot_x` in the blob, read `cs:` by `spl_mcs` - and a row's
+in the blob beside the status line, read `cs:` by `spl_mcs` (which is why
+they stayed in the blob when `drv_boot_x` left for `.boot3`: it hands
+`ovl_spl_msg_drv` a blob offset, rule B5's one registered immediate) - and a
+row's
 `DRVR_TITLE` is an OFFSET into it (`DRVT_*`), the same in both copies because
 they are one macro. −77 resident on kern_big, −92 on kern_emu (its absolute
 mouse's name), +100 of `CTRL.DRV` (its 15 KB claim holds it) and +79 of a blob
@@ -135883,8 +135931,9 @@ disk.
 **It qualifies on ONDEMAND-PLAN §1's own test.** The pick happens on the
 Theme page, which is itself `CTRL.DRV` module code read off the system disk
 when the panel opened; and at boot the settings reader calls `thm_set` where
-it calls `bdk_apply` and `bxf_sync` (the blob's `DOCK_APPLY` and
-`EXF_SYNC`), with the boot volume mounted.
+it calls `bdk_apply` and `bxf_sync` (the boot's `DOCK_APPLY` and
+`EXF_SYNC` instances, the blob's and `.boot3`'s since BOOT3-PLAN wave 2),
+with the boot volume mounted.
 
 **A refusal is `CF = 1` out of `thm_set`, and something else stands.** When
 the module cannot be mounted — no system disk, no heap, an image from another

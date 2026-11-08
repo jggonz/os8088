@@ -562,8 +562,9 @@ sc_rclick_x:
     stc
     retf
 
-; (vgcf_boot - Force Color at boot - is drv_boot_x's own lines in the blob
-; since kernel size pass 14: the blob was its one caller, driver.inc)
+; (vgcf_boot - Force Color at boot - is drv_boot_x's own lines since kernel
+; size pass 14, in the blob then and in `.boot3` since BOOT3-PLAN wave 2: it
+; was its one caller, driver.inc)
 
 ; =============================================================================
 section .text
@@ -1703,10 +1704,12 @@ TOASTSTR sc_s_path, 'Path too long'         ; kernel nothing (SPEC.md 2.8)
 TOASTSTR sc_s_self, 'Cannot replace itself'
 
 ; =============================================================================
-section .boot2                    ; the BOOT half (SPEC.md 2.5.1): runs once,
+B3SECT                          ; the BOOT half (SPEC.md 2.5.1): runs once,
 ; =============================================================================
-; from ovc_load, and costs no resident byte and no disk read - .boot2 rides the
-; fixed ten-sector blob (docs/plans/completed/DESKTOP-SHORTCUTS-PLAN.md 3.1).
+; from ovc_load, and costs no resident byte and no disk read - it rides
+; `.boot3`, KERNEL.SYS's tail, beside its one caller since BOOT3-PLAN wave 2
+; (the fixed blob before that, docs/plans/completed/DESKTOP-SHORTCUTS-PLAN.md
+; 3.1). ovc_buf, which the copy below writes through CS, is `.boot3`'s too.
 
 ; ovl_sc_load's EXITS, AHEAD OF ITS ENTRY. Behind the body they were ~250
 ; bytes past its six early refusals, so each assembled as a 5-byte jcc-over-
@@ -1815,7 +1818,7 @@ ovl_sc_load:
     push es
     pop ds                      ; DS = the claim
     push cs
-    pop es                      ; ES = this overlay
+    pop es                      ; ES = this image, `.boot3` (ovc_buf, driver.inc)
     xor si, si
     mov di, ovc_buf
     cld

@@ -236,12 +236,14 @@ line:
   without crossing it. Read this before believing any spare figure.
 - **`footprint`** — `KERN_SIZE` against guard 1, in bytes and 512-byte steps.
 - **`boot`** — the same size against guard 5, the blob's lift counted, and
-  the **boot arena** at `MIN_RAM_KB`: from the blob's nobits floor
-  (`BLOB_SEG_AT*16 + BOOT2_RES`) to the top of RAM, what the boot's own
-  claims have. 24,064 bytes on kern_big at 128KB and 63,488 on kern_small
-  (BOOT3-PLAN wave 0; 62,464 on kern_small at wave 1, its lift stepping
-  twice); it is the host figure that stands in for a kern_big
-  128KB boot row, which the owner took out.
+  the **boot arena** at `MIN_RAM_KB`: from the blob's top, `mem_init_x`'s
+  floor (`BLOB_SEG_AT*16 + BOOT2_PAD`; it was `BOOT2_RES`, 512 bytes higher,
+  while SYSTEM.CFG's buffer sat past the blob) to the top of RAM, what the
+  boot's own claims have. 24,064 bytes on kern_big at 128KB and 63,488 on
+  kern_small (BOOT3-PLAN wave 0; 62,464 on kern_small at wave 1, its lift
+  stepping twice; 22,528 on kern_big at wave 2, until wave 4 gives it back);
+  it is the host figure that stands in for a kern_big 128KB boot row, which
+  the owner took out.
 - **`boot3`** — the third boot-only home (SPEC.md §2.9.15): `.boot3`'s bytes,
   what is free under the blob, and how far it can grow before the derived
   lift steps (the certain bound). Boot RAM, never a resident byte.
@@ -1110,13 +1112,37 @@ boot arena at 128KB.
 | kern_small | 1,441 (`font_init` and OVBCALL's six bodies) | `.cold`'s end, 0x0EB7 | **160** | 4,745 -> 3,310 (-1,435) |
 | kern_mega | 1,010 (`hb_probe_x`, `font_init`, `mega_wrprobe`, `mega_gateb`, the three `cfx_` bodies) | `KERN_END` 0x2140 | **160** | 6,709 -> 5,713 (-996) |
 
-(`kernsize`'s figures, which leave out the KZIP-only loader.) The big
+(`kernsize`'s figures, which leave out the KZIP-only loader.)
+
+The big
 review's canary fix, boot-7 and item E then took the shipped blob down **21
 bytes on kern_big, kern_emu and kern_mega and 32 on kern_small** (MEASURED off
 the maps: kern_big 6,148 -> 6,127 of 6,656; kern_small 3,495 -> 3,463 of
 5,632; kern_mega 5,887 -> 5,866 of 7,168; docs/plans/BOOT3-PLAN.md 16.6).
 
-Resident: 0 bytes on every kernel. The lift's two steps on kern_small cost
+**Wave 2 took the SYSTEM.CFG reader and the boot driver loader** -
+`drv_boot_x` and its cone, `bxf_sync`, a KGO pair of `.boot3`'s own - out of
+the blob on kern_big, kern_emu and kern_mega, and SYSTEM.CFG's buffer
+`ovc_buf` with them into `.boot3b`, the section's nobits scratch on a linear
+512-byte boundary (MEASURED, the shipped KZIP maps):
+
+| kernel | `.boot3` (+ `.boot3b`) | lift (paragraphs) | the blob (of its sectors) | boot arena | KERNEL.SYS |
+|---|---|---|---|---|---|
+| kern_big | 1,042 -> 2,754 (+ 926: a 414-byte pad, 512 of buffer) | 96 -> **224** | 6,127 -> **4,489** (-1,638) of 6,656 | 24,064 -> 22,528 at 128KB | 85,648 -> 87,200 (168 -> 171 sectors) |
+| kern_emu | 1,042 -> 2,755 (+ 925) | 96 -> **224** | 6,244 -> 4,605 (-1,639) of 7,168 | 23,552 -> 22,016 at 128KB | 86,304 -> 87,872 (169 -> 172) |
+| kern_mega | 1,010 -> 2,670 (+ 914) | 160 -> **256** | 5,866 -> 4,281 (-1,585) of 7,168 | 508,928 -> 507,904 at 640KB | 116,832 -> 118,400 (229 -> 232) |
+
+What stays in the blob is what reads the blob's CS or what `kmain_o` also
+calls (the status line and the driver titles, `xm_boot_x`, the adapter
+switch's instance, two doors); SPEC.md §2.9.15 lists it. The heap's boot floor is
+the blob alone now, `BOOT2_PAD`, and `BOOT2_RES` is gone: the buffer it
+counted is under the blob, inside the lift. Guard 5's headroom at 128KB
+falls with the lift, 2,048 bytes: kern_big 22,016 -> 19,968, kern_emu
+21,504 -> 19,456 (the arena falls 512 less, the floor's 512 coming back).
+Stage 2's `int 13h` count is unchanged on every disk (`blobruns`). kern_small
+has no SYSTEM.CFG reader and is byte-identical.
+
+Resident: 0 bytes on every kernel, in every wave. The lift's two steps on kern_small cost
 1,024 bytes of its 128KB boot arena (63,488 -> 62,464) and of guard 5's
 headroom (60,928 -> 59,904); kern_mega's 1,024 of a 640KB floor. The blob
 keeps its length on every kernel until wave 4 shortens it, so the bytes are

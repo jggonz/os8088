@@ -110,6 +110,9 @@ SECTION_SEG = {".text": "KERNEL_SEG", ".bss": "KERNEL_SEG",
                # mount. It was `.cfx` and missing here, which filed cfx_slide
                # nowhere
                ".boot3": "B3_RAM",
+               # ...and its nobits scratch (BOOT3-PLAN wave 2): SYSTEM.CFG's
+               # buffer ovc_buf, whose vstart is B3_SEG-relative (B3B_AT)
+               ".boot3b": "B3_RAM",
                # kern_mega's own segment (docs/plans/completed/KERN-MEGA-SEGMENTS-PLAN.md):
                # its RUNG, which is where it is until mega_enter copies it
                # above 1MB with `.cold` and where it stays on a machine with

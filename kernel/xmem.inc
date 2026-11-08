@@ -350,7 +350,9 @@ xm_boot_x:
     pop cx
     pop bx
     pop ax
-    retf                        ; FAR: kmain reaches this through SPLGATE1
+    retf                        ; FAR: drv_boot_x reaches this by B2CALL, out
+                                ; of `.boot3` (BOOT3-PLAN wave 2; SPLGATE1 from
+                                ; kmain, then BLOBCALL, before it)
 .refuse:
     mov bx, xm_row              ; ...and here too, for the same reason. This
                                 ; path worked BY LUCK on the machine it was

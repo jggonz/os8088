@@ -180,7 +180,9 @@ ENDMACRO = _Pct(r'^\s*%endmacro')
 ENDMACRO_B = _Pct(r'^\s*%endmacro\b')
 LABEL = re.compile(r'^([A-Za-z_]\w*):')
 LABEL_DOT = re.compile(r'^[A-Za-z_.]\w*:')
-DRVBOOT = re.compile(r'^\s*(?:SPL(?:GATE1?|CALLC?)|BLOBCALL)\s+drv_boot_x\b')
+DRVBOOT = re.compile(r'^\s*(?:SPL(?:GATE1?|CALLC?)|BLOBCALL|B3CALL)\s+drv_boot_x\b')
+# (B3CALL since BOOT3-PLAN wave 2: drv_boot_x is `.boot3`'s on every kernel
+# with drivers, and kern_small's one-byte rung is still the blob's BLOBCALL)
 OVLCALL = re.compile(r'\b(?:OVLCALL|OVBCALL)\s+(\w+)')
 # ...and OVBCALL with it (SPEC.md 2.5.3.2): on kern_big it IS an OVLCALL,
 # so rule 2e's question - is this body still there when the call is made -
@@ -2139,12 +2141,14 @@ def boot3_rules(kfiles, root='.'):
     bad = []
     rows = _b3_stream(kfiles)
     where = {}                          # label -> section, every definition
+    alldefs = {}                        # label -> {every section defining it}
     for f, n, sect, line, raw, _e in rows:
         c0 = line[:1]
         if c0.isalpha() or c0 == '_':
             m = LABEL.match(line)
             if m:
                 where[m.group(1)] = sect
+                alldefs.setdefault(m.group(1), set()).add(sect)
         if 'OSAPI_' in line:
             m = CELLDEF.match(line)
             if m:
@@ -2267,7 +2271,11 @@ def boot3_rules(kfiles, root='.'):
                     re.match(r'^\s*SPLCALLC?\s', line) or  # [spl_fseg]
                     re.search(r'\bcall\s+BLOB_SEG_AT\s*:', line) or
                     'ovlchk: B5 blob offset' in raw or pre):
-                for w in B3WORD.findall(CALL.sub('', line)):
+                code = line             # (a line's OWN label is a definition,
+                m = LABEL.match(code)   # not an immediate - drv_boot_x is
+                if m:                   # one name in two arms, kern_small's
+                    code = code[m.end():]   # in the blob: BOOT3-PLAN wave 2)
+                for w in B3WORD.findall(CALL.sub('', code)):
                     if where.get(w) in blobish:
                         bad.append(('B5', f, n, "`.boot3` carries the blob "
                                     "offset %s as an immediate - read through "
@@ -2302,7 +2310,10 @@ def boot3_rules(kfiles, root='.'):
             m = B3CALL_RE.match(line)
             if m:
                 t = m.group(1)
-                if where.get(t) != '.boot3' and t not in b3mlabs:
+                if '.boot3' not in alldefs.get(t, ()) and t not in b3mlabs:
+                    # (ANY arm's: a name defined in two - drv_boot_x is
+                    # `.boot3` on kern_big and kern_small's blob rung - is
+                    # this kernel's in whichever arm the caller's is)
                     bad.append(('B8', f, n, "B3CALL %s, but %s is in %s, "
                                 "not `.boot3`%s" % (t, t, where.get(
                                     t, 'no section'), inmac)))

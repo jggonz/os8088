@@ -623,11 +623,17 @@ mem_init_x:
     cmp word [spl_fseg], 0
     je .nospl
     mov ax, [spl_fseg]
-%ifdef KERN_SMALL
-    add ax, BOOT2_PAD / 16      ; ...the paragraph past the blob's last byte
-%else                           ; ...and past its nobits scratch, kern_big's
-    add ax, BOOT2_RES / 16      ; SYSTEM.CFG buffer (ovc_buf, driver.inc)
-%endif
+    add ax, BOOT2_PAD / 16      ; ...the paragraph past the blob's last byte.
+                                ; Every kernel since BOOT3-PLAN wave 2 moved
+                                ; SYSTEM.CFG's buffer (ovc_buf) from past the
+                                ; blob into `.boot3b`, under it. A floor ON THE
+                                ; 512-BYTE GRID, and it must stay one: every
+                                ; boot claim stacks bottom-up on it and a
+                                ; pinned one (the FAT window's) keeps its phase
+                                ; for the session, so a paragraph floor put
+                                ; every bottom-up base off the grid (SPEC.md 1)
+                                ; and PiXEL's OSAPI_MEM_CLAIM_DMA refused every
+                                ; open (tests/vesablitd.py, tests/vesasu.py)
 .nospl:
     mov [mem_base], ax
     mov [mem_top], ax           ; an empty heap until int 12h says more

@@ -606,27 +606,37 @@ SPL_MSG_Y     equ 288           ; VGA: under the bar trough (rows 262..281) and
 ; The three drv_boot reaches, and the one spl_reset does. Every one of them
 ; preserves every register and the flags.
 ;
-; **THE FIRST THREE ARE NEAR NOW** (SPEC.md 2.5.2): drv_boot_x moved into this
-; same section, and it is their only caller, so what used to be a 20-byte
-; SPLCALL through spl_fp is three bytes of near call in one address space and
-; the `retf` they answered it with is a `ret`. That collapse is most of why
-; docs/plans/LAST-DROP-BYTES.md row 1 is the only row in the register that returns
-; more than it spends. ovl_spl_redraw below keeps its `retf` - spl_reset is in
-; `.boot2` and reaches it through SPLCALL still.
+; **THE FIRST THREE WERE NEAR, AND ARE FAR AGAIN** (SPEC.md 2.5.2, 2.9.15):
+; drv_boot_x moved into this same section and was their only caller, so what
+; used to be a 20-byte SPLCALL through spl_fp became three bytes of near call
+; and the `retf` they answered it with a `ret` - most of why
+; docs/plans/LAST-DROP-BYTES.md row 1 returned more than it spent. BOOT3-PLAN
+; wave 2 took drv_boot_x on into `.boot3` and LEFT THESE HERE, because
+; spl_mcs reads every string - the driver titles too - through the blob's CS:
+; so the call is a 5-byte B2CALL (`call BLOB_SEG_AT:`, still not SPLCALL's 20)
+; and they answer it with `retf`, kmain_o's other two's shape. kern_small has
+; no drv_boot and so no caller, and keeps its `ret`s byte for byte.
+; ovl_spl_redraw below keeps its `retf` - spl_reset is in `.boot2` and reaches
+; it through SPLCALL still.
 ; -----------------------------------------------------------------------------
+%ifdef OS88_DRIVERS
+ %define SPL_MRET retf          ; (B2CALL from drv_boot_x, `.boot3`)
+%else
+ %define SPL_MRET ret
+%endif
 ovl_spl_msg_cfg:                ; 'Loading SYSTEM.CFG'
     push si
     mov si, spl_s_cfg
     call spl_msg_cs
     pop si
-    ret
+    SPL_MRET
 
 ovl_spl_msg_boot:               ; 'Starting os8088'
     push si
     mov si, spl_s_boot
     call spl_msg_cs
     pop si
-    ret
+    SPL_MRET
 
 ; ...and the two kmain reaches, for the phases that are NOT disk and are the
 ; longest things on a hard-disk boot's bar (SPEC.md 15.6.4). Each is composed
@@ -674,9 +684,10 @@ spl_msg_cs:
 ; ovl_spl_msg_drv - 'Loading Driver n/N (Title)'
 ; in:  AL = the 1-based ordinal, AH = how many are being loaded,
 ;      CS:SI -> the row's title, in the blob's own DRV_TITLES (driver.inc)
-; THE ENTRY IS THE BODY: drv_boot_x is its one caller and is in this section,
-; so the `call spl_msg_drv / ret` stub that stood in front of it was four
-; bytes of the blob spent on a name (SPEC.md 125.1 took them back)
+; THE ENTRY IS THE BODY: drv_boot_x is its one caller, so the `call
+; spl_msg_drv / ret` stub that stood in front of it was four bytes of the blob
+; spent on a name (SPEC.md 125.1 took them back). FAR since BOOT3-PLAN wave 2
+; (SPL_MRET, above): drv_boot_x is `.boot3`'s, and hands SI as a BLOB offset
 ; -----------------------------------------------------------------------------
 ovl_spl_msg_drv:
     pushf
@@ -710,7 +721,7 @@ ovl_spl_msg_drv:
     pop bx
     pop ax
     popf
-    ret
+    SPL_MRET
 
 ; -----------------------------------------------------------------------------
 ; The composer. DI walks spl_mline and every store goes through spl_mput,

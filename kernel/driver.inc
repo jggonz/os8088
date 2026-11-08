@@ -1036,25 +1036,13 @@ CFG_KESZ    equ 5               ; bytes per table entry
 ; expression anyone can evaluate is just .bss nothing can use - which, with
 ; KERN_CODE_MAX as tight as it now is, is memory somebody else needs.
 CFG_FBUF    equ CFG_REC0 + CFG_NKEY * CFR_HDR + CFG_NB + 2
-; BOOT2_RES - what mem_init keeps of the heap's floor while stage 2 lives: the
-; blob's sectors and, past them, its nobits scratch - the SYSTEM.CFG file
-; buffer ovc_buf (below), CFG_FBUF rounded up to a SECTOR (kernel size pass
-; 14: 164 zero bytes that were read off the disk on every boot). Guard 5 (the
-; 128KB boot, kernel.asm) still sums BOOT2_PAD: ovc_buf is first written by
-; drv_boot, long after stage 1's copy and its stack at the top of RAM are dead.
-;
-; 512 AND NOT 16, because this is the HEAP'S FLOOR until mem_unblob: every
-; claim made at boot is stacked bottom-up on it, and a pinned one (the FAT
-; window's) holds whatever phase it was given for the whole session - so a
-; floor rounded to a paragraph put EVERY bottom-up base off the 512-byte grid
-; (SPEC.md 1: every disk-visible base is 512-aligned), and PiXEL's
-; OSAPI_MEM_CLAIM_DMA, which refuses a base that is not, refused every open
-; (`-: not enough memory`, tests/vesablitd.py and tests/vesasu.py red). The
-; cost is under 512 bytes of the boot's heap, given back with the blob
-BOOT2_RES   equ BOOT2_PAD + ((CFG_FBUF + 511) / 512) * 512
-%if BOOT2_RES % 512 || BOOT2_PAD % 512
-  %error "driver: BOOT2_RES is the heap's floor at boot, and must keep every claim base on the 512-byte grid"
-%endif
+; BOOT2_RES WAS HERE: the heap's floor while stage 2 lives, the blob's sectors
+; plus, past them, SYSTEM.CFG's file buffer ovc_buf rounded up to a sector
+; (kernel size pass 14). BOOT3-PLAN wave 2 took the buffer's readers into
+; `.boot3` and the buffer with them, into `.boot3b` UNDER the blob, which the
+; derived lift (kernel.asm's BLOB_LIFT) holds clear - so the floor is the blob
+; alone, BOOT2_PAD, on every kernel, and mem_init_x's one `add` says so
+; (memory.inc, where the floor's 512-byte rule now lives).
 
 ; --- whose blob is whose (SPEC.md 51.9.1) ------------------------------------
 ; row index, size, offset into the struct. The ROW and not the class, for the
@@ -4992,8 +4980,9 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
 %endif                          ; machine's to decide (_load's sentinel)
     call %1 %+ _want_set
 %ifdef DOCK_OPT
-    BLOBCALL bdk_apply          ; (the blob's own dock_apply, FAR-bodied as
-                                ; the Dock page's is - KSW_SECT, kernel.asm)
+    B2CALL bdk_apply            ; (the blob's own dock_apply, FAR-bodied as
+                                ; the Dock page's is - KSW_SECT, kernel.asm;
+                                ; this reader is `.boot3`'s since wave 2)
                                 ; the map above stored [dock_cfg]; the band,
                                 ; the strip and the drive column are DERIVED
                                 ; from it (SPEC.md 30.5), which is not a store.
@@ -5372,32 +5361,38 @@ section .cold                   ; ...and back to cold code
 ; Boot (SPEC.md 51.3) and the notice that follows it
 ; =============================================================================
 
-section .boot2                    ; boot overlay (SPEC.md 2.5): this runs ONCE,
-                                ; from kmain, before the first mount overwrites
-                                ; it - so it costs no RAM and nothing at all
-                                ; against KERN_BUDGET. Same shape and the same
-                                ; home as clk_init's four-rung RTC ladder
-                                ; (SPEC.md 37.90), for the same reason: a
-                                ; hardware probe that answers once at boot has
-                                ; no business being resident.
+B3SECT                          ; THE THIRD BOOT-ONLY HOME (SPEC.md 2.9.15,
+                                ; BOOT3-PLAN wave 2; the blob until then): this
+                                ; runs ONCE, from drv_boot_x, so it costs no
+                                ; RAM and nothing at all against KERN_BUDGET -
+                                ; and since wave 2 no blob byte either. It
+                                ; rides KERNEL.SYS's packed tail, which the
+                                ; splash is already up for, and is dropped at
+                                ; mem_unblob with the blob.
 
 DRVP_OPL    equ 0x388           ; the OPL2's address/status port; +1 is data
 
-; --- SYSTEM.CFG's reader, in the overlay (SPEC.md 51.5.3, 2.5.1) -------------
+; --- SYSTEM.CFG's reader, in `.boot3` (SPEC.md 51.5.3, 2.9.15) --------------
 ; It is here rather than in .cold because it is read ONCE, before the first
-; paint, and because since SPEC.md 2.5.1 the overlay outlives the mount that
-; drv_cfg_load needs. 431 bytes of code and 202 of tables and buffer that no
-; longer sit in the kernel's own segment, and thirteen of the fourteen bytes a
-; new setting used to cost.
+; paint, and because `.boot3` outlives the mount that drv_cfg_load needs (the
+; blob's reason, SPEC.md 2.5.1, until BOOT3-PLAN wave 2 gave the blob its
+; bytes back). 431 bytes of code and 202 of tables and buffer that do not sit
+; in the kernel's own segment, and thirteen of the fourteen bytes a new
+; setting used to cost.
 CFG_MAP    ovc
 CFG_DATA   ovc
-; ovc_buf - boot-only scratch, and NOT BLOB BYTES (kernel size pass 14): it
-; is the paragraphs just past the loaded blob, which mem_init reserves with it
-; (BOOT2_RES) and mem_unblob gives back with it. Nothing reads it before
-; %1_load/%1_ser write it - _deser is bounded by the count the read returned -
-; so the zeros it carried as 164 bytes of every boot's sector read bought
-; nothing (docs/plans/completed/ksp13/xfile.md WANTS 3)
-ovc_buf     equ BOOT2_PAD       ; .boot2 is vstart 0: its end IS this offset
+; ovc_buf - boot-only scratch, and NOT FILE BYTES (kernel size pass 14).
+; Nothing reads it before %1_load/%1_ser write it - _deser is bounded by the
+; count the read returned - so the zeros it carried as 164 bytes of every
+; boot's sector read bought nothing (docs/plans/completed/ksp13/xfile.md WANTS
+; 3). Its readers - ovc_load's read, ovc_deser and ovl_sc_load's copy - all
+; reach it THROUGH CS, so it is `.boot3b`'s (boot3.inc): the nobits scratch
+; past `.boot3`'s last byte on a LINEAR 512-byte boundary (a read target),
+; under the blob, where the derived lift keeps it and mem_unblob gives it back
+; (BOOT3-PLAN wave 2; until then the paragraphs past the blob, BOOT2_RES)
+section .boot3b
+ovc_buf:    resb ((CFG_FBUF + 511) / 512) * 512
+B3SECT
 CFG_SHARED ovc
 CFG_BOOT   ovc
                                 ; (the name's staging is `.boot3`'s
@@ -5415,7 +5410,8 @@ CFG_BOOT   ovc
 ; -----------------------------------------------------------------------------
 ovl_cfg_load:
     call ovc_load               ; NEAR, since SPEC.md 2.5.2: drv_boot_x is its
-    ret                         ; only caller and is in this section now, so the
+    ret                         ; only caller and is in this section (`.boot3`
+                                ; with it since BOOT3-PLAN wave 2), so the
                                 ; SPLCALLC that used to reach it - the one form
                                 ; that does NOT bank the flags, because this
                                 ; answers in CF - is three bytes of near call
@@ -5434,8 +5430,8 @@ ovl_cfg_load:
 ; needs the mount, and the mount is what takes the FAT window `.ovl` lives
 ; in. So the detection runs first and this corrects it - which costs nothing,
 ; because every answer desk_init reaches is a byte in a dsk_vtab row and a
-; byte is as easy to overwrite as to write. `.boot2`, so no resident byte: the
-; blob dies at kmain's mem_unblob like the rest of drv_boot.
+; byte is as easy to overwrite as to write. `.boot3`, so no resident byte: it
+; dies at kmain's mem_unblob like the rest of drv_boot.
 ;
 ; Per unit, 0 Auto leaves the row exactly as detected. 1 None takes the ZONE
 ; away and leaves the ROW - the state a drive the equipment word never claimed
@@ -5468,8 +5464,11 @@ ovl_fdd_apply:
     dec ax                      ; 1 Track -> 0, 2 Cylinder -> 1, 0 Auto -> FF
     cmp al, 2
     jae .drives                 ; Auto or a future byte: the canary's finding
-    and al, [cs:b2_cylok]       ; Cylinder over a FAILED canary -> 0, Track
-                                ; (the loader's byte, through the blob's CS)
+    B2CALL ovl_fdd_cylok        ; Cylinder over a FAILED canary -> 0, Track
+                                ; (the loader's byte, read in the blob: it is
+                                ; a label past boot2_entry, which moves
+                                ; between the two passes and is the blob's
+                                ; CS's - SPEC.md 2.9.13.4, os88ovlchk B5/B6)
     mov [boot_cylrun], al       ; ...for every mount after this one
     mov [dsk_cylrun], al        ; ...and the one drv_boot is standing on
 .drives:
@@ -5767,8 +5766,19 @@ section .cold                   ; ...and back to cold code: drv_boot and
 ; Outbound it needs NO new shim. drvf_drv_row, drvf_drv_load and
 ; drvf_drv_mounted are already in `.cold` below, built for CTRL.DRV, and a far
 ; call from the overlay is the same instruction the module makes.
+;
+; ...AND SINCE BOOT3-PLAN WAVE 2 IT IS `.boot3`'s, with its whole cone - the
+; SYSTEM.CFG reader above, the shortcuts' read (desksc.inc), DRV_ATTACH's bdl
+; instance, bxf_sync and a KGO pair of its own (b3_, below: KGO_PAIR's hop
+; reads its inline word through CS, so it must be in its CALLER'S segment).
+; What stays in the blob is what reads `[cs:]` there or what kmain_o also
+; calls: the status line (ovl_spl_msg_*, whose spl_mcs reads the driver
+; titles bdt_* through the blob's CS - so the titles stay too, and
+; drv_boot_x hands over a BLOB offset), xm_boot_x, the adapter switch's
+; instance (bvs_switch, bvs_disp_init's door, bdk_apply) and the loader's
+; b2_cylok (ovl_fdd_cylok's door). Each is B2CALL from here.
 ; =============================================================================
-section .boot2
+B3SECT
 
 ; -----------------------------------------------------------------------------
 ; drv_boot - load every driver the settings file asks for
@@ -5792,14 +5802,14 @@ drv_boot_x:
     ; settings read are one phase from the user's side, so they get one line;
     ; it goes up BEFORE drv_mounted rather than after, because the mount is
     ; most of what it is announcing.
-    call ovl_spl_msg_cfg
+    B2CALL ovl_spl_msg_cfg      ; (the status line stays in the blob)
 
     xor ch, ch                  ; CH = 1 once a settings RECORD has been read
     call COLD_SEG:drvf_drv_mounted
     jc .nodisk
 %ifdef KERN_BIG
  %ifndef KERN_MEGA              ; (kern_mega: the store is mega_xminit's)
-    BLOBCALL xm_boot_x          ; THE STORE ABOVE 1MB FIRST, before any driver
+    B2CALL xm_boot_x            ; THE STORE ABOVE 1MB FIRST, before any driver
                                 ; (SPEC.md 41.12): it is what puts `.cold` in
                                 ; the HMA, and a driver loaded after it may go
                                 ; up there too (docs/plans/HMA-PLAN.md 5). It
@@ -5823,10 +5833,10 @@ drv_boot_x:
     test byte [drv_cfg+CFG_VGC], 1  ; Force Color (SPEC.md 39.28), BEFORE the
     jz .novgc                   ; adapter switch below, so a switch onto the
     mov ax, (SC_OP_VGC << 8) | MOD_SETS ; VGA finds the BIOS's record colour
-    call bvs_cgo                ; already. It was vgcf_boot, a resident far
+    call b3_cgo                 ; already. It was vgcf_boot, a resident far
     dw mod_need                 ; body with this one caller - in the blob
-    call far [SETFP]            ; since kernel size pass 14, its hops the
-    call bvs_cgo                ; blob's own (KGO_PAIR bvs). mod_need's CF is
+    call far [SETFP]            ; since kernel size pass 14, its hops this
+    call b3_cgo                 ; image's own (KGO_PAIR b3). mod_need's CF is
     dw mod_drop                 ; NOT tested: a core that could not be read
 .novgc:                         ; leaves SETFP on mod_gone and its row empty,
                                 ; which mod_drop passes over - and there is no
@@ -5875,7 +5885,7 @@ drv_boot_x:
 %ifdef KERN_BIG
     mov ah, [vid_kind]
 %endif
-    BLOBCALL bvs_switch         ; (the blob's own vid_switch, FAR-bodied as
+    B2CALL bvs_switch           ; (the blob's own vid_switch, FAR-bodied as
                                 ; the panel's is - KSW_SECT, kernel.asm)
     jc .vnosw                   ; no such adapter here: stay on the probe's
 %ifdef KERN_BIG                 ; answer
@@ -5890,8 +5900,8 @@ drv_boot_x:
     ; applies: the adapter was already right, or was refused, and neither is a
     ; statement about the desktop. No spl_reset - the primary's card is never
     ; re-programmed here, so the loading screen is untouched.
-    call bvs_disp_init          ; (the blob's own: KSW_SECT, kernel.asm)
-%endif
+    B2CALL bvs_disp_far         ; (the blob's own, KSW_SECT, kernel.asm,
+%endif                          ; through its far door: kmain_o calls it NEAR)
 .load:
     ; --- HOW MANY are we about to read? (SPEC.md 15.6) -----------------------
     ; The status line names an ordinal out of a total, so the total has to be
@@ -5919,8 +5929,8 @@ drv_boot_x:
     mov al, dl
     mov ah, dh
     mov si, [bx+DRVR_TITLE]     ; an offset into the blob's own copy of
-    add si, bdt_base            ; DRV_TITLES - the title is not resident
-    call ovl_spl_msg_drv        ; (kernel size pass 14)
+    add si, bdt_base            ; ovlchk: B5 blob offset - DRV_TITLES, read by ovl_spl_msg_drv's spl_mcs through the BLOB's CS, which B2CALL makes it
+    B2CALL ovl_spl_msg_drv      ; (kernel size pass 14: no title is resident)
 %ifdef DRV_DIAG
     mov [ddg_row], cl
     mov byte [ddg_step], 0
@@ -5940,7 +5950,7 @@ drv_boot_x:
     cmp byte [bx+DRVR_ERR], DRVE_NOVOL  ; says - they ticked it to reach the
     jne .skip                   ; disk tool, say - but a default that came
     mov al, cl                  ; up with NOTHING TO DO is taken down again
-    call bvs_cgo                ; and its memory given back. DRVR_ERR
+    call b3_cgo                 ; and its memory given back. DRVR_ERR
     dw drv_unload_x
 .drop:                          ; stays, so the page says why the row is
     mov byte [bx+DRVR_WANT], 0  ; unticked. RAM only: DRVR_ANS is 0, so the
@@ -5950,7 +5960,7 @@ drv_boot_x:
     jb .next
 
     DDG 0x0F                    ; DRVDIAG: every load returned
-    call ovl_spl_msg_boot    ; the loads are done and the desktop is not up
+    B2CALL ovl_spl_msg_boot     ; the loads are done and the desktop is not up
                                 ; yet: xm_boot, the palette and the first
                                 ; wm_paint_all are still to come, and a line
                                 ; left naming a driver it has finished with is
@@ -5990,7 +6000,7 @@ drv_boot_x:
     retf
 drv_boot_want:                  ; CL = a row: ZF = 1 when it has no file or is
     mov al, cl                  ; not wanted, else BX = it - the one question
-    call bvs_cgo                ; all three walks above ask (only CL is read).
+    call b3_cgo                 ; all three walks above ask (only CL is read).
     dw drv_row_x
     cmp word [bx+DRVR_FILE], 0  ; A ROUTINE OF ITS OWN and not a local of
     je .wret                    ; drv_boot_x: a near `ret` inside a far
@@ -6014,9 +6024,22 @@ drv_boot_want:                  ; CL = a row: ZF = 1 when it has no file or is
 ; (SPEC.md 31.5): app_launch takes its own locks, so this must run with none
 ; held - which is why it is the last thing kmain does before ui_task.
 ; -----------------------------------------------------------------------------
-DRV_ATTACH bdl, bvs_cgo                  ; drv_load and the attach half, for drv_boot
+DRV_ATTACH bdl, b3_cgo                  ; drv_load and the attach half, for drv_boot
                                 ; (kernel size pass 13) - given back with the
-                                ; rest of the blob
+                                ; rest of `.boot3` (the blob's until wave 2)
+%macro B3SWC 1                  ; BSWC's shape through `.boot3`'s own pair
+    call b3_cgo
+    dw %1
+%endmacro
+%ifdef KERN_BIG
+EXF_SYNC bxf, B3SWC             ; EXTD.DRV's sync (extmod.inc), drv_boot_x's
+%endif                          ; alone: `.boot3` with it since wave 2
+KGO_PAIR b3                     ; ovlchk: B3 hand-down - the far return's CS (`mov [bp+10], cs`), spent by the hop's own retf before the call it builds returns
+section .boot2                  ; ...and the blob keeps what reads its own CS
+                                ; or what kmain_o also calls (above)
+ovl_fdd_cylok:                  ; ovl_fdd_apply's door onto the loader's byte
+    and al, [cs:b2_cylok]       ; (boot2.asm): AL &= it, through the BLOB's CS
+    retf
 %ifdef KERN_BIG
 ; ...AND THE BOOT'S ADAPTER SWITCH, the same trade (KSW_SECT, kernel.asm): the
 ; Display page's vid_switch, vid_disp_init and wm_refit and the Dock page's
@@ -6044,7 +6067,9 @@ WM_REFIT bvw, BSWK
 %ifdef DOCK_OPT
 DOCK_APPLY bdk, BSWK, BSWC, bvw
 %endif
-EXF_SYNC bxf, BSWC              ; ...and EXTD.DRV's sync (extmod.inc)
+bvs_disp_far:                   ; bvs_disp_init's FAR door, for drv_boot_x's
+    call bvs_disp_init          ; B2CALL out of `.boot3`: kmain_o calls the
+    retf                        ; body NEAR, so it keeps its `ret`
 bvw_rowcalc:                    ; ...and the desktop grid's (desk.inc): the
     B3CALL cfx_grid             ; geometry from `.boot3` (cfx_grid, boot3.inc),
     BSWC desk_reflow            ; which costs this blob nothing, and the
@@ -6231,7 +6256,8 @@ drvf_drv_mounted:        call drv_mounted
 ; stays: the settings core, `.modc`, may not reach the panel's hop)
 ; (drvf_drv_find and drvf_ss_mins2idle went in kernel size pass 13: their one
 ; caller each - hb_probe_x (in `.boot3` since BOOT3-PLAN wave 1) and the
-; settings reader's unpack (the blob) - is boot-only, with nothing in BP, and
+; settings reader's unpack (`.boot3` since BOOT3-PLAN wave 2) - is boot-only,
+; with nothing in BP, and
 ; reaches the near body through wm_cbd)
 
 section .modc                   ; CTRL.DRV's image (SPEC.md 2.8)

@@ -2191,6 +2191,13 @@ section .boot3   start=B3_START vstart=0 ; the third boot-only home, the
                                 ; is, the slide and its list - opens the
                                 ; section here, for `.boot2`'s `jmp
                                 ; boot2_entry` reason; the foot is at the foot
+%ifdef B3B_ON                   ; ...and its NOBITS SCRATCH (SPEC.md 2.9.15.1,
+section .boot3b  nobits vstart=B3B_AT ; BOOT3-PLAN wave 2): SYSTEM.CFG's file
+%endif                          ; buffer, ovc_buf, past `.boot3`'s last byte
+                                ; on the next LINEAR 512-byte boundary (it is
+                                ; a disk-read destination) - B3_SEG-relative,
+                                ; because its readers are `.boot3` bodies that
+                                ; reach it through CS (boot3.inc)
 %ifdef COLD_SLIDE
 section .vga     start=VGA_START vstart=VGA_VSTART ; ...and the VGA rung (2)
 %endif
@@ -6008,7 +6015,11 @@ kmain_o:
                                 ; the drivers, which it would replace anyway,
                                 ; and before anything writes above 1MB
 %endif
-    BLOBCALL drv_boot_x         ; ...and load what SYSTEM.CFG asks for
+%ifdef OS88_DRIVERS
+    B3CALL   drv_boot_x         ; ...and load what SYSTEM.CFG asks for (in
+%else                           ; `.boot3`, BOOT3-PLAN wave 2; kern_small's is
+    BLOBCALL drv_boot_x         ; the blob's one-byte `retf` rung)
+%endif
 %ifdef KERN_EMU
     BLOBCALL vmm_boot_x         ; ...one of which may be SPEC.md 9.11's
                                 ; absolute pointer, which is DRVC_OVL and so
@@ -8930,6 +8941,11 @@ MODC_START   equ B3_START + B3_SIZE ; `.boot3` is the file's last section on
   %error "`.boot3` is not past `.mega` in the file - it is the file's last section"
  %endif
 %endif
+%ifndef KZIP                    ; ...and NOKZIP's plain read clears the blob,
+ %if KERNEL_SEG * 16 + ((MODC_START - BOOT2_PAD + 511) & ~511) > BLOB_SEG_AT * 16
+  %error "NOKZIP: stage 2's flat read of KERNEL.SYS (B2_KSECS, whole sectors to MODC_START) runs into the blob - the derived BLOB_LIFT should have prevented this (BOOT3-PLAN 13)"
+ %endif                         ; rounded as the read rounds it - the whole
+%endif                          ; file past the blob, not `.boot3` alone
 MODF_START   equ MODC_START + MODC_SIZE
 MODL_START   equ MODF_START + MODF_SIZE
 %ifdef KERN_BIG
@@ -9398,11 +9414,9 @@ SK_MEGA_KB equ SK_R(SK_CUM4) - SK_R(SK_CUM4 - MEGA_PARA * 16) ; rungs when they
   %assign KS_B3RAM  B3_RAM       ; the blob's nobits floor, which is what a
   %assign KS_B3RES  B3_RES       ; 128KB machine's boot arena is measured
                                  ; from (kernsize's boot3 and boot lines)
- %ifdef KERN_SMALL
-  %assign KS_B2RES  BOOT2_PAD    ; (mem_init_x's floor: kern_small has no
- %else                           ; ovc_buf past the blob)
-  %assign KS_B2RES  BOOT2_RES
- %endif
+  %assign KS_B2RES  BOOT2_PAD    ; (mem_init_x's floor: the blob alone on
+                                 ; every kernel since BOOT3-PLAN wave 2 took
+                                 ; ovc_buf from past it into `.boot3b`)
   %warning ksb: boot3=KS_B3 b3ram=KS_B3RAM b3res=KS_B3RES b2res=KS_B2RES blift=KS_BLIFT
   %warning ks: text=KS_TEXT bss=KS_BSS cold=KS_COLD lowbss=KS_LOW vgabuf=KS_VGAB ovl=KS_OVL boot2=KS_BOOT2 stk0=KS_STK0 imgpara=KS_IMGP coldpara=KS_COLDP fatpara=KS_FATP lowpara=KS_LOWP vgabufpara=KS_VGABP ksize=KS_SIZE budget=KS_BUDGET codemax=KS_CODEM kend=KS_END kseg=KS_KSEG colds=KS_COLDS fats=KS_FATS lows=KS_LOWS vgas=KS_VGAS blobseg=KS_BLOB minramkb=KS_MINRAM bootmax=KS_BOOTMX grace=KS_GRACE toppara=KS_TOPP vga=KS_VGA vgars=KS_VGARS
   %ifdef KERN_MEGA              ; ...and kern_mega's own rung, on a line of

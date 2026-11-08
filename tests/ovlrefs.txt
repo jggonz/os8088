@@ -82,12 +82,29 @@ sch_idle_start      kmain_o only (kernel.asm:4182) - spawns the idle task, docs/
 # the kernel: drv_boot_x is inside `.boot2` now (SPEC.md 2.5.2), so the calls no
 # longer cross and there is nothing here to account for.
 ovl_spl_redraw      spl_reset only (splash.inc:488) - repaint after a mode set
+# ...and three are BACK, from the other side: BOOT3-PLAN wave 2 took
+# drv_boot_x on into `.boot3` and left the status line here, because spl_mcs
+# reads every string - the driver titles too - through the blob's CS. So each
+# is a B2CALL (`call BLOB_SEG_AT:`) out of `.boot3`, and the guarantee is the
+# caller's: drv_boot_x is B3CALL'd from kmain_o (MARK 28), long before
+# spl_finish, and `.boot3` itself only exists from kz_all to mem_unblob.
+ovl_spl_msg_cfg     drv_boot_x only (B2CALL from `.boot3`), inside kmain_o, before spl_finish - 'Loading SYSTEM.CFG'
+ovl_spl_msg_drv     drv_boot_x only (B2CALL from `.boot3`), inside kmain_o, before spl_finish - 'Loading Driver n/N', its title a BLOB offset (bdt_base)
+ovl_spl_msg_boot    drv_boot_x only (B2CALL from `.boot3`), inside kmain_o, before spl_finish - 'Starting os8088'
 
 # --- the settings parser, SPEC.md 51.5 / docs/plans/completed/SETTINGS-COST.md -------------
 # ovl_cfg_load was here for the same reason and has left for the same one: its
 # only caller moved into the section with it.
-ovl_sc_load         ovc_load only (CFG_BOOT's expansion, which IS `.boot2` - the macro is merely DEFINED under `.modc`, where the reader cannot tell a definition from an emission). ovc_load's one caller is ovl_cfg_load, drv_boot_x's, inside kmain_o: the desktop shortcuts' boot read, SPEC.md 26.8.6
-bdk_apply           ovc_load only (CFG_BOOT's expansion, which IS `.boot2`, as the row above says - the macro is DEFINED under `.modc`). The blob's own dock_apply (DOCK_APPLY bdk, driver.inc), applied to the settings just read, inside drv_boot_x, inside kmain_o. Visible to this gate only since the template walk learned a multi-argument expansion pastes its first (SPEC.md 120.4's bvs_switch row)
+ovl_sc_load         ovc_load only (CFG_BOOT's expansion, which IS `.boot3` since BOOT3-PLAN wave 2, `.boot2` before it - the macro is merely DEFINED under `.modc`, where the reader cannot tell a definition from an emission). ovc_load's one caller is ovl_cfg_load, drv_boot_x's, inside kmain_o: the desktop shortcuts' boot read, SPEC.md 26.8.6
+bdk_apply           ovc_load only (CFG_BOOT's expansion, which IS `.boot3` since wave 2, as the row above says - the macro is DEFINED under `.modc`), by B2CALL. The blob's own dock_apply (DOCK_APPLY bdk, driver.inc), applied to the settings just read, inside drv_boot_x, inside kmain_o, before spl_finish. Visible to this gate only since the template walk learned a multi-argument expansion pastes its first (SPEC.md 120.4's bvs_switch row)
+# ...and the rest of what drv_boot_x's cone still reaches in the blob, each a
+# B2CALL out of `.boot3` (BOOT3-PLAN wave 2), each inside drv_boot_x, inside
+# kmain_o, before spl_finish:
+xm_boot_x           drv_boot_x only (B2CALL): the store above 1MB, attached right after the mount. Stays in the blob beside vx_boot_x, whose bvs_cgo hop it shares
+bvs_switch          drv_boot_x only (B2CALL; it is FAR-bodied, KSW_SECT): SYSTEM.CFG's adapter. kmain_o's own vid_switch is this same body
+bvs_disp_far        drv_boot_x only (B2CALL): bvs_disp_init's 4-byte far door - kmain_o near-calls the body itself, so the body keeps its `ret`
+ovl_fdd_cylok       ovl_fdd_apply only (B2CALL), drv_boot_x's: the loader's b2_cylok read through the BLOB's CS - a label past boot2_entry, which `.boot3` may not name (SPEC.md 2.9.13.4)
+drv_boot_x          NOT a crossing: kern_small's one-byte `retf` rung is the blob's (BLOBCALL from kmain_o), kern_big's body is `.boot3`'s (B3CALL from kmain_o, MARK 28) - one name in two arms, which this source walk files under the last one it reads
 
 # --- not a call at all ------------------------------------------------------
 # kernel.asm's `kbld_blob: dw boot2_entry` is the length of the blob up to the

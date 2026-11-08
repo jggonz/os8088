@@ -1,8 +1,8 @@
 # `.boot3` — boot-only code that rides in KERNEL.SYS
 
-> **Status: BEING BUILT. Waves 0 and 1 are built (2026-11-08, sections 16.4
-> and 16.5), and so are item E with the big review's canary fix (BR-1) and
-> boot-7 (section 16.6); waves 2-5 are not.** Written 2026-11-08 at the owner's
+> **Status: BEING BUILT. Waves 0, 1 and 2 are built (2026-11-08, sections
+> 16.4, 16.5 and 16.7), and so are item E with the big review's canary fix
+> (BR-1) and boot-7 (section 16.6); waves 3-5 are not.** Written 2026-11-08 at the owner's
 > request, after the big review's size ledger asked for a 14th blob sector
 > and the owner refused it (docs/reports/BIG-REVIEW-2026-11-08.md section 7,
 > docs/reports/big-review-2026-11-08/synth/phase1.md "Both boot-time homes
@@ -693,6 +693,15 @@ with `cfx_cfgname` near −2), plus 512 nobits. The derived lift goes 96 →
 1,715 = 0x18866, + 1,086 = 0x18CA4, rounded up to 0x18E00. On kern_mega the
 lift goes to about **256** (B3_END about 0x219E2, + 1,086, rounded to
 0x22000), PREDICTED.
+
+**Built (build, 2026-11-08)**, with the deviations section 16.7 lists.
+MEASURED (the shipped KZIP maps): kern_big `.boot2` 6,127 -> **4,489**
+(-1,638), `.boot3` 1,042 -> 2,754 + 926 nobits (`.boot3b`: a 414-byte pad to
+the linear 512-byte boundary and `ovc_buf`'s 512), lift 96 -> **224**;
+kern_emu 6,244 -> 4,605 (-1,639), `.boot3` 2,755, lift 224; kern_mega 5,866
+-> 4,281 (-1,585), `.boot3` 2,670 + 914, lift 160 -> **256**. Resident 0 on
+every kernel; kern_small byte-identical. `ovc_buf` moved on kern_mega too,
+and `BOOT2_RES` is gone from every kernel (section 16.7, deviation 2).
 
 ### Wave 3: relieve `.ovl` (kern_big, kern_emu, kern_mega)
 
@@ -1960,3 +1969,147 @@ system images, the live tail sectors intersect in exactly {57} (last of its
 band on 360KB/720KB, first on 1.44MB), so the new position has **no margin**.
 The Makefile's `KSIG_OFF` block and SPEC.md 18.93.1 now say so, and that the
 answer to a red `canary` row is a re-walked band, not a looser gate.
+
+### 16.7 Wave 2 as built (build, 2026-11-08)
+
+Built against this tree's code; where the code disagreed with the plan the
+code won. Host checks only (CLAUDE.md's Testing rule): no emulator ran, no
+row was run but the fast tier inside `make` and the host scripts named
+below.
+
+**What moved** (kern_big, kern_emu, kern_mega): `drv_boot_x`,
+`drv_boot_want`; the SYSTEM.CFG reader's `ovc_*` expansion (`CFG_MAP`,
+`CFG_DATA`, `CFG_SHARED`, `CFG_BOOT`) with `ovl_cfg_load` and
+`ovl_fdd_apply`; `ovl_sc_drop` .. `ovl_sc_load` (desksc.inc); `DRV_ATTACH
+bdl, b3_cgo`; `EXF_SYNC bxf, B3SWC`; and `KGO_PAIR b3` - all under `B3SECT`.
+`ovc_buf` into `.boot3b` (`section .boot3b nobits vstart=B3B_AT`, kernel.asm;
+`B3B_AT` = the next linear 512-byte boundary past `.boot3`, boot3.inc's foot).
+Stayed in the blob, each reached by `B2CALL`: `ovl_spl_msg_cfg`/`_drv`/`_boot`
+(their `ret` became `retf`), `bdt_*`, `xm_boot_x`, `bvs_switch`, `bdk_apply`,
+`bvs_disp_init` through a new 4-byte door `bvs_disp_far`, and the loader's
+`b2_cylok` through a new 6-byte door `ovl_fdd_cylok`.
+
+**What was measured** (the shipped KZIP maps and kernel.kz.json, against the
+starting commit built in a worktree at the same commit count; `kernsize`'s
+`boot2` figure leaves out the 194-byte KZIP loader, section 16.6):
+
+| kernel | resident | `.boot2` (map, KZIP) | `.ovl` | `.boot3` (+ `.boot3b`) | lift (para) | guard 5 headroom | boot arena | KERNEL.SYS |
+|---|---:|---|---:|---|---:|---:|---:|---|
+| kern_big | 96,768, +0 | 6,127 -> **4,489** (-1,638) of 6,656 | 5,119 | 1,042 -> 2,754 (+ 926) at 0x17DA | 96 -> **224** | 22,016 -> 19,968 | 24,064 -> 22,528 (128KB) | 85,648 -> 87,200 (168 -> 171 sectors) |
+| kern_emu | 96,768, +0 | 6,244 -> **4,605** (-1,639) of 7,168 | 5,119 | 1,042 -> 2,755 (+ 925) | 96 -> **224** | 21,504 -> 19,456 | 23,552 -> 22,016 | 86,304 -> 87,872 (169 -> 172) |
+| kern_mega | 62,976 (MEGA_RESIDENT), +0 | 5,866 -> **4,281** (-1,585) of 7,168 | 5,118 | 1,010 -> 2,670 (+ 914) at 0x2140 | 160 -> **256** | 506,880 -> 505,344 (640KB) | 508,928 -> 507,904 | 116,832 -> 118,400 (229 -> 232) |
+| kern_small | 58,880, +0 | 3,463, identical | 1,474 | 1,441, identical | 160 | 59,904 | 62,464 | 55,408, identical |
+
+The plan's prediction was about 1,640 freed and `.boot3` about +1,715 on
+kern_big, lift 224, arena about 22,528; kern_mega lift about 256: all within
+a few bytes. The lift is the read's term on all three kernels (`.boot3b`
+fits under it), so the lift is 4 sectors of boot RAM (2,048 bytes) on
+kern_big and kern_emu and 3 on kern_mega, as the owner accepted for this wave
+(owner-decisions.md, third round, Q2); the arena falls 512 less than the
+lift because the heap's floor came down by `ovc_buf`'s 512. KERNEL.SYS grows
+3 sectors on each of the three; `blobruns`' stage-1 and stage-2 call counts
+are unchanged on every disk (2/2/2/2/3/3 and 11/11/9/8/8/8). `cfx_tab`
+93 + 3 + 3 + 22 (197 of 256 bytes): the eleven COLD_SEG words section 8
+listed left the blob's 14 for `.boot3`'s 11, and the ROM's and COLDHMA.SYS's
+lists conserve (93+14+11 -> 93+3+22); `os88rom.py kernel` cuts kern_big's
+ROM with 266 bytes of its window spare.
+
+**What was proven byte-identical, at one commit** (`make`, `make mega` and
+`make emu` in a worktree of the starting commit, against this tree before
+committing): **kern_small's `kernel-full.bin` section by section,
+`kernel.bin`, `kernel.sys`, its boot sectors and `small360.img`/`small720.img`.**
+On kern_big, kern_emu and kern_mega every module section (`.modc` .. `.modfs`)
+and `.vga`/`.mega` are identical; `.text`, `.ovl` and `.cold` keep their
+lengths and differ only in immediates that name blob offsets or the boot floor
+- `sch_isr`'s and `dkb_geom`'s SPLCALL targets, `dsk_xfer`'s, `kbld_blob`,
+`mouse_init`'s two, and `mem_init_x`'s `add ax, BOOT2_PAD/16` (it was
+`BOOT2_RES/16`, 512 bytes higher) - 8 bytes a kernel; `.modmap` moves with
+MODC_START. Of the shipped images every apps, category, media, WIN16, ARCADE
+and kern_mega apps disk is identical; the four system disks, `emu.img`,
+`mega.img`/`mega120.img` differ in KERNEL.SYS, BOOTHD.SYS, COLDHMA.SYS (its
+lists) and ASSOC.DAT (cluster numbers: KERNEL.SYS grew), and `util360.img`
+only in `SYSCHECK.O88` (section 16.4's note).
+
+**Deviations.**
+
+1. **`ovl_fdd_apply` read the loader's byte through the blob's CS** (`and al,
+   [cs:b2_cylok]`), which the plan's closure missed: in `.boot3` CS is
+   `B3_SEG`, and `b2_cylok` is a label past `boot2_entry`, which rule B6
+   refuses (it moves between the two passes). The instruction is a 6-byte
+   blob door, `ovl_fdd_cylok` (`and al, [cs:b2_cylok] / retf`), B2CALL'd in
+   its place (5 bytes for 5). The body still moved (-93 net to the blob).
+2. **kern_mega's `ovc_buf` moved into `.boot3b` too, and `BOOT2_RES` is
+   gone on every kernel.** This wave's brief said kern_mega keeps BOOT2_RES
+   and `mem_init_x`'s non-small arm, citing section 16.1's item 2 - which 16.2
+   superseded (section 5.2: "with kern_mega on, the conditional disappears").
+   The build settled it: with the buffer past kern_mega's blob its lift was
+   already 256 (the read binds) and its arena 507,392; with the buffer in
+   `.boot3b` the lift is still 256 and the arena 507,904 - the move is free
+   there and gives back 512 bytes of boot RAM. `mem_init_x`'s two arms then
+   assemble the same instruction on kern_big and kern_small (`add ax,
+   BOOT2_PAD/16`), so the arm went with the equate, byte-identically on both;
+   `kernsize`'s `b2res=` field now carries `BOOT2_PAD`.
+3. **kern_small stays byte-identical**, so two places are armed rather than
+   one-ladder: kmain_o's call is `B3CALL drv_boot_x` under `OS88_DRIVERS`
+   and the blob's one-byte stub's `BLOBCALL` on kern_small; and the three
+   status-line entries end in `SPL_MRET` (vidsel.inc: `retf` under
+   `OS88_DRIVERS`, `ret` on kern_small, where nothing calls them - dead blob
+   bytes kern_small has carried since SPEC.md 2.5.2, not this wave's to cut).
+4. **`os88ovlchk` needed four repairs**, none a rule relaxed: rule 2c's
+   registry (`tests/ovlrefs.txt`) gains the seven blob entries `.boot3` now
+   reaches (the three status-line entries, `xm_boot_x`, `bvs_switch`,
+   `bvs_disp_far`, `ovl_fdd_cylok`), each with its guarantee, and a
+   `drv_boot_x` row for the one name in two arms; B5 no longer reads a
+   line's own label as an immediate, and B8 accepts a `B3CALL` target any of
+   whose definitions is `.boot3` (the same name-in-two-arms); `DRVBOOT`, rule
+   2e's and B6's mount marker, recognises `B3CALL drv_boot_x`. The eighteen
+   fixtures still fail their rules. `KGO_PAIR b3`'s `mov [bp+10], cs` is a
+   registered B3 hand-down, marked on the invocation line - the only raw line
+   an expansion's body has.
+5. **Two crossings the plan did not count**: CFG_BOOT's `BLOBCALL bdk_apply`
+   (the dock settings, under `DOCK_OPT`) is a `B2CALL`, +1; and `B3CALL
+   cfx_cfgname` assembles as `push cs` + a near call inside `.boot3`, -1
+   rather than the -2 predicted.
+6. **The NOKZIP read-end guard** (section 13) was not in the tree; it is now,
+   after `MODC_START` in kernel.asm. Both it and the `.boot3b` alignment
+   guard were made to fire by hand, and NOKZIP, `NO_COLD_SLIDE`,
+   `NO_HMA_DRV`, `DRVDIAG=1` and kern_mega/kern_emu `BOOTMARK=1` assemble.
+   kern_big's `-DBOOT_MARK` alone fails `.ovl`'s window guard at the
+   starting commit as well (the Makefile's knob arm adds what makes it fit),
+   so that is not this wave's.
+7. **`vmm_boot_x` (kern_emu) did not move**: the plan's "may join". It shares
+   the blob's `bvs_cgo` with `xm_boot_x`'s shape and is wave 4's to take with
+   the rest of the adapter bodies.
+8. **`B3_RES` counts `.boot3b`'s pad** as well as the buffer, so that `B3_END`
+   is the scratch's real end: 926 bytes on kern_big (414 + 512), 914 on
+   kern_mega. `kernsize`'s `boot3` line prints it as "nobits".
+9. **`tools/os88sym.py`** files `.boot3b` at `B3_RAM` (`ovc_buf` resolves to
+   17DA:0C60, linear 0x18A00 on kern_big); `os88ladder --selfcheck` and
+   `os88intguide --selfcheck` both pass.
+
+**Host checks run**: `make` (fast tier 75 passed, 1 skipped), `make mega`,
+`make emu`; `tools/kernsize.py` on kern_big, kern_small and kern_mega (each
+build's own lines, before and after, above); `tests/unit/t_blobruns.py`,
+`t_canary.py`, `t_abilock.py`; `tools/checkdocs.py`; `tools/os88index.py
+--check`; the cheap soak host checks run by their scripts: `bootfloor`
+(38 checks) and `bootfence` (17), `coldpic` (`os88romfix.py --check`),
+`resident`; `os88rom.py kernel` into the scratchpad.
+
+**Rows to name** for the single final pass. fast (run inside `make`):
+`ovlchk`, `canary`, `blobruns`, `bootfence`, `romtool`, `image`,
+`diskverify`, `livefull`. full: `bootsmoke`, `small128`, `megahigh`,
+`sysfree`. soak, host-only: `bootfloor`, `coldpic`, `resident`. soak,
+emulator - the boot and its loads: `kzboot`, `kzboot-off`, `bootstatus`
+(the status line through `B2CALL`), `blobsum`, `bootfloor-ab`, `hdboot`,
+`hdtakeboot`, `install`, `cylrun`, `splashbar`, `postboot`, `heapmap`,
+`v20boot`, `pravetzboot`; the re-pointers: `coldslide` (its fourth group is
+22 words now), `rombig`, `romnodisk`, `hmacold`, `hmadrv`, `hmahiber`,
+`hmapool`, `xmhwalk`, `vgadrop`, `buildmatrix`; what `drv_boot_x` and the
+reader apply: `fddpage` (`ovl_fdd_apply` and its door), `deskfdd`,
+`vgacolor` (Force Color through `b3_cgo`), `extdmod` and `dispmode`
+(`bxf_sync`), `desksc`, `stikboot`, `stikmiss` (`ovl_sc_load` and
+`ovc_buf`), `hdauto` (a `DRVE_NOVOL` drop through `b3_cgo`), `usbmouse`,
+`vesa`, `vesablitd` (the boot floor's 512-byte grid), `ethernet`,
+`colorpresets`, `hibernatedrv`, `autostart`, `hibernate`, `fontpick`; kern_emu
+`vmmouse`; kern_mega `megaovl`, `megamod`, `megahiber`, `megahma`,
+`megarmbext`, `rdboot`.

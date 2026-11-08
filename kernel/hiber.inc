@@ -5725,7 +5725,7 @@ hbm_s_off:  db 13, 10, 'os8088 has hibernated.', 13, 10, 13, 10
             db 'Press any key to restart it.', 13, 10, 0
 
 ; hbg_kgo / hbg_cgo - this image's far hop into the kernel (kernel.asm's
-; KGO_PAIR, CTRL.DRV's cp_ pair and the blob's bvs_ one): drv_row_x,
+; KGO_PAIR, CTRL.DRV's cp_ pair, the blob's bvs_ one and `.boot3`'s b3_): drv_row_x,
 ; drv_unload_x and drv_load_at are reached through it, so the three resident
 ; four-byte far shims that only images called could go (kernel size pass 14)
 KGO_PAIR hbg

@@ -16,7 +16,7 @@ at boot and the heap floor falls by it. Two boots of the shipped 360KB disks:
        two-assembly diff tools/os88rom.py takes, not against the list itself.
        The list's fourth group, `.boot3`'s own `call COLD_SEG:` words (11
        since BOOT3-PLAN wave 1 moved hb_probe_x, as_boot and font_init
-       there), is read at a STOP: the section is the heap's by the time the
+       there, 22 since wave 2 moved drv_boot_x's cone), is read at a STOP: the section is the heap's by the time the
        desktop is up, so a first boot breaks on spl_finish - in the blob,
        after the slide at MARK 10 and before mem_unblob_x - and reads them
        there, every one, against the slid segment;

@@ -23,9 +23,10 @@
 ;   kz_all returns (stage 2's end, after    expanded and aboard
 ;     the canary; boothd's kz_hd likewise)
 ;   kmain -> SPLGATE1 kmain_o -> its calls  live: mem_init_x raised [mem_base]
-;                                             past the blob + BOOT2_RES, so no
-;                                             claim, read-ahead or buffer
-;                                             lands on it
+;                                             past the blob, which the lift
+;                                             keeps above this section and
+;                                             `.boot3b`, so no claim,
+;                                             read-ahead or buffer lands on it
 ;   kmain zeroes [spl_fseg], mem_unblob_x   DROPPED - the one `mov [mem_base],
 ;                                             ax` that gives back the blob, its
 ;                                             lift, and this, for 0 new bytes
@@ -85,8 +86,20 @@ B3_START    equ BOOT2_PAD + (KERN_END - KERNEL_SEG) * 16 ; NO_ROM_COLD: KERN_END
 %endif
 B3_RAM      equ KERNEL_SEG + (B3_START - BOOT2_PAD) / 16 ; ...so a segment
 B3_SEG      equ B3_RAM              ; the segment its bodies run at: constant
-B3_RES      equ 0                   ; its nobits scratch, `.boot3b`: none yet
-                                    ; (BOOT3-PLAN wave 2 brings ovc_buf)
+; B3_RES - its nobits scratch `.boot3b`, counted from `.boot3`'s last byte:
+; the pad up to the next LINEAR 512-byte boundary and the scratch itself
+; (BOOT3-PLAN wave 2: SYSTEM.CFG's buffer ovc_buf, a disk-read destination,
+; which was the paragraphs past the blob - BOOT2_RES - until its readers left
+; the blob). Every kernel that reads SYSTEM.CFG - kern_big, kern_emu,
+; kern_mega; kern_small reads none and has no `.boot3b`
+%ifdef OS88_DRIVERS
+ %define B3B_ON 1
+%endif
+%ifdef B3B_ON
+B3_RES      equ B3B_AT - B3_SIZE + B3B_SIZE ; (B3B_AT, B3B_SIZE: the foot)
+%else
+B3_RES      equ 0
+%endif
 section .boot3                  ; (already open where kernel.asm declares it;
                                 ; said again for the source scanners)
 %ifdef COLD_SLIDE
@@ -220,6 +233,16 @@ CFGN_STAGE cfx_cfgname, retf
 %endif
 b3_end:
 B3_SIZE     equ b3_end - $$
+%ifdef B3B_ON                   ; ...and `.boot3b`, whose one tenant (ovc_buf,
+                                ; driver.inc) is met before this foot: where it
+                                ; starts - the next LINEAR 512-byte boundary
+                                ; past `.boot3`, B3_SEG-relative - and how long
+B3B_AT      equ ((B3_RAM * 16 + B3_SIZE + 511) & ~511) - B3_RAM * 16
+section .boot3b
+b3b_end:
+B3B_SIZE    equ b3b_end - $$
+section .boot3
+%endif
 
 ; --- the guards (BOOT3-PLAN 13) ----------------------------------------------
 %ifdef COLD_SLIDE
@@ -233,6 +256,11 @@ B3_SIZE     equ b3_end - $$
 %endif
 %if B3_SIZE + B3_RES > 0xFFF0
   %error "`.boot3` has outgrown one segment"
+%endif
+%ifdef B3B_ON
+ %if (B3_RAM * 16 + B3B_AT) % 512 || B3B_AT < B3_SIZE
+  %error "`.boot3b` is not on a linear 512-byte boundary past `.boot3` - ovc_buf is a disk-read destination (SPEC.md 1)"
+ %endif
 %endif
 %if B3_RAM * 16 + B3_SIZE + B3_RES > BLOB_SEG_AT * 16
   %error "`.boot3` lands on stage 2's blob - the derived BLOB_LIFT (kernel.asm) should have prevented this"

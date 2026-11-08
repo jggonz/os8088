@@ -862,7 +862,8 @@ def report_mega(cur, base, p, tag):
 
 def arena(cur):
     """`; boot arena N` - what the boot's own claims have at MIN_RAM_KB:
-    from the blob's nobits top (BLOB_SEG_AT + BOOT2_RES, mem_init_x's floor)
+    from the blob's top (BLOB_SEG_AT + BOOT2_PAD, mem_init_x's floor; the
+    `b2res=` field, which was BOOT2_RES until BOOT3-PLAN wave 2)
     to the top of RAM. The boot sector and its stack are dead by kmain_o.
     The host figure that stands in for a kern_big 128KB boot row (the
     owner's, 2026-11-08; BOOT3-PLAN 13)."""

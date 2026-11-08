@@ -879,9 +879,12 @@ b2_cylok:    db 0xFF            ; SPEC.md 31.14: FF = Cylinder may apply. A
                                 ; other, and neither may be forced. A hard-disk
                                 ; boot calls only KZ_HD here, never
                                 ; boot2_entry, so it keeps FF and Cylinder is
-                                ; the user's word there. A MASK, so
-                                ; ovl_fdd_apply reads it `cs:` - the blob is
-                                ; one segment until mem_unblob - with one AND.
+                                ; the user's word there. A MASK, read `cs:` -
+                                ; the blob is one segment until mem_unblob -
+                                ; with one AND, by ovl_fdd_cylok (driver.inc),
+                                ; ovl_fdd_apply's blob door since it went to
+                                ; `.boot3` (BOOT3-PLAN wave 2), which may not
+                                ; name this label: it moves between passes.
                                 ; In the blob and not the image, because
                                 ; .rerun's second load overwrites the image
 b2_t0:       dw 0
