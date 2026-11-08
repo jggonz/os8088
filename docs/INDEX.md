@@ -23,7 +23,7 @@ Read first: [§11 wm.inc — windows](../SPEC.md#11-wminc--windows); [§20 Loada
 | `0x0076` | `OSAPI_WM_CREATE` | SI=template; out BX = win ptr, CF on full |
 | `0x007C` | `OSAPI_WM_SHOW` | BX=win ptr |
 | `0x0082` | `OSAPI_WM_HIDE` | BX=win ptr |
-| `0x02BC` | `OSAPI_WM_DESTROY` | BX = a window of YOURS; the gfx lock is held, as OSAPI_WM_HIDE wants it... |
+| `0x02BC` | `OSAPI_WM_DESTROY` | BX = a window of YOURS; the gfx lock is HELD - unlike OSAPI_WM_HIDE, which takes it itself, this cell does not... |
 | `0x0088` | `OSAPI_WM_FRONT` | BX=win ptr |
 | `0x008E` | `OSAPI_WM_CONTENT` | BX=win ptr; out AX=content left, DX=top |
 | `0x0096` | `OSAPI_WM_OBSCURED` | BX=win ptr; out CF=1 if covered - which INCLUDES your window being hidden, so a worker gating a draw on this needs no visibility test of its own... |
@@ -103,7 +103,7 @@ Read first: [§5 vga12.inc](../SPEC.md#5-vga12inc); [§25 icons.inc — icon for
 | `0x0050` | `OSAPI_GFX_XOR_RECT` | AX=x1, BX=y1, CX=x2, DX=y2 |
 | `0x0058` | `OSAPI_GFX_XOR_FILL` | AX=x1, BX=y1, CX=x2, DX=y2 |
 | `0x0398` | `OSAPI_ICON_PEN` | AL = the colour the next OSAPI_ICON_DRAW's MASK rows lay down, AH = the colour its DATA rows draw over them... |
-| `0x039D` | `OSAPI_ICON_DRAW` | CX = x, DX = y, SI -> the record. out CF = 1 refused (a first byte that is neither 1 nor ICON_SOLID, or a record taller than 16) |
+| `0x039D` | `OSAPI_ICON_DRAW` | CX = x, DX = y, SI -> the record. out CF = 1 refused (a first byte that is neither 1 nor ICON_SOLID - and on kern_small anything but 1... |
 | `0x0393` | `OSAPI_GFX_BLIT1_PEN` | AL = ink (what a SET bit in the next OSAPI_GFX_BLIT1's band becomes), AH = paper (a CLEAR one). SPEC.md 5.4.2.2... |
 | `0x00B3` | `OSAPI_SET_COLOR` | AL -> [gfx_color] |
 | `0x0481` | `OSAPI_GFX_DESK` | AX,BX = x1,y1 CX,DX = x2,y2 (inclusive), lock held (W_PAINT): lay the DESKTOP'S OWN GROUND there... |
@@ -157,7 +157,7 @@ Read first: [§18 disk.inc — floppy I/O (BIOS int 13h) + the FAT driver](../SP
 | `0x0115` | `OSAPI_FILE_RENAME` | SI = old name, DI = new name; out as above |
 | `0x0431` | `OSAPI_FILE_COPY` | COPY OR MOVE ONE ENTRY, source folder to destination (SPEC.md 22.24)... |
 | `0x043D` | `OSAPI_FILE_WRITE_AT` | SI = a NUL 8.3 name, ES:BX = the bytes, CX = how many (>= 1), DX:AX = the byte offset (a multiple of the volume's CLUSTER)... |
-| `0x0118` | `OSAPI_FILE_DFREE` | out CF=0, DX:AX = free bytes, BX = SECTORS per cluster. NO DISK I/O - AND THAT IS NOT THE SAME AS CHEAP (SPEC.md 18.4.5)... |
+| `0x0118` | `OSAPI_FILE_DFREE` | out CF=0, DX:AX = free bytes, BX = SECTORS per cluster... |
 | `0x042B` | `OSAPI_VOL_STAT` | THE VOLUME YOU ARE STANDING ON, in four registers (SPEC.md 18.4.6): out CF=0 with AX = sectors per cluster, BX = free clusters, CX = bytes per sector... |
 | `0x0124` | `OSAPI_FILE_DLG` | AL = 0 Open / 1 Save, BX = your window ptr, DI = completion proc, SI = default name (NUL, <= 12) or 0... |
 | `0x0190` | `OSAPI_VOL_KIND` | AL = a volume index (0 = A:). CF=1 = there is no such volume... |
@@ -205,7 +205,7 @@ Read first: [§2 Memory map](../SPEC.md#2-memory-map); [§41 xmem.inc — memory
 | `0x03AC` | `OSAPI_MEM_CLAIM_HI` | AX = KB; out CF, DX = segment |
 | `0x03B2` | `OSAPI_MEM_CLAIM_DMA_HI` | ...and CX = the page-safe HEAD |
 | `0x01AA` | `OSAPI_MEM_FREE` | DX = the segment you were given; out CF=0 released, CF=1 not yours (or inside a compaction's relocation proc, SPEC.md 66.3 rule 3)... |
-| `0x0443` | `OSAPI_MEM_COMPACT` | AH = MEMC_WHATIF: AL = a purge level, out AX/BX as OSAPI_MEM_AVAIL_LVL planned as if YOUR OWN REGION could move... |
+| `0x0443` | `OSAPI_MEM_COMPACT` | AH = MEMC_WHATIF: AL = a purge level, out AX/BX as OSAPI_MEM_AVAIL at that level planned as if YOUR OWN REGION could move... |
 | `0x0487` | `OSAPI_MEM_HMA` | A DRIVER'S BUFFER IN THE HMA (SPEC.md 2.10.8): AX = bytes, 1..8,192, out CF=0 DX = its segment and AX = its first OFFSET... |
 | `0x01B0` | `OSAPI_MEM_AVAIL` | out AX = largest free run in KB, BX = total free KB... |
 | `0x0425` | `OSAPI_MEM_FLOOR` | AL = the level; preserves every register and the flags... |
@@ -290,7 +290,7 @@ Read first: [§53 fsx.inc — fullscreen exclusive](../SPEC.md#53-fsxinc--fullsc
 | slot | call | takes |
 |---|---|---|
 | `0x045B` | `OSAPI_FSX_SPK` | THE SPEAKER AT A SAMPLE RATE (SPEC.md 34.11), from INSIDE YOUR OWN FSXF_RATE BRACKET only (53.2.2) - PCM with no card... |
-| `0x00F7` | `OSAPI_FULLSCREEN` | AL = 1 enter (BX=win ptr) / 0 exit; caller holds the gfx lock (window callbacks do); out CF=1 enter refused (screen already owned)... |
+| `0x00F7` | `OSAPI_FULLSCREEN` | AL = 1 enter / 0 exit, BX = YOUR window either way; caller holds the gfx lock (window callbacks do); out CF=1 refused, entering or leaving, when the... |
 | `0x022F` | `OSAPI_FSX_CAPS` | in BX = the window to ask ABOUT (0 = whatever is frontmost)... |
 | `0x0235` | `OSAPI_FSX_RUN` | the bracket (SPEC.md 53.1). In AX = a near proc in your image, BX = your window ptr, CX = flags (bit 0 = FSXF_KEEPWORKER, bit 1 = FSXF_FASTTICK... |
 | `0x023B` | `OSAPI_FSX_MODE` | in AL = FSXM_*, ES:DI = an FSI_SIZE buffer of yours (set ES = DS). Bracket-only... |
