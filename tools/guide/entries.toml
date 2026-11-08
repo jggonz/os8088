@@ -1311,7 +1311,7 @@ title = "Recorder"
 kind = "program"
 summary = "Records sound from a Sound Blaster and plays it back, with a picture of the wave as it goes."
 short = "Sound recording"
-needs = "SOUND.DRV with a Sound Blaster"
+needs = "A Sound Blaster to record (playback also works on the PC speaker)"
 
 ["CONTENTS.TXT"]
 title = "Contents"

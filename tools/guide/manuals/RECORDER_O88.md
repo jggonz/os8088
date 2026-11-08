@@ -45,8 +45,8 @@ window is covered or minimized.
 Click **PLAY** to hear the take. With a Sound Blaster it plays in the
 background and the status line reads **PLAYING (SB)**, then **PLAY DONE
 (SB)**; you can keep using other programs, and **STOP** ends it early.
-Without one it plays through the PC speaker. The desktop waits while it plays, a click stops it with **PLAY ABORTED**, and
-the end reads **PLAY DONE (SPEAKER)**.
+Without one it plays through the PC speaker. The desktop waits while it
+plays, a click stops it with **PLAY ABORTED**, and the end reads **PLAY DONE (SPEAKER)**.
 
 ## The demo
 
@@ -88,6 +88,8 @@ its button.
 | SPEAKER PCM DISABLED | Sampled sound on the PC speaker is switched off |
 | REC STOPPED (OVERRUN) | Recorder fell behind the card and stopped the take there |
 | REC STOPPED (WATCHDOG) / PLAY STOPPED (WATCHDOG) | The card stopped answering, so the take or the playback was ended |
+| STOPPED | **STOP** ended the recording, or the sound driver ended the playback underneath Recorder |
+| ERROR - n | The sound driver refused a request with error code n (S: the driver's state had gone stale) |
 
 ## Good to know
 
