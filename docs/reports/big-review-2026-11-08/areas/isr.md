@@ -643,3 +643,64 @@ before the full registry.
    OUT before calling the kernel's int 08h (dosw.inc 276, 334). So the ROM calls the
    *desktop's* int 1Ch, and a windowed program's 1Ch handler never runs. Is that
    intended (SPEC.md 96.54)? Many DOS games time off 1Ch.
+
+## Verification
+
+Adversarial pass, 2026-11-08. Every bug, hazard and medium finding and every
+doc mismatch was re-read against the code. The machine-readable result,
+including the exact doc fixes to apply, is `data/isr.json`.
+
+- **isr-1 CORRECTED** (bug -> consistency). The code is as described, but SPEC.md
+  9.8.3 already chooses the stopped tick on purpose ("The tick stands still while
+  paused"). What SPEC does not say is that 40:6C and the time of day stay behind
+  afterwards. Doc fix 3 is retargeted to that bullet.
+- **isr-2 CORRECTED.** Confirmed: the feed swaps SP only, um_pm33 calls it from
+  the card's IRQ, and MOUPRIV_ENTER loads SS with no test. The estimate is about
+  +13 bytes (three SS moves), not +8. The header fix describes today's code.
+- **isr-3 CONFIRMED.** The os88api.inc fix touches an OSAPI contract comment, so
+  applying it needs `tools/abilock.py --update` (no bump).
+- **isr-4 CONFIRMED.** No `cld` anywhere on sch_isr's path to splf_anim's
+  `rep movsb`, DSV_TICK or the rate hook; fsx_rtick likewise.
+- **isr-5 REFUTED.** The transient tail of 64 occurs only after the entry at 63
+  is removed, when at most 62 entries remain. The hook's "not full" answer is
+  then true, and no byte is lost.
+- **isr-6 CORRECTED.** The post-DOS re-arm (mouse.inc 1590) is already inside
+  pushf/cli...popf. Four sites remain (mou_lockon, mou_p2_off, mouse_unhook,
+  and SOUND.DRV's pair).
+- **isr-7 CORRECTED.** The mechanism is confirmed. cur_move is measured at
+  11,500 cycles on CGA (~2.4 ms) and 15,100 on VGA (~3.2 ms) (PERFORMANCE.md
+  1356). The 1.94 ms the finding used is the gfx_lock pair. Worse than stated.
+- **isr-8 CONFIRMED** (real-mode kernels; SPEC itself records two field faults
+  it would have reported).
+- **isr-9 CONFIRMED** against the IBM listing. GLaBIOS is unchecked, so the
+  fixes name the IBM ROM and SeaBIOS.
+- **isr-10 CONFIRMED.**
+- **isr-11 CONFIRMED.**
+- **isr-12 CORRECTED.** SPEC 1 rule 3 is scoped to routines an ISR can call,
+  which these are not. The absolute reading comes from CLAUDE.md's short form.
+- **isr-13 CONFIRMED** (proposal; restores and L3 spot-checked, bytes not re-derived).
+- **isr-14 CONFIRMED** (no latency budget exists anywhere).
+- **isr-15 CONFIRMED** (spot-checked).
+- **isr-16 unchecked.**
+- **isr-17 CONFIRMED.**
+
+Doc mismatches:
+
+1. sched.inc 2187: confirmed, rewritten to name only what the IBM ROM and
+   SeaBIOS do.
+2. SPEC 8.5.1: confirmed. The sch_rhook "second window" addendum is dropped:
+   it runs after the chain, and the paragraph is about the chain's stack.
+3. SPEC 9.8.3 "nothing is lost": **REFUTED as proposed**, because the next
+   bullets already say the tick stands still. Replaced by a fix to the
+   "tick stands still" bullet.
+4. SPEC 28: confirmed. The 9600-baud clause is dropped to keep the fix minimal.
+5. splash.inc 1210: **REFUTED**. "its own in-ISR blit" is khb_paint, whose
+   `cld` at sched.inc 1634 says exactly that.
+6. mouse.inc 3986: confirmed, rewritten to describe the SP-only swap that is
+   in the code today.
+7. sb.inc 2555: confirmed.
+8. os88drv.inc 270: confirmed. It is a column-0 comment, so not fingerprinted.
+9. SPEC 53.2.2: confirmed (a DF bullet added).
+10. os88api.inc 6605: confirmed (needs `abilock --update`).
+11. events.inc 80: confirmed.
+12. Added: usbmouse.asm's "on mou_pstack whatever stack" (the same SP-only fact).

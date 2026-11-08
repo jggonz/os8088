@@ -350,7 +350,7 @@
   {
    "file": "kernel/loader.inc",
    "old_text": "    cmp [es:si+LD_H_VER], al                 ; 6 = package, 7 = driver: the",
-   "new_text": "    cmp [es:si+LD_H_VER], al                 ; PKG_FMT = package, DRV_VER = driver: the",
+   "new_text": "    cmp [es:si+LD_H_VER], al                 ; PKG_FMT or DRV_VER: the",
    "why": "The version bytes are PKG_FMT equ 10 (loader.inc) and DRV_VER equ 12 (driver.inc), not 6 and 7."
   },
   {
@@ -404,7 +404,7 @@
   {
    "file": "kernel/instance.inc",
    "old_text": "; out: CF = 0, DI = the first live KIND_PKG record whose I_SPTR matches;",
-   "new_text": "; out: CF = 0, DI = the first KIND_PKG record, live or dying, whose I_SPTR matches;",
+   "new_text": "; out: CF = 0, DI = the first KIND_PKG record, live or dying, whose I_SPTR\n;      matches;",
    "why": "inst_of_seg walks inst_next, which returns every record with I_STATE != 0 (dying included), and never tests I_STATE itself."
   },
   {
@@ -656,7 +656,7 @@
   {
    "file": "SPEC.md",
    "old_text": "                kernel's own, never adopted, so you may free your claim the\n                moment this returns.",
-   "new_text": "                kernel's own, never adopted, so you may free your claim the\n                moment this returns. PIN it across the call if it is\n                movable (§66): the region claim may compact the heap\n                first, and the kernel holds your ES:DI banked, unrelocated",
+   "new_text": "                kernel's own, never adopted, so you may free your claim the\n                moment this returns. PIN it across the call if it is\n                movable (§66): the region claim may compact the heap\n                first, and the kernel holds your ES:DI banked, unrelocated.",
    "why": "ld_pkg_start_x banks ES:DI in [ld_msrc] and then calls ld_alloc, whose mem_claimp_hi_x may compact; nothing relocates [ld_msrc+2] (The Wire pins with wr_fpin for this reason)."
   }
  ]

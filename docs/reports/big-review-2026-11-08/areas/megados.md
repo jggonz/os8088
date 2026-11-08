@@ -439,3 +439,45 @@ Bytes: 0.
 2. md-3/md-10: which field machines are 8042-only for A20? The Victory 286 is the obvious candidate (docs/FIELD-MACHINES.md). The 86Box `mr286` profile could confirm the W7 race with `tools/os88box.py`.
 3. md-2: is a direct `int 15h AH=87h` from a DOS program under kern_mega common enough to matter? The filter lets an in-arena move through to the ROM, which then leaves A20 shut. No program that does this is known from the field.
 4. Rethink 1 versus md-15: does the owner want the header verified at all, given that the threat (a program writing above 1MB outside the arena) is already closed off for every well-behaved route?
+
+## Verification
+
+Adversarial pass of 2026-11-08. Every bug, hazard and medium finding was
+re-read in the source, with the other build arms; the low kern_dos image was
+re-assembled into a scratch directory (byte-identical to
+`build/megak/kerndosl.bin`) to re-measure md-6. Nothing in the tree was built
+or booted. None of the findings is in `docs/plans/ABI-BREAK-LIST.md` or
+`docs/plans/KERNEL-BYTE-QUEUE.md`.
+
+- md-1 CONFIRMED - only `mega_dwake` is ever written to `MPK_C_WAKE` (megados.inc:1363), so `.cells0` is dead; bytes refined to -12 HIBER.DRV.
+- md-2 CORRECTED - the defect is real (kdh_tramp runs after kd_mou_arm, kd_mou_rearm then drops the slot), but `dos_hvec` is `DOS_MEGA`-only, so the fix must be gated (`KD_HMA` / `KD_MEGA`) to leave kern_big's kern_dos unchanged.
+- md-3 CONFIRMED - one A20 test after an IBF-only wait, with the anchor already cleared.
+- md-4 CORRECTED - real path, severity medium -> low: it needs >16KB of new claims between claim and snapshot and an in-use count low enough for the stage to reach the packed stream at 64KB.
+- md-5 CONFIRMED - t_mirror's set is its list plus `kernel/*.inc`; no other test compares the kerndos/ mirrors.
+- md-6 CORRECTED - measured, not estimated: 357 + 189 + 459 (hbs_stub) bytes of `.text` and 23 of `.bss`, about -1,025 per kern_mega image; KD_IMG_KB 37 -> 36 on the low arm is predicted to hold.
+- md-7 CONFIRMED - `kd_glb` is used only under `KD_GATE`.
+- md-8 CONFIRMED - nothing reads `KDL_PLOW`.
+- md-9 CONFIRMED - narrow (IF = 0, microseconds), low.
+- md-10 CONFIRMED.
+- md-11 CONFIRMED.
+- md-12 CONFIRMED - the bound holds today (10 fixed regions plus MX_NBLK - 1).
+- md-13 CONFIRMED (spot-checked).
+- md-14 CONFIRMED - -8 bytes.
+- md-15 unchecked.
+- md-16 CONFIRMED - latent.
+- md-17 CORRECTED - below 33KB the loop does not restore 1KB short; CX wraps and the stub overruns P or spins. Still unreachable, still `record`.
+- md-18 unchecked.
+- md-19 CORRECTED - 26 bytes, not 30, and `mega_hbwk` must stay in `.text` (it has to be in the image that `mega_hbwake` reads it from), so -22.
+- md-20 CONFIRMED.
+- md-21 unchecked.
+- md-22 CONFIRMED (spot-checked: the truncated sentence and the 61 -> 43 -> 34 history).
+- md-23 unchecked.
+- md-24 unchecked.
+- md-25 unchecked.
+
+Doc mismatches: all 24 confirmed against the exact text, with the
+replacements refined (SPEC.md 96.40.9's stub sentence keeps "the two legal
+ones", which is what the code still accepts until md-1 lands; the SPEC.md
+87.9 paragraph is marked retired rather than rewritten). One more was added
+from the same block: `kd_leave`'s `jz .hold` comment ("W6: the return. Until
+it exists"), so there are 25 doc fixes in `data/megados.json`. None refuted.

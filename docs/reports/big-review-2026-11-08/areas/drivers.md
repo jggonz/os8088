@@ -566,3 +566,100 @@ The proposed text is in the structured output.
 5. drivers-1's fix also decides the K1a/K1b question in NO-PINNING-PLAN.
    Does the owner want the global count kept for the `MC_DMA` pin, or
    deleted as K1a proposes?
+
+## Verification
+
+Adversarial pass, 2026-11-08: every bug, hazard, high and medium finding
+re-read against the code (both build arms where they differ), and every doc
+mismatch re-quoted from its file. Nothing refuted. The applied doc fixes are
+in `data/drivers.json`.
+
+### Findings
+
+- drivers-1 (high bug, global drv_wcnt): CONFIRMED. The timeout skips
+  `drv_release`; `usbm_row` is row 5, so rows 0-4 each pay the wait at
+  reboot; K1b's deferral reason is stale.
+- drivers-2 (hazard, unload while a task is inside): CONFIRMED. Race by
+  inspection, not reproduced.
+- drivers-3 (bug, CLASSK and the HMA): CONFIRMED. Only where `.cold` really
+  is in the HMA and `ROMF_HPLACE` succeeds.
+- drivers-4 (hazard, DSV_RELINST at IF=0): CONFIRMED. Duration corrected:
+  normally well under 1 ms, several ms worst case on a high-speed DSP reset,
+  not "tens of ms".
+- drivers-5 (PRESERVE BX): CORRECTED. `drv_unload_x` relies on the rule too.
+  The `.cold` sites are resident and the blob is documented as full to the
+  byte, so it is not "0 resident". Severity lowered to low.
+- drivers-6 (hazard, IRQ vectors unchecked): CONFIRMED.
+- drivers-7 (static volume bank pair): CONFIRMED. Latent.
+- drivers-8 (kern_mega `drv_fs_hi` wrap): CONFIRMED as a record item. Line
+  :2786.
+- drivers-9 (common-prefix DSV table, -98 .bss): CONFIRMED. The arithmetic
+  holds. Not already in ABI-BREAK-LIST or KERNEL-BYTE-QUEUE.
+- drivers-10 (resident .DRV names): UNCHECKED. The saving needs pricing.
+- drivers-11 (dead arms in the OS88_DRIVERS gate): CONFIRMED by a nesting
+  walk. The prose is fixed in this pass and the arms are left for phase one.
+- drivers-12 (dead CH stores): CONFIRMED. Lines 5799 and 5820.
+- drivers-13 (.text-to-.cold hop): CONFIRMED. The structure is as described;
+  the cycle figure is an estimate.
+- drivers-14 (FSX_SPK skips the stream interlock): CONFIRMED.
+- drivers-15 (class = slot rethink): CONFIRMED as a design item.
+- drivers-16 (private ABIs unlocked): CONFIRMED.
+- drivers-17 (SYSTEM.CFG drops unknown keys): CONFIRMED. Deliberate, so
+  record only.
+
+### Doc mismatches (all 33 CONFIRMED; 40 fixes after splitting and additions)
+
+The quotes were re-checked character for character, and each replacement was
+rewritten to fit the whole sentence it lands in. Two reviewer proposals would
+have changed code: the `DRV_MAX equ 4` rewrite at driver.inc:125 and the
+"delete the %else arm" at driver.inc:1026. Both were turned into comment-only
+edits. Code-file fixes were machine-checked to leave every code token as it
+was.
+
+1. snd.inc:9 (the "only sink" paragraph): CONFIRMED. The whole paragraph is
+   replaced, not just its first line.
+2. snd.inc:42 (PIT channel 0): CONFIRMED.
+3. snd.inc:557 (the probes): CONFIRMED.
+4. snd.inc:646 (three slot targets): CONFIRMED.
+5. driver.inc:153 (DRVC_NET is a block class): CONFIRMED.
+6. driver.inc:261 (DRVR_TITLE): CONFIRMED.
+7. driver.inc:387 (drv_bss GROWS): CONFIRMED.
+8. driver.inc:3511 (drv_bss GROWS): CONFIRMED.
+9. driver.inc:125 (kern_small DRV_MAX essay): CONFIRMED, made comment-only.
+10. driver.inc:1026 (CFG_DATA kern_small arm): CONFIRMED, made comment-only.
+11. driver.inc:1821 (DRVM_CEIL_NET on kern_small): CONFIRMED.
+12. driver.inc:2054 (strings stay in .text): CONFIRMED.
+13. driver.inc:2193 (SERIAL.DRV): CONFIRMED.
+14. driver.inc:2387 (drv_call_ent's sites): CONFIRMED. The whole block is
+    rewritten, since drvf_drv_call is gone too.
+15. driver.inc:4545 (`[drv_fseg]` fence): CONFIRMED, along with the next
+    sentence's `[drv_fseg]` and "spawn from a service call".
+16. driver.inc:5298 (84,064 bytes): CONFIRMED (85,168 now).
+17. driver.inc:5994 (CH is 0): CONFIRMED.
+18. driver.inc:6574 (five sites): CONFIRMED.
+19. driver.inc:4128 (`%1_call`): CONFIRMED.
+20. os88drv.inc:74 (rounded to a KB): CONFIRMED.
+21. os88drv.inc:95 (DRVC_OVL never loaded): CONFIRMED.
+22. os88drv.inc:620 (detach rule): CONFIRMED, along with rule 1 (READY).
+23. SPEC 51.7 (`ES == [drv_fseg]`): CONFIRMED. Rule 2 is a separate fix.
+24. SPEC 51.0.2 (`.ovlw`/`.ovl`): CONFIRMED.
+25. SPEC 51.2 (KB rung): CONFIRMED.
+26. SPEC 51.2 (HDD.DRV's length 34): CONFIRMED.
+27. SPEC 51.2.1 (bitmap per row index): CONFIRMED.
+28. SPEC 51.2.1 (kern_small keeps DRVE_TWICE): CONFIRMED.
+29. SPEC 51.12.1 (Up to 32K): CONFIRMED.
+30. SPEC 51.12.3 (every call site through dos_classk): CONFIRMED. The HMA
+    predicate sentence is left for the drivers-3 fix.
+31. SPEC 34.7 (five slots): CONFIRMED.
+32. xmem.asm:84 (mem_bytes_kb_x): CONFIRMED, along with "a byte of a KB" at
+    :91.
+33. NO-PINNING-PLAN:177 (only SOUND.DRV spawns): CONFIRMED.
+
+Added by the verifier (same facts, other places):
+
+- snd.inc:6-7, the banner's "three ... slot targets".
+- driver.inc:1801, "Up to 32K".
+- driver.inc:3708, "KB boundary" in drv_bss's header.
+- SPEC 51.7 rule 2, which follows `sbl_detach`'s own comment that its wait is
+  ordering, not the guarantee.
+- SPEC 51.12.3, `SERIAL.DRV` and kern_mega's row-count arm.
