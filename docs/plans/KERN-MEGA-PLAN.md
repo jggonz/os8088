@@ -16426,12 +16426,97 @@ text says), so the in-place decode's 286 (LOADALL) path is where to look.
 And after a protected-mode bracket (03-BEBOP's own `VPR_SPLIT`), the next
 clip's door refused real mode with `FSXR_DRV` (04-MECH2 after 03; 08, 09 and
 10 later in the sequence), where a fresh boot ran each in real mode; those
-plays were still whole, with no stall or pause.
+plays were still whole, with no stall or pause - 14.182 is that one.
+
+### 14.182 A closed stream left SOUND.DRV naming its ring's freed claim, and the next real-mode door refused `FSXR_DRV` (2026-11-08) - FIXED
+
+**Found by the owner's pre-release check**, the same pass as 14.181: the
+VGA demo videos played full screen one after another on 86Box's
+`vm/viddemo-vga`, each in its own window, closed after its play. 01, 02,
+05, 06, 07 and 11 ran in a real-mode bracket and 03 protected by the
+player's own choice (`[vp_rwhy]` 21, `VPR_SPLIT`), but 04, 08, 09 and 10
+FELL BACK to protected mode with `FSXR_DRV` (`[fsx_rwhy]` 8) - where a fresh
+boot ran each of them real. The plays were whole with no pause, so the cost
+was the bracket, not the picture; but real-mode parity with kern_big is the
+standing goal and the fallback had no reason. It is not 03's protected
+play: two REAL plays in a row do it (08 then 09), and so does 03 then 04.
+
+**The refusal site**: `fsx_rsndq`, the door's SOUND.DRV test (W4) - every
+word of the driver's `SNDV_RMODE` list asked `mega_s2segc` for a real
+segment, `FFFFh` (a base above 1MB) answering `FSXR_DRV`. Not the list's
+class walk (`fsx_rlist`), not the lent driver (14.180): the driver row was
+carried and conventional.
+
+**Cause.** SOUND.DRV's list is `sbl_rseg` (the ring's segment), the
+control words' segment `sbl_extctl+2`, `sbl_poolseg` and `sbl_seg`. The
+last two are zeroed when their claims are freed (`sbl_pool_put`,
+`sbl_dma_put`); the first two were set at every open and never cleared, so
+after a stream's end they still named its ring's claim - and once the
+window closed, a FREED LDT entry. Read off the machine (08 then 09):
+after 08's close `[sbl_rseg]` = `[sbl_extctl+2]` = `130C`, its descriptor
+not present; at 09's door the entry had gone to one of 09's own claims
+above 1MB, the stale word answered `FFFFh`, and the door refused for a
+stream that no longer existed. Whether it bit depended on which claim took
+the entry first, which is why 05 after 04 ran real and 08 after 07 did not.
+Zeroing the two words from the host before 04's open (03 then 04) made 04's
+door answer `FSXR_REAL` - the whole of the cause. A real play leaves them
+stale the same way: the bracket's return renames a word the bracket wrote
+to the selector of the claim at its paragraph (`mega_p2d`), the ring's,
+and the close frees it.
+
+**Fix - in the driver, where the word dangles.** `sbl_stop_stream` zeroes
+`[sbl_rseg]` and `[sbl_extctl+2]` in the `cli` window that clears
+`[sbl_str_act]` (the ISR's readers of `[sbl_extctl]` run only under an
+open stream). SPEC.md 34.5.3 ("the stream's end forgets the ring") and
+53.2.3 (W4's list: each word 0 while it names nothing) carry the rule. The
+door is unchanged: a LIVE word above 1MB - a stream open across the door -
+is still refused, which is what the test is for.
+
+`vidrmbsnd`'s last check read the two words after leg W's stream - opened
+in a real-mode bracket and closed inside it - and wanted them SELECTORS of
+the ring's claim, the return's rename of a word the bracket wrote: that
+was the stale word itself standing as the evidence. It wants them 0 now
+(the close forgot them; no segment of either kind outlives the stream).
+The rename of a word a stream still OPEN across the return holds stays
+covered where it matters, by Q and J playing on in protected mode through
+`[sbl_extctl]`, which the block ISR loads as a far pointer.
+
+What it costs: SOUND.DRV **+6 bytes** (`xor al, al` became `xor ax, ax`,
+the same size, and two 3-byte stores): the image 10,511 -> 10,517, the
+packed `SOUND.DRV` 8,998 -> 9,004, its HMA twin `sound.hma.bin` the same
++6 (`COLDHMA.SYS` 3,072 -> 3,074). Every kernel's
+`kernel.bin` and `kernel.sys` byte-identical (the change is the driver's
+alone; `.mega`'s rung untouched); the shipped disks differ in SOUND.DRV
+(and its HMA twin) and nothing else - on kern_big and kern_small the two
+words are read only by the open that sets them, so nothing plays
+differently there. SysCheck's manifest of the shipped files
+(`syscheck_man.inc`) follows the new size and sum, so `SYSCHECK.O88`
+differs too. Measured as an A/B at one commit against mega-release's own
+build: kern_big, kern_small and kern_mega `kernel.bin`/`kernel.sys`
+`cmp`-identical; of the images `all` and `make mega` build, only the
+system disks (all four geometries, `mega.img`, `mega120.img`) and
+`util360.img` (SysCheck) differ, and in those only the files named here.
+
+**The row, `megasndword`** (soak): kern_mega on `vm/viddemo-vga`, the
+player's arm with 08-WILLY.V88 and 09-TRACK.V88 in C:'s MEDIA, each opened
+in its own window, F, Space, the door's verdict read a guest second in,
+Esc, closed. RED on mega-release: after 08's close both words `130C`, a
+freed entry; 09's door `FSXR_DRV`, the play protected. Green here: both words 0
+after the close, both plays real. And the owner's sequence on the same
+machine, one boot, each clip in its own window (10-LX486 left out: it is
+14.181's real-mode hang at frame 221, which a real-mode bracket now
+reaches on kern_mega as it does on kern_big - the `FSXR_DRV` fallback
+had been hiding it there): 01, 02, 04, 05, 06, 07, 08, 09 and 11 in a
+real-mode bracket, 03 protected by its own `VPR_SPLIT`; every frame drawn,
+`[vp_stall]` 0 and `[vp_pause]` 0 on all ten, sound for every frame.
 
 ### 14.183 The 486 clip's hang at frame 221 was page-ahead's chain read through a HANDLE: two `mov ds, dx` the in-place decode never borrowed for (2026-11-08) - FIXED
 
-(14.182 is the parallel `FSXR_DRV` fix's; this is the other finding 14.181
-left "seen in the same pass, not fixed here".)
+(The other finding 14.181 left "seen in the same pass, not fixed here";
+14.182 is the `FSXR_DRV` one. With 14.182 a kern_mega real-mode bracket
+reaches this clip in a long sequence too, where the fallback to protected
+mode had hidden it - and the fix below is the real-mode bracket's as much as
+kern_big's: the same package code, the same LOADALL borrow.)
 
 **The symptom**: `apps/video/demo/vga/10-LX486.V88` full screen on
 `vm/viddemo-vga` (MR 286, 16 MHz, 4 MB, OTI-067, SB16) hung the machine at

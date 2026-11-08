@@ -19825,6 +19825,22 @@ SOAK = [
         wants=("build/mega.img", "build/mbr.bin", "build/megak/boothd.bin",
                "build/megak/kernel.sys", "build/megak/apps/video.o88",
                "build/megak/apps/video.map")),
+    Row("megasndword", "soak", py("tests/megasndword.py"), 30.0,
+        "KERN-MEGA-PLAN 14.182, SPEC.md 34.5.3/53.2.3: a closed stream "
+        "leaves SOUND.DRV no segment word. 86Box's vm/viddemo-vga (MR 286, "
+        "SB16 on IRQ 5), kern_mega, the Video Player's arm with 08-WILLY "
+        "and 09-TRACK in C:'s MEDIA, each played full screen in its own "
+        "window and closed: both in a real-mode bracket ([fsx_rwhy] "
+        "FSXR_REAL), and between them [sbl_rseg] and [sbl_extctl+2] 0 with "
+        "no SNDV_RMODE word naming a freed LDT entry. RED on mega-release: "
+        "both words left naming the first ring's freed selector, and 09's "
+        "door refused real mode with FSXR_DRV (the owner's VGA demo videos' "
+        "04, 08, 09, 10 played protected). 30s is 15 measured (one boot, "
+        "two plays stopped a second in)",
+        needs=("86box",),
+        wants=("build/mega.img", "build/mbr.bin", "build/megak/boothd.bin",
+               "build/megak/kernel.sys", "build/megak/apps/video.o88",
+               "build/megak/apps/video.map", "build/sound.bin")),
     Row("megapxhugez", "soak", py("tests/megapxhuge.py", "--bmp"), 40.0,
         "SPEC.md 106.8.1: megapxhuge's PACKED half - PiXEL's kern_mega arm "
         "reads a CZ-packed picture whole into ONE OSAPI_MEM_HUGE claim "
