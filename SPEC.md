@@ -649,9 +649,16 @@ size.
 
 **The whole class fails silently and that is what the registry is for.** A body
 here is correct exactly as long as every path to it runs before `spl_finish`.
-Add one runtime caller and the call reaches `spl_gate`, which tests `[spl_fseg]`
-and *returns* — no crash, no message, a working-looking desktop with one
-initialiser that quietly did nothing. `dispcold` byte-compares `.cold` against
+Add one runtime caller and what the call reaches depends on where the body
+lives now. Into the blob, it is `SPLCALL`'s, whose inline test of `[spl_fseg]`
+skips the call and *returns* — no crash, no message, a working-looking desktop
+with one initialiser that quietly did nothing. (That test was `spl_gate`'s,
+`.text`'s one shared copy, until BOOT3-PLAN wave 4 deleted the gate with its
+last two sites, §2.9.5.2.) Into `.boot3` or `.ovl` there is no test at all: the
+call is a plain `call B3_SEG:x` or `call FAT_SEG:x` into bytes the heap or the
+FAT window has since taken, which is why those two are refused at build time
+(§2.9.15.4's B1 for `.boot3`, the `tests/ovlrefs.txt` registry below for
+`.ovl`) rather than at run time. `dispcold` byte-compares `.cold` against
 the built image on a live guest and there is no blob counterpart, because the
 blob is gone by the time a desktop exists.
 
@@ -672,8 +679,12 @@ four bytes apiece to own a far return the body can own itself. That is exactly
 never been made here; `kmain` names each body directly now.
 
 **A body moved here ends in `retf`, and that is a third gate rule.** Everything
-in the blob is entered through `call far [spl_fp]` — that is what `SPLCALL`,
-`SPLGATE1` and `SPLSTUB` all expand to — so an entry that keeps its
+in the blob is entered FAR. From `.text` and `.cold` that is `call far
+[spl_fp]`, which is what `SPLCALL` and `SPLCALLC` expand to (and `SPLGATE1` and
+`SPLSTUB` did, until BOOT3-PLAN wave 4 deleted them); from `.boot3` it is
+`B2CALL`, `call BLOB_SEG_AT:x`; from inside the blob it is `BLOBCALL`, `push cs`
+and a near call; and `kmain` itself reaches `.boot3`, not the blob, by `call
+B3_SEG:kmain_o`. So an entry that keeps its
 near `ret` pops IP, leaves CS on the stack and returns into whatever the word
 above it names. Until §2.5.2 every entry happened to be a `call body / retf`
 trampoline and the hole was invisible; naming a body directly is the right shape
@@ -2372,9 +2383,9 @@ guards, because `SPL_RESIDENT` is `splash.inc`'s and `splash.inc` is included
 *after* `viddet.inc`; by the foot of the file both are settled. It passes with
 about 1,500 bytes to spare, and what it refuses is one specific tempting shape:
 routing `spw_vid_detect` into the boot overlay. `.ovl` is aboard before stage 1
-jumps, and `vid_detect` in it would be too — but the route from `.text` runs
-through `spl_gate`, which is at the far end of `.text`, so the **path** is not
-aboard even where the destination is. §2.5.2's register refuses `vid_detect` and
+jumps, and `vid_detect` in it would be too — but the route from `.text` ran
+through `spl_gate`, which was at the far end of `.text` (until BOOT3-PLAN wave
+4 deleted it), so the **path** was not aboard even where the destination is. §2.5.2's register refuses `vid_detect` and
 `vid_init` on that, and without this line nothing in the tree would have said so.
 
 **And then it was derived** (the big review's boot-4, BR-153, 2026-11-08).
@@ -231609,9 +231620,9 @@ itself, and the two kernel addresses `vx_kret` and `vx_null`). The driver
 banks the kernel's segment (ES) and COPIES the pointers, and **fills
 `vid_tab` row 4** (`vid_vxrow`, which is that row where the table is
 resident and the one resident row where it is not, §39.2) from the chosen
-mode. The table lives in the boot blob
-beside `vx_boot_x`, its one sender, so it is given back with the blob (DX is
-the blob's segment). `kernel/vxabi.inc` is the layout, shared as source with the
+mode. The table lives in `.boot3` (§2.9.15; the boot blob until BOOT3-PLAN
+wave 4, 2026-11-08) beside `vx_boot_x`, its one sender, so it is given back
+with `.boot3` at `mem_unblob` (DX is `B3_SEG`). `kernel/vxabi.inc` is the layout, shared as source with the
 driver, and both ends assert their copy against it.
 
 `vx_ep` (dword, `.text`, initialised 0) and `vx_bpp` are armed by `vx_boot_x`
@@ -231737,17 +231748,19 @@ and nothing in the kernel computes one for this display.
 **In, at boot**: `vx_boot_x` (`kernel/vidext.inc`) is `vmm_boot_x`'s shape —
 `drv_boot_x` read the row and stopped at `drv_check`, and this is the owner
 that attaches it: ATTACH, arm `vx_ep`/`vx_bpp`, `VXV_INIT`, light
-`VID_A_VESA`, then the blob's own `bvs_switch`. `kmain_o` calls it **after
-`spl_finish` and before `as_boot`** (the blob's tail, SPEC.md 26.10.5), so
-the loading screen is down, the blob's `vid_switch` is still aboard, the
+`VID_A_VESA`, then the boot's own `bvs_switch`. `kmain_o` calls it **after
+`spl_finish` and before `as_boot`** (the boot's tail, SPEC.md 26.10.5), so
+the loading screen is down, the boot's `vid_switch` is still aboard, the
 desktop's first paint is the first thing drawn in the new mode - and a
 package the autostart launches finds the display it will live on: it was
 called from kmain after `kmain_o` returned at first, and PiXEL, launched by
 a link, built its tables for the VGA a switch then took away. **It is in
-the blob (`.boot2`)**, beside `vmm_boot_x`, with `vx_blk`: it was `.cold` while
-the blob measured 6,142 of 6,144 bytes, and kernel size pass 14 gave the blob
-its thirteenth sector to take both out of resident memory (178 bytes;
-`tests/unit/t_blobruns.py` prices the sector at no `int 13h` on any geometry).
+`.boot3`**, beside `vmm_boot_x`, with `vx_blk` and `bvs_switch` (BOOT3-PLAN
+wave 4, 2026-11-08, which gave the blob its sector back). Before that it was
+in the blob (`.boot2`): it was `.cold` while the blob measured 6,142 of 6,144
+bytes, and kernel size pass 14 gave the blob its thirteenth sector to take
+both out of resident memory (178 bytes; `tests/unit/t_blobruns.py` priced the
+sector at no `int 13h` on any geometry).
 
 **Out**: the driver's detach is preceded by `vid_switch AL=VID_VGA`, by the
 one caller that can detach it — the Drivers page (`CTRL.DRV`, which holds
