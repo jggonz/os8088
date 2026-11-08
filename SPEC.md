@@ -100941,7 +100941,10 @@ the block first moves, `mx_tokfit`) and never overlapping another live
 token's. Every cell finds the block by the token (`mx_key`) and goes to where
 it is now (`mx_tophys`). A token is never 0 (it is at least 100000h), and a
 copy is checked against the block's KB-rounded size, as before - the two
-things packages lean on. A census of every caller found none that reads a
+things packages lean on. A package that reads a block IN PLACE inside
+kern_mega's real-mode bracket asks where it is now, each bracket
+(`OSAPI_XMEM_COPY` CX = 0, 53.2.3: the Video Battle's clip cache, KERN-MEGA-
+PLAN 14.179). A census of every caller found none that reads a
 token in place under protected mode: LOADALL (`os88la.inc`) and unreal mode
 (`os88ub.inc`) are real-mode techniques, gated off under `CPU_F_PM` (the
 Video Player's `[vp_pm]`, `HDD.DRV`'s `HDV_ARM` refusal), and `XMEM.DRV`
@@ -107551,7 +107554,19 @@ for the exit (a tone is not the bracket's: the speaker is the door's).
       runs), the bytes moved by LOADALL on a 286 (`apps/os88la.inc`, 16 KB
       a borrow) and by a loaded base on a 386 (`apps/os88ub.inc`, 2 KB a
       chunk), interrupts open between pieces and A20 proved first - kern_big
-      XMEM.DRV's two transports;
+      XMEM.DRV's two transports. **CX = 0 is WHERE** (KERN-MEGA-PLAN
+      14.179): no byte moved, CF = 0 and DX:AX = the LINEAR address the
+      extended end is at NOW - the same translation, answered, with the
+      same AX = 1 / 2 refusals. A package that reads its block IN PLACE
+      inside the bracket (a LOADALL'd or loaded base, 126.4.2) asks it
+      each bracket, because on kern_mega the pool moves a token's block
+      between brackets (50.6.10) and never inside one; it is how the Video
+      Battle's clip cache (126.4.6) runs here as on kern_big. Every other
+      kernel, and kern_mega in protected mode, answers CX = 0 AX = 3 (a bad
+      length) as before - on a real-mode kernel the token IS the address,
+      so a package asks only under `CPU_F_PM` at its door. An answer where
+      there was a refusal: `PKG_FMT` 10 kept (`tools/abilock.py --update`).
+      16 bytes of `.mega`;
     - `OSAPI_XMEM_CAPS`: the pool's answer off `mx_tab`;
     - `OSAPI_DRV_CALL` and `OSAPI_DRV_CALL_AT`: a class the door carried low
       is called at its real paragraph through its `DSV_PKGCALL` (`DRVC_EMS`
@@ -107826,8 +107841,19 @@ The Video Battle asks before its hold opens and keeps `VB_RKEEP` + AX
 bank) and again where `vp_rbhold` holds the door's room (§98.3.24.2).
 `VB_RKEEPM` and `VP_RBRKB` are their fallbacks for a refusal.
 
-What it costs: kern_mega `.mega` +432 bytes (24,160 -> 24,592; the rung's
-26,112 not crossed, so `MEGA_CODE_KB` and the pool unchanged), `.text` +6
+**A conventional SOUND.DRV's vector, which the run's door missed** (found
+by `vidrmbtwice` once SOUND.DRV was lent: no kern_mega had run the card's
+driver below 1MB before). `mega_ivt_sync`'s `.fixrow` writes a vector that
+names a pair's code half back as the image's SEGMENT when the image is
+conventional - the IVT is the reflections' - and the forced sync at every
+bracket's return does it; the next door's `fsx_rsnddn` looked for the code
+half alone, banked nothing, and left the card's line SHUT for the bracket,
+so the second play's stream died with the samples queued before the drop.
+It matches the row's `RMD_SEG` too now and banks the cell as it was.
+
+What it costs: kern_mega `.mega` +416 bytes against mega-release at 14.179
+(24,176 -> 24,592; the rung's 26,112 not crossed, so `MEGA_CODE_KB` and the
+pool unchanged), `.text` +6
 (the real-mode refusal, `tests/megaseg.txt` 3,754 -> 3,760), resident
 unchanged; kern_big and kern_small byte-identical. `megaparvb` and
 `megaparvp` are the gates (KERN-MEGA-PLAN 14.180 has the measurement).
@@ -245162,10 +245188,14 @@ loaded base) are the precedents and their mechanisms are taken as they are:
   pays. The sound's borrows are in the hook's interrupts-off part and never
   yield.
 - **The check**, at the fill's end (`vb_hipq`): the whole file held; EMS the
-  four quarters; XMS a 286 or up, NOT under CPU_F_PM (on kern_mega a token
-  is no address, 50.6.10), LOADALL probed with INT 6 hooked on a 286, and on
-  either tier the hold's first 16 bytes read in place against
-  OSAPI_XMEM_COPY's - a gate a BIOS closed reads 1 MB low and fails it.
+  four quarters; XMS a 286 or up in real mode, LOADALL probed with INT 6
+  hooked on a 286, and on either tier the hold's first 16 bytes read in
+  place against OSAPI_XMEM_COPY's - a gate a BIOS closed reads 1 MB low and
+  fails it. Read in place at `[vb_hlin]`, the block's linear base: the token
+  on a real-mode kernel, and in kern_mega's real-mode bracket the twin's
+  answer to where the block is now (`OSAPI_XMEM_COPY` CX = 0, 53.2.3) - a
+  token is no address there (50.6.10), and under `CPU_F_PM` itself (kern_mega's
+  door) the check answers the tier alone and the bracket makes it (126.4.5).
   `[vb_noinp]` is the A/B gate (a test's poke): the copying hold plays.
 - **A ring given its clip BEFORE the fill ended keeps copying** until it is
   given another: the title's, and whatever the reader had read ahead.
@@ -245365,8 +245395,10 @@ unused; every heavy clip streamed off the disk through a 104 KB ring, and
   (`vb_hipok`, 126.4.2's conditions less "the whole file"): XMS on a 286 or
   later in real mode, LOADALL probed, the first 16 bytes read in place
   against the driver's; or EMS with the frame's four quarters and a board as
-  fast as RAM. Refused (an 8088 with no board, kern_mega, a closed gate,
-  `[vb_noinp]`) the hold is 126.4.1's, unchanged.
+  fast as RAM. Refused (an 8088 with no board, a closed gate, `[vb_noinp]`)
+  the hold is 126.4.1's, unchanged. On kern_mega the hold opens at the door
+  in protected mode, where neither borrow can be tried: the cache is planned
+  there on the tier and checked in every bracket (126.4.5).
 - **The block's first part is PINNED**: the IDLE LOOP's records (format 7,
   `VH_IDLE`), read into it at the load - so the resident claim loses the
   loop (72 KB of the owner's VGA battle) and the idle frames decode in place
@@ -245408,7 +245440,12 @@ unused; every heavy clip streamed off the disk through a 104 KB ring, and
 - **The conventional rings** stay two - ring 0 the largest run, ring 1
   `VB_CRMIN` beside it - for the clips the cache has no slot for (a slot
   refused, a clip longer than the pool), the title's and the openings'
-  fixed rings. A clip in place uses none of its ring's memory.
+  fixed rings. A clip in place uses none of its ring's memory. Ring 1 is
+  claimed FIRST, at its least, and ring 0 is then the largest run left
+  (KERN-MEGA-PLAN 14.179): sized the other way round, ring 0 was the run
+  `OSAPI_MEM_AVAIL` answered less ring 1, and a cache AVAIL counts free that
+  a claim which fits does not shed - kern_mega's pinned 9 KB read-ahead -
+  left ring 1 short by its KB ("Not enough memory" on Bochs's kern_mega).
 - **A guard is the largest record, in 4 KB** (`[vb_cgkb]`), where it was 16
   or 32 KB: 24 KB of the owner's VGA battle.
 
@@ -245445,11 +245482,11 @@ bracket** (SPEC.md 53.2.3).
   (`vb_rclaim`, out of `vb_main`: a real-mode bracket refuses a claim) and
   given back by `vb_between`.
 - **kern_mega's door PREPARED** (`vb_prep`, KERN-MEGA-PLAN 14.180): at
-  `vb_load`'s end, before the hold is opened and the rings are sized,
-  `OSAPI_FSX_RUN` with `FSXF_REAL | FSXF_PREP` (SPEC.md 53.2.3.1) and the
-  list the play will hand the door (`vb_mkfsxl`, below; again after the
-  hold opens when it is an EMS hold, whose driver the first list could not
-  name): the drivers the bracket carries come down out of the pool - so the
+  the hold's opening (`vb_load`, before `vb_hopen`) and again at every
+  play's door before the rings are sized, `OSAPI_FSX_RUN` with `FSXF_REAL |
+  FSXF_PREP` (SPEC.md 53.2.3.1) and the list the play will hand the door
+  (`vb_mkfsxl`, below - SOUND.DRV named for a card before its ring is
+  claimed, and an EMS hold's EMS.DRV from the second ask on): the drivers the bracket carries come down out of the pool - so the
   hold is sized with their 15 KB, as kern_big's XMS never had them - and
   `[vb_rkeep]` is `VB_RKEEP` plus the KB the door answers it will still
   claim, so the rings leave exactly that. Refused (a kern_mega before it):
@@ -245477,11 +245514,26 @@ bracket** (SPEC.md 53.2.3).
   real-mode bracket), the bounce pinned for the bracket and with the EMS
   frame in the swap list, `FSXL_DRV DRVC_EMS` for an EMS hold; filled and
   read inside through `OSAPI_XMEM_COPY`'s and `OSAPI_DRV_CALL`'s twins.
-  The read in place (126.4.2) is checked again at each bracket's start: on
-  kern_mega a token is the block's linear address only while the pool
-  leaves the block where it is, and the check's 16 bytes through the twin
-  against the same 16 in place is what says so: by a 386's loaded base
-  (Bochs) and a 286's LOADALL (86Box), and an EMS hold through the frame.
+  The read in place (126.4.2) is checked again at each bracket's start:
+  on kern_mega the pool moves a token's block between brackets (50.6.10),
+  so the bracket ASKS where it is now (`OSAPI_XMEM_COPY` CX = 0, 53.2.3)
+  into `[vb_hlin]`, the base every in-place read is aimed from, and the
+  check's 16 bytes through the twin against the same 16 there is what says
+  the borrow works: by a 386's loaded base (Bochs) and a 286's LOADALL
+  (86Box), and an EMS hold through the frame.
+- **The clip cache** (126.4.6, KERN-MEGA-PLAN 14.179), as on kern_big: the
+  hold opens at the door BEFORE the resident claim is sized (`vb_load`'s
+  `.rings`, as a real-mode kernel's does), so a cache keeps the idle loop
+  in its block and the resident claim has no part for it; `vb_hipok` there,
+  in protected mode, answers the tier alone (XMS on a 286 or later; EMS on
+  its quarters and the board's speed, as everywhere) and `vb_cplan` plans
+  the slots. Each bracket then makes the check before anything is read
+  (`vb_main`): refused there - a 286 with no LOADALL, a gate a BIOS closed
+  - the idle loop has no resident room to go to inside a bracket, so the
+  bracket returns at once (`[vb_cnope]`), and `vb_play` shuts the gate
+  (`[vb_noinp]`, for the window's life), unloads the battle and plays it
+  again from the door with the copying hold. A move between plays costs
+  nothing: the next bracket reads the block where it is.
 - **The machines** (W4, 86Box's mr286 through the port): the 286's CMOS
   shutdown reset, CGA and Hercules, a Sound Blaster 2.0, the XMS and EMS
   holds - no engine change was needed for any (`vbtmega86`).
@@ -245520,16 +245572,24 @@ battles (not in the tree): `BATTLE.VBT`, a CGA4 battle of 6.3 MB, and the
 VGA battle inside `FF7BATTV-286.O88` (16.0 MB), played by this tree's
 engine. "Rings" is the two conventional clip rings, guards aside:
 
-| battle, machine | kern_big hold / rings | kern_mega before | after 14.178 | after 14.180 |
-|---|---|---|---|---|
-| CGA4, 640K + 384K | 316 / 368 (cache) | 220 / 320 | 280 / 320 | 292 / 328 |
-| CGA4, 2 MB | 956 / 368 (cache) | 860 / 320 | 920 / 320 | (not re-measured) |
-| CGA4, 4 MB | 3,004 / 368 (cache) | 2,908 / 320 | 2,964 / 320 | 2,980 / 328 |
-| VGA, 640K + 384K | 316 / 260 | 224 / 224 | 280 / 224 | 292 / 232 |
-| VGA, 4 MB | 3,004 / 332 (cache) | 2,912 / 224 | 2,964 / 224 | 2,980 / 232 |
+| battle, machine | kern_big hold / rings | kern_mega before | kern_mega after (14.178) | and the cache (14.179) | and the drivers lent (14.180) |
+|---|---|---|---|---|---|
+| CGA4, 640K + 384K | 316 / 368 (cache) | 220 / 320 | 280 / 320 | 280 / 336 (cache) | 292 / 336 (cache) |
+| CGA4, 2 MB | 956 / 368 (cache) | 860 / 320 | 920 / 320 | 920 / 336 (cache) | (not re-measured) |
+| CGA4, 4 MB | 3,004 / 368 (cache) | 2,908 / 320 | 2,964 / 320 | 2,964 / 336 (cache) | 2,980 / 336 (cache) |
+| VGA, 640K + 384K | 316 / 260 | 224 / 224 | 280 / 224 | 280 / 224 | 292 / 224 |
+| VGA, 4 MB | 3,004 / 332 (cache) | 2,912 / 224 | 2,964 / 224 | 2,964 / 296 (cache) | 2,980 / 296 (cache) |
+
+"(cache)" is the clip cache, its clips played in place; the VGA battle at
+640K + 384K has none on either kernel (its 72 KB idle loop and the slots'
+least, 256 KB, are more than either pool), so the kernels agree there too. 14.180's column is the drivers' 15 KB in the
+hold (FSXF_PREP, 53.2.3.1): the rings are the cache's either way, its ring
+rule leaving the exact room the door now answers in two holes (5 and 11 KB)
+rather than in a ring.
 
 Neither kernel holds a whole battle there. **Every KB of the difference,
-640K + 384K, CGA4** (kern_big 684 held, kern_mega 540 before, 600 after):
+640K + 384K, CGA4** (kern_big 684 held, kern_mega 540 before, 600 after
+14.178, 616 with the cache):
 
 - **the region, 48 KB of extended memory - FIXED**: above 1MB on kern_mega
   (`OS88_HIGH`) and copied into conventional memory for every real-mode
@@ -245548,21 +245608,22 @@ Neither kernel holds a whole battle there. **Every KB of the difference,
   `tests/megapar.py` holds the hold to every KB the kernel leaves programs,
   and the difference to the fixed area's 21;
 - **the clip cache, 16 KB of conventional memory (72 in the VGA battle at
-  4 MB) - OPEN**: kern_big's hold is a CACHE of whole clips played in place
-  (126.4.6) and its idle loop lives in it; kern_mega's is the copying hold
-  (`vb_ctry` refuses the cache under `[vb_pmd]`: the in-place check needs
-  real mode, and a token is the block's address only while the pool leaves
-  it where it is), so the idle loop is in the resident claim. KERN-MEGA-PLAN
-  14.178 has the proposal;
+  4 MB) - FIXED** (KERN-MEGA-PLAN 14.179): kern_big's hold is a CACHE of
+  whole clips played in place (126.4.6) and its idle loop lives in it;
+  kern_mega's was the copying hold, the idle loop in the resident claim.
+  Now the cache is planned at the door and checked in each bracket, where
+  `OSAPI_XMEM_COPY`'s twin answers where the block is (126.4.5), and
+  kern_mega's hold is the cache wherever kern_big's is;
 - **the bracket's own conventional memory, 18 KB - the kernel's**: its
   service area (3 KB) and HDD.DRV (4) and SOUND.DRV (11) - low copies until
   14.180, the lent images since (the same KB, made before the rings rather
   than in the room they left) - where kern_big runs both drivers from the
   HMA (53.2.3; KERN-MEGA-PLAN 14.180 has the HMA twins as a proposal);
-- **the rest, 14 KB of conventional memory - 8 FIXED**: the room the rings
-  left the door (`VB_RKEEPM`, 24 KB, against the 18 it took), which
-  `FSXF_PREP`'s answer sizes exactly (in the play the largest free run is
-  `VB_RKEEP`'s 8 KB, against 16 before); kern_mega's floor 3.5 KB higher
+- **the rest, 14 KB of conventional memory**: the room the rings left the
+  door (`VB_RKEEPM`, 24 KB, against the 18 it took), which `FSXF_PREP`'s
+  answer sizes exactly - 8 KB more for the rings with the copying hold;
+  with the cache (14.179) its ring rule leaves them in two holes in the
+  play (5 and 11 KB), under `VB_RKEEP` + a 4 KB unit; kern_mega's floor 3.5 KB higher
   (63.0 against 59.5 with XMEM.DRV's `.cold` in the HMA), the read-ahead's
   9 KB landing the door's walk rebuilds, at the arena's foot under a pinned
   claim where no ring reaches it, and 4 KB units, less kern_big's XMEM.DRV
@@ -245570,7 +245631,8 @@ Neither kernel holds a whole battle there. **Every KB of the difference,
 
 `tests/megapar.py --prog vb` (row `megaparvb`) is the gate: both kernels on
 that machine, the demo bundle or the owner's (`$OS88_VBT_TARGET`,
-`$OS88_VBT_PKG`).
+`$OS88_VBT_PKG`) - and, since 14.179, kern_mega's hold the clip cache
+wherever kern_big's is.
 
 ### 126.5 The band
 

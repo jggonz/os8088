@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "16730f0feb025f4d48d59ce1ce47b2918d1d763652bf0be732a5730f7312b313",
+  "fingerprint": "3c15f5f68255cec0f0c0908499be5bbb059098b89ee9bcb3fd1f3cc36a1e08dd",
   "version": 12
  },
  "PKG_FMT": {
-  "fingerprint": "2c2287feb1a654dd14c6dd8efe660ee36a80a372b4b16fdc83fa74a611dd7e75",
+  "fingerprint": "2ccd68403e71e26080195ac024d08343cb3c88398727562c3b11a7f74f002f51",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -1872,17 +1872,31 @@
    "to": 12
   },
   {
-   "fingerprint": "2c2287feb1a654dd14c6dd8efe660ee36a80a372b4b16fdc83fa74a611dd7e75",
+   "fingerprint": "384bdaff9353a174d8a2d1f2d70e78504b915d419293c1c62b11339416646eed",
    "from": 10,
    "guard": "PKG_FMT",
-   "reason": "FSXF_PREP (OSAPI_FSX_RUN CX bit 4 with FSXF_REAL, SPEC.md 53.2.3.1): a flag added; every kernel before it refuses the bit as undefined, so nothing built before stops running - PKG_FMT kept",
+   "reason": "OSAPI_XMEM_COPY: CX = 0 answers WHERE (the extended end's linear address now) inside kern_mega's real-mode bracket; a bad length (refused) everywhere else, as before - an answer where there was a refusal, nothing built before changes (KERN-MEGA-PLAN 14.179)",
    "to": 10
   },
   {
-   "fingerprint": "16730f0feb025f4d48d59ce1ce47b2918d1d763652bf0be732a5730f7312b313",
+   "fingerprint": "1de7b23ac1205c3f46ac3c96b633f2773c7022d61acce1d4b81b50b984528e8b",
    "from": 12,
    "guard": "DRV_VER",
-   "reason": "FSXF_PREP (OSAPI_FSX_RUN CX bit 4 with FSXF_REAL, SPEC.md 53.2.3.1): a flag added; every kernel before it refuses the bit as undefined, so nothing built before stops running - PKG_FMT kept",
+   "reason": "OSAPI_XMEM_COPY: CX = 0 answers WHERE (the extended end's linear address now) inside kern_mega's real-mode bracket; a bad length (refused) everywhere else, as before - an answer where there was a refusal, nothing built before changes (KERN-MEGA-PLAN 14.179)",
+   "to": 12
+  },
+  {
+   "fingerprint": "2ccd68403e71e26080195ac024d08343cb3c88398727562c3b11a7f74f002f51",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "merge of mega-release (14.179's abi note kept) with FSXF_PREP (OSAPI_FSX_RUN CX bit 4, SPEC.md 53.2.3.1): a flag added, every kernel before it refuses the bit - PKG_FMT kept",
+   "to": 10
+  },
+  {
+   "fingerprint": "3c15f5f68255cec0f0c0908499be5bbb059098b89ee9bcb3fd1f3cc36a1e08dd",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "merge of mega-release (14.179's abi note kept) with FSXF_PREP (OSAPI_FSX_RUN CX bit 4, SPEC.md 53.2.3.1): a flag added, every kernel before it refuses the bit - PKG_FMT kept",
    "to": 12
   }
  ]

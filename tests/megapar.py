@@ -51,6 +51,16 @@ driver's image, the kernel's, a module) and the instance's. Then:
   7. out of the play and the window closed, the drivers are back UP: the
      kernel's pool blocks more than in the play (mx_relinst's mega_drvup).
 
+  8. (vb) kern_mega's hold is the CLIP CACHE (SPEC.md 126.4.6) wherever
+     kern_big's is - the idle loop in its block, a ring given a clip in
+     place and records read there, the A/B gate open - so the resident
+     claim has no part for the idle loop and the rings take its KB, as on
+     kern_big (KERN-MEGA-PLAN 14.179: the cache planned at the door, checked
+     in the bracket where OSAPI_XMEM_COPY's twin answers where the block is
+     now). RED on mega-release, whose vb_ctry refused the cache under
+     CPU_F_PM (the demo at 640K + 384K: kern_big's cache, kern_mega's
+     copying hold, 0 records in place); green after.
+
 The table prints the conventional side as well (the rings, the free runs),
 which kern_mega pays the bracket's service area and the drivers' low copies
 out of (SPEC.md 53.2.3) - reported, not asserted: see KERN-MEGA-PLAN 14.178
@@ -151,7 +161,8 @@ def measure(kern, a):
         path = "C:/VBATTLE.O88"
         names = [("vb_hblk", 2), ("vb_cpool", 2), ("vb_rkb", 2),
                  ("vb_rkb2", 2), ("vb_tplay", 1), ("vb_err", 2),
-                 ("vb_cmode", 1)]
+                 ("vb_cmode", 1), ("vb_iinp", 1), ("vb_irings", 2),
+                 ("vb_icalls", 2), ("vb_noinp", 1)]
     else:
         pkg = os88build.at("build/megak/apps/video.o88" if kern == "mega"
                            else "build/video.o88")
@@ -200,7 +211,9 @@ def measure(kern, a):
             s = st()
             got.update(hold=s["vb_hblk"] * 4, pool=s["vb_cpool"],
                        conv=s["vb_rkb"] + s["vb_rkb2"], err=s["vb_err"],
-                       title=s["vb_tplay"], cache=s["vb_cmode"])
+                       title=s["vb_tplay"], cache=s["vb_cmode"],
+                       idle=s["vb_iinp"], irings=s["vb_irings"],
+                       icalls=s["vb_icalls"], noinp=s["vb_noinp"])
         else:
             for _ in range(120):
                 om.guest_sleep(m, 1)
@@ -348,6 +361,16 @@ def main():
                r["fixed"], g))
         print("  conventional: kern_big %d KB held (%s free), kern_mega %d "
               "(%s free)" % (b["conv"], b["runs"], r["conv"], r["runs"]))
+        if a.prog == "vb":
+            ok(not b["cache"] or (r["cache"] and r["idle"] and
+                                  r["irings"] and r["icalls"] and
+                                  not r["noinp"]),
+               "8. kern_mega's hold is the CLIP CACHE wherever kern_big's is "
+               "(kern_big %s, kern_mega %s): the idle loop in its block (%d), "
+               "%d ring(s) given a clip in place, %d records read there" % (
+                   "cache" if b["cache"] else "no cache",
+                   "cache" if r["cache"] else "the copying hold",
+                   r["idle"], r["irings"], r["icalls"]))
     if fails:
         print("megapar: FAIL (%d)" % len(fails))
         return 1

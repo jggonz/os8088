@@ -1604,12 +1604,8 @@ fsx_rprepf:
 fsx_rprepp:
     ; STKBALANCE-OK: answers fsx_run's caller - unwinds its near return, fsx_rprepf's pusha, AX and far return and leaves through kret_di, which pops kent_di's six (53.2.3.1)
     pop ax                      ; (the near return: never taken)
-    popa
-    pusha
-    mov bx, di
-    sub bx, inst_tab
-    shr bx, 5
-    mov [ss:fsx_rown], bx       ; (fsx_rxrows' slot)
+    popa                        ; ([ss:fsx_rown] is DI's slot: fsx_rmvck
+    pusha                       ; stored it, fsx_rxrows reads it)
     xor bp, bp                  ; BP = the KB
     mov ax, [di+I_SPTR]
     call MEGA_SEL_CODE:mega_ishif ; THE REGION'S COPY, when it is above 1MB
@@ -1657,7 +1653,7 @@ fsx_rkb:
     mov al, ah
     rcr al, 1
     shr al, 1
-    xor ah, ah
+    cbw                         ; (64 at most)
     add bp, ax
     ret
 
@@ -2589,14 +2585,18 @@ fsx_rsnddn:
     mov si, 0x08 * 4
     mov cx, 1                   ; the cell's 8259 bit, master then slave
 .v:
-    cmp [si+2], dx
-    jne .vn
+    mov ax, [si+2]
+    cmp ax, dx                  ; its pair's code half - or, for an image
+    je .vm                      ; that is CONVENTIONAL, its own segment,
+    cmp ax, [es:bp+RMD_SEG]     ; which mega_ivt_sync's .fixrow writes back
+    jne .vn                     ; for reflections (FSXF_PREP's lent SOUND.DRV,
+.vm:                            ; 14.180: missed, its line stayed SHUT)
     cmp di, rms_svec - rms_lo + RMV_N * 6
     jae .vn
     mov [es:di], si
+    mov [es:di+4], ax           ; (the cell's segment, as it was)
     mov ax, [si]
     mov [es:di+2], ax
-    mov [es:di+4], dx
     add di, 6
     mov ax, [es:bp+RMD_SEG]
     mov [si+2], ax
@@ -3725,7 +3725,11 @@ rms_xcaps:
 ; 286 and by a loaded base on a 386, in kern_big's XMEM.DRV's pieces (16 KB /
 ; 2 KB, interrupts open between them), with A20 proved first. out CF = 0;
 ; CF = 1 AX = 1 no store / 2 not a block of yours / 3 bad length. Every other
-; register kept
+; register kept. CX = 0 is WHERE (SPEC.md 53.2.3, KERN-MEGA-PLAN 14.179): no
+; byte moved, CF = 0 and DX:AX = the LINEAR address those bytes are at NOW -
+; what a package reads in place by LOADALL or a loaded base inside this
+; bracket, where nothing moves a block; every other kernel and context
+; refuses CX = 0 as a bad length
 ; -----------------------------------------------------------------------------
 rms_xcopy:
     push bx
@@ -3739,8 +3743,7 @@ rms_xcopy:
     push cs
     pop ds
     mov bp, 3
-    jcxz .e
-    test cl, 1
+    test cl, 1                  ; (CX = 0 passes both: WHERE, at .w)
     jnz .e
     cmp cx, 32768
     ja .e
@@ -3755,6 +3758,7 @@ rms_xcopy:
     mov bl, [rms_slot]
     call rms_xchk               ; DX:AX = where those bytes are now
     jc .e
+    jcxz .w                     ; (CX = 0: that is the answer)
     push dx
     push ax
     mov ax, es                  ; the conventional end, linear
@@ -3796,6 +3800,16 @@ rms_xcopy:
     pop di
     pop si
     pop dx
+    pop cx
+    pop bx
+    retf
+.w:
+    pop es                      ; WHERE: DX:AX answered, the caller's DX
+    pop ds                      ; dropped (CF = 0, rms_xchk's)
+    pop bp
+    pop di
+    pop si
+    pop cx
     pop cx
     pop bx
     retf

@@ -13721,8 +13721,7 @@ mega_seglow:
     jc .rx                          ; DX), its fresh pair freed, and MC_RLOC
     mov ax, [bp-2]                  ; the proc...
     mov [ss:si+MC_RLOC], ax
-.rx:
-    MXT_ES
+.rx:                                ; (ES = the tables' tail: mega_mselset's)
     mov si, [bp-4]
     mov word [es:si+MX_KB], 0       ; ...and the pool block
 .ok:
@@ -13801,10 +13800,9 @@ mega_mvblk:
 ; mega_mselset - DX = a conventional claim's own (fresh) DATA selector, AX =
 ; the pair it is to be named by instead -> CF = 0, SI = its mem_tab record,
 ; its mem_sel row AX and the fresh pair freed; CF = 1 no record has DX.
-; Every other register kept
+; ES = the tables' tail either way; every other register kept
 mega_mselset:
     push bx
-    push es
     call mega_mselof
     jc .o
     mov [es:bx], ax
@@ -13816,7 +13814,6 @@ mega_mselset:
     pop ax
     clc
 .o:
-    pop es
     pop bx
     ret
 
@@ -13876,13 +13873,14 @@ mega_drvlow:
     jnz .back                       ; (SBL_DSCS's boundary)
     xchg ax, cx                     ; AX = the KB
     call mega_mvblk                 ; moved, the driver's pair with it
-    push es
-    MXT_ES
-    mov word [es:si+MX_KB], 0       ; the pool block free
-    pop es
+    mov cx, si
     mov dx, di
     mov ax, bp
+    push es
     call mega_mselset               ; the claim named by the driver's pair
+    mov si, cx
+    mov word [es:si+MX_KB], 0       ; ...and the pool block free
+    pop es
     popa
     clc
     ret
@@ -13917,11 +13915,9 @@ mega_drvup:
     call MEGA_SEL_CODE:mega_ishif
     jnc .n                          ; above 1MB: where drv_hi put it
     push bx
-    call mega_mselof                ; SI = its record, ES:BX its row
-    jc .o
-    cmp word [ss:si+MC_OWN], MEM_K_DRV
-    jne .o
-    mov di, bx
+    call mega_mselof                ; SI = its record (the image's own,
+    jc .o                           ; MEM_K_DRV: no other claim is named by a
+    mov di, bx                      ; driver's pair), ES:BX its row
     call mega_mpbase                ; DX:AX = its base
     mov [mega_xsrc], ax
     mov [mega_xsrc+2], dx
