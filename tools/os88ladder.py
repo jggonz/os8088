@@ -853,7 +853,7 @@ STAGES = [
     dict(id="drvboot", short="mount + drivers", title="The floppy is mounted - over the start-up code",
          moved="the disk's index, written across {ovlkb} of code that was running",
          take=dict(phases=["drv_boot_x", "vmm_boot_x", "bvw_rowcalc",
-                           "hb_probe_x", "thm_set"])),
+                           "hb_probe_x", "kbm_adopt", "thm_set"])),
     dict(id="autostart", short="autostart", title="The loading screen ends, and Autostart runs",
          moved="nothing on this disk - a program's memory for each shortcut in AUTOSTRT",
          take=dict(phases=["spl_finish", "vx_boot_x", "as_boot"])),
@@ -2035,6 +2035,11 @@ NOTES = {
         'mount, so a hard disk is there to be looked at, and before the '
         'first frame, because the answer is a question the desktop puts '
         'up. A floppy-only machine pays eight compares and no disk work.',
+    'kbm_adopt':
+        'No pointer has spoken: copy the keyboard mouse - the arrow keys '
+        'as the mouse - out of the start-up code into 512 bytes of its own '
+        'memory, where it lives until a mouse first moves. A machine with '
+        'a mouse keeps none of it.',
     'thm_set':
         'Resolve the colour scheme from the setting, once, before '
         'anything is drawn.',
@@ -2139,6 +2144,7 @@ TITLES = {
     "vmm_boot_x": "Attach a virtual machine's pointer",
     "bvw_rowcalc": "Place the drives and shortcuts",
     "hb_probe_x": "Is there a hibernation to resume?",
+    "kbm_adopt": "Keep the keyboard mouse, if there is no mouse",
     "thm_set": "Resolve the colour scheme",
     "spl_finish": "Finish the loading screen",
     "vx_boot_x": "Attach the VESA display",

@@ -889,6 +889,8 @@ def boot3_line(p, tag, cur):
     blob = cur["blobseg"] * 16
     margin = blob - 64 - 1022 - start - cur["boot3"]
     p(f"{tag} boot3      .boot3 {kb(cur['boot3'])}"
+      + (f" (the keyboard mouse's image `.boot3m` {kb(cur['b3m'])} of it)"
+         if cur.get("b3m") else "")
       + (f" + {kb(cur['b3res'])} nobits" if cur["b3res"] else "")
       + f" at {cur['b3ram']:#06x} -> {kb(blob - end)} free under the blob,"
       f" {kb(margin)} before the derived lift steps"

@@ -150,6 +150,30 @@ class _Booted(object):
         return self._cm.__exit__(*e)
 
 
+def keep_kbmouse(m):
+    """Keep the keyboard mouse's pointer half for a row that FAKES a mouseless
+    machine on one that has a mouse (SPEC.md 9.6.7, BOOT3-PLAN wave 5).
+
+    Since wave 5 the pointer half is a claim adopted at the boot's end when
+    no pointer has spoken - which on MartyPC is every boot, the mouse not
+    having moved - and DROPPED by mou_hotplug's `.have` the first time one
+    does. A row that then puts [mou_ptr] back to 0 to drive the keypad
+    (wirefleetnomouse, serlease) would find the slots empty and every key
+    passing through. So call this BEFORE the row's first mouse motion: it
+    NOPs the 5-byte far call at `mou_hotplug.kbmdrop`, and the half stays
+    armed as it would on a machine whose mouse never spoke. Paused, so no
+    pass runs half of it; asserts the bytes are the call it means to remove.
+    """
+    at = m.sym("mou_hotplug.kbmdrop")
+    m.pause()
+    op = m.read(at, 1)[0]
+    if op != 0x9A:
+        raise RuntimeError("mou_hotplug.kbmdrop is %02X, not the far call to "
+                           "kbm_dropf - the drop moved" % op)
+    m.write(at, b"\x90" * 5)
+    m.run()
+
+
 def boot(image, apps=None, machine="os8088_5150_cga", card=None,
          saver=False, why_ibm=None, verbose=True, limit=180.0, settle=True,
          quick=False, **kw):

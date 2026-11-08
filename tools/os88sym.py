@@ -113,6 +113,12 @@ SECTION_SEG = {".text": "KERNEL_SEG", ".bss": "KERNEL_SEG",
                # ...and its nobits scratch (BOOT3-PLAN wave 2): SYSTEM.CFG's
                # buffer ovc_buf, whose vstart is B3_SEG-relative (B3B_AT)
                ".boot3b": "B3_RAM",
+               # ...and the keyboard mouse's pointer half after it (SPEC.md
+               # 2.8.8, BOOT3-PLAN wave 5): a MODULE IMAGE, never run where
+               # it lies (B3M_SEG) but in a heap claim kbm_adopt makes -
+               # mod_r_kbm's segment, the two-step read the modules below
+               # need - so it has no fixed segment either
+               ".boot3m": None,
                # kern_mega's own segment (docs/plans/completed/KERN-MEGA-SEGMENTS-PLAN.md):
                # its RUNG, which is where it is until mega_enter copies it
                # above 1MB with `.cold` and where it stays on a machine with

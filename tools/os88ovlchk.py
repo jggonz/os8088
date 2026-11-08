@@ -2341,7 +2341,7 @@ def boot3_rules(kfiles, root='.'):
                 bad.append(('B4', f, n, "a NEAR transfer %s -> %s (%s): two "
                             "segments sharing offsets" % (sect, t,
                                                           c.group(2))))
-            if c.group(2) in b3mlabs:
+            if c.group(2) in b3mlabs and sect != '.boot3m':
                 bad.append(('B9', f, n, "a transfer into `.boot3m` (%s): the "
                             "image is copied into a claim, never run where "
                             "it lies" % c.group(2)))
@@ -2432,7 +2432,7 @@ def boot3_rules(kfiles, root='.'):
                 bad.append(('B8', f, n, "the `.boot3` macros are the kernel "
                             "assembly's; %s is outside it%s" % (f, inmac)))
         # --- B9: `.boot3m` is copied, never run in place ------------------
-        if b3mlabs and ex not in B3ENTRY:
+        if b3mlabs and ex not in B3ENTRY and sect != '.boot3m':
             m = OTHERCALL.match(line)
             t = m.group(2) if m else None
             m = B3CALL_RE.match(line)
@@ -2537,6 +2537,13 @@ B3_OKTREE = {
     'kernel/o.inc': B3_OVSMAC + "section .boot2\nb_o:\n    OVSCALL ovl_o\n"
                     "    retf\n%ifndef KERN_SMALL\nB3SECT\n%else\n"
                     "section .ovl\n%endif\novl_o:\n    retf\n"
+                    "section .text\n",
+    # ...and `.boot3m`'s shape (BOOT3-PLAN wave 5): an image whose own
+    # entries jump and call INSIDE it, and a `.boot3` adopter that names an
+    # entry as an IMMEDIATE (the slot it arms) - neither a transfer into it
+    'kernel/m.inc': "section .boot3m\nm_e:\n    call m_n\n    jnz m_f\n"
+                    "    retf\nm_f:\n    retf\nm_n:\n    ret\n"
+                    "B3SECT\nm_ad:\n    mov word [bx], m_e\n    ret\n"
                     "section .text\n",
 }
 B3_FIXTURES = [

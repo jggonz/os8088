@@ -88,7 +88,8 @@ B3_START    equ BOOT2_PAD + (KERN_END - KERNEL_SEG) * 16 ; NO_ROM_COLD: KERN_END
 %endif
 B3_RAM      equ KERNEL_SEG + (B3_START - BOOT2_PAD) / 16 ; ...so a segment
 B3_SEG      equ B3_RAM              ; the segment its bodies run at: constant
-; B3_RES - its nobits scratch `.boot3b`, counted from `.boot3`'s last byte:
+; B3_RES - its nobits scratch `.boot3b`, counted from `.boot3m`'s last byte
+; (B3_EXT, the foot: `.boot3`, its paragraph pad and wave 5's image):
 ; the pad up to the next LINEAR 512-byte boundary and the scratch itself
 ; (BOOT3-PLAN wave 2: SYSTEM.CFG's buffer ovc_buf, a disk-read destination,
 ; which was the paragraphs past the blob - BOOT2_RES - until its readers left
@@ -98,7 +99,7 @@ B3_SEG      equ B3_RAM              ; the segment its bodies run at: constant
  %define B3B_ON 1
 %endif
 %ifdef B3B_ON
-B3_RES      equ B3B_AT - B3_SIZE + B3B_SIZE ; (B3B_AT, B3B_SIZE: the foot)
+B3_RES      equ B3B_AT - B3_EXT + B3B_SIZE ; (B3B_AT, B3B_SIZE: the foot)
 %else
 B3_RES      equ 0
 %endif
@@ -234,13 +235,30 @@ VID_CTXCAP cfx_ctxcap, retf
 ; CFGN_STAGE), here for cfx_grid's reason (kernel size pass 16)
 CFGN_STAGE cfx_cfgname, retf
 %endif
+%ifndef OS88_DRIVERS            ; kern_small: `.boot3`'s own KGO hop, which
+KGO_PAIR b3                     ; ovlchk: B3 hand-down - the far return's CS (`mov [bp+10], cs`), spent by the hop's own retf before the call it builds returns
+%endif                          ; driver.inc expands on every other kernel:
+                                ; kbm_adopt reaches mem_claimp_hi_x, a near
+                                ; `.cold` body, through it (BOOT3-PLAN wave 5)
 b3_end:
 B3_SIZE     equ b3_end - $$
+; ...and `.boot3m`, the keyboard mouse's image (SPEC.md 2.8.8, mouse.inc's
+; B3M_SIZE), right after it in the file and in RAM, on the next PARAGRAPH, so
+; that it is a segment of its own: B3M_SEG is what kbm_adopt copies it from.
+; B3_EXT is the two together, which is what lands from B3_RAM - the read's
+; end, the lift's input and MODC_START's distance from B3_START
+B3M_OFF     equ (B3_SIZE + 15) & ~15
+B3M_SEG     equ B3_SEG + B3M_OFF / 16
+B3M_START   equ B3_START + B3M_OFF ; (its file offset: kernel.asm's section line)
+B3_EXT      equ B3M_OFF + B3M_SIZE
 %ifdef B3B_ON                   ; ...and `.boot3b`, whose one tenant (ovc_buf,
                                 ; driver.inc) is met before this foot: where it
                                 ; starts - the next LINEAR 512-byte boundary
-                                ; past `.boot3`, B3_SEG-relative - and how long
-B3B_AT      equ ((B3_RAM * 16 + B3_SIZE + 511) & ~511) - B3_RAM * 16
+                                ; past `.boot3m`, B3_SEG-relative, which it
+                                ; MUST be: ovc_buf is written by drv_boot_x's
+                                ; SYSTEM.CFG read, before kbm_adopt copies the
+                                ; image out - and how long
+B3B_AT      equ ((B3_RAM * 16 + B3_EXT + 511) & ~511) - B3_RAM * 16
 section .boot3b
 b3b_end:
 B3B_SIZE    equ b3b_end - $$
@@ -253,19 +271,19 @@ section .boot3
   %error "a `.boot3` entry lies in the RAM `.vgabuf` shares with it - put it after b3_live (SPEC.md 39.22)"
  %endif
 %else                           ; ...and where no slide shares it, the section
- %if B3_RAM < VGABUF_RAM + (KVGABUF_SIZE + 15) / 16 && B3_RAM + (B3_SIZE + 15) / 16 > VGABUF_RAM
+ %if B3_RAM < VGABUF_RAM + (KVGABUF_SIZE + 15) / 16 && B3_RAM + (B3_EXT + 15) / 16 > VGABUF_RAM
   %error "`.boot3` overlaps `.vgabuf`'s bytes on a kernel with no slide to put there (SPEC.md 39.22)"
  %endif
 %endif
-%if B3_SIZE + B3_RES > 0xFFF0
+%if B3_EXT + B3_RES > 0xFFF0
   %error "`.boot3` has outgrown one segment"
 %endif
 %ifdef B3B_ON
- %if (B3_RAM * 16 + B3B_AT) % 512 || B3B_AT < B3_SIZE
-  %error "`.boot3b` is not on a linear 512-byte boundary past `.boot3` - ovc_buf is a disk-read destination (SPEC.md 1)"
+ %if (B3_RAM * 16 + B3B_AT) % 512 || B3B_AT < B3_EXT
+  %error "`.boot3b` is not on a linear 512-byte boundary past `.boot3m` - ovc_buf is a disk-read destination (SPEC.md 1), and below the image's end the SYSTEM.CFG read would land on the keyboard mouse before kbm_adopt copies it"
  %endif
 %endif
-%if B3_RAM * 16 + B3_SIZE + B3_RES > BLOB_SEG_AT * 16
+%if B3_RAM * 16 + B3_EXT + B3_RES > BLOB_SEG_AT * 16
   %error "`.boot3` lands on stage 2's blob - the derived BLOB_LIFT (kernel.asm) should have prevented this"
 %endif
 %ifdef KZIP

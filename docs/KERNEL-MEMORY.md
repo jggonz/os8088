@@ -1201,7 +1201,31 @@ where it is read in two calls instead of three: 512 bytes of its 128KB boot
 arena for one `int 13h` before the bar. Every byte of it is boot RAM; 0 is
 resident.
 
-Resident: 0 bytes on every kernel, in every wave but wave 4's −22/−18. The lift's two steps on kern_small cost
+**Wave 5 took the keyboard mouse's pointer half out of the resident footprint**
+(SPEC.md §9.6.7, §2.8.8): `kbm_tab`, `kbm_key`, `kbm_btn`, `kbm_rclick`,
+`kbm_move`, `kbm_p5spend`, `kbm_ui` and `kbm_post` are `.boot3m`, a module
+image after `.boot3` in KERNEL.SYS, which `kbm_adopt` copies into a 512-byte
+`MEM_K_MOD` claim at `kmain_o`'s end **only when no pointer has spoken**, and
+which `mou_hotplug`'s `.have` drops when one first does. This is the one
+place in the boot-only homes where something OUTLIVES the drop - as a heap
+claim, on one class of machine - so it is the exception to "`.boot3` costs no
+resident byte" and says so: the image is never run where it lies (rule B9),
+and its claim is heap, a mouseless machine's only standing cost. MEASURED,
+against the commit before:
+
+| kernel | static resident | a mouseless machine | `.boot3` + `.boot3m` | lift (paragraphs) | KERNEL.SYS |
+|---|---|---|---|---|---|
+| kern_big | **−346** (`.text` −364, `.bss` +12, `.cold` +6): `KERN_SIZE` 96,768 -> **96,256** | one 512-byte granule: **+166** net | 5,847 -> 6,372 | 416 -> 448 (`HEAP_SEG` fell 32, so the blob's floor stays 0x1A800) | 84,704 -> 84,864 (166 sectors either way) |
+| kern_emu | −346, no rung crossed (96,768) | +166 | 5,949 -> 6,484 | 416 -> 448 (floor 0x1A800 -> 0x1AA00: 512 of the 128KB arena) | 84,912 -> 85,088 (166 -> 167; emu.img's read is 7 calls either way) |
+| kern_mega | **−352 conventional**: `MEGA_RESIDENT` 62,976 -> **62,464** | 512 conventional until `mega_enter`, then above 1MB (0) | 5,637 -> 6,165 | 448 -> 480 (floor stays 0x23E00) | 115,360 -> 115,536 (226 sectors) |
+| kern_small | **−346**: `KERN_SIZE` 58,880 -> **58,368** | +166, on the 128KB machine | 1,803 -> 2,388 | 320 -> 352 (the page term holds the blob at 0x10000) | 53,424 -> 53,568 (105 sectors) |
+
+No `int 13h` call was added on any shipped disk (`t_blobruns`): kern_big's
+packed tail grew 160 bytes inside the sector it already ended in, with 128 of
+that sector left - the 360KB and 720KB disks still read KERNEL.SYS in 11
+stage-2 calls with no sector to spare.
+
+Resident: 0 bytes on every kernel, in every wave but wave 4's −22/−18 and wave 5's −346 (−352 on kern_mega). The lift's two steps on kern_small cost
 1,024 bytes of its 128KB boot arena (63,488 -> 62,464) and of guard 5's
 headroom (60,928 -> 59,904); kern_mega's 1,024 of a 640KB floor. The blob
 keeps its length on every kernel until wave 4 shortens it, so the bytes are

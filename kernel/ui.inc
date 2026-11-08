@@ -211,10 +211,14 @@ ui_task:
                                 ; judge: a BIOS reports an Alt+numpad character
                                 ; with AH = 0, which equals an empty latch
 .notae:
-    call kbm_key                ; with no mouse on the machine, the arrows ARE
-    jc .events                  ; the mouse (SPEC.md 9.6) and this key is not
-                                ; the application's. One compare per keystroke
-                                ; on a machine that has one. 0x1C is not in
+    call far [KBFP + KBM_E_KEY] ; with no mouse on the machine, the arrows ARE
+.kbmk:                          ; the mouse (SPEC.md 9.6) and this key is not
+    jnc .events                 ; the application's: CF = 0, the pointer half
+                                ; took it. Its SLOT is the gate (9.6.7): on a
+                                ; machine that has a mouse, or once the half is
+                                ; dropped, it is mod_gone's CF = 1 - a far call
+                                ; per keystroke, and the key passes. (`.kbmk`
+                                ; is tests/kbmadopt.py's red arm.) 0x1C is not in
                                 ; kbm_tab and AL = 0 is not Space, so the
                                 ; synthesised key passes through untouched
     KFZ 4                       ; 4: kbm_key passed it through (SPEC.md 9.6)
@@ -719,7 +723,7 @@ ui_task:
 .tail:
     cmp byte [mou_ptr], 0       ; the keyboard mouse's end-of-pass service
     jne .kbm_done               ; (SPEC.md 9.6.1): a press held the button so
-    call kbm_ui                 ; that whatever this pass dispatched could
+    call far [KBFP + KBM_E_UI]  ; that whatever this pass dispatched could
 .kbm_done:                      ; track it, and if nothing did, this is where
                                 ; the press becomes a click.
                                 ;

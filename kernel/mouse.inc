@@ -1387,7 +1387,20 @@ mou_hotplug:
                                 ; bug this exists to fix. So put the power
                                 ; back up on every port FIRST...
     call mou_lockon             ; ...and only then retire the ports the mouse
-    mov byte [mou_hpst], 2      ; did not speak on. State 2 is terminal: this
+                                ; did not speak on.
+    call task_yield             ; THE KEYBOARD MOUSE'S POINTER HALF GOES BACK
+.kbmdrop:                       ; (SPEC.md 9.6.7) - but first ONE ROUND of the
+    call COLD_SEG:kbm_dropf     ; round-robin (SPEC.md 8): OSAPI_MOUSE is worker-
+                                ; legal (20.6), so a worker can be inside the
+                                ; image, preempted, as [mou_ptr] lands - and a
+                                ; yield from task 0 runs every ready task once
+                                ; before task 0 again, which is the slice it
+                                ; leaves on (BOOT3-PLAN R16). A machine that
+                                ; never adopted pays the yield and an empty
+                                ; drop, once. `.kbmdrop` is tests/kbmadopt.py's
+                                ; red arm, and its keep for the two rows that
+                                ; fake a mouseless machine on one with a mouse
+    mov byte [mou_hpst], 2      ; State 2 is terminal: this
     jmp short .done             ; is one compare per UI pass from here on
                                 ; (the settled exit is mou_newround's ret on
                                 ; BOTH kernels since kernel size pass 18: its
@@ -2390,9 +2403,11 @@ mou_p2_byte:
 ; window control are unreachable, so the desktop is a picture of an operating
 ; system rather than one. The arrow keys become the mouse.
 ;
-; It is gated on [mou_seen], the same byte 9.4/9.5 already keep, so a machine
-; with a working mouse never enters any of this - the cost there is one
-; compare per keystroke.
+; It is gated on [mou_ptr] (SPEC.md 9.6.6), and since BOOT3-PLAN wave 5 it is
+; TWO HALVES (SPEC.md 9.6.7): what every machine runs stays here, and the
+; pointer half is a module image adopted at the boot's end only when nothing
+; has spoken - so a machine with a mouse carries none of it, and its cost
+; there is one far call per keystroke to an empty slot.
 ;
 ; WHAT IT TAKES FROM APPLICATIONS, which is the part worth deciding rather
 ; than discovering. An 83/84-key keyboard has no separate cursor pad: the
@@ -2415,29 +2430,20 @@ mou_p2_byte:
 ; in, because keys go to wm_top.
 ;
 ; ---------------------------------------------------------------------------
-; WHAT THIS COSTS, AND WHEN TO TAKE IT OUT AGAIN
+; WHAT THIS COSTS
 ;
-; About 456 bytes resident on kern_big today (build/kernel.map, 2026-11-08:
-; kbm_tab..kbm_isr less mou_clamp 306, kbm_p5spend 16, kbm_pollm..kbm_ui 108,
-; kbm_post 9, state 17). It was 520 bytes of .text when it landed, two
-; 512-byte steps of KERN_BUDGET: the spare went 4,096 -> 3,584 -> 3,072.
-; The first was decided on when the budget was at its OLD ceiling and that
-; step was half the slack rather than an eighth of it, on the grounds that this
-; is the difference between a usable machine and an unusable one at exactly
-; the moment the mouse fails. The second bought
-; 9.6.1 and 9.6.2, and it is 114 bytes of code for a whole step: the image
-; rung had ONE byte of slack (.text + .bss = 49,151 against a 49,152
-; ceiling), so any addition at all cost the same 512 and trimming could not
-; have avoided it. That is the guard working, not this being dear - and the
-; next byte added to .text anywhere pays 512 too.
-;
-; IF FOOTPRINT EVER BECOMES THE HIGHER PRIORITY, THIS IS A FIRST CANDIDATE TO
-; REMOVE - dropped outright, or built only into the testing and benchmark
-; kernels, where the harness drives the mouse over QMP and never needs it.
-; Nothing else depends on it: this module plus six call sites (ui_task's key
-; poll and its deferred ladder, the kbm_poll in menu_track / ui_drag /
-; ui_grow, and osapi_mouse). Recommend it to whoever is spending the budget
-; rather than removing it unasked.
+; It was ~456 bytes resident on kern_big (kernel size pass 18) and 520 when it
+; landed, two 512-byte steps of KERN_BUDGET bought on the grounds that this is
+; the difference between a usable machine and an unusable one at exactly the
+; moment the mouse fails - and for years the note here said it was the first
+; candidate to remove if footprint ever came first. The owner's answer
+; (2026-11-08, docs/reports/big-review-2026-11-08/owner-decisions.md) was to
+; keep it and stop paying for it where it is not used: the pointer half - the
+; table and 388 bytes of code - is `.boot3m` below, out of the static
+; footprint on EVERY kernel, and a heap granule for the session on the one
+; machine that needs it (SPEC.md 9.6.7, 2.8.8 for the figures). What stays is
+; kbm_shf, mou_clamp, kbm_isr/kbm_i15, the modal polls, mou_evfill and the
+; state.
 ; =============================================================================
 KBM_MIN     equ 3               ; px a press moves when the keys are tapped...
 KBM_ACC     equ 3               ; ...how much a repeat adds while one is held
@@ -2449,69 +2455,13 @@ KBM_GAP     equ 3               ; ticks: presses closer than this are a HOLD.
                                 ; deliberate tap is 200ms+ (4+), so this is
                                 ; where the two separate on an 18.2Hz clock
 
-; scancode, dx, dy - the eight directions of the keypad
-kbm_tab     db 0x47, -1, -1     ; Home  up-left
-            db 0x48,  0, -1     ; Up
-            db 0x49,  1, -1     ; PgUp  up-right
-            db 0x4B, -1,  0     ; Left
-            db 0x4D,  1,  0     ; Right
-            db 0x4F, -1,  1     ; End   down-left
-            db 0x50,  0,  1     ; Down
-            db 0x51,  1,  1     ; PgDn  down-right
-KBM_NDIR    equ 8
-
-; -----------------------------------------------------------------------------
-; kbm_key - the UI task's keystroke, before anything else sees it
-; in:  AL = ascii, AH = scan (as int 16h returned them)
-; out: CF = 1 if this key was the mouse and must not be dispatched - and then
-;      AX is spent (kbm_move, kbm_btn, kbm_rclick: ui_task dispatches nothing
-;      after it and kbm_poll0 banks it); CF = 0, all registers preserved
-; -----------------------------------------------------------------------------
-kbm_key:
-    cmp byte [mou_ptr], 0
-    jne kbm_pass                ; a real mouse has spoken: never intercept
-    push ax
-    call kbm_shf                ; ...or ScrollLock is on and the user has asked
-    test al, 0x10               ; for the keys back (KB_FLAG bit 4 - see
-    pop ax                      ; kbm_shf; `pop` leaves the flags alone)
-    jnz kbm_pass
-    cmp al, ' '                 ; Space: the button, for a hand already on the
-    je kbm_btn                  ; arrows. Tested above the ASCII gate because it
-                                ; carries a byte - and it is the one printable
-                                ; key this takes, which is what makes the hatch
-                                ; below have to be a key that carries none
-    cmp ah, 0x4C                ; the keypad's centre 5: the button, and tested
-    je kbm_btn                  ; ABOVE the gate as well because it is the one
-                                ; keypad key with NO cursor function - so what
-                                ; a BIOS puts in AL for it is that BIOS's
-                                ; business. SeaBIOS says 0 and the field
-                                ; machine says otherwise, and testing AL is
-                                ; what made this key dead there while every
-                                ; test here passed (SPEC.md 9.6.1)
-    or al, al
-    jnz kbm_pass                ; ASCII - NumLock is on and these are digits,
-                                ; which belong to whatever is running
-    cmp ah, 0x52                ; the keypad's 0 (Ins)...
-    je kbm_btn
-    cmp ah, 0x53                ; Del: the right button (SPEC.md 12.4)
-    je kbm_rclick
-
-    push bx
-    push cx
-    push dx
-    mov bx, kbm_tab
-    mov cx, KBM_NDIR
-.find:
-    cmp ah, [bx]
-    je kbm_move
-    add bx, 3
-    loop .find
-    pop dx
-    pop cx
-    pop bx
-kbm_pass:
-    clc
-    ret
+; THE POINTER HALF - kbm_tab, kbm_key, kbm_btn, kbm_rclick, kbm_move,
+; kbm_p5spend, kbm_ui and kbm_post - is NOT HERE. It is the image `.boot3m`
+; below kbm_post's old place (SPEC.md 9.6.7, 2.8.8): adopted into a heap claim
+; at the boot's end when no pointer has spoken, dropped when one first does, and
+; never resident on a machine with a mouse. What stays in `.text` is what every
+; machine runs: kbm_shf (kbm_isr's keypad-5 test), mou_clamp, kbm_isr and
+; kbm_i15, the modal polls and the state.
 
 ; kbm_shf - AL = KB_FLAG, the BIOS's shift state (0040:0017)
 ;
@@ -2540,185 +2490,6 @@ kbm_shf:
 %endif
     mov al, [0x417]             ; NOT 0x17 with segment 0: that reads the
     pop ds                      ; middle of the vector table
-    ret
-
-; --- the button: press = down, press again = up ------------------------------
-; ONE key action, and there used to be two - a click (Ins) that pressed and
-; released together, and a hold (keypad 5) that latched. They were the wrong
-; pair. Nothing tracks a click, so the click key could never open a menu:
-; menu_track drew the pull-down and its very next instruction polled a button
-; that was already up, which is a menu that flashes and will not stay open -
-; reported off a Compaq Portable III, and the same for a window drag and the
-; grow box. The hold key opened them and read as broken everywhere else,
-; because a button that stays down is not what an icon or a close box wants.
-;
-; So: a press LATCHES mouse_btn and posts EVT_MDOWN, and kbm_relax releases it
-; the moment the ui_task pass that dispatched that down is over. Anything that
-; dispatches and returns therefore gets a CLICK - the release lands before
-; anything can poll a level. menu_track, ui_drag, ui_grow and a package's own
-; tracking loop do NOT return until the button comes up, so for those the same
-; press holds, and the next press releases it: press-drag-release on a
-; keyboard (SPEC.md 9.6.1).
-;
-; A REPEAT IS NOT A PRESS. Typematic arrives ~1.8 ticks apart and a deliberate
-; second press is 4+ - the same split KBM_GAP already makes for the ramp - so
-; without this a press held a moment too long opened a menu and closed it
-; again on its own repeat, which is the other way the Compaq's symptom is
-; produced. The stamp moves on an ignored repeat too, so a key held down stays
-; held rather than firing again once the repeats have drifted KBM_GAP apart.
-kbm_btn:
-    mov byte [kbm_p5], 0        ; WHICHEVER ROUTE GOT HERE, one press (9.6.4):
-                                ; whether this BIOS discards keypad 5 or
-                                ; delivers it is a property of the BIOS, so on
-                                ; one that delivers it BOTH kbm_isr and this
-                                ; would claim the same keystroke - the menu
-                                ; opening and shutting in one press. int 16h
-                                ; is always looked at first, so cancelling the
-                                ; pending scancode here is what makes the hook
-                                ; a FALLBACK rather than a second opinion.
-                                ; NO AX BANK (kernel size pass 18, -2): AX is
-                                ; spent on CF = 1, which is kbm_move's contract
-                                ; already, and both callers own it - ui_task
-                                ; dispatches nothing after a CF = 1 key, and
-                                ; kbm_poll0 and kbm_p5spend bank it themselves
-    mov ax, [ticks]
-    sub ax, [kbm_btick]         ; wrap-safe, like every other tick compare here
-    cmp ax, KBM_GAP
-    jb .held
-    xor byte [mouse_btn], 0x01  ; ONE read-modify-write: mou_apply stores
-    mov al, [mouse_btn]         ; this byte from an ISR and the USB worker
-    and ax, 0x01                ; 1 = now DOWN, which IS EVT_MDOWN: the event
-    jnz .post                   ; codes are published ABI (events.inc, every
-    mov al, EVT_MUP             ; package's os88api.inc), so 1 cannot move.
-.post:                          ; AH is already 0 for the up event
-    call kbm_post
-.held:
-    mov ax, [ticks]
-    mov [kbm_btick], ax
-    stc
-    ret
-
-; kbm_rclick - the keypad's Del as the RIGHT button. It lives HERE, beside
-; kbm_btn and in short reach of kbm_key's dispatch, for kbm_btn's reason: a
-; jcc to a routine more than 127 bytes away assembles as FIVE bytes, and
-; kbm_key has four of them (kernel size pass 8). mou_clamp, which used to
-; stand here, went below kbm_move to make the room.
-kbm_rclick:                     ; latches too - menu_popup ends on a level poll
-                                ; of bit 1 exactly as menu_track does on bit 0
-                                ; (and spends AX on CF = 1 as kbm_btn does)
-    xor byte [mouse_btn], 0x02
-    test byte [mouse_btn], 0x02
-    jz .out                     ; a release queues nothing (SPEC.md 9)
-    mov ax, EVT_RDOWN
-    call kbm_post
-.out:
-    stc
-    ret
-
-; --- a direction: step, clamp, and move the arrow ----------------------------
-; A DROPPED MENU IS A LIST, and gets asked first (SPEC.md 9.6.3): a press with
-; a vertical component there moves one ITEM rather than KBM_MIN pixels, and
-; menu_kbnav has already placed the pointer when it answers CF = 0. Asking it
-; ABOVE the step ramp is what keeps the two mechanisms apart - a placed press never
-; stamps [kbm_last], so the first arrow AFTER the menu closes sees a large tick
-; gap and starts fresh at KBM_MIN, which is what it should do anyway.
-kbm_move:
-    mov al, [bx+2]              ; dy: the axis a menu is a list along
-    call COLD_SEG:menu_kbnav    ; FAR: it is cold (SPEC.md 12.10)
-    jnc .paint                  ; placed - the repaint below is all that is left
-    ; --- DL = how far this press moves the pointer (it was kbm_accel, with
-    ; this one caller, until kernel size pass 17 wrote it here: AX and CX are
-    ; dead at this point - kbm_key's frame puts CX back, and AX is about to
-    ; be the step's product - so its three banks, its call and its jump to
-    ; the ladder went). A fixed step cannot be right: small enough to aim
-    ; with is too small to cross the screen with. Presses arriving closer
-    ; together than KBM_GAP are a held key (typematic repeat), and the step
-    ; grows while that lasts.
-    mov ax, [ticks]
-    mov dx, ax
-    xchg dx, [kbm_last]         ; the tick of THIS press banked, the last one's
-    sub ax, dx                  ; in DX: wrap-safe, like every other tick
-    mov dl, KBM_MIN             ; compare here
-    mov cl, [bx]                ; the direction this press is (the row's scan)
-    cmp ax, KBM_GAP
-    jae .set                    ; a fresh tap starts slow again...
-    cmp cl, [kbm_lastk]
-    jne .set                    ; ...and so does a CHANGE OF DIRECTION, which
-                                ; is what a person does the instant they
-                                ; overshoot. Without it the correction is
-                                ; travelling at full speed too, and a menu item
-                                ; sits unreachable between two 24px strides -
-                                ; which is exactly how this first failed to
-                                ; pick one
-    mov dl, [kbm_step]
-    add dl, KBM_ACC
-    cmp dl, KBM_MAX
-    jbe .set
-    mov dl, KBM_MAX
-.set:
-    mov dh, cl                  ; the step and the direction in ONE word store:
-    mov [kbm_step], dx          ; the pair is adjacent (the %if at kbm_step),
-                                ; DH was the old tick's high byte and dead, and
-                                ; imul below writes no DX (kernel size pass 18,
-                                ; -2)
-    mov al, [bx+1]              ; DL is the step, and imul does not disturb
-                                ; it, so it serves both axes
-    imul dl                     ; dx (-1, 0, +1) x the step -> AX, signed
-    add ax, [mouse_x]
-    push ax                     ; banked on OUR stack until y is ready, for
-                                ; mou_clamp's 2-D reason (SPEC.md 39.15.4).
-                                ; NOT in a shared word: when the ISR staged
-                                ; its x in one ([mou_nx], gone since size
-                                ; pass 9), a serial byte landing between our
-                                ; store and read-back paired its x with our y
-    mov al, [bx+2]              ; dy, the same way
-    imul dl
-    add ax, [mouse_y]
-    mov bx, ax
-    pop ax
-    call mou_clamp
-    mov [mouse_x], ax
-    mov [mouse_y], bx
-    mov byte [cur_shchk], 1     ; THE POINTER MOVED (SPEC.md 7.2.1.1)
-    inc byte [ui_post]          ; ...and SAY SO once (SPEC.md 13.13)
-    call sch_wake_ui            ; ...and WAKE the UI task (SPEC.md 8.1.2.2)
-.paint:
-    ; --- put the arrow where mouse_x/mouse_y now say: the ISR's own .move
-    ; rules (SPEC.md 7) - draw only with the gfx lock free and the cursor
-    ; refcount-visible, otherwise leave it to the next unlock. IF is 0 across
-    ; the move because cur_move is not re-entrant against the ISR - and on a
-    ; machine with a modem on the other port that ISR is still live. SI/DI/BP/
-    ; ES are saved round cur_move, which clobbers all four (SPEC.md 7.1.4.1):
-    ; osapi_mouse reaches this through kbm_poll from inside a package's own
-    ; tracking loop. It was kbm_paint, written here now (kernel size pass 12,
-    ; -8): AX and BX were its own bank, and here BX is kbm_key's and AX was
-    ; spent on the step above - kbm_poll and ui_task bank it themselves
-    pushf
-    cli
-    mov al, 1                   ; [cur_dirty]'s answer unless the draw below
-    cmp byte [gfx_lock_flag], 0 ; happens: ONE store at the foot where each
-    jne .pset                   ; arm carried its own immediate one (kernel
-    cmp byte [cur_level], 0     ; size pass 10: 5 bytes)
-    jl .pset
-    push si
-    push di
-    push bp
-    push es
-    mov ax, [mouse_x]
-    mov bx, [mouse_y]
-    call cur_move
-    pop es
-    pop bp
-    pop di
-    pop si
-    mov al, 0
-.pset:
-    mov [cur_dirty], al
-    popf
-    pop dx
-    pop cx
-    pop bx
-    stc
     ret
 
 
@@ -3413,32 +3184,6 @@ kbd_ovspend:
     pop ax                      ; a full keyboard buffer is already sounding
     ret
 
-; -----------------------------------------------------------------------------
-; kbm_p5spend - turn a keypad-5 press the ISR saw into the button press
-;
-; The ISR only ever sets a byte: everything else the button does - the event,
-; the latch, the repeat guard - is kbm_btn's, and kbm_btn runs in TASK context
-; where every other button key already reaches it. So IRQ1 pushes nothing onto
-; the event queue and this needed no new rule about what an ISR may call.
-;
-; Called from the two places the keyboard mouse is serviced from, which
-; between them cover every state the machine can be in: kbm_poll0 (the modal
-; loops and a package's own tracking loop) and the end of kbm_ui (an ordinary
-; ui_task pass). In kbm_ui it must come AFTER .relax, or the press is released
-; by the same pass that made it - 9.6.1's flashing menu from a third direction.
-; out: nothing (all registers preserved, flags clobbered)
-; -----------------------------------------------------------------------------
-kbm_p5spend:
-    push ax
-    xor al, al
-    xchg al, [kbm_p5]           ; read-and-clear in one, so a press arriving
-    or al, al                   ; between the test and the store cannot be lost
-    jz .out                     ; (fr_restart's idiom, and for its reason)
-    call kbm_btn                ; the same one action Ins and Space take
-.out:
-    pop ax
-    ret
-
 
 ; -----------------------------------------------------------------------------
 ; kbm_poll - service the keyboard from a loop that has taken over the UI task
@@ -3487,15 +3232,17 @@ kbm_poll0:                      ; and kbm_pollm's own bank is the same push
     mov ah, 0x01
     int 0x16
     jz .p5                      ; nothing waiting
-    call kbm_key
-    jc .take                    ; ours, and acted on: take it out
+    call far [KBFP + KBM_E_KEY] ; the pointer half's kbm_key (SPEC.md 9.6.7)
+    jnc .take                   ; CF = 0: ours, and acted on - take it out. An
+                                ; empty slot (a mouse, or the half dropped) is
+                                ; mod_gone's CF = 1: not ours
     cmp byte [kbm_eat], 0
     je .p5                      ; not ours, and somebody else will read it
 .take:
     mov ah, 0x00
     int 0x16
 .p5:
-    call kbm_p5spend            ; LAST, so int 16h gets first refusal: on a
+    call far [KBFP + KBM_E_P5]  ; LAST, so int 16h gets first refusal: on a
                                 ; BIOS that delivers keypad 5 the call above
                                 ; has already claimed it and cleared the flag
                                 ; (SPEC.md 9.6.4), and this finds nothing
@@ -3504,6 +3251,375 @@ kbm_poll0:                      ; and kbm_pollm's own bank is the same push
                                 ; ladder is not running (SPEC.md 9.8). A TAIL
                                 ; JUMP: kbd_ovspend keeps every register and
                                 ; ends in the ret this needs (size pass 10)
+
+
+; mou_evfill - stamp an event record at DS:SI and queue it
+; in:  AX = EVT_*, SI -> an 8-byte record in DS, PRIVATE TO THE CALLER
+; out: nothing (evq_push's contract); AX clobbered, SI unmoved
+;
+; The same nine instructions stood in kbm_post and in mou_isr's .fill. THE TWO
+; BUFFERS STAY TWO and that is the point: kbm_ev is filled from the UI task
+; and mou_evrec from the serial mouse ISR, and only evq_push itself runs under
+; cli - so one shared buffer would let the ISR corrupt a half-filled record.
+; It is the RECORD that is shared here, not the storage.
+;
+; It ends `jmp evq_push` - a tail call, replacing the `call evq_push` each
+; site had, so the mouse ISR's peak stack depth does not move (SPEC.md 9.10's
+; 128-byte private stack is unchanged). Not hot: mou_isr reaches .fill only on
+; a button transition EDGE, and kbm_post's three callers are keyboard-mouse
+; key handlers.
+mou_evfill:
+    mov [si], ax
+    mov ax, [mouse_x]
+    mov [si+2], ax
+    mov ax, [mouse_y]
+    mov [si+4], ax
+    mov ax, [ticks]             ; birth time: two of these close together are
+    mov [si+6], ax              ; a double-click, exactly as a real one is
+    jmp evq_push                ; ...which preserves everything
+
+; =============================================================================
+; THE POINTER HALF - `.boot3m`, a module image with no file (SPEC.md 9.6.7, 2.8.8,
+; docs/plans/BOOT3-PLAN.md wave 5)
+;
+; What only a machine with NO pointer runs: the direction table, the key test,
+; the button, the right button, the step and paint, keypad 5's spend and the
+; end-of-pass service. It rides KERNEL.SYS as the section after `.boot3`, is
+; COPIED into a heap claim at the boot's end by kbm_adopt (below) when
+; [mou_ptr] says nothing has spoken, and is DROPPED by mou_hotplug's `.have`
+; the first time a pointer does. A machine with a mouse never claims it, and
+; on every machine its 390-odd bytes are out of the resident footprint.
+;
+; THE OWNER'S SHAPE, preferred over a KBMOUSE.DRV module: no disk read, no
+; file on any disk, no system-disk dependency - the bytes come out of the very
+; assembly that is running, so mod_need's disk, ROM door and build checks have
+; nothing to do and kbm_adopt claims and arms the row itself.
+;
+; ITS CONTRACT IS A MODULE'S (kernel/mod.inc): vstart 0, CS of its own, DS =
+; KERNEL_SEG (every caller's), the STATE stays in DS - kbm_ev because
+; mou_evfill takes it as DS:SI, and the step, the stamps and the ScrollLock
+; level because a kern_mega code half above 1MB cannot be written - and the
+; table is read through CS. THREE ENTRIES, far, through MODFP KBFP's slots.
+; NO RELOCATION OF ANY KIND: `.cold` is reached through api_far and `.text`
+; through its cells and spw_near, so no word in here names a segment that
+; moves, and cfx_slide, the ROM, the HMA image and mod_cfix have nothing to do.
+; B9 (tools/os88ovlchk.py) refuses any transfer into it from outside it.
+; =============================================================================
+KBM_NENT    equ 3               ; the image's entries, in MODFP KBFP's order:
+KBM_E_KEY   equ 0               ; kbm_key (ui_task, kbm_poll0)
+KBM_E_P5    equ 4               ; kbm_p5spend (kbm_poll0)
+KBM_E_UI    equ 8               ; kbm_ui (ui_task's ladder)
+section .boot3m
+kbmi_hdr:                       ; the module header (MOD_H_*, SPEC.md 2.8.2):
+    dw 0x384F                   ; mod_hiboot reads its MOD_H_IMG, and a RAM
+    db MOD_VER, MOD_KBM         ; reader finds a module where it looks
+    dw MOD_BNUM, MOD_STAMP      ; (BUILD_NUM as an equ: mod.inc)
+    dw kbmi_end, KBM_NENT
+    dw kbm_key, kbm_p5spend, kbm_ui
+%if KBM_E_P5 != 4 * 1 || KBM_E_UI != 4 * 2
+  %error "KBM_E_* are the header's entry order, four bytes a slot"
+%endif
+
+; scancode, dx, dy - the eight directions of the keypad
+kbm_tab     db 0x47, -1, -1     ; Home  up-left
+            db 0x48,  0, -1     ; Up
+            db 0x49,  1, -1     ; PgUp  up-right
+            db 0x4B, -1,  0     ; Left
+            db 0x4D,  1,  0     ; Right
+            db 0x4F, -1,  1     ; End   down-left
+            db 0x50,  0,  1     ; Down
+            db 0x51,  1,  1     ; PgDn  down-right
+KBM_NDIR    equ 8
+
+; -----------------------------------------------------------------------------
+; kbm_key - the UI task's keystroke, before anything else sees it
+; in:  AL = ascii, AH = scan (as int 16h returned them)
+; out: CF = 0 if this key was the mouse and must not be dispatched - and then
+;      AX is spent (kbm_move, kbm_btn, kbm_rclick: ui_task dispatches nothing
+;      after it and kbm_poll0 banks it); CF = 1, all registers preserved
+;
+; THE CARRY IS INVERTED against what it was in `.text`, and that is the whole
+; of the gate (SPEC.md 9.6.7): FAR-entered through the slot [KBFP], and a slot
+; nothing armed - a machine with a mouse, or this image dropped - answers
+; mod_gone's CF = 1 with every register kept, which is exactly "not mine". So
+; the two callers, ui_task and kbm_poll0, call the slot and read CF = 0 as
+; spent, and need no row test and no resident stub.
+; -----------------------------------------------------------------------------
+kbm_key:
+    cmp byte [mou_ptr], 0
+    jne kbm_pass                ; a real mouse has spoken: never intercept
+    push ax
+    call kbmi_shf               ; ...or ScrollLock is on and the user has asked
+    test al, 0x10               ; for the keys back (KB_FLAG bit 4 - see
+    pop ax                      ; kbm_shf; `pop` leaves the flags alone)
+    jnz kbm_pass
+    cmp al, ' '                 ; Space: the button, for a hand already on the
+    je kbm_btn                  ; arrows. Tested above the ASCII gate because it
+                                ; carries a byte - and it is the one printable
+                                ; key this takes, which is what makes the hatch
+                                ; below have to be a key that carries none
+    cmp ah, 0x4C                ; the keypad's centre 5: the button, and tested
+    je kbm_btn                  ; ABOVE the gate as well because it is the one
+                                ; keypad key with NO cursor function - so what
+                                ; a BIOS puts in AL for it is that BIOS's
+                                ; business. SeaBIOS says 0 and the field
+                                ; machine says otherwise, and testing AL is
+                                ; what made this key dead there while every
+                                ; test here passed (SPEC.md 9.6.1)
+    or al, al
+    jnz kbm_pass                ; ASCII - NumLock is on and these are digits,
+                                ; which belong to whatever is running
+    cmp ah, 0x52                ; the keypad's 0 (Ins)...
+    je kbm_btn
+    cmp ah, 0x53                ; Del: the right button (SPEC.md 12.4)
+    je kbm_rclick
+
+    push bx
+    push cx
+    push dx
+    push bp                     ; ...and BP, which kbm_move's two far doors
+                                ; (api_far, spw_near) take their target in
+    mov bx, kbm_tab
+    mov cx, KBM_NDIR
+.find:
+    cmp ah, [cs:bx]             ; the table is the IMAGE'S (+1 a read)
+    je kbm_move
+    add bx, 3
+    loop .find
+    pop bp
+    pop dx
+    pop cx
+    pop bx
+kbm_pass:
+    stc                         ; NOT MINE - the answer an empty slot gives too
+    retf
+
+; kbmi_shf - the image's own copy of kbm_shf (AL = KB_FLAG, 0040:0017), for
+; kbm_key's ScrollLock test and kbm_ui's level: a near call where the resident
+; one would be a far door (kbm_isr keeps the resident one, SPEC.md 9.6.7).
+; Clobbers AX (kern_mega: AL); the flags
+kbmi_shf:
+    push ds
+%ifdef KERN_MEGA
+    MEGA_SEG0 ds                ; (`.boot3m` is not `.text`: [ss:mega_seg0])
+%else
+    xor ax, ax
+    mov ds, ax
+%endif
+    mov al, [0x417]
+    pop ds
+    ret
+
+; --- the button: press = down, press again = up ------------------------------
+; ONE key action, and there used to be two - a click (Ins) that pressed and
+; released together, and a hold (keypad 5) that latched. They were the wrong
+; pair. Nothing tracks a click, so the click key could never open a menu:
+; menu_track drew the pull-down and its very next instruction polled a button
+; that was already up, which is a menu that flashes and will not stay open -
+; reported off a Compaq Portable III, and the same for a window drag and the
+; grow box. The hold key opened them and read as broken everywhere else,
+; because a button that stays down is not what an icon or a close box wants.
+;
+; So: a press LATCHES mouse_btn and posts EVT_MDOWN, and kbm_relax releases it
+; the moment the ui_task pass that dispatched that down is over. Anything that
+; dispatches and returns therefore gets a CLICK - the release lands before
+; anything can poll a level. menu_track, ui_drag, ui_grow and a package's own
+; tracking loop do NOT return until the button comes up, so for those the same
+; press holds, and the next press releases it: press-drag-release on a
+; keyboard (SPEC.md 9.6.1).
+;
+; A REPEAT IS NOT A PRESS. Typematic arrives ~1.8 ticks apart and a deliberate
+; second press is 4+ - the same split KBM_GAP already makes for the ramp - so
+; without this a press held a moment too long opened a menu and closed it
+; again on its own repeat, which is the other way the Compaq's symptom is
+; produced. The stamp moves on an ignored repeat too, so a key held down stays
+; held rather than firing again once the repeats have drifted KBM_GAP apart.
+kbm_btn:
+    mov byte [kbm_p5], 0        ; WHICHEVER ROUTE GOT HERE, one press (9.6.4):
+                                ; whether this BIOS discards keypad 5 or
+                                ; delivers it is a property of the BIOS, so on
+                                ; one that delivers it BOTH kbm_isr and this
+                                ; would claim the same keystroke - the menu
+                                ; opening and shutting in one press. int 16h
+                                ; is always looked at first, so cancelling the
+                                ; pending scancode here is what makes the hook
+                                ; a FALLBACK rather than a second opinion.
+                                ; NO AX BANK (kernel size pass 18, -2): AX is
+                                ; spent on CF = 0, which is kbm_move's contract
+                                ; already, and both callers own it - ui_task
+                                ; dispatches nothing after a CF = 1 key, and
+                                ; kbm_poll0 and kbm_p5spend bank it themselves
+    mov ax, [ticks]
+    sub ax, [kbm_btick]         ; wrap-safe, like every other tick compare here
+    cmp ax, KBM_GAP
+    jb .held
+    xor byte [mouse_btn], 0x01  ; ONE read-modify-write: mou_apply stores
+    mov al, [mouse_btn]         ; this byte from an ISR and the USB worker
+    and ax, 0x01                ; 1 = now DOWN, which IS EVT_MDOWN: the event
+    jnz .post                   ; codes are published ABI (events.inc, every
+    mov al, EVT_MUP             ; package's os88api.inc), so 1 cannot move.
+.post:                          ; AH is already 0 for the up event
+    call kbm_post
+.held:
+    mov ax, [ticks]
+    mov [kbm_btick], ax
+    clc                         ; spent (kbm_key's inverted carry). FAR: kbm_key
+    retf                        ; jumps here, kbm_p5spend calls `push cs`/near
+
+; kbm_rclick - the keypad's Del as the RIGHT button. It lives HERE, beside
+; kbm_btn and in short reach of kbm_key's dispatch, for kbm_btn's reason: a
+; jcc to a routine more than 127 bytes away assembles as FIVE bytes, and
+; kbm_key has four of them (kernel size pass 8). mou_clamp, which used to
+; stand here, went below kbm_move to make the room.
+kbm_rclick:                     ; latches too - menu_popup ends on a level poll
+                                ; of bit 1 exactly as menu_track does on bit 0
+                                ; (and spends AX on CF = 0 as kbm_btn does)
+    xor byte [mouse_btn], 0x02
+    test byte [mouse_btn], 0x02
+    jz .out                     ; a release queues nothing (SPEC.md 9)
+    mov ax, EVT_RDOWN
+    call kbm_post
+.out:
+    clc
+    retf
+
+; --- a direction: step, clamp, and move the arrow ----------------------------
+; A DROPPED MENU IS A LIST, and gets asked first (SPEC.md 9.6.3): a press with
+; a vertical component there moves one ITEM rather than KBM_MIN pixels, and
+; menu_kbnav has already placed the pointer when it answers CF = 0. Asking it
+; ABOVE the step ramp is what keeps the two mechanisms apart - a placed press never
+; stamps [kbm_last], so the first arrow AFTER the menu closes sees a large tick
+; gap and starts fresh at KBM_MIN, which is what it should do anyway.
+kbm_move:
+    mov al, [cs:bx+2]           ; dy: the axis a menu is a list along
+    mov bp, menu_kbnav          ; FAR: it is cold (SPEC.md 12.10) - and through
+    call KERNEL_SEG:api_far     ; api_far, which pushes where `.cold` RUNS: this
+                                ; image names no segment of `.cold`'s, so the
+                                ; slide, the ROM and the HMA have nothing in it
+                                ; to re-point (SPEC.md 2.8.8). BP is kbm_key's
+                                ; bank
+    jnc .paint                  ; placed - the repaint below is all that is left
+    ; --- DL = how far this press moves the pointer (it was kbm_accel, with
+    ; this one caller, until kernel size pass 17 wrote it here: AX and CX are
+    ; dead at this point - kbm_key's frame puts CX back, and AX is about to
+    ; be the step's product - so its three banks, its call and its jump to
+    ; the ladder went). A fixed step cannot be right: small enough to aim
+    ; with is too small to cross the screen with. Presses arriving closer
+    ; together than KBM_GAP are a held key (typematic repeat), and the step
+    ; grows while that lasts.
+    mov ax, [ticks]
+    mov dx, ax
+    xchg dx, [kbm_last]         ; the tick of THIS press banked, the last one's
+    sub ax, dx                  ; in DX: wrap-safe, like every other tick
+    mov dl, KBM_MIN             ; compare here
+    mov cl, [cs:bx]             ; the direction this press is (the row's scan)
+    cmp ax, KBM_GAP
+    jae .set                    ; a fresh tap starts slow again...
+    cmp cl, [kbm_lastk]
+    jne .set                    ; ...and so does a CHANGE OF DIRECTION, which
+                                ; is what a person does the instant they
+                                ; overshoot. Without it the correction is
+                                ; travelling at full speed too, and a menu item
+                                ; sits unreachable between two 24px strides -
+                                ; which is exactly how this first failed to
+                                ; pick one
+    mov dl, [kbm_step]
+    add dl, KBM_ACC
+    cmp dl, KBM_MAX
+    jbe .set
+    mov dl, KBM_MAX
+.set:
+    mov dh, cl                  ; the step and the direction in ONE word store:
+    mov [kbm_step], dx          ; the pair is adjacent (the %if at kbm_step),
+                                ; DH was the old tick's high byte and dead, and
+                                ; imul below writes no DX (kernel size pass 18,
+                                ; -2)
+    mov al, [cs:bx+1]           ; DL is the step, and imul does not disturb
+                                ; it, so it serves both axes
+    imul dl                     ; dx (-1, 0, +1) x the step -> AX, signed
+    add ax, [mouse_x]
+    push ax                     ; banked on OUR stack until y is ready, for
+                                ; mou_clamp's 2-D reason (SPEC.md 39.15.4).
+                                ; NOT in a shared word: when the ISR staged
+                                ; its x in one ([mou_nx], gone since size
+                                ; pass 9), a serial byte landing between our
+                                ; store and read-back paired its x with our y
+    mov al, [cs:bx+2]           ; dy, the same way
+    imul dl
+    add ax, [mouse_y]
+    mov bx, ax
+    pop ax
+    call KERNEL_SEG:cw_mou_clamp
+    mov [mouse_x], ax
+    mov [mouse_y], bx
+    mov byte [cur_shchk], 1     ; THE POINTER MOVED (SPEC.md 7.2.1.1)
+    inc byte [ui_post]          ; ...and SAY SO once (SPEC.md 13.13)
+    mov bp, sch_wake_ui         ; ...and WAKE the UI task (SPEC.md 8.1.2.2),
+    call KERNEL_SEG:spw_near    ; through spw_near's `call bp`: no shim of its own
+.paint:
+    ; --- put the arrow where mouse_x/mouse_y now say: the ISR's own .move
+    ; rules (SPEC.md 7) - draw only with the gfx lock free and the cursor
+    ; refcount-visible, otherwise leave it to the next unlock. IF is 0 across
+    ; the move because cur_move is not re-entrant against the ISR - and on a
+    ; machine with a modem on the other port that ISR is still live. SI/DI/BP/
+    ; ES are saved round cur_move, which clobbers all four (SPEC.md 7.1.4.1):
+    ; osapi_mouse reaches this through kbm_poll from inside a package's own
+    ; tracking loop. It was kbm_paint, written here now (kernel size pass 12,
+    ; -8): AX and BX were its own bank, and here BX is kbm_key's and AX was
+    ; spent on the step above - kbm_poll and ui_task bank it themselves
+    pushf
+    cli
+    mov al, 1                   ; [cur_dirty]'s answer unless the draw below
+    cmp byte [gfx_lock_flag], 0 ; happens: ONE store at the foot where each
+    jne .pset                   ; arm carried its own immediate one (kernel
+    cmp byte [cur_level], 0     ; size pass 10: 5 bytes)
+    jl .pset
+    push si
+    push di
+    push es                     ; (BP is kbm_key's bank already)
+    mov ax, [mouse_x]
+    mov bx, [mouse_y]
+    mov bp, cur_move
+    call KERNEL_SEG:spw_near
+    pop es
+    pop di
+    pop si
+    mov al, 0
+.pset:
+    mov [cur_dirty], al
+    popf
+    pop bp
+    pop dx
+    pop cx
+    pop bx
+    clc                         ; spent
+    retf
+
+; -----------------------------------------------------------------------------
+; kbm_p5spend - turn a keypad-5 press the ISR saw into the button press
+;
+; The ISR only ever sets a byte: everything else the button does - the event,
+; the latch, the repeat guard - is kbm_btn's, and kbm_btn runs in TASK context
+; where every other button key already reaches it. So IRQ1 pushes nothing onto
+; the event queue and this needed no new rule about what an ISR may call.
+;
+; Called from the two places the keyboard mouse is serviced from, which
+; between them cover every state the machine can be in: kbm_poll0 (the modal
+; loops and a package's own tracking loop) and the end of kbm_ui (an ordinary
+; ui_task pass). In kbm_ui it must come AFTER .relax, or the press is released
+; by the same pass that made it - 9.6.1's flashing menu from a third direction.
+; out: nothing; AX and the flags clobbered - both callers have AX dead here
+;      (kbm_poll0 pops its own bank next, kbm_ui CLOBBERS EVERYTHING), which
+;      is what lets the press be a TAIL JUMP into kbm_btn, whose retf is this
+;      one's: no AX bank and no second contract for kbm_btn. FAR, slot 1
+;      (KBM_E_P5): an empty slot's mod_gone is the same nothing
+; -----------------------------------------------------------------------------
+kbm_p5spend:
+    xor al, al
+    xchg al, [kbm_p5]           ; read-and-clear in one, so a press arriving
+    or al, al                   ; between the test and the store cannot be lost
+    jnz kbm_btn                 ; (fr_restart's idiom, and for its reason): the
+    retf                        ; same one action Ins and Space take
 
 ; -----------------------------------------------------------------------------
 ; kbm_ui - the end of a ui_task pass: the ScrollLock edge, then the click latch
@@ -3533,11 +3649,12 @@ kbm_poll0:                      ; and kbm_pollm's own bank is the same push
 ;      stated rather than tightened because SPEC.md 7.1.4.1 is what a routine
 ;      promising more than it keeps costs here.
 ; -----------------------------------------------------------------------------
-kbm_ui:                         ; ui_task tests [mou_ptr] before calling
+kbm_ui:                         ; FAR, slot 2 (KBM_E_UI). ui_task tests
+                                ; [mou_ptr] before calling
                                 ; (kernel size pass 16: the second compare
                                 ; that was here went, -8): a machine with a
                                 ; mouse pays that compare and not the call
-    call kbm_shf                ; AL = the ScrollLock level, 0 or 10h: the bit
+    call kbmi_shf               ; AL = the ScrollLock level, 0 or 10h: the bit
     and al, 0x10                ; itself, which is all [kbm_slast] is compared
                                 ; with (AX is this routine's to spend)
     cmp al, [kbm_slast]
@@ -3546,15 +3663,15 @@ kbm_ui:                         ; ui_task tests [mou_ptr] before calling
     or al, al                   ; pass sees no edge
     jz .relax                   ; the FALLING edge raises nothing - the pointer
                                 ; is simply live again
-    call gfx_lock
+    call KERNEL_SEG:cw_gfx_lock ; (the cells are the doors, SPEC.md 2.8.8)
     mov cx, [mouse_x]
     mov dx, [mouse_y]
-    call wm_hit                 ; BX = the window under the pointer, 0 = none
+    call KERNEL_SEG:cw_wm_hit   ; BX = the window under the pointer, 0 = none
     or bx, bx
     jz .unlock
-    call wm_front               ; ...which activates it too, so the menu bar
+    call KERNEL_SEG:apic_wm_front ; ...which activates it too, so the menu bar
 .unlock:                        ; and the keyboard end up on the same window
-    call gfx_unlock
+    call KERNEL_SEG:cw_gfx_unlock
 .relax:
     cmp word [ui_ev + EV_TYPE], EVT_MDOWN
     jne .p5                     ; .p5, the spend: nothing to release is the
@@ -3571,38 +3688,80 @@ kbm_ui:                         ; ui_task tests [mou_ptr] before calling
                                 ; pass that made it (SPEC.md 9.6.4). A tail
                                 ; jump, for kbm_poll0's reason
 
-; mou_evfill - stamp an event record at DS:SI and queue it
-; in:  AX = EVT_*, SI -> an 8-byte record in DS, PRIVATE TO THE CALLER
-; out: nothing (evq_push's contract); AX clobbered, SI unmoved
-;
-; The same nine instructions stood in kbm_post and in mou_isr's .fill. THE TWO
-; BUFFERS STAY TWO and that is the point: kbm_ev is filled from the UI task
-; and mou_evrec from the serial mouse ISR, and only evq_push itself runs under
-; cli - so one shared buffer would let the ISR corrupt a half-filled record.
-; It is the RECORD that is shared here, not the storage.
-;
-; It ends `jmp evq_push` - a tail call, replacing the `call evq_push` each
-; site had, so the mouse ISR's peak stack depth does not move (SPEC.md 9.10's
-; 128-byte private stack is unchanged). Not hot: mou_isr reaches .fill only on
-; a button transition EDGE, and kbm_post's three callers are keyboard-mouse
-; key handlers.
-mou_evfill:
-    mov [si], ax
-    mov ax, [mouse_x]
-    mov [si+2], ax
-    mov ax, [mouse_y]
-    mov [si+4], ax
-    mov ax, [ticks]             ; birth time: two of these close together are
-    mov [si+6], ax              ; a double-click, exactly as a real one is
-    jmp evq_push                ; ...which preserves everything
-
 ; kbm_post - AX = event type, at the pointer, stamped now
-kbm_post:
+kbm_post:                       ; (near: the image's own three callers)
     push si
-    mov si, kbm_ev
-    call mou_evfill
+    push bp                     ; kbm_btn's and kbm_rclick's callers keep BP
+    mov si, kbm_ev              ; kbm_ev stays in DS (SPEC.md 9.6.7)
+    mov bp, mou_evfill
+    call KERNEL_SEG:spw_near
+    pop bp
     pop si
     ret
+
+kbmi_end:
+KBMI_SIZE   equ kbmi_end - $$
+%if KBMI_SIZE > 512
+  %error "the keyboard mouse's image is past ONE 512-byte granule (MEM_GRAN, SPEC.md 50.2.1): a mouseless machine would hold two for the session - a decision, not a drift (BOOT3-PLAN R17)"
+%endif
+B3M_SIZE    equ KBMI_SIZE       ; ...and it is all of `.boot3m` (boot3.inc)
+
+; -----------------------------------------------------------------------------
+; kbm_adopt - `.boot3`, near, from kmain_o's end: the image into a claim, when
+;             no pointer has spoken (SPEC.md 9.6.7, 2.8.8)
+; in:  DS = KERNEL_SEG, after every boot-time probe that can prove a pointer
+;      (mouse_init, the PS/2 reset, drv_boot_x's USBMOUSE.DRV, kern_emu's
+;      vmm_boot_x) and before as_boot launches anything
+; out: nothing; clobbers AX, BX, CX, DX, SI, DI, ES and the flags (kmain_o
+;      keeps nothing live across it)
+;
+; mod_need's claim and arm, without what is about a FILE: no system disk, no
+; ROM door, no header compare against another build's bytes - the image is
+; this assembly's, in RAM since kz_all. A refusal (no heap) leaves the row 0
+; and the slots on mod_gone: every key then passes through, which is the safe
+; direction. [mou_ptr] and not [mou_idany]: a mouse that answered identify
+; but never sent a packet still needs the arrows (SPEC.md 9.6.6).
+; -----------------------------------------------------------------------------
+B3SECT
+kbm_adopt:
+    cmp byte [mou_ptr], 0
+    jne .out                    ; a pointer: nothing claimed, ever
+    mov ax, (KBMI_SIZE + 15) / 16 ; paragraphs; the door rounds to the granule
+    mov bx, MEM_K_MOD
+    call b3_cgo                 ; top down and pinned, like every module image:
+    dw mem_claimp_hi_x          ; its base IS its CS
+    jc .out
+    mov [mod_r_kbm + MODR_SEG], dx
+    mov es, dx
+    push ds
+    mov ax, B3M_SEG             ; `.boot3m` where kz_all left it (boot3.inc)
+    mov ds, ax
+    xor si, si
+    xor di, di
+    mov cx, (KBMI_SIZE + 1) / 2
+    cld
+    rep movsw
+    pop ds
+    mov bx, KBFP                ; ...and the three slots, armed as mod_check
+    mov word [bx + KBM_E_KEY], kbm_key ; arms them (kern_mega: a real-mode
+    mov [bx + KBM_E_KEY + 2], dx ; segment, which mega_mods_fix converts and
+    mov word [bx + KBM_E_P5], kbm_p5spend ; mod_hiboot moves above 1MB at the
+    mov [bx + KBM_E_P5 + 2], dx ; switch)
+    mov word [bx + KBM_E_UI], kbm_ui
+    mov [bx + KBM_E_UI + 2], dx
+.out:
+    ret
+
+; kbm_dropf - `.cold`, far: the pointer half's claim back (SPEC.md 9.6.7). From
+; mou_hotplug's `.have` alone, on the UI task, after its task_yield; an empty
+; row is mod_free_row's no-op. Clobbers AL
+section .cold
+kbm_dropf:
+    mov al, MOD_KBM
+    call mod_drop
+    retf
+section .text
+
 
 kbm_old9    dd 0                ; the BIOS's int 09h, chained by kbm_isr
                                 ; (SPEC.md 9.6.4). .text with a real

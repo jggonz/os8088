@@ -1,9 +1,10 @@
 # `.boot3` — boot-only code that rides in KERNEL.SYS
 
-> **Status: BEING BUILT. Waves 0, 1, 2, 3 and 4 are built (2026-11-08, sections
-> 16.4, 16.5, 16.7, 16.8 and 16.10), and so are item E with the big review's
-> canary fix (BR-1) and boot-7 (section 16.6), and wave 4's two preconditions
-> boot-4 and boot-10 (section 16.9); wave 5 is not.** Written 2026-11-08 at the owner's
+> **Status: BUILT, host-checked; the final pass is owed. Waves 0, 1, 2, 3, 4
+> and 5 are built (2026-11-08, sections 16.4, 16.5, 16.7, 16.8, 16.10 and
+> 16.11), and so are item E with the big review's canary fix (BR-1) and boot-7
+> (section 16.6), and wave 4's two preconditions boot-4 and boot-10 (section
+> 16.9). Section 13's union of rows runs once, in the final pass.** Written 2026-11-08 at the owner's
 > request, after the big review's size ledger asked for a 14th blob sector
 > and the owner refused it (docs/reports/BIG-REVIEW-2026-11-08.md section 7,
 > docs/reports/big-review-2026-11-08/synth/phase1.md "Both boot-time homes
@@ -2665,3 +2666,184 @@ term's 128KB machine), `megahigh`. soak, host-only: `bootfloor`, `coldpic`,
 canary generator's and `t_canary`'s set (areas/boot.md question 4); the
 `os88boot` measurements that would turn this wave's PREDICTED call counts
 into MEASURED ones are the final pass's; wave 5.
+
+### 16.11 Wave 5 as built (build, 2026-11-08)
+
+Built against this tree's code; where the code disagreed with the plan the
+code won. Host checks only (CLAUDE.md's Testing rule): no emulator ran, no
+soak row was run through the suite, and nothing was booted; `bootfloor`,
+`coldpic` and `resident` ran by their scripts.
+
+**What moved, on every kernel:** `kbm_tab`, `kbm_key`, `kbm_btn`,
+`kbm_rclick`, `kbm_move`, `kbm_p5spend`, `kbm_ui` and `kbm_post` (and
+`kbm_pass`) out of `.text` into `.boot3m`, a module image after `.boot3` in
+KERNEL.SYS, with a module header, `MOD_KBM`'s row (`'KBMOUSE'`), `MODFP
+KBFP, MOD_KBM, 3`, and `kbmi_shf`, the image's own copy of `kbm_shf`.
+`kbm_adopt` (`.boot3`, near from `kmain_o` after `hb_probe_x`) claims it on
+`[mou_ptr]` = 0; `mou_hotplug`'s `.have` drops it through `kbm_dropf`
+(`.cold`, 6 bytes) after one `task_yield`. SPEC.md 2.8.8 and 9.6.7 are the
+contract.
+
+**What was measured** (the shipped KZIP maps, `kernsize` and kernel.kz.json,
+against the starting commit `54b82a5d` built in a worktree at the same commit
+count):
+
+| kernel | `.text` / `.bss` / `.cold` | static resident | a mouseless machine | `.boot3` + `.boot3m` (image) | lift (para) | boot arena | KERNEL.SYS | stage-2 calls (spare sectors) |
+|---|---|---|---|---|---:|---|---|---|
+| kern_big | −364 / +12 / +6 | **−346**: `KERN_SIZE` 96,768 → **96,256** | 512 claim, **+166** net | 5,847 → 6,372 (452) | 416 → 448 | 22,528 (unchanged: `HEAP_SEG` fell 32) | 84,704 → 84,864, **166 sectors either way** | 360KB/720KB 11 (0 spare, before and after), 1.2MB 7 (15), 1.44MB 7 (17) |
+| kern_emu | −364 / +12 / +6 | −346, no rung (96,768; the image rung's spare 150 → 502) | +166 | 5,949 → 6,484 | 416 → 448 | 22,528 → 22,016 | 84,912 → 85,088 (166 → **167**) | emu.img 7 either way (17 → 16 spare) |
+| kern_mega | −364 / +12 / +6 (`.cold` above 1MB) | **−352 conventional**: `MEGA_RESIDENT` 62,976 → **62,464** | 512 until `mega_enter`, then above 1MB | 5,637 → 6,165 (453) | 448 → 480 | 508,416 (unchanged) | 115,360 → 115,536, 226 sectors | mega.img 10, mega120.img 11 (cylinder model) either way |
+| kern_small | −364 / +12 / +6 | **−346**: `KERN_SIZE` 58,880 → **58,368** | 512, **+166** on the 128KB machine | 1,803 → 2,388 (452; + the 56-byte KGO pair) | 320 → 352 | 61,952 (unchanged) | 53,424 → 53,568, 105 sectors | small360/720 7 (5 → 6 spare) |
+
+`.boot2` and `.ovl` are unchanged on every kernel (3,102 / 3,161 on
+kern_big, 2,908 / 1,474 on kern_small, 3,019 / 3,160 on kern_mega, kernsize's
+NOKZIP `boot2`). **The hard constraint held without a compensating saving**:
+wave 4 left kern_big's packed tail ending 224 bytes into its last sector
+(288 free), and this wave's packed growth is 160 bytes, so the tail ends 384
+bytes into the same sector and KERNEL.SYS is 159 sectors read in the same 11
+stage-2 calls on 360KB and 720KB (`t_blobruns`, rc 0; `--tail 1` still
+red there). "0 packed sectors of slack" was 288 bytes of slack inside the
+last sector; it is 128 now. kern_emu's file crossed a sector (80 bytes free
+before) and emu.img's 1.44MB read absorbs it in the same 7 calls.
+
+**What was proven byte-identical, at one commit** (`make`, `make mega` and
+`make emu` in a worktree of `54b82a5d` under the scratchpad, against this
+tree before committing, both at build 971; every `.img`/`.bin`/`.sys`/`.drv`/
+`.o88`/`.rom` under `build/` compared by bytes): 379 identical, 75 differ,
+2 named only in the base (WIN16's path-keyed caches, wave 4's note).
+Identical: every apps, category, media, WIN16 and ARCADE disk in all its
+geometries, kern_mega's apps, WIN16 and XTMP3 disks, every non-kernel driver
+(`USBMOUSE`, `VMMOUSE`, `XMEM`, `ETHER`, `HDD`, `SOUND`, `VESA`, ...), and
+**kern_big's and kern_mega's `boothd.bin`/`BOOTHD.SYS`** - their `BLOB_SEG`
+did not move (`HEAP_SEG` fell by exactly the lift's step), so an installed
+hard disk's volume boot record needs no refresh for this wave on those two
+kernels (R11); kern_emu's did move. Differ, as this wave means them to: every
+kernel (`kernel-full.bin`, `kernel.bin`, `kernel.sys`), every boot sector,
+every kernel module (cut from the kernel image: its `MOD_STAMP` moved),
+`COLDHMA.SYS`, the nine system disks, and `util360.img` and `syscheck.o88` for
+section 16.10's reasons (`FSCHECK.DRV`, a kernel module; SYSCHECK's manifest).
+
+**Deviations.**
+
+1. **No `mod_need`, no `[rom_mfp]` door (the plan's step 3).** The image is
+   the running assembly's own bytes, so what `mod_need` adds - the system
+   disk, the ROM's SIZE/COPY, the header compare against another build - has
+   nothing to do. `kbm_adopt` claims through `mem_claimp_hi_x` (`b3_cgo`),
+   copies and arms the three slots itself: 70 transient bytes. With it went
+   the plan's kern_mega cost (the +4 `.text` door word and the ~+16 `.cold`
+   ROM-first arms: **0** here), R18 entirely (no door is swapped, so none can
+   be left installed), and B3's third registered hand-down. `mod_free_row`
+   is still the drop and `mod_hiboot` still moves it on kern_mega.
+2. **No resident gate (the plan's step 4).** `kbm_key`'s carry is
+   INVERTED in the image - CF = 0 "mine", CF = 1 "pass" - so an empty slot's
+   `mod_gone` (CF = 1, every register kept) IS "pass", and `ui_task` and
+   `kbm_poll0` call the slot directly (`call far [KBFP]` + `jnc`): no 12-byte
+   stub, no row test, +1 a site. `kbm_p5spend` and `kbm_ui` answer in no flag,
+   so their sites are +1 each too (the plan's +8 at `kbm_poll0` was a row
+   test). R15 is removed by construction, not guarded.
+3. **No new `retf` shims (the plan's 20 bytes).** The image reaches `.text`
+   through existing cells - `cw_mou_clamp`, `cw_gfx_lock`, `cw_gfx_unlock`,
+   `cw_wm_hit`, `apic_wm_front` (DOCK.DRV's door) - and `spw_near` for
+   `cur_move`, `sch_wake_ui` and `mou_evfill`, with BP in `kbm_key`'s frame
+   or `kbm_post`'s bank; `kbm_shf` is copied (`kbmi_shf`, 10 bytes of image).
+   And `menu_kbnav` is reached through **`api_far`** rather than `call
+   COLD_SEG:`, so **the image holds no segment word that moves**: `cfx_slide`,
+   the ROM, the HMA image and `mod_cfix` have nothing to re-point, os88cfx and
+   os88rom need no `.boot3m` classification, and os88rom's site walk proves it
+   (a `COLD_SEG` word there would fail the build as "in no section the ROM can
+   reach"). The plan's step 1 "`.boot3m` classified as a module image" in
+   os88cfx/os88rom is therefore not needed; os88rom learned only that a row
+   may have no image (`NOFILE_ROWS`, `dw 0, 0`).
+4. **`kbm_p5spend` tail-jumps into `kbm_btn`** (the plan: `push cs / call
+   kbm_btn`, +1, which os88ovlchk's return-kind rule refused as a near call
+   to a `retf` body): both callers have AX dead at that point, so its AX bank
+   went too.
+5. **R16: a worker MAY call `OSAPI_MOUSE` on a mouseless machine** - it is on
+   SPEC.md 20.6's worker-legal list and Cyclone's worker polls it every frame
+   (SPEC.md 67.11.3) - so the drop waits one scheduler round, as the plan said
+   to: a `task_yield` from task 0 before `call COLD_SEG:kbm_dropf` (3 bytes of
+   `.text`). The round-robin scan (`sch_switch`, `cur+1` upward, wrapping)
+   runs every ready task before task 0 again, and nothing on the image's
+   path blocks. Not covered: a worker of ANOTHER package during an fsx freeze
+   (SPEC.md 53.2), which is ineligible while the freeze holds - but the UI
+   task is too, so `.have` does not run then.
+6. **Open check 1, settled: kern_mega's module code half is readable** -
+   access byte 9Ah in `mega_ldt_alloc2` (above 1MB) and `mega_mods_fix`'s
+   conventional alias - so `kbm_tab` stays in the image and is read through
+   `cs:` on kern_mega too (the plan's −282 fallback is not needed).
+7. **The price is better than predicted**: −346 static (−352 conventional on
+   kern_mega) against the plan's −310 (−306); +166 heap on a mouseless machine
+   against +202; the image 452 bytes against "about 443". The glue is 44
+   bytes where the plan had 78 (82): the four sites +4, the row 4, the name 8,
+   the slots 12 (`.bss`), the `mod_fpt` word 2, the yield 3, the drop's site
+   5 and door 6.
+8. **The lift steps once on every kernel** (the plan said kern_big's would
+   not move): `.boot3`'s margin before a step was 331 bytes on kern_big and the
+   image and adoption are 525. On kern_big, kern_mega and kern_small the
+   resident saving moved `HEAP_SEG` down by the same 32 paragraphs, so the
+   blob - and `boothd`'s `BLOB_SEG` - did not move; on kern_emu, whose image
+   rung was not crossed, the blob rose 512 bytes.
+9. **`.boot3b` moved past `.boot3m`** (the plan did not name it): `ovc_buf` is
+   written by `drv_boot_x`'s SYSTEM.CFG read before `kbm_adopt` copies the
+   image, so a buffer on `.boot3`'s end would have overwritten it. `B3_EXT`
+   (`.boot3`, its paragraph pad, `.boot3m`) replaces `B3_SIZE` in `B3B_AT`,
+   `B3_RES`, the lift, the foot guards, `MODC_START` and kernsize's `boot3`
+   line (which also prints `b3m=` now).
+10. **`MOD_BNUM`** (mod.inc): the header's build word as an `equ`, because
+    `BUILD_NUM` is a `%define` that `apps.inc` includes after mouse.inc.
+11. **B9 now allows transfers inside `.boot3m`** (it refused the image's own
+    jumps), with a positive-control fixture (`kernel/m.inc`: an image calling
+    and jumping inside itself and a `.boot3` adopter naming an entry as an
+    immediate).
+12. **Two soak rows that fake a mouseless machine** - `wirefleetnomouse` and
+    `serlease`, which put `[mou_ptr]` back to 0 after their mouse moved -
+    would have found the half dropped. `tools/os88ui.py`'s new
+    `keep_kbmouse(m)` NOPs the drop (`mou_hotplug.kbmdrop`) before their first
+    mouse motion; both call it. They rest on MartyPC's mouse not sending a
+    packet during the boot, which is also what `kbmadopt` rests on; the final
+    pass is where that is seen.
+13. **`kbmadopt`'s two red arms** are runtime patches (the plan's first, "gate
+    `kbm_key` on `[mou_ptr]`", has no site in this shape): `--break key`
+    flips `ui_task.kbmk`'s `jnc` to `jc` (the inverted carry read the old way:
+    a passed key is eaten), `--break drop` NOPs `mou_hotplug.kbmdrop`. The row
+    is written and registered (soak, `secs` 45 ESTIMATED) and was NOT run,
+    nor were its red arms: both need MartyPC, which this wave does not run.
+14. **`tools/os88ladder.py`** learned `kbm_adopt` (its STAGES, note and title),
+    which its `--selfcheck` asked for.
+
+**Host checks run**: `make` (fast tier 76 passed, 1 skipped), `make mega`,
+`make emu`; `tools/kernsize.py` on all four (above); `tests/unit/t_blobruns.py`
+(rc 0), `t_canary.py`, `t_abilock.py`; `tools/checkdocs.py`;
+`tools/os88index.py --check`; the cheap soak host checks by their scripts:
+`bootfloor` (38 checks), `coldpic` (`os88romfix.py --check`), `resident`
+(4 kernels); `os88rom.py kernel` for both ROM kernels (kern_big 93+2+0+26
+sites, 148 module words in 11 modules, 260 bytes of the window spare;
+kern_small 47+2+0+3, 46 in 6 modules) and `--selfcheck`; `os88ladder
+--selfcheck`, `os88intguide --selfcheck`; the knob arms `NO_COLD_SLIDE` (with
+and without `KERN_KNOB`), `BOOT_MARK` (kern_big and kern_small), `NOKZIP` and
+kern_emu/kern_mega assembled to scratch files. `NO_ROM_COLD` with
+`KERN_KNOB` fails to assemble on `mou_p2knock`'s 64KB guard - **at the starting
+commit too**, so it is not this wave's (found, not fixed).
+
+**Rows to name** for the single final pass. fast (inside `make`): `ovlchk`,
+`canary`, `blobruns`, `blobbodies`, `bootfence`, `romtool`, `image`,
+`diskverify`, `livefull`, `moddrop`, `hotpar`, `movable`. full: `bootsmoke`,
+`small128` (the 128KB machine's +166), `megahigh`, `ps2mouse` (a pointer that
+settles at the boot: nothing adopted). soak, host-only: `bootfloor`,
+`coldpic`, `resident`. soak, emulator - the new row and the keyboard mouse:
+**`kbmadopt`** (new, with `--break key` and `--break drop` run by hand),
+`wirefleetnomouse`, `serlease`, `curshape`, `mouerrq`, `kbd4f`,
+`kbdpreempt`; a pointer that speaks after the boot: `usbmouse`; never
+adopted: `vmmouse` (kern_emu); the claim in an image: `hibernate`,
+`hibernatedrv`, `megahiber`, `heapmap`; the load paths and the moved `.cold`
+(the image names none of it, `api_far` does): `coldslide`, `rombig`,
+`romsmall`, `romnodisk`, `hmacold`, `hmadrv`, `hmahiber`; the boot and the
+lift: `kzboot`, `kzboot-off`, `splashbar`, `smallboot`, `bootfloor-ab`,
+`postboot`, `hdboot`, `hdtakeboot`, `install`, `buildmatrix`; kern_mega:
+`megamod`, `megaovl`.
+
+**Left undone**: running `kbmadopt` and its red arms, and measuring its
+`secs` (final pass); the R16 race itself has no row (no MartyPC script can
+place a preemption inside the image at the instant a mouse settles - said in
+the row's docstring); `NO_ROM_COLD` + `KERN_KNOB`'s pre-existing assembly
+failure.

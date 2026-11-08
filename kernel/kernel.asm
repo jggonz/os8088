@@ -1970,8 +1970,9 @@ HEAP_SEG    equ KERN_END        ; the claim heap (SPEC.md 50) starts where
 ; the forward reference creates no size cycle. boot2.asm's KZIP guard stays the
 ; EXACT check - a last block that GROWS adds to R past this bound
 KZ_MARGIN_K equ 64              ; boot2.asm's KZ_MARGIN (boot3.inc's guard)
-B3_END      equ B3_RAM * 16 + B3_SIZE + B3_RES
-B3_LIFT_RD  equ ((B3_RAM * 16 + B3_SIZE + KZ_MARGIN_K + 1022 + 511) & ~511) / 16 - HEAP_SEG
+B3_END      equ B3_RAM * 16 + B3_EXT + B3_RES ; (B3_EXT: `.boot3` and
+B3_LIFT_RD  equ ((B3_RAM * 16 + B3_EXT + KZ_MARGIN_K + 1022 + 511) & ~511) / 16 - HEAP_SEG
+                                ; `.boot3m` after it, boot3.inc)
 B3_LIFT_RS  equ ((B3_END + 511) & ~511) / 16 - HEAP_SEG
 B3_LIFT_F   equ 96 + (B3_LIFT_RD - 96) * (B3_LIFT_RD > 96)
 B3_LIFT_0   equ B3_LIFT_F + (B3_LIFT_RS - B3_LIFT_F) * (B3_LIFT_RS > B3_LIFT_F)
@@ -2215,9 +2216,13 @@ section .boot3   start=B3_START vstart=0 ; the third boot-only home, the
                                 ; is, the slide and its list - opens the
                                 ; section here, for `.boot2`'s `jmp
                                 ; boot2_entry` reason; the foot is at the foot
+section .boot3m  start=B3M_START vstart=0 ; ...the keyboard mouse's
+                                ; pointer half after it, a MODULE IMAGE that
+                                ; is copied into a claim and never run where
+                                ; it lies (SPEC.md 2.8.8, 9.6.7; mouse.inc)
 %ifdef B3B_ON                   ; ...and its NOBITS SCRATCH (SPEC.md 2.9.15.1,
 section .boot3b  nobits vstart=B3B_AT ; BOOT3-PLAN wave 2): SYSTEM.CFG's file
-%endif                          ; buffer, ovc_buf, past `.boot3`'s last byte
+%endif                          ; buffer, ovc_buf, past `.boot3m`'s last byte
                                 ; on the next LINEAR 512-byte boundary (it is
                                 ; a disk-read destination) - B3_SEG-relative,
                                 ; because its readers are `.boot3` bodies that
@@ -6067,6 +6072,13 @@ kmain_o:
                                 ; the first paint, because the answer is a
                                 ; window ui_task's first pass puts up
 %endif
+    call     kbm_adopt          ; ...and NO POINTER HAS SPOKEN: the keyboard
+                                ; mouse's pointer half out of `.boot3m` into a
+                                ; claim (SPEC.md 9.6.7, 2.8.8). After every
+                                ; probe that could prove one - mouse_init, the
+                                ; PS/2 reset, drv_boot_x's USBMOUSE.DRV,
+                                ; vmm_boot_x - and before as_boot launches
+                                ; anything, so the claim is the heap's top
 
     ; --- the WINDOW half is dead from here (SPEC.md 2.5.3) -------------------
     ; drv_boot's mount has taken the FAT window `.ovl` was read onto, so
@@ -7475,6 +7487,9 @@ mod_fpt:
 %ifdef OS88_SHORTCUTS
     MODFP SETFP, MOD_SETS, 1    ; the settings core's ONE slot, CPE_SC (2.8.7)
 %endif
+    MODFP KBFP, MOD_KBM, KBM_NENT ; the keyboard mouse's pointer half (2.8.8):
+                                ; its slots are the gate, an empty one being
+                                ; mod_gone's CF = 1, "not mine" (9.6.7)
 %if MODFP_I != MOD_MAX
   %error "MODFP: MODFP_I blocks against MOD_MAX rows"
 %endif
@@ -8934,8 +8949,10 @@ OVL_SIZE equ ovl_end - $$     ; `$$` is 0 here: `.ovl` has a vstart of its
 %ifdef KERN_MEGA
 MEGA_START   equ COLD_START + COLD_PARA * 16 ; `.mega` on its rung, over the
 %endif                                  ; cold one
-MODC_START   equ B3_START + B3_SIZE ; `.boot3` is the file's last section on
-                                    ; every kernel (these guards hold it past
+MODC_START   equ B3_START + B3_EXT ; `.boot3` - and `.boot3m` after it, the
+                                    ; keyboard mouse's image (BOOT3-PLAN wave
+                                    ; 5) - are the file's last sections on
+                                    ; every kernel (these guards hold them past
                                     ; `.cold`, `.ovl`, `.vga` and `.mega`)
 %if B3_START < COLD_START + COLD_SIZE || B3_START < OVL_START + OVL_SIZE
   %error "`.boot3` is not past `.cold` and `.ovl` in the file - MODC_START would cut into them"
@@ -9419,14 +9436,16 @@ SK_MEGA_KB equ SK_R(SK_CUM4) - SK_R(SK_CUM4 - MEGA_PARA * 16) ; rungs when they
                                  ; steer by it, and for a while the one it
                                  ; named was the looser of the two
   %assign KS_BLIFT  BLOB_LIFT    ; ...and the third boot-only home (SPEC.md
-  %assign KS_B3     B3_SIZE      ; 2.9.15): its size, segment and scratch, and
+  %assign KS_B3     B3_EXT       ; 2.9.15): its size, segment and scratch, and
+  %assign KS_B3M    B3M_SIZE     ; (B3_EXT counts `.boot3m`, wave 5's image,
+                                 ; which is also printed alone)
   %assign KS_B3RAM  B3_RAM       ; the blob's nobits floor, which is what a
   %assign KS_B3RES  B3_RES       ; 128KB machine's boot arena is measured
                                  ; from (kernsize's boot3 and boot lines)
   %assign KS_B2RES  BOOT2_PAD    ; (mem_init_x's floor: the blob alone on
                                  ; every kernel since BOOT3-PLAN wave 2 took
                                  ; ovc_buf from past it into `.boot3b`)
-  %warning ksb: boot3=KS_B3 b3ram=KS_B3RAM b3res=KS_B3RES b2res=KS_B2RES blift=KS_BLIFT
+  %warning ksb: boot3=KS_B3 b3m=KS_B3M b3ram=KS_B3RAM b3res=KS_B3RES b2res=KS_B2RES blift=KS_BLIFT
   %warning ks: text=KS_TEXT bss=KS_BSS cold=KS_COLD lowbss=KS_LOW vgabuf=KS_VGAB ovl=KS_OVL boot2=KS_BOOT2 stk0=KS_STK0 imgpara=KS_IMGP coldpara=KS_COLDP fatpara=KS_FATP lowpara=KS_LOWP vgabufpara=KS_VGABP ksize=KS_SIZE budget=KS_BUDGET codemax=KS_CODEM kend=KS_END kseg=KS_KSEG colds=KS_COLDS fats=KS_FATS lows=KS_LOWS vgas=KS_VGAS blobseg=KS_BLOB minramkb=KS_MINRAM bootmax=KS_BOOTMX grace=KS_GRACE toppara=KS_TOPP vga=KS_VGA vgars=KS_VGARS
   %ifdef KERN_MEGA              ; ...and kern_mega's own rung, on a line of
     %assign KS_MEGA  MEGA_SIZE  ; its own (tools/kernsize.py's `mega`

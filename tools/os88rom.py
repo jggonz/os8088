@@ -369,6 +369,12 @@ def cfix(img, home, new):
             return b
 
 
+# mod_tab rows whose image is NOT an os88mod cut but a section of the kernel
+# itself, adopted from memory at the boot (SPEC.md 2.8.8): the keyboard
+# mouse's pointer half, `.boot3m`. Its name is on no disk
+NOFILE_ROWS = ("KBMOUSE",)
+
+
 def cfix_prove(images, names, mods, home, vst):
     """THE PROOF mod_cfix needs no table (MOVABLE-COLD-PLAN 4): for every
     module image and every segment `.cold` can be moved to - the ROM's, the
@@ -621,6 +627,14 @@ def kernel_tables(build, variant):
             rowimg.append(r)
             continue
         same = [j for j in range(len(rows)) if fileof[j] == fileof[r]]
+        if not same and cstr(fileof[r]) in NOFILE_ROWS:
+            # A ROW ADOPTED FROM MEMORY (SPEC.md 2.8.8): its image is a
+            # section of the kernel itself, copied into a claim at the boot
+            # and never read - so the ROM holds no copy (SIZE refuses) and
+            # has no list for it (the image names no `.cold` segment, which
+            # the site walk above proves: a word there would fail it)
+            rowimg.append(None)
+            continue
         if len(same) != 1:
             fail(f"mod_tab row {r} names {cstr(fileof[r])!r}, which is no "
                  f"one image's file")
@@ -802,12 +816,15 @@ def write_romtab(t, path, held=None, pkg=None, hdrv=(), drvorg=0):
     if t["modfix"]:
         out.append("rt_mods:")              # per ROW (see kernel_tables)
         for n in t["rowimg"]:
+            if n is None:                   # a row with no image (2.8.8)
+                out.append("    dw 0, 0")
+                continue
             out.append(f"    dw rt_mod{n}, {len(L['mods'].get(n, []))}")
         for n in range(t["nmods"]):
             words(f"rt_mod{n}", L["mods"].get(n, []))
     out.append("rt_img:")                   # ...and the image each row has
     for n in t["rowimg"]:
-        if n in held:
+        if n is not None and n in held:
             out.append(f"    dw 0x{held[n]:04X}, {len(t['images'][n])}")
         else:
             out.append("    dw 0, 0")

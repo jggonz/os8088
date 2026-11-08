@@ -67,10 +67,17 @@ MOD_NFSCK   equ 0
 ; whole panel (SPEC.md 2.8.7). LAST, so every image keeps its id.
 %ifdef OS88_SHORTCUTS
 MOD_SETS    equ MOD_NIMG
-MOD_MAX     equ MOD_NIMG + 1
+MOD_KBM     equ MOD_NIMG + 1
 %else
-MOD_MAX     equ MOD_NIMG
+MOD_KBM     equ MOD_NIMG
 %endif
+; ...and MOD_KBM, the second row that is no image os88mod.py cuts: the
+; keyboard mouse's pointer half, `.boot3m`, ADOPTED FROM MEMORY at the boot's
+; end on a machine with no pointer and dropped when one first speaks
+; (SPEC.md 2.8.8, 9.6.7). No file on any disk names it, so mod_need is never
+; asked for it - kbm_adopt (mouse.inc) claims and arms it itself. LAST, for
+; MOD_SETS's reason
+MOD_MAX     equ MOD_KBM + 1
 MOD_CTRL    equ 0               ; the Control Panel (SPEC.md 31)
 MOD_FMT     equ 1               ; the floppy formatter (SPEC.md 18.96)
 MOD_DISKOPS equ 2               ; DISKOPS.DRV: the cloner, Write Img and
@@ -134,6 +141,11 @@ MOD_MAX_KB  equ 16              ; the biggest module image we will claim,
 ; are known. Summed rather than hashed: the point is that two builds of one
 ; commit differ, and a section size differing by ONE byte moves every address
 ; above it.
+MOD_BNUM    equ BUILD_NUM       ; ...and the build number as an ASSEMBLER number,
+                                ; for a header met before apps.inc %includes
+                                ; buildnum.inc: mouse.inc's `.boot3m` (SPEC.md
+                                ; 2.8.8). BUILD_NUM is a %define, which cannot
+                                ; be named ahead of its line; an equ can
 %ifdef KERN_MEGA                ; ...and `.mega`'s, or code moving from `.text`
 MOD_STAMP   equ (KTEXT_SIZE + KBSS_SIZE + COLD_SIZE + MEGA_SIZE + KLOW_SIZE) & 0xFFFF
 %else                           ; to `.mega` would keep the sum and move every
@@ -216,6 +228,8 @@ mod_hdrt:   dw 0x384F           ; MOD_H_MAGIC
             dw MOD_STAMP        ; MOD_H_STAMP
 
 mod_f_serial: db 'SERIAL.DRV',0 ; SPEC.md 115: explicit Connect loads it
+mod_f_kbm:  db 'KBMOUSE', 0     ; SPEC.md 2.8.8: no file has this name - it is
+                                ; what the RAM view calls the claim
 mod_tab:
     dw 0, mod_f_ctrl            ; MOD_CTRL
     dw 0, mod_f_fmt             ; MOD_FMT
@@ -253,6 +267,8 @@ mod_r_dock:
 %ifdef OS88_SHORTCUTS
     dw 0, mod_f_ctrl            ; MOD_SETS: the SAME file, cut short (2.8.7)
 %endif
+mod_r_kbm:                      ; MOD_KBM, NAMED for mod_r_fdlg's reason:
+    dw 0, mod_f_kbm             ; kbm_adopt (mouse.inc) stores its claim here
 mod_tab_end:                    ; (a label and no byte: tools/os88rom.py
                                 ; counts the ROWS by it, MOD_SETS included,
                                 ; because the ROM answers per row)
@@ -751,7 +767,10 @@ MOD_HIOK_SETS equ 1 << MOD_SETS ; CTRL.DRV's settings core, the same file
 MOD_HIOK_SETS equ 0
 %endif
 %ifdef KERN_BIG
-MOD_HIOK equ (1 << MOD_CTRL) | (1 << MOD_FMT) | (1 << MOD_DISKOPS) | (1 << MOD_HIBER) | (1 << MOD_DOCK) | (1 << MOD_EXT) | (1 << MOD_WIN) | (1 << MOD_DESK) | (1 << MOD_STIKM) | MOD_HIOK_SETS
+MOD_HIOK equ (1 << MOD_CTRL) | (1 << MOD_FMT) | (1 << MOD_DISKOPS) | (1 << MOD_HIBER) | (1 << MOD_DOCK) | (1 << MOD_EXT) | (1 << MOD_WIN) | (1 << MOD_DESK) | (1 << MOD_STIKM) | MOD_HIOK_SETS | (1 << MOD_KBM)
+; (MOD_KBM, the keyboard mouse's adopted image, SPEC.md 2.8.8: armed at the
+; boot in real mode like any boot-loaded module, so mod_hiboot moves it; its
+; code half is readable, access byte 9Ah, so its table reads through CS hold)
 %else
 MOD_HIOK equ 0
 %endif

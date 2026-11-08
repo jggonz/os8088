@@ -1763,6 +1763,9 @@ chrome (§76.14), `DESK.DRV`, the desk layer's verbs, hover edge, show
 and key arms (§11.103.10), and `STIKMENU.DRV`, Locator's Sticky Apps menu
 (§110.12); `kern_small` instead carries
 `FILECP.DRV` and `FDLG.DRV` (§22.3, §38.0), bodies `kern_big` keeps resident.
+**Every kernel has one row with no file at all**, `KBMOUSE`: the keyboard
+mouse's pointer half, a section of KERNEL.SYS adopted into a claim at the
+boot when no pointer has spoken (§2.8.8).
 **On the disk every one is a `'CZ'` container** (§20.13.5): `os88mod.py`
 checks each image the way `mod_check` will and then wraps it, `mod_need`
 sizes its claim from the directory hint `drv_find` reads, and the transparent
@@ -1856,12 +1859,13 @@ in the tree.
   bytes) allocated and never armed on each kernel, made an eighth entry a hard
   NASM error in whichever module grew, and could not be per-build because the
   host tool scraped it with a regex. Removing it was −36 bytes on `kern_big`
-  and −38 on `kern_small`. `MOD_MAX` is 11 on `kern_big` (ten images and
-  `MOD_SETS`, §2.8.7) and 6 on `kern_small`. BIG has `MOD_HIBER` 3,
-  `MOD_DOCK` 4, `MOD_EXT` 5, `MOD_WIN` 6, `MOD_DESK` 7 (`DKD_NENT` 4,
-  §11.103.10), `MOD_STIKM` 8 (`SMN_NENT` 2, §110.12), `MOD_SER` 9
-  (`SERIAL.DRV`, §115) and `MOD_SETS` 10;
-  SMALL has `MOD_FCP` 3, `MOD_FDLG` 4 and `MOD_SER` 5.
+  and −38 on `kern_small`. `MOD_MAX` is 12 on `kern_big` (ten images,
+  `MOD_SETS`, §2.8.7, and `MOD_KBM`, §2.8.8) and 7 on `kern_small`. BIG has
+  `MOD_HIBER` 3, `MOD_DOCK` 4, `MOD_EXT` 5, `MOD_WIN` 6, `MOD_DESK` 7
+  (`DKD_NENT` 4, §11.103.10), `MOD_STIKM` 8 (`SMN_NENT` 2, §110.12),
+  `MOD_SER` 9 (`SERIAL.DRV`, §115), `MOD_SETS` 10 and `MOD_KBM` 11
+  (`KBM_NENT` 3); SMALL has `MOD_FCP` 3, `MOD_FDLG` 4, `MOD_SER` 5 and
+  `MOD_KBM` 6.
 - **`mod_fpr` indexes by `MOD_TAB_OFF` and not `mod_tab`, and that is an
   ASSEMBLER constraint rather than a taste.** An expression like
   `mod_fpt - mod_tab/2` is label arithmetic nasm 3 refuses outright
@@ -1939,7 +1943,8 @@ smaller. `DESK.DRV` shipped that way until §11.103.10's drop rule.
 `tests/unit/t_moddrop.py` (fast tier) reads every `mod_tab` row and fails the
 build unless the row's `MOD_*` reaches a `mod_drop` in kernel code, or
 `tests/moddrop.txt` says why that module is held until restart. The list
-turns one way and is empty today.
+turns one way and is empty today. `MOD_KBM`'s drop is the one a feature does
+not decide: it belongs to the first pointer that speaks (§2.8.8).
 
 #### 2.8.4 A refusal is a normal path, and the caller owes the reason
 
@@ -2281,6 +2286,99 @@ paid for by the decode it skips. kern_big resident: `.text` +6 (the row and
 its `mod_fpt` word), `.bss` +9 (the slot block and `[dskw_trunc]`), `.cold`
 +88 (`mod_need`, `mod_check`, `dskw_rbody` and `sc_modcall`), **+103 bytes
 in all**.
+
+#### 2.8.8 A row adopted from memory: `KBMOUSE`, the keyboard mouse's pointer half
+
+**One row has no file.** `MOD_KBM` (`kernel/mod.inc`, the last row: 11 on
+kern_big, kern_emu and kern_mega, 6 on kern_small, so `MOD_MAX` is 12 and 7)
+is the keyboard mouse's pointer half (§9.6.7): the direction table, the key
+test, the button, the right button, the step and paint, keypad 5's spend and
+the end-of-pass service - what only a machine with **no** pointer runs. Its
+image is `.boot3m`, the section after `.boot3` in KERNEL.SYS (§2.9.15),
+assembled with the kernel and carrying a module header like every image
+(§2.8.2: id `MOD_KBM`, `KBM_NENT` 3, `MOD_BNUM` - `BUILD_NUM` as an assembler
+number, because the header is met before `apps.inc` includes the build
+number), but it is never cut out, is on no disk and is never read:
+`os88mod.py` does not see it and `mod_need` is never asked for it. Its file
+name, `'KBMOUSE'`, is what the RAM view calls the claim (§28). It was the
+owner's shape (BOOT3-PLAN wave 5), preferred over a `KBMOUSE.DRV` module: no
+disk read, no cluster on any disk, no system-disk dependency.
+
+**Adoption.** At `kmain_o`'s end - after every boot-time probe that can
+prove a pointer (`mouse_init`, the PS/2 reset, `drv_boot_x` and its
+USBMOUSE.DRV, kern_emu's `vmm_boot_x`) and before `as_boot` launches
+anything, so the claim is the heap's top - `kbm_adopt` (`.boot3`) asks
+`[mou_ptr]`. With no pointer it claims the image's paragraphs through
+`mem_claimp_hi_x` (`MEM_K_MOD`: top down and pinned, as every module image is
+- its base is its CS), copies `.boot3m` into the claim, stores the segment in
+the row (`mod_r_kbm`) and arms the three `KBFP` slots. That is `mod_need`'s
+claim and arm without what is about a FILE - the system disk, the ROM door
+(§2.10.5), the header compare against another build's bytes: the image is the
+running assembly's own, in RAM since `kz_all`. A refusal (no heap) leaves the
+row 0 and the slots on `mod_gone`, so every key passes through - the safe
+direction. A machine with a pointer claims nothing. `.boot3`'s KGO hop
+`b3_cgo` reaches `mem_claimp_hi_x`; kern_small, whose `.boot3` had no pair
+(it reads no SYSTEM.CFG), gains `KGO_PAIR b3` in boot3.inc's foot (56
+transient bytes).
+
+**No relocation of any kind.** The image names no segment that moves:
+`menu_kbnav` (`.cold`) is reached through `api_far` (`call KERNEL_SEG:api_far`
+with BP = the target - `api_far` pushes where `.cold` RUNS), and `.text`
+through its cells and `spw_near` (`cw_mou_clamp`, `cw_gfx_lock`,
+`cw_gfx_unlock`, `cw_wm_hit`, `apic_wm_front`; `spw_near` for `cur_move`,
+`sch_wake_ui` and `mou_evfill`), so `cfx_slide`, the ROM's lists (§2.10.4),
+the HMA image and `mod_cfix` have nothing to do for it and no shim was added.
+`tools/os88rom.py` proves it - a `COLD_SEG` word in `.boot3m` falls in no
+section the ROM can reach and fails the build - and files the row as one
+with no image (`dw 0, 0` in `rt_img` and `rt_mods`). On kern_mega the slots
+are armed in real mode, `mega_mods_fix` converts them at the switch and
+`mod_hiboot` moves the image above 1MB (`MOD_KBM` is in `MOD_HIOK`) like every
+module the boot loaded; its code half is readable (access byte 9Ah,
+`mega_ldt_alloc2` and `mega_mods_fix` alike), so the table's reads through
+`cs:` hold there.
+
+**The gates are the slots: `mod_gone` means "not mine".** A slot nothing
+armed answers `mod_gone` - CF = 1, every register kept. The image's
+`kbm_key` answers **CF = 0** for a key it took (AX spent) and CF = 1 for one
+it passed - inverted against the resident routine it replaced - so its two
+callers, `ui_task` and `kbm_poll0`, `call far [KBFP + KBM_E_KEY]` and read
+CF = 1 as "pass" whether the image said so or the slot is empty. There is no
+row test and no resident stub: that is BOOT3-PLAN R15's hazard (an empty slot
+eating every key) removed by construction rather than guarded. Keypad 5's
+spend and the end-of-pass service answer in no flag, so an empty slot is
+harmless there too, and `kbm_ui`'s call stays behind ui_task's `[mou_ptr]`
+test (§9.6.1.1).
+
+**The drop belongs to the first pointer.** `[mou_ptr]` is set in interrupt
+or worker context (§9.6.6), where nothing may free a claim, so the drop is
+`mou_hotplug`'s `.have` arm, which runs once, on the UI task, on the first
+pass after any backend settles: one `task_yield`, then `call
+COLD_SEG:kbm_dropf`, a 6-byte `.cold` door to `mod_drop`. **The yield is
+R16's answer**: `OSAPI_MOUSE` is on §20.6's worker-legal list (Cyclone's
+worker polls it every frame, §67.11.3), so a worker can be inside the image,
+preempted, at the instant `[mou_ptr]` lands; a yield from task 0 runs every
+ready task once before task 0 again (§8's round-robin scans `cur+1` upward
+and wraps), and nothing on the image's path blocks, so that slice is the one
+it leaves on. `mod_free_row` disarms before it frees, and an empty row is its
+no-op, so a machine that never adopted pays one yield and one call, once.
+**Nothing re-adopts**: unplugging the mouse does not bring the keyboard mouse
+back (§9.6.1.1).
+
+**What it costs, MEASURED at BOOT3-PLAN wave 5** (`kernsize`, against the
+commit before; §9.6.7 has the per-kernel table): `.text` −364, `.bss` +12
+(the slots), `.cold` +6 (the door) - **−346 bytes static** on kern_big,
+kern_small and kern_emu, with `KERN_SIZE` one 512-byte step lower on the
+first two (kern_emu's image rung had 150 bytes of spare and now has 502), and
+**−352 conventional** on kern_mega, whose `.cold` goes above 1MB
+(`MEGA_RESIDENT` one step lower). On a
+**mouseless** machine the claim is one 512-byte granule (§50.2.1; the image is
+452 bytes, and an `%error` at 512 makes a second granule a decision), so it
+holds **+166 bytes net** for the session; a machine with a mouse holds
+nothing. `KERNEL.SYS` grows 160 bytes on kern_big and stays 166 sectors - the
+moved bytes are LZ4-packed in the same stream - so **no `int 13h` call is
+added on any shipped disk** (`t_blobruns`).
+
+`tests/unit/t_moddrop.py` finds the row's drop in `kbm_dropf`.
 
 ### 2.9 Stage 2 — the loader is not in the boot sector any more
 
@@ -3411,10 +3509,11 @@ unbounded decision below is worth about 200 ms of it.
     [ ...          LZ4 blocks     ]  what stage 2 expands into where the head ends
 ```
 
-**The LZ4 blocks END WITH `.boot3`** on every kernel (§2.9.15): the
-file's last section, so its bytes are the last block's tail and arrive after
-the bar is up, priced by `t_blobruns --tail N` (fast tier). Before the
-modules, as every section is.
+**The LZ4 blocks END WITH `.boot3`** on every kernel (§2.9.15), **and
+`.boot3m` after it** (BOOT3-PLAN wave 5, §2.8.8): the file's last sections, so
+their bytes are the last block's tail and arrive after the bar is up, priced
+by `t_blobruns --tail N` (fast tier). Before the modules, as every section
+is.
 
 **The head cannot be packed**, and that is §15's constraint rather than a
 choice: `spl_tick` far-calls `viddet.inc` while the rest of the kernel is
@@ -3877,9 +3976,19 @@ mouse and drive captions and `spl_finish`. `SPLGATE`/`SPLGATE1`/`SPLSTUB` and
 `spl_gate` went with their last sites (§2.9.5.2): **−22 bytes of `.text`**
 on kern_big, kern_emu and kern_mega, −18 on kern_small.
 
+**...and since wave 5, the keyboard mouse's adoption** (every kernel):
+`kbm_adopt`, near-called from `kmain_o`'s end, copies the section after this
+one, **`.boot3m`** - the pointer half's module image (§2.8.8, §9.6.7) - into a
+claim when no pointer has spoken. `.boot3m` is not a `.boot3` body: it is never
+run where it lies (rule B9), only copied, and it names no segment that moves.
+kern_small gains `.boot3`'s KGO pair (`KGO_PAIR b3`, boot3.inc's foot) for
+the one `.cold` body the adoption reaches, `mem_claimp_hi_x`.
+
 ##### 2.9.15.1 Where it sits, and when it is alive
 
-It is the file's last section (`MODC_START = B3_START + B3_SIZE`), so
+It is the file's last section but one - `.boot3m` follows it on the next
+paragraph (`B3M_OFF`, `B3M_SEG`), and `B3_EXT` is the two together, so
+`MODC_START = B3_START + B3_EXT` - so
 `B2_KSECS`, `KZ_SECS`, `kz_all`, `kz_hd` and boothd's read cover it with no
 loader change, and it is LZ4-packed as the end of the last block. It lands
 at `B3_RAM` = `B3_SEG`, a constant:
@@ -3893,8 +4002,10 @@ at `B3_RAM` = `B3_SEG`, a constant:
 
 **`.boot3b` is its nobits scratch** (wave 2), on every kernel that reads
 SYSTEM.CFG: the settings file's buffer `ovc_buf`, `CFG_FBUF` rounded up to a
-sector, at `B3B_AT` - the next LINEAR 512-byte boundary past `.boot3`'s last
-byte, `B3_SEG`-relative (it is a disk-read destination, §1, and its readers
+sector, at `B3B_AT` - the next LINEAR 512-byte boundary past `.boot3m`'s last
+byte (wave 5: `drv_boot_x`'s SYSTEM.CFG read lands there BEFORE `kbm_adopt`
+copies the image out, so below the image's end it would overwrite it),
+`B3_SEG`-relative (it is a disk-read destination, §1, and its readers
 reach it through CS). `B3_RES` counts the pad and the buffer (926 bytes on
 kern_big, 914 on kern_mega). Until wave 2 the buffer was the paragraphs past
 the blob and `BOOT2_RES` (`BOOT2_PAD` + 512) was the heap's floor at boot;
@@ -3950,8 +4061,9 @@ they went then, and a `B3SECT` body is in `.boot3` everywhere.
 ```
 CEIL512(x) = (x + 511) & ~511
 LIFT0      = max(96,
-                 CEIL512(B3_RAM*16 + B3_SIZE + KZ_MARGIN + 1022)/16 - HEAP_SEG,
-                 CEIL512(B3_RAM*16 + B3_SIZE + B3_RES)/16          - HEAP_SEG)
+                 CEIL512(B3_RAM*16 + B3_EXT + KZ_MARGIN + 1022)/16 - HEAP_SEG,
+                 CEIL512(B3_RAM*16 + B3_EXT + B3_RES)/16          - HEAP_SEG)
+             (B3_EXT: `.boot3` and `.boot3m` after it, wave 5)
 BLOB_LIFT  = LIFT0, or - when [blob, blob + BOOT2_PAD) at LIFT0 would cross
              a 64KB page - the lift that puts the blob ON that page boundary
 ```
@@ -3984,7 +4096,11 @@ the rest of `.ovl`'s relief, 1,992 bytes on kern_big) they go to **352**
 blob's non-splash bodies) they go to **416** (kern_big, kern_emu: `.boot3`
 5,847 and 5,949 bytes) and **448** (kern_mega, 5,637), the read's term; and
 kern_small's to **320** (`.boot3` 1,803), the page term's - the read's would
-have been 192. A step is 512
+have been 192. At wave 5 (`.boot3m`, 452 bytes, and the adoption) kern_big's
+goes to **448** (`B3_EXT` 6,372), the read's term, and the blob's floor does
+not move - `HEAP_SEG` fell the same 32 paragraphs with the resident bytes the
+wave took out; kern_small's to **352** (2,388), the page term holding the
+blob at 0x10000. A step is 512
 bytes of BOOT RAM, never a resident byte - and an installed hard disk's
 volume boot record must be refreshed with the kernel (§52.10).
 
@@ -4017,13 +4133,14 @@ each with a fixture that must fail it on every run:
 | B6 | a `KZ_*`, `b2_*` or post-`boot2_entry` name in `.boot3` (§2.9.13.4's identity), and a `B3CALL` after `drv_boot_x` to a body that reaches `.ovl` |
 | B7 | `.boot3` in a file `kerndos/kdos.asm` includes, unless `kerndos/kdlayout.inc` declares it |
 | B8 | `B3CALL` at a non-`.boot3` target, `B2CALL` outside `.boot3` or at a non-blob target, either macro outside `kernel/` - a site written inside a `%macro` body judged at each expansion (it held the fallback words to each other until wave 1 retired them) |
-| B9 | any transfer into `.boot3m`, which is copied and never run in place (BOOT3-PLAN wave 5) |
+| B9 | any transfer into `.boot3m` from outside it (its own jumps and calls are the image's), which is copied and never run in place (BOOT3-PLAN wave 5; §2.8.8) |
 
 The kernel's own guards (boot3.inc, kernel.asm): `b3_live - $$ >=
 KVGABUF_SIZE` where the slide shares `.vgabuf`'s RAM, and no overlap with
-`.vgabuf` where nothing does; `B3_SIZE + B3_RES <= 0xFFF0`; `.boot3` and its
-scratch below the blob; `.boot3b` on a linear 512-byte boundary past
-`.boot3`; `.boot3` past `.cold`, `.ovl`, `.vga` and `.mega` in the file, so
+`.vgabuf` where nothing does; `B3_EXT + B3_RES <= 0xFFF0`; `.boot3`,
+`.boot3m` and the scratch below the blob; `.boot3b` on a linear 512-byte
+boundary past `.boot3m`; the image (`KBMI_SIZE`) at most one 512-byte granule
+(mouse.inc, BOOT3-PLAN R17); `.boot3` past `.cold`, `.ovl`, `.vga` and `.mega` in the file, so
 that it is the last section `MODC_START` follows; NOKZIP's flat read, rounded
 to whole sectors as `B2_KSECS` rounds it, below the blob (wave 2); `KZ_MARGIN_K
 == KZ_MARGIN`.
@@ -15626,10 +15743,13 @@ is nothing to click: the menu bar, the dock, the drive icons and every window
 control are unreachable, so the desktop is a picture of an operating system
 rather than one. The arrow keys become the mouse.
 
-Gated on **`[mou_seen]`** — the byte §9.4 and §9.5 already keep — so a machine
-whose mouse has spoken never enters any of it, and the cost there is one
-compare per keystroke. Verified: with a mouse present the arrows reach
-applications untouched.
+Gated on **`[mou_ptr]`** (§9.6.6) — set the first time any pointer proves
+itself — so a machine whose mouse has spoken never enters any of it. Since
+BOOT3-PLAN wave 5 it is **two halves** (§9.6.7): what every machine runs is
+resident, and the pointer half is a module image adopted at the boot's end
+only when nothing has spoken, so a machine with a mouse carries none of it
+and pays one far call per keystroke to an empty slot. Verified: with a mouse
+present the arrows reach applications untouched.
 
 **What it takes from applications**, which is a decision rather than an
 accident. An 83/84-key keyboard has no separate cursor pad — the arrows *are*
@@ -16200,10 +16320,13 @@ machine has one.
 `[mou_ptr]` is the second question, one byte, set by whichever backend proves
 itself — `MOU_SETTLE_STORES` beside `[mou_seen]`, for every backend's settle
 (§9.5.1.1), and `vmm_boot_x`'s own copy —
-and never cleared. The five consumers that mean "is there a pointer" now read
-it: `kbm_key`, `kbm_ui`, `kbm_isr`'s two gates, `osapi_mouse`'s poll and
-`fm_drag`'s disambiguation (§9.6.1). The serial contest keeps `[mou_seen]`
-and is untouched.
+and never cleared. The consumers that mean "is there a pointer" read it:
+`kbm_key` (the adopted image's own test, for the passes between a settle and
+the drop), ui_task's `kbm_ui` call, `kbm_isr`'s two gates, `osapi_mouse`'s
+poll, `fm_drag`'s disambiguation (§9.6.1) - and, once at the boot's end,
+`kbm_adopt`, which is why it decides the adoption (§9.6.7): a mouse that
+answered identify but never sent a packet still needs the arrows. The serial
+contest keeps `[mou_seen]` and is untouched.
 
 **`[mou_ptr]` is still not `[mou_seen]` even though §9.9's backend enters
 the contest** — `mou_p2_byte` does set `[mou_seen]` when its first complete
@@ -16243,7 +16366,10 @@ with a mouse it does nothing at all.
 It was still being **called** to find that out, 671 times a second, from the UI
 ladder's tail: a near call, a compare and a return is ~65 cycles, and at that
 rate it is **0.93% of the machine** for a subsystem that is retired for the
-rest of the boot. The test is at the call site now.
+rest of the boot. The test is at the call site now. **Since BOOT3-PLAN wave 5
+retiring also gives the memory back**: on a machine that adopted the pointer
+half, `mou_hotplug`'s `.have` - the first UI pass after the settle - drops its
+claim (§9.6.7), and the slots answer `mod_gone` from then on.
 
 **Unplugging the mouse does not bring the keyboard mouse back**, and that is a
 deliberate narrowing rather than an oversight: nothing in this system notices a
@@ -16251,6 +16377,42 @@ serial mouse leaving, the old behaviour only appeared to survive an unplug
 because the poll never stopped, and a machine that loses its pointer mid-session
 is not a case worth 0.93% of an 8088 in every other session. If it is ever
 wanted, it is a **key combination** — an event — not a poll.
+
+#### 9.6.7 Two halves: the keys every machine reads, and the pointer only a mouseless one runs
+
+**Since BOOT3-PLAN wave 5 the keyboard mouse is not resident on any kernel.**
+It was ~456 bytes of `.text` (kernel size pass 18) and, for years, the
+"first candidate to remove" if footprint came first; the owner's answer was
+to keep it and stop paying for it where it is not used (big review, second
+round). Split on WHO runs each part:
+
+| half | what | where | why there |
+|---|---|---|---|
+| resident | `kbm_isr`/`kbm_i15` and `KBM_SCAN`, `kbm_shf`, `mou_clamp`, `kbm_pollm`/`kbm_poll`/`kbm_poll0`, `mou_evfill`, the state (`kbm_p5`, `kbm_step`/`kbm_lastk`, `kbm_last`, `kbm_btick`, `kbm_slast`, `kbm_eat`, `kbm_ev`, `kbm_old9`, `kbd_*`) | `.text` | IRQ1's handler is every machine's (it wakes the UI task and guards the BIOS buffer, §9.8); the modal polls eat the keys a menu, drag or grow would leave wedged on every machine; `kbm_ev` must be DS:SI for `mou_evfill`; and a kern_mega code half above 1MB cannot be written |
+| pointer | `kbm_tab`, `kbm_key`, `kbm_btn`, `kbm_rclick`, `kbm_move`, `kbm_p5spend`, `kbm_ui`, `kbm_post`, and `kbmi_shf` (its own copy of `kbm_shf`) | `.boot3m`, adopted into a `MEM_K_MOD` claim (§2.8.8) | reached only in task context, from `ui_task` and `kbm_poll0` - never from an ISR |
+
+The pointer half is reached through three far slots, `KBFP` (`KBM_E_KEY`,
+`KBM_E_P5`, `KBM_E_UI`); `kbm_key` answers **CF = 0 for "mine"**, so an empty
+slot's `mod_gone` (CF = 1) is "not mine" and every key passes - which is what
+a machine with a mouse, and a machine whose half was dropped, both need
+(§2.8.8). The adoption is `kbm_adopt` at `kmain_o`'s end, on `[mou_ptr]` =
+0; the drop is `mou_hotplug`'s `.have`, after one `task_yield` (§2.8.8, R16).
+A machine whose serial mouse is not touched by the end of the boot holds the
+claim until its first packet, a few seconds.
+
+**MEASURED** (`kernsize` and `kernel.kz.json`, against the commit before):
+
+| | kern_big | kern_emu | kern_small | kern_mega |
+|---|---|---|---|---|
+| `.text` / `.bss` / `.cold` | −364 / +12 / +6 | −364 / +12 / +6 | −364 / +12 / +6 | −364 / +12 / +6 (`.cold` above 1MB after the switch) |
+| static resident | **−346**; `KERN_SIZE` 96,768 → 96,256 | **−346**; no rung crossed (`KERN_SIZE` 96,768 either way; the image rung's spare 150 → 502) | **−346**; `KERN_SIZE` 58,880 → 58,368 | **−352 conventional**; `MEGA_RESIDENT` 62,976 → 62,464 |
+| a mouseless machine's claim | 512 (image 452): **+166** net for the session | the same | 512: **+166**, on the 128KB machine | 512 conventional from the adoption to `mega_enter`, then **0**: `mod_hiboot` moves it above 1MB (an `mx_tab` block); +160 if the pool refuses it |
+| `.boot3` + `.boot3m` (lift) | 5,847 → 6,372 (416 → 448 paragraphs; the blob's floor stays 0x1A800, `HEAP_SEG` having fallen 32) | 5,949 → 6,484 (416 → 448; `HEAP_SEG` did not fall, so the blob's floor rose 0x1A800 → 0x1AA00: 512 bytes of the 128KB boot arena) | 1,803 → 2,388 (320 → 352; the page term keeps the blob at 0x10000) | 5,637 → 6,165 (448 → 480; the floor stays 0x23E00) |
+| KERNEL.SYS | 84,704 → 84,864, 166 sectors either way | 84,912 → 85,088, 166 → 167 sectors - emu.img's 1.44MB stage 2 has 16 to spare and reads it in the same 7 calls | 53,424 → 53,568, 105 sectors | 115,360 → 115,536, 226 sectors either way |
+
+No `int 13h` call is added on any shipped disk: kern_big's packed tail grew
+160 bytes inside the sector it already ended in (`t_blobruns`, whose 360KB and
+720KB rows had no sector to spare after wave 4).
 
 ### 9.7 The key-state map — is this key DOWN right now?
 
@@ -99936,6 +100098,13 @@ On `kern_mega` in protected mode the plain paragraph door hands its count to
 cache goes to the pool above 1MB and the pool counts in KB; the half-KB it
 rounds is not conventional memory anybody else wanted.
 
+**The one claim a whole machine class holds for the session because of the
+granule** is the keyboard mouse's pointer half (§2.8.8, §9.6.7): a 452-byte
+image in one 512-byte granule, taken through `mem_claimp_hi_x` on a machine
+with no pointer and never on one with a mouse - 166 bytes net of the 346 it
+took out of the static footprint. An image one byte past 512 would hold two
+granules, so mouse.inc's `%error` makes that growth a decision.
+
 #### 50.2.1.1 The DISK class, and the 256-byte granule it would allow
 
 Alignment and size granularity are two properties, and part 3 above is a
@@ -159453,6 +159622,11 @@ source) as `HIBERNAT.IMG` in the root of the chosen disk. It has no header:
 file offset *n* is linear address *n*, which is what lets the restore be a
 list of sector runs and nothing else.
 
+So it carries every module claim with its row and slots, and **the keyboard
+mouse's adopted pointer half** (§2.8.8) with them: a mouseless session comes
+back with its claim armed, and one resumed on a machine whose mouse then
+speaks drops it at `mou_hotplug`'s `.have`, as at any boot.
+
 The **pointer**, `HIBERNAT.PTR`, is written beside it after the image, so a
 boot that finds no pointer finds no hibernation whatever else is on the disk
 — a write that failed half way leaves nothing to resume. And the **old**
@@ -159874,7 +160048,9 @@ size pass 2) as one range (`[mega_tbllin]`, `[mega_ldtend]` +
 which a restore requires exactly - an image from before it, or from a machine
 whose RAM puts the tables elsewhere, is refused; `.cold`'s copy is not in it, being a
 code selector whose bytes are `KERNEL.SYS`'s), and every `mx_tab` block in
-use is one more. They go down through a 32KB conventional bounce claimed
+use is one more - the keyboard mouse's adopted pointer half (§2.8.8) among
+them on a mouseless machine, `mod_hiboot` having moved it above 1MB at the
+switch. They go down through a 32KB conventional bounce claimed
 AFTER the picture, so the image does not hold it, and Fletcher's sums are
 taken over every chunk as it is appended.
 
