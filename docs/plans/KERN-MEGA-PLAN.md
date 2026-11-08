@@ -15215,3 +15215,186 @@ memory: the landing 4.5KB -> 9KB while held.
 **Rows.** `hdbounce` (soak, 86Box, ~55 s): the four legs and their bounds
 (SPEC.md 51.8.1); red on the base tree in all four, red in `ide` alone
 with HDD.DRV's DSV_CAPS 0, green after.
+
+### 14.168 The huge claim's ask answered for the claim it is asked about, "how much can I have" counts the pool, the C SDK's way to big memory, and Frotz's story above 1MB (2026-11-08) - FIXED
+
+docs/plans/MEGA-HUGE-PLAN.md F3, F6, F7 and Frotz's adoption (the owner,
+2026-11-08: *"Work through the steps, and close the gaps as needed"*). Shared
+with the other agents working that plan: F1, F2 and F9 (the bridge's
+addressing, its report, the "no bridge" refusal) are another branch's.
+
+**F3 - the ask ignored BX.** `OSAPI_MEM_HUGE` with AX = 0 answered the
+better of the pool alone, the heap alone and the BRIDGE whatever claim was
+being asked about - and a window every 32KB or 16KB (BX = 8000h / 4000h) can
+never bridge (`mega_hugebf` refuses it). Measured under Bochs at 4MB
+(tests/megahuge's new leg 7): the ask for 32KB windows answered **3454K**, a
+claim of it was **refused**; the pool alone was 2988K. **Should such a claim
+bridge? No, and that is the design, not a gap**: the windows are 64KB long
+and overlap, so for every 32KB boundary of the claim some window spans it -
+the cut between a pool piece and a heap piece included - and one descriptor
+cannot cover two places; a shape that skipped the seam would break the one
+promise the claim exists for, any 32KB record whole in ONE window. So the ask
+is the whole fix: `mega_hugeqf` reads the caller's BX and, for 4000h / 8000h,
+answers the better of the two ALONE. After: asked 2982K, got it, step 8, BX 0.
+
+**F6 - "how much can I have" counted conventional memory alone.**
+`OSAPI_MEM_AVAIL`, `MEMP_AVAIL` and the C SDK's `os88_mem_largest_kb` /
+`_total_kb` answer the conventional heap on kern_mega, while an
+`OS88_HIGHMEM` package's claims of 64KB or less go above 1MB first - false
+refusals (Weave's and Loom's pre-read check, Frotz's) and undersizing (WIN16's
+third arena, the Apple II's halving loop). **The decision: a new ASK, not a
+changed cell.** `OSAPI_MEM_AVAIL`'s contract is "a claim of AX from here will
+be SERVED", every package built so far plans conventional things from it (a
+CS, a `MEMP_CONV` block, the Task Manager's heap), and changing what it
+answers on one kernel is the silent kind of ABI change. So the AX = 0 ask
+grows a verb in BX: **`MEMH_AVAIL` (1)** answers the KB doors' question with
+the pool counted - AX = the largest claim `OSAPI_MEM_CLAIM` serves THIS
+caller (the heap's, or the pool's best run up to 64KB), BX = the total free
+KB (heap + pool, `mx_caps`, 0FFFFh at most), DX = the pool's best run (0 for
+a caller the pool owner rule refuses) - `mega_availf` in `.mega`. kern_mega
+in real mode answers `OSAPI_MEM_AVAIL`'s figures; kern_big and kern_small
+answer every ask CF = 1, as they always did, and a caller falls back to
+`OSAPI_MEM_AVAIL` there, where it IS the answer - **so kern_big and kern_small
+are byte-identical** (A/B at one commit: `build/kernel.bin`,
+`build/smallk/kernel.bin`). `abilock`: an addition (an equ and a verb on an
+ask) and a clarification - no `PKG_FMT` bump. Measured (4MB Bochs):
+`OSAPI_MEM_AVAIL` 574K / 574K, `MEMH_AVAIL` 574K / **3556K**, pool run 2982K.
+Callers moved: the C SDK's `os88_mem_largest_kb` / `_total_kb` (so Weave,
+Loom, the Apple II, C64, Lemmings and RunCPM, at their rebuild), Frotz
+(`zi_room`), WIN16's third arena (the mega arm: the pool's run, up to
+`W16_ARPOOL` = 512KB, beside the heap's figure less its keep).
+
+**F7 - the C SDK.** `os88_mem_huge`'s thunk read its argument through BX
+and called the cell with **BX = SP**: at SP = 8000h or 4000h it asked for 32KB
+or 16KB windows its caller then walked 64KB apart (tests/chuge with BX forced
+to 8000h: `fill bad 0040`). Now BX = 0, and `os88_mem_huge_w(kb, win)` asks
+for windows on purpose; `os88_mem_huge_ask(win)` is the AX = 0 ask (every
+kernel answers); `os88_file_read_huge` / `_write_huge` take the whole 32-bit
+count (two words) and `os88_file_hi()` the read's high word;
+`os88_file_read_at_seg` reads a chunk into seg:off; `os88_seg_get` /
+`os88_seg_put` copy between a claim and DS a word at a time (SPEC.md 73.9.2).
+
+**And a plain file past 64KB was REFUSED into any claim above 1MB.**
+`dskw_rbody` sent a plain file that would cross its selector's window to
+`dskw_tolo`, the segment arm, which refuses a buffer at or above 1MB:
+FERR_IO for every file over 64KB read into an `OSAPI_MEM_HUGE` claim in the
+pool - while the WRITE of the same bytes worked, walking the windows by
+`dskw_hicarry` since KERN-MEGA-MEMORY-PLAN MC7. Found by tests/chuge
+(`read ferr 0002`); it would have stopped Frotz's adoption at its first story.
+A plain file (R = 0) that `dskw_tolo` refuses now takes the selector arm's own
+walk, the write's. (Through a BRIDGE that walk is F1's subject: `dskw_hisub`
+steps by SEG_SUB, not by the run - the other branch's fix.)
+
+**Frotz** (SPEC.md 61.4): a story over 64KB is ONE `OSAPI_MEM_HUGE` claim with
+a window every 32KB - window k is the 64KB from 32KB x k, exactly Frotz's page
+- so `zm_run` writes the page table as DX + 8k, where the paragraph claim
+needed a SEG_SUB selector per page. Refused from the ask for that shape;
+falls back to `MEMP_CLAIM`; a conventional answer (CX = 1000h) takes
+`zm_pages`'s sums; kern_big and kern_small take today's path unchanged (both
+asks CF = 1). tests/megafrotz: the 282KB story's claim based F88800h (16MB
+Bochs), and the transcript; red with mega-release's FROTZ.O88 (based 12400h).
+`megafrotz-low` is the 640K + 384K machine: the pool cannot hold 282KB, the
+claim is a conventional run, the story plays the same.
+
+**Bytes.** kern_big and kern_small: none (byte-identical). kern_mega: `.cold`
++51 (`mmf_osapi_mem_huge`'s MEMH_AVAIL arm 27, `mega_hugeqf`'s shape test 18,
+`dskw_rbody`'s plain-file arm 6), `.mega` +48 (`mega_availf`); both above
+1MB, so `MEGA_RESIDENT` is unchanged (62,976 of 68,096) and the kernel
+segment's window too (os88megaseg overhead 3754, unchanged). FROTZ.O88's
+image 23,447 -> 23,626 (+179: `zi_room`, the huge arm of `zi_load`, `zm_run`;
+the file 19,393 -> 19,543 packed), no arm - it is the same on every kernel.
+The C packages that call the avail thunks grow by the ask and its fallback
+(~10 bytes) at their next rebuild.
+
+**Rows.** megahuge (legs 7, 8: red on 626e0ebb's kernel, `w32 max 0D7E
+refused`, MEMH_AVAIL `0D7E 0001 0000`), chuge-mega and chuge-big (new: the C
+package tests/chuge, red as its docstring lists), megafrotz (the base
+assertion; red with 626e0ebb's FROTZ.O88), megafrotz-low (new).
+
+### 14.169 A BRIDGED huge claim is right every way in, says where its cut is, can be refused, and its conventional piece is movable and at an end (2026-11-08) - FIXED
+
+MEGA-HUGE-PLAN step 1, its F1, F2 and F9. An `OSAPI_MEM_HUGE` claim that
+neither region holds alone BRIDGES them (SPEC.md 50.3.5): P windows over a
+pool block, then a conventional claim, one run of selectors. Window k is
+right by construction; the survey read that everything else computing a
+place from a base plus an offset went past the pool piece. **Confirmed**, and
+worse than read: the file doors' selector arm took the machine down.
+
+**Measured on mega-release 626e0ebb** (tests/megabrdg's MEGABRDG: the largest
+bridge with an 80KB conventional claim under it, freed after; the cut found
+by the walk; a pattern through windows P-1..P+1):
+
+| | Bochs 4MB (3,365K: 46 windows of pool) | 86Box at286_vga_sb 640K + 384K (688K: 4 of pool, 432K heap) |
+|---|---|---|
+| SEG_SUB / SEG_AT / SEG_HND at 1230h and 10040h past the cut, SEG_TILE at it | WRONG memory, every one | WRONG memory, every one |
+| 256 bytes before the cut, SEG_LIN by the rule (window k's own base) | right | right |
+| a file written across the cut and read back | the write a #GP: kern_mega FAULT 0D, the machine reset | the 64KB read REFUSED (AX 2 - `.czfb`), the odd-offset write a #GP (limit) in `dskw_wone`: the program closed |
+| BX out of the claim | 0 | 0 |
+| BX = HUGE_NOBRIDGE on the claim of the bridge's size | ignored: bridged | ignored: bridged |
+| the conventional piece | - | at 24000..90000, the fill point: the 80KB freed under it, 64K over it - a pinned block mid-heap; `OSAPI_MEM_MOVABLE` of the bridge REFUSED (CF = 1): no way to unpin it |
+
+**F1, OSAPI_SEG** (`mega_bfmap`, `.mega`): `SEG_SUB`, `SEG_SUBC`, `SEG_AT`
+and `SEG_HND` asked from a selector in a bridge's pool piece (its pool block
+says `MX_FBRIDGE`) map a place past the cut to the same offset past it in the
+conventional piece (`MX_AUX`'s selector), and cut a reach short at the end of
+the piece it is in; past the conventional piece's end too is refused (AX =
+5; `SEG_AT` DX = 0). `SEG_TILE` maps its first and last tile and refuses (AX
+= 3) unless one piece holds every tile. `SEG_LIN` answers one selector's
+base, so the rule - the byte at X is `SEG_LIN` of window X >> 16 plus X &
+FFFFh - is the contract (SPEC.md 50.3.5), the same arithmetic on every
+kernel; the probe prints the naive form (first base + X), wrong by
+construction on a bridge.
+
+**F1, the file doors** (`kernel/diskw.inc`, `.cold`, kern_mega only): the
+selector arm bounded a run by the OFFSET's 64KB wrap and stepped by
+`SEG_SUB`; a window clipped at the cut was then overrun. `dskw_hileft` (LSL)
+bounds a run by the window's LIMIT (`dskw_runmax`), `dskw_hifix` moves a
+sector on before it would cross the limit, and a sector that straddles the
+cut (an offset from it not a multiple of 512) is staged in two parts
+(`dskw_hin1` cuts its live bytes at the end, `dskw_hinext` steps
+`[dskw_wseg]` to the next window and leaves `[dskw_src]` where the sector
+ends there, `[dskw_hi]` bit 1 telling `.stg` it is counted). The `.czfb`
+change that lets a plain read past 64KB above 1MB take the walk is
+byte-for-byte 14.168's (mega-hugeask found it too).
+
+**F2**: a bridge answers BX = its pool piece's windows (the cut at BX x
+64KB; window BX the conventional piece's first); BX = `HUGE_NOBRIDGE` (2,
+bit 1 - 1 is 14.168's `MEMH_AVAIL` on the ask, 4000h and 8000h the shapes)
+refuses one on the claim (`mega_hugebf`) and on the AX = 0 ask
+(`mega_hugeqf`, beside 14.168's shape test). kern_big and kern_small never
+bridge and ignore it. abilock: an addition, no `PKG_FMT` bump - BX was kept
+before, and no shipped caller sets bit 1 (the C thunk's BX = SP, which could
+have, is 14.168's BX = 0 now).
+
+**F9**: the conventional piece was claimed bottom-up through the DMA door,
+born pinned, and named by no DX a package holds. It is taken from the TOP
+now (`mmf_osapi_mem_claim_dma_hi`, CX = 0: the heap's end, as 14.166 put the
+rings), and `OSAPI_MEM_MOVABLE` of the bridge's DX declares it
+(`mega_bfpcf`: the pool piece moves anyway): its proc is called for its moves
+and every selector over it follows them (`mega_mpmovef`), so a `ret` is the
+proc. Measured after: 34000..A0000 on the 1408K machine, 144K free under it
+and none over it, the record movable once declared.
+
+**WIN16** (`apps/win16/w16pm.inc`, the arm): `w16_vclaim` asked BX = 0, so a
+large arena could bridge, and its map's virtual paragraphs, `w16_pvirt`'s
+linear bases and `SEG_TILE`'s huge pointers all assume one run. It asks
+`HUGE_NOBRIDGE` now: a GlobalAlloc neither region holds alone is refused.
+HUGEGA (tests/win16/hugega.c, `win16megahugega`, Bochs at 2MB): the largest
+GlobalAlloc from 960K down, written and read back through a __huge pointer,
+and no huge pool block of WIN16's a bridge. Red with the WIN16.O88 from
+before, on mega-release's kernel and on this one: no HUGEGA.TXT in 300 s.
+Green: HUGEGA OK 768, one pool block.
+
+**Bytes.** kern_big and kern_small byte-identical (built with and without at
+one commit, `cmp` equal: every byte is in `mega.inc` or under `%ifdef
+KERN_MEGA`). kern_mega: `.text` 46,086 -> 46,086, `.bss` 5,404 -> 5,404,
+**MEGA_RESIDENT 62,976 before and after**, megaseg overhead 3,754 of 3,754;
+`.cold` 46,560 -> 46,794 (+234: the file doors' walk, `mega_bfpcf`, the
+top door and BX out in `mega_hugebf`; measured against mega-release
+84672715, after 14.168), `.mega` 23,616 -> 23,824 (+208: `mega_bfmap` and its
+five callers). WIN16's arm +1 byte.
+
+**Rows.** `megabrdg` (Bochs 4MB), `megabrdg86` (86Box 1408K), red as the
+table says and green here; `win16megahugega`. The interface the next steps
+build on (F4 packed reads, F5 the walker include): SPEC.md 50.3.5's *The
+cut*.

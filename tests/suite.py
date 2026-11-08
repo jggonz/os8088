@@ -3473,7 +3473,7 @@ SOAK = [
         "never comes back to its prompt. 57s measured",
         needs=("marty",), serial=True,
         wants=("build/frotz.o88", "build/zt/ZBIG.Z5")),
-    Row("megafrotz", "soak", py("tests/megafrotz.py"), 30.0,
+    Row("megafrotz", "soak", py("tests/megafrotz.py"), 45.0,
         "KERN-MEGA-MEMORY-PLAN MC7: a story past 256KB on kern_mega in "
         "protected mode, where the story claim is an LDT selector and each "
         "32KB page a SEG_SUB selector. Bochs, tests/frotz/zbiggen.py's 282KB "
@@ -3482,10 +3482,48 @@ SOAK = [
         "exactly the generator's model. Red with FROTZ.O88 from before the "
         "page table (--pkg): VERIFY bad, then 'bad routine header - the "
         "story has stopped' on the first `go` - every address past 64KB "
-        "read out of the first 64KB. 22s measured",
+        "read out of the first 64KB. And MEGA-HUGE-PLAN's adoption: the "
+        "story claim is ONE OSAPI_MEM_HUGE claim with a window every 32KB, "
+        "its base (SEG_LIN off the LDT) 1MB or more - red with mega-release "
+        "626e0ebb's FROTZ.O88, a conventional MEMP_CLAIM based at 12400h. "
+        "39s measured",
         needs=("bochs",),
         wants=("build/mega.img", "build/megarun.o88", "build/mbr.bin",
                "build/frotz.o88", "build/zt/ZBIG.Z8")),
+    Row("megafrotz-low", "soak", py("tests/megafrotz.py", "--low"), 45.0,
+        "MEGA-HUGE-PLAN, Frotz's adoption on the 640K + 384K machine "
+        "(Bochs at 1MB): the pool cannot hold the 282KB story, so the ask "
+        "for a 32KB-window claim answers the heap and the claim is a "
+        "conventional run (mega_hugec) under zm_run's table - and the story "
+        "plays the generator's transcript all the same. Red if the claim "
+        "lands above 1MB there (the assertion turned round). 39s measured",
+        needs=("bochs",),
+        wants=("build/mega.img", "build/megarun.o88", "build/mbr.bin",
+               "build/frotz.o88", "build/zt/ZBIG.Z8")),
+    Row("chuge-mega", "soak", py("tests/chuge.py", "--leg", "mega"), 40.0,
+        "MEGA-HUGE-PLAN F3, F6, F7 from C on kern_mega (Bochs, 4MB): "
+        "tests/chuge's CHUGE - os88_mem_largest_kb/total_kb count the pool "
+        "(a Weave-shaped check of eleven 64KB claims ACCEPTS, and all eleven "
+        "are given), os88_mem_huge_ask(W32) is granted by os88_mem_huge_w, "
+        "os88_mem_huge's step 8, os88_seg_put/get through every window, "
+        "139,264 bytes out by os88_file_write_huge and back by "
+        "os88_file_read_huge (os88_file_hi 2), and os88_file_read_at_seg "
+        "into a window. Red on mega-release 626e0ebb's kernel (--megabuild): "
+        "`total 0001`, `w32 got 0000`, `read ferr 0002`; red with the avail "
+        "thunks on OSAPI_MEM_AVAIL alone (`f6 refuse`) and with "
+        "os88_mem_huge's BX at 8000h (`fill bad 0040`). 22s measured",
+        needs=("bochs",),
+        wants=("build/mega.img", "build/megarun.o88", "build/mbr.bin",
+               "build/chuge.o88")),
+    Row("chuge-big", "soak", py("tests/chuge.py", "--leg", "big"), 45.0,
+        "MEGA-HUGE-PLAN F3, F6, F7 from C on kern_big (MartyPC XT, 640KB): "
+        "the same CHUGE, CHUGE.TXT read off the live B: - step 1000h, the "
+        "ask answered by OSAPI_MEM_AVAIL's fallback and granted, F6 "
+        "REFUSING (no 640KB heap holds 704KB), the 32-bit file calls and "
+        "the bulk copy over a conventional claim. The fallback half of "
+        "every thunk the plan changed. 25s measured",
+        needs=("marty",), serial=True,
+        wants=("build/os8088-360.img", "build/chuge360.img")),
     Row("pkgmove-wireflet", "soak",
         py("tests/pkgmove.py", "--app", "wirefleet", "--disk",
            "games360.img", "--open", "B:/WIREFLET.O88", "--word",
@@ -19470,7 +19508,12 @@ SOAK = [
         "And KERN-MEGA-PLAN 14.121: the answer is EXACT with the boot's "
         "read-ahead store and C:'s FAT window standing (asserted at the "
         "query) - a claim of one KB more is refused (`over refused`). "
-        "60s is 16 measured",
+        "And MEGA-HUGE-PLAN F3/F6: the ask with BX = 8000h answers what a "
+        "32KB-window claim is granted (it never bridges) and a claim of it "
+        "is had, step 8, BX 0; the ask with BX = MEMH_AVAIL counts the pool "
+        "(total 640K or more past OSAPI_MEM_AVAIL's, DX the pool's run). "
+        "Red on mega-release 626e0ebb's kernel (--build): `w32 max 0D7E "
+        "refused`, MEMH_AVAIL `0D7E 0001 0000`. 60s is 18 measured",
         needs=("bochs",),
         wants=("build/mega.img", "build/megahuge.o88", "build/megarun.o88",
                "build/mbr.bin")),

@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "eed359323545289fae7defce9610db6c75eeb839eb05116b578eb6fe137851b5",
+  "fingerprint": "0904a6ee6a78253a98e9494bda497b7b686f5efbfdf023b0161d0c8f6ac89024",
   "version": 12
  },
  "PKG_FMT": {
-  "fingerprint": "da7a8066c71939bb2d88545640cfe4ad6b32ec98fe2749f251e11e3605c332b3",
+  "fingerprint": "25553679c9728a4bbaf4bc8e34d1b258fb303bbc7c71145ce5230dfaeb2db45b",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -1816,17 +1816,31 @@
    "to": 12
   },
   {
-   "fingerprint": "da7a8066c71939bb2d88545640cfe4ad6b32ec98fe2749f251e11e3605c332b3",
+   "fingerprint": "d5a7ccaff103edfdd72c6bfad1bd26adac4c72c719f138cfec571dc2a5c68ca7",
    "from": 10,
    "guard": "PKG_FMT",
-   "reason": "OSAPI_MEM_HUGE: HUGE_NOBRIDGE (BX bit 1, value 2) refuses a bridge on the claim and the AX = 0 ask, and a bridge answers BX = its pool piece's windows; OSAPI_MEM_MOVABLE of a bridge declares its conventional piece; the bridge's step rule in the contract (KERN-MEGA-PLAN 14.169) - an addition: BX was kept before and no shipped caller sets bit 1, so PKG_FMT stays",
+   "reason": "MEGA-HUGE-PLAN F3/F6: OSAPI_MEM_HUGE's AX = 0 ask now reads BX - the claim's shape (a 16KB/32KB window claim is answered without the bridge it never gets) and MEMH_AVAIL (new equ, 1), the KB doors' answer with the pool counted; OSAPI_MEM_AVAIL/MEMP_AVAIL documented as conventional-only on kern_mega. An addition and a clarification: no cell moved, nothing built before stops running - no PKG_FMT bump",
    "to": 10
   },
   {
-   "fingerprint": "eed359323545289fae7defce9610db6c75eeb839eb05116b578eb6fe137851b5",
+   "fingerprint": "77fa8fa412d1dea757104900e271e1b4ebf1faf777727198fce13c1db8198af3",
    "from": 12,
    "guard": "DRV_VER",
-   "reason": "OSAPI_MEM_HUGE: HUGE_NOBRIDGE (BX bit 1, value 2) refuses a bridge on the claim and the AX = 0 ask, and a bridge answers BX = its pool piece's windows; OSAPI_MEM_MOVABLE of a bridge declares its conventional piece; the bridge's step rule in the contract (KERN-MEGA-PLAN 14.169) - an addition: BX was kept before and no shipped caller sets bit 1, so PKG_FMT stays",
+   "reason": "MEGA-HUGE-PLAN F3/F6: OSAPI_MEM_HUGE's AX = 0 ask now reads BX - the claim's shape (a 16KB/32KB window claim is answered without the bridge it never gets) and MEMH_AVAIL (new equ, 1), the KB doors' answer with the pool counted; OSAPI_MEM_AVAIL/MEMP_AVAIL documented as conventional-only on kern_mega. An addition and a clarification: no cell moved, nothing built before stops running - no PKG_FMT bump",
+   "to": 12
+  },
+  {
+   "fingerprint": "25553679c9728a4bbaf4bc8e34d1b258fb303bbc7c71145ce5230dfaeb2db45b",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_MEM_HUGE: HUGE_NOBRIDGE (BX = 2, bit 1) refuses a bridge on the claim and the AX = 0 ask, and a bridge answers BX = its pool piece's windows; OSAPI_MEM_MOVABLE of a bridge declares its conventional piece; the cut's rules in the contract (KERN-MEGA-PLAN 14.169) - an addition: BX was kept before and no shipped caller sets bit 1, so PKG_FMT stays",
+   "to": 10
+  },
+  {
+   "fingerprint": "0904a6ee6a78253a98e9494bda497b7b686f5efbfdf023b0161d0c8f6ac89024",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_MEM_HUGE: HUGE_NOBRIDGE (BX = 2, bit 1) refuses a bridge on the claim and the AX = 0 ask, and a bridge answers BX = its pool piece's windows; OSAPI_MEM_MOVABLE of a bridge declares its conventional piece; the cut's rules in the contract (KERN-MEGA-PLAN 14.169) - an addition: BX was kept before and no shipped caller sets bit 1, so PKG_FMT stays",
    "to": 12
   }
  ]

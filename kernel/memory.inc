@@ -455,6 +455,8 @@ MEMP_REGROW   equ 4             ; its base need not be 512-aligned (a DISK
 MEMP_AVAIL    equ 5             ; claim's is, SPEC.md 50.2.1.1)
 MEMP_KPARTS   equ 6             ; ...and the kernel's three fixed parts, exact
 MEMP_CONV     equ 0x8000        ; ...and in CX: stay conventional on kern_mega
+MEMH_AVAIL    equ 1             ; OSAPI_MEM_HUGE's AX = 0 ask with BX = this:
+                                ; the KB doors' answer, the pool counted
 %ifndef MEM_GRAN                ; (MEMGRAN=16 builds the 256-byte knob,
 MEM_GRAN    equ 32              ; SPEC.md 50.2.1.1)
 %endif
@@ -5327,11 +5329,23 @@ mmf_osapi_mem_huge:
 %ifdef KERN_MEGA
     or ax, ax                   ; AX = 0 ASKS (KERN-MEGA-MEMORY-PLAN MC5):
     jnz .claim                  ; the most one claim gets - the heap's, and
-    push bx                     ; in protected mode the pool's and the
-    call mem_rank_top           ; bridge's (mega_hugeqf)
+    cmp bx, MEMH_AVAIL          ; in protected mode the pool's and the
+    je .avail                   ; bridge's (mega_hugeqf), for the claim BX
+    push bx                     ; names: 16KB and 32KB windows never
+    call mem_rank_top           ; bridge (MEGA-HUGE-PLAN F3)
     call mem_avail_lvl_x
     pop bx
     call COLD_SEG:mega_hugeqf
+    clc
+    retf
+.avail:                         ; BX = MEMH_AVAIL: OSAPI_MEM_AVAIL with the
+    call mem_rank_top           ; POOL counted (MEGA-HUGE-PLAN F6) - what the
+    call mem_avail_lvl_x        ; KB doors serve THIS caller in either
+    xor dx, dx                  ; region; DX = the pool's best run, 0 none
+    cmp byte [mega_on], 0
+    je .ar                      ; real mode: the heap's answer as it stands
+    call MEGA_SEL_CODE:mega_availf
+.ar:
     clc
     retf
 .claim:

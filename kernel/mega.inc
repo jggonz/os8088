@@ -6050,11 +6050,22 @@ mega_hugef:
 ; -----------------------------------------------------------------------------
 ; mega_hugeqf - FAR: OSAPI_MEM_HUGE's QUERY in protected mode (KERN-MEGA-
 ; MEMORY-PLAN MC5, D6): AX = the largest CONVENTIONAL claim (mem_avail_lvl_x's
-; answer), ES = the caller -> AX = the largest one claim of the cell's can
-; be: the pool alone (mx_maxrun - a caller its pool owner rule admits), the
-; conventional heap alone, or the BRIDGE - the pool's run cut to whole 64KB
-; windows and then the heap less its 64KB reserve (D8). Exact for the pack
-; the claim will make; real mode, AX unchanged. Every other register kept
+; answer), BX = the claim's shape (the caller's BX), ES = the caller -> AX =
+; the largest one claim of the cell's can be: the pool alone (mx_maxrun - a
+; caller its pool owner rule admits), the conventional heap alone, or the
+; BRIDGE - the pool's run cut to whole 64KB windows and then the heap less its
+; 64KB reserve (D8). Exact for the pack the claim will make; real mode, AX
+; unchanged. Every other register kept
+;
+; NO BRIDGE FOR BX = 4000h OR 8000h (MEGA-HUGE-PLAN F3): a window every 16KB
+; or 32KB is 64KB LONG, so the windows overlap and some window spans every
+; 32KB (16KB) boundary of the claim - the cut between a pool piece and a heap
+; piece included. One descriptor cannot cover two places, so no shape of that
+; claim can straddle a cut, and the guarantee it exists for (any 32KB record
+; whole in ONE window) would be lost at the seam even if it could. mega_hugebf
+; refuses those claims, and the ask answered the bridge figure for them all
+; the same - a promise the claim then broke. Their answer is the better of
+; the two ALONE, which is what such a claim is granted
 ; -----------------------------------------------------------------------------
 mega_hugeqf:
     cmp byte [mega_on], 0
@@ -6063,7 +6074,6 @@ mega_hugeqf:
     push cx
     push dx
     mov cx, ax                      ; CX = the heap's
-    mov bh, bl                      ; BH = the ask's low byte (HUGE_NOBRIDGE)
     call MEGA_SEL_CODE:mega_ownerf  ; may it have the pool at all?
     jc .o
     call MEGA_SEL_CODE:mx_maxrunf   ; AX = the pool's
@@ -6072,8 +6082,14 @@ mega_hugeqf:
     jae .b
     mov ax, cx                      ; AX = the better of the two alone
 .b:
-    test bh, HUGE_NOBRIDGE          ; no bridge asked for: the better alone
+    mov bx, sp
+    mov bx, [ss:bx+4]               ; the caller's BX: the claim's shape
+    test bl, HUGE_NOBRIDGE          ; no bridge asked for: the better alone
     jnz .d                          ; (KERN-MEGA-PLAN 14.169)
+    cmp bx, 0x4000
+    je .d                           ; ...whose overlapping windows never
+    cmp bx, 0x8000                  ; bridge (above, and mega_hugebf)
+    je .d
     cmp dx, 64
     jb .d
     cmp cx, MEGA_RESKB
@@ -9505,6 +9521,54 @@ mega_ownerf:
     retf
 mega_xmself:
     call mega_xmsel
+    retf
+
+; mega_availf - FAR (osapi_mem_huge's MEMH_AVAIL ask, `.cold`): OSAPI_MEM_AVAIL
+; with the POOL counted (MEGA-HUGE-PLAN F6). An OS88_HIGHMEM package's claim
+; of 64KB or less goes above 1MB where it can (mega_claimhf), so the heap's
+; figures alone refuse a program the pool would serve, and size one smaller
+; than it could be.
+; in:  AX = the heap's largest claim, BX = its total free, in KB
+;      (mem_avail_lvl_x at the caller's floor), ES = the caller, DS = KDATA
+; out: AX = the largest claim a KB door serves this caller: the heap's, or
+;      the pool's best run up to 64KB, the better (MEMP_CLAIM with no head
+;      the same, granted the KB that cover it); BX = the heap's total plus
+;      the pool's free KB (mx_caps: a kernel cache counts as free, as below
+;      1MB), 0FFFFh at most; DX = the pool's best run in KB, for a caller
+;      that sizes ONE claim of OSAPI_MEM_HUGE from it. A caller the pool
+;      owner rule refuses (no OS88_HIGHMEM, no OS88_DRV_HICLAIM): AX and BX
+;      as they came, DX = 0. Every other register kept
+mega_availf:
+    push cx
+    push si
+    push di
+    mov si, ax                      ; SI = the heap's largest
+    mov di, bx                      ; DI = its total
+    xor dx, dx
+    call mega_ownerof               ; BL = the owner: may it have the pool?
+    jc .o
+    call mx_maxrun                  ; AX = the pool's best run, packed
+    push ax
+    call mx_caps                    ; AX = the pool's free KB (BL, CX, DX)
+    add di, ax
+    jnc .t
+    mov di, 0xFFFF
+.t:
+    pop ax
+    mov dx, ax                      ; DX = the run
+    cmp ax, 64
+    jbe .c
+    mov ax, 64                      ; a KB door's pool claim is 64KB at most
+.c:
+    cmp ax, si
+    jae .r
+.o:
+    mov ax, si
+.r:
+    mov bx, di
+    pop di
+    pop si
+    pop cx
     retf
 
 ; -----------------------------------------------------------------------------

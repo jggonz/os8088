@@ -39,6 +39,7 @@ mj_entry:
     mov [mj_res+28], ax
     mov [mj_res+30], bx
     xor ax, ax                      ; --- the query -------------------------
+    xor bx, bx                      ; (64KB windows: the ask reads BX)
     call OSAPI_MEM_HUGE
     sbb cx, cx
     mov [mj_res+10], cx

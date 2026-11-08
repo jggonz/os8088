@@ -84033,7 +84033,7 @@ table's end and present on every kernel (docs/plans/KERN-MEGA-PLAN.md 12.2):
 | `OSAPI_MEM_CODESEL` **0x04B9** | DX = the segment (or selector) naming a claim of the caller's. Out CF=0, AX = the selector to **far call code** in it: DX itself on a real-mode kernel; under `CPU_F_PM` the code half of the claim's allocator pair - DX - 8 for its data half, which is the claim's value, and a code half as it is (§50.6.12). CF=1 when there is none: DX = 0, or under `CPU_F_PM` anything that is not a pair's - a GDT segment, a data-only selector (an `OSAPI_XMEM_SEL` window, the read-ahead store). Any context. `apps/os88api.inc`'s `OS88_CODESEL` is its inline fast path, `value - 8` under `CPU_F_PM`. **Until KERN-MEGA-MEMORY-PLAN MC7 the protected-mode answer was a static LDT code alias, `(S >> 2) | 4`, and the macro inlined it; MC7's step 6 retired the aliases.** A binary built before MC7 that converts with `OS88_CODESEL` or `op_cseg` - a C package with an overlay (crt0's `cc_ovbind`), a package that far-calls a code part (`apps/os88partsbody.inc`), PIXELSTEIN 3D, LOOM's preview, WEAVE's canvas core - still computes the alias, which now names an unrelated LDT entry with no fault to say so: such a binary must be rebuilt for kern_mega, and kern_mega pairs with its own release's apps disk (§20.18). Every real-mode kernel runs it as before, which is why `PKG_FMT` did not move |
 | `OSAPI_XMEM_WALK` **0x04BF** | ES:DI = room for CX records of `XMW_SIZE` (6) bytes. Out CF=0, AX = the extended pool's live blocks written, each `XMW_OFF` (KB from the pool's base, which `OSAPI_XMEM_CAPS` answers in DX:CX), `XMW_KB` and `XMW_OWN`: an instance slot for an `OSAPI_XMEM_ALLOC` block, 80h \| slot for a package's REGION placed above 1MB (`OS88_HIGH`, docs/plans/KERN-MEGA-PLAN.md 13.3 step 4), 0A0h \| slot for a CLAIM it took there (`OS88_HIGHMEM`, KERN-MEGA-PLAN item 81), 0C0h \| row a driver's claim, FDh a driver's image, FEh the kernel's own (the read-ahead store, module pairs), FFh a cell called outside any instance. The record's sixth byte, `XMW_CLS`, is 0 except for a driver's block on kern_mega, where it is that driver's `DRVC_*` class off `drv_tab` (0 when no row matches) - so a reader names `SOUND.DRV` and not *a driver* - and for a kernel CACHE on kern_mega (owner FEh), where it is the cache's purge level, FBh-FEh: a block the next claim may take back (§50.6.8). **BX = `XMW_LONG` (4C58h, 'XL')** asks for LONG records: `XMW_FIXED`'s, each `XMW_LSIZE` = 8 bytes with `XMW_TAG` (+6, a word) the cache's whole `MEM_P_*` tag - its low byte the window slot, volume or owner the cache serves - and 0 for every other record (§28.4.11, KERN-MEGA-PLAN 14.92). kern_mega answers it; kern_big's `XMEM.DRV` refuses it with CF=1, AX = 2 and nothing written. **BX = `XMW_FIXED` (4658h, 'XF')** asks kern_mega for its fixed areas as well: one record each IN FRONT of the blocks, owner `XMW_GDT`, `XMW_LDT` (the LDT and the IDT) and `XMW_KCODE` (`.cold` and `.mega`), at POSITIVE `XMW_OFF`s past the pool's KB - they are at the top of RAM, above the pool (§50.6.9). The HMA (`XMW_HMA`, F0h) is the pool's first block and is walked as one; `XMW_PAD` is not written (§28.4.10, KERN-MEGA-PLAN 14.70.2). Additive: every other kernel ignores BX and writes 0 at `XMW_CLS`. On kern_big with a store the pool is `XMEM.DRV`'s and the cell walks its table (overlay ABI 2's `XMV_WALK`, §28.4.8): owner a slot or FFh. CF=1, AX = 1 with no pool - kern_small, kern_mega in real mode, a kern_big machine without the overlay. The Task Manager's "RAM is RAM" reads it (KERN-MEGA-PLAN 13.6). Any context |
 | `OSAPI_XMEM_RUN` **0x04CB** | DX:AX = the TOKEN of an `OSAPI_XMEM_ALLOC` block the caller owns (its base). Out CF=0, DX = the first of a **run of data selectors**, CX = the step between them (8): selector *k* is the 64KB window from 32KB x *k* into the block, the last ones cut at its end, so **any 32KB of the block lies wholly inside one window** - the one at (offset >> 15), at (offset & 7FFFh). What a reader of records of 32KB or less needs to read them in place from ANY context once made, where `OSAPI_XMEM_SEL`'s one window has to be re-aimed by the UI task per read and `OSAPI_MEM_HUGE`'s 64KB windows cut a record that straddles one in two. One view a block: a block with a run takes no `OSAPI_XMEM_SEL` and the reverse (AX = 2 either way). Freed with the block. CF=1, AX = 1 not available (every kernel but kern_mega in protected mode) or no run of free LDT entries, 2 not the base of a block the caller owns or it has a selector already. UI-task context. The Video Player's hold and bank (98.3.18.16) are its consumer; docs/plans/KERN-MEGA-PLAN.md 14.16 |
-| `OSAPI_MEM_HUGE` **0x04C5** | AX = KB (1..65535). Out CF=0: DX = the claim's first segment or selector and CX = the STEP to its next 64KB - a program walks by CX and never by a constant. CX = 1000h for a conventional claim on every kernel; CX = 8 on kern_mega in protected mode for an `OS88_HIGHMEM` package, whose claim is ONE pool block above 1MB under a run of consecutive LDT data selectors, a 64KB window each and the last ending at the claim's end (§50.3.5). CF=1 refused - above 1MB only when the pool's free KB are short, the compactor moving huge claims too (§50.3.5). Freed by `OSAPI_MEM_FREE` with that DX, and at the instance's teardown; `OSAPI_MEM_REGROW` takes the pool's to any size and answers its first selector NOW (KERN-MEGA-PLAN 14.37). Docs/plans/KERN-MEGA-PLAN.md 14.1 answers 6 and 7: an ADDITION, so `OSAPI_MEM_CLAIM` and `OS88_HUGE_INCR` mean what they always did. **BX = 8000h** asks for a window every 32KB instead, each 64KB long (`OSAPI_XMEM_RUN`'s shape on a claim that moves), answered BX = 0 when given and BX kept otherwise; such a claim does not regrow, and moves a 64KB piece at a time with the package's rate hook held off (§50.3.5, KERN-MEGA-PLAN 14.41, 14.49). **BX = 4000h** a window every 16KB, the same way. **On kern_mega in protected mode a conventional claim is a run too, CX = 8** (§50.3.5, KERN-MEGA-MEMORY-PLAN MC7.4). Any context |
+| `OSAPI_MEM_HUGE` **0x04C5** | AX = KB (1..65535). Out CF=0: DX = the claim's first segment or selector and CX = the STEP to its next 64KB - a program walks by CX and never by a constant. CX = 1000h for a conventional claim on every kernel; CX = 8 on kern_mega in protected mode for an `OS88_HIGHMEM` package, whose claim is ONE pool block above 1MB under a run of consecutive LDT data selectors, a 64KB window each and the last ending at the claim's end (§50.3.5). CF=1 refused - above 1MB only when the pool's free KB are short, the compactor moving huge claims too (§50.3.5). Freed by `OSAPI_MEM_FREE` with that DX, and at the instance's teardown; `OSAPI_MEM_REGROW` takes the pool's to any size and answers its first selector NOW (KERN-MEGA-PLAN 14.37). Docs/plans/KERN-MEGA-PLAN.md 14.1 answers 6 and 7: an ADDITION, so `OSAPI_MEM_CLAIM` and `OS88_HUGE_INCR` mean what they always did. **BX = 8000h** asks for a window every 32KB instead, each 64KB long (`OSAPI_XMEM_RUN`'s shape on a claim that moves), answered BX = 0 when given and BX kept otherwise; such a claim does not regrow, and moves a 64KB piece at a time with the package's rate hook held off (§50.3.5, KERN-MEGA-PLAN 14.41, 14.49). **BX = 4000h** a window every 16KB, the same way. **On kern_mega in protected mode a conventional claim is a run too, CX = 8** (§50.3.5, KERN-MEGA-MEMORY-PLAN MC7.4). **AX = 0 ASKS** (§50.3.5): AX = the most KB a claim of BX's shape is given now, nothing claimed - and BX = `MEMH_AVAIL` (1) is the KB doors' answer with the pool counted, AX largest / BX total / DX the pool's best run; CF=1 on kern_big and kern_small, whose `OSAPI_MEM_AVAIL` is that answer. Any context |
 
 **Branch on `CPU_F_PM`, then on the slot.** A package that reads extended
 memory in place takes 41.13's or 41.15's route without the bit and this one
@@ -99274,26 +99274,50 @@ sample ISR open (§34.11), and for a driver's claim, whose own ISRs may read
 it, the move is ONE step with interrupts off, as 14.41 shipped it. The Video
 Player's ring is its consumer (98.3.18.17).
 
-**AX = 0 ASKS rather than claims** (docs/plans/completed/KERN-MEGA-MEMORY-PLAN.md
-MC5): CF = 0, AX = the most KB one claim of this cell can be given NOW,
-nothing claimed - claim exactly that and it is had (14.121: the caches it
-counts are the room the claim sheds). kern_big and kern_small answer CF = 1
-(a claim of 0KB, refused): `OSAPI_MEM_AVAIL` is the question there. On
-kern_mega in protected mode the answer is the best of three: the pool's best
-run alone (`mx_maxrun`, for a caller the pool's owner rule admits), the
-conventional heap alone, and the BRIDGE below.
+**THE BRIDGE** (docs/plans/completed/KERN-MEGA-MEMORY-PLAN.md MC5, D7, D8): on
+kern_mega in protected mode a claim with a window every 64KB (BX = 0) that
+neither the pool nor the conventional heap holds alone may take ONE piece in
+each - the pool's best run cut to whole 64KB windows first, then a
+conventional claim of the rest, the heap left at least `MEGA_RESKB` (64KB) -
+under one run of selectors stepped by 8 (`mega_hugebf`). Each piece is the
+record it would be alone and moves alone; `OSAPI_MEM_FREE` of DX frees both,
+and it does not regrow. **The two pieces are not contiguous**, so a bridge is
+one buffer only to a program that WALKS IT BY ITS STEP - window k is DX + 8k;
+`OSAPI_SEG` and the file doors follow the pieces (below, docs/plans/KERN-MEGA-PLAN.md
+14.169, MEGA-HUGE-PLAN F1); base arithmetic of the program's own - a sum on a
+selector, or `SEG_LIN` of the first window plus an offset - is right only on
+a claim that did not bridge.
 
-**The bridge** (KERN-MEGA-MEMORY-PLAN MC5, D7; docs/plans/KERN-MEGA-PLAN.md
-14.169). A 64KB-step claim that neither the pool nor the heap holds alone is
-given as TWO PIECES under ONE run of selectors stepped by 8 (`mega_hugebf`):
-the pool's best run cut to whole 64KB windows first, then a conventional
-claim of the rest, the heap left at least 64KB (`MEGA_RESKB`). Each piece is
-contiguous and the record it would be alone - it moves alone and is freed
-alone at the instance's teardown; `OSAPI_MEM_FREE` of DX frees both - and the
-pool block says `MX_FBRIDGE` and names the conventional piece in `MX_AUX`. A
-16KB or 32KB step (BX = 4000h / 8000h) never bridges, and neither does a
-regrow (CF = 1). Two runs of memory have a CUT between them, after the pool
-piece's last window, and the rules are:
+**A window every 16KB or 32KB NEVER bridges** (MEGA-HUGE-PLAN F3), and that is
+the design rather than a gap: such windows are 64KB long and overlap, so for
+every 32KB (16KB) boundary of the claim some window spans it - the cut between
+a pool piece and a heap piece included - and one descriptor cannot cover two
+places. Nor would a shape that skipped the seam keep the claim's one promise,
+any 32KB record whole in ONE window. So `mega_hugebf` refuses BX = 4000h and
+8000h, and such a claim is the pool's or the heap's alone.
+
+**AX = 0 ASKS rather than claims** (MC5, D6): out CF = 0, AX = the most KB one
+claim of the cell can be given now, nothing claimed - claim exactly that and
+it is had (exact for the pack the claim will make, the boot's caches counted
+as room the claim sheds, KERN-MEGA-PLAN 14.121). **The ask reads BX, which
+names the claim it is for** - set it:
+
+| BX | answers |
+|---|---|
+| 0 | the better of the pool alone, the heap alone and the bridge |
+| 8000h, 4000h | the better of the pool alone and the heap alone: no bridge (above). Until MEGA-HUGE-PLAN F3 the ask ignored BX and answered the bridge's figure for a claim that was then refused |
+| `HUGE_NOBRIDGE` (2) | the better of the pool alone and the heap alone - the claim's own answer when it is asked with `HUGE_NOBRIDGE` (below, KERN-MEGA-PLAN 14.169) |
+| `MEMH_AVAIL` (1) | **the KB doors' question, with the POOL counted** (MEGA-HUGE-PLAN F6, `mega_availf`): AX = the largest claim `OSAPI_MEM_CLAIM` (or `OSAPI_MEM_P` with no head) serves THIS caller - the heap's, or the pool's best run up to 64KB, the better; BX = the total free KB it can claim from, the heap's plus the pool's free (`mx_caps`, a cache counted free), 0FFFFh at most; DX = the pool's best run in KB, 0 when the pool owner rule refuses the caller. `OSAPI_MEM_AVAIL` and `MEMP_AVAIL` count conventional memory alone on kern_mega, as they always have - while an `OS88_HIGHMEM` package's claims of 64KB or less go above 1MB first (§50.3.7) - so a package that sizes or refuses from them asks this first and falls back to them where it answers CF = 1 |
+
+kern_mega in real mode answers the heap's figures (`MEMH_AVAIL`: exactly
+`OSAPI_MEM_AVAIL`'s, DX = 0). **kern_big and kern_small answer every ask CF = 1**
+(a claim of 0KB, refused before anything is shed): there the conventional heap
+is the whole answer, and `OSAPI_MEM_AVAIL` gives it. tests/megahuge's legs 7
+and 8 are the gate for BX = 8000h and `MEMH_AVAIL` (MEGA-HUGE-PLAN F3, F6).
+
+**The cut** (docs/plans/KERN-MEGA-PLAN.md 14.169, MEGA-HUGE-PLAN F1, F2,
+F9). Two runs of memory have a CUT between them, after the pool piece's last
+window, and the rules are:
 
 - **WHERE THE CUT IS: out BX = the pool piece's windows** when a bridge was
   given, so window BX - DX + 8 x BX - is the conventional piece's first and
@@ -99411,7 +99435,9 @@ OSAPI_MEM_P   0x04E9, X     BL = the verb (MEMP_*), ES = the caller (X stub)
                         AX = the paragraphs granted
   MEMP_AVAIL    5   -> AX = the largest claim you can have, BX = the total,
                         in paragraphs, at your floor as OSAPI_MEM_AVAIL;
-                        CX = MEM_GRAN, the granule in paragraphs
+                        CX = MEM_GRAN, the granule in paragraphs - the
+                        CONVENTIONAL heap's on kern_mega; the pool too is
+                        OSAPI_MEM_HUGE's MEMH_AVAIL ask (§50.3.5)
   CF=1 refused; every register not named is preserved
   MEMP_KPARTS   6   -> AX = the kernel's resident FAT window, BX = its
                         background task stacks, CX = task 0's stack, in BYTES -
@@ -112418,6 +112444,22 @@ refusal is not a feature. Bronze (417KB), The Dreamhold (434KB) and Lost Pig
 (337KB) are the largest that do fit, and the four stories on the 360KB disk —
 Mini-Zork, Zork 285, Adventure and Balances, 63–100KB — all run on a 256KB XT,
 which is what `make xt` is for and where the refusal is tested.
+
+**On kern_mega a story over 64KB is ONE `OSAPI_MEM_HUGE` claim with a window
+every 32KB** (BX = 8000h, §50.3.5; docs/plans/MEGA-HUGE-PLAN.md) - above 1MB
+where the pool has room, and it was a conventional `MEMP_CLAIM` for the whole
+session, 100-512KB of the heap every other program shares. Window k is the 64KB
+from 32KB x k, which is exactly Frotz's page (§61.3, `zmem.inc`), so the page
+table is the claim's own run - `zm_run` writes DX + 8k - where the paragraph
+claim needed a SEG_SUB selector per page (up to fifteen LDT entries a story).
+The refusal is the ask for that shape (`zi_room`: AX = 0, BX = 8000h, which
+never bridges), and a story of 64KB or less refuses from `MEMH_AVAIL` - the
+KB doors' answer with the pool counted - because its claim goes above 1MB too.
+A refused huge claim falls back to the paragraph door; a conventional answer
+(CX = 1000h, kern_mega in real mode) takes `zm_pages`'s sums. Both asks are CF
+= 1 on kern_big and kern_small, which keep `MEMP_AVAIL` and the paragraph
+door, unchanged. `tests/megafrotz.py` asserts the story claim's base is 1MB or
+more and the 282KB story plays.
 
 ### 61.5 Windows and text
 
@@ -131558,6 +131600,38 @@ the overlays did not move):
 The three bytes of bss every package lost in common were `os88.h`'s three
 layout checks, `static char` arrays until they became typedefs — which
 SmallerC checks the same way and emits nothing for.
+
+#### 73.9.2 Memory past the region: the huge claim, the pool, the 32-bit file calls
+
+A C package's data past its 63.5KB is a claim, and `os88.h` carries the whole
+way to a big one (docs/plans/MEGA-HUGE-PLAN.md F3, F6, F7; tests/chuge is the
+gate on both kernels):
+
+- **`os88_mem_largest_kb()` / `os88_mem_total_kb()` count the POOL on
+  kern_mega** - OSAPI_MEM_HUGE's `MEMH_AVAIL` ask (§50.3.5), falling back to
+  `OSAPI_MEM_AVAIL` where it answers CF = 1 (kern_big, kern_small, where it is
+  the same answer). They counted conventional memory alone, while every C
+  package in the tree says `OS88_HIGHMEM` and its `os88_mem_claim()` of 64KB or
+  less goes above 1MB first - so Weave's and Loom's pre-read refusal, the
+  Apple II's halving loop and the refusal toasts of C64, Lemmings and RunCPM
+  planned from the wrong heap. `os88_mem_largest_p()` stays the conventional
+  heap's, exact to the granule.
+- **`os88_mem_huge(kb)` passes BX = 0**, a window every 64KB. It passed BX =
+  SP - the register the argument was read through - so a stack pointer of
+  8000h or 4000h asked for 32KB or 16KB windows its caller then walked 64KB
+  apart. `os88_mem_huge_w(kb, win)` asks for `OS88_HUGE_W32` / `_W16` on
+  purpose; with `os88_mem_huge_step()` = 8 the windows are the ones asked for
+  (such a claim never bridges), with 1000h the claim is one segment.
+  `os88_mem_huge_ask(win)` is the AX = 0 ask for that shape, answered on every
+  kernel (`OSAPI_MEM_AVAIL`'s largest where there is no ask).
+- **`os88_file_read_huge` / `os88_file_write_huge`** take the whole 32-bit
+  count as two words, into or out of a claim from its base, and
+  `os88_file_hi()` is the read size's high word; **`os88_file_read_at_seg`**
+  is `os88_file_read_at` into seg:off; **`os88_seg_get` / `os88_seg_put`** copy
+  n bytes between a claim and DS a word at a time, inside one 64KB window - the
+  string move rule 2 forbids in compiled code, made in the thunk with ES loaded
+  on the line before. None of them crosses a window: the caller steps by
+  `os88_mem_huge_step()`, which is the rule §50.3.5 gives every program.
 
 ### 73.10 `tools/cc8086.py` — the gate, in order
 
@@ -241330,6 +241404,7 @@ byte of it.
 | class byte | `OS88_HIGH | OS88_HIGHMEM` in the arm, nothing in the shipped build (124.31.3's last step): the image and WIN16's own plain claims may go above 1 MB, the program's memory stays below it. `tests/megahigh.txt`'s two WIN16 lines are retired |
 | the arenas | at most `W16_NARENA` = **4**, as in real mode (§124.25.1). It was 3 until 2026-11-02, because each arena is four bytes of bss; S24 batch 6 freed the bytes. The fourth is limited by the **map** rather than by RAM: the map holds 1,012 KB of virtual paragraphs (960 KB until 2026-11-04, when `W16V_LO` fell from 1000h to 0300h, §124.31.3), and the third arena takes the largest free run less 96 KB. Arcade's setup asked for 408 KB for its fourth, got it from the kernel, and the map refused it. Before the stepped floor (§124.25.1), the fall back was the request's own 52 KB: MSCOMSTF's code went into it, and its DGROUP then had nowhere to go. Stepping down by quarters finds what the map still holds. The claim count: the program, the library part and four arenas are six. A running `LoadLibrary` holds the loader part, its read cache and one table claim for each library still loading. Arcade's setup loads its six DLLs this way with no claim refused (seen 2026-11-02; the peak was not counted) |
 | the third arena | leaves `W16_ARKEEP` = **96 KB** of the largest free run, not 32 (§124.25.1): a part's fetch is a conventional claim on kern_mega whatever the class byte says (`op_fetch`'s DMA door), and the library part's is 62 KB. With 32 a program that made its third arena before its first library call could not fetch the part at all: MMTEST did, once S23 batch 2 took the system-library part from 33 to 34 KB, and its closing `MessageBox` ended it with *WIN16's library part could not be read* (seen 2026-11-01; 96 cured it). A constant, so no byte of either image |
+| the third arena, from the POOL | **or the pool's best run, up to `W16_ARPOOL` = 512 KB, the better** (docs/plans/MEGA-HUGE-PLAN.md F6): an arena over 64 KB is `W16VCLAIM`'s `OSAPI_MEM_HUGE`, which tries the pool first, and `MEMP_AVAIL` counts conventional memory alone - so the arena was sized from the heap it did not come from, a 4MB machine's third arena no bigger than a 640KB one's. The ask is `MEMH_AVAIL`'s DX (§50.3.5); no keep is taken off it, the pool piece holding no conventional byte; 512 KB is half the arm's 1,012 KB virtual map, so the fourth arena and the bitmaps keep the rest. A refused ask (real mode) leaves the heap's figure |
 | the census | not in the arm: it decides whether an 8088 can run a program (§124.3), and kern_mega runs on a 286 or better. `w16cens.inc`, `w16optab.inc` and their 1,012 bytes of bss are what pay for the arm's own code |
 
 #### 124.31.2 What the kernel lends

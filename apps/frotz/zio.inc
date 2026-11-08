@@ -113,6 +113,9 @@ ZI_DYNMAX    equ 0E000h
 %define zi_fsz_h      (os88_image_end + ZIO_SLACK + 2)
 %define zi_para       (os88_image_end + ZIO_SLACK + 4)   ; paragraphs the story needs
 %define zi_dlg        (os88_image_end + ZIO_SLACK + 6)   ; byte: ZID_*
+%define zi_huge       (os88_image_end + ZIO_SLACK + 7)   ; byte: 1 = zi_load's
+                                                         ; story claim is
+                                                         ; OSAPI_MEM_HUGE's
 %define zi_taddr      (os88_image_end + ZIO_SLACK + 8)   ; readline: text buffer
 %define zi_paddr      (os88_image_end + ZIO_SLACK + 10)  ; readline: parse buffer
 %define zi_pcl        (os88_image_end + ZIO_SLACK + 12)  ; save/restore PC
@@ -632,11 +635,8 @@ zi_dlg_story:
     shl dx, cl
     or ax, dx
     mov [zi_para], ax
-    push ax
-    mov bl, MEMP_AVAIL
-    call OSAPI_MEM_P                ; AX = the LARGEST FREE RUN, not the total
-    pop cx
-    cmp cx, ax
+    call zi_room                    ; AX = the LARGEST claim zi_load can make,
+    cmp [zi_para], ax               ; not the total
     ja .toobig
     jmp zi_load
 .nofile:
@@ -649,6 +649,46 @@ zi_dlg_story:
     mov si, zi_m_issave
 .say:
     jmp zw_notice
+
+; -----------------------------------------------------------------------------
+; zi_room - the largest story claim zi_load can make NOW, for [zi_para]
+; out: AX = paragraphs; [zi_huge] = 1 when that claim is OSAPI_MEM_HUGE's.
+;      Clobbers BX, CX, DX
+;
+; KERN_MEGA'S ASKS FIRST (MEGA-HUGE-PLAN F6), because its claims go where
+; OSAPI_MEM_P's MEMP_AVAIL does not look: a story of 64KB or less is a KB-door
+; claim and goes above 1MB where it can (MEMH_AVAIL counts the pool), and a
+; bigger one is ONE claim with a window every 32KB - this file's page, so the
+; page table is the claim's own run (zmem.inc's zm_run) - answered by the ask
+; for exactly that shape, which never bridges (F3). Both asks are CF = 1 on
+; kern_big and kern_small, which take MEMP_AVAIL and the paragraph door as
+; they always did: nothing there changes
+; -----------------------------------------------------------------------------
+zi_room:
+    mov byte [zi_huge], 0
+    xor ax, ax
+    mov bx, MEMH_AVAIL
+    cmp word [zi_para], 0x1000
+    jbe .ask
+    mov bx, 0x8000
+.ask:
+    call OSAPI_MEM_HUGE             ; AX = KB
+    jc .memp
+    cmp ax, 0x400
+    jb .sh
+    mov ax, 0x3FF                   ; (a story is 512KB at most: room enough)
+.sh:
+    mov cl, 6
+    shl ax, cl
+    cmp word [zi_para], 0x1000
+    jbe .r
+    inc byte [zi_huge]
+.r:
+    ret
+.memp:
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P                ; AX = the LARGEST FREE RUN, not the total
+    ret
 
 ; -----------------------------------------------------------------------------
 ; zi_savext - is [zi_name] a .SAV?
@@ -789,6 +829,23 @@ zi_load:
                                     ; zm_setup, whose zt_f2keep would otherwise
                                     ; carry the last story's bit into this one
 
+    cmp byte [zi_huge], 0           ; ONE CLAIM WITH A WINDOW EVERY 32KB
+    je .para                        ; (zi_room): above 1MB on kern_mega, and
+    mov ax, [zi_para]               ; the page table is its own run (zm_run)
+    add ax, 63
+    mov cl, 6
+    shr ax, cl                      ; AX = KB
+    push ax
+    mov bx, 0x8000
+    call OSAPI_MEM_HUGE             ; DX = window 0, CX = the step
+    pop ax
+    jc .para                        ; refused: the paragraph door, as before
+    cmp cx, 8
+    jne .hseg                       ; 1000h: a SEGMENT (kern_mega in real
+    or bx, bx                       ; mode) - zm_pages sums it, below
+    jz .hrun                        ; BX = 0: the windows asked for
+    call OSAPI_MEM_FREE             ; 64KB apart: not this file's page
+.para:
     mov ax, [zi_para]
     xor cx, cx                      ; no DMA head
     mov bl, MEMP_CLAIM
@@ -813,6 +870,13 @@ zi_load:
     call OSAPI_MEM_CLAIM
     jc .nomem
     mov word [zi_para], 64 * 64
+    jmp short .claimed
+.hrun:
+    call .hkb                       ; [zi_para], [zf_spara], [zf_sseg]
+    call zm_run                     ; page k is window k: DX + 8k
+    jmp short .read
+.hseg:
+    call .hkb
 .claimed:
     mov [zf_sseg], dx
     mov ax, [zi_para]
@@ -820,6 +884,7 @@ zi_load:
     call zm_pages                   ; the page table: a segment per 32KB
     jc .nomem                       ; (kern_mega: no LDT entry for one)
 
+.read:
     push es
     mov es, dx                      ; ES:BX = the claim, offset 0
     xor bx, bx
@@ -1003,6 +1068,13 @@ zi_load:
     ; repaint retries (SPEC.md 20.6).
     call zf_hire
     clc
+    ret
+.hkb:                               ; the huge claim's: AX = its KB, DX = it
+    mov cl, 6
+    shl ax, cl                      ; the paragraphs GRANTED, which are ours
+    mov [zi_para], ax
+    mov [zf_spara], ax
+    mov [zf_sseg], dx
     ret
 
 ; -----------------------------------------------------------------------------
