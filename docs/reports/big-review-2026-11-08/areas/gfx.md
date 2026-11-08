@@ -19,7 +19,7 @@ measured number from the tree.
 | `SPEC.md` | §5 opening + table (4141-4237), 5.4 (4238-4330), 5.4.1.3 (4560-4590), 5.4.3.2/6 (5836-5850, 6008-6020), 5.7 (7172-7260), 5.10.2/4 (7998-8095), 5.13 (8558-8600), §32 (70516-71010), 39.31-39.34 (81383-81490), §4 table rows 4096-4097 | |
 | `PERFORMANCE.md` | Part 5 table (1209-1300) | |
 | `apps/os88api.inc` | BLIT4, BLITP, SPANS, POINTS contracts | |
-| `docs/plans/ABI-BREAK-LIST.md` §9-10, `KERNEL-BYTE-QUEUE.md`, `LAST-DROP-PERF.md` §7 | | to avoid re-proposing |
+| `docs/plans/ABI-BREAK-LIST.md` sections 9-10, `KERNEL-BYTE-QUEUE.md`, `LAST-DROP-PERF.md` §7 | | to avoid re-proposing |
 
 ## Verdict
 

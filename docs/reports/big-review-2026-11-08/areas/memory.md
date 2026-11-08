@@ -129,7 +129,7 @@ This is additive: a new verb, so `abilock --update` with no bump. **~+30 to +40 
 **Recommendation:** record. It only matters on small heaps, where it does matter. **+6 to +40, depending on approach.**
 
 ### mem-17 - Movable regions could be declared by a header bit instead of 72 call sites (rethink, low, now)
-Every package carries `OS88_REGION_MOVABLE` (72 sites in 67 files), 10-19 bytes each in the image, plus a far call at start-up, because "declared and named nothing" must be told apart from "forgot" (`apps/os88api.inc:4829-4836`). A package-header flag bit read by the loader, with `MC_RLOC` set to a kernel sentinel meaning "kernel half only, no owner proc", would make the common case free. `mem_reloc_call` already runs the kernel's half unconditionally (`:3869-3871`). Old packages keep their call, and new packages built with the bit run pinned on an older kernel (the safe direction).
+Every package carries `OS88_REGION_MOVABLE` (72 declarations across 67 package sources), 10-19 bytes each in the image, plus a far call at start-up, because "declared and named nothing" must be told apart from "forgot" (`apps/os88api.inc:4829-4836`). A package-header flag bit read by the loader, with `MC_RLOC` set to a kernel sentinel meaning "kernel half only, no owner proc", would make the common case free. `mem_reloc_call` already runs the kernel's half unconditionally (`:3869-3871`). Old packages keep their call, and new packages built with the bit run pinned on an older kernel (the safe direction).
 **est. kernel +8 `.cold`; -10 to -19 per package image, ~-1 KB of disk tree-wide; the `t_movable` ratchet then checks the bit.**
 
 ### mem-18 - The KB doors keep regrowing the same bug (size, low, flagday) - listed as ABI-BREAK-LIST **C1**

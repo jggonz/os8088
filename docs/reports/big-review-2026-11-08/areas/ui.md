@@ -13,7 +13,7 @@ booted.
 | `kernel/apps.inc` | 148 | all (About) |
 | `kernel/clip.inc` | 336 | all, both `OS88_COMPACT`/`KERN_MEGA` arms |
 | `kernel/spinner.inc` | 275 | all (the `OS88_SPINNER` macro, both `.boot2` and module instances) |
-| SPEC.md | | §13 intro and steps 1-5, 13.4, 13.5, 13.5.1, 13.7 (head), 13.9.2, 13.11, 13.12, 13.13; §14 intro; §55 whole; §59.0-59.5, 59.8 (part), 59.8.1 (head), 59.11; §75.0-75.2.1, 75.3.2; §39.29.4; §120.5; §32 head |
+| SPEC.md | | §13 intro and steps 1-5, 13.4, 13.5, 13.5.1, 13.7 (head), 13.9.2, 13.11, 13.12, 13.13; §14 intro; §55 whole; §59 head to 59.5, 59.8 (part), 59.8.1 (head), 59.11; §75 head to 75.2.1, 75.3.2; §39.29.4; §120.5; §32 head |
 | context | | `kernel/menu.inc` 55-112, 380-470, 480-540, 818-826, 2583-2595; `kernel/events.inc` 180-300; `kernel/wm.inc` 147-165, 396-460, 2727-2765; `kernel/instance.inc` 1921-1950; `kernel/mouse.inc` 3190-3225; `kernel/memory.inc` 2540-2590; `kernel/fprog.inc` 161-171; `kernel/shutdown.inc` 1-130, 300-340; `kernel/kernel.asm` 325-370, 849-870, 1290-1320, 1568-1600; `kernel/viddet.inc` 82-130; `apps/os88api.inc` 4072-4080, 5660-5700, 5895-5935 |
 
 Also read: `docs/plans/ABI-BREAK-LIST.md`, `docs/plans/KERNEL-BYTE-QUEUE.md`,

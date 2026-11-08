@@ -110,7 +110,7 @@ Ranked by value. Phase: **now** = no ABI break; **flagday** = needs one;
 (`mouse.inc` 767-800, 880) and flushes by reading RX, LSR and IIR (888-896).
 It never writes FCR (base+2). The ISR takes **one** RX byte per port per
 interrupt (3,720-3,753). §9.13's re-arm in `osapi_mouse` rewrites MCR and
-IER only (1,585-1,590). SPEC.md 213,126 confirms that nothing in the tree
+IER only (1,585-1,590). SPEC.md line 213,126 confirms that nothing in the tree
 touches the FCR.
 
 **Failure.** Take a warm boot after an OS or driver that enabled the FIFO.

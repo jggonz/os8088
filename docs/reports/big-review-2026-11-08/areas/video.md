@@ -770,7 +770,7 @@ and the proposed replacement.
     - **Code:** 0x0241 (`os88api.inc:5401`). §53.5 withdrew "the present":
       nothing is flushed.
     - **Proposed:** "fsx_wait - the frame clock (SPEC.md 53.5, 0x0241)"
-18. **`kernel/fsx.inc:976-977`**, "(SPEC.md 53.10, slot 0x04E8)".
+18. **`kernel/fsx.inc:976-977`**, "(SPEC.md 53.10, the stale slot number 04E8h)".
     - **Code:** `OSAPI_FSX_PAGE` is 0x03C5 (`os88api.inc:5414`).
     - **Proposed:** "(SPEC.md 53.10, slot 0x03C5)"
 19. **`kernel/fsx.inc:193-194`**, "bit 1 = FSXF_FASTTICK; others refuse)".
