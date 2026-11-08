@@ -19629,6 +19629,22 @@ SOAK = [
         needs=("bochs", "nasm"),
         wants=("build/mega.img", "build/megahw.o88", "build/megarun.o88",
                "build/mbr.bin")),
+    Row("megapfl", "soak", py("tests/megapfl.py"), 35.0,
+        "KERN-MEGA-PLAN 14.176: THE POOL FILLED AND GIVEN BACK, then file "
+        "activity. Bochs at 4MB: MEGAPFL claims 128KB in the pool "
+        "(HUGE_NOBRIDGE), fills the pool with OSAPI_XMEM_ALLOC blocks of "
+        "MEMH_AVAIL's DX until under 8KB is left, frees everything, and the "
+        "pool's best run is what it was (2,978 KB); its own packed file read "
+        "back whole into its segment above 1MB; the launch finishes and "
+        "MEGARUN's next FIND answers, no kern_mega FAULT. The shape of a "
+        "probe reported as an F4 regression whose entry returned BX = "
+        "MEMH_AVAIL's free KB, not its window (SPEC.md 20.2). RED, both "
+        "measured: --break bx (that probe's BX) - FAULT 00 at 0060:64A5, "
+        "wm_ptr2idx's divide; --break free (OSAPI_XMEM_FREE's cell a retf) - "
+        "the best run 128 KB. 35s is 26 measured",
+        needs=("bochs", "nasm"),
+        wants=("build/mega.img", "build/megapfl.o88", "build/megarun.o88",
+               "build/mbr.bin")),
     Row("megahw86", "soak", py("tests/megahw.py") + ["--box"], 30.0,
         "megahw on 86Box's at286_vga_sb with 640K + 384K above 1MB: the "
         "largest claim a bridge of 768 KB, the cut at window 4, every leg "
