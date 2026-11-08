@@ -3239,8 +3239,8 @@ px_memfield:
     push dx
     push si
     push di
-    call OSAPI_MEM_AVAIL            ; BX = total free KB
-    mov si, px_s_mem
+    PX_AVAIL px_avail               ; BX = total free KB (the ARM: the
+    mov si, px_s_mem                ; pool counted, SPEC.md 106.8.1)
     mov di, px_cline
     call px_strcpy
     mov ax, bx
@@ -4596,6 +4596,10 @@ px_fidx     equ px_cur + PXR_FIDX
     PXVAR px_mwp, MWT_SZ            ; px_mwmove walks them so)
     PXVAR px_mwd, MWT_SZ
     PXVAR px_mwfo, 2                ; px_mwfar's offset, for a part
+%ifdef PKG_MEGA
+    PXVAR px_hrun, 2                ; THE ARM's masters (pxrec.inc's
+                                    ; PX_MCLAIM): the step between a huge
+%endif                              ; claim's 32KB windows, 0 none
     PXVAR px_wsacc, 2               ; THE WORK CLAIM'S sub-buffers as
     PXVAR px_wslin, 2               ; selectors of their own: [px_wseg] +
     PXVAR px_wslut, 2               ; [px_wo_*] paragraphs names another

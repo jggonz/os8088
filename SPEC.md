@@ -99568,8 +99568,10 @@ The cost on a package is what it takes: `hw_aim` and `hw_span` 91 bytes,
 `hw_get` 73 more (the copy loop with it), `hw_put` 61 beside that,
 `hw_claim` 92, `hw_fread` 87, `hw_fwrite` 64 - XTMP3's three arms (claim,
 get, fread) 343. XTMP3's kern_mega arm is the first user (§121.6.1);
-WaveRack, PiXEL, Audio,
-VBattle, the Browser and the Video Player are next (MEGA-HUGE-PLAN 3).
+WaveRack, Audio and the Browser are next (MEGA-HUGE-PLAN 3). PiXEL's master
+needs none of it - its window table already IS a 32KB-window claim's run
+(§106.8.1) - and Video Battle reads its hold inside a REAL-MODE bracket,
+where no selector is (KERN-MEGA-PLAN 14.172).
 
 `tests/os88huge.py` (`os88huge`, host) runs every routine under Unicorn
 against a model on four shapes - windows 96KB APART with guards between (a
@@ -214684,7 +214686,8 @@ the bytes read.
 
 **The MASTER is one heap claim of `mw x mh` bytes, one byte a pixel, an
 index into a 256-entry RGB palette** (768 bytes of PiXEL's bss). It may be
-larger than 64KB, up to 1MB: row `y` is at offset `O = y*mw` in it, reached
+larger than 64KB, up to 1MB (4MB, one huge claim, on kern_mega's arm:
+106.8.1): row `y` is at offset `O = y*mw` in it, reached
 through a table of WINDOWS made once per claim (`OSAPI_SEG`'s `SEG_SUB`, one
 every 32KB, each reaching 64KB or the claim's end) as window `O >> 15` at
 offset `O & 7FFFh`, so a row never straddles its window (`mw` is at most
@@ -214827,6 +214830,81 @@ claim (106.11), and — only while a picture decodes — the old master, the
 RING and the WORK claim (106.9), and a drop-down's bank (13.14.1) while its
 list is open. Seven at the worst moment. (Wave 3 adds a decoder PART and
 frees the head before the claims are made: still seven, 106.18.)
+
+#### 106.8.1 kern_mega's arm: the master is one huge claim, up to 4MB (MEGA-HUGE-PLAN 3, 2026-11-08)
+
+**On `make mega`'s PIXEL.O88 the master is ONE `OSAPI_MEM_HUGE` claim with a
+window every 32KB** (BX = 8000h, §50.3.5), and its table is that claim's own
+run of selectors. Through `OSAPI_MEM_CLAIM` a master over 64KB was a
+CONVENTIONAL claim on kern_mega (an `OS88_HIGHMEM` package's claims go above
+1MB at 64KB or less, §50.3.7), and the table at most 32 windows: 1MB, more
+than a real-mode kernel gives one claim and half what a 4MB machine's pool
+holds free. What the arm does:
+
+- **The claim** (`PX_MCLAIM`, pxrec.inc; the master in `px_claims` and an
+  operation's destination in the edit part's `pf_start`, which becomes the
+  master): `OSAPI_MEM_HUGE`, BX = 8000h. Selector k is the 64KB window from
+  32KB x k, cut at the claim's end - exactly the layout a table already is
+  (window `O >> 15` at offset `O & 7FFFh`, a row never straddling it) - so
+  `px_mwbuild` fills the table with the claim + `[px_hrun]` x k, `[px_hrun]`
+  being the step the cell answered when it gave that run (BX = 0 out: 8 in
+  protected mode, the pool's block or a conventional claim alike), and asks
+  no `SEG_SUB` and takes no LDT entry of its own. A real-mode kernel keeps BX
+  (no such run): `[px_hrun]` = 0 and the table is `SEG_SUB`'s sums, as it
+  was. A 32KB-window claim never bridges (§50.3.5), so the master is the
+  pool's or the heap's, one piece.
+- **The cap** is `PX_MWN` = 128 windows on the arm: 4MB, the whole of a 4MB
+  machine's pool and more. The shipped build keeps 32.
+- **The scale is asked of the shape it will be granted** (`PX_AVAILR`, the
+  routine `px_avail` in the package and `pe_avail` in the edit part): AX =
+  the 8000h ask (`OSAPI_MEM_HUGE` AX = 0, BX = 8000h: the better of the
+  pool's best run and the heap's, MEGA-HUGE-PLAN F3) and BX = the pool-aware
+  total (`MEMH_AVAIL`, F6) in place of `OSAPI_MEM_AVAIL`'s conventional two,
+  for `px_claims`' pick, for the edit's room checks (`px_eroom`, Resize's
+  line, "Needs 300K; 120K free") and for the status bar's "Memory:". An ask
+  refused - kern_mega in real mode answers the heap's - is
+  `OSAPI_MEM_AVAIL`'s. The work claim, the ring and the view are what they
+  were.
+- **The histogram's TAIL** past the pixels (106.20) is at their paragraph
+  count rounded up to 8 - past FFFFh on a master over 1MB, where the 16-bit
+  sum every tail finder made (`px_htail`, the edit part's `pe_tailof`, full
+  screen's, the plans' `pl_htail`) put it back INSIDE the master, the decode's
+  counts written over its pixels. On the arm the count is carried to 32 bits
+  (`PX_ADC`) and the tail is a `SEG_SUB` from the run's window (count >> 11)
+  at (count & 7FFh) (`PX_TAILAT`, pxrec.inc); the shipped sums are as they
+  were.
+- **Movable as before**: the master's `OSAPI_MEM_MOVABLE` (§66) is recorded
+  for a conventional one; a pool one moves whatever is declared, its
+  selectors following it, and `px_mreloc` is called for neither in
+  protected mode.
+- **What waits**: a PACKED picture read whole (`px_rflat`, a 'CZ' file
+  expanded by one `OSAPI_FILE_READ` into an `OSAPI_MEM_P` claim, §20.14)
+  stays that conventional claim. Into a pool claim over 64KB the kernel
+  decoded a packed file into one window until MEGA-HUGE-PLAN F4 (KERN-MEGA-PLAN
+  14.171, a branch of its own); once that is merged the flat read can be a
+  huge claim too. A user's picture is not packed; the shipped samples are.
+
+**The arm's resident is its own now**, so its bss is not the shipped one's:
+`$(MEGAAPPDIR)/pixel.bin` is pixel.asm assembled `-DPKG_MEGA`, `tools/pxlink.py
+-D PKG_MEGA` writes its map as `$(MEGAAPPDIR)/pxlink.inc`, and every LINKED
+part of the arm - the GIF part as well now - is assembled against that one
+(`-I $(MEGAAPPDIR)/` ahead of `$(BUILD)/`); the part's stamp check (106.20)
+refuses one linked against the other build. **Bytes**: the arm's image 41,019
+-> 41,158 (+139), its bss 11,417 -> 11,995 (+578: three tables of 96 more
+words, and `[px_hrun]`), 53,153 of `APP_MAX_SIZE`'s 65,024; its parts +510
+(the tail finders, +66 in each part that carries the plans, `pe_avail` and
+the claim in the edit part); its PIXEL.O88 109,866 -> 110,314 bytes; the
+shipped PIXEL.O88 byte-identical; no kernel byte.
+
+**Measured** (86Box's at286_vga_sb, `tests/megapxhuge.py --find`: a 2048-wide
+8-bit PCX, the height halved to 32 rows between one decoded at 1/1 and one
+not): the largest master at 1/1 **450 KB -> 2,882 KB on 4MB** (2048 x 224 ->
+2048 x 1440), and **450 -> 514 KB on 640K + 384K** (the master taking the
+heap alone there, ahead of the pool's best run). `megapxhuge` is the row: a
+2048 x 1400 picture at 1/1 on 4MB, its table the run, rows past 1MB and 2MB
+read through it the file's, the tail at byte 2BC000h the file's counts; red
+with mega-release's arm, which opened it at 1/4, and with the tail's 16-bit
+sum kept, which left the tail empty.
 
 ### 106.9 The decode pipeline: a worker, and the UI task as its file pump (wave 2)
 

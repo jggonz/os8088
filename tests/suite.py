@@ -18985,7 +18985,8 @@ SOAK = [
         "measured",
         needs=("bochs", "nasm"),
         wants=("build/mega.img", "build/megak/apps/pixel.o88",
-               "build/megarun.o88", "build/mbr.bin", "build/pixel.bin")),
+               "build/megarun.o88", "build/mbr.bin",
+               "build/megak/apps/pixel.bin")),
     Row("megapixelship", "soak", py("tests/megapixel.py", "--shipped"), 90.0,
         "megapixel with the SHIPPED PIXEL.O88 on B: in place of the kern_mega "
         "arm (SPEC.md 20.18: the shipped build must be correct on kern_mega, "
@@ -19623,6 +19624,22 @@ SOAK = [
         needs=("86box",),
         wants=("build/mega.img", "build/megak/apps/xtmp3.o88",
                "build/megak/apps/xtmp3.map", "build/mbr.bin")),
+    Row("megapxhuge", "soak", py("tests/megapxhuge.py"), 30.0,
+        "SPEC.md 106.8.1 (MEGA-HUGE-PLAN 3): PiXEL's kern_mega arm makes its "
+        "master ONE OSAPI_MEM_HUGE claim with a window every 32KB (BX = "
+        "8000h), sized by that shape's own ask, its table the claim's own "
+        "run, up to 4MB. 86Box's at286_vga_sb with 4MB, the arm and a "
+        "2048 x 1400 8-bit PCX on B: double-clicked: decoded at 1/1, a "
+        "2,802 KB master; px_hrun 8 and the shown table's window k the "
+        "claim + 8k; master rows each side of 1MB and 2MB into it read "
+        "through the run the file's indices; the histogram's tail at byte "
+        "2BC000h the file's counts; no exception charged to PiXEL. "
+        "RED: the arm of mega-release (--pkg) - the picture at 1/4, a 177 "
+        "KB master; and the tail's 16-bit sum kept - the tail empty. --find measures the largest master at 1/1: 450 -> 2,882 "
+        "KB at 4MB, 450 -> 514 KB at --megs 1.375. 30s is 16 measured",
+        needs=("86box",),
+        wants=("build/mega.img", "build/megak/apps/pixel.o88",
+               "build/megak/apps/pixel.map")),
     Row("megacaps", "soak", py("tests/megacaps.py"), 60.0,
         "docs/plans/KERN-MEGA-PLAN.md 14.122, SPEC.md 41.8: "
         "OSAPI_XMEM_CAPS ANSWERS WHAT A CLAIM IS THEN GIVEN. kern_mega "

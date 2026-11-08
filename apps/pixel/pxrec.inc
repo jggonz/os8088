@@ -81,8 +81,17 @@ PXH_BINS    equ 1024
 ; KB, and is rebuilt when that claim is not the one it was made of (its
 ; KEY); a real-mode move re-bases it (px_mreloc), a protected-mode one is a
 ; rebase that changes no selector. A master is held to PX_MWN windows: 1MB,
-; more than any real-mode kernel can give one -----------------------------------
+; more than any real-mode kernel can give one - and on kern_mega's ARM 4MB
+; (MEGA-HUGE-PLAN 3, SPEC.md 106.8.1): there the master is ONE OSAPI_MEM_HUGE
+; claim with a window every 32KB (BX = 8000h), which the pool holds to its
+; whole free run, and the table is that claim's own run of selectors, window k
+; the claim + [px_hrun] x k (px_mwbuild) - no SEG_SUB, no LDT entry of its own
+; -------------------------------------------------------------------------------
+%ifdef PKG_MEGA
+PX_MWN      equ 128                 ; windows a table holds: 128 x 32KB
+%else
 PX_MWN      equ 32                  ; windows a table holds: 32 x 32KB
+%endif
 MWT_KEY     equ 0                   ; word: the claim the table is OF; FFFFh
                                     ; made of nothing yet (ask again)
 MWT_PSEG    equ 2                   ; word: where that claim's segment is
@@ -113,6 +122,127 @@ MWT_NONE    equ 0xFFFF              ; (no selector and no heap segment)
     pop cx
     pop bx
     pop ax
+%endmacro
+
+; PX_AVAILR - the ARM's routine body (px_avail in the package, pe_avail in
+; the edit part; PX_AVAIL calls it): AX = the largest claim a MASTER is
+; granted, BX = the KB free in all - OSAPI_MEM_AVAIL's two answers, which is
+; what they are on every kernel but kern_mega in protected mode (MEGA-HUGE-PLAN 3, SPEC.md
+; 106.8.1). There a master is an OSAPI_MEM_HUGE claim with a window every
+; 32KB, which the pool or the conventional heap holds ALONE (never a bridge,
+; F3), so AX is that shape's own ask (AX = 0, BX = 8000h) and BX the
+; pool-aware total (MEMH_AVAIL, F6). An ask refused - kern_big, kern_small,
+; or no kernel that answers it - is OSAPI_MEM_AVAIL's. Preserves all else
+%macro PX_AVAILR 0
+    push cx
+    push dx
+    xor ax, ax
+    mov bx, MEMH_AVAIL
+    call OSAPI_MEM_HUGE             ; BX = the total, the pool counted
+    jc %%conv
+    push bx
+    xor ax, ax
+    mov bx, 0x8000
+    call OSAPI_MEM_HUGE             ; AX = the most one master is granted
+    pop bx
+    jnc %%o
+%%conv:
+    call OSAPI_MEM_AVAIL
+%%o:
+    pop dx
+    pop cx
+    ret
+%endmacro
+
+; PX_AVAIL routine - a call of PX_AVAILR's routine on the ARM, of
+; OSAPI_MEM_AVAIL itself in the shipped build (byte for byte what it was)
+%macro PX_AVAIL 1
+%ifdef PKG_MEGA
+    call %1
+%else
+    call OSAPI_MEM_AVAIL
+%endif
+%endmacro
+
+; PX_MCLAIM - AX = KB: the MASTER's claim (or an operation's destination,
+; which becomes one), DX = it, CF = 1 refused - OSAPI_MEM_CLAIM, but on the
+; ARM an OSAPI_MEM_HUGE claim with a window every 32KB (BX = 8000h), the
+; layout a table already is (px_mwbuild): [px_hrun] = the step between its
+; windows when the cell gave that run (BX = 0 out: 8 under kern_mega's
+; protected mode), 0 when it did not (a real-mode kernel's sum, which
+; SEG_SUB answers too). Preserves all but DX and the flags
+%macro PX_MCLAIM 0
+%ifdef PKG_MEGA
+    push bx
+    push cx
+    mov bx, 0x8000
+    call OSAPI_MEM_HUGE             ; DX = the claim, CX = the step
+    jc %%o
+    or bx, bx
+    jz %%r
+    xor cx, cx                      ; (no run: the table is SEG_SUB's)
+%%r:
+    mov [px_hrun], cx
+%%o:
+    pop cx
+    pop bx
+%else
+    call OSAPI_MEM_CLAIM
+%endif
+%endmacro
+
+; PX_TAILAT seg - THE HISTOGRAM'S TAIL (pxmaster.inc's px_htail and the
+; parts' three twins): DX:AX = a master's pixels in paragraphs, already
+; rounded up to 8 (`add ax, 7`, PX_ADC, `and al, 0xF8`: the layout
+; KERN-MEGA-PLAN 14.40 made), `seg` its claim -> DX = a selector of the tail
+; there, AX kept. The shipped build's is
+; the 16-bit sum it always was, right while a master is under 1MB. The ARM's
+; master reaches 4MB (106.8.1), where the count passes FFFFh: there the tail
+; is a SEG_SUB from the RUN's window (count >> 11) at (count & 7FFh), which
+; [px_hrun] names - the same bytes, asked of a window the kernel bounds by
+; the claim. Preserves all else
+%macro PX_TAILAT 1
+%ifdef PKG_MEGA
+    cmp word [px_hrun], 0
+    je %%sum
+    push ax
+    push ax                         ; (the count's low word, for below)
+    mov al, ah
+    xor ah, ah
+    shr al, 1
+    shr al, 1
+    shr al, 1                       ; AX = its low word >> 11...
+    shl dx, 1
+    shl dx, 1
+    shl dx, 1
+    shl dx, 1
+    shl dx, 1
+    or ax, dx                       ; ...and the high word's: the window
+    mul word [px_hrun]
+    add ax, %1
+    mov dx, ax                      ; DX = window (count >> 11) of the run
+    pop ax
+    and ax, 0x07FF                  ; AX = the paragraphs into it
+    PXSUB
+    pop ax
+    jmp short %%o
+%%sum:
+    mov dx, %1
+    PXSUB
+%%o:
+%else
+    mov dx, %1
+    PXSUB
+%endif
+%endmacro
+
+; PX_ADC - between a tail count's `add ax, 7` and its `and al, 0xF8`: the
+; carry into the count's high word on the ARM, whose count passes FFFFh
+; (PX_TAILAT); nothing in the shipped build
+%macro PX_ADC 0
+%ifdef PKG_MEGA
+    adc dx, 0
+%endif
 %endmacro
 
 ; PXMW_LOOK - the lookup itself: DX:AX = a byte offset into the claim the
