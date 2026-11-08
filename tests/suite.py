@@ -19381,10 +19381,13 @@ SOAK = [
         "and with Bochs's SB16 the music heard in its capture at the "
         "bundle's own rate; the bundle held in XMS - opened at the door, "
         "filled through the twin, read IN PLACE by a 386's loaded base, no "
-        "disk read from the fill on. 240s is 238 measured. Broken (vb_door "
-        "blind to CPU_F_PM) the first "
+        "disk read from the fill on - the CLIP CACHE as on kern_big "
+        "(KERN-MEGA-PLAN 14.179), and the block MOVED between plays read "
+        "where it is now (OSAPI_XMEM_COPY CX = 0). 240s is 238 measured. "
+        "Broken (vb_door blind to CPU_F_PM) the first "
         "Play is CLOSED by a #GP again; DRVC_SOUND left out of the list, a "
-        "silent play",
+        "silent play; RED on mega-release (no cache there), and vb_hipok "
+        "aiming at the token the moved block fails the check",
         needs=("bochs", "numpy"),
         wants=("build/mega.img", "build/megak/kernel.map",
                "build/vbattle.o88")),
@@ -19396,8 +19399,11 @@ SOAK = [
         "Sound Blaster 2.0 fed on the emulated clock, the XMS hold read in "
         "place by LOADALL, and an EMS hold (a Lo-tech board, the name's "
         "_ems) read in place through the frame - no disk read from either "
-        "fill on. Broken (vb_door blind to CPU_F_PM) the package is CLOSED "
-        "at the first Play. 120s is 107 measured",
+        "fill on, each the CLIP CACHE as on kern_big and the XMS block "
+        "moved between plays read where it is now (KERN-MEGA-PLAN 14.179). "
+        "Broken (vb_door blind to CPU_F_PM) the package is CLOSED "
+        "at the first Play; RED on mega-release (no cache). 120s is 107 "
+        "measured",
         needs=("86box",),
         wants=("build/mega.img", "build/megak/kernel.map",
                "build/vbattle.o88")),
@@ -19766,7 +19772,11 @@ SOAK = [
         "excess + 8. $OS88_VBT_TARGET / $OS88_VBT_PKG name the owner's "
         "real battles (never in the tree); the demo bundle otherwise. RED "
         "on mega-release: the region 48 KB and the picture 12 KB in the "
-        "pool, the hold 232 of 285. 30s is 19-21 measured (two boots)",
+        "pool, the hold 232 of 285. And (KERN-MEGA-PLAN 14.179) kern_mega's "
+        "hold the CLIP CACHE wherever kern_big's is - the idle loop in its "
+        "block, clips read in place: RED on mega-release at 14.178 (the "
+        "copying hold, 0 records in place). 30s is 19-21 measured (two "
+        "boots)",
         needs=("86box",),
         wants=("build/mega.img", "build/os8088.img", "build/vbattle.o88",
                "build/BATTLE.VBT")),

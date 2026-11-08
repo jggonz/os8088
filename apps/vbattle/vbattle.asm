@@ -1478,6 +1478,14 @@ vb_play:
 .ran:
     call vb_between                 ; (the claims a desktop window holds)
     popf
+    jc .nc
+    cmp byte [vb_cnope], 0          ; kern_mega's bracket REFUSED THE CACHE
+    je .nc                          ; (vb_main): the battle loaded again
+    mov byte [vb_cnope], 0          ; with the copying hold, and played -
+    mov byte [vb_noinp], 1          ; once, the gate shut for the window's
+    call vb_unload                  ; life
+    jmp .go
+.nc:
     mov al, [vb_cvon]               ; (the picture's as the desktop came
     mov [vb_cvback], al             ; back: up already, no text flash - a
     jnc .back                       ; test's, vbtcover)
@@ -2041,11 +2049,12 @@ vb_load:
     add ax, (VB_MR + VB_MPIECE) / 16
 .rings:
     push ax                         ; THE HOLD, opened here once a session
-    cmp byte [vb_pmd], 0            ; (kern_mega: at .claimed, below): a
-    jne .rh                         ; CACHE keeps the idle loop in its block
-    cmp byte [vb_hopd], 0           ; (126.4.6), and the claim has no part
-    jne .rh                         ; for it
-    mov byte [vb_hopd], 1
+    cmp byte [vb_hopd], 0           ; (kern_mega too, at its door: an XMS
+    jne .rh                         ; block, EMS pages and the bounce are
+    mov byte [vb_hopd], 1           ; refused inside a real-mode bracket): a
+                                    ; CACHE keeps the idle loop in its block
+                                    ; (126.4.6), and the claim has no part
+                                    ; for it
     call vb_hopen
 .rh:
     pop ax
@@ -2085,12 +2094,7 @@ vb_load:
                                     ; the rings' below (no hole on the desktop)
     cmp byte [vb_pmd], 0            ; ON kern_mega THE BRACKET READS: no
     je vb_lread                     ; paragraph is added to a selector
-    cmp byte [vb_hopd], 0           ; (VBATTLE-MEGA-PLAN W1) - and the HOLD
-    jne .ok                         ; is opened here, once: its XMS block,
-    mov byte [vb_hopd], 1           ; its EMS pages and its bounce are refused
-    call vb_hopen                   ; inside a real-mode bracket (W3)
-.ok:
-    clc
+    clc                             ; (VBATTLE-MEGA-PLAN W1)
     ret
 .fail:
     stc
@@ -2477,6 +2481,8 @@ vb_ringclm:
 ; a machine that has been used, the second-largest hole, where one claim for
 ; both could only ever have one - and then, when ring 1 went somewhere else
 ; and ring 0's run has room left over, ring 0 claimed again over all of it.
+; THE CACHE's pair (126.4.6) is ring 1 at its least, claimed first, and
+; ring 0 the largest run left (KERN-MEGA-PLAN 14.179).
 ; Each is cut to whole 4 KB and has its guard past it; VB_RKEEP is left free
 ; for the kernel's file reads (a FAT window). OSAPI_MEM_AVAIL counts the
 ; desktop's caches as free and the claim sheds them (SPEC.md 50.6.3): the
@@ -2532,31 +2538,33 @@ vb_rclaim:
 .pair:                              ; ring 0 half of AX KB, ring 1 the
     sub ax, [vb_rkeep]              ; largest left. CF=1 none claimed
     jc .pno
+    mov bx, vb_rg0
     cmp byte [vb_cmode], 0          ; THE CACHE (126.4.6): a ring is only
     jne .pc                         ; for a clip it has no slot for - ring
     shr ax, 1                       ; 0 the run, ring 1 the least beside it
     jmp short .p0
 .pc:
-    mov dx, VB_CRMIN                ; ring 1: its least - VB_CRMIN, or the
-    cmp dx, [vb_rmin]               ; bundle's own (vb_rmin) UP to whole 4
+    mov ax, VB_CRMIN                ; ring 1: its least - VB_CRMIN, or the
+    cmp ax, [vb_rmin]               ; bundle's own (vb_rmin) UP to whole 4
     jae .pc1                        ; KB, since a ring is cut to them (62
-    mov dx, [vb_rmin]               ; cut to 60 refused the owner's VGA
-    add dx, 3                       ; battle under VBATTLED, 2026-11-07)
-    and dl, 0xFC
+    mov ax, [vb_rmin]               ; cut to 60 refused the owner's VGA
+    add ax, 3                       ; battle under VBATTLED, 2026-11-07)
+    and al, 0xFC
 .pc1:
-    add dx, 4                       ; ...a 4 KB step of slack, its guard
-    add dl, [vb_cgkb]
-    adc dh, 0
-    sub ax, dx
-    jc .pno
-.p0:
-    mov bx, vb_rg0
-    call .claim
-    jc .pno
+    add al, [vb_cgkb]               ; ...and its guard - CLAIMED FIRST, ring
+    adc ah, 0                       ; 0 then the largest left: a cache
+    mov bx, vb_rg1                  ; OSAPI_MEM_AVAIL counts free that a claim
+.p0:                                ; which fits does not shed (kern_mega's
+    call .claim                     ; pinned read-ahead, 9 KB) left ring 1
+    jc .pno                         ; short when ring 0 went first
     call OSAPI_MEM_AVAIL
     sub ax, [vb_rkeep]
     jc .pfree
     mov bx, vb_rg1
+    cmp byte [vb_cmode], 0
+    je .p1
+    mov bx, vb_rg0
+.p1:
     call .claim
     jnc .pok
 .pfree:
@@ -3321,13 +3329,21 @@ vb_main:
     call .ring                      ; places, which vb_rclaim summed from the
     mov bx, vb_rg1                  ; selector at the door
     call .ring
+    cmp byte [vb_hinp], 0           ; THE HOLD IN PLACE checked again in THIS
+    je .m1                          ; bracket: where the pool has the block
+    cmp byte [vb_cmode], 0          ; now (the twin's answer), A20 and a
+    jne .mc                         ; 286's LOADALL state this bracket's
+    call vb_hipq                    ; (a whole hold: else it copies)
+    jmp short .m1
+.mc:
+    call vb_hipok                   ; THE CACHE, planned at the door on the
+    jnc .m1                         ; tier: refused here (no LOADALL), the
+    mov byte [vb_cnope], 1          ; idle loop has no resident room to go
+    jmp short .back                 ; to - vb_play loads the copying hold
+.m1:
     call vb_lread                   ; ...and read (once a session)
     jc .back
-    cmp byte [vb_hinp], 0           ; THE HOLD IN PLACE checked again in THIS
-    je .m1                          ; bracket: the pool may have moved the
-    call vb_hipq                    ; block since (its token is its address
-.m1:                                ; only while it stays), and a 286's
-    call vb_main1                   ; LOADALL state is this bracket's
+    call vb_main1
 .back:
     mov byte [vb_ready], 0          ; (the hook off before the words go
     mov si, vb_rlst                 ; back to selectors)
@@ -5739,6 +5755,8 @@ VB_VAR vb_icalls, 2                 ; ...records reached in place (a count)
 VB_VAR vb_iyc, 2                    ; ...yields inside a borrow (a count)
 VB_VAR vb_irings, 2                 ; ...rings given a clip in place
 VB_VAR vb_htok, 4                   ; ...the block's token
+VB_VAR vb_hlin, 4                   ; ...its linear base, read in place
+VB_VAR vb_cnope, 1                  ; ...kern_mega's bracket refused the cache
 VB_VAR vb_hcur, FSEQ_SIZE           ; ...the fill's own file cursor
 VB_VAR vb_htab, 28 * 8              ; ...the ranges (HT_*)
 VB_VAR vb_hpno, 1                   ; ...its hold order had nothing

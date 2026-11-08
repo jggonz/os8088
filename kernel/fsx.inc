@@ -3580,7 +3580,11 @@ rms_xcaps:
 ; 286 and by a loaded base on a 386, in kern_big's XMEM.DRV's pieces (16 KB /
 ; 2 KB, interrupts open between them), with A20 proved first. out CF = 0;
 ; CF = 1 AX = 1 no store / 2 not a block of yours / 3 bad length. Every other
-; register kept
+; register kept. CX = 0 is WHERE (SPEC.md 53.2.3, KERN-MEGA-PLAN 14.179): no
+; byte moved, CF = 0 and DX:AX = the LINEAR address those bytes are at NOW -
+; what a package reads in place by LOADALL or a loaded base inside this
+; bracket, where nothing moves a block; every other kernel and context
+; refuses CX = 0 as a bad length
 ; -----------------------------------------------------------------------------
 rms_xcopy:
     push bx
@@ -3594,8 +3598,7 @@ rms_xcopy:
     push cs
     pop ds
     mov bp, 3
-    jcxz .e
-    test cl, 1
+    test cl, 1                  ; (CX = 0 passes both: WHERE, at .w)
     jnz .e
     cmp cx, 32768
     ja .e
@@ -3610,6 +3613,7 @@ rms_xcopy:
     mov bl, [rms_slot]
     call rms_xchk               ; DX:AX = where those bytes are now
     jc .e
+    jcxz .w                     ; (CX = 0: that is the answer)
     push dx
     push ax
     mov ax, es                  ; the conventional end, linear
@@ -3651,6 +3655,16 @@ rms_xcopy:
     pop di
     pop si
     pop dx
+    pop cx
+    pop bx
+    retf
+.w:
+    pop es                      ; WHERE: DX:AX answered, the caller's DX
+    pop ds                      ; dropped (CF = 0, rms_xchk's)
+    pop bp
+    pop di
+    pop si
+    pop cx
     pop cx
     pop bx
     retf

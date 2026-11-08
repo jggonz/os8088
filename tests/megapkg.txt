@@ -32,12 +32,14 @@ apps/os88spk.inc 1              # THE SHIPPED BUILD REFUSING THE TIER:
     # Player); without them the real-mode ISRs would store through CS a
     # sample at a time, a fault each, so the PCM tier refuses and the package
     # plays another way. 15 bytes of image (measured on Audio)
-apps/vbattle/vbcache.inc 1      # THE BATTLE'S DECODE IN PLACE refused
-    # under protected mode (vb_hipok, SPEC.md 126.4.2): a token is no address
-    # there (50.6.10) and both borrows - LOADALL, a 386's loaded base - are
-    # real mode's. The copying hold plays instead. ~4 bytes, the fail-safe:
-    # on kern_mega the play runs in a real-mode bracket (126.4.5), where
-    # this test answers real mode
+apps/vbattle/vbcache.inc 1      # THE BATTLE'S DECODE IN PLACE planned,
+    # not checked, under protected mode (vb_hipok, SPEC.md 126.4.2, 126.4.5):
+    # both borrows - LOADALL, a 386's loaded base - are real mode's and a
+    # token is no address there (50.6.10), so kern_mega's door answers the
+    # tier alone and each real-mode bracket makes the check, the block's
+    # place asked of OSAPI_XMEM_COPY's twin (CX = 0, KERN-MEGA-PLAN 14.179).
+    # ~4 bytes: the play runs in a real-mode bracket (126.4.5), where this
+    # test answers real mode
 apps/vbattle/vbattle.asm 2      # VIDEO BATTLE PLAYS ON kern_mega IN THE
     # SHIPPED BUILD - the owner's decision (docs/plans/VBATTLE-MEGA-PLAN.md,
     # 2026-11-06): every battle disk, the builder's zip and every game
