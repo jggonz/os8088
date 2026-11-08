@@ -16360,3 +16360,69 @@ the pool, 36 KB against 21 + 8 (the player 64 against 21 + 32), the 16 KB
 run, no `[vp_rbkb]`. Leg 7 RED with `mx_relinst`'s `jmp mega_drvup` taken
 out (0 KB after the close). Green here. `--map` prints the heaps and the
 tables; `--clip 05-LASTX.V88` banks the player at 4 MB too.
+
+### 14.181 A lent SOUND.DRV went back UP and left its IRQ vector naming the freed copy: every play after the first window closed was silent (2026-11-08) - FIXED
+
+**Found by the owner's pre-release check**: the VGA demo videos
+(apps/video/demo/vga/, 01-09 made for a 16 MHz 286) played full screen one
+after another on 86Box's `vm/viddemo-vga` (Micronics MR 286, 16 MHz, 4 MB,
+OTI-067, SB16 on IRQ 5, IDE at 5400 rpm), each in its own Video Player
+window opened from C:'s MEDIA and closed after the play - as a user plays
+them. The first clip played with its sound; EVERY clip after it played its
+picture whole with no stall and SILENT past its first block: `[vp_snd]` 0,
+`[vp_pause]` 1, `[vp_afr]` 11-18 frames of sound queued in all, real-mode
+and protected-mode brackets alike. A play repeated in the SAME window kept
+its sound; a fresh boot per clip kept it every time; kern_big on the same
+machine kept it through the whole sequence. An SB2.0 on IRQ 7 did the same.
+
+**Cause.** 14.180 lends SOUND.DRV DOWN for a real-mode bracket
+(`FSXF_PREP`, `mega_drvlow`) and takes it back UP when any instance ends
+(`mx_relinst`'s `mega_drvup`). While it is down, the forced `mega_ivt_sync`
+at the bracket's return writes the card's IVT cell as the conventional
+image's SEGMENT (`.fixrow`, for reflections - 14.180's own finding). The
+trip up moved the image and its selectors (`mega_mvblk`) and left the cell
+alone, so it named a paragraph that was no longer the driver's. Read off the
+machine: before the first play IVT 0Dh = `10EC:0831` (the pair's code half,
+the image at 3E7C00); in the play `16E0:0831` (the copy at 016E00); after
+the close the image back at 3E7C00 and the cell STILL `16E0:0831`; in the
+second play the copy at 017200 and the cell `16E0:0831` - into the middle of
+the new copy. The second door's `fsx_rsnddn` matched neither the code half
+nor the new `RMD_SEG`, banked nothing and left the line shut; the gates the
+next sync built from the cell went to whatever claim held that paragraph
+now, or reflected to it. Whether it shows depends on where the next copy
+lands: on `vm/at286-port` with the clip at C:'s root the second copy took
+the first's paragraph and the stale cell happened to be right.
+
+**Fix.** `mega_drvivt` (`.mega`, called by `mega_drvup` after each image it
+takes up): every IRQ cell, IVT 08h-0Fh and 70h-77h, that names the image's
+old paragraph names the pair's CODE half again - what `drv_hi` left there
+and what `fsx_rsnddn` matches - and `mega_ivt_sync` rebuilds the gates (and
+IVT 20h's twins). A cell naming anything else is not the driver's and is
+left alone. SPEC.md 53.2.3.1 carries it.
+
+What it costs: kern_mega `.mega` +64 bytes (24,592 -> 24,656 from its rung;
+the 26,112 rung not crossed, the code area 74,806 of 261,120), `.text` and
+the resident footprint unchanged (62,976; `tests/megaseg.txt` 3,760 as it
+was); kern_big and kern_small byte-identical but for the build number.
+
+**The row, `megasndup`** (soak): kern_mega on `vm/viddemo-vga`, the
+player's arm and 06-SNOW.V88 in C:'s MEDIA (a 128/16/63 disk), played full
+screen, the window closed, opened and played again. RED on mega-release:
+after the close IVT 0Dh = `1560:0831` with the image back at 3E7C00, and
+play 2 silent after 16 frames. Green here (the cell `1104`'s code half, both
+plays 303 of 303 frames, the card open and never dry). The sequence of all
+eleven clips in one boot, after the fix: sound on every play, 01-09 with no
+stall and no pause.
+
+**Seen in the same pass, not fixed here** (both kernels, so not kern_mega's):
+10-LX486.V88 (a 486 clip) HANGS in a real-mode / kern_big full-screen play
+at its frame 221 - the first record of the file at 60,000 bytes or more
+(62,663; no clip 01-09 has one) - with the CPU executing data at
+`0206:9059` (kern_big's `.bss`) under the MR BIOS's INT 6 handler, IF clear,
+and the mouse dead. `[vp_noinp]` 1 (no in-place decode, 98.3.18.7) plays it
+through (609 pauses, 140 s against 92: the 286 cannot keep up, as the clip's
+text says), so the in-place decode's 286 (LOADALL) path is where to look.
+And after a protected-mode bracket (03-BEBOP's own `VPR_SPLIT`), the next
+clip's door refused real mode with `FSXR_DRV` (04-MECH2 after 03; 08, 09 and
+10 later in the sequence), where a fresh boot ran each in real mode; those
+plays were still whole, with no stall or pause.
