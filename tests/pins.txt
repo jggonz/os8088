@@ -44,6 +44,10 @@ C kernel/ascw.inc MEM_K_ASC              # FORMAT.DRV's ASSOC.DAT flush work
                                          # buffer, claimed and freed inside one
                                          # ascw_flush_x call; every offset into
                                          # it is live across the write
+C kernel/diskw.inc MEM_K_SEAM            # kern_mega's huge read's seam (SPEC.md
+                                         # 20.14.5.4): claimed and freed inside
+                                         # one OSAPI_FILE_READ, the decoder
+                                         # reading it by linear base throughout
 C kernel/compress.inc MEM_K_CMPR         # the Compress/Uncompress verb's working
                                          # block, claimed and freed inside one
                                          # command; three segments are paragraph
@@ -162,6 +166,13 @@ D apps/syscheck/disk.inc sc_wseg         # FSCHECK.DRV's workspace (SPEC.md 118.
                                          # int 13h moves sectors straight into it
                                          # on every step of a disk task, a claim at
                                          # the DMA door, freed when the task ends
+X apps/tracker/tracker.asm @trk_hzfits   # kern_mega's arm only: the module's
+                                         # OSAPI_MEM_HUGE claim is a POOL block
+                                         # above 1MB, which the pool moves by its
+                                         # descriptors (mx_compactf) - no wall in
+                                         # the heap; one the cell put in the heap
+                                         # is given back for the door's movable
+                                         # claim (SPEC.md 45.3.1.2)
 X apps/syscheck/disk.inc sc_fseg         # FSCHECK.DRV, KERNEL CODE the kernel far-
                                          # calls on every step (118.14.1): a claim
                                          # made inside a step - the read-ahead

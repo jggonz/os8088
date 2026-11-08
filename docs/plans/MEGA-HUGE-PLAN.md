@@ -124,4 +124,7 @@ target), the Task Manager.
 | F1, F2, F9 | **done** (mega-hugebridge) | KERN-MEGA-PLAN 14.169 |
 | F5 | **done** - `apps/os88huge.inc`: a record and `hw_aim`, `hw_get`/`hw_put`, `hw_claim`, `hw_fread`, `hw_fwrite`, every piece split where a window ends (SPEC.md 50.3.8) | KERN-MEGA-PLAN 14.170; os88huge, megahw, megahw86, megahwbig |
 | XTMP3 | **done** - the arm's hold is one huge claim, a bridge allowed: 192 -> 608 KB held at 640K + 384K, 2,848 -> 3,232 KB at 4MB | SPEC.md 121.6.1; 14.170; x3huge, x3mega |
-| F4, F8 | open | |
+| F4 | **done** - a packed file past 64KB into a huge claim of any shape, a bridge's cut included (a read across a cut starts on a 64KB window of the claim, FERR_PROT otherwise); the decoder aimed by X, the seam for a stream across the cut | KERN-MEGA-PLAN 14.171; SPEC.md 20.14.5.4; megahpk |
+| Tracker | **done** - the arm's module in the pool, one run (`HUGE_NOBRIDGE`), up to the format's 960KB | SPEC.md 45.3.1.2; megamod trkarm, trkbig |
+| RealDMG | **done** - a packed cartridge in place, past 256KB; cartridge RAM of 64/128KB NOT done (the core's RAM addressing, REALDMG-SPEC 10.3.1 says why) | REALDMG-SPEC 10.3.1; megagbpk |
+| F8 | open | |

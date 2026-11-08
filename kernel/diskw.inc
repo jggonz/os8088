@@ -429,6 +429,9 @@ dskw_read_x:
     mov [dskw_cap], cx
     mov [dskw_caphi], dx
     call dskw_rbody             ; out: CF + DX:AX (pops touch neither)
+%ifdef KERN_MEGA
+    call dskw_hzfree            ; a huge read's seam back (14.171): neither
+%endif
     call ct_fpg_end             ; ...and neither does this (SPEC.md 12.8)
     pop es
     pop bp
@@ -2008,6 +2011,9 @@ dskw_rbody:
     jmp .fits
 .big:
 %endif
+%ifdef KERN_MEGA
+.czkb:                          ; (the huge read's refusals, 14.171)
+%endif
     cmp dx, 0x3FF               ; 64MB or more SATURATES at 0xFFFF KB, which
     jb .kb                      ; no claim meets: the shift below would drop
     mov dx, 0xFFFF              ; U's top bits and the inc would wrap, and a
@@ -2080,7 +2086,46 @@ dskw_rbody:
     mov cx, ax                  ; through scratch selectors (KERN-MEGA-MEMORY-
     or cx, dx                   ; PLAN MC7.4). ABOVE 1MB A PLAIN FILE (R = 0)
     jz .czhip                   ; past the window is read by the selector
-    jmp .czbad                  ; arm's own walk, a window on at each carry
+                                ; arm's own walk, a window on at each carry
+    ; --- AND A PACKED ONE IS THE HUGE READ (MEGA-HUGE-PLAN F4, KERN-MEGA-PLAN
+    ; 14.171). It was refused here: the decoder walked its output by base
+    ; arithmetic, which past a bridge's cut is another program's memory. Now
+    ; the destination is WALKED first - every 64KB of X a window of the claim,
+    ; each 64KB but the last, and the cut, if any, on that grid (FERR_PROT
+    ; off it, FERR_BIG for a claim shorter than U) - the packed bytes are read
+    ; at R as before, and dskw_czexp decodes through mega_hz*'s map. A stream
+    ; that itself straddles the cut gets THE SEAM, 64KB claimed here, before
+    ; any data I/O, so a refusal still leaves the destination untouched
+    mov [dskw_czsrc], ax        ; R's low word: where the packed bytes start
+    mov cx, ax                  ; in their window, and (& 7FFFh) the input's
+    shl cx, 1                   ; offset in its 32KB view
+    mov cx, dx
+    rcl cx, 1
+    mov [ss:mega_hzxs], cx      ; R >> 15: that view, which the walk halves
+    call dskw_hzwalk            ; for the window to bank in [dskw_seg]
+    jc .czhrf
+    mov cx, [ss:mega_hzcut]
+    shr cx, 1                   ; the cut's window, 0 none
+    jz .czhrd
+    cmp dx, cx
+    jae .czhrd                  ; R at or past it: the stream is one piece's
+    call dskw_hzseam            ; ...and before it, as U is past it: a seam
+    jc .czhbig
+.czhrd:
+    mov ax, [dskw_czsrc]
+    mov [dskw_src], ax          ; the packed bytes' place in [dskw_seg]
+    jmp .czsized
+.czhrf:
+    cmp al, FERR_PROT
+    jne .czhb
+    jmp dskw_wbody.prot         ; the cut off the 64KB grid
+.czhbig:
+    stc                         ; no 64KB for the seam: FERR_BIG, DX = U's
+.czhb:                          ; KB and the seam's 64 more (CF = 1); the
+    mov ax, [dskw_uz]           ; claim short of U: U's alone (CF = 0, out
+    mov dx, [dskw_uzhi]         ; of `cmp al, FERR_PROT` with AL = FERR_BIG).
+    adc dx, 0                   ; The KB as .toobig says it, past its
+    jmp .czkb                   ; SHORTCUTS test, which is a plain read's
 .czfbl:                         ; (dskw_hicarry - the write's since MC7):
                                 ; it was refused FERR_IO, so no file over
                                 ; 64KB reached an OSAPI_MEM_HUGE claim in the
@@ -2383,6 +2428,11 @@ dskw_czexp:
     jc .bad                     ; and a file shorter than the header borrows
     mov ah, al                  ; out of it and is refused here...
 %ifdef KERN_MEGA
+    cmp byte [dskw_hi], 0       ; THE HUGE READ (dskw_rbody's .czfb, 14.171):
+    je .czn                     ; a selector arm's expansion past 64KB
+    cmp word [dskw_uzhi], 0
+    jne .czhz
+.czn:
     push ax                     ; (AH is the length's top byte: kept)
     mov ax, [dskw_czseg]        ; kern_mega: a real paragraph, maybe off the
     cmp byte [dskw_hi], 0       ; grid - a selector for it; above 1MB the
@@ -2424,12 +2474,46 @@ dskw_czexp:
     mov al, [si+2]              ; the format, which the decoder checks
     add si, DSK_CZ_HDR
     call lz_decomp_big          ; ...AH being the length's top byte
+%ifdef KERN_MEGA
+    mov word [ss:mega_hzes], 0  ; (a refusal before the entry's own test
+%endif                          ; would leave the name standing: `mov` keeps CF)
     pop ds
     ret
 .bad:
+%ifdef KERN_MEGA
+    mov word [ss:mega_hzes], 0
+%endif
     pop ds
     stc
     ret
+%ifdef KERN_MEGA
+.czhz:                          ; THE HUGE READ: the map again - the seam's
+    push ax                     ; claim may have moved the claim, whose
+    call dskw_hzwalk            ; windows follow it and whose bases do not
+    jc .czhzb                   ; stand still - then the seam's copy...
+    call dskw_hzfill
+    and word [ss:mega_hzxo], 0  ; ...ODD at X 0 and BACK beside it...
+    and word [ss:mega_hzxb], 0
+    push dx
+    mov ax, [ss:mega_hzxo]      ; (X, which mega_hzaim aims at)
+    mov di, MEGA_SEL_ODD
+    call mega_hzaim
+    mov es, ax
+    mov ax, [ss:mega_hzxs]      ; ...SLD at the 32KB view R is in...
+    mov di, MEGA_SEL_SLD
+    call mega_hzaim
+    pop dx
+    mov si, [dskw_czsrc]
+    and si, 0x7FFF              ; ...at R's offset in it, the header's 4
+    mov word [ss:mega_hzes], MEGA_SEL_ODD ; bytes inside it - and the decoder
+    mov ds, ax                  ; told, by its ES, that this is the one
+    pop ax
+    xor di, di
+    jmp short .czsi
+.czhzb:
+    pop ax
+    jmp short .bad
+%endif
 
 ; -----------------------------------------------------------------------------
 ; dskw_fpgb - arm the progress widget for the whole job (SPEC.md 12.8.1)
@@ -2684,6 +2768,202 @@ cpu 8086
     mov [dskw_src], cx          ; where the sector ends, in the next window
     or byte [dskw_hi], 2        ; ...said for .stg (`or`: CF = 0)
 .o:
+    ret
+
+; -----------------------------------------------------------------------------
+; dskw_hzwalk / dskw_hzseam / dskw_hzfill / dskw_hzfree - THE HUGE READ's map
+; (MEGA-HUGE-PLAN F4, KERN-MEGA-PLAN 14.171; mega.inc's mega_hz* aim by it).
+; dskw_hzwalk: the destination from [dskw_czseg] (X = 0) to U, a window of
+;   64KB at a time by SEG_SUB (dskw_hicarry): every window but the last 64KB
+;   long, and the last reaching U's last byte - else FERR_BIG, a claim
+;   shorter than U - and where a window's base is not the last one's + 64KB,
+;   THE CUT, there and only there, on the 64KB grid of X: a window cut short
+;   with another after it is a cut OFF the grid, FERR_PROT (SPEC.md 50.3.5:
+;   a packed read across a bridge starts at one of its windows). Out: CF = 0
+;   with [mega_hzb0], [mega_hzcut] (32KB units, 0 none) and [mega_hzcb], and
+;   [dskw_seg] = the window [mega_hzxs] >> 1; CF = 1, AX = FERR_*. Every
+;   other register kept; [dskw_wseg] spent
+; dskw_hzseam: 64KB for THE SEAM - a conventional claim, else a pool block -
+;   CF = 1 neither. Every register kept
+; dskw_hzfill: the seam's copy of X C-32KB..C+32KB, out of the claim after
+;   the read; nothing without a seam. Every register kept
+; dskw_hzfree: the seam back, after the read whichever way it went. Every
+;   register and FLAGS kept
+; -----------------------------------------------------------------------------
+dskw_hzwalk:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    mov ax, [dskw_czseg]
+    mov [dskw_wseg], ax
+    call MEGA_SEL_CODE:mega_selbasef ; DX:AX = X 0's base
+    jc .big
+    mov [ss:mega_hzb0], ax
+    mov [ss:mega_hzb0 + 2], dx
+    and word [ss:mega_hzcut], 0
+    mov si, ax                  ; DI:SI = this window's base
+    mov di, dx
+    mov bx, [dskw_uz]
+    mov cx, [dskw_uzhi]
+    sub bx, 1
+    sbb cx, 0                   ; CX = the last window, BX = U's last byte in it
+    xor bp, bp                  ; BP = this window
+.l:
+    mov ax, [ss:mega_hzxs]
+    shr ax, 1
+    cmp ax, bp
+    jne .nb
+    mov ax, [dskw_wseg]
+    mov [dskw_seg], ax          ; the window R is in: the read's
+.nb:
+cpu 286
+    lsl ax, [dskw_wseg]         ; AX = its limit
+cpu 8086
+    jnz .big
+    cmp bp, cx
+    je .last
+    inc ax
+    jnz .short                  ; under 64KB with U still to come
+    call dskw_hicarry           ; [dskw_wseg] = the next window
+    jc .big                     ; ...none: the claim ends short of U
+    mov ax, [dskw_wseg]
+    call MEGA_SEL_CODE:mega_selbasef
+    jc .big
+    inc bp
+    inc di                      ; DI:SI = where it would be in one run
+    cmp ax, si
+    jne .cut
+    cmp dx, di
+    je .l
+.cut:
+    cmp word [ss:mega_hzcut], 0
+    jne .prot                   ; a second cut: no claim has one
+    mov si, bp
+    shl si, 1
+    mov [ss:mega_hzcut], si
+    mov [ss:mega_hzcb], ax
+    mov [ss:mega_hzcb + 2], dx
+    mov si, ax
+    mov di, dx
+    jmp short .l
+.short:
+    call dskw_hicarry           ; a window after a short one: the cut is
+    jc .big                     ; off the grid; none: the claim's end
+.prot:
+    mov ax, FERR_PROT
+    jmp short .no
+.last:
+    cmp ax, bx
+    jae .ok                     ; (CF = 0)
+.big:
+    mov ax, FERR_BIG
+.no:
+    stc
+.ok:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+dskw_hzseam:
+    push ax
+    push bx
+    push dx
+    mov ax, 64
+    mov bx, MEM_K_SEAM
+    call mem_claim_x            ; DX = its selector
+    jc .pool
+    mov [ss:mega_hzsel], dx
+    mov ax, dx
+    call MEGA_SEL_CODE:mega_selbasef ; DX:AX = its base
+    jmp short .set
+.pool:
+    inc byte [sch_lock]         ; (mx_alloc's, as mega_hiclaim2 holds it)
+    xor ax, ax
+    mov dx, 1                   ; 64KB
+    mov bx, MX_KOWN
+    call MEGA_SEL_CODE:mx_allocf ; DX:AX = its base
+    dec byte [sch_lock]         ; (`dec` keeps CF)
+    jc .o
+    and word [ss:mega_hzsel], 0
+.set:
+    mov [ss:mega_hzsm], ax
+    mov [ss:mega_hzsm + 2], dx
+    mov byte [ss:mega_hzsf], 1  ; (`mov` keeps CF = 0)
+.o:
+    pop dx
+    pop bx
+    pop ax
+    ret
+dskw_hzfill:
+    cmp byte [ss:mega_hzsf], 0
+    je .o
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov ax, [ss:mega_hzcut]
+    dec ax                      ; X = C - 32KB, in the pool's piece...
+    xor di, di                  ; (not SLD: the piece, not the seam)
+    call mega_hzmap
+    mov [mega_xsrc], ax
+    mov [mega_xsrc + 2], dx
+    mov ax, [ss:mega_hzsm]      ; ...to the seam's first half
+    mov dx, [ss:mega_hzsm + 2]
+    mov [mega_xdst], ax
+    mov [mega_xdst + 2], dx
+    mov cx, 0x8000
+    call MEGA_SEL_CODE:mx_lcopyf
+    mov ax, [ss:mega_hzcb]      ; ...and X = C, the conventional piece's
+    mov dx, [ss:mega_hzcb + 2]  ; first 32KB, to its second
+    mov [mega_xsrc], ax
+    mov [mega_xsrc + 2], dx
+    add word [mega_xdst], 0x8000
+    adc word [mega_xdst + 2], 0
+    mov cx, 0x8000
+    call MEGA_SEL_CODE:mx_lcopyf
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.o:
+    ret
+dskw_hzfree:
+    pushf                       ; (the read's CF, whichever way out)
+    cmp byte [ss:mega_pm], 0    ; (before the switch .lowbss is not zeroed)
+    je .o
+    cmp byte [ss:mega_hzsf], 0
+    je .o
+    push ax
+    push bx
+    push dx
+    mov byte [ss:mega_hzsf], 0
+    mov dx, [ss:mega_hzsel]
+    or dx, dx
+    jz .pool
+    mov bx, MEM_K_SEAM
+    call mem_free_x
+    jmp short .x
+.pool:
+    mov ax, [ss:mega_hzsm]
+    mov dx, [ss:mega_hzsm + 2]
+    mov bl, MX_KOWN
+    call MEGA_SEL_CODE:mx_freef
+.x:
+    pop dx
+    pop bx
+    pop ax
+.o:
+    popf
     ret
 
 ; -----------------------------------------------------------------------------
