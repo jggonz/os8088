@@ -198,6 +198,9 @@ cfx_tab_end:
 ; neither a VGA nor an EGA - may live there (SPEC.md 39.22). The guard below
 ; holds every later entry past them.
 b3_live:
+%ifdef B3_POISON
+B3_LIVEOFF  equ b3_live - $$    ; (B3POISON=1's lowest poisoned byte on a
+%endif                          ; VGA at home: memory.inc's b3p_lay)
 %else                           ; ===== THE FOOT, %included at kernel.asm's
                                 ; foot, after every module's B3SECT block:
                                 ; the bodies that need the modules' macros

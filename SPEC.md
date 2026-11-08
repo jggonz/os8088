@@ -4145,6 +4145,26 @@ that it is the last section `MODC_START` follows; NOKZIP's flat read, rounded
 to whole sectors as `B2_KSECS` rounds it, below the blob (wave 2); `KZ_MARGIN_K
 == KZ_MARGIN`.
 
+**The run-time half is a KNOB, never shipped: `B3POISON=1`** (BOOT3-PLAN 4.2,
+R3). What no source scan sees is a far pointer STORED somewhere, or a vector
+left aimed at the dead RAM; on a shipped kernel such a call runs whatever the
+bytes still say, often the body itself, which works until the heap reuses the
+RAM. Under the knob `mem_unblob_x` first calls `b3p_lay` (memory.inc), which
+fills `[b3p_lo, b3p_hi)` with CCh - `hi` the `[mem_base]` `mem_init_x` raised
+past the blob, `lo` the lower of the floor and `.boot3`'s first paragraph
+past `b3_live` (the `.vgabuf` share below it stays the decoder's) - takes int
+3 for `b3p_trap` (`.text`: it records the CS:IP that ran the poison in
+`b3p_hit` and the far return below the frame in `b3p_from`, then `cli`/`hlt`
+for good), and the range is then **quarantined**: the floor store writes
+`[b3p_hi]` instead of the floor. Given back, the poison would not survive the
+drop - `mem_compact` slides the boot's claims onto exactly these bytes, all
+13KB of them on kern_big on a CGA + Hercules machine (measured) - so the knob
+trades the range's heap for a range that stays CCh for the session: a late
+call traps where it lands and a late write shows as bytes that are no longer
+CCh. `tests/b3poison.py` (soak, `b3poison`) boots it on kern_big and
+kern_small in a private tree, and its red arm injects a far call to
+`B3_SEG:kmain_o` at the desktop.
+
 ### 2.10 The ROM — `.cold` in a 5150's spare sockets
 
 **The contract for docs/plans/ROM-PLAN.md waves 0–3.** An IBM 5150 has six

@@ -680,7 +680,15 @@ section .cold                   ; ...and back, and mem_unblob_x is exactly why
                                 ; that could not live in it
 mem_unblob_x:
     push ax
+%ifdef B3_POISON
+    call b3p_lay                ; B3POISON=1 (a knob, never shipped): the dead
+                                ; range CCh, and KEPT out of the heap
+%endif
     call mem_floor_ax
+%ifdef B3_POISON
+    mov ax, [b3p_hi]            ; ...the QUARANTINE: the floor stays where
+                                ; mem_init_x raised it (b3p_lay's banner)
+%endif
     mov [mem_base], ax
 %ifdef OS88_COMPACT
     mov byte [mem_pg_rank], 0   ; DISSOLVE NOTHING, said rather than inherited:
@@ -697,6 +705,134 @@ mem_unblob_x:
                                 ; run is a barrier either way
     pop ax
     retf
+
+%ifdef B3_POISON
+%ifdef KERN_MEGA
+ %error "B3POISON=1 is kern_big's and kern_small's: b3p_trap is a real-mode vector and its record a CS write, and kern_mega runs the desktop in protected mode (tests/cswrites.txt, tests/seg0.txt)"
+%else                           ; (and so t_cswrite and t_seg0 count none of it)
+; -----------------------------------------------------------------------------
+; b3p_lay - B3POISON=1's runtime half of BOOT3-PLAN 4.2 (SPEC.md 2.9.15.4):
+;           the dead `.boot3`, `.boot3m`, `.boot3b`, the lift and the blob
+;           filled with CCh at the drop and QUARANTINED, so a late call into
+;           any of them is `int 3` at the very byte it lands on, for the
+;           whole session
+;
+; in:  nothing (near, from mem_unblob_x, before the floor store)
+; out: [b3p_lo], [b3p_hi] the range; every register preserved
+;
+; THE RANGE is [b3p_lo, b3p_hi), in paragraphs:
+;   hi  [mem_base] before the store - the paragraph past the blob that
+;       mem_init_x raised it to (or the floor itself on a kernel no stage 2
+;       published, whose `.boot3` is then the whole range)
+;   lo  the LOWER of the floor the store would write and `.boot3`'s first
+;       paragraph past b3_live: on a VGA or an EGA at home (COLD_SLIDE) the
+;       floor is HEAP_SEG and `.boot3`'s head sits under it, on the
+;       `.vgabuf` rung, whose first KVGABUF_SIZE bytes are the planar
+;       decoder's for the session - b3_live is asserted past them
+;       (boot3.inc), so everything from it up is as dead as the rest. On a
+;       mono machine, a ROM- or HMA-adopted one and kern_small the floor is
+;       at or below `.boot3`, and the range is exactly what the store gives
+;       back (the slid-off `.cold` copy and the VGA rung included)
+; Nothing in it is live: the shipped store hands all of [floor, hi) to the
+; heap, and the `.vgabuf` share below the floor stops at b3_live.
+;
+; WHY QUARANTINED, NOT GIVEN BACK (the plan said "before it compacts", and
+; the code disagreed): the shipped drop's mem_compact slides the boot's
+; claims down onto exactly these bytes - on kern_big on a CGA + Hercules
+; machine, all 13KB of them, measured - so poison laid and then given back
+; is overwritten before the desktop's first frame, and a late call then runs
+; a claim's bytes instead of trapping. Kept out of the heap, the range stays
+; CCh for the session: a late CALL traps where it lands, and a late WRITE
+; (an ISR, a buffer pointer left aimed at `.boot3b`) shows as bytes that are
+; no longer CCh, which tests/b3poison.py reads at its end. The price is the
+; range's bytes of heap, on a kernel nobody ships.
+;
+; It also takes int 3 (IVT 0Ch) for b3p_trap: a CCh is executed as `int 3`,
+; and what a BIOS leaves there is usually an IRET, which would walk the
+; poison a byte at a time into whatever follows it.
+; -----------------------------------------------------------------------------
+b3p_lay:
+    push ax
+    push cx
+    push dx
+    push di
+    push es
+    xor ax, ax
+    mov es, ax
+    pushf
+    cli
+    mov word [es:3*4], b3p_trap
+    mov word [es:3*4+2], KERNEL_SEG
+    popf
+    mov dx, [mem_base]
+    mov [b3p_hi], dx
+    call mem_floor_ax
+    cmp ax, B3_SEG + (B3_LIVEOFF + 15) / 16
+    jbe .lo
+    mov ax, B3_SEG + (B3_LIVEOFF + 15) / 16
+.lo:
+    mov [b3p_lo], ax
+    cld
+    xchg ax, dx                 ; DX = the cursor, AX = the end
+.fill:                          ; 0FFFh paragraphs at a time (a segment's worth)
+    sub ax, dx
+    jbe .done
+    cmp ax, 0x0FFF
+    jbe .f1
+    mov ax, 0x0FFF
+.f1:
+    mov es, dx
+    add dx, ax
+    mov cl, 3
+    shl ax, cl                  ; paragraphs -> words
+    xchg ax, cx
+    xor di, di
+    mov ax, 0xCCCC
+    rep stosw
+    mov ax, [b3p_hi]
+    jmp short .fill
+.done:
+    pop es
+    pop di
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+section .text                   ; the trap and its record: KERNEL_SEG, which
+                                ; does not move (a `.cold` handler would be a
+                                ; vector the slide had to re-point)
+; b3p_trap - int 3 under B3POISON=1. Records WHERE the poison was run and
+; WHO far-called it, then stops the machine: cli, hlt, for good. The row
+; (tests/b3poison.py) reads the record; a machine that never ran poison
+; keeps it 0.
+;   b3p_hit   CS, IP of the CCh executed (the frame's IP less one)
+;   b3p_from  IP, CS of the far return below the frame - the CALLER, when the
+;             poison was entered by a far call, which is BOOT3-PLAN R3's shape
+b3p_trap:
+    cli
+    push bp
+    mov bp, sp                  ; (BP addresses SS: the stack, which is right)
+    push ax
+    mov ax, [bp+4]
+    mov [cs:b3p_hit], ax
+    mov ax, [bp+2]
+    dec ax
+    mov [cs:b3p_hit+2], ax
+    mov ax, [bp+8]
+    mov [cs:b3p_from], ax
+    mov ax, [bp+10]
+    mov [cs:b3p_from+2], ax
+.halt:
+    hlt
+    jmp short .halt
+b3p_lo:     dw 0
+b3p_hi:     dw 0
+b3p_hit:    dw 0, 0
+b3p_from:   dw 0, 0
+section .cold
+%endif                          ; (KERN_MEGA)
+%endif
 
 ; -----------------------------------------------------------------------------
 ; mem_floor_ax - the heap's lowest paragraph (module internal)

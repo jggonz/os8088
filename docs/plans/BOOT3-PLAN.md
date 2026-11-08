@@ -2865,3 +2865,90 @@ from both `kbm_key` and `kbm_p5spend` (deviation 4 above, not a `push
 cs`/near call); a spent key is CF = 0, not CF = 1; and only `kbm_poll0`
 banks AX - `kbm_p5spend`'s two callers have it dead. No shipped byte moved
 (`cmp` at one commit).
+
+### 16.12 `b3poison` as built (build, 2026-11-08)
+
+Built against this tree's code; where the code disagreed with section 4.2 the
+code won. The one piece of section 13's list that had not been built: the
+`B3POISON=1` knob and its soak row, BOOT3-PLAN R3's runtime half.
+
+**The knob** (`Makefile`, `#>` marker, `$(KNOBS)` and `$(VIDSTAMP)` tag
+`-b3p`; `-DB3_POISON`, so `-DKERN_KNOB`). Under it `mem_unblob_x` calls
+`b3p_lay` (memory.inc, `.cold`) before the floor store. `b3p_lay` takes
+IVT 3 for `b3p_trap` and records the range `[b3p_lo, b3p_hi)`. `hi` is the
+`[mem_base]` that `mem_init_x` raised past the blob. `lo` is the lower of the
+floor and `.boot3`'s first paragraph past `b3_live` (`B3_LIVEOFF`, a
+knob-only `equ` in boot3.inc). On a VGA at home the floor is HEAP_SEG, which
+leaves `.boot3`'s head on the `.vgabuf` rung; the decoder's KVGABUF_SIZE
+bytes stay below `b3_live`. Everything in the range is filled with CCh, and
+the floor store then writes `[b3p_hi]`. `b3p_trap` (`.text`, so the vector
+names KERNEL_SEG, which never moves) records the CS:IP that ran the poison
+in `b3p_hit` and the far return below the frame in `b3p_from`, then runs
+`cli`/`hlt` for good. The price is +49 bytes of `.text` (35 of handler, 12 of
+record) and +95 of `.cold` (89 for `b3p_lay`, 6 at the two sites in
+`mem_unblob_x`), on a kernel nobody ships. On kern_mega it is an `%error`:
+the vector is real mode, the record is a CS write, and kern_mega's desktop
+runs in protected mode. That is also why `t_cswrite` and `t_seg0` count none
+of it.
+
+**Deviations.**
+
+1. **Quarantined, not given back.** Section 4.2 says the range is filled
+   "before it compacts". Built that way, the first boot showed that
+   `mem_compact` slides the boot's claims onto exactly those bytes: on
+   kern_big on the CGA + Hercules 5150 that was all 13,312 of them, measured,
+   with 0 free paragraphs left. So the poison was gone before the first
+   desktop frame, and a late call would have run a claim's bytes. Under the
+   knob the range therefore stays out of the heap for the session. A late
+   CALL traps where it lands. A late WRITE (an ISR, or a buffer pointer left
+   aimed at `.boot3b`) shows as bytes that are no longer CCh, which the row
+   also reads. The knob kernel pays the range's heap: 13,312 bytes on
+   kern_big there, 8,752 on kern_small.
+2. **The range is wider than "[floor, blob top)"** where `.boot3` sits under
+   the floor (a VGA or EGA at home). The bytes from `b3_live` up are dead
+   there too, and `kmain_o` is the first body after `b3_live`.
+3. **The red arm is a runtime patch at the desktop, not a kmain edit.** It
+   injects a FAR CALL to `B3_SEG:kmain_o` from wherever the CPU is: the
+   return frame is pushed on SS:SP and CS:IP is parked on the body, with IF
+   and TF off and the registers set AFTER `park`, which does not keep SS:SP.
+   The first version was trapped on SS 0. This keeps the shipped `kmain` as
+   the kmain under test, and it is "a call after the drop" either way.
+
+**The row** is `tests/b3poison.py`, soak, `secs` 33.0 MEASURED (the green
+run, both kernels, with the two private trees already built; building them
+from cold is about 65 s and 50 s more, so the timeout is 600). Each kernel
+runs in a process of its own because os88geom reads `$OS88_DEFINES` at import
+time. Both run on `os8088_5150_both_gla`, a CGA and a Hercules: a mono machine
+at home, so on kern_big `.cold` slides and the range is at its widest, and
+the Display page has a second adapter. The legs:
+
+- the poison is there: the range covers `kmain_o` and the whole blob, IVT 3
+  is `KERNEL_SEG:b3p_trap`, no claim is in the range, and every byte reads
+  CCh;
+- a menu: Control Panel;
+- a Control Panel round: the Display page, then close;
+- a file open: `B:/APPS/CALC.O88`, closed from its own menu;
+- a display switch: Set Primary on the other adapter, `[vid_kind]` 2 -> 1;
+- after every leg, `[b3p_hit]` is 0 and `[ticks]` moves;
+- at the end, the range is still all CCh.
+
+**Results, run once each:**
+
+- **Green:** rc 0, 33 s. kern_big's range is [17A0, 1AE0), 13,312 bytes,
+  with B3_SEG 1801 and the blob at 19E0..1AE0. kern_small's is [0EDD, 1100),
+  8,752 bytes, with B3_SEG 0EDD and the blob at 1000..1100. Every check
+  passed on both kernels.
+- **Red (`--break late`):** rc 1, 15 s. On both kernels the trap names the
+  call: `1801:0166 (kmain_o)` from `0060:34DC (sch_idle_body.rearm)` on
+  kern_big, and `0EDD:0000 (kmain_o)` from `0060:239B` on kern_small.
+
+**Byte identity.** The shipped kernels are unchanged: kern_big's, kern_small's,
+kern_emu's and kern_mega's `kernel.bin` and `kernel.sys` were `cmp`-identical
+before and after, at the same commit count (973, uncommitted). The knob code
+is all behind `%ifdef B3_POISON`, and `B3_LIVEOFF` is too.
+
+**Found on the way.** An `os88ui` Disk-window verb on kern_small needs
+`OS88_DEFINES=KERN_SMALL` in the environment BEFORE os88geom is imported. The
+window record is 65 bytes there, not 74. Set later, `open_drive("B")` times
+out reading garbage titles, and that looks like a kern_small bug when it is
+not one. The row's import-time arm says so.
