@@ -621,8 +621,12 @@ w16_vclaim:
     rcr ax, 1                       ;   the first of which names it (the map
     mov cl, 5                       ;   SEG_SUBs into it, past 64 KB too);
     shr ax, cl                      ;   OSAPI_MEM_HUGE's unit is the KB
-    xor bx, bx
-    call OSAPI_MEM_HUGE
+    mov bx, HUGE_NOBRIDGE           ; ONE RUN OF MEMORY (KERN-MEGA-PLAN
+    call OSAPI_MEM_HUGE             ;   14.169): the map's virtual paragraphs,
+                                    ;   w16_pvirt's linear bases and SEG_TILE's
+                                    ;   huge pointers all assume it, and a
+                                    ;   BRIDGE (SPEC.md 50.3.5) is two - a
+                                    ;   block across its cut would be cut short
     jc .got
     mov cl, 6
     shl ax, cl                      ; granted, in paragraphs

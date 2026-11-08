@@ -6063,6 +6063,7 @@ mega_hugeqf:
     push cx
     push dx
     mov cx, ax                      ; CX = the heap's
+    mov bh, bl                      ; BH = the ask's low byte (HUGE_NOBRIDGE)
     call MEGA_SEL_CODE:mega_ownerf  ; may it have the pool at all?
     jc .o
     call MEGA_SEL_CODE:mx_maxrunf   ; AX = the pool's
@@ -6071,6 +6072,8 @@ mega_hugeqf:
     jae .b
     mov ax, cx                      ; AX = the better of the two alone
 .b:
+    test bh, HUGE_NOBRIDGE          ; no bridge asked for: the better alone
+    jnz .d                          ; (KERN-MEGA-PLAN 14.169)
     cmp dx, 64
     jb .d
     cmp cx, MEGA_RESKB
@@ -6114,6 +6117,8 @@ mega_hugeqf:
 mega_hugebf:
     cmp byte [mega_on], 0
     je .no0
+    test bl, HUGE_NOBRIDGE          ; the caller refused a bridge (14.169)
+    jnz .no0
     cmp bx, 0x4000
     je .no0
     cmp bx, 0x8000
@@ -6150,8 +6155,11 @@ mega_hugebf:
     jb .no                          ; ...less the reserve: short
     mov ax, bp                      ; --- the CONVENTIONAL piece, first: it
     xor cx, cx                      ; is the one a compaction may take time
-    call COLD_SEG:mmf_osapi_mem_claim_dma ; over, and nothing is held yet
-    jc .no
+    call COLD_SEG:mmf_osapi_mem_claim_dma_hi ; over, and nothing is held yet.
+    jc .no                          ; From the TOP (14.169): the heap's end,
+                                    ; never the fill point, where what the
+                                    ; bottom stack sheds under it would cut
+                                    ; the free run in two (14.166's rule)
     mov [mega_bfc], dx              ; (its pair's data selector)
     inc byte [sch_lock]             ; --- the POOL piece, and the run, one step
     mov ax, [mega_bfp]
@@ -6204,6 +6212,10 @@ mega_hugebf:
     dec byte [sch_lock]
     mov dx, bp
     mov cx, 8
+    mov ax, [mega_bfp]              ; WHERE THE CUT IS (14.169): the caller's
+    shr ax, 6                       ; BX = the pool piece's windows, so window
+    mov di, sp                      ; BX (DX + 8 x BX) is the conventional
+    mov [ss:di+8], ax               ; piece's first
     clc
     jmp short .out
 .full:
@@ -8721,6 +8733,9 @@ MX_FBRIDGE  equ 0x40                ; ...with MX_FHUGE: a BRIDGED claim's pool
                                     ; run going on over a conventional claim
                                     ; whose pair's data selector is MX_AUX:
                                     ; OSAPI_MEM_FREE frees both, REGROW refuses
+HUGE_NOBRIDGE equ 2                 ; OSAPI_MEM_HUGE's BX bit 1: never a
+                                    ; bridge - apps/os88api.inc's mirror
+                                    ; (KERN-MEGA-PLAN 14.169, SPEC.md 50.3.5)
 MX_FH16     equ 0x20                ; ...with MX_FHUGE: a window every 16KB,
                                     ; each 64KB long (BX = 4000h asked it,
                                     ; KERN-MEGA-MEMORY-PLAN MC7.4), MX_FH32's
@@ -11779,6 +11794,29 @@ mega_dmamovf:
     pop bx
     retf
 
+; mega_bfpcf - FAR (osapi_mem_movable, `.cold`): DX = a pool selector, ES =
+; the caller -> CF = 0 it is a BRIDGE of the caller's (MX_FBRIDGE) and DX =
+; its CONVENTIONAL piece's data selector, the claim a declaration is about:
+; the pool piece moves whatever it declares (every pool block but a pinned
+; one does), so the bridge's DX names the piece that is born pinned
+; (KERN-MEGA-PLAN 14.169); CF = 1 anything else, DX kept. Keeps the rest
+mega_bfpcf:
+    push bx
+    push si
+    push es
+    call mega_claimfind             ; SI = its entry, ES the tail
+    jc .o
+    test byte [es:si+MX_FL], MX_FBRIDGE
+    stc
+    jz .o
+    mov dx, [es:si+MX_AUX]
+    clc
+.o:
+    pop es
+    pop si
+    pop bx
+    retf
+
 ; mega_claimfreef - FAR (osapi_mem_free, `.cold`): DX = a selector
 ; mega_claimhf gave, ES = the caller -> CF = 0 its block and selector are
 ; free; CF = 1 it is no claim of the caller's. Every register kept
@@ -12815,6 +12853,9 @@ mega_segf:
     mov ax, dx
     call mega_selbase               ; DX:AX = the segment's base
     jc .atno
+    push si
+    push dx                         ; [the base, for a bridge's pieces]
+    push ax
     mov cx, di
     shl di, 4
     add ax, di
@@ -12822,6 +12863,11 @@ mega_segf:
     shr cx, 12
     add dx, cx                      ; DX:AX = the window's base
     mov cx, 0xFFFF
+    pop si
+    pop di                          ; DI:SI = the base asked from
+    call mega_bfmap                 ; a BRIDGE: the piece it is in, the
+    pop si                          ; window cut at its end (14.169)
+    jc .atno
     call mega_segown                ; BL = the caller's owner byte
     xor di, di                      ; (no match)
     call mega_wset                  ; AX = the window
@@ -12906,6 +12952,8 @@ mega_segf:
     mov ax, dx
     call mega_selbase               ; DX:AX = the segment's base
     jc .sno
+    push dx                         ; [the base, for a bridge's pieces]
+    push ax
     push si
     shl si, 4                       ; + paragraphs x 16
     add ax, si
@@ -12923,6 +12971,10 @@ mega_segf:
 .s64:
     mov cx, 0xFFFF
 .sblk:
+    pop si
+    pop di                          ; DI:SI = the base asked from
+    call mega_bfmap                 ; a BRIDGE: past its cut, the conventional
+    jc .spast                       ; piece (KERN-MEGA-PLAN 14.169)
     call mega_bclip                 ; inside a pool block or a conventional
     jc .snb                         ; claim: clipped to its end, CF = 0 - a
     mov bl, bh                      ; descriptor of the block's
@@ -12951,6 +13003,9 @@ mega_segf:
     pop ax
     clc
     retf
+.spast:
+    mov ax, 5                       ; past a bridge's end
+    jmp short .sno1
 .snb:
     cmp bh, 0x92                    ; a PAIR is a block's or nothing
     je .snw
@@ -13455,6 +13510,81 @@ mega_bclip:
     pop ax
     ret
 
+; mega_bfmap - A BRIDGE'S PIECES (KERN-MEGA-PLAN 14.169, SPEC.md 50.3.5): DI:SI
+; = the base of the selector a place is asked from, DX:AX = that base + the
+; offset asked for, CX = a reach - 1. When the base lies in a BRIDGED claim's
+; pool piece (MX_FBRIDGE), the claim is two runs of memory and a sum past the
+; piece's end - the CUT - lands in whatever pool memory follows it: DX:AX
+; becomes the same offset past the cut in the conventional piece, and CX is
+; clipped at the end of the piece the place is in (a reach across the cut is
+; two pieces no one segment can be). CF = 1: past the conventional piece's
+; end as well. Anything else comes back as it went, CF = 0. Keeps the rest
+mega_bfmap:
+    cmp di, MEGA_XPOOL >> 16
+    jae .pool
+    clc                             ; below the pool: no bridge's piece
+    ret
+.pool:
+    push bx
+    push si
+    push di
+    push bp
+    push es
+    push dx
+    push ax                         ; [ss:bp] = the place
+    mov bp, sp
+    mov ax, si
+    mov dx, di
+    MXT_ES
+    call mega_blkof                 ; BX = a pool block's entry, DX:AX = its
+    jc .same                        ; end
+    test byte [es:bx+MX_FL], MX_FBRIDGE
+    jz .same
+    mov si, [ss:bp]
+    mov di, [ss:bp+2]               ; DI:SI = the place
+    cmp di, dx
+    jb .left
+    ja .conv
+    cmp si, ax
+    jb .left                        ; before the cut: clipped at it
+.conv:
+    sub si, ax
+    sbb di, dx                      ; DI:SI = bytes past the cut
+    mov ax, [es:bx+MX_AUX]
+    call mega_selbase               ; DX:AX = the conventional piece's base
+    jc .past
+    add si, ax
+    adc di, dx
+    mov [ss:bp], si
+    mov [ss:bp+2], di               ; the place, in it
+    call mega_blkof                 ; DX:AX = its end
+    jc .past
+.left:
+    sub ax, [ss:bp]
+    sbb dx, [ss:bp+2]               ; DX:AX = bytes from the place to the end
+    jb .past
+    jnz .same                       ; 64KB or more: CX stands
+    or ax, ax
+    jz .past
+    dec ax
+    cmp cx, ax
+    jbe .same
+    mov cx, ax
+.same:
+    clc
+.o:
+    pop ax
+    pop dx
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop bx
+    ret
+.past:
+    stc
+    jmp short .o
+
 ; mega_wbind - DX:AX = a BOUND window's base, CX = its reach: CF = 0 when the
 ; base lies in a block - a conventional claim or a pool block - with CX clipped
 ; at that block's end, and a pool block flagged MX_FWIN, so it moves with the
@@ -13644,6 +13774,8 @@ mega_segtile:
     mov ax, dx
     call mega_selbase               ; DX:AX = the segment's base
     jc .null
+    push dx                         ; [the base, for a bridge's pieces]
+    push ax
     push si
     shl si, 4
     add ax, si
@@ -13651,6 +13783,29 @@ mega_segtile:
     adc dl, 0
     shr si, 12
     add dx, si                      ; DX:AX = the first tile's base
+    pop si
+    pop di                          ; DI:SI = the base asked from
+    push dx                         ; A BRIDGE (14.169): the first tile and
+    push ax                         ; the last mapped to the pieces they are
+    add dx, bp                      ; in, and refused unless ONE piece holds
+    dec dx                          ; every tile - a tile is 64KB of one run
+    mov cx, 0xFFFF                  ; of memory, and the last may be cut at
+    call mega_bfmap                 ; the claim's end but not at the cut
+    mov bx, dx                      ; (BX = the last tile's high word)
+    pop ax
+    pop dx
+    jc .nb
+    cmp bx, MEGA_XPOOL >> 16
+    jb .tcv
+    inc cx                          ; in the pool and cut short: only a
+    jnz .nb                         ; bridge's piece is (at the cut)
+.tcv:
+    call mega_bfmap                 ; DX:AX = the first tile's base, mapped
+    jc .nb
+    inc bx                          ; ...and the last must be BP - 1 tiles
+    sub bx, bp                      ; on from it in the same piece
+    cmp bx, dx
+    jne .nb
     push dx                         ; the last tile in a block too, or none
     add dx, bp
     dec dx
@@ -13777,6 +13932,8 @@ mega_segh:
     mov ax, si
     call mega_selbase               ; DX:AX = SI's base
     jc .nb
+    push dx                         ; [the base, for a bridge's pieces]
+    push ax
     mov di, [ss:bx+2]               ; ...+ the paragraphs
     push di
     shl di, 4
@@ -13786,6 +13943,10 @@ mega_segh:
     shr di, 12
     add dx, di
     dec cx                          ; the limit (0 - 1 = 64KB)
+    pop si
+    pop di                          ; DI:SI = the base asked from
+    call mega_bfmap                 ; a BRIDGE: the piece it is in (14.169)
+    jc .nb
     call mega_bclip                 ; ...clipped at the block's end
     jc .nb
     mov di, [ss:bx]

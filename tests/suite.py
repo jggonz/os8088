@@ -18450,6 +18450,23 @@ SOAK = [
         wants=("build/mega.img", "build/mbr.bin", "build/megak/kernel.sys",
                "build/megak/apps/win16.o88", "build/megak/kdos/DOS.O88",
                "build/win16/DGROUP.EXE")),
+    Row("win16megahugega", "soak", py("tests/win16mega.py", "HUGEGA"), 60.0,
+        "SPEC.md 124.31.3, 50.3.5, docs/plans/KERN-MEGA-PLAN.md 14.169: the "
+        "LARGEST GlobalAlloc on kern_mega, under Bochs at 2MB (where 960K is "
+        "more than the pool or the heap holds alone, so a BX = 0 huge ask "
+        "BRIDGES them): HUGEGA.EXE asks 960K, 32K less a refusal, writes a "
+        "word every 256 bytes through a __huge pointer and reads it back - "
+        "HUGEGA.TXT says HUGEGA OK <KB> - and with the block held no huge "
+        "pool block of WIN16's is a bridge (mx_tab's MX_FBRIDGE): "
+        "w16_vclaim asks HUGE_NOBRIDGE, because the map's virtual paragraphs, "
+        "w16_pvirt's linear bases and SEG_TILE's huge pointers assume one "
+        "run. RED with the WIN16.O88 from before, measured: no HUGEGA.TXT in "
+        "300s on the fixed kernel (the arena bridged, its tiles refused "
+        "across the cut). 60s is 9 measured",
+        needs=("bochs", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/mega.img", "build/mbr.bin", "build/megak/kernel.sys",
+               "build/megak/apps/win16.o88", "build/megak/kdos/DOS.O88",
+               "build/win16/HUGEGA.EXE")),
     Row("win16megamemdc", "soak", py("tests/win16mega.py", "MEMDC"), 120.0,
         "SPEC.md 124.25.3-6, WIN16-ANY-PLAN S19b: MEMDC.EXE on kern_mega, "
         "under Bochs (tests/win16mega.py): the palette calls' blocks "
@@ -19480,6 +19497,40 @@ SOAK = [
         needs=("86box",),
         wants=("build/mega.img", "build/megajw.o88",
                "build/megak/apps/audio.o88", "build/megak/apps/sheet.o88")),
+    Row("megabrdg", "soak", py("tests/megabrdg.py"), 30.0,
+        "docs/plans/KERN-MEGA-PLAN.md 14.169, SPEC.md 50.3.5, 50.6.11 "
+        "(MEGA-HUGE-PLAN F1, F2, F9): EVERY WAY INTO A BRIDGED OSAPI_MEM_HUGE "
+        "CLAIM AGREES WITH ITS STEP WALK. Bochs at 4MB: MEGABRDG claims the "
+        "largest bridge (an 80KB conventional claim under it, freed after), "
+        "finds the cut by the walk, writes a pattern through windows P-1..P+1 "
+        "and reads it back through SEG_SUB, SEG_AT and SEG_HND from window "
+        "P-1 at 256 bytes before the cut, 1230h and 10040h past it, SEG_TILE "
+        "at the cut (and refused across it), SEG_LIN by the rule (window "
+        "k's base + the offset in it), and a 96KB file written from 32KB "
+        "before the cut and read back to 16KB before it, byte-exact, aligned "
+        "and at odd offsets (a sector straddling the cut). And F2: BX = the "
+        "pool piece's windows, HUGE_NOBRIDGE's ask less and its claims one "
+        "piece; F9: OSAPI_MEM_MOVABLE of the bridge accepted. RED on the "
+        "tree before, measured: every place past the cut WRONG memory, BX 0, "
+        "HUGE_NOBRIDGE ignored (bridged), and the file legs took the machine down "
+        "(kern_mega FAULT 0D in the write). 30s is 21 measured",
+        needs=("bochs",),
+        wants=("build/mega.img", "build/megabrdg.o88", "build/megarun.o88",
+               "build/mbr.bin")),
+    Row("megabrdg86", "soak", py("tests/megabrdg.py") + ["--box"], 40.0,
+        "docs/plans/KERN-MEGA-PLAN.md 14.169: megabrdg on 86Box's "
+        "at286_vga_sb with 640K + 384K above 1MB (the 14.166 machine, "
+        "where the largest bridge is 688K: 256K of pool, 432K of heap), "
+        "and F9's half only a heap read can see: the conventional piece is "
+        "taken from the TOP (no free KB over it), so the 80KB freed under "
+        "it joins the free run instead of standing under a pinned block; "
+        "its record movable once declared. RED on the tree before, "
+        "measured: the piece at 24000..90000 over the 80KB hole (80K free "
+        "under it, 64K over), its record pinned with no way to unpin, every "
+        "place past the cut wrong, the read across it REFUSED (AX 2) and "
+        "the odd-offset write a #GP (limit) in dskw_wone. 40s is 24 measured",
+        needs=("86box",),
+        wants=("build/mega.img", "build/megabrdg.o88")),
     Row("megacaps", "soak", py("tests/megacaps.py"), 60.0,
         "docs/plans/KERN-MEGA-PLAN.md 14.122, SPEC.md 41.8: "
         "OSAPI_XMEM_CAPS ANSWERS WHAT A CLAIM IS THEN GIVEN. kern_mega "

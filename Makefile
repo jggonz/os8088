@@ -15484,6 +15484,12 @@ $(BUILD)/megajw.bin: tests/megajw/megajw.asm apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ tests/megajw/megajw.asm
 $(BUILD)/megajw.o88: $(BUILD)/megajw.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/megajw.bin -o $@
+# MEGABRDG (tests/megabrdg): every way into a BRIDGED OSAPI_MEM_HUGE claim against its step walk - SEG_SUB/AT/HND/
+# TILE/LIN past the cut, a file written and read back across it, the no-bridge ask, MEM_MOVABLE (MEGA-HUGE-PLAN F1/F2/F9)
+$(BUILD)/megabrdg.bin: tests/megabrdg/megabrdg.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/megabrdg/megabrdg.asm
+$(BUILD)/megabrdg.o88: $(BUILD)/megabrdg.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/megabrdg.bin -o $@
 # MEGACAPS (tests/megacaps): OSAPI_XMEM_CAPS answers what a claim is then
 # given, a cache in the pool counted as free
 $(BUILD)/megacaps.bin: tests/megacaps/megacaps.asm apps/os88api.inc | $(BUILD)
@@ -19921,7 +19927,7 @@ distclean: clean clean-marty clean-cc clean-nasm3 clean-gb clean-watcom
 # it with the default 1KB - "Not enough memory to allocate file structures").
 # A tests/win16/<name>.wcl adds its options to the compile: BIG is medium
 # model, so its sixteen code_seg functions are far (SPEC.md 124.20).
-WIN16FIX := MSGBOX WINDOW MENU DIALOG MODELESS PROFILE INIFILE BITMAP FPU FPX PUMP GDICARD ICONS WRITER BIG FILES DLLUSE CDLG REGDB LZT SHX MEMDC MDI TASKS TASKB SELTEST MMTEST MCITEST WITEST TMTEST MOTEST PMDDE XVOL OVRTEST MSCDX VBUSER PROPS DGROUP CSALIAS CTLPROC LONGNAME BIGBMP LHEAP DOSENV PMNP DDEUSE
+WIN16FIX := MSGBOX WINDOW MENU DIALOG MODELESS PROFILE INIFILE BITMAP FPU FPX PUMP GDICARD ICONS WRITER BIG FILES DLLUSE CDLG REGDB LZT SHX MEMDC MDI TASKS TASKB SELTEST MMTEST MCITEST WITEST TMTEST MOTEST PMDDE XVOL OVRTEST MSCDX VBUSER PROPS DGROUP CSALIAS CTLPROC LONGNAME BIGBMP LHEAP DOSENV PMNP DDEUSE HUGEGA
 # ...and the LIBRARIES (SPEC.md 124.23): -bd, linked as windows_dll with
 # their exports and ordinals in tests/win16/<name>.wlk. DLLUSE imports them
 # by the import lines in its own .wlk, so it links without them. W16DLL3 it

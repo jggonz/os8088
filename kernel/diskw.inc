@@ -2077,8 +2077,14 @@ dskw_rbody:
 .czfb:
     call dskw_tolo              ; a conventional claim decodes as it always
     jnc .czfbl                  ; did, by paragraph - its registers loaded
-    jmp .czbad                  ; through scratch selectors (KERN-MEGA-MEMORY-
-.czfbl:                         ; PLAN MC7.4)
+    mov cx, ax                  ; through scratch selectors (KERN-MEGA-MEMORY-
+    or cx, dx                   ; PLAN MC7.4). ABOVE 1MB A PLAIN FILE (R = 0)
+    jz .czhip                   ; past the window is read by the selector
+    jmp .czbad                  ; arm's own walk, a window on at each carry
+.czfbl:                         ; (dskw_hicarry - the write's since MC7):
+                                ; it was refused FERR_IO, so no file over
+                                ; 64KB reached an OSAPI_MEM_HUGE claim in the
+                                ; pool (MEGA-HUGE-PLAN F7, Frotz's story)
     mov cx, [dskw_seg]
     mov [dskw_czseg], cx
 .czlo:
@@ -2302,6 +2308,8 @@ dskw_xclus:
 %ifdef KERN_MEGA
     cmp byte [dskw_hi], 0
     je .stgseg
+    test byte [dskw_hi], 2      ; a sector across a window's end: dskw_one
+    jnz .stgon                  ; stepped past it already (14.169)
     add word [dskw_src], 512    ; above 1MB the OFFSET moves (dskw_runmax)
     jnc .stgon
     call dskw_hicarry
@@ -2568,9 +2576,10 @@ dskw_subsrc:
 dskw_hifix:
     cmp byte [dskw_hi], 0
     je .o
-    cmp word [dskw_src], 0xFE00
-    jbe .o
     push ax
+    call dskw_hileft            ; a whole sector before the window's end?
+    cmp ax, 512
+    jae .q
     push cx
     mov ax, [dskw_src]
     mov cl, 4
@@ -2580,6 +2589,7 @@ dskw_hifix:
     and word [dskw_src], 15     ; ...and what is left of it
 .p:
     pop cx
+.q:
     pop ax
 .o:
     ret
@@ -2603,6 +2613,77 @@ dskw_hisub:                     ; [dskw_wseg] - the ADVANCING segment the
     pop dx
     pop cx
     pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; dskw_hileft / dskw_hin1 / dskw_hinext - THE WINDOW'S END, not the offset's
+; wrap (KERN-MEGA-PLAN 14.169). A selector's window is not always 64KB: a
+; SUB is cut at its block's end, and a BRIDGED claim (OSAPI_MEM_HUGE, SPEC.md
+; 50.3.5) is two runs of memory - its last pool window ends at the CUT, and
+; the next byte is the conventional piece's, which OSAPI_SEG's SUB answers
+; (mega_bfmap). So a run is bounded by the window's LIMIT (dskw_runmax), a
+; sector is moved on before it would cross it (dskw_hifix), and a sector
+; that straddles the cut itself - a buffer whose offset from it is not a
+; multiple of 512 - is staged in two parts: dskw_hin1 cuts its live bytes at
+; the end, dskw_hinext steps [dskw_wseg] to the window that starts there
+; and leaves [dskw_src] where the sector ends in it, [dskw_hi] bit 1 saying
+; so for dskw_xclus's .stg (dskw_one clears it).
+; dskw_hileft: AX = the bytes from [dskw_src] to the window's end (its limit
+;   + 1; FFFFh for 64KB), 0 at or past it. Keeps the rest
+; dskw_hin1: CX = live bytes -> CX = those before the end, BX = the rest (0:
+;   none, or the segment arm). Clobbers AX
+; dskw_hinext: BX = the rest -> CX = BX; when not 0 the window stepped on,
+;   [dskw_src] = BX. CF = 1 no window to be had. Clobbers AX
+; -----------------------------------------------------------------------------
+dskw_hileft:
+cpu 286
+    lsl ax, [dskw_wseg]         ; (protected mode only: [dskw_hi] = 1)
+cpu 8086
+    jnz .z
+    sub ax, [dskw_src]
+    jb .z                       ; past the end
+    inc ax
+    jnz .o
+    dec ax                      ; 65,536: FFFFh
+.o:
+    ret
+.z:
+    xor ax, ax
+    ret
+dskw_hin1:
+    xor bx, bx
+    cmp byte [dskw_hi], 0
+    je .o
+    call dskw_hileft
+    cmp cx, ax
+    jbe .o
+    mov bx, cx
+    sub bx, ax                  ; BX = the rest...
+    mov cx, ax                  ; ...CX = what fits
+.o:
+    ret
+dskw_hinext:
+    mov cx, bx
+    or cx, cx                   ; (CF = 0)
+    jz .o
+cpu 286
+    lsl ax, [dskw_wseg]         ; the window's end, from its base
+cpu 8086
+    inc ax
+    jz .w                       ; 64KB: a whole window on
+    push cx
+    mov cl, 4
+    shr ax, cl                  ; ...in paragraphs (a window's end is on
+    pop cx                      ; one: its base and the cut both are)
+    call dskw_hisub
+    jmp short .x
+.w:
+    call dskw_hicarry
+.x:
+    jc .o
+    mov [dskw_src], cx          ; where the sector ends, in the next window
+    or byte [dskw_hi], 2        ; ...said for .stg (`or`: CF = 0)
+.o:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2696,16 +2777,13 @@ dskw_runmax:
 %ifdef KERN_MEGA
 .hi:
     call dskw_hifix             ; no sector across the window's end
-    mov ax, [dskw_src]
-    neg ax                      ; bytes left before the offset wraps...
-    jz .hfull                   ; (0: the whole 64KB)
-    push cx
-    mov cl, 9
-    shr ax, cl                  ; ...as whole sectors
-    pop cx
+    call dskw_hileft            ; bytes left before the window ENDS - its
+    push cx                     ; limit, not the offset's wrap: a bridge's
+    mov cl, 9                   ; last pool window ends at the cut, where
+    shr ax, cl                  ; the next byte is another piece's (KERN-
+    pop cx                      ; MEGA-PLAN 14.169) - as whole sectors
     cmp ax, 127
     jbe .hret
-.hfull:
     mov ax, 127                 ; the bound every run has
 .hret:
     ret
@@ -5059,6 +5137,9 @@ dskw_ioerr:
 ; buffer being the caller's.
 ; -----------------------------------------------------------------------------
 dskw_one:                       ; ...whichever [dskw_fop] says (dskw_xclus)
+%ifdef KERN_MEGA
+    and byte [dskw_hi], 1       ; (no straddle said yet: dskw_hinext)
+%endif
     cmp byte [dskw_fop], 0
     je dskw_rone
 dskw_wone:
@@ -5066,6 +5147,7 @@ dskw_wone:
     push ds
     mov si, [dskw_src]          ; (read through the KERNEL's DS, before...)
 %ifdef KERN_MEGA
+    call dskw_hin1              ; (CX = what this window holds, BX the rest)
     DSKW_WSEG ds                ; ...DS:SI = the caller's bytes
 %else
     mov ds, [dskw_wseg]         ; ...DS:SI = the caller's bytes
@@ -5075,6 +5157,15 @@ dskw_wone:
     mov di, dsk_secbuf
     cld
     rep movsb
+%ifdef KERN_MEGA
+    pop ds                      ; THE REST from the next window's start, past
+    push ds                     ; a cut (KERN-MEGA-PLAN 14.169): the kernel's
+    call dskw_hinext            ; DS for the step, the caller's for the bytes
+    jc .wx
+    xor si, si
+    DSKW_WSEG ds
+    rep movsb
+%endif
     mov cx, dsk_secbuf + 512
     sub cx, di                  ; CX = the bytes past the live ones, to zero
     xor al, al
@@ -5083,6 +5174,12 @@ dskw_wone:
     DSK_WR1D dskw_clba          ; ES = LOW_SEG already: the scratch goes out
     pop si
     ret
+%ifdef KERN_MEGA
+.wx:
+    pop ds                      ; no window past the end: CF = 1
+    pop si
+    ret
+%endif
 
 dskw_rone:
     push ss
@@ -5093,6 +5190,7 @@ dskw_rone:
     jc .out
     push si
 %ifdef KERN_MEGA
+    call dskw_hin1              ; (CX = what this window holds, BX the rest)
     DSKW_WSEG es                ; ES:DI = the caller's destination
 %else
     mov es, [dskw_wseg]         ; ES:DI = the caller's destination
@@ -5105,8 +5203,20 @@ dskw_rone:
     cld
     rep movsb                   ; DS:SI -> ES:DI
     pop ds
+%ifdef KERN_MEGA
+    call dskw_hinext            ; THE REST into the next window, past a cut
+    jc .rx                      ; (KERN-MEGA-PLAN 14.169)
+    DSKW_WSEG es
+    xor di, di
+    push ds
+    push ss
+    pop ds
+    rep movsb
+    pop ds
+.rx:
+%endif
     pop si                      ; CF = 0 from the `jc`, which nothing since
-.out:                           ; has touched
+.out:                           ; has touched (on kern_mega: from dskw_hinext)
     ret
 
 ; -----------------------------------------------------------------------------
