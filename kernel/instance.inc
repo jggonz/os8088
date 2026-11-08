@@ -4,8 +4,8 @@
 ; The instance table (SPEC.md 29): one record per running application
 ; instance, built-in kind or loaded package. The table is the single source
 ; of truth for "what is running" - the dock renders from it, the Task
-; Manager names tasks through it, and the package-region allocator derives
-; occupancy from it.
+; Manager names tasks through it. (A package region is a heap claim owned by
+; its record's slot, SPEC.md 20.1/50.3 - nothing derives occupancy from here.)
 ;
 ; Concurrency (SPEC.md 29.2, binding): records publish with an I_STATE=1
 ; byte store as the LAST write (task_spawn precedent); task-less instances
@@ -19,7 +19,8 @@
 ; A package instance can be on EITHER side of that split since SPEC.md 20.6:
 ; it is born task-less, and a window callback may claim it one worker task
 ; through inst_pkg_spawn. Once it has one, its region is freed by
-; task_exit's release byte from the worker, not by the UI task.
+; mem_free_rec on the worker, in inst_task_die, and the record by task_exit's
+; release byte - not by the UI task.
 ; =============================================================================
 
 ; --- instance record, 32 bytes (SPEC.md 29.1) ---------------------------------
@@ -41,17 +42,18 @@ IF_FSMIN equ 2                  ; I_FLAGS bit1: ...and it went down from
                                 ; going that is not kept
 IF_DESK  equ 4                  ; I_FLAGS bit2: this instance's window is a
                                 ; DESK window (SPEC.md 11.103), so it has NO
-                                ; dock tile (SPEC.md 30). Set by OSAPI_WM_DESK's
-                                ; MAKE on the CALLER's record - in the entry
-                                ; proc, before the loader's step 9 publishes it
-                                ; (which writes no I_FLAGS) - and zeroed with
-                                ; the record by inst_alloc
+                                ; dock tile (SPEC.md 30). Set by ld_alloc for an
+                                ; OS88_F_DESK launch while the record is still
+                                ; unpublished, then set or cleared by the
+                                ; loader's step 9 off the window the entry proc
+                                ; returned (desk_drop_x clears it), and zeroed
+                                ; with the record by inst_alloc
 I_KIND   equ 2                  ; byte: KIND_*; bit 7 = package
 I_TASK   equ 3                  ; byte: task slot (SPEC.md 8), 0xFF = none
 I_WIN    equ 4                  ; word: window record ptr
 I_SPTR   equ 6                  ; word: builtin state ptr / package base
 I_SIZE   equ 8                  ; word: package region bytes; 0 for builtins,
-                                ; 0xFFFF for a 64KB region (SPEC.md 20.1.1)
+                                ; at most APP_MAX_SIZE = 0xFE00 (SPEC.md 20.1.1)
 I_ICO_PKG equ 1                 ; the I_ICON value meaning "in this
                                 ; instance's own region, at LD_HDR_SIZE": 1
                                 ; can never be a real .text body pointer, the
@@ -150,7 +152,7 @@ SSI_TASK   equ 3                ; byte: the task slot, 0xFF = none
 SSI_WIN    equ 4                ; word: OPAQUE - the kernel's own window record
 SSI_SEG    equ 6                ; word: the region's base segment
 SSI_SIZE   equ 8                ; word: region BYTES, 0 for a built-in
-                                ; and 0xFFFF for a 64KB one (SPEC.md 20.1.1)
+                                ; and at most 0xFE00 (SPEC.md 20.1.1)
 SSI_KB     equ 10               ; word: KB this instance holds off the heap -
                                 ; the ONE field filled outside the cli window,
                                 ; and the one that is not the record's own
@@ -366,7 +368,8 @@ inst_next:
 ; -----------------------------------------------------------------------------
 ; inst_of_seg - which live package instance is running at this segment?
 ; in:  BX = a segment
-; out: CF = 0, DI = the first live KIND_PKG record whose I_SPTR matches;
+; out: CF = 0, DI = the first KIND_PKG record, live or dying, whose I_SPTR
+;      matches;
 ;      CF = 1 = none does (DI = one past the table)
 ; clobbers: DI (the output), flags - and nothing else.
 ;
@@ -1442,8 +1445,12 @@ inst_lkhd:  db 0
 
 ; -----------------------------------------------------------------------------
 ; app_launch - launch (or front) a built-in app kind (SPEC.md 29.4)
-; in:  AL = kind (0..6); UI task only, gfx lock NOT held (takes its own)
-; out: CF = 1 launch failed (instance/window/task table full), CF = 0 done
+; in:  AL = kind (KIND_ABOUT..KIND_CTRL, or KIND_HIBER on kern_big); UI task
+;      only, gfx lock NOT held (takes its own) - unless [inst_lkhd] is set,
+;      when the caller (fdlg_open) holds it and the show runs under that hold
+;      (SPEC.md 38.6)
+; out: CF = 1 launch failed (instance or window table full, the kind at its
+;      cap, or a singleton with only dying instances), CF = 0 done
 ; clobbers: nothing else (flags only)
 ;
 ; At the kind's cap, "launch" fronts + un-minimizes the existing live
@@ -1452,8 +1459,8 @@ inst_lkhd:  db 0
 ; the first free state-pool slot (a slot is held iff a same-kind record
 ; with I_STATE != 0 points at it), create the window from the kind's
 ; template cascaded (+16,+16) per pool slot, fill + bind + init, publish
-; I_STATE=1 (LAST record write), spawn the kind's task (rollback on a full
-; task table: unpublish, destroy the window), then show the window.
+; I_STATE=1 (LAST record write), then show the window. There is no task
+; arm since SPEC.md 14.8 (the NO TASK ARM note below).
 ; -----------------------------------------------------------------------------
 app_launch:
     call kent_bp                ; = push ax/bx/cx/dx/si/di/bp
@@ -1640,10 +1647,11 @@ app_launch:
 ; synchronous teardown under the held lock - destroy the window, free the
 ; record. Task-owned instance: set the die flag and hide for instant
 ; feedback; the task notices at its next wake and tears itself down via
-; inst_task_die. For a PACKAGE instance the record store frees its region
-; too (SPEC.md 29.2 rule 7) - on either branch: a package that took a
-; worker (SPEC.md 20.6) reaches the second one, and there the freeing store
-; is task_exit's release byte instead.
+; inst_task_die. For a PACKAGE instance the region goes with the record
+; (SPEC.md 29.2 rule 7) on either branch: mem_free_rec frees it, and every
+; claim, just before the record is freed - here, or for a package that took
+; a worker (SPEC.md 20.6) in inst_task_die on that worker, before
+; task_exit's release byte.
 ; -----------------------------------------------------------------------------
 app_close_win:
     push di
@@ -1974,9 +1982,11 @@ inst_task_die:
 ; The two routines below are the first API slots that hand a package-supplied
 ; pointer to inst_of_win, and inst_of_win is not defensive: wm_ptr2idx's
 ; `div cl` FAULTS (int 0, no handler installed) once BX - wm_wins exceeds
-; 255*WIN_SIZE, and the `wm_owner+si` load that follows is unbounded. The
-; loader already refuses to wm_destroy an aborting entry's BX without exactly
-; this test (SPEC.md 21 step 9) - this is that test, factored out.
+; 255*WIN_SIZE (its clamp bounds the index it returns, so the `wm_owner+si`
+; load is bounded; the fault is not), and a pointer that is in range but not
+; a window names the last one. This is that test. The loader does not need
+; it on an aborting entry - its abort path never consults BX, sweeping by
+; W_SEG instead (SPEC.md 20.2).
 ; -----------------------------------------------------------------------------
 inst_wchk:
     push ax
@@ -2032,8 +2042,8 @@ inst_pkg_fence:
 ; -----------------------------------------------------------------------------
 ; inst_pkg_spawn - give a package instance its one worker task (SPEC.md 20.6)
 ;
-; in:  AX = near entry point inside the package image (a whole-word package
-;           address, relocated as class 0 by os88pkg.py, SPEC.md 20.2)
+; in:  AX = near entry point inside the package image (a plain offset in the
+;           package's own segment - v3 has no relocation, SPEC.md 20.1/20.2)
 ;      BX = the package's own window ptr (what OSAPI_WM_CREATE returned)
 ; out: CF = 1 refused, nothing created; CF = 0 and AL = the task slot
 ; clobbers: AL (an output) and the flags - every other register preserved,
@@ -2136,9 +2146,9 @@ inst_pkg_spawn:
 ; in:  BX = the package's own window ptr; the gfx lock must NOT be held
 ; out: returns with EVERY register AND the flags preserved if the instance
 ;      is still live - otherwise NEVER RETURNS: it tears the instance down
-;      through inst_task_die (gfx_lock, wm_destroy, gfx_unlock, task_exit
-;      with BX = the record, which frees the record and with it the package
-;      region inside one IF=0 window)
+;      through inst_task_die (gfx_lock, inst_unwin, gfx_unlock, mem_free_rec
+;      - the region and every claim - then task_exit with BX = the record,
+;      which frees the record and the task slot inside one IF=0 window)
 ;
 ; Called by the worker at least once per outer-loop iteration. gfx_lock is
 ; NOT reentrant, and inst_task_die takes it - calling this while holding the
@@ -2486,10 +2496,9 @@ inst_knd:    resb 1             ; app_launch scratch: kind being launched
                                 ; was 16 bytes here until kernel size pass 17:
                                 ; app_launch cascades the template in place.
                                 ; inst_icon_ptr's staging slot was 64 bytes
-                                ; HERE before that and is now dsk_ico itself -
-                                ; the dsk_get_icon idiom taken the whole way,
-                                ; SPEC.md 25/30. The tenancy is stated at
-                                ; assoc_docicon_x)
+                                ; HERE before that, then dsk_ico itself, and
+                                ; is inst_icobuf above since the worker-
+                                ; teardown race - its declaration says why)
 
 
 section .text

@@ -14,10 +14,11 @@
 ;
 ; Up to MAX_TASKS tasks; task 0 is the boot thread (the UI task) and runs on
 ; the task-0 stack (SS:STK0_TOP) — it owns no slice of sch_stacks. Slots
-; 1..MAX_TASKS-1 are dynamic (task_spawn / task_exit), each with an
-; SCH_STACK-byte stack in .lowbss.
+; 1..MAX_TASKS-1 are dynamic (task_spawn / task_exit), each with a stack
+; from SCH_PARTITION's fixed list (128..SCH_STACK bytes) in .lowbss.
 ;
-; All tasks run CS = DS = KERNEL_SEG and SS = LOW_SEG (SPEC.md 1/2.1): the
+; All tasks run SS = LOW_SEG (SPEC.md 1/2.1) - and CS = DS = KERNEL_SEG,
+; except a package's worker, whose CS = DS is its own segment (SPEC.md 20.6): the
 ; stacks live in low memory, outside the kernel's 64KB window, and a context
 ; switch is still nothing more than swapping SP because every task shares the
 ; one SS. SS is therefore NOT saved in the frame below and never changes
@@ -101,18 +102,18 @@ SCH_STACK   equ 384             ; per-task stack bytes. It was 1,536 when the
                                 ; them - left its deepest mark 142 bytes down,
                                 ; and Tracker's streaming worker feeding a
                                 ; Sound Blaster through its own IRQ reached
-                                ; the same 142. 256 is 1.8x that, which is
-                                ; thinner than this project usually runs, so
+                                ; the same 142. 256 was 1.8x that and 384 is
+                                ; 2.7x - thinner than this project usually runs, so
                                 ; SCH_MAGIC below makes an overrun a CAUGHT
                                 ; failure instead of a silent one.
                                 ;
                                 ; **IT IS A CONSTANT AND A REBUILD.** It used
                                 ; to have to be 256 exactly, because
                                 ; sch_switch turned the slot index into the
-                                ; slice's base with a byte swap; that path is
-                                ; still there for 256 and there is a general
-                                ; one beside it for any multiple of 128, so
-                                ; changing this and MAX_TASKS is the whole of
+                                ; slice's base with a byte swap. The base is
+                                ; a lookup in sch_stkbase now (SPEC.md 8.6),
+                                ; so changing SCH_PARTITION and MAX_TASKS is
+                                ; the whole of
                                 ; the change (docs/KERNEL-MEMORY.md, "Task
                                 ; stacks"). apps/taskmgr's bss map used to be
                                 ; hand-chained literals and was the other half
@@ -173,7 +174,7 @@ SCH_FRAME   equ 24              ; saved-frame size: 9 regs + IP/CS/FLAGS
 ; -----------------------------------------------------------------------------
 %ifdef KERN_SMALL
 ; --- kern_small's FOUR (docs/plans/KERN-SMALL-CUT-PLAN.md D1) ----------------------
-; 832 bytes against kern_big's 2,816. The COUNT is the owner's; what is
+; 960 bytes against kern_big's 2,816. The COUNT is the owner's; what is
 ; chosen here is WHICH FOUR, off the same survey (docs/plans/completed/STACK-SLOTS-PLAN.md 12.1)
 ; read against what SPEC.md 24.5 actually puts on the small disks:
 ;
@@ -285,7 +286,7 @@ SCH_WD_TICKS equ 18             ; cooperative mode: the watchdog forces a
 ;
 ; IT IS IN THE BOOT OVERLAY (SPEC.md 2.5, docs/plans/LAST-DROP-BYTES.md row 3), which
 ; is 166 bytes of `.text` that stop existing when kmain gives the blob back.
-; kmain:4170 is its ONE caller and there is no second entry: nothing
+; kmain's OVBCALL is its ONE caller and there is no second entry: nothing
 ; re-initialises the scheduler, the reboot path is sched_unhook - which RESTORES
 ; the old vector and is a different routine - and sch_fast_on/sch_fast_off
 ; re-programme the PIT without coming near this body. Zero outbound calls, so
@@ -293,8 +294,10 @@ SCH_WD_TICKS equ 18             ; cooperative mode: the watchdog forces a
 ;
 ; The vector store below is what makes it safe to be here and is worth reading
 ; before anything is added: `mov word [es:0x22], KERNEL_SEG` names the segment
-; as a CONSTANT. In `.boot2` CS is the BLOB's, and the blob is about to become
-; somebody's heap claim, so `mov [es:0x22], cs` would install a vector into
+; as a CONSTANT. On kern_big this body is `.ovl` and CS is FAT_SEG, whose bytes
+; the first mount takes (SPEC.md 2.5); on kern_small it is `.boot2` and CS is
+; the BLOB's, which is about to become somebody's heap claim. Either way
+; `mov [es:0x22], cs` would install a vector into
 ; freed memory and the machine would die later at an address with no connection
 ; to this file. tools/os88ovlchk.py rule 2b refuses that spelling outright now.
 ; -----------------------------------------------------------------------------
@@ -357,8 +360,11 @@ sched_init:
                                 ; one word store for the two (the %if at the
                                 ; foot of this file keeps them adjacent)
     mov word [sch_wd_hits], 0   ; zeroed HERE by hand, like the four bytes
-                                ; above it: nothing clears .bss at boot, so
-                                ; every one of these has to be stored rather
+                                ; above it: .bss arrives as the image's zero
+                                ; padding (SPEC.md 12.8.5.1, checked on the
+                                ; kern_big binary), but sched_init is boot-
+                                ; overlay code, so storing these costs no
+                                ; resident byte and they are stored rather
                                 ; than assumed. (This comment used to explain
                                 ; sch_coop, which is set three lines up - and
                                 ; a store whose comment justifies a DIFFERENT
@@ -474,7 +480,8 @@ section .text
 ; (which this replaces outright - it WAS this routine, in the wrong module),
 ; and in snd.inc's PCM deadline prime.  Two copies are deliberately NOT
 ; converted:
-;   * sched_init's seed at the top of this file is `.ovl`, the boot overlay,
+;   * sched_init's seed at the top of this file is boot-overlay code (`.ovl`
+;     on kern_big, `.boot2` on kern_small),
 ;     and a near call from there to `.text` would assemble cleanly and run
 ;     wrong;
 ;   * sch_account's is on the IRQ0 path and does more (the IRR coherence
@@ -802,10 +809,10 @@ sch_idle_body:
 ; in:  nothing.  out: CF=1 if no slot was free (the machine keeps the old
 ;      resume-the-outgoing fallback and nothing else changes)
 ;
-; IN THE BOOT OVERLAY (docs/plans/LAST-DROP-BYTES.md row 16). One caller, kmain:4182,
-; and the idle task it spawns outlives it by construction - a task's code is
+; IN THE BOOT OVERLAY (docs/plans/LAST-DROP-BYTES.md row 16). One caller, kmain's
+; OVLCALL, and the idle task it spawns outlives it by construction - a task's code is
 ; sch_idle_body in `.text`, which is what BX = 0 above names. Taking the address
-; of a `.text` label from `.boot2` is correct and taking the address of an `.boot2`
+; of a `.text` label from `.ovl` is correct and taking the address of an `.ovl`
 ; one would not be: `.text` has vstart=0 and the consumer supplies KERNEL_SEG.
 ;
 ; **kmain does not read the CF this answers with**, which is what lets the site
@@ -854,7 +861,8 @@ section .text
 ; task_spawn - create a task that iret-launches into a near entry point
 ;
 ; Builds a complete saved frame at the top of the slot's stack: DX = the
-; spawn argument, other GP regs zero, DS = ES = KERNEL_SEG, CS = KERNEL_SEG,
+; spawn argument, other GP regs zero, DS = CS = the segment in BX (KERNEL_SEG
+; when BX = 0), ES = KERNEL_SEG,
 ; IP = entry, FLAGS with IF=1. The slot's sch_cycles counter is zeroed
 ; before the publish (the ISR only charges the RUNNING slot, so a
 ; pre-publish write cannot race - SPEC.md 8.1). The scan starts at slot 1:
@@ -879,8 +887,9 @@ section .text
 ; drives the repaint). Pre-empted between the scan and the publish, the
 ; second spawner would overwrite the first's T_SP/T_INST and both callers
 ; would be handed the same slot number - one task lost, one instance record
-; leaked for the session. The window is ~30 stores with no I/O, shorter than
-; task_exit's.
+; leaked for the session. The window is the slice's 0xCC fill - one `rep
+; stosw` of the whole slice, ~0.7 ms on a 384-byte one at PERFORMANCE.md's
+; 1.76 us a byte - plus ~30 stores, no I/O; longer than task_exit's.
 ;
 ; The frame is built through ES, not DS: sch_stacks is in LOW_SEG (.lowbss),
 ; which DS does not address. The task record itself is ordinary kernel .bss
@@ -1246,9 +1255,10 @@ task_exit:
 ;           which charges nothing but still answers the question. task_cycles
 ;           and task_debit used to re-derive this from the same [sch_cur]
 ;           under the same cli; now they do not.
-; clobbers: AX, BX, CX, DX, SI - on BOTH arms now (CX:DX the PREVIOUS stamp
-;           on the charging arm, and BX untouched on the early-out, since
-;           pass 18 - nothing reads either); the early-out used to
+; clobbers: AX and SI on both arms; BX, CX and DX on the charging arm only
+;           (CX:DX the PREVIOUS stamp there; the early-out jumps past the
+;           latch and touches none of the three, since pass 18 - nothing
+;           reads either); the early-out used to
 ;           clobber nothing. Every call site already tolerated the list:
 ;           sch_isr holds a full frame, sch_switch's .pick pushes DX and BX,
 ;           task_exit banks the record pointer in DI first, task_cycles and
@@ -1370,7 +1380,7 @@ task_cycles:
 ;
 ; sch_lock is deliberately NOT reused as the "don't switch" flag even though
 ; it looks like one: task_yield tests it too and self-resumes when it is set
-; (see task_yield above), so raising sch_lock would not make multitasking
+; (see task_yield below), so raising sch_lock would not make multitasking
 ; cooperative - it would stop multitasking altogether and freeze every Timer
 ; and Bounce instance forever, their task_sleep never handing the CPU on.
 ; Cooperative mode must leave the VOLUNTARY path fully working and suppress
@@ -1432,7 +1442,9 @@ sched_mode_get:                 ; FAR-ENTERED (SPEC.md 2.6.1): no near caller
 ; EOI - we must not), then bumps [ticks], wakes due sleepers, and switches
 ; round-robin if the tail's two tests allow it: sch_lock must be clear, and
 ; in cooperative mode only the watchdog switches (SPEC.md 8.2). Runs with
-; IF=0 throughout; calls no BIOS service beyond the chain; never sti.
+; IF=0 throughout, except inside sch_rhook on kern_big while a sample ISR is
+; open (SPEC.md 34.11), where the hook runs at IF=1; calls no BIOS service
+; beyond the chain, and sch_isr itself never sti's.
 ;
 ; Decision order is binding: accounting and the wake scan run BEFORE both
 ; tests, so cycle accounting and task_sleep deadlines keep working every tick
@@ -1512,7 +1524,7 @@ khb_dipl:   db 0                ; to disagree: cutting 32 bytes off the
                                 ; is aimed at the chain the machine is actually
                                 ; in. Depth, not SP, because the answer has to
                                 ; compare across slots - and it is derived from
-                                ; sch_stacks + slot * SCH_STACK, never from
+                                ; sch_stkbase[slot] + sch_stksize[slot], never from
                                 ; SP's low bits: at 384 a slice is 128-aligned
                                 ; and the `neg al` that read 256-aligned ones
                                 ; produced garbage (the switch path below says
@@ -1817,7 +1829,7 @@ task_yield:
     ; here too).
     ;
     ; **WRITTEN OUT RATHER THAN VMM_POLL, and the difference is DS.** The macro
-    ; is for ui_task and menu_drop, which already hold the kernel's; this site
+    ; is for ui_task, which already holds the kernel's; this site
     ; does not - task_yield is an OSAPI slot, so the caller may be a package
     ; with its own DS. The GATE is still the macro's cs-relative compare, and
     ; the segment load moves INSIDE the branch: a machine with no backdoor pays
@@ -2184,9 +2196,9 @@ sch_isr:
     ; Registers are already saved here, so unlike SPEC.md 9.10's swap this one
     ; needs no `cs:` override and a plain byte flag will do.
 %ifndef NO_CHAINPRIV
-    cmp byte [sch_chbusy], 0    ; NESTED? (SPEC.md 8.5.1) The ROM sends its EOI
-    jne .chskip                 ; and then stis, so a second IRQ0 can re-enter
-                                ; this ISR - and that one may not chain again
+    cmp byte [sch_chbusy], 0    ; NESTED? (SPEC.md 8.5.1) The ROM stis and runs
+    jne .chskip                 ; int 1Ch before its EOI, and a second IRQ0 can
+                                ; re-enter this ISR after that EOI - and that one may not chain again
                                 ; on the private stack (the saved SP is one
                                 ; register), and it is ALREADY on that stack, so
                                 ; the switch below is refused for it too: a
@@ -2871,9 +2883,9 @@ sch_stksize:
 ; -----------------------------------------------------------------------------
 sch_clsbytes:
     dw SCH_STACK                ; 0: unspecified - the largest class
-    dw 128                      ; 1: a sleeper. The idle task, a C package
-    dw 192                      ;    whose worker only sleeps, a Timer, a
-    dw 256                      ;    Bounce, a driver's stream task
+    dw 128                      ; 1: a sleeper - the idle task, Bounce
+    dw 192                      ; 2: most workers, the modal class
+    dw 256                      ; 3: a worker that draws through a deep chain
     dw SCH_STACK                ; 4: the largest, asked for on purpose
 SCH_NCLASS  equ ($ - sch_clsbytes) / 2
 %if SCH_NCLASS > 0x3F
@@ -2885,17 +2897,19 @@ SCH_NCLASS  equ ($ - sch_clsbytes) / 2
 ;
 ; Entered with IF=0, DS=KERNEL_SEG and a complete saved frame on the current
 ; stack (from sch_isr or task_yield's save stub). Parks SP in the current
-; record, picks the next ready task round-robin (falling back to the current
-; task if nothing is ready), and resumes it.
+; record, picks the next ready task round-robin (falling back to the idle task
+; if nothing is ready - or, before sch_idle_start, to the outgoing one), and
+; resumes it. (This header describes sch_switch:, which is above, after
+; sch_isr - not sch_clsbytes, which it follows.)
 ;
-; RE-ARMING sch_hold is the FIRST thing done here, and deliberately on the
+; RE-ARMING sch_hold is the first thing done once SS is known to be ours, and deliberately on the
 ; routine's single entry point rather than at each caller: the counter means
 ; "ticks of watchdog budget left since the running task last reached the switch
 ; path", so every one of the three ways in - fall-through from sch_isr, the
 ; explicit jmp from task_yield's save path, the explicit jmp from task_exit -
 ; must re-arm it (SPEC.md 8.2). Hence a task that yields voluntarily can never
-; trip the watchdog however long it runs in total; the "nothing ready, resume
-; the outgoing task" fallback below re-arms it too, so an idle single-task
+; trip the watchdog however long it runs in total; the "nothing ready"
+; fallback re-arms it too, so an idle single-task
 ; system manufactures no watchdog hits; and a dying task re-arms it for its
 ; successor.
 
@@ -2917,7 +2931,7 @@ resb ($-$$) % 2                         ; keep the BLOCK on a WORD boundary,
                                         ; anyway, so nothing may derive a
                                         ; slice base from SP's low bits, and
                                         ; every consumer works from
-                                        ; sch_stacks + slot * SCH_STACK -
+                                        ; sch_stkbase[n] and sch_stksize[n] -
                                         ; sch_switch's canary arm, task_spawn's
                                         ; fill, tests/stackprobe (whose own
                                         ; comment records that the high-byte
@@ -2949,9 +2963,8 @@ sch_stacks: resb SCH_STK_TOTAL          ; slots 1..MAX_TASKS-1, one slice per
                                         ; order; a slice's bottom is
                                         ; sch_stkbase[n] and its size
                                         ; sch_stksize[n] - nothing derives
-                                        ; either (SPEC.md 8.6)
-                                        ; of .lowbss (font_glyphs precedes
-                                        ; it). Slot 0 = the UI task runs on
+                                        ; either (SPEC.md 8.6).
+                                        ; Slot 0 = the UI task runs on
                                         ; the task-0 stack, SS:STK0_TOP,
                                         ; which grows down from above this
                                         ; section - it needs no reservation

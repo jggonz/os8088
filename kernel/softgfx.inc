@@ -204,8 +204,9 @@ gfx_pat_stage:
 ; BX = y1, CX = x2, DX = y2; clobbers flags). One shared core, sw_rect,
 ; parameterized by [sw_mode]:
 ;
-;   SWM_SOLID - per plane, the [gfx_color] bit picks a 00/FF byte; edges
-;               become (dest & ~mask) | (value & mask), interiors stosb.
+;   SWM_SOLID - sw_ink reduces [gfx_color] through gfx_inktab to 00h, FFh or
+;               the 50% dither; edges are one store, dest ^= (pat ^ dest) &
+;               mask (SPEC.md 39.25.1), interiors rep stosw and a tail byte.
 ;   SWM_GRAY  - one AA/55 pattern for all planes (color 15/0 per pixel
 ;               bit), toggled each row via [sw_altm] = FF; same edge math.
 ;   SWM_XOR   - XOR 0Fh flips every plane identically: edges xor the
@@ -414,10 +415,10 @@ sw_ink:
 ; PLANE" - a SPEC.md 39.26 relic, because there is one plane and no loop, so
 ; "once per plane" had become "once per call". BX and DX are still the
 ; interior loop's working registers; only the pointless save is gone. The one
-; caller is sw_rect_pl (a tail `jmp`, so this routine's `ret` is its), whose
-; one caller is sw_rect, which banks all eight registers in its own prologue
-; and pops them at .done - and sw_rect_pl's published contract is already
-; "clobbers: everything but the segment registers".
+; caller is sw_rect (a `call`, after gfx_rect_setup: sw_rect_pl was folded
+; into it in kernel size pass 17), which banks the registers in its own
+; prologue and pops them at .done - so "clobbers: everything but the
+; segment registers" is all this routine owes it.
 ;
 ; sw_col has the run of the register file and saves nothing, and this
 ; routine's own interior loop can hold
@@ -436,13 +437,14 @@ sw_ink:
 ; protecting nothing. They were copied verbatim off gfx_nextrow when it was
 ; inlined. kernel.asm's mark_fill inlines the same three instructions with no
 ; override and says so. The caller set is closed and re-checked at each edit:
-; sw_col from sw_plane_op only, sw_plane_op from sw_rect_pl only, sw_rect_pl
-; from sw_rect only, and nothing on that chain writes DS.
+; sw_col from sw_plane_op only, sw_plane_op from sw_rect only, and nothing
+; on that chain writes DS.
 ; -----------------------------------------------------------------------------
 %ifdef KHP_MONORECT
 %ifdef SW_BANKWALK
 ; =============================================================================
-; SPEC.md 39.31 - THE RECT IS WALKED A BANK AT A TIME (kern_big)
+; SPEC.md 39.31 - THE RECT IS WALKED A BANK AT A TIME (KHP_MONORECT: a knob,
+; built and OFF on every kernel)
 ;
 ; What follows replaces the three column-major passes below it on kern_big:
 ; left edge column, right edge column, interior rows, each stepping rows with
@@ -935,11 +937,11 @@ sw_pairbuild:
 ;           per ROW of every 4bpp blit on a 1bpp adapter - ~135 clocks a row,
 ;           and a 466x110 Paint canvas is 110 rows of a repaint measured at
 ;           399 ms.
-;           **gfx_blit4's row loop is the ONLY caller** (vga12.inc:2714,
+;           **gfx_blit4's row loop is the ONLY caller** (its `.row`, vga12.inc,
 ;           grepped over kernel/, apps/, drivers/, tools/ and tests/); it is
 ;           reached only when [gfx_blit_fst] == 1, and its only successor is
 ;           `jmp .nextrow`:
-;             AX  .nextrow opens `mov ax,[gfx_blit_sv]`               dead
+;             AX  .row banks it round gfx_rowbase, nothing else reads dead
 ;             SI  .row opens `mov si,[gfx_blit_sv]`, every iteration  dead
 ;             DX  gfx_rowbase, called earlier in the SAME iteration, ends
 ;                 in a `mul` and so WRITES DX; .par then loads it with a
@@ -948,7 +950,8 @@ sw_pairbuild:
 ;             DI  never read on the fst == 1 path, and sw_blit_row loads
 ;                 it itself from [gfx_blit_ro] at every entry          dead
 ;           and when the row loop ends all five come off gfx_blit4's OWN
-;           prologue at .pops. BX (`inc bx` at .nextrow) and BP (`add ax,bp`)
+;           prologue at .pops. BX (`inc bx` at .nextrow) and BP (`add
+;           [gfx_blit_sv],bp`)
 ;           are LIVE and stay saved; DS and ES are mandatory - the routine
 ;           swaps both. A second caller would inherit a contract that no
 ;           longer holds: read this list before adding one.
@@ -1345,9 +1348,9 @@ sw_patcol:
 
 ; -----------------------------------------------------------------------------
 ; sw_save / sw_restore - software twins of gfx_save / gfx_restore, same
-; rounding and buffer layout (SPEC.md 5) - a buffer saved from the back
-; buffer restores to it byte-identically. One shared body, sw_xfer, with
-; [sw_dir] picking the direction; restore additionally dirties the rect.
+; rounding and buffer layout (SPEC.md 5). One shared body, sw_xfer, with
+; [sw_dir] picking the direction; restore honours the sub-rect and then
+; disarms it (SPEC.md 5.8).
 ;   sw_save:    in AX/BX/CX/DX = rect, ES:DI = buffer; DI advances
 ;   sw_restore: in AX/BX/CX/DX = rect, ES:SI = buffer; SI advances
 ; ES preserved; clobbers flags.
@@ -1374,12 +1377,12 @@ sw_xfer:
     ; PLANE COUNT: this walked `add bx,[vid_rpara] / cmp bx,[vid_rend] /
     ; jb .plane`, a SEGMENT compare, so it needs its own argument and gets
     ; one. sw_xfer is reached only from sw_save and sw_restore, and those only
-    ; from vga12.inc's `cmp byte [vid_mono],0 / jne` pair or, on a build with
-    ; no VGA at all, from the NOVGA_ARM beside each. vid_apply - the sole
-    ; writer of all three cells (tests/unit/t_invariants.py) - sets
-    ; [vid_rpara] = 1 and [vid_rend] = [vid_rseg] + 1 on every non-VGA arm, so
-    ; BX started at [vid_rseg] and reached [vid_rend] after exactly one pass,
-    ; every time.
+    ; from vga12.inc's VIDEXTM [vid_planes] dispatch or, on a build with no
+    ; VGA at all, from the NOVGA_ARM beside each. vid_apply - then the sole
+    ; writer of all three cells - set [vid_rpara] = 1 and [vid_rend] =
+    ; [vid_rseg] + 1 on every non-VGA arm, so BX started at [vid_rseg] and
+    ; reached [vid_rend] after exactly one pass, every time. Both cells have
+    ; since gone.
     ; With one pass the two `cmp byte [sw_dir],0` tests are four instructions
     ; apart on one straight line, so the first one goes and its body - the
     ; sub-rect skip - becomes .rst's first instruction, which is still ABOVE

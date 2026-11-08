@@ -22,9 +22,10 @@
 ; masked writes compose correctly. A read of each target byte loads the
 ; latches before the masked write, so unmasked pixels survive.
 ;
-; Clipping: rows are clipped to the screen (0..479) - icons drawn inside
-; windows can hang off the bottom edge; byte columns past the right screen
-; edge (>= ROW_BYTES) are skipped defensively. Leaves the GC in the default
+; Clipping: rows are clipped to the screen (0 .. [vid_ch]-1) - icons drawn
+; inside windows can hang off the bottom edge; byte columns past the right
+; screen edge ([vid_stride] on the 1bpp pass, ROW_BYTES on the planar one)
+; are skipped defensively. Leaves the GC in the default
 ; state (SPEC 1 rule 7). Caller holds the gfx lock.
 ; =============================================================================
 
@@ -546,7 +547,7 @@ ico_core.none:                  ; (spelled out: ico_core_v above is the last
 ; is a short jump rather than a relaxed five-byte one.)
 ; -----------------------------------------------------------------------------
 ; ico_core_bb - the software renderer's icon body (SPEC.md 32/39.5): the white underlay
-;               ORs the shifted mask-row bits into all four planes, the
+;               ORs the shifted mask-row bits into the one 1bpp plane, the
 ;               black pass AND-NOTs the data-row bits out of them - color
 ;               15 under the mask, 0 under the data, like the VRAM passes.
 ; in:       DI = row offset, CL/CH = shift pair, ico_* vars set by ico_core

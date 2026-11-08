@@ -16,7 +16,7 @@ modk_hdr:
 
 ; -----------------------------------------------------------------------------
 ; dkx_hook / dkx_unhook - take dock.inc's dkv over, and give it back
-; in:  nothing; the graphics lock is held by dkf_apply's caller, so no
+; in:  nothing; the graphics lock is held by dock_apply's caller (bdk_apply's is the boot), so no
 ;      operation can be executing while the table is rewritten (SPEC.md 30.5)
 ; out: CF = 0; every register preserved
 ;
@@ -493,14 +493,12 @@ dkx_live_set:
     jmp dkx_ret_di
 
 ; -----------------------------------------------------------------------------
-; dock_apply - the SETTING moved: geometry, drive column, windows, strip
-; in:  [dock_cfg] already written; gfx lock held by the caller, or at boot
-; out: nothing (all registers preserved). THE CALLER OWES THE REPAINT, which
-;      is vid_switch's own contract: the Control Panel posts [cp_dirty]
-;
-; SPEC.md 30.5. wm_refit moves every window back inside the new band, and the
-; raise caches go because a window that did not move can have had the strip
-; stand up or lie down behind it.
+; dkx_paint - db_paint (dock.inc) on any edge: the rule and white field when
+;             the damage span says they are owed, then every tile whose key moved
+; in:  nothing (caller holds the gfx lock)
+; out: CF = 1 if any pixel was drawn, CF = 0 if the strip was already right -
+;      and CF = 0 while the strip is OPEN, which damages no window. All
+;      registers preserved; [gfx_color], [gfx_hole] and [wm_clip_n] restored.
 ; -----------------------------------------------------------------------------
 dkx_paint:
     push cs
@@ -536,7 +534,8 @@ dkx_paint:
     mov al, [gfx_color]         ; byte-only read: gfx_lock_flag lives next
     push ax                     ; door. ON THE STACK, not in .bss, and that
                                 ; rests on dkx_paint having EXACTLY ONE EXIT
-                                ; below `.go` - the five pops at the bottom.
+                                ; below `.go` - the pen's, the region's and the hole's pops and
+                                ; dkx_ret_di's six at the bottom.
                                 ; The wm_fs_vis refusal returns ABOVE this, and
                                 ; the CF answer is after the pops. A second
                                 ; early return added below here leaks a word
@@ -868,7 +867,7 @@ dkx_px_hit:
 ;
 ; **That rotation is NOT what makes a freed-and-refilled slot safe, and the
 ; sentence that used to say so was wrong**: every package's I_ICON is
-; I_ICO_PKG (loader.inc:265) or 0 (:261), so two different PACKAGES in one slot
+; I_ICO_PKG or 0 (loader step 9's one store), so two different PACKAGES in one slot
 ; key identically whatever the rotation does. What actually protects the case
 ; is SPEC.md 30's own guarantee - every dock-state transition rides a wm_show,
 ; wm_front, wm_hide or wm_destroy repaint and all four call dkx_paint

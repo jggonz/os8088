@@ -2,7 +2,8 @@
 ; os8088 - events.inc
 ;
 ; The system event queue (SPEC.md 10): a single ring of 16 fixed 8-byte
-; records in .bss. A FULL ring discards its OLDEST INPUT rather than refusing
+; records in .lowbss (its three indices in .bss). A FULL ring discards its
+; OLDEST INPUT rather than refusing
 ; the newest (SPEC.md 10.1) - see evq_push, and the one exception it makes.
 ; Producers may be ISRs (the mouse ISR pushes button
 ; events with IF=0), consumers are tasks (the UI task pops), so both push
@@ -14,7 +15,7 @@
 EV_TYPE     equ 0               ; word: EVT_*
 EV_A        equ 2               ; word: payload a (mouse events: x)
 EV_B        equ 4               ; word: payload b (mouse events: y)
-EV_C        equ 6               ; word: payload c (unused so far)
+EV_C        equ 6               ; word: payload c (mouse events: birth tick)
 
 EVT_NONE    equ 0
 EVT_MDOWN   equ 1               ; a=x, b=y, c=birth tick
@@ -75,10 +76,13 @@ EVQ_MASK    equ (EVQ_RECSIZE * EVQ_CAP) - 1     ; byte-offset wrap mask (0x7F)
 ; -----------------------------------------------------------------------------
 ; evq_push - append one event record to the queue
 ; in:  SI -> 8-byte record (in DS)
-; out: nothing; drops the event silently when the queue is full
+; out: nothing. A full ring drops its OLDEST record - or this one, when the
+;      oldest is an EVT_WAKE (SPEC.md 10.1); no caller is told
 ; clobbers: nothing (flags only)
 ; ISR-safe: the copy + index update sit inside pushf/cli ... popf, so a
-; caller running with IF=0 (the mouse ISR) stays that way throughout.
+; caller running with IF=0 (the mouse ISR) stays that way throughout. The
+; ring is addressed through SS (SPEC.md 10.1.1), so an ISR caller needs SS =
+; LOW_SEG: the mouse ISRs load it, and any other must be on a task stack.
 ; -----------------------------------------------------------------------------
 evq_push:
     call sch_wake_ui            ; an event means the UI task has work
@@ -263,10 +267,10 @@ evq_pop:
     cld
     push ds                     ; ...and the SOURCE is the ring, in LOW_SEG
     push ss                     ; since SPEC.md 10.1.1. DS is BANKED rather than
-    pop ds                      ; the copy wearing a segment prefix: the 8086
-    movsw                       ; LOSES the prefix when a string op restarts
-    movsw                       ; after an interrupt, and NMI reaches inside the
-    movsw                       ; cli above. EVQ_RECSIZE / 2 = 4, unrolled -
+    pop ds                      ; the copy wearing four `ss` prefixes - the same
+    movsw                       ; bytes. Either is correct here: the 8086 loses
+    movsw                       ; a prefix only when an interrupted REP string
+    movsw                       ; op restarts, and these four have no REP. EVQ_RECSIZE / 2 = 4, unrolled -
     movsw                       ; GROW THE RECORD AND THIS TRUNCATES SILENTLY.
     pop ds
 

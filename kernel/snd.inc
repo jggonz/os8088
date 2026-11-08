@@ -3,17 +3,19 @@
 ;
 ; The sound layer (SPEC.md 34), and all of it: the tone tier's
 ; owner/priority/generation router, the PC speaker driver (tone + PWM
-; exclusive clips), snd_tick (the one scheduler touch-point), and the three
-; os8088 API slot targets - caps, tone, play.
+; exclusive clips), snd_tick (the one scheduler touch-point), and the os8088
+; API slot targets - caps, tone, play, FM and stream (SOUND.DRV's, reached
+; through drv_svc) and the bracket's OSAPI_FSX_SPK.
 ;
-; THE PC SPEAKER IS THE ONLY SINK. The Sound Blaster and OPL2 drivers, the
-; driver table that chose between them, the per-tier route overrides and the
-; Control Panel page that set them are all gone, and with them the 64KB
-; SND_SEG they needed for DMA buffers, a record ring and a staging pool. What
-; is left needs no buffer at all: osapi_snd_play takes the caller's ES:SI and
-; paces it out of the caller's own memory, which is the shape a future
-; play-a-WAV package wants - the samples are the app's problem, not the
-; kernel's.
+; THE PC SPEAKER IS THE ONLY RESIDENT SINK. The card tiers - OPL2, Sound
+; Blaster, MPU-401, Covox - are SOUND.DRV's (SPEC.md 34, 51), and with them
+; went the 64KB SND_SEG the resident cards needed for DMA buffers, a record
+; ring and a staging pool. What stays resident is the tone router, the
+; speaker, the clip and bracket doors, and the places the driver is reached:
+; DSV_CAPS, DSV_FM and DSV_STREAM, DSV_TONE (snd_tone_out), DSV_TICK and
+; DSV_RELINST. The clip needs no buffer at all: osapi_snd_play takes the
+; caller's ES:SI and paces it out of the caller's own memory - the samples
+; are the app's problem, not the kernel's.
 ;
 ; Speaker PCM (SPEC.md 34.4): ch2 in mode 0 lobyte-only is the modulator -
 ; one `out 42h, AL` per sample emits a low pulse of AL PIT-cycles and the
@@ -39,7 +41,9 @@
 ; one mode at a time (snd_ch2mode: 0 free / 1 tone / 2 PWM); every 61h access
 ; is read-modify-write under pushf/cli..popf because the upper bits belong to
 ; the XT's keyboard/parity logic. snd_init saves the boot state of bits 0-1;
-; snd_unhook restores it. PIT channel 0 is never touched here at all.
+; snd_unhook restores it. PIT channel 0 is touched only by the
+; bracket door (OSAPI_FSX_SPK, SPEC.md 34.11): it trims the bracket's own
+; divisor at open, and spk_off puts it back and reloads the channel.
 ; =============================================================================
 
 ; --- capability bits (SPEC.md 34.2) ------------------------------------------
@@ -555,10 +559,9 @@ snd_disp_set:
 ; clobbers: flags
 ;
 ; Saves the boot state of 61h bits 0-1, stores every .bss byte the layer
-; reads (nothing clears .bss at boot, SPEC.md 8), runs the probes the driver
-; table declares (the speaker's presence is initialised data; the OPL2 row's
-; probe fully initialises the chip before reporting present, SPEC.md 34.2),
-; and sets snd_live LAST: the publish that arms snd_tick and the public
+; reads (nothing clears .bss at boot, SPEC.md 8) - it runs no probe: the
+; card probes are SOUND.DRV's attach (SPEC.md 51) - and sets snd_live LAST:
+; the publish that arms snd_tick and the public
 ; entry points (SPEC.md 34.7, the 29.2 publish-last idiom).
 
 %ifndef KERN_SMALL
@@ -643,8 +646,9 @@ snd_unhook:
     ret
 
 ; =============================================================================
-; The three API slot targets (SPEC.md 20.3) - caps, tone and the exclusive
-; clip. There is one sink, so there is nothing to select and nothing to probe.
+; The API slot targets (SPEC.md 20.3) - caps, tone and the exclusive clip,
+; FM and stream (live while SOUND.DRV is: drv_svc_call), and the bracket's
+; speaker door OSAPI_FSX_SPK (SPEC.md 34.11). The tier is snd_route's.
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------

@@ -4,9 +4,11 @@
 ; No font bytes are hard-coded unless the BUILD asks for some: font_init asks
 ; the VGA BIOS for its ROM 8x8 character set (int 10h AX=1130h BH=03h) and
 ; REMEMBERS WHERE IT IS - [font_seg]:[font_base], glyph 32 - and every
-; renderer reads the ROM's own rows through it (SPEC.md 6). There is no RAM
-; copy: the 768 bytes of .lowbss the table and its blank cell were are not
-; resident on any machine. The ROM's SPACE (glyph 32) is the blank cell an
+; renderer reads the ROM's own rows through it (SPEC.md 6). There is no RESIDENT
+; copy: the 768 bytes of .lowbss the table and its blank cell were are gone
+; from every machine, and only one whose ROM font_init times more than a
+; quarter slower than RAM copies the 760 into a 1KB MEM_K_FONT heap claim
+; (SPEC.md 6.0.1). The ROM's SPACE (glyph 32) is the blank cell an
 ; unprintable character draws. `make FONT=<name>` replaces the probe with a
 ; typeface carried in the boot overlay and copied into .lowbss after all
 ; (SPEC.md 6.2, ovl_font_init at the foot of this file) - the pointer then
@@ -503,12 +505,11 @@ font_ch_drop:
 ; clobbers: nothing
 ;
 ; Characters outside 32..126 draw nothing (the caller's pen still advances).
-; Clipping is whole-char: if any part of the 8x8 cell would leave the screen
-; the glyph is skipped entirely (acceptable v1 behavior per SPEC.md 6) - and,
-; while a background task's clip region is armed, if any part of the cell
-; would leave THAT (SPEC.md 11.3). A glyph is one shape or none; the region
-; is the only thing here that could produce half of one, and half an 8x8
-; glyph is unreadable anyway.
+; Clipping: a cell that would leave the SCREEN is skipped entirely (on a
+; SEAMCUT kernel a cell a display seam crosses is cut there instead, SPEC.md
+; 39.14.11). Against an armed clip region the cell is cut to the ROWS
+; wm_clip_rows allows (SPEC.md 11.3.2) and, on kern_big, to the columns
+; [wm_clip_cm] allows (11.3.4); a cell no fragment reaches draws nothing.
 ; -----------------------------------------------------------------------------
 font_char:
     SNAPAUDIT_TALLY snap_hchar, snap_kchar
@@ -722,9 +723,9 @@ font_char:
 ; -----------------------------------------------------------------------------
 ; font_char_bb - the software renderer's glyph body (SPEC.md 32/39.5)
 ;
-; The same shifted-row masks as the VRAM path, applied to all four planes
-; in software: the [gfx_color] plane bit picks or (set bits) or and-not
-; (clear bits). When x is byte-aligned the second-byte mask is always 0
+; The same shifted-row masks as the VRAM path, applied in software to the
+; 1bpp framebuffer's one plane: font_ink's reduced ink picks or (set bits)
+; or and-not (clear bits). When x is byte-aligned the second-byte mask is always 0
 ; and that write is skipped, so nothing lands past the row's last byte.
 ; in:       CX = x, DX = y (cell fully on screen - font_char clipped),
 ;           SI -> 8 glyph row bytes
@@ -916,11 +917,11 @@ font_char_bb:
     ret                         ; ...and the third exit
 
 ; -----------------------------------------------------------------------------
-; font_ink - internal: font_char_bb's per-plane colour register
+; font_ink - internal: font_char_bb's ink register
 ;
-; The glyph loop tests bit 0 of CH once per plane and shifts, so on VGA the
-; colour index goes in untouched. On mono there is one plane and one bit to
-; give it: gfx_ink's black or white. The middle greys round to black - a
+; Its one caller is font_char_bb, which font_char reaches only on a 1bpp
+; display, so there is one plane and one bit to give the glyph loop's
+; `test ch, 1`: gfx_ink's black or white. The middle greys round to black - a
 ; dithered 8x8 glyph costs half its strokes, and Piano's coloured letters
 ; want contrast, not texture.
 ;
@@ -939,7 +940,7 @@ font_char_bb:
 ; from disagreeing.
 ;
 ; in:       CH = [gfx_color], [gfx_dis]
-; out:      CH = the colour index (VGA) or 00/FF (mono); [font_dith] set
+; out:      CH = 00h or FFh; [font_dith] set
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
 font_ink:
@@ -1048,10 +1049,10 @@ font_str:
 ;
 ; Since packages left the kernel segment (SPEC.md 20.1) a drawn string can
 ; belong to the kernel or to any loaded package, and the caller is the only
-; one who knows which. Five call sites in the tree pass a package segment -
-; the window title (wm_draw_win), the app name and menu titles
-; (menu_draw_bar), and the item strings (menu_drop, menu_widest); every other
-; caller reaches this through font_str above with ES = DS.
+; one who knows which. Three callers are left:
+; OSAPI_FONT_STR_XPARENT's X cell (slot 0x0068, ES = the package's),
+; wm_draw_win's caption (ES = the owner's) and font_run_x's .whole fallback.
+; font_str above (ES = DS) survives only in `make BOOTPROF=1`.
 ; -----------------------------------------------------------------------------
 font_str_x:
     push ax
@@ -1087,10 +1088,11 @@ font_str_x:
 ; in:       CX = x, DX = y, SI -> ASCIIZ (font_run_x: ES:SI), AL = text
 ;           colour, AH = background colour; caller holds the gfx lock
 ; out:      nothing
-; clobbers: flags, and [gfx_color] - the pen is SPENT: it is left at the run's
-;           foreground on a drawn run and at its background on one whose cells
-;           were all refused by the clip region (font_run_scell sets it before
-;           the test). A caller that draws afterwards sets its own pen
+; clobbers: flags, and [gfx_color] - the pen is UNDEFINED after the call:
+;           the single-pass paths never write it, .whole leaves the
+;           foreground, and a run cut per cell leaves whatever its last cell
+;           set (font_run_scell sets the background before the test). A
+;           caller that draws afterwards sets its own pen
 ;
 ; **Every text-bearing element in this system erases a rect and then letters
 ; it**, and each of them writes those bytes twice: once as a fill and once,
@@ -2083,8 +2085,10 @@ fnt_rn_edge:
 ;
 ; THERE IS NO PLANE LOOP, and that is font_run_x's gate rather than an
 ; assumption here: [vid_mono] is tested three instructions above the .cell
-; loop, and a 1bpp target has one plane. A planar run takes .slow (SPEC.md
-; 6.1), so the 4-plane walk this used to carry could never run.
+; loop, and a 1bpp target has one plane. A planar or off-grid run never
+; reaches it: .escape sends one to font_run_scell instead ([font_rn_pl],
+; [font_rn_k7]; SPEC.md 6.1.10, 6.1.11), so the 4-plane walk this used to
+; carry could never run.
 ;
 ; What is left is exactly what differs between two cells of one word: the
 ; character, the x edge test, the clip test and one byte of DI. Everything a

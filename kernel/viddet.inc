@@ -722,7 +722,7 @@ vid_depth_set:
     cbw                         ; size pass 13 nothing there reads the word -
                                 ; the save-under, menu_drop's sizing and the
                                 ; cursor all drop their x1 multiplies)
-                                ; 1 or 4, so the sign bit is clear and AH
+                                ; 1, 4, 8 or 16, so the sign bit is clear and AH
                                 ; becomes 0. `cbw` is 8086.
     mov [vid_planes_w], ax
 %endif
@@ -1731,17 +1731,20 @@ section .text                   ; ...and back, so the next include lands right
 ;
 ; The loading screen is stage 2's now, so every call it makes into the kernel
 ; is across a segment. This is that: ONE far door, `call bp` / `retf`, three
-; bytes, with BP naming the near `.text` routine - vid_apply, vid_setmode or
-; gfx_rowbase. It was three shims of four bytes, one per routine (and
+; bytes, with BP naming the near `.text` routine - the splash's are vid_setmode
+; and gfx_rowbase (vid_apply is the blob's own copy, bvs_apply, now). It was
+; three shims of four bytes, one per routine (and
 ; spw_vid_detect a fourth until SPEC.md 2.5.3.3 put vid_detect in the blob
-; with its callers); the loader's side pays the BP load, in `.boot2` and
-; `.boot2`, which the machine gives back once it is up. `call`/`retf` touch no
+; with its callers); the loader's side pays the BP load, in `.boot2`,
+; which the machine gives back once it is up. `call`/`retf` touch no
 ; flag. It is
 ; HERE, at the end of viddet.inc, rather than in kernel.asm's cw_ block for one
 ; reason: SPL_RESIDENT. The bar cannot move until the routines the first tick
 ; calls are ABOARD, and the cw_ block is at the end of `.text` - the last
-; sector of the image. Here it lands in sector 7, which is what SPL_RESIDENT
-; now measures and why it fell from 9 to that.
+; sector of the image. Here it lands in `.text` sector 4 (0x922 on kern_big,
+; 0x842 on kern_small); SPL_RESIDENT, still 9, is what the %if at the foot of
+; kernel.asm measures it against - and the three bytes below it, which the
+; first tick also touches, are not under that %if.
 ; =============================================================================
 spw_near:   call bp
             retf

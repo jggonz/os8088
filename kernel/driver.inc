@@ -119,23 +119,14 @@ DRV_MAX     equ 9 + DRV_VX + DRV_PX ; ...and kern_big stops at HTTPFS.DRV (SPEC.
 DRV_MAX     equ 4               ; **kern_small HAS NO RAM DISK** (SPEC.md
                                 ; 62.9.15): a 128-256KB machine has nothing to
                                 ; spare for a store made of the memory it is
-                                ; short of, so the row, its two images and all
-                                ; of the kernel-side support go. Everything
-                                ; after it moves up one - the Ethernet card to
-                                ; row 2 and the parallel link to row 3 - and
-                                ; drv_cfgbit moves with them, so kern_small's
-                                ; SYSTEM.CFG bit for the cable is 2 where
-                                ; kern_big's is 3. THAT DIVERGENCE IS REAL AND
-                                ; IS NOT WHAT drv_cfgbit FIXED: the table
-                                ; decouples the bitmap from the PAGE'S ORDER
-                                ; within one build, and two builds with
-                                ; different row COUNTS cannot share an
-                                ; assignment. It is written down in 62.9.15 and
-                                ; in 31.1's table rather than worked around:
-                                ; the two ship separate disks with separate
-                                ; settings files. DRV_MAX is what everything
-                                ; walks, so this one constant is the whole of
-                                ; it.
+                                ; short of. SINCE SPEC.md 51.0 kern_small HAS
+                                ; NO DRIVER LAYER AT ALL: no drv_tab, no
+                                ; drv_cfgbit and no SYSTEM.CFG are assembled
+                                ; (they are OS88_DRIVERS's, which is kern_big's),
+                                ; so the row-move and settings-bit divergence
+                                ; this note used to describe no longer exists.
+                                ; This constant survives only for the few
+                                ; kern_small sites that still name it
 %endif
 
 ; --- driver classes (SPEC.md 51.2) -------------------------------------------
@@ -149,9 +140,9 @@ DRVC_DISK   equ 2               ; block volumes: hard disks (SPEC.md 51.8)
 DRVC_NET    equ 4               ; **THE ETHERNET CARD** (SPEC.md 72) - and
                                 ; not the parallel link, which this line said
                                 ; for a cycle after the cable moved to
-                                ; DRVC_FILE (62.9) to serve a volume. A SECOND
-                                ; block-serving class beside DRVC_DISK, which
-                                ; is what DV_CLASS exists for
+                                ; DRVC_FILE (62.9) to serve a volume. It serves
+                                ; SOCKETS through DSV_PKGCALL (SPEC.md 72) and
+                                ; no blocks: its DSV_BLK is 0
 DRVC_RETIRED3 equ 3             ; WAS the serial monitor's, and the driver is
                                 ; gone (SPEC.md 58). THE NUMBER STAYS: a class
                                 ; is an index into drv_fptr* below, which
@@ -258,7 +249,8 @@ DRVC_OVL    equ 0x40            ; NOT A CLASS, and mirrored from
 DRVR_DISP   equ 0               ; dw: PKG_DISP - the dispatcher's offset
 DRVR_SEG    equ 2               ; dw: the segment it runs in, 0 = not loaded
 DRVR_FILE   equ 4               ; dw: -> its NUL 8.3 file name (.text)
-DRVR_TITLE  equ 6               ; dw: -> its display name (.text)
+DRVR_TITLE  equ 6               ; dw: its display name, an OFFSET into DRV_TITLES
+                                ; (the blob's and CTRL.DRV's copies, not resident)
 DRVR_PARA   equ 8               ; dw: PARAGRAPHS its claim took, 0 = not
                                 ; loaded (a whole number of granules,
                                 ; SPEC.md 50.2.1; it was KB)
@@ -384,9 +376,10 @@ DRV_H_BSSP  equ 31              ; byte: THE BSS SIZE IN PARAGRAPHS
                                 ; the TAIL, and the tail of a top-down claim
                                 ; is walled in between this driver and the one
                                 ; loaded before it. The claim is exact now and
-                                ; drv_bss GROWS when the round-up does not
-                                ; cover the bss, which for the shipped set is
-                                ; four drivers and none of them at boot
+                                ; drv_bss REFUSES an image whose bss the claim
+                                ; does not cover: os88drv.py strips the zero
+                                ; run only to the 512-byte rung, so a driver
+                                ; this tree built always fits (SPEC.md 51.1.2)
 DRV_HDR_SZ  equ 0x20
 DRV_VER     equ 12              ; 4 until the API table moved, 7 until two
                                 ; cells were re-contracted, 9 until the RAM
@@ -1024,8 +1017,9 @@ DRV_CFG_MAPN equ 8
 CFG_NKEY    equ 16              ; ...and 'DK' (DOCK_OPT is kern_big's)
 %else
     dw 'TP'                     ; same key, same reason, on kern_small too -
-    db 1, 7, CFG_THMP           ; the preset round-trips there even though
-                                ; this kernel never reads it (SPEC.md 76.14.14)
+    db 1, 7, CFG_THMP           ; an arm no build assembles: CFG_DATA is
+                                ; expanded only under OS88_DRIVERS (ovc, cpc),
+                                ; and kern_small reads no SYSTEM.CFG (51.0)
 CFG_NKEY    equ 9               ; no 'RD' key: kern_small has no RAM disk, and
 %endif                          ; an unknown key is DROPPED rather than carried
                                 ; (SPEC.md 51.5 rule 1), which is the honest
@@ -1798,7 +1792,7 @@ drv_memk:                       ; one word per drv_tab row, in the same order
 section .text
 
 ; --- ...AND THE OTHER QUESTION A CLASS CAN BE ASKED (SPEC.md 51.12.1) -------
-; What a class COULD cost - the ceiling `Hard drives (Up to 32K)` quotes - is
+; What a class COULD cost - the ceiling `Hard drives (Up to 4K)` quotes - is
 ; the sum of the table above over the rows of that class, and every term of it
 ; is fixed at ASSEMBLY TIME. It used to be a runtime form of
 ; OSAPI_DRV_CLASSK (`DRVCK_ALL`, bit 7 of the class byte), which walked a
@@ -1818,7 +1812,7 @@ section .text
 ; is not a number and the SDK cannot see DRVM_HDD. The %if is what makes the
 ; literal safe, and it is the half a package could never have had.
 DRVM_CEIL_DISK equ 4            ; MIRRORED in apps/os88api.inc - t_mirror
-DRVM_CEIL_NET  equ 34           ; ...ditto, on kern_small (no PCI row)
+DRVM_CEIL_NET  equ 34           ; ...ditto: ETHER.DRV's row alone (the %if)
 DRVM_CEIL_NET_PCI equ 39        ; ...and DRVC_NET's on every big build
                                 ; (SPEC.md 125.5): ETHER.DRV and PCIETHER.DRV
                                 ; are ALTERNATIVES in one publication slot, so
@@ -2051,11 +2045,10 @@ section .modu                   ; CTRL.DRV's image (SPEC.md 2.8): the Drivers
                                 ; is still KERNEL_SEG inside an image - so it
                                 ; takes no shim with it and the whole 40 bytes
                                 ; leave `.cold` rather than a net share of it.
-                                ; The strings it hands back (drv_errstr,
-                                ; drv_s_off, drv_e0) STAY in `.text`: it
-                                ; answers an ADDRESS and the caller draws it
-                                ; through DS, so they are not module data and
-                                ; want no `cs:`.
+                                ; The strings are this image's own (.modu):
+                                ; drv_errstg reads them `cs:` and STAGES them
+                                ; into cp_sbuf, which is the address it
+                                ; answers (SPEC.md 2.8.6).
 drv_status_x:
     push ax
     mov al, [bx+DRVR_ERR]       ; A REPORTED REASON OUTRANKS 'Loaded', which is
@@ -2190,8 +2183,8 @@ osapi_drv_classk_x:
     inc cx
 %endif
     mov ax, [bx+DRVR_PARA]      ; the image drv_load claimed, in paragraphs
-    add ax, 63                  ; and ROUNDED UP to the KB (EMS.DRV and
-                                ; SERIAL.DRV are under one: truncated, a
+    add ax, 63                  ; and ROUNDED UP to the KB (EMS.DRV is
+                                ; under one: truncated, a
                                 ; loaded class would answer 0, which is "not
                                 ; loaded")...
     mov bx, [bx+DRVR_SEG]       ; ...and everything that names it as owner,
@@ -2383,19 +2376,16 @@ drv_nostamp:
 ; always right: restore the segment, THEN the word.
 ; -----------------------------------------------------------------------------
 drv_call_ent:                   ; ...and the same thing for a caller that has
-    mov bp, [bx+DRVR_ENT]       ; the ROW and not the entry proc, which is four
-                                ; of the five sites in the tree (drv_attach x2,
-                                ; drv_tier_x and blank.inc's ss_call). It
-                                ; FALLS THROUGH; drv_nostamp above ends in a
-                                ; `ret` and does not reach here. drv_call's own
-                                ; NASM locals are all below its label, so
-                                ; nothing is re-parented, and drvf_drv_call
-                                ; (the far thunk) and :2002 (which passes
-                                ; [drv_dlg_cb] in BP) still enter at drv_call
-                                ; itself. The fifth, drv_unload_x, TESTS the
-                                ; entry first; it does that on the row's own
-                                ; word now and comes here too (kernel size
-                                ; pass 17)
+    mov bp, [bx+DRVR_ENT]       ; the ROW and not the entry proc: drv_unload_x,
+                                ; drv_cp_closed's THMPAL leg and blank.inc's
+                                ; ss_call. It FALLS THROUGH; drv_nostamp above
+                                ; ends in a `ret` and does not reach here.
+                                ; drv_call's own NASM locals are all below its
+                                ; label, so nothing is re-parented. DRV_ATTACH's
+                                ; %1_call loads BP itself and enters at drv_call
+                                ; through its image's hop, as do hiber.inc,
+                                ; vidext.inc, vmmouse.inc, xmem.inc and :3327
+                                ; (which passes [drv_dlg_cb] in BP)
 drv_call:
     cmp bx, drv_tab             ; ...AND BX MUST BE A ROW AT ALL. This one is
     jb .stray                   ; checked FIRST and on BX itself, because it is
@@ -3307,8 +3297,9 @@ osapi_drv_dlg_x:                ; THE BODY IS CTRL.DRV's, modc_e_dlg (ctrl.inc,
 ;      name in KERNEL_SEG, DX:CX = its size (SPEC.md 38.6)
 ; out: nothing
 ;
-; Called by fdlg_commit as an ordinary kernel near proc, through the resident
-; thunk in kernel.asm. The gfx lock is held and the dialog is already down.
+; Called by fdlg_reap_x's commit half as an ordinary kernel near proc:
+; wm_pkgcall takes a W_SEG 0 window into `.cold` (SPEC.md 2.6.3), so no
+; thunk stands between (kernel.asm, beside drv_svc_call). The gfx lock is held and the dialog is already down.
 ;
 ; DISARMED BEFORE THE CALL, not after: a page may legitimately open the next
 ; dialog from inside this one's completion, and clearing afterwards would
@@ -3508,8 +3499,9 @@ drv_load_at:
                                 ; and drv_bss handed the remainder back with
                                 ; a shrink - which cannot return it, the tail
                                 ; of a top-down claim being walled in above
-                                ; the image. drv_bss GROWS instead, once it
-                                ; knows the figure
+                                ; the image. drv_bss checks the bss against
+                                ; this exact claim instead, and refuses one
+                                ; it does not cover (SPEC.md 51.1.2)
     mov bx, MEM_K_DRV
     call mem_claimp_hi_x        ; a driver's base IS its CS - top-down, like
     pop bx                      ; a package's region, and movable for the same
@@ -3705,7 +3697,7 @@ drv_check:
 ; landing mid-heap permanently splits the space a package can be loaded into".
 ;
 ; So the size is made exact WHERE IT IS KNOWN, which is the build: os88drv.py
-; strips the trailing zero run only as far as the KB boundary the driver's
+; strips the trailing zero run only as far as the 512-byte rung the driver's
 ; footprint needs, so the size the DIRECTORY reports already covers the bss
 ; and this routine has nothing to resize. On a packed disk those zeros cost
 ; almost nothing - they are what LZ4 is best at - which is the half that was
@@ -4125,8 +4117,8 @@ section .modc                   ; IMAGE CODE (see VGC_FORCE's banner below):
     pop ax
     ret
 
-; %1_call - drv_call_ent: AL = the verb, BX = the row -> the driver's answer,
-;           through drv_call's far entry
+; %1_call - AL = the verb, BX = the row -> the driver's answer: BP from
+;           DRVR_ENT, then drv_call through this image's hop
 %1 %+ _call:
     mov bp, [bx+DRVR_ENT]
     call %2                     ; drv_call, through this image's KGO_PAIR
@@ -4540,12 +4532,13 @@ drv_hiboot_f:
 ; record, no I_SPTR to be identical to. So this is its own slot with its own
 ; fence, rather than a sixth branch blunting that one.
 ;
-; The fence is the same SHAPE: the caller's segment must be the segment of the
-; driver whose services are currently published. ES is the caller's DS and a
-; driver's DS is its own segment, so `ES == [drv_fseg]` is an identity test,
-; not an approximation. One consequence to know: a driver cannot spawn from
-; ATTACH, because drv_publish arms [drv_fseg] only after attach returns. Spawn
-; from a service call, which is where a stream opens anyway.
+; The fence is the same SHAPE: the caller's segment must be the segment of a
+; driver whose services are currently published, in any class. ES is the
+; caller's DS and a driver's DS is its own segment, so `ES == some class's
+; published segment` (drv_pub_seg) is an identity test, not an
+; approximation. One consequence to know: a driver cannot spawn from ATTACH,
+; because drv_publish arms the class's slot only after attach returns. Spawn
+; from DRVV_READY or a service call, which is where a stream opens anyway.
 ;
 ; T_INST is 0xFF - a driver has no instance, so the Task Manager bills its
 ; worker to System, where its memory already is (MEM_K_DRV). That is why DL
@@ -5295,7 +5288,7 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
 ;
 ; **dskw_stat and not drv_find**, deliberately: drv_find answers a SIZE and
 ; refuses one whose high word is non-zero, and KERNEL.SYS is past 64KB today
-; (84,064 bytes on kern_big) - so it would report that the system disk is not
+; (over 80KB on kern_big) - so it would report that the system disk is not
 ; the system disk. Existence is the question here.
 %1 %+ _save:
     push bx
@@ -5992,7 +5985,7 @@ drv_boot_x:
     retf
 drv_boot_want:                  ; CL = a row: ZF = 1 when it has no file or is
     mov al, cl                  ; not wanted, else BX = it - the one question
-    call bvs_cgo                ; all three walks above ask (CH is 0 in each).
+    call bvs_cgo                ; all three walks above ask (only CL is read).
     dw drv_row_x
     cmp word [bx+DRVR_FILE], 0  ; A ROUTINE OF ITS OWN and not a local of
     je .wret                    ; drv_boot_x: a near `ret` inside a far
@@ -6571,7 +6564,8 @@ section .text
 ; caller is dsk_xfer, which holds [sch_lock] across the transfer. This cell
 ; holds nothing and is documented worker-safe, so a shared staging word is one
 ; a second task can rewrite between the store and the call - which is why the
-; five sites below name drv_fptr..drv_fptr5 outright.
+; one site below stages nothing: drv_pkg_disp builds the far frame on the
+; caller's own stack from DS, which is per task.
 drv_pkg_call_x:
     push ds
     push bp                     ; ...UNDER DI: BP stays the near proc across

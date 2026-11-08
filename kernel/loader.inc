@@ -16,9 +16,9 @@
 ; entry classes, a near call to the entry - for long enough that all four
 ; halves of that sentence were false.
 ;
-; The region is freed by the instance record (SPEC.md 29.2 rule 7): mem_free_rec
-; releases every claim the slot owns, so the store that frees a record frees
-; its region. Only the UI task loads (loader_run runs on it exclusively), so
+; The region goes with the instance record (SPEC.md 29.2 rule 7): both
+; teardown sites call mem_free_rec, which releases every claim the slot owns,
+; region included, just before the store that frees the record. Only the UI task loads (loader_run runs on it exclusively), so
 ; the claim never races itself.
 ;
 ; loader_run is called only from the UI task (ui.inc step 3) with the gfx
@@ -46,7 +46,7 @@ LD_EDISK    equ 1               ; disk_read failed
 LD_EBAD     equ 2               ; not a valid package (entry or header)
 LD_EBIG     equ 3               ; too large (file, image or image+bss)
 LD_EABORT   equ 4               ; package entry returned CF=1
-LD_ENOMEM   equ 5               ; instance table or pool exhausted
+LD_ENOMEM   equ 5               ; instance table full, or no heap claim fits
 LD_EVER     equ 6               ; an os8088 package of ANOTHER format: the
                                 ; one refusal a normal user meets, so it is
                                 ; the one that says why (SPEC.md 20.2.0)
@@ -287,12 +287,12 @@ ld_unreserve:
 ; It fails two of these five by design, which is SPEC.md 51.1's two
 ; independent gates working, and merging it would delete them.
 ;
-; Both callers are .cold and so is this (SPEC.md 2.6), so the call is near.
+; All three callers are .cold and so is this (SPEC.md 2.6), so the call is near.
 ; -----------------------------------------------------------------------------
 ld_hdr_ok:
     cmp word [es:si+LD_H_MAGIC], 0x384F      ; 'O','8'
     jne ld_hdr_size.bad
-    cmp [es:si+LD_H_VER], al                 ; 6 = package, 7 = driver: the
+    cmp [es:si+LD_H_VER], al                 ; PKG_FMT or DRV_VER: the
     mov al, LD_EVER                          ; two gates SPEC.md 51.1 wants -
     jne ld_hdr_size.stc                      ; and an 'O8' file of ANOTHER
                                              ; format is the one refusal that
@@ -584,7 +584,7 @@ ld_owed:
     ret
 
 ; -----------------------------------------------------------------------------
-; loader_run - load, relocate and launch the package at a directory index
+; loader_run - load and launch the package at a directory index
 ; in:  AX = directory index (0-based), into the listing of the file-manager
 ;      window named by [ld_pwin] (SPEC.md 22.1) - which may not be the one
 ;      currently mounted
@@ -699,18 +699,18 @@ loader_run_x:
 
 ; -----------------------------------------------------------------------------
 ; ld_run_body - the load pipeline (module-internal; loader_run saves regs)
-; in:  AX = directory index
+; in:  SI -> the staged directory entry (loader_run_x stages it)
 ; out: AL = LD_* status
 ;
-; Steps (SPEC.md 21): validate the dir entry; peek the header via a
-; 1-sector read into dsk_secbuf; size the allocation
-; (roundup512(max(img+bss, fsize)) - sector granularity means the full-file
-; read can never touch a neighbouring region); reserve an instance record +
-; pool region; read the whole file; re-check the header (disk-swap guard);
-; apply the reloc table; zero the bss (killing the table); call the entry;
-; register + publish the instance and wm_show its window. Every failure
-; path leaves running instances untouched - the reserved record was never
-; published, so it (and with it the region) is simply still free.
+; Steps (SPEC.md 21): the entry's type and size (ld_take); peek the first
+; sector (dsk_peek_x) and validate the header where it landed; size and
+; reserve the record and its region, roundup512(img + bss) (ld_alloc); read
+; the image - or the compressed file, high in the region - and expand it;
+; re-check the header in the region (disk-swap guard); then ld_start: zero
+; the bss, call the entry, register + publish the instance and wm_show its
+; window. Every failure path leaves running instances untouched: the
+; reserved record was never published, and ld_unreserve gives the region
+; back.
 ; -----------------------------------------------------------------------------
 ; -----------------------------------------------------------------------------
 ; ld_run_name - the load pipeline, resolved by NAME (SPEC.md 21.4)
@@ -878,7 +878,9 @@ ld_where:
     ; enough (SPEC.md 20.13.7). os88pkg.py computes the same R and REFUSES to
     ; compress anything for which R + file does not fit the region this
     ; loader was going to claim anyway - so the sizing at step 4 is untouched
-    ; and this cannot overflow it.
+    ; and this cannot overflow it FOR A FILE os88pkg.py WROTE: a foreign
+    ; header can, by up to 512 bytes, and nothing here refuses it (SPEC.md
+    ; 20.13.8.1).
     mov bx, ax                  ; (AX = the image, just loaded)
     mov ax, [ld_fsz]
     sub bx, ax
@@ -930,8 +932,8 @@ ld_run_body_x:
     ; --- 2. peek the header: first sector into dsk_secbuf ---------------------
     ; dsk_secbuf is disk.inc's mount scratch - safe to reuse here because
     ; both disk_mount and loader_run run only on the UI task. It lives in
-    ; LOW_SEG, so the sector lands there and only the 32 header bytes are
-    ; staged back into the kernel segment for ld_check_hdr to read.
+    ; LOW_SEG, so the sector lands there and is validated where it landed:
+    ; ld_check_hdr reads it through ES.
 .peek:
     mov cx, 512                 ; ...whichever transport (SPEC.md 20.14.6.2).
     call dsk_peek_x             ; A redirected volume has no sectors at all -

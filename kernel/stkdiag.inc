@@ -32,8 +32,8 @@
 ; It also reaches `sch_old08`, which no package can name.
 ;
 ; WHAT IT COSTS THE MEASUREMENT. The diagnostic task below takes a slot and a
-; slice of its own, so a STKDIAG kernel has two fewer worker slots than a
-; shipped one (the idle task's and this one's). It does NOT perturb the number:
+; slice of its own, so a STKDIAG kernel has one fewer worker slot than a
+; shipped one (this one's - the idle task holds a slot on both). It does NOT perturb the number:
 ; the floor is read off the IDLE task's slice, which this code only ever reads.
 ;
 ; Prefix sd_.
@@ -156,7 +156,7 @@ sd_dbg_blk:
 ; out:      CF = 0 and BX = the slice base (a LOW_SEG offset), else CF = 1
 ; clobbers: BX, flags
 ;
-; sch_switch's arithmetic, in one place that three readers here share. Slot 0
+; sch_stkbase's lookup, in one place that three readers here share. Slot 0
 ; owns no slice of sch_stacks (SPEC.md 8) and is refused rather than answered.
 ; -----------------------------------------------------------------------------
 sd_slice_base:
@@ -165,7 +165,7 @@ sd_slice_base:
     push dx
     or al, al
     jz .none                    ; task 0 IS in sch_stkbase now, but its stack
-                                ; is STK0's 1,024 bytes rather than a slice
+                                ; is STK0's 512 bytes rather than a slice
                                 ; task_spawn filled, so the 0xCC scan below
                                 ; would read whatever is there. Nothing here
                                 ; measures on it anyway: the two tasks below
@@ -192,8 +192,6 @@ sd_slice_base:
     stc
     ret
 
-; -----------------------------------------------------------------------------
-; sd_pre08 / sd_post08 - what the ROM's int 08h chain costs a task stack
 ; in:       BP = SP at the chain, taken by sch_isr BEFORE either call;
 ;           DS = KERNEL_SEG, IF = 0
 ; out:      [sd_rom08] raised if this pass was the deepest yet
@@ -413,9 +411,10 @@ sd_iwater:
     ret
 
 ; -----------------------------------------------------------------------------
-; sd_vwater - the deepest ANY slice has been: THE FLOOR
+; sd_vwater - the deepest ANY slice has been, the panel's own painter included
+;            (the FLOOR is sd_iwater's)
 ; in:       DS = KERNEL_SEG
-; out:      AX = bytes, or 0 if the victim was refused a slot
+; out:      AX = bytes, or 0 if no slice holds a mark
 ;
 ; EVERY slice and not just the idle task's, which is what this read first, and
 ; the reason is the phases: while the operator is moving the mouse or holding a
@@ -446,10 +445,6 @@ sd_vwater:
     pop dx
     pop bx
     ret
-
-; -----------------------------------------------------------------------------
-; sd_victim - a task that exists to be interrupted, and does nothing else
-; -----------------------------------------------------------------------------
 
 ; -----------------------------------------------------------------------------
 ; sd_utoa - AX unsigned -> decimal at ES:DI, NUL-terminated

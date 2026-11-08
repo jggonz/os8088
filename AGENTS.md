@@ -298,11 +298,37 @@ user gives a different workflow. `apps/wirefleet/` and its SPEC.md section
 
 ## Hard rules (§1 — these break silently if violated)
 
+> ### RUNGS ARE TEMPORARY. BYTES ARE FOREVER.
+>
+> The footprint moves in 512-byte steps, so a change that adds 400 bytes often
+> reports as costing nothing and a change that saves 300 often reports as
+> buying nothing. **Both readings are wrong and neither is a rounding error —
+> they are the wrong question.** The right one is always *how many BYTES, and
+> what do they buy?*, and it is asked against the byte and not against the
+> step. This project will keep optimising and will keep spending; every rung
+> gets crossed eventually, and the byte that crossed it is charged to whoever
+> was standing there rather than to whoever spent it.
+>
+> **A rounded figure will actively hide the thing you are deciding about.**
+> Worked example, this tree: `gfx_points` was built with one inner loop and
+> with three, and `kern_small`'s `kernel.bin` is **75,493 bytes either way** —
+> section padding swallowed the difference whole. The symbol span says what the
+> file could not: **472 bytes against 215**. Measure the SPAN, or `kernsize`'s
+> sum and its accrued line; never a step count, and never a padded artefact.
+>
+> **The question that replaces it has a shape**: *do we spend N resident bytes
+> for M cycles?* — and it may answer differently per build. The same
+> `gfx_points` split is **yes on `kern_big` and no on `kern_small`**: 257 bytes
+> for 92 cycles a point is worth it on the machine with memory and is not on
+> the machine with 128KB (SPEC.md 5.6.9.3, PERFORMANCE.md Set 143.3.2).
+
+
 - **8086 only.** `cpu 8086` plus `-w+error`: no `pusha`, no `push imm`, no
   `shl reg, imm` other than 1, no `movzx`, no 32-bit registers.
 - **Near model.** CS = DS = `KERNEL_SEG` for kernel code and every task;
   **SS = `LOW_SEG`**, because task stacks live outside the kernel's segment.
-  Every inter-module kernel call is near — there is no far code (§33).
+  Calls between modules in `.text` are near; `.cold` is a code segment of its
+  own, entered far (§2.6).
   **SS ≠ DS, so `[bp+disp]` addresses SS**: kernel code holding a pointer in BP
   needs `[ds:bp+…]`.
 - **Register discipline.** Public routines preserve every register but their
@@ -392,6 +418,18 @@ user gives a different workflow. `apps/wirefleet/` and its SPEC.md section
   the test may grow `.text`/`.cold`, and moving code to `.cold` or the boot
   overlay relieves `KERN_CODE_MAX` but not `KERN_BUDGET` — a module relieves
   both. Check `tools/kernsize.py` before and after: a byte costs a byte.
+  **`.cold` IS RESIDENT, and the name is the trap**: it means a cold PATH, not
+  a cold LIFETIME. Those bytes are in RAM from boot to power-off exactly like
+  `.text`'s on the machine the budget describes (a 5150's ROM or a 286's HMA
+  can take them out of RAM, SPEC.md 2.10 and 2.10.7, and no budget counts
+  that) and are billed by `KERN_BUDGET` exactly like `.text`'s — all
+  `COLD_SEG` buys is a CS of its own, which relieves the 64KB near-addressing
+  window and nothing else (docs/KERNEL-MEMORY.md, *Where it goes*). **`.boot2`
+  (the boot blob) and `.ovl` are the sections that really do go away**, and the two get
+  conflated constantly: *"+N bytes of `.cold`, nothing resident"* is a
+  sentence several sessions have now written and it is wrong every time. The
+  honest form is *"+N bytes of `.cold`, resident, no rung crossed"* — and per
+  the banner above, the rung is not the point anyway.
   **Code `mod_need` itself reaches cannot be a module** - the loader cannot
   load its own dependencies - so code inside that cone is gated by build
   rather than moved. There is no entry cap (§2.8.1): a module's slot block is its
@@ -401,6 +439,19 @@ user gives a different workflow. `apps/wirefleet/` and its SPEC.md section
   `tests/moddrop.txt` says why it is held until restart - `DESK.DRV` held
   5KB pinned after the last Sticky App closed, until SPEC.md 11.103.10's
   drop rule. A new module needs its drop on the day it lands.
+- **Design for BYTES, never for rungs** — the banner at the top of this
+  section is the rule; this is its mechanics. The amortised price of a byte is
+  a byte, so a change that crosses no rung has not cost nothing: it spent slack
+  belonging to whoever comes next, and the guard bills *them* the whole 512.
+  **A rung is not a design input.** Do not size a feature, shave a table, or
+  justify an addition against where the next crossing falls; take a rung-shaped
+  answer only when it is the clean one anyway. Two arguments are refused
+  outright: *"it adds 400 bytes and crosses no rung, so it is free"* and *"it
+  saves 500 and uncrosses no rung, so it buys nothing."* The one moment a rung
+  is the point is when a crossing means the kernel no longer FITS — and that is
+  a discussion to have with whoever asked for the feature, never a build fix
+  and never a reason to quietly cut the design down. Slack here
+  has never gone unspent, so its expected cost is 100%.
 - **kern_mega-only package code is the ARM's, never the shipped build's**
   (SPEC.md 20.18). The owner's rule:
   *"mega specific work that more than trivially increases the disk size is
@@ -431,6 +482,19 @@ user gives a different workflow. `apps/wirefleet/` and its SPEC.md section
   can have more than one such word, and segments derived from a base are
   reached by no poke at all. Opting in and forgetting the proc is silent until
   the next compaction, which by construction happens on a busy heap.
+- **A PACKAGE'S OWN REGION is that rule's biggest instance, and it is a
+  RATCHET now** (§66.6.1.1). Every package under `apps/` declares
+  `OS88_REGION_MOVABLE` where its window exists — and, if it hires a worker,
+  `OS88_WORKER_RESTARTABLE` at the spawn, because §66.6.2's frame pins the
+  region however it is declared and a region declaration alone is **inert**.
+  `tests/unit/t_movable.py` (fast tier) fails the build otherwise; the way out
+  is a line in `tests/movable.txt` with a reason, and the list only turns one
+  way. **Before declaring, ask what segment words the package holds that point
+  INSIDE itself** — almost always none, which is why the proc is a `ret`; the
+  two shapes where it is not are a segment the package **stamped** somewhere
+  (scribe did, into its pre-parts `.ovl`, until SPEC.md 95.8.8 made it a part) and a **re-homed** program whose assets
+  live in its own carve (skies), and for those the bare form is silent
+  corruption rather than a missed optimisation.
 - **The package boundary is solved once, not per call site** (§20): calling out
   is a far call through an API cell that switches DS; calling in goes through
   the three-byte dispatcher in the package header, so every callback is a near
@@ -531,7 +595,7 @@ bug: a **visible redraw** (seconds on real hardware), a **double-draw flash**
 every one was found on hardware or by counting.
 
 That is the whole of it that applies to every change. Open PERFORMANCE.md
-itself for one of four reasons — it is 6,553 lines and over half is a log of
+itself for one of four reasons — it is over 15,000 lines and most of it is a log of
 field measurements:
 
 - **Part 5** before touching a redraw path — the standing budget names the

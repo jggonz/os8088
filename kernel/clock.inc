@@ -20,8 +20,9 @@
 ; The one BIOS caller is clk_rtc_write, and it is NOT IN THIS FILE and does
 ; NOT run outside the gfx lock. SPEC.md 37.94 moved it into CTRL.DRV
 ; (kernel/clockw.inc) and its only caller is cp_flush_close_x, which runs WITH
-; the lock held; ui.inc no longer drains [clk_dirty] at all, and [clk_dirty]
-; itself went with the move. clockw.inc's own banner has the live version -
+; the lock held; ui.inc no longer drains [clk_dirty] at all. The byte itself
+; stays resident: clk_fld_adj sets it and cp_flush_close_x spends it at the
+; panel's close. clockw.inc's own banner has the live version -
 ; "BIOS FROM HERE IS FINE" - and states the reason: SPEC.md 31.1's "must not
 ; call BIOS" binds cp_paint and cp_onclick, which are page callbacks, and
 ; teardown is not one. (Three sentences describing the replaced design stood
@@ -155,9 +156,9 @@ CLK_YMAX    equ 2099            ; also the range the leap rule below is exact
 ; clk_fmt and the Date/Time page's month field.
 ;
 ; THE MONTH LENGTHS ARE NOT A TABLE any more: a `clk_mdays db 31,28,...`
-; used to sit here with exactly one reader, and clk_mlen carries the eleven
-; non-February answers as a 16-bit mask instead (0x15AA, derived at the
-; routine). February was always the branch and still is.
+; used to sit here with exactly one reader, and clk_mlen derives the eleven
+; non-February answers from the month's parity about August instead (kernel
+; size pass 17, at the routine). February was always the branch and still is.
 clk_mnames: db 'JanFebMarAprMayJunJulAugSepOctNovDec'
 
 
@@ -380,7 +381,7 @@ clk_probe:
                                 ; AL is still the tier for SPEC.md 37.92's
                                 ; publication. `.none` never arrives here and
                                 ; keeps its own CLK_T_NONE store at the top,
-                                ; which it needs because .bss is not zeroed
+                                ; which only restates the zero .bss boots with
     pop ax
     clc
     ret
@@ -629,11 +630,11 @@ clk_at_num:
     ret
 
 ; clk_at_dcno - the refusal trampoline the first four of clk_at_dec's range
-; tests share (see clk_rp_dgno above for why one near jump beats four inverted
-; pairs, and why this is a global rather than a `.local`): -9.  Cold by
-; construction - a field out of range means the byte did not decode in the
-; mode Register B claims, and clk_at_probe then tries the other mode once and
-; gives the tier up.
+; tests share - one near jump where four inverted Jcc/jmp pairs would stand,
+; and a global because the tests reach it from outside a `.local`'s scope: -9.
+; Cold by construction - a field out of range means the byte did not decode in
+; the mode Register B claims, and clk_at_read then tries the other mode once
+; and gives the tier up.
 ; -----------------------------------------------------------------------------
 clk_at_dcno:
     jmp clk_at_dec.no
@@ -1520,7 +1521,7 @@ clk_rp_year:
 
 ; -----------------------------------------------------------------------------
 ; clk_bios_dnone - the refusal trampoline the first four of clk_bios_read's
-; validations share (see clk_rp_dgno above): -9.  Cold by construction - a BIOS
+; validations share (clk_at_dcno's shape, above): -9.  Cold by construction - a BIOS
 ; that answers int 1Ah at all passes every one of them, and one that does not
 ; costs the tier, not a redraw.
 ; -----------------------------------------------------------------------------
@@ -1867,7 +1868,7 @@ clk_snapshot:
 ; -----------------------------------------------------------------------------
 ; clk_fmt - format the whole clock for the menu bar (SPEC.md 12.1)
 ; in:  nothing
-; out: SI = clk_str, 18..24 glyphs + NUL, in the live display form:
+; out: SI = clk_str, CX = its length; 18..24 glyphs + NUL, in the live form:
 ;      'Mmm DD YYYY  HH:MM', plus ':SS' if [clk_secs], and in 12-hour mode
 ;      the hour 1..12 with NO leading zero and a trailing ' AM'/' PM'
 ; clobbers: nothing else
@@ -2190,8 +2191,8 @@ clk_year:   resw 1              ; CLK_YMIN..CLK_YMAX. NO PAD ABOVE IT: the one
                                 ; is clk_snapshot's `[clk_hour]`, which is
                                 ; hour+day and stops three bytes short
 
-; --- display settings (SPEC.md 37): runtime state, boot defaults in
-; --- clk_init, nowhere to persist them (the kernel never writes the data disk)
+; --- display settings (SPEC.md 37): boot defaults in clk_init; on kern_big
+; --- SYSTEM.CFG's 'CH' and 'CS' records persist them (SPEC.md 51.5)
 clk_h12:    resb 1              ; 0 = 24-hour, 1 = 12-hour + AM/PM
 clk_secs:   resb 1              ; 0 = the menu bar hides seconds, 1 = shows
 clk_barq:   resb 1              ; sticky: the bar's text is stale (an edit or a
@@ -2326,7 +2327,8 @@ section .cold
 ; THE LIVE FIELDS, under cli, and NOT clk_snapshot: the clk_sn_* copy is the
 ; menu bar's formatters', and a package refreshing it would race their next
 ; format. The UI task is the clock's only writer, so from the UI task this is
-; consistent; a worker accepts a torn read across a rollover. Two word reads
+; consistent - and from a worker too: every writer carries a whole second or a
+; whole edit under cli, so a worker is at worst a catch-up behind. Two word reads
 ; ride the field order the first assertion beside the fields pins.
 ; -----------------------------------------------------------------------------
 osapi_clk_get_x:

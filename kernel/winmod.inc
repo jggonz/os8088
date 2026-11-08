@@ -90,7 +90,7 @@ section .cold
 ;      mod_need is still reading the module, and the kind has always meant
 ;      what is LIVE
 ;
-; dkf_apply's shape. Idempotent both ways: mod_need is six compares when the
+; dock_apply's shape (DOCK_APPLY). Idempotent both ways: mod_need is six compares when the
 ; image is already held and the hook rewrites the same five pointers, which
 ; is what lets vid_switch re-assert a theme through thm_set (SPEC.md 76.12.1)
 ; without a disk access; and with nothing mounted the unhook is mod_gone's

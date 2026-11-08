@@ -27,7 +27,7 @@
 ; Raising a window, showing one, dragging one - each of those repaints the
 ; chrome because the chrome MIGHT have changed, and most of the time the only
 ; thing that did is which tile wears the active mark. So each tile carries a
-; key (dock_key: its icon in the high bits, live/minimized/active in bits
+; key (db_key, DOCK.DRV's dkx_key: its icon in the high bits, live/minimized/active in bits
 ; 0..2) and a tile whose key still matches what was drawn is left alone. A
 ; focus change costs two tiles; nothing changing costs no pixels at all, and
 ; dock_paint says so in CF, which is what lets wm_dock_under skip putting the
@@ -128,7 +128,7 @@ dock_cfg:   db DOCK_P_BOTTOM
 ; -----------------------------------------------------------------------------
 ; IN THE BOOT OVERLAY (SPEC.md 2.5.3 - the WINDOW half, which is what OVLCALL
 ; reaches; 2.5.2 is `.boot2`), docs/plans/LAST-DROP-BYTES.md row 15. One caller,
-; kmain:4525.
+; kmain (its `OVLCALL dock_init`).
 ;
 ; It has NO outbound call at all now, which is what it costs `.text`: it used
 ; to ask cw_dock_force for "the whole strip is owed", and dock_force's answer
@@ -179,7 +179,7 @@ section .text
 ; second copy of the basic addresses, and a per-operation trampoline to carry
 ; an index the module no longer needs.
 ;
-; A SLOT'S BASIC BODY IS THE WHOLE GUARD. Four operations exist only while a
+; A SLOT'S BASIC BODY IS THE WHOLE GUARD. Five operations exist only while a
 ; module is mounted (a hidden strip's tick, an open hole); their slots rest on
 ; dkb_ret/dkb_clc, so the kernel-side `cmp [dock_auto]` / `cmp [gfx_hole]`
 ; tests that used to stand in front of them - and which dkx_pass, dkx_hole_sub
@@ -206,7 +206,7 @@ DK_NENT       equ 2             ; DOCK.DRV's mod_fp entries: hook, unhook
 %endmacro
 
                                 ; entry 0 is dkx_hook and entry 1 dkx_unhook
-                                ; (SPEC.md 30.5), and dkf_apply is their only
+                                ; (SPEC.md 30.5), and DOCK_APPLY (dock_apply, bdk_apply) is their only
                                 ; caller - mod_disarm rests both on mod_gone,
                                 ; so calling one with nothing mounted refuses
 
@@ -518,7 +518,7 @@ db_paint:
     mov al, [gfx_color]         ; byte-only read: gfx_lock_flag lives next
     push ax                     ; door. ON THE STACK, not in .bss, and that
                                 ; rests on db_paint having EXACTLY ONE EXIT
-                                ; below `.go` - the five pops at the bottom.
+                                ; below `.go` - the pen's `pop` and kret_di's six at the bottom.
                                 ; The wm_fs_vis refusal returns ABOVE this, and
                                 ; the CF answer is after the pops. A second
                                 ; early return added below here leaks a word
@@ -847,7 +847,7 @@ db_px_hit:
 ;
 ; **That rotation is NOT what makes a freed-and-refilled slot safe, and the
 ; sentence that used to say so was wrong**: every package's I_ICON is
-; I_ICO_PKG (loader.inc:265) or 0 (:261), so two different PACKAGES in one slot
+; I_ICO_PKG or 0 (loader step 9's one store), so two different PACKAGES in one slot
 ; key identically whatever the rotation does. What actually protects the case
 ; is SPEC.md 30's own guarantee - every dock-state transition rides a wm_show,
 ; wm_front, wm_hide or wm_destroy repaint and all four call db_paint
@@ -1296,7 +1296,7 @@ dock_px2:   resw 1              ; pass that has just run - the forced span
 dock_act:   resw 1              ; the instance record owning the frontmost
                                 ; visible window, 0 = none. Read per tile, so
                                 ; it is resolved once per dock_paint
-dock_ck:    resw INST_MAX       ; what each tile was last DRAWN as (dock_key)
+dock_ck:    resw INST_MAX       ; what each tile was last DRAWN as (db_key)
 
 %ifdef DOCK_OPT
 ; --- SPEC.md 30.5/30.6: what the KERNEL reads about where the strip stands.

@@ -1,22 +1,25 @@
 ; =============================================================================
 ; kernel/dskwin.inc - THE MOUNT-OWNED WINDOW, AT THE BOTTOM OF `.lowbss`
 ;
-; Three buffers and the four constants that size them. They were the last
+; ONE buffer now - dsk_secbuf - and the constants that size the listing;
+; disk_dir and disk_icons were the other two until docs/plans/
+; LISTING-HOME-PLAN.md 13 and SPEC.md 25.9 took them out. They were the last
 ; thing in `disk.inc`'s `.lowbss` block, which put them at the TOP of the
 ; rung; they are here, in the FIRST file kernel.asm includes, so that they are
 ; the FIRST thing in `.lowbss` and therefore sit immediately above FAT_SEG.
 ;
 ; WHY THE ADDRESS MATTERS, when no other `.lowbss` byte's does (SPEC.md 2.1.2).
-; The FAT window and these three come alive at the SAME MOMENT - the first
+; The FAT window and this buffer come alive at the SAME MOMENT - the first
 ; mount - and are untouched before it. Adjacent, they are one contiguous
-; 7,936-byte region that is dead for the whole of `kmain`:
+; region, FAT_SEG's bytes plus DSK_WIN_BYTES, that is dead for the whole of
+; `kmain`:
 ;
-;     FAT_SEG   4,608   the FAT snapshot, filled at mount
+;     FAT_SEG   DSK_FAT_SECS x 512   the FAT window (SPEC.md 18.8)
 ;     +           512   dsk_secbuf  FIRST: the one int 13h TARGET here, so it
 ;                                   takes the rung's 512-aligned base
-;     +           768   disk_dir    "ALWAYS exactly a mount snapshot"
-;     +         2,048   disk_icons  "fully rewritten every mount"
-;     =         7,936   of which 7,680 is readable (SPEC.md 2.1.2). LOW_SEG is
+;     +    DSK_OVLPAD   0 on every shipped build
+;     (disk_dir, 768, and disk_icons, 2,048, sat here and made it 7,936;
+;     both are gone.) LOW_SEG is
 ;                       a rung base (guard 6); dsk_secbuf is aligned because it
 ;                       is the rung's first bytes, and the %if below holds it
 ;
@@ -188,13 +191,11 @@ DSK_OVLPAD   equ 0              ; a plain kern_big: the region is 5,120 and
 ; machine-wide store's size and is the only body count left. DSK_ICO_SIZE is
 ; still the width of one.
 DSK_ICOIX_N  equ DSK_NENT        ; one REFERENCE byte per entry, and DSK_NENT
-                                 ; on BOTH kernels because there is one
-                                 ; listing size now: SPEC.md 22.6 retired the
-                                 ; donated claim, so a volume lists into the
-                                 ; `.lowbss` floor whatever mounted it. It was
-                                 ; DSK_VENT here while a hard disk could list
-                                 ; more than a floppy. 64 bytes on kern_big,
-                                 ; against the 4,096 of bodies it replaces
+                                 ; on every build: one byte per entry, in the
+                                 ; caller's store beside the entries (SPEC.md
+                                 ; 22.6.3, 25.9) - there is no `.lowbss`
+                                 ; floor any more. It was DSK_VENT here while
+                                 ; a hard disk could list more than a floppy
 
 ; How many entries a listing holds - ONE NUMBER, for every volume on the
 ; machine. There was a second, DSK_VENT, for a volume whose driver donated a
@@ -208,8 +209,9 @@ DSK_ICOIX_N  equ DSK_NENT        ; one REFERENCE byte per entry, and DSK_NENT
 ; floppy's are busy for the same reason - a DOS install is busy wherever it
 ; sits - so the next raise raises this number and there is nothing to split.
 ;
-; **AND IT IS PER-BUILD SINCE SPEC.md 22.6.2**: 64 on kern_big, 32 on
-; kern_small. Sixty-four was taken for DOS - "DOS directories are
+; **AND IT IS PER-BUILD SINCE SPEC.md 22.6.2**: 1,024 on kern_big (a
+; CEILING since 22.6.4: the listing is sized to its folder), 64 on kern_dos,
+; 32 on kern_small. Sixty-four was taken for DOS - "DOS directories are
 ; busier than ours ever were: LEMMINGS 68 entries, F15 66, TD1 41" - and
 ; kern_small has no DOS: the plan to run one there was not realised, and
 ; `build/small.img` / `build/small360.img` carry 12 root entries with 8 in the
@@ -267,14 +269,17 @@ DSK_NENT     equ 32
 %endif
 
 ; --- DOES THIS BUILD HARVEST ICONS? (SPEC.md 96.44.7) -----------------------
-; `disk_icons` is **2,048 bytes of `.lowbss`** and step 4 of `disk_mount` is
-; what fills it: a 16x16 body per entry, read with one `int 13h` per type-1
-; file. It is the DISK WINDOW's, and `kern_dos` has no window, no
+; `disk_icons` WAS **2,048 bytes of `.lowbss`** - SPEC.md 25.9 replaced it
+; with a machine-wide store and one reference byte per entry - and step 4 of
+; `disk_mount` is what fills the references: a 16x16 body per new package,
+; read with one `int 13h` each. It is the DISK WINDOW's, and `kern_dos` has no window, no
 ; `fm_draw_icon16` and no file manager - MEASURED on the guest after a
 ; handoff, the array held 192 non-zero bytes and every reader of it in that
 ; root was inside the mount that wrote it.
 ;
-; **`disk_dir` STAYS, and that is a correction.** The listing looked equally
+; **`disk_dir` STAYED, and that was a correction** - until
+; docs/plans/LISTING-HOME-PLAN.md 13 took the listing out of `.lowbss`
+; altogether (below). The listing looked equally
 ; dead and is not: SPEC.md 96.47's live resume finds `HIBERNAT.IMG` with
 ; `dsk_find_name_x`, which walks `[disk_nfiles]` entries through
 ; `dsk_get_dir_x` - so the 768-byte half has a real consumer and only the

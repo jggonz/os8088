@@ -257,7 +257,7 @@ SPL_SPINR   equ 41              ; ...and its rows. WHERE it is is the layout's
 
 ; -----------------------------------------------------------------------------
 ; spl_xform - coin-flip a spinner x: AL = box-relative x (0..104) ->
-;             AX = 320 + (AL - SPL_HALFW) * cos / 64. clobbers: nothing else
+;             AX = [spl_l_cx] + (AL - SPL_HALFW) * cos / 64. clobbers: nothing else
 ; -----------------------------------------------------------------------------
 %1 %+ _xform:
     push cx

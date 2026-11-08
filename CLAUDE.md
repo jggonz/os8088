@@ -333,7 +333,8 @@ user gives a different workflow. `apps/wirefleet/` and its SPEC.md section
   `shl reg, imm` other than 1, no `movzx`, no 32-bit registers.
 - **Near model.** CS = DS = `KERNEL_SEG` for kernel code and every task;
   **SS = `LOW_SEG`**, because task stacks live outside the kernel's segment.
-  Every inter-module kernel call is near — there is no far code (§33).
+  Calls between modules in `.text` are near; `.cold` is a code segment of its
+  own, entered far (§2.6).
   **SS ≠ DS, so `[bp+disp]` addresses SS**: kernel code holding a pointer in BP
   needs `[ds:bp+…]`.
 - **Register discipline.** Public routines preserve every register but their
@@ -431,7 +432,9 @@ user gives a different workflow. `apps/wirefleet/` and its SPEC.md section
   drop rule. A new module needs its drop on the day it lands.
   **`.cold` IS RESIDENT, and the name is the trap**: it means a cold PATH, not
   a cold LIFETIME. Those bytes are in RAM from boot to power-off exactly like
-  `.text`'s and are billed by `KERN_BUDGET` exactly like `.text`'s — all
+  `.text`'s on the machine the budget describes (a 5150's ROM or a 286's HMA
+  can take them out of RAM, SPEC.md 2.10 and 2.10.7, and no budget counts
+  that) and are billed by `KERN_BUDGET` exactly like `.text`'s — all
   `COLD_SEG` buys is a CS of its own, which relieves the 64KB near-addressing
   window and nothing else (docs/KERNEL-MEMORY.md, *Where it goes*). **`.boot2`
   (the boot blob) and `.ovl` are the sections that really do go away**, and the two get
@@ -629,7 +632,7 @@ them too: *"2 frames = 16.7 ms, worst 320 transient px"* is a measurement, and
 *"it looked fine"* is not.
 
 That is the whole of it that applies to every change. Open PERFORMANCE.md
-itself for one of four reasons — it is 6,553 lines and over half is a log of
+itself for one of four reasons — it is over 15,000 lines and most of it is a log of
 field measurements:
 
 - **Part 5** before touching a redraw path — the standing budget names the
@@ -950,8 +953,8 @@ in docs/TESTING.md, per capability.
   are injected by the Makefile, and stage 1 relocates itself.
 - `kernel/kernel.asm` — constants, the memory ladder and its guards, boot
   sequence, the API jump table, `%include`s of every module, size assertions.
-  Which `.inc` owns what is the table in §4, and every file in `kernel/` is in
-  it: the pre-GUI text shell's five relics are deleted, not parked.
+  Which `.inc` owns what is the table in §4 (not yet every file in `kernel/`);
+  the pre-GUI text shell's five relics are deleted, not parked.
 - `apps/` — loadable packages; **everything here ships**. `os88api.inc` is the
   SDK, and each package's design notes are its SPEC.md section. `apps/cc/` is
   the **C** SDK (§73): `os88.h`, the runtime `crt0.asm`/`os88thunk.asm`, the

@@ -31,8 +31,8 @@
 ; vanishing, and the per-module pass keeps assembling.
 %ifdef OS88_ASSOC
 
-ASSOC_NAPP   equ 16             ; app slots - 20 resident bytes each (stem,
-                                ; glyph, cluster, volume, default folder)
+ASSOC_NAPP   equ 16             ; app slots - 19 resident bytes each (stem,
+                                ; glyph, cluster, volume)
 ASSOC_NEXT   equ 32             ; extension slots - 4 each. Both were 12 and
                                 ; 24, and NOTHING FREES A SLOT in a session, so
                                 ; a machine that met more than 7 declaring

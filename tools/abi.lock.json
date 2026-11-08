@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "8478189868f02fad2de6187eae15df0eb8d51e8622af39c27fa75faa763ec710",
+  "fingerprint": "2f0c55b8ccad8075c68853729b7707c0077cc55d61fc156affdc8b88c3c9f85c",
   "version": 12
  },
  "PKG_FMT": {
-  "fingerprint": "0daf1607c08c2501190e88f1a2b42103bab8587a9f1c7d0c90b63b3eed2fa781",
+  "fingerprint": "1f1fd60b3543677d42c972a5ee1984ade5e006d17e56f62bc33431865884c872",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -1813,6 +1813,20 @@
    "from": 12,
    "guard": "DRV_VER",
    "reason": "BLKCAP_SEL (DSV_CAPS bit 4 for DRVC_DISK, SPEC.md 51.8.1): an addition - a driver that leaves it clear is bounced exactly as before, and no cell moved; no bump (KERN-MEGA-PLAN 14.167)",
+   "to": 12
+  },
+  {
+   "fingerprint": "1f1fd60b3543677d42c972a5ee1984ade5e006d17e56f62bc33431865884c872",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "big review 2026-11-08: contract COMMENTS corrected to match the code (worker register state, clipboard context, pen state after font_run/gfx_blit4, slot cross-references); no cell moved or re-contracted, so no bump",
+   "to": 10
+  },
+  {
+   "fingerprint": "2f0c55b8ccad8075c68853729b7707c0077cc55d61fc156affdc8b88c3c9f85c",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "big review 2026-11-08: contract COMMENTS corrected to match the code (worker register state, clipboard context, pen state after font_run/gfx_blit4, slot cross-references); no cell moved or re-contracted, so no bump",
    "to": 12
   }
  ]

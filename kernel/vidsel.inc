@@ -97,7 +97,7 @@ vid_dbg_blk:
 ; =============================================================================
 ; THE ADAPTER PROBE TRIO, IN THE BOOT OVERLAY (SPEC.md 2.5.2,
 ; docs/plans/LAST-DROP-BYTES.md row 2) - 262 contiguous bytes and the cleanest body
-; in the tree to move: ONE inbound edge in the whole repository (kmain:4211),
+; in the tree to move: ONE inbound edge in the whole repository (kmain's OVBCALL),
 ; ZERO outbound, and no data and no `section` line anywhere in the span.
 ; vid_probe_avail calls vid_memchk three times and vid_cga_alias once and calls
 ; nothing else at all, so the two below it stay near-called and keep their near
@@ -323,7 +323,7 @@ vid_probe_avail:
 ; vid_avail read 0x02 (Hercules alone) where it should read 0x06.
 ;
 ; Offset 0x7F00 is inside the Hercules' page 0 and PAST THE LAST DISPLAYED
-; BYTE: four banks of 87 rows x 90 bytes end at 0x7796, and page 0 runs to
+; BYTE: four banks of 87 rows x 90 bytes end at 0x7E96, and page 0 runs to
 ; 0x7FFF. So the probe never flickers the screen it is running on. On the CGA
 ; side that offset is past its 16KB and reads back through whatever mirroring
 ; the card does, which is fine - the question is only whether the two answers
@@ -385,7 +385,7 @@ section .text                   ; ...and the overlay's three end here
                                 ; otherwise reach the ror below, and the 8086
                                 ; does not mask a rotate count - kind 8 would
                                 ; rotate by 9 and answer for kind 0. cmp sets
-                                ; CF = 1 for AL < 4, i.e. IN range, so one cmc
+                                ; CF = 1 for AL <= VID_KIND_MAX, i.e. IN range, so one cmc
                                 ; makes CF = 1 mean "refuse" and the jump
                                 ; carries it straight out (jc and pop touch no
                                 ; flag). Setting CF before the compare would
@@ -398,7 +398,7 @@ section .text                   ; ...and the overlay's three end here
     inc cl                      ; ROR by n leaves bit n-1 of the original in
     mov al, [vid_avail]         ; CF, so n = kind+1 puts bit KIND there - which
     ror al, cl                  ; is what `test [vid_avail], 1 << kind` was.
-    cmc                         ; CL is 1..4, never 0. Then invert to this
+    cmc                         ; CL is 1..VID_KIND_MAX+1, never 0. Then invert to this
 .out:                           ; routine's published polarity: CF = 0 is yes
     pop cx
     pop ax                      ; pop touches no flag
@@ -1106,7 +1106,7 @@ section .text
 ; NOTHING ELSE - several callers are inner loops with no spare register and one
 ; is inside IRQ4. There is no register to index a per-display block through, so
 ; the active display's numbers are copied into the words the renderer already
-; reads. It is vid_apply's own idiom, and 36 bytes of rep movsw against a
+; reads. It is vid_apply's own idiom, and 32 bytes of rep movsw against a
 ; 756 us per-call floor is under a tenth of one primitive - paid only when the
 ; display actually changes, which spatial coherence makes rare.
 ; =============================================================================
@@ -1632,8 +1632,8 @@ vid_ctx_act:
 .out:
     ret
 %ifdef KERN_SMALL
-    nop                         ; PARITY PAD, never run, kern_small only (kernel
-%endif                          ; size pass 15): kern_big paired it with viddet's
+    nop                         ; NEVER ASSEMBLED: this file's %ifdef KERN_BIG
+%endif                          ; encloses it (a kern_small pad, size pass 15)
 
 ; -----------------------------------------------------------------------------
 ; vid_ctx_init - one display, at the origin, holding what is on screen now
@@ -1652,7 +1652,7 @@ vid_ctx_act:
 ; **THE LINE ABOVE USED TO SAY "and from vid_switch" AND IT WAS NOT TRUE** -
 ; vid_switch calls vid_avail_test, cur_unlazy, vid_blank, wm_su_drop_all,
 ; vid_equip, vid_apply, vid_setmode, vid_disp_init and desk_rowcalc, and none of
-; them is this. kmain:4203 is the only edge in the repository, which is what
+; them is this. kmain's OVLCALL is the only edge in the repository, which is what
 ; puts this body in the BOOT OVERLAY (SPEC.md 2.5.2,
 ; docs/plans/LAST-DROP-BYTES.md row 13) - and a stale comment naming a runtime caller
 ; is exactly how a later session would add the one that breaks it silently.
@@ -1998,14 +1998,14 @@ vid_dual_ok:
 ; caller owes the repaint either way - the geometry it was drawn against has
 ; just moved.
 ;
-; TWO DISPLAYS IS [vid_avail] == HERC|CGA EXACTLY, and an equality rather than
-; a bit count for a reason per value. VGA|CGA is ONE CARD - vid_probe_avail
-; sets the CGA bit on every VGA/EGA without probing, mode 6 being a standard
-; BIOS mode there - so a bit count would report two displays on the commonest
-; machine in the tree and programme the VGA twice. VGA|HERC|CGA genuinely IS
-; two cards and is deliberately not taken: the bitmap cannot say whether the
-; CGA bit is that VGA's mode 6 or a third card, and SPEC.md 39.11.4 already
-; accepts that pairing as one nobody built.
+; TWO DISPLAYS IS vid_dual_ok's ANSWER - a HERC bit and a colour bit (VGA or
+; CGA), an EGA primary refused - and not a bit count. VGA|CGA is ONE CARD -
+; vid_probe_avail sets the CGA bit on every VGA/EGA without probing, mode 6
+; being a standard BIOS mode there - so a bit count would report two displays
+; on the commonest machine in the tree and programme the VGA twice.
+; VGA|HERC|CGA IS two cards and IS taken: vid_disp_other names the VGA as the
+; colour one (SPEC.md 39.19), and a third, real CGA beside them is
+; indistinguishable from the VGA's mode 6 and never programmed.
 ;
 ; THE SECONDARY IS BROUGHT UP BY MAKING IT MOMENTARILY CURRENT. vid_apply is
 ; the only routine that turns a vid_tab row into the sixteen words a display
@@ -2018,7 +2018,7 @@ vid_dual_ok:
 ; rather than a shortcut. A swap carries the smallest thing that is genuinely
 ; per-display, because it has to be cheap enough to sit under a drawing
 ; primitive (SPEC.md 39.12); vid_apply on the way IN also rewrote every desktop
-; word - the dock row, the clock cell, the drive column, the pull-down cap -
+; word - the dock row, the clock cell, the drive column -
 ; and only vid_apply puts those back.
 ;
 ; AND THE PRIMARY'S CARD IS NEVER RE-PROGRAMMED. There is no vid_setmode on the
@@ -2043,7 +2043,7 @@ vid_dual_ok:
                                 ; goes on wants it, and vid_dual_ok keeps AL)
     %2 vid_dual_ok              ; ONE load above the branch, because both arms
     jnc .paired                 ; below want it and vid_dual_ok keeps AH (it
-                                ; is three compares, a clc and an stc)
+                                ; is a compare, two tests and an stc)
 
     ; --- REFUSED, and that used to be the end of it ------------------------
     ; [vid_ndisp] was 1 here BY CONSTRUCTION: vid_dual_ok read nothing but
@@ -2230,14 +2230,14 @@ vid_span_one:
 ;
 ; FOUR WORDS AND NOTHING ELSE, which is the whole reason 39.16 is cheap.
 ; vid_apply computed every derived CHROME word - the dock row, the clock cell,
-; the drive column, the pull-down cap, and 39.16's own vid_pw/vid_ph pair -
+; the drive column, and 39.16's own vid_pw/vid_ph pair -
 ; from the display it was applying, and vid_disp_init applies the primary
 ; LAST. So growing the desktop past them here leaves the strips measuring
 ; themselves against the monitor they are drawn on, with no special case
 ; anywhere.
 ;
 ; The union's ORIGIN is (0, 0) by construction: display 0 sits there and every
-; other display is placed to its right, so a bounding box needs only the far
+; other display is placed to its right or below it, so a bounding box needs only the far
 ; corner.
 ; -----------------------------------------------------------------------------
 ; VSW_UNION %1, %2 - %1_desk_union, written once (kernel size pass 13): its

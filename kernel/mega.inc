@@ -5,15 +5,14 @@
 ; at the end of kmain, with the desktop painted and before task 0 becomes the
 ; UI task, mega_enter switches the CPU into 286 PROTECTED MODE and leaves it
 ; there. This file is that switch and everything protected mode needs that
-; real mode got from the ROM. It is wave M1 of KERN-MEGA-PLAN 10.
+; real mode got from the ROM. It began as wave M1 of KERN-MEGA-PLAN 10.
 ;
-; THE MAP (KERN-MEGA-PLAN 3). Every segment value the kernel and its packages
-; already hold keeps meaning what it means:
+; THE MAP (KERN-MEGA-PLAN 3, cut back by KERN-MEGA-MEMORY-PLAN MC7.4):
 ;
-;   GDT entry i, for every i from 8 to 8191, is DATA with base i x 128 and a
-;   64KB limit, so selector N is segment N whenever N is a multiple of 8. That
-;   is every heap base (all of them are multiples of 32 paragraphs), LOW_SEG,
-;   0x0040, 0xA000, 0xB000, 0xB800 and 0xF000.
+;   GDT entry i, for every i from 8 up to `.cold`'s own (MEGA_GDT_ID - 1), is
+;   DATA with base i x 128 and a 64KB limit, so selector N is segment N for
+;   every segment the kernel itself loads below COLD_SEG - LOW_SEG, the FAT
+;   window, 0x0040. Past it are the per-use scratches (MEGA_SEL_K0 ...).
 ;
 ;   The EXCEPTIONS are the kernel's two code segments: entry 12 is KERNEL_SEG
 ;   (0x0060) as READABLE CODE, because every package far-calls 0x0060:cell,
@@ -21,14 +20,15 @@
 ;   IVT, which nothing loads as a segment, so they carry the kernel's own
 ;   selectors (MEGA_SEL_*).
 ;
-;   LDT entry i, for i from 0 to 2047, is READABLE CODE with base i x 512, so
-;   any 512-aligned conventional segment S has a code alias (S >> 2) | 4 - a
-;   package, a driver or a module is far-called through that. Its TI bit is
-;   set, so it can never equal an identity selector.
+;   The LDT sits on the GDT's base and its entries from MEGA_LDT_FREE0 are an
+;   allocator (mega_ldt_alloc): every claim, region, image, frame buffer and
+;   ROM is an LDT selector, an image's a code/data PAIR with data = code + 8.
+;   The block under this header is the detail.
 ;
-; Both tables and the IDT live above 1MB (MEGA_*_LIN), which is why this is
-; kern_big's and why xm_sniff keeps XMEM.DRV out on this build: kern_mega
-; owns the memory up there.
+; The tables and the IDT are one block, at the top of extended memory or, on
+; a machine too small for that, in a conventional claim (the block below this
+; header). kern_mega owns the memory above 1MB, which is why xm_sniff keeps
+; XMEM.DRV out on this build.
 ;
 ; THE ROM (KERN-MEGA-PLAN 2.2). A 286 cannot leave protected mode except by
 ; resetting the CPU, so nothing on a per-event path may go through the BIOS:
@@ -54,8 +54,12 @@
 ; arm is the Victory 286's to check.
 ;
 ; THE FAULT REPORTER. Every exception and every software interrupt nobody
-; handles ends in mega_fault, which writes the vector, the error code, CS:IP,
-; SS:SP and the registers to QEMU's debug console (port E9h) and stops. In
+; handles ends in mega_fault. A #GP that is a package's far transfer through a
+; data segment, a write through a code segment or a segment-0 access is
+; completed (mega_gpfix, mega_gpw, mega_null0 and its mega_db step); a
+; package's own fault closes that package (mega_fkill); anything else is
+; reported - the vector, error code, CS:IP and SP on one line under the menu
+; bar, and the whole frame on port E9h in a MEGA_E9 build - and stops. In
 ; real mode a wild write corrupts something; here it is a #GP at the
 ; instruction that did it, and that is only worth having if it is reported.
 ; =============================================================================
@@ -841,7 +845,7 @@ mega_irqrom:
     jae .no
 .yes:
     push ax                         ; DX = the stub: 0Ah-0Fh for 22h-27h,
-    cmp al, 0x28                    ; 70h-77h for themselves, 10 bytes apart
+    cmp al, 0x28                    ; 70h-77h for themselves, 6 bytes apart
     jae .slv
     sub al, 0x22
     jmp short .idx
@@ -1425,7 +1429,8 @@ mega_t08:
 ;
 ; The byte is RE-DELIVERED rather than dropped: `int` through the line's own
 ; gate, which is what the lost edge would have done - IRQ1's is kbm_isr on
-; this kernel always (mega_ivt_sync leaves 20h/21h alone), IRQ12's is whoever
+; this kernel always (mega_ivt_sync rebuilds from 22h and makes gate 21h
+; mega_i21, which sends an int from a GDT CS to kbm_isr), IRQ12's is whoever
 ; owns the vector, mou_p2_isr or a package. Their EOIs are no-ops here, the
 ; tick's own having gone and nothing else being in service. An AUX byte whose
 ; vector is the ROM's (its gate only EOIs, or reflects) is read and dropped.
@@ -2402,7 +2407,8 @@ mega_fdpost dw 0                    ; ...and the first different after one
 %endif ; MEGA_DIAG
 
 ; -----------------------------------------------------------------------------
-; mega_fault - report and stop
+; mega_fault - every exception: a #GP or #DB completed (mega_gpfix, mega_db),
+; a package's fault closed (mega_fkill), or reported and stopped
 ; in:       [SP] = vector, [SP+2] = error code (0 where the CPU gives none),
 ;           then the IP, CS and FLAGS the fault pushed
 ; -----------------------------------------------------------------------------
@@ -3246,11 +3252,12 @@ mega_tlog:
 ; out:      every register the BIOS's answer, and its CF, ZF and the rest in
 ;           the FLAGS the iret restores (IF stays the caller's)
 ;
-; DS and ES go to the BIOS as SEGMENTS: an identity selector already is one,
-; the kernel's data alias is KERNEL_SEG, LOW0 is 0, and an LDT code alias is
-; its 512-aligned base. Coming back, a register the BIOS left alone is given
-; its own selector back, and one it changed - int 13h AH=08h's ES:DI, int 10h
-; AX=1130h's ES:BP - is taken as the identity selector it now is.
+; DS and ES go to the BIOS as SEGMENTS, each read off its descriptor
+; (mega_s2segc): an identity selector is itself, the kernel's data alias
+; KERNEL_SEG, LOW0 0, and a base above 1MB FFFFh. Coming back, a register the
+; BIOS left alone is given its own selector back, and one it changed - int 13h
+; AH=08h's ES:DI, int 10h AX=1130h's ES:BP - is made a selector by mega_rseg
+; (the identity map below `.cold`, a claim base's pair, or mega_useg's).
 ; -----------------------------------------------------------------------------
 ;
 ; A CALLER ON A STACK THAT IS NOT LOW_SEG'S (SPEC.md 50.6.11's SEG_LEND,
@@ -3260,7 +3267,8 @@ mega_tlog:
 ; instead ([mega_rsseg], an identity selector below 1MB), entered with the
 ; caller's registers under a frame whose iret comes back to mega_svc_fb,
 ; which puts the caller's stack back. No stack lent: a software int is the
-; caller's stack fault (0Ch), and an IRQ the ROM owns goes on as before.
+; caller's stack fault (0Ch), and an IRQ the ROM owns is reflected on the
+; caller's stack, whose SELECTOR real mode then takes as its segment.
 ; Never re-entered: on the lent stack already (an IRQ in the window before
 ; the switch to real mode, or after it) is SS = [mega_rsseg], reflected
 ; where it is like LOW_SEG's; in real mode the BIOS's own ints and IRQs
@@ -3369,7 +3377,7 @@ mega_svc:
     jne .esok                       ; would refuse it
     mov ax, [mega_ses]
     mov [ss:bp+0], ax
-    call MEGA_SEL_CODE:mega_hibnc        ; .cold: the segment has no room for it
+    call MEGA_SEL_CODE:mega_hibnc        ; .mega: the segment has no room for it
     pop es
     pop ds
     popa
@@ -5149,7 +5157,7 @@ mega_strcal:
     pop es
     popa
     ret
-.probe:                             ; SI = DI = MEGA_SCOFF, CX = 2
+.probe:                             ; SI = DI = MEGA_SCOFF, CX = MEGA_SCCNT
     mov si, MEGA_SCOFF
     mov di, MEGA_SCOFF
     mov cx, MEGA_SCCNT              ; WHAT .take MEASURES AGAINST: it was
@@ -5677,7 +5685,7 @@ mega_bhex2:
 ; in:  BP = mega_svc's frame (ES restored to the caller's selector), DS = KDATA,
 ;      IF = 0
 ; out: the frame's AH = the status, AL = sectors moved, CF in its FLAGS
-; clobbers: AX..DI, ES (mega_svc pops the frame). FAR: it is .cold, because
+; clobbers: AX..DI, ES (mega_svc pops the frame). FAR: it is .mega's, because
 ;           kern_mega's .text + .bss is the one 64KB segment and was within
 ;           33 bytes of it
 ;
@@ -9816,14 +9824,14 @@ mx_copy:
 
 ; -----------------------------------------------------------------------------
 ; THE LDT ALLOCATOR (KERN-MEGA-PLAN 13.3 step 1). Entries MEGA_LDT_FREE0 to
-; MEGA_LDT_N - 1 (768 of them) are descriptors with ANY 24-bit base and limit,
-; handed out and taken back by selector - where the entries below are the
-; fixed aliases, base i x 512, that a 512-aligned image is far-called through.
+; [mega_ldtn] - 1 (MEGA_LDT_BASE of them, plus one per 16KB of extended
+; memory: mega_layoutf) are descriptors with ANY 24-bit base and limit, handed
+; out and taken back by selector; the entries below are the GDT's own, the
+; LDT's base being the GDT's (KERN-MEGA-MEMORY-PLAN MC7's step 6).
 ; An entry is free when its access byte is 0 (not present), which is how
 ; mega_enter leaves the whole range. Everything that READS a selector's base
-; asks the descriptor in this range (mega_selbase, mega_s2seg), and nothing
-; that converts a code alias to its image (mega_cs2ds, mega_ivt_sync) takes
-; one of these for an alias.
+; asks its descriptor (mega_selbase, mega_s2segc), and a code selector's data
+; twin is + 8 only where mega_ldt2ds finds one (mega_cs2ds).
 ;
 ; KERN-MEGA-PLAN 13.4 is the decision about the memory behind them: a
 ; kernel-owned block above 1MB comes out of the SAME table as the XMEM cells'
@@ -9842,7 +9850,7 @@ MX_KDRV     equ 0xFD                ; ...and for a DRIVER'S IMAGE (drv_hi_move):
 
 ; mega_ldt_alloc - DX:AX = a 24-bit base, CX = the limit (bytes - 1), BL = the
 ; access byte (0x92 data, 0x9A code) -> CF = 0 and AX = the selector (TI = 1,
-; RPL 0); CF = 1 and AX kept when all 768 are taken. Clobbers nothing else
+; RPL 0); CF = 1 and AX kept when every allocator entry is taken. Clobbers nothing else
 mega_ldt_alloc:
     push di
     push es

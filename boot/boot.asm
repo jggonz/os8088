@@ -50,7 +50,8 @@ org 0x7C00
 %define KERNEL_SECTORS 16
 %endif
 %ifndef BOOT2_SECS
-%define BOOT2_SECS 2            ; must match kernel/kernel.asm's own constant
+%define BOOT2_SECS 2            ; STALE placeholder: the Makefile always
+                                ; passes kernel/kernel.asm's real value
 %endif
 
 ; --- FLAT_PAYLOAD: the four diagnostics that boot through this sector --------
@@ -376,15 +377,12 @@ entry:
     ; nothing to be left over, the loop ending when [left] does. Three
     ; attempts, with a controller reset between, for read_run's reason.
     ;
-    ; THE PAGE BOUND IS NOT DECORATION. The blob lands just under the top of
-    ; conventional RAM, in [top-8192, top-2560), so a 64KB boundary falls
-    ; inside it whenever int 12h's KB total is 3..8 more than a multiple of 64
-    ; - and the controller answers a straddling transfer with error 09h, which
-    ; through the retry above is "Disk error" and a halt. No machine we support
-    ; reports such a total; the window was two values wide when the blob was
-    ; 2,560 bytes and is six now that SPEC.md 2.9.6 has put the boot overlay in
-    ; it, and twenty bytes of a sector with 132 free is the wrong thing to be
-    ; clever about.
+    ; THE PAGE BOUND IS NOT DECORATION, but it is no longer a run-time fact.
+    ; The blob lands at HEAP_PARA, a build constant (SPEC.md 2.9.5), so
+    ; whether it straddles a 64KB page - which the controller answers with
+    ; error 09h, "Disk error" through the retry above - is fixed per kernel.
+    ; The bound stays because FLAT_PAYLOAD's whole-image read shares this
+    ; loop.
 .next:
     mov ax, [lba]               ; LBA -> CHS
     xor dx, dx

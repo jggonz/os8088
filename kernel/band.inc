@@ -28,7 +28,7 @@
 ; a RAM destination through all of it would put the hottest primitive in the
 ; system at risk to save the small half of the work. A band is always 1bpp, so
 ; only the MONO composition is needed here. What is shared is the thing worth
-; sharing: font_glyphs itself.
+; sharing: the glyph table itself, through [font_seg]:[font_base].
 ;
 ; THE BUFFER IS A HEAP CLAIM, NOT .bss (SPEC.md 5.9.2). It is 2KB, taken once
 ; at boot under MEM_K_BAND and never freed, and that is what makes the width

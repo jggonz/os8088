@@ -462,31 +462,33 @@ written into several change records and is wrong every time. If a byte has to
 stop being resident, the mechanism is an **on-demand module** (SPEC.md §2.8),
 not a section move.
 
-`kern_big`, as blessed (`kernsize --json`; the `.text`/`.bss`/`.cold`/
-`.lowbss` figures are the `sections` line and the rungs are `kernel.asm`'s):
+`kern_big`, as `kernsize` printed it on 2026-11-08 (the `.text`/`.bss`/`.vga`/`.cold`/
+`.lowbss` figures are the `sections` line and the segments its `ladder` line;
+run the tool for today's):
 
 | rung | segment | size | what it is |
 |---|---|---:|---|
-| image (`.text` 47,333 + `.bss` 5,525) | `KERNEL_SEG` 0x0060 | 53,248 | resident code in the kernel's own segment, its read-only data and its scratch |
-| `.cold` (40,432) | `COLD_SEG` 0x0D60 | 40,448 | resident code with a CS of its own (SPEC.md §2.6): the file system, the Standard File dialog, associations, drivers, the heap, the desktop and the on-demand modules' thunks |
-| FAT window | `FAT_SEG` 0x1740 | 4,608 | `DSK_FAT_SECS` = 9 sectors of the mounted volume's FAT (SPEC.md §18.8); 2 sectors = 1,024 bytes on `kern_small` |
-| `.lowbss` (6,366) + task 0's stack (512) | `LOW_SEG` 0x1860 | 7,168 | the mount-owned disk buffers, every task stack, the two private ISR stacks, and the tables that left the segment |
-| `.vgabuf` (336) | `VGABUF_SEG` 0x1A20 | 512 | `vga_pbuf`, SPEC.md §5.4.1.3's planar decoder's plane rows (`vga_p4tab` is a union with the mono pair tables in `.lowbss` since §39.22.1). **The only rung a machine can decline**: `mem_floor_ax` seeds the heap floor UNDER it when `[vid_avail] & VID_A_VGA` is clear, so a mono machine's heap starts 512 bytes lower (§39.22). 0 on `kern_small` and on `NOPLANE` builds |
-| **`KERN_SIZE`** | heap at `HEAP_SEG` 0x1A40 | **105,984** | 105.0 KB on VGA, 104.0 on a 1bpp adapter, whose heap starts under the `.vgabuf` rung |
+| image (`.text` 40,328 + `.bss` 5,366) | `KERNEL_SEG` 0x0060 | 46,080 | resident code in the kernel's own segment, its read-only data and its scratch |
+| FAT window | `FAT_SEG` 0x0BA0 | 4,608 | `DSK_FAT_SECS` = 9 sectors of the mounted volume's FAT (SPEC.md §18.8); 2 sectors = 1,024 bytes on `kern_small` |
+| `.lowbss` (5,358) + task 0's stack (512) | `LOW_SEG` 0x0CC0 | 5,872 | the mount-owned disk buffers, every task stack, the two private ISR stacks, and the tables that left the segment |
+| `.vga` (2,030) | `VGA_RAM` 0x0E2F | 2,032 | code only a VGA or an EGA runs, inside `KERNEL_SEG`'s 64KB window (SPEC.md §2.10.9); on a machine with neither, `kmain_o` slides `.cold` down over it (`cfx_slide`). 0 on `kern_small` |
+| `.cold` (37,566) | `COLD_SEG` 0x0EAE | 37,568 | resident code with a CS of its own (SPEC.md §2.6): the file system, the Standard File dialog, associations, drivers, the heap, the desktop and the on-demand modules' thunks |
+| `.vgabuf` (336) | `VGABUF_SEG` 0x17DA | 608 | `vga_pbuf`, SPEC.md §5.4.1.3's planar decoder's plane rows (`vga_p4tab` is a union with the mono pair tables in `.lowbss` since §39.22.1), plus the pad to `KERN_END`'s one 512-byte rounding (`LADDER_PACK`). `mem_floor_ax` seeds the heap floor UNDER it when `[vid_avail] & VID_A_VGA` is clear (§39.22). 0 on `kern_small` and on `NOPLANE` builds |
+| **`KERN_SIZE`** | heap at `HEAP_SEG` 0x1800 | **96,768** | 96.0 KB on VGA; lower on a machine without one - under `.vgabuf` with no VGA, and with neither a VGA nor an EGA just past `.cold` slid down onto the VGA rung (`mem_floor_ax`) |
 
-`kern_small`'s ladder is `KERNEL 0x0060  COLD 0x0a00  FAT 0x1060  LOW 0x10a0
-HEAP 0x11c0` — `KERN_SIZE` **71,168 bytes**, the heap starting at 71.0 KB — so
-a 128KB machine has 57.0 KB of heap by arithmetic; `tests/small128.py` boots
+`kern_small`'s ladder is `KERNEL 0x0060  FAT 0x0880  LOW 0x08c0  COLD 0x0994
+HEAP 0x0ec0` — `KERN_SIZE` **58,880 bytes**, the heap starting at 59.0 KB — so
+a 128KB machine has 69.0 KB of heap by arithmetic; `tests/small128.py` boots
 one under MartyPC and reads what is actually free after the boot-time claims,
-and on this tree the two AGREE: **58,368 bytes = 57.0 KB, with no pinned
-claim standing**. It was 54.0 KB at 74,240; the three kilobytes between are
+and when it was last taken, at `KERN_SIZE` 71,168, the two AGREED: **58,368
+bytes = 57.0 KB, with no pinned claim standing**. It was 54.0 KB at 74,240; the three kilobytes between are
 kernel size pass 4 (docs/reports/KERNEL-BYTES-SINCE-SQUASH-2026-09-25.md).
 A 640KB machine reporting 639KB has ~534 KB under `kern_big` before any
 driver or read-ahead claim.
 
-**Not in the span**: stage 2's blob (`.boot2`, 4,751 bytes: the loader, the
+**Not in the span**: stage 2's blob (`.boot2`, 6,478 bytes: the loader, the
 splash and the boot overlay's blob half) and the overlay's window half
-(`.ovl`, 5,075 bytes loaded onto the FAT window and `dsk_secbuf`), both
+(`.ovl`, 5,119 bytes loaded onto the FAT window and `dsk_secbuf`), both
 dead by the first desktop — see below; on `kern_small` the split is a BUILD
 CHOICE, SPEC.md §2.5.3.2), the on-demand modules (files read
 into a heap claim when asked for, §2.8), and the menu save-under, which is a
@@ -497,16 +499,16 @@ sized from the rect actually dropped (`menu_save_kb`, §12.4; `MENU_SAVE_KB`
 ### What the Task Manager shows
 
 The memory view's `System` row is `KERN_KB` = `(KERN_SIZE + 1023) / 1024`,
-**104** on `kern_big`, with one indented row per span the ladder declares,
+**95** on `kern_big`, with one indented row per span the ladder declares,
 every figure from `OSAPI_SYS_KB` (SPEC.md §20.9) so that a package never
 carries a copy of the ladder:
 
 | row | constant | bytes | shown |
 |---|---|---:|---:|
-| `Code+data` | `SKB_IMG` = the rest | 98,048 | 96 |
+| `Code+data` | `SKB_IMG` = the rest | 88,832 | 87 |
 | `Stacks` | `SKB_STK` + `SKB_STK0` | 2,816 + 512 | 3 |
 | `FAT snap` | `SKB_FAT` = `FAT_PARA`·16 | 4,608 | 5 |
-| **`System`** | **`KERN_SIZE`** | **105,984** | **104** |
+| **`System`** | **`KERN_SIZE`** | **96,768** | **95** |
 
 The KB column is rounded **cumulatively** — each running boundary to the
 nearest kilobyte, each row the difference of two boundaries — so the rows
@@ -584,7 +586,7 @@ SS ≠ DS everywhere in the kernel (SPEC.md §1) — and the layout is:
 
 | | bytes | what |
 |---|---:|---|
-| `sch_stacks` | 2,816 (`kern_small` 1,280) | the background slices, one per slot 1..`MAX_TASKS`−1 |
+| `sch_stacks` | 2,816 (`kern_small` 960) | the background slices, one per slot 1..`MAX_TASKS`−1 |
 | `sch_chstack` | `SCH_CHSTK` = 128 | the ROM's `int 08h` chain runs here, not on the interrupted task (§8.5) |
 | `mou_pstack` | `MOU_PSTK` = 128 | both mouse ISRs run here, not on the interrupted task (§9.10) |
 | task 0 | `STK0_SIZE` = 512 | the UI task's, above the top of `.lowbss`, growing down onto it |
@@ -593,13 +595,13 @@ SS ≠ DS everywhere in the kernel (SPEC.md §1) — and the layout is:
 §8.7). `SCH_PARTITION` in `kernel/sched.inc` is one `SCH_SLOT <bytes>` line
 per background slot and the only place the layout is written; `sch_stkbase`,
 `sch_stksize` and `SCH_STK_TOTAL` derive from it. `kern_big` (`MAX_TASKS` =
-14) is 3 × 128, 6 × 192, 2 × 256, 2 × 384; `kern_small` (`MAX_TASKS` = 7) is
-128, 128, 192, 192, 256, 384. A spawn takes the smallest free slice that fits
+14) is 3 × 128, 6 × 192, 2 × 256, 2 × 384; `kern_small` (`MAX_TASKS` = 5) is
+128, 192, 256, 384. A spawn takes the smallest free slice that fits
 what the package declared in its header (§8.7.2), and a package that
 declares nothing gets `SCH_STACK` = 384, the largest class — which is what
 `CC_STACK` in `apps/cc/crt0.asm` mirrors and `tests/unit/t_mirror.py` guards.
 The idle task holds one 128-byte slot for the life of the machine, so
-`kern_big` has **twelve usable worker slots** and `kern_small` five. Running
+`kern_big` has **twelve usable worker slots** and `kern_small` three. Running
 out is `OSAPI_TASK_SPAWN`'s `CF=1`, which every package already degrades on;
 a Timer or Bounce that cannot get a slot rolls its launch back instead.
 
@@ -664,7 +666,7 @@ what `tests/stackprobe` was written for.
 turned a slot index into a slice base with a byte swap that only works at
 256, and `apps/taskmgr`'s bss was a hand-chained map of literal offsets. Both
 are gone — the base is looked up in `sch_stkbase` (§8.6), every size must be
-a multiple of 128 and even, and the Task Manager derives every offset — so a
+even (`SCH_SLOT`'s `%error`; only `SCH_STACK` is still held to a multiple of 128), and the Task Manager derives every offset — so a
 class change is one line of `SCH_PARTITION` and a rebuild. `MAX_TASKS` is
 mirrored in `apps/os88api.inc` at the larger of the two kernels' values (14),
 because a package sizes its snapshot buffer from it and over-allocating is
@@ -754,8 +756,9 @@ a package image being loaded, a package's file buffer out of the heap — so
 the image rounds to a whole 512 bytes rather than to a paragraph, `FAT_PARA`
 and `LOW_PARA` are multiples of 32 paragraphs, and `VGABUF_PARA` is too so
 that the mono floor under it stays aligned. Guard 6 proves the ladder, guard
-2d the decoder rung, and guard 6b the heap: `mem_claim` rounds to whole KB,
-so every base it hands out is `HEAP_SEG` + n·64 paragraphs.
+2d the decoder rung, and guard 6b the heap: `mem_claim` rounds every size to
+`MEM_GRAN` paragraphs (512 bytes), so every base it hands out is the floor,
+the top or a claim edge — `HEAP_SEG` + n·`MEM_GRAN` paragraphs.
 
 ### The boot sector has to get out of the way
 

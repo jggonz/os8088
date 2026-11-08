@@ -41,12 +41,16 @@
 ;   file (SPEC.md 22.5). dskw_write lost its 64KB ceiling in SPEC.md 18.4.1,
 ;   but the copy buffer is a heap claim of whatever the machine could spare
 ;   and a file may still be bigger than it, so a copy stays a truncating
-;   create followed by a run of dskw_append calls, each one a whole number
-;   of clusters.
+;   create followed by a run of appends, each one a whole number of
+;   clusters - dskw_append calls on kern_small, one held WRITE_SEQ stream on
+;   kern_big (SPEC.md 22.5.3).
 ;
 ; **This module is `.cold` (SPEC.md 2.6).** It is the one of the four with no
 ; resident thunks and no `_x` bodies at all: every caller of an fcp_ routine
-; is files.inc, which is cold too, so those calls stayed near. Only the calls
+; is files.inc, which is cold too, so those calls stayed near - the one other
+; way in being the OSAPI_FILE_COPY cell's far call to fcpf_fcp_door (SPEC.md
+; 22.24). That is kern_big; on kern_small the bodies are FILECP.DRV's
+; (FCPBODY, below). Only the calls
 ; that leave the cold set go out, through `KERNEL_SEG:cw_*`. Two things
 ; are on the author rather than the build: CS is NOT KERNEL_SEG here, so
 ; nothing may take a kernel segment from it, and DATA stays in `.text` - the

@@ -2,7 +2,7 @@
 """Generate docs/INDEX.md - the "does this already exist?" index.
 
 WHY THIS EXISTS, stated plainly because the reason is a mistake rather than a
-plan. SPEC.md is ~67,000 lines and answers any question you know to ask it.
+plan. SPEC.md is over 240,000 lines and answers any question you know to ask it.
 Grep answers a narrow question fast. Neither answers the question you have
 BEFORE you write code, which is not "how does OSAPI_ABOUT_SET work" but "is
 there already a way to put my application's name in the menu bar". Sheet and

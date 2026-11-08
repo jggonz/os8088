@@ -3,9 +3,10 @@
 ;
 ; The 512-byte sector relocates itself, finds the data area and reads the
 ; first BOOT2_SECS sectors of KERNEL.SYS to a scratch segment. Those sectors
-; are this file. Everything the sector could not afford is here: the int 1Eh
-; parameter table (SPEC.md 18.92/18.93), read_run's four bounds, the 286
-; head-cross gate (18.93.2), 18.93.1's canary and its shorten-and-reload.
+; are this file. Everything the sector could not afford is here: read_run's
+; bounds, the 286 head-cross gate (18.93.2), 18.93.1's canary and its
+; shorten-and-reload. (The int 1Eh table is stage 1's since SPEC.md 2.9.8;
+; the copy below is idempotent.)
 ;
 ; It is assembled INTO THE KERNEL, which buys it the kernel's own constants -
 ; the image's sector count falls out of MODC_START rather than being measured
@@ -109,9 +110,13 @@ KSIG_OFF    equ 4096 - BOOT2_KNOBSEC * 512 + BOOT2_SMALLSEC * 512 ; SPEC.md 18.9
                                 ; legal for TWO blob lengths, SPLSTARS' being
                                 ; a sector longer, and that intersection is
                                 ; only 106..109. One blob length (SPEC.md
-                                ; 15.3.8.5) widens the band to file sectors
-                                ; 21, 57 and 106..110, and 21 is the bottom of
-                                ; it. The Makefile's KSIG_OFF block carries the
+                                ; 15.3.8.5) widens the band - but counted
+                                ; from where STAGE 2's runs start (data +
+                                ; BOOT2_SECS, .reload below) it is file
+                                ; sectors 57 and 106..110. 21, where this
+                                ; sits, crosses no head on kern_big's 360KB
+                                ; and 720KB disks: t_canary walks runs from
+                                ; the data area and does not see it. The Makefile's KSIG_OFF block carries the
                                 ; whole derivation
 B2_KSECS    equ ((MODC_START + 511) / 512) - BOOT2_SECS  ; what is left to read
 
@@ -600,16 +605,17 @@ kz_all:
 ; exists. boot/boothd.asm is a volume boot record with its own reader: it
 ; loads the blob to BLOB_SEG, loads `.text` to KERNEL_SEG and jumps there,
 ; never touching boot2_entry (2.9.9). So a packed kernel arriving that way
-; would be jumped INTO, and the sector has 23 spare bytes to do something
-; about it in.
+; would be jumped INTO, and the sector had the spare bytes to do something
+; about it in (it has seven left).
 ;
 ; What makes it fit in five of them is the ARITHMETIC AGREEING. The floppy
 ; reads the head to KERNEL_SEG and the blocks to KERNEL_SEG + head/16 + R; the
 ; hard disk reads one run to KERNEL_SEG + R, which puts the head at the bottom
 ; of it and the blocks at KERNEL_SEG + R + head/16 - THE SAME PLACE. So the
 ; whole of the difference is moving the head down, and kz_all is then the
-; identical call on identical addresses. The move cannot overlap: R is 20,992
-; and the head is 4,608.
+; identical call on identical addresses. The move cannot overlap: R is
+; KZ_RPARA*16 from os88kz.py (18,432 on kern_big and 10,240 on kern_small at
+; the 2026-11-08 build) and the head is 4,608.
 ; -----------------------------------------------------------------------------
 kz_hd:
     push bp                     ; the caller's boot timer, which it writes into

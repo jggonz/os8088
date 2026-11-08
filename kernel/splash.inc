@@ -1,9 +1,11 @@
 ; =============================================================================
 ; splash.inc - boot-time loading screen (SPEC.md 15)
 ;
-; While the boot sector is still pulling the rest of this kernel off the
-; floppy, it far-calls spl_tick (via the pinned 0800:0008 entry) after every
-; sector that lands. The first tick switches to mode 12h and draws the
+; While stage 2 is still pulling the rest of this kernel off the floppy, it
+; calls spl_tick NEAR (both are `.boot2`, SPEC.md 2.9.4) after every run that
+; lands, once SPL_RESIDENT sectors of `.text` are aboard. State is the blob's,
+; read `cs:`, except spl_live/spl_busy/spl_quiet, which are `.text` bytes in
+; viddet.inc because the IRQ0 handlers read them through DS. The first tick switches to mode 12h and draws the
 ; welcome dialog; every tick advances a pixel-granular progress bar, a
 ; percentage, and a spinning vector "8088" - stroke digits coin-flipped
 ; about their vertical axis through a 16-entry cosine table.
@@ -33,8 +35,9 @@ section .boot2                  ; ...and it lives in STAGE 2 (SPEC.md 2.9.4).
                                 ; .text to them, and the whole module lands in
                                 ; the image instead
 
-SPL_RESIDENT equ 9              ; sectors the boot sector waits for before
-                                ; ticking us (must match boot/boot.asm).
+SPL_RESIDENT equ 9              ; sectors stage 2 waits for before ticking
+                                ; us (the Makefile reads it for KZ_HEAD; the
+                                ; %if at the foot of kernel.asm checks it).
                                 ; It was 6, and the module ended at 3,072
                                 ; bytes EXACTLY - no headroom at all, so the
                                 ; next thing that had to be resident (the

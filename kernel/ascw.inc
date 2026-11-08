@@ -417,7 +417,7 @@ asw_old:
     xor ah, ah
     CSDO mov [CSEG bp+asw_onapp-asw_v], ax
     mov cl, ASC_ROW
-    mul cl                      ; napp <= 32: the product fits AX
+    mul cl                      ; napp <= ASC_NAPP (90): 90 x 88 fits AX
     add ax, bx
     add ax, ASC_HDR             ; what the header says the file holds
     cmp ax, [cs:bp+asw_ofs-asw_v]
@@ -960,7 +960,7 @@ asw_index:
 asw_rowoff:
     mov al, [cs:bp+asw_ix-asw_v]
     mov ah, ASC_ROW
-    mul ah                      ; <= 31 * 88: the product fits AX
+    mul ah                      ; 8 x 8 bits: the product always fits AX
     add ax, ASW_NEW + ASC_HDR
     mov di, ax
     ret

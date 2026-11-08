@@ -104,7 +104,7 @@ FSIF_PLANAR equ 2
 FSIF_BANKED equ 4
 
 ; -----------------------------------------------------------------------------
-; fsx_caps - which FSXM ids a window's display can set (SPEC.md 53.8, 0x02C0)
+; fsx_caps - which FSXM ids a window's display can set (SPEC.md 53.8, 0x022F)
 ;
 ; in:       BX = the window to ask ABOUT, or 0 for "whatever is frontmost"
 ; out:      AX = bitmask (bit n = FSXM id n settable), DL = the answering
@@ -191,7 +191,10 @@ fsx_capstab:                    ; indexed by VID_* (VGA 0, HERC 1, CGA 2, EGA 3)
 ;
 ; in:       AX = near entry inside the caller's image, BX = the caller's own
 ;           window ptr, CX = flags (bit 0 = FSXF_KEEPWORKER, bit 1 =
-;           FSXF_FASTTICK; others refuse);
+;           FSXF_FASTTICK, bit 2 = FSXF_RATE with DX/DI - kern_big, never
+;           with FASTTICK - bit 3 = FSXF_REAL, accepted and stripped on every
+;           kernel; others refuse), CH = the display (0 the window's, n
+;           display n-1 on kern_big; kern_small takes 0 alone);
 ;           ES = the CALLER's DS (the X stub) - the ownership fence reads it.
 ;           UI-task window-callback context, gfx lock held.
 ; out:      CF=1 refused, nothing changed. CF=0: the app's proc ran to its
@@ -559,7 +562,7 @@ fsx_mfail:                      ; fsx_mode's refusal, HERE rather than behind a
 ;    the game must not land in the desktop ladder (the SPEC.md 34.4
 ;    click-abort drain is the precedent); 3. disarm the freeze; 4. repaint
 ;    the desktop under the still-held lock. The callback epilogue's
-;    gfx_unlock then flushes (if buffered) and re-shows the cursor with a
+;    gfx_unlock then re-shows the cursor with a
 ;    fresh save-under from the restored VRAM - SPEC.md 7's own contract.
 ;
 ; Step 4 is a wm_paint_all on every machine and every CPU tier, and SPEC.md
@@ -573,7 +576,7 @@ fsx_mfail:                      ; fsx_mode's refusal, HERE rather than behind a
 ; and DI are fsx_run's to restore at kret_di, so the body banks nothing.)
 
 ; -----------------------------------------------------------------------------
-; fsx_mode - set a foreign mode and describe it (SPEC.md 53.4, 0x02D0)
+; fsx_mode - set a foreign mode and describe it (SPEC.md 53.4, 0x023B)
 ;
 ; in:       AL = FSXM_* id, ES:DI = an FSI_SIZE buffer (ES is the caller's
 ;           own, the gfx_blit4 idiom). Bracket-only, exclusive task only.
@@ -866,7 +869,7 @@ fsx_xcrtc:                      ; Mode X CRTC retiming, index in the low byte
 %endif                          ; ...end of Mode X, VGA-only by definition
 
 ; -----------------------------------------------------------------------------
-; fsx_wait - the frame clock, and the present (SPEC.md 53.5, 0x02D8)
+; fsx_wait - the frame clock (SPEC.md 53.5, 0x0241)
 ;
 ; in:       AL = FSXW_TICK  (0) return at the next [ticks] change (hlt between
 ;                              polls);
@@ -974,7 +977,7 @@ fsx_wait:
 
 ; -----------------------------------------------------------------------------
 ; fsx_page - show one of the pages FSI_PAGES advertises (SPEC.md 53.10, slot
-;            0x04E8)
+;            0x03C5)
 ;
 ; in:       AL = the page index. Bracket-only, exclusive task only, and only
 ;           after an fsx_mode call in a mode that HAS more than one page.
@@ -1230,11 +1233,12 @@ fsx_evtmp: resb 8               ; fsx_restore's event-drain scratch
 fsx_wdisp: resb 1               ; the display the running bracket's window is
                                 ; on (SPEC.md 39.18.3). Written by fsx_run
                                 ; before the app's proc runs and read only by
-                                ; fsx_mode, so it needs no boot-time init
-                                ; either - and STILL CORRECT after the byte
-                                ; above lost the same argument (SPEC.md
-                                ; 12.8.5.1), because fsx_mode is legal only
-                                ; inside the bracket. The claim is about the
+                                ; fsx_mode (directly and through EXTD.DRV's
+                                ; EXTF_KIND) and fsx_surf, so it needs no
+                                ; boot-time init either - and STILL CORRECT
+                                ; after the byte above lost the same argument
+                                ; (SPEC.md 12.8.5.1), because both are legal
+                                ; only inside the bracket.
                                 ; SET OF READERS, so a new one reached from
                                 ; desktop code falsifies it - and it is the
                                 ; ONE fact fsx_run still establishes about

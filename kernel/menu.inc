@@ -2,8 +2,8 @@
 ; os8088 - menu.inc
 ;
 ; The menu bar and pull-down menus (SPEC.md 12). The bar is three zones:
-; the System menu (an 11x11 hand-authored chip silhouette - the os8088
-; logo, and the one place bitmap data is hand-made), which is cell 0 in
+; the System menu (the os8088 logo, an 11x11 chip silhouette drawn as
+; seven rects - SPEC.md 12.05.1), which is cell 0 in
 ; EVERY application; the ACTIVE APPLICATION'S NAME, which is a real menu
 ; cell for every application (SPEC.md 12.7 - 'About <Name>' when the window
 ; registered a handler, and 'Close' always, at the bottom) and a bare label
@@ -22,7 +22,8 @@
 ; the caller (the UI task) already holds the gfx lock, so tracking reads
 ; mouse_x/mouse_y/mouse_btn directly (the ISR keeps them fresh; the cursor
 ; stays hidden - the highlight is the feedback). The pixels under the
-; dropped menu are saved to SAVE_SEG:0 and put back on release. It returns
+; dropped menu are saved to a heap claim sized from its rect ([menu_sseg],
+; menu_drop) and put back on release - or repainted, if the claim is refused. It returns
 ; a (cell, item) pair rather than a flat command, because item numbering
 ; now has to mean something inside a menu set the kernel has never seen.
 ;
@@ -67,9 +68,8 @@ CMD_TASKS   equ 3
 CMD_SEP     equ 4               ; the RULE above Hibernate. It is a MENU_DIS
                                 ; item, so menu_hover can never land on it -
                                 ; and it needs no handler either, because
-                                ; ui_cmd is a compare ladder and an id it
-                                ; does not match falls out of the bottom and
-                                ; returns. The id exists only so that
+                                ; ui_cmd's jump table sends it to .done,
+                                ; which returns. The id exists only so that
                                 ; the items below it still equal base+item
 %ifdef KERN_BIG
 CMD_HIBER   equ 5               ; Hibernate... (SPEC.md 87), kern_big only:
@@ -322,7 +322,7 @@ section .text
 ; nothing else in the machine ever draws in the bar's own rows.
 ;
 ; A caller that overdrew only PART of the bar wants menu_inval instead -
-; forcing the whole bar for an 88px widget is what made the file-activity
+; forcing the whole bar for an 80px widget is what made the file-activity
 ; progress bar (SPEC.md 12.8) redraw the menus, the logo and the clock every
 ; time it finished.
 ; -----------------------------------------------------------------------------
@@ -1648,8 +1648,8 @@ menu_popup:
     jz .none                    ; an empty descriptor drops nothing
     call menu_setup             ; never trust a caller's count - the rect has
                                 ; to fit on the screen (menu_relayout's rule),
-                                ; and how many fit depends on the adapter:
-                                ; 16 at 480 or 348 rows, 11 at CGA's 200
+                                ; and that is MENU_POPMAX (11) on
+                                ; every adapter ([vid_popmax], laid down)
     and word [menu_dseg], 0     ; every popup descriptor in the tree is the
                                 ; kernel's own (SPEC.md 12.4). `and`: the
                                 ; flags are dead - menu_widest's menu_des sets
@@ -1730,9 +1730,9 @@ menu_popup:
 ; overlay drawn VRAM-direct like the cursor. Only one menu is ever open - both callers run on the UI
 ; task and both are driven by a held button - so the one save-under buffer
 ; needs no allocator of its own. It IS a heap claim (SPEC.md 50.2), and it is
-; claimed HERE and released before this routine returns - MENU_SAVE_KB for
-; exactly as long as a menu is on screen, bounded at build time by the clamps
-; below and asserted in kernel.asm. It used to be taken once at menu_init and
+; claimed HERE and released before this routine returns - sized from the
+; menu's rect, at most MENU_SAVE_KB (the ceiling the clamps below hold and
+; kernel.asm asserts), for exactly as long as a menu is on screen. It used to be taken once at menu_init and
 ; held for the session, which is 20KB a 128KB machine was paying for at every
 ; instant it was not looking at a menu.
 ;
@@ -2573,7 +2573,7 @@ MENU_LOGO_N equ 6               ; ...and menu_relayout stamps this into cell
 menu_items_file:
     dw menu_s_close
 %ifdef OS88_SHORTCUTS
-    dw sc_s_remx                ; item 1, swapped by ui_loc_gate (SPEC.md 26.8.5)
+    dw sc_s_remx                ; item 1, swapped by desk_select / desk_unsel_x / sc_m_del (SPEC.md 26.8.5)
 MENU_FILE_N equ 2
 %else
 MENU_FILE_N equ 1

@@ -157,11 +157,12 @@ vmm_dsp:
 ; word of sch_stkdie. So the apply runs on mou_pstack, and #147's invariant
 ; holds unchanged.
 ;
-; It is safe to borrow because it is PROVABLY IDLE while [vmm_on] is set:
-; vmm_boot_x settles the contest on MOU_VMROW and calls mou_lockon, which
-; clears IER on both UARTs, masks both lines at the master 8259 and calls
-; mou_p2_off. Neither mouse ISR can fire, so neither can be inside
-; MOUPRIV_ENTER, and [mou_psave] has no other writer.
+; It is safe to borrow because nothing can be on it at the same time:
+; vmm_poll holds IF = 0 from MOUPRIV_ENTER to MOUPRIV_LEAVE, and both mouse
+; ISRs run IF = 0 from gate to iret (SPEC.md 9.10). vmm_boot_x's mou_lockon
+; normally keeps both ISRs silent too - IER 0 on both UARTs, both lines
+; masked, mou_p2_off - but a serial lease (SPEC.md 115) re-arms one line, and
+; the IF = 0 argument is what covers that.
 ;
 ; The swap is INSIDE the cli, and that is load-bearing rather than tidy: SP is
 ; what sch_switch saves into the task's record, so a tick taken while SP points
@@ -253,13 +254,13 @@ vmm_poll:
 ; **Expands to nothing on kern_big AND kern_small** (SPEC.md 9.11.7) - it is
 ; defined unconditionally and tests KERN_EMU in its body, so a call site needs
 ; no %ifdef of its own and the two shipped kernels assemble it to no bytes at
-; all. Used by ui_task's pass and by menu_drop,
-; both of which already hold DS = KERNEL_SEG; task_yield's site is written out
+; all. Used by ui_task's pass, which already holds DS = KERNEL_SEG;
+; task_yield's site is written out
 ; longhand in sched.inc because it does not.
 ;
 ; DS-RELATIVE HERE and cs-relative at task_yield's site, which is not an
-; inconsistency: a segment override costs two bytes, and these two callers
-; already hold the kernel's DS, so paying it here would buy nothing at either.
+; inconsistency: a segment override costs two bytes, and this caller
+; already holds the kernel's DS, so paying it here would buy nothing.
 ; task_yield's caller may be a package, so that one site pays it and gets back
 ; far more - see sched.inc.
 %macro VMM_POLL 0
@@ -330,7 +331,7 @@ vmm_boot_x:
     dw drv_call
     jc  .refuse
 
-    ; --- won: settle the contest, as mou_claim / mou_p2_byte do --------------
+    ; --- won: settle the contest, as mou_settle does for the others ----------
     mov byte [mou_port],  MOU_VMROW
     mov byte [mou_line],  MOU_P2LINE
     mov al, 1

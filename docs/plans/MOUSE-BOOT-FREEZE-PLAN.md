@@ -7,14 +7,16 @@
 > the mouse driven by injected packets at a fixed guest pace.
 >
 > **Built (SPEC.md 9.4.8):**
-> * **B1 — the poll interval is timed from the desktop.** `kmain` stamps a new
->   base word `[mou_hpbase]` at the first frame, so the poller's first DTR drop
->   moves from the first UI pass (on a long boot) to ~3s after the desktop.
->   `[mou_hpt]` is left 0-until-a-drop so `sysbench`'s "poller stamp (0=nvr)"
->   (§9.4.2) still reads true.
+> * **B1 — the poll interval is timed from the desktop.** `kmain` stamps
+>   `[mou_hpt]` at the first frame, so the poller's first DTR drop moves from
+>   the first UI pass (on a long boot) to ~3s after the desktop. It was built
+>   as a separate `[mou_hpbase]` and later folded into the one stamp (SPEC.md
+>   9.4.8, "One stamp, not three"); `[mou_hpst]` = 3 now carries the "poller
+>   fired" reading.
 > * **B3 — the drain ends on quiet, bounded by a ceiling.** Each dropped byte
 >   re-stamps `[mou_dstamp]`; the window closes `MOU_DRAINQ` = 3 ticks after the
->   last byte **or** `MOU_DRAINT` = 9 ticks after the raise, whichever first.
+>   last byte **or** `MOU_DRAINT` ticks after the raise (9 when built, 18 since
+>   FIELD-NOTES 44), whichever first.
 >   An idle-then-move user's first motion is read at once (was a fixed 505 ms);
 >   continuous motion stays bounded at the ceiling exactly as before.
 > * Verified on both adapters: `mou_hpbase` stamped, `mou_hpt` 0; idle-then-move

@@ -25,14 +25,16 @@
 ; bytes after the image, so a package addresses its bss with equ offsets
 ; from the os88_image_end label that OS88_IMAGE_END defines.
 ;
-; Packages run in the kernel's near model: CS = DS = KERNEL_SEG, but
+; Packages run in their OWN segment: CS = DS = the region the loader gave
+; them (SPEC.md 20.1), but
 ; SS = LOW_SEG - every task stack lives OUTSIDE the kernel segment (just
 ; ABOVE it since SPEC.md 2), so SS != DS and `[bp+disp]` addresses SS, not
 ; your data. A pointer held in BP needs an explicit `ds:` override. That has
 ; always been true inside a callback (you run on the UI task's stack) and
 ; matters more now that a package can own a worker task of its own
-; (OSAPI_TASK_SPAWN below), whose 384-byte stack is likewise in LOW_SEG -
-; and 384 is a budget to respect, not a suggestion: the tick, the mouse and
+; (OSAPI_TASK_SPAWN below), whose stack - the class its header declares
+; (OS88_STACK_* below; 384 if none) - is likewise in LOW_SEG - and that is a
+; budget to respect, not a suggestion: the tick, the mouse and
 ; any sound IRQ land their frames on it while your worker runs (SPEC.md
 ; 20.6 rule 6; tests/stackprobe measures the real cost on real hardware).
 ;
@@ -145,7 +147,7 @@ VT_FILE      equ 2               ; AH: a REDIRECTED volume (SPEC.md 62.9) -
                                  ; hb_pick does. The slot has answered this
                                  ; value since SPEC.md 62.9 and the SDK named
                                  ; only the other two
-                            ; It is baked into every OSAPI_* far call, so a
+                            ; KERNEL_SEG (above) is baked into every OSAPI_* far call, so a
                             ; package built against a different value calls
                             ; into empty memory: rebuild EVERY .o88 (and the
                             ; apps floppies) whenever the kernel moves
@@ -207,12 +209,14 @@ CYELLOW   equ 14
 CWHITE    equ 15
 
 ; --- the os8088 API jump table (SPEC.md 20.3, pinned offsets) ---------------------
-; Each slot is an 8-byte cell at 0x0010 + 8n, and `call OSAPI_*` is a FAR
+; The cells are packed from 0x0010 in several lengths (SPEC.md 20.3), so an
+; address is the sum of the cells before it; `call OSAPI_*` is a FAR
 ; call: the %defines below expand to `call KERNEL_SEG:0xNNNN`, so package
 ; source is written exactly as it always was and the segment change is
 ; invisible. Every cell switches DS to the kernel's on the way in and back to
 ; yours on the way out; every register except a documented output is
-; preserved, flags included.
+; preserved. FLAGS are not, unless a cell's own contract says so - CF is the
+; commonest answer.
 %define OSAPI_GFX_LOCK      KERNEL_SEG:0x0010   ; acquire drawing mutex + hide cursor
 %define OSAPI_GFX_UNLOCK    KERNEL_SEG:0x0018   ; show cursor + release mutex
 %define OSAPI_GFX_PIXEL     KERNEL_SEG:0x0020   ; CX=x, DX=y
@@ -238,7 +242,7 @@ CWHITE    equ 15
 ; than a thing you defaulted to, and tests/unit/t_textrules.py is the gate:
 ; a new call site fails the build until it is registered in
 ; tests/textsites.txt with a reason. SPEC.md 6.6 is the closed list of what
-; a good reason looks like - there are five kinds and "it was shorter to
+; a good reason looks like - there are six kinds and "it was shorter to
 ; write" is not one of them.
 %define OSAPI_FONT_CHAR_XPARENT     KERNEL_SEG:0x0060   ; CX=x, DX=y, AL=char
 %define OSAPI_FONT_STR_XPARENT      KERNEL_SEG:0x0068   ; CX=x, DX=y, SI=NUL string
@@ -270,8 +274,9 @@ CWHITE    equ 15
                                  ; ONE-SHOT: the draw puts CWHITE/CBLACK back
 %define OSAPI_ICON_DRAW     KERNEL_SEG:0x039D   ; CX = x, DX = y, SI -> the
                                  ; record. out CF = 1 refused (a first byte
-                                 ; that is neither 1 nor ICON_SOLID, or a
-                                 ; record taller than 16)
+                                 ; that is neither 1 nor ICON_SOLID - and on
+                                 ; kern_small anything but 1 - or a record of
+                                 ; 0 rows or taller than 16)
 ICON_SOLID  equ 0                ; the record's first byte for a picture whose
                                  ; MASK IS ALL ONES (SPEC.md 25.6.2): `db
                                  ; ICON_SOLID, rows` then the `rows` DATA words
@@ -305,7 +310,8 @@ ICON_SOLID  equ 0                ; the record's first byte for a picture whose
 %define OSAPI_WM_SHOW       KERNEL_SEG:0x007C   ; BX=win ptr
 %define OSAPI_WM_HIDE       KERNEL_SEG:0x0082   ; BX=win ptr
 %define OSAPI_WM_DESTROY    KERNEL_SEG:0x02BC   ; BX = a window of YOURS; the gfx
-                                 ; lock is held, as OSAPI_WM_HIDE wants it. Frees
+                                 ; lock is HELD - unlike OSAPI_WM_HIDE, which takes
+                                 ; it itself, this cell does not. Frees
                                  ; the RECORD - hide only takes the pixels down,
                                  ; and the slot stays used with your segment in
                                  ; its W_SEG. That is fine for a window you keep
@@ -375,8 +381,8 @@ ICON_SOLID  equ 0                ; the record's first byte for a picture whose
                                  ; kernel has the layer (kern_small: CF=1, and
                                  ; every verb refuses there). QUERY IS NOT
                                  ; FREE: it LOADS DESK.DRV off the system disk
-                                 ; (a find and a read) and holds a 1 KB claim
-                                 ; until restart, unless the loader already
+                                 ; (a find and a read) and holds a ~5 KB claim
+                                 ; until the last widget goes, unless the loader already
                                  ; did for a package with OS88_F_DESK - so ask
                                  ; it ONCE, in your ENTRY PROC on the UI task,
                                  ; never from a worker (SPEC.md 20.6 rule 7)
@@ -889,10 +895,11 @@ OSAPI_LZ_BIG equ 0x80            ; ...OR'd in: AH:CX is the length (20.13.3)
                                  ; THE CELL IS IN BOTH KERNELS; which FORMATS
                                  ; answer is a build knob, and one this kernel
                                  ; does not carry is refused the same way.
-%define OSAPI_FULLSCREEN    KERNEL_SEG:0x00F7   ; AL = 1 enter (BX=win ptr) / 0 exit;
-                                 ; caller holds the gfx lock (window
-                                 ; callbacks do); out CF=1 enter refused
-                                 ; (screen already owned). Exiting is the
+%define OSAPI_FULLSCREEN    KERNEL_SEG:0x00F7   ; AL = 1 enter / 0 exit, BX = YOUR
+                                 ; window either way; caller holds the gfx
+                                 ; lock (window callbacks do); out CF=1
+                                 ; refused, entering or leaving, when the
+                                 ; screen is another window's. Exiting is the
                                  ; app's job (Esc in its onkey is the
                                  ; convention) - the menu bar is
                                  ; unreachable while it holds the screen.
@@ -1103,10 +1110,10 @@ OSAPI_FCP_MOVE equ 1
 %define OSAPI_FILE_DFREE    KERNEL_SEG:0x0118   ; out CF=0, DX:AX = free bytes, BX =
                                  ; SECTORS per cluster.
                                  ;
-                                 ; NO DISK I/O - AND THAT IS NOT THE SAME AS
-                                 ; CHEAP (SPEC.md 18.4.5). It is answered from
-                                 ; the resident FAT snapshot by COUNTING EVERY
-                                 ; ENTRY IN IT, so the cost is O(clusters) of
+                                 ; NO DISK I/O ON A FLOPPY, FAT RE-READS ON A
+                                 ; HARD DISK'S FAT16 WINDOW - AND NEITHER IS
+                                 ; CHEAP (SPEC.md 18.4.5). It is answered by
+                                 ; COUNTING EVERY FAT ENTRY, so the cost is O(clusters) of
                                  ; CPU: about 105ms per call on a 20MB hard
                                  ; disk on a 4.77MHz 8088. Ask it when you are
                                  ; about to decide something, NOT once per
@@ -1734,7 +1741,7 @@ MEMC_WHATIF_P equ 2              ; AH: MEMC_WHATIF in PARAGRAPHS - the same
                                  ; CF FIRST - kern_big's what-if hands back
                                  ; the flags it was called with
 %define OSAPI_MEM_COMPACT   KERNEL_SEG:0x0443   ; AH = MEMC_WHATIF: AL = a
-                                 ; purge level, out AX/BX as OSAPI_MEM_AVAIL_LVL
+                                 ; purge level, out AX/BX as OSAPI_MEM_AVAIL at that level
                                  ; planned as if YOUR OWN REGION could move;
                                  ; AH = MEMC_POST: BX = a window of yours, AL =
                                  ; the rank, out CF=0 posted (an EVT_WAKE
@@ -1790,7 +1797,7 @@ MEMC_WHATIF_P equ 2              ; AH: MEMC_WHATIF in PARAGRAPHS - the same
 ; STRICTLY BELOW it are still yours for the taking, and nothing at or above it
 ; is shed by a claim of yours or dropped by the compaction that precedes one -
 ; it is PACKED OUT OF THE WAY instead - and OSAPI_MEM_AVAIL (and
-; OSAPI_MEM_AVAIL_MAX at the same level) answers the number such a claim will
+; OSAPI_MEM_COMPACT's MEMC_WHATIF at the same level) answers the number such a claim will
 ; actually be served. Set it, ask, claim, lift it: the plan you made is the
 ; plan that happens.
 ;
@@ -1803,7 +1810,7 @@ MEMC_WHATIF_P equ 2              ; AH: MEMC_WHATIF in PARAGRAPHS - the same
 ;   jnc .got                     ; ...this still reads the claim's CF
 ;
 ; IT IS YOUR TASK'S AND IT OUTLIVES THE CALL. That is what lets a package set
-; it, post OSAPI_MEM_COMPACT_WAKE, RETURN, and claim on the wake with the pass
+; it, post OSAPI_MEM_COMPACT's MEMC_POST, RETURN, and claim on the wake with the pass
 ; between having dropped only what the floor allowed. It is also why you lift
 ; it: a floor left standing lowers every later claim your task makes, which
 ; for the UI task is every other package's. The kernel lifts it for you when
@@ -1811,11 +1818,10 @@ MEMC_WHATIF_P equ 2              ; AH: MEMC_WHATIF in PARAGRAPHS - the same
 ; which is what every task starts with; 0 is "purge NOTHING", the honest ask
 ; for a program that would rather be refused than cost somebody a redraw.
 %define OSAPI_MEM_FLOOR     KERNEL_SEG:0x0425   ; AL = the level; preserves
-                                 ; every register and the flags. 0x0568 beside
-                                 ; it is RETIRED (stc/ret): it was
-                                 ; OSAPI_MEM_CLAIM_LVL, a claim carrying the
-                                 ; floor as an argument, which a floor set
-                                 ; once made a cell for nothing
+                                 ; every register and the flags. OSAPI_MEM_CLAIM_LVL,
+                                 ; the cell that once carried the floor as an
+                                 ; argument, is WITHDRAWN (SPEC.md 20.3.1): a
+                                 ; floor set once made it a cell for nothing
 %define OSAPI_WM_CLIP_TEST  KERNEL_SEG:0x014D   ; AX=x1, BX=y1, CX=x2, DX=y2 (inclusive);
                                  ; out CF=0 the whole rect is drawable (also
                                  ; when no clip is armed), CF=1 it is not.
@@ -2783,7 +2789,7 @@ SSI_WIN    equ 4                ; word: OPAQUE - the kernel's own window record.
                                 ; address you may do anything else with
 SSI_SEG    equ 6                ; word: the region's base segment
 SSI_SIZE   equ 8                ; word: its region in BYTES, 0 for a built-in
-                                ; and 0xFFFF for a 64KB one (SPEC.md 20.1.1)
+                                ; and at most 0xFE00 (SPEC.md 20.1.1)
 SSI_KB     equ 10               ; word: KB it holds off the claim heap
 SSI_NAME   equ 12               ; 16 bytes: its name, NUL-terminated
 SSI_CYC    equ 28               ; dword: cycles billed to its callbacks
@@ -3937,7 +3943,8 @@ EMS_PAGE     equ 16384          ; bytes a page, and a quarter of the frame
                                  ; typeface, and it works on all three
                                  ; adapters.
 ;
-; Your worker gets DX = your instance index, DS = ES = CS = KERNEL_SEG,
+; Your worker gets DX = your instance index, DS = CS = YOUR segment,
+; ES = KERNEL_SEG,
 ; IF = 1 and the gfx lock free. The binding rules, none of them enforced:
 ;
 ;  1. ONE worker per instance. A second OSAPI_TASK_SPAWN just refuses.
@@ -3963,7 +3970,8 @@ EMS_PAGE     equ 16384          ; bytes a page, and a quarter of the frame
 ;     every call to the part of your content that shows. OSAPI_WM_OBSCURED
 ;     is still there and still correct, but it vetoes the whole frame for
 ;     one covered pixel - prefer the clip.
-;  6. Your stack is SCH_STACK (384) bytes in LOW_SEG and SS != DS (see the header of
+;  6. Your stack is at least the class your header declares (OS88_STACK_*,
+;     128..384 bytes; 384 if you declare none) in LOW_SEG and SS != DS (see the header of
 ;     this file). No deep recursion, no big stack buffers, and BP-relative
 ;     operands address SS.
 ;  7. You may call: the gfx_* and font_* slots, OSAPI_SET_COLOR, OSAPI_GFX_PEN,
@@ -4004,7 +4012,7 @@ FERR_NAME    equ 3               ; malformed 8.3 name / bad argument
 FERR_NOENT   equ 4               ; no such file
 FERR_EXIST   equ 5               ; the target name already exists
 FERR_FULL    equ 6               ; no free clusters
-FERR_DIRFULL equ 7               ; the root directory is full
+FERR_DIRFULL equ 7               ; the current directory has no free slot
 FERR_PROT    equ 8               ; read-only/hidden/system/label/directory
 FERR_WPROT   equ 9               ; the media is write-protected
 FERR_BIG     equ 10              ; larger than the buffer (or than 64KB)
@@ -4127,7 +4135,7 @@ MENU_DIS    equ 1           ; an item string that BEGINS with this byte is
                             ; SPEC.md 47 is the standard for every disabled
                             ; control in the system.
 
-; --- window record layout (SPEC.md 11, 20 bytes) -------------------------------
+; --- window record layout (SPEC.md 11): 34 published bytes on kern_big, 28 on kern_small
 W_FLAGS   equ 0             ; word: bit0 = used, bit1 = visible, bit2 =
                             ; resizable, bit3 = fullscreen
 W_X       equ 2             ; word: frame left (screen coords)
@@ -4176,13 +4184,14 @@ W_TIMER   equ 32            ; word: the kernel's deadline, 0 = disarmed. Arm
                             ; it with OSAPI_WM_TIMER; do not write it
 MAX_WIN   equ 12
 
-; THE LAST THREE WORDS ARE kern_big's ALONE. The 128KB kernel's record STOPS
-; at 28 bytes (SPEC.md 13.8.2), so on that machine offset 28 is the NEXT
-; window's W_FLAGS and offset 32 is its W_W - naming any of the three there
-; reads, or writes, a window that is not yours. Install them with
+; THE LAST THREE WORDS ARE kern_big's ALONE. The 128KB kernel's PUBLISHED
+; words stop at 28 bytes (SPEC.md 13.8.2), and what follows there is the
+; kernel's own per-window state: offset 28 is that window's size-changed
+; handler, 30 its wake handler and 32 its close negotiator - naming any of
+; the three there overwrites a word the kernel dispatches through. Install them with
 ; OSAPI_WM_ONDRAG / OSAPI_WM_ONTIMER / OSAPI_WM_TIMER, which answer CF = 1 on
 ; the kernel that has neither, and never name these offsets yourself. That is
-; also why there is no WIN_SIZE here: the stride is 72 on one shipping kernel
+; also why there is no WIN_SIZE here: the stride is 74 on one shipping kernel
 ; and 65 on the other (kernel size pass 4 folded the side tables in), and a window INDEX never leaves the kernel anyway.
 
 ; THE RECORD LIVES IN KERNEL_SEG. On entry to any callback ES points there
@@ -5187,10 +5196,15 @@ OS88_BSS_SIZE equ 0
                                                 ; 8, a cell row is a single
                                                 ; store: no shift, no read, no
                                                 ; second byte, no fill pass.
-                                                ; Off that path it falls back
-                                                ; to fill+FONT_STR, so it is
-                                                ; never slower than doing it
-                                                ; by hand
+                                                ; On kern_big a VGA pair whose
+                                                ; planes nest (SPEC.md
+                                                ; 6.1.10.1) and an unaligned x
+                                                ; (6.1.11) are one pass too;
+                                                ; anything else falls back to
+                                                ; fill+FONT_STR, so it is never
+                                                ; slower than doing it by hand.
+                                                ; The pen ([gfx_color]) is
+                                                ; undefined after the call
 
 %define OSAPI_WM_TOP        KERNEL_SEG:0x01EC   ; out BX = the frontmost
                                                 ; VISIBLE window that is not
@@ -5666,8 +5680,9 @@ GLS_SZ    equ 14                 ; the walk state, in YOUR bss
 ; One TEXT buffer for the whole machine, living in the claim heap and sized to
 ; what is in it. It outlives the app that filled it - the owner is a kernel
 ; tag, not your instance - so copy in one program, close it, paste in another.
-; All three take no lock, touch no VRAM and do no I/O: legal from a window
-; callback AND from a worker (SPEC.md 20.6 rule 7).
+; All three take no lock, touch no VRAM and do no I/O, but they are legal from
+; a window callback (or the UI task) only - NOT from a worker (SPEC.md 55.4:
+; clip_put claims, and the copies are bursts between movable segments).
 %define OSAPI_CLIP_PUT      KERNEL_SEG:0x0268   ; ES:SI = the text, CX = its
                                  ; length. CX = 0 EMPTIES the clipboard and
                                  ; is not an error. Out CF=1 = refused (over
@@ -6602,8 +6617,10 @@ WHEEL_STEPS equ 3                ; LINES of text one wheel notch scrolls
                                  ; YOURS). Post an EVT_WAKE for it (SPEC.md
                                  ; 10, 74.1): the UI task pops it in order with
                                  ; the mouse events and calls the handler
-                                 ; above. Any context - ISR-safe and worker-
-                                 ; safe, no lock needed. out CF=0 a wake is
+                                 ; above. Any context - worker-safe, and
+                                 ; ISR-safe given SS = LOW_SEG (the event
+                                 ; ring is addressed through SS), no lock
+                                 ; needed. out CF=0 a wake is
                                  ; queued for that window - posted now, or one
                                  ; was ALREADY waiting, which is the same
                                  ; promise: the kernel keeps at most one queued

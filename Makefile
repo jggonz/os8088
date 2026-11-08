@@ -19,7 +19,7 @@
 # `make deps-check` is the same question with no install: it reports and exits
 # nonzero if anything is missing.
 #
-# .DEFAULT_GOAL IS NOT DECORATION. `all` is 1,800 lines down, and make takes
+# .DEFAULT_GOAL IS NOT DECORATION. `all` is far down the file, and make takes
 # the FIRST TARGET IN THE FILE as the default goal - so putting these two
 # rules up here, where a reader finds them, silently made `make` mean
 # `make deps`: a dependency report, no floppy built, exit 0. Naming the goal
@@ -2544,7 +2544,7 @@ STKLST = -l $(@:.bin=.lst) --before "[map all $(@:.bin=.map)]"
 # per make invocation, so making it a prerequisite here and excluding the two
 # rows keeps `make test-fast` complete on its own and runs each once under
 # `make`. `python3 tools/os88test.py fast` direct still runs them as rows.
-#> [Test] test-fast :: host-side regression tier (~2s); `all` already runs it
+#> [Test] test-fast :: host-side regression tier (budget 30s CPU); `all` already runs it
 test-fast: checkdocs $(SHIPIMGS) $(WEAVEWABS)
 ifeq ($(KNOBS),)
 	@OS88_PKGDEFS="$(PKGSBDEF)" python3 tools/os88test.py fast -x checkdocs -x docindex

@@ -23,11 +23,12 @@
 ; THIS MODULE HAS NO %ifdef IN IT - it is in both builds, entire.
 ;
 ; [cpu_tier] is one of CPU_8086 / CPU_286 / CPU_386 and [cpu_feat] carries the
-; four feature bits, with two writers that each own their bits (SPEC.md
+; five feature bits, with three writers that each own their bits (SPEC.md
 ; 84.6.2): xmem.inc writes the three memory bits, this module's probe writes
-; CPU_F_X87, and this module publishes the byte. Both are INITIALIZED DATA IN
-; .text, not .bss: -f bin zeroes nothing at boot, and the answer a machine
-; reads when the probe never ran has to be the safe one - the sw_avail /
+; CPU_F_X87, kern_mega's mega_enter writes CPU_F_PM, and this module publishes
+; the byte. Both are INITIALIZED DATA IN .text, not .bss, by choice: the
+; answer a machine reads when the probe never ran has to be the safe one,
+; and the image's own byte is that on every loader - the sw_avail /
 ; snd_live idiom of SPEC.md 32/34.7. cpu_detect writes the tier on every
 ; path. On kern_small nothing ever writes the three memory bits and they read
 ; 0, which is true - no gate verified, no HMA, no unreal mode - and is

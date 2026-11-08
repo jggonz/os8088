@@ -150,7 +150,7 @@ MODR_SIZE   equ 4               ; ...and that is the whole row. It was 8: two
                                 ; a power of two. The dead word went first and
                                 ; the padding with it - the live part had been
                                 ; the first four bytes for a while, and MOD_MAX
-                                ; is THREE, so the pad was wasting six.
+                                ; was THREE then, so the pad was wasting six.
 MODR_SHIFT  equ 2               ; ...still a power of two, so the id -> row
                                 ; conversion is shifts and never a multiply.
                                 ; ONE SITE reads it now - mod_row, which
@@ -467,7 +467,7 @@ mod_need:
     mov es, dx                  ; ...and NO second `mov si, [bx+MODR_FILE]`:
     mov cx, bp                  ; SI is still the one loaded for drv_find, and
 %ifdef ROM_ADOPT                 ; mem_claim_x banks SI/DI around everything
-    mov al, ROMF_COPY           ; including the compaction (memory.inc:520).
+    mov al, ROMF_COPY           ; including the compaction (memory.inc, mem_claim_x).
     call far [rom_mfp]          ; ...or the ROM has the bytes: the first CX
     jnc .rdone                  ; of the image to ES:0, and the read's own
                                 ; answer, AX = CX and DX = 0. A ROM that holds
@@ -983,7 +983,7 @@ mod_drop:
 ; needs no init entry point.
 ;
 ; What this routine is for is the OTHER thing: a row's resting value is not
-; zero. Every MODR_SEG must read mod_gone before the first thunk runs, or a
+; zero. Every mod_fp slot must read mod_gone before the first thunk runs, or a
 ; thunk that reaches its far call ahead of its own mod_need jumps to segment
 ; 0. mod_need cannot be trusted to be the only door, because a thunk with the
 ; test written the wrong way round still assembles.

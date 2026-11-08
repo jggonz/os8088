@@ -16,7 +16,8 @@
 ;                   0 now, and AL = 1 when the session comes back, at which
 ;                   point hbm_dosrun frees the claims and jumps to hbm_wake
 ;   mega_dosgo      at the handover: the staged launch block's kern_mega tail,
-;                   the IVT's tick and keyboard back to the BIOS's, and out of
+;                   the IVT's tick, keyboard and int 15h back to the BIOS's,
+;                   and out of
 ;                   protected mode - CR0 on a 386, the shutdown-0Ah reset on a
 ;                   286 (mega_r286's one branch) - into mega_dropr, which puts
 ;                   the 8259 back at 08h and enters the existing loader stub
@@ -33,6 +34,7 @@
 ; =============================================================================
 
 ; --- the kern_mega tail of the launch block, MIRRORED (kerndos/kdlaunch.inc) --
+; (by hand: tests/unit/t_mirror.py does not scan kerndos/)
 KDL_CAP     equ 10              ; dw KB the machine has: lowered to the park
 KDL_XBASE   equ 488             ; dd the XMS arena's linear base, 0 = none
 KDL_XKB     equ 492             ; dw ...and its KB
@@ -57,8 +59,9 @@ MPK_C_PACC  equ 0x3BC           ; dd the stub's own PIT clocks
 MPK_C_PPREV equ 0x3C0           ; dw ...and its last count
 MPK_C_KGDTR equ 0x3C2           ; 6 the kernel's GDTR...
 MPK_C_KIDTR equ 0x3C8           ; 6 ...and IDTR, which it loads last
-MPK_C_WAKE  equ 0x3CE           ; dd where it jumps then: mega_dwake for a
-                                ;    park, mega_hbwake for a hibernate (W5)
+MPK_C_WAKE  equ 0x3CE           ; dd where it jumps then: mega_dwake, the
+                                ;    only wake mega_dhcfill is given (a
+                                ;    hibernate's resume is megares.inc's now)
 MPK_C_END   equ 0x3D2
 MPK_MAGIC   equ 0x400           ; +400 dd 'PARK'
 MPK_NREG    equ 0x404           ; +404 dw regions the sum covers
@@ -232,7 +235,8 @@ mega_dhfree dw 0                    ; ...and the HMA's KB free then, which the
 MEGA_DMAPKB equ 768                 ; MPS_MAP's reach: past any conventional
                                     ; top - a bit a KB, set = in use
 mega_dnreg  dw 0                    ; the header's MPK_NREG...
-mega_dncpy  dw 0                    ; ...and MPK_NCPY (0 on a park)
+mega_dncpy  dw 0                    ; ...and MPK_NCPY: the bank's MPK_PCPY, a
+                                    ; runs park's later runs, the HMA save
 %if mega_dncpy - mega_dnreg != 2 || MPK_NCPY - MPK_NREG != 2
  %error "mega_dstubup copies mega_dnreg and mega_dncpy as one run"
 %endif
@@ -802,7 +806,7 @@ mega_dosparkf:
 .regs:
     ; --- the regions the sum covers -------------------------------------------
     mov word [mega_dnreg], 0
-    mov word [mega_dncpy], 0        ; (a hibernate's resume sets it)
+    mov word [mega_dncpy], 0        ; (counted up by the copies below)
     mov ax, [mega_dikb]             ; the park's IMAGE, in 64-byte lines
     call mega_dlines
                                     ; (KB x 16)

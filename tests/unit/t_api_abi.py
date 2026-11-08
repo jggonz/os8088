@@ -3,8 +3,8 @@
 
     python3 tests/unit/t_api_abi.py
 
-WHAT BREAKS, AND WHY NOTHING CATCHES IT TODAY.  SPEC.md 20.3's table is 8-byte
-cells at 0060:0010 + 8n, and `apps/os88api.inc` turns each address into a
+WHAT BREAKS, AND WHY NOTHING CATCHES IT TODAY.  SPEC.md 20.3's table is cells of
+several lengths packed from 0060:0010, and `apps/os88api.inc` turns each address into a
 `%define` a package FAR-CALLS.  The two halves live in different files, so
 they can disagree, and when they do nothing anywhere says so: the package
 assembles, loads, runs, and calls the wrong kernel routine.
@@ -98,7 +98,7 @@ SIX THINGS ARE CHECKED, and the last is the one worth the file.
   4. Every call target lands on a real `.text` symbol.  A displacement into
      the middle of a routine assembles and runs.
   5. Every cell inside the table's extent is accounted for: published here,
-     published to DRIVERS (`drivers/os88drv.inc` owns 0x0248), or on the
+     published to DRIVERS (`drivers/os88drv.inc` owns OSAPI_DRV_TASK, 0x01D9), or on the
      COMPAT list below.
   6. THE NAME AGREES WITH THE ROUTINE.  `OSAPI_GFX_LOCK` must reach
      `gfx_lock`.  Most match by the naming convention (`x`, `osapi_x`,
@@ -143,10 +143,9 @@ TABLE_BASE = 0x0010
 CELL = 8                # the LONGEST cell: the decode window, not the stride
 
 # Cells that exist in the kernel and are deliberately NOT published by this
-# branch's SDK. 0x01B8..0x01C8 are `main`'s three paragraph-counting arena
-# slots, kept live so a main-era package still runs and answered through
-# converting wrappers (apps/os88api.inc's "KB-counting memory slots" note);
-# new code uses the KB slots at 0x0200+. They are not a free list.
+# branch's SDK go in COMPAT, which is EMPTY. COMPAT_OLD is its record and
+# nothing reads it: kernel size pass 4 deleted every cell on it and moved the
+# table down (SPEC.md 20.3.1), so none of these numbers is a cell any more.
 COMPAT_OLD = {0x01B8: "main's OSAPI_MEM_ALLOC (paragraphs)",
           0x01C0: "main's OSAPI_MEM_FREE (paragraphs)",
           0x01C8: "main's OSAPI_MEM_AVAIL (paragraphs)",

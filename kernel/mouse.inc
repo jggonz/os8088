@@ -21,7 +21,9 @@
 ;
 ; The hotspot is the drawn position (0,0 of the cell); at the right and
 ; bottom screen edges the cell is clipped, never shifted;
-; mouse_x/mouse_y themselves range over the full 0..639 / 0..479.
+; mouse_x/mouse_y themselves range over the live screen, 0..[vid_wm1] /
+; 0..[vid_hm1] - or both displays' union on a two-display kern_big
+; (mou_clamp, SPEC.md 39.15.4).
 ; =============================================================================
 
 ; UART register offsets from a port's base: +1 IER, +2 IIR, +3 LCR, +4 MCR,
@@ -37,7 +39,7 @@ MOU_LOCKN   equ 8               ; CLEAN packets in a row from ONE port before
                                 ; have handed the mouse's slot to the modem.
                                 ; Clean, because what really separates a mouse
                                 ; from ASCII is that every byte is consumed -
-                                ; see mou_claim and SPEC.md 9.5. Eight costs
+                                ; see mou_byte and SPEC.md 9.5. Eight costs
                                 ; a fifth of a second of the first movement
                                 ; and nothing else: the packets before it are
                                 ; decoded and acted on like any other
@@ -313,7 +315,9 @@ CUR_BHY     equ 4               ; two hands MEET at - the centre of an 8x8 face
 ;
 ; The base decides the IRQ, because that is what the BIOS, DOS and every mouse
 ; driver ever written assume: 3F8 is IRQ4 and 2F8 is IRQ3. A card whose jumper
-; disagrees with its base address is out of scope here, as it was before.
+; disagrees with its base is still serviced where both rows are live - any
+; hooked line services every live port (SPEC.md 9.5.2, 9.5.2.1) - but a lone
+; card jumpered to the other line is not: only a live row's line is hooked.
 ; -----------------------------------------------------------------------------
 MOU_L4      equ 0x10            ; IRQ4's bit in the master 8259's OCW1 (0x21)
 MOU_L3      equ 0x08            ; ...and IRQ3's. Named because the ISR entries
@@ -1112,7 +1116,7 @@ section .text                   ; ...and the overlay's serial five end here
 ; mou_settle - THE CONTEST IS OVER AND THIS BACKEND WON (SPEC.md 9.5.1)
 ;
 ; The five state bytes, written in ONE place, because there are four backends
-; that can win one machine's contest - the serial run (mou_claim), the aux
+; that can win one machine's contest - the serial run (mou_byte's .pkt), the aux
 ; port (mou_p2_isr), a pointing DRIVER (osapi_mouse_feed, SPEC.md 9.12) and
 ; kern_emu's backdoor (vmm_boot_x, SPEC.md 9.11.2) - and four copies of a
 ; five-store sequence is four places for one of the stores to be left out.
@@ -1150,7 +1154,7 @@ section .text                   ; ...and the overlay's serial five end here
 ; second caller, because mou_p2_isr is KERN_BIG's and so is the driver
 ; (SPEC.md 51.0). Factoring for one caller there was MEASURED at +10 `.text`
 ; and it crossed a 512-byte image rung on a kernel that had three bytes left
-; in one; kern_small takes the macro inline in mou_claim instead, where the
+; in one; kern_small takes the macro inline in mou_byte instead, where the
 ; `cmp byte [mou_seen], 0` the routine would do is already two instructions
 ; above it, and pays +1 for the [mou_idany] that arm never used to set.
 ;
@@ -1247,7 +1251,7 @@ mou_lockon:
     mov cl, [bx+mou_masks]      ; the line its BASE says it is on...
     mov al, [mou_line]          ; ...against the one the mouse's packets
     or  al, al                  ; actually arrived on. Unknown (impossible:
-    jz .next                    ; mou_claim sets it with [mou_seen]) masks
+    jz .next                    ; the settle sets it with [mou_seen]) masks
     cmp cl, al                  ; nothing, because the failure is silent
     je .next                    ; and permanent
     in  al, 0x21
@@ -1291,7 +1295,7 @@ mou_lockon:
 ; card the port was never probed into existence, and with a healthy-but-idle
 ; mouse a cycle re-identifies it and the drain eats the burst. The one
 ; visible seam is that motion STARTED inside a drain window is eaten with it
-; - up to half a second, self-healing on the next packet - which is the price
+; - up to ~1 s (MOU_DRAINT), self-healing on the next packet - the price
 ; of never mistaking a PnP string for a click.
 ; -----------------------------------------------------------------------------
 mou_hotplug:
@@ -2197,7 +2201,9 @@ mou_p2_off:
     mov al, 0xA7                ; ...the auxiliary port switched off, so the
     call mou_p2cw               ; device is not even clocked...
     mov al, [mou_p2cmd0]        ; ...and the command byte back as the BIOS had
-    call mou_p2wcmd             ; it, IRQ12 bit and all
+    call mou_p2wcmd             ; it, IRQ12 bit and all - but with bit 5 SET
+                                ; (the aux clock off) and bit 4 clear, which
+                                ; is what mou_p2cmd0 holds
     pop ax
 .out:
     ret
@@ -2405,8 +2411,10 @@ mou_p2_byte:
 ; ---------------------------------------------------------------------------
 ; WHAT THIS COSTS, AND WHEN TO TAKE IT OUT AGAIN
 ;
-; 520 bytes of .text, which is two 512-byte steps of KERN_BUDGET: the spare
-; went 4,096 -> 3,584 -> 3,072. The first was decided on when the budget was
+; About 456 bytes resident on kern_big today (build/kernel.map, 2026-11-08:
+; kbm_tab..kbm_isr less mou_clamp 306, kbm_p5spend 16, kbm_pollm..kbm_ui 108,
+; kbm_post 9, state 17). It was 520 bytes of .text when it landed, two
+; 512-byte steps of KERN_BUDGET: the spare went 4,096 -> 3,584 -> 3,072. The first was decided on when the budget was
 ; at its OLD ceiling and that step was half the slack rather than an eighth of
 ; it, on the grounds that this is the difference between a usable machine and
 ; an unusable one at exactly the moment the mouse fails. The second bought
@@ -2423,7 +2431,6 @@ mou_p2_byte:
 ; poll and its deferred ladder, the kbm_poll in menu_track / ui_drag /
 ; ui_grow, and osapi_mouse). Recommend it to whoever is spending the budget
 ; rather than removing it unasked.
-; docs/KERNEL-MEMORY.md carries the same note beside the numbers.
 ; =============================================================================
 KBM_MIN     equ 3               ; px a press moves when the keys are tapped...
 KBM_ACC     equ 3               ; ...how much a repeat adds while one is held
@@ -2713,8 +2720,8 @@ kbm_move:
 ;
 ; in:       AX = x, BX = y, virtual, possibly outside every display
 ; out:      AX/BX legal
-; clobbers: AX, BX, flags. CX and DX SURVIVE - mou_isr still has the staged
-;           button byte in DX and kbm_move its step in DL.
+; clobbers: AX, BX, flags. CX and DX SURVIVE - mou_apply still has the
+;           buttons in CL and kbm_move its step in DL.
 ;
 ; ONE DISPLAY IS THE OLD PER-AXIS CLAMP, unchanged: [vid_wm1]/[vid_hm1] are
 ; display 0's extent there, and this is the same six compares the two callers
@@ -2795,12 +2802,15 @@ mou_clamp:
 ; the machine hides exactly the bug it exists to find.
 ;
 ; So the kernel reads the SCANCODE rather than the BIOS's translation of it.
-; This is the only place os8088 touches the keyboard hardware, and it does the
-; least a hook can do: it PEEKS port 60h and chains. On the 8088's 8255 the
+; This is the kernel's only int 09h hook (the PS/2 half reaches the same 8042
+; through port 64h, SPEC.md 9.9), and it does the least a hook can do: it
+; PEEKS port 60h and chains. On the 8088's 8255 the
 ; byte is latched in port A until the BIOS acknowledges it with bit 7 of port
 ; 61h, so reading it early is not consuming it - the real handler below reads
 ; the same byte and does all the work, including the ack, the shift states and
-; the EOI. Nothing here writes a port, queues a key or ends an interrupt.
+; the EOI. What this writes is the master 8259's mask around the ROM's call
+; (SPEC.md 9.8.3) and, on the self-chain refusal alone, an EOI; it queues no
+; key.
 ;
 ; WHETHER THE BIOS DISCARDS IT IS A PROPERTY OF THE BIOS, NOT OF THE MACHINE
 ; CLASS, which is why this is installed on every tier and not only on the
@@ -3735,7 +3745,7 @@ mou_isr_body:
     mov cx, [ticks]             ; peer's 2400 into our 1200 - and no mouse,
     mov [bx+mou_errt], cx       ; which at its own rate makes none. CX is
 .clean:                         ; free here (mou_byte spends it anyway).
-                                ; mou_claim will not count this port until
+                                ; mou_byte's run will not count this port until
                                 ; it has been clean for MOU_ERRQ. 12 bytes,
                                 ; EVEN, so the hot code after it keeps its
                                 ; parity (tests/unit/t_hotpar.py)
@@ -3983,12 +3993,14 @@ mou_byte:
 ; task runs while one is inside MOUPRIV_ENTER, and nothing here re-enables
 ; interrupts.
 ;
-; IT SWAPS UNCONDITIONALLY where MOUPRIV_ENTER tests SS first, and that is
-; ten bytes of the difference. The macro's test exists because a ROM service
-; the kernel calls with IF=1 may have switched stacks under an ISR (SPEC.md
-; 7.4's int 13h); this is not an ISR, it is a plain task call, and SS is
-; LOW_SEG in every os8088 task context by SPEC.md 1. Nor does either store
-; need the macro's cs: override: an X cell arrives with DS = KERNEL_SEG.
+; IT SWAPS SP ALONE where MOUPRIV_ENTER banks and loads SS as well (SPEC.md
+; 9.10.1). The macro's SS half exists because a ROM service the kernel calls
+; with IF=1 may have switched stacks under an ISR (SPEC.md 7.4's int 13h). The
+; feed assumes SS = LOW_SEG, as in every os8088 task context by SPEC.md 1 -
+; true of a CH375 report from the worker, but NOT guaranteed on USBMOUSE.DRV's
+; PicoMEM path, which calls in from inside the card's IRQ handler and so
+; inherits whatever SS that interrupted. Nor does either store need the
+; macro's cs: override: an X cell arrives with DS = KERNEL_SEG.
 ; -----------------------------------------------------------------------------
 MOU_FEEDROW equ 8               ; [mou_port] once a DRIVER has won. Past
                                 ; MOU_P2ROW and distinct from kern_emu's
@@ -6280,7 +6292,7 @@ cur_dprev   db 0                ; the one to put back afterwards (39.15.2).
 mou_old_off dw 0, 0             ; the vectors we displaced, per port row
 mou_old_seg dw 0, 0
 ; The decoder, PER PORT ROW (stride 2, so [bx+...] indexes it directly - the
-; odd byte of each pair is padding and costs 4 bytes in all). The two ports
+; odd byte of each pair holds that row's mou_b0, below). The two ports
 ; decode independently, which is what stops either one corrupting the other's
 ; packets or resetting the other's run (SPEC.md 9.5).
 mou_phase   db 0,0,0,0          ; packet state: 0 idle, 1 got b0, 2 got b1,
@@ -6405,7 +6417,7 @@ mou_hpt     dw 0                ; the ONE tick stamp the poller measures from:
 mou_drain   db 0                ; ISR discards RX while set (armed by a
 mou_dstamp  dw 0                ; hot-plug raise; expires MOU_DRAINT later)
 mou_line    db 0                ; the 8259 bit of the line the WINNING packets
-                                ; came in on, banked by mou_claim beside
+                                ; came in on, banked by MOU_SETTLE_STORES beside
                                 ; [mou_seen]. 0x10 = IRQ4, 0x08 = IRQ3, 0 =
                                 ; not settled. Published because a machine
                                 ; whose mouse is at 2F8 on IRQ4 (SPEC.md
@@ -6430,8 +6442,9 @@ mou_ptr     db 0                ; A POINTING DEVICE HAS PROVEN ITSELF, whichever
                                 ; as long as serial was the only backend, and
                                 ; the reason the keyboard mouse stayed switched
                                 ; on next to a working PS/2 one. Set beside
-                                ; [mou_seen] in mou_claim and in mou_p2_byte at
-                                ; its settle; never cleared. BELOW
+                                ; [mou_seen] by MOU_SETTLE_STORES (every
+                                ; backend's settle) and by vmm_boot_x's copy;
+                                ; never cleared. BELOW
                                 ; the published span on purpose: 9.4.2's block
                                 ; is read by offset off a floppy and nothing
                                 ; may be inserted into it
@@ -6453,7 +6466,8 @@ mou_p2id    db 0                ; the device ID it answered the reset with - 0
                                 ; is a plain mouse. Banked and published, never
                                 ; tested: a wheel mouse in its 3-byte boot mode
                                 ; is exactly the mouse this decoder wants
-mou_p2ph    db 0                ; packet state: 0 idle, 1 got b0, 2 got b1
+mou_p2ph    db 0                ; packet state: 0 idle, 1 got b0, 2 got b1,
+                                ; 3 a wheel mouse's Z byte owed (SPEC.md 9.9.8)
 mou_p2b0    db 0                ; byte 0: YV XV YS XS 1 MB RB LB
 mou_p2b1    db 0                ; byte 1: the X magnitude
 mou_p2cmd0  db 0                ; the 8042's command byte AS THE BIOS LEFT IT,

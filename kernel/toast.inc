@@ -58,11 +58,12 @@
 ; menu_inval, and no drawing routine at all.
 ;
 ; TWO ENTRY POINTS FOR CALLERS and they are on opposite sides of a lock:
-; toast_show STAGES and never draws, toast_pass (the UI task's idle pass)
-; draws. That is what makes the context rule `any` - a window callback holds
+; toast_show STAGES, and draws on the spot only for a caller that provably
+; holds the lock (toast_now, SPEC.md 59.4); toast_pass (the UI task's idle
+; pass) draws the rest. That is what makes the context rule `any` - a window callback holds
 ; the gfx lock, a worker holds nothing, kernel file code holds it too, and
-; gfx_lock is not reentrant. Deferring gives ONE drawing site, which is also
-; the ONE expiry site, and puts it where this tree already spends deferred
+; gfx_lock is not reentrant. Deferring gives ONE expiry site, which is also
+; the drawing site for every caller that does not hold the lock, and puts it where this tree already spends deferred
 ; flags ([fm_fchk], [cp_dirty], [desk_zdirty]). The cost is up to one pass of
 ; latency - a tick - on a three-second message.
 ;
@@ -115,7 +116,7 @@ TOAST_TICKS equ 55              ; ~3.0 s at 18.2 Hz: long enough to read eight
                                 ; that it is gone before it becomes furniture
 TOAST_SCAN  equ 256             ; bytes of the caller's string examined before
                                 ; the copy gives up. Generous against any real
-                                ; message (the buffer keeps 23) and the whole
+                                ; message (the buffer keeps TOAST_MAX) and the whole
                                 ; of the defence: the scan runs interrupts-off
                                 ; through a package-supplied pointer, and
                                 ; without a byte bound a segment holding no
@@ -191,8 +192,9 @@ toast_scov:  db 0               ; and 1 = it is over the CLOCK and hides the
 ; property of where the strip happens to live.
 ;
 ; The stage runs with interrupts off: a worker task and the UI task can both
-; raise, and a half-copied buffer would letter as garbage. 23 bytes of
-; rep-less movsb is ~475 clocks, ~100 us against a 55 ms tick.
+; raise, and a half-copied buffer would letter as garbage. Up to 24 kept bytes
+; of the filtered `es lodsb` loop is ~2,000 clocks, ~0.5 ms, and a hostile
+; 256-byte scan ~14,000, ~3 ms (estimated), against a 55 ms tick.
 ; -----------------------------------------------------------------------------
 toast_show:
     call kent_di                ; = push ax/bx/cx/dx/si/di. BX is not spent
@@ -314,7 +316,8 @@ toast_show:
 ; toast_say - say entry AL of a word table of NUL strings
 ; in:       AL = index (0 = nothing to report, which is how every one of these
 ;           tables spells it), BX = the table, CX = its length in entries
-; out:      nothing - all registers AND the flags preserved
+; out:      nothing - all registers AND the flags preserved. FAR: it ends in
+;           retf, so .cold reaches it through ct_toast_say
 ;
 ; The kernel's own verdict tables (`fm_errtab`, `fm_stattab`) are arrays of
 ; string pointers indexed by a FERR_*/LD_* code, and every caller of this was
@@ -396,12 +399,10 @@ toast_now:
                                 ; %if there holds them to it. The flag is
                                 ; strictly 0 or 1 - every writer was read, and
                                 ; the comment beside the declaration says so.
-                                ; Torn reads cannot lie either: gfx_lock writes
-                                ; flag then owner inside its own cli window and
-                                ; gfx_unlock writes owner FIRST then flag, so
-                                ; the only interleaving visible is (1, 0xFF) =
-                                ; 0xFF01, which this refuses exactly as the two
-                                ; byte compares did; and an 8086 takes
+                                ; Torn reads cannot happen either: gfx_lock's
+                                ; .take and gfx_unlock each write flag and
+                                ; owner in ONE word store (vga12.inc), so no
+                                ; half-written pair is ever visible; and an 8086 takes
                                 ; interrupts only at instruction boundaries, so
                                 ; the word read is atomic
     cmp byte [sch_cur], 0       ; ...and task 0 - ui_task (kernel.asm's kmain
@@ -419,9 +420,9 @@ toast_now:
                                 ; steps this wrote out itself (kernel size
                                 ; pass 14: 6 bytes; fpg_bare spends BX).
                                 ; Done now because the idle pass that would
-                                ; carry it to VRAM does not come until the
+                                ; draw it does not come until the
                                 ; operation this announces is over (SPEC.md
-                                ; 32) - fpg_begin's reasoning exactly.
+                                ; 59.4) - fpg_begin's reasoning exactly.
                                 ; BX, which fpg_bare spends, is NOT banked:
                                 ; toast_show leaves by kret_di straight after,
                                 ; which puts it back as it does AX (kernel
@@ -630,7 +631,7 @@ toast_pass:
 .out:                           ; bar rather than straight to the field is
                                 ; what keeps wm_fs_vis's guard in front of it:
                                 ; a fullscreen window is over these pixels and
-                                ; the message waits for it to end
+                                ; the strip is not drawn while it is covered, and its seconds still run
     pop ax
     ret
 
@@ -649,8 +650,8 @@ toast_pass:
 ; in:       anything, lock held or not
 ; out:      nothing - all registers AND THE FLAGS preserved
 ;
-; Does not draw. Two of its three callers hold the gfx lock (fpg_begin,
-; inst_free's teardown) and one is inside toast_show's cli window; the pixels
+; Does not draw. Its callers are toast_show's retire (inside its cli window)
+; and toast_owner_gone (instance teardown, lock held or not); the pixels
 ; go back on toast_pass's next look, which is a tick away at worst.
 ; -----------------------------------------------------------------------------
 toast_kill:

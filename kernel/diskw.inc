@@ -2,16 +2,19 @@
 ; os8088 - diskw.inc
 ;
 ; The FAT write path (SPEC.md 18.4). disk.inc reads a data floppy; this
-; module is the only one that modifies one, and the only caller of
-; disk_write anywhere in the kernel. Five public routines - dskw_write,
-; dskw_read, dskw_delete, dskw_rename, dskw_dfree - are the whole surface,
+; module makes every FILE-level change to one - though it is not the only
+; caller of disk_write: the disk cloner (diskops.inc), the Control Panel's
+; boot-sector byte (driver.inc's cpc_fdbs) and FSCHECK.DRV (fsck.inc) write
+; sectors beneath it. Five public routines - dskw_write,
+; dskw_read, dskw_delete, dskw_rename, dskw_dfree - were the first surface,
 ; and read and write are ONE routine each: both take a far pointer and a
 ; 32-bit count, so there is no separate big-file entry point any more
 ; (SPEC.md 18.4.1; its slot 0x0190 has since gone to OSAPI_VOL_KIND),
-; for the OS and for packages alike (they ARE the API cells 0x0120..0x0140,
+; for the OS and for packages alike (they ARE the API cells 0x0103..0x0118,
 ; SPEC.md 20.3): whole files, by name, in the volume's CURRENT directory
-; (SPEC.md 19.2 - [dsk_cwd], which dsk_chdir moves). No handles, no seek,
-; no partial rewrite, no paths: a name is resolved in one directory, the
+; (SPEC.md 19.2 - [dsk_cwd], which dsk_chdir moves). No handles and no
+; paths - the chunked and positioned doors (SPEC.md 18.4.4-18.4.9) came
+; later and are bodies here too: a name is resolved in one directory, the
 ; one the volume is currently sitting in. dskw_mkdir joins them as the
 ; sixth (SPEC.md 18.5) and dskw_rmdir as the seventh (SPEC.md 18.6) - the
 ; two that act on a directory rather than on a file, and the two the API
@@ -477,8 +480,9 @@ dskw_wrap7:
 ;      16 bits at the SPEC.md 18.2-legal spc = 128); CF=1, AX = FERR_*
 ; clobbers: AX/BX/DX (the outputs), CF
 ;
-; Answered entirely from the resident FAT snapshot - NO DISK I/O, WHICH IS NOT
-; THE SAME AS CHEAP. dsk_free_clus_x counts every entry in that snapshot, so
+; Answered by counting the FAT - no disk I/O on a floppy, whose FAT is wholly
+; resident, but FAT re-reads through the window on a FAT16 partition (SPEC.md
+; 18.8) - AND NEITHER IS CHEAP. dsk_free_clus_x counts every entry, so
 ; this is O(clusters) of CPU: ~105ms a call on a 20MB hard disk on the field's
 ; 4.77MHz 8088, measured (SPEC.md 18.4.5). The sentence that used to be here -
 ; "so a package may call it as freely as it likes" - is what apps/ftpd read
@@ -492,8 +496,8 @@ dskw_dfree_x:
     mov bl, [dsk_spc]           ; (SPEC.md 22.7), so the two cannot disagree.
     xor bh, bh                  ; BX is this routine's own output and `mul dx`
     mov dx, bx                  ; writes DX:AX only, so one load serves both
-    mul dx                      ; DX:AX = free sectors (DX = 0: free
-                                ; clusters * spc <= TotSec16 <= 5,760)
+    mul dx                      ; DX:AX = free sectors (under 2^22:
+                                ; clusters < 65,525 and spc <= 64)
     mov cx, 9                   ; bytes = sectors * 512, in 32 bits
 .shift:
     shl ax, 1
@@ -1281,7 +1285,7 @@ dskw_rt_scan:
     mov [dskw_cursec], dx       ; ...and its high word is the walker's
 
     call dskw_hit               ; the WHOLE entry, and where it is - exactly
-                                ; as dskw_find does, so dskw_rt_zap can
+                                ; as dskw_find does, so rtbody's .lfn can
                                 ; rewrite the slot without a name lookup
                                 ; (dskw_find refuses to match an LFN entry at
                                 ; all, by design)
@@ -1903,8 +1907,9 @@ dskw_last_p:
 ;
 ; The size compare is 32-bit against the caller's capacity and happens
 ; BEFORE any data I/O, so FERR_BIG always leaves the destination untouched.
-; A size field whose sector count would not fit 16 bits (>= 32MB) cannot be
-; a real chain on any volume this kernel mounts (TotSec16 <= 65,535) and is
+; A size field whose sector count would not fit 16 bits (>= 32MB) is past
+; what this path can count ([dskw_rem] is 16 bits; kern_big mounts bigger
+; volumes, SPEC.md 18.7.5, but no caller's buffer holds such a file) and is
 ; refused as FERR_IO up front: a wrapped count could otherwise make the
 ; chain walk STOP EARLY and report success over a hostile entry (SPEC.md 18
 ; - every byte off the disk is hostile input).
@@ -2216,7 +2221,7 @@ dskw_rbody:
 ;
 ; dskw_wdata's twin, and since size pass 10 its BODY too (dskw_xclus), and coalescing the same way (SPEC.md 18.4.2): whole
 ; sectors are APPENDED TO A PENDING RUN rather than read here, and the run is
-; spent by dskw_rflush when the LBA stops being contiguous, when its DMA page
+; spent by dskw_flushrun when the LBA stops being contiguous, when its DMA page
 ; is full, or at the end. A run crosses CLUSTER boundaries, which is the whole
 ; point - a file laid down contiguously is one run per track. The partial
 ; final sector stages through dsk_secbuf with only its live bytes copied out,
@@ -2866,7 +2871,8 @@ dskw_nbody:
 ; always the debt (SPEC.md 18.4 rule 3). The invariant above is about what
 ; the snapshot IS, never about how soon: a mount snapshot or nothing at all,
 ; and the empty-listing-plus-debt this leaves is the second of those - the
-; identical state a quiet mount publishes (18.9), paid by dsk_relist. What
+; identical state a quiet mount publishes (18.9), paid by the next mount
+; that lists (dsk_relist, which paid it, is deleted - SPEC.md 18.4). What
 ; that buys is every write the user cannot see, and the Control Panel is the
 ; measured case: 3 mounts and 47 sectors to save SYSTEM.CFG while the user
 ; is on B:, none of which changed a pixel.
@@ -2898,7 +2904,7 @@ dskw_sync_x:
     mov word [disk_nfiles], 0   ; ...otherwise publish the EMPTY listing and
     mov byte [dsk_lstale], 1    ; the debt, exactly the state a quiet mount
                                 ; leaves (18.9): a wrong listing is worse than
-                                ; no listing, and dsk_relist is the payment
+                                ; no listing, and the next listing mount pays
 .defer:
     ret
 
@@ -2969,7 +2975,7 @@ dskw_stat_x:
 
 ; -----------------------------------------------------------------------------
 ; dskw_clbytes - bytes per cluster
-; out: AX = [dsk_spc] * 512 (a power of two, <= 32,768 by mount rule 8)
+; out: AX = [dsk_spc] * 512 (a power of two, <= 32,768 by mount rule 4)
 ; clobbers: AX (the output), flags
 ; -----------------------------------------------------------------------------
 dskw_clbytes:
@@ -3011,7 +3017,8 @@ dskw_clbytes:
 ;
 ; TWO PRECONDITIONS, both refused rather than mis-read, and both the same
 ; discipline dskw_append carries at the other end: the offset and the
-; capacity must each be a whole number of CLUSTERS. That is what makes the
+; capacity must each be a whole number of CLUSTERS on kern_small, and of
+; SECTORS on kern_big (SPEC.md 18.4.4.2). That is what makes the
 ; resume point exact and lets one dsk_read_chain call serve a chunk. A caller
 ; asks OSAPI_FILE_DFREE for the cluster size, which has always answered it.
 ; The FINAL chunk is the exception the arithmetic makes for itself: the take
@@ -3134,7 +3141,7 @@ dskw_read_at_x:
     jae .eof
 .inrange:
 %ifdef KERN_SMALL
-    mov cx, [dwr_clb]           ; a POWER OF TWO (mount rule 2: spc is), so
+    mov cx, [dwr_clb]           ; a POWER OF TWO (mount rule 4: spc is), so
     dec cx                      ; each remainder below is a mask - dskw_wabody's
 %else                           ; test - where it was two `div`s (-6, and
     mov cx, 511                 ; ~300 cycles a call). kern_big's are whole
@@ -3162,9 +3169,9 @@ dskw_read_at_x:
     mov [dwr_take], ax
 
     ; --- walk to the cluster holding the offset ------------------------------
-    ; offset / cluster_bytes, and one div is enough: a volume caps at 65,535
-    ; sectors (SPEC.md 18.7), so the offset is under 33MB and its high word is
-    ; under 512 - which is at or below every cluster size there is.
+    ; offset / cluster_bytes, and one div: a REAL file's quotient fits 16 bits
+    ; (a volume holds under 65,525 clusters), but the offset is bounded only
+    ; by the entry's size, and a hostile size can overflow it - unguarded.
     mov ax, [dwr_off]
     mov dx, [dwr_off+2]
     div word [dwr_clb]          ; AX = clusters to skip
@@ -3674,7 +3681,7 @@ dws_hlose:
 ;
 ; ONE BODY, TWO DOORS, and an append is a write-at whose offset is the file's
 ; size: the append door enters with the offset's high word 0xFFFF, which no
-; real offset can carry (a volume caps at 32MB), and the body substitutes the
+; real offset can carry (no FAT16 volume reaches 4GB), and the body substitutes the
 ; size once it has the entry in hand. That is what turns the append's own
 ; precondition - the size must be a whole number of clusters (SPEC.md 18.4.4)
 ; - into the SAME test the write-at makes on any offset: it must land on a
@@ -3927,10 +3934,12 @@ dskw_wabody:
     jmp short .atclus
 .div:
 %endif
-    mov ax, [dwr_off]           ; clusters to skip. One div is enough: the
-    mov dx, [dwr_off+2]         ; offset is under 33MB (SPEC.md 18.7), so its
-    div bx                      ; high word is under 512, which is at or below
-    xchg cx, ax                 ; every cluster size there is
+    mov ax, [dwr_off]           ; clusters to skip. One div: a REAL file's
+    mov dx, [dwr_off+2]         ; quotient fits 16 bits (a volume holds under
+    div bx                      ; 65,525 clusters), but an APPEND's offset is
+    xchg cx, ax                 ; the entry's size, which a hostile disk can
+                                ; make overflow it - unguarded here, unlike
+                                ; .trunc's (SPEC.md 18.4.7.5)
     jcxz .walk                  ; an empty file owns no cluster to stop on -
     sub cx, bp                  ; the entry's head reads 0 below. Otherwise a
                                 ; grow stops ON the last cluster, one step
@@ -6729,7 +6738,7 @@ dskw_czseg:   resw 1            ; ...and the segment it expands INTO - the
 %ifdef KERN_MEGA
 dskw_czsrc:   resw 1            ; ...and ABOVE 1MB the packed bytes' OFFSET,
                                 ; banked before the read: that read moves
-                                ; [dskw_src] on a run at a time (dskw_rflush).
+                                ; [dskw_src] on a run at a time (dskw_flushrun).
                                 ; A WRITE banks byte 0 here too, for the
                                 ; stamp (dskw_wdata, dskw_czstamp)
 %endif

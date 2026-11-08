@@ -140,12 +140,16 @@ The five rows: `bootsmoke` (boots to a desktop on both 1bpp adapters),
 (kern_small builds and boots on its floor machine), `ps2mouse` (mouse and
 keyboard work), `ctoolchain` (the C toolchain produces a package).
 
-Five more are the owner's ratchets, put in `full` at his word rather than by
+Six more are the owner's ratchets, put in `full` at his word rather than by
 the rules above, and **not precedents**: `megahigh`, `sysfree`,
-`guidelock-full`, and the pin ratchet's two halves - `pins` (every heap claim
+`guidelock-full`, `noovl` (SPEC.md 19.11), and the pin ratchet's two halves - `pins` (every heap claim
 in the source declares itself movable or has a line in `tests/pins.txt`) and
 `pinsrt` (the same buckets read back out of `mem_tab` on MartyPC,
 docs/plans/NO-PINNING-PLAN.md 4.1).
+
+Three more sit in `full` against the rules above and are `soak` candidates:
+`w16censall` (one program family), `knobself` (a tool's own check) and
+`khpknobs` (knob builds).
 
 ---
 

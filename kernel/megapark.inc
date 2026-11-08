@@ -15,9 +15,9 @@
 ;      DX:BX = the sum, CX = KB parked and SI:DI = the park's base, from
 ;      somewhere the header is NOT - kd_unpark's launch block, below 1MB -
 ;      so a header a stray write shrank cannot restore too little and still
-;      agree with itself (KERN-MEGA-DOS-PLAN 10.4). A resume passes its own
-;      cells (mega_hbgof); W7's probe, which after a reset has nothing else,
-;      passes the header's
+;      agree with itself (KERN-MEGA-DOS-PLAN 10.4). W7's probe, which after
+;      a reset has nothing else, passes the header's own. (A hibernate's
+;      resume no longer comes through here: kernel/megares.inc.)
 ; out: the restore and a far jump to mega_dwake through the kernel's own
 ;      tables, or - the sum differs - a sentence, a key and a restart
 ;
@@ -152,9 +152,10 @@ mpk_stub:
     cmp dx, [MPK_C_PSUM + 2]
     jne .bad
     MPKMARK 42, 'S'                 ; the sum agrees
-    ; --- a hibernate's COPIES, before the restore (W5; 0 on a park) ----------
-    ; the tables and every pool block, from where the resume read them into
-    ; this block to where the image had them. This stub runs on its own GDT
+    ; --- THE COPIES, before the restore (MPK_NCPY) ----------------------------
+    ; the banked table bytes back into the kernel's tables (MPK_PCPY), a runs
+    ; park's later runs out of the image, and the HMA's 64KB (MC4). This stub
+    ; runs on its own GDT
     ; with IF = 0 and NMI off, so the kernel's GDT, LDT and IDT are only data
     mov bp, [MPK_NCPY]
     mov si, [MPK_NREG]

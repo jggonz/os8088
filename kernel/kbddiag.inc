@@ -21,8 +21,9 @@
 ; is safe to read twice - port 64h (status, no side effect) before the ROM's
 ; handler and port 60h AFTER it, when the 8042 has already handed the byte
 ; over and a re-read returns the same byte and consumes nothing. So the ROM
-; sees exactly the hardware state it sees on a plain kernel; the one thing
-; that changes is that kbm_isr CALLS the ROM rather than jumping to it.
+; sees exactly the hardware state it sees on a plain kernel. What changes is
+; kbg_pre and kbg_post around the ROM's call - and that, unlike the shipped
+; kernel's call (SPEC.md 9.8.3), this one is made with every IRQ still open.
 ;
 ; Drawn with font_run (SPEC.md 6.6): every line is padded to KBG_W cells, so
 ; the padding is the erase and nothing is drawn twice.

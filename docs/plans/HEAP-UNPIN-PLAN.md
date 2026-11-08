@@ -623,8 +623,8 @@ callback cannot reach"*, one level worse, because here the holder is a second
 image rather than a kernel table. Only a `DRVV_RELOC` verb reaches them.
 
 **The user's "unload and remount" is not hypothetical. This tree already does it,
-twice, and it is 91 bytes.** `hbm_detach`/`hbm_reload` (kernel/hiber.inc:1321,
-called at :1202 and :1258 — 61 and 30 bytes) unload every driver whose state is
+twice, and it is 91 bytes.** `hbm_sweep`/`hbm_reload` (kernel/hiber.inc; `hbm_detach` at :1321 when this
+was written, called at :1202 and :1258 — 61 and 30 bytes then) unload every driver whose state is
 *hardware* before a hibernate image is written and reload them from a bitmask
 afterwards, deliberately keeping `DRVC_DISK` and `DRVC_FILE` loaded *"because
 their state is memory"* (SPEC.md 87.4 step 2). And `ss_reap_x`

@@ -6,7 +6,8 @@
 ; (index 0x3CE / data 0x3CF) and Sequencer (0x3C4/0x3C5) directly - both
 ; byte-identical on an EGA, which runs this same code in mode 10h at 350
 ; rows ([vid_mono] = 0, SPEC.md 39.24). The width and stride are 640/80 on
-; both; only the two bottom-edge clips here read the live [vid_ch].
+; both, and the planar row steps are ROW_BYTES; every clip reads the live
+; screen ([vid_cw]/[vid_ch], or [vid_cwm1]/[vid_chm1] in gfx_rect_setup).
 ;
 ; Conventions (SPEC.md 1, 5, 7):
 ;   - Solid fills use Set/Reset (GC0 = color, GC1 = 0Fh) with the Bit Mask
@@ -17,8 +18,8 @@
 ;     including full interior bytes - because the ALU XORs against the latch
 ;     contents. rep stosb is only used for the interior of replace-mode
 ;     fills, where the latches are irrelevant.
-;   - Every routine clips to 0..639 / 0..479 and leaves the GC/Sequencer in
-;     the default state on return: Set/Reset enable = 0, Bit Mask = FF,
+;   - Every routine clips to the live screen, 0..[vid_cwm1] / 0..[vid_chm1],
+;     and leaves the GC/Sequencer in the default state on return: Set/Reset enable = 0, Bit Mask = FF,
 ;     function = replace, rotate 0, Map Mask = 0Fh, Read Map = 0, mode 0.
 ;   - Drawing routines run with the gfx lock held (SPEC.md 1.6), so the
 ;     module-private scratch variables below need no interrupt guard: the
@@ -30,11 +31,11 @@ VGA_SEQ     equ 0x3C4           ; Sequencer index port (data +1)
 
 gfx_mono1       dw 0            ; THE WINDOW BEING DRAWN HAS DECLARED ITS
                                 ; CONTENT TWO COLOURS (SPEC.md 11.96.17.1), so
-                                ; font_ink takes its mono path here as well -
-                                ; reducing the ink to 00h/FFh, which the glyph
-                                ; loop turns into colour 0 and 15 across all
-                                ; four planes, and stippling a disabled one
-                                ; instead of leaving it solid CDGRAY. Set by
+                                ; font_run's planar prologue stipples a
+                                ; disabled run instead of leaving it solid
+                                ; CDGRAY, and gfx_pen_dis rounds the pen to
+                                ; black (font_ink, the 1bpp renderer's, never
+                                ; sees a VGA). Set by
                                 ; wm_pkgcall (stacked, so a repaint pass that
                                 ; calls several windows' callbacks answers
                                 ; WHOSE) and by wm_clip_set (for a background
@@ -298,10 +299,12 @@ gfx_lock_flag   db 0            ; drawing mutex (SPEC.md 7); **strictly 0 or 1
                                 ; byte and the next AS ONE WORD (`cmp word
                                 ; [gfx_lock_flag], 1` = held, and held by task
                                 ; 0), and that test dies SILENTLY if this ever
-                                ; becomes a depth. Four writers in the tree and
-                                ; no fifth: :5303 (1), :5384 (0), sched.inc
-                                ; :1683 (0) and :1699 (the value banked at
-                                ; :1677).
+                                ; becomes a depth. The writers: gfx_lock and
+                                ; gfx_unlock (one word store each, with the
+                                ; owner), sched.inc's KFZ strip (forced 0,
+                                ; then the banked value back) and, on
+                                ; kern_mega, mega.inc's fault and strip paths
+                                ; - grep `gfx_lock_flag]` before adding one.
                                 ; Initialized data and NOT .bss - not because
                                 ; .bss is unzeroed (it arrives zeroed, SPEC.md
                                 ; 2.6) but because gfx_lock_own below cannot
@@ -1121,7 +1124,7 @@ gfx_lstepv:
 ; gfx_ls_d2, gfx_ls_d4, gfx_pt_rmax ([vid_rowmax] + oy), gfx_pt_rtab
 ; (vid_rowtab - 2*oy), gfx_pt_kx (ox >> 3, exact: an origin is a multiple of 8)
 ; and gfx_pt_f are members of THE PRIMITIVE UNION at the foot of this file
-; (size pass 9) - gfx_pt_resolve rewrites all five at every call's .pass.
+; (size pass 9) - gfx_points' .pass rewrites them at every call.
 ; gfx_pt_f is ONE BYTE, not three. PT_OOB is set by gfx_ls_box, PT_2ND by the
 ; tail below, and "did THIS call hook?" is not stored at all - [gfx_dnest]
 ; answers it, because the gate refuses to hook unless it found that byte zero,
@@ -1722,12 +1725,12 @@ vga_b4out:
 ; Every caller in the tree draws its own now, through apps/os88gfx.inc, and
 ; commits with gfx_points or gfx_blit1.
 ;
-; WHAT STAYED, and it is the interesting half: gfx_ls_ink, gfx_ls_box,
-; gfx_ls_addr and gfx_ls_lx/ly. gfx_points needs all four - the clip rect a
-; point falls in, its byte and bit, the ink class and the second display's
-; translation - which is 5.12.5's point seen from the kernel side. The six
-; per-call concerns did not move into the apps, so the routines that answer
-; them did not either.
+; WHAT STAYED, and it is the interesting half: gfx_points still needs the
+; clip rect a point falls in, its byte and bit, the ink class and the second
+; display's translation - which is 5.12.5's point seen from the kernel side.
+; gfx_ls_box is still a routine; the ink class, the byte and bit and the
+; translation are inline in gfx_points now. The per-call concerns did not
+; move into the apps, so the code that answers them did not either.
 ; -----------------------------------------------------------------------------
 
 ; -----------------------------------------------------------------------------
@@ -1739,19 +1742,24 @@ vga_b4out:
 ;           BP    = source stride in bytes (one row to the next)
 ;           AX    = destination x, BX = destination y (screen coords)
 ;           CX    = width in pixels (> 0), DX = height in rows (> 0)
-; out:      nothing; every register preserved. [gfx_color] is left holding
-;           the last colour drawn.
+; out:      nothing; every register preserved. [gfx_color] is UNSPECIFIED
+;           afterwards: a run path leaves the last run's colour in it, the
+;           two row decoders the caller's.
 ; clobbers: nothing else (flags)
 ;
-; What this is, and what it deliberately is not. It coalesces runs of equal
-; pixels and emits one gfx_fill per run - the same thing apps/paint's pt_blit
+; What this is, and what it deliberately is not. It draws each row with one
+; of three writers - runs (a gfx_hline each, or vga_blit_span straight into
+; the planes), the 1bpp pair decoder (SPEC.md 5.4.1.1) or the planar
+; transpose (5.4.1.3) - chosen per call and, on VGA, per row. The run path
+; is the same thing apps/paint's pt_blit
 ; did in the package, and therefore the same pixels - but from INSIDE the
 ; kernel. That is the whole win and it is a large one: since packages own a
 ; segment (SPEC.md 20.1) every gfx call from one is a FAR call, so a canvas
 ; repaint that cost N far calls plus N run scans now costs ONE call and a
-; near loop. It also means the primitive works on all three adapters, in
-; and inside a clip region, without one line of adapter-specific code -
-; because gfx_fill already does.
+; near loop. The run path also works on every adapter and inside a clip
+; region without one line of adapter-specific code, because gfx_fill
+; already does; the two row decoders are adapter-specific and are used
+; only on screen, with no region in the way.
 ;
 ; **The run scan compares BYTES, not pixels, and that is the whole speed of
 ; the SCAN.** A run of colour c is a run of bytes equal to c|c<<4, so
@@ -1789,12 +1797,14 @@ vga_b4out:
 ; A plane-parallel VGA fast path (build a byte-per-8-pixels mask per plane
 ; and write it through the Map Mask) would beat this on detailed pictures and
 ; lose to it on flat ones, and it would need its own 1bpp
-; twins. It is a worthwhile future optimisation and it changes no caller;
-; docs/plans/completed/PAINT-NOTES.md records why it was not the first one.
+; twins. It has since been taken - vga_blit_prow (SPEC.md 5.4.1.3) below, and
+; sw_blit_row (5.4.1.1) for 1bpp - and docs/plans/completed/PAINT-NOTES.md
+; records why it was not the first one.
 ;
-; Colour reduction on a 1bpp adapter happens in gfx_fill, per run (SPEC.md
-; 39.4), so a 16-colour picture reads as black/dither/white there exactly as
-; the rest of the UI does.
+; Colour reduction on a 1bpp adapter is the pair tables' (sw_pairbuild builds
+; them from gfx_inktab), or gfx_fill's per run for a block off the screen in
+; x (SPEC.md 39.4) - so a 16-colour picture reads as black/dither/white there
+; exactly as the rest of the UI does.
 ;
 ; ...and a DISPLAY SPLIT is THREE cases now, not one, and the paragraph that
 ; used to sit here got its own cost wrong twice (SPEC.md 39.14.7.1):
@@ -1838,14 +1848,14 @@ gfx_blitd:
 gfx_blit4:
     KFZ 25                      ; a packed-4bpp block (SPEC.md 5.4)
     call cur_unlazy              ; off the clip list (SPEC.md 11.3): 7.1.4
-                                ; ...but NOT off the display split, and there
-                                ; is deliberately no GFXDENTER here: A RUN
-                                ; CARRIES NO SOURCE (SPEC.md 39.14.7). The
-                                ; destination stays VIRTUAL the whole way
-                                ; down, and each coalesced run is one solid
-                                ; gfx_hline that splits itself through
-                                ; gfx_fill's own GFXDISP - so a straddling
-                                ; block needs no source arithmetic at all.
+                                ; ...but NOT off the display split HERE: the
+                                ; hook is taken below, just above .hkdone,
+                                ; when the block fits one display (SPEC.md
+                                ; 39.14.7.1), and a straddle is cut at the
+                                ; seam (39.14.7.2). Only a cut the seam
+                                ; refuses keeps the destination VIRTUAL, each
+                                ; coalesced run splitting itself through
+                                ; gfx_fill's own GFXDISP.
                                 ; Nested (gfx_dnest != 0) the runs take
                                 ; GFXDISP's local path, which is what an
                                 ; outer whole-shape hook wants.
@@ -2467,9 +2477,10 @@ vga_blit_span:
 ; the one number here worth improving and 5.4.1.1 says how.
 ;
 ; THREE SEGMENTS, exactly as sw_blit_row has: the source is the CALLER's (ES
-; on entry and left there through the decode), the table and the four plane
-; rows are .lowbss - so DS becomes LOW_SEG and nothing needs an override -
-; and the framebuffer is ES for the write pass alone. Nothing may read a
+; on entry and left there through the decode), the table is .lowbss and read
+; ss:, the four plane rows are .vgabuf and DS becomes VGABUF_SEG for them
+; (SPEC.md 39.22) - so every .lowbss word in between needs ss: - and the
+; framebuffer is ES for the write pass alone. Nothing may read a
 ; [gfx_blit_*] word after DS moves.
 ; -----------------------------------------------------------------------------
 VGA_PB      equ 84              ; bytes per plane row: 640/8 = 80, and four
@@ -4147,7 +4158,7 @@ gfx_xor_rect_d:
 ; Each pixel is touched exactly ONCE, which is what keeps the XOR forms
 ; self-inverting.
 ;
-; BP CARRIES THE FILL, which is how gfx_line already uses it in this file. It
+; BP CARRIES THE FILL. It
 ; survives every callee: gfx_fill and gfx_xor_fill document "clobbers: flags";
 ; vga_solid_rect names no BP at all; gfx_clip_run, gfx_disp_run,
 ; gfx_rect_setup and vga_gc_reset name none either (and the inline GC arms
@@ -5370,8 +5381,10 @@ gfx_unlock:
 ;   VGA direct   - GC write mode 1: each movsb moves 8 pixels across all
 ;                  four planes through the latches; mode restored after
 ;                  (SPEC.md 1 rule 7).
-;   mono         - per-row rep movsb through gfx_rowbase, immune to the
-;                  banked layouts by construction.
+;   mono         - rep movsb a row: with dy a whole number of banks the
+;                  destination base is derived once and the rows walk
+;                  with gfx_nextrow (SPEC.md 5.5.1), else two gfx_rowbase
+;                  a row - immune to the banked layouts by construction.
 ; -----------------------------------------------------------------------------
 gfx_scroll:
     GFXAUDIT_HOOK
@@ -5862,10 +5875,10 @@ section .cold                   ; gfx_blit1's body, and its far entry below it
                                 ; the small body a fraction of this one
 ; =============================================================================
 ; gfx_blit1_x - a composed 1bpp band, straight into the framebuffer (SPEC.md
-;               5.4.2). kern_big only; kern_small's thunk is stc/retf - a
-;               variant without the two-display, VGA and pen arms was BUILT
-;               and MEASURED for it (+419 bytes, SPEC.md 5.4.2.5) and NOT
-;               TAKEN: that build may stay slower, by decision.
+;               5.4.2). BOTH kernels: kern_small's body - without the
+;               two-display, VGA and pen arms, and refusing an x off the
+;               byte grid - was refused in SPEC.md 5.4.2.5 and shipped by
+;               5.4.2.5.1's reversal (the section banner above).
 ;
 ; in:       ES:SI = the band, BP = its stride in bytes per row, AX = x (a
 ;           multiple of 8, SIGNED), BX = y (SIGNED), CX = width in pixels (a
@@ -7138,9 +7151,10 @@ section .lowbss                 ; LOW_SEG (SPEC.md 2.1), and not .bss for
                                 ; KERN_CODE_MAX, which is the guard nobody can
                                 ; raise. Here it costs neither - the low rung
                                 ; had 1,258 bytes standing - and it costs
-                                ; nothing to REACH either, because the decoder
-                                ; runs with DS = LOW_SEG and reads both with no
-                                ; override at all (SPEC.md 5.4.1.3)
+                                ; one `ss:` prefix a read to REACH: SS is
+                                ; LOW_SEG in all kernel code, where DS is the
+                                ; caller's source in sw_blit_row and VGABUF_SEG
+                                ; in the planar decoder (SPEC.md 5.4.1.3)
 gfx_pairtab0 resb 256           ; SPEC.md 5.4.1.1's pair tables, built once from
 gfx_pairtab1 resb 256           ; gfx_inktab by sw_pairbuild - and here rather
                                 ; than in .bss for 39.3.1's reason, which came

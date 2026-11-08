@@ -661,8 +661,11 @@ it never had to survive a program.
 SHORTCUT.** The hibernation image is written before the program starts,
 `kern_dos` restarts the machine when it exits exactly as it does on the
 floppy arm (§9), and the fresh kernel's own `hb_probe` finds the pointer and
-resumes it without asking. There is no second stub, no second extent walk and
-no second copy of the transport facts inside `kern_dos`.
+resumes it without asking. There was to be no second stub, no second extent walk
+and no second copy of the transport facts inside `kern_dos`. **Superseded in
+part by SPEC.md 96.49**: `kd_resume` (`kerndos/kdresume.inc`) now puts the
+image back directly when it can - the stub shared as SOURCE
+(`kernel/hbstub.inc`), not copied - and this route is its fallback.
 
 1. `DOS.O88` asks for arm 3 on a machine with a fixed disk, so the record it
    posts says *hibernate first*.
@@ -725,7 +728,8 @@ loader and not POST, and os8088's own boot writes nothing below `0x0600`.
 reads back byte for byte after the ROM's bootstrap, after stage 2, and at a
 settled desktop.
 
-So `kd_leave` writes `'DX'`, the code and a checksum there, `hbm_ask` reads
+So `kd_bda` writes `'KDX1'`, the code word (its high byte the refusal
+reason, SPEC.md 96.40.7) and the arena in KB (96.41.1) there, and no checksum, `hbm_ask` reads
 them beside the pointer, and `hbm_res` stages the code for the stub to hand to
 `hbm_wake` in a register. The window then finds `DST_RAN` with a number.
 

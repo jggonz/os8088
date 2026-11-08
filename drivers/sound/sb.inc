@@ -2552,7 +2552,8 @@ sbl_refill_task:
 ; -----------------------------------------------------------------------------
 ; sbl_tick - the stream watchdog (SPEC.md 34.5), a snd_tick leaf
 ;
-; in:       IF = 0, DS = KERNEL_SEG, behind the snd_live gate; AX/DX free
+; in:       IF = 0, DS = this image, ES = KERNEL_SEG, behind the snd_live
+;           gate; AX/DX/BP free; DF is the interrupted code's
 ; out:      nothing
 ; clobbers: AX, DX
 ;

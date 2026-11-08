@@ -81,14 +81,15 @@
 ; reason, which is that a loaded image cannot reach it: no API slot publishes
 ; it, so a driver that needs the scheduler held cannot ask for it itself.
 ;
-; THE CLAIM IS WHOLE KB, and that is heap and not a rung: drv_load_at claims
-; mem_bytes_kb_x of the file's unpacked size, so image + bss of 1,568 bytes
+; THE CLAIM IS WHOLE 512-BYTE GRANULES (SPEC.md 50.2.1; it was whole KB when
+; the figures below were taken), and that is heap and not a rung: drv_load_at
+; claims mem_bytes_gp_x of the file's unpacked size, so image + bss of 1,568 bytes
 ; held 2,048 of every 286+ machine's heap for the session, and 1,014 held
 ; 1,024 - until the HMA's loader, LOADALL and the two walks took the image to
 ; 2,239 and the claim to 3,072. It is 2,042 now, back inside 2,048 (SPEC.md
 ; 41.12.6): the HMA's walk is the tail's, the LOADALL save shares the AH=87h
 ; block, and la_borrow is one walk of SI. Six bytes are left; a byte spent
-; here is a byte of a KB on every 286 and 386. Two things in the image are
+; here is a byte of a 512-byte granule on every 286 and 386. Two things in the image are
 ; shaped by that, beyond plain tightening:
 ;
 ;   - THE SCRATCH LIVES ON TOP OF THE ATTACH-ONLY CODE (xm_once, at the foot
