@@ -314,7 +314,8 @@ peer).
   thinking in huge reservations"* - XTMP3's hold (one XMEM block or 192K of
   conventional, never the bridge) is the first instance. A survey of who
   could and should use the region-crossing claim follows the merge to
-  `elendilon`.
+  `elendilon` - done: docs/plans/MEGA-HUGE-PLAN.md (it also found a
+  correctness defect in the bridge itself, F1, that WIN16 is exposed to now).
 
 Still open:
 
