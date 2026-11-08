@@ -471,6 +471,58 @@ vk_seq:
     sub ax, [vk_gbad0]
     mov [vk_res+54], ax
     mov word [vk_res+52], 1         ; G ran
+
+    ; H: THE MAP AND A RUN (SPEC.md 18.4.8.3). The stream mapped (4 runs at
+    ; most); then a COLD seek to 12 MB handed run 0 and two chunks read,
+    ; every byte checked, timed and their low-cylinder int 13h calls counted:
+    ; with the run the walk and the reads touch no FAT
+    mov ax, [vk_res+24]
+    mov [vk_gbad0], ax
+    xor ax, ax
+    xor dx, dx
+    call vk_seek
+    mov byte [es:VK_CUR+FSEQ_FLG], FSEQF_MAP
+    mov dx, ds
+    mov bx, vk_runs
+    mov cx, 4
+    mov si, vk_f_stream
+    mov di, VK_CUR
+    call OSAPI_FILE_READ_SEQ
+    mov byte [es:VK_CUR+FSEQ_FLG], 0
+    jnc .hm
+    mov ax, 0xFFFF
+.hm:
+    mov [vk_res+62], ax             ; the runs (FFFFh refused)
+    jc .out
+    mov [vk_hgen], dx
+    xor ax, ax
+    mov dx, 12 * 16                 ; 12 MB, cold
+    call vk_seek
+    mov ax, [vk_runs]
+    mov [es:VK_CUR+FSEQ_RUN], ax
+    mov ax, [vk_runs+2]
+    mov [es:VK_CUR+FSEQ_RUN+2], ax
+    mov ax, [vk_hgen]
+    mov [es:VK_CUR+FSEQ_RGEN], ax
+    mov byte [es:VK_CUR+FSEQ_FLG], FSEQF_RUN
+    call vk_i13on
+    call vk_i13zero
+    call OSAPI_GET_TICKS
+    push ax
+    call vk_seq1
+    call vk_seq1
+    call OSAPI_GET_TICKS
+    pop dx
+    sub ax, dx
+    mov [vk_res+64], ax
+    mov ax, [vk_i13lo]
+    mov [vk_res+66], ax
+    call vk_i13off
+    mov byte [es:VK_CUR+FSEQ_FLG], 0
+    mov ax, [vk_res+24]
+    sub ax, [vk_gbad0]
+    mov [vk_res+68], ax
+    mov word [vk_res+70], 1         ; H ran
 .out:
     mov word [vk_sdone], 1
     ret
@@ -851,6 +903,8 @@ vk_r_gbm:     db 'G: bookmark read (ticks)', 0
 vk_r_gbml:    db 'G: ...its FAT-area calls', 0
 vk_gbad0:     dw 0
 vk_bm:        times 16 db 0
+vk_runs:      times 16 db 0       ; H's map: four runs
+vk_hgen:      dw 0                ; ...and the generation it answered
 
 vk_win:       dw 0
 vk_seg:       dw 0
@@ -869,7 +923,7 @@ vk_i13lo:     dw 0
 vk_rdone:     dw 0
 vk_fdone:     dw 0
 vk_sdone:     dw 0
-vk_res:       times 34 dw 0
+vk_res:       times 36 dw 0
 
     OS88_BSS BL_BSS_SIZE
     align 512

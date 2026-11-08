@@ -129,7 +129,7 @@ def main():
             os88marty.until(m, lambda mm: rw("vk_sdone") != 0,
                             "the READ_SEQ rows to end", poll=0.05,
                             limit=1500.0, guest=300.0)
-            r = [rw("vk_res", 2 * i) for i in range(31)]
+            r = [rw("vk_res", 2 * i) for i in range(36)]
 
             # A: the same three for a person - timed parks, no harness to
             # say go - reported and SAVED as VIDKERN.TXT beside the package
@@ -138,7 +138,7 @@ def main():
                             "the run-all to save its report", poll=0.05,
                             limit=1500.0, guest=300.0)
             full = rb("bl_full")
-            auto = [rw("vk_res", 2 * i) for i in range(31)]
+            auto = [rw("vk_res", 2 * i) for i in range(36)]
         finally:
             m.close()
         try:
@@ -235,6 +235,24 @@ def main():
     if r[30] > 1 or r[29] * 2 > r[25]:
         bad.append("G: the bookmark's read was not one link: %d ticks against "
                    "the cold seek's %d, %d FAT-area calls" % (r[29], r[25], r[30]))
+    # H: the map and a run (SPEC.md 18.4.8.3) - a COLD seek to 12 MB handed
+    # run 0, two chunks: the walk and the reads inside the run read no FAT
+    print("     H: the map %s run(s); a cold seek to 12 MB with run 0, two "
+          "chunks %.1f ms, %d FAT-area calls, %d bad (the cold seek "
+          "without: %.1f ms)" % ("refused:" if r[31] == 0xFFFF else r[31],
+                                 per(r[32], 1), r[33], r[34], per(r[25], 1)))
+    if not r[35]:
+        bad.append("H: the map row did not run")
+    elif r[31] == 0xFFFF or r[31] == 0:
+        bad.append("H: the map was refused or found no run")
+    else:
+        if r[34]:
+            bad.append("H: %d chunk(s) read with the run at the wrong offset"
+                       % r[34])
+        if r[33] > 1 or r[32] >= r[25]:
+            bad.append("H: the run did not spare the FAT: the cold seek and "
+                       "two chunks %d ticks against the cold seek's alone %d "
+                       "without it, %d FAT-area calls" % (r[32], r[25], r[33]))
     if not r[9] or r[10] > r[9] * 1.25 + 2:
         bad.append("READ_SEQ is not flat: %d ticks at 0 MB, %d at 12 MB"
                    % (r[9], r[10]))

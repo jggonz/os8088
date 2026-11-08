@@ -37783,7 +37783,10 @@ zeroes its cursor as before:
   writes it (a cursor is born zeroed), and an older kernel MUST NOT be
   handed a moved `+12` - it walks one link and reads the wrong cluster. So a
   caller moves a cursor only when `+4` is set, and zeroes it otherwise.
-  `os88_rseq` does exactly that (§18.4.8.1).
+  `os88_rseq` (§18.4.8.1) still zeroes on every move: its callers load
+  package parts and seek rarely, and the test is 6 bytes in every package
+  that carries it - WireFleet sits at `APP_MAX_SIZE` to the byte, its save
+  buffer padded to 512, and those 6 cost it a rung it does not have.
 
 `tests/vidkern.py`'s row G holds it: hot at 1 MB, moved forward to 3 MB, a
 chunk skipped, moved back to 2 MB, every byte checked; then a bookmark taken
@@ -37791,6 +37794,99 @@ at 12 MB, a read at 0 between, the bookmark copied back - its read 439 ms
 against the cold seek's 1,813 on MartyPC's XT-IDE, one FAT-area int 13h call.
 Broken on purpose (the old one-link walk with `+4` still written) the moved
 cursor reads two chunks from the wrong offset.
+
+#### 18.4.8.3 …and a caller that MAPPED its file hands each call the run it reads in, and the FAT is not read
+
+**A stream reads the FAT for every cluster it crosses, however it lays out.**
+`dsk_read_chain` follows the chain a link a cluster, and each link is a
+lookup in the volume's FAT window (18.8), which on a fixed disk covers 2,304
+clusters - 4.6 MB at 2 KB clusters. Video Battle's bundle is 6.5 MB and reads
+two places at once (a clip 5.5 MB in, the music 0.5 MB in), so the window
+moved between them **13 times in 6 s of Bolt** on the PicoMEM 2 twin, nine
+sectors each; on an ST-225 each move is a seek to the FAT and back. And every
+link is a call (~330 µs a link through the thunks on 5150 #1, 18.4.8.2).
+
+The kernel cannot know where a program will read next; **the program can**,
+and a file copied onto a disk in one go is one contiguous run of clusters, or
+a few. So the caller holds the file's layout and tells each call the one run
+it reads in, which is the trade of §5's packages drawing their own lines:
+the knowledge sits with the code that has it, and the kernel's part is a
+compare.
+
+**The cursor grows to 22 bytes for a caller that asks** (`FSEQ_XSIZE`); a
+16-byte cursor is read and written exactly as before, and the kernel copies
+16 back to every caller - the run is the caller's and is never written. `+3`,
+the byte that was 0, is the caller's FLAGS:
+
+| off | size | |
+|---|---|---|
+| 3 | 1 | `FSEQF_RUN` (1): `+16..+21` describe a run - `FSEQF_MAP` (2): this call MAPS |
+| 16 | 2 | the run's first cluster |
+| 18 | 2 | its last |
+| 20 | 2 | the generation the map answered in `DX` |
+
+**To map**: `+3` = `FSEQF_MAP`, `CX` = how many runs the buffer at `DX:BX`
+holds (4 bytes a run: first cluster, last; at least 1), `SI` the name. The
+kernel walks the chain once from the name, to its end or until `CX` runs are
+written, in FILE ORDER - so a FAT with a loop in it ends too, every jump back
+being a run. Out `CF=0`, `AX` = the runs written (`CX` of them: there may be
+more, and a read past the last is the FAT walk as before) and `DX` = the
+generation they hold under; the cursor is not touched, and a map reads no
+data. `CF=1` `FERR_*` as a read's. A redirected volume (62.9) has
+no clusters and refuses `FERR_NAME`.
+
+**To read with one**: `+3` = `FSEQF_RUN`, `+16`/`+18` = the run holding the
+cluster the call starts in (the caller finds it: offset / cluster bytes, then
+the runs' lengths summed in order), `+20` the map's `DX`. While
+that call runs, `dsk_next_clus` answers **cluster + 1 for any cluster from
+`+16` to one below `+18`** without reading the FAT; the run's last cluster
+and everything outside it are looked up as before, so a read that runs past
+its run is correct, only slower. The run is honoured only when `+20` is
+`[dsk_mgen]` and the cursor is either cold (generation 0: it stats the name
+on the current volume) or stamped with the current volume (`+2`, the
+kernel's) - a write anywhere on the volume, or a mount that reads a boot
+sector, makes it a stale map, and a stale map is today's FAT walk, never a
+wrong read. A COLD seek is where a run saves the most: the walk to the offset
+is links inside the run, and none of them reads the FAT.
+
+**What it trusts.** Within one call a run is a statement about the FAT: a
+cluster in a file's run is that file's, and its link is the next one. A
+caller that lies gets its own volume's wrong clusters, which is §18.4.8's
+"READ_AT with a wrong offset and nothing worse" - the hint is live only
+inside a READ_SEQ call, which writes nothing, and the kernel copy's `+18`
+is 0 at every other moment, so no write, free or truncate ever walks a chain through it.
+
+Resident, measured (`tools/os88rdiff.py` against the commit before):
+**+139 bytes of `.cold` and +6 of `.text`** - the compare in `dsk_next_clus`
+(15), the wrapper's honour test and its clear (~48) and the map (~76), and
+`dwr_c`'s six more bytes. kern_big alone (`DSK_RUN`): kern_dos shares this
+source and has no room, and kern_small's door answers `FERR_NAME` to both,
+as to every READ_SEQ.
+
+**Its callers, and what they keep.** Video Battle maps its bundle when it
+builds its bookmarks (126.4.7): 16 runs, and every read goes through one
+22-byte scratch cursor that carries the run holding its first cluster, its
+rings' 16-byte cursors copied in and back (`vb_rseq`, `VB_NOMAP` the A/B).
+Video Player maps its video's FIRST run only, when it opens it (98.3.25),
+straight into its two stream cursors, which grew to 22 bytes; a video
+copied in one go is that run, and a fragmented one reads past it through the
+FAT as before.
+
+**Measured.** `tests/vidkern.py`'s row H, MartyPC's XT-IDE (2 KB clusters):
+the 13 MB stream maps as ONE run, and a COLD seek to 12 MB handed it then
+two chunks read take 1,098 ms with **no** FAT-area `int 13h` call, against
+1,922 ms for the cold seek alone without it; broken on purpose (the run
+answering cluster + 2) the reads fail and the row is red. The owner's
+battle on the CGA PicoMEM 2 twin, 6 s of Bolt: the FAT window moved 13
+times without the map and **0** with it, `int 13h` calls 124 -> 94. On
+86Box's `pc5150` with its ST11M and ST-225 (CGA, `tools/os88hdd.py --st11`,
+the same VBATTLED with and without the map, 86Box's timing): the same
+1.14 MB read in 4.6 s of the reader's time against 5.3 s, its slowest
+32 KB 137 ms against 192.
+
+The cleaner ABI-break shape - a slot of its own and the run fields
+first-class in every cursor - is docs/plans/ABI-BREAK-LIST.md's row
+R.extent.
 
 ### 18.4.9 `OSAPI_FILE_WRITE_SEQ` — a streaming append, whose place the KERNEL keeps (`kern_big`)
 

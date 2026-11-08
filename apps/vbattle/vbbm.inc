@@ -21,6 +21,9 @@
 
 VB_BMMAX    equ 16384               ; clusters past this: no bookmarks (a
                                     ; chain of them is short anyway)
+VB_NRUN     equ 16                  ; THE MAP's runs (SPEC.md 18.4.8.3): a
+                                    ; bundle copied in one go is ONE; a read
+                                    ; past the last kept is the FAT's, as before
 
 ; vb_bmbuild - the bookmarks, for the bundle [vb_namep] (+ [vb_embat]). The
 ; UI task, at load. Every failure leaves [vb_bmok] 0 and every seek as it
@@ -34,6 +37,7 @@ vb_bmbuild:
     push di
     push es
     mov byte [vb_bmok], 0
+    mov word [vb_nrun], 0
     push ds
     pop es
     mov di, vb_bmk                  ; none yet: an index of 0 is "none"
@@ -52,6 +56,9 @@ vb_bmbuild:
     shl bx, cl
     jz .out
     mov [vb_bmclb], bx
+%ifndef VB_NOMAP                    ; (the A/B: the same package, no map)
+    call vb_rmap
+%endif
     mov ax, bx                      ; a cluster's scratch: its KB, at least 1
     mov cl, 10
     shr ax, cl
@@ -137,6 +144,109 @@ vb_bmbuild:
     pop cx
     pop bx
     pop ax
+    ret
+
+; vb_rmap - THE MAP (SPEC.md 18.4.8.3): the bundle's clusters as runs, so a
+; read hands the kernel the run it reads in and the FAT is not read - the
+; window had moved 13 times in 6 s of Bolt between the clip, 5.5 MB in, and
+; the music near the start. One walk of the chain, at load. A kernel without
+; it refuses the call (CX is no cluster multiple) and [vb_nrun] stays 0.
+; Preserves every register
+vb_rmap:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov di, vb_xc                   ; a cursor that maps: its flag, the rest
+    mov cx, FSEQ_XSIZE / 2          ; nothing the call reads
+    xor ax, ax
+    cld
+    rep stosw                       ; (ES = DS: vb_bmbuild's)
+    mov byte [vb_xc+FSEQ_FLG], FSEQF_MAP
+    mov dx, ds
+    mov bx, vb_runs
+    mov cx, VB_NRUN
+    mov si, [vb_namep]
+    mov di, vb_xc
+    call OSAPI_FILE_READ_SEQ
+    jc .out
+    mov [vb_rgen], dx
+    mov [vb_nrun], ax
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; vb_rseq - OSAPI_FILE_READ_SEQ on the 16-byte cursor DI (ES = DS), its
+; registers and its answer, handed the map's run that holds the cluster the
+; call starts in (18.4.8.3) when there is one: the cursor is read through
+; vb_xc, which has the room, and copied back with no flag set
+vb_rseq:
+    cmp word [vb_nrun], 0
+    jne .run
+    call OSAPI_FILE_READ_SEQ
+    ret
+.run:
+    push cx
+    push si
+    push di
+    push dx
+    mov si, di
+    mov di, vb_xc
+    mov cx, FSEQ_SIZE / 2
+    cld
+    rep movsw
+    mov ax, [vb_xc+FSEQ_OFF]        ; the cluster it starts in: its index...
+    mov dx, [vb_xc+FSEQ_OFF+2]
+    div word [vb_bmclb]
+    mov si, vb_runs                 ; ...counted off the runs, in file order
+    mov cx, [vb_nrun]
+.r:
+    mov dx, [si+2]
+    sub dx, [si]
+    inc dx                          ; DX = this run's clusters
+    cmp ax, dx
+    jb .hit
+    sub ax, dx
+    add si, 4
+    loop .r
+    jmp short .call                 ; past the runs kept: the FAT's
+.hit:
+    mov ax, [si]
+    mov [vb_xc+FSEQ_RUN], ax
+    mov ax, [si+2]
+    mov [vb_xc+FSEQ_RUN+2], ax
+    mov ax, [vb_rgen]
+    mov [vb_xc+FSEQ_RGEN], ax
+    mov byte [vb_xc+FSEQ_FLG], FSEQF_RUN
+.call:
+    pop dx
+    pop di
+    pop si
+    pop cx
+    push di
+    mov di, vb_xc
+    call OSAPI_FILE_READ_SEQ
+    pop di
+    pushf
+    push si
+    push cx
+    push di
+    mov si, vb_xc
+    mov byte [si+FSEQ_FLG], 0       ; (no flag in a cursor kept elsewhere)
+    mov cx, FSEQ_SIZE / 2
+    cld
+    rep movsw
+    pop di
+    pop cx
+    pop si
+    popf
     ret
 
 ; vb_bmseek - cursor DI is about to SEEK to file offset DX:AX: make it

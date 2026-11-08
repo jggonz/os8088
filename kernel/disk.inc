@@ -54,6 +54,13 @@
 %ifdef KD_BUILD
 %define DSK_STREAM
 %endif
+; DSK_RUN: READ_SEQ's caller-held RUN and the MAP (SPEC.md 18.4.8.3) - kern_big's
+; alone: kern_dos's image has no room, and its DOS reads nothing that needs one
+%ifdef KERN_BIG
+%ifndef KD_BUILD
+%define DSK_RUN
+%endif
+%endif
 ; DSK_DSCAN: dsk_find and the copy engine's fcp_scan share one directory walk,
 ; dsk_dscan (docs/reports/FILECP-SIZE-2026-10-18.md 5.2) - kern_big's alone.
 ; kern_small is on a diet (SPEC.md 39.27.4) and the shared walk is RESIDENT
@@ -6515,6 +6522,16 @@ dsk_free_clus_x:
 ; (SPEC.md 18).
 ; -----------------------------------------------------------------------------
 dsk_next_clus_x:
+%ifdef DSK_RUN
+    cmp ax, [dwr_c+FSEQ_RUN]    ; A CALLER'S RUN (18.4.8.3): inside a READ_SEQ
+    jb .fat                     ; call that mapped its file, a cluster below
+    cmp ax, [dwr_c+FSEQ_RUN+2]  ; its run's last links to the next, and the
+    jae .fat                    ; FAT is not read. [dwr_c+18] is 0 at every
+    inc ax                      ; other moment, so this never answers
+    clc                         ; (CF was 1: AX below the last)
+    ret
+.fat:
+%endif
     push bx
     push cx
     push dx
@@ -11139,7 +11156,11 @@ section .text
 ; and the add needs no wrap test. Not .bss - its resting value is not zero
 ; (SPEC.md 12.8.5.1)
 dsk_mgen:   dw 1
-dwr_c:      times 16 db 0       ; READ_SEQ's cursor, the kernel's copy for the
+%ifdef DSK_RUN
+dwr_c:      times 22 db 0       ; READ_SEQ's cursor, the kernel's copy for the
+%else
+dwr_c:      times 16 db 0
+%endif
 %endif                          ; call (18.4.8). dwr_stat reads it on EVERY
                                 ; READ_AT, so .text and seeded: generation 0
                                 ; is no cursor, and the wrapper leaves it so

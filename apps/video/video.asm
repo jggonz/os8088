@@ -1066,6 +1066,7 @@ vp_open:
     mov di, vp_rdcur                ; ...and vp_rdat's cursor, which names no
     call os88_rseq_new              ; file and would trust the last one's
     call vp_bmclear                 ; ...and every bookmark, no file's either
+    call vp_rmap                    ; ...and the file's first run, mapped
     pop di
     xor ax, ax
     mov [vp_nkeys], ax
@@ -5218,6 +5219,65 @@ vp_rdat:
 
 %include "os88rseq.inc"            ; os88_rseq, vp_rdat's disk arm
 
+; vp_rmap - [vp_name]'s FIRST RUN (SPEC.md 18.4.8.3): a video copied in one
+; go is one, and a read in it then reads no FAT. One walk of the chain, at
+; open; a kernel without the map refuses (CX = 1 is no cluster multiple) and
+; [vp_run+2] stays 0. A read outside the run is the FAT's, as before.
+; Preserves every register
+vp_rmap:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    xor ax, ax
+    mov [vp_run+2], ax
+    mov dx, ds                      ; DX:BX = the run's 4 bytes
+    mov bx, vp_run
+    mov cx, 1
+    push ds
+    pop es
+    mov di, vp_cur                  ; (its flag the map's, for this call: the
+    mov byte [di+FSEQ_FLG], FSEQF_MAP ; map writes nothing else of it)
+    mov si, vp_name
+    call OSAPI_FILE_READ_SEQ
+    mov byte [vp_cur+FSEQ_FLG], 0
+    mov [vp_run+4], dx
+    jnc .out
+    mov word [vp_run+2], 0          ; (a refusal may have written nothing)
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; vp_rseqr - OSAPI_FILE_READ_SEQ on cursor ES:DI = DS:DI (22 bytes, vp_cur or
+; vp_xcur) with the map's run in it when there is one: its registers and its
+; answer
+vp_rseqr:
+    cmp word [vp_run+2], 0
+    je .go
+    push si
+    push di
+    mov byte [di+FSEQ_FLG], FSEQF_RUN
+    add di, FSEQ_RUN
+    mov si, vp_run
+    cld
+    movsw
+    movsw
+    movsw
+    pop di
+    pop si
+.go:
+    call OSAPI_FILE_READ_SEQ
+    ret
+
 ; vp_spankb - CX = bytes at any offset: AX = the KB vp_rdat's read of them
 ; can take - CX and a cluster less a byte, rounded up to whole clusters
 ; (the offset's own place in its cluster is the most it can be moved on)
@@ -6512,7 +6572,7 @@ vp_xstep:
     pop es
     mov di, vp_xcur
     mov si, vp_name
-    call OSAPI_FILE_READ_SEQ        ; AX = the bytes (DX 0: one chunk)
+    call vp_rseqr                    ; AX = the bytes (DX 0: one chunk)
     call vp_hdis                    ; (flags kept)
     pop dx
     jc .drop                        ; the disk failed: the stream will say so
@@ -7366,7 +7426,7 @@ vp_xbread:
 %ifdef VP_RDTIME
     call vp_rtb
 %endif
-    call OSAPI_FILE_READ_SEQ        ; AX = the bytes (DX 0: a chunk)
+    call vp_rseqr                    ; AX = the bytes (DX 0: a chunk)
 %ifdef VP_RDTIME
     call vp_rte
 %endif
@@ -8037,7 +8097,7 @@ vp_xfillt:
     pop es
     mov di, vp_cur
     mov si, vp_name
-    call OSAPI_FILE_READ_SEQ        ; AX = the bytes, the cursor moved on
+    call vp_rseqr                    ; AX = the bytes, the cursor moved on
     pop si
     pop di                          ; DI:SI = where it started
     pop bx
@@ -8317,7 +8377,7 @@ vp_eread:
     pop es
     mov di, vp_cur
     mov si, vp_name
-    call OSAPI_FILE_READ_SEQ        ; DX:AX = the bytes
+    call vp_rseqr                    ; DX:AX = the bytes
 .hx:
     pop bx
     ret
@@ -8664,7 +8724,7 @@ vp_bstep:
     pop es
     mov di, vp_xcur
     mov si, vp_name
-    call OSAPI_FILE_READ_SEQ        ; (a far cell: no tail jump)
+    call vp_rseqr                    ; (a far cell: no tail jump)
     ret
 .xb:
     call .tail
@@ -25002,12 +25062,14 @@ vp_ptk:       dw 0                  ; ticks paused, this play
 vp_rchk:      db 0                  ; ...and the block's writes are checked
                                     ; (after the two words: they keep the
                                     ; parity they had)
-vp_cur:       times FSEQ_SIZE db 0
+vp_cur:       times FSEQ_XSIZE db 0 ; (22: room for the map's run, 18.4.8.3)
 %if VP_BMN
 vp_bm:        times VP_BMN * FSEQ_SIZE db 0 ; BOOKMARKS (98.3.25): a cursor a MB
 %endif
 vp_rdcur:     times FSEQ_SIZE db 0  ; vp_rdat's own (os88_rseq), never the stream's
-vp_xcur:      times FSEQ_SIZE db 0  ; THE HOLD (98.3.18): its loader's cursor,
+vp_run:       times 6 db 0          ; THE MAP's first run (18.4.8.3): first, last
+                                    ; (0 = none), the generation it holds under
+vp_xcur:      times FSEQ_XSIZE db 0 ; THE HOLD (98.3.18): its loader's cursor,
 vp_xgap:      dw 0                  ; THE GAP (os88xgap.inc): G, 0 none
 vp_xgok:      db 0                  ; ...measured, this instance
 vp_xsclm:     dw 0                  ; vp_xstep's claim, the read inside it

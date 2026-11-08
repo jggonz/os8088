@@ -293,3 +293,27 @@ The ST11M is the classic XT controller: **its ROM at C800h**, **ports
   NE2000 elsewhere, or 7 if the card's own interrupt can move (`IRQ` in
   config.txt, PM2-10-4-26 on);
 - with the ST-225 as 80h, the card's own disk image is 81h.
+
+## 2026-11-08, later: where the rest of the reader's time went
+
+Traced on the CGA PicoMEM 2 twin over 6 s of Bolt (logging breakpoints on
+`dsk_xfer`, `dsk_rah_fill`, `dsk_copy_seg_x`, `dsk_fat_window.load`):
+
+- **The sector cache filled on every short read** (SPEC.md 18.95.12): the
+  last eight sectors of every read, every 4 KB music read and every FAT
+  lookup took a nine-sector fill - two `int 13h` calls under the
+  eight-sector cap, then a `rep movsw` out of the slot. 75 fills against 19
+  Video Battle reads in 4 s. Never filling off the card's units: sound
+  frames late **19 -> 4** over the same window, copies 69 -> 0. 10 bytes.
+- **The FAT window moved between the clip (5.5 MB in) and the music (0.5 MB
+  in)** 13 times in 6 s. READ_SEQ's caller-held run (SPEC.md 18.4.8.3):
+  the package maps its file once and hands each read the run it reads in;
+  0 window loads, `int 13h` calls 124 -> 94. 145 resident bytes.
+- **What is left is the CPU.** An 8-sector call is ~12.7 ms on the twin,
+  most of it the card BIOS's `rep movsw` out of its window, one 512-byte
+  command at a time (`pmbios/pm_cmd.asm`'s `PCC_Do_MemCopyW_512b`), and
+  Bolt's decode and sound feed are ~43% of the CPU. The ST-225's DMA costs
+  the CPU nothing. The stock firmware has one zero-copy path - a read whose
+  buffer is RAM the card itself provides (`MEM_RAM` in `bios_disk.cpp`) -
+  and the owner's 5150 has its conventional memory on a SixPakPlus, so the
+  card's RAM could only be upper memory os8088 does not use.

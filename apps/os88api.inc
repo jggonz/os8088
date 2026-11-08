@@ -6096,6 +6096,15 @@ CLIP_MAXKB equ 32                ; the clipboard's ceiling, KB. A put longer
                                  ; FSEQ_OFF is yours to write
 FSEQ_OFF    equ 12              ; the cursor's offset field (dword)
 FSEQ_SIZE   equ 16              ; ...and the cursor's size
+FSEQ_FLG    equ 3               ; THE CALLER'S FLAGS byte (SPEC.md 18.4.8.3),
+FSEQF_RUN   equ 1               ; 0 in a plain cursor: RUN = +16..+21 hold the
+FSEQF_MAP   equ 2               ; run this call reads in; MAP = CX runs of 4
+                                ; bytes (first cluster, last) written to
+                                ; DX:BX (CX >= 1), out AX = the runs written
+                                ; (CX = maybe more) and DX = the generation
+FSEQ_RUN    equ 16              ; ...the run: first cluster, last (words)
+FSEQ_RGEN   equ 20              ; ...and the MAP's DX, copied here
+FSEQ_XSIZE  equ 22              ; a cursor that sets a flag is this size
 %define OSAPI_FILE_WRITE_SEQ KERNEL_SEG:0x0461  ; A STREAMING APPEND (SPEC.md
                                  ; 18.4.9, KERN_BIG; the small kernel answers
                                  ; CF=1 FERR_NAME). SI = the name ON EVERY

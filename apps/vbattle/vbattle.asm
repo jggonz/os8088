@@ -1615,7 +1615,7 @@ vb_dread:
     mov di, [vb_rcur]
     mov si, [vb_namep]
     push cx
-    call OSAPI_FILE_READ_SEQ
+    call vb_rseq                    ; (READ_SEQ, with the map's run: vbbm.inc)
     pop cx
     jc .bad
     or dx, dx
@@ -5541,6 +5541,10 @@ VB_VAR vb_bmseg, 2                  ; ...the build's scratch cluster
 VB_VAR vb_bmc, FSEQ_SIZE            ; ...the build's cursor, and AFTER it
 VB_VAR vb_bmt, FSEQ_SIZE            ; ...the template (zeroed together)
 VB_VAR vb_bmk, 4 * (VB_MAXCLIP + 1) ; ...a clip head's +4/+6, the music last
+VB_VAR vb_nrun, 2                   ; THE MAP (vbbm.inc, 18.4.8.3): its runs,
+VB_VAR vb_rgen, 2                   ; ...the generation they hold under,
+VB_VAR vb_runs, 4 * VB_NRUN         ; ...each a first cluster and a last
+VB_VAR vb_xc, FSEQ_XSIZE            ; ...and the cursor a read hands it in
 VB_VAR vb_docvol, 1
 VB_VAR vb_docdir, 2
 VB_VAR vb_docname, 14
