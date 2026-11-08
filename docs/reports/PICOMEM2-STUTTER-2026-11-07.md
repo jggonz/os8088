@@ -247,6 +247,27 @@ a quarter as often. Emulated, the battle A/B above reads 27 holes / 124.2
 ms on both firmwares with it, as with one sector. Its rate on the iron is
 the next VIDDISK R.
 
+## Four a call on the iron; six (2026-11-08)
+
+The owner's battle on the four-sector kernel (`c8703d36`), VBPROF against
+the one-sector play's:
+
+| | one sector | four sectors |
+|---|---:|---:|
+| the reader while reading | 75 KB/s | **97 KB/s** |
+| frames stalled | 148 | **15** (all `17-CHAR1`, 64 KB/s) |
+| frames of sound late (skipped) | 115 | **50** (`17-CHAR1` 12, `20-CHAR1` 22, `07-SCOPE` 16) |
+| frames held on the glass | 3 | 1 (#64, the first opening, 343 ms on a 0.7 ms decode - #40 the same at one sector: an opening's head, not the rate) |
+
+No microstutter in either. TakeOnMe (95.4 KB/s, Video Player) stalled 11
+times and paused once, noticeably. The owner's point stands over all of it:
+a clip's 95 or 65 KB/s is an AVERAGE, and a battle - two rings, the music
+streaming, the caches - cannot bank its spikes as Video Player's one big
+ring can. The goal is "plays what the ST-225 plays", not the card's best.
+So `DSK_PMRUN` is 6 (~9-10 ms of IRQ0 held, under the 13.7 ms hook): the
+next round. Past it lies the firmware - which the owner weighs against the
+users a custom flash would lose.
+
 ## The field kit: `make pm2kit`
 
 `build/pm2kit/` (and `build/pm2kit-360.img`): VIDSND (T and R), VIDBENCH and

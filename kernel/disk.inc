@@ -895,9 +895,10 @@ dsk_dbg_raw:
 %endif
 section .text                   ; DATA, so back to the kernel segment
 %ifdef DSK_PMHD
-DSK_PMRUN     equ 4             ; sectors a call on the card's disk, IRQ0
-                                ; masked: ~6-8 ms on 5150 #1, under Video
-                                ; Battle's 13.7 ms hook period (18.91.7)
+DSK_PMRUN     equ 6             ; sectors a call on the card's disk, IRQ0
+                                ; masked: ~9-10 ms on 5150 #1, under Video
+                                ; Battle's 13.7 ms hook period (18.91.7).
+                                ; 4 read 97 KB/s and still stalled there
 dsk_pmhd:     db 0xFF           ; the first int 13h unit a PicoMEM 2 serves,
                                 ; FFh none (drv_sniff; SPEC.md 18.91.7)
 %endif
