@@ -8078,8 +8078,10 @@ cw_drv_pkg_call equ apic_drv_pkg_call ; ...and its PAINT, which is the same
 %endif
 cw_vga_xor_rect_vram:   call vga_xor_rect_vram
                     retf
-; (cw_vid_disp_init went in kernel size pass 13: its two callers, kmain_o and
-; drv_boot_x, are the blob's and reach vid_disp_init through spw_near)
+; (cw_vid_disp_init went in kernel size pass 13: its two callers are boot-only
+; and run the blob's own expansion, bvs_disp_init (driver.inc) - kmain_o, the
+; blob's, near, and drv_boot_x, `.boot3`'s since BOOT3-PLAN wave 2, through
+; its far door bvs_disp_far)
 %ifdef KERN_BIG
 ; vidsel.inc's whole dual-display half is inside one %ifdef KERN_BIG, so these
 ; bodies do not exist in the small build.

@@ -5560,7 +5560,8 @@ ovl_fdd_apply:
 section .ovl                   ; ...AND THE REST OF THIS BLOCK IS THE WINDOW
                                 ; HALF (SPEC.md 2.5.2). ovl_cfg_load above
                                 ; is drv_boot's, reached AFTER the mount, so
-                                ; it stays in the blob; the sniff and its
+                                ; it is `.boot3`'s (BOOT3-PLAN wave 2; the
+                                ; blob's until then); the sniff and its
                                 ; port helpers run at MARK 25, before
                                 ; drv_boot is called at all.
 drv_sniff:
@@ -5935,8 +5936,8 @@ drv_boot_x:
     mov [ddg_row], cl
     mov byte [ddg_step], 0
 %endif
-    call bdl_load               ; DRV_ATTACH's, in this blob (below): BX is
-                                ; the row drv_boot_want left
+    call bdl_load               ; DRV_ATTACH's, in `.boot3` with this loop
+                                ; (below): BX is the row drv_boot_want left
     jnc .ok
     cmp byte [bx+DRVR_ANS], 0   ; A DEFAULT THE MACHINE CHOSE that failed
     je .drop                    ; (SPEC.md 51.3.2): say nothing and stop

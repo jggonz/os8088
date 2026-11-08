@@ -83587,8 +83587,9 @@ overlay, which dies at `mem_unblob` and costs nothing resident. It is 113
 bytes, and the overlay had 25 left on `kern_big` and **19 on `kern_emu`**,
 whose VMware probe also lives there; a key costs it 10 bytes on its own
 (the `_keys` row and `CFG_FBUF`'s growth). So the overlay makes one far call
-and nothing else, and `vgcf_boot` — 28 bytes of `.cold`, resident (in the
-boot blob, at its one call site in `drv_boot_x`, since kernel size pass 14) — tests
+and nothing else, and `vgcf_boot` — 28 bytes of `.cold`, resident (since kernel size pass 14
+not `.cold` at all but `drv_boot_x`'s own lines at its one call site: the boot
+blob's then, `.boot3`'s since BOOT3-PLAN wave 2, §2.9.15) — tests
 the byte, reads the core with `mod_need MOD_SETS`, runs `SC_OP_VGC` through
 its one slot and drops it again. **The core is read only on a machine whose
 box is ticked**, so every other machine pays the 28 bytes and no disk time;
@@ -84186,8 +84187,8 @@ drifts, and the thing it drifts away from is `drv_vol_bank`/`drv_vol_back` —
 Since kernel size pass 13 `drv_load_at` IS the resident loader, and a CLASS
 row's attach half — the HMA placement, `drv_attach`, `drv_tier` and
 `drv_publish` — is `driver.inc`'s `DRV_ATTACH` macro, expanded in the three
-images that bring a class driver up (the boot blob for `drv_boot`, `CTRL.DRV`'s
-panel for the Drivers and Sound pages, `HIBER.DRV` for the reload after a wake
+images that bring a class driver up (`.boot3` for `drv_boot` - the boot blob
+until BOOT3-PLAN wave 2 - `CTRL.DRV`'s panel for the Drivers and Sound pages, `HIBER.DRV` for the reload after a wake
 or a suspend). Each expansion's `_load` passes its own attach half in DI:SI and
 `drv_load_at` far-calls it at the point the attach always ran, inside the same
 volume bracket. The one resident caller, the screen saver, loads an overlay and
@@ -101875,8 +101876,8 @@ it again, so no driver says this by accident, an older driver keeps its whole
 claim, and an older kernel ignores the word: **no ABI break, no `DRV_VER`
 bump**.
 
-The kernel (`DRV_ATTACH`'s `%1_att`, kern_big's three expansions: the boot
-blob, CTRL.DRV and HIBER.DRV) reads it after the publish and before
+The kernel (`DRV_ATTACH`'s `%1_att`, kern_big's three expansions: `.boot3`
+(the boot blob until BOOT3-PLAN wave 2), CTRL.DRV and HIBER.DRV) reads it after the publish and before
 `DRVV_TIER` and `DRVV_READY`, rounds it up to 512 bytes (§50.2.1: it was a
 KB) and, when that is smaller than `DRVR_PARA`, calls `mem_regrowp` through
 the image's own hop into `.cold` - **zero resident bytes** - and stores the
@@ -102534,7 +102535,8 @@ loads and mounts with `DRVR_ANS` 0. GLaBIOS refuses the disk-less call the
 same way.
 
 **A default is the MACHINE's** (`DRVR_ANS` = 0, §51.5.4), and two things
-follow from that in `drv_boot`'s load loop, both in the blob:
+follow from that in `drv_boot`'s load loop, both in `.boot3` (§2.9.15; the
+blob's until BOOT3-PLAN wave 2):
 
 - **A machine-chosen row that fails to load says nothing.** It drops its
   want in RAM and does not raise `[drv_nerr]`, so the Control Panel does not
