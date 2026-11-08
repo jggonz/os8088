@@ -35,13 +35,23 @@ driver's image, the kernel's, a module) and the instance's. Then:
   3. the hold takes every pool KB that is not the KERNEL'S, less one granule
      (VB 8 KB: its 4 KB kept for the round-up and a 4 KB unit; VP one 32 KB
      slot);
-  4. so kern_big's hold less kern_mega's is at most what kern_mega's kernel
-     holds above 1MB beyond kern_big's (kern_big's XMS pool, which its HMA is
-     not in, less the pool kern_mega leaves programs), plus that granule:
-     EVERY KB of the difference is the kernel's own, none of it the
-     program's to recover.
+  4. so kern_big's hold less kern_mega's is at most kern_mega's FIXED AREA
+     above 1MB (extended memory less the pool: `.cold`, `.mega`, the park's
+     scratch and the tables, read off the machine) beyond kern_big's 64 KB
+     HMA, plus that granule - EVERY KB of the difference is that fixed
+     area's, none of it a driver's or the program's (KERN-MEGA-PLAN 14.180:
+     it was the fixed area AND the drivers' 15 KB before);
+  5. no pool block of the KERNEL'S in the play: the drivers the bracket
+     carries (SOUND.DRV, HDD.DRV) were brought down by FSXF_PREP (SPEC.md
+     53.2.3.1), not held above 1MB beside their low copies;
+  6. vb: the rings left the door its own KB and no guess - the largest free
+     conventional run in the play is VB_RKEEP and at most a 4 KB unit more
+     (VB_RKEEPM kept 24 for 18); vp: the door answered FSXF_PREP
+     ([vp_rbkb] is not FFFFh);
+  7. out of the play and the window closed, the drivers are back UP: the
+     kernel's pool blocks more than in the play (mx_relinst's mega_drvup).
 
-  5. (vb) kern_mega's hold is the CLIP CACHE (SPEC.md 126.4.6) wherever
+  8. (vb) kern_mega's hold is the CLIP CACHE (SPEC.md 126.4.6) wherever
      kern_big's is - the idle loop in its block, a ring given a clip in
      place and records read there, the A/B gate open - so the resident
      claim has no part for the idle loop and the rings take its KB, as on
@@ -56,12 +66,21 @@ which kern_mega pays the bracket's service area and the drivers' low copies
 out of (SPEC.md 53.2.3) - reported, not asserted: see KERN-MEGA-PLAN 14.178
 for the accounting of every KB.
 
-RED on mega-release (its tree, this file run there): vb - the region (48 KB)
+RED on mega-release at 14.178 (its tree, this file run there): vb - the region (48 KB)
 and the title picture (12 KB) in the pool, the hold 220 of the 284 KB the
 kernel leaves (2, 3, 4); vp - the arm's region (64 KB) in the pool, the bank
 6 slots (192 KB) of 284 (2, 3, 4). Green with OSAPI_SEG SEG_LOW (the region
 down before the hold is sized) and the picture given back before the hold
-opens. The owner's targets skip, saying so, when the variables are unset.
+opens. RED again on mega-release at 14.179 for legs 4-6 (KERN-MEGA-PLAN
+14.180): vb - SOUND.DRV and HDD.DRV 15 KB in the pool, kern_big's hold less
+kern_mega's 36 KB against the fixed area's 21 + 8, the largest free run
+16 KB; vp - the same 15 KB, 64 against 21 + 32, [vp_rbkb] absent. Green with
+FSXF_PREP. The owner's targets skip, saying so, when the variables are unset.
+
+    --map    each kernel's conventional heap in the play, and kern_mega's
+             tables (OS88_LDT_FREE0 = MEGA_LDT_FREE0 to split the LDT's
+             entries: identity and allocator)
+    --clip   vp: the demo clip - 05-LASTX.V88 (37 MB) is banked at 4 MB too
 """
 import argparse
 import os
@@ -74,6 +93,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path[:0] = [os.path.join(ROOT, "tools"), os.path.join(ROOT, "tests")]
 
 fails = []
+VB_RKEEP = 8            # apps/vbattle/vbattle.asm: KB its rings leave free
 
 
 def ok(cond, what):
@@ -150,6 +170,8 @@ def measure(kern, a):
         files = ["VIDEO.O88=" + pkg, "CLIP.V88=" + a.clip]
         path = "C:/CLIP.V88"
         names = [("vp_xbn", 2), ("vp_xbank", 1), ("vp_k", 2), ("vp_done", 2)]
+        if kern == "mega":                  # (FSXF_PREP's answer: 14.180;
+            names.append(("vp_rbkb", 2))    # an arm before it has none)
     subprocess.run([sys.executable, os.path.join(ROOT, "tools/os88hdd.py"),
                     "--noboot", "--out", vhd, "--cyls", "1024", "--heads",
                     "8", "--spt", "17", "--spc", "8"] +
@@ -175,6 +197,8 @@ def measure(kern, a):
                 r = om.pkg_reads(m, w, [(sym[n], l) for n, l in names])
             return {n: (b[0] if l == 1 else u16(b))
                     for (n, l), b in zip(names, r)}
+        if kern == "mega":                  # ...read as "none" when absent
+            names = [(n, l) for n, l in names if n in sym]
         if a.prog == "vb":
             om.guest_sleep(m, 2)
             m.key("Enter")
@@ -201,7 +225,8 @@ def measure(kern, a):
                 om.guest_sleep(m, 1)
                 s = st()
             got.update(hold=s["vp_xbn"] * 32, conv=s["vp_k"] * 32,
-                       title=1 if s["vp_done"] else 0, err=0, cache=0)
+                       title=1 if s["vp_done"] else 0, err=0, cache=0,
+                       prep=s.get("vp_rbkb", 0xFFFF))
         got["rmode"] = rmode[0]
         m.pause()
 
@@ -209,6 +234,8 @@ def measure(kern, a):
             def __getitem__(self, k):
                 return S(k)
         mp = heapmap.Map(m, SY())
+        if a.map:
+            mp.report("%s: the conventional heap in the play" % kern)
         got["runs"] = [round(p / 64.0, 1) for _b, p in mp.runs()]
         got["xm_kb"] = u16(m.read(S("xm_kb"), 2))
         if kern == "big":
@@ -222,7 +249,41 @@ def measure(kern, a):
             got["mine"] = sorted(int(c.kb) for c in mine)
             got["kernel_kb"] = sum(int(c.kb) for c in kernel)
             got["free_for_programs"] = got["xm_kb"] - got["kernel_kb"]
+            # THE FIXED AREA above 1MB (mega_layoutf: `.cold`, `.mega`, the
+            # park's scratch and the tables), which no pool KB is: extended
+            # memory less the pool. kern_big's HMA (64 KB) is the same kind
+            # of KB on kern_big - outside its XMS pool - so its excess over
+            # 64 is the part of kern_big's hold less kern_mega's that is the
+            # kernel's own, by construction (KERN-MEGA-PLAN 14.180, item 4)
+            got["fixed"] = u16(m.read(S("mega_extkb"), 2)) - got["xm_kb"]
+            if a.map:                       # ...and what the tables hold
+                tl = struct.unpack("<I", m.read(S("mega_tbllin"), 4))[0]
+                n = u16(m.read(S("mega_ldtn"), 2))
+                t = m.read(tl, n * 8)
+                free0 = int(os.environ.get("OS88_LDT_FREE0", "0"), 0)
+                used = [i for i in range(n) if t[i * 8 + 5]]
+                print("  tables: %d KB at %06X, %d entries, %d present "
+                      "(%d of them below the allocator's first, entry %d)"
+                      % (u16(m.read(S("mega_tblkb"), 2)), tl, n, len(used),
+                         len([i for i in used if i < free0]), free0))
         m.run()
+        if kern == "mega":
+            # ...AND THE DRIVERS GO BACK UP when the instance ends (mx_relinst's
+            # mega_drvup, SPEC.md 53.2.3.1): out of the play, the window
+            # closed, the kernel's pool blocks read again
+            m.key("Escape")
+            om.guest_sleep(m, 4)
+            try:
+                ui.close(w)
+                om.guest_sleep(m, 2)
+                m.pause()
+                got["kernel_after"] = sum(
+                    int(c.kb) for c in heapmap.pool(m)
+                    if c.own >= 0xFF00 and not c.purgeable)
+                m.run()
+            except Exception as e:          # (reported by leg 7)
+                print("  (the close: %s)" % e, flush=True)
+                got["kernel_after"] = None
     return got
 
 
@@ -231,6 +292,12 @@ def main():
     ap.add_argument("--prog", choices=("vb", "vp"), default="vb")
     ap.add_argument("--megs", default="1.375")
     ap.add_argument("--kern", choices=("both", "big", "mega"), default="both")
+    ap.add_argument("--clip", default="08-WILLY.V88",
+                    help="vp: the demo clip (apps/video/demo/vga/) - "
+                    "05-LASTX.V88 (37 MB) is banked at 4 MB too, where "
+                    "08-WILLY.V88 is held whole")
+    ap.add_argument("--map", action="store_true",
+                    help="print each kernel's conventional heap in the play")
     a = ap.parse_args()
     os.environ.setdefault("OS88_86BOX_ROMS", os.path.join(
         ROOT, "build", "86box", "roms"))
@@ -238,8 +305,8 @@ def main():
     if a.prog == "vb":
         a.bundle, note = bundle_of(a)
     else:
-        a.clip = os.path.join(ROOT, "apps/video/demo/vga/08-WILLY.V88")
-        note = "08-WILLY.V88"
+        a.clip = os.path.join(ROOT, "apps/video/demo/vga", a.clip)
+        note = os.path.basename(a.clip)
     print("megapar: %s, %s, %s MB, 86Box at286_vga_sb_hdd" % (
         {"vb": "Video Battle", "vp": "the Video Player"}[a.prog], note,
         a.megs), flush=True)
@@ -261,21 +328,44 @@ def main():
            "(pool %d, the kernel's %d), %d KB granule" % (
                r["hold"], r["free_for_programs"], r["xm_kb"],
                r["kernel_kb"], g))
+        ok(r["kernel_kb"] == 0,
+           "5. no pool block of the KERNEL'S in the play: %d KB - the "
+           "drivers the bracket carries (SOUND.DRV 11, HDD.DRV 4) brought "
+           "down by FSXF_PREP rather than held above 1MB beside their low "
+           "copies (SPEC.md 53.2.3.1)" % r["kernel_kb"])
+        if a.prog == "vb":
+            big = max(r["runs"]) if r["runs"] else 0
+            ok(big <= VB_RKEEP + 4,
+               "6. the rings leave the door its own KB and no guess: the "
+               "largest free conventional run in the play %.1f KB, at most "
+               "VB_RKEEP %d + a 4 KB unit (FSXF_PREP's answer, not "
+               "VB_RKEEPM's 24)" % (big, VB_RKEEP))
+        else:
+            ok(r.get("prep", 0xFFFF) != 0xFFFF,
+               "6. the door answered FSXF_PREP: [vp_rbkb] %s KB held for it "
+               "(VP_RBRKB's guess, 16, when refused)" % (
+                   r.get("prep") if r.get("prep", 0xFFFF) != 0xFFFF
+                   else "none - FFFFh"))
+        ok(r.get("kernel_after") and r["kernel_after"] > r["kernel_kb"],
+           "7. the drivers went back UP when the instance ended: the "
+           "kernel's pool blocks %s KB after the close (mega_drvup)" % (
+               r.get("kernel_after"),))
     if len(res) == 2:
         b, r = res["big"], res["mega"]
-        own = b["pool"] - r["free_for_programs"]
+        own = r["fixed"] - 64
         ok(b["hold"] - r["hold"] <= own + g,
            "4. kern_big's hold %d - kern_mega's %d = %d KB, at most the "
-           "kernel's own %d (kern_big's pool %d less what kern_mega leaves "
-           "programs) + %d" % (b["hold"], r["hold"], b["hold"] - r["hold"],
-                               own, b["pool"], g))
+           "kernel's own %d (kern_mega's fixed area above 1MB, %d KB, less "
+           "kern_big's 64 KB HMA) + %d" % (
+               b["hold"], r["hold"], b["hold"] - r["hold"], own,
+               r["fixed"], g))
         print("  conventional: kern_big %d KB held (%s free), kern_mega %d "
               "(%s free)" % (b["conv"], b["runs"], r["conv"], r["runs"]))
         if a.prog == "vb":
             ok(not b["cache"] or (r["cache"] and r["idle"] and
                                   r["irings"] and r["icalls"] and
                                   not r["noinp"]),
-               "5. kern_mega's hold is the CLIP CACHE wherever kern_big's is "
+               "8. kern_mega's hold is the CLIP CACHE wherever kern_big's is "
                "(kern_big %s, kern_mega %s): the idle loop in its block (%d), "
                "%d ring(s) given a clip in place, %d records read there" % (
                    "cache" if b["cache"] else "no cache",
