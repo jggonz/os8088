@@ -81,6 +81,16 @@ X kernel/band.inc MEM_K_BAND             # the 1bpp band composer's buffer, take
                                          # once at boot and never freed - and only
                                          # the BAND=1 knob assembles band.inc, so
                                          # no shipped kernel makes this claim
+X kernel/mega.inc MEM_K_DRV              # kern_mega's LENT driver image
+                                         # (mega_drvlow, SPEC.md 53.2.3.1): a
+                                         # driver FSXF_PREP brings down for a
+                                         # real-mode bracket. The door banks its
+                                         # PARAGRAPH and the IVT names it there,
+                                         # and SOUND.DRV's SBL_DSCS needs it on
+                                         # 512 bytes - a move between the door's
+                                         # sum and the drop runs a stale segment.
+                                         # Bottom-up, among the arena's low pins,
+                                         # and back up when an instance ends
 X kernel/loader.inc ld_base              # a package REGION: born pinned, and the
                                          # PACKAGE declares it (OS88_REGION_
                                          # MOVABLE, OS88_WORKER_RESTARTABLE), which
