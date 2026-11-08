@@ -2867,11 +2867,11 @@ endif
 	$(NASM) -f bin -w+error $(KINC) $(VIDDEF) $(KZDEF) \
 	        --before "[map all $(BUILD)/kernel.map]" -o $@ $(KERNEL_SRC)
 # THE KERNEL'S OWN LIST of the words naming `.cold`'s segment, stamped into
-# the blob's cfx_tab. Two more assemblies
+# `.boot3`'s cfx_tab (kernel/boot3.inc). Two more assemblies
 # with the segment moved, side by side; a kernel with no cfx_tab (kern_small,
 # kern_mega) is left alone. A packed kernel is stamped again after PASS 2
 # below, that being the assembly that ships - and stamped HERE too, because
-# `.cfx` is past `.boot2` and the two passes must pack the same bytes there
+# `.boot3` is past `.boot2` and the two passes must pack the same bytes there
 # (a KZ define that moved a blob word would then say so, which is right).
 	@python3 tools/os88cfx.py $@ $(BUILD)/kernel.map -- \
 	        $(NASM) -f bin -w+error $(KINC) $(VIDDEF) $(KZDEF) $(KERNEL_SRC)
