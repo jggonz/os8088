@@ -300,3 +300,40 @@ Each row: file:line, a short exact quote, what the code does, and proposed text.
 3. Should the saver settings window close with the panel, as Customize does (sysmisc-6), or should its Ok be a save in its own right?
 4. Is `KHP_RELIT`'s about 22 resident bytes worth the wake repaint on kern_big (sysmisc-9)? That needs a MartyPC `flicker`/`pace` reading of a saver wake, which this review did not take.
 5. Should kerndos take its date from `OSAPI_CLK_GET` rather than `int 1Ah AH=04h`? The DOS area owns that call; it is the date half of sysmisc-3.
+
+## Verification
+
+Adversarial pass, 2026-11-08: every bug/hazard and every medium finding re-read
+against the code on both build arms (`KERN_BIG`/`KERN_SMALL`, and the
+`KERN_MEGA` knob lists in kernel.asm); low-severity items spot-checked. None is
+in docs/plans/ABI-BREAK-LIST.md or KERNEL-BYTE-QUEUE.md; sysmisc-9 is already
+priced in docs/plans/LAST-DROP-PERF.md. Machine-readable verdicts and the
+apply-ready doc fixes (70 entries, every `old_text` checked to occur exactly
+once) are in `data/sysmisc.json`.
+
+Findings:
+
+- **sysmisc-1** CONFIRMED - `mul 10 / div 182` against an 18.2065 Hz `[ticks]`; +30.8 s/day. 625/11379 is 0 bytes and stays in range for hibernation's 32,768-tick passes. Predicted, not measured.
+- **sysmisc-2** CORRECTED - the path to `[clk_sec+0FEh]` traces exactly. But `_unpack` is `CFG_BOOT`'s, which only the overlay instantiates (driver.inc:4910, 5403). The fix is one 5-byte `and` in `.ovl`, with nothing in CTRL.DRV.
+- **sysmisc-3** CORRECTED - real. A 32-bit tick count built from h:m:s plus the `int 1Ah` call is about +40-60 CTRL.DRV bytes, not +35. WIN16 already answers 2Ah/2Ch from `OSAPI_CLK_GET` (§124.17.3), which is the precedent for the kerndos date half.
+- **sysmisc-4** CONFIRMED (low).
+- **sysmisc-5** CONFIRMED (low) - only a chip left in 12-hour mode is affected.
+- **sysmisc-6** CONFIRMED (low) - no panel-close path names `ss_row` or an `SSV_*` verb.
+- **sysmisc-7** CONFIRMED (low) - transient; `cp_repost`'s repaint follows.
+- **sysmisc-8** unchecked (record item).
+- **sysmisc-9** CORRECTED - already measured and queued: LAST-DROP-PERF.md row 2, `KHP_RELIT` +32 bytes, CGA 781 -> 629 ms, Hercules 984 -> 727, VGA 1,203 -> 706.
+- **sysmisc-10** CONFIRMED - kernel `.bss` boots zero and `clk_probe` has one caller. The flagged ctrl.inc bytes are resident `.text`.
+- **sysmisc-11** CONFIRMED.
+- **sysmisc-12** CORRECTED - about thirty sites (31 grep lines), most of them in wm.inc, not eleven.
+- **sysmisc-13** CONFIRMED.
+- **sysmisc-14** (R1) CONFIRMED as a proposal. Added caveat: a nested tick skips the ROM chain (`sch_chskip`, §8.5.1), so 40:6C can trail `[ticks]`.
+- **sysmisc-15** (R2) CORRECTED - CTRL.DRV is 15,405 bytes today (`build/ctrl.drv`). The 11,119 in SPEC.md 2.8 comes from an older size pass, and the saving is unprototyped.
+- **sysmisc-16** CONFIRMED.
+- **sysmisc-17** unchecked (prior-art record).
+
+Doc/code mismatches (numbered as above):
+
+- 1-18, 20-35 and 37-48 CONFIRMED. Several were split into more than one exact edit, such as the §31 contracts table, the §31.8 caption paragraph and the §37 month-length paragraph.
+- **19 REFUTED** - "a 12x12 glyph is 82.8 ms ... for the Sound page's three" (ctrl.inc:2749) is §31.1.3's measured MartyPC cost of the press edge's three glyphs (SPEC.md 69204). It is not the deleted clipped-fallback figure, and the later 4.3-6.4 ms per glyph is a different measurement.
+- 36 needed no change (as the reviewer said).
+- Found while verifying and added to doc_fixes: ctrl.inc's `.redraw` comment ("The save caption is not redrawn either", ~:7174), and §31.4's "§31.3's Buffer page still uses it" (that page is retired).

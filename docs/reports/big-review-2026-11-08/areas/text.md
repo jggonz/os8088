@@ -605,7 +605,7 @@ replacement. Also in the structured result.
     **SPEC.md:26266** "an 88px widget" / "an 88px strip" / "changes an 88px
     span" - FPG_W is 80 since FPG_GAP went to 0 (fprog.inc:59-69). Proposed:
     "80px".
-30. **kernel/fprog.inc:1033** "AX = whole units (<= 256, so the quotient" -
+30. **REFUTED (see Verification).** **kernel/fprog.inc:1033** "AX = whole units (<= 256, so the quotient" -
     (65,535 + 511) / 512 is at most 128. Proposed: "(<= 128, so the
     quotient".
 31. **kernel/fprog.inc:1145-1146** "locked or not (the file calls' own rule;
@@ -629,3 +629,63 @@ replacement. Also in the structured result.
    built; only a new package on an old kernel mis-renders.
 4. text-3: document the pen as undefined, or restore it? Kernel callers all
    set their pen first today; the question is the SDK's promise.
+
+## Verification
+
+An adversarial pass re-read the cited code on both kernels (the `KERN_SMALL`,
+`GFX_VGA`, `VID_EXT`, `DOCK_OPT`, `SEAMCUT` and `FPG_PARK` arms), along with
+`build/kernel.map`, `docs/plans/ABI-BREAK-LIST.md` and
+`docs/plans/KERNEL-BYTE-QUEUE.md`. Neither plan lists any finding below.
+
+- **text-1: confirmed.** `dkx_gfx_hole_arm` re-seeds `wm_clip_tab` under
+  `fpg_bare`'s zeroed count, and the pop puts back a stale count. +13 is
+  exact. Banking the hole is safe because the widget never sits under the
+  bottom strip.
+- **text-2: confirmed.** `vid_depth_set` writes mono/planes as one word
+  (1/1, 0/4, 0/8-or-16), so `font_char_bb` only ever runs with
+  `vid_mono` = 1. The 14 bytes are exact, and the deletion is even, so
+  parity holds.
+- **text-3: confirmed.** Only `.whole` and `font_run_scell` store the pen.
+- **text-4: confirmed** (low). The pair can also be read torn between the
+  two stores.
+- **text-5: confirmed** (low). The name-width gap was read, not run.
+- **text-6: confirmed.**
+- **text-7: CORRECTED.** `fnt_rn_edge`'s VGA arm is about 43 bytes by the
+  map, not about 25, so the mono saving is about 185 bytes.
+- **text-8: confirmed** (-3).
+- **text-9: confirmed** (the clocks are predicted).
+- **text-10: confirmed.**
+- **text-11: confirmed.** Its impact is still PLAUSIBLE: how `asc_use`
+  treats rows for missing packages was not traced.
+- **text-12: unchecked.**
+- **text-13: confirmed.**
+- **text-14: confirmed.** The counts reproduce.
+- **text-15: confirmed** (premises). It needs an abilock `--update` for the
+  new cell.
+- **text-16: CORRECTED.** The `menu_s_msep` saving is -17, not -19.
+  `files.inc`'s `fm_s_fsep` is a third kernel separator.
+- **text-17: unchecked.**
+- **text-18: unchecked.**
+- **text-19: unchecked.**
+- **Doc mismatches: 32 confirmed, 1 REFUTED.**
+  - **No. 30 (fprog.inc:1033) is REFUTED.** "<= 256" is a true, loose
+    bound, so it is not a mismatch. The routine's header already says 128.
+  - **No. 23** was quoted inexactly. The real text is "(like the menu-bar
+    logo, the one / sanctioned place ...)".
+  - **No. 8's** fallback is `.whole`, not `.slow`.
+  - **No. 10** was reworded. `.escape` sends planar and off-grid runs to
+    `font_run_scell`, so they never reach `font_run_cell`.
+  - **No. 28** became two edits, because the same paragraph's "A width
+    clamp in `menu_popup` is the fix ..." is stale too.
+  - **No. 29** also fixes SPEC.md:26266. fprog.inc:1102 is left alone,
+    because it is history told in the past tense.
+  - **No. 33** also fixes ascw.inc:963.
+  - **Three new mismatches were added:**
+    - font_ink's `out:` line.
+    - SPEC 11.96.17.1's "`font_ink` clears `[font_dith]` on the VGA path".
+    - icons.inc:549, `ico_core_bb`'s "all four planes".
+  - The two OSAPI contract-comment edits in apps/os88api.inc (FONT_RUN and
+    ICON_DRAW) change the abilock fingerprint. Applying them needs
+    `python3 tools/abilock.py --update "<why>"`, with no `PKG_FMT` bump.
+  - That makes 38 doc fixes in all, in data/text.json.
+

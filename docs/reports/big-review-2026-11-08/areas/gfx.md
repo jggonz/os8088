@@ -402,3 +402,55 @@ Each: file:line, the exact current text, what the code does, proposed text.
   first candidate.
 - gfx-4's predicted gain wants one `gfxbench` row on MartyPC's
   `os8088_xt_vga` before the bytes are spent.
+
+## Verification
+
+The adversarial verifier re-read the cited code, the other build arms and the
+plan lists on 2026-11-08. Nothing was built or run. The machine-readable
+result, with every doc fix checked for an exact and unique match, is
+`../data/gfx.json`.
+
+- **gfx-1: CORRECTED** (still high). The bug is real. The VGA group count was
+  wrong: with w < 0, the last pixel x+w-1 lies left of x, so `[vga_pr_n]` is
+  <= 0 and BP wraps to about 65,536 groups. The decoder then sweeps the whole
+  64KB of VGABUF_SEG, which is the bottom of the heap, not 8KB of it. The
+  ~8KB per row figure belongs to sw_blit_row on 1bpp, kern_small included.
+  `jle` and `jz` have the same 2-byte short encoding.
+- **gfx-2: confirmed** (plausible, not run). kern_mega builds GFX_PLANE, and
+  no limit guard exists.
+- **gfx-3: CORRECTED.** On kern_small, CLIPQF is the inline `cmp word
+  [wm_clip_n],0`, not a far call, so the saving there is -3 bytes and about 20
+  clocks rather than -4 bytes. On kern_big only the `jne .okq` fall-through
+  needs `or sp,sp`, because `ja .clipok` already arrives with ZF=0; net -3.
+- **gfx-4: confirmed** as a perf proposal. The gain is PREDICTED. SPEC 5.6.9.2
+  never measured or refused a planar arm.
+- **gfx-5: confirmed.** The header and SPEC 5.4 are corrected below to say
+  UNSPECIFIED.
+- **gfx-6: confirmed.** It is already ranked in LAST-DROP-PERF.md 7.1.
+- **gfx-7: confirmed.** The `.ovl` placement of vid_apply was not checked.
+- **gfx-8: unchecked.**
+- **gfx-9: confirmed.**
+- **gfx-10: CORRECTED.** SPEC §1 rule 3 already scopes the IF rule to
+  ISR-callable code. Only CLAUDE.md/AGENTS.md's short form needs the scope
+  back.
+- **gfx-11: confirmed.** The §4 row is fixed below.
+- **gfx-12: confirmed.** All 31 listed mismatches held.
+- **gfx-13: confirmed.**
+- **gfx-14: unchecked.**
+- **gfx-15: confirmed.** The sort is wm.inc's.
+- **gfx-16: confirmed** (gfx_hline relies on gfx_fill keeping CX).
+- **gfx-17: unchecked.**
+- **Doc mismatches: 31 confirmed, 0 refuted.** Nos. 4, 13 and 30 were
+  reworded. No. 30's "refused as a request" is ambiguous rather than flatly
+  false, but no path refuses on bit 14. Nine more stale statements in the
+  same blocks were added as fixes:
+  - vga12.inc gfx_blit4 "no adapter-specific code"
+  - softgfx.inc:207 SWM_SOLID
+  - softgfx.inc:439 caller chain
+  - softgfx.inc:942 and 951, the AX and BP notes
+  - SPEC 4580 ".lowbss" plane rows
+  - SPEC 4235 `bb_*`
+  - SPEC 7203 `vga_lmtab`
+  - SPEC 4253 `[gfx_color]`
+
+  That makes 40 doc fixes in all.

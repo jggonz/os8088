@@ -287,3 +287,27 @@ Bytes: 0.
 2. **mc-16:** is anything in megados.inc or the hibernate resume known to depend on the PIC being exactly at 20h, as opposed to "whatever `mega_pic_pm` sets"? I found only `mega_pic_at`'s AH parameter, which suggests not.
 3. **mc-5:** is the 0.257 ms/KB figure from KERN-MEGA-DOS-PLAN 2.4 the Victory's `rep movsw` above 1 MB, or a BIOS block move? If it is the latter, the IF-off estimate for a piece is pessimistic.
 4. Is LZ decoding into a pool claim serialized across tasks anywhere (a file-layer lock)? If it is, mc-9's BACK hazard is unreachable today and the +1-byte fix is insurance only.
+
+## Verification
+
+Adversarial pass, 2026-11-08: every finding re-read against `kernel/mega.inc`, `kernel/lz.inc`, `kernel/kernel.asm`, `apps/win16/win16.asm` and `build/megak/kernel.map`; nothing built or run. 13 confirmed, 5 corrected, 0 refuted, 1 unchecked; every doc mismatch confirmed (17 fixes in `data/megacore.json`: the MAP paragraph's two rows and BOCHS.md's two lines are each merged into one fix, and the `mega_svc` comment's "goes on as before" from the table above is added beside SPEC's).
+
+- **mc-1 CORRECTED** (still high): confirmed, and the same path has a fourth SS read - `mega_rseg` .nu -> `mega_useg` -> `mega_ldt_alloc`'s `cmp di, [ss:mega_ldte]`. `mem_tab` is at `.lowbss` 13CCh, also past 3FFh. Bytes about +16 for the reflection path's sites, nearer +40 with the `.cold` siblings.
+- **mc-2 confirmed**: `.none` -> `.nest`, `mega_rss` = the selector, `.rmc` loads it in real mode.
+- **mc-3 confirmed**: `mega_rspar` is stored before `mega_p2d`, which keeps DX when it refuses; no `MC_OWN` check.
+- **mc-4 confirmed**: the walks and their cli brackets are as described; the 5 ms figure is a prediction.
+- **mc-5 CORRECTED**: already recorded in KERN-MEGA-PLAN 14.48.3 ("14.15's 64KB worst case is ~16 ms"); what is new is `mx_alloc`'s `sch_lock` across a whole pack and the ISR-reachable-flag model. The 0.257 ms/KB is LOADALL-PLAN's measured copy rate (open question 3).
+- **mc-6 confirmed**: a BIOS-owned IRQ7 falls to `mega_eoi1`, a non-specific EOI with no ISR read.
+- **mc-7 confirmed**: there is no wrap in `mega_rfclk`; +00B0h is the right correction.
+- **mc-8 confirmed**: 4Ah/4Eh are in `.pad`'s 47h-53h NumLock arm; 40:96 bits 2-3 are never written; AH=12h is 40:18 alone.
+- **mc-9 CORRECTED**: the widened rebase is 0 bytes, not +1 (the two instruction pairs are the same length). The commoner collision of the same class is another task's LZ decode re-aiming BACK/ODD/SLD, which `mega_slidec`'s own comment concedes and the rebase does not cover. Serialization (open question 4) was not established.
+- **mc-10 confirmed**: there is no CS test before `mega_gpfix`/`mega_gpw`, and `mega_cs2ds` maps 0x0060 to KDATA.
+- **mc-11 confirmed**: the read-modify-write is at both sites, and saves 2 bytes each.
+- **mc-12 confirmed**: there is no low-nibble test in `mega_s2segc`.
+- **mc-13 confirmed** (listed, CODE-REVIEW row 18; its "ninth row #GP" half is already fixed, since NULL is returned).
+- **mc-14 confirmed** (listed): set at 13480, read at 11243, never cleared, for the block's life.
+- **mc-15 CORRECTED**: the spin is real. A late FAh is harmless in `mega_k09` itself: it is a break of 7Ah, and `.notbrk` sends it to `.eoi`. Only `kbm_isr`/`kbd_track` remain to check.
+- **mc-16 CORRECTED**: "the copy and nothing else" is wrong. `mega_ivt_sync` copies to a literal `0x20*4` and rebuilds from a literal 22h. `mega_idt_gate` (`0x28`, `0x26`), `mega_irqrom` (22h-28h) and `mega_capon` (`0x26*4`) also hard-code IRQ0-7 at 20h-27h. `mega_i21` is 81 bytes (map), so the net is about -70. Still worth re-opening.
+- **mc-17 confirmed**: `cmp dx, 0x10 / jb .lowend` checks nothing below 1 MB.
+- **mc-18 confirmed**: the handler is entered by `retf` after `mega_swok`'s compare.
+- **mc-19 unchecked** (low, prior art).

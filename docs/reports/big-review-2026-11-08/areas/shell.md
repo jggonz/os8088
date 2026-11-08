@@ -499,3 +499,56 @@ principled way out if the theme becomes a default.
    kern_big and kern_emu, or should it ride `.cfx` like the grid copy?
 4. shell-14: does the owner want a `flicker` measurement of kern_small's cell
    repaint before deciding between +2 calls and the flash?
+
+## Verification
+
+Adversarial pass, 2026-11-08, against the same tree and `build/kernel.map`;
+every bug/hazard and every medium finding re-read with its callers and
+build arms. Data: `docs/reports/big-review-2026-11-08/data/shell.json`.
+
+Findings:
+
+- shell-1 - CONFIRMED. `desk_drop_x` keys on `IF_DESK` alone; step 9 drops for
+  any non-`WF_DESK` window; `stik_load` has already bound `stik_le`; MAKE's CF
+  is ignored under `STIK_DESKONLY`. Not in either plan queue.
+- shell-2 - CORRECTED. Real; the settings core is 3,180 bytes (`mods_end` =
+  0xC6C), not 2,206, and §110.12's "about a second" prices the menu's load.
+- shell-3 - CONFIRMED. `sc_m_dfind` (AH = 0FFh) matches only `SC_STIK` rows,
+  so WIN16's group link must probe, one module load per zone.
+- shell-4 - CORRECTED. Real duplication, but the copies have diverged beyond
+  geometry (the module's hole/region bank, the open-strip CF clear, prologue
+  encoding), so one macro needs `%if` arms; severity medium -> low.
+- shell-5 - CONFIRMED (17 source lines, not 19 instructions).
+- shell-6 - CONFIRMED (five sites: `desk_select`, `desk_unsel_x`,
+  `sc_rclick_x` x2, `sc_m_del`).
+- shell-7 - CONFIRMED.
+- shell-8 - CORRECTED. Behaviour as described; kind bug -> weakness (heap
+  held in a movable claim, nothing malfunctions).
+- shell-9 - CONFIRMED (cycle figures predicted, not measured).
+- shell-10 - CONFIRMED (predicted).
+- shell-11 - CONFIRMED.
+- shell-12 - CORRECTED. Only the caption is forced (confirmed), but the SDK's
+  "Both strings are terminated" closes the PACKAGE record's paragraph and the
+  driver's three strings are each documented NUL: no SDK contradiction.
+- shell-13 - CONFIRMED (spot-checked).
+- shell-14 - CONFIRMED (spot-checked).
+- shell-15 - unchecked (low, recorded decision).
+
+Doc mismatches (numbering as in the section above):
+
+- 1, 2, 4-11, 13-23, 24 (its SPEC.md:80168 half), 26, 27, 29 - CONFIRMED,
+  replacement text refined in the JSON (`doc_fixes`). Item 9's edit is inside
+  `OSAPI_WM_DESK`'s contract, which `tools/abilock.py` fingerprints: apply it
+  with `python3 tools/abilock.py --update` (no `PKG_FMT` bump).
+- 3 (`desk.inc:2387`, "osapi_desk_svc copies") - REFUTED as a doc fix: the
+  stale name is real but sits in an `%error` string, which is code.
+- 12 (SPEC.md:221361) - REFUTED: a row of the dated 2026-10-15 measured
+  table, accurate for the build it measured.
+- 24, its SPEC.md:80196 half (the §39.19.6.2 heading) - REFUTED as proposed;
+  replaced by a fix to the summary sentence at SPEC.md:80007-80009, which
+  still says the image is 1,023 bytes (it is 1,955, a 2 KB claim).
+- 25 (SPEC.md:80013, `wm_land_fit` in "What moved") - REFUTED: the list of
+  what went into EXTD.DRV when it landed, which is history and accurate.
+- 28 (`os88api.inc:1446`, "Both strings") - REFUTED, as shell-12.
+- Added by the verifier: `apps/stiklib.asm:8` ("held from the first QUERY to
+  the restart") and SPEC.md:80007-80009 (above).

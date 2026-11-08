@@ -927,3 +927,64 @@ and the proposed replacement.
 5. **Blob room (video-2, video-3, video-4).** Is there room in kern_big's
    blob for about 45 transient bytes, or does it take the fourteenth
    sector? Either way it is disk, not residency.
+
+## Verification
+
+Adversarial pass, 2026-11-08: every bug, hazard, high and medium finding was
+re-read against the code (both build arms) and the plans. No finding was
+refuted. The data file `data/video.json` carries the corrected fields.
+
+- **video-1**: CORRECTED. The bug is real: the only refusal is under
+  `%ifdef KERN_BIG`, and kern_small writes 3BFh = 3 on every call, page 0
+  included. kern_small's cost is +13 bytes, not +11.
+- **video-2**: CONFIRMED. The fix needs its own copy of the alias test in
+  `.boot2`, because on kern_big `vid_memchk` is in `.ovl`, which the splash
+  cannot reach. The monitor-damage risk is period lore and is not verified
+  here.
+- **video-3**: CORRECTED. The MCGA defect is real. Divert only BL =
+  0Ah..0Ch to `.equip`. Sending "anything but 07h/08h" there would also
+  move a VGA+mono machine (BL = 01h) onto a Hercules primary.
+- **video-4**: CONFIRMED.
+- **video-5**: CONFIRMED in code order. The hardware claim stays
+  PLAUSIBLE until it is measured.
+- **video-6**: CONFIRMED in the code path. The effect on the glass stays
+  PLAUSIBLE until it is run under QEMU.
+- **video-7**: CORRECTED. The saving is -82..-86 bytes. fsx_bmodes'
+  id-8 byte is kept on purpose, and fsx.inc:1194-1203 gives the reason.
+- **video-8**: CONFIRMED.
+- **video-9**: CONFIRMED. The cost is +3..+8 bytes.
+- **video-10**: CORRECTED. The defect is real, but the proposed fix would
+  break HIBER.DRV: `hbm_stageseg` reads `[vid_kind]` after `vid_reboot`, so
+  the fix must bank `[vid_kind]` and restore it. It must also program the
+  card by hand, because int 10h mode 7 is wrong on Hercules+CGA with a CGA
+  primary. The cost is +18..+24 bytes.
+- **video-11**: CONFIRMED.
+- **video-12**: CONFIRMED (spot-checked).
+- **video-13**: CONFIRMED (spot-checked).
+- **video-14**: CONFIRMED (spot-checked).
+- **video-15**: CONFIRMED. All 41 quotes were found verbatim, and the
+  claims they make are confirmed.
+- **video-16**: unchecked.
+- **video-17**: CORRECTED. A VGA machine's CGA row does draw 1bpp. The
+  span is confirmed at about 1,108 bytes. Cite MONO-RECLAIM-PLAN.
+- **video-18**: unchecked. The SPEC quote was located.
+- **video-19**: CONFIRMED (spot-checked).
+- **video-20**: unchecked.
+
+Doc mismatches. The numbers follow the list above.
+
+- **1 and 2**: CONFIRMED, merged into one rewrite of the paragraph.
+- **3 to 10**: CONFIRMED.
+- **11**: CONFIRMED, but rewritten as a comment-only fix. Deleting the
+  dead `%ifdef KERN_SMALL` nop would be a code change.
+- **12**: CONFIRMED, refined. `spw_near` has more targets than the list
+  proposed (menu_relayout, inst_vol_enter and others), so the fix names the
+  splash's own targets.
+- **13 to 41**: CONFIRMED. The replacements in 18 and 41 are refined
+  against the real flags (FASTTICK with RATE refuses, and kern_small takes
+  CH = 0 only).
+
+Three stale neighbours were added: `vid_disp_init`'s "pull-down cap",
+§39.18's "A SAME-MODE bracket still changes the geometry" and step 5 of
+§53.6. The "latched at the next vertical retrace" wording for the Hercules
+page was deliberately not fixed until video-5 is measured.

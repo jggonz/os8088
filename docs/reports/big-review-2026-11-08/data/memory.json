@@ -1,0 +1,678 @@
+{
+ "area": "memory",
+ "title": "The claim heap, XMS and on-demand modules",
+ "summary": "The heap's core model is the best-argued subsystem in the kernel: an out-of-band record table that is the allocator, two-ended placement, purgeability encoded in the owner word at zero record cost, relocation by callback through the holder's own dispatcher (no handle double-indirection on an 8088), one walk body for plan and run, and mem_avail defined as the question mem_claim answers. The weaknesses are at the edges: interrupt latency (mem_regrow copies at IF=0; mem_avail walks O(n^2) at IF=0), failure policy (a doomed claim sheds every cache and can park once per shed), a per-owner cap that also binds the kernel's shared tags (MEM_K_DRV: at most eight driver images), a purge floor any teardown lifts (a multi-file paste can silently stop part-way), the KB-shift carry surviving in the DMA head door, and a self-region widening that lets a package free or regrow the region it runs in (a documented choice in loader.inc, and one mem_owner_of_x depends on). Modules are solid (build + layout stamps, bounded entries, build-time-proven mod_cfix); the open risk is a worker-side drop freeing code the UI task is executing. xmem.inc is a clean overlay shim with three stale sentences. Most doc drift sits in orphaned headers of inlined routines and in SPEC 66.3, which still describes the MC_DMA-pins / no-park design.",
+ "strengths": [
+  {
+   "title": "The record IS the allocator, out of band",
+   "evidence": "kernel/memory.inc:1064-1258, 6261; SPEC.md 50.2",
+   "why": "Free is one word store, no free list can disagree with the map, and the map is in .lowbss behind ss: so a package overrun cannot corrupt it (DOS's in-band MCBs can be killed by a one-byte overrun)."
+  },
+  {
+   "title": "Purgeable class encoded in the owner word, priority in its high byte",
+   "evidence": "kernel/memory.inc:305-351, 1379-1452, 1456-1515",
+   "why": "Zero bytes per record, no notification protocol (zeroing the one naming word is the notice), and a rank-bounded cheapest-first shed so a cache can never evict a dearer one."
+  },
+  {
+   "title": "Relocation by callback rather than handles, default PINNED",
+   "evidence": "kernel/memory.inc:110-124, 1224, 3839-3962; SPEC.md 66.2",
+   "why": "Normal access is a plain segment load; only a move pays, once, through PKG_DISP so nobody writes a retf; MC_RLOC reset on every publish makes stale procs impossible. Cheaper per access than Mac handles or GEOS lock/unlock."
+  },
+  {
+   "title": "Plan and run are one body, direction is a mask",
+   "evidence": "kernel/memory.inc:2883-3064, 2680-2720",
+   "why": "The plan cannot promise a run the moves do not deliver, by construction; complementing the key folds both passes into one scan."
+  },
+  {
+   "title": "The kernel's half is a table, and the IVT lesson is kept",
+   "evidence": "kernel/memory.inc:3109-3163, 3330-3485",
+   "why": "A holder costs a 4-byte row; one loop, called once per address space (.bss, .lowbss, the IVT), covers them all; only IRQ vectors + int 33h are rewritten because unused IVT slots are scratch (tests/hdmove.py)."
+  },
+  {
+   "title": "mem_avail answers mem_claim's question",
+   "evidence": "kernel/memory.inc:4867-5040, 4261-4357",
+   "why": "The figure packages size down from models the compaction + shed a claim would really do, on both kernels; the under-report-is-invisible argument is written down."
+  },
+  {
+   "title": "DMA page rule as a monotonic bump inside the scan, preserved across moves",
+   "evidence": "kernel/memory.inc:1153-1171, 2769-2842, 1764-1768",
+   "why": "No claim-test-retry while holding blocks; regrow and both compaction passes keep the property a claim was granted under."
+  },
+  {
+   "title": "Module loader: two stamps, bounded entries, mod_gone, drop gate, proven cfix scan",
+   "evidence": "kernel/mod.inc:105-141, 282-284, 537-616, 681-716; SPEC.md 2.8.2-2.8.3",
+   "why": "A stale or hostile image is refused, not executed; unloaded slots refuse rather than jump; t_moddrop gates 'every module has a drop'; mod_cfix is a byte scan made safe by a build-time proof in tools/os88rom.py."
+  },
+  {
+   "title": "XMS as an overlay with one gate written last",
+   "evidence": "kernel/xmem.inc:40-55, 259-262, 343",
+   "why": "No resident cost on an 8088, and the tier-0 refusals are byte-identical to what every package has already met on the target machine."
+  }
+ ],
+ "findings": [
+  {
+   "id": "mem-1",
+   "kind": "bug",
+   "severity": "medium",
+   "title": "MEM_OWNER_MAX caps the kernel's shared tags: the ninth driver image is refused with the heap free",
+   "detail": "mem_claim_1 counts every live record whose MC_OWN equals BX and refuses at MEM_OWNER_MAX (8) regardless of BX. Every driver image and every DRVC_OVL image loaded through drv_load_at (XMEM.DRV, SAVER.DRV, THMPAL.DRV) is claimed under the single tag MEM_K_DRV, and kern_big has DRV_MAX = 9 + DRV_VX + DRV_PX rows (SOUND, HDD, NET/ETHER, RAMDISK, VESA, EMS, CDROM, HTTPFS, USBMOUSE, PCIETHER). On a well-equipped AT (or where HMA_DRV declines) the ninth MEM_K_DRV claim fails exactly as 'no heap'. MEM_K_MOD and MEM_K_IMG share one owner each the same way. The cap's purpose is to charge an app that floods the table; it has no meaning for kernel tags whose counts the kernel bounds.",
+   "evidence": [
+    "kernel/memory.inc:1095-1112 owner walk counts any BX",
+    "kernel/memory.inc:57-74 cap and its rationale",
+    "kernel/driver.inc:3513-3515 mov bx, MEM_K_DRV / mem_claimp_hi_x",
+    "kernel/driver.inc:80 DRV_MAX equ 9 + DRV_VX + DRV_PX",
+    "kernel/xmem.inc:283-285 XMEM.DRV via drv_load_at",
+    "kernel/blank.inc:683 SAVER.DRV via drv_load_at"
+   ],
+   "recommendation": "Skip the cap when BH = 0xFF (kernel tags); purgeable ranges are already per-ordinal owners. Add a gate that loads every driver on an AT profile, or an assembly-time check that the kernel tags' maxima fit MEM_MAX.",
+   "phase": "now",
+   "bytes_est": "+5 .cold resident",
+   "verdict": "confirmed",
+   "verify_note": "mem_claim_1's owner walk (memory.inc:1094-1112) counts MC_OWN == BX with no exception for BH = 0xFF, and every driver image is claimed as MEM_K_DRV (driver.inc:3513). HMA_DRV is only defined on ROM_COLD kern_big (kernel.asm:1166-1175), so a standard kern_big puts every image on the heap. Not listed in ABI-BREAK-LIST/KERNEL-BYTE-QUEUE. Reaching nine needs XMEM.DRV plus eight drivers loaded at once, so it is latent on most profiles (the reviewer's open question 1)."
+  },
+  {
+   "id": "mem-2",
+   "kind": "bug",
+   "severity": "medium",
+   "title": "mem_regrow runs path 3's whole copy with interrupts off",
+   "detail": "mem_regrow is one pushf/cli window from entry to exit, and path 3 inside it runs mem_hifit (O(MEM_MAX^2)) and mem_bcopy of the whole old block. At ~25 clocks a word on a 4.77 MHz 8088 a 64KB canvas grow is ~170 ms at IF=0: ~20 serial-mouse bytes overrun the one-byte 8250 buffer, SB half-buffer IRQs are late, and two BIOS ticks are lost (the PIC holds one). The compactor solved the identical problem with [sch_lock] and IF=1; regrow is the outlier.",
+   "evidence": [
+    "kernel/memory.inc:4559-4560 pushf/cli at entry",
+    "kernel/memory.inc:4616 mem_hifit under the window",
+    "kernel/memory.inc:4640 mem_bcopy under the window",
+    "kernel/memory.inc:4664 popf only at the end",
+    "kernel/memory.inc:4040 mem_compact uses inc byte [sch_lock] instead"
+   ],
+   "recommendation": "Decide the destination and publish under cli, raise [sch_lock], restore IF and copy, then cli only for the record store. Nobody can claim while switching is paused and ISRs do not claim.",
+   "phase": "now",
+   "bytes_est": "+10 .cold resident",
+   "verdict": "confirmed",
+   "verify_note": "mem_regrow's pushf/cli (memory.inc:4559-4560) brackets mem_hifit and mem_bcopy (4616, 4640) to the popf at the end; mem_bcopy itself never re-enables. The compactor raises [sch_lock] instead (mem_compact)."
+  },
+  {
+   "id": "mem-3",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "A doomed claim sheds every cache and may park workers once per shed",
+   "detail": "kern_big's retry loop is compact -> shed one -> retry until nothing is left to shed; mem_compact clears [mem_parked] at .end so each call may park again (INST_PARKW = 4 ticks). A claim bigger than the whole heap destroys MEM_P_DIRW (priced 'seconds') and the FAT windows before CF=1. A real caller probes this way: cmz_wclaim tries the largest window first and halves on refusal, so the first refusal has already shed everything before a window that fits without shedding is tried.",
+   "evidence": [
+    "kernel/memory.inc:952-989 compact/shed/retry loop",
+    "kernel/memory.inc:4095-4106 park per mem_compact call",
+    "kernel/memory.inc:4174 [mem_parked] cleared at .end",
+    "kernel/instance.inc:576 INST_PARKW equ 4",
+    "kernel/compress.inc:3536-3553 cmz_wclaim largest-first probe"
+   ],
+   "recommendation": "(a) Before the first compaction compare the request with mem_avail_lvl_p's exact TOTAL at the claimant's rank (no modelling error, so never a false refusal). (b) cmz_wclaim sizes its first try from mem_avail. Optionally hold the park for one mem_claim_x call rather than one mem_compact call.",
+   "phase": "now",
+   "bytes_est": "+14 .cold (precheck), +6 .cold (one park per claim)",
+   "verdict": "confirmed",
+   "verify_note": "mem_claim_x loops mem_claim_1 -> mem_compact -> mem_shed_one -> retry (memory.inc:951-989) with no total-size precheck; mem_compact clears [mem_parked] unconditionally at .end, so each compaction may park again when [mem_wpin] is set; cmz_wclaim probes largest window first (compress.inc:3537-3553)."
+  },
+  {
+   "id": "mem-4",
+   "kind": "bug",
+   "severity": "medium",
+   "title": "The purge floor is lifted by ANY teardown and its task stamp distinguishes no UI-task user",
+   "detail": "OSAPI_MEM_FLOOR stamps [sch_cur], which is 0 for every package callback, the DOS and the kernel's paste alike. mem_free_rec_x writes MEM_LVL_TOP unconditionally on every instance teardown (a Disk window closing included), and fcp_lend does the same. Concrete failure: a multi-file paste raises the floor to MED so its copy buffer cannot shed MEM_P_FLIST; the user closes any window while an overwrite question is up; under pressure the next entry's copy buffer sheds the list; fcp_lnext finds [fcp_lseg]=0 and ends with DONE - the paste silently stops part-way and reports success. DOS's set/size/post/return/claim sequence can lose its floor the same way.",
+   "evidence": [
+    "kernel/memory.inc:5848-5853 floor stamped with sch_cur",
+    "kernel/memory.inc:4826 mem_free_rec_x lifts it unconditionally",
+    "kernel/filecp.inc:452-459 paste raises floor to MEM_PG_MED",
+    "kernel/filecp.inc:532-547 fcp_lnext: purged list -> DONE",
+    "kernel/filecp.inc:2348 fcp_lend lifts unconditionally"
+   ],
+   "recommendation": "Stamp the floor with inst_caller's instance (DH, 0xFF kernel) as well as the task, and lift it in mem_free_rec_x only when the stamp names the dying instance; or protect the paste by the copy-buffer claim's own rank rather than a machine-wide byte.",
+   "phase": "now",
+   "bytes_est": "+8 .cold resident",
+   "verdict": "confirmed",
+   "verify_note": "mmf_osapi_mem_floor stamps AH = [sch_cur] (memory.inc:5848-5852), which is 0 for every UI-task user; mem_free_rec_x and fcp_lend write MEM_LVL_TOP unconditionally (memory.inc:4826, filecp.inc:2348); fcp_lnext reads [fcp_lseg] = 0 as DONE (filecp.inc:536-548). Any instance teardown during a list paste (including a package exiting by itself) lifts the floor."
+  },
+  {
+   "id": "mem-5",
+   "kind": "bug",
+   "severity": "low",
+   "title": "mem_claim_dma_x's head KB->paragraph shift still has the bit-10 carry bug",
+   "detail": "mov si,cx / mov cl,6 / shl si,cl / jnc: on the 8086 CF is only the last bit out (bit 10). Heads of 1024-2047 KB are refused, but 2048 KB becomes head 0 (no constraint) and 2049 KB a 1KB head, both granted. The claim's AX and mem_regrow's AX already carry cmp ax,1024 guards for exactly this (CODE-REVIEW-TWO-CYCLES #6); the package door passes CX raw.",
+   "evidence": [
+    "kernel/memory.inc:860-866 the head shift",
+    "kernel/memory.inc:927-929 claim AX guard",
+    "kernel/memory.inc:4562-4565 regrow AX guard",
+    "kernel/memory.inc:5254-5266 mmf_osapi_mem_claim_dma passes CX"
+   ],
+   "recommendation": "cmp cx, 65 / jae -> SI = 0xFFFF ahead of the shift (mem_claim_1 refuses a head over 0x1000 anyway).",
+   "phase": "now",
+   "bytes_est": "+3 .cold resident",
+   "verdict": "confirmed",
+   "verify_note": "memory.inc:860-866: `shl si, cl` with CL = 6 leaves CF = bit 10 only; CX = 2048 gives SI = 0 (no constraint) and 2049 a 64-paragraph head. mmf_osapi_mem_claim_dma passes the package's CX straight in (memory.inc:5254-5266). Low: only a nonsensical head reaches it."
+  },
+  {
+   "id": "mem-6",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "The self-region widening in mem_find_own also lets a package FREE or REGROW the region it is running in",
+   "detail": "mem_find_own accepts DX == BX so OS88_REGION_MOVABLE can name its slot-owned region, but the same fence serves mem_free_x and mem_regrow. OSAPI_MEM_FREE DX=CS frees the executing region; OSAPI_MEM_REGROW DX=CS hitting path 3 copies the region elsewhere and returns with CS still the old, now free, base. Both are the 'one wrong word' accidents the fence exists to stop.",
+   "evidence": [
+    "kernel/memory.inc:4415-4422 the widening",
+    "kernel/memory.inc:4459 mem_free_x uses mem_find_own",
+    "kernel/memory.inc:4576 mem_regrow uses mem_find_own",
+    "kernel/memory.inc:4435-4436 the fence's stated purpose",
+    "kernel/loader.inc:1690-1695 the arm is a documented choice",
+    "kernel/memory.inc:5996-6000 mem_owner_of_x relies on it"
+   ],
+   "recommendation": "Keep mem_find_own's arm (mem_owner_of_x depends on DX = BX matching the first record at DX). If the self-harm is worth closing, refuse a REGION record (MC_OWN < INST_MAX and mem_is_region) in the package doors mmf_osapi_mem_free and osapi_mem_regrow_x only, and reword loader.inc:1690-1695 if the policy changes.",
+   "phase": "now",
+   "bytes_est": "+3 net .cold",
+   "verdict": "corrected",
+   "verify_note": "Real, but DELIBERATE and documented: loader.inc:1690-1695 says the `cmp dx, bx` arm 'has always let a package name its own region with mov dx, cs and free, regrow or unpin it, which is a package shooting itself and not a thing the kernel undertakes to prevent'. The recommendation as written is wrong: mem_owner_of_x relies on the DX = BX match (memory.inc:5996-6000, 'matches the FIRST live record based at DX whatever it is'), so deleting the arm from mem_find_own breaks it. Severity lowered to low; a fix belongs in the package doors (refuse a region record in mmf_osapi_mem_free/osapi_mem_regrow_x), not in mem_find_own."
+  },
+  {
+   "id": "mem-7",
+   "kind": "hazard",
+   "severity": "medium",
+   "title": "Nothing bounds the interrupt context any more: blocks an ISR uses move at IF=1 unless they are driver images",
+   "detail": "SPEC 66.3 bounds ISRs by 'the MC_DMA pin', which no longer exists. Only MC_OWN == MEM_K_DRV moves at IF=0. Yet mem_region_reloc's IVT rows rewrite vectors naming ANY moved block, package regions included, and packages do hook IRQs (DOS chains int 08h with its CS; DOS's region is movable). Today that hook appears to live only inside a bracket where nest/worker pins hold, so the rule is held by coincidence. A tick mid-copy runs the old copy and its data writes are lost once the vector is patched. The same holds for any driver ISR touching a movable data claim (SOUND.DRV is safe only by its per-chunk cli discipline).",
+   "evidence": [
+    "kernel/memory.inc:1987-2000 MC_DMA no longer tested",
+    "kernel/memory.inc:2974-2976 IF=0 only for MEM_K_DRV",
+    "kernel/memory.inc:3474-3483 IVT rows patch any moved block",
+    "apps/dos/dos.asm:11445-11446 DOS hooks int 08h with CS",
+    "docs/HEAP-CLAIMS.md:329 DOS region MOVABLE"
+   ],
+   "recommendation": "Move at IF=0 whenever the block's base appears in any of the 17 mem_rr_ivt segment words (subsumes the driver-image test), and state an ISR author rule in SPEC 66.3.",
+   "phase": "now",
+   "bytes_est": "+12 .cold resident",
+   "verdict": "confirmed",
+   "verify_note": "mem_can_move has no MC_DMA test (memory.inc:1987-2000); mem_cp_walk cli's only for MC_OWN == MEM_K_DRV (2973-2976); mem_reloc_call runs mem_region_reloc unconditionally for every move (3869-3871) and its IVT group (mem_rr_ivt, 3473-3483) patches any block named by IRQ0-15 or int 33h. dos_m33_arm hooks int 08h with CS (dos.asm:11431-11446) and DOS's region is MOVABLE (HEAP-CLAIMS.md:329). Whether the hook ever stands outside a pinning bracket is unproven (reviewer's open question 4); latent hazard."
+  },
+  {
+   "id": "mem-8",
+   "kind": "perf",
+   "severity": "medium",
+   "title": "O(MEM_MAX^2) walks run with interrupts off (mem_avail, mem_hifit, mem_claim_1)",
+   "detail": "mem_avail_lvl_p runs the whole compaction model inside pushf/cli: mem_cp_next is a full table scan per step and each live claim calls mem_can_move, which far-calls cw_inst_ptr and inst_seg_parked (an inst_tab walk). By arithmetic ~8-15 ms at IF=0 on a busy 32-record table, against a 7.5 ms serial byte; packages size themselves with it and the Task Manager polls it. mem_hifit (33 x 32) runs under regrow's cli; mem_claim_1's bump-restart is bounded by live claims x table.",
+   "evidence": [
+    "kernel/memory.inc:4927-5023 mem_avail_lvl_p's cli window",
+    "kernel/memory.inc:2680-2720 mem_cp_next full scan",
+    "kernel/memory.inc:1975-2148 mem_can_move far calls",
+    "kernel/memory.inc:1740-1789 mem_hifit"
+   ],
+   "recommendation": "Measure first: MartyPC cycles across one OSAPI_MEM_AVAIL on a 20-claim heap. If over ~5 ms, guard mem_avail with [sch_lock] instead of cli (its globals are only shared with other tasks). mem-14 removes the n^2.",
+   "phase": "now",
+   "bytes_est": "+5 .cold resident",
+   "verdict": "confirmed",
+   "verify_note": "mem_avail_lvl_p's model runs between pushf/cli and popf (memory.inc:4927-5023) and calls mem_cp_next / mem_can_move per step; the 8-15 ms figure is arithmetic, not measured - the recommendation to measure first stands."
+  },
+  {
+   "id": "mem-9",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "Regrow path 3 puts every grower at the top, whatever door it came in by",
+   "detail": "mem_hifit keeps the highest candidate base (the floor or a live claim's end) that fits, i.e. the bottom of the highest free run that fits. Usually that is the middle run, just above the data stack, but when a hole among the ceiling's regions and driver images fits, a bottom-up data claim that grows lands there - the mid-heap split 50.2 was written against - with MC_DMA_HI clear, so the descending pass will not pack it and the ascending pass treats ceiling claims as barriers.",
+   "evidence": [
+    "kernel/memory.inc:1712-1724 highest-fit rationale",
+    "kernel/memory.inc:4599-4616 path 3 calls mem_hifit",
+    "kernel/memory.inc:778-793 the two-ends rule"
+   ],
+   "recommendation": "Honour the door: lowest fit (or the fit leaving the largest run) for a bottom-up claim, highest only for MC_DMA_HI - one XOR with the mask trick mem_cp_next uses.",
+   "phase": "now",
+   "bytes_est": "+8 .cold resident",
+   "verdict": "corrected",
+   "verify_note": "mem_hifit's candidates are the heap floor and each live claim's END, and it keeps the HIGHEST candidate that fits (memory.inc:1740-1789) - i.e. the BOTTOM of the highest free run that fits. With data bottom-up and regions top-down that is usually the start of the middle run, directly above the data stack, so the grower lands among ceiling claims only when a hole between them fits it. Real but narrower than stated; severity low."
+  },
+  {
+   "id": "mem-10",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "mod_drop on a worker can free a module the UI task is executing; and the same missing fact pins every module for life",
+   "detail": "mod_disarm documents that a drop can run on a worker (inst_task_die -> desk_drop_x) while the UI task far-calls a slot with no lock (DKD_HOVER); its cli prevents a torn slot, not a freed image. If the last widget's own worker dies while the UI task is pre-empted inside dkd_hover for it, the image is freed under the UI task's IP, which does not fault. The missing fact 'is a frame standing in this image' is also why MEM_K_MOD is pinned forever, although a module is named only by kernel words like a driver image.",
+   "evidence": [
+    "kernel/mod.inc:880-894 mod_disarm's worker note",
+    "kernel/deskmod.inc:103-133 desk_drop_x",
+    "kernel/instance.inc:1726 and 1939 drops from teardown",
+    "kernel/memory.inc:2049-2050 MEM_K_MOD pinned",
+    "kernel/xmem.inc:434-438 xm_dsp brackets with wm_nest_pushd/pop"
+   ],
+   "recommendation": "Now: never free a module from a non-UI task; post the drop and service it at ui_task step 0. Rethink: bracket module thunks with wm_nest_pushd/pop so mem_in_nest answers for modules and they can move like driver images.",
+   "phase": "now",
+   "bytes_est": "+12 .cold (deferred drop); bracket rethink unpriced (per-thunk bytes)",
+   "verdict": "confirmed",
+   "verify_note": "mod_disarm's own note (mod.inc:880-886) says a drop can run on a worker (inst_task_die -> desk_drop_x) while the UI task far-calls a DESK.DRV slot with no lock; desk_drop_x frees through mod_drop (deskmod.inc:116-133) and its banner's 'every other caller is on the UI task' does not cover the worker case. MEM_K_MOD is pinned in mem_can_move (memory.inc:2049-2050)."
+  },
+  {
+   "id": "mem-11",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "The driver-image IF=0 move's latency note is wrong in both directions",
+   "detail": "The note says ~50 ms is 'three ticks' and costs 'at most one mouse PACKET'. 50 ms is under one 55 ms tick and the PIC latches one IRQ0, so no tick is lost below ~110 ms; but a 1200-baud mouse delivers ~6-7 bytes into a one-byte 8250 buffer in 50 ms (about two packets), and the SB refill and NIC receive stall too.",
+   "evidence": [
+    "kernel/memory.inc:3080-3088 the cost paragraph",
+    "kernel/memory.inc:2973-2977 the IF=0 move"
+   ],
+   "recommendation": "Correct the text; optionally have the descending pass leave driver images in place unless the plan needs them to move.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "18KB at ~25 clocks a word is ~48 ms, under one 55 ms tick, and the PIC holds one IRQ0 pending; the mouse is 1200 baud 7N1 (mouse.inc:617), ~6-7 bytes in 50 ms into a one-byte 8250. Doc fix applied below."
+  },
+  {
+   "id": "mem-12",
+   "kind": "consistency",
+   "severity": "medium",
+   "title": "Orphaned headers of inlined routines are where this file's documentation rots",
+   "detail": "About 450 lines of headers describe ten routines that no longer exist as bodies (mem_frameless, mem_busy_seg, mem_cp_mine, mem_cp_both, mem_cp_drop, mem_cp_move, mem_cp_kill, mem_own_drv, mem_dmaok, mem_total_kb). Six of the mismatches in this area are in them, because nobody edits a header with no code under it.",
+   "evidence": [
+    "kernel/memory.inc:2279-2402 mem_frameless",
+    "kernel/memory.inc:2405-2436 mem_busy_seg",
+    "kernel/memory.inc:2151-2238 mem_cp_mine, mem_cp_both",
+    "kernel/memory.inc:2595-2633 mem_cp_drop",
+    "kernel/memory.inc:3067-3101 mem_cp_move, mem_cp_kill",
+    "kernel/memory.inc:6009-6030 mem_own_drv"
+   ],
+   "recommendation": "Keep three lines at each call site with a SPEC pointer, move the essays to SPEC 66, and have checkdocs refuse an 'INLINE since size pass N' header whose name appears neither as a label nor in SPEC.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "None of mem_frameless, mem_busy_seg, mem_cp_mine, mem_cp_both, mem_cp_drop, mem_cp_move, mem_cp_kill, mem_own_drv, mem_dmaok, mem_total_kb is a label anywhere in kernel/; their headers remain (e.g. memory.inc:2151, 2173, 2279, 2405, 2595, 5149, 6009), and several of the confirmed doc fixes below are in them."
+  },
+  {
+   "id": "mem-13",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "The owner word means four things, and the slot/segment split costs code in five places",
+   "detail": "MC_OWN is a slot (a region, a built-in's data), a segment (package and driver data, second images), 0xFBxx-0xFExx (caches) or 0xFFxx (kernel tags). Owning the region by slot and the data by segment is why mem_find_own needs the widening (mem-6), mem_rr_tab carries a mem_tab+MC_OWN row, mem_reloc_call classifies three ways, mem_free_rec_x walks twice, and MEM_OWNER_MAX counts region and data apart. Owning everything a package holds by slot (drivers keep segments) deletes four of the five; the cost is CLS_OWN's readers (the Task Manager).",
+   "evidence": [
+    "kernel/memory.inc:5955 mem_own returns ES as owner",
+    "kernel/memory.inc:3459 mem_tab+MC_OWN row",
+    "kernel/memory.inc:3880-3906 three-way classification",
+    "kernel/memory.inc:4836-4841 two walks",
+    "kernel/memory.inc:4415-4422 widening"
+   ],
+   "recommendation": "Record; take it at the flag day with C1 if the Task Manager is touched anyway.",
+   "phase": "flagday",
+   "bytes_est": "-20 to -40 .cold, unmeasured",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked: mem_find_own's widening (memory.inc:4414-4422), the mem_tab+MC_OWN row (3459), mem_reloc_call's three-way split (3880-3906) and mem_free_rec_x's two walks (4831-4841) are as described. Byte estimate unmeasured."
+  },
+  {
+   "id": "mem-14",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "Keep mem_tab sorted by base: every walk becomes linear and best fit is free",
+   "detail": "Each n^2 in the file comes from the table being unordered (mem_cp_next nearest-key scan, mem_claim_1 restart-on-overlap, mem_hifit/mem_runat candidate x table, mem_bigrun). Compaction preserves relative order, so a sorted table stays sorted. Insert/remove is a rep movsw of at most 320 bytes on rare operations. First fit becomes one pass, 50.3.1's unbuilt best fit nearly free, the plan O(n). Blockers: kern_mega pairs selectors with record INDEX (mem_val, MEGA_MSELN); mem_skip and held SI are record pointers; snapshot row order changes.",
+   "evidence": [
+    "kernel/memory.inc:2680-2720 mem_cp_next",
+    "kernel/memory.inc:1179-1201 restart scan",
+    "kernel/memory.inc:1740-1789 mem_hifit",
+    "kernel/memory.inc:4376-4396 mem_val index-keyed selector",
+    "SPEC.md 50.3.1 cure 2 best fit"
+   ],
+   "recommendation": "Prototype on kern_big/kern_small behind a knob and measure plan cycles and span; re-key mem_sel by base or keep kern_mega unsorted.",
+   "phase": "now",
+   "bytes_est": "-30 to +20 .cold, unmeasured",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked: the restart scan, mem_hifit's candidate x table and mem_cp_next's full scan are as described; kern_mega's MEGA_MSELN == MEM_MAX record-index pairing (memory.inc:126-129) is the stated blocker. Estimate unmeasured."
+  },
+  {
+   "id": "mem-15",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "Only the kernel can own a cache: no purgeable class for package claims",
+   "detail": "The purgeable range is kernel tags only, so a package's rebuildable caches (decoder tables, Sheet's 32KB staging, undo, mix buffers) are walls or freed by hand. Windows' GMEM_DISCARDABLE, Mac purgeable handles and GrowZone, GEOS discardable blocks and AmigaOS low-memory handlers all gave this to applications. MC_DMA bit 13 is free (head <= 0x1000 uses bits 0-12; 14 and 15 are taken). A declared-movable claim could be marked purgeable at a rank by an OSAPI_MEM_P verb, and the shed calls its existing reloc proc with DX=0 ('purged') before freeing.",
+   "evidence": [
+    "kernel/memory.inc:310-319 tags only",
+    "kernel/memory.inc:156-164 MC_DMA bit use",
+    "kernel/memory.inc:1402-1452 mem_shed_one",
+    "kernel/memory.inc:2653-2662 mem_pg_cheap"
+   ],
+   "recommendation": "Add the verb and bit; extend mem_pg_cheap/mem_shed_one; document 'DX=0 means purged' in the reloc proc contract. Additive, abilock --update without a bump.",
+   "phase": "now",
+   "bytes_est": "+30 to +40 .cold resident",
+   "prior_art": "Windows 3.x GMEM_DISCARDABLE + LRU; Mac purgeable handles + GrowZone; GEOS discardable blocks; AmigaOS 3 AddMemHandler",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked: MC_DMA_HEAD = 0x3FFF with heads <= 0x1000 (bits 0-12) and bits 14/15 taken (memory.inc:156-164), so bit 13 is free; purgeable ranks are kernel tags only (0xFB..0xFE)."
+  },
+  {
+   "id": "mem-16",
+   "kind": "prior-art",
+   "severity": "low",
+   "title": "No recency inside a rank: the shed takes the first equal-rank record in table order",
+   "detail": "mem_shed_one keeps the first-seen candidate among equals, and all window raise caches are TRIV, so the cache of the window about to be raised goes as readily as a buried one. Windows discards by LRU and the Mac purges by need. For MEM_P_WSAVE, z-order already is recency.",
+   "evidence": [
+    "kernel/memory.inc:1422-1423 jae keeps first equal",
+    "kernel/memory.inc:353-362 WSAVE all TRIV"
+   ],
+   "recommendation": "Record; if small-heap redraw cost shows up, shed the deepest window's raise cache first.",
+   "phase": "record",
+   "bytes_est": "+6 to +40 depending on approach",
+   "prior_art": "Windows 3.x LRU discard list; Mac purge by address/need",
+   "verdict": "confirmed",
+   "verify_note": "mem_shed_one's `cmp dl, al / jae .scan` (memory.inc:1421-1422) keeps the first-seen record of the lowest rank."
+  },
+  {
+   "id": "mem-17",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "Region movability by package-header bit instead of 72 call sites",
+   "detail": "Every package carries OS88_REGION_MOVABLE (69 sites in 67 files), 10-19 bytes each plus a far call. A header flag bit read by the loader, with MC_RLOC set to a sentinel meaning 'kernel half only', makes the common case free; mem_reloc_call already runs the kernel's half unconditionally. Old packages keep their call; new ones run pinned on older kernels (safe direction).",
+   "evidence": [
+    "apps/os88api.inc:4847-4870 OS88_REGION_MOVABLE",
+    "apps/os88api.inc:4829-4836 why a proc is required",
+    "kernel/memory.inc:3869-3871 kernel half unconditional"
+   ],
+   "recommendation": "Add the bit, a sentinel test in mem_reloc_call, and point t_movable at the bit.",
+   "phase": "now",
+   "bytes_est": "+8 .cold kernel; -10..-19 per package image (~-1KB disk tree-wide)",
+   "verdict": "corrected",
+   "verify_note": "The pattern is real; the count is 69 OS88_REGION_MOVABLE lines in 67 files (grep of apps/), not 72. mem_reloc_call does run the kernel's half unconditionally (memory.inc:3869-3871)."
+  },
+  {
+   "id": "mem-18",
+   "kind": "size",
+   "severity": "low",
+   "title": "The KB doors keep regrowing the same carry bug - more evidence for C1",
+   "detail": "The KB->paragraph conversion has carried the bit-10 carry defect at three doors (claim AX, regrow AX, the DMA head CX of mem-5), each found separately. The paragraph door has no such shift.",
+   "evidence": [
+    "kernel/memory.inc:927-929",
+    "kernel/memory.inc:4562-4565",
+    "kernel/memory.inc:860-866"
+   ],
+   "recommendation": "No new row; cite this as evidence for C1.",
+   "phase": "flagday",
+   "bytes_est": "as C1: ~-50 to -70 per kernel",
+   "listed_as": "ABI-BREAK-LIST C1",
+   "verdict": "unchecked",
+   "verify_note": "Evidence is mem-5's and the two guards already in the code; listed as ABI-BREAK-LIST C1."
+  },
+  {
+   "id": "mem-19",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "kern_mega osapi_mem_regrow_x's move-down copies the OLD size into the NEW claim",
+   "detail": "The .move arm sizes the copy from the old KB (shl si, 9) into a conventional claim of the new KB. mega_claimregrowf answers CF = 1 for every regrow of an FH32/FH16/bridge huge block (.hnol -> .nol), shrinks included, so a shrink reaches .move and overruns the new claim; an old size of 128KB+ wraps CX to 0 (nothing copied, the old block freed) and 65-127KB walks a 16-bit offset past the selector's 64KB.",
+   "evidence": [
+    "kernel/memory.inc:5440-5468 the .move arm",
+    "kernel/mega.inc:12052-12056, 12084 .huge -> .hnol -> .nol"
+   ],
+   "recommendation": "Copy min(old, new) KB, and refuse the move (or segment-step it) when that exceeds 64KB.",
+   "phase": "now",
+   "bytes_est": "+4 .cold (kern_mega)",
+   "verdict": "corrected",
+   "verify_note": "Real and wider than stated. osapi_mem_regrow_x's .move arm copies the OLD KB << 9 words (memory.inc:5440-5468). mega_claimregrowf reaches .nol -> CF = 1 -> .move for ANY regrow of an MX_FH32/MX_FH16/MX_FBRIDGE huge block, shrinks included (mega.inc:12052-12056, 12084), so a shrink overruns the new conventional claim; an old size of 128KB+ makes CX wrap to 0 (nothing copied, block freed), and 65-127KB runs SI/DI past 64KB of the selector. Fix: copy min(old, new) and refuse (or segment-step) past 64KB. kern_mega only and unreleased: low."
+  },
+  {
+   "id": "mem-20",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "xm_release_rec carries EMS and NET per-instance teardown",
+   "detail": "The XMS release issues EMSV_GONE and NETV_GONE driver calls because it has the fourth caller (ld_unreserve); the next per-instance driver resource will be added here or forgotten.",
+   "evidence": [
+    "kernel/xmem.inc:710-735",
+    "kernel/loader.inc:236"
+   ],
+   "recommendation": "One 'instance gone' broadcast over published classes with a GONE verb, called from inst_rel_rec and ld_unreserve.",
+   "phase": "record",
+   "bytes_est": "~0",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked: xm_release_rec issues DRVC_EMS/EMSV_GONE and DRVC_NET/NETV_GONE (xmem.inc:710-735) because ld_unreserve far-calls it (loader.inc:236)."
+  },
+  {
+   "id": "mem-21",
+   "kind": "prior-art",
+   "severity": "low",
+   "title": "XMS blocks are named by linear address; the 8-block pool cannot be defragmented",
+   "detail": "A block is its 32-bit base and XM_MAX_BLKS is 8 machine-wide; HIMEM's handles plus lock counts let it move unlocked EMBs. Harmless at today's two consumers.",
+   "evidence": [
+    "kernel/kernel.asm:1948 XM_MAX_BLKS equ 8",
+    "kernel/xmem.inc:525-531 xm_alloc returns a linear base"
+   ],
+   "recommendation": "Record so the table is not grown without a handle design.",
+   "phase": "record",
+   "bytes_est": "0",
+   "prior_art": "HIMEM.SYS XMS handles with lock counts",
+   "verdict": "unchecked",
+   "verify_note": "XM_MAX_BLKS equ 8 confirmed at kernel.asm:1948; the rest is a record."
+  }
+ ],
+ "doc_fixes": [
+  {
+   "file": "kernel/memory.inc",
+   "old_text": "the package pool, handed out in KB-granular, segment-aligned blocks to",
+   "new_text": "the package pool, handed out in whole granules (MEM_GRAN, 512 bytes - SPEC.md 50.2.1) to",
+   "why": "mem_claim_x.gran rounds every claim to MEM_GRAN = 32 paragraphs (memory.inc:933-937); the paragraph doors ask for less than a KB."
+  },
+  {
+   "file": "kernel/memory.inc",
+   "old_text": "MC_PARA  equ 2                  ; word: size in paragraphs (KB << 6)",
+   "new_text": "MC_PARA  equ 2                  ; word: size in paragraphs, whole MEM_GRAN granules",
+   "why": "MC_PARA is AX after mem_claim_x.gran's round to MEM_GRAN (memory.inc:933-937), not KB<<6."
+  },
+  {
+   "file": "kernel/memory.inc",
+   "old_text": "CLS_PARA   equ 2                ; word: size in paragraphs (KB << 6)",
+   "new_text": "CLS_PARA   equ 2                ; word: size in paragraphs, whole MEM_GRAN granules",
+   "why": "The snapshot copies MC_PARA, which is a granule count (memory.inc:933-937)."
+  },
+  {
+   "file": "kernel/memory.inc",
+   "old_text": "MC_OWN   equ 4                  ; word: owner - 0..INST_MAX-1 is an instance\n                                ; slot; 0xFF00 | tag is the kernel's own",
+   "new_text": "MC_OWN   equ 4                  ; word: owner - 0..INST_MAX-1 an instance\n                                ; slot (a package's REGION, a built-in's data);\n                                ; otherwise a SEGMENT (a package's or a\n                                ; driver's data, SPEC.md 50.2); 0xFBxx..0xFExx\n                                ; a purgeable kernel cache (50.6); 0xFF00 | tag\n                                ; the kernel's own",
+   "why": "mem_own returns the caller's segment as owner (memory.inc:5934-5956); MEM_PG_TRIV..MEM_PG_HIGH = 0xFB..0xFE (memory.inc:344-349)."
+  },
+  {
+   "file": "kernel/memory.inc",
+   "old_text": "                                ; Bits 0-14 are the 64KB-page-safe HEAD in\n                                ; paragraphs, 0 = no constraint - and\n                                ; mem_claim_1 refuses a head over 0x1000, a\n                                ; page being 4,096 paragraphs, so the top bit\n                                ; is free by that check and not by hope.",
+   "new_text": "                                ; Bits 0-13 are the 64KB-page-safe HEAD in\n                                ; paragraphs, 0 = no constraint - and\n                                ; mem_claim_1 refuses a head over 0x1000, a\n                                ; page being 4,096 paragraphs, so the top two\n                                ; bits are free by that check and not by hope.\n                                ; (Bit 14 is MC_DISK, below.)",
+   "why": "Verifier-found: MC_DISK = 0x4000 and MC_DMA_HEAD = 0x3FFF (memory.inc:156-161), so the head is bits 0-13."
+  },
+  {
+   "file": "kernel/memory.inc",
+   "old_text": "                                ; a smaller) with its region and one spare",
+   "new_text": "                                ; a smaller) and two spare: DATA claims, the\n                                ; REGION being owned by its instance slot and\n                                ; counted apart",
+   "why": "mem_claim_1 counts records whose MC_OWN equals BX (memory.inc:1106-1108); a package's data is owned by its segment, its region by its slot."
+  },
+  {
+   "file": "kernel/memory.inc",
+   "old_text": "                                ; because its base IS its CS and so it can\n                                ; never move, and freed by the feature that\n                                ; asked for it rather than by a teardown",
+   "new_text": "                                ; because its base IS its CS - and PINNED\n                                ; (mem_can_move): nothing brackets a call into\n                                ; a module, so nothing can say no frame stands\n                                ; in it - and freed by the feature that\n                                ; asked for it rather than by a teardown",
+   "why": "Driver images are CS-based and do move (memory.inc:2038-2047); MEM_K_MOD is pinned by mem_can_move's own test (2049-2050)."
+  },
+  {
+   "file": "kernel/memory.inc",
+   "old_text": "; different lifetimes and only one of them can ever move:\n;\n;   a data claim can move within its lifetime by being freed and re-claimed;\n;   a package region can NEVER move, because its base IS its CS - relocating\n;   it would invalidate W_SEG, I_SPTR, every MB_SEG in the menu bar and every\n;   claim owner word. SPEC.md 66 compacts the DATA arena and deliberately\n;   leaves regions out for exactly this reason.",
+   "new_text": "; different lifetimes and move at different prices:\n;\n;   a data claim moves whenever its holder declared a proc (SPEC.md 66.2);\n;   a package region moves only when no frame stands in it and its worker is\n;   restartable (SPEC.md 66.6.1, 66.6.2), and then W_SEG, I_SPTR, every MB_SEG\n;   in the menu bar and every claim owner word naming it must be rewritten\n;   (mem_region_reloc) - so a CS still costs more to move, and goes high.",
+   "why": "mem_can_move's .frameless arm lets a region move (memory.inc:2065-2083) and mem_region_reloc rewrites those words (3229-3253)."
+  },
+  {
+   "file": "kernel/memory.inc",
+   "old_text": ";                    reach a task already suspended mid-access, which is what\n;                    pins a claim whose owner has a live worker until SPEC.md\n;                    66.5's park handshake exists.\n;   INTERRUPTS       not bounded by sch_lock at all, so any claim with\n;                    MC_DMA != 0 is pinned outright. That is right twice over:\n;                    a bus master may be mid-transfer, and the 64KB page rule\n;                    is a property of the ADDRESS, so such a block cannot be\n;                    relocated even in principle.",
+   "new_text": ";                    reach a task already suspended mid-access, so a claim\n;                    whose owner has a live worker moves only once that\n;                    worker has PARKED (SPEC.md 66.5, inst_seg_parked).\n;   INTERRUPTS       not bounded by sch_lock at all. Only a driver image\n;                    moves at IF = 0 (mem_cp_walk, SPEC.md 66.6.3.1), so\n;                    its vectors are rewritten before an ISR can run the\n;                    old copy; every other block moves with interrupts on.\n;                    MC_DMA is a placement constraint the move honours, not\n;                    a pin (SPEC.md 66.4.2).",
+   "why": "mem_compact parks workers (memory.inc:4095-4106); mem_can_move does not test MC_DMA (1987-2000); only MC_OWN == MEM_K_DRV moves under cli (2973-2976)."
+  },
+  {
+   "file": "kernel/memory.inc",
+   "old_text": "; `dsk_xfer` reads-the-class-while-BX-is-still-the-row discipline. Three of\n; the tests below can never fire on a correctly-behaved holder, because\n; nothing declares a region or a DMA buffer movable; they are here because",
+   "new_text": "; `dsk_xfer` reads-the-class-while-BX-is-still-the-row discipline. Some of\n; the tests below can never fire on a correctly-behaved holder - nothing\n; declares a module image movable, for one - and they are here because",
+   "why": "Regions are declared movable at 69 OS88_REGION_MOVABLE sites and the MC_DMA test is gone (memory.inc:1987-2000); a module never calls mem_movable (mod.inc)."
+  },
+  {
+   "file": "kernel/memory.inc",
+   "old_text": "                                        ; A segment matching no instance -\n                                        ; a driver's image - answers CF = 1",
+   "new_text": "                                        ; A segment matching no instance -\n                                        ; a driver's - answers CF = 0 only\n                                        ; once every TF_SERVICE task has\n                                        ; parked and no package worker is\n                                        ; inside a driver verb (66.5.5)",
+   "why": "inst_seg_parked's .drv arm walks TF_SERVICE tasks and [wm_tcnt] and can answer CF = 0 (instance.inc:700-718)."
+  },
+  {
+   "file": "kernel/memory.inc",
+   "old_text": ";                             parked at OSAPI_TASK_ALIVE\" and raises\n;                             [mem_wpin] itself. This used to be two tests of",
+   "new_text": ";                             parked at OSAPI_TASK_ALIVE\"; mem_can_move's\n;                             .busy arm raises [mem_wpin] when it refuses.\n;                             This used to be two tests of",
+   "why": "inst_seg_parked never writes [mem_wpin]; mem_can_move's .busy arm does (memory.inc:2112)."
+  },
+  {
+   "file": "kernel/memory.inc",
+   "old_text": "                                ; declaration above is in hand - and it raises\n                                ; [mem_wpin] itself, so a region asks for the",
+   "new_text": "                                ; declaration above is in hand - and the .busy\n                                ; arm it shares raises [mem_wpin], so a region\n                                ; asks for the",
+   "why": "[mem_wpin] is written at memory.inc:2112 (mem_can_move .busy), not by inst_seg_parked."
+  },
+  {
+   "file": "kernel/memory.inc",
+   "old_text": "; A DRIVER's segment is pinned unconditionally, and the reason is the same one\n; stated the other way round: a driver has no instance record to read I_TASK\n; out of, and it may well own a service task (SPEC.md 34.5's transient refill\n; task is exactly one). \"I cannot tell\" and \"it is busy\" have to be the same\n; answer here.",
+   "new_text": "; A DRIVER's segment has no instance record to read I_TASK out of, and it may\n; well own a service task (SPEC.md 34.5's transient refill task is exactly\n; one), so it moves only once every TF_SERVICE task has parked and no package\n; worker is inside a driver verb (inst_seg_parked's .drv arm, SPEC.md 66.5.5).",
+   "why": "inst_seg_parked's .drv arm answers CF = 0 when all TF_SERVICE tasks are parked (instance.inc:700-718)."
+  },
+  {
+   "file": "kernel/memory.inc",
+   "old_text": "; mem_can_move's driver-image arm ask it. A DRIVER's claim needs no such test\n; here either: it matches no instance, so inst_seg_parked pins it outright.\n;\n; Both of these lift when SPEC.md 66.5's park handshake lands - the point of\n; putting them behind one predicate is that they lift in one place.",
+   "new_text": "; mem_can_move's driver-image arm ask it. A DRIVER's claim needs no such test\n; here either: it matches no instance, so inst_seg_parked asks its service\n; tasks instead.\n;\n; Both of these lifted when SPEC.md 66.5's park handshake landed - in one\n; place, which is the point of putting them behind one predicate.",
+   "why": "The park handshake exists (memory.inc:4095-4106, instance.inc:654-718)."
+  },
+  {
+   "file": "kernel/memory.inc",
+   "old_text": "                                ; mem_busy_seg raises (SPEC.md 66.5)",
+   "new_text": "                                ; mem_can_move's .busy arm raises (SPEC.md 66.5)",
+   "why": "mem_busy_seg is no longer a routine; its body is mem_can_move's .busy arm (memory.inc:2104-2112)."
+  },
+  {
+   "file": "kernel/memory.inc",
+   "old_text": "; THREE ADDRESS SPACES, which is why there are three loops. wm_wins, inst_tab\n; and the seven scalars are .bss and reached through DS; menu_bar is .lowbss\n; and mem_tab is the claim table, both reached through SS (SPEC.md 2.6).",
+   "new_text": "; ONE LOOP, called once per address space: wm_wins, inst_tab, drv_tab and the\n; lone scalars are .bss and reached through DS; menu_bar is .lowbss and mem_tab\n; is the claim table, both reached through SS (SPEC.md 2.6); and on a driver\n; build the IRQ vectors and int 33h are segment 0 (SPEC.md 66.6.3.1).",
+   "why": "mem_region_reloc calls mem_rr_walk three times with ES = DS, SS, 0 (memory.inc:3236-3253); mem_rr_tab has drv_tab and int 33h rows (3349-3483)."
+  },
+  {
+   "file": "kernel/memory.inc",
+   "old_text": "; ~50 ms - three ticks - for the largest image in the tree, ETHER's 18KB. That\n; is the honest bound and not the typical case. What three lost ticks cost: the\n; BIOS clock, and at most one mouse PACKET, which mou_isr resyncs on the\n; framing bit rather than corrupting. It cannot land inside a floppy transfer -",
+   "new_text": "; ~50 ms - under one tick - for the largest image in the tree, ETHER's 18KB.\n; That is the honest bound and not the typical case. What it costs: no tick,\n; the PIC holding one pending; about two serial mouse packets, the 8250 keeping\n; one byte of the ~six a 1200-baud mouse sends meanwhile, which mou_isr resyncs\n; on the framing bit rather than corrupting; and a sound refill IRQ ~50 ms late.\n; It cannot land inside a floppy transfer -",
+   "why": "18KB at ~25 clocks a word is ~48 ms, under a 55 ms tick; a 1200-baud 7N1 mouse sends ~6-7 bytes in 50 ms into a one-byte 8250 (mouse.inc:617)."
+  },
+  {
+   "file": "kernel/memory.inc",
+   "old_text": "mem_base: resw 1                  ; first heap paragraph = HEAP_SEG",
+   "new_text": "mem_base: resw 1                  ; the arena's first paragraph: the floor\n                                  ; (mem_floor_ax), raised past stage 2's\n                                  ; blob until mem_unblob",
+   "why": "mem_base is stored from the floor plus the blob's end (memory.inc:611-621) and lowered by mem_unblob (672-690)."
+  },
+  {
+   "file": "kernel/memory.inc",
+   "old_text": "; The claim heap's unit is the kilobyte, so every caller of mem_claim that",
+   "new_text": "; The KB doors' unit is the kilobyte (the heap's own is the paragraph, in\n; MEM_GRAN granules), so every caller of mem_claim that",
+   "why": "mem_claim_x converts KB to paragraphs and rounds to MEM_GRAN (memory.inc:925-937)."
+  },
+  {
+   "file": "kernel/mod.inc",
+   "old_text": "is THREE, so the pad was wasting six.",
+   "new_text": "was THREE then, so the pad was wasting six.",
+   "why": "MOD_MAX is now 11 on kern_big and 6 on kern_small (mod.inc:41-73); the sentence is history."
+  },
+  {
+   "file": "kernel/mod.inc",
+   "old_text": "Every MODR_SEG must read mod_gone before the first thunk runs",
+   "new_text": "Every mod_fp slot must read mod_gone before the first thunk runs",
+   "why": "MODR_SEG rests at 0 = not loaded (mod.inc:407); mod_disarm points the mod_fp slots at mod_gone (880-894)."
+  },
+  {
+   "file": "kernel/mod.inc",
+   "old_text": "including the compaction (memory.inc:520).",
+   "new_text": "including the compaction (memory.inc, mem_claim_x).",
+   "why": "memory.inc:520 is the SYSKB constants; mem_claim_x is at ~880-996."
+  },
+  {
+   "file": "kernel/xmem.inc",
+   "old_text": "; the kernel. DRV_MAX is still 4 and DRVC_MAX is still 5.",
+   "new_text": "; the kernel. It takes no drv_tab row, so DRV_MAX and DRVC_MAX do not count it.",
+   "why": "kern_big DRV_MAX is 9 + DRV_VX + DRV_PX (driver.inc:80) and DRVC_MAX 10 (driver.inc:226)."
+  },
+  {
+   "file": "kernel/xmem.inc",
+   "old_text": "; ONE TRAP, and it is not this routine's: a block claimed in a package's ENTRY\n; PROC is stamped 0xFF (the kernel), not the instance, because inst_caller\n; answers with the running task's T_INST when no callback is being dispatched\n; - and the loader far-calls the entry on the UI task. Such a block matches no\n; slot and this will never free it. Claim from a callback (SPEC.md 41.5.1).",
+   "new_text": "; A block claimed in a package's ENTRY PROC is stamped with its instance like\n; any other: loader_run step 8 brackets the entry as a stamped dispatch, so\n; inst_caller answers the instance there too (SPEC.md 41.5.1), and this\n; releases it.",
+   "why": "instance.inc:1013-1036 (inst_caller) and loader.inc:221-226: step 8 stamps the entry proc with its instance."
+  },
+  {
+   "file": "kernel/xmem.inc",
+   "old_text": "(loader.inc:157)",
+   "new_text": "(loader.inc, ld_unreserve)",
+   "why": "ld_unreserve's far call to cw_xm_release_rec is at loader.inc:236."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`mem_tab` — `MEM_MAX` (**32**) records × **8** bytes, in **`.lowbss`**",
+   "new_text": "`mem_tab` — `MEM_MAX` (**32**; **16** on `kern_small`) records × **10** bytes, in **`.lowbss`**",
+   "why": "MC_SIZE equ 10 (memory.inc:125) and MEM_MAX equ 16 under KERN_SMALL (memory.inc:33-34)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "MC_SEG   0  word  base segment, 0 = free record\nMC_PARA  2  word  size in paragraphs (KB << 6)\nMC_OWN   4  word  owner: 0..INST_MAX-1 = instance slot;\n                  0xFF00 | tag = the kernel's own (MEM_K_SAVE, …);\n                  a package's claims carry the SEGMENT it runs in\nMC_DMA   6  word  the 64KB-page-safe HEAD in paragraphs, 0 = no constraint\n                  (mem_claim_dma, §50.3 — recorded so a claim that MOVES\n                  keeps the property it was granted for)",
+   "new_text": "MC_SEG   0  word  base segment, 0 = free record\nMC_PARA  2  word  size in paragraphs, a whole number of granules (§50.2.1)\nMC_OWN   4  word  owner: 0..INST_MAX-1 = instance slot (a package's REGION,\n                  a built-in's data); 0xFBxx..0xFExx = a purgeable kernel\n                  cache (§50.6); 0xFF00 | tag = the kernel's own (MEM_K_DRV,\n                  …); a package's or driver's data carries the SEGMENT it\n                  runs in\nMC_DMA   6  word  bits 0-13: the 64KB-page-safe HEAD in paragraphs, 0 = no\n                  constraint (mem_claim_dma, §50.3 — recorded so a claim that\n                  MOVES keeps the property it was granted for); bit 14\n                  MC_DISK, the DISK class (§50.2.1.1); bit 15 MC_DMA_HI, the\n                  top-down door\nMC_RLOC  8  word  relocation proc, 0 = PINNED (§66.2)",
+   "why": "memory.inc:75-125 and 156-161: MC_RLOC at 8, MC_DISK 0x4000, MC_DMA_HI 0x8000, MC_DMA_HEAD 0x3FFF; MEM_K_SAVE no longer exists (memory.inc:166-168)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "smaller) plus its region and one spare.",
+   "new_text": "smaller) and two spare. They are DATA claims: the package's region is owned\nby its instance slot and counted apart.",
+   "why": "mem_claim_1 counts MC_OWN == BX (memory.inc:1106-1108); data is owned by the segment, the region by the slot."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "| `MEM_K_SAVE` | `MENU_SAVE_KB` = 20 |",
+   "new_text": "| `MEM_P_MSAVE` (TRIVIAL-purgeable, §12.4.2) | sized to the menu, at most `MENU_SAVE_KB` = 20 |",
+   "why": "menu.inc:1868-1891 claims mem_bytes_kb of the menu's rect under MEM_P_MSAVE; 0xFF01 is retired (memory.inc:166-168)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "**Concurrency (binding).** Every operation runs inside one\n`pushf`/`cli` … `popf` window — the `task_spawn` precedent (§8). Claims are",
+   "new_text": "**Concurrency (binding).** Every map operation runs inside one\n`pushf`/`cli` … `popf` window — the `task_spawn` precedent (§8) — except\ncompaction, which holds `[sch_lock]` across its plan and its moves with\ninterrupts as the caller had them, and disables them only to move a driver\nimage (§66.3, §66.6.3.1). Claims are",
+   "why": "mem_compact raises [sch_lock] (memory.inc:4040) and mem_cp_walk cli's only for MC_OWN == MEM_K_DRV (2973-2976)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "- **no `MC_RLOC`** — the default;\n- **`MC_DMA != 0`** — a bus master may be mid-transfer, and the 64KB page rule\n  (§50.3) is a property of the *address*, so such a block cannot be relocated\n  even in principle;\n- **a purgeable cache** — it places itself top-down under the region ceiling\n  (§50.6.1), so sliding it *down* puts it in the one arena it is deliberately\n  kept out of; and it is the one class that need not move, because the shed\n  already gives its room back;\n- **`MEM_K_DRV`, `MEM_K_MOD`, and a package's region** — each base *is* a CS\n  (§2.8/§51.3/§50.2). A region is told apart from a built-in's data claim the\n  way §50.6.1 tells them apart: `KIND_PKG` **and** base == `I_SPTR`;\n- **anything owned by a segment somebody is running in** — see below.",
+   "new_text": "- **no `MC_RLOC`** — the default;\n- **the target of a disk transfer in flight** (`mem_in_xfer`, author rule 5\n  below);\n- **`MEM_K_MOD`** — a module's base is a CS and nothing brackets a call into\n  it, so nothing can say no frame stands in it (§2.8);\n- **a package's region** while a frame stands in it, the loader stands in it\n  or its worker is running — and outright while it owns a worker with no\n  declared restart point (§66.6.1, §66.6.2). A region is told apart from a\n  built-in's data claim the way §50.6.1 tells them apart: `KIND_PKG` **and**\n  base == `I_SPTR`;\n- **a driver image** (`MEM_K_DRV`) while a frame stands in it or any driver\n  worker exists (§66.6.3);\n- **anything owned by a segment somebody may be running in** — see below.\n\n`MC_DMA` is not on the list: it is a placement constraint the move honours\n(§66.4.2). A purgeable cache moves exactly when it declared a proc (§50.6.7).",
+   "why": "mem_can_move (memory.inc:1974-2148): MC_RLOC, mem_in_xfer, MEM_K_MOD, .frameless, .drvimg, .busy; no MC_DMA test and no blanket purgeable pin."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "so a claim owned by a segment with a live worker is pinned until\n   §66.5's park handshake exists. A **driver's** segment is pinned\n   unconditionally: it has no instance record to read `I_TASK` out of and may\n   well own a service task (§34.5's transient refill task is one), and \"I\n   cannot tell\" and \"it is busy\" have to be the same answer.",
+   "new_text": "so a claim owned by a segment with a live worker moves only once that\n   worker has PARKED (§66.5). A **driver's** segment has no instance record\n   to read `I_TASK` out of and may well own a service task (§34.5's transient\n   refill task is one), so it moves only once every `TF_SERVICE` task has\n   parked and no package worker is inside a driver verb (§66.5.5, §66.6.3.2).",
+   "why": "inst_seg_parked (instance.inc:654-718) answers CF = 0 for a parked worker and, for a driver's segment, when all TF_SERVICE tasks are parked."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "2. **Interrupt handlers** — not bounded by `sch_lock` at all, which is what\n   the `MC_DMA` pin above is for.",
+   "new_text": "2. **Interrupt handlers** — not bounded by `sch_lock` at all. Only a driver\n   image moves at IF = 0 (§66.6.3.1), so its vectors are rewritten before an\n   ISR can run the old copy; every other block moves with interrupts on.",
+   "why": "mem_cp_walk's cli is taken only for MC_OWN == MEM_K_DRV (memory.inc:2973-2976); the MC_DMA pin no longer exists (1987-2000)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`MOD_MAX` is 10 on `kern_big` (nine images and\n  `MOD_SETS`, §2.8.7) and 5 on `kern_small`. BIG has `MOD_HIBER` 3,\n  `MOD_DOCK` 4, `MOD_EXT` 5, `MOD_WIN` 6, `MOD_DESK` 7 (`DKD_NENT` 4,\n  §11.103.10), `MOD_STIKM` 8 (`SMN_NENT` 2, §110.12) and `MOD_SETS` 9;\n  SMALL has `MOD_FCP` 3 and `MOD_FDLG` 4.",
+   "new_text": "`MOD_MAX` is 11 on `kern_big` (ten images and\n  `MOD_SETS`, §2.8.7) and 6 on `kern_small`. BIG has `MOD_HIBER` 3,\n  `MOD_DOCK` 4, `MOD_EXT` 5, `MOD_WIN` 6, `MOD_DESK` 7 (`DKD_NENT` 4,\n  §11.103.10), `MOD_STIKM` 8 (`SMN_NENT` 2, §110.12), `MOD_SER` 9\n  (`SERIAL.DRV`, §115) and `MOD_SETS` 10;\n  SMALL has `MOD_FCP` 3, `MOD_FDLG` 4 and `MOD_SER` 5.",
+   "why": "mod.inc:41-73: MOD_SER 9 / MOD_NIMG 10 on kern_big with OS88_SHORTCUTS always defined there (kernel.asm:961-963); MOD_SER 5 / MOD_NIMG 6 on kern_small."
+  },
+  {
+   "file": "docs/HEAP-CLAIMS.md",
+   "old_text": "| `MEM_K_SAVE` menu save-under | `MENU_SAVE_KB` = 20KB clamp; **measured 3.0KB** for a real menu | **MOVABLE on kern_big** |",
+   "new_text": "| `MEM_P_MSAVE` menu save-under | `MENU_SAVE_KB` = 20KB clamp; **measured 3.0KB** for a real menu | **PURGEABLE (TRIV), and MOVABLE on kern_big** |",
+   "why": "The save-under is MEM_P_MSAVE = MEM_PG_TRIV<<8|2 (memory.inc:174-179, menu.inc:1889); 0xFF01 is retired."
+  },
+  {
+   "file": "docs/HEAP-CLAIMS.md",
+   "old_text": "the sixteen hardware IRQ vectors (§66.6.3.1) and nothing else",
+   "new_text": "the sixteen hardware IRQ vectors and int 33h (§66.6.3.1) and nothing else",
+   "why": "mem_rr_ivt carries MEM_RR_ONE 0x33*4+2 after the two IRQ rows (memory.inc:3473-3483)."
+  },
+  {
+   "file": "docs/HEAP-CLAIMS.md",
+   "old_text": "§66.6.3.1 patches the **sixteen hardware IRQ vectors** instead of refusing on the table",
+   "new_text": "§66.6.3.1 patches the **sixteen hardware IRQ vectors and int 33h** instead of refusing on the table",
+   "why": "mem_rr_ivt also rewrites int 33h for USBMOUSE.DRV (memory.inc:3476-3483)."
+  },
+  {
+   "file": "docs/HEAP-CLAIMS.md",
+   "old_text": "a driver may hook its own IRQ vector and nothing else.",
+   "new_text": "a driver may hook its own IRQ vector - and a pointing driver int 33h - and nothing else.",
+   "why": "int 33h is the one non-IRQ vector mem_rr_ivt rewrites (memory.inc:3476-3483, SPEC 9.12.7)."
+  },
+  {
+   "file": "docs/HEAP-CLAIMS.md",
+   "old_text": "(`mem_claim_dma_x`: `MC_DMA` pins it, and a shed is the way out)",
+   "new_text": "(claimed page-safe through `mem_claimp_dma_x` and never declared movable, so pinned; a shed is the way out)",
+   "why": "mem_can_move no longer tests MC_DMA (memory.inc:1987-2000); dsk_rah_land claims with mem_claimp_dma_x and declares no proc (disk.inc:7662-7673)."
+  }
+ ]
+}

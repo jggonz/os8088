@@ -648,3 +648,53 @@ File:line, a short exact quote, what the code does, and proposed text.
    before the code relies on it.
 4. **R1.** Splitting mount from listing touches `fmv_load`, in files.inc,
    another reviewer's area. That reviewer should agree the seam.
+
+## Verification
+
+An adversarial pass re-read every cited line in `kernel/disk.inc`, `kernel/dskwin.inc`, `kernel/drvvol.inc`, `kernel/desk.inc`, `kernel/fprog.inc`, `kernel/vga12.inc`, `boot/boothd.asm` and SPEC.md 18/19, including the `KERN_SMALL`, `KD_BUILD` and `DSK_BIGDIR` arms. Nothing below was run; every verdict comes from reading the code. None of these items is in `docs/plans/ABI-BREAK-LIST.md` or `docs/plans/KERNEL-BYTE-QUEUE.md`. `data/diskread.json` carries the corrected fields and the exact doc fixes.
+
+**Findings: 12 confirmed, 4 corrected, 0 refuted, 4 unchecked.**
+
+- **dr-1, confirmed.** The BPB fetch uses AH=08h's geometry (4074-4081), while boothd and `dsk_bpb_check` use the BPB's. It bites when the two geometries differ and the base is not 0, which is FN33's shape. FN33 says the images *boot*, which does not show that C: mounts. `dsk_hcyl_probe` also reads the pair.
+- **dr-2, confirmed.** There is no lock test at 940-953, and the slot is published with a C thunk. No package in the tree calls it. The byte estimate was raised to about +16.
+- **dr-3, confirmed.** It is somewhat worse than stated: a single-sector retry that succeeds returns to full-length runs, so the ladder repeats.
+- **dr-4, confirmed.** Only 03h is special-cased (2025-2027). Whether each AT ROM hands back 06h with CF=1 is still open question 3.
+- **dr-5, confirmed.** SPEC 18.95.2 refused the cursor on I/O grounds only. This finding is about CPU, as DISK-CPU-PLAN 3.1 is.
+- **dr-6, unchecked.** The call sequence is as described. The cycle and byte figures were not re-derived.
+- **dr-7, confirmed.** `.notched` has no carry test, and `dsk_runcap` answers 128 at BX=0.
+- **dr-8, corrected.** The fix as written is wrong twice. Adding only the base's low word does not keep the phase mod spt, and a full 32-bit dividend can overflow the div by spt and #DE under sch_lock on a large partition. Divide by spt*heads first, or bank `base mod spt`. Now about +14.
+- **dr-9, corrected.** The finding is real. The store needs an ES override, so it costs 5 bytes, not 4.
+- **dr-10, corrected.** The inconsistency is real. The proposed "real reason" (the `[dsk_bnc_*]` cells are one set) is not one, because an inner transfer into 512-aligned `dsk_secbuf` can never bounce. The doc fix states the head's rule instead.
+- **dr-11, confirmed.**
+- **dr-12, confirmed.**
+- **dr-13, confirmed.** The guard is dead. `dsk_boot_from_x` is in `.ovl`.
+- **dr-14, corrected.** The wrong-unit mask is real. The option "clear bit 7 only" is refused: the probe recalibrates the unit, so that unit's calibrated bit should still be cleared. Derive the mask from `[fdd_unit]` (about +10 `.ovl`).
+- **dr-15, confirmed.** Benign.
+- **dr-16, confirmed.** See the doc-fix counts below.
+- **dr-17, confirmed.** `dsk_put_dir` has no bound, and the zero-capacity case is excluded only by the quiet stop.
+- **dr-18, unchecked.**
+- **dr-19, unchecked.**
+- **dr-20, unchecked.**
+
+**Doc fixes: 61 confirmed, 2 refuted.** Every quoted text was found exactly as quoted. Replacements were rewritten where the proposal was partial or inexact:
+
+- dskwin.inc's banner and table, and the 7,936-byte region.
+- The 238 ms figure. It is now PERFORMANCE.md's 24 ms per 512 bytes (Set 24), which SPEC 19.7.1 already quotes, not the proposed 65 ms.
+- drvvol.inc's "pure move". The shallow history cannot show that `drv_mounted` was rewritten after the move, so the fix makes no such claim.
+- SPEC 18.3 step 2. The kept cwd falls back to the root and does not fail the mount.
+- SPEC 18.3 step 4, now written against `ico_ref_try`, `dsk_peek`, `PKG_FMT`, `DSK_HARV_MAX` and `ASSOC.DAT`.
+
+Seven fixes the reviewer missed were added:
+
+- `disk_mount`'s LBA 0 geometry line.
+- SPEC 18's `disk_mount` row ("FAT snapshot into `FAT_SEG`").
+- `disk_write`'s "cyl<80 rule".
+- SPEC 18.3 step 3 (`disk_dir`/`LOW_SEG`).
+- `dsk_chdir_q`'s "dsk_relist is the payment".
+- dskwin.inc's "`disk_dir` STAYS".
+- dskwin.inc's "these three come alive".
+
+Two proposals were refuted:
+
+- **REFUTED, mismatch #10** (disk.inc:2806, `DH = 0FFh is not a geometry`). This is a code change, not a doc fix. It belongs with dr-13.
+- **REFUTED, mismatch #36** (disk.inc:10962, `re-seek unit 1 (bit 1)`). The comment describes the code accurately. It changes with dr-14's code fix.

@@ -497,7 +497,7 @@ Each gives the exact current text, what the code does, and replacement text.
     (`files.inc:7307-7360`) and the self-paste walk is `fcp_run2`'s `.selfup`
     (`filecp.inc:631-652`). Replace with "ends with one re-list pass in
     `fm_paste_res`" and "**`fcp_run2` refuses a folder pasted into itself**".
-12. **SPEC.md:75778** - "and the kernel's own three callers'". There are four:
+12. **REFUTED** - **SPEC.md:75778** - "and the kernel's own three callers'". There are four:
     `ctrl.inc:1155`, `files.inc:5892` (`fm_c_dlg`, both image commands),
     `compress.inc:2398`, `diskops.inc:1521`. Replace "three" with "four".
 13. **SPEC.md:75569** - "the box accepts exactly the bytes `dskw_name83` will
@@ -523,7 +523,7 @@ Each gives the exact current text, what the code does, and replacement text.
     document icon composed into the store costs no per-file RAM and no paint
     work: every Disk window, the chooser included (§38.1), shows it with no
     change to a drawing path."
-17. **SPEC.md:108215** - "The raise is 20 bytes a slot". A slot is 19 (stem 8,
+17. **REFUTED** - **SPEC.md:108215** - "The raise is 20 bytes a slot". A slot is 19 (stem 8,
     glyph 8, `assoc_clus` 2, `assoc_drv` 1; `assoc_dfold` went in size pass
     13, as the paragraph above says). Replace with "19 bytes a slot".
 18. **kernel/assoc.inc:34** - "app slots - 20 resident bytes each (stem,
@@ -603,3 +603,69 @@ Each gives the exact current text, what the code does, and replacement text.
   (+~14), or is a commit check on the Save box alone the right size?
 * files-18 is not on ABI-BREAK-LIST; the owner may want it there as a
   candidate row for the next flag day.
+
+## Verification
+
+Adversarial pass, 2026-11-08. Code re-read for every bug, hazard and
+medium-or-higher finding (callers, the `KERN_SMALL`/`KERN_BIG` arms, sections);
+every doc quote grepped exact and unique. `docs/plans/ABI-BREAK-LIST.md` and
+`KERNEL-BYTE-QUEUE.md` list none of these.
+
+- **files-1** CONFIRMED (high). Two claims run with `[dsk_dseg]` aimed and before the listing
+  is written: `dsk_rah_want` (disk.inc:4252) and `dsk_fatw_want` -> `dsk_fatw_claim`. Each is sized
+  at its own rank, so a cheaper cache counts as free. Neither `mem_shed_one` nor `fmv_demote` protects
+  the destination. It needs memory pressure. Bytes refined to about +10.
+- **files-2** CORRECTED, bytes only. The bug is as stated: the record is `I_STATE` 0 during
+  `KD_INIT`, so `inst_next` skips it. The fixed `FM_NSLOT` walk saves about 12 bytes, not 3.
+- **files-3** CONFIRMED. The Enter and Save-button paths both end in `fdlg_save`, and nothing
+  else checks the name.
+- **files-4** CONFIRMED (kern_big only).
+- **files-5** CORRECTED, severity medium -> low. The saving is a predicted few percent of a
+  navigation that already costs at least one ~400 ms disk call.
+- **files-6** CONFIRMED (latent).
+- **files-7** CONFIRMED.
+- **files-8** CONFIRMED.
+- **files-9** CONFIRMED. The row press reaches `fm_drag` inside the chooser.
+- **files-10** CONFIRMED. `fm_kinit_x`'s own comment says so.
+- **files-11** CORRECTED. `ICO_R_NONE` is not the only blank case: a row `ico_body` refuses also
+  stages blank. The flag belongs on `dsk_ico_stage`'s `.none` arm, and the cost is about 1,500
+  cycles a row, not 800.
+- **files-12** CONFIRMED. SPEC.md 22.3's limits do not state it.
+- **files-13** CONFIRMED (spot-check).
+- **files-14** CORRECTED. `fm_pool` is at 0AAFBh on kern_big (build/kernel.map), not ~0C5xx.
+  kern_small (7D2Dh) never runs `mem_rr_tab`.
+- **files-15** CONFIRMED (spot-check).
+- **files-16** CONFIRMED.
+- **files-17** unchecked. AH = 0 at the call is confirmed; whether `wm_pkgcall` delivers BX was
+  not checked.
+- **files-18** CONFIRMED. `fdlg_open_x` overwrites AH, and no contract defines it.
+- **files-19, files-20, files-21** unchecked (record).
+
+Doc mismatches: 39 fixes are confirmed in `data/files.json`. The original entries are 1-11,
+13-16 and 18 onward. Several are rewritten so that they describe the code today rather than a
+pending fix:
+
+- 13 (38.5's name box) now states what the box does and does not refuse.
+- 14 (54.0's `ASC_KB`) is put in the past tense with a pointer to §54.7.4.
+- 22.6.3's claim list names all four claimers.
+- 22's preamble and the files.inc header are rewritten whole.
+
+Verifier-found additions:
+
+- 38.6.2's second `fdlg_sizeof`
+- `fm_view` in 22's retitle paragraph
+- 22.3's `fmv_repaint_all` bullet
+- the `FS_FREEH`/`FS_USEDH` rows
+- driver.inc:3310's `fdlg_commit` and "resident thunk" (kernel.asm:8316 says there is none)
+- files.inc's `fdlg_commit` comments at the `fm_svp_set` and repaint-tail sites
+
+Two entries are REFUTED:
+
+- **12 REFUTED.** `ctrl.inc:1155` is `OSAPI_DRV_DLG`'s body (`modc_e_dlg`), which the same
+  38.9 row already names separately. The kernel's own callers are files.inc, compress.inc and
+  diskops.inc: three.
+- **17 REFUTED (not applied).** "The raise is 20 bytes a slot" sits beside a measured
+  "114 resident bytes". That figure is historical, and 54.2 says the paragraphs below it describe
+  the retired `assoc_dfold` byte. Changing only the per-slot figure would make the total
+  inconsistent, and a shallow clone could not settle which came first. The assoc.inc:34 code
+  comment, which states the current cost, is fixed.

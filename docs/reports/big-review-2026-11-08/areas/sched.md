@@ -215,3 +215,39 @@ Quotes are exact. Kernel line numbers are this tree's.
 3. **Can a DOS program's `int 1Ch` hook run on `sch_chstack`** (sched-7)? It needs the tick to land while SS = LOW_SEG with that program's hook in the IVT - i.e. inside a kernel service the DOS back end runs on a LOW_SEG stack. If DOS virtualises 1Ch or swaps SS for every back-end call, sched-7 drops to the ROM-only case.
 4. **CLAUDE.md's "`OSAPI_TASK_YIELD`, a full task switch | 693 us"** is PERFORMANCE.md Set 1, measured before khp1's sched-1 took a yield from 644 to 283 us on MartyPC's 5150 CGA. A switch to ANOTHER task costs more than a yield-to-self, so 693 may still be the right figure for what the row names - but nobody has re-measured it on the field machine since, and the table is quoted as a budget.
 5. **Was SCH_CHSTK sized from `STKDIAG`'s `sd_cwater`** (sched-8), or from the A/B in STACK-SLOTS-PLAN 4.1? If the former, the 56-byte reading may be low.
+
+## Verification
+
+Adversarial pass, 2026-11-08: every finding re-read against the code (both arms where they differ), `build/kernel.map` and `build/kernel-full.bin`; every doc mismatch grep-checked for its exact text. 19 findings: 15 confirmed, 4 corrected, 0 refuted. 60 doc fixes confirmed (some mismatches split into several exact replacements, plus four the review missed); 1 refuted.
+
+- **sched-1** confirmed - the `pushf`/`cli` at 914-915 is not undone until `.done`, and the fill runs inside it. Added: make sure no snapshot reader shows a package the reserved state 3.
+- **sched-2** corrected - the bug is real, but the proposed reorder (`sub` before `cli`) leaves an IF=1 boundary with `sch_lock` already lowered, where a nested tick could switch away from inside the ISR. Fix instead: take the `spk_seg`/`sti` block after the skip tests and the `0x0101` raise. 0 bytes.
+- **sched-3** confirmed - raisers also in mega.inc (a dozen sites). SPEC 7 has been rewritten in doc_fixes.
+- **sched-4** confirmed - narrowed to "window callbacks run on the UI task, except a W_PAINT that a worker's repaint dispatches".
+- **sched-5** corrected - the valid range is 1..32768. 0 and 1 both wake at the next tick, and 32769..65535 wake at once.
+- **sched-6** confirmed.
+- **sched-7** corrected - adjacency confirmed on the map (mou_pstack 6D6..756, sch_chstack 756). The overlay is not free: `.ovl` is 5,119 of its 5,120-byte bound. A check in `sch_switch` costs every switch and blames the outgoing task, so check once per tick after the chain instead. About +9..+12 bytes.
+- **sched-8** confirmed - `sd_rom08` (= `sd_cwater`) is the number that sized SCH_CHSTK. The 20% odds assume random bytes, so the real odds are lower, but a gap still under-reports.
+- **sched-9** confirmed (spot-check).
+- **sched-10** confirmed - the sched.inc:121 item is an `%error` string, not a comment, so it moved out of the doc fixes into this finding as a code change.
+- **sched-11** corrected - the copy is real. The sched-2 leak does not exist in fsx_rtick, because its skip path is the ISR's own iret.
+- **sched-12** confirmed and strengthened - nothing ever stores `[sch_chbusy]` (kern_big's word store covers `sch_rbusy`/`sch_lock`, and chbusy is the byte below them), so the scheduler already depends on `.bss` arriving zeroed. The image padding under `.bss` is all zero on kern_big.
+- **sched-13** confirmed.
+- **sched-14** confirmed - the host mirrors (t_stkclass, os88pkg) need no change.
+- **sched-15** confirmed - T_FLAGS bit 1 is free, and the change is in neither queue.
+- **sched-16** confirmed - the quoted sentence is SPEC.md:18270 (§10.1), not §7.3.
+- **sched-17** confirmed.
+- **sched-18** confirmed.
+- **sched-19** confirmed.
+
+Doc mismatches:
+- **REFUTED** - sched.inc:121 "it is the largest class and every class is one". It is an `%error` message (code), not a comment, so it is folded into sched-10.
+- Corrected - apps/os88api.inc:34. Only the "384-byte" half is fixed. "The tick, the mouse and any sound IRQ land their frames on it" stays true: the mouse IRQ's six-byte gate frame lands on the worker's stack before the swap (§8.5's own comment).
+- Corrected - SPEC.md:12401. Rewritten to the measured state (zero padding, and `sch_chbusy` relies on it) without pre-empting the §2.6 ruling.
+- Corrected - SPEC.md:12517 clobbers. The early-out writes AX and SI only, so CX and DX are charging-arm-only too. The sched.inc:1249 header has the same fix.
+- Corrected - SPEC.md:13573. Now "cost 209 bytes when it landed", with `.bss` 4 now, so the total and its parts still agree.
+- Corrected - SPEC.md:46168. Only the line numbers are replaced by `sch_frame`. "Both used to say" becomes true once the os88api.inc:3940 fix applies.
+- Corrected - sched.inc:2874. The class labels now use the SDK's own OS88_STACK_* descriptions.
+- Corrected - sched.inc:2888. Fixed in place, and the header now says which routine it describes. Moving it stays a sched-10 recommendation.
+- Added (the review missed these) - sched.inc:20 "All tasks run CS = DS = KERNEL_SEG", sched.inc:857 "DS = ES = KERNEL_SEG, CS = KERNEL_SEG", sched.inc:1249 sch_account clobbers, and the "fallback below re-arms it too" sentence at sched.inc:2898.
+- All other mismatches are confirmed as listed. The replacement texts are in data/sched.json, each checked to occur exactly once and to apply in sequence. Every .inc replacement changes comment text only.

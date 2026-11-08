@@ -1,0 +1,668 @@
+{
+ "area": "boot",
+ "title": "Boot path and kernel init",
+ "summary": "The boot path is one of the best-reasoned parts of the tree. Stage 1 relocates itself by arithmetic and checksums the 13-sector stage 2 it reads. Stage 2 reads a whole cylinder per int 13h call and checks the transfer rather than the table. kmain's boot half runs from that blob, which is given back to the heap floor and compacted away, so boot-only code costs no resident byte. That beats what DOS, Windows 3.x or System 6 did with init code. But the guard whose whole purpose is the fault no emulator reproduces is defeated on four of the six shipped system disks. Since kernel size pass 14 took BOOT2_SECS from 12 to 13, stage 2's first run on kern_big's 360KB and 720KB images starts on head 1 and never crosses a head, and the canary (file sector 21) sits in that run. On the BIOS it exists for it passes, publishes boot_cylrun and lets dsk_xfer write across heads all session. t_canary stayed green because it models runs from the data area, not from data+BOOT2_SECS. The fix is two numbers (file sector 57). On kern_small's 360KB and 720KB disks and on kern_big's 1.2MB disk the canary sector is placed correctly, but the splash's first tick executes vid_setmode/gfx_rowbase out of sectors loaded past the first head crossing, before the canary runs, so on that BIOS the machine runs garbage before it can be rescued (boot-2, verified worse than first reported). The rest is the usual shape of a heavily size-passed area. A guard label sits four bytes short of the stores it is meant to cover, while the rung it guards is four sectors too big. The second loader (boothd) still asks a RAM question boot.asm retired, and the kernel fetches the boot partition's BPB with the int 13h AH=08h geometry the hard-disk sector deliberately stopped trusting. Stage 2 keeps a dead duplicate of the DPT patch in a blob with 4 bytes free. Guard 5 omits BLOB_LIFT on every shipped kernel (ROM_COLD is the default, not a knob). And more than forty comments and SPEC passages state wrong current values because they narrate history instead of invariants. Nothing here needs an ABI break.",
+ "strengths": [
+  {
+   "title": "The boot blob sits at the heap FLOOR and is given back and compacted",
+   "evidence": "boot/boot.asm 369; boot/boot2.asm 135-155; kernel/kernel.asm 6098-6121 (mem_unblob_x)",
+   "why": "Every boot-only body (the loader, the splash, kmain_o, two dozen *_x init routines) is in .boot2 and rejoins the long free run at the bottom of the heap. A transient at the top would strand itself above unmovable claims. This is the model any new boot-only code should follow, and it beats DOS's SYSINIT, which in practice was lost memory."
+  },
+  {
+   "title": "Verify the TRANSFER, never the table",
+   "evidence": "boot/boot2.asm 401-470",
+   "why": "Reading back your own int 1Eh patch proves nothing; summing a sector that a crossing run delivered does. Using the sum rather than the first word closed the kern_mega case where the wrong sector's first word was also 0. The principle is right even though the sector is currently in the wrong place (boot-1)."
+  },
+  {
+   "title": "Stage 1 checksums stage 2",
+   "evidence": "boot/boot.asm 458-505",
+   "why": "It catches the failure that is not a disk error (a sector that silently did not arrive) for a 20 ms loop. BOOTDIAG=1 prints the sum, so the missing sector can be named from the host."
+  },
+  {
+   "title": "Assembly-time arithmetic instead of dead runtime checks",
+   "evidence": "boot.asm 137-147 (MEMNEED clamp); boot2.asm 515-519 (packed-tail vs blob); kernel.asm 8873 (.cfx vs BLOB_SEG_AT); boot2.asm 883",
+   "why": "Each one turns a field fault into a build failure at zero bytes."
+  },
+  {
+   "title": "A range check on DL rather than a fallback",
+   "evidence": "boot/boot.asm 266-298; boot/mbr.asm 74-77",
+   "why": "A range check cannot load a kernel off the wrong disk; a fallback can. The reasoning is written at the site."
+  },
+  {
+   "title": "Fixed low words with a registry indirection",
+   "evidence": "kernel/kernel.asm 2338-2412 (0060:0004 boot_cylrun, 000C boot_ticks, 000E dbg_reg_at)",
+   "why": "A cheap, ABI-stable channel between the loader, the kernel and the test harness. The registry means the next instrument does not need a word of its own."
+  },
+  {
+   "title": "One decoder serves both loaders",
+   "evidence": "boot/boot2.asm 521-616 (kz_all, kz_hd)",
+   "why": "The hard disk and the floppy place the packed tail at the same address because their arithmetic agrees, so the HDD door is a short move plus the floppy's own kz_all, with no second copy to drift."
+  },
+  {
+   "title": "The interrupt has its own far pointer",
+   "evidence": "kernel/kernel.asm 5242-5254; kernel/sched.inc 2326-2352",
+   "why": "spl_ifp exists because SPLCALL stages its target in a shared word two instructions before the call. A one-boot-in-fifty race was closed by construction rather than by cli."
+  },
+  {
+   "title": "Section-end guards for every section",
+   "evidence": "kernel/kernel.asm 9795-9884",
+   "why": "A stray section switch cannot silently under-report a size that a ladder rung is derived from."
+  },
+  {
+   "title": "boothd's CHS proof on bytes read off a disk",
+   "evidence": "boot/boothd.asm 378-422",
+   "why": "The two guards that make a single div pair safe against a hostile BPB are written beside the failure each prevents: an INT 0 into POST's vector, or a cylinder-1024 wrap that jumps into the wrong sectors."
+  },
+  {
+   "title": "cpu_detect's x87 scratch word on its own stack frame",
+   "evidence": "kernel/cpudet.inc 117-139",
+   "why": "The deliberate no-override [bp+0] encoding is documented as the mechanism, together with why a 'fix' would break 8087 detection. That is how a non-obvious encoding should be documented."
+  }
+ ],
+ "findings": [
+  {
+   "id": "boot-1",
+   "kind": "bug",
+   "severity": "high",
+   "title": "The boot canary is inert on kern_big's 360KB and 720KB disks, and t_canary cannot see it",
+   "detail": "Stage 2 starts reading at data+BOOT2_SECS. On kern_big's 360KB and 720KB images the data area is LBA 14 (fatsz 3), so .text begins at LBA 27, which is cylinder 1, head 1, sector 1. read_run bounds runs at the cylinder, so run 1 is LBA 27..35, on head 1 only, and crosses no head. KSIG_OFF 4096 is kernel sector 8 = file sector 21 = LBA 35, inside that run. On a BIOS that flips heads at the wrong sector (the canary's whole reason; on a 286 this is reachable once the user ticks Cylinder), every later cylinder's head-1 half loads wrong and the canary still passes. Stage 2 then publishes [0060:0004], dsk_cylrun becomes 1, and every multi-sector WRITE for the session crosses heads on that BIOS. kernel size pass 14 (BOOT2_SECS 12 -> 13) broke it: at 12, .text began on head 0 sector 9 and run 1 crossed. t_canary's crosses() walks runs from the data area instead of from data+BOOT2_SECS, so it reports file sector 21 as crossing. Under the real partition, the legal band over all six shipped system images and the 11/13/14-sector blob lengths is {57, 106..110}. The 1.2MB and 1.44MB disks and both kern_small disks are correct today (but see boot-2 for kern_small and 1.2MB).",
+   "evidence": [
+    "boot/boot2.asm:318-322 .reload starts at b2_lba0 + BOOT2_SECS",
+    "boot/boot2.asm:713-723 read_run's cylinder bound",
+    "Makefile:1021 KSIG_OFF := 4096; boot/boot2.asm:57",
+    "build/os8088-360.img and os8088-720.img BPB: rsvd 1, nfat 2, fatsz 3, root 112 -> data at LBA 14",
+    "tests/unit/t_canary.py:99-117 crosses() starts lba = data",
+    "boot/boot2.asm:467 publishes the bound; kernel/disk.inc:5343-5346 dsk_cylrun"
+   ],
+   "recommendation": "Move the canary to file sector 57: KSIG_OFF := 22528 in the Makefile, and KSIG_OFF equ 22528 - BOOT2_KNOBSEC*512 + BOOT2_SMALLSEC*512 in boot2.asm (memory sector 44 on kern_big, 46 on kern_small, both inside .text; under KZIP it falls in the packed tail, which the existing %if arm handles). Fix t_canary's crosses() to start each walk at data + boot2_secs (and its docstring with it), then break it on purpose (KSIG_OFF back to 4096) and watch os8088-360.img go red. Better still, see boot-10.",
+   "phase": "now",
+   "bytes_est": "0 (immediate values change)",
+   "verdict": "confirmed",
+   "verify_note": "Re-derived from the built images' BPBs: 360/720 data LBA 14, spt 9, heads 2; .text at LBA 27 = cyl 1 h1 s1; run 27..35 single-head; canary LBA 35 inside it. A walk from data+BOOT2_SECS gives ok(21)=False for blob 13 and 14 on both 9/2 disks and True on 1.2MB, 1.44MB and both small disks; the intersection is [57,106,107,108,109,110]. t_canary.crosses() really starts at lba = data. Not listed in ABI-BREAK-LIST or KERNEL-BYTE-QUEUE."
+  },
+  {
+   "id": "boot-2",
+   "kind": "hazard",
+   "severity": "high",
+   "title": "The splash runs code from crossing runs before the canary has verified them, which defeats the canary on kern_small's floppies and kern_big's 1.2MB",
+   "detail": "After every run, stage 2 ticks spl_tick once SPL_RESIDENT sectors are aboard. The first tick far-calls vid_setmode and gfx_rowbase (kern_big .text 0x7F5 / 0x8C4, sectors 3 and 4; kern_small 0x766 / 0x7E4, both sector 3), and spl_isr keeps calling gfx_rowbase from IRQ0. The canary only runs after the whole load. On kern_small's 360KB and 720KB disks (the 128KB XT's own, data at LBA 12, blob 11) .text starts at LBA 23 = head 0 sector 6, run 1 is LBA 23..35 and crosses at .text sector 4; on the EOT-8 BIOS the canary exists for, the wrong delivery already starts at .text sector 3 (head 0 sector 9), which holds both routines. On kern_big's 1.2MB disk .text starts at LBA 42 (head 0 sector 13) and run 1 crosses at kernel sector 3. In both cases the machine executes garbage at the first tick, before the shorten-and-reload can run, so the canary - correctly placed on those disks - never gets to rescue the boot. The KZIP plain head is read with the same bound. kern_big's 360KB/720KB (run 1 head-1 only) and 1.44MB (first crossing at .text sector 8) are not exposed.",
+   "evidence": [
+    "boot/boot2.asm:350-377 tick gate",
+    "kernel/splash.inc:519-524 spl_chrome -> spw_near -> vid_setmode",
+    "build/kernel.map: vid_setmode 7F5, gfx_rowbase 8C4; build/smallk/kernel.map: 766, 7E4",
+    "build/small360.img / small720.img BPB: data LBA 12, spt 9, heads 2",
+    "boot/boot2.asm:419-473 canary after the load",
+    "boot/boot2.asm:336-339 KZIP head through read_run"
+   ],
+   "recommendation": "Keep the TRACK bound until the resident head is aboard: widen b2_runmax to the cylinder only once SPL_RESIDENT sectors have landed (move the mul at 306-310 behind a [b2_left] test). This costs one extra int 13h on geometries whose first head crossing falls inside the head (kern_small 360/720 and kern_big 1.2MB today). Verifying the canary before the first tick instead would delay the bar to about a third of the load once boot-1 moves the canary to sector 44.",
+   "phase": "now",
+   "bytes_est": "+8 blob (.boot2, transient); needs boot-7's room on kern_big",
+   "verdict": "corrected",
+   "verify_note": "Mechanism confirmed. Corrected exposure and severity (medium -> high): the reviewer said 360/720 are not exposed, which holds only for kern_big; kern_small's 360KB and 720KB disks (the 128KB XT target, i.e. the machines most likely to carry an EOT-8 clone BIOS) are exposed, because their .text starts at head 0 sector 6 and vid_setmode/gfx_rowbase sit in .text sector 3. On those disks this, not boot-1, is what defeats the canary."
+  },
+  {
+   "id": "boot-3",
+   "kind": "bug",
+   "severity": "medium",
+   "title": "A canary reload resets the splash's .text state while the blob still thinks the splash is up",
+   "detail": ".rerun reloads from .text sector 0. That re-lands spl_live, spl_busy and spl_quiet (.text 0x922-0x925) and the vid_* block (0x753-0x795) with their image defaults. [cs:spl_on] lives in the blob and stays 1, so the second pass's spl_tick skips the first-tick branch and never raises spl_live again. The consequences: spl_isr refuses every frame; spl_paint draws the bar with the default vid_* values (the wrong segment on CGA or Hercules); vid_init sees spl_live = 0 and performs the mode set the splash was protecting, which wipes the screen; and every later spl_step takes the 'finished' exit. The loading screen is gone for the rest of the boot, on exactly the machines the reload rescues.",
+   "evidence": [
+    "boot/boot2.asm:525-529 .rerun -> .reload",
+    "kernel/viddet.inc:1753-1796 spl_live/spl_busy/spl_quiet in .text",
+    "kernel/splash.inc:241-244 first-tick test on [cs:spl_on]",
+    "kernel/splash.inc:346-348 spl_step's finished exit",
+    "kernel/splash.inc:1180-1190 spl_isr's spl_live test",
+    "build/kernel.map vid_seg 753 .. vid_band_xe 789"
+   ],
+   "recommendation": "Test the kernel byte for the first-tick branch: cmp byte [spl_live],0 / jne .running in place of cmp byte [cs:spl_on],0, keeping the mov byte [cs:spl_on],1 that spl_step needs. After a reload, the next tick re-probes, re-draws the chrome and re-raises spl_live. spl_hook is already guarded by spl_hooked.",
+   "phase": "now",
+   "bytes_est": "-1 blob",
+   "verdict": "corrected",
+   "verify_note": "Main claim confirmed (spl_on is a blob byte at .boot2 1585; spl_live and the vid_* block are .text sector 3/4 bytes the reload re-lands). The reviewer's secondary claim - that the DMA zeroing spl_busy under an in-flight spl_isr frame lets a nested IRQ0 start a second frame - is refuted and removed: the DMA writes ascending, so spl_live (0x922) is already 0 when spl_busy (0x924) is, and a nested spl_isr refuses at its spl_live test first."
+  },
+  {
+   "id": "boot-4",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "The SPL_RESIDENT guard stops four bytes short of the stores it is meant to cover, and the rung is four sectors too big",
+   "detail": "SPL_RES_SIZE is measured at spw_resident_end. The first tick writes spl_live and spl_busy and reads spl_quiet, all placed after that label. SPEC 2.9.4's own rule is that 'a first-tick store belongs in the head or in the blob', and the guard does not check it. Meanwhile SPL_RESIDENT is 9 against a measured need of 0x926 = 2,342 bytes (5 sectors) on kern_big and 0x846 on kern_small, and viddet.inc's comment claims sector 7. Under KZIP, KZ_HEADSEC equals SPL_RESIDENT, so 4,608 bytes of .text ship unpacked where 2,560 would do. The guard's own %error text also still says to raise SPL_RESIDENT 'in BOTH kernel/splash.inc and boot/boot2.asm'; boot2.asm defines none.",
+   "evidence": [
+    "kernel/kernel.asm:8653-8656",
+    "kernel/viddet.inc:1743-1796",
+    "kernel/splash.inc:36",
+    "build/kernel.map: spw_resident_end 922, spl_quiet 925; smallk 842/845",
+    "Makefile:2828 KZ_HEAD from SPL_RESIDENT",
+    "build/kernel.kz.json head 4608, tail 92082->73904"
+   ],
+   "recommendation": "(a) Move spw_resident_end below spl_quiet (0 bytes). (b) Derive SPL_RESIDENT as (SPL_RES_SIZE+511)/512 at the foot of kernel.asm and have the Makefile read it from the ks: %warning line instead of sed-ing splash.inc; SPL_RESIDENT only reaches .boot2 immediates and KZ_HEAD, which the existing two-pass KZIP build already sequences. Before lowering it, audit every store the first tick can make (vid_setmode, vid_wipe, vid_cga_equip, vid_6845_prog, bvs_apply) for an address in sectors 5-8. (c) Correct the %error string (a code change, so it is not in doc_fixes).",
+   "phase": "now",
+   "bytes_est": "0 resident; ~-400 bytes of KERNEL.SYS on kern_big (2,048 more bytes packed at ~80%)",
+   "verdict": "corrected",
+   "verify_note": "Facts confirmed against both maps and kernel.kz.json (73904/92082 = 80.3%, so ~400 bytes saved). Severity lowered medium -> low: the uncovered stores are 4 bytes and today sit 1,770 bytes below the guarded boundary, so the gap can only bite if the label lands within 4 bytes of a sector end; the size win is disk, not RAM."
+  },
+  {
+   "id": "boot-5",
+   "kind": "hazard",
+   "severity": "medium",
+   "title": "A hard-disk boot fetches its own BPB with the AH=08h geometry that boothd deliberately stopped trusting",
+   "detail": "boothd reads with the BPB's spt and heads, because the geometry that wrote the volume is the only one that reads it back (FIELD-NOTES 33). The kernel's dsk_boot_from_x instead asks int 13h AH=08h, and dsk_bpb_check's first read of the boot partition (the read that fetches the BPB, converting bpb_hidd into CHS) uses that answer. Where the two differ, boothd boots and the kernel then fails to mount its own boot volume: no SYSTEM.CFG, no HDD.DRV, and a desktop that looks like it works. The comment at the AH=08h call still says it is 'the same question boot/boothd.asm asks'.",
+   "evidence": [
+    "boot/boothd.asm:16-36, 174-183",
+    "kernel/disk.inc:2786-2808 int 13h AH=08h",
+    "kernel/disk.inc:4076-4081 first read uses dsk_bootspt/dsk_boothds",
+    "docs/FIELD-NOTES.md 33"
+   ],
+   "recommendation": "Hand the geometry over: boothd sets SI=[spt] and DI=[bpb_heads] before the jump, and dsk_boot_from_x takes them when they are sane (spt 1..63, heads 1..255), falling back to AH=08h otherwise so an old VBR chaining a new KERNEL.SYS still boots. Write the handoff (DL, BX:CX, SI, DI, BP) into SPEC 52.10.3. boothd has 7 bytes free, so this needs boot-6's -9 first.",
+   "phase": "now",
+   "bytes_est": "+8 boothd (boot sector); ~-20 .ovl (transient)",
+   "verdict": "confirmed",
+   "verify_note": "Read both: boothd has no AH=08h ('AND NO int 13h AH=08h AT ALL'); dsk_boot_from_x.hard calls AH=08h into dsk_bootspt/dsk_boothds; dsk_bpb_check copies them into disk_spt/disk_heads for the BPB-fetching read. The stale 'same question boothd asks' comment is added to doc_fixes."
+  },
+  {
+   "id": "boot-6",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "boothd's RAM check asks the question SPEC 2.7.1 retired, and never asks about the blob",
+   "detail": "boothd subtracts RELOC_ADJ first, then compares the relocated segment BASE against KERNEL_SEG + ksecs*32 + BOOT_STACK/16. That is the shape boot.asm itself calls out as demanding 31,744 bytes of headroom nothing uses. It never considers the blob, which it reads to BLOB_SEG, above the image by the FAT window, .lowbss and .vgabuf. Today the over-strictness happens to cover the blob, but nothing asserts it. The built sector has 7 bytes free, not the 23 or 25 its comments claim.",
+   "evidence": [
+    "boot/boothd.asm:121-129",
+    "boot/boot.asm:226-243 (the retired form, explained)",
+    "boot/boothd.asm:237-239 blob to BLOB_SEG",
+    "build/boothd.bin: last non-zero byte at 496 of 504"
+   ],
+   "recommendation": "Do what stage 1 does: cmp ax, MEMNEED against the top of RAM before the sub, with MEMNEED = max(BLOB_SEG + BOOT2_SECS*32 + 160, RELOC_ADJ) computed at assembly time. That drops the [ksecs] load and shift.",
+   "phase": "now",
+   "bytes_est": "-9 boothd (boot sector)",
+   "verdict": "corrected",
+   "verify_note": "Code and the 7-free-byte count confirmed (boot_drive db 0x80 at 496, kofs at 504). Severity lowered medium -> low: it refuses only machines ~31KB short of what is needed, and a hard-disk machine is in practice a 640KB one; its value is the 9 bytes boot-5 needs."
+  },
+  {
+   "id": "boot-7",
+   "kind": "size",
+   "severity": "medium",
+   "title": "Stage 2's copy of the DPT patch is dead code in a blob with 4 bytes free",
+   "detail": "Stage 1 patches int 1Eh before its first multi-sector read (SPEC 2.9.8), and its own comment calls stage 2's copy 'idempotent rather than necessary'. Nothing enters boot2_entry except stage 1: FLAT_PAYLOAD jumps straight to KERNEL_SEG, the hard disk never enters stage 2, and the ROM kernel still boots through the floppy stage 1. kmain_o's dsk_dpt_init_x covers the hard-disk boot. kern_big's blob ends at 0x19FC of 0x1A00.",
+   "evidence": [
+    "boot/boot.asm:300-334, 316-319",
+    "boot/boot2.asm:262-284 (41 bytes)",
+    "build/kernel.map boot2_end 19FC",
+    "kernel/kernel.asm:5664 dsk_dpt_init_x"
+   ],
+   "recommendation": "Delete the block, leaving stage 1's %ifndef DPT_ROM as the one site. This is the room boot-2 and boot-5 need.",
+   "phase": "now",
+   "bytes_est": "-41 blob on every kernel",
+   "verdict": "confirmed",
+   "verify_note": "Only reference to boot2_entry from outside boot2.asm is kernel.asm's jmp at .boot2 offset 0; stage 1 and stage 2 share the same DPT_ROM knob and the same SPT. Byte count re-summed from the encodings: 41."
+  },
+  {
+   "id": "boot-8",
+   "kind": "consistency",
+   "severity": "low",
+   "title": ".bss arrives zeroed by the load, while many comments and SPEC passages say it does not",
+   "detail": "In the shipped kern_big, the file bytes between kernel_text_end (file 0xB788) and the next section (.ovl at 0xCE00) are all zero, and .bss (memory 0x9D88-0xB27E) maps entirely into that gap; kern_small likewise (.bss ends 0x80CB, .ovl at memory 0x8200). Every loader writes it: stage 2, boothd and kz_expand. kmain_o relies on this ('NO loader_init ... .bss is zero at boot'). mod_fp's, cpudet's, bootprof's and spl_fp's comments say '-f bin zeroes nothing', and so do a dozen more in assoc, clock, ctrl, desk and disk and several SPEC passages, while SPEC elsewhere says '.bss arrives zeroed'. The property holds by construction (the next file section starts at a memory address above .bss), but nothing asserts it.",
+   "evidence": [
+    "build/kernel.bin 0xB788-0xCE00 all zero",
+    "kernel/kernel.asm:5894-5900 relies on it",
+    "kernel/kernel.asm:5813, 5227; kernel/cpudet.inc:29; kernel/bootprof.inc:43 deny it",
+    "SPEC.md 18051 vs 7410, 11776, 15488"
+   ],
+   "recommendation": "Add one %if beside the section-end guards: the first file section after .text must start at or past BOOT2_PAD + KTEXT_SIZE + KBSS_SIZE, with an error message naming kmain_o's reliance. Then correct the comments tree-wide in one pass. Do not move data on the strength of it: .bss is as resident as .text.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "Zero gap checked on build/kernel.bin; .bss and .ovl ranges checked in both maps. The contradiction is wider than three comments (grep finds ~15 in kernel/ and several in SPEC); only the three the reviewer named are in doc_fixes."
+  },
+  {
+   "id": "boot-9",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "The three hand-set constants carry their history in comments, and the history is now wrong about the present",
+   "detail": "The BOOT2_SECS block (kernel.asm 1983-2138) still argues for 18, 19 and 22 sectors and says kern_small is nine. The KSIG_OFF block (boot2.asm 51-115) gives eight past values and a band of 21, 57, 106..110 that boot-1 shows is wrong. The SPL_RESIDENT block (splash.inc 36-75) records three raises, none of them current. Each block opens by telling the reader to read the constant rather than the prose, then quotes numbers anyway.",
+   "evidence": [
+    "kernel/kernel.asm:2032, 2114-2138",
+    "boot/boot2.asm:51-115",
+    "kernel/splash.inc:36-75"
+   ],
+   "recommendation": "For a derived or hand-set constant, the comment should state the INVARIANT and the guard that enforces it, nothing more. Move the ledger of past values to docs/history once, as KERN-BUDGET-LEDGER.md already does for the budgets.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "Read all three blocks; the stale kern_small-nine paragraph and the 18/19/22 argument are in doc_fixes."
+  },
+  {
+   "id": "boot-10",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "Let the build CHOOSE KSIG_OFF and SPL_RESIDENT instead of checking hand-typed values afterwards",
+   "detail": "KSIG_OFF is typed twice and checked by a model; SPL_RESIDENT is typed once and sed-ed out by the Makefile. Both have moved half a dozen times, each by manual re-derivation, and boot-1 is what one wrong model costs.",
+   "evidence": [
+    "Makefile:1021, 2828",
+    "boot/boot2.asm:57",
+    "tests/unit/t_canary.py"
+   ],
+   "recommendation": "Have one host tool (t_canary's crosses() with the start fixed) compute the band from the shipped geometries and emit -DKSIG_OFF=<lowest legal>. KSIG_OFF only reaches a mov si,imm16 in .boot2 and the Makefile's KSIGDEF2, so .text cannot move with it. Derive SPL_RESIDENT as in boot-4. Keep t_canary as the independent second reader.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked: KSIG_OFF's only code use is boot2.asm's mov si, KSIG_OFF (and the KZIP %if); the Makefile adjusts it per BOOT2_XSEC/KERN_SMALL by hand."
+  },
+  {
+   "id": "boot-11",
+   "kind": "perf",
+   "severity": "low",
+   "title": "sch_isr draws a 28.7 ms spinner frame with IF=0 throughout kmain_o",
+   "detail": "From sched_init to spl_finish, every phase change (about every 220 ms) runs spl_anim inside IRQ0 without sti. That is deliberate, to avoid re-entering the scheduler, but it blocks IRQ6 (floppy completions during the boot mount and driver loads) and IRQ4 (the mouse; spl_quiet covers only the identify window) for up to 28.7 ms at a time.",
+   "evidence": [
+    "kernel/sched.inc:2318-2353",
+    "kernel/splash.inc:1150-1163 (SPL_SPINSH 2)"
+   ],
+   "recommendation": "Let sch_isr only set a 'frame due' byte, and draw the frame on the main line from spl_step/spl_stepq, which already hold the lock. Measure with os88boot.py phase times first.",
+   "phase": "now",
+   "bytes_est": "~-10 .text, +6 blob",
+   "verdict": "confirmed",
+   "verify_note": "sched.inc's own comment states the IF=0 asymmetry as deliberate; the cost is as described."
+  },
+  {
+   "id": "boot-12",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "A floppy image written to a USB stick boots drive A",
+   "detail": "boot.asm forces any DL above 3 to 0. A user who dd's os8088.img (instead of the live image) to a stick that the BIOS boots as USB-HDD (DL 80h) reads drive A: they get Disk error, or a kernel off whatever floppy is in A.",
+   "evidence": [
+    "boot/boot.asm:276-298"
+   ],
+   "recommendation": "No code change (the sector's CHS geometry is wrong for a stick anyway). Say it in docs/LIVE-MEDIA.md's troubleshooting.",
+   "phase": "record",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "cmp dl,3 / jbe / xor dl,dl read at boot.asm 293-297."
+  },
+  {
+   "id": "boot-13",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "The floppy handoff leaves BX:CX as residue, while two comments promise zeros",
+   "detail": "After a canary pass BX:CX are 0. On the .nocross path (every 286 boot, every TRACKRUN build) BX holds the boot tick from [b2_t0] and CX read_run's residue, and under KZIP kz_all leaves BX holding a segment. kmain_o's and dsk_boot_from_x's comments say 'both 0'. It is harmless today, because the floppy arm ignores them.",
+   "evidence": [
+    "boot/boot2.asm:380-383 mov bx,[b2_t0]",
+    "boot/boot2.asm:460-508",
+    "kernel/kernel.asm:5603",
+    "kernel/disk.inc:2697"
+   ],
+   "recommendation": "Correct both comments and document the handoff once (boot-5). Do not spend blob bytes zeroing the registers.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "Confirmed; detail sharpened (BX = the boot tick on the .nocross path). Both comments are in doc_fixes."
+  },
+  {
+   "id": "boot-14",
+   "kind": "size",
+   "severity": "low",
+   "title": "Stage 1's runtime DMA-page bound for the blob read is an assembly-time fact",
+   "detail": "The destination is HEAP_PARA, an immediate, and the geometry is fixed per image, so whether the blob read crosses a 64KB page is known when the sector is assembled. The comment justifying the runtime code still describes the retired top-of-RAM landing.",
+   "evidence": [
+    "boot/boot.asm:373-420"
+   ],
+   "recommendation": "Only if stage 1 needs the room (35 bytes free today): replace the runtime bound with a %if refusal on the kernel arm, keeping the runtime form for FLAT_PAYLOAD. Fix the comment either way.",
+   "phase": "record",
+   "bytes_est": "~-20 boot sector (not RAM)",
+   "verdict": "confirmed",
+   "verify_note": "Confirmed; free space corrected to 35 bytes (the 'Loader checksum' NUL is at 473, BS_CYLASK at 509). Comment fix is in doc_fixes."
+  },
+  {
+   "id": "boot-15",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "Shut Down uses a bare cli/sti pair and leaves hard-disk heads over data",
+   "detail": "The bare cli ... sti pair breaks the pushf/cli/popf rule. It is a terminal path that wants IF=1 afterwards, so it is not wrong, but nothing says so. 'You can now turn off your computer' on an XT with an ST-225 leaves the heads parked over data; period practice was PARK.COM.",
+   "evidence": [
+    "kernel/shutdown.inc:24, 54, 328"
+   ],
+   "recommendation": "Add a comment on the pair. Record head parking as a possible HDD.DRV verb (seek to the last cylinder with AH=0Ch) for Shut Down to call when a hard disk is mounted; it would live in the module, never resident.",
+   "phase": "record",
+   "bytes_est": "0 now; ~+20 module if taken",
+   "verdict": "confirmed",
+   "verify_note": "cli at 24, sti at 54, the message at 328."
+  },
+  {
+   "id": "boot-16",
+   "kind": "prior-art",
+   "severity": "low",
+   "title": "Stage 2 could walk the FAT, which would remove 'KERNEL.SYS first and contiguous'",
+   "detail": "Both loaders read KERNEL.SYS as a flat run. That forces os88disk.py and the installer to place it first and contiguous, and forced the kofs patch site for non-destructive installs.",
+   "evidence": [
+    "boot/boot.asm:341-350",
+    "boot/boothd.asm:52-57, 484-488",
+    "SPEC.md 52.10.15"
+   ],
+   "recommendation": "Record only. A FAT12 walker in stage 2 is ~100 blob bytes, which kern_big does not have; revisit if non-destructive installs keep failing to find a free run.",
+   "phase": "record",
+   "bytes_est": "+~100 blob if taken",
+   "prior_art": "MS-DOS 5+: the boot sector loads only IO.SYS's first 3 sectors, and that loader walks the FAT for the rest, which is what let SYS stop needing IO.SYS at cluster 2.",
+   "verdict": "unchecked",
+   "verify_note": "Low-severity record item; not re-derived."
+  },
+  {
+   "id": "boot-17",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "Make kmain_o a table rather than a call sequence",
+   "detail": "About 35 init calls of three kinds (OVLCALL, BLOBCALL, far shims) are interleaved with 31 hand-numbered MARKW and 8 BPMARKW sites, whose numbers may not be renumbered.",
+   "evidence": [
+    "kernel/kernel.asm:5597-6040",
+    "kernel/kernel.asm:5894-5900 (the 'counted, not named' note)"
+   ],
+   "recommendation": "Use a blob-resident table of (kind byte, offset word) entries walked by one loop, with MARK/BPMARK emitted from the entry index; conditional calls become conditional table rows. Measure first: the win is mainly in the knob builds and in readability.",
+   "phase": "now",
+   "bytes_est": "~-30 to -60 blob; 0 resident",
+   "prior_art": "AmigaOS Kickstart RomTags (priority and flags, walked by InitCode); OS/2 CONFIG.SYS and Windows 3.x SYSTEM.INI [boot] for the declarative later half of boot.",
+   "verdict": "unchecked",
+   "verify_note": "Design suggestion; byte estimate not re-derived (kmain_o mixes OVBCALL/OVSCALL/BLOBCALL/OVLCALL/far shims, so a table needs more than three kinds)."
+  },
+  {
+   "id": "boot-18",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "Guard 5 omits BLOB_LIFT on every shipped kernel",
+   "detail": "Guard 5 sums KERNEL_SEG*16 + KERN_SIZE + BOOT2_PAD, but on a ROM_COLD build the blob sits at HEAP_SEG + BLOB_LIFT, 1,536 bytes higher. ROM_COLD is NOT a knob: kernel.asm defines it unless NO_ROM_COLD, so kern_big and kern_small (both held to guard 5's 128KB line) carry the lift, and the guard under-counts their boot footprint by 1,536 bytes. Stage 1's own runtime check uses the lifted HEAP_PARA, so a machine is never mis-accepted; what is wrong is the build-time answer.",
+   "evidence": [
+    "kernel/kernel.asm:9683-9686",
+    "kernel/kernel.asm:1121-1123 %ifndef NO_ROM_COLD / %define ROM_COLD 1",
+    "kernel/kernel.asm:1913-1933 BLOB_LIFT 96"
+   ],
+   "recommendation": "Use BLOB_SEG_AT in the sum so the guard and stage 1 agree by construction.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "corrected",
+   "verify_note": "The reviewer's premise 'every ROM_COLD build is currently a knob build (exempt)' is wrong: ROM_COLD is the default on every shipped kernel, so the omission is live on kern_big and kern_small. Phase record -> now. Still low: stage 1 refuses correctly at run time and tests/small128.py boots the 128KB machine."
+  },
+  {
+   "id": "boot-19",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "boot.asm's default constants would build a wrong sector silently",
+   "detail": "KERNEL_SECTORS defaults to 16 and BOOT2_SECS to 2 ('must match kernel/kernel.asm's own constant'), but the real value has been 11-14 for a long time. HEAP_PARA has no default and fails loudly; these two would not.",
+   "evidence": [
+    "boot/boot.asm:49-54"
+   ],
+   "recommendation": "Replace both defaults with %error on the kernel (non-FLAT_PAYLOAD) arm.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "Defaults read at boot.asm 49-54; the comment is corrected in doc_fixes (comment only)."
+  }
+ ],
+ "doc_fixes": [
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": "; every task, SS = LOW_SEG, ES scratch. EVERY inter-module call inside the\n; kernel is near - there is no far code and no second code segment. The\n; module contracts",
+   "new_text": "; every task, SS = LOW_SEG, ES scratch. Calls inside `.text` are near; `.cold`\n; (COLD_SEG), the boot blob ([spl_fseg]) and the boot overlay's window half\n; (`.ovl`, FAT_SEG) are segments of their own, reached by far calls through\n; fixed shims (SPEC.md 2.5, 2.6, 33). The module contracts",
+   "why": "kmain calls COLD_SEG:mem_unblob_x and kmain_o runs via OVLCALL/SPLGATE1 far calls; .cold, .boot2 and .ovl are separate segments"
+  },
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": ";   0060:0008  boot splash tick (SPEC.md 15): far-called by the boot sector\n;              after every sector it reads, while the rest of this image is\n;              still coming off the floppy\n",
+   "new_text": ";   0060:0004  boot_cylrun - the loader's head-crossing finding (18.93.1);\n;              0060:0008..000B are free (stage 2 calls the splash NEAR,\n;              SPEC.md 2.9.4); 0060:000C boot_ticks (15.4) and 0060:000E the\n;              debug registry (57) are fixed words, not entry points\n",
+   "why": "kernel.asm's own fixed-entry block says 0x08..0x0B ARE FREE AGAIN; boot2.asm calls spl_tick near"
+  },
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": ";            LOW_SEG     .lowbss + task 0's stack    LOW_PARA\n;            HEAP_SEG    the claim heap              up to int 12h's top",
+   "new_text": ";            LOW_SEG     .lowbss + task 0's stack    LOW_PARA\n;            (VGA_RAM)   `.vga`, kern_big only       VGA_PARA\n;            COLD_RAM    `.cold`                     COLD_PARA\n;            (MEGA_RAM)  `.mega`, kern_mega only     MEGA_PARA\n;            VGABUF_RAM  `.vgabuf`                   VGABUF_PARA\n;            HEAP_SEG    the claim heap              up to int 12h's top\n;   (the ROM_COLD order, which every shipped kernel builds; NO_ROM_COLD=1\n;   puts `.cold` between KERNEL_SEG and FAT_SEG - the ladder below is exact)",
+   "why": "ROM_COLD is defined unless NO_ROM_COLD (kernel.asm 1121); its arm puts FAT after KERNEL and .vga/.cold/.mega/.vgabuf above LOW before HEAP (1657-1897)"
+  },
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": "; are. The sector refuses to relocate at all when the kernel's read would\n; reach it, which is the same question asked of the machine actually in front\n; of it rather than of the smallest one we support.",
+   "new_text": "; are. The sector refuses a machine that cannot hold stage 2's blob at\n; HEAP_SEG under its own 2,560 bytes (SPEC.md 2.7.1), which is the same\n; question asked of the machine actually in front of it rather than of the\n; smallest one we support.",
+   "why": "boot.asm's MEMFIT = HEAP_PARA + BOOT2_SECS*32 + (BOOT_SECT+BOOT_STACK)/16, compared against the top of RAM before the relocation"
+  },
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": "; reads the whole blob before it jumps and stage 2 copies it to HEAP_SEG, so\n; the overlay is resident",
+   "new_text": "; reads the whole blob straight to the heap's floor before it jumps (SPEC.md\n; 2.9.5) - nothing copies it - so the overlay is resident",
+   "why": "boot.asm sets [dest] = HEAP_PARA for the blob read; boot2.asm's entry comment: 'the copy is gone'"
+  },
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": "; The ninth sector holds the boot copy of Dock layout setup (SPEC.md 30.5).\n; The whole blob is freed before the desktop; KERN_BUDGET is unchanged. It is\n; nine on kern_small too, which has no such copy: KSIG_OFF (the Makefile) is\n; one constant for every kernel, and it names file sector 21 only at nine.",
+   "new_text": "; The whole blob is freed before the desktop; KERN_BUDGET is unchanged.\n; kern_small's is BOOT2_SMALLSEC shorter and a knob's BOOT2_KNOBSEC longer;\n; KSIG_OFF moves by the same sectors in the other direction, so the canary's\n; FILE sector is the same on every kernel.",
+   "why": "BOOT2_SECS equ 13 + BOOT2_KNOBSEC - BOOT2_SMALLSEC (kern_small 11); boot2.asm's KSIG_OFF equ compensates both"
+  },
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": "                                ; The six that took it from 13 are SPEC.md\n                                ; 2.9.12's, and they are not for a feature:\n                                ; they are the room to move twenty-five\n                                ; BOOT-ONLY bodies out of `.text` and `.cold`\n                                ; into `.boot2`, where mem_unblob gives them back\n                                ; to the heap at the end of kmain.\n                                ; docs/plans/LAST-DROP-BYTES.md is the register of\n                                ; them and names the caller that makes each one\n                                ; boot-only. 18 is 36 bytes short of the whole\n                                ; register; 19 takes it with room over.\n                                ;\n                                ; WHAT IT COST, measured off the images by\n                                ; tests/unit/t_blobruns.py and not reasoned\n                                ; from one geometry: ONE extra int 13h on 360KB\n                                ; and one on 720KB, none on 1.44MB, plus the\n                                ; six in-run sectors - which land on EVERY\n                                ; geometry, ~144 ms at PERFORMANCE.md's 24 ms a\n                                ; sector, and are the half a call table hides.\n                                ; All of it before the first splash pixel.\n                                ;\n                                ; 20 and 21 change no call on any geometry and\n                                ; are deliberately NOT taken - they are there\n                                ; when something needs them. 22 buys 1.44MB a\n                                ; third call and 23 buys 720KB a fourth, and\n                                ; that is where the next conversation is\n",
+   "new_text": "                                ; What a sector more or less costs, per\n                                ; geometry, is tests/unit/t_blobruns.py's\n                                ; table, measured off the images - not this\n                                ; comment, which argued 18, 19 and 22 here for\n                                ; a blob length long since retired\n",
+   "why": "BOOT2_SECS is 13 (11 on kern_small); the deleted text argues for 18/19/20-23-sector blobs that no build has"
+  },
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": "                                ; boot BX:CX are 0 and DL is 0 or 1, and all",
+   "new_text": "                                ; boot DL is the unit (0..3) and BX:CX are\n                                ; whatever stage 2 left - unread - and all",
+   "why": "boot.asm passes DL 0..3 (cmp dl,3); stage 2 never zeroes BX/CX (read_run residue, [b2_t0] in BX on .nocross); the floppy arm of dsk_boot_from_x ignores them"
+  },
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": "                                ; entry slot at mod_gone. `-f bin` zeroes no\n                                ; .bss, so until this runs those slots hold\n                                ; whatever was in memory - and they are\n                                ; far-call targets.",
+   "new_text": "                                ; entry slot at mod_gone. `.bss` arrives as\n                                ; the file's zero gap (nothing asserts it -\n                                ; SPEC.md 2.5), so until this runs those slots\n                                ; hold 0000:0000, the IVT - and they are\n                                ; far-call targets.",
+   "why": "build/kernel.bin 0xB788-0xCE00 (.text end to .ovl) is all zero and .bss (mem 9D88-B27E) maps inside it; smallk likewise; kmain_o 5896 relies on it"
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "; in:  DL = the BIOS drive it read with; BX:CX = the partition base (both 0\n;      from boot/boot.asm, which does not set them and does not need to)",
+   "new_text": "; in:  DL = the BIOS drive it read with; BX:CX = the partition base on a\n;      hard-disk boot (boot/boothd.asm sets them); on a floppy boot they are\n;      stage 2's residue, and the floppy arm never reads them",
+   "why": "boothd.asm hands BX:CX = bpb_hidd; boot2.asm never zeroes BX/CX; the floppy arm uses BX as a row walker without reading it"
+  },
+  {
+   "file": "kernel/disk.inc",
+   "old_text": "    ; int 13h AH=08h, the same question boot/boothd.asm asks and for the same\n    ; reason: every CHS read of this volume needs it, and the FIRST of them\n    ; fetches the BPB, so it cannot come from there.",
+   "new_text": "    ; int 13h AH=08h: every CHS read of this volume needs a geometry, and the\n    ; FIRST of them fetches the BPB, so it cannot come from there.\n    ; boot/boothd.asm NO LONGER asks this question - since FIELD-NOTES 33 it\n    ; reads with the BPB's own spt/heads - so where the two differ this read\n    ; is the one that disagrees.",
+   "why": "boothd.asm note 1: 'IT USED TO ASK int 13h AH=08h ... AND NO int 13h AH=08h AT ALL'"
+  },
+  {
+   "file": "kernel/cpudet.inc",
+   "old_text": "; [cpu_tier] is one of CPU_8086 / CPU_286 / CPU_386 and [cpu_feat] carries the\n; four feature bits, with two writers that each own their bits (SPEC.md\n; 84.6.2): xmem.inc writes the three memory bits, this module's probe writes\n; CPU_F_X87, and this module publishes the byte. Both are INITIALIZED DATA IN\n; .text, not .bss: -f bin zeroes nothing at boot, and the answer a machine\n; reads when the probe never ran has to be the safe one",
+   "new_text": "; [cpu_tier] is one of CPU_8086 / CPU_286 / CPU_386 and [cpu_feat] carries the\n; five feature bits, with three writers that each own their bits (SPEC.md\n; 84.6.2): xmem.inc writes the three memory bits, this module's probe writes\n; CPU_F_X87, kern_mega's mega_enter writes CPU_F_PM, and this module publishes\n; the byte. Both are INITIALIZED DATA IN .text, not .bss, by choice: the\n; answer a machine reads when the probe never ran has to be the safe one,\n; and the image's own byte is that on every loader",
+   "why": "cpudet.inc defines CPU_F_PM 0x10 '(mega_enter)' beside the four others; .bss is in fact zeroed by the load (file zero gap)"
+  },
+  {
+   "file": "kernel/bootprof.inc",
+   "old_text": "; In .text with real initialisers rather than .bss, for dsk_dpt's reason\n; (SPEC.md 18.92): `-f bin` zeroes nothing, and a mark that was never reached\n; has to read as 0 rather than as whatever was in memory.",
+   "new_text": "; In .text with real initialisers rather than .bss, for dsk_dpt's reason\n; (SPEC.md 18.92): a mark that was never reached has to read as 0, and an\n; initialiser says so on every loader, where `.bss` is only zero because the\n; file's gap happens to land on it.",
+   "why": ".bss maps into the file's zero gap between .text and .ovl on both kernels; nothing asserts it"
+  },
+  {
+   "file": "kernel/viddet.inc",
+   "old_text": "; sector of the image. Here it lands in sector 7, which is what SPL_RESIDENT\n; now measures and why it fell from 9 to that.",
+   "new_text": "; sector of the image. Here it lands in `.text` sector 4 (0x922 on kern_big,\n; 0x842 on kern_small); SPL_RESIDENT, still 9, is what the %if at the foot of\n; kernel.asm measures it against - and the three bytes below it, which the\n; first tick also touches, are not under that %if.",
+   "why": "build/kernel.map spw_resident_end 922, smallk 842; splash.inc SPL_RESIDENT equ 9; spl_live/spl_busy/spl_quiet sit after the label"
+  },
+  {
+   "file": "kernel/splash.inc",
+   "old_text": "; While the boot sector is still pulling the rest of this kernel off the\n; floppy, it far-calls spl_tick (via the pinned 0800:0008 entry) after every\n; sector that lands.",
+   "new_text": "; While stage 2 is still pulling the rest of this kernel off the floppy, it\n; calls spl_tick NEAR (both are `.boot2`, SPEC.md 2.9.4) after every run that\n; lands, once SPL_RESIDENT sectors of `.text` are aboard. State is the blob's,\n; read `cs:`, except spl_live/spl_busy/spl_quiet, which are `.text` bytes in\n; viddet.inc because the IRQ0 handlers read them through DS.",
+   "why": "boot2.asm .load_next: 'call spl_tick ; NEAR: ... the pinned 0060:0008 far entry it used to answer at is gone'"
+  },
+  {
+   "file": "kernel/splash.inc",
+   "old_text": "SPL_RESIDENT equ 9              ; sectors the boot sector waits for before\n                                ; ticking us (must match boot/boot.asm).",
+   "new_text": "SPL_RESIDENT equ 9              ; sectors stage 2 waits for before ticking\n                                ; us (the Makefile reads it for KZ_HEAD; the\n                                ; %if at the foot of kernel.asm checks it).",
+   "why": "boot.asm has no SPL_RESIDENT; Makefile:2828 seds it; kernel.asm's SPL_RES_SIZE %if checks it"
+  },
+  {
+   "file": "boot/boot.asm",
+   "old_text": "%define BOOT2_SECS 2            ; must match kernel/kernel.asm's own constant",
+   "new_text": "%define BOOT2_SECS 2            ; STALE placeholder: the Makefile always\n                                ; passes kernel/kernel.asm's real value",
+   "why": "kernel.asm BOOT2_SECS equ 13 + KNOBSEC - SMALLSEC (11..14); the default 2 matches no build"
+  },
+  {
+   "file": "boot/boot.asm",
+   "old_text": "    ; THE PAGE BOUND IS NOT DECORATION. The blob lands just under the top of\n    ; conventional RAM, in [top-8192, top-2560), so a 64KB boundary falls\n    ; inside it whenever int 12h's KB total is 3..8 more than a multiple of 64\n    ; - and the controller answers a straddling transfer with error 09h, which\n    ; through the retry above is \"Disk error\" and a halt. No machine we support\n    ; reports such a total; the window was two values wide when the blob was\n    ; 2,560 bytes and is six now that SPEC.md 2.9.6 has put the boot overlay in\n    ; it, and twenty bytes of a sector with 132 free is the wrong thing to be\n    ; clever about.",
+   "new_text": "    ; THE PAGE BOUND IS NOT DECORATION, but it is no longer a run-time fact.\n    ; The blob lands at HEAP_PARA, a build constant (SPEC.md 2.9.5), so\n    ; whether it straddles a 64KB page - which the controller answers with\n    ; error 09h, \"Disk error\" through the retry above - is fixed per kernel.\n    ; The bound stays because FLAT_PAYLOAD's whole-image read shares this\n    ; loop.",
+   "why": "stage 1 sets [dest] = HEAP_PARA (an immediate) for the blob; the top-of-RAM landing was retired by SPEC.md 2.9.5"
+  },
+  {
+   "file": "boot/boot2.asm",
+   "old_text": "; are this file. Everything the sector could not afford is here: the int 1Eh\n; parameter table (SPEC.md 18.92/18.93), read_run's four bounds, the 286\n; head-cross gate (18.93.2), 18.93.1's canary and its shorten-and-reload.",
+   "new_text": "; are this file. Everything the sector could not afford is here: read_run's\n; bounds, the 286 head-cross gate (18.93.2), 18.93.1's canary and its\n; shorten-and-reload. (The int 1Eh table is stage 1's since SPEC.md 2.9.8;\n; the copy below is idempotent.)",
+   "why": "boot.asm patches int 1Eh before its first multi-sector read and calls stage 2's copy 'idempotent rather than necessary'"
+  },
+  {
+   "file": "boot/boot2.asm",
+   "old_text": "                                ; only 106..109. One blob length (SPEC.md\n                                ; 15.3.8.5) widens the band to file sectors\n                                ; 21, 57 and 106..110, and 21 is the bottom of\n                                ; it.",
+   "new_text": "                                ; only 106..109. One blob length (SPEC.md\n                                ; 15.3.8.5) widens the band - but counted\n                                ; from where STAGE 2's runs start (data +\n                                ; BOOT2_SECS, .reload below) it is file\n                                ; sectors 57 and 106..110. 21, where this\n                                ; sits, crosses no head on kern_big's 360KB\n                                ; and 720KB disks: t_canary walks runs from\n                                ; the data area and does not see it.",
+   "why": "on os8088-360/720.img .text starts at LBA 27 (cyl 1 head 1 sector 1); run 1 is LBA 27..35 on head 1 only and holds file sector 21 (LBA 35)"
+  },
+  {
+   "file": "boot/boot2.asm",
+   "old_text": "; would be jumped INTO, and the sector has 23 spare bytes to do something\n; about it in.",
+   "new_text": "; would be jumped INTO, and the sector had the spare bytes to do something\n; about it in (it has seven left).",
+   "why": "build/boothd.bin: code ends at 496, kofs at 504 - 7 bytes free"
+  },
+  {
+   "file": "boot/boot2.asm",
+   "old_text": "; identical call on identical addresses. The move cannot overlap: R is 20,992\n; and the head is 4,608.",
+   "new_text": "; identical call on identical addresses. The move cannot overlap: R is\n; KZ_RPARA*16 from os88kz.py (18,432 on kern_big and 10,240 on kern_small at\n; the 2026-11-08 build) and the head is 4,608.",
+   "why": "build/kernel.kz.json r 18432; build/smallk/kernel.kz.json r 10240"
+  },
+  {
+   "file": "boot/boothd.asm",
+   "old_text": "; chain-loads it to 0000:7C00 with DL = the BIOS drive; from there its job is\n; boot/boot.asm's job exactly - pull KERNEL.SYS off the volume into\n; 0060:0000, ticking the splash, and jump to it.",
+   "new_text": "; chain-loads it to 0000:7C00 with DL = the BIOS drive; from there its job is\n; stage 1's and stage 2's together - pull KERNEL.SYS off the volume (the blob\n; to BLOB_SEG, `.text` to 0060:0000), publish [spl_fseg] and jump; the kernel\n; starts its own loading screen (SPEC.md 2.9.9).",
+   "why": "boothd's own lines 72-83: it no longer ticks the splash; it loads the blob, writes [es:SPL_FSEG] and jumps"
+  },
+  {
+   "file": "boot/boothd.asm",
+   "old_text": "; Three things differ from boot/boot.asm and NOTHING ELSE does:",
+   "new_text": "; It is a second loader, not a variant: it does stage 1's AND stage 2's job\n; for a hard disk (SPEC.md 2.9.9), with no canary, no blob sum and no video\n; setup, and it never enters stage 2. Three things differ in the ARITHMETIC\n; it shares with boot/boot.asm:",
+   "why": "boothd reads two passes itself, has no canary/blob sum/video setup, takes kofs/ksecs from patch sites and calls KZ_HD"
+  },
+  {
+   "file": "boot/boothd.asm",
+   "old_text": "; Assembled with -DKERNEL_SECTORS=<n> by the Makefile, exactly as the floppy\n; sector is.",
+   "new_text": "; Assembled with BOOT2_SECS, BLOB_SEG and SPL_FSEG (and KZ_HD/KZ_RPARA under\n; KZIP) from the kernel's own build; the kernel's length and start are the\n; installer's patch words at BOOTHD_KSECS/BOOTHD_KOFS below.",
+   "why": "Makefile's boothd.bin rule passes -DBOOT2_SECS and BOOTHD_DEFS (BLOB_SEG, SPL_FSEG, KZ_HD); ksecs/kofs are patched at 508/504"
+  },
+  {
+   "file": "boot/boothd.asm",
+   "old_text": "                                ; sector spends none of its 25 spare bytes on",
+   "new_text": "                                ; sector spends none of its few spare bytes on",
+   "why": "build/boothd.bin has 7 bytes free (code ends at 496, kofs at 504)"
+  },
+  {
+   "file": "boot/boothd.asm",
+   "old_text": "    ; NO VIDEO SETUP, which the floppy sector can afford and this one cannot.\n    ; boot/boot.asm reads the equipment word and sets mode 3 or mode 7 for a\n    ; clean, cursorless screen while the kernel lands; that costs fifteen\n    ; bytes, and every one of them is spent here on the geometry probe and\n    ; 32-bit arithmetic a hard disk needs.",
+   "new_text": "    ; NO VIDEO SETUP, which the floppy's loader can afford and this one cannot.\n    ; Stage 2 (boot/boot2.asm) reads the equipment word and sets mode 3 or\n    ; mode 7 for a clean, cursorless screen while the kernel lands; that costs\n    ; fifteen bytes, and this sector spends them on the BPB checks and the\n    ; 32-bit arithmetic a hard disk needs.",
+   "why": "boot2.asm's entry does int 11h + mode 3/7 (moved there by SPEC.md 2.9.8); boothd has had no geometry probe since FIELD-NOTES 33"
+  },
+  {
+   "file": "boot/boothd.asm",
+   "old_text": "    ; compressed KERNEL.SYS read to KERNEL_SEG would simply be JUMPED INTO -\n    ; and there are 23 spare bytes here to do something about that in.",
+   "new_text": "    ; compressed KERNEL.SYS read to KERNEL_SEG would simply be JUMPED INTO -\n    ; and there were spare bytes here to do something about that in.",
+   "why": "build/boothd.bin has 7 bytes free"
+  },
+  {
+   "file": "boot/boothd.asm",
+   "old_text": "; The same trade BOOTDIAG=1 makes on the floppy side, which spends its four\n; spare bytes on two hex digits (SPEC.md 18.94):",
+   "new_text": "; The same trade BOOTDIAG=1 made in the floppy sector before stage 2 took its\n; two status digits (SPEC.md 2.9.10):",
+   "why": "boot2.asm now prints BOOTDIAG's two status digits ('IT KEEPS THE CANARY NOW ... hundreds of bytes spare')"
+  },
+  {
+   "file": "boot/boothd.asm",
+   "old_text": "    int 0x10                    ; only, and we set a text mode above",
+   "new_text": "    int 0x10                    ; only, and POST left a text mode",
+   "why": "boothd sets no video mode ('NO VIDEO SETUP')"
+  },
+  {
+   "file": "boot/boothd.asm",
+   "old_text": "; built long before it knows which kernel it will boot - it ships inside\n; HDD.DRV - so the count is a word",
+   "new_text": "; built long before it knows which KERNEL.SYS it will boot - it ships as\n; BOOTHD.SYS on the system disk (SPEC.md 52.10.16) - so the count is a word",
+   "why": "boothd's own line 250: 'this sector ships as BOOTHD.SYS on the system disk ... It shipped inside HDDTOOL.DRV once'"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "2. **Near model.** CS = DS = `KERNEL_SEG` (0x0800) for all kernel code and\n   tasks; **SS = `LOW_SEG`** (0x0440), because every task stack lives outside\n   the kernel segment (§2.1). ES is scratch — any routine may change and use\n   ES freely, but must restore it before returning unless documented\n   otherwise. Calls between modules in `.text` are **near** calls; modules in\n   there is no far code and no second code segment (§33).",
+   "new_text": "2. **Near model.** CS = DS = `KERNEL_SEG` (0x0060) for kernel `.text` and\n   every task; **SS = `LOW_SEG`**, a rung above the image whose value depends\n   on the build, because every task stack lives outside the kernel segment\n   (§2.1). ES is scratch — any routine may change and use ES freely, but must\n   restore it before returning unless documented otherwise. Calls between\n   modules in `.text` are **near** calls; `.cold` (`COLD_SEG`), the boot blob\n   and the boot overlay's window half are segments of their own, reached\n   through far shims (§2.5, §2.6, §33).",
+   "why": "kernel.asm KERNEL_SEG equ 0x0060; LOW_SEG equ FAT_SEG + FAT_PARA (derived); COLD_SEG:mem_unblob_x and OVLCALL are far calls"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "Measured: **stage 1 is 378 of 510 bytes (132 free), stage 2 is 379.**",
+   "new_text": "Measured when it moved: **stage 1 was 378 of 510 bytes (132 free), stage 2\n379.** Stage 1 has since spent most of that (§2.9.7's sum, §2.9.8's table,\n§2.9.11's range check) and has 35 bytes free below the Cylinder byte.",
+   "why": "build/boot*.bin: last byte used at 473 ('Loader checksum' NUL), BS_CYLASK at 509"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "Below the top of RAM, because stage 1 refuses a\nmachine that cannot hold `KERNEL_SECTORS` plus its own stack plus `RELOC_ADJ`,\nwhich is stricter than the blob's requirement by about 21KB — **guard 5c** in\n`kernel.asm` is that argument written as an assertion, using\n`ceil(MODC_START/512)` as a lower bound on `KERNEL_SECTORS`, so a kernel that\ngrew past it fails to build instead of overwriting itself in the field.",
+   "new_text": "Below the top of RAM, because stage 1 refuses a\nmachine that cannot hold the blob at `HEAP_PARA` under its own 2,560 bytes\n(§2.7.1) — the question **guard 5c** in `kernel.asm` used to assert from the\noutside, retired once stage 1 asked it directly.",
+   "why": "boot.asm MEMFIT equ HEAP_PARA + BOOT2_SECS*32 + (BOOT_SECT + BOOT_STACK)/16; kernel.asm '5c. RETIRED, BECAUSE STAGE 1 NOW ASKS THE QUESTION ITSELF'"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`kmain` points\n`spl_fp` / `spl_fseg` at `spl_dead` and calls `mem_unblob`",
+   "new_text": "`kmain` writes\n`[spl_fseg]` = 0 — the sentinel every far call through the pair tests\n(§2.9.5.3) — and calls `mem_unblob`",
+   "why": "kernel.asm kmain: xor ax,ax / mov [spl_fseg],ax / call COLD_SEG:mem_unblob_x; no spl_dead exists in kernel/"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "It fits in the 512 bytes with 23 to spare, having started with 18,",
+   "new_text": "It fit in the 512 bytes with 23 to spare (7 today), having started with 18,",
+   "why": "build/boothd.bin: code ends at 496, kofs at 504"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "KERNEL_SEG   equ 0x0800                ; linear 0x08000 - guard 8 fences it\nVGA_SEG      equ 0xA000                ; against the boot sector at 0x7C00",
+   "new_text": "; an EXCERPT: kernel.asm is the authority, and its ladder has more rungs\n; (`.cold`, `.vga`, `.mega`, `.vgabuf`) than this shows\nKERNEL_SEG   equ 0x0060                ; linear 0x00600, the first paragraph\nVGA_SEG      equ 0xA000                ; above the BIOS data area",
+   "why": "kernel.asm:27 KERNEL_SEG equ 0x0060"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "KERN_BUDGET  equ 74240                 ; the WHOLE kernel's footprint (§2)",
+   "new_text": "KERN_BUDGET  equ KERN_RESIDENT_KB*1024 - KERNEL_SEG*16 ; DERIVED per kernel (§2)",
+   "why": "kernel.asm:1446-1453 derive KERN_BUDGET from *_RESIDENT_KB per kernel"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "STK0_SIZE    equ 1024                  ; task 0's own stack (§2.1)",
+   "new_text": "STK0_SIZE    equ 512                   ; task 0's own stack (§2.1)",
+   "why": "kernel.asm:1568 STK0_SIZE equ 512"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "+ osapi helper routines, **boot splash entry at 0x0008** (§15) |",
+   "new_text": "+ osapi helper routines, the fixed words at 0x0004/0x000C/0x000E (§18.93.1, §15.4, §57) |",
+   "why": "kernel.asm: 0x08..0x0B ARE FREE AGAIN; boot_cylrun 0x04, boot_ticks 0x0C, dbg_reg_at 0x0E"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "on a 1bpp adapter the progress bar alone (§39.6); far-ticked by the boot sector per sector read; self-contained, no .bss |",
+   "new_text": "on a 1bpp adapter the progress bar alone (§39.6); stage 2's (`.boot2`, §2.9.4): ticked NEAR by the loader per run, reached far by the kernel through `spl_fp`; no .bss |",
+   "why": "splash.inc: section .boot2; boot2.asm calls spl_tick near after each run"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "**Boot splash entry — 0800:0008.** A third fixed entry point sits between\nthe cold entry and the API table: a `jmp near spl_tick` at offset 0x0008,\n**far-called by the boot sector after every sector it reads** once at least\n`SPL_RESIDENT` (= 6) sectors are in memory. Contract: AX = sectors loaded\nso far, DX = total sectors to load; `spl_tick` preserves every register and\nsegment (flags clobbered), runs on the boot stack with the boot sector's\nsegments, and returns with `retf`. The boot sector defines the same\n`SPL_RESIDENT` constant; the two must agree with this section.",
+   "new_text": "**The splash is stage 2's (§2.9.4).** There is no fixed splash entry any\nmore (0x0008..0x000B are free): stage 2 calls `spl_tick` **near**, after every\nrun it reads, once at least `SPL_RESIDENT` (= 9) sectors of `.text` are in\nmemory. Contract: AX = sectors loaded so far, DX = total sectors to load;\n`spl_tick` preserves every register, runs on stage 1's stack with DS =\n`KERNEL_SEG` and its own data `cs:`, and returns with `ret`. `SPL_RESIDENT`\nis defined once, in `splash.inc`; the Makefile reads it for `KZ_HEAD`, and\nthe `%if` on `spw_resident_end` at the foot of `kernel.asm` checks it. The\nkernel reaches the rest of the splash far, through `spl_fp`/`spl_fseg`\n(§2.9.5.1).",
+   "why": "kernel.asm 0x08 block 'FREE AGAIN'; boot2.asm 'call spl_tick ; NEAR'; splash.inc SPL_RESIDENT equ 9; spl_tick ends ret"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`sched_init` → `clk_init` (§37 — the RTC probe, before the\nmode set so a machine without one is dated from the fallback constants\nfrom the first paint onward) → `vid_init` (§39 — re-runs the splash's probe\nand apply, and **skips the mode set while the splash is live**, §15.3) →\n`font_init` → `wm_init` →\n`inst_init` → `mouse_init` → `desk_init` → `files_init` →\n`snd_init` (§34.7 — publishes `snd_live` last) → `drv_boot` (§51.3) →\n`spl_finish` (§15.3) → gfx_lock →\n`wm_paint_all` → gfx_unlock → `cursor_show` → `drv_notice` (§51.3) → jump\ninto `ui_task` (task 0 never returns). (`dock_init` runs right after\n`desk_init`.)",
+   "new_text": "`kmain_o`, out of the blob (§2.5.3.3), which runs in order:\n`dsk_boot_from` (§52.10.3) → `cpu_detect` (from inside `xm_sniff` on\nkern_big, §60) → `dsk_dpt_init` (§18.92) → `sched_init` → `sch_idle_start`\n→ `clk_init` (§37 — the RTC probe, before the mode set so a machine without\none is dated from the fallback constants from the first paint onward) →\n`vid_init` (§39 — re-runs the splash's probe and apply, and **skips the mode\nset while the splash is live**, §15.3) → `vid_ctx_init` → `vid_probe_avail`\n→ `mem_init` (§50) → the module slots (§2.8) → `font_init` → `wm_init` →\n`menu_init` → `inst_init` → `mouse_init` → `desk_init` → `dock_init` →\n`files_init` → `drv_init` → `drv_sniff` → `snd_init` (§34.7 — publishes\n`snd_live` last) → `drv_boot` (§51.3) → `hb_probe` → `thm_set` →\n`spl_finish` (§15.3) → `vx_boot` → `as_boot`. Back in `kmain`: `mem_unblob`\ngives the blob back (§2.9.5) → `wm_paint_all` → the boot timer stops (§15.4)\n→ `cursor_show` → `drv_notice` (§51.3) → jump into `ui_task` (task 0 never\nreturns).",
+   "why": "kernel.asm kmain (6065-6200) and kmain_o (5597-6060): the calls in that order"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "through `cpu_info`'s AH (slot 0x0155), so the byte belongs beside the routine\nthat publishes it. On `kern_small` nothing ever writes it and it reads 0 — no\ngate verified, no HMA, no unreal mode — which is true, and is also exactly\nwhat tier 0 answers.",
+   "new_text": "through `cpu_info`'s AH (slot 0x0155), so the byte belongs beside the routine\nthat publishes it. On `kern_small` nothing writes the three memory bits and\nthey read 0 — no gate verified, no HMA, no unreal mode — which is true, and is\nalso exactly what tier 0 answers; `CPU_F_X87` is probed on both kernels.",
+   "why": "cpudet.inc: 'the x87 probe has no %ifdef, so CPU_F_X87 is live on kern_small too'"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`cpu_detect` is **boot overlay** (§2.5): once from `kmain`, first thing,\nbefore `sched_init` hooks an ISR",
+   "new_text": "`cpu_detect` is **boot overlay** (§2.5): once from `kmain_o`, right after\n`dsk_boot_from` (from inside `xm_sniff` on kern_big, which needs the tier\nfirst), before `sched_init` hooks an ISR",
+   "why": "kernel.asm kmain_o: OVLCALL dsk_boot_from_x first, then xm_sniff (kern_big, calls cpu_detect itself) or OVLCALL cpu_detect (kern_small)"
+  }
+ ]
+}

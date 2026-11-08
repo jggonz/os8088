@@ -876,3 +876,58 @@ proposed text.
    XT? A counter in `ui_task` would say so in a session.
 4. **R4.** Does BIOS int 15h C2h work on the field P4 with the USB→PS/2
    converter where the direct 8042 path is marginal?
+
+## Verification
+
+Adversarial pass, 2026-11-08. Each bug, hazard and medium finding was checked
+against the code: callers, the `KERN_SMALL`/`KERN_MEGA`/`KBD_I15` arms,
+`build/kernel.map` and `build/smallk/kernel.map`. No finding is in
+`docs/plans/ABI-BREAK-LIST.md` or `docs/plans/KERNEL-BYTE-QUEUE.md`.
+
+Verdicts:
+
+- **input-1: confirmed.** Nothing in `kernel/` writes FCR. The in-session
+  path is the likeliest trigger: a DOS program turns the FIFO on, then the
+  §9.13 re-arm rewrites MCR and IER only. Not measured.
+- **input-2: confirmed (PREDICTED).**
+  - Neither path has an IMR bracket: the I15 path skips it, and kern_mega
+    jumps to the ROM. `sch_isr` never reads the 8259 ISR before switching.
+  - Correction: IRQ1 stays in service until the parked task is scheduled
+    again, not necessarily for a whole UI pass.
+  - The floppy timeout follows because `disk.inc` holds `sch_lock` across
+    int 13h.
+- **input-3: confirmed.** The byte estimate is about 13, not about 11.
+- **input-4: corrected, medium to low.** SPEC.md 115 (225404-225405) makes
+  the pin the caller's written contract, and WireFleet, the only caller,
+  complies. The finding is unenforced hardening, not a latent defect.
+- **input-5: confirmed.** Side effect: setting 0500h = 1 also turns Print
+  Screen off for DOS programs under DOS.O88.
+- **input-6: confirmed.** No doc fix is emitted: the recommended swap would
+  undo it, so the comment belongs to the code change.
+- **input-7: confirmed.** The compare swap costs no bytes.
+- **input-8: confirmed.** The header doc fix describes today's code, which
+  has no bracket.
+- **input-9: confirmed.**
+- **input-10: confirmed** as a plausible weakness. It has not been observed.
+- **input-11: confirmed.**
+- **input-12: confirmed.** The spans re-measure to 456. Whether the module
+  qualifies is the owner's judgement: loading it needs a system-disk read at
+  the moment the mouse has failed.
+- **input-13: confirmed.** The ordering is as stated. The byte estimate was
+  not checked.
+- **input-14: confirmed.**
+- **input-15: confirmed.**
+- **input-16: confirmed.** One more hit: `vmmouse.inc:333`. The history and
+  cost-record references are left alone: `mouse.inc` 1385 and 1491, and
+  SPEC 14865, 14903, 15335 and 17602.
+- **input-17: confirmed.**
+- **input-18: unchecked.** The cycle figure was not re-derived.
+
+Doc mismatches:
+
+- All 30 were confirmed. None is REFUTED.
+- Several replacements were refined. The kbddiag header now states the
+  missing bracket. The SPEC 9.5.6/9.5.4/9.5.5/9.6.1.1 fix changes heading
+  levels only; the out-of-order numbering is left as it is.
+- The `mou_claim` entry became a fix for each line of present-tense text.
+- 53 exact, unique replacements are in `data/input.json`.

@@ -470,3 +470,46 @@ Each is listed with file:line, an exact quote, and the proposed text. The struct
 3. dw-15 versus `WSQF_KEEP`: a kept hold on a fixed disk already outlives callbacks. Should deferred frees on a fixed disk also outlive them, with flushing at the next write or batch end only? That would remove nearly every second flush on the hard disk.
 4. dw-12 on kern_small: 360KB disks have 2-sector clusters (32-entry folders). Is growth worth about 90 bytes of the 64KB budget there, or kern_big only?
 5. The `.cold` resident figure in 118.14.7 ("90 ... the 73-byte stub") predates pass 17. It needs a `kernsize` span to restate; no map was built here.
+
+## Verification
+
+Adversarial pass over every finding and doc mismatch above, against the code at this tree (no build, no emulator). The verified set, with the doc fixes to apply, is `data/diskwrite.json`.
+
+### Findings
+
+- **dw-1** CORRECTED: both divides are unguarded as stated, but both are assembled on kern_small too (neither is under an `%ifdef`), so both kernels need both guards; bytes about +4 (wabody) and +6-8 (READ_AT) each.
+- **dw-2** confirmed: `[dskw_first]` is the unlinked sub-chain on both plain arms (the link lands only at `.link`, after the sub-chain flush), so the proposed free-then-flush is exact. `dskw_refat`'s header accepts lost clusters; disk-full is what makes them the whole free space.
+- **dw-3** confirmed: `dsk_next_clus_x` sets CF only for out-of-range or a failed window load, and `.try` keeps candidates in range.
+- **dw-4** confirmed; added that DOS.O88 owns a worker (`dvw_start`), whose file calls must be shown to run on task 0 before a refusal lands.
+- **dw-5** confirmed (`.ioerr` skips `.reset`; `.stale` does not).
+- **dw-6** confirmed; SPEC 18.4.7.2 permits the round-up that 18.4's "No memory ever leaks past EOF" forbids.
+- **dw-7** CORRECTED: real, but there are three removal arms to re-arm (or one shared label), and the guard's `jz .corrupt` also skips `dskw_rt_go_home`, leaving the volume deep in the tree.
+- **dw-8** confirmed.
+- **dw-9** confirmed (6 bytes to 4).
+- **dw-10** confirmed (5Ah sets bits 3 and 4; `os88disk.py` writes it for every packed file).
+- **dw-11** confirmed.
+- **dw-12** CORRECTED: 14 entries holds for 512-byte clusters (1.44MB, 1.2MB, the 360KB system disk); a 720KB folder holds 30. RunCPM's section records the limit failing a save on the glass.
+- **dw-13** CORRECTED: on a multi-window FAT16 `dsk_free_clus_x` faults FAT windows in, so it is disk I/O, not CPU only; use the existing goal-bounded count (`[dsk_fcgoal]`, kern_big).
+- **dw-14** confirmed (byte figure is an estimate).
+- **dw-15** confirmed; it interacts with dw-5 (deferred dirt is what park carries across a swap).
+- **dw-16** confirmed.
+- **dw-17** confirmed (the second walk usually ends in the same sector).
+- **dw-18** confirmed.
+- **dw-19** confirmed.
+- **dw-20** confirmed (spot-checked).
+- **dw-21** confirmed.
+- **dw-22** confirmed (spot-checked).
+- **dw-23** unchecked (low, record only).
+- **dw-24** confirmed.
+
+None of the findings is already listed in `docs/plans/ABI-BREAK-LIST.md` or `docs/plans/KERNEL-BYTE-QUEUE.md` under these names, and none is refuted.
+
+### Doc/code mismatches
+
+- 1-13, 15-25 confirmed, each with a refined replacement in the JSON. Refinements worth naming:
+  - 11: the replacement's cross-reference for `dskw_rmtree` is **§18.90**, not §18.6.
+  - 15: the proposed comment described a guard that does not exist yet (dw-1). The applied text says the divide is unguarded.
+  - 18: `disk.inc:9094` is the INSIDE arm's own chain write (called from this module), and `driver.inc:6506` is the Control Panel's boot-sector byte (`cpc_fdbs`), not a raw sector door.
+  - 20: `fsk_delsys` does not restore ES on every path, so the comment does not say it does.
+- 7 (`diskw.inc:495-496`), the `:1284` half of 18 and the `:383` half of 21 were not in the structured set. They are confirmed and added.
+- 14, the `apps/os88api.inc:6093`/`:6109` half: **REFUTED**. "Offset AND capacity must each be a cluster multiple" is the portable contract, binding on kern_small and still accepted on kern_big. SPEC 18.4.4.2 documents kern_big's relaxation. Editing the OSAPI contract comment also moves `tools/abi.lock.json`'s fingerprint. The `diskw.inc:3014` half is confirmed, because that comment describes the code, and the code differs per arm.

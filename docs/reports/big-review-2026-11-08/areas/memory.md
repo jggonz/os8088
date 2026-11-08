@@ -206,3 +206,42 @@ Each row: file:line, exact current text, what the code does, proposed text. (dat
 3. mem-14: does anything outside `memory.inc` rely on a record's *index* staying put (other than kern_mega's `mem_sel` pairs)? `tools/heapmap.py` and the Task Manager's hash read the snapshot in table order.
 4. mem-7: does DOS (or any movable region) ever hold an IRQ vector outside a bracket where `mem_in_nest` pins it? If never, the cheap fix is the SPEC rule and a gate, not code.
 5. mem-10: is `desk_drop_x` from `inst_task_die` reachable while the UI task is inside `dkd_hover` for the dying widget, or does something serialise them that this review did not find?
+
+## Verification
+
+Adversarial pass, 2026-11-08: every bug/hazard and every high/medium finding re-read against the code (all build arms); low-severity non-bugs spot-checked. No finding is already fixed, and none is in docs/plans/ABI-BREAK-LIST.md or KERNEL-BYTE-QUEUE.md except mem-18 (C1). Machine-readable verdicts and the applied-ready doc fixes are in `data/memory.json`.
+
+- **mem-1** CONFIRMED - the owner walk has no kernel-tag exception; HMA_DRV is ROM_COLD-only, so every image is a MEM_K_DRV heap claim. Latent until XMEM.DRV plus eight drivers are loaded at once.
+- **mem-2** CONFIRMED - mem_regrow's single pushf/cli covers mem_hifit and the whole mem_bcopy.
+- **mem-3** CONFIRMED - compact/shed/retry has no total-size precheck, and [mem_parked] is cleared at every mem_compact exit.
+- **mem-4** CONFIRMED - the floor is one machine-wide word stamped with [sch_cur], and both mem_free_rec_x and fcp_lend lift it unconditionally.
+- **mem-5** CONFIRMED (low) - CX = 2048 gives head 0, 2049 a 1KB head.
+- **mem-6** CORRECTED, severity medium -> low - the arm is a documented choice (loader.inc:1690-1695), and mem_owner_of_x depends on the DX = BX match, so the proposed deletion from mem_find_own would break it. A fix belongs in the package free/regrow doors.
+- **mem-7** CONFIRMED (latent) - no MC_DMA pin, IF=0 only for MEM_K_DRV, and the IVT rows patch any block; whether DOS's int 08h hook ever stands outside a pinning bracket is unproven.
+- **mem-8** CONFIRMED - the cli window is real; the 8-15 ms figure is arithmetic, not measured.
+- **mem-9** CORRECTED, severity medium -> low - mem_hifit picks the BOTTOM of the highest free run that fits, which is usually directly above the data stack; a grower lands among ceiling claims only when a hole there fits it.
+- **mem-10** CONFIRMED (low).
+- **mem-11** CONFIRMED - 50 ms is under one tick; the mouse loses about two packets. Doc fix included.
+- **mem-12** CONFIRMED - none of the ten names is a label; their headers remain.
+- **mem-13** CONFIRMED (spot-check).
+- **mem-14** CONFIRMED (spot-check).
+- **mem-15** CONFIRMED (spot-check) - MC_DMA bit 13 is free.
+- **mem-16** CONFIRMED (spot-check).
+- **mem-17** CORRECTED - 69 OS88_REGION_MOVABLE sites in 67 files, not 72.
+- **mem-18** unchecked (C1 evidence).
+- **mem-19** CORRECTED - wider than stated: every regrow of an FH32/FH16/bridge huge block reaches .move (.hnol -> .nol), shrinks included; 128KB+ copies nothing, and 65-127KB runs a 16-bit offset past 64KB. kern_mega only.
+- **mem-20** CONFIRMED (spot-check).
+- **mem-21** unchecked (record).
+
+Doc mismatches - 40 fixes confirmed (exact text checked unique, code comments change comment text only):
+
+- **A-N, P-V, W, Y, AB, AC, AD** CONFIRMED, replacement text refined. Two were split or widened: D (MC_OWN) also covers CLS_PARA's twin of B, and E/F (the OTHER TASKS / INTERRUPTS lines) became one fix. G now reads "Some of the tests below can never fire... nothing declares a module image movable, for one". H's two lines and J's last paragraph ("inst_seg_parked pins it outright", "Both of these lift when ... lands") are fixed too. The memory.inc:781 lead-in "only one of them can ever move" goes with the region sentence.
+- **K** CORRECTED - it is three address spaces (DS, SS, segment 0), not four. The fix says "one loop, called once per address space" and names drv_tab and int 33h.
+- **O** CONFIRMED, and SPEC.md 50.2's "plus its region and one spare" is fixed with it.
+- **X** CORRECTED - the MEM_K_SAVE row is fixed: MEM_P_MSAVE, sized to the menu, at most MENU_SAVE_KB. The "global mount snapshot" fallback sentence is NOT rewritten, because the replacement behaviour of a refused listing claim was not confirmed.
+- **Z** CORRECTED - SPEC 66.3's pinned list, context 1's driver paragraph and context 2 are rewritten as mem_can_move has them. The proposed new ISR author rule is not added: it is a design decision (mem-7), not a doc fix.
+- **AA** CORRECTED - kern_big defines OS88_SHORTCUTS unconditionally (kernel.asm:961-963) and kern_small never does, so the fix says 11 / 6 with MOD_SER 9 / 5 and drops "(7 with OS88_SHORTCUTS)".
+- **Verifier-found:** the memory.inc MC_DMA comment's "Bits 0-14 are the ... HEAD" is wrong (MC_DMA_HEAD = 0x3FFF, bit 14 = MC_DISK), and HEAP-CLAIMS.md:317's "sixteen hardware IRQ vectors" and "a driver may hook its own IRQ vector and nothing else" miss int 33h. All three are fixed.
+- Not taken up: memory.inc:3207 "twelve holders" and mem_rr_walk's own "ONE LOOP FOR FOUR ADDRESS SPACES" (the second header lists three groups, and the count could not be settled without guessing the author's fourth). instance.inc's inst_seg_parked header ("A segment that matches no instance answers CF = 1") is just as stale, but it is outside this area's files.
+
+No finding was REFUTED outright.

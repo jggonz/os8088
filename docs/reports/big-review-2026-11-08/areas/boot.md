@@ -639,3 +639,72 @@ print([f for f in range(14, 140)
 
 `ok(*geo("os8088-360.img"), 21, 13)` is `False`; `t_canary`'s `crosses()`
 answers `True` for the same sector.
+
+## Verification
+
+Adversarial pass, 2026-11-08, against the same `build/` artefacts (both maps,
+`kernel.kz.json`, `boot*.bin`, `boothd.bin`, the six shipped system images).
+Nothing assembled, nothing booted. Verdicts as in `data/boot.json`.
+
+Findings:
+
+- boot-1 CONFIRMED (high). Re-derived from the images' BPBs: on the 9/2 disks
+  `.text` starts at LBA 27 (cyl 1 h1 s1), run 1 is 27..35 on one head, the
+  canary is LBA 35. Walking from data+BOOT2_SECS the band is [57, 106..110];
+  `t_canary.crosses()` really starts at `lba = data`.
+- boot-2 CORRECTED (medium -> high). Mechanism right, exposure wrong: it is not
+  only the 1.2MB disk. kern_small's 360KB/720KB disks start `.text` at head 0
+  sector 6 and keep `vid_setmode` (0x766) and `gfx_rowbase` (0x7E4) in `.text`
+  sector 3, which an EOT-8 BIOS already delivers from the wrong head. On those
+  disks this, not boot-1, defeats the canary. kern_big 360/720/1.44MB are not
+  exposed.
+- boot-3 CORRECTED. The reload/`spl_on` defect is real; the secondary claim (a
+  nested IRQ0 frame once the DMA zeroes `spl_busy`) is REFUTED and removed -
+  `spl_live` (0x922) is re-landed as 0 before `spl_busy` (0x924), so a nested
+  `spl_isr` refuses at its first test.
+- boot-4 CORRECTED (medium -> low). Facts right; the uncovered 4 bytes sit
+  1,770 bytes below the boundary today, and the ~400-byte win is disk, not RAM.
+  The `%error` text naming boot2.asm is code, so it moved to the recommendation.
+- boot-5 CONFIRMED. Plus the stale "same question boothd asks" comment at the
+  AH=08h call, added to the doc fixes.
+- boot-6 CORRECTED (medium -> low). Code and the 7 free bytes confirmed; it only
+  over-refuses, by ~31KB, on machines that are 640KB in practice.
+- boot-7 CONFIRMED. Only stage 1 enters `boot2_entry`; 41 bytes re-summed.
+- boot-8 CONFIRMED. Zero gap checked on both kernels; the contradiction is wider
+  than three comments (about 15 in `kernel/`, several in SPEC).
+- boot-9 CONFIRMED.
+- boot-10 CONFIRMED (spot-check).
+- boot-11 CONFIRMED.
+- boot-12 CONFIRMED.
+- boot-13 CONFIRMED (sharpened: on the `.nocross` path BX holds the boot tick).
+- boot-14 CONFIRMED (stage 1 has 35 bytes free, not 36).
+- boot-15 CONFIRMED.
+- boot-16 unchecked (record item).
+- boot-17 unchecked (design suggestion).
+- boot-18 CORRECTED (record -> now). Its premise is wrong: ROM_COLD is the
+  DEFAULT (`%ifndef NO_ROM_COLD`), not a knob, so guard 5 under-counts kern_big's
+  and kern_small's boot by BLOB_LIFT's 1,536 bytes today. Still low: stage 1's
+  run-time check uses the lifted HEAP_PARA.
+- boot-19 CONFIRMED.
+
+Doc/code mismatches: 45 fixes carried in `data/boot.json`, each old text
+checked to occur exactly once and to apply in sequence, and every `.asm`/`.inc`
+fix checked to change comment text only. Not carried:
+
+- `kernel.asm` 8655, the `%error` string - REFUTED as a doc fix (it is code);
+  folded into boot-4.
+- `boot2.asm` 13, "ONE BINARY FOR THREE GEOMETRIES" - REFUTED: the sentence is
+  about SPT/HEADS, and the four disks have three (360KB and 720KB share 9/2, as
+  boot.asm's own "Four geometries, THREE sectors" says).
+- `tests/unit/t_canary.py` 101 docstring - REFUTED as a standalone fix: the
+  proposed text describes the walk AFTER boot-1's code fix, and applied alone
+  it would claim the walk does what it does not. Change it with the code.
+- `CLAUDE.md` 336 and `AGENTS.md` 305, "there is no far code (§33)" - real
+  mismatch (`.cold`, the blob and `.ovl` are far-called), WITHHELD: those files
+  are agent configuration that a workflow stage may not edit. The owner should
+  apply the same wording to both.
+- Corrected in passing: SPEC.md 2207 (35 bytes free, not 36); the SPEC §3 block
+  (fixed line by line, with a note that it is an excerpt, rather than
+  regenerated); `boothd.asm` 429 (stage 1 keeps BOOTDIAG's four-digit sum, and
+  stage 2 took only the two status digits); `boot2.asm` 113 (worded as a
+  finding while the code still sits at 21).
