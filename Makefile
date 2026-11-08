@@ -15528,6 +15528,12 @@ $(BUILD)/megabrdg.bin: tests/megabrdg/megabrdg.asm apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ tests/megabrdg/megabrdg.asm
 $(BUILD)/megabrdg.o88: $(BUILD)/megabrdg.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/megabrdg.bin -o $@
+# MEGARGW (tests/megargw): a huge claim REGROWS, every shape - a pool run past the full pool (claim, copy, free),
+# a conventional run extended and cut, a bridge's conventional piece shrunk and grown, a bridge taken below its cut (F8)
+$(BUILD)/megargw.bin: tests/megargw/megargw.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/megargw/megargw.asm
+$(BUILD)/megargw.o88: $(BUILD)/megargw.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/megargw.bin -o $@
 # MEGAHW (tests/megahw): apps/os88huge.inc, the huge claim's walker, in a guest - spans, the aim, the kernel's
 # write and hw_fwrite's, hw_fread back, across a bridge's cut on kern_mega and window 2 on kern_big (MEGA-HUGE-PLAN F5)
 $(BUILD)/megahw.bin: tests/megahw/megahw.asm apps/os88huge.inc apps/os88rseq.inc apps/os88wseq.inc apps/os88api.inc | $(BUILD)

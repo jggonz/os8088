@@ -6418,6 +6418,363 @@ mega_hgfree:
 .r:
     ret
 
+; -----------------------------------------------------------------------------
+; THE REGROW OF A HUGE CLAIM THE POOL'S OWN DID NOT TAKE (docs/plans/
+; MEGA-HUGE-PLAN.md F8, KERN-MEGA-PLAN 14.172, SPEC.md 50.3.5). Three routes,
+; the cheapest first, and none ever changes what a refusal leaves:
+;   * a BRIDGE regrown to its pool piece or less gives its conventional piece
+;     back and is the pool's one run, cut where it stands;
+;   * a bridge's CONVENTIONAL PIECE, or a claim mega_hugec made a run over, is
+;     regrown as the heap regrows any claim (mem_regrow: in place, or moved
+;     with every window based in it) and its windows refitted - the run
+;     extended into the entries straight after it, or cut (mega_hgcpr);
+;   * otherwise CLAIM, COPY, FREE (mega_hugek): OSAPI_MEM_HUGE's own claim of
+;     the new size, a window at a time copied, the old one freed. One run
+;     stays one run (the pool's or the heap's); only a bridge may come back
+;     a bridge. A regrow keeps the claim's SHAPE, so HUGE_NOBRIDGE's promise
+;     (one run of memory) outlives every regrow without a flag to say so
+; -----------------------------------------------------------------------------
+
+; mega_hugergf - FAR (osapi_mem_regrow, `.cold`): DX = the first selector of a
+; POOL claim (MX_FHUGE, a window every 64KB) that mega_claimregrowf did not
+; resize - a bridge, or one run the pool cannot hold at AX KB - AX = the new
+; KB, ES = the caller -> CF = 0, DX = the claim's first selector now (the
+; same one unless it was claimed again); CF = 1 no such claim of the caller's
+; (or one of 32KB or 16KB windows, which never regrows), or no room: nothing
+; changed. Every other register kept
+mega_hugergf:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push bp
+    push es
+    mov bp, sp                      ; [bp] = the caller's ES
+    or ax, ax
+    jz .no
+    call mega_claimfind             ; SI = its entry, ES = the tables' tail
+    jc .no
+    mov bl, [es:si+MX_FL]
+    test bl, MX_FHUGE
+    jz .no
+    test bl, MX_FH32 | MX_FH16      ; (their windows overlap: never regrown,
+    jnz .no                         ; 14.41)
+    mov cx, [es:si+MX_KB]           ; CX = the pool's KB: the claim's, or a
+    test bl, MX_FBRIDGE             ; bridge's pool piece
+    jnz .br
+    mov bx, HUGE_NOBRIDGE           ; ONE RUN the pool cannot hold: claimed
+    mov es, [bp]                    ; again as one run, copied and freed
+    call mega_hugek
+    jmp short .o
+.br:
+    mov di, [es:si+MX_AUX]          ; DI = the conventional piece's value
+    cmp ax, cx
+    ja .bc
+    push dx                         ; --- DOWN INTO THE POOL PIECE ---------
+    mov dx, di
+    mov es, [bp]
+    call COLD_SEG:mmf_osapi_mem_free ; the piece, and the run's windows over
+    pop dx                          ; it with it (mega_mpfreef's mega_cdfree)
+    jc .no
+    MXT_ES                          ; ...and the claim is the pool's one run,
+    and byte [es:si+MX_FL], ~MX_FBRIDGE ; which mega_claimregrowf cuts where it
+    mov word [es:si+MX_AUX], 0      ; stands (a shrink or a level is never
+    mov es, [bp]                    ; refused)
+    call COLD_SEG:mega_claimregrowf
+    jmp short .o
+.bc:                                ; --- THE CONVENTIONAL PIECE REGROWN ---
+    push ax
+    push dx
+    sub ax, cx                      ; AX = the piece's new KB
+    mov si, cx
+    shr si, 6                       ; (the pool piece is whole windows:
+    shl si, 3                       ; mega_hugebf's P)
+    add si, dx                      ; SI = window P, the piece's first
+    mov dx, di
+    mov es, [bp]
+    push ax
+    push cx
+    mov cx, 0xFFFF
+    call COLD_SEG:mem_hrecf         ; AX = the piece's KB now
+    mov bx, ax
+    pop cx
+    pop ax
+    jc .bcno
+    push cx
+    mov cx, bx                      ; CX = the piece's KB now
+    call mega_hgcpr                 ; regrown, and its windows refitted
+    pop bx                          ; BX = the pool piece's KB
+    jnc .bcok
+    add cx, bx                      ; CX = the claim's KB now
+    pop dx
+    pop ax
+    xor bx, bx                      ; a bridge again allowed: it was one
+    call mega_hugek
+    jmp short .o
+.bcok:
+    pop dx                          ; (the claim's first selector: kept)
+    pop ax
+    jmp short .o                    ; (CF = 0: the jnc)
+.bcno:
+    pop dx
+    pop ax
+.no:
+    stc
+.o:
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    retf
+
+; mega_hugecrgf - FAR (osapi_mem_regrow's conventional arm, `.cold`): DX = a
+; conventional claim's value, AX = the new KB, ES = the caller. A claim over
+; 64KB that mega_hugec made a RUN over (window 1 based 64KB past window 0) is
+; regrown with its windows (mega_hgcpr), else claimed again as one run, copied
+; and freed (mega_hugek) -> CF = 0, DX = the claim now; CF = 1 ZF = 1 such a
+; run, refused, nothing changed - and a run of 32KB or 16KB windows always
+; is, as in the pool; CF = 1 ZF = 0 no run at all: the plain regrow is the
+; answer (a claim of 64KB or less below 1MB is the heap's ordinary claim and
+; regrows as one). Keeps the rest
+mega_hugecrgf:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push es
+    mov bx, ax                      ; BX = the new KB
+    mov cx, 0xFFFF
+    call COLD_SEG:mem_hrecf         ; AX = its KB
+    jc .not
+    cmp ax, 64
+    jbe .not
+    mov cx, ax                      ; CX = its KB
+    push dx
+    mov ax, dx
+    call MEGA_SEL_CODE:mega_selbasef ; DX:AX = window 0's base
+    mov di, sp
+    mov di, [ss:di]
+    and di, 0xFFF8                  ; DI = window 0's entry
+    push es
+    push word MEGA_SEL_LDTD
+    pop es
+    mov si, [es:di+8+4]             ; window 1: present data (the access
+    and si, 0xFE00                  ; byte less its ACCESSED bit, which the
+    cmp si, 0x9200                  ; CPU sets on a load)...
+    jne .nw
+    mov si, [es:di+8+2]
+    sub si, ax                      ; ...based SI past window 0, and AH
+    mov ah, [es:di+8+4]             ; the high byte of that
+    sbb ah, dl
+    pop es
+    pop dx
+    cmp ah, 1
+    jne .s32
+    or si, si
+    jnz .s32
+    mov ax, bx                      ; A RUN OF 64KB WINDOWS: regrown with
+    mov si, dx                      ; them, its first window the claim
+    call mega_hgcpr
+    jnc .o
+    mov bx, HUGE_NOBRIDGE           ; ...else claimed again, one run
+    call mega_hugek
+    jnc .o
+.ref:
+    cmp ax, ax                      ; ZF = 1: a run, and refused
+    stc
+    jmp short .o
+.s32:
+    or ah, ah                       ; a window every 32KB or 16KB: refused
+    jnz .not
+    cmp si, 0x8000
+    je .ref
+    cmp si, 0x4000
+    je .ref
+    jmp short .not
+.nw:
+    pop es
+    pop dx
+.not:
+    or sp, sp                       ; ZF = 0: no run
+    stc
+.o:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    retf
+
+; mega_hgcpr - a run's CONVENTIONAL piece regrown and its windows refitted:
+; DX = the piece's value (a claim of the caller's), SI = the selector of the
+; run's first window over it (DX itself for mega_hugec's claim, window P of a
+; bridge), CX = its KB now, AX = the KB it is to have, ES = the caller ->
+; CF = 0 regrown in place or moved (mem_regrow, whose move rebases every
+; window based in it), the windows over it the new KB's - the run extended
+; into the entries straight after it, or cut and the cut entries free;
+; CF = 1 nothing changed: no room, or an entry the extension needs is taken.
+; sch_lock is held throughout, so no task takes an LDT entry between the
+; test and the fill. Every register kept
+mega_hgcpr:
+    pusha
+    push es
+    mov bp, sp                      ; [bp] ES, [bp+14] CX, [bp+16] AX
+    inc byte [sch_lock]
+    call mega_hgcnt                 ; CX = its windows now
+    mov bx, cx
+    mov cx, ax
+    call mega_hgcnt                 ; CX = the windows it is to have
+    mov di, si
+    and di, 0xFFF8                  ; DI = the first one's entry
+    push word MEGA_SEL_LDTD
+    pop es
+    cmp cx, bx
+    jbe .rg
+    push cx
+    push di
+    sub cx, bx                      ; the entries more it needs, straight
+    shl bx, 3                       ; after the run
+    add di, bx
+    call mega_hgchk
+    pop di
+    pop cx
+    jc .no
+.rg:
+    mov es, [bp]
+    call COLD_SEG:osapi_mem_regrow_c ; the piece (its value kept: a selector
+    jc .no                          ; is the same when its bytes move)
+    mov ax, dx
+    call MEGA_SEL_CODE:mega_selbasef ; DX:AX = its base now
+    push word MEGA_SEL_LDTD
+    pop es
+    mov bx, [bp+16]
+    call mega_hgfill                ; windows 0..CX-1, the last to its end
+    mov ax, cx
+    mov cx, [bp+14]
+    call mega_hgcnt                 ; CX = the windows it had
+    sub cx, ax
+    jbe .ok
+    shl ax, 3
+    add di, ax                      ; DI = the first one past its end
+.cut:
+    cmp byte [es:di+5], 0           ; (mega_mpgap may have freed it: it was
+    je .cn                          ; based in what the cut gave back)
+    lea ax, [di+4]
+    call MEGA_SEL_CODE:mega_ldt_freef
+.cn:
+    add di, 8
+    loop .cut
+.ok:
+    clc
+    jmp short .o
+.no:
+    stc
+.o:
+    dec byte [sch_lock]             ; (dec keeps CF)
+    pop es
+    popa
+    ret
+
+; mega_hugek - CLAIM, COPY, FREE: AX = the new KB, CX = the claim's KB now,
+; DX = its first selector, BX = the shape the new one may take (HUGE_NOBRIDGE,
+; or 0: a bridge allowed), ES = the caller, DS = KDATA -> CF = 0, DX = the new
+; claim's first selector: OSAPI_MEM_HUGE's own claim of AX KB, the first
+; min(old, new) KB copied in a window at a time under sch_lock (no task runs,
+; so nothing of the caller's reads either half-way), the old one freed as
+; OSAPI_MEM_FREE frees it, and the old conventional piece's MC_RLOC declared
+; on the new (OSAPI_MEM_MOVABLE: a pool block's refusal is harmless, every
+; one moves); CF = 1 the new claim was refused and nothing changed. Old and
+; new are held at once - this route's price, and why it is the last. Every
+; other register kept
+mega_hugek:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push bp
+    push ds
+    push es
+    mov bp, sp                      ; [bp] ES, [bp+2] DS, [bp+10] CX,
+    push dx                         ; [bp+12] BX, [bp+14] AX; [bp-2] the old
+    call COLD_SEG:mega_bfpcf        ; a bridge: its conventional piece
+    mov cx, 0xFFFF                  ; (CF = 1, DX kept, for anything else)
+    call COLD_SEG:mem_hrecf         ; CX = the MC_RLOC to carry
+    jnc .rl
+    xor cx, cx                      ; (a pool claim: none)
+.rl:
+    mov dx, [bp-2]
+    push cx                         ; [bp-4]
+    mov ax, [bp+14]
+    mov bx, [bp+12]
+    call COLD_SEG:mmf_osapi_mem_huge ; DX = the new claim
+    jc .no
+    push dx                         ; [bp-6]
+    mov ax, [bp+14]                 ; AX = the KB to copy: the smaller
+    cmp ax, [bp+10]
+    jbe .k
+    mov ax, [bp+10]
+.k:
+    mov si, [bp-2]
+    mov di, dx
+    inc byte [sch_lock]
+.cp:
+    mov cx, 0x8000                  ; a whole window, in words...
+    cmp ax, 64
+    jae .w
+    mov cx, ax                      ; ...or the KB left
+    shl cx, 9
+.w:
+    push si
+    push di
+    mov ds, si
+    mov es, di
+    xor si, si
+    xor di, di
+    cld
+    rep movsw
+    pop di
+    pop si
+    mov ds, [bp+2]                  ; (KDATA again)
+    add si, 8
+    add di, 8
+    sub ax, 64
+    ja .cp
+    dec byte [sch_lock]
+    mov dx, [bp-2]                  ; the old claim goes...
+    mov es, [bp]
+    call COLD_SEG:mmf_osapi_mem_free
+    pop dx                          ; DX = the new
+    pop ax                          ; ...and the declaration comes with it
+    or ax, ax
+    jz .nd
+    mov es, [bp]
+    call COLD_SEG:osapi_mem_movable_x
+.nd:
+    add sp, 2
+    clc
+    jmp short .o
+.no:
+    add sp, 2
+    pop dx
+    stc
+.o:
+    pop es
+    pop ds
+    pop bp
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 ; mega_hgfill - ES:DI = a run's first entry, CX = its length, DX:AX = the
 ; block's base, BX = its KB: the run's descriptors, present data, a 64KB
 ; window each and the last ending at the claim's end. SI = 8000h: a window

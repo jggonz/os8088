@@ -99226,7 +99226,10 @@ of data selectors over it, so the run's first selector IS the claim's value
 (its code half at - 8, as for every claim), and answers CX = 8. Every window
 is based in the block, so a move rebases them (`mega_mpmovef`) and the free
 takes them (`mega_mpfreef`). No run of free entries: the claim goes back and
-the cell refuses. Not regrown past its first 64KB. Every real-mode kernel,
+the cell refuses. It regrows WITH its windows (THE REGROW, below); claimed at
+64KB or less it is a run of one, which nothing tells from the heap's ordinary
+claim, and regrows as that - no windows past its first 64KB - so a step
+walker that will grow a claim asks for it over 64KB or above 1MB. Every real-mode kernel,
 and kern_mega in real mode, still answers CX = 1000h.
 
 **BX = 4000h asks for a window every 16KB** (KERN-MEGA-MEMORY-PLAN MC7.4,
@@ -99235,7 +99238,8 @@ for the Video Player's and RealDMG's rolling windows), each 64KB long, below
 regrown, moved a piece at a time with the rate hook held off. Answered BX = 0
 when given.
 
-- **Regrow takes a huge claim to ANY size and keeps it in the pool.** A
+- **Regrow takes a huge claim to ANY size and keeps it in the pool** where
+  the pool can hold it (when it cannot, THE REGROW below moves it). A
   shrink cuts the run's tail and frees the block's; a grow takes the KB
   above the block where they are free, else moves it into a fresh block of
   the new size (after a compaction if one is needed), else packs the pool
@@ -99247,8 +99251,9 @@ when given.
   a free run of the new length when the entries after it are taken - so DX
   is the claim's first selector NOW, the step stays 8, and the old first
   selector is no longer the claim's. A refusal changes nothing a program
-  can see. It is never moved down to conventional memory, whose step is
-  not 8 - the regrow of a pool claim of 64KB or less still is, as it was.
+  can see. Moved down to conventional memory it is a RUN again, stepped by
+  8 (THE REGROW) - the regrow of a pool claim of 64KB or less from
+  `OSAPI_MEM_CLAIM` is the old one-selector move, as it was.
 - **A move is a 64KB PIECE at a time**, each piece's copy and the rebase of
   its descriptors one step with interrupts off, interrupts on between, so a
   claim of megabytes is never seconds of a deaf machine and an ISR reading
@@ -99281,7 +99286,7 @@ each - the pool's best run cut to whole 64KB windows first, then a
 conventional claim of the rest, the heap left at least `MEGA_RESKB` (64KB) -
 under one run of selectors stepped by 8 (`mega_hugebf`). Each piece is the
 record it would be alone and moves alone; `OSAPI_MEM_FREE` of DX frees both,
-and it does not regrow. **The two pieces are not contiguous**, so a bridge is
+and `OSAPI_MEM_REGROW` of DX resizes it (THE REGROW, below). **The two pieces are not contiguous**, so a bridge is
 one buffer only to a program that WALKS IT BY ITS STEP - window k is DX + 8k;
 `OSAPI_SEG` and the file doors follow the pieces (below, docs/plans/KERN-MEGA-PLAN.md
 14.169, MEGA-HUGE-PLAN F1); base arithmetic of the program's own - a sum on a
@@ -99367,6 +99372,43 @@ window, and the rules are:
   moves whatever is declared, as every unpinned pool block does): the proc is
   called for its moves, and every selector over it follows them, so a proc
   that is a `ret` is the usual one.
+
+**THE REGROW** (docs/plans/MEGA-HUGE-PLAN.md F8, KERN-MEGA-PLAN 14.172):
+`OSAPI_MEM_REGROW` with DX = a huge claim (64KB windows) and AX = the new KB
+answers CF = 0 and DX = its first selector NOW, the step still 8, every byte
+up to the smaller size where it was in the walk, and keeps the claim's SHAPE:
+one run stays one run (so `HUGE_NOBRIDGE`'s promise outlives every regrow
+with no flag to say so), and only a bridge comes back a bridge. CF = 1 is
+"no room" and changed nothing. The routes, the cheapest first:
+
+1. **In the pool** (`mega_claimregrowf`, 14.37, 14.49): a pool run cut or
+   grown where it stands, or moved inside the pool.
+2. **A run's CONVENTIONAL piece** - a bridge's, or a claim `mega_hugec` made
+   a run over - is regrown as the heap regrows any claim (`mem_regrow`: in
+   place, or moved with every window based in it) and its windows are
+   refitted: the run extended into the LDT entries straight after it, or cut
+   with the cut entries freed (`mega_hgcpr`). A bridge regrown to its pool
+   piece or less gives the conventional piece back and is the pool's one
+   run, cut where it stands; its DX is kept on this route.
+3. **CLAIM, COPY, FREE** (`mega_hugek`) when neither can: the cell's own claim
+   of the new size (the pool, the heap, or a bridge for a bridge), the
+   smaller size copied a window at a time with no task running, the old
+   claim freed. Old and new are held at once - this route's price, and why
+   it is the last. The old conventional piece's declaration (§66) is made on
+   the new one; a claim that came down from the pool is born pinned, as any
+   claim, and its holder declares it again.
+
+A claim of 32KB or 16KB windows still does not regrow (CF = 1, nothing
+changed), in the pool or below it (its windows overlap, above). `MEMP_REGROW`
+of a run below 1MB takes the same arm (in KB), so the paragraph door no
+longer leaves its windows behind. kern_big and kern_small, and kern_mega in
+real mode, regrow a huge claim as the conventional claim it is
+(`mem_regrow`, CX = 1000h: one contiguous run, nothing to refit, up to the
+1,023KB every conventional claim stops at). MEGARGW (tests/megargw,
+`megargw` under Bochs at 4MB and `megargw86` on 86Box's 640K + 384K) is the
+gate: a pool run regrown past a full pool into the heap, a heap run
+extended and cut, a bridge's conventional piece shrunk and grown back, and a
+bridge taken below its cut, the pattern read back by the walk after each.
 
 MEGABRDG (tests/megabrdg, `megabrdg` under Bochs at 4MB and `megabrdg86` on
 86Box's 640K + 384K) is the gate: it claims the largest bridge with an 80KB

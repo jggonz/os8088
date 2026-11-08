@@ -19576,6 +19576,31 @@ SOAK = [
         "the odd-offset write a #GP (limit) in dskw_wone. 40s is 24 measured",
         needs=("86box",),
         wants=("build/mega.img", "build/megabrdg.o88")),
+    Row("megargw", "soak", py("tests/megargw.py"), 35.0,
+        "docs/plans/KERN-MEGA-PLAN.md 14.172, SPEC.md 50.3.5 (MEGA-HUGE-PLAN "
+        "F8): A HUGE CLAIM REGROWS, every shape. Bochs at 4MB: MEGARGW puts "
+        "a pattern in by the step walk and reads it back after each regrow - "
+        "a 128KB pool run regrown to 256KB past a pool filled with XMEM blocks "
+        "(claim, copy, free: the heap's run now), a 256KB heap run (mega_hugec) "
+        "to 384KB (windows 0..5 one run) and to 160KB (window 3 freed, window "
+        "2's limit 7FFFh), the largest bridge's conventional piece shrunk by "
+        "128KB and grown back by 64KB, then the bridge taken below its cut "
+        "(the pool's one run). RED on the tree before, measured: the pool "
+        "run's regrow refused, the heap run's windows 4 and 5 not the claim's "
+        "and window 2's limit FFFFh, every bridge regrow refused. 35s is 23 "
+        "measured",
+        needs=("bochs",),
+        wants=("build/mega.img", "build/megargw.o88", "build/megarun.o88",
+               "build/mbr.bin")),
+    Row("megargw86", "soak", py("tests/megargw.py") + ["--box"], 30.0,
+        "docs/plans/KERN-MEGA-PLAN.md 14.172: megargw on 86Box's at286_vga_sb "
+        "with 640K + 384K above 1MB - a 286, where Bochs's 386 is not, and "
+        "the 14.166 machine whose largest bridge is 768K here (256K of pool, "
+        "512K of heap, cut at window 4). The same legs and the same RED, "
+        "measured: refused, windows 4 and 5 not the claim's, limit FFFFh, "
+        "refused. 30s is 11 measured",
+        needs=("86box",),
+        wants=("build/mega.img", "build/megargw.o88")),
     Row("megahw", "soak", py("tests/megahw.py"), 30.0,
         "SPEC.md 50.3.8 (MEGA-HUGE-PLAN F5): apps/os88huge.inc IN A GUEST, "
         "across a real bridge's cut. Bochs at 4MB: MEGAHW claims the largest "
