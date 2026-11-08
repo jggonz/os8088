@@ -2443,6 +2443,9 @@ AR_VAR ar_impname, 13               ; the import (arcimp.inc): the zip,
 AR_VAR ar_zsize, 4                  ;   its size,
 AR_VAR ar_zkb, 2                    ;   its claim's KB, its claim,
 AR_VAR ar_zclaim, 2
+%ifdef PKG_MEGA
+AR_VAR ar_zrun, 1                   ; 1: the zips' claims are huge runs (arcimp.inc)
+%endif
 AR_VAR ar_cdseg, 2                  ;   its central directory: where,
 AR_VAR ar_cdoff, 2
 AR_VAR ar_cdend, 2                  ;   where it ends, how many entries

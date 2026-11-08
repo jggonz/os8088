@@ -4816,6 +4816,17 @@ SOAK = [
         "corrupt streams refused with carry set and the stack restored. Host-only",
         needs=("unicorn",),
         wants=("build/arcade-rom/qbert.zip", "build/arcade-rom/invaders.zip")),
+    Row("arcimporthuge", "soak", py("tests/arcimporthuge.py"), 35.0,
+        "ARCADE-SPEC 14 (MEGA-HUGE-PLAN 3): a zip past the 448KB cap, imported "
+        "on kern_mega's arm, whose zip is one OSAPI_MEM_HUGE claim of 32KB "
+        "windows. 86Box at286_vga_sb, 4MB: a SYNTHETIC 609KB zip (the ROMs are "
+        "fetched data) - Space Invaders' four chips forged to arcsets.inc's "
+        "CRC-32s, stored after 600KB of filler - picked through Game > Add ROM "
+        "sets..., and ROMS\\INVADERS.ROM read back off the floppy, byte for "
+        "byte the forged chips' .ROM. RED on the arm before, measured: refused "
+        "as too big, nothing written. 35s is 23 measured",
+        needs=("86box",),
+        wants=("build/mega.img", "build/megak/apps/arcade.o88")),
     Row("arcimport", "soak", py("tests/arcimport.py"), 128.0,
         "ARCADE imports ROM sets on the machine itself (ARCADE-SPEC 1.5): Game > "
         "Add ROM sets... and the file chooser on MartyPC's VGA XT, a 720KB disk "

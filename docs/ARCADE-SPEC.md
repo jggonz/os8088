@@ -1536,6 +1536,24 @@ name a kernel marker under `%ifdef PKG_MEGA`:
      first render - which end at C802h, one word past its 50KB aux part:
      51KB now (`--aux-kb 51`).
 
+**The zip is ONE HUGE CLAIM on the arm** (docs/plans/MEGA-HUGE-PLAN.md 3,
+SPEC.md 50.3.5): `ar_zread` asks `OSAPI_MEM_HUGE` with BX = 8000h, a window
+every 32KB, each 64KB long - which is exactly `ar_zat`'s granule, so the walk
+takes granule g as the run's selector g (`[ar_zclaim]` + 8g, `[ar_zrun]`) and
+needs no `SEG_SUB` and no LDT entry of its own however long the zip; above
+1MB where the pool holds it, the heap's run of the same shape otherwise
+(never a bridge: the windows overlap). So the arm's cap is `AR_ZMAXKB` =
+4096KB rather than the shipped 448KB, the memory the machine has being the
+real one (two zips are held at once, a split set's and its parent's). In real
+mode (BX kept, the step 1000h) the granules' SUBs are as before; the shipped
+build is unchanged. `arcimporthuge` (tests/arcimporthuge.py, 86Box's
+at286_vga_sb at 4MB) is the gate - with the ROMs fetched data and not in the
+tree, its zip is SYNTHETIC: Space Invaders' four chips forged to the CRC-32s
+`arcsets.inc` pins (the import's identity for a chip, 1.5), stored after
+600KB of filler (a 609KB zip), imported to a `INVADERS.ROM` byte for byte
+the forged chips' - red on the arm before, refused as too big. A real MAME
+zip past 448KB is not in the container to try.
+
 The class bits are declared by the shipped build's header as well (they
 mean nothing on a real-mode kernel), so `tests/megahigh.txt` carries no
 ARCADE line.
