@@ -383,7 +383,10 @@ user gives a different workflow. `apps/wirefleet/` and its SPEC.md section
   caught at BUILD time wherever that is possible (a gate, a knob kernel). A
   resident guard earns its bytes only where the failure is catastrophic and
   user-visible and what it prints gives the owner something to act on, as
-  the stack-overflow panel does. Bytes read off a disk or out of
+  the stack-overflow panel does - and even then it is weighed against the
+  bytes: a panel for a failure no machine has met yet (a divide fault, so
+  far) goes behind a build knob, off in the shipped kernels, until a field
+  report says it is being hit. Bytes read off a disk or out of
   `SYSTEM.CFG` are still hostile and still fenced (§19). On kern_mega, where
   the kernel can afford not to crash, closing the faulting package beats
   stopping the machine.
