@@ -29,7 +29,7 @@ APH_MARGKB  equ 96                  ; the heap left free beside the hold (XTMP3'
 APH_PASS    equ 2                   ; a pass's load: reads until two ticks
                                     ; (~110 ms) have gone
 
-%define HW_CLAIM                    ; apps/os88huge.inc: the walker
+%define HW_CLAIMFIT                 ; apps/os88huge.inc: the walker, the hold
 %define HW_GET
 %define HW_RSEQ
 %include "os88huge.inc"
@@ -38,12 +38,11 @@ APH_PASS    equ 2                   ; a pass's load: reads until two ticks
     APW   aph_base                  ; the claim, 0 = none
     APB   aph_on                    ; 1 = the file is in, whole
     APB   aph_load                  ; 1 = it is loading (ap_onwake's passes)
-    APB   aph_hcv                   ; 1 = conventional memory holds part of it
+    APB   aph_hcv                   ; nonzero: conventional memory holds part of it
     APB   aph_skip                  ; 1 = the next open streams (a load failed)
     APB   aph_off                   ; 1 = never hold (a row's streamed case)
     APB   aph_pct                   ; the percentage the status line says
     APW   aph_t0                    ; a pass's first tick
-    APW   aph_kb                    ; the hold's KB (a 32 KB multiple)
     APW   aph_skb                   ; ...and the file's, rounded up
     APD   aph_size                  ; the file's bytes
     APD   aph_have                  ; ...and how many are in
@@ -177,89 +176,27 @@ aph_same:
 
 ; -----------------------------------------------------------------------------
 ; aph_claim - AX = KB: ONE OSAPI_MEM_HUGE claim with a window every 64KB, a
-; bridge allowed, the heap keeping APH_MARGKB beside it. The kernel takes the
-; pool alone, else the heap alone, else the bridge (XTMP3's x3h_huge): where
-; the heap ALONE took it and the margin is short it is claimed once more past
-; the heap's largest run - a bridge, its conventional piece the smaller by
-; the pool's. The conventional part MOVABLE, a `ret` its proc (its windows
+; bridge allowed, the heap's largest run keeping APH_MARGKB beside it -
+; apps/os88huge.inc's hw_claimfit (SPEC.md 50.3.8): the AX = 0 ask first, so
+; a file too big costs no claim - and no pack of the pool - at all; where the
+; heap ALONE took it and the margin is short, claimed once more past the
+; heap's largest run - a bridge, its conventional piece the smaller by the
+; pool's. The conventional part MOVABLE, a `ret` its proc (its windows
 ; follow a move), pinned for each read. A paragraph step - kern_mega in real
-; mode - is held too: the walker is the same. The AX = 0 ask comes first, so
-; a file too big costs no claim - and no pack of the pool - at all.
-; out: CF = 0 [aph_base], aph_hw, [aph_kb], [aph_hcv]; CF = 1 none. keeps all
+; mode - is held too: the walker is the same.
+; out: CF = 0 [aph_base], aph_hw, [aph_hcv]; CF = 1 none. clobbers AX, BX,
+; CX, DX (aph_begin's: it keeps none of them)
 ; -----------------------------------------------------------------------------
 aph_claim:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    mov si, ax                      ; SI = the KB
-    xor bp, bp                      ; BP = 1 on the second claim
-    xor ax, ax                      ; THE ASK first (SPEC.md 50.3.5): nothing
-    xor bx, bx                      ; claimed and nothing packed for a file
-    call OSAPI_MEM_HUGE             ; the machine cannot hold - AX = the most
-    jc .claim                       ; KB one claim is given now
-    cmp ax, si
-    jb .no
-.claim:
-    xor dx, dx
-    mov bl, MEMP_AVAIL
-    call OSAPI_MEM_P                ; BX = the heap's free paragraphs
-    mov di, bx                      ; DI = ...before
-    mov ax, si
-    xor cx, cx
+    xor cx, cx                      ; a 64KB step, a bridge allowed
+    mov dx, APH_MARGKB
     mov bx, aph_hw
-    call hw_claim                   ; DX = the claim
-    jc .no
-    push dx
-    xor dx, dx
-    mov bl, MEMP_AVAIL
-    call OSAPI_MEM_P                ; AX = the largest run, BX = all, after
-    pop dx
-    mov byte [aph_hcv], 0
-    cmp bx, di
-    jae .m
-    mov byte [aph_hcv], 1           ; the heap fell: it holds part of it
-.m:
-    cmp bx, APH_MARGKB * 64
-    jae .ok
-    cmp byte [aph_hcv], 0           ; SHORT: only where the heap alone took it
-    je .back                        ; (no cut), and once
-    cmp word [aph_hw+HW_CUT], 0
-    jne .back
-    or bp, bp
-    jnz .back
-    inc bp
-    call OSAPI_MEM_FREE
-    xor dx, dx
-    mov bl, MEMP_AVAIL
-    call OSAPI_MEM_P                ; AX = the heap's largest run, paragraphs
-    mov cl, 6
-    shr ax, cl
-    add ax, 32                      ; ...past it, in 32 KB
-    and al, 0xE0
-    xchg si, ax
-    jmp short .claim
-.ok:
+    call hw_claimfit                ; DX = the claim, CX = FFFFh conventional
+    jc .o                           ; memory in it
     mov [aph_base], dx
-    mov [aph_kb], si
-    call aph_decl
-    clc
-    jmp short .o
-.back:
-    call OSAPI_MEM_FREE
-.no:
-    stc
+    mov [aph_hcv], cl               ; (aph_decl declares that piece)
+    call aph_decl                   ; (CF = 0)
 .o:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; aph_pin / aph_decl - the hold's conventional piece pinned (a read is about
