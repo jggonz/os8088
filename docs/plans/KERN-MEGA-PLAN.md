@@ -15814,3 +15814,61 @@ MEGA-HUGE-PLAN 3's four COULD adopters.
   21s): PIP copies of Z80ASM.PDF and BDOS.ASM byte for byte; RED before: NO
   FILE. `getruncpm.py`'s limit is 8MB: the three master-disk files ship on the
   live volume, on no floppy (full already).
+
+### 14.176 "The pool's fill-and-free faults later file activity" is the probe's entry returning the wrong BX, not a kern_mega regression (2026-11-08) - NOT A KERNEL DEFECT; a row
+
+**The report** (the mega-hugemisc agent, F8's regrow probe `tests/megargw`):
+on kern_mega, Bochs at 4MB, a package that makes a 128KB huge claim in the
+pool, fills the pool with `OSAPI_XMEM_ALLOC` blocks (MEMH_AVAIL's DX each,
+until under 8KB is left) and frees them all, then "later file activity
+FAULTS" - `FAULT 0D err CB1C at 0060:5079` from the full probe, `FAULT 00 at
+0060:64A5` from a stripped one - clean at e6e7930c, faulting at b7374eaf, so
+charged to the F4 merge (a14db9f8, 14.171).
+
+**The cause.** 0060 is KERNEL_SEG's `.text`, not `.cold` (`.cold` runs at its
+own selector above 1MB; the report resolved both offsets against `.cold`'s
+map). 0060:64A5 is `wm_ptr2idx`'s `div cl`, 0060:5079 is `wm_strseg`+0Bh.
+The fault frame (a breakpoint on `mega_report`, the stack read back) is the
+UI task inside OSAPI_PKG_START for the probe itself - MEGARUN never printed
+its `ok` - with the chain `ld_start` step 9 -> `ct_cw_mem_disp` ->
+`inst_bind_win` -> `wm_ptr2idx`, and BX = 023Eh. SPEC.md 20.2's entry
+contract is that the entry proc RETURNS BX = its window; the probe banked
+SI, DI and BP, not BX, and BX at its `ret` was the last MEMH_AVAIL ask's
+out-BX - the TOTAL free KB, 574 = 023Eh. The loader binds that as a window
+(step 9: "BX = window (from the entry)"): `(023Eh - wm_wins) / WIN_SIZE`
+overflows a byte, #DE; the full probe's BX reached `wm_strseg` instead and
+loaded a selector out of a non-window, #GP.
+
+**Not a regression.** The reporter's own stripped binary faults the same way
+at e6e7930c (`FAULT 00 at 0060:64A5 sp 1772`), built in a tree of its own;
+"clean at e6e7930c" was not reproduced. 86Box's "clean" was the `--box` path
+reading the answer out of the probe's memory and never asking for faults.
+With BX banked after `OSAPI_WM_CREATE` and returned, both probes run clean
+on b7374eaf (the stripped one) and on mega-hugemisc's F8 kernel (the full
+one, every leg's answer identical): MEGARUN `ok`, then `done`.
+
+**The fix is the probe's**: `tests/megargw/megargw.asm` (branch
+mega-hugemisc) keeps its window - `mov [mr_wp], bx` after the create, `mov
+bx, [mr_wp]` before the `clc`/`ret` - and its `--box` path should check
+`m.faults()` after the answer as the Bochs path does. No kernel byte moves
+here: kern_big, kern_small and kern_mega are mega-release's.
+
+**What the kernel could do instead** (a PROPOSAL, the owner's call: resident
+bytes on every kernel for a package that broke its contract): step 9 could
+refuse an entry return whose BX is not a window this load made - inside
+`wm_wins`, on a record boundary, `W_SEG` = `[ld_base]` - as an abort (the
+existing `.abort`, which already destroys every window the entry made by
+its `W_SEG` stamp). About 25 bytes of `.text`. Today a bad BX is a machine
+fault on kern_mega (measured), the same `div` on every kernel (not measured
+on kern_big), and - for a BX the divide does not overflow on - a silent write
+to `wm_owner`'s last slot (`wm_ptr2idx`'s clamp bounds it, it does not refuse
+it).
+
+**The row**: `megapfl` (soak, Bochs 4MB), `tests/megapfl/` + `tests/megapfl.py`
+- the report's shape, written correctly: the 128KB pool claim, the fill to
+under 8KB and the frees, then the pool's best run back (2,978 KB), MEGAPFL's
+own packed file read back into its segment above 1MB, the launch finished and
+MEGARUN's next FIND answered, no FAULT or CLOSED. Measured red both ways:
+`--break bx` (the reported probe's BX, `-DPFL_BADBX`) - `FAULT 00 err 0000 at
+0060:64A5`; `--break free` (OSAPI_XMEM_FREE's cell poked to `retf`) - the best
+run 128 KB. Green at b7374eaf and at e6e7930c.

@@ -15548,6 +15548,12 @@ $(BUILD)/megahw.bin: tests/megahw/megahw.asm apps/os88huge.inc apps/os88rseq.inc
 	$(NASM) -f bin -w+error -I apps/ -o $@ tests/megahw/megahw.asm
 $(BUILD)/megahw.o88: $(BUILD)/megahw.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/megahw.bin -o $@
+# MEGAPFL (tests/megapfl): the pool filled by XMEM blocks around a 128KB huge claim and given back - the pool's best
+# run back, the package's own packed file read after it, the launch finished (KERN-MEGA-PLAN 14.176)
+$(BUILD)/megapfl.bin: tests/megapfl/megapfl.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/megapfl/megapfl.asm
+$(BUILD)/megapfl.o88: $(BUILD)/megapfl.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/megapfl.bin -o $@
 # MEGACAPS (tests/megacaps): OSAPI_XMEM_CAPS answers what a claim is then
 # given, a cache in the pool counted as free
 $(BUILD)/megacaps.bin: tests/megacaps/megacaps.asm apps/os88api.inc | $(BUILD)
