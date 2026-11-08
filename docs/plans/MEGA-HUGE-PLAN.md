@@ -111,3 +111,15 @@ target), the Task Manager.
 3. **F5** (the walker include) and **F4** (packed whole-file reads past 64KB).
 4. **XTMP3 and Frotz** as the first adopters; then WaveRack and PiXEL; then
    the COULD list by what users would notice.
+
+## 5. Status
+
+| item | state | where |
+|---|---|---|
+| F3 | **done** - the ask reads BX; 16/32KB windows are answered without the bridge, which they never get (and should not: overlapping windows cannot straddle a cut, SPEC.md 50.3.5) | KERN-MEGA-PLAN 14.168; tests/megahuge leg 7 |
+| F6 | **done** - a new ask rather than a changed cell: `OSAPI_MEM_HUGE` AX = 0, BX = `MEMH_AVAIL` (AX largest KB-door claim, BX total, DX the pool's run; CF = 1 on kern_big/small, where `OSAPI_MEM_AVAIL` is the answer). Callers moved: the C SDK's `os88_mem_largest_kb`/`_total_kb` (Weave, Loom, Apple II, C64, Lemmings, RunCPM at their rebuild), Frotz, WIN16's third arena | 14.168; tests/megahuge leg 8, chuge-mega |
+| F7 | **done** - `os88_mem_huge` BX = 0; `os88_mem_huge_w`, `os88_mem_huge_ask`, `os88_file_read_huge`/`_write_huge`/`os88_file_hi`, `os88_file_read_at_seg`, `os88_seg_get`/`_put` (SPEC.md 73.9.2) | 14.168; chuge-mega, chuge-big |
+| (found) | **done** - a plain file over 64KB was refused FERR_IO into any claim above 1MB (`dskw_rbody` -> `dskw_tolo`); it now takes the selector arm's own walk. Through a BRIDGE that walk is F1's | 14.168 |
+| Frotz | **done** - a story over 64KB is one `OSAPI_MEM_HUGE` claim, BX = 8000h, its page table the claim's run (`zm_run`) | SPEC.md 61.4; megafrotz, megafrotz-low |
+| F1, F2, F9 | another branch (mega-hugebridge) | |
+| F4, F5, F8 | open | |

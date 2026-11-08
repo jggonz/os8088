@@ -1777,7 +1777,14 @@ MEMC_WHATIF_P equ 2              ; AH: MEMC_WHATIF in PARAGRAPHS - the same
                                  ; "allow for" a shed: OSAPI_CLAIM_SNAPSHOT is
                                  ; for DISPLAYING the heap, and a package that
                                  ; reasons from it subtracts what this figure
-                                 ; has already added.
+                                 ; has already added. ON KERN_MEGA IT COUNTS
+                                 ; CONVENTIONAL MEMORY ALONE, as it always
+                                 ; has, and an OS88_HIGHMEM package's claims of
+                                 ; 64KB or less go above 1MB first - so such a
+                                 ; package sizes and refuses from OSAPI_MEM_HUGE
+                                 ; AX = 0, BX = MEMH_AVAIL (the pool counted),
+                                 ; and asks this one only where that answers
+                                 ; CF=1 (MEGA-HUGE-PLAN F6)
 ; ...AND THE ONE THAT SAYS "BUT NOT THAT" (SPEC.md 50.6.6). The two above are
 ; unconditional: they count EVERY cache as free and then, on the claim, shed or
 ; drop it to make that true. That is right for a program whose own work is
@@ -2388,7 +2395,10 @@ SEG_TYPE    equ 13
                                  ;          can have, BX = the total, in
                                  ;          paragraphs, at your floor as
                                  ;          OSAPI_MEM_AVAIL; CX = the GRANULE
-                                 ;          in paragraphs
+                                 ;          in paragraphs - conventional
+                                 ;          memory ALONE on kern_mega, as
+                                 ;          OSAPI_MEM_AVAIL is: the pool too
+                                 ;          is OSAPI_MEM_HUGE's MEMH_AVAIL
                                  ; CF=1 refused, and a CLAIM or REGROW verb's
                                  ; AX is then the request rounded up to the
                                  ; granule. Every register not named is kept,
@@ -3080,7 +3090,23 @@ KIND_PKG   equ 0x80             ; SSI_KIND bit 7: this instance is a package
                                  ; always leaves the heap 64KB, does not
                                  ; REGROW (CF=1), moves piece by piece like
                                  ; any claim, and OSAPI_MEM_FREE of its DX
-                                 ; frees both pieces
+                                 ; frees both pieces.
+                                 ; THE ASK READS BX, SO SET IT: BX = 0, 8000h
+                                 ; or 4000h answers for THAT claim - a 32KB or
+                                 ; 16KB step never bridges (its 64KB windows
+                                 ; overlap, so one would span the cut) and is
+                                 ; answered the pool's or the heap's alone
+                                 ; (MEGA-HUGE-PLAN F3). BX = MEMH_AVAIL asks
+                                 ; the KB DOORS' question instead: out CF=0,
+                                 ; AX = the largest claim OSAPI_MEM_CLAIM (or
+                                 ; OSAPI_MEM_P with no head) serves YOU, BX =
+                                 ; the total free KB you can claim from, both
+                                 ; regions, and DX = the pool's best run in KB
+                                 ; (0: none for you) - OSAPI_MEM_AVAIL with the
+                                 ; pool counted (MEGA-HUGE-PLAN F6). CF=1 on
+                                 ; kern_big and kern_small, as for any ask:
+                                 ; OSAPI_MEM_AVAIL IS that answer there
+MEMH_AVAIL  equ 1               ; OSAPI_MEM_HUGE AX = 0, BX = this: the ask above
 XMW_OFF     equ 0
 XMW_KB      equ 2
 XMW_OWN     equ 4

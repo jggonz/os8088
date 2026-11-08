@@ -127,6 +127,21 @@
 %ifdef CC_U__os88_mem_huge_step
   %define CC_U__os88_mem_huge       ; one body for the pair
 %endif
+%ifdef CC_U__os88_mem_huge_w
+  %define CC_U__os88_mem_huge       ; ...and the windowed form shares it
+%endif
+%ifdef CC_U__os88_mem_largest_kb
+  %define CC_U_cc_avail             ; the pool-counted ask (MEGA-HUGE-PLAN F6)
+%endif
+%ifdef CC_U__os88_mem_total_kb
+  %define CC_U_cc_avail
+%endif
+%ifdef CC_U__os88_file_write_huge
+  %define CC_U__os88_file_read_huge ; one body for the pair, and os88_file_hi
+%endif
+%ifdef CC_U__os88_file_hi
+  %define CC_U__os88_file_read_huge
+%endif
 %ifdef CC_U__os88_file_copy
   %define CC_U__os88_fcp            ; both names are one body (SPEC.md 22.24)
 %endif
@@ -1482,7 +1497,8 @@ _os88_snd_tone:
 ;
 ; The count is DX:CX, 32 bits. These pass DX = 0 and cap the count at 16, and
 ; that costs a package nothing it can reach: image plus bss cap at 63.5KB, and
-; anything larger lives in a claim, which the _seg forms read straight into.
+; anything larger lives in a claim, which the _seg forms read straight into -
+; and the _huge pair takes the whole 32 bits for a claim of any size.
 ; =============================================================================
 
 ; int os88_ferr(void) - the FERR_* of the last file call, 0 = it worked.
@@ -1683,6 +1699,129 @@ _os88_file_write_segoff:
     and ax, cx                      ; AX = the FERR_*, or 0
     mov [cc_ferr], ax
     xchg ax, cx                     ; the answer: 0, or -1 (see os88_ferr())
+    pop bp
+    ret
+%endif
+
+; unsigned os88_file_read_huge(const char *name, unsigned seg,
+;                              unsigned cap_lo, unsigned cap_hi)
+; int os88_file_write_huge(const char *name, unsigned seg,
+;                          unsigned n_lo, unsigned n_hi)
+; unsigned os88_file_hi(void)
+; The _seg forms with the WHOLE 32-bit count (MEGA-HUGE-PLAN F7): a file of
+; any size into, or out of, an os88_mem_huge() claim from its base - the
+; kernel walks the claim by its own step (SPEC.md 18.4.1), so a run of
+; selectors is one buffer to it. The count is two words, the SDK's shape for
+; 32 bits (os88_file_read_at's offset). The read answers the size's LOW word
+; and os88_file_hi() the high word of that answer (the last READ's); 0 with
+; os88_ferr() == 0 and os88_file_hi() == 0 is an empty file. The base must
+; be a claim's own - every disk-visible base is 512-aligned
+CC_GATE _os88_file_read_huge
+%ifdef CC_U__os88_file_read_huge
+_os88_file_read_huge:
+    call cc_fhargs
+    call OSAPI_FILE_READ            ; CF=0: DX:AX = the size; CF=1: AX = FERR_*
+    jnc .ok
+    mov [cc_ferr], ax
+    xor ax, ax                      ; 0, and os88_ferr() says why
+    mov [cc_fhi], ax
+    ret
+.ok:
+    mov [cc_fhi], dx
+    xor dx, dx
+    mov [cc_ferr], dx
+    ret
+_os88_file_write_huge:
+    call cc_fhargs
+    call OSAPI_FILE_WRITE           ; CF=0 AX = 0; CF=1 AX = FERR_*
+    sbb cx, cx                      ; -1 refused, 0 done
+    and ax, cx
+    mov [cc_ferr], ax
+    xchg ax, cx                     ; the answer: 0, or -1
+    ret
+_os88_file_hi:
+    mov ax, [cc_fhi]
+    ret
+cc_fhargs:                          ; SI = name, ES:BX = seg:0, DX:CX = count
+    mov bx, sp                      ; ([ss:bx+2] is the C's return address)
+    mov si, [ss:bx+4]
+    mov es, [ss:bx+6]               ; ES = THEIR segment
+    mov cx, [ss:bx+8]
+    mov dx, [ss:bx+10]
+    xor bx, bx
+    ret
+%endif
+
+; unsigned os88_file_read_at_seg(const char *name, unsigned seg, unsigned off,
+;                                unsigned cap, unsigned foff_lo,
+;                                unsigned foff_hi)
+; os88_file_read_at INTO A CLAIM (MEGA-HUGE-PLAN F7): ES:BX = seg:off rather
+; than DS, the rest exactly os88_file_read_at's - the file offset and cap each
+; a whole number of clusters, the answer the bytes delivered, os88_ferr() the
+; refusal. off + cap stays inside seg's 64KB (a huge claim's window: base +
+; k * os88_mem_huge_step()), and off is a multiple of 512, as for any base a
+; disk transfer lands in
+CC_GATE _os88_file_read_at_seg
+%ifdef CC_U__os88_file_read_at_seg
+_os88_file_read_at_seg:
+    push bp
+    mov bp, sp
+    mov si, [bp+4]
+    mov es, [bp+6]                  ; ES:BX - THEIRS
+    mov bx, [bp+8]
+    mov cx, [bp+10]
+    mov ax, [bp+12]                 ; DX:AX - the file offset
+    mov dx, [bp+14]
+    call OSAPI_FILE_READ_AT
+    sbb cx, cx                      ; -1 refused, 0 delivered
+    and cx, ax                      ; CX = the FERR_*, or 0
+    mov [cc_ferr], cx
+    sub ax, cx                      ; AX = the count, or 0
+    pop bp
+    ret
+%endif
+
+; void os88_seg_get(void *dst, unsigned seg, unsigned off, unsigned n)
+; void os88_seg_put(unsigned seg, unsigned off, const void *src, unsigned n)
+; A BULK COPY between a claim and your own data (MEGA-HUGE-PLAN F7), where
+; os88_peek/os88_poke are a near call a byte (~11 us each): n bytes, a word
+; at a time, inside ONE 64KB window of the claim - off + n may not pass it
+; (a huge claim's next window is base + os88_mem_huge_step()). A string move
+; in the thunk is the one C can have: rule 2 forbids it in compiled code
+; because ES is the kernel's there, and here ES is loaded on the line before
+CC_GATE _os88_seg_get
+%ifdef CC_U__os88_seg_get
+_os88_seg_get:
+    push bp
+    mov bp, sp
+    push ds
+    pop es                          ; ES:DI - OURS
+    mov di, [bp+4]
+    mov si, [bp+8]
+    mov cx, [bp+10]
+    mov ds, [bp+6]                  ; DS:SI - THEIRS ([bp] is SS: unmoved)
+    shr cx, 1
+    rep movsw
+    adc cx, cx
+    rep movsb
+    push es
+    pop ds                          ; ours again
+    pop bp
+    ret
+%endif
+CC_GATE _os88_seg_put
+%ifdef CC_U__os88_seg_put
+_os88_seg_put:
+    push bp
+    mov bp, sp
+    mov es, [bp+4]                  ; ES:DI - THEIRS
+    mov di, [bp+6]
+    mov si, [bp+8]                  ; DS:SI - ours
+    mov cx, [bp+10]
+    shr cx, 1
+    rep movsw
+    adc cx, cx
+    rep movsb
     pop bp
     ret
 %endif
@@ -2080,19 +2219,54 @@ _os88_mem_claim:
 ; unsigned os88_mem_huge_step(void) - what to ADD to it per 64KB: 0x1000 for a
 ; conventional claim, 8 for a run of selectors above 1MB on kern_mega. The one
 ; piece of segment arithmetic a claim allows is base + k * step
+; BX = 0, a window every 64KB. It was BX = SP - the `mov bx, sp` that reads
+; the argument - so a stack pointer of 8000h or 4000h asked for 32KB or 16KB
+; windows that the caller then walked as 64KB apart (MEGA-HUGE-PLAN F7).
+;
+; unsigned os88_mem_huge_w(int kb, unsigned win) - the same claim with BX =
+; win: 0, 0x8000 (a window every 32KB, each 64KB long) or 0x4000 (every
+; 16KB), SPEC.md 50.3.5. With os88_mem_huge_step() == 8 the windows are the
+; ones asked for - the cell answers BX = 0 for them, and a 16KB or 32KB claim
+; never bridges - so window k is base + 8k; with 0x1000 the claim is one
+; conventional segment and seg + (offset >> 4) is the whole of it
 CC_GATE _os88_mem_huge
 %ifdef CC_U__os88_mem_huge
 _os88_mem_huge:
     mov bx, sp                      ; no frame: one argument
     mov ax, [ss:bx+2]
+    xor bx, bx                      ; a window every 64KB
+cc_huge:
     call OSAPI_MEM_HUGE
     mov [cc_hstep], cx              ; (mov leaves CF)
     sbb ax, ax
     not ax
     and ax, dx
     ret
+_os88_mem_huge_w:
+    mov bx, sp
+    mov ax, [ss:bx+2]
+    mov bx, [ss:bx+4]               ; BX = the windows asked for
+    jmp short cc_huge
 _os88_mem_huge_step:
     mov ax, [cc_hstep]
+    ret
+%endif
+
+; unsigned os88_mem_huge_ask(unsigned win) - OSAPI_MEM_HUGE's AX = 0 ASK for a
+; claim of that shape (KERN-MEGA-MEMORY-PLAN MC5, MEGA-HUGE-PLAN F3): the most
+; KB os88_mem_huge_w(kb, win) is given now, nothing claimed. kern_big and
+; kern_small have no ask (CF = 1) and their huge claim is a conventional one,
+; so the answer there is OSAPI_MEM_AVAIL's largest run - the same question
+CC_GATE _os88_mem_huge_ask
+%ifdef CC_U__os88_mem_huge_ask
+_os88_mem_huge_ask:
+    mov bx, sp
+    mov bx, [ss:bx+2]               ; BX = the claim's shape
+    xor ax, ax                      ; AX = 0: ask
+    call OSAPI_MEM_HUGE
+    jnc .r
+    call OSAPI_MEM_AVAIL            ; no ask: the heap's largest run
+.r:
     ret
 %endif
 
@@ -2278,10 +2452,37 @@ _os88_mem_gran:
     ret
 %endif
 
-CC_T_AX   _os88_mem_largest_kb, OSAPI_MEM_AVAIL         ; AX = largest run
-CC_T_REG  _os88_mem_total_kb,   OSAPI_MEM_AVAIL, bx     ; BX = total free
-                                                        ; Size yourself from
-                                                        ; these, never int 12h
+; unsigned os88_mem_largest_kb(void), os88_mem_total_kb(void) - what the KB
+; doors serve you: the largest claim os88_mem_claim() is given and the total
+; free KB you can claim from. Size yourself from these, never int 12h. On
+; kern_mega they count the POOL as well (MEGA-HUGE-PLAN F6): an OS88_HIGHMEM
+; package's claims of 64KB or less go above 1MB where they can, and
+; OSAPI_MEM_AVAIL alone counts conventional memory there - the false
+; refusals and the undersizing of every C package that planned from it.
+; OSAPI_MEM_HUGE's MEMH_AVAIL ask is that answer; kern_big and kern_small
+; refuse it (CF = 1) and OSAPI_MEM_AVAIL is the same answer there.
+CC_GATE _os88_mem_largest_kb
+%ifdef CC_U__os88_mem_largest_kb
+_os88_mem_largest_kb:
+    jmp short cc_avail              ; AX = the largest
+%endif
+CC_GATE _os88_mem_total_kb
+%ifdef CC_U__os88_mem_total_kb
+_os88_mem_total_kb:
+    call cc_avail
+    xchg ax, bx                     ; AX = the total
+    ret
+%endif
+%ifdef CC_U_cc_avail
+cc_avail:                           ; out AX = largest KB, BX = total KB
+    xor ax, ax
+    mov bx, MEMH_AVAIL
+    call OSAPI_MEM_HUGE
+    jnc .r
+    call OSAPI_MEM_AVAIL
+.r:
+    ret
+%endif
 
 ; int os88_peek(unsigned seg, unsigned off) - one byte out of a claim.
 ; The other half of "C cannot write a segment override". A byte at a time is
@@ -2748,6 +2949,12 @@ cc_nul: db 0
 %ifdef CC_U__os88_file_append
   %assign cc__ferr 1
 %endif
+%ifdef CC_U__os88_file_read_huge
+  %assign cc__ferr 1
+%endif
+%ifdef CC_U__os88_file_read_at_seg
+  %assign cc__ferr 1
+%endif
 %ifdef CC_U__os88_file_delete
   %assign cc__ferr 1
 %endif
@@ -2775,6 +2982,9 @@ cc_assoc:   resb 11                 ; os88_assoc_set()'s space-padded block:
 %endif                              ; 3 extension bytes then 8 stem bytes
 %ifdef CC_U__os88_mem_huge
 cc_hstep:   resw 1                  ; os88_mem_huge()'s step, for _step()
+%endif
+%ifdef CC_U__os88_file_read_huge
+cc_fhi:     resw 1                  ; os88_file_read_huge()'s size, high word
 %endif
 section .text
 %endif

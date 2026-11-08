@@ -15215,3 +15215,98 @@ memory: the landing 4.5KB -> 9KB while held.
 **Rows.** `hdbounce` (soak, 86Box, ~55 s): the four legs and their bounds
 (SPEC.md 51.8.1); red on the base tree in all four, red in `ide` alone
 with HDD.DRV's DSV_CAPS 0, green after.
+
+### 14.168 The huge claim's ask answered for the claim it is asked about, "how much can I have" counts the pool, the C SDK's way to big memory, and Frotz's story above 1MB (2026-11-08) - FIXED
+
+docs/plans/MEGA-HUGE-PLAN.md F3, F6, F7 and Frotz's adoption (the owner,
+2026-11-08: *"Work through the steps, and close the gaps as needed"*). Shared
+with the other agents working that plan: F1, F2 and F9 (the bridge's
+addressing, its report, the "no bridge" refusal) are another branch's.
+
+**F3 - the ask ignored BX.** `OSAPI_MEM_HUGE` with AX = 0 answered the
+better of the pool alone, the heap alone and the BRIDGE whatever claim was
+being asked about - and a window every 32KB or 16KB (BX = 8000h / 4000h) can
+never bridge (`mega_hugebf` refuses it). Measured under Bochs at 4MB
+(tests/megahuge's new leg 7): the ask for 32KB windows answered **3454K**, a
+claim of it was **refused**; the pool alone was 2988K. **Should such a claim
+bridge? No, and that is the design, not a gap**: the windows are 64KB long
+and overlap, so for every 32KB boundary of the claim some window spans it -
+the cut between a pool piece and a heap piece included - and one descriptor
+cannot cover two places; a shape that skipped the seam would break the one
+promise the claim exists for, any 32KB record whole in ONE window. So the ask
+is the whole fix: `mega_hugeqf` reads the caller's BX and, for 4000h / 8000h,
+answers the better of the two ALONE. After: asked 2982K, got it, step 8, BX 0.
+
+**F6 - "how much can I have" counted conventional memory alone.**
+`OSAPI_MEM_AVAIL`, `MEMP_AVAIL` and the C SDK's `os88_mem_largest_kb` /
+`_total_kb` answer the conventional heap on kern_mega, while an
+`OS88_HIGHMEM` package's claims of 64KB or less go above 1MB first - false
+refusals (Weave's and Loom's pre-read check, Frotz's) and undersizing (WIN16's
+third arena, the Apple II's halving loop). **The decision: a new ASK, not a
+changed cell.** `OSAPI_MEM_AVAIL`'s contract is "a claim of AX from here will
+be SERVED", every package built so far plans conventional things from it (a
+CS, a `MEMP_CONV` block, the Task Manager's heap), and changing what it
+answers on one kernel is the silent kind of ABI change. So the AX = 0 ask
+grows a verb in BX: **`MEMH_AVAIL` (1)** answers the KB doors' question with
+the pool counted - AX = the largest claim `OSAPI_MEM_CLAIM` serves THIS
+caller (the heap's, or the pool's best run up to 64KB), BX = the total free
+KB (heap + pool, `mx_caps`, 0FFFFh at most), DX = the pool's best run (0 for
+a caller the pool owner rule refuses) - `mega_availf` in `.mega`. kern_mega
+in real mode answers `OSAPI_MEM_AVAIL`'s figures; kern_big and kern_small
+answer every ask CF = 1, as they always did, and a caller falls back to
+`OSAPI_MEM_AVAIL` there, where it IS the answer - **so kern_big and kern_small
+are byte-identical** (A/B at one commit: `build/kernel.bin`,
+`build/smallk/kernel.bin`). `abilock`: an addition (an equ and a verb on an
+ask) and a clarification - no `PKG_FMT` bump. Measured (4MB Bochs):
+`OSAPI_MEM_AVAIL` 574K / 574K, `MEMH_AVAIL` 574K / **3556K**, pool run 2982K.
+Callers moved: the C SDK's `os88_mem_largest_kb` / `_total_kb` (so Weave,
+Loom, the Apple II, C64, Lemmings and RunCPM, at their rebuild), Frotz
+(`zi_room`), WIN16's third arena (the mega arm: the pool's run, up to
+`W16_ARPOOL` = 512KB, beside the heap's figure less its keep).
+
+**F7 - the C SDK.** `os88_mem_huge`'s thunk read its argument through BX
+and called the cell with **BX = SP**: at SP = 8000h or 4000h it asked for 32KB
+or 16KB windows its caller then walked 64KB apart (tests/chuge with BX forced
+to 8000h: `fill bad 0040`). Now BX = 0, and `os88_mem_huge_w(kb, win)` asks
+for windows on purpose; `os88_mem_huge_ask(win)` is the AX = 0 ask (every
+kernel answers); `os88_file_read_huge` / `_write_huge` take the whole 32-bit
+count (two words) and `os88_file_hi()` the read's high word;
+`os88_file_read_at_seg` reads a chunk into seg:off; `os88_seg_get` /
+`os88_seg_put` copy between a claim and DS a word at a time (SPEC.md 73.9.2).
+
+**And a plain file past 64KB was REFUSED into any claim above 1MB.**
+`dskw_rbody` sent a plain file that would cross its selector's window to
+`dskw_tolo`, the segment arm, which refuses a buffer at or above 1MB:
+FERR_IO for every file over 64KB read into an `OSAPI_MEM_HUGE` claim in the
+pool - while the WRITE of the same bytes worked, walking the windows by
+`dskw_hicarry` since KERN-MEGA-MEMORY-PLAN MC7. Found by tests/chuge
+(`read ferr 0002`); it would have stopped Frotz's adoption at its first story.
+A plain file (R = 0) that `dskw_tolo` refuses now takes the selector arm's own
+walk, the write's. (Through a BRIDGE that walk is F1's subject: `dskw_hisub`
+steps by SEG_SUB, not by the run - the other branch's fix.)
+
+**Frotz** (SPEC.md 61.4): a story over 64KB is ONE `OSAPI_MEM_HUGE` claim with
+a window every 32KB - window k is the 64KB from 32KB x k, exactly Frotz's page
+- so `zm_run` writes the page table as DX + 8k, where the paragraph claim
+needed a SEG_SUB selector per page. Refused from the ask for that shape;
+falls back to `MEMP_CLAIM`; a conventional answer (CX = 1000h) takes
+`zm_pages`'s sums; kern_big and kern_small take today's path unchanged (both
+asks CF = 1). tests/megafrotz: the 282KB story's claim based F88800h (16MB
+Bochs), and the transcript; red with mega-release's FROTZ.O88 (based 12400h).
+`megafrotz-low` is the 640K + 384K machine: the pool cannot hold 282KB, the
+claim is a conventional run, the story plays the same.
+
+**Bytes.** kern_big and kern_small: none (byte-identical). kern_mega: `.cold`
++51 (`mmf_osapi_mem_huge`'s MEMH_AVAIL arm 27, `mega_hugeqf`'s shape test 18,
+`dskw_rbody`'s plain-file arm 6), `.mega` +48 (`mega_availf`); both above
+1MB, so `MEGA_RESIDENT` is unchanged (62,976 of 68,096) and the kernel
+segment's window too (os88megaseg overhead 3754, unchanged). FROTZ.O88's
+image 23,447 -> 23,626 (+179: `zi_room`, the huge arm of `zi_load`, `zm_run`;
+the file 19,393 -> 19,543 packed), no arm - it is the same on every kernel.
+The C packages that call the avail thunks grow by the ask and its fallback
+(~10 bytes) at their next rebuild.
+
+**Rows.** megahuge (legs 7, 8: red on 626e0ebb's kernel, `w32 max 0D7E
+refused`, MEMH_AVAIL `0D7E 0001 0000`), chuge-mega and chuge-big (new: the C
+package tests/chuge, red as its docstring lists), megafrotz (the base
+assertion; red with 626e0ebb's FROTZ.O88), megafrotz-low (new).

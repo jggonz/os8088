@@ -4,6 +4,7 @@
     make mega build/frotz.o88 build/zt/ZBIG.Z8 && python3 tests/megafrotz.py
     python3 tests/megafrotz.py --pkg OLD/frotz.o88   another build (the red)
     python3 tests/megafrotz.py --keep                keep the E9 log and shots
+    python3 tests/megafrotz.py --low                 the 640K + 384K machine
 
 Under kern_mega in protected mode every claim is an LDT SELECTOR (SPEC.md
 50.6.12), and a selector reaches at most 64KB. Frotz holds a whole story in
@@ -30,6 +31,16 @@ the transcript differing from the gold.
 
 THE FAILING CASE (docs/WRITING-TESTS.md 1): FROTZ.O88 from before this
 (`--pkg`, the build at fd19b8d0) - see the module's own run for its reading.
+
+AND THE STORY CLAIM IS ABOVE 1MB (docs/plans/MEGA-HUGE-PLAN.md, Frotz's
+adoption): a story over 64KB is one OSAPI_MEM_HUGE claim with a window every
+32KB, the page table its own run (apps/frotz/zmem.inc's zm_run), and the row
+asserts its first selector's base (SEG_LIN, read off the LDT) is 1MB or more.
+Red with FROTZ.O88 from mega-release 626e0ebb (`--pkg`): the story was a
+conventional MEMP_CLAIM, based under A0000h. `--low` boots Bochs at 1MB,
+the 640K + 384K machine, whose pool cannot hold 282KB: the ask for that
+shape answers the heap, the claim is a conventional run (still a window every
+32KB, zm_run's table) and the story must play the same transcript.
 """
 import argparse
 import os
@@ -68,6 +79,7 @@ class Frotz:
         # relative to the image's end - the header's image size, +8 - so a
         # build of another size (--pkg) is read at its own offsets
         self.rel = {n: p[n] - p["os88_image_end"] for n in PROBES}
+        self.lin = None             # the story claim's base, once seen
 
     def bss(self):
         """The whole probe block in one go: {name: word}."""
@@ -107,11 +119,13 @@ def play(box, fz, out):
                                                  ZIW_LINE) else None)
                   (fz.bss()), "the story's first prompt", 600, poll=1.0)
     box.shot(os.path.join(out, "prompt.png"))
-    print("megafrotz: story claim %04x (%s), %d paragraphs" %
+    lin = box.sel_base(v["zf_sseg"]) if v["zf_sseg"] & 4 else None
+    print("megafrotz: story claim %04x (%s%s), %d paragraphs" %
           (v["zf_sseg"], "a selector" if v["zf_sseg"] & 4 else "a segment",
-           v["zf_spara"]))
+           "" if lin is None else " based %X" % lin, v["zf_spara"]))
     if halted(v):
         return fz.lines(v), "halted before its first prompt"
+    fz.lin = lin
     for cmd in ("go", "text", "go"):
         n0 = len(fz.lines(v))
         box.type(cmd)
@@ -141,7 +155,12 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--pkg", default=os.path.join(BUILD, "frotz.o88"))
     ap.add_argument("--keep", action="store_true")
+    ap.add_argument("--low", action="store_true",
+                    help="the 1MB machine (640K + 384K), whose pool cannot "
+                    "hold the story: its claim must be conventional")
     a = ap.parse_args()
+    if a.low:
+        os88bochs.MEGS = 1              # 640K + 384K: a pool of ~240K
     for f in (a.pkg, STORY, GOLD, os.path.join(BUILD, "mega.img")):
         if not os.path.exists(f):
             print("megafrotz: no %s - `make mega build/frotz.o88 "
@@ -167,10 +186,24 @@ def main():
             err = "kern_mega never reached protected mode"
         else:
             box.up()
+            fz = Frotz(box)
             try:
-                lines, err = play(box, Frotz(box), out)
+                lines, err = play(box, fz, out)
             except RuntimeError as e:
                 err = str(e)
+            # MEGA-HUGE-PLAN: a story over 64KB is ONE OSAPI_MEM_HUGE claim
+            # with a window every 32KB, above 1MB where the pool has room -
+            # it was a conventional MEMP_CLAIM for the whole session. With
+            # --low the pool cannot hold it and the claim is the heap's
+            # run (mega_hugec), and the story must play all the same
+            lin = fz.lin
+            high = lin is not None and lin >= 0x100000
+            if not err and high == a.low:
+                err = ("the story claim is based %s - %s" % (
+                    "?" if lin is None else "%X" % lin,
+                    "above 1MB on a machine whose pool cannot hold it"
+                    if a.low else "in conventional memory, not "
+                    "OSAPI_MEM_HUGE's run above 1MB"))
         f = box.fault()
         if f:
             err = f

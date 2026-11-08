@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "8478189868f02fad2de6187eae15df0eb8d51e8622af39c27fa75faa763ec710",
+  "fingerprint": "77fa8fa412d1dea757104900e271e1b4ebf1faf777727198fce13c1db8198af3",
   "version": 12
  },
  "PKG_FMT": {
-  "fingerprint": "0daf1607c08c2501190e88f1a2b42103bab8587a9f1c7d0c90b63b3eed2fa781",
+  "fingerprint": "d5a7ccaff103edfdd72c6bfad1bd26adac4c72c719f138cfec571dc2a5c68ca7",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -1813,6 +1813,20 @@
    "from": 12,
    "guard": "DRV_VER",
    "reason": "BLKCAP_SEL (DSV_CAPS bit 4 for DRVC_DISK, SPEC.md 51.8.1): an addition - a driver that leaves it clear is bounced exactly as before, and no cell moved; no bump (KERN-MEGA-PLAN 14.167)",
+   "to": 12
+  },
+  {
+   "fingerprint": "d5a7ccaff103edfdd72c6bfad1bd26adac4c72c719f138cfec571dc2a5c68ca7",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "MEGA-HUGE-PLAN F3/F6: OSAPI_MEM_HUGE's AX = 0 ask now reads BX - the claim's shape (a 16KB/32KB window claim is answered without the bridge it never gets) and MEMH_AVAIL (new equ, 1), the KB doors' answer with the pool counted; OSAPI_MEM_AVAIL/MEMP_AVAIL documented as conventional-only on kern_mega. An addition and a clarification: no cell moved, nothing built before stops running - no PKG_FMT bump",
+   "to": 10
+  },
+  {
+   "fingerprint": "77fa8fa412d1dea757104900e271e1b4ebf1faf777727198fce13c1db8198af3",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "MEGA-HUGE-PLAN F3/F6: OSAPI_MEM_HUGE's AX = 0 ask now reads BX - the claim's shape (a 16KB/32KB window claim is answered without the bridge it never gets) and MEMH_AVAIL (new equ, 1), the KB doors' answer with the pool counted; OSAPI_MEM_AVAIL/MEMP_AVAIL documented as conventional-only on kern_mega. An addition and a clarification: no cell moved, nothing built before stops running - no PKG_FMT bump",
    "to": 12
   }
  ]
