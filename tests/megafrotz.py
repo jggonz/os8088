@@ -166,7 +166,8 @@ def main():
             print("megafrotz: no %s - `make mega build/frotz.o88 "
                   "build/zt/ZBIG.Z8`" % f)
             return 1
-    out = os.path.join(BUILD, "bochs-megafrotz")
+    out = os.path.join(BUILD, "bochs-megafrotz" + ("-low" if a.low else ""))
+                                        # (its own: megafrotz-low runs beside)
     shutil.rmtree(out, ignore_errors=True)
     os.makedirs(out)
     tmp = tempfile.mkdtemp(prefix="megafrotz-")
