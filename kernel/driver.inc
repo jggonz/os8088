@@ -620,6 +620,15 @@ FSCAP_SEL   equ 4               ; ...and my TRANSFER verbs take a pool
                                 ; buffer above 1MB rather than bouncing it
                                 ; 512 bytes a call (drv_fs_hi, SPEC.md
                                 ; 62.9.2.4). Read by kern_mega alone
+BLKCAP_SEL  equ 4               ; ...and a DRVC_DISK driver's, about its
+                                ; DSV_BLK (SPEC.md 51.8.1): a buffer's DX is
+                                ; loaded as it is, so kern_mega hands it a
+                                ; SELECTOR above 1MB rather than bouncing it
+                                ; through the landing, and an answer of 09h
+                                ; (nothing moved) is bounced after all
+                                ; (dsk_xfer's .drvhi, KERN-MEGA-PLAN 14.167).
+                                ; Read by kern_mega alone. Mirrored in
+                                ; drivers/os88drv.inc
 DRV_ICONV   equ 0x41            ; that verb - clear of every door's own
                                 ; verbs, and of WZV_PAINT (0x40). Mirrored in
                                 ; drivers/os88drv.inc

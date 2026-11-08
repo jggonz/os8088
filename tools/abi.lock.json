@@ -1,6 +1,6 @@
 {
  "DRV_VER": {
-  "fingerprint": "63343e9acc62891e2a76d91d15f56aba3b292086003ca4a6130322ce376c5b34",
+  "fingerprint": "8478189868f02fad2de6187eae15df0eb8d51e8622af39c27fa75faa763ec710",
   "version": 12
  },
  "PKG_FMT": {
@@ -1806,6 +1806,13 @@
    "from": 12,
    "guard": "DRV_VER",
    "reason": "KERN-MEGA-PLAN 14.160: the KB DMA doors' contract says where an OS88_HIGHMEM package's head claim lands on kern_mega (a page-safe pool block), and OSAPI_MEM_P's that a head stays conventional - no cell moved, every package built before still runs",
+   "to": 12
+  },
+  {
+   "fingerprint": "8478189868f02fad2de6187eae15df0eb8d51e8622af39c27fa75faa763ec710",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "BLKCAP_SEL (DSV_CAPS bit 4 for DRVC_DISK, SPEC.md 51.8.1): an addition - a driver that leaves it clear is bounced exactly as before, and no cell moved; no bump (KERN-MEGA-PLAN 14.167)",
    "to": 12
   }
  ]

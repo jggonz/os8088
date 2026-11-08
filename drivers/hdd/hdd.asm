@@ -330,8 +330,12 @@ hd_xfer:
     call hd_chs
     jc hd_xfer_fail4
     call hd_bios_run            ; AX = sectors this one int 13h may carry
-    jc hd_xfer_fail4            ; ...or none of them can: an unaligned buffer
-    mov [hd_run], ax            ; whose next sector would straddle a DMA page
+    jc hd_xfer_fail9            ; ...or none of them can: an unaligned buffer
+    mov [hd_run], ax            ; whose next sector would straddle a DMA page,
+                                ; or one above 1MB - 09h, the ROM's own word
+                                ; for it, and what kern_mega bounces on
+                                ; (BLKCAP_SEL, SPEC.md 51.8.1): it is asked
+                                ; before the first int 13h, so nothing moved
     mov bp, 3
 .attempt:
     mov es, [hd_bseg]           ; reloaded per attempt: the buffer walks a
@@ -371,6 +375,9 @@ hd_xfer:
 hd_xfer_ok:
     xor al, al                  ; and CF = 0
     jmp short hd_xfer_out
+hd_xfer_fail9:
+    mov al, 0x09                ; "DMA boundary": no int 13h reaches the buffer
+    jmp short hd_xfer_fail
 hd_xfer_fail4:
     mov al, 0x04                ; "sector not found": a CHS the geometry cannot
 hd_xfer_fail:                   ; name, or a buffer no transfer can reach
@@ -1533,7 +1540,10 @@ hd_ready:
 ; attach-only data and lives with the attach-only code.
 ; =============================================================================
 hd_services:
-    dw 0                        ; DSV_CAPS    - sound's
+    dw BLKCAP_SEL               ; DSV_CAPS    - DSV_BLK takes a selector as it
+                                ; is (SPEC.md 51.8.1): rung 1 is `rep insw`
+                                ; through ES, and rung 0 answers 09h for a
+                                ; buffer its ROM cannot reach (hd_bios_run)
     dw 0                        ; DSV_FM
     dw 0                        ; DSV_STREAM
     dw 0                        ; DSV_TICK

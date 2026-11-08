@@ -55,7 +55,7 @@
 ;   MEGAXM: i13 ok             (protected mode) int 13h issued by the PACKAGE
 ;                              into a buffer above 1MB (KERN-MEGA-PLAN 14.1
 ;                              answer 11, mega_hibnc): drive A's track 0,
-;                              18 sectors - two runs of the landing's nine -
+;                              18 sectors - one run of the landing's 18 -
 ;                              read into the block at an odd offset and
 ;                              compared with the same sectors read low, then
 ;                              written back from the block and read again
@@ -786,7 +786,7 @@ mz_i13:
     mov al, 1
     call .cmp8
     jnz .wrong
-    mov cl, 0x33                ; --- 9..16: across the landing's run ------
+    mov cl, 0x33                ; --- 9..16 (one landing run since 14.167) -
     mov di, MZ_I13OFF + 4096
     mov al, 9
     call .cmp8
