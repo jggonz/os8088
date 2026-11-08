@@ -138,6 +138,24 @@ def u16(b, i=0):
     return b[i] | (b[i + 1] << 8)
 
 
+def page_dest(dest, head, seg, up):
+    """mem_cp_dest's PAGE BUMP (SPEC.md 66.4.2): where a claim with an MC_DMA
+    head of `head` paragraphs, now at `seg`, lands when the walk's arithmetic
+    says `dest`. Off a 64KB physical page its head would straddle - up to the
+    next page's floor going up, down to the highest base in this page that
+    still fits coming down - and a bump that would carry it past its own base
+    is "leave it", `seg`. (The DISK class's 512-byte rounding is a MEMGRAN=16
+    knob's and is not modelled.)"""
+    if not head or not ((dest ^ (dest + head - 1)) & 0xF000):
+        return dest
+    top = (dest & 0xF000) + 0x1000
+    if top > 0xFFFF:
+        return seg
+    if up:
+        return top if top <= seg else seg
+    return top - head if top - head >= seg else seg
+
+
 class Claim(object):
     __slots__ = ("seg", "para", "own", "dma", "rloc", "hi", "sel")
 
@@ -326,8 +344,10 @@ class Map(object):
                     if c.seg > at:              # is a run, and the fill point
                         out.append((at, c.seg - at))    # resumes above it
                     at = c.end
-                else:
-                    at += c.para                # packs down onto the fill point
+                else:                           # packs down onto the fill
+                    at = page_dest(at, c.dma, c.seg, True) + c.para
+                    # ...point, or the next page's floor if MC_DMA bumps
+                    # it there (66.4.2) - a gap mem_cp_walk does not count
             if self.top > at:
                 out.append((at, self.top - at))
             return out
@@ -340,7 +360,7 @@ class Map(object):
                     out.append((c.end, at - c.end))
                 at = c.seg
             else:
-                at -= c.para
+                at = page_dest(at - c.para, c.dma, c.seg, False)
         if at > self.base:
             out.append((self.base, at - self.base))
         return sorted(out)

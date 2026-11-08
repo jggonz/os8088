@@ -4981,10 +4981,31 @@ mem_avail_lvl_p:                ; AX/BX in PARAGRAPHS, otherwise the same
     test byte [ss:si+MC_DMA+1], MC_DMA_HI >> 8
     jz .lo
     inc dx                      ; a ceiling mover: its size joins the fill
-    jmp short .pack             ; point and a run is pending
+                                ; point and a run is pending - AND ITS PAGE
+    mov ax, [ss:si+MC_DMA]      ; HEAD WITH IT (SPEC.md 66.4.3.1, KERN-MEGA-
+    and ax, MC_DMA_HEAD         ; PLAN 14.185). The descending pass bumps an
+%ifdef MEM_ALIGN_CLASS          ; MC_DMA mover DOWN off a page its head would
+    test byte [ss:si+MC_DMA+1], MC_DISK >> 8
+    jz .hslack                  ; straddle - by less than the head - and a
+    add ax, 31                  ; DISK one down to 512 bytes (< 32 more), so
+.hslack:                        ; the run occupies at most its size plus that
+%endif                          ; under B: charged here, the hole measured at
+    add bx, ax                  ; B is never more than the pass leaves. The
+    jmp short .pack             ; slack's own gap is not a run (under-report)
 .lo:
     or dx, dx                   ; a floor mover packs onto the fill point...
-    jz .pack
+    jnz .barrier
+    push di                     ; ...AT mem_cp_dest's DESTINATION, which is
+    call mem_cp_dest            ; the fill point unless MC_DMA bumps it to the
+    mov bx, di                  ; next page's floor (or DISK aligns it): the
+    pop di                      ; run's own arithmetic, so the plan cannot put
+    jmp short .pack             ; a block where the run will not (SPEC.md
+                                ; 66.4.3.1, KERN-MEGA-PLAN 14.185). The gap the
+                                ; bump opens is NOT measured, as mem_cp_walk
+                                ; does not measure it: mem_compact decides on
+                                ; that walk's run, and a hole it cannot see
+                                ; is not one mem_claim compacts for. DI is the
+                                ; total, banked round the call that writes it
 .barrier:                       ; ...unless a run is pending under it, and
     call mem_cp_gap             ; then it is where that run stops: the hole is
     mov bx, [ss:si+MC_SEG]      ; base - fill, which is B - S - fill, and the

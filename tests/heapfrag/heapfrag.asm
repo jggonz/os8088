@@ -839,13 +839,19 @@ hf_run:
     ; than one legal offset in a few (measured: offset F20h, on kern_big and
     ; kern_mega). One that pinned MC_DMA again would refuse the ask.
     ;
-    ; NOT mem_avail's answer with the block movable, which is what check 13
-    ; asks: that plan (mem_avail_lvl_x's inline mem_cp_both) packs a floor
-    ; mover onto the fill point WITHOUT mem_cp_dest's page bump, so here it
-    ; promises the block landing at F - G - F more than the run delivers, and
-    ; the claim of it is refused (KERN-MEGA-PLAN 14.184, measured on kern_big
-    ; and kern_mega alike). It is recorded (hf_dmaaw) for the harness to print
-    ; and is not this check's to assert.
+    ; AND mem_avail's ANSWER WITH THE BLOCK MOVABLE IS CLAIMED FIRST (SPEC.md
+    ; 66.4.3.1, KERN-MEGA-PLAN 14.185) - exactly that many KB, given straight
+    ; back, the outcome in hf_dmaag (1 granted, 2 refused) for the harness to
+    ; assert beside check 14. Until 14.185 the plan (mem_avail_lvl_x's inline
+    ; mem_cp_both) packed a floor mover onto the fill point WITHOUT
+    ; mem_cp_dest's page bump, so here it promised the block landing at F -
+    ; G - F more than the run delivers - 48K against 45K on kern_mega, 100K
+    ; against 97K on kern_big - and the claim was REFUSED: the dangerous
+    ; direction, a claimant shedding its caches on a promise. It is claimed
+    ; BEFORE check 14's own ask because after that the block has moved and
+    ; any plan is right; the move it makes is then the one 14 reads (an
+    ; ignored MC_DMA still lands it at F, across the page, and a re-pinned
+    ; MC_DMA still refuses 14's ask), so 14 is red and green as before.
     ;
     ; A ROOF goes on first, a plain top-down claim the block's size: on
     ; kern_mega a ring is sent to the top end of the heap when only rings and
@@ -859,6 +865,7 @@ hf_run:
     ; start of its page and moving the WRONG MEMORY, silently.
 .dma:
     mov byte [hf_dmawhy], 1     ; 1: no big claim, or no room to say anything
+    mov byte [hf_dmaag], 0      ; (the avail claim not asked yet)
     cmp word [hf_bigseg], 0     ; the hole this pass needs is the big claim's,
     jne .dmaok0                 ; and without one there is nothing to open
     jmp .dmano
@@ -970,10 +977,17 @@ hf_run:
     mov ax, hf_reloc
     call OSAPI_MEM_MOVABLE      ; ...and then the block alone
     jc .dmarst
-    call OSAPI_MEM_AVAIL        ; what mem_avail says its move buys: RECORDED
-    mov [hf_dmaaw], ax          ; for the harness and NOT the ask (the ask is
-    mov ax, [hf_dmaap]          ; one KB past the run with nothing of ours
-    inc ax                      ; moving, so only this block's move funds it)
+    call OSAPI_MEM_AVAIL        ; what mem_avail says its move buys...
+    mov [hf_dmaaw], ax
+    mov byte [hf_dmaag], 2      ; ...and a claim of EXACTLY that: 2 refused,
+    call OSAPI_MEM_CLAIM        ; the promise the plan could not keep
+    jc .dmaag
+    call OSAPI_MEM_FREE         ; DX: straight back
+    mov byte [hf_dmaag], 1      ; 1 granted
+.dmaag:
+    mov ax, [hf_dmaap]          ; THE ASK: one KB past the run with nothing
+    inc ax                      ; of ours moving, so only this block's move
+                                ; funds it
     mov byte [hf_dmawhy], 8     ; 8: the ask was refused
     call OSAPI_MEM_CLAIM
     jc .dmarst
@@ -1523,6 +1537,8 @@ hf_dmaf    equ os88_image_end + 178  ; word: F, the fill point (paragraph)
 hf_dmad    equ os88_image_end + 180  ; word: D, where the block is claimed
 hf_dmaat   equ os88_image_end + 182  ; word: where it stood when last read
 hf_dmawhy  equ os88_image_end + 184  ; byte: check 14's stage, 0 = PASS
+hf_dmaag   equ os88_image_end + 185  ; byte: hf_dmaaw claimed: 1 granted,
+                                     ; 2 refused, 0 never asked (14.185)
 hf_sv      equ os88_image_end + 186  ; word: hf_s, kept while check 14 borrows it
 %if 164 + 2 * HF_NPLUG > HF_BSS_TOTAL
   %error "hf_plug runs past HF_BSS_TOTAL"

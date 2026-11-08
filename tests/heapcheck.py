@@ -134,27 +134,45 @@ def both_passes(cl, base, top):
     merely safe, which is what lets the region arm keep asserting equality
     instead of being weakened to an inequality that would no longer catch the
     27KB-short error it was written for."""
-    MC_DMA_HI = 0x8000
+    MC_DMA_HI, MC_DMA_HEAD = 0x8000, 0x3FFF
     MEM_PG_MIN, MEM_PG_MAX = 0xFB, 0xFE
     live = sorted(c for c in cl
                   if not (MEM_PG_MIN <= (c[2] >> 8) <= MEM_PG_MAX))
     def ceilmover(c):
         return c[4] != 0 and (c[3] & MC_DMA_HI)
+    def head(c):
+        return c[3] & MC_DMA_HEAD
+    def landing(fill, c):
+        # SPEC.md 66.4.2, written again here from the spec: a head that would
+        # cross a 64KB page at the fill point goes to the next page's floor,
+        # or stays where it is if that is past its own base
+        h = head(c)
+        if not h or not ((fill ^ (fill + h - 1)) & 0xF000):
+            return fill
+        nxt = (fill & 0xF000) + 0x1000
+        return nxt if nxt <= c[0] else c[0]
     def newbase(c):
+        # ...and a ceiling mover with a head is charged the head as well: the
+        # descending pass bumps it DOWN by less than that (SPEC.md 66.4.3.1,
+        # KERN-MEGA-PLAN 14.185), so this is the most the run can occupy
         B = top
         for d in live:
             if d[0] > c[0] and not ceilmover(d) and d[0] < B:
                 B = d[0]
-        return B - sum(d[1] for d in live if ceilmover(d) and c[0] <= d[0] < B)
+        return B - sum(d[1] + head(d) for d in live
+                       if ceilmover(d) and c[0] <= d[0] < B)
     best, fill = 0, base
     for c in live:
         if c[4] != 0 and not (c[3] & MC_DMA_HI):
-            fill += c[1]                        # a bottom-up mover packs down
+            # a bottom-up mover packs down - where the run will put it, and
+            # the gap a page bump opens is not a run (the compactor's own
+            # walk does not count it, so mem_claim does not compact for it)
+            fill = landing(fill, c) + c[1]
             continue
         at = newbase(c) if ceilmover(c) else c[0]
         if at > fill:
             best = max(best, at - fill)
-        fill = at + c[1]
+        fill = at + c[1] + (head(c) if ceilmover(c) else 0)
     return max(best, top - fill if top > fill else 0)
 
 
@@ -291,6 +309,29 @@ def main():
                  u16(b, 182), u16(b, 114), u16(b, 174), u16(b, 176),
                  "" if not why else "  - stopped at stage %d: %s"
                  % (why, DMA_WHY.get(why, "?"))))
+        # ...AND mem_avail's ANSWER WITH THE BLOCK MOVABLE, CLAIMED (SPEC.md
+        # 66.4.3.1, KERN-MEGA-PLAN 14.185). heapfrag asks it and claims
+        # exactly that before check 14's own ask: until 14.185 the plan had
+        # no page bump and promised the block at F, and the claim was refused
+        # on both kernels - an over-report, the dangerous direction. GRANTED
+        # is the assertion; and with the compactor in, the answer must also
+        # see the move (more than the pinned answer), or a plan that pinned
+        # the block would pass it by under-reporting.
+        dmaap, dmaaw, dmaag = u16(b, 174), u16(b, 176), b[185]
+        dbad = 0
+        if dmaag == 0:
+            print("  14b mem_avail with the block movable: never asked "
+                  "(check 14 stopped first)")
+            dbad = 1
+        else:
+            granted = dmaag == 1
+            sees = dmaaw > dmaap or bool(expect_fail)
+            print("  14b mem_avail with the block movable %dK (pinned %dK): "
+                  "claim of it %s%s   %s"
+                  % (dmaaw, dmaap, "GRANTED" if granted else "REFUSED",
+                     "" if sees else ", and it does not see the move",
+                     "PASS" if granted and sees else "FAIL"))
+            dbad = not (granted and sees)
         print("L0=%dK S=%dK L1=%dK want=%dK  moved=%d told=%d stranger=%d"
               % (u16(b, 6), u16(b, 4), u16(b, 8), u16(b, 10),
                  nmoved, nrel, nbad))
@@ -428,7 +469,7 @@ def main():
             print("  PAINT never opened - the region rows cannot be asked")
             rbad += 1
 
-        bad = over + rbad
+        bad = over + rbad + dbad
         for i, r in enumerate(res):
             want_fail = i in expect_fail
             ok = (r != 0) if want_fail else (r == 0)

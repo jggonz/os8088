@@ -16646,3 +16646,82 @@ ports. 37 of 37 green: `heapcheck`, `mega-heapcheck`, `paintmove`,
 `weavemove`, `loommove`, `mega-weavemove`, `cmemmove`, `ovlmove`, `cpcost`,
 `pathcost`, `fatwpin`, `doswpart`. No kernel byte moved, so no other row can
 see the change.
+
+### 14.185 `mem_avail` plans the PAGE BUMP: a floor mover lands where `mem_cp_dest` puts it, a ceiling mover is charged its head (2026-11-08) - FIXED
+
+**The defect** (14.184's find, SPEC.md 66.4.3.1's second open mismatch, now
+closed): `mem_avail_lvl_x`'s inline `mem_cp_both` packed a movable floor claim
+onto the fill point and never asked `mem_cp_dest`, so a movable `MC_DMA`
+claim whose head would straddle a 64KB page there was planned AT the fill
+point while the run bumps it to the next page's floor. An OVER-report - a
+claimant told N KB sheds its caches on the way to a refusal. Reachable today
+through the two movable `MC_DMA` claims in the tree, the typeface cache
+(`apps/os88type.inc`) and the Audio Player's idle look-ahead, both bottom-up.
+
+**The fix, one arm each** (`kernel/memory.inc`, SPEC.md 66.4.3.1):
+
+- **floor**: `.lo` with no ceiling run pending calls `mem_cp_dest` (DI, the
+  walk's total, banked round it) and the fill point resumes past the
+  destination - the run's own arithmetic, so the plan is the run step for
+  step. The gap the bump opens is NOT measured: `mem_cp_walk` does not
+  measure it either, and `mem_compact` decides on that walk's run, so a hole
+  only it would leave is not one `mem_claim` compacts for.
+- **ceiling**: the brief's proposal was to treat a top-down `MC_DMA` mover as
+  a barrier. **That is not safe**, and the sweep below says so: the block
+  really does slide up, so a floor mover above it that the plan packs down
+  through the gap cannot move in the run (`tools/heapwhatif.py`, *DMA ceiling
+  mover, floor mover over it*: 404K planned as a barrier, 380K delivered).
+  Instead a ceiling mover adds its head to the deferred sum with its size
+  (+31 paragraphs for a DISK one on a `MEMGRAN=16` knob): the descending pass
+  bumps it DOWN by less than that, so the hole measured at its barrier is
+  never more than the pass leaves - a bounded under-report, three
+  instructions with no branch. No top-down `MC_DMA` claim is movable in the
+  tree, so this arm guards the next declarer.
+
+**Checked against a model of the allocator, not only the plan.** A scratch
+sweep (68,615 random page-safe layouts of 2..7 claims, mixed doors, 40% with
+an all-head `MC_DMA`) compared each spelling with the most `mem_compact` can
+deliver - the layout as it stands, the ascending pass's run, the descending
+pass's, and the pair - each pass modelled with `mem_cp_dest`'s bump: the old
+plan read OVER on 1,416 (worst +38.8K), the barrier spelling on 146 (worst
++23.5K), this one on none; a second seed 1,438 / 159 / 0.
+
+**The red/green row: `heapcheck`'s 14b** (heapfrag.asm, heapcheck.py, SPEC.md
+66.8). Before check 14's own ask, heapfrag asks `OSAPI_MEM_AVAIL` with the
+block alone movable (`hf_dmaaw`, as 14.184 recorded it), claims exactly that
+and frees it, recording the outcome in `hf_dmaag` (bss +185, the free byte
+beside `hf_dmawhy`); the harness asserts GRANTED and that the answer exceeds
+the pinned one (a plan that pinned the block would pass "granted" by
+under-reporting). `hf_n` stays at 18, so none of the nine rows that open
+HEAPFRAG sees a new row. Measured:
+
+| kernel | base (14.184 tree) | fixed |
+|---|---|---|
+| kern_big, MartyPC 5150 CGA | 100K promised (95K pinned), REFUSED - 14b alone red | 97K, GRANTED, 1..18 and R1..R4 green |
+| kern_mega, 1MB Bochs | 48K (43K pinned), REFUSED - 14b alone red | 45K, GRANTED, all green |
+
+And 14 still goes red alone with `mem_cp_dest`'s bump amputated (`jz .out`
+made `jmp .out`, kern_big): the block at 4F20h, offset F20h, stage 11 - with
+14b GREEN, the plan agreeing with the amputated run, which is 14b's question.
+
+**Bytes** (`tools/os88rdiff.py kernel HEAD .`, `kernsize`): `mem_avail_lvl_p`
+107 -> 125, **+18 bytes of `.cold`, resident, no rung crossed**, on kern_big
+(37,566 -> 37,584) and kern_mega (48,393 -> 48,411; resident 62,976 of
+68,096, unchanged); kern_small 0 (no walk there). `make budget-check` passes
+on all four budgeted kernels. HEAPFRAG 2,650 -> 2,677 bytes (never shipped), its bss unchanged at 188.
+
+**Cycles, counted on MartyPC** (a scratch script: a breakpoint at
+`mem_avail_lvl_p` and its return, heapfrag's region-suite key driving three
+calls, the same six-claim map with four movable floor claims, both kernels):
+35,393 / 33,246 / 33,257 before, 36,373 / 34,232 / 34,149 after - **~240
+cycles (50 us at 4.77MHz) per movable floor claim**, ~3% of a 7 ms call,
+bounded by `MEM_MAX` of them (< 1.6 ms) against the walk's own O(MEM_MAX^2)
+`mem_cp_next` scans. A guarded call (test the head inline, call only for a
+constrained claim) would buy ~180 of the 240 for 8 more bytes; not taken -
+`mem_avail` is a sizing question, not a per-frame one.
+
+**Models moved with it**: `tools/heapmap.py` gains `page_dest()` and its
+`compacted()` bumps both directions (it modelled `mem_cp_walk` without the
+bump); `tools/heapwhatif.py`'s `true_combined`, `after_the_pass` and `exact2`
+bump and charge the head, with three DMA cases; `tests/heapcheck.py`'s
+`both_passes()` does the same from the spec.
