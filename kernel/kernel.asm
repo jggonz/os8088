@@ -6376,6 +6376,7 @@ SEG_WINL    equ 10              ; (and refused below: SPEC.md 124.31.3)
 SEG_LEND    equ 11              ; kern_mega's lent stack (124.31.2), refused below too
 SEG_HND     equ 12              ; kern_mega's handle descriptor (124.31.3), and too
 SEG_TYPE    equ 13              ; kern_mega's code/data retype of a window (124.31.6), and too
+SEG_LOW     equ 14              ; kern_mega's own region down to conventional memory (50.6.11), and too
 section .cold
 osapi_seg:                      ; (api_rxc's far body: DS = KDATA)
 %ifdef KERN_MEGA

@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "b1d48f7a750aa67e4aa18dcd681357cef392ee4318b5b461ae7324aaaa45b562",
+  "fingerprint": "21ca0722f0583976b9c5107db252d61c76c5b108f682ffb577a66077f26c121b",
   "version": 12
  },
  "PKG_FMT": {
-  "fingerprint": "b89d4ba965edc87688bc5e965ee07429382c9542d9a2f7fef309251f30c16041",
+  "fingerprint": "b17dfe3075902ee596997aa22421a316ed306324db1f1e5543fbc30d65101bd8",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -1855,6 +1855,20 @@
    "from": 12,
    "guard": "DRV_VER",
    "reason": "MEGA-HUGE-PLAN F8 (KERN-MEGA-PLAN 14.174): OSAPI_MEM_REGROW of a huge claim now regrows a bridge, a pool run the pool cannot hold, and a conventional run with its windows, keeping the claim's shape - a contract widened (CF=1 cases now granted), nothing built before stops running, no PKG_FMT bump",
+   "to": 12
+  },
+  {
+   "fingerprint": "b17dfe3075902ee596997aa22421a316ed306324db1f1e5543fbc30d65101bd8",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "merge of mega-fsxpar (KERN-MEGA-PLAN 14.178): OSAPI_SEG verb SEG_LOW (14) added past SEG_TYPE on top of F8's regrow - an addition, every older verb as it was, real-mode kernels refuse it as an unknown verb; no PKG_FMT or DRV_VER bump",
+   "to": 10
+  },
+  {
+   "fingerprint": "21ca0722f0583976b9c5107db252d61c76c5b108f682ffb577a66077f26c121b",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "merge of mega-fsxpar (KERN-MEGA-PLAN 14.178): OSAPI_SEG verb SEG_LOW (14) added past SEG_TYPE on top of F8's regrow - an addition, every older verb as it was, real-mode kernels refuse it as an unknown verb; no PKG_FMT or DRV_VER bump",
    "to": 12
   }
  ]

@@ -251,15 +251,24 @@ def run(arm, tmp, syms):
             rbase = m._desc(sel())[0]
             cv0 = rw("vb_cvseg")
             cbase = m._desc(cv0)[0] if cv0 else 0
-            ok(rbase >= 0x100000 and cbase >= 0x100000 and rb("vb_cvon"),
-               "W5: the region above 1MB (%06X) and the title picture too "
-               "(%06X), up in the window" % (rbase, cbase))
+            ok(rbase < 0xA0000 and cbase >= 0x100000 and rb("vb_cvon"),
+               "W5: the title picture above 1MB (%06X), up in the window - "
+               "and the region CONVENTIONAL from the entry (%06X: SEG_LOW, "
+               "KERN-MEGA-PLAN 14.178)" % (cbase, rbase))
         key("Enter")
         until(lambda: rb("vb_ready") == 1, "the play")
         if arm == "play":
-            ok(rw("vb_cvseg") == cv0 and rb("vb_cvon"),
-               "W5: the picture KEPT through the play - it costs the play no "
-               "conventional byte")
+            # KERN-MEGA-PLAN 14.178: a picture above 1MB is the HOLD's KB
+            # until the hold is sized - given back at the first play's door
+            # when a hold opened there, kept through every play after
+            if rb("vb_hon"):
+                ok(rw("vb_cvseg") == 0,
+                   "14.178: the picture given back at the first play's door "
+                   "- its pool KB the hold's, sized after it")
+            else:
+                ok(rw("vb_cvseg") == cv0 and rb("vb_cvon"),
+                   "W5: the picture KEPT through the play (no hold) - it "
+                   "costs the play no conventional byte")
         if arm == "card":
             return card(m, S, rb, rw, until, key, bd, tmp)
         if arm in ("hold", "ems"):
@@ -322,20 +331,27 @@ def run(arm, tmp, syms):
         key("Escape")
         until(lambda: rb("vb_ready") == 0, "Esc to the desktop", 60)
         os88marty.ui_done(m)
-        ok(rb("vb_cvback") == 1 and rb("vb_cvon") == 1,
-           "W5: the window is the picture as the play returns - no text "
-           "layout first")
+        ok(rb("vb_cvon") == 1,
+           "W5: the window is the picture again as the play returns")
         ok(rw("vb_err") == 0 and rw("vb_rclm") == 0 and rw("vb_ring") == 0,
            "4. back on the desktop: no error, the rings and the card's "
            "ring given back")
         rmode[0] = 0
+        cv1 = rw("vb_cvseg")
         key("Enter")
         until(lambda: rb("vb_ready") == 1 and rb("vb_tplay") == 1,
               "the second play's title")
         ok(rmode[0] == 1 and rw("vb_err") == 0,
            "4. a SECOND play reaches its title, real mode again")
+        ok(cv1 and rw("vb_cvseg") == cv1 and rb("vb_cvon"),
+           "W5: the picture KEPT through the second play, the hold sized "
+           "already - it costs the play no conventional byte")
         key("Escape")
         until(lambda: rb("vb_ready") == 0, "Esc again", 60)
+        os88marty.ui_done(m)
+        ok(rb("vb_cvback") == 1 and rb("vb_cvon") == 1,
+           "W5: the window is the picture as that play returns - no text "
+           "layout first")
         ok(not faults(m, S), "5. no kern_mega FAULT or CLOSED")
 
 

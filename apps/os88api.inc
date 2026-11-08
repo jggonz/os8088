@@ -2344,6 +2344,27 @@ OS88_HUGE_INCR      equ 0x1000
                                  ;          124.26.12). CF=1, AX = 4 for
                                  ;          anything else; CF=1 on a
                                  ;          real-mode kernel
+                                 ; SEG_LOW  DX = YOUR OWN DS, AX = a
+                                 ;          relocation proc of yours
+                                 ;          (OSAPI_MEM_MOVABLE's AX) or 0 ->
+                                 ;          your REGION, when kern_mega put
+                                 ;          it above 1MB (OS88_HIGH), moved
+                                 ;          into a conventional claim at the
+                                 ;          arena's top, every selector of it
+                                 ;          KEPT (only bases change: reload
+                                 ;          ES yourself; DS and CS reload as
+                                 ;          the cell returns) and its pool
+                                 ;          block freed; movable with AX's
+                                 ;          proc, pinned with 0. Already
+                                 ;          conventional: CF=0, nothing done.
+                                 ;          For a real-mode bracket's package
+                                 ;          (SPEC.md 53.2.3): asked BEFORE its
+                                 ;          extended memory is sized, the
+                                 ;          pool has the region's KB back and
+                                 ;          the bracket copies nothing. CF=1
+                                 ;          AX = 1 no conventional room, 3
+                                 ;          not your region; CF=1 on a real-
+                                 ;          mode kernel (ask under CPU_F_PM)
                                  ; out CF=0 and the answer; CF=1 refused (no
                                  ; LDT entry free, or SEG_REAL's none),
                                  ; AX = the reason: 1 no LDT entry or window
@@ -2367,6 +2388,7 @@ SEG_WINL    equ 10
 SEG_LEND    equ 11
 SEG_HND     equ 12
 SEG_TYPE    equ 13
+SEG_LOW     equ 14
 
 ; OSAPI_MEM_P - THE CLAIM HEAP IN PARAGRAPHS (SPEC.md 50.2.1, 50.3.7). Every
 ; claim is rounded to the heap's GRANULE - 512 bytes today, and the door says

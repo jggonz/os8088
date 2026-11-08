@@ -412,7 +412,8 @@ vp_entry:
     test ah, CPU_F_PM               ; kern_mega: neither LOADALL nor a loaded
     jz .rmode                       ; base exists in protected mode - the
     mov byte [vp_pm], 1             ; hold and the bank are read in place
-.rmode:                             ; through SELECTORS (98.3.18.16)
+    call vp_low                     ; through SELECTORS (98.3.18.16); and our
+.rmode:                             ; region conventional (KERN-MEGA-PLAN 14.178)
 %else
 %endif
     call vp_layfit                  ; THE WINDOW'S SIZE is the layout's, for a
@@ -5268,6 +5269,9 @@ vp_xopen:
 .ok:                                ; either form as code above it moved)
     cmp byte [vp_resid], 0          ; RESIDENT: read whole into its blocks
     jne .out
+%ifdef PKG_MEGA
+    call vp_low                     ; (the entry's, again before the pool is
+%endif                              ; sized when the entry's was refused)
     call vp_xcaps                   ; no pool (every 8088): nothing more is
     or ax, ax                       ; asked, not even the directory - unless
     jnz .sz                         ; EXPANDED MEMORY answers (98.3.18.6)
@@ -11973,6 +11977,31 @@ vp_sstart:
 %endif
 
 %ifdef PKG_MEGA
+; vp_low - the arm under CPU_F_PM ([vp_pm]): OUR REGION, which OS88_HIGH put
+; above 1MB, brought DOWN to conventional memory for good (OSAPI_SEG
+; SEG_LOW, KERN-MEGA-PLAN 14.178) - at the entry, before a window exists,
+; and again before the pool is sized (vp_xopen) if the entry was refused.
+; A real-mode play copies the region into the heap anyway, so above 1MB its
+; pool block only sat idle beside the copy - 64 KB the bank never had,
+; where kern_big's region was never in its pool. Every register kept
+vp_low:
+    cmp byte [vp_pm], 0
+    je .o
+    push ax
+    push bx
+    push dx
+    mov dx, ds
+    mov ax, vp_reloc
+    mov bl, SEG_LOW
+    call OSAPI_SEG
+    pop dx
+    pop bx
+    pop ax
+.o:
+    ret
+%endif
+
+%ifdef PKG_MEGA
 ; vp_rbhold - THE REAL-MODE BRACKET's ROOM (SPEC.md 98.3.24.2), in protected
 ; mode: VP_RBRKB claimed TOP-DOWN and conventional (the DMA door, CX = 0)
 ; before the ring sizes itself, and vp_rbfree's after it is claimed - so the
@@ -11990,7 +12019,15 @@ vp_rbhold:
     push ax
     push cx
     push dx
+    push bx
+    mov dx, ds                      ; OUR REGION brought down already (SEG_LOW,
+    mov bl, SEG_REAL                ; vp_xopen - KERN-MEGA-PLAN 14.178): the
+    call OSAPI_SEG                  ; bracket copies nothing, and the room is
+    pop bx                          ; the service area's and the drivers'
+    mov ax, VP_RBRKB - 64
+    jnc .h
     mov ax, VP_RBRKB
+.h:
     xor cx, cx
     call OSAPI_MEM_CLAIM_DMA_HI
     jc .n

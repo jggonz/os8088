@@ -101016,6 +101016,7 @@ verb:
 | `SEG_LEND` 11 | DX = the real paragraph of a claim of the caller's below 1MB (`SEG_REAL`'s answer for its base), CX = the top of a stack in it; or DX = 0 | the stack is LENT: a BIOS `int 10h`-`1Fh` made on a stack that is not `LOW_SEG`'s runs on it (§124.31.2), entered through the claim's selector in protected mode and its paragraph in real mode - the GDT's identity map stops at `.cold`, so no selector is both. The last lender's is the one used; DX = 0 takes the caller's back, and its instance's end does. CF = 1 when DX is no live claim's base |
 | `SEG_HND` 12 | SI = a selector based in a claim or a pool block, AX = a paragraph offset into it, CX = bytes (0 = 64KB), DX = a HANDLE descriptor to re-aim, or 0 for a new one; SI = 0 frees DX | DX = a handle descriptor based there, its reach CX clipped at that block's end (§124.31.3) |
 | `SEG_TYPE` 13 | DX = a WINDOW of the caller's (made by `SEG_WIN`, `SEG_WINL` or `SEG_AT`) or a HANDLE descriptor (`SEG_HND`) based in a block of the caller's own, CX = 0 data / 1 code / 2 code NOT PRESENT; **CX = 3: DX:SI = the caller's `#NP` handler** (0 in DX takes it back) | the descriptor's type set in place, F2h (data, DPL 3) / 9Eh (code, conforming, DPL 0) / 1Ah since KERN-MEGA-PLAN 14.144 (92h / 9Ah / 1Ah before it); base, limit and selector kept (§124.31.6). CF = 1, AX = 4 for anything that is not the caller's own window or handle descriptor (a SUB, a pair, a tile, another's window or handle descriptor, a DX that is no allocator LDT entry). CX = 3 needs only a caller that is somebody (CF = 1, AX = 4 otherwise) |
+| `SEG_LOW` 14 | DX = the caller's OWN DS (its region), AX = a relocation proc of its (`OSAPI_MEM_MOVABLE`'s AX) or 0 | the region, when kern_mega put it above 1MB (`OS88_HIGH`), MOVED into a conventional claim at the arena's top owned by its slot - as a region loaded low is - with every selector KEPT: the bytes copied and every LDT descriptor based inside the old block rebased by the drop, as a pool move rebases them (a window excepted), in one step with interrupts off and `[sch_lock]` held; the claim's mem_sel row made the region's pair, MC_RLOC = AX (movable with a proc, pinned with 0), and the pool block freed (KERN-MEGA-PLAN 14.178). DS and CS read the new base as the cell returns; a caller reloads ES itself. Conventional already: CF = 0 and nothing done. CF = 1, AX = 1 no conventional room, AX = 3 DX is not the caller's own region - nothing moved either way. For a real-mode bracket's package (SPEC.md 53.2.3), asked BEFORE it sizes its extended memory |
 
 **Every real-mode kernel answers what the caller's own arithmetic was** -
 `DX x 16`, `DX`, `DX`, `DX + AX` (`SEG_SUB` and `SEG_SUBC` alike), `DX` for
@@ -101033,6 +101034,9 @@ real-mode caller's next 64KB is its segment + `1000h`, its own sum.
 `SEG_HND`: a real-mode caller's block is its paragraph, which needs no
 descriptor. So is `SEG_TYPE`: a real-mode segment is code or data by how it is used,
 and the caller keeps the segment it has.
+And so is `SEG_LOW`: a real-mode kernel's region is conventional already,
+so a caller asks it only under `CPU_F_PM` (`osapi_segr`'s `ja` refuses
+every verb past `SEG_BWIN`: kern_big and kern_small byte-identical).
 `.mega` alone: 18 bytes, kern_big and kern_small byte-identical.
 
 On kern_mega in protected mode (`mega_segf`, `.mega`):
@@ -107397,6 +107401,24 @@ conventional room without moving the package - and the bracket goes on in
 protected mode with nothing taken, where the bank is never read. No claim is
 pinned for it, and a door that compacted nothing of the caller's is exactly
 as before.
+
+**A region above 1MB is held TWICE for a bracket's life, so a package that
+sizes extended memory brings it down first** (KERN-MEGA-PLAN 14.178). The
+copy below is a conventional claim of the region's size while its pool block
+stands idle above 1MB - and a package that takes "the whole pool" for a hold
+or a bank at its door took it without those KB, which kern_big's XMS never
+had a region in. Measured on 86Box's 286 at 640K + 384K: the Video Battle's
+hold 220 KB of the pool's 300 with its 48 KB region and a 12 KB picture kept
+above 1MB, against kern_big's 316. `OSAPI_SEG` `SEG_LOW` (50.6.11) moves the
+caller's own region into a conventional claim at the arena's top, its
+selectors kept, and frees the pool block: asked BEFORE the package sizes
+its extended memory - both callers ask in their entry proc, before a window
+exists, and again at the door when that was refused - the pool has the KB,
+and the bracket then finds the region conventional and copies nothing (step
+1's `FSXR_ROOM` test of the copy does not arise). The region stays down
+while the package runs - kern_big's arrangement, a window that is open costing
+its region's conventional KB as there - and goes with the instance. The
+Video Battle (126.4.5) and the Video Player's arm (98.3.24.2) ask it.
 
 **What the kernel does, on kern_mega**:
 1. at the door, after every other test: the reasons above, tested NOT in
@@ -208993,6 +209015,40 @@ ring is up to 80 KB smaller for it. +60 bytes of the arm's image (63,832;
 `tests/megarmbext.py`'s player legs are the gate: both plays real on an
 extended desktop, and `FSXR_ROOM` on both without it.
 
+**And the region comes down before the pool is sized** (KERN-MEGA-PLAN
+14.178): the arm's entry proc asks `OSAPI_SEG` `SEG_LOW` (50.6.11, `vp_low`),
+and `vp_xopen` again before it sizes a hold or a bank when that was refused,
+so the 64 KB pool block the region held - idle in
+every real-mode play, whose copy of it was conventional - is the bank's,
+and `vp_rbhold`'s room is the service area's and the drivers' alone (16 KB,
+`VP_RBRKB` - 64) once `SEG_REAL` answers the region conventional. Measured
+on 86Box's 286 with the 37 MB `05-LASTX.V88` (`tests/megapar.py` measures
+the 1.5 MB `08-WILLY.V88`): the bank 6 -> 8 slots at 640K + 384K (kern_big
+10) and 90 -> 92 at 4 MB (kern_big 94). What is left is the kernel's own -
+its fixed area above 1MB, 20 KB more than kern_big's HMA holds, and the
+drivers' images, 15 - and the pool's remainder under a 32 KB slot: 98.3.24.3.
++48 bytes of the arm's image (61,879 -> 61,927); the shipped player byte-identical.
+
+##### 98.3.24.3 What the player holds against kern_big (2026-11-08)
+
+The same machine, both kernels (86Box's `at286_vga_sb_hdd`, the clip on C:,
+read during the play; kern_big with XMEM.DRV, whose pool is extended memory
+less the HMA):
+
+| machine | clip | kern_big bank / ring claim | kern_mega before | kern_mega after |
+|---|---|---|---|---|
+| 640K + 384K | 37 MB | 320 KB (10 slots) / 160 KB, 154.5 KB free | 192 KB (6) / 160, 196.5 free | 256 KB (8) / 160, 196.5 free |
+| 4 MB | 37 MB | 3,008 KB (94) / 160 | 2,880 KB (90) / 160 | 2,944 KB (92) / 160 |
+
+The remaining 64 KB of bank is no program's: the pool kern_mega leaves
+programs is 284 KB at 640K + 384K (299 less SOUND.DRV's 11 and HDD.DRV's 4
+above 1MB) against kern_big's 320, and 284 is 8 whole slots and 28 KB. The
+conventional side holds the same ring on both, with MORE left free on
+kern_mega (its floor is 3.5 KB higher and the bracket's service area and
+low drivers 18 KB, against kern_big's 59.5 KB floor and XMEM.DRV's 2 KB -
+and the region's 64 KB conventional on both). `tests/megapar.py --prog vp`
+is the gate (KERN-MEGA-PLAN 14.178).
+
 ### 98.4 The window: the Preview (wave 6)
 
 **The window IS the Preview** (VIDEO-PLAN 3.3): the file's poster in a
@@ -245315,10 +245371,15 @@ bracket** (SPEC.md 53.2.3).
   (conventional on every kernel) - the resident claim, the rings and their
   packing probe, the hold's bounce, the card's ring - so on kern_mega the
   only claim that goes above 1MB is the title picture, and the region
-  itself; the door leaves the region's room as well (`VB_REGKB`) for the
-  bracket's copy down. A picture above 1MB costs a play nothing and is kept
-  through it (`vb_cvplay`), so the window is the picture again the moment
-  the play returns.
+  itself. **The region comes DOWN in the entry proc** (`vb_low`, `OSAPI_SEG`
+  `SEG_LOW`, KERN-MEGA-PLAN 14.178; asked again by `vb_door` when refused
+  there) before anything is sized, so the hold's pool has its 48 KB and the
+  bracket copies nothing; refused at the door too, it leaves
+  the region's room as well (`VB_REGKB`) for the bracket's copy down, as
+  before. A picture above 1MB is given back at the first play's door, before
+  the hold is sized - kept there it was 12 KB of the hold - and kept through
+  every play after (`vb_cvplay`), so the window is the picture again the
+  moment such a play returns. Measured with the owner's battles (126.4.7).
 - **A card** (W2): SOUND.DRV goes low through the list, and the card's ring
   - conventional, from `OSAPI_MEM_CLAIM_DMA_HI` - is in the swap list; the
   stream runs through `OSAPI_SND_STREAM`'s real-mode twin. On Bochs's SB16
@@ -245328,6 +245389,60 @@ bracket** (SPEC.md 53.2.3).
 `tests/vbtmega.py` on Bochs and, `--emu 86box`, on the mr286 (rows
 `vbtmega`, `vbtmega86`) are the gates. **What it cost** the shipped engine: W1 image 24,337 -> 24,887 (+550),
 bss +69, the packed file +451; W3 +76, +1, +49; W5 +48, +1, +34.
+
+#### 126.4.7 What a battle holds on kern_mega against kern_big (2026-11-08)
+
+The owner's ask: *"Why would it be getting any less, in fsx real, than it
+gets on big?"* Measured on ONE machine, 86Box's `at286_vga_sb_hdd` (the
+mr286, a VGA, an SB 2.0, the battle on an IDE C:), each kernel booted on it
+and the play run to its title, where the hold has filled; kern_big with
+XMEM.DRV, whose pool is extended memory less the HMA. The owner's two real
+battles (not in the tree): `BATTLE.VBT`, a CGA4 battle of 6.3 MB, and the
+VGA battle inside `FF7BATTV-286.O88` (16.0 MB), played by this tree's
+engine. "Rings" is the two conventional clip rings, guards aside:
+
+| battle, machine | kern_big hold / rings | kern_mega before | kern_mega after (14.178) |
+|---|---|---|---|
+| CGA4, 640K + 384K | 316 / 368 (cache) | 220 / 320 | 280 / 320 |
+| CGA4, 2 MB | 956 / 368 (cache) | 860 / 320 | 920 / 320 |
+| CGA4, 4 MB | 3,004 / 368 (cache) | 2,908 / 320 | 2,964 / 320 |
+| VGA, 640K + 384K | 316 / 260 | 224 / 224 | 280 / 224 |
+| VGA, 4 MB | 3,004 / 332 (cache) | 2,912 / 224 | 2,964 / 224 |
+
+Neither kernel holds a whole battle there. **Every KB of the difference,
+640K + 384K, CGA4** (kern_big 684 held, kern_mega 540 before, 600 after):
+
+- **the region, 48 KB of extended memory - FIXED**: above 1MB on kern_mega
+  (`OS88_HIGH`) and copied into conventional memory for every real-mode
+  bracket, so its pool block sat idle beside the copy. `SEG_LOW` at the
+  door (126.4.5) brings it down before the hold is sized;
+- **the title picture, 12 KB of extended memory (8 in the VGA battle) -
+  FIXED**: kept above 1MB through the first play too (126.4.5);
+- **kern_mega's own above 1MB, 36 KB of extended memory - the kernel's**:
+  its fixed area (`.cold` 47.6 KB, `.mega` 24.1, the tables and the park's
+  scratch: 84 KB) against kern_big's HMA (64 KB, `.cold` and SOUND.DRV in
+  it, which XMS never counted), and SOUND.DRV's and HDD.DRV's images in the
+  pool (15 KB). `tests/megapar.py` holds the hold to every KB the kernel
+  leaves programs;
+- **the clip cache, 16 KB of conventional memory (72 in the VGA battle at
+  4 MB) - OPEN**: kern_big's hold is a CACHE of whole clips played in place
+  (126.4.6) and its idle loop lives in it; kern_mega's is the copying hold
+  (`vb_ctry` refuses the cache under `[vb_pmd]`: the in-place check needs
+  real mode, and a token is the block's address only while the pool leaves
+  it where it is), so the idle loop is in the resident claim. KERN-MEGA-PLAN
+  14.178 has the proposal;
+- **the bracket's own conventional memory, 18 KB - the kernel's**: its
+  service area (3 KB) and the low copies of HDD.DRV (4) and SOUND.DRV (11),
+  where kern_big runs both drivers from the HMA (53.2.3);
+- **the rest, 14 KB of conventional memory**: kern_mega's floor 3.5 KB
+  higher (63.0 against 59.5 with XMEM.DRV's `.cold` in the HMA), the
+  directory read-ahead (9 KB) the door's walk rebuilds inside the room the
+  rings leave (`VB_RKEEPM`, 24 KB, against the 18 the door takes), and 4 KB
+  units, less kern_big's XMEM.DRV and its 2 KB claim.
+
+`tests/megapar.py --prog vb` (row `megaparvb`) is the gate: both kernels on
+that machine, the demo bundle or the owner's (`$OS88_VBT_TARGET`,
+`$OS88_VBT_PKG`).
 
 ### 126.5 The band
 
