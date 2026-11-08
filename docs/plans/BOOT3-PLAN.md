@@ -1,7 +1,8 @@
 # `.boot3` — boot-only code that rides in KERNEL.SYS
 
 > **Status: BEING BUILT. Waves 0 and 1 are built (2026-11-08, sections 16.4
-> and 16.5); waves 2-5 and item E are not.** Written 2026-11-08 at the owner's
+> and 16.5), and so are item E with the big review's canary fix (BR-1) and
+> boot-7 (section 16.6); waves 2-5 are not.** Written 2026-11-08 at the owner's
 > request, after the big review's size ledger asked for a 14th blob sector
 > and the owner refused it (docs/reports/BIG-REVIEW-2026-11-08.md section 7,
 > docs/reports/big-review-2026-11-08/synth/phase1.md "Both boot-time homes
@@ -464,10 +465,13 @@ is no emuk tree here, so its figures are PREDICTED.
 
 ## 7. The canary, BLOBSUM, and integrity
 
-- **KSIG_OFF stays put through wave 3.** It is 4,096 on kern_big, inside the
-  4,608-byte plain head, at file sector 21. `.boot3` appends at the far end,
-  and BOOT2_SECS does not change before wave 4. `t_canary` is unchanged by
-  waves 0-3 and 5, and so is BR-1's fix.
+- **KSIG_OFF stays put through wave 3.** ~~It is 4,096 on kern_big, inside the
+  4,608-byte plain head, at file sector 21.~~ **(build, 2026-11-08)** BR-1's
+  fix moved it, with item E: it is **22,528** on kern_big, file sector 57, in
+  the packed tail (section 16.6). `.boot3` appends at the far end, and
+  BOOT2_SECS does not change before wave 4, so waves 2-3 and 5 leave the file
+  sector where it is; `t_canary` re-walks the loader's runs on every build
+  and the neighbour-sum test covers the sector's changing contents.
 - **The canary moves when BOOT2_SECS falls, on every kernel.** That is wave 4:
   13 → 7 on kern_big, 11 → 7 on kern_small, 14 → 7 or 8 on kern_emu and
   kern_mega. BR-1's fix (1) puts KSIG_OFF at 22,528 and was checked at blob
@@ -598,6 +602,9 @@ forbidden, and boot-4's audit (phase1.md WP6) is the check either way.
 | BR-1's track-bounded head | independent: the tick goes after BR-1's `pop word [b2_runmax]`, outside the widening block, so `.rerun`'s one-shot guarantee is untouched | interacts: a 7-sector blob makes the 360KB/720KB head cross a track (one call more there) and stops it crossing on 1.2MB/1.44MB (one call fewer) |
 | NOKZIP | not applicable: the SPL_RESIDENT gate stays as it is | the same |
 | rows | `splashbar`, `splashspin`, `kzboot`, `canary` | section 13's whole wave-4 list |
+
+**Built (build, 2026-11-08)** with BR-1 and boot-7, section 16.6: 8 bytes,
+after BR-1's `pop`, inside the same `%ifndef BOOT_NOSPLASH`.
 
 What each buys before the bar is section 10's table. In short (PREDICTED):
 item E shows the bar 4 to 18 sectors and one int 13h call sooner on every
@@ -1820,4 +1827,126 @@ PREDICTED and not acted on.
     ROM bytes, `RT_HASB3` = 1).
 11. **`kernsize`'s baseline was not re-blessed**: it was stale at the
     starting commit already, and blessing is a size pass's act.
+
+### 16.6 BR-1, boot-7 and item E as built (build, 2026-11-08)
+
+The three changes in `boot/boot2.asm` and their gates, as one commit:
+BR-1 (docs/reports/big-review-2026-11-08/followup-canary.md, synth/bugs.md
+BR-1), boot-7 (areas/boot.md) and item E (section 8). Host checks only
+(CLAUDE.md's Testing rule): no emulator ran, no row was run but the fast
+tier inside `make` and the host scripts named below.
+
+**What moved.**
+
+- **The canary, part 1**: `KSIG_OFF` 4,096 -> **22,528** (the Makefile and
+  `boot2.asm`; the Makefile's arms make it 23,552 on kern_small and 22,016 on
+  kern_emu, kern_mega and a knob build), **file sector 57** on every kernel,
+  in the packed tail. Under KZIP the sum reads `mov si, KSIG_OFF +
+  KZ_RPARA*16` (40,960 on kern_big, 34,304 on kern_small, 48,128 on
+  kern_mega at this build) and the `%if KSIG_OFF >= KZ_HEADSEC*512` ES arm is
+  gone. Three `%error`s fence it: the sector in the tail, inside the
+  handoff's 64KB, and inside `KZ_SECS`; each was made to fire by hand.
+- **The canary, part 2**: the plain head is read at the TRACK bound
+  (`mov ax,[b2_spt] / xchg ax,[b2_runmax] / push ax` ... `pop word
+  [b2_runmax]`, 12 bytes, under `%ifndef TRACK_RUN`).
+- **Item E**: `xor ax,ax / mov dx, KZ_SECS-KZ_HEADSEC / call spl_tick` after
+  the pop, inside `%ifndef BOOT_NOSPLASH` (8 bytes).
+- **boot-7**: stage 2's copy of the diskette parameter table and its
+  `DPT_AT` equate are deleted (41 bytes); stage 1's is the one copy.
+- **`t_canary` rewritten** to walk the loader's own runs per kernel (blob,
+  `KZ_HEADSEC`, R out of each kernel.kz.json; the head at the track, the tail
+  restarting behind it, the DMA page), and to find the ARMED sector by the
+  signature in each disk's own boot sector rather than by the Makefile's
+  arithmetic. **Broken on purpose**: with `KSIG_OFF` back at 4,096 (the
+  Makefile and `boot2.asm`) against the starting commit's images, which are
+  armed at file sector 21, it is red on all six system images - the four
+  9-sector ones because their run starts after the flip, the 1.2MB and
+  1.44MB ones because sector 21 is in the head, which no longer crosses -
+  and on both kern_mega images; restored, it is green: LBA 71, 71, 86, 90, 69,
+  69, the follow-up's figures. Against a stale tree (sources at 22,528,
+  images armed at 21) it is red naming the boot sector's signature.
+- **`t_blobruns`' stage-2 model reads the head at the track**, and its STAGE2
+  ratchet moves one call on four disks, with the reason beside it: 1.2MB 8 ->
+  9, 1.44MB 7 -> 8, small360 and small720 7 -> 8; 360KB and 720KB 11
+  unchanged (the head is one track there). PREDICTED, as BR-1 priced it.
+- Records: SPEC.md 2.9.8, 2.9.13.1, 2.9.13.3 (retitled: the run-start rule
+  replaces "the canary is unmoved"), 2.9.14, 15, 18.93.1 (file sector 57,
+  the run-start rule, the blast radius as READS), 18.93.2's survey sentence;
+  docs/KERNEL-MEMORY.md; docs/FIELD-NOTES.md 31 and a new **68** (the Pravetz
+  report: what is known and what is not); `tests/rdiag.asm`'s header and
+  docs/MARTYPC-DEBUG.md's clone-BIOS row (rdiag360 no longer tests a
+  cylinder run); areas/boot.md's "write" claim; `tools/os88intguide.py`'s
+  anchor on boot2.asm's `DPT_AT` (now on boot.asm's vector store; its
+  `--selfcheck` and `os88ladder --selfcheck` both pass).
+
+**What was measured** (each tree's maps and kernel.kz.json, against the
+starting commit built in a worktree at the same commit count):
+
+| kernel | resident | `.boot2` in the shipped KZIP build (map) | `.boot2` as kernsize prints it | `.ovl` | `.boot3` | KERNEL.SYS |
+|---|---:|---|---|---:|---:|---|
+| kern_big | 96,768, +0 | 6,148 -> **6,127** (-21) of 6,656, 529 free | 5,974 -> 5,933 (-41) | 5,119 | 1,042 | 85,648 (168 sectors), +0 |
+| kern_emu | 96,768, +0 | 6,265 -> **6,244** (-21) of 7,168 | - | 5,119 | 1,042 | 86,304, +0 |
+| kern_small | 58,880, +0 | 3,495 -> **3,463** (-32) of 5,632 | 3,310 -> 3,269 (-41) | 1,474 | 1,441 | 55,408 (109 sectors), +0 |
+| kern_mega | 62,976 (MEGA_RESIDENT), +0 | 5,887 -> **5,866** (-21) of 7,168 | 5,713 -> 5,672 (-41) | 5,118 | 1,010 | 116,832 (229 sectors), +0 |
+
+By encoding the parts are -41 (boot-7), +12 (part 2), +8 (item E) and, on
+kern_small only, -11 (part 1's arm), which is what the maps show. Guard 5's
+headroom, the boot arena and every `kernsize` line but `boot2`'s are
+unchanged on every kernel.
+
+**What was proven byte-identical, at one commit** (the starting commit in a
+worktree under the scratchpad, `make`, `make mega` and `make emu`, against
+this tree before committing): every section of `kernel-full.bin` but
+`.boot2` - `.text`, `.ovl`, `.vga`, `.cold`, `.boot3`, `.mega` and every
+module section - on all four kernels (the blob is the last thing in
+`.boot2` and nothing outside it names a label past `boot2_entry`; `b2_cylok`'s
+reader, `ovl_fdd_apply`, is in the blob). **KERNEL.SYS is identical past its
+blob** on all four, so the packed stream did not move a byte and KERNEL.SYS
+keeps its length. Of the shipped images, every apps, category, media, WIN16
+and ARCADE disk is identical; the six system disks differ (the blob and the
+boot sector's KSIG/BLOBSUM), `util360.img` differs only in `SYSCHECK.O88`
+(the manifest of kern_big's system disk, section 16.4's note), and
+`mega.img`/`mega120.img`/`emu.img` differ as their kernels' blobs do. The
+boot sectors and `boothd.bin` (KZ_HD moved 21 bytes down) differ, as they
+must.
+
+**Deviations.**
+
+1. **".rerun skips the head bound" needs no code.** The xchg/pop form puts
+   back exactly what was in `[b2_runmax]`, which on `.rerun`'s second pass is
+   the track, so the pass widens nothing and stays one-shot without a guard
+   or a skip. One behaviour does change: a head read that exhausts its three
+   attempts is now at the track bound, so `read_run` halts with "Disk error"
+   instead of jumping to `.rerun` - on an 8088 it used to get a second set of
+   attempts at the track bound, which is what the first set now is.
+2. **Part 2's three instructions are under `%ifndef TRACK_RUN`**, where the
+   bound is the track already: 0 on every shipped kernel.
+3. **The break-on-purpose went red on six images, not four**: once the head
+   is track-bounded a canary in the head never crosses, so sector 21 is also
+   inert on the 1.2MB and 1.44MB disks under this loader. The four the plan
+   named are the ones the OLD loader left inert.
+4. **`t_canary` is an independent reader in a second way** the plan did not
+   ask for: it reads the signature out of each disk's boot sector, so it
+   walks the sector the build armed. kern_mega's images are walked
+   model-only when present (`make mega` is on demand, so a tree that has run
+   `make` since holds mega images armed for an older KSIG_OFF).
+5. **rdiag was not given a cylinder bound** behind a define; its texts now
+   say it no longer tests a cylinder run, and docs/MARTYPC-DEBUG.md points at
+   the real kernel's `boot_cylrun`/`b2_cylok` instead. Undone, and recorded.
+6. **No new fast row**: the canary row (`canary`) and blobruns carry it.
+
+**Found on the way.** `kernsize`'s `boot2` figure is the **NOKZIP** arm: it
+assembles without `-DKZIP`, so it leaves out `kz_all`, `kz_expand`,
+`kz_hd` and the head loop - 194 bytes on kern_big at this build (6,127 in the
+map, 5,933 printed). Every "free in the blob" figure this plan quotes from
+`kernsize` is that much too generous; section 16.5's `.boot2` column is
+kernsize's. Passing the KZ numbers (`python3 tools/kernsize.py -DKZIP
+-DKZ_SECS=155 -DKZ_RPARA=1152 -DKZ_HEADSEC=9 -DKZ_NBLK=2`) prints the
+shipped 6,127. Not fixed here.
+
+**Rows to name** for the single final pass: `canary`, `blobruns` (fast,
+both run inside `make`); `kzboot`, `kzboot-off`, `cylrun`, `splashbar`,
+`splashspin`, `pravetzboot` (to be extended per FIELD-NOTES 68), `v20boot`,
+`smallboot`, `hdboot`, `install`, `blobsum`, `fddpage`, `megacz` (soak);
+`bootsmoke`, `small128` (full).
 

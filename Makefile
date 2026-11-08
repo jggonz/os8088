@@ -896,12 +896,11 @@ endif
 # boundary and only goes wrong after it, so a canary in a run's FIRST half is
 # loaded correctly on exactly the machine it exists to catch.
 #
-# File sector 36 crosses in all three shipped geometries - 360KB (data at LBA
-# 12), 720KB (LBA 14) and 1.44MB (LBA 33) - and sits in the middle of the common
-# band 33..38, so it keeps three sectors of margin if a BPB ever moves. It is
-# inside the first 64KB, so the compare reuses the ES the handoff already loads,
-# and the word is the same for every geometry because KERNEL.SYS is one file.
-# tests/suite.py's `canary` row is what keeps all of that true.
+# It is FILE SECTOR 57 today, on every kernel - KSIG_OFF below, whose last
+# paragraph says why - inside the 64KB the handoff's ES already names, and the
+# sum is the same for every geometry because KERNEL.SYS is one file.
+# tests/suite.py's `canary` row is what keeps all of that true, walking the
+# runs the loader really cuts on every shipped system image.
 # Stage 2's size, read from the kernel's own constant so the two cannot
 # disagree (SPEC.md 2.9). The sector needs it to know how many sectors to
 # fetch before anything has told it; kernel.asm asserts that stage 2 fits.
@@ -1018,7 +1017,25 @@ BOOT2_PAD  := $(shell echo $$(( $(BOOT2_SECS) * 512 )))
 # beside the knob's below takes the sector back off. Kernel size pass 14 took
 # kern_big to THIRTEEN for VESA.DRV's attach: 4096, memory sector 8, file sector 8 + 13 = 21 - and kern_small's
 # block takes two sectors back off now, so it is still eleven and 5120.
-KSIG_OFF := 4096
+#
+# **AND THE RULE WAS ABOUT THE RUN ALL ALONG, which is what moved it to FILE
+# SECTOR 57** (the big review's BR-1, 2026-11-08; SPEC.md 18.93.1). "In a
+# run's second half" assumes runs start where the geometry says; under KZIP
+# (the default since 2026-09-05) stage 2 restarts them at `.text` - the plain
+# head is read in runs of its own - and again at `.text` + KZ_HEADSEC, where
+# the packed tail lands R paragraphs up. On a 9-sector disk file sector 21 is
+# in the head-1 half of cylinder 1 and every run containing it began after
+# that cylinder's flip, at any blob length: the canary was INERT on the 360KB
+# and 720KB system disks of kern_big and kern_small for two months, and
+# t_canary, walking runs from the data area, passed it. 22528 is memory sector
+# 44, file sector 44 + 13 = 57, in the packed tail, and lands at LBA 71, 71,
+# 86, 90, 69 and 69 on the six system disks - past the flip of a run that
+# began before it on every one. Its memory address under KZIP is KSIG_OFF + R
+# (boot/boot2.asm), so the segment bump that the head/tail split once needed
+# is gone. kern_small (+1024 below) is 23552 and kern_mega and the knob arms
+# (-512) 22016: file sector 57 everywhere. t_canary now models the loader's
+# own cuts - head split, tail restart, the DMA page - per kernel.
+KSIG_OFF := 22528
 #
 # A PAYLOAD SHORTER THAN THE OFFSET DEFINES NO KSIG AT ALL, and that is the
 # whole of this line's second job. It used to answer 0, and a fabricated zero is

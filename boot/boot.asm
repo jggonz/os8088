@@ -305,7 +305,7 @@ entry:
     ; FDC may touch on a track. THE IBM PC AND XT ROMS SAY 8, from the
     ; 8-sector diskettes of DOS 1.x, and a 360KB disk has NINE.
     ;
-    ; Stage 2 has patched this since SPEC.md 18.92 and that was enough for as
+    ; Stage 2 patched this from SPEC.md 18.92 on, and that was enough for as
     ; long as this sector read FOUR sectors: LBA 12 on a 360KB volume is
     ; cylinder 0, head 1, sector 4, so a four-sector run ends at sector 7 and
     ; never meets EOT. SPEC.md 2.9.6 made it THIRTEEN, the first run became
@@ -316,8 +316,9 @@ entry:
     ;
     ; The machine's own table is COPIED and one byte patched: the step rate,
     ; head load/unload, motor timings and gap lengths in it belong to these
-    ; drives and are not ours to guess. Stage 2 still does the same thing to
-    ; the same address, which is now idempotent rather than necessary.
+    ; drives and are not ours to guess. This is the ONLY copy: stage 2 kept a
+    ; second one, idempotent once this ran first, until the big review's
+    ; boot-7 deleted it (SPEC.md 2.9.8).
     xor ax, ax
     mov es, ax                  ; ES = 0 for the vector, and outside the knob
                                 ; below because the reads that follow want it

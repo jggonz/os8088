@@ -141,8 +141,15 @@ first mount), "boot sector" is stage 1 or `boothd.asm` (not RAM at all).
   int 1Eh EOT patch; on a 286 it is reachable once the user ticks Cylinder,
   SPEC.md 31.14): every later cylinder's head-1 half loads wrong, the canary
   passes, `[es:0x0004]` is written (`boot2.asm` 467), `dsk_cylrun` becomes 1
-  (`disk.inc` 5343-5346) and every multi-sector **write** for the session
-  crosses heads on a BIOS that flips at the wrong sector.
+  (`disk.inc` 5343-5346) and every crossing multi-sector **read** for the
+  session returns the other head's sectors on a BIOS that flips at the wrong
+  sector - and a FAT or directory sector read wrong is then rewritten.
+  (Corrected (follow-up, 2026-11-08): this said "write"; cylinder runs are
+  reads only, SPEC.md 18.91.3. The date is corrected too: on the shipped KZIP
+  kernel the canary has been inert on the 9-sector disks since 2026-09-05,
+  and the 12 -> 13 step broke only the `NOKZIP=1` arm,
+  `../followup-canary.md` section 3. Fixed (build, 2026-11-08):
+  docs/plans/BOOT3-PLAN.md section 16.6.)
 
 **Recommendation.** Re-derive the band under the real partition (runs start at
 `data + BOOT2_SECS`, cylinder-bounded). Over all six shipped system images and
@@ -288,6 +295,8 @@ The sector has **7 bytes free** (last non-zero byte at 496 of 504), not the 23
 or 25 its comments claim.
 
 ### boot-7 (size, MEDIUM, now) Stage 2's copy of the DPT patch is dead, in a blob with four bytes free
+
+**Fixed (build, 2026-11-08)**: the block and stage 2's `DPT_AT` are deleted, -41 blob on every kernel (docs/plans/BOOT3-PLAN.md 16.6).
 
 **Evidence.** `boot.asm` 300-334 patches int 1Eh before stage 1's first
 multi-sector read (SPEC.md 2.9.8); the header comment says stage 2's copy is

@@ -502,8 +502,10 @@ kernel size pass 4 (docs/reports/KERNEL-BYTES-SINCE-SQUASH-2026-09-25.md).
 A 640KB machine reporting 639KB has ~534 KB under `kern_big` before any
 driver or read-ahead claim.
 
-**Not in the span**: stage 2's blob (`.boot2`, 6,478 bytes: the loader, the
-splash and the boot overlay's blob half) and the overlay's window half
+**Not in the span**: stage 2's blob (`.boot2`, 6,127 bytes of 6,656 in the
+shipped KZIP build: the loader, the splash and the boot overlay's blob half;
+`kernsize` prints 5,933, because it assembles the NOKZIP arm and so leaves out
+the KZIP-only loader - `kz_all`, `kz_expand`, `kz_hd`, the head loop) and the overlay's window half
 (`.ovl`, 5,119 bytes loaded onto the FAT window and `dsk_secbuf`), both
 dead by the first desktop — see below; on `kern_small` the split is a BUILD
 CHOICE, SPEC.md §2.5.3.2), the on-demand modules (files read
@@ -1107,6 +1109,12 @@ boot arena at 128KB.
 | kern_big, kern_emu | 1,042 bytes (wave 0's 535 + `hb_probe_x`, `as_boot` and `font_init`) | `VGABUF_RAM` 0x17DA | 96, the floor | 6,478 -> 5,974 (-504) |
 | kern_small | 1,441 (`font_init` and OVBCALL's six bodies) | `.cold`'s end, 0x0EB7 | **160** | 4,745 -> 3,310 (-1,435) |
 | kern_mega | 1,010 (`hb_probe_x`, `font_init`, `mega_wrprobe`, `mega_gateb`, the three `cfx_` bodies) | `KERN_END` 0x2140 | **160** | 6,709 -> 5,713 (-996) |
+
+(`kernsize`'s figures, which leave out the KZIP-only loader.) The big
+review's canary fix, boot-7 and item E then took the shipped blob down **21
+bytes on kern_big, kern_emu and kern_mega and 32 on kern_small** (MEASURED off
+the maps: kern_big 6,148 -> 6,127 of 6,656; kern_small 3,495 -> 3,463 of
+5,632; kern_mega 5,887 -> 5,866 of 7,168; docs/plans/BOOT3-PLAN.md 16.6).
 
 Resident: 0 bytes on every kernel. The lift's two steps on kern_small cost
 1,024 bytes of its 128KB boot arena (63,488 -> 62,464) and of guard 5's

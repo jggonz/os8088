@@ -2850,7 +2850,7 @@ ticked with its date.
 
 **Phase 1, wave 1**
 
-- [ ] **S01 URGENT: BR-1 part 1** (KSIG_OFF 22528, the segment arm dropped: 0 bytes big/mega, -11 small) **and the `t_canary` rewrite**, red on all four 9-sector images at 4096; SPEC.md 2.9.13.3 and 18.93.1; rdiag fixed or retired (follow-up, 2026-11-08)
+- [x] **S01 URGENT: BR-1 part 1** (KSIG_OFF 22528, the segment arm dropped: 0 bytes big/mega, -11 small) **and the `t_canary` rewrite**, red on all four 9-sector images at 4096; SPEC.md 2.9.13.3 and 18.93.1; rdiag fixed or retired (follow-up, 2026-11-08). **Built (build, 2026-11-08)** with part 2, boot-7 and BOOT3 item E in one commit: docs/plans/BOOT3-PLAN.md 16.6. rdiag's texts are fixed; the instrument was not given a cylinder define
 - [ ] S01 gates: WP10; BR-74, BR-75, BR-76, BR-171, BR-172, BR-177; the kernsize home tally; `t_bsszero` (fast), red once on a private tree with `.ovl`'s `start=` removed (follow-up, 2026-11-08)
 - [ ] S02 free bytes and `.bss`: WP1 (with BR-110), WP7 (the rule is settled: zero since PR #61; the comment fixes checked in); `.ovl` at 46 free, blob at 17
 - [ ] S04 contracts and tags: WP14, WP19, the APICHK knob; one lock update
@@ -2858,7 +2858,7 @@ ticked with its date.
 
 **Phase 1, wave 2**
 
-- [ ] S03 boot: WP6 (BR-153 first, with `resident` named), BR-1 part 2, BR-14, BR-25, BR-55, BR-56, BR-63; BR-155, BR-156
+- [ ] S03 boot: WP6 (BR-153 first, with `resident` named), BR-1 part 2, BR-14, BR-25, BR-55, BR-56, BR-63; BR-155, BR-156. (BR-1 part 2 and boot-7 are built, with S01's line: BOOT3-PLAN 16.6, build, 2026-11-08)
 - [ ] S03 BOOT3-PLAN wave 0 (with boot-18, BR-154) and wave 1 (blob -504); `.boot3` generic across the kernels (owner, 2026-11-08)
 - [x] S03 O1, the 14th blob sector: **NO** (owner, 2026-11-08); the route is BOOT3-PLAN
 - [ ] S03 BR-6, in BOOT3's room, with the owner's rule: an MDA alone prints a message and halts; an MDA beside a CGA switches to the CGA

@@ -212,15 +212,18 @@ def stage2_calls(start, spt, heads, nsec_blob, k, tail=0):
     lba = start + nsec_blob
     dest = KERNEL_SEG
     if k:
-        parts = [(k["headsecs"], 0),
-                 (k["ksecs"] - k["headsecs"] + tail, k["rpara"])]
+        # the plain head at the TRACK bound since the big review's BR-1 part 2
+        # (boot2.asm: the splash's first tick runs those sectors before the
+        # canary has looked at anything), the tail at the gate's cylinder
+        parts = [(k["headsecs"], 0, spt),
+                 (k["ksecs"] - k["headsecs"] + tail, k["rpara"], runmax)]
     else:
         return None
     calls = 0
-    for left, rpara in parts:
+    for left, rpara, bound in parts:
         dest += rpara
         while left:
-            run = min(left, runmax - lba % runmax)
+            run = min(left, bound - lba % bound)
             page = (-((dest << 4) & 0xFFFF)) & 0xFFFF
             if page:
                 run = min(run, page >> 9)
@@ -248,13 +251,23 @@ def stage2_calls(start, spt, heads, nsec_blob, k, tail=0):
 # os8088_5150_herc_sb_720_gla reads the loader in 14 int 13h either way, 5,889
 # against 5,930 ms. Which way it falls is the KERNEL's length and not the
 # blob's, so the next kernel that grows may move this row, with a reason.
+#
+# **THE BIG REVIEW'S BR-1 (part 2) SPENT ONE ON FOUR OF THE SIX, ON PURPOSE.**
+# The plain head is read at the TRACK bound now, because the splash's first
+# tick runs those sectors before the canary has checked anything, and on a
+# BIOS that flips at the wrong sector a head read across a flip ran the other
+# head's bytes as vid_setmode. Where the head crosses a track that is one call
+# more - kern_big's 1.2MB (head LBA 42..50) and 1.44MB (46..54) disks and both
+# kern_small disks (23..31) - and where it does not (kern_big 360KB and 720KB,
+# 27..35, one track) it is nothing. PREDICTED, ~170-400 ms an 8088 boot on
+# those four, until os88boot measures it in the final pass.
 STAGE2 = {
     "os8088-360.img": 11,
     "os8088-720.img": 11,
-    "os8088-120.img": 8,
-    "os8088.img": 7,
-    "small360.img": 7,      # kern_small, 108 sectors packed, read after its
-    "small720.img": 7,      # OWN 11-sector blob (it was priced after 13)
+    "os8088-120.img": 9,    # 8 + BR-1's track-bound head
+    "os8088.img": 8,        # 7 + BR-1's track-bound head
+    "small360.img": 8,      # kern_small, 98 sectors packed, read after its
+    "small720.img": 8,      # OWN 11-sector blob; 7 + BR-1's track-bound head
 }
 
 

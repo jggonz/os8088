@@ -1635,7 +1635,12 @@ FAST = [
         "SPEC.md 18.93.1's canary offset re-derived from every shipped image's "
         "own BPB: it has to name a sector a transfer run reads AFTER the head "
         "boundary, because the half before it loads correctly on exactly the "
-        "machine the canary is for - which is how the first one shipped wrong"),
+        "machine the canary is for - which is how the first one shipped wrong. "
+        "And the run has to have BEGUN before the flip, so it walks stage 2's "
+        "own cuts per kernel (the KZIP head at the track, the tail restart, "
+        "the DMA page) and finds the armed sector by each disk's boot-sector "
+        "signature: walking from the data area passed file sector 21 for two "
+        "months while it was inert on every 9-sector disk (BR-1)"),
     Row("ascplace", "fast", py("tests/unit/t_ascplace.py"), 0.1,
         "SPEC.md 54.7.5: every shipped volume's ASSOC.DAT lies inside ONE "
         "TRACK. The mount reads it on every volume switch and the read-ahead "

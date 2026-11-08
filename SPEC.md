@@ -2784,8 +2784,13 @@ sector 5's own, to the digit.
 So the copy-and-patch moves to stage 1, before its first read. The machine's own
 table is copied and one byte changed: the step rate, head load/unload, motor
 timings and gap lengths belong to those drives and are not ours to guess. Stage
-2 still does the same thing to the same address, which is now **idempotent
-rather than necessary** — it copies our patched table over itself.
+2 did the same thing to the same address for as long as it was the boot
+sector's; once stage 1 did it first, the second copy copied our patched table
+over itself, and the big review's boot-7 deleted it (41 bytes of blob,
+2026-11-08). Nothing else enters stage 2: `FLAT_PAYLOAD` jumps straight to
+`KERNEL_SEG`, the hard disk calls `kz_hd` alone (§2.9.13.5), and the kernel
+takes its own copy in `dsk_dpt_init_x` either way. `DPTROM=1` (§18.92.1) is
+one site again, stage 1's.
 
 **What paid for it**: the `int 11h` text-mode set left the sector for stage 2.
 POST's own screen now stays up for the blob's read rather than the kernel's
@@ -3342,10 +3347,38 @@ find the DMA page's end, resting on every destination being 512-aligned. A
 paragraph-aligned `R` makes that shift truncate, and a run of **zero** sectors
 is an infinite loop rather than a wrong picture. It cost a boot to find.
 
-**Nothing bounds the head's read but `[b2_left]`.** The first version capped
-`[b2_runmax]`, which is not a cap at all: `read_run` **divides** the LBA by it
-to find where the current run ends, so a borrowed value redefines the geometry
-rather than shortening one read.
+**The head is read at the TRACK bound, whatever §18.93.2's gate chose** (the
+big review's BR-1, part 2, 2026-11-08). The splash's first tick runs code out
+of these sectors — `vid_setmode`, `gfx_rowbase` — *before* §18.93.1's canary
+has looked at anything, so on a BIOS that flips at the wrong sector a head read
+across a flip would run the other head's bytes as the kernel's: `.text`
+sectors 3..8 on kern_big's 1.2MB disk, 4..8 on both kern_small disks. Stage 2
+swaps `[b2_spt]` into `[b2_runmax]` for the head and pops the gate's bound back
+after it (`mov ax,[b2_spt] / xchg ax,[b2_runmax] / push ax` … `pop word
+[b2_runmax]`, 12 bytes). A track is a geometry `read_run` can divide by — it
+is `.rerun`'s own — and the pop restores exactly what was there, so `.rerun`'s
+second pass restores the track and stays one-shot; a head read that exhausts
+its retries at the track bound halts rather than reloading. The price is one
+more `int 13h` on an 8088 where the head crosses a track — kern_big's 1.2MB
+and 1.44MB disks and both kern_small disks — and nothing on kern_big's 360KB
+and 720KB, where the head is one track (`t_blobruns`' STAGE2 rows).
+
+**Nothing else bounds the head's read but `[b2_left]`.** The first version
+capped `[b2_runmax]` at the head's sector COUNT, which is not a cap at all:
+`read_run` **divides** the LBA by it to find where the current run ends, so a
+borrowed count redefines the geometry rather than shortening one read.
+
+**The first splash tick follows the head at once** (BOOT3-PLAN item E,
+2026-11-08): `xor ax,ax / mov dx, KZ_SECS − KZ_HEADSEC / call spl_tick`, 8
+bytes, after the pop and inside the tail loop's `%ifndef BOOT_NOSPLASH`. It
+needs exactly the `SPL_RESIDENT` sectors, `KZ_HEADSEC` *is* `SPL_RESIDENT`,
+and nothing it may use is in the packed tail (which `kz_all` has not
+expanded), so the splash, the adapter probe and the bar at 0 come one tail
+run sooner on every disk. `spl_tick` clamps and stores whatever count it is
+given (§15), so 0 is a legal first count, and a `.rerun` ticks 0 again — the
+bar's existing "climbs from 0" (§18.93.1). A first-tick store past the head
+lands where the packed tail is about to be read and is overwritten; it was
+forbidden before and still is.
 
 ##### 2.9.13.2 The decoder is UNBOUNDED, and that is a decision
 
@@ -3362,17 +3395,40 @@ the loop stops when it has produced what the block header said. It is a copy
 of `kernel/lz.inc`'s LZ4 arm minus those, and **the copy is the point** —
 `lz.inc` lives in `.cold`, which is inside the bytes being expanded.
 
-##### 2.9.13.3 The canary is unmoved, and its reasoning is untouched
+##### 2.9.13.3 The canary is in the packed tail, and its RUN must start before a flip
 
-§18.93.1's probe is a word whose **file sector** has to cross a head on every
-shipped geometry — and that is a property of the sector number and the
-geometry, not of what is in it. So it is still file sector 21, the Makefile
-reads the word out of the **packed** file at the same offset, and the check
+§18.93.1's probe has to be read after a head flip, inside a run that began
+before it — and under the packed kernel stage 2 decides where runs begin, not
+the geometry. `read_run` cuts at the cylinder and at the 64KB DMA page of the
+destination, and the load restarts twice more: at `.text`, where the plain
+head is read in runs of its own (at the **track** bound, §2.9.13.1), and at
+`.text + KZ_HEADSEC`, where the packed tail starts afresh `R` paragraphs up.
+
+**This section said "the canary is unmoved, and its reasoning is untouched"
+from the day KZIP became the default (2026-09-05) to the big review (BR-1,
+2026-11-08), and it was wrong.** It checked that file sector 21 was past a
+flip; it did not check that the head split had moved where that sector's run
+started. On a 9-sector disk file sector 21 is in the head-1 half of cylinder 1
+and every run containing it began after that cylinder's flip, at any blob
+length — so the canary was **inert** on the 360KB and 720KB system disks of
+kern_big and kern_small for two months, and `t_canary`, walking runs from the
+data area, passed it.
+
+So the canary is **file sector 57** on every kernel (`KSIG_OFF` 22,528 on
+kern_big, 23,552 on kern_small, 22,016 on kern_emu, kern_mega and a knob
+build), in the packed tail, at LBA 71, 71, 86, 90, 69 and 69 on the six system
+disks. The Makefile sums the **packed** file's sector, and its memory address
+is one immediate: tail sector `KSIG_OFF/512 − KZ_HEADSEC` lands at
+`KZ_HEADSEC·512 + R` plus that many sectors, which is `KSIG_OFF + R` —
+inside the 64KB the handoff's `ES` already names (40,960 on kern_big at the
+2026-11-08 build). The `ES` bump the head/tail split once assembled (11 bytes
+on kern_small, which the old sector 21 put in its tail) is gone; three
+assembly-time `%error`s fence the immediate instead — the sector must be in
+the tail, inside that 64KB, and inside what `KZ_SECS` reads. The check still
 runs where it always did: after the whole read and **before** the expansion.
-
-Only the memory address moves, and the two adjustments cancel: the tail's base
-is `+head/16 +R` and the offset inside it is `KSIG_OFF − head`, so `+R` at the
-**same offset** is the same address.
+`tests/unit/t_canary.py` walks the runs the loader cuts, per kernel, off each
+disk's BPB and its kernel's `kernel.kz.json`, and finds the armed sector by
+the signature in each disk's own boot sector.
 
 ##### 2.9.13.4 It is a TWO-PASS BUILD, and it has to be
 
@@ -3505,7 +3561,11 @@ page, the plain head and then the packed tail — and ratchets it per geometry:
 **11 / 11 / 8 / 7** calls on 360KB / 720KB / 1.2MB / 1.44MB at ten sectors,
 checked against MartyPC's FDC (165 sectors in 13 READ commands on the 360KB
 disk, two of them the blob's). An eleventh blob sector is free on every
-geometry; a twelfth costs 720KB a call, which `--sectors 12` says.
+geometry; a twelfth costs 720KB a call, which `--sectors 12` says. **Since
+the big review's BR-1 (2026-11-08) the plain head is read at the track bound**
+(§2.9.13.1), which the walk models: **11 / 11 / 9 / 8**, and 8 on both
+kern_small disks, one call more wherever the head crosses a track (PREDICTED
+until `os88boot` measures it).
 
 ##### 2.9.14.1 …and the window half takes the name `.ovl` back
 
@@ -32522,7 +32582,9 @@ pinned offsets. kernel.asm also owns the tiny osapi helper routines
 **The splash is stage 2's (§2.9.4).** There is no fixed splash entry any
 more (0x0008..0x000B are free): stage 2 calls `spl_tick` **near**, after every
 run it reads, once at least `SPL_RESIDENT` (= 9) sectors of `.text` are in
-memory. Contract: AX = sectors loaded so far, DX = total sectors to load;
+memory - under the packed kernel that is the plain head, so the first tick
+comes the moment the head is aboard and before the first tail run (BOOT3-PLAN
+item E, §2.9.13.1), with AX = 0. Contract: AX = sectors loaded so far, DX = total sectors to load;
 `spl_tick` preserves every register, runs on stage 1's stack with DS =
 `KERNEL_SEG` and its own data `cs:`, and returns with `ret`. `SPL_RESIDENT`
 is defined once, in `splash.inc`; the Makefile reads it for `KZ_HEAD`, and
@@ -38828,7 +38890,7 @@ its own RAM; reading them back proves the write worked, which it always did. It
 says nothing about whether the BIOS consulted them. The only thing worth
 verifying is the **transfer**.
 
-So the build sums **file sector 21** of `KERNEL.SYS` - the 16-bit sum of its
+So the build sums **file sector 57** of `KERNEL.SYS` - the 16-bit sum of its
 256 words - and injects it as `KSIG`. After the load the boot sector compares, and on a mismatch
 drops `run_max` to `SPT` and **does the whole load again**. A boot 2.2s slower
 beats a kernel that is quietly wrong.
@@ -38856,6 +38918,32 @@ half is loaded correctly on precisely the machine it exists to catch. The first
 version of this used file sector 32, which is in a first half in every
 geometry; it passed on the failing machine and shipped a kernel that was
 still scrambled.
+
+**AND THE RUN HAS TO HAVE BEGUN BEFORE THE FLIP, which is the loader's fact
+and not the geometry's.** A run is cut where `read_run` cuts it - the cylinder,
+the 64KB DMA page of its destination, the end of what is wanted - and stage 2
+restarts runs where the load does: at `.text` (the blob is in front of it,
+§2.9), and under the packed kernel again at `.text + KZ_HEADSEC`, where the
+tail starts afresh `R` paragraphs up (§2.9.13.3). A sector after a flip in a
+run that **started** after that flip is loaded correctly on the failing
+machine exactly as a first-half sector is. That is how file sector 21 - past a
+flip on every geometry, which is what the band below checked - was **inert on
+the 360KB and 720KB system disks of both shipped kernels from 2026-09-05, when
+KZIP became the default, to 2026-11-08** (the big review's BR-1): there it is
+the head-1 half of cylinder 1, and every run containing it began at or after
+that cylinder's flip. `t_canary` walked runs from the data area and passed it.
+The canary is **file sector 57** now (`KSIG_OFF` 22,528 on kern_big; the
+Makefile's arms carry the same file sector to every kernel), in the packed
+tail, read after a flip of a run that began before it on all six system disks
+(LBA 71, 71, 86, 90, 69, 69), and `t_canary` walks the loader's own cuts per
+kernel - head split, tail restart, DMA page - to say so.
+
+**What a missed canary costs is READS.** Cylinder runs are reads only
+(§18.91.3), so on a BIOS that flips at the wrong sector every crossing
+multi-sector read of the session returns the other head's sectors once
+`boot_cylrun` is published - and a FAT or directory sector read wrong is then
+rewritten. The splash's first tick is guarded separately: it runs before the
+canary, so the plain head it runs is read at the track bound (§2.9.13.1).
 
 **THE BAND IS AN INTERSECTION, so a geometry added years later can invalidate
 an offset nothing touched.** File sector 36 crossed on all three geometries
@@ -38976,9 +39064,10 @@ A/B for §18.91.1 itself.
 splash always drew correctly, which is what made it so hard to read: the splash
 module is file sectors 0–8, and on a 360KB disk the first head flip is at LBA 27
 — file sector 15. Everything the screen could show was loaded before the first
-sector that could be wrong. (File sector 21, where the canary sits now, is past
-that flip on every geometry — which is the band's own guarantee and not a
-coincidence of the new value.)
+sector that could be wrong. (File sector 21, where the canary sat next, was
+past that flip on every geometry — the band's own guarantee — and still inert
+on two of them once KZIP moved where its run began; file sector 57 is where it
+sits now, for the run-start rule above.)
 
 ### 18.93.2 The XT gate: who PAYS for the discovery
 
@@ -39013,7 +39102,9 @@ turns the check off.
 
 **The bet is recorded rather than assumed.** docs/FIELD-NOTES.md 31 carries the
 survey it rests on — `rdiag` booted on each BIOS under MartyPC, 206 sectors
-each. Four XT-class ROMs cross a head correctly (IBM 5150/5160, GLaBIOS, Compaq
+each, while stage 1 still read that payload in cylinder runs (it is
+track-bounded now, so `rdiag` no longer asks this question: tests/rdiag.asm's
+header). Four XT-class ROMs cross a head correctly (IBM 5150/5160, GLaBIOS, Compaq
 Deskpro Rev H, Eagle PC Spirit 1.9), one XT-class clone could not be brought up
 to test at all, and the single failure is a 286. That note also carries what the
 gate costs, measured: a 286 with the failing BIOS boots in the same ~9s doing

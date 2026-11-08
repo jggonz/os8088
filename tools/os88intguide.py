@@ -1085,7 +1085,7 @@ so that it can change one number in it. {{@p500|Chapter 2}} covers why.
                    ["0580h", "os8088's boot-time floppy table", 1],
                    ["Chapter", "2", 1]],
          "anchors": [A("boot/boot.asm", r"DPT_AT\s+equ\s+0x0580"),
-                     A("boot/boot2.asm", r"DPT_AT\s+equ\s+0x0580")]},
+                     A("boot/boot.asm", r"mov word \[es:0x0078\], DPT_AT")]},
     ],
 }
 

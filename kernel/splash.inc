@@ -3,7 +3,9 @@
 ;
 ; While stage 2 is still pulling the rest of this kernel off the floppy, it
 ; calls spl_tick NEAR (both are `.boot2`, SPEC.md 2.9.4) after every run that
-; lands, once SPL_RESIDENT sectors of `.text` are aboard. State is the blob's,
+; lands, once SPL_RESIDENT sectors of `.text` are aboard - under KZIP that is
+; the plain head, so the first tick comes the moment the head is in, with AX =
+; 0, before any tail run (SPEC.md 2.9.13.1, BOOT3-PLAN item E). State is the blob's,
 ; read `cs:`, except spl_live/spl_busy/spl_quiet, which are `.text` bytes in
 ; viddet.inc because the IRQ0 handlers read them through DS. The first tick
 ; switches to mode 12h and draws the welcome dialog; every tick advances a
