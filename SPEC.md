@@ -200636,7 +200636,7 @@ without them (`ffmpeg` capability).
 |---|---|---|---|---|
 | `5150-st225` (default) | 119,000 B/s | 50% / 85% | PCM8 11,025 Hz | the owner's machine, its disk measured (VIDDISK, 130 KB/s under a half-machine hook with §18.91.5's cylinder reads; 96,000 for a kernel built `NOHDCYL=1` or older than build 458) |
 | `5150-xtide` | 96,000 | 50% / 85% | PCM8 11,025 | an XT-IDE the CPU copies, measured on MartyPC under the cylinder bound (98.2.1.3; 91,000 under the track's) |
-| `5150-picomem2` | 150,000 | 40% / 80% | PCM8 22,050 | predicted |
+| `5150-picomem2` | 135,000 | 50% / 85% | PCM8 22,050 | the owner's 5150 #1 with a PicoMEM 2 (PM2-10-4-26) as its hard disk, measured (2026-11-07, docs/reports/PICOMEM2-STUTTER-2026-11-07.md): the CPU copies every byte, so the disk falls with the decode's share - VIDDISK 294.3 KB/s idle, 223.9 / 147.1 / 72.8 at 25 / 50 / 75%. 0.9 of the 50% row, as `5150-st225`'s. Its sound stutters while the disk is read under a hook on that firmware, whatever the budget |
 | `floppy` | 15,000 | 50% / 85% | PCM8 5,512 | predicted |
 | `286-slow` (was `286`) | 150,000 | 150% / 250% of an 8088's | PCM8 22,050 | predicted: a slow 6-8 MHz AT, a stand-in no machine has measured |
 | `286-fast` (was `286-pvga`) | 448,000 | 225% / 375% of an 8088's, priced by its own table | PCM8 22,050 | a fast 16 MHz 286 with VGA on the board, measured on a real one - the owner's AMD 286 with a PVGA1A, whose RAM has wait states: decodes 12-29% slower than `286-speeddemon` (docs/reports/VIDBENCH-PVGA286-2026-10-08.md) |
@@ -201698,7 +201698,7 @@ was left was the peak's 2 frames and the 32 KB record's 17. The owner's
 3.375 encode played on the 286 with 0 late and 0 stalls, sound OFF - the
 case `auto` has not been played in is a Sound Blaster beside it.
 
-- **Without a curve** - `5150-picomem2`, `floppy`, `286` (a 6 MHz AT,
+- **Without a curve** - `floppy`, `286` (a 6 MHz AT,
   predicted) - the average is the ONLY thing that leaves the reader its
   time, so `auto` there is the profile's own `avg`. Those want a curve
   measured (VIDDISK on the machine) more than a number changed.

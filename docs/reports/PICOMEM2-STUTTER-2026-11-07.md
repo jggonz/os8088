@@ -4,8 +4,8 @@
 MartyPC's PicoMEM 2.x twin (`os8088_5150_herc_pm2_gla`: a 4.77 MHz 5150, the
 card's firmware compiled for the host as `libpmhost`, its card time the
 8088's; docs/TESTING.md, *The PicoMEM, as its own firmware*), at branch
-`video-battle-pico2`. Nothing here was measured on the iron yet: the field
-half is `make pm2kit` (below). True of that emulator, that firmware source and
+`video-battle-pico2`, and on the iron the same evening with `make pm2kit`
+(*On the iron*, below). True of that emulator, that firmware source and
 that build.
 
 ## The report from the iron
@@ -108,6 +108,58 @@ the same twin. Not run down: it is the twin's or SOUND.DRV's stream on an
 emulated 2.x, not the machine's - the owner hears the battle, stuttering.
 Until it is, the battle's own A/B is the field's.
 
+## On the iron (2026-11-07)
+
+The owner ran the kit on 5150 #1: CGA, the PicoMEM 2 as C: on PM2-10-4-26,
+its SB at **240h on IRQ 5** (220h is taken by another of the card's devices,
+as on 5150 #2), the card's own line 7. The tone rows were recorded on a
+phone across the room, `tools/vstone.py` read the m4a as it came:
+
+| row | | reads | holes in 5 s | ms silent |
+|---|---|---:|---:|---:|
+| A | the tone alone | - | 7 | 19 |
+| B | ISR holds 16 ms, no disk | - | 3 | 5 |
+| C | tracks, no hold | 51 tracks | 2 | 4 |
+| D | tracks, holds 4 ms | 44 | **228** | 218 |
+| E | tracks, holds 8 ms | 37 | **384**, one of 615 ms | 1,822 |
+| F | tracks, holds 16 ms | 23 | **508** | 1,604 |
+| G | one sector a call, holds 16 ms | 827 sectors | **455** | 1,410 |
+| H | as G, the SB's line masked per call | 779 | 3 | 5 |
+| I | IRQ0 holds 16 ms, one sector | 1,232 | **365** | 662 |
+| J | as I, IRQ0 masked per call | 1,165 | **0** | **0** |
+
+A to C's few holes are a phone in a room (2 ms each, the noise floor). Every
+row's IRQ count was 151-154: line 5 is JUMPERED (masking it in H lost
+nothing, unlike the twin's multiplexed line).
+
+- **The release firmware does not chop under an unheld read** (C) - where
+  the emulated stock build did. Its own mixing keeps up with the 8088's
+  sector copies. What breaks it is **any interrupt that holds the PC while
+  the card waits on a copy**, from 4 ms up, as short repeated holes at the
+  hold's rate.
+- **That is the owner's stutter exactly**: "short, repeated stuttering",
+  not dropouts; steady in the idle loop (music streaming, a small decode in
+  the timer's hook); a little at an opening's end; and during HEAVY actions
+  only - a big decode in the hook, 15 times a second, while the clip streams.
+- **J is clean on the iron**: one sector a call with IRQ0 masked for the
+  call cures it from os8088's side, on the firmware as released. VIDDISK
+  prices the shape: one sector a call 1.83 ms, a 63-sector track 96.1 ms
+  (1.53 ms a sector) - **about 20% slower** reading, and IRQ0 held off at
+  most one sector's 1.8 ms.
+- VIDSND's ADPCM row interrupted 0 times: the card's DSP does not do 7Dh
+  (auto-init 4-bit ADPCM), so a Video Player ADPCM file plays silent on it.
+
+The Video Battle recording (65 s, the owner's own bundle) shows the same:
+short dips at a few a second through the first half, 23-49 a second from
+about 37 s on, when the actions began. No VBPROF came back; music under a
+phone is not a tone, so that is an indication, not a count.
+
+The profile's numbers (VIDDISK, under its 30 Hz hook holding 0/25/50/75%):
+294.3 / 223.9 / 147.1 / 72.8 KB/s; `5150-picomem2` is now 135,000 at 50% /
+85% with that curve (SPEC.md 98.2's table). VIDBENCH decodes as 5150 #1's
+did with the ST-225 - the same CPU - the worst synthetic frame 37% of a
+30 fps period. VIDDISK W wrote 83.4 KB/s.
+
 ## The cure, three ways
 
 1. **Firmware, upstream.** The `pm1x-pr` wait hook is two small hunks in
@@ -123,9 +175,9 @@ Until it is, the battle's own A/B is the field's.
    answer init end directly". The SB's IRQ/DMA command (77h) IS in the June
    source, which is what SOUND.DRV uses. Untried on a real PicoMEM 2.
 3. **os8088, for itself.** J's shape in the kernel's PicoMEM disk path:
-   one sector a call, IRQ0 masked for the call. It costs disk rate on every
-   PicoMEM machine and cures only the stock firmware's half that we can
-   reach; it is the fallback if 1 does not come.
+   one sector a call, IRQ0 masked for the call. **Proven on the iron** (J,
+   0 holes) and about 20% of the disk's rate. It needs no firmware at all,
+   so it is the one that works on the card as released, today.
 
 ## The field kit: `make pm2kit`
 

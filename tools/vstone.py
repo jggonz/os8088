@@ -96,7 +96,13 @@ def segments(x, rate, min_gap=1.0, min_len=2.0):
     if not len(e):
         return []
     loud = np.percentile(e, 90)
-    on = e > max(loud * 0.2, 1e-4)
+    # a row that STUTTERS dips under any threshold every few ms: the
+    # loudest 5 ms window in each 150 ms is what says whether a row is on
+    k = 15
+    pad = np.concatenate((np.zeros(k), e, np.zeros(k)))
+    mx = np.max(np.lib.stride_tricks.sliding_window_view(pad, 2 * k + 1),
+                axis=1)
+    on = mx > max(loud * 0.3, 1e-4)
     # close gaps shorter than min_gap: a break inside a row is not a row end
     segs, start, last_on = [], None, None
     gapw = int(min_gap * 1000 / 5.0)
@@ -110,6 +116,8 @@ def segments(x, rate, min_gap=1.0, min_len=2.0):
             last_on = i
     if start is not None:
         segs.append((start, last_on + 1))
+    # the 150 ms window widened each row by k windows a side: take them off
+    segs = [(a + k + 2, b - k - 2) for a, b in segs]
     return [(a * n, b * n) for a, b in segs if (b - a) * 5.0 / 1000 >= min_len]
 
 

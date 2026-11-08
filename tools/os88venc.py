@@ -175,12 +175,22 @@ PROFILES = {
                        what="a 5150 with an XT-IDE: the CPU copies the "
                             "disk, so it streams what the decode leaves "
                             "(measured on MartyPC)"),
-    "5150-picomem2": dict(disk=150000, avg=0.40, peak=0.80, owe=1.6,
+    # MEASURED on 5150 #1 with its PicoMEM 2 as C: (PM2-10-4-26, 2026-11-07,
+    # docs/reports/PICOMEM2-STUTTER-2026-11-07.md): VIDDISK's 32 KB
+    # READ_SEQ under the 30 Hz hook read 294.3 KB/s idle and 223.9 / 147.1
+    # / 72.8 at 25 / 50 / 75% - the CPU copies every byte, so the disk
+    # falls with the decode's share, as an XT-IDE's does. The budget is
+    # 0.9 of the 50% row, as the ST-225's: 0.9 x 147.1 x 1024 = 135,567.
+    # It was 150,000 at a 40% share, predicted. At 100% extrapolated: 0
+    "5150-picomem2": dict(disk=135000, avg=0.50, peak=0.85, owe=1.6,
                           ring=8,
+                          disk_at=((0.0, 294.3 / 147.1), (0.25, 223.9 / 147.1),
+                                   (0.5, 1.0), (0.75, 72.8 / 147.1),
+                                   (1.0, 0.0)),
                           speed=1, rate=22050, audio="pcm8",
-                          what="a 5150 with a PicoMEM 2: fast storage the "
-                               "CPU copies, so a lower CPU share "
-                               "(predicted)"),
+                          what="a 5150 with a PicoMEM 2: the CPU copies "
+                               "the disk, 294 KB/s idle and 147 at half "
+                               "the machine (measured)"),
     "floppy": dict(disk=15000, avg=0.50, peak=0.85, owe=1.6, speed=1,
                    ring=8,
                    rate=5512, audio="pcm8",
@@ -538,8 +548,8 @@ CHOICE_HELP = {
                       "copies for: 96 KB/s at half the machine, and less "
                       "as the picture and the speaker take more of it - "
                       "the copy is charged",
-        "5150-picomem2": "IBM 5150/XT with a PicoMEM 2: 150 KB/s, 22 kHz "
-                         "sound (predicted)",
+        "5150-picomem2": "IBM 5150/XT with a PicoMEM 2: 135 KB/s at half "
+                         "the CPU, 22 kHz sound (measured)",
         "floppy": "Played off a floppy: 15 KB/s, 5.5 kHz sound - small and "
                   "slow",
         "286-slow": "A slow 286 with a hard disk: 150 KB/s, three 8088s of "
