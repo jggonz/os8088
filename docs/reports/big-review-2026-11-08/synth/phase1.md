@@ -129,8 +129,8 @@ rule:
 | histsys-2, isr-8 (BR-9); wm-1, wm-13, histsys-11 (BR-8) | WP8 | batch F core: +30 res, +12 `.ovl`; batch C core: BR-8's +5 and the wake fence. **Now 0 on both sides** (owner, 2026-11-08): BR-9 is a knob and BR-8 is not taken |
 | boot-4 (BR-153), boot-18 (BR-154), boot-6 (BR-25's boothd half) | WP6 | batch A: KERNEL.SYS -400, boothd -9 |
 | abi-3 (BR-62's gate half), abi-4 (BR-146), engsys-2/-8/-12/-15 (BR-75/-76/-171/-172), gfx-7 (BR-152), md-12 (BR-170), shell-6 (BR-117), ui-4 (BR-111) | WP10 | batch A's host gates; batch B's BR-152 `.ovl` +8 (now 0: an assembly-time check) |
-| abi-8 (BR-22's gate half) | WP19 | none (BR-22's dw-4 fence stays in batch E) |
-| text halves of BR-22 (ui-8), BR-77, BR-78, BR-85, BR-104, BR-115, BR-122; abi-5 (BR-145) | WP26 / WP4 | none (0 bytes); one abilock `--update` instead of several |
+| abi-8 (BR-22's gate half) | WP19 | none (BR-22's dw-4 fence was batch E's; it is not taken as retail code, packages are trusted, owner, 2026-11-08, so WP19's APICHK knob is its home) |
+| text halves of BR-22 (ui-8), BR-77, BR-78, BR-85, BR-104, BR-115, BR-122; abi-5 (BR-145) | WP26 / WP4 | none (0 bytes); one abilock `--update` instead of several. (BR-22's and BR-85's text halves are already in the SDK, follow-up, 2026-11-08, and leave WP26) |
 
 Three findings were in both first syntheses and had their double count
 corrected by the fit lens: ui-3 (BR-110), loader-8 (BR-11: now batch D's) and
@@ -186,34 +186,43 @@ recommended order of work.
 ### The binding constraint: transient homes on kern_big
 
 Both boot-time homes are full on kern_big. With ownership resolved, the ledger
-covers this plan's wants and the bug batches' wants together.
+covers this plan's wants and the bug batches' wants together. **Re-drawn after
+the owner's answers (owner, 2026-11-08):** the 14th blob sector is refused, and
+BOOT3-PLAN's third boot home supplies the room instead.
 
 - **The blob** (BOOT2_SECS 13, kernel.asm:2111). boot2_end is 0x19FC of 0x1A00
   (build/kernel.map), so **4 bytes are free**. kern_small has 702 free and
   kern_mega 285, so this is kern_big's problem alone.
-- **`.ovl`** is held by a hard `%error` at 5,120. It stands at **5,116**, so 4
-  are free.
+- **`.ovl`** is held by a hard `%error` at 5,120. It stands at **5,119**
+  (0x13FF, MEASURED; BOOT3-PLAN section 16 re-read it), so **1** is free (the
+  first draft's 5,116 / 4 free is corrected, follow-up).
 
 | home (kern_big) | frees | wants (and whose) |
 |---|---|---|
-| blob | WP6 boot-7 **-41**, WP1 drivers-12 -4, WP7 hiber-17 -9 = **58 with the 4 free**; optional boot-17 -30..-60 | BR-1 +12..+19 (cost lens's xchg/push/pop form +12; truth lens +19 with the KZIP ES adjustment), BR-6 +25..+35 (Wilton's 3BAh toggle; the alias-test form is +60..+110), BR-56 +4, BR-147 +7, BR-155 +6, WP27 shell-8 +10, WP4 drivers-5 +2..+4: **+66..+85** |
-| `.ovl` | WP7 **-45** (sched-12 -30, sysmisc-10 -15) = **49 with the 4 free** | WP8 install +20..+30 (cost lens; the first draft's +12 left out the 7-byte `mov word [es:d16],imm16` stores), WP8 gfce-6 +22 (replaces BR-44's +5), BR-18 +6, BR-88 +5, BR-141 +10, BR-157 +8, BR-158 +16, BR-25 +6: **+93..+103** |
+| blob | WP6 boot-7 **-41**, WP1 drivers-12 -4, WP7 hiber-17 -9 = **58 with the 4 free**; **BOOT3-PLAN wave 1: about 504 net** (`hb_probe_x`, `as_boot`'s walk, `font_init`, 507 bytes into `.boot3`), about 508 free after it, ~549 with boot-7 | BR-1 **+12** (the head bound; its canary move is 0 bytes on kern_big, follow-up), BR-6 +25..+35 (Wilton's 3BAh toggle; the alias-test form is +60..+110), BR-56 +4, BR-147 +7, BR-155 +6, WP27 shell-8 +10 (in `.boot3` from BOOT3 wave 2), WP4 drivers-5 +2..+4: **+66..+78**, or +101..+153 with the alias form |
+| `.ovl` | WP7 **-45** (sched-12 -30, sysmisc-10 -15) = **46 with the 1 free**; **BOOT3-PLAN wave 3: 176** (`vid_ctx_init`, `sch_idle_start`, `mem_init_x`), so `.ovl` is 177 free before WP7 and ~222 after it | WP8 gfce-6 +22 (replaces BR-44's +5), BR-18 +6, BR-88 +5, BR-141 +10, BR-157 +8, BR-158 +16, BR-25 +6: **+73**. WP8's install (+20..+30) is now a knob build's (owner, 2026-11-08), so it leaves this column |
 
 **So:**
 
-- **Land WP6 and WP7 first.** Even then, kern_big needs one of two things.
-  - **Blob:** boot-17's kmain_o table (-30..-60, measure first), or a 14th blob
-    sector. One more sector costs one sector of boot read, 512 bytes of boot
-    footprint (guard 5) and no resident byte. That is the owner's call, and it
-    is the cheapest growth in the phase.
-  - **`.ovl`:** the wants exceed the room by **44..54** even after WP7. Move
-    bodies out of `.ovl` as the `%error` text suggests (SPEC 2.5.3.2), at least
-    that many bytes. clk_probe's RTC rungs, which take sysmisc-4/5's +24, are
-    the first candidate. Taking gfce-6 in BR-44's +5 form instead saves 17
+- **Land WP6 and WP7 first, then BOOT3-PLAN waves 0, 1 and 3** (its section 8)
+  for kern_big. They cost 0 resident bytes; wave 1 costs about +450 bytes of
+  KERNEL.SYS and ~+24 ms after the bar on 360KB (PREDICTED), wave 3 about 0
+  read.
+  - **Blob:** after wave 1 every want above fits, BR-6's alias form included,
+    so the old choice "boot-17's table or a 14th sector" is **gone**
+    (BOOT3-PLAN section 11). boot-17 rides wave 4 for its diagnostic value
+    alone, if wanted.
+  - **`.ovl`:** after wave 3 and WP7 the +73 fits with ~150 to spare; the
+    clock ladder (1,782 MEASURED) is BOOT3-PLAN's option if BR-157/158 want
     more.
 - kern_small's installs go in `.boot2`, which has room.
 - Add a host tally line for both homes to `kernsize` (WP31), so this ledger is
-  printed rather than hand-kept.
+  printed rather than hand-kept; BOOT3-PLAN wave 0's `boot3=` line is its
+  third column.
+- BOOT3-PLAN's section 15 has ten open questions for the owner (the name, wave
+  2's boot RAM, kern_mega's and kern_small's `.ovl`, a kern_big 128KB boot row,
+  wave 4, an earlier bar, the clock ladder, `B2CALL`, and `blobruns` in the
+  fast tier). They are that plan's, and they stay open.
 
 ## Watch list: what moves `apps/os88api.inc`, `drivers/os88drv.inc` or the lock's inputs
 
@@ -224,14 +233,14 @@ the one text update, WP19's tags are another, and each cell-adding WP is one.
 
 | WP | item | lock action | the trap |
 |---|---|---|---|
-| 9 | gfr-5/abi-6/loader-6: `dw OS88_API_LEVEL` at KERNEL_SEG:0006, header byte 31 = needed level, `OS88_NEED level` | update | Byte 31 is the NUL of a legal 15-character name. Cap names at 14 when it is set, and relax `os88pkg.py:122-125`, `os88disk.py:289-293`, `os88pkgsize.py:41`, `os88rate.py:150`, `os88face.py`/`os88vbt.py`. An OLD kernel's Sticky caption (desksc.inc:770-781) measures such a name as 16 and shows its stem. That is harmless, but it is a visible difference |
+| 9 | gfr-5/abi-6/loader-6: `dw OS88_API_LEVEL` at KERNEL_SEG:0006, header byte 31 = needed level, `OS88_NEED level` - **parked: must prove its worth before it spends bytes (owner, 2026-11-08)** | update, if taken | Byte 31 is the NUL of a legal 15-character name. Cap names at 14 when it is set, and relax `os88pkg.py:122-125`, `os88disk.py:289-293`, `os88pkgsize.py:41`, `os88rate.py:150`, `os88face.py`/`os88vbt.py`. An OLD kernel's Sticky caption (desksc.inc:770-781) measures such a name as 16 and shows its stem. That is harmless, but it is a visible difference |
 | 5, 15 | L7/mc-19's PM-clean bit and mem-17's movable bit in **LD_H_CLASS (+15)** bits 5 and 3 | update | The flags byte has no free bit (fit lens: ICON, ASSOC, PARTS, 3-4 compression, GLYPH, DESK, STIK). Bits 6-7 of +15 are OS88_HIGH/HIGHMEM. Bits 3-5 make an old kernel give the largest stack class (instance.inc:2106-2121), which is safe. New kernels mask `and bx,0x07`. `os88pkg.py:211` (`a[15]&0x3F > STK_CLASS_MAX`) must mask the same, and so must sched.inc:2891-2893's `%error` |
-| 2 | hm-9/mem-15 `MEMP_PURGEABLE` (optional) | update | **Every shipped kernel answers an unknown OSAPI_MEM_P verb as MEMP_AVAIL with CF clear** (cost lens; on kern_small too). BR-107 (hm-14, batch D) must land first, and a caller must use `OS88_NEED` |
+| 2 | hm-9/mem-15 `MEMP_PURGEABLE` (optional; **parked**, follow-up, 2026-11-08) | update, if ever built | **Every shipped kernel answers an unknown OSAPI_MEM_P verb as MEMP_AVAIL with CF clear** (cost lens; on kern_small too). BR-107 (hm-14, batch D) must land first, and a caller must use `OS88_NEED` |
 | 15 | text-15 bold run cell; text-16 `MENU_SEP`/`MENU_CHK` | update | An older kernel draws MENU_SEP as a selectable blank, and so does a kern_small without text-16's +12 |
 | 16 | dr-5 `OSAPI_FILE_FIND_SEQ`; gi-2 `OSAPI_FILE_GRAIN` | update | Appended cells |
 | 18 | sched-15 `OSAPI_TASK_WAKE` | update | Appended cell |
 | 19 | abi-8/ctx-7 `; @ctx` tags in every contract | **one** update | Contract lines are fingerprinted, so the whole tagging is one update |
-| 8 | wm-13/histsys-11: the window doors and WM_WAKE refuse a bad BX | update | Reverses "BX is trusted, as OSAPI_WM_WAKE" (os88api.inc:1733). SPEC 11 and 20.8 first |
+| 8 | wm-13/histsys-11: the window doors and WM_WAKE refuse a bad BX - **not taken: packages are trusted (owner, 2026-11-08)**; only the BX-trust sentence is written | none for the doors | The contract "BX is trusted, as OSAPI_WM_WAKE" (os88api.inc:1733) now stands; it was what the doors would have reversed |
 | 22 | D8 phase 1 `OSAPI_IRQ` (**OWNER**, optional) | update | If its common EOI stub is taken, every hooked interrupt pays about +60..+90 clocks. Keep it off IRQ0 and the 8250 paths |
 | 26 | all contract text (list in WP26), including mc-5's GFX_LOCK wording, xm-12's context rule, hdk-2's os88api.inc:3490 and gfce-8's class sentence | **one** update | ui-9's "unless the ring overflowed" weakens a promise. That is still no bump, but say so in the reason |
 | 27 | ui-11, ui-12, ui-19 cells; shell-3 `AH=0FEh`; files-17 AH/BX | update | Check what an older kernel does with AH=0FEh before shipping a caller |
@@ -306,6 +315,18 @@ reloaded only if shed.** The pin is the need/drop bracket that `t_moddrop`
 already guarantees. Then decide, as the owner, whether kern_big's two largest
 resident bodies join it.
 
+**Decided (owner, 2026-11-08): WP2b is REFUSED; WP2a stays.** FILECP and FDLG
+do not become kern_big modules in any form - "20+ times now (almost once per
+size pass)". kern_small can afford them as modules: a one-disk distribution
+with no hard disk, drivers or DOS, where being able to run a program at all
+beats managing and opening files faster. kern_big cannot: the user has swapped
+in a DOS, office or utility disk and cannot be made to put in the system disk
+and wait every time they open or copy a file - "open and copy file are not
+'system management' actions". A boot-time cache is not a saving either. The
+owner records the refusal in CLAUDE.md, AGENTS.md and SPEC 38 so it is not
+proposed again. rt-1's drop-to-cache, rt-9's ranks and shell-2's two users
+(WP2a) are not touched by the refusal.
+
 **Findings taken.**
 
 - `rt-1` [K] **Drop to a cache; let the need/drop bracket be the pin.** It
@@ -336,7 +357,8 @@ resident bodies join it.
 
   Both become a cache hit after the first use.
 - `rt-2` [K] with `bytes-3` [C] and `rt-6` [C]: **FILECP and FDLG on kern_big
-  as modules cached at boot. OWNER.**
+  as modules cached at boot. REFUSED (owner, 2026-11-08); kept below as the
+  record of what was priced.**
   - **Re-measured, and the first draft's -3,600 was wrong.** fdlg's `.cold`
     span fdlg_ref..desk_zs is 2,080 bytes, but **1,089 of it is `os88ui_*`**,
     the kernel's copy of the shared UI, which stays resident (re-measured on
@@ -383,9 +405,25 @@ resident bodies join it.
     COMMAND.COM's answer, the existing swap prompt, instead of a refusal.
     **Put the trade to the owner with those three quotes. Do not present it as
     settled.** kern_small's own caching (rt-6, +60..+85 there) is a separate
-    owner question.
-- *Optional:* `hm-9` [K] `mem-15` [C] **package purgeable claims**
-  (`MEMP_PURGEABLE`). **Amended (truth and cost lenses):**
+    owner question. **The owner answered: refused** (above). **rt-6 stays open
+    and the owner likes it** (owner, 2026-11-08: "keep FDLG as purgeable"
+    might be worth ~100 bytes on kern_small): it is rt-1's arm on kern_small,
+    +60..+85 `.cold` there, uncounted until the owner takes it.
+- *Parked (follow-up, 2026-11-08):* `hm-9` [K] `mem-15` [C] **package
+  purgeable claims** (`MEMP_PURGEABLE`). The owner asked for the use cases
+  (`../followup-purgeable.md`): **not needed now.** It pays only under memory
+  pressure (256-384KB machines, busy sessions); the real case is **Sheet's two
+  modules, ~80KB** held from launch to exit, whose recovery code already
+  exists (`ch_ovneed`, `sh_m2need`) and which also needs a frame pin in
+  `ch_xthunk`; then the lazy-part keep (xtmp3, WIN16, PiXEL: disk reads saved,
+  not memory) and a few small recompute caches. The review's two cited
+  consumers are partly stale: **Skies' title art is already solved**
+  (SPEC 88.10.7.1, #252), and Tracker's shadow is real but small. A
+  **zero-kernel-byte alternative** exists: Sheet `op_drop`s its modules after
+  each use, as PiXEL does, at a ~1-2 s re-read per chart or dialog. If it is
+  ever built, take the rank in AL (a part re-read is LOW, a recompute TRIV) and
+  measure first: a 256KB profile with Sheet behind a second application,
+  read with `tests/heapmap.py`. The design as the lenses amended it:
   - MC_DMA bit 13 is free only once MC_DMA_HEAD narrows from 0x3FFF to 0x1FFF
     (0 bytes; every head reader masks with it).
   - The purge's proc call cannot run where mem_shed_one runs. It runs inside
@@ -395,8 +433,8 @@ resident bodies join it.
     their purge is deferred to the compactor's drop arm.
   - Cost: +50..+80 `.cold` kern_big (not +30..+70), and +4..+6 on kern_small
     for a real refusal.
-  - Consumers wait: Skies' title art (-485 ms of exit) and the Text Screen
-    shadow (~420 ms to rebuild).
+  - Consumers the review cited: Skies' title art (-485 ms of exit; stale, see
+    above) and the Text Screen shadow (~420 ms to rebuild).
 
 **Owned elsewhere.** These travel first; bytes are not counted here.
 - `mem-10`/`hm-3` (BR-4, batch C) and gap `ctx-1`/`ctx-2`: teardown posted to
@@ -422,29 +460,30 @@ resident bodies join it.
 1. Batch C's BR-4 and batch D's BR-53 (prerequisites).
 2. rt-1 drop-to-cache with rt-9's ranks, written SPEC-first.
 3. shell-2's two users.
-4. **OWNER:** rt-2's FILECP/FDLG arm on kern_big and kern_emu only, with the
-   ROM skip.
-5. Optionally hm-9.
+4. ~~**OWNER:** rt-2's FILECP/FDLG arm on kern_big and kern_emu only, with the
+   ROM skip.~~ **Refused (owner, 2026-11-08).**
+5. ~~Optionally hm-9.~~ **Parked** (follow-up, 2026-11-08).
 
-**Files.** kernel/mod.inc, memory.inc (mem_pg_own, mem_shed_one), filecp.inc,
-fdlg.inc, kernel.asm (FCP_MOD/FDLG_MOD on kern_big), boot/boot2.asm (the copy at
-mem_unblob), tools/os88mod.py, desksc.inc, stikmenu.inc, tests/moddrop.txt,
-Makefile (the four kern_big system disks), SPEC 2.8.3 and 38.0.
+**Files.** kernel/mod.inc, memory.inc (mem_pg_own, mem_shed_one),
+tools/os88mod.py, desksc.inc, stikmenu.inc, tests/moddrop.txt, SPEC 2.8.3.
+(filecp.inc, fdlg.inc, kernel.asm's FCP_MOD/FDLG_MOD, boot2.asm's copy, the
+Makefile's kern_big disks and SPEC 38.0 left with WP2b.)
 
 **Bytes.**
 
 | | kern_small | kern_big | kern_mega |
 |---|---:|---:|---:|
 | rt-1 drop-to-cache + rt-9 ranks | 0 (OWNER: +60..+85) | +60..+85 `.cold` | 0 conv / +60..+85 high (conventional-heap modules only) |
-| rt-2 FILECP/FDLG (OWNER) | 0 (already modules) | **-2,568 movable (MEASURED) +60..+100 glue = -2,468..-2,508**; 0 where `.cold` is ROM/HMA-adopted | **0. Do not apply**: their `.cold` is already above 1MB |
+| rt-2 FILECP/FDLG | 0 (already modules) | **REFUSED (owner, 2026-11-08)**: 0 (was -2,568 movable MEASURED +60..+100 glue = -2,468..-2,508) | 0 |
 | shell-2 users | 0 | 0 (inside rt-1) | 0 |
-| *opt.* hm-9 | +4..+6 refusal | +50..+80 `.cold` | 0 / +50..+80 |
-| **core total** | **0** | **-2,383..-2,448** | **0 / +60..+85** |
+| *parked* hm-9 | (+4..+6 refusal) | (+50..+80 `.cold`) | (0 / +50..+80) |
+| **core total** | **0** (rt-6 +60..+85 if the owner takes it) | **+60..+85** (was -2,383..-2,448) | **0 / +60..+85** |
 
-Disk: about +4 clusters on each kern_big system disk.
+Disk: no change (the +4 clusters per kern_big system disk left with WP2b).
 
-**Risk.** High. It adds a state to every module, it changes what the user sees
-on kern_big under pressure, and FDLG's kern_big seam is new code.
+**Risk.** Medium (was high). It adds a state to every module; with WP2b gone it
+no longer changes what the user sees on kern_big under pressure, and FDLG's
+kern_big seam is not written.
 
 **Rows.** `moddrop` (fast; it must recognise the cache as a drop);
 `kernresident`, `small128`, `bootsmoke` (full); soak `fcpapi`, `fcpcopy`,
@@ -452,12 +491,12 @@ on kern_big under pressure, and FDLG's kern_big seam is new code.
 `fdlgchoose`, `stik`, `stikmenu`, `stikshort`, `stiknodesk`, `desksc`,
 `deskitem`, `shedrelist`, `regrowshed`, and the `mega-` twins (mega must stay
 unchanged). **New rows:**
-- shed FILECP under pressure, then Save As shows the prompt;
 - Sticky Apps pressed twice gives one disk load;
-- the same on a COLDHMA machine, with no preload claim.
+- (the shed-FILECP and COLDHMA-preload rows left with WP2b, owner,
+  2026-11-08).
 
-**Dependencies.** Batch C (BR-4) and batch D (BR-53) first. WP9 for hm-9's
-callers.
+**Dependencies.** Batch C (BR-4) and batch D (BR-53) first. (WP9 for hm-9's
+callers: both are parked.)
 
 **Travels with.** After batches C and D.
 
@@ -480,23 +519,45 @@ first draft's two mechanisms are both replaced.
   OWNER.**
   - `[mou_ptr]` is set and never cleared (mouse.inc:6439-6447), so once a mouse
     speaks the code is never needed again.
-  - Hold the image from boot, on WP2's boot-cache mechanism, and drop it beside
+  - Hold the image from boot, on WP2's boot-cache mechanism (**which fell with
+    WP2b, owner, 2026-11-08** - see the dependency below), and drop it beside
     every `[mou_ptr]` store: mou_settle on kern_big (mouse.inc:1179-1183),
     kern_small's inline MOU_SETTLE_STORES (3933), and kern_emu's vmm_boot_x
     (vmmouse.inc:339).
   - Keep resident: kbm_isr (IRQ1's handler for the whole kernel), KBM_SCAN's
-    keypad-5 latch, kbm_key's gates, kbm_shf and the thunks.
+    keypad-5 latch, kbm_key's gates, kbm_shf and the thunks - **and
+    `kbm_poll0`** (follow-up, 2026-11-08): `menu_track`, `ui_drag` and
+    `ui_grow` call it on every machine to eat the keys a modal loop would leave
+    in the BIOS buffer, and it calls `kbm_p5spend`, which stays resident or
+    gets a `[mou_ptr]` gate in front of its thunk.
   - There is **no first-press disk read**, which removes the fit lens's
     objection (mouse.inc:2412-2417: "the difference between a usable machine
     and an unusable one at exactly the moment the mouse fails").
   - Hibernate restores `[mou_ptr]` with the kernel, so a dropped keyboard mouse
     stays consistent across a resume.
   - **The cost the first draft missed** (cost lens): a machine with *no* mouse
-    keeps the image claimed for the whole session. That is about +450 plus
-    paragraph rounding and a claim slot, against 300..380 moved out, so **+85..+165
-    of RAM in use, for ever**, on exactly the 128KB mouseless 5150.
-  - Saving: -290..-380 static resident (MEASURED spans: kbm_tab..kbm_isr 306,
-    kbm_p5spend 16, kbm_pollm..kbm_ui 108, kbm_post 9, state 17).
+    keeps the image claimed for the whole session. **Corrected (follow-up,
+    2026-11-08):** `mod_need` claims whole 512-byte granules (`MEM_GRAN`), so
+    a ~450-byte image holds **512** bytes against the ~300 it took out:
+    **+130..+220 of RAM in use, for ever** (not +85..+165), on exactly the
+    128KB mouseless 5150; past 512 bytes of image it would be two granules,
+    about +650. `KERN_BUDGET` cannot see it, and `kernresident`/`small128` see
+    it only on a mouseless test machine.
+  - Saving: **about -300..-320 static resident** (follow-up, 2026-11-08; was
+    -290..-380): the MEASURED 456 (kbm_tab..kbm_isr less mou_clamp 306,
+    kbm_p5spend 16, kbm_pollm..mou_evfill 108, kbm_post 9, state 17), less
+    ~80 that stays resident (`kbm_poll0` 39 among it), less ~55..75 of glue
+    (a `mod_tab` row 4, the name 12, ~4 `mod_fp` slots 16, thunks 15..30, the
+    drops ~7 each). ESTIMATED; kern_big's figure, assumed the same on
+    kern_small and kern_mega. The -380 top was optimistic because
+    `kbm_poll0` cannot go.
+  - **The dependency fell (follow-up, 2026-11-08).** "Load at boot" rode
+    rt-2's boot cache, which is refused with WP2b. Without a new mechanism the
+    boot load is a `mod_need` of a file - a directory lookup and a read, 1-3
+    int 13h - about **0.4-1.2 s on every XT boot**. On kern_mega the image
+    lives above 1MB, so the mouseless cost is 0 conventional. rt-7 stays an
+    OWNER item: the owner asked for it to be explained
+    (`../followup-decisions-6-8.md` section 6) and has not decided it.
   - On kern_small the boot-cache copy is new code, unpriced (expect tens of
     `.cold` bytes), and it is decided with WP2's kern_small question.
 - `rt-3` [C] **The PS/2 runtime as an owner-loaded overlay**, XMEM.DRV's
@@ -520,12 +581,29 @@ first draft's two mechanisms are both replaced.
     `.vga`. That is **+16 on the gauge** (not +10), about -165..-185 on a mono
     machine (text.md's -165 against WP3's -185; 144 is the measured part), and
     ~30-40 clocks a run on VGA (<1% of the ~4,300-cycle prologue).
+  - **Priced (follow-up, 2026-11-08):** 187 bytes move (144 + 43, MEASURED),
+    about 10 of doors stay, so **-177 on a CGA/Hercules/MDA kern_big**, +16 on
+    VGA/EGA and the gauge, 0 on kern_small and kern_mega. Extra time is +5..+15
+    clocks on an aligned run (Note Pad's), +35..+55 unaligned. On a maximized
+    VGA Note Pad full repaint (51 runs, 3,927 cells, 0.894 s MEASURED VGA
+    price) 40 clocks a run is **0.048%**; the absolute worst case, one run a
+    cell (4.25 s), is **0.78%** (about 33 ms). PREDICTED: gfxbench cannot
+    resolve a sub-1% delta. The owner asked for this explained and has not
+    decided it.
   - The parity pad at font.inc:1839 and `t_hotpar` move with it.
 - *Refused:* `bytes-2`'s AT rung. Its XMS half, the bodies past `xm_have`
   (about 110..130 bytes), stays resident and is recorded with WP34.
 - *Record:* video-17's mono rung (-1,100..-1,500 on the VGA gauge) is
   complementary to the VGA rung (rt-4). It is the largest resident lever left
   and needs the Display page's CGA row greyed there.
+- `rt-5` (WP31's, for the gauge): **the mono figure is MEASURED, not
+  estimated** (follow-up, 2026-11-08): mono kern_big resides in **94,208**
+  bytes against the VGA gauge's 96,768 (-2,560), and `MONO_FLOOR`
+  (kernel.asm:9374) already computes it for `SK_MONO_KB`. Printing it in
+  `kernsize` is 0 shipped bytes and is what would make text-7's -177 visible;
+  gating it is the owner's policy question. `tests/kernresident.py` takes its
+  span from the VGA constant `KERN_END` (line 78), so a Hercules twin must read
+  the running floor `[mem_base]`, or it passes green and tests nothing.
 
 **Files.** kernel/mouse.inc, vmmouse.inc, font.inc, mod.inc (mod_tab rows),
 kernel.asm (the slide decision; the boot-cache copy), a new drivers/ps2mouse/
@@ -537,24 +615,31 @@ WP24).
 
 | | kern_small | kern_big | kern_mega |
 |---|---:|---:|---:|
-| rt-7 KBMOUSE (OWNER) | -290..-380 (gross of the kern_small boot copy) | -290..-380 | -290..-380 conv |
+| rt-7 KBMOUSE (OWNER) | -300..-320 (gross of the kern_small boot copy) | -300..-320 | -300..-320 conv |
 | rt-3 PS/2 overlay | n/a | **-220..-235 on every machine** | 0 (kept resident) |
-| text-7 (OWNER) | n/a | +16 gauge; -165..-185 mono | 0 |
-| **total** | **-290..-380** | **-494..-599 gauge; -675..-800 mono XT** | **-290..-380 conv** |
+| text-7 (OWNER) | n/a | +16 gauge; -177 mono | 0 |
+| **total** (follow-up, 2026-11-08) | **-300..-320** (was -290..-380) | **-504..-539 gauge; -697..-732 mono XT** (was -494..-599; -675..-800) | **-300..-320 conv** |
 | modules | KBMOUSE.DRV +400..+450 | KBMOUSE.DRV +400..+450; PS2 overlay ~+265 | KBMOUSE +400..+450 (0 conv) |
+| heap on a mouseless machine (rt-7) | +130..+220 for the session | +130..+220 | 0 conv |
 
-KBMOUSE.DRV takes a cluster on every system disk, small360 included.
+KBMOUSE.DRV takes a cluster on every system disk, small360 included. Without a
+boot-time carrier it also costs ~0.4-1.2 s on every XT boot (above).
 
 **Risk.** Medium. The drop sites must cover every `[mou_ptr]` store on every
 kernel. The overlay needs its door registry, on the `tests/vgarefs.txt` shape.
 
 **Rows.** `ovlchk`, `moddrop` (fast); `ps2mouse` (full); soak `wheelps2`,
 `mega-ps2mouse`, `vmmouse`, `vidresidentcga`, `vidresidentvga`,
-`kernresident`, `disptext`, `glyphcost`, `hibernate`. **New row:** a
-pointerless desktop driven by arrow keys on a CGA `_gla` machine (no `kbm*` row
-exists), and the same after a hibernate resume.
+`kernresident`, `disptext`, `glyphcost`, `hibernate`, `wirefleetnomouse`,
+`mouerrq`. **New row:** a row named for the keyboard mouse itself, with a CGA
+`_gla` leg and an after-hibernate leg. **Corrected (follow-up, 2026-11-08):**
+the first draft's "no `kbm*` row exists" was wrong - `wirefleetnomouse` (soak,
+tests/suite.py:2699) puts the probe back to "nobody has spoken", which
+switches the keyboard mouse on, and drives every gesture with the keypad and
+Space, and `mouerrq` covers the keyboard mouse retiring.
 
-**Dependencies.** WP2's boot-cache mechanism (rt-7). `t_moddrop` must know the
+**Dependencies.** WP2's boot-cache mechanism (rt-7) - refused with WP2b
+(owner, 2026-11-08), so rt-7 needs another carrier or pays the boot read. `t_moddrop` must know the
 init lifetime (fit lens: the first draft's "WP10 only" was wrong).
 
 **Travels with.** Batch F (mouse.inc) if it is in flight.
@@ -735,7 +820,12 @@ bytes the bug pass's boot fixes need. No resident byte moves.
   bytes). Then derive SPL_RESIDENT as (SPL_RES_SIZE+511)/512 and have the
   Makefile read it from the `ks:` line. **First audit every first-tick store**
   (vid_setmode, vid_wipe, vid_cga_equip, vid_6845_prog, bvs_apply) for an
-  address in sectors 5-8. **Amended (cost lens):** under KZIP, moving 2,048
+  address in sectors 5-8. **The existing gate on this window is `t_resident`**
+  (follow-up, 2026-11-08: soak row `resident`, tests/suite.py:1746): it fails
+  a `jmp kret*` below `spw_resident_end` beside the `SPL_RES_SIZE >
+  SPL_RESIDENT*512` guard, after the `vid_pop8` dead-adapter incident. What is
+  new is the derivation and the audit of DATA stores into sectors 5-8, which
+  `t_resident` does not check. **Amended (cost lens):** under KZIP, moving 2,048
   bytes into the packed tail saves
   - **~-403 on kern_big** (167 -> 166 sectors);
   - **~-383 on kern_mega** (-1 sector);
@@ -758,13 +848,28 @@ bytes the bug pass's boot fixes need. No resident byte moves.
 - `boot-9` [C], `boot-13` [C]: constants' comments carry their invariant and
   guard; the history ledger goes to docs/history.
 - *Optional, measure first:* `boot-17` [U]: kmain_o as a blob table, -30..-60
-  blob. The ledger above needs it, or a 14th sector.
+  blob. The ledger above needed it, or a 14th sector. **Neither now (owner,
+  2026-11-08):** the sector is refused, and BOOT3-PLAN's wave 1 gives the
+  blob ~508 free; boot-17's bytes were blob bytes only while kmain_o is in the
+  blob, so it rides BOOT3 wave 4 for its diagnostic value alone, if wanted.
+- **Re-routed through BOOT3-PLAN (owner, 2026-11-08).** boot-7's -41 is still
+  worth taking but is no longer load-bearing; boot-18 (BR-154, guard 5 counts
+  BLOB_LIFT) lands in BOOT3 wave 0; boot-4 and boot-10 gate BOOT3 wave 4's
+  shrink of the blob (13 -> 7 or 8 sectors), not waves 0-3
+  (docs/plans/BOOT3-PLAN.md section 11).
 
 **Sequencing with BR-1 (fit lens).** BR-1 keeps b2_runmax at the track bound
 "until SPL_RESIDENT sectors are aboard". boot-4 lowers SPL_RESIDENT from 9 to 5.
 So **land boot-4's first-tick audit before BR-1**, or re-check BR-1 after it.
 BR-1's own form is the cost lens's safe `xchg`/`push`/`pop` (+12) or the truth
 lens's +19 with the KZIP ES adjustment. It is batch A's, paid from boot-7's -41.
+**Re-priced (follow-up, 2026-11-08):** the KZIP ES adjustment is not needed -
+`mov si, KSIG_OFF + KZ_RPARA*16` with an `%error` moves the canary for 0 bytes
+on kern_big and kern_mega and -11 on kern_small - so BR-1's blob cost is the
++12 head bound alone, and its canary move and its `t_canary` rewrite (which
+need no room) land first. The canary has been inert on 360KB/720KB since
+2026-09-05 (KZIP the default), so boot-10's independent reader matters more,
+not less.
 
 **Files.** boot/boot2.asm, boothd.asm, boot.asm; kernel/splash.inc;
 kernel/kernel.asm (guard 5, the SPL guard at 8650-8653); Makefile (SPL_RESIDENT,
@@ -780,10 +885,12 @@ docs/history/.
 **Risk.** Low. boot-4's audit is the step that must not be skipped.
 
 **Rows.** `canary`, `image`, `diskverify` (fast); `bootsmoke` (full); soak
-`blobruns`, `bootfloor`, `bootfloor-ab`, `smallboot`, `splashbar`, `splashspin`,
-`hdboot`, `hdtakeboot`, `pravetzboot`, `v20boot`.
+`resident` (added, follow-up, 2026-11-08), `blobruns`, `bootfloor`,
+`bootfloor-ab`, `smallboot`, `splashbar`, `splashspin`, `hdboot`, `hdtakeboot`,
+`pravetzboot`, `v20boot`; with BOOT3-PLAN, its section 13's rows.
 
-**Dependencies.** None. It unblocks batch A's BR-1, BR-6, BR-25 and BR-63.
+**Dependencies.** None. It unblocks batch A's BR-1, BR-6, BR-25 and BR-63,
+with BOOT3-PLAN wave 1 for kern_big's blob.
 
 **Travels with.** **Batch A**, in the same session and first. They share
 boot2.asm, splash.inc and kernel.asm's guards.
@@ -796,12 +903,35 @@ boot2.asm, splash.inc and kernel.asm's guards.
 zeroed and those that say it does not. That contradiction cost fsx_cur. Then
 free the `.ovl` room the ledger needs.
 
+**Settled (owner and follow-up, 2026-11-08).** "iirc we didn't used to, and
+now do" - confirmed from the code (`../areas/gap-bss-zeroing.md`): kernel
+`.bss` is zero at `kmain` on every shipped load path since PR #61 (2e8e2924,
+2026-08-08), on all four kernels, KZIP and NOKZIP, floppy, hard disk and live
+media, and every warm restart. No instruction clears it: the next section's
+`start=` makes it zero file padding, and every loader lands it. What is NOT
+zero: `.bss` before `kmain` (it holds the packed stream during the load, so
+stage 2 and the splash keep their state in the plain head), `.lowbss`'s
+`dsk_secbuf` (the `.ovl` spill), and `.vgabuf`. The 65 false comments are
+corrected; about 30 "`-f bin` zeroes nothing" lines are stale but harmless.
+
 **Findings taken.**
 - `boot-8` [C]: in shipped kern_big the file bytes between kernel_text_end and
   `.ovl` are zero, and every loader writes them. Add one `%if` on the layout.
-- `histsys-16` [C]: adopt the zeroed rule. Extend t_bsssentinel to assert the
-  `.bss` span is all-zero on **all four** budgeted kernels. Drop the resident
-  zero stores (~-20, unmeasured).
+- `histsys-16` [C]: adopt the zeroed rule. ~~Extend t_bsssentinel to assert
+  the `.bss` span is all-zero on **all four** budgeted kernels.~~ **The gate is
+  a new host check instead (follow-up, 2026-11-08): `tests/unit/t_bsszero.py`,
+  fast tier** - for each built kernel (`build/`, `build/smallk/`,
+  `build/megak/`, any `$(BUILD)` with a `kernel.map`) parse the map's `.text`
+  and `.bss` ranges, assert `kernel.bin` covers `[text_file + bss_vstart, +
+  bss_len)` and that every byte there is 0; leave `kernel.sys` to
+  `os88kz.py`'s existing round-trip refusal. Break it on purpose once (drop
+  `.ovl`'s `start=` in a private tree). 0 resident and image bytes, ~40 lines,
+  ~50 ms per `make`; it is the build-time guard the owner prefers to resident
+  bytes. An assembly-time `%if` cannot do it (NASM cannot name the next
+  section generically). `t_bsssentinel` keeps its non-zero-sentinel rule
+  (followup-already-exists C8). Optionally a second check that nothing stage
+  2 writes before `kz_all` lies past `KZ_HEADSEC*512`. Drop the resident zero
+  stores (~-20, unmeasured).
 - `sched-12` [C]: sched_init's stores (-30 `.ovl`). The scheduler already
   depends on the rule (`[sch_chbusy]`).
 - `hiber-17` [C] (-9 `.boot2`), `sysmisc-10` [C] (-15 `.ovl`). Their comments
@@ -816,11 +946,14 @@ tests/unit/t_bsssentinel.py; SPEC 2.5, 2.6, 8.
 
 **Risk.** Low once the gate holds on four kernels.
 
-**Rows.** `bsssentinel` (soak; promote it, since it is a rule about an
+**Rows.** New `bsszero` (fast, follow-up, 2026-11-08; `secs` measured when
+registered), `bsssentinel` (soak; promote it, since it is a rule about an
 artefact), `kernbudget` (fast); `bootsmoke`, `small128`, `kernresident`
 (full); soak `megahigh`.
 
-**Dependencies.** None. WP8 and the bug batches' `.ovl` items depend on it.
+**Dependencies.** None. The bug batches' `.ovl` items depend on it (WP8's
+install, which also did, is now a knob build's); its `.ovl` -45 still lands
+beside BOOT3-PLAN wave 3's 176 (that plan's section 11).
 
 **Travels with.** WP1 (same session).
 
@@ -837,10 +970,25 @@ artefact), `kernbudget` (fast); `bootsmoke`, `small128`, `kernresident`
 The stack-overflow panel exists (174 bytes on kern_big, MEASURED) and handles
 only stack overflow. This WP owns BR-8 and BR-9 (fit lens: one owner).
 
+**Decided (owner, 2026-11-08).** On kern_mega, where the kernel can afford not
+to crash, closing the faulting package beats killing the OS - mega_fkill
+already does it (gfce-2 answered). In real mode a divide fault deserves at
+least a stack-overflow-style message where it cannot be recovered from, but it
+has not been met in production, so **the panel's resident bytes, the ~174-byte
+package answer included, wait behind a build KNOB until a field report says it
+is being hit** ("That is a balancing act"). The same weighing applies to every
+diagnostic panel for a failure nobody has met. And **packages are trusted**:
+the window doors, the wake fence, the bound before the div and DESK.DRV's
+`.make` bound are not taken as retail code (WP19's APICHK knob at most). What
+this WP still ships: gfce-3's divide ratchet (build-time, 0 bytes), gfce-6's
+CFG_MAP domain column (a hostile FILE, not a package argument), gfce-7, and the
+SPEC text. **0 resident on every kernel.**
+
 **Findings taken.**
 
 - `gfce-1` [C] = `histsys-2` [K] + `isr-8` [C] (BR-9): **point int 0, and int 6
-  on a 286+, at a generalised death panel.**
+  on a 286+, at a generalised death panel. A KNOB, off in shipped kernels
+  (owner, 2026-11-08)**; everything in this bullet is the knob build's.
   - sch_diepanel takes SI = message and AX/DX = the evidence, and prints
     "DIVIDE ERROR TASK nn AT cccc:iiii NAME".
   - Never hook int 5 (PrtSc).
@@ -860,7 +1008,10 @@ only stack overflow. This WP owns BR-8 and BR-9 (fit lens: one owner).
 - `gfce-2` [C] **OWNER, before gfce-1 ships**: does the panel halt as a bug
   report, or does the faulting package close and the desk live? mega_fkill is
   the precedent. The second form is about +45..+65 more, recorded, and the 286+
-  needs a skip decoder.
+  needs a skip decoder. **Answered (owner, 2026-11-08):** kern_mega closes the
+  faulting package (as it does); real mode shows a stack-overflow-style
+  message in the knob build only. The +45..+65 package-close form on the
+  real-mode kernels is not asked for.
 - `gfce-3` [C] **A divide ratchet**: tests/unit/t_divsites.py (fast) and
   tests/divsites.txt.
   - Register every div/idiv in kernel/ and drivers/ by file and label, with a
@@ -869,7 +1020,10 @@ only stack overflow. This WP owns BR-8 and BR-9 (fit lens: one owner).
   - Counted: 95 div, 1 idiv and 7 xlatb in the kernel; 48 in drivers. Five
     kernel sites are unfenced today.
   - The list only shrinks. It can carry xlat and computed jumps. 0 bytes.
-- `wm-1` [K] + `wm-13` [C] + `histsys-11` [C] (BR-8): **the window doors.**
+- `wm-1` [K] + `wm-13` [C] + `histsys-11` [C] (BR-8): **the window doors. Not
+  taken: packages are trusted (owner, 2026-11-08)**; the rest of this bullet
+  is the APICHK knob's design (WP19), and only the SPEC sentence (package
+  doors trust BX, as OSAPI_WM_WAKE says) ships.
   - **Amended (truth lens):** clamping before the div only swaps a dead machine
     for silent corruption. A wild BX maps to slot MAX_WIN-1 and the bodies
     still write through it (wm_show_b's `or [bx+W_FLAGS]`; wm_destroy unlinks
@@ -896,7 +1050,8 @@ only stack overflow. This WP owns BR-8 and BR-9 (fit lens: one owner).
   Take it only if a counter shows wm_ptr2idx hot on the damage pass (one
   rebuild).
 - `gfce-5` [C]: DESK.DRV's `.make` divides a package BX fenced only by
-  plausibility. Run wm_isrec's bound first. +5 DESK.DRV.
+  plausibility. Run wm_isrec's bound first. +5 DESK.DRV. **Not taken: the
+  same package-argument class (owner, 2026-11-08).**
 - `gfce-6` [K]: **SYSTEM.CFG gets a MAX column** in CFG_MAP. An out-of-domain
   byte **skips** the store so the boot default stands (the verifier's
   correction: 0 is not every key's default).
@@ -905,7 +1060,8 @@ only stack overflow. This WP owns BR-8 and BR-9 (fit lens: one owner).
   - It competes for `.ovl` (see the ledger).
 - `gfce-7` [C]: cmz_jsayx tests `cmp ax, FM_NERR` (11), not 16. 0 bytes.
 - *Optional:* `sched-9` (record): the panel trusts the table it calls suspect.
-  +4.
+  +4. With the generalised panel a knob, this is a +4 for the retail
+  stack-overflow panel alone, still record.
 
 **Files.** kernel/sched.inc (panel), kernel.asm (install in sched_init),
 wm.inc, instance.inc (inst_wchk's same off-by-one comment), deskmod.inc,
@@ -918,16 +1074,19 @@ door text).
 
 | | kern_small | kern_big | kern_mega |
 |---|---:|---:|---:|
-| panel + stubs (gfce-1) | +40..+55 | +45..+60 | 0 (IDT) |
-| doors + wake fence | +28..+44 | +28..+44 | +28..+44 conv |
-| bound before div | +2 | +2 | +2 |
-| **resident total** | **+70..+101** | **+75..+106** | **+30..+46 conv** |
-| transient | +20..+30 `.boot2` | +20..+30 `.ovl`, +22 `.ovl` (gfce-6) | +20..+30 `.ovl` |
-| modules | - | DESK.DRV +5, CTRL.DRV +22 | DESK.DRV +5 |
+| panel + stubs (gfce-1): **knob only** (owner, 2026-11-08) | 0 (+40..+55 in the knob) | 0 (+45..+60 in the knob) | 0 (IDT) |
+| doors + wake fence: **not taken** (owner) | 0 (+28..+44 in APICHK) | 0 (+28..+44 in APICHK) | 0 conv |
+| bound before div: **not taken** (owner) | 0 | 0 | 0 |
+| **resident total** | **0** (was +70..+101) | **0** (was +75..+106) | **0 conv** (was +30..+46) |
+| transient | 0 (the install, +20..+30 `.boot2`, is the knob's) | +22 `.ovl` (gfce-6); the install's +20..+30 is the knob's | the install's +20..+30 is the knob's |
+| modules | - | CTRL.DRV +22 (gfce-6); DESK.DRV +5 not taken | DESK.DRV +5 not taken |
 
-**Value per byte.** It is the clearest growth in the phase. The panel turns a
-dead machine into a named report on exactly the machines the project targets.
-The doors stop a wild window pointer from unlinking another package's window.
+**Value per byte.** It was the clearest growth in the phase: the panel turns a
+dead machine into a named report on exactly the machines the project targets,
+and the doors stop a wild window pointer from unlinking another package's
+window. **The owner weighed it the other way (2026-11-08):** nobody has met the
+fault in production, and a package's wild pointer is the package's bug. The
+knob build keeps the value for the day a field report asks for it.
 
 **Risk.** Low-medium. The panel must not trust the scheduler tables. DOS.O88's
 vector exchange must round-trip. A door refusal is a new answer on a path some
@@ -936,11 +1095,12 @@ package may take wrongly, so the package sweep in the final pass matters.
 **Rows.** soak `int0sweep`, `mega-int0sweep`, `stkpanel`, `dispclose`,
 `dispclose-small`, `zonedmg`, `dmgcull`, `kdos`, `timerrace`, `cfgtrip`;
 `mirror` (fast). **New:** a `tests/` package dividing by zero in a callback
-gets the panel on a 5150 `_gla` profile and as `box-<row>` on 86Box's 286;
-break the install and watch it time out. A wild-pointer WM call under
-int0sweep, refused. `divsites` (fast).
+gets the panel on a 5150 `_gla` profile and as `box-<row>` on 86Box's 286, on
+the knob build (owner, 2026-11-08); break the install and watch it time out.
+A wild-pointer WM call refused is the APICHK row's (WP19). `divsites` (fast).
 
-**Dependencies.** WP7 (`.ovl` room). gfce-2's answer before the panel ships.
+**Dependencies.** WP7 (`.ovl` room) for gfce-6 only. gfce-2 is answered
+(owner, 2026-11-08).
 
 **Travels with.** Batch F (sched.inc). The door half lands in batch C's
 session if C is first.
@@ -953,6 +1113,24 @@ session if C is first.
 package built against cells newer than the running kernel far-calls past the
 table's end, and a newer apps disk in an older machine is the ordinary case.
 Only The Wire's own cell fence guards it today.
+
+**Parked: it must prove its worth before it spends bytes (owner,
+2026-11-08).** The owner likes it in general, but packages and drivers already
+carry versions checked before anything runs, so a run-time level would only
+catch a mistake in that versioning - and the same mistake could break the new
+number. **The one argument for it** (follow-up, 2026-11-08,
+`../followup-already-exists.md` M5): the level and the per-cell table already
+exist as The Wire's `WIRE_LEVEL` = 7 and `WIRE_CELL_LEVELS`
+(`tools/os88wire.py:120-137`), checked against each package's calls, and The
+Wire greys a too-new package (SPEC 20.2.0.1); `abicompat` tests the old-kernel
+case. So the computation this WP proposes is The Wire's existing code, and the
+only gap left is the kernel word and the load-time check for a package **copied
+by hand**, which reaches the same `PKG_FMT` without The Wire and far-calls past
+the table. The kernel half is ~8 `.cold`. The design below stands as the
+record of what would be built; its bytes leave the phase totals until it is
+taken. The WPs that named it as a dependency (WP15, WP16, WP18, WP22, WP27)
+keep their appended cells and rely on the package's own version and The
+Wire's level meanwhile.
 
 **Findings taken.** `abi-6` [C], `loader-6` [K], `gfr-5` [C].
 **Amended (fit lens; gfr-5; flagday A4).**
@@ -988,7 +1166,7 @@ instance.inc (the class mask), apps/os88api.inc (level, OS88_NEED, header
 macro), tools/os88pkg.py, os88wire.py, os88disk.py, os88pkgsize.py,
 os88rate.py, os88face.py, os88vbt.py; SPEC 20.2, 20.2.0.1.
 
-**Bytes.**
+**Bytes.** **0 counted (parked, owner, 2026-11-08).** If taken:
 - +8..+9 `.cold` on every kernel (kern_mega high); 0 for the word.
 - About +9-10 per opting package.
 
@@ -999,8 +1177,9 @@ os88rate.py, os88face.py, os88vbt.py; SPEC 20.2, 20.2.0.1.
 refused with LD_EVER; a 14-character name with byte 31 set round-trips through
 os88disk.py.
 
-**Dependencies.** None. **Land it before any WP that adds a cell** (WP2's hm-9,
-WP15, WP16, WP18, WP22, WP27).
+**Dependencies.** None. ~~**Land it before any WP that adds a cell** (WP2's
+hm-9, WP15, WP16, WP18, WP22, WP27).~~ Parked (owner, 2026-11-08); if it is
+taken, it still lands before the first new cell.
 
 **Travels with.** WP26 (one session, sequential lock updates).
 
@@ -1080,7 +1259,11 @@ already making. 0 shipped bytes. Each item is testable red-on-purpose
 
 **Owned elsewhere.** `mc-10` (BR-68, batch H): its counter is +8..+10 `.mega`
 plus **+2 conventional `.bss`** for `[mega_kfix]` beside `[mega_infault]`
-(cost lens).
+(cost lens). **Behind a knob (follow-up, 2026-11-08, the owner's weighing):**
+an instrument for a kernel mistake no machine has met belongs in a knob build;
+MEGATRAP=1's #GP census to E9 (`tools/megatraps.py`) is its natural home.
+WP7's `t_bsszero` (fast) is a gate of this WP's kind and is registered with
+WP7.
 
 **Files.** tools/checkdocs.py, abilock.py, os88test.py, os88soak.py;
 tests/unit/t_mirror.py, t_api_abi.py, t_registry.py, t_kernbudget.py, a new
@@ -1094,7 +1277,7 @@ apps/os88pit.inc.
 
 **Rows.** These are rows: `checkdocs`, `docindex`, `mirror`, `api-abi`,
 `abilock`, `registry`, `asmrules`, `kernbudget`, `canary` (fast), plus new
-`sections`, and api-abi's per-kernel mode in full.
+`sections` and WP7's `bsszero` (fast), and api-abi's per-kernel mode in full.
 
 **Dependencies.** None. **Run it first**: WP3, WP5, WP24 and WP31 lean on it.
 
@@ -1392,7 +1575,8 @@ SDK additions that retire a standing rule violation.
   still run on kern_small and on older kernels, so their case-6 overstrike sites
   and tests/textsites.txt rows **stay** until the bold exists on kern_small too
   (+35..+45 there, against its 64KB rule) or the packages refuse with WP9's
-  OS88_NEED.
+  OS88_NEED (WP9 is parked, owner, 2026-11-08, so the first branch, or the
+  package's own version, is what is left).
 - `text-16` [K] **Real MENU_SEP and MENU_CHK prefixes.** kern_big -5. **Amended
   (cost lens):** kern_small needs menu_drop's +12 too, or new packages show
   selectable blanks there.
@@ -1408,8 +1592,11 @@ SDK additions that retire a standing rule violation.
   or give it the lazy arm's go-home bracket. 0 shipped.
 - Gap `gi-10` [C]: os88_wseq_put uses `rep movsb` (+4 package bytes, ~50 -> 17
   clocks a byte).
-- Gap `gi-7` [C]: os88pit.inc says pit_now is wrong inside an armed
-  FASTTICK/RATE bracket. Docs; the SPEC half is WP26.
+- ~~Gap `gi-7` [C]: os88pit.inc says pit_now is wrong inside an armed
+  FASTTICK/RATE bracket. Docs; the SPEC half is WP26.~~ **Withdrawn
+  (follow-up, 2026-11-08):** `apps/os88pit.inc:39-43` already says it, from
+  the review's own doc pass (`10912c6e`); only SPEC 72.15.1's sentence is
+  owed, in WP26.
 
 **Owned elsewhere.** `hm-7` (BR-59, batch D: +20 per parts image).
 
@@ -1432,7 +1619,9 @@ them in the final pass.
 `pxparts`, `rehome`, `rehomemove`, `rehomeabort`, `megarehome`, `sheetmsep`,
 `assocopen`, and the parts packages' own rows.
 
-**Dependencies.** WP9 (OS88_NEED; the header-bit ledger). WP16's gi-2 for gi-3.
+**Dependencies.** WP9 (OS88_NEED; the header-bit ledger) - parked (owner,
+2026-11-08); the header-bit ledger is a text and still applies. WP16's gi-2 for
+gi-3.
 
 **Travels with.** Batch D (loader.inc).
 
@@ -1574,9 +1763,16 @@ to block on something other than time. sch_lock's rules should be numbered.
   - Quote **+40..+55**, about 12 less if sch_wake_ui folds onto it.
 - `sched-13` [C]: evq_pop's four `ss movsw` (0 bytes, ~35 clocks cheaper).
 - `sched-11` [K]: one macro for the chain swap and one for the hook guard, so
-  fsx_rtick gets BR-82's canary too. 0 bytes.
+  fsx_rtick gets BR-82's canary too. 0 bytes. (BR-82's canary is a knob's now,
+  follow-up, 2026-11-08; the shared macros are worth having anyway.)
 - Gap `ctx-8` [K]: "never block under sch_lock" becomes a numbered rule in SPEC 7.
   The tripwire in gfx_lock's `.block` arm is +7, or 0 as WP19's static gate.
+  **Follow-up (2026-11-08):** the rule's text is already SPEC 7's (from
+  `14428309`: a nestable count under which nothing may wait on another
+  task); what is missing is its NUMBER and the lock ORDER (`gfx_lock`,
+  `sch_lock`, `mem_cp_busy`, the module lock). The tripwire is a diagnostic for
+  a failure no machine has met, so under the owner's weighing it is a knob's or
+  the static gate's - never retail (uncounted either way).
 - *Optional, measure first:* `histsys-5` [C] with gap `ctx-3` [C]: **release
   sch_lock across the UI task's floppy int 13h.** Three preconditions (ctx-3):
   1. the mouse ISR's "held by us" arm tests `cmp byte [sch_cur],0` (+7; it
@@ -1594,7 +1790,12 @@ to block on something other than time. sch_lock's rules should be numbered.
   revolution (~200 ms).
 
 **Owned elsewhere.** `sched-3` (BR-80), `sched-6` (BR-81), `sched-7`/`isr-9`
-(BR-82, the ISR stack canary; its seed wants WP7's `.ovl` room): batch F.
+(BR-82, the ISR stack canary; a knob build's now, follow-up, 2026-11-08, so its
+seed no longer wants `.ovl` room): batch F. The owner's note on stacks
+(2026-11-08): work on whatever context was there has caused one or two
+problems, not shutdown-related - a sound interrupt arriving can drive a package
+already close to its stack's edge over it; the mouse and idle already have
+stacks of their own, and more stack work is not needed immediately.
 
 **Files.** kernel/sched.inc, events.inc, ui.inc, fsx.inc, disk.inc and
 mouse.inc (histsys-5), drivers/sound/sb.inc (refill on wake),
@@ -1631,7 +1832,11 @@ violation are the batches':
 - the DF `cld`s, BR-86 (F);
 - abi-7, BR-73 (C).
 
-This WP is the model they are fences of.
+This WP is the model they are fences of. **After the owner's answers
+(2026-11-08), "packages are trusted" is a recorded principle and the six
+package-argument fences (BR-8's doors, BR-22, BR-29, BR-30, BR-37, BR-173) are
+not taken as retail code**, so this WP's APICHK knob is their only home - which
+makes it the one place a package's misuse is caught, at 0 shipped bytes.
 
 **Findings taken.**
 - `abi-8` [C] with gap `ctx-7` [C] **Machine-readable tags in each contract
@@ -1940,20 +2145,20 @@ once.
 |---|---|
 | `abi-12` [C] / `abi-13` [U] | the verb-register rule for new doors (AL, or BL when AL is an argument); the naming rule for new cells |
 | `abi-14` [K] | an X cell's pointer argument is "SI (in your DS; ES is not read)"; GFX_SPANS says ES:SI |
-| `isr-3` [C] (BR-85) | OSAPI_WM_WAKE from an ISR requires SS = LOW_SEG; the SS-independent evq_push (+3, gap ctx-5) is batch C's code |
+| ~~`isr-3` [C] (BR-85)~~ | ~~OSAPI_WM_WAKE from an ISR requires SS = LOW_SEG~~ **withdrawn (follow-up, 2026-11-08):** `apps/os88api.inc:6631-6633` already says "ISR-safe given SS = LOW_SEG" (`14428309`); the SS-independent evq_push (+3, gap ctx-5) stays batch C's code |
 | `sched-4` [C], `sched-5` [K], `histsys-15` [K] (BR-78) | on the UI task TASK_SLEEP ends at the first input; its range is 1..32,768 ticks (re-derived: the first scan sees ticks+1, so AX = 0x8001 still sleeps its full length) |
 | `wm-8` [C] (BR-78) | OSAPI_WM_TIMER: AX ≤ 32,767 ticks |
 | `gfx-5` [C], `text-3` [C] (BR-77) | the pen after BLIT4 and after FONT_RUN is unspecified |
-| `ui-8` [C] (BR-22) | the clipboard is **not** worker-safe |
+| ~~`ui-8` [C] (BR-22)~~ | ~~the clipboard is **not** worker-safe~~ **withdrawn (follow-up, 2026-11-08):** `apps/os88api.inc:5684-5689` and SPEC 55.4 already say it (`14428309`) |
 | `ui-9` [C] (BR-115) | W_ONMOUSEUP "unless the event ring overflowed" (batch C may instead take the +12 dispatch) |
 | `loader-10` [C] (BR-122) | PKG_START: pin a movable source claim across the call |
-| `hm-2` [K], `mem-6` [K] (BR-104) | the self-region arm of mem_find_own is deliberate; record the owner's decision either way (closing it is +6..+8, batch D) |
+| `hm-2` [K], `mem-6` [K] (BR-104) | the self-region arm of mem_find_own is deliberate; record the owner's decision either way (closing it is +6..+8, batch D; under "packages are trusted" it is not counted there, follow-up, 2026-11-08) |
 | `histsys-17` [C] | the eight lock-bound display fields become gfx_dc, adjacent, cleared with two or three word stores (-4..-8; ABI-BREAK-LIST R6 gets a home) |
 | gap `gfce-8` [C] | SPEC 18.4 gets the error CLASS table (DOS 59h style); the SDK preamble says CF=1 is the only universal refusal and AX=1 means "not on this kernel". **Not** one renumbered space. Flagday R9's contract half stays at the flag day: Recorder reads the stream stub's AX=4 (recorder.asm:754), and the bare-stc stubs preserve AX for OSAPI_SND_FM callers (truth lens) |
 | gap `cursor:mc-5` [C] | OSAPI_GFX_LOCK only *promises* to hide the cursor since SPEC 7.1.4; raw framebuffer writers have no way to make it happen (an appended CUR_EXCLUDE cell is recorded) |
 | gap `xm-12` [C] | name SPEC 41.8's context rule for XMEM ALLOC/FREE/COPY |
 | gap `hdk-2` [K] | os88api.inc:3490: the HDD door reaches a partition erase, by SPEC 117.4's design |
-| gap `gi-7` [C] | SPEC 53.2.1 and 72.15.1: pit_now is wrong inside an armed FASTTICK/RATE bracket |
+| gap `gi-7` [C] | SPEC 72.15.1: pit_now is wrong inside an armed FASTTICK/RATE bracket (**narrowed, follow-up, 2026-11-08**: SPEC 53.2.1 and os88pit.inc already say it, `10912c6e`) |
 | flagday R2-2 | the wording row |
 
 **Files.** apps/os88api.inc, SPEC 7, 8, 13.9, 18.4, 20.3, 21.5, 41.8, 53.2.1,
@@ -1969,7 +2174,8 @@ conv).
 **Dependencies.** None. Land it after WP19's tags if both are in flight, or with
 WP9, so the lock moves as few times as possible.
 
-**Travels with.** WP9.
+**Travels with.** WP9 (parked; this WP's single lock update goes ahead on its
+own).
 
 ---
 
@@ -1991,7 +2197,8 @@ sysmisc-6, ui-16).
   path are this record's". +12 CTRL.DRV, WIN16 -12. It is the additive half of
   flagday C10. **Check what an older kernel does with AH=0FEh.**
 - `shell-8` [K]: the boot reader regrows the shortcut claim to ceil(rows/8) KB.
-  +10 `.boot2`; it is in the blob ledger.
+  +10 `.boot2`; it is in the blob ledger (in `.boot3` from BOOT3-PLAN wave 2,
+  which moves the shortcut reader).
 - `ui-11` [C]: one double-click interval for the machine, read by the kernel's
   four detectors and set from the Mouse page. +5 plus a 4-byte inline cell.
 - *Optional:* `ui-12` [U], a clipboard generation count (+4 `.text`, +2 `.bss`,
@@ -2011,7 +2218,8 @@ clip.inc, apps/os88api.inc, apps/win16/w16progm.inc.
 **Rows.** soak `fdlgchoose`, `fdlgsmall`, `deskitem`, `desksc`, `stikmenu`,
 `toast`, `clipkeep`, `mouseup`, the WIN16 shortcut row; `toast` (fast).
 
-**Dependencies.** WP9 (the cells).
+**Dependencies.** WP9 (the cells) - parked (owner, 2026-11-08); check what an
+older kernel does with each new cell before shipping a caller.
 
 **Travels with.** Batches C and E.
 
@@ -2170,7 +2378,16 @@ kernel or kernel group carries, and 5 are true divergence.
 - Gap `rt-5` [C]: kernsize prints **per-class** resident figures (VGA, mono
   8088, ROM/HMA-adopted) and the blob/`.ovl` tally lines the ledger above wants,
   and `kernresident` gains a mono-machine row in soak. KERN_BUDGET stays the VGA
-  ceiling.
+  ceiling. **Follow-up (2026-11-08):** the mono figure is not an estimate - the
+  constants give **94,208** (`MONO_FLOOR`, kernel.asm:9374, already feeding
+  `SK_MONO_KB`), 2,560 under the gauge's 96,768, and the `ks:` line already
+  hands kernsize every input, so printing it (option (a)) is host Python only.
+  The mono soak row must read the running floor `[mem_base]`: today's
+  `kernresident` takes its span from the VGA constant `KERN_END` (line 78) and
+  would pass green on a Hercules machine while testing nothing. Gating the mono
+  figure (option (b), a `KERN_MONO_BUDGET`) is the owner's policy question,
+  and it earns its keep only once a mono-only rung lands
+  (`../followup-decisions-6-8.md` section 8).
 - *OWNER, prototype first:* `gkm-6` [C], **retire kern_emu.**
   - Rebuild VMMOUSE.DRV as a DRVC_POINT worker driver on kern_big, the way
     USBMOUSE.DRV works.
@@ -2381,8 +2598,13 @@ Following gap ul-11, how each kind of figure this plan quotes stands:
   the Victory 286's 0.257 ms/KB.
 - PREDICTED: every cycle figure for the door (+150..+215), the boost, the
   sch_lock release, gfx-4's 5-10×, text-9's 4.8 ms and files-5's 35 ms.
-- ESTIMATED: histsys-7 (-90..-140), rt-7 (-290..-380) and hm-9 (+50..+80).
-  WP2's -2,568 is a MEASURED span, but its glue is ESTIMATED.
+- ESTIMATED: histsys-7 (-90..-140), rt-7 (-300..-320, follow-up, 2026-11-08;
+  was -290..-380) and hm-9 (+50..+80, parked). WP2b's -2,568 was a MEASURED
+  span with ESTIMATED glue (refused, owner, 2026-11-08).
+- MEASURED (follow-up, 2026-11-08): the mono kern_big resident figure, 94,208
+  (`MONO_FLOOR`), and text-7's 187 moved bytes. PREDICTED: text-7's
+  0.048%/0.78% of a Note Pad repaint, rt-7's 0.4-1.2 s boot read without a
+  carrier.
 
 ---
 
@@ -2397,7 +2619,7 @@ means `bugs.md` owns it and the WP named in the text travels with it. "WPn
 | abi-3 | hazard | medium | C | WP10 (BR-62) | t_api_abi decodes only kern_big's table |
 | abi-4 | hazard | low | K | WP10 (BR-146) | An N-cell body reads the caller's DS out of api_rn's stack frame at a literal offset |
 | abi-5 | hazard | low | C | WP4 (BR-145) | OSAPI_DRV_CALL promises DI back, but neither the kernel nor the driver contract keeps it |
-| abi-6 | rethink | high | C | WP9 | No runtime API level: a package cannot ask which cells this kernel has |
+| abi-6 | rethink | high | C | WP9 (parked: must prove its worth (owner, 2026-11-08)) | No runtime API level: a package cannot ask which cells this kernel has |
 | abi-7 | weakness | medium | C | batch C (BR-73) | Packages write the window record's geometry, which the SDK says they may not |
 | abi-8 | weakness | medium | C | WP19 (BR-22) | Rules about which task or context may call a cell are prose, and SPEC admits one has no enforcement |
 | abi-10 | weakness | medium | C | WP24 | Contracts are written in up to four places, and the copies have gone stale |
@@ -2414,16 +2636,16 @@ means `bugs.md` owns it and the WP named in the text travels with it. "WPn
 | boot-10 | rethink | low | C | WP6 | Let the build CHOOSE KSIG_OFF and SPL_RESIDENT instead of checking hand-typed values afterwards |
 | boot-11 | perf | low | C | batch A (BR-155) | sch_isr draws a 28.7 ms spinner frame with IF=0 throughout kmain_o |
 | boot-13 | consistency | low | C | WP6 | The floppy handoff leaves BX:CX as residue, while two comments promise zeros |
-| boot-17 | rethink | low | U | WP6 | Make kmain_o a table rather than a call sequence |
+| boot-17 | rethink | low | U | WP6 (BOOT3 wave 4, diagnostic only (owner, 2026-11-08)) | Make kmain_o a table rather than a call sequence |
 | boot-18 | weakness | low | K | WP6 (BR-154) | Guard 5 omits BLOB_LIFT on every shipped kernel |
 | boot-19 | weakness | low | C | WP6 | boot.asm's default constants would build a wrong sector silently |
 | bytes-2 | size | medium | K | WP3 (superseded by rt-3) | An AT rung: the PS/2 runtime and the XMS bodies, slid over on an 8088 |
-| bytes-3 | rethink | medium | C | WP2 | FILECP and FDLG on kern_big as boot-preloaded purgeable images (the COMMAND.COM transient model) |
+| bytes-3 | rethink | medium | C | WP2 (REFUSED with WP2b (owner, 2026-11-08)) | FILECP and FDLG on kern_big as boot-preloaded purgeable images (the COMMAND.COM transient model) |
 | bytes-8 | size | low | K | WP4 (kern_small; kern_big conditional) | The module names' '.DRV' suffix |
 | bytes-9 | consistency | low | K | WP24 | KERNEL-MEMORY.md's hand-copied ladder and Task Manager tables are ~9KB stale |
 | bytes-10 | consistency | low | C | WP24 | AGENTS.md has lost CLAUDE.md's byte rules |
 | dr-1 | hazard | medium | C | batch A (BR-25) | Boot partition mounted with AH=08h geometry while the volume is addressed with the BPB's |
-| dr-2 | hazard | medium | C | batch E (BR-37) | Batch bracket's 'UI is frozen' assertion is not enforced at a door packages can call |
+| dr-2 | hazard | medium | C | batch E (BR-37; not taken (owner, 2026-11-08)) | Batch bracket's 'UI is frozen' assertion is not enforced at a door packages can call |
 | dr-3 | weakness | medium | C | batch E (BR-61) | A failing read-ahead fill runs the full retry ladder, then the direct read runs it again |
 | dr-4 | hazard | medium | C | batch E (BR-16) | Status 06h (media changed) is retried as a generic error and discarded |
 | dr-5 | rethink | medium | C | WP16 | OSAPI_FILE_FIND stays quadratic though dsk_dscan already resumes from a raw slot |
@@ -2436,7 +2658,7 @@ means `bugs.md` owns it and the WP named in the text travels with it. "WPn
 | dr-14 | consistency | low | K | batch E (BR-141) | dsk_fdd_probe clears unit 1's calibrated bit whatever unit it probed |
 | dr-16 | consistency | medium | C | WP25 | Documentation drift in this area is a defect of its own |
 | dr-18 | rethink | low | U | WP16 | Mount and listing are one routine with quiet flags |
-| dw-4 | hazard | medium | C | batch E (BR-22) | The UI-task-only rule for every file cell is enforced by nothing |
+| dw-4 | hazard | medium | C | batch E (BR-22; not taken (owner, 2026-11-08)) | The UI-task-only rule for every file cell is enforced by nothing |
 | dw-5 | hazard | low | C | batch E (BR-133) | A failed FAT flush keeps its dirt, which dsk_fatw_park may later write to another disk |
 | dw-6 | hazard | low | C | batch E (BR-134) | WRITE_AT's INSIDE arm writes up to 511 bytes past the caller's buffer onto disk slack |
 | dw-9 | consistency | low | C | WP1 | dskw_find matches the volume label, so its name cannot be used |
@@ -2521,19 +2743,19 @@ means `bugs.md` owns it and the WP named in the text travels with it. "WPn
 | hm-5 | perf | low | C | batch D (BR-54) | The O(n^2) planning walks run with IF=0, where [sch_lock] would give the same exclusion |
 | hm-7 | hazard | medium | C | batch D (BR-59) | A lazy part is re-fetched by 8.3 name with no check that the file is still the one launched |
 | hm-8 | perf | low | C | batch D (BR-53) | A claim refused for lack of a free RECORD runs a full compaction before the shed that would free one |
-| hm-9 | rethink | medium | K | WP2 | Package purgeable claims, delivered through the existing MC_RLOC proc with DX = 0 |
+| hm-9 | rethink | medium | K | WP2 (parked (follow-up, 2026-11-08)) | Package purgeable claims, delivered through the existing MC_RLOC proc with DX = 0 |
 | hm-11 | size | medium | K | WP15 | The parts loader stays resident in every non-loader parts package, once per instance |
 | hm-12 | weakness | low | C | WP15 | MEM_OWNER_MAX = 8 is the most-negotiated constant in the package tree, and there is no shared sub-allocator |
 | hm-13 | weakness | low | C | batch D (BR-11) | The claim floor is stamped per TASK while every package callback runs on task 0, and any teardown lifts it |
 | hm-14 | consistency | low | C | batch D (BR-107) | OSAPI_MEM_P treats any unknown verb as MEMP_AVAIL and returns the caller's own CF |
 | histsys-1 | hazard | high | C | batch C (BR-4) | A dying worker tears down and repaints other windows on its own 128/192-byte stack slice |
-| histsys-2 | hazard | medium | K | WP8 (BR-9) | No int 0 (divide fault) handler on kern_big/kern_small: a 286+ hangs, an 8088 continues with garbage |
+| histsys-2 | hazard | medium | K | WP8 (BR-9; a knob (owner, 2026-11-08)) | No int 0 (divide fault) handler on kern_big/kern_small: a 286+ hangs, an 8088 continues with garbage |
 | histsys-3 | perf | medium | C | WP12 | The free-cluster count is recomputed (and on FAT16 re-read) on every DFREE, VOL_STAT and mount |
 | histsys-4 | weakness | low | K | WP18 | No scheduling preference for the UI task: input waits up to N worker quanta |
 | histsys-5 | rethink | medium | C | WP18 | Every int 13h freezes every task for ~400 ms |
 | histsys-6 | weakness | low | C | batch F (BR-95) | Keyboard is polled outside the event ring, so key/mouse order is lost across a pass |
 | histsys-7 | size | medium | K | WP4 | Seven 36-byte copies of a union driver service table in resident .bss |
-| histsys-11 | weakness | low | C | WP8 (BR-8) | OSAPI_WM_WAKE writes through an unvalidated BX from ISR and worker context |
+| histsys-11 | weakness | low | C | WP8 (BR-8; not taken (owner, 2026-11-08)) | OSAPI_WM_WAKE writes through an unvalidated BX from ISR and worker context |
 | histsys-15 | hazard | low | K | WP26 (BR-78) | OSAPI_TASK_SLEEP with AX >= 0x8002 returns at the next tick |
 | histsys-16 | consistency | low | C | WP7 | Two contradictory rules about .bss at boot |
 | histsys-17 | weakness | low | C | WP26 | The implicit display context is eight scattered bytes reset one by one |
@@ -2547,11 +2769,11 @@ means `bugs.md` owns it and the WP named in the text travels with it. "WPn
 | input-16 | consistency | low | C | WP25 | mou_claim no longer exists, and 22 references remain |
 | isr-1 | consistency | low | K | WP13 | Pause stops the BIOS tick count on an XT; SPEC chose that but does not say the time of day falls behind |
 | isr-2 | hazard | medium | K | batch F (BR-36) | osapi_mouse_feed is reached from an IRQ handler but swaps SP and not SS |
-| isr-3 | hazard | low | C | WP26 (BR-85) | OSAPI_WM_WAKE's 'ISR-safe' has an unstated SS = LOW_SEG precondition |
+| isr-3 | hazard | low | C | WP26 (BR-85; withdrawn, already in the SDK (follow-up, 2026-11-08)) | OSAPI_WM_WAKE's 'ISR-safe' has an unstated SS = LOW_SEG precondition |
 | isr-4 | hazard | low | C | batch F (BR-86) | DF is never cleared at the IRQ0 callback boundary |
 | isr-6 | hazard | low | K | batch F (BR-34) | IMR read-modify-writes at IF=1 on task context |
 | isr-7 | hazard | medium | K | batch F (BR-21) | The cursor is drawn at IF=0 inside the serial ISR, which caps SERIAL.DRV's usable rate on an 8250 |
-| isr-8 | weakness | medium | C | WP8 (BR-9) | CPU exceptions are left to the BIOS dummy handler (real-mode kernels) |
+| isr-8 | weakness | medium | C | WP8 (BR-9; a knob (owner, 2026-11-08)) | CPU exceptions are left to the BIOS dummy handler (real-mode kernels) |
 | isr-9 | hazard | low | C | batch F (BR-82) | SCH_CHSTK is sized without int 1Ch, and the mechanism SPEC gives is the wrong way round |
 | isr-10 | consistency | low | C | WP13 | SPEC names the wrong 'longest IF=0 window' |
 | isr-11 | consistency | low | C | WP4 | DSV_TICK's environment is documented as the kernel's, and it is not |
@@ -2560,8 +2782,8 @@ means `bugs.md` owns it and the WP named in the text travels with it. "WPn
 | isr-14 | rethink | medium | C | WP13 | A written interrupt-latency budget, and a ratchet that enforces it |
 | isr-16 | weakness | low | U | WP24 | No single 'callable at interrupt time' list |
 | isr-17 | consistency | low | C | batch F (BR-34) | The SB driver leaves the master PIC reading its ISR |
-| loader-5 | hazard | medium | C | batch D (BR-30) | 'No nested start' and 'UI task only' for OSAPI_PKG_START are prose, not fences |
-| loader-6 | prior-art | medium | K | WP9 | No load-time refusal for a package needing newer cells at the same PKG_FMT |
+| loader-5 | hazard | medium | C | batch D (BR-30; not taken (owner, 2026-11-08)) | 'No nested start' and 'UI task only' for OSAPI_PKG_START are prose, not fences |
+| loader-6 | prior-art | medium | K | WP9 (parked (owner, 2026-11-08)) | No load-time refusal for a package needing newer cells at the same PKG_FMT |
 | loader-8 | weakness | low | C | batch D (BR-11) | ld_unreserve is a drifted twin of mem_free_rec (it misses the page-floor lift) |
 | loader-10 | hazard | low | C | WP26 (BR-122) | OSAPI_PKG_START's caller image must be pinned across the call; the contract does not say so |
 | loader-11 | perf | low | C | WP29 | Compressor's gamma searches its top bit from bit 15 down |
@@ -2569,7 +2791,7 @@ means `bugs.md` owns it and the WP named in the text travels with it. "WPn
 | mc-2 | hazard | medium | C | batch H (BR-65) | An option-ROM IRQ on an unlent foreign stack is reflected with a selector as the real-mode SS |
 | mc-4 | hazard | medium | C | batch H (BR-66) | Linear LDT walks with interrupts off, one per block on a teardown |
 | mc-9 | hazard | medium | K | batch H (BR-67) | Global GDT scratch selectors held by prose; the compactor rebases SLD but not BACK |
-| mc-10 | weakness | medium | C | batch H (BR-68) | The kernel's own writes through CS are completed silently |
+| mc-10 | weakness | medium | C | batch H (BR-68; the counter a knob (follow-up, 2026-11-08)) | The kernel's own writes through CS are completed silently |
 | mc-11 | consistency | low | C | WP1 | The write-only CMOS index port is read back |
 | mc-12 | hazard | low | C | batch H (BR-165) | mega_s2segc truncates an off-grid base |
 | mc-13 | weakness | low | C | batch H (BR-165) | mega_ustab rows are never freed and can name a moved claim |
@@ -2603,7 +2825,7 @@ means `bugs.md` owns it and the WP named in the text travels with it. "WPn
 | mem-11 | weakness | low | C | WP13 | The driver-image IF=0 move's latency note is wrong in both directions |
 | mem-12 | consistency | medium | C | WP25 | Orphaned headers of inlined routines are where this file's documentation rots |
 | mem-14 | rethink | medium | C | WP17 | Keep mem_tab sorted by base: every walk becomes linear and best fit is free |
-| mem-15 | rethink | medium | C | WP2 | Only the kernel can own a cache: no purgeable class for package claims |
+| mem-15 | rethink | medium | C | WP2 (parked (follow-up, 2026-11-08)) | Only the kernel can own a cache: no purgeable class for package claims |
 | mem-17 | rethink | low | K | WP15 | Region movability by package-header bit instead of 72 call sites |
 | mem-19 | hazard | low | K | batch D (BR-106) | kern_mega osapi_mem_regrow_x's move-down copies the OLD size into the NEW claim |
 | sched-1 | hazard | medium | C | batch F (BR-51) | task_spawn holds IF=0 across the whole 0xCC slice fill |
@@ -2611,7 +2833,7 @@ means `bugs.md` owns it and the WP named in the text travels with it. "WPn
 | sched-4 | hazard | low | C | WP26 (BR-78) | OSAPI_TASK_SLEEP on the UI task ends at the next input, undocumented |
 | sched-5 | hazard | low | K | WP26 (BR-78) | task_sleep's range is 1..32768 and unstated |
 | sched-6 | hazard | low | C | batch F (BR-81) | evq_push wakes the UI task before the record is in the ring |
-| sched-7 | hazard | low | K | batch F (BR-82) | The two private ISR stacks have no canary and sit back to back |
+| sched-7 | hazard | low | K | batch F (BR-82; the canary a knob (follow-up, 2026-11-08)) | The two private ISR stacks have no canary and sit back to back |
 | sched-10 | weakness | medium | C | WP25 | Comment rot is the area's real defect |
 | sched-11 | consistency | low | K | WP18 | fsx_rtick is a third copy of the chain swap and the hook guard |
 | sched-12 | weakness | low | C | WP7 | sched_init's zero stores rest on an unresolved contradiction about .bss |
@@ -2646,7 +2868,7 @@ means `bugs.md` owns it and the WP named in the text travels with it. "WPn
 | text-4 | hazard | low | C | batch B (BR-131) | OSAPI_FONT_GLYPHS can return the seam cut's borrowed table |
 | text-5 | hazard | low | C | batch B (BR-132) | Menu layout measures package strings with an unbounded font_width_x |
 | text-6 | consistency | low | C | WP10 | fprog's one-word-store adjacencies are only half asserted |
-| text-7 | size | low | K | WP3 | font_run_x's once-per-run VGA prologue is resident on mono machines |
+| text-7 | size | low | K | WP3 (OWNER; -177 mono, +16 VGA (follow-up, 2026-11-08)) | font_run_x's once-per-run VGA prologue is resident on mono machines |
 | text-8 | size | low | C | WP1 | [vid_popmax] is a constant held in a memory word |
 | text-9 | perf | low | C | WP20 | VGA ico_pass keeps its per-word column bookkeeping in memory |
 | text-11 | hazard | low | C | batch E (BR-129) | An empty volume keeps a stale ASSOC.DAT |
@@ -2658,7 +2880,7 @@ means `bugs.md` owns it and the WP named in the text travels with it. "WPn
 | ui-3 | hazard | low | C | WP1 (BR-110) | ui_dispatch decides 'is this Locator' by reading AM_ONCMD = 0 in the owner's segment without the lock |
 | ui-4 | hazard | low | C | WP10 (BR-111) | ui_cmd's jump table has no length assert against CMD_LAST |
 | ui-7 | consistency | low | K | batch F (BR-86) | DF is defended in toast_show but trusted in clip_put, the slot whose failure corrupts the kernel heap |
-| ui-8 | hazard | medium | C | WP26 (BR-22) | The SDK and SPEC.md 55.4 tell authors a worker may call the clipboard; the code says it must not |
+| ui-8 | hazard | medium | C | WP26 (BR-22; withdrawn, already in the SDK (follow-up, 2026-11-08)) | The SDK and SPEC.md 55.4 tell authors a worker may call the clipboard; the code says it must not |
 | ui-9 | weakness | low | C | WP26 (BR-115) | 'The kernel guarantees delivery' of W_ONMOUSEUP is false when the ring dropped the release |
 | ui-10 | size | low | K | WP27 | About's fourth line from [vid_w]/[vid_h] instead of a per-kind string table |
 | ui-11 | prior-art | low | C | WP27 | One user-settable double-click interval for the whole machine |
@@ -2676,7 +2898,7 @@ means `bugs.md` owns it and the WP named in the text travels with it. "WPn
 | video-13 | weakness | low | C | WP23 | EGA's caps row omits mode 0Dh, which every EGA has |
 | video-14 | consistency | low | C | WP23 | The kind-class idiom is hand-spelled at about ten sites |
 | video-15 | weakness | medium | C | WP25 | Comments narrate history, and about 40 statements in this area have gone stale |
-| wm-1 | hazard | high | K | WP8 (BR-8) | wm_ptr2idx raises INT 0 on a wild window pointer; its comment says it is bounded |
+| wm-1 | hazard | high | K | WP8 (BR-8; not taken (owner, 2026-11-08)) | wm_ptr2idx raises INT 0 on a wild window pointer; its comment says it is bounded |
 | wm-2 | size | medium | K | WP8 | Store the slot index in the record so wm_ptr2idx is a load, not a div |
 | wm-4 | hazard | medium | C | batch C (BR-48) | wm_ask_size trusts a W_ONSIZE negotiator to keep BX, which no contract says |
 | wm-6 | consistency | medium | C | batch C (BR-50) | wm_resize clamps against the union width and ignores the side-dock band |
@@ -2686,7 +2908,7 @@ means `bugs.md` owns it and the WP named in the text travels with it. "WPn
 | wm-10 | size | low | C | WP1 | wm_lk's gfx_lock_flag test is redundant |
 | wm-11 | weakness | medium | C | WP11 | The XT does not get the redraw knobs built and measured for it |
 | wm-12 | rethink | medium | K | WP21 | Transitive marking redraws windows that were never damaged |
-| wm-13 | consistency | medium | C | WP8 (BR-8) | Window-pointer validation is inconsistent across the wm doors |
+| wm-13 | consistency | medium | C | WP8 (BR-8; not taken (owner, 2026-11-08)) | Window-pointer validation is inconsistent across the wm doors |
 | wm-14 | weakness | low | C | WP1 | wm_dmg_bands and the natural-bank banner exist twice, with dead inner arms |
 | wm-15 | weakness | medium | C | WP25 | wm.inc narrates its own history and the narration goes stale |
 | wm-16 | weakness | low | K | WP15 | The content white fill is still the default double-draw |
@@ -2711,28 +2933,28 @@ gfce-4 (FSX_SPK's N is unfenced by contract) and gms-7.
 | gi-3 | weakness | medium | C | WP15 | The parts standard and op_self round reads to CLUSTERS on kern_big, which brings back the cost SPEC 18.4.4.2 removed |
 | gi-4 | hazard | low | C | batch E | The READ_SEQ cursor names no file and stays trusted across a quiet folder change |
 | gi-6 | weakness | low | C | WP31 | The kern_small stubs leave AX undefined, so shared fallbacks cannot tell 'no door' from a refusal |
-| gi-7 | hazard | low | C | WP26 | pit_now is wrong inside an armed FSXF_FASTTICK/FSXF_RATE bracket; only its users say so |
+| gi-7 | hazard | low | C | WP26 (narrowed to SPEC 72.15.1 (follow-up, 2026-11-08)) | pit_now is wrong inside an armed FSXF_FASTTICK/FSXF_RATE bracket; only its users say so |
 | gi-8 | consistency | low | K | WP10 | Kernel conventions are copied without a mirror gate |
 | gi-9 | weakness | low | C | WP15 | crt0's plain .OVL arm ships in no package and keeps the folder bug the lazy arm fixed |
 | gi-10 | perf | low | C | WP15 | os88_wseq_put copies byte by byte with a five-instruction loop |
 | ctx-1 | rethink | high | C | batch C (BR-4) | Post instance teardown to the UI task, so paint and teardown have one context |
-| ctx-2 | hazard | medium | K | batch C | A worker that dies holding the gfx lock deadlocks the desktop on kern_big and kern_small |
+| ctx-2 | hazard | medium | K | batch C (BR-173; not taken (owner, 2026-11-08)) | A worker that dies holding the gfx lock deadlocks the desktop on kern_big and kern_small |
 | ctx-3 | rethink | medium | C | WP18 | sch_lock can be released across the UI task's floppy int 13h only with three changes; the first fixes a bug the release would create |
 | ctx-4 | hazard | medium | C | WP13 | IF=0 has no bound and no instrument; set one per machine class and measure it in the final pass |
 | ctx-5 | hazard | medium | C | batch C (BR-85) | Every ISR-callable door assumes SS = LOW_SEG, which the kernel itself says is false |
 | ctx-6 | hazard | low | K | batch D | On kern_small any task's claim may shed, which is the case the kern_big gate exists to forbid |
 | ctx-7 | weakness | medium | C | WP19 | Context rules should be machine-readable tags and a call-graph gate, not two prose lists |
 | ctx-8 | weakness | low | K | WP18 | The lock order 'never block under sch_lock' is obeyed and stated in prose, but not numbered or enforced |
-| gfce-1 | hazard | high | C | WP8 | One fatal path: point int 0 (and #UD on a 286+) at the death panel |
-| gfce-2 | rethink | medium | C | WP8 (owner decision) | A package's own divide fault should close the package, not the machine |
+| gfce-1 | hazard | high | C | WP8 (a knob (owner, 2026-11-08)) | One fatal path: point int 0 (and #UD on a 286+) at the death panel |
+| gfce-2 | rethink | medium | C | WP8 (answered: kern_mega closes the package; real mode a knob (owner, 2026-11-08)) | A package's own divide fault should close the package, not the machine |
 | gfce-3 | weakness | medium | C | WP8 | The divide fence is a habit; make it a ratchet |
-| gfce-5 | hazard | low | C | WP8 | DESK.DRV's .make divides a package BX fenced only by plausibility |
+| gfce-5 | hazard | low | C | WP8 (not taken (owner, 2026-11-08)) | DESK.DRV's .make divides a package BX fenced only by plausibility |
 | gfce-6 | weakness | medium | K | WP8 | SYSTEM.CFG gets a domain column, not per-byte patches |
 | gfce-7 | consistency | low | C | WP8 | cmz_jsayx tells a code from a string at 16; fm_errtab has 11 entries |
 | gfce-8 | weakness | medium | C | WP26 (now half) | One error CLASS, not one error NUMBER |
 | gfce-9 | prior-art | low | C | WP19 | APICHK=1: the checked kernel, concretely |
 | gfr-2 | rethink | medium | P | WP32 | Open the same door to the kernel's cw_ shims first: no ABI, and it rehearses T5 |
-| gfr-5 | weakness | high | C | WP9 | The API level goes in now, in two free places; abi-6's flag-day half and abi-16 dissolve |
+| gfr-5 | weakness | high | C | WP9 (parked (owner, 2026-11-08)) | The API level goes in now, in two free places; abi-6's flag-day half and abi-16 dissolve |
 | gfr-6 | rethink | medium | P | WP4 | Driver cluster: histsys-7 makes D1 and drivers-9 moot; N1 re-checked for Phase 1; histsys-8 scoped and recorded; histsys-12 costs ~5 s on the XT |
 | hdk-1 | hazard | medium | K | WP33 | HDV_ARM redirects any rung-1 read into the armed segment, including the kernel's own metadata reads |
 | hdk-2 | consistency | low | K | WP33 | The package door now reaches a partition erase, and five places still say it reaches no sector |
@@ -2779,11 +3001,11 @@ gfce-4 (FSX_SPK's N is unfenced by contract) and gms-7.
 | os88ui:F5 | hazard | low | C | batch E | The scroll-bar drag identity (x1,y1) assumes bars cannot share a corner; Disk windows can |
 | os88ui:F6 | consistency | low | K | WP1 | OS88UI_FILL is a dead flag that seven kernel sites still load |
 | rt-1 | rethink | high | K | WP2 | Drop to a cache, and let the need/drop bracket be the pin |
-| rt-2 | size | medium | K | WP2 | FILECP and FDLG on kern_big as modules cached at boot: about -2,500 resident, not -3,600 |
+| rt-2 | size | medium | K | WP2 (REFUSED (owner, 2026-11-08)) | FILECP and FDLG on kern_big as modules cached at boot: about -2,500 resident, not -3,600 |
 | rt-3 | rethink | medium | C | WP3 | The PS/2 runtime as an owner-loaded overlay (XMEM.DRV's shape), not an AT rung |
-| rt-5 | consistency | medium | C | WP31 | KERN_BUDGET is a VGA reading; the target machine's figure is never printed |
-| rt-6 | rethink | medium | C | WP2 | kern_small's module split as a run-time heap decision on both kernels |
-| rt-7 | size | medium | K | WP3 | The keyboard mouse is init-lifetime code: hold it from boot and drop it at settle |
+| rt-5 | consistency | medium | C | WP31 (mono 94,208 MEASURED, `MONO_FLOOR` exists (follow-up, 2026-11-08)) | KERN_BUDGET is a VGA reading; the target machine's figure is never printed |
+| rt-6 | rethink | medium | C | WP2 (OWNER, liked (owner, 2026-11-08)) | kern_small's module split as a run-time heap decision on both kernels |
+| rt-7 | size | medium | K | WP3 (OWNER; -300..-320, +130..+220 mouseless (follow-up, 2026-11-08)) | The keyboard mouse is init-lifetime code: hold it from boot and drop it at settle |
 | rt-9 | weakness | low | C | WP2 | Module purge ranks must be decided per module, not inherited |
 | ul-1 | weakness | low | C | WP14 | bytes-5 re-derived: ~93-127 provable bytes, the convention change refuted, the gate justified only as a lint |
 | ul-5 | consistency | low | C | WP5 | md-21 corrected: eight A20 bodies with three probe aliases, not six |
@@ -2807,7 +3029,7 @@ Each names the batch whose files it touches.
 
 | id | batch | bytes | the fix |
 |---|---|---|---|
-| ctx-2 [K] | C (with BR-4) | +12 `.text` big/small; -24 `.mega` | inst_task_die releases a gfx lock the dying task owns (`mov al,[sch_cur] / cmp al,[gfx_lock_own] / jne / call gfx_unlock`); delete kern_mega's duplicate in mega_fkill. Inside BR-4's figure if both land |
+| ctx-2 [K] | C (with BR-4); **not taken: packages are trusted (owner, 2026-11-08)** | +12 `.text` big/small; -24 `.mega` (not counted) | inst_task_die releases a gfx lock the dying task owns (`mov al,[sch_cur] / cmp al,[gfx_lock_own] / jne / call gfx_unlock`); delete kern_mega's duplicate in mega_fkill. Inside BR-4's figure if both land |
 | ctx-5 [C] | C (with BR-85) | +3 `.text` | evq_push loads ES from LOW_SEG instead of `push ss / pop es`; an ISR-callable door may assume DS and nothing else |
 | ctx-6 [K] | D | +14 `.text` kern_small, or 0 | the shed half of kern_big's sch_cur gate on kern_small, or the rule in SPEC 66.3.1 (OWNER) |
 | gi-1 [C] | E | +2 package | os88wseq's kern_small path asks OSAPI_FILE_DFREE (BX = sectors/cluster) instead of VOL_STAT and banks FERR_NODISK; REDLINE is its only caller |
@@ -2855,7 +3077,7 @@ corrections are applied.
 | hm-15 / loader-14 -> ul-6 [C], rt-8 [K] | record | A clone of a running instance is not pristine, because ld_start does not re-copy initialised data. Shared code across packages is real, but a library does not pay on the target. An image cache for relaunches is +100..+150 `.cold`, recorded |
 | mem-16 [C] | record | No recency inside a rank. Watch for it after WP2's cache |
 | shell-14 [C] | record | kern_small draws a desk cell two and three times; take a flicker reading first |
-| gfce-2 [C] | record -> WP8 | The owner's decision on what the panel is for |
+| gfce-2 [C] | record -> WP8 | The owner's decision on what the panel is for - answered (owner, 2026-11-08) |
 | gfce-10 [C] | record | kern_mega's two fatal panels (~-20 `.mega` to unify after WP8) |
 | gfce-11 [C], video-18 [U] | record | No latch for a hung fsx bracket: Ctrl-Alt-Del already exits; correct SPEC 53.1's sentence |
 | cursor:mc-8, mc-R1, mc-R2, mc-R3 | record | Multi-display context swaps; per-output exclusion (+20..+30, with CURFIX); planar save-under in off-screen VRAM; the cursor after the EOI (BR-21's rethink) |
@@ -2874,13 +3096,25 @@ corrections are applied.
 
 ## Phase totals per kernel (resident, the recommended cores, ESTIMATED)
 
-| kernel | every WP, owner decisions taken | without the OWNER items (WP2, WP3's KBMOUSE and text-7, WP11) | context |
+**Recomputed after the owner's answers (2026-11-08)** from the summary table:
+WP2b refused (WP2 is WP2a's +60..+85 on kern_big), WP3's corrected figures,
+WP8 at 0 (the panel a knob, the doors not taken) and WP9 parked at 0. The
+earlier figures are in brackets.
+
+| kernel | every WP, owner items taken (WP3's KBMOUSE and text-7, WP11) | without the OWNER items (WP3's KBMOUSE and text-7, WP11) | context |
 |---|---:|---:|---|
-| kern_small | **-138..-416** | -36..+152 | blessed KERN_SIZE 59,392 of 64,000 (re-read at the start) |
-| kern_big (VGA gauge) | **-2,158..-2,676** | **-150..+210** | blessed 96,768 of 100,864 |
-| kern_big on a mono 8088 | about -2,600..-3,150 (WP3's mono column; WP11's and WP20's `.vga` not paid) | about -240..+130 (WP20's `.vga` not paid) | |
-| kern_mega conventional | **-387..-626** | -97..-246 | budget 68,096 |
-| kern_mega above 1MB | +166..+389 | +106..+304 | not budgeted |
+| kern_small | **-258..-434** (was -138..-416) | **-114..+42** (was -36..+152) | blessed KERN_SIZE 59,392 of 64,000 (re-read at the start) |
+| kern_big (VGA gauge) | **-191..+185** (was -2,158..-2,676, with WP2b) | **-173..+180** (was -150..+210, which left WP2a out) | blessed 96,768 of 100,864 |
+| kern_big on a mono 8088 | about -270..-660 (WP3's mono column; WP11's and WP20's `.vga` not paid) (was -2,600..-3,150) | about -265..+100 (WP20's `.vga` not paid) (was -240..+130) | mono resides in 94,208 today, MEASURED (`MONO_FLOOR`) |
+| kern_mega conventional | **-443..-596** (was -387..-626) | **-143..-276** (was -97..-246) | budget 68,096 |
+| kern_mega above 1MB | +158..+380 (was +166..+389) | +158..+380 (was +106..+304, which left WP2a out) | not budgeted |
+
+Not counted anywhere above (owner, 2026-11-08): WP8's panel in its knob build
+(+45..+60 kern_big, +40..+55 kern_small, +20..+30 transient), WP8's doors and
+bound in APICHK (+30..+46), WP9's level (+8..+9), WP2b (-2,468..-2,508 on
+kern_big, refused), hm-9 (parked), rt-6 (+60..+85 kern_small, liked, not
+taken), and the diagnostic-only guards moved to knobs (BR-80's +7 tripwires,
+BR-82's +9..+12 canary, mc-10's +8 `.mega` +2 `.bss`).
 
 Outside the resident totals:
 
@@ -2891,28 +3125,38 @@ Outside the resident totals:
   - HDD.DRV about -45 net;
   - XMEM.DRV about -17 net;
   - HIBER.DRV/DISKOPS.DRV +54..+74.
+- **Heap:** rt-7 holds +130..+220 for the session on a mouseless machine.
+- **Boot:** BOOT3-PLAN wave 1 about +450 bytes of KERNEL.SYS and ~+24 ms
+  after the bar on 360KB (that plan's figures, PREDICTED); rt-7 without a
+  carrier ~0.4-1.2 s per XT boot.
 - **Packages:** mem-17 -10..-19 per image; DOS.O88 +150..+165 (WP34).
 
 **What the totals say.**
 
-- **The phase is a net saving on every budgeted kernel only if the owner takes
-  WP2.** Without the owner items, kern_big runs from a 150-byte saving to a
-  210-byte spend. kern_small runs between -36 and +152 against a 64KB
-  residency rule, and kern_mega conventional still saves -97..-246.
+- **The phase is no longer a large net saving on kern_big.** With WP2b refused
+  (owner, 2026-11-08), kern_big runs from a ~190-byte saving to a ~185-byte
+  spend with the owner items taken, and from -173 to +180 without them. Its
+  big lever is gone; what is left is a spread of small WPs either side of
+  zero. kern_small saves -258..-434 with the owner items (almost all of it
+  rt-7) and runs -114..+42 without them, against a 64KB residency rule.
+  kern_mega conventional saves -443..-596.
 - **The growth is concentrated.** It is mostly correctness and speed:
   - WP12 +160..+255 (FAT write path);
   - WP20 +120..+146 (graphics; the `.vga` part only on VGA/EGA);
-  - WP8 +75..+106 (fault containment);
-  - WP16 +77..+88 and WP18 +50..+77.
+  - WP16 +77..+88 and WP18 +50..+77;
+  - WP11 +286..+289 (the KHP round, owner, reviewed row by row).
+
+  WP8 (was +75..+106) is now 0 retail (owner).
 - **Where to cut if the owner wants the phase smaller**, in order:
   - WP12's dw-14 (+100..+160);
   - WP20's `.vga` items (+80..+90);
-  - WP8's door refusals (+22..+32);
   - WP18's boost (+10..+22);
   - WP27's optional cells.
-- **WP2 is no longer the phase's keystone**, because it is the owner's
-  decision. Its correctness prerequisites are batch C's BR-4 and batch D's
-  BR-53, and they are worth landing whatever WP2's answer is.
+- **The largest savings left are owner items**: rt-7 (-300..-320 on every
+  kernel, at +130..+220 of heap on a mouseless machine and a boot read without
+  a carrier), text-7 (-177 mono), and WP11's rows one by one. **WP2a's
+  correctness prerequisites** (batch C's BR-4 and batch D's BR-53) are worth
+  landing whatever else is decided.
 
 ## Recommended order of work: one implementation session each
 
@@ -2923,16 +3167,16 @@ files. No session runs a soak row or `test-full` (CLAUDE.md's Testing).
 | # | session | why here |
 |---|---|---|
 | 1 | **WP10** gates | every later WP leans on the four-kernel ABI decoder, t_mirror over kerndos, the section check and the new rows |
-| 2 | **WP1 + WP7** | free bytes and the `.bss` rule; `.ovl` -45 for WP8 and the batches |
-| 3 | **WP6 + batch A** | boot room, then BR-1/BR-6/BR-25/BR-63 in it; boot-4's audit before BR-1 |
+| 2 | **WP1 + WP7** | free bytes and the `.bss` rule with `t_bsszero`; `.ovl` -45 for the batches |
+| 3 | **WP6 + batch A, with BOOT3-PLAN waves 0-1 (and 3)** | BR-1's canary move and `t_canary` first (no room needed); then boot room - boot-7 and BOOT3 wave 1 (owner, 2026-11-08: no 14th sector) - and BR-1's head bound, BR-6, BR-25, BR-63 in it; boot-4's audit before BR-1's head bound |
 | 4 | **WP14 + WP19** | header grammar, liveness lint, `@ctx` tags, the APICHK knob (one lock update) |
-| 5 | **WP9 + WP26** | the API level, then every contract sentence (one more lock update); every cell-adding WP may now follow |
-| 6 | **WP8 + batch F** | the fault panel and divide ratchet with sched.inc's batch; gfce-2 answered first |
-| 7 | **Batch C + WP21** | BR-4/ctx-1/ctx-2 teardown on the UI task, BR-42, WP8's door half if not done; wm-17 with BR-47 |
+| 5 | **WP26** | every contract sentence (one more lock update); WP9's level is parked (owner, 2026-11-08) |
+| 6 | **WP8 + batch F** | the divide ratchet and gfce-6 with sched.inc's batch; the panel is a knob build's (owner, 2026-11-08) |
+| 7 | **Batch C + WP21** | BR-4/ctx-1 teardown on the UI task (ctx-2's release not taken, owner), BR-42; wm-17 with BR-47 |
 | 8 | **Batch D + WP17 + WP13** | BR-53 (WP2's prerequisite), BR-12 (ifwin's first catch), mem-9, C1's internal callers |
 | 9 | **WP2a**: rt-1 drop-to-cache, rt-9 ranks, shell-2's users | the mechanism, SPEC 2.8.3 first |
-| 10 | **WP2b** (OWNER): FILECP/FDLG arm on kern_big | only on the owner's word; the ROM/HMA skip |
-| 11 | **WP3** | KBMOUSE on WP2's boot cache (OWNER), the PS/2 overlay, text-7 (OWNER) |
+| 10 | ~~**WP2b** (OWNER): FILECP/FDLG arm on kern_big~~ | **refused (owner, 2026-11-08)**; the session is dropped. rt-6 on kern_small, if the owner takes it, rides session 9 |
+| 11 | **WP3** | the PS/2 overlay; KBMOUSE (OWNER, its boot carrier now open) and text-7 (OWNER) on the owner's word |
 | 12 | **WP4 + WP22 + batch G (driver half) + WP31** | driver tables, contract text, the IMR shadow, gkm-1's fixes, the matrix gates |
 | 13 | **WP5 + batch H** | kern_mega's own; gms-4 before gms-R2 |
 | 14 | **Batch E + WP16** | the disk hazards, then the read path and F3 |
@@ -2954,8 +3198,13 @@ A/B leg against the starting commit (WP11, WP12, WP16, WP18 and WP20's
 measurements are taken there), and `test-full`. A failing final pass re-runs
 only what failed.
 
-**Owner decisions to collect before the sessions that need them:** gfce-2
-(session 6); WP2b's trade with its three quotes (10); KBMOUSE and text-7 (11);
-the WP11 round (18); dw-14's SPEC rewrite (15); a 14th blob sector or boot-17
-(3); gkm-6 (12); hdk-2's erase policy (22); kern_small caching (rt-6) and
-ctx-6 (8).
+**Owner decisions to collect before the sessions that need them:** KBMOUSE
+and text-7 (11; explained in `../followup-decisions-6-8.md`); the WP11 round
+(18; each row reviewed on its own merit, owner); dw-14's SPEC rewrite (15);
+BOOT3-PLAN's ten section-15 questions (3); gkm-6 (12); hdk-2's erase policy
+(22); kern_small caching (rt-6, liked) and ctx-6 (8); rt-5's mono gate (12,
+WP31). **Answered (owner, 2026-11-08):** gfce-2 (kern_mega closes the package;
+the real-mode panel is a knob); WP2b (refused); the 14th blob sector (refused:
+BOOT3-PLAN); packages are trusted (the six fences not taken); WP9's level (must
+prove its worth first); BR-6 (an MDA halts with a message, or switches to a
+CGA).

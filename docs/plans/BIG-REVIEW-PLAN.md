@@ -10,6 +10,18 @@ what, in which order, on which branch, and what "done" means. Tick section 6
 as work lands. When the last row is ticked, move the file to
 `docs/plans/completed/` in the same commit (docs/README.md).
 
+**After the owner's answers (owner and follow-up, 2026-11-08).** The owner
+answered the review's decisions in two rounds the same day
+(`docs/reports/big-review-2026-11-08/owner-decisions.md`, which binds), and
+five follow-ups re-checked what the answers turned on (listed in section 1's
+inputs). This plan is brought into line with them, in place: every changed
+item is marked "(owner, 2026-11-08)" or "(follow-up, 2026-11-08)". In short:
+S10 (WP2b) is withdrawn; S03's blob work routes through
+`docs/plans/BOOT3-PLAN.md`, whose waves 2-4 become S30 and S31; S06's fault
+panel is built behind a knob; the six package fences leave S07, S08 and S14;
+BR-1's 0-byte half and its gate move to wave 1 as urgent; KBMOUSE and text-7
+are taken; and 2.6 is split into what is decided and what is still open.
+
 ## 1. Sources, and how the review was run
 
 The owner asked for a comprehensive, blue-sky review of the kernel: what is
@@ -77,6 +89,13 @@ both comment and documentation only:
 | `synth/doc-owner-questions.md` | the doc pass's seven concerns that were not a text fix: each a code defect already in `bugs.md`, or a rule to decide | nothing new; the `.bss` rule (item 3) is S02's, the canary (item 2) S03's |
 | `areas/*.md`, `data/*.json` | 25 area reviews and 12 gap reviews, verified | evidence behind each finding id |
 | `docs/reports/BIG-REVIEW-2026-11-08.md` | the review's report to the owner, written from the synth files | the answers to the owner's questions this plan does not carry (below) |
+| `owner-decisions.md` | the owner's two rounds of answers, 2026-11-08 (binding) | 2.6, and every item marked "(owner, 2026-11-08)" |
+| `followup-canary.md` | BR-1 re-checked: inert since 2026-09-05, part 1 at 0 bytes, the `t_canary` rewrite, the Pravetz record | S01's urgent item, S03's BR-1 part 2 |
+| `followup-purgeable.md` | the real use cases for package-purgeable claims | S09's hm-9, parked |
+| `followup-decisions-6-8.md` | rt-7, text-7 and rt-5 explained and re-priced | S11's and S12's figures |
+| `followup-already-exists.md` | recommendations for things the tree already has (six withdrawn or reworded, five that missed an existing piece) | S03's, S05's, S06's, S11's and S12's items and rows |
+| `areas/gap-bss-zeroing.md` | `.bss` is zero at `kmain` on every shipped path since PR #61; the `t_bsszero` gate | S01's gate, S02's rule |
+| `docs/plans/BOOT3-PLAN.md` | the `.boot3` design that replaces the refused 14th blob sector (a proposal; its section 11 places each blob and `.ovl` want, its section 15 lists ten questions) | S03's blob room, S30, S31 |
 
 **Where each of the owner's questions is answered.** This plan answers the
 last four. The report answers the first four, from `keep.md` and
@@ -119,7 +138,11 @@ last four. The report answers the first four, from `keep.md` and
 ### 2.1 The shape
 
 Phase 1 is **29 sessions in 7 waves**, the seventh taken in two steps (7,
-then 7b). Each session is one of:
+then 7b). **After the owner's answers it is 30** (owner, 2026-11-08): S10 is
+withdrawn (its id and heading are kept, so nothing renumbers), and
+`docs/plans/BOOT3-PLAN.md`'s waves become work in three places, S03 (its
+waves 0 and 1), S30 (waves 2 and 3, in wave 5) and S31 (wave 4, in wave 6).
+Each session is one of:
 
 - a bug batch from `bugs.md`, or half of one, plus the WPs `phase1.md` says
   travel with it;
@@ -154,30 +177,32 @@ gives the full table.
 
 | S | session | items | wave | parallel with | depends on (merged) | kern_big res | kern_small res | kern_mega conv |
 |---|---|---|---|---|---|---:|---:|---:|
-| S01 | gates | WP10, batch A's host gates, kernsize home tally | 1 | S02, S04 | - | 0 | 0 | 0 |
+| S01 | gates, and BR-1's urgent half | WP10, batch A's host gates, kernsize home tally; `t_bsszero`; BR-1 part 1 and the `t_canary` rewrite (follow-up, 2026-11-08) | 1 | S02, S04 | - | 0 | 0 | 0 |
 | S02 | free bytes, `.bss` rule | WP1, WP7 | 1 | S01, S04 | - | -144..-166 | -165..-208 | -87..-121 |
 | S04 | contracts, context tags, APICHK | WP14, WP19 | 1 | S01, S02 | - | 0 | 0 | 0 |
-| S03 | boot | WP6, batch A core, BR-14 | 2 | S05 | S01, S02 | +2 (BR-14) | +13 (BR-14) | 0 |
-| S05 | API level, contract text | WP9, WP26 (+ R9's doc half) | 2 | S03 | S04 | +0..+5 | +0..+5 | -4..-8 |
-| S06 | faults, ISRs, input | WP8 panel, WP13, WP22 shadow, batch F | 3 | S07, S08, S13, S14 | wave 2 | +129..+144 | +105..+120 | ~+99 |
-| S07 | WM, UI, teardown | batch C, WP21, WP8 doors | 3 | S06, S08, S13, S14 | wave 2 | +98 (+59..+136) | +82 (+45..+118) | ~+88 |
-| S08 | loader and heap | batch D, WP17, C1's callers | 3 | S06, S07, S13, S14 | wave 2 | +99 | +104 | 0 |
+| S03 | boot | WP6, BOOT3 waves 0-1, batch A core, BR-14 | 2 | S05 | S01, S02 | +2 (BR-14) | +13 (BR-14) | 0 |
+| S05 | API level (if cheap), contract text | WP9, WP26 (+ R9's doc half) | 2 | S03 | S04 | +0..+5 | +0..+5 | -4..-8 |
+| S06 | faults (a knob), ISRs, input | WP8 panel behind a knob, WP13, WP22 shadow, batch F | 3 | S07, S08, S13, S14 | wave 2 | **+81** (was +129..+144) | **+62** (was +105..+120) | ~+96 (was ~+99) |
+| S07 | WM, UI, teardown | batch C, WP21 (WP8's doors and BR-173 out) | 3 | S06, S08, S13, S14 | wave 2 | **+48 (+18..+78)** (was +98) | **+32 (+4..+60)** (was +82) | ~+38 (was ~+88) |
+| S08 | loader and heap | batch D (BR-29, BR-30 out), WP17, C1's callers | 3 | S06, S07, S13, S14 | wave 2 | **+68** (was +99) | **+73** (was +104) | 0 |
 | S13 | kern_mega | WP5, batch H | 3 | S06, S07, S08, S14 | wave 2 | 0 | 0 | -18 (+ high) |
-| S14 | disk and files | batch E, WP16 | 3 | S06, S07, S08, S13 | wave 2 | +145..+156 | +95..+100 | +6..+21 |
+| S14 | disk and files | batch E (BR-22, BR-37 out), WP16 | 3 | S06, S07, S08, S13 | wave 2 | **+117..+128** (was +145..+156) | **+67..+72** (was +95..+100) | +6..+12 (was +6..+21) |
 | S09 | module drop-to-cache | WP2a (rt-1, rt-9, shell-2) | 4 | S12, S15, S17 | S07, S08 | +60..+85 | 0 (O5: +60..+85) | 0 |
 | S12 | drivers, matrix gates | WP4, WP22 driver half, batch G driver half, WP31 | 4 | S09, S15, S17 | S06 | -6..-66 | -10 | -184..-194 |
 | S15 | FAT write path | WP12 | 4 | S09, S12, S17 | S14 | +160..+255 | 0..+3 | 0 |
 | S17 | display and hot paths | batch B, WP20, WP23 | 4 | S09, S12, S15 | S03, S07 | +159..+185 | +40..+52 | +63..+75 |
-| S10 | FILECP/FDLG cached on kern_big (**O4**) | WP2b (rt-2) | 5 | S16, S19, S20, S21 | S09 | **-2,468..-2,508** | 0 | 0 |
-| S16 | scheduler | WP18 | 5 | S10, S19, S20, S21 | S06, S12 | +50..+77 | +50..+77 | +50..+77 |
-| S19 | SDK-side work in packages | WP15 | 5 | S10, S16, S20, S21 | S08, S14 | +42..+60 | +24..+32 | +30..+40 |
-| S20 | desk, dialogs, menus | WP27 | 5 | S10, S16, S19, S21 | S07, S14 | -15..-25 | -21..+9 | -21..-31 |
-| S21 | hibernate, clock, services | WP29, WP30, batch G services half | 5 | S10, S16, S19, S20 | S12, S13 | -8..+12 | -8..+12 | -8..+12 |
-| S11 | keyboard mouse, PS/2 overlay (**O6, O7**) | WP3, input-10 | 6 | S18, S22, S23, S24 | S09, S12, S16 | -494..-599 | -290..-380 | -290..-380 |
-| S18 | the KHP round (**O8**) | WP11 | 6 | S11, S22, S23, S24 | S17 | +286..+289 | 0 | 0 |
-| S22 | HDD.DRV | WP33, batch I's HDD half | 6 | S11, S18, S23, S24 | S13, S14 | 0 | 0 | 0 |
-| S23 | XMEM.DRV and DOS.O88's XMS | WP34, batch I's XMEM half | 6 | S11, S18, S22, S24 | S13, S21 | -54 | 0 | 0 |
-| S24 | Control Panel engine | WP28 | 6 | S11, S18, S22, S23 | S17, S21 | -10 | 0 | 0 |
+| S30 | `.boot3` waves 2-3 (follow-up of O1) | BOOT3-PLAN waves 2 and 3 | 5 | S16, S19, S20, S21 | S03, S12 | 0 | 0 if it opts in | 0 |
+| S10 | **WITHDRAWN**: FILECP/FDLG cached on kern_big, refused (owner, 2026-11-08) | WP2b (rt-2) | - | - | - | 0 (was -2,468..-2,508) | 0 | 0 |
+| S16 | scheduler | WP18 | 5 | S30, S19, S20, S21 | S06, S12 | +50..+77 | +50..+77 | +50..+77 |
+| S19 | SDK-side work in packages | WP15 | 5 | S30, S16, S20, S21 | S08, S14 | +42..+60 | +24..+32 | +30..+40 |
+| S20 | desk, dialogs, menus | WP27 | 5 | S30, S16, S19, S21 | S07, S14 | -15..-25 | -21..+9 | -21..-31 |
+| S21 | hibernate, clock, services | WP29, WP30, batch G services half | 5 | S30, S16, S19, S20 | S12, S13 | -8..+12 | -8..+12 | -8..+12 |
+| S11 | keyboard mouse, PS/2 overlay, text-7 (O6 and O7 TAKEN) | WP3, input-10 | 6 | S18, S22, S23, S24, S31 | S09, S12, S16 | **-504..-539** (mono about -685..-740) | **-300..-320** | **-300..-320** |
+| S18 | the KHP round, per row (O8 decided) | WP11 | 6 | S11, S22, S23, S24, S31 | S17 | 0..+289 by row (the six: +286..+289) | 0 | 0 |
+| S22 | HDD.DRV | WP33, batch I's HDD half | 6 | S11, S18, S23, S24, S31 | S13, S14 | 0 | 0 | 0 |
+| S23 | XMEM.DRV and DOS.O88's XMS | WP34, batch I's XMEM half | 6 | S11, S18, S22, S24, S31 | S13, S21 | -54 | 0 | 0 |
+| S24 | Control Panel engine | WP28 | 6 | S11, S18, S22, S23, S31 | S17, S21 | -10 | 0 | 0 |
+| S31 | `.boot3` wave 4: `.boot2` back to its purpose (owner: YES) | BOOT3-PLAN wave 4 | 6 | S11, S18, S22, S23, S24 | S03, S30 | -8 (PREDICTED) | not priced | not priced |
 | S25 | the OSCALL rewrite, the `cw_` door | WP32 (T6, P4, V7's counter) | 7 | S26 only | waves 1-6 | -40..-60 | 0 | 0 |
 | S26 | docs: front matter, generated copies, the comment convention | WP24a | 7 | S25 | S01, S04 | 0 | 0 | 0 |
 | S27 | docs: SPEC's package sections split out | WP24b (engsys-18) | 7b | S28, S29 | S25, S26 | 0 | 0 | 0 |
@@ -187,17 +212,30 @@ gives the full table.
 How some cells above were derived:
 
 - **S02** adds WP1's figure to WP7's 0..-20.
-- **S03**'s resident cost is BR-14's alone. Its real spend is `.boot2` (2.5).
-- **S06** is batch F's core without BR-9 (+59 / +40), plus WP8's panel and
-  stubs (+45..+60 / +40..+55), plus WP22's shadow (+25 / +25; kern_mega +39).
-- **S07** is batch C's core (+108 / +92 / ~+98) plus WP21's -10.
-- **S08** is batch D's core, plus WP17's +8 and loader-8's -3 on kern_big. On
+- **S03**'s resident cost is BR-14's alone. Its real spend is `.boot2` (2.5),
+  and BOOT3-PLAN's waves 0-1 are 0 resident.
+- **S06** is batch F's core without BR-9 and without BR-85's code half (+56 /
+  +37 / ~+57), plus WP22's shadow (+25 / +25; kern_mega +39). WP8's panel and
+  stubs (+45..+60 / +40..+55) are built only behind a knob, so 0 shipped
+  (owner, 2026-11-08); BR-85's +3 is held (follow-up, 2026-11-08). The old
+  figure was +59 / +40 core plus the panel plus the shadow.
+- **S07** is batch C's core (+108 / +92 / ~+98) less BR-8 (+38: the doors and
+  the bound) and BR-173 (+12), which are package fences (owner, 2026-11-08),
+  so +58 / +42 / ~+48, plus WP21's -10.
+- **S08** is batch D's core less BR-29 (+13) and BR-30 (+18) (owner,
+  2026-11-08), so +63 / +73, plus WP17's +8 and loader-8's -3 on kern_big. On
   kern_mega, loader-8's -20 is high. `bugs.md` and `phase1.md` each disclaim
   loader-8, and `phase1.md`'s ownership table gives it to batch D, so it is
   counted here.
 - **S12** is WP4 plus batch G's driver half (BR-5, BR-31, BR-32, BR-34's
   scan: +81 on kern_big; .bss +11 on kern_mega).
-- **S14** is batch E's core plus WP16.
+- **S14** is batch E's core less BR-22 (+12) and BR-37 (+16) (owner,
+  2026-11-08), so +40 / +45 / 0, plus WP16.
+- **S11** takes KBMOUSE at the follow-up's -300..-320 (not -290..-380), the
+  PS/2 overlay's -220..-235 and text-7's +16 gauge (about -177 mono).
+- **S30 and S31** are BOOT3-PLAN's figures, priced for kern_big; the owner's
+  second round makes `.boot3` generic, so BOOT3-PLAN re-prices kern_small and
+  kern_mega.
 - **S17** is batch B's core without BR-14, plus WP20's gauge figure. A mono
   kern_big machine pays about 80..90 less of it (WP20's mono figure is
   +40..+56).

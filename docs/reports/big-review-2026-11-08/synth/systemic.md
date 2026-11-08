@@ -58,6 +58,46 @@ authority.
   themes 5 and 6.
 - Lens amendments are tagged **[truth]**, **[cost]** or **[fit]** where they
   change what an item says.
+- **After the owner's first answers.** Items the owner decided are tagged
+  **(owner, 2026-11-08)** and items a follow-up re-read are tagged
+  **(follow-up, 2026-11-08)**; see the next section.
+
+## After the owner's first answers (2026-11-08)
+
+The owner answered the review the same day (`../owner-decisions.md`, binding).
+Five follow-ups re-read what the answers touched (`../followup-canary.md`,
+`../followup-purgeable.md`, `../followup-decisions-6-8.md`,
+`../followup-already-exists.md`, `../areas/gap-bss-zeroing.md`), and
+`docs/plans/BOOT3-PLAN.md` replaces the refused 14th blob sector. For this
+view:
+
+- **"Packages are trusted" is a recorded principle, not an open ruling**
+  (theme 5, and every theme that leaned on it). Real mode cannot defend
+  against a hostile package (and on kern_mega an FSX real-mode bracket hands
+  it real mode anyway), so the only thing worth defending against is our own
+  mistakes, and most of those are better found and guarded at BUILD time than
+  with resident bytes. Resident guards pay where the failure is catastrophic
+  and user-visible and the printout gives the owner useful information (the
+  stack-overflow panel). The six package-argument fences (BR-8's doors, BR-22,
+  BR-29, BR-30, BR-37, BR-173) are not taken as retail code; the checked build
+  is their home.
+- **A diagnostic for a failure nobody has met waits behind a build knob**
+  (theme 4): the INT 0/#UD panel included; kern_mega closes the faulting
+  package. The same weighing moves the other diagnostic-only guards here
+  (sched-3's tripwire, the ISR-stack canary, mc-10's counter) behind knobs.
+- **FILECP/FDLG on kern_big is refused** (theme 7), in any form; the module
+  cache (rt-1) stays.
+- **The API level must prove its worth before it spends bytes** (theme 9).
+- **The purgeable package claim is not needed now** (theme 6); its real case
+  is Sheet's ~80KB of modules.
+- **Theme 1's extra stack work is not needed immediately**: the mouse and
+  idle already have stacks of their own, and the case met in the field is a
+  sound interrupt arriving on a package stack already near its edge.
+- The shared-library and `.LNK` entries in *What we would NOT copy* are
+  reworded: the tree already has one shared library (STIKLIB) and both
+  shortcuts and `.LNK` links.
+
+The totals below are recomputed; the earlier figures are given beside them.
 
 ## Summary: the themes ranked by value
 
@@ -67,29 +107,31 @@ judgement; the columns are the evidence.
 
 | rank | theme | the change of approach | now (kern_big resident) | flag day | why this rank |
 |---|---|---|---|---|---|
-| 1 | 1. Execution contexts and locks | teardown runs on the UI task; a dying owner releases its lock; context rules become tags and a gate | **+11..+48** (ctx-1 with ctx-2 ~+43, ui-3 -19) | none; deferred damage stays record (+150..+200) | one move removes the root of five findings (histsys-1, hm-3, ctx-2, mem-10's worker arm, the worker reset of `[mem_pg_floor]`) and the context-lock review's one HIGH |
-| 2 | 4. Faults and the error model | every CPU fault reaches one named stop; refusal is CF, and AX means something only inside a named family; errors carry a class | **+45..+60** .text, +20..+30 transient | the "not on this kernel" value (open: AX=0 or AX=1) | turns today's dead machine (1981 ROM), endless re-execute (286+) or silent garbage (later 8088 ROMs) into a named stop for wm-1, dw-1, gfce-5 and every unfenced divide, but changes what a package divide does on an 8088, so it ships with the package-close half or a kernel-CS test |
-| 3 | 7. Residency and lifetime | a third lifetime (a dropped module becomes a cache); init-lifetime code held from boot and dropped at settle; class code in owner-loaded overlays, not more rungs | **~-2,380..-2,450** (FILECP/FDLG cached), **-290..-380** (keyboard mouse), **-220** (PS/2 overlay) | - | the largest byte return in the review, all no-ABI; needs two owner decisions (the system-disk trade on kern_big, and the module test for the keyboard mouse) |
-| 4 | 9. Versioning and capability | a runtime API LEVEL in padding that is free today | **0** word, **+7..+12** .cold | dissolves (gfr-5) | the cheapest item here, and the precondition for every appended cell in themes 1-7 and 13 |
+| 1 | 1. Execution contexts and locks | teardown runs on the UI task; context rules become tags and a gate (a dying owner's lock release is not taken: packages are trusted, owner, 2026-11-08) | **-1..+29** (ctx-1 ~+31 without ctx-2's owner check, ui-3 -19, sched-3's tripwire to a knob; was +11..+48) | none; deferred damage stays record (+150..+200) | one move removes the root of five findings (histsys-1, hm-3, ctx-2, mem-10's worker arm, the worker reset of `[mem_pg_floor]`) and the context-lock review's one HIGH |
+| 2 | 4. Faults and the error model | every CPU fault reaches one named stop **in a knob build** (owner, 2026-11-08); refusal is CF, and AX means something only inside a named family; errors carry a class | **0** shipped (was +45..+60 .text, +20..+30 transient; those are the knob build's now) | the "not on this kernel" value (open: AX=0 or AX=1) | turns today's dead machine (1981 ROM), endless re-execute (286+) or silent garbage (later 8088 ROMs) into a named stop for wm-1, dw-1, gfce-5 and every unfenced divide, but changes what a package divide does on an 8088, so it ships with the package-close half or a kernel-CS test |
+| 3 | 7. Residency and lifetime | a third lifetime (a dropped module becomes a cache); init-lifetime code held from boot and dropped at settle; class code in owner-loaded overlays, not more rungs | **+60..+85** (the module cache; FILECP/FDLG cached is REFUSED, owner, 2026-11-08, was ~-2,380..-2,450), **-300..-320** (keyboard mouse, owner's; was -290..-380), **-220** (PS/2 overlay) | - | still the largest byte return left, all no-ABI; with WP2b refused it rests on the keyboard mouse (an owner decision, explained in `../followup-decisions-6-8.md`) and the PS/2 overlay |
+| 4 | 9. Versioning and capability | a runtime API LEVEL in padding that is free today | **0** counted (parked: must prove its worth before it spends bytes, owner, 2026-11-08); +7..+12 .cold if taken | dissolves (gfr-5) | the cheapest item here; the one argument left for it is the hand-copied package (follow-up) |
 | 5 | 2. Interrupts and the IF=0 budget | one owner for IVT, IMR and int 15h; a written latency budget with a ratchet and rows | **+77..+91** (+100..+150 for the full IRQ cell, owner's call) | IRQ cell mandatory for drivers (L3/D8) | no IF=0 bound exists; the longest windows (a grow copy, ~170 ms for 64KB PREDICTED) dwarf the one SPEC names |
-| 6 | 5. Validation at the boundary | hostile FILES are owned by the reader that understands them; package pointers are checked only in a checked build | **+41..+55** (about half .cold) | - | contains a HIGH (loader-1) and respects the owner's "packages are trusted" ruling instead of eroding it |
+| 6 | 5. Validation at the boundary | hostile FILES are owned by the reader that understands them; package pointers are checked only in a checked build | **+37..+51** (about half .cold; hm-14's +4 not counted, follow-up; was +41..+55) | - | contains a HIGH (loader-1) and follows the owner's "packages are trusted" principle, now recorded (owner, 2026-11-08) |
 | 7 | 11. The kernel matrix | kernels fork, packages must not; arm honesty by gate | **+5** .cold, +~20 HIBER.DRV | L3, staged | 5 true divergences, and coverage inverse to importance (21-28 kern_small soak rows against 390-430 kern_mega, and `test-full` never boots kern_mega); the gates are 0 shipped bytes |
-| 8 | 6. The memory model | keep claims and the relocation proc; add package-purgeable claims through that proc, a shared sub-allocator in source, and parts init-drop | **+64..+119** .cold | C1 (kernel -45..-69) | the one capability every period GUI had (a package-owned cache); hm-11 saves 0.8-1.5KB per running parts instance at 0 kernel bytes |
+| 8 | 6. The memory model | keep claims and the relocation proc; a shared sub-allocator in source, and parts init-drop; package-purgeable claims **parked** (follow-up, 2026-11-08) | **+29..+39** .cold (hm-9's +35..+80 parked; was +64..+119) | C1 (kernel -45..-69) | the period GUIs' package-owned cache is not needed now (its real case is Sheet's ~80KB); hm-11's saving waits on a self-shrink facility (phase1 WP15) |
 | 9 | 3. Waiting and I/O | block on events, not time; a disk wait that freezes nothing, after its preconditions | **+40..+55** .text +6 cell (the wait primitive) | caller-held write cursor (dw-22) | the wait primitive is the "one change of model" the scheduler review names; the disk-freeze release is real only on ROMs that keep the caller's stack and needs four preconditions |
 | 10 | 12. Contract and documentation system | one source per fact, the rest generated; a committed heading lock | **0** | 0 | round 1 already applied 946 fixes; what remains is the gate that stops the shape recurring |
 | 11 | 8. Dispatch and the call surface | rare cells behind one index door; the handler table in a window class | -40..-60 (`cw_` rehearsal, after the vector question) | T5 **-325..-390**, R14 **~-300** | the largest flag-day bytes, but the owner declined both smaller forms of the door, it costs +150..+300 clocks a rare call PREDICTED, and its vector collides with DOS |
 | 12 | 10. The kernel-driver contract | read service tables in place; a request block only where registers ran out | **-90..-140** (0 kern_small) | D6 request block (record) | a sure no-ABI saving, mostly bookkeeping beyond it |
 | 13 | 13. The API shape and the includes | a stateless kernel whose efficiency is won back by caller-held tokens; fix the leaks in that shape, do not build a library | **+34..+36** (grain cell, cursor name stamp) | READ_AT-shaped stream cell; withdraw `os88_rseq` | small, and one of its items makes a documented kern_small path run at all |
 
-**Totals (ESTIMATED).** The core now-phase items net to about **-2.46KB to
--2.84KB resident on kern_big** (about -2.98KB to -3.19KB of savings, almost
-all of it theme 7's three residency items, against +0.35KB to +0.52KB of
-growth), or -2.19KB to -2.58KB with theme 3's file-layer items. On a kern_big
-whose `.cold` a ROM or COLDHMA.SYS adopted, the FILECP/FDLG cache saves
-nothing and is skipped. kern_small nets about -0.16KB to +0.05KB (growth of
-+0.22KB to +0.34KB against the keyboard mouse's -0.29KB to -0.38KB). The byte
-ledger near the end itemises both. None of it needs a `PKG_FMT` or `DRV_VER`
-bump.
+**Totals (ESTIMATED), recomputed after the owner's answers (2026-11-08).** The
+core now-phase items net to about **-0.18KB to -0.37KB resident on kern_big**
+(about -0.61KB to -0.68KB of savings - the keyboard mouse, the PS/2 overlay and
+theme 10 - against +0.31KB to +0.43KB of growth, rt-1's module cache now among
+it), or **-0.11KB to +0.09KB** with theme 3's file-layer items. They were
+-2.46KB to -2.84KB while the FILECP/FDLG cache was in; the owner refused it.
+kern_small nets about **-0.05KB to -0.16KB** (growth of +0.16KB to +0.25KB
+against the keyboard mouse's -0.30KB to -0.32KB; was -0.16KB to +0.05KB). The
+keyboard mouse is still the owner's decision: without it kern_big is about
+-0.05KB to +0.12KB and kern_small +0.16KB to +0.25KB. The byte ledger near the
+end itemises both. None of it needs a `PKG_FMT` or `DRV_VER` bump.
 
 ## The one pattern under all thirteen themes
 

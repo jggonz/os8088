@@ -8,8 +8,10 @@ This is a dated measurement of one tree, not a maintained document. SPEC.md and
 the code stay the authority. Every line number and byte figure below can move.
 
 **After the review (owner and follow-up, 2026-11-08).** The owner has answered
-the first round of section 10. The answers, in the owner's words where it
-matters, are `big-review-2026-11-08/owner-decisions.md`, and they bind. Five
+section 10 in two rounds on the same day. The answers, in the owner's words
+where it matters, are `big-review-2026-11-08/owner-decisions.md`, and they
+bind; where the second round revisits a first-round answer (the API level),
+the second round is the one in force. Five
 follow-ups re-checked what the answers turned on, all under
 `docs/reports/big-review-2026-11-08/`:
 
@@ -75,11 +77,12 @@ Two facts constrain the plans more than any byte total:
   `.ovl` bytes (its wave 3) for 0 resident (owner, 2026-11-08).
 - **Phase 1 is a net resident saving on kern_big only if the owner takes
   WP2's FILECP/FDLG trade.** The owner refused that trade (owner,
-  2026-11-08). With it gone, and with the package fences and the fault
-  panel out of the shipped kernels, Phase 1 GROWS kern_big by about
-  +0.09..+0.54KB with its open owner items taken and +0.17..+0.52KB without
-  them (ESTIMATED, section 7). Correctness costs bytes, and the review's
-  biggest saving is no longer on offer.
+  2026-11-08). With it gone, the package fences and the fault panel out of
+  the shipped kernels, and the keyboard mouse and text-7 taken (the owner's
+  second round), Phase 1 with its bug batches comes to about
+  **-0.13..+0.25KB on kern_big** without the KHP round and +0.16..+0.54KB
+  with its six recommended rows (ESTIMATED, section 7). Correctness costs
+  bytes, and the review's biggest saving is no longer on offer.
 
 The flag day saves about **-1,170 resident on kern_big, -515 on kern_small and
 -770 conventional on kern_mega** (ESTIMATED). It moves `PKG_FMT` 10 -> 13 and
@@ -161,7 +164,7 @@ comments and SPEC text describing retired designs as current.
 
 | area | code | docs | biggest risk |
 |---|---|---|---|
-| abi | the call surface's mechanics are the best part of the kernel | contracts kept in up to four places, which disagree (abi-10) | no runtime API level: a new package on an old kernel calls past the table (abi-6; WP9). The Wire already fences the packages it serves, so the gap is a hand-copied package (follow-up, 2026-11-08) |
+| abi | the call surface's mechanics are the best part of the kernel | contracts kept in up to four places, which disagree (abi-10) | no runtime API level: a new package on an old kernel calls past the table (abi-6; WP9). The Wire already fences the packages it serves, so the gap is a hand-copied package (follow-up, 2026-11-08); the owner: take the level if it is cheap |
 | boot | one of the best-reasoned parts; boot-only code costs no resident byte | 40+ comments state history as current values | canary inert on four of the six system disks since 2026-09-05, and the splash's first tick runs code ahead of it on three (BR-1) |
 | bytes | close to the floor of routine-by-routine work | SPEC.md 2.6 and KERNEL-MEMORY.md tables stale | no live defect; the remaining levers are structural (theme 7, T5) |
 | diskread | one transfer routine, divide safety by arithmetic, a measured cache | the worst drift found: headers of deleted routines, SPEC 18's mount sequence (dr-16) | the boot partition is mounted with AH=08h geometry but addressed with the BPB's; FIELD-NOTES 33 is still live (dr-1, BR-25) |
@@ -384,8 +387,11 @@ from `synth/phase1.md` inserted where it binds.
    is the ordinary case. **Narrowed (follow-up, 2026-11-08):** The Wire
    already computes exactly the level the review proposed (`WIRE_LEVEL` and
    `WIRE_CELL_LEVELS` in `tools/os88wire.py`, SPEC.md 92.2) and greys a
-   too-new package, so the gap left is a package copied by hand. The owner:
-   a run-time level must prove its worth before it spends bytes.
+   too-new package, so the gap left is a package copied by hand. The owner,
+   first round: a run-time level must prove its worth before it spends bytes;
+   second round: **take it if it is cheap**, because the loaders gate on
+   `<=` PKG_FMT, so a package newer than the kernel can still call a cell the
+   kernel lacks.
 6. **The kernels drift apart through one-arm fixes, and test coverage runs
    inverse to importance** (theme 11). 32 of the 64 code bugs live on one
    kernel or kernel group, but only 5 are true divergence. The 128KB floor
@@ -401,7 +407,8 @@ from `synth/phase1.md` inserted where it binds.
    - `KERN_BUDGET` reads a VGA machine, so a win on the mono 8088 target never
      shows on the gauge (rt-5). The mono figure is already computed inside
      the assembly: `MONO_FLOOR`, 94,208 bytes against the gauge's 96,768,
-     MEASURED (follow-up, 2026-11-08).
+     MEASURED (follow-up, 2026-11-08). The owner: print it in `kernsize`,
+     because mono gains are pure gains for mono (owner, 2026-11-08).
 8. **Lifetimes are kept by hope, not by count** (themes 7 and 10). One global
    driver worker count stands for all drivers (BR-5); nothing counts the
    callers inside a driver (BR-31). The Sticky App library's lifetime is keyed
@@ -419,7 +426,8 @@ from `synth/phase1.md` inserted where it binds.
    into a `.boot3` section at the tail of KERNEL.SYS, read while the splash is
    already up and dropped before the `.vga` drop. Its wave 1 frees ~504 blob
    bytes and its wave 3 frees 176 of `.ovl`, for 0 resident (owner,
-   2026-11-08).
+   2026-11-08). The owner's second round makes it generic across the kernels
+   (kern_small unless it truly does not need it) and takes its wave 4.
 10. **A task can block only on time, and every int 13h freezes every task for
     ~400 ms** (theme 3). `dsk_xfer` raises `sch_lock` across the BIOS call
     (`kernel/disk.inc:1462`). `gfx_lock`'s waiters spin through yield.
@@ -444,8 +452,8 @@ no ABI break: an appended cell or a contract clarification is an
 |---|---|---|---|---|
 | 1 | 1. contexts and locks | teardown runs on the UI task; a dying owner releases its lock; the context rules become `; @ctx` tags plus a call-graph gate | **+11..+48** (teardown -6..+50 by route, ~+43 for the cheapest working shape; ui-3 -19); about **-1..+36** with BR-173 out under decision 3. Not needed immediately (owner, 2026-11-08) | none (deferred damage recorded at +150..+200) |
 | 2 | 4. faults and errors | every CPU fault reaches one named stop; CF is the refusal and AX means something only inside a named family; errors carry DOS-3-style classes | **0 shipped** (owner, 2026-11-08): the panel and stubs (+45..+60 `.text` big, +35..+55 small, +20..+30 transient) are built only behind a knob | R9's universal value (open: AX=0 or the doc half only) |
-| 3 | 7. residency and lifetime | a third lifetime (a dropped module becomes a purgeable cache); init-lifetime code held from boot and dropped at settle; class code in owner-loaded overlays, not more rungs | FILECP/FDLG (-2,380..-2,450) **refused** (owner, 2026-11-08); rt-1's drop-to-cache **+60..+85** `.cold`; **-300..-320** (keyboard mouse, OWNER; corrected by the follow-up), **-220** (PS/2 overlay) | - |
-| 4 | 9. versioning | a runtime API LEVEL at `KERNEL_SEG:0006`, padding that is free today | **0** for the word, +7..+12 `.cold` for the load check. **Must prove its worth first** (owner, 2026-11-08): The Wire already computes the level, so the load check covers only hand-copied packages (follow-up, 2026-11-08) | dissolves abi-6's flag-day half |
+| 3 | 7. residency and lifetime | a third lifetime (a dropped module becomes a purgeable cache); init-lifetime code held from boot and dropped at settle; class code in owner-loaded overlays, not more rungs | FILECP/FDLG (-2,380..-2,450) **refused** (owner, 2026-11-08); rt-1's drop-to-cache **+60..+85** `.cold`; **-300..-320** (keyboard mouse, TAKEN as "instead of": owner, 2026-11-08; re-priced by the follow-up), **-220** (PS/2 overlay); text-7 TAKEN (+16 gauge, about -177 mono) | - |
+| 4 | 9. versioning | a runtime API LEVEL at `KERNEL_SEG:0006`, padding that is free today | **0** for the word, +7..+12 `.cold` for the load check. **Take it if it is cheap** (owner, 2026-11-08, second round; the first round said it must prove its worth). The Wire already computes the level, so the load check covers only hand-copied packages (follow-up, 2026-11-08) | dissolves abi-6's flag-day half |
 | 5 | 2. interrupts | one owner for the IVT, the IMR and int 15h; a written IF=0 budget with a ratchet and rows | **+74..+88** (+77..+91 less ctx-5's +3, held: follow-up, 2026-11-08; the IVT scan probably costs less, walking `mem_rr_ivt`) (+100..+150 more for the full `OSAPI_IRQ` cell, OWNER) | the IRQ cell mandatory for drivers (D8) |
 | 6 | 5. validation | hostile FILES are fenced by the reader that owns the domain; package POINTERS are checked only in an `APICHK=1` build | **+33..+47** (+41..+55 less wm-2's +4 and hm-14's +4, which are package fences: owner and follow-up, 2026-11-08; about half `.cold`) | - |
 | 7 | 11. the kernel matrix | kernels fork, packages must not; arm honesty enforced by gates | **+5** `.cold`, +~20 HIBER.DRV; gates 0 shipped | L3, staged |
@@ -545,9 +553,20 @@ What each theme means concretely:
   - the keyboard mouse dropped at the first `[mou_ptr]` store. Re-priced
     (follow-up, 2026-11-08): about **-300..-320** resident (`kbm_poll0` must
     stay); on a machine that never settles a pointer the module holds a whole
-    512-byte heap granule, so **+130..+220** for the session, not +85..+165;
-    and its "load at boot" rode on WP2b's boot cache, which is not built, so
-    without it the boot pays a file read (~0.4-1.2 s on an XT, PREDICTED).
+    512-byte heap granule, so **+130..+220** for the session, not +85..+165
+    (about +190..+210 against the corrected saving); and its "load at boot"
+    rode on WP2b's boot cache, which is not built. **TAKEN, in an
+    "instead of" form** (owner, 2026-11-08, second round): the keyboard mouse
+    IS resident on every kernel today (`kbm_tab` .. `kbm_ev`, `.text`), and one
+    cluster on disk for a decent amount of resident RAM is a good trade, but
+    no boot may get longer. So `KBMOUSE.DRV` is loaded ONLY when no mouse is
+    found; a machine with a mouse never reads it, and the boot-cache
+    dependency goes. The mouseless machine pays the read (~0.4-1.2 s on an
+    XT, PREDICTED) and the heap granule.
+- **text-7, `font_run_x`'s VGA prologue into `.vga`: TAKEN** (owner,
+  2026-11-08, second round), at +16 on the VGA gauge and about -177 on a mono
+  kern_big, and 0.048% of a full Note Pad repaint (0.78% in the absolute worst
+  case, one run per cell), PREDICTED (follow-up, 2026-11-08).
 - **Do not generalise the rung** (rt-4). A rung can be given back only as a
   contiguous suffix under `.cold`, and mono and VGA are complementary. The
   working split is:
@@ -578,10 +597,19 @@ What each theme means concretely:
   0006 and the load check, ~8 `.cold`) covers only a package copied by hand.
   That gap is real: SPEC.md 20.2.0.1 says a new package calling a cell an old
   kernel lacks loads at the same `PKG_FMT` and far-calls past the table.
-- **The owner (2026-11-08).** Liked in general, but packages and drivers
-  already carry versions checked before anything runs, so a run-time level
-  would catch only a mistake in that versioning, and the same mistake could
-  break the new number. **It must prove its worth before it spends bytes.**
+- **The owner (2026-11-08), first round.** Liked in general, but packages
+  and drivers already carry versions checked before anything runs, so a
+  run-time level would catch only a mistake in that versioning, and the same
+  mistake could break the new number. It must prove its worth before it
+  spends bytes.
+- **The owner, second round: TAKE IT IF IT IS CHEAP.** The loaders gate on
+  `<=` PKG_FMT rather than `==`, so a package newer than the kernel can still
+  call a cell the kernel lacks. In the owner's words, "an `==` check on an API
+  level keeps the `<=` PKG_FMT gate (rather than a list of supported formats
+  per kernel) while refusing to crash on an old apps disk in a new kernel, or
+  the reverse". The design above refuses only a package whose needed level is
+  above the kernel's; whether the owner's `==` means that or an exact match
+  is still to confirm (section 10).
 
 **2. Interrupts.**
 - **Write the budget and gate it** (WP13): `tests/ifwin.txt` registers every
@@ -756,9 +784,11 @@ where os8088 already has the feature in another shape, the entry names it
 - **A desktop that is a folder of `.LNK` files** (Windows 95), read back by a
   directory walk at every boot. os8088 already has both shortcuts (SPEC.md
   26.8: SYSTEM.CFG records with their picture cached, made by dragging
-  anything runnable onto the desk) and `.LNK` links (SPEC.md 26.10); only the
-  per-boot directory-walk storage is refused (owner and follow-up,
-  2026-11-08).
+  anything runnable onto the desk) and `.LNK` links (SPEC.md 26.10). Making
+  the desktop a folder was already looked into, and it is not a bad idea at
+  its core; it is only too expensive in disk reads and resident bytes to
+  manage on a machine without a 95-era system's resources (owner and
+  follow-up, 2026-11-08).
 - **Settings in CMOS.**
 - **GEOS-style state files instead of hibernate.**
 - **OS/2's no-copy DOS box.**
@@ -898,7 +928,14 @@ wave 3 frees 176 of `.ovl`; wave 4, the owner's call, takes `.boot2` back to
 Its section 11 places each want: BR-6, BR-1 and BR-147 in `.boot2` once wave 1
 has landed; shell-8 in `.boot3` from wave 2; the `.ovl` wants with about 120 to
 spare after wave 3. phase1.md's "14th sector or boot-17" choice is gone, and
-boot-17 rides wave 4 for its diagnostics alone. The plan carries waves 0-1 in
+boot-17 rides wave 4 for its diagnostics alone. The owner's second round
+answers seven of its ten open questions: `.boot3` is GENERIC across the
+kernels (kern_small unless it truly does not need it), so kern_mega's 2-byte
+`.ovl` gets the same relief; the name is whatever confuses a new session
+least; wave 4 is YES; no kern_big 128KB boot row; `blobruns` into the fast
+tier if it is really quick (or full); the earlier bar without wave 4 only if
+it is less complex than wave 4. BOOT3-PLAN's per-kernel figures were priced
+for kern_big alone and are re-priced there. The plan carries waves 0-1 in
 session 3 and waves 2-4 as sessions of their own.
 
 kern_small's installs go in `.boot2`, which has 702 bytes free.
@@ -913,20 +950,20 @@ marks a WP whose bytes wait on a decision.
 | 2 | WP1 + WP7 | free bytes (dead code, dead data, redundant tests); `.bss` arrives zeroed: settled, zero on every shipped path since PR #61, the comments corrected, and `t_bsszero` proposed as the gate (owner and follow-up, 2026-11-08) | -165..-208 | -144..-166 (`.ovl` -45, `.boot2` -4) | -87..-121 / -49 |
 | 3 | WP6 + BOOT3 waves 0-1 + batch A | boot: KSIG_OFF and SPL_RESIDENT derived by the build; blob room through BOOT3-PLAN, not a 14th sector (owner, 2026-11-08); then BR-1, BR-6, BR-25, BR-55, BR-56, BR-63 | 0 (`.boot2` +18) | 0 (blob -41 and BOOT3 wave 1's -504 first, then +69; KERNEL.SYS ~-403, then ~+450 for `.boot3`) | 0 |
 | 4 | WP14 + WP19 | a routine header grammar and a liveness lint; `@ctx` tags, the call-graph gate, the `APICHK=1` checked build | 0 | 0 | 0 |
-| 5 | WP9 + WP26 | the API level (held until it proves its worth: owner, 2026-11-08); every contract sentence in one `abilock --update` | -4..-8 | -4..-8 | -4..-8 / 0 |
+| 5 | WP9 + WP26 | the API level (take it if it is cheap: owner, 2026-11-08, second round); every contract sentence in one `abilock --update` | 0..+5 | 0..+5 | -4..-8 / +8..+9 |
 | 6 | WP8 + batch F | the fault panel, int 0/6 stubs (behind a build knob, owner, 2026-11-08), divide ratchet, window doors (not retail, owner), CFG_MAP domain; then input, ISR and scheduler fixes | 0 | 0 (`.ovl` +22, gfce-6 only) | 0 |
 | 7 | batch C + WP21 | BR-4 teardown on the UI task with BR-173, BR-28, BR-42, BR-47..BR-50, BR-176; the damage-pass convention | -10 | -10 | -10 |
 | 8 | batch D + WP17 + WP13 | BR-2, BR-7, BR-11, BR-12, BR-53 (WP2's prerequisite); heap placement; the IF=0 rule, gate and instrument | 0 | +8 | 0 / +8 |
 | 9 | WP2a | rt-1 drop-to-cache, rt-9 ranks, shell-2's two users (MOD_SETS 3,180 bytes MEASURED, STIKMENU 7,876) | 0 | +60..+85 `.cold` | 0 / +60..+85 |
 | 10 | WP2b | FILECP and FDLG on kern_big as modules cached at boot. **REFUSED** (owner, 2026-11-08), in any form; the session is withdrawn | 0 | 0 (was -2,468..-2,508) | 0 |
-| 11 | WP3 (OWNER: KBMOUSE, text-7) | the keyboard mouse at init lifetime; the PS/2 runtime as an owner-loaded overlay; `font_run_x`'s VGA prologue into `.vga` | -290..-380 (KBMOUSE corrected to about -300..-320 by the follow-up) | -494..-599 (mono XT -675..-800) | -290..-380 / 0 |
+| 11 | WP3 (KBMOUSE and text-7 TAKEN: owner, 2026-11-08, second round) | the keyboard mouse as `KBMOUSE.DRV`, loaded only when no mouse is found; the PS/2 runtime as an owner-loaded overlay; `font_run_x`'s VGA prologue into `.vga` | -300..-320 (KBMOUSE re-priced by the follow-up; was -290..-380) | -504..-539 (mono XT about -685..-740) | -300..-320 / 0 |
 | 12 | WP4 + WP22 + batch G (driver half) + WP31 | driver tables read in place; contract text; the IMR shadow; gkm-1's one-arm fixes; matrix gates | +15..+19 | -62..-122 | -156..-166 / +40..+100 |
 | 13 | WP5 + batch H | kern_dos images (-560 kern_big's, -1,585 each kern_mega's) and kern_mega's own dead weight | 0 | 0 | -40 / -145..-165 |
 | 14 | batch E + WP16 | the disk hazards; a linear directory walk, `FILE_GRAIN`, F3's dual-mark reader | +22..+27 | +77..+88 | +6..+12 / +70..+80 |
 | 15 | WP12 | FAT write path: a cached free count, contiguous runs (dw-14, OWNER for its SPEC rewrite), a bracketed flush | 0..+3 | +160..+255 | 0 / +160..+255 |
 | 16 | WP18 | scheduler: a measure-first UI boost, `task_wake`, numbered lock rules; histsys-5's disk release only after its preconditions | +50..+77 | +50..+77 | +50..+77 / 0 |
 | 17 | batch B + WP20 + WP23 | display fixes; graphics hot paths; the button drawing order; video facts | +32..+44 | +120..+146 (mono +40..+56) | +24..+36 / +16..+20 |
-| 18 | WP11 (OWNER) | the KHP round: RELIT, DMGSTALE, CAPTION, VGASAVE, VGAFILL, VGAEDGE recommended; the rest per row | 0 | +286..+289 (+104..+107 every machine, +182 `.vga`) | 0 |
+| 18 | WP11 (per row: owner, 2026-11-08) | the KHP round, revived row by row, each on whether it earns its space: RELIT, DMGSTALE, CAPTION, VGASAVE, VGAFILL, VGAEDGE recommended | 0 | 0..+289 by row (the six: +286..+289, +104..+107 every machine, +182 `.vga`) | 0 |
 | 19 | WP15 | SDK-side work in packages | +24..+32 | +42..+60 | +30..+40 / +12..+20 |
 | 20 | WP27 | desk, dialogs and menus: the additions, behind `OS88_NEED` | -21..+9 | -15..-25 | -21..-31 / +6 |
 | 21 | WP29 + WP30 + batch G (hiber/clock half) | DISKOPS and HIBER module work (+54..+74 modules); one clock (prototype) | -10..+10 | -10..+10 | -10..+10 |
@@ -941,65 +978,91 @@ several. A batch's bytes are in section 4.1, and a parenthesis notes transient
 bytes. Each WP's own figure is in `synth/phase1.md`'s summary table.
 
 **Phase totals** (`synth/phase1.md`, the WPs alone, bug batches excluded,
-ESTIMATED):
+ESTIMATED). **Recomputed after the owner's answers (owner and follow-up,
+2026-11-08):** WP2b is refused, so it is in neither column; WP2a's
+drop-to-cache (+60..+85 `.cold` kern_big) is in both; WP8's panel, stubs and
+door refusals (+75..+106 big, +70..+101 small, +30..+46 mega conv) are behind
+knobs, so 0 shipped; WP9 is in both, as "take it if it is cheap"; WP3's
+KBMOUSE (re-priced -300..-320) and text-7 (+16 gauge, about -177 mono) are
+taken. The one owner item left to split on is WP11, now per row:
 
-| kernel | every WP, owner items taken | without WP2 (both halves), WP3's KBMOUSE and text-7, and WP11 | context |
+| kernel | without WP11 | with WP11's six recommended rows | context |
 |---|---:|---:|---|
-| kern_small | **-138..-416** | -36..+152 | KERN_SIZE 59,392 of 64,000 |
-| kern_big (VGA gauge) | **-2,158..-2,676** | **-150..+210** | KERN_SIZE 96,768 of 100,864 |
-| kern_big on a mono 8088 | about -2,600..-3,150 | about -240..+130 | |
-| kern_mega conventional | **-387..-626** | -97..-246 | budget 68,096 |
-| kern_mega above 1MB | +166..+389 | +106..+304 | not budgeted |
+| kern_small | **-218..-426** | -218..-426 | KERN_SIZE 59,392 of 64,000 |
+| kern_big (VGA gauge) | **-95..-469** | **-183..+194** | KERN_SIZE 96,768 of 100,864 |
+| kern_big on a mono 8088 | about -356..-760 | about -249..-656 | `MONO_FLOOR` 94,208, MEASURED |
+| kern_mega conventional | **-443..-596** | -443..-596 | budget 68,096 |
+| kern_mega above 1MB | +166..+389 | +166..+389 | not budgeted |
 
-The right-hand column leaves out the whole of WP2, as `synth/phase1.md`
-computes it. WP2a's drop-to-cache is not itself an owner item; keeping it
-without WP2b adds +60..+85 `.cold` on kern_big.
+The first review's figures, for the record: every WP with the owner items
+taken, kern_small -138..-416, kern_big -2,158..-2,676 (mono about
+-2,600..-3,150), kern_mega -387..-626 conv and +166..+389 high; without WP2,
+WP3's KBMOUSE and text-7 and WP11, -36..+152, -150..+210 (mono about
+-240..+130), -97..-246 and +106..+304. rt-6 (kern_small keeping FDLG
+purgeable, section 10) adds +60..+85 to kern_small if it is taken.
 
 **With the bug batches.** This is this document's arithmetic, not a
-synthesis figure. The batches' core totals (section 4.1) include BR-8 and
-BR-9, which WP8 already prices, so those are removed once. The core batches
-then add about **+415 kern_big, +294 kern_small and ~+200 kern_mega conv**.
-The whole of Phase 1 is therefore about:
+synthesis figure. After the owner's answers the core batches (section 4.1's
+recomputed total) add about **+341 kern_big, +220 kern_small and ~+179
+kern_mega conv**; nothing is double-counted with WP8 any more, because both
+BR-8 and BR-9 are out of the shipped kernels. The whole of Phase 1 is
+therefore about:
 
-- **kern_big:** -1.7..-2.3KB with the owner items; +0.27..+0.63KB without them.
-- **kern_small:** -0.12..+0.16KB with the owner items; +0.26..+0.45KB without
-  them.
-- **kern_mega conv:** about -0.19..-0.43KB.
+- **kern_big:** -0.13..+0.25KB without the KHP round; +0.16..+0.54KB with its
+  six recommended rows; on a mono 8088 about -0.42..-0.02KB and
+  -0.32..+0.09KB.
+- **kern_small:** -0.21..0KB.
+- **kern_mega conv:** about -0.26..-0.42KB.
 
-If the owner applies the packages-are-trusted ruling, each kernel drops ~107
-more. All of it is ESTIMATED.
+The first review's figures were kern_big -1.7..-2.3KB with the owner items
+and +0.27..+0.63KB without, kern_small -0.12..+0.16KB and +0.26..+0.45KB,
+and kern_mega about -0.19..-0.43KB. All of it is ESTIMATED.
 
 Outside the resident totals:
-- **Modules:** KBMOUSE.DRV +400..+450 (a cluster on every system disk); a PS/2
-  overlay ~+265; CTRL.DRV -1,500..-3,000 (WP28, unprototyped); HDD.DRV ~-45;
-  XMEM.DRV ~-17; HIBER.DRV/DISKOPS.DRV +54..+74.
+- **Modules:** KBMOUSE.DRV +400..+450 (a cluster on every system disk, read
+  only on a machine where no mouse is found); a PS/2 overlay ~+265; CTRL.DRV
+  -1,500..-3,000 (WP28, unprototyped); HDD.DRV ~-45; XMEM.DRV ~-17;
+  HIBER.DRV/DISKOPS.DRV +54..+74.
 - **Packages:** mem-17 -10..-19 per image; DOS.O88 +150..+165 (WP34).
-- **Disk:** about +4 clusters on each kern_big system disk if WP2b is taken.
+- **Boot:** `docs/plans/BOOT3-PLAN.md` costs 0 resident through its wave 3
+  and -8 at wave 4 (PREDICTED, not counted above). KERNEL.SYS grows about
+  +450 at its wave 1 and +1,950 by its wave 2 (+1 and +4 sectors), read after
+  the bar: about +24 and +80 ms on 360KB (PREDICTED). Those figures are
+  kern_big's; the second round makes `.boot3` generic, so they are re-priced
+  per kernel there.
+- **Disk:** WP2b's +4 clusters per kern_big system disk are gone with it.
 
 **Where the phase grows** is mostly correctness and speed:
 - WP12 +160..+255;
 - WP20 +120..+146;
-- WP8 +75..+106;
 - WP16 +77..+88;
 - WP18 +50..+77.
+
+WP8's +75..+106 left the list with the knob and the ruling (owner,
+2026-11-08).
 
 **If it must shrink, cut in this order:**
 1. dw-14;
 2. WP20's `.vga` items;
-3. WP8's door refusals;
-4. WP18's boost;
-5. WP27's optional cells.
+3. WP18's boost;
+4. WP27's optional cells.
+
+WP8's door refusals, the old third item, are already out.
 
 **Lock discipline.** No WP moves `PKG_FMT` or `DRV_VER`, but several move a
 fingerprint, so each needs an `abilock --update` with no bump:
 - WP9's level, and the header byte-31 cap;
 - WP19's `@ctx` tags, one update for the whole tagging;
 - WP26's contract text, one update;
-- each cell-adding WP (WP2's `MEMP_PURGEABLE`, WP16, WP18, WP22's optional
-  `OSAPI_IRQ`, WP27).
+- each cell-adding WP (WP16, WP18, WP22's optional `OSAPI_IRQ`, WP27; WP2's
+  `MEMP_PURGEABLE` is parked, follow-up, 2026-11-08).
 
 **WP9 lands before any WP that adds a cell**, so the first caller of a new cell
-refuses on an old kernel.
+refuses on an old kernel. That holds if WP9 is taken, which the owner's second
+round makes "if it is cheap" (owner, 2026-11-08). If session 5 finds it is not,
+a cell-adding WP falls back on what the tree already does: The Wire's
+`WIRE_CELL_LEVELS` row and `WIRE_LEVEL` raised by the release that first
+publishes the cell (SPEC.md 92.2), with hand-copied packages unguarded.
 
 **The PM-clean bit goes in `LD_H_CLASS`, not in the flags byte.** The
 syntheses disagree on where L7's bit and mem-17's movable bit go:
@@ -1058,7 +1121,7 @@ in the same commit as the SDK, and the table is renumbered once.
 | **P3** | the DOS launch block reorganised at the next `KDL_VER` | KDL_VER | 0 | recorded |
 | **P4** | T5's door rehearsed on the kernel's own `cw_` shims | none | -45..-90 `.text` kern_big | before T5 |
 | **P5** | one 16-byte boot handoff record | none | ~0 | recorded |
-| **A4** | the runtime API level (WP9) | none | +~8 `.cold`, 0 word | take it first |
+| **A4** | the runtime API level (WP9). The level computation is already The Wire's (`WIRE_CELL_LEVELS`, SPEC.md 92.2); the kernel half covers only a hand-copied package (follow-up, 2026-11-08) | none | +~8 `.cold`, 0 word | take it first, if it is cheap (owner, 2026-11-08, second round; the first round said it must prove its worth) |
 | **A5** | the appended cells the flag day makes cheaper, recorded so none waits for it | none | - | recorded |
 | **V7** | T5's renumber sorts by MEASURED call frequency (`OSAPI_SEG`, 108 sites, and `OSAPI_FS_OP`, 45, are promotion candidates) | inside T5 | +6 a promotion | prerequisite of T5 |
 
@@ -1071,7 +1134,7 @@ in the same commit as the SDK, and the table is renumbered once.
 - the private ABI versions fingerprinted;
 - `@ctx` tags;
 - `API_RN_DSOFF`;
-- A4;
+- A4, if it is cheap (owner, 2026-11-08);
 - T6's mechanism;
 - V7's frequency reading;
 - P4;
@@ -1081,7 +1144,8 @@ in the same commit as the SDK, and the table is renumbered once.
 - D8's shadow and scan;
 - F3's reader;
 - R9's doc half;
-- an `APICHK=1` kernel for the flag day's soak;
+- an `APICHK=1` kernel for the flag day's soak (it now also carries the six
+  package fences decision 3 keeps out of retail, if they are built at all);
 - a paper design for L1 on kern_small.
 
 **The order:**
@@ -1165,7 +1229,9 @@ areas and in all 12 gaps. The two doc passes (commits `14428309` and
 as text and are in `synth/doc-owner-questions.md`: five are code defects
 already in the register (BR-1, BR-23, BR-32, BR-45, BR-196), one is a rule to
 decide (whether code may rely on `.bss` arriving zeroed on every load path,
-WP7), and one is a stale `SPL_RESIDENT` inside an `%error` string that needs a
+WP7; settled since: zero at `kmain` on every shipped path since PR #61, by the
+file layout, `areas/gap-bss-zeroing.md`, owner and follow-up, 2026-11-08), and
+one is a stale `SPL_RESIDENT` inside an `%error` string that needs a
 code-string edit (WP6). The shapes recur, because nothing catches them:
 
 1. **Hand copies of code.**
@@ -1226,125 +1292,209 @@ and mostly WP10 and WP24:
 
 ## 10. Decisions for the owner
 
-Every item the syntheses mark owner or needs-owner, one line each, with the
-options. They are grouped by when they block work.
+Every item the syntheses mark owner or needs-owner, with the options. The
+owner answered in two rounds on 2026-11-08
+(`big-review-2026-11-08/owner-decisions.md`, which is the record and binds).
+So the section is split: what is **decided**, with the answer, and what is
+**still open**, grouped by when it blocks work. Each item keeps its number from
+the first version of this list, because the plan and the follow-ups cite them.
+
+### Decided
+
+- **1. The fatal panel's purpose** (gfce-2). The options were (a) halt as a
+  bug report; (b) close the faulting package and keep the desk, as
+  `mega_fkill` does (+45..+65 more, plus a skip decoder on a 286+); (c) halt
+  only for a kernel CS, and IRET otherwise on an 8088. **The answer (owner,
+  2026-11-08):** on kern_mega, where the kernel can afford not to crash,
+  closing the faulting package beats killing the OS, and it already does. In
+  real mode a divide fault deserves at least a stack-overflow-style message
+  where it cannot be recovered from, because a picture of it lets the owner
+  trace who divided. But it has not been met in production, so the panel's
+  resident bytes, the ~174-byte package answer included, wait behind a build
+  KNOB, off in shipped kernels, until a field report says it is being hit:
+  "that is a balancing act". **The same weighing applies to every diagnostic
+  panel for a failure nobody has met** (recorded in CLAUDE.md and AGENTS.md).
+  Shipped bytes: 0 (was ~+55 big / ~+40 small resident, +12..+20 `.ovl`).
+- **2. A 14th blob sector on kern_big: NO** (owner, 2026-11-08). It delays the
+  progress bar by 0.4-0.8 s, one or two more int 13h. Options (b) boot-17's
+  table and (c) `vid_memchk` into `.boot2` fall with it. The route is
+  `docs/plans/BOOT3-PLAN.md`: a third boot-time section at the tail of
+  KERNEL.SYS, read while the splash is already up and dropped before the
+  `.vga` drop and the heap compaction, so that `.boot2` goes back to "draw the
+  splash and load kernel.sys". **Its own questions, second round:** generic
+  across the kernels, kern_small included unless it truly does not need it;
+  the name is whatever confuses a new session reading the boot least; wave 4
+  YES; no kern_big 128KB boot row (there was one, and it was taken out);
+  `blobruns` into the fast tier if it is really quick, or full; the earlier
+  bar without wave 4 only if it is less complex than wave 4.
+- **3. Packages are trusted** (owner, 2026-11-08). Real mode cannot defend
+  against a hostile package (and on kern_mega an FSX real-mode bracket hands
+  it real mode anyway), so the only thing worth defending against is our own
+  mistakes, and most of the time those are better found and guarded at BUILD
+  time than with resident bytes. Resident guards pay where the failure is
+  catastrophic and user-visible and the printout tells the owner something,
+  as the stack-overflow panel does. **The six package-argument fences (BR-8's
+  doors +36, BR-22 +12, BR-29 +13, BR-30 +18, BR-37 +16, BR-173 +12) are not
+  taken as retail code**: at most an `APICHK`-style knob (option (b)). BR-8's
+  bound goes only with its doors, by this item's own rule, so the `div` stays
+  as it is in retail. The follow-up applies the same weighing to BR-84 (with
+  the panel), BR-85's code half, BR-107 and BR-109's optional doors (section
+  4.1). The fences against hostile FILES (BR-7, BR-23, BR-44, BR-59) are not
+  in this class (`synth/bugs.md`). Recorded in CLAUDE.md and AGENTS.md.
+- **4. WP2b, FILECP and FDLG on kern_big as modules cached at boot:
+  REFUSED** (owner, 2026-11-08), in any form, as it has been "20+ times now
+  (almost once per size pass)". kern_small can afford them as modules: a
+  one-disk distribution with no hard disk, drivers or DOS, where running a
+  program at all beats managing and opening files faster. kern_big cannot: the
+  user has swapped in a DOS, office or utility disk and cannot be made to
+  insert the system disk and wait every time a file is opened or copied, and
+  "open and copy file are not 'system management' actions". A boot-time cache
+  is not a saving either. Recorded in CLAUDE.md, AGENTS.md and SPEC.md 38 so
+  that it is not proposed again.
+- **6. rt-7, the keyboard mouse: TAKEN, as "instead of", not "always, then
+  dropped"** (owner, 2026-11-08, second round). The keyboard mouse is
+  resident on every kernel today; one cluster on disk for a decent amount of
+  resident RAM is a good trade, but no boot may get longer, so `KBMOUSE.DRV`
+  is loaded ONLY when no mouse is found and a machine with a mouse never reads
+  it. Figures (follow-up, 2026-11-08): about **-300..-320** static resident
+  (not -290..-380: `kbm_poll0` stays); `KBMOUSE.DRV` +400..+450, one cluster
+  on every system disk; a mouseless machine holds a whole 512-byte heap
+  granule, about **+130..+220** for the session (not +85..+165), and pays the
+  file read at boot (1-3 int 13h, ~0.4-1.2 s on an XT, PREDICTED).
+- **7. text-7, `font_run_x`'s VGA prologue into `.vga`: TAKEN** (owner,
+  2026-11-08, second round). About -177 on a mono kern_big, +16 on the VGA
+  gauge; Note Pad's real aligned runs gain ~+5..+15 clocks, and a full
+  maximised repaint gains 0.048% at the review's 40 clocks a run (0.78% in
+  the absolute worst case of one run per cell), PREDICTED (follow-up,
+  2026-11-08).
+- **8. rt-5, the mono residency figure: PRINT IT** (owner, 2026-11-08, second
+  round), option (a): a `classes` line in `tools/kernsize.py` (VGA, EGA, mono,
+  mono with `.cold` in a ROM or the HMA), 0 shipped bytes. The figure already
+  exists as `MONO_FLOOR`: mono kern_big resides in **94,208** against the
+  gauge's 96,768, MEASURED (follow-up, 2026-11-08). No `KERN_MONO_BUDGET`
+  gate.
+- **9. WP11, the KHP round: per row** (owner, 2026-11-08), option (b). It is
+  waiting to be revived, and each row is reviewed on whether it earns its
+  space. Its separate half (kern_small's losing arms) is still open below.
+- **The `.bss` rule** (WP7; `synth/doc-owner-questions.md`). "iirc we didn't
+  used to, and now do": confirmed from the code. Kernel `.bss` is zero at
+  `kmain` on every shipped path since PR #61, by the file layout rather than
+  by an instruction, and the comments are corrected
+  (`areas/gap-bss-zeroing.md`). The proposed gate is `tests/unit/t_bsszero.py`
+  (fast, 0 shipped bytes).
+- **BR-6, a plain MDA driven with Hercules timings** (owner, 2026-11-08). It
+  can damage the monitor. os8088 does not run on an MDA: print an MDA message
+  and halt, or switch to the usable CGA when one is present.
+- **The run-time API level (A4, abi-6, gfr-5): TAKE IT IF IT IS CHEAP**
+  (owner, 2026-11-08, second round). The first round said it must prove its
+  worth, because packages and drivers already carry versions checked before
+  anything runs. The second round: the loaders gate on `<=` PKG_FMT rather
+  than `==`, so a package newer than the kernel can still call a cell the
+  kernel lacks, and a level check refuses that rather than crash. The level
+  computation already exists as The Wire's (follow-up, 2026-11-08), so the
+  cost is the word at `KERNEL_SEG:0006` (0 bytes) and ~8 `.cold` for the
+  check.
+- **`.LNK` and a desktop that is a folder.** Shortcuts and `.LNK` links exist
+  (SPEC.md 26.8, 26.10). The refusal of a desktop that is a folder stands:
+  it was looked into, it is not a bad idea at its core, and it is too
+  expensive in disk reads and resident bytes for a machine without a 95-era
+  system's resources (owner, 2026-11-08; section 5's list is reworded).
+- **Theme 1's further context work: not needed immediately** (owner,
+  2026-11-08). The mouse and idle already have stacks of their own. The field
+  problem the owner knows of is a sound interrupt arriving on a package
+  already near its stack's edge; it was not at shutdown.
+- **Package-purgeable claims (hm-9): parked** (follow-up, 2026-11-08, on the
+  owner's request for real use cases). Not needed now; if built, justified by
+  Sheet's ~80KB of modules and by keeping lazy parts until the heap needs
+  them, not by the two consumers the review cited; and the zero-kernel-byte
+  alternative (Sheet dropping its modules after use) is the comparison to put
+  first (`followup-purgeable.md`).
+
+### Still open
 
 **Before Phase 1's sessions that need them:**
 
-1. **The fatal panel's purpose** (gfce-2; session 6). Options:
-   - (a) halt as a bug report;
-   - (b) close the faulting package and keep the desk, as `mega_fkill` does
-     (+45..+65 more, plus a skip decoder on a 286+);
-   - (c) halt only for a kernel CS, and IRET otherwise on an 8088.
-
-   Some form of (b) or (c) must ship with the stubs, because (a) alone halts
-   on package divides that continue today.
-2. **A 14th blob sector on kern_big** (session 3). Options:
-   - (a) take it: +512 bytes of guard 5's boot footprint, ~+22 ms of load on
-     360KB (PREDICTED), 0 resident; certain if BR-6 lands in the blob;
-   - (b) boot-17's `kmain_o` table, -30..-60, measure first;
-   - (c) move `vid_memchk` from `.ovl` into `.boot2` (frees 55 `.ovl`, still
-     needs (a)).
-3. **The packages-are-trusted ruling** on ~107 core bytes per kernel. The
-   items are BR-8's doors +36, BR-22 +12, BR-29 +13, BR-30 +18, BR-37 +16 and
-   BR-173 +12. Options:
-   - (a) retail fences;
-   - (b) `APICHK=1` only;
-   - (c) per-item named exceptions (dw-4's "a cross-linked FAT survives the
-     reboot" is the strongest).
-
-   If the doors are declined, take BR-8's bound only with them, or leave the
-   `div` to BR-9's panel.
-4. **WP2b: FILECP and FDLG on kern_big as modules cached at boot** (session
-   10). Options:
-   - (a) take it: about -2.4KB resident; 0 where `.cold` is ROM/HMA-adopted;
-     about +4 clusters per system disk; a Save As on a one-drive XT under
-     pressure then asks for the system disk;
-   - (b) decline.
-
-   Against it stand ONDEMAND-PLAN 1.2 ("The chooser cannot be the thing that
-   costs you the disk you are choosing on"), KERN-SMALL-MODULE-SPLIT ("Big
-   needs those to stay fast") and SPEC.md 38.0 ("not a module, on purpose").
-5. **rt-6: cache modules on kern_small too.** Options: (a) +60..+85, letting
-   the 128KB machine open Save As on a data floppy until heap pressure;
-   (b) leave it as today.
-6. **rt-7: the keyboard mouse at init lifetime** (session 11). Options:
-   - (a) take it: -290..-380 static resident on all kernels; +400..+450
-     KBMOUSE.DRV and a cluster on every system disk; +85..+165 of RAM in use
-     for ever on a mouseless machine;
-   - (b) keep it resident.
-7. **text-7: `font_run_x`'s VGA prologue into `.vga`.** Options: (a) -165..-185
-   on a mono kern_big, +16 on the VGA gauge, ~30-40 clocks a run on VGA;
-   (b) leave it.
-8. **rt-5: gate the mono residency figure**, or only print it in `kernsize`.
-9. **WP11: the KHP round** (session 18), per row. Options:
-   - (a) take the six recommended (+286..+289 on the gauge);
-   - (b) choose per row (RAISEOL, VGABLITP, FRAME, MONORECT, MONOSCROLL,
-     MONOPAT);
-   - (c) send each refused arm to `docs/plans/khp1/patches/`.
-
-   Separately: delete kern_small's losing arms (+74 there), or keep them
-   under `%else`.
-10. **ctx-6: kern_small's shed gate.** Options: (a) +14 `.text`; (b) keep
-    SPEC.md 66.3.1's exclusion and write the shed case into it.
-11. **BR-104 / hm-2: close `mem_find_own`'s self-region arm for FREE and
-    REGROW.** Options: (a) +6..+8, reversing an explicit SPEC.md 66.6.1.1
-    decision; (b) record the self-harm acceptance; (c) put it in `APICHK`
-    only.
-12. **BR-60 / dw-12: subdirectories grow.** Options: (a) +90 `.cold`, the
-    first item to cut; (b) keep SPEC's "the kernel does not grow a directory".
-13. **dw-14: contiguous allocation from the known size** (session 15).
-    Options: (a) +70 `.cold`, with SPEC 18.4's non-goal rewritten first;
-    (b) drop it.
-14. **The `OSAPI_IRQ` cell (D8).** Options: (a) now, +100..+150 resident
-    kern_big, SOUND.DRV -60..-100; (b) only at the flag day; (c) never
-    (shadow and scan only).
-15. **gkm-6: retire kern_emu** for a USBMOUSE-shaped VMMOUSE.DRV. Options:
-    (a) prototype it (+~40 kern_big, -385 emu-only, unproven drag
-    responsiveness); (b) keep kern_emu.
-16. **hdk-2: may a package erase a hard-disk partition without a tool-owned
-    confirm?** Options: (a) as today; (b) require an HDDTOOL token.
-17. **hm-12a: `MEM_OWNER_MAX` 8 -> 10 on kern_big.** 0 bytes; a policy against
-    SPEC.md 50.2's justification of 8.
-18. **BR-65 (kern_mega): an option-ROM IRQ on an unlent foreign stack.**
-    Options: (a) reflect it on a small fixed kernel stack, +20 `.mega` and
-    +128..+192 `.lowbss` conventional; (b) mask the line and replay it at the
-    next LOW_SEG reflection; (c) make `SEG_LEND` mandatory for a package that
-    keeps its own stack, 0 bytes (SDK text). Batch H takes (c) now and (a)
-    only on the owner's word.
-19. **engsys-15: the threshold** at which a scoped soak selection counts as
-    the whole tier and needs `--user-asked` (proposed ~90%).
-20. **wm-19: retire `band.inc`'s `BAND=1` knob** under WP11's "no indefinite
-    shelf".
-21. **hiber-19: keep `HIBERNAT.IMG` allocated** between hibernates
-    (unchecked).
+- **5. rt-6: cache modules on kern_small too.** Options: (a) +60..+85,
+  letting the 128KB machine open Save As on a data floppy until heap pressure;
+  (b) leave it as today. The owner finds it interesting: "keep FDLG as
+  purgeable" might be worth ~100 bytes (owner, 2026-11-08). Not yet a yes.
+- **9, its second half: kern_small's losing KHP arms.** Delete them (+74
+  there), or keep them under `%else`.
+- **The API level's comparison.** The owner's second round speaks of "an `==`
+  check on an API level ... refusing to crash on an old apps disk in a new
+  kernel, or the reverse". The review's design refuses only a package whose
+  needed level is ABOVE the kernel's, because cells are only appended and an
+  older package runs on a newer kernel. Confirm which is meant before session
+  5 builds it.
+- **BOOT3-PLAN's remaining questions** (`docs/plans/BOOT3-PLAN.md` section
+  15, not copied here). The second round answered questions 1, 3, 4 (kern_small
+  opts in unless it truly does not need it, which is a finding the work has to
+  make), 5, 6, 7 and 10. Open: 2 (wave 2's boot-time RAM), 8 (the clock ladder
+  whole or two rungs) and 9 (`B2CALL`'s constant segment).
+- **The Pravetz report.** Which disk did that machine boot? No record says.
+  `followup-canary.md` has the one 86Box run that tells an erroring ROM from a
+  lying one; then ask the reporter.
+- **10. ctx-6: kern_small's shed gate.** Options: (a) +14 `.text`; (b) keep
+  SPEC.md 66.3.1's exclusion and write the shed case into it.
+- **11. BR-104 / hm-2: close `mem_find_own`'s self-region arm for FREE and
+  REGROW.** Options: (a) +6..+8, reversing an explicit SPEC.md 66.6.1.1
+  decision; (b) record the self-harm acceptance; (c) put it in `APICHK` only.
+  Decision 3's weighing reads on it (a package harming its own region), but
+  the owner has not answered it.
+- **12. BR-60 / dw-12: subdirectories grow.** Options: (a) +90 `.cold`, the
+  first item to cut; (b) keep SPEC's "the kernel does not grow a directory".
+- **13. dw-14: contiguous allocation from the known size** (session 15).
+  Options: (a) +70 `.cold`, with SPEC 18.4's non-goal rewritten first;
+  (b) drop it.
+- **14. The `OSAPI_IRQ` cell (D8).** Options: (a) now, +100..+150 resident
+  kern_big, SOUND.DRV -60..-100; (b) only at the flag day; (c) never
+  (shadow and scan only).
+- **15. gkm-6: retire kern_emu** for a USBMOUSE-shaped VMMOUSE.DRV. Options:
+  (a) prototype it (+~40 kern_big, -385 emu-only, unproven drag
+  responsiveness); (b) keep kern_emu.
+- **16. hdk-2: may a package erase a hard-disk partition without a tool-owned
+  confirm?** Options: (a) as today; (b) require an HDDTOOL token.
+- **17. hm-12a: `MEM_OWNER_MAX` 8 -> 10 on kern_big.** 0 bytes; a policy
+  against SPEC.md 50.2's justification of 8.
+- **18. BR-65 (kern_mega): an option-ROM IRQ on an unlent foreign stack.**
+  Options: (a) reflect it on a small fixed kernel stack, +20 `.mega` and
+  +128..+192 `.lowbss` conventional; (b) mask the line and replay it at the
+  next LOW_SEG reflection; (c) make `SEG_LEND` mandatory for a package that
+  keeps its own stack, 0 bytes (SDK text). Batch H takes (c) now and (a)
+  only on the owner's word.
+- **19. engsys-15: the threshold** at which a scoped soak selection counts as
+  the whole tier and needs `--user-asked` (proposed ~90%).
+- **20. wm-19: retire `band.inc`'s `BAND=1` knob** under WP11's "no
+  indefinite shelf".
+- **21. hiber-19: keep `HIBERNAT.IMG` allocated** between hibernates
+  (unchecked).
 
 **For the flag day:**
 
-22. **T5 or T1.** Options:
-    - (a) the software-interrupt door at +150..+300 clocks (31-63 us) a rare
-      call, with a vector in 81h-FFh that DOS virtualises, and a residual risk
-      from a DOS program that writes the IVT directly;
-    - (b) T1's five-byte cells;
-    - (c) neither.
+- **22. T5 or T1.** Options:
+  - (a) the software-interrupt door at +150..+300 clocks (31-63 us) a rare
+    call, with a vector in 81h-FFh that DOS virtualises, and a residual risk
+    from a DOS program that writes the IVT directly;
+  - (b) T1's five-byte cells;
+  - (c) neither.
 
-    K17-1, T1's cousin, was declined before.
-23. **The IF rule.** Is any rare cell legitimately called with IF=0? "IF=1
-    callers only" drops the FLAGS restore from the door. The `@ctx` tags
-    answer it.
-24. **R14 and the C SDK.** Options: (a) the C SDK emits a class table from the
-    setter calls it sees; (b) C packages declare one.
-25. **L1 on kern_small.** Options: (a) design fixed-size kern_small content
-    for the region below a shared `KERNEL_SEG`; (b) keep L1 a kern_big row
-    and let kern_small pay the hole. Also: does kern_mega pack its ladder, so
-    L1 is worth up to -128 there?
-26. **R9's "not on this kernel" value.** Options: (a) AX=0, which is unused as
-    a refusal in every family but moves XREFUSE and needs a census of its
-    AX=1 readers; (b) the doc half only. AX=1 is refused.
-27. **gkm-9: is a one-disk 8088/286 product a goal?** It bears on L3, and runs
-    against the standing rule that no release carries kern_mega's disks.
-28. **L3's timing.** It stays blocked on The Wire serving kern_mega builds, by
-    the owner's ranking. Confirm, or reorder.
+  K17-1, T1's cousin, was declined before.
+- **23. The IF rule.** Is any rare cell legitimately called with IF=0? "IF=1
+  callers only" drops the FLAGS restore from the door. The `@ctx` tags
+  answer it.
+- **24. R14 and the C SDK.** Options: (a) the C SDK emits a class table from
+  the setter calls it sees; (b) C packages declare one.
+- **25. L1 on kern_small.** Options: (a) design fixed-size kern_small content
+  for the region below a shared `KERNEL_SEG`; (b) keep L1 a kern_big row
+  and let kern_small pay the hole. Also: does kern_mega pack its ladder, so
+  L1 is worth up to -128 there?
+- **26. R9's "not on this kernel" value.** Options: (a) AX=0, which is unused
+  as a refusal in every family but moves XREFUSE and needs a census of its
+  AX=1 readers; (b) the doc half only. AX=1 is refused.
+- **27. gkm-9: is a one-disk 8088/286 product a goal?** It bears on L3, and
+  runs against the standing rule that no release carries kern_mega's disks.
+- **28. L3's timing.** It stays blocked on The Wire serving kern_mega builds,
+  by the owner's ranking. Confirm, or reorder.
 
 ## 11. What was NOT covered
 
@@ -1378,28 +1528,44 @@ today. Register them and run their union once, in the final pass:
 - a hostile-header package (BR-7);
 - a negative-width BLIT4 call that goes red on `jz` (BR-3);
 - a package dividing by zero in a callback, on MartyPC GLaBIOS and as a `box-`
-  row on 86Box's 286 (BR-9);
-- a wild-pointer WM call (BR-8);
+  row on 86Box's 286 (BR-9), now against the knob build only (owner,
+  2026-11-08);
+- a wild-pointer WM call (BR-8), now an `APICHK=1` row only (owner,
+  2026-11-08);
 - a shed during a mount on the 128KB machine (BR-2);
 - unticking a second driver while USBMOUSE's worker runs (BR-5);
 - Esc on the Resume face (BR-10);
 - a pointerless desktop driven by the arrow keys on CGA, and after a resume
-  (WP3);
-- shed FILECP, then Save As (WP2b);
+  (WP3). Corrected (follow-up, 2026-11-08): the keypad half exists as
+  `wirefleetnomouse` (soak), which puts the probe back to "nobody has spoken"
+  and drives every gesture with the keypad and Space, and `mouerrq` covers
+  the keyboard mouse retiring. What is missing is a row named for the
+  keyboard mouse, a CGA leg, the after-resume leg, and now a boot with a
+  mouse that proves `KBMOUSE.DRV` is never read;
+- shed FILECP, then Save As (WP2b): withdrawn with WP2b (owner,
+  2026-11-08);
 - Sticky Apps pressed twice gives one disk load (WP2a);
 - an MDA-primary, an MCGA and a 64KB-EGA machine profile (BR-6, BR-55,
   BR-56): none exists in MartyPC or 86Box today;
-- `KSIG_OFF` back at 4096 turning `os8088-360.img` and `small360.img` red
-  (BR-1).
+- `KSIG_OFF` back at 4096 turning all four 9-sector images red,
+  `os8088-360.img`, `os8088-720.img`, `small360.img` and `small720.img`,
+  once `t_canary`'s `crosses()` models what stage 2 really does: start at
+  KERNEL.SYS + `BOOT2_SECS`, read `KZ_HEADSEC` in runs of its own, restart
+  the tail there, apply the DMA-page bound (BR-1; follow-up, 2026-11-08);
+- `rdiag360.img`, FIELD-NOTES 31's survey instrument, no longer tests
+  cylinder runs at all, because stage 1's flat arm is now track-bounded: give
+  it the cylinder bound behind a define, or retire it (follow-up,
+  2026-11-08).
 
 **Predicted numbers that need a measurement before they are quoted as fact:**
 - the regrow copy at IF=0 (~86-170 ms);
 - isr-7's baud ceilings;
 - every cycle figure for T5's door (+150..+300), R14's class lookup (+40..+90)
   and input-2's in-service test (55-65);
-- the boot cost of BR-1's track-bound head (~170-400 ms on four disks) and of
-  a 14th blob sector (~22 ms);
-- WP2b's ~7 ms boot copy;
+- the boot cost of BR-1's track-bound head (~170-400 ms on four disks; the
+  14th blob sector it was set beside is refused);
+- BOOT3-PLAN's load after the bar (about +24 ms at its wave 1, +80 ms at
+  wave 2 on 360KB);
 - D7's ~5 s Drivers page;
 - kern_mega's ~16 ms compaction piece, which is derived from the Victory
   286's MEASURED 0.257 ms/KB.
@@ -1416,7 +1582,9 @@ nobody assembled any of them.
 - **kern_mega's real-CPU behaviour.** Limit-checking faults (BR-13, BR-64,
   BR-65) are visible only on Bochs or 86Box, and QEMU cannot fail them. The
   286 reset path runs only on 86Box. None of these was run.
-- **Real hardware.** BR-6's monitor risk is lore, not verified. BR-183
+- **Real hardware.** BR-6's monitor risk is lore, not verified by this
+  review; the owner treats it as real ("this can damage the monitor") and
+  decided the MDA rule on it (owner, 2026-11-08). BR-183
   (HDD.DRV's ECC-corrected read) and BR-210 want field runs
   (docs/FIELD-MACHINES.md).
 - **Outside the kernel proper.** Packages and the C toolchain were reviewed
