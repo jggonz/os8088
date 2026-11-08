@@ -605,7 +605,11 @@ def main():
         # one sector again, comes after that fill with the chrome already up
         # (both tried, 2026-11-07). 12.8.3.2 is invisible on this path now;
         # going dark during the retries is not, and is what fails here.
-        leg("arm", len(seen) >= 2 and all(f for f, _ in seen),
+        # kern_mega's listing does not open with that fill, so there the
+        # first attempt is 12.8.3.2's own shape (down, armed by the count)
+        # and the RETRIES are what must be lit
+        lit = seen[1:] if os.environ.get("OS88_MEGA") else seen
+        leg("arm", len(seen) >= 2 and all(f for f, _ in lit),
             "(chrome up, run) at each failed attempt: %r" % seen[:6])
 
         chk = os.path.join(work, "a-fsck.img")
