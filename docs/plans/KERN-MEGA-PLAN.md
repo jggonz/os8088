@@ -16874,3 +16874,10 @@ battles (`$OS88_VBT_TARGET`, `$OS88_VBT_PKG`, not in the tree): the CGA4
 `BATTLE.VBT` - 8/8, kern_mega rings 336, runs [5.0, 10.0], kern_big 368;
 the VGA battle inside `FF7BATTV-286.O88` - 8/8, rings 224, runs [5.0,
 10.0], kern_big 256. SPEC.md 126.4.7 carries the figures.
+
+**Rows run, scoped** (`os88test.py soak --marty-jobs 1`, 408 s, **14 of 14
+green**): `megaparvb`, `megaparvp`, `vbtmega`, `vbtmega86`, `vbtdiag`,
+`vbtsound`, `vbtloops`, `vbtgame`, `vbthold`, `vbtholdcopy`,
+`vbtholdpart`, `vbtholdorder`, `vbtholdnox`, `vbtseam` - no row names
+`vb_bmbuild` or `vbbm.inc`. Fast tier green in `make` (73 passed); `make
+mega` builds.
