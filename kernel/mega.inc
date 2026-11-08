@@ -13935,11 +13935,16 @@ mega_drvup:
     mov [mega_xdst+2], dx
     xchg ax, cx
     call mega_mvblk                 ; up, the driver's pair with it
+    mov ax, [ss:si+MC_SEG]          ; AX = the paragraph it ran at
     pushf
     cli
     mov word [es:di], 0             ; the pair the block's now, not the
     and word [ss:si+MC_SEG], 0      ; record's - and the record free
     popf
+    mov si, sp
+    mov si, [ss:si]                 ; the row (BX, pushed above)
+    mov dx, [si+DRVR_SEG]
+    call mega_drvivt                ; ...and its vectors with it (14.181)
 .nopool:
     dec byte [sch_lock]
 .o:
@@ -13951,6 +13956,39 @@ mega_drvup:
     pop es
     popa
     ret
+
+; mega_drvivt - mega_drvup's, for an image it took back UP (KERN-MEGA-PLAN
+; 14.181, SPEC.md 53.2.3.1): AX = the conventional paragraph it ran at, DX =
+; its data selector. Every IRQ cell (IVT 08h-0Fh, 70h-77h) naming that
+; paragraph - mega_ivt_sync's .fixrow wrote it there while the image was
+; lent - names the pair's CODE half again, as drv_hi left it and as the next
+; door's fsx_rsnddn matches it; then the gates are synced. Left naming the
+; paragraph, the cell pointed at memory that was no longer the driver's:
+; the next rebuild gated it to another claim's pair or reflected it there,
+; and every later play was silent. A cell naming anything else is not the
+; driver's. PM, DS = KDATA. Every register kept but FLAGS
+mega_drvivt:
+    pusha
+    push es
+    mov bx, MEGA_SEL_LOW0
+    mov es, bx
+    sub dx, 8                       ; the code half
+    mov si, 0x08 * 4 + 2            ; each cell's SEGMENT word
+.c:
+    cmp [es:si], ax
+    jne .n
+    mov [es:si], dx
+.n:
+    add si, 4
+    cmp si, 0x10 * 4 + 2
+    jne .s
+    mov si, 0x70 * 4 + 2
+.s:
+    cmp si, 0x78 * 4 + 2
+    jb .c
+    pop es
+    popa
+    jmp mega_ivt_sync               ; (its gates and IVT 20h's twins)
 
 ; mega_segown - ES = the caller's DS -> BL = the owner a window is recorded
 ; under: its instance slot (mx_relinst's), 0C0h | its drv_tab row (a

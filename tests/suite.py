@@ -19798,6 +19798,21 @@ SOAK = [
         needs=("86box",),
         wants=("build/mega.img", "build/os8088.img", "build/video.o88",
                "build/megak/apps/video.o88", "build/megak/apps/video.map")),
+    Row("megasndup", "soak", py("tests/megasndup.py"), 30.0,
+        "KERN-MEGA-PLAN 14.181, SPEC.md 53.2.3.1: a lent SOUND.DRV gone "
+        "back UP keeps its vector. 86Box's vm/viddemo-vga (MR 286, SB16 on "
+        "IRQ 5), kern_mega, the Video Player's arm and 06-SNOW.V88 in C:'s "
+        "MEDIA: played full screen, the window closed (mega_drvup), opened "
+        "and played again. Both plays real-mode, every frame, the card open "
+        "and never dry, sound for every frame; between them no IRQ cell "
+        "names a conventional paragraph. RED on mega-release: IVT 0Dh left "
+        "naming the freed copy's paragraph, play 2 silent after 16 frames "
+        "([vp_snd] 0, [vp_pause] 1) - the owner's VGA demo videos, every "
+        "clip after the first. 30s is 27 measured (one boot, two plays)",
+        needs=("86box",),
+        wants=("build/mega.img", "build/mbr.bin", "build/megak/boothd.bin",
+               "build/megak/kernel.sys", "build/megak/apps/video.o88",
+               "build/megak/apps/video.map")),
     Row("megapxhugez", "soak", py("tests/megapxhuge.py", "--bmp"), 40.0,
         "SPEC.md 106.8.1: megapxhuge's PACKED half - PiXEL's kern_mega arm "
         "reads a CZ-packed picture whole into ONE OSAPI_MEM_HUGE claim "

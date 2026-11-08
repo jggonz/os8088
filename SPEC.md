@@ -107851,6 +107851,22 @@ half alone, banked nothing, and left the card's line SHUT for the bracket,
 so the second play's stream died with the samples queued before the drop.
 It matches the row's `RMD_SEG` too now and banks the cell as it was.
 
+**...and the same vector when the image goes back UP** (KERN-MEGA-PLAN
+14.181: the owner's pre-release pass of the VGA demo videos on 86Box's
+16 MHz 286 - one clip played full screen, its window closed, the next one
+opened). The forced sync left the card's IVT cell naming the lent image's
+conventional SEGMENT, and `mega_drvup` moved the image up without touching
+it, so the cell named a paragraph that was now somebody else's or nobody's:
+the next gate rebuild made it that claim's pair or a reflection to the old
+paragraph, and the next door's `fsx_rsnddn` matched neither the code half
+nor the new copy's `RMD_SEG`. Every play after the first window closed went
+SILENT after its first block (`[vp_snd]` 0, `[vp_pause]` 1), protected-mode
+brackets included, until a reboot. **`mega_drvup` now puts every IRQ cell
+(08h-0Fh, 70h-77h) that names the image's old paragraph back to its pair's
+CODE half - what `drv_hi` left there and what the door matches - and syncs
+the gates** (`mega_drvivt`); a cell naming anything else is not the
+driver's and is left alone.
+
 What it costs: kern_mega `.mega` +416 bytes against mega-release at 14.179
 (24,176 -> 24,592; the rung's 26,112 not crossed, so `MEGA_CODE_KB` and the
 pool unchanged), `.text` +6
