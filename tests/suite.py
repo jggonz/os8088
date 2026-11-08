@@ -369,6 +369,19 @@ FAST = [
         "system disks and two kz.json files, ~0.04s - WRITING-TESTS 2.1's "
         "shipped-artifacts family, beside image and canary",
         needs=("nasm",)),
+    Row("blobbodies", "fast", py("tests/unit/t_blobbodies.py"), 0.1,
+        "`.boot2` holds only what it is FOR (SPEC.md 2.9.14, BOOT3-PLAN wave "
+        "4): every label each built kernel's map puts in the blob is filed in "
+        "tests/blobbodies.txt as the loader, the splash, the first tick's "
+        "probe or the status line - or as a RESIDUE row with its reason, "
+        "held to a per-kernel RESIDUE_MAX that only goes down. The blob is "
+        "what stage 1 reads before the bar shows, so a body left there "
+        "instead of `.boot3` is paid for in the boot's one silent stretch. "
+        "FAST because it is the owner's ratchet on a size decision every "
+        "change to a boot body makes, and a host read of four maps, ~0.04s. "
+        "Broken on purpose three ways - a new label in `.boot2`, a residue "
+        "row a kernel lacks, RESIDUE_MAX one lower - and red each time",
+        needs=("nasm",)),
     Row("romsmall", "soak", py("tests/romsmall.py"), 45.0,
         "docs/plans/ROM-PLAN.md 3.4, wave 2: `make small`'s disks boot the same "
         "with or without the ROM. A: the ROM cut from build/smallk is ADOPTED "

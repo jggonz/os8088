@@ -22,7 +22,9 @@
 ;     the tail's read                         NOT CALLABLE (rule B2's cone)
 ;   kz_all returns (stage 2's end, after    expanded and aboard
 ;     the canary; boothd's kz_hd likewise)
-;   kmain -> SPLGATE1 kmain_o -> its calls  live: mem_init_x raised [mem_base]
+;   kmain -> call B3_SEG:kmain_o (its      live: mem_init_x raised [mem_base]
+;     own body is this section's since
+;     BOOT3-PLAN wave 4) -> its calls
 ;                                             past the blob, which the lift
 ;                                             keeps above this section and
 ;                                             `.boot3b`, so no claim,
@@ -200,12 +202,13 @@ b3_live:
                                 ; the bodies that need the modules' macros
 section .boot3
 %ifdef KERN_BIG                 ; (kern_big, kern_emu, kern_mega: kern_small's
-                                ; blob has its own desk grid, no capture and no
+                                ; boot has its own desk grid, no capture and no
                                 ; SYSTEM.CFG reader)
 ; -----------------------------------------------------------------------------
 ; cfx_grid - desk_rowcalc's geometry for the BOOT (desk.inc's DESK_GRID): the
-;            blob's bvw_rowcalc far-calls it and then reflows (kernel size pass
-;            15). All registers preserved but flags.
+;            boot's bvw_rowcalc calls it and then reflows (kernel size pass
+;            15; the blob's far call until BOOT3-PLAN wave 4 put bvw_rowcalc
+;            in this section too). All registers preserved but flags.
 ;
 ; HERE because the blob had nine bytes and `.boot3` is the RAM nothing claims
 ; until mem_unblob - which is after kmain_o's last call - and past b3_live.
@@ -224,10 +227,10 @@ cfx_grid:
     pop bx
     pop ax
     retf
-; cfx_ctxcap - vid_ctx_capture for the blob's bvs_disp_init (vidsel.inc's
+; cfx_ctxcap - vid_ctx_capture for the boot's bvs_disp_init (vidsel.inc's
 ; VID_CTXCAP), here for cfx_grid's reason
 VID_CTXCAP cfx_ctxcap, retf
-; cfx_cfgname - SYSTEM.CFG's name staged for the blob's ovc_load (driver.inc's
+; cfx_cfgname - SYSTEM.CFG's name staged for the boot's ovc_load (driver.inc's
 ; CFGN_STAGE), here for cfx_grid's reason (kernel size pass 16)
 CFGN_STAGE cfx_cfgname, retf
 %endif

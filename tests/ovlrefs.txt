@@ -63,8 +63,8 @@ drv_sniff           kmain_o only (kernel.asm) - what card is at 388h, and whethe
 vid_detect          spl_chrome only (splash.inc, `.boot2`: the loading screen's first tick) and vid_init (`.boot2`, from kmain_o) - both are IN the blob, so both are gone at spl_finish with it. vid_switch re-probes nothing (SPEC.md 2.5.3.3)
 bvs_apply           spl_chrome only (splash.inc, `.boot2`: the loading screen's first tick) - vid_init and the blob's vid_switch/vid_disp_init copies are IN the blob with it. The panel and EXTD.DRV carry copies of their own (viddet.inc's VID_APPLY), so no runtime path names this one (kernel size pass 14)
 files_init_x        kmain_o only (kernel.asm) - the Disk module's state, SPEC.md 22, before the first mount
-kmo_mark            BOOT_MARK only: MARKW's landing, and every MARKW is inside kmain_o (the macro BODY is what sits in `.text`, textually) - so it is reached only while kmain_o itself is running
-kmain_o             kmain only (kernel.asm), its one far call after MARK 0 - kmain from its first far call through BLOBCALL spl_finish, so the blob is live for the whole body by construction: it ends BY calling spl_finish and returns before mem_unblob_x (SPEC.md 2.5.3.3). drv_boot_x, hb_probe_x and xm_boot_x left this file with the move - their only caller is inside `.boot2` now, so the calls no longer cross
+kmo_mark            BOOT_MARK only: MARKW's landing, and every MARKW is inside kmain_o (the macro BODY is what sits in `.text`, textually) - so it is reached only while kmain_o itself is running. In `.boot3` with kmain_o since BOOT3-PLAN wave 4: it reads the index byte through CS, which is `.boot3`'s there
+kmain_o             kmain only (kernel.asm), its one far call after MARK 0 (`call B3_SEG:kmain_o` since BOOT3-PLAN wave 4: kmain_o is `.boot3`'s, not the blob's) - stage 2 enters the kernel only after kz_all has expanded `.boot3`, and kmain zeroes [spl_fseg] and calls mem_unblob_x only after kmain_o has returned, so the section is live for the whole body by construction
 drv_init_x          kmain_o only (kernel.asm) - the driver table seeded, SPEC.md 51. Nothing re-seeds it: drv_unload clears ONE row. drv_svc_clear_all moved with it and has no other caller
 dsk_boot_from_x     kmain_o only (kernel.asm) - which volume the machine came off, SPEC.md 18.96, read out of the registers the boot sector left. dsk_bootltr moves with it and is named nowhere else: it stamps the letter into three fixed messages, once, and it stays stamped
 dsk_dpt_init_x      kmain_o only (kernel.asm) - int 1Eh becomes ours, SPEC.md 18.92. dsk_xfer READS the parameter table for the life of the machine; nothing rebuilds it
@@ -96,15 +96,22 @@ ovl_spl_msg_boot    drv_boot_x only (B2CALL from `.boot3`), inside kmain_o, befo
 # ovl_cfg_load was here for the same reason and has left for the same one: its
 # only caller moved into the section with it.
 ovl_sc_load         ovc_load only (CFG_BOOT's expansion, which IS `.boot3` since BOOT3-PLAN wave 2, `.boot2` before it - the macro is merely DEFINED under `.modc`, where the reader cannot tell a definition from an emission). ovc_load's one caller is ovl_cfg_load, drv_boot_x's, inside kmain_o: the desktop shortcuts' boot read, SPEC.md 26.8.6
-bdk_apply           ovc_load only (CFG_BOOT's expansion, which IS `.boot3` since wave 2, as the row above says - the macro is DEFINED under `.modc`), by B2CALL. The blob's own dock_apply (DOCK_APPLY bdk, driver.inc), applied to the settings just read, inside drv_boot_x, inside kmain_o, before spl_finish. Visible to this gate only since the template walk learned a multi-argument expansion pastes its first (SPEC.md 120.4's bvs_switch row)
+bdk_apply           ovc_load only (CFG_BOOT's expansion, which IS `.boot3` since wave 2, as the row above says - the macro is DEFINED under `.modc`), by B3CALL - the boot's own dock_apply (DOCK_APPLY bdk, driver.inc) is `.boot3`'s too since wave 4, applied to the settings just read
 # ...and the rest of what drv_boot_x's cone still reaches in the blob, each a
 # B2CALL out of `.boot3` (BOOT3-PLAN wave 2), each inside drv_boot_x, inside
-# kmain_o, before spl_finish:
-xm_boot_x           drv_boot_x only (B2CALL): the store above 1MB, attached right after the mount. Stays in the blob beside vx_boot_x, whose bvs_cgo hop it shares
-bvs_switch          drv_boot_x only (B2CALL; it is FAR-bodied, KSW_SECT): SYSTEM.CFG's adapter. kmain_o's own vid_switch is this same body
-bvs_disp_far        drv_boot_x only (B2CALL): bvs_disp_init's 4-byte far door - kmain_o near-calls the body itself, so the body keeps its `ret`
+# kmain_o, before spl_finish. (xm_boot_x, bvs_switch and bvs_disp_init's far
+# door bvs_disp_far were here until wave 4 took them, and kmain_o, into
+# `.boot3`: they are not crossings any more, and the door is gone.)
+# ...AND WHAT kmain_o ITSELF STILL CALLS IN THE BLOB, since BOOT3-PLAN wave 4
+# moved it to `.boot3`: each is a B2CALL out of kmain_o, before its own
+# B2CALL spl_finish - which is the release's precondition, so the blob is
+# aboard for every one of them by construction.
+vid_init            kmain_o only (B2CALL, MARK 7) - the probe and publish re-run, the mode set skipped while the splash is up (viddet.inc); before spl_finish
+ovl_spl_msg_mouse   kmain_o only (B2CALL, MARK 18) - 'Looking for a mouse', before spl_finish
+ovl_spl_msg_fdd     kmain_o only (B2CALL, MARK 20) - 'Checking drives', before spl_finish
+bvs_apply_f         the boot's own vid_switch and vid_disp_init only (VSW_SWITCH's and VSW_DISP's bvs arms, B2CALL - the macro BODIES are what sits in `.text`, textually): bvs_apply's far door, from `.boot3`, which drv_boot_x, vx_boot_x and kmain_o reach before spl_finish (vx_boot_x after it, and before mem_unblob_x - the blob is still aboard: kmain releases it only on kmain_o's return)
 ovl_fdd_cylok       ovl_fdd_apply only (B2CALL), drv_boot_x's: the loader's b2_cylok read through the BLOB's CS - a label past boot2_entry, which `.boot3` may not name (SPEC.md 2.9.13.4)
-drv_boot_x          NOT a crossing: kern_small's one-byte `retf` rung is the blob's (BLOBCALL from kmain_o), kern_big's body is `.boot3`'s (B3CALL from kmain_o, MARK 28) - one name in two arms, which this source walk files under the last one it reads
+drv_boot_x          NOT a crossing: `.boot3`'s on every kernel since BOOT3-PLAN wave 4 (kern_small's one-byte `retf` rung was the blob's until then), B3CALL'd from kmain_o, MARK 28
 
 # --- not a call at all ------------------------------------------------------
 # kernel.asm's `kbld_blob: dw boot2_entry` is the length of the blob up to the

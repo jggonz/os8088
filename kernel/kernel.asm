@@ -1974,7 +1974,20 @@ B3_END      equ B3_RAM * 16 + B3_SIZE + B3_RES
 B3_LIFT_RD  equ ((B3_RAM * 16 + B3_SIZE + KZ_MARGIN_K + 1022 + 511) & ~511) / 16 - HEAP_SEG
 B3_LIFT_RS  equ ((B3_END + 511) & ~511) / 16 - HEAP_SEG
 B3_LIFT_F   equ 96 + (B3_LIFT_RD - 96) * (B3_LIFT_RD > 96)
-BLOB_LIFT   equ B3_LIFT_F + (B3_LIFT_RS - B3_LIFT_F) * (B3_LIFT_RS > B3_LIFT_F)
+B3_LIFT_0   equ B3_LIFT_F + (B3_LIFT_RS - B3_LIFT_F) * (B3_LIFT_RS > B3_LIFT_F)
+; ...AND OFF THE 64KB DMA PAGE (BOOT3-PLAN 3.3's page term, wave 4). Stage 1
+; bounds every run at the destination's page (boot.asm's second bound), so a
+; blob that straddles one costs an int 13h call BEFORE THE BAR for nothing: a
+; 7-sector blob at kern_small's 0xF800 was read 4 + 2 + 1 where 6 + 1 does it
+; (tests/unit/t_blobruns.py, which walks that bound). So when
+; [blob, blob + BOOT2_PAD) would cross a page, the lift rounds the blob UP to
+; it - at most BOOT2_PAD of boot RAM, 0 resident, and only on the kernel
+; whose blob lands there: kern_small at this build (0xF800 -> 0x10000, guard
+; 5's 128KB headroom ~2KB less); kern_big's, kern_emu's and kern_mega's
+; blobs cross no page and this term is 0 there
+B3_BLOB0    equ (HEAP_SEG + B3_LIFT_0) * 16
+B3_PGX      equ ((B3_BLOB0 >> 16) != ((B3_BLOB0 + BOOT2_PAD - 1) >> 16))
+BLOB_LIFT   equ B3_LIFT_0 + ((((B3_BLOB0 + 0xFFFF) >> 16) << 12) - HEAP_SEG - B3_LIFT_0) * B3_PGX
 BLOB_SEG_AT equ HEAP_SEG + BLOB_LIFT
 
 
@@ -2136,21 +2149,24 @@ XM_MAX_BLKS equ 8               ; the pool's fixed block table, entries: a
 ; sector by name - it boots only on a 286 or better, so stage 1 reading one
 ; sector more costs no period 8088 anything, and its blob is the knob length
 ; it always was (byte-identical kernel, the Makefile's KERN_MEGA block).
+; SEVEN, ON EVERY KERNEL, since BOOT3-PLAN wave 4 (2026-11-08; SPEC.md 2.9.14):
+; `.boot2` went back to its original purpose - the loader, the loading
+; screen, the first tick's adapter probe and the status line - and every
+; other body in it (kmain_o, the boot's adapter switch, xm_boot_x, vx_boot_x,
+; vmm_boot_x, the Dock geometry, kern_small's desk grid) moved to `.boot3`,
+; KERNEL.SYS's last section, which rides the packed read AFTER the bar is
+; up. kern_big's thirteen, kern_emu's and kern_mega's fourteen and
+; kern_small's eleven all became seven, and with them BOOT2_SMALLSEC and
+; kern_emu's and kern_mega's extra sector went: what is left fits seven on
+; all four (tests/blobbodies.txt is the ratchet that keeps it so). Only a
+; KNOB build keeps a sector more, for the reason above. The paragraphs above
+; are the history of how it grew; tests/unit/t_blobruns.py prices the seven.
 %ifdef KERN_KNOB
-  %define BOOT2_KNOBSEC 1
-%elifdef KERN_EMU
-  %define BOOT2_KNOBSEC 1
-%elifdef KERN_MEGA
   %define BOOT2_KNOBSEC 1
 %else
   %define BOOT2_KNOBSEC 0
 %endif
-%ifdef KERN_SMALL
-  %define BOOT2_SMALLSEC 2
-%else
-  %define BOOT2_SMALLSEC 0
-%endif
-BOOT2_SECS  equ 13 + BOOT2_KNOBSEC - BOOT2_SMALLSEC ; sectors stage 1 reads before it jumps - the
+BOOT2_SECS  equ 7 + BOOT2_KNOBSEC ; sectors stage 1 reads before it jumps - the
                                 ; loader, its screen and the blob half of
                                 ; the boot overlay, one section to BOOT2_PAD.
                                 ; THE TOTAL IS THIS, so
@@ -5280,7 +5296,7 @@ api_name2:  times 13 db 0       ; slots are not reached before kmain, and
 ;
 ; ZERO IS "NO BLOB", and it is the seed and the retirement value both. Every
 ; far call through this pair is behind that test - SPLCALL, OVLCALL(C),
-; spl_gate and sch_isr's copy - and BLOBCALL is the only call that skips it,
+; and sch_isr's copy - and BLOBCALL is the only call that skips it,
 ; from inside the blob, where the blob is aboard by construction. That guard is
 ; what makes a kernel started some other way survive a spl_step; the pointer's
 ; seed never was. It used to be COLD_SEG:mod_gone, tested with `jbe` - which
@@ -5420,25 +5436,18 @@ api_sysfp:  dw dwf_dskw_write_sys  ; which verb the shared fenced cell runs:
 ;
 ; **TWENTY bytes a site** (pushf 1 + cmp word 6 + jbe 2 + mov word 6 + call far
 ; 4 + popf 1), and the flags are banked across them because the
-; busiest caller is inside dsk_xfer's run loop with its own CF in flight. That
-; count is why SPLGATE below exists, and why this form still does too: nothing
-; in here is a CODE reference - only DS-relative data - so it drops into
+; busiest caller is inside dsk_xfer's run loop with its own CF in flight.
+; Nothing in here is a CODE reference - only DS-relative data - so it drops into
 ; `.text`, `.cold` and `.boot2` unchanged, and those three are three
 ; address spaces (SPEC.md 2.6). It is the portable form and the expensive one.
 ;
-; SPLGATE - the same call through `.text`'s shared gate, 3 bytes a
-; site. **`.text` ONLY**, and that is not a convention: a near call out of
-; `.cold` into `.text` is a jump into another segment, which is exactly what
-; tools/os88ovlchk.py exists to refuse - so the misuse fails the build rather
-; than the machine. kmain's eleven sites are all of `.text`'s, and every one of
-; them runs ONCE per boot, so the near call+ret this adds is ~99us on a
-; nine-second boot and the per-sector site in dsk_xfer keeps the inline form.
-;
-; A site names its target and so does its stub, and the NAME is the link: a
-; SPLGATE with no matching SPLSTUB is an undefined symbol, not a wrong address.
-; That is the whole reason the stub is generated from the target rather than
-; written out - SPEC.md 2.9.5.1 is what a second copy of a target looks like
-; when it goes wrong.
+; SPLGATE / SPLGATE1 / SPLSTUB AND THE GATE THEY SHARED ARE GONE (BOOT3-PLAN
+; wave 4): `.text`'s one shared copy of this test, `spl_gate`, 3 bytes a site
+; plus a stub per shared target, which kmain's eleven boot calls once used.
+; Its last two sites were kmain's `SPLGATE1 kmain_o` and dkb_geom's, and both
+; are `call B3_SEG:` now - kmain_o and ovl_dock_geom are `.boot3`'s, at a
+; constant segment, so there is no pointer to stage and kmain needs no test
+; (dkb_geom keeps its own). 9 bytes a site became 5, and the 14-byte gate went.
 %macro SPLCALL 1
     pushf
     cmp word [spl_fseg], 0
@@ -5470,24 +5479,6 @@ api_sysfp:  dw dwf_dskw_write_sys  ; which verb the shared fenced cell runs:
 %%done:                         ; never "a record was read"
 %endmacro
 
-%macro SPLGATE 1
-    call splg_%1
-%endmacro
-
-; ...and the SINGLE-SITE form, which is the one most targets want. A stub only
-; pays when it is SHARED: 3 at the site + 8 for the stub is 11 against 9
-; written out here, so the two forms cross over at two sites. splf_step (three
-; sites, all in kmain) and splf_stepq (two, both in mouse.inc) keep their
-; stubs; the other ten targets use these. The NAME is still the link - it is
-; written at the site and nowhere else, so a target this configuration does not
-; assemble is an undefined symbol exactly as a stub for one would be, and the
-; per-stub %ifdefs are gone because the site already carries the one that
-; matters. Using the shared form without a SPLSTUB is a build error; using this
-; form where a stub exists costs 2 bytes and nothing else.
-%macro SPLGATE1 1
-    mov word [spl_fp], %1
-    call spl_gate
-%endmacro
 
 ; OVLCALL - into the WINDOW half, `.ovl` (SPEC.md 2.5.3; it was OVWCALL and
 ; `.ovlw` until SPEC.md 2.9.14 gave the name back). A plain far call, where the
@@ -5661,31 +5652,31 @@ section .boot3
 %endif
 %endmacro
 
-; SPLSTUB - one three-instruction landing per SHARED target, emitted at the gate
-%macro SPLSTUB 1
-splg_%1:
-    mov word [spl_fp], %1
-    jmp short spl_gate
-%endmacro
 
 
 ; =============================================================================
-; kmain_o - kmain's BOOT HALF, in the blob (SPEC.md 2.5.3.3)
+; kmain_o - kmain's BOOT HALF, in `.boot3` (SPEC.md 2.5.3.3, 2.9.15)
 ;
-; Everything kmain does from its first far call to spl_finish: it runs once,
-; and it is given back with the rest of the blob by the mem_unblob_x kmain
-; makes on its return. It ENDS by calling spl_finish, so the blob is live for
-; the whole body by construction - no argument about call order is needed.
+; Everything kmain does from its first far call to as_boot: it runs once, and
+; it is given back with the rest of `.boot3` and the blob by the mem_unblob_x
+; kmain makes on its return. kmain enters it only after kz_all has expanded
+; `.boot3` (stage 2 jumps to the kernel only then), and returns from it before
+; mem_unblob_x - so the section is live for the whole body by construction.
 ;
-; A caller in the blob reaches another blob entry with BLOBCALL (`push cs` /
-; near call, 4 bytes): the blob is one segment, and it is
-; aboard because this code is running in it. Everything resident is reached
-; FAR - OVLCALL for the window half until drv_boot_x's mount (os88ovlchk rule
-; 2e scans THIS body for that line now), `call KERNEL_SEG:`/`COLD_SEG:` shims
-; for `.text` and `.cold`. MARK and BPMARK are MARKW and BPMARKW here, the
-; same numbers spelled for a blob caller.
+; IT WAS THE BLOB'S UNTIL BOOT3-PLAN WAVE 4, which took it - and every other
+; body that is not the loader, the splash, the first tick's probe or the
+; status line - out of `.boot2` on every kernel, so that the blob stage 1
+; reads before the bar shows is no bigger than its purpose (SPEC.md 2.9.14).
+; A `.boot3` body is reached with B3CALL (`push cs` + a near call here); what
+; stayed in the blob with B2CALL (`call BLOB_SEG_AT:`, its target ending in
+; `retf`). Everything resident is reached FAR - OVLCALL for the window half
+; until drv_boot_x's mount (os88ovlchk rule 2e scans THIS body for that
+; line), `call KERNEL_SEG:`/`COLD_SEG:` shims for `.text` and `.cold`. MARK
+; and BPMARK are MARKW and BPMARKW here, the same numbers spelled for a
+; caller outside `.text`; MARKW's landing kmo_mark moved with this body,
+; because it reads the index byte through CS.
 ; =============================================================================
-section .boot2
+B3SECT
 kmain_o:
     OVLCALL  dsk_boot_from_x    ; WHICH VOLUME DID WE COME OFF? (SPEC.md
                                 ; 52.10.3) DL and BX:CX are the boot sector's
@@ -5802,7 +5793,7 @@ kmain_o:
                                 ; mode set, so the very first menu bar paint
                                 ; already carries a valid clock
     MARKW 7
-    BLOBCALL vid_init               ; video adapter (SPEC.md 39): probe, publish
+    B2CALL   vid_init           ; video adapter (SPEC.md 39): probe, publish
                                 ; the runtime geometry. Re-runs what the
                                 ; splash already did, EXCEPT the mode set -
                                 ; the loading screen stays up and keeps
@@ -5828,7 +5819,7 @@ kmain_o:
                                 ; there
     MARKW 10
 %ifdef KERN_BIG
-    call bvs_disp_init          ; (the blob's own, driver.inc: KSW_SECT)
+    call bvs_disp_init          ; (the boot's own, driver.inc: KSW_SECT)
                                 ; ...and if it has BOTH mono cards, programme
                                 ; the second one too (SPEC.md 39.13). Here
                                 ; because [vid_avail] is what decides, so this
@@ -5941,7 +5932,7 @@ kmain_o:
                                 ; no app instances exist until launched
     MARKW 17
     BPMARKW 4                    ; ...the window manager, the bar, the table
-    BLOBCALL splf_step           ; a notch: the mode set and the font are done.
+    B2CALL   splf_step          ; a notch: the mode set and the font are done.
                                 ; ON A HARD DISK THIS IS THE FRAME THAT PUTS
                                 ; THE SCREEN UP, at 0 of SPL_POST (SPEC.md
                                 ; 2.9.9.1) - so the line below is the first
@@ -5952,7 +5943,7 @@ kmain_o:
     mov [mdg_n0], ax
 %endif
     MARKW 18
-    BLOBCALL ovl_spl_msg_mouse   ; ...and SAY SO (SPEC.md 15.6.4). AFTER the
+    B2CALL   ovl_spl_msg_mouse  ; ...and SAY SO (SPEC.md 15.6.4). AFTER the
                                 ; notch, which is what raises [spl_live]:
                                 ; composed before it, the line is never drawn
     OVBCALL   mouse_init         ; IRQ4 live; cursor stays hidden until shown.
@@ -5962,7 +5953,7 @@ kmain_o:
     BPMARKW 5                    ; ...and SPEC.md 9.4.1's two waits, which are
                                 ; the largest phase of a boot that is not
                                 ; the disk
-    BLOBCALL splf_step           ; ...and another: the serial reset holds
+    B2CALL   splf_step          ; ...and another: the serial reset holds
                                 ; DTR/RTS low for MOU_RSTLOW ticks (~165ms),
                                 ; which is the only non-I/O phase up here
                                 ; long enough to see (SPEC.md 15.3)
@@ -5971,7 +5962,7 @@ kmain_o:
     mov [mdg_n1], ax
 %endif
     MARKW 20
-    BLOBCALL ovl_spl_msg_fdd     ; ...and the SECOND stall the hard disk exposed
+    B2CALL   ovl_spl_msg_fdd    ; ...and the SECOND stall the hard disk exposed
                                 ; (SPEC.md 15.6.4): desk_init asks SPEC.md
                                 ; 18.97's TRACK 0 question about unit 1, and a
                                 ; drive heading for the absent verdict costs
@@ -6014,7 +6005,7 @@ kmain_o:
     MARKW 27
     BPMARKW 6                    ; ...the desktop, the dock, the driver table
 
-    BLOBCALL splf_step           ; a notch, and the last one kmain spends by
+    B2CALL   splf_step          ; a notch, and the last one kmain spends by
                                 ; hand: everything below is sectors, and
                                 ; dsk_xfer ticks the bar itself (SPEC 15.3)
 %ifdef MOU_DIAG
@@ -6029,13 +6020,12 @@ kmain_o:
                                 ; the drivers, which it would replace anyway,
                                 ; and before anything writes above 1MB
 %endif
-%ifdef OS88_DRIVERS
     B3CALL   drv_boot_x         ; ...and load what SYSTEM.CFG asks for (in
-%else                           ; `.boot3`, BOOT3-PLAN wave 2; kern_small's is
-    BLOBCALL drv_boot_x         ; the blob's one-byte `retf` rung)
-%endif
+                                ; `.boot3` on every kernel: kern_big's since
+                                ; BOOT3-PLAN wave 2, kern_small's one-byte
+                                ; `retf` rung since wave 4)
 %ifdef KERN_EMU
-    BLOBCALL vmm_boot_x         ; ...one of which may be SPEC.md 9.11's
+    B3CALL   vmm_boot_x         ; ...one of which may be SPEC.md 9.11's
                                 ; absolute pointer, which is DRVC_OVL and so
                                 ; stops at drv_check with nothing called: the
                                 ; kernel is its owner and this is where it
@@ -6103,14 +6093,14 @@ kmain_o:
 %endif
     MARKW 31
 
-    BLOBCALL spl_finish         ; the bar to 100% and the screen handed back:
+    B2CALL   spl_finish         ; the bar to 100% and the screen handed back:
                                 ; the paint kmain makes on return covers every
                                 ; pixel of it, so the loading screen needs no
                                 ; erase. The LAST call of the body but one:
                                 ; kmain releases the blob as soon as this
                                 ; returns
 %ifdef VID_EXT
-    BLOBCALL vx_boot_x          ; ...and VESA.DRV, if SYSTEM.CFG asked for it
+    B3CALL   vx_boot_x          ; ...and VESA.DRV, if SYSTEM.CFG asked for it
                                 ; (SPEC.md 120.4): a DRVC_OVL row drv_boot_x
                                 ; read and stopped at, attached here and the
                                 ; desktop switched onto it through the blob's
@@ -6146,8 +6136,8 @@ kmain_o:
     retf
 %ifdef BOOT_MARK
 kmo_mark:                       ; MARKW's landing - mark_here's shape, one
-    pushf                       ; segment along: the byte is read through the
-    push bp                     ; BLOB's CS, which is where it is
+    pushf                       ; segment along: the byte is read through
+    push bp                     ; `.boot3`'s CS, which is where it is
     mov bp, sp
     push bx
     mov bx, [bp+4]              ; the return address (flags and bp above it)
@@ -6194,9 +6184,14 @@ kmain:
                                 ; stops with its number up instead of resetting
 %endif
     MARK 0
-    SPLGATE1 kmain_o            ; ...the whole boot, from the blob, up to and
+    call B3_SEG:kmain_o         ; ...the whole boot, from `.boot3`, up to and
                                 ; including spl_finish (SPEC.md 2.5.3.3). MARK
-                                ; 1-31 are in there, as MARKW
+                                ; 1-31 are in there, as MARKW. A CONSTANT
+                                ; segment since BOOT3-PLAN wave 4, and so no
+                                ; [spl_fseg] test: SPLGATE1's guarded a kernel
+                                ; entered without stage 2, which skipped its
+                                ; whole boot and could not have run anyway
+                                ; (SPEC.md 2.9.5.3). 5 bytes for 9
 
     ; --- ...AND STAGE 2 GOES BACK TO THE HEAP (SPEC.md 2.9.5, 50.6.3) -------
     ; The line above is the last thing that ever wants the loading screen, so
@@ -7106,9 +7101,10 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
     call %1                     ; in the image on kern_small and resident on
 %endmacro                       ; kern_big (vid_equip, wm_su_drop_all): the
                                 ; scan does not read `call %1`
-; (BSWK/BSWC, the blob's pair through bvs_kgo/bvs_cgo, are driver.inc's,
-; beside the blob's expansions: a name of a `.boot2` label written here would
-; be a reference INTO the blob from `.text` - tests/ovlrefs.txt)
+; (BSWK/BSWC, the boot's pair through b3_kgo/b3_cgo - `.boot3`'s since
+; BOOT3-PLAN wave 4, the blob's bvs_kgo/bvs_cgo before it - are driver.inc's,
+; beside the boot's expansions: a name of a boot-only label written here
+; would be a reference into it from `.text` - tests/ovlrefs.txt)
 
 ; KGO_PAIR - %1_cgo / %1_kgo: CPXC's and CPXK's far hop, built by hand, for an
 ; image whose CS is not the kernel's: the call left the address of `dw target`
@@ -7483,51 +7479,8 @@ MOD_NSLOT equ (mod_fp_end - mod_fp) / 4
                                 ; (the fence), snd.inc (the release walk)
                                 ; and viddet.inc (the mode leaves)
 
-; =============================================================================
-; SPLGATE's landing pads (SPEC.md 2.9.5.2)
-;
-; DOWN HERE for the same reason the BOOTMARK block below is: this is `.text`,
-; and `.text` ABOVE the %includes pushes splash.inc out of the image's first
-; SPL_RESIDENT sectors.
-;
-; One stub a TARGET, not a site: kmain calls splf_step three times and pays
-; three bytes for each, against one stub of eight shared between them. The
-; stubs are generated from the target name (SPLSTUB) so the name is written
-; once and a mismatch is an undefined symbol.
-;
-; The gate itself is the guard the inline macro carries at every site, kept
-; word for word - SPEC.md 2.9.5.1 is what happens when this test is not on
-; this side of the far call - plus the `ret` that makes it shareable. It
-; preserves the flags, so a caller with CF in flight is unchanged, and it
-; clobbers NO register: the target arrives as the stub's own immediate rather
-; than in AX, which is what keeps this a size change and not a register-
-; discipline change.
-; =============================================================================
-; ONE STUB, because one target has more than one site: splf_step, three times
-; in kmain. Every other target is called once and writes its own immediate at
-; that one site (SPLGATE1 / SPLGATE1 above) - a stub for it would be 11 bytes
-; where the site alone is 9, and it would carry a %ifdef the site already has.
-; That took ovl_font_init's BAKED_FONT arm and ovl_xm_sniff's KERN_BIG arm out
-; of this block, and with them the one snag worth remembering: a stub names a
-; target, so a stub for a target this CONFIGURATION does not assemble is an
-; undefined symbol - which is the property that makes a missing pairing a build
-; error and not a wrong address, and it is not theoretical. Both were found by
-; the assembler within a minute of each other, one by `make` and one by
-; test-full's kern_small row.
-;
-; **splf_stepq's stub is gone with its sites** (SPEC.md 9.4.7). Both were in
-; mouse_init's identify window, which is in the blob now (`.boot3` on kern_small
-; since BOOT3-PLAN wave 1): a SPLGATE is a NEAR call to a `.text` stub and
-; neither can make one, so both became the inline
-; SPLCALL form and the 8-byte landing pad had nothing left to land.
-spl_gate:
-    pushf
-    cmp word [spl_fseg], 0
-    je .dead
-    call far [spl_fp]
-.dead:
-    popf
-    ret
+; (SPLGATE's landing pads and spl_gate were here, SPEC.md 2.9.5.2: gone with
+; their last two sites in BOOT3-PLAN wave 4 - see SPLCALL's note above.)
 
 ; =============================================================================
 ; BOOTMARK=1's blocks (see the MARK macro above)
@@ -8093,9 +8046,8 @@ cw_drv_pkg_call equ apic_drv_pkg_call ; ...and its PAINT, which is the same
 cw_vga_xor_rect_vram:   call vga_xor_rect_vram
                     retf
 ; (cw_vid_disp_init went in kernel size pass 13: its two callers are boot-only
-; and run the blob's own expansion, bvs_disp_init (driver.inc) - kmain_o, the
-; blob's, near, and drv_boot_x, `.boot3`'s since BOOT3-PLAN wave 2, through
-; its far door bvs_disp_far)
+; and run the boot's own expansion, bvs_disp_init (driver.inc) - kmain_o and
+; drv_boot_x, both near and all three `.boot3`'s since BOOT3-PLAN wave 4)
 %ifdef KERN_BIG
 ; vidsel.inc's whole dual-display half is inside one %ifdef KERN_BIG, so these
 ; bodies do not exist in the small build.
@@ -8418,8 +8370,8 @@ dsk_chdir_q:      call COLD_SEG:dkf_dsk_chdir_q
 ; drv_svc_call is called by snd_tick inside IRQ0, so it pays a far call 18.2
 ; times a second (54.6 under 53.2.1 FSXF_FASTTICK) - ~6us on a tick that has
 ; a whole 55ms, and it does nothing at all when no driver publishes a stream.
-; drv_boot's thunk is GONE (SPEC.md 2.5.2): the body is in the overlay and
-; kmain's one call site reaches it through SPLGATE1, which is the crossing the
+; drv_boot's thunk is GONE (SPEC.md 2.5.2): the body is in `.boot3` and
+; kmain_o's one call site reaches it with B3CALL, which is the crossing the
 ; thunk used to be.
 %ifdef OS88_DRIVERS                     ; (kern_small: no caller - snd.inc's
 drv_svc_call:  call COLD_SEG:drv_svc_call_x ; are all OS88_DRIVERS's now)
@@ -8757,10 +8709,10 @@ KTEXT_SIZE equ kernel_text_end - $$
 ; that memory.
 ;
 ; It is also what refused the tempting shape here for a while: routing
-; spw_vid_detect into the boot overlay through spl_gate. `.boot2` is aboard
-; before stage 1 jumps and vid_detect would be too, which reads as free - but
-; spl_gate is at the far end of `.text`, so the PATH is not aboard even though
-; the destination is. docs/plans/LAST-DROP-BYTES.md rows 10 and 22 were refused
+; spw_vid_detect into the boot overlay through spl_gate (a `.text` gate that
+; BOOT3-PLAN wave 4 deleted). `.boot2` is aboard before stage 1 jumps and
+; vid_detect would be too, which reads as free - but spl_gate was at the far
+; end of `.text`, so the PATH was not aboard even though the destination was. docs/plans/LAST-DROP-BYTES.md rows 10 and 22 were refused
 ; on this. SPEC.md 2.5.3.3 took them anyway by changing the PATH: spl_chrome
 ; is `.boot2`, the same segment as `.boot2`, so it reaches vid_detect with a
 ; BLOBCALL (`push cs` / near call) and no `.text` byte in between.
@@ -9741,6 +9693,11 @@ SK_MEGA_KB equ SK_R(SK_CUM4) - SK_R(SK_CUM4 - MEGA_PARA * 16) ; rungs when they
 %if BLOB_SEG_AT*16 + BOOT2_PAD > MEGA_BOOT_KB*1024 - BOOT_SECT - BOOT_STACK
 %error "kern_mega cannot BOOT on its 1MB floor machine's 640KB - see docs/KERNEL-MEMORY.md"
 %endif
+%endif
+; 5a. ...and the blob crosses no 64KB DMA page (BLOB_LIFT's page term,
+;    BOOT3-PLAN wave 4): stage 1 would split its read there for nothing
+%if (BLOB_SEG_AT*16 >> 16) != ((BLOB_SEG_AT*16 + BOOT2_PAD - 1) >> 16)
+%error "stage 2's blob straddles a 64KB DMA page - stage 1 splits its read there (boot.asm's second bound); BLOB_LIFT's page term should have prevented this"
 %endif
 ; 5b. ...and BOOT2_PAD is in that sum because STAGE 2 SITS ON THE HEAP'S FLOOR
 ;    (SPEC.md 2.9.5), which is the kernel's own last paragraph - LIFTED by

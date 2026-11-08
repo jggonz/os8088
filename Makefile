@@ -2297,22 +2297,14 @@ endif
 # ...and kern_mega keeps the knob's sector it took while it WAS one (kern_mega
 # size pass 1): only a 286 or better boots it, so the sector costs no 8088
 # anything, and the kernel stays byte-identical to the knob build it was.
-ifneq ($(KERN_EMU),)
-BOOT2_XSEC := 1
-endif
-ifneq ($(KERN_MEGA),)
-BOOT2_XSEC := 1
-endif
+# ...AND THAT IS THE ONLY ARM SINCE BOOT3-PLAN WAVE 4 (2026-11-08): the blob
+# is seven sectors on kern_big, kern_emu, kern_mega and kern_small alike -
+# everything in it that was not the loader, the splash, the first tick's
+# probe or the status line moved to `.boot3` - so kern_emu's and kern_mega's
+# extra sector and kern_small's two fewer (kernel.asm's BOOT2_SMALLSEC) went
+# with the bodies that had needed them.
 ifneq ($(BOOT2_XSEC),)
 BOOT2_SECS := $(shell echo $$(( $(BOOT2_SECS) + 1 )))
-BOOT2_PAD  := $(shell echo $$(( $(BOOT2_SECS) * 512 )))
-endif
-# ...and kern_small TWO SECTORS SHORTER than the literal: kernel.asm's
-# BOOT2_SMALLSEC. The twelfth sector is kern_big's boot copy of the adapter
-# switch and the thirteenth VESA.DRV's attach, and kern_small has no drv_boot to
-# carry either (kernel size passes 13 and 14), so it keeps the eleven it had.
-ifneq ($(KERN_SMALL),)
-BOOT2_SECS := $(shell echo $$(( $(BOOT2_SECS) - 2 )))
 BOOT2_PAD  := $(shell echo $$(( $(BOOT2_SECS) * 512 )))
 endif
 # ...AND EACH ARM'S CANARY IS WALKED OVER ITS OWN SHIPPED SYSTEM DISKS
@@ -2912,26 +2904,27 @@ KINC = -I kernel/ -I apps/ -I $(BUILD)/$(if $(filter-out $(BUILD),$(ICODIR)), -I
 # (tools/os88ksig.py head) - so the head can never be SHORTER than the window
 # (the foot refuses that too) and is never longer than KZ_HEADMIN asks.
 #
-# KZ_HEADMIN IS A CALL-COUNT DECISION, NOT A SIZE ONE, and on kern_big it is 9
-# for one geometry. Taking kern_big's head from 9 to the window's 5 saves
-# ~400 bytes of KERNEL.SYS and moves stage 2's calls (t_blobruns' model, this
-# build's packed length; PREDICTED until os88boot measures it):
+# KZ_HEADMIN IS A CALL-COUNT DECISION, NOT A SIZE ONE. It was 9 on kern_big,
+# kern_emu, kern_mega and every knob from boot-4 until BOOT3-PLAN wave 4,
+# because at a 13-sector blob the window's 5-sector head cost the two
+# 9-sector disks a stage-2 call (360KB and 720KB 11 -> 12) to save 1.44MB
+# one. Wave 4's 7-sector blob moved where KERNEL.SYS's head lands, and
+# t_blobruns' model, run per head over the shipped disks at this build's
+# packed length, says the window's own head is now the best on every disk -
+# int 13h calls before the bar (stage 1 + the head) / in total (stage 1 +
+# stage 2), PREDICTED until os88boot measures them:
 #
-#   blob 13, head 9 -> 5   360KB 11 -> 12   720KB 11 -> 12   1.2MB 9 -> 9   1.44MB 8 -> 7
+#   kern_big, blob 7   head 5   head 6   head 7   head 8   head 9
+#   360KB, 720KB        3/13     3/13     4/14     4/15     4/15
+#   1.2MB               3/9      3/9      3/9      3/9      3/9
+#   1.44MB              3/9      3/9      3/9      3/9      3/9
+#   (blob 13, head 9, before wave 4: 3/13, 3/13, 4/11, 4/10)
 #
-# A 9-sector head ends exactly on a cylinder on the two 9-sector disks, so the
-# packed tail starts on one; a 5-sector head restarts the tail 4 sectors short
-# of a cylinder and costs those disks a call after the bar (1.44MB gains one
-# BEFORE it, its head being one track run instead of two). 360KB is the
-# owner's 5150's geometry, so the trade is the owner's, and it is not this
-# change's: it stays 9 on kern_big, kern_emu, kern_mega and every knob. With
-# BOOT3-PLAN wave 4's 7-sector blob the same model gives 5 or 6 as the best
-# head on every kern_big disk (11, 11, 8, 7 against 9's 12, 12, 8, 7), so the
-# number to revisit is this one, with the blob, in that wave.
-#
-# kern_small takes the window outright (KZ_HEADMIN 0, below): on small360 and
-# small720 a 5-sector head costs no call at all (8 either way).
-KZ_HEADMIN := 9
+# so 0 - the head IS the resident window, max(SPL_RESIDENT, 0) - on every
+# kernel: 5 and 6 tie on calls everywhere and 5 is the shorter file. The
+# number stays a knob for the next time a blob length or a head bound moves
+# the answer; SPEC.md 2.9.13.1 and BOOT3-PLAN 16.10 carry the table.
+KZ_HEADMIN := 0
 # ...and what an ASSEMBLER command line has to carry so a loader outside the
 # kernel gets pass 2's numbers. Expanded IN THE RECIPE, because
 # kernel.kz.json is written by a rule and does not exist when this file is
@@ -2948,9 +2941,6 @@ endif
 # length comes off pass 1's own map, so pass 1 cannot be told it. It reaches
 # only the loader's immediates, which the two-pass compare leaves out, and
 # kernel.asm's foot checks it against SPL_RESIDENT on pass 2.)
-ifneq ($(KERN_SMALL),)
-KZ_HEADMIN := 0
-endif
 
 # **THE FILE AND THE IMAGE ARE TWO NAMES NOW, ALWAYS** - `kernel.bin` is what
 # the kernel IS and `kernel.sys` is what goes on a disk, and with KZIP off the

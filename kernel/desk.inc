@@ -622,13 +622,13 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
 section .modu                   ; CTRL.DRV's copy (KSW_SECT, kernel.asm)
 DESK_ROWCALC wm, KSWC
 %ifdef KERN_SMALL
-section .boot2                  ; ...and kern_small's boot copy, through a hop
-%macro BDRC 1                   ; of the blob's own (kern_big's is driver.inc's
+B3SECT                          ; ...and kern_small's boot copy, through a hop
+%macro BDRC 1                   ; of its own (kern_big's is driver.inc's
     call bvw_cgo                ; BSWC, beside its other boot expansions, and
-    dw %1                       ; kern_small has no drv_boot to carry them)
-%endmacro
-DESK_ROWCALC bvw, BDRC
-KGO_PAIR bvw
+    dw %1                       ; kern_small has no drv_boot to carry them).
+%endmacro                       ; `.boot3` with kmain_o, its one caller,
+DESK_ROWCALC bvw, BDRC          ; since BOOT3-PLAN wave 4 - the blob's before
+KGO_PAIR bvw                    ; ovlchk: B3 hand-down - the far return's CS (`mov [bp+10], cs`), spent by the hop's own retf before the call it builds returns
 %endif
 section .cold
 

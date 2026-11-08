@@ -4980,9 +4980,10 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
 %endif                          ; machine's to decide (_load's sentinel)
     call %1 %+ _want_set
 %ifdef DOCK_OPT
-    B2CALL bdk_apply            ; (the blob's own dock_apply, FAR-bodied as
+    B3CALL bdk_apply            ; (the boot's own dock_apply, FAR-bodied as
                                 ; the Dock page's is - KSW_SECT, kernel.asm;
-                                ; this reader is `.boot3`'s since wave 2)
+                                ; this reader `.boot3`'s since wave 2, the
+                                ; apply since wave 4)
                                 ; the map above stored [dock_cfg]; the band,
                                 ; the strip and the drive column are DERIVED
                                 ; from it (SPEC.md 30.5), which is not a store.
@@ -5772,12 +5773,13 @@ section .cold                   ; ...and back to cold code: drv_boot and
 ; SYSTEM.CFG reader above, the shortcuts' read (desksc.inc), DRV_ATTACH's bdl
 ; instance, bxf_sync and a KGO pair of its own (b3_, below: KGO_PAIR's hop
 ; reads its inline word through CS, so it must be in its CALLER'S segment).
-; What stays in the blob is what reads `[cs:]` there or what kmain_o also
-; calls: the status line (ovl_spl_msg_*, whose spl_mcs reads the driver
-; titles bdt_* through the blob's CS - so the titles stay too, and
-; drv_boot_x hands over a BLOB offset), xm_boot_x, the adapter switch's
-; instance (bvs_switch, bvs_disp_init's door, bdk_apply) and the loader's
-; b2_cylok (ovl_fdd_cylok's door). Each is B2CALL from here.
+; What stays in the blob is what reads `[cs:]` there: the status line
+; (ovl_spl_msg_*, whose spl_mcs reads the driver titles bdt_* through the
+; blob's CS - so the titles stay too, and drv_boot_x hands over a BLOB
+; offset) and the loader's b2_cylok (ovl_fdd_cylok's door). Each is B2CALL
+; from here. xm_boot_x and the adapter switch's instance (bvs_switch,
+; bvs_disp_init, bdk_apply) followed in wave 4, with kmain_o, and are
+; B3CALL or near calls now.
 ; =============================================================================
 B3SECT
 
@@ -5810,7 +5812,7 @@ drv_boot_x:
     jc .nodisk
 %ifdef KERN_BIG
  %ifndef KERN_MEGA              ; (kern_mega: the store is mega_xminit's)
-    B2CALL xm_boot_x            ; THE STORE ABOVE 1MB FIRST, before any driver
+    B3CALL xm_boot_x            ; THE STORE ABOVE 1MB FIRST, before any driver
                                 ; (SPEC.md 41.12): it is what puts `.cold` in
                                 ; the HMA, and a driver loaded after it may go
                                 ; up there too (docs/plans/HMA-PLAN.md 5). It
@@ -5886,7 +5888,7 @@ drv_boot_x:
 %ifdef KERN_BIG
     mov ah, [vid_kind]
 %endif
-    B2CALL bvs_switch           ; (the blob's own vid_switch, FAR-bodied as
+    B3CALL bvs_switch           ; (the boot's own vid_switch, FAR-bodied as
                                 ; the panel's is - KSW_SECT, kernel.asm)
     jc .vnosw                   ; no such adapter here: stay on the probe's
 %ifdef KERN_BIG                 ; answer
@@ -5901,8 +5903,8 @@ drv_boot_x:
     ; applies: the adapter was already right, or was refused, and neither is a
     ; statement about the desktop. No spl_reset - the primary's card is never
     ; re-programmed here, so the loading screen is untouched.
-    B2CALL bvs_disp_far         ; (the blob's own, KSW_SECT, kernel.asm,
-%endif                          ; through its far door: kmain_o calls it NEAR)
+    call bvs_disp_init          ; (the boot's own, KSW_SECT, kernel.asm:
+%endif                          ; `.boot3` with this since wave 4, so NEAR)
 .load:
     ; --- HOW MANY are we about to read? (SPEC.md 15.6) -----------------------
     ; The status line names an ordinal out of a total, so the total has to be
@@ -6036,21 +6038,20 @@ DRV_ATTACH bdl, b3_cgo                  ; drv_load and the attach half, for drv_
 EXF_SYNC bxf, B3SWC             ; EXTD.DRV's sync (extmod.inc), drv_boot_x's
 %endif                          ; alone: `.boot3` with it since wave 2
 KGO_PAIR b3                     ; ovlchk: B3 hand-down - the far return's CS (`mov [bp+10], cs`), spent by the hop's own retf before the call it builds returns
-section .boot2                  ; ...and the blob keeps what reads its own CS
-                                ; or what kmain_o also calls (above)
-ovl_fdd_cylok:                  ; ovl_fdd_apply's door onto the loader's byte
-    and al, [cs:b2_cylok]       ; (boot2.asm): AL &= it, through the BLOB's CS
-    retf
 %ifdef KERN_BIG
 ; ...AND THE BOOT'S ADAPTER SWITCH, the same trade (KSW_SECT, kernel.asm): the
 ; Display page's vid_switch, vid_disp_init and wm_refit and the Dock page's
 ; dock_apply are CTRL.DRV's, and the boot is the one caller they have outside
 ; the panel - drv_boot applies SYSTEM.CFG's adapter and Dock setting, kmain_o
-; arranges the displays. So the blob carries its own expansion of each, `bvs_`,
-; reaching the kernel through BSWK/BSWC (KGO_PAIR bvs below), given back at
-; mem_unblob with the rest of it. The text is the panel's, macro for macro.
-%define BSW_GO bvs_kgo          ; KSWK's and KSWC's shape through the blob's
-%define BSW_CGO bvs_cgo         ; own pair (KGO_PAIR bvs, below)
+; arranges the displays. So the boot carries its own expansion of each, `bvs_`,
+; reaching the kernel through BSWK/BSWC, given back at mem_unblob with the rest
+; of it. The text is the panel's, macro for macro. In `.boot3` beside its
+; callers (drv_boot_x, kmain_o, vx_boot_x) since BOOT3-PLAN wave 4 - the blob's
+; before, with a pair of its own, KGO_PAIR bvs - so the hop is `.boot3`'s b3_
+; pair above and the blob's pair is gone. The one body it reaches that stays
+; in the blob is bvs_apply, the splash's first tick's (B2CALL bvs_apply_f).
+%define BSW_GO b3_kgo           ; KSWK's and KSWC's shape through `.boot3`'s
+%define BSW_CGO b3_cgo          ; own pair (KGO_PAIR b3, above)
 %macro BSWK 1
     call BSW_GO
     dw %1
@@ -6068,16 +6069,15 @@ WM_REFIT bvw, BSWK
 %ifdef DOCK_OPT
 DOCK_APPLY bdk, BSWK, BSWC, bvw
 %endif
-bvs_disp_far:                   ; bvs_disp_init's FAR door, for drv_boot_x's
-    call bvs_disp_init          ; B2CALL out of `.boot3`: kmain_o calls the
-    retf                        ; body NEAR, so it keeps its `ret`
 bvw_rowcalc:                    ; ...and the desktop grid's (desk.inc): the
-    B3CALL cfx_grid             ; geometry from `.boot3` (cfx_grid, boot3.inc),
-    BSWC desk_reflow            ; which costs this blob nothing, and the
-    ret                         ; reflow - desk_rowcalc's two halves, in its
-                                ; order
-KGO_PAIR bvs
+    B3CALL cfx_grid             ; geometry (cfx_grid, boot3.inc) and the
+    BSWC desk_reflow            ; reflow - desk_rowcalc's two halves, in its
+    ret                         ; order
 %endif
+section .boot2                  ; ...and the blob keeps what reads its own CS:
+ovl_fdd_cylok:                  ; ovl_fdd_apply's door onto the loader's byte
+    and al, [cs:b2_cylok]       ; (boot2.asm): AL &= it, through the BLOB's CS
+    retf
 DRV_TITLES bdt                  ; the rows' names, for drv_boot_x's 'Loading
                                 ; Driver n/N (Title)' - the blob's own copy
 
@@ -6231,11 +6231,13 @@ section .cold                   ; ...the far entries themselves live HERE, or
 ; each because the bodies keep the near `ret` they have always had.
 ; -----------------------------------------------------------------------------
 ; ...and three the BOOT OVERLAY needs (SPEC.md 2.5.2): xm_boot_x moved into the
-; blob and reaches the driver layer exactly as a module does.
+; blob (`.boot3` since BOOT3-PLAN wave 4) and reaches the driver layer exactly
+; as a module does.
 ; (drvf_drv_row, drvf_drv_load_at and drvf_drv_unload went in kernel size
-; pass 14: their callers are the blob, CTRL.DRV's panel and HIBER.DRV, and each
-; reaches the near body through its own image's KGO_PAIR hop - bvs_cgo,
-; cp_cgo, hbg_cgo - at the five bytes the far call was)
+; pass 14: their callers are the boot, CTRL.DRV's panel and HIBER.DRV, and each
+; reaches the near body through its own image's KGO_PAIR hop - b3_cgo (the
+; blob's bvs_cgo until wave 4), cp_cgo, hbg_cgo - at the five bytes the far
+; call was)
 ; (drvf_drv_call went in kernel size pass 15: its callers are the blob,
 ; CTRL.DRV and HIBER.DRV, each reaching drv_call through its own KGO_PAIR hop
 ; at the five bytes the far call was - and the hop keeps BP, drv_call's input)
@@ -6252,7 +6254,7 @@ drvf_drv_vol_back:       call drv_vol_back
 drvf_drv_mounted:        call drv_mounted
                     retf
 ; (drvf_drv_release went in kernel size pass 14: every caller is CTRL.DRV's
-; panel, through CPXC, or the blob, through bvs_cgo - the hops those two
+; panel, through CPXC, or the boot, through b3_cgo - the hops those two
 ; images already carry - at the five bytes the far call was. drvf_drv_mounted
 ; stays: the settings core, `.modc`, may not reach the panel's hop)
 ; (drvf_drv_find and drvf_ss_mins2idle went in kernel size pass 13: their one
@@ -6878,13 +6880,14 @@ cdl_tier:                       ; itself on kern_big (kernel size pass 13) and
 section .cold
 
 
-section .boot2
-; drv_boot loads what SYSTEM.CFG asks for, and kmain's ladder calls it through
-; SPLGATE1. There is no SYSTEM.CFG here and nothing to load, so the rung is a
-; `ret` rather than a gap in the ladder - kmain stays readable as the sequence
-; it is (SPEC.md 15).
+B3SECT
+; drv_boot loads what SYSTEM.CFG asks for, and kmain_o's ladder calls it with
+; B3CALL. There is no SYSTEM.CFG here and nothing to load, so the rung is a
+; `retf` rather than a gap in the ladder - kmain_o stays readable as the
+; sequence it is (SPEC.md 15). In `.boot3` with kmain_o since BOOT3-PLAN wave
+; 4, as kern_big's is since wave 2: one call, one home, on every kernel.
 drv_boot_x:
-    retf                        ; SPLGATE1's far entry (SPEC.md 2.5.3)
+    retf                        ; B3CALL's far entry (SPEC.md 2.9.15)
 
 section .modc                   ; CTRL.DRV's image (SPEC.md 2.8): cp_flush_x
                                 ; reaches this NEAR, so the stub has to be in

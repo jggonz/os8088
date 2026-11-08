@@ -83,16 +83,23 @@ ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
 # figure: 13 is the last two-call blob on 720KB, 15 on 360KB, 16 on 1.2MB and
 # 21 on 1.44MB, so a growth that is free on the release geometry can still buy
 # a call on the other three - and 720KB is still the one that binds.
+#
+# **BOOT3-PLAN WAVE 4 TOOK EVERY KERNEL'S BLOB TO SEVEN** (2026-11-08): `.boot2`
+# back to the loader, the splash, the first tick's probe and the status line,
+# everything else to `.boot3` (tests/blobbodies.txt keeps it there). Seven is
+# two calls on every geometry - 4 + 3, 4 + 3, 1 + 6, 3 + 4 - so these rows do
+# not move for kern_big; what moves is SEVEN FEWER SECTORS before the bar, and
+# kern_small's third call (below).
 IMAGES = {
-    "os8088-360.img": (2, "4 + 9 at 13 sectors (it was 6 + 2 at 8 and 6 + "
-                          "9 + 4 at 19); the 14th costs a third call"),
-    "os8088-720.img": (2, "4 + 9 at 13, this geometry's last two-call "
-                          "blob: the 14th sector was the price"),
-    "os8088-120.img": (2, "1 + 12 at 13 - the data area starts one sector "
+    "os8088-360.img": (2, "4 + 3 at 7 sectors (4 + 9 at 13; 6 + 2 at 8 and "
+                          "6 + 9 + 4 at 19); 13 is the last two-call blob"),
+    "os8088-720.img": (2, "4 + 3 at 7 (4 + 9 at 13, this geometry's last "
+                          "two-call blob: the 14th sector was the price)"),
+    "os8088-120.img": (2, "1 + 6 at 7 - the data area starts one sector "
                           "short of a cylinder end here, so the first call "
                           "is a single sector and 16 is the last two-call "
                           "blob"),
-    "os8088.img":     (2, "3 + 10 at 13, and 21 is the last size that is two "
+    "os8088.img":     (2, "3 + 4 at 7, and 21 is the last size that is two "
                           "calls here - the next one is not free"),
     # the 128KB machine's (SPEC.md 24.5.7): kern_small's disks put KERNEL.SYS
     # at LBA 12, two sectors earlier than the 360KB and 720KB disks above
@@ -102,11 +109,14 @@ IMAGES = {
     # model priced a 13-sector blob and walked no page (BOOT3-PLAN 12, "found
     # on the way"); the model now walks what boot.asm does, and the count is
     # PREDICTED until os88boot on small360 confirms it (the final pass).
-    # BOOT3-PLAN wave 4's 7-sector blob, kept off the page, gives one back
-    "small360.img":   (3, "6 + 1 + 4 at 11: the data area starts at LBA 12, "
-                          "and the blob at 0xF200 crosses the DMA page at "
-                          "0x10000 seven sectors in"),
-    "small720.img":   (3, "6 + 1 + 4 at 11, the 360KB small disk's shape"),
+    # ...AND BOOT3-PLAN WAVE 4 GAVE IT BACK (2026-11-08): the blob is seven
+    # sectors and kernel.asm's BLOB_LIFT rounds it up onto the page when it
+    # would straddle one (its page term; at wave 4's lift it would have sat at
+    # 0xF800 and read 4 + 2 + 1), so it is read at 0x10000 as 6 + 1
+    "small360.img":   (2, "6 + 1 at 7, the blob at 0x10000 - on the DMA page "
+                          "rather than across it (6 + 1 + 4 at 11, at "
+                          "0xF600, was the third call)"),
+    "small720.img":   (2, "6 + 1 at 7, the 360KB small disk's shape"),
 }
 # ...whose kernel is build/smallk's, so its stage-2 read is priced off that
 # kernel's own packed layout and not the big one's
@@ -261,13 +271,26 @@ def stage2_calls(start, spt, heads, nsec_blob, k, tail=0):
 # kern_small disks (23..31) - and where it does not (kern_big 360KB and 720KB,
 # 27..35, one track) it is nothing. PREDICTED, ~170-400 ms an 8088 boot on
 # those four, until os88boot measures it in the final pass.
+#
+# **BOOT3-PLAN WAVE 4 GAVE THREE OF THEM BACK, AND ONE MORE** (2026-11-08). A
+# 7-sector blob moves the plain head six sectors earlier on every disk, and
+# the head is now the resident window itself (the Makefile's KZ_HEADMIN 0: 5
+# sectors, 6 on kern_mega), chosen per disk off this model - so the 1.2MB and
+# 1.44MB heads are one track run again and the tails start better placed:
+# 1.2MB 9 -> 7, 1.44MB 8 -> 7, both small disks 8 -> 7. 360KB and 720KB stay
+# at 11 and are now EXACTLY FULL: the packed tail ends on the cylinder at LBA
+# 180, so ONE more packed sector of KERNEL.SYS costs those two disks a call
+# after the bar (`--tail 1` shows it; 1.2MB has 15 to spare, 1.44MB 17, the
+# small disks 5). That is where cylinders fall, not slack anybody spent; a
+# head of 8 or 9 would buy 17 sectors of it for two calls more. PREDICTED,
+# like the rest of this table, until os88boot measures it in the final pass.
 STAGE2 = {
-    "os8088-360.img": 11,
-    "os8088-720.img": 11,
-    "os8088-120.img": 9,    # 8 + BR-1's track-bound head
-    "os8088.img": 8,        # 7 + BR-1's track-bound head
-    "small360.img": 8,      # kern_small, 98 sectors packed, read after its
-    "small720.img": 8,      # OWN 11-sector blob; 7 + BR-1's track-bound head
+    "os8088-360.img": 11,   # head 5 at LBA 21..25, the tail 26..180: 0 free
+    "os8088-720.img": 11,   # (the 360KB disk's shape)
+    "os8088-120.img": 7,    # 9 at blob 13 / head 9 (BR-1's track-bound head)
+    "os8088.img": 7,        # 8 at blob 13 / head 9
+    "small360.img": 7,      # kern_small, 98 sectors packed, after its OWN
+    "small720.img": 7,      # 7-sector blob; 8 at blob 11
 }
 
 

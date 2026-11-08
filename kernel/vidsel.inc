@@ -1033,8 +1033,10 @@ section .text
     %2 cur_unlazy               ; 1. the cursor's save-under is the old
     call %1 %+ _blank           ; geometry's - and so is the tube we are
 %ifdef KERN_SMALL               ; walking away from, and so is every raise
-    KSWN wm_su_drop_all         ; (in this image on kern_small, KSW_SECT)
-%else
+ %ifnidn %1, bvs                ; (the boot's bvs is kern_big's alone: said
+    KSWN wm_su_drop_all         ; so os88ovlchk's B4, which keeps both arms
+ %endif                         ; of a %ifdef, sees no `.boot3` near call
+%else                           ; to `.text`) in this image on kern_small
     %2 wm_su_drop_all           ; (resident on kern_big: OSAPI_THM_SET's too)
 %endif
                                 ; cache (SPEC.md 39.14.8.1): wm_su_ck compares
@@ -1045,7 +1047,11 @@ section .text
 
     mov [vid_kind], al          ; 2. republish the geometry
     call %1 %+ _equip           ; (this image's own: VSW_EQUIP)
-    call %1 %+ _apply           ; (this image's own: viddet.inc's VID_APPLY)
+%ifidn %1, bvs                  ; (the boot's is in `.boot3` and its
+    B2CALL bvs_apply_f          ; VID_APPLY stays in the blob - the splash's
+%else                           ; first tick runs it - so through its far
+    call %1 %+ _apply           ; door; this image's own otherwise:
+%endif                          ; viddet.inc's VID_APPLY)
     %2 vid_setmode
 
 %ifdef KERN_BIG
@@ -2105,7 +2111,11 @@ vid_dual_ok:
                                 ; display, and display 0 current (vid_cur is
                                 ; the byte after, the %error beside them)
     mov [vid_kind], ah          ; (a no-op unless a caller moved it)
+%ifidn %1, bvs                  ; (the boot's VID_APPLY is the blob's: its
+    B2CALL bvs_apply_f          ; far door, as in VSW_SWITCH)
+%else
     call %1 %+ _apply           ; republishes the chrome extent AND re-homes
+%endif
 .cap:
     xor al, al                  ; the pointer onto display 0 - which is what
 %ifidn %1, bvs                  ; a shrinking desktop owes it - through this

@@ -273,7 +273,7 @@ vmm_poll:
 %endmacro
 
 %ifdef KERN_EMU
-section .boot2
+B3SECT                          ; `.boot3` since BOOT3-PLAN wave 4
 ; -----------------------------------------------------------------------------
 ; vmm_boot_x - attach the image and settle the contest (SPEC.md 9.11.2)
 ;
@@ -293,15 +293,16 @@ section .boot2
 ; failing this compare never reads a sector of. cpu_detect runs from the boot
 ; overlay long before drv_boot_x, so the tier is published.
 ;
-; IN THE BLOB, beside xm_boot_x, which is the same shape - attach an overlay
-; drv_boot_x has already read, once, and give it back on a refusal. It runs
-; once and is given back to the heap with the rest of `.boot2` at spl_finish.
+; IN `.boot3` (the blob until BOOT3-PLAN wave 4), beside xm_boot_x, which is
+; the same shape - attach an overlay drv_boot_x has already read, once, and
+; give it back on a refusal. It runs once and is given back to the heap with
+; the rest of `.boot3` at mem_unblob_x.
 ; It used to be `.cold`, resident for the life of the machine, because the blob
 ; was full when it was written; SPEC.md 2.9.14 made the blob one section and
 ; SPEC.md 2.5 folded the old `.ovl` into it, and the room that left is what
 ; this spends (SPEC.md 9.11.2.1).
 ;
-; CS IS THE BLOB'S here, not KERNEL_SEG, so every edge out is far: driver.inc's
+; CS IS `.boot3`'s here, not KERNEL_SEG, so every edge out is far: driver.inc's
 ; drvf_* entries for drv_call and drv_release (xm_boot_x's), and the
 ; ovw_mou_lockon thunk in `.text`. DS is the kernel's (SPEC.md 1's near model)
 ; and every store below goes through it.
@@ -327,7 +328,7 @@ vmm_boot_x:
                                 ; and the row already carries the DRVE_*
     mov bp, [bx+DRVR_ENT]
     mov ax, (VMM_ABI_VER << 8) | DRVV_ATTACH    ; AH: the ABI the image
-    call bvs_cgo                ; checks against its own
+    call b3_cgo                 ; checks against its own
     dw drv_call
     jc  .refuse
 
@@ -343,7 +344,7 @@ vmm_boot_x:
     mov byte [vmm_on], 1        ; LAST, and deliberately so: it is the gate
     jmp short .out              ; every poll site reads. An immediate store
                                 ; and not AL's: mou_lockon spends AX..CX since
-                                ; kernel size pass 18 (this is `.boot2`, given
+                                ; kernel size pass 18 (this is `.boot3`, given
                                 ; back, so the two bytes are nobody's)
 
 .refuse:
@@ -358,8 +359,8 @@ vmm_boot_x:
                                 ; drive either
     cmp word [bx+DRVR_SEG], 0   ; ...and hand the image straight back - on the
     je  .out                    ; CPU path only if drv_boot_x read it anyway,
-    call bvs_cgo  ; which has no tier test of its own
-    dw drv_release              ; (the blob's hop: drvf_drv_release went)
+    call b3_cgo   ; which has no tier test of its own
+    dw drv_release              ; (`.boot3`'s hop: drvf_drv_release went)
 .out:
     pop es
     pop bp
@@ -369,7 +370,7 @@ vmm_boot_x:
     pop cx
     pop bx
     pop ax
-    retf                        ; FAR: kmain_o reaches this with BLOBCALL
+    retf                        ; FAR: kmain_o reaches this with B3CALL
 
 section .text
 %endif                          ; KERN_EMU

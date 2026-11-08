@@ -713,7 +713,7 @@ def walk(image, machine, defines, lad, cons, limit=240.0, verbose=True,
                 nxt = sites[i + 1][0] if i + 1 < len(sites) else None
                 m.breakpoints([{"type": "exec", "addr": a}
                                for a in (addr, nxt) if a is not None])
-                m.run()             # FLAT: kmain_o's are in the blob
+                m.run()             # FLAT: kmain_o's are in `.boot3`
                 if m.wait_stop(limit) is None:
                     raise Stale("kmain never returned from %s" % name,
                                 "kernel/kernel.asm's kmain",

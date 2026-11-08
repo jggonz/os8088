@@ -505,10 +505,12 @@ kernel size pass 4 (docs/reports/KERNEL-BYTES-SINCE-SQUASH-2026-09-25.md).
 A 640KB machine reporting 639KB has ~534 KB under `kern_big` before any
 driver or read-ahead claim.
 
-**Not in the span**: stage 2's blob (`.boot2`, 6,127 bytes of 6,656 in the
-shipped KZIP build: the loader, the splash and the boot overlay's blob half;
-`kernsize` prints 5,933, because it assembles the NOKZIP arm and so leaves out
-the KZIP-only loader - `kz_all`, `kz_expand`, `kz_hd`, the head loop) and the overlay's window half
+**Not in the span**: stage 2's blob (`.boot2`, 3,296 bytes of 3,584 in the
+shipped KZIP build since BOOT3-PLAN wave 4: the loader, the splash, the first
+tick's probe and the status line, and nothing else - tests/blobbodies.txt;
+`kernsize` prints 3,102, because it assembles the NOKZIP arm and so leaves out
+the KZIP-only loader - `kz_all`, `kz_expand`, `kz_hd`, the head loop), the
+third boot-only home `.boot3` (below), and the overlay's window half
 (`.ovl`, 5,119 bytes loaded onto the FAT window and `dsk_secbuf`), both
 dead by the first desktop — see below; on `kern_small` the split is a BUILD
 CHOICE, SPEC.md §2.5.3.2), the on-demand modules (files read
@@ -563,7 +565,7 @@ Three floors, and they are different questions:
 
 | floor | `kern_big` | `kern_small` | where it is asserted |
 |---|---:|---:|---|
-| stage 1 refuses to load the kernel over itself — prints `RAM`, halts | ~118.5 KB | ~87 KB | `boot/boot.asm`'s `MEMFIT`: `HEAP_PARA` + 8 blob sectors + the sector and its 2,048-byte stack, derived from `kernsize`'s `kend` at build time. `make test RAMKB=<n>` makes the sector believe a smaller machine (SeaBIOS answers 639 whatever `-m` says) |
+| stage 1 refuses to load the kernel over itself — prints `RAM`, halts | ~118.5 KB | ~87 KB | `boot/boot.asm`'s `MEMFIT`: `HEAP_PARA` + the blob's `BOOT2_SECS` sectors + the sector and its 2,048-byte stack, derived from `kernsize`'s `kend` at build time. `make test RAMKB=<n>` makes the sector believe a smaller machine (SeaBIOS answers 639 whatever `-m` says) |
 | the machine the configuration is CLAIMED to boot on | 128 KB | 128 KB | guard 5, `MIN_RAM_KB`; `kernsize`'s `boot` line says how far under it the kernel is |
 | what is left for programs | 527 KB on 639 | 47.5 KB on 128 | the `ladder` line; `tests/small128.py` and `tests/kernresident.py` read the real figure off a booted machine |
 
@@ -1103,7 +1105,8 @@ is, landing under the blob at a constant segment (`B3_SEG`; on kern_big
 `VGABUF_RAM`, over `.vgabuf`'s RAM and the lift) and given back at
 `mem_unblob_x` with the blob. So it is the blob's lifetime without the
 blob's price - the blob's every byte delays the first splash pixel, and on
-kern_big its 13 sectors are full.
+kern_big its 13 sectors were full until wave 4 took the blob back to its
+purpose and to 7 sectors on every kernel (below).
 
 **`.boot3` is NOT `.cold`**, and the two names will be confused the way
 `.cold` and `.boot2` are: it costs **boot RAM and load time, never a
@@ -1172,7 +1175,33 @@ RAM; guard 5's headroom at 128KB 19,968 -> 17,920 on kern_big, 19,456 ->
 back. kern_small keeps all of it in `.ovl` (`OVSCALL`, SPEC.md §2.5.3.2) and
 is byte-identical.
 
-Resident: 0 bytes on every kernel, in every wave. The lift's two steps on kern_small cost
+**Wave 4 took `.boot2` back to its original purpose, on every kernel**
+(SPEC.md §2.9.14.2): `kmain_o` itself, the boot's adapter switch and its KGO
+pair, `xm_boot_x`, `vx_boot_x` and `vx_blk`, kern_emu's `vmm_boot_x`, the
+Dock's boot geometry and kern_small's desk-grid copy moved to `.boot3`, and
+`BOOT2_SECS` fell to **7** on all four. `kmain`'s call is `call
+B3_SEG:kmain_o` and `dkb_geom`'s `call B3_SEG:ovl_dock_geom` - 5 bytes for
+`SPLGATE1`'s 9 each - and with its last two sites `spl_gate` went: **−22
+bytes of `.text`** on kern_big, kern_emu and kern_mega, −18 on kern_small,
+no rung crossed on any of them (and the bytes are still real). MEASURED, the
+shipped KZIP maps:
+
+| kernel | resident | the blob | `.boot3` (+ `.boot3b`) | lift (paragraphs) | boot arena | KERNEL.SYS |
+|---|---|---|---|---|---|---|
+| kern_big | 96,768 (`.text` −22, no rung) | 4,456 of 6,656 -> **3,296 of 3,584** | 4,746 -> 5,847 (+ 905) | 352 -> **416** | 20,480 -> **22,528** at 128KB | 87,248 -> **84,704** (171 -> 166 sectors) |
+| kern_emu | 96,768 | 4,572 of 7,168 -> **3,311 of 3,584** | 4,747 -> 5,949 (+ 803) | 352 -> **416** | 19,968 -> **22,528** | 87,904 -> **84,912** (172 -> 166) |
+| kern_mega | MEGA_RESIDENT 62,976 (`.text` −22) | 4,248 of 7,168 -> **3,213 of 3,584** | 4,662 -> 5,637 (+ 1,019) | 384 -> **448** | 505,856 -> **508,416** at 640KB | 118,448 -> **115,360** (232 -> 226) |
+| kern_small | 58,880 (`.text` −18) | 3,463 of 5,632 -> **3,102 of 3,584** | 1,441 -> 1,803 | 160 -> **320** (the page term) | 62,464 -> **61,952** | 55,136 -> **53,424** (108 -> 105) |
+
+The blob's six (seven) sectors back outweigh the lift's two steps on kern_big,
+kern_emu and kern_mega, so the arena GROWS by 2,048 bytes there - the blob
+ends lower (kern_big 0x1B000 -> 0x1A800). On kern_small the lift's **page
+term** (SPEC.md §2.9.15.3) moves the blob onto the 64KB DMA page at 0x10000,
+where it is read in two calls instead of three: 512 bytes of its 128KB boot
+arena for one `int 13h` before the bar. Every byte of it is boot RAM; 0 is
+resident.
+
+Resident: 0 bytes on every kernel, in every wave but wave 4's −22/−18. The lift's two steps on kern_small cost
 1,024 bytes of its 128KB boot arena (63,488 -> 62,464) and of guard 5's
 headroom (60,928 -> 59,904); kern_mega's 1,024 of a 640KB floor. The blob
 keeps its length on every kernel until wave 4 shortens it, so the bytes are

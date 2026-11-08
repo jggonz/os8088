@@ -1567,7 +1567,12 @@ vid_init:                       ; the spw_near door the splash already needs
     pop bp
 %endmacro
 VID_APPLY bvs, BSPW             ; bvs_apply: the splash, vid_init, and the
-                                ; blob's vid_switch/vid_disp_init (driver.inc)
+                                ; boot's vid_switch/vid_disp_init (driver.inc)
+%ifdef KERN_BIG
+bvs_apply_f:                    ; ...whose FAR door that is: they are `.boot3`'s
+    call bvs_apply              ; since BOOT3-PLAN wave 4 and B2CALL it, while
+    retf                        ; the splash and vid_init call it NEAR
+%endif
 section .text
 
 ; -----------------------------------------------------------------------------

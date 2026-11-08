@@ -212,10 +212,10 @@ DK_NENT       equ 2             ; DOCK.DRV's mod_fp entries: hook, unhook
                                 ; so calling one with nothing mounted refuses
 
 dkb_geom:
-    cmp word [spl_fseg], 0
-    je .panel
-    SPLGATE1 ovl_dock_geom
-    ret
+    cmp word [spl_fseg], 0      ; the boot's copy while `.boot3` lives (kmain
+    je .panel                   ; zeroes this one store before mem_unblob_x)
+    call B3_SEG:ovl_dock_geom   ; ...a constant segment since BOOT3-PLAN wave
+    ret                         ; 4: SPLGATE1's 9 bytes were the blob's way
 .panel:
     call far [CPFP + CPE_DOCK_GEOM*4]
     ret
@@ -256,12 +256,13 @@ dkb_geom:
     pop ax                      ; kernel size pass 14)
     ret
 %endmacro
-section .boot2
-; BDKGO - the blob's KGO_PAIR hop (driver.inc's BSWK, which is defined after
-; this file): ovl_dock_geom runs from kmain_o through spl_gate, long after
+B3SECT
+; BDKGO - `.boot3`'s KGO_PAIR hop (driver.inc's BSWK, which is defined after
+; this file): ovl_dock_geom runs from dkb_geom's far call while `.boot3`
+; lives (the blob's, through spl_gate, until BOOT3-PLAN wave 4), long after
 ; the splash's first tick, so cw_kretf is aboard
 %macro BDKGO 1
-    call bvs_kgo
+    call b3_kgo
     dw %1
 %endmacro
 ovl_dock_geom:

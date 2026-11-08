@@ -392,7 +392,7 @@ def main():
                     tmpl[macro].append(tcur)
                     # a TEMPLATE label can carry the return-kind rule's
                     # declaration too (FRAMEB, below): kernel.asm's KGO_PAIR,
-                    # CTRL.DRV's and the boot blob's cp_kgo/bvs_kgo, is
+                    # CTRL.DRV's and `.boot3`'s cp_kgo/b3_kgo, is
                     # exk_go's shape written once for two images. Its kinds
                     # stay empty, which is "unjudged" - exactly a raw one's
                     tdecl = 'ovlchk: builds its own far frame' in raw
@@ -490,10 +490,43 @@ def main():
         def arg(i):
             i = int(i)
             return args[i - 1] if 0 < i <= len(args) else ''
+        # `%ifidn %1, bvs` is decided on the known arguments, as rules B1-B9's
+        # expander decides it (_b3_expander): BOOT3-PLAN wave 4's VSW_SWITCH
+        # and VSW_DISP far-call the blob's bvs_apply from `.boot3` in the bvs
+        # arm and near-call their own %1_apply in every other, and keeping
+        # both arms here read the near one as a `.boot3` -> `.boot2` call.
+        # Every other condition keeps all its arms, the safe direction
+        stack = []                      # per %if: [this arm live, any taken]
         for body in mlines.get(name, ()):
             body = PASTE.sub(lambda mm: arg(mm.group(1)) + mm.group(2), body)
             body = re.sub(r'%%\w+', ' ', body)
             body = PARAM.sub(lambda mm: arg(mm.group(1)), body)
+            st = body.strip()
+            mi = IFIDN.match(body)
+            if mi:
+                hit = (mi.group(3).strip() == mi.group(4).strip()) \
+                    != (mi.group(2) == 'n')
+                if mi.group(1):
+                    if stack and stack[-1] is not None:
+                        stack[-1] = [hit and not stack[-1][1],
+                                     stack[-1][1] or hit]
+                else:
+                    stack.append([hit, hit])
+                continue
+            if re.match(r'%(?:el)?if', st):
+                if st.startswith('%if'):
+                    stack.append(None)  # undecidable: every arm kept
+                continue
+            if st.startswith('%else'):
+                if stack and stack[-1] is not None:
+                    stack[-1] = [not stack[-1][1], True]
+                continue
+            if st.startswith('%endif'):
+                if stack:
+                    stack.pop()
+                continue
+            if any(x is not None and not x[0] for x in stack):
+                continue
             if body.lstrip().startswith('%'):
                 continue             # a preprocessor line: %if, %error, ...
             mm = re.match(r'^\s*(\w+)\b(.*)$', body)
@@ -2061,6 +2094,7 @@ B3ENTRY = ('B3CALL', 'B2CALL', 'BLOBCALL', 'OVLCALL', 'OVBCALL', 'OVSCALL',
 B3OVLCS = re.compile(r'\bmov\s+(?:(?:byte|word|dword)\s+)?\[[^\]]*\]'
                      r'\s*,\s*cs\b', re.I)
 QUOTED = re.compile(r"'[^']*'|\"[^\"]*\"|`[^`]*`")
+IFIDN = re.compile(r'^\s*%(el)?if(n?)idni?\s+([^,]*),\s*(.*?)\s*$')
 B3LOADERSYM = re.compile(r'^(?:KZ_\w+|b2_\w+)$')
 EXPLINE = re.compile(r'^\s*(?:[A-Za-z_]\w*:\s*)?(\w+)\b(.*)$')
 
