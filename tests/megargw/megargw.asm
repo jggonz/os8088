@@ -58,6 +58,10 @@ mr_entry:
     mov si, mr_tpl
     call OSAPI_WM_CREATE
     jc .out0
+    mov [mr_wp], bx                 ; THE WINDOW, for the entry's return:
+                                    ; SPEC.md 20.2 - the loader binds BX, and
+                                    ; the asks below leave MEMH_AVAIL's total
+                                    ; there (KERN-MEGA-PLAN 14.176)
     OS88_REGION_MOVABLE
     ; --- L1: 128KB in the pool, the pool filled, regrown to 256KB ---------
     mov ax, 128
@@ -309,6 +313,7 @@ mr_entry:
     mov word [mr_res+52], 1
     mov si, mr_s_e9
     call mr_dump
+    mov bx, [mr_wp]                 ; BX = the window (SPEC.md 20.2)
     clc                             ; (CF = 1 out of an entry proc is a
 .out0:                              ; refusal: the instance would be torn down
                                     ; before a row on 86Box reads MR_RES)
@@ -511,6 +516,7 @@ mr_s_e92:   db 'MEGARGW2: ', 0
 mr_res:     db 'MRGRES01'
             times 48 db 0
 mr_a        dw 0
+mr_wp       dw 0                ; the window OSAPI_WM_CREATE made
 mr_m        dw 0
 mr_p        dw 0
 mr_fill_tok times MR_NFILL * 4 db 0

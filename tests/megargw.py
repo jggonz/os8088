@@ -201,6 +201,17 @@ def run_box(keep):
                         "%s=%X" % (k, last[k]) for k in FIELDS))
                 return
             verdict(r)
+            # ...AND STILL RUNNING: the answer is read out of the probe's
+            # memory, so a fault that CLOSED it after writing would pass
+            # unseen (KERN-MEGA-PLAN 14.176 - an entry returning the wrong
+            # BX faulted the loader after every leg had answered)
+            M.guest_sleep(m, 2)
+            alive = any("MEGARGW" in str(nm).upper()
+                        for nm, sp in J.insts(m).values())
+            if not check("MEGARGW still running after its answer", alive,
+                         "titles %s" % ui.titles()):
+                for l in m.faults()[-12:]:
+                    print("   fault: " + l)
     finally:
         if not keep:
             shutil.rmtree(tmp, ignore_errors=True)
