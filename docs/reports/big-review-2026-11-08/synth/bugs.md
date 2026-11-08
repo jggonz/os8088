@@ -953,3 +953,228 @@ spend a byte now). ABI is `none` unless stated.
 | BR-170 | mega_dreg_add drops a region on overflow; the stub's restore loop is wrong below PKB 33; the trip's own time is uncounted and x87 state not reset (md-12, md-17 corrected, md-18 UNCHECKED) | mega | megados.inc:480-497, 73-76; megapark.inc:172-198; megados.inc:735-737, 1342-1348 | an %if for the region worst case; an assert PKB >= 33 where the floor is set; FNINIT if a package ever keeps x87 state across a yield | rec; 0 | megadosp (soak) |
 | BR-171 | Section switch-back is gated only for nobits sections (engsys-12 confirmed) | build | NASM refuses only an open nobits section; shutdown.inc ends in .modu by design; the sentinel block omits .vga, .cfx, .modx, .mods, .modfs (kernel.asm:9786-9886) | a host check that each .inc's last section equals the one active at its %include, with an exemption list | 0 | no row (a fast unit row) |
 | BR-172 | The whole-soak permission refusal is bypassed by `-k '*'` (engsys-15 confirmed) | tools | os88test.py:1318 and os88soak.py:1050 test only `not a.k` | also refuse a selection covering more than ~90% of the tier without --user-asked | 0 | no row |
+
+---
+
+## Fix batches
+
+Eight batches, each a module boundary an implementation session can take whole:
+few files, one review thread, one final pass. Batch order is a suggestion
+(A and D carry the most dangerous items). Every fix in every batch is
+phase **now** with no ABI break except three, which belong to the
+ABI-BREAK-LIST batch instead: BR-34's IRQ ownership cell, BR-66's
+ISR-reachable claim flag, and BR-104's policy reversal if the owner takes it.
+Items marked "SDK text" change a fingerprinted contract comment and need
+`abilock --update` without a PKG_FMT bump; that is not a break.
+
+Byte sums are the reviewers' estimates added up, midpoints where a range was
+given, rounded; "core" is the items a batch should not ship without, "all"
+includes every low row in the batch. As the banner in CLAUDE.md says, these are
+BYTES, not rungs, and a batch whose sum crosses no rung has still spent them.
+kern_emu takes kern_big's figures. On kern_mega, `.cold` lands above 1MB, so a
+batch's `.cold` figure is NOT billed to MEGA_RESIDENT; its `.text`/`.bss`
+figure is.
+
+### Batch A - boot, detection and the build's own gates
+
+- **Files:** boot/boot2.asm, boot/boothd.asm, kernel/splash.inc, kernel/viddet.inc (vid_detect), kernel/disk.inc (dsk_boot_from_x, .ovl only), kernel/kernel.asm (guard 5, the SPL_RESIDENT guard), Makefile (KSIG_OFF, KZ_HEAD), tests/unit/t_canary.py, tests/unit/t_api_abi.py, tools/checkdocs.py, tools/os88test.py, tools/os88soak.py.
+- **Items:** core BR-1, BR-6, BR-63, BR-25, BR-55, BR-56; with boot-7's dead DPT copy as the room. Low: BR-153, BR-154, BR-155 (measure first), BR-156 (doc). Host gates: BR-62's t_api_abi half, BR-74, BR-75, BR-76, BR-171, BR-172.
+
+| | kern_big | kern_small | kern_mega |
+|---|---|---|---|
+| resident | 0 (BR-155 would be ~-10 .text) | 0 (same) | 0 |
+| .boot2 (transient) | +8 -41 -1 +30 +10 +4 = **~+10** (range +3..+17) | **~+10** (same items) | as kern_big |
+| boot sector | boothd **-1** (+8 -9) | - | - |
+| .ovl (transient) | **+4** (BR-25 +6, dr-13 -2); -28 later | 0 | as kern_big |
+| disk | KERNEL.SYS ~-400 (BR-153); BR-6 may add one blob sector | - | - |
+
+- **Rows (final pass):** canary, api-abi (fast); blobruns, blobsum, splashbar, splashspin, smallboot, kzboot, hdboot, hddgeom (soak); bootsmoke, small128 (full); box- twins of hdboot on 86Box for FN33's images. New: an MDA-primary boot, an MCGA and a 64KB EGA profile if MartyPC or 86Box carries one (none in the suite today).
+
+### Batch B - display, FSX and drawing
+
+- **Files:** kernel/fsx.inc, kernel/vga12.inc, kernel/vidsel.inc, kernel/apps.inc, kernel/fprog.inc, kernel/font.inc, kernel/menu.inc (menu_widest), kernel/viddet.inc (VID_APPLY), SPEC 5.4/6.1/53.10 and the SDK for the pen and page texts.
+- **Items:** core BR-3, BR-14, BR-45, BR-46, BR-57. Low: BR-58, BR-77 (doc), BR-131, BR-132, BR-147, BR-148, BR-149, BR-151, BR-152. (kern_mega's BR-64 is in batch H.)
+
+| | kern_big | kern_small | kern_mega |
+|---|---|---|---|
+| resident, core | 0 +2 +18 +13 +8 (+2 blit1) = **~+43** | 0 +13 +8 (+2) = **~+23** | as kern_big |
+| resident, all | **~+105** (adds BR-58 +13, BR-148 +5, BR-149 +21, BR-151 +8, BR-131 +10, BR-132 +6) | **~+33** (adds BR-151 +4, BR-132 +6) | as kern_big |
+| transient | .ovl +8 (BR-152); .boot2 +7 (BR-147) | .boot2 +7 | as kern_big |
+| modules | +14 across VID_APPLY's module expansions (BR-147) | - | - |
+
+- **Rows:** dispblit, blitcut, blitpair, blitplane, atblit, atblitvga, wireballvideo, wireballmono, dispfsxherc, fsxdisp, dispfsx, vesa, vesacp, saver, savervga, toastfpg, dockmodule, dispreboot, vgadirty (soak). New: a negative-width BLIT4 call (must go red on `jz`).
+
+### Batch C - window manager, UI and instance teardown
+
+- **Files:** kernel/wm.inc, kernel/ui.inc, kernel/instance.inc (inst_task_die), kernel/toast.inc, kernel/deskmod.inc and DESK.DRV, kernel/desk.inc/desksc.inc (one equ), kernel/events.inc (BR-85 comment), apps/os88api.inc texts.
+- **Items:** core BR-4, BR-8, BR-28, BR-47, BR-48, BR-49, BR-50, BR-42. Low: BR-73 (the resize mode and its lint), BR-85, BR-108, BR-109, BR-110, BR-111, BR-112, BR-113, BR-114, BR-115, BR-116, BR-117, BR-118, BR-119.
+
+| | kern_big | kern_small | kern_mega |
+|---|---|---|---|
+| resident, core | +22 +5 +9 +0 +8 +2 +6 +10 = **~+62** (range +50..+75) | +22 +5 +9 +5 +8 +2 = **~+51** | as kern_big |
+| resident, all | **~+105**: adds BR-73 +10, BR-109 +12, BR-108 +3, BR-110 **-19**, BR-112 +4, BR-113 +8, BR-114 +8, BR-115 +12, BR-116 +4 | **~+80** (same, less the kern_big-only rows) | as kern_big |
+| with wm-2 in place of BR-8's compare | -1 against the core figure (net +4 instead of +5) | -7 (net -2 instead of +5) | |
+| modules | DESK.DRV +6 (BR-42) | - | - |
+
+- **Rows:** stkclass, stkapps, stik, stikcard, toast (fast); stk0water, stkpanel, timerrace, deskbench, dmgcull, zonedmg, paintnogrow, paintnogrow-vga, dockpos, dockmark, stikmenu, stikboot, stikswap, mouseup, evqfull, desksc, deskitem, toastbar, dispfsx (soak). New: a clickrace row on timerrace's model; a stkwater reading of Bounce closed over a second window; a wild-pointer WM call under int0sweep.
+
+### Batch D - loader and heap
+
+- **Files:** kernel/loader.inc, kernel/memory.inc, kernel/filecp.inc (floor sites; FILECP.DRV on kern_small), kernel/compress.inc (cmz_wclaim's first try), kernel/mod.inc only if BR-4 lands elsewhere, apps/os88partsbody.inc (BR-59), kerndos/kdshim.inc (BR-105's kern_dos half).
+- **Items:** core BR-2, BR-7, BR-11, BR-12, BR-29, BR-30. Then BR-35, BR-52, BR-53, BR-54 (measure first), BR-59. Low: BR-104 (owner's call), BR-105, BR-106, BR-107, BR-120, BR-121, BR-122 (doc).
+
+| | kern_big | kern_small | kern_mega |
+|---|---|---|---|
+| resident, core | 0 +24 +13 +13 +13 +18 = **~+81** .cold | +10 +24 +8 +13 +13 +18 = **~+86** .cold | core .cold above 1MB; loader-8 ~-20 |
+| resident, all | **~+150** .cold: adds BR-35 +5, BR-52 +12, BR-53 +26, BR-54 +8, BR-104 +5, BR-105 +2, BR-107 +4, BR-120 +8, BR-121 +5 | **~+110** .cold | +4 more for BR-106, above 1MB |
+| modules / packages | FILECP.DRV a few bytes (kern_small); +20 in EVERY parts package's image (BR-59); kern_dos +1..+4 (BR-105) | | |
+
+- **Rows:** heapgran, drvmem (fast); lzfence, lzload, lzload-lz4, lzfmt-all, lzbig, lzcomp, fcpcopy, fcpapi, fcproom, fcpsmall, fdlgsmall, memp, regrowshed, clipgrow, heapcheck, heapmap, heapdrv, msegnomem, pkgmove-*, dosmem, assocopen, stikboot, thewire (soak); small128, megahigh (full). New: a hostile-header package, a shed-during-mount row on the 128KB machine, a close-a-window-mid-paste row.
+
+### Batch E - disk and file layer
+
+- **Files:** kernel/disk.inc, kernel/diskw.inc, kernel/files.inc, kernel/fdlg.inc (FDLG.DRV on kern_small), kernel/fsck.inc (FSCHECK.DRV), kernel/assoc.inc, kernel/ascw.inc (FORMAT.DRV), kernel/filecp.inc (BR-128's doc only).
+- **Items:** core BR-16, BR-17, BR-22, BR-23, BR-24, BR-27, BR-37, BR-41. Then BR-61, and BR-60 only on the owner's word (90 bytes). Low: BR-123..BR-130, BR-133..BR-143.
+
+| | kern_big | kern_small | kern_mega |
+|---|---|---|---|
+| resident, core | +16 +12 +12 +11 +5 -12 +16 +8 = **~+67** | +16 +9 +12 +11 +5 +16 = **~+68** | as kern_big (.cold above 1MB) |
+| resident, all (without BR-60) | **~+185**: adds BR-61 +16 and the low rows (BR-134 +25, BR-135 +12, BR-139 +14, BR-126 +10, BR-129 +10, BR-136 +8, BR-138 +6, BR-140 +5, BR-125 +4, BR-124 +4, BR-133 +3) | **~+120** (adds BR-61 +16, BR-127 +10, BR-136 +8, BR-138 +6, BR-125 +4, BR-124 +4, BR-133 +3) | |
+| BR-60 subdirectory growth | **+90** more | optional | |
+| transient / modules | .ovl +10 (BR-141); FSCHECK.DRV +6; FORMAT.DRV +10 | FDLG.DRV +8 | |
+
+- **Rows:** fdswap, wseq, dosmedia, curdisk, dosfull, fsckhd, fsckdisk, fmcommit, fdlgchoose, fdlgup, fdlgdrop, fdlgsmall, pkgmove-*, dosfile, dosdir, assocstale, assocflush, cdromsim, deskfdd, hddgeom (soak). New: a worker calling a file cell (must refuse), a hostile FileSize entry, an unreadable FAT, a 15th file in a kernel-made folder.
+
+### Batch F - input, ISRs and the scheduler
+
+- **Files:** kernel/mouse.inc, kernel/sched.inc (including the INT 0/INT 6 stubs and the system-error panel), kernel/events.inc, kernel/serial.inc (SERIAL.DRV), kernel/clip.inc (one cld), kernel/fsx.inc (fsx_rtick's cld only), kernel/kbddiag.inc (knob), kernel/stkdiag.inc (knob).
+- **Items:** core BR-9, BR-18, BR-19, BR-20, BR-36, BR-51, BR-86 (the cld). BR-21 is MEASURE first. Low: BR-78 (doc), BR-79, BR-80 (doc), BR-81, BR-82, BR-83, BR-84, BR-87, BR-88, BR-89, BR-90, BR-91, BR-92, BR-93, BR-94 (record), BR-95 (optional); BR-34's four IMR read-modify-writes (the scan of vectors is batch G).
+
+| | kern_big | kern_small | kern_mega |
+|---|---|---|---|
+| resident, core | +30 +6 +15 +13 +13 +8 +1 = **~+86** | +30 +15 +13 +8 +1 = **~+67** | as kern_big (+1 fsx_rtick); its own IDT already handles INT 0 after the switch |
+| resident, all | **~+140**: adds BR-82 +11, BR-92 +12, BR-93 +14, BR-34 IMR +8, BR-86 clip +2, BR-85 +3, BR-80 +7 (BR-95 +25 and BR-21's rethink +35 on top if taken) | **~+110** | as kern_big |
+| transient | .ovl +12 (BR-9), +6 (BR-18), +5 (BR-88) | .ovl +12, .boot2 +6, +5 | as kern_big |
+| modules | SERIAL.DRV +20 (BR-87), 0 (BR-90) | - | - |
+
+- **Rows:** serlease, dosmouse, doswmouse, kdmouse, usbmouse, kbd4f, kbdpreempt, kbdburst, int0sweep, stkpanel, stk0water, timerrace, timerbounce, evqfull, wirefleetlink, wirefleetnomouse, ringmove-wirefleet, clipkeep, clipgrow, trkspkrate, vidspk22, vidspkfast (soak); ps2mouse (full); 86Box AT-BIOS twins for BR-19. The measurement BR-21 needs is serlease at divisor 12 with the mouse moving, taken once by whoever decides.
+
+### Batch G - drivers, hibernate and system services
+
+- **Files:** kernel/driver.inc, kernel/snd.inc, kernel/hiber.inc and kernel/diskops.inc (HIBER.DRV, DISKOPS.DRV), kernel/drvvol.inc, kernel/clock.inc, kernel/ctrl.inc (CTRL.DRV), kernel/blank.inc (SAVER.DRV), kernel/kernel.asm (osapi_rand), drivers/sound/sb.inc (SOUND.DRV), apps/timer/timer.asm, apps/dos (the kern_dos date half of BR-26).
+- **Items:** core BR-5, BR-10, BR-15, BR-31, BR-32, BR-33, BR-38, BR-39, BR-40, BR-43, BR-44; BR-34's vector scan and SB fixes. Then BR-26, BR-72. Low: BR-96..BR-103, BR-157..BR-160, BR-145 (doc).
+
+| | kern_big | kern_small | kern_mega |
+|---|---|---|---|
+| resident, core | +25 +11(.bss) +12 +5 +0 +25 +2 = **~+80** | **+2** (BR-43; BR-15 is 0) | the .bss +11 and +2 are conventional; the .cold above 1MB |
+| resident, all | **~+92** (adds BR-159 +12) | +2 | |
+| .ovl (transient) | +29 (BR-44 +5, BR-157 +8, BR-158 +16) | 0 | as kern_big |
+| HIBER.DRV | **~+100** (BR-10 +2, BR-38 +20, BR-40 +30, BR-96 +10, BR-97 +10, BR-98 +6, BR-99 +8, BR-100 +6, BR-102 +6, BR-103 +2) | - | batch H adds -9 |
+| other modules | DISKOPS.DRV +48 (BR-72 +30, BR-101 +18); CTRL.DRV +40..+60 (BR-26), ~0 (BR-160); SAVER.DRV +15; SOUND.DRV +14 (IMR +6, OCW3 +8) | - | |
+
+- **Rows:** drvmem (fast); usbmouse, heapdrv, hmadrv, hma286, hmapool, sndkeep, sndonce, sndmove, hibernate, hibernatedrv, hibernatem, hmahiber, p2hiber, ems, diskclone, imgcases, wimgtrip, cfgtrip, deskclock, arclock, kdreturnset, saver, vesacp (soak). New: untick a second driver with USBMOUSE up (BR-5), Esc on the Resume face keeps the files (BR-10), a DOS TIME read after a panel Set (BR-26).
+
+### Batch H - kern_mega
+
+- **Files:** kernel/mega.inc, kernel/megados.inc, kernel/megapark.inc, kernel/megares.inc, kerndos/kdmouse.inc, kerndos/kdhma.inc, kerndos/kdpark.inc, kernel/vga12.inc's KERN_MEGA arm (BR-64), kernel/memory.inc's mega regrow arm (BR-106 is in batch D's file but may travel here).
+- **Items:** core BR-13, BR-64, BR-67 (0 bytes), BR-69, BR-70, BR-71. Then BR-65 (form (c) now, (a) on the owner's word), BR-66's LDT half, BR-68. Low: BR-144, BR-161..BR-170. BR-66's compaction model is flag day.
+
+| | conventional (MEGA_RESIDENT) | above 1MB (.cold/.mega) | modules / other |
+|---|---|---|---|
+| core | **+20** .text (BR-64, unless placed in .mega) | +28 (BR-13) +0 (BR-67) = **~+28** | HIBER.DRV -12 (BR-69) -1 (BR-71); HMA kern_dos +8 -1 (BR-70, BR-71); .boot2 +8 (BR-71) |
+| all | +20; **+128..+192 .lowbss** only if BR-65's form (a) is chosen | **~+150** (adds BR-66 +25, BR-68 +8, BR-161 +6, BR-162 +16, BR-163 +6, BR-164 +20, BR-165 +20, BR-166 +4, BR-168 +8, BR-169 +5, BR-144 +8) | HIBER.DRV +4 (BR-169) |
+
+- **Rows:** megagrid, megapkg (fast); megahigh (full); megatrap0, megadosp, megadosroom, megahibfull, megap2hiber, megahiber, kdmouse, dosmouse, lzload, win16mega* (soak). These run on QEMU, which checks no segment limit and cannot fail BR-13, BR-64 or BR-65: the new rows belong on Bochs (docs/BOCHS.md) - a lent-stack int 10h probe, a 3-byte-slack canvas, a foreign-stack option-ROM IRQ.
+
+### The batches side by side (core, then all)
+
+| batch | kern_big resident | kern_small resident | kern_mega conventional | transient | modules |
+|---|---|---|---|---|---|
+| A boot and detection | 0 / 0 | 0 / 0 | 0 / 0 | ~+10 .boot2 each kernel; -1 boothd; +4 .ovl | KERNEL.SYS ~-400 disk |
+| B display | ~+43 / ~+105 | ~+23 / ~+33 | as big / as big | .ovl +8, .boot2 +7 | +14 |
+| C WM and UI | ~+62 / ~+105 | ~+51 / ~+80 | as big / as big | - | DESK.DRV +6 |
+| D loader and heap | ~+81 / ~+150 | ~+86 / ~+110 | .text 0; .cold above 1MB | - | parts packages +20 each |
+| E disk and files | ~+67 / ~+185 (+90 BR-60) | ~+68 / ~+120 | .cold above 1MB | .ovl +10 | FDLG/FSCHECK/FORMAT +8/+6/+10 |
+| F input, ISR, sched | ~+86 / ~+140 | ~+67 / ~+110 | as big's .text share | .ovl +23, .boot2 +6 (small) | SERIAL.DRV +20 |
+| G drivers, hiber, services | ~+80 / ~+92 | +2 / +2 | +13 (.bss and .text) | .ovl +29 | HIBER ~+100, DISKOPS +48, CTRL ~+50, SAVER +15, SOUND +14 |
+| H kern_mega | - | - | +20 / +20 (+128..192 if BR-65a) | .boot2 +8 | HIBER -9, HMA kern_dos +7; ~+150 above 1MB |
+| **total, core** | **~+420** | **~+300** | | | |
+| **total, all** | **~+780** (+90 with BR-60) | **~+455** | | | |
+
+Read the totals against the owner's brief ("not huge byte growths") and the
+budgets, not against a rung: about 420 resident bytes on kern_big and about 300
+on kern_small buy every high and medium defect in this register. kern_small's
+300 is the figure to argue about, since its budget is 64KB resident; batches D
+and E are where most of it goes, and both are defects that corrupt data on
+exactly that machine (BR-2, BR-7, BR-17). Several items reclaim bytes and can
+pay for others inside the same batch: BR-110 (-19), BR-27 (-12), boot-7 (-41
+transient), BR-69 (-12 module), and wm-2's form of BR-8.
+
+## Source finding index
+
+Every non-refuted bug and hazard finding, and every other-kind finding used as
+a defect, with the item it is merged into.
+
+| source | BR | source | BR | source | BR | source | BR |
+|---|---|---|---|---|---|---|---|
+| abi-1 | 43 | dw-1 | 23 | input-1 | 18 | mem-1 | 35 |
+| abi-2 | 62 | dw-2 | 17 | input-2 | 19 | mem-2 | 12 |
+| abi-3 | 62 | dw-3 | 24 | input-3 | 20 | mem-3 | 53 |
+| abi-4 | 146 | dw-4 | 22 | input-4 | 87 | mem-4 | 11 |
+| abi-5 | 145 | dw-5 | 133 | input-5 | 88 | mem-5 | 105 |
+| abi-7 | 73 | dw-6 | 134 | input-6 | 89 | mem-6 | 104 |
+| abi-8 | 22 | dw-7 | 135 | input-7 | 90 | mem-7 | 52 |
+| boot-1 | 1 | dw-8 | 62 | input-8 | 91 | mem-8 | 54 |
+| boot-2 | 1 | dw-11 | 136 | input-9 | 92 | mem-10 | 4 |
+| boot-3 | 63 | dw-12 | 60 | input-11 | 93 | mem-19 | 106 |
+| boot-4 | 153 | dw-18 | 137 | input-14 | 94 | sched-1 | 51 |
+| boot-5 | 25 | dw-19 | 143 | isr-2 | 36 | sched-2 | 79 |
+| boot-6 | 25 | engsys-1 | 74 | isr-3 | 85 | sched-3 | 80 |
+| boot-11 | 155 | engsys-2 | 75 | isr-4 | 86 | sched-4 | 78 |
+| boot-12 | 156 | engsys-8 | 76 | isr-6 | 34 | sched-5 | 78 |
+| boot-15 | 156 | engsys-12 | 171 | isr-7 | 21 | sched-6 | 81 |
+| boot-18 | 154 | engsys-15 | 172 | isr-8 | 9 | sched-7 | 82 |
+| dr-1 | 25 | files-1 | 2 | isr-9 | 82 | sched-8 | 83 |
+| dr-2 | 37 | files-2 | 27 | isr-17 | 34 | sched-9 | 84 |
+| dr-3 | 61 | files-3 | 41 | loader-1 | 7 | sched-18 | 80 |
+| dr-4 | 16 | files-4 | 11 | loader-2 | 7 | shell-1 | 42 |
+| dr-7 | 138 | files-6 | 123 | loader-3 | 7 | shell-6 | 117 |
+| dr-8 | 139 | files-7 | 124 | loader-4 | 29 | shell-7 | 119 |
+| dr-9 | 140 | files-8 | 125 | loader-5 | 30 | shell-11 | 118 |
+| dr-12 | 61 | files-9 | 126 | loader-7 | 120 | shell-12 | 119 |
+| dr-13 | 25 | files-10 | 127 | loader-8 | 11 | sysmisc-1 | 15 |
+| dr-14 | 141 | files-12 | 128 | loader-9 | 121 | sysmisc-2 | 44 |
+| dr-15 | 142 | files-13 | 129 | loader-10 | 122 | sysmisc-3 | 26 |
+| dr-17 | 142 | files-14 | 130 | mc-1 | 13 | sysmisc-4 | 157 |
+| drivers-1 | 5 | gfx-1 | 3 | mc-2 | 65 | sysmisc-5 | 158 |
+| drivers-2 | 31 | gfx-2 | 64 | mc-3 | 161 | sysmisc-6 | 159 |
+| drivers-3 | 32 | gfx-5 | 77 | mc-4 | 66 | sysmisc-7 | 160 |
+| drivers-4 | 33 | gfx-7 | 152 | mc-5 | 66 | text-1 | 46 |
+| drivers-6 | 34 | hiber-1 | 96 | mc-6 | 162 | text-3 | 77 |
+| drivers-7 | 39 | hiber-2 | 38 | mc-7 | 163 | text-4 | 131 |
+| drivers-8 | 144 | hiber-3 | 39 | mc-8 | 164 | text-5 | 132 |
+| histsys-1 | 4 | hiber-4 | 40 | mc-9 | 67 | text-11 | 129 |
+| histsys-2 | 9 | hiber-5 | 97 | mc-10 | 68 | ui-1 | 45 |
+| histsys-6 | 95 | hiber-6 | 98 | mc-12 | 165 | ui-2 | 28 |
+| histsys-11 | 8 | hiber-7 | 10 | mc-13 | 165 | ui-3 | 110 |
+| histsys-15 | 78 | hiber-8 | 99 | mc-14 | 165 | ui-4 | 111 |
+| hm-1 | 12 | hiber-9 | 100 | mc-15 | 166 | ui-5 | 112 |
+| hm-2 | 104 | hiber-10 | 101 | mc-17 | 167 | ui-6 | 113 |
+| hm-3 | 4 | hiber-11 | 101 | mc-18 | 167 | ui-7 | 86 |
+| hm-4 | 35 | hiber-12 | 72 | md-1 | 69 | ui-8 | 22 |
+| hm-5 | 54 | hiber-16 | 102 | md-2 | 70 | ui-9 | 115 |
+| hm-6 | 105 | hiber-18 | 103 | md-3 | 71 | ui-16 | 114 |
+| hm-7 | 59 | hm-8 | 53 | md-4 | 168 | ui-17 | 116 |
+| hm-13 | 11 | hm-14 | 107 | md-9 | 169 | video-1 | 14 |
+| md-10 | 71 | md-11 | 169 | md-12 | 170 | video-2 | 6 |
+| md-16 | 105 | md-17 | 170 | md-18 | 170 | video-3 | 55 |
+| video-4 | 56 | video-5 | 57 | video-6 | 58 | video-8 | 147 |
+| video-9 | 148 | video-10 | 149 | video-11 | 150 | video-12 | 151 |
+| wm-1 | 8 | wm-3 | 47 | wm-4 | 48 | wm-5 | 49 |
+| wm-6 | 50 | wm-7 | 109 | wm-8 | 78 | wm-9 | 108 |
+| wm-13 | 8 | | | | | | |
+
+Context, not defects, cited above: boot-7 (the room BR-1 and BR-25 need),
+boot-10 (BR-1's rethink), wm-2 (BR-8's alternative), wm-17 (BR-47's rethink),
+isr-13 (BR-34's flag-day cell), sysmisc-14 (BR-26's rethink R1), mem-14
+(BR-54's rethink). Refuted and dropped: isr-5, wm-20.

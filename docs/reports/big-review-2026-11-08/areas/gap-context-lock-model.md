@@ -804,3 +804,45 @@ opt-in shape. Default synchronous, per-window deferred.
 - **kern_mega's reflected int 13h.** ctx-3 keeps `sch_lock` there. Whether a
   native PM floppy path (`mega_fd13`) could ever run with switching live
   belongs to megacore, not here.
+
+## Verification
+
+Adversarial pass, 2026-11-08. Every hazard, bug and high or medium finding
+was re-read in the code on all three build arms. ctx-8 and ctx-9 (low) were
+spot-checked. No finding is refuted. Neither queue (ABI-BREAK-LIST.md,
+KERNEL-BYTE-QUEUE.md) lists any of them. The corrected fields are in
+`data/gap-context-lock-model.json`.
+
+Findings:
+- **ctx-1** confirmed (rethink, bytes ESTIMATED). `inst_task_die` runs the whole teardown and repaint on the worker. `mem_free_rec_x` resets the global `[mem_pg_floor]` unconditionally. `mega_fkill .worker` sets SP to the faulting frame and far-jumps into `inst_task_die`. The posted-work ladder that would take it already exists.
+- **ctx-2** corrected. The deadlock is real: the `.retry`/`.block` arm never compares the owner. But SPEC.md 20.6 rule 4 documents it as a binding package rule, so this is a missing kernel defence (a hazard), not an unknown bug. Since this review, SPEC has been amended to say `gfx_lock` records its owner and does not consult it. Bytes are +12 `.text` (3+4+2+3), not +9. The kern_mega block it replaces is 24 bytes, not 13.
+- **ctx-3** confirmed. The mouse ISR's free-lock arm rests on "dsk_xfer holds [sch_lock] throughout". Its held arm reads `[sch_cur]` at interrupt time. The +7 ISR test is right.
+- **ctx-4** confirmed. No suite row measures IF=0 duration. The bounds come from arithmetic, not from a measurement. The 9,600 default is SPEC.md 115's Open (divisor 0 = 12).
+- **ctx-5** confirmed (latent). `evq_push` is SS-relative throughout, and `sch_switch` records the SeaBIOS stack hop. The WM_WAKE cell is already amended to "ISR-safe given SS = LOW_SEG". The kernel comment in events.inc was not, and it is carried below.
+- **ctx-6** corrected. The gate really is `OS88_COMPACT`-only, but SPEC.md 66.3.1 states the kern_small exclusion deliberately. Its reason ("no compactor") covers compaction and not the shed, so this is a low hazard against a recorded decision. +14 is right.
+- **ctx-7** confirmed. The two rule-7 lists differ as stated. SPEC's paragraph also says `OSAPI_DRV_CALL` "is on the list" when its list does not name it. Its forbidden-slots sentence is broken ("and every verb of" runs into "`os88pcm_play` blocks", SPEC.md:46241-46242). Neither defect is proposed as a fix here, because it is a design-list decision.
+- **ctx-8** corrected (spot-check). The rule is now stated in prose in SPEC.md 7's `sch_lock` bullet: "Under it `task_yield` resumes its caller ... nothing that holds it may wait". It is still unnumbered and unenforced.
+- **ctx-9** confirmed (spot-check). WM_PKGD_MAX is 8, and a per-window rect costs 96 `.bss` (12 x 8).
+
+Doc mismatches (14). Seven are already applied and are dropped:
+- the SPEC 7 "exactly two" bullet
+- SPEC 20.6 rule 4's "no owner field"
+- SPEC 29.2 rule 7's "no explicit region-free call"
+- vga12.inc's "Four writers"
+- toast.inc's "flag then owner"
+- os88api.inc's `SCH_STACK (384)`
+- os88api.inc's WM_WAKE cell
+
+Nine fixes are carried, each old_text checked unique in the current file:
+- SPEC 7's `gfx_lock` description
+- the SPEC 0x0158 row
+- SPEC 29.2 rule 2, which carries the same stale "region released from `task_exit` under IF=0" as the already-fixed rule 7
+- os88api.inc's `app_bounce_task`. This is column-0 SDK prose, outside the abilock fingerprint.
+- events.inc:109-111
+- memory.inc:4065-4067
+- disk.inc:6426-6427, narrowed to kern_small plus a 66.3.1 pointer
+- wm.inc's `wm_lk` header and its "all three" and `wm_unlk` in/out lines, as two fixes
+
+Not proposed:
+- os88api.inc:3983 and SPEC.md:46221 still quote the WM_WAKE cell's old "any context - ISR-safe" wording as what it "has always said".
+- events.inc:120-126's "never changed again" about SS has the same caveat as the fix at 109-111.

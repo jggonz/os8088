@@ -327,3 +327,42 @@ Listed in full in the structured result; summarised here:
 - Should `tests/unit/` gain a ratchet listing the writers of `os88ui_krect`,
   `os88ui_ksb` and `os88ui_armw`? Their "UI task only" invariant holds by
   census today and nothing enforces it.
+
+## Verification
+
+Adversarial pass, 2026-11-08. Each finding was re-read against the cited code
+in every build arm; `docs/plans/ABI-BREAK-LIST.md` and
+`docs/plans/KERNEL-BYTE-QUEUE.md` have no os88ui/kbtn/krect/arm_f row, so
+none of these is already listed.
+
+| id | verdict | note |
+|---|---|---|
+| F1 | confirmed | `UI_FILL` (os88ui.inc:829) comes before `UI_PEN`, the frame, the DEF ring and `UI_WIDTH`; `UI_RUN` is last. SPEC 20.5.1.3.1 makes the fill unconditional but says nothing about its order, so the order is not a deliberate choice. The reorder brings the gap to zero drawing calls, but the caption cells are still written twice (fill, then opaque run). |
+| F2 | corrected | (a) and (b) hold: `LABEL`/`TLABEL` never match a bare `%1:`, `SECT` never matches `section OS88UI_KGLYPH`, and ctrl.inc:267-270 gives that as CPXN's reason. (c) is half wrong. `UI_GRAY` is already `call KERNEL_SEG:cw_gfx_fill_gray`, a far call that is correct from any image. Only `UI_HLINE` (a near call to `ct_cw_gfx_hline`) lacks a KFAR arm. |
+| F3 | confirmed | Every caller hands BX = `os88ui_krect` (fdlg 1108, files 3369, cp_krect 2832, sd_rect 237, hbm_btnrect 1109). Nothing else writes `os88ui_krec`, and `BT_DOWN` is only read. |
+| F4 | confirmed | `os88ui_arm` is one store. AX is the value at both sites. A 5-byte far call becomes a 3-byte store. |
+| F5 | confirmed (low) | Reachable by geometric coincidence only. files.inc:3356-3361 itself says a damage repaint behind a drag reaches other Disk windows. |
+| F6 | corrected | The flag is dead, but `xor di, di` cannot simply replace the load at ctrl.inc:4302: it sits between `call cpf_vidok` (CF out) and `jnc .live`, so the clear must move above the call. fdlg_blabel's `inc di` arithmetic still works from 0. |
+| F7, F8 | confirmed | F8 spot-checked (os88ui.inc:2287-2302). F7 rests on fdlg.inc:1289-1291. |
+| R1 | plausible | Not re-measured. Not listed in either queue. |
+
+Spans spot-checked off `build/kernel.map` and `build/smallk/kernel.map`:
+`os88ui_btn` DB84, `os88ui_arm_f` DFC1, the glyph at .modu F84/1019,
+kern_small `os88ui_sbar` 4B43 and `fdb_btn` .modd 4FC. These agree with the
+reviewer's table.
+
+**Doc fixes: 22 confirmed.** Every `old_text` was matched exactly and is
+unique in its file. They cover all 18 of the reviewer's items, with these
+changes:
+
+- The two-place items are split into one fix per place.
+- The `os88ui.inc` twin of SPEC 13.14.6's "emulator cannot show" sentence is
+  added.
+- The OS88UI_FILL item covers only the equ comment. The call-site comments at
+  files.inc:3348, ctrl.inc:4302 and ctrl.inc:5785 still describe the fill
+  truthfully, so they were left alone.
+- SPEC 13.10.1/13.10.4/13.10.5/13.10.5.10 ("two kernel bars") is not
+  rewritten. Only the os88ui.inc comment is corrected, and it now names the
+  real residue (F5).
+- The fdlg.inc:40 figure is restated from the measured spans as ~1,400
+  (kern_big) and ~1,100 (kern_small).
