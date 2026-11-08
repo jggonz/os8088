@@ -1,7 +1,7 @@
 {
  "area": "ui",
  "title": "The UI task, toasts, clipboard, About, spinner",
- "summary": "The UI task's model is sound, and in places better than the period systems it imitates. Every window callback goes through one dispatch environment (ui_bill). Posted work is gated by one OR-byte that the tick re-sets, so a forgotten post arrives late instead of never. The idle really sleeps, with the lost wakeup closed inside one cli span. Chrome boxes fire on the release, with the identity re-checked there. Toasts and the clipboard are small, honest designs: their hostile-input bounds are real, and the assembler enforces the toast length cap. The defects are narrow but real. On kern_big, the About box indexes its adapter table past the end on a VESA desktop; SPEC.md 39.29.4 named this and nobody fixed it. The race SPEC.md 13.9.2 fixed for timers is still open on the content-click, right-click and W_ONDRAG paths: the handler is read before gfx_lock and never re-tested. ui_dispatch identifies Locator by reading AM_ONCMD = 0 from a package segment without the lock. A typed plain Enter can be swallowed by the Alt+Enter latch. A toast raised under a fullscreen window expires unseen. The largest weakness is prose. ui.inc carries about two comment-only lines for every line of code, much of it size-pass history, and over fifty statements across the area's comments, SPEC sections 13, 14, 55, 59 and 75, and the SDK no longer match the code. SPEC.md 13's numbered loop describes a ui_task several redesigns old. The SDK tells package authors that a worker may call the clipboard, which the code says is unsafe. (Verification: 2 of the reviewer's 54 doc mismatches were refuted; the content-click race fix is 5 bytes, not 6.)",
+ "summary": "The UI task's model is sound, and in places better than the period systems it imitates. Every window callback goes through one dispatch environment (ui_bill). Posted work is gated by one OR-byte that the tick re-sets, so a forgotten post arrives late instead of never. The idle really sleeps, with the lost wakeup closed inside one cli span. Chrome boxes fire on the release, with the identity re-checked there. Toasts and the clipboard are small, honest designs: their hostile-input bounds are real, and the assembler enforces the toast length cap. The defects are narrow but real. On kern_big, the About box indexes its adapter table past the end on a VESA desktop; SPEC.md 39.29.4 named this and nobody fixed it. The race SPEC.md 13.9.2 fixed for timers is still open on the content-click, right-click and W_ONDRAG paths: the handler is read before gfx_lock and never re-tested. ui_dispatch identifies Locator by reading AM_ONCMD = 0 from a package segment without the lock. A typed plain Enter can be swallowed by the Alt+Enter latch. A toast raised under a fullscreen window expires unseen. The largest weakness is prose. ui.inc carries about two comment-only lines for every line of code, much of it size-pass history, and over fifty statements across the area's comments, SPEC sections 13, 14, 55, 59 and 75, and the SDK no longer match the code. SPEC.md 13's numbered loop describes a ui_task several redesigns old. The SDK tells package authors that a worker may call the clipboard, which the code says is unsafe. (Verification: 2 of the reviewer's 53 doc mismatches were refuted (ui.inc:1449's %endif tag, which the block's ui_timer_pass banner justifies, and an ABI-fingerprinted SDK contract line that is approximately true); the other 51 are applied as 59 exact edits. The ui_bill liveness test is 5 bytes, not 6.)",
  "strengths": [
   {
    "title": "One dispatch environment for every window callback (ui_bill)",
@@ -429,334 +429,358 @@
  ],
  "doc_fixes": [
   {
-   "file": "kernel/loader.inc",
-   "old_text": "LD_ENOMEM   equ 5               ; instance table or pool exhausted",
-   "new_text": "LD_ENOMEM   equ 5               ; instance table full, or no heap claim fits",
-   "why": "There is no pool: ld_alloc answers LD_ENOMEM when inst_alloc finds no free record or mem_claimp_hi_x refuses the region (loader.inc ld_alloc .nomem/.nodrv)."
+   "file": "kernel/ui.inc",
+   "old_text": "; keyboard, drains one event from the system queue, runs any deferred\n",
+   "new_text": "; keyboard, drains the system event ring (up to EVQ_CAP records a pass,\n; SPEC.md 10.2), runs any deferred\n",
+   "why": "ui_task sets [ui_drain] = EVQ_CAP + 1 and loops .yield -> .evloop until the ring is empty (ui.inc:300, 707-713)."
   },
   {
-   "file": "kernel/loader.inc",
-   "old_text": "; The region is freed by the instance record (SPEC.md 29.2 rule 7): mem_free_rec\n; releases every claim the slot owns, so the store that frees a record frees\n; its region.",
-   "new_text": "; The region goes with the instance record (SPEC.md 29.2 rule 7): both\n; teardown sites call mem_free_rec, which releases every claim the slot owns,\n; region included, just before the store that frees the record.",
-   "why": "app_close_win (instance.inc .noflush: call mem_free_rec, then mov byte [di+I_STATE], 0) and inst_task_die (call mem_free_rec, then jmp task_exit) free the region explicitly; no store frees it."
+   "file": "kernel/ui.inc",
+   "old_text": "; ui_post_cmd for the kernel's own CMD_* (SPEC.md 13). The lock is a\n",
+   "new_text": "; a [ui_pcmd] store and a [ui_post] bump for the kernel's own CMD_*\n; (SPEC.md 13). The lock is a\n",
+   "why": "There is no ui_post_cmd routine; stikmenu.inc:1752 writes [ui_pcmd] and bumps [ui_post] itself (ui.inc:2640-2643)."
   },
   {
-   "file": "kernel/loader.inc",
-   "old_text": "; Both callers are .cold and so is this (SPEC.md 2.6), so the call is near.",
-   "new_text": "; All three callers are .cold and so is this (SPEC.md 2.6), so the call is near.",
-   "why": "ld_hdr_ok is called by ld_check_hdr (loader.inc), drv_check (driver.inc, in .cold) and the re-home arm (loader.inc ld_start .rehome) - the banner above already says 'all three callers'."
+   "file": "kernel/ui.inc",
+   "old_text": "; Step 4 is the system clock (SPEC.md 37): clk_tick every pass - it is cheap\n",
+   "new_text": "; Step 4 is the system clock (SPEC.md 37): clk_tick on every pass that sees\n; [ticks] move (SPEC.md 13.12) - it is cheap\n",
+   "why": "clk_tick sits after .posted_done's `cmp ax,[ui_lastt] / je .idle` (ui.inc:1081-1085, 1124)."
   },
   {
-   "file": "kernel/loader.inc",
-   "old_text": "    cmp [es:si+LD_H_VER], al                 ; 6 = package, 7 = driver: the",
-   "new_text": "    cmp [es:si+LD_H_VER], al                 ; PKG_FMT = package, DRV_VER = driver: the",
-   "why": "The version bytes are PKG_FMT equ 10 (loader.inc) and DRV_VER equ 12 (driver.inc), not 6 and 7."
+   "file": "kernel/ui.inc",
+   "old_text": "; pops a context menu (SPEC.md 12.4) on two things only - the frontmost\n; file-manager window's content, and a DOCK TILE, whose one item is Close\n; (SPEC.md 30.2).",
+   "new_text": "; hands the press whole to a front window that installed W_ONRC (SPEC.md\n; 13.11), and otherwise pops a context menu (SPEC.md 12.4) on the frontmost\n; file-manager window's content, a DOCK TILE, whose one item is Close\n; (SPEC.md 30.2), and with OS88_SHORTCUTS a desktop shortcut (SPEC.md 26.8.5).",
+   "why": "ui_rdown dispatches [bx+W_ONRC] through ui_bill before the fm_menus test, and .strip calls sc_rclick_x under OS88_SHORTCUTS (ui.inc:1569-1583, 1607-1612)."
   },
   {
-   "file": "kernel/loader.inc",
-   "old_text": "; loader_run - load, relocate and launch the package at a directory index",
-   "new_text": "; loader_run - load and launch the package at a directory index",
-   "why": "v3 has no relocation (loader.inc banner: 'v3 HAS NO RELOCATION AT ALL')."
+   "file": "kernel/ui.inc",
+   "old_text": "; that is already frontmost never reaches wm_front), and QUIT (close box ->\n; app_close_win: window, task and state freed), raise, or drag them;\n",
+   "new_text": "; that is already frontmost never reaches wm_front), raise or drag them, and\n; ARM the chrome boxes, whose matching release QUITs (close box ->\n; app_close_win: window, task and state freed; SPEC.md 13.5);\n",
+   "why": ".close_box/.min_box only store [ui_armw]/[ui_armr]; app_close_win runs at .mup on the release over the same box (ui.inc:671-682, 345-395)."
   },
   {
-   "file": "kernel/loader.inc",
-   "old_text": "; in:  AX = directory index\n; out: AL = LD_* status\n;\n; Steps (SPEC.md 21): validate the dir entry; peek the header via a\n; 1-sector read into dsk_secbuf; size the allocation\n; (roundup512(max(img+bss, fsize)) - sector granularity means the full-file\n; read can never touch a neighbouring region); reserve an instance record +\n; pool region; read the whole file; re-check the header (disk-swap guard);\n; apply the reloc table; zero the bss (killing the table); call the entry;\n; register + publish the instance and wm_show its window. Every failure\n; path leaves running instances untouched - the reserved record was never\n; published, so it (and with it the region) is simply still free.",
-   "new_text": "; in:  SI -> the staged directory entry (loader_run_x stages it)\n; out: AL = LD_* status\n;\n; Steps (SPEC.md 21): the entry's type and size (ld_take); peek the first\n; sector (dsk_peek_x) and validate the header where it landed; size and\n; reserve the record and its region, roundup512(img + bss) (ld_alloc); read\n; the image - or the compressed file, high in the region - and expand it;\n; re-check the header in the region (disk-swap guard); then ld_start: zero\n; the bss, call the entry, register + publish the instance and wm_show its\n; window. Every failure path leaves running instances untouched: the\n; reserved record was never published, and ld_unreserve gives the region\n; back.",
-   "why": "ld_run_body_x reads [si+LD_DE_TYPE] (SI, not AX), peeks with dsk_peek_x, sizes need = roundup512(img+bss) in ld_alloc, has no pool and no reloc table, and frees the claimed region through ld_unreserve (.ret2)."
+   "file": "kernel/ui.inc",
+   "old_text": "; ui_bill, which was already two of them.",
+   "new_text": "; ui_ptcall, which was already two of them.",
+   "why": "SPEC.md 13.7: 'It was `ui_ptcall` and served W_ONCLICK and W_ONMOUSEUP alone'."
   },
   {
-   "file": "kernel/loader.inc",
-   "old_text": "    ; LOW_SEG, so the sector lands there and only the 32 header bytes are\n    ; staged back into the kernel segment for ld_check_hdr to read.",
-   "new_text": "    ; LOW_SEG, so the sector lands there and is validated where it landed:\n    ; ld_check_hdr reads it through ES.",
-   "why": "Step 3 does `mov si, bx / call ld_check_hdr` on ES = LOW_SEG; nothing is staged (its own comment at .hdr says so)."
+   "file": "kernel/ui.inc",
+   "old_text": "; STK0_SIZE 1,024 and a measured 274-byte watermark - it was +8 until the",
+   "new_text": "; STK0_SIZE 512 and SPEC.md 15.1's measured 246-byte watermark - it was +8 until the",
+   "why": "kernel.asm:1568 `STK0_SIZE equ 512`, whose comment divides by SPEC.md 15.1's 246."
   },
   {
-   "file": "kernel/loader.inc",
-   "old_text": "    ; and this cannot overflow it.",
-   "new_text": "    ; and this cannot overflow it FOR A FILE os88pkg.py WROTE: a foreign\n    ; header can, by up to 512 bytes, and nothing here refuses it (SPEC.md\n    ; 20.13.8.1).",
-   "why": "ld_check_hdr never tests R + file against roundup512(image + bss); image 1,000, file 600, bss 0 reads to 1,536 in a 1,024-byte region (SPEC.md 20.13.8.1's own example)."
+   "file": "kernel/ui.inc",
+   "old_text": ";      and a full repaint IF it moved\n; clobbers: AX, BX, CX, DX, DI (internal helper of the UI task)\n;\n; The gfx lock is only released while the outline is erased",
+   "new_text": ";      and the union of the old and new rects repainted (wm_paint_dmg) IF it\n;      moved\n; clobbers: AX, BX, CX, DX, SI, DI (internal helper of the UI task)\n;\n; The gfx lock is only released while the outline is erased",
+   "why": "ui_drag ends in wm_dmg_union + wm_paint_dmg (ui.inc:2004-2033) and loads SI = ui_drag_step at its head (ui.inc:1786)."
   },
   {
-   "file": "kernel/instance.inc",
-   "old_text": "; Manager names tasks through it, and the package-region allocator derives\n; occupancy from it.",
-   "new_text": "; Manager names tasks through it. (A package region is a heap claim owned by\n; its record's slot, SPEC.md 20.1/50.3 - nothing derives occupancy from here.)",
-   "why": "ld_alloc claims the region with mem_claimp_hi_x under the record's slot (loader.inc step 5); no allocator walks inst_tab."
+   "file": "kernel/ui.inc",
+   "old_text": "                                ; a transient overlay never enters the back\n                                ; buffer, so no flush is needed here)\n",
+   "new_text": "                                ; a transient overlay, XOR-erased before\n                                ; the lock drops - SPEC.md 32 has no back\n                                ; buffer any more)\n",
+   "why": "No gfx_flush exists in kernel/; SPEC.md 32: 'It was written for a back buffer, and the back buffer is gone.'"
   },
   {
-   "file": "kernel/instance.inc",
-   "old_text": "; through inst_pkg_spawn. Once it has one, its region is freed by\n; task_exit's release byte from the worker, not by the UI task.",
-   "new_text": "; through inst_pkg_spawn. Once it has one, its region is freed by\n; mem_free_rec on the worker, in inst_task_die, and the record by task_exit's\n; release byte - not by the UI task.",
-   "why": "inst_task_die ends `call mem_free_rec / mov bx, di / jmp task_exit`: the claim free and the record free are separate steps."
+   "file": "kernel/ui.inc",
+   "old_text": "                                ; the overlay is always erased before\n                                ; anyone else can draw. Going through the back\n                                ; buffer instead would dirty the whole window\n                                ; rect and flush it twice per pass.\n",
+   "new_text": "                                ; the overlay is always erased before\n                                ; anyone else can draw.\n",
+   "why": "SPEC.md 32's back buffer and its flush are gone; no gfx_flush in kernel/."
   },
   {
-   "file": "kernel/instance.inc",
-   "old_text": "I_SIZE   equ 8                  ; word: package region bytes; 0 for builtins,\n                                ; 0xFFFF for a 64KB region (SPEC.md 20.1.1)",
-   "new_text": "I_SIZE   equ 8                  ; word: package region bytes; 0 for builtins,\n                                ; at most APP_MAX_SIZE = 0xFE00 (SPEC.md 20.1.1)",
-   "why": "ld_alloc stores roundup512(image+bss) <= 0xFE00 ('NO SATURATION any more') and the re-home stores image+bss bounded by ld_hdr_size; 0xFFFF is never written."
+   "file": "kernel/ui.inc",
+   "old_text": "; right. The tables-full refusals below (Timer and Bounce at their cap of ten)\n",
+   "new_text": "; right. Launches refused at a kind's cap (ui_cmd's beep, SPEC.md 29.4.1)\n",
+   "why": "Timer and Bounce are packages now (SPEC.md 14.8) and ui_loc_gate has no refusal below it (ui.inc:2465-2485)."
   },
   {
-   "file": "kernel/instance.inc",
-   "old_text": "SSI_SIZE   equ 8                ; word: region BYTES, 0 for a built-in\n                                ; and 0xFFFF for a 64KB one (SPEC.md 20.1.1)",
-   "new_text": "SSI_SIZE   equ 8                ; word: region BYTES, 0 for a built-in\n                                ; and at most 0xFE00 (SPEC.md 20.1.1)",
-   "why": "SSI_SIZE is I_SIZE copied by the snapshot; I_SIZE is at most APP_MAX_SIZE = 0xFE00 (ld_alloc)."
+   "file": "kernel/ui.inc",
+   "old_text": "    ; which is exactly why .close_box can take its own lock too. The guard",
+   "new_text": "    ; which is exactly why the close box's release (.mup) takes its own lock too. The guard",
+   "why": ".close_box only arms; the lock is taken at .mup_lk on the release (ui.inc:671-682, 362-364)."
   },
   {
-   "file": "kernel/instance.inc",
-   "old_text": "; out: CF = 0, DI = the first live KIND_PKG record whose I_SPTR matches;",
-   "new_text": "; out: CF = 0, DI = the first KIND_PKG record, live or dying, whose I_SPTR matches;",
-   "why": "inst_of_seg walks inst_next, which returns every record with I_STATE != 0 (dying included), and never tests I_STATE itself."
+   "file": "kernel/ui.inc",
+   "old_text": "                                 ; know which is in the drive. The message\n                                 ; fits the 288px notice window, which a path\n                                 ; spelled out in full would not:\n                                 ; app_about_center centres it and font_str\n                                 ; stops at the SCREEN edge, not the window's\n",
+   "new_text": "                                 ; know which is in the drive. The message\n                                 ; is a toast, which TOASTRUN holds to\n                                 ; TOAST_MAX - and a path spelled out in\n                                 ; full would not fit it\n",
+   "why": "The failure path calls toast_show with ui_s_nofile (ui.inc:2936-2959); there is no notice window or app_about_center use here."
   },
   {
-   "file": "kernel/instance.inc",
-   "old_text": "; in:  AL = kind (0..6); UI task only, gfx lock NOT held (takes its own)\n; out: CF = 1 launch failed (instance/window/task table full), CF = 0 done",
-   "new_text": "; in:  AL = kind (KIND_ABOUT..KIND_CTRL, or KIND_HIBER on kern_big); UI task\n;      only, gfx lock NOT held (takes its own)\n; out: CF = 1 launch failed (instance or window table full, the kind at its\n;      cap, or a singleton with only dying instances), CF = 0 done",
-   "why": "KIND_* runs 0..2 plus KIND_HIBER = 3 on kern_big (instance.inc), and app_launch spawns no task: its refusals are the cap test, inst_alloc, the pool scan and wm_create."
+   "file": "kernel/ui.inc",
+   "old_text": "; ui_post_cmd - defer one of the kernel's own menu commands (SPEC.md 13)\n; in:  AX = CMD_*\n; out: nothing (all registers preserved)\n",
+   "new_text": "; [ui_pcmd] - one of the kernel's own menu commands, DEFERRED (SPEC.md 13)\n; a poster stores the CMD_* in [ui_pcmd] and bumps [ui_post]; ui_task step 3\n; spends it (there is no ui_post_cmd routine any more - see the note below)\n",
+   "why": "No ui_post_cmd label exists; the note at ui.inc:2640 says its one caller writes the two stores itself."
   },
   {
-   "file": "kernel/instance.inc",
-   "old_text": "; I_STATE=1 (LAST record write), spawn the kind's task (rollback on a full\n; task table: unpublish, destroy the window), then show the window.",
-   "new_text": "; I_STATE=1 (LAST record write), then show the window. There is no task\n; arm since SPEC.md 14.8 (the NO TASK ARM note below).",
-   "why": "app_launch's body says 'NO TASK ARM' after the publish; no kind row has a task entry."
+   "file": "kernel/ui.inc",
+   "old_text": "(8 on small;\n    cmp ax, CMD_LAST            ; 11 or 12 on big with shortcuts) are CONTIGUOUS",
+   "new_text": "(8 on small;\n    cmp ax, CMD_LAST            ; 10 on big, 11 with shortcuts) are CONTIGUOUS",
+   "why": "menu.inc: CMD_LAST = CMD_STIK = CMD_FILES+1 = 10, or 11 with OS88_SHORTCUTS; the .tab rows have 10/11 entries."
   },
   {
-   "file": "kernel/instance.inc",
-   "old_text": "; inst_task_die. For a PACKAGE instance the record store frees its region\n; too (SPEC.md 29.2 rule 7) - on either branch: a package that took a\n; worker (SPEC.md 20.6) reaches the second one, and there the freeing store\n; is task_exit's release byte instead.",
-   "new_text": "; inst_task_die. For a PACKAGE instance the region goes with the record\n; (SPEC.md 29.2 rule 7) on either branch: mem_free_rec frees it, and every\n; claim, just before the record is freed - here, or for a package that took\n; a worker (SPEC.md 20.6) in inst_task_die on that worker, before\n; task_exit's release byte.",
-   "why": "Both branches call mem_free_rec (app_close_win .noflush, inst_task_die) before the I_STATE store / task_exit."
+   "file": "kernel/ui.inc",
+   "old_text": "across a repaint. ui_lit_set is the only",
+   "new_text": "across a repaint. ui_lit_go (ui_lit_on/off's body) is the only",
+   "why": "No ui_lit_set label exists; ui_lit_on and ui_lit_off both jump into ui_lit_go (ui.inc:1397-1407)."
   },
   {
-   "file": "kernel/instance.inc",
-   "old_text": "; 255*WIN_SIZE, and the `wm_owner+si` load that follows is unbounded. The\n; loader already refuses to wm_destroy an aborting entry's BX without exactly\n; this test (SPEC.md 21 step 9) - this is that test, factored out.",
-   "new_text": "; 255*WIN_SIZE (its clamp bounds the index it returns, so the `wm_owner+si`\n; load is bounded; the fault is not), and a pointer that is in range but not\n; a window names the last one. This is that test. The loader does not need\n; it on an aborting entry - its abort path never consults BX, sweeping by\n; W_SEG instead (SPEC.md 20.2).",
-   "why": "wm_ptr2idx clamps AL to MAX_WIN-1 after the div (wm.inc), and ld_start's .abort calls .sweep (wm_destroy_seg by W_SEG) and never reads BX."
+   "file": "kernel/ui.inc",
+   "old_text": "; ui_lit_on / ui_lit_off / ui_lit_set - draw or un-draw the held box\n; in:  AL = the wanted state (0 or 1) for ui_lit_set; the named entries carry\n;      their own, which is what keeps AL free at the four call sites\n",
+   "new_text": "; ui_lit_on / ui_lit_off - draw or un-draw the held box (body: ui_lit_go)\n; in:  nothing - each entry pushes AX and loads its own state (0 or 1) into AL\n;      for ui_lit_go, which is what keeps AL free at the four call sites\n",
+   "why": "There is no ui_lit_set entry; ui_lit_go is reached only after an entry's push ax / mov al (ui.inc:1397-1407)."
   },
   {
-   "file": "kernel/instance.inc",
-   "old_text": "; in:  AX = near entry point inside the package image (a whole-word package\n;           address, relocated as class 0 by os88pkg.py, SPEC.md 20.2)",
-   "new_text": "; in:  AX = near entry point inside the package image (a plain offset in the\n;           package's own segment - v3 has no relocation, SPEC.md 20.1/20.2)",
-   "why": "v3 packages are linked at org 0 with no relocation table (loader.inc banner); inst_pkg_fence bounds AX as an offset (cmp ax, [di+I_SIZE])."
+   "file": "kernel/menu.inc",
+   "old_text": "                                ; ui_cmd is a compare ladder and an id it\n                                ; does not match falls out of the bottom and\n                                ; returns.",
+   "new_text": "                                ; ui_cmd's jump table sends it to .done,\n                                ; which returns.",
+   "why": "ui_cmd is `jmp word [bx + .tab]` and CMD_SEP's row is .done (ui.inc:3022-3045)."
   },
   {
-   "file": "kernel/instance.inc",
-   "old_text": ";      through inst_task_die (gfx_lock, wm_destroy, gfx_unlock, task_exit\n;      with BX = the record, which frees the record and with it the package\n;      region inside one IF=0 window)",
-   "new_text": ";      through inst_task_die (gfx_lock, inst_unwin, gfx_unlock, mem_free_rec\n;      - the region and every claim - then task_exit with BX = the record,\n;      which frees the record and the task slot inside one IF=0 window)",
-   "why": "inst_task_die: call inst_unwin ... call gfx_unlock / call mem_free_rec / mov bx, di / jmp task_exit."
+   "file": "kernel/toast.inc",
+   "old_text": "; toast_show STAGES and never draws, toast_pass (the UI task's idle pass)\n; draws. That is what makes the context rule `any`",
+   "new_text": "; toast_show STAGES, and draws on the spot only for a caller that provably\n; holds the lock (toast_now, SPEC.md 59.4); toast_pass (the UI task's idle\n; pass) draws the rest. That is what makes the context rule `any`",
+   "why": "toast_show ends in `call toast_now` (toast.inc:288-290), which draws via fpg_bare when task 0 owns the lock (392-432)."
   },
   {
-   "file": "kernel/instance.inc",
-   "old_text": "                                ; inst_icon_ptr's staging slot was 64 bytes\n                                ; HERE before that and is now dsk_ico itself -\n                                ; the dsk_get_icon idiom taken the whole way,\n                                ; SPEC.md 25/30. The tenancy is stated at\n                                ; assoc_docicon_x)",
-   "new_text": "                                ; inst_icon_ptr's staging slot was 64 bytes\n                                ; HERE before that, then dsk_ico itself, and\n                                ; is inst_icobuf above since the worker-\n                                ; teardown race - its declaration says why)",
-   "why": "inst_icobuf: resb DSK_ICO_SIZE is inst_icon_ptr's own slot, 'not dsk_ico's, because dock_draw_tile runs on a dying package's WORKER'."
+   "file": "kernel/toast.inc",
+   "old_text": "; gfx_lock is not reentrant. Deferring gives ONE drawing site, which is also\n; the ONE expiry site,",
+   "new_text": "; gfx_lock is not reentrant. Deferring gives ONE expiry site, which is also\n; the drawing site for every caller that does not hold the lock,",
+   "why": "toast_now (toast_ad) is a second drawing site; toast_pass remains the only expiry site."
+  },
+  {
+   "file": "kernel/toast.inc",
+   "old_text": "message (the buffer keeps 23)",
+   "new_text": "message (the buffer keeps TOAST_MAX)",
+   "why": "kernel.asm:340 TOAST_MAX equ 24, and toast_show copies up to TOAST_MAX (toast.inc:236)."
+  },
+  {
+   "file": "kernel/toast.inc",
+   "old_text": "; raise, and a half-copied buffer would letter as garbage. 23 bytes of\n; rep-less movsb is ~475 clocks, ~100 us against a 55 ms tick.",
+   "new_text": "; raise, and a half-copied buffer would letter as garbage. Up to 24 kept bytes\n; of the filtered `es lodsb` loop is ~2,000 clocks, ~0.5 ms, and a hostile\n; 256-byte scan ~14,000, ~3 ms (estimated), against a 55 ms tick.",
+   "why": "The copy is a filtered es lodsb loop bounded by TOAST_MAX = 24 kept and TOAST_SCAN = 256 examined (toast.inc:245-266), not a 23-byte movsb."
+  },
+  {
+   "file": "kernel/toast.inc",
+   "old_text": "                                ; carry it to VRAM does not come until the\n                                ; operation this announces is over (SPEC.md\n                                ; 32) - fpg_begin's reasoning exactly.\n",
+   "new_text": "                                ; draw it does not come until the\n                                ; operation this announces is over (SPEC.md\n                                ; 59.4) - fpg_begin's reasoning exactly.\n",
+   "why": "There is no back buffer to carry pixels to VRAM (SPEC.md 32); the reason is the UI task's pass not coming round (SPEC.md 59.4)."
+  },
+  {
+   "file": "kernel/toast.inc",
+   "old_text": "the message waits for it to end",
+   "new_text": "the strip is not drawn while it is covered, and its seconds still run",
+   "why": "toast_arm sets [toast_die] before menu_draw_bar's wm_fs_vis guard is reached (toast.inc:445-447, 637-639; menu.inc:825)."
+  },
+  {
+   "file": "kernel/toast.inc",
+   "old_text": "; Does not draw. Two of its three callers hold the gfx lock (fpg_begin,\n; inst_free's teardown) and one is inside toast_show's cli window; the pixels",
+   "new_text": "; Does not draw. Its callers are toast_show's retire (inside its cli window)\n; and toast_owner_gone (instance teardown, lock held or not); the pixels",
+   "why": "The only `call toast_kill` sites are toast.inc:292 (toast_show .kill) and 703 (toast_owner_gone); fpg_begin no longer retires a toast."
+  },
+  {
+   "file": "kernel/toast.inc",
+   "old_text": "; out:      nothing - all registers AND the flags preserved\n",
+   "new_text": "; out:      nothing - all registers AND the flags preserved. FAR: it ends in\n;           retf, so .cold reaches it through ct_toast_say\n",
+   "why": "toast_say ends in `retf` (toast.inc:364); kernel.asm:8108 ct_toast_say is `call KERNEL_SEG:toast_say / ret`."
+  },
+  {
+   "file": "kernel/apps.inc",
+   "old_text": "; 0, 1 or 2 (kernel/viddet.inc). xchg, not",
+   "new_text": "; 0..3 (kernel/viddet.inc) - but 4, VID_VESA, under VID_EXT, has no row here (SPEC.md 39.29.4). xchg, not",
+   "why": "viddet.inc:110-122: VID_EGA = 3 and VID_VESA = 4 under VID_EXT (kern_big); app_about_vid has 3 or 4 rows (apps.inc:57-60)."
+  },
+  {
+   "file": "kernel/spinner.inc",
+   "old_text": ";             AX = 320 + (AL - SPL_HALFW) * cos / 64. clobbers: nothing else",
+   "new_text": ";             AX = [spl_l_cx] + (AL - SPL_HALFW) * cos / 64. clobbers: nothing else",
+   "why": "The body adds [%1_l_cx] '...and NOT 320, which is VGA's centre alone' (spinner.inc:270)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "   - `[wm_fs]` non-zero (§11.2) → skip both menu-bar branches below and go",
+   "new_text": "   - `wm_fs_vis` answers CF = 1 (a visible fullscreen window, §11.2, §39.17.1) → skip both menu-bar branches below and go",
+   "why": "ui.inc:475-481 calls wm_fs_vis, 'The PREDICATE and not the latch (SPEC.md 39.17.1)'."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "store\n     `CP_ITIME` into `[cp_sel]` and `app_launch` KIND_CTRL (§31.5), no lock\n     held, beeping on refusal like any other launch.",
+   "new_text": "store\n     `CP_ITIME` into `[cp_sel]` and open the Control Panel through\n     `cpf_cp_open` (§31.5; §2.8.4 — the module load, which owns the refusal,\n     beep or toast), no lock held; with `OS88_SNDCARD` a press on the\n     speaker goes to SOUND.DRV first (`ui_clkcell`, §34.15).",
+   "why": "ui.inc:517-527 and ui_clkcell (3392-3406) call cpf_cp_open, not app_launch, and hand the speaker's press to SOUND.DRV."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "   - else `wm_hit`: close box → **quit**: gfx_lock, `app_close_win` BX",
+   "new_text": "   - else `wm_hit`: close box → **arm** (§13.5); the matching release over\n     the same box **quits**: gfx_lock, `app_close_win` BX",
+   "why": ".close_box/.min_box only arm; app_close_win/inst_minimize run at .mup under the lock (ui.inc:330-403, 667-682)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "gfx_unlock. Minimize box (AL=3) →\n     gfx_lock, `inst_minimize` BX",
+   "new_text": "gfx_unlock. Minimize box (AL=3) →\n     arm likewise; its release: gfx_lock, `inst_minimize` BX",
+   "why": "Both boxes share one arming body (ui.inc:671-682); .mup_min calls inst_minimize on the release."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "every pass. On release (outline drawn, lock held): xor-erase, clamp\n     w to WMIN_W..`[vid_w]`−W_X and h to WMIN_H..`[vid_h]`−W_Y, write\n     W_W/W_H, `wm_paint_dmg` over the union of the old and new rects\n     (§11.91 — the origin is fixed, so that is the origin plus the larger\n     size per axis), gfx_unlock — same no-relock rule.",
+   "new_text": "every pass. On release (outline drawn, lock held): xor-erase, clamp\n     w and h between the window's own minimum (`wm_min_axd`, §11.100.2;\n     WMIN_W/WMIN_H by default) and the screen edge less the origin, write\n     W_W/W_H, `wm_paint_dmg` over the union of the old and new rects\n     (§11.91 — the larger extent in y; in x the union of both rects, because\n     `wm_snap_win` can move the origin, §11.95.2), gfx_unlock — same\n     no-relock rule.",
+   "why": "ui_grow_clamp calls wm_min_axd (ui.inc:2397-2413) and the damage x is the union of both rects for wm_snap_win (2348-2368)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "     `fm_menus` → gfx_lock, `fm_rclick` then `fm_rcmd` (§22), gfx_unlock.",
+   "new_text": "     `fm_menus` → gfx_lock, `fm_rclick`, then `ui_rcmd` billed through\n     `ui_bill` (§22), gfx_unlock. With no window under the press, the dock\n     strip gets it (`dock_rclick`, §30.2) and, under `OS88_SHORTCUTS`, a\n     desktop shortcut opens its menu (`sc_rclick`, §26.8.5).",
+   "why": "ui_rdown .ctxwin runs fm_rclick_x then `mov bp, ui_rcmd / jmp .bill`; .strip calls dock_rclick then sc_rclick_x (ui.inc:1591-1612)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "Then, on the same deferred\n   channel, if `[clk_dirty]` is non-zero (§37): zero it and call\n   `clk_rtc_write` — the Control Panel changed the time and the hardware\n   RTC is written **here**, outside the lock, because a page proc may not\n   call BIOS (§31.1).",
+   "new_text": "The hardware RTC is no longer\n   written from this channel: `[clk_dirty]` is spent by `CTRL.DRV` when the\n   Control Panel closes (§37.94).",
+   "why": "ui.inc:1075-1080: '[clk_dirty] WAS DRAINED HERE and is not any more (SPEC.md 37.94)'; clk_rtc_write lives in clockw.inc."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "   ```\n   ui_post_cmd  in:  AX = CMD_* (§12.3)\n                out: nothing (all registers preserved)\n   ```\n\n   `ui_post_cmd` is one word store and is legal **from any lock-held\n   callback**",
+   "new_text": "   ```\n   [ui_pcmd]  a poster stores AX = CMD_* (§12.3) here and bumps [ui_post]\n   ```\n\n   Posting is one word store and one bump (§13.13), with no routine of its\n   own any more, and is legal **from any lock-held callback**",
+   "why": "No ui_post_cmd label exists; stikmenu.inc:1752-1753 writes [ui_pcmd] and `inc byte [ui_post]` itself."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "5. `task_yield`.",
+   "new_text": "5. Sleep until the next tick or an ISR's wake (`task_sleep`, §8.1.2.2,\n   with the lost wakeup closed under one IF=0 span, §8.1.2.3); `task_yield`\n   only in a `NOUIBLOCK=1` build.",
+   "why": "ui.inc:1156-1187: pushf/cli, test [sch_uiwake], task_sleep(1); task_yield is the %else (NOUIBLOCK) arm."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "   three-word table {CMD_ABOUT, CMD_TIMER, CMD_REBOOT} that restores the",
+   "new_text": "   two-word table {CMD_ABOUT, CMD_CLOSE} that restores the",
+   "why": "ui.inc:2614-2616: `ui_loc_base: dw CMD_ABOUT, CMD_CLOSE` / `UI_LOC_N equ 2`."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "\n`ui_cmd` (in: AX = CMD_*, 0 ignored) is the old flat dispatcher, unchanged:\nCMD_ABOUT/CTRL/CLOCK/BOUNCE/TASKS → `call\napp_launch` with AL = the matching KIND_* (§29; CMD_CTRL → KIND_CTRL, the\nControl Panel of §31). It runs on the UI task with\nno lock held, so the call is direct — the deferred `inst_launch` channel\nin step 3 exists for lock-held posters (e.g. W_ONCLICK handlers, and now\nevery app menu handler, which runs under the lock by contract §12.2).\nTimer/Bounce launch a **new instance** each time (up to their §29\ncaps); About/Control Panel/Task Manager are singletons — at cap,\napp_launch fronts (and un-minimizes) the existing instance instead. CMD_FILES → call\n`files_open` (§22 — mounts, then launches/fronts the Disk singleton via\napp_launch; does its own locking). CMD_CLOSE → **quit** the frontmost:\ngfx_lock, `wm_top`, and if BX ≠ 0 `app_close_win` under the same lock,\ngfx_unlock. CMD_REBOOT → gfx_lock (never released), `vid_text` (§39.6 —\nmode 3, or mode 7 with the Hercules graphics bit cleared),\n`sched_unhook` — which does not return, falling into §18.100's park and the\n",
+   "new_text": "`ui_cmd` (in: AX = CMD_*, 0 ignored) is a jump table indexed by `CMD_* − 1`\nand bounded by `CMD_LAST`; `CMD_SEP`'s row returns. It runs on the UI task\nwith no lock held, so every command does its own locking — the deferred\n`inst_launch` channel in step 3 exists for lock-held posters (e.g. W_ONCLICK\nhandlers, and every app menu handler, which runs under the lock by contract\n§12.2). CMD_ABOUT is the one kind it launches: `app_launch` with AL =\nKIND_ABOUT, a singleton fronted (and un-minimized) at its cap, and a beep\nwhen the tables are full. CMD_CTRL → `cpf_cp_open` (§2.8.4: the panel's\ncode is a module, so opening it reads a file and owns the refusal).\nCMD_TASKS → `ui_tm_open` (the Task Manager is a package on the system disk,\n§28). CMD_FILES → `fmf_files_open` (§22 — fronts, creates or moves a\nfile-manager window; does its own locking). CMD_CLOSE → **quit** the\nfrontmost: gfx_lock, `wm_top`, and if BX ≠ 0 `app_close_win` under the same\nlock, gfx_unlock — a beep when there is nothing to close. CMD_SHUTDOWN →\n`cpf_shutdown`. On kern_big CMD_HIBER → `hbf_open` (§87.1) and CMD_STIK →\n`stm_act_x` (§110.12); with `OS88_SHORTCUTS`, CMD_SCDEL → `desk_key_x`\nwith the Delete key (§26.8.5). CMD_REBOOT → flush the Control Panel\n(`cpf_cp_flush_close`, unless the post asked not to), detach every driver\n(`drv_shutdown_x`, §51.2), gfx_lock (never released), `vid_reboot` (a text\nmode on every display), `sched_unhook` — which does not return, falling\ninto §18.100's park and the `int 0x19` at its tail.\n",
+   "why": "ui_cmd's .tab (ui.inc:3039-3045) and its arms (3050-3174): only .about calls app_launch; there are no CLOCK/BOUNCE commands."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "matter: the count is a single word the producer only increments, so it cannot",
+   "new_text": "matter: the count is a single byte the producer only increments, so it cannot",
+   "why": "events.inc:352 `evq_count: resb 1`; the slot reads [cs:evq_count] / cbw (events.inc:314)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "Both keep their own test. They are reached by nothing else today, and a guard\nonly its one caller enforces is a guard the next caller forgets.",
+   "new_text": "Neither keeps a test of its own any more: `ui_arm_chk` is written into the\nladder's step (kernel size pass 16) and `ui_arm_trk`'s banner says its caller\ntests, so a second caller must test `[ui_armw]` itself.",
+   "why": "ui.inc:1278 '(WRITTEN IN ui_task's .arm_done step)'; ui.inc:1306 ui_arm_trk 'THE CALLER TESTS IT, so this body does not'."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "Two of the thirteen should not be here at all, and §31.5.2 records why:\n`[cp_dirty]`'s collection belongs where the click callback returns, and\n`[clk_dirty]`'s at the Control Panel's close. Both are cheap enough behind this\nword that neither is urgent.",
+   "new_text": "One of them should not be here at all, and §31.5.2 records why:\n`[cp_dirty]`'s collection belongs where the click callback returns. (The\nsecond, `[clk_dirty]`, has already moved to the Control Panel's close,\n§37.94.) It is cheap enough behind this word not to be urgent.",
+   "why": "ui.inc:1075-1080: [clk_dirty] is no longer drained by ui_task; [cp_dirty] still is (ui.inc:962)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "press already walked. Cost in `.bss`: `MAX_WIN` words, 24 bytes. It is\ntherefore in `kern_small` too, unlike §13.8.2 and §13.9 — those are\n`kern_big`'s because they *grew the record*, which is the thing this\ndeliberately does not do.",
+   "new_text": "press already walked. Cost in `.bss`: one record word, so `MAX_WIN` words,\n24 bytes. It is in `kern_small` too, unlike §13.8.2 and §13.9, although it\ngrew the record as they did: the side table it was born as went in kernel\nsize pass 4 (above).",
+   "why": "wm.inc:115 `W_ONRC equ W_SIDE+6`, a record word on both kernels; this section's own opening says it moved from the wm_onrc side table."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "stopped at `ui_timer_pass.locked` (SI asserted to be that record), `W_FLAGS`\nbit 0 is cleared there as a worker's teardown leaves it, and the pass must\nreach `.gone` before `ui_bill`. Broken on purpose - the `jz .gone` after the",
+   "new_text": "stopped at `ui_task.tp_locked` (SI asserted to be that record), `W_FLAGS`\nbit 0 is cleared there as a worker's teardown leaves it, and the pass must\nreach `.tp_gone` before `ui_bill`. Broken on purpose - the `jz .tp_gone` after the",
+   "why": "The labels are ui_task's .tp_locked/.tp_gone (ui.inc:822-832); tests/timerrace.py:59 breaks at ui_task.tp_locked."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "  \"Hercules - 720x348 - mono\" or \"CGA - 640x200 - mono\". The geometry cannot",
+   "new_text": "  \"Hercules - 720x348 - mono\", \"CGA - 640x200 - mono\" or, on kern_big,\n  \"EGA - 640x350 - 16 colors\" (a VESA desktop, kind 4, has no row yet:\n  §39.29.4). The geometry cannot",
+   "why": "apps.inc:57-66: app_about_v3 'EGA - 640x350 - 16 colors' under GFX_VGA, and no VID_VESA row."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "**Any context.** None of the three takes the gfx lock, touches VRAM or does\nI/O, so a worker task may call them (§20.6 rule 7).",
+   "new_text": "**The UI task or a window callback, never a worker.** None of the three\ntakes the gfx lock, touches VRAM or does I/O, but `clip_put` claims (which a\nworker may not, §20.6 rule 7) and both copies are bursts of up to 32KB\nbetween segments that may move — `clip.inc`'s header gives the argument,\nand the +16-byte `sch_lock` bracket that would lift the rule.",
+   "why": "clip.inc:36-56 'CONTEXT: THE UI TASK OR A WINDOW CALLBACK - not a worker (SPEC.md 55.4)'; rule 7's list has no clipboard slot."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "operation, not an error: it frees the block and clears the three words.",
+   "new_text": "operation, not an error: it frees the block and clears the three fields.",
+   "why": "clip_drop zeroes clip_seg (a word), clip_kb (a BYTE) and clip_bytes (a word) (clip.inc:257-260, 326-334)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "It carries **one inverted space\nof padding at each end**, which is what makes it read as a strip.",
+   "new_text": "It carries **one cell of padding**,\nwhich is what makes it read as a strip — laid out as §59.8.1's inset and 4px\nlead rather than a space at each end.",
+   "why": "toast_place counts the message plus one cell (toast.inc:516-519); §59.8.1 replaced the per-end space with an inset and 4px padding."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`Saved` is 7 cells and an 18-glyph clock in a 25-cell",
+   "new_text": "`Saved` is 6 cells and an 18-glyph clock in a 25-cell",
+   "why": "The strip is str_len + 1 cells (toast.inc:516-519), so 'Saved' is 6."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "The strip is its message plus\none inverted space at each end and no wider;",
+   "new_text": "The strip is its message plus\none cell (§59.8.1's inset and padding) and no wider;",
+   "why": "toast_place: `call str_len / inc cx` - the message plus one cell (toast.inc:516-519)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "and `Saved` is exactly 7 cells.",
+   "new_text": "and `Saved` is 6 cells.",
+   "why": "The strip is str_len + 1 cells (toast.inc:516-519)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "**`toast_show` never draws.** It stages and returns; `toast_pass`, in",
+   "new_text": "**`toast_show` stages; it draws only for a caller that provably holds the\nlock (§59.4).** Otherwise it stages and returns; `toast_pass`, in",
+   "why": "toast_show ends in `call toast_now` (toast.inc:288-290), which draws when task 0 owns the gfx lock."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "- **`toast_kill` does not draw and preserves the flags.** Two of its three\n  callers hold the gfx lock.",
+   "new_text": "- **`toast_kill` does not draw and preserves the flags.** Its callers are\n  `toast_show`'s retire, inside its `cli` window, and `toast_owner_gone` at\n  teardown, lock held or not.",
+   "why": "The only call sites are toast.inc:292 and 703; fpg_begin no longer retires a toast (toast.inc:176-183)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "The\n  strip is in the clock's field now, wholly right of `[vid_clk_hx]`, so the\n  two cannot touch and may be up together",
+   "new_text": "The\n  two are kept apart by geometry now — `toast_place` reserves the widget's\n  cells (§59.9.2) — so they cannot touch and may be up together",
+   "why": "toast.inc:185-191: §59.9 gave the strip the gap as a home, and 'They are kept apart by GEOMETRY now (toast_place reserves the widget's cells, SPEC.md 59.9.2)'."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "- **`ui_task`'s ladder names the next step in every \"nothing to do\" jump**, so\n  inserting `.chk_toast` meant re-pointing `.chk_zones`'s `je` at it. Get that\n  wrong and the new step is unreachable on every pass where the previous one\n  had nothing to do, which is nearly all of them (§22.8's own warning).\n",
+   "new_text": "- **`toast_pass` is a tick-gated step** (§13.12): it sits behind the one\n  `[ticks]` compare and runs on every tick pass, so no \"nothing to do\" jump\n  has to be re-pointed at it. Move it among the posted steps and §22.8's\n  warning comes back: a step a previous one's jump skips is unreachable on\n  nearly every pass.\n",
+   "why": "ui.inc:1081-1095: .chk_toast's `call toast_pass` follows the [ticks]/[ui_lastt] compare unconditionally; nothing jumps to it."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "otherwise. The test\nis three compares:",
+   "new_text": "otherwise. The test\nis three facts, asked in two compares (the flag and the owner are one word):",
+   "why": "toast_now is `cmp word [gfx_lock_flag], 1` (flag + owner) then `cmp byte [sch_cur], 0` (toast.inc:393-408)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "It ends in `gfx_flush`, for `fpg_begin`'s reason and not for tidiness: the\ndraw happens mid-lock and on a double-buffered machine (§32) the flush that\nwould carry it to VRAM does not come until `gfx_unlock` — which is after the\noperation being announced. Paint used to reach around that with a `pt_wait`\nof its own; it does not have to any more.\n",
+   "new_text": "It needs no flush: §32's back buffer is gone, so the draw reaches the glass\nthe moment it is made, mid-lock and before the operation being announced.\nPaint used to reach around the old flush with a `pt_wait` of its own; it does\nnot have to any more.\n",
+   "why": "toast_now ends in fpg_bare + menu_draw_bar with no gfx_flush (toast.inc:409-432); no gfx_flush exists in kernel/ (SPEC.md 32)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "same window again would recurse on a 384-byte task stack (§8): `sch_stkdie`,",
+   "new_text": "same window again would recurse on the UI task's 512-byte stack (`STK0_SIZE`,\n§8): `sch_stkdie`,",
+   "why": "wm.inc:2192 'The negotiator runs under the gfx lock on the UI task'; kernel.asm:1568 STK0_SIZE equ 512."
   },
   {
    "file": "apps/os88api.inc",
-   "old_text": "SSI_SIZE   equ 8                ; word: its region in BYTES, 0 for a built-in\n                                ; and 0xFFFF for a 64KB one (SPEC.md 20.1.1)",
-   "new_text": "SSI_SIZE   equ 8                ; word: its region in BYTES, 0 for a built-in\n                                ; and at most 0xFE00 (SPEC.md 20.1.1)",
-   "why": "The kernel's I_SIZE (copied into SSI_SIZE) is at most APP_MAX_SIZE = 0xFE00 (loader.inc ld_alloc). abilock.surface() drops this indented comment: it follows an equ line, not an OSAPI_ %define."
-  },
-  {
-   "file": "kernel/compress.inc",
-   "old_text": "                                ; circular. os88pkg.py refuses it too, in the\n                                ; same words",
-   "new_text": "                                ; circular for THIS verb. os88pkg.py solves it\n                                ; as a fixed point (SPEC.md 20.13.8); the\n                                ; machine does not attempt it",
-   "why": "SPEC.md 20.13.8: os88pkg.py packs parted images (compress_parted); only cmz_pkg refuses bit 2."
-  },
-  {
-   "file": "kernel/compress.inc",
-   "old_text": "; ld_cpre's own ladder (loader.inc; SPEC.md 20.13.1): what the mount reads out",
-   "new_text": "; the ladder ld_run_body_x's step 6a writes inline (loader.inc; SPEC.md\n; 20.13.1): what the mount reads out",
-   "why": "There is no ld_cpre: the clear-prefix ladder is inline in ld_run_body_x at .expand (loader.inc)."
-  },
-  {
-   "file": "SPEC.md",
-   "old_text": "the loader copies it again into `inst_icons` (§29) so the dock tile survives\nin the kernel's own segment.",
-   "new_text": "the loader copies nothing: it sets I_ICON to the `I_ICO_PKG` sentinel (§29.1)\nand `inst_icon_ptr` stages the body out of the instance's own region when a\ntile is drawn (§21 step 9).",
-   "why": "Step 9 writes `and ax, 1 / mov [di+I_ICON], ax` (I_ICO_PKG = 1); inst_icons does not exist (§21 step 9 says so too)."
-  },
-  {
-   "file": "SPEC.md",
-   "old_text": "the index is into *that* window's listing, so `loader_run`\nlatches `ld_pwin` and calls `fmv_sync` on it **before** `ld_run_body`\nresolves the index against the globals)",
-   "new_text": "the index is into *that* window's listing, so `loader_run`\nstands where that window stands (a quiet chdir) and stages the entry out of\nits own cache **before** `ld_run_body` runs - `fmv_sync` and the globals\nonly when that cache was purged or the folder is gone)",
-   "why": "loader_run_x: dsk_chdir_q_x then fmv_ld_ent out of the poster's claim; fmv_sync_x only on .loud (FS_VSEG = 0 or the chdir failed)."
-  },
-  {
-   "file": "SPEC.md",
-   "old_text": "3 too large, 4 entry aborted, 5 out of memory)",
-   "new_text": "3 too large, 4 entry aborted, 5 out of memory, 6 `LD_EVER` a package of\nanother format)",
-   "why": "loader.inc defines LD_EVER equ 6, which ld_hdr_ok answers on a version mismatch."
-  },
-  {
-   "file": "SPEC.md",
-   "old_text": "I_SIZE the region's size in bytes, now a whole-KB multiple because that is\n`mem_claim`'s granularity.",
-   "new_text": "I_SIZE the region's size in bytes: roundup512(image + bss), claimed in\nparagraphs exactly as asked because the granule is 512 (§50.2.1).",
-   "why": "ld_alloc: `add ax, 511 / and ax, 0FE00h`, then `shr ax, cl` to paragraphs for mem_claimp_hi_x; the comment says the KB rounding is gone."
-  },
-  {
-   "file": "SPEC.md",
-   "old_text": "No compaction — regions never move once loaded, which\nis exactly why they are allocated from the far end.",
-   "new_text": "Regions are allocated from the far end; a published one may still move\nunder §66.6.1 when its package declares it movable, and `[ld_base]` pins the\none being loaded.",
-   "why": "Step 9's comment: 'mem_can_move pins the region whose base this names' ([ld_base] = 0 after the launch); §66.6.1 moves frameless regions."
-  },
-  {
-   "file": "SPEC.md",
-   "old_text": "the first-fit-over-`inst_tab` allocator this replaced, is gone;",
-   "new_text": "the first-fit-over-`inst_tab` allocator this replaced, is gone, and the name\nnow belongs to steps 4 and 5 (§21.5);",
-   "why": "loader.inc has a routine named ld_alloc: 'steps 4 and 5: size the region and reserve it'."
-  },
-  {
-   "file": "SPEC.md",
-   "old_text": "HIGH word is below `PKG_FILE_HI`** (16 — else status 3, `LD_EBIG`)",
-   "new_text": "HIGH word is below `PKG_FILE_HI`** (512, compared as DH ≥ 2 — else\n   status 3, `LD_EBIG`)",
-   "why": "kernel.asm: PKG_FILE_HI equ 512; ld_take: `cmp dh, PKG_FILE_HI >> 8 / jae .big`."
-  },
-  {
-   "file": "SPEC.md",
-   "old_text": "1..15 pass, because a package carrying\n   parts may be up to 1MB",
-   "new_text": "1..511 pass, because a package carrying\n   parts may be up to 32MB",
-   "why": "ld_take refuses only DH >= 2 (PKG_FILE_HI = 512, 'the file must be under 32MB')."
-  },
-  {
-   "file": "SPEC.md",
-   "old_text": "2. Peek the header: AX = [ld_clus] → `dsk_clus2lba` (CF → status 2), then\n   `disk_read` 1 sector into `dsk_secbuf` (UI-task-only shared scratch) —\n   the first sector of the first cluster IS the file's first 512 bytes,\n   so peek semantics are exact. CF → status 1.",
-   "new_text": "2. Peek the header: `dsk_peek_x` reads 1 sector of [ld_clus] into\n   `dsk_secbuf` (UI-task-only shared scratch) —\n   the first sector of the first cluster IS the file's first 512 bytes,\n   so peek semantics are exact. CF → status 1, a cluster out of range\n   included (it read as status 2 before the peek was factored).",
-   "why": "ld_run_body_x .peek: `call dsk_peek_x / jc .disk1` (LD_EDISK); its comment: 'A cluster out of range now reads as LD_EDISK where it read as LD_EBAD'."
-  },
-  {
-   "file": "SPEC.md",
-   "old_text": "`mem_claim_hi` need KB → CF →",
-   "new_text": "`mem_claimp_hi` need/16 paragraphs → CF →",
-   "why": "ld_alloc: `shr ax, cl` (CL = 4) then `call mem_claimp_hi_x`."
-  },
-  {
-   "file": "SPEC.md",
-   "old_text": "to **ES = [ld_base], BX = 0**, the\n   package's own segment at offset 0.",
-   "new_text": "to **ES = [ld_base], BX = 0**, the\n   package's own segment at offset 0 - for a PLAIN image. A compressed one\n   is read whole, `roundup512(file)` bytes, at R = roundup512(image − file)\n   and expanded downwards (§20.13), and that read can pass `need` by up to\n   512 bytes (§20.13.8.1).",
-   "why": "ld_where: BX = roundup512(image - file) and AX = [ld_fsz] when [ld_cfmt] has a format; step 6a then runs lz_decomp_x in the region."
-  },
-  {
-   "file": "SPEC.md",
-   "old_text": "7. *(retired — v3 has no relocation, §20.2)*",
-   "new_text": "7. *(retired — v3 has no relocation, §20.2. The code's comments number\n   differently: loader.inc's step 7 is the bss zero below, its 8 the far\n   call and its 9 the publish.)*",
-   "why": "ld_start's banners read '--- 7. zero the package bss', '--- 8. launch', '--- 9. register + publish'; renumbering this list would break the many '§21 step N' citations, so the difference is stated instead."
-  },
-  {
-   "file": "SPEC.md",
-   "old_text": "CF → the abort path (BX\n   sanity-checked exactly as before: inside wm_wins, record-aligned, then\n   locked wm_destroy), status 4.",
-   "new_text": "CF → the abort path (BX\n   is not consulted: every window the region's W_SEG stamp names is\n   destroyed, §20.2), status 4.",
-   "why": "ld_start .abort calls .sweep (by W_SEG) and never reads BX; the success path does not check BX either."
-  },
-  {
-   "file": "SPEC.md",
-   "old_text": "With no worker it is the task-less path: locked wm_destroy + I_STATE ← 0 —\nthat store frees the region. With a §20.6 worker it is the die-flag path,\nand the worker's next `OSAPI_TASK_ALIVE` runs `inst_task_die`; then\n`task_exit`'s release byte frees the record **and with it the region**,\ninside one IF=0 window (§29.2 rules 2 and 7).",
-   "new_text": "With no worker it is the task-less path: locked wm_destroy, `mem_free_rec`\n(the region with every claim), then I_STATE ← 0 frees the record. With a\n§20.6 worker it is the die-flag path, and the worker's next\n`OSAPI_TASK_ALIVE` runs `inst_task_die`: `mem_free_rec` on the worker, then\n`task_exit`'s release byte frees the record and the task slot inside one\nIF=0 window (§29.2 rules 2 and 7).",
-   "why": "app_close_win .noflush: inst_unwin, mem_free_rec, then I_STATE <- 0; inst_task_die: mem_free_rec then jmp task_exit."
-  },
-  {
-   "file": "SPEC.md",
-   "old_text": "two round-ups can exceed the one `ld_alloc` sizes the region with by up to\n511 bytes when the bss is short",
-   "new_text": "two round-ups can exceed the one `ld_alloc` sizes the region with by up to\n512 bytes when the bss is short",
-   "why": "The paragraph's own example overruns by exactly 512 (1,536 in 1,024): R + roundup512(file) and need are both multiples of 512 and the sum is under image + 1,022."
-  },
-  {
-   "file": "SPEC.md",
-   "old_text": "the decoder's output\nbound keeps every write inside the region, as it does for a plain compressed\nfile that short, and only the read above can pass it.",
-   "new_text": "the decoder's output\nbound keeps every write inside the region only while the IMAGE is longer than\nthat prefix. An image shorter than it (the header test asks only image ≥ 32,\nand a prefix may be 320) wraps the expected output too, to nearly 64KB, and\nthe decoder may then write that far into whatever lies above the region: the\nguard image > prefix belongs beside the one above, and is not taken either.",
-   "why": "Step 6a: `sub dx, bx` (image - prefix) with no carry test feeds BX:DX = the expected output to lz_decomp_x, whose only write bound is that count (lz_take)."
-  },
-  {
-   "file": "SPEC.md",
-   "old_text": "through it, and (from format v2 on, §21) the package-region allocator\nderives occupancy from it.",
-   "new_text": "through it. (A package region is a heap claim owned by its record's slot,\n§21 - nothing derives occupancy from the table any more.)",
-   "why": "ld_alloc claims the region with mem_claimp_hi_x under the slot owner (loader.inc step 5)."
-  },
-  {
-   "file": "SPEC.md",
-   "old_text": "Set by\n                  ;       app_launch for a built-in kind with KD_TASK, or\n                  ;       by inst_pkg_spawn for a package's one worker",
-   "new_text": "Set only\n                  ;       by inst_pkg_spawn (no built-in kind has a task\n                  ;       since §14.8), for a package's one worker",
-   "why": "KD_TASK is gone (instance.inc KD_SIZE note, §29.3 'There is no task word'); app_launch has 'NO TASK ARM'."
-  },
-  {
-   "file": "SPEC.md",
-   "old_text": "a 64KB region reads `0xFFFF` (§20.1.1)",
-   "new_text": "at most `0xFE00`, `APP_MAX_SIZE` (§20.1.1)",
-   "why": "I_SIZE = roundup512(image+bss) <= 0xFE00 with no saturation (ld_alloc)."
-  },
-  {
-   "file": "SPEC.md",
-   "old_text": "7. **Package region occupancy is derived** (format v2, §21): the byte\n   range [I_SPTR, I_SPTR + I_SIZE) is occupied iff I_STATE != 0. There is\n   no explicit region-free call — the store that frees the record frees\n   the region.",
-   "new_text": "7. **A package region is a heap claim owned by its record's slot**\n   (§20.1, §50.3), and it goes with the record: `mem_free_rec` frees it,\n   with every other claim, at both free points (§29.4), just before the\n   store that frees the record.",
-   "why": "app_close_win and inst_task_die both call mem_free_rec before the record store / task_exit (instance.inc); the region is a mem_claimp_hi_x claim."
-  },
-  {
-   "file": "SPEC.md",
-   "old_text": "**Files 4 (stride `FS_SIZE`, pool `fm_pool`)**,",
-   "new_text": "**Files `VIEW_SLOTS`+1 = 5 (four of the user's and the Standard File\nchooser's, §38.1; stride `FS_SIZE`, pool `fm_pool`)**,",
-   "why": "inst_kinds' Disk row: `db VIEW_SLOTS+1, WF_SIZABLE` - 'PLUS ONE, the Standard File chooser's'; VIEW_SLOTS equ 4."
-  },
-  {
-   "file": "SPEC.md",
-   "old_text": "`inst_kinds` rows are in KIND_* order, one 16-byte row per kind; the\nControl Panel's row is the last one and is task-less, pool-less and\ninit-less:\n\n```nasm\n    dw cp_tpl, 0, 0, 0, 0, cp_sname   ; tpl, task, pool, ssize, init, name\n    dw 0                              ; icon: generic fallback\n    db 1, 0                           ; cap 1, KD_WFLAG 0: stateless\n                                      ; task-less singleton, not resizable\n```",
-   "new_text": "`inst_kinds` rows are in KIND_* order, one `KD_SIZE` (14-byte) row per\nkind. The Control Panel's is pool-less, with an init proc and an icon of\nits own (Hibernate's follows it on kern_big):\n\n```nasm\n    dw cp_tpl, 0, 0, cp_kinit, cp_sname   ; tpl, pool, ssize, init, name\n    dw inst_ico_ctrl                      ; icon\n    db 1, 0                               ; cap 1, KD_WFLAG 0: stateless\n                                          ; task-less singleton, not resizable\n```",
-   "why": "instance.inc: KD_SIZE equ 14 (no task word) and the CP row is `dw cp_tpl, 0, 0, cp_kinit, cp_sname / dw inst_ico_ctrl / db 1, 0`, with the KIND_HIBER row after it under KERN_BIG."
-  },
-  {
-   "file": "SPEC.md",
-   "old_text": "out CF=1 failed (instance/window/task table full — silent no-op for the caller)",
-   "new_text": "out CF=1 failed (instance or window table full, or the kind at its cap — silent no-op for the caller)",
-   "why": "app_launch spawns no task; it refuses at the cap test, inst_alloc, the pool scan and wm_create."
-  },
-  {
-   "file": "SPEC.md",
-   "old_text": "template copied to scratch with x/y cascaded +16·s",
-   "new_text": "the template's x/y cascaded +16·s in place, put back after",
-   "why": "app_launch .tpl: `add [si], ax / add [si+2], ax / call wm_create / ... sub [si], ax / sub [si+2], ax` - inst_tplbuf went in kernel size pass 17."
-  },
-  {
-   "file": "SPEC.md",
-   "old_text": "out CF=0 if BX lies inside `wm_wins` and is record-aligned, CF=1 otherwise. Preserves everything but the flags.",
-   "new_text": "out CF=0 if BX lies inside `wm_wins`, is record-aligned and is owned by a live (I_STATE 1) instance, with DI = that record; CF=1 otherwise. Clobbers DI and the flags.",
-   "why": "inst_wchk calls inst_of_win and tests [di+I_STATE] = 1; its banner: 'clobbers: DI (an output), flags'."
-  },
-  {
-   "file": "SPEC.md",
-   "old_text": "and AX must satisfy I_SPTR ≤ AX < I_SPTR + I_SIZE,",
-   "new_text": "and the caller's segment (ES, the stub's stamp) must be I_SPTR with AX < I_SIZE,",
-   "why": "inst_pkg_fence: `mov dx, es / cmp dx, [di+I_SPTR] / jne .fail / cmp ax, [di+I_SIZE]` - I_SPTR is a segment and AX an offset."
-  },
-  {
-   "file": "SPEC.md",
-   "old_text": "entry point: `I_SPTR ≤ AX < I_SPTR + I_SIZE`.",
-   "new_text": "entry point: the calling segment (ES, stamped by the API stub) is\n`I_SPTR` and `AX < I_SIZE` - a segment and an offset, not one range.",
-   "why": "inst_pkg_fence compares ES against I_SPTR and AX against I_SIZE (instance.inc)."
-  },
-  {
-   "file": "SPEC.md",
-   "old_text": "Task-less (I_TASK = 0xFF) → I_STATE ← 2, wm_destroy (clears wm_owner, repaints), I_WIN ← 0, I_STATE ← 0 — for a package instance that final store frees the region (rule 29.2.7).",
-   "new_text": "Task-less (I_TASK = 0xFF) → I_STATE ← 2, wm_destroy (clears wm_owner, repaints), I_WIN ← 0, `mem_free_rec`, I_STATE ← 0 — for a package instance `mem_free_rec` is what frees the region (rule 29.2.7).",
-   "why": "app_close_win .noflush: inst_rel_rec, inst_unwin, mem_free_rec, then mov byte [di+I_STATE], 0."
-  },
-  {
-   "file": "SPEC.md",
-   "old_text": "and for a package instance that took a §20.6 worker, `task_exit`'s release-byte store is what frees the region.",
-   "new_text": "and for a package instance that took a §20.6 worker, `inst_task_die`'s `mem_free_rec` frees the region and `task_exit`'s release byte the record.",
-   "why": "inst_task_die: call mem_free_rec / mov bx, di / jmp task_exit."
-  },
-  {
-   "file": "SPEC.md",
-   "old_text": "`inst_tab` (INST_MAX × I_RECSZ = 384 bytes), `inst_launch` (word: 0 =\nnone, else kind + 1), plus module scratch (template copy buffer, pool-slot\ncursor — UI task only). All zeroed by `inst_init`.",
-   "new_text": "`inst_tab` (INST_MAX × I_RECSZ = 384 bytes, 192 on kern_small),\n`inst_launch` (byte: 0 = none, else kind + 1), `inst_knd` (app_launch's\nkind, UI task only - the pool slot is DX and the template is cascaded in\nplace), `inst_icobuf` (`inst_icon_ptr`'s 64-byte staging slot), the\nper-instance rows `inst_fdrv`/`inst_fcwd`/`inst_fpick`/`inst_fname`\n(§19.2.1, §38.10) and, where the compactor is built, `inst_parkreq`,\n`inst_parksafe`, `inst_restart` and `sch_parked` (§66.5). `inst_init`\nzeroes `inst_tab` and `inst_launch` only; `inst_alloc` clears a reused\nrecord's rows in the side tables.",
-   "why": "instance.inc .bss: inst_launch resb 1, inst_knd, inst_icobuf, the four inst_f* tables, and the OS88_COMPACT park tables; inst_init stores only inst_tab and [inst_launch]; inst_alloc.hit clears inst_fpick/inst_fname/inst_parksafe/inst_restart rows."
-  },
-  {
-   "file": "SPEC.md",
-   "old_text": "- **the clear prefix**, `ld_cpre`'s own ladder — 32 bytes, plus 64 with an",
-   "new_text": "- **the clear prefix**, the loader's own ladder (inline in `ld_run_body_x`\n  step 6a; `cmz_cpre` here) — 32 bytes, plus 64 with an",
-   "why": "There is no ld_cpre: the ladder is inline at ld_run_body_x .expand and repeated in compress.inc's cmz_cpre."
-  },
-  {
-   "file": "SPEC.md",
-   "old_text": "                kernel's own, never adopted, so you may free your claim the\n                moment this returns.",
-   "new_text": "                kernel's own, never adopted, so you may free your claim the\n                moment this returns. PIN it across the call if it is\n                movable (§66): the region claim may compact the heap\n                first, and the kernel holds your ES:DI banked, unrelocated",
-   "why": "ld_pkg_start_x banks ES:DI in [ld_msrc] and then calls ld_alloc, whose mem_claimp_hi_x may compact; nothing relocates [ld_msrc+2] (The Wire pins with wr_fpin for this reason)."
+   "old_text": "; All three take no lock, touch no VRAM and do no I/O: legal from a window\n; callback AND from a worker (SPEC.md 20.6 rule 7).",
+   "new_text": "; All three take no lock, touch no VRAM and do no I/O, but they are legal from\n; a window callback (or the UI task) only - NOT from a worker (SPEC.md 55.4:\n; clip_put claims, and the copies are bursts between movable segments).",
+   "why": "clip.inc:36-56 forbids workers; column-0 SDK prose, so tools/abilock.py's fingerprint does not include it."
   }
  ]
 }

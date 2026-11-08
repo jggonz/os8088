@@ -458,3 +458,39 @@ because I did not trace every site.)
    MartyPC) would size the rethink before anyone builds it.
 5. wm-18: how often does the 16-rect list overflow on a 12-window desktop?
    Same instrument, in `wm_clip_add`'s `.full`.
+
+## Verification
+
+Adversarial pass, 2026-11-08: every bug/hazard and every high/medium finding
+re-read against the code (both arms where they differ); low non-bug items
+spot-checked. Corrections are applied in `data/wm.json`.
+
+- **wm-1** corrected - real; the 8-bit quotient overflows for `BX - wm_wins >= 256*WIN_SIZE` (18,944 / 16,640), not 255x; OSAPI_WM_DESTROY reaches the div twice unvalidated (`wm_su_drop`, then its own call).
+- **wm-2** corrected - sizes check (19 -> 11 bytes); `.mbelow` calls `wm_idx2ptr` only per MARKED lower window, not per pair.
+- **wm-3** corrected - real for `wm_dmg_npro` and `wm_dmg_stwin`; `wm_dmg_dk` is cleared at entry with `wm_dmg_fs`, `wm_su_son` is armed inside the pass. A leaked stwin does not read `[1+W_X]`: desk's armed rect is empty, so every window is excused from marking in the next pass (a missed repaint).
+- **wm-4** confirmed - the clobber rule is SPEC.md:26382, not 98747.
+- **wm-5** confirmed - also hits `wm_zoom`'s standard rect via `wm_resize`'s snap; argued from code.
+- **wm-6** confirmed.
+- **wm-7** corrected - severity low, kind consistency: both cells REQUIRE the lock in the SDK; the defect is destroy's stale "as OSAPI_WM_HIDE wants it" (fixed in the doc fixes). Hidden-window fullscreen draw plausible by reading.
+- **wm-8** confirmed.
+- **wm-9** corrected - SPEC.md 66.3 author rule 3 already forbids a relocation proc to draw or free; robustness only.
+- **wm-10** confirmed - -7 bytes.
+- **wm-11** confirmed - already in LAST-DROP-PERF.md 7.1.
+- **wm-12** corrected - the mul and overlap test run per marked lower window only.
+- **wm-13** confirmed.
+- **wm-14** confirmed.
+- **wm-15** confirmed (spot-checked).
+- **wm-16** corrected - the package counts did not reproduce (~29 package directories name OWNBG).
+- **wm-17** confirmed (spot-checked).
+- **wm-18** unchecked.
+- **wm-19** confirmed.
+- **wm-20** REFUTED - SPEC.md 11.99 (line 25441) already says the lock is held across the wait and the wait yields.
+- **wm-R1** confirmed (the named holes exist; a proposal, unmeasured).
+- **wm-R2** unchecked.
+- **wm-R3** unchecked.
+
+Doc/code mismatches (numbering as above):
+
+- 1-9, 12-22 confirmed and written as 28 exact edits in `data/wm.json` (several items split into two edits; item 22's "145-150" is about §11.3 rule 3, not OWNBG, and is fixed to match the new rule 3; item 22's `OSAPI_WM_DAMAGE` cross-reference is §11.90.2, not §11.96.6). `.bss` really is zeroed: `COLD_START` follows `KTEXT_SIZE + KBSS_SIZE` so the gap is file padding (kernel.asm:8691), `boot/osrom.asm` zeroes it on the ROM build, and SPEC.md 10 and 30 rely on it.
+- 10 (wm.inc:930/1071, "the tree disagrees with itself about whether .bss arrives zeroed") REFUTED as a fix - the sentence is still true: dozens of "-f bin zeroes nothing" reasons remain in SPEC.md and other kernel files.
+- 11 (wm.inc:919/1060, the natural-bank "side table" banner) confirmed stale, but NOT emitted as an edit: the two copies are byte-identical for ~80 lines either side, so no unique anchor exists. Apply it with wm-14's merge of the two `wm_dmg_bands` copies.

@@ -486,3 +486,44 @@ the one place an index can still meet a different listing (a purged cache,
    crafted header once the fix is written, to see which.
 4. **Header byte 31 for loader-6**: confirm no shipped package has a
    16-character name (os88pkg would have written a non-zero byte 31).
+
+## Verification
+
+The adversarial verifier re-read the cited code in every build arm the
+findings touch: `KERN_BIG`/`KERN_SMALL`/`KERN_MEGA` in `ld_where`, step 6a and
+`ld_unreserve`; `lz.inc`'s bounds; `compress.inc`'s `cmz_uncomp`/`cmz_hdr`;
+`instance.inc`'s teardown sites; `wm_ptr2idx`; `desk_drop_x`; and
+`build/kernel.map` for `wm_wins`. Nothing here is already in
+`docs/plans/ABI-BREAK-LIST.md` or `docs/plans/KERNEL-BYTE-QUEUE.md`; the
+byte queue's `ld_unreserve` row is only about BP preservation. Machine-readable
+verdicts and the 55 confirmed doc fixes are in `../data/loader.json`.
+
+- **loader-1** - CONFIRMED (high). Step 6a's `sub dx, bx` wraps when image < prefix, and `lz_take` bounds writes only by that count. The image arm shares the hole. SPEC 20.13.8.1's "the output bound keeps every write inside the region" is wrong and is corrected.
+- **loader-2** - CONFIRMED (medium). On a plain image the re-check pins image to the file but not bss, so step 7 can zero past `need`. +6 holds if the new branch reuses the `mov al, LD_EBAD` above `.ret2j`.
+- **loader-3** - CONFIRMED (medium). Up to 512 bytes on the disk read and 511 on the image-arm copy. SPEC 20.13.8.1 says 511 against its own 512-byte example; corrected.
+- **loader-4** - CONFIRMED (medium). With `wm_wins` = 9FCAh, BX = 0 overflows the `div` and no INT 0 handler is installed. The W_SEG compare needs checking against kern_mega selectors and the re-home arm. Estimate is ~+8..+18.
+- **loader-5** - CONFIRMED (medium). Only the document arm tests `[ld_base]`. The `sch_cur` fence is defence in depth, since a worker already may not touch files. Estimate is ~+15..+21.
+- **loader-6** - CORRECTED. The gap is real, but `os88pkg.py` already refuses 16-character names, so byte 31 is always 0 and the tool change is only writing the level. Check the name field's other readers first.
+- **loader-7** - CONFIRMED (low). Neither `ldf_ld_pkg_start` nor assoc's hand-on arm consumes `[ld_said]`.
+- **loader-8** - CONFIRMED (low). `ld_unreserve` lacks `mem_free_rec_x`'s floor lift. The byte estimates were not verified.
+- **loader-9** - CONFIRMED (low). `jc .nomem` skips the drop, and DI is one past the table on that path.
+- **loader-10** - CONFIRMED (low). The sentence for SPEC 21.5 is among the doc fixes.
+- **loader-11** - CONFIRMED (spot-check).
+- **loader-12** - CONFIRMED. `ld_cpre` does not exist; the comment in `compress.inc` and SPEC 54854 are both fixed.
+- **loader-13** - CONFIRMED (spot-check).
+- **loader-14** - unchecked (record item).
+- **loader-15** - CONFIRMED (spot-check of the measured trade).
+
+Doc mismatches: every quoted text exists exactly and once (SPEC's
+`I_SPTR ≤ AX < I_SPTR + I_SIZE` occurs twice and both copies are fixed). All
+are confirmed. One fix was reshaped rather than taken as written. Renumbering
+SPEC §21's steps 7-9 to the code's numbering would break about twenty
+`§21 step N` citations, so the fix adds a note to the retired step 7 that
+states the code's numbering. Fixes added by the verifier:
+
+- SPEC 20.13.8.1's 511 becomes 512.
+- Both stale region-free clauses in §29.4's `app_close_win` row.
+- SPEC 54854's `ld_cpre`.
+- loader-10's pin sentence in §21.5.
+
+No fix was refuted.

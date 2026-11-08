@@ -782,3 +782,34 @@ text. **Code comments**:
   timer fire on its own tick rather than one late, so it looks load-bearing.
   It is worth a sentence in SPEC.md 13.9 saying so, since it reads as
   redundant against the tick sweep.
+
+## Verification
+
+The adversarial verifier re-read the cited code (both kernel arms where they differ), the ABI-break list and the byte queue (neither lists any of these findings), and checked every doc quote with `grep -F`. Verdicts:
+
+- **ui-1** confirmed. kern_big defines `VID_EXT` unless `NOVIDEXT`, so `[vid_kind]` = 4 reads `'VG'` = 4756h as the fourth line's pointer. The new row needs a geometry-free name, because a VESA mode's size varies (SPEC.md 120).
+- **ui-2** corrected. The race is confirmed on all three paths; `.mup_lk` and `ui_dispatch .app` already re-test under the lock. The `ui_bill` head test is 5 bytes (`F6 04 01` + `jz`), not 6: net 0 on kern_big and +5 on kern_small.
+- **ui-3** confirmed. Only `menu_loc_set` has `AM_ONCMD` = 0, and `fm_menus` has a real handler, so `[menu_win]` = 0 is a sound Locator test. The -19 estimate is consistent.
+- **ui-4** confirmed. The table rows match today; nothing asserts it.
+- **ui-5** confirmed.
+- **ui-6** corrected. `toast_now`'s painter `toast_ad` also arms before the guard, so the proposed `.up`-only fix leaves the callback path open. That makes it about +5 to +10 bytes.
+- **ui-7** corrected. Under `std` the copy wraps from `clip_seg:0000` to `:FFFF` and walks down, so the damage lands above the claim (past its end), not below it.
+- **ui-8** confirmed.
+- **ui-9** confirmed.
+- **ui-10** corrected. kern_small's strings and table are 79 bytes, not 81. The saving is unmeasured.
+- **ui-11** confirmed. The byte estimate was not measured.
+- **ui-12** unchecked.
+- **ui-13** unchecked.
+- **ui-14** unchecked.
+- **ui-15** corrected. ui.inc has about 1,150 lines of code or data and about 1,890 lines that are only comments or blank. It does not have "550 instructions". The drift itself is real.
+- **ui-16** corrected. The fix is about +6 to +10 bytes, not +4.
+- **ui-17** corrected. `ui_sys_open` is in `.text` and `toast_say` ends in `retf`, so the `toast_say` route costs about +6 bytes, not -3. An inline `cmp al, LD_NSTAT / jae` costs +4.
+- **ui-18** confirmed.
+- **ui-19** unchecked.
+- **ui-20** unchecked.
+- **ui-21** confirmed.
+
+Doc mismatches: the reviewer listed 53. **51 are confirmed**, and they are emitted in `data/ui.json` as 59 exact edits. Some were split. Some gained a sibling with the same evidence: SPEC.md 13.9.2's `.gone` label, SPEC.md 59.2's and 59.8's "7 cells", 59.4's "three compares", and the `ui_lit_set` banner. Every edit's `old_text` is unique at its turn when the edits are applied in order. The kernel-file edits change comment text only, which was checked by diffing the code with comments stripped. Two mismatches are **REFUTED**:
+
+- **REFUTED**: `kernel/ui.inc:1449`'s `%endif ; KERN_BIG - SPEC.md 13.8.1/13.8.2/13.9`. The block does hold `ui_timer_pass`'s 13.9 banner (ui.inc:1281-1302), even though the code itself is now inline in `ui_task`.
+- **REFUTED**: `apps/os88api.inc:5910`, "at the right end of the MENU BAR". It is approximately true, because both of the strip's homes are on the bar's right-hand side. The line is also an indented OSAPI contract comment that `tools/abilock.py` fingerprints, so editing it would force an ABI-lock update for no reader benefit.
