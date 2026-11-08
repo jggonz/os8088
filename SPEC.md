@@ -107315,12 +107315,14 @@ had a region in. Measured on 86Box's 286 at 640K + 384K: the Video Battle's
 hold 220 KB of the pool's 300 with its 48 KB region and a 12 KB picture kept
 above 1MB, against kern_big's 316. `OSAPI_SEG` `SEG_LOW` (50.6.11) moves the
 caller's own region into a conventional claim at the arena's top, its
-selectors kept, and frees the pool block: asked at the door BEFORE the
-package sizes its extended memory, the pool has the KB, and the bracket then
-finds the region conventional and copies nothing (step 1's `FSXR_ROOM` test
-of the copy does not arise). The region stays down while the package runs -
-kern_big's arrangement - and goes with the instance. The Video Battle
-(126.4.5) and the Video Player's arm (98.3.24.2) ask it.
+selectors kept, and frees the pool block: asked BEFORE the package sizes
+its extended memory - both callers ask in their entry proc, before a window
+exists, and again at the door when that was refused - the pool has the KB,
+and the bracket then finds the region conventional and copies nothing (step
+1's `FSXR_ROOM` test of the copy does not arise). The region stays down
+while the package runs - kern_big's arrangement, a window that is open costing
+its region's conventional KB as there - and goes with the instance. The
+Video Battle (126.4.5) and the Video Player's arm (98.3.24.2) ask it.
 
 **What the kernel does, on kern_mega**:
 1. at the door, after every other test: the reasons above, tested NOT in
@@ -208841,8 +208843,9 @@ ring is up to 80 KB smaller for it. +60 bytes of the arm's image (63,832;
 extended desktop, and `FSXR_ROOM` on both without it.
 
 **And the region comes down before the pool is sized** (KERN-MEGA-PLAN
-14.174): the arm's `vp_xopen` asks `OSAPI_SEG` `SEG_LOW` (50.6.11) before
-it sizes a hold or a bank, so the 64 KB pool block the region held - idle in
+14.174): the arm's entry proc asks `OSAPI_SEG` `SEG_LOW` (50.6.11, `vp_low`),
+and `vp_xopen` again before it sizes a hold or a bank when that was refused,
+so the 64 KB pool block the region held - idle in
 every real-mode play, whose copy of it was conventional - is the bank's,
 and `vp_rbhold`'s room is the service area's and the drivers' alone (16 KB,
 `VP_RBRKB` - 64) once `SEG_REAL` answers the region conventional. Measured
@@ -208851,7 +208854,7 @@ the 1.5 MB `08-WILLY.V88`): the bank 6 -> 8 slots at 640K + 384K (kern_big
 10) and 90 -> 92 at 4 MB (kern_big 94). What is left is the kernel's own -
 its fixed area above 1MB, 20 KB more than kern_big's HMA holds, and the
 drivers' images, 15 - and the pool's remainder under a 32 KB slot: 98.3.24.3.
-+38 bytes of the arm's image (61,879 -> 61,917); the shipped player byte-identical.
++48 bytes of the arm's image (61,879 -> 61,927); the shipped player byte-identical.
 
 ##### 98.3.24.3 What the player holds against kern_big (2026-11-08)
 
@@ -245163,9 +245166,10 @@ bracket** (SPEC.md 53.2.3).
   (conventional on every kernel) - the resident claim, the rings and their
   packing probe, the hold's bounce, the card's ring - so on kern_mega the
   only claim that goes above 1MB is the title picture, and the region
-  itself. **The region comes DOWN at the door** (`vb_door`, `OSAPI_SEG`
-  `SEG_LOW`, KERN-MEGA-PLAN 14.174) before anything is sized, so the hold's
-  pool has its 48 KB and the bracket copies nothing; refused, the door leaves
+  itself. **The region comes DOWN in the entry proc** (`vb_low`, `OSAPI_SEG`
+  `SEG_LOW`, KERN-MEGA-PLAN 14.174; asked again by `vb_door` when refused
+  there) before anything is sized, so the hold's pool has its 48 KB and the
+  bracket copies nothing; refused at the door too, it leaves
   the region's room as well (`VB_REGKB`) for the bracket's copy down, as
   before. A picture above 1MB is given back at the first play's door, before
   the hold is sized - kept there it was 12 KB of the hold - and kept through

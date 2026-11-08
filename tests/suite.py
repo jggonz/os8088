@@ -19678,7 +19678,7 @@ SOAK = [
         needs=("86box",),
         wants=("build/mega.img", "build/megak/apps/pixel.o88",
                "build/megak/apps/pixel.map")),
-    Row("megaparvb", "soak", py("tests/megapar.py", "--prog", "vb"), 600.0,
+    Row("megaparvb", "soak", py("tests/megapar.py", "--prog", "vb"), 30.0,
         "KERN-MEGA-PLAN 14.174, SPEC.md 53.2.3/126.4.7: the Video Battle's "
         "hold on kern_big AND kern_mega on the same 86Box machine "
         "(at286_vga_sb_hdd, 640K + 384K, the battle on C:): kern_mega's "
@@ -19689,17 +19689,17 @@ SOAK = [
         "excess + 8. $OS88_VBT_TARGET / $OS88_VBT_PKG name the owner's "
         "real battles (never in the tree); the demo bundle otherwise. RED "
         "on mega-release: the region 48 KB and the picture 12 KB in the "
-        "pool, the hold 220 of 284. 600s is 470 measured (two boots)",
+        "pool, the hold 232 of 285. 30s is 19-21 measured (two boots)",
         needs=("86box",),
         wants=("build/mega.img", "build/os8088.img", "build/vbattle.o88",
                "build/BATTLE.VBT")),
-    Row("megaparvp", "soak", py("tests/megapar.py", "--prog", "vp"), 600.0,
+    Row("megaparvp", "soak", py("tests/megapar.py", "--prog", "vp"), 30.0,
         "KERN-MEGA-PLAN 14.174, SPEC.md 98.3.24.3: the Video Player's bank "
         "on kern_big AND kern_mega's arm on the same 86Box machine "
         "(at286_vga_sb_hdd, 640K + 384K, 08-WILLY.V88 on C:, read in the "
         "play): legs 1-4 as megaparvb's at a 32 KB slot's granule. RED on "
         "mega-release: the arm's 64 KB region in the pool, the bank 6 slots "
-        "of the 284 KB the kernel leaves. 600s is 470 measured (two boots)",
+        "of the 285 KB the kernel leaves. 30s is 22 measured (two boots)",
         needs=("86box",),
         wants=("build/mega.img", "build/os8088.img", "build/video.o88",
                "build/megak/apps/video.o88", "build/megak/apps/video.map")),

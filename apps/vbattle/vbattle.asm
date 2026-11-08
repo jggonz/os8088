@@ -371,6 +371,7 @@ vb_entry:
     loop .sn
     mov byte [di], 0
 .snd:
+    call vb_low                     ; (kern_mega: our region conventional)
     call OSAPI_FILE_HERE
     mov [vb_selfdir], dx
     mov [vb_selfvol], bl
@@ -796,17 +797,32 @@ vb_door:
     mov [vb_rkeep], ax
     cmp byte [vb_pmd], 0
     je .lo
-    mov dx, ds                      ; OUR REGION ABOVE 1MB (OS88_HIGH) comes
-    mov ax, vb_reloc                ; DOWN for good before anything is sized
-    mov bl, SEG_LOW                 ; (KERN-MEGA-PLAN 14.174): the pool then
-    call OSAPI_SEG                  ; has its KB for the hold, and the bracket
-    jnc .lo                         ; copies nothing. Refused, the bracket
-    add word [vb_rkeep], VB_REGKB   ; copies it, and the rings leave its room
-.lo:
+    call vb_low                     ; OUR REGION ABOVE 1MB (OS88_HIGH) came
+    jnc .lo                         ; down at the entry (vb_low); refused
+    add word [vb_rkeep], VB_REGKB   ; there, again here, and refused here
+.lo:                                ; too the bracket copies it: its room
     mov bx, [vb_win]
     call OSAPI_FSX_CAPS             ; AX = modes, DL = VID_*
     mov [vb_capm], ax
     mov [vb_vid], dl
+    ret
+
+; vb_low - kern_mega in protected mode: OUR REGION, which OS88_HIGH put
+; above 1MB, brought DOWN to conventional memory for good (OSAPI_SEG
+; SEG_LOW, KERN-MEGA-PLAN 14.174) - at the entry, before anything is sized
+; or a window exists, and again at a play's door if the entry was refused.
+; Every real-mode bracket copies the region into conventional memory, so
+; above 1MB its pool block only sat idle beside the copy and the hold was
+; sized without its KB; down, the bracket runs it where it is (kern_big's
+; arrangement). CF = 0 conventional; CF = 1 still above 1MB, or a real-
+; mode kernel's refusal - every kernel but kern_mega in protected mode
+; refuses the verb as unknown, which costs one call and no CPU test
+; (tests/megapkg.txt). AX, BX, DX spent
+vb_low:
+    mov dx, ds
+    mov ax, vb_reloc
+    mov bl, SEG_LOW
+    call OSAPI_SEG
     ret
 
 ; vb_mklist - kern_mega's door to a REAL-MODE bracket (SPEC.md 53.2.3, the

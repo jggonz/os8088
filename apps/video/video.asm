@@ -412,7 +412,8 @@ vp_entry:
     test ah, CPU_F_PM               ; kern_mega: neither LOADALL nor a loaded
     jz .rmode                       ; base exists in protected mode - the
     mov byte [vp_pm], 1             ; hold and the bank are read in place
-.rmode:                             ; through SELECTORS (98.3.18.16)
+    call vp_low                     ; through SELECTORS (98.3.18.16); and our
+.rmode:                             ; region conventional (KERN-MEGA-PLAN 14.174)
 %else
 %endif
     call vp_layfit                  ; THE WINDOW'S SIZE is the layout's, for a
@@ -5269,14 +5270,8 @@ vp_xopen:
     cmp byte [vp_resid], 0          ; RESIDENT: read whole into its blocks
     jne .out
 %ifdef PKG_MEGA
-    cmp byte [vp_pm], 0             ; OUR REGION DOWN FOR GOOD before the pool
-    je .low                         ; is sized (SEG_LOW, KERN-MEGA-PLAN
-    mov dx, ds                      ; 14.174): a play copies it into the
-    mov ax, vp_reloc                ; heap anyway, so the pool block it
-    mov bl, SEG_LOW                 ; leaves is the bank's - 64 KB of it,
-    call OSAPI_SEG                  ; where kern_big's region was never there.
-.low:                               ; Refused, the bracket copies it
-%endif
+    call vp_low                     ; (the entry's, again before the pool is
+%endif                              ; sized when the entry's was refused)
     call vp_xcaps                   ; no pool (every 8088): nothing more is
     or ax, ax                       ; asked, not even the directory - unless
     jnz .sz                         ; EXPANDED MEMORY answers (98.3.18.6)
@@ -11979,6 +11974,31 @@ vp_sstart:
     nop                             ; (never run: what follows at the parity
                                     ; it had - tools/os88rdiff.py --hot)
 %else
+%endif
+
+%ifdef PKG_MEGA
+; vp_low - the arm under CPU_F_PM ([vp_pm]): OUR REGION, which OS88_HIGH put
+; above 1MB, brought DOWN to conventional memory for good (OSAPI_SEG
+; SEG_LOW, KERN-MEGA-PLAN 14.174) - at the entry, before a window exists,
+; and again before the pool is sized (vp_xopen) if the entry was refused.
+; A real-mode play copies the region into the heap anyway, so above 1MB its
+; pool block only sat idle beside the copy - 64 KB the bank never had,
+; where kern_big's region was never in its pool. Every register kept
+vp_low:
+    cmp byte [vp_pm], 0
+    je .o
+    push ax
+    push bx
+    push dx
+    mov dx, ds
+    mov ax, vp_reloc
+    mov bl, SEG_LOW
+    call OSAPI_SEG
+    pop dx
+    pop bx
+    pop ax
+.o:
+    ret
 %endif
 
 %ifdef PKG_MEGA

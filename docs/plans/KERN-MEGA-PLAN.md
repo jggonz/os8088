@@ -15773,11 +15773,13 @@ then finds the region conventional and copies nothing. Every real-mode
 kernel refuses it as any unknown verb (`osapi_segr`'s `ja`): an ABI
 ADDITION, `PKG_FMT` 10 kept (`tools/abilock.py --update`).
 
-**The programs**: the Video Battle's `vb_door` asks it under `[vb_pmd]`
-before `vb_load` sizes anything (refused, the old `VB_REGKB` room), and
+**The programs**: the Video Battle's entry proc asks it (`vb_low`, under
+`CPU_F_PM`), and `vb_door` again before `vb_load` sizes anything when that
+was refused (refused there too, the old `VB_REGKB` room), and
 `vb_cvplay` gives a picture above 1MB back until the hold is open (kept on
 every play after, W5's instant cover); the Video Player's arm asks it in
-`vp_xopen` before the pool is sized, and `vp_rbhold`'s room is 16 KB once
+its entry proc (`vp_low`) and `vp_xopen` again before the pool is sized,
+and `vp_rbhold`'s room is 16 KB once
 `SEG_REAL` answers the region conventional (SPEC.md 98.3.24.2).
 
 **After** (the same machine; SPEC.md 126.4.7 and 98.3.24.3 have the tables):
@@ -15815,9 +15817,19 @@ Bytes: kern_mega `.mega` 23,824 -> 24,160 (+336, `mega_seglow` and the
 verb's two compares), `.cold` +4 (`mmf_mem_claim_hi`), `.text` +0
 (`tests/megaseg.txt` unchanged), resident 62,976 unchanged; kern_big and
 kern_small `kernel.bin`/`kernel.sys` byte-identical (`cmp`, one commit).
-VBATTLE.O88 image 28,427 -> 28,437 (+10; the file 22,756 -> 22,737); the
-Video Player's arm image 61,879 -> 61,917 (+38), the shipped VIDEO.O88
-byte-identical.
+VBATTLE.O88 image 28,427 -> 28,443 (+16); the Video Player's arm image
+61,879 -> 61,927 (+48), the shipped VIDEO.O88 byte-identical.
+
+**Asked in the entry proc, not at the door, because the region MOVES**: the
+first build asked at the first Play's door and in `vp_xopen`, and fourteen
+kern_mega Video Player rows (`mega-vid*`, Bochs) failed - each read the
+player's state at the linear base its window had when it opened, and the
+region left it at the file's open. A region that is conventional before the
+window exists is where every row (and the Task Manager) first finds it. The
+picture's rule and `vbtmega`'s W5 legs moved with it: the region is
+conventional from the entry, the picture given back at the first play's door
+when a hold opens there and KEPT through the second play, whose return is
+the instant cover.
 
 Rows: `megaparvb`, `megaparvp` (`tests/megapar.py`, 86Box, both kernels on
 one machine at 640K + 384K): kern_mega's play real; no pool block of the
