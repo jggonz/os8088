@@ -16738,3 +16738,78 @@ look-ahead), `dirwshed`, `tmmaxrun`, `memp`, `heapmap`, `heapdrv`,
 `heapscrl`, `heaphi` - and the `mega-` ports that exist (`mega-trkcompact`,
 `mega-sndmove`, `mega-heapmap`, `mega-heapdrv`, `mega-heapscrl`,
 `mega-heaphi`). Fast tier green in `make`.
+
+### 14.186 The Audio Player's hold is FILLED BY THE STREAM: the first play starts at once, the next is copies (2026-11-08) - FIXED
+
+**The defect** (the owner's report): on kern_mega the Audio Player's arm
+(14.173, SPEC.md 86.5.4) read the WHOLE WAV into its `OSAPI_MEM_HUGE` hold
+before the track opened - `ap_onwake` passes of 32 KB `hw_fread`s, `Loading
+42%` on the status line - so a 30 s clip off a floppy waited about 27 s for
+its first sound, where kern_big's player, built to stream, starts at once.
+The owner's call: *"stream the first play seems fine? The player was made to
+stream after all."*
+
+**The fix** (`apps/audio/aphold.inc`, the arm only; SPEC.md 86.5.4 first):
+
+- **The open never waits.** `aph_begin` no longer returns a carry and
+  `ap_open_track` no longer turns back on it: the same key held whole keeps
+  its hold, the same key part-filled keeps the claim and fills again from
+  the start (`[aph_have]` = 0), any other file frees the hold and claims a
+  new one exactly as before (`hw_claimfit`, the margin, the look-ahead first
+  and pinned across the claim) - its KB now rounded to 1 KB, not 32, since
+  no 32 KB read lands in it. Then the track opens and streams.
+- **The fill is a side effect of the refill.** `aph_rseq`, the `AP_RSEQ`
+  hook, has three cases now: held whole - a `hw_get` copy, as before; the
+  key FILLING - the disk's `os88_rseq`, then `aph_fill` copies the gulp the
+  disk just put in the look-ahead into the hold at its file offset
+  (`hw_put`, split at window ends); anything else - the disk's alone. No
+  read is issued for the hold.
+- **Contiguous or nothing.** `[aph_lo]` is the first gulp's offset,
+  `[aph_have]` the high-water mark; a gulp that does not start at
+  `[aph_have]`, or a copy past `HW_LEN`, frees the hold (`aph_free`) and the
+  play streams on. The fill past `[ap_data_end]` sets `[aph_on]`; a copy out
+  delivers at most `[aph_have]` less the offset, which is every byte the
+  refill publishes since the fill passed the data's end, and an offset below
+  `[aph_lo]` goes to the disk. The player has no seek, so out of step is a
+  defensive case - `audholdgap` forces it.
+- **Stop frees a part fill too** (the simplest rule, and no partial hold
+  outlives the play that was filling it); Clear, another file and the list's
+  end as before. Repeat on a one-track list and Previous back to the track
+  play from memory.
+- **Gone**: `aph_tick`, `aph_read1`, `aph_text` and the `Loading` string,
+  `ap_onwake`'s load pass, `aph_load`/`aph_skip`/`aph_pct`/`aph_t0`/`aph_skb`/
+  `aph_size`/`aph_hcv`/`aph_cur`/`aph_msg`, `aph_pin` (a copy yields nowhere,
+  so the conventional piece is never pinned now; `aph_claim` declares it
+  movable inline), and the walker's `HW_RSEQ` for `HW_PUT`.
+
+14.156's concern - a floppy refill losing a revolution while the card plays
+alone - is the FIRST play's again, as it is on kern_big: accepted by the
+owner, and retired for every play after it.
+
+**Bytes**: the arm's image 14,495 -> **14,127 (-368)**, bss 5,717 -> 5,683
+(-34), `AUDIO.O88` on megaapps 10,458 -> 10,157 packed (-301). The shipped
+build is byte-identical (`build/audio.bin` 12,315 and `AUDIO.O88` 9,076
+`cmp`-equal to mega-release's).
+
+**Rows** (`tests/audhuge.py` rewritten, SPEC.md 86.5.4): `audhuge` - PLAYING
+1.25 s after the window (14.173's arm: not playing for ~25 s), streaming,
+the hold claimed and bridged at window 3; the first play's reads make it
+HELD WHOLE with every byte from `aph_lo` the file's; the Repeat play copies
+(ncopy 3 -> 9, ndisk 36 -> 36, 0 READ DATA in 4 s); Stop frees it, no
+exception. RED, measured: `--pkg` the 14.173 arm `--src mega-release` - 1
+fails (not PLAYING in 4 s); `AUDHUGE_RED=nofill` (aph_fill a `clc; ret`) -
+2 fails (the fill 0..0). New `audholdgap` (`audhuge.py --gap`): the
+high-water mark moved on 32 KB, the hold given up and the play streaming on;
+RED `AUDHUGE_RED=noseq` (the two `jne .drop` nopped) - the hold kept.
+`megasbhold` (`megasbgap.py --hold`) now sets `[ap_repeat]`, waits for the
+first play's fill and judges the capture's last 10 s: 0 READ DATA, aph_ndisk
++0, longest silence 30 ms, 50 ms in all (both at the tail); RED with an arm
+whose aph_fill is a `ret`: aph_on 0, 25 READ DATA, 90 ms / 330 ms. `audhuge
+--find`: 672 KB at 640K + 384K, unchanged.
+
+**Rows run, scoped** (`os88test.py soak`, one emulator lane, 165 s, 8 of 8
+green): `audhuge`, `audholdgap`, `megasbhold`, `megasbgap` (the streamed
+case, `[aph_off]`), `megajw` (a WAV opened and paused beside Sheet: the hold
+claimed at the open now), `mega-audhand`, `mega-ringmove-audio`,
+`mega-sndmove` - every row that loads AUDIO on kern_mega. Fast tier green in
+`make`; `make mega` builds.

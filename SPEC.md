@@ -99752,8 +99752,9 @@ The cost on a package is what it takes: `hw_aim` and `hw_span` 91 bytes,
 XTMP3's three arms (claim, get, fread) 343. XTMP3's kern_mega arm is the
 first user (§121.6.1);
 WaveRack's arm takes the hold and `hw_aim` alone, converting a window at a
-time into its play hold (§123.6), and the Audio Player's arm the same three
-as XTMP3 for its whole-file hold (§86.5.4) (KERN-MEGA-PLAN 14.173) - all
+time into its play hold (§123.6), and the Audio Player's arm claim, get
+and PUT - its hold filled by the first play's own reads, a copy of each
+gulp (§86.5.4) (KERN-MEGA-PLAN 14.173, 14.186) - all
 three holds `hw_claimfit` since 14.177, which put their three copies in
 one place and left each arm's image smaller (XTMP3 46,985 -> 46,983 with
 the ask it never had, WaveRack 44,157 -> 44,150, Audio 14,509 -> 14,495); the
@@ -158472,36 +158473,48 @@ differs in its idle immediate alone, `AP_SLP_IDLE` (§86.5.1). +66 bytes of `aud
 bss. `tests/ringmove.py --app audio` (a card) and `--app audiospk` (the
 speaker) are the gates.
 
-### 86.5.4 A WAV the machine can hold is played from memory — kern_mega's arm (`aphold.inc`)
+### 86.5.4 A WAV the machine can hold is played again from memory — kern_mega's arm (`aphold.inc`)
 
-**On kern_mega the Audio Player's arm reads a WAV whole before it plays it,
-when the machine can hold it, and the play reads no disk** (`PKG_MEGA`,
-§20.18; docs/plans/MEGA-HUGE-PLAN.md 3; KERN-MEGA-PLAN 14.173). The hold is
-ONE `OSAPI_MEM_HUGE` claim with a window every 64KB, a bridge of the pool
-and the heap allowed (§50.3.5), walked through `apps/os88huge.inc`
-(§50.3.8) - so it is all of the file the machine can hold, not the pool's
-best run. XTMP3's hold is the precedent (§121.6.1) and the shape is its:
+**On kern_mega the Audio Player's arm STREAMS a WAV's first play, as every
+build does, and keeps a copy of what the stream reads; the file held whole,
+its next play reads no disk** (`PKG_MEGA`, §20.18; docs/plans/MEGA-HUGE-PLAN.md
+3; KERN-MEGA-PLAN 14.173, 14.186). The hold is ONE `OSAPI_MEM_HUGE` claim
+with a window every 64KB, a bridge of the pool and the heap allowed
+(§50.3.5), walked through `apps/os88huge.inc` (§50.3.8) - so it is all of the
+file the machine can hold, not the pool's best run. XTMP3's hold is the
+precedent (§121.6.1) and the walker its.
 
-- **The load is the UI task's, a pass at a time.** `ap_open_track` asks
-  `aph_begin` first: the current entry's file - its folder, volume and name,
-  THE KEY - held whole already opens at once; one that is not is claimed
-  (its KB rounded up to 32, so each 32 KB `READ_SEQ` is a whole capacity)
-  and the open returns with `[ap_state]` STOP and the status line saying
-  `Loading 0%`. Each `ap_onwake` pass then reads 32 KB chunks into it
-  (`hw_fread`, one `os88_rseq` a window, so never across a window's end nor
-  a bridge's cut) until two ticks have gone, says the figure when it moved -
-  the status line alone, which only grows - and wakes itself for the next.
-  The file in, `ap_open_track` runs again and the track opens as ever.
-  Play during the load is the load; Stop, the list's end and Clear playlist
-  give the hold back (`aph_free`, in `ap_stop_msg`), and so does opening any
-  other file; the kernel frees it with the instance. A load that fails
-  gives it back and opens the track streaming, once (`[aph_skip]`).
-- **The play is copies.** The refill's read is the include's `AP_RSEQ`
-  hook (aplook.inc), here `aph_rseq`: a gulp of the held file is `hw_get`'s
-  copy out of the hold into the look-ahead (`[aph_ncopy]`), anything else
-  the disk's (`[aph_ndisk]`). The look-ahead, the worker, the feed and the
-  card are untouched: they cannot tell. The parser's header read at the
-  open still goes to the disk. A speaker play's gulps are the same copies.
+- **The open does not wait.** `ap_open_track` asks `aph_begin` first: the
+  current entry's file - its folder, volume and name, THE KEY - held whole
+  already keeps its hold and plays from it; the same file part-filled keeps
+  the claim and fills again from the start; any other file gives the hold
+  back and is claimed afresh (its KB rounded up, the claim's byte X the
+  file's byte X). Either way the track opens AT ONCE and plays through the
+  14.160 look-ahead exactly as the shipped build's does. (Until 14.186 the
+  arm read the whole file first, `Loading 42%` on the status line: a 30 s
+  clip off a floppy waited ~27 s for its first sound.)
+- **The fill is the stream's own reads.** The refill's read is the
+  include's `AP_RSEQ` hook (aplook.inc), here `aph_rseq`. A gulp the disk
+  delivers for the file being filled is ALSO copied into the hold at its
+  file offset (`hw_put`, split where a window ends, so never across a
+  bridge's cut) - no read is issued for the hold. The fill is CONTIGUOUS:
+  `[aph_have]` is its high-water mark, the first gulp starts it, and a gulp
+  that does not begin exactly there - or a copy that does not fit - gives
+  the hold back for this file (`aph_free`) and the play streams on, so a
+  gap is never read back as audio. The fill reaching the data's end (or
+  the file's) makes the file HELD WHOLE (`[aph_on]` = 1).
+- **A second play is copies.** Held whole, a gulp of the same key is
+  `hw_get`'s copy out of the hold into the look-ahead (`[aph_ncopy]`), at
+  most the fill's high-water mark less the offset - which, since the fill
+  passed the data's end, is every byte the refill publishes; any other read
+  is the disk's (`[aph_ndisk]`). Repeat on a one-track list and Previous
+  back to it play from memory; the look-ahead, the worker, the feed and the
+  card cannot tell. The parser's header read at each open still goes to
+  the disk. A speaker play's gulps are the same reads and copies.
+- **What frees it.** Stop, the list's end and Clear playlist give the hold
+  back (`aph_free`, in `ap_stop_msg`), whole or part-filled - a part fill
+  is not kept past Stop - and so does opening any other file; the kernel
+  frees it with the instance.
 - **The heap keeps `APH_MARGKB` (96 KB) beside it**, in its largest run -
   the card's grant, the speaker ring, a program launched while it plays. The
   kernel takes the pool alone, else the heap alone, else the bridge; where
@@ -158517,22 +158530,31 @@ best run. XTMP3's hold is the precedent (§121.6.1) and the shape is its:
   over, XT-MP3's hold refused - 14.166's rule). The AX = 0 ask comes first
   (`hw_claimfit`), so a file too big to hold costs no claim and no pack.
   Conventional memory in the hold is declared MOVABLE, a `ret` its proc
-  (§50.3.5: its windows follow a move), and pinned for each read.
-- **What streams still streams.** A file the machine cannot hold, a load
-  that failed, and every file on a real-mode kernel go through the 14.160
-  look-ahead exactly as before; `[aph_off]` = 1 makes the arm do so for
-  every file (megasbgap's streamed case).
+  (§50.3.5: its windows follow a move); a copy in or out yields nowhere,
+  so nothing pins it.
+- **What streams still streams.** A file the machine cannot hold, a fill
+  abandoned, and every file on a real-mode kernel go through the 14.160
+  look-ahead and nothing more; `[aph_off]` = 1 makes the arm do so for
+  every file (megasbgap's streamed case). KERN-MEGA-PLAN 14.156's concern -
+  a floppy refill losing a revolution a call while the card plays alone -
+  is therefore the first play's on kern_mega as it is kern_big's (the
+  owner's call, 14.186), and retired for every play after it.
 
 **Measured** on 86Box's at286_vga_sb by `tests/audhuge.py --find`: the
-largest WAV held whole is **672 KB at 640K + 384K above 1MB** (a bridge cut
-at window 3: 31 s at 22,050 Hz, 62 s at 11,025 Hz 8-bit mono) and **3,360 KB
-at 4MB** (156 s and 312 s) - where the arm before held nothing and streamed
-every file. `megasbhold` plays megasbgap's 10 s 22,050 Hz clip held: no
-floppy read during it and no silence inside it (streamed: 90-150 ms, 290-530
-ms in all). The cost is the arm's alone: its image 13,247 -> 14,509 bytes
-(+1,262: the walker's claim, aim, copy and file read 343 of it), packed
-9,469 -> 10,455, bss 5,633 -> 5,719 (+86); `AUDIO.O88` as shipped is
-byte-identical. Rows: `audhuge`, `megasbhold`, and `megasbgap` (streamed).
+largest WAV a hold is claimed for is **672 KB at 640K + 384K above 1MB** (a
+bridge cut at window 3: 31 s at 22,050 Hz, 62 s at 11,025 Hz 8-bit mono;
+re-measured at 14.186, unchanged) and **3,360 KB at 4MB** (156 s and 312 s;
+14.173's figure) - where the arm before held nothing and streamed every
+file. The 576 KB file plays 1.25 s after its window opens (14.173's arm:
+~25 s of `Loading`), and its second play copies every gulp. `megasbhold`
+plays megasbgap's 10 s 22,050 Hz clip twice: the second reads no floppy and
+has no silence inside it over 30 ms, 50 ms in all, both at its tail
+(streamed: 90-150 ms, 290-530 ms in all). The cost is the arm's alone: its
+image 13,247 -> 14,509 bytes at 14.173 (+1,262), 14,127 since 14.186 (-368:
+the load passes, the status text and the read cursor gone, `hw_put` in for
+`hw_fread`), packed 10,157, bss 5,683; `AUDIO.O88` as shipped is
+byte-identical. Rows: `audhuge`, `audholdgap` (the fill out of step),
+`megasbhold`, and `megasbgap` (streamed).
 
 ### 86.6 The WAV parser (`apw_parse`)
 
@@ -158747,7 +158769,7 @@ number of clusters — a 16-byte-record queue is neither.
 | decoder scratch | 2,368 B | `apd_out` in bss: a card's 2 KB half, and on the speaker a step's span of inputs — the PCM source copy (`aps_src`) too, one format a track (§86.21) |
 | speaker buffers | 1,280 B | `aps_stage` 512, `aps_dbuf` 768 (the box's table, k ≤ 3 — and `ap_cinv`'s 256, a counts file never being boxed). The shaper's 2,816-byte family was here as `aps_fam` and lives in the speaker ring's claim now (§34.11.9), so a card machine never holds it |
 | speaker ring | 17 KB | `aps_rseg`, claimed at the first speaker play and kept (§86.21) |
-| the hold (kern_mega's arm) | the file, rounded up to 32 KB | one `OSAPI_MEM_HUGE` claim, the pool's, the heap's or a bridge of both, the heap left 96 KB beside it; from a track's open to Stop, the list's end or another file (§86.5.4) |
+| the hold (kern_mega's arm) | the file, rounded up to 1 KB | one `OSAPI_MEM_HUGE` claim, the pool's, the heap's or a bridge of both, the heap left 96 KB beside it; from a track's open to Stop, the list's end or another file - filled by the first play's own reads, played from by the next (§86.5.4) |
 | playlist | `AP_MAXTRK` × 16 B | bss |
 | SND ring grant + driver pool | ~28 KB | `SOUND.DRV`'s claims, released when the player stops |
 

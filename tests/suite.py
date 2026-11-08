@@ -19879,30 +19879,46 @@ SOAK = [
         needs=("86box", "nasm"),
         wants=("build/mega.img", "build/megak/apps/waverack.o88",
                "build/megak/apps/waverack.bin")),
-    Row("audhuge", "soak", py("tests/audhuge.py"), 40.0,
-        "SPEC.md 86.5.4 (MEGA-HUGE-PLAN 3): the Audio Player's kern_mega arm "
-        "HOLDS a WAV whole in ONE OSAPI_MEM_HUGE claim, a bridge allowed, and "
-        "plays it from memory. 86Box's at286_vga_sb, 640K + 384K above 1MB, "
-        "the arm and a 576 KB 8-bit WAV of an index pattern on B:, "
-        "double-clicked: aph_on, a step of 8 and its KB, a bridge cut at "
-        "window 3; every byte of the hold, window by window, the file's; "
-        "playing with its gulps COPIED (aph_ncopy, aph_ndisk 0, at most 2 "
-        "READ DATA in 4 s of play - the desktop's); Stop gives it back, no "
-        "exception. RED: the arm of "
-        "mega-release (--pkg/--src) - no hold, every gulp a floppy read. "
-        "--find: 0 -> 672 KB here, 0 -> 3,360 KB at --megs 4 (156 s at "
-        "22,050 Hz). 40s is 27 measured",
+    Row("audhuge", "soak", py("tests/audhuge.py"), 60.0,
+        "SPEC.md 86.5.4 (MEGA-HUGE-PLAN 3, KERN-MEGA-PLAN 14.186): the Audio "
+        "Player's kern_mega arm STREAMS a WAV's first play at once and fills "
+        "ONE OSAPI_MEM_HUGE claim, a bridge allowed, with the stream's own "
+        "reads; the file held whole, its next play is copies. 86Box's "
+        "at286_vga_sb, 640K + 384K above 1MB, the arm and a 576 KB 8-bit WAV "
+        "of an index pattern on B:, double-clicked, [ap_repeat] set: PLAYING "
+        "within 4 s, streaming (aph_ndisk counting), the hold claimed (a "
+        "step of 8, its KB, a bridge cut at window 3); the first play's reads "
+        "make it HELD WHOLE (aph_on) and every byte from aph_lo the file's; "
+        "the second play's gulps COPIED (aph_ncopy, aph_ndisk unchanged, at "
+        "most 2 READ DATA in 4 s - the desktop's); Stop gives it back, no "
+        "exception. RED, measured: --pkg the 14.173 arm (--src mega-release) "
+        "- not playing for the load, 1 fails; AUDHUGE_RED=nofill (aph_fill a "
+        "`ret`) - the fill never moves, 2 fails. --find: the largest file a "
+        "hold is claimed for. 60s is 25-29 measured",
+        needs=("86box", "nasm"),
+        wants=("build/mega.img", "build/megak/apps/audio.o88",
+               "build/megak/apps/audio.bin", "build/mbr.bin")),
+    Row("audholdgap", "soak", py("tests/audhuge.py", "--gap"), 40.0,
+        "SPEC.md 86.5.4 (KERN-MEGA-PLAN 14.186): the hold's fill is "
+        "CONTIGUOUS - audhuge's machine and file, the fill's high-water mark "
+        "(aph_hw's aph_have) moved on 32 KB once the play streams, so the "
+        "next gulp is out of step: the hold is given up (aph_base 0, aph_on "
+        "0) and the play streams on off the disk, no exception - a gap is "
+        "never played back. RED, measured: AUDHUGE_RED=noseq (aph_fill's two "
+        "`jne .drop` nopped) - the hold kept. 40s is 17 measured",
         needs=("86box", "nasm"),
         wants=("build/mega.img", "build/megak/apps/audio.o88",
                "build/megak/apps/audio.bin", "build/mbr.bin")),
     Row("megasbhold", "soak", py("tests/megasbgap.py", "--hold"), 45.0,
         "megasbgap's clip HELD (SPEC.md 86.5.4, KERN-MEGA-PLAN 14.156's "
-        "concern retired for a file that fits): the 10 s 22,050 Hz WAV opened "
-        "through File > Open is read whole into the arm's hold first "
-        "(aph_on), and the play reads NO floppy and has no silence inside it "
-        "over 60 ms nor 120 ms in all (measured: none, 0 ms; streamed it is "
-        "90-150 ms and 290-530 ms). RED: --pkg the arm of mega-release - no "
-        "hold, 90-100 ms and 290-340 ms of silence. 45s is 28 measured",
+        "concern retired after a file's first play, 14.186): the 10 s 22,050 "
+        "Hz WAV opened through File > Open with [ap_repeat] set streams once, "
+        "its own reads filling the arm's hold (aph_on), and the SECOND play - "
+        "the capture's last 10 s - reads NO floppy and has no silence inside "
+        "it over 60 ms nor 120 ms in all (measured: 30 ms, 50 ms, both at the "
+        "tail; streamed it is 90-150 ms and 290-530 ms). RED, measured: an "
+        "arm with aph_fill a `ret` (--pkg, --src) - aph_on 0, 25 READ DATA, "
+        "90 ms and 330 ms of silence. 45s is 21-26 measured",
         needs=("86box", "numpy", "nasm"),
         wants=("build/mega.img", "build/megak/apps/audio.o88",
                "build/megak/apps/audio.bin", "build/megak/kernel.map")),

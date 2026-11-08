@@ -2,83 +2,79 @@
 ; os8088 - apps/audio/aphold.inc - THE HOLD, kern_mega's arm (SPEC.md 86.5.4)
 ;
 ; %included by audio.asm under PKG_MEGA (apps/os88mega.inc): the shipped
-; build carries none of it. A WAV the machine can hold is played FROM MEMORY:
-; before the track opens, the WHOLE FILE is read into ONE OSAPI_MEM_HUGE
-; claim - a window every 64KB, a bridge of the pool and the heap allowed
-; (SPEC.md 50.3.5) - a time-boxed run of 32 KB reads each ap_onwake pass,
-; the status line saying 'Loading 42%'; from then on every gulp of the
-; look-ahead (ap_refill_chunk's AP_RSEQ, aph_rseq) is a COPY out of the hold,
-; and the play reads no disk. That retires KERN-MEGA-PLAN 14.156's concern
-; (a floppy refill losing a revolution a call while the card plays alone) for
-; every file that fits; a file that does not - or a load that fails, or
-; [aph_off] set - streams through the 14.160 look-ahead exactly as before.
-; XTMP3's hold (apps/xtmp3/x3hold.inc, SPEC.md 121.6.1) is the precedent, its
-; walker apps/os88huge.inc (SPEC.md 50.3.8) the way in and out: every read
-; and every copy is split where a window ends, so never across a bridge's cut.
+; build carries none of it. A track opens and STREAMS at once, as every build
+; does (KERN-MEGA-PLAN 14.186: it used to read the whole file first,
+; 'Loading 42%'); the hold - ONE OSAPI_MEM_HUGE claim, a window every 64KB,
+; a bridge of the pool and the heap allowed (SPEC.md 50.3.5) - is claimed at
+; the open when it fits and FILLED BY THE STREAM: every gulp the look-ahead
+; reads off the disk for that file (ap_refill_chunk's AP_RSEQ, aph_rseq) is
+; also copied into it at its file offset, and no read is issued for it. The
+; fill is contiguous from the first gulp; one out of step gives the hold up
+; for this file, so a gap is never played. The fill past the data's end, the
+; file is HELD WHOLE (aph_on), and its next play - Repeat on a one-track
+; list, Previous back to it - copies every gulp out of the hold and reads no
+; disk: KERN-MEGA-PLAN 14.156's concern (a floppy refill losing a revolution
+; while the card plays alone) is the first play's, as on kern_big, and
+; retired after it. XTMP3's hold is the precedent (apps/xtmp3/x3hold.inc,
+; SPEC.md 121.6.1), its walker apps/os88huge.inc (SPEC.md 50.3.8) the way in
+; and out: every copy is split where a window ends, so never across a cut.
 ;
 ; THE KEY is the file: its folder, volume and name. A track that opens with
-; the same key keeps the hold (Repeat on a one-track list, Previous back to
-; it); any other frees it first, and so do Stop, Clear playlist and a load
-; that fails. The kernel frees the claim with the instance.
+; the same key keeps the hold (held whole: played from; part-filled: filled
+; again from the start); any other frees it first, and so do Stop, Clear
+; playlist and the list's end, whole or not. The kernel frees the claim with
+; the instance.
 ; =============================================================================
 
-APH_CHUNK   equ 32768               ; one read: a cluster multiple on any disk
 APH_MARGKB  equ 96                  ; the heap left free beside the hold (XTMP3's
                                     ; X3H_MARGKB): the card's grant, the speaker
                                     ; ring and a program launched while it plays
-APH_PASS    equ 2                   ; a pass's load: reads until two ticks
-                                    ; (~110 ms) have gone
 
 %define HW_CLAIMFIT                 ; apps/os88huge.inc: the walker, the hold
 %define HW_GET
-%define HW_RSEQ
+%define HW_PUT
 %include "os88huge.inc"
 
     APBUF aph_hw, HW_SIZE           ; the hold's walker record (HW_LEN: KB x 1K)
     APW   aph_base                  ; the claim, 0 = none
     APB   aph_on                    ; 1 = the file is in, whole
-    APB   aph_load                  ; 1 = it is loading (ap_onwake's passes)
-    APB   aph_hcv                   ; nonzero: conventional memory holds part of it
-    APB   aph_skip                  ; 1 = the next open streams (a load failed)
     APB   aph_off                   ; 1 = never hold (a row's streamed case)
-    APB   aph_pct                   ; the percentage the status line says
-    APW   aph_t0                    ; a pass's first tick
-    APW   aph_skb                   ; ...and the file's, rounded up
-    APD   aph_size                  ; the file's bytes
-    APD   aph_have                  ; ...and how many are in
+    APD   aph_lo                    ; the fill's first byte (the first gulp's)
+    APD   aph_have                  ; ...and its high-water mark (0: no gulp yet)
+    APD   aph_at                    ; a filling gulp's offset
     APW   aph_dir                   ; THE KEY: the folder, the volume, the name
     APB   aph_vol
     APBUF aph_name, 13
-    APBUF aph_cur, FSEQ_SIZE        ; the load's READ_SEQ cursor
     APW   aph_ncopy                 ; gulps copied out of the hold...
     APW   aph_ndisk                 ; ...and read off the disk (rows read both)
-    APBUF aph_msg, 14               ; 'Loading 100%', NUL
 
 ; -----------------------------------------------------------------------------
-; aph_begin - ap_open_track's first question (UI task): is the current entry's
-; file held, or can it be? out: CF = 0 open the track now (held whole already,
-; or it streams); CF = 1 a load is running (begun now, or this file's still
-; going) - ap_onwake opens the track when it is in. ap_msg says 'Loading'.
+; aph_begin - ap_open_track's first question (UI task): the current entry's
+; file held whole keeps the hold (its play copies); the same file part-filled
+; fills again from the start; any other gives the hold back and is claimed
+; afresh when it fits (or nothing: it streams). The open never waits.
 ; clobbers AX, BX, CX, DX, SI, DI
 ; -----------------------------------------------------------------------------
 aph_begin:
     cmp byte [aph_off], 0
-    jne .now
+    jne .o
     call apl_goto_cur               ; the entry's folder, its name, its size
-    jc .now                         ; (ap_prep_track says what is wrong)
+    jc .o                           ; (ap_prep_track says what is wrong)
     call OSAPI_FILE_HERE            ; DX = the folder, BL = the volume
     push dx
     push bx
     call apl_cur_name               ; SI = the name
     pop bx
     pop dx
-    jc .now
-    call aph_same                   ; THIS file: held, or loading
-    jnc .same
+    jc .o
+    call aph_same                   ; THIS file's hold
+    jc .new
+    cmp byte [aph_on], 0
+    je .arm                         ; part-filled: again from the start
+.o:
+    ret
+.new:
     call aph_free
-    cmp byte [aph_skip], 0          ; its load failed a moment ago: stream it
-    mov byte [aph_skip], 0
-    jne .now
     mov [aph_dir], dx               ; the key
     mov [aph_vol], bl
     mov di, aph_name
@@ -92,56 +88,35 @@ aph_begin:
     mov byte [di], 0
     mov si, aph_name
     call ap_filesize                ; DX:AX = its bytes
-    jc .now
-    mov [aph_size], ax
-    mov [aph_size+2], dx
-    add ax, 1023                    ; its KB, rounded up to 32 KB: each read
-    adc dx, 0                       ; a whole APH_CHUNK capacity however the
-    mov cx, 10                      ; file ends
+    jc .o
+    add ax, 1023                    ; its KB, rounded up: claim byte X is
+    adc dx, 0                       ; the file's byte X, and no gulp is
+    mov cx, 10                      ; delivered past its end
 .kb:
     shr dx, 1
     rcr ax, 1
     loop .kb
     or dx, dx
-    jnz .now
-    mov [aph_skb], ax               ; (the percentage's whole)
-    add ax, 31
-    jc .now
-    and al, 0xE0
+    jnz .o
     or ax, ax
-    jz .now
+    jz .o
     push ax
     call ap_ensure_bufs             ; the look-ahead FIRST, so it keeps its
     pop ax                          ; page-safe pool block (KERN-MEGA-PLAN
-    jc .now                         ; 14.160) and the hold takes what is left
+    jc .o                           ; 14.160) and the hold takes what is left
     call aph_claim                  ; the hold, or nothing - the look-ahead
     pushf                           ; PINNED meanwhile, so the claim's pack
     call ap_rdecl                   ; leaves it on the pool's floor (14.166);
     popf                            ; no play is open: movable again
-    jc .now
-    xor ax, ax                      ; the load begins
+    jc .o
+.arm:
+    xor ax, ax                      ; no gulp in yet: the first starts it
     mov [aph_have], ax
     mov [aph_have+2], ax
-    mov byte [aph_load], 1
-    mov byte [aph_pct], 0xFF
-    mov di, aph_cur
-    call os88_rseq_new
-    mov byte [ap_state], AP_ST_STOP ; nothing plays until it is in
-    call aph_text                   ; 'Loading 0%' (the caller repaints: the
-    mov bx, [ap_win]                ; gfx lock is not reentrant)
-    call OSAPI_WM_WAKE              ; ap_onwake's first pass
-.same:
-    cmp byte [aph_load], 0          ; held whole: CF = 0, open it
-    je .now
-    mov word [ap_msg], aph_msg
-    stc
-    ret
-.now:
-    clc
     ret
 
 ; aph_same - DX = a folder, BL = its volume, SI -> a name: CF = 0 the hold
-; (whole or loading) is that file's. keeps everything but flags
+; (whole or filling) is that file's. keeps everything but flags
 aph_same:
     cmp word [aph_base], 0
     je .no
@@ -182,10 +157,10 @@ aph_same:
 ; heap ALONE took it and the margin is short, claimed once more past the
 ; heap's largest run - a bridge, its conventional piece the smaller by the
 ; pool's. The conventional part MOVABLE, a `ret` its proc (its windows
-; follow a move), pinned for each read. A paragraph step - kern_mega in real
-; mode - is held too: the walker is the same.
-; out: CF = 0 [aph_base], aph_hw, [aph_hcv]; CF = 1 none. clobbers AX, BX,
-; CX, DX (aph_begin's: it keeps none of them)
+; follow a move; a copy in or out yields nowhere, so nothing pins it). A
+; paragraph step - kern_mega in real mode - is held too: the walker is the
+; same. out: CF = 0 [aph_base], aph_hw; CF = 1 none. clobbers AX, BX, CX,
+; DX (aph_begin's: it keeps none of them)
 ; -----------------------------------------------------------------------------
 aph_claim:
     xor cx, cx                      ; a 64KB step, a bridge allowed
@@ -194,38 +169,18 @@ aph_claim:
     call hw_claimfit                ; DX = the claim, CX = FFFFh conventional
     jc .o                           ; memory in it
     mov [aph_base], dx
-    mov [aph_hcv], cl               ; (aph_decl declares that piece)
-    call aph_decl                   ; (CF = 0)
-.o:
-    ret
-
-; aph_pin / aph_decl - the hold's conventional piece pinned (a read is about
-; to land in it) / movable again. Nothing when the pool holds it all. keep all
-aph_pin:
-    push ax
-    xor ax, ax
-    jmp short aph_mset
-aph_decl:
-    push ax
+    jcxz .o                         ; the pool holds it all (CF = 0)
     mov ax, ap_reap.out             ; (a bare `ret`)
-aph_mset:
-    cmp byte [aph_hcv], 0
-    je .o
-    push dx
-    mov dx, [aph_base]
     call OSAPI_MEM_MOVABLE
-    pop dx
-.o:
-    pop ax
     clc
+.o:
     ret
 
-; aph_free - the hold given back, loaded or loading. keeps everything
+; aph_free - the hold given back, whole or filling. keeps everything
 aph_free:
     push dx
     xor dx, dx
     mov byte [aph_on], dl
-    mov byte [aph_load], dl
     xchg dx, [aph_base]
     or dx, dx
     jz .o
@@ -235,198 +190,46 @@ aph_free:
     ret
 
 ; -----------------------------------------------------------------------------
-; aph_tick - ap_onwake's pass while [aph_load]: reads until APH_PASS ticks
-; have gone or the file is in. In: the track opened (from memory now). A read
-; that fails: the hold given up, and the track opened streaming. UI task, no
-; gfx lock. clobbers AX, BX, CX, DX, SI, DI
-; -----------------------------------------------------------------------------
-aph_tick:
-    call OSAPI_GET_TICKS
-    mov [aph_t0], ax
-.rd:
-    call aph_read1                  ; CF = 1 failed; ZF = 1 all in
-    jc .fail
-    jz .in
-    call OSAPI_GET_TICKS
-    sub ax, [aph_t0]
-    cmp ax, APH_PASS
-    jb .rd
-    call aph_text                   ; 'Loading 42%', drawn when it moved:
-    jnc .wake                       ; the status line alone (the figure only
-    mov bx, [ap_win]                ; grows, and the open drew the window)
-    call OSAPI_WM_OBSCURED
-    jc .wake
-    call OSAPI_GFX_LOCK
-    call OSAPI_WM_CLIP_SET
-    jc .un
-    call apu_origin
-    mov si, aph_msg
-    mov dx, 16
-    call apu_run6                   ; where apu_draw puts the status line
-.un:
-    call OSAPI_GFX_UNLOCK
-.wake:
-    mov bx, [ap_win]
-    call OSAPI_WM_WAKE              ; ...and the next pass
-    ret
-.fail:
-    call aph_free
-    mov byte [aph_skip], 1          ; the open below streams it
-    jmp short .open
-.in:
-    mov byte [aph_load], 0
-    mov byte [aph_on], 1
-.open:
-    call OSAPI_GFX_LOCK
-    call ap_open_track              ; (sets ap_msg itself)
-    jmp ap_repunlock
-
-; aph_read1 - one APH_CHUNK of the file into the hold, standing in its folder
-; first (File > Open elsewhere moves us, SPEC.md 38.10). out: CF = 1 a read
-; failed; CF = 0 and ZF = 1 the whole file is in, ZF = 0 more to come.
-; clobbers AX, BX, CX, DX, SI, DI
-aph_read1:
-    mov ax, [aph_have]
-    mov dx, [aph_have+2]
-    cmp dx, [aph_size+2]
-    jne .more
-    cmp ax, [aph_size]
-.more:
-    jae .in
-    push ax
-    push dx
-    call OSAPI_FILE_HERE
-    cmp dx, [aph_dir]
-    jne .go
-    cmp bl, [aph_vol]
-    je .here
-.go:
-    mov dx, [aph_dir]
-    mov bl, [aph_vol]
-    call OSAPI_FILE_GOTO_QM
-.here:
-    pop dx
-    pop ax
-    jc .bad
-    mov cx, APH_CHUNK
-    mov si, aph_name
-    mov di, aph_cur
-    mov bx, aph_hw
-    call aph_pin
-    call hw_fread                   ; DX:AX = delivered (no more than CX)
-    call aph_decl                   ; (keeps the flags)
-    jc .bad
-    or ax, ax
-    jz .bad                         ; nothing where the size says there is
-    add [aph_have], ax
-    adc word [aph_have+2], 0
-    or ax, ax                       ; ZF = 0: more (the next call sees all)
-    clc
-    ret
-.in:
-    xor ax, ax                      ; ZF = 1, CF = 0
-    ret
-.bad:
-    stc
-    ret
-
-; aph_text - ap_msg = 'Loading N%', N = have x 100 / size (in KB, a word).
-; out: CF = 1 the figure moved (aph_msg made again), CF = 0 it did not.
-; keeps everything but flags
-aph_text:
-    push es
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    mov word [ap_msg], aph_msg
-    mov ax, [aph_have]
-    mov dx, [aph_have+2]
-    mov cx, 10
-.s:
-    shr dx, 1
-    rcr ax, 1
-    loop .s
-    mov cx, 100
-    mul cx
-    mov bx, [aph_skb]
-    cmp dx, bx
-    jae .c
-    div bx
-    cmp ax, 100
-    jbe .p
-.c:
-    mov ax, 100
-.p:
-    cmp al, [aph_pct]
-    je .out                         ; (CF = 0)
-    mov [aph_pct], al
-    mov di, aph_msg
-    mov si, aph_s_load
-    push ds
-    pop es
-    cld
-.cs:
-    movsb
-    cmp byte [si], 0
-    jne .cs
-    cmp al, 100
-    jb .two
-    mov ax, '10'                    ; (low byte first: '1', '0')
-    stosw
-    xor al, al                      ; ...and a '0'
-    jmp short .u
-.two:
-    aam                             ; AH = tens, AL = units
-    or ah, ah
-    jz .u
-    xchg al, ah
-    add al, '0'
-    stosb
-    mov al, ah
-.u:
-    add al, '0'
-    stosb
-    mov ax, '%'                     ; '%' and the NUL
-    stosw
-    stc
-.out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    pop es
-    ret
-aph_s_load: db 'Loading ', 0
-
-; -----------------------------------------------------------------------------
 ; aph_rseq - ap_refill_chunk's read (AP_RSEQ), os88_rseq's registers: SI ->
 ; the name, ES:BX the buffer, CX its capacity, DX:AX the offset, DI the
 ; cursor. out CF = 0, DX:AX = bytes delivered (0 at the end); CF = 1 AX =
 ; FERR_*. THE HELD FILE is a copy out of the hold (hw_get, split where a
-; window ends); any other read is the disk's. keeps BX, CX, SI, DI, DS, ES
+; window ends); the file FILLING is the disk's read, copied into the hold as
+; well (aph_fill); any other read is the disk's alone. keeps BX, CX, SI, DI,
+; DS, ES
 ; -----------------------------------------------------------------------------
 aph_rseq:
-    cmp byte [aph_on], 0
-    je .disk
     push bx
     push dx
     mov dx, [ap_trk_dir]
     mov bl, [ap_trk_vol]
-    call aph_same
+    call aph_same                   ; CF = 0: the hold is this track's
     pop dx
     pop bx
     jc .disk
+    cmp byte [aph_on], 0
+    jne .held
+    push dx                         ; FILLING: the disk's, then the copy
+    push ax
+    call .disk                      ; (os88_rseq returns here)
+    pop word [aph_at]
+    pop word [aph_at+2]
+    jc .r
+    call aph_fill                   ; (CF = 0)
+.r:
+    ret
+.held:
+    cmp dx, [aph_lo+2]              ; below the fill's first byte: the disk's
+    jne .lo                         ; (a replay starts where the fill did)
+    cmp ax, [aph_lo]
+.lo:
+    jb .disk
     push bx                         ; [sp+4]: the buffer's offset
     push cx
     push di
-    mov di, [aph_size]              ; BX:DI = what is left from the offset
-    mov bx, [aph_size+2]
-    sub di, ax
+    mov di, [aph_have]              ; BX:DI = what is held from the offset:
+    mov bx, [aph_have+2]            ; past the data's end, so every byte the
+    sub di, ax                      ; refill publishes
     sbb bx, dx
     jb .eof
     jnz .cap                        ; (64 KB or more: CX stands)
@@ -456,3 +259,56 @@ aph_rseq:
 .disk:
     inc word [aph_ndisk]
     jmp os88_rseq
+
+; aph_fill - the gulp the disk just delivered (AX bytes - a gulp fits a
+; word - at ES:BX, read from [aph_at]) copied into the hold at its offset.
+; The fill is CONTIGUOUS: the first gulp starts it ([aph_have] 0), each
+; after must begin at [aph_have]; one that does not, or does not fit, gives
+; the hold up for this file and the play streams on. The fill past
+; [ap_data_end]: held whole. keeps everything but flags; CF = 0
+aph_fill:
+    push ax
+    push cx
+    push dx
+    push di
+    mov cx, ax                      ; CX = the bytes
+    mov ax, [aph_at]
+    mov dx, [aph_at+2]              ; DX:AX = their offset
+    mov di, [aph_have]
+    or di, [aph_have+2]
+    jnz .seq
+    mov [aph_lo], ax                ; the first gulp: the fill starts here
+    mov [aph_lo+2], dx
+    jmp short .put
+.seq:
+    cmp ax, [aph_have]
+    jne .drop
+    cmp dx, [aph_have+2]
+    jne .drop
+.put:
+    mov di, bx                      ; ES:DI = the gulp
+    push bx
+    mov bx, aph_hw
+    call hw_put                     ; keeps every register
+    pop bx
+    jc .drop
+    add ax, cx
+    adc dx, 0
+    mov [aph_have], ax
+    mov [aph_have+2], dx
+    cmp dx, [ap_data_end+2]
+    jne .end
+    cmp ax, [ap_data_end]
+.end:
+    jb .out
+    mov byte [aph_on], 1            ; past the data's end: HELD WHOLE
+    jmp short .out
+.drop:
+    call aph_free                   ; out of step: never a gap played
+.out:
+    pop di
+    pop dx
+    pop cx
+    pop ax
+    clc
+    ret

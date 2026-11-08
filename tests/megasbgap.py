@@ -11,11 +11,13 @@ WAV the machine can hold WHOLE into one huge claim and plays it from memory
 (SPEC.md 86.5.4, apps/audio/aphold.inc), which this 220 KB clip always is -
 so the player is launched first, its [aph_off] set (an arm before the hold
 has no such byte and streams anyway), and the clip opened through File >
-Open. --hold leaves the byte alone: the clip is held whole (aph_on) before
-it plays, the floppy is not read during the play, and the silences inside it
-are held to 60 ms and 120 ms in all (measured: none). RED for --hold: --pkg
-the arm of mega-release (no hold) - aph_on fails, and its streamed silences
-(90-100 ms, 290-340 ms in all, measured) fail the held bars.
+Open. --hold leaves the byte alone and sets [ap_repeat]: the first play
+streams and its own reads fill the hold (aph_on, KERN-MEGA-PLAN 14.186), the
+second - the capture's last SECS - reads no floppy, and the silences inside
+it are held to 60 ms and 120 ms in all (measured: none). RED for --hold:
+--pkg the arm before the hold (14.173's base, no aphold.inc) - aph_on fails,
+and its streamed silences (90-100 ms, 290-340 ms in all, measured) fail the
+held bars.
 
 AUDIO.O88 plays a 10 s, 22,050 Hz 8-bit mono WAV off a scratch 1.44MB B: on
 86Box's at286_vga_sb (the owner's mr286, a Sound Blaster 2.0), the card's DAC
@@ -182,28 +184,36 @@ def main():
             pseg = got and int(got[1])
             if not a.hold and pseg and "aph_off" in syms:
                 m.write(m.lin(pseg, syms["aph_off"]), b"\x01")
+            if a.hold and pseg:             # the one-track list played twice
+                m.write(m.lin(pseg, syms["ap_repeat"]), b"\x01")
             ui.menu_pick("File", "Open...")
             ui.chooser_open("../MEDIA/TONE22.WAV")
+
+            def rb(name, n=1):
+                return pseg and name in syms and int.from_bytes(
+                    m.readseg(pseg, syms[name], n), "little")
+            nd1 = None
             if a.hold:
                 on = None
-                for _ in range(60):         # the load: 220 KB off the floppy
-                    M.guest_sleep(m, 0.5)
-                    on = "aph_on" in syms and pseg and \
-                        m.readseg(pseg, syms["aph_on"], 1)[0]
+                for _ in range(int(SECS) * 2 + 20):   # the first play,
+                    M.guest_sleep(m, 0.5)   # streamed, fills the hold
+                    on = rb("aph_on")
                     if on:
                         break
-                check("HOLD: the clip is held whole before it plays (aph_on)",
-                      bool(on), "aph_on %r" % on)
-                for _ in range(20):         # ...and opened: the open's own
-                    M.guest_sleep(m, 0.25)  # reads (the folder, the header)
-                    if pseg and m.readseg(pseg, syms["ap_state"], 1)[0] == 1:
-                        break               # are before the play, not in it
+                nd1 = rb("aph_ndisk", 2)
+                check("HOLD: the first play's own reads hold the clip whole "
+                      "(aph_on)", bool(on), "aph_on %r" % on)
+                for _ in range(40):         # ...and the second opened: its
+                    M.guest_sleep(m, 0.25)  # own reads (the folder, the
+                    if rb("aph_ncopy", 2) and rb("ap_state") == 1:
+                        break               # header) are before it, not in it
+                m.write(m.lin(pseg, syms["ap_repeat"]), b"\x00")
             r0 = m.disk()["reads"]
             M.guest_sleep(m, SECS + 3)
             reads = m.disk()["reads"] - r0
             ndisk = None
             if a.hold and pseg and "aph_ndisk" in syms:
-                ndisk = int.from_bytes(m.readseg(pseg, syms["aph_ndisk"], 2), "little")
+                ndisk = rb("aph_ndisk", 2) - (nd1 or 0)
             check("the window is the Audio Player's",
                   any("Audio" in t for t in ui.titles()), "titles %s" % ui.titles())
             got = dispapps.pkg_seg(m, 0)    # THE RING, off its descriptor
@@ -223,14 +233,17 @@ def main():
         t0, t1, gaps = silences(got)
         if not check("the play is in the capture", t0 is not None):
             return 1
+        if a.hold:                          # the SECOND play: the capture's
+            t0 = t1 - SECS + 0.1            # last SECS (the first streamed)
+            gaps = [g for g in gaps if g[0] >= t0]
         print("     play %.2f-%.2f s (%.2f s); silences %s" % (
             t0, t1, t1 - t0, ", ".join("%.2f+%dms" % g for g in gaps) or "none"))
-        check("it played %.1f s or more" % MIN_PLAY, t1 - t0 >= MIN_PLAY,
+        check("it played %.1f s or more" % MIN_PLAY, t1 - t0 >= MIN_PLAY - 0.1,
               "%.2f s" % (t1 - t0))
         if a.hold:
-            check("HOLD: the floppy was NOT read for it (%d READ DATA in all, "
-                  "at most 2 the desktop's own; aph_ndisk %s - no gulp off the "
-                  "disk)" % (reads, ndisk), reads <= 2 and ndisk == 0)
+            check("HOLD: the floppy was NOT read for the second play (%d READ "
+                  "DATA in all, at most 2 the desktop's own; aph_ndisk +%s - no "
+                  "gulp off the disk)" % (reads, ndisk), reads <= 2 and ndisk == 0)
         else:
             check("the floppy was read during it (%d READ DATA)" % reads, reads >= 20)
         longest = max([ms for _, ms in gaps] or [0])
