@@ -6259,6 +6259,10 @@ mmf_mem_claim:            call mem_claim_x
 
 mmf_mem_free:             call mem_free_x
                       retf
+%ifdef KERN_MEGA
+mmf_mem_claim_hi:         call mem_claim_hi_x ; (SEG_LOW: a region brought
+                      retf                    ; down, at the arena's top)
+%endif
 %ifdef KERN_BIG                 ; its callers are kern_big only
 mmf_mem_movable:          call mem_movable_x
                       retf

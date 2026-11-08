@@ -5268,6 +5268,15 @@ vp_xopen:
 .ok:                                ; either form as code above it moved)
     cmp byte [vp_resid], 0          ; RESIDENT: read whole into its blocks
     jne .out
+%ifdef PKG_MEGA
+    cmp byte [vp_pm], 0             ; OUR REGION DOWN FOR GOOD before the pool
+    je .low                         ; is sized (SEG_LOW, KERN-MEGA-PLAN
+    mov dx, ds                      ; 14.174): a play copies it into the
+    mov ax, vp_reloc                ; heap anyway, so the pool block it
+    mov bl, SEG_LOW                 ; leaves is the bank's - 64 KB of it,
+    call OSAPI_SEG                  ; where kern_big's region was never there.
+.low:                               ; Refused, the bracket copies it
+%endif
     call vp_xcaps                   ; no pool (every 8088): nothing more is
     or ax, ax                       ; asked, not even the directory - unless
     jnz .sz                         ; EXPANDED MEMORY answers (98.3.18.6)
@@ -11990,7 +11999,15 @@ vp_rbhold:
     push ax
     push cx
     push dx
+    push bx
+    mov dx, ds                      ; OUR REGION brought down already (SEG_LOW,
+    mov bl, SEG_REAL                ; vp_xopen - KERN-MEGA-PLAN 14.174): the
+    call OSAPI_SEG                  ; bracket copies nothing, and the room is
+    pop bx                          ; the service area's and the drivers'
+    mov ax, VP_RBRKB - 64
+    jnc .h
     mov ax, VP_RBRKB
+.h:
     xor cx, cx
     call OSAPI_MEM_CLAIM_DMA_HI
     jc .n

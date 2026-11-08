@@ -12966,6 +12966,8 @@ mega_segf:
     je .hndj
     cmp bl, SEG_TYPE
     je .typej
+    cmp bl, SEG_LOW
+    je mega_seglow
     stc
     retf
 .typej:                             ; SEG_TYPE: the body is `.cold`'s
@@ -13236,6 +13238,166 @@ mega_segf:
     pop ax
     pop di
     stc
+    retf
+
+; mega_seglow - FAR (jumped to from mega_segf): SEG_LOW's body (SPEC.md
+; 50.6.11, KERN-MEGA-PLAN 14.174). ES = the caller's DS, DX = it - its OWN
+; region and nothing else - AX = a relocation proc of its or 0. A region
+; ld_hi put ABOVE 1MB (OS88_HIGH) moves into a conventional claim at the
+; arena's TOP owned by its slot, as a region loaded low is: the bytes copied,
+; every LDT descriptor based inside the old block rebased by the drop (the
+; pair and any SUB of it - mx_cpmove's rule, windows excepted: a window is its
+; owner's, 14.80), the claim's own fresh pair freed and its mem_sel row made
+; the REGION'S pair, MC_RLOC = AX, and the pool block freed. So no selector
+; changes - only bases - and a segment register holding one reads the new
+; place at its next load, as after any pool move. Copy and rebase are ONE
+; step with interrupts off and [sch_lock] held: no task runs the region
+; between them. A real-mode bracket then finds it conventional and copies
+; nothing (53.2.3), and the pool has its KB back for what the caller sizes
+; after. CF = 0 and every register kept (conventional already: nothing done);
+; CF = 1 AX = 1 no conventional room, AX = 3 not the caller's own region.
+; DS = KDATA
+mega_seglow:
+    pusha                           ; [bp+16] AX ... [bp+12] DX ... [bp+2] DI
+    push es                         ; [bp+0]
+    mov bp, sp
+    push ax                         ; [bp-2] the proc
+    push ax                         ; [bp-4] the pool entry (below)
+    push ax                         ; [bp-6] its KB (below)
+    mov ax, es
+    cmp ax, dx
+    jne .not                        ; its own region alone
+    call mega_slotof                ; BL = its slot
+    jc .not
+    push bx
+    call mega_selbase               ; DX:AX = the region's base
+    pop bx
+    jc .not
+    cmp dl, MEGA_XPOOL >> 16
+    jb .ok                          ; conventional already
+    or bl, 0x80
+    mov ax, es
+    call mega_rgnblk                ; SI = its pool entry, DX:AX its base,
+    jc .not                         ; CX its KB
+    and bx, 0x1F                    ; BX = the slot: the claim's owner
+    mov [mega_xsrc], ax
+    mov [mega_xsrc+2], dx
+    mov [bp-4], si                  ; the pool entry
+    mov [bp-6], cx                  ; its KB
+    mov ax, cx
+    call COLD_SEG:mmf_mem_claim_hi  ; DX = the claim's data selector
+    jc .room
+    mov ax, dx
+    push dx
+    call mega_selbase               ; DX:AX = its base
+    mov [mega_xdst], ax
+    mov [mega_xdst+2], dx
+    pop dx                          ; DX = the new pair's data selector
+    jc .back
+    cmp byte [mega_xdst+2], MEGA_XPOOL >> 16
+    jb .got                         ; below 1MB: the answer
+.back:
+    call COLD_SEG:mmf_mem_free      ; (a base it cannot use: back - BX the
+.room:                              ; slot, DX the claim)
+    mov word [bp+16], 1             ; no conventional room
+    jmp short .no
+.not:
+    mov word [bp+16], 3             ; not the caller's own region
+.no:
+    pop ax
+    pop ax
+    pop ax
+    pop es
+    popa
+    stc
+    retf
+.got:
+    mov ax, [bp-6]
+    shl ax, 10                      ; the bytes (64KB: 0)...
+    dec ax
+    and al, 0xFE                    ; ...even, FFFEh at most: mx_lcopy's
+    inc ax                          ; ceiling, which is past image + bss
+    inc ax
+    jnz .cl
+    mov ax, 0xFFFE
+.cl:
+    xchg ax, cx
+    inc byte [sch_lock]
+    pushf
+    cli
+    push dx
+    call mx_lcopy                   ; the bytes...
+    pop dx
+    push es                         ; ...and every descriptor over them
+    mov ax, MEGA_SEL_LDTD           ; rebased (DX's fresh pair is below 1MB:
+    mov es, ax                      ; not in the block)
+    mov cx, [bp-6]
+    mov ax, cx
+    shl cx, 10
+    shr ax, 6
+    mov bh, al                      ; BH:CX = the block's bytes, 24 bits
+    mov si, MEGA_LDT_FREE0 * 8
+.d:
+    cmp byte [es:si+5], 0
+    je .dn
+    mov ax, [es:si+2]
+    mov bl, [es:si+4]
+    sub ax, [mega_xsrc]
+    sbb bl, [mega_xsrc+2]
+    jc .dn                          ; below the block
+    cmp bl, bh
+    ja .dn
+    jb .in
+    cmp ax, cx
+    jae .dn                         ; at or past its end
+.in:
+    mov ax, si
+    call mega_iswin                 ; a window is its owner's (14.80)
+    jnc .dn
+    mov ax, [mega_xsrc]
+    mov bl, [mega_xsrc+2]
+    sub ax, [mega_xdst]
+    sbb bl, [mega_xdst+2]           ; BL:AX = the drop
+    sub [es:si+2], ax
+    sbb [es:si+4], bl
+.dn:
+    add si, 8
+    cmp si, [ss:mega_ldte]
+    jb .d
+    pop es
+    popf
+    dec byte [sch_lock]
+    MXT_ES                          ; THE RECORDS: the claim's mem_sel row is
+    mov bx, mem_sel                 ; the region's pair from here, MC_RLOC
+    mov si, mem_tab                 ; the proc...
+.r:
+    cmp [es:bx], dx
+    je .rf
+    add si, MC_SIZE
+    inc bx
+    inc bx
+    cmp bx, mem_sel + MEGA_MSELN * 2
+    jb .r
+    jmp short .rx                   ; (its own row is there: not reached)
+.rf:
+    mov ax, [bp+12]                 ; (pusha's DX: the region)
+    mov [es:bx], ax
+    mov ax, [bp-2]
+    mov [ss:si+MC_RLOC], ax
+    mov ax, dx                      ; ...the claim's fresh pair freed...
+    call mega_ldt_free
+    sub ax, 8
+    call mega_ldt_free
+.rx:
+    mov si, [bp-4]
+    mov word [es:si+MX_KB], 0       ; ...and the pool block
+.ok:
+    pop ax
+    pop ax
+    pop ax
+    pop es
+    popa
+    clc
     retf
 
 ; mega_segown - ES = the caller's DS -> BL = the owner a window is recorded

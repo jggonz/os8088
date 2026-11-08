@@ -690,12 +690,16 @@ vb_coverload:
 
 ; vb_cvplay - the picture's claim at a play's door: given back (the play
 ; wants the memory) - unless it is ABOVE 1MB (kern_mega with OS88_HIGHMEM:
-; SEG_REAL has no paragraph for it), where it costs the play nothing and
-; is kept, so the window is the picture again the moment the play returns
+; SEG_REAL has no paragraph for it) and the hold is sized already, where it
+; is kept, so the window is the picture again the moment the play returns.
+; Before the hold opens it goes either way: a pool block kept there was the
+; hold's 12 KB (KERN-MEGA-PLAN 14.174)
 vb_cvplay:
     mov dx, [vb_cvseg]
     or dx, dx
     jz vb_cvfree
+    cmp byte [vb_hopd], 0           ; (the hold not yet sized: the pool's
+    je vb_cvfree                    ; KB are its, as kern_big's are - 14.174)
     mov bl, SEG_REAL
     call OSAPI_SEG
     jnc vb_cvfree
@@ -792,11 +796,12 @@ vb_door:
     mov [vb_rkeep], ax
     cmp byte [vb_pmd], 0
     je .lo
-    mov dx, ds                      ; OUR REGION ABOVE 1MB (OS88_HIGH): the
-    mov bl, SEG_REAL                ; bracket copies it DOWN, so the rings
-    call OSAPI_SEG                  ; leave its room as well (53.2.3's
-    jnc .lo                         ; FSXR_ROOM otherwise)
-    add word [vb_rkeep], VB_REGKB
+    mov dx, ds                      ; OUR REGION ABOVE 1MB (OS88_HIGH) comes
+    mov ax, vb_reloc                ; DOWN for good before anything is sized
+    mov bl, SEG_LOW                 ; (KERN-MEGA-PLAN 14.174): the pool then
+    call OSAPI_SEG                  ; has its KB for the hold, and the bracket
+    jnc .lo                         ; copies nothing. Refused, the bracket
+    add word [vb_rkeep], VB_REGKB   ; copies it, and the rings leave its room
 .lo:
     mov bx, [vb_win]
     call OSAPI_FSX_CAPS             ; AX = modes, DL = VID_*

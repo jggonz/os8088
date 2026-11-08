@@ -15724,3 +15724,107 @@ full tier) green. NOT run, by the build: every kern_big and kern_small row
 `audhand`, `ringmove-audio`, `ringmove-audiospk`) - the shipped WAVERACK and
 AUDIO are byte-identical to mega-release's, so those rows would boot the
 same bytes.
+
+### 14.174 The real-mode bracket's parity with kern_big: a region above 1MB was held twice, and the Video Battle's picture took the hold's KB; `OSAPI_SEG` `SEG_LOW` (2026-11-08) - FIXED (the double count), MEASURED (the rest), PROPOSAL (the clip cache)
+
+The owner (2026-11-08): *"Video player/vbattle ... the actual targets fully
+use conv memory AND xms when available. Why would it be getting any less, in
+fsx real, than it gets on big? We do need to fix that somehow."*
+
+**Measured first, both kernels on ONE machine** - 86Box's `at286_vga_sb_hdd`
+(the mr286, VGA, an SB 2.0, an IDE disk), 640K + 384K, 2 MB and 4 MB,
+kern_big with XMEM.DRV as a user's boots it - with the owner's real battles
+(a 6.3 MB CGA4 `BATTLE.VBT` and the 16.0 MB VGA battle inside
+`FF7BATTV-286.O88`, played by this tree's engine; supplied for profiling,
+never checked in) and the Video Player's largest demo clip (`05-LASTX.V88`,
+37 MB). Both programs DO use conventional memory and extended memory on
+kern_mega exactly as on kern_big - rings or a ring beside an XMS hold or
+bank - so F10 (the bracket reaching a huge claim's pool pieces, 14.172) is
+not where the KB went. Where they went, the CGA4 battle at 640K + 384K
+(kern_big 316 KB held in XMS + 368 in its rings = 684; kern_mega 220 + 320 =
+540), heaps and the pool's table read off the machine in the play:
+
+| | KB | whose |
+|---|---|---|
+| the battle's REGION in the pool (`OS88_HIGH`) while the bracket runs its conventional COPY | 48 XMS | the double count: fixed here |
+| the title picture kept above 1MB through the first play (`vb_cvplay`) | 12 XMS | the engine's: fixed here |
+| kern_mega's fixed area (`.cold` 47.6, `.mega` 24.1, tables and park 12 = 84) against kern_big's 64 KB HMA, which XMS never counts and which holds kern_big's `.cold` AND SOUND.DRV | 20 XMS | the kernel's |
+| SOUND.DRV's (11) and HDD.DRV's (4) images in the pool | 15 XMS | the kernel's |
+| the clip cache: kern_big's hold is a cache of whole clips read in place, its idle loop in it; kern_mega's the copying hold, the loop in the resident claim | 16 conv (72 for the VGA battle at 4 MB) | the engine's: PROPOSAL below |
+| the bracket's service area (3) and low copies of HDD.DRV (4) and SOUND.DRV (11) | 18 conv | the kernel's (53.2.3) |
+| kern_mega's conventional floor 63.0 KB against kern_big's 59.5 (`.cold` in the HMA), the read-ahead the door's walk rebuilds (9) inside `VB_RKEEPM`'s room, 4 KB units, less XMEM.DRV's 2 KB | 14 conv | both |
+
+The Video Player's arm (its 64 KB region the same double count): bank 6
+slots (192 KB) against kern_big's 10 (320) at 640K + 384K, 90 against 94 at
+4 MB, the same 160 KB ring on both and MORE conventional left free on
+kern_mega (196.5 KB against 154.5).
+
+**`OSAPI_SEG` `SEG_LOW` (verb 14, SPEC.md 50.6.11, 53.2.3)**: DX = the
+caller's own DS, AX = a relocation proc or 0 -> a region kern_mega put above
+1MB moves into a conventional claim at the arena's TOP owned by its slot, as
+a region loaded low is (`mega_seglow`, `.mega`): the bytes copied and every
+LDT descriptor based inside the old block rebased by the drop (`mx_desc`'s
+rule, windows excepted), one step with interrupts off under `[sch_lock]`;
+the claim's mem_sel row made the REGION's pair (its own fresh pair freed),
+MC_RLOC the proc, the pool block freed. No selector changes; CS and DS read
+the new base as the cell returns. Conventional already: CF = 0, nothing done;
+CF = 1 AX = 1 no room, 3 not the caller's own region. A real-mode bracket
+then finds the region conventional and copies nothing. Every real-mode
+kernel refuses it as any unknown verb (`osapi_segr`'s `ja`): an ABI
+ADDITION, `PKG_FMT` 10 kept (`tools/abilock.py --update`).
+
+**The programs**: the Video Battle's `vb_door` asks it under `[vb_pmd]`
+before `vb_load` sizes anything (refused, the old `VB_REGKB` room), and
+`vb_cvplay` gives a picture above 1MB back until the hold is open (kept on
+every play after, W5's instant cover); the Video Player's arm asks it in
+`vp_xopen` before the pool is sized, and `vp_rbhold`'s room is 16 KB once
+`SEG_REAL` answers the region conventional (SPEC.md 98.3.24.2).
+
+**After** (the same machine; SPEC.md 126.4.7 and 98.3.24.3 have the tables):
+the CGA4 battle's hold 220 -> 280 KB at 640K + 384K, 860 -> 920 at 2 MB,
+2,908 -> 2,964 at 4 MB; the VGA battle's 224 -> 280 and 2,912 -> 2,964; the
+Video Player's bank 6 -> 8 slots and 90 -> 92. **kern_mega still holds less
+than kern_big**: the battle 36 KB of extended memory (the kernel's 20 + 15,
+and a 4 KB unit) and 48 KB of conventional (the cache's 16, the bracket's
+18, the rest 14); the player 64 KB of bank (the kernel's 35 and the pool's
+remainder under one 32 KB slot, 28), with 42 KB more conventional idle than
+kern_big. The kernel-side residue is kern_mega's own footprint above 1MB and
+the bracket's low copies - the owner's to trade, below - and no program can
+recover it.
+
+**What is left, for the owner** (not built):
+1. **The clip cache under kern_mega** (16 KB conventional for the CGA4
+   battle at 640K + 384K, 72 KB for the VGA battle at 4 MB, and whole clips
+   played in place where the copying hold copies). The cache needs the hold
+   read in place in every bracket; on kern_mega a token is the block's
+   address only while the pool leaves it, and the check needs real mode. A
+   real-mode twin answering a token block's CURRENT linear base (what
+   `rms_xchk` already computes for `rms_xcopy`) would let the engine aim its
+   in-place reads at it each bracket, so a move between plays costs nothing;
+   the cache then planned at the door on a 286 or later and verified in the
+   bracket, with a refusal ("Needs real mode") where a 286 has no LOADALL -
+   the idle loop has no resident room to fall back to inside a bracket.
+2. **The drivers the bracket carries low** (15 KB of pool images + 15 KB of
+   low copies): kern_big runs SOUND.DRV and HDD.DRV from the HMA through
+   relocated twins (SPEC.md 2.10.8); kern_mega's pool HMA could hold them
+   the same way, reachable in both modes - a port of COLDHMA's tables.
+3. **`VB_RKEEPM`** (24 KB kept for the door's 18): a door that ANSWERED its
+   conventional need for a list would size it exactly.
+
+Bytes: kern_mega `.mega` 23,824 -> 24,160 (+336, `mega_seglow` and the
+verb's two compares), `.cold` +4 (`mmf_mem_claim_hi`), `.text` +0
+(`tests/megaseg.txt` unchanged), resident 62,976 unchanged; kern_big and
+kern_small `kernel.bin`/`kernel.sys` byte-identical (`cmp`, one commit).
+VBATTLE.O88 image 28,427 -> 28,437 (+10; the file 22,756 -> 22,737); the
+Video Player's arm image 61,879 -> 61,917 (+38), the shipped VIDEO.O88
+byte-identical.
+
+Rows: `megaparvb`, `megaparvp` (`tests/megapar.py`, 86Box, both kernels on
+one machine at 640K + 384K): kern_mega's play real; no pool block of the
+instance's but its hold or bank; the hold every pool KB the kernel leaves
+programs less a granule (8 KB / one 32 KB slot); kern_big's hold less
+kern_mega's no more than the kernel's own excess plus that granule. RED on
+mega-release (the file run in its tree): the battle's region 48 KB in the
+pool, its hold 232 of 285; the player's region 64 KB, its bank 192 of 285.
+Green here. `$OS88_VBT_TARGET` / `$OS88_VBT_PKG` point the battle leg at the
+owner's battles; unset, the demo bundle.
