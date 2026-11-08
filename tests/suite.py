@@ -16348,6 +16348,18 @@ SOAK = [
         "showing page 0 for the page the key names, it FAILS",
         needs=("marty", "nasm"), serial=True,
         wants=("build/video.o88",)),
+    Row("vidpage3xip", "soak", py("tests/vidpage.py", "--layout", "modex",
+                                  "--pages", "3", "--xip"), 39.0,
+        "SPEC.md 98.3.18.19: vidpage3mx's clip - page-ahead on Mode X's "
+        "three pages, hidden records CHAINED - on 86Box's 16 MHz 286, the "
+        "file held whole in XMS and every play IN PLACE (the card's bank "
+        "line 7, LOADALL's borrows): every hold the clip, from the start, "
+        "from key 1 and with no keys. With vp_pghid's chain walk reading "
+        "the hidden record's header through a plain mov ds (a HANDLE in "
+        "place, so the HMA's bytes) it FAILS at every play - the owner's "
+        "10-LX486.V88 hung the machine there. SOAK: one package, and 86Box's",
+        needs=("86box", "nasm"), serial=True,
+        wants=("build/video.o88", "build/os8088.img")),
     Row("vidpage4v", "soak", py("tests/vidpage.py", "--pages", "4",
                                 "--screen", "320x200"), 100.0,
         "SPEC.md 98.1.3.7.1, 98.3.8.4: vidpage3mx's shape on sixteen "

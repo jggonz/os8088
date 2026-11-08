@@ -209657,7 +209657,7 @@ addresses), and every `mov ds, dx` a ring pointer reaches is `VP_DSDX`: a
 LOADALL at the instruction that loaded DS, so no code before it sees a
 borrowed DS. `VP_DSEND`, before the matching `pop ds`, puts the API cells
 back. Each pair is one borrow inside its own `pushf / cli ... popf`. Fifteen
-sites: the super-packet's header and the record's length (`vp_nextw`), the
+sites (seventeen since 98.3.18.19): the super-packet's header and the record's length (`vp_nextw`), the
 five decode branches (`vp_decrec`), the flip's copy and header, the three
 page-ahead tests, and the card's audio copy and ADPCM decode (`vp_aput`).
 Three sites tested a byte and branched after `pop ds`; they read it into AL
@@ -210194,6 +210194,40 @@ second falls 105 KB short at the worst against 1,019 KB without them, so a
 file made with `--kernel mega` gives up far less to cover the stretch the
 bank drains in. The borrows stay charged on every frame, which over-prices a
 record in a conventional slot a little.
+
+##### 98.3.18.19 The page-ahead chain read through the borrow (2026-11-08)
+
+**A hidden record's header and a COPY's are read through `VP_DSDX` too.**
+98.3.18.11's fifteen sites missed two, both page-ahead ON N PAGES's
+(98.1.3.7.1, 98.3.8.4): `vp_pghid`'s chain walk, which reads each hidden
+record's page and its "another follows" bit, and `vp_pgcopy`'s
+source and band (98.1.3.7.2). Each was a plain `mov ds, dx`, and in place
+DX is a HANDLE (FFF0h-FFFFh): the walk read FFFxh:SI - the HMA's bytes - as
+the chain, decoded whatever records that said followed into whatever page it
+named, walked off the record's window, and on a 286 the decode ran into data
+with interrupts off. The two-page walk (`.two`) reads no header and was
+right; a page-ahead file on two pages plays in place as before.
+
+Found by the owner's pre-release check: `apps/video/demo/vga/10-LX486.V88`
+- the only VGA demo clip on three pages - HUNG the machine full screen on
+86Box's 16 MHz 286 at its frame 221, its first hidden record, on kern_big
+and in kern_mega's real-mode bracket alike, played out of the XMS bank in
+place (98.3.18.13); `[vp_noinp]` and kern_mega's protected bracket (whose
+handle is a real selector, 98.3.18.16) played it through. That the record
+was the file's first of 60 KB or more was a coincidence: its hidden page
+records are the file's biggest. With both sites borrowing, it plays all
+2,036 frames (693 pauses - a 486's clip on a 286, as its text says).
+
+**Keys are not affected**: `vp_decn` and `vp_kref1` keep their plain
+`mov ds, dx`, since a key's read is always into the conventional ring
+(98.3.18.7) and its DX a segment. VIDEO.O88 +48 bytes in each arm, no
+bss and no kernel byte; every other routine is identical at an even shift.
+**`vidpage3xip`** (soak) is the gate: `tests/vidpage.py --layout modex
+--pages 3 --xip`, vidpage3mx's clip on 86Box's 286 with the file held whole
+and every play in place (the card's bank line 7), every hold the clip. RED
+before the fix (in place, bank line 7): 10,565 of 15,360 canvas pixels wrong
+at the first hold of the play from the start, 640 at frame 45 of the play
+from key 1, and the keyless file's play wrong at every hold.
 
 #### 98.3.22 The play's profile: every frame timed on the machine (2026-10-15)
 
