@@ -38091,6 +38091,100 @@ is the value every widget entry already leaves there. A DVK_DRV volume
 (HDD.DRV's rung 1) never runs this loop at all. `tests/fpgnotch.py` is the
 gate that a LIVE bar still moves.
 
+#### 18.91.7 …and a PicoMEM 2's disk is read EIGHT sectors a call at most, IRQ0 masked for it (kern_big, kern_emu)
+
+**On a PicoMEM 2 the card's sound goes silent whenever an interrupt holds
+the PC inside the card's int 13h** (docs/reports/PICOMEM2-STUTTER-2026-11-07.md).
+Per sector the card reads its SD, mixes once and asks the PC to copy 512
+bytes out of its window - with interrupts ON - then waits for the copy
+mixing nothing, with 5 ms of sound mixed ahead. A hook that decodes a frame
+inside that copy (Video Battle's, Video Player's: SPEC.md 126.3, 98.3) is a
+hole in the card's output as long as the hook. Measured on 5150 #1 with
+PM2-10-4-26, VIDSND's T rows: tracks read under a 4-16 ms hold broke the
+tone 228-508 times in 5 s; tracks read with NO hold broke it 0 times, and so
+did one sector a call with IRQ0 masked for the call. That is the owner's
+"short, repeated stuttering" during heavy actions - and it says what the
+cure needs: not short calls, but no hook inside one.
+
+So the transfer loop reads such a disk that way:
+
+- **`drv_sniff`'s hard-disk branch** (driver.inc, the boot overlay's
+  window half) asks once, when the BIOS has a fixed disk: `dsk_fdd_pmemu`
+  (18.97.6 - port 2A3h's ramp, the card BIOS's function 0, its segment)
+  answers for the card's attribute slots in order, FDD0, FDD1, then
+  **HDD0..3 as slots 2..5**, bit 7 = the card serves the unit; the first
+  hard slot that answers is unit 80h + (slot - 2). Then function 3 (int 13h
+  AX=6003h DX=1234h): AL = the board, **11 = a PicoMEM 2.0** (a BIOS without
+  it hands AX back, AL = 3). That unit goes in **`[dsk_pmhd]`** (`.text`,
+  FFh = none). A 1.x is not matched: its firmware (`firmware/picomem1/`)
+  mixes while it waits, and its machine is a 286 whose disk rate this would
+  cost.
+- **`dsk_xfer`**, for a unit at or above `[dsk_pmhd]`, cuts the run to
+  **`DSK_PMRUN` = 8** sectors at most and sets IRQ0's bit in the 8259's mask
+  before the int 13h, clearing it after. The card's disks follow the PC's
+  own (an ST-225 is 80h, the card's first image 81h), so a real disk below
+  them keeps its runs. An IRQ0 that falls in the masked call waits in the
+  IRR: eight sectors are ~12-13 ms on the field machine, just under Video
+  Battle's 13.7 ms period (`VB_DIV`) and well under the 18.2 Hz tick; a
+  call that runs past the period merges two of its ticks. The cap is the hook's
+  latency, not the card's: the card keeps up with an unheld run of any
+  length.
+- **ONE sector a call was the first build, and the field priced it at
+  half the disk**: VIDDISK on 5150 #1 read 125.2 / 98.0 / 68.1 / 35.6 KB/s
+  under its hook at 0 / 25 / 50 / 75% against 294.3 / 223.9 / 147.1 / 72.8
+  multi-sector. The raw int 13h said 20% (a sector a call 1.83 ms, 1.53 a
+  sector in a track); through the kernel each one-sector run paid the
+  transfer loop's whole per-run cost, 64 calls and ~5.1 ms a sector for
+  32 KB - too slow to feed a clip encoded for the ST-225's 119 KB/s. FOUR
+  a call (2026-11-08) read 97 KB/s while reading in the owner's battle
+  (VBPROF: 15 stalls, 50 frames of sound late, against 148 and 115 at one)
+  and TakeOnMe stalled 11 times: a clip's SPIKES, not its average, are what
+  the reader must cover, and a battle's rings are smaller than a play's.
+  Six a call is the per-run cost a sixth as often. SIX (2026-11-08, with
+  the bookmarks of 126.4.8) read 111 KB/s while reading and still dropped
+  sound in the heavy clips - the reader busy 63-77% of their time at
+  78-82 KB/s - so EIGHT is the next try. Its own rate is VIDDISK R's to
+  measure on the iron, and `5150-picomem2`'s 135,000 (98.2) charges none
+  of it until then.
+- Resident: **40 bytes of `.cold`** in `dsk_xfer` (its parity pad among them) and the byte in `.text`.
+  18.95.12's no-fill test is 10 more of `.cold`.
+  The probe is window-half code and costs no resident byte - but the window
+  half was full (5,119 of 5,120), so the DSK_PMHD builds drop four of
+  `sched_init`'s zero stores (its slot-clearing and cycle-clearing loops,
+  `sch_wd_hits`, `sch_pit_last`'s high word), which wrote zero over zero:
+  `.bss` lies wholly in the file's zero gap between `.text` and `.ovl` and
+  stage 2's one read lands it (SPEC.md 10's `evq_init` went on the same fact). The
+  window half is 5,112 now; the boot blob and its read are as they were.
+- **Not kern_mega** (its int 13h is the real-mode bracket's), **not
+  kern_small** (no room in its boot halves, and a 128KB machine with a PicoMEM 2 is not one
+  anybody runs), and not the card's floppy images, which nothing streams.
+
+#### 18.91.7.1 …unless the card runs OUR firmware, which mixes while it waits, and says so in BX
+
+The hold above exists only because the stock firmware stops mixing while it
+waits on the PC. `firmware/picomem2/` is the June source (`be7b2e6`, the
+firmware PM2-6-21-26 shipped) with `pm-pr`'s fixes, which are board-
+independent: the card mixes in every PC-command wait of an int 13h
+(`pm_pccmd_wait_hook`) and in the SD driver's waits, reads a call's sectors
+in runs with ONE copy command a run, and waits for the PC's copy however long
+it takes. It also sets the firmware-revision word the card BIOS's function
+3 hands back in `BX` to **8088h** (Elendilon/ISA-PicoMEM `pm-pr`, `6204e0d`;
+the stock firmware leaves it 0).
+
+`drv_sniff` reads `BX` beside `AL` = 11 and, at 8088h, stores the unit
+**plus 40h** in `[dsk_pmhd]`. No unit is at or above it, so `dsk_xfer`
+neither masks IRQ0 nor cuts the run: a call reads as far as the track and
+the cylinder let it, and the timer hook decodes while the card reads its
+SD. §18.95.12's no-fill test masks the 40h off, so the cache still never
+fills from the card's disk - a fill is a second copy on either firmware. 8
+bytes of the window half (5,120 of 5,120 now) and 3 of `.cold`.
+
+On the CGA twin running that firmware (libpmhost v2 with both patches),
+6 s of Bolt: **33 int 13h calls against 100** with the stock firmware's
+behaviour (the same build without the wait hook, which reads 8088h nowhere),
+sound frames late 5 -> 3; §18.91.7's VIDSND rows had already shown the wait
+hook clean in every row, a 16 ms hold inside a copy included.
+
 ### 18.92 The diskette parameter table is OURS, and EOT is why
 
 **int 1Eh is not an interrupt.** It is a far pointer to an 11-byte table the
@@ -38461,7 +38555,7 @@ is the kernel's and its layout may change:
 | 0 | 2 | the mount generation it was seeded under; **0 = not seeded** |
 | 2 | 1 | the volume |
 | 3 | 1 | 0 |
-| 4 | 2 | 0 |
+| 4 | 2 | `+12`'s cluster index, as the last call left it - non-zero after a read on a kernel that seeks forward (18.4.8.2) |
 | 6 | 2 | the last cluster the previous call read, one FAT link before `+12`'s |
 | 8 | 4 | the file's size |
 | 12 | 4 | **the offset**: where the next call reads. A cluster multiple |
@@ -38556,7 +38650,9 @@ customer while seven other loops read a file a chunk at a time through
 now, and none of them changed shape to become one, because the offset
 **stays the caller's**: a helper takes `READ_AT`'s own registers plus a
 cursor, compares the cursor's `+12` with the offset asked for, and re-seeds
-the cursor there when they differ. A seek, a restart, a rewind and a retry
+the cursor there when they differ - or, since 18.4.8.2, MOVES it there when
+its `+4` says the kernel walks forward, so a seek ahead costs the links it
+skips and a seek back the walk it always did. A seek, a restart, a rewind and a retry
 after an error therefore need nothing at the call site - the conversion is
 the call and a 16-byte cursor.
 
@@ -38602,6 +38698,148 @@ slower for the change:
 bytes of cursor per reader and 76 bytes of helper (`os88_rseq`, measured) per
 package or driver that carries one, `OP_BSS` included in every package with
 parts.
+
+#### 18.4.8.2 …and a cursor MOVED forward walks from where it stands; a copy of one is a bookmark
+
+**A seek used to be a walk from the front, whatever it cost.** The cursor
+knew only "the next call reads one link past `+6`", so a caller moving `+12`
+had to zero the cursor (§18.4.8's rule) and pay the stat and the whole chain
+again. Measured on 5150 #1 (2 KB clusters, PicoMEM 2): **~330 µs a link,
+140 ms a MB** - Video Battle's clip heads 5.8 MB into a 6.5 MB bundle cost
+961-1,153 ms to start, every time (docs/reports/PICOMEM2-STUTTER-2026-11-07.md),
+and an ST-225 pays the same walk plus its seeks.
+
+So the kernel now keeps, in the cursor's own reserved word, **`+4` = the
+cluster index of `+12`'s offset** (`RSQ_IDX`), written by every call that
+read. On a valid cursor, `dwr_stat` walks **`(+12 / cluster) - [+4] + 1`
+links from `+6`**: one when the caller left `+12` where the last call put it
+(the stream, as before), more when the caller moved it FORWARD. Moved BACK
+past `+6`, it goes from the name, as a cold cursor does. A misaligned `+12`
+is refused as before. 34 bytes of `.cold`.
+
+What that gives a caller, with no new slot and nothing changed for one that
+zeroes its cursor as before:
+- **A forward seek costs the links it skips, not the links before it.**
+  Move `+12`, keep the rest.
+- **A copy of a cursor is a BOOKMARK.** The 16 bytes as a call left them
+  name a place in the file: copied back later, the next call walks one link
+  from there - **a clip 5.8 MB in starts as if it were 32 KB in**. A
+  bookmark goes stale exactly when a cursor does (§18.4.8's generation and
+  volume), and then the kernel re-seeds it from the name, silently, at its
+  `+12`: never wrong, only slow once.
+- **A backward seek is a bookmark and a forward one.** The chain only links
+  forward, so nothing can walk back; a caller that keeps bookmarks behind it
+  - a player, one a MB as it plays - reaches any earlier place by copying
+  the nearest one at or before it and moving `+12` on. No kernel memory per
+  stream, which is what a kernel-kept index would have cost.
+- **Which kernel it is: `+4` non-zero after a read.** An older kernel never
+  writes it (a cursor is born zeroed), and an older kernel MUST NOT be
+  handed a moved `+12` - it walks one link and reads the wrong cluster. So a
+  caller moves a cursor only when `+4` is set, and zeroes it otherwise.
+  `os88_rseq` (§18.4.8.1) still zeroes on every move: its callers load
+  package parts and seek rarely, and the test is 6 bytes in every package
+  that carries it - WireFleet sits at `APP_MAX_SIZE` to the byte, its save
+  buffer padded to 512, and those 6 cost it a rung it does not have.
+
+`tests/vidkern.py`'s row G holds it: hot at 1 MB, moved forward to 3 MB, a
+chunk skipped, moved back to 2 MB, every byte checked; then a bookmark taken
+at 12 MB, a read at 0 between, the bookmark copied back - its read 439 ms
+against the cold seek's 1,813 on MartyPC's XT-IDE, one FAT-area int 13h call.
+Broken on purpose (the old one-link walk with `+4` still written) the moved
+cursor reads two chunks from the wrong offset.
+
+#### 18.4.8.3 …and a caller that MAPPED its file hands each call the run it reads in, and the FAT is not read
+
+**A stream reads the FAT for every cluster it crosses, however it lays out.**
+`dsk_read_chain` follows the chain a link a cluster, and each link is a
+lookup in the volume's FAT window (18.8), which on a fixed disk covers 2,304
+clusters - 4.6 MB at 2 KB clusters. Video Battle's bundle is 6.5 MB and reads
+two places at once (a clip 5.5 MB in, the music 0.5 MB in), so the window
+moved between them **13 times in 6 s of Bolt** on the PicoMEM 2 twin, nine
+sectors each; on an ST-225 each move is a seek to the FAT and back. And every
+link is a call (~330 µs a link through the thunks on 5150 #1, 18.4.8.2).
+
+The kernel cannot know where a program will read next; **the program can**,
+and a file copied onto a disk in one go is one contiguous run of clusters, or
+a few. So the caller holds the file's layout and tells each call the one run
+it reads in, which is the trade of §5's packages drawing their own lines:
+the knowledge sits with the code that has it, and the kernel's part is a
+compare.
+
+**The cursor grows to 22 bytes for a caller that asks** (`FSEQ_XSIZE`); a
+16-byte cursor is read and written exactly as before, and the kernel copies
+16 back to every caller - the run is the caller's and is never written. `+3`,
+the byte that was 0, is the caller's FLAGS:
+
+| off | size | |
+|---|---|---|
+| 3 | 1 | `FSEQF_RUN` (1): `+16..+21` describe a run - `FSEQF_MAP` (2): this call MAPS |
+| 16 | 2 | the run's first cluster |
+| 18 | 2 | its last |
+| 20 | 2 | the generation the map answered in `DX` |
+
+**To map**: `+3` = `FSEQF_MAP`, `CX` = how many runs the buffer at `DX:BX`
+holds (4 bytes a run: first cluster, last; at least 1), `SI` the name. The
+kernel walks the chain once from the name, to its end or until `CX` runs are
+written, in FILE ORDER - so a FAT with a loop in it ends too, every jump back
+being a run. Out `CF=0`, `AX` = the runs written (`CX` of them: there may be
+more, and a read past the last is the FAT walk as before) and `DX` = the
+generation they hold under; the cursor is not touched, and a map reads no
+data. `CF=1` `FERR_*` as a read's. A redirected volume (62.9) has
+no clusters and refuses `FERR_NAME`.
+
+**To read with one**: `+3` = `FSEQF_RUN`, `+16`/`+18` = the run holding the
+cluster the call starts in (the caller finds it: offset / cluster bytes, then
+the runs' lengths summed in order), `+20` the map's `DX`. While
+that call runs, `dsk_next_clus` answers **cluster + 1 for any cluster from
+`+16` to one below `+18`** without reading the FAT; the run's last cluster
+and everything outside it are looked up as before, so a read that runs past
+its run is correct, only slower. The run is honoured only when `+20` is
+`[dsk_mgen]` and the cursor is either cold (generation 0: it stats the name
+on the current volume) or stamped with the current volume (`+2`, the
+kernel's) - a write anywhere on the volume, or a mount that reads a boot
+sector, makes it a stale map, and a stale map is today's FAT walk, never a
+wrong read. A COLD seek is where a run saves the most: the walk to the offset
+is links inside the run, and none of them reads the FAT.
+
+**What it trusts.** Within one call a run is a statement about the FAT: a
+cluster in a file's run is that file's, and its link is the next one. A
+caller that lies gets its own volume's wrong clusters, which is §18.4.8's
+"READ_AT with a wrong offset and nothing worse" - the hint is live only
+inside a READ_SEQ call, which writes nothing, and the kernel copy's `+18`
+is 0 at every other moment, so no write, free or truncate ever walks a chain through it.
+
+Resident, measured (`tools/os88rdiff.py` against the commit before):
+**+139 bytes of `.cold` and +6 of `.text`** - the compare in `dsk_next_clus`
+(15), the wrapper's honour test and its clear (~48) and the map (~76), and
+`dwr_c`'s six more bytes. kern_big alone (`DSK_RUN`): kern_dos shares this
+source and has no room, and kern_small's door answers `FERR_NAME` to both,
+as to every READ_SEQ.
+
+**Its callers, and what they keep.** Video Battle maps its bundle when it
+builds its bookmarks (126.4.8): 16 runs, and every read goes through one
+22-byte scratch cursor that carries the run holding its first cluster, its
+rings' 16-byte cursors copied in and back (`vb_rseq`, `VB_NOMAP` the A/B).
+Video Player maps its video's FIRST run only, when it opens it (98.3.25),
+straight into its two stream cursors, which grew to 22 bytes; a video
+copied in one go is that run, and a fragmented one reads past it through the
+FAT as before.
+
+**Measured.** `tests/vidkern.py`'s row H, MartyPC's XT-IDE (2 KB clusters):
+the 13 MB stream maps as ONE run, and a COLD seek to 12 MB handed it then
+two chunks read take 1,098 ms with **no** FAT-area `int 13h` call, against
+1,922 ms for the cold seek alone without it; broken on purpose (the run
+answering cluster + 2) the reads fail and the row is red. The owner's
+battle on the CGA PicoMEM 2 twin, 6 s of Bolt: the FAT window moved 13
+times without the map and **0** with it, `int 13h` calls 124 -> 94. On
+86Box's `pc5150` with its ST11M and ST-225 (CGA, `tools/os88hdd.py --st11`,
+the same VBATTLED with and without the map, 86Box's timing): the same
+1.14 MB read in 4.6 s of the reader's time against 5.3 s, its slowest
+32 KB 137 ms against 192.
+
+The cleaner ABI-break shape - a slot of its own and the run fields
+first-class in every cursor - is docs/plans/ABI-BREAK-LIST.md's row
+R.extent.
 
 ### 18.4.9 `OSAPI_FILE_WRITE_SEQ` — a streaming append, whose place the KERNEL keeps (`kern_big`)
 
@@ -40904,6 +41142,29 @@ prefetch call than as an armed byte.
 Not on kern_dos (no room in its image) and not on kern_mega (its store above
 1MB lands through a nine-sector bounce): `DSK_RAHINT` is undefined there, and
 kern_mega drops the cache at step 2 instead (before the FAT window).
+
+#### 18.95.12 …and a PicoMEM 2's disk is never FILLED, only served (kern_big, kern_emu)
+
+A fill is a bet that the sectors after a short read will be wanted before
+the slot is evicted, paid for in revolutions saved. **An SD card has no
+revolution to save**, and on a PicoMEM 2 the bet costs twice over: the
+chunk's ninth sector is a second int 13h under 18.91.7's eight-sector cap,
+and every byte served out of the slot is a second `rep movsw` the 8088 makes
+itself, on top of the one the card's BIOS already made out of its window. A
+streaming read is not exempt the way 18.95.1 promised: the gate spares a read
+only while what it still wants covers a chunk, so the LAST eight sectors of
+every read, every short read (Video Battle's 4 KB music pieces) and every
+one-sector FAT lookup each took a fill.
+
+So `dsk_rah_fill`, for a unit at or above `[dsk_pmhd]` (18.91.7), answers
+as if there were no surplus: the caller reads direct. What a slot already
+holds is still served, so nothing else about §18.95 moves, and a real disk
+below the card's units (an ST-225 at 80h) keeps its fills.
+
+Measured on the CGA PicoMEM 2 twin, the owner's battle, 6 guest seconds of
+Bolt from the same menu walk, twice each (identical both times): **sound
+frames late 19 -> 4**, int 13h calls 130 -> 124, `dsk_copy_seg_x` 69 -> 0.
+Resident: **10 bytes of `.cold`**.
 
 ### 18.96 Formatting a floppy — the mount's verdict, run backwards
 
@@ -50645,6 +50906,64 @@ can no longer pass a stream the machine cannot read. It costs no kernel byte.
 a hand-built stream holding one 70,000-byte match must be refused by both
 host decoders. That second half is the negative control, and it fails with
 the cap taken out.
+
+##### 20.14.5.4 …and on kern_mega into a huge claim, across a bridge's cut (MEGA-HUGE-PLAN F4)
+
+**Into a selector claim above 1MB a packed file whose expansion passed 64KB
+was refused** `FERR_IO` (`dskw_rbody`'s `.czfb`): the segment arm, which
+decodes by paragraph, cannot name memory above 1MB, and the selector arm's
+decoder took one window - and its motions, the output's 64KB bump, a
+match's source a window back, the input's slides, were BASE ARITHMETIC,
+which past a bridge's cut (§50.3.5) is another program's memory. Every
+shipped data file is lz4-packed (§20.13.5), so no module, cartridge or
+picture over 64KB reached the pool through `OSAPI_FILE_READ`.
+
+**It is one read now, and the placement is the same** — the packed bytes at
+`R = U − P` from the destination, expanded downwards onto themselves, no
+second claim (§20.14.2) — with the decoder's three scratches aimed by **X,
+the byte's offset in the destination**, rather than by sums (kern_mega only;
+`kern_big` and `kern_small` are byte-identical, their huge claim being one
+conventional block the segment arm already walks by paragraph):
+
+- **the destination is WALKED first, before any data I/O**: every 64KB of X
+  a window of the claim (`OSAPI_SEG`'s SUB stepping, `dskw_hzwalk`), each
+  64KB long but the last, the last reaching U's last byte (else `FERR_BIG`,
+  DX = U's KB), and a cut — a window whose base is not the last one's +
+  64KB — allowed only ON THAT GRID. A window cut short with another after it
+  is a cut off the grid, `FERR_PROT`: a read across a bridge starts at one of
+  its windows. One run has no cut and any paragraph-aligned start;
+- **the output (`MEGA_SEL_ODD`) and a match's source (`MEGA_SEL_BACK`) are
+  64KB windows at 64KB multiples of X**, which the walk's grid rule puts
+  inside one piece each, so a back-reference reaching across a window edge -
+  LZ4's 64KB window is exactly that hazard - reads the PREVIOUS window of X,
+  in whichever piece it is (`mega_hzback`, `mega_hzbump`, `mega_hzbkaim`);
+- **the input (`MEGA_SEL_SLD`) is a window at every 32KB of X** (the
+  decoder's checkpoint slides, §20.14.5.1), and one of those straddles the
+  cut: X = C − 32KB. **No descriptor can cover two places**, so that view is
+  aimed at **THE SEAM**, a 64KB copy of X C−32KB..C+32KB taken out of the
+  claim after the read and before the decode (`dskw_hzfill`). It is claimed
+  only when the stream itself straddles the cut (R before it): a
+  conventional claim (`MEM_K_SEAM`), else a pool block - a bridge leaves the
+  heap its 64KB reserve - BEFORE any data I/O, and refused as `FERR_BIG`, DX
+  = U's KB + 64, when neither can be had; freed on the read's way out,
+  whichever way (`dskw_hzfree`). A stream wholly in one piece needs none;
+- **the decoder learns it from its ES**: `dskw_czexp` names the output in
+  `[mega_hzes]` and `lz_decomp_big`'s entry, finding ES there, sets `LZ_HZ`
+  in its frame's format byte and spends the name - so a package's
+  `OSAPI_DECOMP`, whatever its AL, never takes the huge motions.
+
+The scratches are the decoder's own, aimed by linear base, so the caveat
+§20.14.5.1's slides already carry stands for the output too: a task switch
+to another decode that re-aims one of them is read through on the way back.
+The file layer is the UI task's alone (§18.4), so two huge reads never meet.
+
+`tests/megahpk.py` is the gate: three host-made 'CZ' files on a 4MB Bochs,
+150,000 bytes into a one-run pool claim, then 620,000 bytes into two
+bridges - one packing badly, its stream across the cut (the seam), one
+packing well, its stream all in the conventional piece - and a read 4096
+bytes into a bridge, refused `FERR_PROT`; every byte summed by the step
+against the original. Red on the tree before, every read `refused 0002`;
+red again with the seam taken out.
 
 ##### 20.14.6 The hint is a CACHE, so the read path has a MISS path now
 
@@ -72879,6 +73198,18 @@ What differs from a grant ring (§34.5.2):
 - verbs 3 and 9 are unchanged, and the teardown is: an instance's sound is
   released before its memory (`inst_rel_rec`), so a player that dies stops
   the card before its ring is freed.
+- **the stream's end forgets the ring** (KERN-MEGA-PLAN 14.182):
+  `sbl_stop_stream` zeroes `[sbl_rseg]` and the control words' segment
+  `[sbl_extctl+2]` in the same `cli` window that clears `[sbl_str_act]`,
+  as `sbl_dma_put` and `sbl_pool_put` zero `[sbl_seg]` and
+  `[sbl_poolseg]`. Both are words of `SNDV_RMODE`'s list (§53.2.3), so a
+  word naming a ring the package has since freed was a SELECTOR outliving
+  its claim on kern_mega: once another claim took that LDT entry above 1MB
+  the next real-mode door read "no real segment" off it and refused with
+  `FSXR_DRV` for a stream that no longer existed (the VGA demo videos' 04,
+  08, 09 and 10 played protected after an earlier clip's window closed).
+  6 bytes; kern_big's and kern_small's driver plays nothing differently,
+  a segment word there being read only by the open that sets it.
 
 **ADPCM4** is `SND_OPENF_ADPCM4` on the same verb: the start byte after
 `48h` is **7Dh** (auto-init 4-bit ADPCM, with a reference byte) instead of
@@ -85127,7 +85458,7 @@ table's end and present on every kernel (docs/plans/KERN-MEGA-PLAN.md 12.2):
 | `OSAPI_MEM_CODESEL` **0x04B9** | DX = the segment (or selector) naming a claim of the caller's. Out CF=0, AX = the selector to **far call code** in it: DX itself on a real-mode kernel; under `CPU_F_PM` the code half of the claim's allocator pair - DX - 8 for its data half, which is the claim's value, and a code half as it is (§50.6.12). CF=1 when there is none: DX = 0, or under `CPU_F_PM` anything that is not a pair's - a GDT segment, a data-only selector (an `OSAPI_XMEM_SEL` window, the read-ahead store). Any context. `apps/os88api.inc`'s `OS88_CODESEL` is its inline fast path, `value - 8` under `CPU_F_PM`. **Until KERN-MEGA-MEMORY-PLAN MC7 the protected-mode answer was a static LDT code alias, `(S >> 2) | 4`, and the macro inlined it; MC7's step 6 retired the aliases.** A binary built before MC7 that converts with `OS88_CODESEL` or `op_cseg` - a C package with an overlay (crt0's `cc_ovbind`), a package that far-calls a code part (`apps/os88partsbody.inc`), PIXELSTEIN 3D, LOOM's preview, WEAVE's canvas core - still computes the alias, which now names an unrelated LDT entry with no fault to say so: such a binary must be rebuilt for kern_mega, and kern_mega pairs with its own release's apps disk (§20.18). Every real-mode kernel runs it as before, which is why `PKG_FMT` did not move |
 | `OSAPI_XMEM_WALK` **0x04BF** | ES:DI = room for CX records of `XMW_SIZE` (6) bytes. Out CF=0, AX = the extended pool's live blocks written, each `XMW_OFF` (KB from the pool's base, which `OSAPI_XMEM_CAPS` answers in DX:CX), `XMW_KB` and `XMW_OWN`: an instance slot for an `OSAPI_XMEM_ALLOC` block, 80h \| slot for a package's REGION placed above 1MB (`OS88_HIGH`, docs/plans/KERN-MEGA-PLAN.md 13.3 step 4), 0A0h \| slot for a CLAIM it took there (`OS88_HIGHMEM`, KERN-MEGA-PLAN item 81), 0C0h \| row a driver's claim, FDh a driver's image, FEh the kernel's own (the read-ahead store, module pairs), FFh a cell called outside any instance. The record's sixth byte, `XMW_CLS`, is 0 except for a driver's block on kern_mega, where it is that driver's `DRVC_*` class off `drv_tab` (0 when no row matches) - so a reader names `SOUND.DRV` and not *a driver* - and for a kernel CACHE on kern_mega (owner FEh), where it is the cache's purge level, FBh-FEh: a block the next claim may take back (§50.6.8). **BX = `XMW_LONG` (4C58h, 'XL')** asks for LONG records: `XMW_FIXED`'s, each `XMW_LSIZE` = 8 bytes with `XMW_TAG` (+6, a word) the cache's whole `MEM_P_*` tag - its low byte the window slot, volume or owner the cache serves - and 0 for every other record (§28.4.11, KERN-MEGA-PLAN 14.92). kern_mega answers it; kern_big's `XMEM.DRV` refuses it with CF=1, AX = 2 and nothing written. **BX = `XMW_FIXED` (4658h, 'XF')** asks kern_mega for its fixed areas as well: one record each IN FRONT of the blocks, owner `XMW_GDT`, `XMW_LDT` (the LDT and the IDT) and `XMW_KCODE` (`.cold` and `.mega`), at POSITIVE `XMW_OFF`s past the pool's KB - they are at the top of RAM, above the pool (§50.6.9). The HMA (`XMW_HMA`, F0h) is the pool's first block and is walked as one; `XMW_PAD` is not written (§28.4.10, KERN-MEGA-PLAN 14.70.2). Additive: every other kernel writes 0 at `XMW_CLS` and ignores BX, but for kern_big's `XMW_LONG` refusal above and its `XMW_FIXED` with the HMA's tail installed, which puts the HMA's contents in front (§28.4.13). On kern_big with a store the pool is `XMEM.DRV`'s and the cell walks its table (overlay ABI 2's `XMV_WALK`, §28.4.8): owner a slot or FFh. CF=1, AX = 1 with no pool - kern_small, kern_mega in real mode, a kern_big machine without the overlay. The Task Manager's "RAM is RAM" reads it (KERN-MEGA-PLAN 13.6). Any context |
 | `OSAPI_XMEM_RUN` **0x04CB** | DX:AX = the TOKEN of an `OSAPI_XMEM_ALLOC` block the caller owns (its base). Out CF=0, DX = the first of a **run of data selectors**, CX = the step between them (8): selector *k* is the 64KB window from 32KB x *k* into the block, the last ones cut at its end, so **any 32KB of the block lies wholly inside one window** - the one at (offset >> 15), at (offset & 7FFFh). What a reader of records of 32KB or less needs to read them in place from ANY context once made, where `OSAPI_XMEM_SEL`'s one window has to be re-aimed by the UI task per read and `OSAPI_MEM_HUGE`'s 64KB windows cut a record that straddles one in two. One view a block: a block with a run takes no `OSAPI_XMEM_SEL` and the reverse (AX = 2 either way). Freed with the block. CF=1, AX = 1 not available (every kernel but kern_mega in protected mode) or no run of free LDT entries, 2 not the base of a block the caller owns or it has a selector already. UI-task context. The Video Player's hold and bank (98.3.18.16) are its consumer; docs/plans/KERN-MEGA-PLAN.md 14.16 |
-| `OSAPI_MEM_HUGE` **0x04C5** | AX = KB (1..65535). Out CF=0: DX = the claim's first segment or selector and CX = the STEP to its next 64KB - a program walks by CX and never by a constant. CX = 1000h for a conventional claim on every kernel; CX = 8 on kern_mega in protected mode for an `OS88_HIGHMEM` package, whose claim is ONE pool block above 1MB under a run of consecutive LDT data selectors, a 64KB window each and the last ending at the claim's end (§50.3.5). CF=1 refused - above 1MB only when the pool's free KB are short, the compactor moving huge claims too (§50.3.5). Freed by `OSAPI_MEM_FREE` with that DX, and at the instance's teardown; `OSAPI_MEM_REGROW` takes the pool's to any size and answers its first selector NOW (KERN-MEGA-PLAN 14.37). Docs/plans/KERN-MEGA-PLAN.md 14.1 answers 6 and 7: an ADDITION, so `OSAPI_MEM_CLAIM` and `OS88_HUGE_INCR` mean what they always did. **BX = 8000h** asks for a window every 32KB instead, each 64KB long (`OSAPI_XMEM_RUN`'s shape on a claim that moves), answered BX = 0 when given and BX kept otherwise; such a claim does not regrow, and moves a 64KB piece at a time with the package's rate hook held off (§50.3.5, KERN-MEGA-PLAN 14.41, 14.49). **BX = 4000h** a window every 16KB, the same way. **On kern_mega in protected mode a conventional claim is a run too, CX = 8** (§50.3.5, KERN-MEGA-MEMORY-PLAN MC7.4). Any context |
+| `OSAPI_MEM_HUGE` **0x04C5** | AX = KB (1..65535). Out CF=0: DX = the claim's first segment or selector and CX = the STEP to its next 64KB - a program walks by CX and never by a constant. CX = 1000h for a conventional claim on every kernel; CX = 8 on kern_mega in protected mode for an `OS88_HIGHMEM` package, whose claim is ONE pool block above 1MB under a run of consecutive LDT data selectors, a 64KB window each and the last ending at the claim's end (§50.3.5). CF=1 refused - above 1MB only when the pool's free KB are short, the compactor moving huge claims too (§50.3.5). Freed by `OSAPI_MEM_FREE` with that DX, and at the instance's teardown; `OSAPI_MEM_REGROW` takes the pool's to any size and answers its first selector NOW (KERN-MEGA-PLAN 14.37). Docs/plans/KERN-MEGA-PLAN.md 14.1 answers 6 and 7: an ADDITION, so `OSAPI_MEM_CLAIM` and `OS88_HUGE_INCR` mean what they always did. **BX = 8000h** asks for a window every 32KB instead, each 64KB long (`OSAPI_XMEM_RUN`'s shape on a claim that moves), answered BX = 0 when given and BX kept otherwise; such a claim does not regrow, and moves a 64KB piece at a time with the package's rate hook held off (§50.3.5, KERN-MEGA-PLAN 14.41, 14.49). **BX = 4000h** a window every 16KB, the same way. **On kern_mega in protected mode a conventional claim is a run too, CX = 8** (§50.3.5, KERN-MEGA-MEMORY-PLAN MC7.4). **AX = 0 ASKS** (§50.3.5): AX = the most KB a claim of BX's shape is given now, nothing claimed - and BX = `MEMH_AVAIL` (1) is the KB doors' answer with the pool counted, AX largest / BX total / DX the pool's best run; CF=1 on kern_big and kern_small, whose `OSAPI_MEM_AVAIL` is that answer. Any context |
 
 **Branch on `CPU_F_PM`, then on the slot.** A package that reads extended
 memory in place takes 41.13's or 41.15's route without the bit and this one
@@ -92320,6 +92651,26 @@ ceiling §45.3.1 exists to have removed. The refusals that cannot be
 pre-checked — `.nomem` (the heap fragmented under a figure `OSAPI_MEM_AVAIL`
 had just answered), `.noring`, a genuine `FERR_IO` — are the residue of the
 single-copy peak, not an oversight.
+
+#### 45.3.1.2 On kern_mega the module is the POOL's (MEGA-HUGE-PLAN F4)
+
+**The arm's module goes into an `OSAPI_MEM_HUGE` claim above 1MB** when the
+pool's best run holds it (`trk_hzfits`, the `MEMH_AVAIL` ask): one run of
+KB, `HUGE_NOBRIDGE` - never a bridge, because every sample's and pattern
+window is a `SEG_SUB` at a paragraph of the blob, and a SUB's reach stops at
+a cut - read whole by the packed read past 64KB (§20.14.5.4) and walked by
+the same windows as ever. Before it the module was a KB door's conventional
+claim whatever the pool held: 116KB of the ~560KB heap for `BEVERLY.MOD`,
+and no module the heap could not fund in one run. The ceiling is now the
+format's own - paragraph offsets in a word, the 960KB gate - and the pool's.
+A claim the cell put in the heap after all (an LDT run short) is given back
+and the door claims as before; with no pool (a 1MB machine) nothing
+changes. A pool block moves by its descriptors, so it takes no
+`OSAPI_MEM_MOVABLE` and no `trk_reloc`; and a huge claim does not regrow
+(MEGA-HUGE-PLAN F8), so `trk_trim` leaves its under-1KB of slack. The
+shipped build is byte-identical. `tests/megamod.py`'s `trkarm` (the blob
+above 1MB) and `trkbig` (a generated 700KB module, packed, which only the
+pool can hold) are the gate.
 
 #### 45.3.2 …and the refusal asks for the room first (§66.4.3)
 
@@ -100340,7 +100691,10 @@ of data selectors over it, so the run's first selector IS the claim's value
 (its code half at - 8, as for every claim), and answers CX = 8. Every window
 is based in the block, so a move rebases them (`mega_mpmovef`) and the free
 takes them (`mega_mpfreef`). No run of free entries: the claim goes back and
-the cell refuses. Not regrown past its first 64KB. Every real-mode kernel,
+the cell refuses. It regrows WITH its windows (THE REGROW, below); claimed at
+64KB or less it is a run of one, which nothing tells from the heap's ordinary
+claim, and regrows as that - no windows past its first 64KB - so a step
+walker that will grow a claim asks for it over 64KB or above 1MB. Every real-mode kernel,
 and kern_mega in real mode, still answers CX = 1000h.
 
 **BX = 4000h asks for a window every 16KB** (KERN-MEGA-MEMORY-PLAN MC7.4,
@@ -100349,7 +100703,8 @@ for the Video Player's and RealDMG's rolling windows), each 64KB long, below
 regrown, moved a piece at a time with the rate hook held off. Answered BX = 0
 when given.
 
-- **Regrow takes a huge claim to ANY size and keeps it in the pool.** A
+- **Regrow takes a huge claim to ANY size and keeps it in the pool** where
+  the pool can hold it (when it cannot, THE REGROW below moves it). A
   shrink cuts the run's tail and frees the block's; a grow takes the KB
   above the block where they are free, else moves it into a fresh block of
   the new size (after a compaction if one is needed), else packs the pool
@@ -100361,8 +100716,9 @@ when given.
   a free run of the new length when the entries after it are taken - so DX
   is the claim's first selector NOW, the step stays 8, and the old first
   selector is no longer the claim's. A refusal changes nothing a program
-  can see. It is never moved down to conventional memory, whose step is
-  not 8 - the regrow of a pool claim of 64KB or less still is, as it was.
+  can see. Moved down to conventional memory it is a RUN again, stepped by
+  8 (THE REGROW) - the regrow of a pool claim of 64KB or less from
+  `OSAPI_MEM_CLAIM` is the old one-selector move, as it was.
 - **A move is a 64KB PIECE at a time**, each piece's copy and the rebase of
   its descriptors one step with interrupts off, interrupts on between, so a
   claim of megabytes is never seconds of a deaf machine and an ISR reading
@@ -100387,6 +100743,149 @@ its periods owed and paid at the next call (KERN-MEGA-PLAN 14.49). With a
 sample ISR open (§34.11), and for a driver's claim, whose own ISRs may read
 it, the move is ONE step with interrupts off, as 14.41 shipped it. The Video
 Player's ring is its consumer (98.3.18.17).
+
+**THE BRIDGE** (docs/plans/completed/KERN-MEGA-MEMORY-PLAN.md MC5, D7, D8): on
+kern_mega in protected mode a claim with a window every 64KB (BX = 0) that
+neither the pool nor the conventional heap holds alone may take ONE piece in
+each - the pool's best run cut to whole 64KB windows first, then a
+conventional claim of the rest, the heap left at least `MEGA_RESKB` (64KB) -
+under one run of selectors stepped by 8 (`mega_hugebf`). Each piece is the
+record it would be alone and moves alone; `OSAPI_MEM_FREE` of DX frees both,
+and `OSAPI_MEM_REGROW` of DX resizes it (THE REGROW, below). **The two pieces are not contiguous**, so a bridge is
+one buffer only to a program that WALKS IT BY ITS STEP - window k is DX + 8k;
+`OSAPI_SEG` and the file doors follow the pieces (below, docs/plans/KERN-MEGA-PLAN.md
+14.169, MEGA-HUGE-PLAN F1); base arithmetic of the program's own - a sum on a
+selector, or `SEG_LIN` of the first window plus an offset - is right only on
+a claim that did not bridge.
+
+**A window every 16KB or 32KB NEVER bridges** (MEGA-HUGE-PLAN F3), and that is
+the design rather than a gap: such windows are 64KB long and overlap, so for
+every 32KB (16KB) boundary of the claim some window spans it - the cut between
+a pool piece and a heap piece included - and one descriptor cannot cover two
+places. Nor would a shape that skipped the seam keep the claim's one promise,
+any 32KB record whole in ONE window. So `mega_hugebf` refuses BX = 4000h and
+8000h, and such a claim is the pool's or the heap's alone.
+
+**AX = 0 ASKS rather than claims** (MC5, D6): out CF = 0, AX = the most KB one
+claim of the cell can be given now, nothing claimed - claim exactly that and
+it is had (exact for the pack the claim will make, the boot's caches counted
+as room the claim sheds, KERN-MEGA-PLAN 14.121). **The ask reads BX, which
+names the claim it is for** - set it:
+
+| BX | answers |
+|---|---|
+| 0 | the better of the pool alone, the heap alone and the bridge |
+| 8000h, 4000h | the better of the pool alone and the heap alone: no bridge (above). Until MEGA-HUGE-PLAN F3 the ask ignored BX and answered the bridge's figure for a claim that was then refused |
+| `HUGE_NOBRIDGE` (2) | the better of the pool alone and the heap alone - the claim's own answer when it is asked with `HUGE_NOBRIDGE` (below, KERN-MEGA-PLAN 14.169) |
+| `MEMH_AVAIL` (1) | **the KB doors' question, with the POOL counted** (MEGA-HUGE-PLAN F6, `mega_availf`): AX = the largest claim `OSAPI_MEM_CLAIM` (or `OSAPI_MEM_P` with no head) serves THIS caller - the heap's, or the pool's best run up to 64KB, the better; BX = the total free KB it can claim from, the heap's plus the pool's free (`mx_caps`, a cache counted free), 0FFFFh at most; DX = the pool's best run in KB, 0 when the pool owner rule refuses the caller. `OSAPI_MEM_AVAIL` and `MEMP_AVAIL` count conventional memory alone on kern_mega, as they always have - while an `OS88_HIGHMEM` package's claims of 64KB or less go above 1MB first (§50.3.7) - so a package that sizes or refuses from them asks this first and falls back to them where it answers CF = 1 |
+
+kern_mega in real mode answers the heap's figures (`MEMH_AVAIL`: exactly
+`OSAPI_MEM_AVAIL`'s, DX = 0). **kern_big and kern_small answer every ask CF = 1**
+(a claim of 0KB, refused before anything is shed): there the conventional heap
+is the whole answer, and `OSAPI_MEM_AVAIL` gives it. tests/megahuge's legs 7
+and 8 are the gate for BX = 8000h and `MEMH_AVAIL` (MEGA-HUGE-PLAN F3, F6).
+
+**The cut** (docs/plans/KERN-MEGA-PLAN.md 14.169, MEGA-HUGE-PLAN F1, F2,
+F9). Two runs of memory have a CUT between them, after the pool piece's last
+window, and the rules are:
+
+- **WHERE THE CUT IS: out BX = the pool piece's windows** when a bridge was
+  given, so window BX - DX + 8 x BX - is the conventional piece's first and
+  the cut is at BX x 64KB into the claim. BX comes back as it went for a
+  claim that is one run, so a caller asks with BX = 0 (or HUGE_NOBRIDGE) and
+  reads 0 as "one run".
+- **BX = HUGE_NOBRIDGE (2, bit 1) refuses a bridge**: the claim is one run or
+  refused, and the AX = 0 ask answers the better of the two alone. For a
+  caller whose own bookkeeping assumes one run of memory - WIN16's virtual
+  paragraphs (§124.31.3), whose `w16_vclaim` asks it. kern_big and kern_small
+  never bridge and ignore the bit (BX kept).
+- **The step walk is right by construction**: window k is DX + 8k, its base
+  in its piece. The byte at offset X of the claim is at offset X & FFFFh of
+  window X >> 16 - so its LINEAR address is `SEG_LIN` of THAT window plus X &
+  FFFFh, never the first window's base plus X, which on a bridge is pool
+  memory past the cut (another program's, or free). That rule is the same
+  arithmetic on every kernel (CX = 1000h there), so code written to it needs
+  no test of where it runs - and `apps/os88huge.inc` is that code, written
+  once (§50.3.8): copy in and out, aim with the reach, read and write a file
+  in pieces, every piece split where a window ends.
+- **`OSAPI_SEG` follows the pieces** (§50.6.11, `mega_bfmap`): `SEG_SUB`,
+  `SEG_SUBC`, `SEG_AT` and `SEG_HND` from a selector in the pool piece at an
+  offset past the cut answer the same offset past the cut in the
+  conventional piece - the claim's next byte, as in one run - and a reach
+  that would cross the cut is CUT SHORT at it, because no one segment is two
+  pieces: a read past such a window faults rather than reading the pool
+  memory after the piece. Past the conventional piece's end too: refused, AX
+  = 5 (`SEG_AT`: DX = 0, its refusal). `SEG_TILE` maps its first tile and its
+  last and is REFUSED (AX = 3) unless one piece holds every tile - a tile is
+  64KB of one run, and the last may be cut at the claim's end but not at the
+  cut. `SEG_AIM` already refuses an offset past its BLOCK's end, and a bound
+  window's block is one piece.
+- **`OSAPI_FILE_READ` and `OSAPI_FILE_WRITE` step across it**: the selector
+  arm bounds a run by its window's LIMIT, not by the offset's 64KB wrap
+  (`dskw_hileft`), moves a sector on before it would cross that limit
+  (`dskw_hifix`), and stages a sector that straddles the cut - a buffer whose
+  offset from it is not a multiple of 512 - in two parts (`dskw_hin1`,
+  `dskw_hinext`), so one call across the cut lands each byte in its piece. A
+  PLAIN read of more than 64KB from the offset into a selector above 1MB is
+  carried by the same stepping (it was refused before, `.czfb`), and so,
+  since MEGA-HUGE-PLAN F4, is a PACKED one whose expansion passes 64KB, into
+  a claim of any shape - one run, a bridge, 16KB or 32KB windows - provided
+  that a read crossing a cut STARTS on one of the claim's 64KB windows: the
+  cut a multiple of 64KB from the destination, `FERR_PROT` otherwise
+  (§20.14.5.4).
+- **The conventional piece is born pinned, as every claim is (§66), and is
+  taken from the TOP** - the heap's end, never the fill point, where what
+  the bottom stack sheds under it would cut the free run in two (KERN-MEGA-PLAN
+  14.166's rule: a pinned block never sits in the middle of a region).
+  `OSAPI_MEM_MOVABLE` of the bridge's DX declares that piece (the pool piece
+  moves whatever is declared, as every unpinned pool block does): the proc is
+  called for its moves, and every selector over it follows them, so a proc
+  that is a `ret` is the usual one.
+
+**THE REGROW** (docs/plans/MEGA-HUGE-PLAN.md F8, KERN-MEGA-PLAN 14.174):
+`OSAPI_MEM_REGROW` with DX = a huge claim (64KB windows) and AX = the new KB
+answers CF = 0 and DX = its first selector NOW, the step still 8, every byte
+up to the smaller size where it was in the walk, and keeps the claim's SHAPE:
+one run stays one run (so `HUGE_NOBRIDGE`'s promise outlives every regrow
+with no flag to say so), and only a bridge comes back a bridge. CF = 1 is
+"no room" and changed nothing. The routes, the cheapest first:
+
+1. **In the pool** (`mega_claimregrowf`, 14.37, 14.49): a pool run cut or
+   grown where it stands, or moved inside the pool.
+2. **A run's CONVENTIONAL piece** - a bridge's, or a claim `mega_hugec` made
+   a run over - is regrown as the heap regrows any claim (`mem_regrow`: in
+   place, or moved with every window based in it) and its windows are
+   refitted: the run extended into the LDT entries straight after it, or cut
+   with the cut entries freed (`mega_hgcpr`). A bridge regrown to its pool
+   piece or less gives the conventional piece back and is the pool's one
+   run, cut where it stands; its DX is kept on this route.
+3. **CLAIM, COPY, FREE** (`mega_hugek`) when neither can: the cell's own claim
+   of the new size (the pool, the heap, or a bridge for a bridge), the
+   smaller size copied a window at a time with no task running, the old
+   claim freed. Old and new are held at once - this route's price, and why
+   it is the last. The old conventional piece's declaration (§66) is made on
+   the new one; a claim that came down from the pool is born pinned, as any
+   claim, and its holder declares it again.
+
+A claim of 32KB or 16KB windows still does not regrow (CF = 1, nothing
+changed), in the pool or below it (its windows overlap, above). `MEMP_REGROW`
+of a run below 1MB takes the same arm (in KB), so the paragraph door no
+longer leaves its windows behind. kern_big and kern_small, and kern_mega in
+real mode, regrow a huge claim as the conventional claim it is
+(`mem_regrow`, CX = 1000h: one contiguous run, nothing to refit, up to the
+1,023KB every conventional claim stops at). MEGARGW (tests/megargw,
+`megargw` under Bochs at 4MB and `megargw86` on 86Box's 640K + 384K) is the
+gate: a pool run regrown past a full pool into the heap, a heap run
+extended and cut, a bridge's conventional piece shrunk and grown back, and a
+bridge taken below its cut, the pattern read back by the walk after each.
+
+MEGABRDG (tests/megabrdg, `megabrdg` under Bochs at 4MB and `megabrdg86` on
+86Box's 640K + 384K) is the gate: it claims the largest bridge with an 80KB
+conventional claim standing under it, finds the cut by the walk, and reads a
+pattern back every way above at 256 bytes before the cut and 1230h and
+10040h past it, writes and reads a file across it aligned and at odd
+offsets, and asserts BX, HUGE_NOBRIDGE, the declaration and the piece's
+place.
 
 MEGAHI (tests/megahi) is the gate under Bochs at 4MB: 200KB in four pieces,
 `MEGAHI: huge 2844 step 0008 ok` - each piece written and read back, the
@@ -100449,7 +100948,9 @@ OSAPI_MEM_P   0x04E9, X     BL = the verb (MEMP_*), ES = the caller (X stub)
                         AX = the paragraphs granted
   MEMP_AVAIL    5   -> AX = the largest claim you can have, BX = the total,
                         in paragraphs, at your floor as OSAPI_MEM_AVAIL;
-                        CX = MEM_GRAN, the granule in paragraphs
+                        CX = MEM_GRAN, the granule in paragraphs - the
+                        CONVENTIONAL heap's on kern_mega; the pool too is
+                        OSAPI_MEM_HUGE's MEMH_AVAIL ask (§50.3.5)
   CF=1 refused; every register not named is preserved
   MEMP_KPARTS   6   -> AX = the kernel's resident FAT window, BX = its
                         background task stacks, CX = task 0's stack, in BYTES -
@@ -100509,6 +101010,150 @@ path must reach - a ring in an `FSXF_REAL` list (VBattle's `vb_ring`, the
 Video Player's `vp_ring` and `vp_aseg`, `tests/megarmb`'s rings), or a
 workspace a fixed disk is read through a call a run rather than a call a
 sector (SysCheck's, §118.14). The head is in paragraphs, `KB × 64`.
+
+### 50.3.8 `apps/os88huge.inc` — walking a huge claim by its step, written once
+
+§50.3.5's rule is one line of arithmetic - byte X of an `OSAPI_MEM_HUGE`
+claim is at offset `X & FFFFh` of window `DX + CX × (X >> 16)` - and every
+program that holds more than 64KB was going to write the loop around it:
+split a copy where a window ends, aim a pointer and know how far it reaches,
+read a file in pieces that never cross a window. Written wrong, the loop is
+right on a paragraph step (one contiguous run, where a reach past a window's
+end lands on the next byte anyway) and wrong on kern_mega, where the next
+window is another selector and a bridge's cut lies between two of them
+(docs/plans/MEGA-HUGE-PLAN.md F5). So the loop is SOURCE, shared the way
+§20.5.2's decimal formatter is: `apps/os88huge.inc`, prefix `hw_`, one
+`%define` an arm, 8086, no kernel call but the claim and the file doors it
+names.
+
+**The record** (`HW_SIZE` = 14 bytes, in the caller's DS; every routine takes
+BX -> it):
+
+| field | what |
+|---|---|
+| `HW_SEG` +0 | window 0, the cell's DX |
+| `HW_STEP` +2 | the step to the window 64KB on: the cell's CX, ×2 for a claim given a window every 32KB (BX = 8000h asked, 0 answered), ×4 for 16KB (4000h) - the 64KB-apart windows are every second / fourth one |
+| `HW_LEN` +4 | dword: the bytes the walk may reach; nothing at or past it is touched. `hw_claim` writes KB × 1024 - set it lower to bound the walk by what is held |
+| `HW_CUT` +8 | the bridge's pool windows (the cell's out BX for BX = 0 asked), 0 one run. Information only: the walk never needs it, because the cut is at a 64KB boundary of the claim and every piece already ends at one |
+| `HW_FOFF` +10 | dword, added modulo 2^32: `hw_fread`'s FILE offset of claim byte 0 (44: a WAV's data from the claim's start; negative: a file's start part-way in). A cluster multiple. `hw_claim` writes 0 |
+
+**The routines** (near; each keeps every register but its outputs):
+
+```
+always   hw_aim    DX:AX = a claim offset, CX = bytes wanted (1..FFFFh)
+                   -> CF=0 ES:DI = that byte, CX = how many of them lie in
+                      its window (never past the window's 64KB - so never
+                      across a cut - nor HW_LEN); CX = FFFFh asks the reach
+                      (a whole window answers FFFFh). CF=1: at/past HW_LEN
+                      or CX = 0, ES DI CX kept. Keeps AX BX DX SI BP DS
+         hw_span   CF=1 when DX:AX + CX runs past HW_LEN. Keeps all
+HW_CLAIM hw_claim  AX = KB, CX = the cell's BX (0, HUGE_NOBRIDGE, 8000h,
+                   4000h) -> CF=0 the record filled, DX = the claim (for
+                   OSAPI_MEM_FREE / _MOVABLE); CF=1 refused, HW_SEG = 0
+HW_CLAIMFIT        AX = KB, CX = the cell's BX, DX = the heap's margin in KB
+     hw_claimfit   (0..1023) -> a HOLD (below): CF=0 the record filled, DX =
+                   the claim, AX = its KB (more than asked after the retry),
+                   CX = FFFFh when conventional memory is in it (declare it
+                   movable), 0 when the pool holds it all; CF=1 nothing
+                   held. Keeps BX SI DI BP DS ES. Takes HW_CLAIM with it
+HW_GET   hw_get    DX:AX, CX bytes OUT of the claim to ES:DI (any segment)
+HW_PUT   hw_put    ...INTO it from ES:DI. Both: CF=1 a span past HW_LEN,
+                   nothing copied; movsw, a byte for an odd count, cld own
+HW_RSEQ  hw_fread  SI = a name, DS:DI = an os88_rseq cursor, DX:AX = the
+                   claim offset, CX = the most bytes (a cluster multiple)
+                   -> CF=0 DX:AX = delivered (fewer: the file's end or
+                      HW_LEN); CF=1 AX = FERR_*. One os88_rseq a window the
+                   span touches, straight into it. Needs apps/os88rseq.inc
+HW_WSEQ  hw_fwrite DS:DI = an open os88_wseq stream, DX:AX, CX bytes of the
+                   claim put on it, one os88_wseq_put a window -> CF=1 AX =
+                   FERR_* (FERR_BIG: past HW_LEN, nothing put). Needs
+                   apps/os88wseq.inc
+```
+
+**A HOLD is `hw_claimfit`** (KERN-MEGA-PLAN 14.177): a whole file - a song,
+a WAV, a region of one - held in ONE claim of 64KB windows, a bridge allowed,
+with the conventional heap kept for what the program claims after it. It was
+written three times, in XTMP3's, WaveRack's and the Audio Player's kern_mega
+arms (§121.6.1, §123.6, §86.5.4), each a little different; this is the one,
+in four steps:
+
+1. **The ask first** (§50.3.5, AX = 0, BX = the shape): a size no claim can
+   be given now is refused there - no claim made, so no pack of the pool
+   either (`megajw`: the pack moved the look-ahead off the pool's floor for a
+   claim that was then refused, 14.166). An ask answered CF = 1 (kern_big,
+   kern_small) is a kernel with no pool: the claim is made and is the heap's.
+2. **The claim** (`hw_claim`), `MEMP_AVAIL` read either side of it: the
+   heap's TOTAL before and after says whether conventional memory is in the
+   claim (it fell), and its LARGEST RUN after is the margin's test - the
+   run, not the total, because what is claimed next is one run (a ring, a
+   card's grant, a program launched while it plays), and on a fragmented
+   heap the total passes where none of them fits.
+3. **The forced bridge, once.** The kernel places a claim in the pool alone,
+   else the heap alone, else a bridge (§50.3.5). So where the HEAP ALONE took
+   it (it fell, no cut) and the run left is short, it is freed and claimed
+   again at the next 32 KB past the heap's largest run: the heap cannot hold
+   that alone (`MEMP_AVAIL`'s largest is the largest claim it gives) and the
+   pool could not hold the smaller one, so the kernel bridges it or refuses
+   it, and a bridge's conventional piece is the smaller by the pool piece.
+   The hold is then LONGER than asked - AX says by how much, a 32 KB multiple
+   still, so a load in 32 KB pieces stays whole pieces - and nothing reads
+   past the file.
+4. **Given back** when it is short with the pool alone holding it (the heap
+   was short before), short as a bridge already, or short after the retry.
+   Only CX = 0 can bridge: any other shape short is retried into the kernel's
+   refusal.
+
+The caller declares the conventional part movable when CX says it is there
+(a `ret` its proc, §50.3.5), and decides what it does not hold for itself -
+XTMP3 gives a paragraph step back (kern_mega in real mode, where its old
+ladder stands) and the Audio Player keeps one. `tests/os88huge.py` runs it
+against a model of that placement with the three cells; `x3huge`,
+`waverackhuge`, `audhuge` and `megasbhold` are its rows in the guest.
+
+`hw_get`, `hw_put`, `hw_fread` and `hw_fwrite` keep a frame on the stack and
+address it with BP - SS, which is where the frame is; nothing reads DS
+through BP. A window is a segment register loaded for the walk: a caller
+does not keep ES across anything of its own that could move the claim, it
+aims again (§50.3.5: the run follows a move, a loaded register does not).
+The file routines are the UI task's (§20.6 rule 7); the rest run anywhere.
+**The kernel's own single calls stay the answer where they fit**:
+`OSAPI_FILE_READ` / `_WRITE` already step a whole file across windows and a
+cut (§50.3.5); `hw_fread` is for a file read in PIECES (a load spread over
+timer passes, a seek) and `hw_fwrite` for one appended in pieces.
+
+The cost on a package is what it takes: `hw_aim` and `hw_span` 91 bytes,
+`hw_get` 73 more (the copy loop with it), `hw_put` 61 beside that,
+`hw_claim` 92, `hw_claimfit` 114 beside it, `hw_fread` 87, `hw_fwrite` 64 -
+XTMP3's three arms (claim, get, fread) 343. XTMP3's kern_mega arm is the
+first user (§121.6.1);
+WaveRack's arm takes the hold and `hw_aim` alone, converting a window at a
+time into its play hold (§123.6), and the Audio Player's arm claim, get
+and PUT - its hold filled by the first play's own reads, a copy of each
+gulp (§86.5.4) (KERN-MEGA-PLAN 14.173, 14.186) - all
+three holds `hw_claimfit` since 14.177, which put their three copies in
+one place and left each arm's image smaller (XTMP3 46,985 -> 46,983 with
+the ask it never had, WaveRack 44,157 -> 44,150, Audio 14,509 -> 14,495); the
+Browser is next (MEGA-HUGE-PLAN 3). PiXEL's master needs none of it - its
+window table already IS a 32KB-window claim's run (§106.8.1) - the Video
+Player's bank and tier already fill both regions, and Video Battle reads its
+hold inside a REAL-MODE bracket, where no selector is (KERN-MEGA-PLAN 14.172).
+
+`tests/os88huge.py` (`os88huge`, host) runs every routine under Unicorn
+against a model on four shapes - windows 96KB APART with guards between (a
+reach past a window's end reads a guard, never the claim's next byte), the
+paragraph step, and a window every 32KB and 16KB - every register checked;
+`--break` takes the window's cap, the window's index, the length's cap, the
+32KB step's doubling or `HW_FOFF` out, and each fails it; and `hw_claimfit`
+against a model of kern_mega's placement (the pool alone, the heap alone,
+the bridge, with `MEMP_AVAIL`'s run and total and `OSAPI_MEM_FREE`), twelve
+cases, which `--break fitnoask` (a claim past the ask), `fitnoretry` (no
+forced bridge) and `fittotal` (the margin off the heap's total) each fail. `tests/megahw`
+(MEGAHW.O88, `megahw` on Bochs at 4MB, `megahw86` on 86Box's 640K + 384K,
+`megahwbig` on MartyPC's 5150 under kern_big) runs them in a guest, from ONE
+build: spans across a bridge's cut (kern_mega) or window 2 (kern_big), the
+aim's reach either side of it, the 64KB about it written by the kernel's own
+`OSAPI_FILE_WRITE` and by `hw_fwrite` and both files held to the pattern,
+then read back by `hw_fread` with `HW_FOFF`.
 
 ### 50.3.2 …and the top-down doors a driver never had
 
@@ -101671,7 +102316,10 @@ the block first moves, `mx_tokfit`) and never overlapping another live
 token's. Every cell finds the block by the token (`mx_key`) and goes to where
 it is now (`mx_tophys`). A token is never 0 (it is at least 100000h), and a
 copy is checked against the block's KB-rounded size, as before - the two
-things packages lean on. A census of every caller found none that reads a
+things packages lean on. A package that reads a block IN PLACE inside
+kern_mega's real-mode bracket asks where it is now, each bracket
+(`OSAPI_XMEM_COPY` CX = 0, 53.2.3: the Video Battle's clip cache, KERN-MEGA-
+PLAN 14.179). A census of every caller found none that reads a
 token in place under protected mode: LOADALL (`os88la.inc`) and unreal mode
 (`os88ub.inc`) are real-mode techniques, gated off under `CPU_F_PM` (the
 Video Player's `[vp_pm]`, `HDD.DRV`'s `HDV_ARM` refusal), and `XMEM.DRV`
@@ -101746,6 +102394,7 @@ verb:
 | `SEG_LEND` 11 | DX = the real paragraph of a claim of the caller's below 1MB (`SEG_REAL`'s answer for its base), CX = the top of a stack in it; or DX = 0 | the stack is LENT: a BIOS `int 10h`-`1Fh` made on a stack that is not `LOW_SEG`'s runs on it (§124.31.2), entered through the claim's selector in protected mode and its paragraph in real mode - the GDT's identity map stops at `.cold`, so no selector is both. The last lender's is the one used; DX = 0 takes the caller's back, and its instance's end does. CF = 1 when DX is no live claim's base |
 | `SEG_HND` 12 | SI = a selector based in a claim or a pool block, AX = a paragraph offset into it, CX = bytes (0 = 64KB), DX = a HANDLE descriptor to re-aim, or 0 for a new one; SI = 0 frees DX | DX = a handle descriptor based there, its reach CX clipped at that block's end (§124.31.3) |
 | `SEG_TYPE` 13 | DX = a WINDOW of the caller's (made by `SEG_WIN`, `SEG_WINL` or `SEG_AT`) or a HANDLE descriptor (`SEG_HND`) based in a block of the caller's own, CX = 0 data / 1 code / 2 code NOT PRESENT; **CX = 3: DX:SI = the caller's `#NP` handler** (0 in DX takes it back) | the descriptor's type set in place, F2h (data, DPL 3) / 9Eh (code, conforming, DPL 0) / 1Ah since KERN-MEGA-PLAN 14.144 (92h / 9Ah / 1Ah before it); base, limit and selector kept (§124.31.6). CF = 1, AX = 4 for anything that is not the caller's own window or handle descriptor (a SUB, a pair, a tile, another's window or handle descriptor, a DX that is no allocator LDT entry). CX = 3 needs only a caller that is somebody (CF = 1, AX = 4 otherwise) |
+| `SEG_LOW` 14 | DX = the caller's OWN DS (its region), AX = a relocation proc of its (`OSAPI_MEM_MOVABLE`'s AX) or 0 | the region, when kern_mega put it above 1MB (`OS88_HIGH`), MOVED into a conventional claim at the arena's top owned by its slot - as a region loaded low is - with every selector KEPT: the bytes copied and every LDT descriptor based inside the old block rebased by the drop, as a pool move rebases them (a window excepted), in one step with interrupts off and `[sch_lock]` held; the claim's mem_sel row made the region's pair, MC_RLOC = AX (movable with a proc, pinned with 0), and the pool block freed (KERN-MEGA-PLAN 14.178). DS and CS read the new base as the cell returns; a caller reloads ES itself. Conventional already: CF = 0 and nothing done. CF = 1, AX = 1 no conventional room, AX = 3 DX is not the caller's own region - nothing moved either way. For a real-mode bracket's package (SPEC.md 53.2.3), asked BEFORE it sizes its extended memory |
 
 **Every real-mode kernel answers what the caller's own arithmetic was** -
 `DX x 16`, `DX`, `DX`, `DX + AX` (`SEG_SUB` and `SEG_SUBC` alike), `DX` for
@@ -101763,6 +102412,9 @@ real-mode caller's next 64KB is its segment + `1000h`, its own sum.
 `SEG_HND`: a real-mode caller's block is its paragraph, which needs no
 descriptor. So is `SEG_TYPE`: a real-mode segment is code or data by how it is used,
 and the caller keeps the segment it has.
+And so is `SEG_LOW`: a real-mode kernel's region is conventional already,
+so a caller asks it only under `CPU_F_PM` (`osapi_segr`'s `ja` refuses
+every verb past `SEG_BWIN`: kern_big and kern_small byte-identical).
 `.mega` alone: 18 bytes, kern_big and kern_small byte-identical.
 
 On kern_mega in protected mode (`mega_segf`, `.mega`):
@@ -101786,6 +102438,14 @@ On kern_mega in protected mode (`mega_segf`, `.mega`):
   claim's first 64KB has a CS - RealDMG's recompiler part and its extra cache
   tiers (docs/plans/completed/KERN-MEGA-MEMORY-PLAN.md 8.1); it is a block's or
   nothing (CF = 1, AX = 3). A block's free takes both halves.
+- **A BRIDGED claim** (§50.3.5, docs/plans/KERN-MEGA-PLAN.md 14.169) is two
+  runs of memory, and a base plus an offset past its pool piece's end - the
+  cut - is no address in it. `SEG_SUB`, `SEG_SUBC`, `SEG_AT`, `SEG_HND` and
+  `SEG_TILE` asked from a selector in the pool piece map such an offset into
+  the conventional piece and cut a reach short at the cut (`mega_bfmap`);
+  `SEG_TILE` across the cut, and anything past the conventional piece's end,
+  is refused. `SEG_LIN` answers one selector's base: a bridge's byte X is
+  `SEG_LIN` of window X >> 16 plus X & FFFFh.
 - A **BOUND window** (`SEG_BWIN`) is a fresh descriptor - never a match, so
   re-aiming it moves nobody else's - based in a claim or a pool block **of
   the caller's own** (`mega_bown`, asked before the block is flagged: a
@@ -102006,7 +102666,10 @@ was - by a selector - and not by its segment:
   arm loads going through a scratch selector. The LZ decoder slides by
   descriptor (`mega_slidec`), a match 64KB behind the output through
   `MEGA_SEL_BACK`, and a match source that may slide never re-aims the
-  input's `MEGA_SEL_SLD`.
+  input's `MEGA_SEL_SLD`. Above 1MB the same three scratches are aimed by
+  the byte's offset in the destination instead of by sums, so a packed file
+  expands past 64KB into a pool claim and across a bridge's cut (§20.14.5.4,
+  MEGA-HUGE-PLAN F4).
 - **A kernel module that does PARAGRAPH arithmetic keeps it** (MC7.6):
   DISKOPS.DRV's compressor, join and cloner and CTRL.DRV's `cpc_fdtest` hold
   their claims' REAL paragraphs (`clo_kpara` on the way in, `clo_kfree` on
@@ -108139,7 +108802,9 @@ a `DVK_BIOS` unit's (the partition's base added, CHS's reach checked) or a
 `DVK_DRV` `DRVC_DISK` volume's own - and each driver the list reaches whose
 image is above 1MB is given a conventional claim its image and bss are
 copied DOWN into at the freeze's arm and back UP at the exit, as the region
-is (a driver already conventional runs where it is). The walk happens in the
+is (a driver already conventional runs where it is - and `FSXF_PREP`,
+53.2.3.1, is how a package has its drivers conventional before it sizes
+anything). The walk happens in the
 park's scratch, so a bracket that falls back takes nothing. A stat or chain
 that fails is not a fallback: the twin answers that `FERR_*` for that name. **A refusal (CF = 1) is for a state
 the user will not normally be in** - the owner's rule - so none of these
@@ -108176,6 +108841,24 @@ conventional room without moving the package - and the bracket goes on in
 protected mode with nothing taken, where the bank is never read. No claim is
 pinned for it, and a door that compacted nothing of the caller's is exactly
 as before.
+
+**A region above 1MB is held TWICE for a bracket's life, so a package that
+sizes extended memory brings it down first** (KERN-MEGA-PLAN 14.178). The
+copy below is a conventional claim of the region's size while its pool block
+stands idle above 1MB - and a package that takes "the whole pool" for a hold
+or a bank at its door took it without those KB, which kern_big's XMS never
+had a region in. Measured on 86Box's 286 at 640K + 384K: the Video Battle's
+hold 220 KB of the pool's 300 with its 48 KB region and a 12 KB picture kept
+above 1MB, against kern_big's 316. `OSAPI_SEG` `SEG_LOW` (50.6.11) moves the
+caller's own region into a conventional claim at the arena's top, its
+selectors kept, and frees the pool block: asked BEFORE the package sizes
+its extended memory - both callers ask in their entry proc, before a window
+exists, and again at the door when that was refused - the pool has the KB,
+and the bracket then finds the region conventional and copies nothing (step
+1's `FSXR_ROOM` test of the copy does not arise). The region stays down
+while the package runs - kern_big's arrangement, a window that is open costing
+its region's conventional KB as there - and goes with the instance. The
+Video Battle (126.4.5) and the Video Player's arm (98.3.24.2) ask it.
 
 **What the kernel does, on kern_mega**:
 1. at the door, after every other test: the reasons above, tested NOT in
@@ -108306,7 +108989,19 @@ for the exit (a tone is not the bracket's: the speaker is the door's).
       runs), the bytes moved by LOADALL on a 286 (`apps/os88la.inc`, 16 KB
       a borrow) and by a loaded base on a 386 (`apps/os88ub.inc`, 2 KB a
       chunk), interrupts open between pieces and A20 proved first - kern_big
-      XMEM.DRV's two transports;
+      XMEM.DRV's two transports. **CX = 0 is WHERE** (KERN-MEGA-PLAN
+      14.179): no byte moved, CF = 0 and DX:AX = the LINEAR address the
+      extended end is at NOW - the same translation, answered, with the
+      same AX = 1 / 2 refusals. A package that reads its block IN PLACE
+      inside the bracket (a LOADALL'd or loaded base, 126.4.2) asks it
+      each bracket, because on kern_mega the pool moves a token's block
+      between brackets (50.6.10) and never inside one; it is how the Video
+      Battle's clip cache (126.4.6) runs here as on kern_big. Every other
+      kernel, and kern_mega in protected mode, answers CX = 0 AX = 3 (a bad
+      length) as before - on a real-mode kernel the token IS the address,
+      so a package asks only under `CPU_F_PM` at its door. An answer where
+      there was a refusal: `PKG_FMT` 10 kept (`tools/abilock.py --update`).
+      16 bytes of `.mega`;
     - `OSAPI_XMEM_CAPS`: the pool's answer off `mx_tab`;
     - `OSAPI_DRV_CALL` and `OSAPI_DRV_CALL_AT`: a class the door carried low
       is called at its real paragraph through its `DSV_PKGCALL` (`DRVC_EMS`
@@ -108354,7 +109049,12 @@ for the exit (a tone is not the bracket's: the speaker is the door's).
   at or below 60h, `SNDV_MIXPOP`'s test), answers SI = the offset in the driver's segment of
   a list of word offsets and CX = its count - SOUND.DRV's are the ring's
   segment, an external ring's control-word segment, the staging pool and
-  the double buffer. At the drop each word is banked and made the real
+  the double buffer. **Each word is 0 while it names nothing** - the pool
+  and the buffer when they are freed, the ring's two when its stream ends
+  (§34.5.3, KERN-MEGA-PLAN 14.182) - because the DOOR asks every word for a
+  real segment and refuses the bracket, `FSXR_DRV`, for one above 1MB, and
+  a word left naming a freed claim answers for whichever claim takes its
+  LDT entry next. At the drop each word is banked and made the real
   segment with its base; at the return a word still holding what the drop
   wrote gets its selector back, and a word the bracket WROTE - a stream
   OPENED inside, which stores real segments - gets the selector of the claim
@@ -108501,6 +109201,121 @@ Each was one test at the door and each test is gone:
   loses nothing. A package that wants a lossless line across the bracket
   closes its lease before `OSAPI_FSX_RUN`, or holds it in a conventional
   region.
+
+### 53.2.3.1 `FSXF_PREP` — the door prepared, and its conventional need answered (kern_mega; KERN-MEGA-PLAN 14.180)
+
+A real-mode bracket's package sizes two kinds of memory BEFORE it calls
+`OSAPI_FSX_RUN`: its extended memory (a hold, a bank) out of the pool, and
+its conventional claims (rings) out of the heap - and the door then claims
+conventional memory of its own after them (the service area, a copy of each
+listed driver whose image is above 1MB, EXTD.DRV's copy, the region's copy
+when it is above 1MB). Two things followed, both measured on 86Box's 286 at
+640K + 384K (KERN-MEGA-PLAN 14.178): the drivers the bracket carries -
+SOUND.DRV (11 KB) and HDD.DRV (4 KB) - stood in the pool as images the hold
+was sized without, AND were copied into conventional memory for the
+bracket, so their 15 KB were held twice; and the package could only guess
+what the door would claim (the Video Battle kept 24 KB, `VB_RKEEPM`, for a
+door that took 18; the Video Player's arm 16, `VP_RBRKB` - 64).
+
+**`FSXF_PREP` (CX bit 4, 16) with `FSXF_REAL` asks the door to PREPARE and
+run nothing.** In: what a run would pass - AX = the entry, BX = the window
+(the fence is the run's), BP = the list (§53.2.3), SI = 0, CX =
+`FSXF_REAL | FSXF_PREP` (any other flag is tested as a run's is -
+`FSXF_RATE`'s DX and DI included - and otherwise ignored, but
+`FSXF_KEEPWORKER`, which answers `FSXR_KEEP`).
+**Out, on kern_mega in protected mode: CF = 0, AX = the KB of conventional
+memory the door will still claim, SI = the `FSXR_*` it would answer** -
+`FSXR_REAL`, or the first reason among those that need no claim to test
+(`FSXR_KEEP`, then the list's `FSXR_VOL`, `FSXR_FRAG`, `FSXR_DRV`), AX = 0
+then (a protected-mode bracket claims nothing conventional). Every other
+register as it came; nothing of the door's state is touched, no bracket is
+up, and the call may be made as often as wanted. **Every other kernel
+refuses it, CF = 1** - kern_big and kern_small by the undefined-bit test
+(§53.1: bit 4 was always refused), kern_mega in real mode (a machine it
+could not switch) at `.nreal` - and so did every kern_mega before 14.180:
+a package keeps NOTHING for the door where it is refused under real mode,
+and its old guess where it is refused under `CPU_F_PM`.
+
+What the door does, in protected mode:
+1. the list walked exactly as the run's door walks it (the caller's folder,
+   the park's scratch), and the tests above;
+2. **each driver the bracket will carry (the walked list's classes:
+   `DRVC_DISK`, `DRVC_EMS`, `DRVC_SOUND`) whose image is a pool block is
+   BROUGHT DOWN for good** (`mega_drvlow`): its image and bss moved into a
+   conventional claim owned `MEM_K_DRV` and placed as `drv_load`'s own claim
+   is - bottom-up first fit, into the arena's low holes rather than at its
+   top, under which a package sizes its rings (at the top, 15 KB cost the
+   Video Player's 64 KB-page-aligned ring a 32 KB slot) - and on a 512-byte
+   boundary (SOUND.DRV's `SBL_DSCS` in real mode); every allocator descriptor based in the block rebased in the same
+   interrupts-off step (`mega_mvblk`, the compactor's rule), so no selector
+   changes and its IDT gates and vectors stand; the claim's `mem_sel` row
+   made the driver's pair; the pool block freed. The run's door then finds
+   it conventional and copies nothing ("a driver already conventional runs
+   where it is", above). One there is no conventional room for stays above
+   1MB and its copy's KB are counted;
+3. the region's copy (its `I_SIZE`, when it is above 1MB - §50.6.11's
+   `SEG_LOW` is what brings it down), the service area (`fsx_rsvcsz`, the
+   run's own sum: code, rows, runs, pool rows, a lease's ring, the glyph
+   table's copy) and EXTD.DRV's copy (its claim, when above 1MB) summed, each
+   in whole KB as the run's door claims them.
+
+**A driver brought down is LENT, not moved for good**: its row keeps
+`DRVR_PARA` = 0 (which a `drv_load` image never has), and when ANY
+instance ends - `mx_relinst`, after its pool blocks are freed - every lent
+image goes back up into a pool block owned `MX_KDRV`, where `drv_hi` put
+it, the same way (`mega_drvup`: selectors kept, the conventional record
+freed under it), when the pool has room; one it has none for stays down and
+runs where it is, as any low driver does. So a package asks at EVERY door
+(the next play's may find its drivers back up), and the desktop pays the
+drivers' 15 KB of conventional memory only while some package's hold leaves
+the pool no room for them - which is the double count removed, kern_big's
+arrangement (whose XMS never held them). A Drivers page weighs a lent
+image's conventional KB as 0, as it weighed it above 1MB.
+
+**What a package does**: under `CPU_F_PM`, before it sizes its extended
+memory, `FSXF_PREP` with the list its play will hand the door (the drivers
+come down, the pool has their KB); before it sizes its conventional claims,
+the answer's AX KB left free beside what it keeps for its own file reads -
+WHERE the door will claim them, which is the arena's lowest hole that fits
+(bottom-up first fit) and not necessarily the run the package sizes from:
+holding AX KB in a plain claim while sizing and freeing it before the run
+places them exactly. The Video Battle asks before its hold opens and keeps
+`VB_RKEEP` + AX, held so (`vb_prep`, `vb_rclaim`, §126.4.5); the Video Player's arm asks at the file's open (its
+bank) and again where `vp_rbhold` holds the door's room (§98.3.24.2).
+`VB_RKEEPM` and `VP_RBRKB` are their fallbacks for a refusal.
+
+**A conventional SOUND.DRV's vector, which the run's door missed** (found
+by `vidrmbtwice` once SOUND.DRV was lent: no kern_mega had run the card's
+driver below 1MB before). `mega_ivt_sync`'s `.fixrow` writes a vector that
+names a pair's code half back as the image's SEGMENT when the image is
+conventional - the IVT is the reflections' - and the forced sync at every
+bracket's return does it; the next door's `fsx_rsnddn` looked for the code
+half alone, banked nothing, and left the card's line SHUT for the bracket,
+so the second play's stream died with the samples queued before the drop.
+It matches the row's `RMD_SEG` too now and banks the cell as it was.
+
+**...and the same vector when the image goes back UP** (KERN-MEGA-PLAN
+14.181: the owner's pre-release pass of the VGA demo videos on 86Box's
+16 MHz 286 - one clip played full screen, its window closed, the next one
+opened). The forced sync left the card's IVT cell naming the lent image's
+conventional SEGMENT, and `mega_drvup` moved the image up without touching
+it, so the cell named a paragraph that was now somebody else's or nobody's:
+the next gate rebuild made it that claim's pair or a reflection to the old
+paragraph, and the next door's `fsx_rsnddn` matched neither the code half
+nor the new copy's `RMD_SEG`. Every play after the first window closed went
+SILENT after its first block (`[vp_snd]` 0, `[vp_pause]` 1), protected-mode
+brackets included, until a reboot. **`mega_drvup` now puts every IRQ cell
+(08h-0Fh, 70h-77h) that names the image's old paragraph back to its pair's
+CODE half - what `drv_hi` left there and what the door matches - and syncs
+the gates** (`mega_drvivt`); a cell naming anything else is not the
+driver's and is left alone.
+
+What it costs: kern_mega `.mega` +416 bytes against mega-release at 14.179
+(24,176 -> 24,592; the rung's 26,112 not crossed, so `MEGA_CODE_KB` and the
+pool unchanged), `.text` +6
+(the real-mode refusal, `tests/megaseg.txt` 3,754 -> 3,760), resident
+unchanged; kern_big and kern_small byte-identical. `megaparvb` and
+`megaparvp` are the gates (KERN-MEGA-PLAN 14.180 has the measurement).
 
 ### 53.3 Entry silences what it strands (binding)
 
@@ -113517,6 +114332,22 @@ refusal is not a feature. Bronze (417KB), The Dreamhold (434KB) and Lost Pig
 (337KB) are the largest that do fit, and the four stories on the 360KB disk —
 Mini-Zork, Zork 285, Adventure and Balances, 63–100KB — all run on a 256KB XT,
 which is what `make xt` is for and where the refusal is tested.
+
+**On kern_mega a story over 64KB is ONE `OSAPI_MEM_HUGE` claim with a window
+every 32KB** (BX = 8000h, §50.3.5; docs/plans/MEGA-HUGE-PLAN.md) - above 1MB
+where the pool has room, and it was a conventional `MEMP_CLAIM` for the whole
+session, 100-512KB of the heap every other program shares. Window k is the 64KB
+from 32KB x k, which is exactly Frotz's page (§61.3, `zmem.inc`), so the page
+table is the claim's own run - `zm_run` writes DX + 8k - where the paragraph
+claim needed a SEG_SUB selector per page (up to fifteen LDT entries a story).
+The refusal is the ask for that shape (`zi_room`: AX = 0, BX = 8000h, which
+never bridges), and a story of 64KB or less refuses from `MEMH_AVAIL` - the
+KB doors' answer with the pool counted - because its claim goes above 1MB too.
+A refused huge claim falls back to the paragraph door; a conventional answer
+(CX = 1000h, kern_mega in real mode) takes `zm_pages`'s sums. Both asks are CF
+= 1 on kern_big and kern_small, which keep `MEMP_AVAIL` and the paragraph
+door, unchanged. `tests/megafrotz.py` asserts the story claim's base is 1MB or
+more and the 282KB story plays.
 
 ### 61.5 Windows and text
 
@@ -119971,6 +120802,60 @@ in the tree builds that layout; a plan of the floor-first order needs the
 next ceiling-run's gap charged *below* the floor mover, which is a second
 deferred quantity and is left for whoever meets it.
 
+**THE PAGE BUMP IS IN THE PLAN** (KERN-MEGA-PLAN 14.185; it was this
+section's second open mismatch, found at 14.184 by `heapfrag`'s rebuilt check
+14). `mem_cp_both`'s walk packed a floor mover onto the fill point and a
+ceiling mover into its deferred sum, and neither asked `mem_cp_dest` — so a
+MOVABLE claim carrying `MC_DMA` (§66.4.2) whose head would straddle a 64KB
+page at the fill point was planned AT the fill point, where the run bumps it
+to the next page's floor. The plan OVER-reported by the distance between the
+two, the dangerous direction: a 42KB block over a fill point at offset F20h of
+its page, 48K promised and 45K produced on a 1MB kern_mega, 100K against 97K
+for a 60KB block on kern_big, the claim of the promise refused both times. It
+reached whoever declares such a block movable — the typeface cache
+(`os88type.inc`) and the Audio Player's idle look-ahead, both bottom-up — by
+less than the block's head. Each arm is fixed in the direction it can be:
+
+- **The floor arm asks `mem_cp_dest`** — the run's own routine, so the plan
+  cannot put a block where the run will not (and a DISK-class claim's
+  512-byte rounding on a `MEMGRAN=16` knob comes with it). The fill point
+  resumes past the destination, as `mem_cp_walk`'s `.stay` does, and the gap
+  the bump opens is **not** a run, because `mem_cp_walk` does not count it
+  either: `mem_compact` decides on that walk's run, so a hole only it would
+  leave is not one `mem_claim` compacts for. The plan IS the run here, step
+  for step, which is §66.4's binding property extended to the reporter.
+- **The ceiling arm charges the head.** The descending pass bumps an `MC_DMA`
+  mover DOWN, to the highest base in its page whose head fits — by less than
+  the head — and where it lands depends on the barrier above it, which the
+  deferred sum has not reached yet. So a ceiling mover adds its size AND its
+  head to the fill point (plus 31 paragraphs for a DISK one on the knob):
+  the run occupies at most that under its barrier, so the hole measured
+  there is never more than the pass leaves. A bounded UNDER-report, by less
+  than the head. **Treating it as a barrier, the obvious safe spelling, is
+  not safe**: the block really does slide up, so a floor mover above it that
+  the plan packs down through the gap cannot move in the run — the same free
+  space cut at a different place, read over by up to that gap
+  (`tools/heapwhatif.py`'s *DMA ceiling mover, floor mover over it*). No
+  top-down `MC_DMA` claim is declared movable in the tree today, so this arm
+  is a guard on the next one.
+
+**What it costs**: **18 bytes of `.cold`, resident, no rung crossed**, on `kern_big` and
+`kern_mega` alike (`mem_avail_lvl_p`'s span 107 -> 125; `.cold` 37,566 ->
+37,584 and 48,393 -> 48,411); `kern_small` has no walk and is unchanged.
+Counted on MartyPC's 5150, three `mem_avail_lvl_p` calls against the same
+six-claim map with four movable floor claims: 35,393 / 33,246 / 33,257 cycles
+before, 36,373 / 34,232 / 34,149 after - **~240 cycles (50 us) a movable
+floor claim**, about 3% of the call, and bounded by `MEM_MAX` of them (under
+1.6 ms) against the walk's own O(`MEM_MAX`²) scan. A pinned claim, a cache
+and a ceiling mover pay nothing but the ceiling arm's three instructions.
+The gate is `heapcheck`'s 14b (§66.8): `mem_avail` asked with check 14's
+block movable, and a claim of exactly that answer GRANTED - refused at the
+base on both kernels (100K promised against 97K delivered on kern_big, 48K
+against 45K on a 1MB kern_mega), granted after. `tools/heapwhatif.py` and
+`both_passes()` model both arms; a random sweep of 68,615 page-safe layouts
+against a model of what `mem_compact` can deliver read the old plan OVER on
+1,416, the barrier spelling on 146 and this one on none.
+
 **PLAN ONLY.** There is no `mem_cp_both_run` and there must not be: one walk
 may plan both directions and may **not** run them, because packing a top-down
 claim up inside an ascending walk writes onto claims the walk has not visited
@@ -121920,6 +122805,34 @@ afterthought.
   descending pass is reached from. **Verified by amputation**: with `.flip`
   patched to `jmp .undo` and nothing else changed, checks 1–12 pass and only 13
   goes red.
+- **`tests/heapfrag` check 14 is §66.4.2's gate**, and it BUILDS its layout
+  rather than finding one (KERN-MEGA-PLAN 14.184): from the big claim's base B
+  it names F, the first place a whole number of KB on whose page offset is at
+  least F00h (no block over 4KB may start there), G, the next page's floor,
+  and D, the first such place past G. The big claim is regrown to end at D, a
+  roof the block's size is claimed top-down (so kern_mega's `mem_ringtop` does
+  not send the block to the top end), the block - a 4..60KB `MC_DMA` claim
+  whose head is all of it - is claimed and must land AT D, the big claim
+  shrinks back to end at F, and with every other block of the suite pinned the
+  ask is one KB past the largest run, which only the block's slide from D to G
+  funds. It asserts the contents came, the base moved, and the head is inside
+  one page. **Red both ways it can be broken**: `mem_cp_dest`'s bump removed,
+  the block lands at F, offset F20h, and only 14 goes red on kern_big and
+  kern_mega; a pin on `MC_DMA` would refuse the ask (stage 8 - reasoned, not
+  run). The check it replaced claimed
+  the block above the big claim and freed it, and whether a legal landing
+  could fund its ask was the layout's luck: on a 1MB kern_mega it could not,
+  and the check was red on a correct kernel.
+  **And 14b, ahead of 14's own ask** (KERN-MEGA-PLAN 14.185): `mem_avail`
+  with the block alone movable, and a claim of EXACTLY that answer, which
+  must be GRANTED and must exceed the pinned answer (the move's room seen).
+  It is §66.4.3.1's page-bump gate: red at the base on both kernels (the plan
+  put the block at F; 100K promised against 97K on kern_big, 48K against 45K
+  on kern_mega), green with the plan asking `mem_cp_dest`. It is asked first
+  because once the block has moved every plan is right; 14 still reads the
+  move it makes, and with the bump amputated 14 alone goes red, 14b staying
+  green - the plan agreeing with the run either way, which is its question.
+  The harness asserts it (`hf_dmaag`); `hf_n` stays at 18.
 - **The Task Manager's memory map** already draws every claim at its real
   address and is the cheapest visual confirmation there is.
 - **The field sequence** (docs/FIELD-NOTES.md 2) end to end on a
@@ -130259,6 +131172,43 @@ the network cases through QEMU/NE2000 for correctness and the local fixtures
 through MartyPC or 86Box for 8088 responsiveness; QEMU provides no timing
 claim.
 
+#### 71.18.2 kern_mega — the source and the document in huge claims
+
+On kern_mega in protected mode (`[br_mega]`) the SOURCE and the formatted
+DOCUMENT are `OSAPI_MEM_HUGE` claims (`br_hclaim`, docs/plans/MEGA-HUGE-PLAN.md
+3) of ONE RUN, `HUGE_NOBRIDGE`: above 1MB where the pool holds them, at any
+size, and regrown there; the heap's when it cannot - the claim and its regrow
+alike (§50.3.5's THE REGROW: a run the pool cannot hold any more is claimed
+again in the heap and copied). The line table, the link arena and the
+download buffer stay the KB doors' (64KB or less: above 1MB already, as
+`OS88_HIGHMEM` gives every such claim). Every real-mode kernel's path, the
+8088's included, is the KB doors' as it was: the test is one compare.
+
+**Never a bridge**, and that is measured rather than assumed: every window
+that reads these claims is one piece's - `br_bwaim`'s bound window re-aimed by
+`SEG_AIM`, which refuses an offset past its block, and `br_at`'s `SEG_AT`,
+whose reach stops at a cut - and their callers count on 32-48 KiB of reach
+from the aimed byte (the parser's source window, `br_docmap`'s 16 KiB page
+and the three after it). A bridge would make every one of those aims split
+at the cut. And it would buy nothing here: the page is TWO buffers, so with
+each one run the pool and the heap together are still what they can hold -
+the source in one region, the document in the other.
+
+**The reserve counts both regions** (`br_avail`): the 20% of §71.18 is taken
+of `OSAPI_MEM_HUGE`'s `MEMH_AVAIL` total (the heap's free KB plus the pool's)
+at the start of a load, and every growth decision asks it again; the Download
+Manager's check (§71.20) asks the same. On every other kernel `br_avail` is
+`OSAPI_MEM_AVAIL`.
+
+The 16-bit offset ceilings of §71.18.1 are unchanged (`BR_DOCMAX`, the line
+table's `BR_LINEKB` records): what changes on kern_mega is the memory under
+them. Before this the two claims went down to the conventional heap past
+64KB, so a page whose source and stream together passed about 80% of the
+heap's free KB was cut short on every kern_mega machine, whatever it had
+above 1MB. `tests/brhuge.py` (`brhuge`, Bochs at 16MB) is the gate: a 331KB
+page of 5,001 lines, read off B: whole and laid out whole, both claims above
+1MB.
+
 ### 71.20 Browser 1.6b — streamed downloads and the Download Manager
 
 Downloads are a separate sink from the retained page source. Saving a link
@@ -132668,6 +133618,38 @@ The three bytes of bss every package lost in common were `os88.h`'s three
 layout checks, `static char` arrays until they became typedefs — which
 SmallerC checks the same way and emits nothing for.
 
+#### 73.9.2 Memory past the region: the huge claim, the pool, the 32-bit file calls
+
+A C package's data past its 63.5KB is a claim, and `os88.h` carries the whole
+way to a big one (docs/plans/MEGA-HUGE-PLAN.md F3, F6, F7; tests/chuge is the
+gate on both kernels):
+
+- **`os88_mem_largest_kb()` / `os88_mem_total_kb()` count the POOL on
+  kern_mega** - OSAPI_MEM_HUGE's `MEMH_AVAIL` ask (§50.3.5), falling back to
+  `OSAPI_MEM_AVAIL` where it answers CF = 1 (kern_big, kern_small, where it is
+  the same answer). They counted conventional memory alone, while every C
+  package in the tree says `OS88_HIGHMEM` and its `os88_mem_claim()` of 64KB or
+  less goes above 1MB first - so Weave's and Loom's pre-read refusal, the
+  Apple II's halving loop and the refusal toasts of C64, Lemmings and RunCPM
+  planned from the wrong heap. `os88_mem_largest_p()` stays the conventional
+  heap's, exact to the granule.
+- **`os88_mem_huge(kb)` passes BX = 0**, a window every 64KB. It passed BX =
+  SP - the register the argument was read through - so a stack pointer of
+  8000h or 4000h asked for 32KB or 16KB windows its caller then walked 64KB
+  apart. `os88_mem_huge_w(kb, win)` asks for `OS88_HUGE_W32` / `_W16` on
+  purpose; with `os88_mem_huge_step()` = 8 the windows are the ones asked for
+  (such a claim never bridges), with 1000h the claim is one segment.
+  `os88_mem_huge_ask(win)` is the AX = 0 ask for that shape, answered on every
+  kernel (`OSAPI_MEM_AVAIL`'s largest where there is no ask).
+- **`os88_file_read_huge` / `os88_file_write_huge`** take the whole 32-bit
+  count as two words, into or out of a claim from its base, and
+  `os88_file_hi()` is the read size's high word; **`os88_file_read_at_seg`**
+  is `os88_file_read_at` into seg:off; **`os88_seg_get` / `os88_seg_put`** copy
+  n bytes between a claim and DS a word at a time, inside one 64KB window - the
+  string move rule 2 forbids in compiled code, made in the thunk with ES loaded
+  on the line before. None of them crosses a window: the caller steps by
+  `os88_mem_huge_step()`, which is the rule §50.3.5 gives every program.
+
 ### 73.10 `tools/cc8086.py` — the gate, in order
 
 One tool owns the C half of the build:
@@ -134874,21 +135856,21 @@ a directory entry, 4KB blocks, 8 16-bit `al` words from block 8 — harness:
 0/127/128/16384/16385/32768/65535 bytes are one entry each with the extent,
 `rc` and block count `disk.h` gives them, 67,301 bytes three entries `ex`
 1/3/4 with `rc` 128/128/14, 134,899 bytes five entries ending `ex` 8 `rc` 30),
-`F_SIZE` in 24 bits from the cache. **Files above 65,535 bytes are refused as
-a fact** — the file API a package reaches reads and writes whole files with a
-16-bit count and no seek — with a BDOS 0xFF (open, make, and a SEQUENTIAL
-write of record 511 — the code upstream's `_sys_writeseq` answers for a
-failed `fwrite`, and the same 0xFF for a record the heap will not hold) or 6
-(a random write past the end: `_sys_writerand`'s seek code) and a toast naming
-the file (`RunCPM: NAME.EXT>64K`, or `RunCPM RAM? NAME.EXT`) — every such
+`F_SIZE` in 24 bits from the cache. **A file above 65,535 bytes is ONE HUGE
+CLAIM** (§74.3.3; until it, such a file was refused as a fact), and what this
+model cannot hold is refused with a BDOS 0xFF (an open of a file of 8MB or
+more, past CP/M's own reach; a SEQUENTIAL write past record 65,534 — the code
+upstream's `_sys_writeseq` answers for a failed `fwrite`, and the same 0xFF
+for a record the heap will not hold) or 6 (a random write past the end:
+`_sys_writerand`'s seek code) and a toast naming the file (`RunCPM:
+NAME.EXT>8MB`, or `RunCPM RAM? NAME.EXT`) — every such
 refusal goes through `rc_say`, which ALSO prints the text on the terminal
 while the window is fullscreen (§74.4); a random READ with `r2` set answers 1
 with `cr`/`ex`/`s2` stepped from the record's low bits, as `_sys_readrand`
 does — its `fseek` past the end succeeds on every host, `fread` moves nothing,
 and 6 is only a FAILED `fseek` (harness); `DIR`
-still lists them with the whole chain; none is shipped. The last record this
-model READS is 511 (a 65,535-byte file's tail) and the last it WRITES 510
-(65,408 bytes: the 16-bit size's last whole record). **A ninth open evicts the
+lists every file with the whole chain. The last record this model WRITES is
+65,534 ((record + 1) x 128 is the 24-bit size). **A ninth open evicts the
 least recently used CLEAN entry**; when every entry is a modified file the
 open errs `Bdos Err on X: CP/M ERR` with the toast `RunCPM: 8 files open`; a
 claim the heap refuses evicts clean entries and retries, then toasts `RunCPM
@@ -135096,6 +136078,44 @@ leaving `rc_z.seg` stale: the CCP never answers.
 **Cost:** image +224 bytes (31,030 -> 31,254), bss +0, the module part +18;
 the file 26,941 -> 26,950, no sector.
 
+#### 74.3.3 A file past 64KB is one huge claim
+
+An open file past 65,535 bytes is held whole as ONE `os88_mem_huge` claim
+(§73.9.2, SPEC.md 50.3.5; docs/plans/MEGA-HUGE-PLAN.md 3), and the record
+window is the natural one: a 64KB window is exactly 512 records, so record r
+is at offset (r & 511) x 128 of window r >> 9 - `seg + (r >> 9) x
+os88_mem_huge_step()` (`rc_recoff`) - and no record crosses a window, a cut
+of a bridge included. The size is 24 bits in the row (`size_hi`, its whole
+records `rc_ofrec`), compared in records, never as a byte count. A file of
+65,535 bytes or less keeps the paragraph claim it had (a byte count wastes
+no granule, §50.3.7); the write that takes it past record 510 makes it huge
+(`rc_oft_tohuge`: claimed, its bytes copied through a 256-byte bounce with
+`os88_seg_get`/`_put`, the old claim freed, the new declared movable), and a
+huge entry regrows by KB (`os88_mem_regrow`, an eighth and 3KB of slack). It
+is read whole by `os88_file_read_huge` and written back whole by
+`os88_file_write_huge`, the kernel walking the claim by its own step - a
+PACKED file too (MEGA-HUGE-PLAN F4). A gap a random write leaves is zeroed a
+window, and 32KB, at a time (`rc_gapfill`). The capture files keep their
+65,535-byte ceiling (byte s is window 0's even of a huge claim).
+
+It is the same code on every kernel, the step the cell's answer: on kern_big
+and kern_small a huge claim is one conventional claim (step 1000h, up to the
+1,023KB every such claim stops at); on kern_mega in protected mode it is a run
+of selectors above 1MB where the pool holds it, and its regrow is the
+kernel's (§50.3.5's THE REGROW). Cost: the image 31,462 -> 32,696 bytes, the
+bss 10,597 -> 10,877 (the bounce 256, the rows 16), the module part 6,781 ->
+6,814. `apps/runcpm/hosttest/rcfstest.c` (`make runcpm`'s host check) is the
+gate: a 67,301-byte and a 134,899-byte file opened and read across their
+windows to their last partial records, a file written past record 510
+(made huge) and on to record 1,000 through a regrow that moves, written back
+whole as 128,128 bytes with zeros in the gap, reread; an 8MB file refused -
+red on the tree before (every one of those refused). The master disk's three
+files that were left off for it (BDOS.ASM 67,301, ZCPR3.ASM 66,761,
+Z80ASM.PDF 134,899 bytes) are extracted now (`tools/getruncpm.py`'s
+`MAX_FILE` is 8MB less a byte) and ship where there is room: on the live
+volume (§80.6) all three; on the four floppies none - they were full already,
+and the fill's `LEFT-OFF.TXT` names them under no-room instead.
+
 ### 74.4 What is present and greyed, and what is absent
 
 **The About panel** (`rcabout.c`, wave 5) is the kernel bar's `About RunCPM`
@@ -135150,7 +136170,7 @@ toast, AND — when `rc_full` is set — the same ≤ 24-character text on the
 terminal, `"\r\n" msg "\r\n"` through `rc_puts` (one row = one band, ~1 ms:
 the console line is where upstream's `disk.h` prints its errors); `rc_say_now`
 is the same under the gfx lock with the terminal flushed on the spot, for the
-one WAIT (§74.3's walk). Harness: the `>64K` refusal is on the console only
+one WAIT (§74.3's walk). Harness: the `>8MB` refusal is on the console only
 while `rc_full`; glass: `wave4c-full-user2.png`.
 
 Absent: RunCPM's internal C CCP (host-blocking C; DRI's binary is the command
@@ -158924,6 +159944,89 @@ differs in its idle immediate alone, `AP_SLP_IDLE` (§86.5.1). +66 bytes of `aud
 bss. `tests/ringmove.py --app audio` (a card) and `--app audiospk` (the
 speaker) are the gates.
 
+### 86.5.4 A WAV the machine can hold is played again from memory — kern_mega's arm (`aphold.inc`)
+
+**On kern_mega the Audio Player's arm STREAMS a WAV's first play, as every
+build does, and keeps a copy of what the stream reads; the file held whole,
+its next play reads no disk** (`PKG_MEGA`, §20.18; docs/plans/MEGA-HUGE-PLAN.md
+3; KERN-MEGA-PLAN 14.173, 14.186). The hold is ONE `OSAPI_MEM_HUGE` claim
+with a window every 64KB, a bridge of the pool and the heap allowed
+(§50.3.5), walked through `apps/os88huge.inc` (§50.3.8) - so it is all of the
+file the machine can hold, not the pool's best run. XTMP3's hold is the
+precedent (§121.6.1) and the walker its.
+
+- **The open does not wait.** `ap_open_track` asks `aph_begin` first: the
+  current entry's file - its folder, volume and name, THE KEY - held whole
+  already keeps its hold and plays from it; the same file part-filled keeps
+  the claim and fills again from the start; any other file gives the hold
+  back and is claimed afresh (its KB rounded up, the claim's byte X the
+  file's byte X). Either way the track opens AT ONCE and plays through the
+  14.160 look-ahead exactly as the shipped build's does. (Until 14.186 the
+  arm read the whole file first, `Loading 42%` on the status line: a 30 s
+  clip off a floppy waited ~27 s for its first sound.)
+- **The fill is the stream's own reads.** The refill's read is the
+  include's `AP_RSEQ` hook (aplook.inc), here `aph_rseq`. A gulp the disk
+  delivers for the file being filled is ALSO copied into the hold at its
+  file offset (`hw_put`, split where a window ends, so never across a
+  bridge's cut) - no read is issued for the hold. The fill is CONTIGUOUS:
+  `[aph_have]` is its high-water mark, the first gulp starts it, and a gulp
+  that does not begin exactly there - or a copy that does not fit - gives
+  the hold back for this file (`aph_free`) and the play streams on, so a
+  gap is never read back as audio. The fill reaching the data's end (or
+  the file's) makes the file HELD WHOLE (`[aph_on]` = 1).
+- **A second play is copies.** Held whole, a gulp of the same key is
+  `hw_get`'s copy out of the hold into the look-ahead (`[aph_ncopy]`), at
+  most the fill's high-water mark less the offset - which, since the fill
+  passed the data's end, is every byte the refill publishes; any other read
+  is the disk's (`[aph_ndisk]`). Repeat on a one-track list and Previous
+  back to it play from memory; the look-ahead, the worker, the feed and the
+  card cannot tell. The parser's header read at each open still goes to
+  the disk. A speaker play's gulps are the same reads and copies.
+- **What frees it.** Stop, the list's end and Clear playlist give the hold
+  back (`aph_free`, in `ap_stop_msg`), whole or part-filled - a part fill
+  is not kept past Stop - and so does opening any other file; the kernel
+  frees it with the instance.
+- **The heap keeps `APH_MARGKB` (96 KB) beside it**, in its largest run -
+  the card's grant, the speaker ring, a program launched while it plays. The
+  kernel takes the pool alone, else the heap alone, else the bridge; where
+  the heap ALONE took it and the margin is short it is claimed once more
+  past the heap's largest run - a bridge, its conventional piece the smaller
+  by the pool's. That is `hw_claimfit` (§50.3.8, KERN-MEGA-PLAN 14.177),
+  XTMP3's and WaveRack's hold as well; the margin was the heap's TOTAL free
+  until then. The look-ahead is claimed before the hold, so it
+  keeps its page-safe pool block (§86.5.3, KERN-MEGA-PLAN 14.160), and stays
+  PINNED until the claim is made: declared movable across it, the claim's
+  pack moved it off the pool's floor, and when the session's other claims
+  went it stood in the middle of the pool (`megajw`: 32K free under it, 206K
+  over, XT-MP3's hold refused - 14.166's rule). The AX = 0 ask comes first
+  (`hw_claimfit`), so a file too big to hold costs no claim and no pack.
+  Conventional memory in the hold is declared MOVABLE, a `ret` its proc
+  (§50.3.5: its windows follow a move); a copy in or out yields nowhere,
+  so nothing pins it.
+- **What streams still streams.** A file the machine cannot hold, a fill
+  abandoned, and every file on a real-mode kernel go through the 14.160
+  look-ahead and nothing more; `[aph_off]` = 1 makes the arm do so for
+  every file (megasbgap's streamed case). KERN-MEGA-PLAN 14.156's concern -
+  a floppy refill losing a revolution a call while the card plays alone -
+  is therefore the first play's on kern_mega as it is kern_big's (the
+  owner's call, 14.186), and retired for every play after it.
+
+**Measured** on 86Box's at286_vga_sb by `tests/audhuge.py --find`: the
+largest WAV a hold is claimed for is **672 KB at 640K + 384K above 1MB** (a
+bridge cut at window 3: 31 s at 22,050 Hz, 62 s at 11,025 Hz 8-bit mono;
+re-measured at 14.186, unchanged) and **3,360 KB at 4MB** (156 s and 312 s;
+14.173's figure) - where the arm before held nothing and streamed every
+file. The 576 KB file plays 1.25 s after its window opens (14.173's arm:
+~25 s of `Loading`), and its second play copies every gulp. `megasbhold`
+plays megasbgap's 10 s 22,050 Hz clip twice: the second reads no floppy and
+has no silence inside it over 30 ms, 50 ms in all, both at its tail
+(streamed: 90-150 ms, 290-530 ms in all). The cost is the arm's alone: its
+image 13,247 -> 14,509 bytes at 14.173 (+1,262), 14,127 since 14.186 (-368:
+the load passes, the status text and the read cursor gone, `hw_put` in for
+`hw_fread`), packed 10,157, bss 5,683; `AUDIO.O88` as shipped is
+byte-identical. Rows: `audhuge`, `audholdgap` (the fill out of step),
+`megasbhold`, and `megasbgap` (streamed).
+
 ### 86.6 The WAV parser (`apw_parse`)
 
 Given a name (already GOTO'd) and the file size, it answers a parsed record or
@@ -159137,6 +160240,7 @@ number of clusters — a 16-byte-record queue is neither.
 | decoder scratch | 2,368 B | `apd_out` in bss: a card's 2 KB half, and on the speaker a step's span of inputs — the PCM source copy (`aps_src`) too, one format a track (§86.21) |
 | speaker buffers | 1,280 B | `aps_stage` 512, `aps_dbuf` 768 (the box's table, k ≤ 3 — and `ap_cinv`'s 256, a counts file never being boxed). The shaper's 2,816-byte family was here as `aps_fam` and lives in the speaker ring's claim now (§34.11.9), so a card machine never holds it |
 | speaker ring | 17 KB | `aps_rseg`, claimed at the first speaker play and kept (§86.21) |
+| the hold (kern_mega's arm) | the file, rounded up to 1 KB | one `OSAPI_MEM_HUGE` claim, the pool's, the heap's or a bridge of both, the heap left 96 KB beside it; from a track's open to Stop, the list's end or another file - filled by the first play's own reads, played from by the next (§86.5.4) |
 | playlist | `AP_MAXTRK` × 16 B | bss |
 | SND ring grant + driver pool | ~28 KB | `SOUND.DRV`'s claims, released when the player stops |
 
@@ -202321,7 +203425,7 @@ without them (`ffmpeg` capability).
 |---|---|---|---|---|
 | `5150-st225` (default) | 119,000 B/s | 50% / 85% | PCM8 11,025 Hz | the owner's machine, its disk measured (VIDDISK, 130 KB/s under a half-machine hook with §18.91.5's cylinder reads; 96,000 for a kernel built `NOHDCYL=1` or older than build 458) |
 | `5150-xtide` | 96,000 | 50% / 85% | PCM8 11,025 | an XT-IDE the CPU copies, measured on MartyPC under the cylinder bound (98.2.1.3; 91,000 under the track's) |
-| `5150-picomem2` | 150,000 | 40% / 80% | PCM8 22,050 | predicted |
+| `5150-picomem2` | 135,000 | 50% / 85% | PCM8 22,050 | the owner's 5150 #1 with a PicoMEM 2 (PM2-10-4-26) as its hard disk, measured (2026-11-07, docs/reports/PICOMEM2-STUTTER-2026-11-07.md): the CPU copies every byte, so the disk falls with the decode's share - VIDDISK 294.3 KB/s idle, 223.9 / 147.1 / 72.8 at 25 / 50 / 75%. 0.9 of the 50% row, as `5150-st225`'s. Its sound stutters while the disk is read under a hook on that firmware, whatever the budget |
 | `floppy` | 15,000 | 50% / 85% | PCM8 5,512 | predicted |
 | `286-slow` (was `286`) | 150,000 | 150% / 250% of an 8088's | PCM8 22,050 | predicted: a slow 6-8 MHz AT, a stand-in no machine has measured |
 | `286-fast` (was `286-pvga`) | 448,000 | 225% / 375% of an 8088's, priced by its own table | PCM8 22,050 | a fast 16 MHz 286 with VGA on the board, measured on a real one - the owner's AMD 286 with a PVGA1A, whose RAM has wait states: decodes 12-29% slower than `286-speeddemon` (docs/reports/VIDBENCH-PVGA286-2026-10-08.md) |
@@ -203383,7 +204487,7 @@ was left was the peak's 2 frames and the 32 KB record's 17. The owner's
 3.375 encode played on the 286 with 0 late and 0 stalls, sound OFF - the
 case `auto` has not been played in is a Sound Blaster beside it.
 
-- **Without a curve** - `5150-picomem2`, `floppy`, `286` (a 6 MHz AT,
+- **Without a curve** - `floppy`, `286` (a 6 MHz AT,
   predicted) - the average is the ONLY thing that leaves the reader its
   time, so `auto` there is the profile's own `avg`. Those want a curve
   measured (VIDDISK on the machine) more than a number changed.
@@ -209664,6 +210768,87 @@ ring is up to 80 KB smaller for it. +60 bytes of the arm's image (63,832;
 `tests/megarmbext.py`'s player legs are the gate: both plays real on an
 extended desktop, and `FSXR_ROOM` on both without it.
 
+**And the region comes down before the pool is sized** (KERN-MEGA-PLAN
+14.178): the arm's entry proc asks `OSAPI_SEG` `SEG_LOW` (50.6.11, `vp_low`),
+and `vp_xopen` again before it sizes a hold or a bank when that was refused,
+so the 64 KB pool block the region held - idle in
+every real-mode play, whose copy of it was conventional - is the bank's,
+and `vp_rbhold`'s room is the service area's and the drivers' alone (16 KB,
+`VP_RBRKB` - 64) once `SEG_REAL` answers the region conventional. Measured
+on 86Box's 286 with the 37 MB `05-LASTX.V88` (`tests/megapar.py` measures
+the 1.5 MB `08-WILLY.V88`): the bank 6 -> 8 slots at 640K + 384K (kern_big
+10) and 90 -> 92 at 4 MB (kern_big 94). What is left is the kernel's own -
+its fixed area above 1MB, 20 KB more than kern_big's HMA holds, and the
+drivers' images, 15 - and the pool's remainder under a 32 KB slot: 98.3.24.3.
++48 bytes of the arm's image (61,879 -> 61,927); the shipped player byte-identical.
+
+**And the door says what its room is** (KERN-MEGA-PLAN 14.180): the arm's
+cold part asks `OSAPI_FSX_RUN` `FSXF_REAL | FSXF_PREP` (SPEC.md 53.2.3.1,
+`vp_rprep`, a part vector, `VK_RPREP`) with the list `vp_rmklist` makes -
+in `vp_xopen` before the bank is sized, so SOUND.DRV and HDD.DRV come down
+out of the pool first and the bank has their 15 KB, and again in
+`vp_rbhold`, whose room is then the door's own answer (`[vp_rbkb]`: 3 KB
+for a contiguous clip on C:, the service area alone, the drivers being
+conventional already) and not `VP_RBRKB`'s 16, which stays the fallback
+for a refusal. Measured below (98.3.24.3).
+
+##### 98.3.24.3 What the player holds against kern_big (2026-11-08)
+
+The same machine, both kernels (86Box's `at286_vga_sb_hdd`, the clip on C:,
+read during the play; kern_big with XMEM.DRV, whose pool is extended memory
+less the HMA):
+
+| machine | clip | kern_big bank / ring claim | kern_mega before | after 14.178 | after 14.180 |
+|---|---|---|---|---|---|
+| 640K + 384K | 37 MB | 320 KB (10 slots) / 160 KB, 154.5 KB free | 192 KB (6) / 160, 196.5 free | 256 KB (8) / 160, 196.5 free | 288 KB (9) / 160, 196 free |
+| 4 MB | 37 MB | 3,008 KB (94) / 160 | 2,880 KB (90) / 160 | 2,944 KB (92) / 160 | 2,976 KB (93) / 160 |
+| 640K + 384K | 1.5 MB (`08-WILLY`) | 320 KB (10) / 480 (13 slots) | | 256 KB (8) / 448 (12) | 288 KB (9) / 416 (11) |
+
+The remaining 32 KB of bank is no program's: the pool kern_mega leaves
+programs is 299 KB at 640K + 384K - since 14.180 the whole pool, SOUND.DRV
+and HDD.DRV being conventional for the play - against kern_big's 320,
+which is its fixed area above 1MB (85 KB) against kern_big's 64 KB HMA,
+and 299 is 9 whole slots and 11 KB. The conventional side holds the same
+ring for the 37 MB clip on both, with MORE left free on kern_mega (its
+floor is 3.5 KB higher and the bracket's service area and the drivers 18
+KB, against kern_big's 59.5 KB floor and XMEM.DRV's 2 KB - and the
+region's 64 KB conventional on both). **The 1.5 MB clip's ring lost the
+slot its bank gained**: its ring is "as many slots as the machine has"
+on the 64 KB page grid, and the drivers' 15 KB, conventional before the
+ring is sized, took the run under its last slot (31.5 KB were left idle
+under its first page and 25.5 over its last) - where the copies the
+bracket made before 14.180 had fitted into the slack the slots left. The
+same 640 KB is held either way; on the 37 MB clip the ring is the same
+three slots on both kernels and the trade does not arise. `tests/megapar.py --prog vp`
+is the gate (KERN-MEGA-PLAN 14.178, 14.180).
+
+#### 98.3.25 Bookmarks: a seek walks from the nearest place it has, not the front (2026-11-08)
+
+A seek (the bar, Left and Right, a key's re-entry, the hold handing the
+stream back) zeroed `vp_cur` and set its offset, so its first read walked
+the file's chain from the first cluster: 142 ms a MB on the W0 machine,
+**up to ~2 s** at 12 MB on 5150 #1 - a jump BACK cost that every time,
+and a jump forward as much as a jump from the start. On a kernel that walks
+a moved cursor forward (18.4.8.2):
+- **`vp_bmrec`, after every fill** (`vp_fill` is a wrapper now; the body is
+  `vp_fillb`, which `vp_tpat`'s two-tier jump patches), copies `vp_cur` into
+  the slot of the MB its offset is in, when that slot is empty: the first
+  place seen in each MB, the nearest to its start. 32 slots, 16 bytes each
+  (`vp_bm`, 512 bytes of image, zeros); `vp_open` clears them, a bookmark
+  naming no file.
+- **`vp_curseek`, at both seeks**, starts the cursor from the nearest place
+  at or before the target - itself, when it walks forward and is not past
+  it, or a bookmark - and moves `+12` there; nothing: zeroed, as before. A
+  jump forward walks the links it skips; a jump back into what has played,
+  at most a MB of them (~140 ms on 5150 #1). A stale bookmark (a write, a
+  remount) the kernel re-seeds from the name: never wrong, slow once.
+- A kernel without the forward walk leaves `+4` 0 and records nothing.
+- **The table is the shipped player's** (`VP_BMN` 32). The VPDIAG builds and
+  kern_mega's arm were each within a few hundred bytes of `APP_MAX_SIZE`
+  and have `VP_BMN` 0: their seeks walk forward from the cursor itself, and
+  a jump back is the walk it was. Margins after: shipped 1,326, VIDEOD 200,
+  VIDEOR 274, kern_mega 391 bytes.
+
 ### 98.4 The window: the Preview (wave 6)
 
 **The window IS the Preview** (VIDEO-PLAN 3.3): the file's poster in a
@@ -210123,7 +211308,7 @@ addresses), and every `mov ds, dx` a ring pointer reaches is `VP_DSDX`: a
 LOADALL at the instruction that loaded DS, so no code before it sees a
 borrowed DS. `VP_DSEND`, before the matching `pop ds`, puts the API cells
 back. Each pair is one borrow inside its own `pushf / cli ... popf`. Fifteen
-sites: the super-packet's header and the record's length (`vp_nextw`), the
+sites (seventeen since 98.3.18.19): the super-packet's header and the record's length (`vp_nextw`), the
 five decode branches (`vp_decrec`), the flip's copy and header, the three
 page-ahead tests, and the card's audio copy and ADPCM decode (`vp_aput`).
 Three sites tested a byte and branched after `pop ds`; they read it into AL
@@ -210660,6 +211845,40 @@ second falls 105 KB short at the worst against 1,019 KB without them, so a
 file made with `--kernel mega` gives up far less to cover the stretch the
 bank drains in. The borrows stay charged on every frame, which over-prices a
 record in a conventional slot a little.
+
+##### 98.3.18.19 The page-ahead chain read through the borrow (2026-11-08)
+
+**A hidden record's header and a COPY's are read through `VP_DSDX` too.**
+98.3.18.11's fifteen sites missed two, both page-ahead ON N PAGES's
+(98.1.3.7.1, 98.3.8.4): `vp_pghid`'s chain walk, which reads each hidden
+record's page and its "another follows" bit, and `vp_pgcopy`'s
+source and band (98.1.3.7.2). Each was a plain `mov ds, dx`, and in place
+DX is a HANDLE (FFF0h-FFFFh): the walk read FFFxh:SI - the HMA's bytes - as
+the chain, decoded whatever records that said followed into whatever page it
+named, walked off the record's window, and on a 286 the decode ran into data
+with interrupts off. The two-page walk (`.two`) reads no header and was
+right; a page-ahead file on two pages plays in place as before.
+
+Found by the owner's pre-release check: `apps/video/demo/vga/10-LX486.V88`
+- the only VGA demo clip on three pages - HUNG the machine full screen on
+86Box's 16 MHz 286 at its frame 221, its first hidden record, on kern_big
+and in kern_mega's real-mode bracket alike, played out of the XMS bank in
+place (98.3.18.13); `[vp_noinp]` and kern_mega's protected bracket (whose
+handle is a real selector, 98.3.18.16) played it through. That the record
+was the file's first of 60 KB or more was a coincidence: its hidden page
+records are the file's biggest. With both sites borrowing, it plays all
+2,036 frames (693 pauses - a 486's clip on a 286, as its text says).
+
+**Keys are not affected**: `vp_decn` and `vp_kref1` keep their plain
+`mov ds, dx`, since a key's read is always into the conventional ring
+(98.3.18.7) and its DX a segment. VIDEO.O88 +48 bytes in each arm, no
+bss and no kernel byte; every other routine is identical at an even shift.
+**`vidpage3xip`** (soak) is the gate: `tests/vidpage.py --layout modex
+--pages 3 --xip`, vidpage3mx's clip on 86Box's 286 with the file held whole
+and every play in place (the card's bank line 7), every hold the clip. RED
+before the fix (in place, bank line 7): 10,565 of 15,360 canvas pixels wrong
+at the first hold of the play from the start, 640 at frame 45 of the play
+from key 1, and the keyless file's play wrong at every hold.
 
 #### 98.3.22 The play's profile: every frame timed on the machine (2026-10-15)
 
@@ -215253,6 +216472,32 @@ identical at even shifts (a `PARITY` pad byte after `mro_close` holds them
 there). +92 bytes of image, no bss. `tests/ringmove.py --app midirack` is the
 gate, on the synthetic bank `make mrwttest` writes.
 
+#### 105.10.2 kern_mega's arm: the bank in one huge claim
+
+On the kern_mega arm (`PKG_MEGA`, §20.18) `mwt_load` claims the bank with
+`OSAPI_MEM_HUGE`, BX = 8000h (docs/plans/MEGA-HUGE-PLAN.md 3): a window every
+32KB, each 64KB long, cut at the claim's end - which is `mwt_win`'s own shape,
+so with BX answered 0 and the step 8 `mwt_wins` takes window w as the run's
+selector w (`[mwt_bseg]` + 8w, `[mwt_run]`) and asks no `SEG_SUB` and spends
+no LDT entry for it. Above 1MB where the pool holds it, the heap's run of the
+same shape otherwise (§50.3.5); such a claim never bridges (its windows
+overlap), never regrows (the bank never does), and moves 64KB at a time with
+the selectors following, so the voices' window selectors (`mwt_sseg`) stay
+right across a move and `mwt_pin`'s declaration on a pool claim is the
+harmless refusal it is for every pool block. In real mode (the step 1000h,
+BX kept) the SUBs are as they were. Before it a bank over 64KB was an
+`OSAPI_MEM_CLAIM` and so CONVENTIONAL on every kern_mega machine: a 200KB
+bank was 200KB of the ~560KB heap, and up to `mwt_info`'s 640KB ceiling
+(kept: no bigger bank is built) it can all be pool memory now. The shipped
+build is unchanged.
+
+`midirackwtbig` (the 5150, the shipped build) and `mega-midirackwtbig`
+(86Box 640K + 384K, the arm) play the padded synthetic bank
+(`tools/os88midbank.py synth --pad 192`: 192KB of silent samples first, so
+every sample a voice plays lies past the bank's first 64KB) and hold the
+capture's pitch classes to the reference; on the arm the bank is asserted
+ABOVE 1MB.
+
 ### 105.11 Tests
 
 `tests/mrprobe.py` reads the running package's variables by name out of a
@@ -215679,7 +216924,8 @@ the bytes read.
 
 **The MASTER is one heap claim of `mw x mh` bytes, one byte a pixel, an
 index into a 256-entry RGB palette** (768 bytes of PiXEL's bss). It may be
-larger than 64KB, up to 1MB: row `y` is at offset `O = y*mw` in it, reached
+larger than 64KB, up to 1MB (4MB, one huge claim, on kern_mega's arm:
+106.8.1): row `y` is at offset `O = y*mw` in it, reached
 through a table of WINDOWS made once per claim (`OSAPI_SEG`'s `SEG_SUB`, one
 every 32KB, each reaching 64KB or the claim's end) as window `O >> 15` at
 offset `O & 7FFFh`, so a row never straddles its window (`mw` is at most
@@ -215822,6 +217068,91 @@ claim (106.11), and — only while a picture decodes — the old master, the
 RING and the WORK claim (106.9), and a drop-down's bank (13.14.1) while its
 list is open. Seven at the worst moment. (Wave 3 adds a decoder PART and
 frees the head before the claims are made: still seven, 106.18.)
+
+#### 106.8.1 kern_mega's arm: the master is one huge claim, up to 4MB (MEGA-HUGE-PLAN 3, 2026-11-08)
+
+**On `make mega`'s PIXEL.O88 the master is ONE `OSAPI_MEM_HUGE` claim with a
+window every 32KB** (BX = 8000h, §50.3.5), and its table is that claim's own
+run of selectors. Through `OSAPI_MEM_CLAIM` a master over 64KB was a
+CONVENTIONAL claim on kern_mega (an `OS88_HIGHMEM` package's claims go above
+1MB at 64KB or less, §50.3.7), and the table at most 32 windows: 1MB, more
+than a real-mode kernel gives one claim and half what a 4MB machine's pool
+holds free. What the arm does:
+
+- **The claim** (`PX_HRUN`, pxrec.inc, after it; the master in `px_claims` and an
+  operation's destination in the edit part's `pf_start`, which becomes the
+  master): `OSAPI_MEM_HUGE`, BX = 8000h. Selector k is the 64KB window from
+  32KB x k, cut at the claim's end - exactly the layout a table already is
+  (window `O >> 15` at offset `O & 7FFFh`, a row never straddling it) - so
+  `px_mwbuild` fills the table with the claim + `[px_hrun]` x k, `[px_hrun]`
+  being the step the cell answered when it gave that run (BX = 0 out: 8 in
+  protected mode, the pool's block or a conventional claim alike), and asks
+  no `SEG_SUB` and takes no LDT entry of its own. A real-mode kernel keeps BX
+  (no such run): `[px_hrun]` = 0 and the table is `SEG_SUB`'s sums, as it
+  was. A 32KB-window claim never bridges (§50.3.5), so the master is the
+  pool's or the heap's, one piece.
+- **The cap** is `PX_MWN` = 128 windows on the arm: 4MB, the whole of a 4MB
+  machine's pool and more. The shipped build keeps 32.
+- **The scale is asked of the shape it will be granted** (the routine
+  `px_avail` in the package and `pe_avail` in the edit part, `PX_AVAIL` the call): AX =
+  the 8000h ask (`OSAPI_MEM_HUGE` AX = 0, BX = 8000h: the better of the
+  pool's best run and the heap's, MEGA-HUGE-PLAN F3) and BX = the pool-aware
+  total (`MEMH_AVAIL`, F6) in place of `OSAPI_MEM_AVAIL`'s conventional two,
+  for `px_claims`' pick, for the edit's room checks (`px_eroom`, Resize's
+  line, "Needs 300K; 120K free") and for the status bar's "Memory:". An ask
+  refused - kern_mega in real mode answers the heap's - is
+  `OSAPI_MEM_AVAIL`'s. The work claim, the ring and the view are what they
+  were.
+- **The histogram's TAIL** past the pixels (106.20) is at their paragraph
+  count rounded up to 8 - past FFFFh on a master over 1MB, where the 16-bit
+  sum every tail finder made (`px_htail`, the edit part's `pe_tailof`, full
+  screen's, the plans' `pl_htail`) put it back INSIDE the master, the decode's
+  counts written over its pixels. On the arm the count is carried to 32 bits
+  (`PX_ADC`) and the tail is a `SEG_SUB` from the run's window (count >> 11)
+  at (count & 7FFh) (`PX_TAILAT`, pxrec.inc); the shipped sums are as they
+  were.
+- **Movable as before**: the master's `OSAPI_MEM_MOVABLE` (§66) is recorded
+  for a conventional one; a pool one moves whatever is declared, its
+  selectors following it, and `px_mreloc` is called for neither in
+  protected mode.
+- **A PACKED picture read whole** (`px_rflat`: a 'CZ' file expanded by one
+  `OSAPI_FILE_READ`, §20.14 - every shipped sample is one) is an
+  `OSAPI_MEM_P` claim, which past 64KB is conventional on kern_mega: there it
+  stood in the heap beside the master and refused whatever the heap could
+  not hold. On the arm, past 64KB it is ONE `OSAPI_MEM_HUGE` claim,
+  `HUGE_NOBRIDGE` - its readers aim into it by `SEG_SUB` from its first
+  selector, whose reach a cut stops - which the pool takes when it has the
+  run and the kernel expands the file into whole (MEGA-HUGE-PLAN F4,
+  KERN-MEGA-PLAN 14.171); refused, the paragraph door as before. Still at most
+  1MB of file: the readers' offsets are 16-bit paragraphs. Measured on 4MB
+  (`megapxhuge.py --bmp --find`, a packed 1024-wide 8-bit BMP): the largest
+  opened at 1/1 1024 x 512 (513 KB expanded) -> 1024 x 992 (993 KB, the 1MB
+  of paragraphs).
+
+**The arm's resident is its own now**, so its bss is not the shipped one's:
+`$(MEGAAPPDIR)/pixel.bin` is pixel.asm assembled `-DPKG_MEGA`, `tools/pxlink.py
+-D PKG_MEGA` writes its map as `$(MEGAAPPDIR)/pxlink.inc`, and every LINKED
+part of the arm - the GIF part as well now - is assembled against that one
+(`-I $(MEGAAPPDIR)/` ahead of `$(BUILD)/`); the part's stamp check (106.20)
+refuses one linked against the other build. **Bytes**: the arm's image 41,019
+-> 41,198 (+179), its bss 11,417 -> 11,995 (+578: three tables of 96 more
+words, and `[px_hrun]`), 53,193 of `APP_MAX_SIZE`'s 65,024; its parts +510
+(the tail finders, +66 in each part that carries the plans, `pe_avail` and
+the claim in the edit part); its PIXEL.O88 109,866 -> 110,330 bytes; the
+shipped PIXEL.O88 byte-identical; no kernel byte.
+
+**Measured** (86Box's at286_vga_sb, `tests/megapxhuge.py --find`: a 2048-wide
+8-bit PCX, the height halved to 32 rows between one decoded at 1/1 and one
+not): the largest master at 1/1 **450 KB -> 2,882 KB on 4MB** (2048 x 224 ->
+2048 x 1440), and **450 -> 514 KB on 640K + 384K** (the master taking the
+heap alone there, ahead of the pool's best run). `megapxhuge` is the row: a
+2048 x 1400 picture at 1/1 on 4MB, its table the run, rows past 1MB and 2MB
+read through it the file's, the tail at byte 2BC000h the file's counts; red
+with mega-release's arm, which opened it at 1/4, and with the tail's 16-bit
+sum kept, which left the tail empty. `megapxhugez` is the packed half: a
+1024 x 700 8-bit BMP packed into a CZ file (717,878 bytes expanded) read whole
+and decoded at 1/1 on 4MB; red with the flat claim the paragraph door's,
+where it did not open at all.
 
 ### 106.9 The decode pipeline: a worker, and the UI task as its file pump (wave 2)
 
@@ -232574,6 +233905,7 @@ whole MP3** into a hold:
 
 | hold | when | how |
 |---|---|---|
+| ONE huge claim (`X3HK_HUGE`), kern_mega's arm only | `OSAPI_MEM_HUGE` with a 64KB step gives the file's KB, rounded to 32 KB, in protected mode (a step of 8): the pool's, the heap's or a BRIDGE of both - and the heap keeps `X3H_MARGKB` beside it (below) | 32 KB `READ_SEQ` chunks straight into it and the gulps copied out, both through `apps/os88huge.inc` (§50.3.8: `hw_fread`, `hw_get`), split where a window ends - so never across a bridge's cut |
 | one XMS block (`X3HK_XMS`) | `OSAPI_XMEM_CAPS` has the file's KB | 32 KB `READ_SEQ` chunks into the look-ahead's claim, each `OSAPI_XMEM_COPY`'d up |
 | a conventional claim (`X3HK_CONV`) | no pool, the file at most `X3H_CAPKB` = 192 KB, the heap's largest run holds it and `X3H_MARGKB` = 96 KB stay free beside it, and the CPU is not an 8086 | the chunks read straight into it |
 | none | otherwise, and on every 8088 | the track streams as before (§121.6's 4 KB gulps) |
@@ -232590,6 +233922,32 @@ Audio Player leaves `os88_rseq` (AUDIO.O88 is byte-identical) and XTMP3
 makes `x3_rseq`, a copy out of the hold for the held file and the disk for
 anything else (a finished WAV, `x3_readat`'s header and fingerprint reads).
 `[x3_nrseq]` counts the disk's gulps and `[x3h_ncopy]` the hold's.
+
+**The huge hold** (`x3h_huge`, `PKG_MEGA`; docs/plans/MEGA-HUGE-PLAN.md 3,
+KERN-MEGA-PLAN 14.170) is tried first on kern_mega's arm, so a file the
+pool's best run cannot hold alone is held all the same where the pool and
+the heap together can. The kernel places a claim in the pool alone, else the
+heap alone, else the bridge (§50.3.5); where the HEAP ALONE took it and
+the heap's largest run does not keep `X3H_MARGKB` beside it, it is claimed
+once more at 32 KB past that run - which the heap cannot hold alone, so the
+kernel bridges it and the conventional piece is the smaller by the pool
+piece (the hold then longer than the file, which no read passes). Short
+again, or a paragraph step (kern_mega in real mode, where `X3H_CAPKB`
+stands as on every other kernel), and the old ladder goes on. That is
+`apps/os88huge.inc`'s `hw_claimfit` (§50.3.8, KERN-MEGA-PLAN 14.177), which
+asks the cell first, so a song no claim can hold costs no claim and no
+pack; the margin was the heap's TOTAL free until then. A hold with conventional
+memory in it (`[x3h_hcv]`) is declared movable with a `ret` proc - its
+windows follow a move - pinned across each read into it as the
+conventional hold is, and given up by `x3_plan` as the conventional hold
+is. `x3h_at` stays the conventional hold's: `SEG_AT` maps across a cut but
+its reach stops there (KERN-MEGA-PLAN 14.169), which the walker never asks
+it to cross. Measured on 86Box's at286_vga_sb, the largest song held whole
+(`tests/x3huge.py --find`, to 32 KB): **192 KB -> 608 KB** with 640K + 384K
+above 1MB, **2,848 KB -> 3,232 KB** at 4MB - the bridge's pool piece plus
+the heap down to `X3H_MARGKB`, where the XMS block was the pool's best run
+after the package's own claims had taken their share of it. The shipped
+build is byte-identical.
 
 **The key** is the file's folder, volume and name. A track that opens with
 the same key keeps its hold (a replay, a seek, a step, a Decode first after
@@ -234358,6 +235716,30 @@ added (WAVERACK-PLAN.md's Wave 4b section says when one would earn it):
   (§123.13, KERN-MEGA-PLAN 14.159) the hold is a pool claim ABOVE 1MB there
   whenever it is 64 KB or less, a lone data selector, and the window binds
   into it all the same.
+  **kern_mega's own arm holds more** (`PKG_MEGA`, §20.18; KERN-MEGA-PLAN
+  14.173): the hold is ONE `OSAPI_MEM_HUGE` claim with a window every 64KB,
+  a bridge of the pool and the heap allowed (§50.3.5, `wt_hhuge`), the
+  heap's largest run left holding the ring, the look-ahead and 16 KB as the
+  shipped build's test required - claimed once more past that run, so a
+  bridge, when the heap alone took it and left too little: `hw_claimfit`
+  (§50.3.8, KERN-MEGA-PLAN 14.177), XTMP3's and the Audio Player's hold
+  too, its retry at the next 32 KB past the run where WaveRack's own copy
+  went a whole 64 KB past it - and every address in it is
+  `apps/os88huge.inc`'s `hw_aim`
+  (§50.3.8): `wt_hoff` answers the window AND its reach, so `wt_hget`'s
+  caller takes no more frames than the window holds and comes back for the
+  rest, and `wt_hput` converts a window at a time - no frame is written or
+  read across a window's end, so none across a bridge's cut. No bound window
+  (`wt_hbwin` is the shipped build's) and no 1 MB paragraph limit; the CPU
+  test is dropped, kern_mega running on a 286 or later where `wt_cshare` is
+  0. Measured by `tests/waverackhuge.py --find` on 86Box's at286_vga_sb: the
+  largest region held, one byte a frame, **448 -> 640 KB** at 640K + 384K
+  above 1MB (42 -> 59 s at 11,025 Hz; 10 -> 15 s at 44,100) and **448 ->
+  3,328 KB** at 4MB (42 s -> 5 min 9 s at 11,025 Hz; 77 s at 44,100: there
+  the region rides a C: and the medium is poked slow, `--force`, since a
+  fixed disk streams it). `waverackhuge` holds a 640 KB region a floppy
+  cannot stream, bridged, byte for byte; `waverackmega-arm` runs
+  `waverackmega` on the arm.
 - **The d = 1 8-bit loops** (`wt_cv8m1`, `wt_cv8s1`): no box, so a sample is
   the load, the extremes, the table and the store, and the peak and the rails
   are derived from the extremes once a call (`wt_cvx`) - the same values the
@@ -235126,8 +236508,14 @@ standing in that folder with `OSAPI_FILE_GOTO_QM`.
 | final pass (wave 6b) | `waverackrec` on the final code: XT-IDE 60 s at 11,025 and 15,000 Hz, high water 3,072 / 4,096; 204 s beside a second WaveRack's 2 MB scan 16,384; 32 KB clusters 5,120 / 6,656; floppy 8,000 Hz 27,648; 0 overruns, every take = the card's count. The copy 97.8 cycles a byte. Drawing on the 5150 + Hercules (`calls`): idle 0 a tick, recording 0.99, playing at Fit 1.02, one cut 16, a full repaint 1,122-1,459 ms (77-90 primitives); `wr_redraw` while recording 60.4 ms a tick median. Image **43,625** bytes after the review's fixes (packed 34,249 - 34 clusters at 1 KB), bss **7,774** |
 | record rate, measured | XT-IDE (2 KB and 32 KB clusters): 60 s at 11,025 and 15,000 Hz with no overrun, the ring's high water 3,072-6,656 bytes of 32,256; 203 s at 11,025 Hz while a second WaveRack launched, opened and scanned 2 MB, high water 8,704. 1.44 MB floppy: 8,000 Hz, 30 s, high water 27,648; 11,025 Hz refused there (§123.7's write-time rule) |
 
-**On kern_mega** (KERN-MEGA-PLAN 14.149, 14.159): WaveRack has no `PKG_MEGA`
-arm and declares `OS88_HIGH | OS88_HIGHMEM` (its class byte, §20.18), so in
+**On kern_mega** (KERN-MEGA-PLAN 14.149, 14.159, 14.173): WaveRack declares
+`OS88_HIGH | OS88_HIGHMEM` (its class byte, §20.18) and, since 14.173, has a
+`PKG_MEGA` arm in `$(MEGAPKGS)` on kern_mega's own disks whose one difference
+is the play's HOLD (§123.6: one huge claim, a bridge allowed, walked by
+`apps/os88huge.inc`; image 43,955 -> **44,157** bytes, +202, packed 33,776 ->
+33,949, bss 7,779 -> 7,792). The shipped build, which every other disk
+carries and which must stay correct there (§20.18 item 2), is the one this
+paragraph describes; the arm is the same in every other line. So in
 protected mode its REGION is a code/data pair above 1MB and every claim of
 64 KB or less is a pool block there - the band, the envelopes, the view
 cache, the history, the hold, the look-ahead, the take's staging units and
@@ -242492,6 +243880,7 @@ byte of it.
 | class byte | `OS88_HIGH | OS88_HIGHMEM` in the arm, nothing in the shipped build (124.31.3's last step): the image and WIN16's own plain claims may go above 1 MB, the program's memory stays below it. `tests/megahigh.txt`'s two WIN16 lines are retired |
 | the arenas | at most `W16_NARENA` = **4**, as in real mode (§124.25.1). It was 3 until 2026-11-02, because each arena is four bytes of bss; S24 batch 6 freed the bytes. The fourth is limited by the **map** rather than by RAM: the map holds 1,012 KB of virtual paragraphs (960 KB until 2026-11-04, when `W16V_LO` fell from 1000h to 0300h, §124.31.3), and the third arena takes the largest free run less 96 KB. Arcade's setup asked for 408 KB for its fourth, got it from the kernel, and the map refused it. Before the stepped floor (§124.25.1), the fall back was the request's own 52 KB: MSCOMSTF's code went into it, and its DGROUP then had nowhere to go. Stepping down by quarters finds what the map still holds. The claim count: the program, the library part and four arenas are six. A running `LoadLibrary` holds the loader part, its read cache and one table claim for each library still loading. Arcade's setup loads its six DLLs this way with no claim refused (seen 2026-11-02; the peak was not counted) |
 | the third arena | leaves `W16_ARKEEP` = **96 KB** of the largest free run, not 32 (§124.25.1): a part's fetch is a conventional claim on kern_mega whatever the class byte says (`op_fetch`'s DMA door), and the library part's is 62 KB. With 32 a program that made its third arena before its first library call could not fetch the part at all: MMTEST did, once S23 batch 2 took the system-library part from 33 to 34 KB, and its closing `MessageBox` ended it with *WIN16's library part could not be read* (seen 2026-11-01; 96 cured it). A constant, so no byte of either image |
+| the third arena, from the POOL | **or the pool's best run, up to `W16_ARPOOL` = 512 KB, the better** (docs/plans/MEGA-HUGE-PLAN.md F6): an arena over 64 KB is `W16VCLAIM`'s `OSAPI_MEM_HUGE`, which tries the pool first, and `MEMP_AVAIL` counts conventional memory alone - so the arena was sized from the heap it did not come from, a 4MB machine's third arena no bigger than a 640KB one's. The ask is `MEMH_AVAIL`'s DX (§50.3.5); no keep is taken off it, the pool piece holding no conventional byte; 512 KB is half the arm's 1,012 KB virtual map, so the fourth arena and the bitmaps keep the rest. A refused ask (real mode) leaves the heap's figure |
 | the census | not in the arm: it decides whether an 8088 can run a program (§124.3), and kern_mega runs on a 286 or better. `w16cens.inc`, `w16optab.inc` and their 1,012 bytes of bss are what pay for the arm's own code |
 
 #### 124.31.2 What the kernel lends
@@ -242710,7 +244099,13 @@ what the numbers mean**:
     and which the map `SEG_SUB`s into past 64 KB as it does below. That
     covers the program's image, its PSP and resources, and the arenas:
     everything the program is handed a selector into. Where the pool cannot
-    hold one, the kernel puts it in conventional memory as before.
+    hold one, the kernel puts it in conventional memory as before - and
+    NEVER ACROSS BOTH: the huge ask is `HUGE_NOBRIDGE` (§50.3.5,
+    docs/plans/KERN-MEGA-PLAN.md 14.169), because the map's virtual
+    paragraphs, `w16_pvirt`'s linear bases and `SEG_TILE`'s huge pointers
+    all assume one run of memory, and a block across a bridge's cut would be
+    cut short there. A block neither region holds alone is refused (a
+    GlobalAlloc of 0), which `win16megahugega` holds on a 2MB machine.
   - The two things that needed them low:
     - a window `AllocSelector`, `SetSelectorBase`, `SetSelectorLimit`,
       `PrestoChangoSelector` and DPMI 0000h/0007h/0008h make is a
@@ -244751,6 +246146,30 @@ The tables, a record after a record:
 - **a picture, 8 bytes**: its column and row in the band, its cells and
   rows, its paragraph in the PICTURES region.
 
+#### 126.2.6 An opening's SEAM: the silence at a cut taken out (`os88vbt.seam_join`)
+
+Openings cut from one clip on one frame are exported as files of their own,
+and each export can carry a few milliseconds of silence at the cut - the
+owner's Demo Battle 2: **17.1 ms** at `01-Opening`'s end, **10.2 ms** at
+`02-Opening`'s start, and the card on the PicoMEM 2 twin played **26.8 ms of
+exact silence** where the source has none: "the small music drop between the
+two opening clips". The engine's hand-over is exact (126.3: the next
+opening's sound starts at the write position the moment the last one's
+ends); the gap is in the records.
+
+So the builder joins every opening's own sound to the one before it, as the
+project's `"seam"` on the later opening says (`vbtproj.set_opening`):
+
+| seam | |
+|---|---|
+| `auto` (absent) | trim, then shift |
+| `trim` | the later opening's head frames dropped while each is wholly silent AND black (`vbtana.dark_at`, the palette rules' own test) - picture and sound together |
+| `shift` | what is left of the silence, when it is under a frame, closed: the later sound's first samples fill the earlier one's silent tail and the later sound moves EARLIER by that much - at most a frame ahead of its picture (27.3 ms in Demo Battle 2, under half a frame at 15 fps) |
+| `none` | as exported |
+
+The build says what it did on stderr. `tests/unit/t_vbtseam.py` (row
+`vbtseam`) holds the cases.
+
 ### 126.3 The engine
 
 Three pieces, the Video Player's own shape (98.3):
@@ -245356,7 +246775,10 @@ its cursor's offset does not seek.
 5. a clip playing, to its ring's top: what is on the glass first;
 6. (after a key, nothing more for a third of a second, `VB_KQUIET`) the head
    of the clip under the menu's cursor;
-7. the head of the enemy's attack;
+7. the head of the enemy's attack - or, while a plan whose rolled damage
+   takes the enemy's last HP plays, the head of the VICTORY clip (`vb_begin_plan`
+   sets `[vb_eclip]` to it: the enemy has no next move, and read at the
+   ending the head held the picture 316 ms on 5150 #1, 2026-11-08);
 8. the music, to its ring's top.
 
 A ring is given to a clip only if it is not playing and not holding the
@@ -245503,10 +246925,14 @@ loaded base) are the precedents and their mechanisms are taken as they are:
   pays. The sound's borrows are in the hook's interrupts-off part and never
   yield.
 - **The check**, at the fill's end (`vb_hipq`): the whole file held; EMS the
-  four quarters; XMS a 286 or up, NOT under CPU_F_PM (on kern_mega a token
-  is no address, 50.6.10), LOADALL probed with INT 6 hooked on a 286, and on
-  either tier the hold's first 16 bytes read in place against
-  OSAPI_XMEM_COPY's - a gate a BIOS closed reads 1 MB low and fails it.
+  four quarters; XMS a 286 or up in real mode, LOADALL probed with INT 6
+  hooked on a 286, and on either tier the hold's first 16 bytes read in
+  place against OSAPI_XMEM_COPY's - a gate a BIOS closed reads 1 MB low and
+  fails it. Read in place at `[vb_hlin]`, the block's linear base: the token
+  on a real-mode kernel, and in kern_mega's real-mode bracket the twin's
+  answer to where the block is now (`OSAPI_XMEM_COPY` CX = 0, 53.2.3) - a
+  token is no address there (50.6.10), and under `CPU_F_PM` itself (kern_mega's
+  door) the check answers the tier alone and the bracket makes it (126.4.5).
   `[vb_noinp]` is the A/B gate (a test's poke): the copying hold plays.
 - **A ring given its clip BEFORE the fill ended keeps copying** until it is
   given another: the title's, and whatever the reader had read ahead.
@@ -245706,8 +247132,10 @@ unused; every heavy clip streamed off the disk through a 104 KB ring, and
   (`vb_hipok`, 126.4.2's conditions less "the whole file"): XMS on a 286 or
   later in real mode, LOADALL probed, the first 16 bytes read in place
   against the driver's; or EMS with the frame's four quarters and a board as
-  fast as RAM. Refused (an 8088 with no board, kern_mega, a closed gate,
-  `[vb_noinp]`) the hold is 126.4.1's, unchanged.
+  fast as RAM. Refused (an 8088 with no board, a closed gate, `[vb_noinp]`)
+  the hold is 126.4.1's, unchanged. On kern_mega the hold opens at the door
+  in protected mode, where neither borrow can be tried: the cache is planned
+  there on the tier and checked in every bracket (126.4.5).
 - **The block's first part is PINNED**: the IDLE LOOP's records (format 7,
   `VH_IDLE`), read into it at the load - so the resident claim loses the
   loop (72 KB of the owner's VGA battle) and the idle frames decode in place
@@ -245749,7 +247177,12 @@ unused; every heavy clip streamed off the disk through a 104 KB ring, and
 - **The conventional rings** stay two - ring 0 the largest run, ring 1
   `VB_CRMIN` beside it - for the clips the cache has no slot for (a slot
   refused, a clip longer than the pool), the title's and the openings'
-  fixed rings. A clip in place uses none of its ring's memory.
+  fixed rings. A clip in place uses none of its ring's memory. Ring 1 is
+  claimed FIRST, at its least, and ring 0 is then the largest run left
+  (KERN-MEGA-PLAN 14.179): sized the other way round, ring 0 was the run
+  `OSAPI_MEM_AVAIL` answered less ring 1, and a cache AVAIL counts free that
+  a claim which fits does not shed - kern_mega's pinned 9 KB read-ahead -
+  left ring 1 short by its KB ("Not enough memory" on Bochs's kern_mega).
 - **A guard is the largest record, in 4 KB** (`[vb_cgkb]`), where it was 16
   or 32 KB: 24 KB of the owner's VGA battle.
 
@@ -245777,12 +247210,33 @@ bracket** (SPEC.md 53.2.3).
 - **The door** (`vb_play`, every kernel). `vb_door` reads `CPU_F_PM` into
   `[vb_pmd]`, the rings' kept room (`VB_RKEEP`, and on kern_mega
   `VB_RKEEPM` 24 KB more for the bracket's own service area and drivers'
-  low copies) and `OSAPI_FSX_CAPS` (not a cell a real-mode bracket keeps).
+  low copies - the GUESS, which `vb_prep` replaces by the door's own
+  figure, below) and `OSAPI_FSX_CAPS` (not a cell a real-mode bracket
+  keeps).
   `vb_load` claims the resident block once (kept between plays) and the
   card's ring; on a real-mode kernel it goes on into `vb_lread`, the reads,
   as before. **The clip rings are claimed at the door on every kernel**
   (`vb_rclaim`, out of `vb_main`: a real-mode bracket refuses a claim) and
   given back by `vb_between`.
+- **kern_mega's door PREPARED** (`vb_prep`, KERN-MEGA-PLAN 14.180): at
+  the hold's opening (`vb_load`, before `vb_hopen`) and again at every
+  play's door before the rings are sized, `OSAPI_FSX_RUN` with `FSXF_REAL |
+  FSXF_PREP` (SPEC.md 53.2.3.1) and the list the play will hand the door
+  (`vb_mkfsxl`, below - SOUND.DRV named for a card before its ring is
+  claimed, and an EMS hold's EMS.DRV from the second ask on): the drivers the bracket carries come down out of the pool - so the
+  hold is sized with their 15 KB, as kern_big's XMS never had them - and
+  `[vb_rkeep]` is `VB_RKEEP` plus the KB the door answers it will still
+  claim, so the rings leave exactly that. Refused (a kern_mega before it):
+  `vb_door`'s guess stands. **The door's KB are HELD where the door will
+  claim them** while `vb_rclaim` sizes the rings (KERN-MEGA-PLAN 14.187):
+  one plain conventional claim of `[vb_rkeep]` less `VB_RKEEP`, bottom-up
+  first fit as the door's `fsx_rlowclaim` places its own, freed before the
+  bracket. In a hole no ring is sized from - the card ring's 64 KB-page gap
+  under it - the rings leave `VB_RKEEP` alone; in the rings' own run, the
+  room left is what it was. Left out of the sum, it was charged twice: the
+  door's 3 KB went into that gap, and ring 0 still left them, at 640K +
+  384K a 4 KB unit (316 KB where 320 fit) once the merge's 1 KB of region
+  moved the run's remainder.
 - **kern_mega's door** (`vb_mklist`): `os88real_prep` over `vb_rlst` - the
   resident claim's base, the card's ring, both rings' `RG_SEG` - and the
   list: `FSXL_FILE` and the name `vb_load` found the bundle under (the
@@ -245806,11 +247260,26 @@ bracket** (SPEC.md 53.2.3).
   real-mode bracket), the bounce pinned for the bracket and with the EMS
   frame in the swap list, `FSXL_DRV DRVC_EMS` for an EMS hold; filled and
   read inside through `OSAPI_XMEM_COPY`'s and `OSAPI_DRV_CALL`'s twins.
-  The read in place (126.4.2) is checked again at each bracket's start: on
-  kern_mega a token is the block's linear address only while the pool
-  leaves the block where it is, and the check's 16 bytes through the twin
-  against the same 16 in place is what says so: by a 386's loaded base
-  (Bochs) and a 286's LOADALL (86Box), and an EMS hold through the frame.
+  The read in place (126.4.2) is checked again at each bracket's start:
+  on kern_mega the pool moves a token's block between brackets (50.6.10),
+  so the bracket ASKS where it is now (`OSAPI_XMEM_COPY` CX = 0, 53.2.3)
+  into `[vb_hlin]`, the base every in-place read is aimed from, and the
+  check's 16 bytes through the twin against the same 16 there is what says
+  the borrow works: by a 386's loaded base (Bochs) and a 286's LOADALL
+  (86Box), and an EMS hold through the frame.
+- **The clip cache** (126.4.6, KERN-MEGA-PLAN 14.179), as on kern_big: the
+  hold opens at the door BEFORE the resident claim is sized (`vb_load`'s
+  `.rings`, as a real-mode kernel's does), so a cache keeps the idle loop
+  in its block and the resident claim has no part for it; `vb_hipok` there,
+  in protected mode, answers the tier alone (XMS on a 286 or later; EMS on
+  its quarters and the board's speed, as everywhere) and `vb_cplan` plans
+  the slots. Each bracket then makes the check before anything is read
+  (`vb_main`): refused there - a 286 with no LOADALL, a gate a BIOS closed
+  - the idle loop has no resident room to go to inside a bracket, so the
+  bracket returns at once (`[vb_cnope]`), and `vb_play` shuts the gate
+  (`[vb_noinp]`, for the window's life), unloads the battle and plays it
+  again from the door with the copying hold. A move between plays costs
+  nothing: the next bracket reads the block where it is.
 - **The machines** (W4, 86Box's mr286 through the port): the 286's CMOS
   shutdown reset, CGA and Hercules, a Sound Blaster 2.0, the XMS and EMS
   holds - no engine change was needed for any (`vbtmega86`).
@@ -245819,10 +247288,15 @@ bracket** (SPEC.md 53.2.3).
   (conventional on every kernel) - the resident claim, the rings and their
   packing probe, the hold's bounce, the card's ring - so on kern_mega the
   only claim that goes above 1MB is the title picture, and the region
-  itself; the door leaves the region's room as well (`VB_REGKB`) for the
-  bracket's copy down. A picture above 1MB costs a play nothing and is kept
-  through it (`vb_cvplay`), so the window is the picture again the moment
-  the play returns.
+  itself. **The region comes DOWN in the entry proc** (`vb_low`, `OSAPI_SEG`
+  `SEG_LOW`, KERN-MEGA-PLAN 14.178; asked again by `vb_door` when refused
+  there) before anything is sized, so the hold's pool has its 48 KB and the
+  bracket copies nothing; refused at the door too, it leaves
+  the region's room as well (`VB_REGKB`) for the bracket's copy down, as
+  before. A picture above 1MB is given back at the first play's door, before
+  the hold is sized - kept there it was 12 KB of the hold - and kept through
+  every play after (`vb_cvplay`), so the window is the picture again the
+  moment such a play returns. Measured with the owner's battles (126.4.7).
 - **A card** (W2): SOUND.DRV goes low through the list, and the card's ring
   - conventional, from `OSAPI_MEM_CLAIM_DMA_HI` - is in the swap list; the
   stream runs through `OSAPI_SND_STREAM`'s real-mode twin. On Bochs's SB16
@@ -245832,6 +247306,119 @@ bracket** (SPEC.md 53.2.3).
 `tests/vbtmega.py` on Bochs and, `--emu 86box`, on the mr286 (rows
 `vbtmega`, `vbtmega86`) are the gates. **What it cost** the shipped engine: W1 image 24,337 -> 24,887 (+550),
 bss +69, the packed file +451; W3 +76, +1, +49; W5 +48, +1, +34.
+
+#### 126.4.7 What a battle holds on kern_mega against kern_big (2026-11-08)
+
+The owner's ask: *"Why would it be getting any less, in fsx real, than it
+gets on big?"* Measured on ONE machine, 86Box's `at286_vga_sb_hdd` (the
+mr286, a VGA, an SB 2.0, the battle on an IDE C:), each kernel booted on it
+and the play run to its title, where the hold has filled; kern_big with
+XMEM.DRV, whose pool is extended memory less the HMA. The owner's two real
+battles (not in the tree): `BATTLE.VBT`, a CGA4 battle of 6.3 MB, and the
+VGA battle inside `FF7BATTV-286.O88` (16.0 MB), played by this tree's
+engine. "Rings" is the two conventional clip rings, guards aside:
+
+| battle, machine | kern_big hold / rings | kern_mega before | kern_mega after (14.178) | and the cache (14.179) | and the drivers lent (14.180) |
+|---|---|---|---|---|---|
+| CGA4, 640K + 384K | 316 / 368 (cache) | 220 / 320 | 280 / 320 | 280 / 336 (cache) | 292 / 336 (cache) |
+| CGA4, 2 MB | 956 / 368 (cache) | 860 / 320 | 920 / 320 | 920 / 336 (cache) | (not re-measured) |
+| CGA4, 4 MB | 3,004 / 368 (cache) | 2,908 / 320 | 2,964 / 320 | 2,964 / 336 (cache) | 2,980 / 336 (cache) |
+| VGA, 640K + 384K | 316 / 260 | 224 / 224 | 280 / 224 | 280 / 224 | 292 / 224 |
+| VGA, 4 MB | 3,004 / 332 (cache) | 2,912 / 224 | 2,964 / 224 | 2,964 / 296 (cache) | 2,980 / 296 (cache) |
+
+"(cache)" is the clip cache, its clips played in place; the VGA battle at
+640K + 384K has none on either kernel (its 72 KB idle loop and the slots'
+least, 256 KB, are more than either pool), so the kernels agree there too. 14.180's column is the drivers' 15 KB in the
+hold (FSXF_PREP, 53.2.3.1): the rings are the cache's either way, its ring
+rule leaving the exact room the door now answers in two holes (5 and 11 KB)
+rather than in a ring. After the bookmarks' merge (126.4.8: the region 48 ->
+49 KB) the same rule left ring 0 316 KB and a 14 KB hole on the demo bundle -
+the door's 3 KB counted in ring 0's run though they land in the card ring's
+page gap below it, idle only while the run's 4 KB remainder had been 0 -
+until the door's room was HELD where the door claims it (KERN-MEGA-PLAN
+14.187): ring 0 320 KB, holes 5 and 10 KB, on the demo and both owner's
+battles alike (CGA4 rings 336, VGA 224, kern_big unchanged).
+
+Neither kernel holds a whole battle there. **Every KB of the difference,
+640K + 384K, CGA4** (kern_big 684 held, kern_mega 540 before, 600 after
+14.178, 616 with the cache):
+
+- **the region, 48 KB of extended memory - FIXED**: above 1MB on kern_mega
+  (`OS88_HIGH`) and copied into conventional memory for every real-mode
+  bracket, so its pool block sat idle beside the copy. `SEG_LOW` at the
+  door (126.4.5) brings it down before the hold is sized;
+- **the title picture, 12 KB of extended memory (8 in the VGA battle) -
+  FIXED**: kept above 1MB through the first play too (126.4.5);
+- **kern_mega's own above 1MB, 36 KB of extended memory - 15 FIXED, 21 the
+  kernel's**: its fixed area (`.cold` 47.6 KB, `.mega` 24.1, the tables and
+  the park's scratch: 85 KB at 640K + 384K, 86 at 4 MB) against kern_big's
+  HMA (64 KB, `.cold` and SOUND.DRV in it, which XMS never counted) - 21 KB
+  that no program can recover and the HMA cannot either (KERN-MEGA-PLAN
+  14.180's item 4: kern_mega's HMA is pool already) - and SOUND.DRV's and
+  HDD.DRV's images in the pool (15 KB), which `FSXF_PREP` (53.2.3.1) now
+  brings down for the play, the copies the bracket made of them anyway.
+  `tests/megapar.py` holds the hold to every KB the kernel leaves programs,
+  and the difference to the fixed area's 21;
+- **the clip cache, 16 KB of conventional memory (72 in the VGA battle at
+  4 MB) - FIXED** (KERN-MEGA-PLAN 14.179): kern_big's hold is a CACHE of
+  whole clips played in place (126.4.6) and its idle loop lives in it;
+  kern_mega's was the copying hold, the idle loop in the resident claim.
+  Now the cache is planned at the door and checked in each bracket, where
+  `OSAPI_XMEM_COPY`'s twin answers where the block is (126.4.5), and
+  kern_mega's hold is the cache wherever kern_big's is;
+- **the bracket's own conventional memory, 18 KB - the kernel's**: its
+  service area (3 KB) and HDD.DRV (4) and SOUND.DRV (11) - low copies until
+  14.180, the lent images since (the same KB, made before the rings rather
+  than in the room they left) - where kern_big runs both drivers from the
+  HMA (53.2.3; KERN-MEGA-PLAN 14.180 has the HMA twins as a proposal);
+- **the rest, 14 KB of conventional memory**: the room the rings left the
+  door (`VB_RKEEPM`, 24 KB, against the 18 it took), which `FSXF_PREP`'s
+  answer sizes exactly - 8 KB more for the rings with the copying hold;
+  with the cache (14.179) its ring rule leaves them in two holes in the
+  play (5 and 11 KB; 5 and 10 since 14.187), under `VB_RKEEP` + a 4 KB
+  unit - the 5 the card ring's page gap, holding the door's 3; kern_mega's floor 3.5 KB higher
+  (63.0 against 59.5 with XMEM.DRV's `.cold` in the HMA), the read-ahead's
+  9 KB landing the door's walk rebuilds, at the arena's foot under a pinned
+  claim where no ring reaches it, and 4 KB units, less kern_big's XMEM.DRV
+  and its 2 KB claim.
+
+`tests/megapar.py --prog vb` (row `megaparvb`) is the gate: both kernels on
+that machine, the demo bundle or the owner's (`$OS88_VBT_TARGET`,
+`$OS88_VBT_PKG`) - and, since 14.179, kern_mega's hold the clip cache
+wherever kern_big's is.
+
+#### 126.4.8 Bookmarks: every clip head one FAT link away (`vbbm.inc`)
+
+**A clip's head was a walk from the bundle's first cluster.** `vb_dread`
+seeked by zeroing its cursor (18.4.8), so every clip started, every head
+the menu's cursor asked for and every ring re-filled from its clip's start
+paid the chain from the front: ~330 us a link on 5150 #1 (2 KB clusters),
+**961-1,153 ms** for the owner's heads 4.8-5.8 MB into a 6.5 MB bundle -
+the Ice, Bolt and Scope sound drops of docs/reports/PICOMEM2-STUTTER-2026-11-07.md,
+on a PicoMEM 2 and, with its seeks on top, an ST-225.
+
+So, on a kernel that walks a moved cursor forward (18.4.8.2):
+- **`vb_bmbuild`, at load** (`vb_load`'s `.sized`), makes ONE forward pass
+  over the bundle: for each clip head and the music, in table order, the
+  build's cursor is moved to the cluster BEFORE the head's and that one
+  cluster read into a scratch claim, which leaves the cursor standing at the
+  head. Its `+4` and `+6` are the bookmark (4 bytes, `vb_bmk`, a clip's slot
+  and the music's last); one 16-byte template keeps what they share. One
+  walk of the chain in all and a cluster a head: ~1 s more load on the
+  field machine's 6.5 MB bundle. Not built - and every seek what it was -
+  when `+4` is 0 after the first read (an older kernel), when clusters are
+  past 16 KB (`VB_BMMAX`: a chain of them is short), or when a read fails.
+- **`vb_bmseek`, at every seek**, any stream's: of the stream's own cursor
+  (when it walks forward and stands at or before the target) and the
+  bookmarks, the one nearest at or before the target is loaded and `+12`
+  moved to it - the kernel walks the links between. None: zeroed, as before.
+- **298 bytes of bss** (`vb_bmk` 260, the build's cursor and the template
+  32) and the code in `vbbm.inc`.
+
+Measured on MartyPC's CGA PicoMEM 2 twin with the owner's bundle (2026-11-08):
+the head 5,772 KB in read in **96 ms where it took 1,002**, the reader at
+194 KB/s while reading where it was 140; on the kernel before 18.4.8.2 the
+same engine built nothing (`[vb_bmok]` 0) and read as it did.
 
 ### 126.5 The band
 

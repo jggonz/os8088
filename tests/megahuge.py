@@ -4,6 +4,7 @@ D6-D8).
 
     python3 tests/megahuge.py            the row
     python3 tests/megahuge.py --keep     ...and leave the boot's directory
+    python3 tests/megahuge.py --build DIR   another tree's kernel (a red)
 
 OSAPI_MEM_HUGE with AX = 0 ASKS: the most one claim of the cell's can be given
 - the pool alone, the heap alone, or the BRIDGE, the pool's best run cut to
@@ -30,9 +31,18 @@ MEGAHUGE on C:'s RUN folder, lets MEGARUN start it, and asserts:
      65,536, as a misfit and sent the read to the conventional fallback,
      which refuses a block above 1MB.
 
+  7. MEGA-HUGE-PLAN F3: the ask with BX = 8000h (a window every 32KB) and a
+     claim of exactly its answer - granted, step 8, BX = 0, and less than the
+     bridge's figure, because such a claim never bridges;
+  8. MEGA-HUGE-PLAN F6: the ask with BX = MEMH_AVAIL - the KB doors' answer
+     with the pool counted: a total 640K or more past OSAPI_MEM_AVAIL's (the
+     heap alone), the largest at least 64KB, DX the pool's best run.
+
 THE FAILING CASE (docs/WRITING-TESTS.md 1): the tree before MC5 answers AX = 0
 with a refusal (a claim of 0KB) - red on (1), `MEGAHUGE: no 01`. Verified when
-the row was written.
+the row was written. Legs 7 and 8 were red on the tree before MEGA-HUGE-PLAN
+F3/F6 (mega-release 626e0ebb): `w32 max <the bridge's figure> refused`, and
+MEMH_AVAIL answered the bridge's figure with BX and DX as they went.
 """
 import os
 import re
@@ -68,8 +78,11 @@ def cache_state(box):
 
 def main():
     keep = "--keep" in sys.argv
-    for p in PKGS + ["build/megarun.o88", "build/mega.img",
-                     "build/mbr.bin"]:
+    bld = None                          # --build DIR: another tree's mega.img,
+    if "--build" in sys.argv:           # megak/, megarun.o88, mbr.bin (a red)
+        bld = sys.argv[sys.argv.index("--build") + 1]
+    for p in PKGS + ([] if bld else ["build/megarun.o88", "build/mega.img",
+                                      "build/mbr.bin"]):
         need(p)
     out = tempfile.mkdtemp(prefix="megahuge-")
     t0 = time.time()
@@ -78,7 +91,7 @@ def main():
     with open(b64, "wb") as fh:
         fh.write(bytes((k ^ (k >> 8)) & 0xFF for k in range(65536)))
     box = os88bochs.Box(out, [os.path.join(ROOT, p) for p in PKGS],
-                        put=("RUN:" + b64,))
+                        put=("RUN:" + b64,), build=bld)
     fails, lines, xkb = [], [], None
     try:
         if box.wait_pm(240):
@@ -112,7 +125,12 @@ def main():
                       ("again", r"MEGAHUGE: again (\w+)"),
                       ("claim", r"MEGAHUGE: claim (\w+) step (\w+)"),
                       ("lin", r"MEGAHUGE: first (\w+) last (\w+)"),
-                      ("c64", r"MEGAHUGE: claim64 at (\w+)")):
+                      ("c64", r"MEGAHUGE: claim64 at (\w+)"),
+                      ("w32", r"MEGAHUGE: w32 max (\w+) got (\w+) step "
+                              r"(\w+) bx (\w+)"),
+                      ("w32n", r"MEGAHUGE: w32 max (\w+) refused"),
+                      ("avail", r"MEGAHUGE: avail (\w+) (\w+) (\w+)"),
+                      ("mav", r"MEGAHUGE: memavail (\w+) (\w+)")):
             m = re.match(rx, l)
             if m:
                 got[k] = [int(g, 16) for g in m.groups()]
@@ -148,6 +166,38 @@ def main():
         if not caches or not caches.get("dirw") or not caches.get("fatw"):
             fails.append("the boot's read-ahead store and C:'s FAT window "
                          "were not both standing at the query: %s" % caches)
+        # MEGA-HUGE-PLAN F3: the ask for a window every 32KB answers what
+        # such a claim is GRANTED - it never bridges - and a claim of exactly
+        # that is had, step 8, BX = 0 (the windows asked for)
+        if "w32n" in got:
+            fails.append("F3: the ask for 32KB windows answered %dK and a "
+                         "claim of it was REFUSED - the bridge's figure, "
+                         "for a claim that cannot bridge" % got["w32n"][0])
+        elif "w32" not in got:
+            fails.append("F3: no 32KB-window ask")
+        else:
+            wk, _, wstep, wbx = got["w32"]
+            print("megahuge: F3 32KB windows: asked %dK, got it, step %d, "
+                  "bx %d (the bridge's %dK)" % (wk, wstep, wbx, n))
+            if wstep != 8 or wbx != 0 or wk >= n:
+                fails.append("F3: the 32KB-window claim %s - want step 8, "
+                             "BX 0 and less than the bridge's %dK"
+                             % (got["w32"], n))
+        # MEGA-HUGE-PLAN F6: MEMH_AVAIL counts the pool. The heap alone
+        # (OSAPI_MEM_AVAIL) is under 640K; the total with a 4MB machine's
+        # pool is past it, the largest a KB door gives is at least 64KB,
+        # and DX is the pool's run
+        if "avail" not in got or "mav" not in got:
+            fails.append("F6: no MEMH_AVAIL / OSAPI_MEM_AVAIL line")
+        else:
+            al, tot, run = got["avail"]
+            ml, mt = got["mav"]
+            print("megahuge: F6 MEMH_AVAIL largest %dK total %dK pool run "
+                  "%dK; OSAPI_MEM_AVAIL %dK / %dK" % (al, tot, run, ml, mt))
+            if not (tot >= mt + 640 and run >= 64 and al >= max(64, ml)):
+                fails.append("F6: MEMH_AVAIL %s against the heap's %s - the "
+                             "pool is not counted" % (got["avail"],
+                                                      got["mav"]))
         if got.get("again", [None])[0] != n:
             fails.append("asked again after the free: %s, not %d"
                          % (got.get("again"), n))

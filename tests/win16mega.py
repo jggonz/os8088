@@ -5,7 +5,7 @@ mode) and so never run the arm that changed.
 
     make && make mega && make win16fixtures && python3 tests/win16mega.py FIXTURE [--keep]
 
-FIXTURE is one of BIGBMP, CTLPROC, DGROUP, MEMDC, MENU. kern_mega boots off C:
+FIXTURE is one of BIGBMP, CTLPROC, DGROUP, HUGEGA, MEMDC, MENU. kern_mega boots off C:
 with WIN16, its DOS.O88 and the fixture in C:\\WIN16 and an \\AUTOSTRT link that
 opens it (tests/win16csalias.py's rig). Bochs cannot read a MessageBox off a
 stack the way the kern_big rows do, so each fixture also writes <NAME>.TXT
@@ -25,6 +25,16 @@ the row reads that file:
            blocks on the arm. It was a #GP in part 9's w16_palobj
            (GetObject of a palette), whose block was loaded with a raw
            `mov es` of a virtual paragraph instead of W16SEG;
+  HUGEGA   "HUGEGA OK <KB>": the LARGEST GlobalAlloc (960 KB, 32 KB less each
+           refusal) written and read back through a __huge pointer, on a
+           2MB machine - where it is bigger than either the pool or the
+           conventional heap holds alone, so an OSAPI_MEM_HUGE ask of BX = 0
+           would BRIDGE the two (SPEC.md 50.3.5, KERN-MEGA-PLAN 14.169). The
+           row also reads mx_tab with the block held: NO pool block of
+           WIN16's is a bridge (MX_FBRIDGE) - WIN16's virtual paragraphs,
+           SEG_TILE huge pointers and linear-base cache assume one run, so
+           w16_vclaim asks HUGE_NOBRIDGE. Red with the WIN16.O88 from before
+           (it asked BX = 0): the arena a bridge;
   MENU     File > Exit (SPEC.md 124, astexit): MENU.EXE writes "menu: up" and,
            when its message loop ends, "menu: ended". The row presses Alt+F,
            X; the program must end, WIN16's instance be gone and the machine
@@ -50,7 +60,10 @@ import os88bochs  # noqa: E402
 
 B = os.path.join(ROOT, "build")
 FIXTURES = {"BIGBMP": "BIGBMP OK", "CTLPROC": "CTLPROC OK",
-            "DGROUP": "DGROUP OK", "MEMDC": "MEMDC OK", "MENU": None}
+            "DGROUP": "DGROUP OK", "HUGEGA": "HUGEGA OK", "MEMDC": "MEMDC OK",
+            "MENU": None}
+MEGS = {"HUGEGA": 2}                # (a machine its block must bridge on)
+MX_NBLK, MX_BLKSZ, MX_FHUGE, MX_FBRIDGE = 96, 10, 1, 0x40
 FAILS = []
 
 
@@ -137,7 +150,7 @@ def main():
     out = tempfile.mkdtemp(prefix="w16mg-")
     c = hd(out, name)
     box = os88bochs.Box(out, [], cimg=c, cgeom=os88bochs.GEOM, noa=True,
-                        bootc=True)
+                        bootc=True, megs=MEGS.get(name))
     try:
         try:
             box.up()
@@ -169,9 +182,20 @@ def main():
                 gone = False
             want(gone, "2. the WIN16 instance is gone")
         else:
-            want(bool(got) and got[0] == FIXTURES[name],
+            want(bool(got) and got[0].startswith(FIXTURES[name]),
                  "1. %s says %r (anything else names the checks that failed)"
                  % (name, FIXTURES[name]))
+        if name == "HUGEGA":            # the block is held at its MessageBox
+            xr = box.read(box.tail("mx_tab"), MX_NBLK * MX_BLKSZ)
+            hug = [(int.from_bytes(xr[i:i + 2], "little"),
+                    int.from_bytes(xr[i + 2:i + 4], "little"), xr[i + 4],
+                    xr[i + 5]) for i in range(0, len(xr), MX_BLKSZ)
+                   if xr[i + 2:i + 4] != b"\0\0" and xr[i + 5] & MX_FHUGE]
+            print("   huge pool blocks (KB from the pool, KB, owner, flags): "
+                  "%s" % hug, flush=True)
+            want(not any(f & MX_FBRIDGE for _, _, _, f in hug),
+                 "1b. no huge claim of WIN16's is a BRIDGE (w16_vclaim asks "
+                 "HUGE_NOBRIDGE)")
         box.guest_sleep(3)
         fl = box.faults()
         print("   " + ("\n   ".join(fl) or "(no fault line)"), flush=True)

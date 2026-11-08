@@ -350,9 +350,21 @@ def add(sf, z, cap, drum, samples, seen, key=None):
 
 
 # --- the synthetic bank: the gates' -------------------------------------------
-def synth(out):
+def synth(out, pad=0):
+    """PAD KB of silent, unreferenced samples go FIRST, so every sample a
+    program plays lies past them - tests/midirack.py --bigbank's bank, whose
+    voices read through windows past the bank's first 64KB (SPEC.md
+    105.10.2)"""
     rate = 11025
     samples, progs, drums = [], [None] * 128, [None] * 128
+    left = pad * 1024
+    while left > 0:
+        n = min(left, 65520)
+        samples.append({'data': bytes(n), 'lps': 0, 'lpe': 0, 'rate': rate,
+                        'gain': 0, 'root': 60, 'fine': 0,
+                        'env': (0, 0, 127, 10)})
+        left -= n
+    k0 = len(samples)
     f0 = 440.0 * 2 ** ((60 - 69) / 12.0)       # middle C
     period = rate / f0
     n = int(round(period * 8))                   # eight cycles: a clean loop
@@ -370,7 +382,7 @@ def synth(out):
                         'gain': 110, 'root': 60, 'fine': 0,
                         'env': (1, 20, 90, 15)})
     for p in range(128):
-        progs[p] = (p % 4, 60, 0, (1, 20, 90, 15))
+        progs[p] = (k0 + p % 4, 60, 0, (1, 20, 90, 15))
     seed = 0xACE1
     noise = []
     for i in range(1500):
@@ -387,7 +399,7 @@ def synth(out):
                     'lpe': 0, 'rate': rate, 'gain': 100, 'root': 60,
                     'fine': 0, 'env': (0, 0, 127, 10)})
     for k in range(27, 88):
-        drums[k] = (5 if k in (35, 36) else 4, k, 0, (0, 0, 127, 10))
+        drums[k] = (k0 + (5 if k in (35, 36) else 4), k, 0, (0, 0, 127, 10))
     b = write(out, progs, drums, samples)
     print('os88midbank: synthetic bank, %d samples, %d bytes -> %s'
           % (len(samples), len(b), rel(out)))
@@ -562,6 +574,8 @@ def main():
     b.add_argument('--kb', type=int, default=224)
     s = sub.add_parser('synth')
     s.add_argument('-o', '--out', required=True)
+    s.add_argument('--pad', type=int, default=0, help='KB of silent samples '
+                   'first, so the played ones lie past them')
     c = sub.add_parser('check')
     c.add_argument('path')
     r = sub.add_parser('render')
@@ -581,7 +595,7 @@ def main():
         return r or check(a.out)
     if a.cmd == 'synth':
         os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
-        return synth(a.out) or check(a.out)
+        return synth(a.out, a.pad) or check(a.out)
     return check(a.path)
 
 

@@ -3529,7 +3529,7 @@ SOAK = [
         "never comes back to its prompt. 57s measured",
         needs=("marty",), serial=True,
         wants=("build/frotz.o88", "build/zt/ZBIG.Z5")),
-    Row("megafrotz", "soak", py("tests/megafrotz.py"), 30.0,
+    Row("megafrotz", "soak", py("tests/megafrotz.py"), 45.0,
         "KERN-MEGA-MEMORY-PLAN MC7: a story past 256KB on kern_mega in "
         "protected mode, where the story claim is an LDT selector and each "
         "32KB page a SEG_SUB selector. Bochs, tests/frotz/zbiggen.py's 282KB "
@@ -3538,10 +3538,48 @@ SOAK = [
         "exactly the generator's model. Red with FROTZ.O88 from before the "
         "page table (--pkg): VERIFY bad, then 'bad routine header - the "
         "story has stopped' on the first `go` - every address past 64KB "
-        "read out of the first 64KB. 22s measured",
+        "read out of the first 64KB. And MEGA-HUGE-PLAN's adoption: the "
+        "story claim is ONE OSAPI_MEM_HUGE claim with a window every 32KB, "
+        "its base (SEG_LIN off the LDT) 1MB or more - red with mega-release "
+        "626e0ebb's FROTZ.O88, a conventional MEMP_CLAIM based at 12400h. "
+        "39s measured",
         needs=("bochs",),
         wants=("build/mega.img", "build/megarun.o88", "build/mbr.bin",
                "build/frotz.o88", "build/zt/ZBIG.Z8")),
+    Row("megafrotz-low", "soak", py("tests/megafrotz.py", "--low"), 45.0,
+        "MEGA-HUGE-PLAN, Frotz's adoption on the 640K + 384K machine "
+        "(Bochs at 1MB): the pool cannot hold the 282KB story, so the ask "
+        "for a 32KB-window claim answers the heap and the claim is a "
+        "conventional run (mega_hugec) under zm_run's table - and the story "
+        "plays the generator's transcript all the same. Red if the claim "
+        "lands above 1MB there (the assertion turned round). 39s measured",
+        needs=("bochs",),
+        wants=("build/mega.img", "build/megarun.o88", "build/mbr.bin",
+               "build/frotz.o88", "build/zt/ZBIG.Z8")),
+    Row("chuge-mega", "soak", py("tests/chuge.py", "--leg", "mega"), 40.0,
+        "MEGA-HUGE-PLAN F3, F6, F7 from C on kern_mega (Bochs, 4MB): "
+        "tests/chuge's CHUGE - os88_mem_largest_kb/total_kb count the pool "
+        "(a Weave-shaped check of eleven 64KB claims ACCEPTS, and all eleven "
+        "are given), os88_mem_huge_ask(W32) is granted by os88_mem_huge_w, "
+        "os88_mem_huge's step 8, os88_seg_put/get through every window, "
+        "139,264 bytes out by os88_file_write_huge and back by "
+        "os88_file_read_huge (os88_file_hi 2), and os88_file_read_at_seg "
+        "into a window. Red on mega-release 626e0ebb's kernel (--megabuild): "
+        "`total 0001`, `w32 got 0000`, `read ferr 0002`; red with the avail "
+        "thunks on OSAPI_MEM_AVAIL alone (`f6 refuse`) and with "
+        "os88_mem_huge's BX at 8000h (`fill bad 0040`). 22s measured",
+        needs=("bochs",),
+        wants=("build/mega.img", "build/megarun.o88", "build/mbr.bin",
+               "build/chuge.o88")),
+    Row("chuge-big", "soak", py("tests/chuge.py", "--leg", "big"), 45.0,
+        "MEGA-HUGE-PLAN F3, F6, F7 from C on kern_big (MartyPC XT, 640KB): "
+        "the same CHUGE, CHUGE.TXT read off the live B: - step 1000h, the "
+        "ask answered by OSAPI_MEM_AVAIL's fallback and granted, F6 "
+        "REFUSING (no 640KB heap holds 704KB), the 32-bit file calls and "
+        "the bulk copy over a conventional claim. The fallback half of "
+        "every thunk the plan changed. 25s measured",
+        needs=("marty",), serial=True,
+        wants=("build/os8088-360.img", "build/chuge360.img")),
     Row("pkgmove-wireflet", "soak",
         py("tests/pkgmove.py", "--app", "wirefleet", "--disk",
            "games360.img", "--open", "B:/WIREFLET.O88", "--word",
@@ -4834,6 +4872,17 @@ SOAK = [
         "corrupt streams refused with carry set and the stack restored. Host-only",
         needs=("unicorn",),
         wants=("build/arcade-rom/qbert.zip", "build/arcade-rom/invaders.zip")),
+    Row("arcimporthuge", "soak", py("tests/arcimporthuge.py"), 35.0,
+        "ARCADE-SPEC 14 (MEGA-HUGE-PLAN 3): a zip past the 448KB cap, imported "
+        "on kern_mega's arm, whose zip is one OSAPI_MEM_HUGE claim of 32KB "
+        "windows. 86Box at286_vga_sb, 4MB: a SYNTHETIC 609KB zip (the ROMs are "
+        "fetched data) - Space Invaders' four chips forged to arcsets.inc's "
+        "CRC-32s, stored after 600KB of filler - picked through Game > Add ROM "
+        "sets..., and ROMS\\INVADERS.ROM read back off the floppy, byte for "
+        "byte the forged chips' .ROM. RED on the arm before, measured: refused "
+        "as too big, nothing written. 35s is 23 measured",
+        needs=("86box",),
+        wants=("build/mega.img", "build/megak/apps/arcade.o88")),
     Row("arcimport", "soak", py("tests/arcimport.py"), 128.0,
         "ARCADE imports ROM sets on the machine itself (ARCADE-SPEC 1.5): Game > "
         "Add ROM sets... and the file chooser on MartyPC's VGA XT, a 720KB disk "
@@ -5880,6 +5929,18 @@ SOAK = [
         "tritone-transposed reference as the negative control",
         needs=("marty", "nasm"), serial=True,
         wants=("build/os8088-720.img", "build/mrwt720.img")),
+    Row("midirackwtbig", "soak", py("tests/midirack.py", "--arm", "wt",
+                                    "--bigbank", "192"), 60.0,
+        "SPEC.md 105.10.2: the wavetable with tools/os88midbank.py's synthetic "
+        "bank PADDED by 192KB of silent samples first (199 KB), so every "
+        "sample a voice plays lies past the bank's first 64KB and is read "
+        "through the bank's later 32KB windows; 10 of 10 half-seconds against "
+        "the reference, the tritone control 0. Its kern_mega port "
+        "(tests/megaport.txt) asserts the arm's huge claim ABOVE 1MB - red "
+        "on the arm before, measured: the 199 KB bank CONVENTIONAL, at "
+        "012400h",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088-720.img", "build/midirack.o88")),
     Row("mrdraw", "soak", py("tests/mrdraw.py"), 50.0,
         "MIDIRack's redraw, priced in drawing calls (SPEC.md 105.9.4): every "
         "far call into a drawing cell of the API table, per gesture, told "
@@ -6944,8 +7005,10 @@ SOAK = [
         "out of the look-ahead claim and the conventional hold's reads, both "
         "converted (SEG_SUB, x3h_at's SEG_AT). Bochs at 16MB with an SB16, "
         "the kern_mega arm and an MP3 on B:. play: region and look-ahead "
-        "claim above 1MB, Auto plays live on the card out of an XMS hold. "
-        "conv: XMEM_CAPS answered 0 for the open, so the hold is a 30 KB "
+        "claim above 1MB, Auto plays live on the card out of a HUGE hold "
+        "(MEGA-HUGE-PLAN 3, apps/os88huge.inc's copies). conv: OSAPI_MEM_HUGE "
+        "pointed at mod_gone and XMEM_CAPS answered 0 for the open, so the "
+        "hold is the fallback 30 KB "
         "claim above 1MB read through a window based inside it; XT Standard "
         "Decode First onto C:: the stage a selector exactly x3_lasz + 2,560 "
         "into the claim, the WAV x3simxt's to the byte, then played. No "
@@ -7045,6 +7108,19 @@ SOAK = [
         "[ch_seg] stale and the move count at 0. Needs `cc`",
         needs=("marty", "cc"), serial=True,
         wants=("build/cmemmove360.img",)),
+    Row("rcbig", "soak", py("tests/rcbig.py"), 40.0,
+        "SPEC.md 74.3.3 (MEGA-HUGE-PLAN 3): RUNCPM's open files past 64KB, "
+        "each ONE os88_mem_huge claim. MartyPC's 5150 (720KB): `pip "
+        "copy.pdf=z80asm.pdf[o]` and `pip bdos2.asm=bdos.asm[o]` - 134,899 "
+        "and 67,301 bytes, read across their windows, the copies made huge at "
+        "record 511 and regrown on, written back whole - and each copy read "
+        "back off the floppy, the original byte for byte then ^Z to its last "
+        "record. Its kern_mega port (tests/megaport.txt) is the same on "
+        "86Box. RED on the tree before, measured: both opens refused, PIP's "
+        "NO FILE, no copy. 40s is 24 measured",
+        needs=("marty",), serial=True,
+        wants=("build/os8088-720.img", "build/runcpm.o88",
+               "build/runcpm-src.stamp")),
     Row("rcmove", "soak", py("tests/rcmove.py"), 120.0,
         "RUNCPM'S 64KB Z80 CLAIM MOVES and the machine keeps running "
         "(SPEC.md 74.3.2, docs/plans/NO-PINNING-PLAN.md C3): cmemmove's "
@@ -16328,6 +16404,18 @@ SOAK = [
         "showing page 0 for the page the key names, it FAILS",
         needs=("marty", "nasm"), serial=True,
         wants=("build/video.o88",)),
+    Row("vidpage3xip", "soak", py("tests/vidpage.py", "--layout", "modex",
+                                  "--pages", "3", "--xip"), 39.0,
+        "SPEC.md 98.3.18.19: vidpage3mx's clip - page-ahead on Mode X's "
+        "three pages, hidden records CHAINED - on 86Box's 16 MHz 286, the "
+        "file held whole in XMS and every play IN PLACE (the card's bank "
+        "line 7, LOADALL's borrows): every hold the clip, from the start, "
+        "from key 1 and with no keys. With vp_pghid's chain walk reading "
+        "the hidden record's header through a plain mov ds (a HANDLE in "
+        "place, so the HMA's bytes) it FAILS at every play - the owner's "
+        "10-LX486.V88 hung the machine there. SOAK: one package, and 86Box's",
+        needs=("86box", "nasm"), serial=True,
+        wants=("build/video.o88", "build/os8088.img")),
     Row("vidpage4v", "soak", py("tests/vidpage.py", "--pages", "4",
                                 "--screen", "320x200"), 100.0,
         "SPEC.md 98.1.3.7.1, 98.3.8.4: vidpage3mx's shape on sixteen "
@@ -17236,6 +17324,15 @@ SOAK = [
         "at a score of 0. A model or build that goes wrong here writes a "
         "bundle that verifies and plays the wrong battle",
         needs=("pil",)),
+    Row("vbtseam", "soak", py("tests/unit/t_vbtseam.py"), 1.0,
+        "SPEC.md 126.2.6: an opening's SEAM with the one before it - two "
+        "openings cut from one clip, each exported with its own silence at "
+        "the cut (the owner's Demo Battle 2: 17.1 + 10.2 ms, a drop heard "
+        "between them), joined by os88vbt.seam_join: auto closes it whole "
+        "(no quiet sample across it, 301 samples shifted), a silent BLACK "
+        "head frame is trimmed and one not black left, and none / trim / "
+        "shift do only their own part. Broken on purpose (seam_join a "
+        "no-op) it FAILS"),
     Row("vbtrules", "soak", py("tests/vbtrules.py"), 8.0,
         "SPEC.md 126.6: the Video Battle RULES' reference (tools/vbtrules.py), "
         "host-side - the 16-bit xorshift's full period, the damage and heal "
@@ -18506,6 +18603,23 @@ SOAK = [
         wants=("build/mega.img", "build/mbr.bin", "build/megak/kernel.sys",
                "build/megak/apps/win16.o88", "build/megak/kdos/DOS.O88",
                "build/win16/DGROUP.EXE")),
+    Row("win16megahugega", "soak", py("tests/win16mega.py", "HUGEGA"), 60.0,
+        "SPEC.md 124.31.3, 50.3.5, docs/plans/KERN-MEGA-PLAN.md 14.169: the "
+        "LARGEST GlobalAlloc on kern_mega, under Bochs at 2MB (where 960K is "
+        "more than the pool or the heap holds alone, so a BX = 0 huge ask "
+        "BRIDGES them): HUGEGA.EXE asks 960K, 32K less a refusal, writes a "
+        "word every 256 bytes through a __huge pointer and reads it back - "
+        "HUGEGA.TXT says HUGEGA OK <KB> - and with the block held no huge "
+        "pool block of WIN16's is a bridge (mx_tab's MX_FBRIDGE): "
+        "w16_vclaim asks HUGE_NOBRIDGE, because the map's virtual paragraphs, "
+        "w16_pvirt's linear bases and SEG_TILE's huge pointers assume one "
+        "run. RED with the WIN16.O88 from before, measured: no HUGEGA.TXT in "
+        "300s on the fixed kernel (the arena bridged, its tiles refused "
+        "across the cut). 60s is 9 measured",
+        needs=("bochs", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/mega.img", "build/mbr.bin", "build/megak/kernel.sys",
+               "build/megak/apps/win16.o88", "build/megak/kdos/DOS.O88",
+               "build/win16/HUGEGA.EXE")),
     Row("win16megamemdc", "soak", py("tests/win16mega.py", "MEMDC"), 120.0,
         "SPEC.md 124.25.3-6, WIN16-ANY-PLAN S19b: MEMDC.EXE on kern_mega, "
         "under Bochs (tests/win16mega.py): the palette calls' blocks "
@@ -18867,7 +18981,7 @@ SOAK = [
         "its I_SPTR comes back a conventional segment. 60s is 41 measured",
         needs=("bochs",),
         wants=("build/mega.img", "build/megarun.o88", "build/mbr.bin")),
-    Row("megamod", "soak", py("tests/megamod.py"), 220.0,
+    Row("megamod", "soak", py("tests/megamod.py"), 265.0,
         "KERN-MEGA-MEMORY-PLAN MC7: a module and a wavetable bank over 64KB "
         "under kern_mega, where every claim is an LDT selector and the "
         "players' old `blobseg + N` granule sums name other descriptors. "
@@ -18884,8 +18998,14 @@ SOAK = [
         "the card's capture must be music, not noise. Red with the pre-MC7 "
         "packages (--pkg, --src): CLOSED TRACKER 0D and CLOSED MIDIRack 0D; "
         "and red on the mr legs with the kernel whose stream door tested an "
-        "external ring's TI bit for 'above 1MB' (SOUND.DRV said 2). 203s "
-        "measured",
+        "external ring's TI bit for 'above 1MB' (SOUND.DRV said 2). And "
+        "SPEC.md 45.3.1.2: the Tracker arm's module is the POOL's (its first "
+        "window at or above 1MB), and the `trkbig` leg loads a generated "
+        "700KB module stored PACKED into the pool's huge claim through the "
+        "packed read past 64KB (MEGA-HUGE-PLAN F4) - plays, every window "
+        "exact. Red with mega-release d433871c's arm (--pkg TRKARM=, --src): "
+        "trkarm's module at 12400h, trkbig never plays. 203s measured, "
+        "+45s for trkbig",
         needs=("bochs",),
         wants=("build/mega.img", "build/megarun.o88", "build/mbr.bin",
                "build/tracker.o88", "build/midirack.o88",
@@ -18984,7 +19104,8 @@ SOAK = [
         "measured",
         needs=("bochs", "nasm"),
         wants=("build/mega.img", "build/megak/apps/pixel.o88",
-               "build/megarun.o88", "build/mbr.bin", "build/pixel.bin")),
+               "build/megarun.o88", "build/mbr.bin",
+               "build/megak/apps/pixel.bin")),
     Row("megapixelship", "soak", py("tests/megapixel.py", "--shipped"), 90.0,
         "megapixel with the SHIPPED PIXEL.O88 on B: in place of the kern_mega "
         "arm (SPEC.md 20.18: the shipped build must be correct on kern_mega, "
@@ -19337,10 +19458,13 @@ SOAK = [
         "and with Bochs's SB16 the music heard in its capture at the "
         "bundle's own rate; the bundle held in XMS - opened at the door, "
         "filled through the twin, read IN PLACE by a 386's loaded base, no "
-        "disk read from the fill on. 240s is 238 measured. Broken (vb_door "
-        "blind to CPU_F_PM) the first "
+        "disk read from the fill on - the CLIP CACHE as on kern_big "
+        "(KERN-MEGA-PLAN 14.179), and the block MOVED between plays read "
+        "where it is now (OSAPI_XMEM_COPY CX = 0). 240s is 238 measured. "
+        "Broken (vb_door blind to CPU_F_PM) the first "
         "Play is CLOSED by a #GP again; DRVC_SOUND left out of the list, a "
-        "silent play",
+        "silent play; RED on mega-release (no cache there), and vb_hipok "
+        "aiming at the token the moved block fails the check",
         needs=("bochs", "numpy"),
         wants=("build/mega.img", "build/megak/kernel.map",
                "build/vbattle.o88")),
@@ -19352,8 +19476,11 @@ SOAK = [
         "Sound Blaster 2.0 fed on the emulated clock, the XMS hold read in "
         "place by LOADALL, and an EMS hold (a Lo-tech board, the name's "
         "_ems) read in place through the frame - no disk read from either "
-        "fill on. Broken (vb_door blind to CPU_F_PM) the package is CLOSED "
-        "at the first Play. 120s is 107 measured",
+        "fill on, each the CLIP CACHE as on kern_big and the XMS block "
+        "moved between plays read where it is now (KERN-MEGA-PLAN 14.179). "
+        "Broken (vb_door blind to CPU_F_PM) the package is CLOSED "
+        "at the first Play; RED on mega-release (no cache). 120s is 107 "
+        "measured",
         needs=("86box",),
         wants=("build/mega.img", "build/megak/kernel.map",
                "build/vbattle.o88")),
@@ -19509,9 +19636,46 @@ SOAK = [
         "And KERN-MEGA-PLAN 14.121: the answer is EXACT with the boot's "
         "read-ahead store and C:'s FAT window standing (asserted at the "
         "query) - a claim of one KB more is refused (`over refused`). "
-        "60s is 16 measured",
+        "And MEGA-HUGE-PLAN F3/F6: the ask with BX = 8000h answers what a "
+        "32KB-window claim is granted (it never bridges) and a claim of it "
+        "is had, step 8, BX 0; the ask with BX = MEMH_AVAIL counts the pool "
+        "(total 640K or more past OSAPI_MEM_AVAIL's, DX the pool's run). "
+        "Red on mega-release 626e0ebb's kernel (--build): `w32 max 0D7E "
+        "refused`, MEMH_AVAIL `0D7E 0001 0000`. 60s is 18 measured",
         needs=("bochs",),
         wants=("build/mega.img", "build/megahuge.o88", "build/megarun.o88",
+               "build/mbr.bin")),
+    Row("megahpk", "soak", py("tests/megahpk.py"), 40.0,
+        "MEGA-HUGE-PLAN F4, KERN-MEGA-PLAN 14.171, SPEC.md 20.14.5.4: a "
+        "PACKED file past 64KB read whole into an OSAPI_MEM_HUGE claim "
+        "above 1MB. Bochs at 4MB, tests/megahpk's MEGAHPK on C:'s RUN with "
+        "three host-made LZ4 'CZ' files: HP1.BIN (150,000 bytes, matches "
+        "back across every 64KB window edge) into a ONE-RUN pool claim; a "
+        "filler leaving 192KB of the pool, then HP2.BIN (620,000 bytes "
+        "packing badly, its stream starting before the cut: THE SEAM) and "
+        "HP3.BIN (packing well, its stream all in the conventional piece) "
+        "into BRIDGES; and HP3.BIN 4096 bytes into a bridge, a cut off the "
+        "64KB grid of X, refused FERR_PROT. Each read's bytes summed by the "
+        "step against the host's sums of the originals. Red on mega-release "
+        "d433871c (--build): every read `refused 0002` (FERR_IO); red again "
+        "with the seam taken out of mega_hzmap: HP2 refused 0002, the "
+        "straddling view reading past the pool piece. 34s measured",
+        needs=("bochs",),
+        wants=("build/mega.img", "build/megahpk.o88", "build/megarun.o88",
+               "build/mbr.bin")),
+    Row("megagbpk", "soak", py("tests/megagbpk.py"), 60.0,
+        "REALDMG-SPEC 10.3.1, MEGA-HUGE-PLAN F4: RealDMG's kern_mega arm on "
+        "a PACKED 1MB cartridge - tools/gbours.py's GBBANK.GB, 64 MBC5 banks "
+        "an LFSR switches among, each switch checked by a read and by code "
+        "run from the bank - stored as an LZ4 'CZ' file on B:. The arm reads "
+        "it with ONE OSAPI_FILE_READ into its 16KB-window claim, expanded "
+        "in place (rw_xread): the game runs (C00Fh A5h, past 500 switches), "
+        "not one switch reads the wrong bank, and bank 1's window is "
+        "[rw_xsel], above 1MB, bank 2 16KB on. Red with mega-release "
+        "d433871c's arm (--pkg, --lst): 'packed and past one claim', the "
+        "cartridge never runs. 45s measured",
+        needs=("bochs", "rgbds"),
+        wants=("build/mega.img", "build/megak/apps/realdmg.o88",
                "build/mbr.bin")),
     Row("megajw", "soak", py("tests/megajw.py"), 25.0,
         "docs/plans/KERN-MEGA-PLAN.md 14.166, SPEC.md 50.3.2, 50.6.10: ONE "
@@ -19536,6 +19700,293 @@ SOAK = [
         needs=("86box",),
         wants=("build/mega.img", "build/megajw.o88",
                "build/megak/apps/audio.o88", "build/megak/apps/sheet.o88")),
+    Row("megabrdg", "soak", py("tests/megabrdg.py"), 30.0,
+        "docs/plans/KERN-MEGA-PLAN.md 14.169, SPEC.md 50.3.5, 50.6.11 "
+        "(MEGA-HUGE-PLAN F1, F2, F9): EVERY WAY INTO A BRIDGED OSAPI_MEM_HUGE "
+        "CLAIM AGREES WITH ITS STEP WALK. Bochs at 4MB: MEGABRDG claims the "
+        "largest bridge (an 80KB conventional claim under it, freed after), "
+        "finds the cut by the walk, writes a pattern through windows P-1..P+1 "
+        "and reads it back through SEG_SUB, SEG_AT and SEG_HND from window "
+        "P-1 at 256 bytes before the cut, 1230h and 10040h past it, SEG_TILE "
+        "at the cut (and refused across it), SEG_LIN by the rule (window "
+        "k's base + the offset in it), and a 96KB file written from 32KB "
+        "before the cut and read back to 16KB before it, byte-exact, aligned "
+        "and at odd offsets (a sector straddling the cut). And F2: BX = the "
+        "pool piece's windows, HUGE_NOBRIDGE's ask less and its claims one "
+        "piece; F9: OSAPI_MEM_MOVABLE of the bridge accepted. RED on the "
+        "tree before, measured: every place past the cut WRONG memory, BX 0, "
+        "HUGE_NOBRIDGE ignored (bridged), and the file legs took the machine down "
+        "(kern_mega FAULT 0D in the write). 30s is 21 measured",
+        needs=("bochs",),
+        wants=("build/mega.img", "build/megabrdg.o88", "build/megarun.o88",
+               "build/mbr.bin")),
+    Row("megabrdg86", "soak", py("tests/megabrdg.py") + ["--box"], 40.0,
+        "docs/plans/KERN-MEGA-PLAN.md 14.169: megabrdg on 86Box's "
+        "at286_vga_sb with 640K + 384K above 1MB (the 14.166 machine, "
+        "where the largest bridge is 688K: 256K of pool, 432K of heap), "
+        "and F9's half only a heap read can see: the conventional piece is "
+        "taken from the TOP (no free KB over it), so the 80KB freed under "
+        "it joins the free run instead of standing under a pinned block; "
+        "its record movable once declared. RED on the tree before, "
+        "measured: the piece at 24000..90000 over the 80KB hole (80K free "
+        "under it, 64K over), its record pinned with no way to unpin, every "
+        "place past the cut wrong, the read across it REFUSED (AX 2) and "
+        "the odd-offset write a #GP (limit) in dskw_wone. 40s is 24 measured",
+        needs=("86box",),
+        wants=("build/mega.img", "build/megabrdg.o88")),
+    Row("megargw", "soak", py("tests/megargw.py"), 35.0,
+        "docs/plans/KERN-MEGA-PLAN.md 14.174, SPEC.md 50.3.5 (MEGA-HUGE-PLAN "
+        "F8): A HUGE CLAIM REGROWS, every shape. Bochs at 4MB: MEGARGW puts "
+        "a pattern in by the step walk and reads it back after each regrow - "
+        "a 128KB pool run regrown to 256KB past a pool filled with XMEM blocks "
+        "(claim, copy, free: the heap's run now), a 256KB heap run (mega_hugec) "
+        "to 384KB (windows 0..5 one run) and to 160KB (window 3 freed, window "
+        "2's limit 7FFFh), the largest bridge's conventional piece shrunk by "
+        "128KB and grown back by 64KB, then the bridge taken below its cut "
+        "(the pool's one run). RED on the tree before, measured: the pool "
+        "run's regrow refused, the heap run's windows 4 and 5 not the claim's "
+        "and window 2's limit FFFFh, every bridge regrow refused. 35s is 23 "
+        "measured",
+        needs=("bochs",),
+        wants=("build/mega.img", "build/megargw.o88", "build/megarun.o88",
+               "build/mbr.bin")),
+    Row("megargw86", "soak", py("tests/megargw.py") + ["--box"], 30.0,
+        "docs/plans/KERN-MEGA-PLAN.md 14.174: megargw on 86Box's at286_vga_sb "
+        "with 640K + 384K above 1MB - a 286, where Bochs's 386 is not, and "
+        "the 14.166 machine whose largest bridge is 768K here (256K of pool, "
+        "512K of heap, cut at window 4). The same legs and the same RED, "
+        "measured: refused, windows 4 and 5 not the claim's, limit FFFFh, "
+        "refused. 30s is 11 measured",
+        needs=("86box",),
+        wants=("build/mega.img", "build/megargw.o88")),
+    Row("megahw", "soak", py("tests/megahw.py"), 30.0,
+        "SPEC.md 50.3.8 (MEGA-HUGE-PLAN F5): apps/os88huge.inc IN A GUEST, "
+        "across a real bridge's cut. Bochs at 4MB: MEGAHW claims the largest "
+        "64KB-step claim through hw_claim (3,454 KB, the cut at window 46), "
+        "puts and gets spans across the cut, from its last byte, at odd "
+        "lengths and the claim's ends; hw_aim's reach one byte before it and "
+        "a window after; the 64KB about it written by the kernel's own "
+        "OSAPI_FILE_WRITE and by hw_fwrite, both files read back to the "
+        "pattern; then zeroed and read back by hw_fread with HW_FOFF. RED: "
+        "--break nowin (hw_aim's window's-end cap out) - kern_mega CLOSED "
+        "MEGAHW 0D, a #GP at the window's limit. 30s is 22 measured",
+        needs=("bochs", "nasm"),
+        wants=("build/mega.img", "build/megahw.o88", "build/megarun.o88",
+               "build/mbr.bin")),
+    Row("megapfl", "soak", py("tests/megapfl.py"), 35.0,
+        "KERN-MEGA-PLAN 14.176: THE POOL FILLED AND GIVEN BACK, then file "
+        "activity. Bochs at 4MB: MEGAPFL claims 128KB in the pool "
+        "(HUGE_NOBRIDGE), fills the pool with OSAPI_XMEM_ALLOC blocks of "
+        "MEMH_AVAIL's DX until under 8KB is left, frees everything, and the "
+        "pool's best run is what it was (2,978 KB); its own packed file read "
+        "back whole into its segment above 1MB; the launch finishes and "
+        "MEGARUN's next FIND answers, no kern_mega FAULT. The shape of a "
+        "probe reported as an F4 regression whose entry returned BX = "
+        "MEMH_AVAIL's free KB, not its window (SPEC.md 20.2). RED, both "
+        "measured: --break bx (that probe's BX) - FAULT 00 at 0060:64A5, "
+        "wm_ptr2idx's divide; --break free (OSAPI_XMEM_FREE's cell a retf) - "
+        "the best run 128 KB. 35s is 26 measured",
+        needs=("bochs", "nasm"),
+        wants=("build/mega.img", "build/megapfl.o88", "build/megarun.o88",
+               "build/mbr.bin")),
+    Row("megahw86", "soak", py("tests/megahw.py") + ["--box"], 30.0,
+        "megahw on 86Box's at286_vga_sb with 640K + 384K above 1MB: the "
+        "largest claim a bridge of 768 KB, the cut at window 4, every leg "
+        "the pattern and no exception charged to MEGAHW. RED: --break nowin "
+        "- a #GP (limit) at hw_mov's rep movsw and MEGAHW never answers. 30s is 21 "
+        "measured",
+        needs=("86box", "nasm"),
+        wants=("build/mega.img", "build/megahw.o88")),
+    Row("megahwbig", "soak", py("tests/megahw.py") + ["--big"], 30.0,
+        "megahw on kern_big, MartyPC's 5150 with 360KB disks: the SAME "
+        "MEGAHW build, the ask refused (CF=1) so 200 KB, one run of "
+        "paragraphs (step 1000h, no cut), B = window 2 - every leg the "
+        "pattern: the walker needs no test of where it runs. RED: --break "
+        "nowin fails the aim (B - 1's reach not one byte; the spans, put "
+        "and got back through the same 16-bit wrap, cannot see it on one "
+        "contiguous run). 30s is 21 measured",
+        needs=("marty", "nasm"),
+        wants=("build/os8088-360.img", "build/megahw.o88")),
+    Row("x3huge", "soak", py("tests/x3huge.py"), 30.0,
+        "SPEC.md 121.6.1 (MEGA-HUGE-PLAN 3): XTMP3's kern_mega arm holds a "
+        "song in ONE OSAPI_MEM_HUGE claim, a bridge allowed. 86Box's "
+        "at286_vga_sb, 640K + 384K above 1MB, the arm and a 480 KB MPEG-1 "
+        "song (NEONDRV's frames repeated) on B:: held whole (x3h_kind "
+        "X3HK_HUGE, x3h_on), a bridge of 544 KB cut at window 3, every byte "
+        "of the hold read window by window the file's, Auto's probe copying "
+        "out of it, no exception charged to XTMP3. RED: the arm of "
+        "mega-release (--pkg/--map) - kind 0, the song streams (the XMS "
+        "block the pool's best run, the conventional hold capped at 192 KB). "
+        "--find measures the largest held: 192 -> 608 KB here, 2,848 -> "
+        "3,232 KB at --megs 4. 30s is 13 measured",
+        needs=("86box",),
+        wants=("build/mega.img", "build/megak/apps/xtmp3.o88",
+               "build/megak/apps/xtmp3.map", "build/mbr.bin")),
+    Row("megapxhuge", "soak", py("tests/megapxhuge.py"), 30.0,
+        "SPEC.md 106.8.1 (MEGA-HUGE-PLAN 3): PiXEL's kern_mega arm makes its "
+        "master ONE OSAPI_MEM_HUGE claim with a window every 32KB (BX = "
+        "8000h), sized by that shape's own ask, its table the claim's own "
+        "run, up to 4MB. 86Box's at286_vga_sb with 4MB, the arm and a "
+        "2048 x 1400 8-bit PCX on B: double-clicked: decoded at 1/1, a "
+        "2,802 KB master; px_hrun 8 and the shown table's window k the "
+        "claim + 8k; master rows each side of 1MB and 2MB into it read "
+        "through the run the file's indices; the histogram's tail at byte "
+        "2BC000h the file's counts; no exception charged to PiXEL. "
+        "RED: the arm of mega-release (--pkg) - the picture at 1/4, a 177 "
+        "KB master; and the tail's 16-bit sum kept - the tail empty. --find measures the largest master at 1/1: 450 -> 2,882 "
+        "KB at 4MB, 450 -> 514 KB at --megs 1.375. 30s is 16 measured",
+        needs=("86box",),
+        wants=("build/mega.img", "build/megak/apps/pixel.o88",
+               "build/megak/apps/pixel.map")),
+    Row("megaparvb", "soak", py("tests/megapar.py", "--prog", "vb"), 30.0,
+        "KERN-MEGA-PLAN 14.178, SPEC.md 53.2.3/126.4.7: the Video Battle's "
+        "hold on kern_big AND kern_mega on the same 86Box machine "
+        "(at286_vga_sb_hdd, 640K + 384K, the battle on C:): kern_mega's "
+        "play in a real-mode bracket, NO pool block of the instance's but "
+        "its hold (its region and its title picture not above 1MB), the "
+        "hold every pool KB the kernel leaves programs less 8, and kern_big's "
+        "hold less kern_mega's no more than kern_mega's fixed area above "
+        "1MB beyond kern_big's 64 KB HMA + 8 (14.180); no pool block of the "
+        "kernel's in the play (SOUND.DRV and HDD.DRV brought down by "
+        "FSXF_PREP, SPEC.md 53.2.3.1); the rings leaving VB_RKEEP + 4 KB "
+        "at most idle (the door's own figure, not VB_RKEEPM's guess). "
+        "$OS88_VBT_TARGET / $OS88_VBT_PKG name the owner's "
+        "real battles (never in the tree); the demo bundle otherwise. RED "
+        "on mega-release at 14.178's base: the region 48 KB and the picture "
+        "12 KB in the pool; at 14.180's: the drivers' 15 KB in the pool, "
+        "36 KB against 21 + 8, a 16 KB idle run. And (KERN-MEGA-PLAN 14.179) "
+        "kern_mega's hold the CLIP CACHE wherever kern_big's is - the idle "
+        "loop in its block, clips read in place: RED on mega-release at "
+        "14.178 (the copying hold, 0 records in place). 30s is 19-21 "
+        "measured (two boots)",
+        needs=("86box",),
+        wants=("build/mega.img", "build/os8088.img", "build/vbattle.o88",
+               "build/BATTLE.VBT")),
+    Row("megaparvp", "soak", py("tests/megapar.py", "--prog", "vp"), 30.0,
+        "KERN-MEGA-PLAN 14.178, SPEC.md 98.3.24.3: the Video Player's bank "
+        "on kern_big AND kern_mega's arm on the same 86Box machine "
+        "(at286_vga_sb_hdd, 640K + 384K, 08-WILLY.V88 on C:, read in the "
+        "play): legs 1-5 as megaparvb's at a 32 KB slot's granule, and the "
+        "door answered FSXF_PREP ([vp_rbkb], 14.180). RED on mega-release "
+        "at 14.178's base: the arm's 64 KB region in the pool, the bank 6 "
+        "slots of the 285 KB the kernel leaves; at 14.180's: the drivers' "
+        "15 KB in the pool, 64 KB against 21 + 32, no [vp_rbkb]. 30s is 22 "
+        "measured (two boots)",
+        needs=("86box",),
+        wants=("build/mega.img", "build/os8088.img", "build/video.o88",
+               "build/megak/apps/video.o88", "build/megak/apps/video.map")),
+    Row("megasndup", "soak", py("tests/megasndup.py"), 30.0,
+        "KERN-MEGA-PLAN 14.181, SPEC.md 53.2.3.1: a lent SOUND.DRV gone "
+        "back UP keeps its vector. 86Box's vm/viddemo-vga (MR 286, SB16 on "
+        "IRQ 5), kern_mega, the Video Player's arm and 06-SNOW.V88 in C:'s "
+        "MEDIA: played full screen, the window closed (mega_drvup), opened "
+        "and played again. Both plays real-mode, every frame, the card open "
+        "and never dry, sound for every frame; between them no IRQ cell "
+        "names a conventional paragraph. RED on mega-release: IVT 0Dh left "
+        "naming the freed copy's paragraph, play 2 silent after 16 frames "
+        "([vp_snd] 0, [vp_pause] 1) - the owner's VGA demo videos, every "
+        "clip after the first. 30s is 27 measured (one boot, two plays)",
+        needs=("86box",),
+        wants=("build/mega.img", "build/mbr.bin", "build/megak/boothd.bin",
+               "build/megak/kernel.sys", "build/megak/apps/video.o88",
+               "build/megak/apps/video.map")),
+    Row("megasndword", "soak", py("tests/megasndword.py"), 30.0,
+        "KERN-MEGA-PLAN 14.182, SPEC.md 34.5.3/53.2.3: a closed stream "
+        "leaves SOUND.DRV no segment word. 86Box's vm/viddemo-vga (MR 286, "
+        "SB16 on IRQ 5), kern_mega, the Video Player's arm with 08-WILLY "
+        "and 09-TRACK in C:'s MEDIA, each played full screen in its own "
+        "window and closed: both in a real-mode bracket ([fsx_rwhy] "
+        "FSXR_REAL), and between them [sbl_rseg] and [sbl_extctl+2] 0 with "
+        "no SNDV_RMODE word naming a freed LDT entry. RED on mega-release: "
+        "both words left naming the first ring's freed selector, and 09's "
+        "door refused real mode with FSXR_DRV (the owner's VGA demo videos' "
+        "04, 08, 09, 10 played protected). 30s is 15 measured (one boot, "
+        "two plays stopped a second in)",
+        needs=("86box",),
+        wants=("build/mega.img", "build/mbr.bin", "build/megak/boothd.bin",
+               "build/megak/kernel.sys", "build/megak/apps/video.o88",
+               "build/megak/apps/video.map", "build/sound.bin")),
+    Row("megapxhugez", "soak", py("tests/megapxhuge.py", "--bmp"), 40.0,
+        "SPEC.md 106.8.1: megapxhuge's PACKED half - PiXEL's kern_mega arm "
+        "reads a CZ-packed picture whole into ONE OSAPI_MEM_HUGE claim "
+        "(HUGE_NOBRIDGE) past 64KB, which the kernel expands into "
+        "(MEGA-HUGE-PLAN F4). 86Box's at286_vga_sb with 4MB, a 1024 x 700 "
+        "8-bit BMP packed (717,878 bytes expanded) on B:: read whole "
+        "(px_rflat), decoded at 1/1, the master's run, rows and tail the "
+        "file's. RED: the arm with the flat claim the paragraph door's "
+        "(conventional past 64KB) - the picture did not open. 40s is 25 "
+        "measured",
+        needs=("86box",),
+        wants=("build/mega.img", "build/megak/apps/pixel.o88",
+               "build/megak/apps/pixel.map")),
+    Row("waverackhuge", "soak", py("tests/waverackhuge.py"), 60.0,
+        "SPEC.md 123.6 (MEGA-HUGE-PLAN 3): WaveRack's kern_mega arm HOLDS a "
+        "play in ONE OSAPI_MEM_HUGE claim, a bridge allowed, walked through "
+        "apps/os88huge.inc. 86Box's at286_vga_sb, 640K + 384K above 1MB, the "
+        "arm and a 640 KB 8-bit mono 44,100 Hz WAV on B: (a floppy cannot "
+        "stream it): wt_held, wt_hw a step of 8 and 640 KB, a bridge cut at "
+        "window 3; loaded whole and playing from it (wt_slow 0); every byte "
+        "of the hold, window by window, wrsim.hold_bytes(); Stop gives it "
+        "back, no exception charged. RED: the shipped WAVERACK.O88 "
+        "(mega-release's only build, --pkg --plain) - not held, 'Disk too "
+        "slow: gaps'. --find measures the largest held: 448 -> 640 KB here, "
+        "448 -> 3,328 KB at --megs 4 --force (309 s at 11,025 Hz). 60s is 41 measured",
+        needs=("86box", "nasm"),
+        wants=("build/mega.img", "build/megak/apps/waverack.o88",
+               "build/megak/apps/waverack.bin", "build/mbr.bin")),
+    Row("waverackmega-arm", "soak", py("tests/waverackmega.py", "--arm"), 60.0,
+        "waverackmega on kern_mega's own WaveRack ARM (build/megak/apps/, "
+        "PKG_MEGA, SPEC.md 123.6): PRELUDE.WAV held - the hold one huge "
+        "claim, above 1MB, its bytes wrsim.hold_bytes() read by its step - "
+        "and played to its end; every WHERE placement and the SLOT take as "
+        "the shipped build's leg. RED: as waverackmega's (the arm shares "
+        "every line but the hold's claim and walk). 60s is 45 measured",
+        needs=("86box", "nasm"),
+        wants=("build/mega.img", "build/megak/apps/waverack.o88",
+               "build/megak/apps/waverack.bin")),
+    Row("audhuge", "soak", py("tests/audhuge.py"), 60.0,
+        "SPEC.md 86.5.4 (MEGA-HUGE-PLAN 3, KERN-MEGA-PLAN 14.186): the Audio "
+        "Player's kern_mega arm STREAMS a WAV's first play at once and fills "
+        "ONE OSAPI_MEM_HUGE claim, a bridge allowed, with the stream's own "
+        "reads; the file held whole, its next play is copies. 86Box's "
+        "at286_vga_sb, 640K + 384K above 1MB, the arm and a 576 KB 8-bit WAV "
+        "of an index pattern on B:, double-clicked, [ap_repeat] set: PLAYING "
+        "within 4 s, streaming (aph_ndisk counting), the hold claimed (a "
+        "step of 8, its KB, a bridge cut at window 3); the first play's reads "
+        "make it HELD WHOLE (aph_on) and every byte from aph_lo the file's; "
+        "the second play's gulps COPIED (aph_ncopy, aph_ndisk unchanged, at "
+        "most 2 READ DATA in 4 s - the desktop's); Stop gives it back, no "
+        "exception. RED, measured: --pkg the 14.173 arm (--src mega-release) "
+        "- not playing for the load, 1 fails; AUDHUGE_RED=nofill (aph_fill a "
+        "`ret`) - the fill never moves, 2 fails. --find: the largest file a "
+        "hold is claimed for. 60s is 25-29 measured",
+        needs=("86box", "nasm"),
+        wants=("build/mega.img", "build/megak/apps/audio.o88",
+               "build/megak/apps/audio.bin", "build/mbr.bin")),
+    Row("audholdgap", "soak", py("tests/audhuge.py", "--gap"), 40.0,
+        "SPEC.md 86.5.4 (KERN-MEGA-PLAN 14.186): the hold's fill is "
+        "CONTIGUOUS - audhuge's machine and file, the fill's high-water mark "
+        "(aph_hw's aph_have) moved on 32 KB once the play streams, so the "
+        "next gulp is out of step: the hold is given up (aph_base 0, aph_on "
+        "0) and the play streams on off the disk, no exception - a gap is "
+        "never played back. RED, measured: AUDHUGE_RED=noseq (aph_fill's two "
+        "`jne .drop` nopped) - the hold kept. 40s is 17 measured",
+        needs=("86box", "nasm"),
+        wants=("build/mega.img", "build/megak/apps/audio.o88",
+               "build/megak/apps/audio.bin", "build/mbr.bin")),
+    Row("megasbhold", "soak", py("tests/megasbgap.py", "--hold"), 45.0,
+        "megasbgap's clip HELD (SPEC.md 86.5.4, KERN-MEGA-PLAN 14.156's "
+        "concern retired after a file's first play, 14.186): the 10 s 22,050 "
+        "Hz WAV opened through File > Open with [ap_repeat] set streams once, "
+        "its own reads filling the arm's hold (aph_on), and the SECOND play - "
+        "the capture's last 10 s - reads NO floppy and has no silence inside "
+        "it over 60 ms nor 120 ms in all (measured: 30 ms, 50 ms, both at the "
+        "tail; streamed it is 90-150 ms and 290-530 ms). RED, measured: an "
+        "arm with aph_fill a `ret` (--pkg, --src) - aph_on 0, 25 READ DATA, "
+        "90 ms and 330 ms of silence. 45s is 21-26 measured",
+        needs=("86box", "numpy", "nasm"),
+        wants=("build/mega.img", "build/megak/apps/audio.o88",
+               "build/megak/apps/audio.bin", "build/megak/kernel.map")),
     Row("megacaps", "soak", py("tests/megacaps.py"), 60.0,
         "docs/plans/KERN-MEGA-PLAN.md 14.122, SPEC.md 41.8: "
         "OSAPI_XMEM_CAPS ANSWERS WHAT A CLAIM IS THEN GIVEN. kern_mega "
@@ -19691,10 +20142,12 @@ SOAK = [
         needs=("86box", "nasm"),
         wants=("build/megak/kernel.sys", "build/megak/boothd.bin", "build/hddtool.bin", "build/hdd.bin",
                "build/megak/ctrl.drv", "build/hdd.drv", "build/mbr.bin")),
-    Row("megasbgap", "soak", py("tests/megasbgap.py"), 25.0,
+    Row("megasbgap", "soak", py("tests/megasbgap.py"), 60.0,
         "docs/plans/KERN-MEGA-PLAN.md 14.156, 14.160: a 10 s 22,050 Hz 8-bit "
         "WAV in AUDIO from a scratch 1.44MB B: on 86Box's at286_vga_sb (the "
-        "mr286, a Sound Blaster 2.0), the card's DAC captured "
+        "mr286, a Sound Blaster 2.0), STREAMED - opened through File > Open "
+        "with the arm's [aph_off] set first, the case a file too big to hold "
+        "takes (SPEC.md 86.5.4; megasbhold is the held one) - the card's DAC captured "
         "($MARTYPC_WAV): the look-ahead ring, off its descriptor, is a pool "
         "block below 16MB with its 32 KB inside one 64KB page (the DMA "
         "door, 14.160), the floppy is read all through the play, and no "
@@ -19706,7 +20159,7 @@ SOAK = [
         "plain pool claim, crossed a page. RED, measured: --pkg an AUDIO arm "
         "with the plain claim - placement fails, 290/350 ms, 870/1,110 ms; "
         "14.156's base 540 ms, 3.57 s; OS88_MEGA_POKE='mega_fdgo.ss+0xD=9090' "
-        "500 ms, 'dsk_runcap.hi+0x10=9090' 450 ms. 25s is 22 measured",
+        "500 ms, 'dsk_runcap.hi+0x10=9090' 450 ms. 60s is 41 measured",
         needs=("86box", "numpy", "nasm"),
         wants=("build/mega.img", "build/megak/apps/audio.o88",
                "build/megak/apps/audio.bin", "build/megak/kernel.map")),
@@ -21311,6 +21764,19 @@ SOAK = [
         needs=("qemu",), serial=True,
         wants=("build/brtest360.img", "build/ether360.img", "build/browser.o88"),
         locks=("port:8090",)),
+    Row("brhuge", "soak", py("tests/brhuge.py"), 50.0,
+        "SPEC.md 71.18.2 (MEGA-HUGE-PLAN 3, the Browser): A PAGE LARGER THAN "
+        "kern_mega's CAP OF BEFORE, WHOLE. Bochs at 16MB: DOCHUGE.HTM, 5,000 "
+        "rows in a <pre> (325,086 bytes, a 325,036-byte stream, 5,011 lines), "
+        "opened off B: - the source and the document both OSAPI_MEM_HUGE "
+        "claims above 1MB, the page not cut, the stream's tail read by its "
+        "descriptor holding the end marker, End painting it. RED on the tree "
+        "before, measured: the source a conventional claim, the document "
+        "stopped at 7 KB against the conventional reserve (br_trunc 1, "
+        "br_docfull 1, 102 lines). 50s is 32 measured",
+        needs=("bochs",),
+        wants=("build/mega.img", "build/megak/kernel.map",
+               "build/browser.o88")),
     Row("brmega", "soak", py("tests/brmega.py"), 60.0,
         "KERN-MEGA-MEMORY-PLAN MC7, SPEC.md 71.18: the Browser's document, "
         "line table and source past 64KB under kern_mega, where every claim "
@@ -21383,6 +21849,23 @@ SOAK = [
         "separator every two digits fails 939 calls, the signed entry not "
         "restoring AX 66, the 32-bit divide not carrying 4,270, the field "
         "padding one short runs away and fails every field call",
+        needs=("nasm", "unicorn")),
+    Row("os88huge", "soak", py("tests/os88huge.py"), 1.5,
+        "SPEC.md 50.3.8 (MEGA-HUGE-PLAN F5): apps/os88huge.inc, the huge "
+        "claim's walker, every arm run under Unicorn against a model on four "
+        "shapes - windows 96KB APART with guards between (a bridge's shape: a "
+        "reach past a window's end reads a guard, never the claim's next "
+        "byte), the paragraph step, a window every 32KB and every 16KB - "
+        "hw_claim's record, hw_aim's pointer and reach, hw_get/hw_put spans, "
+        "hw_fread's one os88_rseq a window (HW_FOFF 0, positive, negative), "
+        "hw_fwrite's one put a window, refusals, every register; and "
+        "hw_claimfit against a model of kern_mega's placement (the ask first "
+        "and no claim past it, the forced-bridge retry - on a fragmented heap "
+        "too - and every way a hold is given back). 3,482 checks. "
+        "Broken on purpose (--break): the window's cap out fails 227, the "
+        "window's index out 462, the length's cap 47, the 32KB step's "
+        "doubling 4, HW_FOFF ignored 290, hw_claimfit's ask ignored 1, its "
+        "retry out 10, its margin off the heap's total 4. Host-only",
         needs=("nasm", "unicorn")),
     Row("m83", "soak", py("tests/m83.py"), 1.0,
         "SPEC.md 77.20: apps/os88m83.inc's m83_mangle - the ONE 8.3 mangle "

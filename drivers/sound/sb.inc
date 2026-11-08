@@ -1927,10 +1927,17 @@ sbl_stop_stream:
     mov dx, [sbl_ackp]
     in al, dx                   ; retire a latched block IRQ SB-side (2xFh
     and byte [sbl_ackp], 0xFE   ; for 16 bits) - and the ACK is 2xEh again
-    xor al, al
+    xor ax, ax
     mov [sbl_fmt], al           ; ...as every stream after this one is 8-bit
     mov [sbl_expect], al        ; mono until its own verb 11 says otherwise
     mov [sbl_str_act], al       ; handles are stale from here
+    mov [sbl_rseg], ax          ; ...and the RING FORGOTTEN (SPEC.md 34.5.3,
+    mov [sbl_extctl+2], ax      ; KERN-MEGA-PLAN 14.182): two SNDV_RMODE
+                                ; words, which kern_mega's door asks for a
+                                ; real segment - left naming a freed claim,
+                                ; the selector answered for whichever claim
+                                ; took its LDT entry next, and a later play
+                                ; was refused real mode (FSXR_DRV)
     popf
     cmp byte [sbl_pst], 0       ; an SB Pro stereo stream: mixer 0Eh back to
     je .nopst                   ; the byte it held (SPEC.md 34.5.5) - in the

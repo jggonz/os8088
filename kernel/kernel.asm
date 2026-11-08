@@ -999,6 +999,15 @@ TOAST_MAX   equ 24
   %define OS88_DRIVERS 1
 %endif
 
+; A PICOMEM 2's DISK, ONE SECTOR A CALL WITH IRQ0 MASKED (SPEC.md 18.91.7):
+; drv_sniff finds the card's first unit, dsk_xfer reads it so. kern_big and
+; kern_emu; not kern_mega, whose int 13h is its bracket's
+%ifdef KERN_BIG
+ %ifndef KERN_MEGA
+  %define DSK_PMHD 1
+ %endif
+%endif
+
 ; ...and with them go the sound layer's CARD tiers (SPEC.md 34.0). This is
 ; the half of docs/plans/KERN-SMALL-CUT-PLAN.md's A1 that OS88_DRIVERS has already
 ; made unreachable rather than merely unwanted: every route to an OPL2 or a
@@ -6496,6 +6505,7 @@ SEG_WINL    equ 10              ; (and refused below: SPEC.md 124.31.3)
 SEG_LEND    equ 11              ; kern_mega's lent stack (124.31.2), refused below too
 SEG_HND     equ 12              ; kern_mega's handle descriptor (124.31.3), and too
 SEG_TYPE    equ 13              ; kern_mega's code/data retype of a window (124.31.6), and too
+SEG_LOW     equ 14              ; kern_mega's own region down to conventional memory (50.6.11), and too
 section .cold
 osapi_seg:                      ; (api_rxc's far body: DS = KDATA)
 %ifdef KERN_MEGA

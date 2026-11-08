@@ -2,8 +2,22 @@
 """A 22 kHz Sound Blaster stream from a floppy on kern_mega: no long silence
 (docs/plans/KERN-MEGA-PLAN.md 14.156, SPEC.md 34.5.2, 86.5.2).
 
-    python3 tests/megasbgap.py              the row
+    python3 tests/megasbgap.py              the row (streamed)
+    python3 tests/megasbgap.py --hold       megasbhold: the clip HELD first
     python3 tests/megasbgap.py --keep DIR   ...and keep the capture there
+
+THE STREAMED CASE is a file too big to hold. kern_mega's AUDIO arm reads a
+WAV the machine can hold WHOLE into one huge claim and plays it from memory
+(SPEC.md 86.5.4, apps/audio/aphold.inc), which this 220 KB clip always is -
+so the player is launched first, its [aph_off] set (an arm before the hold
+has no such byte and streams anyway), and the clip opened through File >
+Open. --hold leaves the byte alone and sets [ap_repeat]: the first play
+streams and its own reads fill the hold (aph_on, KERN-MEGA-PLAN 14.186), the
+second - the capture's last SECS - reads no floppy, and the silences inside
+it are held to 60 ms and 120 ms in all (measured: none). RED for --hold:
+--pkg the arm before the hold (14.173's base, no aphold.inc) - aph_on fails,
+and its streamed silences (90-100 ms, 290-340 ms in all, measured) fail the
+held bars.
 
 AUDIO.O88 plays a 10 s, 22,050 Hz 8-bit mono WAV off a scratch 1.44MB B: on
 86Box's at286_vga_sb (the owner's mr286, a Sound Blaster 2.0), the card's DAC
@@ -69,6 +83,7 @@ from cycweb import pkg_syms  # noqa: E402
 MACHINE = "at286_vga_sb"
 RATE, SECS, TONE = 22050, 10.0, 660.0
 LONGEST_MS, TOTAL_MS, MIN_PLAY = 220, 700, 9.5
+HOLD_LONGEST_MS, HOLD_TOTAL_MS = 60, 120    # --hold (megasbhold): 20 ms, 30 ms
 
 fails = []
 
@@ -136,6 +151,9 @@ def main():
                     "build/megak/apps/'s - the red leg's")
     ap.add_argument("--src", default=ROOT,
                     help="the tree whose apps/audio/ that package was built from")
+    ap.add_argument("--hold", action="store_true",
+                    help="megasbhold: the clip HELD whole first (SPEC.md 86.5.4) "
+                    "and played from memory, the floppy idle")
     a = ap.parse_args()
     pkg = a.pkg or os88build.at("build/megak/apps/audio.o88")
     syms, img = pkg_syms(os.path.join(a.src, "apps/audio/audio.asm"),
@@ -156,10 +174,46 @@ def main():
         with os88ui.boot(os88build.at("build/mega.img"), apps=disk,
                          machine=MACHINE, label="sbgap") as ui:
             m = ui.m
-            ui.path("B:/MEDIA/TONE22.WAV", limit=120)
+            # the player first, then the clip through File > Open: kern_mega's
+            # arm HOLDS a file it can (SPEC.md 86.5.4, aphold.inc), and this
+            # row's streamed case is the one a file too big to hold takes -
+            # so [aph_off] is set before the open (an arm with no hold has no
+            # such byte, and streams anyway)
+            ui.path("B:/APPS/AUDIO.O88", limit=120)
+            got = dispapps.pkg_seg(m, 0)
+            pseg = got and int(got[1])
+            if not a.hold and pseg and "aph_off" in syms:
+                m.write(m.lin(pseg, syms["aph_off"]), b"\x01")
+            if a.hold and pseg:             # the one-track list played twice
+                m.write(m.lin(pseg, syms["ap_repeat"]), b"\x01")
+            ui.menu_pick("File", "Open...")
+            ui.chooser_open("../MEDIA/TONE22.WAV")
+
+            def rb(name, n=1):
+                return pseg and name in syms and int.from_bytes(
+                    m.readseg(pseg, syms[name], n), "little")
+            nd1 = None
+            if a.hold:
+                on = None
+                for _ in range(int(SECS) * 2 + 20):   # the first play,
+                    M.guest_sleep(m, 0.5)   # streamed, fills the hold
+                    on = rb("aph_on")
+                    if on:
+                        break
+                nd1 = rb("aph_ndisk", 2)
+                check("HOLD: the first play's own reads hold the clip whole "
+                      "(aph_on)", bool(on), "aph_on %r" % on)
+                for _ in range(40):         # ...and the second opened: its
+                    M.guest_sleep(m, 0.25)  # own reads (the folder, the
+                    if rb("aph_ncopy", 2) and rb("ap_state") == 1:
+                        break               # header) are before it, not in it
+                m.write(m.lin(pseg, syms["ap_repeat"]), b"\x00")
             r0 = m.disk()["reads"]
             M.guest_sleep(m, SECS + 3)
             reads = m.disk()["reads"] - r0
+            ndisk = None
+            if a.hold and pseg and "aph_ndisk" in syms:
+                ndisk = rb("aph_ndisk", 2) - (nd1 or 0)
             check("the window is the Audio Player's",
                   any("Audio" in t for t in ui.titles()), "titles %s" % ui.titles())
             got = dispapps.pkg_seg(m, 0)    # THE RING, off its descriptor
@@ -179,20 +233,29 @@ def main():
         t0, t1, gaps = silences(got)
         if not check("the play is in the capture", t0 is not None):
             return 1
+        if a.hold:                          # the SECOND play: the capture's
+            t0 = t1 - SECS + 0.1            # last SECS (the first streamed)
+            gaps = [g for g in gaps if g[0] >= t0]
         print("     play %.2f-%.2f s (%.2f s); silences %s" % (
             t0, t1, t1 - t0, ", ".join("%.2f+%dms" % g for g in gaps) or "none"))
-        check("it played %.1f s or more" % MIN_PLAY, t1 - t0 >= MIN_PLAY,
+        check("it played %.1f s or more" % MIN_PLAY, t1 - t0 >= MIN_PLAY - 0.1,
               "%.2f s" % (t1 - t0))
-        check("the floppy was read during it (%d READ DATA)" % reads, reads >= 20)
+        if a.hold:
+            check("HOLD: the floppy was NOT read for the second play (%d READ "
+                  "DATA in all, at most 2 the desktop's own; aph_ndisk +%s - no "
+                  "gulp off the disk)" % (reads, ndisk), reads <= 2 and ndisk == 0)
+        else:
+            check("the floppy was read during it (%d READ DATA)" % reads, reads >= 20)
         longest = max([ms for _, ms in gaps] or [0])
         total = sum(ms for _, ms in gaps)
-        check("no silence inside it over %d ms" % LONGEST_MS, longest <= LONGEST_MS,
+        lim, tot = (HOLD_LONGEST_MS, HOLD_TOTAL_MS) if a.hold else (LONGEST_MS, TOTAL_MS)
+        check("no silence inside it over %d ms" % lim, longest <= lim,
               "longest %d ms" % longest)
-        check("its silences under %d ms in all" % TOTAL_MS, total < TOTAL_MS,
+        check("its silences under %d ms in all" % tot, total < tot,
               "%d ms" % total)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    print("megasbgap: %s" % ("PASS" if not fails else "FAIL (%s)" % ", ".join(fails)))
+    print("megasbgap%s: %s" % (" --hold" if a.hold else "", "PASS" if not fails else "FAIL (%s)" % ", ".join(fails)))
     return 1 if fails else 0
 
 

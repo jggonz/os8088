@@ -306,6 +306,11 @@ MEM_K_MTBL equ 0xFF13           ; kern_mega's DESCRIPTOR TABLES in conventional
                                 ; whose extended memory cannot hold them;
                                 ; top-down and pinned for the session. 0xFF12
                                 ; is the image run table's, so this is 0xFF13
+MEM_K_SEAM equ 0xFF14           ; kern_mega's HUGE READ's SEAM (KERN-MEGA-PLAN
+                                ; 14.171, SPEC.md 20.14.5.4): 64KB, a copy of
+                                ; a packed stream either side of a bridge's
+                                ; cut, held for one OSAPI_FILE_READ and freed
+                                ; on its way out (dskw_hzfree)
 MEM_K_CLIP equ 0xFF07           ; the system clipboard's text (SPEC.md 55) -
                                 ; sized to what is in it, freed when it is
                                 ; emptied, and deliberately NOT an instance's,
@@ -465,6 +470,8 @@ MEMP_REGROW   equ 4             ; its base need not be 512-aligned (a DISK
 MEMP_AVAIL    equ 5             ; claim's is, SPEC.md 50.2.1.1)
 MEMP_KPARTS   equ 6             ; ...and the kernel's three fixed parts, exact
 MEMP_CONV     equ 0x8000        ; ...and in CX: stay conventional on kern_mega
+MEMH_AVAIL    equ 1             ; OSAPI_MEM_HUGE's AX = 0 ask with BX = this:
+                                ; the KB doors' answer, the pool counted
 %ifndef MEM_GRAN                ; (MEMGRAN=16 builds the 256-byte knob,
 MEM_GRAN    equ 32              ; SPEC.md 50.2.1.1)
 %endif
@@ -5134,10 +5141,31 @@ mem_avail_lvl_p:                ; AX/BX in PARAGRAPHS, otherwise the same
     test byte [ss:si+MC_DMA+1], MC_DMA_HI >> 8
     jz .lo
     inc dx                      ; a ceiling mover: its size joins the fill
-    jmp short .pack             ; point and a run is pending
+                                ; point and a run is pending - AND ITS PAGE
+    mov ax, [ss:si+MC_DMA]      ; HEAD WITH IT (SPEC.md 66.4.3.1, KERN-MEGA-
+    and ax, MC_DMA_HEAD         ; PLAN 14.185). The descending pass bumps an
+%ifdef MEM_ALIGN_CLASS          ; MC_DMA mover DOWN off a page its head would
+    test byte [ss:si+MC_DMA+1], MC_DISK >> 8
+    jz .hslack                  ; straddle - by less than the head - and a
+    add ax, 31                  ; DISK one down to 512 bytes (< 32 more), so
+.hslack:                        ; the run occupies at most its size plus that
+%endif                          ; under B: charged here, the hole measured at
+    add bx, ax                  ; B is never more than the pass leaves. The
+    jmp short .pack             ; slack's own gap is not a run (under-report)
 .lo:
     or dx, dx                   ; a floor mover packs onto the fill point...
-    jz .pack
+    jnz .barrier
+    push di                     ; ...AT mem_cp_dest's DESTINATION, which is
+    call mem_cp_dest            ; the fill point unless MC_DMA bumps it to the
+    mov bx, di                  ; next page's floor (or DISK aligns it): the
+    pop di                      ; run's own arithmetic, so the plan cannot put
+    jmp short .pack             ; a block where the run will not (SPEC.md
+                                ; 66.4.3.1, KERN-MEGA-PLAN 14.185). The gap the
+                                ; bump opens is NOT measured, as mem_cp_walk
+                                ; does not measure it: mem_compact decides on
+                                ; that walk's run, and a hole it cannot see
+                                ; is not one mem_claim compacts for. DI is the
+                                ; total, banked round the call that writes it
 .barrier:                       ; ...unless a run is pending under it, and
     call mem_cp_gap             ; then it is where that run stops: the hole is
     mov bx, [ss:si+MC_SEG]      ; base - fill, which is B - S - fill, and the
@@ -5487,11 +5515,23 @@ mmf_osapi_mem_huge:
 %ifdef KERN_MEGA
     or ax, ax                   ; AX = 0 ASKS (KERN-MEGA-MEMORY-PLAN MC5):
     jnz .claim                  ; the most one claim gets - the heap's, and
-    push bx                     ; in protected mode the pool's and the
-    call mem_rank_top           ; bridge's (mega_hugeqf)
+    cmp bx, MEMH_AVAIL          ; in protected mode the pool's and the
+    je .avail                   ; bridge's (mega_hugeqf), for the claim BX
+    push bx                     ; names: 16KB and 32KB windows never
+    call mem_rank_top           ; bridge (MEGA-HUGE-PLAN F3)
     call mem_avail_lvl_x
     pop bx
     call COLD_SEG:mega_hugeqf
+    clc
+    retf
+.avail:                         ; BX = MEMH_AVAIL: OSAPI_MEM_AVAIL with the
+    call mem_rank_top           ; POOL counted (MEGA-HUGE-PLAN F6) - what the
+    call mem_avail_lvl_x        ; KB doors serve THIS caller in either
+    xor dx, dx                  ; region; DX = the pool's best run, 0 none
+    cmp byte [mega_on], 0
+    je .ar                      ; real mode: the heap's answer as it stands
+    call MEGA_SEL_CODE:mega_availf
+.ar:
     clc
     retf
 .claim:
@@ -5595,8 +5635,12 @@ osapi_mem_regrow_x:
     call mem_ishidx             ; a pool SELECTOR (mega_claimhf, OS88_HIGHMEM):
     jc .conv                    ; resized in the pool, the selector kept...
     call COLD_SEG:mega_claimregrowf
-    jc .move
+    jc .huge
     retf
+.huge:                          ; A HUGE CLAIM the pool's regrow did not take
+    call COLD_SEG:mega_hugergf  ; - a bridge, or one run the pool cannot hold
+    jc .move                    ; (MEGA-HUGE-PLAN F8): CF = 1 is final for it,
+    retf                        ; as mega_claimkbf below refuses a run
 .move:                          ; ...or, past 64KB or with no room up there,
     push ax                     ; MOVED DOWN: a conventional claim, the old
     push bx                     ; bytes copied in and the pool block freed -
@@ -5645,6 +5689,14 @@ osapi_mem_regrow_x:
     pop ax
     retf
 .conv:
+    cmp byte [mega_on], 0       ; PROTECTED MODE: a claim mega_hugec made a
+    je osapi_mem_regrow_c       ; RUN over is regrown with its windows (F8)
+    call COLD_SEG:mega_hugecrgf
+    jnc .rr
+    jnz osapi_mem_regrow_c      ; (ZF = 0: no run - the plain regrow)
+.rr:
+    retf                        ; (CF = 1 with ZF = 1: a run, refused)
+osapi_mem_regrow_c:             ; (a far entry: the run's piece, mega_hgcpr)
 %endif
     push bx
     call mem_own                ; BX = the owner ES names (CF=1 = not a
@@ -5653,6 +5705,35 @@ osapi_mem_regrow_x:
 .out:
     pop bx                      ; pop leaves CF and DX alone
     retf
+
+%ifdef KERN_MEGA
+; mem_hrecf - FAR (mega.inc's huge regrow, MEGA-HUGE-PLAN F8): DX = a claim's
+; value, ES = the caller -> CF = 0, AX = its KB and CX = its MC_RLOC (CX =
+; FFFFh in: read; anything else is written first); CF = 1 it is no claim of
+; the caller's here. Keeps the rest
+mem_hrecf:
+    push bx
+    push si
+    call mem_own
+    jc .o
+    call mem_find_own
+    jc .o
+    cmp cx, 0xFFFF
+    je .r
+    mov [ss:si+MC_RLOC], cx
+.r:
+    mov cx, [ss:si+MC_RLOC]
+    mov ax, [ss:si+MC_PARA]
+    push cx
+    mov cl, 6
+    shr ax, cl
+    pop cx
+    clc
+.o:
+    pop si
+    pop bx
+    retf
+%endif
 
 ; -----------------------------------------------------------------------------
 ; osapi_mem_p - OSAPI_MEM_P (0x04E9, SPEC.md 50.3.7): the claim heap counted
@@ -5723,11 +5804,25 @@ osapi_mem_p:
     jmp short .gen
 .mreg:
     call mem_ishidx             ; a POOL block: OSAPI_MEM_REGROW's own arm
-    jc .gen                     ; resizes it (or moves it down), in KB
+    jc .mconv                   ; resizes it (or moves it down), in KB
     push ax
     call .kb
     call COLD_SEG:osapi_mem_regrow_x
     jc .mno
+    add sp, 2
+    jmp short .mkb
+.mconv:                         ; ...and so does it a conventional claim
+    cmp byte [mega_on], 0       ; mega_hugec made a RUN over (MEGA-HUGE-PLAN
+    je .gen                     ; F8): the paragraph regrow would leave its
+    push ax                     ; windows as they were
+    call .kb
+    call COLD_SEG:mega_hugecrgf
+    jnc .mok
+    jnz .mno                    ; (no run: the paragraph door's own)
+    pop ax                      ; a run, refused
+    stc
+    retf
+.mok:
     add sp, 2
     jmp short .mkb
 .kb:
@@ -5849,6 +5944,8 @@ osapi_mem_movable_x:
 %ifdef KERN_MEGA
     jmp short .out
 .hi:                            ; above 1MB: a region never moves, and of the
+    call COLD_SEG:mega_bfpcf    ; (A BRIDGE: its conventional piece is the
+    jnc .seg                    ; claim declared, KERN-MEGA-PLAN 14.169)
     call COLD_SEG:mega_dmamovf  ; pool's claims only a DMA door's is ever
 %endif                          ; pinned, so only its pin is the caller's to
 .out:                           ; take off or put back (KERN-MEGA-PLAN 14.160)
@@ -6399,6 +6496,10 @@ mmf_mem_claim:            call mem_claim_x
 
 mmf_mem_free:             call mem_free_x
                       retf
+%ifdef KERN_MEGA
+mmf_mem_claim_hi:         call mem_claim_hi_x ; (SEG_LOW: a region brought
+                      retf                    ; down, at the arena's top)
+%endif
 %ifdef KERN_BIG                 ; its callers are kern_big only
 mmf_mem_movable:          call mem_movable_x
                       retf

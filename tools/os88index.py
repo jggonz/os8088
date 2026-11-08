@@ -297,6 +297,18 @@ INCLUDES = [
      "yours and a cursor whose offset differs is re-seeded, so a seek needs "
      "nothing; the small kernel's `FERR_NAME` is retried as `READ_AT`. Zero "
      "the cursor with `os88_rseq_new` whenever the FILE changes."),
+    ("os88huge.inc", "50.3.8",
+     "WALKING AN OSAPI_MEM_HUGE CLAIM by the step it answered, on every "
+     "kernel: a 14-byte record (`HW_SEG`, `HW_STEP`, `HW_LEN`, `HW_CUT`, "
+     "`HW_FOFF`) and `hw_aim` (a 32-bit offset as ES:DI, with how far its "
+     "window reaches), `hw_get`/`hw_put` (copies to and from ES:DI), "
+     "`hw_claim` (the cell and the record), `hw_claimfit` (a HOLD: the "
+     "ask first, the claim with the heap's largest run kept N KB, the one "
+     "forced-bridge retry - every whole-file hold's), `hw_fread` (a file read into "
+     "the claim in window-sized `os88_rseq` calls) and `hw_fwrite` (onto an "
+     "`os88_wseq` stream) - every span split where a window ends, so never "
+     "across a kern_mega bridge's cut. One `%define` an arm. XTMP3's "
+     "kern_mega hold is the worked example (SPEC.md 121.6.1)."),
     ("os88wseq.inc", "18.4.9.4",
      "An APPEND OF ANY SIZE: `os88_wseq_open` (a name, a stream record of "
      "`WSEQ_SIZE` and a buffer of yours) creates the file empty, "

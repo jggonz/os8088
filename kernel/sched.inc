@@ -330,12 +330,22 @@ sched_init:
     push cx
     push es
 
+    ; (ON A DSK_PMHD BUILD THESE ZERO STORES ARE GONE - this one, .zcyc's,
+    ; sch_wd_hits' and sch_pit_last's high word - for the window half's room,
+    ; SPEC.md 18.91.7. They wrote zero over zero: `.bss` (9D94h-B28Ah of
+    ; KERNEL_SEG on kern_big) lies wholly in the file's gap between `.text`'s
+    ; end and `.ovl`'s start, emitted as zero bytes, and stage 2's one
+    ; contiguous read lands them before this runs - SPEC.md 10's evq_init went
+    ; on the same fact. The comments below that say nothing clears .bss are
+    ; about RAM at power-on, which the load writes over)
+%ifndef DSK_PMHD
     mov bx, sch_tasks           ; mark every slot free
     mov cx, MAX_TASKS
 .clear:
     mov byte [bx+T_STATE], 0
     add bx, T_SIZE
     loop .clear
+%endif
 
     mov byte [sch_cur], 0
 %ifdef KERN_BIG
@@ -361,6 +371,7 @@ sched_init:
                                 ; = 1: only slot 0 is live (SPEC.md 8.1.3),
                                 ; one word store for the two (the %if at the
                                 ; foot of this file keeps them adjacent)
+%ifndef DSK_PMHD
     mov word [sch_wd_hits], 0   ; zeroed HERE by hand, like the four bytes
                                 ; above it: .bss arrives as the image's zero
                                 ; padding (SPEC.md 12.8.5.1, checked on the
@@ -371,6 +382,7 @@ sched_init:
                                 ; sch_coop, which is set three lines up - and
                                 ; a store whose comment justifies a DIFFERENT
                                 ; store is a store somebody deletes)
+%endif
     push es                     ; TASK 0 HAS A CANARY NOW, and it is checked on
     push ax                     ; every switch like everybody else's - see
     mov ax, LOW_SEG             ; sch_stkbase, whose slot-0 entry is this word.
@@ -402,6 +414,7 @@ sched_init:
     out 0x40, al
     out 0x40, al
 
+%ifndef DSK_PMHD
     mov bx, sch_cycles          ; zero the per-task cycle counters
     mov cx, MAX_TASKS * 2
 .zcyc:
@@ -409,6 +422,7 @@ sched_init:
     inc bx
     inc bx
     loop .zcyc
+%endif
 
     mov al, 0x00                ; seed sch_pit_last with a coherent stamp:
     out 0x43, al                ; high word = [ticks] = 0, low word = the
@@ -418,7 +432,9 @@ sched_init:
     mov ch, al
     neg cx
     mov [sch_pit_last], cx
+%ifndef DSK_PMHD
     mov word [sch_pit_last+2], 0
+%endif
 
     xor ax, ax                  ; vector table segment
     mov es, ax

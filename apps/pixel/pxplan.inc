@@ -652,9 +652,9 @@ pl_htail:
     rcr ax, 1
     loop .p
     add ax, 7                       ; ...up to a multiple of 8 (the layout
-    and al, 0xF8                    ; KERN-MEGA-PLAN 14.40 made)
-    mov dx, [px_cur + PXR_MSEG]     ; a SEG_SUB there (MC7: the sum on a
-    PXSUB                           ; real-mode kernel)
+    PX_ADC                          ; KERN-MEGA-PLAN 14.40 made) - a SEG_SUB
+    and al, 0xF8                    ; there (pxrec.inc's PX_TAILAT)
+    PX_TAILAT [px_cur + PXR_MSEG]
     mov es, dx
     pop dx
     pop cx

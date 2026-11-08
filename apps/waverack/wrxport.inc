@@ -747,6 +747,24 @@ wt_plan:
     cmp ax, WT_BUDGET
     jbe .stream
 .new:
+%ifdef PKG_MEGA
+    mov ax, [wt_e1]                 ; it cannot: kern_mega's arm holds it in
+    mov dx, [wt_e1+2]               ; ONE huge claim (wt_hhuge) - its KB, one
+    sub ax, [wt_nlo]                ; byte a frame rounded up, a word of KB
+    sbb dx, [wt_nlo+2]              ; (64 MB). No CPU test: kern_mega runs on
+    add ax, 1023                    ; a 286 or later, where wt_cshare is 0
+    adc dx, 0
+    jc .slow
+    mov cx, 10
+.kb:
+    shr dx, 1
+    rcr ax, 1
+    loop .kb
+    or dx, dx
+    jnz .slow
+    call wt_hhuge                   ; [wt_hseg] and wt_hw, or no hold
+    jc .slow
+%else
     mov ax, [wt_e1]                 ; it cannot: the hold's PARAGRAPHS (SPEC.md
     mov dx, [wt_e1+2]               ; 50.3.7) - one byte a frame (8-bit mono,
     sub ax, [wt_nlo]                ; what the conversion starts from),
@@ -796,6 +814,7 @@ wt_plan:
     jnc .hw
     call wt_hfree
     jmp short .slow
+%endif
 .hw:
     mov ax, [wt_nlo]
     mov dx, [wt_nlo+2]
@@ -1499,6 +1518,70 @@ wt_rd1:
     mov byte [wt_srcdone], 1
     ret
 
+%ifdef PKG_MEGA
+; -----------------------------------------------------------------------------
+; THE HOLD ON kern_mega's ARM (PKG_MEGA, apps/os88mega.inc; MEGA-HUGE-PLAN 3,
+; SPEC.md 123.6): ONE OSAPI_MEM_HUGE claim with a window every 64KB, a
+; bridge of the pool and the heap allowed (SPEC.md 50.3.5), walked through
+; apps/os88huge.inc's record wt_hw - so every address in it is hw_aim's, a
+; window and the reach in it, and nothing reads or writes across a window's
+; end (nor so across a bridge's cut). The shipped build's conventional claim
+; under a bound window (wt_hbwin) is not assembled here: on kern_mega it was
+; the heap's largest run alone, ~480 KB on the 640K + 384K machine.
+; -----------------------------------------------------------------------------
+%define HW_CLAIMFIT                 ; hw_claimfit (hw_claim), and hw_aim
+%include "os88huge.inc"
+
+; wt_hhuge - AX = the hold's KB: claimed as above, the heap's largest run
+; keeping the play's own claims beside it - the ring and its words,
+; WT_HMARGKB and the look-ahead unless held - as the shipped build's test
+; did. apps/os88huge.inc's hw_claimfit (SPEC.md 50.3.8): the ask first, so a
+; region no claim can be given costs no claim and no pack; where the heap
+; ALONE took it and that run is short, claimed once more past the heap's
+; largest run, which the heap cannot hold alone - a bridge, its
+; conventional piece the smaller by the pool's (the hold then longer than
+; the region, which nothing reads past). Conventional memory in it is
+; declared MOVABLE, a `ret` its proc (its windows follow a move; nothing
+; holds a window across a call that can move it).
+; out: CF = 0 [wt_hseg] = the claim, wt_hw its record; CF = 1 nothing claimed.
+; clobbers AX, BX, CX, DX (wt_plan, its one caller, clobbers them all)
+wt_hhuge:
+    mov dx, WT_RINGKB + 1 + WT_HMARGKB  ; DX = the run to keep, KB
+    cmp word [wt_laseg], 0
+    jne .k
+    add dx, WT_LAKB
+.k:
+    xor cx, cx                      ; a 64KB step, a bridge allowed
+    mov bx, wt_hw
+    call hw_claimfit                ; DX = the claim, CX = FFFFh conventional
+    jc .o                           ; memory in it
+    mov [wt_hseg], dx
+    jcxz .o                         ; ...that piece movable (SPEC.md 50.3.5)
+    mov ax, wr_ret
+    call OSAPI_MEM_MOVABLE
+    clc
+.o:
+    ret
+
+; wt_hoff - the hold's address of document frame DX:AX ([wt_hlo] <= it),
+; CX frames wanted (1..FFFFh): ES:DI, CX = how many of them lie in its
+; window from there (hw_aim's reach) - every caller takes CX and comes back
+; for the rest. clobbers AX, DX
+wt_hoff:
+    sub ax, [wt_hlo]
+    sbb dx, [wt_hlo+2]
+    push bx
+    mov bx, wt_hw
+    call hw_aim
+    pop bx
+    ret
+
+; wt_hget - CX frames from [wt_fpos] in the hold: ES:DI, CX the reach
+wt_hget:
+    mov ax, [wt_fpos]
+    mov dx, [wt_fpos+2]
+    jmp short wt_hoff
+%else
 ; wt_hbwin - [wt_hwin] for the hold just claimed at [wt_hseg]: OSAPI_SEG's
 ; SEG_BWIN (SPEC.md 50.6.11). Under CPU_F_PM (kern_mega) the claim's value is
 ; an LDT SELECTOR, and wt_hoff's paragraph sum named some other descriptor
@@ -1564,6 +1647,8 @@ wt_hget:
     mov dx, [wt_fpos+2]
     jmp short wt_hoff
 
+%endif
+
 ; -----------------------------------------------------------------------------
 ; wt_hstep - ONE PASS OF THE LOAD (SPEC.md 123.6, XTMP3's shape, SPEC.md
 ;            121.6.1): reads of up to 16 KB of the region (wo_read, through
@@ -1621,23 +1706,9 @@ wt_hstep:
     mov byte [wt_hload], 0
     jmp wt_finish
 
-; wt_hput - CX frames at ES:DI (the I/O claim) into the hold at [wt_hpos],
-; ONE BYTE A FRAME - the unsigned 8-bit mono value the conversion starts from
-; (wrsim.mono: a 16-bit sample's high byte XOR 80h, the channels' (L + R) >>
-; 1), so the held play is the d = 1 8-bit loop's and a stereo or 16-bit
-; region holds in a half or a quarter of its bytes; [wt_hpos] on.
-; clobbers AX, BX, DX, SI, DI, ES
-wt_hput:
-    push cx
-    mov si, di                      ; DS:SI will be the frames...
-    mov bx, es
-    mov ax, [wt_hpos]
-    mov dx, [wt_hpos+2]
-    call wt_hoff                    ; ...ES:DI the hold
-    mov dl, [wo_bits]
-    mov dh, [wo_ch]
-    push ds
-    mov ds, bx
+; WT_HCONV - CX frames at DS:SI (DL = the bits, DH = the channels) into
+; ES:DI, one byte a frame (below); its way out is the expansion site's .x
+%macro WT_HCONV 0
     cld
     cmp dl, 16
     je .w
@@ -1673,12 +1744,71 @@ wt_hput:
     rcr al, 1
     stosb
     loop .s16
+%endmacro
+
+; wt_hput - CX frames at ES:DI (the I/O claim) into the hold at [wt_hpos],
+; ONE BYTE A FRAME - the unsigned 8-bit mono value the conversion starts from
+; (wrsim.mono: a 16-bit sample's high byte XOR 80h, the channels' (L + R) >>
+; 1), so the held play is the d = 1 8-bit loop's and a stereo or 16-bit
+; region holds in a half or a quarter of its bytes; [wt_hpos] on.
+; On kern_mega's arm the frames go in a WINDOW AT A TIME, each piece as far
+; as hw_aim says that window reaches (wt_hoff): a frame's byte is never
+; written past a window's end, so never across a bridge's cut.
+; clobbers AX, BX, DX, SI, DI, ES
+%ifdef PKG_MEGA
+wt_hput:
+    push cx
+    push bp
+    mov si, di                      ; DS:SI will be the frames...
+    mov bx, es
+.pc:
+    push cx                         ; (the frames left)
+    push bx
+    mov ax, [wt_hpos]
+    mov dx, [wt_hpos+2]
+    call wt_hoff                    ; ...ES:DI the hold, CX this window's
+    mov bp, cx
+    mov dl, [wo_bits]
+    mov dh, [wo_ch]
+    push ds
+    mov ds, bx
+    call wt_hcv
+    pop ds
+    add [wt_hpos], bp
+    adc word [wt_hpos+2], 0
+    pop bx
+    pop cx
+    sub cx, bp
+    jnz .pc
+    pop bp
+    pop cx
+    ret
+
+; wt_hcv - WT_HCONV as a call: SI and DI on past the frames. clobbers AX, BL
+wt_hcv:
+    WT_HCONV
+.x:
+    ret
+%else
+wt_hput:
+    push cx
+    mov si, di                      ; DS:SI will be the frames...
+    mov bx, es
+    mov ax, [wt_hpos]
+    mov dx, [wt_hpos+2]
+    call wt_hoff                    ; ...ES:DI the hold
+    mov dl, [wo_bits]
+    mov dh, [wo_ch]
+    push ds
+    mov ds, bx
+    WT_HCONV
 .x:
     pop ds
     pop cx
     add [wt_hpos], cx
     adc word [wt_hpos+2], 0
     ret
+%endif
 
 ; wt_hsay - 'Loading 45%' on the status bar, when the figure moves.
 ; clobbers AX, BX, CX, DX, SI, DI

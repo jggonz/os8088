@@ -17,7 +17,14 @@
 ; length and offset is checked against the file before it is used.
 ; =============================================================================
 
+%ifdef PKG_MEGA
+AR_ZMAXKB   equ 4096                ; a zip bigger than this is refused: on
+                                    ; kern_mega's arm it is ONE huge claim of
+                                    ; 32KB windows (ARCADE-SPEC 14), which
+                                    ; walks a zip's 32-bit offsets as far as
+%else                               ; the machine holds it
 AR_ZMAXKB   equ 448                 ; a zip bigger than this is refused
+%endif
 AR_NPLACE   equ 8                   ; folders remembered
 AR_NSET     equ 8                   ; sets ar_sets may list
 ZC_CLAIM    equ 6                   ; a zip's record (ar_zsize..ar_cdn): its claim
@@ -230,7 +237,20 @@ ar_zread:
     add ax, 2
     mov [ar_zkb], ax
     push si
+%ifdef PKG_MEGA
+    mov bx, 0x8000                  ; ONE HUGE CLAIM, a window every 32KB
+    call OSAPI_MEM_HUGE             ; (ARCADE-SPEC 14): window k is 64KB
+    mov byte [ar_zrun], 0           ; from 32KB x k - ar_zat's own granule,
+    jc .hno                         ; so the walk needs no SUB. BX = 0 and
+    or bx, bx                       ; CX = 8 say so; BX kept (real mode) is
+    jnz .hno                        ; the granules' SUBs as before
+    cmp cx, 8
+    jne .hno
+    mov byte [ar_zrun], 1
+.hno:                               ; (CF: the claim's - or's and cmp's 0)
+%else
     call OSAPI_MEM_CLAIM
+%endif
     pop si
     jc .nomem
     mov [ar_zclaim], dx
@@ -351,10 +371,19 @@ ar_zat:
     shl dx, cl
     add bx, dx
     and ax, 0xF800
+    cmp byte [ar_zrun], 0           ; a huge claim's run: granule g is its
+    je .sub                         ; selector g (AX = g x 800h paragraphs)
+    mov cl, 8
+    shr ax, cl                      ; AX = g x 8
+    add ax, [ar_zclaim]
+    mov es, ax
+    jmp short .got
+.sub:
 %endif
     mov dx, [ar_zclaim]
     call ar_sub
     mov es, dx
+.got:
     pop cx
     pop dx
     pop ax

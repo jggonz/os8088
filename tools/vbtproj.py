@@ -52,6 +52,10 @@ A project file (version 1):
                  loop; "full" (absent: false) plays it over the WHOLE screen,
                  the menu not yet there - the full ones first, the last with
                  the menu (it joins the idle loop),
+                 "seam"?: how its own sound joins the one before it -
+                 "auto" (absent), "trim" (silent black head frames dropped),
+                 "shift" (a sub-frame silence closed, the sound earlier),
+                 "none" (os88vbt.seam_join),
      "title":    null | LOOP + {"leave": null (a fade) | a clip id, "anchors":
                  [k...] (the title's frames the leaving clip is entered at)}
                  - SPEC.md 126.3.1: before the openings, round until a key,
@@ -520,12 +524,18 @@ class Project:
             o.insert(j, o.pop(i))
         self._edit(f)
 
-    def set_opening(self, i, clip=None, sound=False, full=None):
-        """Opening I's clip, its sound (None: silent; False: as it is), and
-        whether it is FULL SCREEN (True) or plays with the menu (False);
-        None leaves it as it is"""
+    def set_opening(self, i, clip=None, sound=False, full=None, seam=None):
+        """Opening I's clip, its sound (None: silent; False: as it is),
+        whether it is FULL SCREEN (True) or plays with the menu (False), and
+        its SEAM with the opening before it (os88vbt.SEAMS; "auto" removes
+        the key); None leaves it as it is"""
         def f(d):
             o = d["openings"][i]
+            if seam is not None:
+                if seam == "auto":
+                    o.pop("seam", None)
+                else:
+                    o["seam"] = seam
             if clip is not None:
                 o["clip"] = clip
             if sound is not False:

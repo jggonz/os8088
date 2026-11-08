@@ -453,6 +453,9 @@ ap_entry:
 %include "os88spk.inc"
 %include "os88spkfx.inc"
 %include "apspk.inc"
+%ifdef PKG_MEGA
+%include "aphold.inc"               ; the whole-file hold (SPEC.md 86.5.4)
+%endif
 
 ; =============================================================================
 ; Data: window template, menus, labels, strings

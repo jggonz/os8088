@@ -59,6 +59,13 @@
 %ifdef KD_BUILD
 %define DSK_STREAM
 %endif
+; DSK_RUN: READ_SEQ's caller-held RUN and the MAP (SPEC.md 18.4.8.3) - kern_big's
+; alone: kern_dos's image has no room, and its DOS reads nothing that needs one
+%ifdef KERN_BIG
+%ifndef KD_BUILD
+%define DSK_RUN
+%endif
+%endif
 ; DSK_DSCAN: dsk_find and the copy engine's fcp_scan share one directory walk,
 ; dsk_dscan (docs/reports/FILECP-SIZE-2026-10-18.md 5.2) - kern_big's alone.
 ; kern_small is on a diet (SPEC.md 39.27.4) and the shared walk is RESIDENT
@@ -900,6 +907,15 @@ dsk_dbg_raw:
     retf
 %endif
 section .text                   ; DATA, so back to the kernel segment
+%ifdef DSK_PMHD
+DSK_PMRUN     equ 8             ; sectors a call on the card's disk, IRQ0
+                                ; masked: ~12-13 ms on 5150 #1, just under
+                                ; Video Battle's 13.7 ms hook period
+                                ; (18.91.7). 4 and 6 read 97 and 111 KB/s
+                                ; and still dropped sound in heavy clips
+dsk_pmhd:     db 0xFF           ; the first int 13h unit a PicoMEM 2 serves,
+                                ; FFh none (drv_sniff; SPEC.md 18.91.7)
+%endif
                                 ; (SPEC.md 2.6 rule 1)
 
 
@@ -1950,6 +1966,19 @@ dsk_xfer:
     mov bp, 1                   ; FLOPPY1=1: one sector a call, the pre-18.91
                                 ; transfer, for A/B-ing this on real iron
 %endif
+%ifdef DSK_PMHD
+    mov al, [dsk_unit]          ; A PICOMEM 2's DISK (SPEC.md 18.91.7): at
+    cmp al, [dsk_pmhd]          ; most DSK_PMRUN sectors a call, IRQ0 masked
+    jb .nopm                    ; for it, so no timer hook lands inside the
+    cmp bp, DSK_PMRUN           ; card's copy wait - where its sound goes
+    jbe .pmrun                  ; silent - and the hook is held off a few ms
+    mov bp, DSK_PMRUN           ; at most. AX is the run the track allowed,
+.pmrun:                         ; spent by now (the head is popped over it
+    in al, 0x21                 ; below). Taken off again after the int 13h
+    or al, 1
+    out 0x21, al
+.nopm:
+%endif
     mov [dsk_run], bp
 %ifdef DISK_COUNTERS
     add [dsk_dbg_sec], bp
@@ -2025,6 +2054,17 @@ dsk_xfer:
     mov byte [mega_fdx], 0      ; (`mov` leaves CF alone)
 %endif
     CURXFER_OFF                  ; `mov` leaves the flags alone, so int 13h's CF
+%ifdef DSK_PMHD
+    pushf                       ; ...and IRQ0 open again on the card's disk
+    mov al, [dsk_unit]          ; (SPEC.md 18.91.7). AL only: a failure's
+    cmp al, [dsk_pmhd]          ; status is AH, and a success's AL is never
+    jb .nopu                    ; read (.ok below says why)
+    in al, 0x21
+    and al, 0xFE
+    out 0x21, al
+.nopu:
+    popf
+%endif
     jnc .ok                     ; still reaches this branch
     mov [dsk_ioerr], ah         ; keep the status for diskw.inc's mapping
 %ifdef DISK_COUNTERS
@@ -2537,7 +2577,8 @@ dsk_xfer:
     nop                         ; PARITY PAD, never executed: the exits above
                                 ; are 3 bytes shorter, and dsk_runcap and
                                 ; dsk_next_clus_x keep an EVEN shift
-                                ; (t_hotpar.py)
+                                ; (t_hotpar.py). DSK_PMHD's 40 bytes in
+                                ; dsk_xfer are even, so it stays there too
 
 
 
@@ -6552,6 +6593,16 @@ dsk_free_clus_x:
 ; (SPEC.md 18).
 ; -----------------------------------------------------------------------------
 dsk_next_clus_x:
+%ifdef DSK_RUN
+    cmp ax, [dwr_c+FSEQ_RUN]    ; A CALLER'S RUN (18.4.8.3): inside a READ_SEQ
+    jb .fat                     ; call that mapped its file, a cluster below
+    cmp ax, [dwr_c+FSEQ_RUN+2]  ; its run's last links to the next, and the
+    jae .fat                    ; FAT is not read. [dwr_c+18] is 0 at every
+    inc ax                      ; other moment, so this never answers
+    clc                         ; (CF was 1: AX below the last)
+    ret
+.fat:
+%endif
     push bx
     push cx
     push dx
@@ -7140,6 +7191,12 @@ dsk_rah_fill:
 .gate:
     cmp bx, ax
     jae .nofill                 ; no surplus: there is nothing to cache
+%ifdef DSK_PMHD
+    mov cl, [dsk_pmhd]          ; ...and NO FILL OFF A PICOMEM 2 (18.95.12):
+    and cl, 0xBF                ; an SD card has no revolution to save, and
+    cmp [dsk_unit], cl          ; a fill there is a second call and a copy
+    jae .nofill                 ; the 8088 makes itself - our firmware's too
+%endif                          ; (its unit + 40h, 18.91.7.1). CX is dead here
 %ifdef KERN_MEGA
     cmp byte [dsk_rah_hi], 0
     je .land
@@ -10621,13 +10678,15 @@ FDD_SELW     equ 4000            ; a short settle after the select reaches the
 
 %ifdef KERN_BIG
 ; -----------------------------------------------------------------------------
-; dsk_fdd_pmemu - does a PicoMEM serve floppy unit AL from an image?
-; (SPEC.md 18.97.6)
-; in:  AL = the unit (0..3)
-; out: CF = 0 yes; CF = 1 no, or no PicoMEM, and AL = the unit again.
-; clobbers: AH, BX, CX, DX, ES, flags - its one caller has banked all four
-;      (dsk_fdd_probe, which calls it under its own saves; kernel size pass
-;      11 took the routine's second set off, -11 of `.ovl`)
+; dsk_fdd_pmemu - does a PicoMEM serve attribute slot AL from an image?
+; (SPEC.md 18.97.6, 18.91.7)
+; in:  AL = the slot: 0, 1 floppy units A: and B:; 2..5 HDD0..3 (unit 80h
+;      + AL - 2), the card's table running straight on
+; out: CF = 0 yes, ES = the PM BIOS's segment; CF = 1 no, or no PicoMEM.
+;      AL = the slot again either way.
+; clobbers: AH, BX, CX, DX, ES, flags - its two callers bank what they need
+;      (dsk_fdd_probe, under its own saves; drv_sniff's DSK_PMHD branch;
+;      kernel size pass 11 took the routine's second set off, -11 of `.ovl`)
 ;
 ; THREE QUESTIONS, EACH ONLY ASKED IF THE ONE BEFORE ANSWERED. Port 2A3h is
 ; the card's test register and counts one up per read - a ramp nothing else
@@ -10639,7 +10698,9 @@ FDD_SELW     equ 4000            ; a short settle after the select reaches the
 ; card's configuration struct sits 16KB above that, FDDn_Attribute at +B2h
 ; per unit, BIT 7 meaning "the PicoMEM disk code serves this drive"
 ; (pmbios/pm_vars.asm; its order is the config file's, so the card keeps it).
-; Units 2 and 3 have no attribute and answer no.
+; HDD0..3's attributes follow FDD1's, which is why slots 2..5 are theirs -
+; and why this no longer refuses AL >= 2: floppy units 2 and 3 have no slot,
+; and dsk_fdd_probe asks only about unit 1.
 ;
 ; KERN_BIG ONLY, beside its caller in the window half. kern_big's blob is full
 ; and its `.ovl` had ~90 bytes; kern_small's `.ovl` has 30 (the two guards at
@@ -10650,8 +10711,6 @@ FDD_SELW     equ 4000            ; a short settle after the select reaches the
 ; (SPEC.md 18.97.6).
 ; -----------------------------------------------------------------------------
 dsk_fdd_pmemu:
-    cmp al, 2
-    jae .no
     mov bl, al                  ; the unit, through int 13h's clobbers
     mov dx, 0x2A3
     pushf
@@ -11186,7 +11245,11 @@ section .text
 ; and the add needs no wrap test. Not .bss - its resting value is not zero
 ; (SPEC.md 12.8.5.1)
 dsk_mgen:   dw 1
-dwr_c:      times 16 db 0       ; READ_SEQ's cursor, the kernel's copy for the
+%ifdef DSK_RUN
+dwr_c:      times 22 db 0       ; READ_SEQ's cursor, the kernel's copy for the
+%else
+dwr_c:      times 16 db 0
+%endif
 %endif                          ; call (18.4.8). dwr_stat reads it on EVERY
                                 ; READ_AT, so .text and seeded: generation 0
                                 ; is no cursor, and the wrapper leaves it so

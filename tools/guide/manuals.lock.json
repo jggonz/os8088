@@ -85,9 +85,9 @@
   "sources": [
    "apps/audio"
   ],
-  "stamped": "55a051b4",
-  "strings": "e12e9e2c75e19803",
-  "why": "Unchanged: XTMP3's track split the look-ahead out of apengine.inc into aplook.inc (35efae82). AUDIO.O88 assembles byte-identical and no user-visible string changed. Only the file a string lives in moved."
+  "stamped": "e15cc130",
+  "strings": "685a84aa6fd914d9",
+  "why": "kern_mega arm only: the hold filled by the stream (KERN-MEGA-PLAN 14.186); the page already says it reads a song a little at a time as it plays, which is now true on every kernel - unchanged"
  },
  "AUTOSTRT": {
   "sources": [],
@@ -112,9 +112,9 @@
    "tools/os88vbt.py",
    "tools/vbtscene.py"
   ],
-  "stamped": "05aa6e2c",
-  "strings": "0848db46e848836d",
-  "why": "the demo as demo_project builds it (full and --floppy), the four disks' versions"
+  "stamped": "d70ec25c",
+  "strings": "248798d5d21fc5a7",
+  "why": "read: the openings' seam setting and the victory read-ahead are below this page's level of detail"
  },
  "BEVERLY_MOD": {
   "sources": [],
@@ -516,9 +516,18 @@
    "firmware/picomem1/README.md",
    "firmware/picomem1/SHA256SUMS"
   ],
-  "stamped": "e4576a70",
+  "stamped": "d70ec25c",
   "strings": "52a90b0aba7759ae",
-  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+  "why": "a 2.0 is pointed at the PicoMEM 2 firmware now in the tree"
+ },
+ "FW_PICOMEM2": {
+  "sources": [
+   "firmware/picomem2/README.md",
+   "firmware/picomem2/SHA256SUMS"
+  ],
+  "stamped": "d70ec25c",
+  "strings": "29fb8825c8c9bb27",
+  "why": "new page: the PicoMEM 2.0 firmware, its fixes, what it lacks against PM2-10-4-26, flashing"
  },
  "GAMES": {
   "sources": [],
@@ -980,9 +989,9 @@
   "sources": [
    "apps/runcpm"
   ],
-  "stamped": "e4576a70",
-  "strings": "67bdba87c78bc549",
-  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+  "stamped": "87c45da6",
+  "strings": "c7f6d06375d430a5",
+  "why": "files past 64KB open as one huge claim (SPEC 74.3.3): the limits bullet rewritten to the memory rule, the 8MB ceiling and the RAM? message"
  },
  "SALES_SLK": {
   "sources": [],
@@ -1236,9 +1245,9 @@
    "tools/os88vbtgui.py",
    "tools/os88vbt.py"
   ],
-  "stamped": "05aa6e2c",
-  "strings": "23d8f003319c2003",
-  "why": "written against the builder's README in os88vbtbundle.py, os88vbtgui.py's tabs and Build tab labels, and os88vbt.py's commands"
+  "stamped": "d70ec25c",
+  "strings": "625b853e3ccf1b2e",
+  "why": "read: the openings' seam setting and the victory read-ahead are below this page's level of detail"
  },
  "TOOL_VENC": {
   "sources": [
@@ -1281,17 +1290,17 @@
   "sources": [
    "apps/vbattle"
   ],
-  "stamped": "05aa6e2c",
-  "strings": "9ce2b7f5173e96ca",
-  "why": "written against vbprof.inc (VBPROF1-9.DAT, XMS or conventional record) and SPEC.md 126.8"
+  "stamped": "d70ec25c",
+  "strings": "e619e1fa6fb6b44e",
+  "why": "read: the openings' seam setting and the victory read-ahead are below this page's level of detail"
  },
  "VBATTLE_O88": {
   "sources": [
    "apps/vbattle"
   ],
-  "stamped": "05aa6e2c",
-  "strings": "9ce2b7f5173e96ca",
-  "why": "written against apps/vbattle (window strings, File menu, keys in vbgame.inc/vb_keys, adapter choice in vb_load) and SPEC.md 126; shots taken on the VGA XT"
+  "stamped": "d70ec25c",
+  "strings": "e619e1fa6fb6b44e",
+  "why": "read: the openings' seam setting and the victory read-ahead are below this page's level of detail"
  },
  "VESA_DRV": {
   "sources": [

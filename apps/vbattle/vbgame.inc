@@ -457,6 +457,36 @@ vb_begin_plan:
     mov [vb_wclip], al
     mov byte [vb_cdone], 0xFF
     mov [vb_pend], al               ; the hook takes it at its anchor
+    ; ...and THE BLOW THAT ENDS IT (126.4, item 7): the damage is rolled with
+    ; the plan, so a plan that takes the enemy's last HP is known before its
+    ; clip plays - the read-ahead is then the VICTORY clip, not a move the
+    ; enemy will never make. Read at the ending, its head held the picture
+    ; 316 ms on 5150 #1 (2026-11-08)
+    cmp byte [vb_qw], ENEMY
+    je .x
+    mov al, [RL+RH_VICT]
+    cmp al, NONE
+    je .x
+    mov cl, [vb_qn]
+    xor ch, ch
+    jcxz .x
+    xor bx, bx
+.v:
+    cmp byte [vb_qt+bx], ENEMY
+    jne .vn
+    mov si, bx
+    shl si, 1
+    mov dx, [vb_qdmg+si]
+    or dx, dx
+    jz .vn
+    cmp dx, [vb_ehp]
+    jb .vn
+    mov [vb_eclip], al
+    ret
+.vn:
+    inc bx
+    loop .v
+.x:
     ret
 
 ; vb_who - who BL's name at DS:DI, DI past it

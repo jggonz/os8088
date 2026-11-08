@@ -1136,7 +1136,9 @@ bl_head:
 
 ; -----------------------------------------------------------------------------
 ; bl_paint - draw the visible page of the report
-; in:       SI = window ptr; the gfx lock is HELD (this is a W_PAINT or a
+; in:       SI = window ptr on the FIRST call (the window's paint callback;
+;           every later call draws in that window whatever SI holds); the
+;           gfx lock is HELD (this is a W_PAINT or a
 ;           callback that has already drawn), content already whatever the
 ;           caller left there
 ; clobbers: flags (every register preserved)
@@ -1157,7 +1159,12 @@ bl_paint:
     push si
     push di
     push bp
-    mov bx, si
+    mov bx, [bl_win]            ; THE WINDOW IS THE ONE THE FIRST CALL NAMED -
+    or bx, bx                   ; a paint callback's SI, the window's first
+    jnz .win                    ; paint. A bench calling after a run had
+    mov bx, si                  ; spent SI asked the window manager about a
+    mov [bl_win], bx            ; stray pointer, and VIDSND's report went
+.win:                           ; down at (269, 5) over the menu bar
     call OSAPI_WM_GEOM          ; CX = content w, DX = content h
     jc .out
     mov [bl_cw], cx
@@ -1869,8 +1876,10 @@ bl_mxhi    equ bl_mxlo + 2               ; over the whole suite - a jiggle
 bl_mylo    equ bl_mxhi + 2               ; that comes back to where it started
 bl_myhi    equ bl_mylo + 2               ; moves no SAMPLE but widens this
 bl_mhave   equ bl_myhi + 2               ; byte: the box has been seeded
+bl_win     equ bl_mhave + 1              ; word: the window, from bl_paint's
+                                         ; first call (0 = not yet)
 %endmacro
 
-; ...and its size, for the caller's OS88_BSS. The tail past bl_out is 70
+; ...and its size, for the caller's OS88_BSS. The tail past bl_out is 72
 ; bytes of scalars; 96 is that with the slack a new scalar would want.
 BL_BSS_SIZE equ BL_MAXLINE * 2 + 8 + BL_ARENA + BL_MAXROWS * 2 + BL_OUTSZ + 96

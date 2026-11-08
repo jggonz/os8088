@@ -1785,7 +1785,14 @@ MEMC_WHATIF_P equ 2              ; AH: MEMC_WHATIF in PARAGRAPHS - the same
                                  ; "allow for" a shed: OSAPI_CLAIM_SNAPSHOT is
                                  ; for DISPLAYING the heap, and a package that
                                  ; reasons from it subtracts what this figure
-                                 ; has already added.
+                                 ; has already added. ON KERN_MEGA IT COUNTS
+                                 ; CONVENTIONAL MEMORY ALONE, as it always
+                                 ; has, and an OS88_HIGHMEM package's claims of
+                                 ; 64KB or less go above 1MB first - so such a
+                                 ; package sizes and refuses from OSAPI_MEM_HUGE
+                                 ; AX = 0, BX = MEMH_AVAIL (the pool counted),
+                                 ; and asks this one only where that answers
+                                 ; CF=1 (MEGA-HUGE-PLAN F6)
 ; ...AND THE ONE THAT SAYS "BUT NOT THAT" (SPEC.md 50.6.6). The two above are
 ; unconditional: they count EVERY cache as free and then, on the claim, shed or
 ; drop it to make that true. That is right for a program whose own work is
@@ -2344,6 +2351,27 @@ OS88_HUGE_INCR      equ 0x1000
                                  ;          124.26.12). CF=1, AX = 4 for
                                  ;          anything else; CF=1 on a
                                  ;          real-mode kernel
+                                 ; SEG_LOW  DX = YOUR OWN DS, AX = a
+                                 ;          relocation proc of yours
+                                 ;          (OSAPI_MEM_MOVABLE's AX) or 0 ->
+                                 ;          your REGION, when kern_mega put
+                                 ;          it above 1MB (OS88_HIGH), moved
+                                 ;          into a conventional claim at the
+                                 ;          arena's top, every selector of it
+                                 ;          KEPT (only bases change: reload
+                                 ;          ES yourself; DS and CS reload as
+                                 ;          the cell returns) and its pool
+                                 ;          block freed; movable with AX's
+                                 ;          proc, pinned with 0. Already
+                                 ;          conventional: CF=0, nothing done.
+                                 ;          For a real-mode bracket's package
+                                 ;          (SPEC.md 53.2.3): asked BEFORE its
+                                 ;          extended memory is sized, the
+                                 ;          pool has the region's KB back and
+                                 ;          the bracket copies nothing. CF=1
+                                 ;          AX = 1 no conventional room, 3
+                                 ;          not your region; CF=1 on a real-
+                                 ;          mode kernel (ask under CPU_F_PM)
                                  ; out CF=0 and the answer; CF=1 refused (no
                                  ; LDT entry free, or SEG_REAL's none),
                                  ; AX = the reason: 1 no LDT entry or window
@@ -2367,6 +2395,7 @@ SEG_WINL    equ 10
 SEG_LEND    equ 11
 SEG_HND     equ 12
 SEG_TYPE    equ 13
+SEG_LOW     equ 14
 
 ; OSAPI_MEM_P - THE CLAIM HEAP IN PARAGRAPHS (SPEC.md 50.2.1, 50.3.7). Every
 ; claim is rounded to the heap's GRANULE - 512 bytes today, and the door says
@@ -2395,7 +2424,10 @@ SEG_TYPE    equ 13
                                  ;          can have, BX = the total, in
                                  ;          paragraphs, at your floor as
                                  ;          OSAPI_MEM_AVAIL; CX = the GRANULE
-                                 ;          in paragraphs
+                                 ;          in paragraphs - conventional
+                                 ;          memory ALONE on kern_mega, as
+                                 ;          OSAPI_MEM_AVAIL is: the pool too
+                                 ;          is OSAPI_MEM_HUGE's MEMH_AVAIL
                                  ; CF=1 refused, and a CLAIM or REGROW verb's
                                  ; AX is then the request rounded up to the
                                  ; granule. Every register not named is kept,
@@ -2982,6 +3014,13 @@ KIND_PKG   equ 0x80             ; SSI_KIND bit 7: this instance is a package
                                  ; from extended. out CF=0 done; CF=1 and AX =
                                  ; 1 no store / 2 the range is not inside a
                                  ; block you own / 3 bad length. ES is restored.
+                                 ; CX = 0 is a bad length (3) everywhere but
+                                 ; INSIDE kern_mega's REAL-MODE bracket
+                                 ; (FSXF_REAL, SPEC.md 53.2.3), whose twin
+                                 ; answers WHERE: no byte moved, CF=0 and DX:AX
+                                 ; = the LINEAR address the extended end is at
+                                 ; NOW - a token's block moves on kern_mega
+                                 ; between brackets, never inside one.
 %define OSAPI_XMEM_WALK     KERNEL_SEG:0x04BF   ; ES:DI = room for CX records
                                  ; of XMW_SIZE bytes; out CF=0 and AX = the
                                  ; extended pool's blocks written, each
@@ -3049,10 +3088,17 @@ KIND_PKG   equ 0x80             ; SSI_KIND bit 7: this instance is a package
                                  ; before it refuses (KERN-MEGA-PLAN 14.37).
                                  ; Free it with OSAPI_MEM_FREE and the DX it
                                  ; gave; the kernel frees it at your teardown
-                                 ; too. OSAPI_MEM_REGROW takes one above 1MB
-                                 ; to ANY size and keeps it there: DX is its
-                                 ; first selector NOW (the run may move), the
-                                 ; step stays 8; CF=1 changed nothing.
+                                 ; too. OSAPI_MEM_REGROW takes one to ANY
+                                 ; size (MEGA-HUGE-PLAN F8): in the pool
+                                 ; where the pool holds it, its run extended
+                                 ; or cut below 1MB, else claimed again,
+                                 ; copied and freed - DX is its first
+                                 ; selector NOW, the step stays 8, and the
+                                 ; SHAPE is kept: one run stays one run, only
+                                 ; a bridge comes back a bridge. A claim that
+                                 ; came down from the pool is born pinned:
+                                 ; declare it (OSAPI_MEM_MOVABLE) again.
+                                 ; CF=1 changed nothing.
                                  ; BX = 8000h asks for a WINDOW EVERY 32KB
                                  ; instead (KERN-MEGA-PLAN 14.41): selector k
                                  ; is the 64KB window from 32KB x k, cut at
@@ -3084,10 +3130,56 @@ KIND_PKG   equ 0x80             ; SSI_KIND bit 7: this instance is a package
                                  ; memory, under ONE run stepped by 8 - which
                                  ; a 64KB step's claim gets when neither the
                                  ; pool nor the heap alone holds it. A bridge
-                                 ; always leaves the heap 64KB, does not
-                                 ; REGROW (CF=1), moves piece by piece like
+                                 ; always leaves the heap 64KB, REGROWS
+                                 ; (its heap piece, or below its cut the
+                                 ; pool's one run), moves piece by piece like
                                  ; any claim, and OSAPI_MEM_FREE of its DX
-                                 ; frees both pieces
+                                 ; frees both pieces.
+                                 ; THE ASK READS BX, SO SET IT: BX = 0, 8000h
+                                 ; or 4000h answers for THAT claim - a 32KB or
+                                 ; 16KB step never bridges (its 64KB windows
+                                 ; overlap, so one would span the cut) and is
+                                 ; answered the pool's or the heap's alone
+                                 ; (MEGA-HUGE-PLAN F3). BX = MEMH_AVAIL asks
+                                 ; the KB DOORS' question instead: out CF=0,
+                                 ; AX = the largest claim OSAPI_MEM_CLAIM (or
+                                 ; OSAPI_MEM_P with no head) serves YOU, BX =
+                                 ; the total free KB you can claim from, both
+                                 ; regions, and DX = the pool's best run in KB
+                                 ; (0: none for you) - OSAPI_MEM_AVAIL with the
+                                 ; pool counted (MEGA-HUGE-PLAN F6). CF=1 on
+                                 ; kern_big and kern_small, as for any ask:
+                                 ; OSAPI_MEM_AVAIL IS that answer there
+MEMH_AVAIL  equ 1               ; OSAPI_MEM_HUGE AX = 0, BX = this: the ask above
+                                 ; A BRIDGE IS TWO RUNS OF MEMORY (SPEC.md
+                                 ; 50.3.5, KERN-MEGA-PLAN 14.169): out BX =
+                                 ; its POOL piece's windows when you got
+                                 ; one, so window BX (DX + 8 x BX) is the
+                                 ; conventional piece's first and the CUT is
+                                 ; at BX x 64KB; BX kept for any claim that
+                                 ; is one run (so ask with BX = 0, or
+                                 ; HUGE_NOBRIDGE, to read it). Walk by the
+                                 ; step and every window is right; OSAPI_SEG
+                                 ; SEG_SUB / SEG_AT / SEG_HND / SEG_TILE
+                                 ; follow the pieces past the cut and cut a
+                                 ; reach short at it (no one segment is two
+                                 ; pieces; SEG_TILE across it is refused),
+                                 ; and OSAPI_FILE_READ / _WRITE step across
+                                 ; it. SEG_LIN is one selector's base: the
+                                 ; byte at offset X is SEG_LIN of window
+                                 ; X >> 16, plus X & FFFFh - never the first
+                                 ; window's base plus X. BX = HUGE_NOBRIDGE
+                                 ; asks for ONE run, never a bridge - the
+                                 ; claim and the AX = 0 ask alike (kern_big
+                                 ; and kern_small never bridge, and ignore
+                                 ; it). OSAPI_MEM_MOVABLE of a bridge's DX
+                                 ; declares its conventional piece, which is
+                                 ; born pinned as every claim is: the proc
+                                 ; is called for its moves, and its
+                                 ; selectors follow them
+HUGE_NOBRIDGE equ 2              ; OSAPI_MEM_HUGE's BX: one run, no bridge
+                                 ; (bit 1: BX = 1 on the AX = 0 ask is
+                                 ; another question, MEGA-HUGE-PLAN F6's)
 XMW_OFF     equ 0
 XMW_KB      equ 2
 XMW_OWN     equ 4
@@ -6148,6 +6240,15 @@ CLIP_MAXKB equ 32                ; the clipboard's ceiling, KB. A put longer
                                  ; FSEQ_OFF is yours to write
 FSEQ_OFF    equ 12              ; the cursor's offset field (dword)
 FSEQ_SIZE   equ 16              ; ...and the cursor's size
+FSEQ_FLG    equ 3               ; THE CALLER'S FLAGS byte (SPEC.md 18.4.8.3),
+FSEQF_RUN   equ 1               ; 0 in a plain cursor: RUN = +16..+21 hold the
+FSEQF_MAP   equ 2               ; run this call reads in; MAP = CX runs of 4
+                                ; bytes (first cluster, last) written to
+                                ; DX:BX (CX >= 1), out AX = the runs written
+                                ; (CX = maybe more) and DX = the generation
+FSEQ_RUN    equ 16              ; ...the run: first cluster, last (words)
+FSEQ_RGEN   equ 20              ; ...and the MAP's DX, copied here
+FSEQ_XSIZE  equ 22              ; a cursor that sets a flag is this size
 %define OSAPI_FILE_WRITE_SEQ KERNEL_SEG:0x0461  ; A STREAMING APPEND (SPEC.md
                                  ; 18.4.9, KERN_BIG; the small kernel answers
                                  ; CF=1 FERR_NAME). SI = the name ON EVERY
@@ -6940,6 +7041,24 @@ FSXF_REAL       equ 8           ; OSAPI_FSX_RUN CX bit 3 (SPEC.md 53.2.3): on
                                 ; back, and a kernel in real mode keeps SI.
                                 ; Inside, OSAPI_CPU_INFO's CPU_F_PM says the
                                 ; same. apps/os88real.inc renames your claims
+FSXF_PREP       equ 16          ; OSAPI_FSX_RUN CX bit 4, WITH FSXF_REAL
+                                ; (SPEC.md 53.2.3.1): PREPARE the door and
+                                ; run nothing. kern_mega in protected mode
+                                ; walks the list (BP), brings DOWN for good
+                                ; each driver the bracket would carry whose
+                                ; image is above 1MB, where conventional
+                                ; memory has room (selectors kept; back up
+                                ; when an instance ends), and answers CF = 0,
+                                ; AX = the KB of CONVENTIONAL memory the door
+                                ; will still claim (the service area, the
+                                ; region's copy if above 1MB, EXTD.DRV's and
+                                ; any driver's copy it could not bring down)
+                                ; and SI = FSXR_* - the bracket the door
+                                ; would run (AX = 0 unless FSXR_REAL). Leave
+                                ; AX KB free when you size your conventional
+                                ; claims. Every other kernel, and kern_mega in
+                                ; real mode, refuses the bit (CF = 1): keep
+                                ; nothing there. AX, BX and BP as for the run
 FSXR_REAL       equ 0           ; ...SI out: the bracket ran in real mode
 FSXR_KEEP       equ 1           ; ...protected: FSXF_KEEPWORKER was asked
 FSXR_SVC        equ 2           ; (RETIRED, never answered: a driver's

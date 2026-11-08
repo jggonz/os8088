@@ -44,6 +44,10 @@ C kernel/ascw.inc MEM_K_ASC              # FORMAT.DRV's ASSOC.DAT flush work
                                          # buffer, claimed and freed inside one
                                          # ascw_flush_x call; every offset into
                                          # it is live across the write
+C kernel/diskw.inc MEM_K_SEAM            # kern_mega's huge read's seam (SPEC.md
+                                         # 20.14.5.4): claimed and freed inside
+                                         # one OSAPI_FILE_READ, the decoder
+                                         # reading it by linear base throughout
 C kernel/compress.inc MEM_K_CMPR         # the Compress/Uncompress verb's working
                                          # block, claimed and freed inside one
                                          # command; three segments are paragraph
@@ -77,6 +81,16 @@ X kernel/band.inc MEM_K_BAND             # the 1bpp band composer's buffer, take
                                          # once at boot and never freed - and only
                                          # the BAND=1 knob assembles band.inc, so
                                          # no shipped kernel makes this claim
+X kernel/mega.inc MEM_K_DRV              # kern_mega's LENT driver image
+                                         # (mega_drvlow, SPEC.md 53.2.3.1): a
+                                         # driver FSXF_PREP brings down for a
+                                         # real-mode bracket. The door banks its
+                                         # PARAGRAPH and the IVT names it there,
+                                         # and SOUND.DRV's SBL_DSCS needs it on
+                                         # 512 bytes - a move between the door's
+                                         # sum and the drop runs a stale segment.
+                                         # Bottom-up, among the arena's low pins,
+                                         # and back up when an instance ends
 X kernel/loader.inc ld_base              # a package REGION: born pinned, and the
                                          # PACKAGE declares it (OS88_REGION_
                                          # MOVABLE, OS88_WORKER_RESTARTABLE), which
@@ -162,6 +176,13 @@ D apps/syscheck/disk.inc sc_wseg         # FSCHECK.DRV's workspace (SPEC.md 118.
                                          # int 13h moves sectors straight into it
                                          # on every step of a disk task, a claim at
                                          # the DMA door, freed when the task ends
+X apps/tracker/tracker.asm @trk_hzfits   # kern_mega's arm only: the module's
+                                         # OSAPI_MEM_HUGE claim is a POOL block
+                                         # above 1MB, which the pool moves by its
+                                         # descriptors (mx_compactf) - no wall in
+                                         # the heap; one the cell put in the heap
+                                         # is given back for the door's movable
+                                         # claim (SPEC.md 45.3.1.2)
 X apps/syscheck/disk.inc sc_fseg         # FSCHECK.DRV, KERNEL CODE the kernel far-
                                          # calls on every step (118.14.1): a claim
                                          # made inside a step - the read-ahead
@@ -364,6 +385,11 @@ D apps/vbattle/vbprof.inc vb_prseg       # VBATTLED's profile (SPEC.md 126.8): i
                                          # writes into it at interrupt time for
                                          # the whole bracket; claimed as the
                                          # play's rings are, freed at its end
+C apps/vbattle/vbbm.inc vb_bmseg         # the bookmarks' scratch cluster (SPEC.md
+                                         # 126.4.8): claimed, read into with
+                                         # OSAPI_FILE_READ_SEQ (its DX:BX) once a
+                                         # clip head and freed inside
+                                         # vb_bmbuild's one call, at load
 C apps/vbattle/vbprof.inc vb_prfseg      # VBATTLED's profile file at the play's
                                          # end: claimed, filled, written with
                                          # OSAPI_FILE_WRITE (its ES:BX) and freed
@@ -387,7 +413,24 @@ C apps/pixel/pixel.asm px_flatraw        # a CZ-packed file read whole for ONE o
                                          # refusal) - for the length of the open,
                                          # where the head parse holds [px_hseg] and
                                          # the decode worker [px_rsegc] inside it,
-                                         # parking at OSAPI_TASK_ALIVE mid-read
+                                         # parking at OSAPI_TASK_ALIVE mid-read.
+                                         # On kern_mega's arm past 64KB it is an
+                                         # OSAPI_MEM_HUGE, HUGE_NOBRIDGE, in the
+                                         # pool, where it moves by its selectors
+                                         # (SPEC.md 106.8.1)
+X apps/pixel/pxmaster.inc @px_avail      # NOT A CLAIM: OSAPI_MEM_HUGE with AX = 0,
+                                         # MEMH_AVAIL and then BX = 8000h - the
+                                         # ARM's ask for the pool-aware total and
+                                         # for what a master's 32KB-window claim
+                                         # is granted, to pick the SCALE (SPEC.md
+                                         # 106.8.1); the master is px_claims' own,
+                                         # declared movable
+X apps/pixel/pxedit.asm @pe_avail        # NOT A CLAIM: the edit part's px_avail -
+                                         # OSAPI_MEM_HUGE with AX = 0 (MEMH_AVAIL,
+                                         # then BX = 8000h), the ARM's ask behind
+                                         # Resize's line and "Needs 300K; 120K
+                                         # free"; the destination is pf_start's
+                                         # px_edseg, declared movable
 C apps/pixel/pxmaster.inc px_wbase       # the decode's WORK claim, for the length
                                          # of one decode job: px_claims makes it,
                                          # px_finish gives it back. The worker and
@@ -445,6 +488,36 @@ X apps/browser/browser.asm @br_claim     # a CLAIM WRAPPER this scan cannot see
                                          # the call, SPEC.md 71.14.1): every caller
                                          # stores DX in a word br_reloc names and
                                          # declares it with br_movable at once
+X apps/browser/browser.asm @br_hclaim    # br_claim's kern_mega twin (SPEC.md
+                                         # 71.18.2): OSAPI_MEM_HUGE of one run for
+                                         # the source and the document, the page
+                                         # claims unpinned after it as br_claim's
+                                         # are; its two callers store DX in a word
+                                         # br_reloc names and declare it with
+                                         # br_movable at once
+X apps/browser/browser.asm @br_avail     # NOT A CLAIM: OSAPI_MEM_HUGE with AX = 0,
+                                         # MEMH_AVAIL - the reserve's free total
+                                         # with the pool counted (SPEC.md 71.18.2)
+X apps/frotz/zio.inc @zi_room           # NOT A CLAIM: OSAPI_MEM_HUGE with AX = 0 is
+                                         # the cell's ASK (MEMH_AVAIL, or the 32KB-
+                                         # window shape), which claims nothing; the
+                                         # story's claims are zf_sseg's, declared
+X apps/win16/w16mem.inc @w16_garena      # NOT A CLAIM: OSAPI_MEM_HUGE with AX = 0,
+                                         # MEMH_AVAIL - the arm's ask for the pool's
+                                         # best run, to SIZE the third arena; the
+                                         # arena itself is claimed by W16VCLAIM
+X apps/os88huge.inc @hw_claimfit         # NOT A CLAIM: OSAPI_MEM_HUGE with AX = 0,
+                                         # the cell's ASK, first, so a hold too big
+                                         # costs no claim and no pack of the pool
+                                         # (KERN-MEGA-PLAN 14.177); the hold itself
+                                         # is hw_claim's, its caller's to declare
+X apps/os88huge.inc si+HW_SEG            # THE WALKER'S CLAIM IS ITS CALLER'S (SPEC.md
+                                         # 50.3.8): DX goes back to the package, whose
+                                         # pool windows move by themselves (14.169) and
+                                         # which declares the CONVENTIONAL piece itself
+                                         # where hw_claimfit's CX says it is there -
+                                         # XTMP3's x3_lset, WaveRack's wt_hhuge, Audio's
+                                         # aph_claim (KERN-MEGA-PLAN 14.173, 14.177, 14.186)
 X apps/realdmg/rwbank.inc rw_xsel        # kern_mega's arm: the cartridge IN PLACE,
                                          # one OSAPI_MEM_HUGE claim in the POOL
                                          # (REALDMG-SPEC 10.3.1). It is not a wall:
@@ -476,10 +549,6 @@ X apps/waverack/wrxport.inc wt_laseg   # the play's look-ahead, which the
                                          # 20.6): a move needs the worker parked
                                          # mid-pass, and nothing parks it; held
                                          # for one play
-X apps/waverack/wrxport.inc wt_hseg    # the play's HOLD, which the worker reads
-                                         # the same way, lock-free, for the length
-                                         # of one play; and wt_hoff walks it by
-                                         # paragraph (it can pass 64KB)
 X apps/waverack/wrrec.inc wc_useg+bx   # a take's staging units, which the
                                          # WORKER copies the ring into between the
                                          # UI's ticks with no lock (SPEC.md 123.7)

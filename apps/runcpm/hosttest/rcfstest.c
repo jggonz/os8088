@@ -113,10 +113,14 @@ struct rc_zregs rc_z;
 
 /* --- the Z80's RAM and the claims ------------------------------------------ */
 static unsigned char zram[65536];
-#define NCLAIM 20
+#define NCLAIM 40
 static unsigned char *cl_mem[NCLAIM];    /* by index; seg = 0x1000 * (i + 1) */
 static unsigned cl_para[NCLAIM];         /* each claim's size, paragraphs */
 static int cl_live[NCLAIM];
+static int cl_run[NCLAIM];               /* a HUGE claim's head: its windows,
+                                          * the slots after it (seg + 0x1000k,
+                                          * os88_mem_huge_step's real-mode step) */
+static int n_huge, n_hregrows;
 static int cl_mov[NCLAIM];               /* os88_mem_movable's last word on it
                                           * (SPEC.md 66.2): a claim is born 0 */
 static int n_declares;
@@ -156,7 +160,39 @@ static void not_movable(unsigned seg, const char *what)
         exit(1);
     }
 }
-int os88_mem_free(unsigned seg) { int i = ci(seg); free(cl_mem[i]); cl_mem[i] = 0; cl_live[i] = 0; n_frees++; return 0; }
+int os88_mem_free(unsigned seg)
+{
+    int i = ci(seg), k, n = cl_run[i] ? cl_run[i] : 1;
+    for (k = 0; k < n; k++) { free(cl_mem[i + k]); cl_mem[i + k] = 0; cl_live[i + k] = 0; cl_run[i + k] = 0; }
+    n_frees++;
+    return 0;
+}
+/* os88_mem_huge - a run of consecutive slots, one 64KB window each (the last
+ * cut at the claim's end), stepped by 0x1000 as a real-mode kernel's is */
+unsigned os88_mem_huge(int kb)
+{
+    int i, k, n = (kb + 63) / 64;
+    if (kb <= 0 || n > NCLAIM) return 0;
+    if (cl_limit && live_claims() + n > cl_limit) return 0;
+    for (i = 0; i + n <= NCLAIM; i++) {
+        for (k = 0; k < n && !cl_live[i + k]; k++) ;
+        if (k == n) break;
+    }
+    if (i + n > NCLAIM) return 0;
+    for (k = 0; k < n; k++) {
+        cl_mem[i + k] = malloc(65536); memset(cl_mem[i + k], 0xA5, 65536);
+        cl_para[i + k] = (k < n - 1 || kb % 64 == 0) ? 4096 : (unsigned)(kb % 64) * 64;
+        cl_live[i + k] = 1; cl_mov[i + k] = 0; cl_run[i + k] = 0;
+    }
+    cl_run[i] = n; n_huge++; n_claims_made++;
+    return (unsigned)(0x1000 * (i + 1));
+}
+unsigned os88_mem_huge_step(void) { return 0x1000; }
+static unsigned long huge_bytes(int i) { int n = cl_run[i]; return (unsigned long)(n - 1) * 65536 + ((unsigned long)cl_para[i + n - 1] << 4); }
+void os88_seg_get(void *dst, unsigned seg, unsigned off, unsigned n)
+{ int c = ci(seg); if ((unsigned long)off + n > 65536) { printf("HARNESS: seg_get past a window\n"); exit(1); } memcpy(dst, cl_mem[c] + off, n); }
+void os88_seg_put(unsigned seg, unsigned off, const void *src, unsigned n)
+{ int c = ci(seg); if ((unsigned long)off + n > 65536) { printf("HARNESS: seg_put past a window\n"); exit(1); } memcpy(cl_mem[c] + off, src, n); }
 /* regrow ALWAYS MOVES here: a caller keeping the old segment reads garbage */
 unsigned os88_mem_regrow_p(unsigned seg, unsigned para)
 {
@@ -171,7 +207,25 @@ unsigned os88_mem_regrow_p(unsigned seg, unsigned para)
     n_regrows++;
     return (unsigned)(0x1000 * (j + 1));
 }
-unsigned os88_mem_regrow(unsigned seg, int kb) { return os88_mem_regrow_p(seg, (unsigned)kb * 64); }
+/* ...and a HUGE claim's regrow, which MOVES as every regrow here does */
+unsigned os88_mem_regrow(unsigned seg, int kb)
+{
+    int i = ci(seg), j, k, n;
+    unsigned s;
+    unsigned long have, want;
+    if (!cl_run[i]) return os88_mem_regrow_p(seg, (unsigned)kb * 64);
+    s = os88_mem_huge(kb);
+    if (!s) return 0;
+    j = ci(s);
+    have = huge_bytes(i); want = (unsigned long)kb * 1024;
+    for (k = 0; (unsigned long)k * 65536 < (have < want ? have : want); k++)
+        memcpy(cl_mem[j + k], cl_mem[i + k], 65536);
+    for (k = 0; k < cl_run[j]; k++) cl_mov[j + k] = cl_mov[i];
+    n = cl_run[i];
+    for (k = 0; k < n; k++) { free(cl_mem[i + k]); cl_mem[i + k] = 0; cl_live[i + k] = 0; cl_run[i + k] = 0; }
+    n_huge--; n_hregrows++;
+    return s;
+}
 unsigned os88_mem_largest_kb(void) { return 200; }
 int  os88_peek(unsigned seg, unsigned off) { return cl_mem[ci(seg)][off & 0xFFFF]; }
 void os88_poke(unsigned seg, unsigned off, int v) { cl_mem[ci(seg)][off & 0xFFFF] = (unsigned char)v; }
@@ -293,6 +347,39 @@ unsigned os88_file_read(const char *name, void *buf, unsigned cap)
     memcpy(buf, f->data, f->size);
     ferr = 0;
     return (unsigned)f->size;
+}
+static unsigned file_hi;
+unsigned os88_file_hi(void) { return file_hi; }
+unsigned os88_file_read_huge(const char *name, unsigned seg, unsigned cap_lo, unsigned cap_hi)
+{
+    struct ffile *f = ffind(fold(std_clus), name);
+    int c = ci(seg);
+    unsigned long cap = (unsigned long)cap_hi << 16 | cap_lo, k;
+    not_movable(seg, "os88_file_read_huge");
+    n_reads++;
+    file_hi = 0;
+    if (!cl_run[c]) { printf("HARNESS: os88_file_read_huge into a claim that is not huge\n"); exit(1); }
+    if (!f) { ferr = OS88_FERR_NOENT; return 0; }
+    if (f->size > cap || f->size > huge_bytes(c)) { ferr = OS88_FERR_BIG; return 0; }
+    for (k = 0; k < f->size; k++) cl_mem[c + (int)(k >> 16)][k & 0xFFFF] = f->data[k];
+    ferr = 0;
+    file_hi = (unsigned)(f->size >> 16);
+    return (unsigned)(f->size & 0xFFFF);
+}
+int os88_file_write_huge(const char *name, unsigned seg, unsigned n_lo, unsigned n_hi)
+{
+    int c = ci(seg);
+    unsigned long n = (unsigned long)n_hi << 16 | n_lo, k;
+    unsigned char *buf;
+    not_movable(seg, "os88_file_write_huge");
+    n_writes++;
+    if (!cl_run[c] || n > huge_bytes(c)) { printf("HARNESS: os88_file_write_huge past its claim\n"); exit(1); }
+    buf = malloc(n ? n : 1);
+    for (k = 0; k < n; k++) buf[k] = cl_mem[c + (int)(k >> 16)][k & 0xFFFF];
+    if (!fput(fold(std_clus), name, buf, n)) { free(buf); ferr = OS88_FERR_DIRFULL; return -1; }
+    free(buf);
+    ferr = 0;
+    return 0;
 }
 int os88_file_write_seg(const char *name, unsigned seg, unsigned count)
 {
@@ -426,6 +513,7 @@ int main(void)
     fput(a0, "S0.BIN", big, 0);      fput(a0, "S127.BIN", big, 127);   fput(a0, "S128.BIN", big, 128);
     fput(a0, "S16384.BIN", big, 16384); fput(a0, "S16385.BIN", big, 16385); fput(a0, "S32768.BIN", big, 32768);
     fput(a0, "S65535.BIN", big, 65535); fput(a0, "S67301.BIN", big, 67301); fput(a0, "S134899.BIN", big, 134899);
+    { unsigned char *z = calloc(8388608, 1); fput(a0, "S8M.BIN", z, 8388608); free(z); }   /* 8MB: past CP/M's reach */
     { static char h100[101]; memset(h100, '.', 100); memcpy(h100, "Hello from A0", 13); fput(a0, "HELLO.TXT", h100, 100); }
     for (i = 0; i < 9; i++) { char nm[13]; sprintf(nm, "F%d.DAT", i); fput(a0, nm, big, 300); }
     std_clus = 0;
@@ -482,14 +570,14 @@ int main(void)
     checkeq(r, 0, "SFIRST *.* finds the first entry (A = 0)");
     n = 1;
     while (bdos(18, FCB) != 0xFF) n++;
-    checkeq((unsigned long)n, 19, "DIR lists the 19 files of A\\0");
+    checkeq((unsigned long)n, 20, "DIR lists the 20 files of A\\0");
     check(n_find > 19, "the first DIR walked the folder (os88_file_find)");
     check(zram[0xED10] == 1 && memcmp(zram + 0xED11, rc_s_name, 11) == 0, "tmpFCB holds the drive and the last name found");
     n_find = 0;
     fcb_set(FCB, 0, "???????????");
     n = (bdos(17, FCB) == 0) ? 1 : 0;
     while (bdos(18, FCB) != 0xFF) n++;
-    checkeq((unsigned long)n, 19, "the second DIR lists the same 19");
+    checkeq((unsigned long)n, 20, "the second DIR lists the same 20");
     checkeq((unsigned long)n_find, 0, "...with NO walk: the cache");
     check_order("the cache is in name order (glob's order: the host name)");
     fcb_set(FCB, 0, "???????????");
@@ -543,14 +631,38 @@ int main(void)
         rc_user = 0;
     }
 
-    /* --- files above 65,535 bytes: listed, refused ------------------------ */
+    /* --- files above 65,535 bytes: ONE HUGE CLAIM each (SPEC.md 74.3.3) ---- */
     fcb_set(FCB, 0, "S67301  BIN");
-    checkeq(bdos(15, FCB), 0xFF, "F_OPEN of a 67,301-byte file is refused (after a refill: the fill's scratch is its own)");
-    check(strstr(last_toast, "S67301.BIN>64K") != 0, "...with the toast naming it");
+    checkeq(bdos(15, FCB), 0, "F_OPEN of a 67,301-byte file works: one huge claim (after a refill: the fill's scratch is its own)");
+    { struct rc_ofile *o = rc_oft_find(0, 0, "S67301  BIN");
+      check(o && o->huge && cl_run[ci(o->seg)] == 2, "...of two 64KB windows");
+      check(o && cl_mov[ci(o->seg)], "...declared movable once the read is done"); }
+    checkeq(zram[FCB + 15], 128, "...rc = 128: extent 0 full");
+    zram[FCB + 33] = 0xFF; zram[FCB + 34] = 1;   /* record 511: window 0's last */
+    checkeq(bdos(33, FCB), 0, "READRAND record 511, window 0's last");
+    check(memcmp(zram + DMA, big + 65408, 128) == 0, "...bytes 65408..65535");
+    zram[FCB + 33] = 0; zram[FCB + 34] = 2;      /* record 512: window 1's first */
+    checkeq(bdos(33, FCB), 0, "READRAND record 512, window 1's first");
+    check(memcmp(zram + DMA, big + 65536, 128) == 0, "...bytes 65536..");
+    zram[FCB + 33] = 525 & 0xFF; zram[FCB + 34] = 525 >> 8;
+    checkeq(bdos(33, FCB), 0, "READRAND record 525 (the last 101 bytes)");
+    check(zram[DMA] == big[67200] && zram[DMA + 100] == big[67300] && zram[DMA + 101] == 0x1A, "...bytes 67200.., then ^Z");
+    zram[FCB + 33] = 526 & 0xFF; zram[FCB + 34] = 526 >> 8;
+    checkeq(bdos(33, FCB), 1, "READRAND record 526 is past the end");
+    checkeq(bdos(16, FCB), 0, "F_CLOSE (unmodified)");
     fcb_set(FCB, 0, "S134899 BIN");
-    checkeq(bdos(15, FCB), 0xFF, "F_OPEN of a 134,899-byte file is refused");
+    checkeq(bdos(15, FCB), 0, "F_OPEN of a 134,899-byte file works");
     checkeq(bdos(35, FCB), 0, "F_SIZE of it answers");
     checkeq((unsigned long)(zram[FCB + 33] | (zram[FCB + 34] << 8) | (zram[FCB + 35] << 16)), 1054, "...1054 records");
+    zram[FCB + 33] = 1053 & 0xFF; zram[FCB + 34] = 1053 >> 8; zram[FCB + 35] = 0;
+    checkeq(bdos(33, FCB), 0, "READRAND record 1053, window 2's");
+    check(zram[DMA] == big[134784] && zram[DMA + 114] == big[134898] && zram[DMA + 115] == 0x1A, "...the last 115 bytes, then ^Z");
+    checkeq(bdos(16, FCB), 0, "F_CLOSE");
+    fcb_set(FCB, 0, "S8M     BIN");
+    last_toast[0] = 0;
+    checkeq(bdos(15, FCB), 0xFF, "F_OPEN of an 8MB file is refused: past CP/M's own reach");
+    check(strstr(last_toast, "S8M.BIN>8MB") != 0, "...with the toast naming it");
+    rc_fs_flush_all();                          /* (the two huge claims back) */
     fcb_set(FCB, 0, "S65535  BIN");
     checkeq(bdos(15, FCB), 0, "F_OPEN of a 65,535-byte file works");
     { struct rc_ofile *o = rc_oft_find(0, 0, "S65535  BIN");   /* read, never
@@ -643,14 +755,10 @@ int main(void)
     hostfile("A/0", "NEW.TXT", &sz, &dat);
     checkeq(sz, 768, "NEW.TXT is 768 bytes: 6 records");
     check(dat && dat[383] == (unsigned char)(14 + 127) && dat[384] == 0 && dat[639] == 0 && dat[640] == 63 && dat[767] == (unsigned char)(63 + 127), "...gap zero, record 5 in place");
-    /* the write past what the model holds */
+    /* records 510, 511 and on: past 65,408 bytes the entry is ONE HUGE CLAIM */
     fcb_set(FCB, 0, "NEW     TXT");
-    zram[FCB + 33] = 0xFF; zram[FCB + 34] = 1;
-    last_toast[0] = 0;
-    checkeq(bdos(34, FCB), 6, "F_WRITERAND record 511 is refused (6)");
-    check(strstr(last_toast, "NEW.TXT>64K") != 0, "...with the toast");
     zram[FCB + 33] = 0xFE; zram[FCB + 34] = 1; dma_pattern(2);
-    checkeq(bdos(34, FCB), 0, "F_WRITERAND record 510 is the last one allowed");
+    checkeq(bdos(34, FCB), 0, "F_WRITERAND record 510, the paragraph claim's last");
     check(n_regrows > 0, "the claim was regrown for record 510 (and MOVED by the harness)");
     checkeq(bdos(16, FCB), 0, "close");
     hostfile("A/0", "NEW.TXT", &sz, &dat);
@@ -660,9 +768,24 @@ int main(void)
     checkeq(bdos(15, FCB), 0, "reopen the 65,408-byte file"); checkeq(zram[FCB + 15], 128, "rc 128");
     checkeq(bdos(35, FCB), 0, "F_SIZE"); checkeq((unsigned long)(zram[FCB + 33] | (zram[FCB + 34] << 8)), 511, "...511 records");
     zram[FCB + 12] = 3; zram[FCB + 32] = 127;    /* record 511: ex 3, cr 127 */
-    last_toast[0] = 0;
-    checkeq(bdos(21, FCB), 0xFF, "F_WRITE seq of record 511 is refused with 0xFF (upstream's failed fwrite)");
-    check(strstr(last_toast, "NEW.TXT>64K") != 0, "...with the toast");
+    dma_pattern(5);
+    checkeq(bdos(21, FCB), 0, "F_WRITE seq of record 511: past 65,408 bytes");
+    { struct rc_ofile *o = rc_oft_find(0, 0, "NEW     TXT");
+      check(o && o->huge, "...the entry ONE HUGE CLAIM now (its bytes copied in)");
+      check(o && cl_mov[ci(o->seg)], "...declared movable"); }
+    zram[FCB + 33] = 1000 & 0xFF; zram[FCB + 34] = 1000 >> 8; zram[FCB + 35] = 0; dma_pattern(6);
+    checkeq(bdos(34, FCB), 0, "F_WRITERAND record 1000, in window 1 (zeros before it)");
+    check(n_hregrows > 0, "...the huge claim regrown for it (and MOVED by the harness)");
+    checkeq(bdos(16, FCB), 0, "close");
+    hostfile("A/0", "NEW.TXT", &sz, &dat);
+    checkeq(sz, 128128, "NEW.TXT is 128,128 bytes: 1,001 records, written back whole");
+    check(dat && dat[65280] == 14 && dat[65408] == 35 && dat[65535] == (unsigned char)(35 + 127) && dat[65536] == 0 && dat[127999] == 0 && dat[128000] == 42 && dat[128127] == (unsigned char)(42 + 127), "...records 510 and 511, zeros to record 1000, record 1000");
+    fcb_set(FCB, 0, "NEW     TXT");
+    checkeq(bdos(35, FCB), 0, "F_SIZE"); checkeq((unsigned long)(zram[FCB + 33] | (zram[FCB + 34] << 8) | (zram[FCB + 35] << 16)), 1001, "...1001 records");
+    rc_fs_flush_all();
+    checkeq(bdos(15, FCB), 0, "reopen the 128,128-byte file: read whole into a huge claim");
+    zram[FCB + 33] = 1000 & 0xFF; zram[FCB + 34] = 1000 >> 8; zram[FCB + 35] = 0;
+    checkeq(bdos(33, FCB), 0, "READRAND record 1000"); check(dma_is(6), "...its bytes");
     checkeq(bdos(16, FCB), 0, "close");
     /* the sequential write over records: extent roll */
     fcb_set(FCB, 0, "SEQ     DAT");
@@ -796,7 +919,7 @@ int main(void)
     fcb_set(FCB, 0, "NEW     TXT"); memcpy(zram + FCB + 17, "OLD     TXT", 11); zram[FCB + 16] = 9;
     checkeq(bdos(23, FCB), 0, "F_RENAME NEW.TXT -> OLD.TXT");
     checkeq(zram[FCB + 16], 0, "...the new name's drive byte is the old one's");
-    hostfile("A/0", "OLD.TXT", &sz, &dat); checkeq(sz, 65408, "OLD.TXT on the disk");
+    hostfile("A/0", "OLD.TXT", &sz, &dat); checkeq(sz, 128128, "OLD.TXT on the disk");
     hostfile("A/0", "NEW.TXT", &sz, &dat); check(sz == (unsigned long)-1, "NEW.TXT gone");
     n = list_file("OLD     TXT", 0); checkeq((unsigned long)n, 1, "the cache says OLD.TXT");
     n = list_file("NEW     TXT", 0); checkeq((unsigned long)n, 0, "...and no NEW.TXT");
@@ -914,12 +1037,12 @@ int main(void)
      * toast is under the lock (immediate) ------------------------------- */
     reset_machine();
     rc_full = 1;
-    fcb_set(FCB, 0, "S67301  BIN");
-    checkeq(bdos(15, FCB), 0xFF, "open of a >64K file refused");
-    check(strcmp(last_toast, "RunCPM: S67301.BIN>64K") == 0, "...toasted");
-    check(strstr(con, "\r\nRunCPM: S67301.BIN>64K\r\n") != 0, "...AND printed on the terminal while fullscreen (a toast is under a fullscreen window)");
+    fcb_set(FCB, 0, "S8M     BIN");
+    checkeq(bdos(15, FCB), 0xFF, "open of an 8MB file refused");
+    check(strcmp(last_toast, "RunCPM: S8M.BIN>8MB") == 0, "...toasted");
+    check(strstr(con, "\r\nRunCPM: S8M.BIN>8MB\r\n") != 0, "...AND printed on the terminal while fullscreen (a toast is under a fullscreen window)");
     con_clear(); rc_full = 0;
-    fcb_set(FCB, 0, "S67301  BIN"); bdos(15, FCB);
+    fcb_set(FCB, 0, "S8M     BIN"); bdos(15, FCB);
     check(con[0] == 0, "...and only while fullscreen");
     { struct ffold *a6 = mkfold(a->clus, "6"); fput(a6, "A-B.TXT", "x", 1); fput(a6, "A.TXT", "y", 1); fput(a6, "A", "z", 1); fput(a6, "A.B", "w", 1); }
     n_toast_locked = 0; n_flush = 0; rc_full = 1; con_clear();

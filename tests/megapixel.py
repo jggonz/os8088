@@ -160,17 +160,19 @@ class Pixel(object):
 
     def __init__(self, box, pkg):
         self.box = box
-        self.map = os88sym._parse_map(os.path.join(ROOT, "build",
-                                                   "pixel.map"))[0]
-        # the map is build/pixel.bin's, and the guest runs `make mega`'s
-        # PIXEL.O88 - the same package with the arm's parts: refuse a map
-        # of another build rather than read its bss at the wrong offsets
+        # the map of the package the guest runs: the shipped build's
+        # (build/pixel.bin), or `make mega`'s arm, whose resident is its
+        # own since MEGA-HUGE-PLAN 3 (build/megak/apps/pixel.bin, SPEC.md
+        # 106.8.1) - refuse a map of another build rather than read its bss
+        # at the wrong offsets
+        d = os.path.dirname(pkg)
+        self.map = os88sym._parse_map(os.path.join(d, "pixel.map"))[0]
         o88 = open(pkg, "rb").read(12)
-        pbin = open(os.path.join(ROOT, "build", "pixel.bin"), "rb").read(12)
+        pbin = open(os.path.join(d, "pixel.bin"), "rb").read(12)
         if o88[8:12] != pbin[8:12]:
-            sys.exit("megapixel: %s is not build/pixel.bin's package "
+            sys.exit("megapixel: %s is not %s/pixel.bin's package "
                      "(image and bss %r, %r) - `make mega` first"
-                     % (pkg, o88[8:12], pbin[8:12]))
+                     % (pkg, d, o88[8:12], pbin[8:12]))
 
     def read(self, label, n, plus=0):
         return self.box.pkg_read("PiXEL", self.map[label] + plus, n)

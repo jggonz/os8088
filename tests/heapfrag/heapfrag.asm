@@ -55,13 +55,16 @@ HF_DMAKB  equ 60              ; check 14's page-constrained block: the head
                               ; is the WHOLE of it and a head must end inside
                               ; one 64KB page, so 60KB is the largest that can
                               ; be asked for at all
+%if HF_DMAKB * 64 + 127 > 0x1000
+  %error "check 14's block must fit the page from D, whose offset is < 80h"
+%endif
 HF_MINKB  equ 64              ; below this there is no room to build a comb
                               ; that proves anything, and the suite says so
                               ; rather than passing vacuously
 HF_ROWS   equ 18                ; ...15 to 18 at SPEC.md 66.4.3
 HF_RROWS  equ 4                 ; ...and the KEY-driven region suite's own
 HF_NPLUG  equ 4                 ; check 13's plugs at most (hf_ceilask)
-HF_BSS_TOTAL equ 176
+HF_BSS_TOTAL equ 188
 
 ; -----------------------------------------------------------------------------
 ; hf_entry - just the window; the suite runs on the first paint (see the header)
@@ -803,100 +806,244 @@ hf_run:
     ; it, over a comment saying such a block was "unrelocatable in principle".
     ; It is a PLACEMENT constraint, and this is the placement asserted.
     ;
-    ; THE HEAD IS THE WHOLE BLOCK, which is what makes the check sharp: a
-    ; block of P paragraphs whose whole length must end inside one 64KB page
-    ; can only sit at a base whose page offset is <= 0x1000 - P, and every
-    ; heap base is a multiple of 64 paragraphs (kernel.asm guard 6b) - so of
-    ; the 64 offsets a destination can have, only a few are legal. A
-    ; compaction that ignored MC_DMA would land on a legal one by luck and
-    ; not by design, and the arithmetic below says which happened.
+    ; THE FIXTURE IS BUILT, NOT FOUND (KERN-MEGA-PLAN 14.184). This check used
+    ; to claim the block above the big claim, free the big claim under it and
+    ; ask for one KB past the largest run - and whether that ask was fundable
+    ; was the LAYOUT's luck: on a 1MB kern_mega the block landed at 7000h
+    ; (bumped off 6C00h, its 42KB head straddling), the hole's floor was
+    ; 5600h, so the only legal landing, 6000h, left 40KB + 87KB where 104KB
+    ; already stood - no move could fund the ask, the compactor moved the
+    ; block page-safely and refused rightly, and the check failed on a
+    ; correct kernel. It would have failed a kernel that IGNORED MC_DMA too
+    ; (5600h is illegal there), so it was red both ways and said nothing.
+    ;
+    ; So the scenario is laid out from the big claim's own base B, in
+    ; paragraphs, every place B + a whole number of KB (every claim this
+    ; check makes is whole KB, so every edge it makes is one of those):
+    ;
+    ;   F = the first such place at or past B whose page offset is >= F00h -
+    ;       where the ascending pass's fill point will stand. No block of
+    ;       more than 4KB may START there: its head would cross the page.
+    ;   G = the next 64KB page's floor, the only legal landing past F
+    ;   D = the first such place past G - where the block is claimed
+    ;
+    ; The big claim is regrown to end at D (the plug under F and the spacer
+    ; F..D, one claim), the block claimed bottom-up lands at D, and the big
+    ; claim shrinks back to end at F: the block now stands over a hole it can
+    ; slide into only as far as G - which still opens the run above it by
+    ; D - G. THE ASK is one KB past the largest run with nothing of ours
+    ; movable, every block of ours but this one pinned through it, so only
+    ; this block's move funds it, and the landing is read back as an address.
+    ; A compaction that ignored MC_DMA moves the block to F, ACROSS a page,
+    ; and this check reads the crossing: that is the red, deterministic rather
+    ; than one legal offset in a few (measured: offset F20h, on kern_big and
+    ; kern_mega). One that pinned MC_DMA again would refuse the ask.
+    ;
+    ; AND mem_avail's ANSWER WITH THE BLOCK MOVABLE IS CLAIMED FIRST (SPEC.md
+    ; 66.4.3.1, KERN-MEGA-PLAN 14.185) - exactly that many KB, given straight
+    ; back, the outcome in hf_dmaag (1 granted, 2 refused) for the harness to
+    ; assert beside check 14. Until 14.185 the plan (mem_avail_lvl_x's inline
+    ; mem_cp_both) packed a floor mover onto the fill point WITHOUT
+    ; mem_cp_dest's page bump, so here it promised the block landing at F -
+    ; G - F more than the run delivers - 48K against 45K on kern_mega, 100K
+    ; against 97K on kern_big - and the claim was REFUSED: the dangerous
+    ; direction, a claimant shedding its caches on a promise. It is claimed
+    ; BEFORE check 14's own ask because after that the block has moved and
+    ; any plan is right; the move it makes is then the one 14 reads (an
+    ; ignored MC_DMA still lands it at F, across the page, and a re-pinned
+    ; MC_DMA still refuses 14's ask), so 14 is red and green as before.
+    ;
+    ; A ROOF goes on first, a plain top-down claim the block's size: on
+    ; kern_mega a ring is sent to the top end of the heap when only rings and
+    ; the kernel stand above the place a top-down claim would take
+    ; (mem_ringtop, 14.166), and a block that came in by the top door is a
+    ; barrier to the ascending pass. With the roof standing over that place
+    ; the top end is not free for it, on every kernel alike.
     ;
     ; The direction of error is why this reads an ADDRESS and not a flag: a
     ; block landing across a page is answered by the 8237 wrapping to the
     ; start of its page and moving the WRONG MEMORY, silently.
 .dma:
+    mov byte [hf_dmawhy], 1     ; 1: no big claim, or no room to say anything
+    mov byte [hf_dmaag], 0      ; (the avail claim not asked yet)
     cmp word [hf_bigseg], 0     ; the hole this pass needs is the big claim's,
-    je .dmano                   ; and without one there is nothing to open
+    jne .dmaok0                 ; and without one there is nothing to open
+    jmp .dmano
+.dmaok0:
     call OSAPI_MEM_AVAIL        ; AX = largest run KB
     mov dx, ax                  ; (DX = the run, the block's other ceiling)
     mov cl, 2
     shr ax, cl                  ; a quarter of it...
     mov cx, [hf_s]
-    inc cx                      ; ...and MORE than one comb block: the gaps
-    cmp ax, cx                  ; the comb left are hf_s KB each, and a block
-    jae .dmabig                 ; that fits one lands there first-fit - below
-    mov ax, cx                  ; HF_PIN when the layout puts a gap there, where
-.dmabig:                        ; moving it can merge nothing with the hole
-                                ; freed above the pin (kern_mega's merged
-                                ; layout: claimed at 4000 under a pin at 4860,
-                                ; and the ask was unfundable, rightly refused)
+    inc cx                      ; ...and MORE than one comb block, so a gap
+    cmp ax, cx                  ; the comb left cannot take it first-fit
+    jae .dmabig                 ; below the place the fixture names
+    mov ax, cx
+.dmabig:
     cmp ax, HF_DMAKB            ; ...capped at HF_DMAKB: the head has to fit
-    jbe .dmasz                  ; inside ONE 64KB page, so the block does too
-    mov ax, HF_DMAKB
+    jbe .dmasz                  ; inside ONE 64KB page from D, whose offset
+    mov ax, HF_DMAKB            ; is under 80h
 .dmasz:
     cmp ax, dx
-    ja .dmano                   ; no run holds it: nothing to say
+    jbe .dmasz2
+    jmp .dmano                  ; no run holds it: nothing to say
+.dmasz2:
     cmp ax, 4
-    jb .dmano                   ; too small to say anything
+    jae .dmasz3
+    jmp .dmano                  ; too small to say anything
+.dmasz3:
     mov [hf_hik], ax
+    mov dx, [hf_bigseg]
+    call hf_lin                 ; AX = B
+    mov si, ax                  ; SI = B, for the rest of the check
+    mov bx, ax
+.dmaf:                          ; F: B + n KB with a page offset >= F00h
+    mov cx, bx
+    and ch, 0x0F
+    cmp cx, 0x0F00
+    jae .dmaf1
+    add bx, 64
+    jmp short .dmaf
+.dmaf1:
+    mov [hf_dmaf], bx
+    and bx, 0xF000
+    add bx, 0x1000              ; G, the next page's floor
+    mov ax, si
+    and ax, 63
+    add bx, ax                  ; ...plus B's own place in a KB, so it is one
+    add bx, 64                  ; of B's: D, the first past G
+    mov [hf_dmad], bx
+    mov byte [hf_dmawhy], 2     ; 2: the plug and spacer did not stand at B
+    mov ax, bx
+    sub ax, si
+    mov cl, 6
+    shr ax, cl                  ; KB from B to D
+    mov dx, [hf_bigseg]
+    call OSAPI_MEM_REGROW
+    jc .dmafix
+    mov [hf_bigseg], dx         ; take DX (SPEC.md 50.3: a grow that moved)
+    call hf_lin
+    cmp ax, si
+    jne .dmafix                 ; it moved: B is not where the plan began
+    mov byte [hf_dmawhy], 3     ; 3: the roof was refused
+    mov ax, [hf_hik]
+    call OSAPI_MEM_CLAIM_HI     ; born pinned, a barrier to both passes
+    jc .dmafix
+    mov [hf_roof], dx
+    mov byte [hf_dmawhy], 4     ; 4: the block was refused
+    mov ax, [hf_hik]
     mov cx, ax                  ; CX = KB of head = ALL of it
     call OSAPI_MEM_CLAIM_DMA
-    jc .dmano
+    jc .dmafix
     mov di, HF_N                ; the slot check 13 handed back
     mov bx, di
     shl bx, 1
     mov [bx+hf_base], dx
     call hf_para
     mov [bx+hf_base0], ax
-    mov ax, hf_reloc
-    call OSAPI_MEM_MOVABLE      ; DX is still its base
-    jc .dmabad
-    push word [hf_s]
+    mov [hf_dmaat], ax
+    mov byte [hf_dmawhy], 5     ; 5: the block did not land at D
+    cmp ax, [hf_dmad]
+    jne .dmafix
+    mov ax, [hf_s]
+    mov [hf_sv], ax
     mov ax, [hf_hik]
     mov [hf_s], ax
-    call hf_fill                ; DI = HF_N
-    mov dx, [hf_bigseg]         ; ...and NOW open the hole under it
-    call OSAPI_MEM_FREE
+    push si
+    call hf_fill                ; DI = HF_N (it spends SI)
+    pop si
+    mov byte [hf_dmawhy], 6     ; 6: the big claim did not shrink back to F
+    mov ax, [hf_dmaf]
+    sub ax, si
+    mov cl, 6
+    shr ax, cl                  ; KB from B to F
+    mov dx, [hf_bigseg]
+    or ax, ax
+    jnz .dmashr
+    call OSAPI_MEM_FREE         ; F is B: no plug at all
     mov word [hf_bigseg], 0
-    call hf_availp
-    inc ax                      ; one KB more than the largest single run, so
-    call OSAPI_MEM_CLAIM        ; only a merge can fund it - and the block in
-    jc .dmapop                  ; the way is the page-constrained one
+    jmp short .dmaask
+.dmashr:
+    call OSAPI_MEM_REGROW       ; a shrink, in place, always (SPEC.md 50.3)
+    jc .dmarst
+    mov [hf_bigseg], dx
+.dmaask:
+    mov byte [hf_dmawhy], 7     ; 7: the block could not be declared
+    xor ax, ax
+    call hf_setrloc             ; nothing of ours movable...
+    call OSAPI_MEM_AVAIL
+    mov [hf_dmaap], ax
+    mov dx, [hf_base + HF_N*2]
+    mov ax, hf_reloc
+    call OSAPI_MEM_MOVABLE      ; ...and then the block alone
+    jc .dmarst
+    call OSAPI_MEM_AVAIL        ; what mem_avail says its move buys...
+    mov [hf_dmaaw], ax
+    mov byte [hf_dmaag], 2      ; ...and a claim of EXACTLY that: 2 refused,
+    call OSAPI_MEM_CLAIM        ; the promise the plan could not keep
+    jc .dmaag
+    call OSAPI_MEM_FREE         ; DX: straight back
+    mov byte [hf_dmaag], 1      ; 1 granted
+.dmaag:
+    mov ax, [hf_dmaap]          ; THE ASK: one KB past the run with nothing
+    inc ax                      ; of ours moving, so only this block's move
+                                ; funds it
+    mov byte [hf_dmawhy], 8     ; 8: the ask was refused
+    call OSAPI_MEM_CLAIM
+    jc .dmarst
     call OSAPI_MEM_FREE         ; DX still: give it straight back
+    mov byte [hf_dmawhy], 9     ; 9: the contents did not come with it
     mov di, HF_N
-    call hf_check               ; the contents came with it
-    pop word [hf_s]
-    jc .dmabad
+    call hf_check
+    jc .dmarst
+    mov byte [hf_dmawhy], 10    ; 10: it did not move
     mov bx, HF_N*2
     call hf_para
+    mov [hf_dmaat], ax
     cmp ax, [bx+hf_base0]
-    je .dmabad                  ; it did not move: the run proves nothing
+    je .dmarst
+    mov byte [hf_dmawhy], 11    ; 11: it landed with its head across a page
     and ax, 0x0FFF              ; paragraphs into its 64KB physical page...
     mov [hf_dmaoff], ax
-    mov cx, [hf_hik]
-    mov bx, cx
+    mov bx, [hf_hik]
     mov cl, 6
     shl bx, cl                  ; KB -> paragraphs
     add ax, bx
     cmp ax, 0x1000              ; ...and the whole head still ends inside it
-    ja .dmabad
+    ja .dmarst
+    mov byte [hf_dmawhy], 0
+    mov ax, [hf_sv]
+    mov [hf_s], ax
     call hf_pass
     jmp short .dmadone
-.dmapop:
-    pop word [hf_s]
-.dmabad:
-    call hf_fail
-    jmp short .dmadone
+.dmarst:
+    mov ax, [hf_sv]
+    mov [hf_s], ax
+.dmafix:
 .dmano:
     call hf_fail
 .dmadone:
+    mov ax, hf_reloc
+    call hf_setrloc             ; ...ours movable again, bar HF_PIN
     mov bx, HF_N*2
     cmp word [bx+hf_base], 0
-    je .done
+    je .dmar
     mov dx, [bx+hf_base]
     call OSAPI_MEM_FREE
     mov word [bx+hf_base], 0
-
+.dmar:
+    mov dx, [hf_roof]
+    or dx, dx
+    jz .dmab
+    call OSAPI_MEM_FREE
+    mov word [hf_roof], 0
+.dmab:
+    mov dx, [hf_bigseg]         ; the big claim's job is over, as before
+    or dx, dx
+    jz .avail                   ; (on to 15 either way: this used to be a je
+    call OSAPI_MEM_FREE         ; .done when the block was never claimed,
+    mov word [hf_bigseg], 0     ; which skipped 15 to 18 and recorded none)
+.avail:
     ; --- 15. mem_avail's ANSWER IS CLAIMABLE (SPEC.md 66.4.3.1) -------------
     ; The one gate that guards the whole combined plan, and the only direction
     ; of error that matters: mem_avail now models BOTH passes, so an arithmetic
@@ -1012,29 +1159,27 @@ hf_run:
 ; move rebases - so a region that moved read as one that did not. DS, not
 ; CS: SEG_LIN takes the claim's DATA selector, and in real mode they agree
 hf_mypara:
-    push bx
-    push cx
     push dx
     mov dx, ds
-    mov bl, SEG_LIN
-    call OSAPI_SEG              ; DX:AX = the linear base
-    mov cl, 4
-    shr ax, cl
-    mov cl, 12
-    shl dx, cl
-    or ax, dx
+    call hf_lin
     pop dx
-    pop cx
-    pop bx
     ret
 
 hf_para:
+    push dx
+    mov dx, [bx+hf_base]
+    call hf_lin
+    pop dx
+    ret
+
+; hf_lin - DX = a claim of ours (a segment, or kern_mega's selector) -> AX =
+; the physical paragraph it starts at. Every other register kept
+hf_lin:
     push bx
     push cx
     push dx
-    mov dx, [bx+hf_base]
     mov bl, SEG_LIN
-    call OSAPI_SEG
+    call OSAPI_SEG              ; DX:AX = the linear base
     mov cl, 4
     shr ax, cl
     mov cl, 12
@@ -1385,6 +1530,16 @@ hf_rmax    equ os88_image_end + 158  ; word: ...and mem_avail_max
 hf_ravwake equ os88_image_end + 160  ; word: ...and plain avail on the wake
 hf_nplug   equ os88_image_end + 162  ; word: check 13's plugs held
 hf_plug    equ os88_image_end + 164  ; HF_NPLUG words: ...and what they are
+hf_roof    equ os88_image_end + 172  ; word: check 14's roof (top-down, pinned)
+hf_dmaap   equ os88_image_end + 174  ; word: check 14's mem_avail, ours pinned
+hf_dmaaw   equ os88_image_end + 176  ; word: ...and with only its block movable
+hf_dmaf    equ os88_image_end + 178  ; word: F, the fill point (paragraph)
+hf_dmad    equ os88_image_end + 180  ; word: D, where the block is claimed
+hf_dmaat   equ os88_image_end + 182  ; word: where it stood when last read
+hf_dmawhy  equ os88_image_end + 184  ; byte: check 14's stage, 0 = PASS
+hf_dmaag   equ os88_image_end + 185  ; byte: hf_dmaaw claimed: 1 granted,
+                                     ; 2 refused, 0 never asked (14.185)
+hf_sv      equ os88_image_end + 186  ; word: hf_s, kept while check 14 borrows it
 %if 164 + 2 * HF_NPLUG > HF_BSS_TOTAL
   %error "hf_plug runs past HF_BSS_TOTAL"
 %endif

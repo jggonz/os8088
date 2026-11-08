@@ -177,9 +177,11 @@ typed for you every time CP/M starts.
   the program ends. If you close the window while a program still has a
   changed file open, that change is lost. Leave the program first, or type
   `EXIT`.
-- Files larger than 65,535 bytes cannot be opened, and a program can have at
-  most eight files open at once. This is why Zork, The Hitchhiker's Guide to
-  the Galaxy and Colossal Cave Adventure are not on the disks.
+- An open file is held whole in memory, so a large file needs that much free
+  memory: if there is not enough, the program is told the file cannot be
+  opened, and the menu bar says **RunCPM RAM?** with the file's name. A file
+  of 8MB or more is past CP/M's own reach and is never opened. A program can
+  have at most eight files open at once.
 - A folder on the floppy cannot grow, so each user area was made with room
   for new files. A full disk refuses to save, and RunCPM says so on the menu
   bar.
