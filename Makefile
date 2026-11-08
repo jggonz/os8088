@@ -2393,7 +2393,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm \
         stories zdisk ztest zh zhboot zcheck zgfx zpic zgfxpic zscreens xt-z 386-z \
         worddisk wordcheck xt-word 386-word \
         scribe scribedisk \
-        cc-note chello covl cfsx pkgrun pkgbig pkgfmt cword cworddisk 386-c-word runcpm runcpmdisk \
+        cc-note chello covl cfsx chuge pkgrun pkgbig pkgfmt cword cworddisk 386-c-word runcpm runcpmdisk \
         paccman paccmandisk pmcbandbench xt-paccman 386-paccman \
         xt-pixelstein xt-pixelstein-herc xt-pixel 386-pixel \
         xt-isotron xt-isotron-cga xt-isotron-herc xt-isotron-ega \
@@ -10342,6 +10342,44 @@ $(BUILD)/cfsxnoovl.img: $(BUILD)/cfsx.o88 tools/os88disk.py
 #   make test TESTAPPS=build/cfsx.img        boots with it in B:
 #   make test TESTAPPS=build/cfsxnoovl.img   ...and the refusal arm
 cfsx: $(BUILD)/cfsx.img $(BUILD)/cfsx360.img $(BUILD)/cfsxnoovl.img
+
+# --- CHUGE, the C SDK's big-memory gate (ON DEMAND: `make chuge`) -------------
+# docs/plans/MEGA-HUGE-PLAN.md F3, F6, F7 from C: os88_mem_huge's BX, the ask
+# for a 32KB-window claim, the KB doors' answer with the pool counted, the
+# 32-bit file calls into and out of a huge claim, a read-at into a claim, and
+# the bulk copy between a claim and DS. Lines on E9 and in CHUGE.TXT
+# (tests/chuge/chuge.c). The FOURTH tests/ C package, and still open-coded:
+# chello's four rules with its name changed, no overlay and no disk list -
+# CC_PACKAGE_AT would buy a template for a shape only two of the four share.
+# tests/chuge.py is its row, under Bochs (kern_mega) and MartyPC (kern_big).
+$(BUILD)/chuge.raw.asm: tests/chuge/chuge.c $(CC_RUNTIME) | $(BUILD) cc-toolchain
+	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S \
+		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) \
+		tests/chuge/chuge.c -o $@
+
+$(BUILD)/chuge.gen.asm: $(BUILD)/chuge.raw.asm tools/cc8086.py tools/ccpeep.py $(CC_PEEPSTAMP)
+	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME) $(CC_PEEPARG)
+
+$(BUILD)/chuge.bin: tests/chuge/chuge.asm $(BUILD)/chuge.gen.asm $(CC_RUNTIME) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ -I tests/chuge/ \
+		-o $@ tests/chuge/chuge.asm
+	@echo "chuge: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/chuge.o88: $(BUILD)/chuge.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $< -o $@
+
+$(BUILD)/chuge.img: $(BUILD)/chuge.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/chuge.o88
+	@python3 tools/os88disk.py --verify $@
+
+# ...and the XT's: MartyPC's machines have 360KB drives, and the kern_big leg
+# writes its 136KB file onto it
+$(BUILD)/chuge360.img: $(BUILD)/chuge.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/chuge.o88
+	@python3 tools/os88disk.py --verify $@
+
+#> [Gate disks] chuge :: the C SDK's big-memory gate (tests/chuge, MEGA-HUGE-PLAN F3/F6/F7)
+chuge: $(BUILD)/chuge.o88 $(BUILD)/chuge.img $(BUILD)/chuge360.img
 
 # --- PKGRUN, OSAPI_PKG_START's gate (ON DEMAND: `make pkgrun`) -----------------
 # SPEC.md 21.5: run a package image that is already in memory. The gate is a

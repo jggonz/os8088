@@ -2077,8 +2077,14 @@ dskw_rbody:
 .czfb:
     call dskw_tolo              ; a conventional claim decodes as it always
     jnc .czfbl                  ; did, by paragraph - its registers loaded
-    jmp .czbad                  ; through scratch selectors (KERN-MEGA-MEMORY-
-.czfbl:                         ; PLAN MC7.4)
+    mov cx, ax                  ; through scratch selectors (KERN-MEGA-MEMORY-
+    or cx, dx                   ; PLAN MC7.4). ABOVE 1MB A PLAIN FILE (R = 0)
+    jz .czhip                   ; past the window is read by the selector
+    jmp .czbad                  ; arm's own walk, a window on at each carry
+.czfbl:                         ; (dskw_hicarry - the write's since MC7):
+                                ; it was refused FERR_IO, so no file over
+                                ; 64KB reached an OSAPI_MEM_HUGE claim in the
+                                ; pool (MEGA-HUGE-PLAN F7, Frotz's story)
     mov cx, [dskw_seg]
     mov [dskw_czseg], cx
 .czlo:
