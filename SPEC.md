@@ -99283,10 +99283,10 @@ under one run of selectors stepped by 8 (`mega_hugebf`). Each piece is the
 record it would be alone and moves alone; `OSAPI_MEM_FREE` of DX frees both,
 and it does not regrow. **The two pieces are not contiguous**, so a bridge is
 one buffer only to a program that WALKS IT BY ITS STEP - window k is DX + 8k;
-the kernel's own services that take the claim are the other half
-(docs/plans/MEGA-HUGE-PLAN.md F1). A program that computes into the claim any other way
-(base arithmetic, `OSAPI_SEG`'s SEG_SUB or SEG_LIN plus an offset) is right
-only on a claim that did not bridge.
+`OSAPI_SEG` and the file doors follow the pieces (below, docs/plans/KERN-MEGA-PLAN.md
+14.169, MEGA-HUGE-PLAN F1); base arithmetic of the program's own - a sum on a
+selector, or `SEG_LIN` of the first window plus an offset - is right only on
+a claim that did not bridge.
 
 **A window every 16KB or 32KB NEVER bridges** (MEGA-HUGE-PLAN F3), and that is
 the design rather than a gap: such windows are 64KB long and overlap, so for
@@ -99306,6 +99306,7 @@ names the claim it is for** - set it:
 |---|---|
 | 0 | the better of the pool alone, the heap alone and the bridge |
 | 8000h, 4000h | the better of the pool alone and the heap alone: no bridge (above). Until MEGA-HUGE-PLAN F3 the ask ignored BX and answered the bridge's figure for a claim that was then refused |
+| `HUGE_NOBRIDGE` (2) | the better of the pool alone and the heap alone - the claim's own answer when it is asked with `HUGE_NOBRIDGE` (below, KERN-MEGA-PLAN 14.169) |
 | `MEMH_AVAIL` (1) | **the KB doors' question, with the POOL counted** (MEGA-HUGE-PLAN F6, `mega_availf`): AX = the largest claim `OSAPI_MEM_CLAIM` (or `OSAPI_MEM_P` with no head) serves THIS caller - the heap's, or the pool's best run up to 64KB, the better; BX = the total free KB it can claim from, the heap's plus the pool's free (`mx_caps`, a cache counted free), 0FFFFh at most; DX = the pool's best run in KB, 0 when the pool owner rule refuses the caller. `OSAPI_MEM_AVAIL` and `MEMP_AVAIL` count conventional memory alone on kern_mega, as they always have - while an `OS88_HIGHMEM` package's claims of 64KB or less go above 1MB first (§50.3.7) - so a package that sizes or refuses from them asks this first and falls back to them where it answers CF = 1 |
 
 kern_mega in real mode answers the heap's figures (`MEMH_AVAIL`: exactly
@@ -99313,6 +99314,65 @@ kern_mega in real mode answers the heap's figures (`MEMH_AVAIL`: exactly
 (a claim of 0KB, refused before anything is shed): there the conventional heap
 is the whole answer, and `OSAPI_MEM_AVAIL` gives it. tests/megahuge's legs 7
 and 8 are the gate for BX = 8000h and `MEMH_AVAIL` (MEGA-HUGE-PLAN F3, F6).
+
+**The cut** (docs/plans/KERN-MEGA-PLAN.md 14.169, MEGA-HUGE-PLAN F1, F2,
+F9). Two runs of memory have a CUT between them, after the pool piece's last
+window, and the rules are:
+
+- **WHERE THE CUT IS: out BX = the pool piece's windows** when a bridge was
+  given, so window BX - DX + 8 x BX - is the conventional piece's first and
+  the cut is at BX x 64KB into the claim. BX comes back as it went for a
+  claim that is one run, so a caller asks with BX = 0 (or HUGE_NOBRIDGE) and
+  reads 0 as "one run".
+- **BX = HUGE_NOBRIDGE (2, bit 1) refuses a bridge**: the claim is one run or
+  refused, and the AX = 0 ask answers the better of the two alone. For a
+  caller whose own bookkeeping assumes one run of memory - WIN16's virtual
+  paragraphs (§124.31.3), whose `w16_vclaim` asks it. kern_big and kern_small
+  never bridge and ignore the bit (BX kept).
+- **The step walk is right by construction**: window k is DX + 8k, its base
+  in its piece. The byte at offset X of the claim is at offset X & FFFFh of
+  window X >> 16 - so its LINEAR address is `SEG_LIN` of THAT window plus X &
+  FFFFh, never the first window's base plus X, which on a bridge is pool
+  memory past the cut (another program's, or free). That rule is the same
+  arithmetic on every kernel (CX = 1000h there), so code written to it needs
+  no test of where it runs.
+- **`OSAPI_SEG` follows the pieces** (§50.6.11, `mega_bfmap`): `SEG_SUB`,
+  `SEG_SUBC`, `SEG_AT` and `SEG_HND` from a selector in the pool piece at an
+  offset past the cut answer the same offset past the cut in the
+  conventional piece - the claim's next byte, as in one run - and a reach
+  that would cross the cut is CUT SHORT at it, because no one segment is two
+  pieces: a read past such a window faults rather than reading the pool
+  memory after the piece. Past the conventional piece's end too: refused, AX
+  = 5 (`SEG_AT`: DX = 0, its refusal). `SEG_TILE` maps its first tile and its
+  last and is REFUSED (AX = 3) unless one piece holds every tile - a tile is
+  64KB of one run, and the last may be cut at the claim's end but not at the
+  cut. `SEG_AIM` already refuses an offset past its BLOCK's end, and a bound
+  window's block is one piece.
+- **`OSAPI_FILE_READ` and `OSAPI_FILE_WRITE` step across it**: the selector
+  arm bounds a run by its window's LIMIT, not by the offset's 64KB wrap
+  (`dskw_hileft`), moves a sector on before it would cross that limit
+  (`dskw_hifix`), and stages a sector that straddles the cut - a buffer whose
+  offset from it is not a multiple of 512 - in two parts (`dskw_hin1`,
+  `dskw_hinext`), so one call across the cut lands each byte in its piece. A
+  PLAIN read of more than 64KB from the offset into a selector above 1MB is
+  carried by the same stepping (it was refused before, `.czfb`); a packed
+  file still decodes into one window (§20.14).
+- **The conventional piece is born pinned, as every claim is (§66), and is
+  taken from the TOP** - the heap's end, never the fill point, where what
+  the bottom stack sheds under it would cut the free run in two (KERN-MEGA-PLAN
+  14.166's rule: a pinned block never sits in the middle of a region).
+  `OSAPI_MEM_MOVABLE` of the bridge's DX declares that piece (the pool piece
+  moves whatever is declared, as every unpinned pool block does): the proc is
+  called for its moves, and every selector over it follows them, so a proc
+  that is a `ret` is the usual one.
+
+MEGABRDG (tests/megabrdg, `megabrdg` under Bochs at 4MB and `megabrdg86` on
+86Box's 640K + 384K) is the gate: it claims the largest bridge with an 80KB
+conventional claim standing under it, finds the cut by the walk, and reads a
+pattern back every way above at 256 bytes before the cut and 1230h and
+10040h past it, writes and reads a file across it aligned and at odd
+offsets, and asserts BX, HUGE_NOBRIDGE, the declaration and the piece's
+place.
 
 MEGAHI (tests/megahi) is the gate under Bochs at 4MB: 200KB in four pieces,
 `MEGAHI: huge 2844 step 0008 ok` - each piece written and read back, the
@@ -100727,6 +100787,14 @@ On kern_mega in protected mode (`mega_segf`, `.mega`):
   claim's first 64KB has a CS - RealDMG's recompiler part and its extra cache
   tiers (docs/plans/completed/KERN-MEGA-MEMORY-PLAN.md 8.1); it is a block's or
   nothing (CF = 1, AX = 3). A block's free takes both halves.
+- **A BRIDGED claim** (§50.3.5, docs/plans/KERN-MEGA-PLAN.md 14.169) is two
+  runs of memory, and a base plus an offset past its pool piece's end - the
+  cut - is no address in it. `SEG_SUB`, `SEG_SUBC`, `SEG_AT`, `SEG_HND` and
+  `SEG_TILE` asked from a selector in the pool piece map such an offset into
+  the conventional piece and cut a reach short at the cut (`mega_bfmap`);
+  `SEG_TILE` across the cut, and anything past the conventional piece's end,
+  is refused. `SEG_LIN` answers one selector's base: a bridge's byte X is
+  `SEG_LIN` of window X >> 16 plus X & FFFFh.
 - A **BOUND window** (`SEG_BWIN`) is a fresh descriptor - never a match, so
   re-aiming it moves nobody else's - based in a claim or a pool block **of
   the caller's own** (`mega_bown`, asked before the block is flagged: a
@@ -241553,7 +241621,13 @@ what the numbers mean**:
     and which the map `SEG_SUB`s into past 64 KB as it does below. That
     covers the program's image, its PSP and resources, and the arenas:
     everything the program is handed a selector into. Where the pool cannot
-    hold one, the kernel puts it in conventional memory as before.
+    hold one, the kernel puts it in conventional memory as before - and
+    NEVER ACROSS BOTH: the huge ask is `HUGE_NOBRIDGE` (§50.3.5,
+    docs/plans/KERN-MEGA-PLAN.md 14.169), because the map's virtual
+    paragraphs, `w16_pvirt`'s linear bases and `SEG_TILE`'s huge pointers
+    all assume one run of memory, and a block across a bridge's cut would be
+    cut short there. A block neither region holds alone is refused (a
+    GlobalAlloc of 0), which `win16megahugega` holds on a 2MB machine.
   - The two things that needed them low:
     - a window `AllocSelector`, `SetSelectorBase`, `SetSelectorLimit`,
       `PrestoChangoSelector` and DPMI 0000h/0007h/0008h make is a

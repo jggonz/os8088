@@ -15310,3 +15310,91 @@ The C packages that call the avail thunks grow by the ask and its fallback
 refused`, MEMH_AVAIL `0D7E 0001 0000`), chuge-mega and chuge-big (new: the C
 package tests/chuge, red as its docstring lists), megafrotz (the base
 assertion; red with 626e0ebb's FROTZ.O88), megafrotz-low (new).
+
+### 14.169 A BRIDGED huge claim is right every way in, says where its cut is, can be refused, and its conventional piece is movable and at an end (2026-11-08) - FIXED
+
+MEGA-HUGE-PLAN step 1, its F1, F2 and F9. An `OSAPI_MEM_HUGE` claim that
+neither region holds alone BRIDGES them (SPEC.md 50.3.5): P windows over a
+pool block, then a conventional claim, one run of selectors. Window k is
+right by construction; the survey read that everything else computing a
+place from a base plus an offset went past the pool piece. **Confirmed**, and
+worse than read: the file doors' selector arm took the machine down.
+
+**Measured on mega-release 626e0ebb** (tests/megabrdg's MEGABRDG: the largest
+bridge with an 80KB conventional claim under it, freed after; the cut found
+by the walk; a pattern through windows P-1..P+1):
+
+| | Bochs 4MB (3,365K: 46 windows of pool) | 86Box at286_vga_sb 640K + 384K (688K: 4 of pool, 432K heap) |
+|---|---|---|
+| SEG_SUB / SEG_AT / SEG_HND at 1230h and 10040h past the cut, SEG_TILE at it | WRONG memory, every one | WRONG memory, every one |
+| 256 bytes before the cut, SEG_LIN by the rule (window k's own base) | right | right |
+| a file written across the cut and read back | the write a #GP: kern_mega FAULT 0D, the machine reset | the 64KB read REFUSED (AX 2 - `.czfb`), the odd-offset write a #GP (limit) in `dskw_wone`: the program closed |
+| BX out of the claim | 0 | 0 |
+| BX = HUGE_NOBRIDGE on the claim of the bridge's size | ignored: bridged | ignored: bridged |
+| the conventional piece | - | at 24000..90000, the fill point: the 80KB freed under it, 64K over it - a pinned block mid-heap; `OSAPI_MEM_MOVABLE` of the bridge REFUSED (CF = 1): no way to unpin it |
+
+**F1, OSAPI_SEG** (`mega_bfmap`, `.mega`): `SEG_SUB`, `SEG_SUBC`, `SEG_AT`
+and `SEG_HND` asked from a selector in a bridge's pool piece (its pool block
+says `MX_FBRIDGE`) map a place past the cut to the same offset past it in the
+conventional piece (`MX_AUX`'s selector), and cut a reach short at the end of
+the piece it is in; past the conventional piece's end too is refused (AX =
+5; `SEG_AT` DX = 0). `SEG_TILE` maps its first and last tile and refuses (AX
+= 3) unless one piece holds every tile. `SEG_LIN` answers one selector's
+base, so the rule - the byte at X is `SEG_LIN` of window X >> 16 plus X &
+FFFFh - is the contract (SPEC.md 50.3.5), the same arithmetic on every
+kernel; the probe prints the naive form (first base + X), wrong by
+construction on a bridge.
+
+**F1, the file doors** (`kernel/diskw.inc`, `.cold`, kern_mega only): the
+selector arm bounded a run by the OFFSET's 64KB wrap and stepped by
+`SEG_SUB`; a window clipped at the cut was then overrun. `dskw_hileft` (LSL)
+bounds a run by the window's LIMIT (`dskw_runmax`), `dskw_hifix` moves a
+sector on before it would cross the limit, and a sector that straddles the
+cut (an offset from it not a multiple of 512) is staged in two parts
+(`dskw_hin1` cuts its live bytes at the end, `dskw_hinext` steps
+`[dskw_wseg]` to the next window and leaves `[dskw_src]` where the sector
+ends there, `[dskw_hi]` bit 1 telling `.stg` it is counted). The `.czfb`
+change that lets a plain read past 64KB above 1MB take the walk is
+byte-for-byte 14.168's (mega-hugeask found it too).
+
+**F2**: a bridge answers BX = its pool piece's windows (the cut at BX x
+64KB; window BX the conventional piece's first); BX = `HUGE_NOBRIDGE` (2,
+bit 1 - 1 is 14.168's `MEMH_AVAIL` on the ask, 4000h and 8000h the shapes)
+refuses one on the claim (`mega_hugebf`) and on the AX = 0 ask
+(`mega_hugeqf`, beside 14.168's shape test). kern_big and kern_small never
+bridge and ignore it. abilock: an addition, no `PKG_FMT` bump - BX was kept
+before, and no shipped caller sets bit 1 (the C thunk's BX = SP, which could
+have, is 14.168's BX = 0 now).
+
+**F9**: the conventional piece was claimed bottom-up through the DMA door,
+born pinned, and named by no DX a package holds. It is taken from the TOP
+now (`mmf_osapi_mem_claim_dma_hi`, CX = 0: the heap's end, as 14.166 put the
+rings), and `OSAPI_MEM_MOVABLE` of the bridge's DX declares it
+(`mega_bfpcf`: the pool piece moves anyway): its proc is called for its moves
+and every selector over it follows them (`mega_mpmovef`), so a `ret` is the
+proc. Measured after: 34000..A0000 on the 1408K machine, 144K free under it
+and none over it, the record movable once declared.
+
+**WIN16** (`apps/win16/w16pm.inc`, the arm): `w16_vclaim` asked BX = 0, so a
+large arena could bridge, and its map's virtual paragraphs, `w16_pvirt`'s
+linear bases and `SEG_TILE`'s huge pointers all assume one run. It asks
+`HUGE_NOBRIDGE` now: a GlobalAlloc neither region holds alone is refused.
+HUGEGA (tests/win16/hugega.c, `win16megahugega`, Bochs at 2MB): the largest
+GlobalAlloc from 960K down, written and read back through a __huge pointer,
+and no huge pool block of WIN16's a bridge. Red with the WIN16.O88 from
+before, on mega-release's kernel and on this one: no HUGEGA.TXT in 300 s.
+Green: HUGEGA OK 768, one pool block.
+
+**Bytes.** kern_big and kern_small byte-identical (built with and without at
+one commit, `cmp` equal: every byte is in `mega.inc` or under `%ifdef
+KERN_MEGA`). kern_mega: `.text` 46,086 -> 46,086, `.bss` 5,404 -> 5,404,
+**MEGA_RESIDENT 62,976 before and after**, megaseg overhead 3,754 of 3,754;
+`.cold` 46,560 -> 46,794 (+234: the file doors' walk, `mega_bfpcf`, the
+top door and BX out in `mega_hugebf`; measured against mega-release
+84672715, after 14.168), `.mega` 23,616 -> 23,824 (+208: `mega_bfmap` and its
+five callers). WIN16's arm +1 byte.
+
+**Rows.** `megabrdg` (Bochs 4MB), `megabrdg86` (86Box 1408K), red as the
+table says and green here; `win16megahugega`. The interface the next steps
+build on (F4 packed reads, F5 the walker include): SPEC.md 50.3.5's *The
+cut*.

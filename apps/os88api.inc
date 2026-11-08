@@ -3107,6 +3107,35 @@ KIND_PKG   equ 0x80             ; SSI_KIND bit 7: this instance is a package
                                  ; kern_big and kern_small, as for any ask:
                                  ; OSAPI_MEM_AVAIL IS that answer there
 MEMH_AVAIL  equ 1               ; OSAPI_MEM_HUGE AX = 0, BX = this: the ask above
+                                 ; A BRIDGE IS TWO RUNS OF MEMORY (SPEC.md
+                                 ; 50.3.5, KERN-MEGA-PLAN 14.169): out BX =
+                                 ; its POOL piece's windows when you got
+                                 ; one, so window BX (DX + 8 x BX) is the
+                                 ; conventional piece's first and the CUT is
+                                 ; at BX x 64KB; BX kept for any claim that
+                                 ; is one run (so ask with BX = 0, or
+                                 ; HUGE_NOBRIDGE, to read it). Walk by the
+                                 ; step and every window is right; OSAPI_SEG
+                                 ; SEG_SUB / SEG_AT / SEG_HND / SEG_TILE
+                                 ; follow the pieces past the cut and cut a
+                                 ; reach short at it (no one segment is two
+                                 ; pieces; SEG_TILE across it is refused),
+                                 ; and OSAPI_FILE_READ / _WRITE step across
+                                 ; it. SEG_LIN is one selector's base: the
+                                 ; byte at offset X is SEG_LIN of window
+                                 ; X >> 16, plus X & FFFFh - never the first
+                                 ; window's base plus X. BX = HUGE_NOBRIDGE
+                                 ; asks for ONE run, never a bridge - the
+                                 ; claim and the AX = 0 ask alike (kern_big
+                                 ; and kern_small never bridge, and ignore
+                                 ; it). OSAPI_MEM_MOVABLE of a bridge's DX
+                                 ; declares its conventional piece, which is
+                                 ; born pinned as every claim is: the proc
+                                 ; is called for its moves, and its
+                                 ; selectors follow them
+HUGE_NOBRIDGE equ 2              ; OSAPI_MEM_HUGE's BX: one run, no bridge
+                                 ; (bit 1: BX = 1 on the AX = 0 ask is
+                                 ; another question, MEGA-HUGE-PLAN F6's)
 XMW_OFF     equ 0
 XMW_KB      equ 2
 XMW_OWN     equ 4

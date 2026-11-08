@@ -5703,6 +5703,8 @@ osapi_mem_movable_x:
 %ifdef KERN_MEGA
     jmp short .out
 .hi:                            ; above 1MB: a region never moves, and of the
+    call COLD_SEG:mega_bfpcf    ; (A BRIDGE: its conventional piece is the
+    jnc .seg                    ; claim declared, KERN-MEGA-PLAN 14.169)
     call COLD_SEG:mega_dmamovf  ; pool's claims only a DMA door's is ever
 %endif                          ; pinned, so only its pin is the caller's to
 .out:                           ; take off or put back (KERN-MEGA-PLAN 14.160)
