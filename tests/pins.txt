@@ -385,6 +385,11 @@ D apps/vbattle/vbprof.inc vb_prseg       # VBATTLED's profile (SPEC.md 126.8): i
                                          # writes into it at interrupt time for
                                          # the whole bracket; claimed as the
                                          # play's rings are, freed at its end
+C apps/vbattle/vbbm.inc vb_bmseg         # the bookmarks' scratch cluster (SPEC.md
+                                         # 126.4.8): claimed, read into with
+                                         # OSAPI_FILE_READ_SEQ (its DX:BX) once a
+                                         # clip head and freed inside
+                                         # vb_bmbuild's one call, at load
 C apps/vbattle/vbprof.inc vb_prfseg      # VBATTLED's profile file at the play's
                                          # end: claimed, filled, written with
                                          # OSAPI_FILE_WRITE (its ES:BX) and freed

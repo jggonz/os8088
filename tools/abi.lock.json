@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "3c15f5f68255cec0f0c0908499be5bbb059098b89ee9bcb3fd1f3cc36a1e08dd",
+  "fingerprint": "b73f0151622a64563f2d77ed06e8f030539c1b6a5bd71279010752b721c5c57d",
   "version": 12
  },
  "PKG_FMT": {
-  "fingerprint": "2ccd68403e71e26080195ac024d08343cb3c88398727562c3b11a7f74f002f51",
+  "fingerprint": "87516c5c225e834a9aaf557016aac3a677c65df86636586148794771ea980f95",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -1897,6 +1897,34 @@
    "from": 12,
    "guard": "DRV_VER",
    "reason": "merge of mega-release (14.179's abi note kept) with FSXF_PREP (OSAPI_FSX_RUN CX bit 4, SPEC.md 53.2.3.1): a flag added, every kernel before it refuses the bit - PKG_FMT kept",
+   "to": 12
+  },
+  {
+   "fingerprint": "1f5a4843b2874631347f27e6e4dcf96f9a46045233ff1383e0f21489054793fe",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "merge video-battle-pico2 into elendilon: READ_SEQ's caller flags, run and map (SPEC.md 18.4.8.3) beside elendilon's SDK; a 16-byte cursor reads as before - no bump",
+   "to": 10
+  },
+  {
+   "fingerprint": "d84fa47996327791a588948499c4f0698466167ce3f733c9c378a3ce06aea947",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "merge video-battle-pico2 into elendilon: READ_SEQ's caller flags, run and map (SPEC.md 18.4.8.3) beside elendilon's SDK; a 16-byte cursor reads as before - no bump",
+   "to": 12
+  },
+  {
+   "fingerprint": "87516c5c225e834a9aaf557016aac3a677c65df86636586148794771ea980f95",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "merge of elendilon (READ_SEQ caller flags, run and map, SPEC.md 18.4.8.3) into mega-release (OSAPI_MEM_HUGE asks, SEG_LOW, XMEM_COPY WHERE, FSXF_PREP): both additions, nothing built before stops running - no PKG_FMT or DRV_VER bump",
+   "to": 10
+  },
+  {
+   "fingerprint": "b73f0151622a64563f2d77ed06e8f030539c1b6a5bd71279010752b721c5c57d",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "merge of elendilon (READ_SEQ caller flags, run and map, SPEC.md 18.4.8.3) into mega-release (OSAPI_MEM_HUGE asks, SEG_LOW, XMEM_COPY WHERE, FSXF_PREP): both additions, nothing built before stops running - no PKG_FMT or DRV_VER bump",
    "to": 12
   }
  ]

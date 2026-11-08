@@ -980,6 +980,15 @@ TOAST_MAX   equ 24
   %define OS88_DRIVERS 1
 %endif
 
+; A PICOMEM 2's DISK, ONE SECTOR A CALL WITH IRQ0 MASKED (SPEC.md 18.91.7):
+; drv_sniff finds the card's first unit, dsk_xfer reads it so. kern_big and
+; kern_emu; not kern_mega, whose int 13h is its bracket's
+%ifdef KERN_BIG
+ %ifndef KERN_MEGA
+  %define DSK_PMHD 1
+ %endif
+%endif
+
 ; ...and with them go the sound layer's CARD tiers (SPEC.md 34.0). This is
 ; the half of docs/plans/KERN-SMALL-CUT-PLAN.md's A1 that OS88_DRIVERS has already
 ; made unreachable rather than merely unwanted: every route to an OPL2 or a

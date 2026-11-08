@@ -129,7 +129,7 @@ def main():
             os88marty.until(m, lambda mm: rw("vk_sdone") != 0,
                             "the READ_SEQ rows to end", poll=0.05,
                             limit=1500.0, guest=300.0)
-            r = [rw("vk_res", 2 * i) for i in range(26)]
+            r = [rw("vk_res", 2 * i) for i in range(36)]
 
             # A: the same three for a person - timed parks, no harness to
             # say go - reported and SAVED as VIDKERN.TXT beside the package
@@ -138,7 +138,7 @@ def main():
                             "the run-all to save its report", poll=0.05,
                             limit=1500.0, guest=300.0)
             full = rb("bl_full")
-            auto = [rw("vk_res", 2 * i) for i in range(26)]
+            auto = [rw("vk_res", 2 * i) for i in range(36)]
         finally:
             m.close()
         try:
@@ -216,6 +216,43 @@ def main():
     if r[24]:
         bad.append("%d int 13h calls at 12 MB went under cylinder 16: the "
                    "chain is being re-read" % r[24])
+    # G (SPEC.md 18.4.8.2): a cursor MOVED rather than zeroed - forward,
+    # back, and a bookmark copied out at 12 MB and back in after a read at 0
+    print("     G: moved-cursor bad chunks %d, +4 set %d; the bookmark's read "
+          "%7.1f ms, %d FAT-area int 13h calls (the cold seek: %7.1f ms)"
+          % (r[27], r[28], per(r[29], 1), r[30], per(r[25], 1)))
+    if not r[26]:
+        bad.append("G (the moved cursor) did not run")
+    if r[27]:
+        bad.append("G: %d chunks read through a MOVED cursor held bytes from "
+                   "the wrong offset" % r[27])
+    if not r[28]:
+        bad.append("G: the cursor's +4 was 0 after a read - this kernel does "
+                   "not seek forward (18.4.8.2)")
+    # ONE link: at most one FAT-area call (the read at 0 between moved the
+    # FAT window, so the link's own sector may be read again - a walk to
+    # 12 MB reads many) and well under the cold seek's time
+    if r[30] > 1 or r[29] * 2 > r[25]:
+        bad.append("G: the bookmark's read was not one link: %d ticks against "
+                   "the cold seek's %d, %d FAT-area calls" % (r[29], r[25], r[30]))
+    # H: the map and a run (SPEC.md 18.4.8.3) - a COLD seek to 12 MB handed
+    # run 0, two chunks: the walk and the reads inside the run read no FAT
+    print("     H: the map %s run(s); a cold seek to 12 MB with run 0, two "
+          "chunks %.1f ms, %d FAT-area calls, %d bad (the cold seek "
+          "without: %.1f ms)" % ("refused:" if r[31] == 0xFFFF else r[31],
+                                 per(r[32], 1), r[33], r[34], per(r[25], 1)))
+    if not r[35]:
+        bad.append("H: the map row did not run")
+    elif r[31] == 0xFFFF or r[31] == 0:
+        bad.append("H: the map was refused or found no run")
+    else:
+        if r[34]:
+            bad.append("H: %d chunk(s) read with the run at the wrong offset"
+                       % r[34])
+        if r[33] > 1 or r[32] >= r[25]:
+            bad.append("H: the run did not spare the FAT: the cold seek and "
+                       "two chunks %d ticks against the cold seek's alone %d "
+                       "without it, %d FAT-area calls" % (r[32], r[25], r[33]))
     if not r[9] or r[10] > r[9] * 1.25 + 2:
         bad.append("READ_SEQ is not flat: %d ticks at 0 MB, %d at 12 MB"
                    % (r[9], r[10]))
