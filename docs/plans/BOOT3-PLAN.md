@@ -2890,7 +2890,11 @@ would leave a mouseless 128KB machine with no pointer at all) and that
 `KERN_END` + 512 = 60,416 is inside 64KB. Any other pinned claim, or this
 one standing after a pointer spoke, still fails both. No kernel or shipped
 byte changed (tests and documents only); SPEC.md 2.8.8 and
-docs/KERNEL-MEMORY.md say how the rules count it.
+docs/KERNEL-MEMORY.md say how the rules count it, and so do the rule 2
+comment above `KERN_RESIDENT_KB` in `kernel/kernel.asm` (guard 1 is no longer
+all of rule 2) and `small128`'s row text (0 pinned, 512 the keyboard mouse's,
+0 purgeable, 69.0 KB usable) - both fixed in the verifier's round, a comment
+and a row string, no assembled byte.
 
 ### 16.12 `b3poison` as built (build, 2026-11-08)
 

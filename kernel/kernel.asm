@@ -1436,8 +1436,10 @@ DRV_HMA_SEG equ 0xF000
 ;      below is the static half, this span; tests/kernresident.py is the half
 ;      an assembler cannot see, a claim made at boot and never given back.
 ;   2. kern_small fully RESIDES in KERN_SMALL_RESIDENT_KB (64KB). Guard 1 is
-;      all of it: tests/small128.py asserts that no pinned claim stands on its
-;      bare desktop, so its span IS what it holds.
+;      the static half, this span; tests/small128.py is the rest - no pinned
+;      claim stands on its bare desktop but the kernel's own, the keyboard
+;      mouse's one 512-byte granule on a mouseless machine (SPEC.md 2.8.8),
+;      which it charges at its size: KERN_END + 512 must fit too.
 ;   3. BOTH BOOT on 128KB - guard 5, MIN_RAM_KB below. Booting and residing
 ;      are separate questions: overlays and the boot order are what a 128KB
 ;      boot exercises, and they have broken it at a resident size well under
