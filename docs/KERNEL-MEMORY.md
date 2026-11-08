@@ -20,7 +20,7 @@ below were read off the tool at the last bless.
 | | rule | guard |
 |---|---|---|
 | 1 | **`kern_big` fully RESIDES in 100KB** once it is at the desktop | guard 1, `KERN_BUDGET` = 100,864, plus `tests/kernresident.py` |
-| 2 | **`kern_small` fully RESIDES in 64KB** once it is at the desktop | guard 1, `KERN_BUDGET` = 64,000, plus `tests/small128.py`'s no-pinned-claim check |
+| 2 | **`kern_small` fully RESIDES in 64KB** once it is at the desktop | guard 1, `KERN_BUDGET` = 64,000, plus `tests/small128.py`'s no-pinned-claim check (the keyboard mouse's 512 excepted, and charged) |
 | 3 | **BOTH BOOT on 128KB** | guard 5, `MIN_RAM_KB` = 128, plus `tests/small128.py` and `tests/kernresident.py` on the 128KB machine |
 | 4 | **`kern_mega` RESIDES in 68KB of CONVENTIONAL memory** once it has switched, and **BOOTS on a 1MB machine's 640KB** | guard 1's mega arm, `KERN_BUDGET` = 68,096 against `MEGA_RESIDENT`; guard 5's mega arm, `MEGA_BOOT_KB` = 640 |
 
@@ -93,7 +93,19 @@ big build can report it. The assembler sees only the static half of a
 resident rule; a claim made at boot and never given back is the other half.
 `tests/kernresident.py` boots a bare VGA desktop under MartyPC and walks
 `mem_tab` for it on kern_big, and `tests/small128.py` asserts kern_small's
-bare desktop holds no pinned claim at all, so its span is its whole footprint.
+bare desktop holds no pinned claim but the kernel's own. That one is the
+keyboard mouse's pointer half (SPEC.md §2.8.8): on a machine no pointer has
+spoken on - both rows' machines, whose mouse nothing moves - it is one
+512-byte `MEM_K_MOD` granule, pinned for the session at the heap's TOP, and
+both rows charge it to the footprint at its SIZE rather than its address. Its
+address is the 128KB machine's last 512 bytes because it has to be: when
+`kbm_adopt` claims it, the heap's floor is still raised past stage 2's live
+blob (`mem_init_x`, until `mem_unblob`), and the `.boot3m` image it copies
+goes with the rest of the boot, so the claim cannot wait. A bottom-up claim
+then would sit above the blob - a pinned island mid-heap once `mem_unblob`
+hands the floor back, and on kern_big still past 100KB by address.
+So on a mouseless machine the footprint is the span plus 512, and on one with
+a pointer it is the span.
 
 **None of the rules binds a KNOB build.** `make`'s `$(KNOBS)` — anything but a
 bare `make`, `make KERN_SMALL=1`, `make emu`, `make mega`, the handful the

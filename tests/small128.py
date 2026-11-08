@@ -23,12 +23,28 @@ accident - the association cache held 3,072 bytes before the user had done
 anything - and SPEC.md 54.0 has since gated it out.  This walks `mem_tab` on
 the machine itself and says whether any others are left.
 
-Four assertions, and the third is the one with teeth:
+Five assertions, and the third is the one with teeth:
 
   1. int 12h really reports 128KB - the machine is the machine
   2. a DESKTOP: the drive zones are laid out and the screen has ink on it
-  3. NO pinned claim stands on a bare desktop
-  4. the free heap agrees with `kernsize`'s ladder to the byte
+  3. NO pinned claim stands on a bare desktop - but the kernel's own one
+  4. ...and that one is the keyboard mouse, held exactly when it should be
+     and charged to rule 2 at its size
+  5. the free heap agrees with `kernsize`'s ladder to the byte
+
+THE KERNEL'S OWN CLAIM (SPEC.md 2.8.8). Nothing moves this machine's mouse,
+so no pointer has spoken by kmain_o's end and kbm_adopt copies the keyboard
+mouse's pointer half - 346 bytes that left kern_small's `.text` for it - into
+ONE 512-byte MEM_K_MOD granule, pinned, at the heap's top, until a pointer
+speaks. That is kernel residency rather than heap lost to a boot-time
+claim nobody accounted for: the owner took it (+166 net on a mouseless
+machine, BOOT3-PLAN wave 5), so assertion 3 excuses that claim and only
+that claim - the row mod_r_kbm names, one MEM_GRAN granule, MEM_K_MOD,
+[mou_ptr] 0 - and assertion 4 holds it to its contract: held on a machine
+no pointer spoke on (the floor machine is where a top-down claim could be
+refused, and a refusal is a mouseless 128KB machine with no pointer at
+all), and KERN_END plus its 512 bytes inside KERN_SMALL_RESIDENT_KB. Any
+other pinned claim is still the failure this row exists for.
 """
 import os
 import sys
@@ -105,29 +121,52 @@ with M.launch("build/small360.img", apps="build/apps360.img",
     #    50.6) and is not a cost; a pinned one is heap the machine never sees
     #    again.
     tab = m.read(m.sym("mem_tab", DEFS), eq["MEM_MAX"] * MC_SIZE)
-    pin = pur = 0
+    kbm_seg = u16(m.read(m.sym("mod_r_kbm", DEFS) + eq["MODR_SEG"], 2))
+    mou_ptr = m.read(m.sym("mou_ptr", DEFS), 1)[0]
+    pin = pur = kbm = 0
     for i in range(eq["MEM_MAX"]):
         r = tab[i * MC_SIZE:(i + 1) * MC_SIZE]
         seg, para, own = u16(r, MC_SEG), u16(r, MC_PARA), u16(r, MC_OWN)
         if not seg:
             continue
         purge = eq["MEM_PG_MIN"] <= (own >> 8) <= eq["MEM_PG_MAX"]
+        mine = (seg == kbm_seg and own == eq["MEM_K_MOD"]
+                and para == eq["MEM_GRAN"] and not mou_ptr)
         if purge:
             pur += para * 16
+        elif mine:
+            kbm += para * 16
         else:
             pin += para * 16
         print("    %04X %5d para = %6d bytes  owner %04X  %s"
-              % (seg, para, para * 16, own, "purgeable" if purge else "PINNED"))
-    check("no PINNED claim stands on a bare desktop", pin == 0,
-          "(%d bytes pinned, %d purgeable)" % (pin, pur))
+              % (seg, para, para * 16, own, "purgeable" if purge else
+                 "PINNED, the keyboard mouse (SPEC.md 2.8.8)" if mine
+                 else "PINNED"))
+    check("no PINNED claim stands on a bare desktop but the kernel's own",
+          pin == 0, "(%d bytes pinned, %d the keyboard mouse's, %d purgeable)"
+          % (pin, kbm, pur))
 
-    # 4. ...and the heap the machine has is the heap the ladder promised.
+    # 4. ...and the kernel's own is the keyboard mouse, held exactly when no
+    #    pointer has spoken, and inside rule 2 at its size.
+    limit = eq["KERN_SMALL_RESIDENT_KB"] * 1024
+    foot = eq["KERN_END"] * 16 + kbm
+    check("the keyboard mouse is held on a mouseless machine, one granule, "
+          "inside rule 2", (kbm == eq["MEM_GRAN"] * 16) == (not mou_ptr)
+          and foot <= limit + eq["KERN_GRACE"],
+          "([mou_ptr] %d, mod_r_kbm %04X, %d bytes; KERN_END %d + %d = %d "
+          "of %d)" % (mou_ptr, kbm_seg, kbm, eq["KERN_END"] * 16, kbm, foot,
+                      limit))
+    if limit < foot <= limit + eq["KERN_GRACE"]:
+        print("  WARNING: %d bytes over KERN_SMALL_RESIDENT_KB, inside the "
+              "branch grace" % (foot - limit))
+
+    # 5. ...and the heap the machine has is the heap the ladder promised.
     heap = eq["HEAP_SEG"] * 16
     free = ram - heap
     check("free heap agrees with the ladder", free > 0,
           "(HEAP_SEG %d = %.1f KB -> %d bytes free = %.1f KB, %.1f KB usable)"
           % (heap, heap / 1024.0, free, free / 1024.0,
-             (free - pin) / 1024.0))
+             (free - pin - kbm) / 1024.0))
 
 print()
 if fails:

@@ -2867,6 +2867,31 @@ cs`/near call); a spent key is CF = 0, not CF = 1; and only `kbm_poll0`
 banks AX - `kbm_p5spend`'s two callers have it dead. No shipped byte moved
 (`cmp` at one commit).
 
+*Correction (final pass, 2026-11-08): the two resident rows.* `test-full`
+failed `small128` ("no PINNED claim stands on a bare desktop", 512 pinned)
+and `kernresident` ("last non-purgeable byte 131072, limit 102400"): both
+machines' mouse is never moved, so both are mouseless and hold this wave's
+claim, `1FE0`, 32 paragraphs, `MEM_K_MOD`, ending at 131,072 - as designed.
+Neither row failed at the base (`origin/elendilon`, `5e4740bb`: 0 pinned;
+span 98,304), which has no claim to see. The KERNEL was right and the rows
+read it wrongly: they measured by ADDRESS and by "no pinned claim", and this
+is the one claim whose address says nothing. It cannot be bottom-up -
+`.boot3m` goes with the boot, and at `kbm_adopt` the floor is still raised
+past the live blob (`mem_init_x`, until `mem_unblob`), so a low claim would
+be a pinned island above the blob's hole for the session and on kern_big
+still past 100KB - and it cannot move (`MEM_K_MOD`; a worker may be inside
+it, R16). So the rows now charge it at its SIZE, and excuse only that claim
+(the segment `mod_r_kbm` names, one `MEM_GRAN` granule, `MEM_K_MOD`,
+`[mou_ptr]` 0): `kernresident` reads 97,792 + 512 = **98,304** of 102,400
+(the base's figure exactly: the static step down and the granule cancel at
+rung grain, the +166 being bytes inside them), and `small128` gains an
+assertion that the floor machine HOLDS it (a refused top-down claim there
+would leave a mouseless 128KB machine with no pointer at all) and that
+`KERN_END` + 512 = 60,416 is inside 64KB. Any other pinned claim, or this
+one standing after a pointer spoke, still fails both. No kernel or shipped
+byte changed (tests and documents only); SPEC.md 2.8.8 and
+docs/KERNEL-MEMORY.md say how the rules count it.
+
 ### 16.12 `b3poison` as built (build, 2026-11-08)
 
 Built against this tree's code; where the code disagreed with section 4.2 the

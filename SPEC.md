@@ -2379,6 +2379,21 @@ nothing. `KERNEL.SYS` grows 160 bytes on kern_big and stays 166 sectors - the
 moved bytes are LZ4-packed in the same stream - so **no `int 13h` call is
 added on any shipped disk** (`t_blobruns`).
 
+**Why the top, and how the resident rules count it.** The claim cannot be
+made later - `.boot3m` goes with the rest of the boot - and when it is made
+the heap's floor is still raised past stage 2's live blob (`mem_init_x`,
+until `mem_unblob` hands it back, §50.6.3), so a bottom-up claim would sit
+above the blob: a pinned island mid-heap for the session, and on kern_big
+still past 100KB by address. Top down it splits nothing. So its ADDRESS on
+the 128KB floor machines is their last 512 bytes, and the resident rules
+count it by SIZE: `tests/kernresident.py` (rule 1) adds the 512 to the last
+other non-purgeable byte, and `tests/small128.py` (rule 2) excuses it from
+"no pinned claim on a bare desktop" - that claim and only that one: the
+segment `mod_r_kbm` names, one `MEM_GRAN` granule, `MEM_K_MOD`, `[mou_ptr]`
+0 - requires it on that mouseless machine, and holds `KERN_END` plus 512
+inside 64KB. A claim still standing after a pointer spoke is a missed drop
+and fails both.
+
 `tests/unit/t_moddrop.py` finds the row's drop in `kbm_dropf`.
 
 ### 2.9 Stage 2 — the loader is not in the boot sector any more

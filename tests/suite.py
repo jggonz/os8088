@@ -2666,7 +2666,10 @@ FULL = [
         "walks mem_tab on the machine and fails if ANY pinned claim stands on "
         "a bare desktop, because that is heap the machine never gets back and "
         "no assembler can see it - SPEC.md 54.0's association cache was "
-        "holding 3,072 bytes of one and was found by accident. Reads 0 "
+        "holding 3,072 bytes of one and was found by accident. The one it "
+        "excuses is the kernel's own: the keyboard mouse's 512-byte image "
+        "(SPEC.md 2.8.8), which it requires on this mouseless machine and "
+        "charges to rule 2 at its size. Reads 0 "
         "pinned, 18,432 purgeable, 40.5 KB usable. Its disk is a `wants=` "
         "on the SHARED build: `make small` on a current tree adds only "
         "build/smallk/, build/smallapp/ and the two small disks (10.6s of "
@@ -21453,7 +21456,9 @@ SOAK = [
         "os8088_xt_vga_128k: it reaches a desktop on a 128KB machine, and at "
         "that desktop every non-purgeable byte is under KERN_RESIDENT_KB "
         "(100KB) - the half an assembler cannot see, a claim made at boot "
-        "and never given back. Allows guard 1's 2KB branch grace with a "
+        "and never given back. The keyboard mouse's image (SPEC.md 2.8.8), "
+        "pinned at the heap's top on this mouseless machine, is kernel code "
+        "and is charged at its SIZE, not its address. Allows guard 1's 2KB branch grace with a "
         "warning; `--release` does not. 12.1s measured.",
         needs=("marty",), serial=True),
     Row("zoomsave", "soak", py("tests/zoomsave.py"), 90.0,
