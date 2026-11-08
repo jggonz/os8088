@@ -7091,6 +7091,11 @@ dsk_rah_fill:
 .gate:
     cmp bx, ax
     jae .nofill                 ; no surplus: there is nothing to cache
+%ifdef DSK_PMHD
+    mov cl, [dsk_unit]          ; ...and NO FILL OFF A PICOMEM 2 (18.95.12):
+    cmp cl, [dsk_pmhd]          ; an SD card has no revolution to save, and
+    jae .nofill                 ; a fill there is a second call and a copy
+%endif                          ; the 8088 makes itself (CX is dead here)
 %ifdef KERN_MEGA
     cmp byte [dsk_rah_hi], 0
     je .land

@@ -37220,6 +37220,7 @@ So the transfer loop reads such a disk that way:
   measure on the iron, and `5150-picomem2`'s 135,000 (98.2) charges none
   of it until then.
 - Resident: **40 bytes of `.cold`** in `dsk_xfer` (its parity pad among them) and the byte in `.text`.
+  18.95.12's no-fill test is 10 more of `.cold`.
   The probe is window-half code and costs no resident byte - but the window
   half was full (5,119 of 5,120), so the DSK_PMHD builds drop four of
   `sched_init`'s zero stores (its slot-clearing and cycle-clearing loops,
@@ -40011,6 +40012,29 @@ prefetch call than as an armed byte.
 Not on kern_dos (no room in its image) and not on kern_mega (its store above
 1MB lands through a nine-sector bounce): `DSK_RAHINT` is undefined there, and
 kern_mega drops the cache at step 2 instead (before the FAT window).
+
+#### 18.95.12 …and a PicoMEM 2's disk is never FILLED, only served (kern_big, kern_emu)
+
+A fill is a bet that the sectors after a short read will be wanted before
+the slot is evicted, paid for in revolutions saved. **An SD card has no
+revolution to save**, and on a PicoMEM 2 the bet costs twice over: the
+chunk's ninth sector is a second int 13h under 18.91.7's eight-sector cap,
+and every byte served out of the slot is a second `rep movsw` the 8088 makes
+itself, on top of the one the card's BIOS already made out of its window. A
+streaming read is not exempt the way 18.95.1 promised: the gate spares a read
+only while what it still wants covers a chunk, so the LAST eight sectors of
+every read, every short read (Video Battle's 4 KB music pieces) and every
+one-sector FAT lookup each took a fill.
+
+So `dsk_rah_fill`, for a unit at or above `[dsk_pmhd]` (18.91.7), answers
+as if there were no surplus: the caller reads direct. What a slot already
+holds is still served, so nothing else about §18.95 moves, and a real disk
+below the card's units (an ST-225 at 80h) keeps its fills.
+
+Measured on the CGA PicoMEM 2 twin, the owner's battle, 6 guest seconds of
+Bolt from the same menu walk, twice each (identical both times): **sound
+frames late 19 -> 4**, int 13h calls 130 -> 124, `dsk_copy_seg_x` 69 -> 0.
+Resident: **10 bytes of `.cold`**.
 
 ### 18.96 Formatting a floppy — the mount's verdict, run backwards
 
