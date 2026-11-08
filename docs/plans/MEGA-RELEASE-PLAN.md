@@ -303,6 +303,19 @@ peer).
    is useful to remove"* - three agents, by package family
    (`mega-trapoffice`, `mega-trapvm`, `mega-trapsys`).
 
+**Answered 2026-11-08** (the owner):
+
+- **A 1MB machine with no memory above 1MB is not kern_mega's** (14.166's
+  proposal, closed): *"This is literally a 640k machine, and they should
+  run big. A 1MB machine is only useful if the bios is one of the ones that
+  maps the additional ram above 1MB, rather than using it as a shadow buffer
+  or just losing it."* The rings that sit mid-heap there stay as they are.
+- **Huge reservations**: *"a bunch of mega apps need to start using and
+  thinking in huge reservations"* - XTMP3's hold (one XMEM block or 192K of
+  conventional, never the bridge) is the first instance. A survey of who
+  could and should use the region-crossing claim follows the merge to
+  `elendilon`.
+
 Still open:
 
 8. **M6's last 300 ms** (KERN-MEGA-PLAN 14.156): (a) AUDIO claims its
