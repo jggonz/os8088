@@ -497,3 +497,30 @@ text-16 (-19 → -17) and ui-10 (81 → 79).
 3. ul-1's prototype treats `int` as unknown. Most `int 13h`/`int 10h` sites
    preserve everything but AX and flags. A BIOS summary table would resolve
    a large share of the 444 undetermined bytes.
+
+## Verification
+
+Adversarial pass, 2026-11-08. No emulator and no `make` were run. Every
+medium finding and the one hazard were re-read against the code, and a third
+of the low findings were spot-checked. The census itself was not re-run,
+because the `-Le` listing is the reviewer's scratchpad build and is not in
+`build/`.
+
+| id | verdict | note |
+|---|---|---|
+| ul-1 | confirmed | `api_copyname` is entered by fall-through from `api_cpname0` (kernel.asm:5181-5184) and banks only AX and CX. `driver.inc:4489` calls `mem_can_move`. One caveat: of the 807 `clobbers:` headers, 509 name something other than none, flags or nothing, but many of those name only the OUTPUT ("AX (the output), flags"). So "502 headers name non-output registers" overstates the lint's input. KERNEL-BYTE-QUEUE 1 covers only the BP reads, so this is not already queued. |
+| ul-2 | confirmed | SPEC.md 39042: the sector cache replaced 19.2.3's directory window, so there are two caches. The `dsk_fat_window`, `dsk_fatw_*` and `dsk_bpb_sig` symbols are `.cold` in the map. ABI-BREAK-LIST L1 is the alternative, as stated. The byte spans were not re-summed. |
+| ul-3 | confirmed | driver.inc:1166-1172 is the pass-14 note. In the map, `drv_f_*` starts at 0x939A, with `fdlg_s_drive` (6 bytes) among the names, and `drv_tab` is at 0x9438. |
+| ul-4 | unchecked | Not in the spot-checked third (low, ~0 bytes). |
+| ul-5 | confirmed | `xm_a20_probe`/`xm_a20_reopen` use `XM_A20_ALIAS` = 0x0510 and `XM_A20_SETTLE` 512, and `hd_xa_a20` probes `[0x0510]`, so there are eight bodies. Wording: mega.inc:10792 borrows XMEM.DRV's SETTLE count, not its whole sequence. |
+| ul-6 | confirmed | `ld_start` (loader.inc:1300-1308) zeroes only `[ld_bss]` bytes at `[ld_img]`. Initialised data is used as it stands in the region, so a clone of a running instance carries that instance's modified data. Neither list proposes the clone. |
+| ul-7 | confirmed | MAX_WIN is 12 and 6 (wm.inc:163, 148), so the rects are 96 and 48 `.bss`. `wm_close_pass` and the `WKQ_*` ring are the two existing deferral queues. |
+| ul-8 | confirmed | Re-running the grep gives 121 field reads in 33 files. `CC_T_WFIELD` is os88thunk.asm:831-844. |
+| ul-9 | unchecked | Not in the spot-checked third (low, ~0 bytes). |
+| ul-10 | confirmed | All seven cited rows exist as soak rows. `stkdie`, `xferfreeze`, `ifoff` and a uilat workers leg do not, and tests/uilat.py has no workers option. `water()` is stkwater.py:89 and `sch_stkdie` is sched.inc:2600. Memory.inc 4559/4664 bracket `mem_regrow`'s IF=0 window (the lines have drifted slightly). For mc-5, KERN-MEGA-PLAN 14.48.3 already derives ~16 ms from the Victory 286's MEASURED 0.257 ms/KB (LOADALL-PLAN.md:286); only a direct reading of the span needs the field. |
+| ul-11 | corrected | The spot-checked corrected estimates match the data's verify notes: bytes-2, histsys-7, histsys-9, ui-16, ui-17, isr-2, sysmisc-3, sysmisc-9, shell-2, mc-9, hm-6, hm-11. One correction: mc-5's 16 ms is 64KB times a field-measured rate. Label it "derived from a measured rate", not "predicted". sysmisc-9's +32 is measured (LAST-DROP-PERF.md:589). |
+
+**Doc mismatches.**
+
+- **SPEC.md §1 rule 3: confirmed, with the text refined.** The quoted sentence spans three source lines, so the fix uses the exact multi-line text. The code really does differ. Cross-module routines such as `assoc_go`, `clk_tick`, `ss_open`, `desk_free` and the `cmz_*` family are contracted by `clobbers:` headers that name non-output registers. The reviewer's extra sentence about API cells was dropped, because it is not universal: SPEC.md 99241 documents a cell that "preserves every register but `DX`".
+- **CLAUDE.md:340 and AGENTS.md:334: not carried as fixes.** The short-form rule there is a summary, so it is less wrong than §1's absolute wording. More to the point, these are the agents' standing instructions, and a workflow's say-so is not enough to change them. When the owner applies the §1 wording, they can align both files together, as CLAUDE.md asks. Note that the reviewer's quote spans two lines in both files.

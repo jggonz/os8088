@@ -676,3 +676,90 @@ New ones only. Already recorded elsewhere, and not repeated here:
    fits the tier's budget)? Today a major merge can break kern_mega's boot
    with no tier noticing. MEGA-RELEASE-PLAN §9 leaves this to "the scoped
    `mega-*` union" of a release.
+
+## Verification
+
+Adversarial pass, 2026-11-08, against the current tree. Every finding was
+re-read at its cited code; section sizes were re-read from
+`build/smallk/kernel.map`, `build/megak/kernel.map` and `tools/kernsize.py`,
+and the row counts re-derived from `suite.rows()`. None of the findings is
+already listed in `docs/plans/ABI-BREAK-LIST.md`, `KERNEL-BYTE-QUEUE.md` or
+MEGA-RELEASE-PLAN 4.2.
+
+### Findings
+
+- **gkm-1 - CORRECTED.** drivers-3 holds: the row count is kern_mega-only
+  (`driver.inc` 2170-2209), and `%1_hma` (3933) zeroes `DRVR_PARA` under
+  `HMA_DRV`, which `kernel.asm` 1176-1183 defines on kern_big and kern_emu
+  but not on kern_mega. hiber-2 holds too, but the evidence is wrong:
+  `.badv` is **not** assembled on kern_big. The `%ifdef OS88_IMG` at
+  `hiber.inc` 3404 wraps only `.bimg`. `.b9` through `.nox`, `.badv`
+  included, sit inside the `%ifdef KERN_MEGA` that opens at `.b6`. So the
+  unconditional fix has to assemble `.badv` on kern_big as well as re-point
+  `HBM_BADV`: about 20 module bytes in HIBER.DRV, 0 resident. The row count
+  costs +5 (push/xor/inc/pop of CX, and `cmp cx,1` for `cmp ax,1`), not +6.
+- **gkm-2 - CONFIRMED.** The guard is at `fsx.inc` 1034-1042 as cited.
+  `OSAPI_XREFUSE` takes no argument and serves four cells. `t_api_abi.py`
+  457 opens `build/kernel.bin` only. The video-1 cost should read +13 (from
+  video.json's correction), not ~+6.
+- **gkm-3 - CORRECTED.** The counts hold within attribution noise. Nothing
+  boots kern_mega in test-full: its 14 rows include `megahigh`, which is a
+  host check. But no `box86port.txt` line runs kern_small today. The
+  `@OS88_BUILD=build/smallk` form appears only in the file's header comment
+  (lines 6-7), and none of the 45 lines uses it. A smallport lane also needs
+  `_ports` to stop dropping `marty` (`suite.py` 21775-21777), not only a new
+  list.
+- **gkm-4 - CONFIRMED.** The self-aligning precedent assembles today
+  (`vidext.inc` 103, `font.inc` 620). Some pad line numbers have drifted by
+  a few lines.
+- **gkm-5 - CONFIRMED.** Every section length, the +5,440 against 5,120,
+  `sched.inc` 177, `DSK_FAT_SECS` 2/9 and the 14 `vgarefs.txt` doors all
+  check.
+- **gkm-6 - CONFIRMED** as a priced option, on a spot-check. Not proved: a
+  worker rotation pumping a drag's spin loop as promptly as `vmm_poll`
+  inside `task_yield` does (SPEC.md 9.11.3's freeze argument), and the
+  +~40 estimate, since `DRV_MAX` goes from 6 to 7. The prototype-first step
+  covers both.
+- **gkm-7 - CONFIRMED.** Re-counted at 638, 126, 406 and 21 conditional
+  lines.
+- **gkm-8 - CONFIRMED.** Re-counted at 380 `call COLD_SEG:` and 335
+  `call KERNEL_SEG:` sites; 54,002 checks.
+- **gkm-9 - CONFIRMED** (spot-check). The 115,872 and 56,607-byte figures
+  check, and `MOD_STAMP` is a function of the section sizes.
+- **gkm-10 - CORRECTED.** The bytes check (452, 214 of them in `.vga`). But
+  LAST-DROP-PERF 7.1 already prices every knob for kern_big and gives
+  "why it is not on yet / what would flip it" per row. What is left is the
+  owner's decision, not a new record.
+- **gkm-11 - CONFIRMED.** kernsize prints "19,842 left" for the segment and
+  "6,946 of the 64KB window left". KERNEL-MEMORY.md 1121-1124 and SPEC.md
+  4028-4029 already say so; only the CLAUDE.md/AGENTS.md short form did not.
+
+### Doc/code mismatches
+
+- **D1, D3 - CONFIRMED.** The texts were refined and spread over the
+  comment lines.
+- **D2 - CONFIRMED.** The fix adds kern_emu beside kern_big, and kern_mega's
+  68KB against `MEGA_RESIDENT`.
+- **D4 - CORRECTED.** docs/KERNEL-MEMORY.md frames the budgets on purpose as
+  "THREE sentences, THREE quantities (and kern_mega's own)". So only the
+  `kernel.asm` header changes, to "Three rules ... and kern_mega's own
+  (rule 4, below)". CLAUDE.md/AGENTS.md's "THREE rules", read with their
+  "kern_mega is rule 4" a line later, are left alone.
+- **D5 - REFUTED.** "on VGA" names the costliest configuration a rule is
+  stated against. For kern_small it is vacuous, not false, and the owner's
+  instruction file is not edited for that.
+- **D6 - CONFIRMED.** The owner answered "Released" on 2026-11-07, and
+  `mkzip.py`'s `mega` group requires the disks. Fixed in CLAUDE.md,
+  AGENTS.md and docs/KERNEL-MEMORY.md. The same stale sentence in
+  `kernel.asm`'s rule 4 block ("a release that is not one yet") was found
+  and fixed alongside.
+- **D7 - CORRECTED.** `KERN_CODE_MAX`'s own guard really is `.text` +
+  `.bss`, so the definition stays. CLAUDE.md/AGENTS.md gain a clause saying
+  that on kern_big the VGA rung's guard binds first. KERNEL-MEMORY.md 120 is
+  the guard's definition and 1121-1124 already gives the window, so it is
+  left alone.
+- **D8 - CONFIRMED.** The header gains a note that the predicate fails
+  where an image has left the heap, on kern_big's `%1_hma` as on kern_mega.
+  The code fix itself is drivers-3's.
+- **D9 - REFUTED.** kern_emu was the third kernel, and that is a true
+  historical statement in its own section.

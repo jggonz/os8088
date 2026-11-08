@@ -633,3 +633,45 @@ not one rank for every module. That is +4-8 bytes and part of rt-1's figure.
 4. rt-8: how often are second instances and relaunches done? This is
    loader-14's measurement, and it decides the image cache.
 5. rt-5: should the mono figure be gated, or only reported?
+
+## Verification
+
+Adversarial pass, 2026-11-08, at `4b9f1715`. Every high and medium finding
+was re-read in the code on kern_big, kern_small and, where it applies,
+kern_mega, and spans were re-measured from `build/kernel.map` and
+`build/smallk/kernel.map`. rt-9 (low) was spot-checked. Nothing is refuted.
+Neither ABI-BREAK-LIST.md nor KERNEL-BYTE-QUEUE.md lists any of these designs.
+Every byte figure is still ESTIMATED: none of them is built. The corrected
+fields are in `data/gap-residency-tiers.json`.
+
+Findings:
+- **rt-1** corrected. The hit path, the absence of bss zeroing, disarm-before-free, the 49 far-call sites over 14 FP blocks and the stride mismatch between mem_pg_own and mod_tab all hold. Three corrections:
+  - It overturns a recorded decision. The pin is "deliberately not built" in mod_drop's banner and in SPEC.md 2.8.3. The banner's reason still holds, because the heap would purge only a dropped image.
+  - kern_mega's above-1MB module images are freed through `mega_hifreef`, so mem_pg cannot purge them.
+  - "mod_cfix is idempotent on a re-adopt" is unproven, because `cfix_prove` models one pass over an unfixed image. A re-adopt should skip mod_cfix.
+- **rt-2** corrected. The arithmetic stands: fdlg_* 987 + os88ui_* 1,089 = bytes-3's 2,080. FILECP 1,657 + FDLG 911 = -2,568. The reviewer's .text figures were 5 high on each kernel, and the errors cancel. Two corrections:
+  - Where a ROM or COLDHMA.SYS adopted `.cold`, these bytes are already off conventional RAM, so the saving is 0 and the boot-time cache claim would be pure cost.
+  - SPEC.md 38.0 records kern_big's "NOT a module, on purpose". That makes this an owner decision, not a size pass.
+- **rt-3** confirmed. The resident PS/2 runtime is 251 bytes of code plus about 14 of state, and its init is in `.ovl`. On kern_mega, IRQ12 may already be owned by a package, so an overlay ISR fits there too.
+- **rt-4** confirmed. cfx_slide applies one delta to `.cold` only. VIDEXTM's 1bpp leg is a near `jb`.
+- **rt-5** confirmed. The rule-1 sentence is now at KERNEL-MEMORY.md:52. kernresident takes `--machine`, but suite.py registers only the VGA row, and kernsize prints no per-class line.
+- **rt-6** confirmed. Image sizes are as quoted. It inherits rt-2's ROM/HMA caveat.
+- **rt-7** corrected. `[mou_ptr]` is never cleared and gates kbm_key. But mou_settle is kern_big's alone: kern_small inlines MOU_SETTLE_STORES at mouse.inc:3933, and kern_emu's vmm_boot_x stores `[mou_ptr]` itself. The drop therefore belongs at every store site, not in one routine.
+- **rt-8** corrected. 35 listings exist against 60 `.o88` in build/, so 941,780 is a sample's total, not "of 942 KB" of everything shipped. The lower bound and the recommendation stand.
+- **rt-9** confirmed (spot-check).
+
+Doc mismatches (7), carried as 9 fixes. Each old_text was checked as unique
+in the current file:
+- kernel.asm's "SEVEN entries" → FIVE. `fdlg_ondrag` no longer exists, so the clause was rewritten rather than renumbered.
+- SPEC.md's FDLG claim parenthetical. This one is corrected: the incident's "4KB claim" was right at the time, so the fix keeps the history and adds today's 512-byte granule and 1,600-byte image.
+- SPEC.md 2.10.9's mod_cfix predicate, plus a separate fix for its "+52 bytes" (59 today).
+- memory.inc's mem_floor_ax `out:` line. This is a comment-only change.
+- mod.inc's "438 this kernel has left" → past tense. This is a comment-only change.
+- HEAP-UNPIN-PLAN's `MOD_MAX` counts. This one is corrected: kern_small's `MOD_MAX` is 6, not 7, because OS88_SHORTCUTS is kern_big's alone.
+- HEAP-UNPIN-PLAN's 29-site count, annotated with today's 49.
+- KERNEL-MEMORY.md's "As blessed" table. This one is corrected: the reviewer's "At the 2026-10-11 budget reset" relabel is wrong, because the table's budgets (100,864 and 64,000) are not that reset's. The table is labelled as an earlier bless instead, pointing at the kernsize block.
+
+Not proposed: KERNEL-BYTE-QUEUE.md:158-168's `MOD_NENT`/`FD_NENT` paragraph
+("FDLG.DRV publishes 7 on kern_small") is stale in the same way. SPEC.md 2.8.1
+removed the entry cap, and FD_NENT is 5. It falls outside this gap's brief, so it
+is left for the queue's owner.

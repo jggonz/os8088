@@ -385,3 +385,43 @@ what the fixed code will do.
    inside ANOTHER package's region above 1MB? The C64 comment says "in
    whatever claim happens to sit there"; a pool neighbour that is a region is
    the case not yet covered.
+
+## Verification
+
+The adversarial verifier re-read every finding against the tree at 4b9f1715.
+Line numbers are the current files'. The map is `build/megak/kernel.map`,
+built after the last code commit (42072b88). The doc pass since then changed
+comments only. Totals: 12 confirmed (one of them corrected), 1 refuted, 10 doc
+fixes confirmed. None of the findings is in `docs/plans/ABI-BREAK-LIST.md` or
+`docs/plans/KERNEL-BYTE-QUEUE.md`.
+
+| id | verdict | note |
+|---|---|---|
+| gms-1 | confirmed | `fsx_rmvck` matches MC_OWN against the slot only. `mem_own` records a package's own claims under its segment (I_SPTR in protected mode), and `mega_bown` already tests both. The reviewer understates the mitigation: `apps/os88real.inc` and SPEC.md 53.2.3 REQUIRE every listed claim to be pinned, so the guard is defence in depth, and today it covers only the region. Moving the `[fsx_rseg]` store after `fsx_rextf` is sound, because none of the three claimers reads it. |
+| gms-2 | confirmed | There is no `mega_iswin` test in `mega_rgnsubfree`. `mega_cdin` and `mx_dfree` both have one. `SEG_WINL` takes any linear base, so a foreign window over a high region can be built. Reach in shipped software is not shown. |
+| gms-3 | confirmed | Windows (`mega_wnew`) and handle descriptors are both access 92h, so the private scan matches them. `mega_dfind` excludes both. |
+| gms-4 | confirmed | `.sub1`, `mega_segtile` and `mega_segbw` read a base and write a descriptor with no `sch_lock`, and `api_rxc` takes none either. `mega_ldt_alloc`'s `cli` covers only its own scan. |
+| gms-5 | confirmed | `mega_bclip` leaves CX alone when CF = 1, and `.put` ignores CF. |
+| gms-6 | confirmed | The difference needs 17 bits and is held in 16. The fix costs slightly more than +4 bytes. Reach is not shown. |
+| gms-7 | **refuted** | Chosen deliberately: MEGA-VIDEO-REALMODE-PLAN 5.1, the owner's answer 3, accepts a hang "like kern_big's", and kern_big on a 286 re-executes the fault the same way. A reporter is a question for the owner, not a defect. |
+| gms-8 | **corrected** | The `and word [mega_dklib], 0` must go BEFORE `mem_free_x`. `and` clears CF, and `mod_free_row`'s CF is its callers' answer (the 14.82 note in `mod.inc`). The high arm still needs the free, because MX_KOWN blocks skip `mx_dfree`, so the proc moves to `.mega` rather than going away. |
+| gms-9 | confirmed | 4 dead bytes. |
+| gms-10 | confirmed (spot) | The whole `[mega_ldte]` pass runs under one `cli`. The time is predicted. |
+| gms-R1 | confirmed | A proposal. Its premise holds. |
+| gms-R2 | confirmed | `mega_subsegf` is 201 bytes. An adapter would inherit gms-4's missing lock unless that is fixed first. |
+| gms-R3 | confirmed (spot) | A record-phase proposal. |
+
+Doc mismatches. All 10 are confirmed. Each quote was re-grepped and is unique.
+These were refined:
+
+- `fsx.inc` ~1.6 KB: changed to "~2.3 KB" rather than an exact count, which
+  would drift.
+- `mega.inc` `mega_pkghif` header: reflowed to two lines.
+- `mega_ldt_free`'s window note: the reviewer's quote spans two comment lines
+  and does not exist on one, so the fix rewrites both lines to say "bound".
+- `fsx.inc` copy-back note: the quote spans two comment lines. The fix inserts
+  the own-lease exception as extra comment lines.
+
+In SPEC.md, the 2,384 and 1,241 figures are corrected to 2,352
+(`rms_hi - rms_lo`) and 1,259 (`OSAPI_TABLE_LEN`, which SPEC.md 44486 already
+states).

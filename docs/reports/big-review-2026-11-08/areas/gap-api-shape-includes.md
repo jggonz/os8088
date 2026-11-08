@@ -431,3 +431,76 @@ and change by a register.
   in a second register as cheaply as it reads the name at DS:SI. If not, keep
   ES:DI for the cursor and pass the buffer in DX:BX as now. The saving shrinks
   to the re-seed and kern_small alias logic, about 40 of the 76 bytes.
+
+## Verification
+
+An adversarial re-read on 2026-11-08 at `bdd82658`, against the current files.
+Every cited site was opened, and the kern_small arm was checked wherever a
+finding depends on it.
+
+**Findings: 10 confirmed, 1 corrected, 0 refuted. Doc fixes: 17 confirmed**
+(the 13 mismatches above, split per site, plus one the verifier found).
+
+- **gi-1, confirmed.** `OS88_SNDCARD` is defined only under `KERN_BIG`
+  (kernel.asm 1008-1010), so kern_small's `osapi_vol_stat` is snd.inc's bare
+  `stc`/`ret`. AX is still the 0 from the `xor` at os88wseq.inc:74, and
+  `.stat` turns that into CF=1, AX=0, with `WS_ERR` = 0. REDLINE is not in
+  `SMALLOMIT` (`rlapply` is), so whether this is visible depends on REDLINE
+  running on kern_small, which nobody has checked (open question 2).
+  ABI-BREAK-LIST T3 is related but is not this item: T3 proposes deleting
+  these cells and was refused.
+- **gi-2, gi-3, confirmed.** `dsk_free_clus_x` has no cache, and no other cell
+  exposes `[dsk_spc]`. `dskw_read_at` masks with 511 on kern_big and with
+  `[dwr_clb]-1` only under `KERN_SMALL` (diskw.inc 3143-3148). `op_clb` is
+  bytes per cluster, and `op_lazyp`/`op_self` round to it. Nothing in SPEC
+  chooses clusters for kern_big on purpose; the evident reason is that one
+  body serves both kernels. Neither item is in ABI-BREAK-LIST or
+  KERNEL-BYTE-QUEUE.
+- **gi-4, confirmed**, as a hazard of the shape and not a live bug: the zeroing
+  rule is a documented caller contract (os88rseq.inc 21-24, SPEC 18.4.8.1).
+  The re-read turned up a **new mismatch**: the kernel's own `READ_SEQ`
+  banner (diskw.inc 3249-3253) says every snapshot bumps `[dsk_mgen]`,
+  including a navigation. In fact `disk_mount_x` bumps it only when
+  `dsk_bpb_bank_get` misses (disk.inc 4199-4204), as `[dsk_mgen]`'s own
+  banner says. A doc fix has been added for that sentence.
+- **gi-5, gi-11, spot-checked, confirmed.** `os88_rseq` is 0x18C-0x1D8 in
+  build/ftpd.map, 76 bytes. `os88data` is 0x2549-0x26D6, 397 bytes. The
+  carrier list matches a grep of `os88rseq.inc`.
+- **gi-6, confirmed.** The kern_small `dwf_dskw_write_at` is one instruction
+  below the `mov ax, FERR_NAME` that the `READ_SEQ`/`WRITE_SEQ` labels share,
+  so the 0-byte label move is real. `od_write` there re-walks on every banked
+  save after the first.
+- **gi-7, confirmed.** `sch_fast_on` loads `sch_fdivs[N]` or the RATE divisor,
+  and `pit_now` assumes 65,536 counts a tick. isoTron (itfs.inc 905-906) and
+  RealDMG (`rwlog`'s hook-period clock, with `pit_now` only outside a bracket)
+  already work around it.
+- **gi-8, corrected.** The `m83_syms`/`dskw_syms` mirror has no gate, and
+  `os88pit.inc` lacks an include guard. Both are confirmed. The `sb_now` part
+  is refuted: x3stub.asm 347-351 says it is `pit_now` "without its cli (a
+  backend never masks interrupts)". That is a deliberate choice, documented at
+  the site, in a test-only stub.
+- **gi-9, gi-10, confirmed.** The plain arm is the `%else` of
+  `CC_OVL_EAGER`/`CC_OVL_LAZY` (crt0.asm 1206), and `CC_OVL_PART` defines one
+  of the two (:206-207). Only tests/cfsx takes it.
+
+Doc-fix notes:
+
+- **Item 7's carrier count is corrected.** `%include "os88pit.inc"` appears in
+  eight shipped sources: ARCADE, FTPD, isoTron, MIDIRACK, PIXELSTEIN, RealDMG,
+  XTMP3 and ETHER.DRV. WIN16 only cites it in a comment. The FASTTICK
+  paragraph goes above the "ONE BODY" paragraph.
+- **Items 2-5 now name the callers that were checked.** `call OSAPI_VOL_STAT`
+  was found in PIXEL, XTMP3, REDLINE, SysCheck, os88wseq.inc and HDD.DRV.
+  `call OSAPI_FILE_WRITE_AT` was found in os88data.inc, WAVERACK, XTMP3 and
+  ETHER.DRV's ethcfg. Cyclone, FTPD and MIDIRACK only mention it in comments,
+  or reach it through os88data.
+- **Item 12 has no usable ellipsis quote, so it is split into three exact
+  edits** of `apps/os88api.inc`. They cover `READ_AT`'s granule,
+  `READ_SEQ`'s granule, and its remount sentence, which was also wrong about a
+  banked mount. **These lines are indented OSAPI contract comments that
+  `tools/abilock.py` fingerprints**, so they must land with
+  `python3 tools/abilock.py --update "..."` (no `PKG_FMT` bump), or `make`
+  fails.
+- **Every asm edit keeps its code lines byte for byte**, which a script checked
+  (it compares the text before each `;`). Every `old_text` occurs exactly once
+  in its file.
