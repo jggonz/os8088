@@ -646,3 +646,97 @@ the os88api.inc comment, which moves the PKG_FMT fingerprint (no bump).
   documentation fix; if no, ~14 declared seconds leave `fast`.
 - Should `docs/plans/completed/` be warn-only under engsys-1? It is design
   record, not measurement, and stale citations there do mislead.
+
+## Verification
+
+Adversarial pass, 2026-11-08: the cited code and documents were re-read at
+the branch head. checkdocs was run, and so was the suite registry
+(`suite.rows()`). Make and the emulators were not run.
+
+- **engsys-1: confirmed.** checkdocs reports 6 problems, all in this
+  review's own `areas/*.md`. `all` depends on `checkdocs`, so `make` fails
+  on this branch. Fixing those lines is part of assembling the review. The
+  systemic half stands: checkdocs is enforced on dated directories.
+- **engsys-2: confirmed.** All six greying cites point at ArtfulType's
+  section. They are fixed below. The fix to the menu-greying sentence is
+  worded so that it still applies after `text.json`'s rewrite of the same
+  sentence, which keeps the wrong number.
+- **engsys-3: confirmed.** §3 and the §15.1 fence are stale. So are the
+  DSV_SIZE figures. `boot.json` already fixes the KERNEL_SEG, KERN_BUDGET
+  and STK0_SIZE lines, so this area adds only VIEW_KB, the guard fence,
+  the 86,528 figure and DSV_SIZE.
+- **engsys-4: CORRECTED.** §1 rules 2 and 4, §4, §33 and §17 are stale as
+  stated. One claim is REFUTED: `make bench` exists (Makefile:13760, with
+  rules at 14509 and 14517). §1 rule 2 and the §4 splash row are fixed by
+  `boot.json`.
+- **engsys-5: confirmed.** The FULLSCREEN SDK comment is wrong in both
+  halves. Its fix needs `abilock.py --update` (no bump) in the same
+  commit. The SND_PLAY half is already listed, and `abi.json` fixes it.
+- **engsys-6: confirmed.** Every count was re-derived. The 0x04F5 ledger
+  line and the "asserts the table's start" sentence are fixed by
+  `abi.json`, not here.
+- **engsys-7: CORRECTED.** The fast-tier claims hold: 76 rows, 56.85 s
+  declared, and no owner exemption in the one-package rows' why= text. In
+  `full`, `noovl` IS an owner ratchet. The rows that break the tier rules
+  are `w16censall`, `knobself` and `khpknobs`.
+- **engsys-8: CORRECTED.** The mechanism holds. 29 basenames are shared
+  today, some of them from this review's own area files.
+- **engsys-9: confirmed.**
+- **engsys-10: confirmed.**
+- **engsys-11: confirmed.**
+- **engsys-12: confirmed.** `shutdown.inc` is the only kernel include that
+  ends outside `.text`. NASM's overlap behaviour was not re-tested.
+- **engsys-13: unchecked.**
+- **engsys-14: confirmed.**
+- **engsys-15: confirmed.** `-k` is fnmatch, so `-k '*'` passes the refusal.
+- **engsys-16: confirmed**, by the row's own why= text.
+- **engsys-17: confirmed.** No guard 8 exists.
+- **engsys-18: confirmed.** The line split was not re-measured.
+- **engsys-19: confirmed.**
+- **engsys-20: unchecked.**
+- **engsys-21: confirmed.**
+
+### Doc mismatches
+
+36 of the 39 were confirmed. Seven of the confirmed ones are not repeated
+because another area's fix covers the same text. Three were refuted. The
+40 fixes in the data file include five that the reviewer did not list:
+
+- section 17's menu-bar line
+- the `sch_wd_hits` segment
+- the §15.1 guard-5 line
+- a second DSV_SIZE line
+- the CLAUDE.md and AGENTS.md copies of the PERFORMANCE.md line count and
+  of the near-model sentence
+
+The refuted three:
+
+- **SPEC.md, section 16, `make bench`: REFUTED.** The target exists.
+- **CLAUDE.md:5, "carry the same repository guidance": REFUTED as a doc
+  fix.** It is a rule, and the defect is AGENTS.md lagging, which is
+  engsys-10's work.
+- **docs/README.md:74, "two documents may not share a basename": REFUTED
+  as a doc fix.** It describes the resolver correctly. The violation is
+  engsys-8's work.
+
+Covered elsewhere, so not repeated:
+
+- SPEC §1 rule 2: the segments and "no far code" (`boot.json`)
+- SPEC §3's KERNEL_SEG line (`boot.json`)
+- SPEC §4's splash entry (`boot.json`)
+- SPEC 20.3's table-length sentence and the 0x04F5 line (`abi.json`)
+- SPEC 20.3's SND_PLAY block (`abi.json`)
+- kernel.asm's "everything ADDED since" block (`abi.json`)
+
+Reworded fixes:
+
+- **The preamble.** It now names 104 as the one free top-level number.
+  The checkdocs.py edit is comment-only, and the dead `"45"`/`"49"`
+  entries stay in the set.
+- **§1 rule 4.** It is rewritten from the garbled text.
+- **§4's coverage sentence.** It names the gap instead of adding 35 rows.
+- **§17.** It gets two exact fixes, not a rewrite.
+- **The CLAUDE.md kernel-table line.** It drops the claim.
+- **TESTING.md and WRITING-TESTS.md.** They drop the counts, and
+  WRITING-TESTS.md now lists `noovl` as a ratchet and names the three
+  misfiled rows.

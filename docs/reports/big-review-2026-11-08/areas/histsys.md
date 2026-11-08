@@ -731,3 +731,54 @@ Each row: file:line, a short exact quote, what the code does, proposed text.
   handler word after `OSAPI_WM_CREATE` (modes, wizards)? Each would need a
   second table or a self-dispatching entry; a grep of `OSAPI_WM_ON*` call
   sites outside entry procs decides the real cost.
+
+## Verification
+
+Adversarial pass, 2026-11-08. Every hazard and every high or medium finding was
+re-read in the code. Low findings 6, 11, 15, 16 and 17 were spot-checked;
+12, 13 and 14 are unchecked. No finding is refuted. The corrected fields are
+in `data/histsys.json`.
+
+Findings:
+- **histsys-1** confirmed (PLAUSIBLE, unmeasured). The close box hides the window on the UI task. `inst_task_die` then runs gfx_lock, `wm_destroy`, the `.chrome` arm (`wm_dock_under` + `menu_draw_bar`, which draws text), `wm_destroy_seg` and `desk_drop_x` on the worker's own slice. SPEC 8.7.4 measured a covered Timer's text chain at about 90 bytes plus a 32-64 byte floor, so 128 is plausibly over. Eight 192-class packages, not nine.
+- **histsys-2** corrected. The missing handler is real. On the IBM 5150/5160 ROM, though, the int 0 stub masks the 8259, so a divide overflow is a dead machine (docs/TESTING.md, tests/int0sweep.py). Only GLaBIOS carries on with a garbage quotient. The 286+ re-execute hang stands.
+- **histsys-3** confirmed. No cached count exists. The FAT16 arm loads the window once per FAT sector. A cache must also be dropped on refat/remount and must not cover a redirected volume.
+- **histsys-4** corrected: severity medium -> LOW. The scan is pure round-robin. SPEC 7.3 already measured `QUANTUM=` at 16-61 ms against 37-70 with one worker, "inside the noise". Only the N-worker case is unmeasured.
+- **histsys-5** confirmed (rethink).
+- **histsys-6** confirmed (spot-check).
+- **histsys-7** corrected. `drv_publish` zeroes all 18 cells and copies only as far as the driver's `DRV_H_DSV` length. An in-place read must therefore length-check each non-sound cell, or else a minimum table length becomes a DRV_VER rule; without either it reads a short table's name string. The copy is also a snapshot. Net saving re-estimated at about -90 to -140 kern_big and about -36 kern_small (ESTIMATED).
+- **histsys-8** confirmed (flag-day rethink, bytes ESTIMATED).
+- **histsys-9** corrected. kern_small has 10 handler words x MAX_WIN 6 = 120 bytes, so it saves about -108, not -180. The kern_big arithmetic (13 x 12 = 312) is right.
+- **histsys-10** confirmed (flag-day rethink).
+- **histsys-11** confirmed (spot-check).
+- **histsys-12** unchecked.
+- **histsys-13** unchecked.
+- **histsys-14** unchecked.
+- **histsys-15** corrected. `[ticks]` is incremented before the wake scan, so AX = 0x8001 still sleeps its full length. Early wake starts at AX >= 0x8002.
+- **histsys-16** confirmed. `ticks`/`sch_*` are `.bss` and `sched_init` is boot-overlay code. Whether kern_small and kern_mega share the zero padding is still the open question above.
+- **histsys-17** confirmed (spot-check).
+
+Doc mismatches (31): every quote was found verbatim. None is refuted.
+- **Carried in `data/histsys.json` (15 fixes):**
+  - ui.inc:1255
+  - wm.inc:2353 (the stale `pop ax` bank)
+  - toast.inc:401 (both writers use one word store)
+  - sched.inc:104
+  - sched.inc:360 (softened to "checked on the kern_big binary")
+  - diskw.inc:480
+  - os88api.inc:1106 (an abilock-fingerprinted OSAPI contract line, so it is applied with `tools/abilock.py --update`, no bump)
+  - os88api.inc:4007
+  - SPEC 18.4.5 (:38441)
+  - SPEC :12420
+  - SPEC :18271
+  - the two structural moves, each as a pair of fixes: the `## 76` heading and intro go below §75.3.3, and the `## 51` heading and intro go below §50.6.12. All of §50.6.5-50.6.12 sat under §51's intro, not only 50.6.5.
+- **Confirmed but carried by another area's data file:**
+  - ui.inc:5 and SPEC close box (ui.json)
+  - events.inc:17/78, sched.inc:18/112/288/805, SPEC :10687 / :12353 / :12372 / :12400 / :18117 / :18181 (sched.json)
+  - wm.inc:15/501/3068 (wm.json)
+  - vga12.inc:301 (gfx.json)
+  - diskw.inc:496 (diskwrite.json)
+  - SPEC :34314 (diskread.json)
+
+  They are left out here so that no old_text is replaced twice.
+- Not proposed: the minimize box line beside SPEC :28270 has the same press/release error as the close box. sched.inc:2533's "1.8x margin" is stale too, for whoever applies sched.json.

@@ -1,0 +1,663 @@
+{
+ "area": "engsys",
+ "title": "The kernel engineering system: guards, ratchets, SPEC, tests",
+ "summary": "The engineering system is strong. The kernel has 636 assembly-time assertions (114 in kernel.asm, 522 in the .inc files). Budgets are derived from a stated KB rule. t_api_abi checks the API table against the emitted bytes. The ABI lock records a written reason for every fingerprint move. A dozen former prose rules are now gates (toast length, transparent text, .vga doors, module drops, movable claims, mega-only code). The weak half is what is still prose, and it fails in three repeatable shapes: running counts, hand copies of code, and section numbers that resolve to the wrong section. None of the three is gated, and each is wrong in the parts of SPEC.md a newcomer reads first (§1, §3, §4, §15-§17, §20.3). For example, checkdocs only proves a § number exists, so six citations of the greying standard point at ArtfulType's §46 and pass. The fast tier's admission rules are well argued but broken by about 17 one-package rows: the tier went from 37 to 76 rows, and the CPU budget, the only enforcement, absorbs the growth. This review's own in-progress reports currently make checkdocs, and so `make`, fail on this branch. Every fix is host-side tooling or text and costs 0 kernel bytes.",
+ "strengths": [
+  {
+   "title": "The assembler is the first gate",
+   "why": "Content rules are enforced at the line that breaks them, at zero runtime cost: TOASTSTR length, section-checked macros through __?SECT?__, MODFP refusing an out-of-order or zero-entry module block, and osapi_sys_kb's parts required to sum to what they measure. This is GEOS Esp's convention-aware assembler done with NASM's preprocessor.",
+   "evidence": "kernel/kernel.asm:345-366, 5524-5546, 7321-7363, 9561-9588; 636 %error sites across kernel/"
+  },
+  {
+   "title": "Budgets are derived, not chosen",
+   "why": "The only decision left is the KB figure, so no budget can quietly drift. KERN_KNOB keeps knob builds out of guard 1 and says why. budget-check ends the grace on all four budgeted kernels.",
+   "evidence": "kernel/kernel.asm:1441-1455, 9447-9477; Makefile:14825-14831"
+  },
+  {
+   "title": "Facts flow out of the assembler",
+   "why": "The %warning ks: line hands kernsize the ladder the kernel actually has, and os88sym refuses any map that is not byte-identical, so Python does not re-derive the layout.",
+   "evidence": "kernel/kernel.asm:9425-9434; tools/os88sym.py"
+  },
+  {
+   "title": "t_api_abi reads the binary",
+   "why": "It decodes every cell shape out of kernel.bin and resolves each one's target. All 78 OSAPI name/number pairs in SPEC.md, CLAUDE.md, KERNEL-MEMORY.md, TESTING.md and the SDK agree today.",
+   "evidence": "tests/unit/t_api_abi.py:1-60"
+  },
+  {
+   "title": "The ABI lock makes a bump a sentence",
+   "why": "Each fingerprint move carries a recorded decision. The fingerprint reads code plus each OSAPI_* contract comment, not prose, so it is neither noisy nor blind.",
+   "evidence": "tools/abilock.py docstring and surface(); tools/abi.lock.json history"
+  },
+  {
+   "title": "Self-maintaining mirrors",
+   "why": "t_mirror compares every name defined in more than one file, so a newly mirrored constant is covered without anyone remembering to add it. The lesson it records (a hand-written half makes a hand-written check) is reusable.",
+   "evidence": "tests/unit/t_mirror.py:24-50"
+  },
+  {
+   "title": "checkdocs learns from its own misses",
+   "why": "It now catches duplicate headings, three-digit sections, document-qualified citations, committed conflict markers and transparent-text totals (with historical pairs). The INDEX is generated and checked. No OS project of the era gated its own documentation.",
+   "evidence": "tools/checkdocs.py:1-152, 220-290; tools/os88index.py"
+  },
+  {
+   "title": "Small harness, actionable failures",
+   "why": "check() never raises, prints want/got and the first differing offset, and why= is a habit. A gate that fails a year later can still be acted on.",
+   "evidence": "tests/unit/harness.py:1-76"
+  },
+  {
+   "title": "The tier policy asks the right questions",
+   "why": "Two questions decide tiers: 'is it worth having to somebody who did not touch this?' and 'did you obviously break the OS?'. The budget is charged in CPU, not wall clock, so a busy box does not fail a green tier.",
+   "evidence": "docs/WRITING-TESTS.md 2.1/2.2; tools/os88test.py:614-650"
+  }
+ ],
+ "findings": [
+  {
+   "id": "engsys-1",
+   "kind": "bug",
+   "severity": "high",
+   "title": "The branch's committed review reports fail checkdocs, so `make` fails; dated directories are held to today's headings",
+   "detail": "checkdocs on 4f0da91 reports 6 problems, all in committed review reports. checkdocs is all's first prerequisite, so `make` on the-big-review stops before building a floppy. Several of the problems are reports quoting a bad citation as evidence. The systemic half: docs/README.md says reports and history are not maintained, yet checkdocs fails on them. SITES_HIST exists to work around exactly this contradiction.",
+   "evidence": [
+    "docs/reports/big-review-2026-11-08/areas/{gfx.md:22,input.md:113,memory.md:132,ui.md:16,video.md:773} - checkdocs output",
+    "Makefile:2425 all: checkdocs ...",
+    "docs/README.md table: reports 'not maintained'",
+    "tools/checkdocs.py:124-152 SITES_HIST"
+   ],
+   "recommendation": "Fix the six lines now: write a quoted bad citation without its §/'SPEC.md ' prefix. Then have checkdocs print problems in docs/reports/, docs/history/ (and possibly docs/plans/completed/) as warn: lines, and keep failing everywhere else.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "Re-ran tools/checkdocs.py: 6 problems, all in docs/reports/big-review-2026-11-08/areas/ (gfx.md:22, input.md:113, memory.md:132, ui.md:16 x2, video.md:773); Makefile:2425 `all: checkdocs ...`. They are this review's own in-progress reports, so the immediate half is fixed as part of assembling the review; the systemic half (docs/README.md says reports are not maintained, yet checkdocs fails on them; SITES_HIST is the workaround) stands."
+  },
+  {
+   "id": "engsys-2",
+   "kind": "hazard",
+   "severity": "high",
+   "title": "A citation that resolves to the WRONG section passes: six §46 cites mean §47",
+   "detail": "The preamble says renumbering is refused because checkdocs cannot catch a citation that resolves to something else. That class is already live without any renumbering. The greying standard is §47, but six SPEC.md lines cite §46 (ArtfulType), including hard rule 8, which binds packages.",
+   "evidence": [
+    "SPEC.md:161, 26453, 26463, 26555, 55757, 76640",
+    "SPEC.md:96478 '## 47. Disabled controls'",
+    "SPEC.md:95185 '### 46.3 Layout' (ArtfulType)",
+    "SPEC.md:20-23 preamble"
+   ],
+   "recommendation": "Fix the six. Add a heading-drift check: compare SPEC.md's {number: title} map at the merge-base (one git show) with HEAD. Fail when a number's title changes or a title's number changes, and list every citation of the old number. Optionally, also check a parenthesised title word after a citation.",
+   "phase": "now",
+   "bytes_est": "0",
+   "prior_art": "Inside Macintosh and the NT design workbook cited by chapter NAME, which cannot resolve to the wrong section.",
+   "verdict": "confirmed",
+   "verify_note": "All six cites (SPEC.md 161, 26453, 26463, 26555, 55757, 76640) say §46; §46 is ArtfulType (94991), the greying standard is §47 (96478). Doc fixes below. Note text.json's rewrite of the 26453 sentence keeps §46; this area's fix is written so it applies either way."
+  },
+  {
+   "id": "engsys-3",
+   "kind": "weakness",
+   "severity": "high",
+   "title": "SPEC.md's hand copies of code are ungated and wrong",
+   "detail": "Wrong today: §3 has KERNEL_SEG 0x0800 (it is 0x0060), KERN_BUDGET 74240, STK0_SIZE 1024 (512) and VIEW_KB 3 (1 or 2). §15.1 reproduces guard 1 without KERN_GRACE, the mega arm or the KERN_KNOB skip, reproduces guard 5 without BOOT2_PAD, and quotes 86,528 bytes. §62.9.1 gives DSV_SIZE as 26/28 (it is 36). Of 182 literal 'NAME equ N' lines in SPEC code fences whose name the tree defines, 4 disagree, so a gate would be nearly clean on day one.",
+   "evidence": [
+    "SPEC.md:4041-4085",
+    "kernel/kernel.asm:27, 1446-1455, 1568, 1622, 1628",
+    "SPEC.md:32330, 32358 vs kernel/kernel.asm:9469-9477, 9682",
+    "SPEC.md:113326, 113335 vs kernel/driver.inc:557"
+   ],
+   "recommendation": "Have t_mirror read SPEC.md's fenced nasm blocks, skipping those marked as history. Better: generate §3 and §15.1 between markers, the way the kernsize baseline block is generated.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "§3: KERNEL_SEG 0x0800 (code 0x0060, kernel.asm:27), KERN_BUDGET 74240 (derived 100,864/64,000/68,096, 1446-1455), STK0_SIZE 1024 (512, 1568), VIEW_KB 3 (1 / 2 on kern_small, 1622/1628). §15.1 fence lacks KERN_GRACE, the mega arm, the KERN_KNOB skip and BOOT2_PAD; prose says 86,528. DSV_SIZE 26/28 vs 36 (driver.inc:557). The 182/4 count is not re-checked. boot.json already fixes the KERNEL_SEG, KERN_BUDGET and STK0_SIZE lines, so they are not repeated here."
+  },
+  {
+   "id": "engsys-4",
+   "kind": "weakness",
+   "severity": "high",
+   "title": "SPEC's front matter describes retired designs as current",
+   "detail": "§1 rule 2 gives the wrong KERNEL_SEG and LOW_SEG and says 'no far code and no second code segment', but .cold is far and has 363 far-call sites. §1 rule 4 says 'four sections' (about 30 exist) and that .bss is last (the sentinel block is). §33 says 'cold code is ordinary code, near called'. §4 lists a splash entry at 0x0008 (that address is free) and claims the table covers all of kernel/ (35 of 74 files are missing). §17 describes the File + Special menus, built-in Timers, segment 0x0800 and QEMU.",
+   "evidence": [
+    "SPEC.md:102-107, 128-134, 161",
+    "SPEC.md:70971-70991",
+    "SPEC.md:4092, 4132; ls kernel/ = 74 files, 35 absent from the table",
+    "SPEC.md:34211-34300 (section 17)",
+    "kernel/kernel.asm:2142-2269 (section declarations), 2359-2365 (0x08 free), 5524-5530 (COLDCALL)"
+   ],
+   "recommendation": "Rewrite §1-§4 and §15-§17 as a short current front matter: one paragraph per rule plus the gate that enforces it. Move the retired narrative to docs/history/. Gate §4 so every kernel/*.inc must appear in its table.",
+   "phase": "now",
+   "bytes_est": "0",
+   "prior_art": "Inside Macintosh IV-VI marked what they superseded instead of rewriting history into the current chapter.",
+   "verdict": "corrected",
+   "verify_note": "Mostly confirmed: §1 rule 2 (wrong segments, 'no far code' while 380 `call COLD_SEG:` + 22 COLDCALL sites exist), §1 rule 4 (garbled 'Two further sections ... : and `.lowbss`'; ~30 sections; the sentinel block, not .bss, is last), §33 'cold code is ordinary code, near called', §4's splash entry at 0x0008 and 35 of 74 kernel/ files without a row, §17 (logo+File+Special menus, segment 0x0800). REFUTED part: §16's `make bench` exists (Makefile:13760 `bench: $(BUILD)/bench.img $(BUILD)/bench360.img`, rules at 14509/14517)."
+  },
+  {
+   "id": "engsys-5",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "Two copies of the slot contracts, disagreeing in both directions",
+   "detail": "The SDK %define comments are fingerprinted. SPEC §20.3's 37-entry contract block is read by no tool. SND_PLAY is stale in SPEC (already listed); FULLSCREEN is stale in the SDK, which says BX is used on enter and only enter refuses, while the code binds BX on exit too and refuses either verb when another window holds the screen.",
+   "evidence": [
+    "SPEC.md:44800-44960; 44810-44816",
+    "apps/os88api.inc:539-545, 892-897",
+    "kernel/wm.inc:4287-4313"
+   ],
+   "recommendation": "Keep the SDK as the single copy. Delete or generate §20.3's block, and fix the FULLSCREEN comment with abilock --update (no bump).",
+   "phase": "now",
+   "bytes_est": "0",
+   "listed_as": "ABI-BREAK-LIST §11 bullet 1 (SND_PLAY only)",
+   "prior_art": "windows.h and the OS/2 .INC were the reference and the manuals rendered them; Inside Macintosh's per-chapter Summary was the one listing.",
+   "verdict": "confirmed",
+   "verify_note": "apps/os88api.inc:892-897 says BX on enter only and 'enter refused'; kernel/wm.inc:4287-4313 binds BX on exit and one latch test refuses either verb. SND_PLAY half is already in ABI-BREAK-LIST §11 and abi.json fixes SPEC's copy. The SDK comment fix needs `abilock.py --update` (no bump) in the same commit, since the fingerprint reads contract comments."
+  },
+  {
+   "id": "engsys-6",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "Running counts in contract prose rot",
+   "detail": "The §20.3 ledger says 1,253 bytes, ending at 0x04F5; the table is 1,259 bytes, ends at 0x04FB, and OSAPI_VOL_CHECK is the 119th rare cell. 'The fifteen' inline cells heads a table of 19 rows. 'TWELVE LABELS' covers 20 sections. TESTING.md says 37/43/10/907 rows; the registry has 76/14/1944. WRITING-TESTS says five plus five full rows; there are 14. The Makefile says ~2s. CLAUDE.md says PERFORMANCE.md is 6,553 lines (it is 15,235); os88index says SPEC is 67k lines (245k). checkdocs already gates exactly one count (textsites). The OSAPI_TABLE_LEN guard is a hand tally that t_api_abi supersedes.",
+   "evidence": [
+    "SPEC.md:44378, 44411",
+    "kernel/kernel.asm:4494-4495, 9787",
+    "docs/TESTING.md:198, 241-243",
+    "docs/WRITING-TESTS.md:138",
+    "Makefile:22, 2547",
+    "CLAUDE.md:632",
+    "tools/checkdocs.py:124-152"
+   ],
+   "recommendation": "Generalise SITES/SITES_HIST into a COUNTS table of (regex, live computer, historical pairs). Feed it tier counts from suite.rows(), the table length and end from kernel.map, the inline-cell count and the kernel file count. Adopt a convention: a prose count either carries its moment or is not written. Derive or drop the OSAPI_TABLE_LEN tally.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "Checked: table guard 44*8+11*7+119*6+... = 0x04EB = 1,259 bytes (kernel.asm:4494-4495); 'The fifteen' heads 19 rows; sentinel block checks 20 sections under 'TWELVE LABELS'; registry fast 76 / full 14 / soak 1,944 vs TESTING.md 37/43/10/907 and WRITING-TESTS 'five' + 'five'; Makefile 'all is 1,800 lines down' (it is at 2425) and '~2s'; PERFORMANCE.md 15,235 lines vs 6,553; SPEC.md 245,112 vs ~67,000. The 0x04F5 line is fixed by abi.json, not here."
+  },
+  {
+   "id": "engsys-7",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "Tier admission rules are prose and are broken by about 17 fast rows and 4 full rows",
+   "detail": "WRITING-TESTS 2.1 says one-package, driver or tool rows are soak, with two named exceptions. Fast nonetheless carries WIN16's five, sheetfmtlib, isotronclean, lemdat, wrsim, x3xttab, stik, stikcard, romtool, catdisk, installabi, brcapacity-fixtures and arcprebuilt-stamp (about 14 declared seconds), plus chromesites, which is kernel-internal. Full has 14 rows against 10 documented; noovl is an unlisted owner ratchet, and w16censall, knobself and khpknobs break 2.2's rules. The only enforcement is the 30s CPU charge, so fast grew from 37 to 76 rows (56.9s declared) unnoticed.",
+   "evidence": [
+    "suite.rows(): fast 76 rows / 56.85s declared, full 14",
+    "docs/WRITING-TESTS.md 2.1, 2.2, line 138",
+    "tests/suite.py:117-133, 2413-2465, 21273-21278"
+   ],
+   "recommendation": "Add Row(family=boundary|rules|artifacts|tree) or owner='<word, date>'. t_registry fails any fast or full row that has neither. Generate the family tables in suite.py, TESTING.md and WRITING-TESTS from the registry. Then the owner moves or exempts each row.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "corrected",
+   "verify_note": "Confirmed for fast: 76 rows / 56.85s declared vs the 30s CPU budget, and the 17 one-package rows plus chromesites carry no owner exemption in their why= text. Corrected for full: of the four rows WRITING-TESTS does not list, noovl IS an owner ratchet ('FULL and not fast because the owner asked for it there', suite.py:2453); the three that break 2.2 are w16censall, knobself AND khpknobs (knob builds)."
+  },
+  {
+   "id": "engsys-8",
+   "kind": "hazard",
+   "severity": "medium",
+   "title": "Basename collisions silently disable citation checks",
+   "detail": "docs/README.md's 'no shared basename' rule is ungated, and 29 basenames are shared. The stems dict keeps the last path. So `LESSONS.md §3` in two skills resolves to vga-face/LESSONS.md, which numbers no headings, and is skipped as uncheckable, although the file it means numbers six.",
+   "evidence": [
+    "docs/README.md:74",
+    "tools/checkdocs.py:204 stems dict",
+    "git ls-files: README.md x27, BRIEF.md x11, SKILL.md x10, LESSONS.md x8",
+    ".claude/skills/refresh-stale-pr/SKILL.md:181; review-fork-pr/SKILL.md:149,206"
+   ],
+   "recommendation": "Resolve a qualifier first in the citing file's own directory, and by basename only when it is unique. Fail an ambiguous qualifier and name the candidates.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "corrected",
+   "verify_note": "Confirmed mechanism (checkdocs.py:204 stems dict keeps the last path; vga-face/LESSONS.md has 0 numbered headings while refresh-stale-pr's has 6 and review-fork-pr's 13). Count corrected: 29 shared basenames today, some from this review's own areas/*.md."
+  },
+  {
+   "id": "engsys-9",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "checkdocs does not read .c, .h, .txt or .sh",
+   "detail": "Unchecked: 1,579 citations in .c, 138 in .h and 205 in .txt (including the ratchet registries' reasons). One is known broken: pmc_menu.c:121 cites SPEC.md section 91.14, and §91 has no subsections. apps/c64/*.c writes 32 bare § citations meaning C64-SPEC, against the rule that a bare § means SPEC.md.",
+   "evidence": [
+    "tools/checkdocs.py:214-216",
+    "apps/paccman/pmc_menu.c:121",
+    "apps/c64/c64.c:302,1352,1366 ..."
+   ],
+   "recommendation": "Add c/h/txt/sh to the scan, qualify the C64 citations and fix pmc_menu.c.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "checkdocs.py scans md/inc/asm/py and Makefile only. pmc_menu.c:121 cites SPEC.md 91.14 and §91 (170017) has no numbered subsection; apps/c64/*.c carry ~60 bare § cites meaning C64-SPEC (counts not re-derived exactly)."
+  },
+  {
+   "id": "engsys-10",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "AGENTS.md has diverged from CLAUDE.md by 726 lines",
+   "detail": "Both files say they carry the same guidance and differ only in title and intro. After line 12, 726 lines differ (786 against 1,370 lines). A Codex session reads older rules.",
+   "evidence": [
+    "CLAUDE.md:5; AGENTS.md:5",
+    "diff <(sed 1,12d CLAUDE.md) <(sed 1,12d AGENTS.md): 726 lines",
+    "AGENTS.md:666 vs CLAUDE.md:953"
+   ],
+   "recommendation": "Generate AGENTS.md from CLAUDE.md with a substitution table for the intro and tool names, and check it in checkdocs the way the index is checked.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "CLAUDE.md 1,370 lines vs AGENTS.md 786; `diff` after line 12 prints 726 changed lines; both files' line 5 says they carry the same guidance."
+  },
+  {
+   "id": "engsys-11",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "The C SDK's constants and thunks are outside both t_mirror and the ABI lock",
+   "detail": "t_mirror's C list covers four emulator .c files and not os88.h, whose OS88_ prefix would defeat name pairing anyway. abilock fingerprints os88api.inc and os88drv.inc only. os88.h has 80 numeric defines; 57 pair with SDK names and all agree today.",
+   "evidence": [
+    "tests/unit/t_mirror.py:181-183",
+    "tools/abilock.py GUARDS",
+    "apps/cc/os88.h (1,476 lines), apps/cc/os88thunk.asm"
+   ],
+   "recommendation": "Add os88.h to t_mirror with a prefix map, and add os88.h and os88thunk.asm to PKG_FMT's fingerprint files.",
+   "phase": "now",
+   "bytes_est": "0",
+   "prior_art": "Microsoft H2INC generated MASM includes from C headers so the two could not disagree.",
+   "verdict": "confirmed",
+   "verify_note": "t_mirror CDEF lists only the four emulator .c files (t_mirror.py:181-183); abilock GUARDS fingerprints os88api.inc and os88drv.inc only. 57/80 agreement not re-counted."
+  },
+  {
+   "id": "engsys-12",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "Section switch-back is gated only for nobits sections",
+   "detail": "With -w+error, NASM only refuses a nobits section left open. A progbits section left open is silent. shutdown.inc ends in .modu by design, because ctrl.inc includes it inside .modu. The sentinel block covers 20 sections but not .modx/.mods/.modfs/.vga/.cfx; for an exact start= successor NASM itself fails with a section overlap (verified), so only padded gaps need a sentinel.",
+   "evidence": [
+    "kernel/shutdown.inc:5 (only section directive)",
+    "kernel/ctrl.inc:1038",
+    "kernel/kernel.asm:9786-9886",
+    "nasm: 'fatal: sections .a and .b overlap!'"
+   ],
+   "recommendation": "Add a host check that each kernel .inc's last section directive equals the section active at its %include (or .text), with an exemption list.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "kernel/shutdown.inc ends in .modu (its one section line, :5), included at ctrl.inc:1038 inside .modu (1021); no other kernel .inc ends outside .text. The sentinel block omits .vga, .cfx, .modx, .mods, .modfs. NASM overlap behaviour not re-tested."
+  },
+  {
+   "id": "engsys-13",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "Ratchets are exact-match registers, not one-way; 21 bespoke parsers",
+   "detail": "The gates force registry == tree in both directions, but a new line raising a count passes with any reason. Direction is held only by review.",
+   "evidence": [
+    "tests/*.txt: 21 registries",
+    "tests/unit/t_textrules.py:138-150",
+    "tests/unit/t_movable.py:285-300"
+   ],
+   "recommendation": "Write a shared tests/unit/ratchet.py (parse, require a reason, compare with the tree) and have it print a warn: line when a registry total rises against the merge-base. A candidate new registry: the 27 bare sti in kernel/.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "unchecked",
+   "verify_note": ""
+  },
+  {
+   "id": "engsys-14",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "Gates regex NASM source for facts the assembler already emits",
+   "detail": "t_kernbudget finds three KERN_BUDGET arms by position and evaluates one expression shape, although the ks: line already prints budget=. A source reformat breaks such gates even when nothing semantic changed.",
+   "evidence": [
+    "tests/unit/t_kernbudget.py:72-98",
+    "kernel/kernel.asm:9425"
+   ],
+   "recommendation": "Read derived facts from the ks:/ksm: lines or kernel.map. Keep source regexes for rules that are about the source itself.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "t_kernbudget.py:72-98 locates three `KERN_BUDGET equ` arms by position and accepts one expression shape; the ks: line already reports budget."
+  },
+  {
+   "id": "engsys-15",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "The whole-soak permission refusal is bypassed by -k '*'",
+   "detail": "Both runners test only `not a.k`, so any glob that matches everything runs all 1,944 rows without --user-asked.",
+   "evidence": [
+    "tools/os88test.py:1318",
+    "tools/os88soak.py:1050"
+   ],
+   "recommendation": "Also refuse when the selection covers more than ~90% of the tier.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "os88test.py:1318 and os88soak.py:1050 refuse only on `not a.k`; -k is fnmatch (os88test.py:1338), so -k '*' selects all 1,944 soak rows without --user-asked."
+  },
+  {
+   "id": "engsys-16",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "builds= is judged per script, not per mode",
+   "detail": "brcapacity-fixtures is a fast row that runs no make. It carries builds=True only because the script runs make in other modes, so the row leaves the parallel lane and its flag says something false.",
+   "evidence": [
+    "tests/suite.py:21273-21278",
+    "tests/unit/t_registry.py BUILDS_WITHOUT_MAKE"
+   ],
+   "recommendation": "Move the row to soak (it is a one-package row), or key t_registry's make test on the row's argv.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "The row's own why= says 'builds=True only because the registry reads tests/brcapacity.py for `make`; the --fixtures mode runs no make'."
+  },
+  {
+   "id": "engsys-17",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "Guards are cited by unstable, out-of-order numbers",
+   "detail": "In file order the guards are numbered 1, 2, 2d, 3, 3b, 4, 6, 7, 6b, 4b, 5, 5b, 5c. SPEC §3 refers to a 'guard 8', and docs cite guards by number.",
+   "evidence": [
+    "kernel/kernel.asm:9438-9715",
+    "SPEC.md:4041"
+   ],
+   "recommendation": "Give each guard a stable tag in its %error text (e.g. [G-BUDGET]) and cite the tags.",
+   "phase": "record",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "File order is 1, 2, 2d, 3, 3b, 4, 6, 7, 6b, 4b, 5, 5b, 5c (kernel.asm:9438-9715); no guard 8 exists, but SPEC §3 cites 'guard 8'."
+  },
+  {
+   "id": "engsys-18",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "SPEC.md is two documents: 56% of it is package design notes",
+   "detail": "245,112 lines and 5,212 numbered headings. 137,687 lines are package sections and 107,389 kernel/system. 239 headings are out of numeric order among their siblings. The binding kernel contract is a minority of the document that claims to be it.",
+   "evidence": [
+    "grep '^## ' SPEC.md (129 top-level sections)",
+    "e.g. SPEC.md:52774 (22.15) before 53330 (22.6)"
+   ],
+   "recommendation": "Move each package section into <PKG>-SPEC.md, keeping its numbers. This is a mechanical citation rewrite that checkdocs already resolves. SPEC.md keeps the kernel, the ABI and cross-package standards. Add a generated number-to-line TOC to INDEX.",
+   "phase": "now",
+   "bytes_est": "0",
+   "prior_art": "Inside Macintosh had a chapter per manager; Minix kept its contract small enough to print beside the code.",
+   "verdict": "confirmed",
+   "verify_note": "SPEC.md is 245,112 lines with 129 top-level sections; '### 22.15' (52774) precedes '### 22.6' (53330). The 56% split is not re-measured."
+  },
+  {
+   "id": "engsys-19",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "Machine-readable routine contracts (register discipline is ungated)",
+   "detail": "Hard rule 3 has no gate; the stack walker checks balance, not clobbers. The kernel already has 1,476 '; out:' and 804 '; clobbers:' header lines, which nothing parses, and they drift: wm_content's header says W_X+1 but the routine returns W_X for a flush-left window.",
+   "evidence": [
+    "kernel/wm.inc:5697 vs 5705-5707",
+    "tests/unit/t_stkbalance.py:1-27"
+   ],
+   "recommendation": "Fix a header grammar (in/out/clobbers/flags/lock). Generate an autodoc-style routine reference from it. Add a conservative report-only checker that flags a register written but neither listed in out:/clobbers: nor saved and restored.",
+   "phase": "now",
+   "bytes_est": "0",
+   "prior_art": "GEOS PASS:/RETURN:/DESTROYED: headers; MASM PROC USES; AmigaOS autodocs.",
+   "verdict": "confirmed",
+   "verify_note": "wm_content's header (wm.inc:5697) says W_X+1 but `call wm_flush / jc .full` returns W_X for a flush-left window; ~1,480 '; out:' and ~900 clobbers lines exist and nothing parses them."
+  },
+  {
+   "id": "engsys-20",
+   "kind": "prior-art",
+   "severity": "low",
+   "title": "A checked build at the API boundary",
+   "detail": "Many SDK contracts are preconditions that can be checked at runtime: the gfx lock held, BX is the caller's window, UI task only, DF=0. Nothing checks them while the system runs.",
+   "evidence": [
+    "apps/os88api.inc contract comments ('caller holds the gfx lock', 'a window of YOURS')"
+   ],
+   "recommendation": "Add a CHECKED=1 knob that asserts those preconditions in the SLOT/RSLOT dispatch for the cells whose contract names them, reporting through the debug registry (§57). Add a soak row that drives packages under it.",
+   "phase": "now",
+   "bytes_est": "0 shipped (knob only, bounded by guard 2)",
+   "prior_art": "Windows 3.1 debug KERNEL parameter validation; NT checked build.",
+   "verdict": "unchecked",
+   "verify_note": ""
+  },
+  {
+   "id": "engsys-21",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "The Makefile is one 20,872-line file, 53% comments",
+   "detail": "11,044 of the lines are comments and there is one include. The incident narratives are valuable, but each is a claim that rots in place.",
+   "evidence": [
+    "Makefile:22, 2547",
+    "Makefile:10105 (the only include)"
+   ],
+   "recommendation": "Split by subject into mk/*.mk, following the apps/cc/Makefile.inc precedent. Move long narratives to the doc that owns each subject and leave a pointer.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "Makefile is 20,872 lines with ~11,070 comment lines; the only include is apps/cc/Makefile.inc (10105)."
+  }
+ ],
+ "doc_fixes": [
+  {
+   "file": "SPEC.md",
+   "old_text": "- **Sections 46 to 49 are unused.** §45 is the Tracker; the four above it are\n  free for whatever comes next.",
+   "new_text": "- **Section 104 is unused.** §103 is REDLINE and §105 MIDIRack; the number\n  is free for whatever comes next.",
+   "why": "SPEC.md has headings ## 46 (ArtfulType), 47 (Disabled controls), 48 (Missile Command), 49 (TameGram); the only absent top-level number is 104"
+  },
+  {
+   "file": "tools/checkdocs.py",
+   "old_text": "# Plus the reserved-range note in the preamble, which names a span, not a\n# heading.",
+   "new_text": "# Plus 45 and 49, left from the preamble's old \"Sections 46 to 49 are\n# unused\" note: both are headings now (SPEC.md 45, 49), so the two entries\n# are dead.",
+   "why": "SPEC.md:90912 '## 45. Tracker' and :98518 '## 49. TameGram' are real headings; comment-only change, the set is untouched"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "   kernel.asm's own final `section .bss` block (§15) is the last thing\n   assembled.",
+   "new_text": "   kernel.asm's end-of-file section sentinels (§15.1.2) are the last thing\n   assembled, and must stay so.",
+   "why": "kernel/kernel.asm:9776-9886: the sentinel block ('THIS BLOCK MUST STAY THE LAST THING IN THE FILE') follows the final `section .bss` at 9808"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "   Two further sections exist and follow the same switch-back rule:\n   and `.lowbss` (task stacks + disk buffers in `LOW_SEG`, §2.1).\n   All four are declared once, with their attributes, at the top of\n   `kernel.asm`; modules switch with a bare `section <name>`.",
+   "new_text": "   Every other section follows the same switch-back rule: `.lowbss` (task\n   stacks + disk buffers in `LOW_SEG`, §2.1), `.cold` (§2.6), `.vga`\n   (§2.10.9), `.mega`, `.ovl` and one per on-demand module image (§2.8).\n   All are declared once, with their attributes, at the top of\n   `kernel.asm`; modules switch with a bare `section <name>`. `shutdown.inc`\n   alone ends outside `.text`, because `ctrl.inc` includes it inside `.modu`.",
+   "why": "kernel/kernel.asm:2142-2269 declares ~30 sections (.boot2 .text .bss .lowbss .vgabuf .cold .cfx .vga .mega .ovl .modc/.modu/...); the old sentence is garbled ('exist ...: and `.lowbss`'); kernel/shutdown.inc:5 is its only section line, included at ctrl.inc:1038 inside .modu (1021)"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "greyed the way §46 says",
+   "new_text": "greyed the way §47 says",
+   "why": "§47 (SPEC.md:96478) is 'Disabled controls - the greying standard'; §46 is ArtfulType (94991)"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "§39.4/§46).",
+   "new_text": "§39.4/§47).",
+   "why": "the greying flag is §47 (96478); old_text chosen so it applies before or after text.json's rewrite of the same sentence"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "Paint does both (§46.3).",
+   "new_text": "Paint does both (§47.3).",
+   "why": "§46.3 is ArtfulType's Layout (95185); §47.3 'Where the tree stands' (96604) lists Paint's menu items"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "It is the §46 rule 5 case",
+   "new_text": "It is the §47 rule 5 case",
+   "why": "the seven greying rules are §47.1 (96487)"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "a flag and not a colour** (§46)",
+   "new_text": "a flag and not a colour** (§47)",
+   "why": "§47.1 rule 1 'Disabled is a FLAG, not a colour' (96489), which names the Minesweeper 8"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "the disabled flag (§46 rule 1)",
+   "new_text": "the disabled flag (§47 rule 1)",
+   "why": "§47.1 rule 1 (96489)"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "VIEW_KB       equ 3          ; each window's cache, claimed when it opens",
+   "new_text": "VIEW_KB       equ 1          ; a listing claim's floor (2, fixed, on\n                             ; kern_small), claimed when a window opens",
+   "why": "kernel/kernel.asm:1622 VIEW_KB equ 1 (kern_big/kern_mega, the floor of a claim sized to its folder, SPEC 22.6.4) and :1628 equ 2 on kern_small"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "%if KERN_SIZE > KERN_BUDGET\n%error \"kernel too big: it must fit KERN_BUDGET - see docs/KERNEL-MEMORY.md\"\n%endif",
+   "new_text": "%ifndef KERN_KNOB\n%ifdef KERN_MEGA\n%if MEGA_RESIDENT > KERN_BUDGET + KERN_GRACE\n%error \"kern_mega too big: what it keeps in conventional memory after the switch is past KERN_BUDGET's branch grace - see docs/KERNEL-MEMORY.md\"\n%endif\n%elif KERN_SIZE > KERN_BUDGET + KERN_GRACE\n%error \"kernel too big: past KERN_BUDGET's branch grace - see docs/KERNEL-MEMORY.md\"\n%endif\n%endif",
+   "why": "kernel/kernel.asm:9469-9477: guard 1 is skipped under KERN_KNOB, has a kern_mega arm on MEGA_RESIDENT and allows KERN_GRACE"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "%if KERNEL_SEG*16 + KERN_SIZE > MIN_RAM_KB*1024 - BOOT_SECT - BOOT_STACK\n%error \"the kernel does not fit MIN_RAM_KB - see docs/KERNEL-MEMORY.md\"\n%endif",
+   "new_text": "%if KERNEL_SEG*16 + KERN_SIZE + BOOT2_PAD > MIN_RAM_KB*1024 - BOOT_SECT - BOOT_STACK\n%error \"the kernel cannot BOOT on MIN_RAM_KB - see docs/KERNEL-MEMORY.md\"\n%endif",
+   "why": "kernel/kernel.asm:9682-9684 adds BOOT2_PAD (guard 5b) and words the error 'cannot BOOT'; it sits inside %ifndef KERN_KNOB / %ifndef KERN_MEGA, as the prose below already says"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "against 86,528 bytes (§2).",
+   "new_text": "against `KERN_BUDGET`, derived per kernel (§2): 100,864 bytes on kern_big,\n64,000 on kern_small and 68,096 on kern_mega against `MEGA_RESIDENT`, with\n`KERN_GRACE` (2,048) over it allowed in branch work until `make budget-check`.",
+   "why": "kernel/kernel.asm:1441-1455 and the guard 1 comment at 9438-9445"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "The table is the whole of `kernel/`, and that is now literally true.",
+   "new_text": "The table is not yet the whole of `kernel/`: `driver.inc`, `mod.inc`,\n`xmem.inc`, `lz.inc`, `toast.inc`, `clip.inc`, the `mega*.inc` family and\nothers have no row, and nothing checks that a file does.",
+   "why": "35 of the 74 files in kernel/ have no `kernel/<file>` row in SPEC.md:4090-4130 (checked file by file)"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "gray dither, menu bar (logo + File\n   + Special)",
+   "new_text": "gray dither, menu bar (the System menu,\n   `Locator` and its File menu, §12.3)",
+   "why": "kernel/menu.inc:4-10 and SPEC.md 12.3: the bar is the System menu, the application's name and Locator's one menu, File; there is no Special menu"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "readable with QMP `xp` on\n    segment 0x0800).",
+   "new_text": "readable with QMP `xp` on\n    segment 0x0060).",
+   "why": "kernel/kernel.asm:27 KERNEL_SEG equ 0x0060"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "only by a debugger (QMP `xp` on segment 0x0800)",
+   "new_text": "only by a debugger (QMP `xp` on segment 0x0060)",
+   "why": "kernel/kernel.asm:27 KERNEL_SEG equ 0x0060 (sch_wd_hits is .bss in KERNEL_SEG)"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "Cold code is ordinary code, near\ncalled like everything else. If the image has to shrink it shrinks by doing\nless or doing it smaller, not by moving it somewhere the accounting cannot\nsee.",
+   "new_text": "Cold code goes in `.cold` (§2.6),\na code segment of its own entered by far calls, and it is still RESIDENT:\n`.cold` relieves the 64KB window and nothing else. If the footprint has to\nshrink it shrinks by doing less or doing it smaller, or by becoming an\non-demand module (§2.8), not by moving it somewhere the accounting cannot\nsee.",
+   "why": "kernel/kernel.asm:2159 section .cold at COLD_SEG; 380 `call COLD_SEG:` and 22 COLDCALL sites in kernel/; far entries end in retf (SPEC 2.6.1)"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "The fifteen, each with the access",
+   "new_text": "The inline cells, each with the access",
+   "why": "the table under it (SPEC.md:44413-44433) has 19 rows; kernel.asm:4495's length guard counts 17 ICELLs plus kern_mega arms"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`DSV_SIZE` is 26 and every cell is spoken for,",
+   "new_text": "`DSV_SIZE` was 26 when this was written (it is 36 today, §62.9.1.1) and every\ncell was spoken for,",
+   "why": "kernel/driver.inc:557 DSV_SIZE equ 36; DSV_FS is at 26 and five more cells follow it (528-540)"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "DSV_SIZE    equ 28",
+   "new_text": "DSV_SIZE    equ 28      ; when DSV_FS landed - 36 today (kernel/driver.inc)",
+   "why": "kernel/driver.inc:557 DSV_SIZE equ 36"
+  },
+  {
+   "file": "apps/os88api.inc",
+   "old_text": "%define OSAPI_FULLSCREEN    KERNEL_SEG:0x00F7   ; AL = 1 enter (BX=win ptr) / 0 exit;\n                                 ; caller holds the gfx lock (window\n                                 ; callbacks do); out CF=1 enter refused\n                                 ; (screen already owned).",
+   "new_text": "%define OSAPI_FULLSCREEN    KERNEL_SEG:0x00F7   ; AL = 1 enter / 0 exit, BX = YOUR\n                                 ; window either way; caller holds the gfx\n                                 ; lock (window callbacks do); out CF=1\n                                 ; refused, entering or leaving, when the\n                                 ; screen is another window's.",
+   "why": "kernel/wm.inc:4287-4313: BX binds on exit too and `cmp [wm_fs],bx / ... stc / jne .out` refuses EITHER verb when another window holds the latch. Comment-only, but the ABI fingerprint reads contract comments: run `python3 tools/abilock.py --update \"OSAPI_FULLSCREEN contract comment matches wm_fullscreen\"` (no PKG_FMT bump) in the same commit"
+  },
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": "; TWELVE LABELS AND NOT TWO.",
+   "new_text": "; TWENTY LABELS AND NOT TWO.",
+   "why": "the block below (kernel.asm:9793-9886) checks 20 sections: .text .lowbss .vgabuf .bss .boot2 .cold .mega .ovl .modc .modu .modf .modp .modd .modl .modh .modk .modw .modj .modn .modmap"
+  },
+  {
+   "file": "kernel/wm.inc",
+   "old_text": "; out: AX = content left (W_X+1), DX = content top (W_Y+TITLE_H);",
+   "new_text": "; out: AX = content left (W_X+1, or W_X for a window flush with the screen's\n;      left edge, SPEC.md 11.95.2), DX = content top (W_Y+TITLE_H);",
+   "why": "kernel/wm.inc:5705-5707: `call wm_flush / jc .full` skips the `inc ax` for a window spanning the screen"
+  },
+  {
+   "file": "docs/TESTING.md",
+   "old_text": "37 rows, ~13s, host-side",
+   "new_text": "host-side, budget 30s CPU",
+   "why": "suite.rows() has 76 fast rows declaring 56.85s; tools/os88test.py:194 BUDGET fast = 30; line 245 already names the banner as the live count"
+  },
+  {
+   "file": "docs/TESTING.md",
+   "old_text": "Host-side only, 43 rows.",
+   "new_text": "Host-side only.",
+   "why": "suite.rows(): 76 fast rows"
+  },
+  {
+   "file": "docs/TESTING.md",
+   "old_text": "NO-PINNING-PLAN.md 4.1). 10 rows. |",
+   "new_text": "NO-PINNING-PLAN.md 4.1). |",
+   "why": "suite.rows(): 14 full rows"
+  },
+  {
+   "file": "docs/TESTING.md",
+   "old_text": "The other 907 gates in `tests/`",
+   "new_text": "The other gates in `tests/`",
+   "why": "suite.rows(): 1,944 soak rows"
+  },
+  {
+   "file": "docs/WRITING-TESTS.md",
+   "old_text": "Five more are the owner's ratchets, put in `full` at his word rather than by\nthe rules above, and **not precedents**: `megahigh`, `sysfree`,\n`guidelock-full`, and the pin ratchet's two halves",
+   "new_text": "Six more are the owner's ratchets, put in `full` at his word rather than by\nthe rules above, and **not precedents**: `megahigh`, `sysfree`,\n`guidelock-full`, `noovl` (SPEC.md 19.11), and the pin ratchet's two halves",
+   "why": "tests/suite.py:2453 noovl: 'FULL and not fast because the owner asked for it there'"
+  },
+  {
+   "file": "docs/WRITING-TESTS.md",
+   "old_text": "`pinsrt` (the same buckets read back out of `mem_tab` on MartyPC,\ndocs/plans/NO-PINNING-PLAN.md 4.1).",
+   "new_text": "`pinsrt` (the same buckets read back out of `mem_tab` on MartyPC,\ndocs/plans/NO-PINNING-PLAN.md 4.1).\n\nThree more sit in `full` against the rules above and are `soak` candidates:\n`w16censall` (one program family), `knobself` (a tool's own check) and\n`khpknobs` (knob builds).",
+   "why": "tests/suite.py:2413, 2433, 2442: the registry's full tier is 14 rows; these three cite no owner decision and break 2.2's first and third rules"
+  },
+  {
+   "file": "Makefile",
+   "old_text": "# .DEFAULT_GOAL IS NOT DECORATION. `all` is 1,800 lines down, and make takes",
+   "new_text": "# .DEFAULT_GOAL IS NOT DECORATION. `all` is far down the file, and make takes",
+   "why": "Makefile:2425 all: (comment-only)"
+  },
+  {
+   "file": "Makefile",
+   "old_text": "host-side regression tier (~2s)",
+   "new_text": "host-side regression tier (budget 30s CPU)",
+   "why": "76 fast rows declaring 56.85s against tools/os88test.py:194's 30s CPU budget; text of a `#>` help marker only"
+  },
+  {
+   "file": "CLAUDE.md",
+   "old_text": "itself for one of four reasons — it is 6,553 lines and over half is a log of",
+   "new_text": "itself for one of four reasons — it is over 15,000 lines and most of it is a log of",
+   "why": "wc -l PERFORMANCE.md = 15,235; Part 9 (field reports) runs from line 1689 to the end"
+  },
+  {
+   "file": "AGENTS.md",
+   "old_text": "itself for one of four reasons — it is 6,553 lines and over half is a log of",
+   "new_text": "itself for one of four reasons — it is over 15,000 lines and most of it is a log of",
+   "why": "same as CLAUDE.md (CLAUDE.md:5 requires both be updated)"
+  },
+  {
+   "file": "CLAUDE.md",
+   "old_text": "  Every inter-module kernel call is near — there is no far code (§33).",
+   "new_text": "  Calls between modules in `.text` are near; `.cold` is a code segment of its\n  own, entered far (§2.6).",
+   "why": "kernel/kernel.asm:2159 section .cold; 380 `call COLD_SEG:` + 22 COLDCALL sites"
+  },
+  {
+   "file": "AGENTS.md",
+   "old_text": "  Every inter-module kernel call is near — there is no far code (§33).",
+   "new_text": "  Calls between modules in `.text` are near; `.cold` is a code segment of its\n  own, entered far (§2.6).",
+   "why": "same as CLAUDE.md"
+  },
+  {
+   "file": "CLAUDE.md",
+   "old_text": "  Which `.inc` owns what is the table in §4, and every file in `kernel/` is in\n  it: the pre-GUI text shell's five relics are deleted, not parked.",
+   "new_text": "  Which `.inc` owns what is the table in §4 (not yet every file in `kernel/`);\n  the pre-GUI text shell's five relics are deleted, not parked.",
+   "why": "35 of 74 kernel/ files have no §4 row; AGENTS.md:666 already omits the claim"
+  },
+  {
+   "file": "tools/os88index.py",
+   "old_text": "SPEC.md is ~67,000 lines",
+   "new_text": "SPEC.md is over 240,000 lines",
+   "why": "wc -l SPEC.md = 245,112; module docstring, not read by the generator"
+  },
+  {
+   "file": "apps/paccman/pmc_menu.c",
+   "old_text": "(SPEC.md 91.14)",
+   "new_text": "(SPEC.md 91)",
+   "why": "SPEC.md §91 (170017) has no numbered subsections; the point is §91's 'TEN IS A CEILING' paragraph at 171568"
+  }
+ ]
+}
