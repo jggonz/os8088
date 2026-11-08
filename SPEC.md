@@ -108114,9 +108114,12 @@ image's conventional KB as 0, as it weighed it above 1MB.
 **What a package does**: under `CPU_F_PM`, before it sizes its extended
 memory, `FSXF_PREP` with the list its play will hand the door (the drivers
 come down, the pool has their KB); before it sizes its conventional claims,
-the answer's AX KB left free beside what it keeps for its own file reads.
-The Video Battle asks before its hold opens and keeps `VB_RKEEP` + AX
-(`vb_prep`, §126.4.5); the Video Player's arm asks at the file's open (its
+the answer's AX KB left free beside what it keeps for its own file reads -
+WHERE the door will claim them, which is the arena's lowest hole that fits
+(bottom-up first fit) and not necessarily the run the package sizes from:
+holding AX KB in a plain claim while sizing and freeing it before the run
+places them exactly. The Video Battle asks before its hold opens and keeps
+`VB_RKEEP` + AX, held so (`vb_prep`, `vb_rclaim`, §126.4.5); the Video Player's arm asks at the file's open (its
 bank) and again where `vp_rbhold` holds the door's room (§98.3.24.2).
 `VB_RKEEPM` and `VP_RBRKB` are their fallbacks for a refusal.
 
@@ -245976,7 +245979,16 @@ bracket** (SPEC.md 53.2.3).
   hold is sized with their 15 KB, as kern_big's XMS never had them - and
   `[vb_rkeep]` is `VB_RKEEP` plus the KB the door answers it will still
   claim, so the rings leave exactly that. Refused (a kern_mega before it):
-  `vb_door`'s guess stands.
+  `vb_door`'s guess stands. **The door's KB are HELD where the door will
+  claim them** while `vb_rclaim` sizes the rings (KERN-MEGA-PLAN 14.187):
+  one plain conventional claim of `[vb_rkeep]` less `VB_RKEEP`, bottom-up
+  first fit as the door's `fsx_rlowclaim` places its own, freed before the
+  bracket. In a hole no ring is sized from - the card ring's 64 KB-page gap
+  under it - the rings leave `VB_RKEEP` alone; in the rings' own run, the
+  room left is what it was. Left out of the sum, it was charged twice: the
+  door's 3 KB went into that gap, and ring 0 still left them, at 640K +
+  384K a 4 KB unit (316 KB where 320 fit) once the merge's 1 KB of region
+  moved the run's remainder.
 - **kern_mega's door** (`vb_mklist`): `os88real_prep` over `vb_rlst` - the
   resident claim's base, the card's ring, both rings' `RG_SEG` - and the
   list: `FSXL_FILE` and the name `vb_load` found the bundle under (the
@@ -246071,7 +246083,13 @@ engine. "Rings" is the two conventional clip rings, guards aside:
 least, 256 KB, are more than either pool), so the kernels agree there too. 14.180's column is the drivers' 15 KB in the
 hold (FSXF_PREP, 53.2.3.1): the rings are the cache's either way, its ring
 rule leaving the exact room the door now answers in two holes (5 and 11 KB)
-rather than in a ring.
+rather than in a ring. After the bookmarks' merge (126.4.8: the region 48 ->
+49 KB) the same rule left ring 0 316 KB and a 14 KB hole on the demo bundle -
+the door's 3 KB counted in ring 0's run though they land in the card ring's
+page gap below it, idle only while the run's 4 KB remainder had been 0 -
+until the door's room was HELD where the door claims it (KERN-MEGA-PLAN
+14.187): ring 0 320 KB, holes 5 and 10 KB, on the demo and both owner's
+battles alike (CGA4 rings 336, VGA 224, kern_big unchanged).
 
 Neither kernel holds a whole battle there. **Every KB of the difference,
 640K + 384K, CGA4** (kern_big 684 held, kern_mega 540 before, 600 after
@@ -246109,7 +246127,8 @@ Neither kernel holds a whole battle there. **Every KB of the difference,
   door (`VB_RKEEPM`, 24 KB, against the 18 it took), which `FSXF_PREP`'s
   answer sizes exactly - 8 KB more for the rings with the copying hold;
   with the cache (14.179) its ring rule leaves them in two holes in the
-  play (5 and 11 KB), under `VB_RKEEP` + a 4 KB unit; kern_mega's floor 3.5 KB higher
+  play (5 and 11 KB; 5 and 10 since 14.187), under `VB_RKEEP` + a 4 KB
+  unit - the 5 the card ring's page gap, holding the door's 3; kern_mega's floor 3.5 KB higher
   (63.0 against 59.5 with XMEM.DRV's `.cold` in the HMA), the read-ahead's
   9 KB landing the door's walk rebuilds, at the arena's foot under a pinned
   claim where no ring reaches it, and 4 KB units, less kern_big's XMEM.DRV

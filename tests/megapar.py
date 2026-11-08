@@ -46,8 +46,11 @@ driver's image, the kernel's, a module) and the instance's. Then:
      53.2.3.1), not held above 1MB beside their low copies;
   6. vb: the rings left the door its own KB and no guess - the largest free
      conventional run in the play is VB_RKEEP and at most a 4 KB unit more
-     (VB_RKEEPM kept 24 for 18); vp: the door answered FSXF_PREP
-     ([vp_rbkb] is not FFFFh);
+     (VB_RKEEPM kept 24 for 18) - and the door's KB held where the door
+     claims them while the rings are sized, not left in ring 0's run when
+     they land in the card ring's page gap (KERN-MEGA-PLAN 14.187: RED at
+     the bookmarks' merge, 14 KB, ring 0 316; green, 10 KB, ring 0 320);
+     vp: the door answered FSXF_PREP ([vp_rbkb] is not FFFFh);
   7. out of the play and the window closed, the drivers are back UP: the
      kernel's pool blocks more than in the play (mx_relinst's mega_drvup).
 

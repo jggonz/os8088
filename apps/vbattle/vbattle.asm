@@ -2550,18 +2550,47 @@ vb_ringclm:
 ; for the kernel's file reads (a FAT window). OSAPI_MEM_AVAIL counts the
 ; desktop's caches as free and the claim sheds them (SPEC.md 50.6.3): the
 ; battle reads one file through its own cursors and walks no directory.
+; THE DOOR'S ROOM (kern_mega: [vb_rkeep] past VB_RKEEP, FSXF_PREP's answer)
+; is HELD while the rings are sized - claimed as the door claims it, bottom-
+; up first fit, and given back before the bracket - so where it lands is
+; where the door's claims will: in a hole no ring is sized from (the card
+; ring's 64 KB-page gap under it, 8 KB at 640K + 384K), and the rings then
+; leave VB_RKEEP alone, or in the rings' run, which is the room left as
+; before. Kept out of the sum, it cost ring 0 a 4 KB unit whenever the
+; door's KB went to that gap (KERN-MEGA-PLAN 14.187). AX, BX, CX, DX spent;
 ; CF=1 and [vb_err] when there is not room for VB_CRMIN each
 vb_rclaim:
     call OSAPI_MEM_AVAIL            ; THE ARENA PACKED FIRST: the whole of the
     sub ax, [vb_rkeep]              ; largest run claimed and given back. The
-    jc .no                          ; kernel can serve that only by shedding
+    jc vb_rcpair.no                 ; kernel can serve that only by shedding
     xor cx, cx                      ; (conventional: the DMA door, no head)
     call OSAPI_MEM_CLAIM_DMA        ; the caches and packing what moves - a
     jc .pk                          ; claim that fits a free run as it stands
     call OSAPI_MEM_FREE             ; does neither, and on a USED machine the
 .pk:                                ; directory read-ahead's 31.5 KB was left
-    call OSAPI_MEM_AVAIL            ; a hole under a 2 KB claim (VBATTLE-RAM-
-    call .pair                      ; PLAN R1). Then THE PAIR, half and half
+    mov ax, [vb_rkeep]              ; a hole under a 2 KB claim (VBATTLE-RAM-
+    push ax                         ; PLAN R1). THE DOOR'S ROOM HELD (above):
+    sub ax, VB_RKEEP                ; none on a real-mode kernel's door
+    jbe .rc
+    xor cx, cx
+    call OSAPI_MEM_CLAIM_DMA        ; (CX = 0: plain, bottom-up, conventional
+    jc .rc                          ; - the door's own placement; refused, the
+    mov word [vb_rkeep], VB_RKEEP   ; KB are left as they were)
+    push dx
+    call vb_rcpair
+    pop dx
+    pushf
+    call OSAPI_MEM_FREE
+    popf
+    jmp short .ro
+.rc:
+    call vb_rcpair
+.ro:
+    pop word [vb_rkeep]             ; (POP keeps CF)
+    ret
+vb_rcpair:
+    call OSAPI_MEM_AVAIL            ; Then THE PAIR, half and half
+    call .pair
     jc .no                          ; of what OSAPI_MEM_AVAIL says - which is
                                     ; exactly what a claim gets (it was
                                     ; checked against the heap at the instant:
