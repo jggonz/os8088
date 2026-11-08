@@ -99650,7 +99650,9 @@ The cost on a package is what it takes: `hw_aim` and `hw_span` 91 bytes,
 `hw_get` 73 more (the copy loop with it), `hw_put` 61 beside that,
 `hw_claim` 92, `hw_fread` 87, `hw_fwrite` 64 - XTMP3's three arms (claim,
 get, fread) 343. XTMP3's kern_mega arm is the first user (§121.6.1);
-WaveRack, PiXEL, Audio,
+WaveRack's arm takes the claim and `hw_aim` alone, converting a window at a
+time into its play hold (§123.6), and the Audio Player's arm the same three
+as XTMP3 for its whole-file hold (§86.5.4) (KERN-MEGA-PLAN 14.173); PiXEL,
 VBattle, the Browser and the Video Player are next (MEGA-HUGE-PLAN 3).
 
 `tests/os88huge.py` (`os88huge`, host) runs every routine under Unicorn
@@ -158046,6 +158048,66 @@ differs in its idle immediate alone, `AP_SLP_IDLE` (§86.5.1). +66 bytes of `aud
 bss. `tests/ringmove.py --app audio` (a card) and `--app audiospk` (the
 speaker) are the gates.
 
+### 86.5.4 A WAV the machine can hold is played from memory — kern_mega's arm (`aphold.inc`)
+
+**On kern_mega the Audio Player's arm reads a WAV whole before it plays it,
+when the machine can hold it, and the play reads no disk** (`PKG_MEGA`,
+§20.18; docs/plans/MEGA-HUGE-PLAN.md 3; KERN-MEGA-PLAN 14.173). The hold is
+ONE `OSAPI_MEM_HUGE` claim with a window every 64KB, a bridge of the pool
+and the heap allowed (§50.3.5), walked through `apps/os88huge.inc`
+(§50.3.8) - so it is all of the file the machine can hold, not the pool's
+best run. XTMP3's hold is the precedent (§121.6.1) and the shape is its:
+
+- **The load is the UI task's, a pass at a time.** `ap_open_track` asks
+  `aph_begin` first: the current entry's file - its folder, volume and name,
+  THE KEY - held whole already opens at once; one that is not is claimed
+  (its KB rounded up to 32, so each 32 KB `READ_SEQ` is a whole capacity)
+  and the open returns with `[ap_state]` STOP and the status line saying
+  `Loading 0%`. Each `ap_onwake` pass then reads 32 KB chunks into it
+  (`hw_fread`, one `os88_rseq` a window, so never across a window's end nor
+  a bridge's cut) until two ticks have gone, says the figure when it moved -
+  the status line alone, which only grows - and wakes itself for the next.
+  The file in, `ap_open_track` runs again and the track opens as ever.
+  Play during the load is the load; Stop, the list's end and Clear playlist
+  give the hold back (`aph_free`, in `ap_stop_msg`), and so does opening any
+  other file; the kernel frees it with the instance. A load that fails
+  gives it back and opens the track streaming, once (`[aph_skip]`).
+- **The play is copies.** The refill's read is the include's `AP_RSEQ`
+  hook (aplook.inc), here `aph_rseq`: a gulp of the held file is `hw_get`'s
+  copy out of the hold into the look-ahead (`[aph_ncopy]`), anything else
+  the disk's (`[aph_ndisk]`). The look-ahead, the worker, the feed and the
+  card are untouched: they cannot tell. The parser's header read at the
+  open still goes to the disk. A speaker play's gulps are the same copies.
+- **The heap keeps `APH_MARGKB` (96 KB) beside it** - the card's grant,
+  the speaker ring, a program launched while it plays. The kernel takes the
+  pool alone, else the heap alone, else the bridge; where the heap ALONE
+  took it and the margin is short it is claimed once more past the heap's
+  largest run - a bridge, its conventional piece the smaller by the pool's
+  (XTMP3's `x3h_huge`). The look-ahead is claimed before the hold, so it
+  keeps its page-safe pool block (§86.5.3, KERN-MEGA-PLAN 14.160), and stays
+  PINNED until the claim is made: declared movable across it, the claim's
+  pack moved it off the pool's floor, and when the session's other claims
+  went it stood in the middle of the pool (`megajw`: 32K free under it, 206K
+  over, XT-MP3's hold refused - 14.166's rule). The AX = 0 ask comes first
+  (`aph_claim`), so a file too big to hold costs no claim and no pack.
+  Conventional memory in the hold is declared MOVABLE, a `ret` its proc
+  (§50.3.5: its windows follow a move), and pinned for each read.
+- **What streams still streams.** A file the machine cannot hold, a load
+  that failed, and every file on a real-mode kernel go through the 14.160
+  look-ahead exactly as before; `[aph_off]` = 1 makes the arm do so for
+  every file (megasbgap's streamed case).
+
+**Measured** on 86Box's at286_vga_sb by `tests/audhuge.py --find`: the
+largest WAV held whole is **672 KB at 640K + 384K above 1MB** (a bridge cut
+at window 3: 31 s at 22,050 Hz, 62 s at 11,025 Hz 8-bit mono) and **3,360 KB
+at 4MB** (156 s and 312 s) - where the arm before held nothing and streamed
+every file. `megasbhold` plays megasbgap's 10 s 22,050 Hz clip held: no
+floppy read during it and no silence inside it (streamed: 90-150 ms, 290-530
+ms in all). The cost is the arm's alone: its image 13,247 -> 14,509 bytes
+(+1,262: the walker's claim, aim, copy and file read 343 of it), packed
+9,469 -> 10,455, bss 5,633 -> 5,719 (+86); `AUDIO.O88` as shipped is
+byte-identical. Rows: `audhuge`, `megasbhold`, and `megasbgap` (streamed).
+
 ### 86.6 The WAV parser (`apw_parse`)
 
 Given a name (already GOTO'd) and the file size, it answers a parsed record or
@@ -158259,6 +158321,7 @@ number of clusters — a 16-byte-record queue is neither.
 | decoder scratch | 2,368 B | `apd_out` in bss: a card's 2 KB half, and on the speaker a step's span of inputs — the PCM source copy (`aps_src`) too, one format a track (§86.21) |
 | speaker buffers | 1,280 B | `aps_stage` 512, `aps_dbuf` 768 (the box's table, k ≤ 3 — and `ap_cinv`'s 256, a counts file never being boxed). The shaper's 2,816-byte family was here as `aps_fam` and lives in the speaker ring's claim now (§34.11.9), so a card machine never holds it |
 | speaker ring | 17 KB | `aps_rseg`, claimed at the first speaker play and kept (§86.21) |
+| the hold (kern_mega's arm) | the file, rounded up to 32 KB | one `OSAPI_MEM_HUGE` claim, the pool's, the heap's or a bridge of both, the heap left 96 KB beside it; from a track's open to Stop, the list's end or another file (§86.5.4) |
 | playlist | `AP_MAXTRK` × 16 B | bss |
 | SND ring grant + driver pool | ~28 KB | `SOUND.DRV`'s claims, released when the player stops |
 
@@ -233465,6 +233528,27 @@ added (WAVERACK-PLAN.md's Wave 4b section says when one would earn it):
   (§123.13, KERN-MEGA-PLAN 14.159) the hold is a pool claim ABOVE 1MB there
   whenever it is 64 KB or less, a lone data selector, and the window binds
   into it all the same.
+  **kern_mega's own arm holds more** (`PKG_MEGA`, §20.18; KERN-MEGA-PLAN
+  14.173): the hold is ONE `OSAPI_MEM_HUGE` claim with a window every 64KB,
+  a bridge of the pool and the heap allowed (§50.3.5, `wt_hhuge`), the
+  heap's largest run left holding the ring, the look-ahead and 16 KB as the
+  shipped build's test required - claimed once more past that run, so a
+  bridge, when the heap alone took it and left too little (XTMP3's
+  `x3h_huge`) - and every address in it is `apps/os88huge.inc`'s `hw_aim`
+  (§50.3.8): `wt_hoff` answers the window AND its reach, so `wt_hget`'s
+  caller takes no more frames than the window holds and comes back for the
+  rest, and `wt_hput` converts a window at a time - no frame is written or
+  read across a window's end, so none across a bridge's cut. No bound window
+  (`wt_hbwin` is the shipped build's) and no 1 MB paragraph limit; the CPU
+  test is dropped, kern_mega running on a 286 or later where `wt_cshare` is
+  0. Measured by `tests/waverackhuge.py --find` on 86Box's at286_vga_sb: the
+  largest region held, one byte a frame, **448 -> 640 KB** at 640K + 384K
+  above 1MB (42 -> 59 s at 11,025 Hz; 10 -> 15 s at 44,100) and **448 ->
+  3,328 KB** at 4MB (42 s -> 5 min 9 s at 11,025 Hz; 77 s at 44,100: there
+  the region rides a C: and the medium is poked slow, `--force`, since a
+  fixed disk streams it). `waverackhuge` holds a 640 KB region a floppy
+  cannot stream, bridged, byte for byte; `waverackmega-arm` runs
+  `waverackmega` on the arm.
 - **The d = 1 8-bit loops** (`wt_cv8m1`, `wt_cv8s1`): no box, so a sample is
   the load, the extremes, the table and the store, and the peak and the rails
   are derived from the extremes once a call (`wt_cvx`) - the same values the
@@ -234233,8 +234317,14 @@ standing in that folder with `OSAPI_FILE_GOTO_QM`.
 | final pass (wave 6b) | `waverackrec` on the final code: XT-IDE 60 s at 11,025 and 15,000 Hz, high water 3,072 / 4,096; 204 s beside a second WaveRack's 2 MB scan 16,384; 32 KB clusters 5,120 / 6,656; floppy 8,000 Hz 27,648; 0 overruns, every take = the card's count. The copy 97.8 cycles a byte. Drawing on the 5150 + Hercules (`calls`): idle 0 a tick, recording 0.99, playing at Fit 1.02, one cut 16, a full repaint 1,122-1,459 ms (77-90 primitives); `wr_redraw` while recording 60.4 ms a tick median. Image **43,625** bytes after the review's fixes (packed 34,249 - 34 clusters at 1 KB), bss **7,774** |
 | record rate, measured | XT-IDE (2 KB and 32 KB clusters): 60 s at 11,025 and 15,000 Hz with no overrun, the ring's high water 3,072-6,656 bytes of 32,256; 203 s at 11,025 Hz while a second WaveRack launched, opened and scanned 2 MB, high water 8,704. 1.44 MB floppy: 8,000 Hz, 30 s, high water 27,648; 11,025 Hz refused there (§123.7's write-time rule) |
 
-**On kern_mega** (KERN-MEGA-PLAN 14.149, 14.159): WaveRack has no `PKG_MEGA`
-arm and declares `OS88_HIGH | OS88_HIGHMEM` (its class byte, §20.18), so in
+**On kern_mega** (KERN-MEGA-PLAN 14.149, 14.159, 14.173): WaveRack declares
+`OS88_HIGH | OS88_HIGHMEM` (its class byte, §20.18) and, since 14.173, has a
+`PKG_MEGA` arm in `$(MEGAPKGS)` on kern_mega's own disks whose one difference
+is the play's HOLD (§123.6: one huge claim, a bridge allowed, walked by
+`apps/os88huge.inc`; image 43,955 -> **44,157** bytes, +202, packed 33,776 ->
+33,949, bss 7,779 -> 7,792). The shipped build, which every other disk
+carries and which must stay correct there (§20.18 item 2), is the one this
+paragraph describes; the arm is the same in every other line. So in
 protected mode its REGION is a code/data pair above 1MB and every claim of
 64 KB or less is a pool block there - the band, the envelopes, the view
 cache, the history, the hold, the look-ahead, the take's staging units and

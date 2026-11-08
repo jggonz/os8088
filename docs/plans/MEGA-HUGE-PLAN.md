@@ -127,4 +127,6 @@ target), the Task Manager.
 | F4 | **done** - a packed file past 64KB into a huge claim of any shape, a bridge's cut included (a read across a cut starts on a 64KB window of the claim, FERR_PROT otherwise); the decoder aimed by X, the seam for a stream across the cut | KERN-MEGA-PLAN 14.171; SPEC.md 20.14.5.4; megahpk |
 | Tracker | **done** - the arm's module in the pool, one run (`HUGE_NOBRIDGE`), up to the format's 960KB | SPEC.md 45.3.1.2; megamod trkarm, trkbig |
 | RealDMG | **done** - a packed cartridge in place, past 256KB; cartridge RAM of 64/128KB NOT done (the core's RAM addressing, REALDMG-SPEC 10.3.1 says why) | REALDMG-SPEC 10.3.1; megagbpk |
+| WaveRack | **done** - the arm (new in `$(MEGAPKGS)`) holds the play in one huge claim, a bridge allowed, `wt_hoff` = `hw_aim` and its callers split at windows: 448 -> 640 KB held at 640K + 384K, 448 -> 3,328 KB at 4MB (42 s -> 59 s / 5 min 9 s at 11,025 Hz) | SPEC.md 123.6; KERN-MEGA-PLAN 14.173; waverackhuge, waverackmega-arm |
+| Audio | **done** - the arm reads a WAV whole into one huge claim before it plays (`aphold.inc`, through `AP_RSEQ`), and plays it from memory: nothing -> 672 KB at 640K + 384K, 3,360 KB at 4MB; megasbhold's clip plays with no floppy read and no silence | SPEC.md 86.5.4; 14.173; audhuge, megasbhold, megasbgap |
 | F8 | open | |
