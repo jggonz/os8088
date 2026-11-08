@@ -386,9 +386,10 @@ section .cold
 ; machine pays eight compares and no I/O; a machine with a hard disk pays
 ; one quiet mount of its root.
 ; -----------------------------------------------------------------------------
-section .boot2                    ; IN THE BLOB (SPEC.md 2.5.3.3): kmain_o is its
+B3SECT                          ; IN `.boot3` (SPEC.md 2.9.15): kmain_o is its
                                 ; one caller, after drv_boot and before its own
-                                ; BLOBCALL spl_finish
+                                ; BLOBCALL spl_finish - it was the blob's until
+                                ; BOOT3-PLAN wave 1
 hb_probe_x:
     push ax
     push dx

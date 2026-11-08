@@ -306,7 +306,8 @@ SCH_WD_TICKS equ 18             ; cooperative mode: the watchdog forces a
 section .ovl                   ; kern_big: the WINDOW half (SPEC.md 2.5.3),
                                 ; whose window has room to spare
 %else
-section .boot2                    ; ...and kern_small: the BLOB half instead
+B3SECT                          ; ...and kern_small: `.boot3` (BOOT3-PLAN wave 1;
+                                ; it was the BLOB half until then)
                                 ; (SPEC.md 2.5.3.2, mouse_init's shape). The
                                 ; deadline is the same either way - kmain runs
                                 ; this long before drv_boot - so the choice is
@@ -317,7 +318,7 @@ section .boot2                    ; ...and kern_small: the BLOB half instead
                                 ; 800 bytes it gave back are only 288 of heap
                                 ; while the overlay still needs the rest, so
                                 ; every body moved here turns one more of them
-                                ; into heap. `.boot2` is written LAST on
+                                ; into heap. `B3SECT` is written LAST on
                                 ; purpose: tools/os88ovlchk.py reads SOURCE
                                 ; and cannot evaluate the %ifdef, so it files
                                 ; this block by the arm below - which is the

@@ -1876,13 +1876,14 @@ ovl_sc_load:
 ; as_boot - AUTOSTART: open every link in the boot volume's \AUTOSTRT
 ;           (SPEC.md 26.10.5)
 ;
-; In the BLOB, so it costs no resident byte: kmain_o calls it straight after
-; spl_finish - a launch must not race the loading screen's IRQ0 frames, which
-; that has stopped - and the blob lives until kmain's mem_unblob_x, after
-; kmain_o returns. It was CTRL.DRV's, behind a test here, and an EMPTY folder
-; then cost every boot the settings core's read: 1.2 s on the 360KB disk,
-; and every system disk ships the folder empty so that the feature can be
-; found. The blob's eleventh sector is the price (SPEC.md 26.10.5).
+; In `.boot3` (SPEC.md 2.9.15), so it costs no resident byte: kmain_o calls
+; it straight after spl_finish - a launch must not race the loading screen's
+; IRQ0 frames, which that has stopped - and `.boot3` lives until kmain's
+; mem_unblob_x, after kmain_o returns. It was CTRL.DRV's, behind a test here,
+; and an EMPTY folder then cost every boot the settings core's read: 1.2 s on
+; the 360KB disk, and every system disk ships the folder empty so that the
+; feature can be found. The blob's eleventh sector was the price (SPEC.md
+; 26.10.5) until BOOT3-PLAN wave 1 moved the walk out of the blob.
 ;
 ; WHAT A MACHINE PAYS:
 ;   no folder        one name looked up in a root the SYSTEM.CFG read has
@@ -1906,7 +1907,7 @@ ovl_sc_load:
 ; mode for the whole session. kmain calls it last, after the switch (or the
 ; refusal), so a link opens exactly as a double-click would.
 ;
-; SO THE WALK IS ONE BODY ASSEMBLED TWICE: `as_boot` in the blob for every
+; SO THE WALK IS ONE BODY ASSEMBLED TWICE: `as_boot` in `.boot3` for every
 ; other kernel, `as_bootc` in `.cold` for kern_mega - and it is written in the
 ; idioms both allow. It holds NO DATA (`.cold` may not, SPEC.md 2.6 rule 1:
 ; the folder's name and the toast are built by immediate stores) and NO CS
@@ -1928,7 +1929,7 @@ ovl_sc_load:
     push cs
     pop es
     mov si, as_s_dir            ; a name dskw_stat reads goes through DS, so
-    mov cx, as_s_dirn           ; the blob's own is staged
+    mov cx, as_s_dirn           ; `.boot3`'s own is staged
     call .cp
 %endif
     mov si, assoc_doc
@@ -1959,7 +1960,7 @@ ovl_sc_load:
     add sp, DSK_FIND_SZ
     push cx
 %else
-    push cs                     ; ES:DI = the answer's room, in the blob and
+    push cs                     ; ES:DI = the answer's room, in `.boot3` and
     pop es                      ; not on task 0's stack: a link that names a
     mov di, as_find             ; link is followed only while 320 bytes of it
                                 ; are left (LNK_SPMIN)
@@ -2019,7 +2020,7 @@ ovl_sc_load:
     pop es
     mov si, as_s_skip
     xor cx, cx
-    call KERNEL_SEG:cw_toast_show   ; COPIED, so a blob string outlives it
+    call KERNEL_SEG:cw_toast_show   ; COPIED, so a `.boot3` string outlives it
 %endif
 .root:
     xor bx, bx                  ; ...and the boot volume's root again, where
@@ -2042,8 +2043,8 @@ ovl_sc_load:
 %endmacro
 
 %ifndef KERN_MEGA
-section .boot2
-as_boot:                        ; (BLOBCALL from kmain_o)
+B3SECT                          ; (`.boot3` since BOOT3-PLAN wave 1)
+as_boot:                        ; (B3CALL from kmain_o)
     AS_WALK
 
 as_s_dir:   db 'AUTOSTRT', 0

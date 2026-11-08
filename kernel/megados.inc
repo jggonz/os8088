@@ -2071,7 +2071,8 @@ section .cold
 
 ; =============================================================================
 ; mega_wrprobe - W7: A PARK THE MACHINE WAS RESET OUT OF (KERN-MEGA-DOS-PLAN
-; 10, wave W7; BLOBCALL'd from kmain_o, real mode, before drv_boot)
+; 10, wave W7; B3CALL'd from kmain_o, real mode, before drv_boot - in
+; `.boot3` since BOOT3-PLAN wave 1, the blob's before it)
 ;
 ; Ctrl-Alt-Del inside a DOS program, or a program that resets the machine:
 ; the ROM's warm boot keeps RAM, and a kern_mega boot does nothing above 1MB
@@ -2085,7 +2086,7 @@ section .cold
 ; the reset or the BIOS damaged is refused in a sentence and restarts.
 ; Returns (RETF, every register kept) only when there is nothing to take.
 ; =============================================================================
-section .boot2
+B3SECT
 mega_wrprobe:
     ; STKBALANCE-OK: a BP frame (`sub sp, 64` / `mov sp, bp`) the walker does not model, and the park's way leaves by a far jump into the stub
     cmp byte [cpu_tier], CPU_286

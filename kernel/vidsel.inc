@@ -112,7 +112,8 @@ section .ovl                   ; kern_big: the WINDOW half (SPEC.md 2.5.3) -
                                 ; forfeit at the first mount, and this build's
                                 ; window has room to spare
 %else
-section .boot2                    ; ...and kern_small: the BLOB half instead
+B3SECT                          ; ...and kern_small: `.boot3` (BOOT3-PLAN wave 1;
+                                ; it was the BLOB half until then)
                                 ; (SPEC.md 2.5.3.2). Same deadline either way -
                                 ; every caller here runs before drv_boot - so
                                 ; the choice is only about WHOSE bytes: on this
@@ -120,7 +121,7 @@ section .boot2                    ; ...and kern_small: the BLOB half instead
                                 ; plus the mount buffers, and those bytes are
                                 ; the listing's. The blob is already read and
                                 ; has room, so the body goes there and the
-                                ; region sheds. `.boot2` is written LAST on
+                                ; region sheds. `B3SECT` is written LAST on
                                 ; purpose: tools/os88ovlchk.py reads SOURCE and
                                 ; cannot evaluate the %ifdef, so it files this
                                 ; block by the arm below - which is the build
@@ -2096,11 +2097,8 @@ vid_dual_ok:
 .cap:
     xor al, al                  ; the pointer onto display 0 - which is what
 %ifidn %1, bvs                  ; a shrinking desktop owes it - through this
- %ifdef B3_ON                   ; image's own copy (VID_CTXCAP): the blob's
-    B3CALL cfx_ctxcap           ; is in `.boot3` where there is one, its own
- %else                          ; where there is not
-    call bvs_ctxcap
- %endif
+    B3CALL cfx_ctxcap           ; image's own copy (VID_CTXCAP): the blob's
+                                ; is in `.boot3`
 %else
     call %1 %+ _ctxcap
 %endif

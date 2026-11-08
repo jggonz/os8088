@@ -521,16 +521,18 @@ section .ovl                   ; kern_big: the WINDOW half (SPEC.md 2.5.3) -
                                 ; forfeit at the first mount, and this build's
                                 ; window has room to spare
 %else
-section .boot2                    ; ...and kern_small: the BLOB half instead
+B3SECT                          ; ...and kern_small: `.boot3` (BOOT3-PLAN wave 1;
+                                ; it was the BLOB half until then)
                                 ; (SPEC.md 2.5.3.2). The deadline is the same
                                 ; either way - kmain runs the whole probe ~60
                                 ; lines above drv_boot - so the choice is only
                                 ; about WHOSE bytes: on this kernel `.ovl` is
                                 ; what sizes the FAT window plus the mount
                                 ; buffers, and those bytes are the listing's.
-                                ; The blob is already read and has room, so the
-                                ; body goes there and the region sheds.
-                                ; `.boot2` is written LAST on purpose:
+                                ; `.boot3` (the blob until BOOT3-PLAN wave 1)
+                                ; is already read and has room, so the body
+                                ; goes there and the region sheds.
+                                ; `B3SECT` is written LAST on purpose:
                                 ; tools/os88ovlchk.py reads SOURCE and cannot
                                 ; evaluate the %ifdef, so it files this block
                                 ; by the arm below - which is the build the
@@ -1685,7 +1687,7 @@ mou_p2wr:
 %ifndef MOU_IN_BLOB             ; kern_big, AND a kern_small knob build (kernel.asm)
 section .ovl
 %else
-section .boot2                    ; ...SPLIT WITH mou_uart's BLOCK ABOVE, and
+B3SECT                          ; ...SPLIT WITH mou_uart's BLOCK ABOVE, and
                                 ; this arm is NEVER ASSEMBLED - the KERN_BIG
                                 ; conditional that opens above mou_p2wr
                                 ; encloses all of it. It is written anyway
@@ -1694,7 +1696,7 @@ section .boot2                    ; ...SPLIT WITH mou_uart's BLOCK ABOVE, and
                                 ; mou_p2_init: the two blocks have to land in
                                 ; ONE section in its model or that call reads
                                 ; as a crossing. On kern_big both really are
-                                ; `.ovl`, so the model's `.boot2 -> .boot2` is the
+                                ; `.ovl`, so the model's `.boot3 -> .boot3` is the
                                 ; same answer about the same pair of bodies
 %endif
                                 ; ...and the PS/2 half's first (see the block
@@ -1775,7 +1777,7 @@ mou_p2dw:
 %ifndef MOU_IN_BLOB             ; kern_big, AND a kern_small knob build (kernel.asm)
 section .ovl
 %else
-section .boot2                    ; ...SPLIT WITH mou_uart's BLOCK ABOVE, and
+B3SECT                          ; ...SPLIT WITH mou_uart's BLOCK ABOVE, and
                                 ; this arm is NEVER ASSEMBLED - the KERN_BIG
                                 ; conditional that opens above mou_p2wr
                                 ; encloses all of it. It is written anyway
@@ -1784,7 +1786,7 @@ section .boot2                    ; ...SPLIT WITH mou_uart's BLOCK ABOVE, and
                                 ; mou_p2_init: the two blocks have to land in
                                 ; ONE section in its model or that call reads
                                 ; as a crossing. On kern_big both really are
-                                ; `.ovl`, so the model's `.boot2 -> .boot2` is the
+                                ; `.ovl`, so the model's `.boot3 -> .boot3` is the
                                 ; same answer about the same pair of bodies
 %endif
                                 ; ...and the overlay's last three: mou_p2dev,

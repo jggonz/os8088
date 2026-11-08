@@ -883,19 +883,24 @@ Three rules bind a body that takes this:
   neighbour. `mouse_init` reaches `mou_p2_init` on `kern_big` only, and the
   PS/2 blocks — which `kern_small` does not assemble at all — carry the same
   conditional so that the scanner's one model stays self-consistent.
-- **`OVBCALL` is held to the blob arm by rule 2d**, so aiming it at a body
-  that did *not* move fails the build, and aiming a plain `OVLCALL` at one
-  that did fails it the other way. Both were verified by breaking them.
+- **`OVBCALL` is held to the `kern_small` arm by rule 2d**, so aiming it at a
+  body that did *not* move fails the build, and aiming a plain `OVLCALL` at
+  one that did fails it the other way. Both were verified by breaking them.
+- **Since BOOT3-PLAN wave 1 the `kern_small` arm is `.boot3`, not the blob**
+  (§2.9.15): every OVBCALL body's `kern_small` block says `B3SECT` where it
+  said `section .boot2`, OVBCALL's `kern_small` arm is `B3CALL` where it was
+  `BLOBCALL` (a byte more a site, in `kmain_o`), and rule 2d holds OVBCALL to
+  `.boot3`. The bodies are `vid_probe_avail` with `vid_memchk`, `sched_init`,
+  `mem_init_x`, the serial probe (`mouse_init` and its three blocks, under
+  `MOU_IN_BLOB` - a `kern_small` knob build keeps `.ovl`), `snd_init` and,
+  under `BAKED_FONT`, `ovl_font_init`. `kern_big`'s arm is still `.ovl`.
 
-**`B3SECT` and `B3CALL` are the same pattern for the third home**
-(§2.9.15.2), and transitional in the same way: on a kernel without `.boot3`
-yet they take the body's old arm - the blob, `.ovl` (`B3SECT ovl`), or
-OVBCALL's choice (`B3SECT ovb`) - and `os88ovlchk` models the `.boot3` arm,
-with rule B8 holding the two macros' words to each other. Unlike a
-conditional `section`, the arms are inside the MACRO, so the scanner reads
-`B3SECT` as one switch and does not depend on which arm is written last; it
-also stopped reading a `section` line inside any `%macro` body as the
-definition's switch, which B3SECT's four arms would otherwise have been.
+**`B3SECT` and `B3CALL` place and call the third home's bodies** (§2.9.15.2).
+Until wave 1 they had fallback arms for a kernel without `.boot3`, each body
+and each call naming its old home; every kernel has the section now, and the
+arms and their words are gone. The scanner reads `B3SECT` as one switch, and
+does not read a `section` line inside any `%macro` body as the definition's
+switch.
 
 ##### 2.5.3.3 `kmain`'s own boot half is a blob body, and a knob build is given the room it costs
 
@@ -934,7 +939,9 @@ What moved with it, and why each is boot-only:
   `spl_finish`. It reaches the three routines it needs through the existing
   `drvf_`/`dkf_` far shims plus one new one, `drvf_drv_find` (4 bytes) -
   which kernel size pass 13 retired again: `drv_find` is reached through
-  `wm_cbd` with BP, which `kmain_o` holds nothing in.
+  `wm_cbd` with BP, which `kmain_o` holds nothing in. **In `.boot3` since
+  BOOT3-PLAN wave 1** (§2.9.15), `B3CALL`ed from `kmain_o`, with `as_boot`
+  and `font_init`.
 - **`wm_init` and `files_init_x` went the OTHER way**, `.ovl` → `.ovlw` on
   kern_small, to make the blob room: `kmain_o` reaches them before the mount,
   which is all `.ovlw` asks.
@@ -1066,6 +1073,17 @@ build where the shipped one runs it from the blob — the same code at a
 different segment, and kern_big's shipped arrangement exactly. What is NOT
 different is what a boot diagnostic is for: the blob's length, the sectors
 stage 1 reads, the canary, and every call `kmain_o` makes, in order.
+
+**Since BOOT3-PLAN wave 1 the knob arms have `.boot3` too** (§2.9.15), and
+what moved there left the blob for the knob builds as it did for the shipped
+ones: kern_big's blob 504 bytes, kern_small's 1,435, kern_mega's 996. The
+`NO_COLD_SLIDE` A/B, which overran its blob at the commit before, assembles
+again; `BOOTMARK=1` (with and without `BOOTHALT=20`) assembles on kern_big,
+kern_small and kern_mega. **`NO_ROM_COLD` does NOT, before or after**: the
+commit before it failed on the blob and on `mou_p2knock`'s window guard (the
+`.ovl` must lie in KERNEL_SEG's 64KB, and without ROM_COLD the FAT window is
+past `.cold`), and the second is not `.boot3`'s. Its `.boot3` sits at
+`KERN_END` (§2.9.15.1) for the day it is fixed.
 `tests/unit/t_buildmatrix.py` carries kern_small's `BOOTMARK` and `BOOTHALT`
 arms as rows of their own, because nothing else assembles them.
 
@@ -3298,7 +3316,7 @@ unbounded decision below is worth about 200 ms of it.
     [ ...          LZ4 blocks     ]  what stage 2 expands into where the head ends
 ```
 
-**The LZ4 blocks END WITH `.boot3`** on a kernel that has it (§2.9.15): the
+**The LZ4 blocks END WITH `.boot3`** on every kernel (§2.9.15): the
 file's last section, so its bytes are the last block's tail and arrive after
 the bar is up, priced by `t_blobruns --tail N` (fast tier). Before the
 modules, as every section is.
@@ -3530,7 +3548,23 @@ own, and there is no `boot/boot3.asm`: the name says *what `.boot2` loads*,
 as `.boot2` is what stage 1 loads, and it names a lifetime rather than a job.
 Its frame is `kernel/boot3.inc` (`cfx_slide`, `cfx_grp`, `cfx_tab`, the
 guards and the lifetime table in its header); its bodies stay in the modules
-that own them, under `B3SECT`.
+that own them, under `B3SECT`. **The frame is %included TWICE**: its HEAD
+where kernel.asm declares the section - so the slide and its list are the
+section's first bytes, for `.boot2`'s `jmp boot2_entry` reason (`-f bin`
+fills a section in the order its blocks are met, and every module's `B3SECT`
+block is met before the foot) - and its FOOT (`B3_FOOT`) at kernel.asm's
+foot, for the bodies that need the modules' macros and for the guards.
+
+**What it holds since wave 1** (BOOT3-PLAN 8), every body `retf`-bodied and
+called by `B3CALL` from `kmain_o`:
+
+| kernel | bodies |
+|---|---|
+| all four | `font_init` with `fi_time` and `fi_pit` (§6.0.1) |
+| kern_big, kern_emu, kern_mega | `hb_probe_x` (§87.5); `cfx_grid`, `cfx_ctxcap`, `cfx_cfgname` (kern_mega's were the blob's `bvw_rowcalc` instance, `bvs_ctxcap` and `ovc_cfgname` until its `.boot3` came on) |
+| kern_big, kern_emu | the slide prefix (`cfx_slide`, `cfx_grp`, `cfx_tab`); `as_boot` with `as_s_dir`, `as_s_skip`, `as_find` (§26.10.5) |
+| kern_mega | `mega_wrprobe`, `mega_gateb`, `mega_gwset` |
+| kern_small | OVBCALL's six bodies (§2.5.3.2): `vid_probe_avail`, `sched_init`, `mem_init_x`, the serial probe, `snd_init` and, under `BAKED_FONT`, `ovl_font_init` |
 
 ##### 2.9.15.1 Where it sits, and when it is alive
 
@@ -3541,8 +3575,10 @@ at `B3_RAM` = `B3_SEG`, a constant:
 
 | kernel | `B3_RAM` | it covers | since |
 |---|---|---|---|
-| kern_big, kern_emu | `VGABUF_RAM` (0x17DA at wave 0) - the paragraph past `.cold` | `.vgabuf`'s 336 bytes, `LADDER_PACK`'s rounding to `KERN_END`, the blob's lift | wave 0: the section took `.cfx` over (§2.10.9) |
-| kern_small, kern_mega, the `NO_COLD_SLIDE` / `NO_ROM_COLD` knobs | (not yet) | - | the wave that first moves a body there (BOOT3-PLAN 5) |
+| kern_big, kern_emu | `VGABUF_RAM` (0x17DA) - the paragraph past `.cold` | `.vgabuf`'s 336 bytes, `LADDER_PACK`'s rounding to `KERN_END`, the blob's lift | wave 0: the section took `.cfx` over (§2.10.9) |
+| the `NO_COLD_SLIDE` knob | `VGABUF_RAM` + `.vgabuf`'s bytes, to the paragraph: no slide may share them | the rounding and the lift | wave 1 |
+| kern_small | `.cold`'s end, to the paragraph (0x0EB7; `.vgabuf` is empty there) | `KERN_END`'s rounding and the lift | wave 1 |
+| kern_mega, the `NO_ROM_COLD` knob | `KERN_END` (kern_mega 0x2140), behind a zero gap in the file from `.mega`'s end (`.ovl`'s) that packs to almost nothing - past `.mega`'s park scratch and `.vgabuf` rather than over them | the lift | wave 1. Every kern_mega body is REAL mode: `mega_enter` runs after `mem_unblob_x` |
 
 | moment | what is in `.boot3`'s RAM |
 |---|---|
@@ -3564,13 +3600,12 @@ A `.boot3` body has a `.boot2` body's contract: CS = `B3_SEG`, DS =
 KERNEL_SEG, SS = LOW_SEG, far-entered, `retf`, its own data through `cs:`,
 `.text` through the KERNEL_SEG shims, `.cold` by a plain `call COLD_SEG:x`.
 
-- **`B3SECT [ovl|ovb]`** places a body: `section .boot3` on a kernel with the
-  section (`B3_ON`), and on one without it the body's old home - the blob,
-  `.ovl`, or OVBCALL's choice (§2.5.3.2).
-- **`B3CALL x [, ovl|ovb]`** calls one: `call B3_SEG:x` (5 bytes, OVLCALL's
-  shape - nothing published, nothing retired), `push cs` + a near call from
-  inside `.boot3`, and on a kernel without the section the old home's entry.
-  The word after the comma must be the body's `B3SECT` word (rule B8).
+- **`B3SECT`** places a body: `section .boot3`, on every kernel.
+- **`B3CALL x`** calls one: `call B3_SEG:x` (5 bytes, OVLCALL's shape -
+  nothing published, nothing retired), or `push cs` + a near call from inside
+  `.boot3`.
+- **OVBCALL** (§2.5.3.2) is `B3CALL` on kern_small and `OVLCALL` elsewhere:
+  the one body home still chosen per kernel, written once in the macro.
 - **`B2CALL x`** is the way back into the blob from `.boot3`:
   `call BLOB_SEG_AT:x`, the constant stage 1 (`HEAP_PARA`) and boothd
   (`BLOB_SEG`) are built with. It is a NEW ASSUMPTION - before it, nothing in
@@ -3579,9 +3614,9 @@ KERNEL_SEG, SS = LOW_SEG, far-entered, `retf`, its own data through `cs:`,
   row `bootfence` (`t_bootfloor.py --fence`) reads every shipped loader's
   encodings against each kernel's map. Its target ends in `retf`.
 
-The fallback arms are transitional, OVBCALL's dual-arm pattern: once every
-kernel has the section they go, and a `B3SECT` body is in `.boot3`
-everywhere.
+`B3SECT` and `B3CALL` had fallback arms for a kernel without the section,
+OVBCALL's dual-arm pattern, until wave 1 put the section on every kernel;
+they went then, and a `B3SECT` body is in `.boot3` everywhere.
 
 ##### 2.9.15.3 The lift is derived
 
@@ -3600,7 +3635,10 @@ that GROWS adds to R past this bound, so boot2.asm's `KZIP` guard stays the
 exact pass-2 check. `KZ_MARGIN_K` mirrors `KZ_MARGIN` under a guard. The
 floor keeps a section that fits under 96 paragraphs from moving anything:
 kern_big's bound is 64 at wave 0, and `.boot3` may grow by `kernsize`'s
-`boot3` margin (523 bytes at wave 0) before the lift steps. A step is 512
+`boot3` margin (523 bytes at wave 0, 16 at wave 1) before the lift steps.
+At wave 1 kern_big's lift is still 96; kern_small's is 160 (`.boot3` 1,441
+bytes from 0xEB70) and kern_mega's 160 (1,010 bytes from KERN_END, where
+only 450 fit under the floor). A step is 512
 bytes of BOOT RAM, never a resident byte - and an installed hard disk's
 volume boot record must be refreshed with the kernel (§52.10).
 
@@ -3626,15 +3664,18 @@ each with a fixture that must fail it on every run:
 | B2 | the load-time cone - `boot2_entry`, `read_run`, `kz_all`, `kz_hd`, `kz_expand`, `spl_tick`, `spl_chrome`, `vid_detect`, `bvs_apply`, `spl_isr`, `spl_anim` and what they reach - naming `.boot3`; and `boot/boot2.asm` or `kernel/splash.inc` naming it at all |
 | B3 | a CS store in `.boot3`, or `B3_SEG` stored in memory, unless the line says `; ovlchk: B3 hand-down - why` |
 | B4 | a near transfer, or a blob macro (`BLOBCALL`, `SPLCALL`, ...), across `.boot2` and `.boot3` |
-| B5 | a `cs:` read in `.boot3` of a label outside it, and a blob label carried as an immediate (`; ovlchk: B5 blob offset - why` excuses one) |
+| B5 | a `cs:` read in `.boot3` of a label outside it, and a blob label carried as an immediate (`; ovlchk: B5 blob offset - why` excuses one; `SPLCALL`'s own, which reaches the blob through `[spl_fp]`:`[spl_fseg]`, needs none) |
 | B6 | a `KZ_*`, `b2_*` or post-`boot2_entry` name in `.boot3` (§2.9.13.4's identity), and a `B3CALL` after `drv_boot_x` to a body that reaches `.ovl` |
 | B7 | `.boot3` in a file `kerndos/kdos.asm` includes, unless `kerndos/kdlayout.inc` declares it |
-| B8 | `B3CALL` at a non-`.boot3` target or with the other fallback word, `B2CALL` outside `.boot3` or at a non-blob target, either macro outside `kernel/` - a site written inside a `%macro` body judged at each expansion |
+| B8 | `B3CALL` at a non-`.boot3` target, `B2CALL` outside `.boot3` or at a non-blob target, either macro outside `kernel/` - a site written inside a `%macro` body judged at each expansion (it held the fallback words to each other until wave 1 retired them) |
 | B9 | any transfer into `.boot3m`, which is copied and never run in place (BOOT3-PLAN wave 5) |
 
 The kernel's own guards (boot3.inc, kernel.asm): `b3_live - $$ >=
-KVGABUF_SIZE`, `B3_SIZE + B3_RES <= 0xFFF0`, `.boot3` and its scratch below
-the blob, `KZ_MARGIN_K == KZ_MARGIN`.
+KVGABUF_SIZE` where the slide shares `.vgabuf`'s RAM, and no overlap with
+`.vgabuf` where nothing does; `B3_SIZE + B3_RES <= 0xFFF0`; `.boot3` and its
+scratch below the blob; `.boot3` past `.cold`, `.ovl`, `.vga` and `.mega` in
+the file, so that it is the last section `MODC_START` follows; `KZ_MARGIN_K
+== KZ_MARGIN`.
 
 ### 2.10 The ROM — `.cold` in a 5150's spare sockets
 
@@ -3739,8 +3780,8 @@ paragraphs (`BLOB_LIFT`):
   bytes past the image, and with `.cold` on top that reached the blob;
 - `.boot2`'s guard proves the read clears it on every build;
 - `mem_unblob` gives the lift back with the blob;
-- on a kernel with `.boot3` (§2.9.15.3) 96 is the FLOOR of a derived lift,
-  and `.boot3`, not `.cold`, is the file's last section.
+- since `.boot3` (§2.9.15.3) 96 is the FLOOR of a derived lift on every
+  kernel, and `.boot3`, not `.cold`, is the file's last section.
 
 #### 2.10.4 Adoption: the ROM decides, the kernel only rings
 
@@ -3811,10 +3852,10 @@ Then it re-points every listed word at F400, the `.vgabuf` words at
 CF = 1 and an untouched kernel, so a wrong ROM is no ROM.
 **The lists are per segment**: `rt_text` (`.text`), `rt_win` (`.ovl` at
 `FAT_SEG`, skipped by the HMA kind, which runs after the mount), `rt_blob`
-(the blob at `[spl_fseg]`) and, on a kernel with `.boot3` (§2.9.15),
-`rt_b3` at `RT_B3SEG` - walked by BOTH kinds, `.boot3` outliving the mount.
-A ROM cut from a kernel without the section carries no walk over it
-(`RT_HASB3`), so kern_small's ROM is unchanged until its `.boot3` lands.
+(the blob at `[spl_fseg]`) and `rt_b3` at `RT_B3SEG`, `.boot3`'s (§2.9.15) -
+walked by BOTH kinds, `.boot3` outliving the mount. kern_small's ROM walks it
+too since BOOT3-PLAN wave 1 (`RT_HASB3`, which is 0 only for a kernel with
+no `.boot3`): `font_init`'s and the OVBCALL bodies' `call COLD_SEG:` words.
 `os88rom.py` compares `.boot3` with `cfx_tab` blanked (`os88cfx.blank`)
 rather than skipping it: the list is stamped after the assembly, and the
 rest of the section is code the ROM re-points.
@@ -4124,7 +4165,8 @@ gives the kernel its own, so it can move `.cold` itself.
   was `.cfx` until BOOT3-PLAN wave 0 made it the third boot-only home and
   kept its labels' names). The words in `.text`, the window half, the blob
   and `.boot3` itself that name `.cold`'s segment (93 + 3 + 25 + 0 at wave
-  0, 195 of the table's 256 bytes) are stamped by `tools/os88cfx.py` into
+  0, 195 of the table's 256 bytes; 93 + 3 + 14 + 11, 197 bytes, once wave 1
+  moved `hb_probe_x`, `as_boot` and `font_init` there) are stamped by `tools/os88cfx.py` into
   `cfx_tab`, `CFX_MAX` (256) bytes of zeros in the section straight after
   `.cold` in the FILE. The tool re-assembles with kernel.asm's `COLD_CS`
   hook at two values and diffs, as os88rom.py does, after each of the
@@ -8912,7 +8954,9 @@ BIOS's answer. It TIMES the candidates, with the macro `FONT_PICK`:
 **What it costs.** **Zero resident bytes** on both kernels (kern_big 97,384,
 kern_small 65,398, both unchanged). `font_init`, the timers and the claim
 are in the BLOB half of the boot overlay on BOTH kernels now, reached by
-`BLOBCALL`, and the blob grew one sector to hold them: **`BOOT2_SECS` 9 ->
+`BLOBCALL`, and the blob grew one sector to hold them (**since BOOT3-PLAN
+wave 1 they are `.boot3`'s on every kernel**, §2.9.15, reached by `B3CALL`,
+and that sector's bytes are the blob's slack): **`BOOT2_SECS` 9 ->
 10**, `.ovl` 1,953 -> 2,178 of 2,496 on kern_big (and `.ovlw` 5,092 -> 4,968,
 the body having left it) and 1,969 -> 2,071 of 2,496 on kern_small.
 `KSIG_OFF` moved one memory sector down with it (6144 -> 5632) so the canary
@@ -9941,7 +9985,8 @@ a baked one still copies its face into `font_glyphs`/`font_zero` in
 `.lowbss`, measured +768 of `.lowbss` against the same knob build unbaked on
 both kernels (plus the face in the overlay, which is not resident). On
 **kern_small** the face and `ovl_font_init` are in the BLOB half (`.ovl`,
-§2.5.3.2), `font_init`'s own placement, reached through `OVBCALL`: in the
+§2.5.3.2; `.boot3` since BOOT3-PLAN wave 1, §2.9.15), `font_init`'s own
+placement, reached through `OVBCALL`: in the
 window half they overran kern_small's `.ovlw` guard, so until kernel size
 pass 8 `FONT=` did not build on kern_small at all.
 
@@ -60257,10 +60302,11 @@ place on A: (`stikmove`, `stikmovecga` and `stikregister` go red; at 4 they
 pass). §19.3.2's 512-byte clusters (`SYS360SPC`) left it 45 free, and the
 folder takes one.
 
-**`as_boot` is the BLOB's** (§2.5.3.3), called by kmain_o straight after
-`spl_finish`, so it costs no resident byte. A launch must not race the
-loading screen's IRQ0 frames, which that has stopped, and the blob lives until
-kmain's `mem_unblob_x`. It:
+**`as_boot` is `.boot3`'s** (§2.9.15; the BLOB's, §2.5.3.3, until BOOT3-PLAN
+wave 1), called by kmain_o straight after `spl_finish`, so it costs no
+resident byte and no blob byte. A launch must not race the loading screen's
+IRQ0 frames, which that has stopped, and `.boot3` lives until kmain's
+`mem_unblob_x`. It:
 
 - stands at the boot volume's root and `dskw_stat`s `AUTOSTRT`. No folder, or
   a FILE of that name, is the end of it;
@@ -77524,7 +77570,8 @@ after `desk_init` returns and again after `drv_boot`, the blob's `bvs_switch`
 and `bdk_reflow`). On kern_big and kern_emu the boot's GEOMETRY half is
 `cfx_grid` in `.boot3`, past `b3_live` (the blob had nine bytes), and
 `bvw_rowcalc` is a far call to it followed by the reflow; kern_mega's blob
-takes the whole copy. On kern_small `desk_reflow` and `desk_live` had no
+took the whole copy until BOOT3-PLAN wave 1, and since then is kern_big's
+shape. On kern_small `desk_reflow` and `desk_live` had no
 other caller and are written into the macro, so all three left resident:
 kern_big, kern_emu and kern_mega `.cold` -100, kern_small `.cold` -123.
 
@@ -77741,7 +77788,7 @@ changes** — drawing is spatially coherent, so the steady state is
 |---|---|
 | `[vid_ndisp]` | displays the kernel has **brought up** — 2 after §39.13, 1 for ever on a one-card machine. Not the same question as how far the *desktop* spans, which is `[vid_w]`/`[vid_h]` and is still one display's until docs/plans/completed/DUAL-DISPLAY-PLAN.md step 6 |
 | `[vid_cur]` | which display's geometry is in the live block |
-| `vid_ctx_capture` | AL = display; bank the live geometry into that record. Not resident since kernel size pass 15: vidsel.inc's `VID_CTXCAP` macro, expanded in each of its callers' images - `vid_ctxcap` (CTRL.DRV), `ext_ctxcap` (EXTD.DRV), `cfx_ctxcap` (`.boot3`, the boot's on kern_big and kern_emu), `bvs_ctxcap` (kern_mega's blob) - and written into the boot overlay's `vid_ctx_init` |
+| `vid_ctx_capture` | AL = display; bank the live geometry into that record. Not resident since kernel size pass 15: vidsel.inc's `VID_CTXCAP` macro, expanded in each of its callers' images - `vid_ctxcap` (CTRL.DRV), `ext_ctxcap` (EXTD.DRV), `cfx_ctxcap` (`.boot3`, the boot's on kern_big, kern_emu and - since BOOT3-PLAN wave 1, where it was the blob's `bvs_ctxcap` - kern_mega) - and written into the boot overlay's `vid_ctx_init` |
 | `vid_ctx_act` | AL = display; make it current, **returning immediately if it already is** |
 | `vid_ctx_init` | one display, at the virtual origin, holding what is on screen now |
 
@@ -102788,8 +102835,8 @@ unchanged and only the parser's own tables take `cs:`.
 an image is a filename read out of the kernel at the image's offset — so each
 image STAGES its own copy into the panel's `cp_sbuf` first: `CTRL.DRV` through
 `cp_stage` (now the settings core's), the boot's reader through `CFGN_STAGE`,
-expanded in `.boot3` where there is one (kern_big, kern_emu) and in the blob
-where there is not. Both names were 22 resident bytes kept for two moments in
+expanded in `.boot3` (`cfx_cfgname`; on kern_mega in the blob, as
+`ovc_cfgname`, until BOOT3-PLAN wave 1 put `.boot3` there too). Both names were 22 resident bytes kept for two moments in
 a session.
 
 **Written once, emitted twice.** `CFG_DATA` / `CFG_SHARED` / `CFG_BOOT` /

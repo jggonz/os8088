@@ -1,7 +1,7 @@
 # `.boot3` — boot-only code that rides in KERNEL.SYS
 
-> **Status: BEING BUILT. Wave 0 is built (2026-11-08, section 16.4); waves 1-5
-> and item E are not.** Written 2026-11-08 at the owner's
+> **Status: BEING BUILT. Waves 0 and 1 are built (2026-11-08, sections 16.4
+> and 16.5); waves 2-5 and item E are not.** Written 2026-11-08 at the owner's
 > request, after the big review's size ledger asked for a 14th blob sector
 > and the owner refused it (docs/reports/BIG-REVIEW-2026-11-08.md section 7,
 > docs/reports/big-review-2026-11-08/synth/phase1.md "Both boot-time homes
@@ -556,6 +556,13 @@ buys kern_small nothing by itself: it is what lets wave 4 shrink the blob.
 6,050..6,569 used, 599..1,118 free. `.boot3` sits at KERN_END; the lift stays
 96 at 314 bytes and becomes about 128 at 833 (B3_END 0x21341, + 1,086,
 rounded to 0x21800), PREDICTED.
+
+**Built (build, 2026-11-08)**, with the deviations section 16.5 lists, every
+kernel's `.boot3` on and the fallback arms deleted. MEASURED: kern_big
+`.boot2` 6,478 -> 5,974 (**-504**), `.boot3` 535 -> 1,042, lift 96 (16 bytes
+before it steps); kern_small `.boot2` 4,745 -> 3,310 (-1,435), `.boot3`
+1,441, lift **160**; kern_mega `.boot2` 6,709 -> 5,713 (-996), `.boot3`
+1,010, lift **160**. Resident 0 on every kernel.
 
 ### Item E: one tick right after the plain head (recommended)
 
@@ -1723,3 +1730,94 @@ whenever kern_big's KERNEL.SYS or COLDHMA.SYS does, though kern_mega's own
 kernel is byte-identical; `util360.img` carries the same file, by design.
 Whether kern_mega's disk should carry a manifest of its own is SPEC.md
 118's question.
+
+### 16.5 Wave 1 as built (build, 2026-11-08)
+
+Built against this tree's code; where the code disagreed with the plan the
+code won. Host checks only (CLAUDE.md's Testing rule): no emulator ran.
+
+**What was measured** (this tree's maps and kz.json, against the starting
+commit built at the same commit count):
+
+| kernel | resident | `.boot2` | `.ovl` | `.boot3` | lift (para) | KERNEL.SYS |
+|---|---:|---|---:|---|---:|---|
+| kern_big | 96,768, +0 | 6,478 -> 5,974 (-504) | 5,119, +0 | 535 -> 1,042 at 0x17DA | 96 (16 bytes before the step) | 85,184 -> 85,648 (167 -> 168 sectors; stage 2 154 -> 155) |
+| kern_emu | 96,768, +0 | 6,091 | 5,119 | 1,042 at 0x17DA | 96 | 86,304 |
+| kern_small | 58,880, +0 | 4,745 -> 3,310 (-1,435) | 1,474, +0 | 1,441 at 0x0EB7 | 96 -> **160** | 54,240 -> 55,408 (106 -> 109; stage 2 95 -> 98) |
+| kern_mega | 62,976 (MEGA_RESIDENT), +0 | 6,709 -> 5,713 (-996) | 5,118, +0 | 1,010 at 0x2140 | 96 -> **160** | 115,888 -> 116,832 (227 -> 229; stage 2 213 -> 215) |
+
+Guard 5's headroom at 128KB: kern_big 22,016 (unchanged), kern_small
+60,928 -> 59,904; boot arena kern_big 24,064, kern_small 63,488 -> 62,464;
+kern_mega 507,904 -> 506,880 at 640KB. `cfx_tab` 93 + 3 + 14 + 11 (197 of 256
+bytes): the eleven `.boot3` words are wave 1's, which leave the blob's 25 at 14.
+The ROM lists conserve: kern_big blob 25 -> 14 + b3 0 -> 11, kern_small blob
+3 -> 1 + b3 0 -> 2. `.text`, `.cold`, `.ovl`, `.vga` and `.mega` are the
+same LENGTH as the starting commit's on every kernel; their bytes differ only
+in immediates that name blob offsets (`SPLCALL`/`SPLGATE1` targets in
+`sch_isr`, `dkb_geom`, `dsk_xfer`, `mouse_init`, and `kbld_blob`), 5-8 bytes a
+kernel - the blob's contents moved under them. No kernel is byte-identical,
+and the plan claimed none for this wave. `blobruns`: every geometry's call
+counts unchanged; small360/small720's three stage-1 calls are now 5 + 1 + 5
+(the lift moved the page bound two sectors earlier), so the page term is still
+PREDICTED and not acted on.
+
+**Deviations.**
+
+1. **The fallback arms are DELETED in this wave**, with `B3_ON`: every kernel
+   switched on, which is section 4's condition. `B3SECT` takes no word,
+   `B3CALL` one argument; the `%ifdef B3_ON` arms in driver.inc and vidsel.inc
+   keep only their `.boot3` side. Rule B8 keeps "B3CALL at a non-`.boot3`
+   target" and its B2CALL checks and drops the kind-word agreement; its two
+   kind fixtures became a `.text` target and a blob target written inside a
+   macro (18 fixtures still).
+2. **kern_small moves by OVBCALL, not by `B3SECT ovb`**: its arm is `B3CALL`
+   (was BLOBCALL) and every OVBCALL body's kern_small block says `B3SECT`. So
+   ALL six OVBCALL bodies moved - including **`vid_probe_avail` +
+   `vid_memchk`**, which section 8 did not list - and, under `BAKED_FONT`,
+   `ovl_font_init` with its face. kern_big's arm stays `.ovl`. Rule 2d holds
+   OVBCALL to `.boot3`; B4 no longer reads OVBCALL (both its arms are far).
+   Every moved closure passed B1-B9 (`os88ovlchk`).
+3. **kern_mega also took `cfx_grid`, `cfx_ctxcap` and `cfx_cfgname`**, the
+   bodies `%ifdef B3_ON` already sent to `.boot3`: its blob's `bvw_rowcalc`
+   DESK_ROWCALC copy, `bvs_ctxcap` and `ovc_cfgname` went. `mega_wrprobe`,
+   `mega_gateb` and `mega_gwset` certified and moved. Its lift is 160, not the
+   predicted 96..128: at `KERN_END` only 450 bytes fit under the floor.
+4. **`kernel/boot3.inc` is %included twice**: its HEAD where kernel.asm
+   declares `.boot3` (the slide prefix must be the section's first bytes, and
+   every module's `B3SECT` block is met before the foot - `.boot2`'s `jmp
+   boot2_entry` reason), its FOOT (`%define B3_FOOT`) at the foot for the
+   `cfx_` bodies, which need the modules' macros, and the guards. The file-
+   order guards (`.boot3` past `.cold`, `.ovl`, `.vga`, `.mega`) sit after
+   `MODC_START` in kernel.asm, where `OVL_SIZE` and `MEGA_SIZE` are known.
+5. **NO_COLD_SLIDE and kern_small start `.boot3` PAST `.vgabuf`'s bytes**
+   (`VGABUF_RAM*16 + KVGABUF_SIZE` to the paragraph) instead of a zero pad: a
+   `times KVGABUF_SIZE` at the head is a forward reference NASM refuses. The
+   same RAM is left; kern_small's KVGABUF_SIZE is 0, so it is `.cold`'s end.
+   A guard refuses an overlap with `.vgabuf` on any kernel without the slide.
+6. **NO_ROM_COLD still does not assemble** - before this wave it failed on the
+   blob and on `mou_p2knock`'s window guard; now only on the second, which is
+   not `.boot3`'s. NO_COLD_SLIDE, which overran its blob at the starting
+   commit, assembles. `BOOTMARK=1` (and `BOOTHALT=20`) assemble on kern_big,
+   kern_small and kern_mega. Neither knob is in `buildmatrix`'s roster.
+7. **`os88ovlchk` needed four rule repairs, each a false positive the move
+   exposed**: B1 ignores quoted strings (bootprof's `"mouse_init"` label);
+   B5 accepts `SPLCALL`'s own immediate (it reaches the blob through
+   `[spl_fp]`:`[spl_fseg]`, which is right from any segment); rule 2c's
+   stale-row check leaves rows naming `.boot3` labels to B1; and three
+   `tests/ovlrefs.txt` rows register AS_WALK's labels, which the expander sees
+   in kern_mega's `.cold` arm because it keeps every arm of `%ifdef KERN_MEGA`.
+   The `mouse_init` row went (the probe left the blob and `.ovl`'s model).
+8. **kern_mega `blobruns` rows were not added** (16.4 deviation 10 deferred
+   them here): they still rest on `make mega`'s images, which `all` does not
+   build and a fast row cannot. Undone.
+9. **`tests/coldslide.py` reads the fourth group at a stop**: a first
+   Hercules boot breaks on `spl_finish` (`BLOB_SEG_AT*16` + its offset; after
+   the slide, before `mem_unblob_x`) and checks every `.boot3` word against
+   the slid segment. UNRUN - it is a soak row - and its registered 35 s
+   predates the extra boot, so the final pass re-measures it.
+10. **`os88rom.py` prints the `.boot3` count** in its site summary
+    (`93+3+14+11`, `47+2+1+2`). kern_small's ROM now walks `rt_b3` (its 14
+    ROM bytes, `RT_HASB3` = 1).
+11. **`kernsize`'s baseline was not re-blessed**: it was stale at the
+    starting commit already, and blessing is a size pass's act.
+

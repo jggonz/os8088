@@ -366,7 +366,7 @@ mega_enter:
 section .cold
 mega_enterf:
     mov si, [ss:mega_gwhy]          ; whether it can be made at all, as the
-    mov dx, si                      ; boot blob found it (mega_gateb; every
+    mov dx, si                      ; boot found it (mega_gateb, `.boot3`; every
     cmp si, 1                       ; refusal `.cold`'s - KERN-MEGA-PLAN 14.45)
     ja .refuse
 
@@ -10596,9 +10596,10 @@ mx_relallf:
 ; their four-byte far doors
 section .cold
 ; -----------------------------------------------------------------------------
-; mega_gateb - FAR, from kmain_o, its last call (BLOBCALL): the half of the
+; mega_gateb - FAR, from kmain_o, its last call (B3CALL): the half of the
 ; switch's gate that has NO SIDE EFFECT a refusal would have to undo, asked
-; IN THE BOOT BLOB, which mem_unblob gives back - whether the CPU is a 286,
+; IN `.boot3` (the boot blob until BOOT3-PLAN wave 1), which mem_unblob gives
+; back - whether the CPU is a 286,
 ; and where the tables go (mega_layoutf, a pure function of the BIOS's
 ; answer) - with the tables aimed when they go above 1MB, which is stores to
 ; words only real mode never reads. The answer is left in [mega_gwhy] for
@@ -10614,7 +10615,7 @@ section .cold
 section .lowbss                 ; (SS-addressed: not the 64KB window's)
 mega_gwhy   resw 1                  ; mega_gateb's verdict: 0 or 1 go on, else
                                     ; the refusal's line
-section .boot2
+B3SECT
 mega_gateb:
     cmp byte [cpu_tier], CPU_286
     mov dx, mega_t86                ; (MOV keeps the flags)
@@ -10835,7 +10836,7 @@ mega_a20f:                          ; (the door's far entry, from mega_gateb
 section .cold
 
 ; -----------------------------------------------------------------------------
-; mega_tset - FAR, from mega_gateb in the boot blob and mega_enterf (it was
+; mega_tset - FAR, from mega_gateb in `.boot3` and mega_enterf (it was
 ; near, from the gate and mega_tlowf, both `.cold`'s): DX:AX = where the tables' block goes
 ; ([mega_tblkb]: the GDT at DX:AX and the LDT on top of it, the IDT
 ; [mega_ldtend] in) -> every word the switch and the kernel read a table's
@@ -10861,7 +10862,7 @@ mega_tset:
     mov ax, [mega_ldtend]
     mov [ss:mega_ldte], ax          ; ...the scans' end, where any DS reads it
     sub ax, 8                       ; - HERE and not in mega_layoutf, whose
-    mov [ss:mega_ldtl], ax          ; boot-blob caller (mega_wrprobe) runs on
+    mov [ss:mega_ldtl], ax          ; boot-time caller (mega_wrprobe) runs on
     add ax, 7                       ; the loader's stack, not LOW_SEG
     mov [mega_ldtd], ax             ; ...its limit, the allocator's last byte
     pop ax

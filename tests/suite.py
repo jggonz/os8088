@@ -422,7 +422,12 @@ FAST = [
         "segment (checked against the two-assembly diff, not the list), "
         "[mem_base] is MONO_FLOOR and the Task Manager's kernel row has both "
         "rungs off it, and CTRL.DRV loaded after the move has every far "
-        "reference re-pointed by mod_cfix. B, the VGA XT: nothing moves - "
+        "reference re-pointed by mod_cfix. A0, a first Hercules boot "
+        "stopped at spl_finish (before mem_unblob gives `.boot3` to the "
+        "heap): cfx_slide's fourth group, `.boot3`'s own `call COLD_SEG:` "
+        "words (11 since BOOT3-PLAN wave 1), every one names the new "
+        "segment - one boot more than the 35s was measured with, so the "
+        "final pass re-measures it. B, the VGA XT: nothing moves - "
         "the negative control, a slide there would run the planar renderer "
         "out of `.cold`'s bytes. SOAK: the subject is the kernel's ladder on "
         "two adapters",

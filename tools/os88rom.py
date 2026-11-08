@@ -1286,7 +1286,8 @@ def main():
         print(f"os88rom: {os.path.relpath(path, ROOT)} and its five sockets - "
               f"{variant}'s .cold ({len(t['cold']):,} bytes) at F400, build "
               f"{build_str(a.build)}; {len(L['text'])}+{len(L['win'])}+"
-              f"{len(L['blob'])} kernel sites + {len(L['vgab'])} `.vgabuf`, "
+              f"{len(L['blob'])}+{len(L['b3'])} kernel sites + "
+              f"{len(L['vgab'])} `.vgabuf`, "
               f"{sum(len(v) for v in L['mods'].values())} in "
               f"{t['nmods']} modules")
         held = [t["names"][n] for n in sorted(t["held"], key=t["held"].get)]
@@ -1332,7 +1333,8 @@ def main():
               f"build {build_str(a.build)}: {len(img):,} bytes, of which "
               f"{res_len:,} stay at FFFF:{res_at:04X}, after .cold's "
               f"{len(t['cold']):,} from {t['vst']:04X}; "
-              f"{len(L['text'])}+{len(L['blob'])} kernel sites + "
+              f"{len(L['text'])}+{len(L['blob'])}+{len(L['b3'])} kernel "
+              f"sites + "
               f"{len(L['vgab'])} `.vgabuf`, "
               f"{sum(len(v) for v in L['mods'].values())} in {t['nmods']} "
               f"modules; {0x10000 - res_at - res_len:,} bytes over it spare")

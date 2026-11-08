@@ -327,9 +327,11 @@ FONT_ICA    equ 0x00F8                      ; 0040:00F8: 'FP', best, RAM, BIOS.
 ; baked table would be dead code on every machine that ever runs it, and a
 ; baked table kept behind a probe would never be the thing being tested.
 ;
-; IN THE BLOB HALF OF THE BOOT OVERLAY (`.boot2`) ON BOTH KERNELS, reached by
-; BLOBCALL: SPEC.md 6.0.1 grew the blob to ten sectors for exactly this body,
-; so it costs no resident byte and no window byte. One caller, kmain.
+; IN `.boot3`, THE THIRD BOOT-ONLY HOME, ON EVERY KERNEL (SPEC.md 2.9.15),
+; reached by B3CALL: it was the blob's (SPEC.md 6.0.1 grew the blob to ten
+; sectors for exactly this body) until BOOT3-PLAN wave 1 gave those bytes back.
+; It costs no resident byte, no window byte and no blob byte. One caller,
+; kmain_o, after kz_all.
 ;
 ; THE TABLE IS READ IN PLACE (SPEC.md 6) - unless even the fastest candidate
 ; FONT_PICK timed is slower than RAM by more than a quarter. Then the 760
@@ -349,7 +351,7 @@ FONT_ICA    equ 0x00F8                      ; 0040:00F8: 'FP', best, RAM, BIOS.
 ; on an AT bus, crosses it by multiples. `make FONTSLOW=1` takes the copy on
 ; any machine, so the copy path has a row.
 ; -----------------------------------------------------------------------------
-section .boot2
+B3SECT
 font_init:
     push ax
     push bx
@@ -401,7 +403,7 @@ font_init:
     pop cx
     pop bx
     pop ax
-    retf                        ; FAR: kmain reaches this through BLOBCALL
+    retf                        ; FAR: kmain_o reaches this through B3CALL
     FONT_TIMERS fi
 section .text
 %endif
@@ -2699,7 +2701,7 @@ font_dith:      resb 1          ; 1 = this glyph is disabled text on a mono
 %ifndef KERN_SMALL
 section .ovl
 %else
-section .boot2                    ; kern_small: the BLOB half, font_init's own
+B3SECT                          ; kern_small: `.boot3`, font_init's own
                                 ; placement and for its reason - that kernel's
                                 ; `.ovl` sits on the FAT window and the mount
                                 ; buffers, and 760 more bytes overran it, so

@@ -239,7 +239,8 @@ line:
   the **boot arena** at `MIN_RAM_KB`: from the blob's nobits floor
   (`BLOB_SEG_AT*16 + BOOT2_RES`) to the top of RAM, what the boot's own
   claims have. 24,064 bytes on kern_big at 128KB and 63,488 on kern_small
-  (BOOT3-PLAN wave 0); it is the host figure that stands in for a kern_big
+  (BOOT3-PLAN wave 0; 62,464 on kern_small at wave 1, its lift stepping
+  twice); it is the host figure that stands in for a kern_big
   128KB boot row, which the owner took out.
 - **`boot3`** — the third boot-only home (SPEC.md §2.9.15): `.boot3`'s bytes,
   what is free under the blob, and how far it can grow before the derived
@@ -1096,12 +1097,22 @@ after the bar - `t_blobruns --tail N` prices them, in the fast tier - and
 (b) once it outgrows the floor of 96 paragraphs under the blob, the blob's
 DERIVED lift (SPEC.md §2.9.15.3): 512 bytes of boot RAM a step, which guard
 5 counts. `kernsize`'s `boot3` line is the room left before that step (523
-bytes at wave 0) and its `boot` line carries the boot arena at 128KB.
+bytes at wave 0, 16 at wave 1 on kern_big) and its `boot` line carries the
+boot arena at 128KB.
 
-| kernel | `.boot3` (wave 0) | where | lift |
-|---|---|---|---|
-| kern_big, kern_emu | 535 bytes (`.cfx`'s 530, + 5 for the slide's fourth group) | `VGABUF_RAM` 0x17DA | 96, the floor (the bound is 64) |
-| kern_small, kern_mega | none yet - `B3SECT`/`B3CALL` take their fallback arms | - | 96 |
+**Every kernel has it since wave 1** (MEASURED, this tree's maps):
+
+| kernel | `.boot3` | where | lift (paragraphs) | `.boot2` it took from the blob |
+|---|---|---|---|---|
+| kern_big, kern_emu | 1,042 bytes (wave 0's 535 + `hb_probe_x`, `as_boot` and `font_init`) | `VGABUF_RAM` 0x17DA | 96, the floor | 6,478 -> 5,974 (-504) |
+| kern_small | 1,441 (`font_init` and OVBCALL's six bodies) | `.cold`'s end, 0x0EB7 | **160** | 4,745 -> 3,310 (-1,435) |
+| kern_mega | 1,010 (`hb_probe_x`, `font_init`, `mega_wrprobe`, `mega_gateb`, the three `cfx_` bodies) | `KERN_END` 0x2140 | **160** | 6,709 -> 5,713 (-996) |
+
+Resident: 0 bytes on every kernel. The lift's two steps on kern_small cost
+1,024 bytes of its 128KB boot arena (63,488 -> 62,464) and of guard 5's
+headroom (60,928 -> 59,904); kern_mega's 1,024 of a 640KB floor. The blob
+keeps its length on every kernel until wave 4 shortens it, so the bytes are
+slack inside its sectors.
 
 A body goes there with `B3SECT` and is called with `B3CALL`; it calls back
 into the blob with `B2CALL`. Rules B1-B9 of `tools/os88ovlchk.py` are the

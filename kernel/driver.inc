@@ -5155,11 +5155,10 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
     mov bx, %1 %+ _buf          ; the read takes ES:BX, which is what makes
     mov cx, CFG_FBUF            ; that free rather than awkward
     xor dx, dx
-%ifdef B3_ON                    ; ...but the NAME is read through DS, so it is
-    B3CALL cfx_cfgname          ; STAGED, into cp_sbuf: the copy is in `.boot3`
-%else                           ; where there is one (kernel size pass 16),
-    call %1 %+ _cfgname         ; this image's own where there is not
-%endif
+    B3CALL cfx_cfgname          ; ...but the NAME is read through DS, so it is
+                                ; STAGED, into cp_sbuf: the copy is in `.boot3`
+                                ; (kernel size pass 16; kern_mega's too since
+                                ; BOOT3-PLAN wave 1)
 %ifdef OS88_SHORTCUTS
     call ovl_sc_load            ; a file with SHORTCUTS after its terminator
     jnc %%have                  ; is read whole into their claim and its head
@@ -5401,9 +5400,8 @@ CFG_DATA   ovc
 ovc_buf     equ BOOT2_PAD       ; .boot2 is vstart 0: its end IS this offset
 CFG_SHARED ovc
 CFG_BOOT   ovc
-%ifndef B3_ON
-CFGN_STAGE ovc_cfgname, ret     ; (.boot3's cfx_cfgname on kern_big and kern_emu)
-%endif
+                                ; (the name's staging is `.boot3`'s
+                                ; cfx_cfgname on every kernel that reads one)
 
 ; -----------------------------------------------------------------------------
 ; ovl_cfg_load - the entry drv_boot reaches through SPLCALL (SPEC.md 2.5.1)
@@ -6047,15 +6045,11 @@ WM_REFIT bvw, BSWK
 DOCK_APPLY bdk, BSWK, BSWC, bvw
 %endif
 EXF_SYNC bxf, BSWC              ; ...and EXTD.DRV's sync (extmod.inc)
-%ifdef B3_ON                    ; ...and the desktop grid's (desk.inc): the
-bvw_rowcalc:                    ; geometry from `.boot3` (cfx_grid, boot3.inc),
-    B3CALL cfx_grid             ; which costs this blob nothing, and the
-    BSWC desk_reflow            ; reflow - desk_rowcalc's two halves, in its
-    ret                         ; order
-%else
-DESK_ROWCALC bvw, BSWC          ; (kern_mega: no `.boot3` yet, and blob to spare)
-VID_CTXCAP bvs_ctxcap, ret      ; ...and bvs_disp_init's capture (vidsel.inc)
-%endif
+bvw_rowcalc:                    ; ...and the desktop grid's (desk.inc): the
+    B3CALL cfx_grid             ; geometry from `.boot3` (cfx_grid, boot3.inc),
+    BSWC desk_reflow            ; which costs this blob nothing, and the
+    ret                         ; reflow - desk_rowcalc's two halves, in its
+                                ; order
 KGO_PAIR bvs
 %endif
 DRV_TITLES bdt                  ; the rows' names, for drv_boot_x's 'Loading
@@ -6236,8 +6230,9 @@ drvf_drv_mounted:        call drv_mounted
 ; images already carry - at the five bytes the far call was. drvf_drv_mounted
 ; stays: the settings core, `.modc`, may not reach the panel's hop)
 ; (drvf_drv_find and drvf_ss_mins2idle went in kernel size pass 13: their one
-; caller each - hb_probe_x and the settings reader's unpack - is in the blob,
-; with nothing in BP, and reaches the near body through wm_cbd)
+; caller each - hb_probe_x (in `.boot3` since BOOT3-PLAN wave 1) and the
+; settings reader's unpack (the blob) - is boot-only, with nothing in BP, and
+; reaches the near body through wm_cbd)
 
 section .modc                   ; CTRL.DRV's image (SPEC.md 2.8)
 
