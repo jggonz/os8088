@@ -512,7 +512,7 @@ X apps/os88huge.inc si+HW_SEG            # THE WALKER'S CLAIM IS ITS CALLER'S (S
                                          # which declares the CONVENTIONAL piece itself
                                          # where hw_claimfit's CX says it is there -
                                          # XTMP3's x3_lset, WaveRack's wt_hhuge, Audio's
-                                         # aph_decl (KERN-MEGA-PLAN 14.173, 14.177)
+                                         # aph_claim (KERN-MEGA-PLAN 14.173, 14.177, 14.186)
 X apps/realdmg/rwbank.inc rw_xsel        # kern_mega's arm: the cartridge IN PLACE,
                                          # one OSAPI_MEM_HUGE claim in the POOL
                                          # (REALDMG-SPEC 10.3.1). It is not a wall:

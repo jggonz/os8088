@@ -85,9 +85,9 @@
   "sources": [
    "apps/audio"
   ],
-  "stamped": "87c45da6",
-  "strings": "2f82f35cbeb3a205",
-  "why": "the huge-claim read-ahead (hw_claimfit, MEGA-HUGE-PLAN) is below the page's detail: it still streams a little at a time; nothing a user reads changed"
+  "stamped": "e15cc130",
+  "strings": "685a84aa6fd914d9",
+  "why": "kern_mega arm only: the hold filled by the stream (KERN-MEGA-PLAN 14.186); the page already says it reads a song a little at a time as it plays, which is now true on every kernel - unchanged"
  },
  "AUTOSTRT": {
   "sources": [],

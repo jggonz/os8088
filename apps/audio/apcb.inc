@@ -306,14 +306,6 @@ ap_onwake:                         ; SI = window
     call ap_lrepaint
 .no_first:
 
-%ifdef PKG_MEGA
-    ; 0b. kern_mega's arm: a file loading into the hold - a pass of it, and
-    ;     the track opened once it is in (aphold.inc)
-    cmp byte [aph_load], 0
-    je .noload
-    call aph_tick
-.noload:
-%endif
     ; 1. the disk-refill handshake (time-critical: do it first)
     cmp byte [ap_req], FR_READ
     jne .norefill
