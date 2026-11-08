@@ -555,3 +555,31 @@ Ctrl-Alt-Del is the escape (see the mismatches). 0 bytes.
   (sched.inc) against "the app dies, the desk lives" (every system in the
   prior-art list). It is the owner's call, and it decides what gfce-1's
   panel is for.
+
+## Verification
+
+Adversarial pass, 2026-11-08, against the current tree (the doc-fix pass had
+already edited some of the quoted files). Every finding was re-read at the
+cited code.
+
+| id | verdict | note |
+|---|---|---|
+| gfce-1 | confirmed | Nothing writes IVT 0/1/3-7 on kern_big or kern_small outside BOOT_MARK's `mark_hook` (kernel.asm `mark_fvec` 0,1,3,4,5,6,7). The 286+ half is architectural: #DE pushes the IP *of* the `div`. The panel is 174 bytes on kern_big and 173 on kern_small (`sch_stkdie` to `sch_stkbase`, strings included), as the maps say. The 5150 masking claim rests on wm.inc's note; the open question about the 1986 XT BIOS revision stands. Not in ABI-BREAK-LIST or KERNEL-BYTE-QUEUE. |
+| gfce-2 | confirmed | A decision to record. `mega_fkill` is the precedent; 8086/8088 #DE pushes the address after the `div`. |
+| gfce-3 | confirmed | Counts reproduced: 95 `div`, 1 `idiv`, 7 `xlatb` in kernel/; 48 `div`/`idiv` in drivers/. One of the five unfenced sites (FSX_SPK) is unfenced *by ruling*, so a ratchet registers it as such. |
+| gfce-4 | **refuted** | The divide is real, but SPEC.md 34.11.1 records the decision: N must be 74..255 and "the door does not re-check it: packages are trusted (the owner's ruling, docs/plans/LAST-DROP-BYTES.md §7.11)", a fence having cost 55 bytes. Also, on an IBM ROM 8088 the int 0 dummy masks the 8259 rather than continuing. It stays a beneficiary of gfce-1. |
+| gfce-5 | confirmed | `.make` fences on W_FLAGS, `[ld_base]` == W_SEG and the record's I_STATE only, then `div cl` and an unbounded `wm_owner+si` read. |
+| gfce-6 | corrected | Raw copy confirmed (`%1_unpack`; 15 rows on kern_big with DOCK_OPT, 8 otherwise). An out-of-domain byte should skip the store, so the boot default stands as the map header promises. Storing 0 would be wrong: 0 is not every key's default. |
+| gfce-7 | confirmed | `cmp ax, 16` against FM_NERR = 11; latent. The imm8 encoding is the same, so the fix is 0 bytes. |
+| gfce-8 | confirmed | Every code named in the class map exists; abi-9's refusal shapes are confirmed there. |
+| gfce-9 | spot-checked, confirmed | Cell macros at kernel.asm:2425/2442/2495; smalllaunch at suite.py:12288. |
+| gfce-10 | spot-checked, confirmed | The two vocabularies exist (sched.inc `sch_s_over`, mega.inc `mega_fbuf`). |
+| gfce-11 | confirmed | Every `kbm_isr` path falls to `.chain` (KBM_SCAN only flags keypad 5). kern_big's bracket touches neither IVT 09h nor IRQ1's mask, so Ctrl-Alt-Del answers. |
+
+**Doc mismatches.** Four are confirmed and go to the data file's `doc_fixes`:
+- SPEC.md 8.8's "only `cli`/`hlt` in the kernel" is scoped to kern_big and kern_small (kern_mega's `mega_fault`, plus the BOOTMARK/BOOTHALT knobs).
+- `FERR_BIG`'s "(or than 64KB)" in os88api.inc. It is an `equ` comment, so the abilock fingerprint does not move.
+- instance.inc's "exceeds 255*WIN_SIZE" becomes "reaches 256*WIN_SIZE, taken unsigned". `wm_wins` is 9FCAh / 766Bh, so every BX below it faults.
+- SPEC.md 53.1's "hangs the machine" becomes the desktop, with the Ctrl-Alt-Del exit.
+
+Three are **dropped as already applied** by the doc-fix pass: SPEC.md 8.8's ".bss first" order, its "costs 209 bytes", and `FERR_DIRFULL`'s "root directory".

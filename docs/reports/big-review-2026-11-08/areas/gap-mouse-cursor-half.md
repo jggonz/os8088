@@ -698,3 +698,53 @@ Nothing to add in bytes beyond isr-7 R's +30 to +40.
 4. Has an `m.flicker()` reading of a VGA pointer sweep ever been taken? If
    not, mc-3's "visible" is predicted. It is the one measurement that ranks
    `KHP_VGASAVE` against R2.
+
+## Verification
+
+An adversarial re-read on 2026-11-08 at `4b9f1715`, against the current files.
+Line numbers have moved by about 12 since the review.
+
+**Findings: 11 confirmed, 1 corrected, 0 refuted.**
+
+- **mc-3, confirmed** (already queued as LAST-DROP-PERF row 3).
+  `KHP_VGASAVE` is defined under `KERN_MEGA` only (kernel.asm 293-294).
+  `cur_move_1`'s planar arm is restore, then save, then draw. SPEC 7.1.2
+  already names kern_mega as the kernel behind 15,100, and its 21.5% ISR share
+  supports the ~20% prediction. PERFORMANCE Part 5's row now names the
+  kernel. The 11,500 vs 12,000 question (open question 2) is left alone.
+- **mc-5, confirmed.** gfx_lock only stores `[cur_lazy]`, and no OSAPI cell
+  spends it. **The `apps/os88api.inc` fix is withheld from doc_fixes**:
+  `tools/abilock.py`'s `surface()` hashes an `OSAPI_*` define's trailing
+  comment, so that edit has to land with `abilock.py --update` (no bump), or
+  `make` fails. The vga12.inc and SPEC 7 texts are fixed.
+- **mc-9, confirmed.** SPEC 10847 does say "never committed", and nothing in
+  `tools/` or `tests/` reads `cur_log`.
+- **mc-1, confirmed.** There are stores only, about -28 bytes. SPEC 10691,
+  13745 and 27726 say `cur_dirty` is SET, which is true of the code, so they
+  are not doc mismatches. They change when mc-1 deletes the variable.
+- **mc-2, confirmed** (+7: `cmp byte [fpg_on],0` + `jne`). fprog.inc 771-790
+  admits a lock-free bar composition on a non-UI task and counts IRQ4 as the
+  only painter to shut out. kbm_move is a second one. The UI task's own
+  keypad path is a likelier way in than a worker.
+- **mc-4, corrected.** The guards are 6 shipped plus 2 KHP, 4 bytes each.
+  The "dangerous borrow" is excluded by the same vid_apply/mou_clamp/display
+  activation invariant that excludes rows = 0, so this is a size item
+  (-24, or -14 with an optional defensive clamp), not a hazard.
+  cur_geom's `out: 0..CUR_GH` should become `1..CUR_GH` with the deletion.
+- **mc-6, mc-7 confirmed.** **mc-8, R1, R2 and R3 were spot-checked and are
+  plausible as records.** `vid_ctx_act` short-circuits on the current
+  display, and the off-screen arithmetic (27,136 bytes a plane) checks.
+
+**Doc fixes: 21 confirmed.**
+
+- **Withheld:** the os88api.inc fix (abilock); SPEC 10691 and 27726 (accurate
+  until mc-1); SPEC 13706 and 13727, which the doc pass had already rewritten.
+- **Refined:** the file header's gate now names FPG_ARMED and the int 13h
+  arm; the hot spot is placed off the shape's own point and clamped (a
+  shift) at the top and left; and "a hide is reached ... from the mouse ISR"
+  became "lock-free owners of the glass".
+- **Added by the verifier:** cur_put_1's header ("the draw is Set/Reset
+  through the Bit Mask"), the same drift as cur_draw's; and the gfx_unlock
+  header beside gfx_lock's.
+- **Checked:** every old_text occurs exactly once in its file, and the code
+  changes touch only text after `;`.
