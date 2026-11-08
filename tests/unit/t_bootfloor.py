@@ -109,6 +109,12 @@ def fence():
     small = os.path.join(BUILD, "smallk")
     if os.path.exists(os.path.join(small, "kernel.map")):
         trees.append((small, ("boot.bin", "boot360.bin"), None))
+    # kern_emu is B3_ON too, so its B2CALLs rest on ITS loaders. `all` does
+    # not build it - `make emu` does, as boot.bin and boothd.bin beside the
+    # map they were made from - so it is checked whenever that tree exists.
+    emu = os.path.join(BUILD, "emuk")
+    if os.path.exists(os.path.join(emu, "kernel.map")):
+        trees.append((emu, ("boot.bin",), "boothd.bin"))
     for tree, sectors, vbr in trees:
         rel = os.path.relpath(tree, ROOT)
         if not os.path.exists(os.path.join(tree, "kernel.map")):

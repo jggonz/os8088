@@ -2407,7 +2407,10 @@ def boot3_rules(kfiles, root='.'):
                                 "lands silently in the DOS core"
                                 % (B3_KDOS, B3_KDLAYOUT)))
                     break
-    return bad
+    # one report a site: a line inside a macro expanded on every pass is
+    # walked once per expansion, and the repeats were noise
+    seen = set()
+    return [b for b in bad if b not in seen and not seen.add(b)]
 
 
 # THE FIXTURES: each a tiny tree that must fail ONE rule, and the positive

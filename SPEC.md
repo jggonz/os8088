@@ -4185,9 +4185,11 @@ gives the kernel its own, so it can move `.cold` itself.
     `VID_A_VGA` nor `VID_A_EGA` - fixed for its life, and known once
     `vid_probe_avail` has run - `kmain_o` far-calls `cfx_slide` before
     `mem_init_x`, unless a ROM already took `.cold`. It copies `.cold` down
-    by `VGA_PARA` paragraphs and adds the delta to every word `.cfx` lists;
-    `[api_coldseg]` is one of them. The routine rides in `.cfx` beside its
-    list (the blob had 78 bytes to spare and it needs ~100). ~105 ms on a
+    by `VGA_PARA` paragraphs and adds the delta to every word `.boot3`'s
+    `cfx_tab` lists, in four groups (the fourth the `call COLD_SEG:x` sites);
+    `[api_coldseg]` is one of them. The routine rides in `.boot3` beside its
+    list (it began in `.cfx`, because the blob had 78 bytes to spare and it
+    needs ~100). ~105 ms on a
     4.77 MHz 8088, ESTIMATED from the copy's length.
   - **The floor** (`mem_floor_ax`): with neither card it is `VGA_RAM`, plus
     `COLD_PARA` while `.cold` is in RAM (slid) - a segment past A000 is not
@@ -77520,7 +77522,7 @@ expanded where its callers are - `wm_rowcalc` in `CTRL.DRV` (Set Primary,
 the Dock page, the arrangement row) and `bvw_rowcalc` for the boot (kmain_o,
 after `desk_init` returns and again after `drv_boot`, the blob's `bvs_switch`
 and `bdk_reflow`). On kern_big and kern_emu the boot's GEOMETRY half is
-`cfx_grid` in `.cfx`, past `cfx_tab` (the blob had nine bytes), and
+`cfx_grid` in `.boot3`, past `b3_live` (the blob had nine bytes), and
 `bvw_rowcalc` is a far call to it followed by the reflow; kern_mega's blob
 takes the whole copy. On kern_small `desk_reflow` and `desk_live` had no
 other caller and are written into the macro, so all three left resident:
@@ -77739,7 +77741,7 @@ changes** — drawing is spatially coherent, so the steady state is
 |---|---|
 | `[vid_ndisp]` | displays the kernel has **brought up** — 2 after §39.13, 1 for ever on a one-card machine. Not the same question as how far the *desktop* spans, which is `[vid_w]`/`[vid_h]` and is still one display's until docs/plans/completed/DUAL-DISPLAY-PLAN.md step 6 |
 | `[vid_cur]` | which display's geometry is in the live block |
-| `vid_ctx_capture` | AL = display; bank the live geometry into that record. Not resident since kernel size pass 15: vidsel.inc's `VID_CTXCAP` macro, expanded in each of its callers' images - `vid_ctxcap` (CTRL.DRV), `ext_ctxcap` (EXTD.DRV), `cfx_ctxcap` (`.cfx`, the blob's on kern_big and kern_emu), `bvs_ctxcap` (kern_mega's blob) - and written into the boot overlay's `vid_ctx_init` |
+| `vid_ctx_capture` | AL = display; bank the live geometry into that record. Not resident since kernel size pass 15: vidsel.inc's `VID_CTXCAP` macro, expanded in each of its callers' images - `vid_ctxcap` (CTRL.DRV), `ext_ctxcap` (EXTD.DRV), `cfx_ctxcap` (`.boot3`, the boot's on kern_big and kern_emu), `bvs_ctxcap` (kern_mega's blob) - and written into the boot overlay's `vid_ctx_init` |
 | `vid_ctx_act` | AL = display; make it current, **returning immediately if it already is** |
 | `vid_ctx_init` | one display, at the virtual origin, holding what is on screen now |
 
@@ -102786,7 +102788,7 @@ unchanged and only the parser's own tables take `cs:`.
 an image is a filename read out of the kernel at the image's offset — so each
 image STAGES its own copy into the panel's `cp_sbuf` first: `CTRL.DRV` through
 `cp_stage` (now the settings core's), the boot's reader through `CFGN_STAGE`,
-expanded in `.cfx` where there is one (kern_big, kern_emu) and in the blob
+expanded in `.boot3` where there is one (kern_big, kern_emu) and in the blob
 where there is not. Both names were 22 resident bytes kept for two moments in
 a session.
 

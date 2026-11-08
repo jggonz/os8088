@@ -1693,6 +1693,16 @@ kern_small 60,928 and 63,488; kern_mega's arena 509,952 at 640KB.
 12. **The SPEC section is 2.9.15** (2.9.15.1-2.9.15.4), with pointers from
     2.5.1.1, 2.5.3.1, 2.5.3.2, 2.9.6, 2.9.13.1, 2.10.3, 2.10.4, 2.10.9,
     15.3.8.5, 39.22 and 52.10.2.1.
+13. **The fence covers kern_emu's tree when it exists** (verifier round 1).
+    kern_emu is `B3_ON` too, so its B2CALLs rest on `build/emuk/boot.bin`
+    and `boothd.bin`; `all` does not build that tree (`make emu` does), so
+    `bootfence` checks it beside its own map whenever the map is there, as
+    it does `build/smallk/`. Its BLOB_SEG_AT is kern_big's 0x1860 today.
+14. **The verifier's round 1 also found four `.cfx` sentences left in
+    SPEC.md** (2.10.9's slide bullet, the `cfx_grid` paragraph, the
+    `vid_ctx_capture` row and `CFGN_STAGE`'s), now `.boot3`; and B1-B9's
+    reports are de-duplicated - a site inside a macro expanded on every pass
+    was reported once per pass.
 
 
 **Found on the way, not this wave's to fix.** `build/mega.img` and
