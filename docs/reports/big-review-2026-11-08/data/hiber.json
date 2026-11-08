@@ -1,0 +1,587 @@
+{
+ "area": "hiber",
+ "title": "Hibernate and the disk cloner",
+ "summary": "Hibernate and the cloner are among the best-shaped subsystems in the kernel: a few hundred resident bytes for hibernate (map spans of ~45 .text, 35 .bss and 287 .cold, which leave out the menu strings, thunks and shims SPEC 87.7 also counts) and ~42 for the cloner, against 7.8KB and 10KB modules; a crash-consistent commit protocol in both (pointer written last and deleted first; boot sector last); one shared description of the pointer head; a 440-byte position-independent stub made possible by the same-build rule and shared as source with kern_dos. The weakest part is the wake. It was designed on the premise that the image's kernel set the hardware up the same way, so nothing needed doing, and four rounds of per-device repair (PIT, speaker, UART, 8042) were added since, without adopting kern_mega's model of restoring the image's own 8259 masks. As a result the repairs write IER=1 to the losing serial port too, which matters on the reboot route when the fresh session's mouse contest had not settled before Resume (the fresh boot's mask then leaves its line open). The other real defects are unwinds and one gap that refuses nothing. kern_big's DOS-handoff refusals still leak the extent claim and strand the user's folder (fixed only on kern_mega). A refused hibernate restores the folder from a bank slot that the driver reload has just overwritten. EMS pages held across a hibernate are silently lost. Nothing fences heap compaction during the image write (a fragility rather than a live defect). The cloner cannot see the 5150's own 8-sector and single-sided DOS 1.x disks, and Write Img can write sector 0 over a short disk and still report success. Every recommendation is module bytes with 0 resident, and none needs an ABI break. Twenty-four doc/code mismatches were filed, mostly in SPEC.md 87.4-87.7, 18.99 and 51.11.4; twenty-two survive verification (one refuted, one deferred because the comment is inside the ABI-fingerprinted OSAPI_DRV_SUSPEND contract). Hibernate exists on kern_big and its derivatives only; kern_small has none (kernel.asm:8347).",
+ "strengths": [
+  {
+   "title": "Crash-consistent commit protocol in both halves",
+   "evidence": "hiber.inc:1853 (old pointer and image deleted first), :1928-1938 (pointer written last); diskops.inc:2068 clo_fin writes LBA 0 last",
+   "why": "A write that dies anywhere leaves no pointer and so nothing to resume; an interrupted clone never claims to be the source. This is the journaling commit-record idea and should be copied into installers and SYSTEM.CFG writes."
+  },
+  {
+   "title": "One object describes the pointer head",
+   "evidence": "hiber.inc:5654-5670 hbm_ptrfix, written from CS by hbm_wrimg and compared by hbm_ask, with an HBP_SIZE %error",
+   "why": "Writer/reader layout drift is impossible by construction."
+  },
+  {
+   "title": "hb_pick is THE predicate",
+   "evidence": "hiber.inc:522-548, called by hb_ok_x, hb_probe_x, hbm_open, hbm_dosrun",
+   "why": "Greying, probing and the write target cannot disagree (SPEC 47 rule 5) structurally, not by review."
+  },
+  {
+   "title": "Same-build rule makes the resume stub trivial",
+   "evidence": "HBP_BUILD/MOD_STAMP/[api_coldseg]>>8 compared at hiber.inc:2372-2383; hbstub.inc needs no symbols",
+   "why": "The stub overwrites the running kernel with byte-identical code, so it needs no relocation and no symbol table, and every other build is refused instead of guessed at."
+  },
+  {
+   "title": "Staging in RAM no rung owns, layout shared as source",
+   "evidence": "hbstage.inc, hbstub.inc included by hiber.inc and kerndos/kdresume.inc; asserts at hiber.inc:285, 2619, 5618; hbmark.inc:65",
+   "why": "Two hosts that cannot call each other share one layout. The text framebuffer sits above any [mem_top] (704KB Herc / 736KB CGA still fit)."
+  },
+  {
+   "title": "Program memory checked by the kernel it restored",
+   "evidence": "hbm_psum hiber.inc:1521, taken at :1878, checked at wake 3a :4719",
+   "why": "The same routine runs on both sides with nothing staged. A cross-linked or truncated image is refused before any package runs on foreign bytes."
+  },
+  {
+   "title": "Job state lives in the buffer the operation claims anyway",
+   "evidence": "diskops.inc:107-155 CL_* in the claim header; resident clo_seg + clo_fnbuf only",
+   "why": "A transient feature costs 2 bytes plus a 13-byte name until used. This is a pattern for every transient feature."
+  },
+  {
+   "title": "Disjoint error alphabets and a CF=0 verb rule",
+   "evidence": "diskops.inc:64-85 (CERR_* from 1, CLA_* from 0x80), :1467-1479 and :1581",
+   "why": "A missing jc becomes a wrong answer instead of a plausible one."
+  },
+  {
+   "title": "Hostile on-disk input bounded",
+   "evidence": "hbm_geom range windows hiber.inc:1693-1701; clo_mruns diskops.inc:3344-3388 bounds the chain by cluster range and by the file's sector count; clo_geom positive last-sector read :643-657",
+   "why": "A cyclic or out-of-range FAT chain cannot loop or overrun, and a geometry guess must be proven by a successful read."
+  }
+ ],
+ "findings": [
+  {
+   "id": "hiber-1",
+   "kind": "bug",
+   "severity": "low",
+   "title": "The wake re-arms the LOSING serial port, and kern_big keeps the fresh boot's 8259 mask",
+   "detail": "hbm_wake step 3d writes MCR and IER=1 through mou_pall, which writes BOTH UART rows. The image's session had silenced the loser with IER=0 and masked its line in mou_lockon. On the reboot route the mask that comes home is the fresh boot's, sampled by hbm_handover and restored by the stub, and mouse_init unmasks both probed lines. After a resume, a modem or second device on the other UART therefore interrupts on every byte, and mou_isr scans the port and drops the byte (about 240 interrupts/s for a 2400-baud modem). SPEC 96.45.2's claim that the writes are idempotent on the reboot route is false for this port.",
+   "evidence": [
+    "hiber.inc:4801-4807 mou_pall MCR and IER",
+    "mouse.inc:474-481 mou_pall writes rows 0 and 2",
+    "mouse.inc:1234-1260 mou_lockon IER=0 and masks loser",
+    "mouse.inc:897-901 mouse_init unmasks each probed port",
+    "hiber.inc:3708-3719 hbm_handover samples fresh masks",
+    "mouse.inc:3795-3796 mou_byte drops other ports"
+   ],
+   "recommendation": "After the IER write, when [mou_seen] is set, call the resident mou_lockon via hbm_kd, placed before .kbunm so the keyboard re-enable follows any mou_p2_off. Pair it with hiber-14.",
+   "phase": "now",
+   "bytes_est": "+10 HIBER.DRV, 0 resident",
+   "verdict": "corrected",
+   "verify_note": "Real but narrower. On the LIVE route the restored mask is the image's, in which mou_lockon had masked the loser, so the wake's IER=1 on the loser asserts a masked line and costs nothing. On the REBOOT route the mask is the fresh boot's as sampled by hbm_handover (hiber.inc:3708): if the fresh session's contest had settled (the user moved the mouse to click Resume) its own mou_lockon masked the loser before the sample and again nothing interrupts; only a resume reached before the fresh contest settled (Enter on the Resume face) brings the loser home unmasked with IER=1, and the image's [mou_seen]=1 means mou_lockon never runs again. Severity lowered to low."
+  },
+  {
+   "id": "hiber-2",
+   "kind": "bug",
+   "severity": "medium",
+   "title": "kern_big DOS-handoff refusals leak the extent claim and strand the user in DOS.O88's folder",
+   "detail": "HBM_BADV is .badv only on kern_mega. On kern_big, .b2-.b6 go to .bad, which neither frees [hb_xseg] nor calls hbm_vbk, so the defect the comment says was fixed persists on the shipped kernel. .b6 leaks a MEM_K_HIB claim of up to 8KB. .b2-.b6 all follow hbm_vbn, and .b4 (DOS.O88 on a volume int 13h cannot reach) is the reachable one.",
+   "evidence": [
+    "hiber.inc:3395-3399 HBM_BADV",
+    "hiber.inc:3454-3463 .badv mega-only",
+    "hiber.inc:2876 hbm_vbn",
+    "hiber.inc:2923-2928 claim",
+    "hiber.inc:3465-3469 .bad"
+   ],
+   "recommendation": "Assemble .badv on every kernel (nothing in it is mega-specific) and make HBM_BADV .badv unconditionally.",
+   "phase": "now",
+   "bytes_est": "+20 HIBER.DRV, 0 resident",
+   "verdict": "confirmed",
+   "verify_note": "HBM_BADV is .bad on every non-mega kernel (hiber.inc:3395-3399); .badv, which frees [hb_xseg] and calls hbm_vbk, is inside %ifdef KERN_MEGA (3454-3463). .b2-.b6 all follow hbm_vbn (2876) and .b6 follows the MEM_K_HIB claim (2923-2928), so kern_big leaks it and leaves the user in DOS.O88's folder."
+  },
+  {
+   "id": "hiber-3",
+   "kind": "bug",
+   "severity": "medium",
+   "title": "A refused hibernate restores the user's folder from a slot the driver reload just overwrote",
+   "detail": "hbm_hibfail calls hbm_reload and then hbm_vbk. drv_vol_bank/back is one static pair documented never to nest, and drv_load_at banks into it, so every reloaded row replaces the user's banked position with the root of [hb_vol]. hbm_vbk then restores that root. This happens whenever any hardware driver was swept and the hibernate is refused (serial leased, write error, HMA copy refused). kern_mega's .b8s has the same order.",
+   "evidence": [
+    "hiber.inc:1982-1994 hbm_hibfail order",
+    "drvvol.inc:100-113 one static pair, never nest",
+    "driver.inc:3446 drv_load_at banks",
+    "hiber.inc:3445-3449 .b8s"
+   ],
+   "recommendation": "Call hbm_vbk before hbm_reload in both places. State the nesting hazard at hbm_vbn.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "hbm_hibfail calls hbm_reload then hbm_vbk (1982-1994); hbm_reload reaches hdl_load (DRV_ATTACH hdl, driver.inc:6068) -> drv_load_at, which calls drv_vol_bank (driver.inc:3446) and overwrites the one static pair with the current position, which hbm_root had set to [hb_vol]'s root. deskmod.inc:79-93 already saves the pair around exactly this nesting for desk_need. Same order in kern_mega's .b8s (3445-3449). Only when some row was swept."
+  },
+  {
+   "id": "hiber-4",
+   "kind": "bug",
+   "severity": "medium",
+   "title": "EMS pages held across a hibernate are lost and nothing refuses",
+   "detail": "hbm_sweep keeps DRVC_EMS, which is right for a suspend. SPEC 107.6 says board contents and page registers do not survive a hibernate's power-off and that holders are unsupported. hb_ok greys only on XMS blocks and hbm_arm checks only room and transport, so browser, video, vbattle and redline sessions holding EMS pages hibernate and resume onto pages that name nothing. This breaks SPEC 87.7's rule that what is owed is refused rather than guessed at.",
+   "evidence": [
+    "hiber.inc:2233-2236 EMS kept",
+    "hiber.inc:605-609 hb_ok XMS only",
+    "hiber.inc:1712-1782 hbm_arm",
+    "SPEC.md 107.6 (217786)",
+    "apps/browser/brnet.inc, apps/video/video.asm use DRVC_EMS"
+   ],
+   "recommendation": "In hbm_arm, ask DRVC_EMS's EMSV_CAPS and refuse with a toast ('EMS pages in use') when any page is allocated.",
+   "phase": "now",
+   "bytes_est": "+30 HIBER.DRV, 0 resident",
+   "verdict": "confirmed",
+   "verify_note": "Real gap, but SPEC 107.6 already states 'A holder across a hibernate is not supported' (SPEC.md 217786ff.) - what is missing is the refusal, not the knowledge. hb_ok_x greys only on XMS blocks (hiber.inc:605-609), hbm_arm checks room and transport only, and browser, video, vbattle, redline and taskmgr name DRVC_EMS. Kept medium."
+  },
+  {
+   "id": "hiber-5",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "Nothing fences heap compaction or shedding during the progressive image write",
+   "detail": "The image is written live through the file layer, low memory first. A mem_claim in the UI task that misses first fit compacts and then sheds, and the file layer can claim (the FAT window, the read-ahead store). A block moved or a record freed between writing its low and high halves tears the image (mem_tab against data). hbm_psum notices only if a package record moved. The write is safe today because the FAT window already exists after hbm_forget, not by design.",
+   "evidence": [
+    "hiber.inc:1886-1918 image write",
+    "memory.inc:951-967 compact then shed",
+    "disk.inc:6194-6220 dsk_fatw_claim",
+    "disk.inc:7540-7600 read-ahead claim"
+   ],
+   "recommendation": "Raise [mem_cp_busy] across the image write. That makes mem_claim refuse rather than move or shed, and a refused FAT-window claim is already documented as harmless. Drop it before the pointer write. Add a hibernate test leg with the FAT window dropped first.",
+   "phase": "now",
+   "bytes_est": "+10 HIBER.DRV, 0 resident",
+   "verdict": "corrected",
+   "verify_note": "The write is one dskw_write of all memory with [sch_lock] up, so only the file layer itself could claim mid-write, and the FAT window and read-ahead store are claimed at mount/vol_add, which a hibernate write to an already-mounted root does not repeat; the reviewer concedes it is safe today. A fragility, not a defect: severity low. The recommended fence has a side effect to check: [mem_cp_busy] also makes mem_free refuse (memory.inc:4456) and mem_movable fail (4572, 4930), so the write path must not free or declare anything while it is raised."
+  },
+  {
+   "id": "hiber-6",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "Resume stub's int 13h calls run through kbm_i15 in the kernel image being overwritten",
+   "detail": "hbm_res never calls mouse_unhook, so on an AT (KBD_I15) int 15h still points at KERNEL_SEG:kbm_i15, and the AT BIOS calls int 15h AH=90h/91h inside every hard-disk int 13h the stub issues. It survives only because the code bytes and kbm_old9 are identical under the same-build rule and the same ROM. hbm_dosrun unhooks for exactly this reason. SPEC 87.6's reason for not unhooking is void now that wake step 3d re-arms the UART and 8042 anyway.",
+   "evidence": [
+    "hiber.inc:2586-2651 hbm_res",
+    "hiber.inc:3626-3683 hbm_down",
+    "hiber.inc:3304-3355 hbm_dosrun calls mouse_unhook",
+    "kernel.asm:1325 KBD_I15",
+    "mouse.inc:3079-3084 kbm_i15 chains via [cs:kbm_old9]"
+   ],
+   "recommendation": "Call mouse_unhook via hbm_kd in hbm_res after hbm_down, so the stub runs on ROM vectors only.",
+   "phase": "now",
+   "bytes_est": "+6 HIBER.DRV",
+   "verdict": "confirmed",
+   "verify_note": "hbm_res/hbm_down never call mouse_unhook (only hbm_dosrun does, 3354), so on a KBD_I15 machine int 15h is the kernel's kbm_i15 while the stub's int 13h calls run over the image; kbm_i15's non-4Fh path jumps through [cs:kbm_old9] (mouse.inc:3079-3084). Survives only because the bytes are identical (same build, same ROM). Low, as filed."
+  },
+  {
+   "id": "hiber-7",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "Esc on the Resume face discards the hibernated session",
+   "detail": "hbm_onkey maps Esc to button 2 in every mode, and in HB_M_RESUME button 2 is Discard, which deletes both files with no confirmation. The keyboard drain covers only repeats. The close box already does the non-destructive thing: the files are kept and the next boot asks again.",
+   "evidence": [
+    "hiber.inc:1366-1382 hbm_onkey",
+    "hiber.inc:1411-1414 .discard",
+    "hiber.inc:738-744 hbf_closed",
+    "SPEC.md:158622"
+   ],
+   "recommendation": "In RESUME mode, make Esc close the window and keep the files. Discard needs the click (or a letter key).",
+   "phase": "now",
+   "bytes_est": "+0..+4 HIBER.DRV",
+   "prior_art": "CUA and the Mac HIG both forbid Esc as a destructive default.",
+   "verdict": "confirmed",
+   "verify_note": "hbm_onkey maps Esc to button 2 in every mode (1366-1382); in HB_M_RESUME button 2 is .discard, which calls hbm_forget (1411-1414). SPEC 87.5 (158622) knows Esc is Discard and only drains the keyboard; the close box keeps the files (hbf_closed). A design weakness, as filed."
+  },
+  {
+   "id": "hiber-8",
+   "kind": "bug",
+   "severity": "low",
+   "title": "A failed no-question resume pins HIBER.DRV for the session",
+   "detail": "On the HBP_DOS arm no window is opened. If hbm_res or hbm_xres then refuses, hb_mode is set to HB_M_RESUME and hbm_winback finds no window. hbf_dropck drops only a GONE image and there is no window to close, so the 8KB claim stays resident. The same happens if cw_app_launch fails in hbm_ask.",
+   "evidence": [
+    "hiber.inc:2430-2435",
+    "hiber.inc:2664-2671 .fail",
+    "hiber.inc:4487-4498 .refuse",
+    "hiber.inc:721-729 hbf_dropck",
+    "hiber.inc:2462-2464"
+   ],
+   "recommendation": "In both refusal paths, set HB_M_GONE when hbm_win reports no window.",
+   "phase": "now",
+   "bytes_est": "+8 HIBER.DRV",
+   "verdict": "confirmed",
+   "verify_note": "On the HBP_DOS arm hbm_ask sets HB_M_RESUME and posts with no window (2430-2435); hbm_res .fail sets HB_M_RESUME again and hbm_winback finds no window; hbf_dropck drops only when GONE (721-729). Same after a failed cw_app_launch. The 8KB module claim then stays for the session."
+  },
+  {
+   "id": "hiber-9",
+   "kind": "bug",
+   "severity": "low",
+   "title": "A pointer this kernel can never read is kept and the module is reloaded on every boot",
+   "detail": "hbm_ask sends any dskw_read failure to .gone with no toast and no forget. SPEC 87.9 names FERR_BIG as the deterministic cross-kernel refusal (a kern_mega pointer met by kern_big), so every boot of that disk reads HIBER.DRV off the system disk and says nothing.",
+   "evidence": [
+    "hiber.inc:2368-2369",
+    "SPEC.md 87.9 (pointer is 28 bytes, FERR_BIG)"
+   ],
+   "recommendation": "Send FERR_BIG to .stale ('Hibernation: other build' and forget). Keep genuine I/O errors on .gone.",
+   "phase": "now",
+   "bytes_est": "+6 HIBER.DRV",
+   "verdict": "confirmed",
+   "verify_note": "dskw_read failure goes to .gone with no toast and no hbm_forget (hiber.inc:2368-2369); SPEC 87.9 (158876) says kern_big meets a kern_mega pointer as FERR_BIG, so that pointer survives every boot and each one loads HIBER.DRV to say nothing."
+  },
+  {
+   "id": "hiber-10",
+   "kind": "bug",
+   "severity": "low",
+   "title": "Write Img lays sector 0 over a short disk and reports 'Wrote'",
+   "detail": "A zero-length chunk ends the write loop, and clo_fin still runs unless nothing at all was read. A file shorter at Enter than at the Open box therefore yields a partial disk with the boot sector down and CLA_DONE. That is the 'target that mounts and lies' which 18.99.2 exists to prevent.",
+   "evidence": [
+    "diskops.inc:1902-1926 clo_imgrun .write/.wdone"
+   ],
+   "recommendation": "At .wdone, refuse with CERR_NOTIMG unless CL_NEXT == CL_TOT.",
+   "phase": "now",
+   "bytes_est": "+8 DISKOPS.DRV",
+   "verdict": "confirmed",
+   "verify_note": "clo_imgrun .write: a zero CL_HELD goes to .wdone, which runs clo_fin (writes LBA 0) unless CL_FOFF is zero (diskops.inc:1902-1926). SPEC 18.99.8's table covers only the no-bytes-at-all case. The inline comment there ('sector 0 is still unwritten') describes the moment of the jump, not what .wdone then does."
+  },
+  {
+   "id": "hiber-11",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "Write Img never checks that the target drive can hold the image",
+   "detail": "clo_wimg plans and arms the write without calling clo_fits. clo_fits could not be called as written anyway: clo_wimg sets CL_SRC = CL_TGT and clo_fits skips same-drive operations. A 1.44MB image written to a 720KB drive fails 720 sectors in.",
+   "evidence": [
+    "diskops.inc:1612-1654 clo_wimg",
+    "diskops.inc:409-415 clo_fits same-drive shortcut"
+   ],
+   "recommendation": "Gate the clo_same shortcut on CL_END != 2 and call clo_fits from clo_wimg.",
+   "phase": "now",
+   "bytes_est": "+10 DISKOPS.DRV",
+   "verdict": "confirmed",
+   "verify_note": "clo_wimg (1612-1654) calls clo_geom_img, clo_size, clo_fbank, clo_fsame, clo_imgsize - no clo_fits; clo_fits starts with clo_same/je .ok (409-415), and clo_wimg sets CL_SRC = CL_TGT."
+  },
+  {
+   "id": "hiber-12",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "The cloner cannot see 8-sector or single-sided (DOS 1.x, no-BPB) disks",
+   "detail": "The probe ladder tries 18, 15 and 9 sectors per track and always assumes two heads, so an unmountable 160KB or 320KB disk fails as CERR_IO. Write Img accepts four double-sided sizes with heads hard-coded to 2, so 160/180/320KB images are 'Not a disk image'. These are the commonest 5150-era disks without a BPB, the case the module header says the cloner exists for.",
+   "evidence": [
+    "diskops.inc:601-614 probe ladder",
+    "diskops.inc:629-657 heads and extent",
+    "diskops.inc:1702 CL_HDS = 2",
+    "diskops.inc:1730-1734 clo_imgtab"
+   ],
+   "recommendation": "Add 8 after 9 in the probe ladder. When the 2-head extent read fails, retry with 1 head before dropping to 40 cylinders. Give clo_imgtab a heads column and three rows: 320/8/1, 360/9/1 and 640/8/2.",
+   "phase": "now",
+   "bytes_est": "+30 DISKOPS.DRV, 0 resident",
+   "prior_art": "DOS 2.0 DISKCOPY handled 160/180/320/360KB disks.",
+   "verdict": "confirmed",
+   "verify_note": "Probe ladder is 18, 15, 12->9 (diskops.inc:601-614) with heads fixed at 2 for the trial and AH=08h's drive answer after; a single-sided disk fails the last-sector read at head 1 and drops to CERR_IO. clo_imgtab has four double-sided rows and CL_HDS = 2 (1702, 1730-1734)."
+  },
+  {
+   "id": "hiber-13",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "About 22 bare [cs:] writes sit beside the module's CSDO/CSEG idiom",
+   "detail": "These writes cost nothing on kern_big. On kern_mega in protected mode each one is a mega_gpw fault-and-restart: hbm_paint's on every repaint, hbm_wrimg's and hbm_ptrfix_set's on every PM hibernate, and the .kbimg block on the no-park-room route. The module's own comment counts this conversion as a fix.",
+   "evidence": [
+    "hiber.inc:1245-1246",
+    "hiber.inc:1824-1834",
+    "hiber.inc:1929-1930",
+    "hiber.inc:2535-2551",
+    "hiber.inc:3106-3157",
+    "mega.inc:4546 mega_gpw"
+   ],
+   "recommendation": "Convert these writes to CSDO/CSEG.",
+   "phase": "now",
+   "bytes_est": "0 kern_big; a few kern_mega module bytes per site",
+   "verdict": "corrected",
+   "verify_note": "27 bare [cs:...] stores in hiber.inc; two of them (5499-5500) are in the resume stub and run in real mode out of the framebuffer, so ~25 are module stores that fault through mega_gpw on kern_mega in PM. The cited 2909-2912 are already CSDO/CSEG and should be dropped from the evidence."
+  },
+  {
+   "id": "hiber-14",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "kern_big wakes with the fresh boot's masks; kern_mega with the image's",
+   "detail": "kern_mega banks the image's 8259 masks before the picture and mega_hbwake restores them. On kern_big the stub restores masks sampled from the fresh boot, and the wake then patches individual lines (mouse, keyboard, cascade, IRQ12). Several per-device repairs in step 3d and the PS/2 block exist partly because of this difference.",
+   "evidence": [
+    "hiber.inc:3942-3945 hbm_xplan banks masks",
+    "hiber.inc:3708-3719 hbm_handover",
+    "hbstub.inc .done restores HS_MASKM/S"
+   ],
+   "recommendation": "Bank in 21h/A1h after the sweep into module data (so it travels in the image, like hbm_psv) and write them back at wake step 1 before sti. The driver reload and step 3d then unmask what they own. This gives one model on every kernel; do it together with hiber-1.",
+   "phase": "now",
+   "bytes_est": "+14 HIBER.DRV",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked: hbm_xplan banks 21h/A1h into mega_dimr1/2 after the sweep (3942-3945); hbm_handover samples the fresh boot's masks into HS_MASKM/S (3708-3719) and the stub restores those."
+  },
+  {
+   "id": "hiber-15",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "hbm_arm's room check uses kern_big's image size on kern_mega in protected mode",
+   "detail": "The PM image is the conventional part rounded to 32KB chunks plus the extended section, but hbm_arm checks for [mem_top]*16 + 4KB. A PM hibernate without room passes the check, sweeps and writes, then fails as 'Hibernate failed': the right refusal for the wrong reason, which the code's own comment warns against.",
+   "evidence": [
+    "hiber.inc:1746-1748",
+    "hiber.inc:1769-1772",
+    "hiber.inc:2558-2564 hbm_xisz",
+    "hiber.inc:3908-3919 hbm_xconv"
+   ],
+   "recommendation": "On the PM arm, add hbm_xconv's rounding and the pool's in-use KB to the need before comparing.",
+   "phase": "now",
+   "bytes_est": "+20 kern_mega HIBER.DRV",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked: hbm_arm sizes the need with hbm_imgsize + 4KB on every kernel (1746-1748); the PM image is hbm_xisz's chunk-rounded conventional part plus HBP_XLEN (2558-2564)."
+  },
+  {
+   "id": "hiber-16",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "Two non-atomic BDA tick reads",
+   "detail": "hbm_dosrun and hbm_wake each read 0040:006C/6E as two words with interrupts on. A carry between the two reads makes a one-hour error in the clock catch-up (1 in 65,536 per read).",
+   "evidence": [
+    "hiber.inc:3146-3149",
+    "hiber.inc:4647-4648"
+   ],
+   "recommendation": "Wrap each pair in pushf/cli ... popf.",
+   "phase": "now",
+   "bytes_est": "+6 HIBER.DRV",
+   "verdict": "confirmed",
+   "verify_note": "Both read 046Ch then 046Eh as two words with no cli (3146-3149 in hbm_dosrun; 4647-4648 in hbm_wake after step 1's sti). A carry between them is ~65,536 ticks (one hour) of error."
+  },
+  {
+   "id": "hiber-17",
+   "kind": "size",
+   "severity": "low",
+   "title": "hb_probe_x zeroes three .bss words that arrive zeroed",
+   "detail": "The comment says .bss is whatever the last kernel left. In kernel.map, .bss is virtual 9D88-B27E, which is file B788-CC7E, inside the zero padding before .ovl at file CE00. kernel.asm:5896 says .bss is zero at boot. Since KERNEL-BYTE-QUEUE item 2 these stores are .boot2 bytes, not resident.",
+   "evidence": [
+    "hiber.inc:385-406",
+    "build/kernel.map section table (.text 1A00+9D88, .ovl CE00, .bss nobits 9D88+14F6)",
+    "kernel.asm:5896"
+   ],
+   "recommendation": "Keep the two non-zero stores (KDH_NOCODE and HB_M_GONE), drop the three zero stores and fix the comment.",
+   "phase": "now",
+   "bytes_est": "-9 .boot2",
+   "verdict": "confirmed",
+   "verify_note": "kernel.map: .text file 1A00-B788, .bss virtual 9D88-B27E = file B788-CC7E, .ovl at CE00; smallk and megak likewise end .bss before .ovl. SPEC.md 10 (18051) states .bss arrives zeroed by stage 2's contiguous read. The three zero stores are redundant .boot2 bytes."
+  },
+  {
+   "id": "hiber-18",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "hbm_hsave trusts ROMF_HTAB's size answer",
+   "detail": "The record walk is 'sub cx,6 / ja', so a CX of 0 would walk 64KB. HBP_PAD holds only the table's low byte, so a table of 43 or more records would silently truncate the size check in hbm_ask. Both are safe with COLDHMA.SYS today.",
+   "evidence": [
+    "hiber.inc:2072-2079",
+    "hiber.inc:2096",
+    "hiber.inc:2385-2392"
+   ],
+   "recommendation": "Add a jcxz guard, and an %error in the COLDHMA build pinning the table under 256 bytes.",
+   "phase": "record",
+   "bytes_est": "+2 HIBER.DRV",
+   "verdict": "confirmed",
+   "verify_note": "hbm_hsave's walk is 'sub cx,6 / ja' (2072-2079), so CX=0 from ROMF_HTAB walks 64KB; HBP_PAD takes CL only (2096), and hbm_ask compares CL (2385-2392)."
+  },
+  {
+   "id": "hiber-19",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "Keep HIBERNAT.IMG allocated and rewrite it in place",
+   "detail": "Today the image is deleted before every hibernate and after every wake. Keeping it allocated would establish room once, keep the chain stable (a defragmented image stays one run and keeps the stub at ~80 int 13h calls), and remove hbm_arm's room arithmetic. Only the pointer would be deleted at the wake. The cost is disk space held permanently, which is the owner's call (87.6 step 5).",
+   "evidence": [
+    "hiber.inc:1580-1594 hbm_forget",
+    "hiber.inc:1853",
+    "hiber.inc:5115"
+   ],
+   "recommendation": "Record. If adopted, write at offset 0 when the file exists and delete only the pointer at the wake.",
+   "phase": "record",
+   "bytes_est": "+-0 HIBER.DRV",
+   "prior_art": "Phoenix APM PHDISK.EXE save-to-disk file; Windows 98/2000 hiberfil.sys, which also rewrites its header signature on resume.",
+   "verdict": "unchecked",
+   "verify_note": "Record-only rethink; not re-verified."
+  },
+  {
+   "id": "hiber-20",
+   "kind": "prior-art",
+   "severity": "low",
+   "title": "What DISKCOPY did that the cloner does not: write another copy, verify, format while copying",
+   "detail": "DISKCOPY offers 'Copy another diskette' reusing the buffer, verifies with /V, and formats target tracks while copying. The cloner frees its buffer at the verdict, never verifies, and issues no AH=05h or AH=18h (FIELD-NOTES 32). Writing another copy is cheap after a one-trip clone, when the whole disk is already in the buffer or the XMS block.",
+   "evidence": [
+    "diskops.inc:1448-1457 clo_key .done",
+    "diskops.inc:2933 clo_free",
+    "diskw.inc:6199-6236 formatter's AH=18h"
+   ],
+   "recommendation": "Now: keep the claim at CLA_DONE after a one-trip clone and offer another target (re-arm CLS_TGT). Record: verify and format-while-copying (about +200 module bytes, which duplicates FORMAT.DRV's track loop).",
+   "phase": "now",
+   "bytes_est": "+40 DISKOPS.DRV (write-another); +200 if format-while-copying",
+   "prior_art": "MS-DOS DISKCOPY 2.0+ (formatting while copying, multiple copies, /V). Unlike os8088, DISKCOPY had no identity check and no boot-sector-last protection.",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked: no AH=05h/18h in diskops.inc; clo_key .done hands back CLA_DONE and the claim is freed at the verdict."
+  },
+  {
+   "id": "hiber-21",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "The fresh session can write the disk under the image before Resume",
+   "detail": "The Resume question is asked on a live desktop after a full boot, and hbm_res itself runs cpf_cp_flush_close. Anything the user does before clicking Resume writes the disk that the image's packages hold views of. Caches are dropped at the wake and held streams were committed before the picture, so the damage is mostly stale listings. Every BIOS or OS hibernator instead resumes before the OS writes anything.",
+   "evidence": [
+    "hiber.inc:2359-2481 hbm_ask on the desktop",
+    "hiber.inc:3643 cpf_cp_flush_close",
+    "ui.inc step 0 dwsf_commit"
+   ],
+   "recommendation": "Record. Add a sentence to SPEC 87.5. Changing the model would mean asking before drivers load.",
+   "phase": "record",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked: hbm_ask runs on the live desktop and hbm_down calls cpf_cp_flush_close before the stub (hiber.inc:3622)."
+  }
+ ],
+ "doc_fixes": [
+  {
+   "file": "SPEC.md",
+   "old_text": "1. **Detach every loaded driver whose class is not `DRVC_DISK`,\n   `DRVC_FILE`, `DRVC_FILE2` or `DRVC_EMS`** (`drv_unload` per row: sound,\n   the NIC),",
+   "new_text": "1. **Detach every loaded driver whose class is not `DRVC_DISK`,\n   `DRVC_FILE`, `DRVC_FILE2`, `DRVC_CD` or `DRVC_EMS`** - and never the VESA\n   renderer's row (§120.4) - (`drv_unload` per row: sound, the NIC),",
+   "why": "hbm_sweep (hiber.inc:2216-2236) also skips DRVC_CD and, under VID_EXT, vesa_row"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "1. `sti`. The IVT is the image's, the PIT is in the kernel's mode 2 (the\n   fresh boot's `sched_init` set it and nothing on the resume path unset it),\n   and with `sch_lock` up the tick counts and switches nobody.",
+   "new_text": "1. Channel 0 back in the kernel's mode 2, divisor 0, and `[sch_pit_last]`\n   re-seeded from it (the live route, §96.49, comes home in the ROM's mode 3\n   that `hbm_dosrun` put back, and a DOS program may have left any divisor),\n   the speaker gate off, then `sti`. The IVT is the image's, and with\n   `sch_lock` up the tick counts and switches nobody.",
+   "why": "hbm_wake step 1 (hiber.inc:4561-4604) reprograms ch0 mode 2/divisor 0, re-seeds sch_pit_last and clears port 61h bits 0-1 before sti; its comment says the SPEC sentence was true of one route only"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "The mouse\nneeds nothing: the fresh boot's `mouse_init` left the UART and the 8042 in\nthe state the image's kernel expects, because the image's kernel set them\nup the same way, and the resume path never calls `mouse_unhook`.",
+   "new_text": "The mouse\nis re-armed by `hbm_wake`'s step 3d (§96.45.2): the drain, MCR and IER, the\nmouse's line at the 8259, and on `kern_big` the 8042's keyboard and PS/2\nhalves - the live route has no `mouse_init` to do it, and on the reboot route\nthe writes repeat what the fresh boot did. The resume path never calls\n`mouse_unhook`.",
+   "why": "hiber.inc:4776-5056 (step 3d) writes the drain, MCR=0Bh and IER=1 via mou_pall, unmasks [mou_line], and on KERN_BIG re-arms the 8042"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "6. The drivers in `[hb_drvmask]` are loaded again",
+   "new_text": "6. The drivers in `[hb_drvmask]`, and those a standing `OSAPI_DRV_SUSPEND`\n   took out (`[hb_susp]`, spent here, §51.11.5), are loaded again",
+   "why": "hiber.inc:5147-5150: mov dx,[hb_drvmask] / or dx,[hb_susp] / mov word [hb_susp],0 / call hbm_reload_m"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`DS` becomes `KERNEL_SEG`, `SS:SP`\nbecomes the banked frame, and a far jump lands in `hb_wake` — inside the\nimage's copy of the module, at the segment the pointer recorded.",
+   "new_text": "`DS` becomes the staged `HS_KSEG`\n(`KERNEL_SEG`), and a far jump lands in `hb_wake` — inside the image's copy\nof the module, at the segment the pointer recorded — which builds `SS:SP`,\nthe banked frame, itself.",
+   "why": "hbstub.inc: mov ax,[cs:HS_KSEG] / mov ds,ax / jmp far [cs:HS_WAKE] ('NOT SS:SP'); hbm_wake loads SS=LOW_SEG, SP=[hb_sp] (hiber.inc:4521-4523)"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "rounding and its dead-zone pad had made it 8KB). The resume stub is ~450 bytes of",
+   "new_text": "rounding and its dead-zone pad had made it 8KB; at the 2026-11-08 review it is\n7,795 + 594 bytes, 6,213 on the disk packed, and an 8,704-byte claim). The\nresume stub is ~450 bytes of",
+   "why": "build/kernel.map: .modh length 1E73h = 7,795, .modhb 252h = 594; build/hiber.drv is 6,213 bytes; 8,389 rounds to 8,704 at the 512-byte granule"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "A failure at 3, 3b, 5 or 6 undoes 1, 2 and 4",
+   "new_text": "A failure at 3, 3b, 5 or 6 - or a serial port still leased once the sweep\nhas run (`Disconnect serial first`) - undoes 1, 2 and 4",
+   "why": "hbm_wrimg (hiber.inc:1844-1847) refuses with hbm_s_serial after step 2 when [ser_row] != FFFFh, through the same .nos unwind"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "§47 rule 5) points item 4 of `menu_items_logo` at one of three strings:",
+   "new_text": "§47 rule 5) points item 4 of `menu_items_logo` at one of the three strings\nbelow - or, under `VID_EXT` on a VESA primary, `Hibernate (VESA)` (§120.4),\nand on kern_mega in protected mode with no pool, `Hibernate (No room)`\n(§87.9):",
+   "why": "hb_ok_x (hiber.inc:588-611) also picks menu_s_hibervx and menu_s_hibernr (menu.inc:2514, 2521)"
+  },
+  {
+   "file": "kernel/hiber.inc",
+   "old_text": ";      mod 65536. ~2,500 reads for 640KB, a few ms on a 4.77 MHz 8088",
+   "new_text": ";      mod 65536. At most ~2,500 reads for 640KB, some 60 ms on a 4.77 MHz\n;      8088 (predicted from the loop's ~27 bytes a sample, not measured)",
+   "why": "the .line loop is ~27 bytes / 10 instructions a sample, ~120 clocks at the 8088 fetch floor, so 2,560 samples is ~60 ms"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "two running sums (s1 from 1). That is ~2,500 reads for 640KB: a few ms on a\n4.77 MHz 8088.",
+   "new_text": "two running sums (s1 from 1). That is at most ~2,500 reads for 640KB: some\n60 ms on a 4.77 MHz 8088, predicted from the loop's length and not measured -\ninside the 200 ms.",
+   "why": "hbm_psum's .line loop (hiber.inc:1550-1567) is ~27 bytes a sample, ~120 clocks at the fetch floor"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "The kernel owns it as 0FEh,",
+   "new_text": "The kernel owns it as 0FFh,",
+   "why": "fprog.inc:80-83: FPG_NOWN = 0FEh means no owner, 0FFh is the kernel's owner id; clo_opgo's own comment says 0FFh"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "The buffer starts at `CL_BUFEND` paragraphs into the claim,",
+   "new_text": "The buffer starts `CL_HDRPARA` (64) paragraphs - the 1KB header - into the claim,",
+   "why": "no CL_BUFEND exists; diskops.inc:155 CL_HDRPARA equ 64, used at :900"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "| `CL_CHUNK` | sectors the buffer holds |",
+   "new_text": "| `CL_CHUNK` | sectors one trip moves - the whole disk when an XMS block stages it |\n| `CL_STAGE` | sectors the conventional buffer holds |",
+   "why": "diskops.inc:121-123, 920-928 and 985-991: CL_STAGE is the buffer's sectors, CL_CHUNK one trip's (CL_TOT on the XMS path)"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "#### 18.99.7 The four verbs, and the freeze",
+   "new_text": "#### 18.99.7 The verbs, and the freeze",
+   "why": "clo_vtab (diskops.inc:308-312) has six verbs, ten under OS88_IMG (kern_big)"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "per entry: the image dispatches internally, so four entries cost one\n`mod_fp` slot",
+   "new_text": "per entry: the image dispatches internally, so every verb - six, ten on\n`kern_big` with `OS88_IMG`'s four - costs one `mod_fp` slot",
+   "why": "clo_vtab: clo_start, clo_key, clo_line, clo_free, clo_saved, clo_wimg + clo_mount, clo_mntdlg, clo_unmnt, clo_unmntw under OS88_IMG"
+  },
+  {
+   "file": "kernel/diskops.inc",
+   "old_text": "; dispatches on DL itself, so four verbs cost\n                                ; one mod_fp slot...",
+   "new_text": "; dispatches on DL itself, so every verb (six,\n                                ; ten with OS88_IMG) costs one mod_fp slot...",
+   "why": "clo_vtab at diskops.inc:308-312 holds six words, ten under OS88_IMG"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`DRVC_DISK`, `DRVC_FILE` and `DRVC_NET` stay mounted across a suspend because\na fullscreen program **wants** them: memory and the ROM's `int 13h`, the RAM\ndisk, and the card the packet driver (§96.23) is the only route to.",
+   "new_text": "`DRVC_DISK`, `DRVC_FILE` and `DRVC_NET` stay mounted across a suspend because\na fullscreen program **wants** them: memory and the ROM's `int 13h`, a file\nredirector (NET.DRV's cable), and the card the packet driver (§96.23) is the\nonly route to. `DRVC_FILE2` (the RAM disk), `DRVC_CD` and `DRVC_EMS` stay too,\nand of those only `DRVC_EMS` can be named here: bit `1 << 8` and up does not\nfit a byte.",
+   "why": "hbm_sweep (hiber.inc:2222-2236) skips DISK, FILE ('the cable'), FILE2 ('the RAM disk; 1<<8 is 0 in CH'), CD, EMS and the suspend's DL=DRVC_NET; driver.inc:193-203 FILE2=8, CD=9"
+  },
+  {
+   "file": "kernel/hiber.inc",
+   "old_text": "; THE SKIP LIST: DRVC_DISK is memory and the ROM's int 13h, DRVC_FILE is the\n; RAM disk, and both are things a DOS program WANTS rather than fights -",
+   "new_text": "; THE SKIP LIST: DRVC_DISK is memory and the ROM's int 13h, DRVC_FILE the\n; cable and DRVC_FILE2 the RAM disk, things a DOS program WANTS rather than fights -",
+   "why": "the loop's own comments (hiber.inc:2226-2229) say DRVC_FILE is the cable and DRVC_FILE2 the RAM disk"
+  },
+  {
+   "file": "kernel/hiber.inc",
+   "old_text": "; to the sweep, it takes one OFF the skip list, so the mask can only reach the\n; three rows this loop was already deciding about and a 0 is exactly today.",
+   "new_text": "; to the sweep, it takes one OFF the skip list, so the mask can only reach the\n; rows this loop was already deciding about and a 0 is exactly today.",
+   "why": "the skip list is five classes plus the caller's DL (hiber.inc:2222-2238), not three"
+  },
+  {
+   "file": "kernel/hiber.inc",
+   "old_text": "    xor ax, ax                  ; .bss is whatever the LAST kernel left\n    mov [hb_resumes], ax        ; (a warm boot clears nothing), and three of\n    mov [hb_xseg], ax           ; these are read before anything writes them.",
+   "new_text": "    xor ax, ax                  ; .bss arrives zeroed (SPEC.md 10: stage 2's\n    mov [hb_resumes], ax        ; read lands the image's padding over it), so\n    mov [hb_xseg], ax           ; these three stores repeat a zero.",
+   "why": "kernel.map: .bss (virt 9D88-B27E) is file B788-CC7E, inside the padding before .ovl at CE00 (smallk and megak likewise); SPEC.md 10 and kernel.asm:5896 say .bss is zero at boot"
+  },
+  {
+   "file": "kernel/hiber.inc",
+   "old_text": "; out: nothing (all registers preserved). A hit records the volume in [hb_vol]",
+   "new_text": "; out: nothing; AX, DX and SI kept, BP clobbered (kmain_o holds nothing in\n;      it). A hit records the volume in [hb_vol]",
+   "why": "hb_probe_x pushes only AX, DX and SI and loads BP with drv_find (hiber.inc:389-391, 419)"
+  },
+  {
+   "file": "kernel/hbstage.inc",
+   "old_text": "; dw the resumed kernel's KERNEL_SEG. Above\n                                ; every KDS_* cell (0x0430..0x0441) so the two\n                                ; stubs' maps do not alias, though they never\n                                ; coexist",
+   "new_text": "; dw the resumed kernel's KERNEL_SEG. Above\n                                ; KDS_* 0x0430..0x0441, though KDS_CHEAD,\n                                ; KDS_FMT and kern_mega's KDS_KSEG/KORG sit\n                                ; higher, and HS_DOSCODE IS KDS_CPLEN's low\n                                ; word: harmless only because the two stubs'\n                                ; cells are never staged together",
+   "why": "hiber.inc:129-142: KDS_CPLEN=043Ah (=HS_DOSCODE), KDS_KSEG 044Ah, KDS_KORG 044Ch, KDS_CHEAD 044Eh, KDS_FMT 0450h"
+  },
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": "HIBERNATE** (SPEC.md 51.11.3), so 0x0550's",
+   "new_text": "HIBERNATE** (SPEC.md 51.11.3), so 0x0419's",
+   "why": "OSAPI_DRV_SUSPEND is cell 0x0419 on this branch (kernel.asm:4040, os88api.inc:3386)"
+  },
+  {
+   "file": "docs/plans/KERNEL-BYTE-QUEUE.md",
+   "old_text": "## 2. `hb_probe_x` → the boot overlay — ~60 `.cold`",
+   "new_text": "## 2. `hb_probe_x` → the boot overlay — ~60 `.cold` — DONE (in `.boot2`, `BLOBCALL` from `kmain_o`, not `.ovlw`; tests/ovlrefs.txt)",
+   "why": "hiber.inc:385 'section .boot2'; kernel.asm:5966 BLOBCALL hb_probe_x; tests/ovlrefs.txt:67"
+  },
+  {
+   "file": "docs/HEAP-CLAIMS.md",
+   "old_text": "| `MEM_K_HIB` hibernate extent list | `hbm_xcap`, the resume stub's lifetime | **UNDECLARED** | claimed on the way into the stub; the machine it is in is about to be overwritten |",
+   "new_text": "| `MEM_K_HIB` hibernate and DOS-handoff scratch: the extent list (`hbm_xcap`), the HMA pool's copy (`hbm_hsave`), kern_mega's 32KB bounce (`hbm_xbounce`) | the extent list for the resume stub's lifetime, or (the DOS handoff's) across the image to the wake; the pool's copy across the image to wake step 0b; the bounce for one protected-mode write | **UNDECLARED** | claimed on the way into the stub or the picture: the machine it is in is about to be overwritten, or the image carries it back |",
+   "why": "MEM_K_HIB is also claimed by hbm_hsave (hiber.inc:2088-2090), the DOS handoff (:2923-2928, freed at wake :4746-4752) and hbm_xbounce (:4039-4044)"
+  },
+  {
+   "file": "docs/plans/HEAP-UNPIN-PLAN.md",
+   "old_text": "`hbm_detach`/`hbm_reload` (kernel/hiber.inc:1321,\ncalled at :1202 and :1258 — 61 and 30 bytes)",
+   "new_text": "`hbm_sweep`/`hbm_reload` (kernel/hiber.inc; `hbm_detach` at :1321 when this\nwas written, called at :1202 and :1258 — 61 and 30 bytes then)",
+   "why": "the routine is hbm_sweep (hiber.inc:2205) now; no hbm_detach exists"
+  }
+ ]
+}

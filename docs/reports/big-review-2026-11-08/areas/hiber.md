@@ -577,3 +577,79 @@ hibernator, which resume before the OS writes anything. Not cheap to change
    across a hibernate the fresh session can do the same before Resume
    (hiber-21). Should `hbm_ask`/`hbm_res` re-validate image rows (`clo_mfind`'s
    host + first cluster) or should hibernate refuse while one is mounted?
+
+## Verification
+
+Adversarial pass, 2026-11-08: every bug/hazard and every medium finding
+re-read in the code (all build arms); low non-bug findings spot-checked.
+Hibernate is kern_big-family only (kern_small has none, `kernel.asm:8347`), so
+every hibernate finding is about kern_big, kern_emu and kern_mega. None of
+these is already in `docs/plans/ABI-BREAK-LIST.md` or
+`docs/plans/KERNEL-BYTE-QUEUE.md`. Machine-readable verdicts and the doc fixes
+to apply are in `../data/hiber.json`.
+
+### Findings
+
+- **hiber-1 - CORRECTED (medium -> low).** Narrower than filed. On the live
+  route the mask that comes home is the image's, where `mou_lockon` had
+  already masked the loser, so IER=1 on a masked line costs nothing. On the
+  reboot route a fresh session whose contest had settled (the mouse moved to
+  click Resume) masked the loser itself before `hbm_handover` sampled the
+  mask. The defect needs a resume reached before the fresh contest settled
+  (Enter on the Resume face): the loser then comes home unmasked with IER=1,
+  and the image's `[mou_seen]` means `mou_lockon` never runs again.
+- **hiber-2 - CONFIRMED.** `.badv` is `%ifdef KERN_MEGA` only; `.b2`-`.b6`
+  reach `.bad` on kern_big after `hbm_vbn`, and `.b6` after the claim.
+- **hiber-3 - CONFIRMED.** `hbm_reload` -> `hdl_load` -> `drv_load_at` ->
+  `drv_vol_bank` overwrites the pair. `deskmod.inc:79-93` already saves it
+  around the same nesting.
+- **hiber-4 - CONFIRMED.** SPEC 107.6 already says a holder across a hibernate
+  is unsupported. What is missing is the refusal.
+- **hiber-5 - CORRECTED (medium -> low).** A fragility, not a live defect: the
+  write runs with `[sch_lock]` up and the file layer's claims happen at mount
+  time. The proposed `[mem_cp_busy]` fence would also make `mem_free` and
+  `mem_movable` refuse while it is raised, so check the write path for both
+  before adopting it.
+- **hiber-6 - CONFIRMED** (low, a latent hazard).
+- **hiber-7 - CONFIRMED.** SPEC 87.5 already knows Esc is Discard and only
+  drains the keyboard.
+- **hiber-8 - CONFIRMED.**
+- **hiber-9 - CONFIRMED.**
+- **hiber-10 - CONFIRMED.** SPEC 18.99.8's table covers only the case where no
+  bytes arrive at all.
+- **hiber-11 - CONFIRMED.**
+- **hiber-12 - CONFIRMED.**
+- **hiber-13 - CORRECTED.** There are 27 bare `[cs:]` stores, and two of them
+  (5499-5500) are in the real-mode stub, so about 25 count. The cited
+  2909-2912 already use CSDO/CSEG and come out of the evidence.
+- **hiber-14 - CONFIRMED** (spot-check).
+- **hiber-15 - CONFIRMED** (spot-check).
+- **hiber-16 - CONFIRMED.**
+- **hiber-17 - CONFIRMED.** On kern_big, kern_small and kern_mega alike,
+  `.bss` ends inside the padding before `.ovl`, and SPEC.md 10 states that
+  `.bss` arrives zeroed.
+- **hiber-18 - CONFIRMED.**
+- **hiber-19 - unchecked** (record-only rethink).
+- **hiber-20 - CONFIRMED** (spot-check: no AH=05h/18h in `diskops.inc`).
+- **hiber-21 - CONFIRMED** (spot-check).
+
+### Doc/code mismatches
+
+Mismatches 1, 2, 3, 4, 5, 8, 9, 10 (SPEC and the `hiber.inc` comment), 11,
+12, 13, 14 (heading, body and the `diskops.inc` comment), 15, 17, 18, 19, 20,
+21, 22, 23 and 24 are **CONFIRMED**. Their replacement texts were refined, and
+4 and 15 were widened to the whole skip list.
+
+- **6 - CORRECTED.** Only the module figure is updated: 7,795 + 594 bytes,
+  6,213 packed and an 8,704-byte claim at the 512-byte granule. "8KB" was
+  wrong. The reviewer's resident spans leave out the strings, thunks and
+  shims that the sentence counts, so the resident figures are left as the
+  historical record they are.
+- **7 - REFUTED.** `hbm_hib` is a real routine and reaches the delete through
+  `hbm_wrimg`, which it calls, so the sentence is true. Renaming
+  `hb_perform`/`hb_wake`/`hb_ask` throughout §87 is not a one-place fix.
+- **16 - DEFERRED (not applied).** The mismatch is real, but the text is an
+  indented comment under `OSAPI_DRV_SUSPEND`'s `%define`, which
+  `tools/abilock.py` fingerprints. Editing it fails `make` until someone runs
+  `python3 tools/abilock.py --update "comment fixed"`, so it is left for a
+  human to apply.

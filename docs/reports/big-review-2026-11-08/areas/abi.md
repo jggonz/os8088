@@ -526,3 +526,42 @@ proposed replacements.)
 - abi-3: kern_mega's hot SLOT and ICW shapes need decoder rows; whether that
   belongs in `t_api_abi` or a mega-only sibling is a tier question
   (docs/WRITING-TESTS.md 2.1).
+
+## Verification
+
+The adversarial pass re-read the cited code, plus the KERN_SMALL, KERN_BIG and KERN_MEGA arms where they differ. Nothing was refuted. Thirteen findings are confirmed, three are corrected and one is unchecked.
+
+- abi-1 - confirmed. The LCG's low k bits have period 2^k. Tank's second draw is fixed by the first draw's parity. `xchg ah, al` is 2 bytes, so +2 holds.
+- abi-2 - confirmed. FPG_PARK is defined only under KERN_BIG, so only kern_small gets the XREFUSE cell. kern_emu and kern_mega define KERN_BIG.
+- abi-3 - confirmed. The gate opens build/kernel.bin at t_api_abi.py:458 (the review said :443). FIXED has no FS_OP or VOL_CHECK row, so the gate would fail on kern_small.
+- abi-4 - corrected: severity medium -> low. `[bp+10]` is the caller's DS today. Each side's comment names the other, and ABI-BREAK-LIST T1 already requires the X/N frame to be re-proved.
+- abi-5 - confirmed. drv_pkg_call_x restores only BP and DS after the driver returns.
+- abi-6 - confirmed. 0060:0006-0007 are padding today. Caveat: before SPEC.md 57, a mouse-instrument word lived at 0060:0006. Check that no PKG_FMT-10 kernel is that old before relying on "an old kernel reads 0".
+- abi-7 - confirmed. Paint's pt_wfix and os88stik.inc both write W_W/W_H/W_X/W_Y.
+- abi-8 - confirmed. SPEC.md:44973 says the file slots' rule is "an author rule with no enforcement behind it".
+- abi-9 - confirmed. The refusal AX values are 0, 1, FERR_PROT, or untouched (kern_mega's stc fill).
+- abi-10 - confirmed. ABI-BREAK-LIST 11 already lists SND_PLAY and kernel.asm's "keeps its NUMBER" block. The 20.3 entries are fixed below. The video area owns the fix to 53.8's copy.
+- abi-11 - corrected: the setter census depends on how it is counted. Asm `call` sites alone give ONTIMER 29, ONWAKE 31 and SNAP 30; every mention gives 48, 59 and 72. The design and the -216 .bss figure stand.
+- abi-12 - confirmed (spot-checked MEM_COMPACT and DRV_USE).
+- abi-13 - unchecked.
+- abi-14 - corrected: milder than stated. GFX_SPANS' contract itself says "the stub puts your DS there". Only the register named is wrong.
+- abi-15 - confirmed (spot-checked wm_sizable and the inline setters).
+- abi-16 - confirmed. Flags bits 0-7 are all defined, and the class field holds 5 values in 6 bits.
+- abi-17 - confirmed (os88thunk.asm's contract).
+
+Doc mismatches:
+
+- 23 of the review's 26 are confirmed and carried into data/abi.json as doc_fixes.
+- Three are confirmed but left to the areas that already carry the same fix:
+  - os88api.inc's "384-byte stack" (sched),
+  - os88drv.inc's "rounded up to a KB" (drivers),
+  - loader.inc's "6 = package, 7 = driver" (loader).
+- Some proposals were reworded:
+  - kernel.asm's "keeps its NUMBER" fix replaces the whole stale block, not just its header line.
+  - The os88api.inc "offset 28 is the NEXT" fix also corrects "record STOPS at 28 bytes".
+  - The t_api_abi COMPAT_OLD deletion would change code. It became a comment-only fix that says COMPAT_OLD is a record nothing reads.
+- Three fixes are new:
+  - kernel.asm:5037's second stale OSAPI_NSTUB.
+  - SPEC.md 20.3's api_rxc snippet (`api_xc:` label, `call KERNEL_SEG:api_far`).
+  - SPEC.md 20.3's FSX_CAPS entry, which omits BX = the window.
+- Abilock fingerprints contract comments, so applying the os88api.inc/os88drv.inc fixes may need `tools/abilock.py --update`, with no bump.

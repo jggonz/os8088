@@ -513,3 +513,41 @@ still says it is a law (doc mismatch D-5). Nothing to change in the code.
 4. **hm-11:** which of the seventeen non-loader parts packages are ever
    multi-instance? That decides whether the init-drop pays per instance or
    only once.
+
+## Verification
+
+Adversarial pass, 2026-11-08: every bug/hazard and every medium finding re-read
+in the code (both arms where they differ); low non-bug findings spot-checked.
+Nothing assembled, no emulator run. `data/histmem.json` carries the full notes.
+
+- **hm-1** CORRECTED - real (regrow copies at IF=0; the compactor at IF=1 under `sch_lock`), but the fix must keep IF=0 for a `MEM_K_DRV` record and for blocks an ISR writes into, exactly as `mem_cp_walk` does; +10 to +16 bytes.
+- **hm-2** CORRECTED - real in code, but SPEC.md 66.6.1.1 (~120292) accepts `mov dx, cs` self-harm explicitly; a policy reversal, severity low.
+- **hm-3** CONFIRMED - `mod_disarm`'s own comment names the worker-drop/`DKD_HOVER` pairing and guards only the slot; tiny window, real on kern_mega's freed selector.
+- **hm-4** CORRECTED - the driver tag does share one eight; modules are `MEM_K_MOD` (0xFF08), a separate eight. Severity low.
+- **hm-5** CONFIRMED (predicted, not measured) - arithmetic agrees; `mem_compact`'s "costs microseconds" comment is contradicted by the same arithmetic.
+- **hm-6** CONFIRMED with corrected bytes - CX = 2048..3071 wraps; the fix is ~0 to +2 bytes, not -2.
+- **hm-7** CONFIRMED - no file-identity check before a lazy fetch.
+- **hm-8** CONFIRMED - a full table runs `mem_compact` (which proceeds whenever the plan's run already covers AX) before the shed.
+- **hm-9** CORRECTED - viable; bit 13 of `MC_DMA` is free only once `MC_DMA_HEAD` narrows from 0x3FFF to 0x1FFF.
+- **hm-10** CONFIRMED - already ABI-BREAK-LIST R2-6; estimates unchecked.
+- **hm-11** CORRECTED - real; map sums give 0.8-1.4KB rather than 1.1-2.0KB, and the drop must go through the KEEP re-home (a bare REGROW leaves `I_SIZE` stale).
+- **hm-12** CONFIRMED (spot-check).
+- **hm-13** CONFIRMED.
+- **hm-14** CONFIRMED - and the valid `MEMP_AVAIL` verb also returns the caller's CF.
+- **hm-15** unchecked (record only).
+- **hm-16** CONFIRMED (spot-check); its comment fix is among the doc fixes.
+
+Doc mismatches: 23 of 24 confirmed, written as 29 exact fixes (some split
+across a section's lines). Corrected: the memory.inc 3207 item now fixes the
+stale "THREE ADDRESS SPACES ... three loops ... seven scalars" sentence and leaves
+"twelve holders" alone, since SPEC.md 66.6 still says twelve. The four
+`apps/os88api.inc` fixes edit OSAPI contract comments that `tools/abilock.py`
+fingerprints, so whoever applies them runs `python3 tools/abilock.py --update
+"comment fixed"` (no bump).
+**REFUTED as a doc fix**: SPEC.md 20.6 rule 7's worker whitelist (~46081). The
+kernel tolerates worker claims (first fit only) and Fractal's worker regrows,
+but the rule is a contract, not a description. Widening it or recording Fractal
+as the exception is a decision for the owner, not a text correction.
+Seen but not proposed: `kernel.asm:4133` and `:4079-4080` still name
+`OSAPI_MEM_AVAIL_LVL` and an `stc/ret` 0x0568 cell, and memory.inc:82 says
+"Bits 0-14 are the ... HEAD" where bit 14 is `MC_DISK`.

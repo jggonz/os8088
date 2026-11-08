@@ -1,0 +1,552 @@
+{
+ "area": "abi",
+ "title": "LENS: the public API surface as a whole",
+ "summary": "The surface's mechanics are the best part of the kernel and beat every period peer on an 8088. Packages make direct far calls into a fixed table, with no relocation and no loader fixups. Cells come in three shapes chosen by how often they are called, and the inline cell was measured at 52-57 cycles against 159-162 for a SLOT. Callbacks are plain near procs because the kernel loads DS from W_SEG, which Win16 needed MakeProcInstance for. The binary decode gate (t_api_abi) and the fingerprint lock (abilock) make collisions and silent contract changes fail `make`. What lags is the model around the mechanics. A package cannot learn at runtime which cells the kernel has, so a new package on an old kernel with the same PKG_FMT still calls past the end of the table. The only common refusal signal is CF; what AX means is up to each cell's author. Rules about which task or context may call a cell are prose with almost no enforcement. The surface has grown by accretion: ten handler setters and seven flag setters, verbs in AL, AH or BL depending on the door, and three meanings each of CLIP, FS and DESK. Two contract bugs are live. OSAPI_RAND's low bits repeat with a short period and six games read them. kern_small's OSAPI_FS_OP overwrites AX although the SDK says every register is kept. The ABI gate decodes one kernel out of four. The flag-day list already covers the byte savings. What is new here is about the model: a major/minor version pair (the table end is published in a free word at no byte cost), one refusal code, and a window class record kept in the package in place of per-window handler words and seventeen setter cells. (Verified: abi-4's hazard is lowered to low, because both sides of the frame already cross-reference each other and T1 already names the re-proof. abi-11's setter counts depend on how they are counted. Several of the doc mismatches were already listed in ABI-BREAK-LIST section 11, and three duplicate fixes owned by the sched, drivers and loader areas are left to them.)",
+ "strengths": [
+  {
+   "title": "Direct far calls into a fixed table, no fixups",
+   "why": "No relocation and no load-time patching, and a call costs one far call. DOS paid an int dispatch, Mac a trap exception, Win16 a fixup chain plus entry-table thunks. This is the right model for a 4.77 MHz 8088.",
+   "evidence": "kernel/kernel.asm:2652-4449; apps/os88api.inc:208-215; SPEC.md 20.3"
+  },
+  {
+   "title": "Cell shape follows heat, and inline cells are measured",
+   "why": "Calls made every frame stay fast while rare calls cost 6 bytes. OSAPI_ICELL/IEND make a length mismatch an assembly error on whichever build has it.",
+   "evidence": "kernel/kernel.asm:2574-2605 (ICELL/IEND/XREFUSE); SPEC.md 20.3 (52-57 vs 159-162 cycles)"
+  },
+  {
+   "title": "The ABI is checked in the binary",
+   "why": "t_api_abi decodes kernel.bin by cell length, resolves each target in the section its shape names, and its ALIAS/INLINE/FIXED ledgers cannot go stale in either direction.",
+   "evidence": "tests/unit/t_api_abi.py:440-579"
+  },
+  {
+   "title": "The lock turns a version bump into a decision",
+   "why": "258 recorded decisions and 5 bumps. Contract comments are part of the fingerprint, and LD_EVER gives the user a refusal message they can act on.",
+   "evidence": "tools/abi.lock.json history; tools/abilock.py docstring; kernel/loader.inc:292-300"
+  },
+  {
+   "title": "The dispatcher at +12 plus one wm_pkgcall site",
+   "why": "Every callback is an ordinary near proc, re-entrant across packages, with DS taken from W_SEG and ES = KERNEL_SEG. A package author cannot forget a retf. This beats Win16's MakeProcInstance and exported prologs.",
+   "evidence": "kernel/wm.inc:396-470 (mov ds,[es:si+W_SEG] at 446); SPEC.md 20.2"
+  },
+  {
+   "title": "Marshalling happens in one layer",
+   "why": "X cells hand the caller's DS over in ES. N cells copy names into a 13-byte buffer with a forced NUL, so a hostile name cannot run on.",
+   "evidence": "kernel/kernel.asm:4596-4612 (api_x), 4747-4767 (api_rn), 5192-5212 (api_copyname)"
+  },
+  {
+   "title": "One SDK and one table, refusals rather than holes",
+   "why": "A cell kern_small lacks answers CF=1 instead of disappearing. This is OS/2's Family API idea without a bind step.",
+   "evidence": "SPEC.md 20.8 rule 4; kernel/driver.inc:6719-6769 (kern_small arm)"
+  },
+  {
+   "title": "Branch on the capabilities, never on the CPU tier",
+   "why": "OSAPI_XMEM_CAPS, SND_CAPS and FSX_CAPS answer what is actually present. That is Gestalt's lesson, learned without Gestalt.",
+   "evidence": "apps/os88api.inc:2061-2063"
+  },
+  {
+   "title": "Tables versioned by their own length byte",
+   "why": "DRV_H_DSV and DRV_H_FSV record how long a driver's service tables were when it was built, and the kernel zero-fills the rest: RegisterClassEx's cbSize in one byte each. It is the pattern for snapshot buffers (R2) and the window-class rethink.",
+   "evidence": "drivers/os88drv.inc:379-390; kernel/driver.inc:340-360"
+  },
+  {
+   "title": "Cells double as module doors (apic_*)",
+   "why": "A module far-calls the public cell instead of growing a private shim, and the label follows the cell through any renumber.",
+   "evidence": "kernel/kernel.asm:2475-2494"
+  },
+  {
+   "title": "t_mirror maintains itself",
+   "why": "Any constant defined in more than one file is compared, so a newly mirrored constant is covered the day it appears.",
+   "evidence": "tests/unit/t_mirror.py header"
+  }
+ ],
+ "findings": [
+  {
+   "id": "abi-1",
+   "kind": "bug",
+   "severity": "medium",
+   "title": "OSAPI_RAND's low bits repeat with a short period, and six games read them",
+   "detail": "osapi_rand computes seed = seed*25173 + 13849 mod 2^16 and returns the seed. 25173 is 1 mod 4 and the increment is odd, so bit 0 alternates on every call, bits 0-1 have period 4 and bits 0-2 period 8. From any seed, x&3 cycles 3,0,1,2. Tank, DotDel, Tamegram, WireBall and Pixelstein all mask the low bits; Tank's `test al,1` is a strict alternation, not a coin. The seed is also one system-wide word, so one package's SRAND re-seeds every other package and two games interleave each other's streams. The SDK says neither.",
+   "evidence": [
+    "kernel/kernel.asm:6599-6607 osapi_rand",
+    "apps/tank/tkgame.inc:1271 and ax,3; :1275 test al,1",
+    "apps/dotdel/ddgame.inc:1002 test al,1; :1014, :1177 and ax,3",
+    "apps/tamegram/tamegram.asm:1200,1209,1215",
+    "apps/wireball/wbgame.inc:34; apps/pixelstein/pxact.inc:243",
+    "apps/os88api.inc:348-349 (SRAND/RAND contract says nothing about the shared seed)"
+   ],
+   "recommendation": "Add `xchg ah, al` after the store, so AL carries bits 8-15 (period of at least 512) and the stored seed is unchanged. Update SPEC.md 20.4's 'out AX = seed'. Document that the seed is shared and that a package needing a reproducible stream carries its own LCG (~14 bytes). Re-baseline any test that asserts a seeded sequence.",
+   "phase": "now",
+   "bytes_est": "+2 .text resident (all kernels)",
+   "listed_as": "",
+   "prior_art": "DOS and Win16 C runtimes keep the seed per process; ANSI C rand() implementations return the high bits for this reason.",
+   "verdict": "confirmed",
+   "verify_note": "Re-read kernel.asm:6599-6607: one shared word [osapi_seed], seed*25173+13849 returned whole. 25173 = 1 mod 4 and the increment is odd, so bit 0 alternates and the low k bits have period 2^k. Read all six sites: Tank's second draw (`test al,1`) is fixed by the first draw's parity, Tamegram's three draws per spawn (and 7 / and 1 / and 3) walk a period-8 pattern. `xchg ah, al` is 86 E0, two bytes: +2 holds. Not in ABI-BREAK-LIST or KERNEL-BYTE-QUEUE."
+  },
+  {
+   "id": "abi-2",
+   "kind": "bug",
+   "severity": "medium",
+   "title": "kern_small's OSAPI_FS_OP overwrites AX although the contract says every register is kept",
+   "detail": "kern_small has no FPG_PARK, so cell 0x04EF there is OSAPI_XREFUSE (mov ax,1 / cmp al,2 / retf). The SDK contract lists kern_small among the refusals and ends 'Every register kept'. kern_big's body does keep AX. Callers state the contract they rely on. None read AX afterwards today, so this is latent. OSAPI_VOL_CHECK uses the same refusal and its contract does say '(AX = 1)'.",
+   "evidence": [
+    "kernel/kernel.asm:1303-1307 (FPG_PARK only on KERN_BIG)",
+    "kernel/kernel.asm:4430-4439 (XREFUSE arm)",
+    "kernel/fprog.inc:1148-1185 (kern_big keeps AX)",
+    "apps/os88api.inc:2543-2565 ('Every register kept')",
+    "apps/dos/dosload.asm:611; apps/os88partsbody.inc:1702"
+   ],
+   "recommendation": "Make the SDK say 'kern_small: CF=1, AX=1 (OSAPI_XREFUSE)', copying VOL_CHECK's wording, and run abilock --update without a bump. Alternatively make the cell stc/retf plus four NOPs (still six bytes) and add a FIXED row to t_api_abi.",
+   "phase": "now",
+   "bytes_est": "0",
+   "listed_as": "",
+   "prior_art": "",
+   "verdict": "confirmed",
+   "verify_note": "FPG_PARK is defined only under KERN_BIG (kernel.asm:1303-1307), so on kern_small cell 0x04EF is OSAPI_XREFUSE = mov ax,1 / cmp al,2 / retf (kernel.asm:2601-2605, 4430-4439). The SDK ends 'Every register kept' (os88api.inc:2565) while VOL_CHECK's says '(AX = 1)'. dsl_opgo and os88partsbody read only CF and flags, so the bug is latent. kern_emu and kern_mega define KERN_BIG, so only kern_small is affected."
+  },
+  {
+   "id": "abi-3",
+   "kind": "hazard",
+   "severity": "medium",
+   "title": "t_api_abi decodes only kern_big's table",
+   "detail": "The gate opens build/kernel.bin and nothing else. Thirteen %if arms inside the table produce kern_small, kern_emu and kern_mega shapes that are never decoded. Only the per-cell ICELL length check and one total-length assert hold them, and the total cannot see two length changes that cancel out in different arms. The FIXED ledger has no rows for kern_small's two XREFUSE cells, so the gate would fail there today, which shows it has never been run there. The invariant that matters is that all four kernels' cells start at the same offsets, and that can be checked from the four symbol maps.",
+   "evidence": [
+    "tests/unit/t_api_abi.py:458 (build/kernel.bin only)",
+    "kernel/kernel.asm:2820,3512,3546,3645,3757,4246,4271,4318,4347,4358,4381,4430,4440 (per-arm cells)",
+    "kernel/kernel.asm:4493 (total-length assert)",
+    "tests/unit/t_api_abi.py:164-168 (FIXED has no FS_OP/VOL_CHECK rows)"
+   ],
+   "recommendation": "Add a --kernel mode for build/smallk, emuk and megak with per-kernel FIXED rows; kern_mega's SLOT `1E E8 .. .. 1F CB 90 90` and its ICW jump cells need decoders. Add a cross-kernel comparison of cell start offsets. Register it where those kernels are built (full tier).",
+   "phase": "now",
+   "bytes_est": "0 (host only)",
+   "listed_as": "",
+   "prior_art": "",
+   "verdict": "confirmed",
+   "verify_note": "main() opens only build/kernel.bin (t_api_abi.py:458, not 443). FIXED (lines 303-307) has no FS_OP or VOL_CHECK rows, and the FIXED branch (lines 527-532) fails a name it has no row for, so kern_small's XREFUSE cell at 0x04EF would fail. Registered once, fast tier (suite.py:847)."
+  },
+  {
+   "id": "abi-4",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "An N-cell body reads the caller's DS out of api_rn's stack frame at a literal offset",
+   "detail": "dwsf_dskw_write_seq applies WSQF_SYS's driver check to `mov bx,[bp+10]`. That word is the caller's DS that api_rn pushed under api_far's far frame, and the offset is counted by hand in a comment with nothing asserting it. T1 (five-byte rare cells) reshapes exactly this frame. If the offset shifts, the check judges the caller's SI or BP as its segment, granting or refusing system-file appends on a wrong value.",
+   "evidence": [
+    "kernel/diskw.inc:3397-3414",
+    "kernel/kernel.asm:4747-4767 (api_rn push order)",
+    "kernel/kernel.asm:4683-4692 (api_far frame)",
+    "docs/plans/ABI-BREAK-LIST.md T1 ('the stack shape of the X/N bodies must be re-proved')"
+   ],
+   "recommendation": "Define API_RN_DSOFF equ 10 beside api_rn with the push sequence and use it in diskw.inc. Name this reader in T1's row.",
+   "phase": "now",
+   "bytes_est": "0",
+   "listed_as": "T1 (new evidence: a hidden reader of the frame T1 changes)",
+   "prior_art": "",
+   "verdict": "corrected",
+   "verify_note": "The offset is right today. dwsf's push bx / push bp sits over api_far's popped frame, so the stack reads IP, CS, SI, DS, giving [bp+10] = the caller's DS (diskw.inc:3397-3414, kernel.asm:4747-4767). Nothing asserts it, but each side's comment names the other: api_rn says 'dwsf_dskw_write_seq reads the DS there', and dwsf spells the frame out. ABI-BREAK-LIST T1 already says 'the stack shape of the X/N bodies must be re-proved'. Severity lowered to low: the hazard fires only inside T1, which already names the re-proof."
+  },
+  {
+   "id": "abi-5",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "OSAPI_DRV_CALL promises DI back, but neither the kernel nor the driver contract keeps it",
+   "detail": "The SDK says DI reaches the driver as set 'and comes back yours'. drv_pkg_call_x pops the caller's DI before the far call and restores only BP and DS after it. The driver-side contract says 'out whatever you define', so the promise holds only if every verb of every driver preserves DI. Also, 'CF=1 AX=0 = no driver' cannot be told apart from a driver verb refusing with AX=0.",
+   "evidence": [
+    "apps/os88api.inc:3441-3460",
+    "kernel/driver.inc:6575-6659",
+    "drivers/os88drv.inc:359-378"
+   ],
+   "recommendation": "Make the driver contract say 'preserve DI; BP is spent'. A kernel push/pop of DI around the call is +2 bytes and +2 stack on ETHER's 272/384-byte service-worker chain, so the doc fix is the right one.",
+   "phase": "now",
+   "bytes_est": "0 (doc); +2 .text if enforced",
+   "listed_as": "",
+   "prior_art": "",
+   "verdict": "confirmed",
+   "verify_note": "drv_pkg_call_x pops the caller's DI before the far call and restores only BP and DS after it (driver.inc:6614-6662). The SDK says DI 'comes back yours' (os88api.inc:3456-3460). The driver contract says 'out whatever you define' (os88drv.inc:377). On the no-driver path (.none) AX = 0 with CF = 1, which cannot be told apart from a verb refusing with AX = 0."
+  },
+  {
+   "id": "abi-6",
+   "kind": "rethink",
+   "severity": "high",
+   "title": "No runtime API level: a package cannot ask which cells this kernel has",
+   "detail": "PKG_FMT is an equality test, a MAJOR number. Since format 10 the table has only grown, so the table's end works as a MINOR number, and The Wire already reasons in it (WIRE_CELL_LEVELS, WIRE_TABLE_END). The guest cannot. SPEC.md 20.2.0.1's 'What it does not cover' is exactly a new package far-calling past an old table. Bytes 0060:0006-0007 are padding today.",
+   "evidence": [
+    "kernel/loader.inc:292-300 (equality)",
+    "kernel/kernel.asm:2346-2360 ('0x06..0x07 stay free')",
+    "tools/os88wire.py:132-138",
+    "SPEC.md 20.2.0.1 'What it does not cover'"
+   ],
+   "recommendation": "NOW: put `dw osapi_table_end` at 0060:0006 (replaces padding). Add an SDK macro OS88_NEED cell for the entry proc (cmp word [es:6], cell+1 / jb refuse); an old kernel reads 0 and refuses. Have os88pkg.py warn when a package calls past the last released level without it. FLAG DAY: carry the needed level in the header and have ld_hdr_ok answer LD_EVER when it exceeds osapi_table_end. First confirm that no PKG_FMT-10 kernel predates SPEC.md 57's registry, which moved a mouse-instrument word off 0060:0006.",
+   "phase": "now",
+   "bytes_est": "0 resident now (padding); ~+8 .cold loader at the flag day; ~10 bytes per opting package",
+   "listed_as": "",
+   "prior_art": "GEOS geode protocol numbers (major must match, minor >=), AmigaOS OpenLibrary(name, version), Win16 load-time import resolution ('Call to Undefined Dynalink'), DOS int 21h AH=30h.",
+   "verdict": "confirmed",
+   "verify_note": "Bytes 0x06-0x07 are `times` padding today (kernel.asm:2346-2360). ld_hdr_ok is an equality test (loader.inc:292-300). SPEC.md 20.2.0.1's 'What it does not cover' (44213) names exactly this gap and leaves only The Wire to fence it. Caveat for the macro: before SPEC.md 57's registry a mouse-instrument word lived at 0060:0006 (SPEC.md 14071), so a kernel that old may not read 0 there. Check that every PKG_FMT-10 kernel post-dates 57 before relying on 'an old kernel reads 0'."
+  },
+  {
+   "id": "abi-7",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "Packages write the window record's geometry, which the SDK says they may not",
+   "detail": "The SDK says the fields are 'readable by contract, not writable'. Paint's pt_wfix writes W_W/W_H/W_X/W_Y from a size-changed callback. The Sticky library hides the window, writes the fields, then shows it. The kernel keeps derived state these writes bypass (W_NATR, W_ZOOMR, W_SUEXT). The writes exist because no door sets geometry without repainting: OSAPI_WM_RESIZE always repaints and cannot be used from the callback Paint is in.",
+   "evidence": [
+    "apps/os88api.inc:3165-3176",
+    "apps/paint/paint.asm:12831-12870, 11516-11520",
+    "apps/os88stik.inc:1023, 1712, 2376-2407",
+    "kernel/wm.inc:117-122"
+   ],
+   "recommendation": "Add a no-repaint/hidden mode to OSAPI_WM_RESIZE (top bit of CX), or legalise hide-write-show for HIDDEN windows only. Add a host lint for stores to [es:..+W_*] under apps/ with an allow-list.",
+   "phase": "now",
+   "bytes_est": "0 (lint); ~+10 .text for a no-repaint mode",
+   "listed_as": "",
+   "prior_art": "Win16 SetWindowPos SWP_NOREDRAW/SWP_NOMOVE; Mac SizeWindow(fUpdate=false). The Mac exposed WindowRecord and Carbon had to retrofit accessors.",
+   "verdict": "confirmed",
+   "verify_note": "pt_wfix writes W_W, W_H, W_X and W_Y through ES = KERNEL_SEG (paint.asm:12831-12870). os88stik.inc writes W_Y (1023, 1712) and W_W/W_H/W_X/W_Y (2376-2407). The SDK at os88api.inc:3170-3174 says 'readable by contract, not writable'. W_NATR, W_ZOOMR and W_SUEXT are W_SIDE+16..+32 (wm.inc:117-119)."
+  },
+  {
+   "id": "abi-8",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "Rules about which task or context may call a cell are prose, and SPEC admits one has no enforcement",
+   "detail": "Each cell's context lives in its comment: UI task only, any, worker-safe, bracket-only, lock held, FSXF_RATE-hook-safe. SPEC.md 20.3 calls the file slots' UI-task rule 'an author rule with no enforcement behind it'. What it protects is global state: the single api_name/api_name2 staging buffer and [api_sysfp], which is written through CS. No file cell tests [sch_cur].",
+   "evidence": [
+    "kernel/kernel.asm:5213-5214 (api_name)",
+    "kernel/kernel.asm:5007-5011 (api_sysfp)",
+    "SPEC.md 20.3 'The file slots are UI-task/window-callback context only'",
+    "tools/stkdepth.py (call graph per worker root)"
+   ],
+   "recommendation": "Put a machine-readable tag (; @ctx ui|any|worker|hook|lock) in each contract comment, where abilock already fingerprints it. Add a host gate on stkdepth's call graph: no worker root (OSAPI_TASK_SPAWN target, OSAPI_DRV_TASK) and no FSXF_RATE hook may reach a cell its tag forbids. Have docs/INDEX.md print the tag.",
+   "phase": "now",
+   "bytes_est": "0 shipped",
+   "listed_as": "",
+   "prior_art": "Inside Macintosh's per-routine 'may move or purge memory' and interrupt-safety tables.",
+   "verdict": "confirmed",
+   "verify_note": "SPEC.md:44973 says 'an author rule with no enforcement behind it'. api_name and api_name2 are single shared .text buffers (kernel.asm:5213-5214), and [api_sysfp] is written through CS (kernel.asm:5007-5011)."
+  },
+  {
+   "id": "abi-9",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "CF is the only common sign of a refusal",
+   "detail": "On CF=1 from an absent capability, AX is 0 (DRV_CALL with no driver), 1 (XREFUSE, FERR_NODISK, FSKE_NOTHERE), FERR_PROT (kern_small's system-file stubs), untouched (every stc/ret stub, and kern_mega's real-mode bracket filling the table with stc), or a family code (7 for an unknown sound verb, DRVE_*).",
+   "evidence": [
+    "kernel/driver.inc:6655-6659",
+    "kernel/kernel.asm:2601-2605",
+    "kernel/kernel.asm:5000-5004",
+    "kernel/fsx.inc:2341-2351",
+    "apps/os88api.inc:4000-4010, 2603"
+   ],
+   "recommendation": "NOW: state in the SDK preamble that CF=1 is the only universal refusal and that AX carries meaning only where a cell names a code family. FLAG DAY: adopt AX=1 = 'no such service/verb on this kernel' everywhere. XREFUSE, FERR_NODISK and FSKE_NOTHERE already answer 1; DRV_CALL's 0 and the stubs that leave AX untouched move, most by sharing XREFUSE.",
+   "phase": "flagday",
+   "bytes_est": "~0 (stubs that keep their own body +3 each)",
+   "listed_as": "",
+   "prior_art": "DOS: CF + AX, error 1 = invalid function. Mac: one OSErr space for the whole system.",
+   "verdict": "confirmed",
+   "verify_note": "Checked four of the codes. DRV_CALL's .none answers AX=0 (driver.inc:6655-6659), XREFUSE AX=1, kern_small's system-file cells AX=FERR_PROT (kernel.asm:5000-5004), and kern_mega's real-mode bracket fills the table with stc (fsx.inc:2341-2351), leaving AX untouched."
+  },
+  {
+   "id": "abi-10",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "Contracts are written in up to four places, and the copies have gone stale",
+   "detail": "The SDK %define comments are the fingerprinted authority. SPEC.md 20.3's slot-contract block is a second copy, stale in at least four entries (SND_PLAY, SND_CAPS, FSX_RUN, FSX_WAIT). SPEC.md 53.8 is a third with the same omissions. kernel.asm's table comments are a fourth, often a dozen lines per cell. SPEC.md already refuses to keep a second copy of the address map for this exact reason.",
+   "evidence": [
+    "SPEC.md 20.3 slot-specific contracts block (44800-44925)",
+    "SPEC.md 53.8 (107737-107760)",
+    "kernel/kernel.asm:3524-3537 (0x0334's comment)",
+    "apps/os88api.inc:529-553, 6872-6974"
+   ],
+   "recommendation": "Delete SPEC.md 20.3's contract block and 53.8's, pointing at the SDK names. Cut each kernel cell comment to one line naming the SDK symbol and the §. Drop SPEC.md 20.3's running cell-count paragraph, which says itself it is not a contract.",
+   "phase": "now",
+   "bytes_est": "0",
+   "listed_as": "ABI-BREAK-LIST 11 (SND_PLAY; kernel.asm's 'keeps its NUMBER' block)",
+   "prior_art": "",
+   "verdict": "confirmed",
+   "verify_note": "SPEC.md 20.3's block is stale for SND_CAPS (44804), SND_PLAY (44811-44816), FSX_CAPS (44908), FSX_RUN (44910-44912) and FSX_WAIT (44921). 53.8 is stale the same way (107740-107751); the video area's fix covers 53.8. ABI-BREAK-LIST 11 already lists SND_PLAY and kernel.asm's stale 'keeps its NUMBER' block. The doc_fixes below repair the 20.3 entries now; deleting the copies is the recommendation."
+  },
+  {
+   "id": "abi-11",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "The window record holds ten handler words that belong in a per-class table in the package",
+   "detail": "Each window record holds ten near pointers into the package's own segment (W_ONSIZE/ONMOUSEUP/ONDRAG/ONTIMER, W_ONSZ/ONWK/ONCL/ONRC/ABOUT/ONWH). They are stored per window in kernel .bss (WIN_SIZE 74 x MAX_WIN 12) and each is installed by its own cell: 219 setter call sites. Seven flag setters add 128 more sites. The wm_create template is a fixed 8 words, which is why every later handler became a cell. Rethink: one W_CLASS word pointing at a table in the package segment: a length byte (the DSV pattern), a style word (the seven flags), then the handler offsets. wm_pkgcall reads it with DS already the package's. Kernel windows share const tables. The table moves with the package under compaction for free. The cost is ~20 cycles per callback.",
+   "evidence": [
+    "kernel/wm.inc:45-127",
+    "apps/os88api.inc:4198-4206 (fixed template)",
+    "setter census (method-dependent): asm `call` sites alone ONTIMER 29, ONWAKE 31, SNAP 30; every mention ONTIMER 48, ONWAKE 59, SNAP 72"
+   ],
+   "recommendation": "At the flag day, price this against K17-2/K17-3: it removes the setters and the record words together, and the template's fixed shape with them.",
+   "phase": "flagday",
+   "bytes_est": "~-200 to -260 resident kern_big (-216 .bss record, -60..-110 table, +~80 dispatch and kernel class tables); ~-1.5KB unpacked across packages",
+   "listed_as": "K17-2, K17-3 (alternative design)",
+   "prior_art": "Win16 WNDCLASS (window procedure per class) and WS_* styles at CreateWindow; Mac window definition procs.",
+   "verdict": "corrected",
+   "verify_note": "Ten handler words confirmed (wm.inc:45-121), and the template is a fixed 8 words (os88api.inc WT_*). The setter census is method-dependent. Counting `call OSAPI_WM_<X>` in asm alone gives ONTIMER 29, ONWAKE 31 and SNAP 30, against the reviewer's 41/36/51. Counting every non-%define mention gives 48/59/72. Read the figures as order-of-magnitude. The byte estimate is unchanged: 9 words x 12 windows = -216 .bss holds."
+  },
+  {
+   "id": "abi-12",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "Multiplexed doors take their verb in AL, AH or BL",
+   "detail": "AL: SND_FM/STREAM/PLAY, FSX_SPK, FILE_COPY, VOL_CHECK, WM_DESK, DSK_CACHE, SERIAL, THM_SET. AH: MEM_COMPACT, DRV_USE. BL: OSAPI_SEG, OSAPI_MEM_P, OSAPI_DRV_CALL (BH = class). Each had a local reason, but a reader cannot guess which.",
+   "evidence": [
+    "apps/os88api.inc OSAPI_MEM_COMPACT, OSAPI_DRV_USE, OSAPI_SEG, OSAPI_MEM_P, OSAPI_DRV_CALL contracts",
+    "kernel/kernel.asm:6380-6420 (osapi_seg dispatch on BL)"
+   ],
+   "recommendation": "NOW: a rule for the next door (verb in AL unless AL is an argument, then BL). FLAG DAY: move the AH outliers only where another row already reopens the cell.",
+   "phase": "now",
+   "bytes_est": "0",
+   "listed_as": "",
+   "prior_art": "DOS int 21h: AH = function, AL = subfunction, unchanged from 1981.",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked: OSAPI_MEM_COMPACT takes AH = MEMC_* (os88api.inc:1736) and OSAPI_DRV_USE AL = class with AH = verb (7059-7061)."
+  },
+  {
+   "id": "abi-13",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "Names collide across subsystems",
+   "detail": "CLIP means both the clipboard (CLIP_PUT/GET/SIZE) and the clip region (WM_CLIP_*). FS means both a DRVC_FILE listing (FS_ENT) and the progress widget (FS_PROG/FS_OP). DESK means a desktop item, the desk layer and the theme ground. Several names break the SUBSYS_VERB shape: GET_TICKS, SET_COLOR, FULLSCREEN, DECOMP, TOAST, REBOOT, SERIAL, SEG, BATCH_*, ABOUT_SET.",
+   "evidence": [
+    "apps/os88api.inc %define census (197 names)"
+   ],
+   "recommendation": "Adopt a naming rule for new cells now. Renames are source-only (no cell moves, a fingerprint update, no bump): do them at the flag day with one cycle of %define aliases.",
+   "phase": "flagday",
+   "bytes_est": "0",
+   "listed_as": "",
+   "prior_art": "OS/2 DOSCALLS' DosVerbNoun naming.",
+   "verdict": "unchecked",
+   "verify_note": "Not spot-checked (low, source-only naming)."
+  },
+  {
+   "id": "abi-14",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "'ES:SI' in an X cell's contract actually means DS:SI",
+   "detail": "OSAPI_GFX_SPANS documents 'ES:SI', but api_x overwrites ES with the caller's DS. SLOT cells such as GFX_BLIT4, FILE_READ (ES:BX) and XMEM_COPY read a real caller-chosen ES. That is three conventions under two spellings.",
+   "evidence": [
+    "apps/os88api.inc:1951-1957",
+    "kernel/kernel.asm:4596-4612"
+   ],
+   "recommendation": "Write X-cell pointer arguments as 'SI (in your DS; ES is not read)', so the register named is the register read.",
+   "phase": "now",
+   "bytes_est": "0",
+   "listed_as": "",
+   "prior_art": "",
+   "verdict": "corrected",
+   "verify_note": "Real but milder than stated. OSAPI_GFX_SPANS' own contract continues 'ES is yours - the stub puts your DS there - so the list lives in your own segment' (os88api.inc:1952-1955), so the reader is told. The defect is only that the register named is not the register read."
+  },
+  {
+   "id": "abi-15",
+   "kind": "prior-art",
+   "severity": "low",
+   "title": "No parameter validation, and no build option that adds it",
+   "detail": "Window arguments are trusted everywhere. The inline setters store through [cs:bx+W_*] and wm_sizable ORs into [bx+W_FLAGS], so a bad BX writes anywhere in KERNEL_SEG. That fits SPEC.md 20.8's trust model, but Windows 3.1's retail parameter validation and its debug kernel are what found most Win16 misuse.",
+   "evidence": [
+    "kernel/kernel.asm:2824, 3517, 3551",
+    "kernel/wm.inc:4277-4284"
+   ],
+   "recommendation": "Add an APICHK=1 knob (0 shipped bytes). Window-taking cells become same-length padded jump cells into a validating stub (BX in the window table, W_SEG = the caller's DS); file cells check [sch_cur]=0. One soak row runs the package sweep on that kernel.",
+   "phase": "now",
+   "bytes_est": "0 shipped (knob only)",
+   "listed_as": "",
+   "prior_art": "Windows 3.1 parameter validation and debug KERNEL RIPs.",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked: wm_sizable ORs into [bx+W_FLAGS] with no check (wm.inc:4277-4284), and the inline setters store through [cs:bx+W_*] (kernel.asm:2824)."
+  },
+  {
+   "id": "abi-16",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "The package header has no room left to grow",
+   "detail": "All eight bits of the flags byte at +3 are defined. +4 is already overloaded as the packed length when the package has parts. +15's class has six bits but only five classes, and an index past SCH_NCLASS is refused as hostile, so those bits cannot be reused without old kernels refusing. Every optional block costs a flag bit.",
+   "evidence": [
+    "SPEC.md 20.2 flags row",
+    "kernel/loader.inc:306-317",
+    "kernel/sched.inc:2872-2881"
+   ],
+   "recommendation": "At the flag day, reserve one bit for 'an extension list follows the clear prefix' (type, length, data) so future blocks, starting with abi-6's needed level, take no bit.",
+   "phase": "record",
+   "bytes_est": "~+20 .cold loader at the flag day",
+   "listed_as": "",
+   "prior_art": "NE/PE headers reaching variable tables from a fixed header; Mac typed resources.",
+   "verdict": "confirmed",
+   "verify_note": "SPEC.md 20.2's flags row defines bits 0-7: icon, assoc, parts, compressed, LZ format, glyph, desk, stik. SCH_NCLASS is 5 in a 6-bit field, refused past the end (sched.inc:2872-2881)."
+  },
+  {
+   "id": "abi-17",
+   "kind": "prior-art",
+   "severity": "low",
+   "title": "Every cell preserves every register, and C packages throw that work away",
+   "detail": "The contract is 'every register except documented outputs', so each kernel body saves what it touches. The C SDK treats AX, BX, CX, DX, SI, DI, ES and FLAGS as clobbered, so for every C package that saving is pure cost. Win16 and OS/2 1.x treated AX/BX/CX/DX/ES as volatile.",
+   "evidence": [
+    "apps/os88api.inc:47-50",
+    "apps/cc/os88thunk.asm:58-66"
+   ],
+   "recommendation": "New argument for V1: C callers already treat everything as clobbered. A surface-wide switch would break hand-written asm silently, so keep it limited to V1's rect primitives.",
+   "phase": "record",
+   "bytes_est": "0",
+   "listed_as": "V1",
+   "prior_art": "Win16/OS/2 Pascal convention: AX-DX and ES volatile; SI, DI, BP, DS preserved.",
+   "verdict": "confirmed",
+   "verify_note": "os88thunk.asm:62-66: 'AX, BX, CX, DX, SI, DI, ES and FLAGS are all fair game and the compiler expects them to be gone'. Already argued under V1."
+  }
+ ],
+ "doc_fixes": [
+  {
+   "file": "apps/os88api.inc",
+   "old_text": "; Packages run in the kernel's near model: CS = DS = KERNEL_SEG, but",
+   "new_text": "; Packages run in their OWN segment: CS = DS = the region the loader gave\n; them (SPEC.md 20.1), but",
+   "why": "The same header says at line 39 and line 55 that a package owns a segment with CS = DS = it; wm.inc:446 loads DS from W_SEG for every callback."
+  },
+  {
+   "file": "apps/os88api.inc",
+   "old_text": "                            ; It is baked into every OSAPI_* far call, so a",
+   "new_text": "                            ; KERNEL_SEG (above) is baked into every OSAPI_* far call, so a",
+   "why": "These lines sit under VT_FILE's comment but are about KERNEL_SEG (defined at line 74), the only value 'baked into every OSAPI_* far call'."
+  },
+  {
+   "file": "apps/os88api.inc",
+   "old_text": "; Each slot is an 8-byte cell at 0x0010 + 8n, and `call OSAPI_*` is a FAR",
+   "new_text": "; The cells are packed from 0x0010 in several lengths (SPEC.md 20.3), so an\n; address is the sum of the cells before it; `call OSAPI_*` is a FAR",
+   "why": "kernel.asm:4493 asserts the table as 44 cells of 8, 11 of 7, 119 of 6, 6 of 3, ... (1,259 bytes); kernel.asm:2406 says 'The offsets are therefore NOT 0x0010 + 8n'."
+  },
+  {
+   "file": "apps/os88api.inc",
+   "old_text": "; preserved, flags included.",
+   "new_text": "; preserved. FLAGS are not, unless a cell's own contract says so - CF is the\n; commonest answer.",
+   "why": "Most cells answer in CF, CLC_OR_STC tails (kernel.asm:2608-2623) also write ZF/SF/PF/OF, and gfx_hline documents 'clobbers: flags' (vga12.inc:1064); only a few contracts (MENU_SET, inst_pkg_alive) promise the FLAGS word."
+  },
+  {
+   "file": "apps/os88api.inc",
+   "old_text": "; --- window record layout (SPEC.md 11, 20 bytes) -------------------------------",
+   "new_text": "; --- window record layout (SPEC.md 11): 34 published bytes on kern_big, 28 on kern_small",
+   "why": "The published words below run to W_TIMER (+32, a word) on kern_big and stop at W_ONMOUSEUP (+26) on kern_small (wm.inc:45-104); WIN_SIZE is 74 / 65 (wm.inc:127, 132)."
+  },
+  {
+   "file": "apps/os88api.inc",
+   "old_text": "; THE LAST THREE WORDS ARE kern_big's ALONE. The 128KB kernel's record STOPS\n; at 28 bytes (SPEC.md 13.8.2), so on that machine offset 28 is the NEXT\n; window's W_FLAGS and offset 32 is its W_W - naming any of the three there\n; reads, or writes, a window that is not yours.",
+   "new_text": "; THE LAST THREE WORDS ARE kern_big's ALONE. The 128KB kernel's PUBLISHED\n; words stop at 28 bytes (SPEC.md 13.8.2), and what follows there is the\n; kernel's own per-window state: offset 28 is that window's size-changed\n; handler, 30 its wake handler and 32 its close negotiator - naming any of\n; the three there overwrites a word the kernel dispatches through.",
+   "why": "kern_small's W_SIDE is 28 (wm.inc:104) and W_ONSZ/W_ONWK/W_ONCL are W_SIDE+0/+2/+4 (wm.inc:112-114); the record is 65 bytes there, not 28, so offset 28 is the same window's word."
+  },
+  {
+   "file": "apps/os88api.inc",
+   "old_text": "the stride is 72 on one shipping kernel",
+   "new_text": "the stride is 74 on one shipping kernel",
+   "why": "wm.inc:127 WIN_SIZE equ 74 on KERN_BIG (65 on kern_small, as the text says)."
+  },
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": "; Three cells need more than that and jump to a stub below instead:",
+   "new_text": "; Some cells need more than that and reach a shared body below instead -\n; two of the shapes (SPEC.md 20.3 lists every one):",
+   "why": "Only two families (X, N) follow; the table has SLOT, X, rare, JCELL, FCELL, FJCELL and INLINE shapes (t_api_abi.py SHAPES, line 261)."
+  },
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": "; Fifteen routines were ONE memory access and a `ret` - a getter, a setter or",
+   "new_text": "; Fifteen routines were ONE memory access and a `ret` when this shape was made\n; (t_api_abi.py's INLINE ledger holds today's twenty) - a getter, a setter or",
+   "why": "tests/unit/t_api_abi.py's INLINE dict has 20 rows on kern_big today (plus 3 FIXED register-only cells)."
+  },
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": "; --- every published slot keeps its NUMBER (SPEC.md 20.8) -------------------\n;     This block was once moved down three cells when the paragraph-counting\n;     arena was retired, and a package built against the older SDK then\n;     called wm_resize where it meant cm_alloc. The numbers are the ABI:\n;     the three arena slots stay at 0x01B8..0x01C8 as wrappers over the\n;     claim heap (osapi_cm_*, kernel/memory.inc), the six slots after them\n;     keep their published numbers, and everything ADDED since starts at\n;     0x0200 - the first free number above them.",
+   "new_text": "; --- the v3 arena's three cells were WITHDRAWN (SPEC.md 20.3.1) -------------\n;     They were 0x01B8..0x01C8, wrappers over the claim heap. Kernel size\n;     pass 4 deleted them and moved every later cell down, as 20.3.1 now\n;     requires of a withdrawn cell; the (dropped) lines below are their\n;     record, not live cells.",
+   "why": "The three arena lines are '; (dropped)' comments (kernel.asm:2785-2790) and SPEC.md 20.3.1 records pass 4 deleting them and renumbering; ABI-BREAK-LIST 11 already flags this block as stale."
+  },
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": "; is why this cannot be an OSAPI_NSTUB: every other N cell's name is an",
+   "new_text": "; is why this cannot be an N cell (api_rn): every other N cell's name is an",
+   "why": "No OSAPI_NSTUB macro exists; N cells are OSAPI_RNCELL -> api_rn (kernel.asm:2516-2518, 4747)."
+  },
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": "                                ; OSAPI_NSTUB avoids it by copying BEFORE it",
+   "new_text": "                                ; api_rn (the N body) avoids it by copying BEFORE it",
+   "why": "No OSAPI_NSTUB macro exists; api_rn calls api_cpname before KDS (kernel.asm:4753-4757)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "at `0x04EF` a 118th, **1,253 bytes**, and `osapi_table_end` is `0x04F5`.",
+   "new_text": "at `0x04EF` a 118th, **1,253 bytes**, `OSAPI_VOL_CHECK` (§118.14.2) at\n`0x04F5` a 119th, **1,259 bytes**, and `osapi_table_end` is `0x04FB`.",
+   "why": "kernel.asm:4440-4449 puts OSAPI_VOL_CHECK at 0x04F5 and osapi_table_end at 0x04FB; the length guard (kernel.asm:4493) counts 119 rare cells, 1,259 bytes."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "name promises. `kernel.asm` asserts the table's start; its span is whatever\nthe cells add up to.",
+   "new_text": "name promises. `kernel.asm` asserts the table's start, and its length against\nthe cell counts; the span is whatever the cells add up to.",
+   "why": "kernel.asm:4489-4495 asserts OSAPI_TABLE_OFF == 0x0010 and OSAPI_TABLE_LEN == 44*8 + 11*7 + 119*6 + ..."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "follows is the X, cold-X, N or SLOT body exactly — `api_rx` falls into\n`api_x`, `api_rxc` into `api_xc`, `api_rn` into `api_n`; `api_rs` is the",
+   "new_text": "follows is the X, cold-X, N or SLOT body exactly — `api_rx` falls into\n`api_x`, and `api_rxc` and `api_rn` carry the cold-X and N bodies themselves\n(there is no separate `api_xc` or `api_n` any more); `api_rs` is the",
+   "why": "kernel.asm:4622 '(was api_xc: ...)' and 4750 '(was api_n: ...)': neither label exists; the bodies are inside api_rxc and api_rn."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "api_xc:\n    push ds\n    push es\n    push ds\n    pop es                          ; ES = the caller's DS\n    push cs\n    pop ds\n    call KERNEL_SEG:api_far         ; COLD_SEG:BP",
+   "new_text": "    push ds\n    push es\n    push ds\n    pop es                          ; ES = the caller's DS\n    push cs\n    pop ds                          ; DS = KERNEL_SEG\n    push cs                         ; COLD_SEG:BP - the far frame is CS\n    call api_far                    ; and a near call",
+   "why": "kernel.asm:4618-4630: api_rxc has no api_xc label and builds the far frame with `push cs / call api_far`, not `call KERNEL_SEG:api_far`."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`OSAPI_CSLOT`, `OSAPI_FARCELL`, `OSAPI_JSLOT`) are still defined in\n`kernel.asm` and no cell uses them.",
+   "new_text": "`OSAPI_CSLOT`, `OSAPI_FARCELL`, `OSAPI_JSLOT`) have been deleted from\n`kernel.asm`; no macro by those names is left.",
+   "why": "grep '%macro OSAPI_CXCELL|NCELL|CSLOT|FARCELL|JSLOT' kernel/ finds nothing; only '(dropped)' comment lines name them."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "OSAPI_SND_CAPS           out AX = caps word (§34.2), BL = tone route\n                         (always 0 = speaker), DX = 1 (the speaker is\n                         always present).",
+   "new_text": "OSAPI_SND_CAPS           out AX = caps word (§34.2), BL = tone route\n                         (0 = the speaker, 1 = a sound driver's sink,\n                         §34.8), DX bit 0 = the speaker (always), bit 1 =\n                         a sound driver is loaded. kern_small: BL = 0,\n                         DX = 1.",
+   "why": "apps/os88api.inc:528-533: BL = 0 the speaker / 1 a sound driver's sink (34.8), DX bit 1 = a sound driver is loaded; 'On kern_small BL = 0 and DX = 1, always'."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "OSAPI_SND_PLAY           PCM clip (§34.4): ES:SI = 8-bit unsigned mono,\n                         CX = count, DX = rate Hz (N = 1193182/rate must\n                         land in 74..255); BLOCKS for the clip; a mouse\n                         click aborts it. out AX = 0 ok / 1 busy / 2 rate\n                         / 3 disabled-by-user / 4 no sink / 5 aborted.\n                         ES restored per §1.",
+   "new_text": "OSAPI_SND_PLAY           the PCM_EXCL clip's door (§34.4). AL = 0 GRANT:\n                         CF=1 AX = 1 busy / 3 disabled by the user / 4\n                         nothing can sound; CF=0 the PWM is yours, the\n                         scheduler locked, BX = the mouse button byte's\n                         offset in KERNEL_SEG. AL = 1 RELEASE, played out;\n                         AL = 2 RELEASE after a click. AX spent. UI task\n                         only. The blocking clip player with the old\n                         ES:SI / CX / DX contract is apps/os88pcm.inc's\n                         os88pcm_play.",
+   "why": "apps/os88api.inc:539-553 defines OSAPI_SND_PLAY as the AL = 0 GRANT / 1, 2 RELEASE door and names os88pcm_play as the clip player; ABI-BREAK-LIST 11 already records this block as stale."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "OSAPI_FSX_CAPS           out AX = the FSXM_* bitmask the live adapter can\n                         set, DL = vid_kind (§53.4). Any context.",
+   "new_text": "OSAPI_FSX_CAPS           in BX = the window to ask about (0 = the\n                         frontmost); out AX = the FSXM_* bitmask that\n                         window's display can set, DL = that display's\n                         VID_* kind (§53.4). Any context.",
+   "why": "apps/os88api.inc:5301-5307: 'in BX = the window to ask ABOUT (0 = whatever is frontmost); out AX = bitmask ... settable on the display that window is on, DL = that display's VID_* kind'."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "                         flags (bit 0 FSXF_KEEPWORKER, bit 1\n                         FSXF_FASTTICK). X — the ownership",
+   "new_text": "                         flags (bit 0 FSXF_KEEPWORKER, bit 1\n                         FSXF_FASTTICK, bit 2 FSXF_RATE §53.2.2, bit 3\n                         FSXF_REAL §53.2.3). X — the ownership",
+   "why": "apps/os88api.inc:5339-5345 and 6878/6895: CX bit 2 = FSXF_RATE (53.2.2), bit 3 = FSXF_REAL (53.2.3)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "OSAPI_FSX_WAIT           in AL = 0 next tick / 1 vertical retrace.\n                         Bracket-only, CF=1 outside one.",
+   "new_text": "OSAPI_FSX_WAIT           in AL = 0 next tick / 1 vertical retrace / 2\n                         the next IRQ0, yielding (FSXW_FRAME, §53.5.1).\n                         Bracket-only, CF=1 outside one or on an unknown AL.",
+   "why": "apps/os88api.inc:5401-5410 and 6974: FSXW_FRAME (2) waits for the next IRQ0, yielding; 'CF=1 outside or on an unknown AL'."
+  },
+  {
+   "file": "tests/unit/t_api_abi.py",
+   "old_text": "SPEC.md 20.3's table is 8-byte\ncells at 0060:0010 + 8n, and",
+   "new_text": "SPEC.md 20.3's table is cells of\nseveral lengths packed from 0060:0010, and",
+   "why": "The same docstring (lines 22-45) and kernel.asm:4493 describe variable-length cells; CELL = 8 at line 143 is only 'the decode window, not the stride'."
+  },
+  {
+   "file": "tests/unit/t_api_abi.py",
+   "old_text": "(`drivers/os88drv.inc` owns 0x0248)",
+   "new_text": "(`drivers/os88drv.inc` owns OSAPI_DRV_TASK, 0x01D9)",
+   "why": "drivers/os88drv.inc:624 %define OSAPI_DRV_TASK KERNEL_SEG:0x01D9."
+  },
+  {
+   "file": "tests/unit/t_api_abi.py",
+   "old_text": "# Cells that exist in the kernel and are deliberately NOT published by this\n# branch's SDK. 0x01B8..0x01C8 are `main`'s three paragraph-counting arena\n# slots, kept live so a main-era package still runs and answered through\n# converting wrappers (apps/os88api.inc's \"KB-counting memory slots\" note);\n# new code uses the KB slots at 0x0200+. They are not a free list.",
+   "new_text": "# Cells that exist in the kernel and are deliberately NOT published by this\n# branch's SDK go in COMPAT, which is EMPTY. COMPAT_OLD is its record and\n# nothing reads it: kernel size pass 4 deleted every cell on it and moved the\n# table down (SPEC.md 20.3.1), so none of these numbers is a cell any more.",
+   "why": "COMPAT = {} at line 160 is the only table main() reads (lines 559-566); the arena cells, 0x0568 and 0x0580 were deleted (SPEC.md 20.3.1, kernel.asm '(dropped)' lines)."
+  },
+  {
+   "file": "drivers/os88drv.inc",
+   "old_text": "                                ;   out whatever you define; CF and AX reach",
+   "new_text": "                                ;   out whatever you define in AX, BX, CX, DX\n                                ;       and SI - but PRESERVE DI, which the\n                                ;       package is promised back; CF and AX reach",
+   "why": "drv_pkg_call_x pops the caller's DI before the far call and restores only BP and DS after it (driver.inc:6614-6662), while apps/os88api.inc:3456-3460 promises DI 'comes back yours'."
+  }
+ ]
+}
