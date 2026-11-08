@@ -37174,6 +37174,100 @@ is the value every widget entry already leaves there. A DVK_DRV volume
 (HDD.DRV's rung 1) never runs this loop at all. `tests/fpgnotch.py` is the
 gate that a LIVE bar still moves.
 
+#### 18.91.7 …and a PicoMEM 2's disk is read EIGHT sectors a call at most, IRQ0 masked for it (kern_big, kern_emu)
+
+**On a PicoMEM 2 the card's sound goes silent whenever an interrupt holds
+the PC inside the card's int 13h** (docs/reports/PICOMEM2-STUTTER-2026-11-07.md).
+Per sector the card reads its SD, mixes once and asks the PC to copy 512
+bytes out of its window - with interrupts ON - then waits for the copy
+mixing nothing, with 5 ms of sound mixed ahead. A hook that decodes a frame
+inside that copy (Video Battle's, Video Player's: SPEC.md 126.3, 98.3) is a
+hole in the card's output as long as the hook. Measured on 5150 #1 with
+PM2-10-4-26, VIDSND's T rows: tracks read under a 4-16 ms hold broke the
+tone 228-508 times in 5 s; tracks read with NO hold broke it 0 times, and so
+did one sector a call with IRQ0 masked for the call. That is the owner's
+"short, repeated stuttering" during heavy actions - and it says what the
+cure needs: not short calls, but no hook inside one.
+
+So the transfer loop reads such a disk that way:
+
+- **`drv_sniff`'s hard-disk branch** (driver.inc, the boot overlay's
+  window half) asks once, when the BIOS has a fixed disk: `dsk_fdd_pmemu`
+  (18.97.6 - port 2A3h's ramp, the card BIOS's function 0, its segment)
+  answers for the card's attribute slots in order, FDD0, FDD1, then
+  **HDD0..3 as slots 2..5**, bit 7 = the card serves the unit; the first
+  hard slot that answers is unit 80h + (slot - 2). Then function 3 (int 13h
+  AX=6003h DX=1234h): AL = the board, **11 = a PicoMEM 2.0** (a BIOS without
+  it hands AX back, AL = 3). That unit goes in **`[dsk_pmhd]`** (`.text`,
+  FFh = none). A 1.x is not matched: its firmware (`firmware/picomem1/`)
+  mixes while it waits, and its machine is a 286 whose disk rate this would
+  cost.
+- **`dsk_xfer`**, for a unit at or above `[dsk_pmhd]`, cuts the run to
+  **`DSK_PMRUN` = 8** sectors at most and sets IRQ0's bit in the 8259's mask
+  before the int 13h, clearing it after. The card's disks follow the PC's
+  own (an ST-225 is 80h, the card's first image 81h), so a real disk below
+  them keeps its runs. An IRQ0 that falls in the masked call waits in the
+  IRR: eight sectors are ~12-13 ms on the field machine, just under Video
+  Battle's 13.7 ms period (`VB_DIV`) and well under the 18.2 Hz tick; a
+  call that runs past the period merges two of its ticks. The cap is the hook's
+  latency, not the card's: the card keeps up with an unheld run of any
+  length.
+- **ONE sector a call was the first build, and the field priced it at
+  half the disk**: VIDDISK on 5150 #1 read 125.2 / 98.0 / 68.1 / 35.6 KB/s
+  under its hook at 0 / 25 / 50 / 75% against 294.3 / 223.9 / 147.1 / 72.8
+  multi-sector. The raw int 13h said 20% (a sector a call 1.83 ms, 1.53 a
+  sector in a track); through the kernel each one-sector run paid the
+  transfer loop's whole per-run cost, 64 calls and ~5.1 ms a sector for
+  32 KB - too slow to feed a clip encoded for the ST-225's 119 KB/s. FOUR
+  a call (2026-11-08) read 97 KB/s while reading in the owner's battle
+  (VBPROF: 15 stalls, 50 frames of sound late, against 148 and 115 at one)
+  and TakeOnMe stalled 11 times: a clip's SPIKES, not its average, are what
+  the reader must cover, and a battle's rings are smaller than a play's.
+  Six a call is the per-run cost a sixth as often. SIX (2026-11-08, with
+  the bookmarks of 126.4.7) read 111 KB/s while reading and still dropped
+  sound in the heavy clips - the reader busy 63-77% of their time at
+  78-82 KB/s - so EIGHT is the next try. Its own rate is VIDDISK R's to
+  measure on the iron, and `5150-picomem2`'s 135,000 (98.2) charges none
+  of it until then.
+- Resident: **40 bytes of `.cold`** in `dsk_xfer` (its parity pad among them) and the byte in `.text`.
+  18.95.12's no-fill test is 10 more of `.cold`.
+  The probe is window-half code and costs no resident byte - but the window
+  half was full (5,119 of 5,120), so the DSK_PMHD builds drop four of
+  `sched_init`'s zero stores (its slot-clearing and cycle-clearing loops,
+  `sch_wd_hits`, `sch_pit_last`'s high word), which wrote zero over zero:
+  `.bss` lies wholly in the file's zero gap between `.text` and `.ovl` and
+  stage 2's one read lands it (SPEC.md 10's `evq_init` went on the same fact). The
+  window half is 5,112 now; the boot blob and its read are as they were.
+- **Not kern_mega** (its int 13h is the real-mode bracket's), **not
+  kern_small** (no room in its boot halves, and a 128KB machine with a PicoMEM 2 is not one
+  anybody runs), and not the card's floppy images, which nothing streams.
+
+#### 18.91.7.1 …unless the card runs OUR firmware, which mixes while it waits, and says so in BX
+
+The hold above exists only because the stock firmware stops mixing while it
+waits on the PC. `firmware/picomem2/` is the June source (`be7b2e6`, the
+firmware PM2-6-21-26 shipped) with `pm-pr`'s fixes, which are board-
+independent: the card mixes in every PC-command wait of an int 13h
+(`pm_pccmd_wait_hook`) and in the SD driver's waits, reads a call's sectors
+in runs with ONE copy command a run, and waits for the PC's copy however long
+it takes. It also sets the firmware-revision word the card BIOS's function
+3 hands back in `BX` to **8088h** (Elendilon/ISA-PicoMEM `pm-pr`, `6204e0d`;
+the stock firmware leaves it 0).
+
+`drv_sniff` reads `BX` beside `AL` = 11 and, at 8088h, stores the unit
+**plus 40h** in `[dsk_pmhd]`. No unit is at or above it, so `dsk_xfer`
+neither masks IRQ0 nor cuts the run: a call reads as far as the track and
+the cylinder let it, and the timer hook decodes while the card reads its
+SD. §18.95.12's no-fill test masks the 40h off, so the cache still never
+fills from the card's disk - a fill is a second copy on either firmware. 8
+bytes of the window half (5,120 of 5,120 now) and 3 of `.cold`.
+
+On the CGA twin running that firmware (libpmhost v2 with both patches),
+6 s of Bolt: **33 int 13h calls against 100** with the stock firmware's
+behaviour (the same build without the wait hook, which reads 8088h nowhere),
+sound frames late 5 -> 3; §18.91.7's VIDSND rows had already shown the wait
+hook clean in every row, a 16 ms hold inside a copy included.
+
 ### 18.92 The diskette parameter table is OURS, and EOT is why
 
 **int 1Eh is not an interrupt.** It is a far pointer to an 11-byte table the
@@ -37544,7 +37638,7 @@ is the kernel's and its layout may change:
 | 0 | 2 | the mount generation it was seeded under; **0 = not seeded** |
 | 2 | 1 | the volume |
 | 3 | 1 | 0 |
-| 4 | 2 | 0 |
+| 4 | 2 | `+12`'s cluster index, as the last call left it - non-zero after a read on a kernel that seeks forward (18.4.8.2) |
 | 6 | 2 | the last cluster the previous call read, one FAT link before `+12`'s |
 | 8 | 4 | the file's size |
 | 12 | 4 | **the offset**: where the next call reads. A cluster multiple |
@@ -37639,7 +37733,9 @@ customer while seven other loops read a file a chunk at a time through
 now, and none of them changed shape to become one, because the offset
 **stays the caller's**: a helper takes `READ_AT`'s own registers plus a
 cursor, compares the cursor's `+12` with the offset asked for, and re-seeds
-the cursor there when they differ. A seek, a restart, a rewind and a retry
+the cursor there when they differ - or, since 18.4.8.2, MOVES it there when
+its `+4` says the kernel walks forward, so a seek ahead costs the links it
+skips and a seek back the walk it always did. A seek, a restart, a rewind and a retry
 after an error therefore need nothing at the call site - the conversion is
 the call and a 16-byte cursor.
 
@@ -37685,6 +37781,148 @@ slower for the change:
 bytes of cursor per reader and 76 bytes of helper (`os88_rseq`, measured) per
 package or driver that carries one, `OP_BSS` included in every package with
 parts.
+
+#### 18.4.8.2 …and a cursor MOVED forward walks from where it stands; a copy of one is a bookmark
+
+**A seek used to be a walk from the front, whatever it cost.** The cursor
+knew only "the next call reads one link past `+6`", so a caller moving `+12`
+had to zero the cursor (§18.4.8's rule) and pay the stat and the whole chain
+again. Measured on 5150 #1 (2 KB clusters, PicoMEM 2): **~330 µs a link,
+140 ms a MB** - Video Battle's clip heads 5.8 MB into a 6.5 MB bundle cost
+961-1,153 ms to start, every time (docs/reports/PICOMEM2-STUTTER-2026-11-07.md),
+and an ST-225 pays the same walk plus its seeks.
+
+So the kernel now keeps, in the cursor's own reserved word, **`+4` = the
+cluster index of `+12`'s offset** (`RSQ_IDX`), written by every call that
+read. On a valid cursor, `dwr_stat` walks **`(+12 / cluster) - [+4] + 1`
+links from `+6`**: one when the caller left `+12` where the last call put it
+(the stream, as before), more when the caller moved it FORWARD. Moved BACK
+past `+6`, it goes from the name, as a cold cursor does. A misaligned `+12`
+is refused as before. 34 bytes of `.cold`.
+
+What that gives a caller, with no new slot and nothing changed for one that
+zeroes its cursor as before:
+- **A forward seek costs the links it skips, not the links before it.**
+  Move `+12`, keep the rest.
+- **A copy of a cursor is a BOOKMARK.** The 16 bytes as a call left them
+  name a place in the file: copied back later, the next call walks one link
+  from there - **a clip 5.8 MB in starts as if it were 32 KB in**. A
+  bookmark goes stale exactly when a cursor does (§18.4.8's generation and
+  volume), and then the kernel re-seeds it from the name, silently, at its
+  `+12`: never wrong, only slow once.
+- **A backward seek is a bookmark and a forward one.** The chain only links
+  forward, so nothing can walk back; a caller that keeps bookmarks behind it
+  - a player, one a MB as it plays - reaches any earlier place by copying
+  the nearest one at or before it and moving `+12` on. No kernel memory per
+  stream, which is what a kernel-kept index would have cost.
+- **Which kernel it is: `+4` non-zero after a read.** An older kernel never
+  writes it (a cursor is born zeroed), and an older kernel MUST NOT be
+  handed a moved `+12` - it walks one link and reads the wrong cluster. So a
+  caller moves a cursor only when `+4` is set, and zeroes it otherwise.
+  `os88_rseq` (§18.4.8.1) still zeroes on every move: its callers load
+  package parts and seek rarely, and the test is 6 bytes in every package
+  that carries it - WireFleet sits at `APP_MAX_SIZE` to the byte, its save
+  buffer padded to 512, and those 6 cost it a rung it does not have.
+
+`tests/vidkern.py`'s row G holds it: hot at 1 MB, moved forward to 3 MB, a
+chunk skipped, moved back to 2 MB, every byte checked; then a bookmark taken
+at 12 MB, a read at 0 between, the bookmark copied back - its read 439 ms
+against the cold seek's 1,813 on MartyPC's XT-IDE, one FAT-area int 13h call.
+Broken on purpose (the old one-link walk with `+4` still written) the moved
+cursor reads two chunks from the wrong offset.
+
+#### 18.4.8.3 …and a caller that MAPPED its file hands each call the run it reads in, and the FAT is not read
+
+**A stream reads the FAT for every cluster it crosses, however it lays out.**
+`dsk_read_chain` follows the chain a link a cluster, and each link is a
+lookup in the volume's FAT window (18.8), which on a fixed disk covers 2,304
+clusters - 4.6 MB at 2 KB clusters. Video Battle's bundle is 6.5 MB and reads
+two places at once (a clip 5.5 MB in, the music 0.5 MB in), so the window
+moved between them **13 times in 6 s of Bolt** on the PicoMEM 2 twin, nine
+sectors each; on an ST-225 each move is a seek to the FAT and back. And every
+link is a call (~330 µs a link through the thunks on 5150 #1, 18.4.8.2).
+
+The kernel cannot know where a program will read next; **the program can**,
+and a file copied onto a disk in one go is one contiguous run of clusters, or
+a few. So the caller holds the file's layout and tells each call the one run
+it reads in, which is the trade of §5's packages drawing their own lines:
+the knowledge sits with the code that has it, and the kernel's part is a
+compare.
+
+**The cursor grows to 22 bytes for a caller that asks** (`FSEQ_XSIZE`); a
+16-byte cursor is read and written exactly as before, and the kernel copies
+16 back to every caller - the run is the caller's and is never written. `+3`,
+the byte that was 0, is the caller's FLAGS:
+
+| off | size | |
+|---|---|---|
+| 3 | 1 | `FSEQF_RUN` (1): `+16..+21` describe a run - `FSEQF_MAP` (2): this call MAPS |
+| 16 | 2 | the run's first cluster |
+| 18 | 2 | its last |
+| 20 | 2 | the generation the map answered in `DX` |
+
+**To map**: `+3` = `FSEQF_MAP`, `CX` = how many runs the buffer at `DX:BX`
+holds (4 bytes a run: first cluster, last; at least 1), `SI` the name. The
+kernel walks the chain once from the name, to its end or until `CX` runs are
+written, in FILE ORDER - so a FAT with a loop in it ends too, every jump back
+being a run. Out `CF=0`, `AX` = the runs written (`CX` of them: there may be
+more, and a read past the last is the FAT walk as before) and `DX` = the
+generation they hold under; the cursor is not touched, and a map reads no
+data. `CF=1` `FERR_*` as a read's. A redirected volume (62.9) has
+no clusters and refuses `FERR_NAME`.
+
+**To read with one**: `+3` = `FSEQF_RUN`, `+16`/`+18` = the run holding the
+cluster the call starts in (the caller finds it: offset / cluster bytes, then
+the runs' lengths summed in order), `+20` the map's `DX`. While
+that call runs, `dsk_next_clus` answers **cluster + 1 for any cluster from
+`+16` to one below `+18`** without reading the FAT; the run's last cluster
+and everything outside it are looked up as before, so a read that runs past
+its run is correct, only slower. The run is honoured only when `+20` is
+`[dsk_mgen]` and the cursor is either cold (generation 0: it stats the name
+on the current volume) or stamped with the current volume (`+2`, the
+kernel's) - a write anywhere on the volume, or a mount that reads a boot
+sector, makes it a stale map, and a stale map is today's FAT walk, never a
+wrong read. A COLD seek is where a run saves the most: the walk to the offset
+is links inside the run, and none of them reads the FAT.
+
+**What it trusts.** Within one call a run is a statement about the FAT: a
+cluster in a file's run is that file's, and its link is the next one. A
+caller that lies gets its own volume's wrong clusters, which is §18.4.8's
+"READ_AT with a wrong offset and nothing worse" - the hint is live only
+inside a READ_SEQ call, which writes nothing, and the kernel copy's `+18`
+is 0 at every other moment, so no write, free or truncate ever walks a chain through it.
+
+Resident, measured (`tools/os88rdiff.py` against the commit before):
+**+139 bytes of `.cold` and +6 of `.text`** - the compare in `dsk_next_clus`
+(15), the wrapper's honour test and its clear (~48) and the map (~76), and
+`dwr_c`'s six more bytes. kern_big alone (`DSK_RUN`): kern_dos shares this
+source and has no room, and kern_small's door answers `FERR_NAME` to both,
+as to every READ_SEQ.
+
+**Its callers, and what they keep.** Video Battle maps its bundle when it
+builds its bookmarks (126.4.7): 16 runs, and every read goes through one
+22-byte scratch cursor that carries the run holding its first cluster, its
+rings' 16-byte cursors copied in and back (`vb_rseq`, `VB_NOMAP` the A/B).
+Video Player maps its video's FIRST run only, when it opens it (98.3.25),
+straight into its two stream cursors, which grew to 22 bytes; a video
+copied in one go is that run, and a fragmented one reads past it through the
+FAT as before.
+
+**Measured.** `tests/vidkern.py`'s row H, MartyPC's XT-IDE (2 KB clusters):
+the 13 MB stream maps as ONE run, and a COLD seek to 12 MB handed it then
+two chunks read take 1,098 ms with **no** FAT-area `int 13h` call, against
+1,922 ms for the cold seek alone without it; broken on purpose (the run
+answering cluster + 2) the reads fail and the row is red. The owner's
+battle on the CGA PicoMEM 2 twin, 6 s of Bolt: the FAT window moved 13
+times without the map and **0** with it, `int 13h` calls 124 -> 94. On
+86Box's `pc5150` with its ST11M and ST-225 (CGA, `tools/os88hdd.py --st11`,
+the same VBATTLED with and without the map, 86Box's timing): the same
+1.14 MB read in 4.6 s of the reader's time against 5.3 s, its slowest
+32 KB 137 ms against 192.
+
+The cleaner ABI-break shape - a slot of its own and the run fields
+first-class in every cursor - is docs/plans/ABI-BREAK-LIST.md's row
+R.extent.
 
 ### 18.4.9 `OSAPI_FILE_WRITE_SEQ` — a streaming append, whose place the KERNEL keeps (`kern_big`)
 
@@ -39906,6 +40144,29 @@ prefetch call than as an armed byte.
 Not on kern_dos (no room in its image) and not on kern_mega (its store above
 1MB lands through a nine-sector bounce): `DSK_RAHINT` is undefined there, and
 kern_mega drops the cache at step 2 instead (before the FAT window).
+
+#### 18.95.12 …and a PicoMEM 2's disk is never FILLED, only served (kern_big, kern_emu)
+
+A fill is a bet that the sectors after a short read will be wanted before
+the slot is evicted, paid for in revolutions saved. **An SD card has no
+revolution to save**, and on a PicoMEM 2 the bet costs twice over: the
+chunk's ninth sector is a second int 13h under 18.91.7's eight-sector cap,
+and every byte served out of the slot is a second `rep movsw` the 8088 makes
+itself, on top of the one the card's BIOS already made out of its window. A
+streaming read is not exempt the way 18.95.1 promised: the gate spares a read
+only while what it still wants covers a chunk, so the LAST eight sectors of
+every read, every short read (Video Battle's 4 KB music pieces) and every
+one-sector FAT lookup each took a fill.
+
+So `dsk_rah_fill`, for a unit at or above `[dsk_pmhd]` (18.91.7), answers
+as if there were no surplus: the caller reads direct. What a slot already
+holds is still served, so nothing else about §18.95 moves, and a real disk
+below the card's units (an ST-225 at 80h) keeps its fills.
+
+Measured on the CGA PicoMEM 2 twin, the owner's battle, 6 guest seconds of
+Bolt from the same menu walk, twice each (identical both times): **sound
+frames late 19 -> 4**, int 13h calls 130 -> 124, `dsk_copy_seg_x` 69 -> 0.
+Resident: **10 bytes of `.cold`**.
 
 ### 18.96 Formatting a floppy — the mount's verdict, run backwards
 
@@ -201082,7 +201343,7 @@ without them (`ffmpeg` capability).
 |---|---|---|---|---|
 | `5150-st225` (default) | 119,000 B/s | 50% / 85% | PCM8 11,025 Hz | the owner's machine, its disk measured (VIDDISK, 130 KB/s under a half-machine hook with §18.91.5's cylinder reads; 96,000 for a kernel built `NOHDCYL=1` or older than build 458) |
 | `5150-xtide` | 96,000 | 50% / 85% | PCM8 11,025 | an XT-IDE the CPU copies, measured on MartyPC under the cylinder bound (98.2.1.3; 91,000 under the track's) |
-| `5150-picomem2` | 150,000 | 40% / 80% | PCM8 22,050 | predicted |
+| `5150-picomem2` | 135,000 | 50% / 85% | PCM8 22,050 | the owner's 5150 #1 with a PicoMEM 2 (PM2-10-4-26) as its hard disk, measured (2026-11-07, docs/reports/PICOMEM2-STUTTER-2026-11-07.md): the CPU copies every byte, so the disk falls with the decode's share - VIDDISK 294.3 KB/s idle, 223.9 / 147.1 / 72.8 at 25 / 50 / 75%. 0.9 of the 50% row, as `5150-st225`'s. Its sound stutters while the disk is read under a hook on that firmware, whatever the budget |
 | `floppy` | 15,000 | 50% / 85% | PCM8 5,512 | predicted |
 | `286-slow` (was `286`) | 150,000 | 150% / 250% of an 8088's | PCM8 22,050 | predicted: a slow 6-8 MHz AT, a stand-in no machine has measured |
 | `286-fast` (was `286-pvga`) | 448,000 | 225% / 375% of an 8088's, priced by its own table | PCM8 22,050 | a fast 16 MHz 286 with VGA on the board, measured on a real one - the owner's AMD 286 with a PVGA1A, whose RAM has wait states: decodes 12-29% slower than `286-speeddemon` (docs/reports/VIDBENCH-PVGA286-2026-10-08.md) |
@@ -202144,7 +202405,7 @@ was left was the peak's 2 frames and the 32 KB record's 17. The owner's
 3.375 encode played on the 286 with 0 late and 0 stalls, sound OFF - the
 case `auto` has not been played in is a Sound Blaster beside it.
 
-- **Without a curve** - `5150-picomem2`, `floppy`, `286` (a 6 MHz AT,
+- **Without a curve** - `floppy`, `286` (a 6 MHz AT,
   predicted) - the average is the ONLY thing that leaves the reader its
   time, so `auto` there is the profile's own `avg`. Those want a curve
   measured (VIDDISK on the machine) more than a number changed.
@@ -208424,6 +208685,33 @@ ring is up to 80 KB smaller for it. +60 bytes of the arm's image (63,832;
 `VPDIAG=time` 64,799, 225 to spare), the shipped player byte-identical.
 `tests/megarmbext.py`'s player legs are the gate: both plays real on an
 extended desktop, and `FSXR_ROOM` on both without it.
+
+#### 98.3.25 Bookmarks: a seek walks from the nearest place it has, not the front (2026-11-08)
+
+A seek (the bar, Left and Right, a key's re-entry, the hold handing the
+stream back) zeroed `vp_cur` and set its offset, so its first read walked
+the file's chain from the first cluster: 142 ms a MB on the W0 machine,
+**up to ~2 s** at 12 MB on 5150 #1 - a jump BACK cost that every time,
+and a jump forward as much as a jump from the start. On a kernel that walks
+a moved cursor forward (18.4.8.2):
+- **`vp_bmrec`, after every fill** (`vp_fill` is a wrapper now; the body is
+  `vp_fillb`, which `vp_tpat`'s two-tier jump patches), copies `vp_cur` into
+  the slot of the MB its offset is in, when that slot is empty: the first
+  place seen in each MB, the nearest to its start. 32 slots, 16 bytes each
+  (`vp_bm`, 512 bytes of image, zeros); `vp_open` clears them, a bookmark
+  naming no file.
+- **`vp_curseek`, at both seeks**, starts the cursor from the nearest place
+  at or before the target - itself, when it walks forward and is not past
+  it, or a bookmark - and moves `+12` there; nothing: zeroed, as before. A
+  jump forward walks the links it skips; a jump back into what has played,
+  at most a MB of them (~140 ms on 5150 #1). A stale bookmark (a write, a
+  remount) the kernel re-seeds from the name: never wrong, slow once.
+- A kernel without the forward walk leaves `+4` 0 and records nothing.
+- **The table is the shipped player's** (`VP_BMN` 32). The VPDIAG builds and
+  kern_mega's arm were each within a few hundred bytes of `APP_MAX_SIZE`
+  and have `VP_BMN` 0: their seeks walk forward from the cursor itself, and
+  a jump back is the walk it was. Margins after: shipped 1,326, VIDEOD 200,
+  VIDEOR 274, kern_mega 391 bytes.
 
 ### 98.4 The window: the Preview (wave 6)
 
@@ -243503,6 +243791,30 @@ The tables, a record after a record:
 - **a picture, 8 bytes**: its column and row in the band, its cells and
   rows, its paragraph in the PICTURES region.
 
+#### 126.2.6 An opening's SEAM: the silence at a cut taken out (`os88vbt.seam_join`)
+
+Openings cut from one clip on one frame are exported as files of their own,
+and each export can carry a few milliseconds of silence at the cut - the
+owner's Demo Battle 2: **17.1 ms** at `01-Opening`'s end, **10.2 ms** at
+`02-Opening`'s start, and the card on the PicoMEM 2 twin played **26.8 ms of
+exact silence** where the source has none: "the small music drop between the
+two opening clips". The engine's hand-over is exact (126.3: the next
+opening's sound starts at the write position the moment the last one's
+ends); the gap is in the records.
+
+So the builder joins every opening's own sound to the one before it, as the
+project's `"seam"` on the later opening says (`vbtproj.set_opening`):
+
+| seam | |
+|---|---|
+| `auto` (absent) | trim, then shift |
+| `trim` | the later opening's head frames dropped while each is wholly silent AND black (`vbtana.dark_at`, the palette rules' own test) - picture and sound together |
+| `shift` | what is left of the silence, when it is under a frame, closed: the later sound's first samples fill the earlier one's silent tail and the later sound moves EARLIER by that much - at most a frame ahead of its picture (27.3 ms in Demo Battle 2, under half a frame at 15 fps) |
+| `none` | as exported |
+
+The build says what it did on stderr. `tests/unit/t_vbtseam.py` (row
+`vbtseam`) holds the cases.
+
 ### 126.3 The engine
 
 Three pieces, the Video Player's own shape (98.3):
@@ -244108,7 +244420,10 @@ its cursor's offset does not seek.
 5. a clip playing, to its ring's top: what is on the glass first;
 6. (after a key, nothing more for a third of a second, `VB_KQUIET`) the head
    of the clip under the menu's cursor;
-7. the head of the enemy's attack;
+7. the head of the enemy's attack - or, while a plan whose rolled damage
+   takes the enemy's last HP plays, the head of the VICTORY clip (`vb_begin_plan`
+   sets `[vb_eclip]` to it: the enemy has no next move, and read at the
+   ending the head held the picture 316 ms on 5150 #1, 2026-11-08);
 8. the music, to its ring's top.
 
 A ring is given to a clip only if it is not playing and not holding the
@@ -244584,6 +244899,39 @@ bracket** (SPEC.md 53.2.3).
 `tests/vbtmega.py` on Bochs and, `--emu 86box`, on the mr286 (rows
 `vbtmega`, `vbtmega86`) are the gates. **What it cost** the shipped engine: W1 image 24,337 -> 24,887 (+550),
 bss +69, the packed file +451; W3 +76, +1, +49; W5 +48, +1, +34.
+
+#### 126.4.7 Bookmarks: every clip head one FAT link away (`vbbm.inc`)
+
+**A clip's head was a walk from the bundle's first cluster.** `vb_dread`
+seeked by zeroing its cursor (18.4.8), so every clip started, every head
+the menu's cursor asked for and every ring re-filled from its clip's start
+paid the chain from the front: ~330 us a link on 5150 #1 (2 KB clusters),
+**961-1,153 ms** for the owner's heads 4.8-5.8 MB into a 6.5 MB bundle -
+the Ice, Bolt and Scope sound drops of docs/reports/PICOMEM2-STUTTER-2026-11-07.md,
+on a PicoMEM 2 and, with its seeks on top, an ST-225.
+
+So, on a kernel that walks a moved cursor forward (18.4.8.2):
+- **`vb_bmbuild`, at load** (`vb_load`'s `.sized`), makes ONE forward pass
+  over the bundle: for each clip head and the music, in table order, the
+  build's cursor is moved to the cluster BEFORE the head's and that one
+  cluster read into a scratch claim, which leaves the cursor standing at the
+  head. Its `+4` and `+6` are the bookmark (4 bytes, `vb_bmk`, a clip's slot
+  and the music's last); one 16-byte template keeps what they share. One
+  walk of the chain in all and a cluster a head: ~1 s more load on the
+  field machine's 6.5 MB bundle. Not built - and every seek what it was -
+  when `+4` is 0 after the first read (an older kernel), when clusters are
+  past 16 KB (`VB_BMMAX`: a chain of them is short), or when a read fails.
+- **`vb_bmseek`, at every seek**, any stream's: of the stream's own cursor
+  (when it walks forward and stands at or before the target) and the
+  bookmarks, the one nearest at or before the target is loaded and `+12`
+  moved to it - the kernel walks the links between. None: zeroed, as before.
+- **298 bytes of bss** (`vb_bmk` 260, the build's cursor and the template
+  32) and the code in `vbbm.inc`.
+
+Measured on MartyPC's CGA PicoMEM 2 twin with the owner's bundle (2026-11-08):
+the head 5,772 KB in read in **96 ms where it took 1,002**, the reader at
+194 KB/s while reading where it was 140; on the kernel before 18.4.8.2 the
+same engine built nothing (`[vb_bmok]` 0) and read as it did.
 
 ### 126.5 The band
 

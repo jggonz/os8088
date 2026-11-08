@@ -1587,13 +1587,16 @@ vb_dread:
     cmp dx, [di+FSEQ_OFF+2]
     je .at
 .seek:
-    xor cx, cx                      ; seek: zero the cursor, set the offset
+    call vb_bmseek                  ; FROM A BOOKMARK, or the cursor itself,
+    jnc .setoff                     ; when one is at or before it (126.4.7)
+    xor cx, cx                      ; ...else zero the cursor, set the offset
     mov [di+0], cx
     mov [di+2], cx
     mov [di+4], cx
     mov [di+6], cx
     mov [di+8], cx
     mov [di+10], cx
+.setoff:
     mov [di+FSEQ_OFF], ax
     mov [di+FSEQ_OFF+2], dx
 .at:
@@ -1612,7 +1615,7 @@ vb_dread:
     mov di, [vb_rcur]
     mov si, [vb_namep]
     push cx
-    call OSAPI_FILE_READ_SEQ
+    call vb_rseq                    ; (READ_SEQ, with the map's run: vbbm.inc)
     pop cx
     jc .bad
     or dx, dx
@@ -1965,6 +1968,7 @@ vb_load:
 .fail1:
     jmp .fail
 .sized:
+    call vb_bmbuild                 ; every clip head bookmarked (126.4.7)
     ; THE SMALLEST RING this bundle can play from (format 8): its largest
     ; clip's entries and 16 KB past them - record 0 and a piece, read with
     ; the entries before the clip may start (vb_headof)
@@ -5243,6 +5247,7 @@ vb_reader:
 %include "vbattle/vbhold.inc"
 %include "vbattle/vbcache.inc"
 %include "vbattle/vbinp.inc"
+%include "vbattle/vbbm.inc"
 %ifdef VB_DIAG
 %include "vbattle/vbprof.inc"
 %endif
@@ -5545,6 +5550,16 @@ VB_VAR vb_selfname, 14              ; our own file, and its folder: a battle
 VB_VAR vb_selfdir, 2                ; embedded in it (vb_embfind)
 VB_VAR vb_selfvol, 1
 VB_VAR vb_embat, 4                  ; where it starts in the file, 0 none
+VB_VAR vb_bmok, 2                   ; BOOKMARKS (vbbm.inc, 126.4.7): built
+VB_VAR vb_bmclb, 2                  ; ...the cluster's bytes, 0 none
+VB_VAR vb_bmseg, 2                  ; ...the build's scratch cluster
+VB_VAR vb_bmc, FSEQ_SIZE            ; ...the build's cursor, and AFTER it
+VB_VAR vb_bmt, FSEQ_SIZE            ; ...the template (zeroed together)
+VB_VAR vb_bmk, 4 * (VB_MAXCLIP + 1) ; ...a clip head's +4/+6, the music last
+VB_VAR vb_nrun, 2                   ; THE MAP (vbbm.inc, 18.4.8.3): its runs,
+VB_VAR vb_rgen, 2                   ; ...the generation they hold under,
+VB_VAR vb_runs, 4 * VB_NRUN         ; ...each a first cluster and a last
+VB_VAR vb_xc, FSEQ_XSIZE            ; ...and the cursor a read hands it in
 VB_VAR vb_docvol, 1
 VB_VAR vb_docdir, 2
 VB_VAR vb_docname, 14

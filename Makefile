@@ -6599,7 +6599,7 @@ REALDMG_SRC := apps/realdmg/realdmg.asm apps/realdmg/rdgdefs.inc \
                apps/realdmg/rdgsys.inc apps/realdmg/rdgppu.inc apps/realdmg/rwfsx.inc apps/realdmg/rwkeys.inc \
                $(BUILD)/rdgcore.inc \
                apps/os88api.inc apps/os88mega.inc apps/os88ui.inc apps/os88parts.inc \
-               apps/os88partsbody.inc apps/os88alt.inc apps/os88pit.inc apps/realdmg/rwlog.inc apps/realdmg/rwbank.inc apps/realdmg/rwstate.inc apps/realdmg/rwreplay.inc \
+               apps/os88partsbody.inc apps/os88rseq.inc apps/os88alt.inc apps/os88pit.inc apps/realdmg/rwlog.inc apps/realdmg/rwbank.inc apps/realdmg/rwstate.inc apps/realdmg/rwreplay.inc \
                apps/realdmg/rwfm.inc apps/realdmg/rwmove.inc drivers/sound/sndpkg.inc \
                apps/os88data.inc
 $(BUILD)/realdmg.bin: $(REALDMG_SRC) | $(BUILD)
@@ -6642,7 +6642,7 @@ $(BUILD)/os8088-cz.zip: tools/os88czbundle.py tools/os88czgui.py tools/os88cz.py
 	python3 tools/os88czbundle.py $@ --dos $(BUILD)/os88cz.com
 
 # THE FIRMWARE AND UTILITIES ZIP, ON DEMAND (tools/os88toolszip.py): the
-# release's other archive - firmware/picomem1/, the kern_big, kern_small and
+# release's other archive - firmware/picomem1/ and picomem2/, the kern_big, kern_small and
 # socket-check ROMs (`make rom-big rom-small socketrom`, cut against THIS
 # tree's kernels, so build it from the tree whose disks it ships beside), the
 # encoder, the Video Battle builder (as BATTLE/), the Game Boy precompiler
@@ -6656,6 +6656,7 @@ toolszip: $(BUILD)/os8088-encoder.zip $(BUILD)/os8088-battle-builder.zip $(BUILD
 	python3 tools/os88toolszip.py $(BUILD)/os8088-tools.zip \
 		--encoder $(BUILD)/os8088-encoder.zip --battle $(BUILD)/os8088-battle-builder.zip --gbstatic $(BUILD)/os8088-gbaot.zip \
 		--cz $(BUILD)/os8088-cz.zip --rom $(BUILD)/rom --picomem firmware/picomem1 \
+		--picomem2 firmware/picomem2 \
 		--dos $(BUILD)/os88cz.com $(BUILD)/os88net.com
 
 # THE REALDMG DISK (docs/REALDMG-SPEC.md section 18), ON DEMAND: REALDMG.O88, its README and GBDEMO.GB - the demo written
@@ -6811,7 +6812,7 @@ XTMP3_SRC := apps/xtmp3/xtmp3.asm apps/xtmp3/x3draw.inc \
              apps/audio/aplook.inc apps/audio/apspk.inc \
              apps/os88spk.inc apps/os88spkfx.inc apps/os88spkfx_t.inc \
              apps/os88rseq.inc apps/os88pit.inc apps/os88dec.inc \
-             apps/os88data.inc apps/os88parts.inc apps/os88partsbody.inc \
+             apps/os88data.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88rseq.inc \
              drivers/sound/sndpkg.inc $(BUILD)/x3ftab.inc \
              $(BUILD)/x3art.inc apps/os88api.inc apps/os88ui.inc
 X3PARTS := $(BUILD)/x3front.bin $(BUILD)/x3art.bin $(BUILD)/x3stdp.bin \
@@ -7109,7 +7110,7 @@ $(shell mkdir -p $(BUILD); \
                                 touch $(VPSTAMP); })
 $(BUILD)/video.bin: apps/video/video.asm apps/video/vdec.inc apps/video/vosd.inc apps/video/vfx.inc apps/video/vprof.inc apps/video/vcold.inc apps/os88spk.inc apps/os88spkfx.inc apps/os88spkfx_t.inc apps/os88api.inc apps/os88alt.inc \
                     apps/os88ui.inc apps/os88rseq.inc apps/os88la.inc apps/os88xgap.inc \
-                    apps/os88parts.inc apps/os88partsbody.inc apps/video/vblk.inc apps/os88mega.inc $(VPSTAMP) | $(BUILD)
+                    apps/os88parts.inc apps/os88partsbody.inc apps/os88rseq.inc apps/video/vblk.inc apps/os88mega.inc $(VPSTAMP) | $(BUILD)
 	$(NASM) -f bin -w+error $(STKLST) -I apps/ $(VPDEF) -o $@ apps/video/video.asm
 	@echo "video:  $(call FILESIZE,$@) bytes"
 
@@ -7237,7 +7238,7 @@ SHEET_SRC := apps/sheet/sheet.asm apps/os88api.inc \
              apps/os88ui.inc apps/os88line.inc apps/os88text.inc \
              apps/os88chart.inc apps/os88chartbss.inc \
              apps/os88chartovl.inc apps/os88fp.inc apps/os88dec.inc \
-             apps/os88parts.inc apps/os88partsbody.inc
+             apps/os88parts.inc apps/os88partsbody.inc apps/os88rseq.inc
 $(BUILD)/sheet.bin: $(SHEET_SRC) | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/sheet/sheet.asm
 	@echo "sheet:  $(call FILESIZE,$@) bytes"
@@ -7433,7 +7434,7 @@ $(BUILD)/browser.bin: apps/browser/browser.asm apps/browser/brnet.inc \
                       apps/browser/brdocmarks.inc \
                       apps/browser/brdownload_paint.inc \
                       apps/browser/brcopyselection.inc \
-                      apps/os88parts.inc apps/os88partsbody.inc \
+                      apps/os88parts.inc apps/os88partsbody.inc apps/os88rseq.inc \
                       apps/browser/assets/brdownload_icons.inc \
                       apps/os88data.inc \
                       apps/os88api.inc \
@@ -7704,7 +7705,7 @@ $(BUILD)/dossetp.bin: $(BUILD)/dosp.bin tools/dossetchk.py apps/dos/dos.asm \
                       apps/dos/dosset.inc apps/dos/doscall.inc \
                       apps/dos/dosnetabi.inc apps/dos/dospktabi.inc apps/win16/w16join.inc apps/win16/w16jgive.inc \
                       apps/os88api.inc apps/os88cp437.inc \
-                      apps/os88partsbody.inc drivers/net/netpkg.inc
+                      apps/os88partsbody.inc apps/os88rseq.inc drivers/net/netpkg.inc
 	$(NASM) -f bin -w+error -I apps/ -I apps/dos/ -I drivers/net/ \
 	        -I kerndos/ $(if $(DOSNETCARD),-DDOSNET_CARD) -DDOSKPART -DDOS_EXTCORE \
 	        $(DOSW16DEF) -DDOS_SETEMIT -o $(BUILD)/dossetx.bin apps/dos/dos.asm
@@ -8740,7 +8741,7 @@ MIDIRACK_SRC := apps/midirack/midirack.asm apps/midirack/mrseq.inc \
                 apps/midirack/mrmid.inc apps/midirack/mrwt.inc \
                 apps/os88pit.inc apps/os88spk.inc apps/os88ui.inc \
                 apps/os88api.inc apps/os88data.inc apps/os88rseq.inc \
-                apps/os88parts.inc apps/os88partsbody.inc \
+                apps/os88parts.inc apps/os88partsbody.inc apps/os88rseq.inc \
                 drivers/sound/sndpkg.inc apps/os88mega.inc
 $(BUILD)/midirack.bin: $(MIDIRACK_SRC) | $(BUILD)
 	$(NASM) -f bin -w+error $(STKLST) -I apps/ -I apps/midirack/ -I drivers/sound/ \
@@ -11716,7 +11717,7 @@ ARCADE_SRC := apps/arcade/arcade.asm apps/arcade/arcdefs.inc apps/arcade/arcpm.i
               apps/arcade/arcface.inc apps/arcade/arcopt.inc \
               apps/arcade/arc6502.inc apps/arcade/arcqbs.inc \
               apps/arcade/arcsnd.inc apps/arcade/arcland.inc drivers/sound/sndpkg.inc \
-              apps/os88api.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88pit.inc \
+              apps/os88api.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88rseq.inc apps/os88pit.inc \
               apps/os88ui.inc apps/os88mega.inc
 # WHAT SHIPS HAS NO ROM IN IT (docs/plans/ARCADE-RELEASE-PLAN.md 2.1): each
 # translated board's RECIPE (.rcp: its code with the ROM's bytes as holes,
@@ -14207,6 +14208,36 @@ vidpm: $(BUILD)/vidbench.o88 $(BUILD)/viddisk.o88 $(BUILD)/vidsnd.o88 \
 	python3 tools/os88disk.py --verify $(BUILD)/vidpm-1440.img
 	@ls -l $(BUILD)/vidpm $(BUILD)/vidpm-1440.img
 
+# THE 5150 + PICOMEM 2 KIT (docs/reports/PICOMEM2-STUTTER-2026-11-07.md): the
+# first real numbers for the `5150-picomem2` profile - vidpm's benches less
+# the 286's - and the two questions about Video Battle's stuttering sound:
+# VIDSND's T rows (a tone, recorded and counted by tools/vstone.py) and
+# VBATTLED's play profile (tools/vbtprof.py). Loose in build/pm2kit/ for FTP,
+# and on build/pm2kit-360.img for the card's floppy or drive A.
+.PHONY: pm2kit
+#> [Applications] pm2kit :: the 5150 + PicoMEM 2 field kit: its video profile, and Video Battle's stutter (VIDSND T)
+pm2kit: $(BUILD)/vidbench.o88 $(BUILD)/viddisk.o88 $(BUILD)/vidsnd.o88 \
+	$(BUILD)/videodiag.o88 $(BUILD)/vbattled.o88 tools/os88vid.py tools/os88disk.py \
+	tests/vidbench/FIELDPM2.TXT
+	rm -rf $(BUILD)/pm2kit && mkdir -p $(BUILD)/pm2kit/src
+	python3 tools/os88vid.py synthxdv $(BUILD)/pm2kit/src/SYNTH.XDV >/dev/null
+	python3 tools/os88vid.py benchdat --synth $(BUILD)/pm2kit/VIDBENCH.DAT \
+	    $(BUILD)/pm2kit/src/SYNTH.XDV >/dev/null
+	rm -rf $(BUILD)/pm2kit/src
+	cp tests/vidbench/FIELDPM2.TXT $(BUILD)/pm2kit/README.TXT
+	cp $(BUILD)/vidbench.o88 $(BUILD)/pm2kit/VIDBENCH.O88
+	cp $(BUILD)/viddisk.o88 $(BUILD)/pm2kit/VIDDISK.O88
+	cp $(BUILD)/vidsnd.o88 $(BUILD)/pm2kit/VIDSND.O88
+	cp $(BUILD)/videodiag.o88 $(BUILD)/pm2kit/VIDEOD.O88
+	cp $(BUILD)/vbattled.o88 $(BUILD)/pm2kit/VBATTLED.O88
+	python3 tools/os88disk.py -o $(BUILD)/pm2kit-360.img --size 360 \
+	    $(BUILD)/pm2kit/README.TXT $(BUILD)/pm2kit/VIDBENCH.O88 \
+	    $(BUILD)/pm2kit/VIDBENCH.DAT $(BUILD)/pm2kit/VIDDISK.O88 \
+	    $(BUILD)/pm2kit/VIDSND.O88 $(BUILD)/pm2kit/VIDEOD.O88 \
+	    $(BUILD)/pm2kit/VBATTLED.O88
+	python3 tools/os88disk.py --verify $(BUILD)/pm2kit-360.img
+	@ls -l $(BUILD)/pm2kit $(BUILD)/pm2kit-360.img
+
 # THE GALLERY (SPEC.md 106.7). Committed, and pinned by tools/pixsamples.py
 # --check, which also compares these three lists with its own - so a picture
 # added here and not there, or there and not here, fails the build. PLAIN on
@@ -15691,7 +15722,7 @@ MEGACOREARGS = $(addprefix APPS:,$(call MEGASUB,$(CORE_TOOLS))) \
 
 $(MEGAAPPDIR)/video.bin: apps/video/video.asm apps/video/vdec.inc apps/video/vosd.inc apps/video/vfx.inc apps/video/vprof.inc apps/video/vcold.inc apps/os88spk.inc apps/os88spkfx.inc apps/os88spkfx_t.inc apps/os88api.inc apps/os88alt.inc \
                          apps/os88ui.inc apps/os88rseq.inc apps/os88la.inc apps/os88xgap.inc \
-                         apps/os88parts.inc apps/os88partsbody.inc apps/video/vblk.inc apps/os88mega.inc $(VPSTAMP) | $(BUILD)
+                         apps/os88parts.inc apps/os88partsbody.inc apps/os88rseq.inc apps/video/vblk.inc apps/os88mega.inc $(VPSTAMP) | $(BUILD)
 	@mkdir -p $(MEGAAPPDIR)
 	$(NASM) -f bin -w+error $(STKLST) -I apps/ $(VPDEF) -DPKG_MEGA -o $@ apps/video/video.asm
 	@echo "video (PKG_MEGA): $(call FILESIZE,$@) bytes"
@@ -19990,7 +20021,7 @@ $(shell mkdir -p $(BUILD); \
         [ -f $(W16STAMP) ] || { rm -f $(BUILD)/.win16-* $(BUILD)/win16.bin \
                                       $(BUILD)/win16.o88; touch $(W16STAMP); })
 
-$(BUILD)/win16.bin: $(WIN16ASM) apps/os88api.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88data.inc \
+$(BUILD)/win16.bin: $(WIN16ASM) apps/os88api.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88rseq.inc apps/os88data.inc \
                     apps/os88ui.inc apps/dos/doscall.inc $(W16STAMP) | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/win16/ -I apps/dos/ \
 	        --before "[map all $(@:.bin=.map)]" \
@@ -20042,7 +20073,7 @@ $(BUILD)/win16/w16dosh.bin: apps/win16/w16dosh.asm apps/win16/w16dos.inc \
                             apps/dos/dos.asm apps/dos/doscall.inc \
                             apps/dos/doscents.inc apps/os88api.inc \
                             apps/os88rseq.inc apps/dos/dosnetabi.inc apps/dos/dospktabi.inc apps/win16/w16join.inc apps/win16/w16jgive.inc \
-                            apps/os88cp437.inc apps/os88partsbody.inc \
+                            apps/os88cp437.inc apps/os88partsbody.inc apps/os88rseq.inc \
                             drivers/net/netpkg.inc
 	$(NASM) -f bin -w+error -I apps/ -I apps/dos/ -I apps/win16/ \
 	        -I $(BUILD)/win16/ -I drivers/net/ -I kerndos/ \
@@ -20081,7 +20112,7 @@ win16: $(BUILD)/win16.o88
 # PLAN 14.164) - so it is not kern_mega DOS.O88's core, whose every program
 # call is real mode; the fonts and the icons are the shipped build's. On
 # kern_mega's WIN16 disks only, never on a shipped one.
-$(MEGAAPPDIR)/win16.bin: $(WIN16ASM) apps/os88api.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88data.inc \
+$(MEGAAPPDIR)/win16.bin: $(WIN16ASM) apps/os88api.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88rseq.inc apps/os88data.inc \
                          apps/os88ui.inc apps/os88mega.inc apps/dos/doscall.inc $(W16STAMP) | $(BUILD)
 	@mkdir -p $(MEGAAPPDIR)
 	$(NASM) -f bin -w+error -I apps/ -I apps/win16/ -I apps/dos/ \
@@ -20107,7 +20138,7 @@ $(MEGAAPPDIR)/win16/w16dosh.bin: apps/win16/w16dosh.asm apps/win16/w16dos.inc $(
                         apps/dos/doscents.inc apps/os88api.inc apps/os88rseq.inc \
                         apps/dos/dosnetabi.inc apps/dos/dospktabi.inc apps/win16/w16join.inc \
                         apps/win16/w16jgive.inc apps/os88cp437.inc \
-                        apps/os88partsbody.inc drivers/net/netpkg.inc
+                        apps/os88partsbody.inc apps/os88rseq.inc drivers/net/netpkg.inc
 	$(NASM) -f bin -w+error -I apps/ -I apps/dos/ -I apps/win16/ \
 	        -I $(MEGAAPPDIR)/win16/ -I drivers/net/ -I kerndos/ \
 	        -DDOS_MEGA -DPKG_MEGA -o $@ apps/win16/w16dosh.asm
@@ -20233,7 +20264,7 @@ $(BUILD)/1942art.inc $(N1942BANKS): $(BUILD)/.1942assets
 	@test -f $@ || python3 tools/1942assets.py -o $(BUILD) $(if $(N1942_ROM),--rom "$(N1942_ROM)")
 $(BUILD)/1942front.inc: tools/1942front.py tools/os88lz.py apps/1942/art/splash.json apps/1942/art/sprites.json | $(BUILD)
 	python3 tools/1942front.py -o $(BUILD)
-$(BUILD)/1942.bin: apps/1942/1942.asm apps/1942/front.inc $(BUILD)/1942front.inc apps/1942/game.inc apps/1942/campaign.inc apps/1942/motion.inc apps/1942/audio.inc apps/1942/pcm.inc apps/1942/video.inc apps/1942/scroll.inc $(BUILD)/1942art.inc apps/os88api.inc apps/os88ui.inc apps/os88parts.inc apps/os88partsbody.inc
+$(BUILD)/1942.bin: apps/1942/1942.asm apps/1942/front.inc $(BUILD)/1942front.inc apps/1942/game.inc apps/1942/campaign.inc apps/1942/motion.inc apps/1942/audio.inc apps/1942/pcm.inc apps/1942/video.inc apps/1942/scroll.inc $(BUILD)/1942art.inc apps/os88api.inc apps/os88ui.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88rseq.inc
 	$(NASM) -f bin -w+error -I apps/ -I apps/1942/ -I $(BUILD)/ -l $(BUILD)/1942.lst -o $@ $<
 # EVERY PART IS OP_COMP | OP_LAZY, packed lz4 by os88pkg.py (SPEC.md 101.2),
 # so one file serves every geometry - and the 360KB disk no longer leaves the
@@ -20291,7 +20322,7 @@ $(DM_ART)/dm-music.inc: tools/drmario_audio.py reference/drmario/bank_FF.asm | $
 drmarco-art: | $(BUILD)
 	python3 tools/drmario_assets.py reference/drmario $(DM_ART) --art $(DM_NATIVE)
 
-$(BUILD)/drmario.bin: apps/drmario/drmario.asm apps/drmario/front.inc apps/drmario/audio.inc apps/drmario/game.inc apps/drmario/video.inc apps/drmario/anim.inc apps/os88api.inc apps/os88ui.inc apps/os88alt.inc apps/os88parts.inc apps/os88partsbody.inc $(DM_ART)/dm-tables.inc $(DM_ART)/dm-vga.bin $(DM_ART)/dm-cga.bin $(DM_ART)/dm-music.inc $(DM_NATIVE_INC)
+$(BUILD)/drmario.bin: apps/drmario/drmario.asm apps/drmario/front.inc apps/drmario/audio.inc apps/drmario/game.inc apps/drmario/video.inc apps/drmario/anim.inc apps/os88api.inc apps/os88ui.inc apps/os88alt.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88rseq.inc $(DM_ART)/dm-tables.inc $(DM_ART)/dm-vga.bin $(DM_ART)/dm-cga.bin $(DM_ART)/dm-music.inc $(DM_NATIVE_INC)
 	$(NASM) -f bin -w+error -I apps/ -I apps/drmario/ -I $(DM_ART)/ -I $(DM_NATIVE)/ -l $(BUILD)/drmario.lst -o $@ $<
 
 # The front screens are parts 0-2, in the order the table in
@@ -20345,7 +20376,7 @@ excitebike-check:
 	python3 tools/excitebike_assets.py --selfcheck
 	python3 tests/unit/t_excitebike_clean.py
 
-$(BUILD)/excitebike.bin: apps/excitebike/excitebike.asm apps/excitebike/front.inc apps/excitebike/video.inc apps/excitebike/world.inc apps/excitebike/game.inc apps/excitebike/vga.inc apps/excitebike/cga.inc apps/excitebike/herc.inc apps/excitebike/sprite.inc apps/excitebike/sim.inc apps/excitebike/input.inc apps/excitebike/hud.inc apps/excitebike/ai.inc apps/excitebike/flow.inc apps/excitebike/audio.inc apps/excitebike/const.inc apps/os88api.inc apps/os88ui.inc apps/os88alt.inc apps/os88parts.inc apps/os88partsbody.inc $(EXB_ART)/exbtables.inc $(EXB_ART)/exbtracks.inc $(EXB_ART)/exbscripts.inc $(EXB_ART)/exbsnd.inc $(EXB_ART)/EXB.SND
+$(BUILD)/excitebike.bin: apps/excitebike/excitebike.asm apps/excitebike/front.inc apps/excitebike/video.inc apps/excitebike/world.inc apps/excitebike/game.inc apps/excitebike/vga.inc apps/excitebike/cga.inc apps/excitebike/herc.inc apps/excitebike/sprite.inc apps/excitebike/sim.inc apps/excitebike/input.inc apps/excitebike/hud.inc apps/excitebike/ai.inc apps/excitebike/flow.inc apps/excitebike/audio.inc apps/excitebike/const.inc apps/os88api.inc apps/os88ui.inc apps/os88alt.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88rseq.inc $(EXB_ART)/exbtables.inc $(EXB_ART)/exbtracks.inc $(EXB_ART)/exbscripts.inc $(EXB_ART)/exbsnd.inc $(EXB_ART)/EXB.SND
 	$(NASM) -f bin -w+error -I apps/ -I apps/excitebike/ -I $(EXB_ART)/ -l $(BUILD)/excitebike.lst -o $@ $<
 
 # EXCITEBIKE.O88 is not a legal 8.3 name (a stem is at most 8 characters), so
@@ -20538,7 +20569,7 @@ xt-isotron-ega: $(IMG360) $(BUILD)/isotron360.img
 # REDLINE native CPU/graphics performance lab (SPEC.md 103).
 .PHONY: redline redlinedisk redline-profile
 redline: $(BUILD)/redline.o88
-$(BUILD)/redline.bin: apps/redline/redline.asm apps/redline/detect.inc apps/redline/workloads.inc apps/redline/ui.inc apps/redline/csrows.inc apps/redline/csfe.inc apps/redline/csknob.inc apps/redline/csapply.inc apps/redline/csweep.inc apps/redline/chipset.inc apps/redline/inspect.inc apps/redline/inspmod.inc apps/os88wseq.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88data.inc apps/os88link.inc apps/redline/baseline.inc apps/redline/baseline-herc.inc apps/redline/baseline-vga.inc apps/os88api.inc apps/os88ui.inc tests/benchlib.inc | $(BUILD)
+$(BUILD)/redline.bin: apps/redline/redline.asm apps/redline/detect.inc apps/redline/workloads.inc apps/redline/ui.inc apps/redline/csrows.inc apps/redline/csfe.inc apps/redline/csknob.inc apps/redline/csapply.inc apps/redline/csweep.inc apps/redline/chipset.inc apps/redline/inspect.inc apps/redline/inspmod.inc apps/os88wseq.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88rseq.inc apps/os88data.inc apps/os88link.inc apps/redline/baseline.inc apps/redline/baseline-herc.inc apps/redline/baseline-vga.inc apps/os88api.inc apps/os88ui.inc tests/benchlib.inc | $(BUILD)
 	python3 tools/benchlint.py apps/redline/redline.asm
 	$(NASM) -f bin -w+error -I apps/ -I tests/ -l $(BUILD)/redline.lst -o $@ apps/redline/redline.asm
 # REDLINE.O88 IS A PARTED PACKAGE (SPEC.md 103.7.2): os88ovl.py cuts .modi -
@@ -20575,7 +20606,7 @@ redline-profile: redlinedisk $(IMG360)
 # the soak row `pixelsim` fails when it is not that search's answer.
 PIXEL_SRC := apps/pixel/pixel.asm apps/pixel/pxui.inc apps/pixel/pxicons.inc \
              apps/pixel/pxappico.inc apps/pixel/pxpart.inc apps/os88api.inc \
-             apps/os88ui.inc apps/os88parts.inc apps/os88partsbody.inc \
+             apps/os88ui.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88rseq.inc \
              apps/os88rseq.inc apps/os88gfx.inc apps/pixel/pxmaster.inc \
              apps/pixel/pxpump.inc apps/pixel/pxsimple.inc \
              apps/pixel/pxview.inc apps/pixel/pxqtab.inc apps/pixel/pxrec.inc \
@@ -20760,7 +20791,7 @@ wirefleet-pair:
 wirefleettest: wirefleetdisk $(IMG)
 	python3 tests/wirefleetlink.py
 wirefleet: $(BUILD)/wireflet.o88
-$(BUILD)/wireflet.bin: apps/wirefleet/wirefleet.asm apps/wirefleet/wfmodel.inc apps/wirefleet/wflink.inc apps/wirefleet/wfchat.inc apps/wirefleet/wfsound.inc apps/wirefleet/wfsong.inc apps/wirefleet/wfanim.inc apps/wirefleet/wfsave.inc apps/wirefleet/wffull.inc apps/wirefleet/wfvideo.inc apps/wirefleet/wfcolor.inc apps/wirefleet/art/tiles.inc apps/wirefleet/art/fx.inc apps/os88api.inc apps/os88ui.inc apps/os88line.inc apps/os88alt.inc apps/os88gfx.inc apps/os88flat.inc apps/os88dec.inc apps/os88parts.inc apps/os88partsbody.inc | $(BUILD)
+$(BUILD)/wireflet.bin: apps/wirefleet/wirefleet.asm apps/wirefleet/wfmodel.inc apps/wirefleet/wflink.inc apps/wirefleet/wfchat.inc apps/wirefleet/wfsound.inc apps/wirefleet/wfsong.inc apps/wirefleet/wfanim.inc apps/wirefleet/wfsave.inc apps/wirefleet/wffull.inc apps/wirefleet/wfvideo.inc apps/wirefleet/wfcolor.inc apps/wirefleet/art/tiles.inc apps/wirefleet/art/fx.inc apps/os88api.inc apps/os88ui.inc apps/os88line.inc apps/os88alt.inc apps/os88gfx.inc apps/os88flat.inc apps/os88dec.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88rseq.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -l $(BUILD)/wireflet.lst --before "[map all $(BUILD)/wireflet.map]" -o $@ $<
 # The two lazy parts (SPEC.md 114.11), in WF_P_* row order: the effect
 # stamps, assembled from the committed fx.inc, and the Sound Blaster clips,
@@ -20796,7 +20827,7 @@ $(BUILD)/wireflet360.img: $(BUILD)/wireflet.o88 apps/wirefleet/README.TXT tools/
 #> [Applications] vbattle :: Video Battle's package and its demo bundle (SPEC.md 126)
 vbattle: $(BUILD)/vbattle.o88 $(BUILD)/BATTLE.VBT
 $(BUILD)/vbattle.bin: apps/vbattle/vbattle.asm apps/vbattle/vbrules.inc apps/vbattle/vbgame.inc \
-                      apps/vbattle/vbloop.inc apps/vbattle/vbhold.inc apps/vbattle/vbcache.inc apps/vbattle/vbinp.inc \
+                      apps/vbattle/vbloop.inc apps/vbattle/vbhold.inc apps/vbattle/vbcache.inc apps/vbattle/vbinp.inc apps/vbattle/vbbm.inc \
                       apps/vbattle/vbband.inc apps/video/vdec.inc apps/os88la.inc apps/os88ub.inc apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -l $(BUILD)/vbattle.lst -o $@ $<
 $(BUILD)/vbattle.o88: $(BUILD)/vbattle.bin tools/os88pkg.py $(PKGZSTAMP)
@@ -20806,7 +20837,7 @@ $(BUILD)/vbattle.o88: $(BUILD)/vbattle.bin tools/os88pkg.py $(PKGZSTAMP)
 # Video Player's VIDEOD for the battle. On vbattlev.img and in the zip
 $(BUILD)/vbattled.bin: apps/vbattle/vbattle.asm apps/vbattle/vbprof.inc apps/vbattle/vbrules.inc \
                        apps/vbattle/vbgame.inc apps/vbattle/vbloop.inc apps/vbattle/vbhold.inc apps/vbattle/vbcache.inc \
-                       apps/vbattle/vbinp.inc apps/vbattle/vbband.inc apps/video/vdec.inc \
+                       apps/vbattle/vbinp.inc apps/vbattle/vbbm.inc apps/vbattle/vbband.inc apps/video/vdec.inc \
                        apps/os88la.inc apps/os88ub.inc apps/os88api.inc apps/os88real.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -DVB_DIAG -o $@ apps/vbattle/vbattle.asm
 $(BUILD)/vbattled.o88: $(BUILD)/vbattled.bin tools/os88pkg.py $(PKGZSTAMP)

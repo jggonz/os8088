@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "8478189868f02fad2de6187eae15df0eb8d51e8622af39c27fa75faa763ec710",
+  "fingerprint": "d84fa47996327791a588948499c4f0698466167ce3f733c9c378a3ce06aea947",
   "version": 12
  },
  "PKG_FMT": {
-  "fingerprint": "0daf1607c08c2501190e88f1a2b42103bab8587a9f1c7d0c90b63b3eed2fa781",
+  "fingerprint": "1f5a4843b2874631347f27e6e4dcf96f9a46045233ff1383e0f21489054793fe",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -1813,6 +1813,20 @@
    "from": 12,
    "guard": "DRV_VER",
    "reason": "BLKCAP_SEL (DSV_CAPS bit 4 for DRVC_DISK, SPEC.md 51.8.1): an addition - a driver that leaves it clear is bounced exactly as before, and no cell moved; no bump (KERN-MEGA-PLAN 14.167)",
+   "to": 12
+  },
+  {
+   "fingerprint": "1f5a4843b2874631347f27e6e4dcf96f9a46045233ff1383e0f21489054793fe",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "merge video-battle-pico2 into elendilon: READ_SEQ's caller flags, run and map (SPEC.md 18.4.8.3) beside elendilon's SDK; a 16-byte cursor reads as before - no bump",
+   "to": 10
+  },
+  {
+   "fingerprint": "d84fa47996327791a588948499c4f0698466167ce3f733c9c378a3ce06aea947",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "merge video-battle-pico2 into elendilon: READ_SEQ's caller flags, run and map (SPEC.md 18.4.8.3) beside elendilon's SDK; a 16-byte cursor reads as before - no bump",
    "to": 12
   }
  ]

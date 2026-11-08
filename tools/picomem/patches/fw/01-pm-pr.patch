@@ -1,31 +1,23 @@
-From 5e507be2cd88e7dd1e4349e5e00d828b2837694c Mon Sep 17 00:00:00 2001
+From 6204e0db3601fe0b1e2973d560577b90fbb205f2 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
-Date: Mon, 12 Oct 2026 08:33:51 +0000
-Subject: [PATCH] PicoMEM 1.x : Fixes, the Sound Blaster during disk access,
- multi sector disk read
+Date: Sun, 8 Nov 2026 12:00:00 +0000
+Subject: [PATCH] PicoMEM : Audio during disk access, multi sector disk read,
+ PicoMEM 1.x fixes
 
-PicoMEM 1.x
-- Restore CYW43_PIO_CLOCK_DIV_INT=4 in the "< 1.5" block and the RP2040's
-  1.20V. Without them a 1.x build never lights the LED and the PC hangs
-  after the BIOS banner.
-- The fake address of a DMA (AEN) cycle has A10 set (0x0FFFFF0F4). With it
-  clear, a DMA cycle whose low address byte was in xx00-xx0F or xx80-xx8F
-  was decoded as a write to the 8237 registers. Noted in pm_isa_rp2350.h
-  but not applied there (not tested).
+Audio during disk access (all boards)
+- The audio mixer and the SB worker run during disk access: in the disk
+  loop, in the PC command waits of an Int 13h (pm_pccmd_wait_hook, core 0
+  only), and in the SD driver's token and ready waits. Before, nothing was
+  mixed while the PC copied a sector: an interrupt handler running inside
+  the copy left a hole in the sound as long as itself.
+- BIOS function 3 returns BX = 8088h (the firmware revision, was 0), so a
+  program can tell that it does not need to hold its interrupts during a
+  disk access.
+- On a PicoMEM 2.0 in a 4.77 MHz 5150, a 635 Hz tone played by the SB while
+  the disk is read, with the timer interrupt holding the PC 4 to 16 ms, has
+  no gap. With PM2-10-4-26 it broke 228 to 508 times in 5 s.
 
-Sound Blaster with the emulated DMA (USE_HWDMA=0)
-- The SB worker runs with the mixer during disk access: in the disk loop,
-  in the PC command waits of an Int 13h (pm_pccmd_wait_hook, core 0 only),
-  and in the SD driver's token and ready waits.
-- 512 Bytes DMA copy (was 128) and a 2048 samples FIFO. The SB starts
-  playing at 1024 samples, the other FIFOs keep 512 (start_thr).
-- A sound shorter than the start level is played when its DMA ends.
-- The block IRQ is sent when the block's bytes are read from the PC, not
-  when its time is up. Several pending blocks send one IRQ each.
-- The rest of the last copy is dropped when the PC programs the DMA again,
-  so it is not counted as part of the next transfer.
-
-Disk read to the PC RAM
+Disk read to the PC RAM (all boards)
 - The sectors of an Int 13h read are read in runs (one f_read, so one SD
   multi block command) into a Pico buffer, then copied by the PC from the
   BIOS RAM transfer buffer with one command. The next run is read while the
@@ -37,9 +29,9 @@ Disk read to the PC RAM
 - On a 16MHz 286 (PicoMEM 1.x, Pico W) a sector is ~650us of PC copy against
   ~270us of SD read. The disk read rate goes from 685 to 755 KB/s, and from
   345 to 380 KB/s with half the CPU busy: 96% of what the 8 bit ISA copy
-  allows. Not tested on a PicoMEM 2.
+  allows.
 
-The PC's copy during a disk access
+The PC's copy during a disk access (all boards)
 - The disk code waits for the PC to end a copy with no time limit, as
   PC_End does, and stops only on a PC reset. The PC copies with its
   interrupts enabled, so an interrupt handler can hold it for more than the
@@ -47,9 +39,28 @@ The PC's copy during a disk access
   interrupt does - and the sector loops do not test PC_MemCopyW_512b's
   result: the sector was left out of the read or the write, with no error.
 
+Sound Blaster with the emulated DMA (USE_HWDMA=0, PicoMEM 1.x)
+- 512 Bytes DMA copy (was 128) and a 2048 samples FIFO. The SB starts
+  playing at 1024 samples, the other FIFOs keep 512 (start_thr).
+- A sound shorter than the start level is played when its DMA ends.
+- The block IRQ is sent when the block's bytes are read from the PC, not
+  when its time is up. Several pending blocks send one IRQ each.
+- The rest of the last copy is dropped when the PC programs the DMA again,
+  so it is not counted as part of the next transfer.
+
+PicoMEM 1.x
+- Restore CYW43_PIO_CLOCK_DIV_INT=4 in the "< 1.5" block and the RP2040's
+  1.20V. Without them a 1.x build never lights the LED and the PC hangs
+  after the BIOS banner.
+- The fake address of a DMA (AEN) cycle has A10 set (0x0FFFFF0F4). With it
+  clear, a DMA cycle whose low address byte was in xx00-xx0F or xx80-xx8F
+  was decoded as a write to the 8237 registers. Noted in pm_isa_rp2350.h
+  but not applied there (not tested).
+
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01LHvUXgSzoPz1D5SLjfPSAp
 Claude-Session: https://claude.ai/code/session_0174Wo9UH9n7xupVfqFkBJ47
+Claude-Session: https://claude.ai/code/session_01Wo8a4oXokbXxeCPsdwusnJ
 ---
  src/CMakeLists.txt                            |   1 +
  src/audio_devices/audio_fifo.c                |   5 +-
@@ -60,14 +71,14 @@ Claude-Session: https://claude.ai/code/session_0174Wo9UH9n7xupVfqFkBJ47
  src/dosbox/bios_disk.h                        |   1 +
  src/lib/FatFs_SPI/sd_driver/SPI/sd_card_spi.c |   2 +
  src/picomem.cpp                               |   4 +
- src/pm_cmd.cpp                                |   4 +
+ src/pm_cmd.cpp                                |   6 ++
  src/pm_isa_rp2040.h                           |   4 +-
  src/pm_isa_rp2350.h                           |   2 +
  src/pm_libs/isa_dma.cpp                       |   2 +-
  src/pm_libs/isa_dma.h                         |   2 +-
  src/pm_libs/pm_pccmd.cpp                      |  44 +++++++-
  src/pm_libs/pm_pccmd.h                        |  21 ++--
- 16 files changed, 203 insertions(+), 30 deletions(-)
+ 16 files changed, 205 insertions(+), 30 deletions(-)
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
 index d6b1b03..743cee9 100644
@@ -433,7 +444,7 @@ index 8285b30..195a292 100644
  #endif
  
 diff --git a/src/pm_cmd.cpp b/src/pm_cmd.cpp
-index b32556d..e63b8b9 100644
+index b32556d..78a76ea 100644
 --- a/src/pm_cmd.cpp
 +++ b/src/pm_cmd.cpp
 @@ -513,6 +513,8 @@ bool PM_RTC_OnOff(uint8_t state)
@@ -461,6 +472,15 @@ index b32556d..e63b8b9 100644
    
       if (PM_Int13h_LEDCount==6) {
          pm_led(0);
+@@ -2137,6 +2141,8 @@ BV_PCCMD_SOURCE=0;      // Reset the PCCMD_FLAG
+ BV_SPIPSRAM=0;          // Reset the SPI PSRAM Flag
+ BV_Int13hCLI=0;
+ BV_BoardID=BOARD_ID;    // Set the Board ID
++BV_FW_Rev=0x88;         // Firmware revision, returned in BX by the BIOS function 3 : 8088h,
++BV_FW_Rev_H=0x80;       // the audio is mixed while the disk access waits for the PC
+ PM_Status=STAT_READY;   // PicoMEM Initialisation completed (The BIOS Wait for its end)
+ PM_Init_Completed=true;
+ 
 diff --git a/src/pm_isa_rp2040.h b/src/pm_isa_rp2040.h
 index f5b5a1f..f6b7e35 100644
 --- a/src/pm_isa_rp2040.h

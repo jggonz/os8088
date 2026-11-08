@@ -112,9 +112,9 @@
    "tools/os88vbt.py",
    "tools/vbtscene.py"
   ],
-  "stamped": "05aa6e2c",
-  "strings": "0848db46e848836d",
-  "why": "the demo as demo_project builds it (full and --floppy), the four disks' versions"
+  "stamped": "d70ec25c",
+  "strings": "248798d5d21fc5a7",
+  "why": "read: the openings' seam setting and the victory read-ahead are below this page's level of detail"
  },
  "BEVERLY_MOD": {
   "sources": [],
@@ -516,9 +516,18 @@
    "firmware/picomem1/README.md",
    "firmware/picomem1/SHA256SUMS"
   ],
-  "stamped": "e4576a70",
+  "stamped": "d70ec25c",
   "strings": "52a90b0aba7759ae",
-  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+  "why": "a 2.0 is pointed at the PicoMEM 2 firmware now in the tree"
+ },
+ "FW_PICOMEM2": {
+  "sources": [
+   "firmware/picomem2/README.md",
+   "firmware/picomem2/SHA256SUMS"
+  ],
+  "stamped": "d70ec25c",
+  "strings": "29fb8825c8c9bb27",
+  "why": "new page: the PicoMEM 2.0 firmware, its fixes, what it lacks against PM2-10-4-26, flashing"
  },
  "GAMES": {
   "sources": [],
@@ -1220,9 +1229,9 @@
    "tools/os88vbtgui.py",
    "tools/os88vbt.py"
   ],
-  "stamped": "05aa6e2c",
-  "strings": "23d8f003319c2003",
-  "why": "written against the builder's README in os88vbtbundle.py, os88vbtgui.py's tabs and Build tab labels, and os88vbt.py's commands"
+  "stamped": "d70ec25c",
+  "strings": "625b853e3ccf1b2e",
+  "why": "read: the openings' seam setting and the victory read-ahead are below this page's level of detail"
  },
  "TOOL_VENC": {
   "sources": [
@@ -1265,17 +1274,17 @@
   "sources": [
    "apps/vbattle"
   ],
-  "stamped": "05aa6e2c",
-  "strings": "9ce2b7f5173e96ca",
-  "why": "written against vbprof.inc (VBPROF1-9.DAT, XMS or conventional record) and SPEC.md 126.8"
+  "stamped": "d70ec25c",
+  "strings": "e619e1fa6fb6b44e",
+  "why": "read: the openings' seam setting and the victory read-ahead are below this page's level of detail"
  },
  "VBATTLE_O88": {
   "sources": [
    "apps/vbattle"
   ],
-  "stamped": "05aa6e2c",
-  "strings": "9ce2b7f5173e96ca",
-  "why": "written against apps/vbattle (window strings, File menu, keys in vbgame.inc/vb_keys, adapter choice in vb_load) and SPEC.md 126; shots taken on the VGA XT"
+  "stamped": "d70ec25c",
+  "strings": "e619e1fa6fb6b44e",
+  "why": "read: the openings' seam setting and the victory read-ahead are below this page's level of detail"
  },
  "VESA_DRV": {
   "sources": [
