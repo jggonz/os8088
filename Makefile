@@ -6741,13 +6741,14 @@ $(BUILD)/wrart.inc: tools/os88wrart.py tools/os88wrlay.py tools/wrsim.py | $(BUI
 	python3 tools/os88wrart.py --selfcheck --quiet
 	python3 tools/os88wrart.py --out $@
 
-$(BUILD)/waverack.bin: apps/waverack/waverack.asm apps/waverack/wrdraw.inc \
-                       apps/waverack/wrface.inc apps/waverack/wrwav.inc \
-                       apps/waverack/wrdoc.inc apps/waverack/wrenv.inc \
-                       apps/waverack/wrxport.inc apps/waverack/wredit.inc \
-                       apps/waverack/wrsave.inc apps/waverack/wrrec.inc \
-                       $(BUILD)/wrart.inc apps/os88dec.inc apps/os88rseq.inc apps/os88data.inc \
-                       apps/os88api.inc apps/os88ui.inc | $(BUILD)
+WAVERACK_SRC := apps/waverack/waverack.asm apps/waverack/wrdraw.inc \
+                apps/waverack/wrface.inc apps/waverack/wrwav.inc \
+                apps/waverack/wrdoc.inc apps/waverack/wrenv.inc \
+                apps/waverack/wrxport.inc apps/waverack/wredit.inc \
+                apps/waverack/wrsave.inc apps/waverack/wrrec.inc \
+                $(BUILD)/wrart.inc apps/os88dec.inc apps/os88rseq.inc apps/os88data.inc \
+                apps/os88api.inc apps/os88ui.inc apps/os88huge.inc
+$(BUILD)/waverack.bin: $(WAVERACK_SRC) | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/waverack/ -I $(BUILD)/ \
 		-o $@ apps/waverack/waverack.asm
 	@echo "waverack: $(call FILESIZE,$@) bytes"
@@ -8706,6 +8707,7 @@ AUDIO_SRC := apps/audio/audio.asm apps/audio/apengine.inc \
              apps/audio/apwav.inc apps/audio/apdec.inc \
              apps/audio/apui.inc apps/audio/aplist.inc \
              apps/audio/apspk.inc apps/os88spk.inc apps/os88spkfx.inc \
+             apps/audio/aphold.inc apps/os88huge.inc \
              apps/os88rseq.inc \
              apps/os88spkfx_t.inc \
              apps/os88api.inc apps/os88ui.inc apps/os88type.inc
@@ -15727,7 +15729,7 @@ MEGAPKGS := $(MEGAAPPDIR)/video.o88 $(MEGAAPPDIR)/audio.o88 \
             $(MEGAAPPDIR)/pixel.o88 $(MEGAAPPDIR)/xtmp3.o88 \
             $(MEGAAPPDIR)/realdmg.o88 $(MEGAAPPDIR)/taskmgr.o88 \
             $(MEGAAPPDIR)/arcade.o88 $(MEGAAPPDIR)/win16.o88 \
-            $(MEGAAPPDIR)/sheet.o88
+            $(MEGAAPPDIR)/sheet.o88 $(MEGAAPPDIR)/waverack.o88
 MEGABASE = $(patsubst $(MEGAAPPDIR)/%,$(BUILD)/%,$(MEGAPKGS))
 # ...and the substitution, ONE IDIOM for every list a kern_mega disk names
 # (SMALLSUB's): the mega arm of any package that has one, everything else as
@@ -15777,6 +15779,18 @@ $(MEGAAPPDIR)/audio.bin: apps/audio/audio.asm $(AUDIO_SRC) apps/os88mega.inc | $
 	@echo "audio (PKG_MEGA): $(call FILESIZE,$@) bytes"
 $(MEGAAPPDIR)/audio.o88: $(MEGAAPPDIR)/audio.bin tools/os88pkg.py $(PKGZSTAMP) $(PKGZBSTAMP)
 	$(OS88PKGB) $(MEGAAPPDIR)/audio.bin -o $@
+
+# WaveRack's arm (SPEC.md 123.6, docs/plans/MEGA-HUGE-PLAN.md 3): the play's
+# HOLD as one OSAPI_MEM_HUGE claim walked through apps/os88huge.inc, a bridge
+# of the pool and the heap allowed - where the shipped build's is one
+# conventional claim, the heap's largest run alone
+$(MEGAAPPDIR)/waverack.bin: $(WAVERACK_SRC) apps/os88mega.inc | $(BUILD)
+	@mkdir -p $(MEGAAPPDIR)
+	$(NASM) -f bin -w+error $(STKLST) -I apps/ -I apps/waverack/ -I $(BUILD)/ \
+		-DPKG_MEGA -o $@ apps/waverack/waverack.asm
+	@echo "waverack (PKG_MEGA): $(call FILESIZE,$@) bytes"
+$(MEGAAPPDIR)/waverack.o88: $(MEGAAPPDIR)/waverack.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(MEGAAPPDIR)/waverack.bin -o $@
 
 $(MEGAAPPDIR)/tracker.bin: apps/tracker/tracker.asm apps/tracker/trkplay.inc \
                            apps/tracker/trkui.inc apps/tracker/trktxt.inc \
@@ -20728,37 +20742,50 @@ $(BUILD)/pixel.o88: $(BUILD)/pixel.bin $(PIXEL_PARTS) tools/os88pkg.py $(PKGZSTA
 # PiXEL's kern_mega ARM: the parts that store
 # into their own words, assembled -DPKG_MEGA so each store goes through ES =
 # PXP_SELF instead of CS (apps/pixel/pxpart.inc's PXSW, PXSWON, PXSSP) - 290
-# single stores and 70 runs, ~2.5KB of image. The resident (pixel.bin),
-# pxhelp, pxgif and pixart have no such store and are the shipped ones, so
-# the links in $(BUILD)/pxlink.inc are the same for both. Each depends on its
+# single stores and 70 runs, ~2.5KB of image - and since MEGA-HUGE-PLAN 3
+# the RESIDENT too (SPEC.md 106.8.1): the master is one OSAPI_MEM_HUGE claim
+# with a window every 32KB, sized by that shape's own ask, and a table holds
+# 4MB of windows (pxrec.inc's PX_MWN), so the arm's bss is not the shipped
+# one's and every LINKED part is assembled against the arm's own map,
+# $(MEGAAPPDIR)/pxlink.inc - -I $(MEGAAPPDIR)/ ahead of $(BUILD)/. pxhelp
+# and pixart link nothing and are the shipped ones. Each depends on its
 # shipped twin, which carries the part's full prerequisite list
-$(MEGAAPPDIR)/pxjpeg.bin: $(BUILD)/pxjpeg.bin apps/pixel/pxjpeg.asm apps/pixel/pxpart.inc apps/pixel/pxhmore.inc $(PIXEL_PLANS) | $(BUILD)
+$(MEGAAPPDIR)/pixel.bin: $(BUILD)/pixel.bin $(PIXEL_SRC) | $(BUILD)
 	@mkdir -p $(MEGAAPPDIR)
-	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -I $(BUILD)/ -DPKG_MEGA -o $@ apps/pixel/pxjpeg.asm
-$(MEGAAPPDIR)/pxpng.bin: $(BUILD)/pxpng.bin apps/pixel/pxpng.asm apps/pixel/pxpart.inc $(PIXEL_PLANS) | $(BUILD)
+	$(NASM) -f bin -w+error $(STKLST) -I apps/ -I apps/pixel/ -DPKG_MEGA -o $@ apps/pixel/pixel.asm
+$(MEGAAPPDIR)/pxlink.inc: $(MEGAAPPDIR)/pixel.bin tools/pxlink.py
+	python3 tools/pxlink.py $(MEGAAPPDIR)/pixel.bin -D PKG_MEGA -o $@
+$(MEGAAPPDIR)/pxgif.bin: $(BUILD)/pxgif.bin apps/pixel/pxgif.asm apps/pixel/pxpart.inc apps/os88lzw.inc \
+                         apps/pixel/pxanim.inc apps/pixel/pxed.inc apps/pixel/pxsvc.inc \
+                         $(PIXEL_PLANS) $(MEGAAPPDIR)/pxlink.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -I $(MEGAAPPDIR)/ -I $(BUILD)/ -DPKG_MEGA -o $@ apps/pixel/pxgif.asm
+$(MEGAAPPDIR)/pxjpeg.bin: $(BUILD)/pxjpeg.bin apps/pixel/pxjpeg.asm apps/pixel/pxpart.inc apps/pixel/pxhmore.inc $(PIXEL_PLANS) $(MEGAAPPDIR)/pxlink.inc | $(BUILD)
 	@mkdir -p $(MEGAAPPDIR)
-	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -I $(BUILD)/ -DPKG_MEGA -o $@ apps/pixel/pxpng.asm
-$(MEGAAPPDIR)/pxsimp.bin: $(BUILD)/pxsimp.bin apps/pixel/pxsimp.asm apps/pixel/pxpart.inc $(PIXEL_PLANS) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -I $(MEGAAPPDIR)/ -I $(BUILD)/ -DPKG_MEGA -o $@ apps/pixel/pxjpeg.asm
+$(MEGAAPPDIR)/pxpng.bin: $(BUILD)/pxpng.bin apps/pixel/pxpng.asm apps/pixel/pxpart.inc $(PIXEL_PLANS) $(MEGAAPPDIR)/pxlink.inc | $(BUILD)
 	@mkdir -p $(MEGAAPPDIR)
-	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -I $(BUILD)/ -DPKG_MEGA -o $@ apps/pixel/pxsimp.asm
-$(MEGAAPPDIR)/pxfull.bin: $(BUILD)/pxfull.bin apps/pixel/pxfull.asm apps/pixel/pxpart.inc apps/pixel/pxfs.inc apps/pixel/pxrec.inc apps/os88api.inc $(BUILD)/pxlink.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -I $(MEGAAPPDIR)/ -I $(BUILD)/ -DPKG_MEGA -o $@ apps/pixel/pxpng.asm
+$(MEGAAPPDIR)/pxsimp.bin: $(BUILD)/pxsimp.bin apps/pixel/pxsimp.asm apps/pixel/pxpart.inc $(PIXEL_PLANS) $(MEGAAPPDIR)/pxlink.inc | $(BUILD)
 	@mkdir -p $(MEGAAPPDIR)
-	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -I $(BUILD)/ -DPKG_MEGA -o $@ apps/pixel/pxfull.asm
-$(MEGAAPPDIR)/pxedit.bin: $(BUILD)/pxedit.bin apps/pixel/pxedit.asm apps/pixel/pxpart.inc apps/pixel/pxed.inc apps/pixel/pxrec.inc apps/pixel/pxqtab.inc apps/pixel/pxgam.inc apps/pixel/pxsvc.inc apps/os88api.inc $(BUILD)/pxlink.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -I $(MEGAAPPDIR)/ -I $(BUILD)/ -DPKG_MEGA -o $@ apps/pixel/pxsimp.asm
+$(MEGAAPPDIR)/pxfull.bin: $(BUILD)/pxfull.bin apps/pixel/pxfull.asm apps/pixel/pxpart.inc apps/pixel/pxfs.inc apps/pixel/pxrec.inc apps/os88api.inc $(BUILD)/pxlink.inc $(MEGAAPPDIR)/pxlink.inc | $(BUILD)
 	@mkdir -p $(MEGAAPPDIR)
-	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -I $(BUILD)/ -DPKG_MEGA -o $@ apps/pixel/pxedit.asm
-$(MEGAAPPDIR)/pxwrite.bin: $(BUILD)/pxwrite.bin apps/pixel/pxwrite.asm apps/pixel/pxpart.inc apps/pixel/pxed.inc apps/pixel/pxrec.inc apps/pixel/pxsvc.inc apps/os88lzw.inc apps/os88api.inc $(BUILD)/pxlink.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -I $(MEGAAPPDIR)/ -I $(BUILD)/ -DPKG_MEGA -o $@ apps/pixel/pxfull.asm
+$(MEGAAPPDIR)/pxedit.bin: $(BUILD)/pxedit.bin apps/pixel/pxedit.asm apps/pixel/pxpart.inc apps/pixel/pxed.inc apps/pixel/pxrec.inc apps/pixel/pxqtab.inc apps/pixel/pxgam.inc apps/pixel/pxsvc.inc apps/os88api.inc $(BUILD)/pxlink.inc $(MEGAAPPDIR)/pxlink.inc | $(BUILD)
 	@mkdir -p $(MEGAAPPDIR)
-	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -I $(BUILD)/ -DPKG_MEGA -o $@ apps/pixel/pxwrite.asm
-$(MEGAAPPDIR)/pxextra.bin: $(BUILD)/pxextra.bin apps/pixel/pxextra.asm apps/pixel/pxpart.inc apps/pixel/pxhmore.inc apps/os88lzw.inc $(PIXEL_PLANS) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -I $(MEGAAPPDIR)/ -I $(BUILD)/ -DPKG_MEGA -o $@ apps/pixel/pxedit.asm
+$(MEGAAPPDIR)/pxwrite.bin: $(BUILD)/pxwrite.bin apps/pixel/pxwrite.asm apps/pixel/pxpart.inc apps/pixel/pxed.inc apps/pixel/pxrec.inc apps/pixel/pxsvc.inc apps/os88lzw.inc apps/os88api.inc $(BUILD)/pxlink.inc $(MEGAAPPDIR)/pxlink.inc | $(BUILD)
 	@mkdir -p $(MEGAAPPDIR)
-	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -I $(BUILD)/ -DPKG_MEGA -o $@ apps/pixel/pxextra.asm
-PIXEL_MEGAPARTS := $(BUILD)/pxhelp.bin $(BUILD)/pxgif.bin $(MEGAAPPDIR)/pxpng.bin \
+	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -I $(MEGAAPPDIR)/ -I $(BUILD)/ -DPKG_MEGA -o $@ apps/pixel/pxwrite.asm
+$(MEGAAPPDIR)/pxextra.bin: $(BUILD)/pxextra.bin apps/pixel/pxextra.asm apps/pixel/pxpart.inc apps/pixel/pxhmore.inc apps/os88lzw.inc $(PIXEL_PLANS) $(MEGAAPPDIR)/pxlink.inc | $(BUILD)
+	@mkdir -p $(MEGAAPPDIR)
+	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -I $(MEGAAPPDIR)/ -I $(BUILD)/ -DPKG_MEGA -o $@ apps/pixel/pxextra.asm
+PIXEL_MEGAPARTS := $(BUILD)/pxhelp.bin $(MEGAAPPDIR)/pxgif.bin $(MEGAAPPDIR)/pxpng.bin \
                    $(MEGAAPPDIR)/pxjpeg.bin $(MEGAAPPDIR)/pxsimp.bin $(MEGAAPPDIR)/pxfull.bin \
                    $(MEGAAPPDIR)/pxedit.bin $(MEGAAPPDIR)/pxwrite.bin $(MEGAAPPDIR)/pxextra.bin \
                    $(BUILD)/pixart.bin
-$(MEGAAPPDIR)/pixel.o88: $(BUILD)/pixel.bin $(PIXEL_MEGAPARTS) tools/os88pkg.py $(PKGZSTAMP)
-	$(OS88PKG) $(BUILD)/pixel.bin -o $@ $(addprefix --part ,$(PIXEL_MEGAPARTS))
+$(MEGAAPPDIR)/pixel.o88: $(MEGAAPPDIR)/pixel.bin $(PIXEL_MEGAPARTS) tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(MEGAAPPDIR)/pixel.bin -o $@ $(addprefix --part ,$(PIXEL_MEGAPARTS))
 
 # `make pixeldisk`: PiXEL and its gallery, in all four geometries, REDLINE's
 # shape. The package at the root, the pictures in PICTURES/ - the folder

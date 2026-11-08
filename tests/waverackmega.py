@@ -151,14 +151,21 @@ def main():
     ap.add_argument("--pkg", help="a WAVERACK.O88 to run instead of build/'s")
     ap.add_argument("--src", default=ROOT,
                     help="the tree whose apps/waverack/ the package was built from")
+    ap.add_argument("--arm", action="store_true",
+                    help="waverackmega-arm: kern_mega's own arm (build/megak/apps/"
+                    "waverack.o88, PKG_MEGA), whose hold is one huge claim")
     a = ap.parse_args()
-    pkg = a.pkg or os88build.at("build/waverack.o88")
+    bin_ = "build/megak/apps/waverack.bin" if a.arm else "build/waverack.bin"
+    pkg = a.pkg or os88build.at("build/megak/apps/waverack.o88" if a.arm
+                                else "build/waverack.o88")
     syms, img = pkg_syms(os.path.join(a.src, "apps/waverack/waverack.asm"),
                          (os.path.join(a.src, "apps") + "/",
                           os.path.join(a.src, "apps/waverack") + "/",
-                          os.path.join(a.src, "build") + "/"))
-    if not a.pkg and img != open(os88build.at("build/waverack.bin"), "rb").read():
-        sys.exit("waverackmega: build/waverack.bin is not this source's - make waverackdisk")
+                          os.path.join(a.src, "build") + "/"),
+                         ("PKG_MEGA",) if a.arm else ())
+    if not a.pkg and img != open(os88build.at(bin_), "rb").read():
+        sys.exit("waverackmega: %s is not this source's - make %s"
+                 % (bin_, "mega" if a.arm else "waverackdisk"))
     data = open(os.path.join(DEMO, CLIP), "rb").read()
     r = wrsim.parse(data)
     tmp = tempfile.mkdtemp(prefix="wrmega-")
@@ -287,7 +294,14 @@ def leg_hold(ui, w, rk, data, r):
     hseg = rk.rd("wt_hseg", 2)
     check("HOLD: loaded whole, frames %d to %d" % (lo, hi), pos == hi and hi > lo + 16,
           "[wt_hpos] = %d" % pos)
-    got = m.readseg(hseg, 0, hi - lo) if hseg else b""
+    got = b""                               # window by window: the arm's
+    step = 0x1000                           # hold is a huge claim (wt_hw's
+    if "wt_hw" in rk.s:                     # step, os88huge.inc)
+        step = rk.rd("wt_hw", 2, 2) or 8
+    k = 0
+    while hseg and len(got) < hi - lo:
+        got += m.readseg(hseg + step * k, 0, min(0x10000, hi - lo - len(got)))
+        k += 1
     want = wrsim.hold_bytes(data, r, lo, hi)
     bad = next((i for i in range(min(len(got), len(want))) if got[i] != want[i]), None)
     check("HOLD: its %d bytes are wrsim.hold_bytes()" % len(want),
