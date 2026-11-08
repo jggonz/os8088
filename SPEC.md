@@ -243848,7 +243848,10 @@ its cursor's offset does not seek.
 5. a clip playing, to its ring's top: what is on the glass first;
 6. (after a key, nothing more for a third of a second, `VB_KQUIET`) the head
    of the clip under the menu's cursor;
-7. the head of the enemy's attack;
+7. the head of the enemy's attack - or, while a plan whose rolled damage
+   takes the enemy's last HP plays, the head of the VICTORY clip (`vb_begin_plan`
+   sets `[vb_eclip]` to it: the enemy has no next move, and read at the
+   ending the head held the picture 316 ms on 5150 #1, 2026-11-08);
 8. the music, to its ring's top.
 
 A ring is given to a clip only if it is not playing and not holding the
