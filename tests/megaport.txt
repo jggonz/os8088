@@ -425,6 +425,7 @@ zonedmg/86box secs=30 OS88_MEGA_EMU=86box   # a zone's damage owes the window ov
 midiracksb secs=30 OS88_MEGA_EMU=86box   # MIDIRack's synth on the SB2.0: the card takes 16,000 samples a second of guest time and the capture's pitch matches the song 10 of 10; red: --break
 midirackwt secs=30 OS88_MEGA_EMU=86box   # ...the wavetable bank (build/mrwt720.img's), 10 of 10; red: --break
 midirackwtbig secs=40 OS88_MEGA_EMU=86box   # ...a 199 KB padded bank, the ARM's OSAPI_MEM_HUGE claim (BX = 8000h, SPEC.md 105.10.2) ABOVE 1MB and its run's windows played past 64KB, 10 of 10; red: the arm before - the bank CONVENTIONAL, at 012400h
+rcbig secs=35 OS88_MEGA_EMU=86box   # RUNCPM's two copies past 64KB on kern_mega (SPEC.md 74.3.3), byte for byte - the huge claims runs of selectors there; red: the tree before - both opens refused, NO FILE. 35s is 21 measured
 midiracksbmem secs=40 OS88_MEGA_EMU=86box OS88_MEGA_MEGS=1   # the two rings live only while they play, the grant ring and the refusals, on a 1MB kern_mega (mem_tab names paragraphs, the package selectors); red: POKE mmf_osapi_mem_free=f8cb
 audhand secs=40 OS88_MEGA_EMU=86box   # the Audio Player's AP_HANDOFF queue is found by the running player (its wakes from a PLAYING stream on the SB); red: POKE osapi_file_goto_qm+5=c3 (GOTO_QM as GOTO_Q)
 vidsound secs=40 OS88_MEGA_EMU=86box   # VIDEO.O88 off an IDE C: (MR BIOS type 47, identified) with the SB2.0 the clock: 1,800 frames, no pause, the play 59.59 s for 59.56 s of sound, the capture byte-exact; red: POKE mmf_osapi_mem_claim_dma_hi=f9cb

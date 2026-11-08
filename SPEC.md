@@ -134089,21 +134089,21 @@ a directory entry, 4KB blocks, 8 16-bit `al` words from block 8 — harness:
 0/127/128/16384/16385/32768/65535 bytes are one entry each with the extent,
 `rc` and block count `disk.h` gives them, 67,301 bytes three entries `ex`
 1/3/4 with `rc` 128/128/14, 134,899 bytes five entries ending `ex` 8 `rc` 30),
-`F_SIZE` in 24 bits from the cache. **Files above 65,535 bytes are refused as
-a fact** — the file API a package reaches reads and writes whole files with a
-16-bit count and no seek — with a BDOS 0xFF (open, make, and a SEQUENTIAL
-write of record 511 — the code upstream's `_sys_writeseq` answers for a
-failed `fwrite`, and the same 0xFF for a record the heap will not hold) or 6
-(a random write past the end: `_sys_writerand`'s seek code) and a toast naming
-the file (`RunCPM: NAME.EXT>64K`, or `RunCPM RAM? NAME.EXT`) — every such
+`F_SIZE` in 24 bits from the cache. **A file above 65,535 bytes is ONE HUGE
+CLAIM** (§74.3.3; until it, such a file was refused as a fact), and what this
+model cannot hold is refused with a BDOS 0xFF (an open of a file of 8MB or
+more, past CP/M's own reach; a SEQUENTIAL write past record 65,534 — the code
+upstream's `_sys_writeseq` answers for a failed `fwrite`, and the same 0xFF
+for a record the heap will not hold) or 6 (a random write past the end:
+`_sys_writerand`'s seek code) and a toast naming the file (`RunCPM:
+NAME.EXT>8MB`, or `RunCPM RAM? NAME.EXT`) — every such
 refusal goes through `rc_say`, which ALSO prints the text on the terminal
 while the window is fullscreen (§74.4); a random READ with `r2` set answers 1
 with `cr`/`ex`/`s2` stepped from the record's low bits, as `_sys_readrand`
 does — its `fseek` past the end succeeds on every host, `fread` moves nothing,
 and 6 is only a FAILED `fseek` (harness); `DIR`
-still lists them with the whole chain; none is shipped. The last record this
-model READS is 511 (a 65,535-byte file's tail) and the last it WRITES 510
-(65,408 bytes: the 16-bit size's last whole record). **A ninth open evicts the
+lists every file with the whole chain. The last record this model WRITES is
+65,534 ((record + 1) x 128 is the 24-bit size). **A ninth open evicts the
 least recently used CLEAN entry**; when every entry is a modified file the
 open errs `Bdos Err on X: CP/M ERR` with the toast `RunCPM: 8 files open`; a
 claim the heap refuses evicts clean entries and retries, then toasts `RunCPM
@@ -134311,6 +134311,44 @@ leaving `rc_z.seg` stale: the CCP never answers.
 **Cost:** image +224 bytes (31,030 -> 31,254), bss +0, the module part +18;
 the file 26,941 -> 26,950, no sector.
 
+#### 74.3.3 A file past 64KB is one huge claim
+
+An open file past 65,535 bytes is held whole as ONE `os88_mem_huge` claim
+(§73.9.2, SPEC.md 50.3.5; docs/plans/MEGA-HUGE-PLAN.md 3), and the record
+window is the natural one: a 64KB window is exactly 512 records, so record r
+is at offset (r & 511) x 128 of window r >> 9 - `seg + (r >> 9) x
+os88_mem_huge_step()` (`rc_recoff`) - and no record crosses a window, a cut
+of a bridge included. The size is 24 bits in the row (`size_hi`, its whole
+records `rc_ofrec`), compared in records, never as a byte count. A file of
+65,535 bytes or less keeps the paragraph claim it had (a byte count wastes
+no granule, §50.3.7); the write that takes it past record 510 makes it huge
+(`rc_oft_tohuge`: claimed, its bytes copied through a 256-byte bounce with
+`os88_seg_get`/`_put`, the old claim freed, the new declared movable), and a
+huge entry regrows by KB (`os88_mem_regrow`, an eighth and 3KB of slack). It
+is read whole by `os88_file_read_huge` and written back whole by
+`os88_file_write_huge`, the kernel walking the claim by its own step - a
+PACKED file too (MEGA-HUGE-PLAN F4). A gap a random write leaves is zeroed a
+window, and 32KB, at a time (`rc_gapfill`). The capture files keep their
+65,535-byte ceiling (byte s is window 0's even of a huge claim).
+
+It is the same code on every kernel, the step the cell's answer: on kern_big
+and kern_small a huge claim is one conventional claim (step 1000h, up to the
+1,023KB every such claim stops at); on kern_mega in protected mode it is a run
+of selectors above 1MB where the pool holds it, and its regrow is the
+kernel's (§50.3.5's THE REGROW). Cost: the image 31,462 -> 32,696 bytes, the
+bss 10,597 -> 10,877 (the bounce 256, the rows 16), the module part 6,781 ->
+6,814. `apps/runcpm/hosttest/rcfstest.c` (`make runcpm`'s host check) is the
+gate: a 67,301-byte and a 134,899-byte file opened and read across their
+windows to their last partial records, a file written past record 510
+(made huge) and on to record 1,000 through a regrow that moves, written back
+whole as 128,128 bytes with zeros in the gap, reread; an 8MB file refused -
+red on the tree before (every one of those refused). The master disk's three
+files that were left off for it (BDOS.ASM 67,301, ZCPR3.ASM 66,761,
+Z80ASM.PDF 134,899 bytes) are extracted now (`tools/getruncpm.py`'s
+`MAX_FILE` is 8MB less a byte) and ship where there is room: on the live
+volume (§80.6) all three; on the four floppies none - they were full already,
+and the fill's `LEFT-OFF.TXT` names them under no-room instead.
+
 ### 74.4 What is present and greyed, and what is absent
 
 **The About panel** (`rcabout.c`, wave 5) is the kernel bar's `About RunCPM`
@@ -134365,7 +134403,7 @@ toast, AND — when `rc_full` is set — the same ≤ 24-character text on the
 terminal, `"\r\n" msg "\r\n"` through `rc_puts` (one row = one band, ~1 ms:
 the console line is where upstream's `disk.h` prints its errors); `rc_say_now`
 is the same under the gfx lock with the terminal flushed on the spot, for the
-one WAIT (§74.3's walk). Harness: the `>64K` refusal is on the console only
+one WAIT (§74.3's walk). Harness: the `>8MB` refusal is on the console only
 while `rc_full`; glass: `wave4c-full-user2.png`.
 
 Absent: RunCPM's internal C CCP (host-blocking C; DRI's binary is the command

@@ -7052,6 +7052,19 @@ SOAK = [
         "[ch_seg] stale and the move count at 0. Needs `cc`",
         needs=("marty", "cc"), serial=True,
         wants=("build/cmemmove360.img",)),
+    Row("rcbig", "soak", py("tests/rcbig.py"), 40.0,
+        "SPEC.md 74.3.3 (MEGA-HUGE-PLAN 3): RUNCPM's open files past 64KB, "
+        "each ONE os88_mem_huge claim. MartyPC's 5150 (720KB): `pip "
+        "copy.pdf=z80asm.pdf[o]` and `pip bdos2.asm=bdos.asm[o]` - 134,899 "
+        "and 67,301 bytes, read across their windows, the copies made huge at "
+        "record 511 and regrown on, written back whole - and each copy read "
+        "back off the floppy, the original byte for byte then ^Z to its last "
+        "record. Its kern_mega port (tests/megaport.txt) is the same on "
+        "86Box. RED on the tree before, measured: both opens refused, PIP's "
+        "NO FILE, no copy. 40s is 24 measured",
+        needs=("marty",), serial=True,
+        wants=("build/os8088-720.img", "build/runcpm.o88",
+               "build/runcpm-src.stamp")),
     Row("rcmove", "soak", py("tests/rcmove.py"), 120.0,
         "RUNCPM'S 64KB Z80 CLAIM MOVES and the machine keeps running "
         "(SPEC.md 74.3.2, docs/plans/NO-PINNING-PLAN.md C3): cmemmove's "
