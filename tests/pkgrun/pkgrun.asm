@@ -65,7 +65,7 @@ pr_done:    db 0                    ; +34 the ENTRY COUNT at the moment the
                                     ;     checks finished, so 1 = they ran to
                                     ;     the end on the first wake and every
                                     ;     later one arrived after them
-pr_ok:      db 0                    ; +35 bit 0 = A, bit 1 = B, bit 2 = C
+pr_ok:      db 0                    ; +35 bit 0 = A, bit 1 = B, bit 2 = C, ... bit 6 = G
 pr_cfa:     db 0                    ; +36 the CF each call answered, 0 or 1
 pr_cfb:     db 0                    ; +37
 pr_cfc:     db 0                    ; +38
@@ -86,8 +86,11 @@ pr_cfe1:    db 0                    ; +52 E's FIRST half: the SAME file handed
 pr_ale1:    db 0                    ; +53 to PKG_RUN, which must refuse it
 pr_ferr2:   db 0                    ; +54 the MSEG read's FERR_*, 0 = read
 pr_len2:    dw 0                    ; +55 ...and the bytes it delivered
-%if ($ - $$) != 57
-  %error "the verdict block must start at offset 32 and be 25 bytes: tests/pkgrun.py reads it by ARITHMETIC, not by a map"
+pr_cfg:     db 0                    ; +57 G: a COMPRESSED image (MINES.O88,
+pr_alg:     db 0                    ; +58 LZ4 on the disk) through the image
+pr_ferr3:   db 0                    ; +59 form - and the read's FERR_*
+%if ($ - $$) != 60
+  %error "the verdict block must start at offset 32 and be 28 bytes: tests/pkgrun.py reads it by ARITHMETIC, not by a map"
 %endif
 
 PR_CLAIM_KB equ 20                  ; HELLO.O88 is under a kilobyte and four was
@@ -107,11 +110,11 @@ PR_OFF      equ 64                  ; ...and the image sits THIS FAR INTO the
                                     ; below is what a lost one reads instead
 PR_POISON   equ 0xA5
 PR_CONT_W  equ 286                  ; content width:  288 outer - 2px borders
-PR_CONT_H  equ 81                  ; ...and 100 outer - TITLE_H - 1. SIX rows
+PR_CONT_H  equ 93                  ; ...and 112 outer - TITLE_H - 1. SEVEN rows
                                     ; at PR_ROW_H now, plus the 6px top
-                                    ; margin, is 78 - so 76 outer stopped
+                                    ; margin, is 90 - 76 outer stopped
                                     ; fitting when SPEC.md 21.5's three
-                                    ; arrived
+                                    ; arrived, and 100 when G did
 PR_ROW_H   equ 12
 
 LD_EBAD    equ 2                    ; SPEC.md 21.4, mirrored - a test package
@@ -258,7 +261,7 @@ pr_onwake:
     call OSAPI_FILE_READ
     jnc .read2
     mov [pr_ferr2], al
-    jmp short .free
+    jmp short .g
 .read2:
     mov [pr_len2], ax
     mov [pr_len], ax                ; pr_run reads this
@@ -266,6 +269,34 @@ pr_onwake:
     call pr_run
     mov [pr_cfe1], bl
     mov [pr_ale1], al
+
+    ; --- G: a COMPRESSED image through the image form (SPEC.md 21.5.1.2).
+    ; MINES.O88 is the shipped one, packed as every release package is
+    ; (PKGZ=lz4, SPEC.md 20.13.5): the file is SHORTER than the image it
+    ; declares, and the slot must expand it the way the disk path does. It
+    ; used to copy the image's length out of a buffer holding the file's -
+    ; The Wire's Load Program on any release .O88 crashed the machine.
+.g:
+    mov es, [pr_seg]
+    mov bx, PR_OFF
+    mov cx, PR_CLAIM_KB * 1024 - PR_OFF
+    xor dx, dx
+    mov si, pr_s_mines
+    call OSAPI_FILE_READ
+    jnc .read3
+    mov [pr_ferr3], al
+    jmp short .free
+.read3:
+    mov [pr_len], ax                ; pr_run reads this: the FILE's length
+    mov si, pr_s_mines
+    call pr_run
+    mov [pr_cfg], bl
+    mov [pr_alg], al
+    or bl, bl
+    jnz .free
+    or al, al
+    jnz .free
+    or byte [pr_ok], 64
 
 .free:
     mov dx, [pr_seg]                ; ours to give back: the image was COPIED
@@ -448,7 +479,7 @@ pr_paint:
     add di, 2
     add dx, PR_ROW_H
     shl cl, 1
-    cmp di, pr_lines + 12
+    cmp di, pr_lines + 14
     jb .row
     pop di
     pop si
@@ -460,23 +491,25 @@ pr_paint:
 
 ; --- window template (SPEC.md 11: 16 bytes, 8 words) --------------------------
 pr_tpl:
-    dw 40, 40, 288, 100
+    dw 40, 40, 288, 112
     dw pr_ttl, pr_paint, 0, 0
 
 pr_ttl:     db 'PKGRUN', 0
 pr_s_file:  db 'HELLO.O88', 0
 pr_s_mseg:  db 'MSEG.O88', 0
 pr_s_none:  db 'NOSUCH.O88', 0
+pr_s_mines: db 'MINES.O88', 0
 pr_s_wait:  db 'running...', 0
 pr_s_fail:  db 'FAIL', 0
 pr_s_pass:  db 'ok', 0
-pr_lines:   dw pr_s_a, pr_s_b, pr_s_c, pr_s_d, pr_s_e, pr_s_f
+pr_lines:   dw pr_s_a, pr_s_b, pr_s_c, pr_s_d, pr_s_e, pr_s_f, pr_s_g
 pr_s_a:     db 'A run from memory', 0
 pr_s_b:     db 'B bad magic refused', 0
 pr_s_c:     db 'C parts refused', 0
 pr_s_d:     db 'D run by name', 0
 pr_s_e:     db 'E parts: no/yes', 0
 pr_s_f:     db 'F no such name', 0
+pr_s_g:     db 'G packed image runs', 0
 
     OS88_BSS 4
     OS88_IMAGE_END

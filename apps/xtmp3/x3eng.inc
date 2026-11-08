@@ -4316,7 +4316,8 @@ x3_be_drop:
 ; x3_bvcall - a backend verb, BL = X3V_*: DS = the part's own for the call
 ; (x3gran.inc section 2), every other register the verb's. The worker never
 ; calls this - GRANULE goes through [x3_bgran] - so its scratch vector is the
-; UI task's alone
+; UI task's alone. Called with DS = ours, and the vector is stored through it:
+; a store through CS is a #GP kern_mega completes (KERN-MEGA-PLAN 14.150)
 ; -----------------------------------------------------------------------------
 x3_bvcall:
     call x3_wsck                    ; a moved work segment re-banked first
@@ -4324,9 +4325,12 @@ x3_bvcall:
     push ds
     xor bh, bh
     shl bx, 1
-    mov ds, [cs:x3_bseg]
+    mov ds, [x3_bseg]
     mov bx, [bx + X3K_VEC]
-    mov [cs:x3_bvec], bx
+    pop ds                          ; ours again, for the store...
+    push ds
+    mov [x3_bvec], bx
+    mov ds, [x3_bseg]               ; ...and the part's for the call
     call far [cs:x3_bvec]
     pop ds
     pop bx

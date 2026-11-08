@@ -1452,6 +1452,13 @@ dsk_xfer:
                                 ; where ES:BX is pinned and switching is off.
                                 ; Every register and the flags are preserved
 
+%ifdef KERN_MEGA
+    call dsk_bnc_want           ; A BUFFER ABOVE 1MB HAS ITS LANDING: a shed
+                                ; one is taken back HERE, before the lock -
+                                ; an ordinary claim from the caller's task -
+                                ; so a shed never leaves the bounce a sector
+                                ; a call (KERN-MEGA-PLAN 14.167)
+%endif
     inc byte [sch_lock]         ; pause task switching across all int 13h
 %ifdef OS88_COMPACT             ; ...and kern_small pins nothing, because
                                 ; nothing there MOVES (SPEC.md 66.0): the word
@@ -1616,10 +1623,10 @@ dsk_xfer:
                                 ; leaves this routine before the int 13h loop
                                 ; below ever runs
 %ifdef KERN_MEGA
-    test dl, 4                  ; THE BUFFER IS AN LDT SELECTOR: the driver's
-    jz .drvlo                   ; own int 13h rung would be refused 09h by
-    call .drvhi                 ; mega_svc's fence, so it gets dsk_secbuf, a
-    jmp short .drvret           ; sector a call (KERN-MEGA-PLAN 13.3 step 4)
+    test dl, 4                  ; THE BUFFER IS AN LDT SELECTOR: a driver
+    jz .drvlo                   ; that says BLKCAP_SEL takes it as it is, and
+    call .drvhi                 ; every other is bounced a RUN at a time
+    jmp short .drvret           ; through the landing (KERN-MEGA-PLAN 14.167)
 .drvlo:
     call drv_blk_call_x
 .drvret:
@@ -1897,16 +1904,16 @@ dsk_xfer:
     mov word [dsk_bnc_n], 1     ; A BUFFER ABOVE 1MB (an LDT selector: a
     mov cx, es                  ; package placed high, its claims, a kernel
     test cl, 4                  ; cache - KERN-MEGA-PLAN item 85) bounces a
-    jz .b1                      ; RUN, through the read-ahead's landing - nine
-    mov cx, [dsk_rah_bnc]       ; page-safe sectors, scratch between fills -
-    jcxz .b1                    ; where a sector at a time through dsk_secbuf
-    cmp bp, si                  ; cost a call, and on a floppy a revolution,
-    jbe .bn1                    ; per 512 bytes
+    jz .b1                      ; RUN, through the read-ahead's landing -
+    mov cx, [dsk_rah_bnc]       ; DSK_BNC_SECS page-safe sectors, scratch
+    jcxz .b1                    ; between fills (14.167) - where a sector at
+    cmp bp, si                  ; a time through dsk_secbuf cost a call, and
+    jbe .bn1                    ; on a floppy a revolution, per 512 bytes
     mov bp, si
 .bn1:
-    cmp bp, DSK_RAH_SECS
+    cmp bp, DSK_BNC_SECS
     jbe .bn2
-    mov bp, DSK_RAH_SECS
+    mov bp, DSK_BNC_SECS
 .bn2:
     cmp bp, 1
     jbe .b1                     ; ONE sector: dsk_secbuf, which .bcp keys on
@@ -2151,9 +2158,32 @@ dsk_xfer:
     jmp .sector
 
 %ifdef KERN_MEGA
-.drvhi:                         ; DX:BX the caller's buffer, CX sectors, DI:SI
-    jcxz .dhok                  ; the LBA, AX and BP the block call's - and
-.dhl:                           ; the driver keeps nothing but CF and AL
+; --- .drvhi: DSV_BLK for a buffer that is an LDT SELECTOR (KERN-MEGA-PLAN
+; 14.167). in: DX:BX the caller's buffer, CX sectors, DI:SI the LBA, AX and
+; BP the block call's (AH the handle, AL 0 read / 1 write). Out: CF and AL,
+; the driver's. Clobbers the rest - .drv reloads what it needs.
+;
+; A DRIVER THAT SAYS BLKCAP_SEL GETS THE SELECTOR AS IT IS: HDD.DRV's rung 1
+; is `rep insw` through ES, which a selector above 1MB serves exactly as a
+; segment does, so a run goes to the drive as ONE command with no copy at
+; all. Its answer 09h - "no transfer I have can reach this buffer", rung 0's
+; for a buffer above 1MB, which the ROM's DMA cannot address - has moved
+; nothing, and is the one answer that falls through to the bounce. Every
+; other driver's block call is BOUNCED, a RUN at a time through the landing
+; ([dsk_rah_bnc], DSK_BNC_SECS page-safe sectors), and a sector at a time
+; through dsk_secbuf only when no landing could be had (dsk_bnc_want). It
+; was a sector a call through dsk_secbuf for every driver - one IDE command
+; per 512 bytes on rung 1, one reflected int 13h (a CPU reset on a 286) per
+; 512 bytes on rung 0. The copier is .bcp, the BIOS bounce's own.
+.drvhi:
+    push ax
+    push di
+    mov al, [drv_blkcls]
+    call drv_cls_svc_x          ; CLSCF: .drv read BP off this same class's table
+    test byte [di+DSV_CAPS], BLKCAP_SEL
+    pop di                      ; (pop writes no flag)
+    pop ax
+    jz .dhbnc
     push ax
     push bx
     push cx
@@ -2161,41 +2191,87 @@ dsk_xfer:
     push si
     push di
     push bp
-    cmp al, 1
-    jne .dhgo
-    mov al, 0x03
-    call .dhcp                  ; a write's sector into the scratch
-    mov al, 1
-.dhgo:
-    mov dx, ss
-    mov bx, dsk_secbuf
-    mov cx, 1
-    call drv_blk_call_x
+    call drv_blk_call_x         ; the selector, as it is
     pop bp
     pop di
     pop si
     pop dx
     pop cx
     pop bx
-    jc .dhbad
-    pop ax
-    cmp al, 1
-    je .dhnext
+    jnc .dhdrop                 ; moved: CF = 0 out
+    cmp al, 0x09                ; ...or refused before a sector moved
+    jne .dhbad
+    pop ax                      ; the block call's AX back: bounce it
+.dhbnc:
+.dhl:
+    jcxz .dhok
     push ax
-    mov al, 0x02
-    call .dhcp                  ; a read's sector out to the caller
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    mov [dsk_bnc_bx], bx        ; the caller's run, as .bcp reads it
+    mov [dsk_bnc_es], dx        ; ([dsk_bnc_si] stays 0: nothing is
+    mov bx, 1                   ; "bouncing" for .unbounce or .fail)
+    cmp word [dsk_rah_bnc], 0
+    je .dhn                     ; no landing: one sector, dsk_secbuf
+    mov bx, cx
+    cmp bx, DSK_BNC_SECS
+    jbe .dhn
+    mov bx, DSK_BNC_SECS
+.dhn:
+    mov [dsk_bnc_n], bx         ; 1 = dsk_secbuf, more = the landing (.bcp)
+    push ax
+    mov al, 0x03
+    call .bcp                   ; a write's run into the scratch
     pop ax
-.dhnext:
-    add bx, 512
-    add si, 1
+    mov cx, bx
+    mov dx, ss
+    mov bx, dsk_secbuf
+    cmp cx, 1
+    je .dhgo
+    mov dx, [dsk_rah_bnc]
+    xor bx, bx
+.dhgo:
+    call drv_blk_call_x
+    jc .dhfail
+    mov al, 0x02
+    call .bcp                   ; a read's run out to the caller
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    push ax
+    mov ax, [dsk_bnc_n]         ; n sectors done: the count, the LBA and
+    sub cx, ax                  ; the offset move (n <= 127, so n x 512
+    add si, ax                  ; is a word)
     adc di, 0
-    loop .dhl
-.dhok:
-    clc
-    ret
+    xchg ah, al
+    shl ax, 1
+    add bx, ax
+    pop ax
+    jmp short .dhl
+.dhfail:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
 .dhbad:
     pop bx                      ; the banked AX, dropped: AL is the status
     stc
+    ret
+.dhdrop:
+    pop bx                      ; (CF = 0 from the `jnc`: pop writes none)
+    ret
+.dhok:
+    clc
     ret
 %endif
 %if %isdef(OS88_DRIVERS) && !%isdef(KERN_MEGA)
@@ -2293,37 +2369,6 @@ dsk_xfer:
 .dcnr:
     ret
 %endif
-%ifdef KERN_MEGA
-.dhcp:                          ; AL = 03h caller -> scratch, 02h back; the
-    push ds                     ; caller's sector at DX:BX. Keeps everything
-    push es
-    push si
-    push di
-    push cx
-    push ss
-    pop es
-    mov di, dsk_secbuf
-    mov ds, dx
-    mov si, bx
-    cmp al, 0x02
-    jne .dhcgo
-    push ds
-    push es
-    pop ds
-    pop es
-    xchg si, di
-.dhcgo:
-    mov cx, 256
-    cld
-    rep movsw
-    pop cx
-    pop di
-    pop si
-    pop es
-    pop ds
-    ret
-%endif
-
 .bcp:                           ; AL = the op that copies at this end
     cmp [dsk_op], al
     jne .bret
@@ -2564,8 +2609,8 @@ dsk_runcap:
                                 ; file doors load (ODD, SLD) and every
     call MEGA_SEL_CODE:mega_selbasef ; claim's value in protected mode
     cmp dx, 0x0F                ; (KERN-MEGA-MEMORY-PLAN MC7.4). Above 1MB (a
-    ja .hma                     ; window, a pool claim) the ROM's int 13h
-    jmp short .lin              ; cannot reach it at all: 0 bounces it
+    ja .hi                      ; window, a pool claim) the ROM's int 13h
+    jmp short .lin              ; cannot reach it at all: 0 bounces it...
 .seg:
 %endif
     mov cl, 4                   ; the carry out of this is the page number,
@@ -2606,6 +2651,15 @@ dsk_runcap:
  %define DSK_RCHMA
 %endif
 %ifdef DSK_RCHMA
+%ifdef KERN_MEGA
+.hi:                            ; ...BUT A FLOPPY'S 8237 CAN (KERN-MEGA-PLAN
+    or dh, dh                   ; 14.156): mega_fd13 programs all 24 bits,
+    jnz .hma                    ; so below 16MB a run into a pool claim goes
+    cmp byte [dsk_unit], 1      ; native as one track - the page math on its
+    ja .hma                     ; linear base - and a call the native path
+    cmp byte [mega_fdoff], 0    ; hands back is bounced by mega_svc itself
+    je .lin                     ; (mega_hibnc). Bounced here, nine sectors a
+%endif                          ; call missed a revolution each: 22 kHz ran dry
 .hma:                           ; ...the IBM AT's diskette code keeps four
     xor bp, bp                  ; page bits, so a transfer there lands under
     jmp short .out              ; 1MB. 0 bounces it through dsk_secbuf, a
@@ -6881,6 +6935,18 @@ dsk_rah_cap:  db DSK_RAH_AUTO    ; A CEILING SOMEBODY ELSE SET (SPEC.md
                                  ; happen while the commander is away, or the
                                  ; next mount hands the cache straight back
 %ifdef KERN_MEGA
+DSK_BNC_SECS equ 18              ; THE LANDING'S SECTORS (KERN-MEGA-PLAN
+                                 ; 14.167): a bounce's run through it is one
+                                 ; reflected int 13h - on a 286 one CPU reset
+                                 ; - so it is sized for the BIOS's call and
+                                 ; not for the read-ahead's nine-sector chunk.
+                                 ; MEASURED on the mr286 profile, a 60KB read
+                                 ; off the BIOS path: 9 72.8 ms, 18 68.4, 36
+                                 ; 66.2, 63 67.8 (conventional 60.0) - past
+                                 ; 18 it is the copy, not the calls
+%if DSK_BNC_SECS < DSK_RAH_SECS || DSK_BNC_SECS > 127
+  %error "the landing carries a read-ahead chunk (DSK_RAH_SECS) and a bounce's run counts in a byte of n x 512 under 64KB"
+%endif
 dsk_rah_bnc:  dw 0               ; kern_mega, the store ABOVE 1MB (KERN-MEGA-
                                  ; PLAN 13.3): the low LANDING every fill
                                  ; reads into and copies up from, a page-safe
@@ -7598,14 +7664,43 @@ dsk_rah_land:
     push bx
     push cx
     push dx
-    mov ax, DSK_RAH_SECS * 32   ; the sectors in PARAGRAPHS, exactly - nine
-    mov cx, ax                  ; are 4.5KB, which a KB door made five (SPEC.md
-    mov bx, MEM_P_RAHB          ; 50.2.1) - all of it inside one 64KB page
+    mov ax, DSK_BNC_SECS * 32   ; the sectors in PARAGRAPHS, exactly (a KB
+    mov cx, ax                  ; door rounds up, SPEC.md 50.2.1) - all of it
+    mov bx, MEM_P_RAHB          ; inside one 64KB page
     call mem_claimp_dma_x
     jc .out
     mov [dsk_rah_bnc], dx
 .out:
     jmp kretc_dx
+
+; dsk_bnc_want - dsk_xfer's head on kern_mega: a transfer whose buffer is
+; ABOVE 1MB has the landing to bounce through, taken back if a shed had it
+; (KERN-MEGA-PLAN 14.167). Asked BEFORE [sch_lock] is raised and only when
+; it is 0 - the caller's own task, where any claim may be made - and only
+; for an LDT selector whose base is past 1MB in protected mode: a selector
+; below it (a 1MB machine's claims, a low alias) goes native or straight to
+; its driver and wants no landing. Refused, the bounce goes a sector a call
+; through dsk_secbuf, as it always could. Every register kept; flags not
+dsk_bnc_want:
+    push ax
+    mov ax, es
+    test al, 4                  ; an LDT selector (bit 2 is clear on every
+    jz .out                     ; identity selector: 32-paragraph bases)
+    cmp word [dsk_rah_bnc], 0
+    jne .out                    ; held: the common case, three tests
+    cmp byte [mega_on], 0
+    je .out                     ; real mode: ES is a segment
+    cmp byte [sch_lock], 0
+    jne .out                    ; nested (a fill), or a caller holding the lock
+    push dx
+    call MEGA_SEL_CODE:mega_selbasef ; DX:AX = its base
+    cmp dx, 0x0F
+    pop dx
+    jbe .out
+    call dsk_rah_land
+.out:
+    pop ax
+    ret
 
 ; dsk_fatw_lowf lived here - mega_enter's drop of the boot's idle FAT
 ; windows (item 38). It ran before mem_xlatf and freed by PARAGRAPH, which

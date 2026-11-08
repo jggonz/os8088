@@ -56,7 +56,14 @@
 %include "wrart.inc"                ; its constants and the icon (the data
                                     ; half is included with the data, below)
 
-    OS88_HEADER 'WaveRack', wr_entry, OS88_F_ICON
+    OS88_HEADER 'WaveRack', wr_entry, OS88_F_ICON, OS88_HIGH | OS88_HIGHMEM
+                                    ; ABOVE 1MB on kern_mega, region and claims
+                                    ; (KERN-MEGA-PLAN 14.159): no sum on DS, CS
+                                    ; or a claim - the hold's is a bound window
+                                    ; (wt_hbwin), wc_myslot compares DS with
+                                    ; I_SPTR, which IS it - and the one disk
+                                    ; buffer, the I/O claim, stays conventional
+                                    ; (wo_iofit, MEMP_CONV)
     OS88_ICON16                     ; a rack panel with a wave on its LCD
     WRART_ICON16
     OS88_ICON16_END
@@ -2914,6 +2921,9 @@ WRB_SIZE0   equ 240 + WR_NB * 10 + WF_NKEYS * 2 + WD_BANDSZ
     WRV wt_rdsz, 2                  ; a play's bounded read, bytes
     WRV wt_csh, 2                   ; wt_plan: the streamed play's CPU share
     WRV wt_hseg, 2                  ; the hold's claim
+    WRV wt_hwin, 2                  ; ...its window: the claim itself in
+                                    ;   real mode, bound under CPU_F_PM
+                                    ;   (wt_hbwin)
     WRV wt_ht0, 2                   ; a load pass's first tick
     WRV wt_hlo, 4                   ; the hold: frames [hlo, hhi), loaded
     WRV wt_hhi, 4                   ; up to hpos

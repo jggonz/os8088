@@ -1650,8 +1650,27 @@ mega_k09:
     or byte [0x96], 0x02            ; the ROM's own E0 flag (40:96 bit 1)
     jmp .eoi
 .note0:
-    cmp al, 0xE1                    ; Pause: swallowed
+    cmp al, 0xE1                    ; Pause is E1 1D 45 E1 9D C5, whose 1D
+    jne .note1                      ; and 45 were a CTRL and a NUM LOCK make
+    or byte [0x96], 0x01            ; that toggled it. The ROM's E1 flag
+    jmp .eoi                        ; (40:96 bit 0) swallows a 1D / 9D right
+.note1:                             ; after an E1, and its pause bit (40:18
+    mov ah, al                      ; bit 3) the 45 / C5 right after THAT -
+    and ah, 0x7F                    ; each exactly one byte, so a keyboard
+    test byte [0x96], 0x01          ; that sends no 45 (86Box's) costs no key
+    jz .note15
+    and byte [0x96], 0xFE
+    cmp ah, 0x1D
+    jne .note2
+    or byte [0x18], 0x08
+    jmp .eoi
+.note15:
+    test byte [0x18], 0x08
+    jz .note2
+    and byte [0x18], 0xF7
+    cmp ah, 0x45
     je .eoi
+.note2:
     mov ah, [0x96]
     and byte [0x96], 0xFD           ; E0 is spent by this code either way
     mov bl, al
@@ -1670,6 +1689,11 @@ mega_k09:
     mov cl, 0x08                    ; alt, either
     cmp bl, 0x38
     je .shift
+    cmp bl, 0x46                    ; E0 46 / E0 C6 is CTRL+BREAK, not the
+    jne .notbrk                     ; scroll lock: swallowed, as the ROM's
+    test ah, 0x02                   ; (whose 1Bh nothing here hooks) puts
+    jnz .eoi                        ; nothing a reader could see either
+.notbrk:
     test al, 0x80
     jz .make
     mov cl, 0x40                    ; a LOCK key's break: no longer held
@@ -1709,6 +1733,13 @@ mega_k09:
     mov ax, 0xE02F
     jmp .store
 .e0grey:
+    mov dh, [0x17]                  ; Ctrl+Alt + the GREY Del is the warm
+    and dh, 0x0C                    ; boot as much as the keypad's is - it
+    cmp dh, 0x0C                    ; went to the alt arm below and was typed
+    jne .e0alt                      ; as A300 (KERN-MEGA-PLAN 14.146)
+    cmp bl, 0x53
+    je .cad
+.e0alt:
     test byte [0x17], 0x08          ; alt + grey = (scan + 50h) << 8
     jz .e0ctrl
     add bl, 0x50
@@ -1717,6 +1748,9 @@ mega_k09:
     jmp .store
 .e0ctrl:
     mov ah, bl
+    test byte [0x17], 0x04          ; ctrl + grey: the ROM's 73h-93h codes,
+    jz .store                       ; E0 ASCII kept (int 16h AH=00h reads 0)
+    call mega_kctl
     jmp .store
 .shift:                             ; E0 2A / E0 AA are the keyboard's fake
     test ah, 0x02                   ; shifts around a grey key: ignored
@@ -1752,6 +1786,7 @@ mega_k09:
     jne .noreset
     cmp bl, 0x53
     jne .noreset
+.cad:
     push ds                         ; (mega_svc's int 19h tail, ES = the
     pop es                          ; BDA: no CMOS shutdown byte here, the
     jmp mega_svc.warm               ; ROM's Ctrl-Alt-Del clears none)
@@ -1804,6 +1839,13 @@ mega_k09:
     jb .chars
     cmp bl, 0x53
     ja .chars
+    mov ah, bl
+    xor al, al
+    test dl, 0x04                   ; ctrl + keypad: its code, whatever the
+    jz .padnc                       ; num lock says - ASCII 0
+    call mega_kctl
+    jmp .store
+.padnc:
     mov dh, dl
     and dh, 0x20                    ; num lock...
     test dl, 0x03
@@ -1930,6 +1972,28 @@ mega_kshift:
     db 'ZXCVBNM<>?', 0, '*', 0, ' '
 mega_kpad:
     db '789-456+1230.'
+
+; mega_kctl - AH = a key 47h-53h (keypad or grey cluster) with CTRL held:
+; AH becomes the ROM's ctrl code for it (Ctrl+Left 73h, Ctrl+Right 74h,
+; Ctrl+End 75h, Ctrl+PgDn 76h, Ctrl+Home 77h, Ctrl+PgUp 84h, the enhanced
+; 8Dh-93h for the rest). Any other AH is kept, and so is every other
+; register.
+mega_kctl:
+    cmp ah, 0x47
+    jb .out
+    cmp ah, 0x53
+    ja .out
+    push bx
+    mov bl, ah
+    mov bh, 0
+    mov ah, [cs:mega_kctab + bx - 0x47]
+    pop bx
+.out:
+    ret
+
+mega_kctab:
+    db 0x77, 0x8D, 0x84, 0x8E, 0x73, 0x8F, 0x74, 0x90, 0x75, 0x91, 0x76
+    db 0x92, 0x93
 %if mega_kshift - mega_kbase != 0x3A || mega_kpad - mega_kshift != 0x3A
  %error "mega_k09's tables are one byte a scan code, 00h-39h"
 %endif
@@ -5604,9 +5668,12 @@ mega_bhex2:
 ;              read-ahead's landing, nine page-safe sectors that are scratch
 ;              between fills, or dsk_secbuf when the landing is shed - each
 ;              run a NESTED int 13h, which goes native or is reflected like
-;              any other. The file layer bounces its own (dsk_xfer's
-;              `.bounce`) and never reaches this; a program that issues its
-;              own int 13h from a high window does
+;              any other. The file layer bounces a fixed disk's own
+;              (dsk_xfer's `.bounce`); a FLOPPY run into a pool claim it
+;              hands down as it is, for the native path to read in place
+;              (dsk_runcap, KERN-MEGA-PLAN 14.156), so it arrives here only
+;              when that path hands the call back - as does a program that
+;              issues its own int 13h from a high window
 ; in:  BP = mega_svc's frame (ES restored to the caller's selector), DS = KDATA,
 ;      IF = 0
 ; out: the frame's AH = the status, AL = sectors moved, CF in its FLAGS
@@ -5751,7 +5818,7 @@ mega_vrm:
 
 mega_hibnc:
     xor bx, bx                      ; ES:BX = the landing: the read-ahead's
-    mov di, DSK_RAH_SECS << 8       ; nine sectors...
+    mov di, DSK_BNC_SECS << 8       ; DSK_BNC_SECS sectors (14.167)...
     mov ax, [dsk_rah_bnc]
     or ax, ax
     jnz .have
@@ -6951,6 +7018,9 @@ mega_fdgo:
 .uncal:
     not dl
     and [es:0x3E], dl               ; the BIOS's view too: not calibrated
+    mov bl, cl                      ; ...and where the head is, nobody's to
+    mov bh, 0                       ; say: the cylinder byte unknown (FFh),
+    mov byte [es:0x94+bx], 0xFF     ; not the place .cal below would believe
     mov si, 2                       ; twice: a 765 steps 77 tracks at most
 .recal:
     and byte [es:0x3E], 0x7F
@@ -6988,21 +7058,36 @@ mega_fdgo:
     or [es:0x3E], dl
 .cal:
     mov byte [mega_fdstep], 4
-    ; --- seek, every call: the 765 knows where it is, and a seek to where
-    ; it already is is one IRQ. The cylinder is PHYSICAL - doubled for a
-    ; 360KB disk in a 1.2MB drive (40:90 bit 5)
-    mov bl, [mega_fdc]
+    ; --- seek, unless the head is THERE (KERN-MEGA-PLAN 14.156). The
+    ; cylinder is PHYSICAL - doubled for a 360KB disk in a 1.2MB drive (40:90
+    ; bit 5). A seek to where the head already is is one IRQ, but the settle
+    ; after it is not free: 15 ms lost the next sector of a sequential read,
+    ; so every call cost a revolution and a 22 kHz stream ran dry. So after
+    ; its seek this path leaves 80h + the cylinder in the BIOS's own byte for
+    ; the drive (40:94) - never a number the BIOS seeks to, so ITS next call
+    ; seeks as it did for the FFh written here before - and believes it only
+    ; while it is still there: a BIOS call that moved the head wrote its own
+    ; cylinder, a recalibrate and every failure here write FFh. A wrong
+    ; belief would read the wrong cylinder, which READ DATA refuses (the ID's
+    ; C), and the BIOS then does the call as ever
+    mov al, [mega_fdc]
     test byte [mega_fdms], 0x20
     jz .ss
-    shl bl, 1
+    shl al, 1
 .ss:
+    mov bl, [mega_fdd]
+    mov bh, 0
+    or al, 0x80
+    cmp [es:0x94+bx], al            ; there already, and nobody moved it?
+    je .placed
+    mov [es:0x94+bx], al
+    and al, 0x7F
+    xchg ax, bx                     ; BL = the cylinder, AL = the drive
     call mega_fdseek
     jc .fall
-    xor bh, bh                      ; ...and the BIOS's cylinder byte made
-    mov bl, [mega_fdd]              ; unknown, so its next call seeks rather
-    mov byte [es:0x94+bx], 0xFF     ; than trusting a number of ours
     mov cl, [dsk_dpt+9]             ; head settle, ms
     call mega_fdms_wait
+.placed:
     ; --- the 8237, channel 2 ---------------------------------------------
     cli
     mov al, 0x06
@@ -7075,6 +7160,9 @@ mega_fdgo:
     xor ah, ah                      ; (CF = 0)
     ret
 .fall:
+    mov bl, [mega_fdd]              ; where the head is now is nobody's to
+    mov bh, 0                       ; say (mov: no flag; ES is the BDA here,
+    mov byte [es:0x94+bx], 0xFF     ; mega_fdlj's way in too)
     stc
     ret
 
@@ -8641,6 +8729,12 @@ MX_FWIN     equ 0x10                ; MX_FL: an OSAPI_SEG BOUND window lives in
                                     ; it (SEG_BWIN), which a rate hook may read
                                     ; through: it moves with the hook held off
                                     ; (mx_cpflags, KERN-MEGA-MEMORY-PLAN 9.1)
+MX_FDMA     equ 0x80                ; MX_FL: a DMA door's claim (mega_claimdf,
+                                    ; KERN-MEGA-PLAN 14.160): MX_AUX is the KB
+                                    ; of its head, which no compaction lands
+                                    ; across a 64KB page (mx_dmafit) - and
+                                    ; OSAPI_MEM_MOVABLE takes its MX_FPIN off
+                                    ; and puts it back (mega_dmamovf)
 MX_NBLK     equ 96                  ; entries (KERN-MEGA-PLAN 14.49): every
                                     ; pool claim, region, driver image and
                                     ; kernel block is one. Nine programs and
@@ -8696,7 +8790,11 @@ mega_ivts_end equ mega_ivts + MEGA_FKVN * 6 ; segment} a row, mega_fkvec's
 mega_npo    equ mega_ivts_end       ; O8 (14.143): the #NP handler's offset,
 mega_npc    equ mega_npo + 2        ;   its code selector (0 none), and the
 mega_npw    equ mega_npc + 2        ;   registrant's owner byte
-mega_npe    equ mega_npw + 1
+mx_dmah     equ mega_npw + 1        ; the head KB mx_alloc's next take must
+                                    ; keep inside one 64KB page, 0 none: set
+                                    ; under [sch_lock] by mega_dmahset, cleared
+                                    ; by mx_alloc on every way out (14.160)
+mega_npe    equ mx_dmah + 1
 MEGA_MXT_SIZE equ (mega_npe + 63) & ~63 ; whole 64-byte lines: the park
                                     ; sums lines (mega_dsave)
 MEGA_MXT_LINES equ MEGA_MXT_SIZE / 64
@@ -8889,7 +8987,10 @@ mx_alloc:
                                     ; then one run from the pool's base up,
                                     ; and the HMA - its first 64KB - is
                                     ; reached last
-.top:                               ; first fit DOWNWARD: the candidate
+.top:
+    cmp byte [es:mx_dmah], 0        ; ...BUT A DMA DOOR'S BLOCK FROM THE FLOOR
+    jne .bot                        ; UP (.bot, KERN-MEGA-PLAN 14.166)
+                                    ; first fit DOWNWARD: the candidate
     mov bp, [xm_kb]                 ; ends at the pool's top, and an overlap
     sub bp, cx                      ; moves it to end where that block
     jc .norun                       ; starts - strictly falling, so it ends
@@ -8919,6 +9020,7 @@ mx_alloc:
     xor ax, ax                      ; AX = MX_AUX: 0, or a TOKEN block's
     call mx_istok                   ; token (an OSAPI_XMEM_ALLOC block, MC3):
     jne .take                       ; a range no live token overlaps, first
+.tok:
     call mx_tokfit                  ; tried where the block IS - so it is the
     jc .norun                       ; block's base until the block moves
 .take:
@@ -8930,6 +9032,10 @@ mx_alloc:
     mov [es:di+MX_KB], cx
     mov bh, 0
     mov [es:di+MX_OWN], bx             ; ...and MX_FL clear
+    cmp byte [es:mx_dmah], 0
+    je .tk0
+    mov byte [es:di+MX_FL], MX_FDMA | MX_FPIN ; a DMA door's: born pinned
+.tk0:
     popf
     call mx_istok                   ; a token block is NAMED by its token,
     jne .phys                       ; everything else by where it is
@@ -8963,6 +9069,7 @@ mx_alloc:
     stc
 .out:
     mov byte [mega_cpry], 0
+    mov byte [es:mx_dmah], 0        ; (mov leaves CF; ES is still the tail)
     dec byte [sch_lock]             ; (dec leaves CF)
     pop es
     pop bp
@@ -8971,6 +9078,64 @@ mx_alloc:
     pop cx
     pop bx
     ret
+.bot:                               ; A DMA DOOR'S BLOCK IS BORN PINNED (14.160)
+    mov bp, [mega_mxflr]            ; and goes to the pool's FLOOR END: every
+.brestart:                          ; other block is taken from the top and
+    mov al, [es:mx_dmah]            ; packs UP, so the free KB are one run from
+    xor ah, ah                      ; the floor, and a pin at the bottom of it
+    mov dx, bp                      ; never cuts it in two - where the top-down
+    and dx, 63                      ; fit put the pin UNDER the blocks before
+    add dx, ax                      ; it, and their frees left a run of their
+    cmp dx, 64                      ; own above it (SPEC.md 66.4.2). First fit
+    jbe .bpage                      ; UPWARD: AX = the head's KB, kept inside
+    add bp, 64                      ; the 64KB page its first byte is in, else
+    and bp, 0xFFC0                  ; the next page's floor (the pool starts
+.bpage:                             ; at 1MB, a page edge); an overlap goes
+    mov dx, bp                      ; past the block - strictly rising, so the
+    add dx, cx                      ; walk ends. DX = the candidate's end
+    jc .norun
+    cmp dx, [xm_kb]
+    ja .norun
+    mov si, mx_tab
+.bscan:
+    mov dx, [es:si+MX_KB]
+    or dx, dx
+    jz .bnext
+    add dx, [es:si+MX_OFF]          ; DX = this block's end
+    cmp bp, dx
+    jae .bnext
+    push dx
+    mov dx, bp
+    add dx, cx
+    cmp [es:si+MX_OFF], dx
+    pop dx
+    jae .bnext
+    mov bp, dx                      ; overlap: restart past it
+    jmp short .brestart
+.bnext:
+    add si, MX_BLKSZ
+    cmp si, mx_tab_end
+    jb .bscan
+    cmp byte [mega_cpry], 0         ; ...and NOTHING MOVABLE UNDER IT: a block
+    jne .take                       ; the top was too full for packs up out
+    mov si, mx_tab                  ; of the way once first, or the pin would
+.bmov:                              ; keep it below, a run cut off
+    cmp word [es:si+MX_KB], 0
+    je .bmn
+    test byte [es:si+MX_FL], MX_FPIN | MX_FDMA
+    jnz .bmn                        ; (another door's block, pinned or not, is
+    cmp [es:si+MX_OFF], bp          ; where it belongs)
+    jb .bpack
+.bmn:
+    add si, MX_BLKSZ
+    cmp si, mx_tab_end
+    jb .bmov
+    jmp .take                       ; (AX = the head: MX_AUX)
+.bpack:
+    mov byte [mega_cpry], 1
+    mov ax, [mega_mxflr]
+    call MEGA_SEL_CODE:mx_packupf   ; (CX and DI kept, as .norun's)
+    jmp .bot
 
 ; mx_shed - for mx_alloc's two refusals: the cheapest purgeable cache above
 ; 1MB that the claimant outranks goes (mx_shedf, `.cold`, mem_shed_one's rule
@@ -9461,10 +9626,12 @@ mega_codesel:
     jnz .no                         ; RPL 0 only
     cmp ax, MEGA_LDT_FREE0 * 8
     jb .no                          ; below the allocator's: the GDT's own
-    cmp ax, [ss:mega_ldte]
-    jae .no
     push bx
     push es
+    mov bx, LOW_SEG                 ; LOW_SEG by name, not SS: mega_gpfix's
+    mov es, bx                      ;   .pairq calls this on the faulting
+    cmp ax, [es:mega_ldte]          ;   stack, a program's own (SPEC.md
+    jae .popno                      ;   20.18.2, KERN-MEGA-PLAN 14.165)
     mov bx, MEGA_SEL_LDTD
     mov es, bx
     mov bx, ax
@@ -10835,6 +11002,7 @@ mx_compactf:
     mov bp, ax
     jmp short .next
 .mov:
+    call mx_dmafit                  ; (a DMA door's head kept page-safe)
     cmp cx, bp
     je .stay
     push bx
@@ -11217,6 +11385,40 @@ mx_canmove:
     test byte [es:di+MX_FL], MX_FPIN
     ret                             ; (ZF = 1: not pinned)
 
+; mx_dmafit - for both compactions: DI = a movable entry (ES the tail), CX =
+; where it is, BP = where the pass would put it -> BP moved TOWARD CX until a
+; DMA door's head (MX_FDMA, MX_AUX KB, KERN-MEGA-PLAN 14.160) lies inside one
+; 64KB page - up to the next page's floor when the block goes down, down to
+; end the head on its page's floor when it goes up - and BP = CX, no move,
+; when that would carry it to or past where it is: SPEC.md 66.4.2's bump, in
+; KB from the pool's base (1MB, a page edge). Any other block: BP as it was.
+; Clobbers AX
+mx_dmafit:
+    test byte [es:di+MX_FL], MX_FDMA
+    jz .o
+    mov ax, bp
+    and ax, 63
+    add ax, [es:di+MX_AUX]
+    cmp ax, 64
+    jbe .o                          ; the head fits where it goes
+    cmp bp, cx
+    ja .up
+    add bp, 64                      ; GOING DOWN: the next page's floor
+    and bp, ~63
+    cmp bp, cx
+    jb .o
+    jmp short .st
+.up:                                ; GOING UP: the head's end on the floor
+    add bp, [es:di+MX_AUX]          ; of the page it would cross
+    and bp, ~63
+    sub bp, [es:di+MX_AUX]
+    cmp bp, cx
+    ja .o
+.st:
+    mov bp, cx                      ; ...or it stays where it is
+.o:
+    ret
+
 ; mx_packupf - FAR (OSAPI_MEM_REGROW's last try, KERN-MEGA-PLAN 14.49): AX =
 ; a floor, KB from the pool base. Every MOVABLE block at or above it slides
 ; UP, packed against the pool's top or the pinned block above it - the
@@ -11268,7 +11470,11 @@ mx_packupf:
     push dx
     push bp
     mov bp, ax
+    call mx_dmafit                  ; (a DMA door's head kept page-safe:
+    cmp bp, cx                      ; it may end where it is)
+    je .same
     call mx_cpmove                  ; DI's block from CX up to BP
+.same:
     pop bp
     pop dx
     pop bx
@@ -11466,11 +11672,30 @@ section .cold                   ; (KERN-MEGA-SEGMENTS-PLAN: back from .mega)
 ;      lives in the block's MX_SEL (OSAPI_XMEM_SEL's word), so mx_free and the
 ;      instance's teardown (mx_relinst) give it back with the block. AX and
 ;      every other register kept
+; mega_claimdf - FAR (osapi_mem_claim_dma / _dma_hi, `.cold`): the same for a
+; DMA door's claim with a HEAD, CX = its KB (1..64; KERN-MEGA-PLAN 14.160):
+; for an OS88_HIGHMEM PACKAGE only - never a driver, whose own 8237 or bus
+; master code may not take a selector's base - a pool block whose first CX KB
+; lie inside one 64KB physical page (the pool is all below 16MB, mega_layoutf,
+; so the 8237's 24 bits reach all of it), BORN PINNED (MX_FPIN) as a
+; conventional claim is born MC_RLOC 0, with MX_FDMA and the head in MX_AUX
+; so a compaction keeps it page-safe once OSAPI_MEM_MOVABLE has unpinned it
+; (mega_dmamovf, mx_dmafit). CF = 1 not taken: the door goes conventional
+mega_claimdf:
+    push ax
+    push bx
+    push cx
+    push si
+    cmp cx, 64
+    jbe mega_claimhf.chk
+    jmp short mega_claimhf.no
 mega_claimhf:
     push ax
     push bx
     push cx
     push si
+    xor cx, cx                      ; no head
+.chk:
     cmp byte [mega_on], 0
     je .no
     or ax, ax
@@ -11480,9 +11705,14 @@ mega_claimhf:
     call MEGA_SEL_CODE:mega_ownerf               ; BL = the owner: 0A0h | slot for an
     jc .no                          ; OS88_HIGHMEM package, 0C0h | row for an
                                     ; OS88_DRV_HICLAIM driver
+    jcxz .any
+    cmp bl, 0xC0                    ; a head: a package's, never a driver's
+    jae .no
+.any:
     mov si, ax                      ; SI = KB
     call mega_kbc                   ; DX:AX = bytes
     inc byte [sch_lock]             ; the base is aimed before any other
+    call mega_dmahset               ; (the head for mx_alloc, under the lock)
     call MEGA_SEL_CODE:mx_allocf    ; task can compact it away (14.37)
     jc .nol                         ; DX:AX = the block's base
     mov cx, si
@@ -11512,6 +11742,41 @@ mega_claimhf:
     pop bx
     pop ax
     clc
+    retf
+
+; mega_dmahset - CL = a DMA claim's head KB (0 none) into mx_dmah, the
+; tables' tail's byte mx_alloc reads and clears: under [sch_lock], so no other
+; task's claim sees it. Clobbers nothing
+mega_dmahset:
+    push es
+    MXT_ES
+    mov [es:mx_dmah], cl
+    pop es
+    ret
+
+; mega_dmamovf - FAR (osapi_mem_movable, `.cold`): DX = a pool selector, AX =
+; a relocation proc or 0, ES = the caller -> CF = 0 its claim is a DMA door's
+; (MX_FDMA) and is now unpinned (AX not 0: the compactor may move it, keeping
+; its head page-safe, and the proc is never called - the selector is what
+; the package holds, and it does not change) or pinned again (AX = 0); CF = 1
+; anything else, nothing changed. Every register kept
+mega_dmamovf:
+    push bx
+    push si
+    push es
+    call mega_claimfind             ; SI = its entry, ES the tail
+    jc .o
+    test byte [es:si+MX_FL], MX_FDMA
+    stc
+    jz .o
+    and byte [es:si+MX_FL], ~MX_FPIN
+    or ax, ax
+    jnz .o                          ; (CF = 0: the or)
+    or byte [es:si+MX_FL], MX_FPIN  ; (CF = 0: the or)
+.o:
+    pop es
+    pop si
+    pop bx
     retf
 
 ; mega_claimfreef - FAR (osapi_mem_free, `.cold`): DX = a selector
@@ -11674,6 +11939,12 @@ mega_claimregrowf:
 .grow:
     call .hroom                     ; the KB above it free: grown in place
     jnc .ogrow                      ; (KERN-MEGA-PLAN 14.49)
+    xor cx, cx                      ; A DMA DOOR'S claim keeps its head in a
+    test byte [es:si+MX_FL], MX_FDMA ; new block too, born pinned again
+    jz .gh                          ; (14.160; SPEC.md 50.3's MC_DMA rule)
+    mov cl, [es:si+MX_AUX]
+.gh:
+    call mega_dmahset
     mov ax, bp
     call mega_kbc                   ; DX:AX = the new size in bytes
     call MEGA_SEL_CODE:mx_allocf                   ; DX:AX = the new block's base

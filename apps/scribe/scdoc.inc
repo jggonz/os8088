@@ -969,10 +969,10 @@ sc_dattr:
     push dx
     push ds
     mov bx, si
-    PKG_STB sc_dpicrun, 0
+    mov dh, 0                       ; [sc_dpicrun], banked after the pop
     call sc_dispic                  ; A PICTURE IS ALWAYS A RUN OF ONE, so its
     jne .notpic                     ; CHPX can carry its own fcPic and nothing
-    PKG_STB sc_dpicrun, 1     ; else shares it (SPEC.md 95.7)
+    mov dh, 1                       ; else shares it (SPEC.md 95.7)
     call sc_dat1                    ; AL = the CHP byte, which for a picture
     mov dl, al                      ; character is its INDEX (88.9)
     inc bx
@@ -991,10 +991,11 @@ sc_dattr:
     cmp al, dl
     je .scan
 .end:
-    PKG_ST sc_dend, bx
     mov al, dl
-    pop ds
-    pop dx
+    pop ds                          ; the package's again: both stores are
+    mov [sc_dend], bx               ; DS's, not CS's - a completed #GP each,
+    mov [sc_dpicrun], dh            ; a run, on kern_mega (KERN-MEGA-PLAN
+    pop dx                          ; 14.162)
     pop cx
     pop bx
     ret
@@ -1119,8 +1120,8 @@ sc_dpara:
     PKG_LD al, sc_pap_tail        ; the tail paragraph rides the mark this
     inc bx                          ; writer appends, at index [sc_len]
 .end:
-    PKG_ST sc_dend, bx
-    pop ds
+    pop ds                          ; (sc_dattr's: one #GP a paragraph)
+    mov [sc_dend], bx
     pop cx
     pop bx
     ret
@@ -1913,21 +1914,22 @@ sc_dpapin:
     push di
     push ds
     push es
-    PKG_STB sc_pap_tail, 0
+    mov byte [sc_pap_tail], 0       ; DS = the package (the load's)
     xor si, si
     PKG_LD cx, sc_len
 .scan:
     cmp si, cx
     jae .tail
-    PKG_LDS sc_dseg
-    mov al, [si]
-    push cs                         ; DS back on the package for every SCVAR
-    pop ds                          ; below. CS IS the package: part 1 is in
-                                    ; this segment (SPEC.md 95.8.8). It was a
-                                    ; word stamped into SCRIBE.OVL while the
-                                    ; module had a CS of its own, and this
-                                    ; idiom then read ~33KB past its claim
-                                    ; (SPEC.md 95.8.2)
+    push ds                         ; DS back on the package for every SCVAR
+    PKG_LDS sc_dseg                 ; below, off the STACK. It was `push cs /
+    mov al, [si]                    ; pop ds` - CS IS the package, part 1
+    pop ds                          ; being in this segment (SPEC.md 95.8.8),
+                                    ; but on kern_mega CS is its CODE
+                                    ; selector and sc_dpapat's stores through
+                                    ; it were a #GP a mark (KERN-MEGA-PLAN
+                                    ; 14.162). Before that it was a word
+                                    ; stamped into SCRIBE.OVL, and the idiom
+                                    ; read ~33KB past its claim (95.8.2)
     cmp al, 13
     jne .next
     mov ax, si
@@ -1945,7 +1947,7 @@ sc_dpapin:
     dec ax                          ; is inside it, and its PAPX is the one
     call sc_dpapat                  ; that covers it
     jc .done
-    PKG_ST sc_pap_tail, al
+    mov [sc_pap_tail], al
 .done:
     pop es
     pop ds
@@ -2456,9 +2458,11 @@ sc_dtrim:
     jne .out
     PKG_LDS sc_cseg
     mov al, [bx]
-    PKG_ST sc_pap_tail, al
-    PKG_ST sc_len, bx
-.out:
+    pop ds                          ; the package's for the two stores, and
+    mov [sc_pap_tail], al           ; back on the stack for .out: the same
+    mov [sc_len], bx                ; nine bytes as two stores through CS,
+    push ds                         ; which were a #GP each a load on
+.out:                               ; kern_mega (KERN-MEGA-PLAN 14.162)
     pop ds
     pop bx
     pop ax

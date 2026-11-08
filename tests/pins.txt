@@ -445,11 +445,6 @@ X apps/browser/browser.asm @br_claim     # a CLAIM WRAPPER this scan cannot see
                                          # the call, SPEC.md 71.14.1): every caller
                                          # stores DX in a word br_reloc names and
                                          # declares it with br_movable at once
-X apps/video/video.asm @vp_rclaim        # a CLAIM WRAPPER this scan cannot see
-                                         # through (its first claim's `jnc` jumps
-                                         # past the second to the shared ret):
-                                         # kern_mega's ring, every caller storing
-                                         # DX in vp_rclm, which vp_smtab declares
 X apps/realdmg/rwbank.inc rw_xsel        # kern_mega's arm: the cartridge IN PLACE,
                                          # one OSAPI_MEM_HUGE claim in the POOL
                                          # (REALDMG-SPEC 10.3.1). It is not a wall:

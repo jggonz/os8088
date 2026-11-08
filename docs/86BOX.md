@@ -164,7 +164,12 @@ profile and NOT copied - a `.cue` names its `.bin` relative to itself - and
 `--cd` replaces it; left relative, 86Box looked for it in the run directory
 and dropped the drive without a word (KERN-MEGA-PLAN 14.68).
 `vm/286-mega-cdrom` and `vm/386-mega-cdrom` are kern_mega with a CD-ROM and
-`tests/megacdrom.py` is the row that drives the first.
+`tests/megacdrom.py` is the row that drives the first. `vm/386-mega-cdrom`
+(a Micronics 386DX-25, SB16) carries a seeded CMOS
+(`nvr-seed/micronics386.nvr`, both floppies 1.44MB), so it boots straight
+through rather than stopping in setup, and the kern_mega port takes it as
+`OS88_MEGA_VM=386-mega-cdrom` - `tests/x3live386.py` is its row
+(KERN-MEGA-PLAN 14.150).
 `vm/pentium-pciether` (`make pentium-pciether`, SPEC.md 125.6) is `vm/pentium`'s
 PCI board (`p54tp4xe`, 16 MB) with 86Box's Realtek RTL8139C+ (`net_01_card =
 rtl8139c+`, SLiRP) booting kern_mega's `make pciethertest` disk with

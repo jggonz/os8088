@@ -22,6 +22,24 @@ modc_e_shutdown:
     mov bp, sched_stop
     call sd_disp                ; BIOS IRQ0, PIT, mouse and speaker restored
     cli
+%ifdef KERN_MEGA
+    test byte [cpu_feat], CPU_F_PM  ; PROTECTED MODE takes IRQ0 through IDT
+    jz .rmtick                  ; gate 20h, which still names sch_isr, so the
+    push es                     ; scheduler ran on under the clock - and
+    mov ax, MEGA_SEL_IDT        ; sched_stop's 0:20h is IVT 08h, which holds
+    mov es, ax                  ; the BIOS's own tick for a reflection
+    mov ax, [sch_old08]         ; (mega_pmtail). So the gate gets sch_old08,
+    mov [es:MEGA_PIC_BASE*8], ax    ; mega_t08 (the ROM's half: 40:6C and
+    mov ax, [sch_old08+2]       ; the motor count), and the IVT the ROM's
+    mov [es:MEGA_PIC_BASE*8+2], ax  ; tick back (KERN-MEGA-PLAN 14.157).
+    MEGA_SEG0 es                ; Here and not in sched_stop: kern_mega's
+    mov ax, [mega_old08]        ; reboot is a warm reset, so Shut Down is
+    mov [es:0x20], ax           ; the one caller that runs on, and CTRL.DRV
+    mov ax, [mega_old08+2]      ; costs the kernel segment nothing
+    mov [es:0x22], ax
+    pop es
+.rmtick:
+%endif
     mov al, 0xFC               ; the BIOS timer, and the KEYBOARD: sched_stop gave
     out 0x21, al               ; int 09h back to the ROM, whose handler is what
                                ; answers Ctrl-Alt-Del with a warm reset
@@ -301,7 +319,7 @@ sd_spinadr:
     mov es, [vid_seg]
     ret
 
-OS88_SPINNER sd, 0
+OS88_SPINNER sd, 0                   ; (a module's copy: CSDO on kern_mega)
 
 sd_question db 'Shut down os8088?', 0
 sd_save     db 'Save your work before continuing.', 0

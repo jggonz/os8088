@@ -2530,12 +2530,16 @@ FULL = [
         "out of build/hello.o88, build/mines.o88, a tier-3 WF_DISK entry and "
         "a WF_ARC one whose .WPK the test packs with --archive, and the "
         "machine fetches it because `make thewiretest`'s "
-        "SYSTEM/APPDATA/WIRE.CFG says to. Eighteen assertions: the catalog is "
+        "SYSTEM/APPDATA/WIRE.CFG says to. Nineteen assertions: the catalog is "
         "understood, the host saw the request it expected, the list is the "
         "catalog, the 8088/8086 filter cuts four rows to three, the predicate "
         "greys Load Program on a WF_DISK record and NOT Add to Disk, the "
         "picture matches the file pixel for pixel, Add to Disk writes both "
-        "files to B: byte-identical, Load Program runs one out of memory, "
+        "files to B: byte-identical, Load Program runs one out of memory - "
+        "and, LAST, a PACKED one (assertion 19, SPEC.md 21.5.1.2): MINES is "
+        "the shipped LZ4 build/mines.o88 and must open `Minesweeper`; red on "
+        "the old image arm, which copied the unpacked length of a shorter "
+        "file and ran LZ4 bytes as code - "
         "AN ARCHIVE'S WHOLE TREE lands on B: byte-identical - eight entries "
         "at three depths, an LZSS one, two INCOMPRESSIBLE ones that put the "
         "stream over 65,536 bytes so the dword Content-Length and the 32-bit "
@@ -6684,6 +6688,12 @@ SOAK = [
         "about one door rather than about the difference. Its parts really "
         "arrive: MSEG rewrites its own title to `MSEG 7/7 OK` and this reads "
         "it, so a launch that produced a window and no parts cannot pass. "
+        "AND G (SPEC.md 21.5.1.2): the SHIPPED MINES.O88, LZ4-packed as "
+        "every release package is, through the IMAGE form - it must run and "
+        "its region must be the UNPACKED image byte for byte; the arm used "
+        "to copy [ld_img] bytes of a shorter file to offset 0, which "
+        "crashed The Wire's Load Program on every release .O88. RED on the "
+        "old arm: 1,320 of 1,445 bytes differ. "
         "VERIFIED RED by downgrading the cell from OSAPI_NCELL to a plain "
         "slot - which is exactly 21.6.1's claim, that the N stub's staging "
         "and inst_vol_enter are what make the front half 14 resident bytes: "
@@ -6705,7 +6715,7 @@ SOAK = [
         "in the file's own header working and the shared build/ untouched "
         "mid-run",
         needs=("marty",),
-        wants=("build/hello.o88", "build/mseg.o88",
+        wants=("build/hello.o88", "build/mseg.o88", "build/mines.o88",
                "build/pkgrun360.img")),
     Row("heapmap", "soak", py("tests/heapmap.py"), 30.0,
         "What does the claim heap look like when the boot is over? (SPEC.md "
@@ -6890,6 +6900,62 @@ SOAK = [
         wants=("build/mega.img", "build/megak/kernel.map",
                "build/megarun.o88", "build/megak/apps/xtmp3.o88",
                "build/megak/apps/xtmp3.bin")),
+    Row("x3live386", "soak", py("tests/x3live386.py"), 30.0,
+        "XT-MP3 PLAYS LIVE ON A 386DX-25 UNDER kern_mega (KERN-MEGA-PLAN "
+        "14.150, SPEC.md 121.5): 86Box's vm/386-mega-cdrom (Micronics "
+        "386DX-25, SB16, its CMOS seeded) with build/mega.img and "
+        "megaxtmp3.img, NEONDRV.MP3 opened from B:\\MEDIA. Auto measures "
+        "Quarter STANDARD at 0.51 on both kernels and decides on XT "
+        "Standard: kern_big plays it live at 1.79, and so must kern_mega - "
+        "x3_md MD_LIVE on X3Q_XTSTD measured 1.25 or better, granules and "
+        "frames counting, and no exception charged to a loaded image. RUN "
+        "RED: --apps with the pre-14.150 XTMP3 (the shipped XT part in the "
+        "arm, stores through CS) - XT Standard 0.91, Decode First, 3,473 "
+        "#GP at the part's selector. 30s is 27 measured",
+        needs=("86box",),
+        wants=("build/mega.img", "build/megaxtmp3.img",
+               "build/megak/apps/xtmp3.map", "build/megak/kernel.map")),
+    Row("officetrap-sheet", "soak", py("tests/officetrap.py", "--leg",
+                                       "sheet"), 35.0,
+        "SHEET IN REAL USE UNDER kern_mega, NO STORE THROUGH CS (KERN-MEGA-PLAN "
+        "14.162): 86Box's at286 port with build/mega.img, MAC.SLK and kern_mega's "
+        "arm (sheet.asm -DPKG_MEGA, its modules' stores through CSDO and each "
+        "claim's data selector). Macro > Run sheetmacro's COUNT (FOR, WHILE, "
+        "SELECT, FORMULA, IF/GOTO/BREAK, COPY/PASTE, CLEAR, SET.VALUE by "
+        "name, RETURN) and LOOP, a 100-turn FOR; Save As BIFF and the host "
+        "reads every answer (J2 = 5050); the BIFF opened again (the chart "
+        "module's formula decoder); and the fault log charges nothing to a "
+        "loaded image. RUN RED: --sheet build/sheet.o88, the shipped build - "
+        "1,725 #GP at 34 sites, five a macro step at the macro module's "
+        "selector and three a formula at the chart module's. 35s is 30 "
+        "measured",
+        needs=("86box",),
+        wants=("build/mega.img", "build/megak/apps/sheet.o88",
+               "build/megak/kernel.map")),
+    Row("officetrap-word", "soak", py("tests/officetrap.py", "--leg",
+                                      "word"), 30.0,
+        "WORD AND SCRIBE IN REAL USE UNDER kern_mega, NO STORE THROUGH CS "
+        "(KERN-MEGA-PLAN 14.162): Word loads and saves WELCOME.DOC, sorts and "
+        "renumbers it; Scribe loads and saves SCWELCOM.DOC and SCWELCOM.RTF, "
+        "sorts and renumbers; the .DOCs read back through tools/wordfmt.py say "
+        "what the originals say and the .RTF keeps its 32 \\pard; the fault "
+        "log charges nothing to a loaded image. RUN RED: --word/--scribe with "
+        "the packages of before - 352 #GP at 28 sites (a mark a load, a "
+        "paragraph a Sort, a run and a paragraph a save). 30s is 25 measured",
+        needs=("86box",),
+        wants=("build/mega.img", "build/megak/kernel.map", "build/word.o88",
+               "build/scribe.o88", "build/WELCOME.DOC", "build/SCWELCOM.DOC",
+               "build/SCWELCOM.RTF")),
+    Row("x3xtunitmega", "soak", py("tests/x3xtunit.py", "--mega"), 30.0,
+        "x3xtunit on the XT part's kern_mega ARM (x3xt.asm -DPKG_MEGA, "
+        "KERN-MEGA-PLAN 14.150) in a protected-mode-shaped map: the part's "
+        "CODE view read and execute only and its DATA a second view of the "
+        "same bytes handed as DS - so every expanded table, granule, clip "
+        "count and stat must be bit-exact AND no store may go through CS "
+        "(Unicorn's write fault, named at its CS:IP). RUN RED: --mega "
+        "--shipped faults at OPEN's first store, and so does the arm with "
+        "one CSDO taken off a line. 30s is 26 measured",
+        needs=("unicorn", "nasm", "numpy")),
     Row("megasheet", "soak", py("tests/megasheet.py"), 80.0,
         "SHEET ABOVE 1MB UNDER kern_mega (KERN-MEGA-MEMORY-PLAN MC7): it "
         "far-calls code in two claims - the chart and macro modules, parts "
@@ -8878,6 +8944,23 @@ SOAK = [
         "lost clusters before 18.4.9.2.",
         needs=("marty",),
         wants=("build/os8088-360.img", "build/dosfull360.img")),
+    Row("doscopyhd", "soak", py("tests/doscopyhd.py"), 20.0,
+        "SPEC.md 96.30.7.3: COPY from the B:\\> prompt onto a 2KB-cluster "
+        "FAT16 C: (XT-IDE, booted off it) of 616, 1,380 and 5,170 bytes, the "
+        "three read back off the VHD on the host by an independent FAT16 "
+        "reader and compared byte for byte. The shell's buffer was sized on "
+        "the PROMPT's volume with AX left holding a directory cluster "
+        "number - one floppy KB - and WRITE_SEQ takes only whole "
+        "destination clusters, so every file past 1KB was `File creation "
+        "error` at its first append. VERIFIED RED with dsh_copy_go's "
+        "destination goto and DSH_CPKB taken out: 1,380 and 5,170 missing, "
+        "the 616-byte control copied. From C:\\> it cannot fail, the "
+        "destination being the prompt's volume - so the prompt is B:'s on "
+        "purpose. 16 s measured",
+        needs=("marty",),
+        wants=("build/kernel.sys", "build/boothd.bin", "build/mbr.bin",
+               "build/hiber.drv", "build/ctrl.drv", "build/hdd.drv",
+               "build/dos.o88")),
     Row("dosseq", "soak", py("tests/dosseq.py", "--hdd", "--kd"), 40.0,
         "A DOS PROGRAM'S SEQUENTIAL I/O COSTS THE SAME AT EVERY OFFSET "
         "(docs/plans/completed/DOS-STREAM-PLAN.md). SEQCOST.COM writes a "
@@ -9578,6 +9661,9 @@ SOAK = [
         needs=("marty",), serial=True, wants=("build/doscom360.img",)),
     Row("dosdirsw", "soak", py("tests/dosdirsw.py"), 30.0,
         "DIR's SWITCHES, AND THE PAUSE THAT MAY NOT BLOCK (SPEC.md 96.33.9). "
+        "Step 0c (96.33.9.3): `DIR B:` typed at A> reports B:'s bytes free "
+        "and not A:'s - the footer was printed after dsh_home; red with it "
+        "moved back. "
         "dsh_c_dir took a path and nothing else, so every switch was read as "
         "part of the file name; reported from the field as \"dir doesn't have "
         "most of its common command line args. Like /p\". WHAT THE SWITCHES "
@@ -9889,6 +9975,10 @@ SOAK = [
         "difference is three characters. Six spellings in one boot - bare, "
         "with the extension, with arguments, with both, fully qualified, and "
         "the .DAT - and the ones that run must report the exact argument text. "
+        "And `B:DOSARGS.COM /M`, a drive with no separator (SPEC.md "
+        "96.33.21): it ran `B:\\OSARGS.COM`, the name's first letter eaten; "
+        "the disk carries a root copy so either drive-only resolution "
+        "finds it, and it was red with the `dec di` out. "
         "VERIFIED RED with the pop put back: three of the six, all three "
         "dotted ones, while the search and the refusal stayed green.",
         needs=("marty",), serial=True,
@@ -10117,6 +10207,11 @@ SOAK = [
         needs=("marty",), serial=True),
     Row("ftpd", "soak", py("tests/ftpd.py"), 360.0,
         "SPEC.md 77: the FTP server driven by Python's own ftplib through "
+        "QEMU's forwarded ports. 8f (77.25.1): LIST and NLST of a folder that "
+        "is not there answer 550 inside the timeout with the control "
+        "connection in step - red on the old abort, which closed the PASV "
+        "LISTENER before the worker had accepted the client's connection, "
+        "so the client read an open, empty data socket for ever. The rest: "
         "QEMU's forwarded ports - login, PASV and active mode, LIST, STOR, "
         "RETR, the Setup page's controls, the window untouched by a log "
         "scrolling under it - and the upload and FTPD.CFG read back off the "
@@ -14165,6 +14260,19 @@ SOAK = [
         "trivially, and the alert must be on the glass at the end, or a dialog"
         "that failed to open reads as one that opened quietly",
         needs=("marty",), serial=True),
+    Row("paintbmpsave", "soak", py("tests/paintbmpsave.py"), 15.0,
+        "SPEC.md 42.13.5: a BMP saved off a PLANAR canvas is a BMP. On VGA "
+        "and EGA the canvas is four planes and the BMP save wrote it raw - "
+        "four quarter-width planes under a 4bpp header, the picture gone "
+        "from the disk. A sixteen-colour GIF made by the row is opened on "
+        "os8088_xt_vga ([pt_planar] = 1 asserted), saved as BMP and as GIF "
+        "off the same canvas, the floppy flushed and both decoded by PIL on "
+        "the host: they must agree pixel for pixel and map the sixteen "
+        "fixture colours one to one, and the canvas must be planar again "
+        "after the save. VERIFIED RED with pt_save's convert pair taken out: "
+        "11,996 of 12,800 pixels differ. 13 s measured",
+        needs=("marty",), serial=True,
+        wants=("build/paint.o88", "build/os8088-360.img")),
     Row("paintdirty", "soak", py("tests/paintdirty.py"), 40.0,
         "SPEC.md 42.16: does Paint ask before it throws a picture away? A"
         "FLAG and not Note Pad's checksum, so the places that set and clear it"
@@ -18842,6 +18950,28 @@ SOAK = [
         "kern_mega FAULT. Red with the `push cs / pop ds` put back "
         "(ECHO 62, DIR 87, TYPE 802). 80s is 56 measured alone, 73 in three lanes",
         needs=("bochs", "nasm")),
+    Row("win16megatrap", "soak", py("tests/win16megatrap.py"), 90.0,
+        "docs/plans/KERN-MEGA-PLAN.md 14.164, 14.165: WIN16 on kern_mega with no "
+        "completed #GP on its hot paths. MEGATRAP=1's census (a private "
+        "tree) under Bochs, WIN16's arm on C:, each trap charged to the "
+        "selector WIN16's own data names: LZT.EXE (LZEXPAND, VER, a few "
+        "hundred int 21h) must charge NONE to the DOS block's code half "
+        "(its gate and host stored through CS, fifteen an int 21h) and at "
+        "most 140 to part 9's (its per-byte copy, 279 a run, is CSDO now), "
+        "and leave SAMPLE.TXT and SECOND.DAT expanded byte for byte; "
+        "Program Manager (win16ref's, a SKIP without it) with its groups, "
+        "tiled, cascaded and cycled, NONE to part 10's (the MDI paint, ~180 "
+        "a key); Solitaire (a WS_CLIPCHILDREN window, CLOSED at its first "
+        "paint while w16_cutkid lost the walk's count) up; MDI.EXE's own "
+        "MDI checks answered 'MDI OK'; File Manager (win16ref's) tiled and "
+        "cascaded, up. Every leg: NO xfer fixup at WIN16's own code "
+        "selector (WM_MDICREATE/WM_MDIDESTROY's call back into WIN16's "
+        "stubs named their DATA half, and kern_mega's fixup CLOSED MDI.EXE "
+        "and File Manager at w16_cbenter's retf). No kern_mega "
+        "FAULT or CLOSED. Red with the WIN16.O88 from before (--pkg/--map): "
+        "1,959, 534, 4,838 and CLOSED; before 14.165, 3, 6 and 1 xfer "
+        "fixups (CLOSED on the kernel before). 77s measured, five legs at once",
+        needs=("bochs", "mtools", "nasm", "win16fixtures")),
     Row("rdgaotmega", "soak", py("tests/rdgaotmega.py"), 250.0,
         "docs/REALDMG-SPEC.md 20.15: a PRECOMPILED cartridge on kern_mega. "
         "tools/gbaot.py translates blargg's cpu_instrs squeezed (--squeeze: "
@@ -19327,6 +19457,29 @@ SOAK = [
         needs=("bochs",),
         wants=("build/mega.img", "build/megahuge.o88", "build/megarun.o88",
                "build/mbr.bin")),
+    Row("megajw", "soak", py("tests/megajw.py"), 25.0,
+        "docs/plans/KERN-MEGA-PLAN.md 14.166, SPEC.md 50.3.2, 50.6.10: ONE "
+        "CLAIM GETS WHAT IS FREE after a session that fragments BOTH heaps - "
+        "a pinned block may not stand in the middle of either. 86Box's "
+        "at286_vga_sb (the mr286, a Sound Blaster) with 640K and 384K above "
+        "1MB (mem_size 1408, mega_extkb asserted), a scratch B: of the "
+        "kern_mega arms: Sheet opened (it fills the pool and spills into the "
+        "heap), a WAV opened in the Audio Player and PAUSED (a pause is a "
+        "play: its look-ahead, a DMA door's pool block, and SOUND.DRV's "
+        "staging pool, a conventional ring, both PINNED), Sheet closed. "
+        "Asserts a pinned block in each heap, each heap ONE free run off "
+        "mx_tab and mem_tab (no pin with free KB on both sides), MEGAJW's "
+        "OSAPI_MEM_HUGE answer within 8K of the pool's free KB in whole "
+        "64KB windows plus the heap's less its 64KB reserve, a claim of it "
+        "granted and read back and one KB more refused, and XT-MP3's hold - "
+        "ONE OSAPI_XMEM_ALLOC of every KB XMEM_CAPS says is free - granted. "
+        "RED on the tree before 14.166, measured: the pool ring at 105C00 "
+        "(23K under it, 217K over), SOUND.DRV's at 25800 (86K under, 474K "
+        "over), the claim 602K where 688K is free, the hold REFUSED. "
+        "25s is 15 measured",
+        needs=("86box",),
+        wants=("build/mega.img", "build/megajw.o88",
+               "build/megak/apps/audio.o88", "build/megak/apps/sheet.o88")),
     Row("megacaps", "soak", py("tests/megacaps.py"), 60.0,
         "docs/plans/KERN-MEGA-PLAN.md 14.122, SPEC.md 41.8: "
         "OSAPI_XMEM_CAPS ANSWERS WHAT A CLAIM IS THEN GIVEN. kern_mega "
@@ -19444,6 +19597,92 @@ SOAK = [
         needs=("86box", "nasm", "rgbds"),
         wants=("build/mega.img", "build/megak/apps/realdmg.o88",
                "build/os8088-720.img")),
+    Row("waverackmega", "soak", py("tests/waverackmega.py"), 40.0,
+        "WaveRack on kern_mega (docs/plans/KERN-MEGA-PLAN.md 14.149, SPEC.md "
+        "123.13), 86Box's at286_vga_sb, build/mega.img and a scratch B: of "
+        "WAVERACK.O88 and PRELUDE.WAV, one boot a leg. HOLD: a 16-bit stereo "
+        "clip a floppy cannot stream plays from the hold, whose claim is an "
+        "LDT selector there - wt_hoff's paragraph sum closed WaveRack with a "
+        "#GP at the load; it must take the hold under a bound window "
+        "(SEG_BWIN/SEG_AIM), load it whole, hold tools/wrsim.py's "
+        "hold_bytes() byte for byte, play to the end and keep its window. "
+        "SLOT: a take's wc_myslot names this instance's inst_tab row. WHERE "
+        "(14.159: WaveRack is OS88_HIGH | OS88_HIGHMEM): off the descriptors, "
+        "the region, hold, look-ahead, band, view cache, envelope and take "
+        "units above 1MB, the I/O claim (MEMP_CONV) and the record ring "
+        "conventional, the take written from the high units. RED with the "
+        "base's package (--pkg/--src): HOLD's window gone, 'WaveRack 0D'; "
+        "and each of 14.159's breaks - no OS88_HIGH, no OS88_HIGHMEM, no "
+        "MEMP_CONV, wt_hoff's sum always, wc_myslot on CS - fails its "
+        "check. 40s is 37.5 measured",
+        needs=("86box", "nasm"),
+        wants=("build/mega.img", "build/waverack.o88", "build/waverack.bin")),
+    Row("hdbounce", "soak", py("tests/hdbounce.py"), 60.0,
+        "docs/plans/KERN-MEGA-PLAN.md 14.167, SPEC.md 51.8.1: kern_mega off "
+        "a 16x63 IDE C: on 86Box's at286_vga_hdd (the mr286), tests/megard's "
+        "MEGARD reading a 120-sector BIG.DAT into its OS88_HIGHMEM pool "
+        "block and into a conventional claim, timed by the guest's PIT and "
+        "then COUNTED - drv_blk_call_x and mega_fd13 breakpoints, every "
+        "DSV_BLK call and every int 13h transfer reflected in protected "
+        "mode. Four legs: ide (HDD.DRV's rung 1 takes C:, 52.1.1): the high "
+        "read no more driver calls than the low one and no int 13h; rom "
+        "(the device row put on rung 0): bios (no HDD.DRV, the kernel's own "
+        "BIOS row): and shed (bios after a squeeze that sheds the landing): "
+        "the high read's int 13h runs DSK_BNC_SECS long but at a track or "
+        "the request's end, and in shed the landing back after it. RED on "
+        "the base tree: ide 120 driver calls against 1, rom and shed 120 "
+        "one-sector int 13h, bios runs of nine",
+        needs=("86box", "nasm"),
+        wants=("build/megak/kernel.sys", "build/megak/boothd.bin", "build/hddtool.bin", "build/hdd.bin",
+               "build/megak/ctrl.drv", "build/hdd.drv", "build/mbr.bin")),
+    Row("megasbgap", "soak", py("tests/megasbgap.py"), 25.0,
+        "docs/plans/KERN-MEGA-PLAN.md 14.156, 14.160: a 10 s 22,050 Hz 8-bit "
+        "WAV in AUDIO from a scratch 1.44MB B: on 86Box's at286_vga_sb (the "
+        "mr286, a Sound Blaster 2.0), the card's DAC captured "
+        "($MARTYPC_WAV): the look-ahead ring, off its descriptor, is a pool "
+        "block below 16MB with its 32 KB inside one 64KB page (the DMA "
+        "door, 14.160), the floppy is read all through the play, and no "
+        "silence inside it may be over 220 ms, nor its silences 700 ms in "
+        "all (measured 90-150 ms, 290-530 ms). Three costs kern_mega had and "
+        "a real-mode kernel has not, each a revolution lost a call: "
+        "dsk_runcap bounced the ring nine sectors a call, mega_fdgo sought "
+        "and waited 15 ms of head settle on every call, and the ring, a "
+        "plain pool claim, crossed a page. RED, measured: --pkg an AUDIO arm "
+        "with the plain claim - placement fails, 290/350 ms, 870/1,110 ms; "
+        "14.156's base 540 ms, 3.57 s; OS88_MEGA_POKE='mega_fdgo.ss+0xD=9090' "
+        "500 ms, 'dsk_runcap.hi+0x10=9090' 450 ms. 25s is 22 measured",
+        needs=("86box", "numpy", "nasm"),
+        wants=("build/mega.img", "build/megak/apps/audio.o88",
+               "build/megak/apps/audio.bin", "build/megak/kernel.map")),
+    Row("megaweavetrap", "soak", py("tests/megaweavetrap.py"), 25.0,
+        "docs/plans/KERN-MEGA-PLAN.md 14.163: WEAVE on kern_mega with NO "
+        "write through CS on its hot paths. 86Box's at286_vga_sb, kern_mega, "
+        "build/weave.img in B:: PONG.WAB served and steered on a and z for 20 "
+        "guest seconds - the ball found at two places - and SHEET.WAB's two "
+        "buttons clicked, its grid changed; not one completed #GP write "
+        "fixup (86Box's `faults`, error 0000) in either, and WEAVE still "
+        "open. wvm.inc stores through DS or ES = its own segment and "
+        "WEAVE.WSM's DS is the package's WSS_MYDS stamp. RED, measured: the "
+        "WEAVE disk of the commit before, 45,282 fixups in the PONG window "
+        "(2,200 a second) and 221 in SHEET's; one `mov [cs:wvm_pc], si` put "
+        "back in wvm_nat, 1,743 at that CS:IP alone. 25s is 22 measured",
+        needs=("86box",),
+        wants=("build/mega.img", "build/weave.img", "build/megak/kernel.map")),
+    Row("megakbcodes", "soak", py("tests/megakbcodes.py"), 15.0,
+        "docs/plans/KERN-MEGA-PLAN.md 14.145: mega_k09, kern_mega's own int "
+        "09h, stores the ROM's words in the BIOS ring - Ctrl on the grey "
+        "cluster (73E0 for Ctrl+Left, the enhanced 8DE0-93E0) and on the "
+        "keypad (7300...9000, whatever Num Lock says), the ctrl letters as "
+        "before - and swallows Pause (86Box's E1 1D / E1 9D) and Ctrl+Break "
+        "(E0 46) whole, with 40:17 unturned and the key after them stored; and "
+        "(14.146, last) Ctrl+Alt+grey Del reboots: a second of real mode in "
+        "a row. Read off the ring's slots at the tail each key found. RED on the "
+        "kernel before: every Ctrl key stored plain (4BE0 for Ctrl+Left) and "
+        "Ctrl+Break turned Scroll Lock on; the grey Del never left protected "
+        "mode. 15s is 7 measured",
+        needs=("86box",),
+        wants=("build/mega.img", "build/megaapps.img",
+               "build/megak/kernel.map")),
     Row("mousess", "soak", py("tests/mousess.py"), 20.0,
         "SPEC.md 9.10.1: the mouse ISR's body runs on LOW_SEG whatever stack "
         "it interrupted. SeaBIOS serves int 13h and int 16h on a stack of its "
@@ -19761,7 +20000,10 @@ SOAK = [
         needs=("marty",), serial=True,
         wants=("build/chart.o88", "build/os8088-360.img")),
     Row("chartread", "soak", py("tests/chartread.py"), 300.0,
-        "SPEC.md 82.18: CHART's THREE readers are one reader. It opens SYLK, "
+        "SPEC.md 82.18: CHART's THREE readers are one reader. Check 0 "
+        "(82.14.2): before any file the canvas is WHITE - ct_entry copied "
+        "only the header into a claim nobody zeroes, so the window showed "
+        "heap noise; red with the clear taken out. It opens SYLK, "
         "DIF and BIFF, and until this row only SYLK had ever been executed "
         "by a test - chartname opens one .SLK and nothing else - so "
         "ct_read_dif, ct_read_biff and ct_rkdec were a few hundred bytes of "

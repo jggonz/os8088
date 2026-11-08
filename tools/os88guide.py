@@ -68,6 +68,7 @@ SECTORS = {2880: "1440", 2400: "1200", 1440: "720", 720: "360"}
 # is the disks most people need; "own" is a disk that ships one program of
 # its own, or a set that repeats programs already on the main disks.
 SECTION = {"start": "main", "xt": "main", "x720": "main", "small": "main",
+           "mega": "main",
            "emu": "main", "live": "main", "all": "own", "progs": "own"}
 # Every section but "main" is one expandable item at the end of the disk row:
 # (its title, the line under it). The count of disks is the page's to add.

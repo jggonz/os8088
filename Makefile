@@ -7233,11 +7233,12 @@ $(DOSNETSTAMP): | $(BUILD)
 # an edit to os88chart.inc rebuilt CHART.O88 and left SHEET.O88 stale - which
 # presents as a fix that did not work, on a binary that never contained it.
 # Four other rules had the same hole and were fixed with this one.
-$(BUILD)/sheet.bin: apps/sheet/sheet.asm apps/os88api.inc \
-                    apps/os88ui.inc apps/os88line.inc apps/os88text.inc \
-                    apps/os88chart.inc apps/os88chartbss.inc \
-                    apps/os88chartovl.inc apps/os88fp.inc apps/os88dec.inc \
-                    apps/os88parts.inc apps/os88partsbody.inc | $(BUILD)
+SHEET_SRC := apps/sheet/sheet.asm apps/os88api.inc \
+             apps/os88ui.inc apps/os88line.inc apps/os88text.inc \
+             apps/os88chart.inc apps/os88chartbss.inc \
+             apps/os88chartovl.inc apps/os88fp.inc apps/os88dec.inc \
+             apps/os88parts.inc apps/os88partsbody.inc
+$(BUILD)/sheet.bin: $(SHEET_SRC) | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/sheet/sheet.asm
 	@echo "sheet:  $(call FILESIZE,$@) bytes"
 
@@ -8461,9 +8462,13 @@ $(BUILD)/DOSARGS.COM: tests/dosargs/args.asm | $(BUILD)
 $(BUILD)/DOSARGS.DAT: $(BUILD)/DOSARGS.COM | $(BUILD)
 	cp $< $@
 
+# ...and DOSARGS.COM at the ROOT as well, for tests/dosext.py's
+# `B:DOSARGS.COM`: a drive with no separator resolves against that volume's
+# root here (SPEC.md 96.33.21) and against its current directory on DOS, and
+# with a copy in both a working resolution of either kind finds the program.
 $(BUILD)/dosargs360.img: $(BUILD)/DOSARGS.COM $(BUILD)/DOSARGS.DAT tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 BIN:$(BUILD)/DOSARGS.COM \
-	        BIN:$(BUILD)/DOSARGS.DAT
+	        BIN:$(BUILD)/DOSARGS.DAT $(BUILD)/DOSARGS.COM
 
 # --- the shortcut gate's disk (SPEC.md 96.21) --------------------------------
 # A SCRATCH image, because the row WRITES to it: Save Shortcut puts a .LNK on
@@ -10362,16 +10367,24 @@ $(BUILD)/pkgrun.o88: $(BUILD)/pkgrun.bin tools/os88pkg.py
 # image it is holding, and the name - and reads two different answers. It is
 # tests/multiseg's package and not a fixture, for HELLO.O88's reason one line
 # up.
+#
+# ...AND MINES.O88, for the same reason again: it is the shipped one and it is
+# PACKED (PKGZ=lz4, SPEC.md 20.13.5), as HELLO.O88 - too small to gain - is
+# not. The image form has to expand a compressed image the way the disk path
+# does (SPEC.md 21.5.1.2), and The Wire's Load Program on any release package
+# crashed the machine until it did.
 $(BUILD)/pkgrun.img: $(BUILD)/pkgrun.o88 $(BUILD)/hello.o88 $(BUILD)/mseg.o88 \
-                     tools/os88disk.py
+                     $(BUILD)/mines.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 \
-		$(BUILD)/pkgrun.o88 $(BUILD)/hello.o88 $(BUILD)/mseg.o88
+		$(BUILD)/pkgrun.o88 $(BUILD)/hello.o88 $(BUILD)/mseg.o88 \
+		$(BUILD)/mines.o88
 	@python3 tools/os88disk.py --verify $@
 
 $(BUILD)/pkgrun360.img: $(BUILD)/pkgrun.o88 $(BUILD)/hello.o88 \
-                        $(BUILD)/mseg.o88 tools/os88disk.py
+                        $(BUILD)/mseg.o88 $(BUILD)/mines.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
-		$(BUILD)/pkgrun.o88 $(BUILD)/hello.o88 $(BUILD)/mseg.o88
+		$(BUILD)/pkgrun.o88 $(BUILD)/hello.o88 $(BUILD)/mseg.o88 \
+		$(BUILD)/mines.o88
 	@python3 tools/os88disk.py --verify $@
 
 #   make pkgrun                            builds both images
@@ -15465,6 +15478,12 @@ $(BUILD)/megahuge.bin: tests/megahuge/megahuge.asm apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ tests/megahuge/megahuge.asm
 $(BUILD)/megahuge.o88: $(BUILD)/megahuge.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/megahuge.bin -o $@
+# MEGAJW (tests/megajw): the largest claim against the free memory - XMEM_CAPS, MEM_AVAIL, OSAPI_MEM_HUGE's query and a
+# claim of it, the answers kept in its own image for a row on 86Box (no port E9) - tests/megajw.py (KERN-MEGA-PLAN 14.166)
+$(BUILD)/megajw.bin: tests/megajw/megajw.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/megajw/megajw.asm
+$(BUILD)/megajw.o88: $(BUILD)/megajw.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/megajw.bin -o $@
 # MEGACAPS (tests/megacaps): OSAPI_XMEM_CAPS answers what a claim is then
 # given, a cache in the pool counted as free
 $(BUILD)/megacaps.bin: tests/megacaps/megacaps.asm apps/os88api.inc | $(BUILD)
@@ -15645,7 +15664,8 @@ MEGAPKGS := $(MEGAAPPDIR)/video.o88 $(MEGAAPPDIR)/audio.o88 \
             $(MEGAAPPDIR)/tracker.o88 $(MEGAAPPDIR)/midirack.o88 \
             $(MEGAAPPDIR)/pixel.o88 $(MEGAAPPDIR)/xtmp3.o88 \
             $(MEGAAPPDIR)/realdmg.o88 $(MEGAAPPDIR)/taskmgr.o88 \
-            $(MEGAAPPDIR)/arcade.o88 $(MEGAAPPDIR)/win16.o88
+            $(MEGAAPPDIR)/arcade.o88 $(MEGAAPPDIR)/win16.o88 \
+            $(MEGAAPPDIR)/sheet.o88
 MEGABASE = $(patsubst $(MEGAAPPDIR)/%,$(BUILD)/%,$(MEGAPKGS))
 # ...and the substitution, ONE IDIOM for every list a kern_mega disk names
 # (SMALLSUB's): the mega arm of any package that has one, everything else as
@@ -15734,14 +15754,31 @@ $(MEGAINST): $(MEGAAPPDIR)/install.bin tools/os88pkg.py $(PKGZSTAMP)
 
 # XTMP3's arm (SPEC.md 121): the PC speaker's and the Covox's protected-mode
 # ISR copies, which it carries as the Audio Player's own source
-# (apps/os88spk.inc through apps/audio/apspk.inc, SPEC.md 86.21)
+# (apps/os88spk.inc through apps/audio/apspk.inc, SPEC.md 86.21) - and the XT
+# BACKEND's own arm, x3xt.asm with -DPKG_MEGA: every store into the part goes
+# through its data selector (x3xt.asm's CSDO) where the shipped part's go
+# through CS, a completed #GP each under kern_mega - ~140 a granule, which
+# halved XT Standard's measured speed on a 386DX-25 and sent a song kern_big
+# plays live to Decode First (KERN-MEGA-PLAN 14.150). The front, art and
+# STANDARD parts store nothing through CS and are the shipped ones
+X3PARTARGSMEGA := --part $(BUILD)/x3front.bin --part $(BUILD)/x3art.bin \
+                  --part $(BUILD)/x3stdp.bin --part $(MEGAAPPDIR)/x3xt.bin
+$(MEGAAPPDIR)/x3xt.bin: apps/xtmp3/x3xt.asm apps/xtmp3/x3gran.inc $(BUILD)/x3xtk.inc \
+                        $(BUILD)/XTGEN.BIN apps/os88api.inc | $(BUILD)
+	@mkdir -p $(MEGAAPPDIR)
+	$(NASM) -f bin -w+error -I apps/xtmp3/ -I apps/ -I $(BUILD)/ -DPKG_MEGA \
+	    -o $@ apps/xtmp3/x3xt.asm
+	python3 tools/x3xtgen.py --seal $@
+	@echo "x3xt (PKG_MEGA): $(call FILESIZE,$@) bytes"
 $(MEGAAPPDIR)/xtmp3.bin: $(XTMP3_SRC) apps/os88mega.inc | $(BUILD)
 	@mkdir -p $(MEGAAPPDIR)
 	$(NASM) -f bin -w+error $(STKLST) -I apps/ -I apps/xtmp3/ -I apps/audio/ \
 	    -I drivers/sound/ -I $(BUILD)/ -DPKG_MEGA -o $@ apps/xtmp3/xtmp3.asm
 	@echo "xtmp3 (PKG_MEGA): $(call FILESIZE,$@) bytes"
-$(MEGAAPPDIR)/xtmp3.o88: $(MEGAAPPDIR)/xtmp3.bin $(X3PARTS) tools/os88pkg.py $(PKGZSTAMP)
-	$(OS88PKG) $(MEGAAPPDIR)/xtmp3.bin -o $@ $(X3PARTARGS) --part-compress lz4
+$(MEGAAPPDIR)/xtmp3.o88: $(MEGAAPPDIR)/xtmp3.bin $(BUILD)/x3front.bin $(BUILD)/x3art.bin \
+                         $(BUILD)/x3stdp.bin $(MEGAAPPDIR)/x3xt.bin \
+                         tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(MEGAAPPDIR)/xtmp3.bin -o $@ $(X3PARTARGSMEGA) --part-compress lz4
 
 # RealDMG's arm (docs/REALDMG-SPEC.md section 10.3.1): under CPU_F_PM a
 # cartridge's banks live above 1MB and are addressed IN PLACE through
@@ -15762,6 +15799,22 @@ $(MEGAAPPDIR)/realdmg.o88: $(MEGAAPPDIR)/realdmg.bin $(BUILD)/rdgcore0.bin $(BUI
                            $(MEGAAPPDIR)/rdgjitp.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(MEGAAPPDIR)/realdmg.bin -o $@ --part $(BUILD)/rdgcore0.bin \
 		--part $(BUILD)/rdgcore1.bin --part $(MEGAAPPDIR)/rdgjitp.bin --part-compress lz4
+
+# SHEET's arm (KERN-MEGA-PLAN 14.162): the same source with -DPKG_MEGA, so its
+# two modules store into their own claims through each claim's DATA selector
+# (sheet.asm's CSDO: `cs:` on the shipped build, byte for byte) - five a step
+# had been a completed #GP each, 1,024 for a 100-turn FOR loop. Cut and
+# packed exactly as $(BUILD)/sheet.o88 is; the resident image is the shipped
+# one, and the macro module's claim is 30KB there against 28 (SH_M2KB)
+$(MEGAAPPDIR)/sheet.bin: $(SHEET_SRC) | $(BUILD)
+	@mkdir -p $(MEGAAPPDIR)
+	$(NASM) -f bin -w+error -I apps/ -DPKG_MEGA -o $@ apps/sheet/sheet.asm
+	@echo "sheet (PKG_MEGA): $(call FILESIZE,$@) bytes"
+$(MEGAAPPDIR)/sheet.o88: $(MEGAAPPDIR)/sheet.bin tools/os88ovl.py tools/os88pkg.py $(PKGZSTAMP) $(PKGZBSTAMP)
+	python3 tools/os88ovl.py $(MEGAAPPDIR)/sheet.bin -o $(MEGAAPPDIR)/sheet.chart.bin \
+		--trim $(MEGAAPPDIR)/sheet.trim.bin --second $(MEGAAPPDIR)/sheet.macro.bin
+	$(OS88PKGB) $(MEGAAPPDIR)/sheet.trim.bin -o $@ \
+		--part $(MEGAAPPDIR)/sheet.chart.bin --part $(MEGAAPPDIR)/sheet.macro.bin
 
 # The Task Manager's arm (SPEC.md 28.4.15): the memory map's second part,
 # RAM above 1MB at its own scale beside conventional memory - kern_mega's
@@ -15819,14 +15872,14 @@ MEGASRC := $(KERNEL_SRC) $(KERNEL_INC) kerndos/kdos.asm $(KERNDOS_INC) \
 # and no budget binds a knob build (the KERN_BUDGET note above $(KNOBS))
 #> [Kernels] mega :: kern_mega (286+ protected mode) and its system and apps disks into build/megak/
 mega: $(BUILD)/mega.img $(BUILD)/mega120.img $(BUILD)/megaapps.img $(BUILD)/megaapps120.img \
-      $(BUILD)/megawin16.img $(BUILD)/megawin16-120.img \
+      $(BUILD)/megawin16.img $(BUILD)/megawin16-120.img $(BUILD)/megaxtmp3.img $(BUILD)/megaxtmp3-120.img \
       $(BUILD)/kernel.bin tests/megaseg.txt tools/os88megaseg.py
 ifeq ($(filter-out KERN_SMALL=% KERN_MEGA=%,$(KNOBS)),)
 	@python3 tools/os88megaseg.py --big $(BUILD)/kernel.map --mega $(MEGADIR)/kernel.map --check tests/megaseg.txt
 else
 	@python3 tools/os88megaseg.py --big $(BUILD)/kernel.map --mega $(MEGADIR)/kernel.map
 endif
-	@echo "mega: $< - kern_mega on 1.44MB, and build/mega120.img on 1.2MB. Pair them with build/megaapps.img / megaapps120.img, the apps disks with kern_mega's package arms (SPEC.md 20.18)."
+	@echo "mega: $< - kern_mega on 1.44MB, and build/mega120.img on 1.2MB. Pair them with build/megaapps.img / megaapps120.img, the apps disks with kern_mega's package arms (SPEC.md 20.18); WIN16 and XTMP3 ride megawin16*.img and megaxtmp3*.img."
 
 # SYSTEM CHECK, AND kern_mega's OWN FSCHECK.DRV BESIDE IT (SPEC.md 118.14.8):
 # the package is the shipped one - it carries no kern_mega code, the kernel's
@@ -17483,23 +17536,37 @@ MEGAAPPSARGS = $(addprefix APPS:,$(call MEGASUB,$(APPS_TOOLS))) \
                $(addprefix SYSTEM:,$(call MEGASUB,$(APPSYS))) \
                $(addprefix SYSTEM/DOS:,$(APPS_DOS) $(APPS_DOSCZ)) \
                $(APPDATAFOLDER)
-MEGAAPPS = $(call MEGASUB,$(APPS))
-# ...and XTMP3's songs as the shipped pair carries them (XTMP3MP3's note),
-# spliced ahead of $(APPDATAFOLDER) for the same argparse reason
-MEGAAPPSARGS144 = $(filter-out $(APPDATAFOLDER),$(MEGAAPPSARGS)) \
-                  $(addprefix MEDIA:,$(XTMP3MP3)) $(APPDATAFOLDER)
-# ...minus XTMP3 on the 1.2MB disk, the shipped 1.2MB disk's own decision
-# (APPS120's note, 2026-10-23): this one asked for 2408 of 2371 clusters
-MEGAAPPS120 = $(filter-out $(MEGAAPPDIR)/xtmp3.o88,$(MEGAAPPS))
-MEGAAPPSARGS120 = $(filter-out $(APPDATAFOLDER) APPS:$(MEGAAPPDIR)/xtmp3.o88,$(MEGAAPPSARGS)) \
-                  $(APPDATAFOLDER)
-$(BUILD)/megaapps.img: $(MEGAPKGS) $(MEGAAPPS) $(XTMP3MP3) $(LOGOVID) tools/os88disk.py
+# ...plus WORD and its WELCOME.DOC (the owner's, 2026-11-07), which kern_big
+# ships on office360.img and word.img alone - kern_mega has no 360KB disks.
+# The Video Player is already here ($(APPS_TOOLS) carries it; kern_big ships a
+# second copy on its system disk, $(SYSVIDARGS)). XTMP3 is NOT here: it and its
+# three songs ride a disk of their own, $(MEGAX3IMG) below, as WIN16 does.
+MEGAAPPSXTRA = APPS:$(BUILD)/word.o88 MEDIA:$(BUILD)/WELCOME.DOC
+MEGAAPPS = $(filter-out $(MEGAAPPDIR)/xtmp3.o88,$(call MEGASUB,$(APPS))) \
+           $(BUILD)/word.o88 $(BUILD)/WELCOME.DOC
+MEGAAPPSARGS144 = $(filter-out $(APPDATAFOLDER) APPS:$(MEGAAPPDIR)/xtmp3.o88,$(MEGAAPPSARGS)) \
+                  $(MEGAAPPSXTRA) $(APPDATAFOLDER)
+MEGAAPPSARGS120 = $(MEGAAPPSARGS144)
+$(BUILD)/megaapps.img: $(MEGAPKGS) $(MEGAAPPS) $(LOGOVID) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(MEGAAPPSARGS144)
 	@echo "megaapps: $@ - pair it with build/mega.img (\`make mega\`)"
 
-$(BUILD)/megaapps120.img: $(MEGAPKGS) $(MEGAAPPS120) $(LOGOVID) tools/os88disk.py
+$(BUILD)/megaapps120.img: $(MEGAPKGS) $(MEGAAPPS) $(LOGOVID) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1200 $(MEGAAPPSARGS120)
 	@echo "megaapps: $@ - pair it with build/mega120.img (\`make mega\`)"
+
+# kern_mega's XTMP3 DISKS (the owner's, 2026-11-07): `make xtmp3disk`'s shape -
+# the package at the root, all three songs in MEDIA/, SYSTEM/APPDATA/ for
+# XTMP3.DAT - with the kern_mega ARM in place of the shipped build, in
+# kern_mega's two geometries. 97 + 151KB of songs: both have room to spare
+MEGAX3IMG    := $(BUILD)/megaxtmp3.img
+MEGAX3IMG120 := $(BUILD)/megaxtmp3-120.img
+MEGAX3ARGS = $(MEGAAPPDIR)/xtmp3.o88 $(addprefix MEDIA:,$(XTMP3MP3)) \
+             --folder SYSTEM/APPDATA
+$(MEGAX3IMG): $(MEGAAPPDIR)/xtmp3.o88 $(XTMP3MP3) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(MEGAX3ARGS)
+$(MEGAX3IMG120): $(MEGAAPPDIR)/xtmp3.o88 $(XTMP3MP3) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1200 $(MEGAX3ARGS)
 
 $(APPSIMG720): $(APPS720) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 720 $(APPSARGS720)
@@ -20009,8 +20076,11 @@ win16: $(BUILD)/win16.o88
 # THE kern_mega ARM (SPEC.md 124.31.1, 20.18): the same sources assembled
 # again with -DPKG_MEGA into $(MEGAAPPDIR), every part of it that is code -
 # the image and its cut parts, the DOS host - and kern_mega's own DOS core
-# (-DDOS_MEGA) as its DOS part; the fonts and the icons are the shipped
-# build's. On kern_mega's WIN16 disks only, never on a shipped one.
+# (-DDOS_MEGA) as its DOS part, with the int 21h gate's protected-mode arm
+# (-DDOS_PMGATE: DS = the core's data selector, not a #GP a cell; KERN-MEGA-
+# PLAN 14.164) - so it is not kern_mega DOS.O88's core, whose every program
+# call is real mode; the fonts and the icons are the shipped build's. On
+# kern_mega's WIN16 disks only, never on a shipped one.
 $(MEGAAPPDIR)/win16.bin: $(WIN16ASM) apps/os88api.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88data.inc \
                          apps/os88ui.inc apps/os88mega.inc apps/dos/doscall.inc $(W16STAMP) | $(BUILD)
 	@mkdir -p $(MEGAAPPDIR)
@@ -20027,11 +20097,11 @@ $(MEGAAPPDIR)/doscore.bin: apps/dos/doscore.asm apps/dos/dos.asm apps/dos/dosbe.
                            kerndos/kdlaunch.inc drivers/net/netpkg.inc | $(BUILD)
 	@mkdir -p $(MEGAAPPDIR)
 	$(NASM) -f bin -w+error -I apps/ -I apps/dos/ -I drivers/net/ \
-	        -I kerndos/ -DDOS_MEGA -o $@ apps/dos/doscore.asm
+	        -I kerndos/ -DDOS_MEGA -DDOS_PMGATE -o $@ apps/dos/doscore.asm
 $(MEGAAPPDIR)/win16/w16dcore.inc: $(MEGAAPPDIR)/doscore.bin tools/w16dcmap.py
 	@mkdir -p $(@D)
 	python3 tools/w16dcmap.py --nasm "$(NASM)" --core $< -o $@ \
-	        -I apps/ -I apps/dos/ -I drivers/net/ -I kerndos/ -DDOS_MEGA
+	        -I apps/ -I apps/dos/ -I drivers/net/ -I kerndos/ -DDOS_MEGA -DDOS_PMGATE
 $(MEGAAPPDIR)/win16/w16dosh.bin: apps/win16/w16dosh.asm apps/win16/w16dos.inc $(MEGAAPPDIR)/win16/w16dcore.inc \
                         apps/dos/dosbe.inc apps/dos/dos.asm apps/dos/doscall.inc \
                         apps/dos/doscents.inc apps/os88api.inc apps/os88rseq.inc \

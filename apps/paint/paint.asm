@@ -13883,6 +13883,23 @@ pt_save:
     adc dx, 0
     mov cx, ax                      ; DX:CX = the file's 32-bit length
     call pt_bmp_hdr                 ; re-stamp it: the live size is the truth
+%ifndef PT_ONEBIT
+    ; **A PLANAR CANVAS IS NOT A BMP** (SPEC.md 42.13.5). On a colour adapter
+    ; the rows are four planes (42.13), and this write is the one codec that
+    ; never went through pt_line_get - it writes the canvas AS the file - so
+    ; on VGA and EGA it saved four quarter-width bit-planes under a 4bpp
+    ; header, and the picture reopened as four squeezed copies. The canvas
+    ; goes PACKED for the write and back after it, in place: no claim, so no
+    ; new way to fail, and 42.13.1.2's fused converters both ways. Undo's row
+    ; marks are banked across the pair - each converter drops them, but the
+    ; undo image is never touched and is in the planar format again by the
+    ; time anything reads them. A packed canvas makes the pair two tests.
+    push word [pt_uy1]
+    push word [pt_uy2]
+    mov al, [pt_planar]
+    push ax                         ; AL = was it planar
+    call pt_topacked                ; (nothing when it is not)
+%endif
     call pt_pin                     ; PINNED across the write (SPEC.md
     mov ax, [pt_base]               ; 66.5.7.1): the kernel holds ES:BX into
     mov es, ax                      ; the canvas for the whole call
@@ -13892,6 +13909,17 @@ pt_save:
                                     ; layer steps a selector buffer's window
                                     ; (dskw_hicarry, KERN-MEGA-MEMORY-PLAN MC7)
     call pt_unpin                   ; ...and movable again, CF untouched
+%ifndef PT_ONEBIT
+    pop bx                          ; BL = was it planar (`pop` writes no flag)
+    pushf                           ; the write's CF, across the way back
+    or bl, bl
+    jz .packed
+    call pt_toplanar                ; preserves every register: AX is still
+.packed:                            ; the FERR_* pt_ferr reads
+    popf
+    pop word [pt_uy2]
+    pop word [pt_uy1]
+%endif
     jnc .wrote
     call pt_ferr
     jmp short .out

@@ -128,6 +128,12 @@ def seg_key(m, v):
     return v
 
 
+def lin(m, seg, off=0):
+    """SEG:OFF linear - an LDT selector's base on kern_mega, where a region
+    and every claim are named by one (docs/BOCHS.md)"""
+    return m.lin(seg, off) if getattr(m, "bochs", False) else seg * 16 + off
+
+
 def mine(cl, seg):
     return sorted([c for c in cl if c[2] == seg], key=lambda c: -c[1])
 
@@ -183,8 +189,8 @@ def heapfrag_ran(m, S):
     seg, _ = pkg_seg(m, S, "Heap")
     if not seg:
         return False
-    img = u16(m.read(seg * 16 + 8, 2))
-    b = m.read(seg * 16 + img, 48)
+    img = u16(m.read(lin(m, seg, 8), 2))
+    b = m.read(lin(m, seg, img), 48)
     done, posted, woke = b[28], b[46], b[47]      # heapfrag.asm's bss table
     locked = m.read(S("gfx_lock_flag"), 1)[0]
     return bool(done and not locked and (woke or not posted))
@@ -564,7 +570,11 @@ def main():
         # Disk window and heapfrag keep a pixel of their own. In y there is
         # room for exactly one step, and one is enough: Sheet at y=45 leaves
         # rows 20..44 to the two windows behind it, one at each side.
-        mo.drag(sh_win.x + 60, sh_win.y + 9, sh_win.x + 60, sh_win.y + 9 + 25)
+        # ...and far enough that the Disk window's TITLE BAR is below Sheet's
+        # top on any screen: on a 640x480 VGA (kern_mega's) Sheet opens 380
+        # tall and the 25-row step left the Disk window wholly covered
+        dy = max(25, disk[1] + os88geom.TITLE_H + 2 - sh_win.y)
+        mo.drag(sh_win.x + 60, sh_win.y + 9, sh_win.x + 60, sh_win.y + 9 + dy)
         os88marty.settle(m)
         sh_seg, sh_win = pkg_seg(m, S, "Sheet")
         print("sheet rect %s" % ((sh_win.x, sh_win.y, sh_win.w, sh_win.h),))
@@ -579,7 +589,7 @@ def main():
         # claims - so a module's claim is set aside here, by the words that
         # name it ([ch_ovseg], [sh_m2far+2])
         SH = pkg_syms("apps/sheet/sheet.asm")
-        mods = set(u16(m.read(sh_seg * 16 + SH[n] + o, 2))
+        mods = set(seg_key(m, u16(m.read(lin(m, sh_seg, SH[n] + o), 2)))
                    for n, o in (("ch_ovseg", 0), ("sh_m2far", 2))) - {0}
         if mods:
             print("Sheet's modules (parts, 82.16.12) at %s - not counted"
@@ -601,7 +611,8 @@ def main():
         os88marty.settle(m)
 
         def sword(name):
-            return u16(m.read(sh_seg * 16 + SH[name], 2))
+            # the PARAGRAPH it names NOW (seg_key: a selector on kern_mega)
+            return seg_key(m, u16(m.read(lin(m, sh_seg, SH[name]), 2)))
 
         w0 = dict((n, sword(n)) for n in MOVABLE)
         sizes = dict((c[0], c[1]) for c in before)
@@ -616,6 +627,7 @@ def main():
                                for n in MOVABLE))
         park(mo, m)
         shot0 = m.vram("cga")
+        sh_para0 = seg_key(m, sh_seg)   # the region's paragraph, NOW
 
         # --- close heapfrag: the floor under Sheet opens up -----------------
         pt = uncovered(m, S, hf_win, prefer_title=True)
@@ -650,11 +662,12 @@ def main():
         # 4b20, txtseg 5860 -> 5320 and bordseg 4da0 -> 4a20, while this row
         # printed all six unchanged and `Sheet now holds []`.
         sh_seg1, _ = pkg_seg(m, S, "Sheet")
-        if sh_seg1 != sh_seg:
-            print("  0 Sheet's REGION moved     %04x -> %04x" % (sh_seg, sh_seg1))
+        if seg_key(m, sh_seg1) != sh_para0:
+            print("  0 Sheet's REGION moved     %04x -> %04x"
+                  % (sh_para0, seg_key(m, sh_seg1)))
 
         def sword1(name):
-            return u16(m.read(sh_seg1 * 16 + SH[name], 2))
+            return seg_key(m, u16(m.read(lin(m, sh_seg1, SH[name]), 2)))
 
         after = mine(claims(m, S), sh_seg1)
         live = set(c[0] for c in after)
@@ -694,8 +707,8 @@ def main():
         # ch_v_* and sh_v_* hold OUR segment, stamped by the binds, and the
         # modules far-call back through them - a stale stamp lands in whatever
         # took the region's old place. sh_rgnreloc re-runs both binds.
-        if sh_seg1 != sh_seg:
-            vs = [u16(m.read(sh_seg1 * 16 + SH[t] + 2 + 4 * i, 2))
+        if seg_key(m, sh_seg1) != sh_para0:
+            vs = [u16(m.read(lin(m, sh_seg1, SH[t] + 2 + 4 * i), 2))
                   for t, n in (("ch_v_first", 9), ("sh_v_first", 2))
                   for i in range(n)]
             vec_ok = all(v == sh_seg1 for v in vs)

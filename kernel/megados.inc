@@ -298,6 +298,10 @@ TOASTSTR mega_dstr, "DOSP 0000K o 0000 b 0000"  ; the trip, on the menu bar:
 section .mega                   ; protected mode only (KERN-MEGA-SEGMENTS-PLAN)
 mega_dosclaimf:
     pusha
+    xor ax, ax                      ; THE POOL PACKED UP first (KERN-MEGA-PLAN
+    inc byte [sch_lock]             ; 14.166): a pin is taken from the floor,
+    call MEGA_SEL_CODE:mx_packupf   ; the HMA, and a block there that is only
+    dec byte [sch_lock]             ; movable would cost the park 64KB below
     mov word [mega_mxflr], MEGA_HMA_KB ; THE HMA IS kern_dos's FOR THE TRIP
     mov word [mega_dhkb], 0         ; (MC4): neither claim may land in it,
     mov bp, MEGA_HMA_KB             ; and what stands there now is saved

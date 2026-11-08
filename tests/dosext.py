@@ -27,7 +27,17 @@ The six spellings, all of the same program, in one boot:
   B:\\BIN\\DOSARGS.COM /M    runs, with them      - fully qualified, for free
   DOSARGS/M                runs, with them      - the switch with no space
   DOSARGS.COM/M            runs, with them        in front of it (96.33.15.2)
+  B:DOSARGS.COM /M         runs, with them      - a drive and no separator
   DOSARGS.DAT              REFUSED              - the rule's own half
+
+`B:DOSARGS.COM` is the drive-only spelling (SPEC.md 96.33.21): `dos_pt_body`
+pointed the name one past the DRIVE LETTER's end and ate its first character,
+so it ran `B:\\OSARGS.COM` - which is not there, and the console refused a
+program that is. The disk carries a second DOSARGS.COM at its ROOT, because
+this DOS resolves a drive-only name against that volume's root where DOS uses
+its current directory; with a copy in both, either resolution finds it, and
+only the eaten letter cannot. VERIFIED RED with the `dec di` taken out:
+`B:DOSARGS.COM /M` refused, the other seven as before.
 
 96.33.15.3 records the one spelling DOS still takes and this DOS does not -
 a path with the extension left off - so a reader who finds it refused knows it
@@ -56,6 +66,7 @@ CASES = [
     ("DOSARGS /M P:220",        "/M P:220"),
     ("DOSARGS.COM /M P:220",    "/M P:220"),
     ("B:\\BIN\\DOSARGS.COM /M",  "/M"),
+    ("B:DOSARGS.COM /M",        "/M"),
     ("DOSARGS/M",               "/M"),
     ("DOSARGS.COM/M",           "/M"),
     ("DOSARGS.DAT",             None),

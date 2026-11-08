@@ -15789,6 +15789,16 @@ Five things hold it up.
   keyboard's repeat rate - while inside a bracket the app's own `int 16h`
   drain took it for Enter. The latch alone carries the key there, as on an XT.
 
+  **Otherwise `mega_k09` stores what a ROM's int 09h stores** (KERN-MEGA-PLAN
+  14.145): Ctrl on the grey cluster is the ROM's code with the `E0` ASCII
+  (`73E0` Ctrl+Left, `74E0` Ctrl+Right, `77E0` Home, `75E0` End, `84E0` PgUp,
+  `76E0` PgDn, the enhanced `8DE0`-`93E0` for Up, Down, Ins and Del), Ctrl on
+  the keypad the same codes with ASCII 0 whatever Num Lock says (and `8E00`,
+  `8F00`, `9000` for `-`, `5`, `+`), and Pause (`E1 1D 45 E1 9D C5`) and
+  Ctrl+Break (`E0 46`) are swallowed whole: the ROM's E1 flag (40:96 bit 0)
+  and its pause bit (40:18 bit 3) take exactly the one byte each expects, so a
+  keyboard that sends no `45` loses no key. `tests/megakbcodes.py` is the row.
+
   **This replaced a `kbd_aeclaim` that decoded `AL` instead** (`AH = 1C` whose
   `AL` is neither `0Dh` typed-or-shifted nor `0Ah` with Ctrl), and the
   replacement is the same answer asked of something that was *already decided*:
@@ -48499,6 +48509,13 @@ proved `image > file`. Every byte off a disk is hostile (§19) and `os88pkg.py`
 is not a gate on a foreign `.O88` — the same rule, and the same class of
 defect, as the `image + bss` carry fence one test along (§21 step 4).
 
+**And `file` is whatever the loader was handed, on both of its arms**: the
+directory entry's size on the disk path, the caller's `DX:CX` on
+`OSAPI_PKG_START`'s image arm (§21.5). The same ladder therefore lets a packed
+image through on both, and both expand it - the image arm copies the file to
+`R` and enters step 6a where the read would have left it (§21.5.1.2). It used
+to copy `image` bytes to offset 0, which no packed file has.
+
 #### 20.13.3 `OSAPI_DECOMP` (0x03D3) — a plain cell, and why
 
 ```
@@ -50298,6 +50315,15 @@ through a run of selectors and its block decoder's protected-mode part
    `build/megaapps120.img` (1.2MB): the shipped apps disk with those builds
    substituted, `make smallapps`'s shape (§27.16). kern_mega's system disks
    take the same substitution for what they carry. `$(MEGAPKGS)` is the list.
+   **Three differences from the shipped apps disk** (the owner's, 2026-11-07):
+   WORD.O88 and `MEDIA\WELCOME.DOC` are on both, kern_mega having no
+   360KB `office360.img` to carry them; XTMP3 is on neither, riding
+   `build/megaxtmp3.img` / `megaxtmp3-120.img` with its songs, as WIN16 rides
+   `megawin16*.img` (§124.18.1); and the 1.2MB disk is otherwise the 1.44MB
+   one, the room XTMP3 left paying for Word there too.
+   An arm may be the SPEED path alone: SHEET's stores into its modules'
+   own claims through each claim's data selector rather than through CS
+   (§81.94.5), the same bytes otherwise.
    A mega arm calls the same API table at the same offsets as its shipped
    build: it is one package built twice, not a second ABI.
 2. **The shipped build must still be CORRECT on kern_mega**, because nothing
@@ -50372,6 +50398,7 @@ program's. Three reads met it, and each now names its segment:
 | `MEGA_CSELTOP`'s `.cold` arm (a driver's tick returning through `drv_svc_call`) | `cmp byte [ss:mega_pm], 0` | `smsw ax` and its PE bit (the CPU's own fact; kern_mega needs a 286) |
 | `mega_ldt2ds` (`mega_gpw`'s check that a code selector has a data twin) | `cmp bx, [ss:mega_ldtl]` | ES = `LOW_SEG` by name |
 | `mega_gpfix`'s `.stale` arm | `cmp ax, [ss:mega_ldte]` | ES = `LOW_SEG` by name |
+| `mega_codesel` (`mega_gpfix`'s `.pairq`: a far transfer through a pair's data half) | `cmp ax, [ss:mega_ldte]` | ES = `LOW_SEG` by name (KERN-MEGA-PLAN 14.165) |
 
 The first faulted a sound tick's `retf` while a Windows program played
 (`FAULT 0D err 118C`, QEMU with an SB16). The second refused every store
@@ -50380,6 +50407,12 @@ program's stack, which is where WIN16's DOS host makes its first
 (`FAULT 0D err 0000`, Write 3.0 on 86Box's 386; QEMU never traps the store).
 The cost is `.mega` +18 bytes and `.cold` +4, no rung crossed; kern_big and
 kern_small assemble byte-identical, and `tests/megaseg.txt`'s 4,381 holds.
+The fourth, `mega_codesel`, refused a pair's data half - so `mega_gpfix`
+reported the far transfer it exists to complete - whenever the program's
+own stack held a small word at `mega_ldte`'s offset: WIN16's
+`w16_cbenter` `retf` CLOSED MDI.EXE and File Manager and was completed for
+Program Manager, the same frame (KERN-MEGA-PLAN 14.165; +5 bytes of
+`.mega`, which the `align 16` before `rms_lo` absorbs).
 The `[ss:mega_*]` reads that remain are in the allocator and the
 far helpers `.cold` calls from kernel paths on the UI task, where SS is
 `LOW_SEG` by the §2.1 convention.
@@ -50957,6 +50990,36 @@ with PARTS is refused on the image arm, and the decode claim is held across
 the whole tree is `Load Program` on a plain `.O88` — bytes that were never a
 file and are never going to be one.
 
+#### 21.5.1.2 ...and what it holds is the FILE, which is usually PACKED
+
+**Every release `.O88` is compressed** (`PKGZ=lz4`, §20.13.5), and the image
+arm used to copy `[ld_img]` bytes to offset 0 whatever the header's flags
+said. On a packed package that is the UNPACKED length read out of a buffer
+holding the shorter packed file: an over-read of the caller's claim, and a
+region whose code is an LZ4 stream. kern_mega faulted on the copy's own limit
+(`kern_mega FAULT 0D` inside the `rep movsb`, or `#GP limit` on the new
+instance's first call); kern_big far-called the stream and halted on `STACK
+OVERFLOW TASK`. The Wire's Load Program (§92.8) crashed the machine on every
+real package, while `tests/thewire.py` Load-Programmed `hello.o88` - too
+small to gain from packing, so it ships plain - and passed.
+
+The header check had never refused it: `ld_check_hdr`'s `.over` arm accepts
+an image longer than the file exactly when bits 3/4 say compressed, which is
+right for a file the disk path then reads high and expands. So the fix is the
+disk path's, not a refusal: the image arm copies the FILE to `R` and enters
+step 6a (`ld_run_body_x.expand`), which expands it downward in the region and
+re-checks the header - the same bytes, the same decoder and the same
+`.ret2`/`ld_unreserve` on a stream that does not decode. +4 resident bytes of
+`.cold` on all three kernels (`ld_where`, the shared half of step 6). The
+region-fit question §20.13.8.1 leaves open applies to this arm exactly as to
+the disk one, and the copy here moves `file` bytes rather than
+`roundup512(file)`, so its worst case is the smaller of the two.
+
+`tests/pkgrun.py`'s G hands the shipped, packed `MINES.O88` to the image form
+and compares the running instance's region with `os88pkg.image_unwrap` of it;
+`tests/thewire.py`'s assertion 19 is Load Program on the same file. Both were
+red on the old arm.
+
 #### The split, which is what makes the body one routine and not two loaders
 
 `ld_run_body_x` gave up two routines, both entered by the disk path exactly
@@ -50974,14 +51037,19 @@ where they used to be inline:
 
 So the file arm is `ld_run_name` (§21.4) — the same routine `ui.inc` launches
 the Task Manager through and `assoc.inc` opens a document with — and the image
-arm is `ld_check_hdr` → `ld_alloc` → **a far `rep movsb`** → `ld_start`.
-Nothing about the arithmetic, the fences or the entry contract moved.
+arm is `ld_check_hdr` → `ld_alloc` → **a far `rep movsb`** → the disk path's
+step 6a, entered where its read would have left it → `ld_start`. Nothing about
+the arithmetic, the fences or the entry contract moved.
 
-**No disk-swap re-check on the image path**, and it is not an omission: the
-bytes came out of memory the caller owns and `ld_check_hdr` read *those very
-bytes*, so there is nothing that could have been swapped underneath them. The
-copy count is `[ld_img]` and not the file length, which `ld_check_hdr` has
-just proved equal — parts being refused above.
+**Where the copy lands and how much it moves are step 6's own answers**, out
+of one routine both arms call (`ld_where`): offset 0 and the image for a plain
+package, where `ld_check_hdr` has just proved image and file equal — parts
+being refused above — and `R = roundup512(image − file)` and the FILE for a
+compressed one (§20.13). §21.5.1.2 is what the second half cost before it
+existed. The in-region `ld_check_hdr` after 6a then runs on this arm too: it
+guards no disk swap here, since the bytes came out of memory the caller owns,
+but it is the check a compressed image owes after its expansion, and a plain
+one pays a few hundred cycles for sharing the path.
 
 **The source is banked in `[ld_msrc]`** (offset, then segment) rather than
 kept in `ES:DI`, because `ld_alloc`'s chain reaches `mem_compact` and a
@@ -71733,7 +71801,15 @@ What differs from a grant ring (§34.5.2):
   the same call places it from the BOTTOM** (§50.3.2, KERN-MEGA-PLAN 14.55):
   a claim with a head there is a ring held while it plays, and is claimed
   low with the same page guarantee; kern_big and kern_small take it from
-  the top as before. A package changes nothing for it;
+  the top as before. A package changes nothing for it. **And for an
+  `OS88_HIGHMEM` package it is a POOL block** (§50.3, KERN-MEGA-PLAN 14.160):
+  below 16MB, the ring inside one page and born pinned, which the 8237
+  reaches through the base `sbl_ring_phys` reads (`SEG_LIN`'s low word and
+  page). The router's gate (`snd_ringhif`) refuses an external ring above
+  1MB unless the pool block it starts is a DMA door's and pinned
+  (`MX_FDMA | MX_FPIN`) - a plain pool claim may move under the chip - and
+  answers 2 as before. A ring a real-mode bracket feeds stays conventional
+  through `OSAPI_MEM_P` with a head (§50.3.7);
 - **verb 1 only RESUMES.** The total arrives through memory; an underrun
   still halts the card, and verb 1 is still what restarts it, with the same
   bound;
@@ -72886,6 +72962,16 @@ an interrupt gate to BX:SI, and the door answers AX = K and **CX:DX = the
 chain**, the kernel's own IRQ0 (`KERNEL_SEG:sch_isr`, KERNEL_SEG being a
 code selector there). The close and `fsx_restore` put the gate back to
 `sch_isr` and leave the IVT's cell alone. Only kern_mega answers AL = 2.
+
+**The setup calls store through DS, on every kernel** (KERN-MEGA-PLAN
+14.150). `os88spk_lpt`, `os88spk_init`, `os88spk_go`, `os88spkfx_init` and
+`os88spkfx_ratchet` are made with DS = the package's own - every caller's
+is, and the Video Player's shaper part hands its data segment - and write the
+library's state, and the ISRs' patched immediates, through it; they still
+READ through CS. Through CS they were 80-100 completed #GPs a play under
+kern_mega, and each such store was one byte longer on every kernel. The
+polled Covox (`OS88SPK_POLL`), which runs inside the producer's loops with
+the producer's DS and on an 8088 alone, still stores through CS.
 
 **The ISR cannot write its state through CS there**: a package's CS in
 protected mode is a read-only code alias, so every `mov [cs:x], ...` traps
@@ -86984,7 +87070,10 @@ unchanged.
 **The file formats cost nothing at all**, which is what made this affordable.
 Every codec in the program already goes through `pt_line_get` and
 `pt_line_put` — one byte per column in `pt_line` — so BMP and GIF, load and
-save, are two routines away from the canvas and neither of them changed. What
+save, are two routines away from the canvas and neither of them changed.
+**All but one**, and that sentence shipped wrong: the BMP SAVE writes the
+canvas as the file, so it is the codec that had to change, and §42.13.5 is
+what it did on every VGA and EGA until it did. What
 those two routines do changed completely: eight pixels now build four bytes by
 shifting each colour index right and rolling the carry into a plane, and the
 reverse pulls eight pixels out of four bytes the same way.
@@ -87441,6 +87530,40 @@ only the first.
 the nibble twice, and bit *k* of `n | n << 4` is bit *k* of the nibble for
 every *k* the four-iteration loop reaches. Two bytes smaller than the line it
 replaces.
+
+#### 42.13.5 The BMP save is the one codec that never went through `pt_line_get`
+
+**Before §42.13 the canvas WAS the BMP**, a 118-byte DIB header and packed
+4bpp rows, so saving one was a single `OSAPI_FILE_WRITE` of the canvas from
+offset 0 (§18.4.1). The planar change left the header a 4bpp one and made the
+rows four bit-planes - so on VGA and EGA `Save as Bmp` wrote four
+quarter-width planes under a 4bpp header, and the picture reopened as four
+squeezed copies with fringes. **Data loss**: the user's picture was gone from
+the disk while the window still showed it. GIF saves were right (they read
+rows through `pt_line_get`), and CGA and Hercules were right (one bit,
+packed); every BMP row in `tests/` ran on a 1bpp machine.
+
+So `pt_save`'s BMP arm puts the canvas PACKED for the write and back after it,
+in place, through §42.13.1.2's fused converters - `pt_topacked`, the write,
+`pt_toplanar`. No claim: a staging copy of the file would be a new way for a
+save to fail on a full heap, and the in-place pair cannot fail. Undo's row
+marks (`[pt_uy1]`/`[pt_uy2]`) are banked across it, because each converter
+drops them and the undo image itself is never touched - it is planar again by
+the time anything reads them - and the clipboard was always kept by both. A
+packed canvas makes the pair two byte tests.
+
+**The cost is two conversions**, 1,165 ms each for the 466 x 110 canvas on a
+4.77 MHz 8088 (§42.13.1.2's measurement), on top of a floppy write that is
+seconds itself - paid only by a BMP save on a colour adapter, and a 286 pays
+a quarter of it. The alternative, a row-at-a-time pack into a streamed write
+(`apps/os88wseq.inc`), is one conversion but a cluster-sized buffer in
+Paint's segment and a file left half-written on a mid-save failure, where
+the one-call write replaces the old file whole or not at all.
+
+`tests/paintbmpsave.py` opens a sixteen-colour picture it generates on
+`os8088_xt_vga`, saves it as BMP and as GIF off the same planar canvas, reads
+both back off the flushed floppy and compares them pixel for pixel; red on the
+old arm at 11,996 of 12,800 pixels.
 
 #### 42.13.4 `pt_screen` does not preserve `BX`, and `pt_sucache` believed it did
 
@@ -99000,6 +99123,34 @@ loop in the driver that held each failed block so the next attempt would land
 elsewhere: correct, but it could hold 128KB to find 32KB and refuse on a
 machine that had the room the whole time.
 
+**On kern_mega in protected mode, an `OS88_HIGHMEM` package's claim of 64KB or
+less WITH A HEAD is a POOL block** (KERN-MEGA-PLAN 14.160), where `mega_claimhf`
+puts its plain claims: `mega_claimdf` hands `mx_alloc` the head, which places
+the block FROM THE POOL'S FLOOR UP (§50.6.10's one exception, KERN-MEGA-PLAN
+14.166) - a candidate whose head would straddle goes UP to the next page's
+floor - and the block is all below 16MB because the pool is
+(`mega_layoutf` caps it at 15MB above the first). Both KB doors (`_DMA` and
+`_DMA_HI`) take the arm; `OSAPI_MEM_P` with a head does not (§50.3.7), and a
+driver never does - its own 8237 or bus-master code may not take a selector's
+base, so a driver's head claim is conventional whatever its header says. CX =
+0 is the plain claim and conventional as always. The answer is a selector,
+and a chip reaches it through the descriptor's base: `OSAPI_SEG` `SEG_LIN`
+answers the low 16 bits and the page, which is exactly what `SOUND.DRV`'s
+`sbl_ring_phys` programs an external ring from, and the floppy's native path
+does its page arithmetic on the same base (`dsk_runcap`, KERN-MEGA-PLAN
+14.156). **It is born PINNED** (`MX_FPIN`), the pool's spelling of a
+conventional claim's `MC_RLOC` = 0: a ring a chip is armed on must not move
+under it, and the pool has no relocation proc to call. `OSAPI_MEM_MOVABLE` on
+it takes the pin off (AX ≠ 0) and puts it back (AX = 0) and calls no proc -
+the selector the package holds is the claim, and a move rebases it - while
+every other pool claim still refuses the call. An unpinned one moves only
+where its head stays inside one page (`mx_dmafit`, §66.4.2's bump in both of
+the pool's passes, towards where the block is and no further), and an
+in-pool regrow that needs a new block carries the head into it. Its head
+costs no real-mode segment: a block a real-mode path names asks
+`OSAPI_MEM_P` instead. The audit of every caller is KERN-MEGA-PLAN 14.160's
+table.
+
 Two limits, both deliberate: a head bigger than 64KB is refused up front (no
 page can hold it, and that is also what bounds the bump). **The claim record
 carries it** — `MC_DMA`, the head in paragraphs, 0 for an ordinary claim — so
@@ -99236,6 +99387,15 @@ exactly this, and the first build of this arm sent them above 1MB, where a
 code part faulted as data (`pxmega`, an invalid opcode in PiXEL's decoder).
 Every kernel masks the bit off before CX is a head.
 
+**A claim WITH A HEAD stays conventional here on every package**, and that is
+now a contract rather than an accident: since KERN-MEGA-PLAN 14.160 the KB DMA
+doors give an `OS88_HIGHMEM` package's head claim a pool block (§50.3), so
+this door is the one a package names for a page-safe buffer that a real-mode
+path must reach - a ring in an `FSXF_REAL` list (VBattle's `vb_ring`, the
+Video Player's `vp_ring` and `vp_aseg`, `tests/megarmb`'s rings), or a
+workspace a fixed disk is read through a call a run rather than a call a
+sector (SysCheck's, §118.14). The head is in paragraphs, `KB × 64`.
+
 ### 50.3.2 …and the top-down doors a driver never had
 
 §50.3's two ends are **data from the bottom, regions from the top**, and the
@@ -99307,6 +99467,38 @@ compacts downwards. **CX = 0 keeps the top**: the parts carve, the C overlay
 and the player's `vp_mclhi` claims ask the door for no page at all, and a
 carve or an overlay is a CS (§20.12.10.8). kern_big and kern_small are
 unchanged, byte for byte.
+
+**...and since KERN-MEGA-PLAN 14.166 a ring goes to the TOP END when the top
+end is free for it** - the owner's rule (2026-11-08): *"we don't want to
+blockade the available space with something in the middle."* Bottom-up, a
+ring lands on the FILL POINT, above the programs' claims and the caches
+standing there, and it is PINNED for as long as it plays: whatever under it
+is freed meanwhile (a program closed, a cache shed) stands under the pin as a
+run of its own. Measured on a 1MB kern_mega (640K and 384K above 1MB, the
+86Box mr286): SOUND.DRV's 16KB staging pool over the 86KB Sheet's spill had
+held, the heap's best run 474KB of 560KB free, `OSAPI_MEM_HUGE` 86KB short.
+The FLOOR end is never free for a ring after the boot - caches and programs'
+spills stand there - and on a machine with a pool the TOP end is, from the
+boot until a program wants a conventional CS. So `mem_ringtop` (`.cold`, from
+`mem_claim_x`'s retry) asks where the top-down first fit would put a claim
+WITH A HEAD from a package or a driver - never the kernel's own: the
+read-ahead's 9KB LANDING (§18.95) is pinned and page-safe and KERN-MEGA-PLAN
+14.167 re-takes it mid-session (`dsk_bnc_want`), but it is a CACHE, which
+every claim sheds and every planner dissolves, so wherever it lands it cuts
+nothing a claim can have; sent to the top it stood above the rings and
+stranded its own 9KB there once shed (measured: 679KB where 688KB is the
+answer) - and when everything above that place is a ring too, or the
+kernel's own (the low tables, a boot driver's image), it sends the claim
+through the top door, which takes exactly that place; when a
+claim with no head stands above it (a carve, an overlay, a region), the top
+is not an end and the ring goes bottom-up as 14.55 put it. A ring at the top
+end has only free memory under it; a top-down claim taken later stacks under
+the ring and frees back into that run; and an idle one, declared movable,
+came in by the top door, so the descending pass packs it back to the top
+(§66.4.1). A head that would straddle a 64KB page bumps DOWN until it ends
+at the top of the page it starts in, which can leave a page's tail between two rings - at most 63KB,
+and only when two stand whose heads cannot share a page. kern_big and
+kern_small are unchanged, byte for byte.
 
 
 #### 50.3.2.1 Two images the doors were opened for and did not reach
@@ -100400,6 +100592,27 @@ HMA's end up to the lowest block, and the HMA is reached last. `mx_compactf`
 one claim. The Task Manager's MAX RUN replays the pack with only the HMA
 pinned, so it reads AVAIL less the HMA's share.
 
+**...but a PINNED block from the floor up** (KERN-MEGA-PLAN 14.166, the
+owner's rule: *"we don't want to blockade the available space with something
+in the middle"*). A DMA door's block (§50.3, KERN-MEGA-PLAN 14.160) is born
+`MX_FPIN`, and taken top-down it landed UNDER every block taken before it -
+so when those were freed their KB stood ABOVE the pin as a run of its own,
+which the pack UP cannot join to the run below it, and the largest claim the
+pool could grant fell short of its free KB by all of them. Measured on a 1MB
+kern_mega (86Box's mr286, the sound driver up): KERN-MEGA-PLAN 14.166's
+table. So `mx_alloc` takes a block it is about to pin FIRST FIT UPWARD from
+`[mega_mxflr]`: free memory is one run from the floor to the lowest movable
+block, and a pin at its bottom leaves it one run. A head that would straddle
+a 64KB page goes to the next page's floor, which can leave a page's tail
+under it - at most 63KB, and only when two pins are standing whose heads
+cannot share a page; the next pin small enough fills it first. A MOVABLE
+block standing under the candidate (the top was too full for it) is packed
+up out of the way first, once, so the pin does not keep it below. The floor
+is the HMA when nothing else stands there, so a DOS trip that finds a pin in
+it parks the HMA with the session (§50.6.10's MC4 rule, 64KB more park) -
+and packs the pool UP first, so a block that is only movable is not left
+there to cost that.
+
 `tests/megaxmove.py` is the gate: a block moved by the pack and read back
 through its first token, by copy, in place, by the file layer and by a
 package's own int 13h. Cost: kern_mega `.cold` +15, `.mega` +112, `.text` +0;
@@ -100667,7 +100880,18 @@ was - by a selector - and not by its segment:
   1MB. Every claim is an LDT selector now, so the bit says nothing about
   where the memory is.
 - `dsk_runcap` does its DMA-page arithmetic on a selector's base: a
-  conventional claim is a direct transfer and only memory above 1MB bounces.
+  conventional claim is a direct transfer and only memory above 1MB bounces
+  - **except a floppy's** (BIOS unit 0 or 1, the base below 16MB, the native
+  path not switched off): `mega_fd13` programs all 24 bits of the 8237, so a
+  run into a pool claim is one native call in place, capped by the 64KB page
+  as a low one is, and a call the native path hands back is bounced by
+  `mega_svc` itself (`mega_hibnc`). Bounced here, a 22 kHz stream's
+  look-ahead ring was read nine sectors a call and ran dry
+  (KERN-MEGA-PLAN 14.156). The native path also seeks only when the head is
+  not already there: after its own seek it leaves 80h + the cylinder in the
+  BIOS's cylinder byte (40:94 + the unit; never a number the BIOS seeks to)
+  and believes it only while it is still there - a BIOS call that moves the
+  head writes its own, a recalibrate and every native failure write FFh.
 - **Frame buffers and ROMs too** (`mega_vfixall`): every real segment at or
   above A000h the kernel holds - the video tables, each display's context,
   the full-screen modes' rows, `font_seg` - becomes one data selector over
@@ -102382,6 +102606,56 @@ volumes, and it went stale twice: the `DRVC_FILE` arm was missing (unticking
 the RAM disk left a mounted volume over a freed image), and §62.9.19's
 `DRVC_FILE2` had to be taught to it again. A mounted `.IMG` (§18.101) is
 `DRVC_IMG`, `0x41`, which no driver's class can equal.
+
+#### 51.8.1 A driver whose `DSV_BLK` takes a selector says so (`BLKCAP_SEL`), and kern_mega stops bouncing it (KERN-MEGA-PLAN 14.167)
+
+On kern_mega in protected mode **every claim is an LDT selector** (§50.6.12),
+and `dsk_xfer` used to send any `DSV_BLK` whose `DX` was one through
+`dsk_secbuf` **a sector a call** (`.drvhi`): one IDE command per 512 bytes on
+HDD.DRV's rung 1, one reflected int 13h - on a 286 a CPU reset - per 512
+bytes on rung 0, for a pool block above 1MB and a conventional claim alike.
+The reason was a driver's paragraph arithmetic on `DX`, which a selector
+does not survive, and a ROM's DMA, which cannot reach above 1MB.
+
+So a `DRVC_DISK` driver may set **`BLKCAP_SEL` = 4 in `DSV_CAPS`** (the bit
+`FSCAP_SEL` is to a file driver, §62.9.2.4): *my `DSV_BLK` loads `DX` into a
+segment register as it is and walks only `BX`*. Then:
+
+- **the selector goes to the driver as it is** - one call for the whole run,
+  as a conventional segment does on every real-mode kernel;
+- **a transport of the driver's that cannot reach the buffer answers `CF` =
+  1, `AL` = 09h having moved nothing** (the ROM's own "DMA boundary"), and
+  that one answer is bounced after all, a RUN at a time through the landing
+  below. Any other `CF` = 1 is the transfer's answer;
+- **a driver that leaves the bit clear is bounced a run at a time** through
+  the landing too - no longer a sector at a time - and through `dsk_secbuf`
+  only when no landing can be had.
+
+HDD.DRV sets it. Rung 1 is `rep insw` / `out` through `ES`, which a selector
+serves as a segment does; rung 0's `hd_bios_run` refuses a buffer above 1MB
+before its first int 13h (§2.10.8's HMA rule, which kern_mega's pool falls
+under) and now answers that refusal **09h** rather than 04h. A buffer below
+1MB that is a selector reaches rung 0's int 13h as it is: `mega_svc` hands
+the ROM the paragraph its descriptor is based on.
+
+**The landing** (`dsk_rah_bnc`, `MEM_P_RAHB`) is the read-ahead's and the
+bounce's both: page-safe, purgeable, `DSK_BNC_SECS` sectors - a bounce's
+run through it is one reflected int 13h, so it is sized for the BIOS call
+and not for the read-ahead's nine-sector chunk. **A shed one is taken back
+at the next transfer that needs it** (`dsk_bnc_want`, at `dsk_xfer`'s head
+before `[sch_lock]` is raised and only when it is 0, for a buffer whose
+base is above 1MB): it used to come back only at the next mount, and every
+high transfer until then went a sector a call. No other kernel reads the
+bit, and no real-mode kernel ever hands a driver a selector.
+
+**Measured** on 86Box's mr286 profile (`tests/hdbounce.py`, 60KB off a 16 x
+63 IDE C:): through HDD.DRV's rung 1 a read into a pool block or a
+conventional claim was 122 one-sector driver calls, 83.8 ms, and is now one
+call for the data, 58.0 ms (kern_big on the same machine: 60.9); through
+rung 0, 122 reflected one-sector int 13h, 156.7 ms, now 75.7 ms high and
+63.8 low; through the kernel's own BIOS row 72.8 -> 68.4 ms high (60.0
+low), and 150.6 -> 68.8 with the landing shed first. KERN-MEGA-PLAN 14.167
+has the table and the landing sizes measured (9, 18, 36, 63 sectors).
 
 ### 51.9 A driver's own settings, inside SYSTEM.CFG
 
@@ -118282,8 +118556,10 @@ page-constrained claim page-safely since before compaction existed — it stages
 `MC_DMA`, lets `mem_hifit` + `mem_dmaok` pick a legal base, copies and rewrites
 `MC_SEG`.
 
-**There are four `MC_DMA` claims in the tree and only one has a chip armed on
-it.**
+**There were four `MC_DMA` claims in the tree when this was written, and only
+one had a chip armed on it**; the fifth row is the Audio Player's, added with
+KERN-MEGA-PLAN 14.160 (the package rings since - 1942's, WaveRack's, the
+Recorder's - are the fourth row's kind, and none of them is declared).
 
 | claim | why it asked | bus master armed? |
 |---|---|---|
@@ -118291,6 +118567,7 @@ it.**
 | the file manager's copy buffer | it is an `int 13h` target | no — `filecp.inc` falls back to a plain claim with **no** `MC_DMA` when no page-safe run exists, and still copies |
 | the typeface cache (`apps/os88type.inc`) | a 512-byte aligned base for a file read | **never** |
 | the Sound Blaster's ring | the 8237 holds its page and offset | **yes**, and it is the only one |
+| the Audio Player's look-ahead (§86.5, KERN-MEGA-PLAN 14.160) | every gulp is one floppy run with no split at a page | **no** — the floppy's 8237 only for the length of one `int 13h`, inside which nothing compacts; declared movable between plays (`ap_rdecl`) and pinned for one (`ap_rpin`) |
 
 Nothing else on this machine is a bus master into host RAM, and each was
 checked rather than assumed: the NE2000's *"remote DMA"* is a PIO window at one
@@ -123942,6 +124219,29 @@ claim, reached the way §73.14's overlay is, or large bss buffers moved into
 heap claims to shrink part 0. Neither is needed yet. `tests/wdparts.py` is the
 gate: the association launch, I_SIZE, the claim covering part 1, part 1's
 bytes at `WD_P1ORG`, and a search whose pattern compiler is part-1 code.
+
+#### 68.10.1 No store through CS, on any kernel
+
+Part 1 being in the program's own segment made `CS` the package again, and
+the Utilities commands and the `.DOC` engines took the old resident spelling
+back: `mov [cs:wd_x]` while DS was the text, the CHP or the PAP dictionary,
+and `push cs / pop ds` to put DS back. **Both are wrong on kern_mega**, where
+`CS` is the region's CODE selector, read-only: each store was a completed #GP
+(`mega_gpw`, ~884 clocks on a 286) - a mark a `.DOC` load, a run and a
+paragraph a save, a paragraph a Sort or Renumber, 352 in one session of
+`tests/officetrap.py` (KERN-MEGA-PLAN 14.162). Since then **every store to a
+package variable goes through DS back on the package or ES = the package**:
+DS from the STACK (`push ds` before the text is borrowed, `pop ds` after,
+or the store moved after the routine's own `pop ds`), never from CS, and
+`wd_plist`'s per-paragraph array through `ES` (`push ds / pop es` at its
+head, `es:` where `cs:` was - the same length and clocks). On the 8088 every
+changed per-character, per-run and per-paragraph loop runs in the same clocks
+or fewer; what pays is once a command or a load - `wd_plist`'s head 26 clocks
+a Sort, `wd_dtrim`'s `pop ds / push ds` 22 a load - and the image is 4 bytes
+SMALLER (53,801 -> 53,797). READS through
+CS stay (`tests/cswrites.txt` names the five pairs that remain, each a read):
+a code selector is readable. `tests/unit/t_cswrite.py` walks `apps/word/`, so
+a new store fails `make`.
 
 ### 68.11 View > Page — the sheet
 
@@ -136705,6 +137005,24 @@ session after it until a minute passes or the app is restarted, which is what
 made this look like a server that breaks rather than a transfer that was too
 slow.
 
+#### 77.25.1 ...and a LIST of a folder that is not there is an EMPTY listing
+
+`LIST NOSUCH` sends its `150` before the walk, because the walk runs on the
+UI task (§20.6 rule 7) and the 150 is the worker's. The walk then failed to
+reach the folder and answered the mid-transfer way - abort the data
+connection, then `550` - but on PASV the worker ACCEPTS the data connection
+only when it first sends (`fd_data_ready`), so there was no data socket yet:
+the abort closed the LISTENER, and the client's connection, which `ftplib`
+and most clients open before they send the command, was left established and
+empty. The client read it until its own timeout and never saw the 550.
+
+So a missing folder is an empty stage and a flag (`[fd_lfail]`): the worker
+accepts, sends nothing, CLOSES - the client's end-of-file - and `fd_xdone`
+answers `550` where it would have said `226`. `tests/ftpd.py`'s 8f sends
+`LIST NOSUCH` and `NLST NOSUCH` and wants `550` from both inside the timeout
+and the control connection still in step; red on the old arm with a data-
+socket timeout.
+
 ### 77.26 The longest silence, which is the number that decides it
 
 The field read WinSCP's documentation and asked the right question: it holds
@@ -148936,6 +149254,39 @@ Both carry `times` pairs now, assembled rather than preprocessed, and both
 were proven by mutation: raising either count alone fails the build with
 `TIMES value -1 is negative` on the assertion's own line.
 
+#### 81.94.5 kern_mega's arm: each module stores through its claim's DATA selector
+
+Both modules keep their state in their own claim and write it `[cs:x]`,
+which real mode allows and protected mode does not: under kern_mega `CS` is
+the claim's CODE selector, read-only, and kern_mega COMPLETES each such store
+as a #GP (`mega_gpw`, ~884 clocks on a 286). The macro engine wrote five a
+STEP (`shm_mstep`'s `.exec`, `shm_mesc`, `shm_pmacro`'s `.act`) - 1,024 for
+a 100-turn `FOR` - and the chart module's BIFF formula decoder three a
+formula (`sh_biff_dcrpn`, `sh_dc_index`). And any macro command may be in a
+loop, so every store in the macro module is on a per-step path.
+
+**So SHEET has a `PKG_MEGA` arm** (§20.18, KERN-MEGA-PLAN 14.162): every
+store into a module is `CSDO insn` with `[CSEG x]`. On the shipped build
+that is the instruction with `cs:`, **byte for byte - `build/sheet.bin` is
+unchanged**. In the arm `CSDO` loads DS for the one instruction with the
+claim's DATA selector - the package's own word naming it, `[sh_m2dseg]` for
+the macro module and `[ch_ovseg]` for the chart module, picked by the
+SECTION (a `CSDO` in `.text` is an `%error`) - and `CSDO_ON ... CSDO_OFF`
+does it once for a run of adjacent stores (kernel/kernel.asm's rules, which
+`tests/unit/t_cswrite.py` holds the runs to). Neither module ever loads DS,
+so DS is the package at every site. Three loops' short jumps out of reach in
+the arm are `SH_JMPF`/`SH_JCXZF`, short on the shipped build.
+
+**The arm's bytes**: the resident image is the shipped one
+(`sheet.trim.bin` identical); the chart part +30 (52,339 -> 52,369); the
+macro module's image +1,310 (18,904 -> 20,214), so its claim is **30 KB** in
+the arm against 28 (`SH_M2KB`) and the text files' tail (§81.91.1) keeps more
+than its shipped room - two channels of 5,248 bytes against 4,880.
+`SHEET.O88` on kern_mega's disks 87,663 -> 87,924. kern_big pays nothing.
+`tests/officetrap.py --leg sheet` is the row: 0 #GP for two macro runs
+(tests/sheetmacro.py's COUNT and a 100-turn FOR), the save and the BIFF
+reload, against 1,725 with the shipped build.
+
 ### 81.93 What the macro language does not do, and where the module stands
 
 This is Excel 2.0's macro vocabulary as `docs/plans/SHEET-MACRO-PLAN.md`
@@ -153339,6 +153690,15 @@ call (§66.3 rule 5, bucket C). The read's staging claim stays undeclared: it
 lives inside one callback and is a file read's target throughout. +59 bytes of
 image. `pkgmove-chart` is the gate, red with `ct_reloc` a bare `ret`.
 
+#### 82.14.2 ...and a CLAIM is not zeroed, so the pixels are cleared at entry
+
+`ct_entry` copied the 118-byte header into the canvas claim and nothing else,
+and nothing renders until a file is opened - so the window showed whatever
+the heap last held under the claim, noise on every adapter. The pixels are
+cleared to WHITE there (`0xFF`, what `ch_prep` clears to for a chart with no
+values), 7 bytes. `tests/chartread.py`'s check 0 reads the canvas before any
+file and wants every byte white.
+
 ### 82.18 Keeping Chart in step with what Sheet writes
 
 Sheet grew four stages of value model while Chart's readers stood still, and
@@ -157566,7 +157926,7 @@ number of clusters — a 16-byte-record queue is neither.
 | item | size | where |
 |---|---|---|
 | image + bss | 17,875 B (12,242 image + 5,633 bss; 18,868 at apps size pass 2's cut point, and 42,872 before the first apps size pass, 28,536 of it bss) | the package region (cap `APP_MAX_SIZE` = 60 KB) |
-| look-ahead ring | 32 KB | one `OSAPI_MEM_CLAIM`, held for the instance's life — the refill's `int 13h` target and the parser's header window (§86.5.2) |
+| look-ahead ring | 32 KB | one `OSAPI_MEM_CLAIM_DMA`, all of it the page-safe head (the plain claim when no page-safe run exists), held for the instance's life — the refill's `int 13h` target, so a gulp is one floppy run with no split at a 64KB page, and the parser's header window (§86.5.2). On kern_mega a pool block (§50.3, KERN-MEGA-PLAN 14.160) |
 | decoder scratch | 2,368 B | `apd_out` in bss: a card's 2 KB half, and on the speaker a step's span of inputs — the PCM source copy (`aps_src`) too, one format a track (§86.21) |
 | speaker buffers | 1,280 B | `aps_stage` 512, `aps_dbuf` 768 (the box's table, k ≤ 3 — and `ap_cinv`'s 256, a counts file never being boxed). The shaper's 2,816-byte family was here as `aps_fam` and lives in the speaker ring's claim now (§34.11.9), so a card machine never holds it |
 | speaker ring | 17 KB | `aps_rseg`, claimed at the first speaker play and kept (§86.21) |
@@ -158583,6 +158943,27 @@ block), and the package's 64KB compares equal after the resume
 row, no fault. A byte of the section flipped on the host is refused,
 `Hibernation: unreadable`. HIBER.DRV is 6,987
 bytes on the disk on kern_mega against 5,137 on kern_big.
+
+**The streaming resume** (`hbm_xres` as built, KERN-MEGA-MEMORY-PLAN MC4.1
+(b), `kernel/megares.inc`) is the path the code takes today, replacing the
+staged copy above: everything that can refuse with the fresh session intact
+is asked first (the section's head and runs against this machine, the
+extents, the geometry), then the stage goes into the text page and
+`mega_hbgor` leaves protected mode by the DOS handover's route, with IRQ1
+and the mice masked. The stub reads the whole image back through the BIOS
+in real mode, summing the section as it comes. **Its refusal comes after
+the fresh kernel is gone**, so it is a sentence, a key and a restart, as
+kern_big's stub's is - and two things make that work on kern_mega
+(KERN-MEGA-PLAN 14.158). The key: the stub switches the 8042's AUX interface
+off (A7h; `mou_p2_init`'s A8h enables it again on the next boot), drops what
+is waiting in the controller's one output buffer (a PS/2 mouse's bytes, IRQ12
+masked, held it against every key) and unmasks IRQ1 before the ROM's
+`int 16h`. The restart: the stub leaves **`'MRF1'`** in the `0040:00F0`
+mailbox (§96.41's cell, which `int 19h` does not touch), and `hbm_ask` on the
+next boot spends it and drops the pointer as it drops a stale one -
+`Hibernation: unreadable`, `hbm_forget`, an ordinary desktop - rather than
+asking the same question again. No disk write precedes the stub, so a power
+cut during a good resume still finds its image.
 
 ## 88. CLEAR SKIES — a filled-polygon flight simulator in a foreign mode (`apps/skies/`)
 
@@ -176253,6 +176634,23 @@ claim runs past part 1's end, the bytes at `program:SC_P1ORG` are
 `build/scribe.p1.bin`, the claim is movable, and the program holds exactly the
 document's three claims — and every leg after it runs part 1's code.
 
+#### 95.8.9 ...and no store through CS: the `PKG_ST` forms are gone
+
+§95.8.8's `PKG_*` macros became one `cs:`-overridden instruction each, which
+is right for a READ and wrong for a STORE on kern_mega: there `CS` is part 1's
+CODE selector, read-only, and `PKG_ST sc_dend` (a run and a paragraph on a
+`.DOC` save), `PKG_STB sc_dpicrun` (a run), the `.DOC` load's `push cs / pop
+ds` (a mark, through `sc_dpapat`'s stores) and `sc_rpap`'s (a paragraph on an
+`.RTF` save) were each a completed #GP - WORD's sites one for one, and
+§68.10.1's account and fix (KERN-MEGA-PLAN 14.162). **There is no store
+form any more**: `PKG_ST` and `PKG_STB` are deleted, every store to an
+`SCVAR` is made with DS back on the package (off the stack, or after the
+routine's own `pop ds`), `sc_dattr` banks its picture flag in DH until it
+has, and `sc_plist` stores through `ES` = the package. §95.8.8's sentence
+that `push cs / pop ds` "is right again" holds for real mode only, and the
+tree no longer uses it to store. The image is 8 bytes smaller (52,955 ->
+52,947); `tests/unit/t_cswrite.py` walks `apps/scribe/`.
+
 ### 95.9 Insert ▸ Picture — the document model
 
 Built in WORD first and reverted out of it (§68.15); this is where it
@@ -178864,6 +179262,32 @@ no copy — true of a stream, false of a whole-file read, which answers
 asks, compares what it got against what it asked for, and hands back a short
 block rather than reading into it.
 
+###### 96.30.7.3 ...and the buffer is sized on the DESTINATION's cluster
+
+`COPY` reads every chunk with `READ_SEQ` and APPENDS every chunk but the
+first with `WRITE_SEQ` (§96.53), and the append takes only whole clusters of
+the volume it writes (§18.4.9). The buffer was sized by `dsh_bufget` on the
+volume the PROMPT stood on - and asked for `AX` KB with `AX` still holding
+`dsh_bank`'s `[dos_curdir]`, a directory cluster number, where TYPE asks for
+`DSH_CPKB`. At a root that is 0, so one cluster of the prompt's volume: a
+floppy's 1KB. `COPY` of anything past 1KB from `A>` onto a FAT16 `C:` (2KB
+clusters at the smallest, §18.7.5) created the file with its first chunk -
+any length is legal there - and was refused at the first 1KB append: `File
+creation error`, and the half-copy deleted (§96.30.6's undo). 13 and 616
+bytes copied; so did the desktop's copy and a copy to `A:`.
+
+So `dsh_copy_go` stands on the destination before it asks, and asks
+`DSH_CPKB`: the block is 8KB, halved under pressure to no less than one
+destination cluster - a multiple of every floppy's cluster too, the sizes
+being powers of two. What is still not asked is the SOURCE's cluster when it
+is the larger and memory forces the halving below it (a hard disk copied onto
+a floppy on a full arena); that is `READ_SEQ`'s refusal, as it always was.
++14 bytes of the core, against 2 of `CORE_MAX`'s slack: `CORE_MAX` +16 on
+each arm, so 16 bytes off both hosts (`apps/dos/doscall.inc`).
+`tests/doscopyhd.py` copies 616, 1,380 and 5,170 bytes from the `B:\>` prompt
+onto a 2KB-cluster FAT16 `C:` and reads all three back off the VHD on the host;
+red on the old sizing with the two larger missing.
+
 ##### 96.30.8 A relative path prefix was dropped, and `DIR <folder>` listed the wrong one
 
 Two more the same tester found on the next pass, both **older than 96.30.7** —
@@ -179902,6 +180326,15 @@ of  A:\` (two spaces, which is `COMMAND.COM`'s own `%S` format) above the
 listing, and `%9d File(s) %9ld bytes free` under it. os8088 DOS printed
 `N file(s)` — lower case, no byte count, no header.
 
+##### 96.33.9.3 ...and its `bytes free` is the LISTED volume's
+
+`OSAPI_FILE_DFREE` answers for the volume the instance stands on (§19.2.1),
+and `dsh_dir_page` printed the footer after `dsh_home` had put the shell back
+on the PROMPT's - so `DIR B:` typed at `A>` listed B: and reported A:'s free
+space. The footer is printed before the walk home now, standing on the volume
+that was listed; the order is the whole of it. `tests/dosdirsw.py`'s step 0c
+checks the two disks' figures differ and that `DIR B:` from `A>` prints B:'s.
+
 ##### 96.33.3 Line input is the console's, and Esc is the way out of full screen
 
 A keystroke on the main page with **no field focused** is the console's: a
@@ -180276,6 +180709,16 @@ of that and answers in cells of its own.
 starts the package, and then stands where the prompt is again — because a
 path may have moved the machine to another volume and every later DOS call
 resolves where DOS thinks it is.
+
+**A drive with no separator** - `B:DOSHELLO.COM` - takes the folder part
+EMPTY, which `dos_walk_pbuf` reads as that volume's root, and the name from
+just past the COLON. It took it from one past the name's first character, the
+separator pointer having been set to the name itself, so the line ran
+`B:\OSHELLO.COM`. Real DOS resolves the drive-only form against that drive's
+CURRENT directory rather than its root; this DOS does not, and a program not
+at the root is then `Bad command or file name` - recorded, not changed here.
+`tests/dosext.py`'s `B:DOSARGS.COM /M` runs it with a copy at the root and one
+in `BIN\`, so either resolution passes and only the eaten letter fails.
 
 ###### 96.33.21.1 `PROGRAM DOCUMENT` — the double-click, with the program named
 
@@ -187731,6 +188174,9 @@ Five things the round trip needs, each the cheapest answer to its own question:
   **Measured on the machine**, byte for byte at a settled desktop. `hbm_res`
   reads it once, as it stages the code, and clears the magic, so a second
   reader gets nothing rather than a code from a session two boots ago.
+  kern_mega's streaming resume stub uses the same four bytes for a second
+  magic, `'MRF1'` - *the resume was refused after the kernel was gone* - which
+  `hbm_ask` spends the same way (§87.9, KERN-MEGA-PLAN 14.158).
 - **`HS_DOSCODE`**, a word in the staging area. It needs **no stub code at
   all**: `hbm_wake` already reads that segment for `HS_CLK`, and the stub never
   writes into it.
@@ -225387,6 +225833,20 @@ once per call and the routine branches, which is the shape §39 asks of
 everything in this tree and is what lets the host harness model ONE interface
 (`apps/lemmings/hosttest/lemraster.c`).
 
+**Nothing in the four files writes through CS** (KERN-MEGA-PLAN 14.148,
+`tests/unit/t_cswrite.py` walks `apps/lemmings/`). The package's scratch -
+`lb_mrow`, `lb_srow`, `lb_sorb`, `lb_smk`, `lb_wi0`, `lb_mlatch`, `lb_dlo` -
+is its own DS-relative memory, and a routine that moves DS to a bank or a
+world claim puts OURS back from the stack (`push ds` ... `pop ds`) or from
+ES, never with `push cs` / `pop ds`; a row shifted into our scratch gets
+ES = DS, not CS. On kern_mega CS is a read-only code selector, and those
+idioms were ~2,500 completed #GP fixups a second in the preview and ~3,500
+in play (Lemmings at ~60% speed there). Every substitution is the same
+instruction with another segment register - `push ds` for `push cs`, an
+`es:` prefix for a `cs:` one - so the 8088 runs each path in the same
+clocks, and two were dropped outright: `lb_pnib`'s dead pair and
+`lb_msample`'s prefix.
+
 Two files stand beside it. `lemmask.inc` owns the **SOLID MASK** — one bit per
 world pixel, 200 bytes a row by 160 rows = 32,000, on every adapter including
 VGA (plane 3 carries the same information, but reading it back is a VRAM read
@@ -229051,8 +229511,10 @@ redirected one, §62.9), 4 `FSKE_IO`, 5 `FSKE_CHANGED` (§118.14.6),
 there). After `FSKS_DONE` or any `FSKE_*` from a step,
 the caller ends with `FSK_END`.
 
-**The workspace** is a claim of the caller's, from `OSAPI_MEM_CLAIM_DMA`
-with the whole block page-safe (CX = AX): the engine reads and writes
+**The workspace** is a claim of the caller's, page-safe as a whole - SysCheck
+asks `OSAPI_MEM_P` with the head = the block, which keeps it conventional on
+kern_mega too, where the KB DMA door would put it in the pool and a fixed
+disk would be read into it a sector a call (§50.3.7, KERN-MEGA-PLAN 14.160): the engine reads and writes
 sectors straight into it, and a transfer that crosses a 64KB physical
 boundary is int 13h's error 09h (§1). Its first 256 bytes are the record
 the package reads; the rest is the engine's.
@@ -230604,6 +231066,23 @@ Every verb keeps every register but AX and its outputs, leaves DF clear,
 never calls the kernel, never touches IF, and uses at most 64 bytes of the
 caller's stack (measured deepest: STANDARD about 32, XT 50).
 
+**The XT part has a kern_mega ARM** (§20.18, KERN-MEGA-PLAN 14.150). It
+keeps its state in its own image and READS it through CS, which a code
+selector allows; it STORES it through `CSDO insn` with `[CSEG x]`
+(`x3xt.asm`): `cs:` in the shipped part, byte for byte what it always was,
+and in the arm (`build/megak/apps/x3xt.bin`, `-DPKG_MEGA`, which kern_mega's
+XTMP3.O88 carries as row 3) DS = the part's data selector for the one
+instruction, banked from DS at every verb's entry (`x3x_dsel`) - one DS
+switch for a run of them (`CSDO_ON`), and the generated kernels' clip count
+too (`tools/x3xtgen.py`, `X3X_KSLOT` per arm). The shipped part's stores were
+~140 completed #GPs a granule under kern_mega and halved XT Standard's
+measured speed on a 386DX-25 (1.79 -> 0.91 audio seconds a second), which
+sent a song kern_big plays live on the same machine to Decode First; the arm
+measures 1.77. It costs the arm 1,920 image bytes (60,618) and 816 resident
+after OPEN's shrink; the shipped part, the STANDARD part and FRONT store
+nothing through CS. `tests/x3xtunit.py --mega` runs the arm bit-exact with
+its code view mapped read-only, and `x3live386` plays the song live.
+
 ### 121.4 Numerics (shipped; `tools/x3sim.py` and `tools/x3simxt.py` are the authority)
 
 All arithmetic is 8086 integer: 16-bit words, `imul` 16x16 to 32, and 32-bit
@@ -231473,7 +231952,8 @@ room: being curated onto a disk is a decision with a date on it.
 | `apps720.img` | **not on it** | 36 of 713 free; the package alone is 97. `make xtmp3disk`'s 720KB floppy carries it, and it is a candidate for the third 720KB disk the owner has planned (§121.13) |
 | `apps360.img` | **not on it** | 14 of 354 free |
 | `media360.img`, 360KB | XTMP3.O88 at the root, AFTERHRS in `MEDIA/` | 147 of 354 free before it; 97 + 30 leaves 20 |
-| `megaapps.img`, `megaapps120.img` | `megaapps.img` as the 1.44MB apps disk; `megaapps120.img` **not on it**, as `apps120.img` (it needed 2,408 of 2,371) | |
+| `megaapps.img`, `megaapps120.img` | **not on them** (the owner's, 2026-11-07): XTMP3 rides kern_mega's own XTMP3 disks below, as WIN16 rides `megawin16*.img` | the room went to Word (§20.18 item 1) |
+| `megaxtmp3.img`, `megaxtmp3-120.img` | the `PKG_MEGA` arm at the root, all three songs in `MEDIA/`, `SYSTEM/APPDATA/` - `make xtmp3disk`'s shape in kern_mega's two geometries; `make mega` builds them | 1.44MB: 1,206,784 bytes free |
 | the everything set | XTMP3.O88 in `APPS/`, no songs | MIDIRack's songs' reason (§105.10): the RunCPM fill would pay for them |
 | the live media | XTMP3.O88 in `APPS/`, all three songs in `MEDIA/` | `t_livefull` holds it to the 1.44MB apps disk |
 | `smallapps*.img`, `small*.img` | **not on them** (`$(SMALLOMIT)`) | |
@@ -232616,6 +233096,22 @@ added (WAVERACK-PLAN.md's Wave 4b section says when one would earn it):
   held play's meter reads the mixed sample**, not each channel - a rail on
   one channel of a stereo file does not light PEAK there; that is the trade
   for holding four times as much.
+  **A frame's address in the hold is never a paragraph sum on kern_mega**
+  (KERN-MEGA-PLAN 14.149): there the claim is an LDT selector (§50.6.11), and
+  `wt_hoff`'s `[wt_hseg]` + offset >> 4 named some other descriptor from the
+  17th frame on - a 16-bit stereo clip a floppy cannot stream closed
+  WaveRack with a #GP at its first load pass. Under `CPU_F_PM` the claim gets
+  a BOUND WINDOW (`wt_hbwin`, `OSAPI_SEG` `SEG_BWIN`), which `wt_hoff`
+  re-aims at each frame's byte offset (`SEG_AIM`: 64 KB of reach, which every
+  read and copy of the hold fits); with none to be had the play does not hold.
+  A real-mode kernel answers `SEG_BWIN` with the claim itself, and `wt_hoff`
+  keeps the sum wherever the window IS the claim - so no `CPU_F_PM` test and
+  no far call a frame on the 8088, 66 bytes of image on every kernel.
+  `waverackmega` plays PRELUDE.WAV from the hold on 86Box's 286 and holds its
+  bytes to `wrsim.hold_bytes()`. Since WaveRack declares `OS88_HIGHMEM`
+  (§123.13, KERN-MEGA-PLAN 14.159) the hold is a pool claim ABOVE 1MB there
+  whenever it is 64 KB or less, a lone data selector, and the window binds
+  into it all the same.
 - **The d = 1 8-bit loops** (`wt_cv8m1`, `wt_cv8s1`): no box, so a sample is
   the load, the extremes, the table and the store, and the peak and the rails
   are derived from the extremes once a call (`wt_cvx`) - the same values the
@@ -233383,6 +233879,25 @@ standing in that folder with `OSAPI_FILE_GOTO_QM`.
 | WaveRack's disk (wave 7) | `make waverackdisk`, all four geometries, on demand like `midirackdisk`: WAVERACK.O88 at the root, the demo clips RAW in MEDIA/ (WaveRack reads with READ_SEQ/READ_AT, which deliver a file as it lies), CREDITS.TXT, CLIPS.TXT per geometry, SYSTEM/APPDATA. **1.44 MB 1,975 of 2,847 clusters** (all six clips); **1.2 MB 1,975 of 2,371** (all six); **720 KB 605 of 713** (FURELISE, MAPLELF, NOCTURNE, PRELUDE: every format shown); **360 KB 302 of 354** (two). THE CLIPS (`apps/waverack/demo/`, committed, 970 KB): excerpts of Wikimedia Commons recordings whose pages say Public Domain or CC0, read 2026-10-28 - FURELISE (Beethoven, V Gao, PD/CC0), MAPLELF (Joplin, US Marine Band 1906, PD-USGov), GYMNO (Satie, Teknopazzo, CC0), MARCH (Sousa, USAF Band of Mid-America, PD-USGov), all 8-bit mono 11,025 Hz, 12 s (MARCH 24 s); NOCTURNE (Chopin, Peter Johnston for Musopen, CC0) 8-bit mono 22,050 Hz, 8 s; PRELUDE (Bach, Kimiko Ishizaka, CC0) 16-bit stereo 11,025 Hz, 3 s - held in memory on an 8088. `tools/os88wrdemo.py` fetches each source at a pinned SHA-256, decodes it with lame and cuts, decimates, normalises (peak 0.9) and dithers it deterministically; the fast `wrsim` row holds the committed clips and CREDITS.TXT to its table. The live media carries the six in MEDIA/ (XTMP3's songs' ground, §80.6); `make waverackhd`'s disk too |
 | final pass (wave 6b) | `waverackrec` on the final code: XT-IDE 60 s at 11,025 and 15,000 Hz, high water 3,072 / 4,096; 204 s beside a second WaveRack's 2 MB scan 16,384; 32 KB clusters 5,120 / 6,656; floppy 8,000 Hz 27,648; 0 overruns, every take = the card's count. The copy 97.8 cycles a byte. Drawing on the 5150 + Hercules (`calls`): idle 0 a tick, recording 0.99, playing at Fit 1.02, one cut 16, a full repaint 1,122-1,459 ms (77-90 primitives); `wr_redraw` while recording 60.4 ms a tick median. Image **43,625** bytes after the review's fixes (packed 34,249 - 34 clusters at 1 KB), bss **7,774** |
 | record rate, measured | XT-IDE (2 KB and 32 KB clusters): 60 s at 11,025 and 15,000 Hz with no overrun, the ring's high water 3,072-6,656 bytes of 32,256; 203 s at 11,025 Hz while a second WaveRack launched, opened and scanned 2 MB, high water 8,704. 1.44 MB floppy: 8,000 Hz, 30 s, high water 27,648; 11,025 Hz refused there (§123.7's write-time rule) |
+
+**On kern_mega** (KERN-MEGA-PLAN 14.149, 14.159): WaveRack has no `PKG_MEGA`
+arm and declares `OS88_HIGH | OS88_HIGHMEM` (its class byte, §20.18), so in
+protected mode its REGION is a code/data pair above 1MB and every claim of
+64 KB or less is a pool block there - the band, the envelopes, the view
+cache, the history, the hold, the look-ahead, the take's staging units and
+the save's output claim. Two kinds stay conventional, each by its door: the
+DMA rings (`OSAPI_MEM_CLAIM_DMA_HI`, the card's), and the **I/O claim**,
+which `wo_ioclaim` makes with `OSAPI_MEM_P` and `CX = MEMP_CONV` (§50.3.7)
+because every read of the document lands in it, the stream's against its
+deadline, and a fixed disk's transfer into a pool block is bounced nine
+sectors a call; every other kernel reads `MEMP_CONV` as no head, the claim
+it always made. Nothing in WaveRack sums a segment: the hold's addressing is
+the bound window above, and `wc_myslot` (§123.7) compares `SSI_SEG` with its
+own DS, which is the region's data selector the loader publishes as
+`I_SPTR` wherever the region is. `waverackmega` reads the placement off the
+descriptors, not the class byte. On kern_big and kern_small the bits are
+ignored and `MEMP_CONV` reads as no head: the same claims as before, 17
+bytes of image (43,955).
 
 ## 124. WIN16 — Windows 3.x programs in an os8088 window (`apps/win16/`, `WIN16.O88`)
 
@@ -241112,6 +241627,13 @@ arm loads its data selector instead. A part that reaches its own data with
 in the arm, the same two instructions in real mode. A far address WIN16
 hands out for its own code - an import stub's (`w16_stubs`, `w16_proc`),
 LibMain's trampoline - is the image's code half (`W16ICS`), never `ds`.
+**So is one WIN16 hands ITSELF**: a callback frame naming one of its own
+stubs as the callee - MDICLIENT's WM_MDICREATE and WM_MDIDESTROY, which
+call back through `W16_CWROW` and `W16_DWROW` (124.27.2) - is entered by
+`w16_cbenter`'s `retf`, and a data half there is a `#GP` with that
+selector as its error code. kern_mega's far-transfer fixup (`mega_gpfix`)
+completes one - a fault each time - and until KERN-MEGA-PLAN 14.165 closed
+MDI.EXE and File Manager there instead (§20.18.2's `mega_codesel` row).
 
 The system-library and task parts (9 and 10) keep the word that holds
 WIN16's data selector, which their thunks load DS from, in their headers.
@@ -241121,6 +241643,21 @@ and before the gate at `W16S_GATE` = 12. The fetch the two parts share
 `w16_pcode`, asks for a code half over 64 KB for the four places that
 need one: the loader's kept copy, parts 9 and 10, the x87 part and the
 DOS host's block.
+
+**A part's stores into its OWN bytes go through `CSDO` where they are hot**
+(KERN-MEGA-PLAN 14.164). Parts 9, 10 and 11 keep their scratch in the
+part and write it `mov [cs:x], reg`; in the arm CS is the read-only code
+half, so each such store is a `#GP` that kern_mega completes. Part 10's MDI
+code (`w16mdi.inc`: the frame and caption paint, the icons, the tile and
+cascade, the move and size outline) did ~180 of them a key in Program
+Manager's group and ~850 a Tile. Every store there is written `CSDO
+<instruction with [CSEG x]>` (`w16pm.inc`): in the shipped build that is
+the same instruction with `cs:`, byte for byte, and in the arm DS is the
+part's DATA half for that one instruction - the word at `W16S_SELF` = 17,
+after the gate, in all three headered parts' arms, which `w16_ptin` writes
+with the code half's pair (+ 8) when it fetches the part. The rest of the
+parts' CS stores are cold - once a program's load, a `WinExec`, an LZ or
+VER call - and stay completed by the kernel.
 
 #### 124.31.6 What the program is told
 
@@ -241215,14 +241752,25 @@ DOS host's block.
 #### 124.31.7 DOS
 
 The DOS core WIN16 hosts (§124.21.1) is kern_mega's own core,
-`$(MEGAAPPDIR)/doscore.bin` (`-DDOS_MEGA`), **unchanged**: the core has one
-byte of `CORE_MAX` to spare, and the forwarded file calls need none of it.
-What the arm does is all on WIN16's side of the door:
+`$(MEGAAPPDIR)/doscore.bin` (`-DDOS_MEGA`), with **one arm of its own**:
+`-DDOS_PMGATE`, the int 21h gate for a core that runs in protected mode
+(KERN-MEGA-PLAN 14.164). Its other two hosts run every program's int 21h in
+real mode, so DOS.O88's and kern_dos's cores are not this assembly and are
+byte for byte what they were. The gate banked the program's registers in
+`[cs:dos_g*]` cells and set DS with `push cs / pop ds`: under WIN16 fifteen
+completed `#GP`s an int 21h, 7,187 for Write's open of a 20 KB file. Under
+`DOS_PMGATE` it loads DS from `dos_csel`, a word in the core's code that
+the host writes once (`w16dh_init`, through the block's data half;
+`tools/w16dcmap.py` publishes its address as `W16_DOSCSEL`), keeps it to
+the `iret`, and banks the program's DS in `dos_gds` (the spare
+`DOS_B_GSP` cell) - one word on the program's stack for a moment, where
+WIN16's host has just had one. That arm is 17,232 bytes, `CORE_MAX` to the
+byte. What else the arm does is on WIN16's side of the door:
 
 - **The block's far entry** (`w16_dhent`) is the block's `SEG_SUBC` code
-  half. The core and the host keep their state through CS, which kern_mega
-  completes by trap (§20.18); the hot one is the host's two stack words at
-  every call.
+  half. The core and the host keep their cold state through CS, which
+  kern_mega completes by trap (§20.18); the host's two stack words at every
+  call go through `W16_DOSCSEL` in the arm.
 - **The PSP** handed to `W16DH_INIT` is the program's selector (`W16PSP`):
   the core keeps the JFT at PSP:0018 and the DTA at PSP:0080 through it.
 - **The read window** is still laid out by the core's own arithmetic, from

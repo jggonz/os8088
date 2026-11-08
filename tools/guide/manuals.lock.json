@@ -922,9 +922,9 @@
   "sources": [
    "apps/realdmg"
   ],
-  "stamped": "24c3d243",
-  "strings": "538de81c8b536080",
-  "why": "About card gained a credit line (ec45f031, and Desk Calendar's 'by jggonz'); the page's About description now says it shows who made it"
+  "stamped": "1a37e25e",
+  "strings": "7a12d506e63a5b3b",
+  "why": "077bf46d (14.147) added one user-visible refusal, 'REALDMG: unpack the ROM' for a packed cartridge over 256K; the Good to know list names it. The packed shipped demo now plays on kern_mega, which the page never said it did not. The toast and replay edits below the page's level."
  },
  "REDLINE_O88": {
   "sources": [

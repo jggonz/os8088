@@ -1628,6 +1628,22 @@ OSAPI_STIK_MARK equ 'D'         ; +3 of a Sticky App row: a remembered WIDGET
                                  ; claim. OSAPI_MEM_REGROW is safe on one of
                                  ; these: the record carries the constraint,
                                  ; and a move re-honours it (SPEC.md 50.3).
+                                 ; ON KERN_MEGA in protected mode an
+                                 ; OS88_HIGHMEM PACKAGE's claim of 64KB or
+                                 ; less WITH A HEAD (CX not 0) is a POOL block
+                                 ; above 1MB and below 16MB, its head inside
+                                 ; one 64KB page and BORN PINNED: a selector
+                                 ; the 8237 reaches through its base
+                                 ; (OSAPI_SEG SEG_LIN, page and all) and that
+                                 ; OSAPI_MEM_MOVABLE unpins and pins again,
+                                 ; calling no proc (the selector is what you
+                                 ; hold, and it does not change). It has no
+                                 ; real-mode segment: a block a real-mode path
+                                 ; names (an FSXF_REAL list, a BIOS call of
+                                 ; yours) asks OSAPI_MEM_P for its head, which
+                                 ; stays conventional (SPEC.md 50.3,
+                                 ; KERN-MEGA-PLAN 14.160). CX = 0 is the plain
+                                 ; claim and conventional, as it always was
 ; ...AND THE SAME TWO FROM THE TOP OF THE HEAP (SPEC.md 50.3.2). For a buffer
 ; THE HARDWARE holds the address of - a sound card's DMA ring, a NIC's
 ; descriptors - which has no business in the arena every data claim and the
@@ -1649,8 +1665,10 @@ OSAPI_STIK_MARK equ 'D'         ; +3 of a Sticky App row: a remembered WIDGET
 ; ...ON KERN_MEGA A CLAIM HERE WITH A HEAD (CX not 0) COMES FROM THE BOTTOM
 ; (SPEC.md 50.3.2, 34.5.3): a head is a chip's page, so it is a DMA ring held
 ; while it plays, and a ring is claimed low there with the same page
-; guarantee. CX = 0 - no page asked, a carve or an overlay that is a CS - is
-; still top-down on every kernel. Nothing to change in a caller
+; guarantee - or, for an OS88_HIGHMEM package, from the POOL as the low DMA
+; door's is (above, KERN-MEGA-PLAN 14.160). CX = 0 - no page asked, a carve
+; or an overlay that is a CS - is still top-down and conventional on every
+; kernel. Nothing to change in a caller
 
 %define OSAPI_MEM_FREE      KERNEL_SEG:0x01AA   ; DX = the segment you were
                                  ; given; out CF=0 released, CF=1 not yours
@@ -2377,7 +2395,12 @@ SEG_TYPE    equ 13
                                  ; CX included. On kern_mega an OS88_HIGHMEM claim
                                  ; with no head goes above 1MB where it can,
                                  ; granted the KB that covers it - unless CX
-                                 ; is MEMP_CONV, which keeps it conventional
+                                 ; is MEMP_CONV, which keeps it conventional.
+                                 ; A claim WITH a head is conventional there
+                                 ; on every package: THE door for a page-safe
+                                 ; buffer a real-mode path names, where the KB
+                                 ; DMA doors give an OS88_HIGHMEM package a
+                                 ; pool block (KERN-MEGA-PLAN 14.160)
 MEMP_CLAIM    equ 0
 MEMP_CLAIM_HI equ 1
 MEMP_CPU      equ 2
@@ -4280,8 +4303,11 @@ OS88_HIGH          equ 0x80
 ; memory (KERN-MEGA-PLAN 13.6). Say it only of a package that does NO
 ; arithmetic on a claim's segment (no `add ax, 1000h`, no offset >> 4 folded
 ; in, no OS88_HUGE_INCR, no comparing it with a number), never far-calls code
-; in one, hands one to no DMA and no BIOS call of its own (the DMA cells are
-; not affected and stay conventional), and never OSAPI_PKG_REHOMEs into one.
+; in one, hands one to no DMA and no BIOS call of its own (the DMA cells
+; with CX = 0 are not affected and stay conventional; with a head they give a
+; page-safe pool block below 16MB, which SOUND.DRV's 8237 reaches - and
+; OSAPI_MEM_P with a head stays conventional, KERN-MEGA-PLAN 14.160), and
+; never OSAPI_PKG_REHOMEs into one.
 ; The kernel's own services take one wherever they take a segment - the file
 ; layer (a redirected volume 512 bytes a call), OSAPI_XMEM_COPY, OSAPI_DECOMP
 ; (64KB of output at most, as the claim is), the clipboard, every drawing

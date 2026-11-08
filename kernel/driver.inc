@@ -620,6 +620,15 @@ FSCAP_SEL   equ 4               ; ...and my TRANSFER verbs take a pool
                                 ; buffer above 1MB rather than bouncing it
                                 ; 512 bytes a call (drv_fs_hi, SPEC.md
                                 ; 62.9.2.4). Read by kern_mega alone
+BLKCAP_SEL  equ 4               ; ...and a DRVC_DISK driver's, about its
+                                ; DSV_BLK (SPEC.md 51.8.1): a buffer's DX is
+                                ; loaded as it is, so kern_mega hands it a
+                                ; SELECTOR above 1MB rather than bouncing it
+                                ; through the landing, and an answer of 09h
+                                ; (nothing moved) is bounced after all
+                                ; (dsk_xfer's .drvhi, KERN-MEGA-PLAN 14.167).
+                                ; Read by kern_mega alone. Mirrored in
+                                ; drivers/os88drv.inc
 DRV_ICONV   equ 0x41            ; that verb - clear of every door's own
                                 ; verbs, and of WZV_PAINT (0x40). Mirrored in
                                 ; drivers/os88drv.inc
@@ -1372,22 +1381,19 @@ drv_tab:
     dw drv_f_sound, DRVT_SOUND
     dw 0, 0
     db DRVC_SOUND
-    db 0                        ; NOT wanted by default, exactly like the disk
-                                ; driver below. It was 1, so a fresh image -
-                                ; which carries no SYSTEM.CFG at all - read
-                                ; the whole 5.5KB driver off the floppy on
-                                ; every boot to be told there was no card:
-                                ; 27 sectors, and 512 bytes cost ~24 ms on the
-                                ; machine this is for (PERFORMANCE.md Part 2,
-                                ; Set 24), so about two thirds of a second -
-                                ; it was ~6.4 s under the pre-AL-fix 238 ms,
-                                ; which is the figure this decision was taken
-                                ; against and the reason it reads as large. Then it
-                                ; opened the Control Panel to report a failure
-                                ; nobody had asked for. NOTHING LOADS UNLESS
-                                ; SYSTEM.CFG ASKS FOR IT (SPEC.md 51.3), so
-                                ; the tick in the Drivers page is both the
-                                ; request and the record of it
+    db 0                        ; 0 IN THE TABLE: the WANT is the BOOT'S to
+                                ; set. It was 1, so a fresh image - which
+                                ; carries no SYSTEM.CFG at all - read the
+                                ; whole 5.5KB driver off the floppy on every
+                                ; boot to be told there was no card (~two
+                                ; thirds of a second on the 5150, PERFORMANCE.md
+                                ; Part 2, Set 24) and then opened the Control
+                                ; Panel to report a failure nobody had asked
+                                ; for. Now CFG_BOOT's sniff (%1_want_set, SPEC.md
+                                ; 51.3.2) sets it to 1 where an OPL2 answers -
+                                ; the MACHINE'S default, DRVR_ANS left 0 - and
+                                ; SYSTEM.CFG overrides only a row the user
+                                ; answered in the Drivers page (51.5.4)
     db DRVE_OK
     db 0
 
@@ -1395,12 +1401,18 @@ drv_tab:
     dw drv_f_hdd, DRVT_HDD
     dw 0, 0
     db DRVC_DISK
-    db 0                        ; NOT wanted by default, unlike sound. This
-                                ; one PROBES CONTROLLERS - an IDE task file
-                                ; and, later, an XT DCB - and a machine with
-                                ; neither should not be poking at 1F0h every
-                                ; boot to be told so. The Drivers page turns
-                                ; it on and SYSTEM.CFG remembers
+    db 0                        ; 0 IN THE TABLE, as sound's: the boot's sniff
+                                ; (SPEC.md 51.3.2) sets the want where the
+                                ; BIOS reports a fixed disk - int 13h AH=08h
+                                ; on 80h, hd_at_bios's own test - and on a 286
+                                ; or better HDD.DRV then takes an IDE drive the
+                                ; BIOS also knows onto its task file (52.1.1).
+                                ; What the sniff will NOT do is probe a
+                                ; controller the BIOS does not know - an IDE
+                                ; task file at 1F0h, later an XT DCB - on
+                                ; every boot to be told there is none: that
+                                ; machine ticks the row in the Drivers page,
+                                ; and SYSTEM.CFG remembers
     db DRVE_OK
     db 0
 
