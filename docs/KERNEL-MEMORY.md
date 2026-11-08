@@ -96,7 +96,10 @@ resident rule; a claim made at boot and never given back is the other half.
 bare desktop holds no pinned claim at all, so its span is its whole footprint.
 
 **None of the rules binds a KNOB build.** `make`'s `$(KNOBS)` — anything but a
-bare `make`, `make KERN_SMALL=1`, `make emu` and `make mega` — passes `-DKERN_KNOB`, and
+bare `make`, `make KERN_SMALL=1`, `make emu`, `make mega`, the handful the
+Makefile exempts because they reach no kernel byte, and `NOKZIP=1` (the
+shipped image read unpacked: the blob is all it changes, BOOT3-PLAN 16.13) —
+passes `-DKERN_KNOB`, and
 guards 1 and 5 are skipped for it (kern_mega's 640KB boot arm excepted: that is
 the only conventional memory its machine has). A knob kernel exists to answer a question
 about a machine, nobody boots it, and every machine this project tests on

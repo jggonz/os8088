@@ -2295,7 +2295,20 @@ KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
 # was brought up, and is a build with a budget of its own now (kernel.asm
 # rule 4). A kern_mega WITH a knob - MEGATRAP=1, MEGADIAG=1 and the rest -
 # still has that knob in this list, so it is still -DKERN_KNOB.
-ifneq ($(filter-out KERN_SMALL=% KERN_EMU=% KERN_MEGA=% NOHEDGE=% NOPICOMEM=% NOLIVESND=% VPDIAG=% HFDIAG=% HFTRACE=% NOATBLIT1=% NOATFAST=% NOATWALK=% NOATSBAR=% NOATROW=% NOATBLANK=% NOATPLAIN=% NOATCX=% NOATRESPAN=% NOATFETCH=% NOATCELL=% NOATTAIL=% NOATONE=% NOATSU=%,$(KNOBS)),)
+# ...and NOKZIP, which is the one exemption that reaches a kernel byte - and
+# not a RESIDENT one: it takes the LZ4 arm out of stage 2's BLOB, which is
+# transient and smaller for it, and leaves the image the shipped one. As a
+# KERN_KNOB build it paid the two pads a diagnostic needs for what it ADDS -
+# BOOT2_KNOBSEC's blob sector below and dskwin.inc's DSK_OVLPAD, 1,024 bytes
+# of LOW that move `.vga`, `.cold` and `.boot3` up the FILE - and NOKZIP adds
+# to neither. Packed, those were zeros that cost nothing; unpacked, they were
+# 1,536 bytes of KERNEL.SYS the flat read carried, and the cluster that took
+# the 720KB system disk past 713 once BOOT3 put its bodies at the file's end
+# (BOOT3-PLAN 16.13, `kzboot-off`). Exempt, the plain KERNEL.SYS IS the
+# shipped kernel.bin's length and image, so the A/B compares one kernel read
+# two ways - and guards 1 and 5 bind it, as they bind what it stands in for.
+# NOKZIP beside a real diagnostic is still -DKERN_KNOB through that knob.
+ifneq ($(filter-out KERN_SMALL=% KERN_EMU=% KERN_MEGA=% NOKZIP=% NOHEDGE=% NOPICOMEM=% NOLIVESND=% VPDIAG=% HFDIAG=% HFTRACE=% NOATBLIT1=% NOATFAST=% NOATWALK=% NOATSBAR=% NOATROW=% NOATBLANK=% NOATPLAIN=% NOATCX=% NOATRESPAN=% NOATFETCH=% NOATCELL=% NOATTAIL=% NOATONE=% NOATSU=%,$(KNOBS)),)
 VIDDEF += -DKERN_KNOB
 BOOT2_XSEC := 1
 endif

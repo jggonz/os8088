@@ -2952,3 +2952,33 @@ is all behind `%ifdef B3_POISON`, and `B3_LIVEOFF` is too.
 window record is 65 bytes there, not 74. Set later, `open_drive("B")` times
 out reading garbage titles, and that looks like a kern_small bug when it is
 not one. The row's import-time arm says so.
+
+### 16.13 `kzboot-off` and the NOKZIP disk, as fixed (final pass, 2026-11-08)
+
+The final pass's `kzboot-off` (`tests/kzboot.py --nokzip`) died inside
+`os88build`: the NOKZIP 720KB system disk needed **714 of 713** clusters. At
+origin/elendilon the same tree is 711/713 (KERNEL.SYS 104,882 bytes, 103
+clusters). BOOT3 made the plain file **2,274** bytes longer (107,156, 105
+clusters): `.boot3` and `.boot3m` are appended at the file's end. What they
+took out of `.ovl` comes off nothing, because `.ovl` sits at a fixed file
+offset with zeros after it, and the blob's six fewer sectors (14 to 8) pay
+back only 3,072 of the 5,346 that moved. Packed, that is free; unpacked,
+every byte is a file byte. A
+COLDHMA.SYS 20 bytes past 3KB was the third cluster, and the shipped disk
+pays that one too. Where the bytes went: NOKZIP=1 was a `KERN_KNOB` build,
+so it paid both diagnostic pads. One is BOOT2_KNOBSEC's blob sector (the
+NOKZIP blob is 3,102 bytes in 8 sectors). The other is dskwin.inc's
+DSK_OVLPAD, 1,024 bytes of LOW, which moves `.vga`, `.cold` and `.boot3` up
+the file. That is 1,536 bytes of zeros the flat read carried, for growth that
+NOKZIP never adds: it takes the LZ4 arm out of the blob, and its `.ovl` is the
+shipped one. The fix is the Makefile's existing `KERN_KNOB` exemption, with
+`NOKZIP=%` added. NOKZIP's plain KERNEL.SYS is now the shipped `kernel.bin`:
+105,620 bytes, with the image past the blob byte-identical and all 474
+differing bytes in the blob. Its modules and COLDHMA.SYS are the shipped
+ones, and guards 1 and 5 bind it. The A/B therefore compares one kernel read
+two ways, and the disk is 713/713. **That is no margin**: the arm fits
+exactly when the shipped 720KB system disk has the unpack's 21 clusters free.
+`tests/kzboot.py` now reads the blob's length from its tree's map (BOOT2_PAD),
+instead of the BOOT2_SECS literal plus a knob sector. No shipped byte moved:
+kern_big, kern_small, kern_emu, kern_mega and every SHIPIMGS image were
+`cmp`-identical before and after, at commit count 974 (uncommitted).

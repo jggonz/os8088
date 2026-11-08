@@ -67,24 +67,25 @@ def kzdefs(t):
     return json.load(open(t.img("kernel.kz.json")))
 
 
-def blob_bytes(knob=False):
-    """BOOT2_SECS * 512 - the blob, read out of the source the Makefile reads.
-
-    `knob` adds kernel.asm's BOOT2_KNOBSEC: a KNOB kernel's blob is a sector
-    longer than the shipped literal says (SPEC.md 2.5.3.3), and NOKZIP=1 is a
-    knob, so the --nokzip arm passes it.
+def blob_bytes(t):
+    """BOOT2_PAD - the blob's length, read off the tree's own map.
 
     kernel.bin is [ the blob ][ the image ] and only the second half lands at
     KERNEL_SEG; stage 1 reads the first into BLOB_SEG. Under KZIP os88kz.py
-    publishes it, and on the other arm there is nothing to publish - so it
-    comes from kernel.asm rather than from a 4096 typed here, which is the
-    same constant one edit away from being wrong.
+    publishes it, and on the other arm there is nothing to publish - so it is
+    read where the assembler published it, as spl_resident() below is.
+
+    It was kernel.asm's BOOT2_SECS literal plus a knob sector, because NOKZIP=1
+    was a KERN_KNOB build and a knob's blob is BOOT2_KNOBSEC longer (SPEC.md
+    2.5.3.3). It is not one any more (the Makefile's KERN_KNOB exemption,
+    BOOT3-PLAN 16.13): its blob is the shipped length. The map says which,
+    so neither this row nor the next exemption has to remember.
     """
-    src = open(os.path.join(ROOT, "kernel", "kernel.asm")).read()
-    m = re.search(r"^BOOT2_SECS\s+equ\s+(\d+)", src, re.M)
+    m = re.search(r"^([0-9A-F]{8})\s+BOOT2_PAD\s*$",
+                  open(t.img("kernel.map"), errors="replace").read(), re.M)
     if not m:
-        sys.exit("kzboot: no BOOT2_SECS in kernel/kernel.asm")
-    return (int(m.group(1)) + (1 if knob else 0)) * 512
+        sys.exit("kzboot: the tree's kernel.map lists no BOOT2_PAD")
+    return int(m.group(1), 16)
 
 
 def spl_resident(t):
@@ -132,8 +133,16 @@ def main():
     # differs only in a BPB whose spt and heads are identical", so the arm
     # still exercises the same 9-spt boot sector reading an unpacked kernel,
     # and the byte comparison below is about the kernel IMAGE, which no
-    # geometry changes. It carries the identical payload - 356 of 713
-    # clusters, the same 356 that will not fit in 354.
+    # geometry changes. It carries the identical payload: the shipped 720KB
+    # system disk with KERNEL.SYS unpacked, so it fits exactly when that disk
+    # has the unpack's clusters free (21 at BOOT3, 207 sectors against 166) -
+    # and at BOOT3 that is 713 of 713, NO MARGIN. It is that tight only
+    # because the plain KERNEL.SYS is already the shipped kernel.bin and
+    # nothing smaller: NOKZIP stopped being a KERN_KNOB build there, whose
+    # two pads were 1,536 bytes of it (the Makefile's exemption, BOOT3-PLAN
+    # 16.13). The next cluster the shipped 720KB system disk spends is this
+    # arm's, and the sentence above about the 360KB disk is then about this
+    # one.
     #
     # The packed arm keeps the 360KB disk, so the tight geometry is still
     # where the SHIPPED configuration is proved.
@@ -157,7 +166,7 @@ def main():
             fails.append("NOKZIP=1 still produced a packed KERNEL.SYS (%d vs "
                          "the image's %d) - the knob did not reach the build"
                          % (packed, len(image)))
-        blob, head = blob_bytes(knob=True), spl_resident(t)
+        blob, head = blob_bytes(t), spl_resident(t)
     else:
         n = kzdefs(t)
         blob, head = n["blob"], n["head"]

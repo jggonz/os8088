@@ -994,8 +994,9 @@ nothing types it: `tools/os88ksig.py` chooses it for the blob each arm has,
 key costs the overlay 10 bytes on every build, and `BOOTMARK=1`'s overlay had
 6 — the give below could not grow to cover it without losing the
 `BOOTMARK=1 DISKAL=1` pairing it already balances. The shipped images are
-byte-identical across the change; `tests/kzboot.py --nokzip` (NOKZIP is a
-knob) reads the knob's length with it.
+byte-identical across the change. (`tests/kzboot.py --nokzip` reads the
+blob's length off its tree's map: NOKZIP alone is exempt from `KERN_KNOB`
+since BOOT3-PLAN 16.13, so its blob is the shipped seven sectors.)
 
 **What it bought, measured** (`tools/kernsize.py`, against the tree it landed
 on):
