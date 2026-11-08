@@ -38,49 +38,17 @@ section .boot2                  ; ...and it lives in STAGE 2 (SPEC.md 2.9.4).
                                 ; .text to them, and the whole module lands in
                                 ; the image instead
 
-SPL_RESIDENT equ 9              ; sectors stage 2 waits for before ticking
-                                ; us (the Makefile reads it for KZ_HEAD; the
-                                ; %if at the foot of kernel.asm checks it).
-                                ; It was 6, and the module ended at 3,072
-                                ; bytes EXACTLY - no headroom at all, so the
-                                ; next thing that had to be resident (the
-                                ; equipment-flag fix in viddet.inc, 32 bytes)
-                                ; failed the assertion below rather than
-                                ; silently ticking a splash that was not
-                                ; aboard.
-                                ;
-                                ; It is 8 for the second instance of exactly
-                                ; that, and the shape is worth recognising:
-                                ; the assertion fires on whatever crosses the
-                                ; line, not on whatever is to blame. This time
-                                ; it was a MERGE - SPEC.md 39.6's 15-byte CGA
-                                ; pre-clear in viddet.inc arriving on top of
-                                ; the other branch's growth - and the module
-                                ; ended 4 bytes over 3,584. Shaving four bytes
-                                ; off a module that has twice filled its rung
-                                ; buys one more collision; a sector buys 512.
-                                ;
-                                ; **AND IT IS 9 FOR THE THIRD**, which is the
-                                ; same shape a third time and by now a pattern
-                                ; worth naming: another MERGE, SPEC.md 72's
-                                ; Ethernet driver arriving on top of the
-                                ; integration branch's four new API slots. The
-                                ; module ended 20 bytes over 4,096, and the 20
-                                ; is one API slot: 8 bytes of jump table plus
-                                ; its 12-byte X stub, both of which live above
-                                ; this module by construction. Nothing in
-                                ; splash.inc grew at all - which is precisely
-                                ; what "fires on whatever crosses the line"
-                                ; means, and why shaving bytes out of the
-                                ; splash would have been work aimed at the
-                                ; wrong file.
-                                ;
-                                ; One more sector is one more BIOS read before
-                                ; the bar starts moving: ~24 ms on the field
-                                ; machine (PERFORMANCE.md's measured sector
-                                ; inside a coalesced run), where the figure
-                                ; this comment used to quote - a fifth of a
-                                ; second - was a sector at the pre-18.91 238 ms
+; SPL_RESIDENT - the sectors stage 2 must have landed before it ticks us - is
+; NOT TYPED HERE ANY MORE (the big review's boot-4, BR-153). It was a hand rung
+; for years - 6, then 8, then 9, each raise forced by whatever crossed the line
+; last (twice a MERGE: SPEC.md 39.6's CGA pre-clear, then SPEC.md 72's API
+; slots; nothing in this file had grown either time) - and the last of them
+; left it four sectors bigger than what it measures. kernel.asm's foot derives
+; it from spw_resident_end, which viddet.inc puts after the bytes the ticks
+; touch: 5 on kern_big, kern_small and kern_emu, 6 on kern_mega. Under KZIP the
+; plain head is max(SPL_RESIDENT, the Makefile's KZ_HEADMIN) - never shorter,
+; and the foot refuses a build where it is. What the ticks reach past that label -
+; data further up `.text` - is tests/unit/t_resident.py's to walk.
 SPL_GC      equ 0x3CE           ; VGA Graphics Controller index port
 
 ; gfx_nextrow, brought INTO this module (SPEC.md 2.9.4) - and now a NEAR call

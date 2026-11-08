@@ -87,20 +87,22 @@ def blob_bytes(knob=False):
     return (int(m.group(1)) + (1 if knob else 0)) * 512
 
 
-def spl_resident():
-    """SPL_RESIDENT * 512 - the plain head, read out of the source.
+def spl_resident(t):
+    """SPL_RESIDENT * 512 - the resident window, read off the tree's own map.
 
-    The Makefile's own $(KZ_HEAD), and the reason this row needs it on BOTH
-    arms is that the region is not a decoder boundary: it is where stage 2
-    WRITES before it jumps (18.93.1's boot_cylrun at +4, the timer at +12,
-    spl_fseg), so an unpacked kernel differs there too and comparing over it
-    would be asserting about those writes.
+    kernel.asm's foot DERIVES it now (the big review's boot-4), so it is read
+    where the assembler published it rather than out of a source that no
+    longer types it. The reason this row needs it on the NOKZIP arm is that
+    the region is not a decoder boundary: it is where stage 2 WRITES before
+    it jumps (18.93.1's boot_cylrun at +4, the timer at +12, spl_fseg), so
+    an unpacked kernel differs there too and comparing over it would be
+    asserting about those writes.
     """
-    src = open(os.path.join(ROOT, "kernel", "splash.inc")).read()
-    m = re.search(r"^SPL_RESIDENT\s+equ\s+(\d+)", src, re.M)
+    m = re.search(r"^([0-9A-F]{8})\s+SPL_RESIDENT\s*$",
+                  open(t.img("kernel.map"), errors="replace").read(), re.M)
     if not m:
-        sys.exit("kzboot: no SPL_RESIDENT in kernel/splash.inc")
-    return int(m.group(1)) * 512
+        sys.exit("kzboot: the tree's kernel.map lists no SPL_RESIDENT")
+    return int(m.group(1), 16) * 512
 
 
 def main():
@@ -155,7 +157,7 @@ def main():
             fails.append("NOKZIP=1 still produced a packed KERNEL.SYS (%d vs "
                          "the image's %d) - the knob did not reach the build"
                          % (packed, len(image)))
-        blob, head = blob_bytes(knob=True), spl_resident()
+        blob, head = blob_bytes(knob=True), spl_resident(t)
     else:
         n = kzdefs(t)
         blob, head = n["blob"], n["head"]

@@ -8757,8 +8757,36 @@ KTEXT_SIZE equ kernel_text_end - $$
 ; is `.boot2`, the same segment as `.boot2`, so it reaches vid_detect with a
 ; BLOBCALL (`push cs` / near call) and no `.text` byte in between.
 SPL_RES_SIZE equ spw_resident_end - $$
-%if SPL_RES_SIZE > SPL_RESIDENT * 512
-%error "the splash's first tick reaches code outside the sectors stage 2 waits for - raise SPL_RESIDENT in BOTH kernel/splash.inc and boot/boot2.asm, or move what grew (SPEC.md 15)"
+;
+; AND SPL_RESIDENT IS DERIVED FROM IT NOW (the big review's boot-4, BR-153).
+; It was typed in splash.inc and checked here, and the check was the only
+; thing tying the number to what it measured - so it moved only when the %if
+; fired, and the last raise left it at 9 against a need of 5. The label is
+; past the four bytes the ticks store and read (viddet.inc), so this is the
+; whole of the window by construction. What it does not count is DATA further
+; up `.text` that tick code names: tests/unit/t_resident.py walks for that,
+; and the one store that must survive the first tick has a line of its own
+; below. It reaches only an immediate in `.boot2` (the NOKZIP arm's tick
+; gate) and the %ifs below, so no byte of `.text` can move with it.
+SPL_RESIDENT equ (SPL_RES_SIZE + 511) / 512
+;
+; vid_setmode's one store that is NOT re-made before anything reads it: the
+; CGA's 3D8h shadow, banked on the first tick (vidsel.inc). It is past
+; spw_resident_end, so the window above does not cover it by construction -
+; this does.
+%if vid_cgamode - $$ >= SPL_RESIDENT * 512
+%error "vid_cgamode is past the resident window: the first tick's store into it would land in a sector stage 2 has not read (or the packed tail), and the CGA's 3D8h shadow would be lost - move it below spw_resident_end (SPEC.md 15, 2.9.4)"
+%endif
+;
+; ...AND THE PLAIN HEAD MUST HOLD IT (SPEC.md 2.9.13.1). Under KZIP the first
+; tick runs the moment the KZ_HEADSEC plain sectors are in (BOOT3-PLAN item
+; E), so the head is at least the window; it may be LONGER, and on kern_big
+; is: the Makefile's KZ_HEADMIN says why its length is a call-count decision
+; of its own and not this number.
+%ifdef KZIP
+ %if KZ_SECS && KZ_HEADSEC < SPL_RESIDENT  ; (pass 1's KZ_HEADSEC is a 0 placeholder)
+  %error "KZ_HEADSEC is shorter than SPL_RESIDENT: the splash's first tick would run code the packed tail has not expanded yet - the head is max(SPL_RESIDENT, KZ_HEADMIN) off pass 1's map, so a pass 2 handed another number is the Makefile's mistake (SPEC.md 2.9.13.1, 15)"
+ %endif
 %endif
 
 section .lowbss

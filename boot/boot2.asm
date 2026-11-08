@@ -50,17 +50,15 @@ B2_STACK    equ 0x7C00          ; stage 1's STACK_TOP, which is still ours
 BS_CYLASK   equ 509             ; boot/boot.asm's: the Floppy page's Cylinder
                                 ; byte in the boot sector, which stage 1's
                                 ; relocated copy still holds at SS:7C00 here
-KSIG_OFF    equ 22528 - BOOT2_KNOBSEC * 512 + BOOT2_SMALLSEC * 512 ; SPEC.md 18.93.1's probe,
-                                ; as a MEMORY offset from KERNEL_SEG - one
-                                ; sector lower on a build whose blob is a
-                                ; sector longer (kernel.asm's BOOT2_KNOBSEC:
-                                ; a knob, kern_emu, kern_mega) and two higher
-                                ; on kern_small's two shorter (BOOT2_SMALLSEC),
-                                ; so it is FILE SECTOR 57 of KERNEL.SYS on
-                                ; every kernel. The shipped literal stays first
-                                ; for t_canary's compare: this equ and the
-                                ; Makefile's KSIG_OFF are one number typed
-                                ; twice, and that row checks they agree.
+%include "ksig.inc"             ; KSIG_OFF: SPEC.md 18.93.1's probe, as a
+                                ; MEMORY offset from KERNEL_SEG. GENERATED per
+                                ; build arm by tools/os88ksig.py into
+                                ; $(BUILD)/ksig.inc (found by -I $(BUILD)/,
+                                ; like buildnum.inc), between the two KZIP
+                                ; passes - the big review's boot-10. It was
+                                ; typed here and in the Makefile, with per-arm
+                                ; arithmetic in both, and every move of it was
+                                ; a hand re-derivation.
                                 ;
                                 ; THE RULE IS ABOUT THE RUN, NOT THE SECTOR
                                 ; (SPEC.md 18.93.1, 2.9.13.3). A run reads
@@ -69,32 +67,22 @@ KSIG_OFF    equ 22528 - BOOT2_KNOBSEC * 512 + BOOT2_SMALLSEC * 512 ; SPEC.md 18.
                                 ; after a flip INSIDE A RUN THAT BEGAN BEFORE
                                 ; IT. Where runs begin is stage 2's business,
                                 ; not the geometry's: read_run cuts at the
-                                ; cylinder, and under KZIP the load restarts
-                                ; twice more - at `.text` (the plain head, in
-                                ; runs of its own) and at `.text` + KZ_HEADSEC
-                                ; (the packed tail). File sector 21, where
-                                ; this sat from 2026-09-05 (KZIP the default)
-                                ; to the big review's BR-1, is in the head-1
-                                ; half of cylinder 1 on a 9-sector disk, and
-                                ; every run containing it there began after
-                                ; that cylinder's flip: INERT on the 360KB and
-                                ; 720KB disks, kern_big's and kern_small's,
-                                ; for two months - and t_canary, which walked
-                                ; runs from the data area, passed it. Sector 57
-                                ; is inside the packed tail and crosses on all
-                                ; six shipped system disks (LBA 71, 71, 86, 90,
-                                ; 69, 69); tests/unit/t_canary.py walks the
-                                ; runs as the loader cuts them, head split,
-                                ; tail restart, DMA page and all.
-                                ;
-                                ; It moves with BOOT2_SECS (the FILE sector is
-                                ; what has to stay put), with the set of
-                                ; shipped geometries (the band is their
-                                ; INTERSECTION), with KZ_HEADSEC and the blob
-                                ; (they decide where runs restart), and it must
-                                ; name a LIVE sector whose sum differs from
-                                ; both neighbours - the Makefile's KSIG_OFF
-                                ; block and SPEC.md 18.93.1 carry the history
+                                ; cylinder and the DMA page, and under KZIP the
+                                ; load restarts twice more - at `.text` (the
+                                ; plain head, in runs of its own) and at
+                                ; `.text` + KZ_HEADSEC (the packed tail). So
+                                ; the generator walks those runs on every
+                                ; system disk the arm ships on, with the arm's
+                                ; own blob, head, length and R, and writes the
+                                ; LOWEST offset that is in the tail, read after
+                                ; a flip on every one of them, and distinct
+                                ; from both neighbours - or fails the build.
+                                ; File sector 21, where this sat from
+                                ; 2026-09-05 to BR-1, was inert on the 360KB
+                                ; and 720KB disks for two months under a
+                                ; hand-typed number. tests/unit/t_canary.py is
+                                ; the independent second reader: its own walk,
+                                ; over the BPBs the images really carry.
 B2_KSECS    equ ((MODC_START + 511) / 512) - BOOT2_SECS  ; what is left to read
 
 ; --- A COMPRESSED KERNEL (SPEC.md 2.9.13), behind KZIP=1 ----------------------
@@ -105,10 +93,11 @@ B2_KSECS    equ ((MODC_START + 511) / 512) - BOOT2_SECS  ; what is left to read
 ; assembled. Without KZIP they are absent and every path below assembles away.
 ;
 ;   KZ_SECS    what stage 2 reads, in place of B2_KSECS
-;   KZ_HEADSEC how many of those are plain - SPL_RESIDENT, and for its reason:
-;              spl_tick far-calls viddet.inc while the rest is still landing,
-;              so those sectors have to be at their linked addresses DURING
-;              the read and not after it
+;   KZ_HEADSEC how many of those are plain - max(SPL_RESIDENT, the
+;              Makefile's KZ_HEADMIN), which kernel.asm's foot checks, and
+;              for its reason: spl_tick far-calls viddet.inc while the rest is
+;              still landing, so those sectors have to be at their linked
+;              addresses DURING the read and not after it
 ;   KZ_RPARA   how far UP the packed tail lands, in paragraphs, so expanding it
 ;              downwards can never overtake the source (SPEC.md 20.13's trick,
 ;              one level down)
@@ -317,8 +306,9 @@ boot2_entry:
 %endif
 %ifndef BOOT_NOSPLASH
     ; --- THE FIRST TICK, AS SOON AS THE HEAD IS ABOARD (BOOT3-PLAN item E) --
-    ; It needs exactly the SPL_RESIDENT sectors, and under KZIP KZ_HEADSEC is
-    ; SPL_RESIDENT, so it can run here rather than after the first tail run:
+    ; It needs the SPL_RESIDENT sectors, and under KZIP KZ_HEADSEC is at least
+    ; that (kernel.asm's foot), so it can run here rather than after the first
+    ; tail run:
     ; the packed tail is not expanded until kz_all, so nothing the first tick
     ; may use is in it. The splash, the adapter probe and the bar at 0 come
     ; one tail run sooner on every disk. After the pop and outside the bound
@@ -349,7 +339,7 @@ boot2_entry:
     mov ax, dx                      ; only thing this loop reads - the head is
     sub ax, [b2_left]               ; already aboard, and SPL_RESIDENT's test
                                     ; below would be a tautology here because
-                                    ; KZ_HEADSEC *is* SPL_RESIDENT
+                                    ; KZ_HEADSEC is at least SPL_RESIDENT
 %else
     mov dx, B2_KSECS            ; tick the splash once it is fully resident:
     mov ax, dx                  ; AX = sectors done, DX = total (SPEC.md 15).
@@ -415,8 +405,9 @@ boot2_entry:
 %ifdef KZIP
     ; THE CANARY IS IN THE PACKED TAIL, AND ITS ADDRESS IS ONE IMMEDIATE
     ; (SPEC.md 2.9.13.3). What it verifies is the TRANSFER, and the Makefile
-    ; sums the PACKED file's sector at KSIG_OFF + BOOT2_PAD - file sector 57,
-    ; tail sector KSIG_OFF/512 - KZ_HEADSEC, which landed at KERNEL_SEG +
+    ; sums the PACKED file's sector at KSIG_OFF + BOOT2_PAD (os88ksig.py's
+    ; choice: file sector 57 on kern_big at the 2026-11-08 build), tail
+    ; sector KSIG_OFF/512 - KZ_HEADSEC, which landed at KERNEL_SEG +
     ; KZ_HEADSEC*512 + R + that many sectors: KSIG_OFF + R, the head's bytes
     ; and the offset inside the tail cancelling. That is inside the 64KB the
     ; handoff's ES already names on every kernel (40,960 on kern_big at the

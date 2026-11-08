@@ -30,17 +30,18 @@ per kernel - its blob length, KZ_HEADSEC, R and segment out of that kernel's
 kernel.kz.json - and the question is the precise one: is there a head flip
 strictly after the start of the canary's run and at or before the canary?
 
-It is AN INDEPENDENT READER (the big review's boot-10): it imports nothing the
-build uses to place the canary, and it reads the injected signature back out of
-each disk's own boot sector (`mov di, KSIG`) and sums that disk's own
-KERNEL.SYS sector to find it, so what it walks is the sector the build really
-armed, not the one the Makefile's arithmetic says it armed.
+It is AN INDEPENDENT READER (the big review's boot-10): since then the BUILD
+CHOOSES the sector - tools/os88ksig.py walks the runs per build arm and writes
+$(BUILD)/ksig.inc - and this row imports nothing from it. It reads the number
+each kernel was really ASSEMBLED with out of that kernel's own map (KSIG_OFF,
+an absolute equ), the signature the build injected out of each disk's own boot
+sector (`mov di, KSIG`), the geometry out of each disk's own BPB, and walks the
+runs with its own code. A generator and a gate that share a model share its
+mistakes; BR-1 was exactly that.
 
-boot/boot2.asm types KSIG_OFF out a second time, and there is no linker here,
-so the two are checked against each other before anything else is asked.
-
-Break it on purpose: KSIG_OFF back at 4096 (file sector 21) must turn
-os8088-360, os8088-720, small360 and small720 red.
+Break it on purpose: make os88ksig.py's `live()` answer True for every sector
+(so it chooses the first tail sector, file sector 22 on kern_big) and rebuild -
+this row must go red on every system disk.
 """
 import json
 import re
@@ -57,39 +58,27 @@ BUILD = ROOT / "build"
 IMAGES = [("os8088-360.img", ""), ("os8088-720.img", ""),
           ("os8088-120.img", ""), ("os8088.img", ""),
           ("small360.img", "smallk"), ("small720.img", "smallk")]
-# ...and kern_mega's, which `make mega` builds and `all` does not: walked when
-# present, with the run model only - its boot sectors are left to its own
-# rows, because a tree that has run `make` since its last `make mega` holds
-# a mega image armed for an older KSIG_OFF, and that is not a defect
-MEGA = [("mega.img", "megak"), ("mega120.img", "megak")]
+# ...and kern_mega's and kern_emu's, which `make mega` and `make emu` build
+# and `all` does not: walked IN FULL when the image carries its tree's
+# current KERNEL.SYS, and named as stale otherwise - a tree that has run
+# `make` since its last `make mega` holds a mega image of an older kernel,
+# and that is not a defect of this one
+OPTIONAL = [("mega.img", "megak"), ("mega120.img", "megak"),
+            ("emu.img", "emuk")]
 KERNEL_SEG = 0x0060
 
 
-def ksig_off():
-    m = re.search(r"^KSIG_OFF\s*:=\s*(\d+)", (ROOT / "Makefile").read_text(), re.M)
+def mapnum(sub, name):
+    """An absolute equ out of build/<sub>/kernel.map's No Section table - the
+    number the kernel was ASSEMBLED with, not what any source says."""
+    p = BUILD / sub / "kernel.map"
+    if not p.exists():
+        sys.exit(f"t_canary: no {p.relative_to(ROOT)} - run make first")
+    m = re.search(r"^([0-9A-F]{8})\s+%s\s*$" % name,
+                  p.read_text(errors="replace"), re.M)
     if not m:
-        sys.exit("t_canary: no KSIG_OFF in the Makefile")
-    off = int(m.group(1))
-    b2 = re.search(r"^KSIG_OFF\s+equ\s+(\d+)",
-                   (ROOT / "boot" / "boot2.asm").read_text(), re.M)
-    if not b2:
-        sys.exit("t_canary: no KSIG_OFF equ in boot/boot2.asm")
-    if int(b2.group(1)) != off:
-        sys.exit(f"t_canary: the Makefile says KSIG_OFF {off} and "
-                 f"boot/boot2.asm says {b2.group(1)} - the build would inject "
-                 f"the word from one offset and the sector compare the other")
-    return off
-
-
-def shipped_blob():
-    """kern_big's blob length, the literal KSIG_OFF is written against: the
-    canary's FILE sector is KSIG_OFF/512 + this, on every kernel (the
-    Makefile's per-arm KSIG_OFF moves the memory offset with the blob)."""
-    src = (ROOT / "kernel" / "kernel.asm").read_text()
-    m = re.search(r"^BOOT2_SECS\s+equ\s+(\d+)", src, re.M)
-    if not m:
-        sys.exit("t_canary: no BOOT2_SECS in kernel/kernel.asm")
-    return int(m.group(1))
+        sys.exit(f"t_canary: {p.relative_to(ROOT)} lists no {name}")
+    return int(m.group(1), 16)
 
 
 def kz(sub):
@@ -151,55 +140,66 @@ def ssum(b):
                for i in range(0, 512, 2)) & 0xFFFF
 
 
-def main():
-    off = ksig_off()                     # kern_big's MEMORY offset
-    fsec = off // 512 + shipped_blob()   # ...its FILE sector, on every kernel
-    if off % 512:
-        sys.exit(f"t_canary: KSIG_OFF {off} is not a whole sector")
-    fileoff = fsec * 512
+def kernel_on(raw, data, kf):
+    """Does the image carry THIS tree's KERNEL.SYS, from the data area on?"""
+    k = kf.read_bytes()
+    return raw[data * 512:data * 512 + len(k)] == k
 
+
+def main():
     missing = [n for n, _ in IMAGES if not (BUILD / n).exists()]
     if missing:
         sys.exit("t_canary: shipped image(s) not built: %s - run make first; "
                  "a geometry this cannot see is a geometry the canary is not "
                  "checked on" % ", ".join(missing))
 
-    bad, lines = [], []
-    for name, sub in IMAGES + [m for m in MEGA if (BUILD / m[0]).exists()]:
+    bad, lines, stale, trees = [], [], [], {}
+    for name, sub in IMAGES + [m for m in OPTIONAL if (BUILD / m[0]).exists()]:
         img = BUILD / name
         k = kz(sub)
         kf = BUILD / sub / "kernel.sys"
         if not kf.exists():
+            if (name, sub) in OPTIONAL:
+                continue
             sys.exit(f"t_canary: no {kf.relative_to(ROOT)} - run make first")
+        off = mapnum(sub, "KSIG_OFF")       # what the kernel ASSEMBLED
+        blob = mapnum(sub, "BOOT2_PAD") // 512
+        if off % 512:
+            bad.append(f"{name}: KSIG_OFF {off} is not a whole sector")
+            continue
+        fsec = off // 512 + blob
+        trees[sub] = (kf, off, fsec)
         d, data, spt, heads = bpb(img)
+        raw = img.read_bytes()
+        if not kernel_on(raw, data, kf):
+            if (name, sub) in OPTIONAL:
+                # `make mega`/`make emu` are on demand: a tree that has run
+                # `make` since holds an image of an OLDER kernel, which is not
+                # a defect of this one
+                stale.append(name)
+                continue
+            bad.append(f"{name}: does not carry build/{sub + '/' if sub else ''}"
+                       f"kernel.sys from its data area (LBA {data}) - the walk "
+                       f"below would be about another kernel")
+            continue
         if heads < 2:
             bad.append(f"{name}: one head - nothing to cross")
             continue
-        raw = img.read_bytes()
         c = data + fsec
-        if name not in dict(MEGA):
-            # THE SECTOR THE BUILD REALLY ARMED: the boot sector's `mov di,
-            # KSIG` must name this disk's own file sector `fsec`
-            s = ssum(raw[c * 512:c * 512 + 512])
-            hits = [i for i in range(0, 509)
-                    if d[i] == 0xBF and d[i + 1] | (d[i + 2] << 8) == s]
-            if len(hits) != 1:
-                bad.append(f"{name}: its boot sector has {len(hits)} `mov di, "
-                           f"0x{s:04X}`, the sum of file sector {fsec} - the "
-                           f"canary the build injected is not the sector this "
-                           f"row walks (KSIG_OFF {off} against the Makefile's "
-                           f"per-kernel arms and KSIGDEF2)")
-                continue
+        # THE SECTOR THE BUILD REALLY ARMED: the boot sector's `mov di, KSIG`
+        # must name this disk's own file sector `fsec`
+        s = ssum(raw[c * 512:c * 512 + 512])
+        hits = [i for i in range(0, 509)
+                if d[i] == 0xBF and d[i + 1] | (d[i + 2] << 8) == s]
+        if len(hits) != 1:
+            bad.append(f"{name}: its boot sector has {len(hits)} `mov di, "
+                       f"0x{s:04X}`, the sum of file sector {fsec} - the "
+                       f"canary the boot sector carries is not the sector the "
+                       f"kernel was assembled to check (KSIG_OFF {off} in the "
+                       f"map against KSIGDEF2's ksig.inc)")
+            continue
         if k is None:
-            # NOKZIP: one plain read of the rest of the file behind the blob,
-            # whose length is the map's BOOT2_PAD
-            m = re.search(r"^([0-9A-F]{8})\s+BOOT2_PAD\s*$",
-                          (BUILD / sub / "kernel.map").read_text(errors="replace"),
-                          re.M)
-            if not m:
-                sys.exit(f"t_canary: no kernel.kz.json and no BOOT2_PAD in "
-                         f"build/{sub + '/' if sub else ''}kernel.map")
-            blob = int(m.group(1), 16) // 512
+            # NOKZIP: one plain read of the rest of the file behind the blob
             r = walk(data + blob, spt, heads, None,
                      (kf.stat().st_size + 511) // 512 - blob)
         else:
@@ -215,18 +215,19 @@ def main():
                        f"plain head, which is read at the track bound and "
                        f"crosses nothing")
             continue
-        lines.append(f"{name} LBA {c} in {which} run {lba}..{lba + n - 1}")
+        lines.append(f"{name} sector {fsec} LBA {c} in {which} "
+                     f"{lba}..{lba + n - 1}")
         if not ok:
-            bad.append(f"{name} ({sub or 'kern_big'}, blob "
-                       f"{(k or {}).get('blob', 0) // 512} sectors): file sector "
-                       f"{fsec} is LBA {c}, in the run {lba}..{lba + n - 1}, "
-                       f"which crosses no head before it")
+            bad.append(f"{name} ({sub or 'kern_big'}, blob {blob} sectors): "
+                       f"file sector {fsec} is LBA {c}, in the run "
+                       f"{lba}..{lba + n - 1}, which crosses no head before it")
     if bad:
         sys.exit(
-            f"t_canary: KSIG_OFF {off} (file sector {fsec}) is NOT read after a "
-            f"head flip on:\n  " + "\n  ".join(bad) + "\n- it would be loaded "
-            f"CORRECTLY on a machine whose FDC flips at the wrong sector, and "
-            f"the canary would pass on the one fault it is for (SPEC.md 18.93.1)"
+            "t_canary: the canary is NOT read after a head flip, or is not the "
+            "sector it claims, on:\n  " + "\n  ".join(bad) + "\n- it would "
+            "be loaded CORRECTLY on a machine whose FDC flips at the wrong "
+            "sector, and the canary would pass on the one fault it is for "
+            "(SPEC.md 18.93.1)"
         )
 
     # ...and it has to be tellable from its neighbours, or a shifted read
@@ -235,14 +236,9 @@ def main():
     # there was 0, and so was the first word of the wrong sector a 286 ROM
     # delivered in its place, which is how that sector passed the canary
     # (SPEC.md 18.93.1)
-    kern = BUILD / "kernel.sys"
-    for kf in (kern, BUILD / "smallk" / "kernel.sys",
-               BUILD / "megak" / "kernel.sys"):
-        if not kf.exists():
-            if kf.parent.name == "megak":
-                continue            # `make mega` is on demand
-            sys.exit(f"t_canary: no {kf.relative_to(ROOT)} - run make first")
+    for sub, (kf, off, fsec) in trees.items():
         kk = kf.read_bytes()
+        fileoff = fsec * 512
         if len(kk) < fileoff + 512:
             sys.exit(f"t_canary: {kf.relative_to(ROOT)} is {len(kk)} bytes, "
                      f"shorter than the canary's file offset {fileoff}")
@@ -256,11 +252,12 @@ def main():
                     f"{fileoff + step}, so a read shifted by a sector still "
                     f"matches (SPEC.md 18.93.1)"
                 )
-    k = kern.read_bytes()
-    print(f"canary: memory offset {off}, file sector {fsec}, read after a head "
-          f"flip on {len(lines)} system disks ({'; '.join(lines)}), sum "
-          f"0x{ssum(k[fileoff:fileoff + 512]):04X} distinct from both "
-          f"neighbours")
-
+    print("canary: read after a head flip on %d system disks (%s), each "
+          "kernel's sector distinct from both neighbours (%s)%s"
+          % (len(lines), "; ".join(lines),
+             ", ".join("%s KSIG_OFF %d" % (sub or "kern_big", o)
+                       for sub, (_k, o, _f) in trees.items()),
+             "" if not stale else "; not walked, holding an older kernel: "
+             + ", ".join(stale)))
 
 main()

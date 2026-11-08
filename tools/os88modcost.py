@@ -400,7 +400,7 @@ def main():
 
     defs, refsite, kind = scan_source()
     sizes, persec = listing(defines + ['-DKZIP', '-DKZ_SECS=0', '-DKZ_RPARA=0',
-                                       '-DKZ_NBLK=1', '-DKZ_HEADSEC=9'])
+                                       '-DKZ_NBLK=1', '-DKZ_HEADSEC=0'])
     bad = crosscheck(persec, defines)
     if bad:
         sys.exit('os88modcost: the listing pass does not add up, so the numbers\n'

@@ -1742,18 +1742,18 @@ section .text                   ; ...and back, so the next include lands right
 ; HERE, at the end of viddet.inc, rather than in kernel.asm's cw_ block for one
 ; reason: SPL_RESIDENT. The bar cannot move until the routines the first tick
 ; calls are ABOARD, and the cw_ block is at the end of `.text` - the last
-; sector of the image. Here it lands in `.text` sector 4 (0x922 on kern_big,
-; 0x842 on kern_small); SPL_RESIDENT, still 9, is what the %if at the foot of
-; kernel.asm measures it against - and the three bytes below it, which the
-; first tick also touches, are not under that %if.
+; sector of the image. Here it lands in `.text` sector 4 (0x91F on kern_big,
+; 0x83F on kern_small, 0xA0C on kern_mega), and SPL_RESIDENT is DERIVED from
+; where the window ends (kernel.asm's foot, the big review's boot-4): 5
+; sectors on kern_big, kern_small and kern_emu, 6 on kern_mega.
 ; =============================================================================
 spw_near:   call bp
             retf
-spw_resident_end:
 
 ; ...and the THREE BYTES of splash.inc that could not go with it. viddet's mode
 ; guard, fprog's boot test and vidsel's spl_reset all ask [spl_live] through
-; DS, so it lives where DS reaches it. 967 bytes left; these stayed.
+; DS, so it lives where DS reaches it. When splash.inc moved into the blob
+; (SPEC.md 2.9.4) these stayed, and the window's end below now counts them.
 spl_live    db 0
 blk_on      db 0                ; blank.inc's: is the desktop off the glass
                                 ; right now? TRUE FOR BOTH ANSWERS - a gated
@@ -1798,6 +1798,26 @@ spl_busy    db 0
 ; exists to capture - a mouse that is on the wire and not detected, which is
 ; PERFORMANCE.md's input overrun and is invisible in an emulator.
 spl_quiet   db 0
+
+; THE WINDOW ENDS HERE, AFTER THE FOUR BYTES THE TICKS STORE AND READ, and not
+; at spw_near's retf (the big review's boot-4, BR-153). It sat four bytes
+; short for as long as the bytes above lived here: spl_tick and spl_isr write
+; [spl_live] and [spl_busy] and read [spl_quiet] on every tick, and SPEC.md
+; 2.9.4's rule is that a first-tick store belongs in the head or in the blob,
+; never past it - so the label that measures the head covers them now, and
+; SPL_RESIDENT (kernel.asm's foot) is derived from it. What the ticks reach
+; FURTHER up `.text` is not measured by any label: tests/unit/t_resident.py
+; walks the ticks' code for every DS reference and refuses one past the
+; window that tests/tickrefs.txt does not explain.
+;
+; AN `equ $` AND NOT A `label:`, ON PURPOSE. tools/os88rom.py leaves every
+; `.text` DATA word out of the ROM/HMA image's hash, and it finds them off the
+; source: a bare label followed by another bare label reads as a pure marker
+; (mod_tab_end's shape) and takes the span to the next address. Written as
+; `spw_resident_end:` here, with vid_text's label next, it did exactly that and
+; dropped vid_text's first 60 bytes of CODE out of the hash. The symbol is the
+; same address either way.
+spw_resident_end equ $
 
 ; (vid_text is HERE, past spw_resident_end, since kernel size pass 17: it is
 ; not a splash routine - fsx_mode and vid_reboot are its only callers - and

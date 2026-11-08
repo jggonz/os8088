@@ -1640,7 +1640,10 @@ FAST = [
         "own cuts per kernel (the KZIP head at the track, the tail restart, "
         "the DMA page) and finds the armed sector by each disk's boot-sector "
         "signature: walking from the data area passed file sector 21 for two "
-        "months while it was inert on every 9-sector disk (BR-1)"),
+        "months while it was inert on every 9-sector disk (BR-1). The BUILD "
+        "chooses the sector now (tools/os88ksig.py, boot-10), and this is its "
+        "independent second reader: it imports nothing from the generator and "
+        "reads the KSIG_OFF each kernel ASSEMBLED out of that kernel's map"),
     Row("ascplace", "fast", py("tests/unit/t_ascplace.py"), 0.1,
         "SPEC.md 54.7.5: every shipped volume's ASSOC.DAT lies inside ONE "
         "TRACK. The mount reads it on every volume switch and the read-ahead "
@@ -1770,14 +1773,17 @@ FAST = [
         "helps if something reaches it, which is how the DMA staging arm of "
         "both file pipelines rotted for a year with this row green "
         "(SPEC.md 18.4.2.1)"),
-    Row("resident", "soak", py("tests/unit/t_resident.py"), 3.7,
+    Row("resident", "soak", py("tests/unit/t_resident.py"), 9.5,
         "nothing the splash's first tick runs may jump to SPEC.md 15.1.2's "
         "epilogue ladder - the ladder is at the far end of .text and the "
         "floppy has not delivered it yet, so the machine dies with a blank "
         "screen and no message. kernel.asm's SPL_RES_SIZE guard measures where "
-        "the resident code ENDS, and size is not reach. "
-        "SOAK and not fast: the splash's reach into the epilogue ladder "
-        "is kernel-internal"),
+        "the resident code ENDS, and size is not reach. And since the big "
+        "review's boot-4 derived SPL_RESIDENT from that label, the DATA "
+        "check: it walks the ticks' code on every built kernel and fails a "
+        "DS reference past the window, or in .bss, that tests/tickrefs.txt "
+        "does not explain - the class of SPEC.md 2.9.4's ui_post incident. "
+        "SOAK and not fast: the splash's reach is kernel-internal"),
     Row("wakedrain", "soak", py("tests/unit/t_wakedrain.py"), 0.2,
         "every event-queue drain gives a package's wake back - one that eats "
         "it deafens the window for the rest of its life (SPEC.md 74.1.1). "

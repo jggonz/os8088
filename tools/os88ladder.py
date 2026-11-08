@@ -86,7 +86,7 @@ class Stale(SystemExit):
 # 1. What the TREE says - constants, the ladder, the volume. No emulator.
 # -----------------------------------------------------------------------------
 
-def grab(path, pattern, what, fix):
+def grab(path, pattern, what, fix, base=0):
     """One constant out of one source file, or a refusal that names both.
 
     Every scrape in this file goes through here on purpose. A `%s` that no
@@ -99,7 +99,7 @@ def grab(path, pattern, what, fix):
     m = re.search(pattern, src, re.M)
     if not m:
         raise Stale("%s is gone" % what, "%s  /%s/" % (path, pattern), fix)
-    return int(m.group(1), 0)
+    return int(m.group(1), base)
 
 
 def kz_numbers(build="build"):
@@ -135,10 +135,16 @@ def constants(build="build"):
                            "BOOT2_SECS - the blob's length in sectors",
                            "find its new name in kernel/kernel.asm and update "
                            "constants(); the Makefile scrapes the same line")
-    c["SPL_RESIDENT"] = grab("kernel/splash.inc", r"^SPL_RESIDENT\s+equ\s+(\d+)",
+    # SPL_RESIDENT IS DERIVED NOW (kernel.asm's foot, the big review's
+    # boot-4), so it is read where the assembler published it - the map's
+    # table of absolute equates - and not out of a source that no longer
+    # types it
+    c["SPL_RESIDENT"] = grab(os.path.join(build, "kernel.map"),
+                             r"^([0-9A-F]{8})\s+SPL_RESIDENT\s*$",
                              "SPL_RESIDENT - sectors before the bar can draw",
-                             "kernel/splash.inc; it decides which stage the "
-                             "loading screen first appears in")
+                             "the build's kernel.map (kernel.asm's foot "
+                             "derives it from spw_resident_end) - run make",
+                             base=16)
     c["SPL_POST"] = grab("kernel/splash.inc", r"^SPL_POST\s+equ\s+(\d+)",
                          "SPL_POST - notches added to the bar's DENOMINATOR",
                          "kernel/splash.inc; the bar's arithmetic on the page "
@@ -164,9 +170,10 @@ def constants(build="build"):
                        "DPT_AT - where the diskette parameter table is copied",
                        "boot/boot.asm, its only definer since boot-7 deleted "
                        "stage 2's dead copy")
-    c["KSIG_OFF"] = grab("boot/boot2.asm", r"^KSIG_OFF\s+equ\s+(\d+)",
+    c["KSIG_OFF"] = grab(os.path.join(build, "ksig.inc"), r"^KSIG_OFF\s+equ\s+(\d+)",
                          "KSIG_OFF - SPEC.md 18.93.1's canary probe",
-                         "boot/boot2.asm; the Makefile types the same number")
+                         "build/ksig.inc, which tools/os88ksig.py writes per "
+                         "build arm (the big review's boot-10) - run make")
     c["STK0_SIZE"] = grab("kernel/kernel.asm", r"^STK0_SIZE\s+equ\s+(\d+)",
                           "STK0_SIZE - task 0's stack",
                           "kernel/kernel.asm's ladder")

@@ -185,7 +185,7 @@ def build_socket():
 FIX_A, FIX_B = 0xF601, 0xF702       # tools/os88romfix.py's pair
 BN_SKIP_MAX = 16       # `.text` words the build number may own (kernel_tables)
 KFLAGS = ["-DKZIP", "-DKZ_SECS=0", "-DKZ_RPARA=0", "-DKZ_NBLK=1",
-          "-DKZ_HEADSEC=9"]          # the Makefile's first-pass kernel-full
+          "-DKZ_HEADSEC=0"]          # the Makefile's first-pass kernel-full
 
 
 def kflags(build):

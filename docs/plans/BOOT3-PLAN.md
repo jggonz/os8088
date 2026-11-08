@@ -2,7 +2,9 @@
 
 > **Status: BEING BUILT. Waves 0, 1, 2 and 3 are built (2026-11-08, sections
 > 16.4, 16.5, 16.7 and 16.8), and so are item E with the big review's canary
-> fix (BR-1) and boot-7 (section 16.6); waves 4 and 5 are not.** Written 2026-11-08 at the owner's
+> fix (BR-1) and boot-7 (section 16.6), and wave 4's two preconditions boot-4
+> and boot-10 (section 16.9, with one owner question left open there); waves
+> 4 and 5 are not.** Written 2026-11-08 at the owner's
 > request, after the big review's size ledger asked for a 14th blob sector
 > and the owner refused it (docs/reports/BIG-REVIEW-2026-11-08.md section 7,
 > docs/reports/big-review-2026-11-08/synth/phase1.md "Both boot-time homes
@@ -477,7 +479,9 @@ is no emuk tree here, so its figures are PREDICTED.
   kern_mega. BR-1's fix (1) puts KSIG_OFF at 22,528 and was checked at blob
   lengths 13, 14 and 15 only (synth/bugs.md BR-1), so wave 4 rides boot-10's
   derived KSIG_OFF (synth/bugs.md BR-1, step 4; phase1.md WP6), which emits
-  each arm's value.
+  each arm's value. **(build, 2026-11-08)** boot-10 is built (section 16.9):
+  `tools/os88ksig.py` chooses it per arm, and walked ahead of wave 4 at blob
+  lengths 7 and 8 with heads 5 and 9 it finds a sector on every arm.
 - **A body that moves out of the blob leaves stage 1's BLOBSUM**
   (SPEC.md 2.9.7). Like `.text`, it is then checked by nothing but the decode.
   That is the same exposure the rest of the kernel has: a misread tail sector
@@ -747,10 +751,18 @@ quicker splash is a benefit."* It is part of the plan proper.
 - **boot-4** (BR-153, phase1.md WP6): SPL_RESIDENT derived from
   `SPL_RES_SIZE`, after its audit of every first-tick store for an address in
   sectors 5-8. It lowers SPL_RESIDENT, and with it KZ_HEADSEC, from 9 to 5,
-  so the head the canary and item E sit on changes shape.
+  so the head the canary and item E sit on changes shape. **(build,
+  2026-11-08) Built, with one deviation (section 16.9):** SPL_RESIDENT is
+  derived (5, and 6 on kern_mega) and the audit is a gate, but the plain head
+  is `max(SPL_RESIDENT, KZ_HEADMIN)` and KZ_HEADMIN stays 9 on kern_big,
+  kern_emu and kern_mega: a 5-sector head costs kern_big's 360KB and 720KB
+  disks a stage-2 call (11 -> 12), which nobody had priced. kern_small takes
+  5. Wave 4 is where kern_big's head is decided, with its blob: at 7 sectors
+  5 or 6 is the best head on every disk.
 - **boot-10** (phase1.md WP6): KSIG_OFF computed per build arm by a generator
   `t_canary` does not import, because wave 4 moves every blob length and BR-1's
-  sector 57 was checked only at 13-15 (section 7).
+  sector 57 was checked only at 13-15 (section 7). **(build, 2026-11-08)
+  Built (section 16.9).**
 - Waves 1 and 2 on that kernel, so that what remains in `.boot2` is the
   residue below.
 - `blobruns` in the fast tier with its model gaps fixed (section 13), so the
@@ -2280,3 +2292,133 @@ the re-pointers of `mem_init_x`'s word: `heapmap`, `bootfloor-ab`,
 `splashbar`, `bootstatus`, `blobsum`, `hdboot`, `hdtakeboot`, `install`,
 `cylrun`, `postboot`, `v20boot`, `pravetzboot`; kern_mega `megaovl`,
 `megamod`, `megahiber`; kern_emu `vmmouse`.
+
+### 16.9 boot-4 and boot-10 as built (build, 2026-11-08)
+
+Wave 4's two preconditions, and nothing of wave 4 itself. Host checks only
+(CLAUDE.md's Testing rule): no emulator ran and no soak row was run through
+the suite; `resident`, `bootfloor` and `coldpic`, host-only, were run by
+their scripts as this wave's checks.
+
+**The audit came first, and it is a gate now.** boot-4 asked for every
+first-tick store to be audited for an address in sectors 5-8 before
+SPL_RESIDENT was lowered. A by-hand audit is an argument; so
+`tests/unit/t_resident.py` gained a second check that walks the ticks' code
+(from `spl_tick` and `spl_isr`, through near calls, `BLOBCALL`, `spw_near`'s
+BP target and fall-through, over a `-Le` listing so macro expansions are what
+they assemble to) on every built kernel and collects every DS memory operand
+and every `mov si/di/bx, label` naming a kernel label. One in `.text` at or
+past SPL_RESIDENT * 512, or in `.bss`/`.lowbss`, fails unless
+`tests/tickrefs.txt` explains it. On kern_big it walks 42 procs and 153
+references, and finds **seven** past the 5-sector window: `vx_ep` and `vx_bpp`
+(0x0C57, 0x0C5B - READS, behind the VESA kind, which no first tick has) and
+`cur_shchk`, `cur_disp`, `mouse_x`, `vid_rowtab` and `ui_post` (stores behind
+`bvs_apply`'s stack test, `jne .homed`, which the first tick takes). All seven
+are registered with their reason; kern_small has four of them, kern_mega and
+kern_emu all seven. **Two of the seven were not in the plan's list**:
+`vx_ep`/`vx_bpp` sit in sector 6 today, so lowering the head without a gate
+would have left vid_setmode reading unloaded memory on any arm that could
+reach the VESA kind early; `vid_rowtab` is a `.lowbss` store through
+`[ss:si]`. The one first-tick store that IS made and must survive,
+`[vid_cgamode]` (0x09E9 on kern_big - 23 bytes inside the window), is
+past `spw_resident_end`, so it gets its own `%if` at kernel.asm's foot.
+**Broken on purpose**: the registry less `mouse_x` is red on all four kernels;
+a line nothing needs is red; `inc byte [evq_head]` planted in spl_tick in
+place of `inc byte [spl_busy]` is red on every kernel; both foot `%if`s were
+made to fire by hand.
+
+**What moved (boot-4).**
+
+- `spw_resident_end` moved below `[spl_live]`, `[blk_on]`, `[spl_busy]` and
+  `[spl_quiet]` (0 bytes; kern_big 0x922 -> 0x926). It is `spw_resident_end
+  equ $`, not a `label:`: tools/os88rom.py finds `.text` data words off the
+  source, and a bare label followed by `vid_text:` reads as a marker - written
+  as a label it dropped vid_text's first 60 bytes of code out of the HMA
+  image's hash and changed COLDHMA.SYS. Found by the one-commit `cmp`, fixed
+  before commit.
+- `SPL_RESIDENT equ (SPL_RES_SIZE + 511) / 512` at kernel.asm's foot;
+  splash.inc types nothing. **5 on kern_big, kern_small and kern_emu; 6 on
+  kern_mega** (its window ends at 0xA13 - the plan's "9 to 5" was kern_big's
+  and kern_small's).
+- The plain head is `max(SPL_RESIDENT, KZ_HEADMIN)`, read off pass 1's map
+  by `tools/os88ksig.py head`; pass 1's `KZ_HEADSEC` is a 0 placeholder like
+  the other KZ numbers (os88rom, os88romfix, os88modcost and t_khpknobs say
+  0 now too), and the foot refuses a pass 2 whose head is shorter than the
+  window.
+
+**Deviation 1: kern_big's head stays 9.** The plan (and phase1.md WP6, and
+areas/boot.md's "the bar's start does not move on any geometry") priced the
+lower head as disk bytes only. t_blobruns' model, at this build's packed
+length, says otherwise:
+
+| blob, head | 360KB | 720KB | 1.2MB | 1.44MB |
+|---|---:|---:|---:|---:|
+| 13, 9 (shipped) | 11 | 11 | 9 | 8 |
+| 13, 5 | **12** | **12** | 9 | **7** |
+| 7, 9 (wave 4, head kept) | 12 | 12 | 8 | 7 |
+| 7, 5 or 6 (wave 4) | 11 | 11 | 8 | 7 |
+
+(stage-2 int 13h calls, PREDICTED.) A 9-sector head ends exactly on a
+cylinder on the two 9-sector disks; 5 restarts the tail four sectors short of
+one. So today the lower head buys ~400 bytes of KERNEL.SYS and 1.44MB's call
+(its head becomes one run, before the bar) for a call after the bar on the
+owner's 5150 geometry - a trade the STAGE2 ratchet would have refused at
+`make`, and the owner's rather than this wave's. `KZ_HEADMIN` is 9 on
+kern_big, kern_emu, kern_mega and every knob, 0 on kern_small, and the
+Makefile carries the table. **Wave 4 should set kern_big's to 0 (or 6) with
+its blob**: at 7 sectors the window's head is the best on every disk.
+**Owner question**: take kern_big's 5-sector head now (360/720 +1 call after
+the bar, 1.44MB -1 before it, -400 bytes), or with wave 4 (the plan's
+order, no call lost anywhere)? This build assumes the latter.
+
+**What moved (boot-10).** `tools/os88ksig.py` chooses KSIG_OFF per arm
+between the two KZIP passes (NOKZIP: before its one pass, model only, then a
+`verify` on the file) and writes `$(BUILD)/ksig.inc`, which boot2.asm
+includes and KSIGDEF2 reads; `verify` re-walks the final KERNEL.SYS and
+records `ksig_off` in kernel.kz.json. The Makefile's `KSIGGEOM` names each
+arm's shipped system disks as their os88disk.py lines build them; the -512
+and +1024 arms are gone. It picks the lowest sector in the tail, inside the
+handoff's 64KB and the read, live on every disk, distinct from both
+neighbours, and fails the build otherwise (made to: a 40-sector tail names
+1.44MB as the disk with no live sector). It asserts on every build that the
+head's run bound (BR-1 part 2, the owner's open question) moves no answer -
+the tail starts where the head ends - and part 2 is untouched. `t_canary`
+reads each kernel's assembled `KSIG_OFF` out of its own map, checks the image
+carries that tree's KERNEL.SYS, and walks mega.img, mega120.img and emu.img in
+full when current (named as stale otherwise). **Broken on purpose**: with
+`live()` answering True the generator chose file sector 22 and `t_canary`
+went red on all four kern_big disks.
+
+**Measured, at one commit** (the starting commit in a worktree under the
+scratchpad, `make`, `make mega`, `make emu`, against this tree before
+committing):
+
+| kernel | resident | `.boot2` (map) | `.ovl` | `.boot3` | KERNEL.SYS | SPL_RESIDENT | head | canary |
+|---|---:|---:|---:|---:|---|---:|---:|---|
+| kern_big | 96,768, +0 | 4,456, +0 | 3,161 | 4,746 | 87,248 (171 sectors), +0 | 5 | 9 | file sector 57 (22,528), unchanged |
+| kern_emu | +0 | 4,572, +0 | 3,161 | 4,747 | 87,904 (172), +0 | 5 | 9 | 57 (22,016), unchanged |
+| kern_small | 58,880, +0 | 3,463, +0 (7 immediates) | 1,474 | 1,441 | 55,408 -> **55,136** (109 -> **108**) | 5 | **5** | **33** (11,264), was 57 |
+| kern_mega | 62,976 (MEGA_RESIDENT), +0 | 4,248, +0 | 3,160 | 4,662 | 118,448 (232), +0 | 6 | 9 | 57 (22,016), unchanged |
+
+Every `kernsize` line is unchanged on all three budgeted kernels.
+**Byte-identical**: kernel.bin, kernel-full.bin, kernel.sys, boot.bin,
+boot360.bin, boot120.bin and boothd.bin on kern_big, kern_emu and kern_mega,
+and coldhma.sys; of all 34 images the starting commit built, every one but
+small360.img and small720.img - so this wave changes no shipped disk of
+kern_big, no apps/category/media/WIN16/ARCADE disk, and neither kern_mega disk
+nor emu.img. kern_small's kernel.bin differs in 7 bytes, all in the blob
+(the head and canary immediates); its packed tail grew by the four sectors the
+head gave it, and KERNEL.SYS lost a sector, so its two disks move behind it.
+`t_blobruns` is unchanged on every disk (small360/small720 8 either way).
+
+**Rows to name** for the single final pass: `canary`, `blobruns`, `image`,
+`diskverify` (fast, inside `make`); `resident` (soak, its `secs` re-measured
+at 9.5 for four kernels), `bootfloor`, `coldpic`, `buildmatrix` (the NOKZIP
+and knob arms of the generator; NOKZIP was built here into a private tree and
+chose 22,016), `kzboot`, `kzboot-off`, `smallboot`, `romsmall`, `splashbar`,
+`splashspin`, `cylrun`, `fddpage`, `megacz`, `pravetzboot` (soak); `small128`,
+`bootsmoke` (full).
+
+**Left undone, on purpose**: kern_big's lower head (deviation 1, the owner's
+or wave 4's); kern_small's on-demand small.img is still outside both the
+generator's and t_canary's set (areas/boot.md question 4).

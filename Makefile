@@ -896,9 +896,10 @@ endif
 # boundary and only goes wrong after it, so a canary in a run's FIRST half is
 # loaded correctly on exactly the machine it exists to catch.
 #
-# It is FILE SECTOR 57 today, on every kernel - KSIG_OFF below, whose last
-# paragraph says why - inside the 64KB the handoff's ES already names, and the
-# sum is the same for every geometry because KERNEL.SYS is one file.
+# Which sector is the BUILD's choice now, per arm (KSIGGEOM below and
+# tools/os88ksig.py: file sector 57 on kern_big at the 2026-11-08 build) -
+# inside the 64KB the handoff's ES already names, and the sum is the same for
+# every geometry of an arm because KERNEL.SYS is one file.
 # tests/suite.py's `canary` row is what keeps all of that true, walking the
 # runs the loader really cuts on every shipped system image.
 # Stage 2's size, read from the kernel's own constant so the two cannot
@@ -1046,7 +1047,37 @@ BOOT2_PAD  := $(shell echo $$(( $(BOOT2_SECS) * 512 )))
 # change to KZ_HEADSEC, R or the DMA cut, or a blob length change on ANY one
 # kernel turns the `canary` row red - that is the gate working, and the answer is to re-walk the band and
 # move KSIG_OFF (here and in boot/boot2.asm), not to loosen t_canary.
-KSIG_OFF := 22528
+#
+# **AND SO THE BUILD CHOOSES IT NOW** (the big review's boot-10, 2026-11-08).
+# Every paragraph above is a hand re-derivation, and the last one found the
+# band one sector wide: a number nobody can move without walking the runs
+# again is a number the build should walk the runs for. tools/os88ksig.py does
+# it, per build ARM, between the two KZIP passes: it walks the runs stage 2
+# cuts on every system disk the arm ships on (KSIGGEOM below - each one's
+# os88disk.py geometry, spc and fatcap included), with the arm's own blob,
+# plain head, packed length and R, and writes the LOWEST memory offset whose
+# sector is in the packed tail, read after a head flip in a run that began
+# before it on every disk, and distinct from both neighbours, into
+# $(BUILD)/ksig.inc - which boot/boot2.asm includes and KSIGDEF2 reads. If no
+# sector qualifies it FAILS THE BUILD rather than ship an inert canary. So the
+# per-arm arithmetic that used to follow BOOT2_SECS here (-512 on a knob,
+# kern_emu and kern_mega, +1024 on kern_small) is gone: each arm's band is its
+# OWN disks' intersection now, not every kernel's. t_canary stays the
+# independent second reader (SPEC.md 18.93.1). At this build it chooses file
+# sector 57 on kern_big, kern_emu and kern_mega - the same sector, so their
+# kernels are byte-identical across the change - and 33 on kern_small, whose
+# two disks share a band that starts twenty-four sectors sooner.
+#
+# KSIGGEOM: the shipped system disks of THIS arm, as `SIZE[:spc=N|:fatcap=N]`
+# exactly as their os88disk.py lines build them (kern_big's 360KB disk is
+# $(SYS360SPC)). A knob kernel ships on kern_big's four. The arm blocks
+# further down replace it for kern_small, kern_emu and kern_mega.
+KSIGGEOM := 360:spc=1 720 1200 1440
+# ...and the DIAGNOSTIC sectors' word, which is a different thing: KSIGDEF
+# below feeds only FLAT_PAYLOAD boot sectors, which never enter stage 2, so
+# their KSIG_OFF is inert (boot.asm assembles no compare) and stays the
+# literal it was, keeping those disks byte-identical.
+KSIG_FLAT := 22528
 #
 # A PAYLOAD SHORTER THAN THE OFFSET DEFINES NO KSIG AT ALL, and that is the
 # whole of this line's second job. It used to answer 0, and a fabricated zero is
@@ -1060,7 +1091,7 @@ KSIG_OFF := 22528
 # sector's own gate compiles no canary for it to need. The gate is the other
 # half of the same fence: KERNEL_SECTORS > KSIG_OFF/512, not > 32, so the
 # compare is only assembled when the sector it names was loaded.
-KSIGDEF = -DKSIG_OFF=$(KSIG_OFF) $$(python3 -c "import sys; d = open(sys.argv[1], 'rb').read(); o = $(KSIG_OFF); print('-DKSIG=%d' % int.from_bytes(d[o:o+2], 'little')) if len(d) > o + 1 else None" $(1))
+KSIGDEF = -DKSIG_OFF=$(KSIG_FLAT) $$(python3 -c "import sys; d = open(sys.argv[1], 'rb').read(); o = $(KSIG_FLAT); print('-DKSIG=%d' % int.from_bytes(d[o:o+2], 'little')) if len(d) > o + 1 else None" $(1))
 
 # ...and the KERNEL's, which needs its own because SPEC.md 2.9 put stage 2 in
 # front of the image - and which is not a WORD but the 16-bit SUM of the
@@ -1082,7 +1113,7 @@ KSIGDEF = -DKSIG_OFF=$(KSIG_OFF) $$(python3 -c "import sys; d = open(sys.argv[1]
 # it does not have. The refusal is two-sided: the message goes to stderr
 # and an option nasm rejects goes to stdout, because a failing `$(...)` on its
 # own does not fail the recipe - the sector would still assemble, canary-less.
-KSIGDEF2 = $$(python3 -c "import sys; d = open(sys.argv[1], 'rb').read(); o = $(KSIG_OFF) + $(BOOT2_PAD); print('-DKSIG=%d' % (sum(int.from_bytes(d[i:i+2], 'little') for i in range(o, o + 512, 2)) & 0xFFFF)) if len(d) >= o + 512 else (sys.stderr.write('KSIGDEF2: %s is %d bytes, shorter than KSIG_OFF + BOOT2_PAD + 512 = %d - no canary sector to sum\n' % (sys.argv[1], len(d), o + 512)), print('--KSIGDEF2-REFUSED-kernel-shorter-than-KSIG_OFF'))" $(1))
+KSIGDEF2 = $$(python3 -c "import re, sys; d = open(sys.argv[1], 'rb').read(); o = int(re.search(r'^KSIG_OFF[ \t]+equ[ \t]+([0-9]+)', open(sys.argv[2]).read(), re.M).group(1)) + $(BOOT2_PAD); print('-DKSIG=%d' % (sum(int.from_bytes(d[i:i+2], 'little') for i in range(o, o + 512, 2)) & 0xFFFF)) if len(d) >= o + 512 else (sys.stderr.write('KSIGDEF2: %s is %d bytes, shorter than KSIG_OFF + BOOT2_PAD + 512 = %d - no canary sector to sum\n' % (sys.argv[1], len(d), o + 512)), print('--KSIGDEF2-REFUSED-kernel-shorter-than-KSIG_OFF'))" $(1) $(BUILD)/ksig.inc)
 
 # ...and THE BLOB'S OWN CHECKSUM (SPEC.md 2.9.7). The kernel's load has had
 # 18.93.1's canary since the day a BIOS was caught flipping heads early; the
@@ -2245,10 +2276,9 @@ BOOT2_XSEC := 1
 endif
 # ...and A SECTOR MORE OF BLOB, kernel.asm's BOOT2_KNOBSEC: a knob kernel
 # ships nowhere, so its boot may read one sector more where a shipped one's
-# may not (SPEC.md 2.5.3.3). KSIG_OFF moves one memory sector DOWN with it
-# (22528 - 512 = 22016), so the canary stays on FILE sector 57 - boot/boot2.asm's
-# equ does the same under KERN_KNOB, and the shipped literal above is what
-# t_canary compares.
+# may not (SPEC.md 2.5.3.3). KSIG_OFF used to move one memory sector DOWN
+# with it here, by hand; tools/os88ksig.py chooses it for the blob each arm
+# HAS now (KSIGGEOM's paragraph).
 # kern_emu TOOK the same sector (SPEC.md 9.11.2.1) for vmm_boot_x until kernel
 # size pass 14 gave kern_big a thirteenth for VESA.DRV's attach: both fit
 # thirteen, so kern_emu was on the literal with kern_big - and the same pass's
@@ -2268,18 +2298,28 @@ endif
 ifneq ($(BOOT2_XSEC),)
 BOOT2_SECS := $(shell echo $$(( $(BOOT2_SECS) + 1 )))
 BOOT2_PAD  := $(shell echo $$(( $(BOOT2_SECS) * 512 )))
-KSIG_OFF   := $(shell echo $$(( $(KSIG_OFF) - 512 )))
 endif
 # ...and kern_small TWO SECTORS SHORTER than the literal: kernel.asm's
 # BOOT2_SMALLSEC. The twelfth sector is kern_big's boot copy of the adapter
 # switch and the thirteenth VESA.DRV's attach, and kern_small has no drv_boot to
-# carry either (kernel size passes 13 and 14), so it keeps the eleven it had,
-# and its KSIG_OFF sits two memory sectors higher (22528 + 1024 = 23552) so
-# the canary stays on file sector 57 with every other kernel.
+# carry either (kernel size passes 13 and 14), so it keeps the eleven it had.
 ifneq ($(KERN_SMALL),)
 BOOT2_SECS := $(shell echo $$(( $(BOOT2_SECS) - 2 )))
 BOOT2_PAD  := $(shell echo $$(( $(BOOT2_SECS) * 512 )))
-KSIG_OFF   := $(shell echo $$(( $(KSIG_OFF) + 1024 )))
+endif
+# ...AND EACH ARM'S CANARY IS WALKED OVER ITS OWN SHIPPED SYSTEM DISKS
+# (KSIGGEOM, SPEC.md 18.93.1): kern_small's small360/small720 at --fatcap 2,
+# kern_emu's emu.img at 1.44MB, kern_mega's mega.img and mega120.img. A knob
+# kernel keeps kern_big's four. small.img (1.44MB, on demand, not shipped) is
+# not in kern_small's set, as it is not in t_canary's.
+ifneq ($(KERN_SMALL),)
+KSIGGEOM := 360:fatcap=2 720:fatcap=2
+endif
+ifneq ($(KERN_EMU),)
+KSIGGEOM := 1440
+endif
+ifneq ($(KERN_MEGA),)
+KSIGGEOM := 1440 1200
 endif
 
 # EVERY KNOB IN $(KNOBS) IS IN THIS STAMP TOO, and the seven that were not are
@@ -2855,7 +2895,35 @@ KINC = -I kernel/ -I apps/ -I $(BUILD)/$(if $(filter-out $(BUILD),$(ICODIR)), -I
 # the overlay's blocks and the splash are assembled ahead of it, and the
 # numbers are fixed-width immediates) - so the bytes being packed are
 # identical in both passes, and $(BUILD)/kernel.kz.json records them.
-KZ_HEAD    := $(shell echo $$(( $(shell sed -n 's/^SPL_RESIDENT  *equ  *\([0-9][0-9]*\).*/\1/p' kernel/splash.inc) * 512 )))
+#
+# THE PLAIN HEAD IS THE RESIDENT WINDOW, LENGTHENED WHERE A LONGER ONE SAVES A
+# CALL (the big review's boot-4, BR-153). Its length was SPL_RESIDENT, sed'd
+# out of splash.inc, and SPL_RESIDENT was a hand rung four sectors bigger
+# than what it measures. kernel.asm's foot derives SPL_RESIDENT now, and the
+# head is max(SPL_RESIDENT, KZ_HEADMIN), read off pass 1's map in the recipe
+# (tools/os88ksig.py head) - so the head can never be SHORTER than the window
+# (the foot refuses that too) and is never longer than KZ_HEADMIN asks.
+#
+# KZ_HEADMIN IS A CALL-COUNT DECISION, NOT A SIZE ONE, and on kern_big it is 9
+# for one geometry. Taking kern_big's head from 9 to the window's 5 saves
+# ~400 bytes of KERNEL.SYS and moves stage 2's calls (t_blobruns' model, this
+# build's packed length; PREDICTED until os88boot measures it):
+#
+#   blob 13, head 9 -> 5   360KB 11 -> 12   720KB 11 -> 12   1.2MB 9 -> 9   1.44MB 8 -> 7
+#
+# A 9-sector head ends exactly on a cylinder on the two 9-sector disks, so the
+# packed tail starts on one; a 5-sector head restarts the tail 4 sectors short
+# of a cylinder and costs those disks a call after the bar (1.44MB gains one
+# BEFORE it, its head being one track run instead of two). 360KB is the
+# owner's 5150's geometry, so the trade is the owner's, and it is not this
+# change's: it stays 9 on kern_big, kern_emu, kern_mega and every knob. With
+# BOOT3-PLAN wave 4's 7-sector blob the same model gives 5 or 6 as the best
+# head on every kern_big disk (11, 11, 8, 7 against 9's 12, 12, 8, 7), so the
+# number to revisit is this one, with the blob, in that wave.
+#
+# kern_small takes the window outright (KZ_HEADMIN 0, below): on small360 and
+# small720 a 5-sector head costs no call at all (8 either way).
+KZ_HEADMIN := 9
 # ...and what an ASSEMBLER command line has to carry so a loader outside the
 # kernel gets pass 2's numbers. Expanded IN THE RECIPE, because
 # kernel.kz.json is written by a rule and does not exist when this file is
@@ -2866,8 +2934,14 @@ KZ_HEAD    := $(shell echo $$(( $(shell sed -n 's/^SPL_RESIDENT  *equ  *\([0-9][
 # being properties of a file that did not exist when the kernel was built.
 KZDEF2 = $(if $(KZIP),$$(python3 -c "import json;d=json.load(open('$(BUILD)/kernel.kz.json'));print('-DKZIP -DKZ_SECS=%d -DKZ_RPARA=%d -DKZ_HEADSEC=%d -DKZ_NBLK=%d'%(d['ksecs'],d['rpara'],d['headsecs'],d['nblk']))"))
 ifeq ($(NOKZIP),)
-KZDEF      := -DKZIP -DKZ_SECS=0 -DKZ_RPARA=0 -DKZ_NBLK=1 \
-              -DKZ_HEADSEC=$(shell echo $$(( $(KZ_HEAD) / 512 )))
+KZDEF      := -DKZIP -DKZ_SECS=0 -DKZ_RPARA=0 -DKZ_NBLK=1 -DKZ_HEADSEC=0
+endif
+# (KZ_HEADSEC is a PLACEHOLDER on pass 1 like the other three: the head's
+# length comes off pass 1's own map, so pass 1 cannot be told it. It reaches
+# only the loader's immediates, which the two-pass compare leaves out, and
+# kernel.asm's foot checks it against SPL_RESIDENT on pass 2.)
+ifneq ($(KERN_SMALL),)
+KZ_HEADMIN := 0
 endif
 
 # **THE FILE AND THE IMAGE ARE TWO NAMES NOW, ALWAYS** - `kernel.bin` is what
@@ -2887,12 +2961,18 @@ endif
 KERNNAME   := kernel.sys
 KERNFILE   := $(BUILD)/$(KERNNAME)
 
-$(BUILD)/kernel-full.bin: $(KERNEL_SRC) $(KERNEL_INC) $(ASSOCICO) $(FONTINC) $(BUILDINC) tools/os88ovlchk.py tools/os88cfx.py \
+$(BUILD)/kernel-full.bin: $(KERNEL_SRC) $(KERNEL_INC) $(ASSOCICO) $(FONTINC) $(BUILDINC) tools/os88ovlchk.py tools/os88cfx.py tools/os88ksig.py \
                           $(BUILD)/stiklib.bin | $(BUILD)
 ifeq ($(NOOVLCHK),)
 	@python3 tools/os88ovlchk.py
 else
 	@echo "os88ovlchk: NOT RUN (NOOVLCHK=1 - the caller states it ran it over this same source)"
+endif
+ifeq ($(KZIP),)
+	@python3 tools/os88ksig.py choose --blob $(BOOT2_PAD) $(addprefix --geom ,$(KSIGGEOM)) \
+	        --plain --inc $(BUILD)/ksig.inc
+else
+	@python3 tools/os88ksig.py seed --inc $(BUILD)/ksig.inc
 endif
 	$(NASM) -f bin -w+error $(KINC) $(VIDDEF) $(KZDEF) \
 	        --before "[map all $(BUILD)/kernel.map]" -o $@ $(KERNEL_SRC)
@@ -2917,12 +2997,17 @@ $(BUILD)/kernel.bin: $(BUILD)/kernel-full.bin tools/os88mod.py tools/os88lz.py $
 # moved a byte of `.text`, this is where it would say so rather than at a
 # customer's boot.
 $(BUILD)/kernel.sys: $(BUILD)/kernel.bin tools/os88kz.py tools/os88lz.py \
-                     tools/os88mod.py tools/os88cfx.py
+                     tools/os88mod.py tools/os88cfx.py tools/os88ksig.py
 ifeq ($(KZIP),)
-	@cp $< $@ && rm -f $(BUILD)/kernel.kz.json
+	@cp $< $@ && rm -f $(BUILD)/kernel.kz.json && \
+	 python3 tools/os88ksig.py verify --blob $(BOOT2_PAD) $(addprefix --geom ,$(KSIGGEOM)) \
+	        --plain --file $@ --inc $(BUILD)/ksig.inc
 else
-	@KZD=$$(python3 tools/os88kz.py $(BUILD)/kernel.bin -o $(BUILD)/kernel.kz1 \
-	          --blob $(BOOT2_PAD) --head $(KZ_HEAD) --defines) && \
+	@KZH=$$(python3 tools/os88ksig.py head --map $(BUILD)/kernel.map --min $(KZ_HEADMIN)) && \
+	 KZD=$$(python3 tools/os88kz.py $(BUILD)/kernel.bin -o $(BUILD)/kernel.kz1 \
+	          --blob $(BOOT2_PAD) --head $$KZH --defines) && \
+	 python3 tools/os88ksig.py choose --blob $(BOOT2_PAD) $(addprefix --geom ,$(KSIGGEOM)) \
+	        --kz "$$KZD" --file $(BUILD)/kernel.kz1 --inc $(BUILD)/ksig.inc && \
 	 echo "os88kz: pass 2 with $$KZD" && \
 	 $(NASM) -f bin -w+error $(KINC) $(VIDDEF) -DKZIP $$KZD \
 	        --before "[map all $(BUILD)/kernel.map]" \
@@ -2932,7 +3017,9 @@ else
 	 python3 tools/os88mod.py $(BUILD)/kernel-full.bin -k $(BUILD)/kernel.bin \
 	        $(KMODARGS) --build $(BUILDNUM) >/dev/null && \
 	 python3 tools/os88kz.py $(BUILD)/kernel.bin -o $@ --blob $(BOOT2_PAD) \
-	        --head $(KZ_HEAD) --json $(BUILD)/kernel.kz.json
+	        --head $$KZH --json $(BUILD)/kernel.kz.json && \
+	 python3 tools/os88ksig.py verify --blob $(BOOT2_PAD) $(addprefix --geom ,$(KSIGGEOM)) \
+	        --json $(BUILD)/kernel.kz.json --file $@ --inc $(BUILD)/ksig.inc
 	@cmp -s -i $(BOOT2_PAD):$(BOOT2_PAD) $(BUILD)/kernel.kz1 $@ || { \
 	  echo "os88kz: the two passes packed DIFFERENT bytes - a -D reached past .boot2"; \
 	  exit 1; }
@@ -2994,7 +3081,8 @@ $(KMODS) $(BIGMODS) $(FSCKMOD): $(BUILD)/kernel.bin ;
 # kernel at build time and assemble the count in. Reading exactly what exists
 # means a short kernel never waits on phantom sectors.
 # EVERY boot.asm rule depends on the MAKEFILE, and that is not tidiness. The
-# sector's KSIG_OFF, KSIG and KERNEL_SECTORS are injected on the command line
+# sector's KSIG (summed at the KSIG_OFF $(BUILD)/ksig.inc names) and
+# KERNEL_SECTORS are injected on the command line
 # and appear nowhere in boot/boot.asm, so moving the canary (SPEC.md 18.93.1)
 # left `make` looking at an up-to-date boot360.bin and shipping the OLD offset.
 # It reads exactly like the canary not working, and cost a test round to find.

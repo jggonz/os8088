@@ -977,7 +977,9 @@ kernel that takes it too** (§9.11.2.1): only an emulator can boot it, so the
 argument is the knob's, and kern_big and kern_small stay on ten. `KSIG_OFF` moves one memory sector
 down with it in both places that type it (5632 → 5120), so the canary stays on
 FILE sector 21 at either length; the shipped literal is still what comes first
-on each line and what `t_canary` compares. It was taken for §39.30: the `VC`
+on each line and what `t_canary` compares. (Since the big review's boot-10
+nothing types it: `tools/os88ksig.py` chooses it for the blob each arm has,
+§18.93.1.) It was taken for §39.30: the `VC`
 key costs the overlay 10 bytes on every build, and `BOOTMARK=1`'s overlay had
 6 — the give below could not grow to cover it without losing the
 `BOOTMARK=1 DISKAL=1` pairing it already balances. The shipped images are
@@ -2359,6 +2361,30 @@ through `spl_gate`, which is at the far end of `.text`, so the **path** is not
 aboard even where the destination is. §2.5.2's register refuses `vid_detect` and
 `vid_init` on that, and without this line nothing in the tree would have said so.
 
+**And then it was derived** (the big review's boot-4, BR-153, 2026-11-08).
+The `%if` was the only thing tying the typed number to what it measured, so
+the number moved only when the `%if` fired, and the last raise left it at 9
+sectors against a need of 5. Two things changed. `spw_resident_end` moved
+below `[spl_live]`, `[blk_on]`, `[spl_busy]` and `[spl_quiet]`: the ticks
+store the first and third and read the last, and this section's own rule is
+that a first-tick store belongs in the head or the blob, never past it — the
+label stopped four bytes short of them. And `SPL_RESIDENT` is no longer typed:
+the foot of `kernel.asm` computes `SPL_RESIDENT equ (SPL_RES_SIZE + 511) / 512`
+from the label — **5 sectors on kern_big, kern_small and kern_emu, 6 on
+kern_mega** (whose `spw_resident_end` is 0xA13). It reaches only the NOKZIP
+arm's tick-gate immediate and the foot's `%if`s, so no byte of `.text` moves
+with it. A label measures where the CODE ends, not what the code NAMES, so two
+more fences cover the rest: an `%if` holds `[vid_cgamode]` — the one store
+`vid_setmode` makes on the first tick that is not re-made before anything reads
+it — inside the window, and `tests/unit/t_resident.py` walks the ticks' code
+(from `spl_tick` and `spl_isr`, through near calls, `BLOBCALL` and
+`spw_near`'s BP target) for every DS reference, failing one past the window or
+in `.bss` that `tests/tickrefs.txt` does not explain. Its first run found seven
+on kern_big (`vx_ep` and `vx_bpp` behind the VESA kind, and `cur_shchk`,
+`cur_disp`, `mouse_x`, `vid_rowtab` and `ui_post` behind `bvs_apply`'s stack
+test), all of them arms the first tick cannot take; the walk over-approximates
+on purpose.
+
 **The guard covers what the first tick RUNS, not what it WRITES, and the
 second half is its own rule.** Under a packed kernel (§2.9.13) everything past
 the head lies IN PLACE under its final address as an LZ4 stream until stage 2
@@ -3330,7 +3356,7 @@ unbounded decision below is worth about 200 ms of it.
 
 ```
     [ BOOT2_PAD    the blob       ]  stage 1 reads it, and it holds the loader
-    [ KZ_HEADSEC   the plain head ]  SPL_RESIDENT sectors
+    [ KZ_HEADSEC   the plain head ]  max(SPL_RESIDENT, KZ_HEADMIN) sectors
     [ ...          LZ4 blocks     ]  what stage 2 expands into where the head ends
 ```
 
@@ -3342,9 +3368,23 @@ modules, as every section is.
 **The head cannot be packed**, and that is §15's constraint rather than a
 choice: `spl_tick` far-calls `viddet.inc` while the rest of the kernel is
 still landing, so those sectors have to be at their linked addresses *during*
-the read. `SPL_RESIDENT` is exactly how many, so the head is exactly that.
-It costs one extra `int 13h` — the head does not end on a cylinder boundary —
-and it buys an animated loading screen through the long read.
+the read. `SPL_RESIDENT` is how many (§2.9.4: derived since the big review's
+boot-4), so the head is **at least** that — and the build reads its length
+off pass 1's own map (`tools/os88ksig.py head`, a 0 placeholder on pass 1 like
+the other KZ numbers), and `kernel.asm`'s foot refuses a pass 2 whose
+`KZ_HEADSEC` is shorter. It may be LONGER, and on kern_big it is: the
+Makefile's `KZ_HEADMIN` floor is **9 on kern_big, kern_emu, kern_mega and every
+knob, and 0 on kern_small**, because the head's length is a call-count decision
+and not a size one. A 9-sector head ends exactly on a cylinder on kern_big's
+two 9-sector disks, so the packed tail starts on one; the window's 5 would
+save ~400 bytes of KERNEL.SYS and cost those disks a stage-2 call after the
+bar (11 → 12, `t_blobruns`' model, PREDICTED) while saving 1.44MB one before
+it (8 → 7) — a trade on the owner's own 5150 geometry, left to the owner, and
+to BOOT3-PLAN wave 4, whose 7-sector blob makes 5 or 6 the best head on every
+kern_big disk. On kern_small the window costs no call (8 either way) and is
+taken: its head is 5 sectors, KERNEL.SYS 55,408 → 55,136 bytes (109 → 108
+sectors). The head costs one extra `int 13h` where it does not end on a run
+boundary, and it buys an animated loading screen through the long read.
 
 **No block produces more than `KZ_BLK` (61,440) bytes**, so the decoder never
 leaves a segment and needs none of §20.14.5's crossing machinery. Measured:
@@ -3384,7 +3424,7 @@ borrowed count redefines the geometry rather than shortening one read.
 **The first splash tick follows the head at once** (BOOT3-PLAN item E,
 2026-11-08): `xor ax,ax / mov dx, KZ_SECS − KZ_HEADSEC / call spl_tick`, 8
 bytes, after the pop and inside the tail loop's `%ifndef BOOT_NOSPLASH`. It
-needs exactly the `SPL_RESIDENT` sectors, `KZ_HEADSEC` *is* `SPL_RESIDENT`,
+needs the `SPL_RESIDENT` sectors, `KZ_HEADSEC` is at least `SPL_RESIDENT`,
 and nothing it may use is in the packed tail (which `kz_all` has not
 expanded), so the splash, the adapter probe and the bar at 0 come one tail
 run sooner on every disk. `spl_tick` clamps and stores whatever count it is
@@ -3427,10 +3467,21 @@ length — so the canary was **inert** on the 360KB and 720KB system disks of
 kern_big and kern_small for two months, and `t_canary`, walking runs from the
 data area, passed it.
 
-So the canary is **file sector 57** on every kernel (`KSIG_OFF` 22,528 on
-kern_big, 23,552 on kern_small, 22,016 on kern_emu, kern_mega and a knob
-build), in the packed tail, at LBA 71, 71, 86, 90, 69 and 69 on the six system
-disks. The Makefile sums the **packed** file's sector, and its memory address
+So BR-1 put the canary on **file sector 57** on every kernel, in the packed
+tail — and walked over all eight system images that was the ONLY sector live
+on every one. **Since the big review's boot-10 the build chooses it**:
+`tools/os88ksig.py` walks the runs stage 2 cuts on each build arm's own
+shipped system disks (the Makefile's `KSIGGEOM`), with that arm's blob, head,
+packed length and `R`, between the two KZIP passes, and writes the lowest
+memory offset whose sector is in the tail, read after a flip in a run that
+began before it on every one of them, and distinct from both neighbours, into
+`$(BUILD)/ksig.inc`, which `boot2.asm` includes; with none, the build fails.
+At the 2026-11-08 build it chooses file sector 57 on kern_big (`KSIG_OFF`
+22,528, LBA 71, 71, 86 and 90), kern_emu and kern_mega (22,016) — the sectors
+they had, so those kernels are byte-identical across the change — and **file
+sector 33 on kern_small** (`KSIG_OFF` 11,264, LBA 45 on both disks), whose two
+disks share a band from sector 33 that the old all-kernel intersection never
+let it use. The Makefile sums the **packed** file's sector, and its memory address
 is one immediate: tail sector `KSIG_OFF/512 − KZ_HEADSEC` lands at
 `KZ_HEADSEC·512 + R` plus that many sectors, which is `KSIG_OFF + R` —
 inside the 64KB the handoff's `ES` already names (40,960 on kern_big at the
@@ -3440,8 +3491,13 @@ assembly-time `%error`s fence the immediate instead — the sector must be in
 the tail, inside that 64KB, and inside what `KZ_SECS` reads. The check still
 runs where it always did: after the whole read and **before** the expansion.
 `tests/unit/t_canary.py` walks the runs the loader cuts, per kernel, off each
-disk's BPB and its kernel's `kernel.kz.json`, and finds the armed sector by
-the signature in each disk's own boot sector.
+disk's BPB and its kernel's `kernel.kz.json`, reads the `KSIG_OFF` each kernel
+was assembled with out of its own map, and checks the boot sector's signature
+names that sector — with its own walk, importing nothing from the generator,
+because BR-1 was a gate and a model agreeing while both were wrong. The head's
+run bound (BR-1's part 2, an open question with the owner) cannot move a tail
+run's start — the tail starts where the head ends — so either answer chooses
+the same sector, and `os88ksig.py choose` asserts that on every build.
 
 ##### 2.9.13.4 It is a TWO-PASS BUILD, and it has to be
 
@@ -17529,7 +17585,8 @@ bytes after. A sector more is what a knob build already takes
 machines that boot `kern_emu` are emulators, because its probe is 386 code
 (§9.11.7), so stage 1 reading one sector more costs no period machine
 anything. `KSIG_OFF` moves a memory sector down with it exactly as on a knob
-build, so the canary stays on file sector 21. Measured at build 907, kern_emu
+build, so the canary stays on file sector 21 (chosen per arm by
+`tools/os88ksig.py` since the big review's boot-10, §18.93.1). Measured at build 907, kern_emu
 against itself: **`.cold` -118, `.text` +0, `.boot2` +94** - 118 resident
 bytes back, and kern_big and kern_small byte-identical.
 
@@ -32653,14 +32710,19 @@ pinned offsets. kernel.asm also owns the tiny osapi helper routines
 
 **The splash is stage 2's (§2.9.4).** There is no fixed splash entry any
 more (0x0008..0x000B are free): stage 2 calls `spl_tick` **near**, after every
-run it reads, once at least `SPL_RESIDENT` (= 9) sectors of `.text` are in
-memory - under the packed kernel that is the plain head, so the first tick
+run it reads, once at least `SPL_RESIDENT` sectors of `.text` are in
+memory (5 on kern_big, kern_small and kern_emu, 6 on kern_mega, derived since
+the big review's boot-4) - under the packed kernel that is the plain head,
+which is at least that long, so the first tick
 comes the moment the head is aboard and before the first tail run (BOOT3-PLAN
 item E, §2.9.13.1), with AX = 0. Contract: AX = sectors loaded so far, DX = total sectors to load;
 `spl_tick` preserves every register, runs on stage 1's stack with DS =
 `KERNEL_SEG` and its own data `cs:`, and returns with `ret`. `SPL_RESIDENT`
-is defined once, in `splash.inc`; the Makefile reads it for `KZ_HEAD`, and
-the `%if` on `spw_resident_end` at the foot of `kernel.asm` checks it. The
+is **derived**, at the foot of `kernel.asm`, from `spw_resident_end` - which
+`viddet.inc` puts after the four bytes the ticks touch - and is typed nowhere;
+the Makefile reads it off pass 1's map for the plain head's length (§2.9.4,
+§2.9.13.1), and `tests/unit/t_resident.py` walks the ticks for the data they
+name past it. The
 kernel reaches the rest of the splash far, through `spl_fp`/`spl_fseg`
 (§2.9.5.1).
 
@@ -33007,7 +33069,8 @@ sections.
 `vid_pop8` - the eight-register epilogue `vid_setmode`, `vid_detect` and
 `vid_text` share - was converted like any other, and every adapter came up dead
 with no message. The three routines all run from the LOADING SCREEN, whose
-first tick is gated on `SPL_RESIDENT` sectors (§15, 9 = 4,608 bytes), and the
+first tick is gated on `SPL_RESIDENT` sectors (§15; 9 = 4,608 bytes then, 5
+derived since the big review's boot-4), and the
 `.text` ladder is at offset 0xC628 - eleven times past the window. The jump
 lands in RAM the floppy has not filled yet and the machine executes it. It is
 the same rule `vid_wipe`'s header states two routines down - *"a helper further
@@ -38962,8 +39025,9 @@ its own RAM; reading them back proves the write worked, which it always did. It
 says nothing about whether the BIOS consulted them. The only thing worth
 verifying is the **transfer**.
 
-So the build sums **file sector 57** of `KERNEL.SYS` - the 16-bit sum of its
-256 words - and injects it as `KSIG`. After the load the boot sector compares, and on a mismatch
+So the build sums **one chosen sector** of `KERNEL.SYS` (file sector 57 on
+kern_big at the 2026-11-08 build; `tools/os88ksig.py` chooses it per arm, as
+below) - the 16-bit sum of its 256 words - and injects it as `KSIG`. After the load the boot sector compares, and on a mismatch
 drops `run_max` to `SPT` and **does the whole load again**. A boot 2.2s slower
 beats a kernel that is quietly wrong.
 
@@ -39018,6 +39082,36 @@ margin. A BPB that moves, a change to
 `KZ_HEADSEC`, R or the DMA cut, or a blob length change on any one kernel turns
 the `canary` row red, and the answer is a re-walked band and a moved
 `KSIG_OFF`, never a looser gate.
+
+**SO THE BUILD RE-WALKS THE BAND ITSELF NOW** (the big review's boot-10,
+2026-11-08). Every move of `KSIG_OFF` was a hand re-derivation - against
+`BOOT2_SECS`, against the set of geometries, against the size of `.text`,
+against where KZIP restarted runs - and BOOT3-PLAN wave 4 moves every blob
+length at once. `tools/os88ksig.py` is the generator: per build ARM, between
+the two KZIP passes, it walks `read_run`'s cuts (cylinder, DMA page, what is
+wanted; the plain head at the track, the tail restarting behind it `R` up) on
+every shipped system disk of that arm - the Makefile's `KSIGGEOM`, each written
+as its `os88disk.py` line builds it (`360:spc=1 720 1200 1440` on kern_big and
+every knob, `360:fatcap=2 720:fatcap=2` on kern_small, `1440` on kern_emu,
+`1440 1200` on kern_mega) - and writes `KSIG_OFF equ N` into
+`$(BUILD)/ksig.inc` for the **lowest** sector that is in the packed tail
+(NOKZIP: the plain read), inside the handoff's 64KB, inside what stage 2 reads,
+read after a flip in a run that began before it on every one of those disks,
+and summing differently from both neighbours (on pass 1's packed tail, which
+is byte-identical to pass 2's). If none qualifies **it fails the build** rather
+than ship an inert canary. `boot/boot2.asm` includes the file; `KSIGDEF2` reads
+it for the boot sectors; any tool that re-assembles the kernel with
+`-I $(BUILD)/` gets the same number, as it gets `buildnum.inc`'s; a `verify`
+pass re-walks the FINAL file and records `ksig_off` in `kernel.kz.json`. Each
+arm's band is its own disks' intersection now rather than every kernel's, so
+at the 2026-11-08 build it is file sector 57 on kern_big, kern_emu and
+kern_mega (unchanged, byte-identical) and **33 on kern_small**. Checked ahead
+of wave 4 at its blob lengths (7 and 8 sectors) and both head lengths (5 and
+9): kern_big's band always contains 57 (and 21 at blob 7, head 5), kern_small's
+starts at 15, kern_mega's at 21 - so the generator has a sector at every
+length wave 4 will produce. `t_canary` remains the independent second reader
+(its own walk, the BPBs the images really carry, the `KSIG_OFF` each kernel's
+own map says it assembled).
 
 **What a missed canary costs is READS.** Cylinder runs are reads only
 (§18.91.3), so on a BIOS that flips at the wrong sector every crossing

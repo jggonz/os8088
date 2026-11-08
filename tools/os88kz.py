@@ -144,7 +144,7 @@ def main():
     ap.add_argument("--blob", type=int, required=True,
                     help="BOOT2_PAD: the bytes stage 1 already has")
     ap.add_argument("--head", type=int, required=True,
-                    help="SPL_RESIDENT * 512: the sectors the splash's first "
+                    help="the plain head, max(SPL_RESIDENT, KZ_HEADMIN) * 512: the sectors the splash's first "
                          "tick reaches, which stay plain")
     ap.add_argument("--margin", type=int, default=64,
                     help="KZ_MARGIN in boot/boot2.asm")

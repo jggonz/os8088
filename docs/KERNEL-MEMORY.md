@@ -593,7 +593,14 @@ rounded up to a whole 512 bytes (the alignment invariant below). **The whole
 of `.bss` is zero when `kmain` runs** - no instruction clears it; the load
 lands the padding - and it is NOT zero before then (under KZIP it holds the
 packed stream until `kz_all`), which is why the splash's state lives in the
-plain head of `.text`.
+plain head of `.text`. That head is `max(SPL_RESIDENT, KZ_HEADMIN)` sectors,
+and `SPL_RESIDENT` is DERIVED from `spw_resident_end` at the foot of
+`kernel.asm` (the big review's boot-4: 5 sectors on kern_big, kern_small and
+kern_emu, 6 on kern_mega) - so a first-tick store must land below that line,
+in the blob, or nowhere; `tests/unit/t_resident.py` walks the ticks for the
+ones that do not, against `tests/tickrefs.txt` (SPEC.md 2.9.4, 2.9.13.1).
+None of it is a resident byte: the head and the window are boot-time shapes
+of the same image.
 
 The file on disk runs past the image rung, and the section after the gap is
 declared with an explicit `start=` at the rung boundary - `.ovl` at `FAT_SEG`

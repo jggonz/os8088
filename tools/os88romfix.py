@@ -54,7 +54,7 @@ LADDER_COLD = "COLD_SEG    equ COLD_HOME\n"
 # The same flags the Makefile hands the shipped kernel, minus the KZ_* values
 # os88kz.py supplies on the second pass - they move no `.text`/`.cold` byte.
 KFLAGS = ["-DKZIP", "-DKZ_SECS=0", "-DKZ_RPARA=0", "-DKZ_NBLK=1",
-          "-DKZ_HEADSEC=9"]
+          "-DKZ_HEADSEC=0"]
 
 
 def fail(msg):
