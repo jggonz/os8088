@@ -6064,10 +6064,10 @@ SOAK = [
         "cold_entry passed all of them",
         needs=("marty",), serial=True),
     Row("tickzero", "soak", py("tests/tickzero.py"), 10.0,
-        "Does the boot ZERO [ticks]? It is .bss, nothing clears .bss, and "
+        "Does the boot ZERO [ticks]? It is .bss (the load's zero padding), and "
         "sched_init's one store is the whole of it - kernel size pass 5 "
-        "folded that store into a comment and no row saw it, because every "
-        "emulator here powers on with zeroed RAM. So this plants 0x8000 at "
+        "folded that store into a comment and no row saw it - the load's "
+        "padding zeroes [ticks] on any machine. So this plants 0x8000 at "
         "sched_init's entry and reads the count at the desktop. Broken on "
         "purpose (the store commented out) it FAILS",
         needs=("marty",)),

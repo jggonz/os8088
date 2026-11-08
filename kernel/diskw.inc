@@ -179,10 +179,10 @@ dskw_syms:  db '$', '%', 0x27, '-', '_', '@', '~', 0x60
 ; and dskw_mkbody is the only thing that ever sets it (SPEC.md 18.5).
 ;
 ; It lives HERE, in .text, and not in .bss - the same rule, and the same
-; hard-won reason, as [dsk_keepcwd] in disk.inc. -f bin gives .bss no image
-; bytes and nothing zeroes it, so an uninitialised .bss byte reads back as
-; whatever the machine left there - reliably NON-ZERO on the hardware this
-; was found on. In .bss this byte made dskw_commit stamp attribute 0x10
+; hard-won reason, as [dsk_keepcwd] in disk.inc. When this was written (before
+; 2026-08-08) .bss had no image bytes and read back as whatever the machine
+; left there - reliably NON-ZERO on the hardware this was found on. It
+; arrives zero now (SPEC.md 10). In .bss this byte made dskw_commit stamp attribute 0x10
 ; on every file the OS ever created - which every reader then refused as
 ; FERR_PROT (a directory is protected), so nothing could be read back or
 ; deleted, and every chain those writes allocated leaked. It is exactly the

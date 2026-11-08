@@ -88,9 +88,9 @@ MOU_VMROW   equ 6               ; [mou_port] once the backdoor has won. Serial
 ;
 ; In .text and not .bss, because -f bin zeroes nothing and this is read at
 ; boot - and, more sharply than for XMEM, because [vmm_on] is what stands
-; between an 8088 and a far call into an image that is not loaded. A .bss byte
-; survives an int 19h warm boot with the previous kernel's value in it; a .text
-; one is re-read from the disk.
+; between an 8088 and a far call into an image that is not loaded. A warm boot
+; re-reads either from the disk (int 19h is a full reload, and .bss comes back
+; as the image's zero padding); .text states the 0 where it is read.
 ; -----------------------------------------------------------------------------
 vmm_on      db 0                ; THE GATE. 1 = the image is attached and the
                                 ; backdoor won the contest. Every poll site

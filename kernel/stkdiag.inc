@@ -91,8 +91,8 @@ SD_ROWS    equ 19
 
 ; ---- state ------------------------------------------------------------------
 ; In .text with real initialisers, for dsk_dpt's reason (SPEC.md 18.92):
-; `-f bin` zeroes nothing and .bss is the previous session's bytes on a warm
-; restart, which for a MAXIMUM is the difference between a reading and a lie.
+; a MAXIMUM must start from a stated 0, and here it is stated in the image
+; (.bss would arrive zero too: every restart is int 19h and a full reload).
 sd_rom08:   dw 0                ; deepest the ROM's int 08h chain has gone, off
                                 ; sch_chstack's own sentinel. Refreshed by
                                 ; sd_paint so the 'SD' block's pointer stays

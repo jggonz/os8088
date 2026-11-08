@@ -32,7 +32,7 @@
 ; task-side writers are atomic with respect to the tick.
 ;
 ; Boot gate (SPEC.md 34.7, binding): int 08h is hooked seconds before
-; snd_init runs and nothing clears .bss at boot, so snd_tick's first
+; snd_init runs, when .bss holds only the load's zeros, so snd_tick's first
 ; instruction tests snd_live - a db 0 in initialised .text data, set to 1 as
 ; snd_init's LAST act. Every byte snd_tick can read is either initialised
 ; .text data or sits behind that gate.
@@ -559,7 +559,7 @@ snd_disp_set:
 ; clobbers: flags
 ;
 ; Saves the boot state of 61h bits 0-1, stores every .bss byte the layer
-; reads (nothing clears .bss at boot, SPEC.md 8) - it runs no probe: the
+; reads (stored, not assumed from the load's zero) - it runs no probe: the
 ; card probes are SOUND.DRV's attach (SPEC.md 51) - and sets snd_live LAST:
 ; the publish that arms snd_tick and the public
 ; entry points (SPEC.md 34.7, the 29.2 publish-last idiom).

@@ -2693,7 +2693,7 @@ hbm_res:
 ; It does not come back. The machine it hands over has no kernel in it.
 ; -----------------------------------------------------------------------------
 hbm_dosrun:
-    CSDO mov byte [CSEG hbm_dosheld], 0    ; module BSS is not zeroed: only hbm_wrimg
+    CSDO mov byte [CSEG hbm_dosheld], 0    ; stored, not assumed (a module that stays loaded keeps its bss): only hbm_wrimg
                                     ; below may say the locks are held
     ; --- 1. the record, where the poster left it (SPEC.md 96.40) -----------
     ; It is copied into the MODULE's own data and every read of it carries a

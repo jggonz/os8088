@@ -264,7 +264,8 @@ fsx_run:
     mov [sch_rpend], dx         ; is the fence's to prove, below, and the ISR
 .norate:                        ; calls through its record as wm_pkgcall
                                 ; does. The accumulator from 0 and nothing
-                                ; owed: .bss is NOT zeroed (SPEC.md 12.8.5.1).
+                                ; owed, stored per bracket rather than assumed
+                                ; (.bss is zero only at boot, SPEC.md 12.8.5.1).
                                 ; Nothing in flight is [sch_rbusy] = 0, which
                                 ; sched_init stores and every hook call
                                 ; balances
@@ -1486,7 +1487,7 @@ fsx_rprepf:
                                 ; parked, EXTD.DRV runs from a low copy and a
                                 ; lease is serviced - fsx_rextf, fsx_rserdn)
     pusha
-    xor ax, ax                  ; (`.lowbss` is not zeroed: .no reads these)
+    xor ax, ax                  ; (`.lowbss` is promised nothing: .no reads these)
     mov [ss:fsx_rlow], ax
     mov [ss:fsx_rsvc], ax
     call fsx_rmvck              ; AL = 0: the caller's movable claims' bases,

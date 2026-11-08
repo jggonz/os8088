@@ -569,17 +569,19 @@ constraint instead of borrowing the shipped kernel's.
 ### The image — `.text` + `.bss`
 
 One flat binary at `KERNEL_SEG:0000`, assembled `-f bin` with no linker.
-`.bss` follows `.text` immediately and is uninitialised by definition, so it
-costs nothing on the floppy and everything in RAM; the pair is charged
+`.bss` follows `.text` immediately and is `nobits`, so NASM emits nothing for
+it - the next section's `start=` pads its range with zeros, which KZIP packs
+to almost nothing on the floppy - and it costs everything in RAM; the pair is charged
 rounded up to a whole 512 bytes (the alignment invariant below). **The whole
-of `.bss` is zeroed before `kmain` runs**; `nasm -f bin` zeroes nothing, which
-is why anything read before that point (`[fdlg_win]`, the splash's state)
-lives in `.text` as a `dw 0`.
+of `.bss` is zero when `kmain` runs** - no instruction clears it; the load
+lands the padding - and it is NOT zero before then (under KZIP it holds the
+packed stream until `kz_all`), which is why the splash's state lives in the
+plain head of `.text`.
 
-The file on disk runs past the image rung, and the gap is where `.cold`
-lands: it is declared with an explicit `start=` at the rung boundary, so NASM
-emits the padding as zeros and stage 2's single contiguous read puts it on
-`COLD_SEG`. Expressing it as a section start is what makes it non-circular —
+The file on disk runs past the image rung, and the section after the gap is
+declared with an explicit `start=` at the rung boundary - `.ovl` at `FAT_SEG`
+on every shipped kernel, `.cold` at `COLD_SEG` under `NO_ROM_COLD` - so NASM
+emits the padding as zeros and the load (`kz_all` under KZIP) puts it there. Expressing it as a section start is what makes it non-circular —
 padding *inside* `.text` would grow `KTEXT_SIZE`, which grows `KIMG_PARA`,
 which grows the padding.
 

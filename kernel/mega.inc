@@ -15102,7 +15102,7 @@ mega_fkn    resb 1                  ; faults in it (0 = none ever)
 mega_fktm   resb 1                  ; 1 = its toast is owed
 mega_seg0   resw 1                  ; MEGA_SEG0's word for code outside .text
 mega_pm     resb 1                  ; 1 = protected mode, for .cold (KDATAR_C):
-                                    ; .lowbss is NOT zeroed, so kmain stores
+                                    ; nothing promises .lowbss, so kmain stores
                                     ; the 0 that is the answer before
                                     ; mega_enter, beside [mega_seg0]
 mega_ldte   resw 1                  ; [mega_ldtend] where any DS reads it: the

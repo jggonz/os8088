@@ -482,7 +482,7 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
 ; in:  nothing
 ; out: nothing
 ; clobbers: nothing (flags only)
-; .bss is not zeroed by the loader: every state variable is set here.
+; Every state variable is set here rather than assumed from .bss's zero.
 ; -----------------------------------------------------------------------------
 section .ovl                   ; BOTH kernels (SPEC.md 2.5.3.3): it was the
                                 ; blob on kern_small, and kmain_o needed that
@@ -687,8 +687,8 @@ fm_kinit_x:
     mov si, [fm_seed_nam]       ; the folder's name when the caller knew it
 %ifdef KERN_BIG
     call fm_pthseed             ; a KD_POOL block is REUSED, so the path is
-%endif                          ; cleared rather than assumed empty (.bss gets
-                                ; no image bytes and nothing zeroes it)
+%endif                          ; cleared rather than assumed empty (a reused
+                                ; block keeps its last owner's bytes)
     call fm_settitle
     and word [fm_tdirty], 0     ; app_launch's wm_show draws this window whole
                                 ; a moment from now, caption included - do not

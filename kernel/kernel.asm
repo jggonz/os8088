@@ -5217,8 +5217,8 @@ api_copyname:
     ret
 
 api_name:   times 13 db 0       ; staged names (.text, not .bss: the file
-api_name2:  times 13 db 0       ; slots are reachable before anything clears
-                                ; .bss, and -f bin clears nothing)
+api_name2:  times 13 db 0       ; slots are not reached before kmain, and
+                                ; by then .bss is zero as well)
 ; THE BLOB'S FAR POINTER, and there is exactly one of it (SPEC.md 2.9.6). The
 ; loading screen and the boot overlay are two sections of one image at one
 ; address - stage 2 copies the whole rung to HEAP_SEG and publishes the segment
@@ -5229,8 +5229,9 @@ api_name2:  times 13 db 0       ; slots are reachable before anything clears
 ;
 ; ONE DWORD AND A MACRO rather than a dword per entry: the segment half is
 ; written once, by stage 2, and the offset half per call - four bytes of .text
-; for the pointer instead of four per site. It is .text and not .bss for the
-; reason api_name is: `-f bin` zeroes nothing.
+; for the pointer instead of four per site. It is .text and not .bss because stage 2
+; writes the segment half BEFORE kz_all, into the plain head kz_all leaves
+; alone: a .bss word would be expanded over (SPEC.md 2.9.13).
 ;
 ; ZERO IS "NO BLOB", and it is the seed and the retirement value both. Every
 ; far call through this pair is behind that test - SPLCALL, OVLCALL(C),

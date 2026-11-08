@@ -233,8 +233,8 @@ gfx_dis         db 0            ; 1 = what is being drawn is a DISABLED
                                 ; anything else" a rule the tree has to keep
                                 ; by hand. Set it through gfx_pen_* and it
                                 ; cannot disagree with gfx_color.
-                                ; Initialized data, NOT .bss (nothing zeroes
-                                ; .bss), and gfx_unlock clears it for the
+                                ; Initialized data, NOT .bss (a choice:
+                                ; .bss arrives zero), and gfx_unlock clears it for the
                                 ; reason it clears the clip region: it is
                                 ; valid for exactly one lock hold.
 gfx_disink      db CBLACK       ; ...and WHICH DIRECTION a disabled GLYPH
@@ -608,9 +608,9 @@ gfx_blit_fd db 0                ; SPEC.md 39.14.7.2: 0 = gfx_blit4 resolves its
                                 ; zeroes nothing, and this is the one byte of
                                 ; gfx_blit4's block that is READ BEFORE IT IS
                                 ; WRITTEN - the gate sits above every store in
-                                ; the routine. In .bss it holds whatever the
-                                ; machine left there until the first blit, and
-                                ; a stale non-zero is a display INDEX handed
+                                ; the routine. In .bss it would be the load's
+                                ; 0 (SPEC.md 10); stated here, because a
+                                ; stale non-zero is a display INDEX handed
                                 ; to vid_ctx_act that indexes past a two-record
                                 ; array. gfx_blit_hk and gfx_blit_fst may stay
                                 ; in .bss because each call writes them first

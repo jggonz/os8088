@@ -1442,7 +1442,7 @@ inst_charge:
 
 ; inst_lkhd - 1 while fdlg_open launches the chooser: app_launch's caller
 ; holds the gfx lock already (SPEC.md 38.6). In .text with an initialiser,
-; because .bss is not zeroed at boot and app_launch reads it on every launch.
+; though .bss would arrive 0 too (SPEC.md 10); app_launch reads it on every launch.
 inst_lkhd:  db 0
 
 ; -----------------------------------------------------------------------------

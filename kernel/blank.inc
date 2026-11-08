@@ -118,7 +118,7 @@ SSV_BUSY    equ 4               ; may your image be freed? Out: CF = 1 = no,
 ; -----------------------------------------------------------------------------
 ; State. In .text with real initialisers rather than in .bss, and here that is
 ; not the usual caution - .bss does arrive zeroed (kernel.asm: the image's gap
-; to COLD_START is emitted as zeros and stage 2's one contiguous read
+; to OVL_START, COLD_START on NO_ROM_COLD, is emitted as zeros and the load
 ; lands them), and it costs the same image bytes either way, because the rung
 ; KIMG_PARA rounds covers .text and .bss together.
 ;

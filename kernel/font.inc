@@ -1006,8 +1006,8 @@ font_ink:
 %ifdef GFX_VGA
 .vga:
     mov [font_dith], al         ; AL = 0 on the `jz` here: cleared on the VGA
-    jmp short .out              ; path too - the glyph loop reads it and .bss
-%endif                          ; is not zeroed by -f bin
+    jmp short .out              ; path too - the glyph loop reads it, so it
+%endif                          ; is stored on every path, not assumed
 %ifdef KERN_SMALL
     nop                         ; PARITY, never executed (kernel size pass
 %endif                          ; 13): font_ink's test and font_str leave font_run_x

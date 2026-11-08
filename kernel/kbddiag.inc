@@ -610,9 +610,9 @@ kbg_t3: db 'c tick f st>st 60 hd tl>tl key  is ir im x', 0
 kbg_t4: db '? .... . ..>.. .. .. ..>.. .... .. .. .. ..', 0
 kbg_t5: db '-', 0
 
-; .text and INITIALISED, not .bss: .bss is not zeroed (SPEC.md 12.8.5.1) and
-; a knob kernel's budget is not billed (docs/KERNEL-MEMORY.md), so the zeroes
-; are cheaper than an init routine and a call to it
+; .text and INITIALISED, not .bss. Either would be zero at boot (.bss is the
+; image's zero padding, SPEC.md 12.8.5.1), and a knob kernel's budget is not
+; billed (docs/KERNEL-MEMORY.md), so the placement costs nothing either way
 kbg_ring:   times KBG_N * KBG_REC db 0
 kbg_rec:    times KBG_REC db 0
 kbg_buf:    times KBG_W + 1 db 0

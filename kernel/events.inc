@@ -60,8 +60,8 @@ EVQ_MASK    equ (EVQ_RECSIZE * EVQ_CAP) - 1     ; byte-offset wrap mask (0x7F)
 ; EVT_WAKE records and left wm_wkq pointing at nothing.
 ;
 ; The three indices are `.bss` and .bss ARRIVES ZEROED: NASM emits the file
-; bytes between .text's end and .cold's start as padding, and stage 2's single
-; contiguous read lands that run over the whole of .bss (clip.inc's own data
+; bytes between .text's end and .ovl's start (.cold's on NO_ROM_COLD) as
+; padding, and the load (kz_all under KZIP) lands that run over all of .bss (clip.inc's own data
 ; block already rests on this, and it was checked on the built binary - the
 ; run is 0 non-zero bytes). So the boot image does the clearing.
 ;

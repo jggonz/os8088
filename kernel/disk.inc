@@ -1140,20 +1140,18 @@ dsk_nmax:    dw DSK_NENT         ; how many entries fit
 
 ; The current directory (SPEC.md 19.2) - the one disk_dir lists and the one
 ; every dskw_* name resolves inside. 0 = the root. These live HERE, in
-; .text, and not in .bss for a reason worth stating: -f bin gives .bss no
-; image bytes, so it boots as whatever the RAM held, and the very first
-; disk_mount reads [dsk_keepcwd] to decide whether to reset [dsk_cwd].
-; Left in .bss, one garbage byte at boot sends the mount walking a garbage
-; cluster chain and the volume lists two lines of noise.
+; .text, and not in .bss. The very first disk_mount reads [dsk_keepcwd] to
+; decide whether to reset [dsk_cwd]; when this was written .bss booted as
+; whatever the RAM held, and one garbage byte sent the mount walking a
+; garbage cluster chain. Since 2026-08-08 .bss arrives zero (SPEC.md 10).
 dsk_fatw0:   dw 0xFFFF           ; the FAT WINDOW (SPEC.md 18.8): the first
                                  ; resident FAT sector, 0xFFFF = none
 ; The per-volume FAT windows (SPEC.md 18.8.1/18.8.2). ALL THREE ARE .text
-; WITH REAL INITIALISERS, and that is load-bearing rather than tidy: -f bin
-; zeroes no .bss, dsk_fatw_pick reads dsk_fatwc as a SEGMENT, and volumes 0
-; and 1 are reached before anything could have written them. Garbage there
-; aims the FAT window at whatever paragraph the bytes happen to name. It has
-; never bitten because a cold machine's RAM is usually zero and only driver
-; volumes had claims - both of which stop being true below.
+; WITH REAL INITIALISERS, and that is load-bearing rather than tidy: dsk_fatww
+; rests at 0xFFFF, which .bss's zero cannot give, dsk_fatw_pick reads
+; dsk_fatwc as a SEGMENT, and volumes 0 and 1 are reached before anything
+; has written them. (Before 2026-08-08 .bss booted as RAM garbage, which
+; would have aimed the FAT window at whatever paragraph it named.)
 ; ADJACENT AND IN THIS ORDER: dsk_fatw_slot answers the first and reaches the
 ; second at +DVOL_MAX*2 and the third at +DVOL_MAX*4.
 dsk_fatww:   times DVOL_MAX dw 0xFFFF   ; the FAT sector each private window
@@ -7612,9 +7610,9 @@ dsk_rah_want:
                                 ; MEM_P_DIRW - mem_claim preserves it
 %endif
     call dsk_rah_flush          ; ...and it holds nothing yet. THE ONLY place
-                                ; that is established: .bss arrives at whatever
-                                ; -f bin left there, and dsk_rah_serve would
-                                ; read it as chunks over random LBAs. It clears
+                                ; that is established: the table is not
+                                ; trusted to arrive empty, and dsk_rah_serve
+                                ; would read stale records as chunks. It clears
                                 ; all DSK_RAH_RUNS records and not just the
                                 ; live ones, which is what makes every scan
                                 ; below safe at any width (18.95.5)

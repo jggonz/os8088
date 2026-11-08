@@ -293,8 +293,8 @@ menu_init:
     push ax
     push bx
     push dx
-    mov word [menu_bdirty], 0x0101 ; [menu_bovr] too. .bss is not zeroed at
-                                ; boot (-f bin), and the
+    mov word [menu_bdirty], 0x0101 ; [menu_bovr] too. Both rest at 1, which
+                                ; .bss's load-time 0 is not, and the
                                 ; furniture has never been drawn: menu_force's
                                 ; whole body, and the second store is the one
                                 ; this routine used to make before calling it

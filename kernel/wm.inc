@@ -528,7 +528,7 @@ wm_init:
     mov cx, wm_clask + 2 - wm_zrun  ; ...through wm_clreq/wm_clask
     rep stosb                   ; in .bss. THE NEST STACK IS IN THE RUN
                                 ; (SPEC.md 66.6.1). .bss arrives zeroed (SPEC.md
-                                ; 10 - the image's .text/.cold gap is zero
+                                ; 10 - the image's .text/.ovl gap is zero
                                 ; padding), so this is a backstop that costs no
                                 ; resident byte (blob or .ovl): a stale
                                 ; [wm_pkgd] past WM_PKGD_MAX would pin every

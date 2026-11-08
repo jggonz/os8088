@@ -93,11 +93,11 @@ fdlg_s_media:  db 'MEDIA', 0    ; SPEC.md 38.10's default folder
 ; fdlg_win - the chooser's window, 0 = none, 0FFFFh = being launched, AND the
 ; modal gate (SPEC.md 38.2). fdlg_blk - its fm_pool block, 0 = none.
 ;
-; Both live HERE, in .text with an initialiser, and not in .bss: `-f bin`
-; gives .bss no image bytes and nothing zeroes it at boot, and fdlg_grab
-; reads the first on the very first mouse press the machine ever sees, while
-; fm_layout reads the second (through fdlg_hook) on the very first Disk
-; window paint. As garbage either one is a chooser that does not exist.
+; Both live HERE, in .text with an initialiser, and not in .bss - a choice,
+; since .bss arrives zero (SPEC.md 10): fdlg_grab reads the first on the very
+; first mouse press the machine ever sees, while fm_layout reads the second
+; (through fdlg_hook) on the very first Disk window paint, and a non-zero in
+; either one is a chooser that does not exist.
 ; -----------------------------------------------------------------------------
 fdlg_win:   dw 0
 fdlg_blk:   dw 0

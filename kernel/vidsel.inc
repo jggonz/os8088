@@ -41,8 +41,8 @@ VID_A_VESA  equ 1 << VID_VESA    ; bit 4. Lit by vx_boot_x when VESA.DRV
 VID_L_RIGHT equ 0
 VID_L_BELOW equ 1
 
-; .text and not .bss, like everything else that has to be right before the
-; kernel has zeroed anything: -f bin zeroes nothing at all.
+; .text and not .bss, though .bss would serve: vid_probe_avail ORs bits into
+; it from kmain, and by then .bss is the image's zero padding (SPEC.md 10).
 vid_avail   db 0                ; which adapters answered (VID_A_*). Probed
                                 ; ONCE, at boot, and cached - vid_switch moves
                                 ; [vid_kind], so re-deriving it later would
@@ -1384,13 +1384,11 @@ VID_CTX_SZ   equ VID_CTX_W*2+5
 %error "vid_seg..vid_tseg is not VID_CTX_W contiguous words - see viddet.inc"
 %endif
 
-; .text with REAL INITIALISERS, not .bss, and for the reason vid_avail above
-; is: -f bin zeroes nothing at all, so a byte in .bss holds whatever the
-; machine left there until something writes it. These two are read before
-; vid_ctx_init runs on any path that ever grows one - and a garbage [vid_ndisp]
-; is a loop bound, while a garbage [vid_cur] is a display index that indexes
-; past the array. cur_sptr and dsk_fatwc are the two this tree has already been
-; caught by.
+; .text with REAL INITIALISERS, not .bss: [vid_ndisp] rests at 1, which
+; .bss's load-time zero cannot give, and both are read before vid_ctx_init
+; runs on any path that ever grows one - [vid_ndisp] is a loop bound and
+; [vid_cur] a display index into the array. cur_sptr and dsk_fatwc's
+; 0xFFFF neighbours are the non-zero defaults this tree has been caught by.
 vid_ndisp   db 1                ; displays the kernel has brought up. 1 for
                                 ; ever on a machine with one card
 vid_cur     db 0                ; which display's geometry is in the live block

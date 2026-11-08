@@ -124,8 +124,9 @@ its own pre-empted instance and updating live while the user types or drags.
    code with DS=0x40 or the ROM's DS. Any routine callable from an ISR must
    preserve the caller's interrupt flag: guard critical sections with
    `pushf`/`cli` … `popf`, never `cli` … `sti`.
-4. **Large buffers go in `section .bss`** (NASM `-f bin` allocates .bss after
-   the file image; it costs no disk space). Code and small data stay inline.
+4. **Large buffers go in `section .bss`** (`nobits`: NASM emits nothing for
+   it, but the next section's `start=` pads the file over its range with
+   zeros, which KZIP packs to almost nothing - §2.5, §10). Code and small data stay inline.
    NASM's section state persists across `%include`: any .inc that opens
    `section .bss` must switch back with an explicit `section .text` before
    the file ends, or the next include's code silently lands in .bss.
@@ -2590,10 +2591,9 @@ machine.**
 What that cost is the display block above `.load`, entered on every boot rather
 than only when a record was read — so a machine with **no `SYSTEM.CFG`** applies
 `CFG_VID`, and on `kern_big` §39.19's `CFG_VDM`/`CFG_VDL`, out of a `drv_cfg`
-that nothing has deserialised into. `drv_cfg` is `.bss` and nothing zeroed
-`.bss`, so those bytes were the previous session's on a warm restart and the
-machine's power-on RAM on a cold one (`drv_init` zeroes the struct now, for
-§39.30's `VC` byte). It has been carried by two accidents:
+that nothing has deserialised into. `drv_cfg` is `.bss`, so those bytes
+were the load's zero padding on every boot, cold or warm (`drv_init` zeroes
+the struct now, for §39.30's `VC` byte). It has been carried by two accidents:
 `CFG_VID` = 0 is `VID_VGA`, which `vid_switch` refuses on the adapters the
 target machine has, and the two arrangement bytes are range-checked before they
 are stored. Neither is a reason — the refusal is `vid_switch`'s job and this
@@ -12914,7 +12914,7 @@ round-robin over the same task table:
 SCH_WD_TICKS equ 18       ; ~1s at 18.2065 Hz: forced switch after this many
                           ; held ticks in cooperative mode
 
-; .bss (sched_init stores 0 to all three — nothing clears .bss at boot, §8)
+; .bss (sched_init stores 0 to all three rather than assume the load's zero, §8)
 sch_coop     resb 1       ; 0 = pre-emptive, 1 = cooperative
 sch_hold     resb 1       ; ticks of watchdog budget LEFT to the running task:
                           ; armed to SCH_WD_TICKS on every entry to sch_switch
@@ -12958,7 +12958,7 @@ it runs on every tick, in both modes, even while floppy reads hold
 and the full frame saved (AX/CX/DX free); never touches the switch path;
 never EOIs. Its first instruction tests `[snd_live]` (initialised `.text`
 data, §34.7) and returns while it is clear — int 08h is hooked seconds
-before `snd_init` runs and nothing clears `.bss` at boot (§8). Idle cost
+before `snd_init` runs, while `.bss` holds only the load's zeros (§8, §10). Idle cost
 once live is ~30 cycles; the worst case is a tone expiry, which is four
 `out`s to silence the speaker.
 
@@ -18118,8 +18118,12 @@ destination; CF=1 if empty; same `pushf`/`cli` … `popf` guard).
 **There is no `evq_init`, and its absence is load-bearing rather than
 incidental.** It zeroed head, tail and count under the same guard, and it was
 deleted in kernel size pass 3 on two facts: the three indices are `.bss` and
-**`.bss` arrives zeroed** (the boot image's `.text`/`.cold` gap is emitted as
-padding and stage 2's one contiguous read lands it over the whole section), and
+**`.bss` arrives zeroed** (the image's `.text` is followed in the file by a
+section placed with an explicit `start=` past the image rung - `.ovl` at
+`FAT_SEG` on every shipped kernel, `.cold` under `NO_ROM_COLD` - so NASM emits
+the `.bss` range as zero padding, and the load lands it before `kmain`:
+`kz_all`'s expansion under KZIP, `kz_hd` on a hard disk, stage 2's read on
+`NOKZIP`), and
 nothing can push before the point in `kmain` the one surviving call sat at —
 the three producers are `mou_isr`, `kbm_post` and `wm_wake`, and `mouse_init`,
 the keyboard hook and the window manager all come later. Its *second* caller
@@ -26320,8 +26324,8 @@ reached the field twice without one instruction of it ever having run.
 operation calls it because the bar *might* have changed owner. `[menu_bdirty]`
 is the gate: `menu_relayout` is the single rebuild point and sets it, which
 covers every ownership change including the one `menu_check` makes at the top
-of `menu_draw_bar` itself. `menu_init` sets it too, because `-f bin` zeroes no
-`.bss`.
+of `menu_draw_bar` itself. `menu_init` sets it too, because its resting value is
+non-zero and `.bss` arrives zero.
 
 **What the flag gates is the MENUS SEGMENT and nothing else** — see §12.9. The
 bar is three independently-drawn segments (logo, menus, clock) and a fourth
@@ -27112,9 +27116,9 @@ Five things hold it up.
   It is `pushf` / `cmp byte [fpg_on], 0` / `je` on the disk path for the life
   of the machine, the same ~13us against a ~24 ms sector that `spl_step`
   settled for (§15.3). All of its state is in `.text` with real
-  initialisers, **not `.bss`** — `-f bin` zeroes nothing, `drv_boot` reads
-  the disk before any init routine could run, and a garbage `[fpg_on]` would
-  have the widget drawing into the splash.
+  initialisers, **not `.bss`** — `drv_boot` reads the disk before any init
+  routine could run, and the 0 is stated where it is read (`.bss` would give
+  the same 0 - the load's zero padding, §10).
 - **The arrow comes off before anything is drawn.** `gfx_lock` only
   *promises* the hide (§7.1.4), so `fpg_begin` spends the promise with
   `cur_unlazy`; it is one-way within a hold, so `fpg_step` inherits it for
@@ -28480,7 +28484,7 @@ Loop forever:
    would take a lock it already holds and hang the machine dead — no beep,
    no watchdog, no recovery. `[ui_pcmd]` lives in `.text` with a `dw 0`
    initialiser, not in `.bss`, because ui_task reads it on its very first
-   pass and `-f bin` gives `.bss` no image bytes (§1). Rapid posts coalesce,
+   pass (`.bss` would read 0 there too: the image's zero padding, §10). Rapid posts coalesce,
    exactly like `[inst_launch]`; nothing in the system posts two.
 
    Deferring is also what keeps the billing honest. `ui_dispatch`'s `.app`
@@ -30660,9 +30664,9 @@ per step. The Control Panel's close coalesces harder still — once a session
 rather than once a tick — and it is a moment the user chose, so the drain and
 its `cmp`/`mov`/`call` left this ladder with the write half they called.
 
-`[ui_lastt]` needs no initialiser. `-f bin` zeroes no `.bss`, but this is an
-**equality** test against a free-running word: garbage costs one extra pass and
-nothing else, there is no ordering to get wrong and no wrap to survive.
+`[ui_lastt]` needs no initialiser. `.bss` arrives zero, and this is an
+**equality** test against a free-running word: any stale value costs one extra
+pass and nothing else, there is no ordering to get wrong and no wrap to survive.
 
 ### 13.11 A package's RIGHT click — `W_ONRCLICK` (API 0x0380)
 
@@ -35300,9 +35304,10 @@ path stack and no memory of how the user got here: the disk records it.
 `[dsk_keepcwd]` (§19.2). It is the flag `dskw_commit` reads to stamp
 `ATTR_DIRECTORY` instead of `ARCHIVE`, and `dskw_mkbody` is the only thing
 that ever *sets* it, so on a system where no folder has yet been created it
-is only ever read. `-f bin` gives `.bss` no image bytes and nothing zeroes
-it, so an uninitialised `.bss` byte reads back as whatever the machine left
-there — reliably **non-zero** on the hardware this was found on. Left
+is only ever read. When this was found (2026-08-04) `.bss` had no image bytes
+and nothing zeroed it, so an uninitialised `.bss` byte read back as whatever
+the machine left there — reliably **non-zero** on that hardware. It arrives
+zero now (§10). Left
 uninitialised, this byte made every file the OS created carry attribute 0x10;
 every reader then refused it as `FERR_PROT` (a directory is protected), so
 nothing could be read back or deleted and every chain those writes
@@ -42450,11 +42455,10 @@ subdirectory is an ordinary cluster chain.
 | `[dsk_keepcwd]` | byte: 1 while a `disk_mount` is being made *on behalf of* navigation or of `dskw_sync`, and only then. A mount with it clear resets `[dsk_cwd]` to 0. |
 
 They live in `.text` with initialisers and **not** in `.bss` for a reason
-worth restating: `-f bin` gives `.bss` no image bytes, so it boots as
-whatever the RAM held, and the very first `disk_mount` reads
-`[dsk_keepcwd]` to decide whether to reset `[dsk_cwd]`. Left in `.bss`, one
-garbage byte at boot sends the mount walking a garbage cluster chain and
-the volume lists two lines of noise. (This is the same trap `dsk_cwd`'s
+worth restating: the very first `disk_mount` reads `[dsk_keepcwd]` to
+decide whether to reset `[dsk_cwd]`, and when this was written `.bss` booted
+as whatever the RAM held - one garbage byte sent the mount walking a garbage
+cluster chain. Since 2026-08-08 `.bss` arrives zero (§10). (This is the same trap `dsk_cwd`'s
 comment in `disk.inc` records; it has cost a debug cycle once already.)
 
 **One walker.** Every directory scan in the kernel — the mount listing
@@ -54574,8 +54578,8 @@ before it looks at what was clicked, so a click on the scroll bar arrives with
 `[fm_2up]` is written by `fm_draw_status` on **every** call, from `fm_2line`
 rather than at the three branches that draw a line — so a fourth two-line
 prompt is a row in `fm_2line` and nothing else — and it lives in `.text` with
-a real initialiser, because `.bss` is not zeroed and `fm_status_only` reads it
-before anything has written one.
+a real initialiser, although `.bss` would arrive zero and `fm_status_only`
+reads it before anything has written one.
 
 **Measured, same machine, CGA**, against the same window with the prompt
 never opened: with the question up, **544** differing pixels in its own band;
@@ -72671,7 +72675,7 @@ the ring is freed at Stop.
 
 - **The `snd_live` boot-gate rule (binding).** `sched_init` hooks int 08h
   as kmain's second act; `snd_init` runs seconds of ticks later, and
-  nothing clears `.bss` at boot (§8). So `snd_tick`'s first instruction
+  until then `.bss` holds only the load's zeros (§8, §10). So `snd_tick`'s first instruction
   tests `snd_live` — a `db 0` in initialised `.text` data (the
   `osapi_seed` idiom of §15), set to 1 as `snd_init`'s **last** act
   (publish-last) — and returns while it is clear. **Every byte `snd_tick`
@@ -76692,8 +76696,9 @@ built, and `VID_ROWTAB` after, so *"is there a table"* and *"is this row in
 it"* are the same compare. Two guards cost 51 cycles on every miss; one costs
 38, and a miss is the common case on a 348-row Hercules.
 
-It lives in `.text` with a real initialiser, not `.bss`: `-f bin` zeroes
-nothing and `gfx_rowbase` is called by the **splash**, which draws while
+It lives in `.text` with a real initialiser, not `.bss`: the load has not
+landed `.bss`'s zeros yet (under KZIP it holds the packed stream) and
+`gfx_rowbase` is called by the **splash**, which draws while
 `vid_apply` has not run and the table holds whatever the last boot left in that
 RAM. And it is **cleared at the top of `vid_apply`'s geometry block** and set
 only after the build — in between, the live geometry and the table disagree,
@@ -77566,8 +77571,8 @@ Each record carries the display's origin in the virtual desktop at
 Five things are load-bearing:
 
 - **`[vid_ndisp]` and `[vid_cur]` are in `.text` with real initialisers.**
-  `-f bin` zeroes nothing, and a garbage `[vid_ndisp]` is a loop bound while a
-  garbage `[vid_cur]` is an index past the array. `cur_sptr` and `dsk_fatwc`
+  `[vid_ndisp]` rests at 1, which `.bss`'s load-time zero cannot give, and it is
+  a loop bound while `[vid_cur]` is an index into the array. `cur_sptr` and `dsk_fatwc`
   are the two this tree has already been caught by. The records themselves are
   `.bss` — written before they are read.
 - **`vid_ctx_init` is called from `kmain`, and never from `vid_apply`.**
@@ -120366,10 +120371,10 @@ move a region on a kernel-initiated claim and never on any other. Recording
 claim pack package B's region. Past that depth the answer is *pin everything*
 rather than a guess.
 
-**And the stack has to START empty.** `-f bin` zeroes no `.bss` and `int 19h`
-zeroes none either, so a warm boot inherits the *previous* kernel's `[wm_pkgd]`
-— past `WM_PKGD_MAX` that pins every region and image for the rest of the
-session, below it the walk compares garbage segments. `wm_init` zeroes
+**And the stack has to START empty.** It does: `int 19h` is a full reload, so
+a warm boot lands the image's zero padding over `[wm_pkgd]` (§10) — and a
+stale depth past `WM_PKGD_MAX` would pin every region and image for the rest
+of the session, below it the walk would compare garbage segments. `wm_init` zeroes
 `wm_pkgd` and `wm_pkgs` in the same `rep stosb` as the window table, which is
 why they are contiguous with it and first.
 
@@ -135437,7 +135442,7 @@ here that is easy to get wrong. The settings map names the byte in **every**
 build, so a kernel with no animation in it still carries the choice across
 `SYSTEM.CFG` untouched instead of dropping it: a user who turns the zoom off,
 boots `kern_small` once and comes back does not find it back on. It is `.text`
-with a real initialiser because `.bss` is not zeroed, and the default is **On**,
+with a real initialiser because the default is **On**, which `.bss`'s zero is not,
 which is what `elendilon` shipped.
 
 **On a build with no zoom the two rows are GREYED, not hidden** (§47 rule 3:
@@ -155354,9 +155359,9 @@ segment re-read.
 
 Two further things that attempt established, both cheap to get wrong again:
 
-- **a package's bss is NOT zero at load.** `-f bin` zeroes nothing and
-  nothing else does it either, so an added counter starts as whatever was
-  there. The first probe read a nesting depth of **52** and, in the same
+- **an added counter can read as garbage.** The loader zeroes the declared
+  bss (`ld_start` step 7, §21), so a counter outside it - or one read through
+  a stale segment, the trap above - starts as whatever was there. The first probe read a nesting depth of **52** and, in the same
   sample, a depth of 0 alongside "entered 2, exited 1" — arithmetically
   impossible, which is the only reason it was caught. A believable garbage
   value would have been read as a result. Zero any new field in the entry

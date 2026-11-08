@@ -478,7 +478,8 @@ VID_ROWTAB  equ 128
 ; when that display returns; see there for why the alternative - rebuilding, at
 ; 23.6 ms - is not affordable under a drawing primitive.
 ;
-; .text with a REAL initialiser, not .bss: -f bin zeroes nothing, and
+; .text with a REAL initialiser, not .bss: .bss is not zero until the load
+; ends (under KZIP it holds the packed stream until kz_all), and
 ; gfx_rowbase is called by the SPLASH - which draws while vid_apply has not run
 ; and the table is whatever the last boot left in that RAM. This zero is the
 ; only thing between that and a progress bar drawn at a random offset.

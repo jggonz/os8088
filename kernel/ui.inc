@@ -2640,8 +2640,8 @@ UI_LOC_N equ 2
 ; is the first menu command that can free that very record, so running it
 ; inline would write cycles into a slot that had just been released.
 ;
-; [ui_pcmd] lives in .text, not .bss: ui_task reads it on its first pass and
-; -f bin gives .bss no image bytes (the dsk_cwd lesson, SPEC.md 1).
+; [ui_pcmd] lives in .text, not .bss: ui_task reads it on its first pass,
+; though .bss would read 0 there too (SPEC.md 10: the image's zero padding).
 ; -----------------------------------------------------------------------------
 ; (ui_post_cmd's one caller was STIKMENU.DRV's stm_pick, which writes its two
 ; stores out now - kernel size pass 14. The contract above is unchanged: one
@@ -2990,7 +2990,7 @@ ui_tm_back:
                                 ; tail jump: CF is nobody's question here
 
 ui_tm_cwd:  dw 0                ; the directory and drive to go back to. In
-ui_tm_drv:  db 0                ; .text: -f bin zeroes no .bss, and A:'s root
+ui_tm_drv:  db 0                ; .text, though .bss would give the same 0: A:'s root
                                 ; is the right answer before the first load
 
 ui_s_tmttl:  db 'Task Manager', 0
@@ -3248,8 +3248,8 @@ ui_tclkw:   resw 1              ; the window it landed on (0 = none recorded):
 ui_post:    resb 1              ; SPEC.md 13.13: HAS ANYTHING BEEN POSTED? The
                                 ; OR of the fifteen deferred-work flags, set
                                 ; beside each of them and cleared before the
-                                ; walk. -f bin zeroes no .bss and it does not
-                                ; matter: garbage here costs one walk. A
+                                ; walk. It arrives 0 (SPEC.md 10), and a
+                                ; stray non-zero would cost one walk. A
                                 ; setter may `inc` it (four bytes against the
                                 ; store's five): only NON-ZERO is read, and the
                                 ; one way inc misses - exactly 256 posts

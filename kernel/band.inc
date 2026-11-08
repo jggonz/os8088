@@ -825,7 +825,7 @@ band_init:
     push ax
     push bx
     push dx
-    mov word [bnd_seg], 0       ; -f bin: .bss is not zeroed, and a band opened
+    mov word [bnd_seg], 0       ; stored rather than assumed, and a band opened
     mov byte [bnd_pol], 0       ; before any band_pen_x must still be legible
     mov ax, BAND_KB
     mov bx, MEM_K_BAND

@@ -6208,7 +6208,7 @@ cur_mvt     dw 0                ; [ticks] at the last movement packet (SPEC.md
 cur_sptr    dw cur_save         ; -> whichever save buffer is live. In .text
                                 ; with a REAL initialiser, not .bss: .bss
                                 ; arrives zeroed (kernel.asm - NASM pads the
-                                ; gap to COLD_START), and 0 here is a pointer
+                                ; gap to OVL_START), and 0 here is a pointer
                                 ; at the API jump table
 cur_tabp    dw cur_and          ; -> the live shape's white table (SPEC.md
                                 ; 7.2). In .text with a real initialiser, for
@@ -6273,10 +6273,9 @@ cur_inxfer   db 0                ; **THE CPU IS INSIDE AN int 13h** (SPEC.md
                                 ; arrow through a disk transfer that would
                                 ; otherwise freeze it. .text with a real
                                 ; initialiser, like cur_disp below and for its
-                                ; reason - -f bin zeroes nothing, and drv_boot
-                                ; reads the disk before any init routine of
-                                ; ours could run, so a garbage byte here would
-                                ; let IRQ4 draw during the splash
+                                ; reason - IRQ4 reads it from the moment the
+                                ; mouse is hooked, so its 0 is stated where it
+                                ; is read (a .bss byte would be the load's 0 too)
 %endif
 cur_dirty   db 0                ; set when the ISR could not move the cursor
 cur_drawn_x dw 0                ; where the cursor pixels actually are, in

@@ -1874,13 +1874,13 @@ drv_init_x:
                                 ; of five far calls to drv_svc_clear through
                                 ; a thunk that existed for it alone (kernel
                                 ; size pass 9: -4 resident, -12 .ovl). The
-                                ; SETTINGS start empty in the same run: -f bin
-                                ; zeroes no .bss, a garbage driver blob is one
+                                ; SETTINGS start empty in the same run, stated
+                                ; rather than assumed: a driver blob is one
                                 ; a driver would be entitled to believe
                                 ; (SPEC.md 51.9), and a key a SYSTEM.CFG has
                                 ; no record for and _map does not seed - 'VC',
-                                ; 'FD' - must read 0, not the last session's
-                                ; byte (SPEC.md 39.28)
+                                ; 'FD' - must read 0 (.bss arrives zero, and
+                                ; a restart reloads it - SPEC.md 39.28)
     pop es
     pop di
     xor cx, cx                  ; nothing is loaded on a cold boot, and .bss

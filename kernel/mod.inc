@@ -977,9 +977,10 @@ mod_drop:
 ; WHY IT EXISTS - AND NOT FOR THE REASON THIS COMMENT USED TO GIVE. It said
 ; ".bss arrives as whatever was in memory - `-f bin` zeroes nothing". That is
 ; false here and clip.inc's declaration block says so from the other end:
-; `.bss` is `nobits vfollows=.text` and `.cold`'s file position is padded past
-; it, so NASM emits at least KBSS_SIZE zero bytes and stage 2's one contiguous
-; read lands them. `.bss` IS zero at boot, which is precisely why clip.inc
+; `.bss` is `nobits vfollows=.text` and the next section's file position
+; (`.ovl`'s at FAT_SEG; `.cold`'s under NO_ROM_COLD) is padded past it, so NASM
+; emits at least KBSS_SIZE zero bytes and the load lands them (kz_all under
+; KZIP, stage 2's read on NOKZIP). `.bss` IS zero at boot, which is precisely why clip.inc
 ; needs no init entry point.
 ;
 ; What this routine is for is the OTHER thing: a slot's resting value is not
