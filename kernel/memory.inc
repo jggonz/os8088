@@ -5454,8 +5454,12 @@ osapi_mem_regrow_x:
     call mem_ishidx             ; a pool SELECTOR (mega_claimhf, OS88_HIGHMEM):
     jc .conv                    ; resized in the pool, the selector kept...
     call COLD_SEG:mega_claimregrowf
-    jc .move
+    jc .huge
     retf
+.huge:                          ; A HUGE CLAIM the pool's regrow did not take
+    call COLD_SEG:mega_hugergf  ; - a bridge, or one run the pool cannot hold
+    jc .move                    ; (MEGA-HUGE-PLAN F8): CF = 1 is final for it,
+    retf                        ; as mega_claimkbf below refuses a run
 .move:                          ; ...or, past 64KB or with no room up there,
     push ax                     ; MOVED DOWN: a conventional claim, the old
     push bx                     ; bytes copied in and the pool block freed -
@@ -5504,6 +5508,14 @@ osapi_mem_regrow_x:
     pop ax
     retf
 .conv:
+    cmp byte [mega_on], 0       ; PROTECTED MODE: a claim mega_hugec made a
+    je osapi_mem_regrow_c       ; RUN over is regrown with its windows (F8)
+    call COLD_SEG:mega_hugecrgf
+    jnc .rr
+    jnz osapi_mem_regrow_c      ; (ZF = 0: no run - the plain regrow)
+.rr:
+    retf                        ; (CF = 1 with ZF = 1: a run, refused)
+osapi_mem_regrow_c:             ; (a far entry: the run's piece, mega_hgcpr)
 %endif
     push bx
     call mem_own                ; BX = the owner ES names (CF=1 = not a
@@ -5512,6 +5524,35 @@ osapi_mem_regrow_x:
 .out:
     pop bx                      ; pop leaves CF and DX alone
     retf
+
+%ifdef KERN_MEGA
+; mem_hrecf - FAR (mega.inc's huge regrow, MEGA-HUGE-PLAN F8): DX = a claim's
+; value, ES = the caller -> CF = 0, AX = its KB and CX = its MC_RLOC (CX =
+; FFFFh in: read; anything else is written first); CF = 1 it is no claim of
+; the caller's here. Keeps the rest
+mem_hrecf:
+    push bx
+    push si
+    call mem_own
+    jc .o
+    call mem_find_own
+    jc .o
+    cmp cx, 0xFFFF
+    je .r
+    mov [ss:si+MC_RLOC], cx
+.r:
+    mov cx, [ss:si+MC_RLOC]
+    mov ax, [ss:si+MC_PARA]
+    push cx
+    mov cl, 6
+    shr ax, cl
+    pop cx
+    clc
+.o:
+    pop si
+    pop bx
+    retf
+%endif
 
 ; -----------------------------------------------------------------------------
 ; osapi_mem_p - OSAPI_MEM_P (0x04E9, SPEC.md 50.3.7): the claim heap counted
@@ -5582,11 +5623,25 @@ osapi_mem_p:
     jmp short .gen
 .mreg:
     call mem_ishidx             ; a POOL block: OSAPI_MEM_REGROW's own arm
-    jc .gen                     ; resizes it (or moves it down), in KB
+    jc .mconv                   ; resizes it (or moves it down), in KB
     push ax
     call .kb
     call COLD_SEG:osapi_mem_regrow_x
     jc .mno
+    add sp, 2
+    jmp short .mkb
+.mconv:                         ; ...and so does it a conventional claim
+    cmp byte [mega_on], 0       ; mega_hugec made a RUN over (MEGA-HUGE-PLAN
+    je .gen                     ; F8): the paragraph regrow would leave its
+    push ax                     ; windows as they were
+    call .kb
+    call COLD_SEG:mega_hugecrgf
+    jnc .mok
+    jnz .mno                    ; (no run: the paragraph door's own)
+    pop ax                      ; a run, refused
+    stc
+    retf
+.mok:
     add sp, 2
     jmp short .mkb
 .kb:

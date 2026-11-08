@@ -99304,7 +99304,10 @@ of data selectors over it, so the run's first selector IS the claim's value
 (its code half at - 8, as for every claim), and answers CX = 8. Every window
 is based in the block, so a move rebases them (`mega_mpmovef`) and the free
 takes them (`mega_mpfreef`). No run of free entries: the claim goes back and
-the cell refuses. Not regrown past its first 64KB. Every real-mode kernel,
+the cell refuses. It regrows WITH its windows (THE REGROW, below); claimed at
+64KB or less it is a run of one, which nothing tells from the heap's ordinary
+claim, and regrows as that - no windows past its first 64KB - so a step
+walker that will grow a claim asks for it over 64KB or above 1MB. Every real-mode kernel,
 and kern_mega in real mode, still answers CX = 1000h.
 
 **BX = 4000h asks for a window every 16KB** (KERN-MEGA-MEMORY-PLAN MC7.4,
@@ -99313,7 +99316,8 @@ for the Video Player's and RealDMG's rolling windows), each 64KB long, below
 regrown, moved a piece at a time with the rate hook held off. Answered BX = 0
 when given.
 
-- **Regrow takes a huge claim to ANY size and keeps it in the pool.** A
+- **Regrow takes a huge claim to ANY size and keeps it in the pool** where
+  the pool can hold it (when it cannot, THE REGROW below moves it). A
   shrink cuts the run's tail and frees the block's; a grow takes the KB
   above the block where they are free, else moves it into a fresh block of
   the new size (after a compaction if one is needed), else packs the pool
@@ -99325,8 +99329,9 @@ when given.
   a free run of the new length when the entries after it are taken - so DX
   is the claim's first selector NOW, the step stays 8, and the old first
   selector is no longer the claim's. A refusal changes nothing a program
-  can see. It is never moved down to conventional memory, whose step is
-  not 8 - the regrow of a pool claim of 64KB or less still is, as it was.
+  can see. Moved down to conventional memory it is a RUN again, stepped by
+  8 (THE REGROW) - the regrow of a pool claim of 64KB or less from
+  `OSAPI_MEM_CLAIM` is the old one-selector move, as it was.
 - **A move is a 64KB PIECE at a time**, each piece's copy and the rebase of
   its descriptors one step with interrupts off, interrupts on between, so a
   claim of megabytes is never seconds of a deaf machine and an ISR reading
@@ -99359,7 +99364,7 @@ each - the pool's best run cut to whole 64KB windows first, then a
 conventional claim of the rest, the heap left at least `MEGA_RESKB` (64KB) -
 under one run of selectors stepped by 8 (`mega_hugebf`). Each piece is the
 record it would be alone and moves alone; `OSAPI_MEM_FREE` of DX frees both,
-and it does not regrow. **The two pieces are not contiguous**, so a bridge is
+and `OSAPI_MEM_REGROW` of DX resizes it (THE REGROW, below). **The two pieces are not contiguous**, so a bridge is
 one buffer only to a program that WALKS IT BY ITS STEP - window k is DX + 8k;
 `OSAPI_SEG` and the file doors follow the pieces (below, docs/plans/KERN-MEGA-PLAN.md
 14.169, MEGA-HUGE-PLAN F1); base arithmetic of the program's own - a sum on a
@@ -99449,6 +99454,43 @@ window, and the rules are:
   moves whatever is declared, as every unpinned pool block does): the proc is
   called for its moves, and every selector over it follows them, so a proc
   that is a `ret` is the usual one.
+
+**THE REGROW** (docs/plans/MEGA-HUGE-PLAN.md F8, KERN-MEGA-PLAN 14.174):
+`OSAPI_MEM_REGROW` with DX = a huge claim (64KB windows) and AX = the new KB
+answers CF = 0 and DX = its first selector NOW, the step still 8, every byte
+up to the smaller size where it was in the walk, and keeps the claim's SHAPE:
+one run stays one run (so `HUGE_NOBRIDGE`'s promise outlives every regrow
+with no flag to say so), and only a bridge comes back a bridge. CF = 1 is
+"no room" and changed nothing. The routes, the cheapest first:
+
+1. **In the pool** (`mega_claimregrowf`, 14.37, 14.49): a pool run cut or
+   grown where it stands, or moved inside the pool.
+2. **A run's CONVENTIONAL piece** - a bridge's, or a claim `mega_hugec` made
+   a run over - is regrown as the heap regrows any claim (`mem_regrow`: in
+   place, or moved with every window based in it) and its windows are
+   refitted: the run extended into the LDT entries straight after it, or cut
+   with the cut entries freed (`mega_hgcpr`). A bridge regrown to its pool
+   piece or less gives the conventional piece back and is the pool's one
+   run, cut where it stands; its DX is kept on this route.
+3. **CLAIM, COPY, FREE** (`mega_hugek`) when neither can: the cell's own claim
+   of the new size (the pool, the heap, or a bridge for a bridge), the
+   smaller size copied a window at a time with no task running, the old
+   claim freed. Old and new are held at once - this route's price, and why
+   it is the last. The old conventional piece's declaration (§66) is made on
+   the new one; a claim that came down from the pool is born pinned, as any
+   claim, and its holder declares it again.
+
+A claim of 32KB or 16KB windows still does not regrow (CF = 1, nothing
+changed), in the pool or below it (its windows overlap, above). `MEMP_REGROW`
+of a run below 1MB takes the same arm (in KB), so the paragraph door no
+longer leaves its windows behind. kern_big and kern_small, and kern_mega in
+real mode, regrow a huge claim as the conventional claim it is
+(`mem_regrow`, CX = 1000h: one contiguous run, nothing to refit, up to the
+1,023KB every conventional claim stops at). MEGARGW (tests/megargw,
+`megargw` under Bochs at 4MB and `megargw86` on 86Box's 640K + 384K) is the
+gate: a pool run regrown past a full pool into the heap, a heap run
+extended and cut, a bridge's conventional piece shrunk and grown back, and a
+bridge taken below its cut, the pattern read back by the walk after each.
 
 MEGABRDG (tests/megabrdg, `megabrdg` under Bochs at 4MB and `megabrdg86` on
 86Box's 640K + 384K) is the gate: it claims the largest bridge with an 80KB
@@ -129368,6 +129410,43 @@ the network cases through QEMU/NE2000 for correctness and the local fixtures
 through MartyPC or 86Box for 8088 responsiveness; QEMU provides no timing
 claim.
 
+#### 71.18.2 kern_mega — the source and the document in huge claims
+
+On kern_mega in protected mode (`[br_mega]`) the SOURCE and the formatted
+DOCUMENT are `OSAPI_MEM_HUGE` claims (`br_hclaim`, docs/plans/MEGA-HUGE-PLAN.md
+3) of ONE RUN, `HUGE_NOBRIDGE`: above 1MB where the pool holds them, at any
+size, and regrown there; the heap's when it cannot - the claim and its regrow
+alike (§50.3.5's THE REGROW: a run the pool cannot hold any more is claimed
+again in the heap and copied). The line table, the link arena and the
+download buffer stay the KB doors' (64KB or less: above 1MB already, as
+`OS88_HIGHMEM` gives every such claim). Every real-mode kernel's path, the
+8088's included, is the KB doors' as it was: the test is one compare.
+
+**Never a bridge**, and that is measured rather than assumed: every window
+that reads these claims is one piece's - `br_bwaim`'s bound window re-aimed by
+`SEG_AIM`, which refuses an offset past its block, and `br_at`'s `SEG_AT`,
+whose reach stops at a cut - and their callers count on 32-48 KiB of reach
+from the aimed byte (the parser's source window, `br_docmap`'s 16 KiB page
+and the three after it). A bridge would make every one of those aims split
+at the cut. And it would buy nothing here: the page is TWO buffers, so with
+each one run the pool and the heap together are still what they can hold -
+the source in one region, the document in the other.
+
+**The reserve counts both regions** (`br_avail`): the 20% of §71.18 is taken
+of `OSAPI_MEM_HUGE`'s `MEMH_AVAIL` total (the heap's free KB plus the pool's)
+at the start of a load, and every growth decision asks it again; the Download
+Manager's check (§71.20) asks the same. On every other kernel `br_avail` is
+`OSAPI_MEM_AVAIL`.
+
+The 16-bit offset ceilings of §71.18.1 are unchanged (`BR_DOCMAX`, the line
+table's `BR_LINEKB` records): what changes on kern_mega is the memory under
+them. Before this the two claims went down to the conventional heap past
+64KB, so a page whose source and stream together passed about 80% of the
+heap's free KB was cut short on every kern_mega machine, whatever it had
+above 1MB. `tests/brhuge.py` (`brhuge`, Bochs at 16MB) is the gate: a 331KB
+page of 5,001 lines, read off B: whole and laid out whole, both claims above
+1MB.
+
 ### 71.20 Browser 1.6b — streamed downloads and the Download Manager
 
 Downloads are a separate sink from the retained page source. Saving a link
@@ -134015,21 +134094,21 @@ a directory entry, 4KB blocks, 8 16-bit `al` words from block 8 — harness:
 0/127/128/16384/16385/32768/65535 bytes are one entry each with the extent,
 `rc` and block count `disk.h` gives them, 67,301 bytes three entries `ex`
 1/3/4 with `rc` 128/128/14, 134,899 bytes five entries ending `ex` 8 `rc` 30),
-`F_SIZE` in 24 bits from the cache. **Files above 65,535 bytes are refused as
-a fact** — the file API a package reaches reads and writes whole files with a
-16-bit count and no seek — with a BDOS 0xFF (open, make, and a SEQUENTIAL
-write of record 511 — the code upstream's `_sys_writeseq` answers for a
-failed `fwrite`, and the same 0xFF for a record the heap will not hold) or 6
-(a random write past the end: `_sys_writerand`'s seek code) and a toast naming
-the file (`RunCPM: NAME.EXT>64K`, or `RunCPM RAM? NAME.EXT`) — every such
+`F_SIZE` in 24 bits from the cache. **A file above 65,535 bytes is ONE HUGE
+CLAIM** (§74.3.3; until it, such a file was refused as a fact), and what this
+model cannot hold is refused with a BDOS 0xFF (an open of a file of 8MB or
+more, past CP/M's own reach; a SEQUENTIAL write past record 65,534 — the code
+upstream's `_sys_writeseq` answers for a failed `fwrite`, and the same 0xFF
+for a record the heap will not hold) or 6 (a random write past the end:
+`_sys_writerand`'s seek code) and a toast naming the file (`RunCPM:
+NAME.EXT>8MB`, or `RunCPM RAM? NAME.EXT`) — every such
 refusal goes through `rc_say`, which ALSO prints the text on the terminal
 while the window is fullscreen (§74.4); a random READ with `r2` set answers 1
 with `cr`/`ex`/`s2` stepped from the record's low bits, as `_sys_readrand`
 does — its `fseek` past the end succeeds on every host, `fread` moves nothing,
 and 6 is only a FAILED `fseek` (harness); `DIR`
-still lists them with the whole chain; none is shipped. The last record this
-model READS is 511 (a 65,535-byte file's tail) and the last it WRITES 510
-(65,408 bytes: the 16-bit size's last whole record). **A ninth open evicts the
+lists every file with the whole chain. The last record this model WRITES is
+65,534 ((record + 1) x 128 is the 24-bit size). **A ninth open evicts the
 least recently used CLEAN entry**; when every entry is a modified file the
 open errs `Bdos Err on X: CP/M ERR` with the toast `RunCPM: 8 files open`; a
 claim the heap refuses evicts clean entries and retries, then toasts `RunCPM
@@ -134237,6 +134316,44 @@ leaving `rc_z.seg` stale: the CCP never answers.
 **Cost:** image +224 bytes (31,030 -> 31,254), bss +0, the module part +18;
 the file 26,941 -> 26,950, no sector.
 
+#### 74.3.3 A file past 64KB is one huge claim
+
+An open file past 65,535 bytes is held whole as ONE `os88_mem_huge` claim
+(§73.9.2, SPEC.md 50.3.5; docs/plans/MEGA-HUGE-PLAN.md 3), and the record
+window is the natural one: a 64KB window is exactly 512 records, so record r
+is at offset (r & 511) x 128 of window r >> 9 - `seg + (r >> 9) x
+os88_mem_huge_step()` (`rc_recoff`) - and no record crosses a window, a cut
+of a bridge included. The size is 24 bits in the row (`size_hi`, its whole
+records `rc_ofrec`), compared in records, never as a byte count. A file of
+65,535 bytes or less keeps the paragraph claim it had (a byte count wastes
+no granule, §50.3.7); the write that takes it past record 510 makes it huge
+(`rc_oft_tohuge`: claimed, its bytes copied through a 256-byte bounce with
+`os88_seg_get`/`_put`, the old claim freed, the new declared movable), and a
+huge entry regrows by KB (`os88_mem_regrow`, an eighth and 3KB of slack). It
+is read whole by `os88_file_read_huge` and written back whole by
+`os88_file_write_huge`, the kernel walking the claim by its own step - a
+PACKED file too (MEGA-HUGE-PLAN F4). A gap a random write leaves is zeroed a
+window, and 32KB, at a time (`rc_gapfill`). The capture files keep their
+65,535-byte ceiling (byte s is window 0's even of a huge claim).
+
+It is the same code on every kernel, the step the cell's answer: on kern_big
+and kern_small a huge claim is one conventional claim (step 1000h, up to the
+1,023KB every such claim stops at); on kern_mega in protected mode it is a run
+of selectors above 1MB where the pool holds it, and its regrow is the
+kernel's (§50.3.5's THE REGROW). Cost: the image 31,462 -> 32,696 bytes, the
+bss 10,597 -> 10,877 (the bounce 256, the rows 16), the module part 6,781 ->
+6,814. `apps/runcpm/hosttest/rcfstest.c` (`make runcpm`'s host check) is the
+gate: a 67,301-byte and a 134,899-byte file opened and read across their
+windows to their last partial records, a file written past record 510
+(made huge) and on to record 1,000 through a regrow that moves, written back
+whole as 128,128 bytes with zeros in the gap, reread; an 8MB file refused -
+red on the tree before (every one of those refused). The master disk's three
+files that were left off for it (BDOS.ASM 67,301, ZCPR3.ASM 66,761,
+Z80ASM.PDF 134,899 bytes) are extracted now (`tools/getruncpm.py`'s
+`MAX_FILE` is 8MB less a byte) and ship where there is room: on the live
+volume (§80.6) all three; on the four floppies none - they were full already,
+and the fill's `LEFT-OFF.TXT` names them under no-room instead.
+
 ### 74.4 What is present and greyed, and what is absent
 
 **The About panel** (`rcabout.c`, wave 5) is the kernel bar's `About RunCPM`
@@ -134291,7 +134408,7 @@ toast, AND — when `rc_full` is set — the same ≤ 24-character text on the
 terminal, `"\r\n" msg "\r\n"` through `rc_puts` (one row = one band, ~1 ms:
 the console line is where upstream's `disk.h` prints its errors); `rc_say_now`
 is the same under the gfx lock with the terminal flushed on the spot, for the
-one WAIT (§74.3's walk). Harness: the `>64K` refusal is on the console only
+one WAIT (§74.3's walk). Harness: the `>8MB` refusal is on the console only
 while `rc_full`; glass: `wave4c-full-user2.png`.
 
 Absent: RunCPM's internal C CCP (host-blocking C; DRI's binary is the command
@@ -214408,6 +214525,32 @@ Nothing was added to the worker, the sequencer, the synth or the mixer:
 identical at even shifts (a `PARITY` pad byte after `mro_close` holds them
 there). +92 bytes of image, no bss. `tests/ringmove.py --app midirack` is the
 gate, on the synthetic bank `make mrwttest` writes.
+
+#### 105.10.2 kern_mega's arm: the bank in one huge claim
+
+On the kern_mega arm (`PKG_MEGA`, §20.18) `mwt_load` claims the bank with
+`OSAPI_MEM_HUGE`, BX = 8000h (docs/plans/MEGA-HUGE-PLAN.md 3): a window every
+32KB, each 64KB long, cut at the claim's end - which is `mwt_win`'s own shape,
+so with BX answered 0 and the step 8 `mwt_wins` takes window w as the run's
+selector w (`[mwt_bseg]` + 8w, `[mwt_run]`) and asks no `SEG_SUB` and spends
+no LDT entry for it. Above 1MB where the pool holds it, the heap's run of the
+same shape otherwise (§50.3.5); such a claim never bridges (its windows
+overlap), never regrows (the bank never does), and moves 64KB at a time with
+the selectors following, so the voices' window selectors (`mwt_sseg`) stay
+right across a move and `mwt_pin`'s declaration on a pool claim is the
+harmless refusal it is for every pool block. In real mode (the step 1000h,
+BX kept) the SUBs are as they were. Before it a bank over 64KB was an
+`OSAPI_MEM_CLAIM` and so CONVENTIONAL on every kern_mega machine: a 200KB
+bank was 200KB of the ~560KB heap, and up to `mwt_info`'s 640KB ceiling
+(kept: no bigger bank is built) it can all be pool memory now. The shipped
+build is unchanged.
+
+`midirackwtbig` (the 5150, the shipped build) and `mega-midirackwtbig`
+(86Box 640K + 384K, the arm) play the padded synthetic bank
+(`tools/os88midbank.py synth --pad 192`: 192KB of silent samples first, so
+every sample a voice plays lies past the bank's first 64KB) and hold the
+capture's pitch classes to the reference; on the arm the bank is asserted
+ABOVE 1MB.
 
 ### 105.11 Tests
 

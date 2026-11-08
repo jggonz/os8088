@@ -3052,10 +3052,17 @@ KIND_PKG   equ 0x80             ; SSI_KIND bit 7: this instance is a package
                                  ; before it refuses (KERN-MEGA-PLAN 14.37).
                                  ; Free it with OSAPI_MEM_FREE and the DX it
                                  ; gave; the kernel frees it at your teardown
-                                 ; too. OSAPI_MEM_REGROW takes one above 1MB
-                                 ; to ANY size and keeps it there: DX is its
-                                 ; first selector NOW (the run may move), the
-                                 ; step stays 8; CF=1 changed nothing.
+                                 ; too. OSAPI_MEM_REGROW takes one to ANY
+                                 ; size (MEGA-HUGE-PLAN F8): in the pool
+                                 ; where the pool holds it, its run extended
+                                 ; or cut below 1MB, else claimed again,
+                                 ; copied and freed - DX is its first
+                                 ; selector NOW, the step stays 8, and the
+                                 ; SHAPE is kept: one run stays one run, only
+                                 ; a bridge comes back a bridge. A claim that
+                                 ; came down from the pool is born pinned:
+                                 ; declare it (OSAPI_MEM_MOVABLE) again.
+                                 ; CF=1 changed nothing.
                                  ; BX = 8000h asks for a WINDOW EVERY 32KB
                                  ; instead (KERN-MEGA-PLAN 14.41): selector k
                                  ; is the 64KB window from 32KB x k, cut at
@@ -3087,8 +3094,9 @@ KIND_PKG   equ 0x80             ; SSI_KIND bit 7: this instance is a package
                                  ; memory, under ONE run stepped by 8 - which
                                  ; a 64KB step's claim gets when neither the
                                  ; pool nor the heap alone holds it. A bridge
-                                 ; always leaves the heap 64KB, does not
-                                 ; REGROW (CF=1), moves piece by piece like
+                                 ; always leaves the heap 64KB, REGROWS
+                                 ; (its heap piece, or below its cut the
+                                 ; pool's one run), moves piece by piece like
                                  ; any claim, and OSAPI_MEM_FREE of its DX
                                  ; frees both pieces.
                                  ; THE ASK READS BX, SO SET IT: BX = 0, 8000h

@@ -4816,6 +4816,17 @@ SOAK = [
         "corrupt streams refused with carry set and the stack restored. Host-only",
         needs=("unicorn",),
         wants=("build/arcade-rom/qbert.zip", "build/arcade-rom/invaders.zip")),
+    Row("arcimporthuge", "soak", py("tests/arcimporthuge.py"), 35.0,
+        "ARCADE-SPEC 14 (MEGA-HUGE-PLAN 3): a zip past the 448KB cap, imported "
+        "on kern_mega's arm, whose zip is one OSAPI_MEM_HUGE claim of 32KB "
+        "windows. 86Box at286_vga_sb, 4MB: a SYNTHETIC 609KB zip (the ROMs are "
+        "fetched data) - Space Invaders' four chips forged to arcsets.inc's "
+        "CRC-32s, stored after 600KB of filler - picked through Game > Add ROM "
+        "sets..., and ROMS\\INVADERS.ROM read back off the floppy, byte for "
+        "byte the forged chips' .ROM. RED on the arm before, measured: refused "
+        "as too big, nothing written. 35s is 23 measured",
+        needs=("86box",),
+        wants=("build/mega.img", "build/megak/apps/arcade.o88")),
     Row("arcimport", "soak", py("tests/arcimport.py"), 128.0,
         "ARCADE imports ROM sets on the machine itself (ARCADE-SPEC 1.5): Game > "
         "Add ROM sets... and the file chooser on MartyPC's VGA XT, a 720KB disk "
@@ -5862,6 +5873,18 @@ SOAK = [
         "tritone-transposed reference as the negative control",
         needs=("marty", "nasm"), serial=True,
         wants=("build/os8088-720.img", "build/mrwt720.img")),
+    Row("midirackwtbig", "soak", py("tests/midirack.py", "--arm", "wt",
+                                    "--bigbank", "192"), 60.0,
+        "SPEC.md 105.10.2: the wavetable with tools/os88midbank.py's synthetic "
+        "bank PADDED by 192KB of silent samples first (199 KB), so every "
+        "sample a voice plays lies past the bank's first 64KB and is read "
+        "through the bank's later 32KB windows; 10 of 10 half-seconds against "
+        "the reference, the tritone control 0. Its kern_mega port "
+        "(tests/megaport.txt) asserts the arm's huge claim ABOVE 1MB - red "
+        "on the arm before, measured: the 199 KB bank CONVENTIONAL, at "
+        "012400h",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088-720.img", "build/midirack.o88")),
     Row("mrdraw", "soak", py("tests/mrdraw.py"), 50.0,
         "MIDIRack's redraw, priced in drawing calls (SPEC.md 105.9.4): every "
         "far call into a drawing cell of the API table, per gesture, told "
@@ -7029,6 +7052,19 @@ SOAK = [
         "[ch_seg] stale and the move count at 0. Needs `cc`",
         needs=("marty", "cc"), serial=True,
         wants=("build/cmemmove360.img",)),
+    Row("rcbig", "soak", py("tests/rcbig.py"), 40.0,
+        "SPEC.md 74.3.3 (MEGA-HUGE-PLAN 3): RUNCPM's open files past 64KB, "
+        "each ONE os88_mem_huge claim. MartyPC's 5150 (720KB): `pip "
+        "copy.pdf=z80asm.pdf[o]` and `pip bdos2.asm=bdos.asm[o]` - 134,899 "
+        "and 67,301 bytes, read across their windows, the copies made huge at "
+        "record 511 and regrown on, written back whole - and each copy read "
+        "back off the floppy, the original byte for byte then ^Z to its last "
+        "record. Its kern_mega port (tests/megaport.txt) is the same on "
+        "86Box. RED on the tree before, measured: both opens refused, PIP's "
+        "NO FILE, no copy. 40s is 24 measured",
+        needs=("marty",), serial=True,
+        wants=("build/os8088-720.img", "build/runcpm.o88",
+               "build/runcpm-src.stamp")),
     Row("rcmove", "soak", py("tests/rcmove.py"), 120.0,
         "RUNCPM'S 64KB Z80 CLAIM MOVES and the machine keeps running "
         "(SPEC.md 74.3.2, docs/plans/NO-PINNING-PLAN.md C3): cmemmove's "
@@ -19615,6 +19651,31 @@ SOAK = [
         "the odd-offset write a #GP (limit) in dskw_wone. 40s is 24 measured",
         needs=("86box",),
         wants=("build/mega.img", "build/megabrdg.o88")),
+    Row("megargw", "soak", py("tests/megargw.py"), 35.0,
+        "docs/plans/KERN-MEGA-PLAN.md 14.174, SPEC.md 50.3.5 (MEGA-HUGE-PLAN "
+        "F8): A HUGE CLAIM REGROWS, every shape. Bochs at 4MB: MEGARGW puts "
+        "a pattern in by the step walk and reads it back after each regrow - "
+        "a 128KB pool run regrown to 256KB past a pool filled with XMEM blocks "
+        "(claim, copy, free: the heap's run now), a 256KB heap run (mega_hugec) "
+        "to 384KB (windows 0..5 one run) and to 160KB (window 3 freed, window "
+        "2's limit 7FFFh), the largest bridge's conventional piece shrunk by "
+        "128KB and grown back by 64KB, then the bridge taken below its cut "
+        "(the pool's one run). RED on the tree before, measured: the pool "
+        "run's regrow refused, the heap run's windows 4 and 5 not the claim's "
+        "and window 2's limit FFFFh, every bridge regrow refused. 35s is 23 "
+        "measured",
+        needs=("bochs",),
+        wants=("build/mega.img", "build/megargw.o88", "build/megarun.o88",
+               "build/mbr.bin")),
+    Row("megargw86", "soak", py("tests/megargw.py") + ["--box"], 30.0,
+        "docs/plans/KERN-MEGA-PLAN.md 14.174: megargw on 86Box's at286_vga_sb "
+        "with 640K + 384K above 1MB - a 286, where Bochs's 386 is not, and "
+        "the 14.166 machine whose largest bridge is 768K here (256K of pool, "
+        "512K of heap, cut at window 4). The same legs and the same RED, "
+        "measured: refused, windows 4 and 5 not the claim's, limit FFFFh, "
+        "refused. 30s is 11 measured",
+        needs=("86box",),
+        wants=("build/mega.img", "build/megargw.o88")),
     Row("megahw", "soak", py("tests/megahw.py"), 30.0,
         "SPEC.md 50.3.8 (MEGA-HUGE-PLAN F5): apps/os88huge.inc IN A GUEST, "
         "across a real bridge's cut. Bochs at 4MB: MEGAHW claims the largest "
@@ -21520,6 +21581,19 @@ SOAK = [
         needs=("qemu",), serial=True,
         wants=("build/brtest360.img", "build/ether360.img", "build/browser.o88"),
         locks=("port:8090",)),
+    Row("brhuge", "soak", py("tests/brhuge.py"), 50.0,
+        "SPEC.md 71.18.2 (MEGA-HUGE-PLAN 3, the Browser): A PAGE LARGER THAN "
+        "kern_mega's CAP OF BEFORE, WHOLE. Bochs at 16MB: DOCHUGE.HTM, 5,000 "
+        "rows in a <pre> (325,086 bytes, a 325,036-byte stream, 5,011 lines), "
+        "opened off B: - the source and the document both OSAPI_MEM_HUGE "
+        "claims above 1MB, the page not cut, the stream's tail read by its "
+        "descriptor holding the end marker, End painting it. RED on the tree "
+        "before, measured: the source a conventional claim, the document "
+        "stopped at 7 KB against the conventional reserve (br_trunc 1, "
+        "br_docfull 1, 102 lines). 50s is 32 measured",
+        needs=("bochs",),
+        wants=("build/mega.img", "build/megak/kernel.map",
+               "build/browser.o88")),
     Row("brmega", "soak", py("tests/brmega.py"), 60.0,
         "KERN-MEGA-MEMORY-PLAN MC7, SPEC.md 71.18: the Browser's document, "
         "line table and source past 64KB under kern_mega, where every claim "

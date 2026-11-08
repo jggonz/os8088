@@ -15724,3 +15724,93 @@ full tier) green. NOT run, by the build: every kern_big and kern_small row
 `audhand`, `ringmove-audio`, `ringmove-audiospk`) - the shipped WAVERACK and
 AUDIO are byte-identical to mega-release's, so those rows would boot the
 same bytes.
+
+### 14.174 A huge claim regrows - a bridge, a pool run the pool cannot hold, a conventional run with its windows (2026-11-08) - FIXED
+
+MEGA-HUGE-PLAN F8. `OSAPI_MEM_REGROW` of an `OSAPI_MEM_HUGE` claim (a window
+every 64KB) refused three of its four shapes: a bridge ("does not regrow"), a
+pool run once the pool could not hold the new size (14.37's arm keeps a run in
+the pool or refuses), and a run `mega_hugec` made below 1MB, which regrew as a
+plain claim - its windows past the old size whatever descriptors followed the
+run, and a cut tail's windows left based in free heap. SPEC.md 50.3.5's THE
+REGROW is the contract as built: CF = 0, DX = the claim's first selector now,
+the step 8, the SHAPE kept (one run stays one run, so `HUGE_NOBRIDGE`'s
+promise outlives a regrow with no flag; only a bridge may come back a bridge).
+
+- `mega_hugergf` (`.cold`, after `mega_claimregrowf` declined): a bridge
+  taken to its pool piece or less frees the conventional piece (its windows
+  with it, `mega_cdfree`), clears `MX_FBRIDGE` and lets the pool's arm cut it
+  in place; above the cut it regrows the conventional piece with
+  `mega_hgcpr`; a one-run pool claim goes to `mega_hugek`.
+- `mega_hugecrgf` (the `.conv` arm in protected mode, and `MEMP_REGROW`'s):
+  a conventional claim over 64KB whose window 1 is based 64KB past window 0
+  (the access byte compared less its ACCESSED bit - the first build compared
+  92h exactly, and a window once loaded reads 93h) AND every later window
+  of its size present data 64KB on from the last (`mega_hcrun` - a plain
+  claim with a SUB that happens to sit after its pair is not taken for a
+  run) is regrown with `mega_hgcpr`; a 32KB/16KB-window run is refused as in the pool; anything
+  else is the plain regrow. A run claimed at 64KB or less is a run of one,
+  indistinguishable from the heap's ordinary claim, and regrows as one -
+  SPEC.md says so.
+- `mega_hgcpr`: under `sch_lock`, the LDT entries straight after the run
+  tested first, then `mem_regrow` of the piece (in place, or moved with every
+  window based in it), then the windows refilled from its base and a cut
+  tail's still-present entries freed.
+- `mega_hugek`: CLAIM, COPY, FREE - the cell's own claim of the new size, the
+  smaller size copied a window at a time under `sch_lock`, the old freed as
+  `OSAPI_MEM_FREE` frees it, the old conventional piece's `MC_RLOC` declared
+  on the new (`mem_hrecf` reads it; `osapi_mem_movable_x` declares).
+
+**Bytes.** kern_mega `.cold` +755 (46,794 -> 47,549 on e6e7930c's tree; 694
+and then 61 for `mega_hcrun`), `.text` and `.mega`
++0, resident 62,976 unchanged, megaseg's overhead untouched (3,754). kern_big
+and kern_small `kernel.bin` byte-identical at one commit (A/B). ABI: a
+contract widened (refusals granted), `tools/abilock.py --update` with no
+`PKG_FMT` bump.
+
+**Rows.** `megargw` (Bochs 4MB, 23s) and `megargw86` (86Box at286_vga_sb,
+640K + 384K, 11s; a 286 - Bochs's CPU is a 386): a 128KB pool run regrown to
+256KB past a pool filled with XMEM blocks, a 256KB heap run to 384KB and
+160KB, the largest bridge's conventional piece shrunk by 128KB and grown back
+by 64KB, then the bridge below its cut. (On Bochs every leg passes and the
+machine then takes `kern_mega FAULT 0D` in the disk layer - which mega-release
+b7374eaf does with the probe and no F8 at all, a pool-fill regression of its
+own being bisected on mega-poolfault; megargw is blocked on that, not red.)
+RED on mega-release e6e7930c on both
+machines, measured: L1 refused, L2's windows 4 and 5 not the claim's and
+window 2's limit FFFFh, L3's first regrow refused. (The 86Box run first
+"lost" the probe after its last leg: the probe returned CF = 1 out of its
+entry, a refusal the loader tears down - a probe bug, `clc`, not a kernel
+one.)
+
+### 14.175 Huge claims in the Browser, MIDIRack, ARCADE and RunCPM (2026-11-08) - FIXED
+
+MEGA-HUGE-PLAN 3's four COULD adopters.
+
+- **The Browser** (SPEC.md 71.18.2, shipped build, gated on `[br_mega]`):
+  the source and the document are `OSAPI_MEM_HUGE` claims of ONE RUN
+  (`br_hclaim`, `HUGE_NOBRIDGE`), regrown by 14.174; the reserve and the
+  Download Manager's check count the pool (`br_avail`, `MEMH_AVAIL`). Not a
+  bridge, by reading the code rather than measuring a bridge: every window that
+  reads them is one piece's (`SEG_AIM`, `SEG_AT`) with 32-48 KiB of reach
+  wanted, and two buffers either side of 1MB already hold pool + heap. Image
+  +48 (48,185 -> 48,233). `brhuge` (Bochs 16MB, 32s): a 325,086-byte page of
+  5,011 lines whole, both claims above 1MB; RED before: the document stopped
+  at 7 KB against the conventional reserve, `br_trunc` 1, 102 lines.
+- **MIDIRack** (SPEC.md 105.10.2, its arm): the bank is `OSAPI_MEM_HUGE` BX
+  = 8000h, whose run is `mwt_win`'s shape - no `SEG_SUB`. Arm image +42, bss
+  +1; shipped identical. `midirackwtbig` (5150) and its megaport line
+  (86Box): a 199 KB padded bank (`os88midbank.py synth --pad`), 10 of 10;
+  RED on the arm before: the bank conventional at 012400h.
+- **ARCADE** (ARCADE-SPEC 14, its arm): the zip is `OSAPI_MEM_HUGE` BX =
+  8000h, granule g its run's selector g, `AR_ZMAXKB` 4096 on the arm. Arm
+  image +43; shipped identical. `arcimporthuge` (86Box 4MB, 23s): a
+  synthetic 609KB zip (the chips forged to `arcsets.inc`'s CRC-32s - the ROMs
+  are fetched data) imported to `INVADERS.ROM` byte for byte; RED: refused.
+- **RunCPM** (SPEC.md 74.3.3, the shipped C package): a file past 65,535
+  bytes is one `os88_mem_huge` claim, 512 records a window. Image 31,462 ->
+  32,696, bss +280, module +33. The host check `rcfstest` (rewritten for the
+  contract, red against the old `rcfs.c`) and `rcbig` (5150 720KB, 24s; 86Box
+  21s): PIP copies of Z80ASM.PDF and BDOS.ASM byte for byte; RED before: NO
+  FILE. `getruncpm.py`'s limit is 8MB: the three master-disk files ship on the
+  live volume, on no floppy (full already).
