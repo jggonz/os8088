@@ -119344,24 +119344,59 @@ in the tree builds that layout; a plan of the floor-first order needs the
 next ceiling-run's gap charged *below* the floor mover, which is a second
 deferred quantity and is left for whoever meets it.
 
-**A SECOND open mismatch: the plan has no page bump** (KERN-MEGA-PLAN 14.184,
-found by `heapfrag`'s rebuilt check 14). `mem_cp_both`'s walk packs a floor
-mover onto the fill point and a ceiling mover into its deferred sum, and
-neither asks `mem_cp_dest` — so a MOVABLE claim carrying `MC_DMA` (§66.4.2)
-whose head would straddle a 64KB page at the fill point is planned AT the
-fill point, where the run bumps it to the next page's floor. The plan then
-OVER-reports by the distance between the two, the dangerous direction:
-measured, a 42KB block over a fill point at offset F20h of its page, 48K
-promised and 45K produced on a 1MB kern_mega, 100K against 97K for a 60KB block
-on kern_big, the claim of the promise refused both times (and granted
-exactly, the bump removed: the plan IS the run but for it). Who it reaches is
-whoever declares such a block movable - the typeface cache (`os88type.inc`)
-and the Audio Player's idle look-ahead - by less than the block's head. The floor arm's fix is `mem_cp_dest` at `.lo` (the gap it opens kept,
-the fill point resumed past the destination, as `mem_cp_walk`'s `.stay`
-does); the ceiling arm's deferred sum cannot place a block before it reaches
-the barrier, and charging a ceiling `MC_DMA` mover as a barrier is the safe
-under-report. Neither is made yet: it moves `kern_big`, and the models
-(`heapwhatif.py`, `both_passes()`) move with it.
+**THE PAGE BUMP IS IN THE PLAN** (KERN-MEGA-PLAN 14.185; it was this
+section's second open mismatch, found at 14.184 by `heapfrag`'s rebuilt check
+14). `mem_cp_both`'s walk packed a floor mover onto the fill point and a
+ceiling mover into its deferred sum, and neither asked `mem_cp_dest` — so a
+MOVABLE claim carrying `MC_DMA` (§66.4.2) whose head would straddle a 64KB
+page at the fill point was planned AT the fill point, where the run bumps it
+to the next page's floor. The plan OVER-reported by the distance between the
+two, the dangerous direction: a 42KB block over a fill point at offset F20h of
+its page, 48K promised and 45K produced on a 1MB kern_mega, 100K against 97K
+for a 60KB block on kern_big, the claim of the promise refused both times. It
+reached whoever declares such a block movable — the typeface cache
+(`os88type.inc`) and the Audio Player's idle look-ahead, both bottom-up — by
+less than the block's head. Each arm is fixed in the direction it can be:
+
+- **The floor arm asks `mem_cp_dest`** — the run's own routine, so the plan
+  cannot put a block where the run will not (and a DISK-class claim's
+  512-byte rounding on a `MEMGRAN=16` knob comes with it). The fill point
+  resumes past the destination, as `mem_cp_walk`'s `.stay` does, and the gap
+  the bump opens is **not** a run, because `mem_cp_walk` does not count it
+  either: `mem_compact` decides on that walk's run, so a hole only it would
+  leave is not one `mem_claim` compacts for. The plan IS the run here, step
+  for step, which is §66.4's binding property extended to the reporter.
+- **The ceiling arm charges the head.** The descending pass bumps an `MC_DMA`
+  mover DOWN, to the highest base in its page whose head fits — by less than
+  the head — and where it lands depends on the barrier above it, which the
+  deferred sum has not reached yet. So a ceiling mover adds its size AND its
+  head to the fill point (plus 31 paragraphs for a DISK one on the knob):
+  the run occupies at most that under its barrier, so the hole measured
+  there is never more than the pass leaves. A bounded UNDER-report, by less
+  than the head. **Treating it as a barrier, the obvious safe spelling, is
+  not safe**: the block really does slide up, so a floor mover above it that
+  the plan packs down through the gap cannot move in the run — the same free
+  space cut at a different place, read over by up to that gap
+  (`tools/heapwhatif.py`'s *DMA ceiling mover, floor mover over it*). No
+  top-down `MC_DMA` claim is declared movable in the tree today, so this arm
+  is a guard on the next one.
+
+**What it costs**: **18 bytes of `.cold`, resident, no rung crossed**, on `kern_big` and
+`kern_mega` alike (`mem_avail_lvl_p`'s span 107 -> 125; `.cold` 37,566 ->
+37,584 and 48,393 -> 48,411); `kern_small` has no walk and is unchanged.
+Counted on MartyPC's 5150, three `mem_avail_lvl_p` calls against the same
+six-claim map with four movable floor claims: 35,393 / 33,246 / 33,257 cycles
+before, 36,373 / 34,232 / 34,149 after - **~240 cycles (50 us) a movable
+floor claim**, about 3% of the call, and bounded by `MEM_MAX` of them (under
+1.6 ms) against the walk's own O(`MEM_MAX`²) scan. A pinned claim, a cache
+and a ceiling mover pay nothing but the ceiling arm's three instructions.
+The gate is `heapcheck`'s 14b (§66.8): `mem_avail` asked with check 14's
+block movable, and a claim of exactly that answer GRANTED - refused at the
+base on both kernels (100K promised against 97K delivered on kern_big, 48K
+against 45K on a 1MB kern_mega), granted after. `tools/heapwhatif.py` and
+`both_passes()` model both arms; a random sweep of 68,615 page-safe layouts
+against a model of what `mem_compact` can deliver read the old plan OVER on
+1,416, the barrier spelling on 146 and this one on none.
 
 **PLAN ONLY.** There is no `mem_cp_both_run` and there must not be: one walk
 may plan both directions and may **not** run them, because packing a top-down
@@ -121330,6 +121365,16 @@ afterthought.
   the block above the big claim and freed it, and whether a legal landing
   could fund its ask was the layout's luck: on a 1MB kern_mega it could not,
   and the check was red on a correct kernel.
+  **And 14b, ahead of 14's own ask** (KERN-MEGA-PLAN 14.185): `mem_avail`
+  with the block alone movable, and a claim of EXACTLY that answer, which
+  must be GRANTED and must exceed the pinned answer (the move's room seen).
+  It is §66.4.3.1's page-bump gate: red at the base on both kernels (the plan
+  put the block at F; 100K promised against 97K on kern_big, 48K against 45K
+  on kern_mega), green with the plan asking `mem_cp_dest`. It is asked first
+  because once the block has moved every plan is right; 14 still reads the
+  move it makes, and with the bump amputated 14 alone goes red, 14b staying
+  green - the plan agreeing with the run either way, which is its question.
+  The harness asserts it (`hf_dmaag`); `hf_n` stays at 18.
 - **The Task Manager's memory map** already draws every claim at its real
   address and is the cheapest visual confirmation there is.
 - **The field sequence** (docs/FIELD-NOTES.md 2) end to end on a
