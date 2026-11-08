@@ -241,7 +241,8 @@ line:
   while SYSTEM.CFG's buffer sat past the blob) to the top of RAM, what the
   boot's own claims have. 24,064 bytes on kern_big at 128KB and 63,488 on
   kern_small (BOOT3-PLAN wave 0; 62,464 on kern_small at wave 1, its lift
-  stepping twice; 22,528 on kern_big at wave 2, until wave 4 gives it back);
+  stepping twice; 22,528 on kern_big at wave 2 and 20,480 at wave 3, until
+  wave 4 gives most of it back);
   it is the host figure that stands in for a kern_big 128KB boot row, which
   the owner took out.
 - **`boot3`** — the third boot-only home (SPEC.md §2.9.15): `.boot3`'s bytes,
@@ -1034,7 +1035,10 @@ it has two halves, because they die at different times:
 | `.ovl` | 5,075 | **the first mount** | `FAT_SEG`, off the kernel's own contiguous read, spilling into `dsk_secbuf`, the one mount-owned buffer left (4,608 + 512 = 5,120 bytes, all readable — SPEC.md §2.1.2), so **45 bytes** spare | `call FAT_SEG:`, a constant |
 
 Those are kern_big's figures (`tools/kernsize.py --json`, build 903; kern_emu's
-blob is 4,757). On `kern_small` the window is 1,024 (a two-sector FAT) + 512 =
+blob is 4,757). **Since BOOT3-PLAN wave 3 the window half is 3,161 bytes on
+kern_big and kern_emu and 3,160 on kern_mega, so 1,959 and 1,960 spare**: the
+clock ladder, `sch_idle_start`, `vid_ctx_init` and `mem_init_x` (1,958
+bytes) moved to `.boot3` (below). On `kern_small` the window is 1,024 (a two-sector FAT) + 512 =
 1,536 against a `.ovl` of 1,480, and SPEC.md §2.5.3.2 is why that build puts
 more of the overlay in the blob.
 
@@ -1141,6 +1145,25 @@ falls with the lift, 2,048 bytes: kern_big 22,016 -> 19,968, kern_emu
 21,504 -> 19,456 (the arena falls 512 less, the floor's 512 coming back).
 Stage 2's `int 13h` count is unchanged on every disk (`blobruns`). kern_small
 has no SYSTEM.CFG reader and is byte-identical.
+
+**Wave 3 relieved `.ovl`** on kern_big, kern_emu and kern_mega: the clock
+ladder whole (`clk_init` to `clk_bcd`, 1,782 bytes), `sch_idle_start` (35),
+`vid_ctx_init` (63) and `mem_init_x` (78) left the window half, and `wm_init`
+(34) left the blob, all for `.boot3` (MEASURED, the shipped KZIP maps):
+
+| kernel | `.ovl` (of 5,120) | `.boot3` (+ `.boot3b`) | lift (paragraphs) | the blob | boot arena | KERNEL.SYS |
+|---|---|---|---|---|---|---|
+| kern_big | 5,119 -> **3,161** (1 -> 1,959 spare) | 2,754 -> 4,746 (+ 982) | 224 -> **352** | 4,489 -> 4,456 of 6,656 | 22,528 -> 20,480 at 128KB | 87,200 -> 87,248 (171 sectors, unchanged) |
+| kern_emu | 5,119 -> **3,161** | 2,755 -> 4,747 (+ 981) | 224 -> **352** | 4,605 -> 4,572 of 7,168 | 22,016 -> 19,968 | 87,872 -> 87,904 (172) |
+| kern_mega | 5,118 -> **3,160** (2 -> 1,960 spare) | 2,670 -> 4,662 (+ 970) | 256 -> **384** | 4,281 -> 4,248 of 7,168 | 507,904 -> 505,856 at 640KB | 118,400 -> 118,448 (232) |
+
+KERNEL.SYS does not grow by the bytes moved: they were in the packed stream
+already, and the zeros they leave in `.ovl` pack to almost nothing. What
+grows is `.boot3`'s end, so the lift steps four times (2,048 bytes of boot
+RAM; guard 5's headroom at 128KB 19,968 -> 17,920 on kern_big, 19,456 ->
+17,408 on kern_emu), which wave 4's shorter blob is planned to give most of
+back. kern_small keeps all of it in `.ovl` (`OVSCALL`, SPEC.md §2.5.3.2) and
+is byte-identical.
 
 Resident: 0 bytes on every kernel, in every wave. The lift's two steps on kern_small cost
 1,024 bytes of its 128KB boot arena (63,488 -> 62,464) and of guard 5's

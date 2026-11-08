@@ -5496,8 +5496,9 @@ api_sysfp:  dw dwf_dskw_write_sys  ; which verb the shared fenced cell runs:
 
 ; OVBCALL - into whichever half THIS BUILD put the body in (SPEC.md 2.5.3.2).
 ; A boot-only body that finishes before the first mount may live in EITHER
-; half, and the two kernels answer differently: kern_big puts the six OVBCALL
-; bodies in `.ovl`, kern_small in `.boot3` (the blob until BOOT3-PLAN wave 1),
+; half, and the two kernels answer differently: kern_big puts the OVBCALL
+; bodies in `.ovl`, kern_small in `.boot3` (the blob until BOOT3-PLAN wave 1;
+; there were six until wave 3 sent mem_init_x to `.boot3` on every kernel),
 ; because the region `.ovl` lands on is what stops kern_small's mount buffers
 ; shedding (the `.ovl` guard at the foot of this file, and DSK_NENT in
 ; dskwin.inc).
@@ -5530,15 +5531,20 @@ api_sysfp:  dw dwf_dskw_write_sys  ; which verb the shared fenced cell runs:
 %endif
 %endmacro
 
-; OVSCALL - OVBCALL'S MIRROR: a body in `.ovl` on kern_small and in the blob
-; on kern_big. wm_init is the one (SPEC.md 9.9.8 bought its `.ovl` bytes on
-; kern_big for the PS/2 wheel's knock). tools/os88ovlchk.py holds it to `.ovl`,
-; the kern_small arm, by the same rule that holds OVBCALL to `.boot2`.
+; OVSCALL - OVBCALL'S MIRROR: a body in `.ovl` on kern_small and in `.boot3`
+; on every other kernel (SPEC.md 2.5.3.2). It was the BLOB there, for wm_init
+; alone (SPEC.md 9.9.8 bought its `.ovl` bytes on kern_big for the PS/2
+; wheel's knock), until BOOT3-PLAN wave 3 relieved `.ovl` by moving the clock
+; ladder and sch_idle_start out of it on every kernel but kern_small - the
+; same build choice, so the same macro, and wm_init went with it. Its bodies
+; write `%ifndef KERN_SMALL` / B3SECT / `%else` / `section .ovl`, the kern_small
+; arm LAST, and tools/os88ovlchk.py holds OVSCALL to `.ovl`, the kern_small
+; model, by the same rule that holds OVBCALL to `.boot3`. Both arms are 5 bytes.
 %macro OVSCALL 1
 %ifdef KERN_SMALL
     OVLCALL %1
 %else
-    BLOBCALL %1
+    B3CALL %1
 %endif
 %endmacro
 
@@ -5774,7 +5780,7 @@ kmain_o:
                                 ; here, and this also closes the ticks-only
                                 ; era - the boot sector's load and the three
                                 ; calls above it
-    OVLCALL  sch_idle_start     ; PROBE (docs/plans/completed/SCHED-IDLE-PLAN.md 6.2): the idle
+    OVSCALL  sch_idle_start     ; PROBE (docs/plans/completed/SCHED-IDLE-PLAN.md 6.2): the idle
                                 ; task. Inert while ui_task never sleeps - the
                                 ; scan skips its slot, so it is reached only
                                 ; where sch_switch used to resume the outgoing
@@ -5783,7 +5789,7 @@ kmain_o:
                                 ; table is cleared
     ; (no evq_init: the ring's three .bss indices arrive zeroed - events.inc)
     MARKW 6
-    OVLCALL  clk_init        ; system clock (SPEC.md 37): probe the RTC,
+    OVSCALL  clk_init           ; system clock (SPEC.md 37): probe the RTC,
                                 ; or fall back to the fixed date - before the
                                 ; mode set, so the very first menu bar paint
                                 ; already carries a valid clock
@@ -5795,7 +5801,7 @@ kmain_o:
                                 ; ticking until spl_finish below (15.3)
     MARKW 8
 %ifdef KERN_BIG
-    OVLCALL  vid_ctx_init       ; ...and bank that geometry as display 0's
+    B3CALL   vid_ctx_init       ; ...and bank that geometry as display 0's
                                 ; (SPEC.md 39.12). AFTER vid_apply and never
                                 ; FROM it: vid_apply runs from the splash while
                                 ; the rest of the kernel is still coming off
@@ -5840,7 +5846,7 @@ kmain_o:
 .noslide:
 %endif
     MARKW 11
-    OVBCALL   mem_init_x         ; the claim heap (SPEC.md 50): int 12h, the
+    B3CALL    mem_init_x         ; the claim heap (SPEC.md 50): int 12h, the
                                 ; empty map. FIRST of the memory users -
                                 ; every claim below goes through it
     MARKW 12
@@ -5912,7 +5918,7 @@ kmain_o:
 %endif
     MARKW 14
     BPMARKW 3                    ; ...the typeface
-    OVSCALL  wm_init            ; the blob on kern_big, `.ovl` on kern_small
+    OVSCALL  wm_init            ; `.boot3`, and `.ovl` on kern_small
     MARKW 15
 %ifdef BANDCOMP
     call KERNEL_SEG:ovw_band_init              ; SPEC.md 5.9.2: the composer's 2KB, before the

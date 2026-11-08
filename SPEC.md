@@ -536,7 +536,10 @@ entry point refuses.
 > (now `OVLCALL`). So a dated passage below — a measurement, a table, the
 > history of a move — that says `.ovl` means the BLOB half and one that says
 > `.ovlw` means the window, as they were written. §2.5.3 to §2.5.3.2, which
-> define the halves, are stated in the current names.
+> define the halves, are stated in the current names. **Since BOOT3-PLAN wave
+> 3 the clock ladder named below is not `.ovl`'s** on kern_big, kern_emu and
+> kern_mega: it moved whole to `.boot3` (§2.9.15), and only kern_small keeps
+> it here.
 
 `section .ovl start=OVL_START vstart=0`, in the *same* assembly as the rest
 of the kernel. It holds code that runs **once**, from `kmain`, and is never
@@ -894,6 +897,16 @@ Three rules bind a body that takes this:
   `mem_init_x`, the serial probe (`mouse_init` and its three blocks, under
   `MOU_IN_BLOB` - a `kern_small` knob build keeps `.ovl`), `snd_init` and,
   under `BAKED_FONT`, `ovl_font_init`. `kern_big`'s arm is still `.ovl`.
+- **Since BOOT3-PLAN wave 3 the MIRROR is `.boot3` too.** `OVSCALL` (`.ovl`
+  on `kern_small`) was `BLOBCALL` on every other kernel, for `wm_init` alone;
+  its other arm is `B3CALL` now, and its bodies are `wm_init`,
+  `sch_idle_start` and the clock ladder (`clk_init` to `clk_bcd`, §37.90),
+  each written `%ifndef KERN_SMALL` / `B3SECT` / `%else` / `section .ovl` -
+  the `kern_small` arm LAST, by the first rule above, so rule 2d holds
+  `OVSCALL` to `.ovl`. `kern_small` is unchanged: its `.ovl` has room and no
+  want named (BOOT3-PLAN 5.1). `mem_init_x` left the build choice the other
+  way: it is `B3SECT` on every kernel, called by a plain `B3CALL`, since its
+  `kern_small` arm was `.boot3` already.
 
 **`B3SECT` and `B3CALL` place and call the third home's bodies** (§2.9.15.2).
 Until wave 1 they had fallback arms for a kernel without `.boot3`, each body
@@ -3646,6 +3659,22 @@ loader's `b2_cylok`, which `ovl_fdd_apply` reads through `ovl_fdd_cylok`, a
 6-byte door - a name past `boot2_entry` is rule B6's, and it is the blob's
 CS's.
 
+**...and since wave 3, what relieves `.ovl`** (kern_big, kern_emu, kern_mega;
+the owner's "move related things together", BOOT3-PLAN 15 q8): the clock
+ladder WHOLE - `clk_init`, `clk_probe`, `clk_commit`, every rung's probe and
+read and `clk_bcd`, one contiguous run of `.ovl` (§37.90) - with
+`sch_idle_start` (§8.1.2), `vid_ctx_init` (§39.12; `KERN_BIG` builds),
+`mem_init_x` (§50) and, from the blob, `wm_init` (§9.9.8). Each was `.ovl`'s
+or the blob's for one caller in `kmain_o`, before the mount, and each is
+called by `B3CALL` or `OVSCALL` (§2.5.3.2) at the same site for the same
+bytes (`wm_init`'s a byte more: `BLOBCALL` was 4). The ladder's tables are
+read through CS in either home; it reaches nothing outside itself but
+`ovw_mark_stamp` (`BLOBMARK`, a far call, `BOOTMARK=1` only), and its data is
+`.bss` and `clk_str`'s scratch (§37.90). **The RTC's WRITE half is not
+touched**: `clockw.inc` in `CTRL.DRV` carries its own copies of the six port
+helpers (§37.94) and names no ladder label, so it runs after the drop as
+before. kern_small keeps all of it but `mem_init_x` in `.ovl`.
+
 ##### 2.9.15.1 Where it sits, and when it is alive
 
 It is the file's last section (`MODC_START = B3_START + B3_SIZE`), so
@@ -3694,8 +3723,10 @@ KERNEL_SEG, SS = LOW_SEG, far-entered, `retf`, its own data through `cs:`,
 - **`B3CALL x`** calls one: `call B3_SEG:x` (5 bytes, OVLCALL's shape -
   nothing published, nothing retired), or `push cs` + a near call from inside
   `.boot3`.
-- **OVBCALL** (§2.5.3.2) is `B3CALL` on kern_small and `OVLCALL` elsewhere:
-  the one body home still chosen per kernel, written once in the macro.
+- **OVBCALL** (§2.5.3.2) is `B3CALL` on kern_small and `OVLCALL` elsewhere,
+  and **OVSCALL** its mirror, `OVLCALL` on kern_small and `B3CALL` elsewhere
+  (since wave 3; `BLOBCALL` before it): the body homes still chosen per
+  kernel, each written once in its macro.
 - **`B2CALL x`** is the way back into the blob from `.boot3`:
   `call BLOB_SEG_AT:x`, the constant stage 1 (`HEAP_PARA`) and boothd
   (`BLOB_SEG`) are built with. It is a NEW ASSUMPTION - before it, nothing in
@@ -3725,14 +3756,17 @@ that GROWS adds to R past this bound, so boot2.asm's `KZIP` guard stays the
 exact pass-2 check. `KZ_MARGIN_K` mirrors `KZ_MARGIN` under a guard. The
 floor keeps a section that fits under 96 paragraphs from moving anything:
 kern_big's bound is 64 at wave 0, and `.boot3` may grow by `kernsize`'s
-`boot3` margin (523 bytes at wave 0, 16 at wave 1, 352 at wave 2 on
-kern_big) before the lift steps.
+`boot3` margin (523 bytes at wave 0, 16 at wave 1, 352 at wave 2, 408 at
+wave 3 on kern_big) before the lift steps.
 At wave 1 kern_big's lift is still 96; kern_small's is 160 (`.boot3` 1,441
 bytes from 0xEB70) and kern_mega's 160 (1,010 bytes from KERN_END, where
 only 450 fit under the floor). At wave 2 (the SYSTEM.CFG reader and the
 driver loader) kern_big's and kern_emu's go to **224** (`.boot3` 2,754 and
 2,755 bytes) and kern_mega's to **256** (2,670): the read's term binds on
-all three, and `.boot3b` fits under it. A step is 512
+all three, and `.boot3b` fits under it. At wave 3 (the clock ladder and
+the rest of `.ovl`'s relief, 1,992 bytes on kern_big) they go to **352**
+(kern_big, kern_emu: `.boot3` 4,746 and 4,747) and **384** (kern_mega,
+4,662), the read's term again. A step is 512
 bytes of BOOT RAM, never a resident byte - and an installed hard disk's
 volume boot record must be refreshed with the kernel (§52.10).
 
@@ -3743,7 +3777,8 @@ ROM_COLD kernel since §2.10.3 (BR-154 of the 2026-11-08 review); `kernsize`'s
 `boot` line counts it too and prints the BOOT ARENA at `MIN_RAM_KB`, from the
 blob's top (`BLOB_SEG_AT*16 + BOOT2_PAD`, `mem_init_x`'s floor) to the top
 of RAM - 24,064 bytes on kern_big at 128KB until wave 2's lift took it to
-22,528 (wave 4 is planned to give it back), the host figure that stands in
+22,528 and wave 3's to 20,480 (wave 4 is planned to give most of it back),
+the host figure that stands in
 for a kern_big 128KB boot row.
 
 ##### 2.9.15.4 The fences: all at build time
@@ -17213,7 +17248,7 @@ Those are module bytes and none of them is resident.
 **What it cost the boot overlay.** `.ovl` had two bytes left of its 5,120
 (§2.5.3), and the knock is 39 with its call. `wm_init`, 34 bytes with one
 caller in `kmain_o` and no outbound calls, moved into the blob on `kern_big`
-(`OVSCALL`, `OVBCALL`'s mirror). Reordering its two `rep stosb` runs made the
+(`OVSCALL`, `OVBCALL`'s mirror; `.boot3` since BOOT3-PLAN wave 3, §2.5.3.2). Reordering its two `rep stosb` runs made the
 closing store `mov [wm_fs], ax` instead of a six-byte immediate. That reorder
 was the byte the blob was short. `kern_small` keeps `wm_init` in `.ovl`.
 
@@ -75140,7 +75175,8 @@ package of §111 since §14.8 - keeps its own `tm_` names and its own
 per-instance stopwatch state — the two are unrelated, and the app's rename
 away from "Clock" is what finally makes the two read differently). Included right after `events.inc`; `clk_init` runs in kmain
 right after `sched_init` and `sch_idle_start` (§15). The software clock and the bar's formatter are near `.text`, called from the
-UI task's inner loop; the RTC probe is the boot overlay's, `OSAPI_CLK_GET` is
+UI task's inner loop; the RTC probe is boot-only (`.boot3` since BOOT3-PLAN
+wave 3, §2.9.15; `.ovl` on `kern_small`), `OSAPI_CLK_GET` is
 `.cold`, and the field editor and the RTC write half ship in `CTRL.DRV`
 (§37.93, §37.94).
 
@@ -75448,7 +75484,9 @@ while `clk_probe` runs — `clk_tb_*` (every rung's read lands there first and
 `[clk_nsrol]` and `[clk_rpyy]` — and they are declared as `equ`s **into the
 menu bar's line buffer**, not beside it. The two lifetimes cannot meet, in
 both directions: every reference to every one of those names is in
-`clock.inc`'s `.ovlw`, which `drv_boot`'s first mount overwrites, and
+`clock.inc`'s `.ovlw`, which `drv_boot`'s first mount overwrites (`.boot3`
+since BOOT3-PLAN wave 3, dead at `mem_unblob_x`, on every kernel but
+`kern_small`; the argument is the CALL's order and holds unchanged), and
 `clk_str`'s only writer is `clk_fmt` - whose callers are the menu bar's
 composition, `toast_place` and `menu_sound`, none reachable before `menu_init`,
 a hundred lines of `kmain` after `OVWCALL clk_init` - and, since kernel size
@@ -75480,7 +75518,8 @@ hardware.
 The consequence for a **size** pass is worth stating where the tests are:
 `clock.inc`'s `.ovlw` half and the whole of `clockw.inc` are the least-covered
 bytes in the kernel, and they buy nothing against `KERN_CODE_MAX` either —
-`.ovlw` is forfeit at the first mount and `.modc` ships in `CTRL.DRV`. What is
+`.ovlw` is forfeit at the first mount (`.boot3`, since BOOT3-PLAN wave 3, at
+`mem_unblob_x`) and `.modc` ships in `CTRL.DRV`. What is
 reachable is rung 1 under QEMU (`sb_ladder` reads `tier 1, stop 00` out of
 §37.92's `'CK'` block, which is a live read of the whole AT burst and decode)
 and the *refusals* of rungs 2 and 3 under `RTC=ns` / `RTC=rp`. Acceptance of

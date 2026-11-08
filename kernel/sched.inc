@@ -812,16 +812,22 @@ sch_idle_body:
 ;      resume-the-outgoing fallback and nothing else changes)
 ;
 ; IN THE BOOT OVERLAY (docs/plans/LAST-DROP-BYTES.md row 16). One caller, kmain's
-; OVLCALL, and the idle task it spawns outlives it by construction - a task's code is
+; OVSCALL, and the idle task it spawns outlives it by construction - a task's code is
 ; sch_idle_body in `.text`, which is what BX = 0 above names. Taking the address
-; of a `.text` label from `.ovl` is correct and taking the address of an `.ovl`
-; one would not be: `.text` has vstart=0 and the consumer supplies KERNEL_SEG.
+; of a `.text` label from a boot-only home is correct and taking the address of
+; one of ITS labels would not be: `.text` has vstart=0 and the consumer supplies
+; KERNEL_SEG. `.boot3` since BOOT3-PLAN wave 3 (`.ovl` until then), and still
+; `.ovl` on kern_small - OVSCALL's two arms (SPEC.md 2.5.3.2).
 ;
 ; **kmain does not read the CF this answers with**, which is what lets the site
 ; use the flag-banking gate rather than SPLCALLC. If a caller ever does, the
 ; call has to change with it.
 ; -----------------------------------------------------------------------------
-section .ovl
+%ifndef KERN_SMALL
+B3SECT                          ; BOOT3-PLAN wave 3 (SPEC.md 2.9.15)
+%else
+section .ovl                    ; kern_small: the window half, written LAST
+%endif                          ; (tools/os88ovlchk.py models kern_small)
 sch_idle_start:
     push bx
     push cx

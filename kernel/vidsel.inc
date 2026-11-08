@@ -1663,16 +1663,17 @@ vid_ctx_act:
 ; **THE LINE ABOVE USED TO SAY "and from vid_switch" AND IT WAS NOT TRUE** -
 ; vid_switch calls vid_avail_test, cur_unlazy, vid_blank, wm_su_drop_all,
 ; vid_equip, vid_apply, vid_setmode, vid_disp_init and desk_rowcalc, and none of
-; them is this. kmain's OVLCALL is the only edge in the repository, which is what
+; them is this. kmain's B3CALL is the only edge in the repository, which is what
 ; puts this body in the BOOT OVERLAY (SPEC.md 2.5.2,
 ; docs/plans/LAST-DROP-BYTES.md row 13) - and a stale comment naming a runtime caller
 ; is exactly how a later session would add the one that breaks it silently.
+; `.boot3` since BOOT3-PLAN wave 3 (SPEC.md 2.9.15), `.ovl` until then.
 ;
 ; Its two outbound calls go through spw_near's `call bp`, which is `.boot2`'s
-; discipline unchanged from `.cold`'s: CS is the overlay's, DS is still
+; discipline unchanged from `.cold`'s: CS is the boot home's, DS is still
 ; KERNEL_SEG, so the body reads [vid_ndisp] and [vid_ox] exactly as it did.
 ; -----------------------------------------------------------------------------
-section .ovl
+B3SECT
 vid_ctx_init:
     push ax
     push di
@@ -1704,7 +1705,7 @@ vid_ctx_init:
     pop es
     pop di
     pop ax
-    retf                        ; FAR: kmain reaches this through SPLGATE1
+    retf                        ; FAR: kmain_o reaches this through B3CALL
 section .text
 
 ; (vid_fsx_enter/leave/unblank: EXTD.DRV's EXT_FSX, kernel/extmod.inc -

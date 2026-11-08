@@ -183,7 +183,10 @@ LABEL_DOT = re.compile(r'^[A-Za-z_.]\w*:')
 DRVBOOT = re.compile(r'^\s*(?:SPL(?:GATE1?|CALLC?)|BLOBCALL|B3CALL)\s+drv_boot_x\b')
 # (B3CALL since BOOT3-PLAN wave 2: drv_boot_x is `.boot3`'s on every kernel
 # with drivers, and kern_small's one-byte rung is still the blob's BLOBCALL)
-OVLCALL = re.compile(r'\b(?:OVLCALL|OVBCALL)\s+(\w+)')
+OVLCALL = re.compile(r'\b(?:OVLCALL|OVBCALL|OVSCALL)\s+(\w+)')
+# ...and OVSCALL, OVBCALL's mirror (SPEC.md 2.5.3.2): it IS an OVLCALL on
+# kern_small, the model's build, since BOOT3-PLAN wave 3 gave it the clock
+# ladder and sch_idle_start - so it is asked rule 2e's question too.
 # ...and OVBCALL with it (SPEC.md 2.5.3.2): on kern_big it IS an OVLCALL,
 # so rule 2e's question - is this body still there when the call is made -
 # is exactly as live for it as for the plain form. On kern_small the body
@@ -246,11 +249,32 @@ def _toastline(line):
     return line
 
 
+_KSIF = re.compile(r'^\s*%if(n?)def\s+KERN_SMALL\s*$')
+_ANYIF = re.compile(r'^\s*%if')
+_ELSE = re.compile(r'^\s*%el')
+_ENDIF = re.compile(r'^\s*%endif\b')
+
+
+def _walk_alt(path):
+    """{line-number: section} for the lines a `%if(n)def KERN_SMALL` block's
+    OTHER arm placed - the non-kern_small kernels' section, where it differs
+    from the one model (kern_small's) that _walk files the line under. A
+    block whose non-small arm switches nothing, and every line after an
+    unconditional switch, has no entry. Only OVSCALL's check reads it
+    (rule B8): its non-small arm is B3CALL, so its target must be placed by a
+    B3SECT in that arm (BOOT3-PLAN wave 3, SPEC.md 2.5.3.2)."""
+    _walk(path)
+    return _WALK[(path, 'alt')]
+
+
 def _walk(path):
     """[(section, line-number, stripped-line, raw-line)] for the whole file."""
     got = _WALK.get(path)
     if got is None:
         got = []
+        alt = {}                        # line -> the non-small arm's section
+        altcur = None
+        frames = []                     # per %if: [ks?, in-the-big-arm?, sect]
         cur = EXTRA.get(path, '.text')
         inmac = False
         for n, raw in enumerate(open(path), 1):
@@ -260,6 +284,18 @@ def _walk(path):
                     inmac = True
                 elif ENDMACRO_B.match(line):
                     inmac = False
+                elif not inmac:
+                    mk = _KSIF.match(line)
+                    if mk:              # %ifndef: the big arm is the first
+                        frames.append([True, mk.group(1) == 'n', None])
+                    elif _ANYIF.match(line):
+                        frames.append([False, False, None])
+                    elif _ELSE.match(line) and frames:
+                        frames[-1][1] = not frames[-1][1]
+                    elif _ENDIF.match(line) and frames:
+                        fr = frames.pop()
+                        if fr[0] and fr[2] is not None:
+                            altcur = fr[2]
             # A `section` line INSIDE a %macro body is the EXPANSION's switch,
             # not the definition's: B3SECT (kernel.asm) holds four of them, one
             # per arm, and read as the definition's they filed everything
@@ -268,17 +304,29 @@ def _walk(path):
             if 'section' in line and not inmac:
                 m = SECT.match(line)
                 if m:
-                    cur = m.group(1)
-                    if cur == '.boot2' and path not in LOADER:
-                        cur = '.blob'       # the overlay's half (SPEC.md 2.9.14)
+                    sw = m.group(1)
+                    if sw == '.boot2' and path not in LOADER:
+                        sw = '.blob'        # the overlay's half (SPEC.md 2.9.14)
+                    if frames and frames[-1][0] and frames[-1][1]:
+                        frames[-1][2] = sw  # the big arm's: not the model's
+                    elif not (frames and frames[-1][0]):
+                        altcur = None
+                    cur = sw
                     continue
             # B3SECT is `section .boot3` on every kernel since BOOT3-PLAN wave
             # 1 (SPEC.md 2.9.15.2), when its fallback arms went
             if 'B3SECT' in line and not inmac and B3SECT_RE.match(line):
+                if frames and frames[-1][0] and frames[-1][1]:
+                    frames[-1][2] = '.boot3'
+                elif not (frames and frames[-1][0]):
+                    altcur = None
                 cur = '.boot3'
                 continue
+            if altcur is not None:
+                alt[n] = altcur
             got.append((cur, n, _toastline(line), raw))
         _WALK[path] = got
+        _WALK[(path, 'alt')] = alt
     return got
 
 
@@ -931,7 +979,7 @@ def main():
     # fails (it would be a blob segment carrying a window offset on the small
     # build), and an OVLCALL aimed at one that DID fails the other way.
     # ...AND SINCE BOOT3-PLAN WAVE 1 ITS kern_small ARM IS `.boot3` (B3CALL),
-    # not the blob: kern_small's six OVBCALL bodies moved there, so the model
+    # not the blob: kern_small's OVBCALL bodies moved there, so the model
     # holds OVBCALL to `.boot3` and this map knows `.boot3`'s labels as well
     MACHALF = {'SPLCALL': '.blob', 'SPLCALLC': '.blob',
                'SPLGATE': '.blob', 'SPLGATE1': '.blob', 'SPLSTUB': '.blob',
@@ -990,7 +1038,7 @@ def main():
     # proxy (size pass 4: kmain's pre-mount half is `kmain_o`, in `.boot2`, and
     # its OVLCALLs are not on kmain's own lines any more). A call to one after
     # the mount is the same defect one level down, so it is refused the same way.
-    WINREF = re.compile(r'\b(?:OVLCALL|OVBCALL)\s+\w+|\bcall\s+FAT_SEG:')
+    WINREF = re.compile(r'\b(?:OVLCALL|OVBCALL|OVSCALL)\s+\w+|\bcall\s+FAT_SEG:')
     BLOBC = re.compile(r'\b(?:SPLGATE1?|SPLCALLC?|BLOBCALL)\s+(\w+)')
     winbody = set()
     for f in kfiles:
@@ -2142,6 +2190,7 @@ def boot3_rules(kfiles, root='.'):
     rows = _b3_stream(kfiles)
     where = {}                          # label -> section, every definition
     alldefs = {}                        # label -> {every section defining it}
+    altw = {}                           # label -> its non-kern_small section
     for f, n, sect, line, raw, _e in rows:
         c0 = line[:1]
         if c0.isalpha() or c0 == '_':
@@ -2149,6 +2198,10 @@ def boot3_rules(kfiles, root='.'):
             if m:
                 where[m.group(1)] = sect
                 alldefs.setdefault(m.group(1), set()).add(sect)
+                if not _e:
+                    a = _walk_alt(f).get(n)
+                    if a:
+                        altw[m.group(1)] = a
         if 'OSAPI_' in line:
             m = CELLDEF.match(line)
             if m:
@@ -2308,7 +2361,21 @@ def boot3_rules(kfiles, root='.'):
             inmac = (" (written inside %%macro %s, expanded here)" % ex
                      if ex else '')
             m = B3CALL_RE.match(line)
-            if m:
+            if m and ex == 'OVSCALL':
+                # OVSCALL's B3CALL is the arm of every kernel BUT the model's
+                # (kern_small's is OVLCALL, which rule 2d holds to `.ovl`), so
+                # its target is judged by the section its body's OTHER arm
+                # places it in: `%ifndef KERN_SMALL` / B3SECT / `%else` /
+                # `section .ovl` (BOOT3-PLAN wave 3). A body plain in `.ovl`
+                # would be `call B3_SEG:` with a window offset on kern_big
+                t = m.group(1)
+                if altw.get(t) != '.boot3':
+                    bad.append(('B8', f, n, "OVSCALL %s is B3CALL on every "
+                                "kernel but kern_small, and %s is not placed "
+                                "by a B3SECT in a `%%ifndef KERN_SMALL` arm "
+                                "(it is %s there)" % (t, t, altw.get(
+                                    t, where.get(t, 'no section')))))
+            elif m:
                 t = m.group(1)
                 if '.boot3' not in alldefs.get(t, ()) and t not in b3mlabs:
                     # (ANY arm's: a name defined in two - drv_boot_x is
@@ -2415,6 +2482,8 @@ def boot3_rules(kfiles, root='.'):
 
 # THE FIXTURES: each a tiny tree that must fail ONE rule, and the positive
 # control that must fail none. {path: text}; LOADER/EXTRA paths are honoured.
+B3_OVSMAC = ("%macro OVSCALL 1\n%ifdef KERN_SMALL\n    OVLCALL %1\n%else\n"
+             "    B3CALL %1\n%endif\n%endmacro\n")
 B3_OKTREE = {
     'boot/boot2.asm': "boot2_entry:\n    call kz_all\n    ret\n"
                       "kz_all:\n    ret\nb2_spt: dw 0\n",
@@ -2428,6 +2497,12 @@ B3_OKTREE = {
         "    SPLCALL blob_e\n"
         "    retf\nb3_z:\n    mov ax, [cs:b3_d]\n    ret\nb3_d: dw 0\n"
         "B3SECT\nb3_y:\n    retf\nsection .text\n",
+    # OVSCALL's shape (BOOT3-PLAN wave 3): `.ovl` on kern_small, the model,
+    # and `.boot3` on every other kernel - the kern_small arm written LAST
+    'kernel/o.inc': B3_OVSMAC + "section .boot2\nb_o:\n    OVSCALL ovl_o\n"
+                    "    retf\n%ifndef KERN_SMALL\nB3SECT\n%else\n"
+                    "section .ovl\n%endif\novl_o:\n    retf\n"
+                    "section .text\n",
 }
 B3_FIXTURES = [
     ('B1', {'kernel/r.inc': "section .text\nres:\n    call B3_SEG:b3_x\n"}),
@@ -2464,6 +2539,11 @@ B3_FIXTURES = [
     ('B8', {'kernel/m.inc': "%macro M_B8 0\n    B3CALL blob_e\n"
                             "%endmacro\nsection .boot2\nb_m:\n    M_B8\n"
                             "    retf\nsection .text\n"}),
+    # OVSCALL at a body that is `.ovl` on EVERY kernel: right on kern_small,
+    # and `call B3_SEG:` carrying a window offset on all the others
+    ('B8', {'kernel/o.inc': B3_OVSMAC + "section .boot2\nb_o:\n"
+                            "    OVSCALL ovl_o\n    retf\nsection .ovl\n"
+                            "ovl_o:\n    retf\nsection .text\n"}),
     ('B9', {'kernel/i.inc': "section .boot3m\nb3m_e:\n    retf\n"
                             "section .boot2\nb_i:\n    jmp b3m_e\n"
                             "    B3CALL b3m_e\n    retf\nsection .text\n"}),

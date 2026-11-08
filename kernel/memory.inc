@@ -550,29 +550,20 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
 ; Runs on task 0 before any other task exists, so it needs no critical
 ; section (SPEC.md 7's only-the-UI-task-calls-BIOS rule holds here).
 ; -----------------------------------------------------------------------------
-%ifndef KERN_SMALL
-section .ovl                   ; kern_big: the WINDOW half (SPEC.md 2.5.3),
-                                ; whose window has room to spare
-%else
-B3SECT                          ; ...and kern_small: `.boot3` (BOOT3-PLAN wave 1;
-                                ; it was the BLOB half until then)
-                                ; (SPEC.md 2.5.3.2, mouse_init's shape). The
-                                ; deadline is the same either way - kmain runs
-                                ; this long before drv_boot - so the choice is
-                                ; only about WHOSE bytes. On that kernel
+B3SECT                          ; `.boot3` on every kernel since BOOT3-PLAN
+                                ; wave 3 (SPEC.md 2.9.15): kern_big's arm was
+                                ; the WINDOW half (SPEC.md 2.5.3) until then,
+                                ; and kern_small's has been `.boot3` since
+                                ; wave 1 (the BLOB half before it). So the
+                                ; build choice OVBCALL made (SPEC.md 2.5.3.2)
+                                ; is gone for this body, and kmain_o calls it
+                                ; with a plain B3CALL. The deadline was the
+                                ; same either way - kmain runs this long
+                                ; before drv_boot - so the choice was only
+                                ; ever about WHOSE bytes, and on kern_small
                                 ; `.ovl` is read onto the FAT window and the
-                                ; mount buffers, and SPEC.md 22.6.3 has just
-                                ; taken the LISTING out of that region: the
-                                ; 800 bytes it gave back are only 288 of heap
-                                ; while the overlay still needs the rest, so
-                                ; every body moved here turns one more of them
-                                ; into heap. `B3SECT` is written LAST on
-                                ; purpose: tools/os88ovlchk.py reads SOURCE
-                                ; and cannot evaluate the %ifdef, so it files
-                                ; this block by the arm below - which is the
-                                ; build the check exists to protect
-%endif
-                                ; docs/plans/LAST-DROP-BYTES.md row 11): kmain sizes
+                                ; mount buffers, whose bytes it needs back
+                                ; (docs/plans/LAST-DROP-BYTES.md row 11): kmain sizes
                                 ; the heap once. mem_unblob_x, which runs LATER
                                 ; and gives the blob back, is a different body
                                 ; and stays resident - it has to, because it

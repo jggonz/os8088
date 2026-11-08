@@ -1,8 +1,8 @@
 # `.boot3` — boot-only code that rides in KERNEL.SYS
 
-> **Status: BEING BUILT. Waves 0, 1 and 2 are built (2026-11-08, sections
-> 16.4, 16.5 and 16.7), and so are item E with the big review's canary fix
-> (BR-1) and boot-7 (section 16.6); waves 3-5 are not.** Written 2026-11-08 at the owner's
+> **Status: BEING BUILT. Waves 0, 1, 2 and 3 are built (2026-11-08, sections
+> 16.4, 16.5, 16.7 and 16.8), and so are item E with the big review's canary
+> fix (BR-1) and boot-7 (section 16.6); waves 4 and 5 are not.** Written 2026-11-08 at the owner's
 > request, after the big review's size ledger asked for a 14th blob sector
 > and the owner refused it (docs/reports/BIG-REVIEW-2026-11-08.md section 7,
 > docs/reports/big-review-2026-11-08/synth/phase1.md "Both boot-time homes
@@ -726,7 +726,16 @@ from outside `clk_init`'s cone (they are `.ovl` today, so none is reached after
 the mount, but B1 asks the same of the drop). Load time: moving `.ovl` bytes
 costs about 0 read. `.ovl` is in the same packed stream (file 0xCE00, MEASURED),
 and the zeros it leaves behind pack to almost nothing. The lift absorbs about
-1.0 byte of R per byte moved. Whole or in part is question 8, still open.
+1.0 byte of R per byte moved. Whole or in part is question 8 (answered: whole).
+
+**Built (build, 2026-11-08)**, with the clock ladder WHOLE and the deviations
+section 16.8 lists. MEASURED (the shipped KZIP maps): `.ovl` kern_big and
+kern_emu 5,119 -> **3,161** (1 -> **1,959** free), kern_mega 5,118 -> **3,160**
+(2 -> **1,960** free); `.boot3` kern_big 2,754 -> 4,746, kern_mega 2,670 ->
+4,662; the lift 224 -> **352** (kern_big, kern_emu) and 256 -> **384**
+(kern_mega), not "same": the ladder's 1,782 bytes were not in the 176 the
+ledger priced. KERNEL.SYS keeps its sectors. Resident 0; kern_small
+byte-identical.
 
 ### Wave 4: `.boot2` back to its original purpose, on every kernel (owner, 2026-11-08)
 
@@ -2125,3 +2134,149 @@ reader apply: `fddpage` (`ovl_fdd_apply` and its door), `deskfdd`,
 `colorpresets`, `hibernatedrv`, `autostart`, `hibernate`, `fontpick`; kern_emu
 `vmmouse`; kern_mega `megaovl`, `megamod`, `megahiber`, `megahma`,
 `megarmbext`, `rdboot`.
+
+### 16.8 Wave 3 as built (build, 2026-11-08)
+
+Built against this tree's code; where the code disagreed with the plan the
+code won. Host checks only (CLAUDE.md's Testing rule): no emulator ran, no
+row was run but the fast tier inside `make` and the host scripts named
+below.
+
+**What moved** (kern_big, kern_emu, kern_mega): **the clock ladder whole**
+(owner, third round, Q8: "move related things together") - `clk_init`,
+`clk_probe`, `clk_commit`, the four rungs' probes and reads (`clk_at_*`,
+`clk_yr_join`, `clk_xt_charge`, `clk_ns_*`, `clk_tobcd`, `clk_rp_*`,
+`clk_bios_*`) and `clk_bcd`, 1,782 bytes, one block of `kernel/clock.inc`;
+`sch_idle_start` (35); `vid_ctx_init` (63, `KERN_BIG` builds); `mem_init_x`
+(78); and, from the blob, `wm_init` (34). All to `.boot3`.
+
+**The callers, checked.** Every one of them has exactly one caller, a line of
+`kmain_o` before `drv_boot_x` (MARKs 5, 6, 8, 11 and 14), so each runs while
+`.boot3` is live - after `kz_all` and before `mem_unblob_x` - and before the
+mount, which is the stronger deadline the `.ovl` homes had. No rung is
+reached from outside `clk_init`'s cone: the only names `clock.inc`'s ladder
+shares with the rest of the tree are `.bss` (`clk_tier`, `clk_rtc`, the
+fields) and `clk_str`'s probe scratch (SPEC.md 37.90), and the ladder's own
+far exit is `BLOBMARK`'s `call KERNEL_SEG:ovw_mark_stamp` (`BOOTMARK=1`
+only). **The RTC's WRITE half is untouched**: `clockw.inc` (CTRL.DRV's
+`.modc`) calls only its own labels and its own `clkw_*` expansions of the
+six `CLK_*_BODY` helpers (SPEC.md 37.94), and names no ladder label - so a
+Control Panel clock set after the drop runs exactly as before. `mem_init_x`'s
+one COLD_SEG word (`wm_cbd`) left `.ovl`'s group for `.boot3`'s: `os88cfx`
+counts 93 + 2 + 3 + 23 (was 93 + 3 + 3 + 22), 197 of 256 bytes, and the ROM
+lists conserve (`os88rom.py kernel`: 93+2+3+23, 266 bytes of the window
+spare, unchanged). It runs at MARK 11, after the slide (MARK 10) and after
+`rom_patch`, so both re-pointers have reached it.
+
+**What was measured** (the shipped KZIP maps and kernel.kz.json, against the
+starting commit `a6a351a3` built in a worktree at the same commit count):
+
+| kernel | resident | `.boot2` (map, KZIP) | `.ovl` (of 5,120) | `.boot3` (+ `.boot3b`) | lift (para) | guard 5 headroom | boot arena | KERNEL.SYS |
+|---|---:|---|---|---|---:|---:|---:|---|
+| kern_big | 96,768, +0 | 4,489 -> **4,456** (-33) of 6,656 | 5,119 -> **3,161** (1,959 free) | 2,754 -> **4,746** (+ 982) at 0x17DA | 224 -> **352** | 19,968 -> 17,920 (128KB) | 22,528 -> 20,480 | 87,200 -> 87,248 (171 sectors, +0; stage 2 158, +0) |
+| kern_emu | 96,768, +0 | 4,605 -> **4,572** (-33) of 7,168 | 5,119 -> **3,161** | 2,755 -> **4,747** (+ 981) | 224 -> **352** | 19,456 -> 17,408 | 22,016 -> 19,968 | 87,872 -> 87,904 (172, +0) |
+| kern_mega | 62,976 (MEGA_RESIDENT), +0 | 4,281 -> **4,248** (-33) of 7,168 | 5,118 -> **3,160** (1,960 free) | 2,670 -> **4,662** (+ 970) at 0x2140 | 256 -> **384** | 505,344 -> 503,296 (640KB) | 507,904 -> 505,856 | 118,400 -> 118,448 (232, +0; stage 2 218, +0) |
+| kern_small | 58,880, +0 | 3,463, identical | 1,474, identical | 1,441, identical | 160 | 59,904 | 62,464 | 55,408, identical |
+
+`kernsize`'s NOKZIP `.boot2` (section 16.6's note) reads 4,295 -> 4,262 on
+kern_big and 4,087 -> 4,054 on kern_mega. KERNEL.SYS grows 32-48 bytes, not
+by what moved: the bytes were in the packed stream already, and the zeros
+they leave in `.ovl` pack to almost nothing. R grows instead (kern_big
+18,944 -> 20,480), and with `.boot3`'s end the lift is the read's term on
+all three kernels: four steps, 2,048 bytes of boot RAM, 0 resident. The
+blob stays at 0x19600..0x1B000 on kern_big and 0x22C00..0x24800 on kern_mega,
+across no 64KB page. `blobruns`: every geometry's stage-1 and stage-2 call
+counts unchanged (2/2/2/2/3/3 and 11/11/9/8/8/8).
+
+**What was proven byte-identical, at one commit** (`make`, `make mega` and
+`make emu` in a worktree of `a6a351a3`, against this tree before
+committing): **kern_small's `kernel-full.bin` section by section,
+`kernel.bin`, `kernel.sys`, `boot.bin`, `boot360.bin` and
+`small360.img`/`small720.img`**, and its `kernsize` lines. On kern_big,
+kern_emu and kern_mega every module section (`.modc` .. `.modfs`), `.vga`
+and `.mega` are identical; `.text` differs in 3 bytes and `.cold` in 1, each
+an immediate naming a blob offset that moved under it (`sch_isr`'s and
+`dkb_geom`'s SPLCALL targets, `kbld_blob`, `dsk_xfer`'s notch: +1 behind
+`kmain_o`'s longer call, -33 behind `wm_init`'s room); `.modmap` moves with
+MODC_START. Of the shipped images every apps, category, media, WIN16 and
+ARCADE disk is identical; the four system disks, `emu.img`,
+`mega.img`/`mega120.img` differ (KERNEL.SYS and its neighbours), and
+`util360.img` only by `SYSCHECK.O88` (section 16.4's note).
+
+**Deviations.**
+
+1. **The clock ladder moved WHOLE**, the plan's option, by the owner's Q8
+   answer, so `.ovl` frees 1,958 bytes on kern_big (1,959 free), not 176
+   (177): the wants it was for (BR-18, BR-88, BR-141, BR-157, BR-158, BR-25,
+   gfce-6 / WP8's install, about +93..+103 with WP7's -45) fit with about
+   1,850 to spare, on kern_big and kern_mega. The price is the lift: 224 ->
+   352 (kern_mega 256 -> 384), which the wave-3 ledger rows (section 9,
+   "~224", "~256") did not carry, because the 176 fitted under them. Wave 4's
+   lift will be higher than section 9 predicts by the same steps (about 416
+   paragraphs on kern_big, a 128KB arena about 23,000 rather than 24,064).
+2. **kern_small is kept byte-identical by a build choice, not by having
+   nothing to move.** The plan's "kern_small has no wave 3" missed that two
+   of the bodies are shared source whose kern_small arm is `.ovl`:
+   `sch_idle_start` (sched.inc) and, with Q8, the whole clock ladder
+   (clock.inc; 174 bytes there, the rungs being `OS88_RTC`'s, SPEC.md
+   37.0.1). Each is written `%ifndef KERN_SMALL` / `B3SECT` / `%else` /
+   `section .ovl`, the kern_small arm LAST (SPEC.md 2.5.3.2's rule), and
+   called by **OVSCALL**, OVBCALL's mirror - whose non-small arm was
+   `BLOBCALL` (for `wm_init` alone) and is `B3CALL` now. So one macro means
+   "`.ovl` on kern_small, `.boot3` elsewhere", and that is why **`wm_init`
+   moved too** (a wave-4 body, pulled forward: `.boot2` -33, `.boot3` +34,
+   +1 at the call). The "one ladder" argument of section 5.1 would move them
+   on kern_small as well; the brief said kern_small unchanged, and its
+   `.ovl` has no want named, so it was not done.
+3. **`mem_init_x` leaves OVBCALL**: its body is `B3SECT` on every kernel
+   (kern_small's arm was `.boot3` since wave 1), and `kmain_o` calls it with
+   a plain `B3CALL`. OVBCALL keeps five bodies.
+4. **`clock.inc` was restructured to hold the ladder in ONE conditional
+   block**: its two empty `section .text` / `section .ovl` interludes (a
+   comment run and the `CLK_NS_*` equates) went, and `clk_bcd`'s block moved
+   textually from after the bar's formatter to the ladder's end, which is
+   where it already sat in `.ovl` on every kernel - so kern_small's `.ovl`
+   and every `.text` byte are unchanged (the cmp above).
+5. **`os88ovlchk` gained an arm check, not a relaxation.** Its expander
+   keeps both of OVSCALL's arms, so the `B3CALL` arm failed B8 against the
+   one model (kern_small's `.ovl`). B8 now judges OVSCALL's `B3CALL` by the
+   section its target's NON-small arm places it in (`_walk_alt`: the section
+   a `%if(n)def KERN_SMALL` block's other arm switched to), and refuses one
+   that is not a `B3SECT` - which closes, for OVSCALL, the hole OVBCALL still
+   has (an OVBCALL at a body plain in `.boot3` passes rule 2d and calls
+   `FAT_SEG:` with a `.boot3` offset on kern_big; not this wave's). A
+   positive control (the shape) and a nineteenth fixture (OVSCALL at a body
+   plain in `.ovl`) were added; broken on purpose in the real tree
+   (`clock.inc`'s B3SECT arm written `section .ovl`), B8 went red at
+   `OVSCALL clk_init`, and green restored. Rule 2e's window-call patterns
+   (`OVLCALL`, `WINREF`) include OVSCALL, which IS a window call on the
+   model's build.
+6. **`tests/ovlrefs.txt` is unchanged**: the `clk_init`, `sch_idle_start`
+   and `wm_init` rows are still the model's (`.ovl` on kern_small), and the
+   `vid_ctx_init` row, now a `.boot3` label reached from the blob, needs no
+   row under B1 and is left to rule 2c's stale-row rule, which leaves rows
+   naming `.boot3` labels alone.
+
+**Host checks run**: `make` (fast tier 75 passed, 1 skipped), `make mega`,
+`make emu`; `tools/kernsize.py` on kern_big, kern_small, kern_mega and
+kern_emu (before and after, above; kern_small's lines identical);
+`tests/unit/t_blobruns.py`, `t_canary.py`, `t_abilock.py`;
+`tools/checkdocs.py`; `tools/os88index.py --check`; the cheap soak host
+checks by their scripts: `bootfloor` (38 checks), `bootfence` (17),
+`coldpic` (`os88romfix.py --check`), `resident`; `os88rom.py kernel` for
+both ROM kernels and `--selfcheck`; `os88ladder --selfcheck`, `os88intguide
+--selfcheck`.
+
+**Rows to name** for the single final pass. fast (inside `make`): `ovlchk`,
+`canary`, `blobruns`, `bootfence`, `romtool`, `image`, `diskverify`,
+`livefull`. full: `bootsmoke`, `small128`, `megahigh`. soak, host-only:
+`bootfloor`, `coldpic`, `resident`. soak, emulator - the clock and its write
+half after the drop: `dtwrite` (QEMU's rung 1, set, reboot, read the bar),
+`deskclock`, `fontpick`; the idle task: `schacct`, `uiblock`; display 0's
+context: `dispapp`, `dualcheck`, `dispmode`, `vgadrop`; the heap's floor and
+the re-pointers of `mem_init_x`'s word: `heapmap`, `bootfloor-ab`,
+`coldslide`, `rombig`, `romsmall`, `romnodisk`, `hmacold`, `hmadrv`,
+`hmahiber`, `buildmatrix`; the lift and its loads: `kzboot`, `kzboot-off`,
+`splashbar`, `bootstatus`, `blobsum`, `hdboot`, `hdtakeboot`, `install`,
+`cylrun`, `postboot`, `v20boot`, `pravetzboot`; kern_mega `megaovl`,
+`megamod`, `megahiber`; kern_emu `vmmouse`.

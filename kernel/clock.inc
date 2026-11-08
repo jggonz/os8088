@@ -215,7 +215,24 @@ CLK_RETRY   equ 10              ; bounded coherent-read retries
 %define CLK_TRY(n) 0            ; SPEC.md 37.0.1: no rung is reachable on this
 %endif                          ; build, so clk_probe walks nothing and every
                                 ; rung's body is out of the assembly too
-section .ovl                  ; boot overlay (SPEC.md 2.5)
+%ifndef KERN_SMALL
+B3SECT                          ; THE CLOCK LADDER, WHOLE - clk_init to clk_bcd,
+                                ; every rung's probe and read - is boot-only:
+                                ; `.boot3` (SPEC.md 2.9.15) since BOOT3-PLAN
+                                ; wave 3, which took it out of `.ovl` to give
+                                ; the window half its room back. kmain_o is
+                                ; its one caller (OVSCALL clk_init, MARK 6),
+                                ; before the mount and long before the drop.
+                                ; Its tables are read through CS here as they
+                                ; were there, and the RTC's WRITE half is
+                                ; CTRL.DRV's own copy (clockw.inc), which names
+                                ; nothing below
+%else
+section .ovl                    ; ...and kern_small keeps it in the window half
+                                ; (BOOT3-PLAN 5.1: that `.ovl` has room and no
+                                ; want named). Written LAST: tools/os88ovlchk.py
+                                ; models kern_small (SPEC.md 2.5.3.2)
+%endif
 
 
 ; -----------------------------------------------------------------------------
@@ -419,7 +436,6 @@ clk_commit:
     mov [clk_day], al
     pop ax
     ret
-section .text
 %ifdef OS88_RTC                 ; SPEC.md 37.0.1: the four RTC rungs, whole.
                                 ; Everything above is the ladder's dispatch
                                 ; and everything below is the SOFTWARE clock -
@@ -443,7 +459,6 @@ section .text
 ; burst by parking the index at 0Dh - read-only, so a stray later write to
 ; 71h cannot corrupt anything - with the NMI bit CLEAR, which is the state
 ; the BIOS leaves after POST.
-section .ovl                  ; boot overlay (SPEC.md 2.5)
 clk_at_get:                     ; the overlay's copy (CLK_AT_GET_BODY above)
     CLK_AT_GET_BODY
 
@@ -532,8 +547,9 @@ clk_at_regs: db 0x02, 0x04, 0x07, 0x08, 0x09, 0x32
                                 ; the six CMOS registers the burst below reads
                                 ; back to back, in order, into clk_rr+1..+6:
                                 ; minute, hour, day, month, year, century. IT
-                                ; IS .ovl DATA, so it is read CS-RELATIVE -
-                                ; the overlay lands on FAT_SEG and DS is
+                                ; IS THE LADDER'S DATA, so it is read
+                                ; CS-RELATIVE - the ladder runs at B3_SEG
+                                ; (FAT_SEG on kern_small) and DS is
                                 ; KERNEL_SEG, so `[si]` would read six bytes of
                                 ; the kernel image instead (SPEC.md 2.5, and
                                 ; the idiom drvp_sbbase already uses)
@@ -808,7 +824,6 @@ clk_yr_join:
 .out:
     pop cx
     ret
-section .text
 
 ; =============================================================================
 ; Tier CLK_T_NS (2): the National MM58167 at 2C0h - AST SixPakPlus and clones
@@ -830,7 +845,6 @@ CLK_NS_SIG  equ 0x0D            ; RAM: no HIGH nibble - the first signature
 CLK_NS_YRB  equ 0x0E            ; RAM: year - 1980, what 86Box's cards use
 CLK_NS_STAT equ 0x14            ; D0 = a counter rolled during the read
 CLK_NS_MAGIC equ 222
-section .ovl                  ; boot overlay (SPEC.md 2.5)
 
 
 ; -----------------------------------------------------------------------------
@@ -885,8 +899,9 @@ clk_ns_put:                     ; the overlay's copy (CLK_NS_PUT_BODY above)
 ; textually first failure" to "the table's order", which is the same order,
 ; and the observable answer (CF = 1, nothing usable) is identical either way.
 ;
-; THE TABLE IS .ovl DATA AND IS READ CS-RELATIVE. The overlay lands on
-; FAT_SEG while DS is KERNEL_SEG, so a plain `[si]` would read six rows out of
+; THE TABLE IS THE LADDER'S DATA AND IS READ CS-RELATIVE. The ladder runs at
+; B3_SEG (FAT_SEG on kern_small) while DS is KERNEL_SEG, so a plain `[si]`
+; would read six rows out of
 ; the kernel image instead - the trap SPEC.md 2.5 names and drvp_sbbase's own
 ; comment repeats. NASM will not warn about it.
 ; -----------------------------------------------------------------------------
@@ -1640,6 +1655,38 @@ clk_bios_read:
     pop ax
     ret
 %endif                          ; OS88_RTC
+
+
+; -----------------------------------------------------------------------------
+; clk_bcd - packed BCD byte to binary
+; in:  AL = BCD
+; out: AL = value, CF = 1 if either nibble is not a decimal digit
+; clobbers: nothing else
+; -----------------------------------------------------------------------------
+clk_bcd:
+    push cx
+    mov ch, al
+    and al, 0x0F
+    cmp al, 10
+    jae .bad
+    mov cl, 4
+    shr ch, cl
+    cmp ch, 10
+    jae .bad
+    mov cl, ch                  ; AL += CH * 10
+    add ch, ch
+    add ch, ch
+    add ch, ch                  ; CH * 8
+    add ch, cl
+    add ch, cl                  ; + CH * 2
+    add al, ch
+    clc
+    jmp .out
+.bad:
+    stc
+.out:
+    pop cx
+    ret
 section .text
 
 ; -----------------------------------------------------------------------------
@@ -2087,40 +2134,6 @@ clk_put4:
     call clk_put2               ; nothing else"), so AH is still the remainder
     pop ax
     ret
-section .ovl                  ; boot overlay (SPEC.md 2.5)
-
-
-; -----------------------------------------------------------------------------
-; clk_bcd - packed BCD byte to binary
-; in:  AL = BCD
-; out: AL = value, CF = 1 if either nibble is not a decimal digit
-; clobbers: nothing else
-; -----------------------------------------------------------------------------
-clk_bcd:
-    push cx
-    mov ch, al
-    and al, 0x0F
-    cmp al, 10
-    jae .bad
-    mov cl, 4
-    shr ch, cl
-    cmp ch, 10
-    jae .bad
-    mov cl, ch                  ; AL += CH * 10
-    add ch, ch
-    add ch, ch
-    add ch, ch                  ; CH * 8
-    add ch, cl
-    add ch, cl                  ; + CH * 2
-    add al, ch
-    clc
-    jmp .out
-.bad:
-    stc
-.out:
-    pop cx
-    ret
-section .text
 
 
 ; =============================================================================

@@ -505,9 +505,12 @@ wm_pkgcall:
 ; bytes left and the PS/2 wheel's knock needed thirty-seven, which is this body
 ; to the byte. The blob had 248. kern_small keeps it in `.ovl`, where its blob
 ; is the tighter of the two; tools/os88ovlchk.py models kern_small, so that
-; arm is written LAST
+; arm is written LAST. ...AND `.boot3` SINCE BOOT3-PLAN WAVE 3 on every other
+; kernel (SPEC.md 2.5.3.2): OVSCALL's non-small arm became B3CALL when the
+; clock ladder and sch_idle_start took the same build choice, and this body
+; went with the macro (it was wave 4's to move anyway)
 %ifndef KERN_SMALL
-section .boot2
+B3SECT
 %else
 section .ovl                   ; BOTH kernels (SPEC.md 2.5.3.3): it was the
                                 ; blob on kern_small, and kmain_o needed that
