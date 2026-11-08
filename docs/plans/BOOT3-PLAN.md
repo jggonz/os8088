@@ -2847,3 +2847,21 @@ lift: `kzboot`, `kzboot-off`, `splashbar`, `smallboot`, `bootfloor-ab`,
 place a preemption inside the image at the instant a mouse settles - said in
 the row's docstring); `NO_ROM_COLD` + `KERN_KNOB`'s pre-existing assembly
 failure.
+
+*Correction (build, 2026-11-08, verifier round 1).* `.boot3m` was in
+`tools/os88ovlchk.py`'s `FAR` alone and not in `MODS`, so none of the
+module-data rules (no `lods` through DS, module-bss accessors name CS, every
+module-data reference names CS or a stager) looked at it: `mov al, [kbm_tab]`
+inside the image - KERNEL_SEG's bytes at the table's offset - passed. It is
+in `MODS` now, and that alone was NOT enough: the data-label map required a
+colon after the label, and `kbm_tab     db ...` has none, so the rule still
+let the read through (demonstrated). The map takes nasm's colonless form
+too, which brought 35 image data labels into it (`kbm_tab`, 25 `sd_*` in
+`.modu`, 8 `sc_*` in `.modc`, `hbm_knk` in `.modh`); every one was already
+read through CS, so the tree passes unchanged, and the inserted DS read now
+fails `make` naming the line. Three comments in `mouse.inc` carried the
+pre-wave contract and are corrected: `kbm_btn`'s `retf` is reached by a JUMP
+from both `kbm_key` and `kbm_p5spend` (deviation 4 above, not a `push
+cs`/near call); a spent key is CF = 0, not CF = 1; and only `kbm_poll0`
+banks AX - `kbm_p5spend`'s two callers have it dead. No shipped byte moved
+(`cmp` at one commit).

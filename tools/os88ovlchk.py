@@ -54,7 +54,15 @@ CCELL = re.compile(r'^\s*OSAPI_(?:RCSLOT|RCXCELL|RNCELL|FCELL)\s+'
 # all, which is how adding JSLOT alone would have bought nothing.
 CELLDEF = re.compile(r'^\s*OSAPI_(?:NSTUB|XSTUB)\s+([A-Za-z_]\w*)\s*,')
 MODS = ('.modc', '.modu', '.modf', '.modl', '.modh', '.modp', '.modd',
-        '.modk', '.modx', '.modw', '.modj', '.modn', '.mods')  # module images (2.8).
+        '.modk', '.modx', '.modw', '.modj', '.modn', '.mods',
+        '.boot3m')  # module images (2.8).
+# `.boot3m` is the keyboard mouse's pointer half (SPEC.md 2.8.8, 9.6.7), a
+# module image with no FILE: it rides KERNEL.SYS's `.boot3` tail and is
+# adopted from memory into a heap claim, then run with DS = KERNEL_SEG and
+# CS = the claim - a module's contract, so every module-data rule below is
+# its too (BOOT3-PLAN wave 5, verifier round 1: before this it was in FAR
+# alone, and `mov al, [kbm_tab]` inside it - KERNEL_SEG's bytes at the
+# table's offset - passed every check here).
 # `.modw` is winmod.inc's WIN95.DRV (SPEC.md 76.14), kern_big's alone, and
 # `.modj` deskmod.inc's DESK.DRV (SPEC.md 11.103.10), kern_big's alone too, and
 # `.modn` stikmenu.inc's STIKMENU.DRV (SPEC.md 110.12), kern_big's alone.
@@ -78,7 +86,7 @@ MODS = ('.modc', '.modu', '.modf', '.modl', '.modh', '.modp', '.modd',
 # which is how `.modl` shipped once with the near-call check blind to it - the
 # clone module's every `call COLD_SEG:` was correct, and would not have been
 # reported had one been near.
-FAR = ('.boot2', '.blob', '.ovl', '.cold', '.mega', '.boot3', '.boot3m') + MODS  # with a vstart
+FAR = ('.boot2', '.blob', '.ovl', '.cold', '.mega', '.boot3') + MODS  # with a vstart
 # `.boot3` is the third boot-only home (SPEC.md 2.9.15), vstart 0 at B3_SEG,
 # and `.boot3m` the image after it (BOOT3-PLAN wave 5); rules B1-B9 below are
 # their own, and the near-call check here is B4's first half.
@@ -1393,7 +1401,13 @@ def main():
     # lines later; a conditional pair stages at the join). Registering them
     # means converting those sites to a macro of their own - worth doing, and
     # not on the back of a change to a different image.
-    MODDEF  = re.compile(r'^\s*([A-Za-z_]\w*):\s*(?:times\s+\S+\s+)?'
+    # The colon is OPTIONAL, as it is to nasm: `kbm_tab     db ...` is a label
+    # too. Requiring one left 35 image data labels out of the map - `.boot3m`'s
+    # kbm_tab, `.modu`'s 25 sd_*, `.modc`'s 8 sc_* and `.modh`'s hbm_knk - so
+    # `.boot3m` joining MODS alone still let `mov al, [kbm_tab]` through
+    # (BOOT3-PLAN wave 5, verifier round 1; demonstrated both ways). All 35
+    # were already read through CS, so widening it found nothing in the tree.
+    MODDEF  = re.compile(r'^\s*([A-Za-z_]\w*)(?::\s*|\s+)(?:times\s+\S+\s+)?'
                          r'(?:d[bwdq]|res[bwdqt])\b', re.I)
     ISDATA  = re.compile(r'^\s*(?:[A-Za-z_]\w*:)?\s*(?:times\s+\S+\s+)?'
                          r'(?:d[bwdq]|res[bwdqt])\b', re.I)

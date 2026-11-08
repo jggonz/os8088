@@ -3446,9 +3446,10 @@ kbm_btn:
                                 ; a FALLBACK rather than a second opinion.
                                 ; NO AX BANK (kernel size pass 18, -2): AX is
                                 ; spent on CF = 0, which is kbm_move's contract
-                                ; already, and both callers own it - ui_task
-                                ; dispatches nothing after a CF = 1 key, and
-                                ; kbm_poll0 and kbm_p5spend bank it themselves
+                                ; already, and every caller owns it - ui_task
+                                ; dispatches nothing after a CF = 0 (spent)
+                                ; key, kbm_poll0 banks it itself, and
+                                ; kbm_p5spend's two callers have it dead
     mov ax, [ticks]
     sub ax, [kbm_btick]         ; wrap-safe, like every other tick compare here
     cmp ax, KBM_GAP
@@ -3464,7 +3465,9 @@ kbm_btn:
     mov ax, [ticks]
     mov [kbm_btick], ax
     clc                         ; spent (kbm_key's inverted carry). FAR: kbm_key
-    retf                        ; jumps here, kbm_p5spend calls `push cs`/near
+    retf                        ; and kbm_p5spend both JUMP here (BOOT3-PLAN 16.11,
+                                ; deviation 4: a push cs/near call failed the
+                                ; return-kind gate), so this retf is theirs
 
 ; kbm_rclick - the keypad's Del as the RIGHT button. It lives HERE, beside
 ; kbm_btn and in short reach of kbm_key's dispatch, for kbm_btn's reason: a
