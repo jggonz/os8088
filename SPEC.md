@@ -49623,6 +49623,64 @@ a hand-built stream holding one 70,000-byte match must be refused by both
 host decoders. That second half is the negative control, and it fails with
 the cap taken out.
 
+##### 20.14.5.4 …and on kern_mega into a huge claim, across a bridge's cut (MEGA-HUGE-PLAN F4)
+
+**Into a selector claim above 1MB a packed file whose expansion passed 64KB
+was refused** `FERR_IO` (`dskw_rbody`'s `.czfb`): the segment arm, which
+decodes by paragraph, cannot name memory above 1MB, and the selector arm's
+decoder took one window - and its motions, the output's 64KB bump, a
+match's source a window back, the input's slides, were BASE ARITHMETIC,
+which past a bridge's cut (§50.3.5) is another program's memory. Every
+shipped data file is lz4-packed (§20.13.5), so no module, cartridge or
+picture over 64KB reached the pool through `OSAPI_FILE_READ`.
+
+**It is one read now, and the placement is the same** — the packed bytes at
+`R = U − P` from the destination, expanded downwards onto themselves, no
+second claim (§20.14.2) — with the decoder's three scratches aimed by **X,
+the byte's offset in the destination**, rather than by sums (kern_mega only;
+`kern_big` and `kern_small` are byte-identical, their huge claim being one
+conventional block the segment arm already walks by paragraph):
+
+- **the destination is WALKED first, before any data I/O**: every 64KB of X
+  a window of the claim (`OSAPI_SEG`'s SUB stepping, `dskw_hzwalk`), each
+  64KB long but the last, the last reaching U's last byte (else `FERR_BIG`,
+  DX = U's KB), and a cut — a window whose base is not the last one's +
+  64KB — allowed only ON THAT GRID. A window cut short with another after it
+  is a cut off the grid, `FERR_PROT`: a read across a bridge starts at one of
+  its windows. One run has no cut and any paragraph-aligned start;
+- **the output (`MEGA_SEL_ODD`) and a match's source (`MEGA_SEL_BACK`) are
+  64KB windows at 64KB multiples of X**, which the walk's grid rule puts
+  inside one piece each, so a back-reference reaching across a window edge -
+  LZ4's 64KB window is exactly that hazard - reads the PREVIOUS window of X,
+  in whichever piece it is (`mega_hzback`, `mega_hzbump`, `mega_hzbkaim`);
+- **the input (`MEGA_SEL_SLD`) is a window at every 32KB of X** (the
+  decoder's checkpoint slides, §20.14.5.1), and one of those straddles the
+  cut: X = C − 32KB. **No descriptor can cover two places**, so that view is
+  aimed at **THE SEAM**, a 64KB copy of X C−32KB..C+32KB taken out of the
+  claim after the read and before the decode (`dskw_hzfill`). It is claimed
+  only when the stream itself straddles the cut (R before it): a
+  conventional claim (`MEM_K_SEAM`), else a pool block - a bridge leaves the
+  heap its 64KB reserve - BEFORE any data I/O, and refused as `FERR_BIG`, DX
+  = U's KB + 64, when neither can be had; freed on the read's way out,
+  whichever way (`dskw_hzfree`). A stream wholly in one piece needs none;
+- **the decoder learns it from its ES**: `dskw_czexp` names the output in
+  `[mega_hzes]` and `lz_decomp_big`'s entry, finding ES there, sets `LZ_HZ`
+  in its frame's format byte and spends the name - so a package's
+  `OSAPI_DECOMP`, whatever its AL, never takes the huge motions.
+
+The scratches are the decoder's own, aimed by linear base, so the caveat
+§20.14.5.1's slides already carry stands for the output too: a task switch
+to another decode that re-aims one of them is read through on the way back.
+The file layer is the UI task's alone (§18.4), so two huge reads never meet.
+
+`tests/megahpk.py` is the gate: three host-made 'CZ' files on a 4MB Bochs,
+150,000 bytes into a one-run pool claim, then 620,000 bytes into two
+bridges - one packing badly, its stream across the cut (the seam), one
+packing well, its stream all in the conventional piece - and a read 4096
+bytes into a bridge, refused `FERR_PROT`; every byte summed by the step
+against the original. Red on the tree before, every read `refused 0002`;
+red again with the seam taken out.
+
 ##### 20.14.6 The hint is a CACHE, so the read path has a MISS path now
 
 §20.14 has said since it was written that a foreign tool may drop those four
@@ -91227,6 +91285,26 @@ pre-checked — `.nomem` (the heap fragmented under a figure `OSAPI_MEM_AVAIL`
 had just answered), `.noring`, a genuine `FERR_IO` — are the residue of the
 single-copy peak, not an oversight.
 
+#### 45.3.1.2 On kern_mega the module is the POOL's (MEGA-HUGE-PLAN F4)
+
+**The arm's module goes into an `OSAPI_MEM_HUGE` claim above 1MB** when the
+pool's best run holds it (`trk_hzfits`, the `MEMH_AVAIL` ask): one run of
+KB, `HUGE_NOBRIDGE` - never a bridge, because every sample's and pattern
+window is a `SEG_SUB` at a paragraph of the blob, and a SUB's reach stops at
+a cut - read whole by the packed read past 64KB (§20.14.5.4) and walked by
+the same windows as ever. Before it the module was a KB door's conventional
+claim whatever the pool held: 116KB of the ~560KB heap for `BEVERLY.MOD`,
+and no module the heap could not fund in one run. The ceiling is now the
+format's own - paragraph offsets in a word, the 960KB gate - and the pool's.
+A claim the cell put in the heap after all (an LDT run short) is given back
+and the door claims as before; with no pool (a 1MB machine) nothing
+changes. A pool block moves by its descriptors, so it takes no
+`OSAPI_MEM_MOVABLE` and no `trk_reloc`; and a huge claim does not regrow
+(MEGA-HUGE-PLAN F8), so `trk_trim` leaves its under-1KB of slack. The
+shipped build is byte-identical. `tests/megamod.py`'s `trkarm` (the blob
+above 1MB) and `trkbig` (a generated 700KB module, packed, which only the
+pool can hold) are the gate.
+
 #### 45.3.2 …and the refusal asks for the room first (§66.4.3)
 
 §45.3.1 leaves `trk_fdone` asking `OSAPI_MEM_AVAIL` before it stops the
@@ -99362,8 +99440,12 @@ window, and the rules are:
   offset from it is not a multiple of 512 - in two parts (`dskw_hin1`,
   `dskw_hinext`), so one call across the cut lands each byte in its piece. A
   PLAIN read of more than 64KB from the offset into a selector above 1MB is
-  carried by the same stepping (it was refused before, `.czfb`); a packed
-  file still decodes into one window (§20.14).
+  carried by the same stepping (it was refused before, `.czfb`), and so,
+  since MEGA-HUGE-PLAN F4, is a PACKED one whose expansion passes 64KB, into
+  a claim of any shape - one run, a bridge, 16KB or 32KB windows - provided
+  that a read crossing a cut STARTS on one of the claim's 64KB windows: the
+  cut a multiple of 64KB from the destination, `FERR_PROT` otherwise
+  (§20.14.5.4).
 - **The conventional piece is born pinned, as every claim is (§66), and is
   taken from the TOP** - the heap's end, never the fill point, where what
   the bottom stack sheds under it would cut the free run in two (KERN-MEGA-PLAN
@@ -101143,7 +101225,10 @@ was - by a selector - and not by its segment:
   arm loads going through a scratch selector. The LZ decoder slides by
   descriptor (`mega_slidec`), a match 64KB behind the output through
   `MEGA_SEL_BACK`, and a match source that may slide never re-aims the
-  input's `MEGA_SEL_SLD`.
+  input's `MEGA_SEL_SLD`. Above 1MB the same three scratches are aimed by
+  the byte's offset in the destination instead of by sums, so a packed file
+  expands past 64KB into a pool claim and across a bridge's cut (§20.14.5.4,
+  MEGA-HUGE-PLAN F4).
 - **A kernel module that does PARAGRAPH arithmetic keeps it** (MC7.6):
   DISKOPS.DRV's compressor, join and cloner and CTRL.DRV's `cpc_fdtest` hold
   their claims' REAL paragraphs (`clo_kpara` on the way in, `clo_kfree` on

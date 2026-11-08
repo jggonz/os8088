@@ -92,6 +92,19 @@ LZ_BIG      equ 0x80            ; OR'd into AL at the published door: AH:CX is
 LZ_FILT     equ 2               ; a filtered stream, recorded in the frame's
                                 ; format byte - a bit no caller can set, AL
                                 ; above LZ_LZB being refused at the door
+%ifdef KERN_MEGA
+LZ_HZ       equ 0x40            ; kern_mega: THE FILE LAYER'S HUGE READ, in the
+                                ; same byte (MEGA-HUGE-PLAN F4, KERN-MEGA-PLAN
+                                ; 14.171) - set at the entry when ES is the
+                                ; output dskw_czexp named in [mega_hzes], and
+                                ; no caller's AL can carry it (the door refuses
+                                ; a format past LZ_LZB). With it every segment
+                                ; motion below - the output's bump, a match's
+                                ; window back, either source's slide - is
+                                ; mega_hz*'s, which aim the three scratches by
+                                ; X, the offset in the destination, so that a
+                                ; bridge's cut is where X changes piece
+%endif
 
 ; Which decoders this kernel carries (SPEC.md 20.13.6). **BOTH IS THE DEFAULT
 ; AND SHIPS**, and it needs no -D at all: `make COMPRESS=lz4` and
@@ -236,7 +249,7 @@ lz_decomp_big:
     jz .esok
 .esbad:
     pop ax
-    jmp short .early
+    jmp .early                  ; (near: the huge read's test below)
 .esok:
     pop ax
 %endif
@@ -244,6 +257,16 @@ lz_decomp_big:
     ja .early                   ; neither format (the dispatch below is left
                                 ; one of two, and needs no refusal of its own
                                 ; in the build that carries both)
+%ifdef KERN_MEGA
+    cmp byte [ss:mega_pm], 0    ; THE FILE LAYER'S HUGE READ (LZ_HZ above):
+    je .nhz                     ; ES is the output it named, and the name is
+    mov bp, es                  ; spent here, so one decode has it. BP is
+    cmp bp, [ss:mega_hzes]      ; scratch until the frame. ES is MEGA_SEL_ODD,
+    jne .nhz                    ; a GDT scratch, so the 64KB test above
+    mov word [ss:mega_hzes], 0  ; passed it as it passes the segment arm's
+    or al, LZ_HZ
+.nhz:
+%endif
     mov bp, cx                  ; AH:BP = the length (BP is scratch until the
     add bp, si                  ; frame: .early pops the caller's back)...
     adc ah, 0                   ; ...and now the stream's END, from DS:0
@@ -377,7 +400,7 @@ lz_at:
 %ifdef KERN_MEGA
     push dx                     ; kern_mega: in protected mode EVERY selector
     mov dx, 0x0800              ; slides by its descriptor, not by arithmetic
-    call COLD_SEG:mega_slidec   ; (the sum in real mode)
+    call lz_slide               ; (the sum in real mode; by X in a huge read)
     pop dx
 %else
     add ax, 0x0800              ; 32KB is 2,048 paragraphs
@@ -449,7 +472,7 @@ lz_cross:
 %ifdef KERN_MEGA
     push dx                     ; paragraphs (a descriptor's, in protected
     mov dx, 0x1000              ; mode: mega_slidec)
-    call COLD_SEG:mega_slidec
+    call lz_slide
     pop dx
 %else
     add ax, 0x1000              ; paragraphs
@@ -466,11 +489,17 @@ lz_cross:
 lz_dbump:
     mov ax, es
 %ifdef KERN_MEGA
+    test byte [bp+LZ_F_FMT], LZ_HZ
+    jz .seg                     ; a huge read: the next 64KB of X, aimed by
+    call mega_hzbump            ; its map (mega_hzbump)
+    jmp short .set
+.seg:
     call COLD_SEG:mega_s2segc   ; kern_mega: ES is a selector - the segment it
     cmp ax, 0xFFFF              ; stands for, 64KB on, and a selector for THAT,
     je .stay                    ; which may be the scratch one (mega.inc). A
     add ax, 0x1000              ; base above 1MB has no segment and keeps ES:
     call COLD_SEG:mega_oddsegc  ; the entry let exactly 64KB in, and its last
+.set:
     mov es, ax                  ; byte is what wraps DI here
 .stay:
     inc byte [bp+LZ_F_BUMP]
@@ -482,6 +511,34 @@ lz_dbump:
     inc byte [bp+LZ_F_BUMP]     ; ...and the match-offset bound stops being a
     ret                         ; compare from here on (LZ_F_BUMP): a count of
                                 ; 64KB boundaries, which cannot reach 256
+
+%ifdef KERN_MEGA
+; lz_slide / lz_back / lz_bkaim - kern_mega's three segment motions, asked of
+; mega_slidec / mega_backf / mega_bkaimf as they always were, or of mega_hz*'s
+; when the frame says LZ_HZ (MEGA-HUGE-PLAN F4). AX = the selector (DX the
+; paragraphs, for the slide) -> AX = the one to load; BP = the frame
+lz_slide:
+    test byte [bp+LZ_F_FMT], LZ_HZ
+    jnz .hz
+    call COLD_SEG:mega_slidec
+    ret
+.hz:
+    jmp mega_hzslide
+lz_back:
+    test byte [bp+LZ_F_FMT], LZ_HZ
+    jnz .hz
+    call COLD_SEG:mega_backf
+    ret
+.hz:
+    jmp mega_hzback
+lz_bkaim:
+    test byte [bp+LZ_F_FMT], LZ_HZ
+    jnz .hz
+    call COLD_SEG:mega_bkaimf
+    ret
+.hz:
+    jmp mega_hzbkaim
+%endif
 
 ; -----------------------------------------------------------------------------
 ; lz_match - copy a match of CX bytes from AX bytes back (module-internal)
@@ -516,7 +573,7 @@ lz_match:
     jnc .go                     ; `pop` leaves the flags alone
     mov ax, ds                  ; 64KB back is exactly 4,096 paragraphs, so
 %ifdef KERN_MEGA                ; the wrapped SI needs no arithmetic of its own
-    call COLD_SEG:mega_backf    ; (a third scratch in protected mode)
+    call lz_back                ; (a third scratch in protected mode)
 %else
     sub ax, 0x1000
 %endif
@@ -531,7 +588,7 @@ lz_match:
     jnc .go2                    ; nothing else moves (mega_bkaimf)
     mov ax, ds
 .bk:
-    call COLD_SEG:mega_bkaimf
+    call lz_bkaim
     mov ds, ax
 .go2:
 %endif

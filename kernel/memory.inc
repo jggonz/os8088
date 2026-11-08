@@ -296,6 +296,11 @@ MEM_K_MTBL equ 0xFF13           ; kern_mega's DESCRIPTOR TABLES in conventional
                                 ; whose extended memory cannot hold them;
                                 ; top-down and pinned for the session. 0xFF12
                                 ; is the image run table's, so this is 0xFF13
+MEM_K_SEAM equ 0xFF14           ; kern_mega's HUGE READ's SEAM (KERN-MEGA-PLAN
+                                ; 14.171, SPEC.md 20.14.5.4): 64KB, a copy of
+                                ; a packed stream either side of a bridge's
+                                ; cut, held for one OSAPI_FILE_READ and freed
+                                ; on its way out (dskw_hzfree)
 MEM_K_CLIP equ 0xFF07           ; the system clipboard's text (SPEC.md 55) -
                                 ; sized to what is in it, freed when it is
                                 ; emptied, and deliberately NOT an instance's,

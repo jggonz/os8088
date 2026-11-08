@@ -617,6 +617,8 @@ mega_enterf:
     mov word [k_dsel], MEGA_SEL_KDATA
     mov byte [mega_on], 1
     mov byte [ss:mega_pm], 1        ; ...and .cold's copy of the same fact
+    and word [ss:mega_hzes], 0      ; no huge read named (.lowbss is not
+    mov byte [ss:mega_hzsf], 0      ; zeroed), and no seam held (14.171)
     mov word [k_seg0], MEGA_SEL_LOW0 ; low memory's selector (MEGA_SEG0)
     or byte [cpu_feat], CPU_F_PM | CPU_F_A20 ; OSAPI_CPU_INFO says so
                                     ; (KERN-MEGA-PLAN 12.1), and A20 is
@@ -4097,6 +4099,115 @@ mega_sldsegf:
     call COLD_SEG:mega_kaimf        ; the same aim, FLAGS and DX kept by it
     pop di                          ; (kernel size pass 15, mega_vbaimf's call)
     retf
+; -----------------------------------------------------------------------------
+; THE FILE LAYER'S HUGE READ (MEGA-HUGE-PLAN F4, KERN-MEGA-PLAN 14.171): a
+; packed file whose expansion passes 64KB into a selector claim - one above
+; 1MB, a run of them (OSAPI_MEM_HUGE), a BRIDGE (SPEC.md 50.3.5) - decoded in
+; place through the decoder's own three scratches, ODD the output, BACK a
+; match's source and SLD the input, each aimed by X, its offset in the
+; destination, rather than by base arithmetic: the cut is where X's map
+; changes piece, and base + 64KB past it is another program's memory.
+; dskw_hzwalk fills the map; lz.inc's decoder calls these when its frame says
+; LZ_HZ, BP = the frame. ODD and BACK are 64KB windows at 64KB multiples of
+; X, which the walk's grid rule puts inside one piece; SLD is a window at
+; every 32KB, and the one that straddles the cut - X = C - 32KB - is aimed at
+; THE SEAM, a 64KB copy of X C-32KB..C+32KB taken before the decode
+; (dskw_hzfill), since no descriptor can cover two places.
+; mega_hzmap: AX = X in 32KB units, DI = the scratch -> DX:AX = its base
+; mega_hzaim: the same -> DI aimed there, AX = DI. DX kept
+; mega_hzslide: AX = SLD or BACK, DX = paragraphs (800h or 1000h) -> AX
+; mega_hzbump: ODD 64KB on -> AX = ODD. mega_hzback: BACK at ODD's X less
+; 64KB -> AX = BACK. mega_hzbkaim: AX = ODD or BACK -> BACK over the same X.
+; Every other register kept, FLAGS not
+; -----------------------------------------------------------------------------
+mega_hzmap:
+    push bx
+    push si
+    mov si, mega_hzb0           ; (an SS offset: .lowbss)
+    mov bx, [ss:mega_hzcut]
+    or bx, bx
+    jz .lin                     ; one run: X on from its base
+    cmp ax, bx
+    jb .pool
+    sub ax, bx                  ; past the cut: the conventional piece's
+    mov si, mega_hzcb
+    jmp short .lin
+.pool:
+    inc ax
+    cmp ax, bx                  ; (`dec` keeps CF)
+    dec ax
+    jb .lin                     ; X + 64KB at or under the cut: the pool's
+    cmp di, MEGA_SEL_SLD        ; THE STRADDLER, which only the input's 32KB
+    jne .lin                    ; grid has: the seam, when there is one
+    cmp byte [ss:mega_hzsf], 0
+    je .lin
+    mov ax, [ss:mega_hzsm]
+    mov dx, [ss:mega_hzsm + 2]
+    jmp short .o
+.lin:
+    mov dx, ax
+    shr dx, 1                   ; DX:AX = X x 32KB
+    mov ax, 0
+    rcr ax, 1
+    add ax, [ss:si]
+    adc dx, [ss:si + 2]
+.o:
+    pop si
+    pop bx
+    ret
+mega_hzaim:
+    push dx
+    call mega_hzmap
+    call mega_gdtaim
+    pop dx
+    ret
+mega_hzslide:
+    push di
+    push si
+    mov di, MEGA_SEL_SLD
+    mov si, mega_hzxs
+    cmp ax, MEGA_SEL_BACK
+    jne .s
+    mov di, ax                  ; a match's source slides on BACK, as
+    mov si, mega_hzxb           ; mega_slidec slides it onto itself
+.s:
+    mov ax, dx
+    shr ax, 11                  ; 800h: one 32KB step, 1000h: two
+    add ax, [ss:si]
+    mov [ss:si], ax
+    call mega_hzaim
+    pop si
+    pop di
+    ret
+mega_hzbump:
+    push di
+    mov ax, [ss:mega_hzxo]
+    inc ax
+    inc ax
+    mov [ss:mega_hzxo], ax
+    mov di, MEGA_SEL_ODD
+    call mega_hzaim
+    pop di
+    ret
+mega_hzback:
+    push di
+    mov ax, [ss:mega_hzxo]
+    dec ax
+    dec ax
+    jmp short mega_hzbkaim.b
+mega_hzbkaim:
+    push di
+    cmp ax, MEGA_SEL_BACK
+    mov ax, [ss:mega_hzxb]
+    je .b                       ; BACK again: where it is
+    mov ax, [ss:mega_hzxo]      ; ODD: the output's window
+.b:
+    mov [ss:mega_hzxb], ax
+    mov di, MEGA_SEL_BACK
+    call mega_hzaim
+    pop di
+    ret
+
 ; mega_gdtaim - DI = a GDT scratch selector, DX:AX = a base -> that entry a
 ; 64KB data descriptor there, AX = the selector. Clobbers DX
 mega_gdtaim:
@@ -15680,6 +15791,19 @@ mega_pm     resb 1                  ; 1 = protected mode, for .cold (KDATAR_C):
 mega_ldte   resw 1                  ; [mega_ldtend] where any DS reads it: the
 mega_ldtl   resw 1                  ; allocator scans' end, and that less one
                                     ; entry (mega_layoutf, MC7's step 6)
+mega_hzes   resw 1                  ; THE FILE LAYER'S HUGE READ (MEGA-HUGE-PLAN
+                                    ; F4, KERN-MEGA-PLAN 14.171): the output ES
+                                    ; the next decode takes as LZ_HZ's (lz.inc),
+                                    ; 0 none - spent by that decode's entry
+mega_hzb0   resw 2                  ; X = 0's linear base (dskw_hzwalk)...
+mega_hzcb   resw 2                  ; ...the conventional piece's, at the cut,
+mega_hzcut  resw 1                  ; ...and the cut, X in 32KB units, 0 none
+mega_hzsm   resw 2                  ; THE SEAM's linear base: X C-32KB..C+32KB
+mega_hzsel  resw 1                  ; ...its claim's selector, 0 a pool block
+mega_hzsf   resb 1                  ; ...and 1 while there is one (dskw_hzfree)
+mega_hzxo   resw 1                  ; X of each scratch, in 32KB units: ODD's,
+mega_hzxb   resw 1                  ; BACK's...
+mega_hzxs   resw 1                  ; ...and SLD's
 section .text
 cpu 8086
 %endif

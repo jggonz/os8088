@@ -18868,7 +18868,7 @@ SOAK = [
         "its I_SPTR comes back a conventional segment. 60s is 41 measured",
         needs=("bochs",),
         wants=("build/mega.img", "build/megarun.o88", "build/mbr.bin")),
-    Row("megamod", "soak", py("tests/megamod.py"), 220.0,
+    Row("megamod", "soak", py("tests/megamod.py"), 265.0,
         "KERN-MEGA-MEMORY-PLAN MC7: a module and a wavetable bank over 64KB "
         "under kern_mega, where every claim is an LDT selector and the "
         "players' old `blobseg + N` granule sums name other descriptors. "
@@ -18885,8 +18885,14 @@ SOAK = [
         "the card's capture must be music, not noise. Red with the pre-MC7 "
         "packages (--pkg, --src): CLOSED TRACKER 0D and CLOSED MIDIRack 0D; "
         "and red on the mr legs with the kernel whose stream door tested an "
-        "external ring's TI bit for 'above 1MB' (SOUND.DRV said 2). 203s "
-        "measured",
+        "external ring's TI bit for 'above 1MB' (SOUND.DRV said 2). And "
+        "SPEC.md 45.3.1.2: the Tracker arm's module is the POOL's (its first "
+        "window at or above 1MB), and the `trkbig` leg loads a generated "
+        "700KB module stored PACKED into the pool's huge claim through the "
+        "packed read past 64KB (MEGA-HUGE-PLAN F4) - plays, every window "
+        "exact. Red with mega-release d433871c's arm (--pkg TRKARM=, --src): "
+        "trkarm's module at 12400h, trkbig never plays. 203s measured, "
+        "+45s for trkbig",
         needs=("bochs",),
         wants=("build/mega.img", "build/megarun.o88", "build/mbr.bin",
                "build/tracker.o88", "build/midirack.o88",
@@ -19518,6 +19524,38 @@ SOAK = [
         "refused`, MEMH_AVAIL `0D7E 0001 0000`. 60s is 18 measured",
         needs=("bochs",),
         wants=("build/mega.img", "build/megahuge.o88", "build/megarun.o88",
+               "build/mbr.bin")),
+    Row("megahpk", "soak", py("tests/megahpk.py"), 40.0,
+        "MEGA-HUGE-PLAN F4, KERN-MEGA-PLAN 14.171, SPEC.md 20.14.5.4: a "
+        "PACKED file past 64KB read whole into an OSAPI_MEM_HUGE claim "
+        "above 1MB. Bochs at 4MB, tests/megahpk's MEGAHPK on C:'s RUN with "
+        "three host-made LZ4 'CZ' files: HP1.BIN (150,000 bytes, matches "
+        "back across every 64KB window edge) into a ONE-RUN pool claim; a "
+        "filler leaving 192KB of the pool, then HP2.BIN (620,000 bytes "
+        "packing badly, its stream starting before the cut: THE SEAM) and "
+        "HP3.BIN (packing well, its stream all in the conventional piece) "
+        "into BRIDGES; and HP3.BIN 4096 bytes into a bridge, a cut off the "
+        "64KB grid of X, refused FERR_PROT. Each read's bytes summed by the "
+        "step against the host's sums of the originals. Red on mega-release "
+        "d433871c (--build): every read `refused 0002` (FERR_IO); red again "
+        "with the seam taken out of mega_hzmap: HP2 refused 0002, the "
+        "straddling view reading past the pool piece. 34s measured",
+        needs=("bochs",),
+        wants=("build/mega.img", "build/megahpk.o88", "build/megarun.o88",
+               "build/mbr.bin")),
+    Row("megagbpk", "soak", py("tests/megagbpk.py"), 60.0,
+        "REALDMG-SPEC 10.3.1, MEGA-HUGE-PLAN F4: RealDMG's kern_mega arm on "
+        "a PACKED 1MB cartridge - tools/gbours.py's GBBANK.GB, 64 MBC5 banks "
+        "an LFSR switches among, each switch checked by a read and by code "
+        "run from the bank - stored as an LZ4 'CZ' file on B:. The arm reads "
+        "it with ONE OSAPI_FILE_READ into its 16KB-window claim, expanded "
+        "in place (rw_xread): the game runs (C00Fh A5h, past 500 switches), "
+        "not one switch reads the wrong bank, and bank 1's window is "
+        "[rw_xsel], above 1MB, bank 2 16KB on. Red with mega-release "
+        "d433871c's arm (--pkg, --lst): 'packed and past one claim', the "
+        "cartridge never runs. 45s measured",
+        needs=("bochs", "rgbds"),
+        wants=("build/mega.img", "build/megak/apps/realdmg.o88",
                "build/mbr.bin")),
     Row("megajw", "soak", py("tests/megajw.py"), 25.0,
         "docs/plans/KERN-MEGA-PLAN.md 14.166, SPEC.md 50.3.2, 50.6.10: ONE "
