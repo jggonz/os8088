@@ -16725,3 +16725,16 @@ constrained claim) would buy ~180 of the 240 for 8 more bytes; not taken -
 bump); `tools/heapwhatif.py`'s `true_combined`, `after_the_pass` and `exact2`
 bump and charge the head, with three DMA cases; `tests/heapcheck.py`'s
 `both_passes()` does the same from the spec.
+
+**Rows run, scoped** (`os88soak.py start`, one emulator lane, 38 min,
+53 of 53 green): `heapcheck`, `paintmove`, `rdmove`, `editmove`,
+`editmove-frotz`, `c64move`, `a2move`, `rcmove`, `regmove`, `regwork`,
+`sheetmove`, `sheetmove-rt`, `trackmove`, `wdheapmove`, `wdheapmove-sc`,
+`weavemove`, `loommove`, `cmemmove`, `ovlmove`, `cpcost`, `pathcost`,
+`fatwpin`, `doswpart` (every row that opens HEAPFRAG) and their `mega-`
+ports; the rows that size off `mem_avail` with movable claims in play -
+`trkcompact`, `trkbigmod`, `sndmove` (the Audio Player's movable `MC_DMA`
+look-ahead), `dirwshed`, `tmmaxrun`, `memp`, `heapmap`, `heapdrv`,
+`heapscrl`, `heaphi` - and the `mega-` ports that exist (`mega-trkcompact`,
+`mega-sndmove`, `mega-heapmap`, `mega-heapdrv`, `mega-heapscrl`,
+`mega-heaphi`). Fast tier green in `make`.
