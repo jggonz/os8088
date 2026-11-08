@@ -179,6 +179,8 @@ def guess_sources(key):
         return []
     if key == "FW_PICOMEM1":
         return ["firmware/picomem1/README.md", "firmware/picomem1/SHA256SUMS"]
+    if key == "FW_PICOMEM2":
+        return ["firmware/picomem2/README.md", "firmware/picomem2/SHA256SUMS"]
     if key.lower() in ALIASES:
         return list(ALIASES[key.lower()])
     stem, _, ext = key.lower().rpartition("_")

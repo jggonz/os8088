@@ -37236,12 +37236,12 @@ So the transfer loop reads such a disk that way:
 
 The hold above exists only because the stock firmware stops mixing while it
 waits on the PC. `firmware/picomem2/` is the June source (`be7b2e6`, the
-firmware PM2-6-21-26 shipped) with `pm1x-pr`'s fixes, which are board-
+firmware PM2-6-21-26 shipped) with `pm-pr`'s fixes, which are board-
 independent: the card mixes in every PC-command wait of an int 13h
 (`pm_pccmd_wait_hook`) and in the SD driver's waits, reads a call's sectors
 in runs with ONE copy command a run, and waits for the PC's copy however long
 it takes. It also sets the firmware-revision word the card BIOS's function
-3 hands back in `BX` to **8088h** (`tools/picomem/patches/fw/02-os8088-rev.patch`;
+3 hands back in `BX` to **8088h** (Elendilon/ISA-PicoMEM `pm-pr`, `6204e0d`;
 the stock firmware leaves it 0).
 
 `drv_sniff` reads `BX` beside `AL` = 11 and, at 8088h, stores the unit

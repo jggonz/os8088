@@ -61,7 +61,7 @@ memory.
 
 ## Good to know
 
-- This is only for the **1.x** card with a **Pico W**. A PicoMEM 2 works
-  with os8088 on its own released firmware and needs nothing from here.
+- This is only for the **1.x** card with a **Pico W**. A **PicoMEM 2.0**
+  takes the PicoMEM 2 firmware beside this one.
 - It has been flashed and used on a PicoMEM 1.14 in a 16 MHz 286, where the
   Sound Blaster, the USB mouse and video playback from disk all work.

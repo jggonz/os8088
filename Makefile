@@ -6642,7 +6642,7 @@ $(BUILD)/os8088-cz.zip: tools/os88czbundle.py tools/os88czgui.py tools/os88cz.py
 	python3 tools/os88czbundle.py $@ --dos $(BUILD)/os88cz.com
 
 # THE FIRMWARE AND UTILITIES ZIP, ON DEMAND (tools/os88toolszip.py): the
-# release's other archive - firmware/picomem1/, the kern_big, kern_small and
+# release's other archive - firmware/picomem1/ and picomem2/, the kern_big, kern_small and
 # socket-check ROMs (`make rom-big rom-small socketrom`, cut against THIS
 # tree's kernels, so build it from the tree whose disks it ships beside), the
 # encoder, the Video Battle builder (as BATTLE/), the Game Boy precompiler
@@ -6656,6 +6656,7 @@ toolszip: $(BUILD)/os8088-encoder.zip $(BUILD)/os8088-battle-builder.zip $(BUILD
 	python3 tools/os88toolszip.py $(BUILD)/os8088-tools.zip \
 		--encoder $(BUILD)/os8088-encoder.zip --battle $(BUILD)/os8088-battle-builder.zip --gbstatic $(BUILD)/os8088-gbaot.zip \
 		--cz $(BUILD)/os8088-cz.zip --rom $(BUILD)/rom --picomem firmware/picomem1 \
+		--picomem2 firmware/picomem2 \
 		--dos $(BUILD)/os88cz.com $(BUILD)/os88net.com
 
 # THE REALDMG DISK (docs/REALDMG-SPEC.md section 18), ON DEMAND: REALDMG.O88, its README and GBDEMO.GB - the demo written

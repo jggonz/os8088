@@ -8,6 +8,8 @@ One folder, `os8088-tools/`:
 
   FIRMWARE/PICOMEM1/  firmware/picomem1/ as committed - the PicoMEM 1.x image
                       os8088 needs, its licence (GPL-2) and its source patch
+  FIRMWARE/PICOMEM2/  firmware/picomem2/ as committed - the PicoMEM 2.0 image,
+                      its licence and how it is rebuilt
   FIRMWARE/ROM/       the kernel ROMs for an IBM 5150's spare sockets, cut
                       against THIS tree's kernels (`make rom-big rom-small`),
                       and the socket-check ROM (`make socketrom`)
@@ -184,6 +186,7 @@ def main():
     ap.add_argument("--cz", required=True, help="build/os8088-cz.zip")
     ap.add_argument("--rom", required=True, help="build/rom")
     ap.add_argument("--picomem", required=True, help="firmware/picomem1")
+    ap.add_argument("--picomem2", required=True, help="firmware/picomem2")
     ap.add_argument("--dos", nargs="+", required=True, help="the .COM files")
     a = ap.parse_args()
 
@@ -193,10 +196,11 @@ def main():
     files += rebase(a.gbstatic, "os8088-gbaot", "GBSTATIC")
     files += rebase(a.cz, "os8088-cz", "CZ")
 
-    for n in sorted(os.listdir(a.picomem)):
-        p = os.path.join(a.picomem, n)
-        if os.path.isfile(p):
-            files.append(("FIRMWARE/PICOMEM1/" + n, readf(p), 0o644))
+    for d, sub in ((a.picomem, "PICOMEM1"), (a.picomem2, "PICOMEM2")):
+        for n in sorted(os.listdir(d)):
+            p = os.path.join(d, n)
+            if os.path.isfile(p):
+                files.append(("FIRMWARE/%s/%s" % (sub, n), readf(p), 0o644))
 
     for r in ROMS:
         for n in [r + ".bin"] + ["%s-%s.bin" % (r, s) for s in SOCKETS]:

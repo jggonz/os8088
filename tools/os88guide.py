@@ -175,6 +175,16 @@ FIRMWARE = [
          "COPYING": "The firmware's licence (GPL version 2).",
          "v1board.patch": "The one change made to the firmware's source.",
      }},
+    {"id": "fw-picomem2", "title": "PicoMEM 2 firmware",
+     "summary": "Firmware for the PicoMEM 2.0 card that keeps its Sound "
+                "Blaster playing through disk reads under os8088.",
+     "dir": "firmware/picomem2",
+     "notes": {
+         "PM2_11_8_26_OS8088.uf2": "The firmware. Copy it onto the card in its BOOT mode.",
+         "README.md": "What the firmware fixes, what it lacks against the October release, and how to install it.",
+         "SHA256SUMS": "Checksums, to confirm the download is intact.",
+         "COPYING": "The firmware's licence (GPL version 2).",
+     }},
 ]
 
 
