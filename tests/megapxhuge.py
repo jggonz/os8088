@@ -24,6 +24,13 @@ file fits a floppy. B:/BIG.PCX is double-clicked (PCX is PiXEL's) and:
      counts: at a count of paragraphs past FFFFh, which the shipped build's
      16-bit sum would put back inside the master (pxrec.inc's PX_TAILAT).
 
+--bmp is the PACKED half (row megapxhugez): a --w 1024 x --h 700 8-bit BMP
+packed into a CZ file (tools/os88lz.py --wrap), named .PCX so PiXEL opens it
+(a .BMP is Paint's; PiXEL names the format by its bytes): read WHOLE
+(px_rflat) into one OSAPI_MEM_HUGE claim past 64KB, which the kernel expands
+into (MEGA-HUGE-PLAN F4), then 1-5 as above. Red with the flat claim the
+paragraph door's (the arm before the adoption): the picture does not open.
+
 --find opens the picture once per height, halving between a height held at
 1/1 and one not, and prints the LARGEST master held at 1/1 (to --w x 32
 rows) - the measurement, not the row (--megs 1.375 is the 640K + 384K
@@ -91,6 +98,29 @@ def make_pcx(path, w, h):
     return len(out)
 
 
+def make_bmp(path, w, h):
+    """An 8-bit BMP, bottom-up, the 256-colour palette - PACKED into a 'CZ'
+    file (tools/os88lz.py --wrap, SPEC.md 20.14), as every shipped data file
+    is: PiXEL reads such a file WHOLE, expanded, into memory (px_rflat)"""
+    stride = (w + 3) & ~3
+    pal = b"".join(bytes((255 - k, (k * 7) & 0xFF, k, 0)) for k in range(256))
+    off = 14 + 40 + len(pal)
+    size = off + stride * h
+    out = bytearray(b"BM" + struct.pack("<IHHI", size, 0, 0, off))
+    out += struct.pack("<IiiHHIIiiII", 40, w, h, 1, 8, 0, stride * h,
+                       2835, 2835, 256, 0)
+    out += pal
+    for y in range(h - 1, -1, -1):
+        out += row(w, y) + bytes(stride - w)
+    raw = path + ".raw"
+    open(raw, "wb").write(out)
+    subprocess.check_call([sys.executable, os.path.join(ROOT, "tools",
+                                                        "os88lz.py"),
+                           "--wrap", path, raw], stdout=subprocess.DEVNULL)
+    os.remove(raw)
+    return len(out)
+
+
 def run(a, h, work):
     import os88marty as om
     import os88sym
@@ -98,8 +128,10 @@ def run(a, h, work):
     os.environ["OS88_MEGA_MEGS"] = a.megs
     sym = os88sym._parse_map(os.path.join(os.path.dirname(a.pkg),
                                           "pixel.map"))[0]
-    pcx = os.path.join(work, NAME)
-    flen = make_pcx(pcx, a.w, h)
+    name = "BIGBMP.PCX" if a.bmp else NAME   # (a .BMP is Paint's: PiXEL
+                                                # names the format by its bytes)
+    pcx = os.path.join(work, name)
+    flen = (make_bmp if a.bmp else make_pcx)(pcx, a.w, h)
     disk = os.path.join(work, "b.img")
     subprocess.check_call([sys.executable, os.path.join(ROOT, "tools",
                                                         "os88disk.py"),
@@ -111,13 +143,13 @@ def run(a, h, work):
                      label="megapxhuge") as ui:
         m = ui.m
         f0 = len(m.faults())
-        w = ui.path("B:/" + NAME)
+        w = ui.path("B:/" + name)
         hrun = sym.get("px_hrun")
 
         def st():
             spans = [(sym["px_cur"], 52), (sym["px_busy"], 1),
                      (sym["px_job"], 1), (sym["px_pcon"], 1),
-                     (sym["px_mwc"] + 6, 2 * 8)]
+                     (sym["px_mwc"] + 6, 2 * 8), (sym["px_rflat"], 1)]
             if hrun:
                 spans.append((hrun, 2))
             r = om.pkg_reads(m, w, spans)
@@ -126,18 +158,24 @@ def run(a, h, work):
                        for k, v in PXR.items())
             rec["idle"] = not (r[1][0] or r[2][0] or r[3][0])
             rec["win"] = struct.unpack("<8H", r[4])
-            rec["hrun"] = struct.unpack("<H", r[5])[0] if hrun else None
+            rec["flat"] = r[5][0]
+            rec["hrun"] = struct.unpack("<H", r[6])[0] if hrun else None
             return rec
         s = st()
+        flat = 0
         for _ in range(900):            # the decode: 1,400 rows on a 286
             om.guest_sleep(m, 1)
             s = st()
+            flat |= s["flat"]
             if s["HAVE"] and s["idle"]:
                 break
-        print("   megapxhuge: %dx%d (%d-byte PCX), %sMB: have %d scale 1/%d "
-              "master %dx%d %d KB seg %04X hrun %s" % (
-                  a.w, h, flen, a.megs, s["HAVE"], 1 << s["SCL"], s["MW"],
-                  s["MH"], s["MKB"], s["MSEG"], s["hrun"]), flush=True)
+        s["flat"] = flat
+        print("   megapxhuge: %dx%d (%d-byte %s), %sMB: have %d scale 1/%d "
+              "master %dx%d %d KB seg %04X hrun %s%s" % (
+                  a.w, h, flen, "BMP, packed" if a.bmp else "PCX", a.megs,
+                  s["HAVE"], 1 << s["SCL"], s["MW"], s["MH"], s["MKB"],
+                  s["MSEG"], s["hrun"], " read whole" if s["flat"] else ""),
+              flush=True)
         res.update(s, held=bool(s["HAVE"]) and s["SCL"] == 0)
         if a.find:
             return res
@@ -147,10 +185,18 @@ def run(a, h, work):
             res["checks"].append((ok, what))
             print("   %s  %s" % ("ok  " if ok else "FAIL", what), flush=True)
             return ok
-        if not want(res["held"] and s["MKB"] > 1024,
-                    "1: the %dx%d picture decoded at 1/1 (scale 1/%d, have "
-                    "%d), its master %d KB - past PX_MWN's 1MB of before"
-                    % (a.w, h, 1 << s["SCL"], s["HAVE"], s["MKB"])):
+        if a.bmp:
+            if not want(res["held"] and s["flat"],
+                        "1: the PACKED %dx%d BMP read whole (px_rflat %d) "
+                        "and decoded at 1/1 (scale 1/%d, have %d): its %d "
+                        "expanded bytes in one huge claim beside the %d KB "
+                        "master" % (a.w, h, s["flat"], 1 << s["SCL"],
+                                    s["HAVE"], flen, s["MKB"])):
+                return res
+        elif not want(res["held"] and s["MKB"] > 1024,
+                      "1: the %dx%d picture decoded at 1/1 (scale 1/%d, have "
+                      "%d), its master %d KB - past PX_MWN's 1MB of before"
+                      % (a.w, h, 1 << s["SCL"], s["HAVE"], s["MKB"])):
             return res
         want(s["hrun"] == 8 and all(s["win"][k] == s["MSEG"] + 8 * k
                                     for k in range(8)),
@@ -197,13 +243,20 @@ def run(a, h, work):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--w", type=int, default=2048)
-    ap.add_argument("--h", type=int, default=1400)
+    ap.add_argument("--h", type=int, default=None)
+    ap.add_argument("--bmp", action="store_true",
+                    help="a PACKED 8-bit BMP instead (--w 1024 --h 700 "
+                    "unless given: 700 KB expanded, past the heap)")
     ap.add_argument("--megs", default=os.environ.get("OS88_MEGA_MEGS", "4"))
     ap.add_argument("--pkg", default="build/megak/apps/pixel.o88")
     ap.add_argument("--find", action="store_true",
                     help="the largest master held at 1/1, to --w x 32 rows")
     ap.add_argument("--keep", action="store_true")
     a = ap.parse_args()
+    if a.h is None:
+        a.h = 700 if a.bmp else 1400
+    if a.bmp and a.w == 2048 and "--w" not in sys.argv:
+        a.w = 1024
     os.chdir(ROOT)
     a.pkg = os.path.abspath(a.pkg)
     for f in ("build/mega.img", a.pkg,

@@ -2994,10 +2994,27 @@ pv_fmt:
 
 %ifdef PKG_MEGA
 ; pe_avail - the package's px_avail, in this part: OSAPI_MEM_AVAIL's two
-; answers as a master's huge claim is granted them (pxrec.inc's PX_AVAILR,
-; SPEC.md 106.8.1). Preserves all else
+; answers as a master's huge claim is granted them (pxrec.inc, SPEC.md
+; 106.8.1). Preserves all else
 pe_avail:
-    PX_AVAILR
+    push cx
+    push dx
+    xor ax, ax
+    mov bx, MEMH_AVAIL
+    call OSAPI_MEM_HUGE             ; BX = the total, the pool counted
+    jc .conv
+    push bx
+    xor ax, ax
+    mov bx, 0x8000
+    call OSAPI_MEM_HUGE             ; AX = the most one master is granted
+    pop bx
+    jnc .o
+.conv:
+    call OSAPI_MEM_AVAIL
+.o:
+    pop dx
+    pop cx
+    ret
 %endif
 
 ; pv_res - Resize's second line: "320 x 240", or - no run for it - "Needs
@@ -3531,7 +3548,17 @@ pf_go:                              ; flip's only once it is sure to run
     mov [px_edkb2], ax
     cmp ax, PX_MWN * 32             ; at most the windows a table holds
     ja .nodest                      ; (pxrec.inc, MC7)
-    PX_MCLAIM                       ; (the ARM: a huge claim, as a master's)
+%ifdef PKG_MEGA
+    push bx                         ; (the ARM: a huge claim, as a master's -
+    push cx                         ; it becomes one, pxrec.inc's PX_HRUN)
+    mov bx, 0x8000
+    call OSAPI_MEM_HUGE
+    PX_HRUN
+    pop cx
+    pop bx
+%else
+    call OSAPI_MEM_CLAIM
+%endif
     jc .nodest
     mov [px_edseg], dx
     mov ax, MWT_NONE                ; (its segment may be one a table was

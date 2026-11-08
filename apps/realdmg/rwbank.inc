@@ -141,9 +141,9 @@ rw_xplan:
 %endif
     cmp byte [rw_pm], 0
     je .no
-    cmp byte [rw_czf], 0            ; packed: one claim, OSAPI_FILE_READ's
-    jne .no                         ;   (rw_plan's .cache says why)
-    mov cx, [rw_romkb]
+    mov cx, [rw_romkb]              ; (PACKED too, since MEGA-HUGE-PLAN F4:
+                                    ;   OSAPI_FILE_READ expands it whole into
+                                    ;   the claim, in place - rw_xread)
     and cx, 0FFF0h                  ; whole banks
     cmp cx, 32
     jb .no
@@ -219,10 +219,21 @@ rw_bload:
     mov al, 2                       ; bank 0: the view's 0000-3FFF
     call op_seg
     mov dx, ax
+%ifdef PKG_MEGA
+    cmp byte [rw_czf], 0            ; PACKED, IN PLACE (REALDMG-SPEC
+    je .rd0                         ;   10.3.1): one read of the whole file
+    push dx                         ;   into the claim, bank 0 copied down
+    call rw_xread
+    pop dx
+    jc .bad
+    jmp short .hdr
+.rd0:
+%endif
     push dx
     call rw_bread
     pop dx
     jc .bad
+.hdr:
     push es                         ; its header's size: 32KB << n, and it
     mov es, dx                      ;   must be the file's (a compressed
     mov cl, [es:0148h]              ;   file reads raw here, and fails this)
@@ -239,6 +250,14 @@ rw_bload:
     pop es
     jc .why
     mov word [rw_bnum], 1
+%ifdef PKG_MEGA
+    cmp byte [rw_czf], 0            ; every bank is in its window already
+    je .b
+    mov ax, [rw_romkb]
+    mov cl, 4
+    shr ax, cl
+    jmp short .allin
+%endif
 .b:
     mov ax, [rw_bnum]               ; bank n: slot n-1, or the last slot
     dec ax
@@ -288,6 +307,9 @@ rw_bload:
     shr ax, cl
     cmp [rw_bnum], ax
     jb .b
+%ifdef PKG_MEGA
+.allin:
+%endif
     mov [rw_banks], ax
     mov al, 2                       ; the image rdg_init and rw_ramsetup read
     call op_seg                     ;   bank 0 from: the view itself
@@ -383,6 +405,43 @@ rw_xclaim:
 .no:
     call OSAPI_MEM_FREE
     stc
+    ret
+
+; rw_xread - rw_bload in place for a PACKED cartridge (REALDMG-SPEC 10.3.1,
+; MEGA-HUGE-PLAN F4): OSAPI_FILE_READ of the whole file into [rw_xsel]'s
+; claim, which it expands in place past 64KB through the 16KB windows'
+; first - the claim is the cartridge, byte for byte, so bank n is window
+; n - 1's 4000h exactly as rw_xput lays it - and then bank 0, its first
+; 16KB, into DX:0000 (the view), where every cartridge's bank 0 lives. CF = 1
+; the read refused. Clobbers AX, BX, CX, SI, DI
+rw_xread:
+    push dx
+    mov ax, [rw_romkb]              ; the capacity: the claim's whole banks
+    mov cx, 1024
+    mul cx                          ; DX:AX
+    mov cx, ax
+    mov es, [rw_xsel]
+    xor bx, bx
+    mov si, rw_name
+    call OSAPI_FILE_READ            ; DX:AX = the bytes it became
+    push ds
+    pop es
+    pop dx
+    jc .r
+    push ds
+    push es
+    mov ax, [rw_xsel]
+    mov es, dx
+    mov ds, ax
+    xor si, si
+    xor di, di
+    mov cx, 2000h
+    cld
+    rep movsw
+    pop es
+    pop ds
+    clc
+.r:
     ret
 
 ; rw_xput - rw_bload in place: the 16KB at DX:0000 (the read's slot) into

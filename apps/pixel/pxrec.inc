@@ -124,37 +124,16 @@ MWT_NONE    equ 0xFFFF              ; (no selector and no heap segment)
     pop ax
 %endmacro
 
-; PX_AVAILR - the ARM's routine body (px_avail in the package, pe_avail in
-; the edit part; PX_AVAIL calls it): AX = the largest claim a MASTER is
-; granted, BX = the KB free in all - OSAPI_MEM_AVAIL's two answers, which is
+; px_avail (pxmaster.inc) and pe_avail (the edit part) - the ARM's: AX =
+; the largest claim a MASTER is granted, BX = the KB free in all - OSAPI_MEM_AVAIL's two answers, which is
 ; what they are on every kernel but kern_mega in protected mode (MEGA-HUGE-PLAN 3, SPEC.md
 ; 106.8.1). There a master is an OSAPI_MEM_HUGE claim with a window every
 ; 32KB, which the pool or the conventional heap holds ALONE (never a bridge,
 ; F3), so AX is that shape's own ask (AX = 0, BX = 8000h) and BX the
 ; pool-aware total (MEMH_AVAIL, F6). An ask refused - kern_big, kern_small,
 ; or no kernel that answers it - is OSAPI_MEM_AVAIL's. Preserves all else
-%macro PX_AVAILR 0
-    push cx
-    push dx
-    xor ax, ax
-    mov bx, MEMH_AVAIL
-    call OSAPI_MEM_HUGE             ; BX = the total, the pool counted
-    jc %%conv
-    push bx
-    xor ax, ax
-    mov bx, 0x8000
-    call OSAPI_MEM_HUGE             ; AX = the most one master is granted
-    pop bx
-    jnc %%o
-%%conv:
-    call OSAPI_MEM_AVAIL
-%%o:
-    pop dx
-    pop cx
-    ret
-%endmacro
 
-; PX_AVAIL routine - a call of PX_AVAILR's routine on the ARM, of
+; PX_AVAIL routine - a call of px_avail / pe_avail on the ARM, of
 ; OSAPI_MEM_AVAIL itself in the shipped build (byte for byte what it was)
 %macro PX_AVAIL 1
 %ifdef PKG_MEGA
@@ -164,31 +143,22 @@ MWT_NONE    equ 0xFFFF              ; (no selector and no heap segment)
 %endif
 %endmacro
 
-; PX_MCLAIM - AX = KB: the MASTER's claim (or an operation's destination,
-; which becomes one), DX = it, CF = 1 refused - OSAPI_MEM_CLAIM, but on the
-; ARM an OSAPI_MEM_HUGE claim with a window every 32KB (BX = 8000h), the
-; layout a table already is (px_mwbuild): [px_hrun] = the step between its
-; windows when the cell gave that run (BX = 0 out: 8 under kern_mega's
-; protected mode), 0 when it did not (a real-mode kernel's sum, which
-; SEG_SUB answers too). Preserves all but DX and the flags
-%macro PX_MCLAIM 0
-%ifdef PKG_MEGA
-    push bx
-    push cx
-    mov bx, 0x8000
-    call OSAPI_MEM_HUGE             ; DX = the claim, CX = the step
+; PX_HRUN - straight after the ARM's master claim (the master in px_claims,
+; an operation's destination in the edit part, which becomes one): an
+; OSAPI_MEM_HUGE with AX = KB and BX = 8000h - a window every 32KB, the
+; layout a table already is (px_mwbuild) - in place of the shipped build's
+; OSAPI_MEM_CLAIM. [px_hrun] = the step between its windows when the cell
+; gave that run (BX = 0 out: 8 under kern_mega's protected mode), 0 when it
+; did not (a real-mode kernel's sum, which SEG_SUB answers too). Nothing on
+; a refusal; the flags kept
+%macro PX_HRUN 0
     jc %%o
     or bx, bx
     jz %%r
     xor cx, cx                      ; (no run: the table is SEG_SUB's)
 %%r:
-    mov [px_hrun], cx
+    mov [px_hrun], cx               ; (CF = 0 from the or / xor)
 %%o:
-    pop cx
-    pop bx
-%else
-    call OSAPI_MEM_CLAIM
-%endif
 %endmacro
 
 ; PX_TAILAT seg - THE HISTOGRAM'S TAIL (pxmaster.inc's px_htail and the

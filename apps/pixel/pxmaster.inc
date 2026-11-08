@@ -720,7 +720,17 @@ px_claims:
     mov [px_cur + PXR_MW], bx
     mov bx, [px_tmh]
     mov [px_cur + PXR_MH], bx
-    PX_MCLAIM                       ; the master first: the largest
+%ifdef PKG_MEGA
+    push bx                         ; the master first: the largest - on the
+    push cx                         ; ARM one huge claim, a window every 32KB
+    mov bx, 0x8000                  ; (SPEC.md 106.8.1)
+    call OSAPI_MEM_HUGE
+    PX_HRUN
+    pop cx
+    pop bx
+%else
+    call OSAPI_MEM_CLAIM            ; the master first: the largest
+%endif
     jc .nomem
     mov [px_cur + PXR_MSEG], dx
     call px_mwinval                 ; (its segment may be one a table was of)
@@ -829,10 +839,27 @@ px_prevmv:
 
 ; px_avail - AX = the largest claim a master is granted, BX = the KB free in
 ; all: OSAPI_MEM_AVAIL's, and on the ARM the master's own shape asked
-; (pxrec.inc's PX_AVAILR, SPEC.md 106.8.1). Preserves all else
+; (SPEC.md 106.8.1; pxrec.inc says why). Preserves all else
 %ifdef PKG_MEGA
 px_avail:
-    PX_AVAILR
+    push cx
+    push dx
+    xor ax, ax
+    mov bx, MEMH_AVAIL
+    call OSAPI_MEM_HUGE             ; BX = the total, the pool counted
+    jc .conv
+    push bx
+    xor ax, ax
+    mov bx, 0x8000
+    call OSAPI_MEM_HUGE             ; AX = the most one master is granted
+    pop bx
+    jnc .o
+.conv:
+    call OSAPI_MEM_AVAIL
+.o:
+    pop dx
+    pop cx
+    ret
 %endif
 
 ; px_capavl - AX/BX = OSAPI_MEM_AVAIL's answers into [px_avl] [px_avt], the

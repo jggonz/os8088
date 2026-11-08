@@ -2560,12 +2560,31 @@ px_head:
     jnz .big
     cmp ax, 0xFFFF - 64
     jae .big
+%ifdef PKG_MEGA
+    cmp ax, 0x1000 - 64             ; THE ARM, past 64KB (SPEC.md 106.8.1):
+    jb .fp                          ; ONE huge claim, the pool's when it has
+    push ax                         ; the run - one run, because the readers
+    add ax, 64 + 63                 ; aim into it by SEG_SUB, whose reach a
+    rcr ax, 1                       ; bridge's cut stops - and OSAPI_FILE_READ
+    shr ax, 1                       ; expands into it whole (KERN-MEGA-PLAN
+    shr ax, 1                       ; 14.171). AX = KB with the KB spare;
+    shr ax, 1                       ; refused, the paragraph door below
+    shr ax, 1
+    shr ax, 1
+    mov bx, HUGE_NOBRIDGE
+    call OSAPI_MEM_HUGE
+    pop ax
+    jnc .fgot
+    xor cx, cx
+.fp:
+%endif
     push ax
     add ax, 64                      ; a KB spare - and none for alignment:
     mov bl, MEMP_CLAIM              ; guard 6b's bases are 512-aligned
     call OSAPI_MEM_P                ; already (px_dmaclaim). CX is 0, the
     pop ax                          ; loop's
     jc .big
+.fgot:
     mov [px_flatraw], dx
     mov [px_flatseg], dx
     push es
@@ -4598,7 +4617,7 @@ px_fidx     equ px_cur + PXR_FIDX
     PXVAR px_mwfo, 2                ; px_mwfar's offset, for a part
 %ifdef PKG_MEGA
     PXVAR px_hrun, 2                ; THE ARM's masters (pxrec.inc's
-                                    ; PX_MCLAIM): the step between a huge
+                                    ; PX_HRUN): the step between a huge
 %endif                              ; claim's 32KB windows, 0 none
     PXVAR px_wsacc, 2               ; THE WORK CLAIM'S sub-buffers as
     PXVAR px_wslin, 2               ; selectors of their own: [px_wseg] +
