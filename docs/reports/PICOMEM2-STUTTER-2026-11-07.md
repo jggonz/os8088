@@ -103,7 +103,8 @@ Every row's IRQ count was 151 (5 s at 30.2 a second) but H's.
 Video Battle itself was played off the twin's card disk (`os8088_5150_pm2_gla`
 and the Hercules twin, the demo bundles): 0 late frames, 0 music underruns,
 the sound stream open (`vb_snd` 1, channel 1 not masked) - and **the card's
-DAC silent on both firmwares**. VIDSND, programming the DSP itself, sounds on
+DAC silent on both firmwares** (2026-11-08: the harness's fault, not the
+emulator's - it never left the silent title; see *The cure taken*). VIDSND, programming the DSP itself, sounds on
 the same twin. Not run down: it is the twin's or SOUND.DRV's stream on an
 emulated 2.x, not the machine's - the owner hears the battle, stuttering.
 Until it is, the battle's own A/B is the field's.
@@ -195,9 +196,29 @@ would have cost two int 13h calls on every 360 KB and 720 KB boot.
 Checked: the probe answers 80h on MartyPC's 2.x twin with the card's disk as
 HDD 0, FFh on the 1.x twin and on a 5150 without a card; C: browses on the
 2.x twin; `pmmarty`, `pmlib`, `hdboot`, `hdauto`, `fddpark`, `fddpage`,
-`viddisk`, `vidsnd` and `bootsmoke` pass. **Not yet heard**: whether Video
-Battle's heavy actions stop stuttering on 5150 #1 (the twin plays the
-battle's SOUND.DRV stream silent, above), and the disk rate it costs there -
+`viddisk`, `vidsnd` and `bootsmoke` pass.
+
+**And on Video Battle itself, in the emulator** (2026-11-08): the demo
+battle (`build/BATTLE.VBT`) off the CGA twin's card disk, 30 guest seconds
+of title, openings and idle loop with its music streaming, the card's DAC
+captured; holes are runs of 64 or more silent frames under a second:
+
+| kernel | card firmware | holes | silent |
+|---|---|---:|---:|
+| before | `pm1x-pr` (mixes while it waits) | 27 | 124.2 ms |
+| before | the same, wait-mixing taken out (stock behaviour) | **104** | **283.8 ms** |
+| after | `pm1x-pr` | 27 | 124.2 ms |
+| after | wait-mixing taken out | **27** | **124.2 ms** |
+
+The 27 are the bundle's own silences, identical in all four. The kernel
+removes every one the firmware added. (*Not done* above said the twin
+played the battle silent: it did not - the harness never left the title,
+whose sound IS silence; the card played the ring's 80h faithfully. With
+the title's Enter pressed once `vb_tplay` is 1, as `tests/vbtsound.py`
+does, it sounds on both firmwares.)
+
+**Not yet heard**: whether Video Battle's heavy actions stop stuttering on
+5150 #1, and the disk rate it costs there -
 VIDDISK R on the new kernel re-measures `5150-picomem2`, which until then
 still charges the multi-sector 135,000.
 
