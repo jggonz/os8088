@@ -16414,7 +16414,8 @@ plays 303 of 303 frames, the card open and never dry). The sequence of all
 eleven clips in one boot, after the fix: sound on every play, 01-09 with no
 stall and no pause.
 
-**Seen in the same pass, not fixed here** (both kernels, so not kern_mega's):
+**Seen in the same pass, not fixed here** (both kernels, so not kern_mega's;
+the first is 14.183's, fixed):
 10-LX486.V88 (a 486 clip) HANGS in a real-mode / kern_big full-screen play
 at its frame 221 - the first record of the file at 60,000 bytes or more
 (62,663; no clip 01-09 has one) - with the CPU executing data at
@@ -16508,3 +16509,58 @@ reaches on kern_mega as it does on kern_big - the `FSXR_DRV` fallback
 had been hiding it there): 01, 02, 04, 05, 06, 07, 08, 09 and 11 in a
 real-mode bracket, 03 protected by its own `VPR_SPLIT`; every frame drawn,
 `[vp_stall]` 0 and `[vp_pause]` 0 on all ten, sound for every frame.
+
+### 14.183 The 486 clip's hang at frame 221 was page-ahead's chain read through a HANDLE: two `mov ds, dx` the in-place decode never borrowed for (2026-11-08) - FIXED
+
+(The other finding 14.181 left "seen in the same pass, not fixed here";
+14.182 is the `FSXR_DRV` one. With 14.182 a kern_mega real-mode bracket
+reaches this clip in a long sequence too, where the fallback to protected
+mode had hidden it - and the fix below is the real-mode bracket's as much as
+kern_big's: the same package code, the same LOADALL borrow.)
+
+**The symptom**: `apps/video/demo/vga/10-LX486.V88` full screen on
+`vm/viddemo-vga` (MR 286, 16 MHz, 4 MB, OTI-067, SB16) hung the machine at
+its frame 221 on kern_big and in kern_mega's real-mode bracket - the CPU in
+`0206:9059`, under the MR BIOS's INT 6 handler, IF clear. `[vp_noinp]` 1 and
+kern_mega's protected bracket played it through.
+
+**How it was found** (no guess survived the instrument): a breakpoint on
+every LOADALL (`la_borrow.resume - 2`) and on INT 6's handler from frame 219
+on. Every table LOADALL loaded was right; the last borrow before INT 6 was
+`vp_decrec.mx0`'s with SI = F0E7h - a planar decode starting 61,671 bytes
+into its window, which no record's address gives (`vp_xmk` answers SI <= 15).
+Breakpoints on `vp_decrec`'s callers then named `vp_pghid`: page-ahead ON N
+PAGES (98.1.3.7.1) walking a CHAIN of hidden records. 10-LX486 is the only
+VGA demo clip on three pages, and record 221 is its first with a hidden
+record (`y1` bit 15) - the 62,663 bytes were a coincidence, its hidden-page
+records being the file's biggest. `vp_pghid`'s `.n` read each record's page
+and its "another follows" bit with a plain `mov ds, dx`; in place DX is a
+HANDLE (FFF0h-FFFFh), so it read the HMA as the chain and decoded "records"
+off the end of the window. The INT 6 frame sat where that last borrow's
+return address (90A4h, `.mx0`) and `VP_DSDX`'s pushed FLAGS (0206h) had been,
+so the CPU had popped the pair as a FAR return - into `0206:90A4`, data -
+and stepped on to the opcode at `0206:9059` the BIOS handler loops on. The protected bracket's handle is a real selector,
+and the copying play's a real segment, which is why both were right.
+
+**Fix** (SPEC.md 98.3.18.19, written first): `vp_pghid`'s chain walk and
+`vp_pgcopy` (a COPY in the chain, 98.1.3.7.2) read through `VP_DSDX` /
+`VP_DSEND` like the other fifteen sites. Keys (`vp_decn`, `vp_kref1`) keep
+the plain load: a key is always read into the conventional ring.
+
+**The cost**: VIDEO.O88 +48 bytes in each arm (shipped `.text` 60,311 ->
+60,359, PKG_MEGA 61,958 -> 62,006), no bss; `tools/os88rdiff.py` with
+`rdiffhot.txt`: every routine but `vp_pghid` (the fix) and `vp_pgcopy` the
+same, none at an odd shift. NO KERNEL BYTE: kern_big's, kern_small's and
+kern_mega's `kernel.bin` are byte-identical to mega-release's at the same
+commit.
+
+**The row, `vidpage3xip`** (soak, 39 s): `tests/vidpage.py --layout modex
+--pages 3 --xip` - vidpage3mx's clip on 86Box's 286 (`at286_vga`, the 1.44
+MB system disk for XMEM.DRV), each Play waiting for the hold to be whole and
+asserting the card's bank line 7 (in place by LOADALL). RED before: every
+play wrong (10,565 of 15,360 canvas pixels at the first hold from the start).
+Green after: every hold 0 wrong on all three plays. And the clip itself on
+`vm/viddemo-vga` after the fix: kern_big 2,036 of 2,036 frames, 693 pauses,
+0 stalls, no error (157 s against 92.5 - the 286 cannot keep up with a 486's
+clip, as its text says); kern_mega in the real-mode bracket the same, 681
+pauses.

@@ -20224,10 +20224,11 @@ vp_fpdec:
 vp_pgcopy:
     push dx
     push ds
-    mov ds, dx
+    VP_DSDX                         ; (in place, a handle: vp_pghid's)
     mov ax, [si+2]
     mov bx, [si+4]
     mov cl, [si+5]                  ; (y1's high byte: the source)
+    VP_DSEND
     pop ds
     add si, COPY_LEN
     push si
@@ -20694,10 +20695,11 @@ vp_pghid:
     cmp byte [vp_npg], 0
     je .two
 .n:
-    push ds
-    mov ds, dx
-    mov ax, [si+4]                  ; AH: another follows this one
-    mov al, [si+3]                  ; AL: its page
+    push ds                         ; (a record IN PLACE is a HANDLE: a plain
+    VP_DSDX                         ; mov ds read FFFxh:SI, the HMA's bytes
+    mov ax, [si+4]                  ; as the chain - KERN-MEGA-PLAN 14.182)
+    mov al, [si+3]                  ; AH: another follows this one, AL: its
+    VP_DSEND                        ; page
     pop ds
     push ax
     call vp_pgnum
