@@ -8987,7 +8987,10 @@ mx_alloc:
                                     ; then one run from the pool's base up,
                                     ; and the HMA - its first 64KB - is
                                     ; reached last
-.top:                               ; first fit DOWNWARD: the candidate
+.top:
+    cmp byte [es:mx_dmah], 0        ; ...BUT A DMA DOOR'S BLOCK FROM THE FLOOR
+    jne .bot                        ; UP (.bot, KERN-MEGA-PLAN 14.166)
+                                    ; first fit DOWNWARD: the candidate
     mov bp, [xm_kb]                 ; ends at the pool's top, and an overlap
     sub bp, cx                      ; moves it to end where that block
     jc .norun                       ; starts - strictly falling, so it ends
@@ -9016,21 +9019,7 @@ mx_alloc:
     jb .tscan
     xor ax, ax                      ; AX = MX_AUX: 0, or a TOKEN block's
     call mx_istok                   ; token (an OSAPI_XMEM_ALLOC block, MC3):
-    je .tok                         ; a range no live token overlaps, first
-    mov al, [es:mx_dmah]            ; ...or a DMA door's HEAD (mega_claimdf,
-    or al, al                       ; 14.160), AX its KB: kept inside the
-    jz .take                        ; 64KB page its first byte is in, else
-    mov dx, bp                      ; the candidate moves DOWN to end its head
-    and dx, 63                      ; on that page's floor - strictly
-    add dx, ax                      ; falling, as an overlap's move is, so
-    cmp dx, 64                      ; the walk still ends. (The pool starts
-    jbe .take                       ; at 1MB, a page edge: a KB offset's page
-    mov dx, bp                      ; is its own.)
-    add dx, ax
-    and dl, 0xC0                    ; the page floor the head crosses...
-    sub dx, ax                      ; ...less the head (never below 0: the
-    mov bp, dx                      ; head crossed it)
-    jmp short .trestart
+    jne .take                       ; a range no live token overlaps, first
 .tok:
     call mx_tokfit                  ; tried where the block IS - so it is the
     jc .norun                       ; block's base until the block moves
@@ -9089,6 +9078,64 @@ mx_alloc:
     pop cx
     pop bx
     ret
+.bot:                               ; A DMA DOOR'S BLOCK IS BORN PINNED (14.160)
+    mov bp, [mega_mxflr]            ; and goes to the pool's FLOOR END: every
+.brestart:                          ; other block is taken from the top and
+    mov al, [es:mx_dmah]            ; packs UP, so the free KB are one run from
+    xor ah, ah                      ; the floor, and a pin at the bottom of it
+    mov dx, bp                      ; never cuts it in two - where the top-down
+    and dx, 63                      ; fit put the pin UNDER the blocks before
+    add dx, ax                      ; it, and their frees left a run of their
+    cmp dx, 64                      ; own above it (SPEC.md 66.4.2). First fit
+    jbe .bpage                      ; UPWARD: AX = the head's KB, kept inside
+    add bp, 64                      ; the 64KB page its first byte is in, else
+    and bp, 0xFFC0                  ; the next page's floor (the pool starts
+.bpage:                             ; at 1MB, a page edge); an overlap goes
+    mov dx, bp                      ; past the block - strictly rising, so the
+    add dx, cx                      ; walk ends. DX = the candidate's end
+    jc .norun
+    cmp dx, [xm_kb]
+    ja .norun
+    mov si, mx_tab
+.bscan:
+    mov dx, [es:si+MX_KB]
+    or dx, dx
+    jz .bnext
+    add dx, [es:si+MX_OFF]          ; DX = this block's end
+    cmp bp, dx
+    jae .bnext
+    push dx
+    mov dx, bp
+    add dx, cx
+    cmp [es:si+MX_OFF], dx
+    pop dx
+    jae .bnext
+    mov bp, dx                      ; overlap: restart past it
+    jmp short .brestart
+.bnext:
+    add si, MX_BLKSZ
+    cmp si, mx_tab_end
+    jb .bscan
+    cmp byte [mega_cpry], 0         ; ...and NOTHING MOVABLE UNDER IT: a block
+    jne .take                       ; the top was too full for packs up out
+    mov si, mx_tab                  ; of the way once first, or the pin would
+.bmov:                              ; keep it below, a run cut off
+    cmp word [es:si+MX_KB], 0
+    je .bmn
+    test byte [es:si+MX_FL], MX_FPIN | MX_FDMA
+    jnz .bmn                        ; (another door's block, pinned or not, is
+    cmp [es:si+MX_OFF], bp          ; where it belongs)
+    jb .bpack
+.bmn:
+    add si, MX_BLKSZ
+    cmp si, mx_tab_end
+    jb .bmov
+    jmp .take                       ; (AX = the head: MX_AUX)
+.bpack:
+    mov byte [mega_cpry], 1
+    mov ax, [mega_mxflr]
+    call MEGA_SEL_CODE:mx_packupf   ; (CX and DI kept, as .norun's)
+    jmp .bot
 
 ; mx_shed - for mx_alloc's two refusals: the cheapest purgeable cache above
 ; 1MB that the claimant outranks goes (mx_shedf, `.cold`, mem_shed_one's rule

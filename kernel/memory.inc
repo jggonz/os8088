@@ -946,6 +946,9 @@ mem_claim_x:
 %endif                          ; ...and with no compactor there is no walk to
                                 ; be inside, so kern_small has no such state
                                 ; and asks nothing
+%ifdef KERN_MEGA
+    call mem_ringtop           ; A RING AT THE TOP END when it is free for
+%endif                          ; one (KERN-MEGA-PLAN 14.166): DI's door
     call mem_claim_1            ; COMPACT, THEN SHED AND RETRY (SPEC.md 66.4 /
     jnc .out                    ; 50.6.2). A cache loses to anything that is
 %ifdef OS88_COMPACT
@@ -6491,5 +6494,116 @@ mem_bytes_kb_x:
                                 ; (mod_disarm), the two cancelling with
                                 ; nothing hot between them (kernel size pass
                                 ; 14; tests/unit/t_hotpar.py)
+
+%ifdef KERN_MEGA
+; -----------------------------------------------------------------------------
+; mem_ringtop - from mem_claim_x's retry, both `.cold` (kern_mega, KERN-MEGA-PLAN
+; 14.166, SPEC.md 50.3.2): A RING GOES TO THE TOP END of conventional memory
+; when the top end is free for it. in: AX = paragraphs (granule-rounded), SI
+; = the page-safe head in paragraphs, DI = the door's bits, BX = the owner.
+; out: DI | MC_DMA_HI when the top-down first fit would put the claim where
+; nothing above it but other RINGS and the kernel's own claims (0xFFxx: the
+; low descriptor tables, a boot driver's image) stands - so mem_claim_1 then takes exactly
+; that place - and DI as it was otherwise: no head (no ring), the top door
+; already, a kernel cache's owner (the landing stays at the floor it is born
+; at), real mode, or a claim with no head above the candidate (a carve, an
+; overlay, a region: the top is not free, and a ring under them would be in
+; the middle - bottom-up first fit, 14.55's, stands). Everything else kept.
+;
+; WHY THE TOP: a ring is held while it plays and PINNED for all of that, and
+; bottom-up it lands on the FILL POINT, above whatever programs' claims and
+; caches stand there - which are freed while it plays (a program closed, a
+; cache shed), and their KB then stand UNDER the pin as a run of their own
+; (measured on a 1MB kern_mega: SOUND.DRV's 16KB staging pool over 86KB that
+; Sheet's spill had held, the heap's best run 474KB of 560KB free). The
+; floor end is never free for it - the read-ahead's landing is born there -
+; and the top end is, on a machine with a pool, from the boot until a
+; program wants a conventional CS. A ring at the top has only free memory
+; under it, and what is later taken top-down stacks under the ring and
+; frees back into that run. Idle (declared movable) it came in by the top
+; door, so the descending pass packs it back to the top (SPEC.md 66.4.1)
+; -----------------------------------------------------------------------------
+mem_ringtop:
+    or si, si
+    jz .r                       ; no head: not a ring
+    test di, MC_DMA_HI
+    jnz .r
+    cmp byte [ss:mega_pm], 0
+    je .r
+    cmp bh, MEM_PG_MIN          ; a kernel cache (0xFBxx..0xFExx) or a
+    jae .r                      ; kernel tag (0xFFxx): its own place
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov bx, si                  ; BX = the head
+    mov dx, [mem_top]
+.cand:                          ; DX = an edge: the base AX under it
+    sub dx, ax
+    jc .no
+.re:
+    cmp dx, [mem_base]
+    jb .no
+%ifdef MEM_ALIGN_CLASS
+    test di, MC_DISK            ; mem_claim_1's bumps, going DOWN: the DISK
+    jz .al                      ; class's 512-byte line...
+    and dl, 0xE0
+.al:
+%endif
+    mov cx, dx                  ; ...and the head inside its 64KB page, else
+    and ch, 0x0F                ; the highest base in this page whose head
+    add cx, bx                  ; still fits
+    cmp cx, 0x1000
+    jbe .fit
+    mov cx, dx
+    and cx, 0xF000
+    add cx, 0x1000
+    sub cx, bx
+    mov dx, cx
+    jmp short .re
+.fit:
+    mov si, mem_tab             ; an OVERLAP: just under it, as mem_claim_1
+.ov:                            ; does going down
+    cmp word [ss:si+MC_SEG], 0
+    je .ovn
+    mov cx, dx
+    add cx, ax                  ; CX = the candidate's end
+    cmp [ss:si+MC_SEG], cx
+    jae .ovn
+    mov cx, [ss:si+MC_SEG]
+    add cx, [ss:si+MC_PARA]
+    cmp cx, dx
+    jbe .ovn
+    mov dx, [ss:si+MC_SEG]
+    jmp short .cand
+.ovn:
+    add si, MC_SIZE
+    cmp si, mem_tab + MEM_MAX * MC_SIZE
+    jb .ov
+    mov si, mem_tab             ; THE CANDIDATE, DX: every claim above it
+.up:                            ; must be a ring, or the KERNEL'S own (the
+    cmp word [ss:si+MC_SEG], 0  ; descriptor tables and the boot drivers'
+    je .upn                     ; images of a machine with no pool, which
+    cmp [ss:si+MC_SEG], dx      ; hold the top from the boot), or it is not
+    jb .upn                     ; the top end
+    test word [ss:si+MC_DMA], MC_DMA_HEAD
+    jnz .upn
+    cmp byte [ss:si+MC_OWN+1], 0xFF
+    jne .no
+.upn:
+    add si, MC_SIZE
+    cmp si, mem_tab + MEM_MAX * MC_SIZE
+    jb .up
+    or di, MC_DMA_HI            ; the top door: mem_claim_1 takes DX
+.no:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.r:
+    ret
+%endif
 
 section .text                   ; ...and the file ends in .text (CLAUDE.md 1)

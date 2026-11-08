@@ -99125,9 +99125,10 @@ machine that had the room the whole time.
 
 **On kern_mega in protected mode, an `OS88_HIGHMEM` package's claim of 64KB or
 less WITH A HEAD is a POOL block** (KERN-MEGA-PLAN 14.160), where `mega_claimhf`
-puts its plain claims: `mega_claimdf` hands `mx_alloc` the head, the top-down
-first fit moves a candidate whose head would straddle DOWN until the head ends
-on that page's floor, and the block is all below 16MB because the pool is
+puts its plain claims: `mega_claimdf` hands `mx_alloc` the head, which places
+the block FROM THE POOL'S FLOOR UP (§50.6.10's one exception, KERN-MEGA-PLAN
+14.166) - a candidate whose head would straddle goes UP to the next page's
+floor - and the block is all below 16MB because the pool is
 (`mega_layoutf` caps it at 15MB above the first). Both KB doors (`_DMA` and
 `_DMA_HI`) take the arm; `OSAPI_MEM_P` with a head does not (§50.3.7), and a
 driver never does - its own 8237 or bus-master code may not take a selector's
@@ -99466,6 +99467,32 @@ compacts downwards. **CX = 0 keeps the top**: the parts carve, the C overlay
 and the player's `vp_mclhi` claims ask the door for no page at all, and a
 carve or an overlay is a CS (§20.12.10.8). kern_big and kern_small are
 unchanged, byte for byte.
+
+**...and since KERN-MEGA-PLAN 14.166 a ring goes to the TOP END when the top
+end is free for it** - the owner's rule (2026-11-08): *"we don't want to
+blockade the available space with something in the middle."* Bottom-up, a
+ring lands on the FILL POINT, above the programs' claims and the caches
+standing there, and it is PINNED for as long as it plays: whatever under it
+is freed meanwhile (a program closed, a cache shed) stands under the pin as a
+run of its own. Measured on a 1MB kern_mega (640K and 384K above 1MB, the
+86Box mr286): SOUND.DRV's 16KB staging pool over the 86KB Sheet's spill had
+held, the heap's best run 474KB of 560KB free, `OSAPI_MEM_HUGE` 86KB short.
+The FLOOR end is never free for a ring - the read-ahead's landing is born at
+it (§18.95) - and on a machine with a pool the TOP end is, from the boot until
+a program wants a conventional CS. So `mem_ringtop` (`.cold`, from
+`mem_claim_x`'s retry) asks where the top-down first fit would put a claim
+WITH A HEAD from a package or a driver (never the kernel's own: the landing
+keeps the floor), and when everything above that place is a ring too it
+sends the claim through the top door, which takes exactly that place; when a
+claim with no head stands above it (a carve, an overlay, a region), the top
+is not an end and the ring goes bottom-up as 14.55 put it. A ring at the top
+end has only free memory under it; a top-down claim taken later stacks under
+the ring and frees back into that run; and an idle one, declared movable,
+came in by the top door, so the descending pass packs it back to the top
+(§66.4.1). A head that would straddle a 64KB page bumps DOWN until it ends
+at the top of the page it starts in, which can leave a page's tail between two rings - at most 63KB,
+and only when two stand whose heads cannot share a page. kern_big and
+kern_small are unchanged, byte for byte.
 
 
 #### 50.3.2.1 Two images the doors were opened for and did not reach
@@ -100558,6 +100585,27 @@ HMA's end up to the lowest block, and the HMA is reached last. `mx_compactf`
 (the pack DOWN) stays as `OSAPI_MEM_REGROW`'s, which wants the free KB above
 one claim. The Task Manager's MAX RUN replays the pack with only the HMA
 pinned, so it reads AVAIL less the HMA's share.
+
+**...but a PINNED block from the floor up** (KERN-MEGA-PLAN 14.166, the
+owner's rule: *"we don't want to blockade the available space with something
+in the middle"*). A DMA door's block (§50.3, KERN-MEGA-PLAN 14.160) is born
+`MX_FPIN`, and taken top-down it landed UNDER every block taken before it -
+so when those were freed their KB stood ABOVE the pin as a run of its own,
+which the pack UP cannot join to the run below it, and the largest claim the
+pool could grant fell short of its free KB by all of them. Measured on a 1MB
+kern_mega (86Box's mr286, the sound driver up): KERN-MEGA-PLAN 14.166's
+table. So `mx_alloc` takes a block it is about to pin FIRST FIT UPWARD from
+`[mega_mxflr]`: free memory is one run from the floor to the lowest movable
+block, and a pin at its bottom leaves it one run. A head that would straddle
+a 64KB page goes to the next page's floor, which can leave a page's tail
+under it - at most 63KB, and only when two pins are standing whose heads
+cannot share a page; the next pin small enough fills it first. A MOVABLE
+block standing under the candidate (the top was too full for it) is packed
+up out of the way first, once, so the pin does not keep it below. The floor
+is the HMA when nothing else stands there, so a DOS trip that finds a pin in
+it parks the HMA with the session (§50.6.10's MC4 rule, 64KB more park) -
+and packs the pool UP first, so a block that is only movable is not left
+there to cost that.
 
 `tests/megaxmove.py` is the gate: a block moved by the pack and read back
 through its first token, by copy, in place, by the file layer and by a

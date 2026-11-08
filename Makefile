@@ -15478,6 +15478,12 @@ $(BUILD)/megahuge.bin: tests/megahuge/megahuge.asm apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ tests/megahuge/megahuge.asm
 $(BUILD)/megahuge.o88: $(BUILD)/megahuge.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/megahuge.bin -o $@
+# MEGAJW (tests/megajw): the largest claim against the free memory - XMEM_CAPS, MEM_AVAIL, OSAPI_MEM_HUGE's query and a
+# claim of it, the answers kept in its own image for a row on 86Box (no port E9) - tests/megajw.py (KERN-MEGA-PLAN 14.166)
+$(BUILD)/megajw.bin: tests/megajw/megajw.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/megajw/megajw.asm
+$(BUILD)/megajw.o88: $(BUILD)/megajw.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/megajw.bin -o $@
 # MEGACAPS (tests/megacaps): OSAPI_XMEM_CAPS answers what a claim is then
 # given, a cache in the pool counted as free
 $(BUILD)/megacaps.bin: tests/megacaps/megacaps.asm apps/os88api.inc | $(BUILD)

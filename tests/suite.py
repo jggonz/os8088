@@ -19457,6 +19457,29 @@ SOAK = [
         needs=("bochs",),
         wants=("build/mega.img", "build/megahuge.o88", "build/megarun.o88",
                "build/mbr.bin")),
+    Row("megajw", "soak", py("tests/megajw.py"), 25.0,
+        "docs/plans/KERN-MEGA-PLAN.md 14.166, SPEC.md 50.3.2, 50.6.10: ONE "
+        "CLAIM GETS WHAT IS FREE after a session that fragments BOTH heaps - "
+        "a pinned block may not stand in the middle of either. 86Box's "
+        "at286_vga_sb (the mr286, a Sound Blaster) with 640K and 384K above "
+        "1MB (mem_size 1408, mega_extkb asserted), a scratch B: of the "
+        "kern_mega arms: Sheet opened (it fills the pool and spills into the "
+        "heap), a WAV opened in the Audio Player and PAUSED (a pause is a "
+        "play: its look-ahead, a DMA door's pool block, and SOUND.DRV's "
+        "staging pool, a conventional ring, both PINNED), Sheet closed. "
+        "Asserts a pinned block in each heap, each heap ONE free run off "
+        "mx_tab and mem_tab (no pin with free KB on both sides), MEGAJW's "
+        "OSAPI_MEM_HUGE answer within 8K of the pool's free KB in whole "
+        "64KB windows plus the heap's less its 64KB reserve, a claim of it "
+        "granted and read back and one KB more refused, and XT-MP3's hold - "
+        "ONE OSAPI_XMEM_ALLOC of every KB XMEM_CAPS says is free - granted. "
+        "RED on the tree before 14.166, measured: the pool ring at 105C00 "
+        "(23K under it, 217K over), SOUND.DRV's at 25800 (86K under, 474K "
+        "over), the claim 602K where 688K is free, the hold REFUSED. "
+        "25s is 15 measured",
+        needs=("86box",),
+        wants=("build/mega.img", "build/megajw.o88",
+               "build/megak/apps/audio.o88", "build/megak/apps/sheet.o88")),
     Row("megacaps", "soak", py("tests/megacaps.py"), 60.0,
         "docs/plans/KERN-MEGA-PLAN.md 14.122, SPEC.md 41.8: "
         "OSAPI_XMEM_CAPS ANSWERS WHAT A CLAIM IS THEN GIVEN. kern_mega "
