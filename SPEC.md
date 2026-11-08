@@ -37164,6 +37164,55 @@ is the value every widget entry already leaves there. A DVK_DRV volume
 (HDD.DRV's rung 1) never runs this loop at all. `tests/fpgnotch.py` is the
 gate that a LIVE bar still moves.
 
+#### 18.91.7 …and a PicoMEM 2's disk is read ONE sector a call, IRQ0 masked for it (kern_big, kern_emu)
+
+**On a PicoMEM 2 the card's sound goes silent whenever an interrupt holds
+the PC inside the card's int 13h** (docs/reports/PICOMEM2-STUTTER-2026-11-07.md).
+Per sector the card reads its SD, mixes once and asks the PC to copy 512
+bytes out of its window - with interrupts ON - then waits for the copy
+mixing nothing, with 5 ms of sound mixed ahead. A hook that decodes a frame
+inside that copy (Video Battle's, Video Player's: SPEC.md 126.3, 98.3) is a
+hole in the card's output as long as the hook. Measured on 5150 #1 with
+PM2-10-4-26, VIDSND's T rows: tracks read under a 4-16 ms hold broke the
+tone 228-508 times in 5 s; one sector a call with IRQ0 masked for the call
+broke it 0 times. That is the owner's "short, repeated stuttering" during
+heavy actions.
+
+So the transfer loop reads such a disk that way:
+
+- **`drv_sniff`'s hard-disk branch** (driver.inc, the boot overlay's
+  window half) asks once, when the BIOS has a fixed disk: `dsk_fdd_pmemu`
+  (18.97.6 - port 2A3h's ramp, the card BIOS's function 0, its segment)
+  answers for the card's attribute slots in order, FDD0, FDD1, then
+  **HDD0..3 as slots 2..5**, bit 7 = the card serves the unit; the first
+  hard slot that answers is unit 80h + (slot - 2). Then function 3 (int 13h
+  AX=6003h DX=1234h): AL = the board, **11 = a PicoMEM 2.0** (a BIOS without
+  it hands AX back, AL = 3). That unit goes in **`[dsk_pmhd]`** (`.text`,
+  FFh = none). A 1.x is not matched: its firmware (`firmware/picomem1/`)
+  mixes while it waits, and its machine is a 286 whose disk rate this would
+  cost.
+- **`dsk_xfer`**, for a unit at or above `[dsk_pmhd]`, takes the run as 1
+  and sets IRQ0's bit in the 8259's mask before the int 13h, clearing it
+  after. The card's disks follow the PC's own (an ST-225 is 80h, the card's
+  first image 81h), so a real disk below them keeps its runs. An IRQ0 that
+  falls in the masked call waits in the IRR: one sector is 1.8 ms on the
+  field machine, under Video Battle's 13.7 ms period (`VB_DIV`) and the
+  18.2 Hz tick.
+- **Its price**: VIDDISK on the field machine, a sector a call 1.83 ms
+  against 1.53 ms a sector by whole tracks - **about 20% of the card's
+  disk rate**, which `5150-picomem2`'s 135,000 (98.2) does not yet charge.
+  Resident: **34 bytes of `.cold`** in `dsk_xfer` and the byte in `.text`.
+  The probe is window-half code and costs no resident byte - but the window
+  half was full (5,119 of 5,120), so the DSK_PMHD builds drop four of
+  `sched_init`'s zero stores (its slot-clearing and cycle-clearing loops,
+  `sch_wd_hits`, `sch_pit_last`'s high word), which wrote zero over zero:
+  `.bss` lies wholly in the file's zero gap between `.text` and `.ovl` and
+  stage 2's one read lands it (SPEC.md 10's `evq_init` went on the same fact). The
+  window half is 5,112 now; the boot blob and its read are as they were.
+- **Not kern_mega** (its int 13h is the real-mode bracket's), **not
+  kern_small** (no room in its boot halves, and a 128KB machine with a PicoMEM 2 is not one
+  anybody runs), and not the card's floppy images, which nothing streams.
+
 ### 18.92 The diskette parameter table is OURS, and EOT is why
 
 **int 1Eh is not an interrupt.** It is a far pointer to an 11-byte table the

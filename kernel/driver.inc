@@ -5640,6 +5640,36 @@ drv_sniff:
                                 ; mounts nothing (51.3.2) and a settings file
                                 ; overrides it only where the USER answered
                                 ; (51.5.4)
+%ifdef DSK_PMHD
+    ; --- ...AND IS IT A PICOMEM 2's? (SPEC.md 18.91.7) ----------------------
+    ; dsk_fdd_pmemu answers for the card's attribute slots in order - FDD0,
+    ; FDD1, then HDD0..3 as 2..5, bit 7 = the card serves the unit - so the
+    ; first hard slot that answers is unit 80h + (slot - 2). Then the card's
+    ; BIOS function 3: AL = the board, 11 a PicoMEM 2.0, and DX = FFFFh
+    push es                     ; (dsk_fdd_pmemu spends ES, BX, CX, DX, AH)
+    mov al, 2
+.pms:
+    push ax
+    call dsk_fdd_pmemu          ; near: both are the window half
+    pop ax
+    jnc .pmy
+    inc ax
+    cmp al, 6
+    jb .pms
+    jmp short .pmx
+.pmy:
+    push ax
+    mov ax, 0x6003
+    mov dx, 0x1234
+    int 0x13
+    cmp al, 11                  ; (a BIOS without function 3 hands AX back,
+    pop ax                      ; AL = 3: no DX test needed)
+    jne .pmx
+    add al, 0x80 - 2
+    mov [dsk_pmhd], al          ; through DS, KERNEL_SEG here (SPEC.md 2.5)
+.pmx:
+    pop es
+%endif
 .nohd:
     pop dx
     pop cx
@@ -5647,6 +5677,7 @@ drv_sniff:
     pop ax
     retf                        ; FAR: kmain reaches this through OVLCALL,
                                 ; `call FAT_SEG:` - it is window-half code
+
 
 ; -----------------------------------------------------------------------------
 ; drvp_wr - write one OPL2 register (overlay-local; SPEC.md 34.1)

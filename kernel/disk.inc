@@ -894,6 +894,10 @@ dsk_dbg_raw:
     retf
 %endif
 section .text                   ; DATA, so back to the kernel segment
+%ifdef DSK_PMHD
+dsk_pmhd:     db 0xFF           ; the first int 13h unit a PicoMEM 2 serves,
+                                ; FFh none (drv_sniff; SPEC.md 18.91.7)
+%endif
                                 ; (SPEC.md 2.6 rule 1)
 
 
@@ -1935,6 +1939,16 @@ dsk_xfer:
     mov bp, 1                   ; FLOPPY1=1: one sector a call, the pre-18.91
                                 ; transfer, for A/B-ing this on real iron
 %endif
+%ifdef DSK_PMHD
+    mov al, [dsk_unit]          ; A PICOMEM 2's DISK (SPEC.md 18.91.7): one
+    cmp al, [dsk_pmhd]          ; sector a call, IRQ0 masked for it, so no
+    jb .nopm                    ; timer hook lands inside the card's copy
+    mov bp, 1                   ; wait - where its sound goes silent. AX is
+    in al, 0x21                 ; the run the track allowed, spent by now
+    or al, 1                    ; (the head is popped over it below). Taken
+    out 0x21, al                ; off again after the int 13h
+.nopm:
+%endif
     mov [dsk_run], bp
 %ifdef DISK_COUNTERS
     add [dsk_dbg_sec], bp
@@ -2010,6 +2024,17 @@ dsk_xfer:
     mov byte [mega_fdx], 0      ; (`mov` leaves CF alone)
 %endif
     CURXFER_OFF                  ; `mov` leaves the flags alone, so int 13h's CF
+%ifdef DSK_PMHD
+    pushf                       ; ...and IRQ0 open again on the card's disk
+    mov al, [dsk_unit]          ; (SPEC.md 18.91.7). AL only: a failure's
+    cmp al, [dsk_pmhd]          ; status is AH, and a success's AL is never
+    jb .nopu                    ; read (.ok below says why)
+    in al, 0x21
+    and al, 0xFE
+    out 0x21, al
+.nopu:
+    popf
+%endif
     jnc .ok                     ; still reaches this branch
     mov [dsk_ioerr], ah         ; keep the status for diskw.inc's mapping
 %ifdef DISK_COUNTERS
@@ -2481,10 +2506,12 @@ dsk_xfer:
     jmp short .ijf              ; CF = 0 off the `or`, and .success's one test
                                 ; - [dsk_bnc_si] - is 0 by the note above, so
                                 ; it is skipped rather than taken
+%ifndef DSK_PMHD
     nop                         ; PARITY PAD, never executed: the exits above
                                 ; are 3 bytes shorter, and dsk_runcap and
                                 ; dsk_next_clus_x keep an EVEN shift
-                                ; (t_hotpar.py)
+                                ; (t_hotpar.py). DSK_PMHD's 35 bytes in
+%endif                          ; dsk_xfer are odd, so there it goes
 
 
 
@@ -10534,13 +10561,15 @@ FDD_SELW     equ 4000            ; a short settle after the select reaches the
 
 %ifdef KERN_BIG
 ; -----------------------------------------------------------------------------
-; dsk_fdd_pmemu - does a PicoMEM serve floppy unit AL from an image?
-; (SPEC.md 18.97.6)
-; in:  AL = the unit (0..3)
-; out: CF = 0 yes; CF = 1 no, or no PicoMEM, and AL = the unit again.
-; clobbers: AH, BX, CX, DX, ES, flags - its one caller has banked all four
-;      (dsk_fdd_probe, which calls it under its own saves; kernel size pass
-;      11 took the routine's second set off, -11 of `.ovl`)
+; dsk_fdd_pmemu - does a PicoMEM serve attribute slot AL from an image?
+; (SPEC.md 18.97.6, 18.91.7)
+; in:  AL = the slot: 0, 1 floppy units A: and B:; 2..5 HDD0..3 (unit 80h
+;      + AL - 2), the card's table running straight on
+; out: CF = 0 yes, ES = the PM BIOS's segment; CF = 1 no, or no PicoMEM.
+;      AL = the slot again either way.
+; clobbers: AH, BX, CX, DX, ES, flags - its two callers bank what they need
+;      (dsk_fdd_probe, under its own saves; drv_sniff's DSK_PMHD branch;
+;      kernel size pass 11 took the routine's second set off, -11 of `.ovl`)
 ;
 ; THREE QUESTIONS, EACH ONLY ASKED IF THE ONE BEFORE ANSWERED. Port 2A3h is
 ; the card's test register and counts one up per read - a ramp nothing else
@@ -10552,7 +10581,9 @@ FDD_SELW     equ 4000            ; a short settle after the select reaches the
 ; card's configuration struct sits 16KB above that, FDDn_Attribute at +B2h
 ; per unit, BIT 7 meaning "the PicoMEM disk code serves this drive"
 ; (pmbios/pm_vars.asm; its order is the config file's, so the card keeps it).
-; Units 2 and 3 have no attribute and answer no.
+; HDD0..3's attributes follow FDD1's, which is why slots 2..5 are theirs -
+; and why this no longer refuses AL >= 2: floppy units 2 and 3 have no slot,
+; and dsk_fdd_probe asks only about unit 1.
 ;
 ; KERN_BIG ONLY, beside its caller in the window half. kern_big's blob is full
 ; and its `.ovl` had ~90 bytes; kern_small's `.ovl` has 30 (the two guards at
@@ -10563,8 +10594,6 @@ FDD_SELW     equ 4000            ; a short settle after the select reaches the
 ; (SPEC.md 18.97.6).
 ; -----------------------------------------------------------------------------
 dsk_fdd_pmemu:
-    cmp al, 2
-    jae .no
     mov bl, al                  ; the unit, through int 13h's clobbers
     mov dx, 0x2A3
     pushf

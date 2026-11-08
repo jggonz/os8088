@@ -179,6 +179,28 @@ did with the ST-225 - the same CPU - the worst synthetic frame 37% of a
    0 holes) and about 20% of the disk's rate. It needs no firmware at all,
    so it is the one that works on the card as released, today.
 
+## The cure taken (2026-11-08): cure 3, in kern_big
+
+The owner's choice, upstream having not answered the 1.x fixes: J's shape in
+the kernel, PicoMEM 2 only, SPEC.md 18.91.7. `drv_sniff` asks the card at
+boot (its attribute slots through `dsk_fdd_pmemu`, then BIOS function 3,
+board 11) and keeps its first hard unit in `[dsk_pmhd]`; `dsk_xfer` reads
+that unit and any after it one sector a call, IRQ0 masked for the call.
+**34 resident bytes of `.cold`** and one of `.text`; the probe fits the boot
+overlay's window half by dropping four of `sched_init`'s zero-over-zero
+stores. The boot blob and its reads are unchanged on every geometry
+(`t_blobruns`: 2 calls everywhere) - an extra blob sector was weighed and
+would have cost two int 13h calls on every 360 KB and 720 KB boot.
+
+Checked: the probe answers 80h on MartyPC's 2.x twin with the card's disk as
+HDD 0, FFh on the 1.x twin and on a 5150 without a card; C: browses on the
+2.x twin; `pmmarty`, `pmlib`, `hdboot`, `hdauto`, `fddpark`, `fddpage`,
+`viddisk`, `vidsnd` and `bootsmoke` pass. **Not yet heard**: whether Video
+Battle's heavy actions stop stuttering on 5150 #1 (the twin plays the
+battle's SOUND.DRV stream silent, above), and the disk rate it costs there -
+VIDDISK R on the new kernel re-measures `5150-picomem2`, which until then
+still charges the multi-sector 135,000.
+
 ## The field kit: `make pm2kit`
 
 `build/pm2kit/` (and `build/pm2kit-360.img`): VIDSND (T and R), VIDBENCH and
