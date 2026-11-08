@@ -107364,7 +107364,9 @@ a `DVK_BIOS` unit's (the partition's base added, CHS's reach checked) or a
 `DVK_DRV` `DRVC_DISK` volume's own - and each driver the list reaches whose
 image is above 1MB is given a conventional claim its image and bss are
 copied DOWN into at the freeze's arm and back UP at the exit, as the region
-is (a driver already conventional runs where it is). The walk happens in the
+is (a driver already conventional runs where it is - and `FSXF_PREP`,
+53.2.3.1, is how a package has its drivers conventional before it sizes
+anything). The walk happens in the
 park's scratch, so a bracket that falls back takes nothing. A stat or chain
 that fails is not a fallback: the twin answers that `FERR_*` for that name. **A refusal (CF = 1) is for a state
 the user will not normally be in** - the owner's rule - so none of these
@@ -107744,6 +107746,91 @@ Each was one test at the door and each test is gone:
   loses nothing. A package that wants a lossless line across the bracket
   closes its lease before `OSAPI_FSX_RUN`, or holds it in a conventional
   region.
+
+### 53.2.3.1 `FSXF_PREP` — the door prepared, and its conventional need answered (kern_mega; KERN-MEGA-PLAN 14.180)
+
+A real-mode bracket's package sizes two kinds of memory BEFORE it calls
+`OSAPI_FSX_RUN`: its extended memory (a hold, a bank) out of the pool, and
+its conventional claims (rings) out of the heap - and the door then claims
+conventional memory of its own after them (the service area, a copy of each
+listed driver whose image is above 1MB, EXTD.DRV's copy, the region's copy
+when it is above 1MB). Two things followed, both measured on 86Box's 286 at
+640K + 384K (KERN-MEGA-PLAN 14.178): the drivers the bracket carries -
+SOUND.DRV (11 KB) and HDD.DRV (4 KB) - stood in the pool as images the hold
+was sized without, AND were copied into conventional memory for the
+bracket, so their 15 KB were held twice; and the package could only guess
+what the door would claim (the Video Battle kept 24 KB, `VB_RKEEPM`, for a
+door that took 18; the Video Player's arm 16, `VP_RBRKB` - 64).
+
+**`FSXF_PREP` (CX bit 4, 16) with `FSXF_REAL` asks the door to PREPARE and
+run nothing.** In: what a run would pass - AX = the entry, BX = the window
+(the fence is the run's), BP = the list (§53.2.3), SI = 0, CX =
+`FSXF_REAL | FSXF_PREP` (any other flag is tested as a run's is -
+`FSXF_RATE`'s DX and DI included - and otherwise ignored, but
+`FSXF_KEEPWORKER`, which answers `FSXR_KEEP`).
+**Out, on kern_mega in protected mode: CF = 0, AX = the KB of conventional
+memory the door will still claim, SI = the `FSXR_*` it would answer** -
+`FSXR_REAL`, or the first reason among those that need no claim to test
+(`FSXR_KEEP`, then the list's `FSXR_VOL`, `FSXR_FRAG`, `FSXR_DRV`), AX = 0
+then (a protected-mode bracket claims nothing conventional). Every other
+register as it came; nothing of the door's state is touched, no bracket is
+up, and the call may be made as often as wanted. **Every other kernel
+refuses it, CF = 1** - kern_big and kern_small by the undefined-bit test
+(§53.1: bit 4 was always refused), kern_mega in real mode (a machine it
+could not switch) at `.nreal` - and so did every kern_mega before 14.180:
+a package keeps NOTHING for the door where it is refused under real mode,
+and its old guess where it is refused under `CPU_F_PM`.
+
+What the door does, in protected mode:
+1. the list walked exactly as the run's door walks it (the caller's folder,
+   the park's scratch), and the tests above;
+2. **each driver the bracket will carry (the walked list's classes:
+   `DRVC_DISK`, `DRVC_EMS`, `DRVC_SOUND`) whose image is a pool block is
+   BROUGHT DOWN for good** (`mega_drvlow`): its image and bss moved into a
+   conventional claim owned `MEM_K_DRV` and placed as `drv_load`'s own claim
+   is - bottom-up first fit, into the arena's low holes rather than at its
+   top, under which a package sizes its rings (at the top, 15 KB cost the
+   Video Player's 64 KB-page-aligned ring a 32 KB slot) - and on a 512-byte
+   boundary (SOUND.DRV's `SBL_DSCS` in real mode); every allocator descriptor based in the block rebased in the same
+   interrupts-off step (`mega_mvblk`, the compactor's rule), so no selector
+   changes and its IDT gates and vectors stand; the claim's `mem_sel` row
+   made the driver's pair; the pool block freed. The run's door then finds
+   it conventional and copies nothing ("a driver already conventional runs
+   where it is", above). One there is no conventional room for stays above
+   1MB and its copy's KB are counted;
+3. the region's copy (its `I_SIZE`, when it is above 1MB - §50.6.11's
+   `SEG_LOW` is what brings it down), the service area (`fsx_rsvcsz`, the
+   run's own sum: code, rows, runs, pool rows, a lease's ring, the glyph
+   table's copy) and EXTD.DRV's copy (its claim, when above 1MB) summed, each
+   in whole KB as the run's door claims them.
+
+**A driver brought down is LENT, not moved for good**: its row keeps
+`DRVR_PARA` = 0 (which a `drv_load` image never has), and when ANY
+instance ends - `mx_relinst`, after its pool blocks are freed - every lent
+image goes back up into a pool block owned `MX_KDRV`, where `drv_hi` put
+it, the same way (`mega_drvup`: selectors kept, the conventional record
+freed under it), when the pool has room; one it has none for stays down and
+runs where it is, as any low driver does. So a package asks at EVERY door
+(the next play's may find its drivers back up), and the desktop pays the
+drivers' 15 KB of conventional memory only while some package's hold leaves
+the pool no room for them - which is the double count removed, kern_big's
+arrangement (whose XMS never held them). A Drivers page weighs a lent
+image's conventional KB as 0, as it weighed it above 1MB.
+
+**What a package does**: under `CPU_F_PM`, before it sizes its extended
+memory, `FSXF_PREP` with the list its play will hand the door (the drivers
+come down, the pool has their KB); before it sizes its conventional claims,
+the answer's AX KB left free beside what it keeps for its own file reads.
+The Video Battle asks before its hold opens and keeps `VB_RKEEP` + AX
+(`vb_prep`, §126.4.5); the Video Player's arm asks at the file's open (its
+bank) and again where `vp_rbhold` holds the door's room (§98.3.24.2).
+`VB_RKEEPM` and `VP_RBRKB` are their fallbacks for a refusal.
+
+What it costs: kern_mega `.mega` +432 bytes (24,160 -> 24,592; the rung's
+26,112 not crossed, so `MEGA_CODE_KB` and the pool unchanged), `.text` +6
+(the real-mode refusal, `tests/megaseg.txt` 3,754 -> 3,760), resident
+unchanged; kern_big and kern_small byte-identical. `megaparvb` and
+`megaparvp` are the gates (KERN-MEGA-PLAN 14.180 has the measurement).
 
 ### 53.3 Entry silences what it strands (binding)
 
@@ -209029,25 +209116,45 @@ its fixed area above 1MB, 20 KB more than kern_big's HMA holds, and the
 drivers' images, 15 - and the pool's remainder under a 32 KB slot: 98.3.24.3.
 +48 bytes of the arm's image (61,879 -> 61,927); the shipped player byte-identical.
 
+**And the door says what its room is** (KERN-MEGA-PLAN 14.180): the arm's
+cold part asks `OSAPI_FSX_RUN` `FSXF_REAL | FSXF_PREP` (SPEC.md 53.2.3.1,
+`vp_rprep`, a part vector, `VK_RPREP`) with the list `vp_rmklist` makes -
+in `vp_xopen` before the bank is sized, so SOUND.DRV and HDD.DRV come down
+out of the pool first and the bank has their 15 KB, and again in
+`vp_rbhold`, whose room is then the door's own answer (`[vp_rbkb]`: 3 KB
+for a contiguous clip on C:, the service area alone, the drivers being
+conventional already) and not `VP_RBRKB`'s 16, which stays the fallback
+for a refusal. Measured below (98.3.24.3).
+
 ##### 98.3.24.3 What the player holds against kern_big (2026-11-08)
 
 The same machine, both kernels (86Box's `at286_vga_sb_hdd`, the clip on C:,
 read during the play; kern_big with XMEM.DRV, whose pool is extended memory
 less the HMA):
 
-| machine | clip | kern_big bank / ring claim | kern_mega before | kern_mega after |
-|---|---|---|---|---|
-| 640K + 384K | 37 MB | 320 KB (10 slots) / 160 KB, 154.5 KB free | 192 KB (6) / 160, 196.5 free | 256 KB (8) / 160, 196.5 free |
-| 4 MB | 37 MB | 3,008 KB (94) / 160 | 2,880 KB (90) / 160 | 2,944 KB (92) / 160 |
+| machine | clip | kern_big bank / ring claim | kern_mega before | after 14.178 | after 14.180 |
+|---|---|---|---|---|---|
+| 640K + 384K | 37 MB | 320 KB (10 slots) / 160 KB, 154.5 KB free | 192 KB (6) / 160, 196.5 free | 256 KB (8) / 160, 196.5 free | 288 KB (9) / 160, 196 free |
+| 4 MB | 37 MB | 3,008 KB (94) / 160 | 2,880 KB (90) / 160 | 2,944 KB (92) / 160 | 2,976 KB (93) / 160 |
+| 640K + 384K | 1.5 MB (`08-WILLY`) | 320 KB (10) / 480 (13 slots) | | 256 KB (8) / 448 (12) | 288 KB (9) / 416 (11) |
 
-The remaining 64 KB of bank is no program's: the pool kern_mega leaves
-programs is 284 KB at 640K + 384K (299 less SOUND.DRV's 11 and HDD.DRV's 4
-above 1MB) against kern_big's 320, and 284 is 8 whole slots and 28 KB. The
-conventional side holds the same ring on both, with MORE left free on
-kern_mega (its floor is 3.5 KB higher and the bracket's service area and
-low drivers 18 KB, against kern_big's 59.5 KB floor and XMEM.DRV's 2 KB -
-and the region's 64 KB conventional on both). `tests/megapar.py --prog vp`
-is the gate (KERN-MEGA-PLAN 14.178).
+The remaining 32 KB of bank is no program's: the pool kern_mega leaves
+programs is 299 KB at 640K + 384K - since 14.180 the whole pool, SOUND.DRV
+and HDD.DRV being conventional for the play - against kern_big's 320,
+which is its fixed area above 1MB (85 KB) against kern_big's 64 KB HMA,
+and 299 is 9 whole slots and 11 KB. The conventional side holds the same
+ring for the 37 MB clip on both, with MORE left free on kern_mega (its
+floor is 3.5 KB higher and the bracket's service area and the drivers 18
+KB, against kern_big's 59.5 KB floor and XMEM.DRV's 2 KB - and the
+region's 64 KB conventional on both). **The 1.5 MB clip's ring lost the
+slot its bank gained**: its ring is "as many slots as the machine has"
+on the 64 KB page grid, and the drivers' 15 KB, conventional before the
+ring is sized, took the run under its last slot (31.5 KB were left idle
+under its first page and 25.5 over its last) - where the copies the
+bracket made before 14.180 had fitted into the slack the slots left. The
+same 640 KB is held either way; on the 37 MB clip the ring is the same
+three slots on both kernels and the trade does not arise. `tests/megapar.py --prog vp`
+is the gate (KERN-MEGA-PLAN 14.178, 14.180).
 
 ### 98.4 The window: the Preview (wave 6)
 
@@ -245329,12 +245436,24 @@ bracket** (SPEC.md 53.2.3).
 - **The door** (`vb_play`, every kernel). `vb_door` reads `CPU_F_PM` into
   `[vb_pmd]`, the rings' kept room (`VB_RKEEP`, and on kern_mega
   `VB_RKEEPM` 24 KB more for the bracket's own service area and drivers'
-  low copies) and `OSAPI_FSX_CAPS` (not a cell a real-mode bracket keeps).
+  low copies - the GUESS, which `vb_prep` replaces by the door's own
+  figure, below) and `OSAPI_FSX_CAPS` (not a cell a real-mode bracket
+  keeps).
   `vb_load` claims the resident block once (kept between plays) and the
   card's ring; on a real-mode kernel it goes on into `vb_lread`, the reads,
   as before. **The clip rings are claimed at the door on every kernel**
   (`vb_rclaim`, out of `vb_main`: a real-mode bracket refuses a claim) and
   given back by `vb_between`.
+- **kern_mega's door PREPARED** (`vb_prep`, KERN-MEGA-PLAN 14.180): at
+  `vb_load`'s end, before the hold is opened and the rings are sized,
+  `OSAPI_FSX_RUN` with `FSXF_REAL | FSXF_PREP` (SPEC.md 53.2.3.1) and the
+  list the play will hand the door (`vb_mkfsxl`, below; again after the
+  hold opens when it is an EMS hold, whose driver the first list could not
+  name): the drivers the bracket carries come down out of the pool - so the
+  hold is sized with their 15 KB, as kern_big's XMS never had them - and
+  `[vb_rkeep]` is `VB_RKEEP` plus the KB the door answers it will still
+  claim, so the rings leave exactly that. Refused (a kern_mega before it):
+  `vb_door`'s guess stands.
 - **kern_mega's door** (`vb_mklist`): `os88real_prep` over `vb_rlst` - the
   resident claim's base, the card's ring, both rings' `RG_SEG` - and the
   list: `FSXL_FILE` and the name `vb_load` found the bundle under (the
@@ -245401,13 +245520,13 @@ battles (not in the tree): `BATTLE.VBT`, a CGA4 battle of 6.3 MB, and the
 VGA battle inside `FF7BATTV-286.O88` (16.0 MB), played by this tree's
 engine. "Rings" is the two conventional clip rings, guards aside:
 
-| battle, machine | kern_big hold / rings | kern_mega before | kern_mega after (14.178) |
-|---|---|---|---|
-| CGA4, 640K + 384K | 316 / 368 (cache) | 220 / 320 | 280 / 320 |
-| CGA4, 2 MB | 956 / 368 (cache) | 860 / 320 | 920 / 320 |
-| CGA4, 4 MB | 3,004 / 368 (cache) | 2,908 / 320 | 2,964 / 320 |
-| VGA, 640K + 384K | 316 / 260 | 224 / 224 | 280 / 224 |
-| VGA, 4 MB | 3,004 / 332 (cache) | 2,912 / 224 | 2,964 / 224 |
+| battle, machine | kern_big hold / rings | kern_mega before | after 14.178 | after 14.180 |
+|---|---|---|---|---|
+| CGA4, 640K + 384K | 316 / 368 (cache) | 220 / 320 | 280 / 320 | 292 / 328 |
+| CGA4, 2 MB | 956 / 368 (cache) | 860 / 320 | 920 / 320 | (not re-measured) |
+| CGA4, 4 MB | 3,004 / 368 (cache) | 2,908 / 320 | 2,964 / 320 | 2,980 / 328 |
+| VGA, 640K + 384K | 316 / 260 | 224 / 224 | 280 / 224 | 292 / 232 |
+| VGA, 4 MB | 3,004 / 332 (cache) | 2,912 / 224 | 2,964 / 224 | 2,980 / 232 |
 
 Neither kernel holds a whole battle there. **Every KB of the difference,
 640K + 384K, CGA4** (kern_big 684 held, kern_mega 540 before, 600 after):
@@ -245418,12 +245537,16 @@ Neither kernel holds a whole battle there. **Every KB of the difference,
   door (126.4.5) brings it down before the hold is sized;
 - **the title picture, 12 KB of extended memory (8 in the VGA battle) -
   FIXED**: kept above 1MB through the first play too (126.4.5);
-- **kern_mega's own above 1MB, 36 KB of extended memory - the kernel's**:
-  its fixed area (`.cold` 47.6 KB, `.mega` 24.1, the tables and the park's
-  scratch: 84 KB) against kern_big's HMA (64 KB, `.cold` and SOUND.DRV in
-  it, which XMS never counted), and SOUND.DRV's and HDD.DRV's images in the
-  pool (15 KB). `tests/megapar.py` holds the hold to every KB the kernel
-  leaves programs;
+- **kern_mega's own above 1MB, 36 KB of extended memory - 15 FIXED, 21 the
+  kernel's**: its fixed area (`.cold` 47.6 KB, `.mega` 24.1, the tables and
+  the park's scratch: 85 KB at 640K + 384K, 86 at 4 MB) against kern_big's
+  HMA (64 KB, `.cold` and SOUND.DRV in it, which XMS never counted) - 21 KB
+  that no program can recover and the HMA cannot either (KERN-MEGA-PLAN
+  14.180's item 4: kern_mega's HMA is pool already) - and SOUND.DRV's and
+  HDD.DRV's images in the pool (15 KB), which `FSXF_PREP` (53.2.3.1) now
+  brings down for the play, the copies the bracket made of them anyway.
+  `tests/megapar.py` holds the hold to every KB the kernel leaves programs,
+  and the difference to the fixed area's 21;
 - **the clip cache, 16 KB of conventional memory (72 in the VGA battle at
   4 MB) - OPEN**: kern_big's hold is a CACHE of whole clips played in place
   (126.4.6) and its idle loop lives in it; kern_mega's is the copying hold
@@ -245432,13 +245555,18 @@ Neither kernel holds a whole battle there. **Every KB of the difference,
   it where it is), so the idle loop is in the resident claim. KERN-MEGA-PLAN
   14.178 has the proposal;
 - **the bracket's own conventional memory, 18 KB - the kernel's**: its
-  service area (3 KB) and the low copies of HDD.DRV (4) and SOUND.DRV (11),
-  where kern_big runs both drivers from the HMA (53.2.3);
-- **the rest, 14 KB of conventional memory**: kern_mega's floor 3.5 KB
-  higher (63.0 against 59.5 with XMEM.DRV's `.cold` in the HMA), the
-  directory read-ahead (9 KB) the door's walk rebuilds inside the room the
-  rings leave (`VB_RKEEPM`, 24 KB, against the 18 the door takes), and 4 KB
-  units, less kern_big's XMEM.DRV and its 2 KB claim.
+  service area (3 KB) and HDD.DRV (4) and SOUND.DRV (11) - low copies until
+  14.180, the lent images since (the same KB, made before the rings rather
+  than in the room they left) - where kern_big runs both drivers from the
+  HMA (53.2.3; KERN-MEGA-PLAN 14.180 has the HMA twins as a proposal);
+- **the rest, 14 KB of conventional memory - 8 FIXED**: the room the rings
+  left the door (`VB_RKEEPM`, 24 KB, against the 18 it took), which
+  `FSXF_PREP`'s answer sizes exactly (in the play the largest free run is
+  `VB_RKEEP`'s 8 KB, against 16 before); kern_mega's floor 3.5 KB higher
+  (63.0 against 59.5 with XMEM.DRV's `.cold` in the HMA), the read-ahead's
+  9 KB landing the door's walk rebuilds, at the arena's foot under a pinned
+  claim where no ring reaches it, and 4 KB units, less kern_big's XMEM.DRV
+  and its 2 KB claim.
 
 `tests/megapar.py --prog vb` (row `megaparvb`) is the gate: both kernels on
 that machine, the demo bundle or the owner's (`$OS88_VBT_TARGET`,

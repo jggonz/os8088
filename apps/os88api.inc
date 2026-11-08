@@ -6997,6 +6997,24 @@ FSXF_REAL       equ 8           ; OSAPI_FSX_RUN CX bit 3 (SPEC.md 53.2.3): on
                                 ; back, and a kernel in real mode keeps SI.
                                 ; Inside, OSAPI_CPU_INFO's CPU_F_PM says the
                                 ; same. apps/os88real.inc renames your claims
+FSXF_PREP       equ 16          ; OSAPI_FSX_RUN CX bit 4, WITH FSXF_REAL
+                                ; (SPEC.md 53.2.3.1): PREPARE the door and
+                                ; run nothing. kern_mega in protected mode
+                                ; walks the list (BP), brings DOWN for good
+                                ; each driver the bracket would carry whose
+                                ; image is above 1MB, where conventional
+                                ; memory has room (selectors kept; back up
+                                ; when an instance ends), and answers CF = 0,
+                                ; AX = the KB of CONVENTIONAL memory the door
+                                ; will still claim (the service area, the
+                                ; region's copy if above 1MB, EXTD.DRV's and
+                                ; any driver's copy it could not bring down)
+                                ; and SI = FSXR_* - the bracket the door
+                                ; would run (AX = 0 unless FSXR_REAL). Leave
+                                ; AX KB free when you size your conventional
+                                ; claims. Every other kernel, and kern_mega in
+                                ; real mode, refuses the bit (CF = 1): keep
+                                ; nothing there. AX, BX and BP as for the run
 FSXR_REAL       equ 0           ; ...SI out: the bracket ran in real mode
 FSXR_KEEP       equ 1           ; ...protected: FSXF_KEEPWORKER was asked
 FSXR_SVC        equ 2           ; (RETIRED, never answered: a driver's

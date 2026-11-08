@@ -16053,3 +16053,156 @@ mega-release (the file run in its tree): the battle's region 48 KB in the
 pool, its hold 232 of 285; the player's region 64 KB, its bank 192 of 285.
 Green here. `$OS88_VBT_TARGET` / `$OS88_VBT_PKG` point the battle leg at the
 owner's battles; unset, the demo bundle.
+
+### 14.180 The bracket's residue that was the kernel's: the drivers it carries lent DOWN for the play, and the door's conventional need ANSWERED (`FSXF_PREP`); the HMA weighed (2026-11-08) - FIXED (the drivers' pool KB, the guessed room), PROPOSAL (HMA twins, the fixed area)
+
+The owner (2026-11-08): *"this whole session is about make real have parity
+so we can actually release it"* - on the same machine the Video Battle and
+the Video Player must hold at least what kern_big gives them. 14.178 left a
+residue it called the kernel's: its proposals 2 (the drivers the bracket
+carries), 3 (an exact `VB_RKEEPM`) and 4 (the fixed area above 1MB) are this
+entry's; 1, the clip cache, is 14.179's.
+
+**Measured first** - 86Box's `at286_vga_sb_hdd` (the mr286, VGA, SB 2.0, IDE
+C:) at 640K + 384K and 4 MB, both kernels, `tests/megapar.py` (the owner's
+real battles for profiling, never checked in). In the play, at 640K + 384K:
+the pool held SOUND.DRV (11 KB) and HDD.DRV (4) as images - `drv_hi` put
+them above 1MB at boot - while the real-mode bracket ran COPIES of both in
+conventional memory, so their 15 KB were held twice and the hold was sized
+without them; and the Video Battle's rings left 24 KB (`VB_RKEEPM`) for a
+door that took 18 - the largest free run in the play was 16 KB against
+`VB_RKEEP`'s 8 - and the Video Player's arm held 16 (`VP_RBRKB` - 64) for
+a door that took 3 plus its copies.
+
+**Item 3 first, because item 2 rides on it: `FSXF_PREP` (SPEC.md
+53.2.3.1).** `OSAPI_FSX_RUN` with `FSXF_REAL | FSXF_PREP` (CX bit 4) and the
+run's own AX, BX and list: kern_mega in protected mode walks the list as
+the door does (`fsx_rprepf`'s prologue, shared), tests what needs no claim
+(`FSXR_KEEP`, the list's `_VOL` / `_FRAG` / `_DRV`), and SIZES rather than
+takes the door's conventional claims - the region's copy when above 1MB,
+the service area (`fsx_rsvcsz`, split out of `fsx_rsvcf` so both sum it
+one way), EXTD.DRV's copy - answering CF = 0, AX = the KB, SI = the
+`FSXR_*` it would answer, from `fsx_rprepp` straight to fsx_run's caller
+(`kret_di`); nothing of the door's state is touched. Every other kernel
+refuses it as an undefined bit, and kern_mega in real mode at `.nreal`.
+An ABI ADDITION: `PKG_FMT` 10 kept (`tools/abilock.py --update`).
+
+**Item 2: the drivers LENT down.** The same call brings each driver the
+walked list carries (`DRVC_DISK`, `DRVC_EMS`, `DRVC_SOUND`) whose image is a
+pool block DOWN for good (`mega_drvlow`): a `MEM_K_DRV` conventional claim
+placed as `drv_load`'s is (bottom-up), on a 512-byte boundary, the bytes
+moved and every allocator descriptor based in the block rebased in one
+interrupts-off step (`mega_mvblk`, factored out of `mega_seglow`, which
+now calls it: the compactor's rule, so no selector changes), the claim's
+`mem_sel` row made the driver's pair (`mega_mselset`), the pool block
+freed. `DRVR_PARA` stays 0, which marks it LENT; `mx_relinst` ends in
+`mega_drvup`, which takes every lent image back up into an `MX_KDRV` pool
+block when the pool has room - so the desktop pays the drivers'
+conventional KB only while a hold leaves the pool none, which is the
+double count removed and kern_big's arrangement (its XMS never held them).
+The door then finds them conventional and copies nothing. The Video Battle
+asks before its hold opens (`vb_prep`, and again after an EMS hold opens)
+and keeps `VB_RKEEP` + AX; the Video Player's arm asks in `vp_xopen` (the
+bank) and in `vp_rbhold` (its room = the answer) through a cold-part
+vector (`VK_RPREP`). `VB_RKEEPM` and `VP_RBRKB` stay as the fallbacks for
+a refusal.
+
+The first build put the lent images at the arena's TOP, as `SEG_LOW` puts a
+region: the 1.5 MB clip's ring, on the 64 KB page grid, then lost a 32 KB
+slot to 15 KB above it (`--map`). Bottom-up, as `drv_load`'s claim is, it
+still loses that slot - 15 KB conventional before the ring is sized
+cannot be had back by placement, where the copies the bracket used to make
+fitted into the slack the slots left - and the same 640 KB is held, bank
++1 slot, ring -1 (SPEC.md 98.3.24.3). On the 37 MB clip the ring is the same
+three slots on both kernels and the bank gains a slot outright.
+
+**After** (the same machine; kern_big | kern_mega at 14.178 | at 14.180, KB):
+
+| | kern_big | 14.178 | 14.180 |
+|---|---|---|---|
+| CGA4 battle, 640K + 384K: hold / rings | 316 / 368 | 280 / 320 | **292 / 328** |
+| CGA4 battle, 4 MB: hold / rings | 3,004 / 368 | 2,964 / 320 | **2,980 / 328** |
+| VGA battle, 640K + 384K: hold / rings | 316 / 260 | 280 / 224 | **292 / 232** |
+| VGA battle, 4 MB: hold / rings | 3,004 / 332 | 2,964 / 224 | **2,980 / 232** |
+| player, 37 MB clip, 640K + 384K: bank / ring | 320 (10) / 160 | 256 (8) / 160 | **288 (9) / 160** |
+| player, 37 MB clip, 4 MB: bank | 3,008 (94) | 2,944 (92) | **2,976 (93)** |
+| player, 1.5 MB clip, 640K + 384K: bank / ring slots | 320 (10) / 13 | 256 (8) / 12 | **288 (9) / 11** |
+| the kernel's pool blocks in the play | - | 15 | **0** |
+| the largest free run in a battle's play | 10.5 | 16 | **8** (`VB_RKEEP`) |
+
+**What is left is the fixed area's, and item 4 says why the HMA cannot take
+it back.** kern_big's hold less kern_mega's is now 24 KB for every battle
+at both sizes, against kern_mega's fixed area above 1MB (85 KB at 640K +
+384K, 86 at 4 MB - `.cold` 48.4, `.mega` and its scratch 26.1 to their
+rungs, 73 KB of code, and the tables' 12) less kern_big's 64 KB HMA: 21-22,
+plus the hold's own 4 KB units. The player's bank is 32 short: the same 21
+and the pool's remainder under one slot.
+
+**Item 4, MEASURED, NOT BUILT - the HMA is pool already.** 14.178 asked
+whether kern_mega leaves the HMA unused, or uses it only on a DOS trip. It
+does neither: since KERN-MEGA-MEMORY-PLAN MC4 the HMA is the POOL'S FIRST
+64 KB (`mega_layoutf`, `mx_alloc`'s top-down claims reach it last), and
+every one of those KB is in `[xm_kb]` and in the measured holds - the
+battle's 292 KB at 640K + 384K is 299 of pool, HMA included, less its 4 KB
+units. So moving any of the fixed area INTO the HMA moves pool KB from the
+top of extended memory to its bottom and gains the pool nothing: `.cold`
+(48.4 KB) and both drivers (15) would fit its 64 KB, and the pool would be
+ext - 64 - 38 (the `.mega` area and the tables) = 17 KB LESS than today's
+ext - 85, for the bracket's 15 KB of conventional memory (the drivers
+reachable in real mode as kern_big's twins are). kern_big's figure is
+better only because its 64 KB were never pool: its XMS starts past them.
+**The fixed area is recovered only by BYTES**, and the candidates are
+measured, each the owner's to weigh against what it holds:
+- **the tables, 12 KB**: of the LDT's 1,064 entries at 640K + 384K, 506 are
+  the GDT's identity map below `MEGA_LDT_FREE0` (528) - every 8th paragraph
+  up to `COLD_SEG`, 4 KB - and of the allocator's 536 (`MEGA_LDT_BASE` 512
+  + one per 16 KB), 27 were present in a battle's play: an identity map of
+  the handful of segments the kernel loads, and an allocator base sized
+  from what the heaviest program (WIN16) really takes, are up to 7 KB of
+  pool, and a design question about missed conversions and selector
+  exhaustion rather than a build;
+- **`.cold`'s kern_big-only code** compiled into kern_mega (it is 48.4 KB
+  there against kern_big's 37.6, 10.8 KB of it kern_mega's own) - the HMA
+  drivers' install and COLDHMA's door among it, dead under kern_mega: a
+  size pass, not measured here;
+- **`.mega` itself** (24.6 KB) is the protected-mode kernel; every byte of
+  it is a byte of pool, which is the one fact anybody spending `.mega`
+  should carry - this entry spent 432 inside its rung.
+
+**Item 2's other half, PROPOSAL - HMA twins for the conventional 15 KB.**
+kern_big runs SOUND.DRV and HDD.DRV in the HMA from relocated twins
+(SPEC.md 2.10.8), reachable in both modes with A20 open. On kern_mega the
+same twins would let a real-mode bracket call them where they lie - its
+conventional cost 15 KB lower (the battle's rings +15, the 1.5 MB clip's
+ring slot back) - at the price of the 15 KB of pool this entry gave back
+(the HMA being pool), and of: COLDHMA's relocation tables (`rt_hdrv`) on
+kern_mega's disks; a placement BEFORE the driver's attach runs (a driver's
+bss holds offsets its own code made, which no table relocates, so kern_mega
+cannot move a running driver into a twin); a code/data pair based at the
+block less `DRV_HMA_ORG` in protected mode, and the six dispatcher sites
+that test `seg >= DRV_HMA_SEG` taught a selector (`.text` bytes); a
+pinned block in the HMA, which makes every DOS trip save the HMA into the
+park (`mega_dhkb`, 64 KB) unless that save learns to take only what stands
+there; and hibernate's pool copy. It trades extended memory for
+conventional, KB for KB - the owner's call which a battle wants more.
+
+Bytes: kern_mega `.mega` 24,160 -> 24,592 (+432, inside its 26,112 rung:
+`MEGA_CODE_KB`, the fixed area and the pool unchanged), `.text` +6 (the
+real-mode refusal; `tests/megaseg.txt` 3,754 -> 3,760), `.cold` +0,
+resident 62,976 unchanged; kern_big and kern_small `kernel.bin` /
+`kernel.sys` byte-identical (`cmp`, one commit). VBATTLE.O88 image 28,443
+-> 28,501 (+58; the file 22,743 -> 22,782); the Video Player's arm image
+61,927 -> 61,958 (+31) and its cold part 1,019 -> 1,067 (+48); the shipped
+VIDEO.O88 byte-identical.
+
+Rows: `megaparvb`, `megaparvp` - legs 4 to 7 new or tightened: kern_big's
+hold less kern_mega's at most the FIXED AREA's excess over 64 KB (read off
+the machine) + the granule, where it was the kernel's whole excess; no
+pool block of the kernel's in the play; the battle's rings leaving
+`VB_RKEEP` + a 4 KB unit idle at most, and the player's door having
+answered `FSXF_PREP`; and the drivers back up once the window is closed.
+RED on mega-release (the new file run in its tree): the drivers' 15 KB in
+the pool, 36 KB against 21 + 8 (the player 64 against 21 + 32), the 16 KB
+run, no `[vp_rbkb]`. Leg 7 RED with `mx_relinst`'s `jmp mega_drvup` taken
+out (0 KB after the close). Green here. `--map` prints the heaps and the
+tables; `--clip 05-LASTX.V88` banks the player at 4 MB too.

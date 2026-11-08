@@ -192,4 +192,11 @@
 #             SMALLER (sch_account, clk_tick, clk_put_mon, which both kernels
 #             share) - the figure moves because kern_big's got the rows' 72
 #             smaller under it; 3,754 is os88megaseg's own reading
-3754
+# 2026-11-08: +6, KERN-MEGA-PLAN 14.180 (SPEC.md 53.2.3.1): FSXF_PREP's
+#             refusal in REAL mode - fsx_run's `test si, FSXF_PREP / jnz
+#             fsx_rfail` at .nreal, which only `.text` can run (a kern_mega
+#             that never switched, or whose switch failed, must refuse the
+#             bit rather than run the bracket it would otherwise run). The
+#             strip of the bit itself is the same `and cl` kern_big has, and
+#             the whole preparation is `.mega`'s (+432 there, inside its rung)
+3760

@@ -19762,11 +19762,17 @@ SOAK = [
         "play in a real-mode bracket, NO pool block of the instance's but "
         "its hold (its region and its title picture not above 1MB), the "
         "hold every pool KB the kernel leaves programs less 8, and kern_big's "
-        "hold less kern_mega's no more than the kernel's own above-1MB "
-        "excess + 8. $OS88_VBT_TARGET / $OS88_VBT_PKG name the owner's "
+        "hold less kern_mega's no more than kern_mega's fixed area above "
+        "1MB beyond kern_big's 64 KB HMA + 8 (14.180); no pool block of the "
+        "kernel's in the play (SOUND.DRV and HDD.DRV brought down by "
+        "FSXF_PREP, SPEC.md 53.2.3.1); the rings leaving VB_RKEEP + 4 KB "
+        "at most idle (the door's own figure, not VB_RKEEPM's guess). "
+        "$OS88_VBT_TARGET / $OS88_VBT_PKG name the owner's "
         "real battles (never in the tree); the demo bundle otherwise. RED "
-        "on mega-release: the region 48 KB and the picture 12 KB in the "
-        "pool, the hold 232 of 285. 30s is 19-21 measured (two boots)",
+        "on mega-release at 14.178's base: the region 48 KB and the picture "
+        "12 KB in the pool; at 14.180's: the drivers' 15 KB in the pool, "
+        "36 KB against 21 + 8, a 16 KB idle run. 30s is 19-21 measured "
+        "(two boots)",
         needs=("86box",),
         wants=("build/mega.img", "build/os8088.img", "build/vbattle.o88",
                "build/BATTLE.VBT")),
@@ -19774,9 +19780,12 @@ SOAK = [
         "KERN-MEGA-PLAN 14.178, SPEC.md 98.3.24.3: the Video Player's bank "
         "on kern_big AND kern_mega's arm on the same 86Box machine "
         "(at286_vga_sb_hdd, 640K + 384K, 08-WILLY.V88 on C:, read in the "
-        "play): legs 1-4 as megaparvb's at a 32 KB slot's granule. RED on "
-        "mega-release: the arm's 64 KB region in the pool, the bank 6 slots "
-        "of the 285 KB the kernel leaves. 30s is 22 measured (two boots)",
+        "play): legs 1-5 as megaparvb's at a 32 KB slot's granule, and the "
+        "door answered FSXF_PREP ([vp_rbkb], 14.180). RED on mega-release "
+        "at 14.178's base: the arm's 64 KB region in the pool, the bank 6 "
+        "slots of the 285 KB the kernel leaves; at 14.180's: the drivers' "
+        "15 KB in the pool, 64 KB against 21 + 32, no [vp_rbkb]. 30s is 22 "
+        "measured (two boots)",
         needs=("86box",),
         wants=("build/mega.img", "build/os8088.img", "build/video.o88",
                "build/megak/apps/video.o88", "build/megak/apps/video.map")),

@@ -9900,7 +9900,7 @@ mx_relinst:
     or al, 0xA0
     call mx_relall
     pop ax
-    ret
+    jmp mega_drvup                  ; ...and a lent driver back up (53.2.3.1)
 
 ; mx_unsel - SI = an mx_tab entry, ES = the tail: its OSAPI_XMEM_SEL
 ; selector, if it has one, back to the allocator. Clobbers nothing
@@ -13713,25 +13713,52 @@ mega_seglow:
     retf
 .got:
     mov ax, [bp-6]
-    shl ax, 10                      ; the bytes (64KB: 0)...
-    dec ax
-    and al, 0xFE                    ; ...even, FFFEh at most: mx_lcopy's
-    inc ax                          ; ceiling, which is past image + bss
-    inc ax
-    jnz .cl
-    mov ax, 0xFFFE
+    call mega_mvblk                 ; the bytes, and every descriptor over
+                                    ; them rebased (DX's fresh pair is below
+                                    ; 1MB: not in the block)
+    mov ax, [bp+12]                 ; THE RECORDS: the claim's mem_sel row is
+    call mega_mselset               ; the region's pair from here (pusha's
+    jc .rx                          ; DX), its fresh pair freed, and MC_RLOC
+    mov ax, [bp-2]                  ; the proc...
+    mov [ss:si+MC_RLOC], ax
+.rx:
+    MXT_ES
+    mov si, [bp-4]
+    mov word [es:si+MX_KB], 0       ; ...and the pool block
+.ok:
+    pop ax
+    pop ax
+    pop ax
+    pop es
+    popa
+    clc
+    retf
+
+; mega_mvblk - a block MOVED, [mega_xsrc] to [mega_xdst], AX = its KB: the
+; bytes copied and every allocator descriptor based inside the old block
+; rebased by the move (mx_cpmove's rule, a window excepted: its owner's,
+; 14.80), as ONE step with interrupts off and [sch_lock] held, so no
+; selector changes and nothing runs between the copy and the rebase - a
+; segment register holding one reads the new place at its next load, as
+; after any pool move. Either way across 1MB (SEG_LOW and mega_drvlow down,
+; mega_drvup up). DS = KDATA. Every register kept
+mega_mvblk:
+    pusha
+    push es
+    push ax                         ; [the KB]
+    shl ax, 10                      ; the bytes - 64KB is 0, and FFFEh,
+    jnz .cl                         ; mx_lcopy's ceiling, which is past
+    mov ax, 0xFFFE                  ; image + bss
 .cl:
     xchg ax, cx
     inc byte [sch_lock]
     pushf
     cli
-    push dx
     call mx_lcopy                   ; the bytes...
-    pop dx
-    push es                         ; ...and every descriptor over them
-    mov ax, MEGA_SEL_LDTD           ; rebased (DX's fresh pair is below 1MB:
-    mov es, ax                      ; not in the block)
-    mov cx, [bp-6]
+    mov ax, MEGA_SEL_LDTD           ; ...and every descriptor over them
+    mov es, ax
+    mov bx, sp
+    mov cx, [ss:bx+2]               ; (the KB, under the flags)
     mov ax, cx
     shl cx, 10
     shr ax, 6
@@ -13757,48 +13784,177 @@ mega_seglow:
     mov ax, [mega_xsrc]
     mov bl, [mega_xsrc+2]
     sub ax, [mega_xdst]
-    sbb bl, [mega_xdst+2]           ; BL:AX = the drop
-    sub [es:si+2], ax
+    sbb bl, [mega_xdst+2]           ; BL:AX = the drop (a rise wraps: the
+    sub [es:si+2], ax               ; same 24-bit sum)
     sbb [es:si+4], bl
 .dn:
     add si, 8
     cmp si, [ss:mega_ldte]
     jb .d
-    pop es
     popf
     dec byte [sch_lock]
-    MXT_ES                          ; THE RECORDS: the claim's mem_sel row is
-    mov bx, mem_sel                 ; the region's pair from here, MC_RLOC
-    mov si, mem_tab                 ; the proc...
+    pop ax
+    pop es
+    popa
+    ret
+
+; mega_mselset - DX = a conventional claim's own (fresh) DATA selector, AX =
+; the pair it is to be named by instead -> CF = 0, SI = its mem_tab record,
+; its mem_sel row AX and the fresh pair freed; CF = 1 no record has DX.
+; Every other register kept
+mega_mselset:
+    push bx
+    push es
+    call mega_mselof
+    jc .o
+    mov [es:bx], ax
+    push ax
+    mov ax, dx
+    call mega_ldt_free
+    sub ax, 8
+    call mega_ldt_free
+    pop ax
+    clc
+.o:
+    pop es
+    pop bx
+    ret
+
+; mega_mselof - DX = a selector -> CF = 0: SI = the mem_tab record whose
+; mem_sel row names it, ES:BX that row (ES = the tables' tail); CF = 1 none
+mega_mselof:
+    MXT_ES
+    mov bx, mem_sel
+    mov si, mem_tab
 .r:
     cmp [es:bx], dx
-    je .rf
+    je .o                           ; (CF = 0 from the compare)
     add si, MC_SIZE
     inc bx
     inc bx
     cmp bx, mem_sel + MEGA_MSELN * 2
     jb .r
-    jmp short .rx                   ; (its own row is there: not reached)
-.rf:
-    mov ax, [bp+12]                 ; (pusha's DX: the region)
-    mov [es:bx], ax
-    mov ax, [bp-2]
-    mov [ss:si+MC_RLOC], ax
-    mov ax, dx                      ; ...the claim's fresh pair freed...
-    call mega_ldt_free
-    sub ax, 8
-    call mega_ldt_free
-.rx:
-    mov si, [bp-4]
-    mov word [es:si+MX_KB], 0       ; ...and the pool block
-.ok:
-    pop ax
-    pop ax
-    pop ax
+    stc
+.o:
+    ret
+
+; mega_drvlow - FSXF_PREP's (SPEC.md 53.2.3.1, fsx_rdrvprep): DX = a loaded
+; driver's DATA selector whose image is a pool block (drv_hi) -> CF = 0: its
+; image and bss MOVED into a conventional claim owned MEM_K_DRV and placed as
+; drv_load's own claim is (bottom-up first fit: the arena's low holes, not
+; the top a package's rings and region are sized under - the Video Player's
+; page-grid ring lost a 32 KB slot to 15 KB at the top), on a 512-byte boundary (the
+; paragraph SBL_DSCS needs of SOUND.DRV in a real-mode bracket) - no
+; selector changes (mega_mvblk), the claim's mem_sel row is the driver's
+; pair, the pool block free. Its row's DRVR_PARA stays 0, which marks it
+; LENT: a conventional image with none of drv_load's paragraphs, which
+; mega_drvup takes back up when an instance ends and the pool has room.
+; CF = 1: nothing changed. PM, DS = KDATA. Every register kept
+mega_drvlow:
+    pusha
+    mov bp, dx                      ; BP = the driver's selector
+    mov ax, dx
+    mov bl, MX_KDRV
+    call mega_rgnblk                ; SI = its entry, DX:AX its base, CX KB
+    jc .no
+    mov [mega_xsrc], ax
+    mov [mega_xsrc+2], dx
+    push si
+    push cx
+    mov ax, cx
+    mov bx, MEM_K_DRV
+    call COLD_SEG:mmf_mem_claim     ; DX = the claim's (fresh) data selector:
+    pop cx                          ; conventional (no kernel cache's tag),
+    pop si                          ; bottom-up first fit as drv_load's was
+    jc .no
+    mov di, dx                      ; DI = the claim
+    mov ax, dx
+    call mega_selbase               ; DX:AX = its base
+    mov [mega_xdst], ax
+    mov [mega_xdst+2], dx
+    test ax, 0x1FF
+    jnz .back                       ; (SBL_DSCS's boundary)
+    xchg ax, cx                     ; AX = the KB
+    call mega_mvblk                 ; moved, the driver's pair with it
+    push es
+    MXT_ES
+    mov word [es:si+MX_KB], 0       ; the pool block free
     pop es
+    mov dx, di
+    mov ax, bp
+    call mega_mselset               ; the claim named by the driver's pair
     popa
     clc
-    retf
+    ret
+.back:
+    mov dx, di
+    mov bx, MEM_K_DRV
+    call COLD_SEG:mmf_mem_free
+.no:
+    popa
+    stc
+    ret
+
+; mega_drvup - mx_relinst's tail: an instance has ended and its pool blocks
+; are free, so every LENT driver image (mega_drvlow's: a loaded row with
+; DRVR_PARA 0 whose image is conventional) goes back UP into a pool block
+; owned MX_KDRV, where drv_hi put it - its selectors kept (mega_mvblk) and
+; its conventional record freed as mem_free_x frees one, its mem_sel row
+; emptied first so the pair goes with the image. One the pool has no room
+; for stays down and runs where it is, as any low driver does. PM, DS =
+; KDATA. Every register kept
+mega_drvup:
+    pusha
+    push es
+    mov bx, drv_tab
+.l:
+    mov dx, [bx+DRVR_SEG]
+    or dx, dx
+    jz .n
+    cmp word [bx+DRVR_PARA], 0
+    jne .n                          ; drv_load's claim: not lent
+    mov ax, dx
+    call MEGA_SEL_CODE:mega_ishif
+    jnc .n                          ; above 1MB: where drv_hi put it
+    push bx
+    call mega_mselof                ; SI = its record, ES:BX its row
+    jc .o
+    cmp word [ss:si+MC_OWN], MEM_K_DRV
+    jne .o
+    mov di, bx
+    call mega_mpbase                ; DX:AX = its base
+    mov [mega_xsrc], ax
+    mov [mega_xsrc+2], dx
+    mov ax, [ss:si+MC_PARA]
+    shr ax, 6                       ; its KB
+    push ax
+    shl ax, 10
+    xor dx, dx
+    inc byte [sch_lock]             ; to the copy's end: the base is used
+    mov bl, MX_KDRV
+    call mx_alloc                   ; DX:AX = the block's base
+    pop cx
+    jc .nopool
+    mov [mega_xdst], ax
+    mov [mega_xdst+2], dx
+    xchg ax, cx
+    call mega_mvblk                 ; up, the driver's pair with it
+    pushf
+    cli
+    mov word [es:di], 0             ; the pair the block's now, not the
+    and word [ss:si+MC_SEG], 0      ; record's - and the record free
+    popf
+.nopool:
+    dec byte [sch_lock]
+.o:
+    pop bx
+.n:
+    add bx, DRVR_SIZE
+    cmp bx, drv_tab + DRV_MAX * DRVR_SIZE
+    jb .l
+    pop es
+    popa
+    ret
 
 ; mega_segown - ES = the caller's DS -> BL = the owner a window is recorded
 ; under: its instance slot (mx_relinst's), 0C0h | its drv_tab row (a

@@ -191,7 +191,10 @@ VB_RKEEPM   equ 24              ; ...and on kern_mega this more: the real-mode
                                 ; bracket's own conventional claims, made
                                 ; inside OSAPI_FSX_RUN after the rings - its
                                 ; service area (3-4 KB) and a driver's low
-                                ; copy (SOUND.DRV 8, HDD.DRV 4; SPEC.md 53.2.3)
+                                ; copy (SOUND.DRV 8, HDD.DRV 4; SPEC.md 53.2.3).
+                                ; A GUESS, kept only for a kern_mega that
+                                ; refuses FSXF_PREP: vb_prep asks the door for
+                                ; the exact figure (53.2.3.1)
 VB_NRCLM    equ 10              ; vb_nrsay's own reason past the FSXR_*: a
                                 ; claim with no real-mode segment
 VB_CPGAIN   equ 16              ; KB a compaction must buy to be posted
@@ -844,6 +847,18 @@ vb_mklist:
     mov di, vb_rlst_bank
     call os88real_prep
     jc .out
+    call vb_mkfsxl
+    clc                             ; (the compares there leave CF anyhow)
+.out:
+    pop es
+    pop di
+    pop si
+    ret
+
+; vb_mkfsxl - the LIST of what a real-mode bracket reads (SPEC.md 53.2.3):
+; the bundle's file by the name vb_load found it under, SOUND.DRV when a
+; card plays and EMS.DRV for an EMS hold, into vb_fsxl. AX, SI, DI, ES spent
+vb_mkfsxl:
     push ds
     pop es
     mov di, vb_fsxl
@@ -867,9 +882,34 @@ vb_mklist:
 .e2:
     mov al, FSXL_END
     stosb
-    clc                             ; (the compares above leave CF anyhow)
-.out:
+    ret
+
+; vb_prep - kern_mega in protected mode, before the hold is sized and the
+; rings are: the real-mode bracket's door PREPARED with the list the play
+; will hand it (OSAPI_FSX_RUN FSXF_PREP, SPEC.md 53.2.3.1, KERN-MEGA-PLAN
+; 14.180) - each driver it carries brought down out of the pool, so the
+; hold has their KB as kern_big's XMS has, and [vb_rkeep] VB_RKEEP and the
+; conventional KB the door will still claim, so the rings leave exactly that
+; and not VB_RKEEPM's guess. Refused (a kern_mega before 14.180): vb_door's
+; guess stands. AX, BX, CX, DX spent
+vb_prep:
+    push si
+    push di
+    push bp
+    push es
+    call vb_mkfsxl
+    mov bp, vb_fsxl
+    mov ax, vb_main
+    mov bx, [vb_win]
+    mov cx, FSXF_REAL | FSXF_PREP
+    xor si, si
+    call OSAPI_FSX_RUN
+    jc .o
+    add ax, VB_RKEEP
+    mov [vb_rkeep], ax
+.o:
     pop es
+    pop bp
     pop di
     pop si
     ret
@@ -2085,10 +2125,15 @@ vb_load:
                                     ; the rings' below (no hole on the desktop)
     cmp byte [vb_pmd], 0            ; ON kern_mega THE BRACKET READS: no
     je vb_lread                     ; paragraph is added to a selector
+    call vb_prep                    ; (its door prepared first: the drivers
+                                    ; down before the hold sizes the pool)
     cmp byte [vb_hopd], 0           ; (VBATTLE-MEGA-PLAN W1) - and the HOLD
     jne .ok                         ; is opened here, once: its XMS block,
     mov byte [vb_hopd], 1           ; its EMS pages and its bounce are refused
     call vb_hopen                   ; inside a real-mode bracket (W3)
+    cmp byte [vb_htype], 2          ; ...and an EMS hold's EMS.DRV, which the
+    jne .ok                         ; first list could not name yet
+    call vb_prep
 .ok:
     clc
     ret

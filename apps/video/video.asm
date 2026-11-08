@@ -5271,7 +5271,9 @@ vp_xopen:
     jne .out
 %ifdef PKG_MEGA
     call vp_low                     ; (the entry's, again before the pool is
-%endif                              ; sized when the entry's was refused)
+                                    ; sized when the entry's was refused)
+    call vp_rprep                   ; ...and the bracket's door PREPARED: the
+%endif                              ; drivers it carries down out of the pool
     call vp_xcaps                   ; no pool (every 8088): nothing more is
     or ax, ax                       ; asked, not even the directory - unless
     jnz .sz                         ; EXPANDED MEMORY answers (98.3.18.6)
@@ -12020,12 +12022,19 @@ vp_rbhold:
     push cx
     push dx
     push bx
-    mov dx, ds                      ; OUR REGION brought down already (SEG_LOW,
-    mov bl, SEG_REAL                ; vp_xopen - KERN-MEGA-PLAN 14.178): the
-    call OSAPI_SEG                  ; bracket copies nothing, and the room is
-    pop bx                          ; the service area's and the drivers'
-    mov ax, VP_RBRKB - 64
-    jnc .h
+    call vp_rprep                   ; THE DOOR'S OWN FIGURE (53.2.3.1): the
+    mov ax, [vp_rbkb]               ; KB it will claim, the drivers down
+    inc ax                          ; (KERN-MEGA-PLAN 14.180)...
+    jz .g
+    dec ax
+    jz .n                           ; (none: no room to hold)
+    jmp short .h
+.g:
+    mov dx, ds                      ; ...or, refused, the guess: OUR REGION
+    mov bl, SEG_REAL                ; brought down already (SEG_LOW, vp_xopen
+    call OSAPI_SEG                  ; - 14.178) and the bracket copies
+    mov ax, VP_RBRKB - 64           ; nothing, the room the service area's
+    jnc .h                          ; and the drivers'
     mov ax, VP_RBRKB
 .h:
     xor cx, cx
@@ -12033,6 +12042,7 @@ vp_rbhold:
     jc .n
     mov [vp_rbh], dx
 .n:
+    pop bx
     pop dx
     pop cx
     pop ax
@@ -14692,6 +14702,9 @@ vp_rpost:
     jmp short vp_cpcall
 vp_rline:
     mov byte [vp_cpv], VK_RLINE
+    jmp short vp_cpcall
+vp_rprep:
+    mov byte [vp_cpv], VK_RPREP
     jmp short vp_cpcall
 %ifdef VP_DIAG
 vp_prbeg:
@@ -24160,6 +24173,8 @@ vp_m3on:      db 0                      ; the GC is in write mode 3 (98.1.3.2.4)
 %ifdef PKG_MEGA                         ; (the kern_mega arm's, 14.66)
 %ifdef PKG_MEGA
 vp_rbh:       dw 0                      ; vp_rbhold's claim, 0 none (98.3.24.2)
+vp_rbkb:      dw 0xFFFF                 ; vp_rprep's answer: the KB the door
+                                        ; still claims, FFFFh none (53.2.3.1)
 %endif
 vp_pm:        db 0                      ; CPU_F_PM, banked at entry: segments
                                         ; are selectors (KERN-MEGA-PLAN 14.16)
