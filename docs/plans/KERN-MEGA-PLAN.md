@@ -15872,3 +15872,68 @@ MEGARUN's next FIND answered, no FAULT or CLOSED. Measured red both ways:
 `--break bx` (the reported probe's BX, `-DPFL_BADBX`) - `FAULT 00 err 0000 at
 0060:64A5`; `--break free` (OSAPI_XMEM_FREE's cell poked to `retf`) - the best
 run 128 KB. Green at b7374eaf and at e6e7930c.
+
+### 14.177 One hold routine instead of three copies: `hw_claimfit` in `apps/os88huge.inc` (2026-11-08) - DONE
+
+**What was copied.** "Claim a huge hold of the file's size, keep N KB of the
+conventional heap free beside it, and where the heap alone took it and the
+margin is short, free it and claim once more just past the heap's largest
+run to force a bridge" was written three times, each in a package's kern_mega
+arm and each a little different: XTMP3's `x3h_huge` (14.170; 96 KB, the
+margin read off the heap's TOTAL free, no ask), WaveRack's `wt_hhuge`
+(14.173; the ring, its words, `WT_HMARGKB` and the look-ahead, read off the
+heap's LARGEST RUN, the ask first, the retry a whole 64 KB past the run) and
+the Audio Player's `aph_claim` (14.173; 96 KB off the total, the ask first).
+
+**The one routine** is `hw_claimfit` (`HW_CLAIMFIT`, SPEC.md 50.3.8): AX =
+KB, CX = the cell's BX, DX = the margin in KB, BX -> the walker's record.
+The ask first (AX = 0, BX = the shape) - a size no claim is given now costs
+no claim and no pack, megajw's lesson, which XTMP3's copy never had; then
+`hw_claim` with `MEMP_AVAIL` either side; the margin is the heap's LARGEST
+RUN after the claim (what is claimed next is one run, and on a fragmented
+heap the total passes where none of it fits - the stricter of the two
+copies' tests, and WaveRack's); where the heap alone took it (its total fell,
+no cut) and that run is short, freed and claimed once more at the next 32 KB
+past the run - which the heap cannot hold alone and the pool could not hold
+the smaller, so the kernel bridges it or refuses; given back when short with
+the pool alone holding it, as a bridge already, or after the retry. Out: CF,
+the record as `hw_claim` leaves it, DX = the claim, AX = its KB (more than
+asked after a retry), CX = FFFFh when conventional memory is in it (the
+caller declares that piece movable), 0 when the pool holds it all. 114 bytes.
+No retry counter: `MEMP_AVAIL`'s largest is the largest claim the heap gives,
+so the second claim cannot be the heap's alone, and a retry's size only
+grows, so the loop ends whatever another task does between the two.
+
+**The packages.** Each arm keeps only what is its own: XTMP3 rounds to 32
+KB, gives a paragraph step back (kern_mega in real mode: its old ladder
+stands) and stores `x3h_hcv`, which is now 0 for every hold but a huge one
+(`x3h_free` clears it), so `x3_lset` and `x3_plan` test it alone; the Audio
+Player stores `aph_hcv` (`aph_kb`, written and never read, is gone);
+WaveRack declares the piece with `wr_ret` (`wt_htry` is gone). What changes
+in behaviour: XTMP3 now asks first; XTMP3's and Audio's margin is the run,
+not the total (the same on a heap whose free memory is one run, which the
+rows' machines have); WaveRack's retry is 32 KB rather than 64 KB past the
+run, a smaller conventional piece.
+
+**Bytes.** No kernel byte. The SHIPPED builds byte-identical: every
+`build/*.o88`, `build/*.bin` and every shipped image (`build/*.img`,
+`build/smallk/`) `md5sum`-equal to mega-release's at one commit; of kern_mega's
+disks only `megaapps*.img` and `megaxtmp3*.img` move, carrying the three
+arms. The arms' IMAGES (`os88pkg.image_unwrap`): XTMP3 46,985 -> 46,983
+(-2, with the ask it never had), WaveRack 44,157 -> 44,150 (-7), Audio
+14,509 -> 14,495 (-14). The packed files, which lz4 decides: XTMP3.O88
+97,032 -> 97,048 (+16), WAVERACK.O88 33,949 -> 33,948, AUDIO.O88 10,455 ->
+10,458 (+3). bss: Audio -2 (`aph_kb`), WaveRack -1 (`wt_htry`), XTMP3 unchanged.
+
+**Rows.** `os88huge` (host, Unicorn) gains `hw_claimfit` against a model of
+kern_mega's placement with the three cells - twelve cases: the pool's, the
+heap's with room, the forced bridge (544 KB cut at window 3, x3huge's
+shape), the same on a FRAGMENTED heap whose total would pass, the retry
+short or refused, the pool alone with the heap short, a bridge at once,
+HUGE_NOBRIDGE, no ask (kern_big), a refused claim; the claims made counted
+each time, so a size past the ask must make NONE. Red three ways:
+`--break fitnoask` (1 failure: a claim past the ask), `fitnoretry` (11: no
+forced bridge), `fittotal` (4: the margin off the total). In the guest:
+`x3huge`, `waverackhuge`, `audhuge`, `megasbhold`, `waverackmega-arm`,
+`megajw`, `x3mega`; `pins` (full) with `tests/pins.txt`'s two ask lines
+folded into one for `@hw_claimfit`.

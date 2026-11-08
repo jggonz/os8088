@@ -44,14 +44,27 @@ documented outputs, the flags' DF aside, compared:
   hw_fwrite the stream receives exactly the span's bytes, one put a window;
             a span past HW_LEN is FERR_BIG with nothing put; a refused put
             answers its AX
+  hw_claimfit against a model of kern_mega's placement (the pool alone, the
+            heap alone, the bridge - SPEC.md 50.3.5) with its three cells
+            (OSAPI_MEM_HUGE, MEMP_AVAIL, OSAPI_MEM_FREE): the ask first and
+            once, with BX = the shape, and NO claim for a size it refuses;
+            the pool's, the heap's with room; the heap alone and the run
+            left short -> freed and claimed once more at the next 32 KB past
+            the run, which bridges (544 KB cut at window 3, XTMP3's x3huge
+            shape) - on a FRAGMENTED heap too, where the total would pass;
+            short again, the pool alone with the heap short, a bridge at
+            once, HUGE_NOBRIDGE, a refused claim: given back, nothing held;
+            AX = the KB held, CX = FFFFh exactly when the heap fell
 
 BROKEN ON PURPOSE (--break NAME, docs/WRITING-TESTS.md 1): `nowin` (the
 window's-end cap taken out of hw_aim), `base0` (the aim adds the window's
 index to nothing - the offset's low word in window 0, the naive sum), `nolen`
 (the length's cap taken out), `nostep2` (hw_claim not doubling a 32KB
 window's step), `nofoff` (hw_fread reading at the claim's offset, HW_FOFF's
-low word ignored) - each must FAIL this row; the row's text names the
-counts.
+low word ignored), `fitnoask` (hw_claimfit claiming past the ask's
+answer), `fitnoretry` (no forced-bridge retry) and `fittotal` (the margin
+read off the heap's total, not its largest run) - each must FAIL this row;
+the row's text names the counts.
 
 Milliseconds, where a package on an emulator would be minutes a case.
 """
@@ -83,6 +96,8 @@ SSEG = 0xD000                           # a stack of its own (SS != DS)
 FSEG = 0xC000                           # a FAR buffer
 KSEG = 0x0060                           # KERNEL_SEG: OSAPI_MEM_HUGE's cell
 HUGE_CELL = 0x04C5
+MEMP_CELL = 0x04E9                      # OSAPI_MEM_P (hw_claimfit's MEMP_AVAIL)
+FREE_CELL = 0x01AA                      # OSAPI_MEM_FREE
 REC = 0x8000                            # CSEG:REC the record
 NAME = 0x8020                           # ...the name the file routines pass
 CUR = 0x8040                            # ...the cursor / the stream
@@ -90,7 +105,7 @@ NBUF = 0x9000                           # ...a near buffer (to 0xFFFF)
 CLAIM_PARA = 0x1000                     # window 0, at 64KB
 GUARD = 0xEE
 ENTRIES = ("hw_claim", "hw_aim", "hw_span", "hw_get", "hw_put", "hw_fread",
-           "hw_fwrite")
+           "hw_fwrite", "hw_claimfit")
 FERR_IO, FERR_BIG = 2, 10
 REGS = (("AX", UC_X86_REG_AX), ("BX", UC_X86_REG_BX), ("CX", UC_X86_REG_CX),
         ("DX", UC_X86_REG_DX), ("SI", UC_X86_REG_SI), ("DI", UC_X86_REG_DI),
@@ -110,6 +125,17 @@ BREAKS = {
     "nostep2": ("    jnz .one\n    shl cx, 1\n", "    jnz .one\n    nop\n"),
     "nofoff": ("    add ax, [bx+HW_FOFF]            ; DX:AX = the file's offset\n",
                "    nop\n"),
+    # hw_claimfit: the ask's refusal ignored (a size no claim is given is
+    # claimed all the same), the forced-bridge retry never made, and the
+    # margin read off the heap's TOTAL rather than its largest run
+    "fitnoask": ("    cmp ax, si\n    jb .no\n.go:\n",
+                 "    cmp ax, si\n    nop\n    nop\n.go:\n"),
+    "fitnoretry": ("    jcxz .back                      ; SHORT",
+                   "    jmp short .back                 ; SHORT"),
+    "fittotal": ("    call OSAPI_MEM_P                ; AX = the largest run, "
+                 "BX = all, after\n",
+                 "    call OSAPI_MEM_P                ; AX = the largest run, "
+                 "BX = all, after\n    mov ax, bx\n"),
 }
 
 
@@ -123,7 +149,7 @@ def build(tmp, brk=None):
     inc = os.path.join(tmp, "os88huge.inc")
     open(inc, "w").write(src)
     lines = ["cpu 8086", "bits 16", "org 0", '%include "os88api.inc"']
-    lines += ["%define " + d for d in ("HW_CLAIM", "HW_GET", "HW_PUT",
+    lines += ["%define " + d for d in ("HW_CLAIMFIT", "HW_GET", "HW_PUT",
                                        "HW_RSEQ", "HW_WSEQ")]
     for e in ENTRIES:                   # call (3) + hlt, a 4-byte stride
         lines += ["    call %s" % e, "    hlt"]
@@ -175,8 +201,10 @@ class Stub:
         mu = Uc(UC_ARCH_X86, UC_MODE_16)
         mu.mem_map(0, 1 << 20)
         mu.mem_write(CSEG * 16, code)
-        # the cell: int F0h / retf
+        # the cells: int F0h / F3h / F4h, retf
         mu.mem_write(KSEG * 16 + HUGE_CELL, b"\xCD\xF0\xCB")
+        mu.mem_write(KSEG * 16 + MEMP_CELL, b"\xCD\xF3\xCB")
+        mu.mem_write(KSEG * 16 + FREE_CELL, b"\xCD\xF4\xCB")
         mu.hook_add(UC_HOOK_INTR, self._int)
         self.mu = mu
         self.huge = None                # (cf, dx, cx, bx) for the next call
@@ -187,6 +215,7 @@ class Stub:
         self.stream = bytearray()
         self.perr = None
         self.bad = []
+        self.kern = None                # a Kernel: hw_claimfit's cells
 
     # -- the kernel and the two file stubs ----------------------------------
     def _setcf(self, cf):
@@ -195,6 +224,9 @@ class Stub:
 
     def _int(self, mu, intno, _):
         r = mu.reg_read
+        if self.kern is not None and intno in (0xF0, 0xF3, 0xF4):
+            self.kern.cell(self, intno)
+            return
         if intno == 0xF0:
             cf, dx, cx, bx = self.huge
             self.huge_in = (r(UC_X86_REG_AX), r(UC_X86_REG_BX))
@@ -404,6 +436,160 @@ def t_claim_more(st, chk):
     r = st.rec()
     chk(cf == 0 and r[1] == 32, "4000h given (CX = 8): the walk's step 32 "
         "(%s)" % (r,))
+
+
+class Kernel:
+    """hw_claimfit's three cells, placing as SPEC.md 50.3.5 says kern_mega
+    does: the pool alone, else the heap alone, else (BX = 0) a BRIDGE - the
+    pool's best run cut to whole 64KB windows, the rest conventional with
+    MEGA_RESKB left. The heap is a largest RUN (which a claim and its
+    conventional piece are taken from) and HOLES beside it, which
+    MEMP_AVAIL's total counts and its largest claim does not"""
+    RESKB = 64
+
+    def __init__(self, pool, run, holes=0, ask=True, refuse=False):
+        self.pool, self.run, self.holes = pool, run * 64, holes * 64
+        self.ask, self.refuse = ask, refuse
+        self.claims, self.next, self.log = {}, 0x0107, []
+
+    def place(self, kb, shape):
+        if kb <= self.pool:
+            return kb, 0, shape
+        if kb * 64 <= self.run:
+            return 0, kb * 64, shape
+        n = self.pool // 64
+        conv = (kb - 64 * n) * 64
+        if shape == 0 and n and 0 < conv <= self.run - self.RESKB * 64:
+            return 64 * n, conv, n
+        return None
+
+    def most(self, shape):
+        best = max(self.pool, self.run // 64)
+        n = self.pool // 64
+        if shape == 0 and n and self.run // 64 > self.RESKB:
+            best = max(best, 64 * n + self.run // 64 - self.RESKB)
+        return best
+
+    def cell(self, st, intno):
+        mu, r = st.mu, st.mu.reg_read
+        w = mu.reg_write
+        if intno == 0xF0:                       # OSAPI_MEM_HUGE
+            ax, shape = r(UC_X86_REG_AX), r(UC_X86_REG_BX)
+            if ax == 0:
+                self.log.append(("ask", shape))
+                if not self.ask:
+                    st._setcf(1)
+                    return
+                w(UC_X86_REG_AX, self.most(shape))
+                for reg in (UC_X86_REG_BX, UC_X86_REG_CX, UC_X86_REG_DX):
+                    w(reg, 0xDEAD)              # the ask's other answers
+                st._setcf(0)
+                return
+            self.log.append(("claim", ax, shape))
+            got = None if self.refuse else self.place(ax, shape)
+            if got is None:
+                st._setcf(1)
+                return
+            p, conv, bx = got
+            self.pool -= p
+            self.run -= conv
+            dx, self.next = self.next, self.next + 0x100
+            self.claims[dx] = (p, conv)
+            w(UC_X86_REG_DX, dx)
+            w(UC_X86_REG_CX, 8)
+            w(UC_X86_REG_BX, bx)
+            w(UC_X86_REG_AX, 0x5A5A)
+            st._setcf(0)
+        elif intno == 0xF3:                     # OSAPI_MEM_P
+            if r(UC_X86_REG_BX) & 0xFF != 5:
+                st.bad.append("OSAPI_MEM_P with BL %02X, not MEMP_AVAIL"
+                              % (r(UC_X86_REG_BX) & 0xFF))
+            self.log.append(("avail",))
+            w(UC_X86_REG_AX, self.run)
+            w(UC_X86_REG_BX, self.run + self.holes)
+            w(UC_X86_REG_CX, 0x20)              # MEM_GRAN
+            st._setcf(0)
+        else:                                   # OSAPI_MEM_FREE
+            dx = r(UC_X86_REG_DX)
+            self.log.append(("free", dx))
+            if dx not in self.claims:
+                st.bad.append("OSAPI_MEM_FREE of %04X, no claim" % dx)
+                return
+            p, conv = self.claims.pop(dx)
+            self.pool += p
+            self.run += conv
+            st._setcf(0)
+
+
+# hw_claimfit's cases: (name, Kernel(...), KB, shape, margin KB, want) - want
+# None refused, else (KB held, the cut, the heap's fall in KB: CX = FFFFh
+# when it fell); every case
+# also states the claims it may make (the asks and frees follow from them)
+FITS = [
+    ("the pool alone", dict(pool=1000, run=400), 480, 0, 96,
+     (480, 0, 0), [480]),
+    ("too big for the ask: NO claim", dict(pool=300, run=200), 500, 0, 96,
+     None, []),
+    ("the heap alone, room left", dict(pool=100, run=500), 200, 0, 96,
+     (200, 0, 200), [200]),
+    ("the heap alone, short: the FORCED BRIDGE", dict(pool=200, run=520),
+     480, 0, 96, (544, 3, 352), [480, 544]),
+    ("a fragmented heap: the RUN is short, not the total",
+     dict(pool=200, run=520, holes=150), 480, 0, 96, (544, 3, 352),
+     [480, 544]),
+    ("the forced bridge short too: given back", dict(pool=150, run=520),
+     480, 0, 120, None, [480, 544]),
+    ("the forced bridge refused", dict(pool=100, run=520), 480, 0, 96,
+     None, [480, 544]),
+    ("the pool alone, the heap short before: given back",
+     dict(pool=1000, run=50), 480, 0, 96, None, [480]),
+    ("a bridge at once, short: given back, no retry",
+     dict(pool=200, run=400), 480, 0, 120, None, [480]),
+    ("HUGE_NOBRIDGE short: the second claim refused, given back",
+     dict(pool=100, run=520), 480, 2, 96, None, [480, 544]),
+    ("no ask (kern_big): claimed all the same",
+     dict(pool=0, run=500, ask=False), 300, 0, 96, (300, 0, 300), [300]),
+    ("the claim refused", dict(pool=900, run=500, refuse=True), 300, 0, 96,
+     None, [300]),
+]
+
+
+def t_claimfit(st, chk):
+    for name, kw, kb, shape, marg, want, claims in FITS:
+        tag = "hw_claimfit, %s" % name
+        k = st.kern = Kernel(**kw)
+        st.mu.mem_write(CSEG * 16 + REC, b"\xCC" * 14)
+        out, cf, regs = st.call("hw_claimfit", AX=kb, CX=shape, DX=marg)
+        st.kern = None
+        if not kept(chk, tag, out, regs, ("BX", "SI", "DI", "BP", "DS", "ES",
+                                          "SS", "SP")):
+            continue
+        asks = [e for e in k.log if e[0] == "ask"]
+        made = [e[1] for e in k.log if e[0] == "claim"]
+        chk(asks == [("ask", shape)] and k.log[0] == ("ask", shape),
+            "%s: asked first, once, BX = the shape (%s)" % (tag, k.log))
+        chk(made == claims and all(e[2] == shape for e in k.log
+                                   if e[0] == "claim"),
+            "%s: the claims %s, want %s" % (tag, made, claims))
+        seg = st.rec()
+        if want is None:
+            chk(cf == 1 and not k.claims,
+                "%s: CF %d, %d claim(s) held - want refused, nothing held"
+                % (tag, cf, len(k.claims)))
+            continue
+        held, cut, fall = want
+        chk(cf == 0 and len(k.claims) == 1 and out["DX"] in k.claims,
+            "%s: CF %d, DX %04X the one claim held (%d held)"
+            % (tag, cf, out["DX"], len(k.claims)))
+        chk(out["AX"] == held and out["CX"] == (0xFFFF if fall else 0),
+            "%s: AX %d KB CX %X, want %d KB, CX %X (the heap fell %d KB)" % (
+                tag, out["AX"], out["CX"], held, 0xFFFF if fall else 0,
+                fall))
+        chk(seg == (out["DX"], 8, held * 1024, cut, 0),
+            "%s: the record %s, want (%04X, 8, %X, %d, 0)" % (
+                tag, seg, out["DX"], held * 1024, cut))
+        chk(k.run - marg * 64 >= 0, "%s: the run left %d KB, the margin %d"
+            % (tag, k.run // 64, marg))
 
 
 def t_aim(st, chk, sh, rng):
@@ -616,6 +802,7 @@ def main():
     rng = random.Random(a.seed)
     st = Stub(code)
     t_claim_more(st, chk)
+    t_claimfit(st, chk)
     for sh in SHAPES:
         t_claim(st, chk, sh)
         t_aim(st, chk, sh, rng)

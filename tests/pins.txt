@@ -491,17 +491,18 @@ X apps/win16/w16mem.inc @w16_garena      # NOT A CLAIM: OSAPI_MEM_HUGE with AX =
                                          # MEMH_AVAIL - the arm's ask for the pool's
                                          # best run, to SIZE the third arena; the
                                          # arena itself is claimed by W16VCLAIM
-X apps/audio/aphold.inc @aph_claim       # NOT A CLAIM: OSAPI_MEM_HUGE with AX = 0,
-                                         # the cell's ASK, first, so a WAV too big to
-                                         # hold costs no claim and no pack of the pool;
-                                         # the hold itself is hw_claim's, declared
-                                         # (aph_decl) and pinned per read (aph_pin)
+X apps/os88huge.inc @hw_claimfit         # NOT A CLAIM: OSAPI_MEM_HUGE with AX = 0,
+                                         # the cell's ASK, first, so a hold too big
+                                         # costs no claim and no pack of the pool
+                                         # (KERN-MEGA-PLAN 14.177); the hold itself
+                                         # is hw_claim's, its caller's to declare
 X apps/os88huge.inc si+HW_SEG            # THE WALKER'S CLAIM IS ITS CALLER'S (SPEC.md
                                          # 50.3.8): DX goes back to the package, whose
                                          # pool windows move by themselves (14.169) and
                                          # which declares the CONVENTIONAL piece itself
-                                         # - XTMP3's x3_lset, WaveRack's wt_hhuge, Audio's
-                                         # aph_decl (KERN-MEGA-PLAN 14.173)
+                                         # where hw_claimfit's CX says it is there -
+                                         # XTMP3's x3_lset, WaveRack's wt_hhuge, Audio's
+                                         # aph_decl (KERN-MEGA-PLAN 14.173, 14.177)
 X apps/realdmg/rwbank.inc rw_xsel        # kern_mega's arm: the cartridge IN PLACE,
                                          # one OSAPI_MEM_HUGE claim in the POOL
                                          # (REALDMG-SPEC 10.3.1). It is not a wall:
@@ -533,10 +534,6 @@ X apps/waverack/wrxport.inc wt_laseg   # the play's look-ahead, which the
                                          # 20.6): a move needs the worker parked
                                          # mid-pass, and nothing parks it; held
                                          # for one play
-X apps/waverack/wrxport.inc @wt_hhuge    # NOT A CLAIM: OSAPI_MEM_HUGE with AX = 0,
-                                         # the cell's ASK, first, so a region no claim
-                                         # can be given costs no claim and no pack;
-                                         # the hold itself is hw_claim's, declared
 X apps/waverack/wrrec.inc wc_useg+bx   # a take's staging units, which the
                                          # WORKER copies the ring into between the
                                          # UI's ticks with no lock (SPEC.md 123.7)

@@ -21691,10 +21691,14 @@ SOAK = [
         "byte), the paragraph step, a window every 32KB and every 16KB - "
         "hw_claim's record, hw_aim's pointer and reach, hw_get/hw_put spans, "
         "hw_fread's one os88_rseq a window (HW_FOFF 0, positive, negative), "
-        "hw_fwrite's one put a window, refusals, every register. 3,431 checks. "
+        "hw_fwrite's one put a window, refusals, every register; and "
+        "hw_claimfit against a model of kern_mega's placement (the ask first "
+        "and no claim past it, the forced-bridge retry - on a fragmented heap "
+        "too - and every way a hold is given back). 3,482 checks. "
         "Broken on purpose (--break): the window's cap out fails 227, the "
         "window's index out 462, the length's cap 47, the 32KB step's "
-        "doubling 4, HW_FOFF ignored 290. Host-only",
+        "doubling 4, HW_FOFF ignored 290, hw_claimfit's ask ignored 1, its "
+        "retry out 10, its margin off the heap's total 4. Host-only",
         needs=("nasm", "unicorn")),
     Row("m83", "soak", py("tests/m83.py"), 1.0,
         "SPEC.md 77.20: apps/os88m83.inc's m83_mangle - the ONE 8.3 mangle "

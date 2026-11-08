@@ -34,6 +34,11 @@
 ;
 ;   HW_CLAIM  hw_claim  AX = KB, CX = the cell's BX -> the record filled,
 ;                       DX = the claim (OSAPI_MEM_FREE's, OSAPI_MEM_MOVABLE's)
+;   HW_CLAIMFIT hw_claimfit  AX = KB, CX = the cell's BX, DX = the heap's
+;                       margin in KB -> a HOLD: the ask first, hw_claim, the
+;                       heap's largest run left DX KB, and the one forced-
+;                       bridge retry where the heap alone took it. CX =
+;                       FFFFh conventional memory is in it. Takes HW_CLAIM
 ;             hw_aim    DX:AX = an offset, CX = bytes wanted -> ES:DI there,
 ;                       CX = how many of them lie in that window
 ;   HW_GET    hw_get    DX:AX, CX bytes out of the claim to ES:DI (any segment)
@@ -46,7 +51,8 @@
 ;
 ; Every routine is near, 8086, keeps every register but its documented
 ; outputs, and copies with movsw (a byte for an odd count) - cld is its own.
-; None calls the kernel but hw_claim (OSAPI_MEM_HUGE) and the two file
+; None calls the kernel but hw_claim (OSAPI_MEM_HUGE), hw_claimfit (that,
+; OSAPI_MEM_P's MEMP_AVAIL and OSAPI_MEM_FREE) and the two file
 ; routines (through the include they name), so any task may walk; the file
 ; routines are the UI task's (SPEC.md 20.6 rule 7). A window is a segment
 ; register loaded for the walk: never keep ES across a call of yours that
@@ -67,6 +73,103 @@ HW_LEN      equ 4                   ; dword: the bytes the walk may reach
 HW_CUT      equ 8                   ; word: the bridge's pool windows, 0 one run
 HW_FOFF     equ 10                  ; dword: hw_fread's file offset of byte 0
 HW_SIZE     equ 14
+
+%ifdef HW_CLAIMFIT
+%define HW_CLAIM                    ; (hw_claimfit's own claim)
+; -----------------------------------------------------------------------------
+; hw_claimfit - a HOLD: hw_claim of AX KB with the conventional heap's largest
+;               run left at least DX KB beside it (SPEC.md 50.3.8; written
+;               once from XTMP3's, WaveRack's and the Audio Player's copies,
+;               KERN-MEGA-PLAN 14.177). THE ASK FIRST (OSAPI_MEM_HUGE, AX =
+;               0, BX = the shape): a size no claim is given now costs no
+;               claim and no pack (megajw). Then the claim, the heap measured
+;               either side of it (MEMP_AVAIL). The kernel takes the pool
+;               alone, else the heap alone, else the bridge (SPEC.md 50.3.5),
+;               so where the HEAP ALONE took it (the heap fell, no cut) and
+;               the run left is short, it is freed and claimed once more at
+;               the next 32 KB past the heap's largest run - which the heap
+;               cannot hold alone (MEMP_AVAIL's largest is the largest claim
+;               it gives), so the kernel bridges it or refuses, and the
+;               conventional piece is the smaller by the pool piece. The
+;               hold is then LONGER than asked (AX: a 32 KB multiple).
+;               Short again, short with the pool alone holding it (the heap
+;               was short before), or a bridge already: given back. Only CX
+;               = 0 can bridge, so for any other shape the second claim is
+;               the kernel's refusal
+; in:  AX = KB (1..65535), CX = the cell's BX, DX = the margin in KB
+;      (0..1023), BX -> the record
+; out: CF = 0 held: the record filled (hw_claim's), DX = the claim, AX = its
+;      KB, CX = 0FFFFh when conventional memory is in it (the heap fell),
+;      which the caller declares MOVABLE (OSAPI_MEM_MOVABLE, a `ret` its
+;      proc: its windows follow a move), 0 when the pool holds all of it
+;      CF = 1 nothing held: AX CX DX and the record undefined
+; keeps BX, SI, DI, BP, DS, ES
+; -----------------------------------------------------------------------------
+hw_claimfit:
+    push bx
+    push si
+    push di
+    push bp
+    push cx                         ; [sp] = the shape, all through
+    mov si, ax                      ; SI = the KB
+    mov bp, dx                      ; BP = the margin
+    push bx
+    xor ax, ax                      ; THE ASK: AX = the most KB one claim of
+    mov bx, cx                      ; this shape is given now
+    call OSAPI_MEM_HUGE
+    pop bx
+    jc .go                          ; (no ask - kern_big, kern_small: claim)
+    cmp ax, si
+    jb .no
+.go:
+    mov cl, 6
+    shl bp, cl                      ; ...the margin in paragraphs
+    push bx
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P                ; BX = the heap's free before
+    mov di, bx                      ; DI = it
+    pop bx
+.claim:
+    pop cx
+    push cx                         ; CX = the shape
+    mov ax, si
+    call hw_claim                   ; DX = the claim
+    jc .no
+    push bx
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P                ; AX = the largest run, BX = all, after
+    cmp bx, di                      ; CX = FFFFh: the heap fell, conventional
+    sbb cx, cx                      ; memory is in it
+    pop bx
+    cmp ax, bp
+    jae .ok
+    jcxz .back                      ; SHORT: the pool alone (the heap short
+    cmp word [bx+HW_CUT], 0         ; before it) or a bridge already - no
+    jne .back                       ; smaller conventional piece to be had
+    call OSAPI_MEM_FREE
+    push bx
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P                ; AX = the heap's largest run, paragraphs
+    pop bx
+    mov cl, 6
+    shr ax, cl
+    add ax, 32                      ; ...past it, the next 32 KB
+    and al, 0xE0
+    xchg si, ax
+    jmp short .claim                ; once more: a bridge, or refused
+.back:
+    call OSAPI_MEM_FREE
+.no:
+    stc
+.ok:
+    xchg ax, si                     ; AX = the KB held (CF = 0 from the jae)
+    pop di                          ; (the shape)
+    pop bp
+    pop di
+    pop si
+    pop bx
+    ret
+%endif
 
 %ifdef HW_CLAIM
 ; -----------------------------------------------------------------------------

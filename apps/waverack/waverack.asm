@@ -2924,7 +2924,6 @@ WRB_SIZE0   equ 240 + WR_NB * 10 + WF_NKEYS * 2 + WD_BANDSZ
 %ifdef PKG_MEGA
     WRV wt_hw, 14                   ; ...kern_mega's arm: its walker record
     times -(HW_SIZE != 14) db 0     ;   (apps/os88huge.inc's HW_SIZE)
-    WRV wt_htry, 1                  ;   ...and wt_hhuge's second claim
 %else
     WRV wt_hwin, 2                  ; ...its window: the claim itself in
                                     ;   real mode, bound under CPU_F_PM

@@ -1529,96 +1529,38 @@ wt_rd1:
 ; under a bound window (wt_hbwin) is not assembled here: on kern_mega it was
 ; the heap's largest run alone, ~480 KB on the 640K + 384K machine.
 ; -----------------------------------------------------------------------------
-%define HW_CLAIM                    ; hw_claim, and hw_aim (always there)
+%define HW_CLAIMFIT                 ; hw_claimfit (hw_claim), and hw_aim
 %include "os88huge.inc"
 
-; wt_hhuge - AX = the hold's KB: claimed as above, the heap keeping the
-; play's own claims beside it - the ring and its words, WT_HMARGKB and the
-; look-ahead unless held - as the shipped build's test did, read off its
-; largest run once the hold is in. The kernel takes the pool alone, else the
-; heap alone, else the bridge (osapi_mem_huge, XTMP3's x3h_huge): where the
-; heap ALONE took it and that run is short, it is claimed once more past the
-; heap's largest run, which the heap cannot hold alone - a bridge, its
+; wt_hhuge - AX = the hold's KB: claimed as above, the heap's largest run
+; keeping the play's own claims beside it - the ring and its words,
+; WT_HMARGKB and the look-ahead unless held - as the shipped build's test
+; did. apps/os88huge.inc's hw_claimfit (SPEC.md 50.3.8): the ask first, so a
+; region no claim can be given costs no claim and no pack; where the heap
+; ALONE took it and that run is short, claimed once more past the heap's
+; largest run, which the heap cannot hold alone - a bridge, its
 ; conventional piece the smaller by the pool's (the hold then longer than
 ; the region, which nothing reads past). Conventional memory in it is
 ; declared MOVABLE, a `ret` its proc (its windows follow a move; nothing
 ; holds a window across a call that can move it).
 ; out: CF = 0 [wt_hseg] = the claim, wt_hw its record; CF = 1 nothing claimed.
-; keeps every register
+; clobbers AX, BX, CX, DX (wt_plan, its one caller, clobbers them all)
 wt_hhuge:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    mov si, ax                      ; SI = the KB
-    mov bp, (WT_RINGKB + 1 + WT_HMARGKB) * 64   ; BP = the run to keep, paras
+    mov dx, WT_RINGKB + 1 + WT_HMARGKB  ; DX = the run to keep, KB
     cmp word [wt_laseg], 0
     jne .k
-    add bp, WT_LAKB * 64
+    add dx, WT_LAKB
 .k:
-    mov byte [wt_htry], 0
-    xor ax, ax                      ; THE ASK first (SPEC.md 50.3.5): a region
-    xor bx, bx                      ; no claim can be given costs no claim and
-    call OSAPI_MEM_HUGE             ; no pack - AX = the most KB one is given
-    jc .claim
-    cmp ax, si
-    jb .no
-.claim:
-    xor dx, dx
-    mov bl, MEMP_AVAIL
-    call OSAPI_MEM_P                ; BX = the heap's free paragraphs
-    mov di, bx                      ; DI = ...before the claim
-    mov ax, si
     xor cx, cx                      ; a 64KB step, a bridge allowed
     mov bx, wt_hw
-    call hw_claim                   ; DX = the claim
-    jc .no
-    push dx
-    xor dx, dx
-    mov bl, MEMP_AVAIL
-    call OSAPI_MEM_P                ; AX = the largest run, BX = all, after
-    pop dx
-    cmp ax, bp
-    jae .ok
-    cmp bx, di                      ; SHORT: the heap untouched, so it was
-    jae .back                       ; short before - no hold
-    cmp word [wt_hw+HW_CUT], 0      ; a bridge already: no smaller piece
-    jne .back
-    cmp byte [wt_htry], 0           ; (the second time: refused)
-    jne .back
-    inc byte [wt_htry]
-    call OSAPI_MEM_FREE
-    xor dx, dx
-    mov bl, MEMP_AVAIL
-    call OSAPI_MEM_P                ; AX = the heap's largest run, paragraphs
-    mov cl, 6
-    shr ax, cl
-    add ax, 64                      ; ...past it, a window on
-    xchg si, ax
-    jmp short .claim
-.ok:
+    call hw_claimfit                ; DX = the claim, CX = FFFFh conventional
+    jc .o                           ; memory in it
     mov [wt_hseg], dx
-    cmp bx, di                      ; conventional memory holds part of it:
-    jae .o                          ; that piece movable (SPEC.md 50.3.5)
+    jcxz .o                         ; ...that piece movable (SPEC.md 50.3.5)
     mov ax, wr_ret
     call OSAPI_MEM_MOVABLE
     clc
-    jmp short .o
-.back:
-    call OSAPI_MEM_FREE
-.no:
-    stc
 .o:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; wt_hoff - the hold's address of document frame DX:AX ([wt_hlo] <= it),

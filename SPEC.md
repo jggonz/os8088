@@ -99663,6 +99663,12 @@ always   hw_aim    DX:AX = a claim offset, CX = bytes wanted (1..FFFFh)
 HW_CLAIM hw_claim  AX = KB, CX = the cell's BX (0, HUGE_NOBRIDGE, 8000h,
                    4000h) -> CF=0 the record filled, DX = the claim (for
                    OSAPI_MEM_FREE / _MOVABLE); CF=1 refused, HW_SEG = 0
+HW_CLAIMFIT        AX = KB, CX = the cell's BX, DX = the heap's margin in KB
+     hw_claimfit   (0..1023) -> a HOLD (below): CF=0 the record filled, DX =
+                   the claim, AX = its KB (more than asked after the retry),
+                   CX = FFFFh when conventional memory is in it (declare it
+                   movable), 0 when the pool holds it all; CF=1 nothing
+                   held. Keeps BX SI DI BP DS ES. Takes HW_CLAIM with it
 HW_GET   hw_get    DX:AX, CX bytes OUT of the claim to ES:DI (any segment)
 HW_PUT   hw_put    ...INTO it from ES:DI. Both: CF=1 a span past HW_LEN,
                    nothing copied; movsw, a byte for an odd count, cld own
@@ -99677,6 +99683,46 @@ HW_WSEQ  hw_fwrite DS:DI = an open os88_wseq stream, DX:AX, CX bytes of the
                    apps/os88wseq.inc
 ```
 
+**A HOLD is `hw_claimfit`** (KERN-MEGA-PLAN 14.177): a whole file - a song,
+a WAV, a region of one - held in ONE claim of 64KB windows, a bridge allowed,
+with the conventional heap kept for what the program claims after it. It was
+written three times, in XTMP3's, WaveRack's and the Audio Player's kern_mega
+arms (§121.6.1, §123.6, §86.5.4), each a little different; this is the one,
+in four steps:
+
+1. **The ask first** (§50.3.5, AX = 0, BX = the shape): a size no claim can
+   be given now is refused there - no claim made, so no pack of the pool
+   either (`megajw`: the pack moved the look-ahead off the pool's floor for a
+   claim that was then refused, 14.166). An ask answered CF = 1 (kern_big,
+   kern_small) is a kernel with no pool: the claim is made and is the heap's.
+2. **The claim** (`hw_claim`), `MEMP_AVAIL` read either side of it: the
+   heap's TOTAL before and after says whether conventional memory is in the
+   claim (it fell), and its LARGEST RUN after is the margin's test - the
+   run, not the total, because what is claimed next is one run (a ring, a
+   card's grant, a program launched while it plays), and on a fragmented
+   heap the total passes where none of them fits.
+3. **The forced bridge, once.** The kernel places a claim in the pool alone,
+   else the heap alone, else a bridge (§50.3.5). So where the HEAP ALONE took
+   it (it fell, no cut) and the run left is short, it is freed and claimed
+   again at the next 32 KB past the heap's largest run: the heap cannot hold
+   that alone (`MEMP_AVAIL`'s largest is the largest claim it gives) and the
+   pool could not hold the smaller one, so the kernel bridges it or refuses
+   it, and a bridge's conventional piece is the smaller by the pool piece.
+   The hold is then LONGER than asked - AX says by how much, a 32 KB multiple
+   still, so a load in 32 KB pieces stays whole pieces - and nothing reads
+   past the file.
+4. **Given back** when it is short with the pool alone holding it (the heap
+   was short before), short as a bridge already, or short after the retry.
+   Only CX = 0 can bridge: any other shape short is retried into the kernel's
+   refusal.
+
+The caller declares the conventional part movable when CX says it is there
+(a `ret` its proc, §50.3.5), and decides what it does not hold for itself -
+XTMP3 gives a paragraph step back (kern_mega in real mode, where its old
+ladder stands) and the Audio Player keeps one. `tests/os88huge.py` runs it
+against a model of that placement with the three cells; `x3huge`,
+`waverackhuge`, `audhuge` and `megasbhold` are its rows in the guest.
+
 `hw_get`, `hw_put`, `hw_fread` and `hw_fwrite` keep a frame on the stack and
 address it with BP - SS, which is where the frame is; nothing reads DS
 through BP. A window is a segment register loaded for the walk: a caller
@@ -99690,11 +99736,15 @@ timer passes, a seek) and `hw_fwrite` for one appended in pieces.
 
 The cost on a package is what it takes: `hw_aim` and `hw_span` 91 bytes,
 `hw_get` 73 more (the copy loop with it), `hw_put` 61 beside that,
-`hw_claim` 92, `hw_fread` 87, `hw_fwrite` 64 - XTMP3's three arms (claim,
-get, fread) 343. XTMP3's kern_mega arm is the first user (§121.6.1);
-WaveRack's arm takes the claim and `hw_aim` alone, converting a window at a
+`hw_claim` 92, `hw_claimfit` 114 beside it, `hw_fread` 87, `hw_fwrite` 64 -
+XTMP3's three arms (claim, get, fread) 343. XTMP3's kern_mega arm is the
+first user (§121.6.1);
+WaveRack's arm takes the hold and `hw_aim` alone, converting a window at a
 time into its play hold (§123.6), and the Audio Player's arm the same three
-as XTMP3 for its whole-file hold (§86.5.4) (KERN-MEGA-PLAN 14.173); the
+as XTMP3 for its whole-file hold (§86.5.4) (KERN-MEGA-PLAN 14.173) - all
+three holds `hw_claimfit` since 14.177, which put their three copies in
+one place and left each arm's image smaller (XTMP3 46,985 -> 46,983 with
+the ask it never had, WaveRack 44,157 -> 44,150, Audio 14,509 -> 14,495); the
 Browser is next (MEGA-HUGE-PLAN 3). PiXEL's master needs none of it - its
 window table already IS a 32KB-window claim's run (§106.8.1) - the Video
 Player's bank and tier already fill both regions, and Video Battle reads its
@@ -99705,7 +99755,11 @@ against a model on four shapes - windows 96KB APART with guards between (a
 reach past a window's end reads a guard, never the claim's next byte), the
 paragraph step, and a window every 32KB and 16KB - every register checked;
 `--break` takes the window's cap, the window's index, the length's cap, the
-32KB step's doubling or `HW_FOFF` out, and each fails it. `tests/megahw`
+32KB step's doubling or `HW_FOFF` out, and each fails it; and `hw_claimfit`
+against a model of kern_mega's placement (the pool alone, the heap alone,
+the bridge, with `MEMP_AVAIL`'s run and total and `OSAPI_MEM_FREE`), twelve
+cases, which `--break fitnoask` (a claim past the ask), `fitnoretry` (no
+forced bridge) and `fittotal` (the margin off the heap's total) each fail. `tests/megahw`
 (MEGAHW.O88, `megahw` on Bochs at 4MB, `megahw86` on 86Box's 640K + 384K,
 `megahwbig` on MartyPC's 5150 under kern_big) runs them in a guest, from ONE
 build: spans across a bridge's cut (kern_mega) or window 2 (kern_big), the
@@ -158198,18 +158252,20 @@ best run. XTMP3's hold is the precedent (§121.6.1) and the shape is its:
   the disk's (`[aph_ndisk]`). The look-ahead, the worker, the feed and the
   card are untouched: they cannot tell. The parser's header read at the
   open still goes to the disk. A speaker play's gulps are the same copies.
-- **The heap keeps `APH_MARGKB` (96 KB) beside it** - the card's grant,
-  the speaker ring, a program launched while it plays. The kernel takes the
-  pool alone, else the heap alone, else the bridge; where the heap ALONE
-  took it and the margin is short it is claimed once more past the heap's
-  largest run - a bridge, its conventional piece the smaller by the pool's
-  (XTMP3's `x3h_huge`). The look-ahead is claimed before the hold, so it
+- **The heap keeps `APH_MARGKB` (96 KB) beside it**, in its largest run -
+  the card's grant, the speaker ring, a program launched while it plays. The
+  kernel takes the pool alone, else the heap alone, else the bridge; where
+  the heap ALONE took it and the margin is short it is claimed once more
+  past the heap's largest run - a bridge, its conventional piece the smaller
+  by the pool's. That is `hw_claimfit` (§50.3.8, KERN-MEGA-PLAN 14.177),
+  XTMP3's and WaveRack's hold as well; the margin was the heap's TOTAL free
+  until then. The look-ahead is claimed before the hold, so it
   keeps its page-safe pool block (§86.5.3, KERN-MEGA-PLAN 14.160), and stays
   PINNED until the claim is made: declared movable across it, the claim's
   pack moved it off the pool's floor, and when the session's other claims
   went it stood in the middle of the pool (`megajw`: 32K free under it, 206K
   over, XT-MP3's hold refused - 14.166's rule). The AX = 0 ask comes first
-  (`aph_claim`), so a file too big to hold costs no claim and no pack.
+  (`hw_claimfit`), so a file too big to hold costs no claim and no pack.
   Conventional memory in the hold is declared MOVABLE, a `ret` its proc
   (§50.3.5: its windows follow a move), and pinned for each read.
 - **What streams still streams.** A file the machine cannot hold, a load
@@ -231975,12 +232031,15 @@ KERN-MEGA-PLAN 14.170) is tried first on kern_mega's arm, so a file the
 pool's best run cannot hold alone is held all the same where the pool and
 the heap together can. The kernel places a claim in the pool alone, else the
 heap alone, else the bridge (§50.3.5); where the HEAP ALONE took it and
-`X3H_MARGKB` is not left beside it, it is claimed once more at 32 KB past
-the heap's largest run - which the heap cannot hold alone, so the kernel
-bridges it and the conventional piece is the smaller by the pool piece (the
-hold then longer than the file, which no read passes). Short again, or a
-paragraph step (kern_mega in real mode, where `X3H_CAPKB` stands as on
-every other kernel), and the old ladder goes on. A hold with conventional
+the heap's largest run does not keep `X3H_MARGKB` beside it, it is claimed
+once more at 32 KB past that run - which the heap cannot hold alone, so the
+kernel bridges it and the conventional piece is the smaller by the pool
+piece (the hold then longer than the file, which no read passes). Short
+again, or a paragraph step (kern_mega in real mode, where `X3H_CAPKB`
+stands as on every other kernel), and the old ladder goes on. That is
+`apps/os88huge.inc`'s `hw_claimfit` (§50.3.8, KERN-MEGA-PLAN 14.177), which
+asks the cell first, so a song no claim can hold costs no claim and no
+pack; the margin was the heap's TOTAL free until then. A hold with conventional
 memory in it (`[x3h_hcv]`) is declared movable with a `ret` proc - its
 windows follow a move - pinned across each read into it as the
 conventional hold is, and given up by `x3_plan` as the conventional hold
@@ -233765,8 +233824,11 @@ added (WAVERACK-PLAN.md's Wave 4b section says when one would earn it):
   a bridge of the pool and the heap allowed (§50.3.5, `wt_hhuge`), the
   heap's largest run left holding the ring, the look-ahead and 16 KB as the
   shipped build's test required - claimed once more past that run, so a
-  bridge, when the heap alone took it and left too little (XTMP3's
-  `x3h_huge`) - and every address in it is `apps/os88huge.inc`'s `hw_aim`
+  bridge, when the heap alone took it and left too little: `hw_claimfit`
+  (§50.3.8, KERN-MEGA-PLAN 14.177), XTMP3's and the Audio Player's hold
+  too, its retry at the next 32 KB past the run where WaveRack's own copy
+  went a whole 64 KB past it - and every address in it is
+  `apps/os88huge.inc`'s `hw_aim`
   (§50.3.8): `wt_hoff` answers the window AND its reach, so `wt_hget`'s
   caller takes no more frames than the window holds and comes back for the
   rest, and `wt_hput` converts a window at a time - no frame is written or
