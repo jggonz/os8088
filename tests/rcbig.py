@@ -49,9 +49,9 @@ def main():
     if mega:
         os.environ.setdefault("OS88_MEGA_EMU", "86box")
         os.environ.setdefault("OS88_MEGA_MEGS", "1.375")
-    for p in ["build/runcpm.o88", A0 + "/PIP.COM"] + \
-            [A0 + "/" + f for f, _ in FILES]:
-        os88fixture.need(p)
+    for p in ["build/runcpm.o88", "build/runcpm-src.stamp"]:
+        os88fixture.need(p)             # (the stamp is what puts A\0's
+                                        # files in build/runcpm-disk)
     RC = pkg_syms("apps/runcpm/runcpm.asm")
     td = tempfile.mkdtemp(prefix="rcbig-")
     fails = []
