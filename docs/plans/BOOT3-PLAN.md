@@ -1950,3 +1950,13 @@ both run inside `make`); `kzboot`, `kzboot-off`, `cylrun`, `splashbar`,
 `smallboot`, `hdboot`, `install`, `blobsum`, `fddpage`, `megacz` (soak);
 `bootsmoke`, `small128` (full).
 
+
+**Verifier round 1 (build, 2026-11-08).** Four stale texts fixed - the
+Makefile's knob/kern_emu/kern_mega and kern_small `KSIG_OFF` arms and
+kernel.asm's `BOOT2_SECS` knob paragraph still said "file sector 21", and
+`tools/os88ladder.py` still named boot2.asm as a `DPT_AT` definer after
+boot-7 - and one fact added: walked with `t_canary`'s own model over all eight
+system images, the live tail sectors intersect in exactly {57} (last of its
+band on 360KB/720KB, first on 1.44MB), so the new position has **no margin**.
+The Makefile's `KSIG_OFF` block and SPEC.md 18.93.1 now say so, and that the
+answer to a red `canary` row is a re-walked band, not a looser gate.

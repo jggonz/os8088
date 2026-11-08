@@ -1035,6 +1035,17 @@ BOOT2_PAD  := $(shell echo $$(( $(BOOT2_SECS) * 512 )))
 # is gone. kern_small (+1024 below) is 23552 and kern_mega and the knob arms
 # (-512) 22016: file sector 57 everywhere. t_canary now models the loader's
 # own cuts - head split, tail restart, the DMA page - per kernel.
+#
+# THERE IS NO MARGIN: 57 IS THE ONLY COMMON SECTOR (build, 2026-11-08). Walked
+# with t_canary's own model over all eight system images (the six shipped and
+# both of kern_mega's), the file sectors read after a flip of a run that began
+# before them intersect in exactly {57}: it is the LAST live sector of its band
+# on 360KB and 720KB (LBA 71 ends the run 54..71) and the FIRST on 1.44MB (LBA
+# 90 is the flip of the run 72..107). File sector 36, an earlier position, sat
+# mid-band with three sectors of margin; this has none. So a BPB that moves, a
+# change to KZ_HEADSEC, R or the DMA cut, or a blob length change on ANY one
+# kernel turns the `canary` row red - that is the gate working, and the answer is to re-walk the band and
+# move KSIG_OFF (here and in boot/boot2.asm), not to loosen t_canary.
 KSIG_OFF := 22528
 #
 # A PAYLOAD SHORTER THAN THE OFFSET DEFINES NO KSIG AT ALL, and that is the
@@ -2234,9 +2245,10 @@ BOOT2_XSEC := 1
 endif
 # ...and A SECTOR MORE OF BLOB, kernel.asm's BOOT2_KNOBSEC: a knob kernel
 # ships nowhere, so its boot may read one sector more where a shipped one's
-# may not (SPEC.md 2.5.3.3). KSIG_OFF moves one memory sector DOWN with it, so
-# the canary stays on FILE sector 21 - boot/boot2.asm's equ does the same
-# under KERN_KNOB, and the shipped literal above is what t_canary compares.
+# may not (SPEC.md 2.5.3.3). KSIG_OFF moves one memory sector DOWN with it
+# (22528 - 512 = 22016), so the canary stays on FILE sector 57 - boot/boot2.asm's
+# equ does the same under KERN_KNOB, and the shipped literal above is what
+# t_canary compares.
 # kern_emu TOOK the same sector (SPEC.md 9.11.2.1) for vmm_boot_x until kernel
 # size pass 14 gave kern_big a thirteenth for VESA.DRV's attach: both fit
 # thirteen, so kern_emu was on the literal with kern_big - and the same pass's
@@ -2261,8 +2273,9 @@ endif
 # ...and kern_small TWO SECTORS SHORTER than the literal: kernel.asm's
 # BOOT2_SMALLSEC. The twelfth sector is kern_big's boot copy of the adapter
 # switch and the thirteenth VESA.DRV's attach, and kern_small has no drv_boot to
-# carry either (kernel size passes 13 and 14), so it keeps the eleven - and the
-# 5120 - it had, file sector 21 either way.
+# carry either (kernel size passes 13 and 14), so it keeps the eleven it had,
+# and its KSIG_OFF sits two memory sectors higher (22528 + 1024 = 23552) so
+# the canary stays on file sector 57 with every other kernel.
 ifneq ($(KERN_SMALL),)
 BOOT2_SECS := $(shell echo $$(( $(BOOT2_SECS) - 2 )))
 BOOT2_PAD  := $(shell echo $$(( $(BOOT2_SECS) * 512 )))

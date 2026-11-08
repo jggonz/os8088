@@ -2093,7 +2093,7 @@ XM_MAX_BLKS equ 8               ; the pool's fixed block table, entries: a
 ; t_blobruns and kzboot all read the shipped figure off it, and the Makefile
 ; adds the knob's sector in the same block that defines KERN_KNOB, so the two
 ; cannot disagree. KSIG_OFF is derived from the total there, so the canary
-; stays on file sector 21 at either length.
+; stays on the same file sector (57 today) at either length.
 ; ...AND ELEVEN ON kern_emu (SPEC.md 9.11.2.1), for the knob's reason one step
 ; along: it is a shipped kernel, but only an emulator boots it - its probe is
 ; 386 code - so its stage 1 reading one sector more costs no period machine

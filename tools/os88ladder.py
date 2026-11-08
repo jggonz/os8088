@@ -162,7 +162,8 @@ def constants(build="build"):
                            "boot/boot.asm")
     c["DPT_AT"] = grab("boot/boot.asm", r"^DPT_AT\s+equ\s+(0x[0-9A-Fa-f]+)",
                        "DPT_AT - where the diskette parameter table is copied",
-                       "boot/boot.asm and boot/boot2.asm, which must agree")
+                       "boot/boot.asm, its only definer since boot-7 deleted "
+                       "stage 2's dead copy")
     c["KSIG_OFF"] = grab("boot/boot2.asm", r"^KSIG_OFF\s+equ\s+(\d+)",
                          "KSIG_OFF - SPEC.md 18.93.1's canary probe",
                          "boot/boot2.asm; the Makefile types the same number")

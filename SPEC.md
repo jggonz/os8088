@@ -38936,7 +38936,16 @@ The canary is **file sector 57** now (`KSIG_OFF` 22,528 on kern_big; the
 Makefile's arms carry the same file sector to every kernel), in the packed
 tail, read after a flip of a run that began before it on all six system disks
 (LBA 71, 71, 86, 90, 69, 69), and `t_canary` walks the loader's own cuts per
-kernel - head split, tail restart, DMA page - to say so.
+kernel - head split, tail restart, DMA page - to say so. **It has no margin**
+(build, 2026-11-08): over all eight system images, kern_mega's two included,
+the sectors read after a flip of a run that began before them intersect in
+exactly {57} - the last live sector of its band on 360KB and 720KB (LBA 71
+ends the run 54..71) and the first on 1.44MB (LBA 90 is the flip of 72..107),
+where file sector 36, an earlier position, sat mid-band with three sectors of
+margin. A BPB that moves, a change to
+`KZ_HEADSEC`, R or the DMA cut, or a blob length change on any one kernel turns
+the `canary` row red, and the answer is a re-walked band and a moved
+`KSIG_OFF`, never a looser gate.
 
 **What a missed canary costs is READS.** Cylinder runs are reads only
 (§18.91.3), so on a BIOS that flips at the wrong sector every crossing
