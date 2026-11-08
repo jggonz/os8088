@@ -19691,6 +19691,58 @@ SOAK = [
         needs=("86box",),
         wants=("build/mega.img", "build/megak/apps/pixel.o88",
                "build/megak/apps/pixel.map")),
+    Row("waverackhuge", "soak", py("tests/waverackhuge.py"), 60.0,
+        "SPEC.md 123.6 (MEGA-HUGE-PLAN 3): WaveRack's kern_mega arm HOLDS a "
+        "play in ONE OSAPI_MEM_HUGE claim, a bridge allowed, walked through "
+        "apps/os88huge.inc. 86Box's at286_vga_sb, 640K + 384K above 1MB, the "
+        "arm and a 640 KB 8-bit mono 44,100 Hz WAV on B: (a floppy cannot "
+        "stream it): wt_held, wt_hw a step of 8 and 640 KB, a bridge cut at "
+        "window 3; loaded whole and playing from it (wt_slow 0); every byte "
+        "of the hold, window by window, wrsim.hold_bytes(); Stop gives it "
+        "back, no exception charged. RED: the shipped WAVERACK.O88 "
+        "(mega-release's only build, --pkg --plain) - not held, 'Disk too "
+        "slow: gaps'. --find measures the largest held: 448 -> 640 KB here, "
+        "448 -> 3,328 KB at --megs 4 --force (309 s at 11,025 Hz). 60s is 41 measured",
+        needs=("86box", "nasm"),
+        wants=("build/mega.img", "build/megak/apps/waverack.o88",
+               "build/megak/apps/waverack.bin", "build/mbr.bin")),
+    Row("waverackmega-arm", "soak", py("tests/waverackmega.py", "--arm"), 60.0,
+        "waverackmega on kern_mega's own WaveRack ARM (build/megak/apps/, "
+        "PKG_MEGA, SPEC.md 123.6): PRELUDE.WAV held - the hold one huge "
+        "claim, above 1MB, its bytes wrsim.hold_bytes() read by its step - "
+        "and played to its end; every WHERE placement and the SLOT take as "
+        "the shipped build's leg. RED: as waverackmega's (the arm shares "
+        "every line but the hold's claim and walk). 60s is 45 measured",
+        needs=("86box", "nasm"),
+        wants=("build/mega.img", "build/megak/apps/waverack.o88",
+               "build/megak/apps/waverack.bin")),
+    Row("audhuge", "soak", py("tests/audhuge.py"), 40.0,
+        "SPEC.md 86.5.4 (MEGA-HUGE-PLAN 3): the Audio Player's kern_mega arm "
+        "HOLDS a WAV whole in ONE OSAPI_MEM_HUGE claim, a bridge allowed, and "
+        "plays it from memory. 86Box's at286_vga_sb, 640K + 384K above 1MB, "
+        "the arm and a 576 KB 8-bit WAV of an index pattern on B:, "
+        "double-clicked: aph_on, a step of 8 and its KB, a bridge cut at "
+        "window 3; every byte of the hold, window by window, the file's; "
+        "playing with its gulps COPIED (aph_ncopy, aph_ndisk 0, at most 2 "
+        "READ DATA in 4 s of play - the desktop's); Stop gives it back, no "
+        "exception. RED: the arm of "
+        "mega-release (--pkg/--src) - no hold, every gulp a floppy read. "
+        "--find: 0 -> 672 KB here, 0 -> 3,360 KB at --megs 4 (156 s at "
+        "22,050 Hz). 40s is 27 measured",
+        needs=("86box", "nasm"),
+        wants=("build/mega.img", "build/megak/apps/audio.o88",
+               "build/megak/apps/audio.bin", "build/mbr.bin")),
+    Row("megasbhold", "soak", py("tests/megasbgap.py", "--hold"), 45.0,
+        "megasbgap's clip HELD (SPEC.md 86.5.4, KERN-MEGA-PLAN 14.156's "
+        "concern retired for a file that fits): the 10 s 22,050 Hz WAV opened "
+        "through File > Open is read whole into the arm's hold first "
+        "(aph_on), and the play reads NO floppy and has no silence inside it "
+        "over 60 ms nor 120 ms in all (measured: none, 0 ms; streamed it is "
+        "90-150 ms and 290-530 ms). RED: --pkg the arm of mega-release - no "
+        "hold, 90-100 ms and 290-340 ms of silence. 45s is 28 measured",
+        needs=("86box", "numpy", "nasm"),
+        wants=("build/mega.img", "build/megak/apps/audio.o88",
+               "build/megak/apps/audio.bin", "build/megak/kernel.map")),
     Row("megacaps", "soak", py("tests/megacaps.py"), 60.0,
         "docs/plans/KERN-MEGA-PLAN.md 14.122, SPEC.md 41.8: "
         "OSAPI_XMEM_CAPS ANSWERS WHAT A CLAIM IS THEN GIVEN. kern_mega "
@@ -19846,10 +19898,12 @@ SOAK = [
         needs=("86box", "nasm"),
         wants=("build/megak/kernel.sys", "build/megak/boothd.bin", "build/hddtool.bin", "build/hdd.bin",
                "build/megak/ctrl.drv", "build/hdd.drv", "build/mbr.bin")),
-    Row("megasbgap", "soak", py("tests/megasbgap.py"), 25.0,
+    Row("megasbgap", "soak", py("tests/megasbgap.py"), 60.0,
         "docs/plans/KERN-MEGA-PLAN.md 14.156, 14.160: a 10 s 22,050 Hz 8-bit "
         "WAV in AUDIO from a scratch 1.44MB B: on 86Box's at286_vga_sb (the "
-        "mr286, a Sound Blaster 2.0), the card's DAC captured "
+        "mr286, a Sound Blaster 2.0), STREAMED - opened through File > Open "
+        "with the arm's [aph_off] set first, the case a file too big to hold "
+        "takes (SPEC.md 86.5.4; megasbhold is the held one) - the card's DAC captured "
         "($MARTYPC_WAV): the look-ahead ring, off its descriptor, is a pool "
         "block below 16MB with its 32 KB inside one 64KB page (the DMA "
         "door, 14.160), the floppy is read all through the play, and no "
@@ -19861,7 +19915,7 @@ SOAK = [
         "plain pool claim, crossed a page. RED, measured: --pkg an AUDIO arm "
         "with the plain claim - placement fails, 290/350 ms, 870/1,110 ms; "
         "14.156's base 540 ms, 3.57 s; OS88_MEGA_POKE='mega_fdgo.ss+0xD=9090' "
-        "500 ms, 'dsk_runcap.hi+0x10=9090' 450 ms. 25s is 22 measured",
+        "500 ms, 'dsk_runcap.hi+0x10=9090' 450 ms. 60s is 41 measured",
         needs=("86box", "numpy", "nasm"),
         wants=("build/mega.img", "build/megak/apps/audio.o88",
                "build/megak/apps/audio.bin", "build/megak/kernel.map")),

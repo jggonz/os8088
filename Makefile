@@ -6741,13 +6741,14 @@ $(BUILD)/wrart.inc: tools/os88wrart.py tools/os88wrlay.py tools/wrsim.py | $(BUI
 	python3 tools/os88wrart.py --selfcheck --quiet
 	python3 tools/os88wrart.py --out $@
 
-$(BUILD)/waverack.bin: apps/waverack/waverack.asm apps/waverack/wrdraw.inc \
-                       apps/waverack/wrface.inc apps/waverack/wrwav.inc \
-                       apps/waverack/wrdoc.inc apps/waverack/wrenv.inc \
-                       apps/waverack/wrxport.inc apps/waverack/wredit.inc \
-                       apps/waverack/wrsave.inc apps/waverack/wrrec.inc \
-                       $(BUILD)/wrart.inc apps/os88dec.inc apps/os88rseq.inc apps/os88data.inc \
-                       apps/os88api.inc apps/os88ui.inc | $(BUILD)
+WAVERACK_SRC := apps/waverack/waverack.asm apps/waverack/wrdraw.inc \
+                apps/waverack/wrface.inc apps/waverack/wrwav.inc \
+                apps/waverack/wrdoc.inc apps/waverack/wrenv.inc \
+                apps/waverack/wrxport.inc apps/waverack/wredit.inc \
+                apps/waverack/wrsave.inc apps/waverack/wrrec.inc \
+                $(BUILD)/wrart.inc apps/os88dec.inc apps/os88rseq.inc apps/os88data.inc \
+                apps/os88api.inc apps/os88ui.inc apps/os88huge.inc
+$(BUILD)/waverack.bin: $(WAVERACK_SRC) | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/waverack/ -I $(BUILD)/ \
 		-o $@ apps/waverack/waverack.asm
 	@echo "waverack: $(call FILESIZE,$@) bytes"
@@ -8706,6 +8707,7 @@ AUDIO_SRC := apps/audio/audio.asm apps/audio/apengine.inc \
              apps/audio/apwav.inc apps/audio/apdec.inc \
              apps/audio/apui.inc apps/audio/aplist.inc \
              apps/audio/apspk.inc apps/os88spk.inc apps/os88spkfx.inc \
+             apps/audio/aphold.inc apps/os88huge.inc \
              apps/os88rseq.inc \
              apps/os88spkfx_t.inc \
              apps/os88api.inc apps/os88ui.inc apps/os88type.inc
@@ -15721,7 +15723,7 @@ MEGAPKGS := $(MEGAAPPDIR)/video.o88 $(MEGAAPPDIR)/audio.o88 \
             $(MEGAAPPDIR)/pixel.o88 $(MEGAAPPDIR)/xtmp3.o88 \
             $(MEGAAPPDIR)/realdmg.o88 $(MEGAAPPDIR)/taskmgr.o88 \
             $(MEGAAPPDIR)/arcade.o88 $(MEGAAPPDIR)/win16.o88 \
-            $(MEGAAPPDIR)/sheet.o88
+            $(MEGAAPPDIR)/sheet.o88 $(MEGAAPPDIR)/waverack.o88
 MEGABASE = $(patsubst $(MEGAAPPDIR)/%,$(BUILD)/%,$(MEGAPKGS))
 # ...and the substitution, ONE IDIOM for every list a kern_mega disk names
 # (SMALLSUB's): the mega arm of any package that has one, everything else as
@@ -15771,6 +15773,18 @@ $(MEGAAPPDIR)/audio.bin: apps/audio/audio.asm $(AUDIO_SRC) apps/os88mega.inc | $
 	@echo "audio (PKG_MEGA): $(call FILESIZE,$@) bytes"
 $(MEGAAPPDIR)/audio.o88: $(MEGAAPPDIR)/audio.bin tools/os88pkg.py $(PKGZSTAMP) $(PKGZBSTAMP)
 	$(OS88PKGB) $(MEGAAPPDIR)/audio.bin -o $@
+
+# WaveRack's arm (SPEC.md 123.6, docs/plans/MEGA-HUGE-PLAN.md 3): the play's
+# HOLD as one OSAPI_MEM_HUGE claim walked through apps/os88huge.inc, a bridge
+# of the pool and the heap allowed - where the shipped build's is one
+# conventional claim, the heap's largest run alone
+$(MEGAAPPDIR)/waverack.bin: $(WAVERACK_SRC) apps/os88mega.inc | $(BUILD)
+	@mkdir -p $(MEGAAPPDIR)
+	$(NASM) -f bin -w+error $(STKLST) -I apps/ -I apps/waverack/ -I $(BUILD)/ \
+		-DPKG_MEGA -o $@ apps/waverack/waverack.asm
+	@echo "waverack (PKG_MEGA): $(call FILESIZE,$@) bytes"
+$(MEGAAPPDIR)/waverack.o88: $(MEGAAPPDIR)/waverack.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(MEGAAPPDIR)/waverack.bin -o $@
 
 $(MEGAAPPDIR)/tracker.bin: apps/tracker/tracker.asm apps/tracker/trkplay.inc \
                            apps/tracker/trkui.inc apps/tracker/trktxt.inc \

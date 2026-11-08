@@ -232,6 +232,9 @@ ap_free_ring:
 .out:
     ret
 
+%ifdef PKG_MEGA                     ; kern_mega's arm: a gulp of a file
+%define AP_RSEQ aph_rseq            ; HELD WHOLE is a copy out of the hold,
+%endif                              ; any other the disk's (aphold.inc)
 %define APLOOK_REFILL               ; ap_refill_chunk
 %include "aplook.inc"
 %undef APLOOK_REFILL
@@ -275,6 +278,11 @@ ap_open_track:
     mov word [ap_msg], ap_s_opening
 
     call ap_stream_close          ; a clean slate (drains the worker)
+%ifdef PKG_MEGA
+    call aph_begin                ; kern_mega's arm: CF = 1 the file is
+    cmc                           ; LOADING into the hold, and ap_onwake
+    jnc .out                      ; opens it when it is in (aphold.inc)
+%endif
     call ap_prep_track            ; the file parsed and the look-ahead primed
     jc .refuse                    ; (ap_msg says why)
     call OSAPI_SND_CAPS           ; THE TIER NOW, not at launch: the
@@ -744,6 +752,9 @@ ap_cmd_stop:
     call ap_stream_close
     mov ax, ap_s_stopped
 ap_stop_msg:                      ; AX = what the status line says
+%ifdef PKG_MEGA
+    call aph_free                 ; Stop, and the list's end: the hold back
+%endif
     mov [ap_msg], ax
     mov byte [ap_state], AP_ST_STOP ; (the clock and the bar: ap_stream_close)
     ret

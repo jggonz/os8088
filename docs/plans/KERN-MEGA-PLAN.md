@@ -15624,3 +15624,101 @@ huge claim's pool piece and the conventional piece is a real segment - then
 the engine's hold is one `HUGE` claim walked by two kinds of address. Either
 is a design decision (where the 1408K machine's conventional memory goes
 between the rings and the hold), so it is written here rather than built.
+
+### 14.173 WaveRack's play hold and a whole-file hold for the Audio Player, each one huge claim on kern_mega's arm (2026-11-08) - FIXED
+
+MEGA-HUGE-PLAN step 4's second round of adopters: the two sound-file holds.
+No kernel byte - two package arms, one of them new.
+
+**WaveRack** (SPEC.md 123.6, 123.13): the play's HOLD - the region loaded
+one byte a frame when the medium cannot keep up - was one conventional
+claim under a bound window on every kernel, so on kern_mega it was the
+heap's largest run alone. WaveRack now has a `PKG_MEGA` arm in
+`$(MEGAPKGS)` (`$(MEGAAPPDIR)/waverack.o88`, on `megaapps.img` /
+`megaapps120.img` by the existing `MEGASUB`), and that arm's one difference
+is the hold: `wt_hhuge` claims it through `apps/os88huge.inc`'s `hw_claim`
+(BX = 0, a bridge allowed), the heap's largest run left holding the ring,
+the look-ahead and `WT_HMARGKB` as the shipped test did, and - where the
+kernel put it in the heap alone short of that - once more past the heap's
+largest run (XTMP3's `x3h_huge`); its conventional part declared movable
+with `wr_ret`. `wt_hoff` is `hw_aim`: ES:DI and the REACH in that window,
+the 64KB-from-ES:DI promise it made (`DI < 16` by the paragraph sum, or a
+re-aimed bound window) being one no window of a bridge can keep. Its two
+callers split at window ends: `wt_rd1` takes the frames `wt_hget` says the
+window holds and comes back for the rest (it already looped by
+`wt_refill`), and `wt_hput` converts a window at a time (the conversion one
+macro, `WT_HCONV`, expanded inline in the shipped build and as `wt_hcv` in
+the arm). The 1 MB paragraph limit and the CPU test go (kern_mega runs on a
+286 or later, where `wt_cshare` is 0); `wt_hbwin` and `wt_hwin` are the
+shipped build's. The I/O claim stays conventional (14.159's `MEMP_CONV`) and
+the rings as 14.160 left them.
+
+**The Audio Player** (SPEC.md 86.5.4, `apps/audio/aphold.inc`, its arm
+only): a WAV the machine can hold is read WHOLE before it plays and the play
+reads no disk - XTMP3's shape (SPEC.md 121.6.1). `ap_open_track` asks
+`aph_begin` first; a file not held is claimed (one huge claim, rounded to 32
+KB, the heap keeping `APH_MARGKB` = 96 KB, the forced-bridge retry, the
+look-ahead claimed before it so it keeps 14.160's page-safe pool block) and
+loaded by `ap_onwake` passes - 32 KB `hw_fread`s for two ticks, `Loading
+42%` on the status line alone, a self-wake for the next - then the track
+opens as ever, its gulps `hw_get` copies through the existing `AP_RSEQ` hook
+(`aph_rseq`). The key is the folder, volume and name; Stop, the list's end,
+Clear playlist and any other file free it; a failed load streams that file
+once. A file it cannot hold streams through 14.160's look-ahead unchanged,
+which retires 14.156's floppy-gap concern for every file that fits;
+`[aph_off]` = 1 streams every file (megasbgap's streamed case, below).
+
+**Measured** on 86Box's at286_vga_sb, `--find` to 32 KB (the shipped
+WAVERACK.O88 and mega-release's AUDIO arm against these; WaveRack's region
+is one byte a frame, 44,100 Hz 8-bit mono off B: - at 4MB off a C: with
+the medium poked slow, a fixed disk streaming it):
+
+| machine | WaveRack, largest region held | Audio, largest WAV held whole |
+|---|---|---|
+| 640K + 384K above 1MB | 448 -> **640 KB** (42 -> 59 s at 11,025 Hz), bridged at window 3 | none -> **672 KB** (31 s at 22,050 Hz, 62 s at 11,025), bridged at window 3 |
+| 4MB | 448 -> **3,328 KB** (42 s -> 5 min 9 s at 11,025 Hz), bridged at window 45 | none -> **3,360 KB** (156 s at 22,050 Hz, 5 min 12 s at 11,025), bridged at window 45 |
+
+The survey's 1 / 2 / 5 minutes at 11 kHz: 1 minute and 5 minutes measured
+(2MB not run). `megasbhold`: megasbgap's 10 s 22,050 Hz clip held, the play
+reading no floppy, no silence inside it (streamed, the same tree: 150 ms
+longest, 510 ms in all; mega-release's arm, held for nothing: 90-100 ms,
+290-340 ms).
+
+**Bytes.** No kernel byte: kern_big, kern_small and kern_mega unchanged. The
+SHIPPED builds byte-identical (`build/waverack.bin`, `build/audio.bin` and
+their `.o88` `cmp` equal to mega-release's), so no kern_big row can see
+this. The arms: WaveRack (new) image 43,955 -> 44,157 (+202: the walker's
+claim and aim 183, `wt_hhuge` and the window-split loops, less `wt_hbwin`
+and the sums), packed 33,776 -> 33,949, bss 7,779 -> 7,792; Audio image
+13,247 -> 14,509 (+1,262: the walker's claim, aim, copy and file read 343,
+`aph_begin`/`_claim`/`_tick`/`_read1`/`_text`/`_rseq`), packed 9,469 ->
+10,455, bss 5,633 -> 5,719.
+
+**Rows.** `waverackhuge` (RED: the shipped package, not held, 'Disk too
+slow: gaps'), `waverackmega-arm` (`waverackmega` on the arm), `audhuge`
+(RED: mega-release's arm, no hold), `megasbhold` (RED: mega-release's arm,
+not held, 90-100 ms / 290-340 ms of silence against 60 / 120), and `megasbgap`
+now opens its clip through File > Open with `[aph_off]` set - the streamed
+case - where a double-click would now hold it.
+
+**Found by the scoped pass, and fixed before it.** `megajw` went red on the
+first build: the Audio Player's look-ahead at 108000h, 32K free under it and
+206K over, and XT-MP3's one-block hold refused. `aph_begin` had declared the
+look-ahead movable (`ap_rdecl`) before claiming the hold, so the claim's pack
+of the pool moved it off the floor - 14.166's rule broken by the order of two
+calls. The look-ahead now stays pinned across the claim and is declared
+after it, and both holds ask first (`OSAPI_MEM_HUGE` AX = 0, BX = 0): a
+region or a file the machine cannot hold costs no claim and no pack at all.
+`tests/pins.txt` registers the two asks (X, not a claim) and drops
+`wt_hseg`'s line - the arm declares the hold's conventional piece; the
+shipped build's hold is still pinned, as it was (its `wt_hoff` sums or
+re-aims a bound window, and a proc would cost shipped bytes - left).
+
+**Scoped pass** (`os88test.py soak -k`, all green at the commit): `megajw`,
+`mega-ringmove-audio`, `mega-audhand`, `waverackmega`, `waverackmega-arm`,
+`waverackhuge`, `audhuge`, `megasbgap`, `megasbhold`; `pins` (t_pins.py,
+full tier) green. NOT run, by the build: every kern_big and kern_small row
+(`waverack`, `waverackplay`, `waverackedit`, `waverackdisk`, `waverackrec`,
+`audhand`, `ringmove-audio`, `ringmove-audiospk`) - the shipped WAVERACK and
+AUDIO are byte-identical to mega-release's, so those rows would boot the
+same bytes.

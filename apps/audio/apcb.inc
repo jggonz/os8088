@@ -248,6 +248,9 @@ ap_oncmd:                          ; AL = item, AH = menu; SI = window
     cmp al, AP_CMD_CLEAR
     jne .n_clear
     call ap_stream_close
+%ifdef PKG_MEGA
+    call aph_free                   ; (kern_mega's arm: its hold too)
+%endif
     call apl_clear
     mov byte [ap_state], AP_ST_STOP
     mov word [ap_msg], ap_s_ready
@@ -303,6 +306,14 @@ ap_onwake:                         ; SI = window
     call ap_lrepaint
 .no_first:
 
+%ifdef PKG_MEGA
+    ; 0b. kern_mega's arm: a file loading into the hold - a pass of it, and
+    ;     the track opened once it is in (aphold.inc)
+    cmp byte [aph_load], 0
+    je .noload
+    call aph_tick
+.noload:
+%endif
     ; 1. the disk-refill handshake (time-critical: do it first)
     cmp byte [ap_req], FR_READ
     jne .norefill
