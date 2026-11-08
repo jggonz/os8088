@@ -3629,7 +3629,7 @@ each with a fixture that must fail it on every run:
 | B5 | a `cs:` read in `.boot3` of a label outside it, and a blob label carried as an immediate (`; ovlchk: B5 blob offset - why` excuses one) |
 | B6 | a `KZ_*`, `b2_*` or post-`boot2_entry` name in `.boot3` (§2.9.13.4's identity), and a `B3CALL` after `drv_boot_x` to a body that reaches `.ovl` |
 | B7 | `.boot3` in a file `kerndos/kdos.asm` includes, unless `kerndos/kdlayout.inc` declares it |
-| B8 | `B3CALL` at a non-`.boot3` target or with the other fallback word, `B2CALL` outside `.boot3` or at a non-blob target, either macro outside `kernel/` |
+| B8 | `B3CALL` at a non-`.boot3` target or with the other fallback word, `B2CALL` outside `.boot3` or at a non-blob target, either macro outside `kernel/` - a site written inside a `%macro` body judged at each expansion |
 | B9 | any transfer into `.boot3m`, which is copied and never run in place (BOOT3-PLAN wave 5) |
 
 The kernel's own guards (boot3.inc, kernel.asm): `b3_live - $$ >=

@@ -2302,33 +2302,41 @@ def boot3_rules(kfiles, root='.'):
         else:
             b3own = None
         # --- B8: the macros' arms agree, and only the kernel uses them ----
-        if not ex and ('B3CALL' in line or 'B2CALL' in line or
-                       'B3SECT' in line):
+        # A site written inside a %macro body is never a written line: the
+        # stream gives it only as an expansion, `ex` naming the macro, and
+        # VSW_SWITCH's and CFG_BOOT's B3CALLs are two of those. So B8 reads
+        # expansions too - all but the three macros' OWN bodies, whose arms
+        # (`call B3_SEG:%1`, `OVLCALL %1`) are not call sites
+        if ex not in ('B3CALL', 'B2CALL', 'B3SECT') and \
+                ('B3CALL' in line or 'B2CALL' in line or 'B3SECT' in line):
+            inmac = (" (written inside %%macro %s, expanded here)" % ex
+                     if ex else '')
             m = B3CALL_RE.match(line)
             if m:
                 t, k = m.group(1), m.group(2) or ''
                 if where.get(t) != '.boot3':
                     if t not in b3mlabs:
                         bad.append(('B8', f, n, "B3CALL %s, but %s is in %s, "
-                                    "not `.boot3`" % (t, t, where.get(
-                                        t, 'no section'))))
+                                    "not `.boot3`%s" % (t, t, where.get(
+                                        t, 'no section'), inmac)))
                 elif kind.get(t, '') != k:
                     bad.append(('B8', f, n, "B3CALL %s%s, but its body is "
                                 "under `B3SECT%s` - the two fallback arms "
-                                "disagree" % (t, ', ' + k if k else '',
-                                              ' ' + kind[t] if kind.get(t)
-                                              else '')))
+                                "disagree%s" % (t, ', ' + k if k else '',
+                                                ' ' + kind[t] if kind.get(t)
+                                                else '', inmac)))
             m = B2CALL_RE.match(line)
             if m:
                 if sect != '.boot3':
-                    bad.append(('B8', f, n, "B2CALL outside `.boot3`"))
+                    bad.append(('B8', f, n, "B2CALL outside `.boot3`%s"
+                                % inmac))
                 elif where.get(m.group(1)) not in blobish:
                     bad.append(('B8', f, n, "B2CALL %s, but it is not in the "
-                                "blob" % m.group(1)))
+                                "blob%s" % (m.group(1), inmac)))
             if not f.startswith('kernel/') and \
                     re.match(r'^\s*(?:B3SECT|B3CALL|B2CALL)\b', line):
                 bad.append(('B8', f, n, "the `.boot3` macros are the kernel "
-                            "assembly's; %s is outside it" % f))
+                            "assembly's; %s is outside it%s" % (f, inmac)))
         # --- B9: `.boot3m` is copied, never run in place ------------------
         if b3mlabs and ex not in B3ENTRY:
             m = OTHERCALL.match(line)
@@ -2458,6 +2466,11 @@ B3_FIXTURES = [
     ('B8', {'kernel/m.inc': "section .boot2\nb_m:\n    B3CALL blob_e\n"
                             "    retf\nsection .text\n"}),
     ('B8', {'kernel/m.inc': "section .text\nt_m:\n    B2CALL blob_e\n"}),
+    # a site written inside a %macro body, expanded in `.boot2`: the stream
+    # gives it only as an expansion (VSW_SWITCH's and CFG_BOOT's shape)
+    ('B8', {'kernel/m.inc': "%macro M_B8 0\n    B3CALL b3_x, ovl\n"
+                            "%endmacro\nsection .boot2\nb_m:\n    M_B8\n"
+                            "    retf\nsection .text\n"}),
     ('B9', {'kernel/i.inc': "section .boot3m\nb3m_e:\n    retf\n"
                             "section .boot2\nb_i:\n    jmp b3m_e\n"
                             "    B3CALL b3m_e\n    retf\nsection .text\n"}),

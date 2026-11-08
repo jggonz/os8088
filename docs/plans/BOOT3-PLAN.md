@@ -1664,7 +1664,7 @@ kern_small 60,928 and 63,488; kern_mega's arena 509,952 at 640KB.
    `%ifidn` on a macro's known arguments (VSW_SWITCH's `.boot3` call is
    `bvs`'s alone; CTRL.DRV expands it as `vid`), and keeps every arm of any
    other condition.
-7. **The fixtures run inside `os88ovlchk` on every invocation** (17 trees,
+7. **The fixtures run inside `os88ovlchk` on every invocation** (18 trees,
    ~0.02 s), not as a row: a rule whose fixture stops failing fails `make`.
    The rules cost ~0.45 s, paid back by a `%` byte test in front of the
    eighteen loops' macro regexes, so the tool's CPU is unchanged (4.3 s
@@ -1703,6 +1703,17 @@ kern_small 60,928 and 63,488; kern_mega's arena 509,952 at 640KB.
     `vid_ctx_capture` row and `CFGN_STAGE`'s), now `.boot3`; and B1-B9's
     reports are de-duplicated - a site inside a macro expanded on every pass
     was reported once per pass.
+15. **Rule B8 reads macro expansions, not only written lines** (verifier
+    round 2). A `B3CALL` written inside a `%macro` body is never a written
+    line - the stream gives it only as an expansion - so the written-lines
+    test let two of today's four sites (`cfx_ctxcap` in VSW_SWITCH,
+    `cfx_cfgname` in CFG_BOOT) carry the wrong fallback word unrefused,
+    which from wave 1 assembles kern_small's or kern_mega's fallback into
+    the wrong home. B8 now reads every expanded line but the B3CALL,
+    B2CALL and B3SECT macros' own bodies, and reports at the expansion
+    line naming the macro; an eighteenth fixture is a `B3CALL ..., ovl`
+    inside a macro expanded in `.boot2`. Broken on purpose at both real
+    sites: each now fails B8 (each passed before).
 
 
 **Found on the way, not this wave's to fix.** `build/mega.img` and
