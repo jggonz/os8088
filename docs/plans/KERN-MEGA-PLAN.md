@@ -15090,7 +15090,30 @@ answer within 8K of the pool's free KB in whole windows plus the heap's less
 its reserve, the claim granted and read back and one KB more refused, and the
 hold granted. **RED** on the tree before, measured: the pool ring at 105C00
 (23K / 217K), SOUND.DRV's at 25800 (86K / 474K), 602K where 688K is free,
-the hold refused. **GREEN** after, 15 s.
+the hold refused. **GREEN** after, 15 s - and again after the 14.167 merge,
+with the 9KB landing at 10000.
+
+**Rows run, scoped, on the merged tree** (`os88soak.py start`, 42 rows, one
+pass): green - `megajw`, `hdbounce`, `waverackmega`, `mega-recorder`,
+`mega-midiracksb`, `mega-midiracksbmem`, `mega-audhand`, `mega-mixersb16`,
+`mega-dossnd`, `x3mega`, `x3live386`, `megapixel`, `mega-ringmove-audio`,
+`mega-ringmove-midirack`, `mega-ringmove-tracker`, `mega-sndmove`,
+`mega-trackmove`, `mega-rdmove`, `mega-sheetmove`, `mega-paintmove`,
+`mega-heapmap`, `mega-heaphi`, `mega-heapcheck`, `mega-editmove`,
+`mega-heapdrv`, `megaxmove`, `megahuge`, `megacaps`, `megashed`, `megaown`,
+`megarehome`, `mega-drvmove`, `megahma`, `megadosp`, `megadosroom`,
+`megakbtrip`, `megahiber`, `megahibfull`, `megap2hiber`, `megatrap0`.
+`mega-vidsound` failed in the lane for want of MartyPC's VHD template in the
+worktree (`os88hdd.py --template`), not a guest answer; green alone with it.
+`megasbgap` (86Box, real time) went 730 ms against its 700 ms bar in the
+loaded lane and 700 ms alone; three more runs alone 540, 310 and 360 ms,
+the merged tree before this change 650 and 540 - the same silences in the
+same places, its ring at 100000 now (the floor) where it was at 3C8000. A
+bar inside its own spread on a shared box, not a regression of placement;
+named for the final pass. `x3mega` failed once in the first pass (before the
+merge: the converted WAV byte-exact, its play not started in time) and
+passed in the second. kern_big's heap rows were not run: kern_big is
+byte-identical.
 
 ### 14.167 A fixed-disk read into a claim moved ONE SECTOR A CALL through HDD.DRV, and nine through the kernel's BIOS path: a driver that takes a selector says so (`BLKCAP_SEL`), the landing is 18 sectors and comes back when shed (2026-11-08) - FIXED
 
