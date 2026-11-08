@@ -129405,6 +129405,43 @@ the network cases through QEMU/NE2000 for correctness and the local fixtures
 through MartyPC or 86Box for 8088 responsiveness; QEMU provides no timing
 claim.
 
+#### 71.18.2 kern_mega — the source and the document in huge claims
+
+On kern_mega in protected mode (`[br_mega]`) the SOURCE and the formatted
+DOCUMENT are `OSAPI_MEM_HUGE` claims (`br_hclaim`, docs/plans/MEGA-HUGE-PLAN.md
+3) of ONE RUN, `HUGE_NOBRIDGE`: above 1MB where the pool holds them, at any
+size, and regrown there; the heap's when it cannot - the claim and its regrow
+alike (§50.3.5's THE REGROW: a run the pool cannot hold any more is claimed
+again in the heap and copied). The line table, the link arena and the
+download buffer stay the KB doors' (64KB or less: above 1MB already, as
+`OS88_HIGHMEM` gives every such claim). Every real-mode kernel's path, the
+8088's included, is the KB doors' as it was: the test is one compare.
+
+**Never a bridge**, and that is measured rather than assumed: every window
+that reads these claims is one piece's - `br_bwaim`'s bound window re-aimed by
+`SEG_AIM`, which refuses an offset past its block, and `br_at`'s `SEG_AT`,
+whose reach stops at a cut - and their callers count on 32-48 KiB of reach
+from the aimed byte (the parser's source window, `br_docmap`'s 16 KiB page
+and the three after it). A bridge would make every one of those aims split
+at the cut. And it would buy nothing here: the page is TWO buffers, so with
+each one run the pool and the heap together are still what they can hold -
+the source in one region, the document in the other.
+
+**The reserve counts both regions** (`br_avail`): the 20% of §71.18 is taken
+of `OSAPI_MEM_HUGE`'s `MEMH_AVAIL` total (the heap's free KB plus the pool's)
+at the start of a load, and every growth decision asks it again; the Download
+Manager's check (§71.20) asks the same. On every other kernel `br_avail` is
+`OSAPI_MEM_AVAIL`.
+
+The 16-bit offset ceilings of §71.18.1 are unchanged (`BR_DOCMAX`, the line
+table's `BR_LINEKB` records): what changes on kern_mega is the memory under
+them. Before this the two claims went down to the conventional heap past
+64KB, so a page whose source and stream together passed about 80% of the
+heap's free KB was cut short on every kern_mega machine, whatever it had
+above 1MB. `tests/brhuge.py` (`brhuge`, Bochs at 16MB) is the gate: a 331KB
+page of 5,001 lines, read off B: whole and laid out whole, both claims above
+1MB.
+
 ### 71.20 Browser 1.6b — streamed downloads and the Download Manager
 
 Downloads are a separate sink from the retained page source. Saving a link
@@ -214384,6 +214421,32 @@ Nothing was added to the worker, the sequencer, the synth or the mixer:
 identical at even shifts (a `PARITY` pad byte after `mro_close` holds them
 there). +92 bytes of image, no bss. `tests/ringmove.py --app midirack` is the
 gate, on the synthetic bank `make mrwttest` writes.
+
+#### 105.10.2 kern_mega's arm: the bank in one huge claim
+
+On the kern_mega arm (`PKG_MEGA`, §20.18) `mwt_load` claims the bank with
+`OSAPI_MEM_HUGE`, BX = 8000h (docs/plans/MEGA-HUGE-PLAN.md 3): a window every
+32KB, each 64KB long, cut at the claim's end - which is `mwt_win`'s own shape,
+so with BX answered 0 and the step 8 `mwt_wins` takes window w as the run's
+selector w (`[mwt_bseg]` + 8w, `[mwt_run]`) and asks no `SEG_SUB` and spends
+no LDT entry for it. Above 1MB where the pool holds it, the heap's run of the
+same shape otherwise (§50.3.5); such a claim never bridges (its windows
+overlap), never regrows (the bank never does), and moves 64KB at a time with
+the selectors following, so the voices' window selectors (`mwt_sseg`) stay
+right across a move and `mwt_pin`'s declaration on a pool claim is the
+harmless refusal it is for every pool block. In real mode (the step 1000h,
+BX kept) the SUBs are as they were. Before it a bank over 64KB was an
+`OSAPI_MEM_CLAIM` and so CONVENTIONAL on every kern_mega machine: a 200KB
+bank was 200KB of the ~560KB heap, and up to `mwt_info`'s 640KB ceiling
+(kept: no bigger bank is built) it can all be pool memory now. The shipped
+build is unchanged.
+
+`midirackwtbig` (the 5150, the shipped build) and `mega-midirackwtbig`
+(86Box 640K + 384K, the arm) play the padded synthetic bank
+(`tools/os88midbank.py synth --pad 192`: 192KB of silent samples first, so
+every sample a voice plays lies past the bank's first 64KB) and hold the
+capture's pitch classes to the reference; on the arm the bank is asserted
+ABOVE 1MB.
 
 ### 105.11 Tests
 

@@ -456,6 +456,16 @@ X apps/browser/browser.asm @br_claim     # a CLAIM WRAPPER this scan cannot see
                                          # the call, SPEC.md 71.14.1): every caller
                                          # stores DX in a word br_reloc names and
                                          # declares it with br_movable at once
+X apps/browser/browser.asm @br_hclaim    # br_claim's kern_mega twin (SPEC.md
+                                         # 71.18.2): OSAPI_MEM_HUGE of one run for
+                                         # the source and the document, the page
+                                         # claims unpinned after it as br_claim's
+                                         # are; its two callers store DX in a word
+                                         # br_reloc names and declare it with
+                                         # br_movable at once
+X apps/browser/browser.asm @br_avail     # NOT A CLAIM: OSAPI_MEM_HUGE with AX = 0,
+                                         # MEMH_AVAIL - the reserve's free total
+                                         # with the pool counted (SPEC.md 71.18.2)
 X apps/frotz/zio.inc @zi_room           # NOT A CLAIM: OSAPI_MEM_HUGE with AX = 0 is
                                          # the cell's ASK (MEMH_AVAIL, or the 32KB-
                                          # window shape), which claims nothing; the

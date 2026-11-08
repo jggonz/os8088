@@ -5862,6 +5862,18 @@ SOAK = [
         "tritone-transposed reference as the negative control",
         needs=("marty", "nasm"), serial=True,
         wants=("build/os8088-720.img", "build/mrwt720.img")),
+    Row("midirackwtbig", "soak", py("tests/midirack.py", "--arm", "wt",
+                                    "--bigbank", "192"), 60.0,
+        "SPEC.md 105.10.2: the wavetable with tools/os88midbank.py's synthetic "
+        "bank PADDED by 192KB of silent samples first (199 KB), so every "
+        "sample a voice plays lies past the bank's first 64KB and is read "
+        "through the bank's later 32KB windows; 10 of 10 half-seconds against "
+        "the reference, the tritone control 0. Its kern_mega port "
+        "(tests/megaport.txt) asserts the arm's huge claim ABOVE 1MB - red "
+        "on the arm before, measured: the 199 KB bank CONVENTIONAL, at "
+        "012400h",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088-720.img", "build/midirack.o88")),
     Row("mrdraw", "soak", py("tests/mrdraw.py"), 50.0,
         "MIDIRack's redraw, priced in drawing calls (SPEC.md 105.9.4): every "
         "far call into a drawing cell of the API table, per gesture, told "
@@ -21461,6 +21473,19 @@ SOAK = [
         needs=("qemu",), serial=True,
         wants=("build/brtest360.img", "build/ether360.img", "build/browser.o88"),
         locks=("port:8090",)),
+    Row("brhuge", "soak", py("tests/brhuge.py"), 50.0,
+        "SPEC.md 71.18.2 (MEGA-HUGE-PLAN 3, the Browser): A PAGE LARGER THAN "
+        "kern_mega's CAP OF BEFORE, WHOLE. Bochs at 16MB: DOCHUGE.HTM, 5,000 "
+        "rows in a <pre> (325,086 bytes, a 325,036-byte stream, 5,011 lines), "
+        "opened off B: - the source and the document both OSAPI_MEM_HUGE "
+        "claims above 1MB, the page not cut, the stream's tail read by its "
+        "descriptor holding the end marker, End painting it. RED on the tree "
+        "before, measured: the source a conventional claim, the document "
+        "stopped at 7 KB against the conventional reserve (br_trunc 1, "
+        "br_docfull 1, 102 lines). 50s is 32 measured",
+        needs=("bochs",),
+        wants=("build/mega.img", "build/megak/kernel.map",
+               "build/browser.o88")),
     Row("brmega", "soak", py("tests/brmega.py"), 60.0,
         "KERN-MEGA-MEMORY-PLAN MC7, SPEC.md 71.18: the Browser's document, "
         "line table and source past 64KB under kern_mega, where every claim "
