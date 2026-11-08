@@ -14953,6 +14953,168 @@ a SKIP without win16ref, as `pm` and `sol` are); and no leg may take an
 none on any leg, "MDI OK", lz/pm/sol as 14.164 measured (0 and 123, 0, up).
 Five legs at once, 77 s.
 
+### 14.166 A pinned block in the middle of a heap: the pool's DMA rings from the floor, a conventional ring at the top end (2026-11-08) - FIXED, and one case left for the owner
+
+**The owner's requirement (2026-11-08).** *"Ram is ram for protected mode, so
+if it gets pushed down into conv that is fine, but in general we don't want
+to blockade the available space with something in the middle ... if someone
+wants to play an mp3, we don't want to end up with '200k high, then a block,
+then 550k low' or somesuch, and prevent them from loading a 600k file. In
+general, we want mega to 'just work'."* On kern_mega a claim over 64KB is a
+run of selectors that can bridge one CONTIGUOUS piece in the pool and one in
+the conventional heap (`OSAPI_MEM_HUGE`, `mega_hugebf`), and each region
+packs its movable blocks before refusing - so the largest claim is decided
+by where the PINNED blocks stand, and one in the middle of either region
+cuts it in two.
+
+**Measured** (86Box's at286_vga_sb, the mr286 with a Sound Blaster;
+`tests/megajw.py`'s session and its scratch `session2.py` twin: Sheet opened,
+a WAV opened in the Audio Player and PAUSED - a pause is a play, so its
+rings stay pinned - Sheet closed; MEGAJW, `tests/megajw`, then asks
+`OSAPI_XMEM_CAPS`, `OSAPI_MEM_AVAIL` and `OSAPI_MEM_HUGE` with AX = 0, claims
+the answer, and asks for XT-MP3's hold - one `OSAPI_XMEM_ALLOC` of every KB
+CAPS says is free, SPEC.md 121.6.1):
+
+| machine (mem_size) | free: pool + heap | one claim, before | after | XT-MP3's hold, before / after |
+|---|---|---|---|---|
+| 640K + 384K above 1MB (1408) | 239 + 560 = 799K | **602K** | **688K** | refused / granted |
+| 2MB (2048) | 879 + 560 = 1,439K | 986K | 1,328K | refused / granted |
+| 4MB (4096) | 2,926 + 560 = 3,486K | 3,034K | 3,376K | refused / granted |
+| 1MB, no extended memory (1024) | 0 + 420 = 420K | 271K | 271K | (no pool) |
+
+After the fix the whole gap is the bridge's two losses by design (SPEC.md
+50.3.5): the heap's 64KB reserve, and the pool's piece cut to whole 64KB
+windows (46-47KB here). The machine at boot, nothing open, was already
+right: 768K of 832K (1408), 487K of 487K (1024).
+
+**The blockers, every one found** (`tests/megajw.py` prints the maps; the
+scratch twin read every step):
+
+| region | block | where it stood, before | why it was pinned | what happened to it |
+|---|---|---|---|---|
+| pool | the Audio Player's look-ahead, 32KB, a DMA door's block (14.160) | 105C00 on 1408 (23K free under it, 217K over it); 198000 on 2MB (608K / 272K); 398000 on 4MB (2,656K / 271K) | born `MX_FPIN`, pinned for a play: the chip and every refill's ES:BX | **FROM THE FLOOR UP** (`mx_alloc .bot`): 100000 on every machine |
+| conventional | SOUND.DRV's staging pool, 16KB, `OSAPI_MEM_P` with the whole pool its head | 25800 on every machine with a pool (86K free under it - what Sheet's spill had held - 474K over it) | pinned while the card plays out of it (SPEC.md 34.5.2) | **AT THE TOP END** (`mem_ringtop`): 9C000..A0000 |
+| conventional | the Audio Player's look-ahead when the pool is full (1408 with Sheet, Paint and Note Pad open: 50000, 95.5K under it) | the same, a conventional ring | the same | top end when free for it, else as before |
+| conventional | the read-ahead's landing, 4.5KB then (9KB since 14.167), page-safe | 10000, the floor, at the boot - and since 14.167 re-taken mid-session by `dsk_bnc_want` when it was shed, on the fill point | page-safe is pinned (`dsk_rah_land`); a cache, which every claim sheds and every planner counts as free | **kept bottom-up**, deliberately: it is a CACHE, which every claim sheds and every planner (mem_avail's walk, the compactor's) dissolves, so a re-take on the fill point cuts nothing a claim can have - the stretches the row reads count it free. Tried at the top end (`mem_ringtop` taking it): at the boot it went to 9DC00..A0000, SOUND.DRV's ring stacked under it, and once shed its 9KB stood above the ring - the one claim 679K where 688K is the answer. `dsk_rah_land` unchanged |
+| conventional | window save-unders, the menu's, the icon store, when the pool is full (FB10/FB12/FB13, pinned caches) | in the bottom stack | caches | kept: dissolved by the shed, counted free by mem_avail |
+| conventional | `MEM_K_MTBL`, the tables of a machine with no extended memory, 12KB | 9B800, under one 6KB driver image | pinned | kept: at the top end but for that image (HEAP-CLAIMS.md's K3) |
+| conventional, no pool | the rings on a machine with NO extended memory: the Audio Player's 32KB at 65400, SOUND.DRV's 16KB at 70000 | 271K under, 139.5K over | pinned while playing | **NOT FIXED** - below, for the owner |
+
+**The pool: a pinned block from the floor up** (SPEC.md 50.6.10). Every pool
+block is taken top-down and packs UP, so the free KB are one run from the
+floor; a DMA door's block, born pinned, was the one exception taken the same
+way, and so landed UNDER every block taken before it - whose frees then
+stood above it as a run of their own. `mx_alloc` now takes a block it will
+pin first fit UPWARD from `[mega_mxflr]`: a head that would straddle a 64KB
+page goes to the next page's floor (the page tail that can strand is at most
+63KB, and only between two pins whose heads cannot share a page - none was
+seen, one pin standing in every session), an overlap past the block, and a
+MOVABLE non-DMA block standing under the candidate (the top was too full) is
+packed up out of the way once first (`mx_packupf`). The top-down DMA arm it
+replaces is gone. The floor is the HMA when nothing stands there, so
+`mega_dosclaimf` packs the pool up before it measures what stands in the HMA
+(a DOS trip parks the HMA with the session when anything is there, 64KB more
+park, MC4) - a ring that is only movable is not left there to cost that; a
+ring still pinned at a trip costs the 64KB, as any block in the HMA does.
+
+**The conventional heap: a ring at the TOP END when the top end is free for
+it** (SPEC.md 50.3.2). 14.55 sent every claim with a head bottom-up on
+kern_mega, the owner's call for EXTERNAL rings ("held only while it plays,
+claimed low"), with SOUND.DRV's two flagged there as "a decision to look back
+over". Bottom-up, a ring lands on the FILL POINT, over whatever the bottom
+stack holds - and that stack comes and goes while the ring plays. The FLOOR
+end is never free for a ring (the landing is born there), and on a machine
+with a pool the TOP end is free from the boot until a program wants a
+conventional CS. `mem_ringtop` (`.cold`, called from `mem_claim_x`'s retry,
+both `.cold`) asks where the top-down first fit would put a claim with a head
+from a package or a driver (never the kernel's own: the landing is a cache,
+above) - the same bumps going down: the DISK class's 512-byte line, the head
+inside its page, an overlap just under the claim - and when everything above
+that place is a ring too, or the kernel's own (the low tables, a boot
+driver's image), it sends the claim through the top door, which takes
+exactly that place. A claim with no head above it - a carve, an overlay, a
+region - means the top is not an end, and the ring goes bottom-up as 14.55
+put it. A ring at the top has only free memory under it; a top-down claim
+taken later stacks under it and frees back into that run; idle, declared
+movable, it came in by the top door and the descending pass packs it back up
+(SPEC.md 66.4.1). The owner's 14.51 test for a conventional claim is kept in
+substance - held only in active use, movable when idle, the rest one run -
+and the letter "claimed low" changes for the case where low is the middle.
+
+**The case left for the owner: a machine with no pool.** With no extended
+memory (86Box's 1024, the 286-525's AMI) every package's REGION is a
+top-down conventional claim, so the top end holds movable regions, the floor
+end the bottom stack, and neither end is free for a ring: it goes bottom-up
+as before and, pinned through a play, cuts the heap (271K + 139.5K measured).
+No placement can do it without a MOVE, and 14.51 is the owner's rule that a
+move happens only under pressure. Two ways, either the owner's call:
+(a) **make room at an end when the ring is claimed** - the movable claims
+between the floor's last pin and the ring's size slide up by it (the
+compactor's ascending pass in reverse; one copy of that stack per ring claim,
+the bottom stack being tens of KB there) - a move at a claim that fits, which
+14.51 rules out as housekeeping; (b) **make the in-use rings movable** -
+SOUND.DRV's staging pool and the packages' rings re-armed on a move (the
+relocation proc halts the stream and re-aims the 8237, HEAP-UNPIN-PLAN's
+`sbl_halt`/`sbl_go_on` shape), so the existing pressure path packs past them
+and a stutter happens only when a claim needs the room - which 14.51 already
+accepts for the Video Player. (b) is kern_big's "compaction for everything"
+and is the recommendation; it is a per-ring audit (SOUND.DRV's pool, the
+double buffer, AUDIO's look-ahead and speaker ring, XT-MP3's, the
+Recorder's, MIDIRack's, 1942's, WireFleet's, ARCADE's, WIN16's waveIn).
+
+**What else was looked at and is not a blocker.** XT-MP3's file hold is an
+`OSAPI_XMEM_ALLOC` token block, movable (MC3); it is ONE block of the file's
+size or a conventional claim of at most 192KB - it never bridges, so the
+largest MP3 it can HOLD is the pool's largest run (which is what the hold
+check measures), and a bigger one streams as it always did. Its other claims
+are declared movable. Every package region is movable (`tests/movable.txt`
+lists only re-homing loaders). Pool blocks that are pinned for a moment - the
+DOS trip's park and arena, a hibernate resume's staging - live only while
+they are used. Driver images, modules and caches above 1MB are movable.
+
+**Bytes.** kern_big and kern_small byte-identical: both assembled with and
+without the change at one commit (`nasm ... kernel/kernel.asm`, the stash
+A/B), `cmp` equal - every byte is under `%ifdef KERN_MEGA` or in `mega.inc`
+and `megados.inc`, which only kern_mega assembles. kern_mega: `.text`
+46,086 -> 46,086, `.bss` and `.lowbss` unchanged, **MEGA_RESIDENT 62,976 before
+and after**; `.cold` 46,232 -> 46,411 (+179: `mem_ringtop` and its near
+call, above 1MB once switched), `.mega` 23,440 -> 23,568 (+128: `mx_alloc`
+298 -> 412 bytes, its `.bot` less the top-down DMA arm it replaces, and
+`mega_dosclaimf`'s pack, +14); the segment overhead 3,754 of 3,754.
+
+**Row.** `megajw` (soak, 86Box; `tests/megajw.py`, the MEGAJW instrument in
+`tests/megajw/`): the session above on 1408, and it asserts a pinned block in
+each heap, each heap ONE free run off `mx_tab` and `mem_tab` (no pin with free
+KB on both sides past a page's tail for each pin after the first), the HUGE
+answer within 8K of the pool's free KB in whole windows plus the heap's less
+its reserve, the claim granted and read back and one KB more refused, and the
+hold granted. **RED** on the tree before, measured: the pool ring at 105C00
+(23K / 217K), SOUND.DRV's at 25800 (86K / 474K), 602K where 688K is free,
+the hold refused. **GREEN** after, 15 s - and again after the 14.167 merge,
+with the 9KB landing at 10000.
+
+**Rows run, scoped, on the merged tree** (`os88soak.py start`, 42 rows, one
+pass): green - `megajw`, `hdbounce`, `waverackmega`, `mega-recorder`,
+`mega-midiracksb`, `mega-midiracksbmem`, `mega-audhand`, `mega-mixersb16`,
+`mega-dossnd`, `x3mega`, `x3live386`, `megapixel`, `mega-ringmove-audio`,
+`mega-ringmove-midirack`, `mega-ringmove-tracker`, `mega-sndmove`,
+`mega-trackmove`, `mega-rdmove`, `mega-sheetmove`, `mega-paintmove`,
+`mega-heapmap`, `mega-heaphi`, `mega-heapcheck`, `mega-editmove`,
+`mega-heapdrv`, `megaxmove`, `megahuge`, `megacaps`, `megashed`, `megaown`,
+`megarehome`, `mega-drvmove`, `megahma`, `megadosp`, `megadosroom`,
+`megakbtrip`, `megahiber`, `megahibfull`, `megap2hiber`, `megatrap0`.
+`mega-vidsound` failed in the lane for want of MartyPC's VHD template in the
+worktree (`os88hdd.py --template`), not a guest answer; green alone with it.
+`megasbgap` (86Box, real time) went 730 ms against its 700 ms bar in the
+loaded lane and 700 ms alone; three more runs alone 540, 310 and 360 ms,
+the merged tree before this change 650 and 540 - the same silences in the
+same places, its ring at 100000 now (the floor) where it was at 3C8000. A
+bar inside its own spread on a shared box, not a regression of placement;
+named for the final pass. `x3mega` failed once in the first pass (before the
+merge: the converted WAV byte-exact, its play not started in time) and
+passed in the second. kern_big's heap rows were not run: kern_big is
+byte-identical.
+
 ### 14.167 A fixed-disk read into a claim moved ONE SECTOR A CALL through HDD.DRV, and nine through the kernel's BIOS path: a driver that takes a selector says so (`BLKCAP_SEL`), the landing is 18 sectors and comes back when shed (2026-11-08) - FIXED
 
 **The owner's question** (2026-11-08): *"For the hard drive transfers: why
