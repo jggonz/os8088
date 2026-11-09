@@ -579,6 +579,38 @@ rc, im, st, err = render(pdfz, H=300)
 check('a zero-width and a zero-height rectangle clip paint nothing', rc == 0 and int((pidx(im) == 0).sum()) == 0,
       'rc %d, %d black' % (rc, 0 if im is None else int((pidx(im) == 0).sum())))
 
+# 1bpp (Hercules, CGA): a coloured or grey STROKE is ink, not paper. PageDesk's
+# own saved /Square strokes 1 0.333 0.333 RG (luminance 136), which the 128
+# threshold drew WHITE - the mark vanished on reopening on both mono adapters
+# (the final pass's pagedeskxt screens). Only near-white (>= 240) stays white.
+rx, ry, bw0, bh0 = 109, 526.3125, 123.875, 140.3125
+EXS = [strm('/Type /XObject /Subtype /Form /BBox [0 0 %s %s]' % (fxs(bw0), fxs(bh0)),
+            ('1 0.333 0.333 RG 1 w 0.5 0.5 %s %s re S' % (fxs(bw0 - 1), fxs(bh0 - 1))).encode())]
+sqa = '<< /Type /Annot /Subtype /Square /F 4 /Rect [%s %s %s %s] /AP << /N 6 0 R >> >>' % (fxs(rx), fxs(ry), fxs(rx + bw0), fxs(ry + bh0))
+pdfm = writepdf('sqmono.pdf', page_pdf(b'0.75 G 1 w 20 100 m 380 100 l S 0.9 G 20 80 m 380 80 l S 0.95 G 20 60 m 380 60 l S', [sqa], EXS, mb='0 0 400 700'))
+for ad in ('herc', 'cga'):
+    for zm in (73, 100):
+        nm = 'mono %s at %d%%: the saved red /Square' % (ad, zm)
+        rc, im, st, err = render(pdfm, flags=1, H=800, zoom=zm, adapter=ad)
+        if rc != 0: check(nm + ' renders', False, err[:80]); continue
+        ink = lum(im) < 128
+        half = int(round(350 * zm / 100 * ADAPT[ad][0] / ADAPT[ad][1]))   # the square is in the page's top half, the rules in its bottom
+        box = ink[:half, :int(400 * zm / 100) - 2]                         # the page, not the desk pattern beside it
+        if not box.any(): check(nm + ': drawn at all', False); continue
+        ys, xs = np.nonzero(box)
+        sub = box[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+        edges = {'top': sub[0:2].any(axis=0).mean(), 'bottom': sub[-2:].any(axis=0).mean(),
+                 'left': sub[:, 0:2].any(axis=1).mean(), 'right': sub[:, -2:].any(axis=1).mean()}
+        check('%s: all four edges inked %s' % (nm, {k: round(float(v), 2) for k, v in edges.items()}), min(edges.values()) > 0.95)
+    rc, im, st, err = render(pdfm, H=800, zoom=100, adapter=ad)
+    if rc == 0:
+        sc = ADAPT[ad][0] / ADAPT[ad][1]
+        def lit(y): r = int(round((700 - y) * sc)); return float((lum(im)[max(r - 1, 0):r + 2, 40:360] < 128).any(axis=0).mean())
+        check('mono %s: a 0.75 and a 0.9 grey rule are ink, a 0.95 grey one is paper (%.2f %.2f %.2f)' % (ad, lit(100), lit(80), lit(60)),
+              lit(100) > 0.95 and lit(80) > 0.95 and lit(60) < 0.05)
+    else:
+        check('mono %s: the grey rules render' % ad, False, err[:80])
+
 print('pdr_annot: %d checks, %d FAILED' % (nchecks, len(fails)))
 for f in fails: print('  FAIL ' + f)
 sys.exit(1 if fails else 0)

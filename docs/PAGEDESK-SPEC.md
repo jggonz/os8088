@@ -393,7 +393,9 @@ VGA/EGA: DeviceGray/RGB/CMYK to luminance and hue; a PDF black/white is the
 palette's black/white, greys map to black, dark grey, light grey, white, and
 saturated colours to the nearest of the 16 by the table in `pdr_colour`.
 1bpp: luminance through a 4x4 ordered dither for fills and images; stroked
-lines and text are black at luminance < 50% and white otherwise. No alpha.
+lines and text are black unless near white (luminance >= 240 of 255), so a
+coloured or grey line, a coloured word and PageDesk's own red mark stay
+visible on Hercules and CGA. No alpha.
 
 ### 10.6 Incomplete rendering
 
@@ -1440,7 +1442,10 @@ luminance `(77r + 150g + 29b) >> 8` and a VGA index: greys -> 0 / 8 / 7 / 15 at
 luminance 48 / 128 / 208; saturated colours -> the nearest of the other twelve by
 channel threshold (`rgb_c4`). A 1bpp **fill** and every image is the 4x4 ordered
 dither `lit when (17 * lum >> 8) > Bayer[y&3][x&3]`; a 1bpp **stroke, text and
-stencil** is solid, black below luminance 128, white above. 4bpp fills use the
+stencil** is solid, white at luminance 240 and above and black below it. Until
+the final pass the cut was 128, which drew PageDesk's own saved /Square
+(`1 0.333 0.333 RG`, luminance 136) and every light rule WHITE, so they
+vanished on reopening; `pdr_annot`'s mono checks hold the line. 4bpp fills use the
 index (a grey fill between two greys is their checker, 20.19.2); 4bpp greys in images are dithered between the four greys.
 
 **Images** are drawn at raster time from the engine's stream, which stays OPEN from

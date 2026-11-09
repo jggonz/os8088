@@ -58,7 +58,7 @@ static void pat_make(pdb *pat, pdw lum, pdw solid)
 {
     pdw r, c, lev = (pdw)(((lum << 4) + lum) >> 8), nib;
     if (solid) {
-        pdb v = lum >= 128 ? 0xFF : 0x00;
+        pdb v = lum >= 240 ? 0xFF : 0x00;   /* 20.19: only near-white ink is paper; a coloured or grey stroke is black */
         for (r = 0; r < 4; r++) pat[r] = v;
         return;
     }
