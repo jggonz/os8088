@@ -27,15 +27,12 @@ static void ovl_rc_fin(void);
 static unsigned rc_f = RCF_CHECK;      /* the launch looks, too */
 static int rc_pk;                       /* the prompt: 1 recover, 2 finish */
 static unsigned rc_t;                   /* the tick of the last command */
-static unsigned rc_n;                   /* records the journal holds */
-static unsigned rc_sz;                  /* the file's size (20.17.2) */
-static unsigned rc_seed;                /* this session's /NM seed */
 static unsigned rc_dclus;               /* APPDATA's cluster, banked */
 
 /* ---- SYSTEM/APPDATA on the boot volume (14.7, 19.9): bodies in the overlay ---- */
 #define RC_JRN    "PAGEDESK.JRN"
 #define RC_TGT    "PDSAVE.TGT"            /* the interrupted-save note (20.17.6) */
-static unsigned rc_fclus, rc_cl, rc_k;
+static unsigned rc_fclus, rc_k;
 static struct os88_place rc_here;
 #define rc_ff ((struct os88_find *)&ed_w)
 static void ovl_rc_leave(void);
@@ -54,8 +51,7 @@ void pdu_rc_cmd(void)
 unsigned pdu_rc_seed(void)
 {
     pdu_clk(pdu_clkw);
-    rc_seed = ((pdu_clkw[2] ^ pdu_clkw[3]) + os88_ticks()) & 0x7FF0u;
-    return rc_seed;
+    return ((pdu_clkw[2] ^ pdu_clkw[3]) + os88_ticks()) & 0x7FF0u;
 }
 
 /* an open completed: look for a journal to offer */
@@ -74,7 +70,6 @@ void pdu_rc_begin(void)
         rc_f |= RCF_RETIRE;
     rc_f &= RCF_OFF | RCF_RETIRE | RCF_CHECK | RCF_JRN;
     rc_pk = 0;
-    rc_n = 0;
 }
 
 /* a prompt is up: its keys are Enter and Esc and no other */

@@ -262,7 +262,7 @@ static void fresh(void)
     cur_clus = 20; cl_sect = 1; fail_write = 0; nwrites = 0; nsaid = 0; said[0] = 0;
     now_ticks = 100;
     strcpy(pdu_name, "TEST.PDF");
-    rc_f = RCF_CHECK; rc_pk = 0; rc_n = 0; rc_sz = 0; rc_dclus = 0;
+    rc_f = RCF_CHECK; rc_pk = 0; rc_dclus = 0;
     pdu_pgmap = 0; pdu_pgsaved = 0; pdu_doc = D_OPEN;
     pdu_ed_init();
     pdu_page = 0;
@@ -273,7 +273,7 @@ static void session(void)
     memset(&pd_host_mem[0x2000 * 16], 0xA5, 16384);
     memset(&pd_host_mem[0x3000 * 16], 0xA5, 4096);
     claim_next = 0x8000; nclaims = 0; cur_clus = 20;
-    rc_f = RCF_CHECK; rc_pk = 0; rc_n = 0; rc_sz = 0; rc_dclus = 0; nsaid = 0; said[0] = 0; pdu_msg[0] = 0;
+    rc_f = RCF_CHECK; rc_pk = 0; rc_dclus = 0; nsaid = 0; said[0] = 0; pdu_msg[0] = 0;
     pdu_ed_init();
 }
 #define TR(x) do { if (getenv("JRV")) printf("  %s:%d\n", x, __LINE__); } while (0)
@@ -409,7 +409,7 @@ static void test_basic(void)
     now_ticks += 4; wake();
     CHECK(nwrites == 0, "...nor at 4 ticks");
     idle();
-    CHECK(nwrites == 1 && jrn() && jrn()->n % 512 == 0, "one write, a whole cluster (%u writes, %u bytes)", nwrites, jrn() ? jrn()->n : 0);
+    CHECK(nwrites == 1 && jrn(), "one write (%u writes, %u bytes)", nwrites, jrn() ? jrn()->n : 0);
     w0 = nwrites;
     pdu_ed_get(a, &r);
     pdu_ed_move(a, 40, 40);
@@ -468,40 +468,43 @@ static void test_stale(void)
 static void test_corrupt(void)
 {
     struct hf *f;
-    unsigned n0, at;
+    unsigned at, k;
     int i;
-    unsigned char *img;
+    unsigned char *img, *orig;
+    unsigned fn;
+    struct pd_edit r;
 
     fresh();
-    vfree();
     for (i = 0; i < 4; i++) {
         mk(PDA_RECT, 0, i * 10, 1, 90 + i, 90);
         pdu_ed_new(&E, "", 0, (pd_pt *)0, 0);
-        idle();
-        keep();
     }
+    idle();
     f = jrn();
-    n0 = V[2].fn;                               /* after the third write; the fourth starts here */
-    CHECK(f && f->n > n0 && n0 % 512 == 0, "four writes, appended on cluster boundaries (%u %u)", f ? f->n : 0, n0);
+    CHECK(f && f->n == 36 + 4 * (2 + 48 + 2), "a header and four records (%u)", f ? f->n : 0);
     img = malloc(f->n);
     memcpy(img, f->d, f->n);
-    img[n0 + 5] ^= 0x40;                        /* a bad byte in the first record of write 4 */
+    orig = malloc(f->n);
+    memcpy(orig, f->d, f->n);
+    fn = f->n;
+    img[36 + 2 * 52 + 7] ^= 0x40;               /* a bad byte in the third record */
     put_jrn(img, f->n);
     session();
-    CHECK(recover(1) == 1 && same_snap(2), "a corrupt record stops replay at the last good boundary (3 records)");
-    memcpy(img, V[3].file, V[3].fn);
-    put_jrn(img, V[3].fn - 100);                /* a torn tail: not even a whole cluster */
+    CHECK(recover(1) == 1 && pdu_ed_count() == 2, "a corrupt record stops replay at the last good one (%d)", pdu_ed_count());
+    pdu_ed_get(1, &r);
+    CHECK(r.rect.x0 == 10, "...and the records before it are whole");
+    put_jrn(orig, fn - 30);                    /* a torn tail */
     session();
     CHECK(recover(1) == 1, "a torn file is still offered");
     at = pdu_ed_count();
-    CHECK(at >= 1 && at <= 4, "...and recovers what is whole (%u)", at);
+    CHECK(at == 3, "...and recovers what is whole (%u)", at);
     session();
-    memcpy(img, V[3].file, V[3].fn);
+    memcpy(img, orig, fn);
     memset(img, 0, 36);                         /* a bad header */
-    put_jrn(img, V[3].fn);
+    put_jrn(img, fn);
     CHECK(recover(1) == 0, "a bad header is not offered");
+    (void)k;
     free(img);
-    vfree();
 }
 
 static void test_readonly(void)
@@ -545,9 +548,8 @@ static void test_walk(unsigned s, unsigned cs)
         if (rnd(6) == 0) pdu_redo();
         idle();
         if (nv < 590 && !(rc_f & RCF_OFF)) keep();
+        if (rc_f & RCF_OFF) break;
     }
-    CHECK(!(rc_f & RCF_OFF), "seed %u: the journal stayed on", s);
-    CHECK(jrn() && jrn()->n < 8192 + 8192, "seed %u: the file stays bounded (%u)", s, jrn() ? jrn()->n : 0);
     /* the last write recovers to the state it was written in */
     for (k = nv - 1; k >= 0 && k >= nv - 6; k--) {
         session();
@@ -562,7 +564,7 @@ static void test_walk(unsigned s, unsigned cs)
 
 static void test_grow(void)
 {
-    int i;
+    int i, n;
     char tx[200];
     struct pd_edit r;
     fresh();
@@ -572,14 +574,22 @@ static void test_grow(void)
     for (i = 0; i < 80; i++) {
         pdu_ed_text(0, tx, 100 + (i % 7) * 15);
         idle();
-        CHECK(jrn() && jrn()->n <= 8192 + 4096, "write %d: bounded (%u)", i, jrn() ? jrn()->n : 0);
+        CHECK(jrn() && jrn()->n <= 8192, "write %d: bounded (%u)", i, jrn() ? jrn()->n : 0);
     }
     pdu_ed_get(0, &r);
-    i = r.text_len;
+    n = r.text_len;
     session();
     CHECK(recover(1), "after many rewrites: offered");
     pdu_ed_get(0, &r);
-    CHECK(pdu_ed_count() == 1 && (int)r.text_len == i, "...the last text that fit (%u)", r.text_len);
+    CHECK(pdu_ed_count() == 1 && (int)r.text_len == n, "...the last text that fit (%u)", r.text_len);
+    /* more than one write stages: off, said, the document unharmed */
+    fresh();
+    for (i = 0; i < 38; i++) {
+        mk(PDA_NOTE, 0, 1, 1, 90, 90);
+        pdu_ed_new(&E, tx, 200, (pd_pt *)0, 0);
+    }
+    idle();
+    CHECK((rc_f & RCF_OFF) && pdu_ed_count() == 38, "a store too big for one write: off, said");
 }
 
 static void test_pages(void)

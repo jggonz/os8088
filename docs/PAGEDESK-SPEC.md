@@ -3946,16 +3946,14 @@ differences are listed in 20.17.7.
 
 #### 20.17.1 What is journaled, and what is not
 
-The journal is a log of **record states**, not of commands: after a command
-completes, every edit-store record whose content changed since the last write
-is written whole (its 48 bytes, its text, its points). This is what makes
-undo, redo, move, resize and typing cost nothing extra to journal - each is
-just "this record is now that" - and it means replay never needs the undo
-history, only 20.8's creation call. A store that shrank (an undone creation)
-is one `T` record. **Page operations are not replayed** (20.11 keeps them in
-the page map, which needs the history to rebuild in order). A record on a page
-created by a page operation (id with bit 15) is not journaled, and recovery
-leaves a deleted placeholder at its index so the others keep theirs. Recovery
+The journal is the **edit store's state after a command**, not a log of
+commands: every record, whole (its 48 bytes, its text, its points), in index
+order. Undo, redo, move, resize and typing therefore cost nothing extra to
+journal - the record is now what it is - and replay never needs the undo
+history, only 20.8's creation call. **Page operations are not replayed**
+(20.11 keeps them in the page map, which needs the history to rebuild in
+order). A record on a page a page operation created (id with bit 15) is
+written as a deleted placeholder, so the others keep their indices. Recovery
 restores marks on the source's own pages only.
 
 #### 20.17.2 Where, and the file
@@ -3963,28 +3961,23 @@ restores marks on the source's own pages only.
 `SYSTEM/APPDATA/PAGEDESK.JRN` on the **boot volume** (`os88_vol_sys()`, 14.7;
 the instance stands there by `OSAPI_FILE_GOTO_QM` and goes back, 19.9). One
 file serves the whole machine: it belongs to the most recent session that
-wrote it. A session that writes while another document's journal is there
-replaces it; the offer is only ever for the journal that is there at open.
+wrote it, and the offer is only ever for the journal that is there at open.
 
-All words little-endian. Header, 36 bytes: `PDJ1`, the source's 8.3 name (16,
-NUL padded), the 8 bytes of the engine's fingerprint (6.2: size, CRC of the
-first and last KiB, `pdxb_fingerprint`), the session's `/NM` seed (2), 4
-reserved, CRC-16 of the first 34 bytes. Then records:
-`len` (2: the bytes of type and body) `type` (1) `body` `crc` (2: CRC-16 of
-type and body). A `len` of 0 is padding to the end of the cluster.
+All words little-endian. Header, 36 bytes: `PD` `J1`, the source's 8.3 name
+(14, informational), 2 pad, the 8 bytes of the engine's fingerprint (6.2:
+size, CRC of the first and last KiB, `pdxb_fingerprint`), 6 reserved, CRC-16 of the first 34 bytes. Then one record per store
+index: `len` (2: 48 + text + 4 x points), the 48-byte `pd_edit`, its text, its
+points, `crc` (2: CRC-16 of the `len` bytes before it). Nothing else.
 
-| type | body |
-|---|---|
-| `R` | record index (2), the 48-byte `pd_edit`, its text (`text_len` bytes), its points (4 x `pts_n`) |
-| `T` | the store's new count (2) |
-
-**Appends are padded to the cluster.** `OSAPI_FILE_APPEND` and `WRITE_SEQ`
-refuse a file whose size is not a whole number of clusters (18.4.4), so each
-write ends in zeros up to the cluster boundary (one cluster is 512 bytes to 4
-KiB; larger refuses the journal). Reading skips the zeros: that is the `len`
-of 0 above. When the file passes 8 KiB, or the store shrinks, the next write is a fresh
-file: a header and one `R` per live record (`WRITE` replaces; the window in
-which the old journal is gone is one call).
+**Deviation from 14.7 ("append-only"):** the file is rewritten whole by one
+`OSAPI_FILE_WRITE` after each burst of commands. The append the volume offers
+refuses a file that is not a whole number of clusters (18.4.4), so an
+append-only journal needs padding, a compaction pass, a record for a store
+that shrank and a last-record-wins replay: about 1,050 bytes of overlay more
+than the D25 share. The cost of the rewrite is a window of one call (the old
+chain freed, the new one written) in which a crash leaves no journal, and a
+write proportional to the store (typically one or two clusters). A journal of
+more than 8 KiB (one staging claim) is not written: it turns itself off, said.
 
 #### 20.17.3 When it is written
 
@@ -3993,18 +3986,17 @@ popover or a typing session. `pdu_undo_end` (outermost) calls `pdu_rc_cmd`,
 which records the tick; the wake handler (`pdu_rc_wake`) writes when the
 document is open, no job runs and **half a second has passed with no further
 command** - so a typing run, a drag or a burst of undo is one write. Cost on
-the 4.77 MHz XT: a CRC of every record to find what changed (about the time
-of one tick per 40 records), then one `int 13h`-class file write: on a floppy
-the data sector, both FAT copies and the directory entry, i.e. ~1.2 s of the
-UI task in which input queues (it is one `WRITE_SEQ`, 15.2's single transfer);
-a hard disk ~0.2 s. A first write, or a compaction, adds the replace and is
-~2 s. A command that changes nothing the store holds (a selection, a scroll,
-a mode) writes nothing. The staging buffer is a transient 8 KiB claim taken
+the 4.77 MHz XT: the copy of the store into the staging claim (a few
+milliseconds per record), then one file replace: on a floppy the data
+sectors, both FAT copies and the directory entry, ~1.2-2 s of the UI task in
+which input queues; a hard disk ~0.2-0.4 s. A command that changes nothing
+the store holds (a selection, a scroll, a mode) never reaches the hook and
+writes nothing. The staging buffer is a transient 8 KiB claim taken
 and freed inside the write, so the claim count (16.2) is untouched; a refused
 claim skips that write, once, and the next command retries.
 
 An unrecoverable write (read-only, full, any `FERR`) turns the journal **off
-for the session** and says `Recovery journal off: the disk refused it.` once.
+for the session** and says `Recovery journal off.` once.
 A volume with no `SYSTEM/APPDATA` says it at the first write too. The
 document is never affected.
 
@@ -4026,14 +4018,12 @@ fingerprint the engine just computed** (a source that changed since - PD-20's
 record is valid. The status line then reads
 `Recover N unsaved marks? Enter recovers, Esc discards.` and **every key is the
 prompt's** (the same rule as 20.11's prompts), on every adapter, because it is
-a line of text and not a dialog. Enter: pass 1 reads the file into a claim and
-finds, for each index, the **last valid** record (replay stops at the first bad
-one: a bad CRC, a length that does not fit, a torn tail); pass 2 makes the
-records in index order through `pdu_ed_new` inside ONE `pdu_undo_begin/end`
+a line of text and not a dialog. Enter: the file is read into a claim and its records are counted (replay stops at the
+first bad one: a bad CRC, a length that does not fit, a torn tail); Enter makes
+the records in index order through `pdu_ed_new` inside ONE `pdu_undo_begin/end`
 (so Undo takes the recovery back as one step), then restores each record's
 `id` and the id counter (a note's reply still points at its note), and the
-document is dirty. The journal stays and the session continues it with a fresh
-file at its next write (the old tail may be torn). Esc deletes it. If marks
+document is dirty. The journal stays and the session's next write replaces it. Esc deletes it. If marks
 were made meanwhile, or the claim is refused: `Could not recover.` and the
 journal is kept. The name in the header is informational: the match is the
 fingerprint, so a renamed copy of the same bytes is the same source. The
