@@ -212,7 +212,7 @@ sdg_dlog:   times SDG_LOGN dw 0
 %endmacro
 
 ; --- the verb ---------------------------------------------------------------------
-; sdg_verb - SNDV_DIAG (SPEC.md 127.3.2). in: AL = SDGF_*, ES = the caller's
+; sdg_verb - SNDV_DIAG (SPEC.md 127.3). in: AL = SDGF_*, ES = the caller's
 ; segment (OSAPI_DRV_CALL), DS = ours. Every port touch is under pushf/cli and
 ; bounded; nothing here is attach-only, so it may run all session.
 %macro SDG_VERB 0

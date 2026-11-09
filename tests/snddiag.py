@@ -36,7 +36,7 @@ RATE = 22050
 
 
 def page(m):
-    wins = [w for w in G.windows(m) if w.title.startswith(b"Sound Debug")]
+    wins = [w for w in G.windows(m) if str(w.title).startswith("Sound Debug")]
     if not wins:
         raise M.MartyError("no Sound Debug window: \\AUTOSTRT did not open it")
     data = M.pkg_read(m, wins[0], 0, 0x6000)
