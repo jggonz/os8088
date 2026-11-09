@@ -576,10 +576,11 @@ Other messages you may see:
 
 These are specific and testable; none loses a saved file.
 
-1. **Incomplete pages are not write-protected.** PD-07 asks that destructive
-   operations depending on missing interpretation be disabled. The code
-   (`pdu_why` in `pducmd.c`) has no such check; only signed documents grey the
-   tools.
+1. **An Incomplete page is not write-protected, by design.** No PageDesk
+   operation rewrites page content: marks are drawn over the page, and Extract
+   and Insert copy its objects byte for byte. So nothing depends on what the
+   renderer skipped (PAGEDESK-SPEC 10.6). Selection, Find and Highlight use the
+   text that was interpreted.
 2. **New, Open and Close document do not ask Save/Discard** (the window close
    does). The journal covers all but the last half second and page operations.
 3. **Forms are not filled** (D24).

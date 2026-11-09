@@ -38,7 +38,7 @@ static const char *pdu_hprof[] = {
     "  ASCIIHex and RunLength streams,",
     "  Helvetica, Times and Courier text,",
     "  paths, 1- and 8-bit grey images.",
-    "Refuses, saying why: Flate on the XT,",
+    "Refuses, saying why: Flate in low RAM,",
     "  xref streams, encryption, JPEG.",
     "Signed files open read-only.",
     "Never runs JavaScript or links.",

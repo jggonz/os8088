@@ -399,9 +399,18 @@ lines and text are black at luminance < 50% and white otherwise. No alpha.
 
 The interpreter records every unsupported operator, resource or feature it
 skipped (a bitmask plus the first name). A page with any record shows
-**Incomplete rendering - <feature>** in the status line, and destructive
-operations that depend on what was skipped (Delete text box over it is fine;
-"cover" and extraction of that page are not) say why they are greyed.
+**Incomplete rendering - <feature>** in the status line and in Help >
+Document info. No operation PageDesk offers depends on what was skipped, so
+none is greyed for it (resolved by the lead, final pass, from 20.20.2 item 1):
+- PageDesk never rewrites or removes page content. Marks, notes and text boxes
+  are annotations drawn over the page.
+- Rotate, move, duplicate and delete edit the page tree only.
+- Extract and Insert copy the page's objects byte for byte (20.11, 20.16), so
+  the skipped content travels with the page exactly as it was.
+- There is no cover or redaction tool.
+- What the interpretation does feed is the text map behind selection, Find and
+  Highlight. On an Incomplete page these work on the text that was
+  interpreted, and the status line already says what was not.
 
 ### 10.7 Slices
 
@@ -4534,13 +4543,12 @@ lead, not fixed. A section named below is not edited; this one overrides it.
 **20.20.2 Behaviour the contract promises that the build does not do.**
 
 1. **10.6 and PD-07: greying operations that depend on skipped content.** The
-   spec says that "cover" and extraction of an Incomplete page are greyed with
-   a reason. They are not. `pdu_why` (`pducmd.c`) greys tools only for a signed
-   document, and no `pdu_inc` test exists in any `pdu*.c` or `pdovl*.c` file
-   other than the status line and Document info. The user is told the page is
-   Incomplete; nothing is refused. This is a defect against the contract, not a
-   documentation error, and there is no byte to fix it in (the primary has
-   157). The guide lists it under Known issues.
+   spec said that "cover" and extraction of an Incomplete page are greyed with
+   a reason, and the build greys neither. RESOLVED by correcting 10.6 rather
+   than the code. PageDesk has no cover tool, and Extract and Insert copy the
+   page's objects byte for byte, so no operation depends on what the renderer
+   skipped. PD-07's rule ("disable destructive operations that depend on the
+   missing interpretation") is met with nothing to disable.
 2. **14.7, PD-20: Save / Discard / Cancel at New, Open and Close document.**
    Only closing the window asks (20.17.8). The journal keeps the marks, so
    nothing is lost, but the contract's wording ("closing a document") is wider
