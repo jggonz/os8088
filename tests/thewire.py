@@ -23,7 +23,7 @@ be run side by side; a bound port is a gate reading the other one's answers.
 the machine asks the host for it and every byte under test is a byte this file
 chose.
 
-EIGHTEEN ASSERTIONS.
+NINETEEN ASSERTIONS.
 
 1. THE CATALOG ARRIVES AND IS UNDERSTOOD. `wr_n` is 5, `wr_state` is WS_DONE
    and `wr_nodrv` is 0 - which is the whole stack under it (ARP, a handshake,
@@ -128,6 +128,17 @@ EIGHTEEN ASSERTIONS.
    again out of it, the transfer claim moved at least once - and everything
    after runs against the moved claims, so a relocation proc that left a word
    behind fails there too. The red run is `wr_reloc` made a bare `ret`.
+
+19. LOAD PROGRAM RUNS A PACKED PACKAGE (SPEC.md 21.5.1.2). MINES is the
+   shipped build/mines.o88, LZ4-packed as every release .O88 is (PKGZ=lz4),
+   where HELLO is too small to gain and ships plain - so assertion 8 alone
+   loaded the one kind of file a release never serves. Load Program on it
+   must open a window titled `Minesweeper`: OSAPI_PKG_START's image arm
+   copied the image's (unpacked) length out of a buffer holding the shorter
+   packed file, and kern_big halted on `STACK OVERFLOW TASK` while kern_mega
+   faulted. tests/pkgrun.py holds the byte-level half (the region IS the
+   unpacked image) on MartyPC; this is the user's path to it. LAST, because
+   a kernel that gets it wrong takes the machine with it.
 
 **THE LAUNCH IS THE DESKTOP ZONE** (SPEC.md 26.7). `ETHER.DRV` registers it,
 so the ethertest-shaped disk that already asks for the driver has the icon on
@@ -1909,6 +1920,39 @@ def main():
             no("Add to Disk on a package of the previous format says %r - the "
                "Wire reads the header it downloaded and refuses before "
                "writing it" % cell())
+
+        # --- 19: LOAD PROGRAM ON A PACKED PACKAGE (SPEC.md 21.5.1.2) -------
+        if not mines[3] & 0x18:
+            no("build/mines.o88 is not compressed (flags %02X) - a PKGZ= "
+               "build? Assertion 19 is about a packed image and would be "
+               "about nothing" % mines[3])
+        pick(1)                                   # MINES: tier 0, one file
+        if b("wr_grey")[0] & 1:
+            no("Load Program is greyed on MINES, which is tier 0 with one "
+               "file and no WF_DISK")
+        before = dispcp.win_list(m, S)
+        press("wr_ra")
+        try:
+            os88qemu.acted(m, lambda: len(dispcp.win_list(m, S))
+                           > len(before), secs=30, what="MINES's window",
+                           poll=0.5)
+        except Exception as e:                    # noqa: BLE001
+            say("no new window: %s" % e)
+        shot("11-loaded-packed")
+        titles = []
+        for slot in dispcp.win_list(m, S):
+            r = m.read(S("wm_wins") + slot * dispcp.WIN_SIZE,
+                       dispcp.WIN_SIZE)
+            titles.append(m.readseg(u16(r, W_SEG), u16(r, dispcp.W_TITLE), 16)
+                          .split(b"\0")[0].decode("latin1", "replace"))
+        say("MINES Load: windows %r, the status cell says %r"
+            % (titles, cell()))
+        if "Minesweeper" not in titles:
+            no("Load Program on the PACKED MINES.O88 opened no Minesweeper "
+               "window (windows %r, status %r): OSAPI_PKG_START has to expand "
+               "a compressed image the way the disk path does, and copying "
+               "[ld_img] bytes of a shorter file runs LZ4 bytes as code "
+               "(SPEC.md 21.5.1.2)" % (titles, cell()))
     finally:
         if not a.keep:
             # ...and QEMU GONE before the data disk is read back on the host:

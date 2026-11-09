@@ -1807,7 +1807,7 @@ static void ovl_play_loop(void)
 
 /* ============================================================================
  * WAVE 5: THE SESSION - preview -> play -> postview -> next / retry / menu,
- * all inside ONE bracket (SPEC.md 116.4.3, docs/LEMMINGS-PORT-PLAN.md wave 5)
+ * all inside ONE bracket (SPEC.md 116.4.3, docs/plans/completed/LEMMINGS-PORT-PLAN.md wave 5)
  *
  * Lemmix's screen order (GameScreen.Preview.pas, .Player.pas, .Postview.pas)
  * on the original's buttons: the preview's left button or Enter plays and Esc

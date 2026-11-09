@@ -208,7 +208,7 @@ LZ4_SKIP = 256                  # a match this long is followed, not searched
                                 # taken to be this one a byte shorter
 
 
-def lz4_compress(src, depth=512, tail=True, parse="opt"):
+def lz4_compress(src, depth=512, tail=True, parse="opt", prefix=0):
     """An OPTIMAL parse over hash chains - the cheapest LZ4 stream for the
     matches the chains find, priced in the format's real bytes.
 
@@ -250,22 +250,41 @@ def lz4_compress(src, depth=512, tail=True, parse="opt"):
     only - and exists for one caller: the boot blob's own decoder
     (tools/os88kz.py, boot/boot2.asm kz_expand). `parse="lazy"` is the old
     encoder, for an A/B.
+
+    `prefix` is a DICTIONARY (SPEC.md 2.9.13.6): the first `prefix` bytes of
+    `src` are already in the decoder's output when the block starts and are
+    not encoded - the stream says `src[prefix:]`, and its matches may reach
+    back into the prefix as into anything else already produced. One caller
+    again, the boot blob's (tools/os88kz.py), and only with `tail=False`:
+    kernel/lz.inc and the packagers start every stream on an empty window.
     """
+    if prefix:
+        if tail or parse != "opt":
+            raise ValueError("a dictionary is the classic block's alone "
+                             "(tail=False, the optimal parse)")
+        if not 0 < prefix <= len(src):
+            raise ValueError(f"a prefix of {prefix} in {len(src)} bytes")
     if parse == "lazy":
         return _lz4_lazy(src, depth, tail)
     src = bytes(src)
     n = len(src)
-    if n <= MFLIMIT:
-        return _lz4_lazy(src, depth, tail)       # one literal sequence either way
+    if n - prefix <= MFLIMIT:                    # one literal sequence either way
+        if not prefix:
+            return _lz4_lazy(src, depth, tail)
+        out = bytearray()
+        _lz4_emit(out, src[prefix:], 0, 0)
+        return bytes(out)
     ch = Chains(src, MINMATCH)
     lim = n - MFLIMIT
     mend = n - LASTLITS
     INF = 1 << 60
-    # the longest match at every legal start, each seeded by the one before
+    # the longest match at every legal start, each seeded by the one before.
+    # Chains inserts every position in order, the dictionary's included, so a
+    # search from `prefix` on finds candidates inside it too
     ml = [0] * n
     mo = [0] * n
     pl = po = 0
-    for i in range(lim):
+    for i in range(prefix, lim):
         mx = min(mend - i, LZ_MAXLEN)
         if pl > LZ4_SKIP:
             pl, po = min(pl - 1, mx), po
@@ -283,7 +302,7 @@ def lz4_compress(src, depth=512, tail=True, parse="opt"):
     QA = [-1] * (n + 256)       # ...at this j
     win = deque()               # sliding minimum of H over [x, x + 254]
     F[n] = 1                    # the empty last-literals token
-    for i in range(n - 1, -1, -1):
+    for i in range(n - 1, prefix - 1, -1):
         L = ml[i] if i < lim else 0
         if L:
             top = L if L < 33 else 32
@@ -332,7 +351,7 @@ def lz4_compress(src, depth=512, tail=True, parse="opt"):
         D[i] = bd
     out = bytearray(2)
     bounds = [(0, 2)]
-    i = 0
+    i = prefix
     while D[i] >= 0:
         j = D[i]
         _lz4_emit(out, src[i:j], GL[j], mo[j])
@@ -387,8 +406,15 @@ def _lz4_lazy(src, depth=128, tail=True):
     return _cut(src, out, bounds) if tail else bytes(out[2:])
 
 
-def lz4_decompress(buf, outlen, tail=True):
-    out = bytearray()
+def lz4_decompress(buf, outlen, tail=True, prefix=b""):
+    """`prefix`: the dictionary lz4_compress(prefix=) was given, as bytes -
+    already in the output when the stream starts, and not part of what is
+    returned."""
+    if prefix and tail:
+        raise ValueError("a dictionary is the classic block's alone")
+    out = bytearray(prefix)
+    base = len(out)
+    outlen += base
     p, end = (_tail_bounds(buf) if tail else (0, len(buf)))
     while True:
         if p >= end:
@@ -427,8 +453,9 @@ def lz4_decompress(buf, outlen, tail=True):
     if tail:
         out += buf[end:]
     if len(out) != outlen:
-        raise ValueError(f"LZ4: produced {len(out)} bytes, expected {outlen}")
-    return bytes(out)
+        raise ValueError(f"LZ4: produced {len(out) - base} bytes, expected "
+                         f"{outlen - base}")
+    return bytes(out[base:])
 
 
 # =============================================================================

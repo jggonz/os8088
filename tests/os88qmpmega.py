@@ -379,6 +379,8 @@ class Server(object):
         self._btn = 0
         self._chain = []                # button edges not yet sent (_button)
         self._chain_t = 0.0
+        self._bx_go = False             # 86Box: a guest _box_edges paused
+        self._bx_t = 0.0
         self._wh = None
         self._lk = threading.RLock()
         self._pid()
@@ -390,8 +392,7 @@ class Server(object):
         self.ls.bind(sock)
         self.ls.listen(8)
         threading.Thread(target=self._accept, daemon=True).start()
-        if not self.box86:
-            threading.Thread(target=self._flusher, daemon=True).start()
+        threading.Thread(target=self._flusher, daemon=True).start()
         _LIVE.append(self)
         atexit.register(self.close)
 
@@ -631,28 +632,87 @@ class Server(object):
         self._chain_t = time.time()
 
     def _box_edges(self, was, mask):
-        """86Box: each changed button an edge the guest has DECODED.
+        """86Box: each changed button an edge the guest has DECODED, the
+        guest PAUSED and STEPPED while it is - so a burst's spacing is the
+        GUEST's and not the host's.
 
         86Box's automation `mouse` verb SETS the button state and the serial
         mouse reports it at its own poll, so edges sent back to back are
         COALESCED - a double-click's four `mouse_button`s (os88qemu.
         mouse_dblclick sends them in one burst, which is right for QEMU's
         msmouse, a packet queued per edge) reached the guest as no edge at
-        all, and box-ethernet's Disk window never opened. So each edge waits
-        until the published mouse_btn agrees (os88mouse.Mouse._edge, which
-        re-sends a dropped packet), as QEMU's queue would have delivered it.
+        all. So each edge is proven: sent, and the guest advanced until the
+        published mouse_btn agrees (os88mouse.Mouse._gedge, which re-sends a
+        dropped packet), as QEMU's queue would have delivered it.
+
+        IT USED TO BE PROVEN ON A RUNNING GUEST (os88mouse._edge), and then
+        everything between two edges - this server's polls, the client's
+        round trip, a descheduled process on a loaded box - was guest time:
+        ff is off here, so a host second is a guest second, and box-ethernet's
+        double-click on BROWSER.O88 put its presses 26 ticks apart against
+        FM_DBLCLK's nine (two FIRST clicks, "BROWSER.O88 did not open a
+        window"; 1 in 6 at a load of ten). Now the guest stands still between
+        the edges of a burst: it is paused at the first, advanced only by
+        _gedge (and by a press's HOLD_TICKS, stepped too - a polling tracker
+        still sees a press a tick long), and LEFT paused, so the next edge
+        finds it where this one left it however late it arrives. It runs
+        again at the next command of any other kind (_flush - every row's
+        next step is a read or a wait, which needs it running) or once no
+        command has come for HOLD host seconds (_flusher), for a client that
+        host-sleeps after a click. That timer spends no guest time either
+        way; it only decides when an idle guest is handed back.
+
+        A guest standing at a BREAKPOINT is not ours to step: the edge is
+        proven on it as before. A guest the client stopped stays stopped.
         A guest that never decodes it is left for the caller's own check to
         name, as QEMU leaves it: this layer does not raise on an edge."""
         from os88marty import MartyError
+        st = self.m.status().get("state")
+        if st == "breakpoint":
+            for bit in (1, 2):
+                if (mask ^ was) & bit:
+                    try:
+                        self.mo._edge(bool(mask & bit), btn=bit)
+                    except MartyError:
+                        pass
+            return
+        self._bx_t = time.time()
+        if st == "running":
+            self.m.pause()
+            self._bx_go = True
         for bit in (1, 2):
             if not (mask ^ was) & bit:
                 continue
+            down = bool(mask & bit)
             try:
-                self.mo._edge(bool(mask & bit), btn=bit)
+                self.mo._gedge(down, btn=bit)
+                if down:
+                    self._bx_hold()
             except MartyError:
                 pass
-            # (_edge's packet carries the OTHER button up: a chord of left
+            # (_gedge's packet carries the OTHER button up: a chord of left
             # and right is not a gesture any row here makes)
+            if self.m.status().get("state") == "breakpoint":
+                self._bx_go = False     # a stop the row will want to see
+                return
+        self._bx_t = time.time()
+
+    def _bx_hold(self):
+        """A press HELD for os88mouse's HOLD_TICKS of the guest's clock, the
+        paused guest advanced to it (os88mouse.Mouse._hold's reason)."""
+        mo = self.mo
+        t0 = mo.ticks()
+        for _ in range(200):            # ~0.8 guest s: a clock that stands
+            if ((mo.ticks() - t0) & 0xFFFFFFFF) >= mo.HOLD_TICKS:
+                return
+            st = self.m.advance(cycles=mo.DBL_STEP)
+            if st.get("state") == "breakpoint":
+                return
+
+    def _bx_resume(self):
+        if self._bx_go:
+            self._bx_go = False
+            self.m.go()
 
     HOLD = 0.3      # s with no further edge before a queued burst goes out:
                     # longer than xmcheck.dblclick's longest gap (0.12 s)
@@ -663,10 +723,17 @@ class Server(object):
             if self._chain and time.time() - self._chain_t >= self.HOLD:
                 with self._lk:
                     self._flush()
+            elif self._bx_go and time.time() - self._bx_t >= self.HOLD:
+                with self._lk:          # (asked again UNDER the lock: an
+                    if (self._bx_go     # edge being served holds it, and
+                            and time.time() - self._bx_t >= self.HOLD):
+                        self._bx_resume()   # restamps _bx_t when done)
 
     def _flush(self):
-        """Send the queued button edges (see _button) as one chain."""
+        """Send the queued button edges (see _button) as one chain - or, on
+        86Box, run the guest a burst of edges left paused (_box_edges)."""
         with self._lk:
+            self._bx_resume()
             chain, self._chain = self._chain, []
             if not chain:
                 return

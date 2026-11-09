@@ -118,7 +118,7 @@ SSV_BUSY    equ 4               ; may your image be freed? Out: CF = 1 = no,
 ; -----------------------------------------------------------------------------
 ; State. In .text with real initialisers rather than in .bss, and here that is
 ; not the usual caution - .bss does arrive zeroed (kernel.asm: the image's gap
-; to COLD_START is emitted as zeros and stage 2's one contiguous read
+; to OVL_START, COLD_START on NO_ROM_COLD, is emitted as zeros and the load
 ; lands them), and it costs the same image bytes either way, because the rung
 ; KIMG_PARA rounds covers .text and .bss together.
 ;
@@ -135,7 +135,9 @@ blk_t0      dw 0                ; [ticks] when the current idle period began
 blk_act     db 0                ; mou_isr saw a packet; the UI task spends it
 
 ; -----------------------------------------------------------------------------
-; The settings (SPEC.md 79.4), and they are in EVERY BUILD.
+; The settings (SPEC.md 79.4). THEY ARE kern_big's ALONE NOW: the next two
+; paragraphs are the argument that once carried them on kern_small too, and
+; the note after them is why it no longer does.
 ;
 ; kern_small has no animation - SAVER.DRV is inside %ifdef KERN_BIG here and
 ; drv_load_at, its only loader, is inside one in driver.inc - but it reads and
@@ -544,6 +546,40 @@ blk_set:
 blk_relit:
     call menu_force
     call dock_force
+%ifdef KHP_RELIT
+%ifdef KERN_BIG
+    cmp byte [vid_ndisp], 1     ; TWO DISPLAYS: the other card's desktop is
+    ja .all                     ; wm_paint_all's EXT_DESK, whole
+%endif
+    call wm_fs_vis              ; ...and a fullscreen window still up: its
+    jc .all                     ; walk starts at it (wm_paint_all's .fswins)
+    ; THE WHOLE BAND IS THE DAMAGE (SPEC.md 11.91.7). wm_paint_all draws the
+    ; desktop and then every window back to front WHOLE, so a pixel under the
+    ; top window was written once per layer - seven to eight times over in
+    ; deskbench's scene - and every covered window put its whole content back
+    ; only for the windows above to paint over it. The damage pass draws each
+    ; window where nothing above will (11.3.3's cull, 11.96.15's pieces,
+    ; 11.97's chrome) and dithers only the ground no window holds (11.91.1),
+    ; and its marking needs no vacated rect: [wm_dmg_stwin] is 0 here, so
+    ; every window the rect touches is marked. The bar and the strip are
+    ; forced above and drawn by the pass; a window over the strip owes it
+    ; through wm_dmg_dk as on any pass. AX..DX are the callers': banked.
+    push ax
+    push bx
+    push cx
+    push dx
+    xor ax, ax                  ; x 0 .. the right edge, MBAR_H .. the bottom:
+    mov bx, MBAR_H              ; wm_paint_dmg clamps the far corner onto the
+    mov cx, 7FFFh               ; live screen, and its dither keeps to the
+%ifdef KERN_BIG                 ; bands (wm_dmg_bands), off the dock
+    mov dx, cx
+%else
+    mov dx, 7FFFh               ; a byte longer than `mov dx, cx` ON PURPOSE:
+%endif                          ; kern_small's wm_paint_all and ui_task parity
+    call wm_paint_dmg
+    jmp kret_dx                 ; once a relight: the shared ladder, 3 bytes
+.all:                           ; for 5 (kernel hot-paths pass 1, size)
+%endif
     jmp wm_paint_all            ; a tail jump: both callers are near (fsx.inc
                                 ; is .text, and kernel.asm's cw_blk_relit is
                                 ; `call blk_relit / retf`), so wm_paint_all's
@@ -568,7 +604,7 @@ section .cold
 ; this file that can multiply at all. SS_MAXMIN is what a word of ticks holds.
 ;
 ; kern_big's ALONE now: its three callers - SYSTEM.CFG's reader
-; (through wm_cbd), ss_set_x and the blanker's wake - are all kern_big's,
+; (through wm_cbd), ss_post_x and ssf_set's blanker wake - are all kern_big's,
 ; and kern_small, which reads no SYSTEM.CFG and has no saver, keeps [ss_idle]
 ; at its resting BLK_IDLE for ever (kernel size pass 13, -23 there).
 ; -----------------------------------------------------------------------------
@@ -707,10 +743,20 @@ ss_open:
 ;
 ; THE DESKTOP IS OWED A FULL REPAINT AND THERE IS NO CHEAPER ANSWER. A session
 ; has drawn over the menu bar, the drive column, the dock and every window, so
+%ifdef KHP_RELIT
+; there is no damage rect to be clever with - the whole band IS the damage
+%else
 ; there is no damage rect to be clever with - wm_paint_all IS the damage
+%endif
 ; (PERFORMANCE.md rule 1's one legitimate exemption, because the whole screen
+%ifdef KHP_RELIT
+; really did change). It is paid once per wake, on the far side of a period
+; measured in minutes - and since SPEC.md 11.91.7 through the damage pass,
+; which writes each pixel about once rather than once per window layer.
+%else
 ; really did change). It is ~0.4s on the 5150 and it is paid once per wake, on
 ; the far side of a period measured in minutes.
+%endif
 ;
 ; **AND wm_paint_all ALONE IS NOT ENOUGH**, which is what cw_blk_relit is for
 ; and is worth stating because it looks like it should be. That routine forces

@@ -41,8 +41,8 @@ VID_A_VESA  equ 1 << VID_VESA    ; bit 4. Lit by vx_boot_x when VESA.DRV
 VID_L_RIGHT equ 0
 VID_L_BELOW equ 1
 
-; .text and not .bss, like everything else that has to be right before the
-; kernel has zeroed anything: -f bin zeroes nothing at all.
+; .text and not .bss, though .bss would serve: vid_probe_avail ORs bits into
+; it from kmain, and by then .bss is the image's zero padding (SPEC.md 10).
 vid_avail   db 0                ; which adapters answered (VID_A_*). Probed
                                 ; ONCE, at boot, and cached - vid_switch moves
                                 ; [vid_kind], so re-deriving it later would
@@ -97,7 +97,7 @@ vid_dbg_blk:
 ; =============================================================================
 ; THE ADAPTER PROBE TRIO, IN THE BOOT OVERLAY (SPEC.md 2.5.2,
 ; docs/plans/LAST-DROP-BYTES.md row 2) - 262 contiguous bytes and the cleanest body
-; in the tree to move: ONE inbound edge in the whole repository (kmain:4211),
+; in the tree to move: ONE inbound edge in the whole repository (kmain's OVBCALL),
 ; ZERO outbound, and no data and no `section` line anywhere in the span.
 ; vid_probe_avail calls vid_memchk three times and vid_cga_alias once and calls
 ; nothing else at all, so the two below it stay near-called and keep their near
@@ -112,7 +112,8 @@ section .ovl                   ; kern_big: the WINDOW half (SPEC.md 2.5.3) -
                                 ; forfeit at the first mount, and this build's
                                 ; window has room to spare
 %else
-section .boot2                    ; ...and kern_small: the BLOB half instead
+B3SECT                          ; ...and kern_small: `.boot3` (BOOT3-PLAN wave 1;
+                                ; it was the BLOB half until then)
                                 ; (SPEC.md 2.5.3.2). Same deadline either way -
                                 ; every caller here runs before drv_boot - so
                                 ; the choice is only about WHOSE bytes: on this
@@ -120,7 +121,7 @@ section .boot2                    ; ...and kern_small: the BLOB half instead
                                 ; plus the mount buffers, and those bytes are
                                 ; the listing's. The blob is already read and
                                 ; has room, so the body goes there and the
-                                ; region sheds. `.boot2` is written LAST on
+                                ; region sheds. `B3SECT` is written LAST on
                                 ; purpose: tools/os88ovlchk.py reads SOURCE and
                                 ; cannot evaluate the %ifdef, so it files this
                                 ; block by the arm below - which is the build
@@ -323,7 +324,7 @@ vid_probe_avail:
 ; vid_avail read 0x02 (Hercules alone) where it should read 0x06.
 ;
 ; Offset 0x7F00 is inside the Hercules' page 0 and PAST THE LAST DISPLAYED
-; BYTE: four banks of 87 rows x 90 bytes end at 0x7796, and page 0 runs to
+; BYTE: four banks of 87 rows x 90 bytes end at 0x7E96, and page 0 runs to
 ; 0x7FFF. So the probe never flickers the screen it is running on. On the CGA
 ; side that offset is past its 16KB and reads back through whatever mirroring
 ; the card does, which is fine - the question is only whether the two answers
@@ -385,8 +386,9 @@ section .text                   ; ...and the overlay's three end here
                                 ; otherwise reach the ror below, and the 8086
                                 ; does not mask a rotate count - kind 8 would
                                 ; rotate by 9 and answer for kind 0. cmp sets
-                                ; CF = 1 for AL < 4, i.e. IN range, so one cmc
-                                ; makes CF = 1 mean "refuse" and the jump
+                                ; CF = 1 for AL <= VID_KIND_MAX, i.e. IN
+                                ; range, so one cmc makes CF = 1 mean
+                                ; "refuse" and the jump
                                 ; carries it straight out (jc and pop touch no
                                 ; flag). Setting CF before the compare would
                                 ; not work - cmp overwrites it.
@@ -398,9 +400,9 @@ section .text                   ; ...and the overlay's three end here
     inc cl                      ; ROR by n leaves bit n-1 of the original in
     mov al, [vid_avail]         ; CF, so n = kind+1 puts bit KIND there - which
     ror al, cl                  ; is what `test [vid_avail], 1 << kind` was.
-    cmc                         ; CL is 1..4, never 0. Then invert to this
-.out:                           ; routine's published polarity: CF = 0 is yes
-    pop cx
+    cmc                         ; CL is 1..VID_KIND_MAX+1, never 0. Then
+.out:                           ; invert to this routine's published
+    pop cx                      ; polarity: CF = 0 is yes
     pop ax                      ; pop touches no flag
     ret
 %endmacro
@@ -474,7 +476,10 @@ section .text
 ;
 ; in:       -
 ; out:      -
-; clobbers: flags
+; clobbers: AX and the flags (kernel size pass 18, -2: its callers are the
+;           reboot path's - ui_cmd_reboot, which never comes back, and
+;           HIBER.DRV's hbm_bye and hbm_down through cw_mem_disp, neither of
+;           which reads AX before writing it - so the bank went)
 ;
 ; vid_text names the PRIMARY's card. int 19h is a bootstrap and not a POST -
 ; it re-reads the boot sector and jumps, resetting no video at all - so what
@@ -494,12 +499,17 @@ section .text
 ; an empty text screen, which is the one thing that path exists to prevent.
 ; -----------------------------------------------------------------------------
 vid_reboot:
-    push ax
-    call vid_text
-%ifdef GFX_VGA                  ; without a VGA in the build the tail cannot
-                                ; run: [vid_avail]'s VGA bit is never set, so
-                                ; the test below always jumps - vid_text alone
-                                ; is already the whole of this routine there
+%ifndef GFX_VGA
+    jmp near vid_text           ; no VGA: vid_text is the whole of it. NEAR on
+                                ; purpose (it would reach short): the odd byte
+                                ; keeps kern_small's hot routines at their
+                                ; measured parity against vid_bk's -1 above
+                                ; (kernel size pass 18), and this runs once
+%else
+    call vid_text                ; (without a VGA in the build the tail could
+                                ; never run - [vid_avail]'s VGA bit is never
+                                ; set there - so that build is the tail jump
+                                ; above, and nothing banks AX for it)
     cmp byte [vid_kind], VID_HERC   ; the mono card is the ONLY primary int 10h
     jne .out                    ; does not drive - and on a VGA machine the CGA
                                 ; row IS the VGA doing mode 6, so vid_text has
@@ -510,9 +520,8 @@ vid_reboot:
     mov ax, 0x0003              ; refuse on a machine flagged mono
     int 0x10
 .out:
-%endif
-    pop ax
     ret
+%endif
 
 ; =============================================================================
 ; THE BOOT STATUS LINE (SPEC.md 15.6) - ENTIRELY IN THE BOOT OVERLAY
@@ -597,27 +606,37 @@ SPL_MSG_Y     equ 288           ; VGA: under the bar trough (rows 262..281) and
 ; The three drv_boot reaches, and the one spl_reset does. Every one of them
 ; preserves every register and the flags.
 ;
-; **THE FIRST THREE ARE NEAR NOW** (SPEC.md 2.5.2): drv_boot_x moved into this
-; same section, and it is their only caller, so what used to be a 20-byte
-; SPLCALL through spl_fp is three bytes of near call in one address space and
-; the `retf` they answered it with is a `ret`. That collapse is most of why
-; docs/plans/LAST-DROP-BYTES.md row 1 is the only row in the register that returns
-; more than it spends. ovl_spl_redraw below keeps its `retf` - spl_reset is in
-; `.boot2` and reaches it through SPLCALL still.
+; **THE FIRST THREE WERE NEAR, AND ARE FAR AGAIN** (SPEC.md 2.5.2, 2.9.15):
+; drv_boot_x moved into this same section and was their only caller, so what
+; used to be a 20-byte SPLCALL through spl_fp became three bytes of near call
+; and the `retf` they answered it with a `ret` - most of why
+; docs/plans/LAST-DROP-BYTES.md row 1 returned more than it spent. BOOT3-PLAN
+; wave 2 took drv_boot_x on into `.boot3` and LEFT THESE HERE, because
+; spl_mcs reads every string - the driver titles too - through the blob's CS:
+; so the call is a 5-byte B2CALL (`call BLOB_SEG_AT:`, still not SPLCALL's 20)
+; and they answer it with `retf`, kmain_o's other two's shape. kern_small has
+; no drv_boot and so no caller, and keeps its `ret`s byte for byte.
+; ovl_spl_redraw below keeps its `retf` - spl_reset is in `.boot2` and reaches
+; it through SPLCALL still.
 ; -----------------------------------------------------------------------------
+%ifdef OS88_DRIVERS
+ %define SPL_MRET retf          ; (B2CALL from drv_boot_x, `.boot3`)
+%else
+ %define SPL_MRET ret
+%endif
 ovl_spl_msg_cfg:                ; 'Loading SYSTEM.CFG'
     push si
     mov si, spl_s_cfg
     call spl_msg_cs
     pop si
-    ret
+    SPL_MRET
 
 ovl_spl_msg_boot:               ; 'Starting os8088'
     push si
     mov si, spl_s_boot
     call spl_msg_cs
     pop si
-    ret
+    SPL_MRET
 
 ; ...and the two kmain reaches, for the phases that are NOT disk and are the
 ; longest things on a hard-disk boot's bar (SPEC.md 15.6.4). Each is composed
@@ -665,9 +684,10 @@ spl_msg_cs:
 ; ovl_spl_msg_drv - 'Loading Driver n/N (Title)'
 ; in:  AL = the 1-based ordinal, AH = how many are being loaded,
 ;      CS:SI -> the row's title, in the blob's own DRV_TITLES (driver.inc)
-; THE ENTRY IS THE BODY: drv_boot_x is its one caller and is in this section,
-; so the `call spl_msg_drv / ret` stub that stood in front of it was four
-; bytes of the blob spent on a name (SPEC.md 125.1 took them back)
+; THE ENTRY IS THE BODY: drv_boot_x is its one caller, so the `call
+; spl_msg_drv / ret` stub that stood in front of it was four bytes of the blob
+; spent on a name (SPEC.md 125.1 took them back). FAR since BOOT3-PLAN wave 2
+; (SPL_MRET, above): drv_boot_x is `.boot3`'s, and hands SI as a BLOB offset
 ; -----------------------------------------------------------------------------
 ovl_spl_msg_drv:
     pushf
@@ -701,7 +721,7 @@ ovl_spl_msg_drv:
     pop bx
     pop ax
     popf
-    ret
+    SPL_MRET
 
 ; -----------------------------------------------------------------------------
 ; The composer. DI walks spl_mline and every store goes through spl_mput,
@@ -949,7 +969,7 @@ section .text
   %error "vid_blank, vid_blank_kind and vid_unblank_kind decide WHICH CARD by comparing against VID_HERC BY NAME and then treating `kind-1 >= 2` as PLANAR and everything else as the CGA (SPEC.md 39.18.1), vga12.inc's thm_set spells the same `kind-1 >= 2` for `is the primary a colour adapter` (SPEC.md 76.12.1), and vid_avail_test's `cmp al, VID_KIND_MAX` is the range that rests on it. A FIFTH kind is silently PLANAR to the dispatch and to the theme, and silently a CGA to vid_blank. Give it an arm in each of them before raising VID_KIND_MAX"
 %endif
 ; VSW_SWITCH %1, %2, %3 - %1_blank and %1_switch, written once (KSW_SECT,
-; kernel.asm): %1 the prefix (`vid` in CTRL.DRV, `bvs` in the boot blob), %2
+; kernel.asm): %1 the prefix (`vid` in CTRL.DRV, `bvs` in the boot's `.boot3`), %2
 ; the hop a RESIDENT callee is reached through (KSWK / BSWK), %3 the prefix of
 ; the wm_refit it calls (`wm` / `bvw`)
 %macro VSW_SWITCH 3
@@ -1013,8 +1033,10 @@ section .text
     %2 cur_unlazy               ; 1. the cursor's save-under is the old
     call %1 %+ _blank           ; geometry's - and so is the tube we are
 %ifdef KERN_SMALL               ; walking away from, and so is every raise
-    KSWN wm_su_drop_all         ; (in this image on kern_small, KSW_SECT)
-%else
+ %ifnidn %1, bvs                ; (the boot's bvs is kern_big's alone: said
+    KSWN wm_su_drop_all         ; so os88ovlchk's B4, which keeps both arms
+ %endif                         ; of a %ifdef, sees no `.boot3` near call
+%else                           ; to `.text`) in this image on kern_small
     %2 wm_su_drop_all           ; (resident on kern_big: OSAPI_THM_SET's too)
 %endif
                                 ; cache (SPEC.md 39.14.8.1): wm_su_ck compares
@@ -1025,7 +1047,11 @@ section .text
 
     mov [vid_kind], al          ; 2. republish the geometry
     call %1 %+ _equip           ; (this image's own: VSW_EQUIP)
-    call %1 %+ _apply           ; (this image's own: viddet.inc's VID_APPLY)
+%ifidn %1, bvs                  ; (the boot's is in `.boot3` and its
+    B2CALL bvs_apply            ; VID_APPLY stays in the blob - the splash's
+%else                           ; first tick runs it - so far, to that FAR
+    call %1 %+ _apply           ; body; this image's own otherwise:
+%endif                          ; viddet.inc's VID_APPLY)
     %2 vid_setmode
 
 %ifdef KERN_BIG
@@ -1099,7 +1125,7 @@ section .text
 ; NOTHING ELSE - several callers are inner loops with no spare register and one
 ; is inside IRQ4. There is no register to index a per-display block through, so
 ; the active display's numbers are copied into the words the renderer already
-; reads. It is vid_apply's own idiom, and 36 bytes of rep movsw against a
+; reads. It is vid_apply's own idiom, and 32 bytes of rep movsw against a
 ; 756 us per-call floor is under a tenth of one primitive - paid only when the
 ; display actually changes, which spatial coherence makes rare.
 ; =============================================================================
@@ -1225,19 +1251,22 @@ vid_bk:
 .mono:
     or dh, dh                   ; the two directions are NOT symmetric here
     mov al, 0x02                ; and the merge keeps both exactly: `mov`
-    jz .m8                      ; touches no flag, so blanking writes 3B8h
+    mov dx, 0x3BF               ; touches no flag (so DX may be loaded for
+    jz .m8                      ; both arms above the test, and the shared
+                                ; tail is a DL move - kernel size pass 18, -1),
+                                ; so blanking writes 3B8h
                                 ; alone - graphics + page 0, video OFF, byte
                                 ; for byte what vid_setmode's blank-first
                                 ; sequence writes (SPEC.md 39.6) - and leaves
                                 ; 3BFh alone, because the graphics LOCK is a
                                 ; second piece of state the unblank would then
                                 ; owe and the gated signal makes it pointless
-    mov dx, 0x3BF               ; unblanking: allow graphics FIRST (the order
+                                ; unblanking: allow graphics FIRST (the order
     mov al, 1                   ; vid_setmode uses), then video on
     out dx, al
     mov al, 0x0A
 .m8:
-    mov dx, 0x3B8
+    mov dl, 0xB8                ; 3B8h: DH is 3 on both arms
     out dx, al
 %ifdef GFX_VGA                  ; (without the planar arm .out is the next
     jmp short .out              ; instruction, and the jump is not assembled)
@@ -1284,7 +1313,10 @@ vid_cgamode db 0x1E             ; THE CGA'S OWN 3D8h VALUE (SPEC.md 39.18.1.1),
                                 ; the other card at boot) is at least
                                 ; self-consistent. OUTSIDE this file's
                                 ; %ifdef KERN_BIG: the idle blanker is not a
-                                ; dual-display feature, and neither is this
+                                ; dual-display feature, and neither is this.
+                                ; The first tick STORES it, so it is one of
+                                ; the two ends SPL_RESIDENT is derived over
+                                ; (kernel.asm's foot, BOOT3-PLAN 16.14)
 
 
 ; -----------------------------------------------------------------------------
@@ -1373,13 +1405,11 @@ VID_CTX_SZ   equ VID_CTX_W*2+5
 %error "vid_seg..vid_tseg is not VID_CTX_W contiguous words - see viddet.inc"
 %endif
 
-; .text with REAL INITIALISERS, not .bss, and for the reason vid_avail above
-; is: -f bin zeroes nothing at all, so a byte in .bss holds whatever the
-; machine left there until something writes it. These two are read before
-; vid_ctx_init runs on any path that ever grows one - and a garbage [vid_ndisp]
-; is a loop bound, while a garbage [vid_cur] is a display index that indexes
-; past the array. cur_sptr and dsk_fatwc are the two this tree has already been
-; caught by.
+; .text with REAL INITIALISERS, not .bss: [vid_ndisp] rests at 1, which
+; .bss's load-time zero cannot give, and both are read before vid_ctx_init
+; runs on any path that ever grows one - [vid_ndisp] is a loop bound and
+; [vid_cur] a display index into the array. cur_sptr and dsk_fatwc's
+; 0xFFFF neighbours are the non-zero defaults this tree has been caught by.
 vid_ndisp   db 1                ; displays the kernel has brought up. 1 for
                                 ; ever on a machine with one card
 vid_cur     db 0                ; which display's geometry is in the live block
@@ -1496,10 +1526,10 @@ vid_ctx_ptr:
 ; WRITTEN ONCE AND EXPANDED WHERE ITS CALLERS ARE (kernel size pass 15): it
 ; was a resident `.text` body nothing resident called. Its callers are the
 ; Control Panel's vid_disp_init (`vid_ctxcap`, CTRL.DRV), EXTD.DRV's Extend
-; (`ext_ctxcap`), the blob's bvs_disp_init (`cfx_ctxcap` in `.cfx` on
-; kern_big and kern_emu, whose blob is full, `bvs_ctxcap` in kern_mega's) and
+; (`ext_ctxcap`), the boot's bvs_disp_init (`cfx_ctxcap`, in `.boot3` beside
+; it since BOOT3-PLAN wave 4, on kern_big, kern_emu and kern_mega alike) and
 ; the boot overlay's vid_ctx_init, which writes it in. %1 is the label, %2
-; the return (`ret`, or `retf` in `.cfx`). The vid_ctx_pre it shared with
+; the return (`ret`, or `retf` in `.boot3`). The vid_ctx_pre it shared with
 ; vid_ctx_act is written into vid_ctx_act now, its one caller left.
 ; -----------------------------------------------------------------------------
 %macro VID_CTXCAP 2
@@ -1563,19 +1593,22 @@ vid_ctx_act:
                                 ; kernel size pass 17)
     mov si, di                  ; ...and the record is
     mov di, vid_seg             ; the SOURCE this way round
-    rep movsw
-    sub si, VID_CTX_W*2         ; ...and rep movsw left SI exactly that far
-    mov di, si                  ; PAST the record it read, so the pointer is
-                                ; recovered rather than derived a second time
+    rep movsw                   ; ...and it leaves SI exactly VID_CTX_W*2 past
+                                ; the record - which is VID_CTX_VX, the word
+                                ; read next, so the three below are addressed
+                                ; off SI as it stands: no `sub si` / `mov di,
+                                ; si` to recover the pointer, and [si] is a
+                                ; byte shorter than [di+32] (kernel size pass
+                                ; 18, -6)
     mov [vid_cur], al           ; ...published here, because AL is about to
                                 ; become the record's KIND below and nothing
                                 ; between reads [vid_cur]
                                 ; ...and republish the origin every hook reads
-    mov ax, [di+VID_CTX_VX]
+    mov ax, [si+VID_CTX_VX-VID_CTX_W*2]
     mov [vid_ox], ax
-    mov ax, [di+VID_CTX_VY]
+    mov ax, [si+VID_CTX_VY-VID_CTX_W*2]
     mov [vid_oy], ax
-    mov al, [di+VID_CTX_KIND]   ; ...and HOW DEEP this display is, which is not
+    mov al, [si+VID_CTX_KIND-VID_CTX_W*2]   ; ...and HOW DEEP this display is, which is not
     call vid_depth_set          ; in the sixteen-word run and is what every
                                 ; primitive dispatches on. Two 1bpp displays
                                 ; agree about it and a VGA beside a Hercules
@@ -1619,8 +1652,8 @@ vid_ctx_act:
 .out:
     ret
 %ifdef KERN_SMALL
-    nop                         ; PARITY PAD, never run, kern_small only (kernel
-%endif                          ; size pass 15): kern_big paired it with viddet's
+    nop                         ; NEVER ASSEMBLED: this file's %ifdef KERN_BIG
+%endif                          ; encloses it (a kern_small pad, size pass 15)
 
 ; -----------------------------------------------------------------------------
 ; vid_ctx_init - one display, at the origin, holding what is on screen now
@@ -1639,16 +1672,17 @@ vid_ctx_act:
 ; **THE LINE ABOVE USED TO SAY "and from vid_switch" AND IT WAS NOT TRUE** -
 ; vid_switch calls vid_avail_test, cur_unlazy, vid_blank, wm_su_drop_all,
 ; vid_equip, vid_apply, vid_setmode, vid_disp_init and desk_rowcalc, and none of
-; them is this. kmain:4203 is the only edge in the repository, which is what
+; them is this. kmain's B3CALL is the only edge in the repository, which is what
 ; puts this body in the BOOT OVERLAY (SPEC.md 2.5.2,
 ; docs/plans/LAST-DROP-BYTES.md row 13) - and a stale comment naming a runtime caller
 ; is exactly how a later session would add the one that breaks it silently.
+; `.boot3` since BOOT3-PLAN wave 3 (SPEC.md 2.9.15), `.ovl` until then.
 ;
 ; Its two outbound calls go through spw_near's `call bp`, which is `.boot2`'s
-; discipline unchanged from `.cold`'s: CS is the overlay's, DS is still
+; discipline unchanged from `.cold`'s: CS is the boot home's, DS is still
 ; KERNEL_SEG, so the body reads [vid_ndisp] and [vid_ox] exactly as it did.
 ; -----------------------------------------------------------------------------
-section .ovl
+B3SECT
 vid_ctx_init:
     push ax
     push di
@@ -1680,7 +1714,7 @@ vid_ctx_init:
     pop es
     pop di
     pop ax
-    retf                        ; FAR: kmain reaches this through SPLGATE1
+    retf                        ; FAR: kmain_o reaches this through B3CALL
 section .text
 
 ; (vid_fsx_enter/leave/unblank: EXTD.DRV's EXT_FSX, kernel/extmod.inc -
@@ -1815,10 +1849,11 @@ vid_disp_planes:
 ; vid_pt_clamp - the nearest virtual point inside display CL (SPEC.md 39.15.4)
 ; in:       AX = x, BX = y virtual, CL = the display to clamp into
 ; out:      AX/BX inside it
-; clobbers: AX, BX, flags
+; clobbers: AX, BX, CX, flags - CX is NOT banked: the one caller (mouse.inc's
+;           seam correction) pops its own CX straight after (kernel hot-paths
+;           pass 1, size: -2)
 ; -----------------------------------------------------------------------------
 vid_pt_clamp:
-    push cx
     push dx
     push di
     push si
@@ -1848,7 +1883,6 @@ vid_pt_clamp:
     pop si
     pop di
     pop dx
-    pop cx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1949,9 +1983,10 @@ vid_dual_ok:
 ; VGA when there is one.
 ; -----------------------------------------------------------------------------
 ; VSW_DISP %1, %2 - %1_disp_other and %1_disp_init, written once: CTRL.DRV's
-; `vid` and the boot blob's `bvs` (KSW_SECT, kernel.asm), %2 the hop a
-; resident callee is reached through. kmain_o and drv_boot reach the blob's,
-; the Display page and vid_switch the panel's
+; `vid` and the boot's `bvs` (KSW_SECT, kernel.asm), %2 the hop a
+; resident callee is reached through. kmain_o and drv_boot reach the boot's,
+; in `.boot3` since BOOT3-PLAN wave 4 (the blob's before it), the Display page
+; and vid_switch the panel's
 %macro VSW_DISP 2
 %1 %+ _disp_other:
     mov al, VID_HERC            ; on a colour card: the other one is the mono
@@ -1985,14 +2020,14 @@ vid_dual_ok:
 ; caller owes the repaint either way - the geometry it was drawn against has
 ; just moved.
 ;
-; TWO DISPLAYS IS [vid_avail] == HERC|CGA EXACTLY, and an equality rather than
-; a bit count for a reason per value. VGA|CGA is ONE CARD - vid_probe_avail
-; sets the CGA bit on every VGA/EGA without probing, mode 6 being a standard
-; BIOS mode there - so a bit count would report two displays on the commonest
-; machine in the tree and programme the VGA twice. VGA|HERC|CGA genuinely IS
-; two cards and is deliberately not taken: the bitmap cannot say whether the
-; CGA bit is that VGA's mode 6 or a third card, and SPEC.md 39.11.4 already
-; accepts that pairing as one nobody built.
+; TWO DISPLAYS IS vid_dual_ok's ANSWER - a HERC bit and a colour bit (VGA or
+; CGA), an EGA primary refused - and not a bit count. VGA|CGA is ONE CARD -
+; vid_probe_avail sets the CGA bit on every VGA/EGA without probing, mode 6
+; being a standard BIOS mode there - so a bit count would report two displays
+; on the commonest machine in the tree and programme the VGA twice.
+; VGA|HERC|CGA IS two cards and IS taken: vid_disp_other names the VGA as the
+; colour one (SPEC.md 39.19), and a third, real CGA beside them is
+; indistinguishable from the VGA's mode 6 and never programmed.
 ;
 ; THE SECONDARY IS BROUGHT UP BY MAKING IT MOMENTARILY CURRENT. vid_apply is
 ; the only routine that turns a vid_tab row into the sixteen words a display
@@ -2005,7 +2040,7 @@ vid_dual_ok:
 ; rather than a shortcut. A swap carries the smallest thing that is genuinely
 ; per-display, because it has to be cheap enough to sit under a drawing
 ; primitive (SPEC.md 39.12); vid_apply on the way IN also rewrote every desktop
-; word - the dock row, the clock cell, the drive column, the pull-down cap -
+; word - the dock row, the clock cell, the drive column -
 ; and only vid_apply puts those back.
 ;
 ; AND THE PRIMARY'S CARD IS NEVER RE-PROGRAMMED. There is no vid_setmode on the
@@ -2030,7 +2065,7 @@ vid_dual_ok:
                                 ; goes on wants it, and vid_dual_ok keeps AL)
     %2 vid_dual_ok              ; ONE load above the branch, because both arms
     jnc .paired                 ; below want it and vid_dual_ok keeps AH (it
-                                ; is three compares, a clc and an stc)
+                                ; is a compare, two tests and an stc)
 
     ; --- REFUSED, and that used to be the end of it ------------------------
     ; [vid_ndisp] was 1 here BY CONSTRUCTION: vid_dual_ok read nothing but
@@ -2064,8 +2099,9 @@ vid_dual_ok:
     ; and sizes itself from its kind (vid_disp_planes).
     ;
     ; So .cap is .single's own capture and not a second copy of it, because
-    ; the boot blob carries an expansion of this macro (driver.inc's bvs_)
-    ; and has no byte to spare. vid_desk_union runs too and is idempotent
+    ; the boot carries an expansion of this macro (driver.inc's bvs_, in
+    ; `.boot3` since BOOT3-PLAN wave 4, in the blob before it), and a second
+    ; copy is bytes stage 2 reads and expands on every boot. vid_desk_union runs too and is idempotent
     ; here: one display at the origin, so it writes back the vid_w/vid_h that
     ; vid_apply has just set from vid_cw/vid_ch.
 .paired:
@@ -2080,15 +2116,16 @@ vid_dual_ok:
                                 ; display, and display 0 current (vid_cur is
                                 ; the byte after, the %error beside them)
     mov [vid_kind], ah          ; (a no-op unless a caller moved it)
+%ifidn %1, bvs                  ; (the boot's VID_APPLY is the blob's: its
+    B2CALL bvs_apply            ; far body, as in VSW_SWITCH)
+%else
     call %1 %+ _apply           ; republishes the chrome extent AND re-homes
+%endif
 .cap:
     xor al, al                  ; the pointer onto display 0 - which is what
 %ifidn %1, bvs                  ; a shrinking desktop owes it - through this
- %ifdef COLD_SLIDE              ; image's own copy (VID_CTXCAP): the blob's
-    call CFX_RAM:cfx_ctxcap     ; is in `.cfx` where there is one, its own
- %else                          ; where there is not
-    call bvs_ctxcap
- %endif
+    B3CALL cfx_ctxcap           ; image's own copy (VID_CTXCAP): the blob's
+                                ; is in `.boot3`
 %else
     call %1 %+ _ctxcap
 %endif
@@ -2217,15 +2254,15 @@ vid_span_one:
 ;
 ; FOUR WORDS AND NOTHING ELSE, which is the whole reason 39.16 is cheap.
 ; vid_apply computed every derived CHROME word - the dock row, the clock cell,
-; the drive column, the pull-down cap, and 39.16's own vid_pw/vid_ph pair -
+; the drive column, and 39.16's own vid_pw/vid_ph pair -
 ; from the display it was applying, and vid_disp_init applies the primary
 ; LAST. So growing the desktop past them here leaves the strips measuring
 ; themselves against the monitor they are drawn on, with no special case
 ; anywhere.
 ;
 ; The union's ORIGIN is (0, 0) by construction: display 0 sits there and every
-; other display is placed to its right, so a bounding box needs only the far
-; corner.
+; other display is placed to its right or below it, so a bounding box needs
+; only the far corner.
 ; -----------------------------------------------------------------------------
 ; VSW_UNION %1, %2 - %1_desk_union, written once (kernel size pass 13): its
 ; callers are vid_disp_init, in CTRL.DRV (`vid`) and the boot blob (`bvs`),

@@ -118,7 +118,7 @@ static struct os88_menuset pmc_mset = {
  * on the 224-pixel arcade field is 25 cells; the row asserts 24 so that one
  * cell of slack survives a font or padding change in somebody else's file. */
 /* TEN LINES, AND TEN IS THE CEILING - the porter's credit was paid for by a
- * MERGE and not by an eleventh line (SPEC.md 91.14). CGA's content box is 144
+ * MERGE and not by an eleventh line (SPEC.md 91). CGA's content box is 144
  * rows and the widget measures n * 12 + 14, so ten is 134 and eleven is 146:
  * over, clamped, and the last line cut off. The gate at the bottom of
  * hosttest/pmcuitest.c is the one that says so, and it refused exactly this

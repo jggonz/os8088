@@ -524,7 +524,12 @@ w16z_read:
     jmp short .out
 .lz:
     pop bp                          ; BP = the buffer's segment
+%ifdef PKG_MEGA                     ; DS is the VALUE here, so not CSDO's
+    push ds                         ;   mov: WIN16's DS pushed, and CSDO's
+    CSDO pop word [CSEG w16z_ids]   ;   own saved DS is the same word, which
+%else                               ;   the pop takes - either is it
     mov [cs:w16z_ids], ds
+%endif
     push ds
     push es
     pop ds                          ; DS = the state
@@ -789,12 +794,12 @@ w16z_copy:
     jnz .buf
     mov ax, LZERROR_GLOBALLOC
     stc
-    jmp short .ret
+    jmp .ret
 .buf:
-    mov [cs:w16z_cbuf], dx
+    CSDO mov [CSEG w16z_cbuf], dx
     xor ax, ax
-    mov [cs:w16z_tot], ax
-    mov [cs:w16z_tot + 2], ax
+    CSDO mov [CSEG w16z_tot], ax
+    CSDO mov [CSEG w16z_tot + 2], ax
 .lp:
     W16SEG es, [cs:w16z_cbuf]       ; a block of ours: a virtual paragraph on
                                     ;   the arm, which ES may not be loaded with
@@ -813,8 +818,8 @@ w16z_copy:
     jc .werr
     cmp ax, cx
     jne .werr
-    add [cs:w16z_tot], ax
-    adc word [cs:w16z_tot + 2], 0
+    CSDO add [CSEG w16z_tot], ax
+    CSDO adc word [CSEG w16z_tot + 2], 0
     jmp short .lp
 .rerr:
     mov ax, LZERROR_READ
@@ -1609,7 +1614,7 @@ w16v_join:
     push ax
     push es
     lea ax, [di + W16V_PMAX - 1]
-    mov [cs:w16v_lim], ax
+    CSDO mov [CSEG w16v_lim], ax
     push di
     mov es, bx
     mov ax, bx
@@ -1631,7 +1636,7 @@ w16v_join:
     stc
     jmp short .long
 .sep:
-    mov byte [cs:di], '\'
+    CSDO mov byte [CSEG di], '\'
     inc di
 .name:
     mov es, dx
@@ -1652,14 +1657,14 @@ w16v_cpy:
     cmp di, [cs:w16v_lim]
     jae .long
     mov al, [es:si]
-    mov [cs:di], al
+    CSDO mov [CSEG di], al
     or al, al
     jz .end
     inc si
     inc di
     jmp short .c
 .long:
-    mov byte [cs:di], 0
+    CSDO mov byte [CSEG di], 0
     stc
     jmp short .out
 .end:

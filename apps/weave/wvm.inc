@@ -31,8 +31,20 @@
 ;   DS = the VM claim      globals, handles, stacks, ring, arenas (4.7)
 ;   ES = the bundle claim  bytecode and the ATOMS pool - read-only (2.1)
 ;   CS = ours              the dispatch table, and every variable this file
-;                          owns, reached with an explicit `cs:` override
+;                          owns, READ with an explicit `cs:` override
 ;   SS:SP = the task stack untouched; the CPU stack never carries VM state
+;
+; ...and every variable this file owns is WRITTEN through a DATA segment,
+; never through CS: DS-relative in a C entry, where DS is ours, and inside a
+; slice through ES = OUR segment (`mov es, [cs:wvm_ourds]`), put back to the
+; bundle (`mov es, [cs:wvm_bseg]`) before the next op's fetch. A real-mode
+; kernel would take `mov [cs:x]` as gladly; kern_mega's CS is a READ-ONLY
+; code alias, and it COMPLETES such a store as a #GP fixup, ~880 clocks on a
+; 286 - which was ~800 a second of PONG.WAB, one per staging word of every
+; native call (KERN-MEGA-PLAN 14.163). The ES switch costs an 8088 ~20
+; clocks where it is not paid for by a store it removes, and only on paths
+; that are already a native call, a CALL/RET, a string or a slice boundary -
+; never on the dispatch loop. A helper that switches ES gives it back.
 ;
 ; WEAVE-SPEC 4.12 pins the dispatch shape, and the `cs:` on the table is not
 ; decoration - DS is the claim, so an unprefixed `jmp [bx+wvm_tab]` would read
@@ -272,6 +284,7 @@ wvm_npush:  resw 1              ; 1 = the answer is pushed (SETP pushes none)
 wvm_nback:  resw 1              ; bytes to rewind SI by on a GC answer
 
 wvm_bcx:    resw 1              ; the budget, across a call that loses CX
+wvm_ssp:    resw 1              ; SP at the slice's entry, for .out
 wvm_besv:   resw 1              ; the caller's ES, for wvm_native
 
 ; the CALL handler's unpacked function-table row
@@ -372,6 +385,7 @@ wvm_hent:
 wvm_sdesc:
     push ax
     push dx
+    push es
     call wvm_hent
     mov ax, [bx+HT_OFF]
     cmp byte [bx+HT_TYPE], HTY_SSTR
@@ -382,16 +396,16 @@ wvm_sdesc:
 .static:
     mov dx, [cs:wvm_bseg]
 .have:
-    mov [cs:wvm_sa], dx
     mov bx, ax
-    push ds
-    mov ds, dx                  ; cc8086:allow whichever claim holds the bytes,
-    mov dl, [bx]                ; for one byte; restored on the next line
-    pop ds
-    xor dh, dh
+    mov es, dx                  ; cc8086:allow whichever claim holds the bytes,
+    mov al, [es:bx]             ; for one byte...
+    xor ah, ah
+    mov es, [cs:wvm_ourds]      ; cc8086:allow ...then ours, for the stores
+    mov [es:wvm_sa], dx
     inc bx
-    mov [cs:wvm_sa+2], bx
-    mov [cs:wvm_sa+4], dx
+    mov [es:wvm_sa+2], bx
+    mov [es:wvm_sa+4], ax
+    pop es
     pop dx
     pop ax
     ret
@@ -399,20 +413,26 @@ wvm_sdesc:
 ; wvm_atob - copy wvm_sa into wvm_sb (the second operand of a pair).
 wvm_atob:
     push ax
+    push es
+    mov es, [cs:wvm_ourds]      ; cc8086:allow ours, for the stores
     mov ax, [cs:wvm_sa]
-    mov [cs:wvm_sb], ax
+    mov [es:wvm_sb], ax
     mov ax, [cs:wvm_sa+2]
-    mov [cs:wvm_sb+2], ax
+    mov [es:wvm_sb+2], ax
     mov ax, [cs:wvm_sa+4]
-    mov [cs:wvm_sb+4], ax
+    mov [es:wvm_sb+4], ax
+    pop es
     pop ax
     ret
 
 ; wvm_nosb - wvm_sb is empty (a one-piece wvm_mkstr).
 wvm_nosb:
-    mov word [cs:wvm_sb], 0
-    mov word [cs:wvm_sb+2], 0
-    mov word [cs:wvm_sb+4], 0
+    push es
+    mov es, [cs:wvm_ourds]      ; cc8086:allow ours, for the stores
+    mov word [es:wvm_sb], 0
+    mov word [es:wvm_sb+2], 0
+    mov word [es:wvm_sb+4], 0
+    pop es
     ret
 
 ; =============================================================================
@@ -464,7 +484,10 @@ wvm_alloc:
     jc .full
     cmp ax, [cs:wvm_send]
     ja .full
-    mov [cs:wvm_stop_ct], ax
+    push es
+    mov es, [cs:wvm_ourds]      ; cc8086:allow ours, for the one store
+    mov [es:wvm_stop_ct], ax
+    pop es
     jmp short .have
 .arr:
     mov bx, [cs:wvm_stop_at]
@@ -473,7 +496,10 @@ wvm_alloc:
     jc .full
     cmp ax, [cs:wvm_aend]
     ja .full
-    mov [cs:wvm_stop_at], ax
+    push es
+    mov es, [cs:wvm_ourds]      ; cc8086:allow ours, for the one store
+    mov [es:wvm_stop_at], ax
+    pop es
 .have:
     push bx                     ; the object's base
     call wvm_hnew
@@ -536,7 +562,7 @@ wvm_mkstr:
     jc .gc
     mov [bx], dl                ; the length byte
     inc bx
-    mov [cs:wvm_tval], ax       ; bank the handle: the copies lose AX
+    push ax                     ; bank the handle: the copies lose AX
     mov di, bx
     push ds
     push ds
@@ -556,7 +582,7 @@ wvm_mkstr:
     cld                         ; when its length is 0, which is the one-piece
     rep movsb                   ; case (wvm_nosb)
     pop ds
-    mov ax, [cs:wvm_tval]
+    pop ax                      ; the handle
     clc
     jmp short .out
 .gc:
@@ -681,14 +707,16 @@ _wvm_gc:
     loop .sw
     mov si, WV_ARENA            ; --- compact, one arena then the other
     mov di, WV_ARENA
+    mov es, [cs:wvm_ourds]      ; cc8086:allow ours, for the two tops (the
+                                ; slides keep ES; restored at the exit)
     mov dx, [cs:wvm_stop_ct]
     call wvm_slide
-    mov [cs:wvm_stop_ct], di
+    mov [es:wvm_stop_ct], di
     mov si, [cs:wvm_abase]
     mov di, si
     mov dx, [cs:wvm_stop_at]
     call wvm_slide
-    mov [cs:wvm_stop_at], di
+    mov [es:wvm_stop_at], di
     mov bx, [cs:wvm_hs]
     mov byte [bx+HS_GCREQ], 0
 .out:
@@ -859,39 +887,46 @@ _wvm_bind:
     push di
     push ds
     push es
-    push ds
-    pop ax
-    mov [cs:wvm_ourds], ax
+    push ds                     ; (DS is ours here, so every store below is
+    pop ax                      ; DS-relative: the header's rule)
+    mov [wvm_ourds], ax
     mov ax, [bp+4]
-    mov [cs:wvm_vmseg], ax
+    mov [wvm_vmseg], ax
     mov ax, [bp+8]
-    mov [cs:wvm_bseg], ax
+    mov [wvm_bseg], ax
     mov ax, [bp+10]
-    mov [cs:wvm_code], ax
+    mov [wvm_code], ax
     mov ax, [bp+12]
-    mov [cs:wvm_clen], ax
+    mov [wvm_clen], ax
     mov ax, [bp+14]
-    mov [cs:wvm_nfunc], ax
+    mov [wvm_nfunc], ax
     shl ax, 1
     shl ax, 1
     add ax, 2
     add ax, [cs:wvm_code]
-    mov [cs:wvm_body], ax       ; the first byte a jump may land on (4.5.1)
+    mov [wvm_body], ax          ; the first byte a jump may land on (4.5.1)
     mov ax, [bp+16]
-    mov [cs:wvm_atoms], ax
+    mov [wvm_atoms], ax
     mov ax, [bp+18]
-    mov [cs:wvm_natom], ax
+    mov [wvm_natom], ax
     mov ax, [bp+20]
-    mov [cs:wvm_nblk], ax
+    mov [wvm_nblk], ax
 
     mov ax, [bp+6]              ; the claim's size in BYTES
     sub ax, WV_TAIL
-    mov [cs:wvm_send], ax       ; one past the string arena
-    mov [cs:wvm_abase], ax
+    mov [wvm_send], ax          ; one past the string arena
+    mov [wvm_abase], ax
+    mov word [wvm_stop_at], ax
     add ax, WV_ARRSZ
-    mov [cs:wvm_aend], ax
-    mov [cs:wvm_hs], ax         ; ...and the scratch is one past the array
+    mov [wvm_aend], ax
+    mov [wvm_hs], ax            ; ...and the scratch is one past the array
                                 ; arena, which is S-16 exactly
+    mov word [wvm_stop_ct], WV_ARENA
+    mov word [wvm_nfrm], 0
+    mov word [wvm_sp], WV_STK
+    mov word [wvm_pc], 0
+    mov word [wvm_argn], 0
+    mov word [wvm_errc], 0
 
     mov ax, [cs:wvm_vmseg]
     mov ds, ax                  ; cc8086:allow the claim, for the wipe below;
@@ -916,15 +951,6 @@ _wvm_bind:
     mov [bx+HS_GCREQ], ax       ; ...gcreq and state likewise
     mov ax, [bp+22]
     mov [bx+HS_SEED], ax
-
-    mov word [cs:wvm_stop_ct], WV_ARENA
-    mov ax, [cs:wvm_abase]
-    mov [cs:wvm_stop_at], ax
-    mov word [cs:wvm_nfrm], 0
-    mov word [cs:wvm_sp], WV_STK
-    mov word [cs:wvm_pc], 0
-    mov word [cs:wvm_argn], 0
-    mov word [cs:wvm_errc], 0
     pop es
     pop ds
     pop di
@@ -937,8 +963,8 @@ _wvm_bind:
 
 ; void wvm_unbind(void) - forget the claim, so a freed segment is never read.
 _wvm_unbind:
-    mov word [cs:wvm_vmseg], 0
-    mov word [cs:wvm_nfrm], 0
+    mov word [wvm_vmseg], 0     ; (DS is ours: a C entry)
+    mov word [wvm_nfrm], 0
     ret
 
 ; void wvm_argi(int v) - stage one int argument for the next wvm_begin.
@@ -951,10 +977,10 @@ _wvm_argi:
     jae .out
     shl bx, 1
     shl bx, 1
-    mov word [cs:wvm_argv+bx], WT_INT
+    mov word [wvm_argv+bx], WT_INT  ; (DS is ours: a C entry)
     mov ax, [bp+4]
-    mov [cs:wvm_argv+bx+2], ax
-    inc word [cs:wvm_argn]
+    mov [wvm_argv+bx+2], ax
+    inc word [wvm_argn]
 .out:
     pop bx
     pop bp
@@ -984,7 +1010,10 @@ _wvm_begin:
     mov ax, [bp+4]
     cmp ax, [cs:wvm_nfunc]
     jae .no
-    mov [cs:wvm_tfn], ax
+    mov [wvm_tfn], ax           ; DS STAYS OURS for the whole of this entry,
+                                ; so our stores are DS-relative (the header's
+                                ; rule) and the CLAIM is ES once the row has
+                                ; been read
     mov es, [cs:wvm_bseg]       ; cc8086:allow the bundle, for the table row
     shl ax, 1
     shl ax, 1
@@ -993,14 +1022,14 @@ _wvm_begin:
     mov bx, ax
     mov ax, [es:bx]
     add ax, [cs:wvm_code]
-    mov [cs:wvm_tofs], ax
+    mov [wvm_tofs], ax
     mov al, [es:bx+2]
     xor ah, ah
-    mov [cs:wvm_tna], ax
+    mov [wvm_tna], ax
     mov al, [es:bx+3]
     xor ah, ah
-    mov [cs:wvm_tnl], ax
-    mov ds, [cs:wvm_vmseg]      ; cc8086:allow the claim, for the frame set-up
+    mov [wvm_tnl], ax
+    mov es, [cs:wvm_vmseg]      ; cc8086:allow the claim, for the frame set-up
 
     mov di, WV_STK
     xor si, si
@@ -1017,8 +1046,8 @@ _wvm_begin:
     mov ax, [cs:wvm_argv+bx]
     mov dx, [cs:wvm_argv+bx+2]
 .pad:
-    mov [di], ax
-    mov [di+2], dx
+    mov [es:di], ax
+    mov [es:di+2], dx
     add di, 4
     inc si
     dec cx
@@ -1030,32 +1059,32 @@ _wvm_begin:
     mov ax, WT_NULL             ; the non-argument locals are NULL (4.7.1),
     xor dx, dx                  ; which is tag 4 and not a zeroed cell
 .fl:
-    mov [di], ax
-    mov [di+2], dx
+    mov [es:di], ax
+    mov [es:di+2], dx
     add di, 4
     loop .fl
 .done:
-    mov [cs:wvm_sp], di
+    mov [wvm_sp], di
     mov ax, [cs:wvm_tofs]
-    mov [cs:wvm_pc], ax
-    mov word [cs:wvm_nfrm], 1
+    mov [wvm_pc], ax
+    mov word [wvm_nfrm], 1
     mov bx, WV_FRM
-    mov word [bx+FR_RET], 0
-    mov word [bx+FR_BASE], WV_STK
+    mov word [es:bx+FR_RET], 0
+    mov word [es:bx+FR_BASE], WV_STK
     mov ax, [cs:wvm_tfn]
-    mov [bx+FR_FN], al
-    mov [cs:wvm_cfn], ax
+    mov [es:bx+FR_FN], al
+    mov [wvm_cfn], ax
     mov ax, [cs:wvm_tnl]
-    mov [bx+FR_NLOC], al
-    mov [cs:wvm_cnloc], ax
-    mov word [cs:wvm_cbase], WV_STK
+    mov [es:bx+FR_NLOC], al
+    mov [wvm_cnloc], ax
+    mov word [wvm_cbase], WV_STK
     mov bx, [cs:wvm_hs]
-    mov byte [bx+HS_STATE], 1
-    mov word [cs:wvm_argn], 0
+    mov byte [es:bx+HS_STATE], 1
+    mov word [wvm_argn], 0
     mov ax, 1
     jmp short .out
 .no:
-    mov word [cs:wvm_argn], 0
+    mov word [wvm_argn], 0
     xor ax, ax
 .out:
     pop es
@@ -1082,8 +1111,8 @@ _wvm_busy:
 _wvm_abort:
     push bx
     push ds
-    mov word [cs:wvm_nfrm], 0
-    mov word [cs:wvm_sp], WV_STK
+    mov word [wvm_nfrm], 0      ; (DS is ours: a C entry)
+    mov word [wvm_sp], WV_STK
     mov ax, [cs:wvm_vmseg]
     or ax, ax
     jz .out
@@ -1141,7 +1170,8 @@ _wvm_slice:
     push di
     push ds
     push es
-    mov word [cs:wvm_stop], WR_IDLE
+    mov [wvm_ssp], sp           ; the depth .out goes back to (DS is ours
+    mov word [wvm_stop], WR_IDLE    ; until the switch below)
     cmp word [cs:wvm_nfrm], 0
     je .out
     mov cx, [bp+4]
@@ -1149,16 +1179,26 @@ _wvm_slice:
     jz .out
     push es
     pop ax
-    mov [cs:wvm_besv], ax       ; the caller's ES, for wvm_native
+    mov [wvm_besv], ax          ; the caller's ES, for wvm_native
+    mov word [wvm_stop], WR_MORE
     mov ds, [cs:wvm_vmseg]      ; cc8086:allow THE SLICE'S SEGMENTS, which the
     mov es, [cs:wvm_bseg]       ; header sets out; both restored at .out
     cld
     mov si, [cs:wvm_pc]
     mov di, [cs:wvm_sp]
-    mov word [cs:wvm_stop], WR_MORE
     jmp short wvm_next
 .out:
     mov ax, [cs:wvm_stop]
+    mov sp, [cs:wvm_ssp]        ; THE SLICE'S OWN DEPTH, whatever a refusal
+                                ; left: a helper that refuses (wvm_pushv's
+                                ; `too deep.`, inside CALL's fill with BX
+                                ; pushed) leaves through wvm_exit with its
+                                ; return address still on the stack, and the
+                                ; pops below took that for ES and returned
+                                ; through a saved register
+                                ; (tests/weave/vmcorpus/12errstk.wjs). Banked
+                                ; at the entry, not taken from BP: a native
+                                ; may lose BP (wvm_native's contract)
     pop es
     pop ds
     pop di
@@ -1182,35 +1222,41 @@ wvm_next:
     jmp [cs:bx+wvm_tab]
 
 ; --- the four ways out -------------------------------------------------------
+; Each leaves with AX = the answer and stores through ES = OURS: the bundle
+; is done with, and _wvm_slice.out gives ES back (the header's rule). A
+; budget's end is the common one, and costs the slice one ES load.
 wvm_x_budget:
-    mov word [cs:wvm_stop], WR_MORE
+    mov ax, WR_MORE
     jmp short wvm_exit
 wvm_x_done:
-    mov word [cs:wvm_nfrm], 0
     mov di, WV_STK              ; HALT and the outermost RET clear the stack
-    mov word [cs:wvm_stop], WR_DONE
     mov bx, [cs:wvm_hs]
     mov byte [bx+HS_STATE], 0
-    jmp short wvm_exit
+    mov ax, WR_DONE
+    jmp short wvm_exit0
 wvm_x_gc:
-    mov word [cs:wvm_stop], WR_GC
     mov bx, [cs:wvm_hs]
     mov byte [bx+HS_GCREQ], 1
+    mov ax, WR_GC
     jmp short wvm_exit
 
 ; wvm_err - stop the handler with code AL (10.6): stacks cleared, ring kept,
 ; globals as they are, the app lives on.
 wvm_err:
     xor ah, ah
-    mov [cs:wvm_errc], ax
+    mov es, [cs:wvm_ourds]      ; cc8086:allow ours, for the code
+    mov [es:wvm_errc], ax
 wvm_err2:                       ; ...and this entry for a code the runtime set
+    mov es, [cs:wvm_ourds]      ; cc8086:allow (again: wvm_nat comes in here)
     mov ax, [cs:wvm_cfn]
-    mov [cs:wvm_errfn], ax
-    mov word [cs:wvm_nfrm], 0
+    mov [es:wvm_errfn], ax
     mov di, WV_STK
-    mov word [cs:wvm_stop], WR_ERR
     mov bx, [cs:wvm_hs]
     mov byte [bx+HS_STATE], 0
+    mov ax, WR_ERR
+wvm_exit0:                      ; no handler is running any more
+    mov es, [cs:wvm_ourds]      ; cc8086:allow ours, for the frame count
+    mov word [es:wvm_nfrm], 0
     ; fall through
 
 wvm_exit:
@@ -1219,8 +1265,10 @@ wvm_exit:
     ; banked - not the ones the opcode handler or the helper that refused did.
     ; So a depth measured against whatever was walking when it escaped is
     ; meaningless; the slice's own balance is checked by walking _wvm_slice.
-    mov [cs:wvm_pc], si
-    mov [cs:wvm_sp], di
+    mov es, [cs:wvm_ourds]      ; cc8086:allow ours; .out restores the caller's
+    mov [es:wvm_stop], ax
+    mov [es:wvm_pc], si
+    mov [es:wvm_sp], di
     jmp _wvm_slice.out
 
 ; 4.5.1's refusals, reached from every operand bound
@@ -1676,26 +1724,29 @@ wvm_call:
     mov ax, [cs:wvm_nfrm]
     cmp ax, WV_NFRM
     jae .deep
-    mov [cs:wvm_tfn], bx
+    mov dx, bx                  ; DX = the function index, for a moment
     shl bx, 1
     shl bx, 1
     add bx, [cs:wvm_code]
     add bx, 2
     mov ax, [es:bx]
     add ax, [cs:wvm_code]
-    mov [cs:wvm_tofs], ax
-    mov al, [es:bx+2]
+    mov bx, [es:bx+2]           ; BL = nargs, BH = nlocals: the bundle's last
+    mov es, [cs:wvm_ourds]      ; cc8086:allow word this op, so ES = OURS for
+                                ; the stores (the header's rule); the bundle
+                                ; again at .go
+    mov [es:wvm_tfn], dx
+    mov [es:wvm_tofs], ax
+    mov al, bh
     xor ah, ah
-    mov [cs:wvm_tna], ax
-    mov al, [es:bx+3]
-    xor ah, ah
-    mov [cs:wvm_tnl], ax
-    mov ax, [cs:wvm_tna]
+    mov [es:wvm_tnl], ax
+    mov al, bl
+    mov [es:wvm_tna], ax
     shl ax, 1
     shl ax, 1
     mov bx, di
     sub bx, ax
-    mov [cs:wvm_tbase], bx      ; base = sp - nargs cells
+    mov [es:wvm_tbase], bx      ; base = sp - nargs cells
     mov bx, [cs:wvm_tnl]
     sub bx, [cs:wvm_tna]
 .fl:
@@ -1718,15 +1769,16 @@ wvm_call:
     mov [bx+FR_RET], si         ; the CALLER's next instruction
     mov ax, [cs:wvm_tbase]
     mov [bx+FR_BASE], ax
-    mov [cs:wvm_cbase], ax
+    mov [es:wvm_cbase], ax
     mov ax, [cs:wvm_tfn]
     mov [bx+FR_FN], al
-    mov [cs:wvm_cfn], ax
+    mov [es:wvm_cfn], ax
     mov ax, [cs:wvm_tnl]
     mov [bx+FR_NLOC], al
-    mov [cs:wvm_cnloc], ax
-    inc word [cs:wvm_nfrm]
+    mov [es:wvm_cnloc], ax
+    inc word [es:wvm_nfrm]
     mov si, [cs:wvm_tofs]
+    mov es, [cs:wvm_bseg]       ; cc8086:allow the bundle, for the next fetch
     jmp wvm_next
 .deep:
     mov al, WE_DEEP
@@ -1734,10 +1786,13 @@ wvm_call:
 
 wvm_ret:
     call wvm_popv
-    mov [cs:wvm_tval], ax
-    mov [cs:wvm_tval+2], dx
-    dec word [cs:wvm_nfrm]
+    push dx                     ; the value, across the frame pop - on the CPU
+    push ax                     ; stack for these few instructions of one op
+    mov es, [cs:wvm_ourds]      ; cc8086:allow ours, for the stores (RET reads
+                                ; no bundle byte; the bundle again below)
     mov ax, [cs:wvm_nfrm]
+    dec ax
+    mov [es:wvm_nfrm], ax
     mov bx, ax
     shl bx, 1
     add bx, ax
@@ -1745,26 +1800,21 @@ wvm_ret:
     add bx, WV_FRM
     mov di, [bx+FR_BASE]        ; sp = base
     mov si, [bx+FR_RET]
-    cmp word [cs:wvm_nfrm], 0
+    or ax, ax                   ; frames left
+    pop ax
+    pop dx                      ; (a pop leaves the flags)
     RE wvm_x_done               ; the outermost RET ends the invocation
-    mov ax, [cs:wvm_tval]
-    mov dx, [cs:wvm_tval+2]
     call wvm_pushv
-    mov ax, [cs:wvm_nfrm]       ; the caller is the top frame again
-    dec ax
-    mov bx, ax
-    shl bx, 1
-    add bx, ax
-    shl bx, 1
-    add bx, WV_FRM
+    sub bx, 6                   ; the caller's frame is the top one again
     mov ax, [bx+FR_BASE]
-    mov [cs:wvm_cbase], ax
+    mov [es:wvm_cbase], ax
     mov al, [bx+FR_NLOC]
     xor ah, ah
-    mov [cs:wvm_cnloc], ax
+    mov [es:wvm_cnloc], ax
     mov al, [bx+FR_FN]
     xor ah, ah
-    mov [cs:wvm_cfn], ax
+    mov [es:wvm_cfn], ax
+    mov es, [cs:wvm_bseg]       ; cc8086:allow the bundle, for the next fetch
     jmp wvm_next
 
 ; --- INCG / DECG -------------------------------------------------------------
@@ -1825,7 +1875,10 @@ wvm_aset:
     cmp word [bx-4], WT_INT
     RNE wvm_type
     mov ax, [bx-2]
-    mov [cs:wvm_tval], ax       ; the value, across the bounds check
+    push es
+    mov es, [cs:wvm_ourds]      ; cc8086:allow ours, for the one store
+    mov [es:wvm_tval], ax       ; the value, across the bounds check
+    pop es
     mov dx, [bx-10]
     mov ax, [bx-6]
     sub di, 12
@@ -1841,8 +1894,9 @@ wvm_aset:
 
 ; the shared refusal: `array index %d of %d.`  AX = the index, DX = the count.
 wvm_aoob:
-    mov [cs:wvm_erra], ax
-    mov [cs:wvm_errb], dx
+    mov es, [cs:wvm_ourds]      ; cc8086:allow ours: a refusal, so the bundle
+    mov [es:wvm_erra], ax       ; is done with
+    mov [es:wvm_errb], dx
     mov al, WE_AIDX
     jmp wvm_err
 
@@ -1863,53 +1917,60 @@ wvm_apay:
 ; GETP / SETP / CALLM / the impure builtins - out through wvm_native
 ; =============================================================================
 
+; Each reads its operands out of the bundle FIRST and then makes ES ours, so
+; the request is staged with `[es:` stores (the header's rule) - wvm_nat
+; takes it from there with ES still ours, and gives the bundle back after
+; the call, as it always did.
 wvm_getp:
     mov al, [es:si]
     xor ah, ah
     inc si
-    mov [cs:wvm_natomv], ax
+    mov es, [cs:wvm_ourds]      ; cc8086:allow ours, for the request
+    mov [es:wvm_natomv], ax
     mov bx, di
     cmp word [bx-4], WT_COMP
     RNE wvm_type
     mov ax, [bx-2]
-    mov [cs:wvm_ncomp], ax
-    mov word [cs:wvm_nkind], WNK_GETP
-    mov word [cs:wvm_nargc], 0
-    mov word [cs:wvm_npop], 1
-    mov word [cs:wvm_npush], 1
-    mov word [cs:wvm_nback], 2
+    mov [es:wvm_ncomp], ax
+    mov word [es:wvm_nkind], WNK_GETP
+    mov word [es:wvm_nargc], 0
+    mov word [es:wvm_npop], 1
+    mov word [es:wvm_npush], 1
+    mov word [es:wvm_nback], 2
     jmp wvm_nat
 
 wvm_setp:
     mov al, [es:si]
     xor ah, ah
     inc si
-    mov [cs:wvm_natomv], ax
+    mov es, [cs:wvm_ourds]      ; cc8086:allow ours, for the request
+    mov [es:wvm_natomv], ax
     mov bx, di
     cmp word [bx-8], WT_COMP
     RNE wvm_type
     mov ax, [bx-6]
-    mov [cs:wvm_ncomp], ax
-    mov word [cs:wvm_nkind], WNK_SETP
-    mov word [cs:wvm_nargc], 1
-    mov word [cs:wvm_npop], 2
-    mov word [cs:wvm_npush], 0
-    mov word [cs:wvm_nback], 2
+    mov [es:wvm_ncomp], ax
+    mov word [es:wvm_nkind], WNK_SETP
+    mov word [es:wvm_nargc], 1
+    mov word [es:wvm_npop], 2
+    mov word [es:wvm_npush], 0
+    mov word [es:wvm_nback], 2
     jmp wvm_nat
 
 wvm_callm:
     mov al, [es:si]
     xor ah, ah
-    mov [cs:wvm_natomv], ax
     mov bl, [es:si+1]
     xor bh, bh
     cmp bx, 9
     RAE wvm_badop
     inc si
     inc si
-    mov [cs:wvm_nargc], bx
+    mov es, [cs:wvm_ourds]      ; cc8086:allow ours, for the request
+    mov [es:wvm_natomv], ax
+    mov [es:wvm_nargc], bx
     inc bx
-    mov [cs:wvm_npop], bx       ; the arguments and the component
+    mov [es:wvm_npop], bx       ; the arguments and the component
     shl bx, 1
     shl bx, 1
     mov ax, di
@@ -1918,10 +1979,10 @@ wvm_callm:
     cmp word [bx], WT_COMP
     RNE wvm_type
     mov ax, [bx+2]
-    mov [cs:wvm_ncomp], ax
-    mov word [cs:wvm_nkind], WNK_CALLM
-    mov word [cs:wvm_npush], 1
-    mov word [cs:wvm_nback], 3
+    mov [es:wvm_ncomp], ax
+    mov word [es:wvm_nkind], WNK_CALLM
+    mov word [es:wvm_npush], 1
+    mov word [es:wvm_nback], 3
     jmp wvm_nat
 
 ; --- BUILT: the six PURE builtins here, the six impure ones out (8.1) -------
@@ -1934,23 +1995,22 @@ wvm_built:
     xor ah, ah
     cmp ax, 9
     RAE wvm_badop
-    mov [cs:wvm_nargc], ax
+    inc si
+    inc si
+    mov es, [cs:wvm_ourds]      ; cc8086:allow ours, for the count...
+    mov [es:wvm_nargc], ax
     cmp bx, 6
     jb .impure
-    inc si
-    inc si
-    shl bx, 1
+    mov es, [cs:wvm_bseg]       ; cc8086:allow ...and a PURE one runs here,
+    shl bx, 1                   ; with the bundle back in ES
     jmp [cs:bx+wvm_btab-12]     ; the six pure ones are indices 6..11
 .impure:
-    mov [cs:wvm_natomv], bx     ; the builtin index rides in the atom slot
-    inc si
-    inc si
-    mov ax, [cs:wvm_nargc]
-    mov [cs:wvm_npop], ax
-    mov word [cs:wvm_ncomp], 0
-    mov word [cs:wvm_nkind], WNK_BUILT
-    mov word [cs:wvm_npush], 1
-    mov word [cs:wvm_nback], 3
+    mov [es:wvm_natomv], bx     ; the builtin index rides in the atom slot
+    mov [es:wvm_npop], ax
+    mov word [es:wvm_ncomp], 0
+    mov word [es:wvm_nkind], WNK_BUILT
+    mov word [es:wvm_npush], 1
+    mov word [es:wvm_nback], 3
     jmp wvm_nat
 
 wvm_btab:
@@ -1961,20 +2021,23 @@ wvm_btab:
 ; popped, because a GC answer has to leave the stack as it found it (4.8).
 ; SI is already past the operands; wvm_nback rewinds it on that answer.
 ; -----------------------------------------------------------------------------
+;
+; ENTERED WITH ES = OURS (the four handlers above), so the request and the
+; block are `[es:` stores - the block lives in our segment too.
 wvm_nat:
-    mov [cs:wvm_pc], si
-    mov [cs:wvm_sp], di
-    mov [cs:wvm_bcx], cx
+    mov [es:wvm_pc], si
+    mov [es:wvm_sp], di
+    mov [es:wvm_bcx], cx
     mov bx, [cs:wvm_nblk]
     mov ax, [cs:wvm_nkind]
-    mov [cs:bx+WN_KIND], ax
+    mov [es:bx+WN_KIND], ax
     mov ax, [cs:wvm_ncomp]
-    mov [cs:bx+WN_COMP], ax
+    mov [es:bx+WN_COMP], ax
     mov ax, [cs:wvm_natomv]
-    mov [cs:bx+WN_ATOM], ax
+    mov [es:bx+WN_ATOM], ax
     mov cx, [cs:wvm_nargc]
-    mov [cs:bx+WN_ARGC], cx
-    mov word [cs:bx+WN_ERRC], 0
+    mov [es:bx+WN_ARGC], cx
+    mov word [es:bx+WN_ERRC], 0
     mov ax, cx
     shl ax, 1
     shl ax, 1
@@ -1984,16 +2047,17 @@ wvm_nat:
     jcxz .copied
 .cp:
     mov ax, [si]
-    mov [cs:bx], ax
+    mov [es:bx], ax
     mov ax, [si+2]
-    mov [cs:bx+2], ax
+    mov [es:bx+2], ax
     add si, 4
     add bx, 4
     loop .cp
 .copied:
-    mov ds, [cs:wvm_ourds]      ; cc8086:allow the includer's own segment, so
-    mov es, [cs:wvm_besv]       ; that C runs normally; ES is what the caller
-    cld                         ; had, because a callback's ES is the kernel's
+    push es                     ; the includer's own segment (ES is ours), so
+    pop ds                      ; that C runs normally; ES is what the caller
+    mov es, [cs:wvm_besv]       ; had, because a callback's ES is the kernel's
+    cld
     call wvm_native
     ; THE TWO CLAIMS ARE RE-READ, NOT POPPED (WEAVE-SPEC 1.2.6). A
     ; native may claim - alert() creates a window, saveState() takes 8KB and
@@ -2010,13 +2074,14 @@ wvm_nat:
     jz .ok
     cmp ax, 2
     je .gc
-    mov bx, [cs:wvm_nblk]       ; a script error the runtime named (10.6.1)
-    mov ax, [cs:bx+WN_ERRC]
-    mov [cs:wvm_errc], ax
+    mov es, [cs:wvm_ourds]      ; cc8086:allow a script error the runtime
+    mov bx, [cs:wvm_nblk]       ; named (10.6.1): the bundle is done with, so
+    mov ax, [cs:bx+WN_ERRC]     ; ES = ours for the three stores
+    mov [es:wvm_errc], ax
     mov ax, [cs:bx+WN_ERRA]
-    mov [cs:wvm_erra], ax
+    mov [es:wvm_erra], ax
     mov ax, [cs:bx+WN_ERRB]
-    mov [cs:wvm_errb], ax
+    mov [es:wvm_errb], ax
     jmp wvm_err2
 .gc:
     sub si, [cs:wvm_nback]
@@ -2069,22 +2134,26 @@ wvm_b_str:
     call wvm_itoa               ; wvm_num, and AX = the length
     jmp short .made
 .bool:
-    or dx, dx
+    mov es, [cs:wvm_ourds]      ; cc8086:allow ours, for the name; the bundle
+    or dx, dx                   ; again at .lit
     jz .false
     mov ax, 4
-    mov word [cs:wvm_num], 'tr'
-    mov word [cs:wvm_num+2], 'ue'
-    jmp short .made
+    mov word [es:wvm_num], 'tr'
+    mov word [es:wvm_num+2], 'ue'
+    jmp short .lit
 .false:
     mov ax, 5
-    mov word [cs:wvm_num], 'fa'
-    mov word [cs:wvm_num+2], 'ls'
-    mov byte [cs:wvm_num+4], 'e'
-    jmp short .made
+    mov word [es:wvm_num], 'fa'
+    mov word [es:wvm_num+2], 'ls'
+    mov byte [es:wvm_num+4], 'e'
+    jmp short .lit
 .null:
+    mov es, [cs:wvm_ourds]      ; cc8086:allow ours, for the name
     mov ax, 4
-    mov word [cs:wvm_num], 'nu'
-    mov word [cs:wvm_num+2], 'll'
+    mov word [es:wvm_num], 'nu'
+    mov word [es:wvm_num+2], 'll'
+.lit:
+    mov es, [cs:wvm_bseg]       ; cc8086:allow the bundle back
 .made:
     call wvm_ownsa              ; wvm_sa = (our segment, wvm_num, AX)
     call wvm_nosb
@@ -2098,12 +2167,12 @@ wvm_b_str:
 
 ; wvm_ownsa - wvm_sa describes AX bytes at wvm_num, in OUR segment.
 wvm_ownsa:
-    push ax
-    mov ax, [cs:wvm_ourds]
-    mov [cs:wvm_sa], ax
-    mov word [cs:wvm_sa+2], wvm_num
-    pop ax
-    mov [cs:wvm_sa+4], ax
+    push es
+    mov es, [cs:wvm_ourds]      ; cc8086:allow ours, for the stores
+    mov [es:wvm_sa+4], ax
+    mov [es:wvm_sa], es
+    mov word [es:wvm_sa+2], wvm_num
+    pop es
     ret
 
 ; wvm_itoa - AX, signed, into wvm_num.  out: AX = the length.  CX preserved.
@@ -2112,6 +2181,8 @@ wvm_itoa:
     push cx
     push dx
     push di
+    push es
+    mov es, [cs:wvm_ourds]      ; cc8086:allow ours: the digits are stores
     mov di, wvm_num + 9
     mov bx, 0                   ; the sign
     or ax, ax
@@ -2126,13 +2197,13 @@ wvm_itoa:
     div cx
     add dl, '0'
     dec di
-    mov [cs:di], dl
+    mov [es:di], dl
     or ax, ax
     jnz .dig
     or bx, bx
     jz .nosign
     dec di
-    mov byte [cs:di], '-'
+    mov byte [es:di], '-'
 .nosign:
     mov ax, wvm_num + 9
     sub ax, di
@@ -2140,12 +2211,13 @@ wvm_itoa:
     mov cx, ax
     mov bx, wvm_num
 .mv:
-    mov dl, [cs:di]
-    mov [cs:bx], dl
+    mov dl, [es:di]
+    mov [es:bx], dl
     inc di
     inc bx
     loop .mv
     pop ax
+    pop es
     pop di
     pop dx
     pop cx
@@ -2192,12 +2264,14 @@ wvm_b_substr:
     jns .st
     xor ax, ax                  ; max(0, start)
 .st:
+    push es
+    mov es, [cs:wvm_ourds]      ; cc8086:allow ours, for the descriptor
     cmp ax, [cs:wvm_sa+4]
     jbe .in
     mov ax, [cs:wvm_sa+4]       ; past the end: an empty answer
 .in:
-    add [cs:wvm_sa+2], ax
-    sub [cs:wvm_sa+4], ax       ; what is left after `start`
+    add [es:wvm_sa+2], ax
+    sub [es:wvm_sa+4], ax       ; what is left after `start`
     mov ax, [bx-2]              ; len
     or ax, ax
     jns .ln
@@ -2205,8 +2279,9 @@ wvm_b_substr:
 .ln:
     cmp ax, [cs:wvm_sa+4]
     jae .keep
-    mov [cs:wvm_sa+4], ax
+    mov [es:wvm_sa+4], ax
 .keep:
+    pop es
     call wvm_nosb
     call wvm_mkstr
     RC wvm_bgc                  ; a substring cannot be over 255 either
@@ -2291,7 +2366,7 @@ wvm_b_rand:
     cmp ax, 1
     RL wvm_type                 ; 10.6.1's `rand of %s.` is the runtime's; the
                                 ; core has no number formatter for a sentence
-    mov [cs:wvm_tna], ax        ; n, banked over the multiply
+    push ax                     ; n, banked over the multiply
     sub di, 4
     mov bx, [cs:wvm_hs]
     mov ax, [bx+HS_SEED]
@@ -2299,8 +2374,9 @@ wvm_b_rand:
     mul dx                      ; DX:AX; AX alone IS the `mod 65536`
     add ax, 13849
     mov [bx+HS_SEED], ax
+    pop bx                      ; n
     xor dx, dx                  ; ...and the answer is the WHOLE word mod n:
-    div word [cs:wvm_tna]       ; the low bits of a 16-bit LCG are poor (8.1.1)
+    div bx                      ; the low bits of a 16-bit LCG are poor (8.1.1)
     mov ax, dx
     jmp wvm_ipush
 
@@ -2317,14 +2393,13 @@ wvm_b_array:
     RL wvm_type
     cmp ax, 2048
     RG wvm_type
-    mov [cs:wvm_tna], ax        ; the count, banked over the allocation
-    shl ax, 1
+    mov dx, ax                  ; the count, banked over the allocation:
+    shl ax, 1                   ; wvm_alloc keeps CX and DX
     add ax, 2                   ; count word + count words
     mov bl, HTY_ARR
     call wvm_alloc              ; preserves CX, which is the budget
     RC wvm_bgc
-    mov [cs:wvm_tval], ax       ; the handle
-    mov dx, [cs:wvm_tna]
+    push ax                     ; the handle
     mov [bx], dx                ; the count
     add bx, 2
     xor ax, ax
@@ -2337,7 +2412,7 @@ wvm_b_array:
     jmp short .z
 .zd:
     sub di, 4
-    mov dx, [cs:wvm_tval]
+    pop dx                      ; the handle
     mov ax, WT_ARR
     call wvm_pushv
     jmp wvm_next
@@ -2748,11 +2823,11 @@ _wvm_str_make:
     cmp cx, 256
     jb .len
 .have:
-    mov ax, [cs:wvm_ourds]
-    mov [cs:wvm_sa], ax
+    mov ax, [cs:wvm_ourds]      ; (DS is ours here: a C entry)
+    mov [wvm_sa], ax
     mov ax, [bp+4]
-    mov [cs:wvm_sa+2], ax
-    mov [cs:wvm_sa+4], cx
+    mov [wvm_sa+2], ax
+    mov [wvm_sa+4], cx
     call wvm_nosb
     mov ds, [cs:wvm_vmseg]      ; cc8086:allow the claim, restored at .out
     call wvm_mkstr
@@ -3056,11 +3131,13 @@ _wvm_load:
     xor ah, ah
     inc si
     push ax
+    mov dx, es                  ; the string is in the file's buffer
     push es
-    pop dx
-    mov [cs:wvm_sa], dx
-    mov [cs:wvm_sa+2], si
-    mov [cs:wvm_sa+4], ax
+    mov es, [cs:wvm_ourds]      ; cc8086:allow ours, for the descriptor
+    mov [es:wvm_sa], dx
+    mov [es:wvm_sa+2], si
+    mov [es:wvm_sa+4], ax
+    pop es
     call wvm_nosb
     call wvm_mkstr
     pop dx
@@ -3076,7 +3153,7 @@ _wvm_load:
     push cx
     mov ax, [es:si]
     add si, 2
-    mov [cs:wvm_tna], ax
+    mov dx, ax                  ; the count: wvm_alloc keeps DX
     shl ax, 1
     add ax, 2
     push si
@@ -3084,7 +3161,6 @@ _wvm_load:
     call wvm_alloc
     pop si
     jc .oops
-    mov dx, [cs:wvm_tna]
     mov [bx], dx
     add bx, 2
 .aw:

@@ -61,6 +61,9 @@ MDG_ROW     equ 10              ; 8px cell + 2 - unchanged, so a plain MOUDIAG
                                 ; still looks like 9.4.6's own photographs
 %endif
 MDG_RATE    equ 9               ; ticks between redraws - ~0.5s at 18.2 Hz
+MDG_FULL    equ 16              ; redraws between forced whole-table ones,
+                                ; ~8 s: the repair for a table a repaint wiped
+MDG_NL      equ 15              ; lines at most - the MOU_ROUND build's
 MDG_W       equ 40              ; cells a line, padded - 320px, inside 640 and
                                 ; inside a Hercules 720. On CGA's 200 rows the
                                 ; five lines end at y 78, clear of the dock
@@ -95,7 +98,8 @@ mdg_show:
     push si
     push di
     push bp
-    call gfx_lock
+    mov word [mdg_sp], mdg_shad ; NO LOCK YET: mdg_line takes it at the first
+    mov byte [mdg_lk], 0        ; line that differs from what is on the glass
 
     mov bp, MDG_Y
 
@@ -368,7 +372,11 @@ mdg_show:
     call mdg_line
 %endif
 
-    call gfx_unlock
+    cmp byte [mdg_lk], 0        ; ...and an unchanged table took no lock at
+    je .nolk                    ; all, so it blinks nothing and the UI task
+    call gfx_unlock             ; sleeps through the pass
+.nolk:
+    mov byte [mdg_force], 0
     pop bp
     pop di
     pop si
@@ -413,6 +421,11 @@ mdg_tick:
     jb .out
     mov ax, [ticks]
     mov [mdg_last], ax
+    dec byte [mdg_cnt]          ; every MDG_FULL redraws the WHOLE table, so a
+    jnz .show                   ; window dragged across it and away does not
+    mov byte [mdg_cnt], MDG_FULL; leave the unchanged lines erased for good
+    mov byte [mdg_force], 1
+.show:
     call mdg_show
 .out:
     pop ax
@@ -459,12 +472,37 @@ mdg_line:
     push cx
     push dx
     push si
+    push di
+    mov si, mdg_buf             ; THE SAME LINE AS LAST TIME IS NOT DRAWN
+    mov di, [mdg_sp]            ; (SPEC.md 9.9.6). Fifteen rows of 40 cells
+    add word [mdg_sp], MDG_W    ; is ~0.5 s of font_run on a 4.77 MHz 8088 -
+    mov cx, MDG_W               ; the whole of MDG_RATE - so redrawn blind the
+    mov dl, [mdg_force]         ; table held the gfx lock nearly all the time,
+.cmp:                           ; the UI task never slept and the arrow over
+    mov al, [si]                ; it blinked twice a second. A hand loop: ES
+    cmp al, [di]                ; is not ours here (mdg_tpl's argument)
+    je .same
+    mov [di], al
+    mov dl, 1
+.same:
+    inc si
+    inc di
+    loop .cmp
+    or dl, dl
+    jz .skip
+    cmp byte [mdg_lk], 0
+    jne .locked
+    call gfx_lock
+    mov byte [mdg_lk], 1
+.locked:
     mov si, mdg_buf
     mov cx, MDG_X
     mov dx, bp
     mov ax, (CBLACK << 8) | CWHITE
     call font_run
+.skip:
     add bp, MDG_ROW
+    pop di
     pop si
     pop dx
     pop cx
@@ -688,6 +726,13 @@ mdb_t4: db 'A norm B hold C long D need1 - 15s each', 0
 %endif
 mdg_buf: times MDG_W + 1 db 0
 mdg_last: dw 0                  ; [ticks] at the last redraw (mdg_tick)
+mdg_sp:   dw 0                  ; this line's slot in mdg_shad
+mdg_lk:   db 0                  ; mdg_show holds the gfx lock
+mdg_force: db 0                 ; draw every line, changed or not
+mdg_cnt:  db MDG_FULL           ; redraws to the next forced one
+mdg_shad: times MDG_NL * MDG_W db 0 ; what each line last PUT on the glass:
+                                ; zero, which no padded line is, so the
+                                ; first mdg_show draws them all
 
 ; --- SPEC.md 9.4.6.5's state. Word arrays are indexed by the port ROW exactly
 ; as mou_idlast is, BX being 0 and 2, and the byte arrays carry four entries

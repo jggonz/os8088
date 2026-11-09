@@ -29,8 +29,8 @@ worth stating because it is the opposite of what "add a check" usually costs:
 So arm B is not "arm A plus a check"; it is arm A with the check REPLACING the
 wait. This row runs the same navigation both ways on one machine and prints
 host seconds and GUEST cycles for each. It asserts the state reached is
-identical and that B is not slower; the sizes are reported rather than
-asserted, because a ratio is a property of the box.
+identical and that B never calls `settle` (counted, not timed); the sizes
+are reported rather than asserted, because a ratio is a property of the box.
 
 WHAT IT DOES NOT COVER. Anything needing a second display, a driver, or a
 package that is not on the shipped apps floppy. The layer's own geometry comes
@@ -113,14 +113,25 @@ def arm_old(m, mo, ui):
 
 
 def arm_new(ui):
-    """The same navigation through the layer."""
+    """The same navigation through the layer. -> (host s, guest cycles, the
+    desktop, how many times the layer SETTLED - it must be none)"""
     m = ui.m
-    t0, c0 = time.time(), m.status()["cycles"]
-    ui.open_drive("B")
-    ui.open("APPS")
-    ui.open("CALC.O88")
-    return (time.time() - t0, m.status()["cycles"] - c0,
-            sorted(w.title for w in ui.windows()))
+    settles = [0]
+    real = os88marty.settle
+
+    def counted(*a, **kw):
+        settles[0] += 1
+        return real(*a, **kw)
+    os88marty.settle = counted
+    try:
+        t0, c0 = time.time(), m.status()["cycles"]
+        ui.open_drive("B")
+        ui.open("APPS")
+        ui.open("CALC.O88")
+        h, c = time.time() - t0, m.status()["cycles"] - c0
+    finally:
+        os88marty.settle = real
+    return h, c, sorted(w.title for w in ui.windows()), settles[0]
 
 
 def clear(ui):
@@ -256,7 +267,7 @@ def main():
         print("\n=== the same navigation, both ways ===\n")
         ah, ac, astate = arm_old(m, mo, ui)
         clear(ui)
-        bh, bc, bstate = arm_new(ui)
+        bh, bc, bstate, bsettles = arm_new(ui)
         clear(ui)
         print("   settle : %6.1fs host, %11d guest cycles (%.1f guest s)"
               % (ah, ac, ac / os88marty.GUEST_HZ))
@@ -266,17 +277,18 @@ def main():
               % (bh / ah if ah else 0, bc / ac if ac else 0))
         check(astate == bstate,
               "both arms reach the same desktop: %r against %r" % (bstate, astate))
-        # IN GUEST CYCLES, which a loaded box cannot move. The win used to be
-        # ~0.4x host and the bound 0.9x host; then `settle` itself learned to
-        # end when the UI idles (docs/plans/completed/SOAK-SPEED.md, harness changes),
-        # so the settling arm now costs the same work plus ~0.6 guest s of
-        # stillness proof per wait - 0.89x guest, and a host ratio that is
-        # noise (1.09x on a box at load 8). What is refused is unchanged: a
-        # layer that confirms by settling anyway pays the settle AND its
-        # check, so it cannot come in under the settling arm.
-        check(bc < ac,
-              "confirming is not slower than settling (%.2fx guest, %.2fx "
-              "host)" % (bc / ac if ac else 0, bh / ah if ah else 0))
+        # THE PROPERTY, NOT A RATIO OF TWO NOISY NUMBERS. What is refused is
+        # a layer that confirms by settling anyway - it pays the settle AND
+        # its check. That used to be asserted as `bc < ac` in guest cycles,
+        # but once `settle` learned to end when the UI idles
+        # (docs/plans/completed/SOAK-SPEED.md) the win shrank to the noise:
+        # 0.98x and 0.91x on an idle box in two runs, 1.01x in a whole-tier
+        # soak, which failed a layer that never settled. So the settles are
+        # COUNTED - os88marty.settle wrapped for the arm's length - and the
+        # sizes are reported, as the module docstring always said they were.
+        check(bsettles == 0,
+              "the layer confirmed by settling %d time(s) - a verb waited on "
+              "the picture instead of the state" % bsettles)
 
     print("")
     if fails:

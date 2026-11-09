@@ -366,8 +366,12 @@ rw_plast        equ rw_pt0 + 2      ; word: [rw_nrun] at the last draw...
 rw_phist        equ rw_plast + 2    ; 8 words: draws by the frames run since
                                     ;   the one before, 1-7 and 8+ (rw_timed;
                                     ;   tests/rdgcore/rdgwin.py reads them)
+rw_czf          equ rw_phist + 16   ; byte: the game's file is stored PACKED
+                                    ;   (rw_czprobe): only OSAPI_FILE_READ
+                                    ;   unpacks it, so one claim or nothing
+rw_fnd          equ rw_czf + 1      ; OSAPI_FIND_SZ: rw_czprobe's record
 %ifdef RDG_AOT
-rw_aseg         equ rw_phist + 16   ; RWA_MAX words: each code image's claim,
+rw_aseg         equ rw_fnd + OSAPI_FIND_SZ ; RWA_MAX words: each code image's claim,
                                     ;   or 0 (rwaot.inc)
 rw_anseg        equ rw_aseg + RWA_MAX * 2 ; byte: images claimed
 rw_afix         equ rw_anseg + 1    ; byte: the images are read and put right
@@ -412,7 +416,7 @@ rw_acode        equ rw_arleft + 1   ; byte: the first image's row (after
                                     ;   the relocations' and the list's)
 rw_bssend       equ rw_acode + 1
 %else
-rw_bssend       equ rw_phist + 16
+rw_bssend       equ rw_fnd + OSAPI_FIND_SZ
 %endif
 RW_BSS          equ rw_bssend - rw_win   ; derived: a sum by hand drifted
 RW_FBUF         equ 5760            ; rdg_render's frame, at [rw_fseg]:0
@@ -800,6 +804,7 @@ rw_load:
     jmp rw_mfree
 rw_load0:
     push si
+    mov byte [rw_czf], 0            ; (the ROM in the package is not packed)
 %ifdef RDG_AOT
     cmp byte [rw_aemb], 0           ; THE ROM IN THE PACKAGE (REALDMG-SPEC
     je .file                        ;   20.13): its size is the meta's, and
@@ -819,6 +824,7 @@ rw_load0:
     jne .rdfail0
     cmp dx, 32
     jb .notrom
+    call rw_czprobe                 ; [rw_czf]: stored packed (rw_plan)
 .sized:
     mov [rw_romkb], dx
     push dx                         ; ONE OPERATION for the cartridge's reads
@@ -3911,8 +3917,8 @@ rw_f9was:   db 0                    ; ...and F9
 rw_f10was:  db 0                    ; ...and F10, F11
 rw_f11was:  db 0
 rw_lossq:   db 0                    ; Screen's toggles for the worker
-rw_s_bw:    db 'Two shades: On', 0  ; (rw_lossyt's: each "On", then its
-rw_s_bw2:   db 'Two shades: Off', 0 ;   "Off")
+TOASTSTR rw_s_bw, 'Two shades: On'  ; (rw_lossyt's: each "On", then its
+TOASTSTR rw_s_bw2, 'Two shades: Off' ;   "Off")
 rw_lflq:    db 0                    ; F12: the log to be written by the UI
                                     ;   task (rw_onwake, rw_fsenter's end)
 rw_ftyped:  db 0                    ; ...and this look's (rw_fedge)
@@ -4852,6 +4858,9 @@ RW_MW           equ MENU_MAXCH      ; glyphs an item, its mark and key with it
 %1: db MENU_DIS, ' ', %2
 %strlen %%a %2
 %strlen %%b %3
+%if %%a > TOAST_MAX                 ; rw_note TOASTS an item's text, its mark
+  %error "RW_MI: the item's text is longer than a toast shows (TOAST_MAX, SPEC.md 59.10)"
+%endif                              ; and key stripped: it must fit the bar
     times RW_MW - 1 - %%a - %%b db ' '  ; (fails the build when it is too long)
 %if %%b
     db %3
@@ -4917,7 +4926,7 @@ RW_SSV          equ 7               ;   only, a 14-item menu being taller
 RW_SLD          equ 8               ;   than CGA's 200 lines - then Save,
 RW_SREC         equ 9               ;   Load, and the replays)
 RW_SPLY         equ 10
-rw_it_sep:      db MENU_DIS, '----------------------', 0
+TOASTSTR rw_it_sep, MENU_DIS, '----------------------'
     RW_MI rw_it_load, 'Load Game...', ''
     RW_MI rw_it_reset, 'Reset', ''
     RW_MI rw_it_pause, 'Pause', ''
@@ -4965,9 +4974,9 @@ rw_it_sep:      db MENU_DIS, '----------------------', 0
     RW_MI rw_it_recs, 'Stop Recording', 'F6'
     RW_MI rw_it_ply, 'Play Replay', 'F7'
     RW_MI rw_it_plys, 'Stop Replay', 'F7'
-rw_s_prfst:     db 'Static reads the profile', 0
-rw_s_jroom:     db 'No room: Interpreter', 0
-rw_s_bignx:     db 'Cache: for the next game', 0
+TOASTSTR rw_s_prfst, 'Static reads the profile'
+TOASTSTR rw_s_jroom, 'No room: Interpreter'
+TOASTSTR rw_s_bignx, 'Cache: for the next game'
 rw_s_cfg:       db 'REALDMG.CFG', 0
 rw_spdit:       dw rw_it_spd0, rw_it_spd1, rw_it_spd2, rw_it_spd3
 rw_sndit:       dw rw_it_snd0, rw_it_snd1, rw_it_snd2
@@ -4980,8 +4989,8 @@ rw_jmenu:       db 1, 3, 2          ; CPU's items 0-2: the mode each chooses
 rw_spdtab:      dw 256, 230, 192, 128   ; Speed, 256ths of the Game Boy's
 
 rw_s_fps:       db 'fps', 0
-rw_s_pfree:     db 'Pacing: Free', 0
-rw_s_pstdy:     db 'Pacing: Steady', 0
+TOASTSTR rw_s_pfree, 'Pacing: Free'
+TOASTSTR rw_s_pstdy, 'Pacing: Steady'
 rw_s_jit:       db ' JIT', 0
 rw_s_aot:       db ' AOT', 0
 rw_s_open1:     db 'Machine > Load Game', 0
@@ -4991,21 +5000,22 @@ rw_s_slow1:     db 'Windowed is slow:', 0
 rw_s_slow2:     db 'Alt+Enter for', 0
 rw_s_slow3:     db 'Full Screen', 0
 rw_s_stop2:     db 'an invalid opcode', 0
-rw_s_big:       db 'REALDMG: needs more XMS', 0
-rw_s_notrom:    db 'REALDMG: not a GB ROM', 0
-rw_s_cgb:       db 'REALDMG: needs GB Color', 0
+TOASTSTR rw_s_big, 'REALDMG: needs more XMS'
+TOASTSTR rw_s_notrom, 'REALDMG: not a GB ROM'
+TOASTSTR rw_s_cz, 'REALDMG: unpack the ROM'
+TOASTSTR rw_s_cgb, 'REALDMG: needs GB Color'
 rw_s_mbc:       db 'REALDMG: MBC '
 rw_s_mbcx:      db 'h unknown', 0
-rw_s_room:      db 'REALDMG: no room for ROM', 0
-rw_s_read:      db 'REALDMG: read failed', 0
+TOASTSTR rw_s_room, 'REALDMG: no room for ROM'
+TOASTSTR rw_s_read, 'REALDMG: read failed'
 %ifdef RDG_AOT
-rw_s_pm:        db 'PRE: not on kern_mega', 0
-rw_s_other:     db 'REALDMG: not this game', 0
-rw_s_ameta:     db 'REALDMG: bad precompile', 0
+TOASTSTR rw_s_pm, 'PRE: not on kern_mega'
+TOASTSTR rw_s_other, 'REALDMG: not this game'
+TOASTSTR rw_s_ameta, 'REALDMG: bad precompile'
 rw_s_ano:       db 'REALDMG: no ', 0
 %endif
-rw_s_noram:     db 'REALDMG: no room for RAM', 0
-rw_s_nosave:    db 'REALDMG: save failed', 0
+TOASTSTR rw_s_noram, 'REALDMG: no room for RAM'
+TOASTSTR rw_s_nosave, 'REALDMG: save failed'
 
 rw_ablines:
     dw rw_ab1, rw_ab2, rw_ab3, rw_ab8, rw_ab9, rw_ab3, rw_ab4, rw_ab5, rw_ab7, 0

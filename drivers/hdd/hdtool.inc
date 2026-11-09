@@ -16,7 +16,7 @@
 ; FINDING THE FILE NEEDS NO NEW API, and that is worth stating because it
 ; looks like it should. HDDTOOL.DRV is on the SYSTEM volume, which is A: on a
 ; floppy machine and the boot partition on an installed one (SPEC.md 52.10.3),
-; and a driver has no way to ask which. It does not need one: drv_load
+; and OSAPI_VOL_SYS would name it (SPEC.md 19.8). It does not need to: drv_load
 ; brackets the whole load in drv_vol_bank .. drv_vol_back and calls
 ; drv_mounted before it reads, and DRVV_READY is sent from INSIDE that bracket
 ; (SPEC.md 51.2.2) - so at the top of hd_ready the current volume already IS
@@ -189,8 +189,8 @@ hd_tool_need:
     pop dx                      ; [hd_tseg], which is the segment we have just
     mov cx, DRV_ORG + PKG_DISP  ; ...and where OUR dispatcher is in it, which
                                 ; is not PKG_DISP when this image runs from
-                                ; the HMA: assembled at DRV_ORG = E000h there
-                                ; (SPEC.md 2.10.8), so it is E00Ch. A tool
+                                ; the HMA: assembled at DRV_ORG = C000h there
+                                ; (SPEC.md 2.10.8), so it is C00Ch. A tool
                                 ; that assumed 000Ch called into the pool's
                                 ; next block down on its first service call -
                                 ; the Hard Disk page's freeze on a 286

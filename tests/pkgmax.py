@@ -4,29 +4,39 @@
     make pkgbig && python3 tests/pkgmax.py [machine] [system-image]
 
 `APP_MAX_SIZE` was 0xF000 - the retired package pool's size - and is 0xFE00
-now, the largest multiple of 512 a word holds. Over 63KB the region is a whole
-**64KB claim**, and that is the size two of the loader's 16-bit words wrapped
-on before the raise:
+now, the largest multiple of 512 a word holds. That ceiling is where two of the
+loader's 16-bit words wrapped before the raise, while the heap counted in KB
+and a region over 63KB was therefore a whole 64KB claim:
 
   * `mem_bytes_kb_x` was `add ax, 1023 / shr` and answered **0 KB** for every
     byte count from 64,513 up - a claim with nowhere to put the image;
-  * `ld_alloc`'s `I_SIZE = KB << 10` is 65,536 for 64KB, which is **0** in a
+  * `ld_alloc`'s `I_SIZE = KB << 10` was 65,536 for 64KB, which is **0** in a
     word - and 0 is how the instance table says BUILT-IN, so the instance
     would be swept as one.
+
+SPEC.md 50.2.1's 512-byte GRANULE retired the KB rounding: the region is now
+claimed in PARAGRAPHS to exactly `roundup512(image + bss)` - 0xFE00 bytes,
+4,064 paragraphs, for this package - and `I_SIZE` is that size in bytes, which
+cannot carry. The row asks the same question of the loader at the same edge:
+the largest legal package gets ALL of what it declared, no more and no less,
+and its instance does not read as built-in.
 
 `PKGMAX.O88` (tests/pkgbig/pkgmax.asm) is image + bss = 0xFE00 to the byte.
 Its entry proc writes 0xA5 into the LAST byte of its bss if the loader left a
 0 there, so one read shows the region reaches 0xFDFF and was zeroed.
 
 FIVE ASSERTIONS, all off guest state: `ld_status` is LD_OK and the window
-opened; the instance is a PACKAGE with `I_SIZE` = 0xFFFF (saturated, not 0);
-the region's claim is 64KB = 4,096 paragraphs owned by that instance; the
-mark is at segment:0xFDFF; and after the close box, the instance and every
-claim on that segment are gone.
+opened; the instance is a PACKAGE with `I_SIZE` = 0xFE00 (the region's bytes,
+not 0); the region's claim is 4,064 paragraphs owned by that instance (on
+kern_mega its selector's limit is 0xFDFF, the same bytes); the mark is at
+segment:0xFDFF; and after the close box, the instance and every claim on that
+segment are gone.
 
-BROKEN ON PURPOSE, both halves, and both go red: with the `sbb ax, 0` out of
-`ld_alloc` the instance reads `I_SIZE` 0; with `mem_bytes_kb_x` put back to
-`add ax, 1023` the claim is 0KB and the load does not survive.
+BROKEN ON PURPOSE, both measured red: with `ld_alloc`'s `shl ax, cl` out,
+`I_SIZE` reads the paragraph count 0x0FE0; with the region's paragraphs put
+back to a whole KB (`add ax, 63 / and ax, 0FFC0h` after the `shr`), the claim
+is 4,096 paragraphs and `I_SIZE` wraps to 0 - the BUILT-IN the row was made
+for - and both of those assertions fail.
 """
 import os
 import struct
@@ -44,6 +54,7 @@ SYS_IMG = sys.argv[2] if len(sys.argv) > 2 else "build/os8088-360.img"
 APPS_IMG = "build/pkgbig.img"
 
 LD_OK = 0
+PARAS = ((APP_MAX_SIZE + 511) & ~511) >> 4     # 4,064: the granule's claim
 PM_MARK = 0xA5                  # tests/pkgbig/pkgmax.asm's
 KIND_PKG = os88geom.KIND_PKG
 I_RECSZ, I_KIND, I_SPTR, I_SIZE = (os88geom.I_RECSZ, os88geom.I_KIND,
@@ -96,10 +107,11 @@ def main():
         if not kind & KIND_PKG:
             fails.append("instance %d is not a package (kind %#04x)"
                          % (slot, kind))
-        if size != 0xFFFF:
-            fails.append("I_SIZE is %#06x, want 0xFFFF: a 64KB region is "
-                         "64 << 10 = 0 in a word, and 0 is a BUILT-IN "
-                         "(SPEC.md 20.1.1)" % size)
+        if size != APP_MAX_SIZE:
+            fails.append("I_SIZE is %#06x, want %#06x: the region's bytes, "
+                         "roundup512(image + bss) - and never 0, which is a "
+                         "BUILT-IN (SPEC.md 20.1.1, 50.2.1)"
+                         % (size, APP_MAX_SIZE))
 
         mine = [c for c in claims(m, S) if c[0] == seg]
         if MEGA:
@@ -114,14 +126,15 @@ def main():
                 [(seg, kb * 64, own & 0x7F) for _, kb, own in pool(m, S)
                  if own == 0x80 | slot]
             print("  region selector %04x: %r" % (seg, d))
-            if not d or d[1] != 0xFFFF:
-                fails.append("the region's selector is %r, want a 64KB limit "
-                             "(0xFFFF)" % (d,))
+            if not d or d[1] != APP_MAX_SIZE - 1:
+                fails.append("the region's selector is %r, want a limit of "
+                             "%#06x - the whole of image + bss"
+                             % (d, APP_MAX_SIZE - 1))
         print("  claims on %04x: %r" % (seg, mine))
-        if len(mine) != 1 or mine[0][1] != 0x1000 or mine[0][2] != slot:
+        if len(mine) != 1 or mine[0][1] != PARAS or mine[0][2] != slot:
             fails.append("the region's claim is %r, want one record of "
-                         "4,096 paragraphs (64KB) owned by instance %d"
-                         % (mine, slot))
+                         "%d paragraphs (roundup512 of image + bss, SPEC.md "
+                         "50.2.1) owned by instance %d" % (mine, PARAS, slot))
 
         lin = getattr(m, "lin", lambda s_, o_=0: (s_ << 4) + o_)
         mark = m.read(lin(seg, APP_MAX_SIZE - 1), 1)[0]
@@ -159,8 +172,8 @@ def main():
             print("  " + f)
         return 1
     print("\npkgmax: a package of exactly APP_MAX_SIZE (%d) loads into a "
-          "64KB claim, reads I_SIZE 0xFFFF and closes clean - PASS on %s"
-          % (APP_MAX_SIZE, MACHINE))
+          "claim of exactly that, reads I_SIZE %#06x and closes clean - PASS on %s"
+          % (APP_MAX_SIZE, APP_MAX_SIZE, MACHINE))
     return 0
 
 

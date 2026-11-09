@@ -403,7 +403,8 @@ with os88ui.boot(_BOOT, machine=MACHINE, limit=180) as ui:
             "latin-1", "replace")
 
     # --- the caches have to EXIST, so open a Disk window before anything ----
-    # A bare desktop holds no claims at all (tests/small128.py asserts it), so
+    # A bare desktop holds no claim a Note Pad could shed (tests/small128.py
+    # asserts none is pinned but the keyboard mouse's, SPEC.md 2.8.8), so
     # a Note Pad launched from nowhere would find the heap empty and grow with
     # no shed to make. Navigating A: is what claims MEM_P_VIEW and the
     # directory read-ahead, and it is also how a person gets to Note Pad.

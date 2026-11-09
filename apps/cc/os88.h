@@ -1042,8 +1042,10 @@ int os88_snd_tone(int hz, int ticks, int prio);  /* hz 0 = off, ticks 0 = until
  * "where my Save As went" is just a Save.
  *
  * The 32-bit count the slots take is capped at 16 bits here, which costs
- * nothing a package can reach: your image and bss together cap at 63.5KB, and
- * anything bigger belongs in a claim, which the _seg forms read into.
+ * nothing a package can reach in its own data: your image and bss together
+ * cap at 63.5KB, and anything bigger belongs in a claim, which the _seg forms
+ * read into - and _huge, below, takes the whole 32 bits for a claim of any
+ * size.
  * A _seg base MUST BE 512-BYTE ALIGNED (SPEC.md 2.1.1: every disk-visible
  * base is): a claim's own base is (the kernel's guard 6b - KB-granular
  * blocks from a 512-aligned heap), and so is any offset into it that is a
@@ -1069,6 +1071,16 @@ unsigned os88_file_read_segoff(const char *name, unsigned seg, unsigned off,
 int os88_file_write_segoff(const char *name, unsigned seg, unsigned off,
                            unsigned count);
 int os88_file_append(const char *name, const void *buf, unsigned count);
+/* ...and the WHOLE 32-bit count, into or out of a claim from its base: a file
+ * of any size and an os88_mem_huge() claim of any size, which the kernel walks
+ * by its own step (SPEC.md 18.4.1). Two words, as os88_file_read_at's offset.
+ * The read answers the size's LOW word and os88_file_hi() its high word;
+ * os88_ferr() says whether a 0 is a refusal (MEGA-HUGE-PLAN F7) */
+unsigned os88_file_read_huge(const char *name, unsigned seg,
+                             unsigned cap_lo, unsigned cap_hi);
+int os88_file_write_huge(const char *name, unsigned seg,
+                         unsigned n_lo, unsigned n_hi);
+unsigned os88_file_hi(void);
 
 /* os88_file_read_at - ONE CHUNK of a file, by byte offset (18.4.4), and the
  * read half of the pair whose write half is os88_file_append(). This is how a
@@ -1093,6 +1105,12 @@ int os88_file_append(const char *name, const void *buf, unsigned count);
  * you write between two reads. */
 unsigned os88_file_read_at(const char *name, void *buf, unsigned cap,
                            unsigned off_lo, unsigned off_hi);
+/* ...INTO A CLAIM: seg:off rather than your own data, every rule above the
+ * same. off is a multiple of 512 and off + cap stays inside seg's 64KB - for a
+ * huge claim, one window, base + k * os88_mem_huge_step() */
+unsigned os88_file_read_at_seg(const char *name, unsigned seg, unsigned off,
+                               unsigned cap, unsigned foff_lo,
+                               unsigned foff_hi);
 int os88_file_delete(const char *name);
 int os88_file_rename(const char *oldname, const char *newname);
 int os88_file_mkdir(const char *name);
@@ -1234,6 +1252,20 @@ unsigned os88_mem_regrow(unsigned seg, int kb);  /* 0 = refused and the old
  * so on kern_mega it would hand back a value that is no claim */
 unsigned os88_mem_huge(int kb);
 unsigned os88_mem_huge_step(void);
+/* os88_mem_huge_w - the same claim with a window every 32KB or 16KB, each
+ * 64KB long (SPEC.md 50.3.5): win = 0 (every 64KB, os88_mem_huge's),
+ * OS88_HUGE_W32 or OS88_HUGE_W16. With os88_mem_huge_step() == 8 the windows
+ * are the ones asked for and window k is base + 8k, so ANY 32KB (16KB) of the
+ * claim is whole in window (offset / 32KB) at (offset % 32KB); with 0x1000
+ * it is one conventional segment, and seg + (offset >> 4) reaches any of it.
+ * Such a claim never bridges the pool and the heap, and never regrows.
+ * os88_mem_huge_ask - the most KB os88_mem_huge_w(kb, win) is given NOW,
+ * nothing claimed (OSAPI_MEM_HUGE's AX = 0 ask, for that shape): claim
+ * exactly that and it is had. Every kernel answers it */
+#define OS88_HUGE_W32 0x8000
+#define OS88_HUGE_W16 0x4000
+unsigned os88_mem_huge_w(int kb, unsigned win);
+unsigned os88_mem_huge_ask(unsigned win);
 /* os88_seg_para - the PARAGRAPH under a segment or selector below 1MB:
  * the segment itself on every real-mode kernel, and under kern_mega, where
  * every claim is a selector (KERN-MEGA-MEMORY-PLAN MC7), its descriptor's
@@ -1250,6 +1282,12 @@ unsigned os88_seg_para(unsigned seg);
  * itself, so a value kept across a compaction there is a segment INSIDE the
  * claim and a relocation proc moves it as it moves any derived segment. */
 unsigned os88_seg_sub(unsigned seg, unsigned para, unsigned len);
+/* os88_mem_largest_kb / os88_mem_total_kb - the largest claim os88_mem_claim()
+ * is given now and the total free KB you can claim from. On kern_mega they
+ * count the POOL above 1MB as well, where an OS88_HIGHMEM package's claims of
+ * 64KB or less go first (OSAPI_MEM_HUGE's MEMH_AVAIL ask, MEGA-HUGE-PLAN F6):
+ * they were the conventional heap's alone, and refused programs the pool
+ * would have served. One claim over 64KB: os88_mem_huge_ask() */
 unsigned os88_mem_largest_kb(void);
 unsigned os88_mem_total_kb(void);
 /* ...and the same heap counted in PARAGRAPHS (SPEC.md 50.3.7). Every claim is
@@ -1261,7 +1299,8 @@ unsigned os88_mem_total_kb(void);
 #define OS88_BYTES_PARA(n) (((n) + 15) >> 4)
 unsigned os88_mem_claim_p(unsigned paras);       /* 0 = refused */
 unsigned os88_mem_regrow_p(unsigned seg, unsigned paras); /* as _regrow */
-unsigned os88_mem_largest_p(void);
+unsigned os88_mem_largest_p(void);  /* the CONVENTIONAL heap's, exact to the
+                                     * granule, on every kernel */
 unsigned os88_mem_gran(void);
 
 /* --- letting the compactor MOVE a claim (SPEC.md 66) ----------------------
@@ -1400,15 +1439,26 @@ unsigned os88_part_seg(int i);       /* base segment; 0 = it is not here */
  * handler. An eager overlay in the carve is re-stamped by crt0 first. */
 int os88_part_fetch(int i);          /* an OP_LAZY part, now. 0 ok, -1 refused */
 void os88_part_drop(int i);          /* ...and give it back */
+/* A FETCHED lazy part can move too, with CC_ONMOVE_PARTS: declare it after
+ * os88_part_fetch, and os88_onmove (with the part's own two bases) must
+ * re-read os88_part_seg(i) for every copy of its segment you keep - as for
+ * the carve. 0 declared, -1 not (not fetched; refused). */
+int os88_part_movable(int i);
 int os88_part_lazyok(int i);         /* would it fit right now? (SPEC.md 47) */
 int os88_part_optok(void);           /* were the OP_OPT scratch parts granted? */
 
 /* Reach into a claim. Two far-segment accessors, because C cannot say `es:`.
  * A byte at a time is ~11 us of near call each: fine for a header, wrong for
- * a copy. Move bulk with os88_file_read_seg() or by claiming, then blitting
- * out of it with os88_gfx_blit4(), which takes a segment of its own. */
+ * a copy. Move bulk with os88_seg_get()/os88_seg_put() below, with
+ * os88_file_read_seg(), or by blitting out of it with os88_gfx_blit4(),
+ * which takes a segment of its own. */
 int  os88_peek(unsigned seg, unsigned off);
 void os88_poke(unsigned seg, unsigned off, int value);
+/* ...and in BULK, n bytes a word at a time, between a claim and your own data
+ * (MEGA-HUGE-PLAN F7). off + n stays inside seg's 64KB: a huge claim's next
+ * window is base + os88_mem_huge_step() */
+void os88_seg_get(void *dst, unsigned seg, unsigned off, unsigned n);
+void os88_seg_put(unsigned seg, unsigned off, const void *src, unsigned n);
 
 /* --- the system clipboard (SPEC.md 55) -----------------------------------
  * One text buffer for the whole machine, outliving the app that filled it.

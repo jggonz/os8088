@@ -28,7 +28,7 @@ the mount at the next name is `GOTO_QM`'s quiet one.  So the kernel seeds the
 cache itself, and this test proves it by never opening B: in a Disk window:
 before that seed existed, every lookup below missed.
 
-CASE IS FOLDED ON BOTH NAMES (§21.5.3.2).  Reported off the glass at `A:\>`
+CASE IS FOLDED ON BOTH NAMES (§21.5.3.2).  Reported off the glass at `A:\\>`
 on a stock system disk: `notepad readme.txt` and `open readme.txt` both
 refused and `open README.TXT` worked.  The association tables are
 uppercase-exact - they are built from FAT names - and nothing in that path
@@ -39,7 +39,7 @@ have turned a visible refusal into a package opening an empty window.
 
 A LAUNCH THAT WORKED OWES A PROMPT (§96.33.17.1), reported with a photograph:
 two `open`s in a row left the cursor at column 0 of a bare line, so the second
-command had no `A:\>` in front of it.  It is §96.33.17's gap rather than this
+command had no `A:\\>` in front of it.  It is §96.33.17's gap rather than this
 feature's - a DOS program's prompt comes back with its EXIT LINE and a package
 has none - so both spellings are asserted.
 
@@ -111,19 +111,21 @@ def main():
         dm = dosmap.package()
 
         def titles():
-            out = []
-            for sl in range(8):
-                wp = os88geom.winptr(m, sl, m.sym)
-                seg = struct.unpack("<H", m.read(wp + os88geom.W_SEG, 2))[0]
-                toff = struct.unpack("<H", m.read(wp + os88geom.W_TITLE, 2))[0]
-                if seg and toff:
-                    out.append(m.read(dosmap.lin(m, seg, toff), 32).split(b"\0")[0]
-                               .decode("latin-1"))
-            return out
+            # **USED RECORDS ONLY** (os88geom.windows). This read every slot's
+            # W_SEG and W_TITLE whatever its W_FLAGS said, and a CLOSED window
+            # leaves both behind until the slot is reused - so after clear()
+            # closed one case's Note Pad, the NEXT case's `want` of "Note Pad"
+            # matched the dead record before its command had even run, and
+            # every case after the first in a run of same-program launches
+            # passed on the previous one's window.
+            return ui.titles()
 
         def dosseg():
             for sl in range(8):
                 wp = os88geom.winptr(m, sl, m.sym)
+                fl = struct.unpack("<H", m.read(wp + os88geom.W_FLAGS, 2))[0]
+                if not fl & os88geom.WF_USED:
+                    continue        # a freed record keeps its old fields
                 ws = struct.unpack("<H", m.read(wp + os88geom.W_SEG, 2))[0]
                 t = struct.unpack("<H", m.read(wp + os88geom.W_TITLE, 2))[0]
                 if ws and t and m.read(dosmap.lin(m, ws, t), 4).startswith(b"DOS\0"):
@@ -204,10 +206,34 @@ def main():
             try:                # `limit` is budgeted on the GUEST's clock
                 os88marty.until(m, answered, "%r to open %r or be refused"
                                 % (line, want), poll=0.05, limit=limit)
-                return res[-1]
+                ok = res[-1]
             except os88marty.MartyError:
-                pass
-            return any(want in t for t in titles())
+                ok = any(want in t for t in titles())
+            if ok:              # ...and let the COMMAND finish, so the next
+                prompted()      # case is typed at a prompt and the console
+            return ok           # read after this is the command's whole answer
+
+        def prompted(limit=10.0):
+            """True once DOS has FINISHED the command it was typed: the
+            console's last line is a prompt again.
+
+            A window's title is NOT that moment. The record is filled while
+            OSAPI_PKG_START is still running - the package's own start, its
+            document and its first paint are inside the call - and the prompt
+            is printed only after the call RETURNS and the machine has stood
+            back where the prompt is (dos_pkg_go). Measured on the 5150 twin:
+            the title is up about 2 guest seconds after the Enter and the
+            prompt about 5, with quiet stretches between them long enough for
+            typ()'s quiesce to return in. So a read taken when launch()
+            answers is a read of a command still running. `limit` is budgeted
+            on the GUEST's clock; a prompt that never comes fails here."""
+            try:
+                os88marty.until(m, lambda _: (console() or [""])[-1]
+                                .endswith(">"), "DOS's prompt to come back",
+                                poll=0.05, limit=limit)
+                return True
+            except os88marty.MartyError:
+                return False
 
         def says(line, want, limit=15.0):
             """Type it and wait for `want` among the last console lines."""
@@ -409,6 +435,10 @@ def main():
         if not any("Note Pad" in t for t in titles()):
             fail("the launch for the overdraw check did not happen")
         else:
+            # [con_drb] is marked by the PROMPT's con_say, which follows
+            # OSAPI_PKG_START's return: read it before then and an unmarked
+            # bitmap is a command still running, not a spent draw
+            prompted()
             b = dosseg()
             drb = struct.unpack("<I", m.read(dosmap.lin(m, b, dm["con_drb"]), 4))[0]
             if drb == 0:

@@ -17,7 +17,7 @@
 ; other task as an ordinary part of every message sent (SPEC.md 113.3). The
 ; parts that are the same - the state names, the generation, the line-at-a-
 ; time header read - are the same on purpose, so a reader of one can read
-; the other; docs/WIRE-PLAN.md 11's shared apps/os88http.inc would take both
+; the other; docs/plans/completed/WIRE-PLAN.md 11's shared apps/os88http.inc would take both
 ; shapes as parameters, and two shapes is what it was waiting for.
 ;
 ; **THE GENERATION IS BUMPED FIRST AND THE SOCKET CLOSED SECOND** (wrhttp.inc's

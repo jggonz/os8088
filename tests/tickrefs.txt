@@ -1,0 +1,18 @@
+# tests/unit/t_resident.py's data check: the kernel words the splash's ticks
+# NAME past the resident window (SPL_RESIDENT sectors of `.text`) or in
+# `.bss`, and why no tick reaches them on a partial kernel (the big review's
+# boot-4, BR-153; SPEC.md 15, 2.9.4).
+#
+# The walk over-approximates - it follows every arm, taken or not - so each
+# line here is an arm the first tick cannot take, with the test that keeps it
+# out. A new reference is a FAILURE until it is moved below
+# spw_resident_end or argued here; a line nothing needs any more fails too.
+#
+# label        reason
+vx_ep          vid_setmode's VESA arm, behind `cmp al, VID_VESA`: [vid_kind] is VID_VESA only once VESA.DRV has attached in drv_boot_x, long after the load (vid_detect never answers it)
+vx_bpp         vid_depth_set's VESA arm, behind the same `cmp al, VID_VESA` - unreachable before VESA.DRV attaches
+cur_shchk      bvs_apply's cursor-homing tail, behind `jne .homed`: the first tick is the one caller on the boot sector's stack and skips it (viddet.inc, SPEC.md 2.9.4's ui_post incident); kmain's vid_init makes the store on a whole kernel
+cur_disp       the same tail as cur_shchk (kern_big's dual display) - skipped on the first tick, made by vid_init
+ui_post        the same tail - the `.bss` store SPEC.md 2.9.4 is about, which once turned an 01 into menu_track's first compare; skipped on the first tick, made by vid_init
+vid_rowtab     bvs_apply's row-table build, behind the same stack test (`cmp ax, LOW_SEG / jne .homed`): `.lowbss` is unreachable on the boot sector's stack, so the first tick leaves [vid_rowmax] 0 and gfx_rowbase computes; vid_init builds it on a whole kernel
+mouse_x        the cursor-homing tail's `mov di, mouse_x / stosw` pair (mouse_x and mouse_y), behind `jne .homed` like cur_shchk - skipped on the first tick, made by vid_init

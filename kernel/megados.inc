@@ -16,10 +16,11 @@
 ;                   0 now, and AL = 1 when the session comes back, at which
 ;                   point hbm_dosrun frees the claims and jumps to hbm_wake
 ;   mega_dosgo      at the handover: the staged launch block's kern_mega tail,
-;                   the IVT's tick and keyboard back to the BIOS's, and out of
-;                   protected mode - CR0 on a 386, the shutdown-0Ah reset on a
-;                   286 (mega_r286's one branch) - into mega_dropr, which puts
-;                   the 8259 back at 08h and enters the existing loader stub
+;                   the IVT's tick, keyboard and int 15h back to the BIOS's,
+;                   and out of protected mode - CR0 on a 386, the shutdown-0Ah
+;                   reset on a 286 (mega_r286's one branch) - into mega_dropr,
+;                   which puts the 8259 back at 08h and enters the existing
+;                   loader stub
 ;
 ; THE WAY BACK is kern_dos's `kd_unpark` (kerndos/kdpark.inc, -DKD_MEGA): it
 ; fetches the park stub out of the park's header with `int 15h AH=87h` into
@@ -33,6 +34,7 @@
 ; =============================================================================
 
 ; --- the kern_mega tail of the launch block, MIRRORED (kerndos/kdlaunch.inc) --
+; (by hand: tests/unit/t_mirror.py does not scan kerndos/)
 KDL_CAP     equ 10              ; dw KB the machine has: lowered to the park
 KDL_XBASE   equ 488             ; dd the XMS arena's linear base, 0 = none
 KDL_XKB     equ 492             ; dw ...and its KB
@@ -57,8 +59,9 @@ MPK_C_PACC  equ 0x3BC           ; dd the stub's own PIT clocks
 MPK_C_PPREV equ 0x3C0           ; dw ...and its last count
 MPK_C_KGDTR equ 0x3C2           ; 6 the kernel's GDTR...
 MPK_C_KIDTR equ 0x3C8           ; 6 ...and IDTR, which it loads last
-MPK_C_WAKE  equ 0x3CE           ; dd where it jumps then: mega_dwake for a
-                                ;    park, mega_hbwake for a hibernate (W5)
+MPK_C_WAKE  equ 0x3CE           ; dd where it jumps then: mega_dwake, the
+                                ;    only wake mega_dhcfill is given (a
+                                ;    hibernate's resume is megares.inc's now)
 MPK_C_END   equ 0x3D2
 MPK_MAGIC   equ 0x400           ; +400 dd 'PARK'
 MPK_NREG    equ 0x404           ; +404 dw regions the sum covers
@@ -232,7 +235,8 @@ mega_dhfree dw 0                    ; ...and the HMA's KB free then, which the
 MEGA_DMAPKB equ 768                 ; MPS_MAP's reach: past any conventional
                                     ; top - a bit a KB, set = in use
 mega_dnreg  dw 0                    ; the header's MPK_NREG...
-mega_dncpy  dw 0                    ; ...and MPK_NCPY (0 on a park)
+mega_dncpy  dw 0                    ; ...and MPK_NCPY: the bank's MPK_PCPY, a
+                                    ; runs park's later runs, the HMA save
 %if mega_dncpy - mega_dnreg != 2 || MPK_NCPY - MPK_NREG != 2
  %error "mega_dstubup copies mega_dnreg and mega_dncpy as one run"
 %endif
@@ -275,9 +279,9 @@ mega_hbs    dw 0, 0                 ; a run's source and what is left of it,
 mega_hbr    dw 0, 0                 ; the bounce's linear base and its fill
 mega_hbbl   dw 0, 0                 ; (hiber.inc's hbm_xwrite, hbm_xres)
 mega_hbf    dw 0
-mega_s_kbdos db "Use this disk's DOS.O88", 0 ; mega_pkgok's refusal
+TOASTSTR mega_s_kbdos, "Use this disk's DOS.O88" ; mega_pkgok's refusal
 %ifdef MEGA_DIAG
-mega_dstr   db "DOSP 0000K o 0000 b 0000", 0    ; the trip, on the menu bar:
+TOASTSTR mega_dstr, "DOSP 0000K o 0000 b 0000"  ; the trip, on the menu bar:
                                     ; KB parked, ms out, ms back (decimal;
                                     ; MEGADIAG=1, KERN-MEGA-PLAN 14.65)
 %endif
@@ -298,6 +302,10 @@ mega_dstr   db "DOSP 0000K o 0000 b 0000", 0    ; the trip, on the menu bar:
 section .mega                   ; protected mode only (KERN-MEGA-SEGMENTS-PLAN)
 mega_dosclaimf:
     pusha
+    xor ax, ax                      ; THE POOL PACKED UP first (KERN-MEGA-PLAN
+    inc byte [sch_lock]             ; 14.166): a pin is taken from the floor,
+    call MEGA_SEL_CODE:mx_packupf   ; the HMA, and a block there that is only
+    dec byte [sch_lock]             ; movable would cost the park 64KB below
     mov word [mega_mxflr], MEGA_HMA_KB ; THE HMA IS kern_dos's FOR THE TRIP
     mov word [mega_dhkb], 0         ; (MC4): neither claim may land in it,
     mov bp, MEGA_HMA_KB             ; and what stands there now is saved
@@ -798,7 +806,7 @@ mega_dosparkf:
 .regs:
     ; --- the regions the sum covers -------------------------------------------
     mov word [mega_dnreg], 0
-    mov word [mega_dncpy], 0        ; (a hibernate's resume sets it)
+    mov word [mega_dncpy], 0        ; (counted up by the copies below)
     mov ax, [mega_dikb]             ; the park's IMAGE, in 64-byte lines
     call mega_dlines
                                     ; (KB x 16)
@@ -2063,7 +2071,8 @@ section .cold
 
 ; =============================================================================
 ; mega_wrprobe - W7: A PARK THE MACHINE WAS RESET OUT OF (KERN-MEGA-DOS-PLAN
-; 10, wave W7; BLOBCALL'd from kmain_o, real mode, before drv_boot)
+; 10, wave W7; B3CALL'd from kmain_o, real mode, before drv_boot - in
+; `.boot3` since BOOT3-PLAN wave 1, the blob's before it)
 ;
 ; Ctrl-Alt-Del inside a DOS program, or a program that resets the machine:
 ; the ROM's warm boot keeps RAM, and a kern_mega boot does nothing above 1MB
@@ -2077,7 +2086,7 @@ section .cold
 ; the reset or the BIOS damaged is refused in a sentence and restarts.
 ; Returns (RETF, every register kept) only when there is nothing to take.
 ; =============================================================================
-section .boot2
+B3SECT
 mega_wrprobe:
     ; STKBALANCE-OK: a BP frame (`sub sp, 64` / `mov sp, bp`) the walker does not model, and the park's way leaves by a far jump into the stub
     cmp byte [cpu_tier], CPU_286

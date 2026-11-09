@@ -40,8 +40,9 @@ BP_HZDIV   equ 1193             ; PIT units per ms (1193182/1000, rounded)
 
 ; ---- the table, and the 'BP' block that names it (SPEC.md 57.2) -------------
 ; In .text with real initialisers rather than .bss, for dsk_dpt's reason
-; (SPEC.md 18.92): `-f bin` zeroes nothing, and a mark that was never reached
-; has to read as 0 rather than as whatever was in memory.
+; (SPEC.md 18.92): a mark that was never reached has to read as 0, and an
+; initialiser says so on every loader, where `.bss` is only zero because the
+; file's gap happens to land on it.
 bprof_tab:   times BP_MARKS dd 0
 bprof_boot:  dw 0xFFFF          ; boot sector + pre-sched init, in BIOS ticks.
                                 ; 0xFFFF = the boot sector never stamped

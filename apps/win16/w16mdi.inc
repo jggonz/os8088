@@ -24,6 +24,7 @@ w16k_gate:
 %if w16k_gate - w16k_base != W16S_GATE || w16vq_myds - w16k_base != W16S_MYDS
   %error "w16k_gate or w16vq_myds is not where W16S_GATE and W16S_MYDS say"
 %endif
+    W16SELF k
 
 ; -----------------------------------------------------------------------------
 ; The calls around it (SPEC.md 124.27.1)
@@ -303,7 +304,7 @@ W16TSK w16i_exitwin
     xor dx, dx
     ret
 
-w16i_s_norst: db 'No restart is needed', 0       ; (short: a toast's box is)
+TOASTSTR w16i_s_norst, 'No restart is needed'    ; (short: a toast's box is)
 
 ; THE ATOMS (SPEC.md 124.25.10): one table of W16_NATOM names in this part,
 ; read and written through a data segment for it - Windows' clipboard
@@ -1262,7 +1263,7 @@ w16i_ncpaint:
     jnz .gone                       ; maximized: all of it outside the client
     call w16i_outer
     jc .gone
-    mov byte [cs:w16i_act], 0       ; active: its client's MC_ACT
+    CSDO mov byte [CSEG w16i_act], 0  ; active: its client's MC_ACT
     push bx
     ICALL w16_rec2hwnd
     ICALL w16_parent
@@ -1272,7 +1273,7 @@ w16i_ncpaint:
     cmp ax, [bx + MC_ACT]
     jne .np
 .act:
-    mov byte [cs:w16i_act], 1
+    CSDO mov byte [CSEG w16i_act], 1
     jmp short .np
 .foc:
     cmp ax, [w16_focus]             ; another child (an icon of Program
@@ -1349,21 +1350,21 @@ w16i_outer:
     jc .out
     push ax
     ICALL w16_capt
-    mov [cs:w16i_cap], ax
+    CSDO mov [CSEG w16i_cap], ax
     sub dx, ax
     ICALL w16_bord
-    mov [cs:w16i_bw], ax
+    CSDO mov [CSEG w16i_bw], ax
     sub dx, ax
     pop cx
     sub cx, ax
-    mov [cs:w16i_x0], cx
-    mov [cs:w16i_y0], dx
+    CSDO mov [CSEG w16i_x0], cx
+    CSDO mov [CSEG w16i_y0], dx
     add cx, [bx + W16W_CX]
     dec cx
-    mov [cs:w16i_x1], cx
+    CSDO mov [CSEG w16i_x1], cx
     add dx, [bx + W16W_CY]
     dec dx
-    mov [cs:w16i_y1], dx
+    CSDO mov [CSEG w16i_y1], dx
     clc
 .out:
     pop si
@@ -1387,22 +1388,22 @@ w16i_icon:
     push word [cs:w16i_y0]
     mov ax, [cs:w16i_x0]            ; the clip: the icon and the title's
     sub ax, W16I_TSIDE              ;   room under it
-    mov [cs:w16i_tl], ax
-    mov [cs:w16i_x0], ax
+    CSDO mov [CSEG w16i_tl], ax
+    CSDO mov [CSEG w16i_x0], ax
     mov ax, [cs:w16i_x1]
     add ax, W16I_TSIDE
-    mov [cs:w16i_tr], ax
-    mov [cs:w16i_x1], ax
+    CSDO mov [CSEG w16i_tr], ax
+    CSDO mov [CSEG w16i_x1], ax
     mov ax, [cs:w16i_y1]
     add ax, 2
-    mov [cs:w16i_ct], ax
+    CSDO mov [CSEG w16i_ct], ax
     add ax, [w16_capn]
     sub ax, 3
-    mov [cs:w16i_cb], ax
-    mov [cs:w16i_y1], ax
+    CSDO mov [CSEG w16i_cb], ax
+    CSDO mov [CSEG w16i_y1], ax
     sub ax, [cs:w16i_ct]
     inc ax
-    mov [cs:w16i_bsz], ax
+    CSDO mov [CSEG w16i_bsz], ax
     call w16i_ncclip
     pop dx                          ; CX/DX = the icon's top left
     pop cx
@@ -1442,7 +1443,7 @@ w16i_icon:
     call w16i_box
     pop bx
 .title:
-    mov byte [cs:w16i_tfit], 1
+    CSDO mov byte [CSEG w16i_tfit], 1
     call w16i_title
 .out:
     pop di
@@ -1551,19 +1552,19 @@ w16i_ring:
 w16i_caption:
     mov ax, [cs:w16i_x0]            ; CL..CR, CT..CB: the caption's face
     add ax, [cs:w16i_bw]
-    mov [cs:w16i_cl], ax
+    CSDO mov [CSEG w16i_cl], ax
     mov ax, [cs:w16i_x1]
     sub ax, [cs:w16i_bw]
-    mov [cs:w16i_cr], ax
+    CSDO mov [CSEG w16i_cr], ax
     mov ax, [cs:w16i_y0]
     add ax, [cs:w16i_bw]
-    mov [cs:w16i_ct], ax
+    CSDO mov [CSEG w16i_ct], ax
     add ax, [cs:w16i_cap]
     sub ax, 2
-    mov [cs:w16i_cb], ax
+    CSDO mov [CSEG w16i_cb], ax
     sub ax, [cs:w16i_ct]
     inc ax
-    mov [cs:w16i_bsz], ax           ; a box: as wide as the face is high
+    CSDO mov [CSEG w16i_bsz], ax      ; a box: as wide as the face is high
     push bx
     mov ax, [cs:w16i_cl]            ; the black line under it
     mov bx, [cs:w16i_cb]
@@ -1574,9 +1575,9 @@ w16i_caption:
     call w16i_box
     pop bx
     mov ax, [cs:w16i_cl]            ; TL..TR: the title's, so far
-    mov [cs:w16i_tl], ax
+    CSDO mov [CSEG w16i_tl], ax
     mov ax, [cs:w16i_cr]
-    mov [cs:w16i_tr], ax
+    CSDO mov [CSEG w16i_tr], ax
     test word [bx + W16W_STYLE + 2], 0x0008 ; WS_SYSMENU: its box at the left
     jz .nosys
     mov ax, [cs:w16i_cl]
@@ -1585,7 +1586,7 @@ w16i_caption:
     add ax, [cs:w16i_bsz]
     call w16i_sep
     inc ax
-    mov [cs:w16i_tl], ax
+    CSDO mov [CSEG w16i_tl], ax
 .nosys:
     test word [bx + W16W_STYLE + 2], 0x0001 ; WS_MAXIMIZEBOX
     jz .nomax
@@ -1597,7 +1598,7 @@ w16i_caption:
     dec ax
     call w16i_sep
     dec ax
-    mov [cs:w16i_tr], ax
+    CSDO mov [CSEG w16i_tr], ax
 .nomax:
     test word [bx + W16W_STYLE + 2], 0x0002 ; WS_MINIMIZEBOX
     jz .nomin
@@ -1609,7 +1610,7 @@ w16i_caption:
     dec ax
     call w16i_sep
     dec ax
-    mov [cs:w16i_tr], ax
+    CSDO mov [CSEG w16i_tr], ax
 .nomin:
     jmp w16i_title
 
@@ -1817,7 +1818,7 @@ w16i_title:
     mov ax, (COLOR_ACTIVECAPTION << 8) | COLOR_CAPTIONTEXT
 .col:
     SLCALL w16d_colors              ; [w16_tcol], [w16_tpap]
-    mov [cs:w16i_tpc], si
+    CSDO mov [CSEG w16i_tpc], si
     ICALL w16_textptr               ; ES:SI, CX = the title
     cmp cx, W16_TXTMAX
     jbe .n
@@ -1856,10 +1857,10 @@ w16i_title:
     je .fill                        ;   a pixel more each side
     jcxz .out
     dec di
-    mov [cs:w16i_tl], di
+    CSDO mov [CSEG w16i_tl], di
     add di, ax
     inc di
-    mov [cs:w16i_tr], di
+    CSDO mov [CSEG w16i_tr], di
 .fill:
     push bx                         ; the face, then the text over it in
     mov si, [cs:w16i_tpc]           ;   the same paper
@@ -1886,7 +1887,7 @@ w16i_title:
     pop bp
 .out:
     mov byte [w16_thalf], 0
-    mov byte [cs:w16i_tfit], 0
+    CSDO mov byte [CSEG w16i_tfit], 0
     pop es
     pop di
     pop si
@@ -1962,8 +1963,8 @@ w16i_mdicreate:
     mov [es:di + 6], ax             ; hMenu: its ID
     call w16i_defpos
     mov ax, w16_stubs + W16_STUBSZ * W16_CWROW
-    mov dx, ds
-    ICALL w16_cbcall
+    W16ICS dx                       ; the IMAGE's code: in the arm DS is its
+    ICALL w16_cbcall                ;   data half (KERN-MEGA-PLAN 14.165)
     xor ax, ax
     cwd
     ret
@@ -2301,7 +2302,7 @@ w16i_mdidestroy:
     pop ax
     ICALL w16_ppush                 ; DestroyWindow's one argument
     mov ax, w16_stubs + W16_STUBSZ * W16_DWROW
-    mov dx, ds
+    W16ICS dx                       ; (the image's code, as WM_MDICREATE's)
     ICALL w16_cbcall
 .none:
     xor ax, ax
@@ -2635,10 +2636,10 @@ w16i_label:
     push di
     push es
     mov di, w16i_mbuf               ; XSEC-OK: written through cs:
-    mov byte [cs:di], '&'
+    CSDO mov byte [CSEG di], '&'
     add cl, '1'
-    mov [cs:di + 1], cl
-    mov byte [cs:di + 2], ' '
+    CSDO mov [CSEG di + 1], cl
+    CSDO mov byte [CSEG di + 2], ' '
     add di, 3
     ICALL w16_hwnd2rec
     jc .end
@@ -2650,12 +2651,12 @@ w16i_label:
     jcxz .end
 .c:
     mov al, [es:si]
-    mov [cs:di], al
+    CSDO mov [CSEG di], al
     inc si
     inc di
     loop .c
 .end:
-    mov byte [cs:di], 0
+    CSDO mov byte [CSEG di], 0
     pop es
     pop di
     pop si
@@ -2779,18 +2780,18 @@ w16i_ncpress:
 .start:
     or cl, cl
     jz .out
-    mov [cs:w16i_tm], cl
-    mov [cs:w16i_tk], bx
-    mov [cs:w16i_ax], ax
-    mov [cs:w16i_ay], dx
+    CSDO mov [CSEG w16i_tm], cl
+    CSDO mov [CSEG w16i_tk], bx
+    CSDO mov [CSEG w16i_ax], ax
+    CSDO mov [CSEG w16i_ay], dx
     push bx                         ; the window as it is, twice: where it
     mov si, w16i_x0                 ; XSEC-OK: read and written through cs:
     mov di, w16i_ol                 ; XSEC-OK: was, and the outline
     mov cx, 4
 .cp:
     mov ax, [cs:si]
-    mov [cs:di], ax
-    mov [cs:di + 8], ax
+    CSDO mov [CSEG di], ax
+    CSDO mov [CSEG di + 8], ax
     inc si
     inc si
     inc di
@@ -2805,7 +2806,7 @@ w16i_ncpress:
     mov cx, 4
 .lim:
     mov ax, [si]
-    mov [cs:di], ax
+    CSDO mov [CSEG di], ax
     inc si
     inc si
     inc di
@@ -2903,7 +2904,7 @@ w16i_track:
     mov cx, 4
 .cp:
     mov bx, [cs:si]
-    mov [cs:di], bx
+    CSDO mov [CSEG di], bx
     inc si
     inc si
     inc di
@@ -2912,29 +2913,29 @@ w16i_track:
     mov cl, [cs:w16i_tm]
     test cl, W16I_TMOVE
     jz .size
-    add [cs:w16i_wl], ax
-    add [cs:w16i_wr], ax
-    add [cs:w16i_wt], dx
-    add [cs:w16i_wb], dx
-    jmp short .new
+    CSDO add [CSEG w16i_wl], ax
+    CSDO add [CSEG w16i_wr], ax
+    CSDO add [CSEG w16i_wt], dx
+    CSDO add [CSEG w16i_wb], dx
+    jmp .new
 .size:
     mov bx, [cs:w16i_cap]           ; BX = the least it may be: three boxes
     add bx, W16I_FRAME              ;   and a frame wide, a caption and a
     test cl, W16I_TL                ;   frame high
     jz .sr
-    add [cs:w16i_wl], ax
+    CSDO add [CSEG w16i_wl], ax
 .sr:
     test cl, W16I_TR
     jz .st
-    add [cs:w16i_wr], ax
+    CSDO add [CSEG w16i_wr], ax
 .st:
     test cl, W16I_TT
     jz .sb
-    add [cs:w16i_wt], dx
+    CSDO add [CSEG w16i_wt], dx
 .sb:
     test cl, W16I_TB
     jz .min
-    add [cs:w16i_wb], dx
+    CSDO add [CSEG w16i_wb], dx
 .min:
     mov ax, bx                      ; width at least 3 * BX
     add ax, bx
@@ -2946,10 +2947,10 @@ w16i_track:
     jge .mh
     test cl, W16I_TL
     jz .mr
-    add [cs:w16i_wl], dx
+    CSDO add [CSEG w16i_wl], dx
     jmp short .mh
 .mr:
-    sub [cs:w16i_wr], dx
+    CSDO sub [CSEG w16i_wr], dx
 .mh:
     mov dx, [cs:w16i_wb]            ; height at least BX + the frame
     sub dx, [cs:w16i_wt]
@@ -2959,10 +2960,10 @@ w16i_track:
     jge .new
     test cl, W16I_TT
     jz .mb
-    add [cs:w16i_wt], dx
+    CSDO add [CSEG w16i_wt], dx
     jmp short .new
 .mb:
-    sub [cs:w16i_wb], dx
+    CSDO sub [CSEG w16i_wb], dx
 .new:
     mov si, w16i_wl                 ; XSEC-OK: read and written through cs:
     mov di, w16i_nl                 ; XSEC-OK: read and written through cs:
@@ -2984,7 +2985,7 @@ w16i_track:
     mov cx, 4
 .cpn:
     mov ax, [cs:si]
-    mov [cs:di], ax
+    CSDO mov [CSEG di], ax
     inc si
     inc si
     inc di
@@ -3594,13 +3595,13 @@ w16i_above:
     pop di                          ; DI = it
     jc .out
     mov ax, [cs:w16i_x0]
-    mov [cs:w16i_al], ax
+    CSDO mov [CSEG w16i_al], ax
     mov ax, [cs:w16i_y0]
-    mov [cs:w16i_at], ax
+    CSDO mov [CSEG w16i_at], ax
     mov ax, [cs:w16i_x1]
-    mov [cs:w16i_ar], ax
+    CSDO mov [CSEG w16i_ar], ax
     mov ax, [cs:w16i_y1]
-    mov [cs:w16i_ab], ax
+    CSDO mov [CSEG w16i_ab], ax
     mov bx, di                      ; SI = the MDI child it is in, BX its
 .up:                                ;   client
     mov si, bx
@@ -3609,11 +3610,11 @@ w16i_above:
     cmp byte [bx + W16W_KIND], W16Q_MDI
     jne .up
     mov ax, [si + W16W_SEQ]
-    mov [cs:w16i_aseq], ax
+    CSDO mov [CSEG w16i_aseq], ax
     ICALL w16_origin                ; the client's origin on the screen
     jc .out
-    mov [cs:w16i_aox], ax
-    mov [cs:w16i_aoy], dx
+    CSDO mov [CSEG w16i_aox], ax
+    CSDO mov [CSEG w16i_aoy], dx
     ICALL w16_rec2hwnd
     mov dx, ax                      ; DX = the client's HWND
     mov si, w16_wnd
@@ -3688,8 +3689,8 @@ w16i_owe:
     push ax
     push dx
     ICALL w16_origin                ; AX/DX = SI's client on the screen
-    mov [cs:w16i_aqx], ax
-    mov [cs:w16i_aqy], dx
+    CSDO mov [CSEG w16i_aqx], ax
+    CSDO mov [CSEG w16i_aqy], dx
     pop dx
     pop ax
     pop si                          ; SI = the bottom
@@ -3738,7 +3739,7 @@ w16i_collect:
     push dx
     push si
     push di
-    mov [cs:w16i_cm], ax
+    CSDO mov [CSEG w16i_cm], ax
     ICALL w16_rec2hwnd
     mov dx, ax                      ; DX = the client's HWND
     xor ax, ax                      ; AX = the SEQ to go above
@@ -3764,7 +3765,7 @@ w16i_collect:
 .take:
     cmp di, W16I_LMAX * 2
     jae .done
-    mov [cs:w16i_list + di], si     ; XSEC-OK: read through cs:
+    CSDO mov [CSEG w16i_list + di], si ; XSEC-OK: read through cs:
     inc di
     inc di
     jmp short .next
@@ -3860,7 +3861,7 @@ w16i_tile:
     call w16i_unmax
     push ax                         ; the icons' row first: w16i_iconh
     call w16i_iconh                 ;   collects them, into the list this
-    mov [cs:w16i_tih], ax           ;   collect fills
+    CSDO mov [CSEG w16i_tih], ax      ;   collect fills
     pop ax
     mov ah, al
     xor al, al
@@ -3869,8 +3870,8 @@ w16i_tile:
     jnz .some
     jmp .out
 .some:
-    mov [cs:w16i_tn], cx
-    mov [cs:w16i_th], ah
+    CSDO mov [CSEG w16i_tn], cx
+    CSDO mov [CSEG w16i_th], ah
     mov di, 1                       ; DI = C
 .c:
     mov ax, di
@@ -3880,7 +3881,7 @@ w16i_tile:
     inc di
     jmp short .c
 .cdone:
-    mov [cs:w16i_tc], di
+    CSDO mov [CSEG w16i_tc], di
     push cx
     ICALL w16_csize                 ; CX/DX = the client
     sub dx, [cs:w16i_tih]
@@ -3888,16 +3889,16 @@ w16i_tile:
     jz .v
     xchg cx, dx                     ; rows: across and down change places
 .v:
-    mov [cs:w16i_te], cx            ; the extent the columns divide
-    mov [cs:w16i_tf], dx            ; ...and the one each column divides
+    CSDO mov [CSEG w16i_te], cx       ; the extent the columns divide
+    CSDO mov [CSEG w16i_tf], dx       ; ...and the one each column divides
     mov ax, cx
     xor dx, dx
     div di
-    mov [cs:w16i_tw], ax            ; a column's breadth
+    CSDO mov [CSEG w16i_tw], ax       ; a column's breadth
     pop cx
-    mov word [cs:w16i_ti], 0        ; the column, and the child (from the
+    CSDO mov word [CSEG w16i_ti], 0   ; the column, and the child (from the
     mov si, cx                      ;   top of the Z order: SI counts down)
-    mov word [cs:w16i_tx], 0
+    CSDO mov word [CSEG w16i_tx], 0
 .col:
     mov ax, [cs:w16i_ti]
     cmp ax, [cs:w16i_tc]
@@ -3916,8 +3917,8 @@ w16i_tile:
     mov ax, [cs:w16i_tf]
     xor dx, dx
     div cx
-    mov [cs:w16i_tk2], ax           ; a child's length down the column
-    mov word [cs:w16i_ty], 0
+    CSDO mov [CSEG w16i_tk2], ax      ; a child's length down the column
+    CSDO mov word [CSEG w16i_ty], 0
 .row:
     dec si
     push si
@@ -3939,12 +3940,12 @@ w16i_tile:
     pop si
     pop cx
     mov ax, [cs:w16i_tk2]
-    add [cs:w16i_ty], ax
+    CSDO add [CSEG w16i_ty], ax
     loop .row
 .nextc:
     mov ax, [cs:w16i_tw]
-    add [cs:w16i_tx], ax
-    inc word [cs:w16i_ti]
+    CSDO add [CSEG w16i_tx], ax
+    CSDO inc word [CSEG w16i_ti]
     jmp .col
 .out:
     pop di
@@ -4072,8 +4073,8 @@ W16TSK w16i_getiwp
     jc .no
     mov cx, [bx + W16W_X]           ; AX/CX/DX/SI = the rectangle, and
     mov dx, [bx + W16W_Y]           ;   where it is now
-    mov [cs:w16i_px], cx
-    mov [cs:w16i_py], dx
+    CSDO mov [CSEG w16i_px], cx
+    CSDO mov [CSEG w16i_py], dx
     mov ax, 1
     test word [bx + W16W_STYLE + 2], WS_CHILD_HI
     jz .top
@@ -4448,12 +4449,12 @@ W16TSK w16i_createicon
     push es
     ICALL w16_args
     mov cx, [es:bx + 14]
-    mov [cs:w16i_iw], cx
+    CSDO mov [CSEG w16i_iw], cx
     mov ax, [es:bx + 12]
-    mov [cs:w16i_ih], ax
+    CSDO mov [CSEG w16i_ih], ax
     mov ax, [es:bx + 10]            ; AL = planes
     mov ah, [es:bx + 8]             ; AH = bits a pixel
-    mov [cs:w16i_ipb], ax
+    CSDO mov [CSEG w16i_ipb], ax
     mov al, ah
     xor ah, ah
     mul cx                          ; DX:AX = a plane's row in bits
@@ -4461,15 +4462,15 @@ W16TSK w16i_createicon
     mov cl, 4
     shr ax, cl
     shl ax, 1
-    mov [cs:w16i_iwb], ax
+    CSDO mov [CSEG w16i_iwb], ax
     mov ax, [es:bx]
-    mov [cs:w16i_ixo], ax
+    CSDO mov [CSEG w16i_ixo], ax
     mov ax, [es:bx + 2]
-    mov [cs:w16i_ixs], ax
+    CSDO mov [CSEG w16i_ixs], ax
     mov ax, [es:bx + 4]
-    mov [cs:w16i_iao], ax
+    CSDO mov [CSEG w16i_iao], ax
     mov ax, [es:bx + 6]
-    mov [cs:w16i_ias], ax
+    CSDO mov [CSEG w16i_ias], ax
     jmp w16i_cichk
 
 ; CreateCursorIconIndirect (USER.408) - args: +0 lpXORbits, +4 lpANDbits,
@@ -4488,22 +4489,22 @@ W16TSK w16i_cursorind
     push ds
     lds si, [es:bx + 8]             ; the CURSORICONINFO
     mov ax, [si + 4]
-    mov [cs:w16i_iw], ax
+    CSDO mov [CSEG w16i_iw], ax
     mov ax, [si + 6]
-    mov [cs:w16i_ih], ax
+    CSDO mov [CSEG w16i_ih], ax
     mov ax, [si + 8]
-    mov [cs:w16i_iwb], ax
+    CSDO mov [CSEG w16i_iwb], ax
     mov ax, [si + 10]               ; AL = planes, AH = bits a pixel
-    mov [cs:w16i_ipb], ax
+    CSDO mov [CSEG w16i_ipb], ax
     pop ds
     mov ax, [es:bx]
-    mov [cs:w16i_ixo], ax
+    CSDO mov [CSEG w16i_ixo], ax
     mov ax, [es:bx + 2]
-    mov [cs:w16i_ixs], ax
+    CSDO mov [CSEG w16i_ixs], ax
     mov ax, [es:bx + 4]
-    mov [cs:w16i_iao], ax
+    CSDO mov [CSEG w16i_iao], ax
     mov ax, [es:bx + 6]
-    mov [cs:w16i_ias], ax
+    CSDO mov [CSEG w16i_ias], ax
 w16i_cichk:                         ; CreateIcon (above) joins here
     mov ax, [cs:w16i_iw]
     dec ax
@@ -4529,13 +4530,13 @@ w16i_cichk:                         ; CreateIcon (above) joins here
     shr ax, cl
     shl ax, 1
     shl ax, 1
-    mov [cs:w16i_xs], ax
+    CSDO mov [CSEG w16i_xs], ax
     mov ax, [cs:w16i_iw]
     add ax, 31
     shr ax, cl
     shl ax, 1
     shl ax, 1
-    mov [cs:w16i_as], ax
+    CSDO mov [CSEG w16i_as], ax
     add ax, [cs:w16i_xs]
     mul word [cs:w16i_ih]
     add ax, W16I_IHDR
@@ -4544,7 +4545,7 @@ w16i_cichk:                         ; CreateIcon (above) joins here
     ICALL w16_gnew                  ;   one is its segment, and may be above it
     or ax, ax
     jz .fall
-    mov [cs:w16i_ihd], ax
+    CSDO mov [CSEG w16i_ihd], ax
     dec dx                          ; its header: an icon WIN16 made
     W16SEG es, dx
     or byte [es:GH_FLAGS], GHF_ICON
@@ -4623,7 +4624,7 @@ w16i_cichk:                         ; CreateIcon (above) joins here
     mov cl, 4
     shr ax, cl
     shl ax, 1
-    mov [cs:w16i_iwb], ax
+    CSDO mov [CSEG w16i_iwb], ax
     xor bx, bx
 .arow:
     cmp bx, [cs:w16i_ih]

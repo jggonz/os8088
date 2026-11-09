@@ -82,12 +82,11 @@
  *     not hold heap for programs that are over. A ninth open evicts the
  *     least recently used CLEAN entry, and when none is clean the open errs
  *     'Bdos Err on X: CP/M ERR' with a toast (SPEC.md 74.4). A file above
- *     65,535 bytes cannot be held
- *     - the read is a 16-bit count - so open/make/write refuse it as a FACT
- *     with a toast naming the file (SPEC.md 47, 74.4); DIR still lists it
- *     with its whole extent chain; the master disk's three such files are
- *     not shipped. Records stop at 511 (65,408 bytes written), the 16-bit
- *     size's last whole record.
+ *     65,535 bytes is ONE HUGE CLAIM (os88_mem_huge, SPEC.md 74.3.3): 512
+ *     records a 64KB window, record r at (r & 511) x 128 of window r >> 9,
+ *     read and written back whole by the kernel's 32-bit file calls; a file
+ *     grows into one past record 510. What CP/M itself cannot reach - 8MB -
+ *     is refused as a FACT with a toast naming the file (SPEC.md 47, 74.4).
  *
  * Every function here is called on the UI task with no lock held (SPEC.md
  * 74.1: the BDOS runs on the wake), which is what makes the file slots legal
@@ -120,11 +119,11 @@
 #define RC_FBAD    8                         /* firstBlockAfterDir: al0 0xFF */
 #define RC_BATCHFCB (RC_CCPADDR + 0x7AC)     /* CCP_DR: the $$$.SUB FCB */
 
-/* the last record this model can READ, 511 (a 65,535-byte file's tail),
- * and the last it can WRITE, 510 (65,408 bytes: the 16-bit size's last
- * whole record) - SPEC.md 74.3 */
-#define RC_MAXREC_R 511
-#define RC_MAXREC_W 510
+/* the last record this model can WRITE, 65,534: (rec + 1) x 128 bytes is
+ * the 24-bit size, CP/M's own 8MB less a record (SPEC.md 74.3.3). A file
+ * past 65,535 bytes is ONE HUGE CLAIM, 512 records a 64KB window, so no
+ * record crosses one; a file of 8MB or more is refused at its open */
+#define RC_MAXREC_W 65534u
 
 /* --- the place: (drive,user) -> folder --------------------------------- */
 static struct os88_place rc_home;            /* the launch folder: FILEBASE */
@@ -198,18 +197,27 @@ static unsigned char rc_subfact[RC_USERS];   /* _CheckSUB's answer per user
 #define RC_OFT 8
 struct rc_ofile {
     char name[11];
-    unsigned char drive, user, dirty, live, pad0;
+    unsigned char drive, user, dirty, live;
+    unsigned char size_hi;                   /* bits 16-23 of the size */
     unsigned seg;                            /* the claim: MOVABLE once it
                                               * is filled, and this is the
                                               * word os88_onmove keeps */
-    unsigned size;                           /* bytes, 0..65535 */
-    unsigned para;                           /* the claim's size, in
-                                              * paragraphs (SPEC.md 50.3.7) */
+    unsigned size;                           /* bits 0-15 of the size */
+    unsigned para;                           /* the claim's size: paragraphs
+                                              * (SPEC.md 50.3.7), or for a
+                                              * HUGE one its KB */
     unsigned lru;                            /* rc_oft_clock at last use */
-};                                           /* 24 bytes a row: walked by
+    unsigned char huge, pad1;                /* 1: an os88_mem_huge claim,
+                                              * window k at seg + k x
+                                              * rc_hstep (SPEC.md 74.3.3) */
+};                                           /* 26 bytes a row: walked by
                                               * pointer, never indexed */
 static struct rc_ofile rc_oft[RC_OFT];
 static unsigned rc_oft_clock;
+static unsigned rc_hstep;                    /* os88_mem_huge_step(): what
+                                              * window k adds per 64KB */
+static unsigned rc_rseg;                     /* rc_recoff's window */
+static unsigned char rc_hbuf[256];           /* rc_oft_tohuge's bounce */
 static int rc_pun_open, rc_lst_open;         /* cpm.h pun_open / lst_open */
 static const char rc_s_pun[] = "PUN     TXT";    /* ...their files, as 11 */
 static const char rc_s_lst[] = "LST     TXT";
@@ -671,7 +679,8 @@ static struct rc_dent *rc_dc_find(const char *n11)
 /* rc_dc_note - our own change to (d,u): a file made or resized. Only the
  * cache that describes (d,u) is touched; another one is refilled when it
  * is next wanted. */
-static void rc_dc_note(int d, int u, const char *n11, unsigned size)
+static void rc_dc_note(int d, int u, const char *n11, unsigned size,
+                       unsigned hi)
 {
     struct rc_dent *e;
     if (d == 0 && u < RC_USERS && n11[0] == '$')
@@ -683,11 +692,11 @@ static void rc_dc_note(int d, int u, const char *n11, unsigned size)
     if (!e) {
         if (rc_dcc->n >= RC_DC_MAX)
             return;
-        rc_dc_insert(n11, size, 0);
+        rc_dc_insert(n11, size, hi);
         return;
     }
     e->size_lo = size;
-    e->size_hi = 0;
+    e->size_hi = (unsigned char)hi;
 }
 
 static void rc_dc_forget(int d, int u, const char *n11)
@@ -749,8 +758,8 @@ static void rc_say_now(const char *msg)
 /* the toast texts more than one refusal names (one copy each) */
 static const char rc_s_runcpm[] = "RunCPM: ";
 static const char rc_s_ram[] = "RunCPM RAM? ";
-static const char rc_s_64k[] = ">64K";
-#define rc_empty (rc_s_64k + 4)              /* "": the NUL of ">64K" */
+static const char rc_s_64k[] = ">8MB";
+#define rc_empty (rc_s_64k + 4)              /* "": the NUL of ">8MB" */
 
 static void rc_toast_name(const char *head, const char *n11, const char *tail)
 {
@@ -802,10 +811,16 @@ static int rc_oft_flush(struct rc_ofile *o)
              * is movable, and the kernel holds its address across a walk
              * that claims. Declared again whatever the write said. */
             os88_mem_movable(o->seg, 0);
-            r = os88_file_write_seg(rc_hname, o->seg, o->size);
+            if (o->huge)                     /* the whole 24-bit size, the
+                                              * kernel walking the claim by
+                                              * its own step */
+                r = os88_file_write_huge(rc_hname, o->seg, o->size,
+                                         o->size_hi);
+            else
+                r = os88_file_write_seg(rc_hname, o->seg, o->size);
             os88_mem_movable(o->seg, 1);
             if (r == 0)
-                rc_dc_note(o->drive, o->user, o->name, o->size);
+                rc_dc_note(o->drive, o->user, o->name, o->size, o->size_hi);
         } else {
             r = -1;
         }
@@ -892,24 +907,95 @@ static unsigned rc_para(unsigned n)
     return (n >> 4) + ((n & 15) ? 1 : 0);
 }
 
-/* rc_oft_grow - room for `need` bytes in entry o (regrow, moving if it
- * must; clean entries evicted for the room); 0 = ok, -1 = refused */
-static int rc_oft_grow(struct rc_ofile *o, unsigned need)
+/* rc_reckb - NREC records as whole KB (8 records a KB) */
+static unsigned rc_reckb(unsigned nrec)
 {
-    unsigned s, para;
-    if (o->para >= 4096 || need <= (o->para << 4))
-        return 0;
-    para = rc_para(need) + 3 * 64;           /* 3KB of slack: a SAVE growing
+    return (nrec >> 3) + ((nrec & 7) ? 1 : 0);
+}
+
+/* rc_oft_tohuge - entry o (a paragraph claim, 65,535 bytes or less) made ONE
+ * HUGE CLAIM of NREC records (SPEC.md 74.3.3): claimed, its bytes copied into
+ * window 0, the old claim freed, the new declared movable. Clean entries
+ * are evicted for the room; 0 = ok, -1 = refused and o is as it was */
+static int rc_oft_tohuge(struct rc_ofile *o, unsigned nrec)
+{
+    unsigned s, kb, off, n, left;
+    kb = rc_reckb(nrec) + 3;
+    while ((s = os88_mem_huge(kb)) == 0)
+        if (!rc_oft_evict())
+            return -1;
+    rc_hstep = os88_mem_huge_step();
+    off = 0;
+    left = o->size;
+    while (left) {                           /* (a count, never off < size:
+                                              * off wraps at the last one) */
+        n = left > 256 ? 256 : left;
+        os88_seg_get(rc_hbuf, o->seg, off, n);
+        os88_seg_put(s, off, rc_hbuf, n);
+        off = RC_W(off + n);
+        left -= n;
+    }
+    os88_mem_free(o->seg);
+    o->seg = s;
+    o->para = kb;
+    o->huge = 1;
+    os88_mem_movable(s, 1);
+    return 0;
+}
+
+/* rc_oft_grow1 - room for NREC records in entry o (regrow, moving if it
+ * must; clean entries evicted for the room); 0 = ok, -1 = refused. Past 511
+ * records (65,408 bytes) the entry is a huge claim from then on. Called
+ * only through rc_oft_grow, which keeps o itself off the evictions */
+static int rc_oft_grow1(struct rc_ofile *o, unsigned nrec)
+{
+    unsigned s, para, need, kb;
+    if (!o->huge) {
+        if (nrec >= 512)
+            return rc_oft_tohuge(o, nrec);
+        need = RC_W(nrec << 7);
+        if (o->para >= 4096 || need <= (o->para << 4))
+            return 0;
+        para = rc_para(need) + 3 * 64;       /* 3KB of slack: a SAVE growing
                                               * a record at a time regrows
                                               * every 24 records, not 8 */
-    if (para > 4096)
-        para = 4096;
-    while ((s = os88_mem_regrow_p(o->seg, para)) == 0)
+        if (para > 4096)
+            para = 4096;
+        while ((s = os88_mem_regrow_p(o->seg, para)) == 0)
+            if (!rc_oft_evict())
+                return -1;
+        o->seg = s;
+        o->para = para;
+        return 0;
+    }
+    kb = rc_reckb(nrec);
+    if (kb <= o->para)
+        return 0;
+    kb += (kb >> 3) + 3;                     /* an eighth more and 3KB: a
+                                              * file growing a record at a
+                                              * time regrows a few dozen
+                                              * times to a megabyte */
+    while ((s = os88_mem_regrow(o->seg, (int)kb)) == 0)
         if (!rc_oft_evict())
             return -1;
     o->seg = s;
-    o->para = para;
+    o->para = kb;
     return 0;
+}
+
+/* rc_oft_grow - rc_oft_grow1 with o marked dirty for the length of it, so
+ * a clean o (opened, or just flushed) is never the entry evicted for its
+ * own room: that freed o's claim under it and the write landed nowhere.
+ * Its own flag is put back either way */
+static int rc_oft_grow(struct rc_ofile *o, unsigned nrec)
+{
+    unsigned char d;
+    int r;
+    d = o->dirty;
+    o->dirty = 1;
+    r = rc_oft_grow1(o, nrec);
+    o->dirty = d;
+    return r;
 }
 
 /* rc_oft_get - the entry for (d,u,name), loading the file when the table
@@ -923,11 +1009,12 @@ static struct rc_ofile *rc_oft_get(int d, int u, const char *n11, int mode)
     struct rc_ofile *o;
     struct rc_dent *e;
     int exists;
-    unsigned size, n, cap, k;
+    unsigned size, n, cap, k, hi;
     o = rc_oft_find(d, u, n11);
     if (o) {
         if (mode == 2) {
             o->size = 0;
+            o->size_hi = 0;
             o->dirty = 1;
         }
         o->lru = ++rc_oft_clock;
@@ -939,24 +1026,40 @@ static struct rc_ofile *rc_oft_get(int d, int u, const char *n11, int mode)
     e = rc_dc_find(n11);
     exists = (e != 0);
     size = 0;
+    hi = 0;
     if (exists) {
-        if (e->size_hi) {
+        if (e->size_hi > 0x7F) {             /* 8MB and more: past CP/M's
+                                              * own reach (RC_MAXREC_W) */
             rc_toast_name(rc_s_runcpm, n11, rc_s_64k);
             return 0;
         }
         size = e->size_lo;
+        hi = e->size_hi;
     } else if (mode == 0) {
         return 0;
     }
     o = rc_oft_slot();
     if (!o)
         return 0;
-    if (mode == 2)
+    if (mode == 2) {
         size = 0;
-    k = rc_para(size);
-    if (k < 1)
-        k = 1;
-    o->seg = rc_oft_claim(k);
+        hi = 0;
+    }
+    o->huge = 0;
+    if (hi) {                                /* PAST 65,535 BYTES: one huge
+                                              * claim (SPEC.md 74.3.3) */
+        k = RC_W((hi << 6) + (size >> 10) + ((size & 1023) ? 1 : 0));
+        while ((o->seg = os88_mem_huge((int)k)) == 0)
+            if (!rc_oft_evict())
+                break;
+        rc_hstep = os88_mem_huge_step();
+        o->huge = 1;
+    } else {
+        k = rc_para(size);
+        if (k < 1)
+            k = 1;
+        o->seg = rc_oft_claim(k);
+    }
     if (o->seg == 0) {
         rc_toast_name(rc_s_ram, n11, rc_empty);
         return 0;
@@ -967,21 +1070,31 @@ static struct rc_ofile *rc_oft_get(int d, int u, const char *n11, int mode)
     o->user = (unsigned char)u;
     os88_memcpy(o->name, n11, 11);
     o->size = size;
+    o->size_hi = (unsigned char)hi;
     o->dirty = 0;                            /* a made, or a truncated, file is
                                               * owed to the disk at its close */
     if (mode != 0 && (!exists || mode == 2))
         o->dirty = 1;
     o->lru = ++rc_oft_clock;
-    if (exists && mode != 2 && size) {
+    if (exists && mode != 2 && (size || hi)) {
         rc_n11_host(n11, rc_hname);
         cap = (k >= 4096) ? 0xFFFF : (k << 4);
         n = 0;
-        if (rc_fs_cd(d, u) == 0)             /* STAND THERE: rc_dc_want does
+        if (rc_fs_cd(d, u) == 0) {           /* STAND THERE: rc_dc_want does
                                               * not move when the slot was
                                               * already valid, and the last
                                               * flush may have left the
                                               * instance in another area */
-            n = os88_file_read_seg(rc_hname, o->seg, cap);
+            if (o->huge) {                   /* the 24-bit count, the claim's
+                                              * KB the capacity */
+                n = os88_file_read_huge(rc_hname, o->seg, RC_W(k << 10),
+                                        k >> 6);
+                if (os88_file_hi() != hi)
+                    n = RC_W(size + 1);      /* (a mismatch, whatever n is) */
+            } else {
+                n = os88_file_read_seg(rc_hname, o->seg, cap);
+            }
+        }
         if (n != size) {
             /* the file changed under the cache, or the read failed */
             rc_oft_drop(o);
@@ -1026,20 +1139,64 @@ static struct rc_ofile *rc_oft_of_fcb(int d, int mode)
  * against the claim: 128 bytes between the DMA and offset rec * 128
  * ========================================================================*/
 
+/* rc_ofrec - entry o's WHOLE records (its partial last one's bytes are
+ * o->size & 127): the 24-bit size in records, which a word holds to 8MB */
+static unsigned rc_ofrec(struct rc_ofile *o)
+{
+    return RC_W(((unsigned)o->size_hi << 9) + (o->size >> 7));
+}
+
+/* rc_recoff - record REC's place in entry o: rc_rseg its window, the answer
+ * the offset in it. A huge claim's window k is seg + k x rc_hstep, k = rec
+ * >> 9 - 512 records a 64KB window, so no record crosses one (SPEC.md
+ * 74.3.3); a paragraph claim is its own one window */
+static unsigned rc_recoff(struct rc_ofile *o, unsigned rec)
+{
+    if (o->huge) {
+        rc_rseg = RC_W(o->seg + rc_hstep * (rec >> 9));
+        return RC_W((rec & 511) << 7);
+    }
+    rc_rseg = o->seg;
+    return RC_W(rec << 7);
+}
+
+/* rc_gapfill - zeros from record R's byte PART to record TO (fseek past the
+ * end, then fwrite), a window - and 32KB - at a time */
+static void rc_gapfill(struct rc_ofile *o, unsigned r, unsigned part,
+                       unsigned to)
+{
+    unsigned off, n;
+    if (part) {
+        off = rc_recoff(o, r);
+        rc_sfill(rc_rseg, RC_W(off + part), 0, RC_BLKSZ - part);
+        r++;
+    }
+    while (r < to) {
+        off = rc_recoff(o, r);
+        n = 512 - (r & 511);                 /* the records left in r's window */
+        if (n > to - r)
+            n = to - r;
+        if (n > 256)
+            n = 256;                         /* (n << 7 in a word) */
+        rc_sfill(rc_rseg, off, 0, RC_W(n << 7));
+        r += n;
+    }
+}
+
 /* rc_rec_read - answers disk.h's codes: 0 read, 1 past the end (nothing
  * moved) */
 static int rc_rec_read(struct rc_ofile *o, unsigned rec)
 {
-    unsigned off, n;
-    if (rec > RC_MAXREC_R)
-        return 1;
-    off = RC_W(rec << 7);
-    if (off >= o->size)
-        return 1;
-    n = o->size - off;
-    if (n > RC_BLKSZ)
+    unsigned off, n, full;
+    full = rc_ofrec(o);
+    if (rec < full)
         n = RC_BLKSZ;
-    rc_zzcopy_in(rc_dma, o->seg, off, n);
+    else if (rec == full && (o->size & 127))
+        n = o->size & 127;
+    else
+        return 1;
+    off = rc_recoff(o, rec);
+    rc_zzcopy_in(rc_dma, rc_rseg, off, n);
     if (n < RC_BLKSZ)                        /* the partial last record: the
                                               * rest is ^Z, as _sys_readseq's
                                               * 0x1A-filled dmabuf */
@@ -1054,22 +1211,24 @@ static int rc_rec_read(struct rc_ofile *o, unsigned rec)
  * end is zeros (fseek + fwrite) */
 static int rc_rec_write(struct rc_ofile *o, unsigned rec)
 {
-    unsigned off, end;
+    unsigned off, full;
     if (rec > RC_MAXREC_W) {
         rc_toast_name(rc_s_runcpm, o->name, rc_s_64k);
         return 0xFF;
     }
-    off = RC_W(rec << 7);
-    end = off + RC_BLKSZ;                    /* <= 65,408: rec <= 510 */
-    if (rc_oft_grow(o, end) < 0) {
+    if (rc_oft_grow(o, RC_W(rec + 1)) < 0) {
         rc_toast_name(rc_s_ram, o->name, rc_empty);
         return 0xFF;
     }
-    if (off > o->size)
-        rc_sfill(o->seg, o->size, 0, off - o->size);
-    rc_zzcopy_out(o->seg, off, rc_dma, RC_BLKSZ);
-    if (end > o->size)
-        o->size = end;
+    full = rc_ofrec(o);
+    if (rec > full)
+        rc_gapfill(o, full, o->size & 127, rec);
+    off = rc_recoff(o, rec);
+    rc_zzcopy_out(rc_rseg, off, rc_dma, RC_BLKSZ);
+    if (rec >= full) {                       /* the size: rec + 1 records */
+        o->size_hi = (unsigned char)(RC_W(rec + 1) >> 9);
+        o->size = RC_W((RC_W(rec + 1) & 511) << 7);
+    }
     o->dirty = 1;
     o->lru = ++rc_oft_clock;
     return 0;
@@ -1121,7 +1280,7 @@ static unsigned ovl_fs_open(void)
     o = rc_oft_of_fcb(d, 0);
     if (!o)
         return 0xFF;
-    recs = (o->size >> 7) + ((o->size & 127) ? 1 : 0);
+    recs = RC_W(rc_ofrec(o) + ((o->size & 127) ? 1 : 0));
     rc_fcb[13] = 0;                          /* s1 */
     rc_fcb[14] = 0x80;                       /* s2: unmodified */
     rc_fcb[15] = (unsigned char)(recs > RC_BLKEX ? RC_BLKEX : recs);
@@ -1157,8 +1316,9 @@ static unsigned ovl_fs_close(void)
         unsigned n = (unsigned)rc_fcb[15] << 7;
         if (!o)
             o = rc_oft_get(d, rc_user, rc_n11, 0);
-        if (o && n < o->size) {
+        if (o && (o->size_hi || n < o->size)) {
             o->size = n;
+            o->size_hi = 0;
             o->dirty = 1;
         }
     }
@@ -1179,7 +1339,7 @@ static unsigned ovl_fs_make(void)
     o = rc_oft_of_fcb(d, 1);
     if (!o)
         return 0xFF;
-    rc_dc_note(d, rc_user, rc_n11, o->size);
+    rc_dc_note(d, rc_user, rc_n11, o->size, o->size_hi);
     rc_fcb[12] = 0;                          /* ex */
     rc_fcb[13] = 0;                          /* s1 */
     rc_fcb[14] = 0;                          /* s2: modified already */
@@ -1541,7 +1701,7 @@ static unsigned ovl_fs_size(void)
     o = rc_oft_find(d, rc_user, rc_n11);
     if (o) {
         lo = o->size;
-        hi = 0;
+        hi = o->size_hi;
     } else {
         if (rc_dc_want(d, rc_user) != 0)
             return 0xFF;
@@ -1671,12 +1831,13 @@ static void rc_fs_capture(int lst, int c)
     o = rc_oft_get(0, 0, lst ? rc_s_lst : rc_s_pun, first ? 2 : 1);
     if (!o)
         return;                              /* pun_dev == NULL: dropped */
-    s = o->size;
-    if (s == 0xFFFF || rc_oft_grow(o, s + 1) < 0)
+    s = o->size;                             /* (window 0 holds byte s even of
+                                              * a huge claim: s < 64KB) */
+    if (o->size_hi || s == 0xFFFF || rc_oft_grow(o, RC_W((s >> 7) + 1)) < 0)
         return;
     os88_poke(o->seg, s, c);
     o->size = s + 1;
     o->dirty = 1;
     if (first)
-        rc_dc_note(0, 0, o->name, 0);
+        rc_dc_note(0, 0, o->name, 0, 0);
 }

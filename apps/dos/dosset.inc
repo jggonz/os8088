@@ -157,8 +157,10 @@ sp_wck:
 sp_hck:
     cmp byte [dos_mwin + OS88UI_CK_ON], 0
     jne .no
+%ifdef DOS_WIN16                    ; (an NE is only WIN16's to run)
     cmp byte [dos_hne], 0
     jne .no
+%endif
     push bx
     mov bx, dos_mhead
     call SPH(os88ui_chkhit)         ; CF = 0 toggled and redrawn
@@ -200,10 +202,14 @@ sp_wdraw1:
 %ifdef DOS_WTAIL
     xor di, di                      ; --- `Close when done`, beside it -------
     cmp byte [dos_mwin + OS88UI_CK_ON], 0
+%ifdef DOS_WIN16
     jne .hd
     cmp byte [dos_hne], 0
     je .hl
 .hd:
+%else
+    je .hl
+%endif
     mov di, OS88UI_DIS
 .hl:
     mov bx, dos_mhead

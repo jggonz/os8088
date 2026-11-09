@@ -471,10 +471,11 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
 ; was `desk_rowcalc_x`, a resident `.cold` far body, and nothing resident ever
 ; called it. Its callers are the BOOT - kmain_o (which runs it right after
 ; desk_init returns, where desk_init used to far-call it as its last step from
-; the overlay, and again after drv_boot), the blob's bvs_switch and
+; the overlay, and again after drv_boot), the boot's bvs_switch and
 ; bdk_reflow - and CTRL.DRV: Set Primary's vid_switch, the Dock page's
-; dock_reflow and the arrangement row. So it is `bvw_rowcalc` in the blob
-; (driver.inc on kern_big, below on kern_small) and `wm_rowcalc` in CTRL.DRV
+; dock_reflow and the arrangement row. So it is `bvw_rowcalc` in `.boot3`
+; (driver.inc on kern_big, below on kern_small; the blob's until BOOT3-PLAN
+; wave 4) and `wm_rowcalc` in CTRL.DRV
 ; (below), named for the WM_REFIT prefix VSW_SWITCH and DOCK_APPLY already
 ; carry. %2 is the image's hop into a near `.cold` routine (BSWC, KSWC). On
 ; kern_small desk_reflow and desk_live are written in as well: there the
@@ -482,10 +483,12 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
 ; volume after the boot), so all three leave resident together.
 ;
 ; THE BLOB HAD NINE BYTES on kern_big and kern_emu, so there the boot's copy
-; of the GEOMETRY (DESK_GRID) is `cfx_grid`, in `.cfx` past cfx_tab (kernel.asm
+; of the GEOMETRY (DESK_GRID) is `cfx_grid`, in `.boot3` past b3_live (boot3.inc
 ; - transient, like the slide beside it, and past the RAM `.vgabuf` shares
-; with it), and the blob's bvw_rowcalc is a far call to it and the reflow.
-; kern_mega has no `.cfx` and a blob with room, so it takes the whole copy.
+; with it), and bvw_rowcalc is a call to it and the reflow - `push cs` + a
+; near call (B3CALL) since BOOT3-PLAN wave 4 put bvw_rowcalc in `.boot3` too,
+; on every KERN_BIG kernel, kern_mega's included. kern_small's DESK_ROWCALC
+; bvw (below) is the whole copy.
 ; -----------------------------------------------------------------------------
 %macro DESK_GRID 0             ; the geometry: AX, BX, CX, DX, SI, flags
     ; --- which ICON, and therefore how tall a zone is (SPEC.md 26.4) --------
@@ -622,13 +625,13 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
 section .modu                   ; CTRL.DRV's copy (KSW_SECT, kernel.asm)
 DESK_ROWCALC wm, KSWC
 %ifdef KERN_SMALL
-section .boot2                  ; ...and kern_small's boot copy, through a hop
-%macro BDRC 1                   ; of the blob's own (kern_big's is driver.inc's
+B3SECT                          ; ...and kern_small's boot copy, through a hop
+%macro BDRC 1                   ; of its own (kern_big's is driver.inc's
     call bvw_cgo                ; BSWC, beside its other boot expansions, and
-    dw %1                       ; kern_small has no drv_boot to carry them)
-%endmacro
-DESK_ROWCALC bvw, BDRC
-KGO_PAIR bvw
+    dw %1                       ; kern_small has no drv_boot to carry them).
+%endmacro                       ; `.boot3` with kmain_o, its one caller,
+DESK_ROWCALC bvw, BDRC          ; since BOOT3-PLAN wave 4 - the blob's before
+KGO_PAIR bvw                    ; ovlchk: B3 hand-down - the far return's CS (`mov [bp+10], cs`), spent by the hop's own retf before the call it builds returns
 %endif
 section .cold
 
@@ -664,10 +667,9 @@ section .cold
 ; -----------------------------------------------------------------------------
 desk_zs:
     push bx
-    mov bl, al
-    xor bh, bh
-    mov al, [bx+desk_zslot]
-    pop bx
+    mov bx, desk_zslot          ; [desk_zslot + AL], AL a zone index below
+    xlatb                       ; DESK_NZ (kernel size pass 18, -4, and
+    pop bx                      ; fewer clocks)
     cmp al, DSL_GONE            ; GONE, and 0xFF, are "not shown": CF = 0
     cmc                         ; there, so complemented CF = 1 is the answer
     jc .no
@@ -2372,8 +2374,8 @@ desk_zx      resw 1             ; ...and its left column (SPEC.md 26.1)
 ; and SS is not DS on this system (SPEC.md 1), so a caption staged on the
 ; stack is unreachable by either and each site would need a kernel buffer of
 ; its own anyway. [desk_svc_seg] is the registering driver's segment and 0 is
-; "no zone": one compare in desk_svflag is the whole of what a machine with no
-; such driver pays at runtime.
+; "no zone": one compare in desk_live (its .svc arm) is the whole of what a
+; machine with no such driver pays at runtime.
 desk_svc_seg  resw 1            ; the driver that registered, 0 = none
 desk_svc_rec:                   ; ...and the record itself, IN THE RECORD'S
 desk_svc_cap  resb DSV_CAPMAX   ; OWN ORDER, so the copy is one `rep movsb`
@@ -2389,8 +2391,8 @@ desk_svc_cell resb 1            ; the cell it asked for (SPEC.md 26.9)
 %endif
 %endif
 desk_zdrv    resb 1             ; desk_draw_zone: current ZONE index - a
-                                ; BYTE, because DESK_NZ bounds it at 8 and
-                                ; every reader wants AL or BL. The saved
-                                ; [gfx_color] that used to sit here is on the
-                                ; routine's own stack now
+                                ; BYTE, because DESK_NZ bounds it (24; 4 on
+                                ; kern_small) and every reader wants AL or
+                                ; BL. The saved [gfx_color] that used to sit
+                                ; here is on the routine's own stack now
 section .text

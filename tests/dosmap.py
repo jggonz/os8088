@@ -105,15 +105,17 @@ def _map(src, defines, incs):
 # kern_emu's DOS.O88 is `-DDOS_WIN16` too, the door a Windows program leaves
 # by, and dosw16.inc sits in `.text` ahead of everything assembled after it -
 # so a map without it is one more map of a DOS no disk carries (doslnk's
-# path box and dosopen's prompt were read at the wrong address, S13). It is
-# dropped beside `DOS_MEGA`, whose DOS has no forward and refuses one.
+# path box and dosopen's prompt were read at the wrong address, S13).
 SHIPPED = ("DOSKPART", "DOS_EXTCORE", "DOS_WIN16")
 # ...and kern_mega's (OS88_MEGA=1, tools/os88megabochs.py) is the same
 # package built `-DDOS_MEGA` as well (Makefile, $(BUILD)/dosp.bin), which
-# moves the bss again - so under OS88_MEGA that define is part of the default,
-# and DOS_WIN16 is not: kern_mega's DOS has no forward
+# moves the bss again - so under OS88_MEGA that define is part of the default.
+# **DOS_WIN16 STAYS**: kern_mega's DOS has carried the forward since WIN16's
+# kern_mega arm (SPEC.md 124.31.1, the Makefile's DOSW16DEF), and this line
+# dropping it read doslnk's path box and dosopen's console at the wrong
+# offsets there - S13's failure again, one kernel over
 if os.environ.get("OS88_MEGA"):
-    SHIPPED = tuple(d for d in SHIPPED if d != "DOS_WIN16") + ("DOS_MEGA",)
+    SHIPPED = SHIPPED + ("DOS_MEGA",)
 
 
 def lin(m, seg, off=0):

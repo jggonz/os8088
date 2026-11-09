@@ -26,7 +26,7 @@
 ; The perturbations reach the ENVIRONMENT or the core's own tables at runtime,
 ; never the source: what is assembled here is byte for byte what ships.
 ;
-;     -DROWS      the eleven rows below (seconds)
+;     -DROWS      the fourteen rows below (seconds)
 ;     -DDORMANN   Klaus Dormann's 6502 functional test, appended by the
 ;                 script at sector DORMSEC and read straight into the C64's
 ;                 RAM; PC starts at $0400 and the run is judged by where the
@@ -48,6 +48,32 @@ SEG_ROM     equ 0x6000              ; ...and C64.ROM's 20KB
 
 IMG_SECTORS equ 64                  ; 32KB of harness; the program follows
 DORMSEC     equ 64                  ; ...at this sector, 128 sectors of it
+%ifdef FAST
+; THE FAST CORE'S LEG (C64-SPEC section 4.7): the same rows, through
+; c64fast.inc's _c64_run, with the part's $FE00 bytes read from CORESEC
+SEG_CODE    equ 0x7000
+CORESEC     equ 192
+CORESECS    equ 127
+%ifdef JIT
+; ...AND THE RECOMPILER'S LEG (C64-SPEC 4.9): its part after the core, set
+; up FORCED - every RAM page looked at on every transfer, every block made
+; on its first entry - so every row and Dormann run translated
+%include "c64tmpl.inc"              ; (build/c64/: the prelude's labels)
+SEG_JIT     equ 0x8000
+JITSEC      equ CORESEC + CORESECS
+JITSECS     equ 44
+%endif
+%ifdef AOT
+; ...AND THE TRANSLATED LEGS (C64-SPEC 4.8): Dormann's own code, half of it
+; translated ahead of time by m65aot.py, the core built for that range
+SEG_AOT     equ 0x8000
+SEG_TAB     equ 0x9000
+AOTSEC      equ CORESEC + CORESECS
+AOTSECS     equ 127
+TABSEC      equ AOTSEC + AOTSECS
+TABSECS     equ 40
+%endif
+%endif
 
 %macro PUSHI 1
     mov ax, %1
@@ -139,6 +165,9 @@ body:
     mov word [_c64_m+CM_RAMSEG], SEG_RAM
     mov word [_c64_m+CM_ROMSEG], SEG_ROM
     call mem_init
+%ifdef FAST
+    call fast_load
+%endif
 
 %ifdef DORMANN
     jmp dormann_main
@@ -258,6 +287,50 @@ bank_set:
     ret
 
 rebank:
+%ifdef JDBG
+    push es
+    push ax
+    mov ax, SEG_JIT
+    mov es, ax
+    mov word [es:0x9E], 0
+    mov ax, 0x5555
+    mov [es:0xA0], ax
+    pop ax
+    pop es
+%endif
+    ; (every row writes its program straight into the RAM claim, which is no
+    ; path a package has: the movers and c64_wr ask the recompiler for its
+    ; flush, so this does what they would - and on the recompiler's leg
+    ; every run starts on a recompiler set up afresh, so no row inherits
+    ; another's volatile pages)
+    call c64_jtouch
+    jmp rebank_body
+
+; jit_fresh - on the recompiler's leg a program a row loads starts on a
+; recompiler set up afresh, so no row inherits another's volatile or
+; patched bytes (a flush alone keeps both, as it does in the package)
+jit_fresh:
+%ifdef JIT
+    push ax
+    push bx
+    push cx
+    push dx
+    PUSHI 64
+    PUSHI 1
+    PUSHI SEG_CODE
+    PUSHI 0                         ; (nothing copied: jl_init again)
+    PUSHI SEG_JIT
+    PUSHI SEG_JIT
+    call _c64j_setup
+    add sp, 12
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+%endif
+    ret
+
+rebank_body:
     push ax
     mov bx, C64_SCR_BOUND
     xor al, al
@@ -332,6 +405,11 @@ _c64_io_rd:
     or al, ah
     jmp short .out
 .plain:
+    cmp bx, 0xFFC0                  ; the program's $FFC0-$FFF9 (C64-SPEC
+    jb .notop                       ; 3.5): c64io.c's c64_hiram, here too
+    mov al, [bx + _c64_hiram - 0xFFC0]
+    jmp short .out
+.notop:
     mov al, bl
     xor al, 0x5A                    ; a byte no bank and no zero can be
     cmp byte [neg_io], 0            ; the negative control for row 5:
@@ -359,6 +437,13 @@ _c64_io_wr:
     mov al, [bp+6]
     mov [io_last_v], al
     inc word [io_writes]
+    cmp bx, 0xFFC0                  ; the program's $FFC0-$FFF9 (row 21)
+    jb .nottop
+    cmp byte [neg_hi], 0            ; (row 21's control: the old drop)
+    jne .out
+    mov [bx + _c64_hiram - 0xFFC0], al
+    jmp short .out
+.nottop:
     cmp bx, 2
     jae .out
     or bx, bx
@@ -412,14 +497,16 @@ rows_main:
     call control
     mov byte [neg_port], 0
 
-    mov si, msg_r4
-    call puts
-    call row_bound
+%ifndef FAST                        ; (row 4 is the accurate core's: a
+    mov si, msg_r4                  ; fetch FALLING THROUGH a region boundary
+    call puts                       ; is the fast core's stated deviation,
+    call row_bound                  ; C64-SPEC 4.7)
     call verdict
     mov byte [neg_stale], 1
     call row_bound
     call control
     mov byte [neg_stale], 0
+%endif
 
     mov si, msg_r5
     call puts
@@ -430,6 +517,7 @@ rows_main:
     call control
     mov byte [neg_io], 0
 
+%ifndef FAST                        ; (the accurate core's fetch ES)
     mov si, msg_r6
     call puts
     call row_seg
@@ -438,6 +526,7 @@ rows_main:
     call row_seg                    ; the call out: a DELIBERATELY STALE ES
     call control
     call unpatch_esfix
+%endif
 
     mov si, msg_r7
     call puts
@@ -465,19 +554,35 @@ rows_main:
     call puts
     call row_cyc
     call verdict
+%ifdef FAST
+    call fpatch_cyc                 ; LDA abs,X charges 3 in the fast core
+    call row_cyc
+    call control
+    call funpatch_cyc
+%else
     call patch_cyc                  ; one opcode's cost made wrong
     call row_cyc
     call control
     call unpatch_cyc
+%endif
 
     mov si, msg_r10
     call puts
     call row_dec
     call verdict
+%ifdef FAST
+    mov ax, 0xF8                    ; the fast core's SED sent to CLD: no
+    mov bx, 0xD8                    ; decimal flag, so no ADC is handed back
+    call fpatch                     ; and every answer is binary
+    call row_dec
+    call control
+    call funpatch
+%else
     call patch_dec                  ; the decimal path's carry made wrong
     call row_dec
     call control
     call unpatch_dec
+%endif
 
     mov si, msg_r11
     call puts
@@ -497,6 +602,87 @@ rows_main:
     call control
     call unpatch_brk
 
+    mov si, msg_r14
+    call puts
+    call row_loop
+    call verdict
+    mov byte [neg_loop], 1
+    call row_loop
+    call control
+    mov byte [neg_loop], 0
+
+    mov si, msg_r18
+    call puts
+    call row_loop97
+    call verdict
+    mov byte [neg_loop], 1
+    call row_loop97
+    call control
+    mov byte [neg_loop], 0
+
+    mov si, msg_r13
+    call puts
+    call row_rmw
+    call verdict
+    mov byte [neg_rmw], 1
+    call row_rmw
+    call control
+    mov byte [neg_rmw], 0
+
+    mov si, msg_r21
+    call puts
+    call row_hiram
+    call verdict
+    mov byte [neg_hi], 1
+    call row_hiram
+    call control
+    mov byte [neg_hi], 0
+
+
+%ifdef JIT
+    mov si, msg_r19
+    call puts
+    call row_samepg
+    call verdict
+    call patch_any                  ; a code page's short cut skips the byte
+    call row_samepg
+    call control
+    call unpatch_any
+    mov si, msg_r17
+    call puts
+    call row_patched
+    call verdict
+    call patch_pat                  ; the flush marks no byte PATCHED
+    call row_patched
+    call control
+    call unpatch_pat
+    mov si, msg_r16
+    call puts
+    call row_chain
+    call verdict
+    mov ax, 0x0302                  ; the chained JMP's `sub bp,3` made 2
+    call jcyc_jmp
+    call row_chain
+    call control
+    mov ax, 0x0203
+    call jcyc_jmp
+    mov si, msg_r20
+    call puts
+    call row_link
+    call verdict
+    call patch_link                 ; jt_link returns at once: nothing links
+    call row_link
+    call control
+    call unpatch_link
+    mov si, msg_r15
+    call puts
+    call row_smc
+    call verdict
+    call patch_hit                  ; the CODE test's branch NOPped out
+    call row_smc
+    call control
+    call unpatch_hit
+%endif
 
     mov ax, [fails]
     or ax, ax
@@ -580,6 +766,7 @@ runprog_at:
     mov word [_c64_m+CM_A], 0
     mov word [_c64_m+CM_X], 0
     mov word [_c64_m+CM_Y], 0
+    call jit_fresh
     call rebank
     PUSHI 200
     call _c64_run
@@ -919,6 +1106,7 @@ bnd_run:
     mov word [_c64_m+CM_A], 0
     mov word [_c64_m+CM_X], 0
     mov word [_c64_m+CM_Y], 0
+    call jit_fresh
     call rebank
     PUSHI 200
     call _c64_run
@@ -933,6 +1121,794 @@ scr_wr_word:                        ; AX = value, BX = scratch offset
     mov al, ah
     call scr_wr
     ret
+
+; -----------------------------------------------------------------------------
+; ROW 13 - READ-MODIFY-WRITE ABOVE $A000 (m65gen.py's RMW, C64-SPEC 4.7)
+; The fast core runs these itself but for I/O, since the Portland CUG
+; Christmas demo's `DEC $C333 / BNE` delay loop ran at 3% handing each one
+; back. With BASIC and the KERNAL in, INC $A010 reads BASIC's byte and writes
+; the result into the RAM UNDER it; DEC $C333 is plain RAM; ASL $E010 reads
+; the KERNAL and writes the RAM under it; neither ROM changes.
+; -----------------------------------------------------------------------------
+row_rmw:
+    mov al, 7
+    call bank_set
+    push es
+    mov ax, SEG_ROM
+    mov es, ax
+    mov byte [es:0x2010], 0x40      ; BASIC's $A010
+    mov byte [es:0x0010], 0x21      ; the KERNAL's $E010
+    pop es
+    push es
+    mov es, [_c64_m+CM_RAMSEG]
+    mov byte [es:0xA010], 0x77      ; what is UNDER them: not what is read
+    mov byte [es:0xE010], 0x77
+    mov byte [es:0xC333], 0x10
+    mov byte [es:0x0400], 0xEE      ; INC $A010
+    mov word [es:0x0401], 0xA010
+    mov byte [es:0x0403], 0xCE      ; DEC $C333
+    mov word [es:0x0404], 0xC333
+    mov byte [es:0x0406], 0x0E      ; ASL $E010
+    mov word [es:0x0407], 0xE010
+    mov byte [es:0x0409], 0x02      ; KIL
+    pop es
+    mov bx, 0x0400
+    mov [_c64_m+CM_PC], bx
+    mov word [_c64_m+CM_S], 0x00FD
+    mov word [_c64_m+CM_P], 0x0024
+    call rebank
+    cmp byte [neg_rmw], 0           ; THE NEGATIVE CONTROL: the map SAYS
+    je .go                          ; BASIC is out while the ROM is in - an
+    mov bx, C64_SCR_MAPA            ; RMW that reads through the map reads
+    mov al, 0                       ; the RAM under it, $77, and writes $78
+    call scr_wr
+.go:
+    PUSHI 200
+    call _c64_run
+    add sp, 2
+    push es
+    mov es, [_c64_m+CM_RAMSEG]
+    cmp byte [es:0xA010], 0x41
+    jne .bad_es
+    cmp byte [es:0xC333], 0x0F
+    jne .bad_es
+    cmp byte [es:0xE010], 0x42
+    jne .bad_es
+    mov ax, SEG_ROM
+    mov es, ax
+    cmp byte [es:0x2010], 0x40
+    jne .bad_es
+    cmp byte [es:0x0010], 0x21
+    jne .bad_es
+    pop es
+    ; ...AND EVERY PAGE WRITTEN IS MARKED (9.2): $A0, $C3 and $E0 - then the
+    ; flush's take (the bitmap and ANY cleared) and the same program again:
+    ; $C3 must be marked AFRESH, which a same-page shortcut that outlived the
+    ; take would skip (m65gen.py's c64_mark, ANY = 2)
+    push es
+    mov es, [_c64_m+CM_RAMSEG]
+    test byte [es:C64_SCR_BASE + C64_SCR_DIRTY + (0xA0 >> 3)], 0x80 >> (0xA0 & 7)
+    jz .bad_es
+    test byte [es:C64_SCR_BASE + C64_SCR_DIRTY + (0xC3 >> 3)], 0x80 >> (0xC3 & 7)
+    jz .bad_es
+    test byte [es:C64_SCR_BASE + C64_SCR_DIRTY + (0xE0 >> 3)], 0x80 >> (0xE0 & 7)
+    jz .bad_es
+    ; a program that writes $C3 and nothing else, so this core's last mark
+    ; IS page $C3 when the take comes
+    mov byte [es:0x0410], 0xCE      ; DEC $C333
+    mov word [es:0x0411], 0xC333
+    mov byte [es:0x0413], 0x02      ; KIL
+    pop es
+    call .r410
+    push es
+    mov es, [_c64_m+CM_RAMSEG]
+    mov di, C64_SCR_BASE + C64_SCR_DIRTY
+    mov cx, 32
+.clr:
+    mov byte [es:di], 0
+    inc di
+    loop .clr
+    mov byte [es:C64_SCR_BASE + C64_SCR_ANY], 0     ; THE TAKE
+    pop es
+    call .r410
+    push es
+    mov es, [_c64_m+CM_RAMSEG]
+    test byte [es:C64_SCR_BASE + C64_SCR_DIRTY + (0xC3 >> 3)], 0x80 >> (0xC3 & 7)
+    jz .bad_es
+    pop es
+
+    xor ax, ax
+    ret
+.bad_es:
+    pop es
+    mov ax, 1
+    ret
+.r410:
+    mov word [_c64_m+CM_PC], 0x0410
+    mov word [_c64_m+CM_S], 0x00FD
+    mov word [_c64_m+CM_P], 0x0024
+    call rebank
+    PUSHI 200
+    call _c64_run
+    add sp, 2
+    ret
+
+; -----------------------------------------------------------------------------
+; ROW 14 - THE SELF-LOOPS (m65gen.py's loop_collapse, C64-SPEC 4.7.2)
+; DEX, DEY and DEC abs with a BNE back onto themselves, which the fast core
+; runs as one step when the budget holds the whole loop. The counters end 0,
+; Z is set, and the run costs EXACTLY what the accurate core says - C64_LOOPC
+; cycles to the KIL, the same on both cores. The control starts X at $11:
+; five cycles more, which must fail the count.
+; -----------------------------------------------------------------------------
+C64_LOOPC equ 1433                  ; (to the KIL, whose 2 are charged)
+row_loop:
+    push es
+    push di
+    mov es, [_c64_m+CM_RAMSEG]
+    mov di, 0x0940
+    xor ax, ax
+    stosw
+    stosw
+    mov si, p_loop
+    mov di, 0x0800
+    mov cx, p_loop_end - p_loop
+.c: mov al, [cs:si]
+    inc si
+    stosb
+    loop .c
+    cmp byte [neg_loop], 0
+    je .go
+    mov byte [es:0x0801], 0x11      ; THE CONTROL: X from $11
+.go:
+    pop di
+    pop es
+    mov word [_c64_m+CM_PC], 0x0800
+    mov word [_c64_m+CM_S], 0x00FD
+    mov word [_c64_m+CM_P], 0x0024
+    mov word [_c64_m+CM_A], 0
+    mov word [_c64_m+CM_X], 0
+    mov word [_c64_m+CM_Y], 0
+    call rebank
+    PUSHI 5000
+    call _c64_run
+    add sp, 2
+    mov ax, 5000
+    sub ax, [_c64_m+CM_CNT]         ; the cycles it ran
+    mov [loop_ran], ax
+    cmp ax, C64_LOOPC
+    jne .bad
+    mov bx, 0x0940
+    call ram_rd
+    or al, al                       ; X ended 0
+    jnz .bad
+    mov bx, 0x0941
+    call ram_rd
+    or al, al                       ; Y ended 0
+    jnz .bad
+    mov bx, 0xC333
+    call ram_rd
+    or al, al                       ; the DEC counter ended 0
+    jnz .bad
+    mov bx, 0x0942
+    call ram_rd
+    and al, 0x82                    ; P pushed after it: Z set, N clear
+    cmp al, 0x02
+    jne .bad
+    xor ax, ax
+    ret
+.bad:
+    mov ax, 1
+    ret
+
+; -----------------------------------------------------------------------------
+; ROW 21 - $FFC0-$FFF9 IS THE PROGRAM'S (C64-SPEC 3.5)
+; With the KERNAL banked out, a program writes 58 bytes to $FFC0-$FFF9 with
+; STA abs,X and reads them back with CMP abs,X: the cores' scratch lives in
+; those guest bytes, and the program's own go through the I/O door to the
+; package's copy. A packed demo's unpacker kept a table there and hung. The
+; control drops those writes, as the cores used to.
+; -----------------------------------------------------------------------------
+row_hiram:
+    push es
+    mov es, [_c64_m+CM_RAMSEG]
+    mov si, p_hiram
+    mov di, 0x0800
+    mov cx, p_hiram_end - p_hiram
+.c: mov al, [cs:si]
+    inc si
+    mov [es:di], al
+    inc di
+    loop .c
+    mov byte [es:0x0010], 0
+    pop es
+    mov di, _c64_hiram
+    mov cx, 0x3A
+    xor al, al
+.z: mov [di], al
+    inc di
+    loop .z
+    mov al, 0                       ; all RAM: the KERNAL out
+    call bank_set
+    mov word [_c64_m+CM_PC], 0x0800
+    mov word [_c64_m+CM_S], 0x00FD
+    mov word [_c64_m+CM_P], 0x0024
+    mov word [_c64_m+CM_A], 0
+    mov word [_c64_m+CM_X], 0
+    mov word [_c64_m+CM_Y], 0
+    call jit_fresh
+    call rebank
+    PUSHI 6000
+    call _c64_run
+    add sp, 2
+    mov bx, 0x0010
+    call ram_rd                     ; (-> AL)
+    cmp al, 1
+    jne .bad
+    xor ax, ax
+    ret
+.bad:
+    mov ax, 1
+    ret
+
+p_hiram:
+    db 0xA2, 0x00                   ; $0800 LDX #0
+    db 0x8A                         ; $0802 TXA
+    db 0x49, 0xA5                   ;       EOR #$A5
+    db 0x9D, 0xC0, 0xFF             ;       STA $FFC0,X
+    db 0xE8                         ;       INX
+    db 0xE0, 0x3A                   ;       CPX #$3A
+    db 0xD0, 0xF5                   ;       BNE $0802
+    db 0xA2, 0x00                   ; $080D LDX #0
+    db 0x8A                         ; $080F TXA
+    db 0x49, 0xA5                   ;       EOR #$A5
+    db 0xDD, 0xC0, 0xFF             ;       CMP $FFC0,X
+    db 0xD0, 0x0B                   ;       BNE fail ($0822)
+    db 0xE8                         ;       INX
+    db 0xE0, 0x3A                   ;       CPX #$3A
+    db 0xD0, 0xF3                   ;       BNE $080F
+    db 0xA9, 0x01                   ;       LDA #1
+    db 0x85, 0x10                   ;       STA $10
+    db 0x02                         ;       KIL
+    db 0xEA                         ; (pad)
+    db 0xA9, 0xFF                   ; $0822 LDA #$FF  (fail)
+    db 0x85, 0x10                   ;       STA $10
+    db 0x02                         ;       KIL
+p_hiram_end:
+
+; -----------------------------------------------------------------------------
+; ROW 18 - THE SAME LOOPS IN SHORT RUNS (C64-SPEC 4.7.2)
+; Row 14's program again, in runs of 97 cycles - less than any of its loops -
+; to its KIL: the fast core takes as many whole passes as each run's budget
+; holds, and the sum of the runs is the same C64_LOOPC, with the same three
+; counters. A run of a raster line or two is what a C64 program actually
+; gets. The control is row 14's: X from $11, five cycles more.
+; -----------------------------------------------------------------------------
+row_loop97:
+    push es
+    push di
+    mov es, [_c64_m+CM_RAMSEG]
+    mov di, 0x0940
+    xor ax, ax
+    stosw
+    stosw
+    mov si, p_loop
+    mov di, 0x0800
+    mov cx, p_loop_end - p_loop
+.c: mov al, [cs:si]
+    inc si
+    stosb
+    loop .c
+    cmp byte [neg_loop], 0
+    je .go
+    mov byte [es:0x0801], 0x11
+.go:
+    pop di
+    pop es
+    mov word [_c64_m+CM_PC], 0x0800
+    mov word [_c64_m+CM_S], 0x00FD
+    mov word [_c64_m+CM_P], 0x0024
+    mov word [_c64_m+CM_A], 0
+    mov word [_c64_m+CM_X], 0
+    mov word [_c64_m+CM_Y], 0
+    call jit_fresh
+    call rebank
+    mov word [loop_ran], 0
+    mov word [loop_n], 0
+.run:                               ; (to the KIL, whose run answers JAM)
+    PUSHI 97
+    call _c64_run
+    add sp, 2
+    push ax
+    mov ax, 97
+    sub ax, [_c64_m+CM_CNT]
+    add [loop_ran], ax
+    pop ax
+    cmp ax, C64_RUN_JAM
+    je .done
+    inc word [loop_n]
+    cmp word [loop_n], 200
+    jb .run
+    jmp short .bad
+.done:
+    cmp word [loop_ran], C64_LOOPC
+    jne .bad
+    mov bx, 0x0940
+    call ram_rd
+    or al, al
+    jnz .bad
+    mov bx, 0x0941
+    call ram_rd
+    or al, al
+    jnz .bad
+    mov bx, 0xC333
+    call ram_rd
+    or al, al
+    jnz .bad
+    xor ax, ax
+    ret
+.bad:
+    mov ax, 1
+    ret
+
+p_loop:
+    db 0xA2, 0x10                   ; LDX #$10
+    db 0xCA, 0xD0, 0xFD             ; DEX / BNE back: 16 x 5 - 1
+    db 0x8E, 0x40, 0x09             ; STX $0940
+    db 0xA0, 0x00                   ; LDY #$00
+    db 0x88, 0xD0, 0xFD             ; DEY / BNE back: 256 x 5 - 1
+    db 0x8C, 0x41, 0x09             ; STY $0941
+    db 0xA9, 0x05                   ; LDA #$05
+    db 0x8D, 0x33, 0xC3             ; STA $C333
+    db 0xCE, 0x33, 0xC3, 0xD0, 0xFB ; DEC $C333 / BNE back: 5 x 9 - 1
+    db 0x08, 0x68                   ; PHP / PLA
+    db 0x8D, 0x42, 0x09             ; STA $0942
+    db 0x02                         ; KIL
+p_loop_end:
+
+%ifdef JIT
+; -----------------------------------------------------------------------------
+; ROW 15 - A TRANSLATED LOOP THAT REWRITES ITS OWN OPERAND (C64-SPEC 4.9.3)
+; `LDA #` whose immediate the loop INCs every pass: the store lands inside
+; the block that is running, which must leave at the next instruction and be
+; made again, so the four bytes stored are $11 $12 $13 $14. The control NOPs
+; the prelude's CODE test out of jm_mark: the block runs on, stale, and
+; stores $11 four times.
+; -----------------------------------------------------------------------------
+row_smc:
+    mov si, p_smc
+    call runprog
+%ifdef JDBG
+    push es
+    mov es, [_c64_m+CM_RAMSEG]
+    mov ax, [es:0x0900]
+    call puthex
+    mov ax, [es:0x0902]
+    call puthex
+    mov ax, [es:0x0802]
+    call puthex
+    mov ax, [_c64_m+CM_PC]
+    call puthex
+    mov ax, SEG_JIT
+    mov es, ax
+    mov al, '|'
+    call putc
+    mov ax, [es:0x44]
+    call puthex
+    mov ax, [es:0x46]
+    call puthex
+    mov al, [es:0x5108]
+    mov ah, [es:0x5008]
+    call puthex
+    mov ax, [es:0]
+    call puthex
+    pop es
+%endif
+    mov bx, 0x0900
+.c: call ram_rd
+    mov ah, bl
+    add ah, 0x11
+    cmp al, ah
+    jne .bad
+    inc bx
+    cmp bx, 0x0904
+    jb .c
+    xor ax, ax
+    ret
+.bad:
+    mov ax, 1
+    ret
+
+p_smc:
+    db p_smc_end - p_smc - 1
+    db 0xA2, 0x00                   ; LDX #$00
+    db 0xA9, 0x11                   ; LDA #$11       ($0802)
+    db 0x9D, 0x00, 0x09             ; STA $0900,X
+    db 0xEE, 0x03, 0x08             ; INC $0803 - LDA's own operand
+    db 0xE8                         ; INX
+    db 0xE0, 0x04                   ; CPX #$04
+    db 0xD0, 0xF3                   ; BNE $0802
+    db 0x02                         ; KIL
+p_smc_end:
+
+; -----------------------------------------------------------------------------
+; ROW 16 - A CHAINED LOOP TO THE BUDGET'S END (C64-SPEC 4.9.4)
+; `L: INX / JMP L` is one block jumping straight into itself; it must stop
+; where the core would. 200 cycles are 40 passes exactly: X = 40, PC = L and
+; nothing left. 201 is a cycle more: the 41st pass's INX takes the budget
+; past 0, so X = 41 and PC is the JMP. Both last passes are the HEAD's to
+; hand to the core - entered by the chained jump with no more than the
+; block's worst case left - and a HEAD that ended the run there instead
+; stops 201 an INX short. The control charges the JMP 2: other answers.
+; -----------------------------------------------------------------------------
+row_chain:
+    mov word [chain_b], 200
+    call .one
+%ifdef JDBG
+    push es
+    mov ax, SEG_JIT
+    mov es, ax
+    mov ax, [_c64_m+CM_X]
+    call puthex
+    mov ax, [es:0x44]
+    call puthex
+    mov bx, 0x5200
+.cd: mov al, [es:bx]
+    xor ah, ah
+    call puthex
+    inc bx
+    cmp bx, 0x5230
+    jb .cd
+    pop es
+%endif
+    cmp word [_c64_m+CM_X], 40
+    jne .bad
+    cmp word [_c64_m+CM_PC], 0x0800
+    jne .bad
+    cmp word [_c64_m+CM_CNT], 0
+    jne .bad
+    mov word [chain_b], 201
+    call .one
+    cmp word [_c64_m+CM_X], 41
+    jne .bad
+    cmp word [_c64_m+CM_PC], 0x0801
+    jne .bad
+    cmp word [_c64_m+CM_CNT], -1
+    jne .bad
+    xor ax, ax
+    ret
+.bad:
+    mov ax, 1
+    ret
+.one:
+    push es
+    mov es, [_c64_m+CM_RAMSEG]
+    mov byte [es:0x0800], 0xE8      ; INX
+    mov byte [es:0x0801], 0x4C      ; JMP $0800
+    mov word [es:0x0802], 0x0800
+    pop es
+    mov word [_c64_m+CM_PC], 0x0800
+    mov word [_c64_m+CM_S], 0x00FD
+    mov word [_c64_m+CM_P], 0x0024
+    mov word [_c64_m+CM_A], 0
+    mov word [_c64_m+CM_X], 0
+    mov word [_c64_m+CM_Y], 0
+    call jit_fresh
+    call rebank
+    push word [chain_b]
+    call _c64_run
+    add sp, 2
+    ret
+
+; -----------------------------------------------------------------------------
+; ROW 20 - AN EXIT IS LINKED TO A BLOCK MADE AFTER IT (C64-SPEC 4.9.4)
+; $0800's block ends at the BNE, whose taken exit ($080A) and fall-through
+; ($0807) have no block yet; $080A's JMP back to $0802 has none either. Each
+; waits in the ring, and each must be linked when its block is made - left
+; waiting, it went through the lookup at every pass for good (PCUG's snow
+; shift). After the loop, NO site may still wait for a PC that has a block.
+; The control makes jt_link return at once.
+; -----------------------------------------------------------------------------
+row_link:
+    push es
+    mov es, [_c64_m+CM_RAMSEG]
+    mov si, p_link
+    mov di, 0x0800
+    mov cx, p_link_end - p_link
+.c: mov al, [cs:si]
+    inc si
+    mov [es:di], al
+    inc di
+    loop .c
+    pop es
+    mov word [_c64_m+CM_PC], 0x0800
+    mov word [_c64_m+CM_S], 0x00FD
+    mov word [_c64_m+CM_P], 0x0024
+    mov word [_c64_m+CM_A], 0
+    mov word [_c64_m+CM_X], 0
+    mov word [_c64_m+CM_Y], 0
+    call jit_fresh
+    call rebank
+    PUSHI 2000
+    call _c64_run
+    add sp, 2
+    cmp word [_c64_m+CM_X], 8       ; the loop ran to its end
+    jne .bad
+    push es
+    mov ax, SEG_JIT
+    mov es, ax
+    mov si, [es:0x56]               ; c64jit.asm's jv_pendt
+    mov cx, 256
+    xor dx, dx
+.l: cmp word [es:si+2], 0           ; a site still waiting...
+    je .n
+    mov ax, [es:si]
+    mov bx, ax
+    and bx, 0x03FF
+    shl bx, 1
+    shl bx, 1
+    cmp [es:bx+0x5800], ax          ; ...for a PC that HAS a block (LT)
+    jne .n
+    cmp word [es:bx+0x5802], 0x9E00
+    jb .n
+    inc dx
+.n: add si, 4
+    loop .l
+    pop es
+    or dx, dx
+    jnz .bad
+    xor ax, ax
+    ret
+.bad:
+    mov ax, 1
+    ret
+
+p_link:
+    db 0xA2, 0x00                   ; $0800 LDX #$00
+    db 0xE8                         ; $0802 INX
+    db 0xE0, 0x08                   ; $0803 CPX #$08
+    db 0xD0, 0x03                   ; $0805 BNE $080A
+    db 0x4C, 0x0F, 0x08             ; $0807 JMP $080F
+    db 0xEA                         ; $080A NOP
+    db 0x4C, 0x02, 0x08             ; $080B JMP $0802
+    db 0x00                         ; $080E
+    db 0x02                         ; $080F KIL
+p_link_end:
+
+; patch_link / unpatch_link - jt_link's first byte made a RET. Found by its
+; prologue: push ax/cx/dx/si/di, then `mov dx, [cs:jv_bpc]`
+patch_link:
+    push es
+    push di
+    push cx
+    mov di, SEG_JIT
+    mov es, di
+    mov di, 0x0100
+    mov cx, 0x1000
+.f: cmp word [es:di], 0x5150
+    jne .n
+    cmp word [es:di+2], 0x5652
+    jne .n
+    cmp word [es:di+4], 0x2E57
+    jne .n
+    cmp word [es:di+6], 0x168B
+    jne .n
+    cmp word [es:di+8], 0x0042
+    je .t
+.n: inc di
+    loop .f
+    jmp short .o
+.t: mov [link_at], di
+    mov al, [es:di]
+    mov [link_was], al
+    mov byte [es:di], 0xC3
+.o: pop cx
+    pop di
+    pop es
+    ret
+unpatch_link:
+    push es
+    push di
+    mov di, SEG_JIT
+    mov es, di
+    mov di, [link_at]
+    or di, di
+    jz .o
+    mov al, [link_was]
+    mov [es:di], al
+.o: pop di
+    pop es
+    ret
+
+; -----------------------------------------------------------------------------
+; ROW 17 - A PATCHED OPERAND IS READ WHERE IT LIES (C64-SPEC 4.9.3)
+; Row 15's loop again: the first INC of the LDA's operand flushes, and marks
+; the byte PATCHED; the block made again reads that operand from memory, so
+; the INCs after it are no change to the code and flush nothing. The right
+; bytes, and no more than two flushes - the run's own (the program was just
+; written) and that one. The control stops the flush marking the byte: every
+; pass flushes again, and the count says so.
+; -----------------------------------------------------------------------------
+row_patched:
+    call row_smc
+    or ax, ax
+    jnz .bad
+    push es
+    mov ax, SEG_JIT
+    mov es, ax
+    mov ax, [es:0x46]               ; c64jit.asm's jv_nflush
+    pop es
+    cmp ax, 2
+    ja .bad
+    xor ax, ax
+    ret
+.bad:
+    mov ax, 1
+    ret
+
+; patch_pat / unpatch_pat - the flush's `or [cs:bx+PATCHED], al` NOPped
+patch_pat:
+    push es
+    push di
+    push cx
+    mov di, SEG_JIT
+    mov es, di
+    mov di, 0x0100
+    mov cx, 0x0800
+.f: cmp word [es:di], 0x082E
+    jne .n
+    cmp word [es:di+2], 0x0087 + ((JC_FINE + 0xD000 / 8) & 0xFF) * 0x100
+    jne .n
+    cmp byte [es:di+4], (JC_FINE + 0xD000 / 8) >> 8
+    je .t
+.n: inc di
+    loop .f
+    jmp short .o
+.t: mov [pat_at], di
+    mov cx, 5
+.p: mov byte [es:di], 0x90
+    inc di
+    loop .p
+.o: pop cx
+    pop di
+    pop es
+    ret
+unpatch_pat:
+    push es
+    push di
+    mov di, SEG_JIT
+    mov es, di
+    mov di, [pat_at]
+    mov word [es:di], 0x082E
+    mov byte [es:di+2], 0x87
+    mov word [es:di+3], JC_FINE + 0xD000 / 8
+    pop di
+    pop es
+    ret
+
+; jcyc_jmp - AH -> AL in JMP abs's templates
+jcyc_jmp:
+    push es
+    push di
+    mov di, SEG_JIT
+    mov es, di
+    mov byte [jc_op], 0x4C
+    call jcyc
+    pop di
+    pop es
+    ret
+
+; -----------------------------------------------------------------------------
+; ROW 19 - A CODE PAGE'S SHORT CUT STILL TESTS THE BYTE (C64-SPEC 4.9.3)
+; Row 15's loop with a store to a DATA byte on its own code page just before
+; the INC of its operand: the data store takes the code page's slow path and
+; leaves ANY 3, so the INC comes through the short cut - which must still
+; make the byte test and leave the block, or the loop stores $11 four times.
+; The control makes the short cut skip it (ANY 3 taken as ANY 2).
+; -----------------------------------------------------------------------------
+row_samepg:
+    mov si, p_samepg
+    call runprog
+    mov bx, 0x0900
+.c: call ram_rd
+    mov ah, bl
+    add ah, 0x11
+    cmp al, ah
+    jne .bad
+    inc bx
+    cmp bx, 0x0904
+    jb .c
+    xor ax, ax
+    ret
+.bad:
+    mov ax, 1
+    ret
+
+p_samepg:
+    db p_samepg_end - p_samepg - 1
+    db 0xA2, 0x00                   ; LDX #$00
+    db 0xA9, 0x11                   ; LDA #$11       ($0802)
+    db 0x9D, 0x00, 0x09             ; STA $0900,X
+    db 0x8D, 0xF0, 0x08             ; STA $08F0 - data, on the code page
+    db 0xEE, 0x03, 0x08             ; INC $0803 - the LDA's operand
+    db 0xE8                         ; INX
+    db 0xE0, 0x04                   ; CPX #$04
+    db 0xD0, 0xF0                   ; BNE $0802
+    db 0x02                         ; KIL
+p_samepg_end:
+
+; patch_any / unpatch_any - jm_mark's `cmp byte [ANY], 2` made `3`
+patch_any:
+    mov al, 3
+    jmp short pany
+unpatch_any:
+    mov al, 2
+pany:
+    push es
+    push di
+    push cx
+    mov di, SEG_JIT
+    mov es, di
+    mov di, JP_jm_mark
+    mov cx, 32
+    mov ah, al
+    xor ah, 1                       ; (the byte it is now: 2 <-> 3)
+.f: cmp word [es:di], 0x3E80
+    jne .n
+    cmp word [es:di+2], C64SCR + S_ANY
+    jne .n
+    cmp [es:di+4], ah
+    jne .n
+    mov [es:di+4], al
+    jmp short .o
+.n: inc di
+    loop .f
+.o: pop cx
+    pop di
+    pop es
+    call c64_jtouch
+    ret
+
+; patch_hit / unpatch_hit - the JNZ after jm_mark's `test [cs:bx],dh`
+patch_hit:
+    push es
+    push di
+    push cx
+    mov di, SEG_JIT
+    mov es, di
+    mov di, JP_jm_mark
+    mov cx, 64
+.f: cmp word [es:di], 0x3784
+    je .t
+    inc di
+    loop .f
+    jmp short .o
+.t: mov cx, 16
+.j: inc di
+    cmp byte [es:di], 0x75
+    loopne .j
+    mov [hit_at], di
+    mov ax, [es:di]
+    mov [hit_save], ax
+    mov word [es:di], 0x9090
+.o: pop cx
+    pop di
+    pop es
+    call c64_jtouch
+    ret
+unpatch_hit:
+    push es
+    push di
+    mov di, SEG_JIT
+    mov es, di
+    mov di, [hit_at]
+    mov ax, [hit_save]
+    mov [es:di], ax
+    pop di
+    pop es
+    call c64_jtouch
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; ROW 5 - REAL I/O STUB RETURNS (C64-SPEC §4.6 row 5)
@@ -1548,9 +2524,85 @@ row_cyc:
     neg ax
     add ax, 200                     ; cycles spent
     cmp ax, [cs:di+2]
+%ifdef JDBG
+    je .ok
+    push ax
+    mov ax, di
+    call puthex
+    pop ax
+    call puthex
+    mov al, '/'
+    call putc
+    push es
+    mov ax, SEG_JIT
+    mov es, ax
+    mov ax, [es:0x44]
+    call puthex
+    mov ax, [es:0x46]
+    call puthex
+    mov ax, [_c64_m+CM_PC]
+    call puthex
+    mov bx, 0xA0
+.tr: mov al, ':'
+    call putc
+    mov ax, [es:bx]
+    call puthex
+    mov al, ','
+    call putc
+    mov ax, [es:bx+2]
+    call puthex
+    add bx, 4
+    cmp bx, 0xE0
+    jb .tr
+    pop es
+    mov al, '['
+    call putc
+    mov ax, [_c64_m+CM_S]
+    call puthex
+    push es
+    mov es, [_c64_m+CM_RAMSEG]
+    mov bx, 0x1F8
+.st: mov al, [es:bx]
+    xor ah, ah
+    call puthex
+    inc bx
+    cmp bx, 0x200
+    jb .st
+    pop es
+    push es
+    mov ax, SEG_JIT
+    mov es, ax
+    mov al, '{'
+    call putc
+    mov ax, [es:0x22]
+    call puthex
+    mov ax, [es:0x4000]
+    call puthex
+    mov ax, [es:0x4002]
+    call puthex
+    mov ax, [es:0x4018]
+    call puthex
+    mov ax, [es:0x401A]
+    call puthex
+    mov al, '}'
+    call putc
+    mov bx, 0x5200
+.cd: mov al, [es:bx]
+    xor ah, ah
+    call puthex
+    inc bx
+    cmp bx, 0x5260
+    jb .cd
+    pop es
+    mov al, ' '
+    call putc
+.ok:
+    add di, 4
+    jmp .next
+%endif
     jne .bad
     add di, 4
-    jmp short .next
+    jmp .next
 
 .special:
     ; --- A TAKEN BRANCH THAT REALLY CROSSES A PAGE. Loaded at $08FB, so the
@@ -1906,6 +2958,9 @@ unpatch_dec:
 ; SETTLES, which is exactly how the test is documented to be read.
 ; =============================================================================
 %ifdef DORMANN
+%ifdef AOT
+  %define SLICE997                  ; (the translated legs' slices, below)
+%endif
 dormann_main:
     mov si, msg_dorm
     call puts
@@ -1951,8 +3006,35 @@ dormann_main:
     ; notices within its first few hundred instructions. A run that reaches
     ; the success trap with this in place would mean the test was not being
     ; run at all.
+  %ifdef AOT
+    ; THE TRANSLATED LEG'S CONTROL: every translated ADC and CMP, listed at
+    ; CTL_LIST, is broken in the translation itself - ADC becomes OR, and
+    ; CMP becomes ADC (an XOR, 8 lower, leaves Z set for the equal values
+    ; Dormann's checks compare) - proof that the translated code is what runs
+    push es
+    mov ax, SEG_AOT
+    mov es, ax
+    mov bx, CTL_LIST
+.ctl: mov si, [es:bx]
+    test si, si
+    jz .ctld
+    sub byte [es:si], 8             ; ADC (10h-15h) -> OR
+    cmp byte [es:si], 0x30
+    jb .ctln
+    sub byte [es:si], 0x20          ; CMP (38h-3Dh) -> ADC: equal values
+.ctln:                              ; no longer leave Z set
+    add bx, 2
+    jmp short .ctl
+.ctld:
+    pop es
+  %elifdef FAST
+    mov ax, 0x69                    ; the fast core's ADC # slot sent to ORA #
+    mov bx, 0x09
+    call fpatch
+  %else
     mov ax, [cs:c64_tab + 0x09*2]
     mov [cs:c64_tab + 0x69*2], ax
+  %endif
     mov si, msg_neg
     call puts
 %endif
@@ -1962,17 +3044,49 @@ dormann_main:
     ; will not start. The package's own cap is 16,384, and 30,000 under warp
     ; for the same reason.
     mov cx, 20000                   ; outer passes of 30,000 cycles each
+%ifdef SLICE997
+    mov cx, 0xFFFF                  ; ...or of 997 (see below)
+%endif
 .run:
     push cx
+%ifdef SLICE997
+    ; THE TRANSLATED LEGS RUN SHORT ODD SLICES: the core consults the PC
+    ; table only at a jump or a run's start, and Dormann falls through whole
+    ; stretches with no jump - a part entered only that way would run on the
+    ; core, and its control would prove nothing. 997 cycles start runs all
+    ; over each part, and enter its translation mid-block
+    PUSHI 997
+%else
     PUSHI 30000
+%endif
     call _c64_run
     add sp, 2
     pop cx
+%ifdef SLICE997
+    ; THE SLICES' HASH: where every slice ENDED - its PC and the countdown it
+    ; left (C64-SPEC 4.5: negative by the last instruction's overshoot). A
+    ; translation that charged one cycle more or less anywhere ends some slice
+    ; on another instruction, and the shell compares this with the fast
+    ; core's own run in the same slices (C64-SPEC 4.8's exactness)
+    push ax
+    mov ax, [_c64_m+CM_PC]
+    xor ax, [_c64_m+CM_CNT]
+    rol word [cs:slice_h], 1
+    xor [cs:slice_h], ax
+    pop ax
+%endif
     cmp ax, C64_RUN_JAM
     je .stuck
     ; ...has the program counter settled on a `jmp *`?
-    mov ax, [_c64_m+CM_PC]
+    ; A `jmp *` repeats the WHOLE state, not only the PC: a loop whose only
+    ; untranslated instructions are a stub's (Dormann's $0211 ADC #/RTS)
+    ; ends every slice on the stub's PC while A, X and the flags move on
+    call state_sig
     cmp ax, [cs:last_pc]
+    jne .moved
+    cmp bx, [cs:last_ax]
+    jne .moved
+    cmp dx, [cs:last_ys]
     jne .moved
     inc word [cs:same_n]
     cmp word [cs:same_n], 3
@@ -1980,9 +3094,15 @@ dormann_main:
     jmp short .cont
 .moved:
     mov [cs:last_pc], ax
+    mov [cs:last_ax], bx
+    mov [cs:last_ys], dx
     mov word [cs:same_n], 0
 .cont:
     loop .run
+%ifdef SLICE997
+    dec word [cs:aot_outer]         ; 0xFFFF x 32 slices of 997: the same
+    jnz .run                        ; ~2 billion cycles of slack as above
+%endif
     mov si, msg_slow
     call puts
     mov al, 5
@@ -2039,6 +3159,12 @@ dormann_main:
     call ram_rd
     xor ah, ah
     call puthex
+%ifdef SLICE997
+    mov si, msg_sliceh
+    call puts
+    mov ax, [cs:slice_h]
+    call puthex
+%endif
     mov si, msg_nl
     call puts
     mov ax, [_c64_m+CM_PC]
@@ -2068,8 +3194,39 @@ dormann_main:
     jmp exit
 %endif
 
+aot_outer: dw 32
+slice_h:   dw 0
 last_pc: dw 0xFFFF
+last_ax: dw 0                       ; A | X << 8
+last_ys: dw 0                       ; Y | S << 8, P folded in
 same_n:  dw 0
+
+; state_sig - AX = PC, BX = A | X << 8 folded with zero page, DX = (Y | S
+; << 8) xor P
+state_sig:
+    mov ax, [_c64_m+CM_PC]
+    mov bl, [_c64_m+CM_A]
+    mov bh, [_c64_m+CM_X]
+    mov dl, [_c64_m+CM_Y]
+    mov dh, [_c64_m+CM_S]
+    xor dl, [_c64_m+CM_P]
+    ; ...and zero page, where a test keeps its loop counters: a loop that
+    ; leaves every register as it found it still moves those
+    push ds
+    push si
+    push cx
+    mov si, [_c64_m+CM_RAMSEG]
+    mov ds, si
+    xor si, si
+    mov cx, 128
+.zp: add bx, [si]
+    rol bx, 1
+    add si, 2
+    loop .zp
+    pop cx
+    pop si
+    pop ds
+    ret
 %endif
 
 ; =============================================================================
@@ -2080,6 +3237,19 @@ same_n:  dw 0
 SEG_LIN equ 0
 SEG_WIN equ 2
 %define OSAPI_SEG hst_seg
+%define OSAPI_XMEM_CAPS hst_xnone       ; ...and no extended memory: the
+%define OSAPI_XMEM_ALLOC hst_xnone      ; D64 shims (c64fast.inc) assemble and
+%define OSAPI_XMEM_FREE hst_xnone       ; refuse, and no row reaches them
+%define OSAPI_XMEM_COPY hst_xnone
+hst_xnone:
+    xor ax, ax
+    stc
+    ret
+%define OSAPI_MEM_CODESEL hst_codesel   ; ...and OSAPI_MEM_CODESEL's: the
+hst_codesel:                            ; segment itself (c64fast.inc)
+    mov ax, dx
+    clc
+    ret
 hst_seg:
     cmp bl, SEG_LIN
     jne .out
@@ -2094,7 +3264,305 @@ hst_seg:
     clc
     ret
 
+%ifdef FAST
+%define C64_FAST
+%define C64F_PORT_VIA_IORD          ; (the port here is this file's own)
+%endif
 %include "c64cpu.inc"
+%ifdef FAST
+%include "c64fast.inc"
+
+section .text
+fast_load:
+    push es
+    mov ax, SEG_CODE
+    mov es, ax
+    xor bx, bx
+    mov word [lba], CORESEC
+    mov cx, CORESECS
+.rd:
+    call rdsec
+    add bx, 512
+    inc word [lba]
+    loop .rd
+    pop es
+    PUSHI SEG_CODE
+    PUSHI SEG_CODE
+    call _c64f_core
+    add sp, 4
+    mov word [_c64_fseg], SEG_CODE
+%ifdef JIT
+    push es
+    mov ax, SEG_JIT
+    mov es, ax
+    xor bx, bx
+    mov word [lba], JITSEC
+    mov cx, JITSECS
+.rj:
+    call rdsec
+    add bx, 512
+    inc word [lba]
+    loop .rj
+    pop es
+    PUSHI 64                        ; a 64KB claim
+    PUSHI 1                         ; FORCED
+    PUSHI SEG_CODE
+    PUSHI 0x5800
+    PUSHI SEG_JIT
+    PUSHI SEG_JIT
+    call _c64j_setup
+    add sp, 12
+    mov word [_c64_fjit], SEG_JIT
+%endif
+%ifdef AOT
+    push es
+    mov ax, SEG_AOT
+    mov es, ax
+    xor bx, bx
+    mov word [lba], AOTSEC
+    mov cx, AOTSECS
+.ra:
+    call rdsec
+    add bx, 512
+    inc word [lba]
+    loop .ra
+    mov ax, SEG_TAB
+    mov es, ax
+    xor bx, bx
+    mov word [lba], TABSEC
+    mov cx, TABSECS
+.rt:
+    call rdsec
+    add bx, 512
+    inc word [lba]
+    loop .rt
+    pop es
+    mov word [_c64_faot], SEG_AOT
+    mov word [_c64_fakb], SEG_AOT   ; (a range is one segment)
+    mov word [_c64_ftab], SEG_TAB
+%endif
+    ret
+
+; fpatch - AX = an opcode whose fast-core slot now JUMPS to opcode BX's slot
+; (its first three bytes saved for funpatch)
+fpatch:
+    push es
+    push di
+    mov di, SEG_CODE
+    mov es, di
+    mov [fp_op], ax
+    mov ah, al
+    xor al, al
+    mov di, ax
+    mov ax, [es:di]
+    mov [fp_save], ax
+    mov al, [es:di+2]
+    mov [fp_save+2], al
+    mov ah, bl
+    xor al, al
+    sub ax, di
+    sub ax, 3
+    mov byte [es:di], 0xE9
+    mov [es:di+1], ax
+%ifdef JIT
+    ; ...AND THE RECOMPILER'S ROW FOR THE OPCODE, the other's copied over it,
+    ; so a control breaks the translated code as it breaks the core's
+    mov di, SEG_JIT
+    mov es, di
+    push si
+    push cx
+    mov al, [fp_op]
+    call jrow
+    mov si, di
+    push si
+    mov di, jp_save
+    mov cx, 16
+.sv: mov al, [es:si]
+    mov [di], al
+    inc si
+    inc di
+    loop .sv
+    pop di                          ; the patched row
+    mov al, bl
+    call jrow_si
+    mov cx, 16
+.cp: mov al, [es:si]
+    mov [es:di], al
+    inc si
+    inc di
+    loop .cp
+    pop cx
+    pop si
+    call c64_jtouch
+%endif
+    pop di
+    pop es
+    ret
+
+%ifdef JIT
+; jrow - ES = the recompiler: DI = the opcode AL's row of its table;
+; jrow_si the same in SI
+jrow:
+    push si
+    call jrow_si
+    mov di, si
+    pop si
+    ret
+jrow_si:
+    push ax
+    xor ah, ah
+    mov si, ax
+    shl si, 1
+    shl si, 1
+    shl si, 1
+    shl si, 1                       ; (a row is 16 bytes: JT_ROW)
+    mov ax, [es:0x00F6]             ; the templates' part (c64jit.asm)
+    add si, ax
+    add ax, 8
+    push bx
+    mov bx, ax
+    add si, [es:bx]                 ; ...its opcode table
+    pop bx
+    pop ax
+    ret
+
+; jcyc - ES = the recompiler: every `sub bp,AH` in LDA abs,X's templates
+; made `sub bp,AL`
+jcyc:
+    push si
+    push di
+    push cx
+    push bx
+    push dx
+    mov dx, ax
+    mov al, [jc_op]
+    call jrow_si                    ; SI = its row
+    mov bx, 4
+.v: push bx
+    mov di, [es:si+bx]              ; a template record, 0 = none
+    or di, di
+    jz .nv
+    add di, [es:0x00F6]
+    mov cl, [es:di+2]
+    xor ch, ch
+    mov di, [es:di]
+    add di, [es:0x00F6]             ; its bytes
+.f: cmp word [es:di], 0xED83
+    jne .n
+    cmp [es:di+2], dh
+    jne .n
+    mov [es:di+2], dl
+.n: inc di
+    loop .f
+.nv:
+    pop bx
+    add bx, 2
+    cmp bx, 10
+    jb .v
+    pop dx
+    pop bx
+    pop cx
+    pop di
+    pop si
+    call c64_jtouch
+    ret
+%endif
+
+; fpatch_cyc / funpatch_cyc - LDA abs,X ($BD)'s first `sub bp,4` made 3, and back
+fpatch_cyc:
+    mov ah, 4
+    mov al, 3
+    jmp short fcyc
+funpatch_cyc:
+    mov ah, 3
+    mov al, 4
+fcyc:
+    push es
+    push di
+    push cx
+%ifdef JIT
+    mov di, SEG_JIT
+    mov es, di
+    mov byte [jc_op], 0xBD
+    call jcyc
+%endif
+    mov di, SEG_CODE
+    mov es, di
+    mov di, 0xBD00
+    mov cx, 254
+.f: cmp word [es:di], 0xED83
+    jne .n
+    cmp [es:di+2], ah
+    jne .n
+    mov [es:di+2], al
+    jmp short .o
+.n: inc di
+    loop .f
+.o: pop cx
+    pop di
+    pop es
+    ret
+
+funpatch:
+    push es
+    push di
+%ifdef JIT
+    mov di, SEG_JIT
+    mov es, di
+    push si
+    push cx
+    mov al, [fp_op]
+    call jrow
+    mov si, jp_save
+    mov cx, 16
+.rs: mov al, [si]
+    mov [es:di], al
+    inc si
+    inc di
+    loop .rs
+    pop cx
+    pop si
+    call c64_jtouch
+%endif
+    mov di, SEG_CODE
+    mov es, di
+    mov ax, [fp_op]
+    mov ah, al
+    xor al, al
+    mov di, ax
+    mov ax, [fp_save]
+    mov [es:di], ax
+    mov al, [fp_save+2]
+    mov [es:di+2], al
+    pop di
+    pop es
+    ret
+
+section .data
+_c64_fseg:  dw 0
+jp_save:    times 16 db 0            ; (the recompiler's row a control moved)
+jc_op:      db 0
+chain_b:    dw 0
+pat_at:     dw 0
+link_at:    dw 0
+link_was:   db 0
+hit_at:     dw 0
+hit_save:   dw 0
+_c64_fpc:   dw 0                    ; (c64io.c's; the harness has no raster)
+_c64f_adj:  dw 0                    ; (c64io.c's too)
+_c64_faot:  dw 0                    ; the translation (C64-SPEC 4.8): 0 = none
+_c64_fakb:  dw 0
+_c64_ftab:  dw 0
+fp_op:      dw 0
+fp_save:    db 0, 0, 0
+%endif
+section .data
+_c64_fjit:  dw 0                    ; the recompiler (C64-SPEC 4.9): 0 = none
+_c64_xnew:  dw 0, 0                 ; (c64fast.inc's extended-memory token)
+section .text
+section .data
+_c64_hiram: times 0x3A db 0             ; (c64io.c's: the program's $FFC0-$FFF9)
+section .text
 %include "c64mem.inc"
 
 section .text
@@ -2167,6 +3635,11 @@ neg_port:   db 0
 neg_stale:  db 0
 neg_io:     db 0
 neg_int:    db 0
+neg_rmw:    db 0
+neg_hi:     db 0
+neg_loop:   db 0
+loop_ran:   dw 0
+loop_n:     dw 0
 saw0:       db 0
 saw1:       db 0
 saw2:       db 0
@@ -2196,6 +3669,15 @@ msg_r9:     db 'row 9  cycle totals and the penalties ', 0
 msg_r10:    db 'row 10 decimal ADC/SBC, all 262144    ', 0
 msg_r11:    db 'row 11 the four unstable stores       ', 0
 msg_r12:    db 'row 12 the interrupt stack and RTI    ', 0
+msg_r13:    db 'row 13 read-modify-write above $A000  ', 0
+msg_r14:    db 'row 14 the self-loops, cycle-exact    ', 0
+msg_r18:    db 'row 18 the self-loops in 97-cycle runs', 0
+msg_r19:    db 'row 19 a code page short cut, tested  ', 0
+msg_r15:    db 'row 15 a running block rewritten       ', 0
+msg_r16:    db 'row 16 a chained loop to the budget    ', 0
+msg_r20:    db 'row 20 exits linked to later blocks    ', 0
+msg_r21:    db "row 21 $FFC0-$FFF9 is the program's     ", 0
+msg_r17:    db 'row 17 a patched operand read in place ', 0
 msg_ok:     db 'ok ', 0
 msg_bad:    db 'FAIL ', 0
 msg_nok:    db '(control fails: ok)', 13, 10, 0
@@ -2205,6 +3687,7 @@ msg_fail:   db 13, 10, 'c64cputest: FAIL', 13, 10, 0
 msg_dorm:   db 'Dormann 6502 functional test, 64KB at $0400', 13, 10, 0
 msg_neg:    db 'NEGATIVE CONTROL: ADC # is dispatched to ORA #', 13, 10, 0
 msg_settle: db 'settled at $', 0
+msg_sliceh: db '  slice hash $', 0
 msg_regs:   db '  A X Y S P = ', 0
 msg_stk:    db '  $0100 $0101 $01FF = ', 0
 msg_jam:    db 'JAM at $', 0

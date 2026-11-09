@@ -28,7 +28,10 @@ W16_ARKEEP  equ 32              ; ...and the third leaves this much of the
                                 ;   largest free run (SPEC.md 124.25.1)
 %else
 W16_ARKEEP  equ 96              ; ...on kern_mega the library part's 62 KB
-%endif                          ;   too: its fetch is conventional (124.31.1)
+                                ;   too: its fetch is conventional (124.31.1)
+W16_ARPOOL  equ 512             ; ...and the pool's run, KB, the most it
+                                ;   takes there (half the 1,012 KB map)
+%endif
 W16_GH0     equ 0x0100          ; the first moveable global handle; + 2i
 %ifdef PKG_MEGA
   %if W16_GH0 + 2 * W16_NGH != W16V_LO
@@ -366,10 +369,29 @@ w16_garena:
     mov bl, MEMP_AVAIL
     call OSAPI_MEM_P                ; AX = the largest claim, paragraphs
     sub ax, W16_ARKEEP * 64         ;   (BX and CX are not ours to keep:
-    jb .fl                          ;   both come back off the stack or are
+    jb .fp                          ;   both come back off the stack or are
     cmp ax, dx                      ;   set again below)
+    jbe .fp
+    mov dx, ax
+.fp:
+%ifdef PKG_MEGA
+    push dx                         ; ...OR THE POOL'S BEST RUN, which is
+    xor ax, ax                      ;   where an arena over 64 KB goes first
+    mov bx, MEMH_AVAIL              ;   (W16VCLAIM's OSAPI_MEM_HUGE) and
+    call OSAPI_MEM_HUGE             ;   which MEMP_AVAIL does not count
+    mov ax, dx                      ;   (MEGA-HUGE-PLAN F6): DX = its KB.
+    pop dx                          ;   No keep - it takes no conventional
+    jc .fl                          ;   memory - and W16_ARPOOL at most,
+    cmp ax, W16_ARPOOL              ;   half the arm's 1,012 KB map
+    jbe .pk
+    mov ax, W16_ARPOOL
+.pk:
+    mov cl, 6
+    shl ax, cl
+    cmp ax, dx
     jbe .fl
     mov dx, ax
+%endif
 .fl:
     pop bx
     pop si

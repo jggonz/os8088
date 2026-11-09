@@ -63,12 +63,11 @@ drv_sniff           kmain_o only (kernel.asm) - what card is at 388h, and whethe
 vid_detect          spl_chrome only (splash.inc, `.boot2`: the loading screen's first tick) and vid_init (`.boot2`, from kmain_o) - both are IN the blob, so both are gone at spl_finish with it. vid_switch re-probes nothing (SPEC.md 2.5.3.3)
 bvs_apply           spl_chrome only (splash.inc, `.boot2`: the loading screen's first tick) - vid_init and the blob's vid_switch/vid_disp_init copies are IN the blob with it. The panel and EXTD.DRV carry copies of their own (viddet.inc's VID_APPLY), so no runtime path names this one (kernel size pass 14)
 files_init_x        kmain_o only (kernel.asm) - the Disk module's state, SPEC.md 22, before the first mount
-kmo_mark            BOOT_MARK only: MARKW's landing, and every MARKW is inside kmain_o (the macro BODY is what sits in `.text`, textually) - so it is reached only while kmain_o itself is running
-kmain_o             kmain only (kernel.asm), its one far call after MARK 0 - kmain from its first far call through BLOBCALL spl_finish, so the blob is live for the whole body by construction: it ends BY calling spl_finish and returns before mem_unblob_x (SPEC.md 2.5.3.3). drv_boot_x, hb_probe_x and xm_boot_x left this file with the move - their only caller is inside `.boot2` now, so the calls no longer cross
+kmo_mark            BOOT_MARK only: MARKW's landing, and every MARKW is inside kmain_o (the macro BODY is what sits in `.text`, textually) - so it is reached only while kmain_o itself is running. In `.boot3` with kmain_o since BOOT3-PLAN wave 4: it reads the index byte through CS, which is `.boot3`'s there
+kmain_o             kmain only (kernel.asm), its one far call after MARK 0 (`call B3_SEG:kmain_o` since BOOT3-PLAN wave 4: kmain_o is `.boot3`'s, not the blob's) - stage 2 enters the kernel only after kz_all has expanded `.boot3`, and kmain zeroes [spl_fseg] and calls mem_unblob_x only after kmain_o has returned, so the section is live for the whole body by construction
 drv_init_x          kmain_o only (kernel.asm) - the driver table seeded, SPEC.md 51. Nothing re-seeds it: drv_unload clears ONE row. drv_svc_clear_all moved with it and has no other caller
 dsk_boot_from_x     kmain_o only (kernel.asm) - which volume the machine came off, SPEC.md 18.96, read out of the registers the boot sector left. dsk_bootltr moves with it and is named nowhere else: it stamps the letter into three fixed messages, once, and it stays stamped
 dsk_dpt_init_x      kmain_o only (kernel.asm) - int 1Eh becomes ours, SPEC.md 18.92. dsk_xfer READS the parameter table for the life of the machine; nothing rebuilds it
-mouse_init          kmain_o only (kernel.asm) - the whole serial+PS/2 probe, SPEC.md 9.4/9.5/9.9. ONE call site tree-wide, in kmain_o well before its BLOBCALL spl_finish, so the blob is live throughout. It is an OVBCALL site (SPEC.md 2.5.3.2): the serial five are `.ovl` on kern_big and on a kern_small KNOB build, `.boot2` on a shipped kern_small (MOU_IN_BLOB, SPEC.md 2.5.3.3.1), and the deadline holds on all three - the call is at MARK 18, before drv_boot. What it alone reaches went with it (mou_uart, mou_idbyte, mou_idquiet, mou_idjudge, mou_p2rd, mou_p2dev, mou_p2flush, mou_p2_init); what mou_hotplug or mouse_unhook can reach did NOT (mou_pall, mou_pout, mou_newround, mou_lockon, mouse_unhook, mou_p2_off and the four PS/2 writers), because a mouse replugged and Chip -> Restart both run all session
 dock_init           kmain_o only (kernel.asm:4342) - the dock strip's scratch, SPEC.md 30
 menu_init           kmain_o only (kernel.asm:4299) - the menu bar's owner and its dirty flags, SPEC.md 12. NOT the save-under: menu_drop claims that per drop and gives it back (SPEC.md 12.4), which is what leaves this body with nothing session-lived in it
 wm_init             kmain_o only (kernel.asm:4291) - the window table cleared, SPEC.md 11. Four rep stos runs over `.bss` and nothing else
@@ -83,12 +82,37 @@ sch_idle_start      kmain_o only (kernel.asm:4182) - spawns the idle task, docs/
 # the kernel: drv_boot_x is inside `.boot2` now (SPEC.md 2.5.2), so the calls no
 # longer cross and there is nothing here to account for.
 ovl_spl_redraw      spl_reset only (splash.inc:488) - repaint after a mode set
+# ...and three are BACK, from the other side: BOOT3-PLAN wave 2 took
+# drv_boot_x on into `.boot3` and left the status line here, because spl_mcs
+# reads every string - the driver titles too - through the blob's CS. So each
+# is a B2CALL (`call BLOB_SEG_AT:`) out of `.boot3`, and the guarantee is the
+# caller's: drv_boot_x is B3CALL'd from kmain_o (MARK 28), long before
+# spl_finish, and `.boot3` itself only exists from kz_all to mem_unblob.
+ovl_spl_msg_cfg     drv_boot_x only (B2CALL from `.boot3`), inside kmain_o, before spl_finish - 'Loading SYSTEM.CFG'
+ovl_spl_msg_drv     drv_boot_x only (B2CALL from `.boot3`), inside kmain_o, before spl_finish - 'Loading Driver n/N', its title a BLOB offset (bdt_base)
+ovl_spl_msg_boot    drv_boot_x only (B2CALL from `.boot3`), inside kmain_o, before spl_finish - 'Starting os8088'
 
 # --- the settings parser, SPEC.md 51.5 / docs/plans/completed/SETTINGS-COST.md -------------
 # ovl_cfg_load was here for the same reason and has left for the same one: its
 # only caller moved into the section with it.
-ovl_sc_load         ovc_load only (CFG_BOOT's expansion, which IS `.boot2` - the macro is merely DEFINED under `.modc`, where the reader cannot tell a definition from an emission). ovc_load's one caller is ovl_cfg_load, drv_boot_x's, inside kmain_o: the desktop shortcuts' boot read, SPEC.md 26.8.6
-bdk_apply           ovc_load only (CFG_BOOT's expansion, which IS `.boot2`, as the row above says - the macro is DEFINED under `.modc`). The blob's own dock_apply (DOCK_APPLY bdk, driver.inc), applied to the settings just read, inside drv_boot_x, inside kmain_o. Visible to this gate only since the template walk learned a multi-argument expansion pastes its first (SPEC.md 120.4's bvs_switch row)
+ovl_sc_load         ovc_load only (CFG_BOOT's expansion, which IS `.boot3` since BOOT3-PLAN wave 2, `.boot2` before it - the macro is merely DEFINED under `.modc`, where the reader cannot tell a definition from an emission). ovc_load's one caller is ovl_cfg_load, drv_boot_x's, inside kmain_o: the desktop shortcuts' boot read, SPEC.md 26.8.6
+bdk_apply           ovc_load only (CFG_BOOT's expansion, which IS `.boot3` since wave 2, as the row above says - the macro is DEFINED under `.modc`), by B3CALL - the boot's own dock_apply (DOCK_APPLY bdk, driver.inc) is `.boot3`'s too since wave 4, applied to the settings just read
+# ...and the rest of what drv_boot_x's cone still reaches in the blob, each a
+# B2CALL out of `.boot3` (BOOT3-PLAN wave 2), each inside drv_boot_x, inside
+# kmain_o, before spl_finish. (xm_boot_x, bvs_switch and bvs_disp_init's far
+# door bvs_disp_far were here until wave 4 took them, and kmain_o, into
+# `.boot3`: they are not crossings any more, and the door is gone.)
+# ...AND WHAT kmain_o ITSELF STILL CALLS IN THE BLOB, since BOOT3-PLAN wave 4
+# moved it to `.boot3`: each is a B2CALL out of kmain_o, before its own
+# B2CALL spl_finish - which is the release's precondition, so the blob is
+# aboard for every one of them by construction.
+vid_init            kmain_o only (B2CALL, MARK 7) - the probe and publish re-run, the mode set skipped while the splash is up (viddet.inc); before spl_finish
+font_init           kmain_o only (B2CALL on kern_big, kern_emu and kern_mega - kern_small's is `.boot3`'s, B3CALL - between MARKW 13 and 14: the ROM font pick, after mem_init_x and before splf_step) - before spl_finish. Back in the blob since BOOT3-PLAN 16.16, which took its bytes out of the packed KERNEL.SYS; the BAKED_FONT arm is ovl_font_init, `.ovl`, and names no blob label
+ovl_spl_msg_mouse   kmain_o only (B2CALL, MARK 18) - 'Looking for a mouse', before spl_finish
+ovl_spl_msg_fdd     kmain_o only (B2CALL, MARK 20) - 'Checking drives', before spl_finish
+bvs_apply           the boot's own vid_switch and vid_disp_init only (VSW_SWITCH's and VSW_DISP's bvs arms, B2CALL - the macro BODIES are what sits in `.text`, textually): the probe's FAR body itself since BOOT3-PLAN 16.17 retired its door bvs_apply_f, from `.boot3`, which drv_boot_x, vx_boot_x and kmain_o reach before spl_finish (vx_boot_x after it, and before mem_unblob_x - the blob is still aboard: kmain releases it only on kmain_o's return)
+ovl_fdd_cylok       ovl_fdd_apply only (B2CALL), drv_boot_x's: the loader's b2_cylok read through the BLOB's CS - a label past boot2_entry, which `.boot3` may not name (SPEC.md 2.9.13.4)
+drv_boot_x          NOT a crossing: `.boot3`'s on every kernel since BOOT3-PLAN wave 4 (kern_small's one-byte `retf` rung was the blob's until then), B3CALL'd from kmain_o, MARK 28
 
 # --- not a call at all ------------------------------------------------------
 # kernel.asm's `kbld_blob: dw boot2_entry` is the length of the blob up to the
@@ -98,3 +122,6 @@ bdk_apply           ovc_load only (CFG_BOOT's expansion, which IS `.boot2`, as t
 # SPEC.md 2.9.14 made the blob one section.)
 
 ovl_dock_geom       dock_geom dispatches here only while spl_fseg > COLD_SEG; after spl_finish it dispatches to the loaded Control Panel. Fullscreen return uses dock_band.
+as_s_dir            NOTHING after mem_unblob: AS_WALK's non-kern_mega arm, which the walk assembles into `.boot3` as as_boot (B3CALL from kmain_o, after spl_finish and before mem_unblob_x). The `.cold` expansion is kern_mega's as_bootc, whose KERN_MEGA arm stores the name by immediates and names none of these three - os88ovlchk keeps every arm of an %ifdef it cannot evaluate, so the scan sees them there (BOOT3-PLAN wave 1)
+as_s_skip           as as_s_dir: as_boot's toast string, in `.boot3`; kern_mega's `.cold` arm pushes the text instead
+as_find             as as_s_dir: as_boot's find buffer, in `.boot3`; kern_mega's `.cold` arm uses a stack frame instead

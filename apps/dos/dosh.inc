@@ -804,6 +804,20 @@ dsh_copy_go:
     je .self                        ; same folder, no new name
 .ok:
     call dsh_bank
+    ; --- THE BUFFER IS SIZED ON THE DESTINATION (SPEC.md 96.30.7.3). Every
+    ; chunk but the last is APPENDED, and OSAPI_FILE_WRITE_SEQ takes only
+    ; whole clusters of the volume it writes (18.4.9) - so dsh_bufget, which
+    ; sizes on the volume we stand on, is asked standing THERE. It was asked
+    ; standing on the PROMPT's volume, with AX - the KB wanted - left holding
+    ; dsh_bank's [dos_curdir]: at A:\ that is 0, so one 512-byte-cluster KB,
+    ; and COPY of anything past 1KB to a 2KB-cluster FAT16 C: answered `File
+    ; creation error` at its first append. NO `jc` on the goto: a destination
+    ; that will not be stood on fails the first write below, which is where
+    ; that is reported, and the size is then merely the wrong volume's.
+    mov dx, [dsh_dclus]
+    mov bl, [dsh_ddrv]
+    call dos_be_goto
+    mov ax, DSH_CPKB                ; the KB asked for, as TYPE asks it
     call dsh_bufget                 ; the DOS arena's, not the heap's
     jc .nomem
     mov word [dsh_skip], 0
@@ -1832,10 +1846,11 @@ dsh_dir_page:
                                     ; dsh_dir_stop is the abandon path and frees
                                     ; it too
     call dsh_wflush                 ; /W's part-row, if one is open
-    call dsh_home
-    call dsh_dirtot
-    xor al, al
-    ret
+    call dsh_dirtot                 ; ...the footer WHILE STILL STANDING on the
+    call dsh_home                   ; listed volume: its `bytes free` is that
+    xor al, al                      ; volume's (SPEC.md 96.33.9.3). After the
+    ret                             ; home it was the PROMPT's - `DIR B:` at A>
+                                    ; printed A:'s free space
 .ioerr:
     call dsh_sfree
     call dsh_home

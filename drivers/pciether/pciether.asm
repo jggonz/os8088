@@ -66,7 +66,6 @@ pce_tab:                        ; the backends, in the order they are tried
 %endmacro
 
 %macro NIC_STATE 0
-pce_bdf:    dw 0                ; the card's bus / device-function
 pce_name:   dw 0                ; its name, for the Control Panel page
 pce_vt:     times 5 dw 0        ; the chosen backend's vectors (PCEV_*)
 rt_seg:     dw 0                ; the ring's claim, as OSAPI_MEM_P named it

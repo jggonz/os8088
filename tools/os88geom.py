@@ -231,6 +231,8 @@ _MIRROR = {
     "DESK_CW": ("kernel/desk.inc", {"big": 96, "small": 32}),
     "DESK_PX": ("kernel/desk.inc", {"big": 102, "small": 44}),
     "DSL_SLOT": ("kernel/desk.inc", 0x3F),
+    "DSL_PIN": ("kernel/desk.inc", 0x40),   # a placed item: tools/os88pmcfg.py
+                                            # and os88deskcfg.py write it
     "DSL_GONE": ("kernel/desk.inc", 0x80),
     # kernel/desksc.inc - one LINK row, which is OSAPI_DESK_ITEM's record too
     "SC_REC": ("kernel/desksc.inc", {"big": 128}),   # OS88_SHORTCUTS: big only
@@ -279,10 +281,17 @@ _MIRROR = {
     # cache, which is how a host script asks "does this entry name a row in
     # the store, or the 0xFF blank?" without judging pixels. Two rows read it
     # - tests/icoshed.py and tests/rdicon.py - which is the second copy
-    # t_mirror exists to catch. FS_IOFH is a HIGH byte, so the offset is
-    # `(FS_IOFH << 8) + FV_ICOIX + entry`.
+    # t_mirror exists to catch. The offset is
+    # `(FS_IOFH << FV_IOSH) + FV_ICOIX + entry` - FV_IOSH below.
     "FS_IOFH": ("kernel/files.inc", 15),
     "FV_ICOIX": ("kernel/files.inc", 0),
+    # ...and where ENTRY 0 is in that cache (SPEC.md 22.6.4): past the
+    # multi-selection's bitmap, which kern_big keeps at the head of the claim.
+    # kern_small has no bitmap and its entries start at 0.
+    "FV_DOFF": ("kernel/files.inc", {"big": 128}),
+    # ...and the index's base is FS_IOFH << FV_IOSH: 128-byte units on
+    # kern_big (22.6.4), 256 on kern_small (22.6.1), where it is 8
+    "FV_IOSH": ("kernel/files.inc", {"big": 7}),
     # kernel/kernel.asm - the chrome
     "MBAR_H": ("kernel/kernel.asm", 20),
     "TITLE_H": ("kernel/kernel.asm", 18),
@@ -325,10 +334,10 @@ _MIRROR = {
     "FM_CHCOLW": ("kernel/files.inc", 72),
     "FM_BTN_W": ("kernel/files.inc", 63),
     "FM_BTN_H": ("kernel/files.inc", 14),
-    # kernel/toast.inc - the strip's message (SPEC.md 59)
+    # kernel/kernel.asm, beside TOASTSTR - the strip's message (SPEC.md 59.10)
     # TOAST_MAX is the TIGHT one by its own comment, so a local copy that is
     # one short truncates exactly the message it was added to read.
-    "TOAST_MAX": ("kernel/toast.inc", 24),
+    "TOAST_MAX": ("kernel/kernel.asm", 24),
     "KERNEL_SEG": ("kernel/kernel.asm", 0x0060),
     # kernel/memory.inc - the claim table (SPEC.md 50)
     # PER ARM (docs/plans/KERN-SMALL-CUT-PLAN.md D1/D7): kern_small holds TWENTY claim records. The SDK

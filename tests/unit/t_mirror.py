@@ -541,9 +541,9 @@ def main():
     # characters`, exit 1) while the cap arm stays quiet at 23 - which is
     # also how the four-conversion/five-argument TypeError that had kept it
     # from ever running was found.
-    toast_src = open(os.path.join(ROOT, "kernel", "toast.inc")).read()
+    toast_src = open(os.path.join(ROOT, "kernel", "kernel.asm")).read()
     m = re.search(r"^TOAST_MAX\s+equ\s+(\d+)", toast_src, re.M)
-    check(m, "kernel/toast.inc still defines TOAST_MAX",
+    check(m, "kernel/kernel.asm still defines TOAST_MAX (beside TOASTSTR)",
           "this row reads the cap out of the kernel rather than typing 24 a "
           "third time; a renamed constant must fail rather than skip",
           got="TOAST_MAX equ <n>" if m else "<not found>", want="TOAST_MAX equ <n>")
@@ -574,7 +574,10 @@ def main():
     # contributes its own characters and CC_PKG_NAME contributes a name's.
     ovm = []
     for line in crt0.splitlines():
-        m2 = re.match(r"^(cc_ovm_[A-Za-z0-9_]*)\s*:?\s*db\s+(.*)$", line)
+        # `TOASTSTR cc_ovm_x, ...` since SPEC.md 59.10 - the macro measures
+        # each package's own name as it assembles; this measures every name
+        m2 = re.match(r"^(?:TOASTSTR\s+)?(cc_ovm_[A-Za-z0-9_]*)\s*(?::?\s*db\s+|,\s*)(.*)$",
+                      line)
         if not m2:
             continue
         rest = m2.group(2)

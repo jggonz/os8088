@@ -1,0 +1,426 @@
+{
+ "area": "isr",
+ "title": "LENS: interrupts, critical sections, reentrancy",
+ "summary": "The interrupt layer is careful and mostly correct. Its typical defect is no longer a missing cli. It is a precondition that the kernel's own ISRs meet and the driver- and package-facing entry points do not: SS = LOW_SEG, DF = 0, the private mouse stack. The real defects are small and cheap. The USB-mouse feed swaps SP but not SS. DF is never cleared at the IRQ0 callback boundary, though sch_isr calls the splash's rep movsb. Four IMR read-modify-writes run at IF=1. Pause stopping the BIOS tick count on an XT is a documented trade-off, but its time-of-day cost is not written down. The systemic gaps are bigger. No interrupt-latency budget is written anywhere. The longest IF=0 windows are now the compactor's copies (mem-2, mem-11) and the cursor move inside the serial ISR (about 2.4-3.2 ms measured), not the window SPEC calls the longest. No single owner controls the IRQ lines, IVT and IMR: six owners write them their own way, and the kernel's restores do not check what they overwrite. CPU exceptions go to the BIOS dummy handler: garbage on an 8088, a hang on a 286. All of it is fixable with small byte costs and no ABI break. A kernel-owned IRQ registry can later be made mandatory at the flag day (ABI-BREAK-LIST L3). (Verification refuted the WireBall queue-tail finding: the transient tail value cannot coincide with a full ring.)",
+ "strengths": [
+  {
+   "title": "Publication by a single store, applied consistently",
+   "evidence": "sched.inc 915-1000 (T_STATE last), 696-724 (sch_wake_ui one word store); ui.inc 746 (xchg test-and-clear of ui_post); vga12.inc 5118-5124 (flag+owner one word)",
+   "why": "On an 8086 an interrupt can arrive only between instructions, so one store is the whole atomicity argument. The tree applies this everywhere it counts and writes down why."
+  },
+  {
+   "title": "Private ISR stacks that do not trust SS",
+   "evidence": "mouse.inc 395-422 (MOUPRIV loads SS), sched.inc 2202-2214 (chain moves only when SS = LOW_SEG), 2412-2425 (sch_switch refuses a foreign SP), 8.5.1's nested-tick resume",
+   "why": "It takes the ISR and ROM-chain depth out of every task slice, which saves real resident bytes, and stays correct under BIOSes that hop stacks. OS/2 1.x had a kernel interrupt stack for the same reason; DOS and Windows 3.0 standard mode did not."
+  },
+  {
+   "title": "A wake protocol that survives drains",
+   "evidence": "wm.inc 2337-2360 (WKQ_NONE/RING/EATEN), events.inc 179-210 (evq_mup bookkeeping), ui.inc 268-290 (redo)",
+   "why": "Coalesced, ISR-safe and impossible to deafen. It is Windows 3.x's PostMessage-as-interrupt-safe-call model plus a recovery for lost records that Windows never had."
+  },
+  {
+   "title": "The ROM treated as hostile but necessary",
+   "evidence": "mouse.inc 2955-2975 and 3039-3046 (self-chain trap with its own EOI), 3001-3031 (ROM called under an IRQ1-only mask), mouse.inc 2245-2250 (slave then master EOI), sb.inc 936-950 (ISR-bit test for spurious IRQ 7)",
+   "why": "Every arm's EOI ownership is explicit, and the fixes came from bugs measured in the field."
+  },
+  {
+   "title": "Halt guards that are textbook correct",
+   "evidence": "sched.inc 754-791 (cli/test/sti/hlt inside the sti shadow), ui.inc 1169-1185 (test and task_sleep in one IF=0 window)",
+   "why": "The lost-wakeup race is closed in both places that halt or block, and the reasoning is written beside the code."
+  },
+  {
+   "title": "A genuinely minimal sample ISR, behind a thin kernel door",
+   "evidence": "apps/os88spk.inc 459-480 (per-sample path with its own cld, state through CS), snd.inc 1031-1062 (spk_off on every way out)",
+   "why": "The cost per sample is about ten instructions, and the kernel keeps only the arbitration and teardown, so the resident cost stays small."
+  },
+  {
+   "title": "Claims are instrumented",
+   "evidence": "sch_chskip (sched.inc 2950), KFZ heartbeat reading IMR/ISR/IRR and re-selecting the IRR (sched.inc 1940-1955), STKDIAG chain water (stkdiag.inc 292-305)",
+   "why": "Each turns an argument about an ISR into a reading taken on the field machine."
+  }
+ ],
+ "findings": [
+  {
+   "id": "isr-1",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "Pause stops the BIOS tick count on an XT; SPEC chose that but does not say the time of day falls behind",
+   "detail": "On the int-09h arm (every XT), kbm_isr calls the ROM with only IRQ1 unmasked. The ROM's Pause (Ctrl+NumLock) waits INSIDE int 09h for the next key. IRQ0 stays masked for the whole pause, and the 8259 latches one edge. A 10-second pause therefore loses about 180 ticks from [ticks] and 40:6C, the SB watchdog stops, and the BIOS time of day falls behind by the pause. SPEC 9.8.3 chooses this on purpose ('The tick stands still while paused ... The machine is paused'). Its 'nothing is lost' bullet is about the ordinary 2,500-cycle handler. What it does not say is the lasting cost: the clock stays behind after the pause ends.",
+   "evidence": [
+    "kernel/mouse.inc:3022-3031 (or al,0xFD; call ROM; restore)",
+    "SPEC.md:16250-16259 (masked edge 'nothing is lost'; IRQ1 open for Pause; 'The tick stands still while paused')",
+    "kernel/sched.inc:2261 ([ticks] only on a delivered IRQ0)"
+   ],
+   "recommendation": "Either document the clock loss (doc fix below), or, before masking, keep IRQ0 open when Ctrl is down in 0040:0017 and the scan is 45h: mask with 0xFC. The 9.8.3 race needs a handler that returns, and the Pause handler does not return until the next key.",
+   "phase": "now",
+   "bytes_est": "0 (doc), or about +14 .text resident (kern_big, kern_small)",
+   "verdict": "corrected",
+   "verify_note": "Code confirmed (mouse.inc 3022-3031). It is not an unnoticed bug: SPEC.md 9.8.3's third bullet already says the tick and scheduler stand still while paused, by design. The original doc fix aimed at the 'nothing is lost' bullet was redundant. It is retargeted to that third bullet, to state the lasting clock loss. Reclassified from bug to consistency."
+  },
+  {
+   "id": "isr-2",
+   "kind": "hazard",
+   "severity": "medium",
+   "title": "osapi_mouse_feed is reached from an IRQ handler but swaps SP and not SS",
+   "detail": "The feed's header says 'this is not an ISR, it is a plain task call', and the feed swaps SP onto mou_pstack only. Its USB-mouse caller (the PicoMEM path, um_pm33) runs inside the card's IRQ handler at IF = 0. The interrupted context can be a ROM service on its own stack (SPEC 7.4's case), the card's own option-ROM service, or a DOS program's stack. The feed then pushes at foreignSS:mou_pstack, and mou_apply's evq_push and the cursor row table go through SS into that segment. The results are a lost event, a garbage arrow and corrupted foreign memory. The header's 'MOUPRIV_ENTER tests SS first' is also stale: MOUPRIV_ENTER loads SS unconditionally (KERN-MEGA-PLAN 14.39). The usbmouse.asm header claims 'puts the cur_move chain on mou_pstack whatever stack this arrived on', which is true of SP only.",
+   "evidence": [
+    "kernel/mouse.inc:3986-3990 (header)",
+    "kernel/mouse.inc:4016-4041 (SP-only swap inside cli)",
+    "drivers/usbmouse/usbmouse.asm:417-426 ('Reached from inside the card's IRQ handler')",
+    "kernel/mouse.inc:395-422 (MOUPRIV loads SS; body reaches .lowbss through SS)",
+    "kernel/events.inc:100-128 (ring through SS)"
+   ],
+   "recommendation": "Bank and load SS as MOUPRIV_ENTER does (mov [mou_pss],ss / mov ss,[cs:mou_lowss], and mov ss,[mou_pss] on exit) inside the existing cli, then rewrite the header to match.",
+   "phase": "now",
+   "bytes_est": "about +13 .text resident (kern_big, OS88_DRIVERS): 4 + 5 + 4 bytes of SS bank/load/restore",
+   "verdict": "corrected",
+   "verify_note": "Confirmed: the feed's body moves SP alone (mouse.inc 4016-4041), um_pm33 calls it from the card's IRQ handler, and MOUPRIV_ENTER sets SS with no test. The estimate is raised from +8 to about +13 (three SS moves). The doc fix describes the code as it is now, not after the fix, because doc fixes are applied before any code change."
+  },
+  {
+   "id": "isr-3",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "OSAPI_WM_WAKE's 'ISR-safe' has an unstated SS = LOW_SEG precondition",
+   "detail": "evq_push addresses the ring through SS (push ss/pop es, [ss:di]). An ISR that interrupted a ROM service on its own stack and posts a wake writes into the ROM's segment. The one in-tree ISR poster, DOS.O88's dvw_irq0, moves to a LOW_SEG slice (dvw_tolow) before posting, so the authors knew. The contract does not say it, and evq_push's own comment states it only as an aside ('which SS names for every kernel task and every ISR on one').",
+   "evidence": [
+    "kernel/events.inc:80-128",
+    "kernel/wm.inc:2343-2360",
+    "apps/os88api.inc:6605-6606",
+    "apps/dos/dosw.inc:267-276, 312-321"
+   ],
+   "recommendation": "State the precondition in os88api.inc and evq_push's header (0 bytes). Optionally make evq_push independent of SS by loading ES from mou_lowss and writing es: in place of ss: (about +3 resident).",
+   "phase": "now",
+   "bytes_est": "0 (doc), or about +3 .text resident",
+   "verdict": "confirmed",
+   "verify_note": "Confirmed in events.inc and dosw.inc. The os88api.inc text is an OSAPI contract comment, which tools/abilock.py fingerprints, so applying that fix needs 'python3 tools/abilock.py --update' (contract clarified, no bump)."
+  },
+  {
+   "id": "isr-4",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "DF is never cleared at the IRQ0 callback boundary",
+   "detail": "sch_isr never executes cld, yet it calls the splash animation (splf_anim -> spl_anim -> spl_spin's rep movsb), the loaded driver's DSV_TICK and the package FSXF_RATE hook (sch_rhook). Packages run with std at IF=1 (instance.inc says so), so the hook and DSV_TICK inherit whatever DF the interrupted code had. spl_isr's own path does cld, but sch_isr's gated call of the same animation does not, which breaks SPEC 1 rule 3 ('ISRs must cld before any string op'). Neither the DSV_TICK contract nor the 53.2.2 hook contract mentions DF. fsx_rtick (kern_mega) has the same gap.",
+   "evidence": [
+    "kernel/sched.inc:1892-2400 (no cld in sch_isr; the file's only cld are 988, 1634 (khb_paint), 2602)",
+    "kernel/sched.inc:2349-2353 -> kernel/splash.inc:186, 1024-1029 (rep movsb)",
+    "kernel/instance.inc:2307-2310 (packages use std)",
+    "kernel/memory.inc:1853 (mem_bcopy's std)",
+    "drivers/os88drv.inc:270-271",
+    "SPEC.md:106853-106868",
+    "SPEC.md:116-117 (rule 3)",
+    "kernel/fsx.inc:1364-1446 (fsx_rtick, no cld)"
+   ],
+   "recommendation": "Add one cld in sch_isr after KDS (the iret restores the interrupted DF), and the same in fsx_rtick. If t_hotpar parity makes that byte dear, put the cld in splf_anim (boot blob) instead, and write 'DF is the interrupted code's' into both contracts.",
+   "phase": "now",
+   "bytes_est": "+1 .text resident (kern_big/kern_small), +1 kern_mega fsx_rtick; or 0 resident with the cld in .boot2",
+   "verdict": "confirmed",
+   "verify_note": "Confirmed: there is no cld anywhere on sch_isr's path, and splf_anim reaches the rep movsb. The splash.inc comment the reviewer flagged is NOT wrong. 'sched.inc says the same thing above its own in-ISR blit' refers to khb_paint's cld at sched.inc 1634, which does say it. That doc fix is refuted."
+  },
+  {
+   "id": "isr-5",
+   "kind": "bug",
+   "severity": "low",
+   "title": "WireBall's queue tail is updated in two instructions its own rate hook reads between",
+   "detail": "The consumer does inc [WP_QTAIL] then and [WP_QTAIL],63, so the tail reads 64 between them, and the reviewer argued the hook could then misjudge a full ring. It cannot. The transient 64 occurs only when the tail wraps from 63, just after the consumer has removed the entry at 63. At that instant at most 62 entries remain, so the ring has room. The hook's test ((head+1)&63 == tail) answers 'not full' against 64, and that answer is correct. The head it stores is masked and never 64. Both instructions are single read-modify-writes, atomic with respect to interrupts.",
+   "evidence": [
+    "apps/wireball/wblink.inc:779-780 (two-instruction tail update)",
+    "apps/wireball/wblink.inc:728-738 (hook's fullness test)"
+   ],
+   "recommendation": "None needed. A single-store index update is still the better pattern to copy, but this one is not a defect.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "refuted",
+   "verify_note": "REFUTED. While the consumer removes the entry at tail = 63, head is in 0..62 (head = 63 would mean empty, and wb_queued would not have read). After that removal at most 62 entries remain, so the hook's 'not full' answer against the transient 64 is the true state. Its store advances head to at most 63. With the post-and tail of 0, that is the legal full state (63 entries), not an empty ring. No queued byte is lost."
+  },
+  {
+   "id": "isr-6",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "IMR read-modify-writes at IF=1 on task context",
+   "detail": "Most IMR writes are under pushf/cli. Four are not: mou_lockon (UI task), mou_p2_off (slave), mouse_unhook, and SOUND.DRV's unmask in sbl_hook and mask in sbl_cell. A task switch between the in and the out writes back a stale mask and undoes another task's change. The likeliest other writer is a windowed DOS program on a pre-empted worker: DOS.O88 exchanges vectors but not the IMR.",
+   "evidence": [
+    "kernel/mouse.inc:1253-1255 (mou_lockon, UI task)",
+    "kernel/mouse.inc:2194-2196 (mou_p2_off slave)",
+    "kernel/mouse.inc:1417-1419 (mouse_unhook)",
+    "drivers/sound/sb.inc:3211-3213, 3235-3237",
+    "apps/dos/dosw.inc:98-106 (no IMR in the exchange)"
+   ],
+   "recommendation": "Wrap each in pushf/cli ... popf. The structural answer is isr-13's IMR shadow.",
+   "phase": "now",
+   "bytes_est": "+6 .text resident (mou_lockon, mou_p2_off), +3 for mouse_unhook (optional), +6 SOUND.DRV",
+   "verdict": "corrected",
+   "verify_note": "The post-DOS re-arm the reviewer cited (mouse.inc 1590-1594) is already inside a pushf/cli ... popf (1581-1595: 'one critical section over the vector AND the mask'), so it is dropped. The other sites are confirmed at IF=1 as far as the routines themselves go."
+  },
+  {
+   "id": "isr-7",
+   "kind": "hazard",
+   "severity": "medium",
+   "title": "The cursor is drawn at IF=0 inside the serial ISR, which caps SERIAL.DRV's usable rate on an 8250",
+   "detail": "mou_byte -> mou_apply's cur_move runs at IF=0 inside mou_isr's port scan, before the EOI. PERFORMANCE.md measures cur_move at 11,500 cycles on the 5150's CGA (about 2.4 ms) and 15,100 on the XT's VGA (about 3.2 ms). The serial lease defaults to 9600 baud, 1.04 ms a byte, and an 8250 overruns once a second byte completes behind an unread one, that is in 1-2 byte-times. That holds whichever row is scanned first. SPEC 115.2's 'keeps mouse movement from stealing serial data' is true of the row routing, not of the timing. On a running desktop that is not compacting, this is likely the longest IF=0 window. input-3 covers the unleased foreign UART; this finding is the leased one.",
+   "evidence": [
+    "kernel/mouse.inc:3718-3762 (scan, routing, EOI at end)",
+    "kernel/mouse.inc:4212-4300 (cursor draw in ISR)",
+    "PERFORMANCE.md:1356 (cur_move 19,400 -> 11,500 cycles CGA, 21,450 -> 15,100 VGA)",
+    "SPEC.md:225422, 225481 (9600 default), 225486-225491"
+   ],
+   "recommendation": "Measure first: run tests/serlease.py at divisor 12 with the mouse moving, on os8088_xt_vga and a CGA twin, and count LSR overrun bits. Then either default the lease to 2400 on an 8250 and document the ceiling, or take the rethink: EOI, then inc sch_lock, a busy byte, sti, the redraw loop, cli.",
+   "phase": "now",
+   "bytes_est": "0 to measure; +30..+40 .text resident for the rethink",
+   "listed_as": "input-3 (adjacent: the unleased form)",
+   "prior_art": "Mac System 1-7 drew the cursor in the VBL task at 68000 interrupt level 1, below the SCC serial at level 4, so cursor drawing could never cost a serial byte.",
+   "verdict": "corrected",
+   "verify_note": "The mechanism is confirmed (mou_isr: the scan calls mou_byte, and the EOI comes after; IF=0 throughout). The reviewer's 1.94 ms is the gfx_lock/unlock pair (PERFORMANCE.md 1357), not cur_move, and VGA is not unmeasured: PERFORMANCE.md 1356 gives 15,100 cycles. With the corrected numbers the hazard is worse than stated, not better."
+  },
+  {
+   "id": "isr-8",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "CPU exceptions are left to the BIOS dummy handler (real-mode kernels)",
+   "detail": "kern_big and kern_small install no handler for int 0 (divide) or, on a 286+, int 6 (invalid opcode); only the BOOT_MARK knob hooks them. On an 8088 the dummy iret continues after the DIV with garbage. On a 286+ it re-executes the DIV forever, a hard hang with no report. Packages, including every C package, have no protection. SPEC records this costing real bugs: SKIES' ADI walked over its own code after an int 0 (SPEC.md 165883), and a ZMODEM size field made one sender line 'an uncontrolled far jump' (SPEC.md 127741). It contradicts the project's own 'a halted machine is a bug report'.",
+   "evidence": [
+    "kernel/instance.inc:1976 ('int 0, no handler installed')",
+    "kernel/kernel.asm:7727-7758 (BOOT_MARK hooks 0,1,3,4,5,6,7)",
+    "kernel/sched.inc:2601-2612 (death-panel principle)",
+    "SPEC.md:127741-127743, 165882-165890"
+   ],
+   "recommendation": "Ship two 4-byte stubs (int 0 always, int 6 when cpu_tier >= 286; never int 5, which is PrtSc on a PC) that set a code and enter sch_diepanel with the faulting CS:IP. Install them in .ovl at sched_init. DOS.O88 banks IVT 00h, and the next kernel booted by int 19h re-installs them.",
+   "phase": "now",
+   "bytes_est": "+30 .cold/.text resident, +12 .ovl",
+   "prior_art": "DOS's int 0 'Divide overflow' handler; Mac System 5-7 bomb box; Windows 3.x UAE.",
+   "verdict": "confirmed",
+   "verify_note": "Confirmed: nothing outside the BOOT_MARK knob writes IVT 0/6 on the real-mode kernels, and SPEC itself names two field defects this would have turned into a report. kern_mega in protected mode builds its own IDT, so the finding is for the real-mode kernels and for kern_mega before it switches."
+  },
+  {
+   "id": "isr-9",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "SCH_CHSTK is sized without int 1Ch, and the mechanism SPEC gives is the wrong way round",
+   "detail": "SPEC 8.5.1 and sched.inc say the ROM sends its EOI and then stis before int 1Ch. The IBM listing's TIMER_INT stis at its head and EOIs after int 1Ch, and SeaBIOS's handle_08 calls int 1Ch before pic_eoi1. Lower IRQs therefore land only between that EOI and the ROM's iret, while whatever POST left on int 1Ch, and in front of the ROM on int 08h (option ROMs), runs on sch_chstack. That code gets whatever stack is left, with no canary, directly above mou_pstack's top in .lowbss. stkdiag.inc states the order correctly ('a real BIOS sti's before int 1Ch').",
+   "evidence": [
+    "SPEC.md:13125-13130",
+    "kernel/sched.inc:2187-2188",
+    "kernel/sched.inc:80-89 (SCH_CHSTK sizing)",
+    "kernel/stkdiag.inc:216, 300"
+   ],
+   "recommendation": "Correct the two texts. Take sched-7's canary. Take a STKDIAG reading on a field machine with option ROMs before anyone shrinks SCH_CHSTK.",
+   "phase": "now",
+   "bytes_est": "0 (doc); canary per sched-7",
+   "listed_as": "sched-7",
+   "verdict": "confirmed",
+   "verify_note": "Confirmed against the IBM 5150 BIOS listing (STI at TIMER_INT's head; INT 1CH, then MOV AL,EOI / OUT 20H,AL). GLaBIOS's int 08h order was not checked (open question 1), so the doc fixes name the IBM ROM and SeaBIOS rather than every ROM."
+  },
+  {
+   "id": "isr-10",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "SPEC names the wrong 'longest IF=0 window'",
+   "detail": "SPEC 28 says sys_snapshot's 1.8-2.2 ms is the longest IF=0 window in the system. Other windows are longer. mem_regrow's relocating path copies the whole block inside one pushf/cli ('The whole of mem_regrow is one IF=0 window'). The driver-image move is about 17-50 ms by its own comment. cur_move in mou_isr is about 2.4-3.2 ms (isr-7), and task_spawn's fill about 0.7 ms (sched-1). The snapshot's 3.5x safety margin is computed against a 1200-baud mouse, not a 9600-baud serial lease.",
+   "evidence": [
+    "SPEC.md:46310-46316",
+    "kernel/memory.inc:4559-4640 (pushf/cli ... mem_bcopy ... popf)",
+    "kernel/memory.inc:3072-3083 (driver image at IF=0, ~17-50 ms)"
+   ],
+   "recommendation": "Correct the text, and adopt isr-14's budget.",
+   "phase": "now",
+   "bytes_est": "0",
+   "listed_as": "mem-2, mem-8, mem-11 (the windows themselves)",
+   "verdict": "confirmed",
+   "verify_note": "Confirmed: mem_regrow's pushf/cli at memory.inc 4559-4560 covers the mem_bcopy at 4640, and the driver-image comment prices its own window at ~17-50 ms."
+  },
+  {
+   "id": "isr-11",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "DSV_TICK's environment is documented as the kernel's, and it is not",
+   "detail": "sbl_tick's header says DS = KERNEL_SEG, but drv_svc_call_x loads the driver's segment into DS and the kernel's into ES. sbl_tick's own [sbl_str_act] reads depend on that. os88drv.inc's DSV_TICK line says nothing about DS, ES, DF, BP being clobbered, or the skip on a nested tick. A third-party driver writer cannot write a correct tick from it.",
+   "evidence": [
+    "drivers/sound/sb.inc:2555, 2564-2570",
+    "kernel/driver.inc:2538-2546",
+    "drivers/os88drv.inc:270-271",
+    "kernel/sched.inc:2269-2276 (nested tick jumps past snd_tick)",
+    "kernel/snd.inc:441-444"
+   ],
+   "recommendation": "Rewrite both texts (see the doc fixes).",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "Confirmed: drv_svc_call_x does push ds / pop es / mov ds,[es:drv_fseg]. os88drv.inc's DSV_TICK lines are column-0 comments, which abilock does not fingerprint."
+  },
+  {
+   "id": "isr-12",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "Bare cli/sti sites are argued in place, and CLAUDE.md's short form of the rule reads as absolute",
+   "detail": "gfx_lock (cli...sti, 'IF = 1 on return'), task_exit's unmatched cli, the idle loop's sti and sch_rhook's sti are each justified where they stand. SPEC 1 rule 3 itself is scoped: only 'any routine callable from an ISR' must preserve the caller's IF. gfx_lock, task_exit and the idle loop are not callable from an ISR, so they do not break SPEC's rule. CLAUDE.md's short form ('Critical sections are pushf/cli ... popf, never cli/sti') drops that scope and reads as absolute, so the tree appears to break it.",
+   "evidence": [
+    "kernel/vga12.inc:5084-5127",
+    "kernel/sched.inc:1190, 598, 757-787",
+    "SPEC.md:114-121"
+   ],
+   "recommendation": "Either restore the scope in CLAUDE.md/AGENTS.md's short form ('in anything an ISR can call'), or list the sanctioned bare sti sites and have t_asmrules fail a new bare sti in kernel/ unless it is registered in a tests/stisites.txt (the textsites.txt ratchet's shape).",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "corrected",
+   "verify_note": "SPEC.md 1 rule 3 (lines 119-121) is scoped to routines callable from an ISR, so the cited sites do not contradict SPEC. The absolute reading comes from CLAUDE.md's condensed rule. The finding is retargeted accordingly."
+  },
+  {
+   "id": "isr-13",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "One owner for IRQ lines, the IVT and the IMR",
+   "detail": "Six owners write vectors and masks, each its own way: the kernel, SOUND.DRV (hook, cell, four discovery stubs and its own spurious-7 test), USBMOUSE, XMEM, os88spk packages and DOS.O88. The kernel's restores (mouse_unhook, sched_stop, spk_off) write back without checking that the vector is still theirs. Only USBMOUSE checks 'still ours'. Each driver re-implements EOI routing and DS derivation. Proposal: an appended OSAPI_IRQ cell with HOOK, UNHOOK (LIFO-checked) and MASK/UNMASK through a kernel IMR shadow with per-owner bits, and a common EOI and spurious-7/15 stub.",
+   "evidence": [
+    "kernel/mouse.inc:1397-1520",
+    "kernel/sched.inc:639-664 (sched_stop movsw's the saved vector back unconditionally)",
+    "kernel/snd.inc:1031-1062",
+    "drivers/sound/sb.inc:3194-3238, 3274-3312",
+    "drivers/usbmouse/usbmouse.asm:464-490 ('put back only if it is still ours')",
+    "drivers/xmem/xmem.asm:1036-1048",
+    "kernel/hiber.inc:4825-4950"
+   ],
+   "recommendation": "Add the cell now as an append (no break); drivers keep working. At the flag day make it mandatory, which is ABI-BREAK-LIST L3's 'an IRQ is hooked through a cell'. Take the IMR shadow alone first (about +25).",
+   "phase": "now",
+   "bytes_est": "about +100 resident net on kern_big (+80 .bss, +120 .text, minus retired sites; estimated); -60 SOUND.DRV; kern_small shadow only, about +25",
+   "listed_as": "ABI-BREAK-LIST L3 (partial)",
+   "prior_art": "OS/2 1.x DevHlp_SetIRQ/UnSetIRQ/EOI; Windows 3.x VPICD_Virtualize_IRQ; AmigaOS AddIntServer/SetIntVector. DOS's TSR rule 'unhook only if still yours' is what USBMOUSE re-derived.",
+   "verdict": "confirmed",
+   "verify_note": "Design proposal. Spot-checked: sched_stop's blind restore, USBMOUSE's still-ours test, and L3's contract text ('an IRQ is hooked through a cell'). The hibernate history and the byte estimate were not re-derived."
+  },
+  {
+   "id": "isr-14",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "A written interrupt-latency budget, and a ratchet that enforces it",
+   "detail": "No IF=0 bound is written anywhere in SPEC, docs or PERFORMANCE.md. Windows argue against 8.3 ms, 7.5 ms or nothing, and the copies grew past 50 ms unremarked. Proposal: a SPEC 1 rule that IF=0 lasts at most about 500 us and never surrounds a caller-sized copy, with copies holding sch_lock at IF=1. Add a fast host gate that flags rep/loop/mem_b* copies inside pushf/cli...popf regions, with a reasons file that can only shrink.",
+   "evidence": [
+    "SPEC.md:46310-46316",
+    "kernel/memory.inc:4559-4640, 3072-3083",
+    "kernel/sched.inc:983-989"
+   ],
+   "recommendation": "Add the rule, plus tests/unit/t_ifwin.py and tests/ifwin.txt.",
+   "phase": "now",
+   "bytes_est": "0 shipped",
+   "prior_art": "AmigaOS: keep Disable() brief and use Forbid() for anything long, the same cli/sch_lock pair os8088 has without the rule. Inside Macintosh's interrupt-time call list.",
+   "verdict": "confirmed",
+   "verify_note": "Confirmed: a grep for a latency budget, 'interrupt latency' or 'longest IF' finds only SPEC.md 46312's snapshot sentence. No t_ifwin gate exists."
+  },
+  {
+   "id": "isr-15",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "sch_lock across int 13h is a whole-machine BIOS monitor",
+   "detail": "Every int 13h holds sch_lock for about 400 ms per call, so no task runs during it, including the SB refill worker (TF_SERVICE). The lock buys three things: BIOS non-reentrancy (a mutex would do), protection for the pinned DMA buffer (mem_pinseg already protects it), and several 'no other task runs' invariants. A BIOS mutex, plus the int 15h AH=90h/91h yield on AT ROMs, would let non-disk tasks run. The real cost is re-proving those invariants.",
+   "evidence": [
+    "kernel/disk.inc:1-14, 1462",
+    "kernel/mouse.inc:4214-4224 (invariant leaning on it)"
+   ],
+   "recommendation": "Record. Take it only if SB underruns during disk reads become a reported problem.",
+   "phase": "record",
+   "bytes_est": "+40..+80 resident",
+   "prior_art": "PC/GEOS SysLockBIOS/SysUnlockBIOS on the 8088; the AT BIOS int 15h AH=90h/91h device-busy hooks used by OS/2 1.x.",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked: disk.inc's header confirms that task switching pauses across all int 13h activity by [sch_lock]."
+  },
+  {
+   "id": "isr-16",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "No single 'callable at interrupt time' list",
+   "detail": "ISR-safety is stated slot by slot, rule by rule, and in a worker's list. No table says which slots an ISR, a rate hook or DSV_TICK may call, and with what SS, DS, ES and DF.",
+   "evidence": [
+    "apps/os88api.inc:6605, 3969-3978, 2348",
+    "SPEC.md:106868-106873"
+   ],
+   "recommendation": "Add a generated section to docs/INDEX.md, built by tools/os88index.py from a '; CTX:' tag on each slot.",
+   "phase": "now",
+   "bytes_est": "0",
+   "prior_art": "Inside Macintosh's 'may move or purge memory' list; Windows 3.1's interrupt-safe call list.",
+   "verdict": "unchecked",
+   "verify_note": "Low-severity weakness, not re-verified."
+  },
+  {
+   "id": "isr-17",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "The SB driver leaves the master PIC reading its ISR",
+   "detail": "sbl_isr's spurious-IRQ-7 test and sbl_stub7 select OCW3 0Bh and never re-select 0Ah. Every in-tree IRR reader selects first, so nothing in-tree is hurt. A DOS program that reads port 20h expecting the IRR is. The kernel's own KFZ heartbeat re-selects 0Ah for exactly this reason ('RIS is STICKY').",
+   "evidence": [
+    "drivers/sound/sb.inc:937-942, 3294-3298",
+    "kernel/sched.inc:1947-1955"
+   ],
+   "recommendation": "Re-select 0Ah at both sites, or write 'every IRR read selects 0Ah first' into SPEC 1.",
+   "phase": "now",
+   "bytes_est": "+8 SOUND.DRV",
+   "verdict": "confirmed",
+   "verify_note": "Confirmed at both sb.inc sites, and the kernel's own khb code states the hazard."
+  }
+ ],
+ "doc_fixes": [
+  {
+   "file": "kernel/sched.inc",
+   "old_text": "; NESTED? (SPEC.md 8.5.1) The ROM sends its EOI\n    jne .chskip                 ; and then stis, so a second IRQ0 can re-enter\n                                ; this ISR - and that one",
+   "new_text": "; NESTED? (SPEC.md 8.5.1) The ROM stis and runs\n    jne .chskip                 ; int 1Ch before its EOI, and a second IRQ0 can\n                                ; re-enter this ISR after that EOI - and that one",
+   "why": "The IBM ROM's TIMER_INT stis at its head and EOIs after int 1Ch, as does SeaBIOS's handle_08; stkdiag.inc 216/300 already state that order."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "which sends its EOI\nand then `sti`s before `int 1Ch`.",
+   "new_text": "which `sti`s and runs `int 1Ch`\nbefore it sends its EOI (the IBM ROM `sti`s at its head; SeaBIOS also EOIs after\n`int 1Ch`). Until that EOI the PIC holds every lower line off, so a device\ninterrupt lands between the EOI and the ROM's `iret`, and `int 1Ch`'s handler -\nwhatever POST left there - runs on this stack in full.",
+   "why": "IBM 5150 TIMER_INT: STI first, INT 1CH, then the EOI; SeaBIOS handle_08 calls int 1Ch before pic_eoi1. This corrects §8.5.1's order; kernel/stkdiag.inc 216 already states it."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "- **The tick stands still while paused**, IRQ0 being masked there, and with\n  it the scheduler. The machine is paused.",
+   "new_text": "- **The tick stands still while paused**, IRQ0 being masked there, and with\n  it the scheduler and the BIOS tick count at 0040:006C, so the time of day\n  falls behind by the length of the pause. The machine is paused.",
+   "why": "kbm_isr masks every line but IRQ1 around the ROM call (mouse.inc 3022-3031); the 8259 latches one IRQ0 edge, so [ticks] and 40:6C lose every tick of the pause but one."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "interrupts off on a 4.77 MHz 8088** — still the longest IF=0 window in the\nsystem, and safe by about 3.5×, not comfortably:",
+   "new_text": "interrupts off on a 4.77 MHz 8088** — one of the longer routine IF=0 windows\n(a driver image's move, §66.6.3.1, and `mem_regrow`'s copy of a whole block are\nfar longer, but rare), and safe by about 3.5×, not comfortably:",
+   "why": "mem_regrow is 'one IF=0 window' around mem_bcopy (memory.inc 4559-4640); the driver-image move is IF=0 for ~17-50 ms by its own comment (memory.inc 3072-3083)."
+  },
+  {
+   "file": "kernel/mouse.inc",
+   "old_text": "; IT SWAPS UNCONDITIONALLY where MOUPRIV_ENTER tests SS first, and that is\n; ten bytes of the difference. The macro's test exists because a ROM service\n; the kernel calls with IF=1 may have switched stacks under an ISR (SPEC.md\n; 7.4's int 13h); this is not an ISR, it is a plain task call, and SS is\n; LOW_SEG in every os8088 task context by SPEC.md 1.",
+   "new_text": "; IT SWAPS SP ALONE, where MOUPRIV_ENTER also loads SS. The macro loads SS\n; because a ROM service the kernel calls with IF=1 may have switched stacks\n; under an ISR (SPEC.md 7.4's int 13h, 9.10.1). The feed assumes SS = LOW_SEG,\n; as in every os8088 task context by SPEC.md 1 - true of a CH375 report from\n; the worker, but NOT guaranteed on USBMOUSE.DRV's PicoMEM path, which calls\n; in from inside the card's IRQ handler and so inherits whatever SS that\n; interrupted.",
+   "why": "MOUPRIV_ENTER sets SS with no test (mouse.inc 405-408); the feed moves SP only (4016-4041); um_pm33 is 'Reached from inside the card's IRQ handler' (usbmouse.asm 419)."
+  },
+  {
+   "file": "drivers/usbmouse/usbmouse.asm",
+   "old_text": "; puts the cur_move chain on mou_pstack whatever stack this arrived on, and\n",
+   "new_text": "; puts the cur_move chain at mou_pstack's offset whatever SP this arrived on\n; (it moves SP, not SS: SPEC.md 9.10.1's SS load is MOUPRIV_ENTER's alone), and\n",
+   "why": "osapi_mouse_feed swaps SP only (kernel/mouse.inc 4016-4041), so the chain runs in whatever SS the card's IRQ interrupted."
+  },
+  {
+   "file": "drivers/sound/sb.inc",
+   "old_text": "; in:       IF = 0, DS = KERNEL_SEG, behind the snd_live gate; AX/DX free",
+   "new_text": "; in:       IF = 0, DS = this image, ES = KERNEL_SEG, behind the snd_live\n;           gate; AX/DX/BP free; DF is the interrupted code's",
+   "why": "drv_svc_call_x does push ds / pop es / mov ds,[es:drv_fseg] (driver.inc 2542-2546), and sbl_tick reads its own [sbl_str_act] through DS."
+  },
+  {
+   "file": "drivers/os88drv.inc",
+   "old_text": ";   DSV_TICK    dw  near proc called from snd_tick - INSIDE IRQ0, at IF=0.\n;                   Keep it short and touch no port that needs a long delay.",
+   "new_text": ";   DSV_TICK    dw  near proc called from snd_tick - INSIDE IRQ0, at IF=0,\n;                   DS = your segment, ES = KERNEL_SEG, BP clobbered, on the\n;                   interrupted stack; DF is the interrupted code's (cld\n;                   before a string op). Skipped on a tick nested inside the\n;                   ROM's int 08h chain (SPEC.md 8.5.1). Keep it short and\n;                   touch no port that needs a long delay.",
+   "why": "drv_svc_call_x sets DS/ES so (driver.inc 2542-2546), the selector arrives in BP, sch_isr has no cld, and a nested tick jumps past snd_tick (sched.inc 2269-2276). Column-0 comment: not abilock-fingerprinted."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "  billed to every one of them, so it is **48 bytes at most**.\n",
+   "new_text": "  billed to every one of them, so it is **48 bytes at most**.\n- **DF is the interrupted code's.** Nothing on the way in clears it, and a\n  package may have been running with `std`; a hook that uses a string\n  instruction issues `cld` first. The ISR's `iret` gives the interrupted code\n  its own back.\n",
+   "why": "sch_isr and sch_rhook (sched.inc 595-628, 1892-2400) and kern_mega's fsx_rtick execute no cld before the far call to the hook; packages use std (instance.inc 2307-2310)."
+  },
+  {
+   "file": "apps/os88api.inc",
+   "old_text": "Any context - ISR-safe and worker-\n                                 ; safe, no lock needed.",
+   "new_text": "Any context - worker-safe, and\n                                 ; ISR-safe given SS = LOW_SEG (the event\n                                 ; ring is addressed through SS), no lock\n                                 ; needed.",
+   "why": "evq_push copies through push ss/pop es and [ss:di] (events.inc 107-121); DOS.O88's dvw_irq0 moves onto a LOW_SEG slice before posting. OSAPI contract comment: needs 'python3 tools/abilock.py --update' (no bump)."
+  },
+  {
+   "file": "kernel/events.inc",
+   "old_text": "; ISR-safe: the copy + index update sit inside pushf/cli ... popf, so a\n; caller running with IF=0 (the mouse ISR) stays that way throughout.\n",
+   "new_text": "; ISR-safe: the copy + index update sit inside pushf/cli ... popf, so a\n; caller running with IF=0 (the mouse ISR) stays that way throughout. The\n; ring is addressed through SS (SPEC.md 10.1.1), so an ISR caller needs SS =\n; LOW_SEG: the mouse ISRs load it, and any other must be on a task stack.\n",
+   "why": "The body uses [ss:di+EV_TYPE] and push ss/pop es for the ring (events.inc 107-121)."
+  }
+ ]
+}

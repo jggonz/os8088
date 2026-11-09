@@ -33,8 +33,12 @@
 ; THE SEGMENT RULES, WHICH ARE THE WHOLE TAX ON LIVING OUT HERE
 ; -----------------------------------------------------------------------------
 ;  * DS is the CALLER's on entry and on return. Every body banks it, sets
-;    DS = CS - so the state block and the scratch below are plain DS-relative
-;    labels rather than a file of `cs:` overrides - and puts it back.
+;    DS = our own data segment - the word the package stamps at WSS_MYDS,
+;    which is CS's value on a real-mode kernel and the claim's DATA selector
+;    on kern_mega, where CS cannot be written - so the state block and the
+;    scratch below are plain DS-relative labels rather than a file of `cs:`
+;    overrides, and puts it back. ES = OUR data is `push ds / pop es`, never
+;    `push cs / pop es`, for the same reason.
 ;  * ES is preserved across every verb. Inside a body ES is the canvas claim
 ;    (the composition's destination) or KERNEL_SEG (the window record).
 ;  * SS is the task's, never ours: [bp+n] addresses the STACK and is right for
@@ -86,10 +90,15 @@ wsm_entry:
     push di
     push es
     push ds
-    mov [cs:wsm_cds], ds            ; the caller's DS, for the two verbs that
-                                    ; read or write a block in it
-    push cs
-    pop ds                          ; ...and now every label below is DS
+    mov bp, ds                      ; the caller's DS...
+    mov ds, [cs:wsm_myds]           ; ...and ours, so every label below is DS:
+                                    ; the package's stamp (WSS_MYDS), never
+                                    ; `push cs / pop ds` - on kern_mega CS is
+                                    ; a read-only code alias, and that pair
+                                    ; and a CS: store here were two #GP
+                                    ; fixups a call (KERN-MEGA-PLAN 14.163)
+    mov [wsm_cds], bp               ; banked, for the two verbs that read or
+                                    ; write a block in it
     cld
     mov [wsm_ab], bx
     mov [wsm_ac], cx
@@ -205,8 +214,8 @@ wsm_v_bind:
     mov cx, 5 + WSM_MAXBAND + 15    ; dirty bands and the contact bits
     xor al, al
     push es
-    push cs
-    pop es
+    push ds                         ; (ES = OUR DS, which is this file's
+    pop es                          ; data on every kernel - not CS)
     rep stosb
     pop es
     mov ax, 1

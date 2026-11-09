@@ -309,8 +309,8 @@ hd_mnt_do:
 ; -----------------------------------------------------------------------------
 ; hd_vol_ask - which kernel volume THIS DRIVER mounted on one partition
 ; in:  AL = the device index, AH = the slot
-; out: AL = the kernel's volume index, 0FFh = none (or a resident too old to
-;      know the verb, which refuses it and leaves the 0FFh standing)
+; out: AL = the kernel's volume index, 0FFh = none (a resident too old to know
+;      the verb never gets here: HD_ABI_VER refuses the pair at load)
 ; clobbers: AX (the output), flags
 ;
 ; The installer's State column wants a drive LETTER (SPEC.md 52.10.4.2), and

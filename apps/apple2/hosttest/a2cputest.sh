@@ -111,6 +111,95 @@ pad() {                             # pad <image> <sectors>
 }
 
 # =============================================================================
+# THE FAST CORE'S LEG (APPLE2-SPEC section 4.6): the generated core, through
+# a2fast.inc's _a2_run, handing back to the accurate core. The same rows bar
+# row 6 (the accurate core's fetch ES, which the plain leg asks), and Dormann,
+# each control made in the core that runs it. The disk is the harness, then
+# Dormann's 64KB at DORMSEC, then the core's part at CORESEC.
+# A2CPU_ONLY=fast runs this leg alone; =plain the original legs alone.
+# =============================================================================
+FASTBIN=$BUILD/apple2/a2fast.bin
+fast_leg() {
+    [ -f "$FASTBIN" ] || { echo "a2cputest: $FASTBIN is missing - make apple2"; exit 1; }
+    [ "$(wc -c < "$FASTBIN")" -eq 65024 ] || { echo "a2cputest: $FASTBIN is not 65,024 bytes"; exit 1; }
+    for MODE in rows real neg; do
+        IMG=$BUILD/a2cputest-fast-$MODE.img
+        case $MODE in
+            rows) FL="-DFAST" ;;
+            real) FL="-DFAST -DDORMANN -DDORMOK=$DORMOK" ;;
+            neg)  FL="-DFAST -DDORMANN -DDORMOK=$DORMOK -DNEG" ;;
+        esac
+        # shellcheck disable=SC2086
+        nasm -f bin -w+error -I apps/apple2/ $FL $DEC -o $IMG apps/apple2/hosttest/a2cputest.asm
+        pad $IMG 64
+        cat "$DORM" >> $IMG
+        cat "$FASTBIN" >> $IMG
+        pad $IMG 2880
+        run $IMG "fast-$MODE" > $BUILD/a2cputest-fast-$MODE.log || true
+        cat $BUILD/a2cputest-fast-$MODE.log
+        case $MODE in
+            rows|real) grep -q "a2cputest: PASS" $BUILD/a2cputest-fast-$MODE.log || {
+                echo "a2cputest: the FAST CORE's $MODE leg FAILED"; exit 1; } ;;
+            neg) grep -q "control fails: ok" $BUILD/a2cputest-fast-$MODE.log || {
+                echo "a2cputest: the fast core's Dormann NEGATIVE CONTROL passed"; exit 1; } ;;
+        esac
+    done
+}
+# =============================================================================
+# THE TRANSLATED LEGS (APPLE2-SPEC section 4.7): Dormann's code translated
+# ahead of time by apps/m6502/m65aot.py, in three parts - one segment holds
+# none of it whole - each run with a core built for its part's range
+# (m65gen.py --aot-range), the rest on the core. Seeds are tools/py6502.py's
+# trace of the same test. The control breaks every translated ADC and CMP in
+# the translation, and must fail. A2AOT_RANGES="LO:HI ..." runs other parts.
+# =============================================================================
+aot_leg() {
+    mkdir -p $BUILD/apple2
+    python3 tools/py6502.py --dormann "$DORM" --trace-out $BUILD/apple2/dorm.seeds >/dev/null
+    for R in ${A2AOT_RANGES:-0400:1400 1400:2A00 2A00:4000}; do
+        N=${R%%:*}
+        python3 apps/m6502/m65aot.py --rom "$DORM" --range $R --seeds $BUILD/apple2/dorm.seeds \
+            -o $BUILD/apple2/dormaot_$N.asm --table $BUILD/apple2/dormaotpc_$N.bin
+        python3 apps/m6502/m65gen.py --machine apple2 --aot-range $R -o $BUILD/apple2/a2fast_dt$N.asm
+        nasm -f bin -w+error -o $BUILD/apple2/a2fast_dt$N.bin $BUILD/apple2/a2fast_dt$N.asm
+        CTL=0x$(awk '$3 == "ctl_list" {print $1}' $BUILD/apple2/dormaot_$N.map)
+        for MODE in real neg; do
+            IMG=$BUILD/a2cputest-aot$N-$MODE.img
+            FL="-DFAST -DAOT -DCTL_LIST=$CTL -DDORMANN -DDORMOK=$DORMOK${M65AOT_TRACE:+ -DTRACE}${AOT_SLICE:+ -DAOT_SLICE=$AOT_SLICE}"
+            [ $MODE = neg ] && FL="$FL -DNEG"
+            # shellcheck disable=SC2086
+            nasm -f bin -w+error -I apps/apple2/ $FL $DEC -o $IMG apps/apple2/hosttest/a2cputest.asm
+            pad $IMG 64
+            cat "$DORM" >> $IMG
+            cat $BUILD/apple2/a2fast_dt$N.bin >> $IMG
+            cat $BUILD/apple2/dormaot_$N.bin >> $IMG
+            pad $IMG $((64 + 128 + 127 + 127))
+            cat $BUILD/apple2/dormaotpc_$N.bin >> $IMG
+            pad $IMG 2880
+            run $IMG "aot$N-$MODE" > $BUILD/a2cputest-aot$N-$MODE.log || true
+            cat $BUILD/a2cputest-aot$N-$MODE.log
+            if [ $MODE = real ]; then
+                grep -q "a2cputest: PASS" $BUILD/a2cputest-aot$N-$MODE.log || {
+                    echo "a2cputest: Dormann through the translation of $R FAILED"; exit 1; }
+            else
+                grep -q "control fails: ok" $BUILD/a2cputest-aot$N-$MODE.log || {
+                    echo "a2cputest: the translated leg's control passed ($R)"; exit 1; }
+            fi
+        done
+    done
+}
+if [ "${A2CPU_ONLY:-}" = fast ]; then
+    fast_leg
+    echo "a2cputest: PASS - the fast core's leg"
+    exit 0
+fi
+if [ "${A2CPU_ONLY:-}" = aot ]; then
+    aot_leg
+    echo "a2cputest: PASS - the translated legs"
+    exit 0
+fi
+
+# =============================================================================
 # THE ROWS (seconds)
 # =============================================================================
 IMG=$BUILD/a2cputest-rows.img
@@ -146,5 +235,11 @@ for MODE in real neg; do
     fi
 done
 
-echo "a2cputest: PASS - twelve rows, and every negative control failed"
+if [ "${A2CPU_ONLY:-}" = plain ]; then
+    echo "a2cputest: PASS - twelve rows, and every negative control failed (the accurate core alone)"
+else
+    fast_leg
+    aot_leg
+    echo "a2cputest: PASS - twelve rows, and every negative control failed, on both cores and through the translation"
+fi
 exit 0

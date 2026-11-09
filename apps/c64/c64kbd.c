@@ -281,6 +281,10 @@ static const unsigned char c64_kscan[] = {
 #define C64K_DOWNMAX 16
 
 static unsigned char c64_matrix[8];         /* row -> the eight column bits */
+static unsigned char c64_mat_any;           /* ...any of them set: the KERNAL
+                                             * reads $DC01 eight times a scan,
+                                             * and with no key down the rows
+                                             * need not be walked */
 static unsigned char c64_down[C64K_DOWNMAX];/* the scan codes still held */
 static unsigned char c64_dasc[C64K_DOWNMAX];/* ...and the ascii they arrived
                                              * with, because the map is keyed
@@ -313,7 +317,20 @@ static unsigned char c64_dasc[C64K_DOWNMAX];/* ...and the ascii they arrived
                                              * margin, in 6510 cycles */
 static unsigned char c64_dage[C64K_DOWNMAX];
 static unsigned c64_dcyc[C64K_DOWNMAX];     /* c64_cyc_lo when it was pressed */
+/* THE SHIFT A TAP WAS TYPED WITH (7.2's rule 6). A tap stays in the matrix
+ * for C64K_FRESH_CYC after its host key is up, and waits in the ring behind
+ * the one before it - on a 4.77 MHz machine that is a fifth of a second of
+ * the user's time - and the host's Shift, polled live, is by then the NEXT
+ * key's: `4+` typed at speed came out `$+`, the 4 still in the matrix when
+ * the hand went to Shift for the +, and a shifted key whose Shift was let go
+ * before its turn came out unshifted. So a key whose host key is UP keeps
+ * the Shift it arrived with, and a held key takes the live one. */
+static unsigned char c64_dfl[C64K_DOWNMAX]; /* 1: the host's Shift was down at
+                                             * the press; 2: the host key is
+                                             * up now (a tap) */
 static int c64_ndown;
+static unsigned char c64_klast;             /* the tap that last LEFT the list */
+static unsigned c64_klcyc;                  /* ...and c64_cyc_lo when it did */
 #ifdef C64_HOST
 static int c64_ndrop;                       /* presses the 16-entry list had
                                              * to drop - the bounded overflow
@@ -369,21 +386,24 @@ static int c64_slock_said;
  * the down-list, so a key pressed between two wakes is not eaten. */
 #define C64K_RING 32
 static unsigned char c64_ring_a[C64K_RING];
-static unsigned char c64_ring_s[C64K_RING];
+static unsigned char c64_ring_s[C64K_RING]; /* the scan code, and bit 7 the
+                                             * host's Shift at the press (a
+                                             * make code is below $80) */
 static int c64_ring_h, c64_ring_t;
 
-/* c64_kbd_init - the HARNESS's reset between its cases, and nothing else's.
+/* ovl_kbd_init - the HARNESS's reset between its cases, and nothing else's.
  * The shipping image does not carry it: every field below is bss, which the
  * loader zeroes once per launch (SPEC.md 20.1), and os88_main used to call
  * this before anything had touched one of them - 113 bytes of code that
  * stored zero over zero (apps size pass 1). */
 #ifdef C64_HOST
-static void c64_kbd_init(void)
+static void ovl_kbd_init(void)
 {
     int i;
     for (i = 0; i < 8; i++)
         c64_matrix[i] = 0;
     c64_ndown = 0;
+    c64_klast = 0;
 #ifdef C64_HOST
     c64_ndrop = 0;
 #endif
@@ -415,10 +435,18 @@ static void c64_key_push(int ascii, int scan)
                                              * cannot start to, so this latch
                                              * is one way */
     }
+    if (scan & 0x80)
+        return;                             /* Alt+0, F11, Ctrl+PgUp...: no
+                                             * matrix key, and bit 7 is rule
+                                             * 6's Shift - kept, it would be
+                                             * read as Shift on scan & $7F */
     if (n == c64_ring_h)
         return;                             /* the ring is full: the key is
                                              * dropped, not written past it */
     c64_ring_a[c64_ring_t] = (unsigned char)ascii;
+    if (os88_key_down(KSC_LSHIFT) | os88_key_down(KSC_RSHIFT))
+        scan |= 0x80;                       /* (rule 6: the Shift it was
+                                             * typed with, kept with it) */
     c64_ring_s[c64_ring_t] = (unsigned char)scan;
     c64_ring_t = n;
 }
@@ -492,8 +520,8 @@ static const unsigned char c64_joysc[5] = {
 
 /* THE KEYSET IS ON, AND ITS KEYS ARE CONSUMED. `KeySetEnable=1` is the
  * shipped state (joystick.c:553) because a keyset is the only joystick source
- * this machine has, and Preferences > Allow keyset joysticks is shown checked
- * and disabled (C64-SPEC §8). This is that resource, so the harness can turn
+ * this machine has, which is why Preferences has no Allow keyset joysticks
+ * item (C64-SPEC §8, §11.2). This is that resource, so the harness can turn
  * it off and show the keys reaching the matrix again - the negative control
  * for the rule below, and `joykeys_enable` is exactly the flag VICE tests
  * first in joystick_check_set (joystick.c:598-601). */
@@ -558,11 +586,13 @@ static void c64_kbd_set(int row, int col, int flags)
  * never cleared incrementally. */
 static void c64_kbd_build(void)
 {
-    int i, e, ch, wantsh;
+    int i, e, ch, sh, wantsh, tapns;
 
     os88_memset(c64_matrix, 0, 8);
     c64_kbd_deshift = 0;
     wantsh = 0;
+    tapns = 0;                              /* a tap typed WITHOUT Shift is
+                                             * in the matrix (rule 6) */
 
     for (i = 0; i < c64_ndown; i++) {
         if (c64_is_joykey((int)c64_down[i]))
@@ -570,6 +600,8 @@ static void c64_kbd_build(void)
                                              * port 2 and is not typed
                                              * (keyboard.c:788-798) */
         ch = c64_dasc[i];
+        sh = c64_dfl[i];                    /* (rule 6: bit 0 Shift at the
+                                             * press, bit 1 a tap) */
         e = c64_scan_is_ctrl(ch, c64_down[i]);
         if (e != 0) {
             /* CTRL+letter: the letter's own position, and the CTRL key */
@@ -577,23 +609,29 @@ static void c64_kbd_build(void)
             if (e >= 0)
                 c64_kbd_set(c64_kasc[e], c64_kasc[e + 1], 0);
             c64_matrix[C64K_LCTRL_R] |= (unsigned char)(1 << C64K_LCTRL_C);
-            continue;
-        }
-        e = c64_kmap_scan(c64_down[i]);
-        if (e >= 0) {
+        } else if ((e = c64_kmap_scan(c64_down[i])) >= 0) {
             c64_kbd_set(c64_kscan[e + 1], c64_kscan[e + 2], c64_kscan[e + 3]);
-            continue;
+        } else if ((e = c64_kmap_asc(ch)) >= 0) {
+            c64_kbd_set(c64_kasc[e], c64_kasc[e + 1], c64_kasc[e + 2]);
+            /* THE ASCII ALREADY SAYS: the BIOS made `4` or `$`, `e` or `E`,
+             * with the Shift as it stood at the make. A key whose entry is
+             * not OPTional (a number, a sign) takes no Shift from a tap at
+             * all, and a LOWER-case letter none either - os88_onkey can
+             * arrive late, after the hand has gone to Shift for the next
+             * key, and the Shift recorded then is not this key's. (An
+             * OPTionally shifted key HELD takes the host's Shift through
+             * the live test below, which is what makes SHIFT+letter the
+             * graphic character it is on the machine.) */
+            if ((c64_kasc[e + 2] & C64K_OPT) == 0 || ch >= 'a')
+                sh &= 2;                    /* (`|` is the one OPT key above
+                                             * `z`: the pound key, unshifted) */
         }
-        e = c64_kmap_asc(ch);
-        if (e < 0)
-            continue;
-        c64_kbd_set(c64_kasc[e], c64_kasc[e + 1], c64_kasc[e + 2]);
-        if ((c64_kasc[e + 2] & C64K_OPT) != 0)
-            if (c64_shift_down)
-                wantsh = 1;                     /* an OPTionally shifted key takes
-                                             * the HOST's shift, which is what
-                                             * makes SHIFT+letter the graphic
-                                             * character it is on the machine */
+        if (sh & 2) {                       /* a tap: its own Shift */
+            if (sh & 1)
+                wantsh = 1;
+            else
+                tapns = 1;
+        }
     }
 
     /* CTRL+digit, from the poll and not from a chord (7.3) */
@@ -622,10 +660,15 @@ static void c64_kbd_build(void)
      * `!virtual_deshift`. */
     if (c64_kbd_deshift != 0)
         c64_matrix[C64K_LSHIFT_R] &= (unsigned char)~(1 << C64K_LSHIFT_C);
-    else if (wantsh | c64_shift_down)       /* both are 0 or 1 */
+    else if (wantsh | (c64_shift_down & (tapns ^ 1)))   /* all 0 or 1; the
+                                             * live Shift waits while a tap
+                                             * typed without it is shown */
         c64_matrix[C64K_LSHIFT_R] |= (unsigned char)(1 << C64K_LSHIFT_C);
     if (c64_ctrl_down)
         c64_matrix[C64K_LCTRL_R] |= (unsigned char)(1 << C64K_LCTRL_C);
+    c64_mat_any = 0;
+    for (i = 0; i < 8; i++)
+        c64_mat_any |= c64_matrix[i];
 }
 
 /* ==========================================================================
@@ -637,7 +680,7 @@ static void c64_kbd_build(void)
  * 46.7 us, under a millisecond, AND IT DOES NOT MULTIPLY BY THE NUMBER OF
  * SLICES IN THE WAKE.
  * ========================================================================*/
-static void c64_kbd_add(int ascii, int scan)
+static void c64_kbd_add(int ascii, int scan, int sh)
 {
     int i;
     for (i = 0; i < c64_ndown; i++) {
@@ -659,21 +702,45 @@ static void c64_kbd_add(int ascii, int scan)
     }
     c64_down[c64_ndown] = (unsigned char)scan;
     c64_dasc[c64_ndown] = (unsigned char)ascii;
+    c64_dfl[c64_ndown] = (unsigned char)sh;
     c64_dage[c64_ndown] = 0;
     c64_dcyc[c64_ndown] = c64_cyc_lo;       /* the EMULATED clock, which is
                                              * the one the machine scans on */
     c64_ndown++;
 }
 
+/* c64_kbd_busy - must the press of SCAN wait in the ring? TAPS ARE TAKEN ONE
+ * AT A TIME (7.2's rule 5): while an earlier press whose host key is already
+ * up is still inside its fresh window, a second would share the matrix with
+ * it, and the KERNAL's scan reads two keys down as one of them or neither -
+ * which on a machine running below about half a C64's speed is every tap
+ * typed 40 ms apart. And a tap of the key that just left waits until the
+ * matrix has shown it UP for a scan interval, or the scan reads one long
+ * press. A key held on the host never blocks anything: chords and game keys
+ * go in together, as they are. */
+static int c64_kbd_busy(int scan)
+{
+    int i;
+    for (i = 0; i < c64_ndown; i++)
+        if (c64_dage[i] != C64K_AGE_OLD && !os88_key_down(c64_down[i]))
+            return 1;
+    return scan == c64_klast &&
+        (unsigned)(c64_cyc_lo - c64_klcyc) < (unsigned)C64K_FRESH_CYC;
+}
+
 static void c64_kbd_poll(void)
 {
-    int i, j, n;
+    int i, j, n, e;
 
     /* --- drain the ring: every press since the last wake goes in first, so
      * a key pressed and released between two wakes is still seen once */
     while (c64_ring_h != c64_ring_t) {
         i = c64_ring_a[c64_ring_h];
         j = c64_ring_s[c64_ring_h];
+        e = j >> 7;                         /* (rule 6's Shift, bit 7) */
+        j &= 0x7F;
+        if (j != KSC_PGUP && c64_kbd_busy(j))
+            break;                          /* the next poll takes it */
         c64_ring_h = (c64_ring_h + 1) & (C64K_RING - 1);
         if (j == KSC_PGUP) {                /* RESTORE is not a matrix key */
             c64_nmi_raise();                /* 7.4: the NMI, and RUN/STOP is
@@ -681,7 +748,7 @@ static void c64_kbd_poll(void)
                                              * real machine reads it */
             continue;
         }
-        c64_kbd_add(i, j);
+        c64_kbd_add(i, j, e);
     }
 
     /* --- the release poll. An entry that has not yet had one emulated
@@ -700,13 +767,18 @@ static void c64_kbd_poll(void)
                                              * scanned it; from here the host
                                              * key state decides */
         }
+        e = os88_key_down(c64_down[i]) ^ 1; /* (0 or 1: the key is up) */
         if (c64_dage[i] == C64K_AGE_OLD)
-            if (!os88_key_down(c64_down[i]))
+            if (e) {
+                c64_klast = c64_down[i];
+                c64_klcyc = c64_cyc_lo;
                 continue;
+            }
         c64_down[n] = c64_down[i];
         c64_dasc[n] = c64_dasc[i];
         c64_dage[n] = c64_dage[i];
         c64_dcyc[n] = c64_dcyc[i];
+        c64_dfl[n] = (unsigned char)((c64_dfl[i] & 1) | (e << 1));
         n++;
     }
     c64_ndown = n;
@@ -783,6 +855,7 @@ static int c64_kbd_pa(void)
     int v, pb, r;
     v = c64_port_out(0, 0);
     pb = c64_port_out(0, 1);
+    if (c64_mat_any)
     for (r = 0; r < 8; r++) {
         if ((c64_matrix[r] & ~pb & 0xFF) != 0)
             v &= ~(1 << r);
@@ -796,6 +869,7 @@ static int c64_kbd_pb(void)
     int v, pa, r;
     v = c64_port_out(0, 1);
     pa = c64_port_out(0, 0);
+    if (c64_mat_any)                        /* (no key down: no row to walk) */
     for (r = 0; r < 8; r++) {
         if ((pa & (1 << r)) == 0)
             v &= ~c64_matrix[r];
@@ -1035,7 +1109,7 @@ static void ovl_clip_service(unsigned base)
         } else {
             n = c64_copy_screen(seg, base);
             if (os88_clip_put_seg(seg, 0, (unsigned)n) != 0)
-                c64_say("The clipboard refused the screen.");
+                c64_say("Clipboard refused it.");
             os88_mem_free(seg);             /* ...and it is gone before the
                                              * slice runs: the claim lives for
                                              * one wake and no longer */
@@ -1063,7 +1137,7 @@ static void ovl_clip_service(unsigned base)
         c64_paste_seg = seg;
         got = os88_clip_get_seg(seg, 0, (unsigned)C64_PASTEMAX);
         if (got <= 0) {
-            c64_say("The clipboard refused to be read.");
+            c64_say("Clipboard would not read");
             c64_paste_stop();               /* which frees the claim */
             return;
         }
@@ -1075,7 +1149,7 @@ static void ovl_clip_service(unsigned base)
         c64_paste_n = got;                  /* WHAT FITS, which is CX and not
                                              * the clipboard's whole length */
         if ((unsigned)n > (unsigned)C64_PASTEMAX)
-            c64_say("Pasting the first 2048 bytes.");  /* C64_PASTEMAX, spelled
+            c64_say("Pasting first 2048 bytes");  /* C64_PASTEMAX, spelled
                                                         * out; hosttest checks
                                                         * the two still agree */
     }

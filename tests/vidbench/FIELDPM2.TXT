@@ -1,0 +1,98 @@
+VIDEO BATTLE ON THE 5150 + PICOMEM 2 - FIELD KIT
+================================================
+
+Two questions, one kit:
+ 1. What does this machine do? The first real
+    numbers for the "5150-picomem2" encoder
+    profile (it was predicted, never measured).
+ 2. Why does Video Battle's sound stutter, and
+    is the cure ours or the card firmware's?
+
+  VIDSND.O88    a tone through the card while the
+                PicoMEM disk is read (T), and the
+                card's interrupt rate (R)
+  VIDBENCH.O88  how fast THIS CPU decodes frames
+  VIDBENCH.DAT  (must sit beside VIDBENCH.O88)
+  VIDDISK.O88   how fast THIS disk streams
+  VIDEOD.O88    Video Player that saves a play's
+                profile as VPPROFn.DAT
+  VBATTLED.O88  Video Battle that saves a play's
+                profile as VBPROFn.DAT
+  README.TXT    this file
+
+COPY THEM ALL INTO ONE EMPTY FOLDER ON THE
+PICOMEM'S HARD DISK (C:). VIDDISK and VIDSND
+measure the disk they run from. Every bench
+saves its report beside itself, numbered: the
+first VIDDISK report is VIDDISK1.TXT.
+
+PLEASE NOTE THE MACHINE FIRST
+---
+ - the PicoMEM firmware (its boot screen, e.g.
+   PM2-10-4-26) and its IRQ line
+ - the jumpers fitted (IRQ 3/5/7..., DMA)
+ - the card's Devices page: SB port and IRQ,
+   NE2000 port and IRQ, EMS on or off
+ - the video card (CGA?) and the SD card
+Close each bench's window before the next.
+
+1. THE TONE - THE ONE THAT MATTERS (75 s)
+---
+Open VIDSND.O88. Put a phone by the speaker,
+START RECORDING, then press T. The desktop
+freezes for about 75 s: 2 s of silence, then
+a steady 635 Hz tone for 5 s, ten times over:
+
+  A  the tone alone
+  B  the CPU held 16 ms at a time, no disk
+  C  the disk read, whole tracks
+  D  ...the CPU held 4 ms at a time
+  E  ...held 8 ms
+  F  ...held 16 ms
+  G  one sector a read, held 16 ms
+  H  as G, the card's line masked for each read
+  I  the TIMER held 16 ms, one sector a read
+  J  as I, the timer masked for each read
+
+Stop recording when the window is back. It
+saves VSTONE1.TXT. Send the RECORDING (any
+format) and VSTONE1.TXT. Keep the room quiet;
+do not touch the machine while it runs.
+
+What it decides, in the emulator (2026-11-07):
+the card's own firmware goes silent in C to I
+when it cannot mix while it waits for the PC;
+with the fix it does not. On the iron, C to F
+choppy = the firmware's; J clean = os8088 can
+work round it by itself.
+
+2. THE PROFILE (one boot)
+---
+a. VIDBENCH.O88, R. Screen garbage while it
+   runs is frames being drawn. -> VIDBENCH1.TXT
+b. VIDDISK.O88, W: writes STREAM.DAT, 12.5 MB,
+   beside itself (minutes) -> VDWRITE1.TXT.
+   Then R (about a minute) -> VIDDISK1.TXT.
+   Then E if the card's EMS is on -> VDEMS1.TXT.
+   SKIP X and L: they are for a 286.
+   Then D deletes STREAM.DAT.
+c. VIDSND.O88, R (about a minute; it is quiet
+   - the count is the answer) -> VIDSND1.TXT
+
+3. A BATTLE'S PROFILE
+---
+Copy VBATTLED.O88 NEXT TO YOUR BATTLE.VBT and
+open it (not the battle's own VBATTLE.O88 - a
+double-click on the .VBT opens that, which
+saves nothing). Play as you did when it
+stuttered: the openings, a few turns. Note
+WHEN it stutters (the openings, the menu, an
+attack). Close it: it saves VBPROF1.DAT beside
+itself. Send it with BATTLE.VBT's date.
+
+4. OPTIONAL: the same with VIDEOD.O88 and any
+.V88 on C:, by its Open button -> VPPROF1.DAT,
+and whether its sound stuttered.
+
+Bring back every .TXT and .DAT, and the
+recording. FTP them off, or copy to a floppy.

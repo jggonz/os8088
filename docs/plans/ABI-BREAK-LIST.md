@@ -134,7 +134,7 @@ value ranking and is otherwise unchanged.
 | **C1** | **The KB memory doors withdrawn** - `OSAPI_MEM_CLAIM`, `_CLAIM_HI`, `_CLAIM_DMA`, `_CLAIM_DMA_HI`, `OSAPI_MEM_AVAIL` and `OSAPI_MEM_REGROW` - in favour of `OSAPI_MEM_P`'s paragraph verbs (SPEC.md 50.3.7), which already carry the head (`CX`), `_HI`, `MEMP_CPU`, `MEMP_CONV`, regrow and avail. SPEC.md 20.3.1 deletes the names | ~34 asm packages, 5 shared includes (`os88partsbody.inc` already uses `MEM_P`), 5 drivers (`SOUND.DRV`'s DMA ring), the C SDK's KB calls (`os88_mem_claim*` become shims or paragraph calls) | six cells (36) + the KB shifts at the doors (~10-14) + `mem_avail`'s round-down KB arm: **~-50 to -70 per kernel**, ESTIMATED; one memory unit in the SDK, and the DISK/CPU class asked at every claim rather than defaulted | HEAP-GRANULARITY-PLAN.md 3.3 (kept the KB doors, no bump); this audit | **proposed**. Each package site decides DISK or CPU as it converts - the per-package half the plan already lists |
 | **C2** | `OSAPI_FILE_APPEND` withdrawn: it IS `OSAPI_FILE_WRITE_AT` with the file's size for an offset (`dskw_append_x` sets `DX = 0xFFFF` and joins `dskw_wat`), so a caller writes `WRITE_AT` with that sentinel | 9 apps, the C SDK, `RAMDISK.DRV`; kern_small, which has APPEND and not the offset door, gains the door's entry | cell 6 + `dwf_` thunk 4 + entry ~5: **~-15 kern_big**, ~0 kern_small, ESTIMATED | this audit (SPEC.md 18.4.7.3 calls them one routine) | **proposed, low** |
 | **C3** | `OSAPI_FILE_GOTO`, `_GOTO_Q` and `_GOTO_QM` as ONE cell with a mode in AL (show / quiet / quiet-and-move): the three take the same `DX` cluster and `BL` volume | 13 + 1 + 29 asm packages, the shared includes, `HDD.DRV` and `ETHER.DRV`, the C SDK | two cells (12) less a mode dispatch (~6): **~-6 per kernel**, ESTIMATED; one contract instead of three | this audit | **proposed, low** - a cleanliness row |
-| **C4** | `OSAPI_FILE_WRITE_SYS` and `OSAPI_FILE_APPEND_SYS` (drivers only, one caller, `HDD.DRV`'s installer) as a flag on the plain cells - AL is unused on input by both | every caller of `OSAPI_FILE_WRITE`/`APPEND` must then zero AL (26 + 9 asm packages) | two 3-byte jump cells and `api_file_append_sys`'s stub: **~-12 to -20 kern_big**, ESTIMATED | this audit | **proposed, low** - the "every caller zeroes a register" cost is the kind KERN-DOS-PLAN's suspend mask paid, and it is real |
+| **C4** | `OSAPI_FILE_WRITE_SYS` and `OSAPI_FILE_APPEND_SYS` (drivers only; `HDD.DRV`'s installer calls `WRITE_SYS` twice and `APPEND_SYS` not at all - its appends go through `OSAPI_FILE_WRITE_SEQ` with `WSEQF_SYS`, behind the same fence) as a flag on the plain cells - AL is unused on input by both | every caller of `OSAPI_FILE_WRITE`/`APPEND` must then zero AL (26 + 9 asm packages) | two 3-byte jump cells and `api_file_append_sys`'s stub: **~-12 to -20 kern_big**, ESTIMATED | this audit | **proposed, low** - the "every caller zeroes a register" cost is the kind KERN-DOS-PLAN's suspend mask paid, and it is real |
 | **C5** | `OSAPI_MEM_HMA` as an arm of `OSAPI_MEM_CLAIM_DMA_HI` and `OSAPI_MEM_FREE` | `SOUND.DRV`, the only DMA_HI caller that is a driver | was ~-14 kern_big / -6 kern_small | ksp12/hma.md; HANDOFF-KERNEL-SIZE-P13.md 3 | **refused** (HANDOFF-KERNEL-SIZE-P14.md 4): the DMA_HI arm would put `SOUND.DRV`'s movable pool in the HMA, and the shape that works - both forms on `OSAPI_MEM_FREE` - measured kern_big **+6** |
 | **C6** | `OSAPI_ASSOC_FLUSH` folded into `OSAPI_ASSOC_SET` | Sheet, SysCheck, `HDD.DRV`, the C SDK | ~-10 | ksp13/assoc.md | **refused**: ES:SI is the whole argument and no register is left to carry a mode |
 | **C7** | `OSAPI_DRV_CALL_AT` folded into `OSAPI_DRV_CALL` with ES always the caller's | FTPD (the one AT caller) and every `DRV_CALL` site, which must then load ES itself | the X cell's `ES = DS` is what 13 apps and 9 drivers rely on; one cell (6) against two bytes at every site | this audit (SPEC.md 20.11.2) | **recorded, not proposed** |
@@ -152,6 +152,7 @@ value ranking and is otherwise unchanged.
 | **R6** | **Content coordinates, design B**: every package-facing coordinate content-relative in and out; `OSAPI_GFX_LOCK` takes BX = the window and arms the clip and DC (98 `WM_CLIP_SET` sites go); `OSAPI_MOUSE` takes BX; `OSAPI_WM_CONTENT` withdrawn or kept as a 4-byte (0,0) inline cell for one cycle; a Control Panel page gets the pane as its DC; `DRV_VER` with it | every package (50 shipped + 43 test assembly packages, 7 C packages, 5 drawing drivers), 42 test scripts that read a package's origin words | **+~800-850 resident per kernel** (ESTIMATED) - a FEATURE: no package can draw outside its content box through any slot, by construction | CONTENT-COORDS-PLAN.md 6 | **proposed, SHELVED by the owner 2026-10-13 for its budget**; the plan's recommendation is design A first and B as its last wave |
 | **R7** | The click EVENT carries the modifier state sampled at the press | every producer and the event record of every package | correctness against a race nobody can produce by hand | MULTISELECT-PLAN.md 8 | **refused** |
 | **R8** | `inst_parksafe` as an `I_FLAGS` bit | every running declared package: `I_FLAGS` IS `SSI_FLAGS` in the published snapshot | -11 kern_big | ksp10/core.md | **refused**: the bit would leak into an ABI field documented as "bit 0 = minimized" |
+| **R.extent** | READ_SEQ's EXTENT RUN made first-class (SPEC.md 18.4.8.3): `FSEQ_SIZE` 22 for every caller, the run fields always read (no `FSEQF_RUN` flag, no 16-or-24 copy-out choice), and the map a slot of its own (`OSAPI_FILE_MAP`) instead of a flag on READ_SEQ's cursor | every READ_SEQ caller's cursor storage (Video Battle's rings and bookmarks, Video Player's 32 bookmarks, `os88_rseq`, the C SDK) and the cell table | the wrapper's flag test and its two-size copy-out go (~-12 `.cold`, ESTIMATED), against the slot's ~+6; a cleaner contract, not bytes. Recorded on 2026-11-08 when the flag form was BUILT as the compatible addition | SPEC.md 18.4.8.3 | **proposed** |
 
 ## D. Driver header, classes and the driver tables
 
@@ -225,6 +226,33 @@ the natural moment to tidy them.
 | `OSAPI_WM_DESK` verb 4 for the shared Sticky App library | built with the owner's approval (STIKLIB-PLAN, SPEC.md 110.15) |
 | `OSAPI_FSX_SPK` thin door; `OSAPI_DRV_SUSPEND`'s mask | R4, R5 |
 
+## V. Speed - rows that would make a HOT path faster
+
+Opened by kernel hot-paths pass 1 (`docs/plans/khp1/BRIEF.md`, 2026-11-06).
+The sections above are mostly about BYTES. This one is about CYCLES. Each row
+is a frozen interface that a hot path pays for on every call, priced in
+cycles on the 4.77 MHz 8088 (MartyPC guest cycles unless it says
+PREDICTED), in user-visible milliseconds for a named operation, and in bytes.
+A row here can cost bytes and still be worth a flag day, because it buys
+time. Every row carries the same status words as above. Ids are `V<n>`.
+Rows found elsewhere that are speed trades are cross-referenced rather than
+copied: **T2-2** (section 10) is one, trading kern_big's 52-cycle inline
+`OSAPI_SET_COLOR` against kern_mega's conventional bytes.
+
+| id | what changes | who it breaks | what it buys (cycles, ms, bytes) | source | status |
+|---|---|---|---|---|---|
+| **V1** | Let `OSAPI_GFX_FILL`, `_PIXEL`, `_HLINE`, `_VLINE` and `_FRAME` **clobber AX..DX** instead of "clobbers: flags" (SPEC.md 5.7's last paragraph is why `sw_rect` pushes eight registers) | every package that keeps a coordinate in AX..DX across a drawing call (+2..4 bytes a site there) | drops four push/pop pairs from every rect primitive: **~120 cycles, ~25 us of a ~510 us small call (~5%)** on the 5150; kernel -8 bytes. MEASURED call, PREDICTED total | khp1/gfxcall.md 5 | **proposed** - the largest per-call lever found, and the one the 756 us floor is partly made of |
+| **V2** | `OSAPI_TASK_YIELD` (0x009E) as a cell that enters the yield directly, building `task_yield`'s frame under the far return instead of the 8-byte SLOT's `push ds / push cs / pop ds` and near call | every cell after 0x009E moves (renumber); every package that yields | **~60 cycles, 13 us of a 283 us yield (4.5%)**, after this pass's sched-1 made the yield 644 -> 283 us | khp1/sched.md 5 | **proposed, low** - fold into any flag day, not worth one |
+| **V3** | Promote `OSAPI_XMEM_RUN`, `_WALK` and `_SEL` (0x04B3..0x04CB) from rare 6-byte cells to hot 8-byte SLOTs at the next renumbering | the renumber | ~85 cycles a call; a player streaming from XMS at a few calls a frame: ~0.1 ms a second; +6 bytes `.text` | khp1/sched.md 5 | **recorded** - only with a renumber (T1 is one) |
+| **V4** | `OSAPI_GFX_SAVE`'s buffer stored in bank order on the 1bpp adapters, so `sw_xfer` walks banks as mono-1's rect walk does, without a per-row wrap test | any caller that indexes its own save buffer (none found in `apps/`, but the layout is published, SPEC.md 5) | ~20 cycles a row, ~4% of `sw_xfer`, **~2 ms of a CGA raise**, for ~+40 bytes. PREDICTED | khp1/mono.md 5 | **recorded, low value** - so nobody re-derives it |
+| **V5** (addition, no bump) | A **batched rect call**: N fills or frames in one far call, the clip-region and display questions asked once | none (a new slot at the end) | per extra primitive the far cell (~165 cycles) and the head (~300): a Calc or Minesweeper redraw of ~30 cells **~14k cycles, ~3 ms**; ~60-80 bytes `.text`. PREDICTED | khp1/gfxcall.md 5 | **proposed as an addition** - wants a package that would use it first |
+| **V6** (recorded) | A length-counted `OSAPI_FONT_RUN` (CX = cells) instead of ASCIIZ | every text caller | ~14 cycles of ~150 a cell, under 1% of a run | khp1/text.md 5 | **refused by its finder** - not worth a cell contract |
+
+vga, pointer, wm and files found none. disk found none worth proposing: carrying
+an image's and its bss's sizes outside the file would let the loader skip its
+header peek, but after disk-4 that peek already does the read's work
+(khp1/disk.md 5).
+
 ## 10. Rows from kern_mega size pass 2's agents
 
 Folded in at the merge from each agent's *WANTS AN ABI BREAK*
@@ -244,7 +272,31 @@ Ids carry the kind's letter and a `2` so they cannot collide with the audit's.
 | **R2-5** | `FSXF_REAL`'s answer returned in a register the door already uses (or a query slot), not by `fsx_run` rewriting the caller's `kent_di` frame | the packages that set `FSXF_REAL` (the Video Player's PM arms) | ~-10 `.text` kern_mega | msp2/shared.md | **proposed, low** |
 | **R2-6** | heap claims named by HANDLE, not by segment value - deletes `MEGA_ISHI`'s dual paths in `OSAPI_MEM_FREE`, `REGROW`, `MOVABLE` and the P cell | every package that claims memory, the C SDK | **several hundred `.cold` bytes on kern_mega** (the forks measure +48, +97, +42, +88, +47 in their routines) | msp2/shared.md | **recorded** - a design question larger than a flag day row; pairs with C1 |
 | **P2-1** | a module header word holding the image's DATA selector, so CSDO is `mov ds, [cs:MOD_H_DSEL]` - a read through CS, legal on a code alias | the module header (`MOD_VER`, `tools/os88mod.py`, every module - all built with the kernel, so no shipped package) | ~0 bytes, **~5x faster at every CSDO site** in every module on kern_mega | msp2/modcsdo.md | **proposed** - kernel-private (a module is versioned with its kernel), so it needs no `PKG_FMT` flag day at all |
-| **F2-1** | a call filter in the packed formats: `E8 rel16` stored as its absolute target before LZ, so near calls repeat and pack | the `'CZ'` container's decoder on every kernel, every packed package, driver and module (SPEC.md 20.13) | an unmeasured share of every call-heavy packed file; it is what made modcsdo refuse a near door per module (-611 image, +433 packed) | msp2/modcsdo.md | **proposed, unmeasured** - wants a host-side experiment over the shipped files first |
+| **F2-1** | a call filter in the packed formats: `E8 rel16` stored as its absolute target before LZ, so near calls repeat and pack | the `'CZ'` container's decoder on every kernel, every packed package, driver and module (SPEC.md 20.13) | an unmeasured share of every call-heavy packed file; it is what made modcsdo refuse a near door per module (-611 image, +433 packed) | msp2/modcsdo.md | **BUILT** as SPEC.md 20.13.9's near-call filter (`LZ_ESC`), with no container change and no bump (20.13.9.4); measured at 114,457 bytes and 225 clusters over the seventeen shipped images |
+
+### 10.1 Kernel size passes 17 and 18
+
+Pass 17's agents' rows (`docs/plans/completed/HANDOFF-KERNEL-SIZE-P18.md`
+section 4, folded in here by pass 18's coordinator). Every figure is an
+ESTIMATE from the finder's reading.
+
+| id | the break | kern_big | callers | source | status |
+|---|---|---:|---|---|---|
+| **K17-1** | **Five-byte rare cells** (`call api_rX / dw target`, the cell's `push bp` into the five stubs) | ~-90 net (-119 table, ~+30 stubs), ~+20 clocks a rare call | every package (renumbers the table) | ksp17/ui.md 1; pass 13 priced ~-105 and the owner declined it then | **refused once, re-priced** |
+| **K17-2** | **The seven window-flag setters as one `OSAPI_WM_FLAG`** (SIZABLE, SNAP, SAVEU, OWNBG, KEEPH, NOANIM, QUIET - 129 bytes of bodies measured) | ~-65 to -75, -36 more if the six retired cells are renumbered away | 113 source files under `apps/` | ksp17/wm.md 1 | **proposed** |
+| **K17-3** | **The ten handler setters as one cell** (ONSIZE, ONMOUSEUP, ONRESIZE, ONDRAG, ONTIMER, ONWAKE, ONCLOSE, ONRCLICK, ONCLICK, ONWHEEL - ~55 bytes of inline cells) | ~-40 to -48 if renumbered | 218 references in `apps/` and `drivers/`, plus `os88.h` | ksp17/sweep.md 1 | **proposed** - pairs with K17-2 as one window-field setter by index, ~-140 to -160 together |
+| **K17-4** | **Thirteen not-hot SLOT cells as rare cells** | -26, ~+85 clocks a call | those cells' callers; each wants a call-frequency reading first | ksp17/ui.md 2 | **proposed, low** |
+| **K17-5** | **Retire the duplicate `drv_pkg_call_x` SLOT at 0x038B** (the XCELL at 0x0348 is a second door) - the same cell as **C7** (`OSAPI_DRV_CALL_AT`, ES left alone; one caller, FTPD's two sites) | -8 | that cell's callers | ksp17/ui.md 3 | **proposed, low** - duplicates C7, which records why it is not proposed |
+| - | `OSAPI_FSX_CAPS` answering `VID_VESA` in DL | -7 | nine packages compare with `VID_VGA` | ksp17/draw.md | **refused by its finder** |
+
+**Pass 18** (`docs/plans/completed/ksp18/`): ten agents found **no new
+break**. Two notes against the rows above, from `ksp18/wmui.md`:
+
+* **OSAPI_WM_TIMER's kern_big target is now the body itself** (the
+  `wm_timer_c` wrapper is gone), so under K17-3 the timer setter joins with
+  no wrapper to retire.
+* **`OSAPI_SEG`'s refusal shares its exit only on kern_big**; a break that
+  reshapes it can give kern_small the same shape.
 
 ## 11. Defects and stale text found by the audit (none is an ABI change)
 
@@ -278,3 +330,190 @@ MULTISELECT-PLAN.md 8; WINDOWED-DRAW-PLAN.md W1; O88-COMPRESSION-PLAN.md
 12.1; STIKLIB-PLAN.md; HANDOFF-APPS-SHARED.md. The caller census behind T4,
 C3, C7 and C8 counted every `OSAPI_*` token per package directory under
 `apps/`, `drivers/` and `tests/` at `ead16c61`.
+
+## 13. Rows from the big kernel review (2026-11-08)
+
+Folded in from the kernel review of 2026-11-08
+(`docs/reports/big-review-2026-11-08/`): 25 area reviews and 12 gap reviews,
+each verified, then three adversarial lenses (truth, cost, fit) over the
+flag-day rows. The reconciliation against this list is
+`areas/gap-flagday-reconcile-abilist.md`; the final plan, with every lens
+correction spelled out, is `synth/flagday.md`. Nothing was built or booted for
+it. **Every byte figure is ESTIMATED unless it says MEASURED** - the measured
+ones come off `build/kernel.map`, `build/smallk/kernel.map` and
+`build/megak/kernel.map` symbol spans and section summaries, and off a decode
+of each kernel's API table in its `kernel-full.bin`. Cycle figures are
+PREDICTED from the 8088's timing tables and fetch floor, never MartyPC
+readings. "conv" is kern_mega conventional memory (`.text`, `.bss`,
+`.lowbss`); kern_mega's `.cold` and `.mega` run above 1MB. kern_emu carries
+kern_big's figure.
+
+The rows add a **bump** column: what the row needs on its own - `PKG_FMT`,
+`DRV_VER`, both, or **none** (an `abilock.py --update` without a bump, or a
+private version). Ids continue this list's sequences.
+
+### 13.1 What the review changes in the rows above
+
+| row | now | why |
+|---|---|---|
+| **T1**, **K17-1** | one row, **superseded by T5**, kept as T5's fallback | the same five-byte design priced twice; T5 buys about three times as much |
+| **T3** | **refused, unchanged** | under T5 seven of kern_small's thirteen refusal cells are rare and become 2-byte words to one shared refusal (-28), with rule 4 intact |
+| **T4** | **refused harder** | a rare cell is 2 bytes under T5 |
+| **T2-2** | **superseded in part** | six of the ten `MEGA_ICW` cells are handler setters, which R14 deletes; the four left (`SET_COLOR` among them) are **refused** - kern_big's inline cycles against ~32 conv bytes |
+| **K17-2** | **proposed, reduced** to one runtime `OSAPI_WM_FLAG` beside R14 | creation-time flags become the class's style word |
+| **K17-3** | **superseded by R14** | its ten setters are INLINE cells (decoded), and R14 removes them and the record words together |
+| **K17-4** | **proposed, low** - part of V7 | -78 under T5 rather than -26, but each demoted cell then pays +150 to +300 clocks a call over a SLOT |
+| **K17-5**, **C7** | one row, **recorded** (C7's status) | the same cell, `OSAPI_DRV_CALL_AT`; two sites, both FTPD |
+| **C1** | **proposed** - a bytes-and-one-unit row, no longer a correctness row | three package doors carried the KB carry defect, two already guarded; the live one is a Phase 1 fix (`synth/bugs.md` BR-105, 0..+3), and the shifts sit in helpers the kernel's own ~20 callers keep. MEASURED: -69 kern_big and kern_small under T5 (36 of cells, 12 under T5, plus 57 `.cold` of door bodies), -12 conv kern_mega. Packages: +0 to +150 with a shared helper (+0.9 to +1.7KB inlined) |
+| **C3** | **refused** | -6 kernel against +~300 across 154 call sites that would each need `mov al, mode` |
+| **C4** | **proposed as `OSAPI_FILE_APPEND_SYS` alone** | it has no caller (HDD.DRV moved to `WRITE_SEQ` + `WSEQF_SYS`); WRITE_SYS keeps its two sites, so nobody zeroes AL. **-17 kern_big MEASURED**, ~-3 kern_small, -12 conv kern_mega |
+| **R1** | **proposed, strengthened** | both forms still there, one KEEP caller; ~-6 conv on kern_mega (the `ld_start` share is `.cold`) |
+| **R2-6** | **recorded, weakened** | kern_mega's forks are `.cold` (above 1MB); packages would pay +2..4 at 367 FREE/MOVABLE sites C1 does not convert. hm-10 folds in |
+| **N1** | **proposed - Phase 1** | only the FSV fallback (7, `drv_fs_call`) is resident; the DSV one is in `DRV_ATTACH`, expanded in `.boot2`, CTRL.DRV and HIBER.DRV |
+| **D1** | **superseded once histsys-7 and D4 land** (both no bump) | one copied table left, so `drv_svcix` has nothing to index; drivers-9 is moot with it |
+| **F2-1** | **superseded - BUILT** | SPEC.md 20.13.9 (`LZ_ESC`), no container change, no bump |
+| **L1** | **proposed for kern_big; kern_small and kern_mega need more** | MEASURED pads: kern_big -384 bytes paragraph-exact. kern_small: one `KERNEL_SEG` on every kernel, but kern_small's FAT is 2 sectors against 9, so the ten-sector region is ~3,584 bytes too big for it: +924 to +3,280 as written. kern_mega: no `LADDER_PACK`, 512-byte rungs, so 0 conv unless its ladder is packed (then up to -128, its 128-byte selector granule). Packages: ~150 `mov ax, KERNEL_SEG` sites rebuild |
+| **L3** | **proposed - still blocked on The Wire**; figures restated | MEASURED: -1,271 `.mega` (`mega_gpfix` 602, `mega_gpw` 526, `mega_null0` 74, `mega_db` 69), -1,627 with `mega_strcal_gp`/`mega_strcal`/`mega_strfix`, plus -17 conv (`mega_tramp`) to ~-60. Its staged road is L7, D8 and mc-10's counter |
+| **R2-1** | **proposed**, restated | `mega_hibnc` is 235 `.mega` today (MEASURED) |
+| **P2** | **strengthened** | the VX/XM/HD versions should be fingerprinted by `abilock.py` (drivers-16) |
+| **V1** | **proposed, refined** | a new entry beside the raw body (kernel callers rely on it preserving everything), +~6; C SDK half first, asm half behind a lint |
+| **V2** | **proposed** | free inside T5's renumber |
+| **section 11** | bullets 1 and 3 **done** | neither text greps any more |
+
+### 13.2 New rows
+
+**T - the API table's shape**
+
+| id | what changes | who it breaks | what it buys | bump | source | status |
+|---|---|---|---|---|---|---|
+| **T5** | **The rare cells behind one software-interrupt door.** A rare call becomes `int OS88_RARE / db index` (3 bytes against 5); the kernel keeps a 2-byte word per rare cell. The door fetches the index through the caller's CS:IP, bumps the stacked IP, picks the kind by index range (cells sorted by kind), and enters today's `api_rs`/`_rsc`/`_rx`/`_rxc`/`_rn` past their `pop bp / mov bp,[cs:bp]` heads; it returns `retf 2`, so CF/ZF survive. Rare X gets its own `retf 2` copy of `api_x` (shared with every hot XCELL) and `api_rs.tail` becomes `retf 2`. IF comes back from the stacked FLAGS by `popf`; on kern_mega a trap gate leaves it alone. **The vector is named in 81h-FFh** (40h-5Fh BIOS, 60h-80h os8088 DOS's packet driver, 67h EMS, 70h-77h the slave PIC) and DOS's AH=25h/35h virtualise it in windowed and full-screen DOS; a DOS program writing the IVT directly is the residual risk. kern_mega: an IDT gate, and the real-mode FSX bracket points the door at a `retf 2` refusal. An index past this kernel's end answers CF=1, AX=1 - **rare cells only**: a newer hot cell on an older kernel is still a wild far call, which A4 guards | every package, driver and C package (every rare site, and the rare set renumbers); the C SDK's thunks; `t_api_abi`; `tools/os88wire.py` and `os88pkg.py` (far-call scans); tests naming cells; DOS.O88 and `kern_dos` (the vector); abi-4's frame reader | MEASURED counts: 112 rare cells on kern_big AND kern_small, 119 on kern_mega. **-325 to -345 kern_big and kern_small** (-448 of cells, +75..95 door from an instruction sketch, +15 tails, +12 two promotions; -385 only with a leaner door), **-345 to -365 conv kern_mega** (-410 lean). Packages **-2 a rare site, ~2,640-2,770 sites: -5.3 to -5.5KB unpacked**. Cost **+150 to +300 clocks a rare call (31-63 us), PREDICTED** | both | bytes-1, gfr-1, abi-4, loader-6; `synth/challenge-*.json` (T5) | **proposed - the table row**; re-proposes K17-1's declined renumber with three new arguments (bytes, a run-time refusal, a rehearsal first in P4). T1 is the fallback |
+| **T6** | **One call spelling that can carry T5's flip, and the names normalised.** Either every `call OSAPI_X` (~7,000 sites) becomes `OSCALL OSAPI_X`, or - evaluate first - `os88api.inc` overloads the mnemonic once (`%imacro call 1` on a per-cell kind `%define`), touching no package source; check that NASM does not warn under `-w+error`. Byte-identical until T5, so `cmp` of every image proves the binaries. The source gates that parse `call OSAPI_X` (`t_textrules`, `t_movable`, `t_stkclass`, `t_megahigh`, `t_pins`, `t_drvclaim`, `t_toast`, `t_kdapi`) learn the spelling in the same commit and are broken on purpose; macro-wrapped sites (`os88ui.inc`, `w16pm.inc`, `stiklib.asm`) are caught by a gate refusing any surviving far call to a rare offset before the flip. Renames ride the flag day with one cycle of `%define` aliases (CLIP vs `WM_CLIP`, FS vs `FS_PROG`/`FS_OP`, DESK, the SUBSYS_VERB outliers) | no binary; package source (the rewrite form only); out-of-tree source gets the aliases | 0 bytes. It buys only T5's flip: every kind is already the same far call today | none | gfr-1, abi-13, abi-12; `synth/challenge-*.json` (T6) | **proposed - the mechanism now (Phase 1), the renames at the flag day** |
+
+**C - duplicate doors and consolidations**
+
+| id | what changes | who it breaks | what it buys | bump | source | status |
+|---|---|---|---|---|---|---|
+| **C9** | **One file-position shape**: `OSAPI_FILE_WRITE_SEQ` takes `READ_SEQ`'s 16-byte caller cursor | 23 WRITE_SEQ sites in 12 files, RAMDISK.DRV, HDD.DRV, the C SDK | 0 to -30 kern_big; ends the O(n^2) thrash between two concurrent write streams | both | histsys-13, dw-22 | **recorded** - wants a census of concurrent writers |
+| **C10** | **`OSAPI_DESK_ITEM` remove by record only** (AH's zone retired; the additive `AH = 0FEh` verb comes first) | WIN16, `os88stik.inc`, `drivers/wirezone.inc` (6 sites) | -6 `.cold` kern_big; WIN16 -12 | both | shell-3 | **proposed, low - fold-in only** |
+
+**R - register contracts and records**
+
+| id | what changes | who it breaks | what it buys | bump | source | status |
+|---|---|---|---|---|---|---|
+| **R9** | **One refusal sign, documented**: CF=1 is the only universal sign, AX means something only inside a named family, and SPEC.md 18.4 gets a class/action table. A universal AX value is **refused as written**: 1 is `EMSE_ROOM` on `OSAPI_DRV_CALL` itself (and `DRVE_DISK`, `LD_EDISK`, `FERR_NODISK`), Recorder reads the stream stub's AX=4, and FM callers may rely on AL surviving a bare `stc` refusal. AX=0 as the universal value is recorded with the census it needs | nothing | 0; a stated rule. kern_small's `OSAPI_VOL_STAT` stub, which breaks its documented answer, is a separate bug fix (+3..4) | none | abi-9, gfce-8, histsys-14; `synth/challenge-*.json` (R9) | **recorded - the doc half now** |
+| **R10** | **Deferred damage, opt-in** (a class style bit; a global four-rect list drained at the UI pass's top) | opt-in: nobody | +80 to +100; coalescing, a shallower UI-task nest | none (opt-in) / PKG_FMT (global) | histsys-10, ctx-9 | **recorded** |
+| **R11** | **32-bit ticks** as an appended `OSAPI_GET_TICKS32` | nobody | +2 `.bss`, +~6 and a cell | none | sched-19 | **recorded until a package asks** |
+| **R12** | **One display-index register**: CH on `OSAPI_FSX_CAPS`, `_RUN`, `_SURF`, `OSAPI_VIDEO`; FSX_CAPS's BX overload retired | 81 FSX call sites, `EXTF_CAPS` | -6 kern_big | PKG_FMT | video-19 | **proposed, low - fold-in** |
+| **R13** | **A claim's owner word is the instance slot** for package claims | the Task Manager | -20 to -40 `.cold` | PKG_FMT | mem-13 | **recorded - ride C1 only if the Task Manager is touched** |
+| **R14** | **The window class lives in the package.** The record's handler words (13 on kern_big/kern_mega, 10 on kern_small) become one `W_CLASS` near pointer to {length, style word, handler offsets}; past the length is "no handler", and the length must cover every slot the largest kernel reads. Creation-time flags are the style word; runtime changes go through K17-2's one `OSAPI_WM_FLAG`; runtime handler changes point at a table of their own. Kernel windows' tables are read through `[api_coldseg]` (or sit in `.text`), in the one helper that also carries `synth/bugs.md` BR-28's liveness re-test. **kern_small keeps its refusal signal**: `OSAPI_WM_CREATE` answers how many class slots this kernel dispatches (ONTIMER and ONDRAG refuse there today and the SDK tells packages to test it) | every windowed package (`WT_*`, 199 handler-setter and 107 flag-setter asm sites, five in drivers); `os88stik.inc`, `deskclok`; the C SDK | **~-320 kern_big (-260..-360)**: -288 `.bss` (12 words x 12 windows), -55 inline setter cells, +~80 helper and tables, K17-2 ~-70, +~6. **-95 to -120 kern_small. ~-350 conv kern_mega** (the `.bss`, six `MEGA_ICWB` stubs). Packages ~-1.5KB unpacked. **+40 to +90 clocks a callback, PREDICTED** | both | abi-11, histsys-9, bytes-6, gfr-3; `synth/challenge-*.json` (R14) | **proposed - replaces K17-3** |
+| **R15** | **A format byte on the clipboard**: AL = format (0 = TEXT) on `OSAPI_CLIP_PUT`/`_GET`/`_SIZE` | 39 sites zero AL (up to +78), the C SDK | +8; SPEC.md 55.1's second format with no new cells | PKG_FMT | ui-13 | **proposed, low - only inside a flag day** |
+| **R16** | **An extension filter on the Open form** (AH; non-matching rows greyed, refused on commit) | the Open callers of `OSAPI_FILE_DLG`, the C SDK | +~30 `.cold` kern_big, FDLG.DRV on kern_small | PKG_FMT | files-18 | **proposed, low, optional - a feature** |
+
+**D - driver header, classes and the driver tables**
+
+| id | what changes | who it breaks | what it buys | bump | source | status |
+|---|---|---|---|---|---|---|
+| **D4** | **The service-table floor, written down**: at `DRV_VER` 12 every driver carries full 36-byte DSV and 30-byte FSV tables (`DSV_SIZE` last moved no later than 2026-09-08 and `DRV_VER` has moved twice since; HDD.DRV and EMS.DRV are full too), so the SDK says so and `OS88_DRIVER` gets an `%error` below it. The zero-fill and clamp in `DRV_ATTACH` stay - they fence a newer, longer table and govern cells past the floor | nothing | 0 resident (`DRV_ATTACH` is in `.boot2`, CTRL.DRV, HIBER.DRV). histsys-7 then reads in place below the floor with no per-read length test | none | histsys-7, drivers-9, N1; `synth/challenge-*.json` (D4) | **proposed - NEEDS NO FLAG DAY**; with histsys-7 it makes D1 and drivers-9 moot |
+| **D5** | **Typed driver slots** instead of one slot per class | every driver header, `OSAPI_DRV_CALL`'s AL, the Drivers page | 0 to -40; a new file driver needs no constant | DRV_VER (+PKG_FMT) | drivers-15 | **recorded** |
+| **D6** | **A request block for `DSV_BLK` and the `FSV_*` verbs** (not for sound or IRQ0) | HDD, RAMDISK, CDROM, HTTPFS, NET's file side | -60 to -120, unmeasured | DRV_VER | histsys-8 | **recorded** |
+| **D7** | **Driver discovery** off the `.DRV` headers | driver rows, `SYSTEM.CFG`, the Drivers page | -200 to -350 resident, +~120 `.boot2`; but ~5 s to open the Drivers page on an XT unless titles are cached | DRV_VER + SYSTEM.CFG | histsys-12 | **recorded, with that price** |
+| **D8** | **The kernel owns driver IRQ lines.** Now: the IMR shadow (+~25, re-synced from port 21h after each DOS bracket) and drivers-6's release-time IVT scan (+25 `.cold`); the appended `OSAPI_IRQ` cell is the owner's call (+100 to +150 kern_big, SOUND.DRV -60 to -100). Flag day: the cell mandatory for DRIVERS. The image-move IVT walk is replaced for driver IRQ lines, not deleted - it also covers int 33h and package-held vectors (DOS.O88). Any common EOI stub stays optional and off IRQ0 and the 8250 paths (+60 to +90 clocks an interrupt) | SOUND.DRV, USBMOUSE.DRV, ETHER/PCIETHER, EMS.DRV; DOS.O88 (the shadow) | flag day ~0 on kern_big and kern_small, 0 conv kern_mega (up to -67 `.cold` above 1MB if int 33h is covered). Correctness: no vector left behind after detach, a kernel-computed `DRVE_BUSY` | none (append) / DRV_VER (mandatory) | isr-13, drivers-6; `synth/challenge-*.json` (D8) | **proposed - the Phase 1 half now; mandatory at a flag day, optional** |
+
+**F - files on disk and names**
+
+| id | what changes | who it breaks | what it buys | bump | source | status |
+|---|---|---|---|---|---|---|
+| **F3** | **The compression hint moves off the directory entry's NTRes case bits** (5Ah/5Bh list every packed file in lower case on NT, Linux vfat and macOS). Now a dual-mark reader (+6 `.cold`) and `os88disk.py` writes a mark with bits 3 and 4 clear; at the flag day 5Ah/5Bh go (-6) | no binary; every disk is rebuilt anyway | net 0; interop with modern hosts | none | dw-10 | **proposed - the reader now, the old mark at the flag day** |
+
+**L - memory layout, segments and kern_mega**
+
+| id | what changes | who it breaks | what it buys | bump | source | status |
+|---|---|---|---|---|---|---|
+| **L6** | **Interrupts-on compaction with an ISR-reachable flag** per claim (`GlobalFix`, `HLock`) | packages whose ISR or FSX rate hook touches a claim | kern_mega's 64KB IF-off piece (~16 ms on the Victory 286) ends; +20 `.mega`, +10 to +16 `.cold` kern_big | none (opt-in) / PKG_FMT (default flipped) | mc-5, hm-1 | **proposed as an ADDITION first** |
+| **L7** | **L3's staged road: a "protected-mode clean" bit** in a PACKAGE header's +15 (bit 5). An old kernel answers it with the largest stack (`instance.inc:2106-2116`); new kernels mask `0x1F` on every kernel (0 bytes) and `mega_gpw` closes a clean package on a CS store. `tools/os88pkg.py:211` and `sched.inc`'s `%error` move with it. Packages only: a driver's +15 is its DSV length, whose bit 5 is already set by 36, so drivers need a header bit of their own at a `DRV_VER` bump. "Clean" forbids CS stores, not writes through callback ES = KERNEL_SEG, which stay legal until the kernel hands a data alias; package BDA/IVT access needs an SDK path first | nothing | +12 `.mega`, kern_mega only (+8 `.mega` and +2 `.bss` for mc-10's `[mega_kfix]`) | none (packages) / DRV_VER (drivers) | mc-19, gfr-5, mc-10; `synth/challenge-*.json` (L3) | **proposed - NEEDS NO FLAG DAY for packages** |
+
+**P - package-private and kernel-private ABIs**
+
+| id | what changes | who it breaks | what it buys | bump | source | status |
+|---|---|---|---|---|---|---|
+| **P3** | **The DOS launch block reorganised** at the next `KDL_VER` bump | `kern_dos` and DOS.O88 together | 0; the next field costs no hunt | KDL_VER | md-24 | **recorded** |
+| **P4** | **T5's door rehearsed on the kernel's own `cw_` shims** (45 bodies; the 23 zero-byte aliases stay far calls), with its own `retf 2` tail | nothing shipped | -45 to -90 `.text` kern_big; +~170 clocks on cold module paths; proves the door before 2,700 package sites depend on it | none | gfr-2, bytes-7 | **proposed - NEEDS NO FLAG DAY; take it before T5** |
+| **P5** | **One boot handoff record** (16 bytes: drive, partition base, geometry, loader id) | the loaders and the kernel together | about neutral; a readable contract | none | boot-5, boot-13 | **recorded** |
+
+**A - additions priced (no bump needed)**
+
+| id | what | buys | source | status |
+|---|---|---|---|---|
+| **A4** | **A run-time API LEVEL, `PKG_FMT`'s minor number.** `dw OS88_API_LEVEL` at `KERNEL_SEG:0006` (free padding today; never a literal 0060, which L1 moves). `os88pkg.py` writes the needed level into header byte 31; byte 31 is a 15-character name's NUL, so names are capped at 14 (the longest today is 13) and the validator exempts it. `ld_check_hdr` refuses a higher level with `LD_EVER`: +~8 `.cold` on kern_big and kern_small, 0 conv on kern_mega. One level table shared with The Wire's `WIRE_CELL_LEVELS`, and `t_abilock` fails an appended cell that does not raise the level. A level, not `osapi_table_end`, because T5 takes the rare cells out of the table: the review's Phase 1 plan (WP9) is changed to match before it lands | a load-time refusal of a package that needs newer cells; the only guard for hot cells after T5 | abi-6, loader-6, gfr-5, abi-16; `synth/challenge-*.json` (A4) | **proposed - take it first** |
+| **A5** | **The appended cells the flag day makes cheaper**, recorded so none waits for it: `task_wake`, `FILE_FIND_SEQ`, purgeable claims, the double-click byte, the clipboard generation, `W_ONMENU`, `FSIF_FLIP`, `OSAPI_DESK_ITEM`'s `AH = 0FEh`, `OSAPI_IRQ` | under T5 an appended rare cell is 2 bytes; under R14 a callback is a class slot | sched-15, dr-5, hm-9, ui-11, ui-12, ui-19, video-12, shell-3 | **recorded** |
+
+**V - speed**
+
+| id | what changes | who it breaks | what it buys | source | status |
+|---|---|---|---|---|---|
+| **V7** | **T5's renumber sorts by MEASURED frequency**: a counter in the door (one rebuild) draws the hot/rare line. Promotion candidates `OSAPI_SEG` (108 sites) and `OSAPI_FS_OP` (45); K17-4's demotions; V2 in the same renumber; V3 stays rare (7 sites) | inside T5 | ~30-60 us a call avoided on any cell that turns out hot; +6 a promotion | gfr-1, bytes-1 | **proposed - a prerequisite of T5** |
+
+### 13.3 The recommended flag day
+
+**Before it (no bump):** `t_api_abi` on four kernels; the C SDK in `PKG_FMT`'s
+fingerprint; the private ABI versions fingerprinted; abi-8's `@ctx` tags;
+`API_RN_DSOFF`; **A4**; **T6**'s mechanism; **V7**'s reading; **P4**; **N1**,
+**D4** and histsys-7; C1's correctness half (the DMA-head guard and the
+kernel's own KB callers moved to paragraphs); **L7** and mc-10; D8's shadow and
+scan (and the cell if the owner takes it); F3's reader; R9's doc half; an
+`APICHK=1` knob for the soak; and a paper design for L1 on kern_small.
+
+**The bump: `PKG_FMT` 10 -> 13, `DRV_VER` 12 -> 14** (section 0 item 2), one
+branch, the C SDK in the same commit, the table renumbered once:
+
+1. withdrawals - C1, C2, C4 (APPEND_SYS alone), R1's bytes form, R14's
+   setters, V7-supported K17-4 demotions;
+2. R14 with K17-2's one flag door;
+3. re-contracts - R2, R3, R12, R15, C10, R2-4, R2-5, V1's new entries, L7's
+   driver bit; optionally R16 and D8 made mandatory;
+4. T5 with V2 and T6's renames;
+5. L1 on kern_big and kern_mega (kern_small only with its design; kern_mega's
+   figure only if its ladder is packed), A4's word moving with `KERNEL_SEG`;
+6. files on disk - F1, F3; kern_mega only, R2-1 and R2-3;
+7. the decision, The Wire's generation reset at 13 and the catalogue
+   republished, `make budget-check` on all four budgeted kernels, and the
+   soak when the owner asks for it.
+
+**Net, resident, ESTIMATED** (L1's pad MEASURED today, 0-511 by build):
+
+| | kern_big | kern_small | kern_mega conv |
+|---|---:|---:|---:|
+| T5 (+ V7's two promotions) | -340 | -340 | -365 |
+| L1 | -384 | not taken | 0 |
+| R14 + K17-2 | -320 | -110 | -350 |
+| C1, C2, C4, R1 | -113 | -72 | -32 |
+| R2, R3, R12, R15, C10, F1, F3, V1, R2-4/5 | -14 | +6 | -24 |
+| **net** | **~-1,170 (-1,100..-1,260)** | **~-515 (-490..-570)** | **~-770 (-700..-870)** |
+
+kern_mega also drops -235 `.mega` (R2-1). Packages: -5.3 to -5.5KB unpacked at
+the rare sites (T5), ~-1.5KB from class tables (R14), +0 to +150 for C1 with a
+shared helper, up to +78 for R15.
+
+**Out of it:** L3 (until The Wire serves kern_mega builds); T1/K17-1 (the
+fallback); K17-3; K17-5/C7; T2-2's remaining four; C3; D1/drivers-9; D4, N1,
+L7 (no bump needed); R9's universal value; R6 with wm-R3; R2-6/hm-10; R10,
+R11, L6 (additive forms); R13; C9, D5, D6, D7, P3, P5; V3-V5, A1; F2; P1, P2-1.
+
+**For the owner:** T5's door and its DOS vector, or T1; whether any rare cell
+is called with IF=0; how C packages declare a class; L1 on kern_small and
+whether kern_mega packs its ladder; D8's cell now or at the flag day; and
+whether a one-disk 8088/286 set is a goal (gkm-9), which bears on L3 and runs
+against the rule that no release carries kern_mega's disks.
+
+### 13.4 Sources
+
+`docs/reports/big-review-2026-11-08/`: `areas/gap-flagday-reconcile-abilist.md`
+(the reconciliation) and the other gap reports
+(`gap-fault-containment-error-model.md`, `gap-context-lock-model.md`,
+`gap-kernel-matrix-near-model.md`); the area reports `areas/abi.md`,
+`bytes.md`, `histsys.md`, `histmem.md`, `drivers.md`, `megacore.md`, `ui.md`,
+`wm.md`, `shell.md`, `files.md`, `video.md`, `memory.md`, `isr.md`,
+`loader.md`, `diskwrite.md`, `sched.md`, `gfx.md`, `boot.md`; their verified
+`data/*.json`; `synth/flagday.md` (the final plan), `synth/phase1.md`,
+`synth/bugs.md`; and the three lenses `synth/challenge-truth.json`,
+`challenge-cost.json`, `challenge-fit.json`.

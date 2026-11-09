@@ -185,7 +185,8 @@ def launch(m, mo, pkg):
         try:
             f = fd.connect()
             break
-        except (OSError, ftplib.all_errors):
+        except ftplib.all_errors:       # a TUPLE (OSError in it): nested in
+                                        # another, the except is a TypeError
             fd.gpace(1.0)
     else:
         raise RuntimeError("nothing answered on port 21")

@@ -356,13 +356,16 @@ def banner_pixels(fl):
     return offs, blue, rgb[12]
 
 
-def banner_sample(fl, banner):
-    """(xb_bfl, (share of the plate pixels now orange, share still blue))."""
+def banner_sample(fl, banner, resume=True):
+    """(xb_bfl, (share of the plate pixels now orange, share still blue)).  RESUME=False reads a guest
+    the caller has already stopped (`advance`) and leaves it stopped."""
     offs, blue, orange = banner
-    fl.m.pause()
+    if resume:
+        fl.m.pause()
     w, h, px = fl.m.fbuf(0)
     bfl = fl.b("xb_bfl")
-    fl.m.run()
+    if resume:
+        fl.m.run()
     def near(o, c):
         return all(abs(px[o + k] - c[k]) <= 8 for k in range(3))
     a = sum(1 for o in offs if near(o, orange)) / len(offs)
@@ -414,14 +417,22 @@ def item_race_start(fl):
         if seen[-1] == "LAP 2  ":
             break
     assert "LAP 2  " in seen, ("the lap flash", sorted(set(seen)))
+    # Every sample is a STOPPED guest moved on by a fixed number of its own cycles (`advance`), never a
+    # running one sampled whenever the host got round to it.  The flash alternates every 8 steps (60 a
+    # second), so it is a 16-step square wave, and a host-paced loop is a sampler whose rate is whatever
+    # the framebuffer read cost this box today: on a loaded one that came to ~1.3M cycles a sample, 16.5
+    # steps, aliasing the wave to one phase - 90 samples of the plain plate from a game that was flashing
+    # throughout.  0.04 guest seconds is 2.4 steps, a fixed phase walk well inside the half-period.
     seen = []
+    fl.m.pause()
     for _ in range(90):
+        fl.m.advance(cycles=int(.04 * M.GUEST_HZ))
         seen.append(fl.hud()[13:20])
         if banner:
-            flashed.append(banner_sample(fl, banner))
+            flashed.append(banner_sample(fl, banner, resume=False))
         else:
             flashed.append((fl.b("xb_bfl"), None))
-        M.guest_sleep(fl.m, .04)
+    fl.m.run()
     assert seen[-1] != "LAP 2  ", "the lap flash never ends"
     assert "LAP 2  " in seen[:20], "the lap flash does not last"
     # the BANNER FLASH (video.inc xb_banner): VGA only.  While the lap flash runs DAC 13 alternates with the

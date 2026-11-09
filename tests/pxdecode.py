@@ -184,6 +184,12 @@ with os88ui.boot(SYSDISK, apps=DISK, machine=a.machine) as ui:
         m.write(base + syms["px_mcap"], bytes((cap & 255, cap >> 8)))
         m.write(base + syms["px_lastref"], b"\0")
         n0 = W("px_ndone")
+        # THE KEYSTROKE'S SLOT IN THE BIOS RING, emptied first: the ROM's
+        # int 09h writes the next key at the tail, so after the Ctrl+R this
+        # word says whether the BIOS ever stored one - and which.
+        tail = u16(m.read(0x41C, 2))
+        m.write(0x400 + tail, b"\0\0")
+        tool0 = B("px_tool")
         m.ctrl("KeyR")
         # **TWO WAITS, SO A TIMEOUT SAYS WHICH HALF STALLED.** This was one
         # 600-second wait, and the one soak failure on record (JEXBIG.JPG,
@@ -193,17 +199,48 @@ with os88ui.boot(SYSDISK, apps=DISK, machine=a.machine) as ui:
         # are state reads already (not an idle UI, not a fixed pause), so the
         # wait's shape was not the question; its silence was. An open has
         # started once the worker holds a job or PiXEL says it is decoding,
-        # or has already ended.
+        # or has already ended. The next failure (HP12.PNG, 2026-11-03) did
+        # name the half - it never started - and the KERNEL had lost it: a
+        # tick inside the ROM's int 09h for the Ctrl make let R's byte store
+        # a plain 'r' (SPEC.md 9.8.3, tests/kbdpreempt.py).
         try:
             M.until(m, lambda _: W("px_ndone") != n0 or B("px_busy")
                     or B("px_job"), "Ctrl+R to start the open of " + name,
                     poll=0.05, guest=120.0)
         except M.MartyError as e:
+            # WHICH LAYER LOST IT. The ring slot separates the emulator and
+            # the ROM (nothing stored, or a plain 'r': Ctrl never arrived)
+            # from the kernel and PiXEL (Ctrl+R stored and taken); the front
+            # window and the tool say whether the key went to another window
+            # or reached PiXEL as a tool letter. Then ONE more Ctrl+R, so a
+            # lost keystroke is told from a PiXEL that no longer reverts -
+            # the row FAILS either way: this is the report, not a retry.
+            got = u16(m.read(0x400 + tail, 2))
+            what = {0: "NOTHING reached the BIOS ring",
+                    0x1312: "the BIOS stored Ctrl+R (13/12) and something "
+                            "took it",
+                    0x1372: "the BIOS stored a plain 'r' - Ctrl did not "
+                            "arrive"}.get(got, "the BIOS stored %04X" % got)
+            fr = ui.front()
+            n1, busy, job, uid = W("px_ndone"), B("px_busy"), B("px_job"), \
+                M.ui_idle(m)
+            m.ctrl("KeyR")
+            try:
+                M.until(m, lambda _: W("px_ndone") != n1 or B("px_busy")
+                        or B("px_job"), "a second Ctrl+R", poll=0.05,
+                        guest=120.0)
+                again = True
+            except M.MartyError:
+                again = False
             raise M.MartyError("%s\n  THE OPEN NEVER STARTED: px_ndone %d "
-                               "(was %d), px_busy %d, px_job %d, ui_idle %s - "
-                               "the Ctrl+R did not reach PiXEL"
-                               % (e, W("px_ndone"), n0, B("px_busy"),
-                                  B("px_job"), M.ui_idle(m)))
+                               "(was %d), px_busy %d, px_job %d, ui_idle %s; "
+                               "%s; front window %r; tool %d (was %d); a "
+                               "second Ctrl+R %s"
+                               % (e, n1, n0, busy, job, uid, what,
+                                  fr and fr.title,
+                                  B("px_tool"), tool0,
+                                  "started the open" if again else
+                                  "did nothing either"))
         try:
             M.until(m, lambda _: W("px_ndone") != n0 and idle(),
                     "the open of " + name, poll=0.3, limit=600)

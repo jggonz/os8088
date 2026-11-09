@@ -5,7 +5,8 @@
 ; GFXE_TEXT / GFXE_BITS half of apps/os88gfx.inc, assembled ONCE. It is not a
 ; package. kernel/deskmod.inc carries it at the end of DESK.DRV's image
 ; (`incbin`), so it is on the system disk once, on the heap once - in the
-; desk layer's claim, held from the first QUERY to the restart - and every
+; desk layer's claim, held from the first QUERY until the last widget goes
+; (SPEC.md 11.103.10's drop rule) - and every
 ; Sticky App built `%define STIK_LIB` far-calls this copy instead of carrying
 ; its own. OSAPI_WM_DESK's LIB verb answers its paragraph.
 ;

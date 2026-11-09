@@ -7,7 +7,7 @@
  *
  * ----------------------------------------------------------------------------
  * READ-ONLY DISK II IS A FOLLOW-UP PULL REQUEST (section 14, and
- * docs/APPLE2-PORT-PLAN.md Decision 13), AND ITS FIRST JOB IS A MEASURED SIZE
+ * docs/plans/completed/APPLE2-PORT-PLAN.md Decision 13), AND ITS FIRST JOB IS A MEASURED SIZE
  * LINE
  * ----------------------------------------------------------------------------
  * Machine > Configure Slots... is GREYED in this PR and the fact that greys

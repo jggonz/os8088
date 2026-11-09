@@ -4,7 +4,7 @@
 as `docs/C64-SPEC.md` stands to `apps/c64`: every symbol, constant, string,
 register answer and layout the port depends on is pinned here, and the change
 goes in here *before* it goes in the code. The design record - the intake, the
-decisions, the waves, the risks - is `docs/APPLE2-PORT-PLAN.md`.
+decisions, the waves, the risks - is `docs/plans/completed/APPLE2-PORT-PLAN.md`.
 
 **It lives outside SPEC.md by the user's instruction, on the C64 precedent.**
 SPEC.md gets no new section for this port.
@@ -517,6 +517,43 @@ controller oscillates inside its deadband by design. **The first thing that
 case asserts is that the budget LEFT `A2_SLICE_MIN`**, which is the rule
 above failing, in one line, without an emulator.
 
+#### 4.3.2 Runs a wake: the budget stops at the cap, the work does not
+
+`A2_SLICE_MAX` is a signed 16-bit countdown's ceiling, and a machine that runs
+16,384 cycles in a small part of a host tick - section 4.6's core on a 286 -
+would spend most of each second between wakes. So **once the budget is at its
+cap and the window still says raise, the controller raises `a2_reps`**, the
+number of runs a wake makes (up to `A2_REPS_MAX` = 16), doubling it on an
+`a2_adx == 0` window and adding one inside the band. On the way down it lowers
+`a2_reps` first (`A2_ADAPT_HI`, and the halve-on-the-spot arm) and only then
+the budget. A run that ends CUT (`cnt > 0`) ends the wake's work too, and a
+JAM ends it at once. One run a wake is what every machine had before, and
+what an 8088 keeps. `hosttest/a2uitest.c`'s one-cell bracket case pins
+`a2_reps` to 1, because its fixture write is "the second run" and its runs
+cost nothing.
+
+#### 4.3.3 The throttle: 1.02 MHz, unless CPU > Warp
+
+**Every host tick pays a tick of an Apple II into what the machine is OWED**,
+and a run never takes more than is owed (`a2_th_allow`, `a2_th_spend`).
+1,020,484 cycles a second is 875.8 units of 64 cycles a tick at 18.2065 Hz:
+14,013 sixteenths of a unit, the fraction carried. Units of 64 because `int`
+is sixteen bits and a tick of cycles is 56,050. **The debt stops at three
+ticks** (`A2_TH_CAP`), so a wake that stalled - a disk read, a dialog - is
+not paid back as a burst at thousands of per cent. **CPU > Warp bypasses
+it**, which is what Warp now means beyond the slice cap. A machine that
+cannot reach 1.02 MHz is never held back: it is always owed more than it
+runs. While nothing is owed a wake runs no 6502 and re-posts, which is what
+the unthrottled machine's wakes did continuously anyway.
+
+The granularity is the host TICK: inside 55 ms the machine runs what it is
+owed as fast as it can and then waits, so timing a program measures against
+the 6502's own cycles stays exact and only the wall clock is coarse.
+`hosttest/a2uitest.c` holds it: 64 ticks of its clock pay 3,587,236 cycles
+within 0.06%, a 100-tick stall pays back no more than three ticks, warp is
+not held - and then `a2_th_off` (the harness's seam: its runs cost no time)
+turns it off for every other case.
+
 ### 4.4 The core's gate - `make a2cputest`
 
 `apps/apple2/hosttest/a2cputest.asm` on `c64cputest.asm`'s boot-sector shape,
@@ -563,6 +600,274 @@ addresses are actually answered, and clears the core's scratch after the load
 because the image lands on top of `$CF00`. And **row 12's vectors are written
 through the ROM part**, not into RAM: `$FFFA-$FFFF` belong to the Autostart
 Monitor on this machine and a write there is dropped.
+
+### 4.6 The fast core (docs/plans/completed/FAST6502-PLAN.md)
+
+**APPLE2.O88's part 1 is a second 6502 core**, written by
+`apps/m6502/m65gen.py` and far-called through `apps/apple2/a2fast.inc`. It
+runs the machine on the same `_a2_m` record and the same scratch page as the
+accurate core above, and hands that core what it does not do itself, so the
+two are one machine and the accurate core stays the oracle. Without the part
+(a refused fetch, or no 128KB for its two claims) the accurate core runs the
+machine alone; nothing is said, because a slower machine is not a broken one.
+
+**Measured, 86Box `286-victory` (16 MHz 286), at the commit that lands this:**
+
+| | accurate core | fast core, first cut | fast core, tuned |
+|---|---|---|---|
+| idle at the `]` prompt | 10% | 48% | **547%** (the KEYIN counter below) |
+| `10 I=I+1 / 20 GOTO 10` | 13.6% | 61% | **67%** |
+
+A profile (CS:IP sampled once an emulated millisecond) puts 97% of the
+machine in the core's slots, so what is left is the core's own instructions,
+not the wake: about 80 host clocks an emulated instruction under Applesoft,
+spread across JSR, RTS, the branches and the zero-page loads.
+
+**AND THE MACHINE IS THROTTLED TO 1.02 MHz** (section 4.3.3, the owner's
+decision once the fast core could pass 100%): the KEYIN counter's idle reads
+**99.8%** with the throttle, where it read 547% without, and the BASIC loop's
+67% is unchanged because it never reaches the wall.
+
+**The layout.** The handler for opcode X is at X x 256 of one 64KB code
+segment; dispatch is `mov dh,[si] / inc si / jmp dx` with DL = 0, inlined at
+the end of every handler as `sub bp,cycles / jle exit / ...`. The slots of
+opcodes it does not run hold the shared code: the entry at `$0210`, the exits,
+P packing, the I/O call-outs and the damage marker. **A part is at most 65,024
+bytes** (its length is a sector count in a word), so the part is the
+segment's first `$FE00` bytes: `a2_fast_init` claims 64KB, copies the part in
+(`a2f_core`), writes the `$FE` and `$FF` slots as near jumps to the targets
+the part's table at `$0203` names (INC abs,X's body lives in a spare slot),
+and gives the part back. Both 64KB claims are movable; `os88_onmove` follows
+`a2_fcode`. **The far call goes through `a2_fseg` = `OSAPI_MEM_CODESEL` of that
+claim**: the same value on a real-mode kernel, the claim's code half under
+kern_mega, where a far call through the data half is a #GP per transfer.
+**The code claim is CONVENTIONAL** (`a2f_claimcode`: `OSAPI_MEM_P` with
+`MEMP_CONV`, SPEC.md 50.3.7), because only a conventional claim is an
+allocator pair on kern_mega: APPLE2 is `OS88_HIGHMEM`, so the KB door sent
+its 64KB above 1MB as a lone data selector, `OSAPI_MEM_CODESEL` refused it,
+and until that was found the fast core and the translation silently never
+ran there. The image is only data and may still go above 1MB.
+
+**The frame.** Nothing the core keeps is in its own segment, which kern_mega
+makes read-only: the machine record, the package's DS and the two I/O doors
+(`a2f_iord`, `a2f_iowr`, far, pushed by `a2fast.inc` before the call and
+dropped by the core's `retf 8`) are on the caller's stack, and the core reads
+them from there. A tail near-called from a handler sees the countdown it
+pushed at `[bp]`, so the clock is synced and restored in place around a
+call-out.
+
+**The registers.** A = AL; N, Z, C in AH in `lahf`'s layout, as above; X = CL;
+Y = CH; PC = SI; S = DI as `$0100+S`; BX the effective address; DH the data;
+**BP the countdown**. V, B, D and I are the scratch page's `PV` byte at their P
+positions. The run stops before the instruction that finds the budget spent,
+with what was not spent in `cnt`, exactly as section 4.2 says.
+
+**The guest image.** The fast core runs in a 64KB claim that replaces the
+49KB one at the first wake (`a2f_image`): `$0000-$C1FF` from the running
+machine, **`$C000-$C0FF` filled with `$02`**, slot space `$FF`, and
+`$D000-$FFFF` a copy of the main ROM. So a fetch is `[si]` and a RAM or ROM
+read is one compare and one `mov`. The accurate core runs in the same claim
+unchanged: it never reads above `$BFFF` but the scratch page, and fetches and
+reads the ROM out of the part.
+
+**Memory.** Zero page and the stack store and nothing else. Every other write
+drops at `$C000` and up, or calls out at `$C0xx`, and **marks damage only on
+`$0400-$0BFF` and `$2000-$5FFF`**: the page bit, the "wrote" byte and the
+watch-range window of section 7.5, which is all the flush reads. Reads of
+`$C000-$C1FF` go to the call-out (`$C0xx`) or answer `$FF` (`$C1xx`); the
+rest of slot space and the ROM are the image. **The keyboard latch is
+answered in the core**: `a2_kb_mirror` writes `$C000`'s byte to `$C14A` and
+"answer it" to `$C14B` at the top of every run and at the strobe, and while a
+paste is in flight the flag says call out, because then the read is
+`a2_paste_peek`'s.
+
+**The ROM's keyboard loop is a counter.** `KEYIN` at `$FD1B` (`INC $4E / BNE
+/ INC $4F / BIT $C000 / BPL`) is where every `INPUT` and `GET` and the
+idle prompt wait. With no key in the latch - which cannot change inside a run
+- a pass from the `BIT` back to it costs 15 cycles (19 when `$4E` wraps) and
+changes nothing but `$4E`/`$4F` and flags the next `BIT` overwrites. So the
+`BIT` at `$FD21` (`kbd_idle`) takes whole passes as a counter while one fits
+with a cycle to spare, then runs for real: the same cycles, the same memory,
+the same PC and flags at the end of the run. `a2f_image` arms it (`IDLEOK`,
+`$C14C`) only when the ROM holds those bytes at `$FD1B`.
+
+**A jump's target is one range test**, `lea bx,[si+$4002] / cmp bx,$1002`,
+which neither a RAM nor a ROM target takes a jump for. `$FFFE` and up need no
+test on this machine: the image's `$FFFE` is the ROM's `RTI` and `$FFFF` an
+opcode this core hands back, so `mov bx,[si]` at `$FFFF` - which faults a 286
+- cannot be reached. **JSR and RTS move the return address as one word** while
+S is not at the stack page's edge. **With a translation (4.7), a taken branch whose target is in its
+range goes through `ct_rom` as a jump's does** - one compare for a branch
+outside it - because the translation's table names only the starts of its
+straight runs, and a loop the core entered in the middle must be able to
+rejoin it.
+
+**What it hands back, and how.** Reason 2 (one instruction): every illegal
+opcode, `BRK`, `ADC`/`SBC` with D set, a read-modify-write at `$C000` and up,
+`JMP ($C0xx)`/`($C1xx)`, and a fetch of the I/O page's `$02`. `a2fast.inc`
+runs the accurate core with a budget of 1 and `CLKB` moved for the step, so
+`a2_now()` reads the clock the run would have had. Reason 4 (the interrupt flag's): `CLI`, `SEI`, `PLP` or `RTI` while the
+interrupt byte is up, or an interrupt pending at entry - the accurate core
+gets a run of at most 64 cycles, so that its one-instruction delay after
+`CLI`/`PLP` falls inside it. Reason 3 (the region): a jump, call, return or
+entry whose PC is in `$BFFE-$CFFF`. The accurate core runs with `HBK` set
+(`$C13A`) and `a2_rebias_go` ends the run at its first re-bias out of that
+region (`a2_hbk`, `a2_cut`'s own arithmetic). `a2_cut` sets `CUTF` (`$C13B`) so
+a cut ends the wrapper's loop as well.
+
+**THE STATED DEVIATION.** An instruction at `$BFFE` or `$BFFF` takes operand
+bytes from the soft switches. Reached by a jump, a call, a return or a new
+run it is the accurate core's. **Reached by falling through from `$BFFD`, or by
+a branch inside page `$BF`, the fast core reads those bytes from the image's
+`$02` instead of calling out.** The only exact fix is a check on every fetch,
+which is the cost this core exists to remove; no shipped Apple program is
+known to do this.
+
+**THE HEAP IS RESHAPED AT THE FIRST WAKE**: a 64KB code claim and a 64KB
+image replace the 49KB RAM, with a compaction on the way, which on an 8088 is
+seconds. `a2_fast_done` says it has FINISHED (set after `a2_fast_init` returns, never mid-way); `tests/apple2part.py` waits for it
+before it reads a claim. **`soak -k a2move` IS RED WITH THE FAST CORE, and the
+reason is placement, not a mover**: both 64KB claims are made where a 64KB
+hole is, which on that row's heap is the bottom, so Note Pad's close leaves
+no hole below either and the pass moves neither. Check 1 (both declared)
+passes, the carve and the region move and are followed, and the row now
+also accepts the code claim's move with `a2_fcode`/`a2_fseg` following
+(`tests/emumove.py`) - but it needs a scenario that puts a hole under them,
+which is owed.
+
+**The gate** is `make a2cputest`'s fast leg (section 4.4): the same rows bar
+row 6 (the accurate core's fetch ES), and Dormann's functional test, through
+`a2fast.inc`'s `_a2_run`. The four controls that the accurate core's tables
+cannot reach in the fast core are made in the fast core's own code: row 4's
+`STA abs` and Dormann's `ADC #` slots jump to `STA zp`'s and `ORA #`'s, row
+10's `LDA abs,X` charges 3, and row 2's `SED` slot jumps to `CLD`'s.
+`A2CPU_ONLY=fast` runs that leg alone.
+
+### 4.7 The ROM translated ahead of time (docs/plans/completed/FAST6502-PLAN.md wave 1c)
+
+**APPLE2.O88's parts 2 and 3 are Applesoft and the Monitor as 8086 code**:
+`apps/m6502/m65aot.py` translates every ROM PC it knows into one code
+segment (part 2, a lazy `OP_SEG`), and a table of words, one per PC from
+`$D000` to `$FFFF`, names each one's translation or 0 (part 3, a lazy
+`OP_ASSET`, 24,576 bytes). The ROM is fixed, so the translation is made once,
+on the host, at build time; programs in RAM stay the fast core's.
+
+**Measured, 86Box `286-victory`, `10 I=I+1 / 20 GOTO 10`: 149% of a 1.02
+MHz Apple under warp, against the fast core's 67%** (section 4.6; 109% at
+the first cut, before the inline `PLP`, the dead-flag work and the groups
+below, and 141.5% before CHRGET's once-only check and `PHP`/`PLP`
+through tables) - so with the throttle on the machine runs at its own speed under
+BASIC as well as idle.
+
+**Which PCs.** A ROM PC is translated when `tools/a2trace.py` saw one start an
+instruction, or when a static walk from those reaches it. The trace boots the
+Autostart ROM on `tools/py6502.py` (an NMOS 6502 in Python, which passes
+Dormann's functional test) with the least of an Apple II+ around it and types
+BASIC programs that reach every statement, function and graphics command that
+needs no disk or cassette. The trace is the walk's input because Applesoft
+dispatches its statements through `RTS` on pushed addresses, which no static
+walk follows. **A PC that is not translated is not wrong, only slower**: the
+table says 0 and the fast core runs it. On the build of this commit: 3,896
+traced, **4,596 translated, 53,038 bytes of code, 1,874 of them entries**
+(the starts of their straight runs, below).
+
+**How it is entered.** A jump, call, return or new run whose target is in
+`$D000-$FFFF` goes through the core's `ct_rom` (its opcode `$72` slot): ES =
+the table, a word load, and a far transfer into the translation when it is
+not 0. The frame grows by three words (`a2fast.inc` pushes `a2_fseg`,
+`a2_ftab`, `a2_faot`); `a2_faot` is the code part's `OSAPI_MEM_CODESEL`, for
+kern_mega's sake as in 4.6. The translation leaves through two fixed offsets
+in the core: `xr_resume` (`$7280`, carry on at SI, which may be translated
+again) and `xr_slice` (`$72A0`, the run's budget is spent).
+
+**The registers and the memory are the core's** (4.6), but **SI is not the
+PC** in translated code: the PC is where the code is, and SI is written only
+on the way out. Reads and writes use the same paths as the core's handlers,
+including the I/O call-outs and the damage marks. Inside ROM, a `JSR` to a translated
+target is a near call into a shared helper that pushes the 6502 return
+address and jumps; an `RTS` looks its target up in the table.
+
+**Time: ONE SUBTRACT A STRAIGHT RUN.** The translation is cut into GROUPS
+(`m65aot.py`'s `groups()`), and a group's first instruction takes the whole
+group's cycles off the countdown. A group ends at a branch or a transfer, at
+an access that may reach a device (whose clock is the countdown at THAT
+instruction's end, so nothing after it may be prepaid), and around an
+instruction that may leave for the core before it runs; an exit inside a
+group gives back what it prepaid for the instructions it did not run. **So
+only a group's start may be entered from outside**, and the PC table names
+no other: every static target, every return point, and every PC the trace
+saw `RTS`, `JMP (ind)`, `BRK` or an interrupt land on (the seeds marked
+`D`, which is how Applesoft's statement handlers stay entries). A run that
+starts anywhere else runs on the core to its next branch or jump - **the
+core's taken branches consult `ct_rom` as its jumps do** (section 4.6), so a
+loop the core entered in the middle rejoins the translation at its next
+pass. An instruction whose operand byte is another's opcode (the `BIT`
+skip) falls through to that other's translation. The countdown is TESTED only at a
+backward branch, a backward `JMP`, `RTS` and `JMP (ind)` - forward
+transfers and `JSR` cannot loop without passing one of those. **THE STATED
+DEVIATION: a run can finish a straight stretch of ROM after its budget is
+spent.** Every cycle is still counted, so `ran = asked - cnt` stays exact and
+the clock a soft switch reads is exact; the Apple II+ has no interrupt
+source, so nothing in the machine can see the overshoot.
+
+**Flags.** N, Z and V are computed only where something can read them: a
+later instruction before they are written again, a branch, or an exit. C is
+always computed.
+
+**A TRANSLATION NEVER RUNS IN DECIMAL MODE.** `SED` leaves for the core at its
+own PC; `PLP` and `RTI` leave at the next PC when what they pulled sets D; and
+`ct_rom` will not enter a translation while D is set. So `ADC` and `SBC` need
+no test of their own, and a decimal-mode stretch of ROM runs on the core.
+
+**What it leaves to the core**: `BRK` and `SED`, which exit to `xr_resume` at
+their own PC. `CLI`, `SEI`, `PLP` and `RTI` exit there only while the
+interrupt byte is up, which is when the core's own handlers hand them to the
+accurate core; otherwise they are a flag and a pull. Microsoft BASIC's
+divide loop runs `PHP`/`PLP` once a bit, and on the core it was a fifth of a
+floating-point program's time. So does **`KEYIN`'s loop (`$FD1B-$FD24`)**. It stays untranslated so that 4.6's counter, which
+takes whole idle passes at once, still applies; translating it would be
+slower.
+
+**CHRGET runs natively.** Applesoft's `CHRGET`/`CHRGOT` live in zero page at
+`$00B1`/`$00B7` and modify their own operand. The translation has a native
+version of each, entered when the core reaches those PCs. A byte-signature
+check on the routine's RAM copy guards it, so a program that rewrites the
+routine gets the core instead - and it is made ONCE, not at every call: bit
+7 of PV says "checked", and it is cleared by every entry into a translation
+from the core (`ct_rom`; code that ran there may have patched the routine)
+and by every translated store that can reach the routine's bytes other than
+TXTPTR (`chr_guard`). It was a dozen compares a character of program text.
+`PHP` and `PLP` pack and unpack P through two 256-byte tables in the
+translation's own segment, inline, where the core calls `getp`/`setp`.
+
+**Memory.** Both parts are fetched by `a2_fast_init` after the core, both or
+neither, as claims of their own length (53,038 and 24,576 bytes, to the
+heap's granule), on top of
+4.6's two 64KB claims. They are MOVABLE (`os88_part_movable`, SPEC.md
+73.14.2.1): a run builds its frame from `a2_faot` and `a2_ftab` at its door,
+and `os88_onmove` re-reads them, the code selector re-derived only when its
+part moved. They were pinned until `soak -k a2move` found them a 78KB wall
+under the RAM: neither the RAM nor the core could slide down past them
+(section 3.1.1). A refusal of either
+leaves `a2_faot`/`a2_ftab` 0, and the fast core runs the ROM itself.
+
+**The gate** is `make a2cputest`'s AOT leg (`A2CPU_ONLY=aot`). It builds
+test cores and translations of Dormann's functional test itself
+(`--range`), in three parts (`$0400-$13FF`, `$1400-$29FF`, `$2A00-$3FFF`; one
+segment holds none of it whole), and runs each to `$3469` in slices of 997
+cycles. The core consults the table only at a jump or a run's start, and
+Dormann falls through whole stretches with no jump, so short odd slices are
+what start runs all over each part - and enter its translation mid-block.
+The test writes its own code at `$04E5`, so in range mode the translator
+leaves every PC that a fixed-address store writes to the core. **The negative
+control** takes 8 off the 8086 opcode of every translated `ADC` and `CMP`
+(`ctl_list`): `ADC` becomes `OR` and `CMP` `XOR`, and the run must then
+fail. Every part of the test checks its results with `CMP`, which is why the
+control is not `ADC` alone - one part runs none. **A trap is the WHOLE state
+repeating** - PC, registers and a sum of zero page - three slices running:
+a loop whose only untranslated instructions are a stub's ends every slice
+on the stub, with only its counters in zero page moving. `tests/apple2part.py` checks that both parts unpack to
+their build files and are claimed at their own length.
 
 ### 4.5 Reset, both kinds
 
@@ -2442,8 +2747,8 @@ Yes button. **Nothing is latched by the PICK**; the ANSWER is what sets
 fill and `os88_oncmd` runs under the desktop's lock.
 
 **`Normal: 1MHz`'s body is WARP OFF.** MII's `mhz1` sets the machine's speed
-back to `MII_SPEED_NTSC` (`mii_mui_menus.c:327-329`); this port has no throttle
-at all, so what "normal" means here is the un-warped machine, and
+back to `MII_SPEED_NTSC` (`mii_mui_menus.c:327-329`), and so does warp off
+here: the un-warped machine is throttled to 1.02 MHz (section 4.3.3), and
 `Normal: 1MHz` / `Fast: 3.5MHz` / `Warp` are the same three radio partners MII
 has with the two reachable ends live. **Its MARK is not its state**: section
 10.1's table ticks it from the MEASURED per cent on MII's own 0.9-1.1 band, so
@@ -3423,7 +3728,7 @@ counters are in memory now and the file says why.
 whose first job is a measured size line. Machine > Configure Slots... greys in
 the meantime with section 10.3's fact.
 
-**The wave keeps its number** in `docs/APPLE2-PORT-PLAN.md` - it is wave 6,
+**The wave keeps its number** in `docs/plans/completed/APPLE2-PORT-PLAN.md` - it is wave 6,
 marked "follow-up PR" - because renumbering a wave that is written down is how
 a plan and a branch stop agreeing.
 
@@ -3506,7 +3811,7 @@ resident image, bss, `APPLE2.OVL`, resident shims, largest C frame.
 families assembled is not an honest measurement of a core, and quoting one
 would set a budget against a number nobody can reproduce. What wave 1's build
 prints (`image 19,300 + bss 10,312`, `APPLE2.OVL` 843) is recorded in
-`docs/APPLE2-PORT-PLAN.md`'s wave-1 paragraph as evidence that the package
+`docs/plans/completed/APPLE2-PORT-PLAN.md`'s wave-1 paragraph as evidence that the package
 BUILDS and packs, and it is **not** a budget figure and not to be compared
 with the headline below: there is no 6502 in it.
 
@@ -4464,7 +4769,7 @@ already exceed two ticks in the worst case and did before this change, for the
 flush's reason above and not the slice's.
 
 **THE PLAN PREDICTED 3-4% AND IT WAS OUT BY SIX**, and the reason is not the
-one this section first gave. docs/APPLE2-PORT-PLAN.md's risk section arrived
+one this section first gave. docs/plans/completed/APPLE2-PORT-PLAN.md's risk section arrived
 at "~400 8088 clocks per emulated 6502 instruction" and divided by nothing
 else. The measurement says **~415 clocks per emulated CYCLE** - about 1,250 a
 6502 instruction, three times the plan's figure - on a cycle-accurate 4.77 MHz
@@ -4513,7 +4818,7 @@ pattern of `?` with the menu shut.
 ### 16.5 Automated evidence, and manual evidence
 
 **Automated evidence** is section 16.6's harnesses and the QMP screendumps.
-**Every `done_when` in `docs/APPLE2-PORT-PLAN.md` rests only on it.**
+**Every `done_when` in `docs/plans/completed/APPLE2-PORT-PLAN.md` rests only on it.**
 
 **Manual evidence** is the three 86Box machines and anything read off them by
 a person: the measured XT speed, the chord table, the look of a scroll, the
@@ -4788,7 +5093,7 @@ named here so the next reader does not go looking for its row.
 NOT committed in the web repo until the OS side is done and the user has said
 go.**
 
-**The brand table in `docs/WIRE-PLAN.md` is fixed by the user and is not to be
+**The brand table in `docs/plans/completed/WIRE-PLAN.md` is fixed by the user and is not to be
 reworded.**
 
 ### 18.1 The record

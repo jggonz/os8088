@@ -301,9 +301,9 @@ wd_uspan:
 .popdone:
     pop ax
 .done:
-    mov [cs:wd_us0], ax
-    mov [cs:wd_us1], bx
-    pop ds
+    pop ds                          ; the package's, whose the span is - a
+    mov [wd_us0], ax                 ; store through CS was a completed #GP on
+    mov [wd_us1], bx                 ; kern_mega (KERN-MEGA-PLAN 14.162)
     jmp wd_rba
 
 ; -----------------------------------------------------------------------------
@@ -320,8 +320,11 @@ wd_plist:
     push bx
     push cx
     push ds
-    mov word [cs:wd_upn], 0
-    mov ax, [cs:wd_us0]
+    push es                         ; ES = the package for the STORES, DS the
+    push ds                         ; text for the scan: through CS each was a
+    pop es                          ; completed #GP on kern_mega, one a
+    mov word [es:wd_upn], 0          ; paragraph (KERN-MEGA-PLAN 14.162) -
+    mov ax, [cs:wd_us0]              ; `es:` is `cs:`'s length and clocks
     mov cx, [cs:wd_us1]
     xor bx, bx
     mov ds, [cs:wd_dseg]
@@ -332,7 +335,7 @@ wd_plist:
     jae .full
     push bx
     shl bx, 1
-    mov [cs:bx+wd_upst], ax
+    mov [es:bx+wd_upst], ax
     pop bx
     inc bx
 .scan:
@@ -350,23 +353,22 @@ wd_plist:
 .end:
     jmp short .para
 .done:
-    mov [cs:wd_upn], bx
+    mov [es:wd_upn], bx
     push bx                         ; the sentinel: where the last paragraph
     shl bx, 1                       ; ends
     mov ax, [cs:wd_us1]
-    mov [cs:bx+wd_upst], ax
+    mov [es:bx+wd_upst], ax
     pop bx
-    push cs
-    pop ds
     clc
     jmp short .out
 .full:
-    push cs
+    push es                         ; DS = the package for the toast
     pop ds
     mov ax, wd_m_toomanyp
     call wd_saymsg
     stc
 .out:
+    pop es
     pop ds
     jmp wd_rcba
 

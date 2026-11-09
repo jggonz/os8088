@@ -41,6 +41,11 @@ FSX_RATE_MIN    equ 2048        ; the fastest divisor it takes: 582 Hz
 FSXF_REAL       equ 8           ; ...bit 3 (SPEC.md 53.2.3): the bracket in REAL
                                 ; mode on kern_mega - every other kernel takes
                                 ; the bit and strips it at the door
+FSXF_PREP       equ 16          ; ...bit 4 (SPEC.md 53.2.3.1), with FSXF_REAL:
+                                ; kern_mega in protected mode PREPARES the
+                                ; door and answers its conventional need,
+                                ; running nothing; every other kernel - and
+                                ; kern_mega in real mode - refuses the bit
 ; ...and its ANSWER, in SI on the way out (SPEC.md 53.2.3; mirrored in
 ; apps/os88api.inc): real mode, or why the bracket ran in protected mode.
 ; One test each at the door, so each lifts by itself - tested NOT in the
@@ -104,7 +109,7 @@ FSIF_PLANAR equ 2
 FSIF_BANKED equ 4
 
 ; -----------------------------------------------------------------------------
-; fsx_caps - which FSXM ids a window's display can set (SPEC.md 53.8, 0x02C0)
+; fsx_caps - which FSXM ids a window's display can set (SPEC.md 53.8, 0x022F)
 ;
 ; in:       BX = the window to ask ABOUT, or 0 for "whatever is frontmost"
 ; out:      AX = bitmask (bit n = FSXM id n settable), DL = the answering
@@ -190,8 +195,11 @@ fsx_capstab:                    ; indexed by VID_* (VGA 0, HERC 1, CGA 2, EGA 3)
 ; fsx_run - the bracket (SPEC.md 53.1, slot 0x0235 via X stub)
 ;
 ; in:       AX = near entry inside the caller's image, BX = the caller's own
-;           window ptr, CX = flags (bit 0 = FSXF_KEEPWORKER, bit 1 =
-;           FSXF_FASTTICK; others refuse);
+;           window ptr, CL = flags (bit 0 = FSXF_KEEPWORKER, bit 1 =
+;           FSXF_FASTTICK, bit 2 = FSXF_RATE with DX/DI - kern_big, never
+;           with FASTTICK - bit 3 = FSXF_REAL, which every kernel accepts
+;           and only kern_mega acts on; others refuse), CH = the display (0 the window's, n
+;           display n-1 on kern_big; kern_small takes 0 alone);
 ;           ES = the CALLER's DS (the X stub) - the ownership fence reads it.
 ;           UI-task window-callback context, gfx lock held.
 ; out:      CF=1 refused, nothing changed. CF=0: the app's proc ran to its
@@ -217,8 +225,13 @@ fsx_run:
     call kent_di                ; = push ax/bx/cx/dx/si/di
 %ifdef KERN_MEGA
     mov si, cx                  ; the flags as ASKED, FSXF_REAL among them:
-%endif                          ; SI is nobody's until the release loop below
+                                ; SI is nobody's until the release loop below
+    and cl, ~(FSXF_REAL | FSXF_PREP) & 0xFF ; ...and FSXF_PREP (53.2.3.1),
+                                ; answered by fsx_rprepf in protected mode
+                                ; and refused at .nreal in real mode
+%else
     and cl, ~FSXF_REAL & 0xFF   ; EVERY kernel takes FSXF_REAL (SPEC.md 53.2.3)
+%endif
                                 ; and strips it here, so the tests below see
                                 ; the flags they always saw: kern_big and
                                 ; kern_small are in real mode already, and
@@ -261,7 +274,8 @@ fsx_run:
     mov [sch_rpend], dx         ; is the fence's to prove, below, and the ISR
 .norate:                        ; calls through its record as wm_pkgcall
                                 ; does. The accumulator from 0 and nothing
-                                ; owed: .bss is NOT zeroed (SPEC.md 12.8.5.1).
+                                ; owed, stored per bracket rather than assumed
+                                ; (.bss is zero only at boot, SPEC.md 12.8.5.1).
                                 ; Nothing in flight is [sch_rbusy] = 0, which
                                 ; sched_init stores and every hook call
                                 ; balances
@@ -300,6 +314,9 @@ fsx_run:
                                 ; It never REFUSES (53.2.3): [fsx_rwhy] is
                                 ; FSXR_REAL and the bracket real, or the
                                 ; reason and the bracket goes on as today's
+    test si, FSXF_PREP          ; FSXF_PREP never returns here from protected
+    jnz fsx_rfail               ; mode (fsx_rprepp answers it), and real mode
+                                ; refuses it as an undefined bit (53.2.3.1)
 %endif
     call fpg_finish             ; **NO KERNEL CHROME SURVIVES INTO A BRACKET**
                                 ; (SPEC.md 12.8.5.2). fpg_arm refuses once
@@ -559,7 +576,7 @@ fsx_mfail:                      ; fsx_mode's refusal, HERE rather than behind a
 ;    the game must not land in the desktop ladder (the SPEC.md 34.4
 ;    click-abort drain is the precedent); 3. disarm the freeze; 4. repaint
 ;    the desktop under the still-held lock. The callback epilogue's
-;    gfx_unlock then flushes (if buffered) and re-shows the cursor with a
+;    gfx_unlock then re-shows the cursor with a
 ;    fresh save-under from the restored VRAM - SPEC.md 7's own contract.
 ;
 ; Step 4 is a wm_paint_all on every machine and every CPU tier, and SPEC.md
@@ -573,7 +590,7 @@ fsx_mfail:                      ; fsx_mode's refusal, HERE rather than behind a
 ; and DI are fsx_run's to restore at kret_di, so the body banks nothing.)
 
 ; -----------------------------------------------------------------------------
-; fsx_mode - set a foreign mode and describe it (SPEC.md 53.4, 0x02D0)
+; fsx_mode - set a foreign mode and describe it (SPEC.md 53.4, 0x023B)
 ;
 ; in:       AL = FSXM_* id, ES:DI = an FSI_SIZE buffer (ES is the caller's
 ;           own, the gfx_blit4 idiom). Bracket-only, exclusive task only.
@@ -726,6 +743,7 @@ fsx_mode:
     mov al, [vid_kind]          ; read ONCE, accumulator form - AL is spent
     cmp al, VID_HERC            ; here (the mul's product went into SI four
     jne .f2                     ; instructions above) and the caller's AX is
+                                ; on the stack - and so is AH, below
 %ifdef KERN_MEGA
     VSEG ax, 0xB000             ; kern_mega: the row holds B800h's SELECTOR
     mov [es:di+FSI_SEG-FSI_SIZE], ax ; after the switch, so B000h's whole
@@ -734,12 +752,14 @@ fsx_mode:
                                 ; FSXM_TEXT80 row's segment has a zero low
                                 ; byte, so its HIGH byte is the whole edit
 %endif
-    mov byte [es:di+FSI_PAGES-FSI_SIZE], 1
-    jmp short .f3
-.f2:
-    cmp al, VID_CGA             ; ...on the stack
+    mov ah, 1                   ; the PAGE COUNT through AH, one register store
+    jmp short .fp               ; for both arms where each carried a five-byte
+.f2:                            ; immediate one (kernel size pass 18, -2)
+    cmp al, VID_CGA
     jne .f3
-    mov byte [es:di+FSI_PAGES-FSI_SIZE], 4
+    mov ah, 4
+.fp:
+    mov [es:di+FSI_PAGES-FSI_SIZE], ah
 .f3:
     mov [fsx_cur], ch
     clc
@@ -863,7 +883,7 @@ fsx_xcrtc:                      ; Mode X CRTC retiming, index in the low byte
 %endif                          ; ...end of Mode X, VGA-only by definition
 
 ; -----------------------------------------------------------------------------
-; fsx_wait - the frame clock, and the present (SPEC.md 53.5, 0x02D8)
+; fsx_wait - the frame clock (SPEC.md 53.5, 0x0241)
 ;
 ; in:       AL = FSXW_TICK  (0) return at the next [ticks] change (hlt between
 ;                              polls);
@@ -971,7 +991,7 @@ fsx_wait:
 
 ; -----------------------------------------------------------------------------
 ; fsx_page - show one of the pages FSI_PAGES advertises (SPEC.md 53.10, slot
-;            0x04E8)
+;            0x03C5)
 ;
 ; in:       AL = the page index. Bracket-only, exclusive task only, and only
 ;           after an fsx_mode call in a mode that HAS more than one page.
@@ -1227,12 +1247,13 @@ fsx_evtmp: resb 8               ; fsx_restore's event-drain scratch
 fsx_wdisp: resb 1               ; the display the running bracket's window is
                                 ; on (SPEC.md 39.18.3). Written by fsx_run
                                 ; before the app's proc runs and read only by
-                                ; fsx_mode, so it needs no boot-time init
-                                ; either - and STILL CORRECT after the byte
-                                ; above lost the same argument (SPEC.md
-                                ; 12.8.5.1), because fsx_mode is legal only
-                                ; inside the bracket. The claim is about the
-                                ; SET OF READERS, so a new one reached from
+                                ; fsx_mode (directly and through EXTD.DRV's
+                                ; EXTF_KIND) and fsx_surf, so it needs no
+                                ; boot-time init either - and STILL CORRECT
+                                ; after the byte above lost the same argument
+                                ; (SPEC.md 12.8.5.1), because both are legal
+                                ; only inside the bracket. The claim is about
+                                ; the SET OF READERS, so a new one reached from
                                 ; desktop code falsifies it - and it is the
                                 ; ONE fact fsx_run still establishes about
                                 ; displays, the acting on it having moved to
@@ -1479,7 +1500,7 @@ fsx_rprepf:
                                 ; parked, EXTD.DRV runs from a low copy and a
                                 ; lease is serviced - fsx_rextf, fsx_rserdn)
     pusha
-    xor ax, ax                  ; (`.lowbss` is not zeroed: .no reads these)
+    xor ax, ax                  ; (`.lowbss` is promised nothing: .no reads these)
     mov [ss:fsx_rlow], ax
     mov [ss:fsx_rsvc], ax
     call fsx_rmvck              ; AL = 0: the caller's movable claims' bases,
@@ -1496,6 +1517,12 @@ fsx_rprepf:
 .nl:
     call fsx_rlist
     jc .why
+    mov bp, sp                  ; FSXF_PREP (53.2.3.1, pusha's SI): the
+    test byte [bp+2], FSXF_PREP ; door's claims SIZED from here, nothing
+    jz .run                     ; taken, the drivers brought down - and
+    call fsx_rprepp             ; fsx_run's caller answered there (it never
+                                ; returns: STKBALANCE-OK's)
+.run:
     popa                        ; (AL the reason again, for every exit below)
     mov al, FSXR_ROOM
     pusha
@@ -1512,7 +1539,7 @@ fsx_rprepf:
     jb .para                    ; conventional: it runs where it is
     mov [ss:fsx_rhi], ax        ; ABOVE 1MB (OS88_HIGH): a copy, low
     mov [ss:fsx_rhi+2], dx
-    mov ax, [di+I_SIZE]         ; image + bss, FFFFh for a whole 64KB
+    mov ax, [di+I_SIZE]         ; image + bss, at most 0xFE00 (SPEC.md 20.1.1)
     mov cx, ax
     inc cx
     and cx, -2                  ; the copy moves words (mega_imghif's sum): CX,
@@ -1555,9 +1582,122 @@ fsx_rprepf:
     call fsx_rfree              ; whatever was taken goes back
     popa
 .out:
+    test si, FSXF_PREP          ; (a PREP's reason is its answer, KB 0:
+    jz .rwhy                    ; fsx_rpreno never returns)
+    call fsx_rpreno
+.rwhy:
     mov [fsx_rwhy], al
     pop ax
     retf
+
+;------------------------------------------------------------------------------
+; fsx_rprepp - FSXF_PREP (SPEC.md 53.2.3.1, KERN-MEGA-PLAN 14.180): jumped to
+; from fsx_rprepf once the door's tests that need no claim have passed -
+; FSXR_KEEP, then the list's FSXR_VOL / _FRAG / _DRV off the walk (a reason
+; comes to fsx_rpreno instead) - with its frame: pusha (DI the instance,
+; restored here), its AX, its far return and fsx_run's kent_di six. The
+; door's conventional claims SIZED rather than taken, each in whole KB as
+; fsx_rlowclaim takes them: the region's copy (when it is above 1MB), the
+; service area (fsx_rsvcsz) and EXTD.DRV's copy - and each driver the list
+; makes the bracket carry BROUGHT DOWN for good from above 1MB where
+; conventional memory has room (mega_drvlow: its selectors kept, its pool
+; block freed), its copy's KB counted where it cannot be. The answer is
+; the caller's AX (the KB) and SI (FSXR_REAL), CF = 0, every other register
+; as it came - kret_di puts kent_di's six back - and fsx_run returns from
+; here: nothing else of the door is touched. CALLED, so its near return is
+; on top and goes with the rest
+fsx_rprepp:
+    ; STKBALANCE-OK: answers fsx_run's caller - unwinds its near return, fsx_rprepf's pusha, AX and far return and leaves through kret_di, which pops kent_di's six (53.2.3.1)
+    pop ax                      ; (the near return: never taken)
+    popa                        ; ([ss:fsx_rown] is DI's slot: fsx_rmvck
+    pusha                       ; stored it, fsx_rxrows reads it)
+    xor bp, bp                  ; BP = the KB
+    mov ax, [di+I_SPTR]
+    call MEGA_SEL_CODE:mega_ishif ; THE REGION'S COPY, when it is above 1MB
+    jc .nrg
+    mov ax, [di+I_SIZE]
+    call fsx_rkb
+.nrg:
+    push bp
+    call fsx_rsvcsz             ; THE SERVICE AREA
+    pop bp
+    call fsx_rkb
+    call fsx_rdrvprep           ; THE DRIVERS, down or counted
+    mov dx, [mod_tab + MOD_EXT * MODR_SIZE + MODR_SEG]
+    lsl cx, dx                  ; EXTD.DRV's copy, when it is above 1MB (no
+    jnz .nx                     ; descriptor: not loaded)
+    xchg ax, dx
+    call MEGA_SEL_CODE:mega_ishif
+    jc .nx
+    xchg ax, cx
+    inc ax
+    call fsx_rkb
+.nx:
+    mov bx, sp
+    mov [ss:bx+32], bp          ; kent_di's AX: the KB, and SI FSXR_REAL
+    and word [ss:bx+24], 0
+    add sp, 22                  ; (pusha, its AX and the far return)
+    jmp short fsx_rprex
+; fsx_rpreno - FSXF_PREP's reason, CALLED from fsx_rprepf's .out (under its
+; near return, its AX and far return): AL = the FSXR_* the door would
+; answer, the KB 0. Never returns
+fsx_rpreno:
+    ; STKBALANCE-OK: answers fsx_run's caller - unwinds its near return, fsx_rprepf's AX and far return and leaves through kret_di, which pops kent_di's six (53.2.3.1)
+    mov bx, sp
+    xor ah, ah
+    mov [ss:bx+10], ax
+    and word [ss:bx+18], 0
+    add sp, 8
+fsx_rprex:
+    clc
+    jmp KERNEL_SEG:kret_di      ; fsx_run's own way out
+
+; fsx_rkb - BP += AX bytes as whole KB (fsx_rlowclaim's unit; FFFFh is 64)
+fsx_rkb:
+    add ax, 1023
+    mov al, ah
+    rcr al, 1
+    shr al, 1
+    cbw                         ; (64 at most)
+    add bp, ax
+    ret
+
+; fsx_rdrvprep - FSXF_PREP's drivers: each class the walked list carries (the
+; scratch's mask, fsx_rdrvf's order: DRVC_DISK, DRVC_EMS, DRVC_SOUND) whose
+; driver is loaded with its image ABOVE 1MB is brought down (mega_drvlow) or,
+; where it cannot be, the KB of the copy the door will claim added to BP.
+; PM, DS = KDATA. Clobbers AX, BX, CX, DX, SI
+fsx_rdrvprep:
+    push es
+    mov ax, MEGA_SEL_PSCR
+    mov es, ax
+    xor bx, bx                  ; BX walks the classes, CH is the mask's
+    mov cx, 0x0103              ; bit and CL the count
+.c:
+    test [es:FSX_RSV+FSV_NSTR+1], ch
+    jz .nx
+    mov al, [cs:fsx_rdpix+bx]
+    cbw
+    xchg ax, si
+    mov si, [drv_fptr+si+2]     ; the driver's data selector, 0 = not loaded
+    mov ax, si
+    call MEGA_SEL_CODE:mega_ishif
+    jc .nx                      ; none, or conventional: it runs where it is
+    mov dx, si
+    call mega_drvlow
+    jnc .nx                     ; down: the bracket copies nothing
+    lsl ax, si                  ; ...else its copy: image + bss, the pair's
+    inc ax                      ; limit (mega_imghif's)
+    call fsx_rkb
+.nx:
+    inc bx
+    shl ch, 1
+    dec cl
+    jnz .c
+    pop es
+    ret
+fsx_rdpix:                      ; drv_fptr's offset per mask bit: DRVC_DISK,
+    db (DRVC_DISK - 1) * 4, (DRVC_EMS - 1) * 4, (DRVC_SOUND - 1) * 4 ; EMS, SOUND
 
 ; fsx_rmvck - THE BANK'S GUARD (SPEC.md 53.2.3): the base of every MOVABLE
 ; claim the instance DI owns, in mem_tab's order, into the park's scratch at
@@ -1819,46 +1959,8 @@ fsx_rlist:
 fsx_rsvcf:
     push es
     push bp
-    mov ax, MEGA_SEL_PSCR
-    mov es, ax
-    mov ax, [es:FSX_RSV+FSV_NRUN]
-    mov cx, RMR_SIZE
-    mul cx
-    add ax, rms_runs - rms_lo   ; the claim's bytes: code, rows, runs...
-    push ax
-    xor bp, bp
-    call fsx_rxrows             ; ...and the bracket's pool rows (CX bytes)
-    pop ax
-    add ax, cx
-    xor dx, dx
-    cmp word [ser_row], 0xFFFF  ; ...and a SERIAL.DRV lease's ring after
-    je .nser                    ; them (W7, fsx_rserdn), at an even offset
-    push ds                     ; (the runs are words) - unless the lease is
-    mov ds, [mod_tab + MOD_SER * MODR_SIZE + MODR_SEG] ; THIS package's: its
-    mov bx, [SRL_O_SEG]         ; ring is in the region, which runs where
-    pop ds                      ; [fsx_rseg] says, and a second copy would
-    inc dx                      ; be overwritten by the region's at the
-    cmp bx, [di+I_SPTR]         ; return. DX = 1 says so (no ring is at an
-    je .nser                    ; odd offset)
-    mov dx, ax
-    add ax, SER_SIZE
-.nser:
-    mov [ss:fsx_rserb], dx
-    xor dx, dx                  ; ...and THE GLYPH TABLE'S COPY last, when it
-    push ax                     ; is above 1MB (MEM_K_FONT, KERN-MEGA-PLAN
-    mov ax, [font_seg]          ; 14.120/14.131): no real segment reaches it
-    call MEGA_SEL_CODE:mega_ishif ; (MEGA_ISHI less its real-mode test:
-    pop ax                      ; `.mega` runs in protected mode alone)
-    jc .nfnt
-    inc ax                      ; there, so the bracket reads it here
-    and al, 0xFE                ; (at an even offset: rep movsw)
-    mov dx, ax
-    add ax, FONT_BYTES
-.nfnt:
-    mov [ss:fsx_rfont], dx
-    push ax
+    call fsx_rsvcsz             ; AX = its bytes (53.2.3.1's answer too)
     call fsx_rlowclaim          ; DX = the selector, AX:CX its base
-    pop si
     jc .o
     mov [ss:fsx_rsvc], dx
     sub cx, rms_lo              ; the paragraph CS x 16 = base - rms_lo
@@ -1916,6 +2018,53 @@ fsx_rsvcf:
     pop es
     ret
 
+; fsx_rsvcsz - the SERVICE AREA's bytes (fsx_rsvcf's claim, and FSXF_PREP's
+; answer, 53.2.3.1): the twins' code and data, the list's runs, the bracket's
+; pool rows, a SERIAL.DRV lease's ring and the glyph table's copy - the last
+; two placed at [ss:fsx_rserb] and [ss:fsx_rfont] as fsx_rsvcf fills them.
+; in: PM, DS = KDATA, DI = the instance, [ss:fsx_rown] its slot, the list
+; walked into the park's scratch (fsx_rlist). out AX = the bytes. Clobbers
+; BX, CX, DX, SI, BP, ES
+fsx_rsvcsz:
+    mov ax, MEGA_SEL_PSCR
+    mov es, ax
+    mov ax, [es:FSX_RSV+FSV_NRUN]
+    mov cx, RMR_SIZE
+    mul cx
+    add ax, rms_runs - rms_lo   ; the claim's bytes: code, rows, runs...
+    push ax
+    xor bp, bp
+    call fsx_rxrows             ; ...and the bracket's pool rows (CX bytes)
+    pop ax
+    add ax, cx
+    xor dx, dx
+    cmp word [ser_row], 0xFFFF  ; ...and a SERIAL.DRV lease's ring after
+    je .nser                    ; them (W7, fsx_rserdn), at an even offset
+    push ds                     ; (the runs are words) - unless the lease is
+    mov ds, [mod_tab + MOD_SER * MODR_SIZE + MODR_SEG] ; THIS package's: its
+    mov bx, [SRL_O_SEG]         ; ring is in the region, which runs where
+    pop ds                      ; [fsx_rseg] says, and a second copy would
+    inc dx                      ; be overwritten by the region's at the
+    cmp bx, [di+I_SPTR]         ; return. DX = 1 says so (no ring is at an
+    je .nser                    ; odd offset)
+    mov dx, ax
+    add ax, SER_SIZE
+.nser:
+    mov [ss:fsx_rserb], dx
+    xor dx, dx                  ; ...and THE GLYPH TABLE'S COPY last, when it
+    push ax                     ; is above 1MB (MEM_K_FONT, KERN-MEGA-PLAN
+    mov ax, [font_seg]          ; 14.120/14.131): no real segment reaches it
+    call MEGA_SEL_CODE:mega_ishif ; (MEGA_ISHI less its real-mode test:
+    pop ax                      ; `.mega` runs in protected mode alone)
+    jc .nfnt
+    inc ax                      ; there, so the bracket reads it here
+    and al, 0xFE                ; (at an even offset: rep movsw)
+    mov dx, ax
+    add ax, FONT_BYTES
+.nfnt:
+    mov [ss:fsx_rfont], dx
+    ret
+
 ; fsx_rxrows - THE BRACKET'S POOL ROWS (kern_mega size pass 2): mx_tab is in
 ; the tables' tail above 1MB, which real mode cannot read, so rms_xchk reads
 ; a copy of what it needs - {MX_AUX, MX_KB, MX_OFF} of every live entry the
@@ -1971,7 +2120,7 @@ fsx_rxrows:
 ; service area - its DSV_BLK and DSV_PKGCALL (SOUND: its DSV_TICK and
 ; DSV_STREAM too), and the REAL paragraph it runs at: its own when its image
 ; is conventional, else a conventional claim's, the image and bss copied down
-; and back up (fsx_rcopyf; SOUND's at the drop and the return, fsx_rsndf).
+; and back up (fsx_rcopyf; SOUND's at the drop and the return, fsx_rsnddn and fsx_rsndup).
 ; SOUND's paragraph must be a multiple of 20h - SBL_DSCS derives DS = CS
 ; only there - and its SNDV_RMODE words must each have a real segment.
 ; CF = 1: AL = FSXR_DROOM no room, FSXR_DRV a word with no segment. PM, DS =
@@ -2200,7 +2349,7 @@ fsx_rcopyf:
     jz .o
     mov es, bx
     mov bx, rms_drv - rms_lo
-    mov dx, RMD_NA              ; (not SOUND's: fsx_rsndf, at IF = 0)
+    mov dx, RMD_NA              ; (not SOUND's: fsx_rsnddn / fsx_rsndup, at IF = 0)
 .d:
     call fsx_rcprow
 .dn:
@@ -2441,14 +2590,18 @@ fsx_rsnddn:
     mov si, 0x08 * 4
     mov cx, 1                   ; the cell's 8259 bit, master then slave
 .v:
-    cmp [si+2], dx
-    jne .vn
+    mov ax, [si+2]
+    cmp ax, dx                  ; its pair's code half - or, for an image
+    je .vm                      ; that is CONVENTIONAL, its own segment,
+    cmp ax, [es:bp+RMD_SEG]     ; which mega_ivt_sync's .fixrow writes back
+    jne .vn                     ; for reflections (FSXF_PREP's lent SOUND.DRV,
+.vm:                            ; 14.180: missed, its line stayed SHUT)
     cmp di, rms_svec - rms_lo + RMV_N * 6
     jae .vn
     mov [es:di], si
+    mov [es:di+4], ax           ; (the cell's segment, as it was)
     mov ax, [si]
     mov [es:di+2], ax
-    mov [es:di+4], dx
     add di, 6
     mov ax, [es:bp+RMD_SEG]
     mov [si+2], ax
@@ -2861,7 +3014,9 @@ fsx_rupf:
     sti                         ; the copy back at IF = 1: no other task runs
     mov al, 1                   ; (frozen) and the rate is off, so nothing
     call MEGA_SEL_CODE:fsx_rcopyf ; in protected mode writes the window's
-                                ; copy meanwhile - nor a low driver's image
+                                ; copy meanwhile - but the package's own
+                                ; SERIAL.DRV lease's ring (fsx_rserdn's
+                                ; known limit) - nor a low driver's image
     call fsx_rfree              ; ...and every claim back: the copies', the
     pop es                      ; service area's
     popa
@@ -2900,7 +3055,7 @@ FSX_RSR     equ 0               ; the scratch: the rows...
 FSX_RSN     equ FSXL_NMAX * RMS_SSZ ; ...the runs
 FSX_RSV     equ FSX_RSN + FSXL_RUNS * RMR_SIZE ; ...and its counters:
 FSV_NSTR    equ 0               ; db: rows written
-FSV_DMSK    equ 1               ; db: the classes asked (1 DISK, 2 EMS)
+FSV_DMSK    equ 1               ; db: the classes asked (1 DISK, 2 EMS, 4 SOUND)
 FSV_NRUN    equ 2               ; dw: runs written
 %if FSX_RSV + 4 > MPS_SIZE
   %error "the extent list's scratch is the park's: MPS_SIZE must hold FSXL_NMAX rows and FSXL_RUNS runs"
@@ -3136,7 +3291,7 @@ cpu 286
 ; data is in the same copy, read through CS: and written with DS = CS; the
 ; kernel's through KERNEL_SEG (a real segment in the bracket), and the pool's
 ; table as fsx_rsvcf copied what of it they need (mx_tab itself is above 1MB,
-; in the tables' tail). WHY NOT RESIDENT `.text`: these are ~1.6 KB that a
+; in the tables' tail). WHY NOT RESIDENT `.text`: these are ~2.3 KB that a
 ; machine needs only inside a real-mode bracket, and `.text` is conventional
 ; memory on every kern_mega machine for ever; a module would be a system-disk
 ; read at every Play (W1's decision 1). Copied out of `.mega` they cost the
@@ -3577,7 +3732,11 @@ rms_xcaps:
 ; 286 and by a loaded base on a 386, in kern_big's XMEM.DRV's pieces (16 KB /
 ; 2 KB, interrupts open between them), with A20 proved first. out CF = 0;
 ; CF = 1 AX = 1 no store / 2 not a block of yours / 3 bad length. Every other
-; register kept
+; register kept. CX = 0 is WHERE (SPEC.md 53.2.3, KERN-MEGA-PLAN 14.179): no
+; byte moved, CF = 0 and DX:AX = the LINEAR address those bytes are at NOW -
+; what a package reads in place by LOADALL or a loaded base inside this
+; bracket, where nothing moves a block; every other kernel and context
+; refuses CX = 0 as a bad length
 ; -----------------------------------------------------------------------------
 rms_xcopy:
     push bx
@@ -3591,8 +3750,7 @@ rms_xcopy:
     push cs
     pop ds
     mov bp, 3
-    jcxz .e
-    test cl, 1
+    test cl, 1                  ; (CX = 0 passes both: WHERE, at .w)
     jnz .e
     cmp cx, 32768
     ja .e
@@ -3607,6 +3765,7 @@ rms_xcopy:
     mov bl, [rms_slot]
     call rms_xchk               ; DX:AX = where those bytes are now
     jc .e
+    jcxz .w                     ; (CX = 0: that is the answer)
     push dx
     push ax
     mov ax, es                  ; the conventional end, linear
@@ -3648,6 +3807,16 @@ rms_xcopy:
     pop di
     pop si
     pop dx
+    pop cx
+    pop bx
+    retf
+.w:
+    pop es                      ; WHERE: DX:AX answered, the caller's DX
+    pop ds                      ; dropped (CF = 0, rms_xchk's)
+    pop bp
+    pop di
+    pop si
+    pop cx
     pop cx
     pop bx
     retf

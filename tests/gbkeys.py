@@ -110,7 +110,11 @@ def run(kind, disk, viewoff, mapoff):
     img = os.path.join(ROOT, "build", "os8088-720.img")
     with os88ui.boot(img, apps=disk, machine=MACHINES[kind], quick=True) as ui:
         m = ui.m
-        ui.path("B:/ACID2.GB")
+        game = ui.path("B:/ACID2.GB")   # the GAME's window, by slot: its
+        # title is "RealDMG" on kern_big and "(Un)RealDMG" on kern_mega
+        # (rw_unttl), where ui.window("RealDMG") resolves by PREFIX to
+        # "RealDMG Controls" - the window already in front - and the raise
+        # below was a no-op that left the game unable to see a key
         st = {"seg": None, "view": 0}
         lin = (lambda s_, o_=0: m.lin(s_, o_)) if MEGA else \
             (lambda s_, o_=0: s_ * 16 + o_)
@@ -186,7 +190,8 @@ def run(kind, disk, viewoff, mapoff):
         if len(cfg) != 144 or cfg[2] != 3 or cfg[136:144] != keymap():
             return "REALDMG.CFG does not keep it: %d bytes, version %d, %s" % (
                 len(cfg), cfg[2] if len(cfg) > 2 else -1, cfg[136:144].hex())
-        ui.raise_window(ui.window("RealDMG"))   # the game reads the map
+        ui.raise_window([w for w in ui.windows() if w.i == game.i][0])
+                                                # the game reads the map
         joy = {}
         for key in ("KeyQ", "KeyZ", "KeyX"):
             m.key(key, down=True, up=False)

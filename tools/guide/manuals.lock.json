@@ -35,15 +35,23 @@
   "sources": [
    "apps/apple2"
   ],
-  "stamped": "e4576a70",
-  "strings": "84a2ce489ed87f7e",
-  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+  "stamped": "fae17be3",
+  "strings": "3a45cab2f2f03ebd",
+  "why": "speed paragraph: the fast core, the ROM translation and the 1.02 MHz throttle on a 286"
  },
  "APPS": {
   "sources": [],
   "stamped": "e4576a70",
   "strings": null,
   "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "ARCADE_O88": {
+  "sources": [
+   "apps/arcade"
+  ],
+  "stamped": "607f6357",
+  "strings": "f2e769a1e0e72cf8",
+  "why": "About card credits the contributor and covers every board; page gains the Arcade menu table (About Arcade, Close) as 1942's has"
  },
  "ARCHIVO_F88": {
   "sources": [],
@@ -77,9 +85,9 @@
   "sources": [
    "apps/audio"
   ],
-  "stamped": "55a051b4",
-  "strings": "e12e9e2c75e19803",
-  "why": "Unchanged: XTMP3's track split the look-ahead out of apengine.inc into aplook.inc (35efae82). AUDIO.O88 assembles byte-identical and no user-visible string changed. Only the file a string lives in moved."
+  "stamped": "e15cc130",
+  "strings": "685a84aa6fd914d9",
+  "why": "kern_mega arm only: the hold filled by the stream (KERN-MEGA-PLAN 14.186); the page already says it reads a song a little at a time as it plays, which is now true on every kernel - unchanged"
  },
  "AUTOSTRT": {
   "sources": [],
@@ -98,6 +106,15 @@
   "stamped": "e4576a70",
   "strings": null,
   "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "BATTLE_VBT": {
+  "sources": [
+   "tools/os88vbt.py",
+   "tools/vbtscene.py"
+  ],
+  "stamped": "d70ec25c",
+  "strings": "248798d5d21fc5a7",
+  "why": "read: the openings' seam setting and the victory read-ahead are below this page's level of detail"
  },
  "BEVERLY_MOD": {
   "sources": [],
@@ -151,9 +168,9 @@
   "sources": [
    "apps/c64"
   ],
-  "stamped": "86ee3df0",
-  "strings": "3308f2081ea59ce1",
-  "why": "checked: Smart attach dialog opens with Open greyed until a file is picked, Preferences items aligned; the page describes neither in detail"
+  "stamped": "38069791",
+  "strings": "9f15ac039135842b",
+  "why": "toast messages cut to TOAST_MAX (SPEC.md 59.10.1); the messages the page quotes are updated to the new words"
  },
  "CALC_O88": {
   "sources": [
@@ -171,9 +188,9 @@
  },
  "CATALOG_TXT": {
   "sources": [],
-  "stamped": "9deeee7d",
+  "stamped": "5e4740bb",
   "strings": null,
-  "why": "checked: the Weave disk's CATALOG.TXT says how a user puts their own bundle on a disk (copy it, double-click it) instead of naming the Makefile's BUNDLES="
+  "why": "covers the live volume's STORIES/CATALOG.TXT (tools/getstories.py write_catalog) beside the Weave disk's"
  },
  "CAT_GIF": {
   "sources": [],
@@ -255,9 +272,9 @@
   "sources": [
    "kernel/ctrl.inc"
   ],
-  "stamped": "1b5a0fd9",
-  "strings": "5a8f150309d151bc",
-  "why": "kernel size pass 16: ctrl.inc's changes are internal - the save's no-system-disk line moved into CTRL.DRV with its text unchanged, and SYSTEM.CFG/KERNEL.SYS are staged into cp_sbuf; nothing a user reads changed"
+  "stamped": "38069791",
+  "strings": "968a5adf84f05f2f",
+  "why": "toast messages written as TOASTSTR and over-length ones cut to TOAST_MAX (SPEC.md 59.10.1); no words the page quotes or describes change"
  },
  "CWORD": {
   "sources": [],
@@ -269,9 +286,9 @@
   "sources": [
    "apps/cword"
   ],
-  "stamped": "55642792",
-  "strings": "e29c72eb33b83e26",
-  "why": "Undo, Cut/Copy/Paste keys, Ctrl+F Search, Alt+F4, Y/N/C on the save prompt, draggable ruler markers, labelled indent boxes, Confirm Changes and RTF keeping every format, all driven under MartyPC"
+  "stamped": "38069791",
+  "strings": "cd315d8f05825318",
+  "why": "toast messages cut to TOAST_MAX (SPEC.md 59.10.1); the messages the page quotes are updated to the new words"
  },
  "CYCLONE_O88": {
   "sources": [
@@ -381,9 +398,9 @@
   "sources": [
    "drivers/ether"
   ],
-  "stamped": "1f75e2ed6",
-  "strings": "8acfc5bbc141884f",
-  "why": "NIC seam (SPEC 125.2) moved ether.asm's body into ethdrv.inc and the 8390 into nicne2k.inc; ETHER.DRV assembles byte-identical (four variants cmp'd), so nothing a user reads changed"
+  "stamped": "fed38237",
+  "strings": "dbf67e1a466a7b16",
+  "why": "kernel size pass 18: eth_name and eth_cpname became one 'Ethernet' string, so the string list lost a duplicate; every string a user reads is unchanged"
  },
  "EXTD_DRV": {
   "sources": [
@@ -499,9 +516,18 @@
    "firmware/picomem1/README.md",
    "firmware/picomem1/SHA256SUMS"
   ],
-  "stamped": "e4576a70",
+  "stamped": "d70ec25c",
   "strings": "52a90b0aba7759ae",
-  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+  "why": "a 2.0 is pointed at the PicoMEM 2 firmware now in the tree"
+ },
+ "FW_PICOMEM2": {
+  "sources": [
+   "firmware/picomem2/README.md",
+   "firmware/picomem2/SHA256SUMS"
+  ],
+  "stamped": "d70ec25c",
+  "strings": "29fb8825c8c9bb27",
+  "why": "new page: the PicoMEM 2.0 firmware, its fixes, what it lacks against PM2-10-4-26, flashing"
  },
  "GAMES": {
   "sources": [],
@@ -547,6 +573,14 @@
   "strings": "e6fb502f9e95b17d",
   "why": "HDDTOOL.DRV-side change only; nothing the page describes"
  },
+ "HELLO_O88": {
+  "sources": [
+   "apps/hello"
+  ],
+  "stamped": "5e4740bb",
+  "strings": "c96da6e079e0172e",
+  "why": "first page, written from apps/hello/hello.asm and SPEC.md 27: the window, File's Greeting/About pages, the About card"
+ },
  "HELV_F88": {
   "sources": [],
   "stamped": "e4576a70",
@@ -557,9 +591,9 @@
   "sources": [
    "kernel/hiber.inc"
   ],
-  "stamped": "ea7b512a",
-  "strings": "98dbfbe0d4d32714",
-  "why": "MC4's streaming resume: a full pool no longer greys the item, only no memory above 1MB does; added 'Hibernate: fragmented'; 'No room above 1MB' kept for a resume on less extended memory"
+  "stamped": "38069791",
+  "strings": "f80029845cffca5e",
+  "why": "toast messages cut to TOAST_MAX (SPEC.md 59.10.1); the messages the page quotes are updated to the new words"
  },
  "HOUSE_PNG": {
   "sources": [],
@@ -593,9 +627,9 @@
   "sources": [
    "apps/install"
   ],
-  "stamped": "0c228f30f",
-  "strings": "2d50f49b5c22b955",
-  "why": "apps/install changed only in OS88VER.TXT (release 20261105's date and what-is-new lines); the page quotes neither, so it stands unchanged"
+  "stamped": "974c976d6",
+  "strings": "a40210b59174c907",
+  "why": "apps/install changed only in OS88VER.TXT (release 20261106's date and what-is-new lines); the page quotes neither, so it stands unchanged"
  },
  "INTRO_MID": {
   "sources": [],
@@ -665,9 +699,9 @@
   "sources": [
    "apps/loom"
   ],
-  "stamped": "6495d304",
-  "strings": "f1ec8a4b0eb77b99",
-  "why": "the Packing toast now brackets only the compile; the status line, which the page describes, still says Packing... for the whole verb - unchanged"
+  "stamped": "38069791",
+  "strings": "df1b6e84bf10b542",
+  "why": "toast messages cut to TOAST_MAX (SPEC.md 59.10.1); the messages the page quotes are updated to the new words"
  },
  "MEDIA": {
   "sources": [],
@@ -799,9 +833,9 @@
   "sources": [
    "apps/paccman"
   ],
-  "stamped": "066560d2",
-  "strings": "2eacb02ecd0d6758",
-  "why": "merge of two fixes: the disk's read-me is README.TXT (plain ASCII), and full screen mid-game draws correctly; both reflected on the page"
+  "stamped": "38069791",
+  "strings": "860c9413154506bd",
+  "why": "toast messages cut to TOAST_MAX (SPEC.md 59.10.1); the messages the page quotes are updated to the new words"
  },
  "PAINT_O88": {
   "sources": [
@@ -905,9 +939,17 @@
   "sources": [
    "apps/realdmg"
   ],
-  "stamped": "24c3d243",
-  "strings": "538de81c8b536080",
-  "why": "About card gained a credit line (ec45f031, and Desk Calendar's 'by jggonz'); the page's About description now says it shows who made it"
+  "stamped": "1a37e25e",
+  "strings": "7a12d506e63a5b3b",
+  "why": "077bf46d (14.147) added one user-visible refusal, 'REALDMG: unpack the ROM' for a packed cartridge over 256K; the Good to know list names it. The packed shipped demo now plays on kern_mega, which the page never said it did not. The toast and replay edits below the page's level."
+ },
+ "RECORDER_O88": {
+  "sources": [
+   "apps/recorder"
+  ],
+  "stamped": "5e4740bb",
+  "strings": "231b245f664b1611",
+  "why": "first page, written from apps/recorder/recorder.asm and SPEC.md 35: the buttons, Sound menu, status lines and every message"
  },
  "REDLINE_O88": {
   "sources": [
@@ -947,9 +989,9 @@
   "sources": [
    "apps/runcpm"
   ],
-  "stamped": "e4576a70",
-  "strings": "67bdba87c78bc549",
-  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+  "stamped": "87c45da6",
+  "strings": "c7f6d06375d430a5",
+  "why": "files past 64KB open as one huge claim (SPEC 74.3.3): the limits bullet rewritten to the memory rule, the 8MB ceiling and the RAM? message"
  },
  "SALES_SLK": {
   "sources": [],
@@ -975,9 +1017,9 @@
   "sources": [
    "apps/scribe"
   ],
-  "stamped": "9deeee7d",
-  "strings": "9002627c285a05c8",
-  "why": "Exit lists Alt+F4, which Scribe now handles; the welcome files are SCWELCOM.RTF and SCWELCOM.DOC; the Insert Picture 'not placed' note removed (the message reads 'WxH placed'); About box line checked on MartyPC"
+  "stamped": "38069791",
+  "strings": "417a79e27c4548c2",
+  "why": "toast messages written as TOASTSTR and over-length ones cut to TOAST_MAX (SPEC.md 59.10.1); no words the page quotes or describes change"
  },
  "SCWELCOM_RTF": {
   "sources": [],
@@ -1198,6 +1240,15 @@
   "strings": "3238a0f33fee57d6",
   "why": "the start-up line and the window label name File > Open Location..., the Browser's real menu item; the page quotes the new start-up line"
  },
+ "TOOL_VBATTLE": {
+  "sources": [
+   "tools/os88vbtgui.py",
+   "tools/os88vbt.py"
+  ],
+  "stamped": "d70ec25c",
+  "strings": "625b853e3ccf1b2e",
+  "why": "read: the openings' seam setting and the victory read-ahead are below this page's level of detail"
+ },
  "TOOL_VENC": {
   "sources": [
    "tools/os88venc.py",
@@ -1235,15 +1286,31 @@
   "strings": null,
   "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
  },
+ "VBATTLED_O88": {
+  "sources": [
+   "apps/vbattle"
+  ],
+  "stamped": "607f6357",
+  "strings": "6282ad9c6b4aaa15",
+  "why": "same About card as VBATTLE.O88, whose page this one defers to for window, menu and keys; the rest of the vbattle diff is kern_mega hold sizing below this page's detail"
+ },
+ "VBATTLE_O88": {
+  "sources": [
+   "apps/vbattle"
+  ],
+  "stamped": "607f6357",
+  "strings": "6282ad9c6b4aaa15",
+  "why": "Video Battle gains the standard About card; page gains the Video Battle menu table (About Video Battle, Close)"
+ },
  "VESA_DRV": {
   "sources": [
    "drivers/vesa/vesa.asm",
    "kernel/vidext.inc",
    "kernel/ctrl.inc"
   ],
-  "stamped": "1b5a0fd9",
-  "strings": "287b8f561883cf80",
-  "why": "kernel size pass 16: ctrl.inc's changes are internal - the save's no-system-disk line moved into CTRL.DRV with its text unchanged, and SYSTEM.CFG/KERNEL.SYS are staged into cp_sbuf; nothing a user reads changed"
+  "stamped": "38069791",
+  "strings": "9a119e740c33a0bb",
+  "why": "toast messages written as TOASTSTR and over-length ones cut to TOAST_MAX (SPEC.md 59.10.1); no words the page quotes or describes change"
  },
  "VIDEO_O88": {
   "sources": [
@@ -1279,9 +1346,9 @@
   "sources": [
    "apps/weave"
   ],
-  "stamped": "7ec8cb8a",
-  "strings": "ac1b906ade71c22c",
-  "why": "checked: no-bundle and refusal screens now name Bundle > Open Bundle..., which the page already says"
+  "stamped": "38069791",
+  "strings": "561b07689a677058",
+  "why": "toast messages written as TOASTSTR and over-length ones cut to TOAST_MAX (SPEC.md 59.10.1); no words the page quotes or describes change"
  },
  "WELCOME_BAS": {
   "sources": [],
@@ -1373,9 +1440,9 @@
   "sources": [
    "apps/word"
   ],
-  "stamped": "9deeee7d",
-  "strings": "466d7146ee799a0e",
-  "why": "Exit lists Alt+F4, which Word now handles (checked on MartyPC)"
+  "stamped": "38069791",
+  "strings": "bd9d9db5d783e988",
+  "why": "toast messages cut to TOAST_MAX (SPEC.md 59.10.1); the messages the page quotes are updated to the new words"
  },
  "WRITING_MD": {
   "sources": [],
@@ -1395,8 +1462,8 @@
   "sources": [
    "apps/xtmp3"
   ],
-  "stamped": "24c3d243",
-  "strings": "4f1c265a642e8c1e",
-  "why": "only an About-card credit line changed (ec45f031 / 'by jggonz'); the page already says the card shows who made it, its credits, or a line about it, so nothing quoted is wrong"
+  "stamped": "38069791",
+  "strings": "952a5583ac539493",
+  "why": "toast messages written as TOASTSTR and over-length ones cut to TOAST_MAX (SPEC.md 59.10.1); no words the page quotes or describes change"
  }
 }

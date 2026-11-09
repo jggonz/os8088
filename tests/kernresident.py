@@ -30,6 +30,24 @@ this walks `mem_tab` on the bare desktop:
   RESIDENT  the last non-purgeable byte is under KERN_RESIDENT_KB. Purgeable
             claims do not count and that is the point of them (SPEC.md 50.6).
 
+THE ONE KERNEL CLAIM, charged at its SIZE (SPEC.md 2.8.8). This machine has
+no pointer that speaks - nothing moves the mouse - so kbm_adopt holds the
+keyboard mouse's pointer half, the kernel's own code that left `.text` for
+it, in ONE 512-byte MEM_K_MOD granule for the session. It is pinned, and it
+is at the heap's TOP because it has to be: when kbm_adopt runs, the heap's
+floor is still raised past stage 2's live blob (mem_init_x, until
+mem_unblob), and the `.boot3m` image it copies is dropped with the rest of
+the boot, so it cannot wait. A bottom-up claim then would sit above the
+blob - a pinned island once mem_unblob hands the floor back, and on kern_big
+still past 100KB by address. Its ADDRESS is therefore the 128KB machine's
+last 512 bytes, which says nothing about rule 1; its BYTES are kernel
+residency, and rule 1 counts them: the
+footprint is the last other non-purgeable byte PLUS the claim's size. Only
+that claim is excused from the address reading, and only while it is what
+SPEC.md 2.8.8 says - the row mod_r_kbm names, one MEM_GRAN granule,
+MEM_K_MOD, and [mou_ptr] still 0. A claim still standing after a pointer
+spoke is a missed drop, and is read by address like any other.
+
 THE BRANCH GRACE. Branch and integration work may run KERN_GRACE (2KB) over
 the budget, as guard 1 allows, and this prints that as a warning and passes;
 `--release` is the upstream-merge and release reading, which fails on a
@@ -76,7 +94,9 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
         fails.append("BOOT: no desktop on a %d KB machine - kern_big no "
                      "longer boots on 128KB (rule 3)" % (ram // 1024))
     span = eq["KERN_END"] * 16                  # the kernel's own last byte
-    top, drivers, purge = span, 0, 0
+    top, drivers, purge, kbm = span, 0, 0, 0
+    kbm_seg = u16(m.read(S("mod_r_kbm") + eq["MODR_SEG"], 2))
+    mou_ptr = m.read(S("mou_ptr"), 1)[0]
     tab = m.read(S("mem_tab"), eq["MEM_MAX"] * MC_SIZE)
     rows = []
     for i in range(eq["MEM_MAX"]):
@@ -93,6 +113,13 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
             continue
         if own == eq["MEM_K_DRV"]:
             drivers += 1
+        if (seg == kbm_seg and own == eq["MEM_K_MOD"]
+                and para == eq["MEM_GRAN"] and not mou_ptr):
+            kbm += para * 16                    # charged by SIZE, below
+            rows.append("  %04X %5d para  owner %04X  ends %6d  PINNED, the "
+                        "keyboard mouse (SPEC.md 2.8.8): %d bytes"
+                        % (seg, para, own, end, para * 16))
+            continue
         top = max(top, end)
         rows.append("  %04X %5d para  owner %04X  ends %6d  PINNED"
                     % (seg, para, own, end))
@@ -102,10 +129,15 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     if drivers:
         fails.append("DRIVERS: %d MEM_K_DRV claim(s) - this machine has a "
                      "driver loaded, and rule 3 is stated with none" % drivers)
-    print("RESIDENT: kernel span ends %d, last non-purgeable byte %d, "
-          "limit %d -> %d spare" % (span, top, limit, limit - top))
+    print("KBMOUSE : [mou_ptr] %d, mod_r_kbm %04X -> %d bytes charged at "
+          "their size" % (mou_ptr, kbm_seg, kbm))
+    last = top
+    top += kbm
+    print("RESIDENT: kernel span ends %d, last other non-purgeable byte %d, "
+          "+ %d keyboard mouse = %d, limit %d -> %d spare"
+          % (span, last, kbm, top, limit, limit - top))
     if top > limit + grace:
-        fails.append("RESIDENT: the last non-purgeable byte is %d, which is "
+        fails.append("RESIDENT: the non-purgeable footprint is %d, which is "
                      "%d past KERN_RESIDENT_KB (%d)%s - kern_big no longer "
                      "fully resides in it (docs/KERNEL-MEMORY.md rule 1)"
                      % (top, top - limit, limit,

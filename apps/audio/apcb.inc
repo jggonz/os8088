@@ -248,6 +248,9 @@ ap_oncmd:                          ; AL = item, AH = menu; SI = window
     cmp al, AP_CMD_CLEAR
     jne .n_clear
     call ap_stream_close
+%ifdef PKG_MEGA
+    call aph_free                   ; (kern_mega's arm: its hold too)
+%endif
     call apl_clear
     mov byte [ap_state], AP_ST_STOP
     mov word [ap_msg], ap_s_ready

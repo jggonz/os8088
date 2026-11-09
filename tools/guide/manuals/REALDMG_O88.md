@@ -394,7 +394,9 @@ that is not write-protected and has some room.
   unknown** (or another number) for a cartridge chip it does not have, and
   **REALDMG: needs more XMS** for a game over 256K when there is not enough
   memory above 1MB to keep it in - none at all, or, on the kern_mega disks,
-  less than the game's size.
+  less than the game's size. A game over 256K stored compressed on the disk
+  says **REALDMG: unpack the ROM**: RealDMG can bring such a game down only
+  as a whole, so keep the file uncompressed.
 - **REALDMG: no room for ROM** or **no room for RAM** means the system does
   not have the memory free. Close other programs, or choose CPU >
   Interpreter to give the recompiler's memory back, and load the game

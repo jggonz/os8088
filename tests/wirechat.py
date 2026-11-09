@@ -974,7 +974,12 @@ def main():
               "16 ...for a claim with an empty body and the usual query (%r)"
               % ([(e[1], e[3]) for e in cl],))
         n = len(HUB.log)
-        check(wait(lambda: any(e[0] == "poll" for e in HUB.log[n:]), "the next poll", secs=20)
+        # 60, NOT 20: a poll the hub is HOLDING when this starts is answered
+        # only when its hold ends - 20 HOST seconds (Hub.handle's `end`) - and
+        # the next poll follows that, so a 20-guest-second budget raced the
+        # fixture's own hold and lost on a loaded box (mega-wirechat, a
+        # whole-tier soak, 2026-11-07)
+        check(wait(lambda: any(e[0] == "poll" for e in HUB.log[n:]), "the next poll", secs=60)
               and rb("wc_link") == LK_LIVE and rb("wc_qclaim") == 0
               and rs("wc_key", 37) == "0b5e-c0de-42"
               and len([e for e in HUB.log if e[0] == "join"]) == nj,

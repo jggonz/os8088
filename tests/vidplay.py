@@ -367,6 +367,24 @@ def main():
                                 "the second play to end", poll=0.1,
                                 limit=300.0, guest=60.0)
                 p1 = int(m.status().get("cycles", 0))
+                if tr is not None:
+                    # ...AND THE WATCH HAS RECORDED IT. The poll above reads
+                    # the byte directly, so it can see the store before the
+                    # pump has handed in the stop the store made - and a
+                    # block left then has no 1 -> 0 pair: "saw no play (1518
+                    # stops)" in a whole-tier soak, 2026-11-07. Wait on the
+                    # trace's own records, which is the thing asserted on.
+                    def ended(_m):
+                        up = False
+                        for h in tr.hits:
+                            if h.get("hit") == 1:
+                                up = True
+                            elif up and h.get("hit") == 0:
+                                return True
+                        return False
+                    os88marty.until(m, ended, "the watch to record the "
+                                    "play's end", poll=0.05, limit=60.0,
+                                    guest=10.0)
                 hits = list(tr.hits) if tr is not None else [
                     {"hit": 1, "cycles": p0}, {"hit": 0, "cycles": p1}]
             c0 = c1 = None

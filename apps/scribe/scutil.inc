@@ -310,9 +310,9 @@ sc_uspan:
 .popdone:
     pop ax
 .done:
-    mov [cs:sc_us0], ax
-    mov [cs:sc_us1], bx
-    pop ds
+    pop ds                          ; the package's, whose the span is - a
+    mov [sc_us0], ax                 ; store through CS was a completed #GP on
+    mov [sc_us1], bx                 ; kern_mega (KERN-MEGA-PLAN 14.162)
     pop bx
     pop ax
     ret
@@ -331,8 +331,11 @@ sc_plist:
     push bx
     push cx
     push ds
-    mov word [cs:sc_upn], 0
-    mov ax, [cs:sc_us0]
+    push es                         ; ES = the package for the STORES, DS the
+    push ds                         ; text for the scan: through CS each was a
+    pop es                          ; completed #GP on kern_mega, one a
+    mov word [es:sc_upn], 0          ; paragraph (KERN-MEGA-PLAN 14.162) -
+    mov ax, [cs:sc_us0]              ; `es:` is `cs:`'s length and clocks
     mov cx, [cs:sc_us1]
     xor bx, bx
     mov ds, [cs:sc_dseg]
@@ -343,7 +346,7 @@ sc_plist:
     jae .full
     push bx
     shl bx, 1
-    mov [cs:bx+sc_upst], ax
+    mov [es:bx+sc_upst], ax
     pop bx
     inc bx
 .scan:
@@ -361,23 +364,22 @@ sc_plist:
 .end:
     jmp short .para
 .done:
-    mov [cs:sc_upn], bx
+    mov [es:sc_upn], bx
     push bx                         ; the sentinel: where the last paragraph
     shl bx, 1                       ; ends
     mov ax, [cs:sc_us1]
-    mov [cs:bx+sc_upst], ax
+    mov [es:bx+sc_upst], ax
     pop bx
-    push cs
-    pop ds
     clc
     jmp short .out
 .full:
-    push cs
+    push es                         ; DS = the package for the toast
     pop ds
     mov ax, sc_m_toomanyp
     call sc_saymsg
     stc
 .out:
+    pop es
     pop ds
     pop cx
     pop bx

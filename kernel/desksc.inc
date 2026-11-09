@@ -562,8 +562,9 @@ sc_rclick_x:
     stc
     retf
 
-; (vgcf_boot - Force Color at boot - is drv_boot_x's own lines in the blob
-; since kernel size pass 14: the blob was its one caller, driver.inc)
+; (vgcf_boot - Force Color at boot - is drv_boot_x's own lines since kernel
+; size pass 14, in the blob then and in `.boot3` since BOOT3-PLAN wave 2: it
+; was its one caller, driver.inc)
 
 ; =============================================================================
 section .text
@@ -595,7 +596,7 @@ sc_s_remx   db MENU_DIS
 sc_s_rem    db 'Remove Shortcut'    ; NO NUL OF ITS OWN: it ends on sc_nul's,
 sc_nul      db 0                ; ...which is also an EMPTY name, for a
                                 ; document's open. Nothing may go between
-sc_s_nf     db 'Shortcut not found (?:)', 0   ; 23: exactly a toast
+TOASTSTR sc_s_nf, 'Shortcut not found (?:)'   ; 23: exactly a toast
 sc_bdg      db 1, 10            ; the badge: 10x10, one word across - a box
             times 10 dw 0x07FE  ; the mask: the whole box white
             dw 0x07FE, 0x0402, 0x043A, 0x041A, 0x042A   ; the box, and an arrow
@@ -1697,16 +1698,18 @@ sc_m_serx:
     popf
     ret
 
-sc_s_room   db 'No room on the desktop', 0  ; the image's own strings: a toast
-sc_s_many   db 'Too many shortcuts', 0      ; copies, and these cost the
-sc_s_path   db 'Path too long', 0           ; kernel nothing (SPEC.md 2.8)
-sc_s_self   db 'A link cannot replace itself', 0
+TOASTSTR sc_s_room, 'No room on the desktop' ; the image's own strings: a toast
+TOASTSTR sc_s_many, 'Too many shortcuts'    ; copies, and these cost the
+TOASTSTR sc_s_path, 'Path too long'         ; kernel nothing (SPEC.md 2.8)
+TOASTSTR sc_s_self, 'Cannot replace itself'
 
 ; =============================================================================
-section .boot2                    ; the BOOT half (SPEC.md 2.5.1): runs once,
+B3SECT                          ; the BOOT half (SPEC.md 2.5.1): runs once,
 ; =============================================================================
-; from ovc_load, and costs no resident byte and no disk read - .boot2 rides the
-; fixed ten-sector blob (docs/plans/completed/DESKTOP-SHORTCUTS-PLAN.md 3.1).
+; from ovc_load, and costs no resident byte and no disk read - it rides
+; `.boot3`, KERNEL.SYS's tail, beside its one caller since BOOT3-PLAN wave 2
+; (the fixed blob before that, docs/plans/completed/DESKTOP-SHORTCUTS-PLAN.md
+; 3.1). ovc_buf, which the copy below writes through CS, is `.boot3`'s too.
 
 ; ovl_sc_load's EXITS, AHEAD OF ITS ENTRY. Behind the body they were ~250
 ; bytes past its six early refusals, so each assembled as a 5-byte jcc-over-
@@ -1815,7 +1818,7 @@ ovl_sc_load:
     push es
     pop ds                      ; DS = the claim
     push cs
-    pop es                      ; ES = this overlay
+    pop es                      ; ES = this image, `.boot3` (ovc_buf, driver.inc)
     xor si, si
     mov di, ovc_buf
     cld
@@ -1876,13 +1879,14 @@ ovl_sc_load:
 ; as_boot - AUTOSTART: open every link in the boot volume's \AUTOSTRT
 ;           (SPEC.md 26.10.5)
 ;
-; In the BLOB, so it costs no resident byte: kmain_o calls it straight after
-; spl_finish - a launch must not race the loading screen's IRQ0 frames, which
-; that has stopped - and the blob lives until kmain's mem_unblob_x, after
-; kmain_o returns. It was CTRL.DRV's, behind a test here, and an EMPTY folder
-; then cost every boot the settings core's read: 1.2 s on the 360KB disk,
-; and every system disk ships the folder empty so that the feature can be
-; found. The blob's eleventh sector is the price (SPEC.md 26.10.5).
+; In `.boot3` (SPEC.md 2.9.15), so it costs no resident byte: kmain_o calls
+; it straight after spl_finish - a launch must not race the loading screen's
+; IRQ0 frames, which that has stopped - and `.boot3` lives until kmain's
+; mem_unblob_x, after kmain_o returns. It was CTRL.DRV's, behind a test here,
+; and an EMPTY folder then cost every boot the settings core's read: 1.2 s on
+; the 360KB disk, and every system disk ships the folder empty so that the
+; feature can be found. The blob's eleventh sector was the price (SPEC.md
+; 26.10.5) until BOOT3-PLAN wave 1 moved the walk out of the blob.
 ;
 ; WHAT A MACHINE PAYS:
 ;   no folder        one name looked up in a root the SYSTEM.CFG read has
@@ -1906,7 +1910,7 @@ ovl_sc_load:
 ; mode for the whole session. kmain calls it last, after the switch (or the
 ; refusal), so a link opens exactly as a double-click would.
 ;
-; SO THE WALK IS ONE BODY ASSEMBLED TWICE: `as_boot` in the blob for every
+; SO THE WALK IS ONE BODY ASSEMBLED TWICE: `as_boot` in `.boot3` for every
 ; other kernel, `as_bootc` in `.cold` for kern_mega - and it is written in the
 ; idioms both allow. It holds NO DATA (`.cold` may not, SPEC.md 2.6 rule 1:
 ; the folder's name and the toast are built by immediate stores) and NO CS
@@ -1928,7 +1932,7 @@ ovl_sc_load:
     push cs
     pop es
     mov si, as_s_dir            ; a name dskw_stat reads goes through DS, so
-    mov cx, as_s_dirn           ; the blob's own is staged
+    mov cx, as_s_dirn           ; `.boot3`'s own is staged
     call .cp
 %endif
     mov si, assoc_doc
@@ -1959,7 +1963,7 @@ ovl_sc_load:
     add sp, DSK_FIND_SZ
     push cx
 %else
-    push cs                     ; ES:DI = the answer's room, in the blob and
+    push cs                     ; ES:DI = the answer's room, in `.boot3` and
     pop es                      ; not on task 0's stack: a link that names a
     mov di, as_find             ; link is followed only while 320 bytes of it
                                 ; are left (LNK_SPMIN)
@@ -2019,7 +2023,7 @@ ovl_sc_load:
     pop es
     mov si, as_s_skip
     xor cx, cx
-    call KERNEL_SEG:cw_toast_show   ; COPIED, so a blob string outlives it
+    call KERNEL_SEG:cw_toast_show   ; COPIED, so a `.boot3` string outlives it
 %endif
 .root:
     xor bx, bx                  ; ...and the boot volume's root again, where
@@ -2042,13 +2046,13 @@ ovl_sc_load:
 %endmacro
 
 %ifndef KERN_MEGA
-section .boot2
-as_boot:                        ; (BLOBCALL from kmain_o)
+B3SECT                          ; (`.boot3` since BOOT3-PLAN wave 1)
+as_boot:                        ; (B3CALL from kmain_o)
     AS_WALK
 
 as_s_dir:   db 'AUTOSTRT', 0
 as_s_dirn   equ $ - as_s_dir
-as_s_skip:  db 'Autostart skipped', 0
+TOASTSTR as_s_skip, 'Autostart skipped'
 as_find:    times DSK_FIND_SZ db 0
 %else
 section .cold

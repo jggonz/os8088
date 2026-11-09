@@ -420,7 +420,8 @@ um_pmattach:                    ; (kern_mega in protected mode as well: the
 ; (the ROM sends it after this returns: ISA-PicoMEM pmbios/pmbios.asm,
 ; IRQCMD_USBMouse into PM_Int_End_Ok_all) - or, on kern_mega in protected
 ; mode, from mega_m33go once the reflection is back, EOI sent. The feed runs as a CH375 report's does from the worker: OSAPI_MOUSE_FEED
-; puts the cur_move chain on mou_pstack whatever stack this arrived on, and
+; puts the cur_move chain at mou_pstack's offset whatever SP this arrived on
+; (it moves SP, not SS: SPEC.md 9.10.1's SS load is MOUPRIV_ENTER's alone), and
 ; nothing that uses that stack can be running (both mouse ISRs and the feed
 ; itself are IF = 0 throughout). DS = ours for the X cell's fence, which asks
 ; whether the caller is DRVC_POINT's published driver.

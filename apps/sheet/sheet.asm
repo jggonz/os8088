@@ -1049,6 +1049,84 @@ sh_%1_btrects: times 4 * %2 dw 0
 ; the macro module's own CS on the stack for the chart module's retf, and either module may
 ; move while the other runs. Routed, the stack holds a tag for the macro module and
 ; the REGION's CS for the chart module - the region is pinned while a callback stands
+; CSDO insn - a store into a MODULE'S OWN variable, spelled [CSEG x]
+; (KERN-MEGA-PLAN 14.162). Both modules keep their state in their own claim
+; and address it through CS, which real mode lets code write. On every
+; shipped build this IS that instruction, `cs:` and all, byte for byte. In
+; kern_mega's arm (-DPKG_MEGA, SPEC.md 20.18) CS is the claim's CODE
+; selector, read-only, and each such store was a completed #GP (mega_gpw,
+; ~884 clocks on a 286) - five every macro STEP, 1,024 for a 100-turn FOR.
+; There DS holds the claim's DATA selector for the one instruction: the
+; package's own word naming it, [sh_m2dseg] for the macro module and
+; [ch_ovseg] for the chart module - the SECTION picks, and a CSDO in
+; resident code is refused, whose data is DS already. DS is the package's
+; at every site (neither module ever loads DS), FLAGS are kept, and no
+; site stores DS, SP or a pop, which the push would move.
+%ifdef PKG_MEGA
+ %define CSEG ds:
+ %macro CSDO 1+
+  %ifidni __?SECT?__, [section .modm]
+    push ds
+    mov ds, [sh_m2dseg]
+  %elifidni __?SECT?__, [section .modc]
+    push ds
+    mov ds, [ch_ovseg]
+  %else
+   %error "CSDO outside a module: resident code's own data is DS"
+  %endif
+    %1
+    pop ds
+ %endmacro
+%else
+ %define CSEG cs:
+ %macro CSDO 1+
+    %1
+ %endmacro
+%endif
+; CSDO_ON ... CSDO_OFF - CSDO for a RUN of such stores, DS switched once
+; (kernel/kernel.asm's, and its rules, which tests/unit/t_cswrite.py holds a
+; run to: entered and left only at its ends, nothing but [CSEG x] and
+; register operands inside it, no call, jump out, string op or DS). Nothing
+; at all on a shipped build
+%macro CSDO_ON 0
+ %ifdef PKG_MEGA
+  %ifidni __?SECT?__, [section .modm]
+    push ds
+    mov ds, [sh_m2dseg]
+  %elifidni __?SECT?__, [section .modc]
+    push ds
+    mov ds, [ch_ovseg]
+  %else
+   %error "CSDO_ON outside a module"
+  %endif
+ %endif
+%endmacro
+%macro CSDO_OFF 0
+ %ifdef PKG_MEGA
+    pop ds
+ %endif
+%endmacro
+; SH_JMPF / SH_JCXZF label - a short jump on a shipped build, a near one in
+; kern_mega's arm, where CSDO's bytes put three loops' ends out of a byte's
+; reach. JCXZ has no near form, so its arm hops; FLAGS untouched either way
+%macro SH_JMPF 1
+ %ifdef PKG_MEGA
+    jmp near %1
+ %else
+    jmp short %1
+ %endif
+%endmacro
+%macro SH_JCXZF 1
+ %ifdef PKG_MEGA
+    jcxz %%t
+    jmp short %%s
+%%t:
+    jmp near %1
+%%s:
+ %else
+    jcxz %1
+ %endif
+%endmacro
 %macro CHOUT 1
     push bp
     mov bp, %1
@@ -1075,7 +1153,11 @@ SHM2_DCLICK  equ 4                  ; resident thunks (sh_dbx_*)
 SHM2_DFIRE   equ 5                  ; 81.111: the released button fires
 SHM2_N       equ 6
 SH_DBX_EDLEN equ 33                 ; 81.96: an edit box's text, with its NUL
-SH_M2KB      equ 28                 ; the macro module's claim, KB: the module and the
+%ifdef PKG_MEGA
+SH_M2KB      equ 30                 ; kern_mega's arm: CSDO's five bytes a site
+%else                               ; are ~1.5KB of image, and the tail keeps
+SH_M2KB      equ 28                 ; at least its shipped room (14.162)
+%endif                              ; the macro module's claim, KB: the module and the
                                      ; text files' tail (81.91.1)
 
   %define SH_MODSEC .modc
@@ -25471,7 +25553,7 @@ sh_biff_dcrpn:
     xor ax, ax
     mov [sh_dc_end], ax
     mov [sh_dc_sp], ax
-    mov byte [cs:sh_dc_cept], 0       ; 81.97.4: never from a formula before
+    CSDO mov byte [CSEG sh_dc_cept], 0 ; 81.97.4: never from a formula before
 .tok:
     cmp di, [sh_dc_tend]
     jae .done
@@ -25865,7 +25947,7 @@ sh_dc_fn:                             ; 21H index - a FIXED count, from the
     ret
 
 sh_dc_fnce:                           ; 58H argc index - a macro COMMAND,
-    mov byte [cs:sh_dc_cept], 1       ; BIFF2/3's way of saying so (81.97),
+    CSDO mov byte [CSEG sh_dc_cept], 1 ; BIFF2/3's way of saying so (81.97),
                                        ; and otherwise tFuncVar exactly
 sh_dc_fnv:                            ; 22H argc index
     push ax
@@ -25898,7 +25980,7 @@ sh_dc_fnv:                            ; 22H argc index
     add di, cx
     jmp short .x
 .xce:
-    mov byte [cs:sh_dc_cept], 0
+    CSDO mov byte [CSEG sh_dc_cept], 0
     stc
 .x:
     pop si
@@ -25962,7 +26044,7 @@ sh_dc_area:                           ; 25H row1 row2 col1 col2
 sh_dc_index:
     mov al, [es:di+bx]
     mov ah, [cs:sh_dc_cept]
-    mov byte [cs:sh_dc_cept], 0
+    CSDO mov byte [CSEG sh_dc_cept], 0
     cmp byte [sh_dc_ver], 4
     jb .one
     cmp byte [es:di+bx+1], 0          ; BIFF4's high byte: 0 a function,
@@ -25971,7 +26053,7 @@ sh_dc_index:
     jne .bad
     mov ah, 1
 .one:
-    mov [cs:sh_dc_ce], ah
+    CSDO mov [CSEG sh_dc_ce], ah
     cmp al, 0xFF
     je .bad
     clc
@@ -40424,15 +40506,17 @@ shm_pmacro:
 .act:
     shl di, 1
     push si                           ; wave 1b: where its arguments start
-    mov byte [cs:shm_rrnew], 0
+    CSDO mov byte [CSEG shm_rrnew], 0
     call word [cs:di + shm_mtab]      ; CS: the table is the module's own
     pop dx
     cmp byte [cs:shm_rrnew], 0        ; it answered a REFERENCE: say which
     je .out                           ; call it was, by where its text is
-    mov byte [cs:shm_rrnew], 0        ; (shm_refarg)
-    mov [cs:shm_rrin], dx
-    mov [cs:shm_rrout], si
-    mov byte [cs:shm_rrok], 1
+    CSDO_ON
+    mov byte [CSEG shm_rrnew], 0 ; (shm_refarg)
+    mov [CSEG shm_rrin], dx
+    mov [CSEG shm_rrout], si
+    mov byte [CSEG shm_rrok], 1
+    CSDO_OFF
     jmp short .out
 .inert:
     SHOUT sh_skipargs
@@ -40966,28 +41050,28 @@ shm_vput:
     push si
     push di
     mov al, [sh_curtype]
-    mov [cs:di], al
+    CSDO mov [CSEG di], al
     mov al, [sh_evalerr]
-    mov [cs:di+1], al
+    CSDO mov [CSEG di+1], al
     mov ax, [sh_curaux]
-    mov [cs:di+2], ax
+    CSDO mov [CSEG di+2], ax
     mov si, sh_acc
     add di, 4
     mov cx, 8
 .acc:
     mov al, [si]
-    mov [cs:di], al
+    CSDO mov [CSEG di], al
     inc si
     inc di
     loop .acc
     sub di, 12
     cmp byte [cs:di], SH_T_TEXT
     jne .out
-    mov [cs:di+4], bx
+    CSDO mov [CSEG di+4], bx
     mov si, sh_sacc
 .text:
     mov al, [si]
-    mov [cs:bx], al
+    CSDO mov [CSEG bx], al
     inc si
     inc bx
     inc cx
@@ -41059,12 +41143,12 @@ shm_vget:
 shm_mcall:
     cmp byte [cs:shm_cans], 0
     je .call
-    mov byte [cs:shm_cans], 0
+    CSDO mov byte [CSEG shm_cans], 0
     SHOUT sh_skipargs                 ; they were evaluated on the first pass
     mov di, shm_ans
     jmp shm_vget
 .call:
-    inc byte [cs:shm_ccount]
+    CSDO inc byte [CSEG shm_ccount]
     cmp byte [cs:shm_ccount], 1
     jne .twice
     push si                           ; the TARGET before any argument: an
@@ -41072,11 +41156,13 @@ shm_mcall:
     SHOUT sh_name_lookup              ; sh_ident
     pop si
     jnc .bad
-    mov [cs:shm_ctcol], ax
-    mov [cs:shm_ctrow], bx
-    mov byte [cs:shm_cnargs], 0
+    CSDO_ON
+    mov [CSEG shm_ctcol], ax
+    mov [CSEG shm_ctrow], bx
+    mov byte [CSEG shm_cnargs], 0
+    CSDO_OFF
     mov ax, [cs:shm_pused]
-    mov [cs:shm_ptent], ax
+    CSDO mov [CSEG shm_ptent], ax
     cmp byte [si], ')'
     je .args
 .arg:
@@ -41100,16 +41186,16 @@ shm_mcall:
     mov bx, [cs:shm_ptent]
     add bx, shm_pool
     call shm_vput
-    add [cs:shm_ptent], cx
+    CSDO add [CSEG shm_ptent], cx
     mov byte [sh_evalerr], 0          ; an argument's error is ITS value, and
-    inc byte [cs:shm_cnargs]          ; does not make the calling cell one
+    CSDO inc byte [CSEG shm_cnargs]   ; does not make the calling cell one
     cmp byte [si], ','
     jne .args
     inc si
     jmp .arg
 .args:
     SHOUT sh_skipargs
-    mov byte [cs:shm_cpend], 1
+    CSDO mov byte [CSEG shm_cpend], 1
     jmp shm_mfalse
 .twice:
     mov word [sh_msg], sh_s_mtwice
@@ -41130,27 +41216,31 @@ shm_cpush:
     push di
     cmp byte [cs:shm_csp], SH_MSUBS
     jae .deep
-    inc byte [cs:shm_csp]
+    CSDO inc byte [CSEG shm_csp]
     call shm_ctop
     mov ax, [sh_macro_col]
-    mov [cs:di], ax
+    CSDO mov [CSEG di], ax
     mov ax, [sh_macro_row]
-    mov [cs:di+2], ax
+    CSDO mov [CSEG di+2], ax
     mov al, [sh_macro_lsp]
-    mov [cs:di+4], al
+    CSDO mov [CSEG di+4], al
     mov al, [cs:shm_sused]
-    mov [cs:di+5], al
+    CSDO mov [CSEG di+5], al
     mov al, [cs:shm_cnargs]
-    mov [cs:di+6], al
-    add [cs:shm_sused], al
-    mov byte [cs:di+7], 0
+    CSDO_ON
+    mov [CSEG di+6], al
+    add [CSEG shm_sused], al
+    mov byte [CSEG di+7], 0
+    CSDO_OFF
     mov ax, [cs:shm_pused]
-    mov [cs:di+8], ax
+    CSDO mov [CSEG di+8], ax
     mov ax, [cs:shm_ptent]
-    mov [cs:shm_pused], ax
+    CSDO mov [CSEG shm_pused], ax
     mov al, [cs:shm_bused]
-    mov [cs:di+10], al
-    mov byte [cs:di+11], 0
+    CSDO_ON
+    mov [CSEG di+10], al
+    mov byte [CSEG di+11], 0
+    CSDO_OFF
     clc
     jmp short .out
 .deep:
@@ -41173,12 +41263,14 @@ shm_cpop:
     mov al, [cs:di+4]
     mov [sh_macro_lsp], al
     mov al, [cs:di+5]
-    mov [cs:shm_sused], al
+    CSDO mov [CSEG shm_sused], al
     mov ax, [cs:di+8]
-    mov [cs:shm_pused], ax
+    CSDO mov [CSEG shm_pused], ax
     mov al, [cs:di+10]
-    mov [cs:shm_bused], al
-    dec byte [cs:shm_csp]
+    CSDO_ON
+    mov [CSEG shm_bused], al
+    dec byte [CSEG shm_csp]
+    CSDO_OFF
     inc word [sh_pass]                ; ...and so does its bindings going
     pop di
     pop ax
@@ -41245,7 +41337,7 @@ shm_mresult:
     je .out                           ; not in a subroutine: nothing to type
     call shm_ctop
     or al, 8 + 64                     ; a reference or an array is a VALUE by
-    mov [cs:di+11], al                ; the time this app returns one
+    CSDO mov [CSEG di+11], al         ; the time this app returns one
 .out:
     jmp shm_mtrue
 
@@ -41339,18 +41431,20 @@ shm_margument:
     ja .up
     sub al, 32
 .up:
-    mov [cs:di], al
+    CSDO mov [CSEG di], al
     inc si
     inc di
     inc cx
     cmp cx, SH_NAME_MAX
     jb .nc
 .nd:
-    mov byte [cs:di], 0
+    CSDO mov byte [CSEG di], 0
     pop si
     mov byte [sh_evalerr], 0
-    mov byte [cs:shm_ahref], 0
-    mov byte [cs:shm_amask], 0
+    CSDO_ON
+    mov byte [CSEG shm_ahref], 0
+    mov byte [CSEG shm_amask], 0
+    CSDO_OFF
     cmp byte [si], ','
     jne .parsed
     inc si
@@ -41361,16 +41455,18 @@ shm_margument:
     SHOUT sh_pcmp
     SHOUT sh_acc_toint
     jc .ref
-    mov [cs:shm_amask], al
+    CSDO mov [CSEG shm_amask], al
 .ref:
     cmp byte [si], ','
     jne .parsed
     inc si
     call shm_mref
     jnc .bad
-    mov [cs:shm_arcol], ax
-    mov [cs:shm_arrow], bx
-    mov byte [cs:shm_ahref], 1
+    CSDO_ON
+    mov [CSEG shm_arcol], ax
+    mov [CSEG shm_arrow], bx
+    mov byte [CSEG shm_ahref], 1
+    CSDO_OFF
 .parsed:
     SHOUT sh_skipargs
     cmp byte [cs:shm_csp], 0
@@ -41384,7 +41480,7 @@ shm_margument:
     cmp ax, [sh_macro_exdep]
     jne .unbound
     mov al, [cs:di+7]                 ; the next argument, in order
-    inc byte [cs:di+7]
+    CSDO inc byte [CSEG di+7]
     cmp al, [cs:di+6]
     jb .passed
     mov al, 0xFF                      ; declared, not passed: #N/A, as Excel
@@ -41406,14 +41502,16 @@ shm_margument:
     mov cx, SH_NAME_MAX + 1           ; back, or the formula resumes parsing
 .bn:                                  ; from inside the module
     mov al, [cs:si]
-    mov [cs:di], al
+    CSDO mov [CSEG di], al
     inc si
     inc di
     loop .bn
     pop si
     pop ax
-    mov [cs:di], al
-    inc byte [cs:shm_bused]
+    CSDO_ON
+    mov [CSEG di], al
+    inc byte [CSEG shm_bused]
+    CSDO_OFF
     inc word [sh_pass]                ; A BINDING CHANGES WHAT A CELL MEANS.
                                        ; sh_eval_cell answers a cell computed
                                        ; in this pass from its cache, and this
@@ -41583,7 +41681,7 @@ shm_mref:
     push cx
     push dx
     push si
-    mov byte [cs:shm_rrok], 0
+    CSDO mov byte [CSEG shm_rrok], 0
     SHOUT sh_pcmp                     ; ...or anything that ANSWERS with one:
     pop dx                            ; a reference function, called as the
     call shm_refarg                   ; whole argument (wave 1b)...
@@ -41843,7 +41941,7 @@ shm_mrangeref:
     CHOUT SHM_MNAME                    ; a defined name, near/far corner both
     jc .out
     push si
-    mov byte [cs:shm_rrok], 0
+    CSDO mov byte [CSEG shm_rrok], 0
     SHOUT sh_pcmp                     ; ...a reference function's answer
     pop dx
     call shm_refarg
@@ -41970,11 +42068,13 @@ shm_refret:
     jbe .r
     xchg bx, dx
 .r:
-    mov [cs:shm_rrc1], ax
-    mov [cs:shm_rrr1], bx
-    mov [cs:shm_rrc2], cx
-    mov [cs:shm_rrr2], dx
-    mov byte [cs:shm_rrnew], 1
+    CSDO_ON
+    mov [CSEG shm_rrc1], ax
+    mov [CSEG shm_rrr1], bx
+    mov [CSEG shm_rrc2], cx
+    mov [CSEG shm_rrr2], dx
+    mov byte [CSEG shm_rrnew], 1
+    CSDO_OFF
     SHOUT sh_skipargs
     mov ax, [cs:shm_rrc1]
     mov bx, [cs:shm_rrr1]
@@ -42319,7 +42419,7 @@ shm_mrelref:
     pop di
     sub di, ax
     mov ax, di
-    mov byte [cs:shm_rtform], 2
+    CSDO mov byte [CSEG shm_rtform], 2
     jmp shm_rttext
 .badpop:
     add sp, 8
@@ -42337,7 +42437,7 @@ shm_mreftext:
     push cx
     push dx
     call shm_boolarg
-    mov [cs:shm_rtform], al           ; 1 A1, 0 R1C1 - shm_rtone's numbering
+    CSDO mov [CSEG shm_rtform], al    ; 1 A1, 0 R1C1 - shm_rtone's numbering
     pop dx
     pop cx
     pop bx
@@ -42443,7 +42543,7 @@ shm_mesc:
     mov al, 0
     adc al, 0
     mov ah, [cs:shm_escwas]
-    mov [cs:shm_escwas], al
+    CSDO mov [CSEG shm_escwas], al
     cmp byte [sh_macro_esc], 0
     jne .press
     cmp al, 1                         ; down now and up before: a press
@@ -42456,13 +42556,15 @@ shm_mesc:
     je .out
     cmp byte [cs:shm_wtpend], 0       ; a WAIT it interrupted is over
     je .nowait
-    mov byte [cs:shm_wtpend], 0
+    CSDO mov byte [CSEG shm_wtpend], 0
     inc word [sh_macro_row]
 .nowait:
     cmp byte [cs:shm_ckmode], 2
     je .goto
-    mov byte [cs:shm_stepon], 1       ; Excel: Esc raises the Single Step
-    mov byte [cs:shm_stepgo], 0       ; dialog - Step, Halt or Continue
+    CSDO_ON
+    mov byte [CSEG shm_stepon], 1 ; Excel: Esc raises the Single Step
+    mov byte [CSEG shm_stepgo], 0 ; dialog - Step, Halt or Continue
+    CSDO_OFF
     jmp short .out
 .goto:
     mov ax, [cs:shm_ckcol]            ; CANCEL.KEY(TRUE, ref)
@@ -42521,10 +42623,10 @@ shm_stepmsg:
 ; ECHO([logical]) - FALSE stops the repaint after each step that changed
 ; something; TRUE or omitted brings it back. The end of the run always paints
 shm_mecho:
-    mov byte [cs:shm_echo], 1
+    CSDO mov byte [CSEG shm_echo], 1
     call shm_boolarg0
     jnc .skip
-    mov [cs:shm_echo], al
+    CSDO mov [CSEG shm_echo], al
 .skip:
     SHOUT sh_skipargs
     jmp shm_mtrue
@@ -42565,15 +42667,17 @@ shm_merror:
     inc si
     call shm_mref
     jnc .bad
-    mov [cs:shm_errcol], ax
-    mov [cs:shm_errrow], bx
-    mov byte [cs:shm_errmode], 2
+    CSDO_ON
+    mov [CSEG shm_errcol], ax
+    mov [CSEG shm_errrow], bx
+    mov byte [CSEG shm_errmode], 2
+    CSDO_OFF
     jmp short .out
 .on:
-    mov byte [cs:shm_errmode], 1
+    CSDO mov byte [CSEG shm_errmode], 1
     jmp short .out
 .off:
-    mov byte [cs:shm_errmode], 0
+    CSDO mov byte [CSEG shm_errmode], 0
 .out:
     SHOUT sh_skipargs
     jmp shm_mtrue
@@ -42588,18 +42692,20 @@ shm_mcancelkey:
     jc .have
     xor al, al                        ; omitted: FALSE (the manual's own)
 .have:
-    mov byte [cs:shm_ckmode], 0
+    CSDO mov byte [CSEG shm_ckmode], 0
     or al, al
     jz .out
-    mov byte [cs:shm_ckmode], 1
+    CSDO mov byte [CSEG shm_ckmode], 1
     cmp byte [si], ','
     jne .out
     inc si
     call shm_mref
     jnc .bad
-    mov [cs:shm_ckcol], ax
-    mov [cs:shm_ckrow], bx
-    mov byte [cs:shm_ckmode], 2
+    CSDO_ON
+    mov [CSEG shm_ckcol], ax
+    mov [CSEG shm_ckrow], bx
+    mov byte [CSEG shm_ckmode], 2
+    CSDO_OFF
 .out:
     SHOUT sh_skipargs
     jmp shm_mtrue
@@ -42626,7 +42732,7 @@ shm_mrestart:
     js .bad
     cmp al, [cs:shm_csp]
     jae .out
-    mov [cs:shm_csp], al
+    CSDO mov [CSEG shm_csp], al
     inc word [sh_pass]                ; bindings in view changed: 81.84.3
 .out:
     SHOUT sh_skipargs
@@ -42659,8 +42765,10 @@ shm_intarg1:
 ; cell, Halt ends the run, Continue runs on without stepping)
 shm_mstepfn:
     SHOUT sh_skipargs
-    mov byte [cs:shm_stepon], 1
-    mov byte [cs:shm_stepgo], 0
+    CSDO_ON
+    mov byte [CSEG shm_stepon], 1
+    mov byte [CSEG shm_stepgo], 0
+    CSDO_OFF
     jmp shm_mtrue
 
 ; WAIT(serial_number) - pause until that date and time. A callback cannot
@@ -42685,13 +42793,13 @@ shm_mwait:
     mov cx, 8
 .bank:
     mov al, [si]
-    mov [cs:di], al
+    CSDO mov [CSEG di], al
     inc si
     inc di
     loop .bank
     pop di
     pop si
-    mov byte [cs:shm_wtpend], 1
+    CSDO mov byte [CSEG shm_wtpend], 1
 .again:
     SHOUT sh_skipargs
     SHOUT sh_pnow                     ; sh_acc = now; CF=1 no clock
@@ -42722,7 +42830,7 @@ shm_mwait:
     mov byte [sh_macro_ctl], SH_MC_WAITT
     jmp shm_mfalse
 .done:
-    mov byte [cs:shm_wtpend], 0
+    CSDO mov byte [CSEG shm_wtpend], 0
     mov byte [sh_evalerr], 0
     jmp shm_mtrue
 .bad:
@@ -42883,8 +42991,10 @@ shm_typearg:
     call shm_mrangeref
     jnc .badpop
 .have:
-    mov [cs:shm_gcol], ax
-    mov [cs:shm_grow], bx
+    CSDO_ON
+    mov [CSEG shm_gcol], ax
+    mov [CSEG shm_grow], bx
+    CSDO_OFF
     SHOUT sh_skipargs
     pop ax
     clc
@@ -42965,7 +43075,7 @@ shm_gc_ref:
     call shm_gc_ld
     mov cx, ax
     mov dx, bx
-    mov byte [cs:shm_rtform], 1
+    CSDO mov byte [CSEG shm_rtform], 1
     push di
     mov di, sh_sacc
     call shm_rtans
@@ -43045,22 +43155,22 @@ shm_gc_under:
     and al, SH_FMT_UNDER
     jmp shm_abool
 shm_gc_bl:
-    mov byte [cs:shm_gmask], SH_BORD_LEFT
+    CSDO mov byte [CSEG shm_gmask], SH_BORD_LEFT
     jmp short shm_gc_bord
 shm_gc_br:
-    mov byte [cs:shm_gmask], SH_BORD_RIGHT
+    CSDO mov byte [CSEG shm_gmask], SH_BORD_RIGHT
     jmp short shm_gc_bord
 shm_gc_bt:
-    mov byte [cs:shm_gmask], SH_BORD_TOP
+    CSDO mov byte [CSEG shm_gmask], SH_BORD_TOP
     jmp short shm_gc_bord
 shm_gc_bb:
-    mov byte [cs:shm_gmask], SH_BORD_BOTTOM
+    CSDO mov byte [CSEG shm_gmask], SH_BORD_BOTTOM
     jmp short shm_gc_bord
 shm_gc_bs:
-    mov byte [cs:shm_gmask], SH_BORD_SHADE
+    CSDO mov byte [CSEG shm_gmask], SH_BORD_SHADE
     jmp short shm_gc_bord
 shm_gc_hide:
-    mov byte [cs:shm_gmask], SH_PROT_HIDDEN
+    CSDO mov byte [CSEG shm_gmask], SH_PROT_HIDDEN
 shm_gc_bord:
     call shm_gc_ld
     SHOUT sh_bt_get                   ; AL = the border/protection byte
@@ -43184,7 +43294,7 @@ shm_mgetname:
     pop si
     jnc .none
     mov byte [sh_sacc], '='
-    mov byte [cs:shm_rtform], 0
+    CSDO mov byte [CSEG shm_rtform], 0
     push di
     mov di, sh_sacc + 1
     call shm_rtans
@@ -43210,8 +43320,10 @@ shm_mgetdef:
 .p:
     call shm_rangetext                ; AX/BX .. CX/DX
     jnc .nonepop
-    mov [cs:shm_gcol], cx             ; the far corner, while the loop
-    mov [cs:shm_grow], dx             ; needs CX and DX
+    CSDO_ON
+    mov [CSEG shm_gcol], cx      ; the far corner, while the loop
+    mov [CSEG shm_grow], dx      ; needs CX and DX
+    CSDO_OFF
     mov si, sh_names
     mov cx, [sh_nnames]
     jcxz .nonepop
@@ -43248,20 +43360,22 @@ shm_mgetnote:
     jc .ref
     jmp shm_refbad
 .ref:
-    mov [cs:shm_gcol], ax
-    mov [cs:shm_grow], bx
+    CSDO_ON
+    mov [CSEG shm_gcol], ax
+    mov [CSEG shm_grow], bx
+    CSDO_OFF
     mov ax, 1
     call shm_intarg
     jc .bad
     cmp ax, 1
     jl .bad
-    mov [cs:shm_gst], ax
+    CSDO mov [CSEG shm_gst], ax
     mov ax, SH_STR_MAX
     call shm_intarg
     jc .bad
     or ax, ax
     js .bad
-    mov [cs:shm_gcnt], ax
+    CSDO mov [CSEG shm_gcnt], ax
     SHOUT sh_skipargs
     mov byte [sh_sacc], 0
     call shm_gc_ld
@@ -43446,10 +43560,12 @@ shm_extent:
     push cx
     push si
     push es
-    mov word [cs:shm_ext_r1], 0xFFFF
-    mov word [cs:shm_ext_c1], 0xFFFF
-    mov word [cs:shm_ext_r2], 0
-    mov word [cs:shm_ext_c2], 0
+    CSDO_ON
+    mov word [CSEG shm_ext_r1], 0xFFFF
+    mov word [CSEG shm_ext_c1], 0xFFFF
+    mov word [CSEG shm_ext_r2], 0
+    mov word [CSEG shm_ext_c2], 0
+    CSDO_OFF
     mov cx, [sh_ncells]
     xor si, si
     jcxz .done
@@ -43462,30 +43578,32 @@ shm_extent:
     inc ax
     cmp ax, [cs:shm_ext_r1]
     jae .r1
-    mov [cs:shm_ext_r1], ax
+    CSDO mov [CSEG shm_ext_r1], ax
 .r1:
     cmp ax, [cs:shm_ext_r2]
     jbe .r2
-    mov [cs:shm_ext_r2], ax
+    CSDO mov [CSEG shm_ext_r2], ax
 .r2:
     mov es, [sh_cellseg]
     mov ax, [es:si + SH_C_COL]
     inc ax
     cmp ax, [cs:shm_ext_c1]
     jae .c1
-    mov [cs:shm_ext_c1], ax
+    CSDO mov [CSEG shm_ext_c1], ax
 .c1:
     cmp ax, [cs:shm_ext_c2]
     jbe .next
-    mov [cs:shm_ext_c2], ax
+    CSDO mov [CSEG shm_ext_c2], ax
 .next:
     add si, SH_C_SZ
     loop .l
 .done:
     cmp word [cs:shm_ext_r2], 0
     jne .out
-    mov word [cs:shm_ext_r1], 0       ; empty: every one is 0
-    mov word [cs:shm_ext_c1], 0
+    CSDO_ON
+    mov word [CSEG shm_ext_r1], 0 ; empty: every one is 0
+    mov word [CSEG shm_ext_c1], 0
+    CSDO_OFF
 .out:
     pop es
     pop si
@@ -43727,8 +43845,10 @@ shm_dirwalk:
     push ds
     pop es                            ; FILE_FIND fills ES:DI - ours
     SHK file_here
-    mov [cs:shm_dhere], dx
-    mov [cs:shm_dhdrv], bl
+    CSDO_ON
+    mov [CSEG shm_dhere], dx
+    mov [CSEG shm_dhdrv], bl
+    CSDO_OFF
     mov si, sh_sacc
     mov al, [si]                      ; "X:" names the drive
     and al, 0xDF
@@ -43745,8 +43865,10 @@ shm_dirwalk:
     mov di, shm_dnew                  ; the text starts "X:\"
     mov al, bl
     add al, 'A'
-    mov [cs:di], al
-    mov word [cs:di+1], ':' + ('\' << 8)
+    CSDO_ON
+    mov [CSEG di], al
+    mov word [CSEG di+1], ':' + ('\' << 8)
+    CSDO_OFF
     add di, 3
     cmp byte [si], '\'
     jne .rel
@@ -43770,7 +43892,7 @@ shm_dirwalk:
     mov di, shm_dnew
 .kc:
     mov al, [cs:si]
-    mov [cs:di], al
+    CSDO mov [CSEG di], al
     inc si
     inc di
     or al, al
@@ -43824,7 +43946,7 @@ shm_dirwalk:
     jc .fail
     cmp byte [cs:di-1], '\'           ; "X:\A" then "X:\A\B"
     je .app
-    mov byte [cs:di], '\'
+    CSDO mov byte [CSEG di], '\'
     inc di
 .app:
     push si
@@ -43835,7 +43957,7 @@ shm_dirwalk:
     jz .ae
     cmp di, shm_dnew + SH_STR_MAX
     jae .ae
-    mov [cs:di], al
+    CSDO mov [CSEG di], al
     inc si
     inc di
     jmp short .ac
@@ -43843,18 +43965,20 @@ shm_dirwalk:
     pop si
     jmp .comp
 .ok:
-    mov byte [cs:di], 0
+    CSDO mov byte [CSEG di], 0
     mov si, shm_dnew                  ; the walk's text is the known one now
     mov di, shm_dirtxt
 .kk:
     mov al, [cs:si]
-    mov [cs:di], al
+    CSDO mov [CSEG di], al
     inc si
     inc di
     or al, al
     jnz .kk
-    mov [cs:shm_dirclu], dx
-    mov [cs:shm_dirdrv], bl
+    CSDO_ON
+    mov [CSEG shm_dirclu], dx
+    mov [CSEG shm_dirdrv], bl
+    CSDO_OFF
     clc
     jmp short .out
 .fail:
@@ -44021,18 +44145,18 @@ shm_malign:
 ; underline; the face and size are SHEET's one font, and it has no italic or
 ; strikeout
 shm_mfont:
-    mov byte [cs:shm_acc8], 0         ; NOT a register: sh_pcmp is the whole
+    CSDO mov byte [CSEG shm_acc8], 0  ; NOT a register: sh_pcmp is the whole
     call shm_boolarg0                 ; evaluator, and keeps none of them.
     call shm_boolnext                 ; name and size: read, and not used
     call shm_boolnext                 ; bold
     jnc .b
-    or [cs:shm_acc8], al
+    CSDO or [CSEG shm_acc8], al
 .b:
     call shm_boolnext                 ; italic
     call shm_boolnext                 ; underline
     jnc .u
     shl al, 1
-    or [cs:shm_acc8], al
+    CSDO or [CSEG shm_acc8], al
 .u:
     mov dl, [cs:shm_acc8]
     xor dh, dh
@@ -44042,16 +44166,16 @@ shm_acc8: db 0
 
 ; CELL.PROTECTION(locked, hidden) - stored inverted: bit 0 is UNLOCKED
 shm_mprot:
-    mov byte [cs:shm_acc8], 0         ; omitted: locked, and not hidden
+    CSDO mov byte [CSEG shm_acc8], 0  ; omitted: locked, and not hidden
     call shm_boolarg0
     jnc .l
     xor al, 1
-    mov [cs:shm_acc8], al
+    CSDO mov [CSEG shm_acc8], al
 .l:
     call shm_boolnext
     jnc .h
     shl al, 1
-    or [cs:shm_acc8], al
+    CSDO or [CSEG shm_acc8], al
 .h:
     mov dl, [cs:shm_acc8]
     xor dh, dh
@@ -44201,23 +44325,23 @@ shm_mfmtnum:
 ; BORDER(outline, left, right, top, bottom, shade) - the Border dialog's own
 ; six boxes; outline is the four edges at once
 shm_mborder:
-    mov byte [cs:shm_acc8], 0
+    CSDO mov byte [CSEG shm_acc8], 0
     call shm_boolarg0
     jnc .o
     or al, al
     jz .o
-    mov byte [cs:shm_acc8], 0x1E      ; outline: left, right, top, bottom
+    CSDO mov byte [CSEG shm_acc8], 0x1E ; outline: left, right, top, bottom
 .o:
-    mov byte [cs:shm_gmask], 2        ; bits 1..5, the dialog's own layout
+    CSDO mov byte [CSEG shm_gmask], 2 ; bits 1..5, the dialog's own layout
 .l:
     call shm_boolnext
     jnc .n
     or al, al
     jz .n
     mov al, [cs:shm_gmask]
-    or [cs:shm_acc8], al
+    CSDO or [CSEG shm_acc8], al
 .n:
-    shl byte [cs:shm_gmask], 1
+    CSDO shl byte [CSEG shm_gmask], 1
     cmp byte [cs:shm_gmask], 0x40
     jb .l
     mov al, [cs:shm_acc8]
@@ -44238,7 +44362,7 @@ shm_mcolw:
     jc .bad
     cmp ax, SH_CW_MAXCH
     ja .bad
-    mov [cs:shm_gst], ax
+    CSDO mov [CSEG shm_gst], ax
     mov ax, [sh_selcol]
     mov cx, [sh_selcol2]
     cmp byte [si], ','
@@ -44286,7 +44410,7 @@ shm_mrowh:
     cmp ax, SH_RH_TWMAX
     ja .bad
 .std:
-    mov [cs:shm_gst], ax
+    CSDO mov [CSEG shm_gst], ax
     mov ax, [sh_selrow]
     mov dx, [sh_selrow2]
     cmp byte [si], ','
@@ -44570,10 +44694,10 @@ shm_tident:
 ; selection when refers_to is omitted, and SET.NAME's value is required. The
 ; name is read on a second pass, after the reference, for ABSREF's reason
 shm_msetname:
-    mov byte [cs:shm_acc8], 1         ; SET.NAME: the reference is required
+    CSDO mov byte [CSEG shm_acc8], 1  ; SET.NAME: the reference is required
     jmp short shm_mdefnm2
 shm_mdefnm:
-    mov byte [cs:shm_acc8], 0
+    CSDO mov byte [CSEG shm_acc8], 0
 shm_mdefnm2:
     push si
     SHOUT sh_pcmp                     ; past the name
@@ -44591,10 +44715,12 @@ shm_mdefnm2:
     cmp byte [cs:shm_acc8], 0
     jne .badpop
 .have:
-    mov [cs:shm_ext_r1], ax           ; banked across the name's second
-    mov [cs:shm_ext_r2], bx           ; evaluation, which keeps no register
-    mov [cs:shm_ext_c1], cx
-    mov [cs:shm_ext_c2], dx
+    CSDO_ON
+    mov [CSEG shm_ext_r1], ax    ; banked across the name's second
+    mov [CSEG shm_ext_r2], bx    ; evaluation, which keeps no register
+    mov [CSEG shm_ext_c1], cx
+    mov [CSEG shm_ext_c2], dx
+    CSDO_OFF
     mov di, si                        ; where the arguments ended
     pop si
     push di
@@ -44696,8 +44822,10 @@ shm_mnote:
     call shm_mrangeref
     jnc .badpop
 .have:
-    mov [cs:shm_gcol], ax
-    mov [cs:shm_grow], bx
+    CSDO_ON
+    mov [CSEG shm_gcol], ax
+    mov [CSEG shm_grow], bx
+    CSDO_OFF
     mov di, si
     pop si
     push di
@@ -44790,14 +44918,14 @@ shm_msort:
     inc si
     call shm_mrangeref                ; AX = the key's column
     jnc .bad
-    mov [cs:shm_gcol], ax
+    CSDO mov [CSEG shm_gcol], ax
     mov ax, 1
     call shm_intarg
     jc .bad
     dec ax
     cmp ax, 2
     jae .bad
-    mov [cs:shm_acc8], al
+    CSDO mov [CSEG shm_acc8], al
     cmp byte [si], ','                ; key2: refused
     je .bad
     mov ax, [cs:shm_gcol]
@@ -44829,23 +44957,25 @@ shm_msort:
 shm_mrun:
     cmp byte [cs:shm_cans], 0
     je .call
-    mov byte [cs:shm_cans], 0
+    CSDO mov byte [CSEG shm_cans], 0
     SHOUT sh_skipargs
     mov di, shm_ans
     jmp shm_vget
 .call:
-    inc byte [cs:shm_ccount]
+    CSDO inc byte [CSEG shm_ccount]
     cmp byte [cs:shm_ccount], 1
     jne .bad
     call shm_mrangeref
     jnc .bad
-    mov [cs:shm_ctcol], ax
-    mov [cs:shm_ctrow], bx
-    mov byte [cs:shm_cnargs], 0
+    CSDO_ON
+    mov [CSEG shm_ctcol], ax
+    mov [CSEG shm_ctrow], bx
+    mov byte [CSEG shm_cnargs], 0
+    CSDO_OFF
     mov ax, [cs:shm_pused]
-    mov [cs:shm_ptent], ax
+    CSDO mov [CSEG shm_ptent], ax
     SHOUT sh_skipargs
-    mov byte [cs:shm_cpend], 1
+    CSDO mov byte [CSEG shm_cpend], 1
     jmp shm_mfalse
 .bad:
     jmp shm_merr
@@ -44869,8 +44999,10 @@ shm_mhpage:
     mov bx, sh_scrollcol
     mov cx, [sh_vcols]
 shm_mscrollby:
-    mov [cs:shm_gcol], bx             ; which word, and by how much a step:
-    mov [cs:shm_grow], cx             ; the evaluator keeps no register
+    CSDO_ON
+    mov [CSEG shm_gcol], bx      ; which word, and by how much a step:
+    mov [CSEG shm_grow], cx      ; the evaluator keeps no register
+    CSDO_OFF
     xor ax, ax
     call shm_intarg1
     jc .bad
@@ -44884,18 +45016,22 @@ shm_mscrollby:
 ; VSCROLL(position[, row_logical]) / HSCROLL - to row (column) position when
 ; the second argument is TRUE, else to that FRACTION of the sheet
 shm_mvscroll:
-    mov word [cs:shm_gcol], sh_scrollrow
-    mov word [cs:shm_grow], SH_ROWS
+    CSDO_ON
+    mov word [CSEG shm_gcol], sh_scrollrow
+    mov word [CSEG shm_grow], SH_ROWS
+    CSDO_OFF
     jmp short shm_mscrollabs
 shm_mhscroll:
-    mov word [cs:shm_gcol], sh_scrollcol
-    mov word [cs:shm_grow], SH_COLS
+    CSDO_ON
+    mov word [CSEG shm_gcol], sh_scrollcol
+    mov word [CSEG shm_grow], SH_COLS
+    CSDO_OFF
 shm_mscrollabs:
     SHOUT sh_pcmp                     ; BOTH readings of the position, now:
     cmp byte [sh_evalerr], 0          ; the second argument's evaluation
     jne .bad                          ; overwrites sh_acc
     SHOUT sh_acc_toint                ; a row or column NUMBER, 1-based...
-    mov [cs:shm_gst], ax
+    CSDO mov [CSEG shm_gst], ax
     SHOUT sh_acc_load_a               ; ...or a fraction of the sheet
     mov ax, [cs:shm_grow]
     dec ax
@@ -44903,7 +45039,7 @@ shm_mscrollabs:
     SHOUT fp_mul
     SHOUT fp_a2i
     jc .bad
-    mov [cs:shm_gcnt], ax
+    CSDO mov [CSEG shm_gcnt], ax
     call shm_boolnext
     mov ax, [cs:shm_gcnt]
     jnc .have
@@ -44997,8 +45133,10 @@ shm_mselend:
     pop ax
     jnc .seek                         ; no: on to the next filled one
 .run:                                 ; yes: along the run to its end
-    mov [cs:shm_gcol], ax
-    mov [cs:shm_grow], bx
+    CSDO_ON
+    mov [CSEG shm_gcol], ax
+    mov [CSEG shm_grow], bx
+    CSDO_OFF
     call shm_step1
     jc .last
     push ax
@@ -45074,10 +45212,10 @@ shm_filled:
 ; and column (sh_bt_findcell's binary search), so walking it in order IS
 ; walking the sheet in reading order
 shm_munlnext:
-    mov byte [cs:shm_acc8], 0
+    CSDO mov byte [CSEG shm_acc8], 0
     jmp short shm_munl
 shm_munlprev:
-    mov byte [cs:shm_acc8], 1
+    CSDO mov byte [CSEG shm_acc8], 1
 shm_munl:
     SHOUT sh_skipargs
     push si
@@ -45086,14 +45224,16 @@ shm_munl:
     mov cl, SH_ROW_BITS
     shl ax, cl
     or ax, [sh_selrow]
-    mov [cs:shm_gst], ax
-    mov word [cs:shm_gcol], 0xFFFF    ; the answer: none yet
-    mov word [cs:shm_ext_c1], 0xFFFF  ; the first unlocked on this sheet...
-    mov word [cs:shm_ext_c2], 0xFFFF  ; ...and the last, for the wrap
+    CSDO_ON
+    mov [CSEG shm_gst], ax
+    mov word [CSEG shm_gcol], 0xFFFF ; the answer: none yet
+    mov word [CSEG shm_ext_c1], 0xFFFF ; the first unlocked on this sheet...
+    mov word [CSEG shm_ext_c2], 0xFFFF ; ...and the last, for the wrap
+    CSDO_OFF
     xor si, si
     mov cx, [sh_nbord]
 .l:
-    jcxz .done
+    SH_JCXZF .done
     mov es, [sh_bordseg]
     test byte [es:si+4], SH_PROT_UNLOCK
     jz .next
@@ -45108,11 +45248,15 @@ shm_munl:
     jne .next
     cmp word [cs:shm_ext_c1], 0xFFFF
     jne .notfirst
-    mov [cs:shm_ext_r1], ax
-    mov [cs:shm_ext_c1], bx
+    CSDO_ON
+    mov [CSEG shm_ext_r1], ax
+    mov [CSEG shm_ext_c1], bx
+    CSDO_OFF
 .notfirst:
-    mov [cs:shm_ext_r2], ax
-    mov [cs:shm_ext_c2], bx
+    CSDO_ON
+    mov [CSEG shm_ext_r2], ax
+    mov [CSEG shm_ext_c2], bx
+    CSDO_OFF
     cmp ax, [cs:shm_gst]              ; this record against the active cell
     jne .cmpd
     cmp bx, [sh_selcol]
@@ -45130,12 +45274,14 @@ shm_munl:
     popf
     jae .next                         ; PREV: the last one before it
 .take:
-    mov [cs:shm_grow], ax
-    mov [cs:shm_gcol], bx
+    CSDO_ON
+    mov [CSEG shm_grow], ax
+    mov [CSEG shm_gcol], bx
+    CSDO_OFF
 .next:
     add si, SH_BT_SZ
     dec cx
-    jmp short .l
+    SH_JMPF .l
 .done:
     pop es
     pop si
@@ -45173,7 +45319,7 @@ shm_mgpie:    mov dx, 4
               jmp short shm_mgal
 shm_mgscat:   mov dx, 5
 shm_mgal:
-    mov [cs:shm_gcnt], dx             ; the evaluator keeps no register
+    CSDO mov [CSEG shm_gcnt], dx      ; the evaluator keeps no register
     SHOUT sh_skipargs
     mov dx, [cs:shm_gcnt]
     mov al, SH_FDK_GAL
@@ -45334,7 +45480,7 @@ shm_mfsaveas:
     jmp short .f
 .have:
     mov ax, [cs:bx+1]                 ; the extension's ".XXX"
-    mov [cs:shm_gcnt], ax
+    CSDO mov [CSEG shm_gcnt], ax
     mov di, si
     pop si
     push di
@@ -45409,11 +45555,11 @@ shm_mseries:
     mov ax, 1
     call shm_intarg                   ; type
     jc .bad
-    mov [cs:shm_gcol], ax
+    CSDO mov [CSEG shm_gcol], ax
     mov ax, 1
     call shm_intarg                   ; date unit
     jc .bad
-    mov [cs:shm_grow], ax
+    CSDO mov [CSEG shm_grow], ax
     mov ax, 1                         ; the step: 1 unless there is one
     SHOUT sh_acc_int
     cmp byte [si], ','
@@ -45548,7 +45694,7 @@ shm_mfopen:
     dec ax
     cmp ax, 3
     jae .badpop
-    mov [cs:shm_acc8], al             ; 0 rw, 1 read, 2 create
+    CSDO mov [CSEG shm_acc8], al      ; 0 rw, 1 read, 2 create
     mov di, si
     pop si
     push di
@@ -45568,36 +45714,40 @@ shm_mfopen:
     jb .free
     jmp .na
 .got:
-    mov [cs:shm_gcnt], cx             ; its index
+    CSDO mov [CSEG shm_gcnt], cx      ; its index
     push di
     mov si, sh_delname                ; the name into the record
 .nm:
     mov al, [si]
-    mov [cs:di], al
+    CSDO mov [CSEG di], al
     inc si
     inc di
     or al, al
     jnz .nm
     pop di
     mov al, [cs:shm_acc8]
-    mov [cs:di+13], al
-    mov byte [cs:di+14], 0
-    mov word [cs:di+20], 0
+    CSDO_ON
+    mov [CSEG di+13], al
+    mov byte [CSEG di+14], 0
+    mov word [CSEG di+20], 0
+    CSDO_OFF
     xor ax, ax                        ; its size: 0 new, else the directory's
     cmp byte [cs:shm_acc8], 2
     je .sized
     call shm_fsize0                   ; AX = the size, CF=1 not there/too big
     jc .na
 .sized:
-    mov [cs:di+18], ax
-    mov word [cs:di+22], SHM_FEACH    ; its share of the tail
+    CSDO_ON
+    mov [CSEG di+18], ax
+    mov word [CSEG di+22], SHM_FEACH ; its share of the tail
+    CSDO_OFF
     cmp ax, SHM_FEACH
     ja .na                            ; the file is bigger than that
     mov ax, [cs:shm_gcnt]
     mov bx, SHM_FEACH
     mul bx
     add ax, SHM_FTAIL
-    mov [cs:di+16], ax                ; its base
+    CSDO mov [CSEG di+16], ax         ; its base
     cmp byte [cs:shm_acc8], 2
     je .opened
     cmp word [cs:di+18], 0            ; an empty file has nothing to read
@@ -45615,12 +45765,12 @@ shm_mfopen:
     jc .na
     or dx, dx                         ; what the read DELIVERED is the size:
     jnz .na                           ; FIND's under-reports a packed file
-    mov [cs:di+18], ax                ; whose hint a foreign OS dropped
+    CSDO mov [CSEG di+18], ax         ; whose hint a foreign OS dropped
 .opened:
-    mov byte [cs:di+15], 1            ; open
+    CSDO mov byte [CSEG di+15], 1     ; open
     cmp byte [cs:shm_acc8], 2         ; a NEW file is marked changed, so
     jne .num                          ; FCLOSE writes it even while empty
-    mov byte [cs:di+14], 1
+    CSDO mov byte [CSEG di+14], 1
 .num:
     pop si
     mov ax, [cs:shm_gcnt]
@@ -45698,7 +45848,7 @@ shm_mfclose:
     call shm_fflush
     jc .na
 .free:
-    mov byte [cs:di+15], 0
+    CSDO mov byte [CSEG di+15], 0
     pop si
     jmp shm_mtrue
 .na:
@@ -45729,7 +45879,7 @@ shm_fflush:
     pop di
     pop es
     jc .out
-    mov byte [cs:di+14], 0
+    CSDO mov byte [CSEG di+14], 0
 .out:
     ret
 
@@ -45756,7 +45906,7 @@ shm_mfpos:
     dec ax
     cmp ax, [cs:di+18]                ; not past the end
     ja .bad
-    mov [cs:di+20], ax
+    CSDO mov [CSEG di+20], ax
 .ask:
     SHOUT sh_skipargs
     mov ax, [cs:di+20]
@@ -45769,7 +45919,7 @@ shm_mfpos:
 ; FREADLN to the end of the line, its CR LF (or LF) read and not answered.
 ; At the end of the file, #N/A. A text value holds SH_STR_MAX
 shm_mfreadln:
-    mov byte [cs:shm_acc8], 1
+    CSDO mov byte [CSEG shm_acc8], 1
     call shm_fchan
     jc .bad
     mov ax, SH_STR_MAX
@@ -45777,7 +45927,7 @@ shm_mfreadln:
 .bad:
     jmp shm_refbad
 shm_mfread:
-    mov byte [cs:shm_acc8], 0
+    CSDO mov byte [CSEG shm_acc8], 0
     call shm_fchan
     jc .bad
     push di
@@ -45837,7 +45987,7 @@ shm_fread:                            ; AX = the most to read, DI = channel
 .e:
     mov byte [si], 0
     sub bx, [cs:di+16]                ; back to a position
-    mov [cs:di+20], bx
+    CSDO mov [CSEG di+20], bx
     pop es
     pop si
     jmp shm_atext
@@ -45849,10 +45999,10 @@ shm_fread:                            ; AX = the most to read, DI = channel
 ; characters written. A read-only channel, or one its claim cannot hold, is
 ; refused
 shm_mfwriteln:
-    mov byte [cs:shm_acc8], 1
+    CSDO mov byte [CSEG shm_acc8], 1
     jmp short shm_fwrite
 shm_mfwrite:
-    mov byte [cs:shm_acc8], 0
+    CSDO mov byte [CSEG shm_acc8], 0
 shm_fwrite:
     call shm_fchan
     jc .bad
@@ -45892,8 +46042,10 @@ shm_fwrite:
     jc .full
     add cx, 2
 .done:
-    mov [cs:di+20], bx
-    mov byte [cs:di+14], 1
+    CSDO_ON
+    mov [CSEG di+20], bx
+    mov byte [CSEG di+14], 1
+    CSDO_OFF
     pop es
     pop si
     mov ax, cx
@@ -45917,7 +46069,7 @@ shm_fput:
     inc bx
     cmp bx, [cs:di+18]
     jbe .ok
-    mov [cs:di+18], bx
+    CSDO mov [CSEG di+18], bx
 .ok:
     clc
     ret
@@ -46037,19 +46189,21 @@ shm_keycode:
 shm_monkey:
     push si                           ; the key, for the second pass
     SHOUT sh_pcmp
-    mov word [cs:shm_gcol], 0xFFFE    ; omitted: unbind
+    CSDO mov word [CSEG shm_gcol], 0xFFFE ; omitted: unbind
     cmp byte [si], ','
     jne .have
     inc si
     call shm_textfirst
     jc .badpop
-    mov word [cs:shm_gcol], 0xFFFF    ; "": swallow the key
+    CSDO mov word [CSEG shm_gcol], 0xFFFF ; "": swallow the key
     cmp byte [sh_sacc], 0
     je .have
     call shm_macref
     jnc .badpop
-    mov [cs:shm_gcol], ax
-    mov [cs:shm_grow], bx
+    CSDO_ON
+    mov [CSEG shm_gcol], ax
+    mov [CSEG shm_grow], bx
+    CSDO_OFF
 .have:
     mov di, si
     pop si
@@ -46116,7 +46270,7 @@ shm_montime:
     mov cx, 8
 .bank:
     mov al, [si]
-    mov [cs:di], al
+    CSDO mov [CSEG di], al
     inc si
     inc di
     loop .bank
@@ -46134,8 +46288,10 @@ shm_montime:
     jc .bad
     call shm_macref
     jnc .bad
-    mov [cs:shm_oncol], ax
-    mov [cs:shm_onrow], bx
+    CSDO_ON
+    mov [CSEG shm_oncol], ax
+    mov [CSEG shm_onrow], bx
+    CSDO_OFF
     call shm_intarg                   ; tolerance: read, not used
     call shm_boolnext                 ; insert
     jnc .ins
@@ -46290,9 +46446,11 @@ shm_barref:
     call shm_barent
     pop ax
     jc .no
-    mov [cs:shm_acc8], al
-    mov [cs:shm_gcol], bx             ; the first custom entry
-    mov [cs:shm_gst], cx              ; ...and how many
+    CSDO_ON
+    mov [CSEG shm_acc8], al
+    mov [CSEG shm_gcol], bx      ; the first custom entry
+    mov [CSEG shm_gst], cx       ; ...and how many
+    CSDO_OFF
     cmp byte [si], ','
     jne .no
     inc si
@@ -46566,8 +46724,10 @@ shm_mcstate:
 ; A row past SH_MCITEMS is dropped. When AL is 1 the FIRST row is the
 ; menu's title instead, into the record's +2
 shm_mcrows:
-    mov [cs:shm_acc8], al
-    mov [cs:shm_gcnt], cx
+    CSDO_ON
+    mov [CSEG shm_acc8], al
+    mov [CSEG shm_gcnt], cx
+    CSDO_OFF
     push di
     call shm_mrangeref                ; AX/BX .. CX/DX
     pop di
@@ -46576,9 +46736,11 @@ shm_mcrows:
     jbe .o
     xchg bx, dx
 .o:
-    mov [cs:shm_ext_c1], ax           ; the name column
-    mov [cs:shm_ext_r1], bx           ; the first row
-    mov [cs:shm_ext_r2], dx           ; the last
+    CSDO_ON
+    mov [CSEG shm_ext_c1], ax    ; the name column
+    mov [CSEG shm_ext_r1], bx    ; the first row
+    mov [CSEG shm_ext_r2], dx    ; the last
+    CSDO_OFF
 .row:
     mov bx, [cs:shm_ext_r1]
     cmp bx, [cs:shm_ext_r2]
@@ -46587,7 +46749,7 @@ shm_mcrows:
     SHOUT sh_cell_totext              ; -> sh_clipbuf
     cmp byte [cs:shm_acc8], 0
     je .cmd
-    mov byte [cs:shm_acc8], 0         ; the title
+    CSDO mov byte [CSEG shm_acc8], 0  ; the title
     push si
     push di
     mov si, sh_clipbuf
@@ -46605,7 +46767,7 @@ shm_mcrows:
 .te:
     pop di
     pop si
-    jmp short .next
+    SH_JMPF .next
 .cmd:
     mov cx, [cs:shm_gcnt]
     cmp cx, SH_MCITEMS
@@ -46616,7 +46778,7 @@ shm_mcrows:
     mov di, shm_anstxt                ; text read will not reach it
 .cp:
     mov al, [si]
-    mov [cs:di], al
+    CSDO mov [CSEG di], al
     inc si
     inc di
     or al, al
@@ -46658,11 +46820,11 @@ shm_mcrows:
     mov cx, [cs:shm_gcnt]
     mov si, sh_clipbuf
     call shm_mcitem
-    inc word [cs:shm_gcnt]
+    CSDO inc word [CSEG shm_gcnt]
     pop di
     pop si
 .next:
-    inc word [cs:shm_ext_r1]
+    CSDO inc word [CSEG shm_ext_r1]
     jmp .row
 .done:
     mov cx, [cs:shm_gcnt]
@@ -46677,8 +46839,10 @@ shm_maddbar:
     SHOUT sh_skipargs
     cmp byte [cs:shm_bar7], 0
     jne .bad
-    mov byte [cs:shm_bar7], 1
-    mov byte [cs:shm_n7], 0
+    CSDO_ON
+    mov byte [CSEG shm_bar7], 1
+    mov byte [CSEG shm_n7], 0
+    CSDO_OFF
     mov ax, SH_BAR_CUSTOM
     jmp shm_anum
 .bad:
@@ -46728,8 +46892,10 @@ shm_mdelbar:
     add bx, 6
     loop .f
 .gone:
-    mov byte [cs:shm_bar7], 0
-    mov byte [cs:shm_n7], 0
+    CSDO_ON
+    mov byte [CSEG shm_bar7], 0
+    mov byte [CSEG shm_n7], 0
+    CSDO_OFF
     jmp shm_mtrue
 .bad:
     jmp shm_merr
@@ -46746,7 +46912,7 @@ shm_maddmenu:
     call shm_barent                   ; BX = where its entries start, CL =
     pop ax                            ; how many
     jc .bad
-    mov [cs:shm_mbar], al
+    CSDO mov [CSEG shm_mbar], al
     mov di, sh_mcrec                  ; a free record
     mov dx, SH_MCUST
 .f:
@@ -46811,7 +46977,7 @@ shm_maddmenu:
     je .inc
     mov bx, shm_n7
 .inc:
-    inc byte [cs:bx]
+    CSDO inc byte [CSEG bx]
     mov ah, [cs:bx]                   ; its position, and the bar re-read if
     push ax                           ; it is the one showing
     call shm_barnow
@@ -46913,7 +47079,7 @@ shm_mdelmenu:
     jc .bad
     push si
     mov byte [di], 0                  ; the record is free
-    mov [cs:shm_acc8], al
+    CSDO mov [CSEG shm_acc8], al
     mov cx, [cs:shm_gst]              ; the bar's custom entries end here
     mov ax, cx
     shl ax, 1
@@ -46939,7 +47105,7 @@ shm_mdelmenu:
     je .d
     mov bx, shm_n7
 .d:
-    dec byte [cs:bx]
+    CSDO dec byte [CSEG bx]
     pop si
     SHOUT sh_skipargs
     call shm_barnow
@@ -47016,10 +47182,10 @@ shm_mdelcmd:
 ; menu, command, check) - the command greyed or not, ticked or not; command 0
 ; is every command of the menu for ENABLE (Excel's "the entire menu")
 shm_menablecmd:
-    mov byte [cs:shm_gmask], 2
+    CSDO mov byte [CSEG shm_gmask], 2
     jmp short shm_mflagcmd
 shm_mcheckcmd:
-    mov byte [cs:shm_gmask], 1
+    CSDO mov byte [CSEG shm_gmask], 1
 shm_mflagcmd:
     call shm_barref
     jc .bad
@@ -47038,7 +47204,7 @@ shm_mflagcmd:
     je .v
     xor al, 1                         ; CHECK TRUE is checked
 .v:
-    mov [cs:shm_acc8], al
+    CSDO mov [CSEG shm_acc8], al
     SHOUT sh_skipargs
     cmp cx, 0xFFFF
     jne .one
@@ -47098,12 +47264,14 @@ shm_mrencmd:
     SHOUT sh_skipargs
     push si
     mov al, [cs:shm_acc8]             ; the bar, banked before the copy: that
-    mov [cs:shm_renbar], al           ; byte is shared scratch
-    mov byte [cs:shm_rent], 0
+    CSDO_ON
+    mov [CSEG shm_renbar], al    ; byte is shared scratch
+    mov byte [CSEG shm_rent], 0
+    CSDO_OFF
     lea bx, [di + 2]                  ; the title...
     cmp cx, 0xFFFF
     jne .name
-    mov byte [cs:shm_rent], 1         ; ...which has to FIT (81.95.3), so the
+    CSDO mov byte [CSEG shm_rent], 1  ; ...which has to FIT (81.95.3), so the
     push si                           ; old one is banked to put back
     push di
     mov si, bx
@@ -47302,14 +47470,14 @@ shm_dbtext:
     je .e
     push ax
     mov al, [si]
-    mov [cs:di], al
+    CSDO mov [CSEG di], al
     pop ax
     inc ax
     inc si
     inc di
     loop .c
 .e:
-    mov byte [cs:di], 0
+    CSDO mov byte [CSEG di], 0
     pop cx
     pop di
     pop si
@@ -47319,7 +47487,7 @@ shm_dbtext:
 shm_mdbox:
     cmp byte [cs:shm_dbpend], 0       ; the second evaluation: the answer
     je .ask
-    mov byte [cs:shm_dbpend], 0
+    CSDO mov byte [CSEG shm_dbpend], 0
     SHOUT sh_skipargs
     mov al, [cs:shm_dbans]
     or al, al
@@ -47350,17 +47518,21 @@ shm_mdbox:
                                        ; an item's size from cells OUTSIDE
                                        ; it, and OK would write every result
                                        ; over them
-    mov [cs:shm_dbcol], ax
-    mov [cs:shm_dbrow], bx
+    CSDO_ON
+    mov [CSEG shm_dbcol], ax
+    mov [CSEG shm_dbrow], bx
+    CSDO_OFF
     sub dx, bx                        ; the items: every row after the first
     jz .bad0                          ; ...and a dialog with no items has no
     cmp dx, SHM_DBMAX                 ; button either, so nothing but the
     ja .bad0                          ; close box could end it
-    mov [cs:shm_dbn], dl
-    mov byte [cs:shm_dbfoc], 0xFF
-    mov byte [cs:shm_dbdef], 0xFF
-    mov byte [cs:shm_dbans], 0
-    mov byte [cs:shm_dbslots], 0
+    CSDO_ON
+    mov [CSEG shm_dbn], dl
+    mov byte [CSEG shm_dbfoc], 0xFF
+    mov byte [CSEG shm_dbdef], 0xFF
+    mov byte [CSEG shm_dbans], 0
+    mov byte [CSEG shm_dbslots], 0
+    CSDO_OFF
     push si
     xor cx, cx
 .item:
@@ -47388,7 +47560,7 @@ shm_mdbox:
     inc cx
     jmp short .fd
 .fdok:
-    mov [cs:shm_dbdef], cl
+    CSDO mov [CSEG shm_dbdef], cl
 .title:
     mov ax, [cs:shm_dbcol]            ; the dialog's own row: its title...
     add ax, 5
@@ -47426,12 +47598,14 @@ shm_mdbox:
     mov ax, 100                       ; x < W_X + W_W), and the run could
 .h:
     add ax, TITLE_H + 2
-    mov [cs:shm_dbh], ax
+    CSDO mov [CSEG shm_dbh], ax
     pop ax
-    mov [cs:shm_dbw], ax
+    CSDO mov [CSEG shm_dbw], ax
     pop si
-    mov byte [cs:shm_dbpend], 1       ; the window opens when the step
-    mov byte [cs:shm_dbopen], 1       ; pauses (shm_mstep), AFTER the sheet
+    CSDO_ON
+    mov byte [CSEG shm_dbpend], 1 ; the window opens when the step
+    mov byte [CSEG shm_dbopen], 1 ; pauses (shm_mstep), AFTER the sheet
+    CSDO_OFF
                                        ; is painted - a window made here was
                                        ; painted over by the pause's repaint
     mov byte [sh_macro_ctl], SH_MC_PAUSEH
@@ -47459,18 +47633,20 @@ shm_dbparse:
     jb .no
     cmp ax, 14
     ja .no                            ; 15, 16: the list boxes
-    mov [cs:di], al
-    mov byte [cs:di+1], 0
+    CSDO_ON
+    mov [CSEG di], al
+    mov byte [CSEG di+1], 0
+    CSDO_OFF
     cmp al, 2                         ; 1 and 2 are the DEFAULT button
     ja .notdef
     cmp byte [cs:shm_dbdef], 0xFF
     jne .notdef
-    mov [cs:shm_dbdef], cl
+    CSDO mov [CSEG shm_dbdef], cl
 .notdef:
     mov ax, [cs:shm_dbcol]
     inc ax
     call shm_dbnum
-    mov [cs:di+2], ax
+    CSDO mov [CSEG di+2], ax
     mov ax, [cs:shm_dbcol]
     add ax, 2
     call shm_dbnum
@@ -47479,7 +47655,7 @@ shm_dbparse:
     jns .yok                          ; negative size is none
     xor ax, ax
 .yok:
-    mov [cs:di+4], ax
+    CSDO mov [CSEG di+4], ax
     mov ax, [cs:shm_dbcol]
     add ax, 3
     call shm_dbnum
@@ -47487,7 +47663,7 @@ shm_dbparse:
     jns .wok                          ; so shm_dbsize gives the item its own
     xor ax, ax
 .wok:
-    mov [cs:di+6], ax
+    CSDO mov [CSEG di+6], ax
     mov ax, [cs:shm_dbcol]
     add ax, 4
     call shm_dbnum
@@ -47496,12 +47672,12 @@ shm_dbparse:
     jns .hok
     xor ax, ax
 .hok:
-    mov [cs:di+8], ax
+    CSDO mov [CSEG di+8], ax
     mov ax, cx                        ; its text
     mov dx, SHM_DBTXT
     mul dx
     add ax, shm_dbtx
-    mov [cs:di+10], ax
+    CSDO mov [CSEG di+10], ax
     push di
     mov di, ax
     mov ax, [cs:shm_dbcol]
@@ -47526,11 +47702,13 @@ shm_dbparse:
     mov al, [cs:shm_dbslots]          ; an edit box: a slot of its own
     cmp al, SHM_DBEDITS
     jae .no
-    inc byte [cs:shm_dbslots]
-    mov [cs:di+1], al
+    CSDO_ON
+    inc byte [CSEG shm_dbslots]
+    mov [CSEG di+1], al
+    CSDO_OFF
     cmp byte [cs:shm_dbfoc], 0xFF     ; the first edit box has the keys
     jne .nofoc
-    mov [cs:shm_dbfoc], cl
+    CSDO mov [CSEG shm_dbfoc], cl
 .nofoc:
     push bx
     call shm_dbslot                   ; BX its text, SI its caret pair
@@ -47541,15 +47719,17 @@ shm_dbparse:
     mov cx, SH_DBX_EDLEN
     call shm_dbtext                   ; AX = its length...
     pop cx
-    mov [cs:si], ax                   ; ...the caret at the END, as
-    mov word [cs:si+2], 0             ; os88line_set would put it
+    CSDO_ON
+    mov [CSEG si], ax            ; ...the caret at the END, as
+    mov word [CSEG si+2], 0      ; os88line_set would put it
+    CSDO_OFF
     jmp short .ok
 .check:
     mov ax, dx
     call shm_dbnum
     or ax, ax
     jz .ok
-    mov byte [cs:di+1], 1
+    CSDO mov byte [CSEG di+1], 1
     jmp short .ok
 .group:
     mov ax, dx
@@ -47558,7 +47738,7 @@ shm_dbparse:
     jnz .gset
     inc ax                            ; blank: the first button, as Excel
 .gset:
-    mov [cs:di+1], al
+    CSDO mov [CSEG di+1], al
 .ok:
     clc
     jmp short .out
@@ -47602,7 +47782,7 @@ shm_dbsize:
     jbe .setw
     lea ax, [bx+16]                   ; a check or option: the glyph too
 .setw:
-    mov [cs:di+6], ax
+    CSDO mov [CSEG di+6], ax
 .hgt:
     cmp word [cs:di+8], 0
     jne .out
@@ -47614,7 +47794,7 @@ shm_dbsize:
     je .seth
     mov ax, 14
 .seth:
-    mov [cs:di+8], ax
+    CSDO mov [CSEG di+8], ax
 .out:
     pop si
     pop bx
@@ -47739,13 +47919,13 @@ shm_dbsave:
     call shm_dbslot
     mov di, sh_dbx_line
     mov ax, [di+LN_CAR]
-    mov [cs:si], ax
+    CSDO mov [CSEG si], ax
     mov ax, [di+LN_VIEW]
-    mov [cs:si+2], ax
+    CSDO mov [CSEG si+2], ax
     mov si, sh_dbx_ebuf
 .c:
     mov al, [si]
-    mov [cs:bx], al
+    CSDO mov [CSEG bx], al
     inc si
     inc bx
     or al, al
@@ -47905,8 +48085,10 @@ shm_dbpaint:
     push dx
     mov bx, si
     call OSAPI_WM_CONTENT
-    mov [cs:shm_dbox], ax
-    mov [cs:shm_dboy], dx
+    CSDO_ON
+    mov [CSEG shm_dbox], ax
+    mov [CSEG shm_dboy], dx
+    CSDO_OFF
     mov al, CBLACK
     call OSAPI_SET_COLOR
     xor cx, cx
@@ -47931,13 +48113,13 @@ shm_dbpress:
     push di
     mov ax, cx
     call shm_dbitem
-    mov byte [cs:shm_dbans], 0
+    CSDO mov byte [CSEG shm_dbans], 0
     test byte [cs:di], 1              ; 1 and 3 are OK
     jz .done
     call shm_dbresults
     mov al, cl
     inc al
-    mov [cs:shm_dbans], al
+    CSDO mov [CSEG shm_dbans], al
 .done:
     mov byte [sh_dbx_done], 1
     pop di
@@ -48086,7 +48268,7 @@ shm_dbfocus:
     push ax
     push cx
     mov al, [cs:shm_dbfoc]
-    mov [cs:shm_dbfoc], cl
+    CSDO mov [CSEG shm_dbfoc], cl
     cmp al, 0xFF
     je .new
     cmp al, cl
@@ -48119,7 +48301,7 @@ shm_dbkey:
 .notent:
     cmp al, 27                        ; Esc: Cancel
     jne .notesc
-    mov byte [cs:shm_dbans], 0
+    CSDO mov byte [CSEG shm_dbans], 0
     mov byte [sh_dbx_done], 1
     jmp short .out
 .notesc:
@@ -48181,7 +48363,7 @@ shm_dbclick:
 .notbtn:
     cmp bl, 13
     jne .notchk
-    xor byte [cs:di+1], 1
+    CSDO xor byte [CSEG di+1], 1
     call shm_dbdraw
     jmp short .out
 .notchk:
@@ -48190,7 +48372,7 @@ shm_dbclick:
     push ax
     call shm_dbgroup                  ; AL its place, DI its group
     jc .nogrp
-    mov [cs:di+1], al
+    CSDO mov [CSEG di+1], al
     call shm_dbredio                  ; every option button, again
 .nogrp:
     pop ax
@@ -48844,13 +49026,13 @@ shm_malert:
     jne .show
     mov byte [sh_macro_aset], OS88UI_AOKCAN
     mov byte [sh_macro_ctl], SH_MC_PAUSEH ; the SAME cell, again, afterwards:
-    mov byte [cs:shm_alpend], 1       ; INPUT's mechanism for INPUT's reason
+    CSDO mov byte [CSEG shm_alpend], 1 ; INPUT's mechanism for INPUT's reason
 .show:
     SHOUT sh_skipargs
     mov byte [sh_macro_wait], SH_MW_ALERT
     jmp shm_mtrue
 .answer:
-    mov byte [cs:shm_alpend], 0
+    CSDO mov byte [CSEG shm_alpend], 0
     SHOUT sh_skipargs
     cmp byte [sh_macro_btn], 0        ; OK; Cancel and a dismissed box are
     jne .false                        ; both FALSE
@@ -49028,21 +49210,23 @@ shm_mresume:
     mov word [sh_macro_steps], 0
     mov byte [sh_macro_lsp], 0
     mov byte [sh_macro_ansok], 0
-    mov byte [cs:shm_csp], 0          ; macro plan wave 1: no frames, and
-    mov byte [cs:shm_cans], 0         ; nothing left over from a run a HALT
-    mov byte [cs:shm_sused], 0        ; or an error ended mid-call - this
-    mov byte [cs:shm_bused], 0        ; state is the module's and outlives
-    mov word [cs:shm_pused], 0        ; the run that wrote it
-    mov byte [cs:shm_echo], 1         ; 81.86: every one of these lasts only
-    mov byte [cs:shm_errmode], 1      ; as long as the run that set it -
-    mov byte [cs:shm_ckmode], 1       ; Excel's own rule for ECHO and
-    mov byte [cs:shm_stepon], 0       ; CANCEL.KEY, and the only safe one
-    mov byte [cs:shm_stepgo], 0       ; for the rest
-    mov byte [cs:shm_wtpend], 0
-    mov byte [cs:shm_alpend], 0
-    mov byte [cs:shm_dbpend], 0       ; 81.96: a halted run's DIALOG.BOX
-    mov byte [cs:shm_dbopen], 0
-    mov byte [cs:shm_escwas], 1       ; an Esc already down is not a press
+    CSDO_ON
+    mov byte [CSEG shm_csp], 0   ; macro plan wave 1: no frames, and
+    mov byte [CSEG shm_cans], 0  ; nothing left over from a run a HALT
+    mov byte [CSEG shm_sused], 0 ; or an error ended mid-call - this
+    mov byte [CSEG shm_bused], 0 ; state is the module's and outlives
+    mov word [CSEG shm_pused], 0 ; the run that wrote it
+    mov byte [CSEG shm_echo], 1  ; 81.86: every one of these lasts only
+    mov byte [CSEG shm_errmode], 1 ; as long as the run that set it -
+    mov byte [CSEG shm_ckmode], 1 ; Excel's own rule for ECHO and
+    mov byte [CSEG shm_stepon], 0 ; CANCEL.KEY, and the only safe one
+    mov byte [CSEG shm_stepgo], 0 ; for the rest
+    mov byte [CSEG shm_wtpend], 0
+    mov byte [CSEG shm_alpend], 0
+    mov byte [CSEG shm_dbpend], 0 ; 81.96: a halted run's DIALOG.BOX
+    mov byte [CSEG shm_dbopen], 0
+    mov byte [CSEG shm_escwas], 1 ; an Esc already down is not a press
+    CSDO_OFF
     mov byte [sh_macro_esc], 0
     mov word [sh_msg], 0
     jmp short .go
@@ -49056,14 +49240,14 @@ shm_mresume:
     cmp al, SH_MW_STEP                ; 81.86: the Single Step dialog
     jne .notstep
     mov al, [sh_macro_btn]
-    mov byte [cs:shm_stepgo], 1       ; Step - and a dismissed dialog, which
+    CSDO mov byte [CSEG shm_stepgo], 1 ; Step - and a dismissed dialog, which
     cmp al, 1                         ; is only a way to keep stepping
     jne .notstep_halt
-    mov byte [cs:shm_stepgo], 2       ; Halt
+    CSDO mov byte [CSEG shm_stepgo], 2 ; Halt
 .notstep_halt:
     cmp al, 2
     jne .go
-    mov byte [cs:shm_stepon], 0       ; Continue: run on without stepping
+    CSDO mov byte [CSEG shm_stepon], 0 ; Continue: run on without stepping
     jmp short .go
 .notstep:
     cmp al, SH_MW_INPUT
@@ -49126,15 +49310,17 @@ shm_mstep:
     jc .noask                         ; no alert to wait on: the run stops
     jmp .out
 .exec:
-    mov byte [cs:shm_stepgo], 0
+    CSDO mov byte [CSEG shm_stepgo], 0
     mov byte [sh_macro_ctl], SH_MC_NONE
     mov byte [sh_ud_busy], 1          ; no Undo snapshot per entry: a macro is
     mov byte [sh_evalerr], 0          ; not undone, and a loop would copy the
     mov ax, [sh_evaldepth]            ; document every time round
     mov [sh_macro_exdep], ax
     mov byte [sh_macro_exec], 1
-    mov byte [cs:shm_ccount], 0       ; one subroutine call to a cell
-    mov byte [cs:shm_cpend], 0
+    CSDO_ON
+    mov byte [CSEG shm_ccount], 0 ; one subroutine call to a cell
+    mov byte [CSEG shm_cpend], 0
+    CSDO_OFF
     mov si, sh_macrobuf
     SHOUT sh_pcmp
     mov byte [sh_macro_exec], 0
@@ -49179,7 +49365,7 @@ shm_mstep:
     jne .ask
     cmp byte [cs:shm_dbopen], 0
     je .out
-    mov byte [cs:shm_dbopen], 0
+    CSDO mov byte [CSEG shm_dbopen], 0
     push cx
     push dx
     mov cx, [cs:shm_dbw]
@@ -49188,7 +49374,7 @@ shm_mstep:
     pop dx
     pop cx
     jnc .out
-    mov byte [cs:shm_dbpend], 0       ; no window to make: the run stops
+    CSDO mov byte [CSEG shm_dbpend], 0 ; no window to make: the run stops
     mov byte [sh_macro_wait], 0       ; ...owing nothing to a later tick
     mov word [sh_msg], sh_s_macroerr
     jmp .fin
@@ -49207,7 +49393,7 @@ shm_mstep:
     mov [sh_macro_row], ax
     jmp .next
 .call:                                ; macro plan wave 1: a subroutine
-    mov byte [cs:shm_cpend], 0
+    CSDO mov byte [CSEG shm_cpend], 0
     call shm_cpush
     jc .deep
     mov ax, [cs:shm_ctcol]
@@ -49217,7 +49403,7 @@ shm_mstep:
     jmp .next
 .ret:                                 ; ...and back: the CALLING cell again,
     call shm_cpop                     ; whose call site now answers RETURN's
-    mov byte [cs:shm_cans], 1         ; value (shm_mcall)
+    CSDO mov byte [CSEG shm_cans], 1  ; value (shm_mcall)
     jmp .next
 .deep:
     mov word [sh_msg], sh_s_mdeep
@@ -49231,7 +49417,7 @@ shm_mstep:
     call shm_mpaint
     jmp .out
 .halted:
-    mov byte [cs:shm_stepgo], 0
+    CSDO mov byte [CSEG shm_stepgo], 0
     mov word [sh_msg], sh_s_macrodone
     jmp .fin
 .skip:

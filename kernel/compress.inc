@@ -3600,8 +3600,9 @@ cmz_pkg:
                                 ; measured from the start of the FILE and the
                                 ; table lives INSIDE the image, so compressing
                                 ; the image and laying out its parts are
-                                ; circular. os88pkg.py refuses it too, in the
-                                ; same words
+                                ; circular for THIS verb. os88pkg.py solves it
+                                ; as a fixed point (SPEC.md 20.13.8); the
+                                ; machine does not attempt it
     test al, 0x18
     jnz .already                ; a compression bit is already set
     mov dx, [es:LD_H_IMG]
@@ -3637,9 +3638,10 @@ cmz_pkg:
     ret
 
 ; cmz_cpre - AL = a package's LD_H_FLAGS -> DX = [cs:cmz_x] = its CLEAR prefix,
-; ld_cpre's own ladder (loader.inc; SPEC.md 20.13.1): what the mount reads out
-; of the first sector and must never have to decompress to get - the header,
-; the icon, the association block, the document glyph (SPEC.md 54.3.2) and the
+; the ladder ld_run_body_x's step 6a writes inline (loader.inc; SPEC.md
+; 20.13.1): what the mount reads out of the first sector and must never have
+; to decompress to get - the header, the icon, the association block, the
+; document glyph (SPEC.md 54.3.2) and the
 ; Sticky App card (SPEC.md 110.12). At most 320, and always a multiple of 16 - which is what lets a source or a
 ; destination be a SEGMENT and the 'CZ' header land on a paragraph in front of
 ; the stream. Compress and Uncompress both ask it, so the two cannot disagree.

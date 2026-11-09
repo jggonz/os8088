@@ -54,7 +54,15 @@ CCELL = re.compile(r'^\s*OSAPI_(?:RCSLOT|RCXCELL|RNCELL|FCELL)\s+'
 # all, which is how adding JSLOT alone would have bought nothing.
 CELLDEF = re.compile(r'^\s*OSAPI_(?:NSTUB|XSTUB)\s+([A-Za-z_]\w*)\s*,')
 MODS = ('.modc', '.modu', '.modf', '.modl', '.modh', '.modp', '.modd',
-        '.modk', '.modx', '.modw', '.modj', '.modn', '.mods')  # module images (2.8).
+        '.modk', '.modx', '.modw', '.modj', '.modn', '.mods',
+        '.boot3m')  # module images (2.8).
+# `.boot3m` is the keyboard mouse's pointer half (SPEC.md 2.8.8, 9.6.7), a
+# module image with no FILE: it rides KERNEL.SYS's `.boot3` tail and is
+# adopted from memory into a heap claim, then run with DS = KERNEL_SEG and
+# CS = the claim - a module's contract, so every module-data rule below is
+# its too (BOOT3-PLAN wave 5, verifier round 1: before this it was in FAR
+# alone, and `mov al, [kbm_tab]` inside it - KERNEL_SEG's bytes at the
+# table's offset - passed every check here).
 # `.modw` is winmod.inc's WIN95.DRV (SPEC.md 76.14), kern_big's alone, and
 # `.modj` deskmod.inc's DESK.DRV (SPEC.md 11.103.10), kern_big's alone too, and
 # `.modn` stikmenu.inc's STIKMENU.DRV (SPEC.md 110.12), kern_big's alone.
@@ -78,7 +86,10 @@ MODS = ('.modc', '.modu', '.modf', '.modl', '.modh', '.modp', '.modd',
 # which is how `.modl` shipped once with the near-call check blind to it - the
 # clone module's every `call COLD_SEG:` was correct, and would not have been
 # reported had one been near.
-FAR = ('.boot2', '.blob', '.ovl', '.cold', '.mega') + MODS  # sections with a vstart
+FAR = ('.boot2', '.blob', '.ovl', '.cold', '.mega', '.boot3') + MODS  # with a vstart
+# `.boot3` is the third boot-only home (SPEC.md 2.9.15), vstart 0 at B3_SEG,
+# and `.boot3m` the image after it (BOOT3-PLAN wave 5); rules B1-B9 below are
+# their own, and the near-call check here is B4's first half.
 # `.mega` is kern_mega's own segment (docs/plans/completed/KERN-MEGA-SEGMENTS-PLAN.md):
 # protected-mode code under MEGA_SEL_CODE, vstart 0 like `.text`, so a near
 # call between the two assembles and lands in the other one's bytes.
@@ -150,6 +161,7 @@ EXTRA = {'apps/os88ui.inc': '.cold',
 # matching SECT must contain the word, and almost none of them do, so the
 # test that costs a byte scan replaces one that costs a regex.
 SECT = re.compile(r'^\s*section\s+(\.\w+)')
+B3SECT_RE = re.compile(r'^\s*B3SECT\b')
 _WALK = {}
 
 # ...and the rest of the per-line patterns, compiled once for the same reason.
@@ -157,19 +169,38 @@ _WALK = {}
 # per line per check, and there are 564k of them left after the walk above.
 # The ones built with `%` interpolation further down are deliberately NOT
 # here - re's own cache is what serves a pattern whose text is not a constant.
-MACRO_D = re.compile(r'^\s*%macro\s+(\w+)')
-MACRO_B = re.compile(r'^\s*%macro\b')
-ENDMACRO = re.compile(r'^\s*%endmacro')
-ENDMACRO_B = re.compile(r'^\s*%endmacro\b')
+class _Pct(object):
+    """A `%`-directive pattern with the byte test in front: the eighteen
+    loops below ask every line whether it opens or closes a macro, which was
+    3.6M regex matches a run, and a line with no `%` in it can be neither."""
+    __slots__ = ('_p',)
+
+    def __init__(self, pat):
+        self._p = re.compile(pat)
+
+    def match(self, line):
+        return '%' in line and self._p.match(line)
+
+
+MACRO_D = _Pct(r'^\s*%macro\s+(\w+)')
+MACRO_B = _Pct(r'^\s*%macro\b')
+ENDMACRO = _Pct(r'^\s*%endmacro')
+ENDMACRO_B = _Pct(r'^\s*%endmacro\b')
 LABEL = re.compile(r'^([A-Za-z_]\w*):')
 LABEL_DOT = re.compile(r'^[A-Za-z_.]\w*:')
-DRVBOOT = re.compile(r'^\s*(?:SPL(?:GATE1?|CALLC?)|BLOBCALL)\s+drv_boot_x\b')
-OVLCALL = re.compile(r'\b(?:OVLCALL|OVBCALL)\s+(\w+)')
+DRVBOOT = re.compile(r'^\s*(?:SPL(?:GATE1?|CALLC?)|BLOBCALL|B3CALL)\s+drv_boot_x\b')
+# (B3CALL since BOOT3-PLAN wave 2: drv_boot_x is `.boot3`'s on every kernel
+# with drivers, and kern_small's one-byte rung is still the blob's BLOBCALL)
+OVLCALL = re.compile(r'\b(?:OVLCALL|OVBCALL|OVSCALL)\s+(\w+)')
+# ...and OVSCALL, OVBCALL's mirror (SPEC.md 2.5.3.2): it IS an OVLCALL on
+# kern_small, the model's build, since BOOT3-PLAN wave 3 gave it the clock
+# ladder and sch_idle_start - so it is asked rule 2e's question too.
 # ...and OVBCALL with it (SPEC.md 2.5.3.2): on kern_big it IS an OVLCALL,
 # so rule 2e's question - is this body still there when the call is made -
 # is exactly as live for it as for the plain form. On kern_small the body
-# is in the blob and outlives the mount, so the rule is merely stricter
-# there than it needs to be, which is the safe direction.
+# is in `.boot3` (the blob until BOOT3-PLAN wave 1) and outlives the mount,
+# so the rule is merely stricter there than it needs to be, which is the
+# safe direction.
 # `[CSEG x]` is the same thing spelled for kern_mega (kernel/kernel.asm's
 # CSDO): `cs:` on every other build, and under CSDO on kern_mega the image's
 # own data segment - the image's data either way
@@ -192,10 +223,67 @@ TRET = re.compile(r'^\s*(ret|retf|retn|iret)\b', re.I)
 TLADJ = re.compile(r'^\s*jmp\s+(kretf?c?_[a-z]{2})\s*$', re.I)
 TEXP = re.compile(r'^\s*(\w+)\s+([A-Za-z_]\w*)\s*(?:,.*)?$')
 # ...AND AN EXPANSION WITH MORE THAN ONE ARGUMENT PASTES ITS FIRST (`VSW_SWITCH
-# bvs, BSWK, bvw` is `bvs_switch` and `bvs_blank`, in the blob). The pattern
+# bvs, BSWK, bvw` is `bvs_switch` and `bvs_blank`, in `.boot3` since BOOT3-PLAN
+# wave 4 and in the blob before it). The pattern
 # took one argument only until SPEC.md 120.4 put the first reference into
 # bvs_switch from OUTSIDE the blob, and the registry could not name a label
 # this walk had never seen.
+
+
+_TOASTSTR = re.compile(r'^(\s*)TOASTSTR\s+([A-Za-z_.][\w.]*)\s*(?:,(.*))?$')
+_TOASTRUN = re.compile(r'^(\s*)TOASTRUN\s+([A-Za-z_.][\w.]*)\s*$')
+
+
+TOASTLABELS = set()
+
+
+def _toastline(line):
+    """A toast macro line read as the bytes it emits (SPEC.md 59.10):
+    `TOASTSTR x, 'a'` IS `x: db 'a', 0`, `TOASTRUN x` IS `x:`, and TOASTEND
+    emits nothing - so every rule here about a label and its section sees a
+    toast string as the `db` it is. The label is remembered: see the staging
+    rule, which a toast's ARGUMENT is not the question of."""
+    m = _TOASTSTR.match(line) or _TOASTRUN.match(line)
+    if m:
+        TOASTLABELS.add(m.group(2))
+    m = _TOASTSTR.match(line)
+    if m:
+        rest = (m.group(3) or '').strip().rstrip()
+        return '%s: db %s' % (m.group(2), rest + ', 0' if rest else '0')
+    m = _TOASTRUN.match(line)
+    if m:
+        return '%s:' % m.group(2)
+    if line.strip() == 'TOASTEND':
+        return ''
+    return line
+
+
+_KSIF = re.compile(r'^\s*%if(n?)def\s+KERN_SMALL\s*$')
+_ANYIF = re.compile(r'^\s*%if')
+_ELSE = re.compile(r'^\s*%el')
+_ENDIF = re.compile(r'^\s*%endif\b')
+
+
+def _walk_alt(path):
+    """{line-number: section} for the lines a `%if(n)def KERN_SMALL` block's
+    OTHER arm placed - the non-kern_small kernels' section, where it differs
+    from the one model (kern_small's) that _walk files the line under. A
+    block whose non-small arm switches nothing, and every line after an
+    unconditional switch, has no entry. Only OVSCALL's check reads it
+    (rule B8): its non-small arm is B3CALL, so its target must be placed by a
+    B3SECT in that arm (BOOT3-PLAN wave 3, SPEC.md 2.5.3.2)."""
+    _walk(path)
+    return _WALK[(path, 'alt')]
+
+
+def _walk_big(path):
+    """{line-number} for the lines inside the NON-kern_small arm of a
+    `%if(n)def KERN_SMALL` block - assembled on every kernel but the model.
+    Only B2CALL's check reads it (rule B8): font_init is `.boot2` on kern_big,
+    kern_emu and kern_mega and `.boot3` on kern_small (BOOT3-PLAN 16.17), so
+    its B2CALL is legal exactly where that arm is the one assembled."""
+    _walk(path)
+    return _WALK[(path, 'big')]
 
 
 def _walk(path):
@@ -203,18 +291,65 @@ def _walk(path):
     got = _WALK.get(path)
     if got is None:
         got = []
+        alt = {}                        # line -> the non-small arm's section
+        big = set()                     # lines inside a KERN_SMALL big arm
+        altcur = None
+        frames = []                     # per %if: [ks?, in-the-big-arm?, sect]
         cur = EXTRA.get(path, '.text')
+        inmac = False
         for n, raw in enumerate(open(path), 1):
             line = raw.split(';')[0]
-            if 'section' in line:
+            if '%' in line:
+                if MACRO_B.match(line):
+                    inmac = True
+                elif ENDMACRO_B.match(line):
+                    inmac = False
+                elif not inmac:
+                    mk = _KSIF.match(line)
+                    if mk:              # %ifndef: the big arm is the first
+                        frames.append([True, mk.group(1) == 'n', None])
+                    elif _ANYIF.match(line):
+                        frames.append([False, False, None])
+                    elif _ELSE.match(line) and frames:
+                        frames[-1][1] = not frames[-1][1]
+                    elif _ENDIF.match(line) and frames:
+                        fr = frames.pop()
+                        if fr[0] and fr[2] is not None:
+                            altcur = fr[2]
+            # A `section` line INSIDE a %macro body is the EXPANSION's switch,
+            # not the definition's: B3SECT (kernel.asm) holds four of them, one
+            # per arm, and read as the definition's they filed everything
+            # written after it in whatever the last arm named. The expansion
+            # is what moves the section, and B3SECT's is modelled below.
+            if 'section' in line and not inmac:
                 m = SECT.match(line)
                 if m:
-                    cur = m.group(1)
-                    if cur == '.boot2' and path not in LOADER:
-                        cur = '.blob'       # the overlay's half (SPEC.md 2.9.14)
+                    sw = m.group(1)
+                    if sw == '.boot2' and path not in LOADER:
+                        sw = '.blob'        # the overlay's half (SPEC.md 2.9.14)
+                    if frames and frames[-1][0] and frames[-1][1]:
+                        frames[-1][2] = sw  # the big arm's: not the model's
+                    elif not (frames and frames[-1][0]):
+                        altcur = None
+                    cur = sw
                     continue
-            got.append((cur, n, line, raw))
+            # B3SECT is `section .boot3` on every kernel since BOOT3-PLAN wave
+            # 1 (SPEC.md 2.9.15.2), when its fallback arms went
+            if 'B3SECT' in line and not inmac and B3SECT_RE.match(line):
+                if frames and frames[-1][0] and frames[-1][1]:
+                    frames[-1][2] = '.boot3'
+                elif not (frames and frames[-1][0]):
+                    altcur = None
+                cur = '.boot3'
+                continue
+            if altcur is not None:
+                alt[n] = altcur
+            if any(fr[0] and fr[1] for fr in frames):
+                big.add(n)              # assembled on every kernel BUT the model
+            got.append((cur, n, _toastline(line), raw))
         _WALK[path] = got
+        _WALK[(path, 'alt')] = alt
+        _WALK[(path, 'big')] = big
     return got
 
 
@@ -280,7 +415,7 @@ def main():
                     tmpl[macro].append(tcur)
                     # a TEMPLATE label can carry the return-kind rule's
                     # declaration too (FRAMEB, below): kernel.asm's KGO_PAIR,
-                    # CTRL.DRV's and the boot blob's cp_kgo/bvs_kgo, is
+                    # CTRL.DRV's and `.boot3`'s cp_kgo/b3_kgo, is
                     # exk_go's shape written once for two images. Its kinds
                     # stay empty, which is "unjudged" - exactly a raw one's
                     tdecl = 'ovlchk: builds its own far frame' in raw
@@ -378,10 +513,43 @@ def main():
         def arg(i):
             i = int(i)
             return args[i - 1] if 0 < i <= len(args) else ''
+        # `%ifidn %1, bvs` is decided on the known arguments, as rules B1-B9's
+        # expander decides it (_b3_expander): BOOT3-PLAN wave 4's VSW_SWITCH
+        # and VSW_DISP far-call the blob's bvs_apply from `.boot3` in the bvs
+        # arm and near-call their own %1_apply in every other, and keeping
+        # both arms here read the near one as a `.boot3` -> `.boot2` call.
+        # Every other condition keeps all its arms, the safe direction
+        stack = []                      # per %if: [this arm live, any taken]
         for body in mlines.get(name, ()):
             body = PASTE.sub(lambda mm: arg(mm.group(1)) + mm.group(2), body)
             body = re.sub(r'%%\w+', ' ', body)
             body = PARAM.sub(lambda mm: arg(mm.group(1)), body)
+            st = body.strip()
+            mi = IFIDN.match(body)
+            if mi:
+                hit = (mi.group(3).strip() == mi.group(4).strip()) \
+                    != (mi.group(2) == 'n')
+                if mi.group(1):
+                    if stack and stack[-1] is not None:
+                        stack[-1] = [hit and not stack[-1][1],
+                                     stack[-1][1] or hit]
+                else:
+                    stack.append([hit, hit])
+                continue
+            if re.match(r'%(?:el)?if', st):
+                if st.startswith('%if'):
+                    stack.append(None)  # undecidable: every arm kept
+                continue
+            if st.startswith('%else'):
+                if stack and stack[-1] is not None:
+                    stack[-1] = [not stack[-1][1], True]
+                continue
+            if st.startswith('%endif'):
+                if stack:
+                    stack.pop()
+                continue
+            if any(x is not None and not x[0] for x in stack):
+                continue
             if body.lstrip().startswith('%'):
                 continue             # a preprocessor line: %if, %error, ...
             mm = re.match(r'^\s*(\w+)\b(.*)$', body)
@@ -513,7 +681,7 @@ def main():
     # once, and one missed is a jump into the kernel's own bytes at a
     # `.mega` offset. Only the three names with one fixed section are judged.
     FARSEG = {'KERNEL_SEG': '.text', 'COLD_SEG': '.cold',
-              'MEGA_SEL_CODE': '.mega'}
+              'MEGA_SEL_CODE': '.mega', 'B3_SEG': '.boot3'}
     fbad = []
     for f in files:
         inmacro = False
@@ -764,7 +932,10 @@ def main():
         sys.exit("os88ovlchk: %d reference(s) into the boot overlay are not in "
                  "tests/ovlrefs.txt - each one must say what guarantees it runs "
                  "before %s" % (len(unregistered), ' / '.join(deadlines)))
-    stale = sorted(registered - ovl_refs)
+    # (a row naming a `.boot3` label is rule B1's, which asks the same
+    # question of that section: it is not this rule's to call stale)
+    stale = sorted(registered - ovl_refs
+                   - {l for l, sct in where.items() if sct == '.boot3'})
     if stale:
         sys.exit("os88ovlchk: tests/ovlrefs.txt lists %d reference(s) that no "
                  "longer exist (%s) - the registry may only shrink by deleting "
@@ -855,21 +1026,29 @@ def main():
     # the macro shared its line with a label - so it is checked rather than
     # reviewed.
     # OVBCALL is the BUILD-CONDITIONAL entry (SPEC.md 2.5.3.2): it expands to
-    # SPLGATE1 on kern_small and to OVLCALL on kern_big, because the body it
-    # names is in `.boot2` on the first and `.ovl` on the second. It is held to
-    # `.boot2` here for the same reason the conditional `section` blocks write
-    # their `.boot2` arm LAST - this scanner has ONE model and that model is
+    # B3CALL on kern_small and to OVLCALL on kern_big, because the body it
+    # names is in `.boot3` on the first and `.ovl` on the second. It is held to
+    # `.boot3` here for the same reason the conditional `section` blocks write
+    # their kern_small arm (`B3SECT`) LAST - this scanner has ONE model and that model is
     # kern_small, which is the build the split exists to protect. What the row
     # buys is both directions: an OVBCALL aimed at a body that did NOT move
     # fails (it would be a blob segment carrying a window offset on the small
     # build), and an OVLCALL aimed at one that DID fails the other way.
+    # ...AND SINCE BOOT3-PLAN WAVE 1 ITS kern_small ARM IS `.boot3` (B3CALL),
+    # not the blob: kern_small's OVBCALL bodies moved there, so the model
+    # holds OVBCALL to `.boot3` and this map knows `.boot3`'s labels as well
     MACHALF = {'SPLCALL': '.blob', 'SPLCALLC': '.blob',
                'SPLGATE': '.blob', 'SPLGATE1': '.blob', 'SPLSTUB': '.blob',
-               'OVLCALL': '.ovl', 'OVBCALL': '.blob', 'BLOBCALL': '.blob',
+               'OVLCALL': '.ovl', 'OVBCALL': '.boot3', 'BLOBCALL': '.blob',
                'OVSCALL': '.ovl'}   # OVBCALL's mirror: `.ovl` on kern_small
     MACPAT = re.compile(r'\b(' + '|'.join(MACHALF) + r')\s+(\w+)')
     REACH = {'.blob': 'the blob (.boot2), through [spl_fseg]',
-             '.ovl': 'the FAT window, by `call FAT_SEG:`'}
+             '.ovl': 'the FAT window, by `call FAT_SEG:`',
+             '.boot3': '`.boot3`, by `call B3_SEG:` (B3CALL)'}
+    half3 = dict(half)
+    for lab, sect in where.items():
+        if sect == '.boot3':
+            half3[lab] = sect
     macbad = []
     for f in kfiles:
         for sect, n, line in sections(f):
@@ -877,7 +1056,7 @@ def main():
             if not m:
                 continue
             macro, tgt = m.group(1), m.group(2)
-            want, got = MACHALF[macro], half.get(tgt)
+            want, got = MACHALF[macro], half3.get(tgt)
             if got and got != want:
                 macbad.append((f, n, macro, tgt, want, got))
     for f, n, macro, tgt, want, got in macbad:
@@ -915,7 +1094,7 @@ def main():
     # proxy (size pass 4: kmain's pre-mount half is `kmain_o`, in `.boot2`, and
     # its OVLCALLs are not on kmain's own lines any more). A call to one after
     # the mount is the same defect one level down, so it is refused the same way.
-    WINREF = re.compile(r'\b(?:OVLCALL|OVBCALL)\s+\w+|\bcall\s+FAT_SEG:')
+    WINREF = re.compile(r'\b(?:OVLCALL|OVBCALL|OVSCALL)\s+\w+|\bcall\s+FAT_SEG:')
     BLOBC = re.compile(r'\b(?:SPLGATE1?|SPLCALLC?|BLOBCALL)\s+(\w+)')
     winbody = set()
     for f in kfiles:
@@ -1236,7 +1415,13 @@ def main():
     # lines later; a conditional pair stages at the join). Registering them
     # means converting those sites to a macro of their own - worth doing, and
     # not on the back of a change to a different image.
-    MODDEF  = re.compile(r'^\s*([A-Za-z_]\w*):\s*(?:times\s+\S+\s+)?'
+    # The colon is OPTIONAL, as it is to nasm: `kbm_tab     db ...` is a label
+    # too. Requiring one left 35 image data labels out of the map - `.boot3m`'s
+    # kbm_tab, `.modu`'s 25 sd_*, `.modc`'s 8 sc_* and `.modh`'s hbm_knk - so
+    # `.boot3m` joining MODS alone still let `mov al, [kbm_tab]` through
+    # (BOOT3-PLAN wave 5, verifier round 1; demonstrated both ways). All 35
+    # were already read through CS, so widening it found nothing in the tree.
+    MODDEF  = re.compile(r'^\s*([A-Za-z_]\w*)(?::\s*|\s+)(?:times\s+\S+\s+)?'
                          r'(?:d[bwdq]|res[bwdqt])\b', re.I)
     ISDATA  = re.compile(r'^\s*(?:[A-Za-z_]\w*:)?\s*(?:times\s+\S+\s+)?'
                          r'(?:d[bwdq]|res[bwdqt])\b', re.I)
@@ -1367,6 +1552,13 @@ def main():
                     continue          # unregistered image: half 1 only, and
                                       # this is a pointer LOAD rather than a
                                       # memory operand over the image
+                if w in TOASTLABELS and not re.search(r'\[[^]]*\b%s\b' % w, line):
+                    continue          # a TOAST's argument, loaded as a
+                                      # pointer: toast_show reads it through
+                                      # ES:SI and copies it (SPEC.md 59.3),
+                                      # so DS staging is not its question.
+                                      # Read THROUGH (a memory operand), it
+                                      # still has to name CS, as above
                 d_bad.append((f, n, sect, w, line.strip()[:56]))
     for f, n, sect, w, src in d_bad:
         print("%s:%d: %s is %s data read through DS: %s" % (f, n, w, sect, src),
@@ -1534,7 +1726,8 @@ def main():
     # retf - and COLDCALL is the same two instructions inside `.cold`
     # (kernel.asm, docs/plans/ROM-PLAN.md 3.2), judged the same way
     # (TEXTCALL, the same in `.text`)
-    BLOBF = re.compile(r'\b(?:BLOBCALL|COLDCALL|TEXTCALL)\s+([A-Za-z_]\w*)')
+    BLOBF = re.compile(r'\b(?:BLOBCALL|COLDCALL|TEXTCALL|B3CALL|B2CALL)'
+                       r'\s+([A-Za-z_]\w*)')
     #
     # A LABEL IS COLLECTED AS A LIST OF EXTENTS, NOT AS ONE.  `%ifdef
     # KERN_BIG` / `%else` is the ordinary shape for a routine whose small-
@@ -1885,6 +2078,633 @@ def check_pkgs():
     print("os88ovlchk: %d package(s) keep every overlay call far" % walked)
 
 
+# =============================================================================
+# THE THIRD BOOT-ONLY HOME: rules B1-B9 (SPEC.md 2.9.15.4, BOOT3-PLAN 4.2)
+# =============================================================================
+# `.boot3` is KERNEL.SYS's last section: it is expanded by kz_all at the very
+# end of stage 2 and given back at mem_unblob_x, so a body there is correct
+# exactly while it is called AFTER the tail is expanded and BEFORE the drop -
+# and nothing at run time checks either (0 resident bytes is the owner's rule:
+# "guard them at build time"). These are those guards. They read SOURCE, as
+# everything above does, with ONE model: a B3SECT block is `.boot3` (the arm
+# every kernel is moving to; on a kernel without the section yet the fallback
+# home's own rules above apply as well, the safe direction).
+#
+# Each rule has a break-it-on-purpose fixture in B3_FIXTURES below, run on
+# every invocation (`b3_selftest`): a rule whose fixture stops failing fails
+# the build, so a rule cannot go quiet by being edited.
+#
+# Registered exceptions are MARKERS on the raw line, so the reason sits beside
+# the code it excuses: `; ovlchk: B3 hand-down - <why>` (rule B3) and
+# `; ovlchk: B5 blob offset - <why>` (rule B5). Rule B1's exceptions are lines
+# in tests/ovlrefs.txt, rule 2c's registry, which asks the same question.
+
+B3_ROOTS = ('boot2_entry', 'read_run', 'kz_all', 'kz_hd', 'kz_expand',
+            'spl_tick', 'spl_chrome', 'vid_detect', 'bvs_apply', 'spl_isr',
+            'spl_anim')
+B3_ROOTS_NEEDED = ('boot2_entry', 'kz_all', 'spl_tick')
+B3_KDOS = 'kerndos/kdos.asm'
+B3_KDLAYOUT = 'kerndos/kdlayout.inc'
+B3CALL_RE = re.compile(r'^\s*B3CALL\s+([A-Za-z_]\w*)\s*$')
+B2CALL_RE = re.compile(r'^\s*B2CALL\s+([A-Za-z_]\w*)\s*$')
+# (not OVBCALL: its arms are OVLCALL and B3CALL, both far, and rule 2d holds
+# it to its target's home - `.boot3` on kern_small, the model's build)
+OTHERCALL = re.compile(r'^\s*(BLOBCALL|SPLCALLC?|SPLGATE1?|OVLCALL'
+                       r'|OVSCALL|COLDCALL|TEXTCALL)\s+([A-Za-z_]\w*)\b')
+B3STORE = re.compile(r'\bmov\s+(?:(?:byte|word|dword)\s+)?\[[^\]]*\]\s*,'
+                     r'\s*(?:cs|B3_SEG|B3_RAM)\b'
+                     r'|\bd[wd]\b[^;]*\b(?:B3_SEG|B3_RAM)\b', re.I)
+B3WORD = re.compile(r'[A-Za-z_]\w*')
+# the entry macros, whose arms nasm picks (by B3_ON and __?SECT?__) and which
+# the rules judge by NAME at the expansion line rather than by their arms
+B3ENTRY = ('B3CALL', 'B2CALL', 'BLOBCALL', 'OVLCALL', 'OVBCALL', 'OVSCALL',
+           'SPLCALL', 'SPLCALLC', 'SPLGATE', 'SPLGATE1', 'COLDCALL',
+           'TEXTCALL')
+B3OVLCS = re.compile(r'\bmov\s+(?:(?:byte|word|dword)\s+)?\[[^\]]*\]'
+                     r'\s*,\s*cs\b', re.I)
+QUOTED = re.compile(r"'[^']*'|\"[^\"]*\"|`[^`]*`")
+IFIDN = re.compile(r'^\s*%(el)?if(n?)idni?\s+([^,]*),\s*(.*?)\s*$')
+B3LOADERSYM = re.compile(r'^(?:KZ_\w+|b2_\w+)$')
+EXPLINE = re.compile(r'^\s*(?:[A-Za-z_]\w*:\s*)?(\w+)\b(.*)$')
+
+
+def _b3_expander(files):
+    """{macro: body lines} and an expander, for rules that must see what a
+    macro EXPANDS TO in the section its expansion is in (main()'s mexpand,
+    kept separate so the fixtures can drive these rules on a tree of their
+    own)."""
+    mlines = {}
+    for f in files:
+        macro = None
+        for _s, _n, line, _r in _walk(f):
+            m = MACRO_D.match(line)
+            if m:
+                macro = m.group(1)
+                mlines[macro] = []
+                continue
+            if ENDMACRO_B.match(line):
+                macro = None
+                continue
+            if macro:
+                mlines[macro].append(line)
+    paste = re.compile(r'%(\d+)\s*%\+\s*(\w+)')
+    param = re.compile(r'%(\d+)')
+
+    def expand(name, args, depth=0):
+        out = []
+        if depth > 8:
+            return out
+
+        def arg(i):
+            i = int(i)
+            return args[i - 1] if 0 < i <= len(args) else ''
+        # `%ifidn %1, bvs` IS decidable here - the arguments are known - and
+        # an arm it rejects is not part of this expansion (VSW_SWITCH's
+        # `.boot3` call is bvs's alone, and CTRL.DRV expands it as vid). Any
+        # other condition is the preprocessor's, and every arm is kept, which
+        # is the safe direction for a rule that refuses what it sees
+        stack = []                      # per %if: [this arm live, any taken]
+        idn = re.compile(r'^\s*%(el)?if(n?)idni?\s+([^,]*),\s*(.*?)\s*$')
+        for body in mlines.get(name, ()):
+            body = paste.sub(lambda mm: arg(mm.group(1)) + mm.group(2), body)
+            body = re.sub(r'%%\w+', ' ', body)
+            body = param.sub(lambda mm: arg(mm.group(1)), body)
+            st = body.strip()
+            mi = idn.match(body)
+            if mi:
+                hit = (mi.group(3).strip() == mi.group(4).strip()) \
+                    != (mi.group(2) == 'n')
+                if mi.group(1):
+                    if stack and stack[-1] is not None:
+                        stack[-1] = [hit and not stack[-1][1],
+                                     stack[-1][1] or hit]
+                else:
+                    stack.append([hit, hit])
+                continue
+            if re.match(r'%(?:el)?if', st):
+                if st.startswith('%if'):
+                    stack.append(None)  # undecidable: every arm kept
+                continue
+            if st.startswith('%else'):
+                if stack and stack[-1] is not None:
+                    stack[-1] = [not stack[-1][1], True]
+                continue
+            if st.startswith('%endif'):
+                if stack:
+                    stack.pop()
+                continue
+            if any(x is not None and not x[0] for x in stack):
+                continue
+            if body.lstrip().startswith('%') or SECT.match(body):
+                continue
+            mm = re.match(r'^\s*(\w+)\b(.*)$', body)
+            if mm and mm.group(1) in mlines and mm.group(1) not in B3ENTRY:
+                sub = [x.strip() for x in mm.group(2).split(',') if x.strip()]
+                out += expand(mm.group(1), sub, depth + 1)
+                continue
+            out.append(body)            # (an entry macro stays a NAME, which
+        return out                      # is how the rules judge one)
+    return mlines, expand
+
+
+def _b3_stream(files):
+    """[(file, line, section, text, raw, macro)] for every line outside a
+    %macro body, each macro expansion followed by the lines it expands to
+    (`macro` names the expansion a line came from, '' for a written one)."""
+    mlines, expand = _b3_expander(files)
+    out = []
+    cache = {}                          # (macro, args) -> its lines: MARK 7
+    for f in files:
+        inm = False
+        for sect, n, line, raw in _walk(f):
+            if '%' in line:
+                if MACRO_B.match(line):
+                    inm = True
+                    continue
+                if ENDMACRO_B.match(line):
+                    inm = False
+                    continue
+            if inm:
+                continue
+            out.append((f, n, sect, line, raw, ''))
+            mm = EXPLINE.match(line)
+            if mm and mm.group(1) in mlines and not line.lstrip().startswith('%'):
+                key = (mm.group(1), mm.group(2))
+                got = cache.get(key)
+                if got is None:
+                    args = [x.strip() for x in mm.group(2).split(',')
+                            if x.strip()]
+                    got = cache[key] = expand(mm.group(1), args)
+                mac = mm.group(1)
+                out += [(f, n, sect, body, raw, mac) for body in got]
+    return out
+
+
+def boot3_rules(kfiles, root='.'):
+    """Rules B1-B9 over `kfiles` (paths relative to `root`'s tree, as the
+    walk keys them). Returns [(rule, file, line, message)].
+
+    ONE PASS over the expanded stream for the line rules, with a cheap
+    substring test in front of every regex: the stream is ~200k lines and
+    almost none of them can be about `.boot3`, so the question that costs a
+    byte scan is asked before the one that costs a match (the walk's own
+    trick, above)."""
+    bad = []
+    rows = _b3_stream(kfiles)
+    where = {}                          # label -> section, every definition
+    alldefs = {}                        # label -> {every section defining it}
+    altw = {}                           # label -> its non-kern_small section
+    for f, n, sect, line, raw, _e in rows:
+        c0 = line[:1]
+        if c0.isalpha() or c0 == '_':
+            m = LABEL.match(line)
+            if m:
+                where[m.group(1)] = sect
+                alldefs.setdefault(m.group(1), set()).add(sect)
+                if not _e:
+                    a = _walk_alt(f).get(n)
+                    if a:
+                        altw[m.group(1)] = a
+        if 'OSAPI_' in line:
+            m = CELLDEF.match(line)
+            if m:
+                where[m.group(1)] = sect
+    b3labs = {l for l, s in where.items() if s == '.boot3'}
+    b3mlabs = {l for l, s in where.items() if s == '.boot3m'}
+    blobish = ('.blob', '.boot2')
+    named = b3labs | b3mlabs
+    b3pat = re.compile(r'\b(?:' + '|'.join(sorted(map(re.escape, named)))
+                       + r')\b') if named else None
+
+    reg = set()
+    regf = os.path.join(root, 'tests', 'ovlrefs.txt')
+    if os.path.exists(regf):
+        for ln in open(regf):
+            ln = ln.split('#', 1)[0].strip()
+            if ln:
+                reg.add(ln.split()[0])
+    post = set()                        # boot2.asm's labels past boot2_entry
+    if os.path.exists(os.path.join(root, 'boot', 'boot2.asm')):
+        after = False
+        for _s, _n, line, _r in _walk('boot/boot2.asm'):
+            m = LABEL.match(line)
+            if m and m.group(1) == 'boot2_entry':
+                after = True
+            if after and m:
+                post.add(m.group(1))
+
+    body = {}                           # blob body -> [(file, line, text)]
+    owner = None                        # ...the blob body this line is in
+    b3own = None                        # ...the `.boot3` body
+    winb3 = set()                       # `.boot3` bodies that reach `.ovl`
+    for f, n, sect, line, raw, ex in rows:
+        inb3 = sect == '.boot3'
+        isblob = sect in blobish
+        pre = line.lstrip().startswith('%')
+        # the bodies, for B2's cone and B6's window question
+        if isblob:
+            text = line
+            m = LABEL.match(line) if line[:1] not in ' \t.' else None
+            if m:
+                owner = m.group(1)
+                body.setdefault(owner, [])
+                text = line[m.end():]
+            if owner:
+                body[owner].append((f, n, text))
+        else:
+            owner = None
+        hit = inb3 or (b3pat is not None and b3pat.search(line))
+        if 'B3' in line or 'B2CALL' in line:
+            hit = True
+        if not hit and not ('B3_' in line):
+            continue
+        # --- B1: a reference into `.boot3` from anywhere but the blob or it
+        if not inb3 and not isblob and not pre and b3pat is not None:
+            code = line
+            m = LABEL.match(code)
+            if m:
+                code = code[m.end():]
+            code = QUOTED.sub("''", code)   # a string names nothing
+            for w in b3pat.findall(code):
+                if w in b3labs and w not in reg:
+                    bad.append(('B1', f, n, "%s names `.boot3`'s %s - that "
+                                "RAM is packed bytes before kz_all and the "
+                                "heap's after mem_unblob; register what runs "
+                                "it in between in tests/ovlrefs.txt"
+                                % (sect, w)))
+        # --- B2's second half: the loader and the splash name none of it
+        if f in LOADER and (re.search(r'\bB(?:3CALL|3SECT|2CALL)\b', line) or
+                            (b3pat is not None and b3pat.search(line))):
+            bad.append(('B2', f, n, "%s names `.boot3`: the loader and the "
+                        "splash run before it exists" % f))
+        # --- B3: nothing stores `.boot3`'s segment where it outlives the call
+        if 'ovlchk: B3 hand-down' not in raw:
+            if inb3 and 'cs' in line and B3OVLCS.search(line):
+                bad.append(('B3', f, n, "`.boot3` stores CS - the segment is "
+                            "the heap's after mem_unblob (mark a transient "
+                            "hand-down `; ovlchk: B3 hand-down - why`)"))
+            elif ('B3_SEG' in line or 'B3_RAM' in line) and \
+                    B3STORE.search(line):
+                bad.append(('B3', f, n, "%s stores `.boot3`'s segment in "
+                            "memory: it is the heap's after mem_unblob" % sect))
+        # --- B4: no near transfer or blob-macro call across .boot2 / .boot3
+        if ex not in B3ENTRY:
+            m = OTHERCALL.match(line)
+            if m and inb3 != (where.get(m.group(2)) == '.boot3'):
+                if m.group(1) in ('BLOBCALL', 'COLDCALL', 'TEXTCALL') \
+                        and inb3:
+                    bad.append(('B4', f, n, "%s from `.boot3` is `push cs` + "
+                                "a NEAR call into another segment - use "
+                                "B2CALL" % m.group(1)))
+                elif where.get(m.group(2)) == '.boot3':
+                    bad.append(('B4', f, n, "%s %s, but %s is in `.boot3` - "
+                                "its entry is B3CALL" % (m.group(1),
+                                                         m.group(2),
+                                                         m.group(2))))
+        for c in CALL.finditer(line):
+            if c.group(1) is not None:
+                continue
+            t = where.get(c.group(2))
+            if t is not None and inb3 != (t == '.boot3'):
+                bad.append(('B4', f, n, "a NEAR transfer %s -> %s (%s): two "
+                            "segments sharing offsets" % (sect, t,
+                                                          c.group(2))))
+            if c.group(2) in b3mlabs and sect != '.boot3m':
+                bad.append(('B9', f, n, "a transfer into `.boot3m` (%s): the "
+                            "image is copied into a claim, never run where "
+                            "it lies" % c.group(2)))
+        if inb3:
+            # --- B5: CS-relative data is its own; no blob offset crosses ---
+            if CSMEM.search(line) and '[' in line:
+                for w in B3WORD.findall(line.split('[', 1)[1]):
+                    t = where.get(w)
+                    if t is not None and t not in ('.boot3', '.boot3b'):
+                        bad.append(('B5', f, n, "`.boot3` reads %s through "
+                                    "CS, but it is in %s - CS is B3_SEG here"
+                                    % (w, t)))
+            if not (B2CALL_RE.match(line) or
+                    ex in ('SPLCALL', 'SPLCALLC') or  # through [spl_fp]:
+                    re.match(r'^\s*SPLCALLC?\s', line) or  # [spl_fseg]
+                    re.search(r'\bcall\s+BLOB_SEG_AT\s*:', line) or
+                    'ovlchk: B5 blob offset' in raw or pre):
+                code = line             # (a line's OWN label is a definition,
+                m = LABEL.match(code)   # not an immediate - drv_boot_x is
+                if m:                   # one name in two arms, kern_small's
+                    code = code[m.end():]   # in the blob: BOOT3-PLAN wave 2)
+                for w in B3WORD.findall(CALL.sub('', code)):
+                    if where.get(w) in blobish:
+                        bad.append(('B5', f, n, "`.boot3` carries the blob "
+                                    "offset %s as an immediate - read through "
+                                    "the blob's CS it is a different byte "
+                                    "(mark it `; ovlchk: B5 blob offset - "
+                                    "why`)" % w))
+            # --- B6: no loader pass-2 number; note a body that reaches .ovl
+            m = LABEL.match(line)
+            if m:
+                b3own = m.group(1)
+            if b3own and re.search(r'\b(?:OVLCALL|OVBCALL)\s+\w+'
+                                   r'|\bcall\s+FAT_SEG:', line):
+                winb3.add(b3own)
+            if not pre:
+                for w in B3WORD.findall(line):
+                    if B3LOADERSYM.match(w) or w in post:
+                        bad.append(('B6', f, n, "`.boot3` names %s - a loader "
+                                    "number or label that moves between the "
+                                    "two passes (SPEC.md 2.9.13.4)" % w))
+        else:
+            b3own = None
+        # --- B8: the macros' arms agree, and only the kernel uses them ----
+        # A site written inside a %macro body is never a written line: the
+        # stream gives it only as an expansion, `ex` naming the macro, and
+        # VSW_SWITCH's and CFG_BOOT's B3CALLs are two of those. So B8 reads
+        # expansions too - all but the three macros' OWN bodies, whose arms
+        # (`call B3_SEG:%1`, `OVLCALL %1`) are not call sites
+        if ex not in ('B3CALL', 'B2CALL', 'B3SECT') and \
+                ('B3CALL' in line or 'B2CALL' in line or 'B3SECT' in line):
+            inmac = (" (written inside %%macro %s, expanded here)" % ex
+                     if ex else '')
+            m = B3CALL_RE.match(line)
+            if m and ex == 'OVSCALL':
+                # OVSCALL's B3CALL is the arm of every kernel BUT the model's
+                # (kern_small's is OVLCALL, which rule 2d holds to `.ovl`), so
+                # its target is judged by the section its body's OTHER arm
+                # places it in: `%ifndef KERN_SMALL` / B3SECT / `%else` /
+                # `section .ovl` (BOOT3-PLAN wave 3). A body plain in `.ovl`
+                # would be `call B3_SEG:` with a window offset on kern_big
+                t = m.group(1)
+                if altw.get(t) != '.boot3':
+                    bad.append(('B8', f, n, "OVSCALL %s is B3CALL on every "
+                                "kernel but kern_small, and %s is not placed "
+                                "by a B3SECT in a `%%ifndef KERN_SMALL` arm "
+                                "(it is %s there)" % (t, t, altw.get(
+                                    t, where.get(t, 'no section')))))
+            elif m:
+                t = m.group(1)
+                if '.boot3' not in alldefs.get(t, ()) and t not in b3mlabs:
+                    # (ANY arm's: a name defined in two - drv_boot_x is
+                    # `.boot3` on kern_big and kern_small's blob rung - is
+                    # this kernel's in whichever arm the caller's is)
+                    bad.append(('B8', f, n, "B3CALL %s, but %s is in %s, "
+                                "not `.boot3`%s" % (t, t, where.get(
+                                    t, 'no section'), inmac)))
+            m = B2CALL_RE.match(line)
+            if m:
+                if sect != '.boot3':
+                    bad.append(('B8', f, n, "B2CALL outside `.boot3`%s"
+                                % inmac))
+                elif where.get(m.group(1)) not in blobish and not (
+                        n in _walk_big(f) and
+                        altw.get(m.group(1)) in blobish):
+                    # (the one exception: a B2CALL written in a non-kern_small
+                    # arm, to a body whose non-kern_small arm places it in the
+                    # blob - font_init's shape, BOOT3-PLAN 16.17. The model,
+                    # kern_small, assembles neither half of that pair)
+                    bad.append(('B8', f, n, "B2CALL %s, but it is not in the "
+                                "blob%s" % (m.group(1), inmac)))
+            if not f.startswith('kernel/') and \
+                    re.match(r'^\s*(?:B3SECT|B3CALL|B2CALL)\b', line):
+                bad.append(('B8', f, n, "the `.boot3` macros are the kernel "
+                            "assembly's; %s is outside it%s" % (f, inmac)))
+        # --- B9: `.boot3m` is copied, never run in place ------------------
+        if b3mlabs and ex not in B3ENTRY and sect != '.boot3m':
+            m = OTHERCALL.match(line)
+            t = m.group(2) if m else None
+            m = B3CALL_RE.match(line)
+            t = m.group(1) if m else t
+            if t in b3mlabs:
+                bad.append(('B9', f, n, "a call into `.boot3m` (%s)" % t))
+
+    # --- B2: the load-time cone may not name `.boot3` ------------------------
+    if body:
+        for r in B3_ROOTS_NEEDED:
+            if r not in body:
+                bad.append(('B2', kfiles[0], 0, "the load-time cone's root %s "
+                            "is not in this tree - rule B2 cannot say what "
+                            "runs before kz_all, so it refuses" % r))
+        seen, todo = set(), [r for r in B3_ROOTS if r in body]
+        while todo:
+            b = todo.pop()
+            if b in seen:
+                continue
+            seen.add(b)
+            for f, n, text in body.get(b, ()):
+                for w in B3WORD.findall(text):
+                    if w in b3labs or w == 'B3CALL':
+                        bad.append(('B2', f, n, "%s is in the load-time cone "
+                                    "and names `.boot3` (%s) - which is still "
+                                    "PACKED then" % (b, w)))
+                    elif w in body and w not in seen:
+                        todo.append(w)
+
+    # --- B6: no `.boot3` body reaching `.ovl` is called after the mount -----
+    for f in kfiles:
+        if not f.endswith('kernel.asm') or not winb3:
+            continue
+        lines = open(os.path.join(root, f), errors='replace').read().split('\n')
+        for head in ('kmain:', 'kmain_o:'):
+            k0 = next((i for i, l in enumerate(lines) if l.startswith(head)),
+                      None)
+            if k0 is None:
+                continue
+            mount = None
+            for i in range(k0 + 1, len(lines)):
+                if LABEL.match(lines[i]):
+                    break
+                if DRVBOOT.search(lines[i]):
+                    mount = i
+                    break
+            if mount is None:
+                continue
+            for i in range(mount + 1, len(lines)):
+                if LABEL_DOT.match(lines[i]):
+                    break
+                m = B3CALL_RE.match(lines[i].split(';', 1)[0])
+                if m and m.group(1) in winb3:
+                    bad.append(('B6', f, i + 1, "B3CALL %s after drv_boot_x: "
+                                "a `.boot3` body that reaches `.ovl`, whose "
+                                "bytes the first mount has taken" % m.group(1)))
+
+    # --- B7: no `.boot3` in a file the DOS core includes, undeclared ---------
+    kd = os.path.join(root, B3_KDOS)
+    if os.path.exists(kd):
+        lay = os.path.join(root, B3_KDLAYOUT)
+        declared = os.path.exists(lay) and '.boot3' in open(lay).read()
+        for ln in open(kd, errors='replace'):
+            m = re.match(r'\s*%include\s+"([^"]+)"', ln.split(';')[0])
+            if not m:
+                continue
+            kf = 'kernel/' + os.path.basename(m.group(1))
+            if kf not in kfiles or declared:
+                continue
+            for sect, n, line, raw in _walk(kf):
+                if sect == '.boot3':
+                    bad.append(('B7', kf, n, "`.boot3` in a file %s includes, "
+                                "and %s does not declare it - under -f bin it "
+                                "lands silently in the DOS core"
+                                % (B3_KDOS, B3_KDLAYOUT)))
+                    break
+    # one report a site: a line inside a macro expanded on every pass is
+    # walked once per expansion, and the repeats were noise
+    seen = set()
+    return [b for b in bad if b not in seen and not seen.add(b)]
+
+
+# THE FIXTURES: each a tiny tree that must fail ONE rule, and the positive
+# control that must fail none. {path: text}; LOADER/EXTRA paths are honoured.
+B3_OVSMAC = ("%macro OVSCALL 1\n%ifdef KERN_SMALL\n    OVLCALL %1\n%else\n"
+             "    B3CALL %1\n%endif\n%endmacro\n")
+B3_OKTREE = {
+    'boot/boot2.asm': "boot2_entry:\n    call kz_all\n    ret\n"
+                      "kz_all:\n    ret\nb2_spt: dw 0\n",
+    'kernel/splash.inc': "spl_tick:\n    ret\n",
+    'kernel/kernel.asm':
+        "section .boot2\nkmain_o:\n    B3CALL b3_x\n    B3CALL b3_y\n"
+        "    SPLCALL drv_boot_x\n    B3CALL b3_x\n    retf\n"
+        "drv_boot_x:\n    retf\nblob_e:\n    retf\n"
+        "section .text\nkmain:\n    nop\n"
+        "B3SECT\nb3_x:\n    push cs\n    call b3_z\n    B2CALL blob_e\n"
+        "    SPLCALL blob_e\n"
+        "    retf\nb3_z:\n    mov ax, [cs:b3_d]\n    ret\nb3_d: dw 0\n"
+        "B3SECT\nb3_y:\n    retf\nsection .text\n",
+    # OVSCALL's shape (BOOT3-PLAN wave 3): `.ovl` on kern_small, the model,
+    # and `.boot3` on every other kernel - the kern_small arm written LAST
+    'kernel/o.inc': B3_OVSMAC + "section .boot2\nb_o:\n    OVSCALL ovl_o\n"
+                    "    retf\n%ifndef KERN_SMALL\nB3SECT\n%else\n"
+                    "section .ovl\n%endif\novl_o:\n    retf\n"
+                    "section .text\n",
+    # ...and font_init's (BOOT3-PLAN 16.17): the blob on every kernel but
+    # kern_small, `.boot3` there - the kern_small arm LAST in both the body
+    # and the call, so B2CALL is legal only in the non-small arm
+    'kernel/f.inc': "B3SECT\nb3_f:\n%ifndef KERN_SMALL\n    B2CALL f_i\n"
+                    "%else\n    B3CALL f_i\n%endif\n    retf\n"
+                    "%ifndef KERN_SMALL\nsection .boot2\n%else\nB3SECT\n"
+                    "%endif\nf_i:\n    retf\nsection .text\n",
+    # ...and `.boot3m`'s shape (BOOT3-PLAN wave 5): an image whose own
+    # entries jump and call INSIDE it, and a `.boot3` adopter that names an
+    # entry as an IMMEDIATE (the slot it arms) - neither a transfer into it
+    'kernel/m.inc': "section .boot3m\nm_e:\n    call m_n\n    jnz m_f\n"
+                    "    retf\nm_f:\n    retf\nm_n:\n    ret\n"
+                    "B3SECT\nm_ad:\n    mov word [bx], m_e\n    ret\n"
+                    "section .text\n",
+}
+B3_FIXTURES = [
+    ('B1', {'kernel/r.inc': "section .text\nres:\n    call B3_SEG:b3_x\n"}),
+    ('B2', {'kernel/splash.inc': "spl_tick:\n    call spl_a\n    ret\n"
+                                 "spl_a:\n    B3CALL b3_x\n    ret\n"}),
+    ('B2', {'boot/boot2.asm': "boot2_entry:\n    call kz_all\n    ret\n"
+                              "kz_all:\n    mov ax, b3_x\n    ret\n"}),
+    ('B3', {'kernel/s.inc': "B3SECT\nb3_s:\n    mov [es:4], cs\n    retf\n"
+                            "section .text\n"}),
+    ('B3', {'kernel/s.inc': "section .text\nkeep: dw b3_x, B3_SEG\n"}),
+    ('B4', {'kernel/n.inc': "B3SECT\nb3_n:\n    call blob_e\n    retf\n"
+                            "section .text\n"}),
+    ('B4', {'kernel/n.inc': "B3SECT\nb3_n:\n    BLOBCALL blob_e\n    retf\n"
+                            "section .text\n"}),
+    ('B4', {'kernel/n.inc': "section .boot2\nb_n:\n    BLOBCALL b3_x\n"
+                            "    retf\nsection .text\n"}),
+    ('B5', {'kernel/c.inc': "B3SECT\nb3_c:\n    mov ax, [cs:blob_e]\n"
+                            "    retf\nsection .text\n"}),
+    ('B5', {'kernel/c.inc': "B3SECT\nb3_c:\n    add si, blob_e\n    retf\n"
+                            "section .text\n"}),
+    ('B6', {'kernel/w.inc': "B3SECT\nb3_w:\n    mov ax, b2_spt\n    retf\n"
+                            "section .text\n"}),
+    ('B6', {'kernel/w.inc': "B3SECT\nb3_x:\n    OVLCALL ovl_q\n    retf\n"
+                            "section .ovl\novl_q:\n    retf\nsection .text\n"}),
+    ('B7', {'kerndos/kdos.asm': '%include "dk.inc"\n',
+            'kernel/dk.inc': "B3SECT\nb3_k:\n    retf\nsection .text\n"}),
+    ('B8', {'kernel/m.inc': "section .boot2\nb_m:\n    B3CALL kmain\n"
+                            "    retf\nsection .text\n"}),
+    ('B8', {'kernel/m.inc': "section .boot2\nb_m:\n    B3CALL blob_e\n"
+                            "    retf\nsection .text\n"}),
+    ('B8', {'kernel/m.inc': "section .text\nt_m:\n    B2CALL blob_e\n"}),
+    # a site written inside a %macro body, expanded in `.boot2`: the stream
+    # gives it only as an expansion (VSW_SWITCH's and CFG_BOOT's shape)
+    ('B8', {'kernel/m.inc': "%macro M_B8 0\n    B3CALL blob_e\n"
+                            "%endmacro\nsection .boot2\nb_m:\n    M_B8\n"
+                            "    retf\nsection .text\n"}),
+    # font_init's shape with the arms CROSSED: B2CALL where kern_small
+    # assembles it, to the body that is `.boot3` there
+    ('B8', {'kernel/f.inc': "B3SECT\nb3_f:\n%ifdef KERN_SMALL\n"
+                            "    B2CALL f_i\n%endif\n    retf\n"
+                            "%ifndef KERN_SMALL\nsection .boot2\n%else\n"
+                            "B3SECT\n%endif\nf_i:\n    retf\n"
+                            "section .text\n"}),
+    # ...and a B2CALL in the big arm to a body that is `.boot3` on EVERY kernel
+    ('B8', {'kernel/f.inc': "B3SECT\nb3_f:\n%ifndef KERN_SMALL\n"
+                            "    B2CALL f_i\n%endif\n    retf\n"
+                            "B3SECT\nf_i:\n    retf\nsection .text\n"}),
+    # OVSCALL at a body that is `.ovl` on EVERY kernel: right on kern_small,
+    # and `call B3_SEG:` carrying a window offset on all the others
+    ('B8', {'kernel/o.inc': B3_OVSMAC + "section .boot2\nb_o:\n"
+                            "    OVSCALL ovl_o\n    retf\nsection .ovl\n"
+                            "ovl_o:\n    retf\nsection .text\n"}),
+    ('B9', {'kernel/i.inc': "section .boot3m\nb3m_e:\n    retf\n"
+                            "section .boot2\nb_i:\n    jmp b3m_e\n"
+                            "    B3CALL b3m_e\n    retf\nsection .text\n"}),
+]
+
+
+def _b3_run_tree(files):
+    import tempfile
+    global _WALK
+    saved, here = _WALK, os.getcwd()
+    _WALK = {}
+    try:
+        with tempfile.TemporaryDirectory(prefix='os88ovlchk-b3-') as tmp:
+            for p, text in files.items():
+                os.makedirs(os.path.join(tmp, os.path.dirname(p)),
+                            exist_ok=True)
+                with open(os.path.join(tmp, p), 'w') as fh:
+                    fh.write(text)
+            os.chdir(tmp)
+            kf = sorted(p for p in files
+                        if p.startswith('kernel/') or p in EXTRA)
+            return boot3_rules(kf, '.')
+    finally:
+        os.chdir(here)
+        _WALK = saved
+
+
+def b3_selftest():
+    """Every rule fails its fixture and nothing fails the control - or this
+    gate itself is broken, and says so."""
+    probs = []
+    got = _b3_run_tree(B3_OKTREE)
+    if got:
+        probs.append('the positive control fails: %s' % (got[:3],))
+    for rule, extra in B3_FIXTURES:
+        tree = dict(B3_OKTREE)
+        tree.update(extra)
+        got = {r for r, _f, _n, _m in _b3_run_tree(tree)}
+        if rule not in got:
+            probs.append('rule %s passes the fixture written to break it (%s)'
+                         % (rule, ', '.join(sorted(extra))))
+    return probs
+
+
+def check_boot3():
+    kfiles = sorted(p.replace('\\', '/')
+                    for p in glob.glob('kernel/*.inc')) + ['kernel/kernel.asm']
+    files = kfiles + [f for f in sorted(EXTRA) if f not in kfiles]
+    probs = b3_selftest()
+    for p in probs:
+        print("os88ovlchk: B-rule fixture: %s" % p, file=sys.stderr)
+    if probs:
+        sys.exit("os88ovlchk: %d `.boot3` rule fixture(s) wrong - the gate "
+                 "would pass what it exists to refuse" % len(probs))
+    bad = boot3_rules(files, '.')
+    for rule, f, n, msg in bad:
+        print("%s:%d: %s: %s" % (f, n, rule, msg), file=sys.stderr)
+    if bad:
+        sys.exit("os88ovlchk: %d `.boot3` reference(s) break rules B1-B9 "
+                 "(SPEC.md 2.9.15.4)" % len(bad))
+    nb3 = len({l for f in files for s, _n, line, _r in _walk(f)
+               if s == '.boot3' for l in [LABEL.match(line)] if l})
+    print("os88ovlchk: `.boot3` keeps rules B1-B9 (%d labels; %d fixtures "
+          "each fail their rule)" % (nb3, len(B3_FIXTURES)))
+
+
 if __name__ == '__main__':
     main()
+    check_boot3()
     check_pkgs()

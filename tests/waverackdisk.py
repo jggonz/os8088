@@ -173,6 +173,23 @@ def cyc(m):
     return int(m.status()["cycles"])
 
 
+def snap(m, read):
+    """(cycles, read()) taken TOGETHER: the guest paused for both reads.
+
+    MartyPC runs on while the host reads, so `cyc(m)` and then a counter a
+    round trip later named two different guest moments - and the gap was
+    HOST time: under a loaded soak the counter read late, `played` came up
+    short of the cycles and the difference was reported as SILENCE (the
+    floppy leg's 0.53 s with 0 underruns). Pausing costs the guest nothing:
+    it cannot see the host stop.
+    """
+    m.pause()
+    try:
+        return cyc(m), read()
+    finally:
+        m.run()
+
+
 def guest_wait(m, secs, what):
     c0 = cyc(m)
     os88marty.until(m, lambda mm: cyc(mm) - c0 >= secs * os88marty.GUEST_HZ,
@@ -242,8 +259,7 @@ def measure_play(ui, rk, label, secs=PLAY_S, more=None):
         os88marty.until(m, lambda mm: rk.b("wt_state") == WT_PLAY and
                         0 < rk.d("wt_played") < 22050, label + ", sought",
                         poll=0.05, guest=60.0)
-        c0 = cyc(m)
-    p0 = rk.d("wt_played")
+    c0, p0 = snap(m, lambda: rk.d("wt_played"))
     end = c0 + secs * os88marty.GUEST_HZ
     seen = set()
 
@@ -254,8 +270,7 @@ def measure_play(ui, rk, label, secs=PLAY_S, more=None):
     # guest's - at 0.5 the window overshot by three guest seconds, enough
     # to run a 4 s play to its end and count the silence after it)
     os88marty.until(m, done, label + " to play", poll=0.05, guest=secs + 60)
-    c1, p1 = cyc(m), rk.d("wt_played")
-    st = rk.b("wt_state")
+    c1, (p1, st) = snap(m, lambda: (rk.d("wt_played"), rk.b("wt_state")))
     out = card_rate(rk.w_("wt_out"))
     dt = (c1 - c0) / os88marty.GUEST_HZ
     r = dict(dt=dt, played=p1 - p0, out=out, under=rk.w_("wt_nunder"),

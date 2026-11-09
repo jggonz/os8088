@@ -1,0 +1,334 @@
+{
+ "area": "gap-mega-unowned-spans",
+ "title": "gap-mega-unowned-spans: kern_mega spans no reviewer owned: fsx.inc's real-mode bracket service twins and mega.inc's image/region/SUB/window-table family",
+ "summary": "The real-mode bracket's code is careful, and it sits in the right bytes: 5,068 bytes of .mega (fsx_rprepf to rms_hi, of which the copied twins are 2,352), 443 of .cold (fsx_rwalkf), 282 of .text and 98 of .lowbss, so almost nothing is MEGA_RESIDENT. The twins I diffed are true twins or documented specialisations: rms_xchk is mx_chk for a token owner, rms_spk is osapi_fsx_spk plus spk_off, rms_drvb is drv_pkg_call_x's shape, and osapi_segr is one body shared by both callers. After LOADALL or ub_set, mega_up reloads GDTR, IDTR, LDTR, CS, DS, ES and SS, and kern_mega uses no TSS, so the descriptor caches come back sane. One defect is in the door: fsx_rmvck matches MC_OWN against the instance slot, but a package's own claims are recorded under its segment (mem_own). The move guard is therefore blind to exactly the claims os88real_prep banks, and the only thing it catches, the region itself, causes a fallback that was not needed. mega_bown had this same bug and was fixed (14.139); fsx_rmvck was not. The derived-descriptor family is where the risk is. Ten kinds of LDT descriptor are told apart by where their base lies plus side tables, and at least seven walkers each work out again which kinds they may touch. Two walkers in this span miss a rule the others enforce: mega_rgnsubfree frees unbound windows (the 14.80 class) and mega_subsegf's own match scan answers a window or a handle descriptor (the 14.128 class). Separately, the SEG_SUB/SUBC/TILE/HND/BWIN paths read a base and then write a descriptor without the sch_lock that mega_subsegf's own comment requires. Most of the fixes are small or save bytes. The systemic fix is a kind byte per LDT entry, and OSAPI_MEM_SUBSEG should become an adapter over OSAPI_SEG, with the cell retired at a flag day.",
+ "strengths": [
+  {
+   "title": "The API-table swap costs no conventional byte and cannot drift",
+   "why": "The 1,259-byte table is banked above 1MB, filled with stc, given a retf before each kept run, and the kept runs are copied back. The kept-cell list is rmk_* label pairs inside the table itself, so a run is exactly its cells and a refused cell answers CF = 1 wherever it is entered.",
+   "evidence": "kernel/fsx.inc:2349-2404 (fsx_rdownf), 2583-2608 (fsx_rkeep/fsx_rkeepm)"
+  },
+  {
+   "title": "Fallback, never refusal, with one test per reason",
+   "why": "Each FSXR_* reason is one test at the door, nothing is taken before the last test that can fail, and fsx_rfree unwinds every claim on every refusal path.",
+   "evidence": "kernel/fsx.inc:1475-1571, 1674-1713"
+  },
+  {
+   "title": "The service area is copied out of .mega for each bracket",
+   "why": "2,352 bytes of real-mode twins cost no resident byte and no disk read. One conventional claim is sized to exactly code, rows, runs, pool rows, ring and font, and it is owned by the instance's slot, so a teardown frees whatever an exit did not.",
+   "evidence": "kernel/fsx.inc:1826-1935; map rms_lo 52E0h..rms_hi 5C10h"
+  },
+  {
+   "title": "SOUND.DRV's rename rule across both mode switches",
+   "why": "A word untouched since the drop gets its selector back; a word the bracket wrote gets mega_p2d's selector or 0. No real-mode segment outlives the bracket, and the copy is made at IF = 0 at the drop and at the return, which suits a card that stays live across both switches.",
+   "evidence": "kernel/fsx.inc:2407-2581"
+  },
+  {
+   "title": "mega_ldt_free is the central safety point",
+   "why": "It nulls every mega_wtab row naming the freed selector and the caller's stacked ES, which closes double frees through a stale row and pop-es-of-a-freed-entry in one place.",
+   "evidence": "kernel/mega.inc:9984-10030"
+  },
+  {
+   "title": "Descriptor caches are sane after LOADALL and the loaded base",
+   "why": "mega_up reloads GDTR, IDTR, LDTR, CS (far jump), DS, ES and SS, which is every cache LOADALL's zeroed table or ub_set can leave behind, and kern_mega has no TSS for a zeroed TR to hurt.",
+   "evidence": "kernel/mega.inc:3695-3725; apps/os88la.inc la_borrow; apps/os88ub.inc ub_set"
+  }
+ ],
+ "findings": [
+  {
+   "id": "gms-1",
+   "kind": "bug",
+   "severity": "medium",
+   "title": "The real-mode door's move guard (fsx_rmvck) compares MC_OWN against the slot, so it never sees the package's own claims",
+   "detail": "fsx_rmvck snapshots and compares the bases of movable claims where MC_OWN == the instance slot. A claim a package makes itself is recorded under the package's SEGMENT (mem_own: 'BX = owner word = the calling segment'; on kern_mega PM, I_SPTR). So the claims os88real_prep banks, which are the only ones a package can list, are never guarded, and a door claim that compacts one leaves a stale real segment for os88real_swap to install inside the bracket. The only slot-owned movable claim the guard sees is the region itself. [fsx_rseg] for a conventional region is computed before fsx_rsvcf/fsx_rdrvf/fsx_rextf claim, so the region moving turns into a needless FSXR_ROOM fallback that recomputing the paragraph would avoid. mega_bown had this same defect and was fixed (14.139 follow-up). Shipped callers are safe only because the Video Player pins its claims (vp_smov).",
+   "evidence": [
+    "kernel/fsx.inc:1601 cmp [ss:si+MC_OWN], bx (BX = slot, 1589-1594)",
+    "kernel/memory.inc:5286 'call mem_own ; BX = owner word = the calling segment'; 5917-5960",
+    "kernel/mega.inc:13508-13580 mega_bown .f: 'matched against the slot alone, a package's own claim was nobody's'",
+    "kernel/fsx.inc:1543-1549 [fsx_rseg] stored before the service-area and driver claims",
+    "SPEC.md 53.2.3 guard paragraph: 'snapshots the base of every movable claim the CALLER'S INSTANCE owns'"
+   ],
+   "recommendation": "In fsx_rmvck, match MC_OWN against [inst_tab + slot*32 + I_SPTR] as well as the slot, using mega_bown's pattern (BP is free under pusha). For a conventional region, compute [fsx_rseg] after fsx_rextf rather than before fsx_rsvcf.",
+   "phase": "now",
+   "bytes_est": "+10 .mega, 0 conventional",
+   "listed_as": "not listed (ABI-BREAK-LIST.md, KERNEL-BYTE-QUEUE.md: no row)",
+   "verdict": "confirmed",
+   "verify_note": "fsx.inc:1597-1600 compares MC_OWN with the slot only; mem_own (memory.inc:5917ff) records a package's own claims under its calling segment (the I_SPTR selector on kern_mega PM), and mega_bown (mega.inc:13560-13566) already matches both. SPEC.md 53.2.3 promises the guard covers 'every movable claim the CALLER'S INSTANCE owns'. Mitigation the reviewer understates: os88real.inc:39-43 and the preceding SPEC paragraph REQUIRE every listed claim pinned, so the guard is defence in depth and its real coverage today is the region alone. [fsx_rseg] is stored at fsx.inc:1543 before fsx_rsvcf/fsx_rdrvf/fsx_rextf and is not read by them, so the reorder is sound. Not in ABI-BREAK-LIST.md or KERNEL-BYTE-QUEUE.md."
+  },
+  {
+   "id": "gms-2",
+   "kind": "bug",
+   "severity": "medium",
+   "title": "mega_rgnsubfree frees unbound windows based in an exiting region above 1MB (the 14.80 class again)",
+   "detail": "mega_rgnsubfree frees every present allocator descriptor whose base lies in the region's pool block, except the region pair, using its own 24-bit compare and no mega_iswin test. Every other block walker has that test (mega_cdin for mega_cdfree/mega_mpmovef, and mx_dfree). mega_iswin's rule is that a window is its owner's wherever it is based; the C64's ROM-bank windows sit 'in whatever claim happens to sit there', and freeing one jammed the 6510 (14.80). When a package placed above 1MB exits, another instance's SEG_WIN/SEG_WINL window based inside that region is freed. mega_ldt_free clears its wtab row, and the holder's next load becomes mega_gpfix's NULL.",
+   "evidence": [
+    "kernel/mega.inc:12487-12534 (no mega_iswin; own compare 12513-12523, free 12525)",
+    "kernel/mega.inc:14604-14640 mega_cdin calls mega_iswin; mx_dfree 9414-9478 'call mega_iswin / jnc .din'",
+    "kernel/mega.inc:14650-14700 mega_iswin's rule and the 14.80 incident",
+    "kernel/loader.inc:254, kernel/memory.inc:4875 callers of mega_pkghifree"
+   ],
+   "recommendation": "Walk with mega_cdin (DL:AX = block base, CX = KB*64 paragraphs), keep the region-pair exemption, and delete the private compare.",
+   "phase": "now",
+   "bytes_est": "-15 to -20 .mega",
+   "listed_as": "not listed",
+   "verdict": "confirmed",
+   "verify_note": "mega_rgnsubfree (mega.inc:12487-12533) frees every present entry based in the block but the pair, with no mega_iswin test; mega_cdin (14604ff) and mx_dfree (9455-9460) both exempt unbound windows. SEG_WINL takes any 32-bit linear base (SPEC.md 100792), so another package's unbound window over a high region is constructible. Reach in shipped software not shown (the C64 case cited is conventional). Not listed."
+  },
+  {
+   "id": "gms-3",
+   "kind": "bug",
+   "severity": "medium",
+   "title": "mega_subsegf's private match scan can return a window or a handle descriptor as a SUB (14.128 on OSAPI_MEM_SUBSEG)",
+   "detail": "OSAPI_MEM_SUBSEG's body has its own 'one over that base already' scan that compares access byte, base and limit only. OSAPI_SEG's SUB arm uses mega_dfind, which also refuses MEGA_HAVL handle descriptors and any mega_wtab window, because a window answered as a SUB moved that SUB at its next aim (14.128). If a window or a WIN16 handle descriptor sits over the same paragraph and limit, it is handed out as the package's SUB. When its owner re-aims or frees it, the SUB moves or dies under the package.",
+   "evidence": [
+    "kernel/mega.inc:12610-12624 the inline scan",
+    "kernel/mega.inc:13975-14012 mega_dfind with MEGA_HAVL (13994) and mega_wslot (13999) exclusions"
+   ],
+   "recommendation": "Replace the scan with call mega_dfind; the inputs (DX:AX, CX, BL) are already in place. Better still, R2: make the whole cell an adapter over SEG_SUB/SEG_SUBC.",
+   "phase": "now",
+   "bytes_est": "-25 .mega",
+   "listed_as": "not listed",
+   "verdict": "confirmed",
+   "verify_note": "mega_subsegf's scan (mega.inc:12610-12624) tests access byte, base and limit only. mega_wnew allocates windows with access 92h (mega_ldt_alloc BL = 0x92) and handle descriptors are 92h with MEGA_HAVL, so both match a SUB's question; mega_dfind (13975ff) excludes both. Inputs already in DX:AX, CX, BL. Not listed."
+  },
+  {
+   "id": "gms-4",
+   "kind": "bug",
+   "severity": "medium",
+   "title": "SEG_SUB/SUBC/TILE/HND/BWIN read a block base and later write a descriptor with no sch_lock",
+   "detail": "mega_subsegf holds sch_lock because 'no task compacts the pool between reading the block's base and aiming a descriptor at it (mx_alloc's rule)'. mega_segf's SUB arm does mega_selbase, bclip and dfind, then mega_ldt_alloc writes the descriptor with the earlier base, at IF = 1 and unlocked; osapi_seg/api_rxc take no lock either. mega_segtile, mega_segh and mega_segbw read and clip before their cli. If the caller is pre-empted by a task whose allocation compacts, the block moves and its existing descriptors are rebased, but the descriptor this call creates lands at the OLD place and is never rebased.",
+   "evidence": [
+    "kernel/mega.inc:12559 mega_subsegf's sch_lock and its comment",
+    "kernel/mega.inc:12915-12945 SEG_SUB: selbase, bclip, dfind, ldt_alloc with no lock",
+    "kernel/mega.inc:13662-13676 segtile reads before cli",
+    "kernel/kernel.asm:4611 api_rxc: no lock"
+   ],
+   "recommendation": "inc/dec byte [sch_lock] around the read-to-write window in mega_segf.sub1 (shared by SUB/SUBC), mega_segtile, mega_segh and mega_segbw. Leave SEG_AIM alone: it is rate-hook-legal and writes under its own cli.",
+   "phase": "now",
+   "bytes_est": "+24 .mega",
+   "listed_as": "not listed",
+   "verdict": "confirmed",
+   "verify_note": "mega_segf .sub1 (mega.inc:12911-12945) does mega_selbase, mega_bclip, mega_dfind and mega_ldt_alloc with no sch_lock, and api_rxc (kernel.asm:4611) takes none; mega_segtile reads and clips before its cli (13650-13672) and mega_segbw reads, bowns and wbinds unlocked. mega_ldt_alloc's own cli covers only the entry scan. A compaction in another task between the read and the write leaves the new descriptor at the old base, which mx_cpmove/mega_mpmovef will not fix because it did not yet exist. Not listed."
+  },
+  {
+   "id": "gms-5",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "SEG_TILE proves only that the first and last tile lie in some block",
+   "detail": "mega_segtile checks the first and last tile bases with two mega_bclip calls. A run that ends in a neighbouring block passes, and a middle tile in a gap gets limit FFFFh because .put's bclip leaves CX alone when the base is in no block. The header promises 'the last cut at the block's end' and refusal for 'a tile in no block'.",
+   "evidence": [
+    "kernel/mega.inc:13662-13670 two bclips",
+    "kernel/mega.inc:13693 per-tile bclip under cli"
+   ],
+   "recommendation": "Call mega_blkof once on the first base, refuse with AX = 3 when (n-1)*64KB reaches the block's end, clip only the last tile, and drop the per-tile table walks under cli.",
+   "phase": "now",
+   "bytes_est": "-10 .mega",
+   "listed_as": "not listed",
+   "verdict": "confirmed",
+   "verify_note": "mega_segtile bclips only the first and last tile bases (13662-13670); mega_bclip leaves CX unchanged on CF = 1 and .put ignores CF (13690-13693), so a middle tile in a gap gets FFFFh, and a run ending in a neighbouring block passes. Low."
+  },
+  {
+   "id": "gms-6",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "mega_mpmovef holds a conventional move as a 16-bit signed paragraph count",
+   "detail": "BX = new - old and sar bp, 12 treat the move as signed 16-bit. A move of 32,768 paragraphs (512KB) or more is read with the wrong sign, so every descriptor in the block is rebased the wrong way. kern_mega's 640KB heap is about 35,800 paragraphs, so a near-empty heap compacting one claim from the top down to the floor can reach this. Rare, and silent when it happens.",
+   "evidence": [
+    "kernel/mega.inc:14250 sub bx, ax",
+    "kernel/mega.inc:14252 sar bp, 12"
+   ],
+   "recommendation": "Take the 17th bit from the sub's borrow (sbb bp, bp) when forming the high part.",
+   "phase": "now",
+   "bytes_est": "+4 .mega",
+   "listed_as": "not listed",
+   "verdict": "confirmed",
+   "verify_note": "mega_mpmovef (mega.inc:14240ff): `sub bx, ax` then `sar bp, 12` treat a 17-bit paragraph difference as 16-bit signed; a move of 8000h paragraphs or more rebases every descriptor the wrong way. Reach not shown (needs a 512KB slide). The fix is a few bytes more than +4 (the borrow has to be folded into the high byte), still small."
+  },
+  {
+   "id": "gms-7",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "A fault inside a real-mode bracket hangs without a word on a 286+",
+   "detail": "By the owner's ruling, a fault inside is a real-mode fault with no kern_mega FAULT line. But on a 286 or later, divide error and #UD are faults: the BIOS's int 0/6 iret re-executes the faulting instruction for ever, so the machine hangs showing nothing, on exactly the machines whose field reports need a CS:IP. The drop does not touch IVT 00h-07h.",
+   "evidence": [
+    "SPEC.md 53.2.3 'A fault inside is a real-mode fault'",
+    "kernel/fsx.inc:2263-2404 fsx_rdownf banks IVT 20h and the sound cells only"
+   ],
+   "recommendation": "Put a reporter in the service area (rms_*). The drop banks IVT 00h and 06h and points them at it; it prints 'real-mode bracket fault vv at cccc:iiii' via int 10h teletype and halts; the return restores the cells. This is reporting, not recovery.",
+   "phase": "now",
+   "bytes_est": "+60 .mega, 0 resident",
+   "listed_as": "not listed; see gap-fault-containment-error-model.md",
+   "verdict": "refuted",
+   "verify_note": "Deliberately chosen: MEGA-VIDEO-REALMODE-PLAN 5.1 answer 3 (the owner, 2026-10-29) accepts 'a fault inside the bracket hanging like kern_big's', and SPEC.md 53.2.3 records it. kern_big on a 286 re-executes a divide error the same way, so 'like kern_big's' holds. A reporter in the service area is an owner question to raise, not a defect."
+  },
+  {
+   "id": "gms-8",
+   "kind": "size",
+   "severity": "low",
+   "title": "mega_dklibfree is resident .text only for a conventional-arm call that just needs a word zeroed",
+   "detail": "mod_free_row's conventional arm calls mega_dklibfree even in real mode, which forces the 18-byte proc into .text. On that arm the claim's own free (mega_mpfreef -> mega_cdfree, whose cdin covers code descriptors) already frees the descriptor; only [mega_dklib] needs clearing.",
+   "evidence": [
+    "kernel/mega.inc:14770-14780 (map .text 4B91h, 18 bytes)",
+    "kernel/mod.inc:932-937 the .conv arm"
+   ],
+   "recommendation": "On the conventional arm, after the free, do 'and word [mega_dklib], 0' (5 bytes, the same size as the far call). Move the proc to .mega for the above-1MB arm.",
+   "phase": "now",
+   "bytes_est": "-18 conventional (MEGA_RESIDENT), +18 .mega",
+   "listed_as": "not listed",
+   "verdict": "corrected",
+   "verify_note": "mega_dklibfree is .text (map 4B91h, 18 bytes) and mod.inc:937 far-calls it on the conventional arm, where mem_free_x -> mega_mpfreef -> mega_cdfree would free the library's descriptor (based inside DESK.DRV's claim) anyway. Correction: the `and word [mega_dklib], 0` must go BEFORE `call mem_free_x`, not after - `and` clears CF and mod_free_row's CF is its callers' answer (mod.inc's own 14.82 note). On the high arm MX_KOWN blocks skip mx_dfree, so the proc's free is still needed there and it can move to .mega (that arm runs only in protected mode)."
+  },
+  {
+   "id": "gms-9",
+   "kind": "size",
+   "severity": "low",
+   "title": "A dead push/mov/pop of BX around mega_ldt_alloc2 in mega_imghif",
+   "detail": "mega_ldt_alloc2 reads only DX:AX and CX, so 'push bx / mov bx, ax / pop bx' does nothing.",
+   "evidence": [
+    "kernel/mega.inc:12385-12395"
+   ],
+   "recommendation": "Delete the three instructions.",
+   "phase": "now",
+   "bytes_est": "-4 .mega",
+   "listed_as": "not listed",
+   "verdict": "confirmed",
+   "verify_note": "mega_imghif (mega.inc:12385-12391): mega_ldt_alloc2 reads only DX:AX and CX and clobbers nothing else, and nothing between the push and pop reads BX, so push bx / mov bx, ax / pop bx is 4 dead bytes."
+  },
+  {
+   "id": "gms-10",
+   "kind": "perf",
+   "severity": "low",
+   "title": "The block walkers in this span scan the whole LDT, mega_mpmovef with IF = 0",
+   "detail": "mega_rgnsubfree, mega_cdfree, mega_mpmovef (cli for the whole pass) and both match scans run to [mega_ldte], which is 512+ entries. PREDICTED, not measured: about 2 ms of IF = 0 per moved conventional claim on a 6 MHz 286, close to an 8250's one-byte budget at 9,600 baud.",
+   "evidence": [
+    "kernel/mega.inc:14240-14275",
+    "kernel/mega.inc:103 MEGA_LDT_BASE 512"
+   ],
+   "recommendation": "Extend megacore.md's high-water-mark proposal to these walkers too, not only the allocators and mx_dfree.",
+   "phase": "now",
+   "bytes_est": "+0 here (megacore's row)",
+   "prior_art": "megacore.md (a) high-water mark",
+   "listed_as": "megacore.md recommendation (a)",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked: mega_mpmovef runs its whole [mega_ldte] scan under one pushf/cli. The 2 ms figure is PREDICTED, as the reviewer says; belongs with megacore.md's high-water-mark row."
+  },
+  {
+   "id": "gms-R1",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "A kind byte per LDT entry instead of ownership inferred from geometry plus side tables",
+   "detail": "Ten descriptor kinds are distinguished by where their base lies, mega_wtab, mega_ustab, the MEGA_HAVL bit, the access byte and the +8 pair rule. At least seven walkers re-derive which kinds they may touch, and each new kind has needed a fix in every one of them (14.80, 14.128, 14.135, 14.139); gms-2 and gms-3 are walkers that were missed. A 386 descriptor has no spare room for a tag, so put one byte per entry (kind plus owner slot) in the tables' tail above 1MB, written by the allocators.",
+   "evidence": [
+    "kernel/mega.inc:14650-14700 mega_iswin",
+    "kernel/mega.inc:13994-13999 mega_dfind exclusions",
+    "kernel/mega.inc:9414-9478 mx_dfree",
+    "kernel/mega.inc:12487-12534 mega_rgnsubfree"
+   ],
+   "recommendation": "Add the array; have each walker test the kind; fold in mega_iswin, mega_wslot and mega_ldt_free's wtab scan; teardown frees windows by kind and owner.",
+   "phase": "now",
+   "bytes_est": "~+600 tail data above 1MB, -100 to -200 .mega code (ESTIMATED), 0 conventional",
+   "prior_art": "OS/2 1.x segment table records each selector's owner and kind explicitly",
+   "listed_as": "not listed",
+   "verdict": "confirmed",
+   "verify_note": "A design proposal; the premise holds (mega_iswin, mega_dfind's HAVL and wslot tests, mx_dfree's owner range, mega_rgnsubfree's missing test are separate re-derivations, and gms-2/gms-3 are two missed). Byte figures are estimates."
+  },
+  {
+   "id": "gms-R2",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "OSAPI_MEM_SUBSEG as an adapter over OSAPI_SEG now; retire it and merge the window verbs at a flag day",
+   "detail": "mega_subsegf (201 bytes) is a second implementation of SEG_SUB/SUBC, with the older match rule (gms-3) and the better lock (gms-4). Now: a ~40-byte adapter calls mega_segf's SUB arm with DX = ES, CX per BL bit 1 and the code bit mapped to SUBC, keeping AX on refusal. Flag day: retire the cell (Clear Skies and Pixelstein move to SEG_SUB) and fold SEG_WIN/WINL/AT into one window verb.",
+   "evidence": [
+    "kernel/mega.inc:12537-12650",
+    "kernel/kernel.asm:6290-6320 osapi_mem_subseg"
+   ],
+   "recommendation": "Do the adapter now. Add a section L row to ABI-BREAK-LIST.md for retiring the cell and merging the window verbs.",
+   "phase": "flagday",
+   "bytes_est": "-150 .mega now; flag day a few more .mega plus one cell",
+   "prior_art": "DPMI 0.9's descriptor set: 0000h/0001h/0007h/0008h/000Ah",
+   "listed_as": "not listed (propose new ABI-BREAK-LIST row in section L)",
+   "verdict": "confirmed",
+   "verify_note": "mega_subsegf is 201 bytes (map 2ECDh..2F96h). An adapter over mega_segf's SUB arm must keep subsegf's region-end limit rule and would inherit gms-4's missing lock unless that is fixed first; flag-day retirement is a new ABI-BREAK-LIST row (none exists)."
+  },
+  {
+   "id": "gms-R3",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "The bracket's 'words real mode reads' as one registry rather than a routine pair per resource",
+   "detail": "Video and font words (mega_vwalk), EXFP (fsx_rexfill), SERFP and the ring, SOUND.DRV's list, the font copy, vx_ep, k_seg0 and CPU_F_PM each have their own drop/return code. SPEC records EXFP as the word the census missed, and the first build hung on it. A table of {address, kind} walked by one drop and one return would turn the next miss into a missing row.",
+   "evidence": [
+    "kernel/fsx.inc:2263-2404, 2803-2876",
+    "SPEC.md 53.2.3 'EXTD.DRV's slots are the one kernel word the plan's census missed'"
+   ],
+   "recommendation": "Do it together with the next resource the bracket has to carry.",
+   "phase": "record",
+   "bytes_est": "0 to -100 .mega (ESTIMATED)",
+   "prior_art": "Windows 3.0 standard mode swaps the low-memory image wholesale rather than renaming words",
+   "listed_as": "not listed",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked: the drop and return carry each resource with its own code (fsx_rdownf, fsx_rexfill, fsx_rserdn/up, fsx_rsnddn/up, mega_vwalk) and SPEC.md 53.2.3 records EXFP as the missed word. A record-phase proposal."
+  }
+ ],
+ "doc_fixes": [
+  {
+   "file": "kernel/fsx.inc",
+   "old_text": "WHY NOT RESIDENT `.text`: these are ~1.6 KB that a",
+   "new_text": "WHY NOT RESIDENT `.text`: these are ~2.3 KB that a",
+   "why": "rms_lo..rms_hi is 930h = 2,352 bytes in build/megak/kernel.map (52E0h..5C10h, .mega); fsx_rsvcf copies exactly rms_strm - rms_lo = rms_hi - rms_lo"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "(2,384 bytes of code and data, 128 of",
+   "new_text": "(2,352 bytes of code and data, 128 of",
+   "why": "The service area's code and data are rms_lo..rms_hi = 930h = 2,352 bytes (kern_mega map); the rows behind them are FSX_RSN = 128 bytes (rms_runs - rms_strm = 80h), as the sentence says"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "(`KERNEL_SEG:0x0010`, 1,241 bytes) is SWAPPED",
+   "new_text": "(`KERNEL_SEG:0x0010`, 1,259 bytes) is SWAPPED",
+   "why": "fsx_rdownf banks OSAPI_TABLE_LEN = osapi_table_end - osapi_table = 04FBh - 0010h = 1,259 bytes; SPEC.md 44486 already says 1,259 and osapi_table_end 0x04FB"
+  },
+  {
+   "file": "kernel/fsx.inc",
+   "old_text": "; db: the classes asked (1 DISK, 2 EMS)",
+   "new_text": "; db: the classes asked (1 DISK, 2 EMS, 4 SOUND)",
+   "why": "fsx_rlist sets AH = 4 for DRVC_SOUND (W4) into the same mask"
+  },
+  {
+   "file": "kernel/fsx.inc",
+   "old_text": "SOUND's at the drop and the return, fsx_rsndf).",
+   "new_text": "SOUND's at the drop and the return, fsx_rsnddn and fsx_rsndup).",
+   "why": "There is no fsx_rsndf label; the sound image's copies down and up are fsx_rsnddn and fsx_rsndup"
+  },
+  {
+   "file": "kernel/fsx.inc",
+   "old_text": "; (not SOUND's: fsx_rsndf, at IF = 0)",
+   "new_text": "; (not SOUND's: fsx_rsnddn / fsx_rsndup, at IF = 0)",
+   "why": "There is no fsx_rsndf label; the sound copies are fsx_rsnddn and fsx_rsndup, both at IF = 0"
+  },
+  {
+   "file": "kernel/mega.inc",
+   "old_text": "; (the region, image and bss, 1..65534), DL = the instance slot -> CF = 0 and",
+   "new_text": "; (the region, image and bss, 1..65534, or FFFFh = 64KB: mega_imghif), DL =\n; the instance slot -> CF = 0 and",
+   "why": "mega_pkghif hands CX to mega_imghif unchanged, and mega_imghif documents and handles CX = FFFFh as a whole 64KB region that ld_hi passes (I_SIZE saturated, KERN-MEGA-PLAN 14.67)"
+  },
+  {
+   "file": "kernel/mega.inc",
+   "old_text": "    push word MEGA_SEL_MXT          ; one: a block's free takes a window\n    pop es                          ; based in it (mega_cdfree, mx_dfree),",
+   "new_text": "    push word MEGA_SEL_MXT          ; one: a block's free takes a bound\n    pop es                          ; window in it (mega_cdfree, mx_dfree),",
+   "why": "mega_cdfree (through mega_cdin) and mx_dfree both skip an UNBOUND window via mega_iswin (14.80); only a bound one goes with the block"
+  },
+  {
+   "file": "kernel/fsx.inc",
+   "old_text": "    call MEGA_SEL_CODE:fsx_rcopyf ; in protected mode writes the window's\n                                ; copy meanwhile - nor a low driver's image",
+   "new_text": "    call MEGA_SEL_CODE:fsx_rcopyf ; in protected mode writes the window's\n                                ; copy meanwhile - but the package's own\n                                ; SERIAL.DRV lease's ring (fsx_rserdn's\n                                ; known limit) - nor a low driver's image",
+   "why": "With fsx_rserb = 1 the bracket package's own lease rides the region's copy, and fsx_rserdn's header records that bytes the protected-mode ISR writes to the high ring between fsx_rserup and the copy up are lost"
+  },
+  {
+   "file": "kernel/mega.inc",
+   "old_text": "; mega_cdin -ES:DI = a present descriptor",
+   "new_text": "; mega_cdin - ES:DI = a present descriptor",
+   "why": "Typo: the header separator every other proc header uses is ' - '"
+  }
+ ]
+}

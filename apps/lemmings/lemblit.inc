@@ -904,12 +904,12 @@ _lem_r_wpiece:
     add si, ax                      ; plane 3
     mov ax, [bp+4]
     mov cx, [bp-8]                  ; CL = s
-    push cs
-    pop es
-    mov di, lb_mrow
+    push ds                         ; ES = OUR DATA, never CS: on kern_mega
+    pop es                          ;   CS is a code selector, and every
+    mov di, lb_mrow                 ;   store through it a #GP fixup
     mov ds, ax                      ; the bank
     call lb_wshift                  ; lb_mrow[0..n-1], DS left as the bank
-    push cs
+    push es                         ; (ES is ours still: lb_wshift's)
     pop ds
     cmp word [bp-22], 2
     jne .mdone
@@ -989,6 +989,7 @@ _lem_r_wpiece:
     mov cx, [bp-8]                  ; CL = s, CH is the loop's temporary
     mov dx, [bp-24]                 ; DX = the main count
     mov ax, [bp+4]
+    push ds                         ; (ours, back at .pend: not CS's)
     push bp
     mov bp, [bp-26]                 ; BP = tail flag: the frame is not read
     mov ds, ax                      ; again until it is popped
@@ -1026,7 +1027,6 @@ _lem_r_wpiece:
     stosb
 .pend:
     pop bp
-    push cs
     pop ds
 .pnext:
     inc word [bp-18]
@@ -1050,10 +1050,11 @@ _lem_r_wpiece:
 ; lb_wshift - internal to _lem_r_wpiece: one source row, shifted, out to ES:DI.
 ; in: DS:SI = src[i0], CL = s, [bp-12] i0, [bp-24] main count, [bp-26] tail.
 ; It writes main + tail bytes. It sets lb_wi0 = i0, which the plane loop reads
-; through CS once DS is the bank's. Clobbers AX, CH, DX, SI, DI.
+; through CS once DS is the bank's - and WRITES it through ES, which is ours
+; here: a write through CS is a #GP on kern_mega. Clobbers AX, CH, DX, SI, DI.
 lb_wshift:
     mov ax, [bp-12]
-    mov [cs:lb_wi0], ax
+    mov [es:lb_wi0], ax
     xor ah, ah
     cmp word [bp-12], 0
     je .nop
@@ -1108,11 +1109,12 @@ _lem_r_tload:
     mov es, ax
     mov di, LEM_VTERR
     xor si, si
-    mov ds, [bx]                    ; (read through DS = ours, then loaded)
+    push ds                         ; (ours again after: not CS, read-only
+    mov ds, [bx]                    ;   on kern_mega - read through DS =
+                                    ;   ours, then loaded)
     mov cx, (LEM_MSTRIDE * LEM_MROWS) / 2
     cld
     rep movsw
-    push cs
     pop ds
     inc bx
     inc bx
@@ -1283,6 +1285,7 @@ lb_compose:
     mov ax, [lb_shadow]             ; ...before DS moves: see lb_pplane
     mov es, ax
     mov ax, [lb_world]
+    push ds                         ; (ours, back at .rowdone)
     mov ds, ax
     mov cx, LEM_SSTRIDE / 2
     cld
@@ -1298,6 +1301,7 @@ lb_compose:
     mov ax, [lb_shadow]             ; ...before DS moves: see lb_pplane
     mov es, ax
     mov ax, [lb_world]
+    push ds                         ; (ours, back at .rowdone)
     mov ds, ax
     mov cx, 40
     cld
@@ -1322,9 +1326,8 @@ lb_compose:
     loop .hb
 
 .rowdone:
-    push cs
-    pop ds
-    mov ax, LEM_SSTRIDE - 1
+    pop ds                          ; ours again - never CS's, which kern_mega
+    mov ax, LEM_SSTRIDE - 1         ;   would not let lem_r_dirty write
     push ax                         ; cdecl: right to left, so b1 first and the
     xor ax, ax                      ; row last (apps/cword/cwmove.inc)
     push ax
@@ -1375,7 +1378,8 @@ lb_msample:
     push cx
     push dx
     call OSAPI_MOUSE
-    or [cs:lb_mlatch], al
+    or [lb_mlatch], al              ; (DS is ours at every caller: lb_msvga
+                                    ;   reads lb_kind through it)
     pop dx
     pop cx
     pop ax
@@ -1385,7 +1389,7 @@ lb_msample:
 ; and the latch cleared.
 _lem_r_mlatch:
     xor ax, ax
-    xchg al, [cs:lb_mlatch]
+    xchg al, [lb_mlatch]
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1441,7 +1445,7 @@ _lem_r_undirty:
     mov bp, sp
     push di
     push es
-    push cs
+    push ds                         ; (ours: a C entry)
     pop es
     mov di, lb_dlo
     mov al, 0xFF
@@ -1635,11 +1639,11 @@ _lem_r_panel:
     mov ax, [lb_fb]                 ; ...before DS moves: see lb_pplane
     mov es, ax
     mov ax, [bp+4]
+    push ds
     mov ds, ax
     mov cx, 20
     cld
     rep movsw
-    push cs
     pop ds
     inc word [bp-2]
     jmp .vrow
@@ -1720,9 +1724,7 @@ lb_pnib:
     or ch, al
     dec bx
     jns .pl
-    push cs
-    pop ds
-    mov al, ch
+    mov al, ch                      ; (DS: the pop below)
     xor ah, ah
     pop ds
     pop si

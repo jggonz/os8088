@@ -172,9 +172,12 @@ def the_file(path):
     return blob
 
 
-# The drive name each ST11 format wrote, by geometry: an ST-238R on an ST11R
-# and an ST-225 on an ST11M, both read off disks the card itself formatted.
-ST11_NAMES = {(615, 4, 26): b"SEAGATE30M", (615, 4, 17): b"SEAGATEST225"}
+# The drive name in the record, by geometry: an ST-238R on an ST11R and an
+# ST-225 on an ST11M. It is whatever was typed at the card's low-level format;
+# the ST11M disk's was read off one the card formatted, and the ST11R's is the
+# same spelling for its own drive - the "SEAGATE30M" first read off one was a
+# name typed in the owner's testing, never meant to ship (2026-11-09).
+ST11_NAMES = {(615, 4, 26): b"SEAGATEST238R", (615, 4, 17): b"SEAGATEST225"}
 
 
 def st11_record(cyls, heads, spt):

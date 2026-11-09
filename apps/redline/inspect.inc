@@ -835,6 +835,6 @@ ri_report:
     pop ax
     ret
 ri_ws:      times WSEQ_SIZE db 0    ; the report's stream (os88wseq.inc)
-ri_s_file:  db 'INSPECT.TXT', 0
-ri_s_rptno: db 'Report not saved', 0
+TOASTSTR ri_s_file, 'INSPECT.TXT'
+TOASTSTR ri_s_rptno, 'Report not saved'
 

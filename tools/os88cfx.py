@@ -14,19 +14,22 @@ COLD_CS hook) and diff. Every byte that moves is half of a word that names the
 segment, and the pair proves the list complete, because anything that depends
 on the segment has to change when it does.
 
-The list is STAMPED into `cfx_tab`, kernel.asm's `.cfx`: CFX_MAX bytes of
-zeros in a section of its own straight after `.cold` in the file, so stage 2's
-one read lands it on the RAM just past the kernel, under the blob's lift, and
-it costs no resident byte. (The blob was the first home, and its 14th sector
-cost 360KB and 720KB a whole int 13h call each.) Three groups - `.text`,
-`.ovl`, `.boot2` - each a stream of offset STEPS from the previous site (from
-0): a byte 1-255 is a step, a 0 is followed by the step as a word, and a word
-of 0 ends the group (no two sites share an offset, so a step is never 0).
+The list is STAMPED into `cfx_tab`, in `.boot3` (kernel/boot3.inc, SPEC.md
+2.9.15): CFX_MAX bytes of zeros in the section straight after `.cold` in the
+file, so stage 2's one read lands it on the RAM just past the kernel, under
+the blob's lift, and it costs no resident byte. (The blob was the first home,
+and its 14th sector cost 360KB and 720KB a whole int 13h call each; the
+section was `.cfx` until it became the third boot-only home.) Four groups -
+`.text`, `.ovl`, `.boot2`, `.boot3` - each a stream of offset STEPS from the
+previous site (from 0): a byte 1-255 is a step, a 0 is followed by the step as
+a word, and a word of 0 ends the group (no two sites share an offset, so a
+step is never 0). The fourth is `.boot3`'s own `call COLD_SEG:` sites, which
+cfx_slide re-points through CS (BOOT3-PLAN 4.1); cfx_tab itself holds none.
 
 Usage, from the Makefile, straight after the kernel's final assembly:
     python3 tools/os88cfx.py <kernel-full.bin> <kernel.map> -- <nasm argv>
 where <nasm argv> is that assembly's command less -o and --before. Writes the
-table into <kernel-full.bin> in place; a kernel with no `.cfx` (kern_small,
+table into <kernel-full.bin> in place; a kernel with no cfx_tab (kern_small,
 kern_mega) is left as it is.
 
     python3 tools/os88cfx.py --selfcheck
@@ -124,11 +127,15 @@ def coldhome(maptext, secs):
     return kseg + (cst - tst) // 16 - vst // 16
 
 
+B3 = ".boot3"                           # the section cfx_tab is in
+GROUPS = (".text", ".ovl", ".boot2", B3)  # cfx_slide's order (boot3.inc)
+
+
 def lists(full, a, b, secs, home, tab):
-    """The three groups, and a count of the module sites left to mod_cfix."""
+    """The four groups, and a count of the module sites left to mod_cfix."""
     if not (len(a) == len(b) == len(full)):
         fail("moving `.cold`'s segment changed the kernel's length")
-    out = {".text": [], ".ovl": [], ".boot2": []}
+    out = {g: [] for g in GROUPS}
     mods = 0
     i = 0
     while i < len(a):
@@ -144,10 +151,10 @@ def lists(full, a, b, secs, home, tab):
                  f"COLD_SEG ({home:#06x}) there")
         where = next((n for n, (s, e, _v) in secs.items() if s <= i < e),
                      None)
+        if where == B3 and tab[0] <= i < tab[1]:
+            fail("a site inside cfx_tab itself")
         if where in out:
             out[where].append(i - secs[where][0])
-        elif where == ".cfx":
-            fail("a site inside cfx_tab itself")
         elif where == ".cold":
             fail(f"`.cold` names its own segment at +{i - secs['.cold'][0]:#x}"
                  f" - SPEC.md 2.10.2, tools/os88romfix.py --check")
@@ -167,11 +174,11 @@ def stamp(fullp, mapp, argv):
     for need in (".text", ".ovl", ".boot2", ".cold"):
         if need not in secs:
             fail(f"the kernel has no {need} section")
-    t0 = symbol(maptext, ".cfx", "cfx_tab")
-    t1 = symbol(maptext, ".cfx", "cfx_tab_end")
+    t0 = symbol(maptext, B3, "cfx_tab")
+    t1 = symbol(maptext, B3, "cfx_tab_end")
     if t0 is None or t1 is None:
         return                          # kern_small, kern_mega: no slide
-    b0 = secs[".cfx"]
+    b0 = secs[B3]
     tab = (b0[0] + t0 - b0[2], b0[0] + t1 - b0[2])
     with open(fullp, "rb") as f:
         full = bytearray(f.read())
@@ -183,21 +190,21 @@ def stamp(fullp, mapp, argv):
             a, b = ex.map(lambda cs: assemble(argv, cs, tmp), (FIX_A, FIX_B))
     home = coldhome(maptext, secs)
     groups, mods = lists(full, a, b, secs, home, tab)
-    blob = b"".join(encode(groups[g]) for g in (".text", ".ovl", ".boot2"))
+    blob = b"".join(encode(groups[g]) for g in GROUPS)
     if len(blob) > tab[1] - tab[0]:
         fail(f"the list is {len(blob)} bytes and cfx_tab holds "
              f"{tab[1] - tab[0]} - raise CFX_MAX in kernel.asm")
     # ...and it decodes to what was meant, by the kernel's own rule
     at = 0
-    for g in (".text", ".ovl", ".boot2"):
+    for g in GROUPS:
         got, at = decode(blob, at)
         if got != sorted(groups[g]):
             fail(f"the {g} group does not decode to itself")
     full[tab[0]:tab[0] + len(blob)] = blob
     with open(fullp, "wb") as f:
         f.write(full)
-    print(f"os88cfx: {len(groups['.text'])}+{len(groups['.ovl'])}+"
-          f"{len(groups['.boot2'])} words name `.cold` ({home:#06x}), "
+    print(f"os88cfx: " + "+".join(str(len(groups[g])) for g in GROUPS)
+          + f" words name `.cold` ({home:#06x}), "
           f"{len(blob)} of cfx_tab's {tab[1] - tab[0]} bytes; {mods} module "
           f"words are mod_cfix's")
 
@@ -206,11 +213,11 @@ def blank(image, maptext):
     """`image` with cfx_tab zeroed, for a reader that compares a fresh
     assembly with the stamped kernel (tools/os88sym.py)."""
     secs = sections(maptext)
-    t0 = symbol(maptext, ".cfx", "cfx_tab")
-    t1 = symbol(maptext, ".cfx", "cfx_tab_end")
-    if t0 is None or t1 is None or ".cfx" not in secs:
+    t0 = symbol(maptext, B3, "cfx_tab")
+    t1 = symbol(maptext, B3, "cfx_tab_end")
+    if t0 is None or t1 is None or B3 not in secs:
         return image
-    b0 = secs[".cfx"]
+    b0 = secs[B3]
     s, e = b0[0] + t0 - b0[2], b0[0] + t1 - b0[2]
     out = bytearray(image)
     out[s:e] = bytes(e - s)

@@ -65,12 +65,14 @@ def fail(msg):
 
 
 def cap():
-    """TOAST_MAX, out of kernel/toast.inc - never a copy (t_mirror.py's rule)."""
-    p = os.path.join(os.path.dirname(__file__), "..", "kernel", "toast.inc")
+    """TOAST_MAX, out of kernel/kernel.asm - never a copy (t_mirror.py's
+    rule). It lives there, above every include, since the TOASTSTR macros
+    that check it at assembly time (SPEC.md 59.10.1) needed it first."""
+    p = os.path.join(os.path.dirname(__file__), "..", "kernel", "kernel.asm")
     for line in open(p, encoding="utf-8"):
         if line.startswith("TOAST_MAX"):
             return int(line.split("equ")[1].split(";")[0].strip())
-    fail("kernel/toast.inc has no `TOAST_MAX equ <n>`")
+    fail("kernel/kernel.asm has no `TOAST_MAX equ <n>`")
 
 
 def bar(m):

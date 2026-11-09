@@ -5,18 +5,18 @@
 
 SPEC.md 18.95.5.  `dsk_rah_want` picks a width instead of taking 63KB or
 nothing: `n = largest_free_run / 9`, capped at `DSK_RAH_RUNS`, floored at
-`DSK_RAH_MIN`, and the claim is `ceil(n * 4.5)` KB.  Three numbers have to
-agree for that to be safe and they are written in three different places -
-the constants here, the divisor in the gate, and the shift-add that turns a
-slot count into KB.
+`DSK_RAH_MIN`, and the claim is `n * 288` paragraphs (SPEC.md 50.2.1).  Three
+numbers have to agree for that to be safe and they are written in three
+different places - the constants here, the divisor in the gate, and the
+multiply-and-shift that turns a slot count into paragraphs.
 
 **THE FAILURE IS A WRITE PAST THE CLAIM.**  `dsk_rah_fill` addresses slot `s`
 at `(s * DSK_RAH_SECS + delta) << 9` inside the claim, bounded by
-`[dsk_rah_runs]`.  If the KB the claim was made with is ever less than
+`[dsk_rah_runs]`.  If the paragraphs the claim was made with are ever fewer than
 `runs * chunk`, the last slot's fill lands outside it - an `int 13h` writing
 into whatever the heap handed out next, which is memory corruption with a
 disk controller behind it and nothing anywhere to report it.  So the row that
-matters is `kb * 1024 >= n * chunk`, checked at every width the machine can
+matters is `paras * 16 >= n * chunk`, checked at every width the machine can
 pick rather than at the one it usually does.
 
 The compile-time half of this lives in `kernel/disk.inc` as two `%error`s -
@@ -26,7 +26,7 @@ which an assert on the constants cannot see.
 
 It is a host-side row even though the widths themselves are measured, because
 a sample is not a proof.  `os8088_5150_gla_192k` (tools/martypc/configs) has
-76KB of heap and picks **7 slots, a 32,768-byte claim over 32,256 bytes of
+76KB of heap and picks **7 slots, a 32,256-byte claim over 32,256 bytes of
 slots**; the reference machine has 524KB and picks the ceiling.  Those are two
 points on a curve with fourteen, and the row that matters - that the claim
 covers the width - has to hold at all of them, including the ones no machine
@@ -64,8 +64,8 @@ def main():
 
     chunk = secs * 512
     check(chunk == 4608, "a chunk is 4,608 bytes",
-          "dsk_rah_want's KB is (n*9+1)>>1 and its gate is n = free/9. Both "
-          "are ceil(n * 4.5KB) and 2 x n x 4.5KB written as integers, so a "
+          "dsk_rah_want's claim is n*9 << 5 paragraphs and its gate is "
+          "n = free/9. Both are n * 4.5KB written as integers, so a "
           "different chunk size makes both silently wrong - in the direction "
           "that claims LESS than the width it then fills",
           got=chunk, want=4608)
@@ -82,14 +82,17 @@ def main():
           got=runs * secs, want="<= 128")
 
     # the two formulas, as dsk_rah_want computes them
-    kb_of = lambda n: (n * 9 + 1) >> 1          # noqa: E731  ceil(n * 4.5)
-    bad = [n for n in range(floor, runs + 1) if kb_of(n) * 1024 < n * chunk]
+    # The claim is in PARAGRAPHS now (SPEC.md 50.2.1): n * 9 << 5, which is
+    # n * 288 - exactly n chunks, where the old KB door took ceil(n * 4.5)
+    paras_of = lambda n: (n * 9) << 5           # noqa: E731  n * 288
+    bad = [n for n in range(floor, runs + 1) if paras_of(n) * 16 < n * chunk]
     check(not bad, "every width's claim COVERS the slots it will be filled with",
           "dsk_rah_fill writes slot s at (s*SECS + delta) << 9 inside the "
           "claim, bounded by [dsk_rah_runs]. A claim shorter than "
           "runs * chunk puts the last fill outside it - an int 13h into "
           "whatever the heap handed out next",
-          got="short at n = %s" % bad, want="kb*1024 >= n*%d at every n" % chunk)
+          got="short at n = %s" % bad,
+          want="paras*16 >= n*%d at every n" % chunk)
 
     # the gate is the OLD rule with the size solved for: 2 x n x chunk <= free
     bad2 = [n for n in range(floor, runs + 1) if 2 * n * chunk > 9 * n * 1024]
@@ -111,7 +114,8 @@ def main():
     # What belongs here instead is the one number this file's own header names
     # and nothing checked: the MULTIPLY. `kb_of` above is a TRANSCRIPTION of
     # it, so every row that uses it is checking the kernel against a copy of
-    # the kernel. dsk_rah_want computes KB as:
+    # the kernel. dsk_rah_want computed KB as (before SPEC.md 50.2.1 took the
+    # claim to paragraphs, which the check below reads instead):
     #
     #     mov cx, 9 / ... / div cx / ... / mul cx / inc ax / shr ax, 1
     #
@@ -126,7 +130,7 @@ def main():
     # kernel AND a stronger invariant than this row could check before: the
     # multiplier is no longer a second spelling of the divisor that could
     # drift from it, it is the SAME REGISTER. So the check below is that the
-    # KB block between `div cx` and the halve is exactly `mul cx / inc ax`,
+    # KB block between `div cx` and the halve was exactly `mul cx / inc ax`,
     # with nothing in it that could write CX in between.
     want_body = re.search(r"^dsk_rah_want:(.*?)^osapi_dsk_cache_x:", src,
                           re.S | re.M)
@@ -135,24 +139,34 @@ def main():
           "file and match somebody else's arithmetic", got=bool(want_body),
           want=True)
     want_src = want_body.group(1) if want_body else ""
-    m = re.search(r"^\s*div cx\b(.*?)shr ax, 1", want_src, re.S | re.M)
+    # THE PARAGRAPH FORM (SPEC.md 50.2.1): `mul cx` / `mov cl, 5` /
+    # `shl ax, cl` before mem_claimp_x - n * 9 * 32 = n * 288 paragraphs, one
+    # chunk each, exact. The multiply must come before anything writes CX,
+    # and the shift count must be 5: one short claims half the width it fills
+    m = re.search(r"^\s*div cx\b(.*?)^\s*call mem_claimp_x\b", want_src,
+                  re.S | re.M)
     body = m.group(1) if m else ""
+    mm = re.search(r"^\s*mul cx\b", body, re.M)
+    pre = body[:mm.start()] if mm else body
+    post = body[mm.end():] if mm else ""
     muls = len(re.findall(r"^\s*mul cx\b", body, re.M))
-    ups = len(re.findall(r"^\s*inc ax\b", body, re.M))
     clob = re.findall(r"^\s*(?:mov|add|sub|xor|and|or|inc|dec|pop|xchg|shl|shr)"
-                      r"\s+(?:cx|cl|ch)\b", body, re.M)
-    check(m is not None and muls == 1 and ups == 1 and not clob,
-          "the KB block in the source IS ceil(n * <the divisor> / 2)",
-          "kb_of above is a transcription of this, so without this check "
+                      r"\s+(?:cx|cl|ch)\b", pre, re.M)
+    shift = re.search(r"^\s*mov cl, (\d+)\b[^\n]*\n\s*shl ax, cl\b", post,
+                      re.M)
+    sh = int(shift.group(1)) if shift else None
+    check(m is not None and muls == 1 and not clob and sh == 5,
+          "the claim in the source IS n * <the divisor> * 32 paragraphs",
+          "paras_of above is a transcription of this, so without this check "
           "every width row is comparing the kernel with a copy of itself. "
           "The claim is sized here and filled from [dsk_rah_runs], so a "
-          "multiplier one short claims less than it fills - an int 13h "
-          "landing in whatever the heap handed out next. The multiply reuses "
-          "the divide's own CX, so anything writing CX between them is the "
-          "one way the two can disagree",
-          got="%d x `mul cx`, %d x `inc ax`, CX written by %s"
-              % (muls, ups, clob or "nothing"),
-          want="1 x `mul cx`, 1 x `inc ax`, CX untouched between")
+          "multiplier or shift one short claims less than it fills - an "
+          "int 13h landing in whatever the heap handed out next. The "
+          "multiply reuses the divide's own CX, so anything writing CX "
+          "between them is the one way the two can disagree",
+          got="%d x `mul cx`, shift %s, CX written before it by %s"
+              % (muls, sh, clob or "nothing"),
+          want="1 x `mul cx`, `mov cl, 5 / shl ax, cl`, CX untouched before")
 
     # ...and that shared divisor/multiplier is the chunk length these rows
     # assume, not a second opinion
@@ -162,7 +176,7 @@ def main():
           "the gate's divisor is the DSK_RAH_SECS these rows assume",
           "The rows above prove the arithmetic; this one proves the kernel "
           "does that arithmetic. A divisor and a chunk size that disagree "
-          "give a width the claim does not cover - and since the KB multiply "
+          "give a width the claim does not cover - and since the claim's multiply "
           "now reuses this same CX, this one literal is BOTH halves",
           got=got if m else "no `div cx` after a `mov cx, <n>`",
           want="9, and == DSK_RAH_SECS (%d)" % secs)

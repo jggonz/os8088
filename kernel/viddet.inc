@@ -146,20 +146,38 @@ VID_LIVE_W  equ 9               ; words in the live block below
 ; broken by the two words that describe the DESKTOP. Here they are vid_cw and
 ; vid_ch - the active display's clip extent - and the desktop's own vid_w /
 ; vid_h are derived below, out of the run.
+; WHERE IT LIVES (kernel size pass 18). The four rows that never change are
+; read by vid_apply and NOTHING ELSE, and vid_apply has no resident copy: it is
+; expanded into the boot blob (bvs_apply), CTRL.DRV (vid_apply) and EXTD.DRV
+; (ext_apply) - so the rows can go WITH it, one copy per image, emitted by
+; VID_APPLY itself (VID_TAB_ROWS), and the kernel keep only the row that is
+; WRITTEN at run time: VESA.DRV's, vid_vxrow. That is what kern_small (-36
+; resident, two rows), kern_emu and kern_big (-72 each) do. One kernel keeps
+; the whole table resident (VID_TAB_RES):
+;   * kern_mega, whose switch rewrites the segment column into selectors in
+;     place (mega.inc) - an image's copy would still say A000h.
+; kern_big was the second until its blob had room: it was FULL TO THE BYTE
+; (boot2_end = BOOT2_PAD at 13 sectors) and the copy wants 83 bytes there.
+; Kernel size pass 18's sweep3 freed 87 of them in the blob's own code
+; (boot2.asm's read_run, spinner.inc, CFG_SHARED/CFG_BOOT), so kern_big takes
+; this arm at thirteen sectors (docs/plans/completed/ksp18/sweep3.md) - -72 resident,
+; no sector added. kern_emu is the same kernel and was this arm's first.
+%ifdef KERN_MEGA
+ %define VID_TAB_RES
+%endif
+%macro VID_TAB_ROWS 0
 %ifdef GFX_VGA
-vid_tab:
     ;    seg     stride bmask bshift rowadd  wrapbit wrapfix    cw   ch
     dw VGA_SEG,      80,    0,     0,     80,       0,      0, 640, 480
-%else                           ; ...AND THE FIRST ROW IS kern_big's TOO, for the
-vid_tab equ $ - VID_REC         ; fourth's reason one row up: kern_small's walk
+%endif                          ; ...AND THE FIRST ROW IS kern_big's TOO, for the
+                                ; fourth's reason one row up: kern_small's walk
                                 ; ends at the equipment word, so [vid_kind] is
                                 ; VID_HERC or VID_CGA there before vid_apply
                                 ; first reads it (SPEC.md 39.27.1) and row 0 was
                                 ; read by nothing. The NAME stays where row 0
-                                ; would be, so vid_apply's `add ax, vid_tab`
-                                ; indexes the same rows on both kernels (kernel
+                                ; would be (vid_tab, %1_vtab), so vid_apply's index
+                                ; reaches the same rows on both kernels (kernel
                                 ; size pass 13, -18 on kern_small)
-%endif
     dw VID_HERC_SEG, 90,    3,     2, 0x2000,  0x8000, 0x805A, 720, 348
     dw  0xB800,      80,    1,     1, 0x2000,  0x4000, 0xC050, 640, VID_H_MIN
 %ifdef GFX_VGA                  ; THE FOURTH ROW IS kern_big's ALONE: a build
@@ -175,7 +193,20 @@ vid_tab equ $ - VID_REC         ; fourth's reason one row up: kern_small's walk
     ;   adapter test, exactly as on VGA (SPEC.md 39.3/39.24). 349*80 = 27,920,
     ;   well inside one 0x8000 plane, so nothing here needs the intra-bank
     ;   assertion the two mono rows do.
+%endif
+%endmacro
+%ifdef VID_TAB_RES
+%ifdef GFX_VGA                  ; indexed from its first row on a VGA kernel,
+vid_tab:                        ; one record before it on kern_small (no row 0)
+%else
+vid_tab equ $ - VID_REC
+%endif
+    VID_TAB_ROWS
+%endif
 %ifdef VID_EXT
+vid_vxrow:                      ; row VID_VESA: vid_tab's fifth where the table
+                                ; is resident, and the one resident row where
+                                ; it is not
     dw VGA_SEG,       0,    0,     0,      0,       0,      0,   0, 0
     ; ^ VID_VESA: WRITTEN BY THE DRIVER at attach (SPEC.md 120.4) - stride
     ;   and rowadd = the mode's BytesPerScanLine, cw/ch = its geometry - and
@@ -183,10 +214,17 @@ vid_tab equ $ - VID_REC         ; fourth's reason one row up: kern_small's walk
     ;   this kind, every one of them being hooked, and a 16-bit offset means
     ;   nothing above the window anyway. Zero until the driver speaks, so a
     ;   switch that somehow preceded it would publish a 0x0 display and draw
-    ;   nothing rather than something
+    ;   nothing rather than something. RESIDENT on every kernel: the driver
+    ;   rewrites it whenever the depth changes (vesa.asm's vx_geom)
+%ifdef VID_TAB_RES
+%if vid_vxrow - vid_tab != VID_VESA * VID_REC
+  %error "vid_vxrow must be vid_tab's row VID_VESA where the table is resident"
 %endif
 %endif
+%endif
+%ifdef VID_TAB_RES
 vid_tab_end:                    ; (kern_mega's switch walks the column)
+%endif
 %ifdef KERN_MEGA
 k_vsa       dw 0xA000           ; VSEG's words (kernel.asm): the segments
 k_vsb       dw 0xB000           ; themselves in real mode, the selectors
@@ -440,7 +478,8 @@ VID_ROWTAB  equ 128
 ; when that display returns; see there for why the alternative - rebuilding, at
 ; 23.6 ms - is not affordable under a drawing primitive.
 ;
-; .text with a REAL initialiser, not .bss: -f bin zeroes nothing, and
+; .text with a REAL initialiser, not .bss: .bss is not zero until the load
+; ends (under KZIP it holds the packed stream until kz_all), and
 ; gfx_rowbase is called by the SPLASH - which draws while vid_apply has not run
 ; and the table is whatever the last boot left in that RAM. This zero is the
 ; only thing between that and a progress bar drawn at a random offset.
@@ -684,7 +723,7 @@ vid_depth_set:
     cbw                         ; size pass 13 nothing there reads the word -
                                 ; the save-under, menu_drop's sizing and the
                                 ; cursor all drop their x1 multiplies)
-                                ; 1 or 4, so the sign bit is clear and AH
+                                ; 1, 4, 8 or 16, so the sign bit is clear and AH
                                 ; becomes 0. `cbw` is 8086.
     mov [vid_planes_w], ax
 %endif
@@ -724,6 +763,7 @@ vid_depth_set:
     pop es                      ; calls this with the boot sector's: ES = DS =
                                 ; KERNEL_SEG (KES's answer, see above)
 
+%ifdef VID_TAB_RES
     mov al, [vid_kind]          ; AL * 18 -> the record. AH is 0 after the
     mov bl, VID_REC             ; mul (3 * 18 = 54 at worst), so the two
     mul bl                      ; accumulator forms below are the whole
@@ -733,6 +773,30 @@ vid_depth_set:
     mov cx, VID_LIVE_W
     cld
     rep movsw
+%endif
+%ifndef KERN_MEGA               ; (kern_mega is always VID_TAB_RES: tests/
+%ifndef VID_TAB_RES             ; unit/t_cswrite.py reads the gate lexically)
+    push ds                     ; THE ROW IS THIS IMAGE'S OWN (VID_TAB_ROWS,
+    mov al, [vid_kind]          ; at this macro's foot): read through CS, so DS
+%ifdef VID_EXT                  ; follows it for the copy - but VESA's row is
+    mov si, vid_vxrow           ; the KERNEL's (its driver writes it), so that
+    cmp al, VID_VESA            ; kind keeps DS. Not `cs rep movsw`: an
+    je %%src                    ; interrupt inside a prefixed rep loses the
+%endif                          ; prefix on an 8086
+    mov bl, VID_REC
+    mul bl
+    add ax, %1 %+ _vtab
+    xchg ax, si
+    push cs
+    pop ds
+%%src:
+    mov di, vid_seg
+    mov cx, VID_LIVE_W
+    cld
+    rep movsw
+    pop ds                      ; DS = KERNEL_SEG again for everything below
+%endif
+%endif
 
     ; --- the DISPLAY's extent first, then the DESKTOP's from it (SPEC.md
     ; 39.2.1). On one display they are the same numbers, and vid_tab has just
@@ -1030,7 +1094,19 @@ vid_depth_set:
     pop cx
     pop bx
     pop ax
+%ifidn %1, bvs                  ; the BOOT's copy is FAR (BOOT3-PLAN 16.17):
+    retf                        ; `.boot3`'s adapter switch B2CALLs it and the
+%else                           ; blob's two callers BLOBCALL it, so no door
     ret
+%endif
+%ifndef VID_TAB_RES             ; ...and this image's copy of the four rows that
+%ifdef GFX_VGA                  ; never change (see vid_tab's header, above),
+%1 %+ _vtab:                    ; indexed as vid_tab is: from its first row on
+%else                           ; a VGA kernel, one record before it on
+%1 %+ _vtab equ $ - VID_REC     ; kern_small
+%endif
+    VID_TAB_ROWS
+%endif
 %endmacro
 %ifdef KERN_SMALL
     nop                         ; PARITY, never executed, kern_small only (kernel
@@ -1471,7 +1547,7 @@ vid_init:                       ; the spw_near door the splash already needs
     BLOBCALL vid_detect
     push bp                     ; BP names the routine to spw_near, and this
                                 ; routine clobbers only flags
-    call bvs_apply              ; (the blob's own copy: VID_APPLY, below)
+    BLOBCALL bvs_apply          ; (the blob's own copy: VID_APPLY, below - FAR)
 %ifdef DOCK_OPT
     mov bp, dock_geom           ; (BP is banked above for spw_near already)
     call KERNEL_SEG:spw_near    ; ...and the strip where the user put it
@@ -1494,8 +1570,12 @@ vid_init:                       ; the spw_near door the splash already needs
     call KERNEL_SEG:spw_near
     pop bp
 %endmacro
-VID_APPLY bvs, BSPW             ; bvs_apply: the splash, vid_init, and the
-                                ; blob's vid_switch/vid_disp_init (driver.inc)
+VID_APPLY bvs, BSPW             ; bvs_apply, FAR: the splash and vid_init
+                                ; (BLOBCALL) and, on kern_big, the boot's
+                                ; vid_switch/vid_disp_init (`.boot3`'s since
+                                ; BOOT3-PLAN wave 4, B2CALL). It had a 4-byte
+                                ; far door, bvs_apply_f, for those two until
+                                ; BOOT3-PLAN 16.17 made the body far itself
 section .text
 
 ; -----------------------------------------------------------------------------
@@ -1660,25 +1740,29 @@ section .text                   ; ...and back, so the next include lands right
 ;
 ; The loading screen is stage 2's now, so every call it makes into the kernel
 ; is across a segment. This is that: ONE far door, `call bp` / `retf`, three
-; bytes, with BP naming the near `.text` routine - vid_apply, vid_setmode or
-; gfx_rowbase. It was three shims of four bytes, one per routine (and
+; bytes, with BP naming the near `.text` routine - the splash's are vid_setmode
+; and gfx_rowbase (vid_apply is the blob's own copy, bvs_apply, now). It was
+; three shims of four bytes, one per routine (and
 ; spw_vid_detect a fourth until SPEC.md 2.5.3.3 put vid_detect in the blob
-; with its callers); the loader's side pays the BP load, in `.boot2` and
-; `.boot2`, which the machine gives back once it is up. `call`/`retf` touch no
+; with its callers); the loader's side pays the BP load, in `.boot2`,
+; which the machine gives back once it is up. `call`/`retf` touch no
 ; flag. It is
 ; HERE, at the end of viddet.inc, rather than in kernel.asm's cw_ block for one
 ; reason: SPL_RESIDENT. The bar cannot move until the routines the first tick
 ; calls are ABOARD, and the cw_ block is at the end of `.text` - the last
-; sector of the image. Here it lands in sector 7, which is what SPL_RESIDENT
-; now measures and why it fell from 9 to that.
+; sector of the image. Here it lands in `.text` sector 4 (0x91F on kern_big,
+; 0x83F on kern_small, 0xA0C on kern_mega), and SPL_RESIDENT is DERIVED from
+; where the window ends and from [vid_cgamode], whichever is later
+; (kernel.asm's foot, the big review's boot-4, BOOT3-PLAN 16.14): 5 sectors
+; on kern_big, kern_small and kern_emu, 6 on kern_mega.
 ; =============================================================================
 spw_near:   call bp
             retf
-spw_resident_end:
 
 ; ...and the THREE BYTES of splash.inc that could not go with it. viddet's mode
 ; guard, fprog's boot test and vidsel's spl_reset all ask [spl_live] through
-; DS, so it lives where DS reaches it. 967 bytes left; these stayed.
+; DS, so it lives where DS reaches it. When splash.inc moved into the blob
+; (SPEC.md 2.9.4) these stayed, and the window's end below now counts them.
 spl_live    db 0
 blk_on      db 0                ; blank.inc's: is the desktop off the glass
                                 ; right now? TRUE FOR BOTH ANSWERS - a gated
@@ -1723,6 +1807,28 @@ spl_busy    db 0
 ; exists to capture - a mouse that is on the wire and not detected, which is
 ; PERFORMANCE.md's input overrun and is invisible in an emulator.
 spl_quiet   db 0
+
+; THE WINDOW ENDS HERE, AFTER THE FOUR BYTES THE TICKS STORE AND READ, and not
+; at spw_near's retf (the big review's boot-4, BR-153). It sat four bytes
+; short for as long as the bytes above lived here: spl_tick and spl_isr write
+; [spl_live] and [spl_busy] and read [spl_quiet] on every tick, and SPEC.md
+; 2.9.4's rule is that a first-tick store belongs in the head or in the blob,
+; never past it - so the label that measures the head covers them now, and
+; SPL_RESIDENT (kernel.asm's foot) is derived from it - and from vidsel.inc's
+; [vid_cgamode], the one first-tick store past it, whichever ends later
+; (BOOT3-PLAN 16.14). What the ticks reach
+; FURTHER up `.text` is not measured by any label: tests/unit/t_resident.py
+; walks the ticks' code for every DS reference and refuses one past the
+; window that tests/tickrefs.txt does not explain.
+;
+; AN `equ $` AND NOT A `label:`, ON PURPOSE. tools/os88rom.py leaves every
+; `.text` DATA word out of the ROM/HMA image's hash, and it finds them off the
+; source: a bare label followed by another bare label reads as a pure marker
+; (mod_tab_end's shape) and takes the span to the next address. Written as
+; `spw_resident_end:` here, with vid_text's label next, it did exactly that and
+; dropped vid_text's first 60 bytes of CODE out of the hash. The symbol is the
+; same address either way.
+spw_resident_end equ $
 
 ; (vid_text is HERE, past spw_resident_end, since kernel size pass 17: it is
 ; not a splash routine - fsx_mode and vid_reboot are its only callers - and

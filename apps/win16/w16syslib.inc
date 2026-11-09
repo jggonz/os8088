@@ -18,6 +18,9 @@
 W16S_MYDS   equ 10                  ; the arm's word for WIN16's data selector
 W16S_GATE   equ 12                  ; w16s_gate's offset in the part (and both
                                     ;   at the same offsets in part 10)
+W16S_SELF   equ 17                  ; the ARM's word for the part's OWN data
+                                    ;   selector, after the gate (w16_ptin
+                                    ;   writes it; CSDO reads it: w16pm.inc)
 
 OFN_HWND    equ 4                   ; OPENFILENAME (commdlg.h, Windows 3.1)
 OFN_FILE    equ 24                  ; lpstrFile
@@ -50,6 +53,7 @@ w16s_gate:
 %if w16s_gate - w16s_base != W16S_GATE || w16vs_myds - w16s_base != W16S_MYDS
   %error "w16s_gate or w16vs_myds is not where W16S_GATE and W16S_MYDS say"
 %endif
+    W16SELF s
 
 ; =============================================================================
 ; COMMDLG: the file dialogs (SPEC.md 124.24.2)

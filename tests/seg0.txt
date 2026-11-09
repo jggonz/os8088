@@ -41,3 +41,14 @@
 1 drivers/hdd/hdxms.inc  # hd_xa_a20, HDD.DRV's XMS ring: its own A20 probe through 0000 and FFFF
 3 drivers/xmem/xmem.asm  # XMEM.DRV, which kern_mega does not ship (its A20 and HMA work is mega_enter's)
 1 kernel/megados.inc  # mega_wrprobe's A20 test through 0000 and FFFF: the boot blob, REAL MODE, before mega_enter has switched
+2 apps/os88spk.inc  # IRQ0's IVT cell exchanged through DS = 0 inside the door's IF = 0 window, by os88spk_go's REAL-MODE kernel arm (under CPU_F_PM the door writes the GATE, AL = 2, and kern_mega's real-mode bracket refuses AL = 0 first: 34.11.1.1) and by os88spk_pgo, the polled Covox, which refuses anything but CPU_8086
+
+# --- apps/weave's host tests: walked because t_cswrite's TREES took apps/weave
+# (KERN-MEGA-PLAN 14.163). Raw-QEMU boot sectors with no kernel under them -
+# they never run on any os8088 kernel, kern_mega included
+3 apps/weave/hosttest/weavecv.asm  # DS = ES = 0: the boot sector's own segment in stage 1, and stage 2's "package" at segment 0 (WEAVE-SPEC 12.3)
+3 apps/weave/hosttest/weavevm.asm  # DS = ES = 0: the boot sector's own segment in stage 1, and stage 2's "package" at segment 0 (WEAVE-SPEC 12.3)
+
+# --- apps/win16 (walked since KERN-MEGA-PLAN 14.164 put it in t_cswrite's TREES) ---
+1 apps/win16/w16syslib.inc  # RegQueryValue's ES:SI = 0:0, "no subkey" - a NULL far pointer w16r_path tests (`mov ax, es / or ax, si / jz`) and never reads through
+1 apps/win16/w16w31.inc  # NOT segment 0: the `xor dx, dx` seven lines up is w16_gnew's size high word; DX is the new class block, W16TOSEL's selector in the arm, by the `mov es, dx`

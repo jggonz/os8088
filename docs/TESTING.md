@@ -195,7 +195,7 @@ where GLaBIOS gives a wrong clip index and carries on.
 **`tools/os88test.py` runs the tests; `tests/suite.py` is the list of them.**
 
 ```
-python3 tools/os88test.py fast      # a commit you keep. 37 rows, ~13s, host-side
+python3 tools/os88test.py fast      # a commit you keep. host-side, budget 30s CPU
 python3 tools/os88test.py full      # major work reaching the integration branch. ~4 min
 python3 tools/os88test.py soak -k 'disp*'    # the rows about what you changed
 python3 tools/os88soak.py  start -k '<glob>'  # the runner, same -k, detached
@@ -238,9 +238,9 @@ make a row slow, it makes it less thorough at the same wall time.
 
 | tier | budget | what it does | when |
 |---|---|---|---|
-| `fast` | **30s** (uses ~9) | Host-side only, 43 rows. Reads what `make` just built and checks what breaks SILENTLY — and only what somebody who did NOT touch the subject can break. | A commit you are going to keep |
-| `full` | **3 min** (uses ~1¼) | One question: *did you obviously break the OS?* Boots to a desktop on both 1bpp adapters and on VGA, builds and boots `kern_small` on its 128KB floor machine, checks the mouse and keyboard, and builds a C package - and carries the ratchets the owner put there (`megahigh`, `sysfree`, `guidelock-full`, and the pin ratchet's `pins` and `pinsrt`, docs/plans/NO-PINNING-PLAN.md 4.1). 10 rows. | A major round of work reaching the integration branch |
-| `soak` | none | The other 907 gates in `tests/`, one subject each — every per-package and kernel-internal row, the 99-knob build matrix, and everything about the tree or the suite rather than the product. | The rows your change can REACH, scoped with `-k`. The WHOLE tier only when the owner asks for it, in as many words — both runners refuse it otherwise |
+| `fast` | **30s** (uses ~9) | Host-side only. Reads what `make` just built and checks what breaks SILENTLY — and only what somebody who did NOT touch the subject can break. | A commit you are going to keep |
+| `full` | **3 min** (uses ~1¼) | One question: *did you obviously break the OS?* Boots to a desktop on both 1bpp adapters and on VGA, builds and boots `kern_small` on its 128KB floor machine, checks the mouse and keyboard, and builds a C package - and carries the ratchets the owner put there (`megahigh`, `sysfree`, `guidelock-full`, `noovl`, and the pin ratchet's `pins` and `pinsrt`, docs/plans/NO-PINNING-PLAN.md 4.1). | A major round of work reaching the integration branch |
+| `soak` | none | The other gates in `tests/`, one subject each — every per-package and kernel-internal row, the 99-knob build matrix, and everything about the tree or the suite rather than the product. | The rows your change can REACH, scoped with `-k`. The WHOLE tier only when the owner asks for it, in as many words — both runners refuse it otherwise |
 
 The runner's own banner — `os88test: fast tier - N rows, Ns declared, budget 30s` — is the live count; the numbers in this table describe the tiers and are not a second source of truth for them.
 

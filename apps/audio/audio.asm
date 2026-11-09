@@ -453,6 +453,9 @@ ap_entry:
 %include "os88spk.inc"
 %include "os88spkfx.inc"
 %include "apspk.inc"
+%ifdef PKG_MEGA
+%include "aphold.inc"               ; the whole-file hold (SPEC.md 86.5.4)
+%endif
 
 ; =============================================================================
 ; Data: window template, menus, labels, strings
@@ -532,7 +535,7 @@ ap_s_notwav:  db 'Not a .WAV file', 0
 ap_s_full:    db 'Playlist is full', 0
 ap_s_dup:     db 'Already in the playlist', 0
 %ifdef AP_HANDOFF
-ap_s_queued:  db 'Sent to Audio Player', 0
+TOASTSTR ap_s_queued, 'Sent to Audio Player'
 ap_qfile:     db 'APQUEUE.DAT', 0
 %endif
 

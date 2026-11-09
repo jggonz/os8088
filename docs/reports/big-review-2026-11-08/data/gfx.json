@@ -1,0 +1,608 @@
+{
+ "area": "gfx",
+ "title": "Drawing primitives: planar VGA and the software renderer",
+ "summary": "The drawing core is in better shape than its comments. Its inner loops are written for the 8088's real costs: the fetch floor, the xchg latch idiom, a one-store read-modify-write, mask tables, and rep movsw with an adc tail. Clipping and display translation are handled once at the public entry and re-enter a single raw body, and unusual cases refuse with CF=1 and a fallback rather than approximating. The real defects sit at the edges. gfx_blit4 never checks the sign of its width, and a negative width passes both decoders' on-screen check. On VGA the planar decoder's group count wraps to ~65,536, sweeping the whole 64KB from the 336-byte vga_pbuf into the heap above .vgabuf; on 1bpp it writes ~8KB of framebuffer a row. The fix is zero bytes, and gfx_blitp already has it. The planar decoder's deliberate over-read is safe in real mode but plausibly a #GP on kern_mega's tight claim selectors. There are three systemic weaknesses: (1) each whole-shape primitive orders hide, display enter and depth dispatch by hand, and the comments record five field bugs from getting that order wrong; (2) a shelf of built-and-off KHP knob bodies doubles the reading surface without shipping their measured gains to the calibration machine; (3) the history-heavy comments now describe at least two dozen things that no longer exist. Cheap wins: delete one of the two CLIPQF checks in every gfx_blit1 band (-3 bytes on each kernel; a far call saved on kern_big), add a planar arm to gfx_points (5-10x per point on VGA, predicted), and pin the path-dependent [gfx_color] side effect of gfx_blit4.",
+ "strengths": [
+  {
+   "title": "One store per masked byte: dest ^= (pat ^ dest) & mask",
+   "evidence": "softgfx.inc:788-792, 341-350, 1313-1316; vga12.inc:6331-6333",
+   "why": "Three bus accesses instead of four, and bits outside the mask are never written back stale even if an ISR touches the byte. It killed a real one-frame flash (tests/deskflash.py). Copy it to every remaining 1bpp RMW."
+  },
+  {
+   "title": "Clip and display hooks sit above the renderer dispatch and re-enter one raw body",
+   "evidence": "vga12.inc:491-589 (GFXCLIP/GFXCLIP_ARM/GFXDISP), 647-689 gfx_disp_run, 954-1003 gfx_clip_run",
+   "why": "One hook serves VGA, both 1bpp adapters and the packed driver. The virtual-before-translate ordering argument is written where it binds (544-550)."
+  },
+  {
+   "title": "The right VGA idioms",
+   "evidence": "vga12.inc:259-293 (8,mask word pair), 3403-3436 xchg latch+masked write, 3483-3495 XOR interior as rep movsb over itself, 5276-5350 write-mode-1 scroll",
+   "why": "These are the tricks the Windows 3.x VGA driver used, in a fraction of the code, and they are priced against the 8088."
+  },
+  {
+   "title": "Derived tables built from one source of truth and unioned",
+   "evidence": "softgfx.inc:879-922 sw_pairbuild; vga12.inc:2489-2526 vga_p4build; 7144-7165 union with built-flag word",
+   "why": "The colour reduction lives only in gfx_inktab. 512 bytes of .lowbss serve both decoders, and each builder clears the other's flag in one store."
+  },
+  {
+   "title": "Refusal as contract, with probes",
+   "evidence": "vga12.inc:2927-2940 (gfx_blitp DI bit 15), 3541-3545 gfx_spans, gfx_blit1 CF=1",
+   "why": "Every caller has a correct slower path one branch away. This is §47 applied to primitives."
+  },
+  {
+   "title": "Per-row run-density pricing in gfx_blit4",
+   "evidence": "vga12.inc:2172-2249",
+   "why": "The first run's length is the probe and the run count is the budget, both free from the scanner. Flat rows keep the span writer and dithered rows go to the transpose. Measured (Set 107)."
+  },
+  {
+   "title": "Layout invariants are assembler errors",
+   "evidence": "vga12.inc:85-87, 256-258, 290-292, 316-318, 1039-1041, 5679-5681, 5791-5793, 7197-7199; softgfx.inc:1482-1484",
+   "why": "Every word load of a byte pair is guarded by %error at the declaration, so a re-layout fails the build instead of silently corrupting."
+  },
+  {
+   "title": "gfx_unlock ends the drawing transaction and resets all leakable state",
+   "evidence": "vga12.inc:5149-5269",
+   "why": "Region, pen, mono1, disabled pen, display context, progress widget and busy shape all die with the hold, so a forgetful caller inherits the safe value. This is EndPaint's idea without an explicit release."
+  },
+  {
+   "title": "The .vga rung slide",
+   "evidence": "vga12.inc:2304-2312, tests/vgarefs.txt",
+   "why": "It gets GEOS's 'only this adapter's driver is resident' while keeping near calls, which suits an 8088 better than GEOS's far strategy call."
+  }
+ ],
+ "findings": [
+  {
+   "id": "gfx-1",
+   "kind": "bug",
+   "severity": "high",
+   "title": "gfx_blit4 trusts the sign of its width; a negative width overruns vga_pbuf (VGA) or sprays the framebuffer (1bpp)",
+   "detail": "gfx_blit4 refuses only zero: `or cx,cx / jz vga_b4out`, and the same for DX. Both decoders then prove the block is on screen with an unsigned add that wraps (1bpp `add ax,cx / cmp ax,[vid_cw] / ja .slow`; planar `mov dx,ax / add dx,cx / cmp dx,[vid_cw] / ja .pdone`), and `cmp cx,16 / jb` passes any CX >= 16. Example: x=20, w=-10 (a package's x2-x1+1 on an empty rect) gives x+w = 10, which counts as on screen. On VGA the first row that opens on detail goes .eplanar into vga_blit_prow with CX ~ 0xFFF6. Its byte span comes from the wrapped last pixel x+w-1, which lies LEFT of x, so [vga_pr_n] = col(last) - col(x) + 1 is <= 0 (0 in the example). `dec bp / jnz .g` then runs ~65,536 groups, storing at [di], [di+84], [di+168] and [di+252] across the whole 64KB of VGABUF_SEG from vga_pbuf: the bottom of the heap above the kernel, corrupted by one bad package argument (a #GP on kern_mega's selector). On 1bpp (kern_big and kern_small), sw_blit_row writes ~8KB of framebuffer per row (32,763 pairs; on a dual-card Hercules, into the CGA's aperture). A negative DX is a ~65,535-row loop. gfx_blitp already fixed exactly this, citing PaccMan.",
+   "evidence": [
+    "vga12.inc:1886-1889 jz only, no sign test",
+    "vga12.inc:2011-2013 1bpp decoder x proof wraps",
+    "vga12.inc:2050-2054 planar x proof wraps; cx>=16 passes negatives",
+    "vga12.inc:2551-2570 n derived from the wrapped last x: <= 0 when w < 0, so BP wraps to ~65536 groups",
+    "vga12.inc:2608-2661 .g writes BP groups into vga_pbuf",
+    "vga12.inc:7176 vga_pbuf resb VGA_PB*4 (336 bytes)",
+    "vga12.inc:2856-2859 gfx_blitp's jle fix and PaccMan note",
+    "kernel.asm:2797-2798 OSAPI_SLOT gfx_blit4: no validation in the cell"
+   ],
+   "recommendation": "Change `jz vga_b4out` to `jle vga_b4out` at both sites (same encoding: short backward jump). Optionally do the same for gfx_blit1_x's `jcxz .refuse` (softgfx-free, .cold +2 bytes), where the consequence is only framebuffer garbage.",
+   "phase": "now",
+   "bytes_est": "0 .text (gfx_blit4); +2 .cold if gfx_blit1 too",
+   "prior_art": "Windows GDI normalises/rejects inverted rectangles at the DC layer before any driver sees them.",
+   "verdict": "corrected",
+   "verify_note": "Confirmed by re-reading vga12.inc:1886-1889 (jz only), 2009-2013 and 2046-2054 (unsigned wrap), 2237-2249 (.eplanar) and 2551-2661 (vga_blit_prow). One detail corrected: on VGA the group count is not ~8190. With a negative w the last pixel x+w-1 lies LEFT of x, so n = col(last) - col(x) + 1 is 1 (same byte) or <= 0. Example x=20, w=-10: last=9, n=0, so `dec bp / jnz .g` runs 65,536 times. The stores at [di], [di+84], [di+168] and [di+252] then sweep the whole 64KB of VGABUF_SEG from vga_pbuf, which is the bottom of the heap above the kernel. ~8190 bytes is right for the 1bpp case (sw_blit_row: 32,763 pairs). kern_small (1bpp only, no GFX_PLANE) has the sw_blit_row half. On kern_mega the VGABUF selector's limit turns it into a #GP. `jle` is the same 2-byte short encoding as `jz`. Not listed in ABI-BREAK-LIST or KERNEL-BYTE-QUEUE."
+  },
+  {
+   "id": "gfx-2",
+   "kind": "hazard",
+   "severity": "medium",
+   "title": "The planar decoder's deliberate over-read can #GP on kern_mega",
+   "detail": "vga_blit_prow starts the decode p>>1 bytes early and reads whole 4-byte groups, so it touches up to 3 bytes before a row's first source byte and up to 3 after its last. The code and SPEC call this safe because the bytes are 'inside the caller's segment'. That holds in real mode, where offsets wrap. kern_mega defines KERN_BIG and therefore GFX_PLANE, and there a claim's selector limit is the claim's own end. A canvas's last row, or a first row at offset < 3 with odd-phase x, therefore reads outside the limit: #GP inside the decoder. Plausible, not run.",
+   "evidence": [
+    "vga12.inc:2574-2576 source biased back p>>1",
+    "vga12.inc:2612-2632 four source bytes per group",
+    "vga12.inc:2475-2477 groups past the block's end",
+    "SPEC.md:4573-4574 'inside the caller's segment'",
+    "mega.inc:5968-5970 last selector's limit is the claim's end",
+    "SPEC.md:99294-99296 OSAPI_SEG limit runs to the block's end"
+   ],
+   "recommendation": "Under %ifdef KERN_MEGA, do one `lsl` of ES where the planar path is armed (vga12.inc:2046-2068), and leave [gfx_blit_pok]=0 when SI-3 underflows or the last row's end+3 passes the limit. Either way, state the 3-byte slack in OSAPI_GFX_BLIT4's contract.",
+   "phase": "now",
+   "bytes_est": "+~20 .text kern_mega only (0 on kern_big/kern_small)",
+   "verdict": "confirmed",
+   "verify_note": "kern_mega defines KERN_BIG (kernel.asm:221/240), so GFX_PLANE. vga_blit_prow biases SI back by p>>1 (2574-2576) and reads whole 4-byte groups. mega.inc:5966-5970 says a selector's limit is the claim's own end. No lsl or limit guard exists in vga12.inc (the only KERN_MEGA arm is the DS load at 2585). Still PLAUSIBLE, not run. The real-mode argument in SPEC 5.4.1.3 ('inside the caller's segment') does not carry. The slack at the end is only what the claim's paragraph rounding leaves."
+  },
+  {
+   "id": "gfx-3",
+   "kind": "perf",
+   "severity": "medium",
+   "title": "gfx_blit1 far-calls the clip-region question twice per band",
+   "detail": "On kern_big, CLIPQF is `call KERNEL_SEG:cw_gfx_clip_query`, a far call to a shim that near-calls gfx_clip_query: about 170 clocks round trip. gfx_blit1_x asks it at 6019 and again at 6067, and nothing in between can change the answer except the hole arming the first call itself performs. The fix carries the first answer in ZF across the nine pushes, which write no flags. The unarmed path already reaches .clipok with ZF=1. `ja .clipok` already arrives with ZF=0; the fall-throughs that do not (after `jne .okq` on kern_big, after `jc .percol` on kern_small) need `or sp,sp` (ZF=0, 2 bytes). Then the second CLIPQF (5 bytes) can be deleted and `je .rowsall` reads the carried flag.",
+   "evidence": [
+    "vga12.inc:457-459 CLIPQF = far call",
+    "kernel.asm:7890 cw_gfx_clip_query: call gfx_clip_query",
+    "vga12.inc:6019-6055 first ask and the paths into .clipok",
+    "vga12.inc:6067-6068 second ask, same answer"
+   ],
+   "recommendation": "Carry ZF to .clipok and drop the second CLIPQF. Optionally inline the first in .cold (DS = KERNEL_SEG there): +~9 bytes for another ~-110 clocks.",
+   "phase": "now",
+   "bytes_est": "-3 .cold on kern_big (~-170 clocks, ~36 us a band, PREDICTED); -3 on kern_small (~-20 clocks: CLIPQF is an inline cmp there)",
+   "verdict": "corrected",
+   "verify_note": "Confirmed on kern_big: CLIPQF is `call KERNEL_SEG:cw_gfx_clip_query` (vga12.inc:457-459, kernel.asm:7890). Nothing between 6019 and 6067 can change the answer. Of the paths into .clipok, `je .clipok` (ZF=1) and `ja .clipok` (ZF=0) already carry the right flag. Only the `jne .okq` fall-through (ZF=1 though armed) needs `or sp,sp`. Kern_big net is -5+2 = -3. Corrected for kern_small: there CLIPQF is the inline `cmp word [wm_clip_n],0` (5 bytes, vga12.inc:475-477), not a far call. The saving is -5+2 = -3 bytes (not -4) and ~20 clocks a band, not ~170."
+  },
+  {
+   "id": "gfx-4",
+   "kind": "perf",
+   "severity": "medium",
+   "title": "gfx_points has no planar path: every VGA point is a whole gfx_fill",
+   "detail": "The gate sends [vid_mono]=0 to .slow, which issues one gfx_pixel per point and pays the full rect machinery. SPEC 5.13 measures 640.87 us per GFX_PIXEL against 165.96 per point on the 1bpp loop. The callers that draw many points (Cyclone, Missile, Tank, os88gfx's GFXE_POINTS sink, the C SDK's os88_gfx_points) get none of the 3.9x on a VGA XT. A planar GFXPT_LOOP body needs nothing the loop lacks: arm Set/Reset = [gfx_color] once (GC0/GC1, as vga_blit_span does); per point do `mov ah,[cs:si+gfx_bitset] / mov al,8 / out dx,ax / xchg [es:di],al`; call vga_gc_reset at .done. ES = VGA_SEG, with the same row table and clip box.",
+   "evidence": [
+    "vga12.inc:1350-1365 gate: vid_mono=0 -> .slow",
+    "vga12.inc:1401-1414 .slow = gfx_pixel per point",
+    "SPEC.md:8558-8580 5.13 prices",
+    "apps/cyclone/cyclone.asm:8167, apps/missile/missile.asm:7608, apps/tank/tank.asm:1111, apps/os88gfx.inc:1368 callers"
+   ],
+   "recommendation": "Add a fourth loop body in the .vga rung behind the existing depth test. Points that straddle displays keep .slow. Take one gfxbench row on os8088_xt_vga before spending the bytes.",
+   "phase": "now",
+   "bytes_est": "+60..70 .vga (resident on VGA/EGA machines only); ~5-10x per point on VGA, PREDICTED",
+   "verdict": "confirmed",
+   "verify_note": "The gate is real: vga12.inc:1350-1365 sends vid_mono=0 to .slow, a gfx_pixel per point (1401-1414). SPEC 5.6.9.2 says only that 'a planar one is gfx_pixel's work either way', with no measurement or refusal of a planar arm, so this is not re-proposing a refused item. gfx_bitset exists (1577). The gain and the +60..70 bytes are PREDICTED. A gfxbench row on os8088_xt_vga should decide it, as the reviewer says."
+  },
+  {
+   "id": "gfx-5",
+   "kind": "consistency",
+   "severity": "medium",
+   "title": "[gfx_color] after gfx_blit4 depends on which path drew",
+   "detail": "The run paths overwrite [gfx_color] with the last run's colour; the two decoders never touch it. The header and SPEC 5.4 promise 'left holding the last colour drawn', and the SDK contract is silent. A package that does SET_COLOR, BLIT4, FILL therefore gets a fill colour that depends on the adapter, x alignment, run density and whether a region was armed.",
+   "evidence": [
+    "vga12.inc:2343-2344 vga_blit_span writes it",
+    "vga12.inc:3245-3250 gfx_blit_run writes it",
+    "vga12.inc:6938 gfx_b4piece writes it",
+    "softgfx.inc:983-1088 sw_blit_row never does",
+    "vga12.inc:2540-2692 vga_blit_prow never does",
+    "vga12.inc:1742-1743 the promise",
+    "apps/os88api.inc:1958-1970 silent"
+   ],
+   "recommendation": "Preserve it: bank AL in the prologue and restore before kret_bp. Failing that, declare it UNSPECIFIED in SPEC 5.4 and the SDK.",
+   "phase": "now",
+   "bytes_est": "+~8 .text (preserve), or 0 (document)",
+   "prior_art": "Neither GDI BitBlt nor QuickDraw CopyBits changes the pen.",
+   "verdict": "confirmed",
+   "verify_note": "vga_blit_span (2343-2344), gfx_blit_run (3245-3250) and gfx_b4piece (6938) store [gfx_color]. sw_blit_row and vga_blit_prow never do. The header (1742-1743) and SPEC 5.4 (4253-4254) both promise 'the last colour drawn'. The two doc fixes below state the current behaviour as UNSPECIFIED. If the preserve fix lands instead, both texts change again."
+  },
+  {
+   "id": "gfx-6",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "Built-and-off knob bodies double the hot code without shipping its wins",
+   "detail": "KHP_VGASAVE/VGAFILL/VGAEDGE/VGABLITP/FRAME are kern_mega-only, and KHP_MONORECT/MONOPAT/MONOSCROLL are defined by no kernel. That leaves two bodies at ~15 sites in these files, plus ~240 lines of the 1bpp bank walk that no shipped kern_big runs. Meanwhile its measured -51% on GFX_FILL 64x64 (CGA/Herc, +344 bytes) is the biggest win for the calibration machine. New arguments: (a) VGA rows 3, 6, 8 and 9 (+214) are .vga bytes, which a 1bpp machine slides away, so only VGA/EGA machines pay for them; (b) the shelf already produces false docs (softgfx.inc:445 banner, SPEC 5.7 items 9-10); (c) t_khpknobs proves the arms assemble, not that they draw.",
+   "evidence": [
+    "kernel.asm:243-297 KHP block",
+    "softgfx.inc:442-680 bank walk under KHP_MONORECT",
+    "vga12.inc:3397-3481, 4406-4452, 4738-4805, 3012-3056, 4180-4222 knob arms",
+    "docs/plans/LAST-DROP-PERF.md 7.1"
+   ],
+   "recommendation": "Set a dated decision per row: take it into kern_big or delete the arm. No indefinite shelf.",
+   "phase": "now",
+   "bytes_est": "0 to decide; per row as LAST-DROP-PERF 7.1 prices it",
+   "listed_as": "LAST-DROP-PERF.md 7.1 rows 3, 6, 8, 9, 11, 12, 14, 16",
+   "verdict": "confirmed",
+   "verify_note": "kernel.asm:243-297: the vga KHP knobs, KHP_FRAME and KHP_FPG are defined only under KERN_MEGA. MONORECT, MONOSCROLL and MONOPAT are defined by no kernel. The stale softgfx.inc:445 banner is confirmed (fixed below). Already ranked in LAST-DROP-PERF.md 7.1, so this is a call for a dated decision, not a new item."
+  },
+  {
+   "id": "gfx-7",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "The planar bodies hard-code an 80-byte stride",
+   "detail": "Every VGA row step in the fill, gray, pattern, save and restore bodies is the ROW_BYTES constant. gfx_blitp's plane-major path reads [vid_stride] and gfx_blit1 reads [vid_rowadd]. The invariant 'every 4-plane surface is 80 bytes a row' is held only by prose (lines 8-9), and that prose is stale. A future 800x600x16 planar mode would shear every fill.",
+   "evidence": [
+    "vga12.inc:3398, 3414, 3439, 3450, 3817, 3833, 3845, 4019, 4052, 4407, 4435, 4748, 4782 ROW_BYTES",
+    "vga12.inc:2994 [vid_stride]",
+    "vga12.inc:6203 [vid_rowadd]",
+    "kernel.asm:37 ROW_BYTES equ 80"
+   ],
+   "recommendation": "Add a check in vid_apply (.ovl): 4 planes implies stride == ROW_BYTES, else refuse the mode. State it in SPEC §5's opening.",
+   "phase": "now",
+   "bytes_est": "+~8 .ovl, 0 resident",
+   "verdict": "confirmed",
+   "verify_note": "ROW_BYTES is the step at every listed planar site (vga12.inc:3398-4782). gfx_blitp reads [vid_stride] and gfx_blit1 reads [vid_rowadd]. The prose at lines 8-9 is stale (fixed below). Whether vid_apply sits in .ovl, and so the '+~8 .ovl' figure, was not checked."
+  },
+  {
+   "id": "gfx-8",
+   "kind": "perf",
+   "severity": "low",
+   "title": "A right-edge clip forfeits both blit decoders",
+   "detail": "x+w > [vid_cw] sends the whole block to the per-run path at ~0.5 ms a run. Clamping [gfx_blit_w] to vid_cw - x once (when x >= 0) keeps both decoders and the scanner, because the source stride is BP and is unaffected. Callers clip today, so this mostly lets them stop. An even left clip is a source advance of -x/2 bytes; an odd one can use gfx_b4piece's column logic, which already exists.",
+   "evidence": [
+    "vga12.inc:2009-2013, 2046-2053 the x proofs",
+    "softgfx.inc:962-966 'every caller clips its own blit'",
+    "vga12.inc:6913-6965 gfx_b4piece odd column"
+   ],
+   "recommendation": "Clamp w to the right edge once, before the fast-path tests.",
+   "phase": "now",
+   "bytes_est": "+~10 .text (+~12 more for even left clip)",
+   "verdict": "unchecked",
+   "verify_note": "Low-severity perf idea; not re-derived."
+  },
+  {
+   "id": "gfx-9",
+   "kind": "perf",
+   "severity": "low",
+   "title": "The shipped 1bpp XOR interior is a byte loop",
+   "detail": "The column-major body complements interior bytes one at a time. Every Disk-window selection band and the menu highlight on CGA/Hercules pass through it. The word loop already written for the knob arm (sw_k_xrow) is ~40% cheaper per byte.",
+   "evidence": [
+    "softgfx.inc:722-727 not byte / inc / loop",
+    "softgfx.inc:577-598 sw_k_xrow word loop"
+   ],
+   "recommendation": "Port the word body into the shipped column-major .xrow.",
+   "phase": "now",
+   "bytes_est": "+~8 .text; ~1 ms per file-row band, PREDICTED",
+   "verdict": "confirmed",
+   "verify_note": "softgfx.inc:722-727 is `not byte [es:di] / inc di / loop` in the shipped column-major .xrow. The word loop is in the KHP_MONORECT arm. The saving is PREDICTED."
+  },
+  {
+   "id": "gfx-10",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "gfx_lock's cli...sti is outside CLAUDE.md's short form of the IF rule",
+   "detail": "gfx_lock uses cli...sti. That is correct: it is task-level only and documents 'IF = 1 on return'. SPEC.md §1 rule 3 already scopes the pushf/cli/popf rule to routines callable from an ISR. CLAUDE.md's restatement drops that scope and reads unconditional.",
+   "evidence": [
+    "vga12.inc:5079 IF=1 on return",
+    "vga12.inc:5084-5127 cli/sti"
+   ],
+   "recommendation": "Restore the scope in CLAUDE.md/AGENTS.md's hard rule ('...in anything an ISR can reach').",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "corrected",
+   "verify_note": "gfx_lock does use cli...sti (vga12.inc:5084-5127) and documents IF=1 on return. But SPEC.md §1 rule 3 (lines 120-122) scopes the rule to 'any routine callable from an ISR', and gfx_lock is task-level only, so SPEC is not contradicted. Only CLAUDE.md's shortened restatement ('Critical sections are pushf/cli ... popf, never cli/sti') reads unconditional. The fix is one clause in CLAUDE.md/AGENTS.md ('in anything an ISR can reach'), not a SPEC §1 exception list."
+  },
+  {
+   "id": "gfx-11",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "vga12.inc is not the module §4 describes",
+   "detail": "It carries the theme (thm_tab, the live block, thm_set and api_thm_set_x in .cold), all the pens, the lock, the display hooks, gfx_blit1, gfx_points and gfx_spans. SPEC 4096 names the lock, save/restore, scroll and 'vga_rect_setup', which is actually gfx_rect_setup and lives in softgfx.inc.",
+   "evidence": [
+    "vga12.inc:101-195, 6969-7133 theme",
+    "vga12.inc:5857-6966 gfx_blit1",
+    "SPEC.md:4096"
+   ],
+   "recommendation": "Move the theme to kernel/theme.inc (mind t_hotpar parity) and correct §4.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "thm_* (vga12.inc:131-195), gfx_pen_* (4827), gfx_points (1324), gfx_spans (3557) and gfx_blit1_x (5901) are all in vga12.inc. vga_rect_setup does not exist, and gfx_rect_setup is softgfx.inc:96. The §4 row is fixed below. Moving the theme to its own file is a separate refactor and not checked against t_hotpar."
+  },
+  {
+   "id": "gfx-12",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "Comments as archaeology bury the current contract",
+   "detail": "About 7,200 lines carry roughly 2,000 lines of instructions, and much of the prose is 'it was X until size pass N'. This review found 25+ statements about code that is gone: sw_rect_pl, vid_rpara/vid_rend, gfx_line, gfx_pt_resolve, gfx_ls_addr, the back buffer, bb_*, vga_rect_setup, .lowbss plane rows, and gfx_blit1 'kern_big only'.",
+   "evidence": [
+    "see doc_mismatches 1-30",
+    "softgfx.inc:304-440 sw_rect_pl x8",
+    "vga12.inc:1725-1729, 2469-2472, 7141-7143"
+   ],
+   "recommendation": "Move history to SPEC and docs/plans/completed. Keep code comments to the current contract and its invariants. Add a cheap gate: identifiers in comments that are neither symbols in the build's map nor on an allow-list.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "Borne out: of the reviewer's 30 doc mismatches, the 28 checked all hold. The other two (SPEC 4160 and 6014) needed rewording, not refutation. Five more stale statements turned up in the same blocks (softgfx.inc:207-208 SWM_SOLID, the 941/951 register notes, SPEC 4580 '.lowbss', SPEC 4229/4235 bb_*). The proposed identifier-in-comment gate is not priced."
+  },
+  {
+   "id": "gfx-13",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "'Asked the depth before entering the display' is a recurring bug class",
+   "detail": "The tree's own comments record it at gfx_xor_rect (a reboot), the menu save-under (39.14.8), gfx_blit1's pen (5.4.2.4), gfx_blitp's depth test (5.4.3.4, 'LATENT') and gfx_points (39.14.6). Each whole-shape primitive orders cur_unlazy, display enter and depth dispatch by hand, and each got it wrong once.",
+   "evidence": [
+    "vga12.inc:4090-4105",
+    "vga12.inc:2874-2898",
+    "vga12.inc:6726-6734",
+    "vga12.inc:1376-1387"
+   ],
+   "recommendation": "Give the whole-shape class (xor_rect, save/restore, scroll, blitp, blit4's hook, points) one entry routine or macro that hides, enters and only then dispatches. Add a GFXAUDIT assertion that the depth byte is read only when nested or on one display.",
+   "phase": "now",
+   "bytes_est": "~0 (code motion)",
+   "prior_art": "Windows GDI cannot reach a DDI entry before it has resolved the DC's PDEVICE: the dispatch target is the device itself.",
+   "verdict": "confirmed",
+   "verify_note": "The cited comments (vga12.inc:1376-1387, 4089-4105, and the 5.4.3.4 'LATENT' note at gfx_blitp) record the same ordering bug class. A single entry macro is a design proposal, not checked for bytes."
+  },
+  {
+   "id": "gfx-14",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "A per-display renderer table instead of per-primitive compares and COLD_SLIDE doors",
+   "detail": "Each primitive does `cmp [vid_planes],4 / jb / je`, a COLD_SLIDE `jmp X_v` door, and on kern_small a NOVGA_ARM. A table of ~8 near pointers in VID_CTX, filled by vid_apply and swapped by vid_ctx_act, would make each entry `jmp [vid_fn_x]` (cycle-neutral). It would fold in VID_EXT's packed dispatch and make the .vga slide structurally safe, since a 1bpp display's table cannot name .vga.",
+   "evidence": [
+    "vidext.inc:71-105",
+    "vga12.inc:3332-3371, 3779-3790, 3971-3978, 4376-4386",
+    "tests/vgarefs.txt"
+   ],
+   "recommendation": "Record for the next time the video layer is opened. The current form is measured and works.",
+   "phase": "record",
+   "bytes_est": "+~16 .bss per display, ~-40 .text",
+   "prior_art": "Win 3.x DDI function table; GEOS video-driver strategy routine.",
+   "verdict": "unchecked",
+   "verify_note": "Record-only rethink; not re-derived."
+  },
+  {
+   "id": "gfx-15",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "gfx_clip_run tests every fragment, with no early exit",
+   "detail": "gfx_clip_run intersects the primitive with all [wm_clip_n] rects: up to 16 at ~150 clocks each, ~0.5 ms per primitive under a full region. If the producer kept the list y-sorted, the walk could stop at the first fragment whose y1 exceeds the primitive's y2. gfx_ls_box and gfx_blit1's .frags would gain the same exit.",
+   "evidence": [
+    "vga12.inc:954-1003",
+    "kernel.asm:58 WM_CLIP_MAX 16",
+    "vga12.inc:1626-1671, 6646-6701"
+   ],
+   "recommendation": "Sort in wm.inc's region builder and add an early exit here (cross-area: wm).",
+   "phase": "now",
+   "bytes_est": "+~6 .text here; the sort is wm.inc's",
+   "prior_art": "Windows and X11 regions are y-x banded rectangle lists for exactly this.",
+   "verdict": "confirmed",
+   "verify_note": "gfx_clip_run (vga12.inc:954-1003) walks all [wm_clip_n] fragments with no early exit. The y-sort is wm.inc's, cross-area, and was not checked."
+  },
+  {
+   "id": "gfx-16",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "V1 cannot be done by changing gfx_fill itself: kernel callers rely on it preserving registers",
+   "detail": "New evidence for ABI-BREAK-LIST V1: the kernel's internal callers depend on the preserve-everything contract belonging to the BODY. gfx_hline returns BX from the CX that gfx_fill kept; gfx_xor_strips carries the fill pointer in BP across four calls; gfx_blit_run and gfx_pixel do the same. So V1 has to be a new package-facing entry beside the raw body, not a change to gfx_fill, and should be priced with that cell.",
+   "evidence": [
+    "vga12.inc:1070-1079",
+    "vga12.inc:4150-4158",
+    "vga12.inc:3240-3266",
+    "softgfx.inc:235-242"
+   ],
+   "recommendation": "Price V1 as a separate cell entry that skips the banking, leaving the internal contract alone.",
+   "phase": "flagday",
+   "bytes_est": "as V1 (-8 kernel) plus a ~6-byte entry",
+   "listed_as": "ABI-BREAK-LIST V1",
+   "verdict": "confirmed",
+   "verify_note": "gfx_hline (vga12.inc:1070-1079) returns BX from the CX that gfx_fill preserved (`mov bx,cx` after the call). That is a real internal dependency on the preserve-everything body, so V1 has to be a separate package-facing entry. This is a refinement of ABI-BREAK-LIST V1."
+  },
+  {
+   "id": "gfx-17",
+   "kind": "size",
+   "severity": "low",
+   "title": "Parity pads serve the 16-bit buses, not the 8088 target",
+   "detail": "These two files hold 12 PARITY pads (~61 sites kernel-wide). They keep hot entries at a pinned address parity for 16-bit-bus fetch. The 8088 fetches one byte at a time and is indifferent, so each pad is a resident byte spent for 8086/V30/286 machines.",
+   "evidence": [
+    "vga12.inc:2217, 2295, 3621, 3784, 4213, 6157",
+    "softgfx.inc:650, 1340",
+    "tests/unit/t_hotpar.py header"
+   ],
+   "recommendation": "State the trade in t_hotpar's header and CLAUDE.md so it is visible. Not a recommendation to remove the pads.",
+   "phase": "record",
+   "bytes_est": "~-12 resident here if dropped (not recommended)",
+   "verdict": "unchecked",
+   "verify_note": "Record-only; not re-derived."
+  }
+ ],
+ "doc_fixes": [
+  {
+   "file": "kernel/vga12.inc",
+   "old_text": "; both; only the two bottom-edge clips here read the live [vid_ch].",
+   "new_text": "; both, and the planar row steps are ROW_BYTES; every clip reads the live\n; screen ([vid_cw]/[vid_ch], or [vid_cwm1]/[vid_chm1] in gfx_rect_setup).",
+   "why": "[vid_cw]/[vid_ch] are read at vga12.inc 2012, 2052, 2077, 2353, 2925, 3068, 3590, 3717, 5395, 6114-6146; softgfx.inc 103/116 read vid_chm1/vid_cwm1"
+  },
+  {
+   "file": "kernel/vga12.inc",
+   "old_text": ";   - Every routine clips to 0..639 / 0..479 and leaves the GC/Sequencer in\n;     the default state on return:",
+   "new_text": ";   - Every routine clips to the live screen, 0..[vid_cwm1] / 0..[vid_chm1],\n;     and leaves the GC/Sequencer in the default state on return:",
+   "why": "gfx_rect_setup clips to [vid_cwm1]/[vid_chm1] (softgfx.inc:103,116); EGA is 350 rows and Hercules 720 wide"
+  },
+  {
+   "file": "kernel/vga12.inc",
+   "old_text": "                                ; becomes a depth. Four writers in the tree and\n                                ; no fifth: :5303 (1), :5384 (0), sched.inc\n                                ; :1683 (0) and :1699 (the value banked at\n                                ; :1677).",
+   "new_text": "                                ; becomes a depth. The writers: gfx_lock and\n                                ; gfx_unlock (one word store each, with the\n                                ; owner), sched.inc's KFZ strip (forced 0,\n                                ; then the banked value back) and, on\n                                ; kern_mega, mega.inc's fault and strip paths\n                                ; - grep `gfx_lock_flag]` before adding one.",
+   "why": "writers are vga12.inc:5124 (gfx_lock) and 5262 (gfx_unlock), sched.inc:2098/2114, mega.inc:2491/7569/7582; the cited line numbers are all stale"
+  },
+  {
+   "file": "kernel/vga12.inc",
+   "old_text": "; out:      nothing; every register preserved. [gfx_color] is left holding\n;           the last colour drawn.",
+   "new_text": "; out:      nothing; every register preserved. [gfx_color] is UNSPECIFIED\n;           afterwards: a run path leaves the last run's colour in it, the\n;           two row decoders the caller's.",
+   "why": "vga_blit_span (2343) and gfx_blit_run (3245-3250) store it; sw_blit_row and vga_blit_prow never touch it (finding gfx-5)"
+  },
+  {
+   "file": "kernel/vga12.inc",
+   "old_text": "; What this is, and what it deliberately is not. It coalesces runs of equal\n; pixels and emits one gfx_fill per run - the same thing apps/paint's pt_blit\n",
+   "new_text": "; What this is, and what it deliberately is not. It draws each row with one\n; of three writers - runs (a gfx_hline each, or vga_blit_span straight into\n; the planes), the 1bpp pair decoder (SPEC.md 5.4.1.1) or the planar\n; transpose (5.4.1.3) - chosen per call and, on VGA, per row. The run path\n; is the same thing apps/paint's pt_blit\n",
+   "why": ".row picks sw_blit_row when [gfx_blit_fst]=1 (2100), vga_blit_span when 2 (2202-2211), vga_blit_prow by the density test (2237-2249), gfx_blit_run otherwise"
+  },
+  {
+   "file": "kernel/vga12.inc",
+   "old_text": "; near loop. It also means the primitive works on all three adapters, in\n; and inside a clip region, without one line of adapter-specific code -\n; because gfx_fill already does.",
+   "new_text": "; near loop. The run path also works on every adapter and inside a clip\n; region without one line of adapter-specific code, because gfx_fill\n; already does; the two row decoders are adapter-specific and are used\n; only on screen, with no region in the way.",
+   "why": "sw_blit_row (1bpp) and vga_blit_prow (planar) are adapter-specific; both are armed only after the on-screen x proofs (2009-2013, 2046-2053) and with no region (CLIPQ at 1955)"
+  },
+  {
+   "file": "kernel/vga12.inc",
+   "old_text": "; twins. It is a worthwhile future optimisation and it changes no caller;\n; docs/plans/completed/PAINT-NOTES.md records why it was not the first one.",
+   "new_text": "; twins. It has since been taken - vga_blit_prow (SPEC.md 5.4.1.3) below, and\n; sw_blit_row (5.4.1.1) for 1bpp - and docs/plans/completed/PAINT-NOTES.md\n; records why it was not the first one.",
+   "why": "vga_blit_prow (vga12.inc:2540-2692) is the plane-parallel path this paragraph calls future"
+  },
+  {
+   "file": "kernel/vga12.inc",
+   "old_text": "; Colour reduction on a 1bpp adapter happens in gfx_fill, per run (SPEC.md\n; 39.4), so a 16-colour picture reads as black/dither/white there exactly as\n; the rest of the UI does.",
+   "new_text": "; Colour reduction on a 1bpp adapter is the pair tables' (sw_pairbuild builds\n; them from gfx_inktab), or gfx_fill's per run for a block off the screen in\n; x (SPEC.md 39.4) - so a 16-colour picture reads as black/dither/white there\n; exactly as the rest of the UI does.",
+   "why": "an on-screen 1bpp block goes to sw_blit_row through gfx_pairtab0/1 (2009-2017, 2091-2100); only .slow's runs reach gfx_fill"
+  },
+  {
+   "file": "kernel/vga12.inc",
+   "old_text": "                                ; ...but NOT off the display split, and there\n                                ; is deliberately no GFXDENTER here: A RUN\n                                ; CARRIES NO SOURCE (SPEC.md 39.14.7). The\n                                ; destination stays VIRTUAL the whole way\n                                ; down, and each coalesced run is one solid\n                                ; gfx_hline that splits itself through\n                                ; gfx_fill's own GFXDISP - so a straddling\n                                ; block needs no source arithmetic at all.\n",
+   "new_text": "                                ; ...but NOT off the display split HERE: the\n                                ; hook is taken below, just above .hkdone,\n                                ; when the block fits one display (SPEC.md\n                                ; 39.14.7.1), and a straddle is cut at the\n                                ; seam (39.14.7.2). Only a cut the seam\n                                ; refuses keeps the destination VIRTUAL, each\n                                ; coalesced run splitting itself through\n                                ; gfx_fill's own GFXDISP.\n",
+   "why": "gfx_blit4 calls gfx_disp_enter at 1946 when vid_span_wh says one display, and .cut/EXT_BCUT (2281-2294) handles a straddle"
+  },
+  {
+   "file": "kernel/vga12.inc",
+   "old_text": "; on entry and left there through the decode), the table and the four plane\n; rows are .lowbss - so DS becomes LOW_SEG and nothing needs an override -\n; and the framebuffer is ES for the write pass alone.",
+   "new_text": "; on entry and left there through the decode), the table is .lowbss and read\n; ss:, the four plane rows are .vgabuf and DS becomes VGABUF_SEG for them\n; (SPEC.md 39.22) - so every .lowbss word in between needs ss: - and the\n; framebuffer is ES for the write pass alone.",
+   "why": "vga_blit_prow loads DS from VGABUF_SEG/rom_vgabw/mega_vbsel (2585-2601) and reads [ss:bx+vga_p4tab]; vga_pbuf is in section .vgabuf (7166-7176)"
+  },
+  {
+   "file": "kernel/vga12.inc",
+   "old_text": "                                ; nothing to REACH either, because the decoder\n                                ; runs with DS = LOW_SEG and reads both with no\n                                ; override at all (SPEC.md 5.4.1.3)",
+   "new_text": "                                ; one `ss:` prefix a read to REACH: SS is\n                                ; LOW_SEG in all kernel code, where DS is the\n                                ; caller's source in sw_blit_row and VGABUF_SEG\n                                ; in the planar decoder (SPEC.md 5.4.1.3)",
+   "why": "sw_blit_row reads `ss xlat` with DS = the source (softgfx.inc:1004-1022); vga_blit_prow reads [ss:bx+vga_p4tab] with DS = VGABUF_SEG"
+  },
+  {
+   "file": "kernel/vga12.inc",
+   "old_text": ";               5.4.2). kern_big only; kern_small's thunk is stc/retf - a\n;               variant without the two-display, VGA and pen arms was BUILT\n;               and MEASURED for it (+419 bytes, SPEC.md 5.4.2.5) and NOT\n;               TAKEN: that build may stay slower, by decision.",
+   "new_text": ";               5.4.2). BOTH kernels: kern_small's body - without the\n;               two-display, VGA and pen arms, and refusing an x off the\n;               byte grid - was refused in SPEC.md 5.4.2.5 and shipped by\n;               5.4.2.5.1's reversal (the section banner above).",
+   "why": "the body sits in .cold on both builds (5857-5862) with %ifndef KERN_BIG arms (5911-5914, 6052-6054)"
+  },
+  {
+   "file": "kernel/vga12.inc",
+   "old_text": "; (size pass 9) - gfx_pt_resolve rewrites all five at every call's .pass.",
+   "new_text": "; (size pass 9) - gfx_points' .pass rewrites them at every call.",
+   "why": "gfx_pt_resolve was folded into .pass in kernel size pass 17 (vga12.inc:1420-1424); no such label exists"
+  },
+  {
+   "file": "kernel/vga12.inc",
+   "old_text": "; WHAT STAYED, and it is the interesting half: gfx_ls_ink, gfx_ls_box,\n; gfx_ls_addr and gfx_ls_lx/ly. gfx_points needs all four - the clip rect a\n; point falls in, its byte and bit, the ink class and the second display's\n; translation - which is 5.12.5's point seen from the kernel side. The six\n; per-call concerns did not move into the apps, so the routines that answer\n; them did not either.",
+   "new_text": "; WHAT STAYED, and it is the interesting half: gfx_points still needs the\n; clip rect a point falls in, its byte and bit, the ink class and the second\n; display's translation - which is 5.12.5's point seen from the kernel side.\n; gfx_ls_box is still a routine; the ink class, the byte and bit and the\n; translation are inline in gfx_points now. The per-call concerns did not\n; move into the apps, so the code that answers them did not either.",
+   "why": "only gfx_ls_box (1589) is defined; gfx_ls_ink, gfx_ls_addr and gfx_ls_lx/ly have no labels left"
+  },
+  {
+   "file": "kernel/vga12.inc",
+   "old_text": "; BP CARRIES THE FILL, which is how gfx_line already uses it in this file. It",
+   "new_text": "; BP CARRIES THE FILL. It",
+   "why": "gfx_line is a stc/ret stub (vga12.inc:1097-1102)"
+  },
+  {
+   "file": "kernel/vga12.inc",
+   "old_text": ";   mono         - per-row rep movsb through gfx_rowbase, immune to the\n;                  banked layouts by construction.",
+   "new_text": ";   mono         - rep movsb a row: with dy a whole number of banks the\n;                  destination base is derived once and the rows walk\n;                  with gfx_nextrow (SPEC.md 5.5.1), else two gfx_rowbase\n;                  a row - immune to the banked layouts by construction.",
+   "why": "vgas_bankcopy takes the constant-delta walk unless dy & [vid_bmask] (5496-5602) and only .gen calls gfx_rowbase per end per row (5611)"
+  },
+  {
+   "file": "kernel/softgfx.inc",
+   "old_text": ";   SWM_SOLID - per plane, the [gfx_color] bit picks a 00/FF byte; edges\n;               become (dest & ~mask) | (value & mask), interiors stosb.",
+   "new_text": ";   SWM_SOLID - sw_ink reduces [gfx_color] through gfx_inktab to 00h, FFh or\n;               the 50% dither; edges are one store, dest ^= (pat ^ dest) &\n;               mask (SPEC.md 39.25.1), interiors rep stosw and a tail byte.",
+   "why": "sw_ink (381-404) reads gfx_inktab; the edge is xor/and/xor (788-792); the interior is rep stosw + stosb (705-711)"
+  },
+  {
+   "file": "kernel/softgfx.inc",
+   "old_text": "; caller is sw_rect_pl (a tail `jmp`, so this routine's `ret` is its), whose\n; one caller is sw_rect, which banks all eight registers in its own prologue\n; and pops them at .done - and sw_rect_pl's published contract is already\n; \"clobbers: everything but the segment registers\".",
+   "new_text": "; caller is sw_rect (a `call`, after gfx_rect_setup: sw_rect_pl was folded\n; into it in kernel size pass 17), which banks the registers in its own\n; prologue and pops them at .done - so \"clobbers: everything but the\n; segment registers\" is all this routine owes it.",
+   "why": "sw_rect pushes AX..BP and ES (233-242) and calls sw_plane_op (293); the comment at 245-249 records the fold"
+  },
+  {
+   "file": "kernel/softgfx.inc",
+   "old_text": "; sw_col from sw_plane_op only, sw_plane_op from sw_rect_pl only, sw_rect_pl\n; from sw_rect only, and nothing on that chain writes DS.",
+   "new_text": "; sw_col from sw_plane_op only, sw_plane_op from sw_rect only, and nothing\n; on that chain writes DS.",
+   "why": "sw_rect_pl no longer exists; sw_plane_op's one call is in sw_rect (293)"
+  },
+  {
+   "file": "kernel/softgfx.inc",
+   "old_text": "; SPEC.md 39.31 - THE RECT IS WALKED A BANK AT A TIME (kern_big)",
+   "new_text": "; SPEC.md 39.31 - THE RECT IS WALKED A BANK AT A TIME (KHP_MONORECT: a knob,\n; built and OFF on every kernel)",
+   "why": "the block is under %ifdef KHP_MONORECT (442), which kernel.asm's KHP block (274-282) defines on no kernel; SPEC.md 39.31's banner says the same"
+  },
+  {
+   "file": "kernel/softgfx.inc",
+   "old_text": "; rounding and buffer layout (SPEC.md 5) - a buffer saved from the back\n; buffer restores to it byte-identically. One shared body, sw_xfer, with\n; [sw_dir] picking the direction; restore additionally dirties the rect.",
+   "new_text": "; rounding and buffer layout (SPEC.md 5). One shared body, sw_xfer, with\n; [sw_dir] picking the direction; restore honours the sub-rect and then\n; disarms it (SPEC.md 5.8).",
+   "why": "there is no back buffer or dirty rect; sw_xfer's .rst adds [gfx_sub_st] and .done calls gfx_sub_off on a restore (softgfx.inc:1417-1459)"
+  },
+  {
+   "file": "kernel/softgfx.inc",
+   "old_text": "    ; from vga12.inc's `cmp byte [vid_mono],0 / jne` pair or, on a build with\n    ; no VGA at all, from the NOVGA_ARM beside each. vid_apply - the sole\n    ; writer of all three cells (tests/unit/t_invariants.py) - sets\n    ; [vid_rpara] = 1 and [vid_rend] = [vid_rseg] + 1 on every non-VGA arm, so\n    ; BX started at [vid_rseg] and reached [vid_rend] after exactly one pass,\n    ; every time.",
+   "new_text": "    ; from vga12.inc's VIDEXTM [vid_planes] dispatch or, on a build with no\n    ; VGA at all, from the NOVGA_ARM beside each. vid_apply - then the sole\n    ; writer of all three cells - set [vid_rpara] = 1 and [vid_rend] =\n    ; [vid_rseg] + 1 on every non-VGA arm, so BX started at [vid_rseg] and\n    ; reached [vid_rend] after exactly one pass, every time. Both cells have\n    ; since gone.",
+   "why": "no vid_rpara/vid_rend definition remains (grep kernel/; t_invariants.py:54,173 says they were deleted); vga_save_vram/vga_restore_vram dispatch with VIDEXTM (vga12.inc:4376, 4711)"
+  },
+  {
+   "file": "kernel/softgfx.inc",
+   "old_text": ";           **gfx_blit4's row loop is the ONLY caller** (vga12.inc:2714,",
+   "new_text": ";           **gfx_blit4's row loop is the ONLY caller** (its `.row`, vga12.inc,",
+   "why": "the one call is at vga12.inc:2100; 2714 is inside gfx_blitp's header now"
+  },
+  {
+   "file": "kernel/softgfx.inc",
+   "old_text": ";             AX  .nextrow opens `mov ax,[gfx_blit_sv]`               dead",
+   "new_text": ";             AX  .row banks it round gfx_rowbase, nothing else reads dead",
+   "why": ".nextrow opens `add [gfx_blit_sv], bp` (vga12.inc:2252) and .row brackets gfx_rowbase with push/pop ax"
+  },
+  {
+   "file": "kernel/softgfx.inc",
+   "old_text": ";           prologue at .pops. BX (`inc bx` at .nextrow) and BP (`add ax,bp`)",
+   "new_text": ";           prologue at .pops. BX (`inc bx` at .nextrow) and BP (`add\n;           [gfx_blit_sv],bp`)",
+   "why": ".nextrow's source step is `add [gfx_blit_sv], bp` (vga12.inc:2252)"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "decode), the table and the plane rows are `.lowbss`, so **`DS` becomes\n  `LOW_SEG` and neither needs an override**, and `ES` becomes the framebuffer",
+   "new_text": "decode), the table is `.lowbss` and read `ss:`, the plane rows are `.vgabuf`\n  (§39.22), so **`DS` becomes `VGABUF_SEG`** and every `.lowbss` word in the\n  decode needs `ss:`, and `ES` becomes the framebuffer",
+   "why": "vga_blit_prow sets DS from VGABUF_SEG (or rom_vgabw/mega_vbsel) at vga12.inc:2585-2601 and reads [ss:bx+vga_p4tab]; vga_pbuf is .vgabuf (7166-7176)"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "- **The four plane rows are staged in `.lowbss` and blitted per plane**, not",
+   "new_text": "- **The four plane rows are staged in `.vgabuf` (§39.22) and blitted per plane**, not",
+   "why": "vga_pbuf is declared under `section .vgabuf` (vga12.inc:7166-7176)"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "API slot 0x0320. `kern_big` only — the small build refuses with CF=1 |",
+   "new_text": "API slot 0x0320. Both kernels since §5.4.2.5.1; `kern_small` has no pen and refuses an x off the byte grid |",
+   "why": "gfx_blit1_x is in .cold on both builds (vga12.inc:5857-5862); kern_small's arm refuses only `test al,7` != 0 (5911-5914)"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`gfx_xor_fill` and `gfx_xor_rect` are additionally cut to it — at the\npublic entry, above the `[vid_mono]` dispatch, so the same hook serves both\nrenderers and all three adapters.",
+   "new_text": "`gfx_fill_pat`, `gfx_xor_fill` and `gfx_xor_rect` are additionally cut to it — at\nthe public entry, above the depth dispatch, so the same hook serves both\nrenderers and all three adapters. The block primitives meet a region on\ntheir own terms: `gfx_blit4`, `gfx_blit1` and `gfx_points` clip to it,\n`gfx_blitp` walks it on request (§5.4.3.6), `gfx_spans` refuses it and\n`gfx_scroll` refuses one it is not wholly inside.",
+   "why": "GFXCLIP is at gfx_fill_pat (vga12.inc:3964); gfx_b4walk (1955-1960), gfx_blit1 .frags (6019-6055), gfx_ls_box (1589), gfx_blitp bit 14 (2819), gfx_spans CLIPQ/jne .no (3562-3565), gfx_scroll wm_clip_test (5411)"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "(`gfx_pixel` … `gfx_restore`) starts with a `[vid_mono]` test and branches to\nits `bb_*` twin in softgfx.inc on a 1bpp adapter, where that renderer *is* the",
+   "new_text": "(`gfx_pixel` … `gfx_restore`) reaches a `[vid_planes]` test at its raw body,\nbelow the clip and display hooks, and branches to its `sw_*` twin in\nsoftgfx.inc on a 1bpp adapter, where that renderer *is* the",
+   "why": "gfx_fill_raw opens with VXMONO sw_fill (vga12.inc:3332), a `cmp byte [vid_planes],4 / jb` (vidext.inc:86-89); the twins are sw_* (softgfx.inc)"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "overlays — drawn and erased within one held lock — and each still opens with\na `[vid_mono]` test into its `bb_*` twin, because at 1bpp \"direct to VRAM\"",
+   "new_text": "overlays — drawn and erased within one held lock — and each still reaches\na depth test into its `sw_*` twin, because at 1bpp \"direct to VRAM\"",
+   "why": "vga_save_vram/vga_restore_vram open with VIDEXTM ..., sw_save/sw_restore (vga12.inc:4376, 4711); no bb_* label exists"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "the coordinate core `vga_rect_setup` that both renderers share (§39.3)",
+   "new_text": "`gfx_blit1`, `gfx_points`, `gfx_spans`, the pens and the theme table; the coordinate core both renderers share is `gfx_rect_setup`, in softgfx.inc (§39.3)",
+   "why": "gfx_rect_setup is softgfx.inc:96 and vga_rect_setup does not exist; gfx_points (1324), gfx_spans (3557), gfx_blit1_x (5901), gfx_pen_* (4827) and thm_* (131-195) are in vga12.inc"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "Module prefix `bb_`; included right after `vga12.inc`.",
+   "new_text": "Module prefix `sw_` (the shared `gfx_rect_setup` and `gfx_pat_stage` keep `gfx_`); included right after `vga12.inc`.",
+   "why": "every softgfx.inc label is sw_* or gfx_*; no bb_ label exists in kernel/"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "  * `SWM_SOLID` — per plane, the `[gfx_color]` bit picks a 00/FF byte; edges\n    become `(dest & ~mask) | (value & mask)`, interiors are `rep stosb`.",
+   "new_text": "  * `SWM_SOLID` — `sw_ink` reduces `[gfx_color]` through `gfx_inktab` to 00h,\n    FFh or the 50% dither; edges are one store, `dest ^= (pat ^ dest) & mask`\n    (§39.25.1), interiors are `rep stosw` and an odd tail byte.",
+   "why": "sw_ink (softgfx.inc:381-404); edge xor/and/xor (788-792); interior rep stosw + stosb (705-711)"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "**On a 1bpp adapter `[vid_planes]` is 1** and `vid_apply` sets the plane\nstride to a single paragraph — purely so `sw_xfer`'s segment compare\nterminates.",
+   "new_text": "**On a 1bpp adapter `[vid_planes]` is 1**, and `sw_xfer` makes one pass over\n`[vid_rseg]`: the plane stride and the end it walked to are gone (§39.26).",
+   "why": "no vid_rpara/vid_rend exists (grep kernel/); sw_xfer is one pass (softgfx.inc:1372-1391)"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "interval genuinely is per row. It fills the same `vga_*` scratch\n`vga_rect_setup` fills, so both renderers' bodies are the ones already there:\n1bpp goes through `sw_rect_pl` — `sw_rect`'s plane loop, split out at this\nchange and otherwise untouched — and VGA through a copy of `gfx_fill_raw`'s",
+   "new_text": "interval genuinely is per row. It answers in registers — AH/AL the edge\nmasks, BX the byte span, DI the left byte — and fills no scratch: 1bpp is\n`sw_spans`' own row loop (§5.10.4 is why it left `sw_rect`'s) and VGA a copy\nof `gfx_fill_raw`'s",
+   "why": "gfx_sp_next's header (vga12.inc:3670-3685) says it answers in registers; sw_spans does not go through sw_rect_pl (softgfx.inc:304)"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "Kernel hot-paths pass 1 (docs/plans/khp1/gfxcall.md) took three more off the\nsame floor, each measured by single-stepping a real call on MartyPC's 5150:",
+   "new_text": "Kernel hot-paths pass 1 (docs/plans/khp1/gfxcall.md) took three more off the\nsame floor, each measured by single-stepping a real call on MartyPC's 5150 —\n9 and 10 behind `KHP_FRAME` and `KHP_FPG`, knobs only kern_mega defines\n(kernel.asm's KHP block):",
+   "why": "kernel.asm:284-295 defines KHP_FRAME and KHP_FPG under %ifdef KERN_MEGA only"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "3. **The edge masks come from tables** (`vga_lmtab`/`vga_rmtab`), not from",
+   "new_text": "3. **The edge masks come from tables** (`gfx_lmtab`/`gfx_rmtab`), not from",
+   "why": "the tables are gfx_lmtab/gfx_rmtab (softgfx.inc:83-84); vga_lmtab has no definition"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "- **A plane step with bit 14 in it is refused as a request**: a caller keeps",
+   "new_text": "- **A plane step cannot carry bit 14**: it is read as the request and\n  stripped from the step, so nothing refuses it and a caller keeps",
+   "why": "gfx_blitp strips it with `and di, 0xBFFF` (vga12.inc:2855) and gfx_bpwalk with `and di, 0x3FFF` (6876); no path refuses on it"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "exactly as the rest of the UI does. `[gfx_color]` is left holding the last\ncolour drawn; every register is preserved.",
+   "new_text": "exactly as the rest of the UI does. `[gfx_color]` is UNSPECIFIED afterwards (a\nrun path leaves the last run's colour, the §5.4.1.1 and §5.4.1.3 decoders the\ncaller's); every register is preserved.",
+   "why": "vga_blit_span and gfx_blit_run store [gfx_color] (vga12.inc:2343, 3245-3250); sw_blit_row and vga_blit_prow never do"
+  }
+ ]
+}

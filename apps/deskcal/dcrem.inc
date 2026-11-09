@@ -452,4 +452,4 @@ dc_missed:
     jmp dc_rpass.x
 
 dc_s_miss:  db ' missed reminder', 0    ; ...and an `s` past one (<= 24)
-dc_s_nortc: db 'No RTC - check the time', 0
+TOASTSTR dc_s_nortc, 'No RTC - check the time'

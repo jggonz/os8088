@@ -1,0 +1,752 @@
+{
+ "area": "sched",
+ "title": "Scheduler, tasks, events",
+ "summary": "The scheduler is the best-engineered subsystem in this tree in the sense that matters: its invariants are checked rather than trusted - one 24-byte frame and one resume path, a slice layout written once in SCH_PARTITION and derived by macro with %error guards, a canary compared on every switch including task 0's, an unconditional 0xCC high-water fill and a death panel naming the culprit, a guarded hlt with two separately-reasoned lost-wakeup guards, exact 32-bit PIT accounting, and a ROM-chain private stack that survives stack-hopping BIOSes. The code defects are small: task_spawn's IF=0 window silently grew to include the slice fill (~676 us at 384 bytes), sch_rhook leaks IF=1 on its skip path on kern_big (0-byte fix: take the sti only after the skip tests and the lock raise), evq_push wakes before it copies (0-byte reorder), the two private ISR stacks have no canary and sit back to back, and the STKDIAG instrument that sized them scans from the wrong end. The real weakness is prose: about forty statements across sched.inc, events.inc, stkdiag.inc, SPEC.md 7/8/10/20.6, apps/os88api.inc and KERNEL-MEMORY.md describe replaced designs - including the SDK still telling package authors a worker gets DS = ES = CS = KERNEL_SEG while SPEC.md 20.6 says that was fixed, kern_small's slot count (7 vs 5), and an unresolved kernel-wide contradiction about whether .bss arrives zeroed (which sched_init already depends on: nothing ever stores sch_chbusy). Against prior art the one systemic gap is that a task can block only on time: every other wait is a sleep-poll or a yield-spin, and sch_wake_ui is a one-task special case of a missing per-task wake; an AmigaOS-Signal / SysV-wakeup style task_wake with a sticky pending bit is ~25-30 resident bytes and an additive cell, and is the change of model worth making. A one-shot UI wake boost (~22 bytes) is the cheap form of the priority every peer (OS/2, GEOS, AmigaOS) gave its interactive thread, to be taken only if a two-worker measurement moves.",
+ "strengths": [
+  {
+   "title": "One frame format, one resume path, one frame builder",
+   "why": "sch_isr, task_yield and task_spawn all produce the frame sch_resume pops, and sch_frame is the single body both task_spawn and the compactor's worker restart call, so two paths that must agree word for word cannot drift.",
+   "evidence": "kernel/sched.inc:28-42, 1075-1107, 2549-2559; kernel/memory.inc:3324"
+  },
+  {
+   "title": "The slice layout is data written once",
+   "why": "SCH_PARTITION expands into the counters/asserts, sch_stkbase and sch_stksize; ascending order (first fit = smallest fit), evenness, minimum size, count and total are build-time errors. This is the pattern every hand-mirrored table should copy.",
+   "evidence": "kernel/sched.inc:198-269, 2822-2857"
+  },
+  {
+   "title": "Thin stacks are checked, not trusted",
+   "why": "Canary on every switch away including task 0, unconditional 0xCC fill at spawn so the shipping kernel's high water is readable on the field machine, and a death panel that moves off the dead stack first and prints slot, SP and instance name.",
+   "evidence": "kernel/sched.inc:366-377, 983-997, 2445-2449, 2686-2724"
+  },
+  {
+   "title": "Race-correct idle and UI blocking",
+   "why": "sch_wake_ui's one-word store feeds two lost-wakeup guards, each test-halt-clear in one IF=0 window with STI's shadow covering hlt; the masked-IRQ0 fail-safe spins instead of hanging; every READY-making event posts sch_idlewake and the fallback spends it.",
+   "evidence": "kernel/sched.inc:700-725, 750-800, 820-822, 2371, 2504; kernel/ui.inc:1169-1185"
+  },
+  {
+   "title": "Exact per-task accounting at negligible cost",
+   "why": "32-bit [ticks]:phase stamps with the IRR coherence test, charged only on a real change, paused rather than wrong under sub-ticks - no peer of the period had exact per-task CPU time.",
+   "evidence": "kernel/sched.inc:1272-1320, 2534-2541"
+  },
+  {
+   "title": "The ROM is fenced",
+   "why": "The int 08h chain runs on a private stack only when SS is ours, sch_switch refuses to park a foreign SS, and a nested tick accounts and wakes but never switches - correct paranoia for an OS calling int 13h/16h with IF=1 on unknown BIOSes.",
+   "evidence": "kernel/sched.inc:2186-2238, 2270, 2382, 2417-2425"
+  },
+  {
+   "title": "Run-time mode switch with no rendezvous",
+   "why": "Pre-emptive and cooperative share every byte of state and the watchdog re-arms on every entry to sch_switch; no historical peer let the user flip this live.",
+   "evidence": "kernel/sched.inc:1392-1406, 2388-2408, 2428"
+  },
+  {
+   "title": "Event ring policy",
+   "why": "Drop-oldest with the EVT_WAKE promise exception, wm_wake's own full-ring refusal, bounded per-pass drain and the wheel as a level - Mac OS PostEvent also dropped the oldest; os8088 adds the promise exception.",
+   "evidence": "kernel/events.inc:95-116; kernel/wm.inc:2347-2365; SPEC.md 10.1-10.4"
+  },
+  {
+   "title": "Word-as-two-bytes tricks are guarded at the declaration",
+   "why": "Every paired store (uiwake/idlewake, idleslot/top, rbusy/lock, fast/fcnt, T_INST/T_FLAGS, spl_busy/spl_quiet) has an %error, so a reorder of .bss fails the build instead of the machine.",
+   "evidence": "kernel/sched.inc:1018-1020, 2345-2347, 3005-3022, 3085-3090"
+  }
+ ],
+ "findings": [
+  {
+   "id": "sched-1",
+   "kind": "hazard",
+   "severity": "medium",
+   "title": "task_spawn holds IF=0 across the whole 0xCC slice fill",
+   "detail": "The cli at task_spawn's head covers the rep stosw of the entire slice. PERFORMANCE.md measures RAM rep stosw at 1.76 us/byte, so a 384 slice is ~676 us at IF=0 (338 us at 192) plus ~30 stores. The window was priced when the fill was KFZ-only and never re-priced: the routine header and SPEC.md 8 still say '~30 stores with no I/O' (the fill's own comment, sched.inc:972-976, does admit 'a few hundred microseconds' and 'runs inside the spawn's cli'). 676 us is ~4 lost pulses of a 5.5 kHz speaker-sample ISR (SPEC.md 34.11.3 counts each 864-cycle IF=0 stretch as one) and two-thirds of a 9600-baud UART byte; spawns happen at every launch and every SB stream open (the transient refill/drain tasks).",
+   "evidence": [
+    "kernel/sched.inc:914-915 pushf/cli",
+    "kernel/sched.inc:983-989 rep stosw of the slice inside the window",
+    "kernel/sched.inc:882-883 '~30 stores with no I/O'",
+    "SPEC.md:12446 same claim",
+    "PERFORMANCE.md:298 rep stosw 1.76 us/byte"
+   ],
+   "recommendation": "Reserve the slot under the cli (T_STATE = 3, which the wake loop and scan ignore and every T_STATE!=0 reader treats as occupied; zero T_FLAGS in the same store), popf/pushf back to the caller's IF, fill and build the frame, then cli for the sch_top raise and the publish. Check first that no snapshot reader (the Task Manager's SS_TSTATE copy) shows a package the new value 3, or document it. Fix the two '~30 stores' sentences regardless.",
+   "phase": "now",
+   "bytes_est": "+8 .text resident",
+   "verdict": "confirmed",
+   "verify_note": "Re-read task_spawn (sched.inc:902-1053): pushf/cli at 914-915 is not undone until .done's popf, and the rep stosw at 989 runs inside. T_STATE readers outside sched.inc (instance.inc:682,707; mega.inc:380,4226) compare with 0 or 2, so a reserved 3 reads as occupied and not sleeping; the remaining risk is a published snapshot showing 3, added to the recommendation."
+  },
+  {
+   "id": "sched-2",
+   "kind": "bug",
+   "severity": "low",
+   "title": "sch_rhook returns IF=1 on its skip path under a sample ISR (kern_big)",
+   "detail": "sch_rhook sti's when [spk_seg] is open before its three skip tests; the taken path re-cli's but the skip path rets with IF=1, against its own 'out: ... IF=0' and sch_isr's 'IF=0 throughout ... never sti'. On the .full call the rest of the tick (sch_account, snd_tick and DSV_TICK - which SPEC.md 8.7.5 says runs at IF=0 - and the wake loop) runs interruptible, deepening nesting on sch_chstack. It does not reach sch_switch, since each skip reason independently refuses the switch (chbusy -> .tres, rbusy implies the hook raised sch_lock -> .tres, foreign SS -> sch_switch's own test). On the .rate call the skip path goes straight to sch_resume under a sample ISR, so only the .full call matters.",
+   "evidence": [
+    "kernel/sched.inc:595-598 sti before the tests",
+    "kernel/sched.inc:600-609 skip tests",
+    "kernel/sched.inc:624-627 cli only on the taken path",
+    "kernel/sched.inc:2240-2243 the .full call site",
+    "kernel/sched.inc:1435 header claim"
+   ],
+   "recommendation": "Move the `cmp word [spk_seg], 0 / je / sti` block from the head to just after the `add word [sch_rbusy], 0x0101` (skip tests and lock raise at IF=0, then the sti, then the call): 0 bytes, the skip path never sti's, and the tests are tens of clocks against the 864-cycle pulse budget. Do NOT take the reorder `KDS / sub word [sch_rbusy],0x0101 / .skip: cli / ret`: it leaves one instruction boundary at IF=1 with the lock already lowered, where a nested tick could switch away from inside this ISR - the thing sch_rhook raises sch_lock to prevent.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "corrected",
+   "verify_note": "Bug confirmed by reading sch_rhook (sched.inc:594-627) and both call sites. The reviewer's fix was wrong: lowering sch_rbusy/sch_lock before the cli opens a window where a nested IRQ0 (a speaker pulse chaining into sch_isr) sees sch_lock = 0 at IF=1 and can reach sch_switch inside the outer ISR. Replaced with the sti-after-the-tests reorder."
+  },
+  {
+   "id": "sched-3",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "sch_lock has become a general Forbid, and yield/sleep/gfx_lock silently degrade under it",
+   "detail": "SPEC.md 7 says exactly two routines raise sch_lock; the tree raises it in disk.inc, diskw.inc, memory.inc, xmem.inc, fsx.inc, hiber.inc, mega.inc, megados.inc and snd.inc. Under it task_yield self-resumes, so a gfx_lock owned by another task spins for ever, and task_sleep stores T_STATE=2 and returns at once, leaving a running task marked sleeping until the next unlocked switch applies the sleep late. memory.inc dropping the lock around a park shows the rule is known; nothing states or enforces it. AmigaOS's Forbid had the same counter and defined Wait() inside it by saving the nest count per task.",
+   "evidence": [
+    "kernel/sched.inc:1881-1882 locked yield resumes self",
+    "kernel/sched.inc:1151-1164 task_sleep",
+    "kernel/vga12.inc:5091-5104 gfx_lock spins through task_yield",
+    "kernel/memory.inc:4040,4101-4103; kernel/xmem.inc:640,662; kernel/hiber.inc:1843; kernel/megados.inc:302; kernel/disk.inc:6405",
+    "SPEC.md:10687"
+   ],
+   "recommendation": "Rewrite SPEC.md 7's paragraph to describe sch_lock as a nestable pre-emption-off bracket with its holder list, and state beside it that nothing inside may yield, sleep or take gfx_lock (doc fix below). Optionally make task_sleep a no-op under the lock (cmp byte [sch_lock],0 / jne before the state store) and add a knob assertion in task_yield's locked arm.",
+   "phase": "now",
+   "bytes_est": "0 (doc); +7 .text resident for the task_sleep guard",
+   "prior_art": "AmigaOS Exec Forbid/Permit (TDNestCnt saved per task so Wait() inside Forbid is legal)",
+   "verdict": "confirmed",
+   "verify_note": "grep of `inc byte [sch_lock]` finds raisers in all the listed files plus mega.inc (a dozen sites); task_yield's .save jumps to sch_isr.sres while it is set; task_sleep stores T_STATE=2 then calls task_yield, which returns at once under the lock."
+  },
+  {
+   "id": "sched-4",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "OSAPI_TASK_SLEEP on the UI task ends at the next input, undocumented",
+   "detail": "sch_wake_ui stores T_STATE=1 unconditionally on every event, mouse byte and keystroke. Window callbacks run on the UI task (all but a W_PAINT a worker's repaint dispatches), so a callback that sleeps for a timed effect is cut short by the next input; the cell says only 'AX = ticks to sleep'.",
+   "evidence": [
+    "kernel/sched.inc:722 unconditional T_STATE store",
+    "SPEC.md 8.1.2.2 its three callers",
+    "kernel/ui.inc:1173-1174 the only intended UI sleep",
+    "apps/os88api.inc:344"
+   ],
+   "recommendation": "Document on the cell: on the UI task the sleep ends at the first input; loop on OSAPI_GET_TICKS for a minimum. (The cell's %define comment is in abilock's fingerprint: abilock --update, no PKG_FMT bump.) If ever needed, a distinct state for .idle's block lets sch_wake_ui promote only that one (~+8).",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "sch_wake_ui (sched.inc:700-723) writes [sch_tasks+T_STATE] = 1 with no state test; callers include evq_push and kbm_isr. Wording narrowed: not every callback runs on the UI task (SPEC.md 20.6 W_PAINT)."
+  },
+  {
+   "id": "sched-5",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "task_sleep's range is 1..32768 and unstated",
+   "detail": "The wake test is the sign of [ticks] - T_WAKE, so AX = 32769..65535 is already 'past' and wakes at the next tick, as do AX = 0 and AX = 1. A package sleeping 'an hour' gets 55 ms.",
+   "evidence": [
+    "kernel/sched.inc:2365-2366 cmp/js",
+    "kernel/sched.inc:1157-1159",
+    "apps/os88api.inc:344",
+    "SPEC.md 8 task_sleep bullet"
+   ],
+   "recommendation": "State 1..32768 (0 and 1 both mean the next tick) on the cell and in SPEC.md 8; the cell comment is fingerprinted (abilock --update without a bump).",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "corrected",
+   "verify_note": "Worked the js test: with T_WAKE = t0 + AX, the scan at t0 + k sees k - AX; AX = 0x8000 stays negative until k = 0x8000, so 32768 works exactly, and 0x8001..0xFFFF read positive at once. The reviewer's 0..32767 / '0x8000 wakes early' was off by one."
+  },
+  {
+   "id": "sched-6",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "evq_push wakes the UI task before the record is in the ring",
+   "detail": "sch_wake_ui is called before pushf/cli. Today's producers are safe (mouse ISR at IF=0, wm_wake under its own cli, kbm_post on the UI task itself), but the routine's contract admits a task-context caller with IF=1, for whom a pre-emption between wake and copy lets the UI task spend sch_uiwake on an empty ring and sleep a tick - the failure SPEC.md 8.1.2.3 exists to prevent.",
+   "evidence": [
+    "kernel/events.inc:84 call sch_wake_ui",
+    "kernel/events.inc:92-93 pushf/cli",
+    "kernel/wm.inc:2345-2359",
+    "kernel/mouse.inc:3567-3577"
+   ],
+   "recommendation": "Move the call to just after the cli.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "Read evq_push (events.inc:83-158) and ui.inc:1158-1182: the UI task spends sch_uiwake at .woke and sleeps on the next .idle, so a wake that precedes its record by a pre-emption is lost until the tick. sch_wake_ui is two stores and safe at IF=0."
+  },
+  {
+   "id": "sched-7",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "The two private ISR stacks have no canary and sit back to back",
+   "detail": "sch_chstack hosts code the kernel does not own - the ROM's int 08h, its int 1Ch chain, whatever nests in the ROM's sti window, and possibly a DOS program's int 1Ch hook when the tick lands with SS=LOW_SEG. On the built kern_big map mou_pstack is at LOW_SEG:06D6..0756 and sch_chstack starts at 0756, so a chain overflow writes the top of the mouse ISR's stack, which is live exactly when a mouse IRQ nests in the ROM's window. Every task slice has a canary; these two do not.",
+   "evidence": [
+    "kernel/sched.inc:80-89 SCH_CHSTK sizing from measured ROMs",
+    "kernel/sched.inc:2937 sch_chstack",
+    "kernel/mouse.inc:6624-6635 mou_pstack in .lowbss",
+    "kernel/kernel.asm:7189-7212 include order",
+    "build/kernel.map: mou_pstack 6D6, sch_chstack 756"
+   ],
+   "recommendation": "Put SCH_MAGIC at sch_chstack's bottom and check it once per TICK, right after the chain's `mov sp, bx` (cmp word [ss:sch_chstack], SCH_MAGIC / jne to a panel that names the chain stack rather than the outgoing task), not in sch_switch on every switch. The seed cannot go in sched_init's .ovl on kern_big, which is 5,119 of its 5,120-byte bound (kernel.asm:8942) - put it in a resident init, or in the room sched-12 frees. The mouse area should guard mou_pstack the same way.",
+   "phase": "now",
+   "bytes_est": "+9..+12 .text resident (check + seed), ~25 clocks a tick",
+   "verdict": "corrected",
+   "verify_note": "Adjacency confirmed on build/kernel.map. Corrected: the reviewer's 'seed in the overlay, free' does not fit (.ovl is 0x13FF = 5,119 bytes against the 512-rounded bound of 5,120), a check in sch_switch is a hot-path cost on every switch (and t_hotpar parity), and sch_stkdie would blame the outgoing task. A per-tick check after the chain is cheaper and names the right culprit."
+  },
+  {
+   "id": "sched-8",
+   "kind": "bug",
+   "severity": "low",
+   "title": "STKDIAG's private-stack high waters scan from the wrong end",
+   "detail": "sd_cwater and sd_mwater scan down from the top for the first byte still equal to the 0xE5 sentinel, so any byte written during the deepest excursion that happens to be 0xE5 stops the scan early, as does any unwritten gap (a `sub sp` frame). sd_water scans up from the base for the first non-fill byte, which is robust. sd_cwater's result is banked as sd_rom08, 'the number that sizes SCH_CHSTK' (stkdiag.inc:713-714), and sd_mwater's sizes MOU_PSTK. Knob-only.",
+   "evidence": [
+    "kernel/stkdiag.inc:303-329 sd_cwater",
+    "kernel/stkdiag.inc:363-389 sd_mwater",
+    "kernel/stkdiag.inc:230-273 sd_water bottom-up",
+    "kernel/stkdiag.inc:713-714 sd_rom08"
+   ],
+   "recommendation": "Scan bottom-up (cld / repe scasb from the base; depth = top - first non-sentinel), and re-take any field number that came from this panel.",
+   "phase": "now",
+   "bytes_est": "0 (STKDIAG knob only)",
+   "verdict": "confirmed",
+   "verify_note": "Read both routines: std / repne scasb from top-1 for the first 0xE5, so an early match under-reports. The '~20%' chance assumes random bytes; real frames hold IPs, flags and F000 segments, so the odds are lower but non-zero, and gaps under-report regardless."
+  },
+  {
+   "id": "sched-9",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "The death panel trusts the table it calls suspect",
+   "detail": "sch_diepanel reads T_INST and, unless 0xFF, calls inst_ptr (which cbw's the index) and prints I_NAME with no bound on the index, though its own header says every record is suspect after an overrun; it also draws into whatever mode is live, including an fsx bracket's foreign mode.",
+   "evidence": [
+    "kernel/sched.inc:2692-2699",
+    "kernel/sched.inc:2713-2721",
+    "kernel/instance.inc:786-797 inst_ptr cbw"
+   ],
+   "recommendation": "Record. If touched: cmp al, INST_MAX / jae .name.",
+   "phase": "record",
+   "bytes_est": "+4 .text resident",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked: no bound before `call inst_ptr`; an index >= 80h sign-extends below inst_tab and sch_dpstr prints until a NUL."
+  },
+  {
+   "id": "sched-10",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "Comment rot is the area's real defect",
+   "detail": "sched.inc is 3,092 lines for ~700 of code and its comments carry history ('it was X until size pass N'). Some fifteen statements in sched.inc alone describe replaced designs (multiply/shift canary, sch_stacks + slot*SCH_STACK in three places, the 256 path 'still there', kmain line numbers, .boot2 claims for an .ovl body, an orphaned sch_switch header after sch_clsbytes, a dangling fragment, 'all tasks run CS = DS = KERNEL_SEG'); stkdiag.inc has headers for routines that no longer exist. One stale statement is not a comment: the %error at sched.inc:121 ('it is the largest class and every class is one') is false since 192-byte classes exist, and the %if it guards protects nothing any more.",
+   "evidence": [
+    "kernel/sched.inc:20, 113, 121, 1515, 2883-2900, 2920, 2953",
+    "kernel/stkdiag.inc:196-219, 450-452"
+   ],
+   "recommendation": "One pass that strips history from code comments (SPEC.md and plans hold it), keeps invariant + reason, and moves the sch_switch header above sch_switch:. Drop or re-word the sched.inc:121 %if/%error as a code change (not a comment fix).",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "Each cited line re-read; the comment-only fixes are in doc_fixes. The sched.inc:121 item was moved here from the doc list because it is an %error string, which a comment-only fix may not touch."
+  },
+  {
+   "id": "sched-11",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "fsx_rtick is a third copy of the chain swap and the hook guard",
+   "detail": "kern_mega's real-mode bracket ISR re-spells sch_isr's chain swap and sch_rhook's skip tests, including the same sti-before-the-tests shape (harmless there, since its skip path is the ISR's own exit), so fixes such as sched-7's chain canary do not reach it.",
+   "evidence": [
+    "kernel/fsx.inc:1364-1425",
+    "kernel/sched.inc:595-627, 2186-2238"
+   ],
+   "recommendation": "One macro for the swap/chain/restore and one for the hook guard, used at both sites.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "corrected",
+   "verify_note": "Copy confirmed (fsx.inc:1382-1427). Corrected: sched-2's IF leak does not exist in fsx_rtick, whose .out path pops and irets, restoring the interrupted FLAGS."
+  },
+  {
+   "id": "sched-12",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "sched_init's zero stores rest on an unresolved contradiction about .bss",
+   "detail": "sched.inc and SPEC.md 8 say nothing clears .bss at boot; events.inc, blank.inc, dock.inc, memory.inc, SPEC.md 10 and SPEC.md 12.8.5.1 (which measured 0x00 on a live machine) say .bss arrives zeroed from the image padding. The scheduler itself already depends on the latter: nothing in the tree stores [sch_chbusy] before sch_isr's first test of it, and a non-zero byte there would skip every chain and refuse every switch. If .bss is zero, ~30 bytes of zero stores sit in kern_big's boot-overlay window, which is 5,119 of its 5,120-byte bound.",
+   "evidence": [
+    "kernel/sched.inc:328-333, 341-365, 397-403",
+    "kernel/sched.inc:2187, 2998 sch_chbusy tested, never stored",
+    "kernel/events.inc:61-65",
+    "kernel/blank.inc:120-122",
+    "SPEC.md:12399-12402, 12869, 27815-27817",
+    "docs/plans/khp1/sched.md section 9",
+    "build/kernel-full.bin: 0 non-zero bytes over .bss's file span 0xB788..0xCC7E"
+   ],
+   "recommendation": "Rule once in SPEC.md 2.6 (with a gate that the padding covers .bss on every kernel); then either keep the stores as deliberate and fix their comments, or drop them and give the overlay its room. Either way sch_chbusy needs a store or the rule.",
+   "phase": "now",
+   "bytes_est": "-30 .ovl (not resident) if dropped; 0 otherwise",
+   "verdict": "confirmed",
+   "verify_note": "Verified on build/kernel-full.bin that the bytes under .bss are padding and all zero on kern_big; found sch_chbusy is never initialised (kern_big's word store at sched.inc:337 covers sch_rbusy/sch_lock, and sch_chbusy is the byte below them). No gate asserting the padding was found. SPEC.md 8's sentence is fixed below to the measured state without pre-empting the ruling."
+  },
+  {
+   "id": "sched-13",
+   "kind": "perf",
+   "severity": "low",
+   "title": "evq_pop banks DS for a prefix hazard that cannot occur",
+   "detail": "The reason given ('the 8086 LOSES the prefix when a string op restarts') applies only to REP string instructions with an override; four unrepeated movsw cannot be interrupted mid-instruction. Four ss movsw are the same 4 bytes and ~35 clocks cheaper on the 8088 than push ds/push ss/pop ds/pop ds (52 clocks of segment push/pop against 4 x 3.78 for the prefixes).",
+   "evidence": [
+    "kernel/events.inc:264-271",
+    "SPEC.md:18180-18185 repeats it and still says rep movsw"
+   ],
+   "recommendation": "Take the prefix form, or keep the banking and correct the reason in both places (doc fixes below do the latter).",
+   "phase": "now",
+   "bytes_est": "0 (~35 clocks a pop)",
+   "verdict": "confirmed",
+   "verify_note": "Copy is push ds / push ss / pop ds / 4 x movsw / pop ds with no REP; the prefix-loss erratum needs an interrupted REP."
+  },
+  {
+   "id": "sched-14",
+   "kind": "size",
+   "severity": "low",
+   "title": "sch_clsbytes row 0 duplicates row 4",
+   "detail": "Rows 0 and 4 are both SCH_STACK, and inst_pkg_spawn already maps an out-of-range index to CX=0 (task_spawn's 'largest'). A dec bx before the bound check makes 0 out of range and drops the row.",
+   "evidence": [
+    "kernel/sched.inc:2872-2878",
+    "kernel/instance.inc:2105-2111"
+   ],
+   "recommendation": "dec bx; cmp bx, SCH_NCLASS (with row 0 dropped); only if the file is open anyway. tests/unit/t_stkclass.py's CLASS_BYTES and tools/os88pkg.py's STK_CLASS_MAX mirror the index meanings, not the table, and need no change.",
+   "phase": "now",
+   "bytes_est": "-1 .text resident",
+   "verdict": "confirmed",
+   "verify_note": "inst_pkg_spawn: `cmp bx, SCH_NCLASS / jae .havecls` with CX = 0 preset; 0 -> 0xFFFF after dec is out of range. Net: +1 (dec) -2 (row)."
+  },
+  {
+   "id": "sched-15",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "A task can block only on time - there is no wait-on-anything primitive",
+   "detail": "Every non-time wait polls: the SB refill task wakes every tick to look, gfx_lock waiters stay READY and spin through task_yield, workers poll OSAPI_TASK_ALIVE, and sch_wake_ui is a one-task special case of the missing primitive. On an 8088 a poll that finds nothing still costs a switch in and out.",
+   "evidence": [
+    "drivers/sound/sb.inc:2539-2542 one-tick pacing",
+    "kernel/vga12.inc:5091-5104",
+    "kernel/sched.inc:700-725 sch_wake_ui",
+    "kernel/ui.inc:1169-1185 the hand-made pending-wake guard"
+   ],
+   "recommendation": "task_wake(AL=slot): if T_STATE==2 make it 1 and post sch_idlewake, else set a sticky wake-pending bit (T_FLAGS bit 1); task_sleep tests-and-clears it under its own cli and returns at once if set. ISR-safe, no record growth, plus a rare OSAPI cell appended at the end (additive, abilock --update without a PKG_FMT bump). Enables IRQ-driven SB refill, NIC-driven ETHER service, sched-16 and sched-17.",
+   "phase": "now",
+   "bytes_est": "+24..+30 .text resident, +6 API cell",
+   "prior_art": "AmigaOS Exec Signal/Wait (one signal bit); Unix System V sleep(chan)/wakeup(chan) with the slot as channel; OS/2 DosSemWait",
+   "verdict": "confirmed",
+   "verify_note": "Premises re-read: sbl_refill_task sleeps 1 tick and polls; gfx_lock .block yields and retries; task_sleep has no pending-wake test today. Not in ABI-BREAK-LIST or KERNEL-BYTE-QUEUE. T_FLAGS bit 1 is free (only TF_SERVICE = bit 0 is defined)."
+  },
+  {
+   "id": "sched-16",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "A UI wake gets no priority over ready workers",
+   "detail": "sch_switch scans round-robin from cur+1, so a UI task woken by input while two or more workers are runnable waits for the tick and then for every ready worker ahead of slot 0: up to N x 55 ms. SPEC.md 7.3 fixed the lock half of starvation and explicitly left 'the UI task does not run more often' open.",
+   "evidence": [
+    "kernel/sched.inc:2468-2502 the scan",
+    "SPEC.md:18270 'This does not make the UI task run more often'"
+   ],
+   "recommendation": "One-shot boost: sch_wake_ui sets [sch_uiboost] only when task 0 was sleeping; sch_switch spends it by picking slot 0 directly when task 0 is READY and fsx_task is 0xFF. One boost per sleep-to-wake bounds worker starvation to one UI pass per input. Measure first on MartyPC with two drawing workers using 7.3's breakpoint method.",
+   "phase": "now",
+   "bytes_est": "+22 .text resident, +1 .bss",
+   "prior_art": "OS/2 1.x foreground/IO boosts; GEOS UI thread above application threads; AmigaOS input handler at priority 20",
+   "verdict": "confirmed",
+   "verify_note": "Scan order confirmed (inc dl from [sch_cur], no priority). The quoted sentence is at SPEC.md:18270 (10.1), not in 7.3."
+  },
+  {
+   "id": "sched-17",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "gfx_lock waiters poll rather than block",
+   "detail": "A blocked waiter is READY and is switched in every round only to yield again - about two switches per waiter per tick for as long as the lock is held. With sched-15, .block could sleep with the pending bit armed and gfx_unlock could wake a recorded waiter; the 7.3 fairness handover would need re-proving.",
+   "evidence": [
+    "kernel/vga12.inc:5082-5132",
+    "SPEC.md:11710 'a real ticket lock wants a per-task wait word and a scheduler that can block on it'"
+   ],
+   "recommendation": "Record until sched-15 exists and a measurement shows the spin matters.",
+   "phase": "record",
+   "bytes_est": "+12 .text resident (after sched-15)",
+   "prior_art": "Win16Mutex; OS/2 RAM semaphores",
+   "verdict": "confirmed",
+   "verify_note": "gfx_lock .block: sti / task_yield / jmp .retry, confirmed."
+  },
+  {
+   "id": "sched-18",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "Exiting with sch_lock raised kills pre-emption for the session, and no contract says so",
+   "detail": "task_exit jumps into sch_switch without looking at sch_lock; the forced switch succeeds and the next task runs with pre-emption off and every yield a no-op for ever. inst_task_die, the normal road, does not hold it.",
+   "evidence": [
+    "kernel/sched.inc:1189-1211",
+    "kernel/instance.inc:1921-1946"
+   ],
+   "recommendation": "Write the rule on task_exit and in SPEC.md 8: a task may not exit with sch_lock raised.",
+   "phase": "record",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "task_exit (sched.inc:1189-1211) reads nothing of sch_lock and enters sch_switch, which does not test it either."
+  },
+  {
+   "id": "sched-19",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "16-bit ticks bound every deadline at 30 minutes",
+   "detail": "[ticks], T_WAKE and OSAPI_GET_TICKS are 16-bit; Mac Ticks, Win16 GetTickCount and AmigaOS timer.device were 32-bit. A high word incremented on the carry is cheap; answering DX from OSAPI_GET_TICKS changes a register the cell may today preserve.",
+   "evidence": [
+    "kernel/sched.inc:2976",
+    "apps/os88api.inc:345"
+   ],
+   "recommendation": "Record for the flag day only if a package asks; the RTC ladder covers long intervals today.",
+   "phase": "flagday",
+   "bytes_est": "+2 .bss, +6 .text resident",
+   "verdict": "confirmed",
+   "verify_note": "ticks is resw 1 and the cell is `out AX = [ticks]`."
+  }
+ ],
+ "doc_fixes": [
+  {
+   "file": "kernel/sched.inc",
+   "old_text": "; 1..MAX_TASKS-1 are dynamic (task_spawn / task_exit), each with an\n; SCH_STACK-byte stack in .lowbss.",
+   "new_text": "; 1..MAX_TASKS-1 are dynamic (task_spawn / task_exit), each with a stack\n; from SCH_PARTITION's fixed list (128..SCH_STACK bytes) in .lowbss.",
+   "why": "SCH_PARTITION (sched.inc:198-235) cuts per-slot slices of 128..384 bytes; only the largest is SCH_STACK."
+  },
+  {
+   "file": "kernel/sched.inc",
+   "old_text": "; All tasks run CS = DS = KERNEL_SEG and SS = LOW_SEG (SPEC.md 1/2.1): the",
+   "new_text": "; All tasks run SS = LOW_SEG (SPEC.md 1/2.1) - and CS = DS = KERNEL_SEG,\n; except a package's worker, whose CS = DS is its own segment (SPEC.md 20.6): the",
+   "why": "sch_frame (sched.inc:1075-1104) writes the BX segment into the DS and CS slots; inst_pkg_spawn passes the package's I_SPTR."
+  },
+  {
+   "file": "kernel/sched.inc",
+   "old_text": "                                ; slice's base with a byte swap; that path is\n                                ; still there for 256 and there is a general\n                                ; one beside it for any multiple of 128, so\n                                ; changing this and MAX_TASKS is the whole of\n                                ; the change (docs/KERNEL-MEMORY.md, \"Task",
+   "new_text": "                                ; slice's base with a byte swap. The base is\n                                ; a lookup in sch_stkbase now (SPEC.md 8.6),\n                                ; so changing SCH_PARTITION and MAX_TASKS is\n                                ; the whole of\n                                ; the change (docs/KERNEL-MEMORY.md, \"Task",
+   "why": "sch_switch reads the canary base from sch_stkbase (sched.inc:2445-2449); no byte-swap or multiple-of-128 path exists."
+  },
+  {
+   "file": "kernel/sched.inc",
+   "old_text": "; 832 bytes against kern_big's 2,816. The COUNT is the owner's; what is",
+   "new_text": "; 960 bytes against kern_big's 2,816. The COUNT is the owner's; what is",
+   "why": "kern_small's SCH_PARTITION is 128+192+256+384 = 960 (sched.inc:198-204)."
+  },
+  {
+   "file": "kernel/sched.inc",
+   "old_text": "; kmain:4170 is its ONE caller and there is no second entry: nothing",
+   "new_text": "; kmain's OVBCALL is its ONE caller and there is no second entry: nothing",
+   "why": "The call is `OVBCALL sched_init` at kernel.asm:5686; kmain line numbers have moved."
+  },
+  {
+   "file": "kernel/sched.inc",
+   "old_text": "; as a CONSTANT. In `.boot2` CS is the BLOB's, and the blob is about to become\n; somebody's heap claim, so `mov [es:0x22], cs` would install a vector into",
+   "new_text": "; as a CONSTANT. On kern_big this body is `.ovl` and CS is FAT_SEG, whose bytes\n; the first mount takes (SPEC.md 2.5); on kern_small it is `.boot2` and CS is\n; the BLOB's, which is about to become somebody's heap claim. Either way\n; `mov [es:0x22], cs` would install a vector into",
+   "why": "sched_init is `section .ovl` on kern_big (sched.inc:301-305), entered `call FAT_SEG:` via OVBCALL (kernel.asm:5449-5485); only kern_small uses .boot2."
+  },
+  {
+   "file": "kernel/sched.inc",
+   "old_text": ";   * sched_init's seed at the top of this file is `.ovl`, the boot overlay,",
+   "new_text": ";   * sched_init's seed at the top of this file is boot-overlay code (`.ovl`\n;     on kern_big, `.boot2` on kern_small),",
+   "why": "sched_init is `.boot2` on kern_small (sched.inc:301-305)."
+  },
+  {
+   "file": "kernel/sched.inc",
+   "old_text": "; IN THE BOOT OVERLAY (docs/plans/LAST-DROP-BYTES.md row 16). One caller, kmain:4182,\n; and the idle task it spawns outlives it by construction - a task's code is\n; sch_idle_body in `.text`, which is what BX = 0 above names. Taking the address\n; of a `.text` label from `.boot2` is correct and taking the address of an `.boot2`\n; one would not be:",
+   "new_text": "; IN THE BOOT OVERLAY (docs/plans/LAST-DROP-BYTES.md row 16). One caller, kmain's\n; OVLCALL, and the idle task it spawns outlives it by construction - a task's code is\n; sch_idle_body in `.text`, which is what BX = 0 above names. Taking the address\n; of a `.text` label from `.ovl` is correct and taking the address of an `.ovl`\n; one would not be:",
+   "why": "sch_idle_start is `section .ovl` on both arms (sched.inc:815) and its call is `OVLCALL sch_idle_start` at kernel.asm:5698."
+  },
+  {
+   "file": "kernel/sched.inc",
+   "old_text": "; spawn argument, other GP regs zero, DS = ES = KERNEL_SEG, CS = KERNEL_SEG,",
+   "new_text": "; spawn argument, other GP regs zero, DS = CS = the segment in BX (KERNEL_SEG\n; when BX = 0), ES = KERNEL_SEG,",
+   "why": "sch_frame writes BP (the BX segment) into the DS and CS slots and KERNEL_SEG into ES (sched.inc:1075-1104); the routine's own in: block says so."
+  },
+  {
+   "file": "kernel/sched.inc",
+   "old_text": "; leaked for the session. The window is ~30 stores with no I/O, shorter than\n; task_exit's.",
+   "new_text": "; leaked for the session. The window is the slice's 0xCC fill - one `rep\n; stosw` of the whole slice, ~0.7 ms on a 384-byte one at PERFORMANCE.md's\n; 1.76 us a byte - plus ~30 stores, no I/O; longer than task_exit's.",
+   "why": "pushf/cli at sched.inc:914-915 is not undone until .done's popf, and the rep stosw fill (983-989) runs inside it."
+  },
+  {
+   "file": "kernel/sched.inc",
+   "old_text": "; clobbers: AX, BX, CX, DX, SI - on BOTH arms now (CX:DX the PREVIOUS stamp\n;           on the charging arm, and BX untouched on the early-out, since\n;           pass 18 - nothing reads either);",
+   "new_text": "; clobbers: AX and SI on both arms; BX, CX and DX on the charging arm only\n;           (CX:DX the PREVIOUS stamp there; the early-out jumps past the\n;           latch and touches none of the three, since pass 18 - nothing\n;           reads either);",
+   "why": "sch_account's early-out (jne .idle at sched.inc:1283-1284) runs only mov al/cbw/shl/xchg si,ax first, so it writes AX and SI alone."
+  },
+  {
+   "file": "kernel/sched.inc",
+   "old_text": "; (see task_yield above), so raising sch_lock would not make multitasking",
+   "new_text": "; (see task_yield below), so raising sch_lock would not make multitasking",
+   "why": "task_yield is defined at sched.inc:1809, below cp_schset (1392)."
+  },
+  {
+   "file": "kernel/sched.inc",
+   "old_text": "; IF=0 throughout; calls no BIOS service beyond the chain; never sti.",
+   "new_text": "; IF=0 throughout, except inside sch_rhook on kern_big while a sample ISR is\n; open (SPEC.md 34.11), where the hook runs at IF=1; calls no BIOS service\n; beyond the chain, and sch_isr itself never sti's.",
+   "why": "sch_rhook sti's when [spk_seg] is non-zero (sched.inc:595-598) and is called from both .rate (2167) and .nortick (2242)."
+  },
+  {
+   "file": "kernel/sched.inc",
+   "old_text": "                                ; sch_stacks + slot * SCH_STACK, never from",
+   "new_text": "                                ; sch_stkbase[slot] + sch_stksize[slot], never from",
+   "why": "The KFZ deep sampler reads sch_stkbase and sch_stksize (sched.inc:1969-1971)."
+  },
+  {
+   "file": "kernel/sched.inc",
+   "old_text": "    dw 128                      ; 1: a sleeper. The idle task, a C package\n    dw 192                      ;    whose worker only sleeps, a Timer, a\n    dw 256                      ;    Bounce, a driver's stream task",
+   "new_text": "    dw 128                      ; 1: a sleeper - the idle task, Bounce\n    dw 192                      ; 2: most workers, the modal class\n    dw 256                      ; 3: a worker that draws through a deep chain",
+   "why": "SCH_PARTITION's note (sched.inc:210-219) says C packages ask 256 and the driver stream task 192, the Timer has had no task since SPEC.md 14.7; row labels match OS88_STACK_* in apps/os88api.inc:4268-4273."
+  },
+  {
+   "file": "kernel/sched.inc",
+   "old_text": "; record, picks the next ready task round-robin (falling back to the current\n; task if nothing is ready), and resumes it.\n;\n; RE-ARMING sch_hold is the FIRST thing done here, and deliberately on the",
+   "new_text": "; record, picks the next ready task round-robin (falling back to the idle task\n; if nothing is ready - or, before sch_idle_start, to the outgoing one), and\n; resumes it. (This header describes sch_switch:, which is above, after\n; sch_isr - not sch_clsbytes, which it follows.)\n;\n; RE-ARMING sch_hold is the first thing done once SS is known to be ours, and deliberately on the",
+   "why": "The fallback picks [sch_idleslot] (sched.inc:2510-2513), and the LOW_SEG test precedes the sch_hold store (2417-2428)."
+  },
+  {
+   "file": "kernel/sched.inc",
+   "old_text": "; trip the watchdog however long it runs in total; the \"nothing ready, resume\n; the outgoing task\" fallback below re-arms it too,",
+   "new_text": "; trip the watchdog however long it runs in total; the \"nothing ready\"\n; fallback re-arms it too,",
+   "why": "The fallback is the idle task now (sched.inc:2510-2513), and it is reached through the same entry that re-arms sch_hold."
+  },
+  {
+   "file": "kernel/sched.inc",
+   "old_text": "                                        ; every consumer works from\n                                        ; sch_stacks + slot * SCH_STACK -",
+   "new_text": "                                        ; every consumer works from\n                                        ; sch_stkbase[n] and sch_stksize[n] -",
+   "why": "sch_switch (2445-2449), task_spawn (954-955) and stkdiag (178-181) all look the slice up in sch_stkbase/sch_stksize."
+  },
+  {
+   "file": "kernel/sched.inc",
+   "old_text": "                                        ; either (SPEC.md 8.6)\n                                        ; of .lowbss (font_glyphs precedes\n                                        ; it). Slot 0 = the UI task runs on",
+   "new_text": "                                        ; either (SPEC.md 8.6).\n                                        ; Slot 0 = the UI task runs on",
+   "why": "A dangling two-line fragment between two complete sentences of sch_stacks' declaration comment."
+  },
+  {
+   "file": "kernel/events.inc",
+   "old_text": "; records in .bss. A FULL ring discards its OLDEST INPUT rather than refusing",
+   "new_text": "; records in .lowbss (its three indices in .bss). A FULL ring discards its\n; OLDEST INPUT rather than refusing",
+   "why": "evq_buf is declared under `section .lowbss` (events.inc:320-342); evq_head/tail/count under `.bss` (344-352)."
+  },
+  {
+   "file": "kernel/events.inc",
+   "old_text": "EV_C        equ 6               ; word: payload c (unused so far)",
+   "new_text": "EV_C        equ 6               ; word: payload c (mouse events: birth tick)",
+   "why": "EVT_MDOWN/MUP/RDOWN carry c = birth tick (events.inc:19-21); the mouse producer stores it (mouse.inc:3574-3575)."
+  },
+  {
+   "file": "kernel/events.inc",
+   "old_text": "; out: nothing; drops the event silently when the queue is full",
+   "new_text": "; out: nothing. A full ring drops its OLDEST record - or this one, when the\n;      oldest is an EVT_WAKE (SPEC.md 10.1); no caller is told",
+   "why": "The .room/.full logic (events.inc:95-116) advances evq_head over the oldest unless it is EVT_WAKE."
+  },
+  {
+   "file": "kernel/events.inc",
+   "old_text": "    pop ds                      ; the copy wearing a segment prefix: the 8086\n    movsw                       ; LOSES the prefix when a string op restarts\n    movsw                       ; after an interrupt, and NMI reaches inside the\n    movsw                       ; cli above. EVQ_RECSIZE / 2 = 4, unrolled -",
+   "new_text": "    pop ds                      ; the copy wearing four `ss` prefixes - the same\n    movsw                       ; bytes. Either is correct here: the 8086 loses\n    movsw                       ; a prefix only when an interrupted REP string\n    movsw                       ; op restarts, and these four have no REP. EVQ_RECSIZE / 2 = 4, unrolled -",
+   "why": "The copy is four unrepeated movsw (events.inc:267-270); an instruction without REP cannot be interrupted mid-way, so the prefix-loss erratum does not apply."
+  },
+  {
+   "file": "kernel/stkdiag.inc",
+   "old_text": "; slice of its own, so a STKDIAG kernel has two fewer worker slots than a\n; shipped one (the idle task's and this one's).",
+   "new_text": "; slice of its own, so a STKDIAG kernel has one fewer worker slot than a\n; shipped one (this one's - the idle task holds a slot on both).",
+   "why": "The idle task is spawned on every kernel (sched.inc:816-840); sd_start adds only its own (stkdiag.inc:863-877)."
+  },
+  {
+   "file": "kernel/stkdiag.inc",
+   "old_text": "; sch_switch's arithmetic, in one place that three readers here share.",
+   "new_text": "; sch_stkbase's lookup, in one place that three readers here share.",
+   "why": "sd_slice_base is a lookup in sch_stkbase (stkdiag.inc:178-181); sch_switch has no arithmetic for it."
+  },
+  {
+   "file": "kernel/stkdiag.inc",
+   "old_text": "                                ; is STK0's 1,024 bytes rather than a slice",
+   "new_text": "                                ; is STK0's 512 bytes rather than a slice",
+   "why": "STK0_SIZE equ 512 (kernel.asm:1568)."
+  },
+  {
+   "file": "kernel/stkdiag.inc",
+   "old_text": "; -----------------------------------------------------------------------------\n; sd_pre08 / sd_post08 - what the ROM's int 08h chain costs a task stack\n",
+   "new_text": "",
+   "why": "Neither sd_pre08 nor sd_post08 exists anywhere in the tree; the header runs straight into sd_water's (stkdiag.inc:196-219)."
+  },
+  {
+   "file": "kernel/stkdiag.inc",
+   "old_text": "; sd_vwater - the deepest ANY slice has been: THE FLOOR\n; in:       DS = KERNEL_SEG\n; out:      AX = bytes, or 0 if the victim was refused a slot",
+   "new_text": "; sd_vwater - the deepest ANY slice has been, the panel's own painter included\n;            (the FLOOR is sd_iwater's)\n; in:       DS = KERNEL_SEG\n; out:      AX = bytes, or 0 if no slice holds a mark",
+   "why": "sd_vwater is the max of sd_water over slots 1..MAX_TASKS-1 (stkdiag.inc:430-448); there is no victim task, and sd_iwater's header names itself the floor."
+  },
+  {
+   "file": "kernel/stkdiag.inc",
+   "old_text": "; -----------------------------------------------------------------------------\n; sd_victim - a task that exists to be interrupted, and does nothing else\n; -----------------------------------------------------------------------------\n\n",
+   "new_text": "",
+   "why": "No sd_victim exists anywhere in the tree; the header is followed directly by sd_utoa's (stkdiag.inc:450-466)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "Outside the scheduler's own\n  internals, exactly **two** routines raise it, both with the same meaning\n  — the tick still runs, the BIOS chain feeds the floppy motor,\n  `sch_account` runs and sleepers mark ready; only involuntary switching\n  pauses: `disk_read` across its int 13h window (§18), and the clip door\n  `OSAPI_SND_PLAY` from its grant to its release, for the duration of an\n  exclusive speaker clip (§34.4, Phase 2). The clip",
+   "new_text": "It is a nestable count\n  (`inc`/`dec`), and outside the scheduler's own internals many routines\n  raise it, all with the same meaning\n  — the tick still runs, the BIOS chain feeds the floppy motor,\n  `sch_account` runs and sleepers mark ready; only involuntary switching\n  pauses: the disk layer across its int 13h windows and the FAT-window walk\n  (§18), the compactor's plan and moves (§66), XMS moves, hibernation,\n  kern_mega's pool and bracket copies, and the clip door\n  `OSAPI_SND_PLAY` from its grant to its release, for the duration of an\n  exclusive speaker clip (§34.4, Phase 2). Under it `task_yield` resumes\n  its caller (§8), so nothing that holds it may wait on another task: a\n  `gfx_lock` another task owns spins for ever, and a `task_sleep` returns at\n  once and is applied late, at the next unlocked switch. The clip",
+   "why": "inc byte [sch_lock] appears in disk.inc, diskw.inc, memory.inc, xmem.inc, fsx.inc, hiber.inc, mega.inc, megados.inc and snd.inc; task_yield's .save jumps to sch_isr.sres while it is set (sched.inc:1881-1882)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "- `MAX_TASKS equ 14` on `kern_big` and **7 on `kern_small`**. Task 0 is the",
+   "new_text": "- `MAX_TASKS equ 14` on `kern_big` and **5 on `kern_small`**. Task 0 is the",
+   "why": "sched.inc:46-47: MAX_TASKS equ 5 under KERN_SMALL (SPEC.md 11.102)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "outgoing task's canary on every switch away — one 8-bit multiply and a\n  shift, for any slice size that is a multiple of 128, with the old byte\n  swap kept under `%if SCH_STACK == 256` for the day a configuration\n  returns there — and a dead canary",
+   "new_text": "outgoing task's canary on every switch away — a lookup in `sch_stkbase`\n  with no arithmetic (§8.6) — and a dead canary",
+   "why": "sch_switch: shr bx,1 x2 / mov bx,[bx+sch_stkbase] / cmp word [ss:bx],SCH_MAGIC (sched.inc:2445-2449); no multiply, no `%if SCH_STACK == 256` anywhere in kernel/."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`tests/stackprobe` re-measures the margin on real hardware, where the\n  BIOS lands interrupt frames QEMU's SeaBIOS services on an internal stack\n  of its own.",
+   "new_text": "`tests/stackprobe` re-measures the margin on real hardware. (SeaBIOS does\n  not service interrupts on an internal stack: its `int 08h` chain measured\n  56 bytes on ours, and since §8.5 and §9.10 the ROM's tick chain and the\n  mouse ISRs run on private stacks rather than on the slice they interrupt.)",
+   "why": "stkdiag.inc:14-20 records the STKDIAG reading that disproved the internal-stack claim; sch_isr swaps to sch_chstack (sched.inc:2186-2219) and the mouse ISRs to mou_pstack."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "three mode fields of §8.2 — nothing clears .bss at boot (`-f bin` puts no\n  bytes on disk and the boot sector does not blank the region), so every\n  .bss byte that needs a defined initial value is stored explicitly by its\n  module's init routine.",
+   "new_text": "three mode fields of §8.2. No instruction clears .bss at boot — it arrives\n  as the image's inter-section padding, zero on the built kernel (§12.8.5.1),\n  and `sch_chbusy`, which nothing stores, already depends on that — but the\n  values above are stored explicitly rather than assumed.",
+   "why": "build/kernel-full.bin holds 0 non-zero bytes over .bss's span (file 0xB788..0xCC7E), SPEC.md 12.8.5.1 measured 0x00 at run time, and nothing in the tree stores [sch_chbusy] before sch_isr first tests it (sched.inc:2187, 2998)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "The IF=0 window is\n  ~30 stores with no I/O, shorter than `task_exit`'s.",
+   "new_text": "The IF=0 window is\n  the slice's 0xCC fill (§8.3: one `rep stosw`, ~0.7 ms on a 384-byte\n  slice) plus ~30 stores, no I/O — longer than `task_exit`'s.",
+   "why": "task_spawn's pushf/cli (sched.inc:914-915) covers the rep stosw of the whole slice (983-989); PERFORMANCE.md prices RAM rep stosw at 1.76 us/byte."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "skips it (T_STATE=0), and the resume-the-outgoing-task fallback cannot\n  pick a dead task because it is only reachable when nothing is ready and\n  **task 0 (the UI task) never sleeps and never exits**. PLACEMENT: the",
+   "new_text": "skips it (T_STATE=0), and the \"nothing ready\" fallback cannot pick a dead\n  task because it picks `[sch_idleslot]`, a task that is always READY and\n  never exits; the resume-the-outgoing-task arm survives only before\n  `sch_idle_start`, when nothing can have exited. `task_exit` also lowers\n  `[sch_top]` past every free slot at the top (§8.1.3). PLACEMENT: the",
+   "why": "sch_switch's fallback loads [sch_idleslot] (sched.inc:2510-2513); the UI task sleeps under UIBLOCK (ui.inc:1173-1174); task_exit's .lower loop (1199-1210)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "observable contract: returns later with all registers preserved, IF=1.)",
+   "new_text": "observable contract: returns later with all registers and the caller's\n  IF preserved.)",
+   "why": "task_yield's pushf banks the caller's FLAGS into the frame sch_resume irets (sched.inc:1855-1858); ui_task's .idle calls task_sleep at IF=0 and relies on IF=0 coming back (ui.inc:1169-1185)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "The index is computed at the head of the\n  routine, in BX, because CX carries the latched phase further down;",
+   "new_text": "The index is computed at the head of the\n  routine, through AX into SI, because CX carries the latched phase further down;",
+   "why": "sch_account: mov al,[sch_cur] / cbw / shl ax,1 x2 / xchg si,ax (sched.inc:1273-1277)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "**Clobbers\n  AX, BX, CX, DX and SI on both arms** (the early-out used to clobber",
+   "new_text": "**Clobbers\n  AX and SI on both arms, and BX, CX and DX on the charging arm** (the early-out used to clobber",
+   "why": "The sch_fast early-out (sched.inc:1283-1284) is taken before the latch and the 32-bit sub, so it writes only AX and SI."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "stage 2. The scan runs `MAX_TASKS` iterations from `cur+1`, so it reaches `cur`",
+   "new_text": "stage 2. The scan runs `[sch_top]` iterations (§8.1.3) from `cur+1`, so it reaches `cur`",
+   "why": "sch_switch loads CH = [sch_top] as the scan's count and modulus (sched.inc:2436, 2468-2502)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "**PLACEMENT (safety-critical).** Both routines must sit **outside** the\n`sch_isr` → `sch_switch` → `sch_resume` fall-through run — put them right\nafter `task_cycles` and before `sch_isr`.",
+   "new_text": "**PLACEMENT (safety-critical).** `sched_mode_get` (resident, far-entered,\nending `retf`) must sit **outside** the `sch_isr` → `sch_switch` →\n`sch_resume` fall-through run, as every resident routine near it must.\n`sched_mode_set`'s body is `cp_schset` in CTRL.DRV (`section .modu`), and\nthe settings reader in the boot blob writes its two stores itself.",
+   "why": "cp_schset is under `section .modu` (sched.inc:1392); sched_mode_get ends retf (1424-1426); driver.inc:5012 writes the stores out; no symbol sched_mode_set exists."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "polled with int 16h from the UI task (§13 step 1) and there is no keyboard\nISR. Since §20.6",
+   "new_text": "polled with int 16h from the UI task (§13 step 1); the int 09h hook,\n`kbm_isr`, only wakes it (§8.1.2.2) and chains to the ROM. Since §20.6",
+   "why": "kbm_isr (mouse.inc:2875) hooks int 09h and calls sch_wake_ui at its head (2897)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "scheduler mode can break. `gfx_lock` is a byte with no owner field, so\n  there is no cheap kernel defence",
+   "new_text": "scheduler mode can break. `gfx_lock` records its owner (`gfx_lock_own`)\n  but cannot take the lock back from it, so there is no cheap kernel defence",
+   "why": "gfx_lock stores the flag and the owner slot in one word (vga12.inc:5121-5124); fprog.inc, mouse.inc and mega.inc read gfx_lock_own."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "never returns. `gfx_lock` is a byte with no owner field, so there is no\n   kernel defence",
+   "new_text": "never returns. `gfx_lock` records its owner (`gfx_lock_own`) but does not\n   consult it when taken, so there is no kernel defence",
+   "why": "gfx_lock stores flag and owner in one word (vga12.inc:5121-5124), and its .retry path (5083-5104) never compares the owner with [sch_cur]."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`task_spawn` writes `SCH_STACK` bytes of `0xCC` over a slice before it seeds",
+   "new_text": "`task_spawn` writes the slice's own size (`sch_stksize`) of `0xCC` over it before it seeds",
+   "why": "The fill count is the slot's sch_stksize entry (sched.inc:954, 983-989), not SCH_STACK."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "One `rep stosb` per *spawn*,\na few hundred microseconds against",
+   "new_text": "One `rep stosw` per *spawn*,\n~0.7 ms on a 384-byte slice and inside the spawn's IF=0 window (§8), against",
+   "why": "The fill is rep stosw (sched.inc:983-989), inside task_spawn's pushf/cli (914-915)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "The evidence is banked into `.bss` first,\n  on the stack we arrived on, and only then does `SP` move — to task 0's, the\n  largest in the machine and, at `IF` = 0 for ever, owned by nobody.",
+   "new_text": "So `SP` moves first — to\n  task 0's, the largest in the machine and, at `IF` = 0 for ever, owned by\n  nobody — and the evidence (the slot, its parked SP, its instance) is then\n  read out of the task table into registers and pushed there.",
+   "why": "sch_diepanel: mov sp, STK0_TOP first, then sch_currec and three loads from sch_tasks into DL/AX/DH, pushed (sched.inc:2687-2699)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "**It costs 209 bytes** (`.text` +201, `.bss` +8) and it is **unconditional**,",
+   "new_text": "**It cost 209 bytes when it landed** (`.text` +201, `.bss` +8 — the `.bss` is 4\nnow, `sch_dpcol` and `sch_dphc`, since the evidence moved into registers) and it is **unconditional**,",
+   "why": "The panel's .bss is sch_dpcol (resw 1) and sch_dphc (resb 2) (sched.inc:2966-2968); sched.inc:2658-2660 records the four-byte evidence bank leaving at size pass 8."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "| `.bss` — the saved SP, the flag, the skip counter | 4 |",
+   "new_text": "| `.bss` — the flag and the skip counter | 3 |",
+   "why": "The task's SP is held in BX across the chain (sched.inc:2198-2201); .bss is sch_chbusy (byte) and sch_chskip (word)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "    cmp word [evq_count], EVQ_CAP\n    jb .room\n    ...                             ; the EVT_WAKE test, below\n    mov ax, [evq_head]\n    add ax, EVQ_RECSIZE\n    and ax, EVQ_MASK\n    mov [evq_head], ax\n    dec word [evq_count]            ; ...and the copy below puts it straight back",
+   "new_text": "    cmp byte [evq_count], EVQ_CAP\n    jb .room\n    ...                             ; the EVT_WAKE test, below\n    mov al, [evq_head]\n    add al, EVQ_RECSIZE\n    and al, EVQ_MASK\n    mov [evq_head], al\n    dec byte [evq_count]            ; ...and the copy below puts it straight back",
+   "why": "evq_head/evq_tail/evq_count are bytes and every access is a byte form (events.inc:95-116, 344-352)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`evq_push` runs in the\n  mouse ISR, which runs on the interrupted task's stack.",
+   "new_text": "`evq_push` runs in the\n  mouse ISR, which runs on `mou_pstack` with SS = `LOW_SEG` (§9.10.1).",
+   "why": "Both mouse ISRs swap to mou_pstack (mouse.inc:6624-6635) and SPEC.md 9.10.1 has the swap set SS too."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "- **The pop copy** — the other way round, and the one that cannot use a prefix.\n  The source is the ring, and `rep movsw` reads it through DS: **the 8086 loses\n  a segment prefix when a string instruction restarts after an interrupt**, and\n  NMI reaches inside the `cli` this runs under. So DS is *banked* around the\n  copy and restored, which is the rule §2.1 states and the only shape that is\n  correct on the target.",
+   "new_text": "- **The pop copy** — the other way round. The source is the ring, and four\n  unrepeated `movsw` read it through DS, so DS is *banked* around the copy and\n  restored. Four `ss` prefixes would be the same four bytes and as correct:\n  the 8086 loses a segment prefix only when an interrupted `rep` string\n  instruction restarts, and this copy has no `rep`.",
+   "why": "evq_pop's copy is push ds/push ss/pop ds, four movsw, pop ds (events.inc:264-271) - no REP, so no restart."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`inst_pkg_spawn` passes `mov bx, [di+I_SPTR]` (kernel/instance.inc:1339) and\n`task_spawn` writes that segment into both the frame's DS slot\n(kernel/sched.inc:422) and its CS slot (kernel/sched.inc:434) while the ES\nslot is `KERNEL_SEG` unconditionally (kernel/sched.inc:423 —\n`mov word [es:di+2], KERNEL_SEG ; ES slot: the kernel, always`).",
+   "new_text": "`inst_pkg_spawn` passes `mov bx, [di+I_SPTR]` and `task_spawn`'s frame\nbuilder, `sch_frame` in kernel/sched.inc, writes that segment into both the\nframe's DS slot and its CS slot while the ES slot is `KERNEL_SEG`\nunconditionally (`; ES  = the kernel, always (SPEC.md 20.1)`).",
+   "why": "The frame is written by sch_frame (sched.inc:1075-1104) with stosw, not `mov word [es:di+2]`; instance.inc:1339 and sched.inc:422-434 no longer hold those lines."
+  },
+  {
+   "file": "docs/KERNEL-MEMORY.md",
+   "old_text": "| `sch_stacks` | 2,816 (`kern_small` 1,280) |",
+   "new_text": "| `sch_stacks` | 2,816 (`kern_small` 960) |",
+   "why": "kern_small's SCH_PARTITION is 128+192+256+384 = 960 (sched.inc:198-204)."
+  },
+  {
+   "file": "docs/KERNEL-MEMORY.md",
+   "old_text": "`kern_small` (`MAX_TASKS` = 7) is\n128, 128, 192, 192, 256, 384.",
+   "new_text": "`kern_small` (`MAX_TASKS` = 5) is\n128, 192, 256, 384.",
+   "why": "sched.inc:46-47 and 198-204."
+  },
+  {
+   "file": "docs/KERNEL-MEMORY.md",
+   "old_text": "`kern_big` has **twelve usable worker slots** and `kern_small` five.",
+   "new_text": "`kern_big` has **twelve usable worker slots** and `kern_small` three.",
+   "why": "kern_small has four slices and the idle task holds its only 128 (sched.inc:196-204: 'THREE USABLE')."
+  },
+  {
+   "file": "docs/KERNEL-MEMORY.md",
+   "old_text": "every size must be\na multiple of 128 and even,",
+   "new_text": "every size must be\neven (`SCH_SLOT`'s `%error`; only `SCH_STACK` is still held to a multiple of 128),",
+   "why": "SCH_SLOT checks evenness and >= SCH_FRAME + 2 only (sched.inc:251-256); 192-byte classes exist; only SCH_STACK has a %128 %error (120-122)."
+  },
+  {
+   "file": "apps/os88api.inc",
+   "old_text": "; Your worker gets DX = your instance index, DS = ES = CS = KERNEL_SEG,",
+   "new_text": "; Your worker gets DX = your instance index, DS = CS = YOUR segment,\n; ES = KERNEL_SEG,",
+   "why": "sch_frame writes the package segment into DS and CS and KERNEL_SEG into ES (sched.inc:1079-1104); SPEC.md 20.6 states the same. Column-0 comment: not in abilock's fingerprint."
+  },
+  {
+   "file": "apps/os88api.inc",
+   "old_text": ";  6. Your stack is SCH_STACK (384) bytes in LOW_SEG and SS != DS (see the header of",
+   "new_text": ";  6. Your stack is at least the class your header declares (OS88_STACK_*,\n;     128..384 bytes; 384 if you declare none) in LOW_SEG and SS != DS (see the header of",
+   "why": "inst_pkg_spawn reads LD_H_CLASS and task_spawn takes the smallest free slice at least that big (instance.inc:2095-2111, sched.inc:930-937)."
+  },
+  {
+   "file": "apps/os88api.inc",
+   "old_text": "; (OSAPI_TASK_SPAWN below), whose 384-byte stack is likewise in LOW_SEG -\n; and 384 is a budget to respect,",
+   "new_text": "; (OSAPI_TASK_SPAWN below), whose stack - the class its header declares\n; (OS88_STACK_* below; 384 if none) - is likewise in LOW_SEG - and that is a\n; budget to respect,",
+   "why": "A worker's slice is per class since SPEC.md 8.7 (instance.inc:2095-2111)."
+  }
+ ]
+}

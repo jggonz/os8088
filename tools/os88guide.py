@@ -68,6 +68,7 @@ SECTORS = {2880: "1440", 2400: "1200", 1440: "720", 720: "360"}
 # is the disks most people need; "own" is a disk that ships one program of
 # its own, or a set that repeats programs already on the main disks.
 SECTION = {"start": "main", "xt": "main", "x720": "main", "small": "main",
+           "mega": "main",
            "emu": "main", "live": "main", "all": "own", "progs": "own"}
 # Every section but "main" is one expandable item at the end of the disk row:
 # (its title, the line under it). The count of disks is the page's to add.
@@ -110,6 +111,9 @@ BLURB = {
     "XTMP3": "An MP3 player for every PC, with three demo songs.",
     "Weave": "Weave apps, ready to run.",
     "Windows 3.x programs": "WIN16, with room for your Windows 3.0 and 3.1 programs.",
+    "Video Battle": "A battle played as joined video clips, with the CGA demo battle.",
+    "Video Battle for VGA": "The demo battle in VGA colours, and the program that records a play.",
+    "Video Battle for Hercules": "The demo battle for a Hercules card.",
     "Weave editor": "The Weave editor, with the demo apps' sources.",
     "Video demo": "A ready-installed hard disk with demo videos: CGA and "
                   "Hercules for an XT, VGA for a 286.",
@@ -140,6 +144,12 @@ TOOLS = [
                 "sized and dithered for the machine it will play on.",
      "files": [("tools/os88venc.py", "The encoder, run from a terminal."),
                ("tools/os88vencgui.py", "The same encoder with a window, previews and presets.")]},
+    {"id": "tool-vbattle", "title": "Video Battle builder",
+     "summary": "Makes a Video Battle out of your own footage: the idle loop, "
+                "the actions' clips joined to it, the music, the menus and "
+                "the enemy, built into a .VBT file and a disk to play it from.",
+     "files": [("tools/os88vbtgui.py", "The builder's window, with a guide."),
+               ("tools/os88vbt.py", "The same builder, run from a terminal.")]},
     {"id": "tool-proxy", "title": "Web proxy",
      "summary": "Runs on your modern computer so the os8088 Browser can reach "
                 "today's web, including secure (https) sites.",
@@ -165,6 +175,16 @@ FIRMWARE = [
          "SHA256SUMS": "Checksums, to confirm the download is intact.",
          "COPYING": "The firmware's licence (GPL version 2).",
          "v1board.patch": "The one change made to the firmware's source.",
+     }},
+    {"id": "fw-picomem2", "title": "PicoMEM 2 firmware",
+     "summary": "Firmware for the PicoMEM 2.0 card that keeps its Sound "
+                "Blaster playing through disk reads under os8088.",
+     "dir": "firmware/picomem2",
+     "notes": {
+         "PM2_11_8_26_OS8088.uf2": "The firmware. Copy it onto the card in its BOOT mode.",
+         "README.md": "What the firmware fixes, what it lacks against the October release, and how to install it.",
+         "SHA256SUMS": "Checksums, to confirm the download is intact.",
+         "COPYING": "The firmware's licence (GPL version 2).",
      }},
 ]
 
@@ -595,7 +615,7 @@ TEXTS = None
 ENTRIES = {}
 PREVIEWS = []           # tools/guide/videos/previews.json, as a list
 PREVIEW_IDX = {}        # source SHA-256 -> index into PREVIEWS
-PREVIEW_BY_NAME = {}    # "cga/03-cga4" -> its PREVIEWS record, for a manual's video:
+PREVIEW_BY_NAME = {}    # "cga/04-miku" -> its PREVIEWS record, for a manual's video:
 
 
 def load_previews():

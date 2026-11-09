@@ -707,7 +707,7 @@ are kept honest. Everything off the wire is checked field by field before a
 pixel of it is drawn — a catalog that does not pass leaves the window working
 and says `Catalog not understood`.
 
-SPEC.md §92 is the format and the contract; `docs/WIRE-PLAN.md` is why it
+SPEC.md §92 is the format and the contract; `docs/plans/completed/WIRE-PLAN.md` is why it
 reads that way.
 
 ### WireFleet — Two PCs. Two fleets. One winner.
@@ -952,6 +952,7 @@ cleanly and runs wrong when C meets this machine.
 | `build/apps720.img`    | 720KB FAT12              | 3.5" DD software floppy         |
 | `build/apps360.img`    | 360KB FAT12              | 86Box / real XT software floppy |
 | `build/media360.img`   | 360KB FAT12              | 360KB media floppy — the shipped module, which the 360KB apps disk has no room for. It exists at that geometry **alone**: every other apps disk, the 1.2MB one included, carries `BEVERLY.MOD` in `MEDIA/` itself |
+| `build/mega*.img`      | 1.44MB / 1.2MB           | **kern_mega**, the protected-mode system for a 286 or later with 1MB or more (`make mega`, released in `286-PLUS/`): `mega.img`/`mega120.img` boot it, `megaapps*.img` is its software disk - the programs built for it, Word and the video player among them - and `megaxtmp3*.img` and `megawin16*.img` carry one program each |
 | `build/zork*.img`      | 1.44MB / 720KB / 1.2MB / 360KB | Frotz story floppies (`make zdisk`). The 1.2MB one is the only list here that is a cut rather than a fill — the 1.44MB story set alone overruns it, so `ADVENT5.Z5` and `905.Z5` come off and nine of the eleven stay |
 | `build/word*.img`      | 1.44MB / 720KB / 1.2MB / 360KB | Microsoft Word floppies (`make worddisk`) |
 | `build/scribe*.img`    | 1.44MB / 720KB / 1.2MB / 360KB | Scribe, the fork of Word: one parted package + its welcome documents (`make scribedisk`) |

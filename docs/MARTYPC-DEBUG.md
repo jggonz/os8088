@@ -1299,7 +1299,7 @@ this tree), `glabios_pc`/`glabios_xt` are bundled with MartyPC.
 | `os8088_5150_cga_4fdd` | four drives — two internal and the pair on the 37-pin external connector (SPEC.md §18.97). The 1982 ROM copies SW1 into `0040:0010`, so this machine must report 4 where `_cga` reports 2 |
 | `os8088_5150_cga_ext720` | the field 5150's own drives plus an IBM 4865: two 360K, an 80-cylinder 720K as unit 2 and a 360K as unit 3 — SPEC.md §18.98's configuration, one machine carrying both of §18.96.2's answers |
 | `os8088_5150_cga_1fd` | **one** drive, which is what the field 5150 has — SPEC.md §18.97's regression half (an uncontested machine must be untouched) |
-| `os8088_compaq_revh`, `os8088_eagle_spirit`, `os8088_columbia_mpc` | XT-class **clone** BIOSes (`configs/os8088_field_roms.toml`), for SPEC.md §18.93.2: does this machine's FDC do the multi-track flip a cylinder-bounded run depends on? Boot `build/rdiag360.img` on each and read the map |
+| `os8088_compaq_revh`, `os8088_eagle_spirit`, `os8088_columbia_mpc` | XT-class **clone** BIOSes (`configs/os8088_field_roms.toml`), for SPEC.md §18.93.2: does this machine's FDC do the multi-track flip a cylinder-bounded run depends on? **Not with `build/rdiag360.img` any more**: it is read by stage 1, whose loop is track-bounded now, so it crosses no head and draws all dots on every ROM (tests/rdiag.asm's header; the big review's BR-1 follow-up, 2026-11-08). Boot the system disk and read `boot_cylrun` and `b2_cylok` at the desktop instead (`tests/cylrun.py`'s method, SPEC.md §18.93.1, §31.14): `boot_cylrun` ≠ 0 means a crossing run passed the canary; 0 with `b2_cylok` = FE means the loader fell back, and catching `.rerun`'s caller says whether the ROM errored or lied |
 
 **Two cards took two patches to make honest.** Upstream maps a
 Hercules-subtype MDA at B0000 **and** B8000 unconditionally, a CGA maps
@@ -1621,6 +1621,19 @@ in the format `tools/sndcheck.py` already parses, so every existing
 assertion — RMS, the Goertzel dominant-frequency scan, `--expect-silence` —
 works against it unchanged. Verified by programming PIT channel 2 for 880 Hz
 through `outb` alone: `sndcheck` reported dominant 891.0 Hz.
+
+**A capture fills only while the machine RUNS.** The server drains each
+source's channel after a free-running batch (`run_loop`), and nothing else
+does - so the time a row spends inside `advance(frames=...)` or
+`advance(cycles=...)`, which runs the machine inside one command, is never
+written: the Sound Blaster's `try_send` drops those samples outright and the
+file comes back with **0 samples**, and an OPL's comes back full length and
+**all zero** while the chip plainly played (the driver's `opl_b0` says keyed
+on). ARCADE's sound lost an hour to it (`tests/arcsound.py`): play under
+`m.run()` and wait with `guest_sleep`, or wait on a guest counter between
+short sleeps, whenever the capture is the assertion. A row that only needs
+the bytes a package mixed can read them out of guest memory instead, which
+no drain can lose (that row's `sb` arm reads ARCADE's ring).
 
 Two differences from QEMU's `-audiodev wav`: the capture is **continuous**
 (QEMU's pcspk stream only runs while the speaker is on, so its file time

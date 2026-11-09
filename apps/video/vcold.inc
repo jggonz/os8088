@@ -22,6 +22,7 @@
 ;      VK_PRBEG  vp_prbeg   (VP_DIAG: the profile's claim, 98.3.22.3)
 ;      VK_PREND  vp_prend   (VP_DIAG: the profile written)
 ;      VK_RQGET  vp_rqget   (VP_RQ: the bracket's reflection counts)
+;      VK_RPREP  vp_rprep   (the door PREPARED, SPEC.md 53.2.3.1)
 ; A vector a build does not carry is 0, and its stub is not assembled.
 ; =============================================================================
 VK_SIGVAL   equ 0x4356              ; 'VC'
@@ -35,4 +36,5 @@ VK_RLINE    equ 2
 VK_PRBEG    equ 3
 VK_PREND    equ 4
 VK_RQGET    equ 5
-VK_N        equ 6
+VK_RPREP    equ 6
+VK_N        equ 7

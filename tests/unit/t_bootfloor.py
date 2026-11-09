@@ -1,7 +1,17 @@
 #!/usr/bin/env python3
 """Stage 1's RAM floor is the kernel's own ladder (SPEC.md 2.7.1).
 
-    python3 tests/unit/t_bootfloor.py
+    python3 tests/unit/t_bootfloor.py [--fence]
+
+`--fence` is the half that runs on EVERY BUILD (the fast-tier `bootfence`
+row), and the half `B2CALL` rests on (SPEC.md 2.9.15.2): `.boot3` calls back
+into the blob as `call BLOB_SEG_AT:x`, a constant, where everything before it
+asked `[spl_fseg]` - so a stage 1 or a volume boot record that read the blob
+ANYWHERE ELSE would send `.boot3` into the wrong RAM with no error at all.
+It reads the shipped sectors' own encodings (stage 1's `jmp HEAP_PARA:0`,
+its `.nomem` bound, boothd's two loads of BLOB_SEG) against each kernel's
+MAP - no assembly, which is what keeps it cheap enough for the fast tier.
+The owner's choice over SPLCALL's 19 bytes a site (BOOT3-PLAN 15 q9).
 
 `boot/boot.asm` refuses a machine that cannot hold stage 2's blob at HEAP_SEG
 under the 2,560 bytes stage 1 keeps live at the ceiling.  It cannot compute
@@ -77,10 +87,93 @@ def ladder(*defines):
     return json.loads(out)
 
 
-def boot2_secs():
-    src = open(os.path.join(ROOT, "kernel", "kernel.asm")).read()
-    m = re.search(r"^BOOT2_SECS  *equ  *(\d+)", src, re.M)
-    return int(m.group(1))
+def mapeq(tree, name):
+    """An equate out of `tree`'s kernel.map - the ASSEMBLY'S own value, so a
+    kernel's arm (kern_small's 11-sector blob, a lifted BLOB_SEG_AT) is the
+    one read. This used to take BOOT2_SECS's first literal out of
+    kernel.asm's text, which is kern_big's 13 whatever was built."""
+    path = os.path.join(tree, "kernel.map")
+    m = re.search(r"^([0-9A-F]{8})\s+%s\s*$" % name,
+                  open(path, errors="replace").read(), re.M)
+    return int(m.group(1), 16) if m else None
+
+
+def boot2_secs(tree=BUILD):
+    return mapeq(tree, "BOOT2_SECS")
+
+
+def fence():
+    """B2CALL's fence: every shipped loader puts the blob at the map's
+    BLOB_SEG_AT, per kernel tree."""
+    trees = [(BUILD, ("boot.bin", "boot360.bin", "boot120.bin"), "boothd.bin")]
+    small = os.path.join(BUILD, "smallk")
+    if os.path.exists(os.path.join(small, "kernel.map")):
+        trees.append((small, ("boot.bin", "boot360.bin"), None))
+    # kern_emu is B3_ON too, so its B2CALLs rest on ITS loaders. `all` does
+    # not build it - `make emu` does, as boot.bin and boothd.bin beside the
+    # map they were made from - so it is checked whenever that tree exists.
+    emu = os.path.join(BUILD, "emuk")
+    if os.path.exists(os.path.join(emu, "kernel.map")):
+        trees.append((emu, ("boot.bin",), "boothd.bin"))
+    for tree, sectors, vbr in trees:
+        rel = os.path.relpath(tree, ROOT)
+        if not os.path.exists(os.path.join(tree, "kernel.map")):
+            check(False, "%s/kernel.map exists" % rel, "`make` writes it; "
+                  "without it the fence asserts nothing", got="missing",
+                  want="a map")
+            continue
+        blob, n2 = mapeq(tree, "BLOB_SEG_AT"), boot2_secs(tree)
+        check(blob is not None and n2 is not None,
+              "%s/kernel.map has BLOB_SEG_AT and BOOT2_SECS" % rel,
+              "the fence compares the loaders against them", got=(blob, n2),
+              want="two equates")
+        if blob is None or n2 is None:
+            continue
+        want = blob + n2 * 32 + TRANSIENT_PARA
+        jmp = bytes([0xEA, 0, 0]) + blob.to_bytes(2, "little")
+        for name in sectors:
+            path = os.path.join(tree, name)
+            if not os.path.exists(path):
+                check(False, "%s/%s exists" % (rel, name), "`make` builds it",
+                      got="missing", want=path)
+                continue
+            d, hits = bound(path)
+            check(d.count(jmp) == 1,
+                  "%s/%s jumps to the blob at BLOB_SEG_AT %04X" % (rel, name,
+                                                                   blob),
+                  "stage 1 reads the blob to HEAP_PARA and enters it there; "
+                  "`.boot3`'s B2CALL is `call BLOB_SEG_AT:x`, so a sector "
+                  "that put it anywhere else sends every one of them into "
+                  "the wrong RAM (SPEC.md 2.9.15.2)",
+                  got="%d far jump(s) there" % d.count(jmp), want="exactly 1")
+            check(len(hits) == 1 and hits[0][1] == want,
+                  "%s/%s refuses below BLOB_SEG_AT + the blob + 2,560" % (
+                      rel, name),
+                  "the .nomem bound is HEAP_PARA's other use; a different "
+                  "value is a sector built against a different kernel",
+                  got=[hex(v) for _, v in hits], want=hex(want))
+        if vbr:
+            path = os.path.join(tree, vbr)
+            if not os.path.exists(path):
+                check(False, "%s/%s exists" % (rel, vbr), "`make` builds it",
+                      got="missing", want=path)
+                continue
+            d = open(path, "rb").read()
+            lo = blob.to_bytes(2, "little")
+            check(bytes([0xBA]) + lo in d and bytes([0xB8]) + lo in d,
+                  "%s/%s loads BLOB_SEG = BLOB_SEG_AT %04X" % (rel, vbr, blob),
+                  "the volume boot record reads the blob to BLOB_SEG and "
+                  "far-calls kz_hd there (SPEC.md 2.9.13.5); B2CALL rests on "
+                  "the same number (SPEC.md 52.10.2.1's incident is the "
+                  "shape of the failure)",
+                  got="absent", want="mov dx/ax, %04X" % blob)
+
+
+if sys.argv[1:] == ["--fence"]:
+    fence()
+    done("bootfence")
+    sys.exit(0)
+fence()
 
 
 # --- 1. the shipped sectors carry THIS kernel's floor ----------------------

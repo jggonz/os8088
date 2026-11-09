@@ -14,8 +14,9 @@ every real-mode kernel's sum untouched.
 
 The package declares OS88_HIGH and OS88_HIGHMEM (tests/megahigh.txt's two
 Browser lines are retired on this row), so its region runs above 1MB and
-every claim of 64KB or less goes there too; a claim regrown past 64KB comes
-back down to conventional memory with a new selector.
+every claim of 64KB or less goes there too - and since SPEC.md 71.18.2 the
+source and the document are OSAPI_MEM_HUGE claims, above 1MB at any size
+(tests/brhuge.py is the page past the old cap).
 
 Boots kern_mega under Bochs (16MB, an NE2000 on Bochs's slirp, SYSTEM.CFG
 wanting ETHER.DRV) with a B: of its own: BROWSER.O88 and DOCWIDE.HTM,

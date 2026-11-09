@@ -86,7 +86,7 @@ class Stale(SystemExit):
 # 1. What the TREE says - constants, the ladder, the volume. No emulator.
 # -----------------------------------------------------------------------------
 
-def grab(path, pattern, what, fix):
+def grab(path, pattern, what, fix, base=0):
     """One constant out of one source file, or a refusal that names both.
 
     Every scrape in this file goes through here on purpose. A `%s` that no
@@ -99,7 +99,7 @@ def grab(path, pattern, what, fix):
     m = re.search(pattern, src, re.M)
     if not m:
         raise Stale("%s is gone" % what, "%s  /%s/" % (path, pattern), fix)
-    return int(m.group(1), 0)
+    return int(m.group(1), base)
 
 
 def kz_numbers(build="build"):
@@ -135,10 +135,16 @@ def constants(build="build"):
                            "BOOT2_SECS - the blob's length in sectors",
                            "find its new name in kernel/kernel.asm and update "
                            "constants(); the Makefile scrapes the same line")
-    c["SPL_RESIDENT"] = grab("kernel/splash.inc", r"^SPL_RESIDENT\s+equ\s+(\d+)",
+    # SPL_RESIDENT IS DERIVED NOW (kernel.asm's foot, the big review's
+    # boot-4), so it is read where the assembler published it - the map's
+    # table of absolute equates - and not out of a source that no longer
+    # types it
+    c["SPL_RESIDENT"] = grab(os.path.join(build, "kernel.map"),
+                             r"^([0-9A-F]{8})\s+SPL_RESIDENT\s*$",
                              "SPL_RESIDENT - sectors before the bar can draw",
-                             "kernel/splash.inc; it decides which stage the "
-                             "loading screen first appears in")
+                             "the build's kernel.map (kernel.asm's foot "
+                             "derives it from spw_resident_end) - run make",
+                             base=16)
     c["SPL_POST"] = grab("kernel/splash.inc", r"^SPL_POST\s+equ\s+(\d+)",
                          "SPL_POST - notches added to the bar's DENOMINATOR",
                          "kernel/splash.inc; the bar's arithmetic on the page "
@@ -162,10 +168,12 @@ def constants(build="build"):
                            "boot/boot.asm")
     c["DPT_AT"] = grab("boot/boot.asm", r"^DPT_AT\s+equ\s+(0x[0-9A-Fa-f]+)",
                        "DPT_AT - where the diskette parameter table is copied",
-                       "boot/boot.asm and boot/boot2.asm, which must agree")
-    c["KSIG_OFF"] = grab("boot/boot2.asm", r"^KSIG_OFF\s+equ\s+(\d+)",
+                       "boot/boot.asm, its only definer since boot-7 deleted "
+                       "stage 2's dead copy")
+    c["KSIG_OFF"] = grab(os.path.join(build, "ksig.inc"), r"^KSIG_OFF\s+equ\s+(\d+)",
                          "KSIG_OFF - SPEC.md 18.93.1's canary probe",
-                         "boot/boot2.asm; the Makefile types the same number")
+                         "build/ksig.inc, which tools/os88ksig.py writes per "
+                         "build arm (the big review's boot-10) - run make")
     c["STK0_SIZE"] = grab("kernel/kernel.asm", r"^STK0_SIZE\s+equ\s+(\d+)",
                           "STK0_SIZE - task 0's stack",
                           "kernel/kernel.asm's ladder")
@@ -262,9 +270,10 @@ def ladder(build="build", defines=()):
                                         (k["vgas"], "vgabuf")]
                                        + ([(k["vga_seg"], "vga")]
                                           if k["vgapara"] else []))]
-    # `.cfx`, the kernel's own list of the words naming `.cold`'s segment and
-    # the slide that rewrites them (SPEC.md 2.10.9). It has no rung: it is
-    # the FILE's last section before the modules, so stage 2's one read lands
+    # `.boot3`, the third boot-only home (SPEC.md 2.9.15; it was `.cfx`):
+    # the kernel's own list of the words naming `.cold`'s segment, the slide
+    # that rewrites them (SPEC.md 2.10.9) and what else rides with them. It
+    # has no rung: it is the FILE's last section before the modules, so stage 2's one read lands
     # it straight past `.cold`, across `.vgabuf`'s RAM and the top's slack,
     # where nothing claims it until mem_unblob. Placed out of the build's own
     # map and equates; a kernel without it (kern_small, kern_mega,
@@ -278,21 +287,21 @@ def ladder(build="build", defines=()):
     except Exception as e:                              # noqa: BLE001
         raise Stale("tools/os88sym.py would not give the kernel's equates "
                     "(%s)" % e, "tools/os88sym.py equates()",
-                    "run `make` first; the page places `.cfx` and reads "
+                    "run `make` first; the page places `.boot3` and reads "
                     "COLD_HOME through it")
     k["cold_home"] = eq.get("COLD_HOME")
     if k["vgapara"] and os.path.exists(mapf):
-        sec = os88cfx.sections(open(mapf).read()).get(".cfx")
-        if sec and "CFX_RAM" in eq:
-            k["cfx_seg"], k["cfx"] = eq["CFX_RAM"], sec[1] - sec[0]
+        sec = os88cfx.sections(open(mapf).read()).get(os88cfx.B3)
+        if sec and "B3_RAM" in eq:
+            k["cfx_seg"], k["cfx"] = eq["B3_RAM"], sec[1] - sec[0]
             # ...and how many words the list names, read off the stamped
-            # table itself (its three groups: `.text`, `.ovl`, the blob)
+            # table itself (its groups: `.text`, `.ovl`, the blob, `.boot3`)
             mt = open(mapf).read()
-            t0 = os88cfx.symbol(mt, ".cfx", "cfx_tab")
+            t0 = os88cfx.symbol(mt, os88cfx.B3, "cfx_tab")
             full = os.path.join(ROOT, build, "kernel-full.bin")
             if t0 is not None and os.path.exists(full):
                 img, at, n = open(full, "rb").read(), sec[0] + t0 - sec[2], []
-                for _ in range(3):
+                for _ in os88cfx.GROUPS:
                     offs, at = os88cfx.decode(img, at)
                     n.append(len(offs))
                 k["cfx_words"] = n
@@ -704,7 +713,7 @@ def walk(image, machine, defines, lad, cons, limit=240.0, verbose=True,
                 nxt = sites[i + 1][0] if i + 1 < len(sites) else None
                 m.breakpoints([{"type": "exec", "addr": a}
                                for a in (addr, nxt) if a is not None])
-                m.run()             # FLAT: kmain_o's are in the blob
+                m.run()             # FLAT: kmain_o's are in `.boot3`
                 if m.wait_stop(limit) is None:
                     raise Stale("kmain never returned from %s" % name,
                                 "kernel/kernel.asm's kmain",
@@ -844,7 +853,7 @@ STAGES = [
     dict(id="drvboot", short="mount + drivers", title="The floppy is mounted - over the start-up code",
          moved="the disk's index, written across {ovlkb} of code that was running",
          take=dict(phases=["drv_boot_x", "vmm_boot_x", "bvw_rowcalc",
-                           "hb_probe_x", "thm_set"])),
+                           "hb_probe_x", "kbm_adopt", "thm_set"])),
     dict(id="autostart", short="autostart", title="The loading screen ends, and Autostart runs",
          moved="nothing on this disk - a program's memory for each shortcut in AUTOSTRT",
          take=dict(phases=["spl_finish", "vx_boot_x", "as_boot"])),
@@ -1364,7 +1373,7 @@ def regions(stage_id, lad, cons, vol, ram_kb, heap, loaded_sectors, spl_first,
                 continue
             add(a, min(b, img_end) if not since("kernel") else b,
                 rid, lab, cls, note)
-        # THE SLIDE'S LIST, ON A LAYER OF ITS OWN. `.cfx` is the file's last
+        # THE SLIDE'S LIST, ON A LAYER OF ITS OWN. `.boot3` is the file's last
         # section before the modules, so it lands straight past `.cold` -
         # across the graphics scratch and the top's rounding, onto memory the
         # pool does not hand out until the loader's space comes back. It is
@@ -2026,6 +2035,11 @@ NOTES = {
         'mount, so a hard disk is there to be looked at, and before the '
         'first frame, because the answer is a question the desktop puts '
         'up. A floppy-only machine pays eight compares and no disk work.',
+    'kbm_adopt':
+        'No pointer has spoken: copy the keyboard mouse - the arrow keys '
+        'as the mouse - out of the start-up code into 512 bytes of its own '
+        'memory, where it lives until a mouse first moves. A machine with '
+        'a mouse keeps none of it.',
     'thm_set':
         'Resolve the colour scheme from the setting, once, before '
         'anything is drawn.',
@@ -2130,6 +2144,7 @@ TITLES = {
     "vmm_boot_x": "Attach a virtual machine's pointer",
     "bvw_rowcalc": "Place the drives and shortcuts",
     "hb_probe_x": "Is there a hibernation to resume?",
+    "kbm_adopt": "Keep the keyboard mouse, if there is no mouse",
     "thm_set": "Resolve the colour scheme",
     "spl_finish": "Finish the loading screen",
     "vx_boot_x": "Attach the VESA display",
@@ -2145,7 +2160,7 @@ SECTION_REGION = {
     ".text": "ktext", ".bss": "ktext", ".cold": "kcold",
     ".ovl": "ovl", ".boot2": "blob",
     ".lowbss": "lowbss", ".vgabuf": "vgabuf",
-    ".vga": "kvga", ".cfx": "cfx",
+    ".vga": "kvga", ".boot3": "cfx",
 }
 
 
@@ -3994,7 +4009,7 @@ def selfcheck(image, defines, build="build"):
          lambda: "%d found" % len(constants(build)))
     try_("the ladder, out of tools/kernsize.py",
          lambda: "KERNEL %04X  FAT %04X  LOW %04X  VGA %04X  COLD %04X  "
-                 "VGABUF %04X  HEAP %04X  BLOB %04X  .cfx %04X+%d"
+                 "VGABUF %04X  HEAP %04X  BLOB %04X  .boot3 %04X+%d"
                  % tuple(ladder(build, defines)[k] for k in
                          ("kseg", "fat_seg", "low_seg", "vga_seg", "cold_ram",
                           "vgabuf_seg", "kend", "blob_seg", "cfx_seg", "cfx")))

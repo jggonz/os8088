@@ -479,6 +479,47 @@ zm_pages:
     ret
 
 ; =============================================================================
+; zm_run - build [zf_stab] over an OSAPI_MEM_HUGE claim with a window every
+;          32KB (zio.inc's zi_load, MEGA-HUGE-PLAN): window k IS page k
+; in:  [zf_sseg] = its first selector, [zf_spara] = its size in paragraphs
+; out: nothing; preserves every register
+;
+; The cell's run is consecutive selectors, window k the 64KB from 32KB x k cut
+; at the claim's end (SPEC.md 50.3.5) - exactly what zm_pages asks SEG_SUB for
+; page by page, made by the claim itself: no call, and no LDT entry of ours
+; per page. A page past the claim is the claim again, as zm_pages has it.
+; =============================================================================
+zm_run:
+    push ax
+    push cx
+    push dx
+    push di
+    mov ax, [zf_spara]
+    add ax, 0x7FF
+    mov cl, 11
+    shr ax, cl                      ; AX = the pages the claim holds
+    xor cx, cx                      ; CX = 8 x the page
+    mov di, zf_stab
+.page:
+    mov dx, [zf_sseg]
+    or ax, ax
+    jz .put                         ; past the claim: the claim again
+    dec ax
+    add dx, cx
+.put:
+    mov [di], dx
+    add cx, 8
+    inc di
+    inc di
+    cmp di, zf_stab + 32
+    jb .page
+    pop di
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; =============================================================================
 ; zm_unpack - a packed address to a byte address (Standard 1.2.3)
 ; in:  AX = packed address, BL = 0 for a routine / 1 for a string
 ; out: DX:AX = the byte address

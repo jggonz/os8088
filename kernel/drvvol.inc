@@ -26,20 +26,21 @@
 ; is now a historical fact about where they were written rather than a claim
 ; about what they do, which this banner is here to record.
 ;
-; A PURE MOVE. Not a line of the four bodies changed, section directives
-; included - which is what lets `kernsize` say the split cost nothing.
+; MOVED, not rewritten: the move changed no line of the four bodies, section
+; directives included - which is what let `kernsize` say the split cost
+; nothing. kern_big's dskw_czsize, drv_find's helper, is a fifth body here.
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; drv_mounted - make drive A: the mounted volume, if it can be
+; drv_mounted - make the BOOT volume's root current, if it can be
 ; in:  nothing
 ; out: CF = 0 mounted; CF = 1 no readable system disk
 ; clobbers: nothing else (flags)
 ;
-; A full remount every time, deliberately: the disk can be swapped between
-; two Control Panel clicks, and every other mount in this OS is a full
-; remount for exactly that reason (SPEC.md 18.3). A driver load is not the
-; place to invent a caching rule.
+; A QUIET mount (SPEC.md 18.9): every caller reads or writes a file by name,
+; so no listing is built, and when SPEC.md 18.9.1's predicate says we already
+; stand here on media that cannot have changed there is no mount at all.
+; Anything else re-validates the volume as every mount does (SPEC.md 18.3).
 ; -----------------------------------------------------------------------------
 section .cold                   ; ...and back: drv_mounted is CTRL.DRV's too
 drv_mounted:
@@ -188,7 +189,7 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
 ; -----------------------------------------------------------------------------
 ; drv_find - a file's byte size, straight out of the directory
 ; in:  SI -> a NUL display name (upper case, as dsk_synth writes them);
-;      drive A: already mounted
+;      the boot volume already current (drv_mounted)
 ; out: CF = 0 and AX = its size; CF = 1 not found
 ; clobbers: AX (the output), flags
 ;

@@ -50,11 +50,11 @@
     pop es
     mov si, %%s
     xor cx, cx
-    call OSAPI_TOAST                ; (24 characters reach the bar: 22 here)
+    call OSAPI_TOAST                ; (TOASTSTR holds it to the bar's 24)
     pop es
     stc
     ret
-%%s: db 'Use the MEGA apps disk', 0
+TOASTSTR %%s, 'Use the MEGA apps disk'
     times (($ - %%b) & 1) nop
 %%ok:
 %endif

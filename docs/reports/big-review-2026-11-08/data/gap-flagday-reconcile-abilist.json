@@ -1,0 +1,263 @@
+{
+ "area": "gap-flagday-reconcile-abilist",
+ "title": "Reconcile the review's flag-day candidates into one bundle, row by row, against docs/plans/ABI-BREAK-LIST.md",
+ "summary": "The reconciliation holds. Re-taken counts match (6,998 package call sites; 154 GOTO sites; 247/120 FREE/MOVABLE; ten MEGA_ICW cells, six of them handler setters), the L1 pads re-derive exactly at 386/309/232, APPEND_SYS has no caller, F2-1 is built, and abi-16 is refuted by instance.inc's own 'an index out of range is not a refusal'. The door's cycle price and both phase nets are predictions, correctly labelled. Two caveats added: the door needs an IDT gate on kern_mega and a vector held out of windowed DOS's whole-IVT bank; and byte 31 is visible to an old kernel's Sticky caption length (desksc.inc), so the API level is not quite 'ignored' by old kernels. Six doc mismatches confirmed (the K17-5 and C4 replacements reduced to facts rather than new verdicts), one already half-fixed by the doc pass.",
+ "strengths": [
+  {
+   "title": "Section 0 of the list is a complete flag-day checklist",
+   "why": "Every reconciliation could be checked against its surfaces rather than re-derived",
+   "evidence": "docs/plans/ABI-BREAK-LIST.md section 0"
+  },
+  {
+   "title": "The version fence can grow a level without a bump",
+   "why": "0060:0006, header byte 31 and the class byte's spare range are each unread or bounded by their reader, so a refusal of newer-cell packages costs no flag day",
+   "evidence": "kernel/kernel.asm 0x06..0x07 comment; tools/os88pkg.py:122-125; kernel/instance.inc:2117-2121"
+  },
+  {
+   "title": "The rare-cell bodies already are the back half of a door",
+   "why": "api_rs/rsc/rx/rxc/rn take the target in BP and touch nothing else",
+   "evidence": "kernel/kernel.asm OSAPI_RCELL and the api_r* bodies"
+  }
+ ],
+ "findings": [
+  {
+   "id": "gfr-1",
+   "kind": "rethink",
+   "severity": "high",
+   "title": "bytes-1's rare-cell door supersedes T1/K17-1, at roughly twice the cycle cost bytes-1 quoted, and forces an all-cells call macro",
+   "detail": "A rare cell today costs about +78 clocks over a hot SLOT. The proposed software-interrupt door adds banking, a fetch of the return CS:IP, the index read, bumping the stacked IP, the table read, kind selection, conditional IF restore and dispatch: about +150 to +215 clocks (30-45 us) per rare call on the 4.77 MHz 8088, PREDICTED, against bytes-1's +80-100. GFX_FILL_GRAY (30 sites), OSAPI_SEG (108) and FS_OP (45) need a frequency reading or promotion at the renumber. V3's XMEM trio has 7 call sites and stays recorded. K17-4 becomes ~-78 at a tripled cycle price; seven of T3's kern_small refusals cost 2 bytes each under the door and keep rule 4. Unlisted costs: `call OSAPI_X` cannot emit `int`, so all 6,998 package call sites (2,767 to rare cells) move to one OSCALL macro; os88wire.py, os88pkg.py and t_api_abi must decode `CD nn idx`; windowed DOS banks the WHOLE IVT while other tasks run, so the door vector must be held out of the exchange; the int frame adds FLAGS under CS:IP, moving abi-4's [bp+10] reader.",
+   "evidence": [
+    "kernel/kernel.asm:2495-2499 OSAPI_RCELL push bp / call / dw",
+    "grep: 6,998 `call OSAPI_*` sites in apps/+drivers/",
+    "XMEM_RUN 2, WALK 2, SEL 3; GFX_FILL_GRAY 30; OSAPI_SEG 108; FS_OP 45",
+    "apps/dos/dos.asm:2970-2977 the whole IVT (512 words) banked",
+    "kernel/mega.inc code selectors 0x9A (readable)"
+   ],
+   "recommendation": "Add T5 (the door) in place of T1; keep T1 as the fallback and merge K17-1 into it. Sort the rare index by kind and measured frequency. Move the SDK to an all-cells OSCALL macro in the same commit. Measure the door on MartyPC in the final pass.",
+   "phase": "flagday",
+   "bytes_est": "~-380 kern_big/kern_mega conventional, ~-240 kern_small; -2 per rare package site; +~150-215 clocks per rare call (PREDICTED)",
+   "listed_as": "ABI-BREAK-LIST T1, K17-1 (supersedes); K17-4; T3; T4; V3",
+   "verdict": "confirmed",
+   "verify_note": "Counts re-taken and exact: 6,998 call sites; XMEM_RUN/WALK/SEL 2/2/3; GFX_FILL_GRAY 30; OSAPI_SEG 108; FS_OP 45. OSAPI_RCELL is push bp / call / dw (kernel.asm:2495-2499). dos.asm:2970-2977 copies all 512 IVT words into dos_ivt, so the vector-exchange hazard is real. The cycle figures are a PREDICTION, labelled as such; nothing in ABI-BREAK-LIST or KERNEL-BYTE-QUEUE names a software-interrupt door. One cost the reviewer did not list: on kern_mega in protected mode an `int` goes through the IDT, so the door also needs a gate there (and a selector-safe read of the return CS) - readable code selectors cover the read, not the gate.",
+   "prior_art": "Mac A-line trap dispatcher; DOS int 21h with retf 2 to keep CF"
+  },
+  {
+   "id": "gfr-2",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "Open the same door to the kernel's cw_ shims first: no ABI, and it rehearses T5",
+   "detail": "KERNEL-BYTE-QUEUE item 1 is stalled on BP liveness (cw_mem_disp takes the body in BP). A door that reads its operand from the return address clobbers no register and costs 3 bytes a site instead of 5 plus a 4-byte shim. build/kernel.map lists 70 cw_ symbols. Modules are versioned with the kernel, so this needs no bump, and it proves the DOS-vector, kern_mega and IF hazards before any package depends on the door.",
+   "evidence": [
+    "docs/plans/KERNEL-BYTE-QUEUE.md:93 'The alternative nobody has priced'",
+    "build/kernel.map: 70 distinct cw_* symbols",
+    "kernel/kernel.asm:7934 cw_mem_disp equ spw_near (`call bp` / `retf`)"
+   ],
+   "recommendation": "Re-take the shim census, then implement the door for cw_ traffic only, as a kernel-private mechanism; open it to packages at the flag day only once it has held.",
+   "phase": "now",
+   "bytes_est": "~-140 .text kern_big (ESTIMATED); +~170 clocks per module-path call",
+   "listed_as": "KERNEL-BYTE-QUEUE item 1",
+   "verdict": "plausible",
+   "verify_note": "70 distinct cw_ symbols in build/kernel.map confirmed; cw_mem_disp is `call bp / retf` (kernel.asm:7934). The -140 is unmeasured, and not every cw_ symbol is a shim with call sites (some are equates onto shared tails), so the census the reviewer asks for is a precondition, not a formality. A kernel-private int still sits in the vector the windowed DOS banks (gfr-1's hazard applies here first) and on kern_mega needs an IDT gate."
+  },
+  {
+   "id": "gfr-3",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "abi-11's class table replaces K17-3; K17-2 survives as one runtime OSAPI_WM_FLAG door; T2-2 loses six of its ten cells",
+   "detail": "K17-3 (one indexed setter for ten handler words) would spend a renumber on a cell the abi-11 class table deletes. The seven window flags take AL set/clear and are per-window runtime state, so K17-2's single door survives. Of the ten MEGA_ICW* inline cells, six are handler setters and go with the table; the other four (gfx_color, osapi_seed, gfx_b1ink, ico_c1) hold kern_big's fast inline SET_COLOR path, so T2-2's remainder is refused.",
+   "evidence": [
+    "kernel/kernel.asm:2690, 2695, 2858, 3341, 3611, 3707, 3754, 3770, 4180, 4311 the ten MEGA_ICW* cells",
+    "apps/os88api.inc kern_small refuses ONDRAG/ONTIMER",
+    "kernel/wm.inc handler words"
+   ],
+   "recommendation": "Rewrite K17-3's row as the abi-11 class table; keep K17-2 as one runtime door; mark T2-2 partly superseded.",
+   "phase": "flagday",
+   "bytes_est": "~-180 to -250 kern_big, ~-80 to -110 kern_small, ~-200 to -280 kern_mega conventional (ESTIMATED)",
+   "listed_as": "ABI-BREAK-LIST K17-3, K17-2, T2-2; abi-11, histsys-9, bytes-6",
+   "verdict": "confirmed",
+   "verify_note": "Re-read: exactly ten MEGA_ICW* cells, six MEGA_ICWB/ICWBW on W_ONSIZE/ONSZ/ONWK/ONRC/ONCLICK/ONWH and four MEGA_ICW on gfx_color, osapi_seed, gfx_b1ink, ico_c1 (line numbers have moved ~6-8 since the review). The split holds. The byte estimate is the reviewer's and unmeasured.",
+   "prior_art": "Win16 WNDCLASS + CreateWindow styles + SetWindowLong"
+  },
+  {
+   "id": "gfr-4",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "No shared handle model: windows already have a stable handle; memory handles stay recorded",
+   "detail": "A window's BX is a pointer to a record that never moves and is readable by contract, so wm-R3's index would only hide a layout packages legitimately read. For memory, a record-offset handle (MC_SIZE 10) would be zero-translation, but kern_mega's measured forks are .cold above 1MB, and packages pay +2..4 at each of 367 FREE/MOVABLE sites, which C1 does not touch.",
+   "evidence": [
+    "kernel/memory.inc:133 MC_SIZE equ 10",
+    "grep: MEM_FREE 247, MEM_MOVABLE 120 call sites"
+   ],
+   "recommendation": "Record: fold hm-10 into R2-6, refuse wm-R3 while R6 is shelved; take hm-2's fence and histsys-11's wm_isrec now.",
+   "phase": "record",
+   "bytes_est": "0 (recorded)",
+   "listed_as": "ABI-BREAK-LIST R2-6, R6; hm-10, wm-R3",
+   "verdict": "confirmed",
+   "verify_note": "MC_SIZE 10 (memory.inc:133) and the 247/120 FREE/MOVABLE call counts re-taken exactly. R2-6 already says 'recorded - a design question larger than a flag day row', so this is consistent with the list, not a reversal of it."
+  },
+  {
+   "id": "gfr-5",
+   "kind": "weakness",
+   "severity": "high",
+   "title": "The API level goes in now, in two free places; abi-6's flag-day half and abi-16 dissolve",
+   "detail": "0060:0006 is free padding with no reader. Package-header byte 31 is always 0: os88pkg.py refuses a 16-character name and any non-NUL after the terminator, and inst_set_name_x copies 15. The class byte at +15 is masked 3Fh and an index at or past SCH_NCLASS (5) launches with the largest stack rather than being refused, which refutes abi-16's 'refused as hostile'. So the kernel can publish OS88_API_LEVEL at 0060:0006 and ld_check_hdr can compare byte 31 against it with no PKG_FMT bump; mc-19's PM-clean bit fits in a free bit of +15.",
+   "evidence": [
+    "kernel/kernel.asm:2349-2351 '0x06..0x07 stay free'",
+    "kernel/instance.inc:1245 mov cx, 15",
+    "tools/os88pkg.py:122-125 refuses a 16-byte name and bytes after the NUL",
+    "kernel/instance.inc:2106-2121 and bx,0x3F; out of range is not a refusal",
+    "kernel/sched.inc:2883-2890 five classes"
+   ],
+   "recommendation": "Now: dw OS88_API_LEVEL at 0060:0006; os88pkg writes the needed level to byte 31; ld_check_hdr refuses with LD_EVER; mc-19's bit for kern_mega. Lock update without a bump. Strike abi-6's flag-day half and record abi-16 as refuted.",
+   "phase": "now",
+   "bytes_est": "+~8 .cold (all kernels); +12 .mega; 0060:0006 costs 0",
+   "listed_as": "abi-6, loader-6, abi-16, mc-19",
+   "verdict": "confirmed",
+   "verify_note": "Every leg re-read and holds: 0x06..0x07 free (kernel.asm comment), parse_name refuses 16-char names AND non-NUL after the terminator, instance.inc:2117-2121 says verbatim 'AN INDEX OUT OF RANGE IS NOT A REFUSAL', and loader.inc's LD_H_CLASS comment says ld_check_hdr does not validate it - so abi-16 is refuted as written. Two caveats the reviewer did not state: (1) parse_name must be changed to allow byte 31, and os88face.py/os88vbt.py write the name field as 16 NUL-padded bytes; (2) an OLD kernel's desksc.inc:770-781 counts the name up to 16 bytes, so a 15-character name with a non-zero byte 31 measures 16 and falls back to its stem as a Sticky caption - harmless, but a visible difference, not 'ignored'. A class byte with bit 5 set loses its declared stack on old kernels (largest class), which is safe.",
+   "prior_art": "GEOS geode protocol; Windows 3.0 NE PROTMODE"
+  },
+  {
+   "id": "gfr-6",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "Driver cluster: histsys-7 makes D1 and drivers-9 moot; N1 re-checked for Phase 1; histsys-8 scoped and recorded; histsys-12 costs ~5 s on the XT",
+   "detail": "Under histsys-7's in-place reads only SOUND keeps a drv_svc copy, so drv_svcix (10 bytes) becomes a compare and drivers-9 has nothing to shrink. N1's fallbacks are still present and fail closed. A Drivers page reading titles off ~12 files costs ~12 int 13h calls, about 5 s on an XT, unless cached.",
+   "evidence": [
+    "kernel/driver.inc:1338 drv_svcix",
+    "kernel/driver.inc:2981 mov ax, FSV_TAB0; :4072 mov cl, DSV_TAB0 (the 0 = 28 fallbacks)",
+    "kernel/driver.inc:384 DRV_VER 12"
+   ],
+   "recommendation": "Phase 1: N1 and histsys-7. Mark D1 superseded-if-histsys-7 and drivers-9 moot; record histsys-8 as D6, histsys-12 as D7, drivers-15 as D5.",
+   "phase": "now",
+   "bytes_est": "N1 -11 every kernel; histsys-7 ~-90..-140 kern_big",
+   "listed_as": "ABI-BREAK-LIST N1, D1, D3; drivers-9, drivers-15, histsys-7, histsys-8, histsys-12",
+   "verdict": "plausible",
+   "verify_note": "Spot-checked: both N1 fallbacks still present (driver.inc:2981, 4072 - the cited lines have moved), drv_svcix is one byte per class (10), DRV_VER 12. The D1/drivers-9 verdict is conditional on histsys-7 landing, which is itself a proposal; the ~5 s figure is ~12 x the 400 ms int 13h cost and is a prediction."
+  },
+  {
+   "id": "gfr-7",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "File doors: C1 survives on correctness; C3 refuted by package-side arithmetic; C4 is half dead (APPEND_SYS has no callers)",
+   "detail": "C3 saves ~6 kernel bytes but adds a `mov al, mode` at each of 154 GOTO call sites (8+20+126), about +300 unpacked across packages. OSAPI_FILE_APPEND_SYS has zero callers: HDD.DRV appends system files with WRITE_SEQ+WSEQF_SYS and calls WRITE_SYS twice. Withdrawing APPEND_SYS alone removes C4's 'every caller zeroes AL' cost.",
+   "evidence": [
+    "drivers/hdd/inst.inc:2240-2250 WRITE_SYS create, WRITE_SEQ + WSEQF_SYS append",
+    "grep: call OSAPI_FILE_GOTO 8, _GOTO_Q 20, _GOTO_QM 126",
+    "build/kernel.map:3256-3257 api_file_append_sys 0x5D0..0x5D9; :8283-8284 dwf_dskw_append_sys 0xAD10..0xAD15"
+   ],
+   "recommendation": "Phase 2: C1, C2, and C4 as 'withdraw APPEND_SYS' only. Refuse C3. Record C9.",
+   "phase": "flagday",
+   "bytes_est": "C4 -17 kern_big (MEASURED spans), ~-3 kern_small; C3 net +~300",
+   "listed_as": "ABI-BREAK-LIST C1, C2, C3, C4",
+   "verdict": "confirmed",
+   "verify_note": "Re-grepped: no `call OSAPI_FILE_APPEND_SYS` anywhere in apps/, drivers/ or tests/; inst.inc:2240 and 3025 are the two WRITE_SYS calls. Spans: api_file_append_sys 9 bytes, dwf_dskw_append_sys 5, the jump cell 3 = 17; the cell's 3 bytes only go at a renumber, and WSEQF_SYS keeps using the shared fence (api_file_sysc), so the fence stays. GOTO site counts exact (154). C3 calls itself 'a cleanliness row', so 'refuted' is on bytes, not on its stated reason."
+  },
+  {
+   "id": "gfr-8",
+   "kind": "size",
+   "severity": "medium",
+   "title": "L1's pad MEASURED today is 386/309/232, and L1 shares T5's flag day",
+   "detail": ".text+.bss ends 0xB27E / 0x80CB / 0xC918 round by KIMG_PARA to 0xB400 / 0x8200 / 0xCA00: pads of 386, 309 and 232 bytes against the row's dated 165 at build 477. FAT_SEG is KERNEL_SEG+KIMG_PARA on every ROM_COLD kernel.",
+   "evidence": [
+    "build/kernel.map, build/smallk/kernel.map, build/megak/kernel.map section headers",
+    "kernel/kernel.asm:1668 KIMG_PARA; :1804 FAT_SEG equ KERNEL_SEG + KIMG_PARA under %ifdef ROM_COLD"
+   ],
+   "recommendation": "Refresh L1's figure (dated, variable, ~256 average) and schedule it in the same Phase 2 commit as T5.",
+   "phase": "flagday",
+   "bytes_est": "-386 kern_big, -309 kern_small, -232 kern_mega today (MEASURED pad)",
+   "listed_as": "ABI-BREAK-LIST L1",
+   "verdict": "confirmed",
+   "verify_note": "Arithmetic re-done off the three maps in build/ (Nov 8 03:08-03:11): 0xB400-0xB27E=386, 0x8200-0x80CB=309, 0xCA00-0xC918=232. KIMG_PARA rounds .text+.bss to 512 (kernel.asm:1668) and FAT_SEG follows it in the ROM_COLD arm (:1804). The figure moves with every commit, as the reviewer says."
+  },
+  {
+   "id": "gfr-9",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "Every other flag-day finding placed under a list letter",
+   "detail": "New rows R9, T6, R10, R11, R12, A4, A5, F3, P3; folds into existing rows V1, L3, P2, F2, V2.",
+   "evidence": [
+    "data/*.json phase==flagday",
+    "docs/plans/ABI-BREAK-LIST.md"
+   ],
+   "recommendation": "Add the new rows and cross-references to ABI-BREAK-LIST.",
+   "phase": "record",
+   "bytes_est": "0 (bookkeeping)",
+   "listed_as": "ABI-BREAK-LIST T, R, C, D, F, A, P, V1, V2, L3, P2, F2",
+   "verdict": "plausible",
+   "verify_note": "Not re-derived row by row (low, bookkeeping). Spot-check: none of T5, R9, C9 or an API-level row exists in the list today, so the new ids do not collide."
+  },
+  {
+   "id": "gfr-10",
+   "kind": "consistency",
+   "severity": "medium",
+   "title": "Phase 1 and Phase 2 written out, with a net per kernel",
+   "detail": "Phase 1 (now, no bump) and Phase 2 (PKG_FMT 10->13, DRV_VER 12->14) batches with ESTIMATED nets: Phase 1 ~-260 kern_big, ~-35 kern_small, ~-125 kern_mega; Phase 2 ~-1,078 / ~-685 / ~-957 conventional.",
+   "evidence": [
+    "kernel/loader.inc:70 PKG_FMT 10; kernel/driver.inc:384 DRV_VER 12",
+    "docs/plans/ABI-BREAK-LIST.md section 0 item 2"
+   ],
+   "recommendation": "Adopt the two batches as the plan of record and quote the nets as ESTIMATED until the door and class table are measured on build spans.",
+   "phase": "flagday",
+   "bytes_est": "Phase 2 net ~-1,078 kern_big / ~-685 kern_small / ~-957 kern_mega (ESTIMATED)",
+   "listed_as": "ABI-BREAK-LIST sections 0, 1",
+   "verdict": "plausible",
+   "verify_note": "PKG_FMT 10 and DRV_VER 12 confirmed. The nets are sums of estimates, about a third of them L1's variable pad and ~140 of Phase 1's kern_big figure gfr-2's unmeasured cw_ door; they are planning figures, correctly labelled."
+  }
+ ],
+ "doc_fixes": [
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": "; Three fixed entry points, at KERNEL_SEG (0x0060 - see the ladder below):",
+   "new_text": "; Two fixed entry points and three fixed words, at KERNEL_SEG (0x0060 - see\n; the ladder below):",
+   "why": "The list below names two entry points (0x0000 and the table at 0x0010) and itself says 0x0004, 0x000C and 0x000E are fixed words, not entry points; the splash entry at 0x0008 is retired (kernel.asm 0x08..0x0B ARE FREE AGAIN)."
+  },
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": ";   0060:0010  os8088 API jump table (SPEC.md 20.3): 8-byte DS-switching cells\n;              at pinned offsets, far-called by loaded packages",
+   "new_text": ";   0060:0010  os8088 API jump table (SPEC.md 20.3): 8-byte SLOTs, 6-byte\n;              rare cells and inline cells at pinned offsets, far-called by\n;              loaded packages",
+   "why": "Since kernel size pass 4 most cells are the 6-byte OSAPI_RCELL and some are inline OSAPI_ICELLs; the table's own header comment and its size assertion counts 44 SLOTs, 11 XCELLs, 119 rare cells and 17 inline cells."
+  },
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": "; like the two jumps above and the table below.",
+   "new_text": "; like the cold entry above and the table below.",
+   "why": "Only one jump remains above boot_ticks (`jmp kmain` at 0x0000); the `jmp near spl_tick` at 0x0008 was retired (SPEC.md 2.9.4)."
+  },
+  {
+   "file": "kernel/mouse.inc",
+   "old_text": "; package reads through 0060:0006. The offsets are asserted at the bottom of\n; this file, because",
+   "new_text": "; package finds through the debug registry at 0060:000E (DBG_TAG_MOUSE,\n; SPEC.md 57). The offsets are asserted at the bottom of this file, because",
+   "why": "0060:0006 is free padding now (kernel.asm: 'the mouse instrument used to have a fixed word at 0x0006 and is now an entry in the registry at 0x000E (57)'); the block is published as `dw DBG_TAG_MOUSE, mou_dbg_blk` in dbg_reg."
+  },
+  {
+   "file": "drivers/hdd/inst.inc",
+   "old_text": "OSAPI_FILE_APPEND_SYS is the door\n    ; (SPEC.md 19.6.1); hd_ibuf_get's size is a speed choice now.",
+   "new_text": "OSAPI_FILE_WRITE_SEQ with WSEQF_SYS\n    ; is the door (SPEC.md 18.4.9, 19.6.1); hd_ibuf_get's size is a speed\n    ; choice now.",
+   "why": "The installer's .append path (inst.inc:2240-2250) extends a system file with OSAPI_FILE_WRITE_SEQ and WSEQF_SYS; nothing in the tree calls OSAPI_FILE_APPEND_SYS."
+  },
+  {
+   "file": "drivers/hdd/inst.inc",
+   "old_text": "; have expired: OSAPI_FILE_APPEND_SYS is the\n                                ; door (SPEC.md 19.6.1),",
+   "new_text": "; have expired: WRITE_SEQ's WSEQF_SYS is the\n                                ; door (SPEC.md 18.4.9, 19.6.1),",
+   "why": "Same fact as the comment at the chunked path: the installer appends to system files through OSAPI_FILE_WRITE_SEQ with WSEQF_SYS, not OSAPI_FILE_APPEND_SYS, which has no caller."
+  },
+  {
+   "file": "docs/plans/ABI-BREAK-LIST.md",
+   "old_text": "`OSAPI_FILE_WRITE_SYS` and `OSAPI_FILE_APPEND_SYS` (drivers only, one caller, `HDD.DRV`'s installer)",
+   "new_text": "`OSAPI_FILE_WRITE_SYS` and `OSAPI_FILE_APPEND_SYS` (drivers only; `HDD.DRV`'s installer calls `WRITE_SYS` twice and `APPEND_SYS` not at all - its appends go through `OSAPI_FILE_WRITE_SEQ` with `WSEQF_SYS`, behind the same fence)",
+   "why": "grep finds no call of OSAPI_FILE_APPEND_SYS anywhere; drivers/hdd/inst.inc:2240 and :3025 are the two WRITE_SYS calls and :2246-2250 the WSEQF_SYS append. The row's 'one caller' hides that one of its two cells is unused."
+  },
+  {
+   "file": "docs/plans/ABI-BREAK-LIST.md",
+   "old_text": "**proposed, unmeasured** - wants a host-side experiment over the shipped files first",
+   "new_text": "**BUILT** as SPEC.md 20.13.9's near-call filter (`LZ_ESC`), with no container change and no bump (20.13.9.4); measured at 114,457 bytes and 225 clusters over the seventeen shipped images",
+   "why": "kernel/lz.inc includes lzfilt.inc (LZ_ESC, LZ_E8) and SPEC.md 20.13.9 documents the filter as built and measured; the row still reads as an untried proposal."
+  },
+  {
+   "file": "docs/plans/ABI-BREAK-LIST.md",
+   "old_text": "| **K17-5** | **Retire the duplicate `drv_pkg_call_x` SLOT at 0x038B** (the XCELL at 0x0348 is a second door) | -8 | that cell's callers | ksp17/ui.md 3 | **proposed, low** |",
+   "new_text": "| **K17-5** | **Retire the duplicate `drv_pkg_call_x` SLOT at 0x038B** (the XCELL at 0x0348 is a second door) - the same cell as **C7** (`OSAPI_DRV_CALL_AT`, ES left alone; one caller, FTPD's two sites) | -8 | that cell's callers | ksp17/ui.md 3 | **proposed, low** - duplicates C7, which records why it is not proposed |",
+   "why": "0x038B is OSAPI_DRV_CALL_AT (apps/os88api.inc:3309, kernel.asm:3715), the cell row C7 already records as not proposed; its only callers are apps/ftpd/ftpd.asm:3912 and :3995, which set ES themselves."
+  }
+ ]
+}
