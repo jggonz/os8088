@@ -14459,8 +14459,10 @@ PX_GALLERY_360 := $(addprefix PICTURES:,$(PX_SAMPLES_360))
 # spellings are identical), so a package added to either is on these disks
 # with nobody remembering it here. The apps list's --folder pair comes out
 # of the sort and goes ahead of the files, where argparse wants an option.
-# NO SYSTEM.CFG: the disk boots on the defaults, the sound card mounted when
-# there is one, and a machine's settings are its owner's (the owner's rule).
+# NO SETTING in SYSTEM.CFG: the disk boots on the defaults, the sound card
+# mounted when there is one, and a machine's settings are its owner's (the
+# owner's rule). The file is there for the DESKTOP: a shortcut for every demo
+# video, placed in the owner's layout (tools/os88deskcfg.py, SPEC.md 98.5).
 #
 # THE DISK is an ST-238R on a Seagate ST11R (615/4/26, 31 MB) for 86Box's
 # 8088s: os88disk.py builds the volume for the 613 cylinders the card hands
@@ -14499,15 +14501,27 @@ $(BUILD)/viddemo/%/00-VIDS.TXT: apps/video/demo/%/00-VIDS.TXT tools/checkreadme.
 		$< $@
 
 .SECONDEXPANSION:
+# the desktop's shortcuts, one a video, in the grid of the adapter the disk is
+# for - and, beside them, 'DA' 0 and no other key (SPEC.md 98.5, 51.5.4)
+.PRECIOUS: $(BUILD)/viddemo/%/system.cfg
+$(BUILD)/viddemo/%/system.cfg: $(BUILD)/video.o88 \
+	$$(wildcard apps/video/demo/$$*/*.V88) \
+	tools/os88deskcfg.py tools/os88geom.py tools/os88mini.py tools/os88pkg.py
+	@mkdir -p $(dir $@)
+	python3 tools/os88deskcfg.py -o $@ --adapter $* \
+		--glyph-from $(BUILD)/video.o88 $(sort $(filter %.V88,$^))
+
 $(BUILD)/VIDDEMO-%-ST11R.VHD: $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
 	$(DRIVERS) $(SYSDOC) $(SYSAPPS) $(SYSOPTIONAL) $(SYSROOT) $(COREAPPS) $(SYSLOGO) \
 	$(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 $$(APPS) $(PX_SAMPLES) \
 	$$(BUILD)/viddemo/$$(shell echo $$* | tr A-Z a-z)/00-VIDS.TXT \
+	$$(BUILD)/viddemo/$$(shell echo $$* | tr A-Z a-z)/system.cfg \
 	$$(wildcard apps/video/demo/$$(shell echo $$* | tr A-Z a-z)/*.V88) \
 	tools/os88disk.py tools/os88hdd.py
 	python3 tools/os88disk.py -o $(BUILD)/viddemo/$*.img --hdd \
 		--geometry 613/4/26 --mbr $(BUILD)/mbr.bin \
 		--boot $(BUILD)/boothd.bin --kernel $(KERNFILE) $(APPDATAFOLDER) \
+		$(filter %/system.cfg,$^) \
 		$(VIDDEMO_INSTALL) $(if $(filter HERC,$*),,$(PX_GALLERY)) \
 		$(addprefix MEDIA:,$(filter %/00-VIDS.TXT %.V88,$^))
 	python3 tools/os88disk.py --verify-hdd $(BUILD)/viddemo/$*.img
@@ -14519,11 +14533,13 @@ $(BUILD)/VIDDEMO-%-IDE.VHD: $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
 	$(DRIVERS) $(SYSDOC) $(SYSAPPS) $(SYSOPTIONAL) $(SYSROOT) $(COREAPPS) $(SYSLOGO) \
 	$(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 $$(APPS) $(PX_SAMPLES) \
 	$$(BUILD)/viddemo/$$(shell echo $$* | tr A-Z a-z)/00-VIDS.TXT \
+	$$(BUILD)/viddemo/$$(shell echo $$* | tr A-Z a-z)/system.cfg \
 	$$(wildcard apps/video/demo/$$(shell echo $$* | tr A-Z a-z)/*.V88) \
 	tools/os88disk.py tools/os88hdd.py
 	python3 tools/os88disk.py -o $(BUILD)/viddemo/$*.img --hdd \
 		--geometry 1024/16/63 --mbr $(BUILD)/mbr.bin \
 		--boot $(BUILD)/boothd.bin --kernel $(KERNFILE) $(APPDATAFOLDER) \
+		$(filter %/system.cfg,$^) \
 		$(VIDDEMO_INSTALL) $(PX_GALLERY) \
 		$(addprefix MEDIA:,$(filter %/00-VIDS.TXT %.V88,$^))
 	python3 tools/os88disk.py --verify-hdd $(BUILD)/viddemo/$*.img

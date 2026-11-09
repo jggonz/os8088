@@ -211273,8 +211273,29 @@ that holds a `00-VIDS.TXT` - `herc/`, `cga/` and `vga/`, the owner's - as
   1.44MB apps disk's, each package once - so a package added to either is
   on these disks with no list edited here - with `beverly.mod` and
   `OS8088.V88` in `MEDIA/` because the apps disk carries them. **No
-  SYSTEM.CFG**: the disk boots on the defaults, the sound card mounted
-  where there is one, and a machine's settings stay its owner's.
+  SETTING in its SYSTEM.CFG**: the disk boots on the defaults, the sound
+  card mounted where there is one, and a machine's settings stay its
+  owner's. The file is there for the desktop alone (below).
+- **A shortcut on the desktop for every demo video** (2026-11-09, the
+  owner's layout): `tools/os88deskcfg.py` writes a SYSTEM.CFG that is
+  26.8.6's trailer behind a settings head carrying ONE record, `DA` = 0
+  (51.5.4). That record is what keeps the defaults the defaults: a file
+  with no `DA` counts every row it finds on as ANSWERED (`DA := DW`, and
+  with no `DW` the live wants are what `_pack` put there), so the
+  sniffed sound card and hard disk would be written down as the user's
+  ticks at the first save. With `DA` 0 no row is answered and every
+  want is the boot's, as with no file at all. Each row is what a drag
+  out of the `MEDIA` window would have written: kind 0, `+3` the `\`,
+  the path `MEDIA\<name>` on C: (volume 2), the 8.3 name as its caption
+  (26.8.4), and the Disk window's own picture - 54.3's page with the
+  Video Player's shipped glyph (54.3.2) inset. They are PLACED, in the
+  grid of the adapter the disk is for (26.9.1): the videos fill the
+  LEFTMOST column top to bottom, one column is left empty, and the rest
+  fill the columns to the right of it - on VGA (7 x 6) 01-07, a gap,
+  08-13; on Hercules (5 x 7) 01-05, a gap, 06-08; on the CGA (4 x 6)
+  01-04, a gap, 05-08 and 09-11, leaving the column beside the drives
+  clear. Booted on another adapter the reflow (26.9.3) forgets a cell
+  that screen has not got and the shortcut flows to the first free one.
 - **The disk is an ST-238R on a Seagate ST11R** (615/4/26, 31 MB) for
   86Box's 8088s. `os88disk.py --hdd --geometry 613/4/26` lays out the
   volume, folders and all, for the 613 cylinders the card hands the BIOS -
