@@ -573,6 +573,12 @@ for (rx, ry, bw0, bh0), mb, zooms in (((109, 526.3125, 123.875, 140.3125), '0 0 
         check('%s: all four edges drawn %s, box %dx%d (want ~%dx%d)' % (nm, {k: round(float(v), 2) for k, v in edges.items()}, bw, bh, exp_w, exp_h),
               min(edges.values()) > 0.95 and abs(bw - exp_w) <= 2 and abs(bh - exp_h) <= 2)
 
+# a rectangle clip with no area clips everything (the outward rounding made a zero-width clip one pixel wide)
+pdfz = writepdf('zclip.pdf', page_pdf(b'q 100.3 100 0 50 re W n 0 g 0 0 400 300 re f Q q 50 50.3 80 0 re W n 0 g 0 0 400 300 re f Q'))
+rc, im, st, err = render(pdfz, H=300)
+check('a zero-width and a zero-height rectangle clip paint nothing', rc == 0 and int((pidx(im) == 0).sum()) == 0,
+      'rc %d, %d black' % (rc, 0 if im is None else int((pidx(im) == 0).sum())))
+
 print('pdr_annot: %d checks, %d FAILED' % (nchecks, len(fails)))
 for f in fails: print('  FAIL ' + f)
 sys.exit(1 if fails else 0)
