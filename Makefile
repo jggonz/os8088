@@ -14480,7 +14480,7 @@ PX_GALLERY_CGAVID := $(addprefix PICTURES:,$(PX_SAMPLES_CGAVID))
 #
 # ...except VGA's, which is a 286's: a 504 MB IDE disk (1024/16/63, the
 # most a BIOS's CHS reaches without LBA), the volume from the MBR's own
-# track and a VHD footer of our own - its 290 MB of video is too much for an
+# track and a VHD footer of our own - its 339 MB of video is too much for an
 # XT's controller, and the videos were made for a 286 and a 486 anyway
 VIDDEMO_ADAPTERS := $(notdir $(patsubst %/,%,$(sort $(dir $(wildcard apps/video/demo/*/00-VIDS.TXT)))))
 VIDDEMO_IDE := vga

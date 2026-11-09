@@ -28,8 +28,8 @@ is a copy your browser can play, with the video's own sound.
 ![Steamboat Willie: a video made to play Live, on the desktop.](video:cga/11-willy)
 
 All of these, and more, are on the video demo hard drives: one for a CGA
-card and one for a Hercules card, each with os8088 installed and its videos
-in `MEDIA`. Their page in this guide is **Video demo**, under Hard disk & CD.
+card, one for a Hercules card and one for a VGA card, each with os8088
+installed and its videos in `MEDIA`. Their page in this guide is **Video demo**, under Hard disk & CD.
 
 ## Starting Video Player
 
