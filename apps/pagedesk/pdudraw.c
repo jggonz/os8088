@@ -374,13 +374,17 @@ static void pdu_status_full(void)
 
 /* say s on the status line - the one place a reason, a result or an error
  * goes (PD-02: a greyed control explains itself here) */
+static int pdu_pshown;                  /* polish: the status line shows a job's
+                                         * "- Esc cancels" line (pdu_progress) */
 static void pdu_say(const char *s)
 {
+    pdu_pshown = 0;
     os88_strcpy(pdu_msg, s, sizeof(pdu_msg));
 }
 
 static void pdu_say2(const char *a, const char *b)
 {
+    pdu_pshown = 0;
     os88_strcpy(pdu_msg, a, sizeof(pdu_msg));
     pdu_cat(pdu_msg, b, sizeof(pdu_msg));
 }
@@ -476,9 +480,20 @@ static void pdu_empty_paint(struct os88_rect *clip)
 }
 
 /* paint the canvas inside clip: the desk around the page, the page's white
- * (PDU_PREFILL: the stub renderer draws only ink), and ask the render job
- * for the page part. Never draws the page's content itself. */
-#define PDU_PREFILL 1
+ * and ask the render job for the page part. Never draws the page's content
+ * itself. 20.19.1: PDREND composes the whole band (ground, desk, ink) and
+ * blits it once, so the white is laid here ONLY where no render will cover
+ * the strip at once: a blank (paper) page, a popover or the About card over
+ * the canvas, a held-button gesture, or a job already running (the strip
+ * waits its turn and must not show what lay under it). Everywhere else the
+ * strip gets its ground exactly once, from PDREND. */
+static unsigned pdu_pg_kind(unsigned i);
+static int pdu_pfill;                   /* verify-polish: a scroll's exposed strip */
+static int pdu_prefill(void)
+{
+    return pdu_pg_kind(pdu_page) != PDM_SRC || pdu_pop != P_NONE || pdu_about
+           || pdu_gs == 2 || pdu_job != J_NONE || pdu_pfill;
+}
 static void pdu_canvas_paint(struct os88_rect *clip)
 {
     struct os88_rect *c;
@@ -498,9 +513,8 @@ static void pdu_canvas_paint(struct os88_rect *clip)
     if (pdu_isect(c, &pdu_pr, &pdu_tr)) {
         pdu_desk(c->x1, pdu_tr.y1, pdu_tr.x1 - 1, pdu_tr.y2);
         pdu_desk(pdu_tr.x2 + 1, pdu_tr.y1, c->x2, pdu_tr.y2);
-#if PDU_PREFILL
-        pdu_fill(pdu_tr.x1, pdu_tr.y1, pdu_tr.x2, pdu_tr.y2, OS88_WHITE);
-#endif
+        if (pdu_prefill())
+            pdu_fill(pdu_tr.x1, pdu_tr.y1, pdu_tr.x2, pdu_tr.y2, OS88_WHITE);
         pdu_render_want(&pdu_tr);
     }
     if (pdu_ed_selected() >= 0)         /* edit: back on, unless a render will */

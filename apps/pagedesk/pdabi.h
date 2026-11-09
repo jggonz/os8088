@@ -164,7 +164,7 @@ struct pd_view {
 #define PDV_REND_STEP       0x42 /* one slice; AX=PDE_BUSY until done, then
                                     PDE_OK. Draws (takes the gfx lock per
                                     band itself)                         */
-#define PDV_REND_ABORT      0x43
+#define PDV_REND_ABORT      0x43 /* CX=1: XB word 0 out = first row not blitted; CX=0 as before */ /* verify-polish */
 #define PDV_REND_TEXTMAP    0x44 /* resumable text pass, no drawing. XB:
                                     pdxb_textmap in/out                  */
 #define PDV_REND_THUMB      0x45 /* XB: pdxb_thumb, 1bpp into a seg:off   */

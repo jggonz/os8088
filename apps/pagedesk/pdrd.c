@@ -69,6 +69,22 @@ static void pat_make(pdb *pat, pdw lum, pdw solid)
     }
 }
 
+/* 20.19.2: a 4bpp GREY fill between two of the palette's four greys
+ * (0, 8, 7, 15 = luminance 0, 85, 170, 255) is a checkerboard of the pair
+ * that brackets it - seven levels, not four, and 0.85 grey (217) is the
+ * 7/15 mix instead of white. Fills only; the state's colour becomes the
+ * pair's first and g_stl[10] its second + 1 (g_spat is unused at 4bpp). */
+static void grey_mix(pdw lum, pdw c4)
+{
+    pdb a, b;
+    if (c4 != 0 && c4 != 7 && c4 != 8 && c4 != 15) return;
+    if (lum >= 21 && lum < 64)        { a = 0; b = 8; }
+    else if (lum >= 106 && lum < 149) { a = 8; b = 7; }
+    else if (lum >= 191 && lum < 234) { a = 7; b = 15; }
+    else return;
+    g_stl[9] = a; g_stl[10] = (pdb)(b + 1);
+}
+
 /* the STATE record: clip rectangle, active clips, colour (20.3.2) */
 static void emit_state(pdw kind)
 {
@@ -79,6 +95,11 @@ static void emit_state(pdw kind)
     w16(g_stl + 4, GS.cx1); w16(g_stl + 6, GS.cy1);
     g_stl[8] = GS.clid; g_stl[9] = (pdb)c4;
     pat_make(g_stl + 10, lum, kind != PK_FILL);
+    if (g_bpp != 1) {                   /* 20.19.2: spat[0] = the checker's other colour + 1 */
+        g_stl[10] = 0;
+        if (kind == PK_FILL)
+            grey_mix(lum, c4);
+    }
     if (g_lstv && pdr_memeq(g_stl, g_lst, 14)) return;
     hdr_set(DLR_STATE, 0, DLH + 14, 0, 0);
     if (dl_put(g_hdr, DLH, g_stl, 14)) { pdr_cpy(g_lst, g_stl, 14); g_lstv = 1; }
@@ -278,6 +299,20 @@ static void mask_span(pdw m, pdi xa, pdi xb)
     p[bb] |= mb;
 }
 
+/* 20.19.2: a span of the checker g_sc4 / g_spat[0]-1 (band-relative x; the
+ * band starts on a multiple of 8, so x parity is absolute parity). The ROW
+ * parity is the page's, not the screen's: a scroll moves the pixels by dy and
+ * renders only the strip it exposes, so a screen-parity checker would flip
+ * phase at that seam after every odd scroll (verify-polish) */
+static void fill4_mix(pdw rowoff, pdi xa, pdi xb, pdi y)
+{
+    pdw ca = g_sc4, cb = (pdw)(g_spat[0] - 1), ce, co;
+    if ((y - g_pgy0) & 1) { ce = cb; co = ca; } else { ce = ca; co = cb; }
+    if (xa & 1) { pdr_fill4(g_bseg, rowoff, xa, xa, co); xa++; }
+    if (xb >= xa && !(xb & 1)) { pdr_fill4(g_bseg, rowoff, xb, xb, ce); xb--; }
+    if (xb > xa) pd_ffill(g_bseg, (pdw)(rowoff + (xa >> 1)), (pdb)((ce << 4) | co), (pdw)((xb - xa + 1) >> 1));
+}
+
 /* paint one span of pixels (absolute x) on absolute row y */
 static void span_out(pdi y, pdi xa, pdi xb)
 {
@@ -292,6 +327,7 @@ static void span_out(pdi y, pdi xa, pdi xb)
     xa = (pdi)(xa - g_bx0); xb = (pdi)(xb - g_bx0);
     if (g_rmode) { mask_span(g_rmode - 1, xa, xb); return; }
     if (g_bpp == 1) pdr_fill1(g_bseg, (pdw)row * g_bstride, xa, xb, g_spat[y & 3]);
+    else if (g_spat[0]) fill4_mix((pdw)row * g_bstride, xa, xb, y);
     else            pdr_fill4(g_bseg, (pdw)row * g_bstride, xa, xb, g_sc4);
 }
 
@@ -747,6 +783,7 @@ static void walk_band(pdi ry0, pdi ry1)
 
 /* ---- one band: compose, then lock / clip / blit / unlock ----------------- */
 static pdw g_winoff;
+static pdi g_ydone;                 /* 20.19.1: the first row not yet blitted */
 static pdw g_thumb;                 /* drawing into a thumbnail cell          */
 static pdw g_tdseg, g_tdoff, g_tstride; /* the cell                           */
 
@@ -777,7 +814,7 @@ static void band_init(void)
         y = (pdi)(g_by0 + r);
         if (g_deskwhite) pd_ffill(g_bseg, rowoff, g_bpp == 1 ? 0xFF : 0xFF, g_bstride);
         else if (g_bpp == 1) pd_ffill(g_bseg, rowoff, (y & 1) ? 0x55 : 0xAA, g_bstride);
-        else pd_ffill(g_bseg, rowoff, 0x77, g_bstride);
+        else pd_ffill(g_bseg, rowoff, 0x88, g_bstride);   /* the shell's desk, 8 */
         if (y >= g_pgy0 && y <= g_pgy1) {
             xa = g_pgx0 < g_bx0 ? g_bx0 : g_pgx0;
             xb = g_pgx1 > (pdi)(g_bx0 + g_bw - 1) ? (pdi)(g_bx0 + g_bw - 1) : g_pgx1;
@@ -802,6 +839,7 @@ static void band_present(void)
         }
         return;
     }
+    g_ydone = (pdi)(g_by0 + g_brows);   /* 20.19.1: ABORT's CX=1 answer */
     os88_gfx_lock();
     if (os88_wm_clip_set((void *)(unsigned)g_winoff) == 0)
         pdr_blit(g_bpp == 1 ? 1 : 4, g_bseg, g_bstride, g_bx0, g_by0, (pdw)g_bw, g_brows);

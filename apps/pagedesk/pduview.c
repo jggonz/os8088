@@ -200,7 +200,9 @@ static void pdu_scroll_to(int nsx, int nsy)
         pdu_tr.y2 = c->y1 - dy - 1;
     }
     os88_memcpy(&pdu_dmg, &pdu_tr, sizeof(pdu_dmg));
+    pdu_pfill = 1;                      /* polish: gfx_scroll leaves it undefined */
     pdu_canvas_paint(&pdu_dmg);
+    pdu_pfill = 0;                      /* polish */
     pdu_sb_fill();
     pdu_sbmove(pdu_sb, old);
 }

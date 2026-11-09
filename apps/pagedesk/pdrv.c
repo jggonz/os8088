@@ -179,6 +179,7 @@ static pdw verb_begin(void)
     g_winoff = g_rq.win_off;
     g_vcx0 = g_rq.view.clip_x0; g_vcy0 = g_rq.view.clip_y0;
     g_vcx1 = g_rq.view.clip_x1; g_vcy1 = g_rq.view.clip_y1;
+    g_ydone = g_vcy0;
     if (g_vcx1 < g_vcx0 || g_vcy1 < g_vcy0) { g_ph = PDR_DONE; return PDE_OK; }
     pdm_view_size(&vb_w, &vb_h, &g_rq.view);
     g_pgx0 = g_rq.view.ox; g_pgy0 = g_rq.view.oy;
@@ -262,8 +263,12 @@ static pdw verb_step(void)
     return PDE_OK;
 }
 
-static pdw verb_abort(void)
+/* 20.19.1: CX = 1 also writes, as XB word 0, the first view row the render
+ * did not blit (its clip's top when none was): the primary lays paper from
+ * there instead of leaving the old pixels under a cancelled page */
+static pdw verb_abort(pdw cx)
 {
+    if (cx) pd_fcopy_out(&g_ydone, g_xb, 0, 2);
     close_streams();
     g_ph = PDR_IDLE; g_mode = PDR_IDLE;
     return PDE_OK;
@@ -455,7 +460,7 @@ pdw pdr_verb(pdw verb, pdw bx, pdw cx, pdw dx)
     case PDV_REND_INIT:     return verb_init(bx);
     case PDV_REND_BEGIN:    return verb_begin();
     case PDV_REND_STEP:     return verb_step();
-    case PDV_REND_ABORT:    return verb_abort();
+    case PDV_REND_ABORT:    return verb_abort(cx);
     case PDV_REND_TEXTMAP:  return verb_textmap();
     case PDV_REND_THUMB:    return verb_thumb();
     case PDV_REND_STATUS:   return verb_status();

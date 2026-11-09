@@ -1388,7 +1388,7 @@ luminance 48 / 128 / 208; saturated colours -> the nearest of the other twelve b
 channel threshold (`rgb_c4`). A 1bpp **fill** and every image is the 4x4 ordered
 dither `lit when (17 * lum >> 8) > Bayer[y&3][x&3]`; a 1bpp **stroke, text and
 stencil** is solid, black below luminance 128, white above. 4bpp fills use the
-index; 4bpp greys in images are dithered between the four greys.
+index (a grey fill between two greys is their checker, 20.19.2); 4bpp greys in images are dithered between the four greys.
 
 **Images** are drawn at raster time from the engine's stream, which stays OPEN from
 band to band while the same image is drawn further down (each band reads on from
@@ -1521,7 +1521,7 @@ calls (`state` 0 -> 1 -> 2; `PDE_BUSY` while stepping). A new `BEGIN`, `THUMB` o
 | `FONTBANK` | `PDE_OK`, or `PDE_FONT` when the index is not a PDRES index |
 | `BEGIN` | `PDE_OK` (the first pass is set up; nothing is drawn yet), `PDE_NOMEM`, or the engine's error on the first content stream |
 | `STEP` | `PDE_BUSY` after a slice, `PDE_OK` after the last band; CF is **clear** on `PDE_BUSY` (it is not a failure) |
-| `ABORT` | `PDE_OK`; closes every stream |
+| `ABORT` | `PDE_OK`; closes every stream. With **CX = 1** it also writes, as XB word 0, the first view row the running render did not blit (the clip's top when none was); CX = 0, which every other caller sends, is the old verb exactly (20.19.1, verify-polish) |
 | `STATUS` | `pdxb_rstatus`: the `PDF_INC_*` bits, the first skipped feature's name, operators interpreted, passes |
 | `TEXTMAP`, `THUMB` | as above |
 
@@ -1661,8 +1661,7 @@ The 4bpp glyph compositor writes a nibble a set bit (a byte-table version would 
 ~3x faster); no `PDREND` row on an emulated XT yet; the clip pool holds 8
 polygon clips a pass (a ninth is its bounding box, `PDF_INC_LIMIT`); text and
 images under a polygon clip are cut to its bounding box; device space is clamped to +-16,000 qpx, so a giant page at 400% loses the far
-part of a path rather than wrapping; 4bpp fills lighter than the palette's light
-grey round to white (10.5); a
+part of a path rather than wrapping; (polish, 20.19.2: 4bpp grey fills are now a 7-level checker, not rounded to white); a
 `kern_mega` build would need the glyph claim addressed through selectors (the cache
 uses segment arithmetic, as every claim here does).
 
@@ -3934,3 +3933,105 @@ document closed with the line above, and *Sample guide* reopened it on a
 re-armed stack. Not run: kern_mega and kern_small, MartyPC (the no-preemption
 window), Hercules and EGA. The final pass re-takes both water marks with
 `tools/stkwater.py` / `tests/stk0water.py` on every adapter.
+
+### 20.19 Polish: the carried defects (`polish`, wave 3)
+
+Five defects carried out of wave 2's verifications, fixed in the shell and in
+PDREND. Each says what was wrong, what is true now and what was looked at.
+
+#### 20.19.1 The page is painted once (`pdu_canvas_paint`)
+
+`PDU_PREFILL` white-filled the page's strip and then PDREND composed the same
+strip (ground, desk, ink) in a band and blitted it, so every repaint wrote the
+page twice. PDREND paints the whole of its clip, so the shell now lays the
+white only where no render covers the strip at once (`pdu_prefill()`): a page
+that is not `PDM_SRC` (a blank is paper, no render is asked for), a popover or
+the About card over the canvas (renders never run under one), a held-button
+gesture (`pdu_gs == 2`), a job already running (the strip waits its turn), and
+the strip a scroll exposes (`pdu_pfill`, set around `pdu_scroll_to`'s paint:
+`OSAPI_GFX_SCROLL` leaves those rows undefined, SPEC.md 5.5, so without it a
+held arrow key smeared the page until the render caught up). Everywhere else
+the strip's ground is written once, by PDREND. The desk around the page is
+the shell's, once - and PDREND's band, which reaches up to 7 pixels past its
+clip to a byte column, now composes that desk in the shell's colour (8, not
+7: a 3-pixel light-grey stripe stood beside the page at 4bpp).
+
+What is NOT white any more, until PDREND reaches it, is the page part of a
+repaint: the previous page, the previous zoom, or a dialog that has just
+closed stays there for the render's interpretation phase (PDREND interprets
+the whole clip before it blits its first band). That is the trade item 2
+asked for; on an XT it is the render's own time, to be looked at in the final
+MartyPC pass.
+
+What is never left there is stale pixels a render will NOT draw:
+`ovl_ground` lays white on the page part of a rect from a row down, and runs
+when a render is cancelled (Esc) or fails (`ovl_render_rest`: `ABORT` with
+CX = 1 says the first row it did not blit, 20.3.5, and the paper starts
+there, so what was drawn stays), when `BEGIN` fails (the whole clip), and
+when a popover or the About card opens over an owed render
+(`pdu_pop_open`, `os88_about`: the owed rect, which renders again when it
+closes).
+
+#### 20.19.2 4bpp grey fills (10.5)
+
+A grey fill (palette index 0, 8, 7 or 15, luminance 0 / 85 / 170 / 255 on the
+VGA palette) between two of them is the 50% checkerboard of the pair that
+brackets it: lum 21-63 is 0/8, 64-105 solid 8, 106-148 8/7, 149-190 solid 7,
+191-233 7/15, else solid 15 (seven levels, nearest-of-seven; 10.5's four
+thresholds 48/128/208 gave HELLO.PDF's 0.85 triangle, luminance 217, white).
+Fills only: strokes, text and image rows are as before; 1bpp is unchanged (its
+4x4 ordered dither). The checker is `emit_state`'s `grey_mix`: the state's
+colour is the pair's first and `g_stl[10]` (the 1bpp pattern, unused at 4bpp)
+carries the second + 1; `span_out` paints it through `fill4_mix` (parity from
+absolute x and the PAGE's row - y less the page's top, so an odd scroll
+leaves no seam where the moved pixels meet the rendered strip; the ends by `pdr_fill4`, the interior one byte fill). Text keeps
+its own quantised colour (its state is `PK_TEXT`, never mixed). Looked at: HELLO.PDF
+at 50% on VGA, the triangle is a 7/15 checker (shots/polish/hello50-zoom.png).
+
+#### 20.19.3 The status line after a short render
+
+A render of 8 slices or fewer that showed "Drawing page N - Esc cancels"
+(a progress line is drawn once a job passes a second) left it on the status
+line. `pdu_pshown` now means "the status line shows a progress line": set by
+`pdu_progress` after it says it, cleared by every `pdu_say`/`pdu_say2`, and
+NOT reset when a job starts - so a render that a popover or a scroll aborted
+after its progress line, and whose restart is short, still ends with "Page
+drawn.".
+
+#### 20.19.4 XOR overlays against popovers and cancelled renders
+
+Edit's selection outline is taken off (`pdu_ed_xoff_l()`) BEFORE a popover or
+the About card opens, so a selection change while one is up no longer replays
+the XOR over its pixels; `pdu_ed_xon_l` already refuses while one is up and
+the close repaints the canvas, which lights it again at the render's end. A
+render that is cancelled or fails left a clip partly fresh and partly old
+pixels with nav's selection XORed into them. Since 20.19.1 lays paper below
+the last band, every pixel of the clip is fresh afterwards, so
+`ovl_render_rest` puts the selection back over the whole clip
+(`pdu_sel_after`) and edit's outline with it: the selection is KEPT and the
+XOR invariant holds. Looked at on VGA: a selection under the Find popover,
+opened and closed with no residue (shots/verify-polish/09, 10).
+
+#### 20.19.5 Esc during a held-button gesture
+
+Two kinds of held gesture exist. Nav's (the Select tool's rubber band and the
+scroll thumb) poll from `os88_ontimer` and return to the dispatcher, so a key
+reaches `os88_onkey` meanwhile: Esc now ends it (`ovl_gcancel`: the band comes
+off, nothing is selected, the release finds no gesture; a thumb drag's thumb
+goes back to where the view is, since os88ui's rate may have moved it past
+the view). Edit's annotation
+tools (`ovl_loop` in `pdutool.c`) are modal loops that poll `os88_mouse()`
+under the gfx lock; no key event is delivered inside one, and the only way to
+see Esc there is `os88_key_down`, which arms the kernel key map for the whole
+session and doubles E0 keys on QEMU (known, `os88_keymap_doubles_e0`). That
+is not taken: an annotation gesture is cancelled by Undo after it ends, as
+20.8 says. Making those gestures non-modal (the nav shape) would give them
+Esc and is a design change for a later wave, not polish.
+
+#### 20.19.6 Sizes
+
+Primary 50,568 + 6,327 = 56,895 (was 56,535: +360, D24's polish share was
++300); overlay part 41,604 (was 41,257: +347, share +200 - `ovl_ground` and
+`ovl_render_rest` live there, being a cancel's and a popover's, not a
+keystroke's); PDREND 60,304 (was 59,878; D20's cap 61,440); `pdstk` unchanged
+at 366 on `cc_onkey`.
