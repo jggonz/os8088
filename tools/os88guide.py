@@ -615,7 +615,7 @@ TEXTS = None
 ENTRIES = {}
 PREVIEWS = []           # tools/guide/videos/previews.json, as a list
 PREVIEW_IDX = {}        # source SHA-256 -> index into PREVIEWS
-PREVIEW_BY_NAME = {}    # "cga/03-cga4" -> its PREVIEWS record, for a manual's video:
+PREVIEW_BY_NAME = {}    # "cga/04-miku" -> its PREVIEWS record, for a manual's video:
 
 
 def load_previews():

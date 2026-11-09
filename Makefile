@@ -14439,14 +14439,21 @@ PX_SAMPLES_720 := $(PXS)/VACATION.JPG $(PXS)/FLOWER.JPG $(PXS)/ROOM.JPG \
                   $(PXS)/MOUNTAIN.BMP $(PXS)/CITY.PCX $(PXS)/BOUNCE.GIF
 PX_SAMPLES_360 := $(PXS)/VACATION.JPG $(PXS)/LAKE.JPG $(PXS)/CAT.GIF \
                   $(PXS)/BALLOONS.PNG $(PXS)/BOUNCE.GIF
+# ...and the CGA video demo disk's (2026-11-09): what is left of its 31 MB
+# once the videos are on it, the owner's 100 KB kept free - 98 clusters of
+# 2 KB, a picture of each format: two JPEGs, a still and an animated GIF and
+# a PNG (SPEC.md 98.5, 106.7)
+PX_SAMPLES_CGAVID := $(PXS)/LAKE.JPG $(PXS)/ROOM.JPG $(PXS)/CAT.GIF \
+                     $(PXS)/BALLOONS.PNG $(PXS)/BOUNCE.GIF
 # ...and the gallery as disk arguments, for the disks that carry PiXEL and have
 # room for it (SPEC.md 106.7): PICTURES/ at the root, as on the pixeldisk. The
-# whole set on the live media and the VGA and CGA video demo disks; the 360KB
-# selection on the second 720KB apps disk and both everything sets, where it
-# fits without adding a disk. Defined HERE, above every consumer, because they
-# are := lists.
+# whole set on the live media and the VGA video demo disk; the 360KB selection
+# on the second 720KB apps disk and both everything sets, where it fits
+# without adding a disk; the CGA video demo disk's five on that disk. Defined
+# HERE, above every consumer, because they are := lists.
 PX_GALLERY := $(addprefix PICTURES:,$(PX_SAMPLES))
 PX_GALLERY_360 := $(addprefix PICTURES:,$(PX_SAMPLES_360))
+PX_GALLERY_CGAVID := $(addprefix PICTURES:,$(PX_SAMPLES_CGAVID))
 
 # THE DEMO VIDEO DISKS (SPEC.md 98.5): a whole os8088 install on a hard disk
 # with the demo videos in MEDIA/ beside a 00-VIDS.TXT that describes them -
@@ -14479,9 +14486,11 @@ VIDDEMO_IDE := vga
 VIDDEMO_IMGS := $(foreach a,$(VIDDEMO_ADAPTERS),$(BUILD)/VIDDEMO-$(shell echo $(a) | tr a-z A-Z)-$(if $(filter $(a),$(VIDDEMO_IDE)),IDE,ST11R).VHD)
 # (= and $$(APPS) below, not :=: the apps disk's lists are defined further
 # down this file, and an immediate expansion here took them as EMPTY)
-# PiXEL's gallery ($(PX_GALLERY)) rides the VGA and CGA disks; the Hercules
-# disk had 91 clusters free (182 KB) before it, and even the 360KB selection
-# is 110, so it carries PiXEL without its pictures (SPEC.md 106.7).
+# PiXEL's gallery ($(PX_GALLERY)) rides the VGA disk, and five of its
+# pictures ($(PX_GALLERY_CGAVID)) the CGA's, whose 2026-11-09 videos left room
+# for no more with 100 KB free; the Hercules disk had 91 clusters free
+# (182 KB) before it, and even the 360KB selection is 110, so it carries
+# PiXEL without its pictures (SPEC.md 106.7).
 VIDDEMO_INSTALL = $(DRIVERS) $(SYSDOC) \
 	$(sort $(SYSAPPSARGS) $(SYSOPTIONALARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSLOGOARG) \
 	       $(FACESARG) $(SYSVIDARGS) \
@@ -14522,7 +14531,7 @@ $(BUILD)/VIDDEMO-%-ST11R.VHD: $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
 		--geometry 613/4/26 --mbr $(BUILD)/mbr.bin \
 		--boot $(BUILD)/boothd.bin --kernel $(KERNFILE) $(APPDATAFOLDER) \
 		$(filter %/system.cfg,$^) \
-		$(VIDDEMO_INSTALL) $(if $(filter HERC,$*),,$(PX_GALLERY)) \
+		$(VIDDEMO_INSTALL) $(if $(filter CGA,$*),$(PX_GALLERY_CGAVID)) \
 		$(addprefix MEDIA:,$(filter %/00-VIDS.TXT %.V88,$^))
 	python3 tools/os88disk.py --verify-hdd $(BUILD)/viddemo/$*.img
 	python3 tools/os88hdd.py --wrap $(BUILD)/viddemo/$*.img --st11 \

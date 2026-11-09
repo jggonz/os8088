@@ -1,113 +1,113 @@
 {
- "8a302ba2be6ef3bea47ecdeccf9498cac3b8b3a7ce58f8fbfcfaa7ee5282dbae": {
-  "src": "apps/video/demo/cga/01-COTXT.V88",
-  "mp4": "cga/01-cotxt.mp4",
+ "a6feabaf80cbeee5d7624009c8ae3ce43598ce343bba4e33626472e2918dc990": {
+  "src": "apps/video/demo/cga/01-SONIC.V88",
+  "mp4": "cga/01-sonic.mp4",
+  "poster": "cga/01-sonic.jpg",
   "w": 267,
   "h": 200,
   "secs": 34.0,
-  "title": "Color Text Mode 80x25",
-  "kb": 1326,
-  "poster": "cga/01-cotxt.jpg"
+  "title": "Sonic 2 - Color Text",
+  "kb": 1681
  },
  "fe4683ef4a71f393f59a65ba8fdeddea15fa90462328bf08d340921ff35791a4": {
-  "src": "apps/video/demo/cga/02-BWPCS.V88",
-  "mp4": "cga/02-bwpcs.mp4",
+  "src": "apps/video/demo/cga/02-BADPC.V88",
+  "mp4": "cga/02-badpc.mp4",
   "w": 150,
   "h": 84,
   "secs": 226.0,
   "title": "PC Speaker (Set it in Ctrl Panel)",
   "kb": 2422,
-  "poster": "cga/02-bwpcs.png"
+  "poster": "cga/02-badpc.png"
  },
- "1a39843bb6a2f69ae4488b298b74994f9a855f51c6ff4c2de84134321aa41019": {
-  "src": "apps/video/demo/cga/03-CGA4.V88",
-  "mp4": "cga/03-cga4.mp4",
+ "e11f6de3e8ea7bb99be641924ee61664e5790f5a726c3f899a1e76e634094360": {
+  "src": "apps/video/demo/cga/03-MIKPC.V88",
+  "mp4": "cga/03-mikpc.mp4",
+  "poster": "cga/03-mikpc.jpg",
   "w": 533,
-  "h": 300,
-  "secs": 25.0,
-  "title": "CGA 4 Color 320*200",
-  "kb": 1294,
-  "poster": "cga/03-cga4.jpg"
+  "h": 400,
+  "secs": 60.8,
+  "title": "Miku Miku - PC Speaker",
+  "kb": 1954
+ },
+ "a42ecc3ce594bc1dfbd814abf77f12e92cbf0e63904b610024a73f9560ce6064": {
+  "src": "apps/video/demo/cga/04-MIKU.V88",
+  "mp4": "cga/04-miku.mp4",
+  "poster": "cga/04-miku.jpg",
+  "w": 533,
+  "h": 400,
+  "secs": 60.8,
+  "title": "Miku Miku - CGA 4 Color",
+  "kb": 1980
  },
  "62f29814f03609397fef4aea3c2018017daf5f56f6def97da6562845e4cae9df": {
-  "src": "apps/video/demo/cga/04-640FS.V88",
-  "mp4": "cga/04-640fs.mp4",
+  "src": "apps/video/demo/cga/05-STARW.V88",
+  "mp4": "cga/05-starw.mp4",
   "w": 267,
   "h": 114,
   "secs": 38.2,
   "title": "640*114 Black and White",
   "kb": 1160,
-  "poster": "cga/04-640fs.png"
+  "poster": "cga/05-starw.png"
  },
- "417ecbd03f74cceb6f357e556f1e9078f78c615b87b166e86ae22bb66787c74e": {
-  "src": "apps/video/demo/cga/05-640FS.V88",
-  "mp4": "cga/05-640fs.mp4",
+ "42be48ddf8e6982f6a5451dac0fd80b906d4ac1802a2eb1e39b14a792912ddce": {
+  "src": "apps/video/demo/cga/06-TAKON.V88",
+  "mp4": "cga/06-takon.mp4",
+  "poster": "cga/06-takon.png",
   "w": 267,
   "h": 200,
-  "secs": 40.4,
-  "title": "CGA 640*200 Full Screen",
-  "kb": 1743,
-  "poster": "cga/05-640fs.png"
+  "secs": 40.3,
+  "title": "Take On Me - 640*200 PCM11",
+  "kb": 1729
  },
- "a44c9908effed89079cda30b927f25f2d3a9da64faf06b8cd198e07f0514da83": {
-  "src": "apps/video/demo/cga/06-640FS.V88",
-  "mp4": "cga/06-640fs.mp4",
+ "15392bf3088985a8216bfdbb140108439ef7797d6c4ad3742aca2983567fd52c": {
+  "src": "apps/video/demo/cga/07-KPROJ.V88",
+  "mp4": "cga/07-kproj.mp4",
+  "poster": "cga/07-kproj.png",
   "w": 267,
   "h": 150,
   "secs": 71.1,
-  "title": "CGA 640*140",
-  "kb": 2172,
-  "poster": "cga/06-640fs.png"
- },
- "811e2d6ac5c1439ae1501b8747a0b814c680b18502eab0e5176fb71dad4998d7": {
-  "src": "apps/video/demo/cga/07-CGA16.V88",
-  "mp4": "cga/07-cga16.mp4",
-  "w": 267,
-  "h": 150,
-  "secs": 25.0,
-  "title": "RBG Monitor Color Hack 160*100",
-  "kb": 1037,
-  "poster": "cga/07-cga16.jpg"
+  "title": "KProject - 640*150 ADPCM4 11Khz",
+  "kb": 2183
  },
  "c7d1987a83946005a4cc065d78ad7b43c3926b0c50d2bbad94d3d292bf03d1e3": {
-  "src": "apps/video/demo/cga/08-CGACP.V88",
-  "mp4": "cga/08-cgacp.mp4",
+  "src": "apps/video/demo/cga/08-A01C.V88",
+  "mp4": "cga/08-a01c.mp4",
   "w": 267,
   "h": 150,
   "secs": 25.0,
   "title": "Composite 16 Color 320*200",
   "kb": 1470,
-  "poster": "cga/08-cgacp.jpg"
+  "poster": "cga/08-a01c.jpg"
  },
  "96f6dd11d197e9d40db5f0781ebc58907109894b77ff3bebdca19cf710fb30b6": {
-  "src": "apps/video/demo/cga/09-CMP5O.V88",
-  "mp4": "cga/09-cmp5o.mp4",
+  "src": "apps/video/demo/cga/09-A01O.V88",
+  "mp4": "cga/09-a01o.mp4",
   "w": 267,
   "h": 150,
   "secs": 25.0,
   "title": "Composite 512 Color 160*100 OldStyle",
   "kb": 261,
-  "poster": "cga/09-cmp5o.jpg"
+  "poster": "cga/09-a01o.jpg"
  },
  "537ecbf4475c34c0372600a6dc49f209f32232366f40251511d3c0ecae802164": {
-  "src": "apps/video/demo/cga/10-CMP5N.V88",
-  "mp4": "cga/10-cmp5n.mp4",
+  "src": "apps/video/demo/cga/10-A01N.V88",
+  "mp4": "cga/10-a01n.mp4",
   "w": 267,
   "h": 150,
   "secs": 25.0,
   "title": "Composite 512 Color 160*100 NewStyle",
   "kb": 268,
-  "poster": "cga/10-cmp5n.jpg"
+  "poster": "cga/10-a01n.jpg"
  },
  "5c07d45e564bc3be4575339f59dfd880148cf9eb1dedf913223a9108128bf6a2": {
-  "src": "apps/video/demo/cga/11-LIVE.V88",
-  "mp4": "cga/11-live.mp4",
+  "src": "apps/video/demo/cga/11-WILLY.V88",
+  "mp4": "cga/11-willy.mp4",
   "w": 133,
   "h": 100,
   "secs": 15.0,
   "title": "CGA Live Desktop",
   "kb": 230,
-  "poster": "cga/11-live.png"
+  "poster": "cga/11-willy.png"
  },
  "0cad59c0641d70c9b3e181bdf7d6ef0d1f30259a31ec1358a719fd5fb30e297d": {
   "src": "apps/video/demo/herc/01-TEXT.V88",

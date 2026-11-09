@@ -211292,8 +211292,10 @@ that holds a `00-VIDS.TXT` - `herc/`, `cga/` and `vga/`, the owner's - as
   grid of the adapter the disk is for (26.9.1): the videos fill the
   LEFTMOST column top to bottom, one column is left empty, and the rest
   fill the columns to the right of it - on VGA (7 x 6) 01-07, a gap,
-  08-13; on Hercules (5 x 7) 01-05, a gap, 06-08; on the CGA (4 x 6)
-  01-04, a gap, 05-08 and 09-11, leaving the column beside the drives
+  08-13; on Hercules (5 x 7) 01-05, a gap, 06-08. The gap is only for a
+  set that fits two columns: the CGA's eleven on its four rows (4 x 6)
+  need three, and a gap could part only two of them, so they run on
+  unbroken, 01-04, 05-08 and 09-11, leaving the column beside the drives
   clear. Booted on another adapter the reflow (26.9.3) forgets a cell
   that screen has not got and the shortcut flows to the first free one.
 - **The disk is an ST-238R on a Seagate ST11R** (615/4/26, 31 MB) for
@@ -211341,6 +211343,21 @@ that holds a `00-VIDS.TXT` - `herc/`, `cga/` and `vga/`, the owner's - as
   pair with new titles and the same frames. The built disk's `MEDIA` holds
   the thirteen with 22,778 of 64,474 clusters free (187 MB), read off the
   volume rather than booted.
+- **The CGA set was re-cut on 2026-11-09** and named for what each is of:
+  `01-SONIC` (re-encoded; text mode, so it plays on a CGA, an EGA or a
+  VGA), `02-BADPC` (`02-BWPCS` as it was), `03-MIKPC` and `04-MIKU`
+  (new: Miku Miku in CGA4 at 320 x 200, its sound for the speaker at
+  6.5 kHz and for a card as 11 kHz ADPCM), `05-STARW`, `06-TAKON` and
+  `07-KPROJ` (the three 640-wide clips, the last two re-encoded, K
+  Project's sound now 11 kHz ADPCM four frames ahead), `08-A01C`,
+  `09-A01O` and `10-A01N` (the composite three as they were) and
+  `11-WILLY`. Trackmania in CGA4 (`03-CGA4`) and in the RGB text-mode
+  sixteen (`07-CGA16`) were dropped. The owner's names for 03, 06 and
+  08-10 were nine characters; they are shortened to 8.3 here. The set
+  is 1.6 MB bigger, which the disk's 31 MB pays for out of PiXEL's
+  gallery: five of its ten pictures (`PX_SAMPLES_CGAVID`, 98 clusters)
+  where it carried all ten, so that 100 KB of the volume stays free
+  (106.7's rule).
 - **`00-VIDS.TXT` is written for Note Pad** and held to `checkreadme.py`'s
   rules as `README.TXT` is: prose one line a paragraph, the per-video
   blocks indented and 28 columns at most, plain ASCII, CRLF on the disk.
@@ -216962,14 +216979,17 @@ the bytes read.
   `SYSTEM/APPDATA/` made.
 - **The gallery beside the package, where it fits** (2026-10-26, the owner's
   rule: a hard disk keeps at least 100 KB free). `PICTURES/` at the root of
-  the live media and the VGA and CGA video demo disks (§98.5) holds all ten;
-  the Hercules video disk had 182 KB free and keeps PiXEL without them. The
+  the live media and the VGA video demo disk (§98.5) holds all ten; the CGA
+  video disk's holds five since its videos were re-cut on 2026-11-09 (two
+  JPEGs, `CAT.GIF`, `BOUNCE.GIF` and `BALLOONS.PNG`: `PX_SAMPLES_CGAVID`),
+  which is what leaves it 100 KB; the Hercules video disk had 182 KB free
+  and keeps PiXEL without them. The
   360 KB selection — five pictures, 216 clusters at 1 KB — rides
   `more720.img` (§24.7) and both everything sets, where it fits without
   adding a disk. The 1.44 MB and 1.2 MB apps disks have ~160 KB free and
   carry none, so the release ships `pixel.img`, the 1.44 MB pixeldisk, as
   `PROGRAMS/PIXEL/PIXEL144.IMG` for the whole gallery on a floppy.
-  `$(PX_GALLERY)` and `$(PX_GALLERY_360)` are the disk arguments.
+  `$(PX_GALLERY)`, `$(PX_GALLERY_360)` and `$(PX_GALLERY_CGAVID)` are the disk arguments.
 - **Off `apps360.img` and `apps720.img`**, by §24.6.1's dated decision,
   taken 2026-10-02 with the plan: those disks had 25 and 37 clusters free,
   and PiXEL is ~16 KB on arrival and grows by a decoder a wave. The 720KB

@@ -28,7 +28,10 @@ inset at x=4..11, y=5..12: the glyph it SHIPS (54.3.2) or its icon reduced
 
 THE LAYOUT (the owner's, off a VGA screenshot): the files, in the order
 given, fill the LEFTMOST column top to bottom; one column is left empty; the
-rest fill the columns to the right of it, top to bottom. Cell 0 is the top of
+rest fill the columns to the right of it, top to bottom. The gap is only
+for a set that fits two columns: one that needs three (the CGA's eleven on
+four rows) runs on with none, since a gap could part only two of them.
+Cell 0 is the top of
 the RIGHTMOST column and cells run down a column and then a column to the
 left (26.9.1), so column c from the right, row r, is cell c * rows + r. The
 rightmost column is the drives' and is never used, nor is the one beside it.
@@ -138,8 +141,14 @@ def head_unanswered():
 
 
 def cells(n, rows, cols):
-    """The owner's layout: the leftmost column, a column empty, the rest."""
-    order = [cols - 1] + list(range(cols - 3, 1, -1))   # never 0 or 1
+    """The owner's layout: the leftmost column, a column empty, the rest -
+    the gap only when the rest is ONE column; a set that needs three runs
+    on unbroken, since a gap between two of them and not the other two
+    reads as a mistake (the owner, on the CGA's eleven)."""
+    if n <= 2 * rows:
+        order = [cols - 1] + list(range(cols - 3, 1, -1))   # never 0 or 1
+    else:
+        order = list(range(cols - 1, 1, -1))
     out = []
     for c in order:
         for r in range(rows):
