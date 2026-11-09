@@ -16266,6 +16266,7 @@ MEGASRC := $(KERNEL_SRC) $(KERNEL_INC) kerndos/kdos.asm $(KERNDOS_INC) \
 #> [Kernels] mega :: kern_mega (286+ protected mode) and its system and apps disks into build/megak/
 mega: $(BUILD)/mega.img $(BUILD)/mega120.img $(BUILD)/megaapps.img $(BUILD)/megaapps120.img \
       $(BUILD)/megawin16.img $(BUILD)/megawin16-120.img $(BUILD)/megaxtmp3.img $(BUILD)/megaxtmp3-120.img \
+      $(BUILD)/arcrelmega.img $(BUILD)/arcrelmega120.img \
       $(BUILD)/kernel.bin tests/megaseg.txt tools/os88megaseg.py
 ifeq ($(filter-out KERN_SMALL=% KERN_MEGA=%,$(KNOBS)),)
 	@python3 tools/os88megaseg.py --big $(BUILD)/kernel.map --mega $(MEGADIR)/kernel.map --check tests/megaseg.txt

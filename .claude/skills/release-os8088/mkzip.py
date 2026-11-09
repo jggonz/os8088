@@ -16,7 +16,8 @@ THE MAIN ZIP IS LAID OUT BY DISK SIZE (approved for v1.0.20261026):
                       EMU360 UTIL360
     360K/128K-RAM/    OS88-360 (small360.img)
     1440K/286-PLUS/   OS88-144 APPS-144 (mega.img, megaapps.img), and in
-                      PROGRAMS/XTMP3 and PROGRAMS/WIN16 their own disks
+                      PROGRAMS/XTMP3, PROGRAMS/WIN16 and PROGRAMS/ARCADE
+                      their own disks
     1200K/286-PLUS/   the same at 1.2MB (mega120.img, megaapps120.img ...)
     PROGRAMS/<APP>/   one larger program per folder, the size in the name
                       (WORD-144.IMG, SCRIB120.IMG, CPM-360.IMG ...), and its
@@ -156,8 +157,8 @@ The 286-PLUS folders inside 1440K and 1200K hold a system disk for a PC with a
 286 or later processor and at least 1MB of memory. It runs in the processor's
 protected mode, so its programs can use all of the machine's memory rather
 than the first 640KB. Boot OS88-144.IMG or OS88-120.IMG from that folder in
-drive A and put the APPS disk beside it in drive B. XTMP3 and WIN16 each have
-a disk of their own in that folder's PROGRAMS. Use the software disks from
+drive A and put the APPS disk beside it in drive B. XTMP3, WIN16 and ARCADE
+each have a disk of their own in that folder's PROGRAMS. Use the software disks from
 the 286-PLUS folder with this system: they carry the builds of the programs
 made for it, and the other disks in this zip are for the system disks
 above."""),
@@ -341,6 +342,11 @@ ITEMS = [
      "WIN16 built for the 286 system, with room for the Windows programs you "
      "copy onto it.",
      [("megawin16.img", "1.44MB", ""), ("megawin16-120.img", "1.2MB", "")]),
+    ("mega", "286 ARCADE disk", True,
+     "ARCADE built for the 286 system, which keeps its games in the memory "
+     "above the first megabyte. No game's ROM is included, as on the other "
+     "ARCADE disks.",
+     [("arcrelmega.img", "1.44MB", ""), ("arcrelmega120.img", "1.2MB", "")]),
 
     ("x720", "Second software disk, 720KB", True,
      "PiXEL with five of its sample pictures in PICTURES, MIDIRack with "
@@ -540,6 +546,8 @@ DEST = {
     "megaapps120.img": "1200K/286-PLUS/APPS-120.IMG",
     "megaxtmp3-120.img": "1200K/286-PLUS/PROGRAMS/XTMP3/XTMP3120.IMG",
     "megawin16-120.img": "1200K/286-PLUS/PROGRAMS/WIN16/WIN16120.IMG",
+    "arcrelmega.img": "1440K/286-PLUS/PROGRAMS/ARCADE/ARCAD144.IMG",
+    "arcrelmega120.img": "1200K/286-PLUS/PROGRAMS/ARCADE/ARCAD120.IMG",
     # the debug disks (SPEC.md 127): one folder, the size in the name
     "debug-sound.img": "DEBUG/SOUND144.IMG",
     "debug-sound-120.img": "DEBUG/SOUND120.IMG",
