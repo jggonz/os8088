@@ -419,6 +419,9 @@ vb_entry:
     mov bx, [vb_win]
     mov si, vb_menus                ; File > Open... (and Close)
     call OSAPI_MENU_SET
+    mov bx, [vb_win]                ; the standard About card (SPEC.md 12.2)
+    mov si, vb_about
+    call OSAPI_ABOUT_SET
     clc
 .out:
     ret
@@ -1228,8 +1231,39 @@ vb_docnames:
     pop bx
     ret
 
-; vb_paint - W_PAINT: four lines of text, the rest of the box filled once
+; vb_paint - W_PAINT: the window's face, then the About card over it when
+; it is up (os88ui_about_d: drawn LAST, the region already armed)
 vb_paint:
+    call vb_face
+    cmp byte [vb_abon], 0
+    je .r
+    mov bx, [vb_win]
+    mov si, vb_ablines
+    call os88ui_about_d
+.r:
+    ret
+
+; vb_about - OSAPI_ABOUT_SET's handler: SI = the window, no region armed, so
+; the handler entry (os88ui_about) arms one
+vb_about:
+    mov byte [vb_abon], 1
+    mov bx, si
+    mov si, vb_ablines
+    jmp os88ui_about
+
+; vb_abdismiss - a key or click takes the card down; CF = 1 it was the
+; card's, and the caller must not also act on it (Enter must not play)
+vb_abdismiss:
+    push ax
+    mov si, [vb_win]
+    mov bx, vb_abon
+    mov ax, vb_paint
+    call os88ui_abdismiss
+    pop ax
+    ret
+
+; vb_face - four lines of text, the rest of the box filled once
+vb_face:
     push si
     mov bx, [vb_win]
     call OSAPI_WM_CONTENT           ; AX = left, DX = top
@@ -1352,6 +1386,10 @@ vb_paint:
 
 ; vb_onkey - Enter plays; anything else is the window's
 vb_onkey:
+    push si
+    call vb_abdismiss               ; (the About card's, if it is up)
+    pop si
+    jc .r
     cmp byte [vb_none], 0           ; (no battle: nothing to play)
     jne .r
     cmp al, 13
@@ -1361,6 +1399,10 @@ vb_onkey:
 .r:
     ret
 vb_onclick:
+    push si
+    call vb_abdismiss
+    pop si
+    jc .r
     cmp byte [vb_none], 0
     jne .r
     push si
@@ -5527,6 +5569,13 @@ VB_CMD_CLOSE  equ 1
 vb_it_open:   db 'Open...', 0
 vb_it_close:  db 'Close', 0
 vb_s_t1:      db ' VIDEO BATTLE', 0
+; the About card (SPEC.md 12.2, 20.5.1.1): the widest line is 29 cells against
+; the text window's 318-pixel content box
+vb_ablines:   dw vb_ab1, vb_ab2, vb_ab3, vb_ab4, 0
+vb_ab1:       db 'Video Battle for os8088', 0
+vb_ab2:       db 'Battles played as video clips', 0
+vb_ab3:       db 0
+vb_ab4:       db 'Contributed by Elendilon', 0
 vb_s_t2:      db ' Enter or click: play (Esc leaves)', 0
 vb_s_t4:      db ' Needs BATTLE.VBT beside it', 0
 vb_s_ready:   db ' Ready', 0
@@ -5579,6 +5628,11 @@ vb_s_healed:  db 'The party heals ', 0
 vb_s_hp:      db ' HP', 0
 vb_s_hits:    db ' hits ', 0
 vb_s_head:    db '        HP          MP', 0
+
+%define OS88UI_ABOUT                ; the About card (vb_about)
+%define OS88UI_NOBTN
+%define OS88UI_ABDISMISS
+%include "os88ui.inc"
 
 %define VD_YIELD                    ; (the yield sites, live in place: vbinp)
 %include "video/vdec.inc"
@@ -6033,6 +6087,7 @@ VB_VAR vb_tink, 1
 VB_VAR vb_tc, 1
 VB_VAR vb_tgnd, 1
 VB_VAR vb_texp, 16
+VB_VAR vb_abon, 1                   ; the About card is up (vb_about)
 VB_REGKB equ ((os88_image_end - $$) + VB_BSS + 1023) / 1024 + 1 ; the region in KB,
                                     ; image and bss: what a real-mode bracket
                                     ; copies down when it is above 1MB
