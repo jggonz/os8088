@@ -211348,8 +211348,10 @@ that holds a `00-VIDS.TXT` - `herc/`, `cga/` and `vga/`, the owner's - as
   (`02-PCSPK`), `03-BADCA`, `05-A01` and `06-TAKON` (Bad Carrot,
   Trackmania and Take On Me re-encoded, each with its sound stored
   ahead), `04-STARW` (`04-ADPCM`) and `07-WILLY` (`08-LIVE`). Sin City
-  (`06-ADPCM`) was dropped. The set is 495 clusters (990 KB) smaller, so
-  the disk has about 1.1 MB free where it had 126 KB.
+  (`06-ADPCM`) was dropped. The set is 495 clusters (990 KB) smaller, which
+  leaves room for PiXEL's whole gallery (106.7), the owner's call until the
+  next re-cut wants the room back: 388 KB of the volume free with it, where
+  the old set had left 126 KB.
 - **The CGA set was re-cut on 2026-11-09** and named for what each is of:
   `01-SONIC` (re-encoded; text mode, so it plays on a CGA, an EGA or a
   VGA), `02-BADPC` (`02-BWPCS` as it was), `03-MIKPC` and `04-MIKU`
@@ -216986,11 +216988,11 @@ the bytes read.
   `SYSTEM/APPDATA/` made.
 - **The gallery beside the package, where it fits** (2026-10-26, the owner's
   rule: a hard disk keeps at least 100 KB free). `PICTURES/` at the root of
-  the live media and the VGA video demo disk (§98.5) holds all ten; the CGA
-  video disk's holds five since its videos were re-cut on 2026-11-09 (two
-  JPEGs, `CAT.GIF`, `BOUNCE.GIF` and `BALLOONS.PNG`: `PX_SAMPLES_CGAVID`),
-  which is what leaves it 100 KB; the Hercules video disk had 182 KB free
-  and keeps PiXEL without them. The
+  the live media and the VGA and Hercules video demo disks (§98.5) holds
+  all ten, the Hercules's since its 2026-11-09 re-cut made room (388 KB
+  left); the CGA video disk's holds five since its videos were re-cut that
+  day (two JPEGs, `CAT.GIF`, `BOUNCE.GIF` and `BALLOONS.PNG`:
+  `PX_SAMPLES_CGAVID`), which is what leaves it 100 KB. The
   360 KB selection — five pictures, 216 clusters at 1 KB — rides
   `more720.img` (§24.7) and both everything sets, where it fits without
   adding a disk. The 1.44 MB and 1.2 MB apps disks have ~160 KB free and

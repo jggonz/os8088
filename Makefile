@@ -14447,9 +14447,10 @@ PX_SAMPLES_CGAVID := $(PXS)/LAKE.JPG $(PXS)/ROOM.JPG $(PXS)/CAT.GIF \
                      $(PXS)/BALLOONS.PNG $(PXS)/BOUNCE.GIF
 # ...and the gallery as disk arguments, for the disks that carry PiXEL and have
 # room for it (SPEC.md 106.7): PICTURES/ at the root, as on the pixeldisk. The
-# whole set on the live media and the VGA video demo disk; the 360KB selection
-# on the second 720KB apps disk and both everything sets, where it fits
-# without adding a disk; the CGA video demo disk's five on that disk. Defined
+# whole set on the live media and the VGA and Hercules video demo disks; the
+# 360KB selection on the second 720KB apps disk and both everything sets,
+# where it fits without adding a disk; the CGA video demo disk's five on that
+# disk. Defined
 # HERE, above every consumer, because they are := lists.
 PX_GALLERY := $(addprefix PICTURES:,$(PX_SAMPLES))
 PX_GALLERY_360 := $(addprefix PICTURES:,$(PX_SAMPLES_360))
@@ -14486,11 +14487,10 @@ VIDDEMO_IDE := vga
 VIDDEMO_IMGS := $(foreach a,$(VIDDEMO_ADAPTERS),$(BUILD)/VIDDEMO-$(shell echo $(a) | tr a-z A-Z)-$(if $(filter $(a),$(VIDDEMO_IDE)),IDE,ST11R).VHD)
 # (= and $$(APPS) below, not :=: the apps disk's lists are defined further
 # down this file, and an immediate expansion here took them as EMPTY)
-# PiXEL's gallery ($(PX_GALLERY)) rides the VGA disk, and five of its
-# pictures ($(PX_GALLERY_CGAVID)) the CGA's, whose 2026-11-09 videos left room
-# for no more with 100 KB free; the Hercules disk had 91 clusters free
-# (182 KB) before it, and even the 360KB selection is 110, so it carries
-# PiXEL without its pictures (SPEC.md 106.7).
+# PiXEL's gallery ($(PX_GALLERY)) rides the VGA and Hercules disks - the
+# Hercules's since its 2026-11-09 videos left it room - and five of its
+# pictures ($(PX_GALLERY_CGAVID)) the CGA's, whose videos of that day left
+# room for no more with 100 KB free (SPEC.md 106.7).
 VIDDEMO_INSTALL = $(DRIVERS) $(SYSDOC) \
 	$(sort $(SYSAPPSARGS) $(SYSOPTIONALARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSLOGOARG) \
 	       $(FACESARG) $(SYSVIDARGS) \
@@ -14531,7 +14531,7 @@ $(BUILD)/VIDDEMO-%-ST11R.VHD: $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
 		--geometry 613/4/26 --mbr $(BUILD)/mbr.bin \
 		--boot $(BUILD)/boothd.bin --kernel $(KERNFILE) $(APPDATAFOLDER) \
 		$(filter %/system.cfg,$^) \
-		$(VIDDEMO_INSTALL) $(if $(filter CGA,$*),$(PX_GALLERY_CGAVID)) \
+		$(VIDDEMO_INSTALL) $(if $(filter CGA,$*),$(PX_GALLERY_CGAVID),$(PX_GALLERY)) \
 		$(addprefix MEDIA:,$(filter %/00-VIDS.TXT %.V88,$^))
 	python3 tools/os88disk.py --verify-hdd $(BUILD)/viddemo/$*.img
 	python3 tools/os88hdd.py --wrap $(BUILD)/viddemo/$*.img --st11 \
