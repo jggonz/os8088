@@ -110,84 +110,74 @@
   "poster": "cga/11-willy.png"
  },
  "0cad59c0641d70c9b3e181bdf7d6ef0d1f30259a31ec1358a719fd5fb30e297d": {
-  "src": "apps/video/demo/herc/01-TEXT.V88",
-  "mp4": "herc/01-text.mp4",
+  "src": "apps/video/demo/herc/01-MATRX.V88",
+  "mp4": "herc/01-matrx.mp4",
   "w": 533,
   "h": 304,
   "secs": 48.8,
   "title": "Text Mode ASCII Blocks",
   "kb": 1159,
-  "poster": "herc/01-text.jpg"
+  "poster": "herc/01-matrx.jpg"
  },
  "540c8d009436f43b96b689adf46f63a853c03d67b023b492b3b0217933fe27a4": {
-  "src": "apps/video/demo/herc/02-PCSPK.V88",
-  "mp4": "herc/02-pcspk.mp4",
+  "src": "apps/video/demo/herc/02-BADPC.V88",
+  "mp4": "herc/02-badpc.mp4",
   "w": 232,
   "h": 132,
   "secs": 55.7,
   "title": "PC Speaker (Set it in Ctrl Panel)",
   "kb": 654,
-  "poster": "herc/02-pcspk.png"
+  "poster": "herc/02-badpc.png"
  },
- "eddbe0ec67d0d94c223bf21c66b844c3738c4064806b9237ce51bbf90873cad8": {
-  "src": "apps/video/demo/herc/03-PCM11.V88",
-  "mp4": "herc/03-pcm11.mp4",
+ "49e1422578595b3b84db6493bcb808a50f9d5c58ff41b5d0601f396615ebce11": {
+  "src": "apps/video/demo/herc/03-BADCA.V88",
+  "mp4": "herc/03-badca.mp4",
+  "poster": "herc/03-badca.png",
   "w": 464,
   "h": 262,
   "secs": 216.0,
-  "title": "PCM 11Khz Fullscreen",
-  "kb": 4815,
-  "poster": "herc/03-pcm11.png"
+  "title": "Bad Carrot - 720*261 Fullscreen",
+  "kb": 4783
  },
  "50dfa91ad7016423003d12ac1a69c3b9b29439e8beb5bf9c0480ec425006f307": {
-  "src": "apps/video/demo/herc/04-ADPCM.V88",
-  "mp4": "herc/04-adpcm.mp4",
+  "src": "apps/video/demo/herc/04-STARW.V88",
+  "mp4": "herc/04-starw.mp4",
   "w": 387,
   "h": 166,
   "secs": 38.2,
   "title": "ADPCM 5Khz Audio",
   "kb": 1389,
-  "poster": "herc/04-adpcm.png"
+  "poster": "herc/04-starw.png"
  },
- "e3d2d836d7eb3bfc357f1e1001a888438151b00f5b558c9dd3f5b24608a14aba": {
-  "src": "apps/video/demo/herc/05-ADPCM.V88",
-  "mp4": "herc/05-adpcm.mp4",
+ "55dbe8b60a4935c64bd3bc051c173fcc76277b4eea97e4bd385355368eddbd46": {
+  "src": "apps/video/demo/herc/05-A01.V88",
+  "mp4": "herc/05-a01.mp4",
+  "poster": "herc/05-a01.png",
   "w": 387,
   "h": 218,
-  "secs": 26.0,
-  "title": "ADPCM 5Khz For Disk Rate",
-  "kb": 1181,
-  "poster": "herc/05-adpcm.png"
+  "secs": 25.0,
+  "title": "Trackmania A01 - 600*218 ADPCM",
+  "kb": 1200
  },
- "551ad9c3a6ac99a5bc30522fc00c867a9db563799fe497628bb00762d2190107": {
-  "src": "apps/video/demo/herc/06-ADPCM.V88",
-  "mp4": "herc/06-adpcm.mp4",
-  "w": 464,
-  "h": 262,
-  "secs": 29.0,
-  "title": "ADPCM 5Khz Audio",
-  "kb": 1563,
-  "poster": "herc/06-adpcm.png"
- },
- "86ae1d85b675ff715b975773bbd20dcfebd741509c783f04f0fb0d46dae0e30a": {
-  "src": "apps/video/demo/herc/07-PCM11.V88",
-  "mp4": "herc/07-pcm11.mp4",
+ "285402be86f44d50bb2409c0080e8e0e0607b1fbb6492966eceb96f5ab5d7980": {
+  "src": "apps/video/demo/herc/06-TAKON.V88",
+  "mp4": "herc/06-takon.mp4",
+  "poster": "herc/06-takon.png",
   "w": 412,
   "h": 310,
-  "secs": 40.4,
-  "title": "Fullscreen PCM 11Khz",
-  "kb": 2359,
-  "poster": "herc/07-pcm11.png"
+  "secs": 40.3,
+  "title": "Take On Me - 640x309 PCM11Khz",
+  "kb": 2315
  },
  "01b220562a0c9e0e43cb244780814408b160ae7d4347e5c0b78e8a9ae6f24053": {
-  "src": "apps/video/demo/herc/08-LIVE.V88",
-  "mp4": "herc/08-live.mp4",
+  "src": "apps/video/demo/herc/07-WILLY.V88",
+  "mp4": "herc/07-willy.mp4",
   "w": 160,
   "h": 120,
   "secs": 15.0,
   "title": "Live Desktop",
   "kb": 217,
-  "poster": "herc/08-live.png"
+  "poster": "herc/07-willy.png"
  },
  "434a92eca36576b64db1272278cb32a38fc9d43fa5721015f562ecc790d05cef": {
   "src": "apps/video/os8088.v88",

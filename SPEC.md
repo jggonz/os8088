@@ -211343,6 +211343,13 @@ that holds a `00-VIDS.TXT` - `herc/`, `cga/` and `vga/`, the owner's - as
   pair with new titles and the same frames. The built disk's `MEDIA` holds
   the thirteen with 22,778 of 64,474 clusters free (187 MB), read off the
   volume rather than booted.
+- **The Hercules set was re-cut on 2026-11-09** and named the same way:
+  `01-MATRX` (`01-TEXT`, The Matrix, as it was), `02-BADPC`
+  (`02-PCSPK`), `03-BADCA`, `05-A01` and `06-TAKON` (Bad Carrot,
+  Trackmania and Take On Me re-encoded, each with its sound stored
+  ahead), `04-STARW` (`04-ADPCM`) and `07-WILLY` (`08-LIVE`). Sin City
+  (`06-ADPCM`) was dropped. The set is 495 clusters (990 KB) smaller, so
+  the disk has about 1.1 MB free where it had 126 KB.
 - **The CGA set was re-cut on 2026-11-09** and named for what each is of:
   `01-SONIC` (re-encoded; text mode, so it plays on a CGA, an EGA or a
   VGA), `02-BADPC` (`02-BWPCS` as it was), `03-MIKPC` and `04-MIKU`
