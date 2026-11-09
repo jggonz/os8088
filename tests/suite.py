@@ -20751,6 +20751,38 @@ SOAK = [
         "(os88pdfont.py check), PDFONTS.TXT, and the art atlas "
         "(os88pdart.py check). Measured 0.4s warm",
         needs=(), builds=True),
+    Row("pagedesk", "soak", py("tests/pagedesk.py"), 300.0,
+        "PAGEDESK-SPEC 20 / PD-28: PageDesk's user flows end to end on QEMU, "
+        "VGA (FULL layout) and a VIDEO=cga private tree (COMPACT) - XTGUIDE "
+        "opened by association, paged, zoomed, Find `Index` (page 12), an "
+        "area Mark and a typed Note, Insert from PDF (MARKUP.PDF page 1), "
+        "Preferences (Flate Off, written to SYSTEM/APPDATA/PAGEDESK.CFG) and "
+        "Save As - each step confirmed off PageDesk's statics, then the "
+        "floppy read back on the host: qpdf --check exit 0, 13 pages, one "
+        "/Square and one /Text on page 12, XTGUIDE's 7 /Link kept, the CFG's "
+        "Flate byte 1. Without qpdf the PDF half SKIPs, never passes. On "
+        "VGA, back on page 12 the re-opened mark must draw all four edges: "
+        "RED at 8e00bef0d - PageDesk draws the saved /Square's left and "
+        "bottom only (top 1%, right 1%) where mutool draws all four "
+        "(rows-report, PDREND). Measured 122s VGA + 176s CGA with the knob "
+        "tree built cold",
+        needs=("qemu", "nasm", "cc"), serial=True, timeout=1200,
+        wants=("build/pagedesk.img", "build/pagedesk.bin")),
+    Row("pagedeskxt", "soak", py("tests/pagedeskxt.py"), 1200.0,
+        "PAGEDESK-SPEC 20 / PD-29's XT proof on MartyPC: a 640 KiB 8088 at "
+        "4.77 MHz on VGA (5160), CGA and a real Hercules (5150 GLaBIOS), one "
+        "thread each - HELLO.PDF and XTGUIDE.PDF opened, a page turned, "
+        "zoomed, Find over XTGUIDE, an area mark, Save As read back and "
+        "qpdf-checked. ASSERTS >= 32 KiB unclaimed after every step and "
+        "reachable at every trough with the caches shed, task 0's stack <= "
+        "384 (D22) and the private module stack <= 1792 (D23) with their "
+        "canaries; REPORTS every step's guest seconds at 4.77 MHz and never "
+        "asserts them (first page ~2.3 guest minutes, Find ~24). The legs "
+        "run concurrently: 10-16 wall minutes each, 20 for VGA + Hercules "
+        "beside another session's MartyPC",
+        needs=("marty", "nasm", "cc"), serial=True, timeout=3600, cpus=3,
+        wants=("build/os8088-360.img", "build/pagedesk360.img",
+               "build/pagedesk.bin")),
 ]
 
 
