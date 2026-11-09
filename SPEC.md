@@ -211317,7 +211317,9 @@ that holds a `00-VIDS.TXT` - `herc/`, `cga/` and `vga/`, the owner's - as
   its own page at 640 x 350, and the two NARROW screens, 320 x 240 and
   320 x 200, the last with nothing degraded - and the rest moved up two
   (`10-WILLY`, `11-TRACK`, `12-LX486`, `13-GS486`), Willy and the 486
-  pair with new titles and the same frames.
+  pair with new titles and the same frames. The built disk's `MEDIA` holds
+  the thirteen with 22,778 of 64,474 clusters free (187 MB), read off the
+  volume rather than booted.
 - **`00-VIDS.TXT` is written for Note Pad** and held to `checkreadme.py`'s
   rules as `README.TXT` is: prose one line a paragraph, the per-video
   blocks indented and 28 columns at most, plain ASCII, CRLF on the disk.
