@@ -3947,7 +3947,7 @@ fixtures, `pdw_pgcheck.py`'s I1 checks against qpdf and Poppler).
 
 File > **Insert from PDF...** (File row 9) raises the OS file dialog; the
 chosen file is not opened. The status line then asks for the pages of that
-file, `Insert pages of NAME (3 or 2-4): `, and Enter inserts
+file, `Insert NAME pages (3, 2-4): ` (built from the row on each key, no buffer), and Enter inserts
 them after the page the command is for (the current page, or the Pages
 panel's selection; Move page moves them afterwards). One run of consecutive
 pages is one page operation, so one Undo takes it back. The inserted pages
@@ -3959,7 +3959,7 @@ known when the range is typed: a range past its end is refused by the save
 different files per save (`PDM_NSLOT`), at most 240 pages in the view
 (20.11.1). Extract refuses a list that holds an inserted page, and Duplicate
 page refuses an inserted page (the writer takes a file page once, `err_detail`
-15), both with "Save first, then try again." - the extract pipeline reads one
+15), both with "Save first." - the extract pipeline reads one
 document. Insert blank page after an inserted page takes page 1's size.
 
 #### 20.16.2 The map and the row
@@ -3974,11 +3974,11 @@ since `ud_init` - a new document - or since the history was last empty): an
 Undo of Delete page or a Redo of an Insert restores map entries that name
 the slot by number, so renaming it would save another file's pages in their
 place. The command reuses the slot whose name and folder are equal, else the
-lowest free one, else refuses ("Three files at most."). A foreign
+lowest free one, else refuses ("3 files at most."). A foreign
 page is a duplicate for edit's purposes (`pdu_pg_isdup`) and `pdu_pg_id` is 0
 for it (the placeholder takes page 1's size). It owns no edit records, as a
 blank or a duplicate owns none (13.7): a new mark on any of them is refused
-in words ("Save first, then try again.", `pdutool.c`). The edit store keys a
+in words ("Save first.", `pdutool.c`). The edit store keys a
 mark by the page ID, `pdu_ed_pg()` = `pdu_pg_id(pdu_page)`, which the
 renderer draws by and the writer saves by, and the notes panel maps through
 `pdu_pg_id` and its inverse `ovl_pg_view` (verify-insert: until then a mark
@@ -4048,10 +4048,11 @@ window less those already written (`err_detail` 16), a dictionary over
 #### 20.16.4 Sizes
 
 Image + bss, measured after the verifier's fixes: PDWRT 47,724 (D24's cap
-49,152, +2,342); the primary 50,594 + 6,389 = 56,983 (+448 against 56,535,
-share +450; the last 20 are the re-open keeping a failed save's line); the overlay part 43,132 (+1,875 against 41,257, share +2,600);
-PDENG and PDREND unchanged. One resident literal, "Save first, then try
-again.", serves the three refusals (a mark, Duplicate, Extract). The
+49,152, +2,342); the primary 50,490 + 6,319 = 56,809 (+274 against 56,535;
+D27 holds insert to +280 of the primary, so the prompt is built in `pdu_line`
+from the row rather than kept in a buffer, and the lines are short); the
+overlay part 43,113 (+1,856 against 41,257, share +2,600); PDENG and PDREND unchanged. One resident literal, "Save first.", serves the
+three refusals (a mark, Duplicate, Extract). The
 save claim is 40 KiB whenever the map holds a foreign page (no new claim, D12);
 the three bit maps live in the object table's tail for the window only.
 `t_pdstk` stays at 366 of 384 on `cc_onkey`: the command, its prompt and op 5

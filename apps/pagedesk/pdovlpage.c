@@ -163,9 +163,17 @@ static void ovl_pg_do(unsigned op, unsigned a, unsigned b, unsigned e)
 }
 
 /* the prompt line: "<what> <typed>_" */
+static int pdu_inslot;                  /* the slot the chosen file has in the row */
 static void ovl_pg_ask(const char *what)
 {
-    os88_strcpy(pdu_line, what, sizeof(pdu_line));
+    if (what)
+        os88_strcpy(pdu_line, what, sizeof(pdu_line));
+    else {                              /* Insert: "Insert NAME pages (3, 2-4): ", the name from the row (D27: no buffer) */
+        os88_strcpy(pdu_line, "Insert ", sizeof(pdu_line));
+        pd_fcopy_in(pdu_dcseg(PDU_DC_PAGES), PDM_NAMES + 14 * pdu_inslot, pdu_line + 7, 13);
+        pdu_line[20] = 0;
+        pdu_cat(pdu_line, " pages (3, 2-4): ", sizeof(pdu_line));
+    }
     pdu_cat(pdu_line, pdu_pkbuf, sizeof(pdu_line));
     pdu_cat(pdu_line, "_", sizeof(pdu_line));
     pdu_tell(pdu_line);
@@ -185,8 +193,6 @@ static void ovl_pg_prompt(int kind, const char *what, int seed)
 
 
 /* ---- Insert from PDF (20.16): the file, then its pages ---- */
-static char pdu_insq[56];               /* the prompt, with the file's name in it */
-static int pdu_inslot;                  /* the slot the chosen file has in the row */
 
 /* the slot a file takes: the one that already names it, else the lowest no
  * map entry uses and the undo history cannot bring back; -1 = three files
@@ -239,7 +245,7 @@ static int ovl_ins_file(const char *name)
     os88_file_here(&pdu_tgtplace);
     k = ovl_ins_slot(name);
     if (k < 0) {
-        pdu_tell("Three files at most.");
+        pdu_tell("3 files at most.");
         return 1;
     }
     seg = pdu_dcseg(PDU_DC_PAGES);
@@ -248,10 +254,7 @@ static int ovl_ins_file(const char *name)
     pd_fpokew(seg, 1004 + 4 * k, pdu_tgtplace.vol + 1u);
     pdu_insmask |= 1u << k;             /* named: kept while the history can name it */
     pdu_inslot = k;
-    os88_strcpy(pdu_insq, "Insert pages of ", sizeof(pdu_insq));
-    pdu_cat(pdu_insq, name, sizeof(pdu_insq));
-    pdu_cat(pdu_insq, " (3 or 2-4): ", sizeof(pdu_insq));
-    ovl_pg_prompt(PK_INSERT, pdu_insq, 0);
+    ovl_pg_prompt(PK_INSERT, 0, 0);
     return 1;
 }
 
@@ -271,7 +274,7 @@ static void ovl_ins_go(void)
             hi = hi * 10 + (pdu_pkbuf[i++] - '0');
     }
     if (pdu_pkbuf[i] || lo < 1 || hi < lo || hi > PD_MAXPAGES) {
-        pdu_tell("Use a page like 3 or 2-4.");
+        pdu_tell("Try 3 or 2-4.");
         return;
     }
     n = hi - lo + 1;
@@ -283,13 +286,12 @@ static void ovl_ins_go(void)
         e = pdu_pgw(v);
         if (PDM_KIND(e) == PDM_FOREIGN && (int)((PDM_IDX(e) >> 10) & 3) == pdu_inslot
             && (PDM_IDX(e) & 1023u) + 1 >= lo && (PDM_IDX(e) & 1023u) < hi) {
-            pdu_tell("Those pages are already in.");
+            pdu_tell("Already inserted.");
             return;
         }
     }
     pdu_pk = PK_NONE;
     ovl_pg_do(5, ovl_pg_tgt() + 1, n, PDM_MK(PDM_FOREIGN, 0, PDM_FORE(pdu_inslot, lo - 1)));
-    pdu_tell("Inserted; Save As draws them.");
 }
 
 static int ovl_pg_cmd(int id)
@@ -498,7 +500,7 @@ static int ovl_pg_key(int ascii, int scan)
         pdu_pkbuf[pdu_pklen++] = ascii;
         pdu_pkbuf[pdu_pklen] = 0;
     }
-    ovl_pg_ask(pdu_pk == PK_EXTRACT ? "Extract pages (e.g. 1,3-5): " : pdu_pk == PK_INSERT ? pdu_insq : "Move page to position: ");
+    ovl_pg_ask(pdu_pk == PK_EXTRACT ? "Extract pages (e.g. 1,3-5): " : pdu_pk == PK_INSERT ? (const char *)0 : "Move page to position: ");
     return 1;
 }
 
@@ -619,7 +621,6 @@ static int ovl_save_done(unsigned err)
 {
     int reopen, r;
     unsigned err_d;
-    static char err_n[14];
     reopen = (pdu_xsave.mode & PDW_OUT_REOPEN) != 0;
     pdu_wrt_out();                      /* 16.2: the writer is freed after */
     if (err) {
@@ -628,17 +629,13 @@ static int ovl_save_done(unsigned err)
         pdu_cat(pdu_line, ": ", sizeof(pdu_line));
         err_d = pdu_xsave.err_detail;
         if (err != PDE_NOMEM && err_d >= 20 && err_d < 20 + PDM_NSLOT) {     /* 20.16: the foreign file at fault */
-            for (r = 0; r < 13; r++) {
-                err_n[r] = pd_fpeekb(pdu_dcseg(PDU_DC_PAGES), PDM_NAMES + 14 * (err_d - 20) + r);
-                if (!err_n[r])
-                    break;
-            }
-            err_n[r] = 0;
-            pdu_cat(pdu_line, err_n, sizeof(pdu_line));
+            r = os88_strlen(pdu_line);  /* <= 29 here: the name (8.3, NUL) fits behind it */
+            pd_fcopy_in(pdu_dcseg(PDU_DC_PAGES), PDM_NAMES + 14 * (err_d - 20), pdu_line + r, 13);
+            pdu_line[r + 13] = 0;
             pdu_cat(pdu_line, ": ", sizeof(pdu_line));
         }
-        pdu_cat(pdu_line, err == PDE_RANGE && err_d == 17 ? "page past the file's end."
-                : err == PDE_LIMIT && err_d == 18 ? "form fields or scripts."
+        pdu_cat(pdu_line, err == PDE_RANGE && err_d == 17 ? "no such page."
+                : err == PDE_LIMIT && err_d == 18 ? "forms or scripts."
                 : pdu_errtext(err), sizeof(pdu_line));
         pdu_wsay(pdu_line);
         if (reopen)
