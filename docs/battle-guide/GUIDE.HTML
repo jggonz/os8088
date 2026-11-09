@@ -1,0 +1,630 @@
+<!doctype html>
+<!-- The pictures in guide/ are made by tools/os88vbtguide.py in the os8088 tree. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Video Battle Builder Guide</title>
+<style>
+:root {
+  --bg: #fbfaf7; --fg: #1f2328; --muted: #5b6168; --line: #d9d6cf;
+  --card: #ffffff; --accent: #2a62b8; --accent-soft: #e6eefb;
+  --why: #fff6dc; --why-line: #e3c25a; --try: #e5f5ea; --try-line: #5aa874;
+  --warn: #fde8e6; --warn-line: #d46a5f; --code: #f1efe9;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #17191c; --fg: #e6e4df; --muted: #a3a7ad; --line: #353a40;
+    --card: #1f2226; --accent: #7aa7ec; --accent-soft: #233149;
+    --why: #332c16; --why-line: #8f7a2d; --try: #18301f; --try-line: #3f7d52;
+    --warn: #3a1f1c; --warn-line: #a4524a; --code: #26292e;
+  }
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+a { color: var(--accent); }
+code, kbd {
+  font: 0.9em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: var(--code); padding: 0.1em 0.35em; border-radius: 4px;
+}
+kbd { border: 1px solid var(--line); border-bottom-width: 2px; }
+pre {
+  background: var(--code); padding: 12px 14px; border-radius: 8px;
+  overflow-x: auto; font: 0.88em/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+pre code { background: none; padding: 0; }
+.layout { display: flex; max-width: 1240px; margin: 0 auto; }
+nav.toc {
+  position: sticky; top: 0; align-self: flex-start; height: 100vh;
+  overflow-y: auto; width: 260px; flex: none; padding: 24px 16px 40px 20px;
+  border-right: 1px solid var(--line); font-size: 14px;
+}
+nav.toc h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 8px; }
+nav.toc ol { list-style: none; padding: 0; margin: 0; }
+nav.toc li { margin: 2px 0; }
+nav.toc li li { padding-left: 14px; font-size: 13px; }
+nav.toc a { text-decoration: none; color: var(--fg); display: block; padding: 2px 6px; border-radius: 4px; }
+nav.toc a:hover { background: var(--accent-soft); }
+main { flex: 1; min-width: 0; padding: 32px 40px 80px; max-width: 920px; }
+header.hero { border-bottom: 1px solid var(--line); padding-bottom: 20px; margin-bottom: 8px; }
+header.hero h1 { font-size: 2.2em; margin: 0 0 6px; line-height: 1.2; }
+header.hero p { color: var(--muted); margin: 0; font-size: 1.08em; }
+h2 { font-size: 1.6em; margin: 2.2em 0 0.4em; padding-top: 0.4em; border-top: 1px solid var(--line); line-height: 1.25; }
+h3 { font-size: 1.22em; margin: 1.8em 0 0.3em; line-height: 1.3; }
+h4 { font-size: 1.02em; margin: 1.4em 0 0.2em; }
+p, ul, ol { margin: 0.6em 0; }
+li { margin: 0.2em 0; }
+table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size: 0.94em; display: block; overflow-x: auto; }
+th, td { text-align: left; vertical-align: top; padding: 7px 10px; border-bottom: 1px solid var(--line); }
+th { background: var(--card); font-weight: 600; }
+figure { margin: 1.2em 0; }
+figure img { max-width: 100%; height: auto; display: block; border: 1px solid var(--line); border-radius: 6px; background: #000; }
+figure.shot img { background: var(--card); }
+figcaption { color: var(--muted); font-size: 0.9em; margin-top: 6px; }
+img.px { image-rendering: pixelated; image-rendering: crisp-edges; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; margin: 1em 0; }
+.grid.three { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+.grid.two { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+figure a { display: block; }
+.grid figure { margin: 0; }
+.grid figcaption b { color: var(--fg); }
+.box { border-left: 4px solid; border-radius: 6px; padding: 10px 14px; margin: 1.1em 0; }
+.box > :first-child { margin-top: 0; }
+.box > :last-child { margin-bottom: 0; }
+.box .label { font-weight: 700; display: block; margin-bottom: 2px; }
+.why { background: var(--why); border-color: var(--why-line); }
+.try { background: var(--try); border-color: var(--try-line); }
+.warn { background: var(--warn); border-color: var(--warn-line); }
+.steps { counter-reset: s; list-style: none; padding: 0; }
+.steps > li { counter-increment: s; position: relative; padding-left: 40px; margin: 0.9em 0; }
+.steps > li::before {
+  content: counter(s); position: absolute; left: 0; top: 0; width: 28px; height: 28px;
+  border-radius: 50%; background: var(--accent); color: #fff; font-weight: 700;
+  display: flex; align-items: center; justify-content: center; font-size: 14px;
+}
+.opt { margin: 1.1em 0; padding: 12px 16px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
+.opt h4 { margin: 0 0 4px; }
+.opt .when { margin: 0.4em 0 0; }
+.opt .when b { color: var(--accent); }
+.recipe { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 18px; margin: 1.2em 0; }
+.recipe h3 { margin-top: 0.2em; }
+.recipe dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0.6em 0; }
+.recipe dt { font-weight: 600; }
+.recipe dd { margin: 0; }
+.small { font-size: 0.9em; color: var(--muted); }
+@media (max-width: 900px) {
+  .layout { display: block; }
+  nav.toc { position: static; height: auto; width: auto; border-right: 0; border-bottom: 1px solid var(--line); padding: 16px; }
+  main { padding: 20px 16px 60px; }
+}
+</style>
+</head>
+<body>
+<div class="layout">
+<nav class="toc" aria-label="Contents">
+<h2>Contents</h2>
+<ol>
+<li><a href="#welcome">What a Video Battle is</a></li>
+<li><a href="#setup">Before you start</a></li>
+<li><a href="#idea">How a battle fits together</a></li>
+<li><a href="#walk">Making a battle, step by step</a>
+  <ol>
+  <li><a href="#w-footage">1. Record the footage</a></li>
+  <li><a href="#w-project">2. Start a project</a></li>
+  <li><a href="#w-battle">3. The Battle tab</a></li>
+  <li><a href="#w-idle">4. The idle loop</a></li>
+  <li><a href="#w-clips">5. The clips</a></li>
+  <li><a href="#w-openings">6. The openings</a></li>
+  <li><a href="#w-music">7. The music</a></li>
+  <li><a href="#w-loops">8. The title and the endings</a></li>
+  <li><a href="#w-actions">9. The actions</a></li>
+  <li><a href="#w-party">10. The characters and their menus</a></li>
+  <li><a href="#w-enemy">11. The enemy</a></li>
+  <li><a href="#w-sounds">12. The sounds</a></li>
+  <li><a href="#w-build">13. Build, and make a disk</a></li>
+  <li><a href="#w-play">14. Play it on os8088</a></li>
+  </ol></li>
+<li><a href="#when">When and why: the choices that matter</a>
+  <ol>
+  <li><a href="#madefor">Made for, and the disk</a></li>
+  <li><a href="#adapters">CGA, VGA and Hercules</a></li>
+  <li><a href="#vgacolours">VGA's colours</a></li>
+  <li><a href="#clippal">A clip's own palette</a></li>
+  <li><a href="#anchors">Anchors: how long a command waits</a></li>
+  <li><a href="#fades">Joins and fades</a></li>
+  <li><a href="#musicloop">The music's loop</a></li>
+  <li><a href="#cadence">Captures by their cadence</a></li>
+  <li><a href="#hold">Hold clips to the disk</a></li>
+  <li><a href="#xms">XMS on the target</a></li>
+  <li><a href="#memory">Memory on a 640 KB machine</a></li>
+  <li><a href="#games">A disk, or a game file</a></li>
+  </ol></li>
+<li><a href="#trouble">When something looks wrong</a></li>
+<li><a href="#cli">The command line</a></li>
+<li><a href="#words">Words used in this guide</a></li>
+</ol>
+</nav>
+<main>
+
+<header class="hero">
+<h1>The Video Battle Builder Guide</h1>
+<p>How to turn footage of a turn-based battle into a Video Battle that plays on a 1980s PC, and how to decide which of the builder's settings matter for yours.</p>
+</header>
+
+<!-- ================================================================== -->
+<h2 id="welcome">What a Video Battle is</h2>
+
+<p>A Video Battle is a turn-based battle whose picture is video. A loop of the scene standing still, the <b>idle loop</b>, plays in the top of the screen. Under it, the <b>band</b> holds the menu, the party's HP and MP, and a message line. When a player picks a command, its clip <b>joins</b> the loop exactly where the loop stands, plays, and joins back onto the loop at its end. The battle reads as one continuous scene, with music under it, on machines as slow as the original 4.77 MHz IBM PC.</p>
+
+<p>The battle is data. One file, <code>BATTLE.VBT</code>, holds every clip, the music, the menus and the rules: who has which command, what each command does, and how the enemy chooses its moves. On os8088, <code>VBATTLE.O88</code> plays it.</p>
+
+<p>The builder runs on your modern computer and makes that file. It:</p>
+<ul>
+<li><b>reads your footage</b> (any video ffmpeg understands) and shows it as the target screen will;</li>
+<li><b>finds the idle loop</b> in a recording of the scene standing still, and <b>recommends where each clip joins it</b> and where it leaves;</li>
+<li><b>holds the rules</b>: the characters, their menus, the actions, the enemy and its moves, and how the battle ends;</li>
+<li><b>builds and checks the bundle</b>. Every way into and out of every clip is decoded again and compared, so a join that would leave a wrong pixel stops the build;</li>
+<li><b>prices it</b> against the machine you made it for: each clip's share of the disk, and what the player will hold in 640 KB;</li>
+<li><b>puts it on a disk</b>: a floppy, or a hard disk image that boots os8088 by itself.</li>
+</ul>
+
+<p>Most of this guide is a walkthrough. It builds one battle from start to finish with a screenshot at every step. After it, <a href="#when">When and why</a> takes the settings that change the result and says when each is worth changing.</p>
+
+<div class="box try"><span class="label">If you only read one section</span>
+Read <a href="#walk">Making a battle, step by step</a>. The window starts every setting at a sensible value, and the Build tab's checks say what is still missing.</div>
+
+<!-- ================================================================== -->
+<h2 id="setup">Before you start</h2>
+
+<h3>What you need on your computer</h3>
+<ul>
+<li><b>Python 3.11 or newer</b> with <b>Tk</b>, for the window. The installer from python.org includes Tk. On Linux, install your distribution's <code>python3-tk</code> package.</li>
+<li><b>numpy</b> and <b>Pillow</b>: <code>python3 -m pip install numpy pillow</code></li>
+<li><b>ffmpeg</b> and <b>ffprobe</b> on your PATH, from <a href="https://ffmpeg.org">ffmpeg.org</a>. They read your footage and your sounds.</li>
+<li>Optional: <code>python3 -m pip install tkinterdnd2</code> lets you drop files on the window on macOS and Linux. On Windows, dropping works without it. Without it, every drop has a button that does the same.</li>
+<li>Optional, to <b>listen</b> in the window: <code>afplay</code> on macOS, the built-in player on Windows, or <code>paplay</code>, <code>aplay</code> or <code>ffplay</code> on Linux. With none of them, the window tells you where the WAV it made is.</li>
+</ul>
+
+<h3>Starting it</h3>
+<p>Open a terminal in the folder this guide is in and run:</p>
+<pre><code>python3 os88vbtgui.py</code></pre>
+<p>To open a project at the same time, name it: <code>python3 os88vbtgui.py MYFIGHT.vbp</code>. On Windows, <code>py os88vbtgui.py</code> may be the command instead.</p>
+
+<h3>What is in this folder</h3>
+<table>
+<tr><th>File</th><th>What it is</th></tr>
+<tr><td><code>os88vbtgui.py</code></td><td>The builder's window. Start here.</td></tr>
+<tr><td><code>os88vbt.py</code></td><td>The builder on the command line (see <a href="#cli">The command line</a>). The window runs it to build and to make disks.</td></tr>
+<tr><td><code>vbtproj.py</code>, <code>vbtana.py</code></td><td>The project, and the analysis: reading footage, finding loops, scoring joins, measuring sounds. Both work on the command line too.</td></tr>
+<tr><td><code>VBATTLE.O88</code></td><td>Video Battle, the os8088 program that plays a battle. Every disk the builder makes gets a copy.</td></tr>
+<tr><td><code>VBATTLED.O88</code></td><td>The same program, writing a record of each play beside itself (<code>VBPROF1.DAT</code> and on), for finding out why a machine stutters. Hard disks the builder makes get a copy.</td></tr>
+<tr><td><code>boot/</code></td><td>os8088 itself (the kernel and drivers), so a hard disk image the builder makes can boot.</td></tr>
+<tr><td><code>GUIDE.HTML</code>, <code>guide/</code></td><td>This guide and its pictures.</td></tr>
+<tr><td><code>README.TXT</code></td><td>A one-page summary.</td></tr>
+<tr><td>the other <code>.py</code> files</td><td>Parts of the builder, among them the video encoder it reads footage with. Leave them where they are.</td></tr>
+</table>
+
+<h3>Where a project keeps things</h3>
+<p>A project is one file, <code>NAME.vbp</code>. It names your footage and sounds by where they are, relative to the project, so keep them beside it or in a folder under it. The first time the window looks at a video it encodes it, which takes a minute or two; the frames are kept in <code>NAME.cache/</code> beside the project, and every look after that is instant. A build writes <code>BATTLE.VBT</code> (and <code>BATTLEV.VBT</code>, <code>BATTLEH.VBT</code> for the other adapters) beside the project too.</p>
+
+<p>Long work (reading a video, finding loops, building, making a disk) runs in the background. The status bar at the bottom says what it is doing, the progress bar moves, and <b>Cancel</b> stops it. A job reads the project from its file, so the window asks you to save a new project before its first job.</p>
+
+<!-- ================================================================== -->
+<h2 id="idea">How a battle fits together</h2>
+
+<p>Six kinds of footage make a battle. You do not need all of them: the idle loop, one action and one ending make a battle that plays.</p>
+
+<table>
+<tr><th>Piece</th><th>What it is</th><th>Where it is set</th></tr>
+<tr><td><b>The idle loop</b></td><td>The scene standing still, a few seconds long, played round and round while the player chooses. Held in memory.</td><td>Idle tab</td></tr>
+<tr><td><b>Action clips</b></td><td>One for each thing that can happen: an attack, a spell, the enemy's move. Each starts at one of the loop's <b>anchor</b> frames and ends on its <b>exit</b> frame, so it joins the loop both ways.</td><td>Clips tab; the Actions tab says which clip each action plays</td></tr>
+<tr><td><b>Openings</b></td><td>What plays before the battle, in turn from a black screen. The last one joins the idle loop.</td><td>Openings tab</td></tr>
+<tr><td><b>The title loop</b></td><td>Optional: a loop before the openings, round until the player presses Enter.</td><td>Title &amp; endings tab</td></tr>
+<tr><td><b>Endings</b></td><td>A victory clip and a defeat clip, played to their end. Each can then hold, fade or join an <b>end loop</b>, or play the battle again.</td><td>Battle tab (the clips) and Title &amp; endings tab (what follows)</td></tr>
+<tr><td><b>Sound</b></td><td>The music, which always loops; each clip's sound effects, placed on its timeline; the menu's own small sounds.</td><td>Battle, Clips, Sounds tabs</td></tr>
+</table>
+
+<p>Every join is exact. The builder makes the frames between the screens the player will really have up, so a clip that starts on the loop's frame 6 starts from frame 6 as it is on the glass. The only question is how alike the two pictures are, and the window scores that for you.</p>
+
+<!-- ================================================================== -->
+<h2 id="walk">Making a battle, step by step</h2>
+
+<p>This walkthrough builds <b>The Iron Beetle</b>: two heroes, Ari and Bram, against a giant beetle. Its footage is os8088's own demo battle, drawn and scored for the project, written out as the ordinary files a screen recording would give you:</p>
+
+<table>
+<tr><th>File</th><th>What it is</th></tr>
+<tr><td><code>footage/idle.mp4</code></td><td>The scene standing still, recorded for a while: four turns of its loop</td></tr>
+<tr><td><code>footage/ari_attack.mp4</code>, <code>ari_bolt.mp4</code>, <code>ari_limit.mp4</code>, <code>bram_attack.mp4</code>, <code>bram_heal.mp4</code>, <code>beetle_attack.mp4</code></td><td>One recording a command, each from the standing pose and back to it</td></tr>
+<tr><td><code>footage/victory.mp4</code>, <code>defeat.mp4</code></td><td>How it ends</td></tr>
+<tr><td><code>footage/title.mp4</code>, <code>reveal.mp4</code></td><td>A title card, and the scene coming up out of black</td></tr>
+<tr><td><code>footage/music.wav</code>, <code>slash.wav</code>, <code>zap.wav</code>, ...</td><td>The music, and one sound for each effect</td></tr>
+<tr><td><code>footage/cover.png</code></td><td>The title picture</td></tr>
+</table>
+
+<p>Every screenshot of the window in this guide is the window working on these files. The same battle, ready made, is one command away: <code>python3 os88vbt.py demo-project demo.vbp</code> writes it as a project that needs no footage at all, which is a good way to look around before you start your own.</p>
+
+<!-- ------------------------------------------------------------------ -->
+<h3 id="w-footage">1. Record the footage</h3>
+
+<p>Plan the recording around the idle loop, because everything joins it.</p>
+<ul>
+<li><b>The idle loop.</b> Record the scene standing still for several seconds, longer than one turn of its animation. The window finds the loop in it.</li>
+<li><b>Each action</b> from the standing pose to the standing pose. Start the recording a little before the command is given and stop a little after the scene has settled again. The window finds where it leaves the pose and where it comes back, so you do not need to trim it.</li>
+<li><b>One recording a file</b> is simplest: each file becomes a clip of its own. A long recording works too, with several clips cut from it (<b>From a source...</b> on the Clips tab).</li>
+<li><b>The frame rate.</b> The battle plays 15 frames a second. A recording at 15, 30 or 60 frames a second is fine. A recording made off a screen at a whole multiple of the game's own rate (60 frames of a game that draws 15) is read by the frames the game drew; see <a href="#cadence">Captures by their cadence</a>.</li>
+<li><b>Sound.</b> The music is best as a file of its own, so it can loop. Effects can be files of their own, or a clip can keep the sound it was recorded with (<b>Its own soundtrack</b>).</li>
+</ul>
+
+<div class="box why"><span class="label">Why the standing pose matters</span>
+A clip joins the loop at one of its frames and leaves onto another. The more an action's first and last frames look like a frame of the loop, the less the player sees at the join. A game that returns to exactly the same pose after every action makes perfect joins.</div>
+
+<!-- ------------------------------------------------------------------ -->
+<h3 id="w-project">2. Start a project</h3>
+
+<p>Start the window. It opens on an empty project called Untitled. Choose <b>File &gt; Save as...</b> and save it beside your footage, here as <code>BEETLE.vbp</code>. The title bar then names the battle and its file; a <code>*</code> in front means there are changes not yet saved.</p>
+
+<p>The <b>Build</b> tab already says what is missing. A new project has no idle loop, which is an ERROR (it stops a build), and no opening and no music, which are INFO lines (it builds without them). Double-click a line to go to the tab that fixes it.</p>
+
+<figure class="shot"><a href="guide/build-checks.png" title="Open full size"><img width="1386" height="112" src="guide/build-checks.png" alt="The Build tab's What is wrong list for a new project: an error for no idle loop, and notes for no opening and no music." loading="lazy"></a>
+<figcaption>A new project's checks. They update as you work, so this list is the to-do list.</figcaption></figure>
+
+<p>The <b>File</b> menu has New, Open..., Open recent, Save, Save as... and Quit; the <b>Edit</b> menu has Undo (Ctrl+Z) and Redo (Ctrl+Y), which undo any change to the project; the <b>View</b> menu's <b>The band in the previews</b> shows or hides the menu band under every preview.</p>
+
+<!-- ------------------------------------------------------------------ -->
+<h3 id="w-battle">3. The Battle tab</h3>
+
+<p>The Battle tab holds what is true of the whole battle.</p>
+
+<figure class="shot"><a href="guide/tab-battle.png" title="Open full size"><img width="1355" height="920" src="guide/tab-battle.png" alt="The Battle tab: the name, Made for, the CGA palette, the sizes, the VGA and Hercules renditions with the title picture, how it ends, and the music." loading="lazy"></a>
+<figcaption>The Battle tab for The Iron Beetle: made for an IBM XT with an ST-225 hard disk, cyan, red and white on CGA, and a VGA version as well.</figcaption></figure>
+
+<ol class="steps">
+<li><b>Name.</b> The battle's name, up to 31 letters. It is the title of the battle's window on the os8088 desktop.</li>
+<li><b>Made for.</b> The machine the battle is for: its processor and its disk. The note beside it says what that machine can read and draw. This is the most important choice; see <a href="#madefor">Made for, and the disk</a>.</li>
+<li><b>Palette.</b> The four CGA colours the whole battle is drawn in, the band included: one of CGA's three sets, <b>Bright</b> or not, and the <b>Background</b> colour. The swatches show the four. Pick the set whose colours are nearest your footage's.</li>
+<li><b>Sizes.</b> How many of the screen's 200 rows are video; the rest are the band. 142 rows of video leave a band of 58 rows, seven lines of text.</li>
+<li><b>Also made for.</b> Tick <b>VGA</b> or <b>Hercules</b> and every build makes a version of the battle for that adapter too (<code>BATTLEV.VBT</code>, <code>BATTLEH.VBT</code>); the player picks the one for the machine it is on. See <a href="#adapters">CGA, VGA and Hercules</a>.</li>
+<li><b>Title picture.</b> <b>Choose...</b> a picture and the battle opens in a window on the desktop showing it, with <b>Its line</b> under it ("Click or press Enter to begin" unless you change it). <b>None</b> takes it away.</li>
+<li><b>How it ends.</b> The <b>Victory clip</b> and the <b>Defeat clip</b>. Pick them once the clips are in (step 5).</li>
+<li><b>Music.</b> Further down; see step 7.</li>
+</ol>
+
+<!-- ------------------------------------------------------------------ -->
+<h3 id="w-idle">4. The idle loop</h3>
+
+<p>On the <b>Idle</b> tab, click <b>Add a video...</b> and choose the recording of the scene standing still (or drop the file on the tab). The window reads it, which is a minute or two the first time, and then recommends loops at once: the list shows each candidate as a range of frames and how much its <b>seam</b> differs, the jump from the loop's last frame back to its first. The best is first and chosen.</p>
+
+<figure class="shot"><a href="guide/tab-idle.png" title="Open full size"><img width="1355" height="920" src="guide/tab-idle.png" alt="The Idle tab: the scene with the band under it, the loop's frames 0 to 24, and the list of recommended loops." loading="lazy"></a>
+<figcaption>The idle loop: frames 0 to 23 of idle.mp4, 24 frames (1.6 seconds). Each candidate is a whole turn of the animation, so every seam differs 0.00%.</figcaption></figure>
+
+<ul>
+<li><b>Play the loop</b> plays the loop being chosen, round and round. <b>Across the seam</b> plays the frames either side of the seam, so you can watch the jump. Either button again stops it.</li>
+<li><b>Difference at the seam</b> shows the loop's last frame with every pixel that changes into its first frame marked. The fewer marks, the smoother the seam.</li>
+<li>Click a candidate to preview it; <b>Use</b> makes it the loop. Or type the frames in <b>Loop: frames ... to (not incl.)</b> and click <b>Set</b>.</li>
+<li><b>Cost it</b> says what the loop will take in memory: its records, the seam's, and the largest.</li>
+</ul>
+
+<figure class="shot"><a href="guide/idle-seam.png" title="Open full size"><img width="642" height="402" src="guide/idle-seam.png" alt="The difference view: the scene dimmed, with the pixels that change at the seam marked in bright green." loading="lazy"></a>
+<figcaption>The difference view. The marked pixels are the ones the seam redraws.</figcaption></figure>
+
+<div class="box why"><span class="label">How long should the loop be?</span>
+As short as looks natural. The loop is held in memory for the whole battle, so every frame of it is memory the clips cannot use; and a clip can only start at one of the loop's frames, so a long loop with few anchors makes a command wait longer. One turn of the animation is usually right.</div>
+
+<!-- ------------------------------------------------------------------ -->
+<h3 id="w-clips">5. The clips</h3>
+
+<p>On the <b>Clips</b> tab, click <b>Add videos...</b> and choose every action's recording at once (or drop them on the window). Each video becomes a clip named after its file, read one after another. Then go through them one at a time.</p>
+
+<figure class="shot"><a href="guide/tab-clips.png" title="Open full size"><img width="1355" height="920" src="guide/tab-clips.png" alt="The Clips tab: the list of clips with where each joins and exits, the clip's frame with the band under it, the timeline with a slash effect, and the idle loop's filmstrip with the anchors outlined." loading="lazy"></a>
+<figcaption>ari_attack: it joins the loop at frames 0, 6, 12 and 18 (outlined in yellow on the filmstrip), exits onto frame 0, and plays the slash sound at its frame 12.</figcaption></figure>
+
+<ol class="steps">
+<li><b>Pick the clip</b> in the list. The picture shows its frame at the slider; the filmstrip at the bottom is the idle loop.</li>
+<li><b>Recommend</b>, then <b>Use the recommendation</b>. The window finds the clip's <b>In</b> frame (of its first frames, the one most like a frame of the loop), the <b>anchors</b> (the loop's frames it can join at), its <b>Out</b> frame and its <b>exit</b> (the loop frame its last frame is most like). The line under the button says what it found.</li>
+<li><b>Check the joins on the filmstrip.</b> Under each loop frame are two numbers: how much the clip's In frame differs from it, with the bytes an entry from it would cost, and how much the clip's Out frame differs (<code>out</code>). Click a frame to compare; tick <b>Difference from the selected idle frame</b> to see the pixels. Double-click a frame (or <b>Anchor on/off</b>) to make it an anchor or not; right-click it (or <b>Exit onto it</b>) to make it the exit.</li>
+<li><b>Adjust In and Out</b> if you want, and click <b>Set</b>.</li>
+<li><b>Add its sounds.</b> Under <b>Effects on its timeline</b>, choose a sound and click <b>Add at this frame</b> to place it at the slider's frame, or <b>A sound file...</b> to bring one in. A cue's <b>Level</b> and <b>stops at frame</b> are set below the list; drag a cue on the timeline to move it. <b>Its own soundtrack, frames</b> uses the clip's recorded sound between two frames instead. <b>Listen to the clip's sound</b> plays it as the build will make it.</li>
+<li><b>The endings.</b> For the victory and defeat clips, tick <b>The battle ends on it (held, no exit)</b>. An ending has no exit: the battle stops on it.</li>
+</ol>
+
+<p>The <b>Joins at</b> column says where each clip can start, and the line under the buttons says <b>The longest wait for an anchor</b>: how long a command can wait for the loop to reach one of its anchors. <b>Its colours on VGA</b> matters only for a VGA version; see <a href="#clippal">A clip's own palette</a>.</p>
+
+<div class="box try"><span class="label">Try it</span>
+Pick a clip, set the slider to its first frame, and click the anchors on the filmstrip one at a time with <b>Difference from the selected idle frame</b> ticked. The frame with the fewest marked pixels is the cleanest join; the Recommend button picks the frames within a margin of the best.</div>
+
+<!-- ------------------------------------------------------------------ -->
+<h3 id="w-openings">6. The openings</h3>
+
+<p>The openings play before the battle, in turn, from a black screen. On the <b>Openings</b> tab, choose a clip in the box under the list and click <b>Add</b> (or drop a video on the tab, which adds it as a clip and as the next opening). <b>Earlier</b> and <b>Later</b> change the order; <b>Remove</b> takes one out. A battle can have up to eight.</p>
+
+<figure class="shot"><a href="guide/tab-openings.png" title="Open full size"><img width="1355" height="920" src="guide/tab-openings.png" alt="The Openings tab: one opening, reveal, with the riser sound, joining idle frame 0, and the preview of its frame 12 with the band under it." loading="lazy"></a>
+<figcaption>One opening: the scene comes up out of black to the riser sound and joins the idle loop at its frame 0.</figcaption></figure>
+
+<ul>
+<li><b>Its sound</b> plays instead of the music while the opening plays; <b>Its own soundtrack</b> uses the clip's recorded sound.</li>
+<li><b>Screen</b>: <b>Full screen</b> plays it over the whole screen with no band; <b>With the menu (video at the top)</b> plays it in the video area with the band under it. The full-screen ones come first. The last opening always plays with the menu, because it joins the idle loop.</li>
+<li><b>Joins idle frame</b>: the loop frame the last opening leaves onto. <b>Recommend</b> finds the most alike.</li>
+<li><b>The music comes in</b>: when the last opening's sound ends, the music starts. <b>Suggest the join</b> lists the places in the music that follow the opening's sound best; <b>Listen to the join</b> plays the end of the openings into the music; <b>Use</b> takes the one chosen.</li>
+<li><b>Load the pictures</b> and <b>Play the start, with its sound</b> preview the battle's start: the openings in turn, then the loop.</li>
+</ul>
+
+<!-- ------------------------------------------------------------------ -->
+<h3 id="w-music">7. The music</h3>
+
+<p>Back on the <b>Battle</b> tab, under <b>Music (it always loops)</b>: click <b>Add a file...</b> and choose the music (or drop it on the Music box). Then find its loop. <b>Find loops</b> listens to it and lists the places where it can jump back with the least seam, each with how alike the two sides are. Click one and <b>Listen to its jump</b> to hear the jump, then <b>Use the chosen loop</b>. Or type the loop's two times and click <b>Set</b>.</p>
+
+<figure class="shot"><a href="guide/battle-music.png" title="Open full size"><img width="1322" height="276" src="guide/battle-music.png" alt="The Music box: the music sound, and five loop candidates, the first from 1.486 s to 20.686 s, 99% alike." loading="lazy"></a>
+<figcaption>Five loops found in music.wav. The first jumps from 20.686 s back to 1.486 s and is 99% alike either side.</figcaption></figure>
+
+<p><b>Comes in at (s)</b> is where the music starts after the openings (step 6 suggests it). <b>(no music)</b> in the Sound box makes a battle with no music: the clips' and the menu's sounds play over silence.</p>
+
+<!-- ------------------------------------------------------------------ -->
+<h3 id="w-loops">8. The title and the endings</h3>
+
+<p>The <b>Title &amp; endings</b> tab is optional, and a battle without it starts on its openings and stops on its ending clip. It has a panel for the title and one each for victory and defeat, and one picture for all three.</p>
+
+<figure class="shot"><a href="guide/tab-loops.png" title="Open full size"><img width="1355" height="920" src="guide/tab-loops.png" alt="The Title and endings tab: the title loop on frames 19 to 35 of the title clip, left by a fade; victory fading to its end clip; defeat fading and playing again; the title card playing in the picture." loading="lazy"></a>
+<figcaption>The Iron Beetle's title card goes round until Enter, then fades; victory fades to a loop of the party cheering; defeat fades and plays the battle again.</figcaption></figure>
+
+<ul>
+<li><b>The title</b> plays before the openings, over the whole screen, round until Enter or Space. Choose its <b>Loop clip</b>, then its <b>Frames</b> (<b>Recommend</b> lists loops in it, as the Idle tab does) and <b>Its sound</b>. <b>Left by</b> is <b>a fade</b>, or a clip that is entered at the title's frames in <b>Entered at</b> (<b>Recommend</b> finds them) and leads into the openings.</li>
+<li><b>Victory</b> and <b>Defeat</b>, <b>Then</b>: <b>Hold its last frame</b>; <b>Fade to its end clip</b>; <b>Join its end clip</b>, its last frame onto the end clip's first; or <b>Fade, and play again</b>. The <b>End clip</b> plays <b>round, until a key</b> or <b>once</b>, in the video area or <b>Full screen</b>; once, <b>After it</b> it can hold, <b>fade to the title</b> or <b>join the title</b>. <b>Its line</b> is the band's message at the end (empty: the default shown beside it). <b>Battle music after its sound</b> brings the music back after a once-through end clip's own sound.</li>
+<li><b>The fade</b>: <b>Steps, one a frame</b>, 1 to 16; <b>Show it</b> plays the fade on the frame shown.</li>
+<li><b>Any key continues</b> lets any key (not Esc) leave the title and replay an end loop, instead of Enter or Space alone.</li>
+</ul>
+
+<!-- ------------------------------------------------------------------ -->
+<h3 id="w-actions">9. The actions</h3>
+
+<p>An action is a command: what it costs, what it does, and which clip it plays. On the <b>Actions</b> tab, <b>New...</b> makes one; pick one in the list to edit it.</p>
+
+<figure class="shot"><a href="guide/tab-actions.png" title="Open full size"><img width="1355" height="920" src="guide/tab-actions.png" alt="The Actions tab: Bolt, aimed at the enemy, costing 10 MP, doing 180 fixed damage, playing ari_bolt when it hits." loading="lazy"></a>
+<figcaption>Bolt: 10 MP for 180 damage to the enemy, playing ari_bolt. The box at the top right works out what it does at the battle's start.</figcaption></figure>
+
+<ul>
+<li><b>Label (8)</b>: its name on the menu, up to 8 letters. <b>Target</b>: <b>enemy</b>, <b>self</b>, <b>ally</b> (one picked), <b>allies</b> (all), <b>none</b>; and for the enemy's moves, <b>character</b> or <b>characters</b>. <b>Cost</b>: none, MP, an item, or a full limit gauge. <b>Accuracy %</b>.</li>
+<li><b>Effects, in order (up to 4)</b>: damage (physical, magical or fixed, 1 to 4 hits), heal, restore MP, revive, guard, charge, boost or lower a stat for some turns, pass, escape, change the enemy's stance, or fill a limit gauge. The line under each says what it does.</li>
+<li><b>Clips, by outcome</b>: the clips it plays when it <b>HIT</b>s, <b>MISS</b>es, is <b>DEFENDED</b>, is a <b>CRITICAL</b>, or is <b>FINISHING</b> (it leaves the enemy at 0). One is chosen at random from the list; an empty list plays HIT's. <b>For</b> a character gives that character clips of their own: an attack shared by two heroes plays each one's own recording.</li>
+<li><b>What it does</b>: the damage or healing each user would deal at the battle's start, its range and its critical.</li>
+</ul>
+
+<p>The outcome is decided before the clip is chosen, so the footage always agrees with the number on the screen.</p>
+
+<!-- ------------------------------------------------------------------ -->
+<h3 id="w-party">10. The characters and their menus</h3>
+
+<p>The <b>Characters &amp; menus</b> tab holds the party, one to four characters. <b>Add</b>, <b>Remove</b>, and <b>Up</b> and <b>Down</b> to change their order, which is the order their turns come in.</p>
+
+<figure class="shot"><a href="guide/tab-party.png" title="Open full size"><img width="1355" height="920" src="guide/tab-party.png" alt="The Characters and menus tab: Ari's stats, a top menu of attack, bolt and limit, the look of the menu, and the band as the engine will draw it." loading="lazy"></a>
+<figcaption>Ari: 320 HP, 40 MP, and a top menu of three actions. The band at the right is drawn as the player will draw it.</figcaption></figure>
+
+<ul>
+<li><b>Stats</b>: Name, HP, MP, ATK, MAG, DEF, MDEF and EVADE.</li>
+<li><b>Menus</b>: the <b>top</b> menu, which opens on the character's turn; <b>sub-menus</b> (<b>New sub-menu...</b>), which an item on it opens; and a <b>side</b> menu, which Left or Right opens. Choose an action in the box and <b>Add to the top</b>, <b>Add to the side</b> or <b>Add to the sub-menu</b>; <b>Up</b>, <b>Down</b> and <b>Remove</b> arrange them.</li>
+<li><b>The look</b> of each menu: a <b>Picture</b> under it, its <b>Text column</b> and <b>Text row</b>, <b>Row pitch</b>, <b>Ink</b> and <b>Cursor</b> (inverse, or an arrow).</li>
+<li><b>The band's layout</b>: where the enemy's name, the party, HP, MP, the limit star and the message line go, and which are shown. Blank keeps the standard place in brackets.</li>
+<li><b>Band pictures</b> and <b>The party's items</b> (for actions that cost an item) are under the list.</li>
+</ul>
+
+<!-- ------------------------------------------------------------------ -->
+<h3 id="w-enemy">11. The enemy</h3>
+
+<figure class="shot"><a href="guide/tab-enemy.png" title="Open full size"><img width="1355" height="920" src="guide/tab-enemy.png" alt="The Enemy tab: the beetle's stats, one stance called normal, and one move, lunge, at the alternate rule." loading="lazy"></a>
+<figcaption>The beetle: 1,200 HP, one stance, and one move, Lunge, aimed at the party in turn.</figcaption></figure>
+
+<ul>
+<li><b>Name</b> and stats; <b>Starts in</b>: the stance it starts in.</li>
+<li><b>Stances</b> (<b>New...</b>, <b>Delete</b>): each with its own <b>Modifiers, %</b> to ATK, MAG, DEF and MDEF and its own moves. An action's stance effect changes it, and a stance can change by itself (<b>Changes when</b> its HP is below a share or after some turns, <b>...to</b> another, <b>...by (an action)</b>) and return (<b>Returns by</b>).</li>
+<li><b>Moves (up to 6)</b>: actions drawn by <b>weight</b>, each aimed <b>at</b> a rule: <b>alternate</b> (each character in turn), <b>random</b>, <b>lowest</b> HP, <b>last</b> to hit it, or a <b>named</b> character.</li>
+<li><b>Responses (up to 2)</b>: an action it may take after a character's action, outside its own turn, at a chance.</li>
+<li><b>Follow-ups</b>: after its turn plays one action, its next turn plays another.</li>
+</ul>
+
+<!-- ------------------------------------------------------------------ -->
+<h3 id="w-sounds">12. The sounds</h3>
+
+<p>The <b>Sounds</b> tab lists every sound the battle plays, as loud as it will be heard, and who uses it. A sound nothing uses says <b>nothing (not built)</b> and costs nothing.</p>
+
+<figure class="shot"><a href="guide/tab-sounds.png" title="Open full size"><img width="1355" height="920" src="guide/tab-sounds.png" alt="The Sounds tab: every sound with what plays it and its level, and the five menu sounds under it." loading="lazy"></a>
+<figcaption>Every sound in The Iron Beetle, and the menu's own: tick when the cursor moves, ok when an action is taken, deny when one is refused.</figcaption></figure>
+
+<ul>
+<li><b>Measure and suggest levels</b> measures each sound as heard and suggests the level that makes it as loud as the music, never past its peak. <b>Apply the suggestions</b> takes them all; <b>Apply to the chosen sound</b> takes one.</li>
+<li>Choose a sound to <b>Set</b> its level in dB, nudge it <b>-3 dB</b> or <b>+3 dB</b>, <b>Listen</b>, point it at another file (<b>Replace file...</b>, which keeps everything that uses it), or <b>Remove</b> it.</li>
+<li><b>Menu sounds</b>: a sound for the cursor moving, a sub-menu or target opening, backing out, an action taken, and a refusal. Blank is silent.</li>
+</ul>
+
+<!-- ------------------------------------------------------------------ -->
+<h3 id="w-build">13. Build, and make a disk</h3>
+
+<p>On the <b>Build</b> tab, click <b>Build</b>. The window builds <code>BATTLE.VBT</code> beside the project (and the VGA and Hercules versions asked for), decodes every way through it to check every join, and shows what it built.</p>
+
+<figure class="shot"><a href="guide/tab-build.png" title="Open full size"><img width="1355" height="920" src="guide/tab-build.png" alt="The Build tab after a build: no problems, the budget table of every clip, the memory lines, the VGA colours, and the disk and game buttons." loading="lazy"></a>
+<figcaption>BATTLE.VBT, 856 KB. Every clip is well inside the ST-225's 116 KB/s; the battle holds 72 KB resident.</figcaption></figure>
+
+<ul>
+<li><b>What is wrong</b>: every problem left. ERROR stops a build; WARN and INFO do not. Double-click one to go there.</li>
+<li><b>The budget</b>, for each <b>Rendition</b> built: each clip's size, length and rate; <b>Of the disk</b>, the clip and the music together as a share of what the disk gives (red is more than it gives, so the clip will stall); <b>Head (s)</b>, what is read before the clip may start; <b>In a ring</b>, whether it fits the player's buffer whole or <b>streams</b>; its anchors and its longest wait.</li>
+<li><b>The memory lines</b>: what the player holds resident, the size of its clip buffers, and what the clip cache holds with extended memory. See <a href="#memory">Memory on a 640 KB machine</a>.</li>
+<li><b>VGA's colours</b>, after a VGA build: the battle's colours, which ones the band uses, and, with a clip picked in the table, how much of the clip each colour draws.</li>
+</ul>
+
+<figure class="shot"><a href="guide/build-vga.png" title="Open full size"><img width="1329" height="154" src="guide/build-vga.png" alt="The memory lines and the VGA colours for the VGA rendition, with bars showing bram_attack's share of each colour." loading="lazy"></a>
+<figcaption>The VGA version, with bram_attack picked: its eight colours and how much of the clip each draws.</figcaption></figure>
+
+<p>Three switches at the top change what is built: <b>Hold clips to the disk</b> (<a href="#hold">when and why</a>), <b>Captures by their cadence</b> (<a href="#cadence">when and why</a>) and <b>XMS on the target</b> (<a href="#xms">when and why</a>). Leave them as they are to start.</p>
+
+<p>Then make something to play:</p>
+<ul>
+<li><b>...and make a disk of it</b>: choose the disk and click <b>Make the disk</b>. It starts at the disk the Made for machine has. The floppies are 360 KB, 720 KB, 1.2 MB and 1.44 MB, for drive B: beside an os8088 system disk; the hard disks are a 20 MB ST-225 on an ST11M, a 32 MB ST-238R on an ST11R, and a 32 MB IDE disk, and boot os8088 by themselves. The image goes beside the project (<code>BATTLE-1440.img</code>, <code>BATTLE-ST11M.VHD</code>), with <code>VBATTLE.O88</code> and the battles built. A battle too big for the disk is refused, saying how big it is.</li>
+<li><b>...or make it a GAME</b>: <b>Make the games</b> writes one <code>.O88</code> for each adapter with the battle inside it, named after the battle (<code>THEIRON.O88</code>, <code>THEIRONV.O88</code>). Copy the file to any os8088 disk and double-click it. See <a href="#games">A disk, or a game file</a>.</li>
+</ul>
+
+<!-- ------------------------------------------------------------------ -->
+<h3 id="w-play">14. Play it on os8088</h3>
+
+<p>Boot os8088, open the disk, and double-click <code>VBATTLE.O88</code> (or the <code>.VBT</code> file itself, or a game file). With a title picture, the battle opens in a window showing it.</p>
+
+<figure class="shot"><a href="guide/os-cga-window.png" title="Open full size"><img width="640" height="400" class="px" src="guide/os-cga-window.png" alt="The os8088 desktop on CGA with The Iron Beetle's window showing its title picture and the line Click or press Enter to begin." loading="lazy"></a>
+<figcaption>The battle's window on a CGA desktop, opened from the hard disk.</figcaption></figure>
+
+<p>Click it or press Enter, and the battle takes the whole screen: the title loop, the openings, then the battle.</p>
+
+<div class="grid two">
+<figure><a href="guide/os-cga-title.png" title="Open full size"><img width="640" height="400" class="px" src="guide/os-cga-title.png" alt="The title loop full screen: VIDEO BATTLE over a starfield." loading="lazy"></a><figcaption><b>The title loop</b>, round until Enter.</figcaption></figure>
+<figure><a href="guide/os-cga-menu.png" title="Open full size"><img width="640" height="400" class="px" src="guide/os-cga-menu.png" alt="The battle on CGA: the beetle and the two heroes, and the band with Ari's menu and the party's HP and MP." loading="lazy"></a><figcaption><b>Ari's turn.</b> The idle loop plays above the menu.</figcaption></figure>
+<figure><a href="guide/os-cga-action.png" title="Open full size"><img width="640" height="400" class="px" src="guide/os-cga-action.png" alt="Ari mid-attack, running at the beetle, with the message ARI: Attack." loading="lazy"></a><figcaption><b>Attack</b>, joined onto the loop.</figcaption></figure>
+<figure><a href="guide/os-vga-action.png" title="Open full size"><img width="640" height="400" class="px" src="guide/os-vga-action.png" alt="The same attack on a VGA in eight colours." loading="lazy"></a><figcaption><b>The same moment on a VGA</b>, from BATTLEV.VBT in eight colours.</figcaption></figure>
+</div>
+
+<table>
+<tr><th>Key</th><th>In the battle</th></tr>
+<tr><td><kbd>Up</kbd> <kbd>Down</kbd></td><td>Move through a menu, or among the characters when an action is aimed at an ally</td></tr>
+<tr><td><kbd>Enter</kbd> or <kbd>Space</kbd></td><td>Take the action, or open the sub-menu; leave the title loop</td></tr>
+<tr><td><kbd>Left</kbd> <kbd>Right</kbd></td><td>Open the side menu, or go back from it</td></tr>
+<tr><td><kbd>Esc</kbd></td><td>Back out of a sub-menu, the side menu or a target; at the top menu, or while a clip plays, leave the battle</td></tr>
+</table>
+
+<p>An action that cannot be paid for is drawn red and refused. After Esc, Enter in the battle's window plays it again.</p>
+
+<!-- ================================================================== -->
+<h2 id="when">When and why: the choices that matter</h2>
+
+<p>Each section here takes one decision: what it changes, when the default is right, and when to change it.</p>
+
+<h3 id="madefor">Made for, and the disk</h3>
+<p><b>Made for</b> names a machine by its processor and its disk, and the note beside it gives the numbers. Its disk speed is the budget every clip is priced against on the Build tab, and the disk the Build tab first offers is that machine's.</p>
+<table>
+<tr><th>Choice</th><th>Use it for</th></tr>
+<tr><td><code>5150-st225</code></td><td>The default: an IBM PC or XT with an ST-225 hard disk, 119 KB/s. Start here for any XT.</td></tr>
+<tr><td><code>5150-xtide</code></td><td>An XT whose disk the processor copies for (an XT-IDE, most flash cards): 96 KB/s at most, less while the picture is busy.</td></tr>
+<tr><td><code>5150-picomem2</code></td><td>An XT with a PicoMEM 2.</td></tr>
+<tr><td><code>floppy</code></td><td>Played off a floppy: 15 KB/s.</td></tr>
+<tr><td><code>286-slow</code>, <code>286-fast</code>, <code>286-speeddemon</code>, <code>286-picomem1</code></td><td>A 286 with a hard disk, from a slow one to the fastest.</td></tr>
+<tr><td><code>486-dx2-66</code></td><td>A 486 with VGA and IDE.</td></tr>
+<tr><td><code>lossless</code></td><td>No budget at all, for a look at the footage at its best.</td></tr>
+</table>
+<div class="box why"><span class="label">A hard disk is the target; a floppy is a bonus</span>
+A floppy reads about 15 KB a second, and the music and a clip both want reading at once. On a floppy, a battle holds its music in memory instead, so the music must be short (two bars of the demo's), and every clip must be small. Make the battle for the hard disk your machine has, and treat a floppy version as a separate, smaller battle.</div>
+
+<h3 id="adapters">CGA, VGA and Hercules</h3>
+<p>Every battle is made for CGA in four colours: that is <code>BATTLE.VBT</code>, and it plays on any colour card. <b>Also made for</b> adds a version for another adapter, built from the same frames, with the same joins and rules:</p>
+<ul>
+<li><b>VGA (mode 0Dh)</b>: 320 x 200 in 4, 8 or 16 colours chosen from your footage. It looks much better than CGA, and costs more disk: see <a href="#vgacolours">VGA's colours</a>.</li>
+<li><b>Hercules (720 x 348)</b>: one bit a pixel at twice CGA's resolution, so more detail and more bytes.</li>
+</ul>
+<p>Put all of them beside <code>VBATTLE.O88</code>; the player takes the one for the card it finds. <b>Picture size, of the canvas</b> sets one smaller for an adapter, centred in black: fewer bytes a frame, which is the way to bring a heavy Hercules battle inside a slow disk. <b>Fit the video</b> crops your footage's edges to the shape (<b>Fill</b>) or squeezes the whole picture in (<b>Stretch</b>). <b>Clip to black and white within</b> draws near-black as black and near-white as white, so a fade to black ends black; 16 levels is the default.</p>
+
+<h3 id="vgacolours">VGA's colours</h3>
+<p>A VGA battle shares one palette among every clip, so that a join never changes a colour. How many:</p>
+<ul>
+<li><b>4</b>: about what CGA costs; black and three colours from the footage.</li>
+<li><b>8</b>: about twice CGA's data. Usually the right choice.</li>
+<li><b>16</b>: about three times CGA's data. For a fast disk, or a machine with the memory to hold the battle.</li>
+</ul>
+<p><b>VGA writes</b>: a VGA draws each pixel in four separate passes, and a changing pixel shows a wrong colour for a moment in between. <b>Bands of 16 rows</b> (the default) makes that about twelve times rarer for about 9% more data. <b>Whole frame</b> is smallest and flashes most; <b>Bands of 8 rows</b> is cleanest and costs about a quarter more.</p>
+<p><b>Keep the band's CGA colours on VGA</b> spends four of the colours on the band's own CGA four; otherwise the band uses the nearest four of the footage's, and red text the footage has no red for is drawn in a pattern. <b>Each clip's own VGA colours</b> keeps some colours for each clip's own, swapped in as it starts; <b>auto</b> keeps none, so every join keeps one dither. Try more when clips have colours of their own that the shared palette misses.</p>
+
+<h3 id="clippal">A clip's own palette</h3>
+<p>On a VGA, a clip that starts and ends on a black screen can have every colour its own: its colours are loaded while the screen is black, so nothing on the glass changes colour. The Clips tab's <b>Its colours on VGA</b> says how a clip is treated:</p>
+<ul>
+<li><b>Automatic</b> (the default): its own palette when it starts and ends on black over the whole screen - the title when a fade leaves it, a full-screen opening that ends black, an end loop an ending fades to - and the shared colours otherwise. The Build tab says which clips it gave their own.</li>
+<li><b>Its own palette</b>: always. Use it for a clip the automatic choice misses, knowing that over a picture that is not black, or with the menu up, the colours change on the glass as it starts and ends.</li>
+<li><b>The battle's shared colours</b>: never. Use it when a clip's own palette is not worth its colour change.</li>
+</ul>
+
+<h3 id="anchors">Anchors: how long a command waits</h3>
+<p>A command starts when the loop reaches one of its clip's anchors. More anchors mean a shorter wait, shown as <b>The longest wait for an anchor</b>; each costs the bytes of one entry (the number on the filmstrip), which the player holds in memory. Four anchors on a 24-frame loop wait at most 6 frames, 0.4 seconds; two wait 0.8. Keep the anchors whose pictures are most alike, and add more only where the wait feels long.</p>
+
+<h3 id="fades">Joins and fades</h3>
+<p>A <b>join</b> goes from one picture to another directly, so it costs only the pixels that change, and it is seamless when the two pictures are alike. A <b>fade</b> takes the picture down to black a step a frame (the Title &amp; endings tab's steps), and then anything can follow from black. Use a join where the footage meets itself (an ending into its own loop, the title into a clip that leaves it); use a fade where it does not. A full-screen opening that starts from black and ends on black joins anything.</p>
+
+<h3 id="musicloop">The music's loop</h3>
+<p>The music always loops, so choose its loop with care: <b>Find loops</b> and listen to each jump. A loop of whole bars at the same point of the tune is seamless. The music is read off the disk as it plays, beside the clips, which is why it shows in the budget's <b>Of the disk</b>; on a floppy it must be short enough to hold in memory. Where it <b>Comes in</b> after the openings is set on the Openings tab, which suggests places that follow the opening's sound.</p>
+
+<h3 id="cadence">Captures by their cadence</h3>
+<p>A screen recording of a game is often made at 60 frames a second of a game that draws 15: four captured frames to each of the game's. The capture drifts against the game, so taking every fourth captured frame by time now and then takes one of the game's frames twice and skips the next: a stutter, always at the same spot of the same clip. With <b>Captures by their cadence</b> on (the default), a recording at a whole multiple of 15 frames a second (30, 45, 60) whose frames mostly repeat is read by where its picture changes instead, taking each of the game's frames once. Ordinary video, whose frames all differ, is read by time either way. The Build tab says how many captures were read this way. Turn it off only to compare.</p>
+
+<h3 id="hold">Hold clips to the disk</h3>
+<p>A clip's average rate can be well inside the disk's while its first second or two is far over it, and the player then runs out of what it has read: the picture waits and the sound skips. With <b>Hold clips to the disk</b> on (the default), the builder draws such a frame in part, the rest over the frames after, so no stretch of a clip asks more of the disk than the Made for machine gives. The sound is kept whole. The budget names the clips it held and for how many frames. Turn it off only for a machine faster than the one you made the battle for.</p>
+
+<h3 id="xms">XMS on the target</h3>
+<p>A 286 or later with extended memory holds whole clips there and plays them from it, so a clip the disk could not feed plays smoothly once it has been read. <b>XMS on the target</b> tells the builder how much the machine has free (a 1 MB machine has 896 KB, a 4 MB machine 2944 KB), and the memory lines then say how much of the battle that holds: the whole battle, or how many of its clips at once. The player uses whatever extended memory it finds; this setting changes what the builder plans for: how it holds clips to the disk, and what the memory lines report. Leave it at <b>none (an XT)</b> for an XT.</p>
+
+<h3 id="memory">Memory on a 640 KB machine</h3>
+<p>The player holds some of the battle all the time: the idle loop, the menu's sounds, the music's buffer, the band's pictures and the joins' entries. The rest of the memory is two clip buffers. The memory lines on the Build tab give both, measured on a 640 KB machine. When the buffers are small, a clip streams in small pieces; when there is no room for them at all, the line says <b>NOT ENOUGH - Play would say Not enough memory</b>. To make room: a shorter idle loop, fewer anchors, fewer or smaller band pictures, or a smaller picture size.</p>
+
+<h3 id="games">A disk, or a game file</h3>
+<p><b>Make the disk</b> puts the player and the battles on a floppy or a hard disk image, ready to boot or to put in drive B:. <b>Make the games</b> puts each battle inside its own copy of the player, one file per adapter, named after the battle: a single file to copy anywhere and double-click, at the cost of one file per adapter. Use a disk to hand someone the whole thing; use a game file to add a battle to a disk they already have.</p>
+
+<!-- ================================================================== -->
+<h2 id="trouble">When something looks wrong</h2>
+
+<table>
+<tr><th>What you see</th><th>Why, and what to do</th></tr>
+<tr><td>A clip jumps as it starts or ends</td><td>The clip's first or last frame is not much like the loop frame it joins. On the Clips tab, look at the filmstrip's scores and the difference view: take the anchors with the smallest numbers, move <b>In</b> or <b>Out</b> a frame, or pick a different <b>exit</b>.</td></tr>
+<tr><td>A stutter at the same spot of a clip, every time</td><td>A screen capture read by time; see <a href="#cadence">Captures by their cadence</a>. Make sure the switch is on and build again.</td></tr>
+<tr><td>A clip pauses, or its sound skips, on the machine</td><td>The clip asks more of the disk than the machine gives. Check the budget's <b>Of the disk</b> for red rows and <b>streams</b>; keep <b>Hold clips to the disk</b> on; check <b>Made for</b> is the machine you play on; use a smaller picture size or fewer VGA colours. On a 286, extended memory helps; see <a href="#xms">XMS on the target</a>.</td></tr>
+<tr><td>"Not enough memory" when the battle starts</td><td>The memory lines say <b>NOT ENOUGH</b>; see <a href="#memory">Memory on a 640 KB machine</a>. Close other programs on os8088 first: the battle needs most of 640 KB.</td></tr>
+<tr><td>A command waits too long</td><td>Too few anchors; see <a href="#anchors">Anchors</a>.</td></tr>
+<tr><td>Colours change on the screen as a clip starts (VGA)</td><td>The clip has its own palette over a picture that is not black. Set <b>Its colours on VGA</b> to <b>The battle's shared colours</b>.</td></tr>
+<tr><td>Pixels flash wrong colours as clips play (VGA)</td><td><b>VGA writes</b> is <b>Whole frame</b>; choose bands.</td></tr>
+<tr><td>Red text in the band is a pattern (VGA)</td><td>The footage has no red for the band. Tick <b>Keep the band's CGA colours on VGA</b>.</td></tr>
+<tr><td>A sound is too loud or too quiet</td><td>Sounds tab: <b>Measure and suggest levels</b>, then <b>Apply the suggestions</b>.</td></tr>
+<tr><td>A check says ERROR</td><td>Read the line, then double-click it to go to the tab it is about. The build refuses until every ERROR is gone.</td></tr>
+<tr><td>"... is not a video that can be read"</td><td>ffmpeg could not read the file. Check that it plays on your computer and that ffmpeg is on your PATH.</td></tr>
+<tr><td>The battle is not the one you expected on VGA or Hercules</td><td>The player takes <code>BATTLEV.VBT</code> on a VGA and <code>BATTLEH.VBT</code> on a Hercules when they are beside it, and <code>BATTLE.VBT</code> otherwise. Build again, and copy all of them.</td></tr>
+</table>
+
+<p>If a battle stutters and none of this explains it, play it with <code>VBATTLED.O88</code> instead of <code>VBATTLE.O88</code>. It plays the same battle and writes <code>VBPROF1.DAT</code> beside itself (then 2, 3, ...), a record of every frame of the play: send that, with what you saw, to whoever looks after Video Battle.</p>
+
+<!-- ================================================================== -->
+<h2 id="cli">The command line</h2>
+
+<p>Everything the window does is also a command, which is useful for scripts and for building on a machine with no screen.</p>
+<pre><code>python3 os88vbt.py demo-project demo.vbp     the demo battle as a project (no footage needed)
+python3 os88vbt.py build PROJECT.vbp         BATTLE.VBT (and each version asked for) beside it
+python3 os88vbt.py disk PROJECT.vbp --disk 3 ...and a 1.44 MB floppy of it
+python3 os88vbt.py game PROJECT.vbp          each version inside its own .O88
+python3 os88vbt.py recommend PROJECT.vbp     the loop's and every clip's points, with their scores
+python3 os88vbt.py info BATTLE.VBT           what is in a bundle
+python3 os88vbt.py verify BATTLE.VBT         decode every path and check every join
+python3 vbtproj.py PROJECT.vbp               what is wrong with a project
+python3 vbtana.py --help                     the analysis, one command each</code></pre>
+<p><code>--disk</code> takes 0 to 3 for the 360 KB, 720 KB, 1.2 MB and 1.44 MB floppies and 4 to 6 for the ST-225, the ST-238R and the IDE hard disk. <code>python3 os88vbt.py COMMAND --help</code> lists each command's options.</p>
+
+<!-- ================================================================== -->
+<h2 id="words">Words used in this guide</h2>
+<table>
+<tr><th>Word</th><th>Meaning</th></tr>
+<tr><td><b>Anchor</b></td><td>A frame of the idle loop a clip can start from.</td></tr>
+<tr><td><b>Band</b></td><td>The rows under the video: the menu, the party and the message line.</td></tr>
+<tr><td><b>Bundle</b></td><td>The battle's file, <code>BATTLE.VBT</code>.</td></tr>
+<tr><td><b>Canvas</b></td><td>The video area above the band.</td></tr>
+<tr><td><b>Capture</b></td><td>Footage recorded off a screen, often at a multiple of the game's frame rate.</td></tr>
+<tr><td><b>Clip</b></td><td>A stretch of footage the battle plays: an action, an opening, an ending, a loop.</td></tr>
+<tr><td><b>End loop</b></td><td>A loop played after victory or defeat, round until a key.</td></tr>
+<tr><td><b>Entry</b></td><td>The frame that takes the screen from an anchor to a clip's first frame. One per anchor, held in memory.</td></tr>
+<tr><td><b>Exit</b></td><td>The idle loop frame a clip's last frame joins.</td></tr>
+<tr><td><b>Fade</b></td><td>The picture taken down to black a step a frame.</td></tr>
+<tr><td><b>Idle loop</b></td><td>The scene standing still, played round while the player chooses.</td></tr>
+<tr><td><b>Join</b></td><td>One picture going straight to another, exactly.</td></tr>
+<tr><td><b>Opening</b></td><td>A clip played before the battle.</td></tr>
+<tr><td><b>Rendition</b></td><td>The battle made for one adapter: CGA, VGA or Hercules.</td></tr>
+<tr><td><b>Resident</b></td><td>Held in memory for the whole battle.</td></tr>
+<tr><td><b>Seam</b></td><td>Where a loop's last frame goes back to its first.</td></tr>
+<tr><td><b>Stance</b></td><td>The enemy's mode: its modifiers and its moves.</td></tr>
+<tr><td><b>Streams</b></td><td>Read off the disk while it plays, rather than read whole first.</td></tr>
+<tr><td><b>XMS</b></td><td>Extended memory, above 1 MB, on a 286 or better.</td></tr>
+</table>
+
+<p class="small">The battle in this guide is os8088's own demo, drawn and scored for the project with nothing captured from anywhere. Its pictures are made again by <code>tools/os88vbtguide.py</code> in the os8088 source tree.</p>
+
+</main>
+</div>
+</body>
+</html>

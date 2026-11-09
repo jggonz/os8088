@@ -25,6 +25,15 @@ and this row plays each one on kern_mega under Bochs with a Sound Blaster 16:
           back out of the guest: a window that names the wrong 32 patterns
           plays another pattern's row 0, and the pairs disagree
   trkarm  the kern_mega ARM's TRACKER.O88 (build/megak/apps/) on BEVERLY.MOD
+          - and since SPEC.md 45.3.1.2 the module is in the POOL: the
+          blob's first window based at or above 1MB
+  trkbig  the ARM on a GENERATED 700KB module (tools/os88mkmod.py), PACKED
+          on B: (an LZ4 'CZ' file, 3KB): past what the conventional heap
+          can fund in one run, so it loads only into the pool's huge claim,
+          through the packed read past 64KB (MEGA-HUGE-PLAN F4, KERN-MEGA-
+          PLAN 14.171) - plays, every window exact, the blob above 1MB. Red
+          on mega-release d433871c: Tracker answers the gate's refusal and
+          never plays (`Tracker playing the module` times out)
   mpp     MODPLUG.O88 (retired: `make modplug`) on BEVERLY.MOD, through its
           own L and the chooser
   mr      the SHIPPED MIDIRACK.O88 on a wavetable bank over 64KB - a synthetic
@@ -78,6 +87,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 os.environ["OS88_BUILD"] = os.path.join(ROOT, "build", "megak")
 import os88bochs  # noqa: E402
+import os88lz  # noqa: E402
 import os88sym  # noqa: E402
 
 BUILD = os.path.join(ROOT, "build")
@@ -375,10 +385,21 @@ def listen(box, cond, what, secs):
     return None
 
 
-def leg_tracker(leg, out, pkg, mapsyms, mod, check_wide=False):
-    box, d = boot(leg, out, [mod, pkg])
+def leg_tracker(leg, out, pkg, mapsyms, mod, check_wide=False, disk=None,
+                pool=False):
+    """DISK is the file B: carries for MOD (a packed copy), POOL: the blob
+    must be the pool's (SPEC.md 45.3.1.2)"""
+    disk = disk or mod
+    box, d = boot(leg, out, [disk, pkg])
     try:
-        row(box, listed([mod, pkg], mod), "the module's open", lock=False)
+        # NO ui_done AFTER THIS ONE: Tracker PLAYS what it opens, and a
+        # playing Tracker redraws its pattern view every row, so "the UI idle
+        # at two reads a quarter HOST second apart" is a race with the music
+        # that a loaded box loses - `wide` waited out 60 guest s for it in a
+        # whole-tier soak (2026-11-07) with the module open and playing. The
+        # wait below is on the state the leg means, [mp_playing].
+        box.goto(ROW_X, ROW0_Y + ROW_H * listed([disk, pkg], disk))
+        box.dblclick()
         t = Pkg(box, "TRACKER", mapsyms)
         box.until(lambda: bad_lines(box) or (box.pkg_base("TRACKER") and
                                             t.b("mp_playing") == 1),
@@ -394,6 +415,11 @@ def leg_tracker(leg, out, pkg, mapsyms, mod, check_wide=False):
                  leg, int.from_bytes(t.rd("mp_npat", 2), "little"),
                  int.from_bytes(t.rd("mp_blobseg", 2), "little")))
         windows(leg, box, t, base, mod, "mp_")
+        if pool:
+            blin = box.sel_base(int.from_bytes(t.rd("mp_blobseg", 2),
+                                               "little"))
+            want(blin >= 0x100000, "%s: the module's claim is the POOL's - "
+                 "its first window at %X (SPEC.md 45.3.1.2)" % (leg, blin))
         seen = {}
 
         trail = []
@@ -612,8 +638,8 @@ def main():
     for p in a.pkg:
         k, v = p.split("=", 1)
         pk[k.upper()] = v
-    legs = a.leg or ["trk", "wide", "trkarm", "mpp", "mr", "mrsb",
-                     "mrarm"]
+    legs = a.leg or ["trk", "wide", "trkarm", "trkbig", "mpp", "mr",
+                     "mrsb", "mrarm"]
     for f in ("build/mega.img", "build/megarun.o88", "build/mbr.bin"):
         if not os.path.exists(os.path.join(ROOT, f)):
             sys.exit("megamod: %s is not built (make mega megarun)" % f)
@@ -652,7 +678,22 @@ def main():
                                 pkg_map(*trk), wide, check_wide=True)
                 elif leg == "trkarm":
                     leg_tracker(leg, out, stage("TRKARM", "TRACKER.O88"),
-                                pkg_map(*trk, defines=("PKG_MEGA",)), bev)
+                                pkg_map(*trk, defines=("PKG_MEGA",)), bev,
+                                pool=True)
+                elif leg == "trkbig":
+                    big = os.path.join(tmp, "BIG.MOD")
+                    subprocess.run([sys.executable, os.path.join(
+                        ROOT, "tools", "os88mkmod.py"), "-o", big, "--kb",
+                        "700"], check=True, stdout=subprocess.DEVNULL)
+                    pz = os.path.join(tmp, "z", "BIG.MOD")
+                    os.makedirs(os.path.dirname(pz), exist_ok=True)
+                    z, packed = os88lz.cz_wrap(open(big, "rb").read())
+                    want(packed, "trkbig: the module packed")
+                    with open(pz, "wb") as f:
+                        f.write(z)
+                    leg_tracker(leg, out, stage("TRKARM", "TRACKER.O88"),
+                                pkg_map(*trk, defines=("PKG_MEGA",)), big,
+                                disk=pz, pool=True)
                 elif leg == "mpp":
                     leg_modplug(leg, out, stage("MODPLUG", "MODPLUG.O88"),
                                 pkg_map("apps/modplug/modplug.asm",

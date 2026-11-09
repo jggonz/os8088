@@ -724,14 +724,14 @@ void os88_onfile(int mode, const char *name, unsigned size_lo,
          * not two (apps/weave/wload.c's "two ways in, one decision", said
          * about creating instead of opening). */
         if (!ovl_newproj(name)) {
-            lm_say("LOOM could not load its overlay; a project cannot be created.");
+            lm_say("LOOM overlay won't load");
             lm_repaint(win, 1);
             return;
         }
         name = lm_argname;
     }
     if (!ovl_openproj(win, name))
-        lm_say("LOOM could not load its overlay; a project cannot be opened.");
+        lm_say("LOOM overlay won't load");
     lm_repaint(win, 1);                 /* over the LAST state - see lm_repaint */
 }
 
@@ -742,7 +742,7 @@ void os88_about(void *win)
      * LOOM.OVL draws nothing at all here and leaves the window alone - which
      * is the honest degradation, and it is why the answer is tested. */
     if (!ovl_about())
-        lm_say("LOOM could not load its overlay; About cannot be shown.");
+        lm_say("LOOM overlay won't load");
     lm_repaint(win, 1);
 }
 

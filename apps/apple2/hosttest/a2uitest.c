@@ -899,6 +899,15 @@ static unsigned h_rom_seg = H_ROMSEG;   /* os88_part_seg's answer: moved by
                                          * the carve round trip (APPLE2-SPEC
                                          * 3.1.1, CC_ONMOVE_PARTS) */
 unsigned os88_part_seg(int i) { return i == 0 ? h_rom_seg : 0; }
+/* THE FAST CORE'S PART IS REFUSED HERE (APPLE2-SPEC section 4.6): this host
+ * has no 8086 to run it, and a refused fetch is the path that leaves the
+ * accurate core's stub - the one every case below drives - running alone */
+int os88_part_fetch(int i) { (void)i; return -1; }
+void os88_part_drop(int i) { (void)i; }
+void a2f_core(unsigned dstseg, unsigned partseg) { (void)dstseg; (void)partseg; }
+void a2f_image(unsigned newseg, unsigned oldseg, unsigned romseg)
+{ (void)newseg; (void)oldseg; (void)romseg; }
+unsigned a2f_codesel(unsigned seg) { return seg; }
 /* os88_mem_movable - the record says so; the harness never compacts. What is
  * checked is WHO declares WHAT, and WHEN (APPLE2-SPEC 3.1.1): the RAM once
  * os88_main has made every claim, Paste's queue once it is filled */
@@ -2457,6 +2466,49 @@ int main(void)
     int lores_groups, hires_groups;
 
     memset(glass, GUNK, sizeof(glass));
+
+    /* THE THROTTLE (APPLE2-SPEC 4.3.3), on this host's clock: the_ticks moves
+     * only when a case moves it, so 64 ticks pay in what 64 ticks of a real
+     * Apple II run, and no more - and the debt stops at three ticks. Then it
+     * is OFF for every other case, whose runs cost no time at all and would
+     * otherwise never be owed a cycle. */
+    {
+        long tot = 0;
+        int k, b;
+
+        a2_th_tick = the_ticks;
+        for (k = 0; k < 64; k++) {
+            the_ticks++;
+            while ((b = a2_th_allow(16384)) > 0) {
+                tot += b;
+                a2_th_spend(b);
+            }
+        }
+        /* 64 ticks = 3.515 s of a 1,020,484 Hz machine = 3,587,236 cycles;
+         * the sum is in whole 64-cycle units, so within a unit a tick */
+        if (tot < 3587236L - 2048 || tot > 3587236L + 2048)   /* 0.06% */
+            printf("a2uitest: FAIL - the throttle paid %ld cycles for 64 ticks "
+                   "and a 1.02 MHz Apple II runs 3,587,236 (section 4.3.3)\n",
+                   tot), fails++;
+        the_ticks += 100;                   /* a long stall... */
+        tot = 0;
+        while ((b = a2_th_allow(16384)) > 0) {
+            tot += b;
+            a2_th_spend(b);
+        }
+        if (tot > 3L * 876 * 64)            /* ...is NOT paid back */
+            printf("a2uitest: FAIL - a 100-tick stall was paid back as %ld "
+                   "cycles; the debt stops at three ticks (section 4.3.3)\n",
+                   tot), fails++;
+        a2_warp = 1;
+        if (a2_th_allow(16384) != 16384)
+            printf("a2uitest: FAIL - warp is throttled (section 4.3.3)\n"),
+                fails++;
+        a2_warp = 0;
+        printf("a2uitest: the throttle holds 64 ticks to a 1.02 MHz machine "
+               "and does not pay a stall back\n");
+        a2_th_off = 1;
+    }
 
     /* THE ROM, AT ITS PIN. The package is written against ONE character
      * generator and "it drew something" is not the same claim as "it drew the
@@ -5531,6 +5583,13 @@ int main(void)
             n_fsxcmp_d = 0;
             n_fsxcmp_s = 0;
             cost_mark();
+            /* ONE RUN A WAKE (section 4.3.2): this host's runs cost nothing,
+             * so the controller has raised the runs a wake to its cap, and
+             * the "second slice" below is then a run inside the FIRST
+             * frame. A fresh window, so it does not raise them again. */
+            a2_reps = 1;
+            a2_adn = 0;
+            a2_adx = 0;
             h_run_wr_in = 2;                /* the SECOND slice writes... */
             h_run_wr_a = a2_tbase[5] + 3;   /* ...one cell of row 5, group 0 */
             h_run_wr_v = 0xC1;              /* 'A', normal form */

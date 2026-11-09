@@ -123,6 +123,13 @@ VP_MSYNC    equ 18                  ; ticks a play waits after a REAL mode
                                     ; pays nothing
 VP_SLOTP    equ VP_CHUNK / 16       ; ...in paragraphs
 VP_KMAX     equ 8                   ; a LIVE play's most slots (a power of two)
+%ifdef VP_DIAG                          ; BOOKMARKS (98.3.25): a MB's each, 32 MB;
+VP_BMN      equ 0                       ; none on the builds with no room for
+%elifdef PKG_MEGA                       ; 512 bytes of them - the diagnostics'
+VP_BMN      equ 0                       ; and kern_mega's arm, each within a few
+%else                                   ; hundred of APP_MAX_SIZE - which seek
+VP_BMN      equ 32                      ; forward from the cursor itself alone
+%endif
 VP_KBIG     equ 15                  ; ...and any other's (SPEC.md 98.3)
 VP_RSLN     equ VP_KBIG + 5         ; ...a ring claim's slots past them: the
                                     ; mirror's two, the bounce, the layer's
@@ -412,7 +419,8 @@ vp_entry:
     test ah, CPU_F_PM               ; kern_mega: neither LOADALL nor a loaded
     jz .rmode                       ; base exists in protected mode - the
     mov byte [vp_pm], 1             ; hold and the bank are read in place
-.rmode:                             ; through SELECTORS (98.3.18.16)
+    call vp_low                     ; through SELECTORS (98.3.18.16); and our
+.rmode:                             ; region conventional (KERN-MEGA-PLAN 14.178)
 %else
 %endif
     call vp_layfit                  ; THE WINDOW'S SIZE is the layout's, for a
@@ -1058,6 +1066,10 @@ vp_open:
     push di
     mov di, vp_rdcur                ; ...and vp_rdat's cursor, which names no
     call os88_rseq_new              ; file and would trust the last one's
+    call vp_bmclear                 ; ...and every bookmark, no file's either
+    mov di, vp_cur                  ; ...and the stream's cursor, which
+    call os88_rseq_new              ; vp_curseek would keep as the new file's
+    call vp_rmap                    ; ...and the file's first run, mapped
     pop di
     xor ax, ax
     mov [vp_nkeys], ax
@@ -5210,6 +5222,65 @@ vp_rdat:
 
 %include "os88rseq.inc"            ; os88_rseq, vp_rdat's disk arm
 
+; vp_rmap - [vp_name]'s FIRST RUN (SPEC.md 18.4.8.3): a video copied in one
+; go is one, and a read in it then reads no FAT. One walk of the chain, at
+; open; a kernel without the map refuses (CX = 1 is no cluster multiple) and
+; [vp_run+2] stays 0. A read outside the run is the FAT's, as before.
+; Preserves every register
+vp_rmap:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    xor ax, ax
+    mov [vp_run+2], ax
+    mov dx, ds                      ; DX:BX = the run's 4 bytes
+    mov bx, vp_run
+    mov cx, 1
+    push ds
+    pop es
+    mov di, vp_cur                  ; (its flag the map's, for this call: the
+    mov byte [di+FSEQ_FLG], FSEQF_MAP ; map writes nothing else of it)
+    mov si, vp_name
+    call OSAPI_FILE_READ_SEQ
+    mov byte [vp_cur+FSEQ_FLG], 0
+    mov [vp_run+4], dx
+    jnc .out
+    mov word [vp_run+2], 0          ; (a refusal may have written nothing)
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; vp_rseqr - OSAPI_FILE_READ_SEQ on cursor ES:DI = DS:DI (22 bytes, vp_cur or
+; vp_xcur) with the map's run in it when there is one: its registers and its
+; answer
+vp_rseqr:
+    cmp word [vp_run+2], 0
+    je .go
+    push si
+    push di
+    mov byte [di+FSEQ_FLG], FSEQF_RUN
+    add di, FSEQ_RUN
+    mov si, vp_run
+    cld
+    movsw
+    movsw
+    movsw
+    pop di
+    pop si
+.go:
+    call OSAPI_FILE_READ_SEQ
+    ret
+
 ; vp_spankb - CX = bytes at any offset: AX = the KB vp_rdat's read of them
 ; can take - CX and a cluster less a byte, rounded up to whole clusters
 ; (the offset's own place in its cluster is the most it can be moved on)
@@ -5268,6 +5339,11 @@ vp_xopen:
 .ok:                                ; either form as code above it moved)
     cmp byte [vp_resid], 0          ; RESIDENT: read whole into its blocks
     jne .out
+%ifdef PKG_MEGA
+    call vp_low                     ; (the entry's, again before the pool is
+                                    ; sized when the entry's was refused)
+    call vp_rprep                   ; ...and the bracket's door PREPARED: the
+%endif                              ; drivers it carries down out of the pool
     call vp_xcaps                   ; no pool (every 8088): nothing more is
     or ax, ax                       ; asked, not even the directory - unless
     jnz .sz                         ; EXPANDED MEMORY answers (98.3.18.6)
@@ -6504,7 +6580,7 @@ vp_xstep:
     pop es
     mov di, vp_xcur
     mov si, vp_name
-    call OSAPI_FILE_READ_SEQ        ; AX = the bytes (DX 0: one chunk)
+    call vp_rseqr                    ; AX = the bytes (DX 0: one chunk)
     call vp_hdis                    ; (flags kept)
     pop dx
     jc .drop                        ; the disk failed: the stream will say so
@@ -7358,7 +7434,7 @@ vp_xbread:
 %ifdef VP_RDTIME
     call vp_rtb
 %endif
-    call OSAPI_FILE_READ_SEQ        ; AX = the bytes (DX 0: a chunk)
+    call vp_rseqr                    ; AX = the bytes (DX 0: a chunk)
 %ifdef VP_RDTIME
     call vp_rte
 %endif
@@ -8029,7 +8105,7 @@ vp_xfillt:
     pop es
     mov di, vp_cur
     mov si, vp_name
-    call OSAPI_FILE_READ_SEQ        ; AX = the bytes, the cursor moved on
+    call vp_rseqr                    ; AX = the bytes, the cursor moved on
     pop si
     pop di                          ; DI:SI = where it started
     pop bx
@@ -8309,7 +8385,7 @@ vp_eread:
     pop es
     mov di, vp_cur
     mov si, vp_name
-    call OSAPI_FILE_READ_SEQ        ; DX:AX = the bytes
+    call vp_rseqr                    ; DX:AX = the bytes
 .hx:
     pop bx
     ret
@@ -8569,15 +8645,10 @@ vp_bseed:
     push es
     push ds
     pop es
-    mov di, vp_cur
-    xor ax, ax
-    mov cx, FSEQ_SIZE / 2
-    cld
-    rep stosw
+    mov di, vp_cur                  ; (98.3.25: from where it can, as a seek)
     mov ax, [vp_xlo]
-    mov [vp_cur+FSEQ_OFF], ax
-    mov ax, [vp_xlo+2]
-    mov [vp_cur+FSEQ_OFF+2], ax
+    mov dx, [vp_xlo+2]
+    call vp_curseek
     call vp_bflush
     pop es
     pop di
@@ -8661,7 +8732,7 @@ vp_bstep:
     pop es
     mov di, vp_xcur
     mov si, vp_name
-    call OSAPI_FILE_READ_SEQ        ; (a far cell: no tail jump)
+    call vp_rseqr                    ; (a far cell: no tail jump)
     ret
 .xb:
     call .tail
@@ -10225,6 +10296,32 @@ vp_xopbeg:
     mov cx, [vp_xcap]
     mov dx, [vp_xcap+2]
     jmp short vp_opend.go
+; vp_xreop - after a bracket (vp_srun, which ended it at the door): a
+; TIMER-fed hold still loading begins its operation again, over the bytes it
+; has still to read. A bank fills while a play reads and has none (vp_xopen).
+; Refused, or nothing left to read, nothing changes. Every register kept
+vp_xreop:
+    cmp byte [vp_xon], 0
+    je .r
+    cmp byte [vp_xbank], 0
+    jne .r
+    cmp byte [vp_xfull], 0
+    jne .r
+    push cx
+    push dx
+    mov cx, [vp_xcap]
+    mov dx, [vp_xcap+2]
+    sub cx, [vp_xhave]
+    sbb dx, [vp_xhave+2]
+    jc .p                           ; (more held than the cap: none to read)
+    jnz vp_opend.go
+    jcxz .p
+    jmp short vp_opend.go
+.p:
+    pop dx
+    pop cx
+.r:
+    ret
 ; vp_xdone - the hold has all of the file: [vp_xfull], and its bar over
 vp_xdone:
     mov byte [vp_xfull], 1
@@ -11947,6 +12044,31 @@ vp_sstart:
 %endif
 
 %ifdef PKG_MEGA
+; vp_low - the arm under CPU_F_PM ([vp_pm]): OUR REGION, which OS88_HIGH put
+; above 1MB, brought DOWN to conventional memory for good (OSAPI_SEG
+; SEG_LOW, KERN-MEGA-PLAN 14.178) - at the entry, before a window exists,
+; and again before the pool is sized (vp_xopen) if the entry was refused.
+; A real-mode play copies the region into the heap anyway, so above 1MB its
+; pool block only sat idle beside the copy - 64 KB the bank never had,
+; where kern_big's region was never in its pool. Every register kept
+vp_low:
+    cmp byte [vp_pm], 0
+    je .o
+    push ax
+    push bx
+    push dx
+    mov dx, ds
+    mov ax, vp_reloc
+    mov bl, SEG_LOW
+    call OSAPI_SEG
+    pop dx
+    pop bx
+    pop ax
+.o:
+    ret
+%endif
+
+%ifdef PKG_MEGA
 ; vp_rbhold - THE REAL-MODE BRACKET's ROOM (SPEC.md 98.3.24.2), in protected
 ; mode: VP_RBRKB claimed TOP-DOWN and conventional (the DMA door, CX = 0)
 ; before the ring sizes itself, and vp_rbfree's after it is claimed - so the
@@ -11964,12 +12086,28 @@ vp_rbhold:
     push ax
     push cx
     push dx
+    push bx
+    call vp_rprep                   ; THE DOOR'S OWN FIGURE (53.2.3.1): the
+    mov ax, [vp_rbkb]               ; KB it will claim, the drivers down
+    inc ax                          ; (KERN-MEGA-PLAN 14.180)...
+    jz .g
+    dec ax
+    jz .n                           ; (none: no room to hold)
+    jmp short .h
+.g:
+    mov dx, ds                      ; ...or, refused, the guess: OUR REGION
+    mov bl, SEG_REAL                ; brought down already (SEG_LOW, vp_xopen
+    call OSAPI_SEG                  ; - 14.178) and the bracket copies
+    mov ax, VP_RBRKB - 64           ; nothing, the room the service area's
+    jnc .h                          ; and the drivers'
     mov ax, VP_RBRKB
+.h:
     xor cx, cx
     call OSAPI_MEM_CLAIM_DMA_HI
     jc .n
     mov [vp_rbh], dx
 .n:
+    pop bx
     pop dx
     pop cx
     pop ax
@@ -12699,16 +12837,11 @@ vp_spos:
     and bx, ax                      ; BX = how far the stream is into it
     push ds
     pop es
+    mov ax, [vp_ssp]                ; THE SEEK (98.3.25): from the nearest
+    sub ax, bx                      ; place at or before it - a bookmark, or
+    mov dx, [vp_ssp+2]              ; the cursor itself - or from the front
     mov di, vp_cur
-    xor ax, ax
-    mov cx, FSEQ_SIZE / 2
-    cld
-    rep stosw
-    mov ax, [vp_ssp]
-    sub ax, bx
-    mov [vp_cur+FSEQ_OFF], ax
-    mov ax, [vp_ssp+2]
-    mov [vp_cur+FSEQ_OFF+2], ax
+    call vp_curseek
 .inbank:
     ; --- the hook's state: before the first super-packet
     xor ax, ax
@@ -14259,7 +14392,7 @@ vp_wmk:
     pop es
     stc
     ret
-vp_s_nowin: db 'No LDT entry free', 0
+TOASTSTR vp_s_nowin, 'No LDT entry free'
 .e:
     times ((.e - vp_wmk) & 1) nop   ; (what follows keeps its parity)
 
@@ -14630,6 +14763,9 @@ vp_rpost:
 vp_rline:
     mov byte [vp_cpv], VK_RLINE
     jmp short vp_cpcall
+vp_rprep:
+    mov byte [vp_cpv], VK_RPREP
+    jmp short vp_cpcall
 %ifdef VP_DIAG
 vp_prbeg:
     mov byte [vp_cpv], VK_PRBEG
@@ -14921,6 +15057,16 @@ vp_srun:
     je .go                          ; the rows between are left behind (the
     call vp_pposter                 ; owner's report)
 .go:
+    call vp_opend
+                                    ; (SPEC.md 12.8.10): an owned operation
+                                    ; PARKS at fsx_run's fpg_finish rather
+                                    ; than coming down (12.8.9), so it stayed
+                                    ; on the bar, frozen, for a whole play in
+                                    ; the window - and its end, made inside,
+                                    ; is refused by kern_mega's real-mode
+                                    ; table, so it stayed for good. Refused
+                                    ; when none is ours; vp_xreop begins it
+                                    ; again after
     call OSAPI_WM_CLIP_CLEAR        ; THE BRACKET'S DOOR PAYS OFF THE WIDGET
                                     ; under whatever region is armed (SPEC.md
                                     ; 12.8.5.2): a play from a key reads its
@@ -15062,6 +15208,7 @@ vp_srun:
     call vp_fmt                     ; now: Play resumes it)
     call vp_repaint
 .out:
+    call vp_xreop                   ; (the hold's bar again, if it still loads)
     call vp_parm                    ; (a session left paused banks on)
     pop di
     pop dx
@@ -17478,9 +17625,12 @@ vp_sndprep:
     call vp_rhave                   ; (real mode: the ring kept, 98.3.24)
     jnc .hwr
 %endif
-    mov ax, VP_RL / 1024 + 1        ; A CARD: the ring and its two control
-    mov cx, ax                      ; words, page-safe and never moved
-    call OSAPI_MEM_CLAIM_DMA_HI
+    push bx                         ; A CARD: the ring and its two control
+    mov ax, (VP_RL / 1024 + 1) * 64 ; words, page-safe and never moved, and
+    mov cx, ax                      ; CONVENTIONAL: the paragraph door with a
+    mov bl, MEMP_CLAIM_HI           ; head (vp_aseg is in vp_rlst, and
+    call OSAPI_MEM_P                ; kern_mega's KB DMA door would put it
+    pop bx                          ; above 1MB, KERN-MEGA-PLAN 14.160)
     jc .ret                         ; no room for it: the play is silent
 %ifdef PKG_MEGA
 .hwr:
@@ -17874,6 +18024,167 @@ vp_upaus:
     ret
 
 ; -----------------------------------------------------------------------------
+; =============================================================================
+; BOOKMARKS (SPEC.md 98.3.25): a copy of the stream's cursor, the first one
+; seen in each MB of the file, taken after every fill. A seek starts from the
+; nearest one at or before its target - or from the cursor itself, ahead -
+; and the kernel walks the links between (18.4.8.2), where a zeroed cursor
+; walks the chain from the file's first cluster: up to 2 s on a 5150 at
+; 12 MB. Only on a kernel that walks forward (the cursor's +4 set by a read);
+; a stale one (a write, a remount) the kernel re-seeds from the name.
+; =============================================================================
+; vp_bmrec - vp_cur, as it stands, into its MB's slot if that is empty.
+; Preserves every register and the flags
+vp_bmrec:
+%if VP_BMN
+    pushf
+    push ax
+    push cx
+    push si
+    push di
+    push es
+    cmp word [vp_cur+4], 0          ; not read, or no forward walk: nothing
+    je .out
+    cmp word [vp_cur+0], 0          ; (cold: no generation)
+    je .out
+    mov ax, [vp_cur+FSEQ_OFF+2]     ; its MB: the offset's bits 20 up
+    mov cl, 4
+    shr ax, cl
+    cmp ax, VP_BMN
+    jae .out
+    mov cl, 4
+    shl ax, cl                      ; x FSEQ_SIZE
+    mov di, ax
+    add di, vp_bm
+    cmp word [di], 0                ; taken: the first in the MB is the one
+    jne .out                        ; nearest its start
+    push ds
+    pop es
+    mov si, vp_cur
+    mov cx, FSEQ_SIZE / 2
+    cld
+    rep movsw
+.out:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop ax
+    popf
+%endif
+    ret
+
+; vp_bmclear - no bookmark. Preserves every register
+vp_bmclear:
+%if VP_BMN
+    push ax
+    push cx
+    push di
+    push es
+    push ds
+    pop es
+    mov di, vp_bm
+    mov cx, VP_BMN * FSEQ_SIZE / 2
+    xor ax, ax
+    cld
+    rep stosw
+    pop es
+    pop di
+    pop cx
+    pop ax
+%endif
+    ret
+
+; vp_curseek - cursor DI (ours) to file offset DX:AX: from the nearest place
+; at or before it - the cursor itself when it walks forward and is not past
+; it, or a bookmark - else zeroed, as a seek always was. Preserves every
+; register
+vp_curseek:
+    push ax
+    push bx
+    push cx
+    push si
+    push es
+    xor bx, bx                      ; BX = the best's offset, high word...
+    xor cx, cx                      ; ...CX its low; SI the best (0 none)
+    xor si, si
+    cmp word [di+4], 0              ; ITSELF
+    je .bms
+    cmp word [di+0], 0
+    je .bms
+    call .le                        ; its +12 at or before DX:AX?
+    jc .bms
+    mov si, di
+    mov bx, [di+FSEQ_OFF+2]
+    mov cx, [di+FSEQ_OFF]
+.bms:
+%if VP_BMN
+    push di
+    mov di, vp_bm
+.k:
+    cmp word [di], 0
+    je .kn
+    call .le
+    jc .kn
+    cmp [di+FSEQ_OFF+2], bx         ; nearer than the best so far?
+    jb .kn
+    ja .kb
+    cmp [di+FSEQ_OFF], cx
+    jbe .kn
+.kb:
+    mov si, di
+    mov bx, [di+FSEQ_OFF+2]
+    mov cx, [di+FSEQ_OFF]
+.kn:
+    add di, FSEQ_SIZE
+    cmp di, vp_bm + VP_BMN * FSEQ_SIZE
+    jb .k
+    pop di
+%endif
+    push ds
+    pop es
+    or si, si
+    jz .zero
+    cmp si, di
+    je .set                         ; itself, as it stands
+    push di
+    mov cx, FSEQ_SIZE / 2
+    cld
+    rep movsw
+    pop di
+    jmp short .set
+.zero:
+    push ax
+    push di
+    mov cx, FSEQ_SIZE / 2
+    xor ax, ax
+    cld
+    rep stosw
+    pop di
+    pop ax
+.set:
+    mov [di+FSEQ_OFF], ax
+    mov [di+FSEQ_OFF+2], dx
+    pop es
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+; .le - CF=0 when cursor DI's +12 is at or before DX:AX, CF=1 past it
+.le:
+    cmp [di+FSEQ_OFF+2], dx
+    jb .y
+    ja .n
+    cmp [di+FSEQ_OFF], ax
+    jbe .y
+.n:
+    stc
+    ret
+.y:
+    clc
+    ret
+
 ; vp_fill - read the next chunk into its slot, if the hook has left it
 ; out: CF=0 one arrived; CF=1 none could be read now (ring full, or the end)
 ; -----------------------------------------------------------------------------
@@ -18164,7 +18475,7 @@ vp_treset:
 vp_tpat:
     push ax
     push bx
-    mov bx, vp_fill
+    mov bx, vp_fillb
     or al, al
     jz .back
     cmp byte [bx], 0xE9             ; (patched already)
@@ -18174,7 +18485,7 @@ vp_tpat:
     mov al, [bx+2]
     mov [vp_tpsv+2], al
     mov byte [bx], 0xE9             ; jmp near vp_tfill
-    mov word [bx+1], vp_tfill - (vp_fill + 3)
+    mov word [bx+1], vp_tfill - (vp_fillb + 3)
     jmp short .r
 .back:
     cmp byte [bx], 0xE9
@@ -18319,7 +18630,7 @@ vp_tpop:
 vp_tfill:
     cmp byte [vp_eof], 0            ; (vp_fill's own tests, which its head's
     je .go                          ; patch jumps over: no Repeat and nothing
-    jmp vp_fill.none                ; resident ever has tiers)
+    jmp vp_fillb.none                ; resident ever has tiers)
 .go:
     call vp_tpop
     mov ax, [vp_lc]
@@ -18381,7 +18692,7 @@ vp_tfill:
     mov bx, [vp_twb]
     call vp_xbread                  ; AX = the bytes: the bounce, copied up
     jnc .bk
-    jmp vp_fill.ioerr
+    jmp vp_fillb.ioerr
 .bk:
     call vp_dtime
     mov dx, [vp_twb]                ; the entry: the bank's slot
@@ -18401,12 +18712,12 @@ vp_tfill:
 %ifdef VP_RDTIME
     call vp_rtb
 %endif
-    call OSAPI_FILE_READ_SEQ
+    call vp_rseqr                   ; (the map's run in it: 18.4.8.3)
 %ifdef VP_RDTIME
     call vp_rte
 %endif
     jnc .cv
-    jmp vp_fill.ioerr
+    jmp vp_fillb.ioerr
 .cv:
     call vp_dtime
 %if %isdef(VP_DIAG) || %isdef(VP_TTEST)
@@ -18466,7 +18777,7 @@ vp_tfill:
     pop ax
     cmp ax, VP_CHUNK                ; ZF=0: the stream's last, short chunk
     pushf
-    jmp vp_fill.pub
+    jmp vp_fillb.pub
 
 ; vp_tseam - a SWITCH, CL = the new tier and DX its entry, [vp_lc] the chunk
 ; just read: what of it the super-packet before it runs on into (vp_mneed)
@@ -18590,7 +18901,10 @@ vp_tcmir:
     pop ax
     ret
 
-vp_fill:                            ; (TWO TIERS: a jmp to vp_tfill here, for
+vp_fill:                            ; THE FILL, AND A BOOKMARK AFTER IT
+    call vp_fillb                   ; (98.3.25): its CF and every register
+    jmp vp_bmrec                    ; as the body left them
+vp_fillb:                           ; (TWO TIERS: a jmp to vp_tfill here, for
                                     ; the session - vp_tpat)
     cmp byte [vp_resid], 0          ; RESIDENT: nothing to read (98.1.7)
     jne .none
@@ -18654,7 +18968,7 @@ vp_fill:                            ; (TWO TIERS: a jmp to vp_tfill here, for
 %ifdef VP_RDTIME
     call vp_rtb
 %endif
-    call OSAPI_FILE_READ_SEQ
+    call vp_rseqr                   ; (the map's run in it: 18.4.8.3)
 %ifdef VP_RDTIME
     call vp_rte
 %endif
@@ -20134,10 +20448,11 @@ vp_fpdec:
 vp_pgcopy:
     push dx
     push ds
-    mov ds, dx
+    VP_DSDX                         ; (in place, a handle: vp_pghid's)
     mov ax, [si+2]
     mov bx, [si+4]
     mov cl, [si+5]                  ; (y1's high byte: the source)
+    VP_DSEND
     pop ds
     add si, COPY_LEN
     push si
@@ -20604,10 +20919,11 @@ vp_pghid:
     cmp byte [vp_npg], 0
     je .two
 .n:
-    push ds
-    mov ds, dx
-    mov ax, [si+4]                  ; AH: another follows this one
-    mov al, [si+3]                  ; AL: its page
+    push ds                         ; (a record IN PLACE is a HANDLE: a plain
+    VP_DSDX                         ; mov ds read FFFxh:SI, the HMA's bytes
+    mov ax, [si+4]                  ; as the chain - KERN-MEGA-PLAN 14.182)
+    mov al, [si+3]                  ; AH: another follows this one, AL: its
+    VP_DSEND                        ; page
     pop ds
     push ax
     call vp_pgnum
@@ -23774,7 +24090,7 @@ vp_rclaim:
     jnz .s0                         ; (a gap: slot 0 and the slack)
     cmp ax, cx
     jb .s0
-    call OSAPI_MEM_CLAIM_DMA        ; every slot on the page grid...
+    call .p                         ; every slot on the page grid...
     jnc .r
 .s0:
     mov cx, bx                      ; ...or slot 0 at least
@@ -23783,9 +24099,29 @@ vp_rclaim:
     jbe .h
     mov cx, ax
 .h:
-    call OSAPI_MEM_CLAIM_DMA
+    call .p
 .r:
     pop cx
+    ret
+; .p - AX = KB, CX = the head's KB -> OSAPI_MEM_CLAIM_DMA's claim, but through
+; the PARAGRAPH door, which keeps a head conventional: kern_mega's KB DMA
+; door gives an OS88_HIGHMEM package a pool block for one (KERN-MEGA-PLAN
+; 14.160), and vp_ring is in vp_rlst - the real-mode bracket reads into it.
+; CF, DX; AX, BX and CX kept
+.p:
+    push ax
+    push bx
+    push cx
+    mov bx, cx
+    mov cl, 6
+    shl ax, cl                      ; paragraphs (SPEC.md 50.3.7)
+    shl bx, cl
+    mov cx, bx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; vp_rclk1 - vp_rclaim one slot fewer, for a COPYING BANK's ring, whose
@@ -24063,6 +24399,8 @@ vp_m3on:      db 0                      ; the GC is in write mode 3 (98.1.3.2.4)
 %ifdef PKG_MEGA                         ; (the kern_mega arm's, 14.66)
 %ifdef PKG_MEGA
 vp_rbh:       dw 0                      ; vp_rbhold's claim, 0 none (98.3.24.2)
+vp_rbkb:      dw 0xFFFF                 ; vp_rprep's answer: the KB the door
+                                        ; still claims, FFFFh none (53.2.3.1)
 %endif
 vp_pm:        db 0                      ; CPU_F_PM, banked at entry: segments
                                         ; are selectors (KERN-MEGA-PLAN 14.16)
@@ -24803,9 +25141,14 @@ vp_ptk:       dw 0                  ; ticks paused, this play
 vp_rchk:      db 0                  ; ...and the block's writes are checked
                                     ; (after the two words: they keep the
                                     ; parity they had)
-vp_cur:       times FSEQ_SIZE db 0
+vp_cur:       times FSEQ_XSIZE db 0 ; (22: room for the map's run, 18.4.8.3)
+%if VP_BMN
+vp_bm:        times VP_BMN * FSEQ_SIZE db 0 ; BOOKMARKS (98.3.25): a cursor a MB
+%endif
 vp_rdcur:     times FSEQ_SIZE db 0  ; vp_rdat's own (os88_rseq), never the stream's
-vp_xcur:      times FSEQ_SIZE db 0  ; THE HOLD (98.3.18): its loader's cursor,
+vp_run:       times 6 db 0          ; THE MAP's first run (18.4.8.3): first, last
+                                    ; (0 = none), the generation it holds under
+vp_xcur:      times FSEQ_XSIZE db 0 ; THE HOLD (98.3.18): its loader's cursor,
 vp_xgap:      dw 0                  ; THE GAP (os88xgap.inc): G, 0 none
 vp_xgok:      db 0                  ; ...measured, this instance
 vp_xsclm:     dw 0                  ; vp_xstep's claim, the read inside it

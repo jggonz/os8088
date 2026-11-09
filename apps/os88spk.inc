@@ -87,14 +87,20 @@
 ;   os88spk_pcons the samples played: both words in your image
 ;
 ; All preserve every register but their outputs. Labels os88spk_; the
-; state is in the including package's own image, reached through CS.
+; state is in the including package's own image. It is READ through CS. The
+; setup calls - os88spk_lpt, os88spk_init, os88spk_go - are made with DS =
+; the package's own (every caller's is) and STORE through it: under kern_mega
+; CS is a read-only code alias and a store through it a #GP the kernel
+; completes, 80-100 a play (KERN-MEGA-PLAN 14.150). The ISRs store through
+; their copy's segment (34.11.1.1); the polled Covox, which runs with the
+; producer's DS and on an 8088 alone, through CS.
 ; =============================================================================
 
 OS88SPK_DRYN    equ 16              ; samples a dry grant plays: 2 ms at 8 kHz
 
 ; -----------------------------------------------------------------------------
 os88spk_lpt:
-    mov [cs:os88spk_lptp], dx
+    mov [os88spk_lptp], dx
     ret
 
 SNDV_DACINFO    equ 6               ; SOUND.DRV's verb (drivers/sound/sndpkg.inc,
@@ -132,7 +138,7 @@ os88spk_init:
     push dx
     push di
     push es
-    mov [cs:os88spk_pin], cl
+    mov [os88spk_pin], cl
     mov cl, ah                      ; RL = 4096 << the size code, taken
     and cl, 0x30                    ; before the divide spends AX
     shr cl, 1
@@ -160,7 +166,7 @@ os88spk_init:
 .pp:
     cmp cl, 2                       ; (two is what os88spk_isrm plays;
     ja .no                          ; 3 and 4 are the format's, 34.11.7)
-    mov [cs:os88spk_pp], cl
+    mov [os88spk_pp], cl
     div cl                          ; AL = N / pulses, the pulse's period
     or ah, ah                       ; (N < 1,024 here, so AH is the
     jnz .no                         ; remainder): exact, or not played
@@ -175,10 +181,10 @@ os88spk_init:
     pop ax
     je .no
 .nlo:
-    mov [cs:os88spk_n], ax
-    mov [cs:os88spk_rl], bx
-    mov [cs:os88spk_rseg], di
-    mov [cs:os88spk_rp+2], di
+    mov [os88spk_n], ax
+    mov [os88spk_rl], bx
+    mov [os88spk_rseg], di
+    mov [os88spk_rp+2], di
     mov es, di
     lea di, [bx+SND_EXT_TAB]        ; THE TABLE: t[s] = 1 + s(N-2)/255 -
     mov cl, al                      ; never 0 (a count of 0 is 65536) and
@@ -206,7 +212,7 @@ os88spk_init:
     jnz .tab
 .sil:
     mov al, [es:bx+SND_EXT_TAB+128] ; a dry grant's count: the middle, which
-    mov [cs:os88spk_sil], al        ; is what silence sounds like here
+    mov [os88spk_sil], al           ; is what silence sounds like here
     clc
     jmp short .out
 .no:
@@ -234,7 +240,7 @@ os88spk_go:
     cli
     push cx                         ; A DRY RING PLAYS A RUN OF SILENCE,
     push es                         ; OS88SPK_DRYN samples a grant: one
-    push cs                         ; sample a grant made the grant's event
+    push ds                         ; sample a grant made the grant's event
     pop es                          ; every pulse, ~400 cycles more each,
     mov di, os88spk_silb            ; and a producer the ring had outrun
     mov al, [cs:os88spk_sil]        ; was then starved by the very pulses it
@@ -243,13 +249,13 @@ os88spk_go:
     rep stosb                       ; and DI was saved on the way in)
     pop es
     pop cx
-    mov word [cs:os88spk_rp], os88spk_silb  ; the first sample a silent one,
-    mov [cs:os88spk_rp+2], cs       ; and its event the first grant
+    mov word [os88spk_rp], os88spk_silb     ; the first sample a silent one,
+    mov [os88spk_rp+2], cs          ; and its event the first grant
     mov ax, 1
-    mov [cs:os88spk_dry], al
-    mov [cs:os88spk_g], ax
-    mov [cs:os88spk_left], ax
-    mov [cs:os88spk_kr], ax         ; ...which ends a period: K and the
+    mov [os88spk_dry], al
+    mov [os88spk_g], ax
+    mov [os88spk_left], ax
+    mov [os88spk_kr], ax            ; ...which ends a period: K and the
     popf                            ; chain are set by then, below
     mov dx, [cs:os88spk_n]
 %ifdef PKG_MEGA
@@ -261,9 +267,9 @@ os88spk_go:
     mov ax, [cs:os88spk_lptp]
     or ax, ax
     jz .spk
-    mov [cs:os88spk_isrd.port+1], ax ; A COVOX (SPEC.md 34.14): its port is
+    mov [os88spk_isrd.port+1], ax    ; A COVOX (SPEC.md 34.14): its port is
 %ifdef PKG_MEGA
-    mov [cs:os88spk_isrdp.port+1], ax ; the ISR's own immediate
+    mov [os88spk_isrdp.port+1], ax    ; the ISR's own immediate
     mov si, os88spk_isrd
     mov di, os88spk_isrdp
 %else
@@ -274,14 +280,14 @@ os88spk_go:
     mov al, [cs:os88spk_pp]
     cmp al, 1
     je .one
-    mov byte [cs:os88spk_isrm.j+1], os88spk_isrm.whole - (os88spk_isrm.j + 2)
+    mov byte [os88spk_isrm.j+1], os88spk_isrm.whole - (os88spk_isrm.j + 2)
 %ifdef PKG_MEGA
-    mov byte [cs:os88spk_isrmp.j+1], os88spk_isrmp.whole - (os88spk_isrmp.j + 2)
+    mov byte [os88spk_isrmp.j+1], os88spk_isrmp.whole - (os88spk_isrmp.j + 2)
 %endif
     mov al, [cs:os88spk_sil]        ; PULSES A SAMPLE (34.11.7): the first
-    mov [cs:os88spk_isrm.hv+1], al  ; entry a whole one, and the half path
+    mov [os88spk_isrm.hv+1], al     ; entry a whole one, and the half path
 %ifdef PKG_MEGA
-    mov [cs:os88spk_isrmp.hv+1], al ; silence until it has a count
+    mov [os88spk_isrmp.hv+1], al    ; silence until it has a count
     mov si, os88spk_isrm
     mov di, os88spk_isrmp
 %else
@@ -309,9 +315,9 @@ os88spk_go:
     push cx                         ; again (34.11.1.1)
     call OSAPI_FSX_SPK              ; AX = K, CX:DX = the chain
     jc .rno
-    mov [cs:os88spk_kn], ax
-    mov [cs:os88spk_chain], dx
-    mov [cs:os88spk_chain+2], cx
+    mov [os88spk_kn], ax
+    mov [os88spk_chain], dx
+    mov [os88spk_chain+2], cx
     pop cx
     jmp short .pit
 .rno:
@@ -321,17 +327,17 @@ os88spk_go:
 %else
     jc .no
 %endif
-    mov [cs:os88spk_kn], ax
+    mov [os88spk_kn], ax
     push ds
     xor ax, ax
     mov ds, ax
     mov ax, si                      ; IRQ0 IS THE ISR'S, and what it was -
     xchg ax, [0x20]                 ; the kernel's own IRQ0, which the door's
-    mov [cs:os88spk_chain], ax      ; close puts back - is the chain a
-    mov ax, cs                      ; period's last sample jumps to
-    xchg ax, [0x22]
-    mov [cs:os88spk_chain+2], ax
-    pop ds
+    mov bx, cs                      ; close puts back - is the chain a
+    xchg bx, [0x22]                 ; period's last sample jumps to (stored
+    pop ds                          ; through our DS, IF = 0 still; BX is
+    mov [os88spk_chain], ax         ; spent by the door)
+    mov [os88spk_chain+2], bx
 .pit:
     mov al, 0x34                    ; channel 0 at N, a sample an IRQ0: mode
     out 0x43, al                    ; 2, lobyte then hibyte - exactly the N
@@ -361,7 +367,7 @@ os88spk_go:
                                     ; SAMPLE - thousands a second
 %else
 .pm:
-    mov [cs:os88spk_dsel], ds       ; the ISRs' DATA selector: ours
+    mov [os88spk_dsel], ds          ; the ISRs' DATA selector: ours
     mov si, di                      ; the protected-mode copy, whose GATE the
     mov al, 2                       ; door writes (AL = 2): it answers AX = K
     pushf                           ; and CX:DX = the kernel's IRQ0 to chain.
@@ -369,9 +375,9 @@ os88spk_go:
     push cx                         ; .one path - CX under them
     call OSAPI_FSX_SPK
     jc .pmno
-    mov [cs:os88spk_kn], ax
-    mov [cs:os88spk_chain], dx
-    mov [cs:os88spk_chain+2], cx
+    mov [os88spk_kn], ax
+    mov [os88spk_chain], dx
+    mov [os88spk_chain+2], cx
     pop cx
     jmp short .pit
 .pmno:

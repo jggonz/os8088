@@ -28,11 +28,28 @@ It does NOT wait for the emulated machine's prompt: the C64's KERNAL takes
 move is a property of the claims; what is asserted of the machine is that it
 runs THROUGH the move, mid-boot, fetching out of the carve and writing its RAM.
 
+WHERE THE RAM MOVES depends on the machine, so "moved" is asked across both
+of heapfrag's compactions - its suite's (claim-path, SPEC.md 66.4) and its
+key's posted one - from a base read BEFORE heapfrag opens. On kern_big
+(MartyPC, CGA) heapfrag's pinned survivor lands in a hole BELOW Note Pad's
+document and the posted pass slides the RAM onto the document's hole. On the
+1MB kern_mega (Bochs, VGA) a window's raise cache - MEM_P_WSAVE, 30KB at that
+depth, PURGEABLE and so never moved (docs/HEAP-CLAIMS.md) - sits between the
+document and the RAM when the emulator claims it; heapfrag's suite sheds it,
+its comb fills the hole it left, and the suite's own compaction slides the
+RAM down against heapfrag's DELIBERATELY pinned survivor - a barrier, not a
+stopper (SPEC.md 66.4) - so the posted pass has nothing under the RAM to give
+it and moves only the ceiling stack. Nothing of the emulator's is pinned
+there: every claim it holds is declared and moves. Measured, C64: kern_big
+RAM 2520 -> 1b40 (suite) -> 1b00 (posted); kern_mega 3720 -> 3200 (suite),
+carve 7d20 -> 8200 (posted).
+
 SIX ASSERTIONS:
 
   1. BOTH DECLARED - MC_RLOC non-zero on the RAM claim and on the carve, read
      from mem_tab (a refused declaration looks like success from inside).
-  2. THE RAM MOVED - to a new base, and the record's ramseg names that claim.
+  2. THE RAM MOVED - to a new base, and the record's ramseg names that claim
+     (in the posted pass, or across heapfrag's suite and it).
   3. THE CARVE MOVED, and romseg followed it - the same distance above
      op_base as before the pass, which is os88_part_seg's answer for where
      the carve is now.
@@ -49,6 +66,13 @@ c64_m.romseg fails 3 and 4 (romseg left at 8aa0 with the carve at 8f80).
 VERIFIED RED, Apple II: os88_onmove not re-reading a2_m.romseg fails 3, 4 and
 6 - romseg left at 8c00 with the carve at 9140, and the 6502, fetching the
 ROM through a stale bias, stuck at one PC.
+VERIFIED RED, C64 on the 1MB kern_mega: os88_mem_movable(c64_m.ramseg, 0)
+fails 1 and 2 (RAM MC_RLOC=0, the claim left at 3720). os88_onmove a bare
+return is red on kern_big (the stale ramseg wrecks heapfrag's suite, which
+never finishes) and INERT on kern_mega BY DESIGN: there every word it
+rewrites is a selector the kernel rebases with the claim (SPEC.md 41.16,
+KERN-MEGA-MEMORY-PLAN MC7.4), so the mega port asks the KERNEL's question -
+the claim moved and the selector names it - and the proc's is kern_big's.
 C64MOVE_DUMP=1 prints mem_tab before and after.
 """
 import argparse
@@ -68,14 +92,15 @@ PKGS = {
     "c64": dict(disk="build/c64move360.img", shim="apps/c64/c64.asm",
                 name="C64.O88", title="VICE (C64)", rec="_c64_m",
                 state="_c64_state", jam=1, rom="build/c64-rom/C64.ROM",
-                keep=20480, ovl=True, chr="_c64_chr_seg"),
+                keep=20480, ovl=True, chr="_c64_chr_seg",
+                fcode="_c64_fcode", fseg="_c64_fseg"),
     # the Apple II's carve is shrunk to the main ROM once the chargen is
     # decoded (APPLE2-SPEC 1.5), so the last 16 bytes it KEEPS end at 0x3000
     "apple2": dict(disk="build/a2move360.img",
                    shim="apps/apple2/apple2.asm", name="APPLE2.O88",
                    title="Apple II", rec="_a2_m", state="_a2_state", jam=2,
                    rom="build/apple2-rom/APPLE2.ROM", keep=0x3000, ovl=False,
-                   chr=None),
+                   chr=None, fcode="_a2_fcode", fseg="_a2_fseg"),
 }
 
 
@@ -121,6 +146,9 @@ def main():
                 st["ovs"] = para(w(seg, "cc_ovseg"))
             if P["chr"]:
                 st["chr"] = para(w(seg, P["chr"]))
+            if P.get("fcode"):          # THE FAST CORE's code claim and the
+                st["fc"] = para(w(seg, P["fcode"]))    # selector it is called
+                st["fs"] = para(w(seg, P["fseg"]))     # through (FAST6502)
             return st
 
         def rloc(base):
@@ -142,6 +170,20 @@ def main():
         ui.open(P["name"])              # region and carve right under it
         os88marty.until(m, lambda _: state(eseg())["pc"] != 0,
                         "the emulated CPU's first slice", poll=0.5, guest=120)
+        # ...and its FAST CORE's code claim: the Apple II makes it, and swaps
+        # its 49KB RAM for a 64KB one, at a later wake than the first slice
+        # (APPLE2-SPEC 4.6), so a RAM read before that names a claim that is
+        # FREED rather than moved. Every machine here runs the fast core,
+        # kern_mega included (C64-SPEC 4.7: the code claim is MEMP_CONV, so
+        # it has a code selector), so waiting for it is a check as well
+        os88marty.until(m, lambda _: state(eseg()).get("fc", 1) != 0,
+                        "the fast core's code claim", poll=0.5, guest=120)
+        # THE RAM'S FIRST BASE, before heapfrag runs: on the 1MB kern_mega
+        # its SUITE's compaction is the one that slides the RAM (the module
+        # docstring, WHERE THE RAM MOVES)
+        ram_a = state(eseg())["ram"]
+        r_ram_a = rloc(ram_a)
+        print("%s's RAM before heapfrag: %04x" % (a.pkg, ram_a))
         hf = ui.open("HEAPFRAG.O88")    # LAST: its pinned blocks land below
         os88marty.until(m, lambda _: heapfrag_ran(m, S),   # the carve
                         "heapfrag's suite and its posted pass", poll=0.5,
@@ -178,6 +220,23 @@ def main():
         h1 = rloc(s1["ram"])
         ok2 = (bool(r_ram) and s1["ram"] != s0["ram"] and bool(h1)
                and h1[1] == r_ram[1])
+        if not ok2 and r_ram_a and r_ram_a[3] and bool(h1):
+            # ...or across heapfrag's SUITE: the same declared claim, by its
+            # size, at a new base - which is the kern_mega layout's move
+            ok2 = s1["ram"] != ram_a and h1[1] == r_ram_a[1]
+            if ok2:
+                s0 = dict(s0, ram=ram_a)        # ...and say so below
+        if not ok2 and s0.get("fc"):
+            # WITH THE FAST CORE the package holds two more 64KB claims, made
+            # at the first wake where a 64KB hole was - so the one under the
+            # ceiling that the pass moves may be the core's CODE claim rather
+            # than the RAM (APPLE2-SPEC 4.6, C64-SPEC 4.7). Then it is THAT
+            # word os88_onmove has to follow, and the selector with it.
+            r_fc, h_fc = rloc(s0["fc"]), rloc(s1["fc"])
+            print("  2 (fast core) code %04x -> %04x, selector %04x -> %04x"
+                  % (s0["fc"], s1["fc"], s0["fs"], s1["fs"]))
+            ok2 = (bool(r_fc) and r_fc[3] and s1["fc"] != s0["fc"]
+                   and bool(h_fc) and h_fc[1] == r_fc[1] and s1["fs"] == s1["fc"])
         print("  2 the RAM moved          %s"
               % ("%04x -> %04x, and ramseg names it" % (s0["ram"], s1["ram"])
                  if ok2 else "NO: ramseg %04x, claim %r" % (s1["ram"], h1)))

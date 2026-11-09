@@ -297,7 +297,18 @@ def native(machine):
         assert indices == list(struct.unpack('<%dI' % R.ROWS, p.data('ru_scores', R.ROWS*4)))
         if not MEGA and machine in ('os8088_redline_pc_gla','os8088_redline_herc_gla',
                                     'os8088_redline_vga_gla'):
-            assert all(800 < n < 1200 for n in indices), indices
+            # THE MACHINE ROWS ARE THE CALIBRATION, THE DRAWING ROWS ARE THE
+            # OS. The first six (ALU, rotate, MUL, DIV, RAM copy and fill)
+            # price the emulated 8088 against the 5150 the reference came
+            # off, and stay within 20% of it. Every row after them prices
+            # THIS kernel's drawing, and a kernel that draws faster than the
+            # one the reference ran scores above 1000 for a true reason:
+            # kernel hot-paths pass 1 moved Opaque text 1062 -> 1171-1260 and
+            # the frames 1076 -> 1108-1155 (main e9d78a10 against elendilon,
+            # VGA/CGA/Hercules, 2026-11-07), and the old shared bound of 1200
+            # failed all three machines. Below 800 is still a regression.
+            assert all(800 < n < 1200 for n in indices[:6]), indices
+            assert all(800 < n < 1500 for n in indices[6:]), indices
         arena_headroom(report, p.word('bl_used'))
         def screenshot(name):
             ui.m.advance(frames=60)

@@ -2,7 +2,7 @@
 """Generate docs/INDEX.md - the "does this already exist?" index.
 
 WHY THIS EXISTS, stated plainly because the reason is a mistake rather than a
-plan. SPEC.md is ~67,000 lines and answers any question you know to ask it.
+plan. SPEC.md is over 240,000 lines and answers any question you know to ask it.
 Grep answers a narrow question fast. Neither answers the question you have
 BEFORE you write code, which is not "how does OSAPI_ABOUT_SET work" but "is
 there already a way to put my application's name in the menu bar". Sheet and
@@ -297,6 +297,18 @@ INCLUDES = [
      "yours and a cursor whose offset differs is re-seeded, so a seek needs "
      "nothing; the small kernel's `FERR_NAME` is retried as `READ_AT`. Zero "
      "the cursor with `os88_rseq_new` whenever the FILE changes."),
+    ("os88huge.inc", "50.3.8",
+     "WALKING AN OSAPI_MEM_HUGE CLAIM by the step it answered, on every "
+     "kernel: a 14-byte record (`HW_SEG`, `HW_STEP`, `HW_LEN`, `HW_CUT`, "
+     "`HW_FOFF`) and `hw_aim` (a 32-bit offset as ES:DI, with how far its "
+     "window reaches), `hw_get`/`hw_put` (copies to and from ES:DI), "
+     "`hw_claim` (the cell and the record), `hw_claimfit` (a HOLD: the "
+     "ask first, the claim with the heap's largest run kept N KB, the one "
+     "forced-bridge retry - every whole-file hold's), `hw_fread` (a file read into "
+     "the claim in window-sized `os88_rseq` calls) and `hw_fwrite` (onto an "
+     "`os88_wseq` stream) - every span split where a window ends, so never "
+     "across a kern_mega bridge's cut. One `%define` an arm. XTMP3's "
+     "kern_mega hold is the worked example (SPEC.md 121.6.1)."),
     ("os88wseq.inc", "18.4.9.4",
      "An APPEND OF ANY SIZE: `os88_wseq_open` (a name, a stream record of "
      "`WSEQ_SIZE` and a buffer of yours) creates the file empty, "
@@ -317,6 +329,12 @@ INCLUDES = [
      "the folder if need be, so the program it names is opened at every boot "
      "(Shift held skips it). Over os88data.inc's walk, so it needs "
      "`OD_BOOTVOL`; REDLINE's Apply on boot is the worked example."),
+    ("os88inflate.inc", "106.18",
+     "INFLATE for a raw DEFLATE stream held WHOLE: `inflate` takes DS:SI, "
+     "writes exactly CX bytes at ES:DI and sets carry on a bad stream. zlib's "
+     "`puff` in 8086, ~1KB of work space (`INF_WS`) and no window of its own. "
+     "ARCADE's zip import is the user (ARCADE-SPEC, its section on import); a stream too "
+     "big to hold wants PIXEL's table-driven ring decoder, 106.18's."),
     ("os88pit.inc", "72.15.1",
      "`pit_now`: a 32-bit clock in 838ns units off the 8253 and the BIOS tick, "
      "good for an hour before it wraps. Sub-tick timing for a profiler."),
@@ -773,37 +791,48 @@ def build():
     w("## docs/")
     w("")
     w("**The DIRECTORY says what a document is, and the filename does not.** "
-      "`docs/` describes how the system works today - instructions, contracts "
-      "and maintained reference. Everything under `docs/plans/` is a design "
-      "record: what was considered, including the options that were rejected, "
-      "and it is never a description of what shipped - SPEC.md is the current "
-      "state and these are how it got there. `docs/plans/completed/` is the "
-      "subset whose work has landed; what stays directly in `docs/plans/` "
-      "still has work open. `docs/history/` is superseded or closed - a record "
-      "of a moment that has passed, and true of no tree you can check out. "
-      "`docs/reports/` is a MEASUREMENT taken at a point in time: true of the "
-      "tree it was taken on, quotable with its date and its box, and never to "
-      "be read as a description of today.")
+      "The documents below describe how the system works TODAY - "
+      "instructions, contracts and maintained reference. Everything else "
+      "under `docs/` is NOT where to learn how something works, and is "
+      "deliberately not listed by name: `docs/plans/` is work proposed or "
+      "half-done, `docs/plans/completed/` is how something got built (never "
+      "what it does now), `docs/history/` is superseded, and `docs/reports/` "
+      "is a dated MEASUREMENT of one tree. SPEC.md, the files below and the "
+      "code are the authority.")
     w("")
     docs = doc_files()
-    for kind, label in (
-            ("reference", "*How it works today - `docs/` (%d):*"),
-            ("plan", "*Plans with work still open - `docs/plans/` (%d):*"),
-            ("completed", "*Design records for what shipped - "
-                          "`docs/plans/completed/` (%d):*"),
-            ("history", "*Superseded and closed - `docs/history/` (%d):*"),
-            ("report", "*Measurements, each true of the tree it was taken on "
-                       "- `docs/reports/` (%d):*")):
-        names = [os.path.basename(n) for n, k in docs if k == kind]
-        w(label % len(names) + " "
-          + ", ".join("`%s`" % n for n in names))
-        w("")
+    refs = [n for n, k in docs if k == "reference"]
+    w("*How it works today - `docs/` (%d):* " % len(refs)
+      + ", ".join("[%s](%s)" % ((n[len("docs/"):],) * 2) for n in refs))
+    w("")
+    counts = dict((k, sum(1 for _n, kk in docs if kk == k))
+                  for k in ("plan", "completed", "history", "report"))
+    w("*Not reference:* %(plan)d open plans in `docs/plans/`, %(completed)d "
+      "design records in `docs/plans/completed/`, %(history)d superseded "
+      "files in `docs/history/`, %(report)d measurements in "
+      "`docs/reports/`." % counts)
+    w("")
     return "\n".join(L) + "\n"
+
+
+def check_misfiled():
+    """A plan or handoff filed as reference is a stale document dressed as a
+    current one: the directory is what tells a reader not to trust it. So a
+    file directly in `docs/` whose NAME says plan or handoff fails the build -
+    it belongs in docs/plans/ (open) or docs/plans/completed/ (shipped)."""
+    bad = [n for n, k in doc_files() if k == "reference"
+           and re.search(r"PLAN|HANDOFF", os.path.basename(n))]
+    for n in bad:
+        print("os88index: %s is a plan filed as reference - git mv it to "
+              "docs/plans/ (open) or docs/plans/completed/ (shipped)" % n)
+    return not bad
 
 
 def main():
     if not check_includes():          # a stale list is a stale index, and this
         return 1                      # one is hand-written, so it is checked
+    if not check_misfiled():
+        return 1
     text = build()
     if "--check" in sys.argv:
         try:

@@ -204,7 +204,7 @@ static void ovl_conv_init(void)
  * COPY IS NOT REACHABLE WITH NO MACHINE and PASTE is greyed with no machine,
  * on a JAM and while PAUSED. c64menu.c's c64_menu_state carries each fact:
  * on a machine that never started the matrix holds nothing but
- * c64_ram_pattern's factory fill
+ * ovl_ram_pattern's factory fill
  * and the clipboard is KERNEL-OWNED and outlives this app (SPEC.md 55.3), so
  * a Copy there would destroy what the user copied elsewhere in exchange for a
  * screen they cannot see. Copy stays LIVE on a JAM - the frozen screen is
@@ -218,7 +218,8 @@ static void ovl_conv_init(void)
 static void ovl_cmd(int menu, int item, void *win)
 {
     if (menu == C64_M_FILE) {
-        if (item == C64_I_ATTACH) {
+        if (item == C64_I_ATTACH || item == C64_I_DISK) {   /* (a D64 is told
+                                             * by its size in os88_onfile) */
             /* File > Smart attach... (Alt+A) on .PRG, through the Standard
              * File dialog. It does not block: the answer arrives at
              * os88_onfile (11.3).
@@ -237,8 +238,10 @@ static void ovl_cmd(int menu, int item, void *win)
              * SPEC.md 38.10's last-picked name for this application, and Open
              * stays greyed until a row is selected (38.8) rather than sitting
              * live over nothing. */
+            c64_smart = (item == C64_I_ATTACH);   /* (11.3.2: only
+                                             * Smart attach starts it) */
             if (os88_file_dlg(OS88_FDLG_OPEN, win, 0) < 0)
-                c64_say("A file dialog is already open.");
+                c64_say("A file dialog is open.");
             return;
         }
         /* Reset machine CPU vs Power cycle machine: on a real machine the
@@ -374,7 +377,7 @@ static void ovl_cmd(int menu, int item, void *win)
              * that announced a speed-up the machine does not deliver is the
              * shape SPEC.md 47 exists to stop, and PERFORMANCE.md's "degrade
              * by tier" gives the port the means to answer: os88_cpu() is a
-             * FACT the code can test, and c64_tier_init has read it before
+             * FACT the code can test, and ovl_tier_init has read it before
              * the menu is first drawn.
              *
              * THE THREE SENTENCES BELOW ARE THIS PORT'S OWN, not VICE's, and
@@ -388,7 +391,7 @@ static void ovl_cmd(int menu, int item, void *win)
             if (!c64_warp)
                 c64_say("Warp mode off.");
             else if (os88_cpu() == OS88_CPU_8086)
-                c64_say("Warp mode on - no change.");
+                c64_say("Warp on - no change.");
             else
                 c64_say("Warp mode on.");
             return;
@@ -420,6 +423,27 @@ static void ovl_cmd(int menu, int item, void *win)
              * machine at all - no C64.ROM, or a JAM - c64_menu_state greys
              * the item rather than let it be a silent no-op (§47). */
             ovl_advance_frame();
+            return;
+        }
+        if (item == C64_I_JIT) {
+            ovl_jit_toggle();
+            return;
+        }
+        if (item == C64_I_COLL) {
+            c64_col_off ^= 1;
+            c64_col_ok = 0;                 /* (on again: scanned afresh) */
+            c64_menu_state();
+            c64_say(c64_col_off ? "Sprite collisions off." :
+                    "Sprite collisions on.");
+            return;
+        }
+        if (item >= C64_I_FS0) {            /* the frame skip (9.13): the
+                                             * three radio items, and the
+                                             * check moves */
+            c64_fs_mode = item - C64_I_FS0;
+            c64_fs_extra = 0;
+            c64_fs_cost = 0;
+            c64_menu_state();
             return;
         }
         if (item == C64_I_SWAPJOY) {

@@ -5697,16 +5697,16 @@ tp_l_bpap:      db 'Ltr', 0, 'Leg', 0, 'A4', 0, 'A5', 0
 tp_l_bgut:      db 'G0', 0, 'G+', 0, 'G++', 0
 tp_l_bpad:      db 'Pad-', 0, 'Pad', 0, 'Pad+', 0
 tp_s_noset:     db 'F5 typesets the preview', 0
-tp_s_loaded:    db 'Loaded', 0
-tp_s_saved:     db 'Saved', 0
-tp_s_copied:    db 'Copied', 0
-tp_s_err:       db 'Read error: new document', 0
-tp_s_werr:      db 'Write error', 0
-tp_s_nomem:     db 'Need more RAM', 0
-tp_s_full:      db 'Document full (8K)', 0
-tp_s_xok:       db 'Exported', 0
-tp_s_xerr:      db 'Export failed', 0
-tp_s_xbig:      db 'Export too large', 0
+TOASTSTR tp_s_loaded, 'Loaded'
+TOASTSTR tp_s_saved, 'Saved'
+TOASTSTR tp_s_copied, 'Copied'
+TOASTSTR tp_s_err, 'Read error: new document'
+TOASTSTR tp_s_werr, 'Write error'
+TOASTSTR tp_s_nomem, 'Need more RAM'
+TOASTSTR tp_s_full, 'Document full (8K)'
+TOASTSTR tp_s_xok, 'Exported'
+TOASTSTR tp_s_xerr, 'Export failed'
+TOASTSTR tp_s_xbig, 'Export too large'
 ; The About card, in the shape apps/paint and apps/modplug use it: what the
 ; program is, who contributed it, and one honest line about what is NOT in
 ; here. A reader who has met TeX should not be left thinking this is TeX.

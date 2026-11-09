@@ -778,7 +778,7 @@ br_dl_claim:
     mov ax, [br_membase]
     or ax, ax
     jnz .base
-    call OSAPI_MEM_AVAIL
+    call br_avail
     mov [br_dl_membase], bx
     jmp .room
 .base:
@@ -816,7 +816,7 @@ br_dl_memroom:
     push cx
     push dx
     mov [br_dl_needkb], ax
-    call OSAPI_MEM_AVAIL
+    call br_avail
     mov [br_dl_largest], ax
     mov ax, [br_dl_membase]
     mov cx, 5

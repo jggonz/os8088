@@ -71,9 +71,10 @@ PKG_DISP     equ 12
 ;
 ;     mov word [DRV_H_KEEP], my_keep    ; my_keep: everything past it is dead
 ;
-; and the kernel shrinks the image's claim to that offset rounded up to a KB,
-; right after the attach and before any other verb is sent. So put what may be
-; dropped LAST, its zeroed state after its code, and never reach it again:
+; and the kernel shrinks the image's claim to that offset rounded up to the
+; heap's 512-byte granule, right after the attach and before any other verb is
+; sent. So put what may be dropped LAST, its zeroed state after its code, and
+; never reach it again:
 ; the bytes are gone from under you, and a test of a byte BEFORE the offset is
 ; what guards every way in. Ignored by a kernel that does not know it, and by
 ; one whose image is not a heap claim (the HMA, kern_mega above 1MB).
@@ -92,10 +93,12 @@ DRV_H_KEEP   equ 4
 ; so a sound driver and a disk driver do not disconnect one another.
 DRVC_OVL     equ 0x40           ; NOT A KERNEL CLASS, so it stays here. A
                                 ; driver's own loadable half (OS88_OVERLAY
-                                ; below): the kernel never loads one and
-                                ; drv_check would refuse it, and the number is
-                                ; here so that saying so is a property of the
-                                ; file rather than a comment.
+                                ; below): the kernel loads one only into a row
+                                ; that expects DRVC_OVL, and stops after the
+                                ; bss - no publication, no verb: its owner
+                                ; attaches it - and the number is here so
+                                ; that saying so is a property of the file
+                                ; rather than a comment.
                                 ; It WAS 4 and moved when DRVC_NET took that
                                 ; number: a real class costs a publication
                                 ; slot (42 bytes) and burning one to leave a
@@ -267,8 +270,12 @@ DRVE_NOVOL   equ 8              ; ...and the one for READY, not attach: you
 ;                   requesting instance slot, other regs per SPEC.md 34.2)
 ;   DSV_STREAM  dw  near proc behind OSAPI_SND_STREAM (in: AL verb, DH = the
 ;                   requesting instance slot)
-;   DSV_TICK    dw  near proc called from snd_tick - INSIDE IRQ0, at IF=0.
-;                   Keep it short and touch no port that needs a long delay.
+;   DSV_TICK    dw  near proc called from snd_tick - INSIDE IRQ0, at IF=0,
+;                   DS = your segment, ES = KERNEL_SEG, BP clobbered, on the
+;                   interrupted stack; DF is the interrupted code's (cld
+;                   before a string op). Skipped on a tick nested inside the
+;                   ROM's int 08h chain (SPEC.md 8.5.1). Keep it short and
+;                   touch no port that needs a long delay.
 ;   DSV_RELINST dw  near proc: AL = an instance slot that is being torn down;
 ;                   release every grant it holds.
 ;   DSV_TONE    dw  near proc: the tone tier's sink while you are loaded
@@ -359,9 +366,10 @@ DSV_CPDRAG   equ 32             ; near proc: the TRACKING edge - the pointer
 DSV_PKGCALL  equ 34             ; dw: near proc reached by OSAPI_DRV_CALL -
                                 ; THE FENCE (SPEC.md 20.11). Publish it and a
                                 ; package can call you; leave it 0 and it
-                                ; cannot. HDD.DRV's reaches HDV_ARM and
-                                ; HDV_DISARM and no sector (52.1.4), so no
-                                ; package can reach DSV_BLK through it.
+                                ; cannot. HDD.DRV's reaches HDV_ARM,
+                                ; HDV_DISARM and HDV_TOOL and no sector
+                                ; (52.1.4, 117.4), so no package can reach
+                                ; DSV_BLK through it.
                                 ;
                                 ;   in  BL = a verb YOU define, BH = your class
                                 ;       - except DRVC_EMS, which gets the
@@ -374,7 +382,9 @@ DSV_PKGCALL  equ 34             ; dw: near proc reached by OSAPI_DRV_CALL -
                                 ;            entry point where ES is not the
                                 ;            kernel's
                                 ;       DS = yours, BP spent by the dispatcher
-                                ;   out whatever you define; CF and AX reach
+                                ;   out whatever you define in AX, BX, CX, DX
+                                ;       and SI - but PRESERVE DI, which the
+                                ;       package is promised back; CF and AX reach
                                 ;       the package unchanged
                                 ;
                                 ; **IT WAS 28 AND MOVED TO 34 IN A MERGE**, because the three page cells
@@ -568,6 +578,17 @@ FSV_SIZE     equ 30
 ;   out  CF = 0 done; CF = 1 and AL = an int 13h status byte (03h = write
 ;             protected, anything else = a hard error)
 ;
+; A DRVC_DISK driver's own DSV_CAPS bit (SPEC.md 51.8.1, KERN-MEGA-PLAN
+; 14.167). Set it when your DSV_BLK loads DX into a segment register as it is
+; and walks only BX - no paragraph arithmetic on it - and kern_mega hands you
+; a buffer that is an LDT SELECTOR (above 1MB: a pool claim, a FAT window) as
+; it is, instead of bouncing the call a run at a time through a low landing.
+; A transport of yours that cannot reach such a buffer (a ROM's DMA, which
+; stops at 1MB) answers CF = 1 and AL = 09h having MOVED NOTHING, and the
+; kernel then bounces that call as it would have. No other kernel reads it,
+; and a driver that leaves it clear is bounced as every driver was
+BLKCAP_SEL   equ 4              ; my DSV_BLK takes a selector as it is
+;
 ; A volume is capped by FAT16 itself - 65,524 clusters of at most 32KB, just
 ; under 2GB (SPEC.md 18.7.5). It was 65,535 sectors (31.99MB) while an LBA was
 ; a word. A volume past 32MB is registered with OSAPI_VOL_ADD's CX = 0,
@@ -605,11 +626,12 @@ FSV_SIZE     equ 30
 ;
 ; Two rules, and the second one is not optional:
 ;   1. You cannot spawn from ATTACH - the kernel arms the fence only after
-;      attach returns. Spawn from a service call.
-;   2. YOUR DETACH MUST NOT RETURN UNTIL YOUR WORKER IS GONE. The kernel
-;      frees your image the moment detach returns, and a worker still on the
-;      run queue leaves the scheduler holding a stack frame whose CS points
-;      at memory the next heap claim takes.
+;      attach returns. Spawn from DRVV_READY or a service call.
+;   2. YOUR DETACH MUST TELL YOUR WORKERS TO DIE, and each must exit (AX = 0).
+;      The kernel waits (about 5 s at most) for every driver worker's exit
+;      before it frees your image; a worker that never exits leaves the
+;      image claimed and the row loaded - a leak, never a free under a CS
+;      that still points into it.
 %define OSAPI_DRV_TASK      KERNEL_SEG:0x01D9
 
 ; --- volumes a DRVC_DISK driver mounts (SPEC.md 18.7/51.8) -------------------

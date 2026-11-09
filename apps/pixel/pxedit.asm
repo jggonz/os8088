@@ -624,9 +624,9 @@ pe_tailof:
     loop .p
     pop cx
     add ax, 7
+    PX_ADC
     and al, 0xF8
-    mov dx, cx
-    PXSUB
+    PX_TAILAT cx
     mov ax, dx
     ret
     nop                             ; PARITY PAD, never executed (MC7's
@@ -2992,6 +2992,31 @@ pv_fmt:
     pop ax
     ret
 
+%ifdef PKG_MEGA
+; pe_avail - the package's px_avail, in this part: OSAPI_MEM_AVAIL's two
+; answers as a master's huge claim is granted them (pxrec.inc, SPEC.md
+; 106.8.1). Preserves all else
+pe_avail:
+    push cx
+    push dx
+    xor ax, ax
+    mov bx, MEMH_AVAIL
+    call OSAPI_MEM_HUGE             ; BX = the total, the pool counted
+    jc .conv
+    push bx
+    xor ax, ax
+    mov bx, 0x8000
+    call OSAPI_MEM_HUGE             ; AX = the most one master is granted
+    pop bx
+    jnc .o
+.conv:
+    call OSAPI_MEM_AVAIL
+.o:
+    pop dx
+    pop cx
+    ret
+%endif
+
 ; pv_res - Resize's second line: "320 x 240", or - no run for it - "Needs
 ; 300K; 120K free" and OK greyed for the fact. Preserves all
 pv_res:
@@ -3003,7 +3028,7 @@ pv_res:
     push di
     call pv_resdim                  ; [px_edw] [px_edh], AX = its KB
     mov si, ax
-    call OSAPI_MEM_AVAIL
+    PX_AVAIL pe_avail
     mov di, px_cline
     cmp ax, si
     jb .no
@@ -3285,7 +3310,7 @@ pv_room:
     call pv_cat
     mov si, pv_s_semi
     call pv_cat
-    call OSAPI_MEM_AVAIL
+    PX_AVAIL pe_avail
     xor dx, dx
     PSV SV_U32N
     mov si, pv_s_kfree
@@ -3523,7 +3548,17 @@ pf_go:                              ; flip's only once it is sure to run
     mov [px_edkb2], ax
     cmp ax, PX_MWN * 32             ; at most the windows a table holds
     ja .nodest                      ; (pxrec.inc, MC7)
+%ifdef PKG_MEGA
+    push bx                         ; (the ARM: a huge claim, as a master's -
+    push cx                         ; it becomes one, pxrec.inc's PX_HRUN)
+    mov bx, 0x8000
+    call OSAPI_MEM_HUGE
+    PX_HRUN
+    pop cx
+    pop bx
+%else
     call OSAPI_MEM_CLAIM
+%endif
     jc .nodest
     mov [px_edseg], dx
     mov ax, MWT_NONE                ; (its segment may be one a table was

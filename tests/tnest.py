@@ -131,8 +131,20 @@ def main():
                                    % (routine, st, rg))
             return rg["flags"] & 1
 
-        T, X = 3, (0x0FF0 if bochs else 0x5A00)     # a worker slot, a fake
-                                                    # image
+        # THE FAKE IMAGES ON kern_mega are the two identity entries just
+        # under `.cold`'s: the GDT's identity map stops at COLD_SEG
+        # (MC7.4, mega.inc), and the entries past it are zero padding or the
+        # scratches, which a PM DS cannot hold - 0FF0/0FE8 were, and Bochs
+        # left DS at 0010 for both, so leg 7 read 0010 back as the image
+        T = 3                                       # a worker slot
+        if bochs:
+            X, Y = (cold & ~7) - 8, (cold & ~7) - 16
+            if KSEG in (X, Y) or m.gdt(X)[0] != X * 16 \
+                    or m.gdt(Y)[0] != Y * 16:
+                print("tnest: %#x/%#x are not identity GDT entries" % (X, Y))
+                return 2
+        else:
+            X, Y = 0x5A00, 0x5B00                   # fake images
         kseg = KSEG
 
         def far_call(routine, bx):
@@ -186,7 +198,6 @@ def main():
             m.write(lin("sch_cur"), bytes([T]))
             call("wm_nest_pushd", X)            # a worker inside an image...
             m.write(lin("sch_cur"), bytes([0]))
-            Y = 0x0FE8 if bochs else 0x5B00
             call("wm_nest_pushd", Y)            # ...while the UI task enters
             at = w16("wm_pkgs", 2 * pkgd0)      # another: still RECORDED
             call("wm_nest_pop", DSEG)

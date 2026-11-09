@@ -22,12 +22,11 @@ committed: the downloads are Microsoft's and Duff Software's.
                                       into <root>/titles/, and unpack their programs
                                       into titles/<name>/x/ for tools/w16reach.py
     win16ref.py samples               copy the programs WIN16's rows play into
-                                      <repo>/build/win16/ (git-ignored): CALC, CLOCK,
-                                      Paintbrush (PBRUSH.EXE and .DLL) and REVERSI
-                                      from Windows 3.0, Windows 3.1's
-                                      CALC, WINMINE and NOTEPAD as W31CALC,
-                                      W31MINE and W31NOTE, and WinMine 2.9 as
-                                      WINMINE
+                                      <repo>/build/win16/ (git-ignored): SAMPLES
+                                      below - Windows 3.0's under their own
+                                      names, 3.1's that clash as W31*, its
+                                      screen savers' .SCR as SS*.EXE, and
+                                      WinMine 2.9 as WINMINE
 
 Each install step screenshots into <root>/log/<install>/NN-<step>.png. LOOK at
 them: the key sequence is the one that worked on 2026-10-28, with fixed waits,
@@ -387,11 +386,26 @@ def install31():
     q.hmp("eject floppy0"); q.close(); quit_qemu()
     check_install(img, ["WIN.COM", "WINMINE.EXE", "CALC.EXE", "SYSTEM.INI"])
     shutil.copy(img, os.path.join(d, "c-pristine.img"))
-    env = mtools_env(img)
+    w31_samples(img)
+
+
+# What samples/w31/ takes off the installed 3.1 disk: the programs SAMPLES
+# names from it. Kept apart from install31 so `samples` can fill in a name
+# added after the install, off c-pristine.img, without a fresh install.
+W31_FILES = ("WINMINE.EXE", "CALC.EXE", "NOTEPAD.EXE", "SOL.EXE", "CHARMAP.EXE",
+             "SSSTARS.SCR", "SSMARQUE.SCR", "SSMYST.SCR", "SSFLYWIN.SCR")
+
+
+def w31_samples(img=None):
     out = os.path.join(ROOT, "samples/w31")
     os.makedirs(out, exist_ok=True)
-    sh("mcopy", "-o", "c:/WINDOWS/WINMINE.EXE", "c:/WINDOWS/CALC.EXE",
-       "c:/WINDOWS/NOTEPAD.EXE", out, env=env)
+    want = [f for f in W31_FILES if not os.path.exists(os.path.join(out, f))]
+    if not want:
+        return
+    img = img or os.path.join(ROOT, "w31", "c-pristine.img")
+    if not os.path.exists(img):
+        sys.exit("samples: no Windows 3.1 install at %s - run install31 first" % img)
+    sh("mcopy", "-o", *("c:/WINDOWS/" + f for f in want), out + "/", env=mtools_env(img))
 
 
 def copy(which, files):
@@ -413,6 +427,21 @@ SAMPLES = [("CALC.EXE", "w3-archive/WINDOWS/CALC.EXE"),
            ("PBRUSH.DLL", "w3-archive/WINDOWS/PBRUSH.DLL"),
            ("REVERSI.EXE", "w3-archive/WINDOWS/REVERSI.EXE"),
            ("WRITE.EXE", "w3-archive/WINDOWS/WRITE.EXE"),
+           ("SOL.EXE", "w3-archive/WINDOWS/SOL.EXE"),
+           # S17's families (tests/win16fam.py, WIN16-ANY-PLAN S17): 3.0's,
+           # bar Character Map and the screen savers, which 3.0 did not have
+           ("NOTEPAD.EXE", "w3-archive/WINDOWS/NOTEPAD.EXE"),
+           ("CARDFILE.EXE", "w3-archive/WINDOWS/CARDFILE.EXE"),
+           ("CALENDAR.EXE", "w3-archive/WINDOWS/CALENDAR.EXE"),
+           ("CLIPBRD.EXE", "w3-archive/WINDOWS/CLIPBRD.EXE"),
+           ("PIFEDIT.EXE", "w3-archive/WINDOWS/PIFEDIT.EXE"),
+           ("TASKMAN.EXE", "w3-archive/WINDOWS/TASKMAN.EXE"),
+           ("CHARMAP.EXE", "w31/CHARMAP.EXE"),
+           ("SSSTARS.EXE", "w31/SSSTARS.SCR"),
+           ("SSMARQUE.EXE", "w31/SSMARQUE.SCR"),
+           ("SSMYST.EXE", "w31/SSMYST.SCR"),
+           ("SSFLYWIN.EXE", "w31/SSFLYWIN.SCR"),
+           ("W31SOL.EXE", "w31/SOL.EXE"),
            ("W31CALC.EXE", "w31/CALC.EXE"),
            ("W31MINE.EXE", "w31/WINMINE.EXE"),
            ("W31NOTE.EXE", "w31/NOTEPAD.EXE"),
@@ -422,6 +451,7 @@ SAMPLES = [("CALC.EXE", "w3-archive/WINDOWS/CALC.EXE"),
 def samples():
     out = os.path.join(REPO, "build", "win16")
     os.makedirs(out, exist_ok=True)
+    w31_samples()
     for name, src in SAMPLES:
         shutil.copyfile(os.path.join(ROOT, "samples", src), os.path.join(out, name))
     print("copied", len(SAMPLES), "programs to", out)

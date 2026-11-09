@@ -19,17 +19,20 @@ at 16MB with a Sound Blaster 16 and SOUND.DRV wanted, the kern_mega ARM's
 XTMP3.O88 (build/megak/apps/, the build kern_mega's apps disk carries) and
 AFTERHRS.MP3 on a B: floppy, and opens the MP3 from B:'s listing:
 
-  play  Auto, the hold where it falls by itself - one XMS block, the pool
-        having room. The region, the look-ahead claim (the ring and the PCM)
-        are above 1MB; the track plays on the card (MD_LIVE, the stream
-        open, granules decoding and frames counting up) with its gulps
-        COPIED out of the hold; Stop.
-  conv  OSAPI_XMEM_CAPS made to answer 0 for the open (the kernel's cell's
-        dispatch word pointed at xm_caps.none in guest memory, and put back
-        once the hold is taken - the word, never the code: CAPS_WORD) so the
-        hold is a CONVENTIONAL claim - 30 KB, OS88_HIGHMEM, so a pool block
-        above 1MB, read and served through x3h_at's window, which must be
-        based inside it. Then Stop, XT STANDARD by Q, Decode First (D) onto
+  play  Auto, the hold where it falls by itself - since MEGA-HUGE-PLAN 3
+        the arm's ONE OSAPI_MEM_HUGE claim (X3HK_HUGE), the pool having
+        room, read in and copied out through apps/os88huge.inc's walker.
+        The region, the look-ahead claim (the ring and the PCM) are above
+        1MB; the track plays on the card (MD_LIVE, the stream open,
+        granules decoding and frames counting up) with its gulps COPIED out
+        of the hold; Stop.
+  conv  OSAPI_MEM_HUGE made to refuse (its cell's dispatch word pointed at
+        mod_gone, the kernel's `stc / retf`) and OSAPI_XMEM_CAPS to answer
+        0 (its word at xm_caps.none) for the open, both put back once the
+        hold is taken - the words, never the code: CAPS_WORD, HUGE_WORD -
+        so the hold is the fallback CONVENTIONAL claim - 30 KB,
+        OS88_HIGHMEM, so a pool block above 1MB, read and served through
+        x3h_at's window, which must be based inside it. Then Stop, XT STANDARD by Q, Decode First (D) onto
         C:: while it converts, the stage [x3c_sseg] is an LDT selector based
         exactly x3_lasz + 2,560 bytes into the look-ahead claim, above 1MB;
         the WAV it writes is tools/x3simxt.py's XT Standard for the file,
@@ -83,7 +86,7 @@ ST_FILE, ST_DONE = 6, 9
 MD_IDLE, MD_CHECK, MD_LIVE, MD_FILE, MD_SPK, MD_CHOOSE, MD_CONV, MD_STEP, \
     MD_LOAD = range(9)
 Q_XTSTD = 4
-X3HK_XMS, X3HK_CONV = 1, 2
+X3HK_XMS, X3HK_CONV, X3HK_HUGE = 1, 2, 3
 X3_PCMRES = 2560
 # OSAPI_XMEM_CAPS's cell, KERNEL_SEG:015Ah - at its physical place, the
 # kernel's code being at 0060:0 in protected mode as in real mode. It is a
@@ -105,6 +108,11 @@ X3_PCMRES = 2560
 # to it is seen at once
 CAPS_CELL = 0x600 + 0x15A
 CAPS_WORD = CAPS_CELL + 4
+# OSAPI_MEM_HUGE's cell, KERNEL_SEG:04C5h, the same shape (`push bp / call
+# api_rxc / dw mmf_osapi_mem_huge`, a .cold body far-called): its word
+# pointed at mod_gone, .cold's own `stc / retf`, refuses every claim
+HUGE_CELL = 0x600 + 0x4C5
+HUGE_WORD = HUGE_CELL + 4
 ROW0_Y, ROW_X, ROW_H = 123, 170, 16            # a Disk window's rows
 # THE PLAY LEG'S CPU. Auto's ladder (x3eng.inc x3l_run) MEASURES each rung's
 # decode in audio seconds a guest second and plays live only on one that
@@ -215,8 +223,9 @@ def leg_play(out):
         print("   %s: Auto decided: state %d md %d quality %d"
               % (leg, s["state"], s["md"], s["qual"]))
         common(leg, box, x)
-        want(x.b("x3h_kind") == X3HK_XMS and x.b("x3h_on") == 1,
-             "%s: the file held whole in one XMS block" % leg)
+        want(x.b("x3h_kind") == X3HK_HUGE and x.b("x3h_on") == 1,
+             "%s: the file held whole in one huge claim (kind %d)"
+             % (leg, x.b("x3h_kind")))
         if not want(s["md"] == MD_LIVE, "%s: Auto plays it live (md %d)"
                     % (leg, s["md"])):
             return
@@ -285,7 +294,7 @@ def wav_check(leg, cimg):
 def leg_conv(out):
     leg = "conv"
     box, d = boot(leg, out, MP3)
-    cell = None
+    cell = hcell = None
     try:
         body = box.sym("xm_caps") - 0x600
         none = box.sym("xm_caps.none") - 0x600
@@ -297,12 +306,20 @@ def leg_conv(out):
                     % (leg, body, got.hex())):
             raise RuntimeError("no OSAPI_XMEM_CAPS cell to point")
         cell = got[4:6]
-        box.dbg(["setpmem 0x%x 2 0x%x" % (CAPS_WORD, none)])
+        hg = box.read(HUGE_CELL, 6)
+        if not want(hg[:2] == b"\x55\xe8", "%s: OSAPI_MEM_HUGE's cell a "
+                    "rare cell (%s)" % (leg, hg.hex())):
+            raise RuntimeError("no OSAPI_MEM_HUGE cell to point")
+        hcell = struct.unpack_from("<H", hg, 4)[0]
+        gone = hcell + box.sym("mod_gone") - box.sym("mmf_osapi_mem_huge")
+        box.dbg(["setpmem 0x%x 2 0x%x" % (CAPS_WORD, none),
+                 "setpmem 0x%x 2 0x%x" % (HUGE_WORD, gone)])
         open_mp3(box)
         x = X3(box)
         box.until(lambda: bad_lines(box) or x.b("x3h_kind") != 0,
                   "the hold", 120, poll=0.3)
-        box.dbg(["setpmem 0x%x 2 0x%x" % (CAPS_WORD, body)])
+        box.dbg(["setpmem 0x%x 2 0x%x" % (CAPS_WORD, body),
+                 "setpmem 0x%x 2 0x%x" % (HUGE_WORD, hcell)])
         cell = None
         box.until(lambda: bad_lines(box) or
                   x.st()["md"] not in (MD_IDLE, MD_CHECK, MD_LOAD),
@@ -381,7 +398,9 @@ def leg_conv(out):
         if cell is not None:
             try:
                 box.dbg(["setpmem 0x%x 2 0x%x"
-                         % (CAPS_WORD, struct.unpack("<H", cell)[0])])
+                         % (CAPS_WORD, struct.unpack("<H", cell)[0])] +
+                        (["setpmem 0x%x 2 0x%x" % (HUGE_WORD, hcell)]
+                         if hcell is not None else []))
             except Exception:   # noqa: BLE001
                 pass
         b = bad_lines(box)

@@ -1,0 +1,319 @@
+# Video Battle's sound stutters on the 5150 + PicoMEM 2: the card goes silent while it waits for the PC
+
+**A measurement, not a description.** Taken 2026-11-07 in the container, on
+MartyPC's PicoMEM 2.x twin (`os8088_5150_herc_pm2_gla`: a 4.77 MHz 5150, the
+card's firmware compiled for the host as `libpmhost`, its card time the
+8088's; docs/TESTING.md, *The PicoMEM, as its own firmware*), at branch
+`video-battle-pico2`, and on the iron the same evening with `make pm2kit`
+(*On the iron*, below). True of that emulator, that firmware source and
+that build.
+
+## The report from the iron
+
+The owner moved the PicoMEM 2 into 5150 #1 (CGA; the ST-225 and the Hercules
+out for now) to test Video Battle: **the audio stutters; the video, if at
+all, not much.** The card runs FreddyVRetro's PM2-10-4-26, whose source is
+not published. The newest public PicoMEM 2 source is June 21 2026
+(`be7b2e6`, with the ADPCM pull request).
+
+## What the firmware does
+
+Read in `be7b2e6` (the source `libpmhost` builds from):
+
+- **The Sound Blaster's samples are fine.** On a 2.x the DSP takes one byte
+  per sample by real DMA off a timer interrupt (`DSP_DMA_EventHandler`,
+  `USE_HWDMA`), into a 1,024-sample FIFO, and raises the block IRQ when the
+  count runs out. Neither depends on what core 0 is doing.
+- **The OUTPUT is not.** The mixer (`pm_audio_domix`) runs on core 0, in the
+  main loop and once per sector inside an int 13h, and fills five buffers of
+  64 frames at 49,716 Hz: with one playing, **5.1 ms mixed ahead**. When the
+  I2S DMA finds no mixed buffer it plays silence.
+- **An int 13h waits on the PC with nothing mixing.** Per sector the card
+  reads the SD, mixes once, asks the PC's ROM to copy 512 bytes out of its
+  window, and spins in `PC_Wait_CMD_End_Disk` until the copy ends (20 ms,
+  then 100 ms, then it gives up). The PC copies **with interrupts enabled**
+  (the card's int 13h `sti`s), so any interrupt handler on the PC lengthens
+  that wait - and Video Battle and Video Player decode frames in the timer's
+  hook (SPEC.md 126.3, 98.3).
+
+`pm1x-pr` (Elendilon/ISA-PicoMEM, the 1.x firmware in `firmware/picomem1/`)
+already changed exactly this for the 1.x: a wait hook mixes during every PC
+command wait of an int 13h, and the SD driver mixes during its own waits.
+That commit is board-independent code; `libpmhost`'s v2 build carries it.
+
+## The A/B, in the emulator
+
+VIDSND's new **T** key (tests/vidbench/vidsnd.asm) plays a 634.9 Hz sine
+through the card (22,222 Hz, auto-init DMA, a 735-byte block: 30 IRQs a
+second) in ten 5 s rows, while a holder burns N ms with interrupts off and
+the foreground reads the card's hard disk through int 13h. `tools/vstone.py`
+finds the rows by their gaps and counts HOLES (the tone under half its
+amplitude) in a recording of them.
+
+Two `libpmhost` v2 builds, identical but for one thing: **mix** is `pm1x-pr`
+as shipped; **no mix** is the same with the wait hook's assignment and the
+two SD-wait mixes taken out - the stock firmware's behaviour, everything else
+equal. The disk is `build/pmhd.img` (16 heads, 63 sectors) as the card's
+HDD 0. Holes in 5 s, and the milliseconds silent:
+
+| row | | reads in 5 s | mix | no mix |
+|---|---|---:|---|---|
+| A | the tone alone | - | 0 | 0 |
+| B | the card's ISR holds 16 ms, no disk | - | 0 | 0 |
+| C | whole tracks, no hold | 53 tracks | 0 | **787 holes, 980 ms** (1.1 ms each, every ~6 ms) |
+| D | tracks, ISR holds 4 ms | 46 | 0 | 696, 1,371 ms |
+| E | tracks, holds 8 ms | 40 | 0 | 612, 1,765 ms |
+| F | tracks, holds 16 ms | 26 | 0 | 212, 2,431 ms (16 ms each, every ~30 ms) |
+| G | one sector a call, holds 16 ms | 1,067 sectors | 0 | 164, 1,778 ms |
+| H | as G, the card's line masked per call | 1,996 | 0 | 0 (but 9 IRQs of 151: see below) |
+| I | IRQ0 holds 16 ms, one sector a call | 1,527 | 0 | 82, 955 ms |
+| J | **as I, IRQ0 masked per call** | 1,415 | 0 | **0** |
+
+Every row's IRQ count was 151 (5 s at 30.2 a second) but H's.
+
+### What it says
+
+- **The stutter is the card's output starving, and the firmware fix cures
+  it.** With the wait hook, every row is clean.
+- **Without it, the card chops even when NOTHING holds the PC** (row C).
+  On an 8088 one sector's round trip - SD, mix, the PC's copy - is about
+  6 ms, longer than the 5.1 ms the card mixes ahead: a 1 ms hole every
+  sector, for as long as the disk streams. Video Battle streams its music and
+  its clips all the time, which matches "the audio stutters, the video
+  hardly".
+- **A hold that lands in a copy makes the hole the hold's length** (F, G, I):
+  the timer hook's decode is such a hold.
+- **os8088 can work round it by itself** (J): one sector a call, with IRQ0
+  masked at the 8259 for each call. Between calls the card sits in its main
+  loop, which mixes, and no hook can lengthen a copy. In this emulator it
+  costs the disk rate: 1,996 sectors in 5 s one at a time (H, holds lost)
+  against 53 x 63 = 3,339 as tracks - **about 40% less** - and the SD's own
+  read time, which `libpmhost` does not model (its SD is instant), still
+  passes unmixed on the card.
+- **A masked line can LOSE the card's interrupt** (H). The twin's SB is on
+  IRQ 5 with only IRQ 7 jumpered, so the SB's interrupt goes through the
+  card's multiplexer on 7, and one raised while 5 was masked was dropped:
+  9 of 151 arrived. On a jumpered line it is a level held until the DSP is
+  read, as a real SB's. Masking IRQ0 (J) lost nothing. **Which lines are
+  jumpered on the owner's card decides whether any such mask is safe** -
+  ask before designing on it.
+
+### Not done
+
+Video Battle itself was played off the twin's card disk (`os8088_5150_pm2_gla`
+and the Hercules twin, the demo bundles): 0 late frames, 0 music underruns,
+the sound stream open (`vb_snd` 1, channel 1 not masked) - and **the card's
+DAC silent on both firmwares** (2026-11-08: the harness's fault, not the
+emulator's - it never left the silent title; see *The cure taken*). VIDSND, programming the DSP itself, sounds on
+the same twin. Not run down: it is the twin's or SOUND.DRV's stream on an
+emulated 2.x, not the machine's - the owner hears the battle, stuttering.
+Until it is, the battle's own A/B is the field's.
+
+## On the iron (2026-11-07)
+
+The owner ran the kit on 5150 #1: CGA, the PicoMEM 2 as C: on PM2-10-4-26,
+its SB at **240h on IRQ 5** (220h is taken by another of the card's devices,
+as on 5150 #2), the card's own line 7. The tone rows were recorded on a
+phone across the room, `tools/vstone.py` read the m4a as it came:
+
+| row | | reads | holes in 5 s | ms silent |
+|---|---|---:|---:|---:|
+| A | the tone alone | - | 7 | 19 |
+| B | ISR holds 16 ms, no disk | - | 3 | 5 |
+| C | tracks, no hold | 51 tracks | 2 | 4 |
+| D | tracks, holds 4 ms | 44 | **228** | 218 |
+| E | tracks, holds 8 ms | 37 | **384**, one of 615 ms | 1,822 |
+| F | tracks, holds 16 ms | 23 | **508** | 1,604 |
+| G | one sector a call, holds 16 ms | 827 sectors | **455** | 1,410 |
+| H | as G, the SB's line masked per call | 779 | 3 | 5 |
+| I | IRQ0 holds 16 ms, one sector | 1,232 | **365** | 662 |
+| J | as I, IRQ0 masked per call | 1,165 | **0** | **0** |
+
+A to C's few holes are a phone in a room (2 ms each, the noise floor). Every
+row's IRQ count was 151-154: line 5 is JUMPERED (masking it in H lost
+nothing, unlike the twin's multiplexed line).
+
+- **The release firmware does not chop under an unheld read** (C) - where
+  the emulated stock build did. Its own mixing keeps up with the 8088's
+  sector copies. What breaks it is **any interrupt that holds the PC while
+  the card waits on a copy**, from 4 ms up, as short repeated holes at the
+  hold's rate.
+- **That is the owner's stutter exactly**: "short, repeated stuttering",
+  not dropouts; steady in the idle loop (music streaming, a small decode in
+  the timer's hook); a little at an opening's end; and during HEAVY actions
+  only - a big decode in the hook, 15 times a second, while the clip streams.
+- **J is clean on the iron**: one sector a call with IRQ0 masked for the
+  call cures it from os8088's side, on the firmware as released. VIDDISK
+  prices the shape: one sector a call 1.83 ms, a 63-sector track 96.1 ms
+  (1.53 ms a sector) - **about 20% slower** reading, and IRQ0 held off at
+  most one sector's 1.8 ms.
+- VIDSND's ADPCM row interrupted 0 times: the card's DSP does not do 7Dh
+  (auto-init 4-bit ADPCM), so a Video Player ADPCM file plays silent on it.
+
+The Video Battle recording (65 s, the owner's own bundle) shows the same:
+short dips at a few a second through the first half, 23-49 a second from
+about 37 s on, when the actions began. No VBPROF came back; music under a
+phone is not a tone, so that is an indication, not a count.
+
+The profile's numbers (VIDDISK, under its 30 Hz hook holding 0/25/50/75%):
+294.3 / 223.9 / 147.1 / 72.8 KB/s; `5150-picomem2` is now 135,000 at 50% /
+85% with that curve (SPEC.md 98.2's table). VIDBENCH decodes as 5150 #1's
+did with the ST-225 - the same CPU - the worst synthetic frame 37% of a
+30 fps period. VIDDISK W wrote 83.4 KB/s.
+
+## The cure, three ways
+
+1. **Firmware, upstream.** The `pm1x-pr` wait hook is two small hunks in
+   `pm_pccmd.cpp`/`pm_cmd.cpp` and two lines in `sd_card_spi.c`; offered to
+   FreddyVRetro, it would land in a release that keeps PM2-10-4-26's
+   features. The clean route.
+2. **Firmware, ours.** `pm1x-pr` builds for a PicoMEM 2 (its CMakeLists
+   selects one), but from the June source: it would LOSE what PM2-10-4-26
+   added and published no source for - the CD-ROM and CD audio, ROM
+   emulation, images off USB, the front panel's joystick and CD player,
+   ArdSynth, the PicoMEM's interrupt on any line (`IRQ` in config.txt), the
+   RTC fixes for GLaTICK, DFS and file-date fixes, and "SB DSP does not
+   answer init end directly". The SB's IRQ/DMA command (77h) IS in the June
+   source, which is what SOUND.DRV uses. Untried on a real PicoMEM 2.
+3. **os8088, for itself.** J's shape in the kernel's PicoMEM disk path:
+   one sector a call, IRQ0 masked for the call. **Proven on the iron** (J,
+   0 holes) and about 20% of the disk's rate. It needs no firmware at all,
+   so it is the one that works on the card as released, today.
+
+## The cure taken (2026-11-08): cure 3, in kern_big
+
+The owner's choice, upstream having not answered the 1.x fixes: J's shape in
+the kernel, PicoMEM 2 only, SPEC.md 18.91.7. `drv_sniff` asks the card at
+boot (its attribute slots through `dsk_fdd_pmemu`, then BIOS function 3,
+board 11) and keeps its first hard unit in `[dsk_pmhd]`; `dsk_xfer` reads
+that unit and any after it one sector a call, IRQ0 masked for the call.
+**34 resident bytes of `.cold`** and one of `.text`; the probe fits the boot
+overlay's window half by dropping four of `sched_init`'s zero-over-zero
+stores. The boot blob and its reads are unchanged on every geometry
+(`t_blobruns`: 2 calls everywhere) - an extra blob sector was weighed and
+would have cost two int 13h calls on every 360 KB and 720 KB boot.
+
+Checked: the probe answers 80h on MartyPC's 2.x twin with the card's disk as
+HDD 0, FFh on the 1.x twin and on a 5150 without a card; C: browses on the
+2.x twin; `pmmarty`, `pmlib`, `hdboot`, `hdauto`, `fddpark`, `fddpage`,
+`viddisk`, `vidsnd` and `bootsmoke` pass.
+
+**And on Video Battle itself, in the emulator** (2026-11-08): the demo
+battle (`build/BATTLE.VBT`) off the CGA twin's card disk, 30 guest seconds
+of title, openings and idle loop with its music streaming, the card's DAC
+captured; holes are runs of 64 or more silent frames under a second:
+
+| kernel | card firmware | holes | silent |
+|---|---|---:|---:|
+| before | `pm1x-pr` (mixes while it waits) | 27 | 124.2 ms |
+| before | the same, wait-mixing taken out (stock behaviour) | **104** | **283.8 ms** |
+| after | `pm1x-pr` | 27 | 124.2 ms |
+| after | wait-mixing taken out | **27** | **124.2 ms** |
+
+The 27 are the bundle's own silences, identical in all four. The kernel
+removes every one the firmware added. (*Not done* above said the twin
+played the battle silent: it did not - the harness never left the title,
+whose sound IS silence; the card played the ring's 80h faithfully. With
+the title's Enter pressed once `vb_tplay` is 1, as `tests/vbtsound.py`
+does, it sounds on both firmwares.)
+
+**Not yet heard**: whether Video Battle's heavy actions stop stuttering on
+5150 #1, and the disk rate it costs there -
+VIDDISK R on the new kernel re-measures `5150-picomem2`, which until then
+still charges the multi-sector 135,000.
+
+## One sector a call was half the disk; four a call (2026-11-08)
+
+The owner's VIDDISK on the one-sector kernel (`d501d9bc`), the same C::
+
+| hook | multi-sector (2026-11-07) | one sector a call | |
+|---|---:|---:|---:|
+| 0% | 294.3 KB/s | 125.2 | -57% |
+| 25% | 223.9 | 98.0 | -56% |
+| 50% | 147.1 | **68.1** | -54% |
+| 75% | 72.8 | 35.6 | -51% |
+
+`int13 calls, 8 x 32K`: 512, a sector each; 32 KB in 329.6 ms, ~5.1 ms a
+sector against 2.7 for a raw one-sector int 13h the same run. The kernel's
+per-run cost, paid 64 times for 32 KB, not the card's - and 68 KB/s cannot
+feed a 54-64 KB/s clip with its 11 KB/s of music. The 20% the report
+predicted came from the raw int 13h alone.
+
+Row C of the tone test had already said what the cure needs: tracks read
+with **no** hold were clean on the iron. So the run is cut to **four**
+sectors (`DSK_PMRUN`), IRQ0 still masked for the call - a few ms of hook
+latency, under Video Battle's 13.7 ms period - and the per-run cost is paid
+a quarter as often. Emulated, the battle A/B above reads 27 holes / 124.2
+ms on both firmwares with it, as with one sector. Its rate on the iron is
+the next VIDDISK R.
+
+## Four a call on the iron; six (2026-11-08)
+
+The owner's battle on the four-sector kernel (`c8703d36`), VBPROF against
+the one-sector play's:
+
+| | one sector | four sectors |
+|---|---:|---:|
+| the reader while reading | 75 KB/s | **97 KB/s** |
+| frames stalled | 148 | **15** (all `17-CHAR1`, 64 KB/s) |
+| frames of sound late (skipped) | 115 | **50** (`17-CHAR1` 12, `20-CHAR1` 22, `07-SCOPE` 16) |
+| frames held on the glass | 3 | 1 (#64, the first opening, 343 ms on a 0.7 ms decode - #40 the same at one sector: an opening's head, not the rate) |
+
+No microstutter in either. TakeOnMe (95.4 KB/s, Video Player) stalled 11
+times and paused once, noticeably. The owner's point stands over all of it:
+a clip's 95 or 65 KB/s is an AVERAGE, and a battle - two rings, the music
+streaming, the caches - cannot bank its spikes as Video Player's one big
+ring can. The goal is "plays what the ST-225 plays", not the card's best.
+So `DSK_PMRUN` is 6 (~9-10 ms of IRQ0 held, under the 13.7 ms hook): the
+next round. Past it lies the firmware - which the owner weighs against the
+users a custom flash would lose.
+
+## The field kit: `make pm2kit`
+
+`build/pm2kit/` (and `build/pm2kit-360.img`): VIDSND (T and R), VIDBENCH and
+its DAT, VIDDISK, VIDEOD and VBATTLED, with `tests/vidbench/FIELDPM2.TXT` as
+the README. The recording of T, run through `tools/vstone.py`, answers on the
+iron what the table above answers in the emulator; the rest is the first
+measurement of the `5150-picomem2` profile, and VBATTLED's profile
+(`tools/vbtprof.py`) is the battle's own account of a stuttering play.
+
+## The ST-225 beside the card
+
+The ST11M is the classic XT controller: **its ROM at C800h**, **ports
+320h-323h**, **IRQ 5**, **DMA 3**. Each meets something the card had on 5150
+#2:
+- the ROM: the card's BIOS defaults to C800h too - move the card's to
+  **D000h** in its config.txt (and its EMS frame off D000h, to E000h);
+- the ports: the card's NE2000 was at **320h** on 5150 #2 - move it to
+  300h or 340h (ETHER.DRV probes 300h, 320h, 340h ... itself);
+- IRQ 5: the SB must not share it. SPEC.md 34.5.6.1: an ST11 on its BIOS
+  v2.0 wipes a block interrupt pending on its line once per int 13h, which
+  ends a play part way. Move the SB off 5, onto a JUMPERED line (a line
+  that is not goes through the card's multiplexer, row H above): 3 with the
+  NE2000 elsewhere, or 7 if the card's own interrupt can move (`IRQ` in
+  config.txt, PM2-10-4-26 on);
+- with the ST-225 as 80h, the card's own disk image is 81h.
+
+## 2026-11-08, later: where the rest of the reader's time went
+
+Traced on the CGA PicoMEM 2 twin over 6 s of Bolt (logging breakpoints on
+`dsk_xfer`, `dsk_rah_fill`, `dsk_copy_seg_x`, `dsk_fat_window.load`):
+
+- **The sector cache filled on every short read** (SPEC.md 18.95.12): the
+  last eight sectors of every read, every 4 KB music read and every FAT
+  lookup took a nine-sector fill - two `int 13h` calls under the
+  eight-sector cap, then a `rep movsw` out of the slot. 75 fills against 19
+  Video Battle reads in 4 s. Never filling off the card's units: sound
+  frames late **19 -> 4** over the same window, copies 69 -> 0. 10 bytes.
+- **The FAT window moved between the clip (5.5 MB in) and the music (0.5 MB
+  in)** 13 times in 6 s. READ_SEQ's caller-held run (SPEC.md 18.4.8.3):
+  the package maps its file once and hands each read the run it reads in;
+  0 window loads, `int 13h` calls 124 -> 94. 145 resident bytes.
+- **What is left is the CPU.** An 8-sector call is ~12.7 ms on the twin,
+  most of it the card BIOS's `rep movsw` out of its window, one 512-byte
+  command at a time (`pmbios/pm_cmd.asm`'s `PCC_Do_MemCopyW_512b`), and
+  Bolt's decode and sound feed are ~43% of the CPU. The ST-225's DMA costs
+  the CPU nothing. The stock firmware has one zero-copy path - a read whose
+  buffer is RAM the card itself provides (`MEM_RAM` in `bios_disk.cpp`) -
+  and the owner's 5150 has its conventional memory on a SixPakPlus, so the
+  card's RAM could only be upper memory os8088 does not use.

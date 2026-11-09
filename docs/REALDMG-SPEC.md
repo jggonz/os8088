@@ -607,7 +607,8 @@ cache could not be claimed and the game ran interpreted (its log has no J).
   which that wording denied). The probe answers a KB over
   an exact size (SPEC.md 20.14.6.3), so the plan takes whole banks; bank 0's
   header must then say the same size, which a compressed file - read raw
-  here - does not. The log's head gives the heap the plan saw.
+  here - does not, so a packed file never comes here (section 19,
+  `rw_czprobe`). The log's head gives the heap the plan saw.
 - **The load** (`rw_bload`, the UI task): the slots, one `OSAPI_XMEM_ALLOC`
   for banks 1 on, then the file through `OSAPI_FILE_READ_SEQ` a bank at a
   time - bank 0 straight into the view's 0000-3FFF (so `rdg_init` is handed
@@ -725,6 +726,33 @@ cartridge in one claim, and no bank is ever fetched (`rw_xplan`,
   is the claim's first window (`[rw_xsel]`, 0 on the one-claim leg, which
   the step no longer tells apart): green on 2026-10-30, cpu_instrs passing
   under the recompiler with its banks in the one claim.
+- **A PACKED cartridge goes in place too** (MEGA-HUGE-PLAN F4, 2026-11-08).
+  Its bank reads cannot be `OSAPI_FILE_READ_SEQ`'s, which is RAW (SPEC.md
+  20.14.3), so `rw_czprobe` sent it to ONE claim, and past `RW_ROMMAX_KB`
+  (256KB) that is refused - "packed and past one claim" (KERN-MEGA-PLAN
+  14.147). Since the kernel expands a packed file past 64KB into a claim
+  above 1MB of any shape (SPEC.md 20.14.5.4), `rw_xplan` takes it, and
+  `rw_bload` reads it with ONE `OSAPI_FILE_READ` into the 16KB-window
+  claim (`rw_xread`) - which is the cartridge byte for byte, bank n at
+  window n - 1's 4000h exactly as `rw_xput` lays a plain one - then copies
+  bank 0, its first 16KB, down into the view and checks the header there.
+  No slot is read through; the claim is still never a bridge (16KB windows
+  never are, KERN-MEGA-PLAN 14.168). The read goes straight into the pool,
+  so on a 286 a large packed cartridge loads at the pool bounce's pace
+  (16.2.6) rather than through the slot's conventional landing - packed
+  cartridges are the shipped demo's size, and the plain ones keep the slot.
+  `tests/megagbpk.py` is the gate: GBBANK.GB (1MB, 64 banks) packed, every
+  switch checked and none wrong, bank 1 `[rw_xsel]` above 1MB; red with the
+  arm before, which refused it.
+- **Cartridge RAM of 64KB or 128KB is still kept as 32KB** (`rw_ramsetup`),
+  and that is not the claim's to lift: `rdg_rambank` addresses a bank as an
+  OFFSET into ONE selector (`and ax, 7`, x 2000h - 8 banks, 64KB, at most),
+  so 128KB (16 banks) needs the core to hold a second segment for the RAM;
+  and 64KB, which that offset does reach, needs `rw_savelen` (a word: 65,536
+  does not fit), the save state's RAM part (rwstate.inc, sized for 8 or
+  32KB) and the MBC3 clock's 1KB trailer past the bank data (which would sit
+  past the one selector) to change with it. None of those is a huge claim's
+  question.
 
 ### 10.3.2 A bank switched to lazily
 
@@ -3654,9 +3682,22 @@ and the frames drawn a second.
   SPEC.md 24.6's `emu360.img` with the cartridge in its `MEDIA/`. There the
   cartridge is LZ4-packed, 32,768 bytes to 1,110: a ROM of up to 256KB is
   read in ONE `OSAPI_FILE_READ` into a single claim (section 10), which is the
-  transparent read's condition (SPEC.md 20.14.3), and only a cartridge in the
-  XMS bank cache (section 10.3, over 256K) is read raw. The 720KB apps disk
+  transparent read's condition (SPEC.md 20.14.3). The 720KB apps disk
   does not carry it: it has 98 clusters free and is being re-curated.
+- **A PACKED cartridge is always ONE claim** (`rw_czprobe`, KERN-MEGA-PLAN
+  14.147). The bank cache (10.3) and kern_mega's banks in place (10.3.1)
+  both read the file a bank at a time through `OSAPI_FILE_READ_SEQ`, which
+  is RAW, so a packed file handed them its LZ4 bytes as bank 0 and the
+  header check said `not a GB ROM`. The size probe cannot tell - it answers
+  what the file EXPANDS to either way - so the load walks the folder with
+  `OSAPI_FILE_FIND` for the file's own record and reads `OSAPI_FIND_CZ` off
+  +22, and `rw_plan` gives a packed file neither the cache nor
+  `rw_xplan`: one claim if it fits, else `REALDMG: unpack the ROM`. That
+  was not a corner on kern_mega: its arm puts EVERY cartridge of 32KB or
+  more in place, so the shipped demo itself was refused there while
+  kern_big played it (`mega-gbship`). A packed cartridge over one claim has
+  no read that unpacks it a bank at a time (SPEC.md 20.14.3's reasons), so
+  the refusal is the answer; the same ROM stored plain goes to the cache.
 - **No game ships.** A cartridge is the user's own.
 
 **`make realdmghd GBROMS=<dir>`** writes a HARD DISK, `build/REALDMG-HD.VHD`,

@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - apps/thewire/wrtxt.inc
 ;
-; EVERY STRING THE WIRE SHOWS, in one file (docs/WIRE-PLAN.md 7).
+; EVERY STRING THE WIRE SHOWS, in one file (docs/plans/completed/WIRE-PLAN.md 7).
 ;
 ; The BRAND TABLE at the top is fixed by the user and is not to be reworded.
 ; Three dots and never an ellipsis character: the machine's font is ASCII
@@ -18,7 +18,7 @@
 ; offsets, SPEC.md 20.2).
 ; =============================================================================
 
-; --- the brand, verbatim (docs/WIRE-PLAN.md's table) -------------------------
+; --- the brand, verbatim (docs/plans/completed/WIRE-PLAN.md's table) -------------------------
 wr_ttl:      db 'The Wire', 0           ; the window title, the menu-bar name
                                         ; and the About card's first line
 wr_s_desc:   db 'Online Software Library', 0

@@ -90,8 +90,9 @@ SLOT = re.compile(r"(?:slot|API) (0x0[0-9A-Fa-f]{3})")   # both spellings: the
 # a wrong number in a routine's own header is the one place an author looks.
 
 # Numbered RULES inside a section, not sections: SPEC.md 1 and 29.2 are lists.
-# Plus the reserved-range note in the preamble, which names a span, not a
-# heading.
+# Plus 45 and 49, left from the preamble's old "Sections 46 to 49 are
+# unused" note: both are headings now (SPEC.md 45, 49), so the two entries
+# are dead.
 RULE_REFS = {"1.6", "1.7", "29.2.8", "45", "49"}
 # Slot numbers prose may still name that apps/os88api.inc deliberately does
 # not define. Nothing is held EMPTY any more (SPEC.md 20.3) - the five cells

@@ -9,14 +9,16 @@
 ; so the panel opens showing it with no click needed.
 ;
 ; The two panes are joined only by the item table (cp_items, SPEC.md 31.1):
-; one 8-byte record per item holding its list name and its page's paint and
-; click procs. cp_paint and cp_onclick know nothing about scheduling; they
-; draw the list, the divider, and whatever the selected record points at.
+; one CP_ISTRIDE-byte record per item (8 on kern_big, 6 on kern_small)
+; holding its list name and its page's paint and click procs. cp_paint and
+; cp_onclick know nothing about scheduling; they draw the list, the divider,
+; and whatever the selected record points at.
 ; Adding a second item is a table row plus a paint/click pair - no change to
 ; the pane machinery.
 ;
-; Structurally still the simplest kind in the tree (SPEC.md 29): task-less,
-; no KD_INIT, no pool, no .bss. Nothing exists at boot; an instance lives
+; Structurally still a simple kind (SPEC.md 29): task-less and pool-less,
+; with a KD_INIT (cp_kinit, the release and drag edges) and one .bss buffer
+; (cp_sbuf, cp_stage's landing ground). Nothing exists at boot; an instance lives
 ; only while its window is open, and the kind's cap is 1. The one byte of
 ; panel state is cp_sel, the selected item, kept as initialised .text data
 ; (init 0 = Scheduler) so nothing has to be zeroed at boot; it persists
@@ -33,8 +35,9 @@
 ; call gfx_lock/gfx_unlock - the lock is not reentrant and re-acquiring it
 ; would deadlock the GUI (SPEC.md 7). They never block, never spawn, make no
 ; BIOS calls, and preserve every register. cp_onclick repaints in place and
-; only what changed: a new selection redraws the two panes (each erases its
-; own rectangle first), a mode flip redraws just the two 12x12 glyph boxes.
+; only what changed: a new selection redraws the two list rows that changed
+; and swaps the page (SPEC.md 31.1.4), a mode flip redraws just the two 12x12
+; glyph boxes.
 ; Never wm_paint_all, never a whole-window redraw. Flipping the mode from
 ; inside a callback is safe - sched_mode_set is one guarded byte store and
 ; needs no rendezvous (SPEC.md 8.2). Other windows that show the mode (the
@@ -152,7 +155,7 @@ CP_PCAPY  equ 74                ; caption text row
 CP_PCAP2  equ CP_PCAPY + 9      ; 83: second caption row. Only the mono answer
                                 ; uses it - the caption is the lowest thing on
                                 ; every page, so a second 8px line fits inside
-                                ; CP_CH (121) with room to spare
+                                ; CP_CH (132) with room to spare
 
 %ifdef OS88_THEME
 ; --- Theme page (SPEC.md 76.4): TWO groups, so a 16px pitch and not CP_PROWH's
@@ -191,9 +194,9 @@ CPH_B2Y2  equ CPH_R2Y + CP_GW + 1           ; 63: theme row 2 bottom
 %ifdef KERN_BIG
 CPH_B3Y2  equ CPH_R3Y + CP_GW + 1           ; 79: theme row 3 bottom
 %endif
-CPH_A0Y1  equ CPH_A0Y - 4                   ; 78: anim row 0 top
-CPH_A0Y2  equ CPH_A0Y + CP_GW + 1           ; 79: ...bottom
-CPH_A1Y2  equ CPH_A1Y + CP_GW + 1           ; 95: anim row 1 bottom
+CPH_A0Y1  equ CPH_A0Y - 4                   ; 94 (kern_small 76): anim row 0 top
+CPH_A0Y2  equ CPH_A0Y + CP_GW + 1           ; 111 (93): ...bottom
+CPH_A1Y2  equ CPH_A1Y + CP_GW + 1           ; 127 (109): anim row 1 bottom
 
 ; ...and the SCREEN SAVER button (SPEC.md 79.7), in the RIGHT-HAND column
 ; beside the animation group (SPEC.md 76.14.10): it stood under both groups
@@ -367,7 +370,8 @@ cp_wdirty:  db 0                ; 1 = a setting changed and SYSTEM.CFG is owed
                                 ; already happens on the spot, and only the
                                 ; RECORD of it waits.
                                 ; .text and not .bss, like everything else
-                                ; here: nothing zeroes .bss (-f bin)
+                                ; here: the initialiser is the boot answer,
+                                ; written down as a decision
 %if cp_wdirty - cp_dirty != 1
 %error "ctrl: cp_repost sets [cp_dirty] and [cp_wdirty] with one word store"
 %endif
@@ -744,8 +748,9 @@ CPV_FCLX  equ CPV_FCX + 18                  ; 128: label left, CP_PLX's gap
 ; --- Drivers page (SPEC.md 31.6/51) ------------------------------------------
 ; One row per drv_tab row: a checkbox, the driver's name, and - in the caption
 ; - what the last load attempt actually answered. The click loads or unloads
-; ON THE SPOT and then writes SYSTEM.CFG, so the box is never a promise about
-; the next boot: what it shows is what is running right now.
+; ON THE SPOT and marks SYSTEM.CFG owed for the panel's close (SPEC.md 31.8),
+; so the box is never a promise about the next boot: what it shows is what is
+; running right now.
 ; Both 27 characters, which is the pane's limit: 222px of pane less CP_PMX,
 ; and font_str clips to the SCREEN and not to the pane (SPEC.md 5). The one
 ; string these replace was THIRTY, and painted through the window's right
@@ -800,8 +805,10 @@ CPV_FCLX  equ CPV_FCX + 18                  ; 128: label left, CP_PLX's gap
 ; string and a second table slot would have been 26 bytes of an image rung
 ; with 27 in it (docs/KERNEL-MEMORY.md), so this is also the affordable
 ; answer, and it is the right one first.
-cp_s_noload: db 'Needs Sys Disk '
+TOASTRUN cp_s_noload
+             db 'Needs Sys Disk '
 cp_s_nodrv:  db 'A:', 0         ; stamped by dsk_bootltr (SPEC.md 52.10.3)
+TOASTEND
 cp_opentab: dw 0, cp_s_noload
 CP_NOPEN  equ 2
 
@@ -842,12 +849,6 @@ CPT_OB1Y2 equ CPT_O1Y + CP_GW + 3           ; 99: row 1 bottom
 cp_tsel:  db 0                  ; selected field; initialised .text data like
                                 ; cp_sel, so the panel stays boot-clean
 
-; SPEC.md 31.5.1: is this draw a FULL one, or the once-a-second refresh? The
-; tick changes digits and nothing else - the band's gaps, the two ':' and the
-; selected field's black surround are all still on the glass from the last
-; full draw - so an incremental pass draws seven opaque runs and NOTHING else.
-; A byte rather than a register because cp_time_fld's AL and AH are already
-; the field index and the field count.
 ; cp_list has JUST laid the whole pane's ground, so an unselected row's bar
 ; rect is already white and cp_listrow may skip its fill (SPEC.md 31.1.4).
 ; Set around cp_list's row loop and nowhere else: a selection that MOVES calls
@@ -864,6 +865,12 @@ cp_skip:  db 0
 %if cp_skip - cp_only != 1
 %error "ctrl: cp_skip must follow cp_only - one word store clears both"
 %endif
+; SPEC.md 31.5.1: is this draw a FULL one, or the once-a-second refresh? The
+; tick changes digits and nothing else - the band's gaps, the two ':' and the
+; selected field's black surround are all still on the glass from the last
+; full draw - so an incremental pass draws seven opaque runs and NOTHING else.
+; A byte rather than a register because cp_time_fld's AL and AH are already
+; the field index and the field count.
 CPT_FBOX  equ 2                 ; [cp_tfull]'s third value: draw MY OWN box,
                                 ; whichever way round it goes (SPEC.md 31.5.3)
 cp_tfull: db 0
@@ -2827,8 +2834,9 @@ cp_krect:
     ret
 
 ; --- cp_kgo / cp_cgo - CPXK's and CPXC's far hop, built by hand (kernel.asm's
-; KGO_PAIR, which says how; the boot blob carries the same pair as bvs_kgo /
-; bvs_cgo for its copies of the adapter switch)
+; KGO_PAIR, which says how; `.boot3` carries the same pair as b3_kgo /
+; b3_cgo for drv_boot_x's cone and the boot's copies of the adapter switch -
+; BOOT3-PLAN waves 2 and 4; the blob's bvs_kgo/bvs_cgo went in wave 4)
 KGO_PAIR cp
 %ifdef KERN_BIG
 EXF_SYNC cxf, CPXC              ; the arrangement row's EXTD.DRV sync (extmod.inc)
@@ -3491,7 +3499,7 @@ cp_dock_click:
     pop ax
     ret
 
-cp_dock_fail: db 'Dock Module Unavailable', 0
+TOASTSTR cp_dock_fail, 'Dock Module Unavailable'
 
 %endif
 
@@ -4077,8 +4085,8 @@ cp_vid_vxlabel:
     jnz .class
     cmp byte [vid_kind], VID_VESA
     jne .auto
-    mov ax, [vid_tab + VID_VESA * VID_REC + 14]     ; the live cw...
-    mov bx, [vid_tab + VID_VESA * VID_REC + 16]     ; ...ch...
+    mov ax, [vid_vxrow + 14]     ; the live cw...
+    mov bx, [vid_vxrow + 16]     ; ...ch...
     mov cx, [vx_bpp]            ; ...and depth
     jmp short .put
 .class:
@@ -4587,7 +4595,8 @@ cp_vid_click:
 ; page can no more disagree with the clock than the Scheduler page can with
 ; sched_mode_get. Nothing here knows what a month is - clk_fld_adj owns the
 ; ranges, the wrap and the day clamp - and nothing here calls BIOS: writing
-; the hardware RTC is ui_task's job, off the [clk_dirty] flag (SPEC.md 13).
+; the hardware RTC is cp_flush_close_x's job at the panel's close, off the
+; [clk_dirty] flag (SPEC.md 37.94).
 ;
 ; Those two are at the BOTTOM of this page's code since SPEC.md 37.93: still
 ; SPEC.md 37's routines with SPEC.md 37's names, but assembled into this
@@ -4659,8 +4668,8 @@ cp_time_paint:
 ; because the option rows own the full pane width while the buttons own
 ; only their column: the two option bands first, then the button column,
 ; then the field bands. A step goes through clk_fld_adj, which also posts
-; [clk_dirty] and [clk_barq] - so the hardware RTC is written by ui_task,
-; outside this held lock, never from here.
+; [clk_dirty] and [clk_barq] - so the hardware RTC is written at the panel's
+; close (cp_flush_close_x, SPEC.md 37.94), never from here.
 ; -----------------------------------------------------------------------------
 cp_time_click:
     push ax
@@ -5182,8 +5191,9 @@ clk_fld_str:
 ; that moves by 12, and either sign of the step flips it. Any edit restarts
 ; the sub-second accumulator from now (setting the seconds to a value and
 ; having it advance a tenth of a second later would be wrong), posts
-; [clk_dirty] so ui_task writes the hardware RTC outside the lock, and posts
-; [clk_barq] so the menu bar follows even when it is not showing seconds.
+; [clk_dirty], which the panel's close spends on the RTC (SPEC.md 37.94),
+; and posts [clk_barq] so the menu bar follows even when it is not showing
+; seconds.
 ; -----------------------------------------------------------------------------
 clk_fld_adj:
     push ax
@@ -5252,9 +5262,10 @@ clk_fld_adj:
     mov ax, [ticks]             ; the new second starts now
     mov [clk_last], ax
     mov word [clk_acc], 0
-    mov byte [clk_dirty], 1     ; ui_task step 3 writes the RTC (SPEC.md 13)
-    mov byte [clk_barq], 1      ; ...and step 4 refreshes the bar, which may
-                                ; otherwise be a minute from noticing
+    mov byte [clk_dirty], 1     ; the panel's close writes the RTC (SPEC.md 37.94)
+    mov byte [clk_barq], 1      ; ...and ui_task step 4 refreshes the bar,
+                                ; which may otherwise be a minute from
+                                ; noticing
     popf
     jmp kretm_dx
 
@@ -5308,13 +5319,14 @@ section .modc                   ; the on-demand image (SPEC.md 2.8): a segment
 ; calls it, from the two ways the panel stops existing, and nothing else does -
 ; a page that changed something sets [cp_wdirty] and returns (SPEC.md 31.8, and
 ; the flag's own comment for why that is a rule rather than a default). It is
-; a near call inside .cold with no .text thunk in front of it, so a page, a
-; driver's page or an API cell cannot reach it even by naming it.
+; a near call inside the module's core (.modc) with no .text thunk in front of
+; it, so a page, a driver's page or an API cell cannot reach it even by naming
+; it.
 ;
-; It is one write of one 32-byte
-; file, and the file carries the whole panel - the driver list, the sound
-; route, the clock options and the scheduler mode - so there
-; is no per-setting bookkeeping to keep in step.
+; It is one write of one small file (CFG_FBUF bytes, every key in
+; driver.inc's CFG_DATA), and the file carries the whole panel - the driver
+; list, the sound route, the clock options, the scheduler mode, the theme and
+; the rest - so there is no per-setting bookkeeping to keep in step.
 ;
 ; It writes ONCE, when the panel closes, rather than on every click. A floppy
 ; write is ~a second on the floor machine and the panel is frozen for it, so
@@ -5402,13 +5414,15 @@ cp_flush_x:
     pop si
     jmp kretm_cx
 cp_dsvt:    dw cp_s_dsok, cp_s_dserr, cp_s_dsdsk ; [cp_dsave] = 0, 2 and 1, read `cs:`
-cp_s_dsok:  db 'Settings Saved', 0
-cp_s_dserr: db 'Not saved: disk error', 0
-cp_s_dsdsk: db 'Not Saved: No Sys in '
+TOASTSTR cp_s_dsok, 'Settings Saved'
+TOASTSTR cp_s_dserr, 'Not saved: disk error'
+TOASTRUN cp_s_dsdsk
+            db 'Not Saved: No Sys in '
 cp_s_dsdrv: db 'A:', 0          ; the letter, copied in above: the system
                                 ; volume is not A: on a machine booted from a
                                 ; hard disk, and a message that names the
                                 ; wrong drive is worse than one that names none
+TOASTEND
 
 ; -----------------------------------------------------------------------------
 ; cp_flush_cfg - [cp_wdirty]'s half of cp_flush_close_x, and the SETTINGS
@@ -5569,8 +5583,8 @@ section .text
 
 
 ; The last click's refusal, as a DRVE_* (0 = the last click was fine, and the
-; notice line is blank). .text and not .bss for the reason everything else
-; here is: -f bin zeroes nothing.
+; notice line is blank). .text with an initialiser, like everything else
+; here: the value is the boot answer, written down as a decision.
 cp_snd_err: db 0
 section .modu                   ; the on-demand image (SPEC.md 2.8): a segment
                                 ; of its own with DS still KERNEL_SEG, so
@@ -7029,10 +7043,9 @@ cp_drv_pane:
 ; what waits is only the record of having asked for it.
 ;
 ; A load that finds no disk or no card leaves the box clear with the reason
-; under it. A settings write that cannot reach the disk says so in this
-; page's caption - the next time the panel is opened, because by then this
-; page is gone - while the driver it loaded stays loaded, which is the honest
-; split: the two are genuinely separate outcomes.
+; under it. A settings write that cannot reach the disk is said as a toast
+; when the panel closes (SPEC.md 59.6) - while the driver it loaded stays
+; loaded, which is the honest split: the two are genuinely separate outcomes.
 ;
 ; A load does floppy I/O with the gfx lock held. That is the same bargain
 ; every other file operation in this OS makes (SPEC.md 18.4): the cursor
@@ -7167,10 +7180,9 @@ cp_drv_click:
                                 ; or an unload touches its own drv_tab row and
                                 ; no other, so redrawing the rest is a
                                 ; double-draw flash on controls that did not
-                                ; move. The save caption is not redrawn either:
-                                ; only cp_flush_x writes [cp_dsave] and that
-                                ; runs at the CLOSE, so it cannot change while
-                                ; this page is on screen
+                                ; move. (There is no save caption to redraw:
+                                ; a failed write is a toast at the close,
+                                ; SPEC.md 59.6.)
     call cp_drv_box1
     call cp_drv_line1
 .done:
@@ -7402,7 +7414,9 @@ CPS cp_s_tdrk,  'Dark'
 %ifdef KERN_BIG
 CPS cp_s_tclr,  'Color'         ; ...and the third, VGA's alone (SPEC.md 76.12)
 CPS cp_s_twin,  'Windows'       ; ...and the fourth (SPEC.md 76.14)
-CPS cp_s_tnowin, 'WIN95.DRV not loaded'   ; ...and its refusal (76.14.1)
+TOASTSTR cp_s_tnowin, 'WIN95.DRV not loaded' ; ...and its refusal (76.14.1),
+                                ; a TOAST, so TOASTSTR's bound (24) and not
+                                ; CPS's (CP_SBUF 28, which it implies)
 %endif
 %ifdef WM_ANIM
 CPS cp_s_tanim, 'Window Animations'

@@ -1,0 +1,665 @@
+{
+ "area": "video",
+ "title": "Adapter detection, geometry, mode selection, extended desktop core, fullscreen exclusive",
+ "summary": "The geometry core is this area's strongest engineering. One parameterized 1bpp renderer drives two banked adapters from 18-byte vid_tab rows. The row table is built by stepping gfx_nextrow. The 16-word per-display run is copied rather than indirected, which is Mac GDevice's model without its per-primitive cost. Adjacency is pinned by %error rather than by prose. The fsx bracket is also sound: the kernel is parked under the app, there is one restore path, fsx_capstab is the one predicate for both greying and refusal, and retrace waits are bounded. The weak spots are at the edges. kern_small's fsx_page enables the Hercules second page (decoding B8000, on every call, page 0 included) on a Hercules+CGA machine, because its dual-card guard is %ifdef KERN_BIG. That is a real bus-contention bug on the owner's class of machine. Detection trusts first answers: a plain MDA gets Hercules 6845 timings, a PS/2 MCGA is driven as a VGA, and a 64KB EGA is driven as planar. All three fixes are small, transient .boot2 changes (the MCGA one must divert only the MCGA display codes). The VESA kind inherits an AC 12h blank that packed and hi-colour pipelines probably bypass. About 82-86 resident bytes of fsx tables and code on kern_small serve modes it can never set. vid_reboot leaves a mono secondary frozen, and its fix must not leave [vid_kind] changed because HIBER.DRV reads it afterwards. Documentation has drifted badly: about 40 statements in SPEC.md §39.11.4, §39.12, §39.13, §39.18, §53.2, §53.6, §53.8 and §120.5, and in in-code headers, describe retired designs, old slot numbers or old counts; all were confirmed and 42 fixes are recorded. None of the recommendations is a large byte growth.",
+ "strengths": [
+  {
+   "title": "One parameterized 1bpp renderer for Hercules and CGA",
+   "evidence": "kernel/viddet.inc:132-205 (vid_tab), SPEC 39.3",
+   "why": "Four numbers (seg, stride, bank mask/shift, wrap pair) are the whole difference between the two adapters, so a fix lands on both at once. It is smaller than GEOS's separate CGA and HGC drivers."
+  },
+  {
+   "title": "The row table is built by iterating the step form",
+   "evidence": "kernel/viddet.inc:968-1042",
+   "why": "Three instructions a row instead of a mul, roughly a fifth of 23.6 ms. The CGA divergence above row 206 was measured and documented. This is a pattern to copy: derive a cache from the incremental form."
+  },
+  {
+   "title": "Copy, do not indirect: vid_ctx_act",
+   "evidence": "kernel/vidsel.inc:1103-1111, 1558-1633",
+   "why": "gfx_nextrow keeps absolute [cs:] operands and its DI-only contract, which the IRQ4 path needs. The swap is 32 bytes of rep movsw, about 95 us, paid only when the display changes. It is Mac GDevice's model without the per-primitive indirection."
+  },
+  {
+   "title": "Layout invariants as assembly errors",
+   "evidence": "viddet.inc:309,326-331,663-670,889; vidsel.inc:1376-1384,1396",
+   "why": "A reorder of the live block, the derived runs or the paired bytes fails the build rather than drawing through the wrong segment."
+  },
+  {
+   "title": "ISA-honest probes",
+   "evidence": "kernel/vidsel.inc:137-181 (vid_memchk), 339-369 (vid_cga_alias), 231-253 (3BFh retry), vid_hprobe",
+   "why": "Writing two values to two offsets defeats the floating bus and rejects an aliasing MDA. vid_cga_alias catches one card at two apertures. vid_hprobe makes field failures diagnosable."
+  },
+  {
+   "title": "Glitch-aware mode sets",
+   "evidence": "viddet.inc:1159-1178,1391-1413 (Hercules blank-first), 1245-1263 (B800 pre-zero), 1296-1388 (os8088's own A0000 clear); vidsel.inc:1286 (vid_cgamode, its own shadow of 3D8h)",
+   "why": "Each of these defects is invisible in any emulator here, and each fix is tied to the field report that found it."
+  },
+  {
+   "title": "The XT ROM's equipment-driven mode set is handled at every int 10h site",
+   "evidence": "viddet.inc:1472-1519 vid_cga_equip; called from vid_setmode, vid_text and fsx_setbios",
+   "why": "This is DOS MODE CO80's manoeuvre, applied wherever a colour card must be reached on a mono-flagged machine."
+  },
+  {
+   "title": "The fsx bracket parks the kernel",
+   "evidence": "kernel/fsx.inc:4-17, 216-545; SPEC 53.1, 53.6",
+   "why": "'The kernel never runs in a foreign mode' holds by construction. The restore is a redraw rather than a VRAM save, so it needs no OS/2-style save/redraw threads and no Windows grabbers."
+  },
+  {
+   "title": "One predicate for greying and refusal",
+   "evidence": "fsx.inc:170-187 and 600-607; vid_dual_ok's three consumers",
+   "why": "SPEC 47's rule made mechanical: the app's grey and the kernel's refusal cannot disagree."
+  },
+  {
+   "title": "FSXW_FRAME waits on the PIT and yields",
+   "evidence": "fsx.inc:887-952, SPEC 53.5.1",
+   "why": "A busy-wait is not stolen from a kept worker. The bounded fsx_insync means a dead status port cannot hang the machine."
+  },
+  {
+   "title": "EXTD.DRV's slots rest at mod_gone",
+   "evidence": "kernel/kernel.asm:7091-7121",
+   "why": "Every EXTCALL is gated behind ndisp>1 or reads CF=1 as the one-display answer, so the extended desktop costs a one-card machine a far call and nothing resident."
+  },
+  {
+   "title": "A minimal VIDEXT hook",
+   "evidence": "kernel/vidext.inc:24-112, vx_null 139-154",
+   "why": "One compare per planar body, with no trampoline; the selector byte rides as the far return address. vx_null makes a hook that fires after detach harmless."
+  },
+  {
+   "title": "Hostile SYSTEM.CFG bytes are bounded",
+   "evidence": "vidsel.inc:382-405 (vid_avail_test range check before the ror); vid_dlay/vid_dmode read as BELOW-or-else and zero-or-else",
+   "why": "The 8086 does not mask a rotate count. An out-of-range kind from a newer kernel's file is refused, not aliased onto kind 0."
+  }
+ ],
+ "findings": [
+  {
+   "id": "video-1",
+   "kind": "bug",
+   "severity": "high",
+   "title": "kern_small fsx_page enables the Hercules second page on a machine that also has a CGA",
+   "detail": "The dual-card refusal in fsx_page's Hercules arm is %ifdef KERN_BIG, and vid_dual_ok exists only inside vidsel.inc's KERN_BIG block. On kern_small, BX=0x030A is unconditional, so 3BFh is written as 3 (B8000 decode on) on EVERY call, page 0 included, and page 1 sets 3B8h bit 7. kern_small does build vid_avail with both HERC and CGA bits (vid_probe_avail's .cga arm and vid_cga_alias are in kern_small's .boot2), and its capstab and mtab offer FSXM_HERC with 2 pages. On a 5150 with Hercules+CGA running the 128KB kernel, any page-flipping app (WireBall's wbvideo.inc:82-87 proves page 1 by calling the slot) puts two cards on the bus at B8000 for the rest of the bracket: page-1 writes land in the CGA's RAM and reads contend. vid_setmode's leave puts 3BFh back to 1. This is exactly what SPEC 53.10 and vid_setmode's .herc comment forbid, and CLAUDE.md promises the API refuses here.",
+   "evidence": [
+    "kernel/fsx.inc:1027-1061 Hercules arm, guard at 1031-1038 is %ifdef KERN_BIG",
+    "kernel/vidsel.inc:1356 %ifdef KERN_BIG ... 2299 %endif encloses vid_dual_ok (1923)",
+    "kernel/vidsel.inc:110-128 the probe trio is in kern_small's .boot2",
+    "kernel/fsx.inc:172 HERC caps row; 1175-1177 FSXM_HERC row, pages=2",
+    "build/smallk/kernel.map: fsx_page 8968, fsx_page.herc 8994",
+    "apps/wireball/wbvideo.inc:82-87 relies on the refusal"
+   ],
+   "recommendation": "On both kernels, replace the guard with `test byte [vid_avail], VID_A_VGA|VID_A_CGA / jz .single`. In the .herc arm vid_kind is VID_HERC, so vid_dual_ok's EGA test and HERC test are trivially answered and the colour bit is the whole question.",
+   "phase": "now",
+   "bytes_est": "+2 resident kern_big, +13 resident kern_small",
+   "verdict": "corrected",
+   "verify_note": "Confirmed in code: fsx.inc:1031 `%ifdef KERN_BIG` wraps the only refusal, vid_dual_ok is inside vidsel.inc's KERN_BIG block, kern_small's vid_probe_avail sets VID_A_CGA beside a Hercules primary, and BH=3 is written to 3BFh even for page 0. Not in ABI-BREAK-LIST or KERNEL-BYTE-QUEUE. Byte estimate corrected: on kern_small the new guard is test byte [mem],imm8 (5) + jz (2) + or al,al (2) + jnz (2) + mov bh,1 (2) = +13, not +11; kern_big +2 (5-byte test replaces a 3-byte call) stands."
+  },
+  {
+   "id": "video-2",
+   "kind": "hazard",
+   "severity": "high",
+   "title": "A plain MDA primary is programmed with Hercules graphics 6845 timings",
+   "detail": "vid_detect makes every mono-flagged machine VID_HERC; this is SPEC 39.1's 'documented scope cut'. vid_setmode then writes vid_6845 (R0=35h, the 720x348 table) and 3B8h=02h/0Ah. A real MDA ignores 3BFh and the graphics bit and stays on 9-dot text clocking, so the horizontal rate is about 16.257MHz/9/54, roughly 33 kHz, against a fixed 18.4 kHz IBM 5151. The result is a dead screen at best, and period MDA documentation warns about out-of-spec CRTC drive. The commonest dual-monitor machine, MDA+CGA with switches set to mono, is driven this way while its usable CGA sits idle. The scope cut's 'no better action exists' is untrue for that machine.",
+   "evidence": [
+    "kernel/viddet.inc:588-594 equipment arm -> VID_HERC",
+    "kernel/viddet.inc:527-530 and SPEC 39.1 scope cut",
+    "kernel/viddet.inc:397-398 vid_6845, 1391-1413 .herc",
+    "kernel/vidsel.inc:145-152, 231-253 the existing alias and 3BFh retry test that does discriminate MDA from Hercules"
+   ],
+   "recommendation": "In vid_detect's mono arm, write 3BFh=1 and run a 0x1000 alias test (vid_memchk's idiom) or Wilton's 3BAh bit-7 toggle loop. If the card is an MDA, probe B800 and choose VID_CGA (vid_setmode's vid_cga_equip already reaches it); otherwise keep today's VID_HERC, or halt with a message on an MDA alone. Remove the scope cut text at the same time.",
+   "phase": "now",
+   "bytes_est": "+25..+35 .boot2 (transient), 0 resident; may cost a blob sector of disk on kern_big",
+   "prior_art": "GEOS, Microsoft's adapter ID and Wilton's VideoID all used the 3BAh toggle so that an MDA is never handed HGC timings",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "Confirmed: vid_detect (viddet.inc:584-594) has no MDA test and the .herc arm of vid_setmode programs vid_6845 unconditionally; vid_probe_avail never probes the PRIMARY mono card. Note for the fix: on kern_big vid_memchk lives in `.ovl` and vid_detect runs from the splash's first tick in `.boot2`, so the test needs its own copy in the blob (the byte estimate assumes that). Monitor-damage risk is period lore, not verified here; the dead-screen and idle-CGA halves stand on the code alone."
+  },
+  {
+   "id": "video-3",
+   "kind": "bug",
+   "severity": "medium",
+   "title": "PS/2 MCGA is classed VID_VGA: the DCC's BL is never read",
+   "detail": "vid_detect tests only AL==1Ah after int 10h AX=1A00h. MCGA answers with BL=0Ah..0Ch. It is found in PS/2 Models 25/30, which are 8086 machines in the target class. It has no mode 12h, no GC and no Sequencer, so the mode set fails, the five GC/SEQ writes hit nothing and the planar renderer draws garbage.",
+   "evidence": [
+    "kernel/viddet.inc:554-557",
+    "kernel/viddet.inc:516-518 header and SPEC 39.1 step 1 name MCGA, then treat it as VGA"
+   ],
+   "recommendation": "After cmp al,1Ah: BL 0Ah..0Ch -> .equip (an MCGA's equipment word says colour, so it comes up as VID_CGA in mode 6, which MCGA emulates); every other BL stays on .vga as today. Mode 11h as a sixth vid_tab row is a later feature.",
+   "phase": "now",
+   "bytes_est": "+8..+12 .boot2 (transient), 0 resident",
+   "prior_art": "Wilton's VideoID and OS/2 VioGetConfig decode the DCC's display codes",
+   "verdict": "corrected",
+   "verify_note": "The MCGA defect is real (viddet.inc:554-557 reads AL only; the header at 516 even names MCGA). Recommendation corrected: the reviewer's 'BL 07h/08h -> .vga, anything else -> .equip' would also send a VGA machine whose DCC reports an MDA/Hercules active (BL=01h, BH=08h - the owner's VGA+Hercules class) to .equip, i.e. VID_HERC primary, changing today's VGA-primary behaviour and handing a plain MDA video-2's timings. Only the MCGA codes should be diverted. The 'EGA active on a VGA-BIOS machine' half was dropped from the title as unevidenced."
+  },
+  {
+   "id": "video-4",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "A 64KB EGA is driven planar although AH=12h's BL already says 64KB",
+   "detail": "SPEC 39.1's third scope cut accepts that the 16 colours collapse toward black on a 64KB EGA. The answer is already in BL at the probe: AH=12h BL=10h returns BL=0 for 64KB.",
+   "evidence": [
+    "kernel/viddet.inc:558-562 reads only BH",
+    "SPEC.md 39.1 'a 64KB EGA is driven as if it had 128KB'"
+   ],
+   "recommendation": "Add `or bl,bl / jz .equip`: a 64KB EGA does mode 6 perfectly. Delete the scope cut.",
+   "phase": "now",
+   "bytes_est": "+4 .boot2 (transient)",
+   "verdict": "confirmed",
+   "verify_note": "Confirmed: after `cmp bl,0x10 / je .equip` the code tests only BH; BL=0 (64KB) is free at that point, and .equip on a colour EGA answers VID_CGA. The scope cut (SPEC.md:76083) is a documented choice but gives no reason against the test."
+  },
+  {
+   "id": "video-5",
+   "kind": "bug",
+   "severity": "medium",
+   "title": "fsx_page on Hercules writes the page bit and then waits, so the flip frame tears (PLAUSIBLE)",
+   "detail": "Mode X's start address is a CRTC register latched at frame start, so write-then-wait is right there. Hercules 3B8h bit 7 is the video fetch's address MSB and acts immediately; HGC notes say to switch inside vertical retrace. fsx_page writes 3BFh/3B8h first and then tail-jumps into the retrace wait, so the frame being scanned shows two pages. The header, SPEC 53.10 and os88api.inc all say the Hercules write 'is latched at the next vertical retrace'.",
+   "evidence": [
+    "kernel/fsx.inc:1054-1061",
+    "kernel/fsx.inc:981-984 header",
+    "SPEC.md 53.10"
+   ],
+   "recommendation": "On the Hercules arm, run the two retrace phases first and then the two outs. The contract that the page is on glass when the routine returns still holds. Verify with MartyPC m.flicker() across a WireBall flip, or on an 86Box HGC.",
+   "phase": "now",
+   "bytes_est": "+8 resident, both kernels",
+   "verdict": "confirmed",
+   "verify_note": "Code order confirmed (outs at 1054-1059, then `jmp short fsx_wait.vsync`). The hardware claim (bit 7 is not latched) is not verifiable here and stays PLAUSIBLE; no doc fix is taken for the 'latched' wording until it is measured. +8 is plausible: the retrace phases live inside fsx_wait's own frame, so the arm needs a callable copy or a reshuffle."
+  },
+  {
+   "id": "video-6",
+   "kind": "hazard",
+   "severity": "medium",
+   "title": "The planar blank (AC 12h) is used for VID_VESA, whose packed and direct-colour pipeline likely bypasses the Attribute Controller (PLAUSIBLE)",
+   "detail": "The dec/cmp map makes kind 4 planar, and vid_bk blanks by zeroing Color Plane Enable. CPE masks the 4-bit attribute path. In 8bpp VBE on many SVGAs and in 16bpp behind a HiColor DAC it has no effect, and QEMU applies ar[0x12] only in its 4/2bpp line drawers. SPEC 64's idle blanker and vid_blank may do nothing on a VESA desktop, and SPEC 120.5's row was never measured. SR01 bit 5 (Screen Off) works on every VGA-class card; it was retired as 'an identical result', which is true only in 16-colour modes.",
+   "evidence": [
+    "kernel/vidsel.inc:1254-1279 .planar arm",
+    "kernel/vidsel.inc:949-954 VESA admitted as planar",
+    "kernel/vidsel.inc:1325-1331 SR01 retired",
+    "SPEC.md 120.5 row 'vid_blank/vid_unblank: the colour arms'"
+   ],
+   "recommendation": "Give kinds VGA and VESA SR01 bit 5 by read-modify-write; keep AC 12h for the EGA alone, whose SR01 is write-only with no Screen Off bit. Alternatively add a VX_BLANK driver selector (VBE 4F10h). Test under QEMU at 8 and 16bpp first.",
+   "phase": "now",
+   "bytes_est": "+12..+14 resident kern_big (or +6 resident + driver bytes)",
+   "verdict": "confirmed",
+   "verify_note": "Code path confirmed: vidsel.inc:949-954 states VESA is planar to vid_bk on purpose and the planar arm writes only AC 12h. Whether the glass darks under VBE 8/16bpp is a hardware/emulator question not run here (no emulators in this stage), so it stays PLAUSIBLE."
+  },
+  {
+   "id": "video-7",
+   "kind": "size",
+   "severity": "medium",
+   "title": "kern_small carries about 85 resident bytes of fsx tables and code for VGA modes it can never set",
+   "detail": "On kern_small vid_kind is only HERC or CGA, and their caps rows grant ids 0-4. Yet fsx_mtab assembles all 9 rows (126 bytes; rows 5-8 = 56 unreachable bytes), fsx_bmodes carries ids 5-8 (4 bytes), fsx_capstab keeps the VGA row (2 bytes) that vid_tab itself drops on kern_small, and fsx_page's Mode X arm (about 25 bytes) cannot run because fsx_cur can never be FSXM_MODEX there.",
+   "evidence": [
+    "build/smallk/kernel.map: fsx_mtab 89DE..8A5C, fsx_bmodes 8A5C..8A64",
+    "kernel/fsx.inc:170-187, 1011-1026, 1161-1203",
+    "kernel/viddet.inc:198-203 the $-VID_REC idiom"
+   ],
+   "recommendation": "Gate mtab rows 5-8 and bmodes 5-7 on GFX_VGA; they are tail entries, so no index moves. Index fsx_capstab from $-2 on no-VGA builds. Put fsx_page's Mode X arm under %ifdef GFX_VGA. Whether to drop bmodes' id-8 byte as well is the author's call: fsx.inc:1194-1203 keeps it deliberately.",
+   "phase": "now",
+   "bytes_est": "-82..-86 resident kern_small, 0 kern_big",
+   "verdict": "corrected",
+   "verify_note": "Map sizes confirmed (fsx_mtab 0x7E = 126 bytes = 9 x 14; rows 5-8 = 56). Corrected: fsx_bmodes' id-8 byte is kept ON PURPOSE (fsx.inc:1194-1203: 'One byte is not worth making a wrong BIOS mode the failure', because the reachability argument crosses two files) - the reviewer missed that reason; the same cross-file argument applies to the mtab rows and capstab row, so the change should carry an %error or a note tying them to fsx_mode's caps test. Range -82 (keeping id 8) to -86."
+  },
+  {
+   "id": "video-8",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "vid_apply builds and arms the row table on VID_VESA, where the mouse stack is allowed to overwrite it",
+   "detail": "Under VID_EXT, vid_rowtab lies directly under mou_pstack, and a packed display's arrow may run on into it 'because nothing reads a row there'. But VID_APPLY still walks the VESA row into the table and sets vid_rowmax=348, so the table is armed while it may be getting corrupted. Any unhooked gfx_rowbase caller on VESA, now or in future, reads a stack-scribbled row.",
+   "evidence": [
+    "kernel/mouse.inc:371-388",
+    "kernel/viddet.inc:1022-1042"
+   ],
+   "recommendation": "In VID_APPLY, skip the build and leave vid_rowmax 0 when [vid_planes] > 4. This makes the invariant structural and saves about 4.6 ms per switch.",
+   "phase": "now",
+   "bytes_est": "+7 per VID_APPLY expansion (+7 .boot2, +14 modules), 0 resident",
+   "verdict": "confirmed",
+   "verify_note": "Confirmed: the .rowtab loop and `mov word [vid_rowmax], VID_ROWTAB` (viddet.inc:1022-1042) have no kind test, and mouse.inc:376-386 relies on nothing reading the table on a packed display. cmp byte [mem],imm + ja = 7 bytes per expansion."
+  },
+  {
+   "id": "video-9",
+   "kind": "bug",
+   "severity": "low",
+   "title": "A same-mode bracket on the secondary paces FSXW_VSYNC to the primary's retrace port",
+   "detail": "fsx_wait picks 3BAh/3DAh from [vid_kind]. A same-mode bracket does not collapse the desktop, so on a VGA+Hercules desktop a bracket on the Hercules polls the VGA's 60 Hz retrace, and raster-synced drawing tears on the 50 Hz card. fsx_surf already answers from [fsx_wdisp].",
+   "evidence": [
+    "kernel/fsx.inc:953-958",
+    "kernel/fsx.inc:760-785, SPEC 39.18.3"
+   ],
+   "recommendation": "On kern_big: `mov al,[fsx_wdisp] / call vid_kind_of` for the port choice. After a collapse it agrees with vid_kind (the records are never written inside the bracket).",
+   "phase": "now",
+   "bytes_est": "+3..+8 resident kern_big",
+   "verdict": "confirmed",
+   "verify_note": "Confirmed: .vsync tests [vid_kind] (fsx.inc:953-956), and fsx_run no longer collapses (405-418). vid_kind_of is resident (vidsel.inc:1441) and record 1 still holds the secondary's kind after a collapse, so the recommendation is safe. Estimate widened: 3+3+2 replaces a 5-byte compare."
+  },
+  {
+   "id": "video-10",
+   "kind": "bug",
+   "severity": "low",
+   "title": "vid_reboot leaves a mono SECONDARY showing a frozen graphics desktop, against SPEC 39.20.1's promise",
+   "detail": "vid_reboot handles only a Hercules primary with a VGA. With a VGA primary and Extend onto a Hercules (the pairing the period built most), the Hercules keeps the frozen desktop across int 19h. Hercules+CGA does the same to the other card. SPEC 39.20.1 promises 'a clean text page on the mono card instead of a frozen graphics desktop'.",
+   "evidence": [
+    "kernel/vidsel.inc:499-522",
+    "SPEC.md 39.20.1 last paragraph",
+    "kernel/hiber.inc:1961, 3658, 3729-3741 (hbm_stageseg reads [vid_kind] after vid_reboot)"
+   ],
+   "recommendation": "When the mono card is present and is not the primary, bank [vid_kind], program the mono card into text by hand (vid_text's .mono arm: vid_6845t, the 0720h clear, 3B8h=29h), and restore [vid_kind]. Do not leave [vid_kind] = VID_HERC behind: HIBER.DRV's hbm_bye/hbm_down print through hbm_stageseg, which picks B000h vs B800h from [vid_kind] after vid_reboot. On Hercules+CGA with a CGA primary, int 10h mode 7 cannot be used (the XT ROM drives 3D4h when 40:10 says colour), so the hand-programmed path is the one to reuse. A CGA secondary can be darked with vid_blank_kind.",
+   "phase": "now",
+   "bytes_est": "+18..+24 resident kern_big",
+   "verdict": "corrected",
+   "verify_note": "Defect confirmed (vid_reboot: `cmp [vid_kind], VID_HERC / jne .out`). Recommendation corrected: the reviewer's 'set vid_kind=VID_HERC and call vid_text again' breaks hibernation - hiber.inc's hbm_bye and the down path call vid_reboot and then hbm_stageseg/hbm_tty, which read [vid_kind] to pick the text framebuffer (hiber.inc:3729-3741), so a VGA primary would print into B000. And vid_text's int 10h mode 7 arm (taken when no VGA) is wrong on Hercules+CGA with a CGA primary. Bytes raised accordingly."
+  },
+  {
+   "id": "video-11",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "A mode-setting bracket's collapse leaves vid_ctx record 0 describing the primary while the live block is the bracket's display",
+   "detail": "vid_fsx_enter republishes the live block for the bracket display with ndisp=1 and cur=0, and captures nothing. vid_disp_find and vid_ctx_rect at ndisp=1 then answer from record 0, the primary. Nothing breaks today, because no drawing happens in a foreign mode, the cursor does not draw under the lock, and gfx_unlock's vid_ctx_act(0) is a no-op. But the invariant is held by prose: a vid_ctx_act(0) reached with vid_cur=1 would copy the primary's geometry back mid-bracket.",
+   "evidence": [
+    "kernel/extmod.inc:437-466",
+    "kernel/extmod.inc:309-316 'The records were never written inside the bracket'"
+   ],
+   "recommendation": "State it in SPEC 39.18.3 as a binding rule, or capture record 0 at enter and restore it from fsx_vkind at leave.",
+   "phase": "record",
+   "bytes_est": "0, or +10 EXTD.DRV",
+   "verdict": "confirmed",
+   "verify_note": "Confirmed against vid_fsx_enter (extmod.inc:437-460): ext_kapply publishes the bracket display, ndisp/cur become 1/0, and no record is captured."
+  },
+  {
+   "id": "video-12",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "FSI_PAGES advertises pages that fsx_page refuses; the grant itself is not published",
+   "detail": "VGA0D says 8 pages but fsx_page refuses mode 0Dh. A dual-card Hercules says 2 but refuses page 1. CLAUDE.md has to teach apps to probe the slot. The hardware count is honest, since an app may flip by hand, so add the grant as a fact instead.",
+   "evidence": [
+    "kernel/fsx.inc:1161-1189 rows",
+    "kernel/fsx.inc:1008-1012 refusals",
+    "CLAUDE.md WireBall section 'An advertised FSI_PAGES count alone does not grant'"
+   ],
+   "recommendation": "Add FSIF_FLIP (FSI_FLAGS bit 3), set at fill time when fsx_page will flip this mode on this machine. This is a contract addition under SPEC 20.2.0.1 with no PKG_FMT bump.",
+   "phase": "now",
+   "bytes_est": "+8 resident kern_big, +4 kern_small",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked: VGA0D row pages = 8 (fsx.inc:1179), fsx_page accepts only FSXM_HERC and FSXM_MODEX (1005-1010)."
+  },
+  {
+   "id": "video-13",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "EGA's caps row omits mode 0Dh, which every EGA has",
+   "detail": "fsx_capstab's EGA row is 0x000F. Mode 0Dh (320x200x16, 8000 bytes a plane, which fits even a 64KB card) already has an fsx_mtab row. SPEC 53.4 calls it 'a safe later addition'.",
+   "evidence": [
+    "kernel/fsx.inc:174-180",
+    "SPEC.md 53.4"
+   ],
+   "recommendation": "Make the EGA row 0x002F, gated on one 86Box EGA run of a mode 0Dh consumer.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked: fsx.inc:174-180, the row and its comment say exactly this."
+  },
+  {
+   "id": "video-14",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "The kind-class idiom is hand-spelled at about ten sites",
+   "detail": "The `dec al / cmp al,2` (planar) and `cmp ..., VID_HERC` (mono card) idioms are written out by hand, tied together only by the VID_KIND_OK %error, which fires only when VID_KIND_MAX moves. The real model is the PC's two display I/O ranges (3Bx mono card, 3Dx colour card), and nothing in the source names it.",
+   "evidence": [
+    "viddet.inc:690-692, 1306-1309, 1837",
+    "vidsel.inc:969-972, 1199-1204, 1813-1815, 944-957",
+    "fsx.inc:955"
+   ],
+   "recommendation": "Add zero-byte macros VIDK_PLANAR and VIDK_MONOCARD, used at every site, so a new kind's author greps one name. Keep the %error.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked viddet.inc:690-692, vidsel.inc:1201-1204 and 1813-1815: the idiom is spelled out at each."
+  },
+  {
+   "id": "video-15",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "Comments narrate history, and about 40 statements in this area have gone stale",
+   "detail": "Retired designs are described in headers (vid_disp_init's 'HERC|CGA EXACTLY', SPEC 39.11.4's 3B8h=0). fsx.inc carries wrong slot numbers (0x02C0, 0x02D0, 0x02D8, 0x04E8). SPEC 39.12 and 39.13 are step logs living in the binding spec. Counts are wrong ('36 bytes', 'nineteen', 'eighteen-word'). The files are about 70% comment, and the 'it used to' paragraphs are where the drift collects.",
+   "evidence": [
+    "see doc_fixes"
+   ],
+   "recommendation": "Fix the list. As a convention, a code header states the current contract and cites the SPEC section for history. Superseded SPEC step-log subsections get a 'superseded by' banner.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "All 41 quotes were found verbatim; each was checked against the code and refined into doc_fixes (42 entries: two adjacent ones merged, the 'delete the PARITY PAD lines' proposal turned into a comment-only fix because deleting lines is a code change, and three stale neighbours added - vid_disp_init's 'pull-down cap', 39.18's same-mode paragraph). The fsx_page 'latched at the next retrace' wording is left until video-5 is measured."
+  },
+  {
+   "id": "video-16",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "The macro-expanded bodies (VID_APPLY, VSW_*, VID_CTXCAP) put each image's hop bugs on one caller path",
+   "detail": "Three or four expansions per body, each reaching resident code through its own %2 hop (KSWK/BSWK/EXK/BSPW). This is the right byte answer, but a hop defect in, say, the blob's bvs_disp_init is exercised only at boot.",
+   "evidence": [
+    "kernel/viddet.inc:751-1105, 1568",
+    "kernel/vidsel.inc:443-468, 962-1084, 1515-1543, 1968-2131, 2250-2296",
+    "kernel/extmod.inc:1286-1289"
+   ],
+   "recommendation": "No code change. Make sure the display rows drive each image's path once: boot, the Display page, and an fsx leave on an extended desktop.",
+   "phase": "record",
+   "bytes_est": "0",
+   "verdict": "unchecked",
+   "verify_note": "Low-severity record item; not re-checked."
+  },
+  {
+   "id": "video-17",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "The mono renderer is resident on VGA-only machines that will never draw 1bpp",
+   "detail": "COLD_SLIDE gives a mono machine back the VGA rung, which is GEOS's one-adapter-resident model in one direction. The reverse is not done: on a planar-only, HERC-less machine, softgfx's sw_* block (about 1,108 bytes in kern_big's map) plus mono arms elsewhere are resident. KERN_BUDGET is measured on VGA, so this is the budgeted figure. The mono renderer must stay near and resident on the XT target; a far hop per primitive costs about 47 us. Note the VGA's own CGA row (mode 6, chosen on the Display page) draws through the same 1bpp renderer, so a VGA-only machine CAN draw 1bpp today.",
+   "evidence": [
+    "kernel/kernel.asm:1137-1146 COLD_SLIDE",
+    "build/kernel.map sw_xor_fill 34CE .. sw_xfer end ~3922"
+   ],
+   "recommendation": "Record. If budget pressure returns: a mono rung slid over at boot on planar-only, HERC-less machines, with the Display page's CGA row greyed (SPEC 47) there. docs/plans/MONO-RECLAIM-PLAN.md is the adjacent record (the opposite direction) and should be cited.",
+   "phase": "record",
+   "bytes_est": "-1,100..-1,500 resident on VGA kern_big at the desktop (ESTIMATED); code cost not estimated",
+   "prior_art": "GEOS loaded one video driver per adapter; Windows 3.x DISPLAY.DRV",
+   "verdict": "corrected",
+   "verify_note": "Map span confirmed (~0x454 = 1,108 bytes). Corrected the title's 'will never draw 1bpp': a VGA machine's CGA row is the VGA in mode 6 driven by the 1bpp renderer (vidsel.inc:197-205), which the recommendation already concedes by greying that row. Not listed in KERNEL-BYTE-QUEUE; MONO-RECLAIM-PLAN covers the reverse direction only."
+  },
+  {
+   "id": "video-18",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "No escape from a hung bracket",
+   "detail": "SPEC 53.1 documents that an app hanging in the bracket hangs the machine. A cooperative abort is cheap; forced unwinding is unsafe.",
+   "evidence": [
+    "SPEC.md 53.1 'An app that hangs in the bracket hangs the machine'"
+   ],
+   "recommendation": "Record a Ctrl+Alt+Esc latch in the keyboard ISR that makes fsx_wait and fsx_page return CF=1 until the bracket ends, so a well-behaved loop exits.",
+   "phase": "record",
+   "bytes_est": "+15 resident",
+   "prior_art": "OS/2 1.x Ctrl-Esc session switch; Windows 3.1 local reboot",
+   "verdict": "unchecked",
+   "verify_note": "Quote located in SPEC 53.1 (it wraps a line); the proposal itself not re-checked."
+  },
+  {
+   "id": "video-19",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "'Which display' has four spellings across the video slots",
+   "detail": "OSAPI_VIDEO answers the primary. FSX_CAPS takes a window in BX, with BX=1..15 overloaded as a display index. FSX_RUN takes the display in CH. FSX_SURF answers [fsx_wdisp].",
+   "evidence": [
+    "kernel/fsx.inc:124-152, 227-230, 787-818",
+    "SPEC.md 39.2.1.1"
+   ],
+   "recommendation": "At a flag day, use one display-index register (CH, 0 = the caller's window's) and retire the pointer overload. Batch it with ABI-BREAK-LIST T1.",
+   "phase": "flagday",
+   "bytes_est": "-6 resident (fsx_caps range arms), EXTF_CAPS simpler",
+   "prior_art": "Windows GetDeviceCaps(hdc); Mac GetGDevice/GetMaxDevice",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked fsx_caps' BX<16 overload (fsx.inc:124-138) and fsx_run's CH (225-226, 248)."
+  },
+  {
+   "id": "video-20",
+   "kind": "prior-art",
+   "severity": "low",
+   "title": "The DCC's BH (inactive display) is free second-card evidence on a VGA BIOS",
+   "detail": "Wilton's VideoID and OS/2 VioGetConfig used BH. os8088's memory probes are better tested on period cards (the PVGA1A+GB101 field case) and work without a VGA BIOS. Recorded so a later author does not replace them with BH alone.",
+   "evidence": [
+    "kernel/vidsel.inc:210-291"
+   ],
+   "recommendation": "No change; record.",
+   "phase": "record",
+   "bytes_est": "0",
+   "verdict": "unchecked",
+   "verify_note": "Record item; not re-checked."
+  }
+ ],
+ "doc_fixes": [
+  {
+   "file": "kernel/vidsel.inc",
+   "old_text": "; TWO DISPLAYS IS [vid_avail] == HERC|CGA EXACTLY, and an equality rather than\n; a bit count for a reason per value. VGA|CGA is ONE CARD - vid_probe_avail\n; sets the CGA bit on every VGA/EGA without probing, mode 6 being a standard\n; BIOS mode there - so a bit count would report two displays on the commonest\n; machine in the tree and programme the VGA twice. VGA|HERC|CGA genuinely IS\n; two cards and is deliberately not taken: the bitmap cannot say whether the\n; CGA bit is that VGA's mode 6 or a third card, and SPEC.md 39.11.4 already\n; accepts that pairing as one nobody built.",
+   "new_text": "; TWO DISPLAYS IS vid_dual_ok's ANSWER - a HERC bit and a colour bit (VGA or\n; CGA), an EGA primary refused - and not a bit count. VGA|CGA is ONE CARD -\n; vid_probe_avail sets the CGA bit on every VGA/EGA without probing, mode 6\n; being a standard BIOS mode there - so a bit count would report two displays\n; on the commonest machine in the tree and programme the VGA twice.\n; VGA|HERC|CGA IS two cards and IS taken: vid_disp_other names the VGA as the\n; colour one (SPEC.md 39.19), and a third, real CGA beside them is\n; indistinguishable from the VGA's mode 6 and never programmed.",
+   "why": "vid_dual_ok (vidsel.inc:1923-1938) passes HERC plus VGA or CGA and refuses only an EGA primary; vid_disp_other (1969-1978) returns VID_VGA on a mono primary with a VGA - SPEC 39.19 already says VGA+Hercules extends."
+  },
+  {
+   "file": "kernel/vidsel.inc",
+   "old_text": "36 bytes of rep movsw",
+   "new_text": "32 bytes of rep movsw",
+   "why": "VID_CTX_W equ 16 (vidsel.inc:1362) and vid_ctx_act copies `mov cx, VID_CTX_W` words: 32 bytes."
+  },
+  {
+   "file": "kernel/vidsel.inc",
+   "old_text": "CF = 1 for AL < 4, i.e. IN range",
+   "new_text": "CF = 1 for AL <= VID_KIND_MAX, i.e. IN range",
+   "why": "The compare is `cmp al, VID_KIND_MAX + 1` (vidsel.inc:382); VID_KIND_MAX is VID_VESA = 4 under VID_EXT, VID_EGA = 3 otherwise (viddet.inc:119-123)."
+  },
+  {
+   "file": "kernel/vidsel.inc",
+   "old_text": "CL is 1..4, never 0",
+   "new_text": "CL is 1..VID_KIND_MAX+1, never 0",
+   "why": "CL = kind+1 after the range check, up to 5 under VID_EXT (vidsel.inc:397-400)."
+  },
+  {
+   "file": "kernel/vidsel.inc",
+   "old_text": "(kmain:4211)",
+   "new_text": "(kmain's OVBCALL)",
+   "why": "The one call site is `OVBCALL vid_probe_avail` at kernel.asm:5727; kmain:4211 is a stale line number."
+  },
+  {
+   "file": "kernel/vidsel.inc",
+   "old_text": "kmain:4203 is the only edge",
+   "new_text": "kmain's OVLCALL is the only edge",
+   "why": "The one call site is `OVLCALL vid_ctx_init` at kernel.asm:5719; kmain:4203 is a stale line number."
+  },
+  {
+   "file": "kernel/vidsel.inc",
+   "old_text": "end at 0x7796",
+   "new_text": "end at 0x7E96",
+   "why": "Bank 3 starts at 0x6000 and 87*90 = 0x1E96, so the last displayed byte is 0x7E96 - vid_setmode's own comment says 'max offset 7E96h' (viddet.inc:1397); 0x7F00 is still past it."
+  },
+  {
+   "file": "kernel/vidsel.inc",
+   "old_text": "is three compares, a clc and an stc",
+   "new_text": "is a compare, two tests and an stc",
+   "why": "vid_dual_ok (vidsel.inc:1923-1938) is cmp, test, test, ret, stc, ret - no clc."
+  },
+  {
+   "file": "kernel/vidsel.inc",
+   "old_text": "; primitive (SPEC.md 39.12); vid_apply on the way IN also rewrote every desktop\n; word - the dock row, the clock cell, the drive column, the pull-down cap -\n; and only vid_apply puts those back.",
+   "new_text": "; primitive (SPEC.md 39.12); vid_apply on the way IN also rewrote every desktop\n; word - the dock row, the clock cell, the drive column -\n; and only vid_apply puts those back.",
+   "why": "vid_apply no longer computes [vid_popmax]: viddet.inc:918-927 says it is the declaration's resting value."
+  },
+  {
+   "file": "kernel/vidsel.inc",
+   "old_text": "the drive column, the pull-down cap, and 39.16's own",
+   "new_text": "the drive column, and 39.16's own",
+   "why": "Same as above: viddet.inc:918-927, [vid_popmax] is not computed by vid_apply any more."
+  },
+  {
+   "file": "kernel/vidsel.inc",
+   "old_text": "other display is placed to its right",
+   "new_text": "other display is placed to its right or below it",
+   "why": "extmod.inc:1245-1248 places display 1 at (0, primary height) for VID_L_BELOW; the union's origin stays (0,0) either way."
+  },
+  {
+   "file": "kernel/vidsel.inc",
+   "old_text": "    nop                         ; PARITY PAD, never run, kern_small only (kernel\n%endif                          ; size pass 15): kern_big paired it with viddet's",
+   "new_text": "    nop                         ; NEVER ASSEMBLED: this file's %ifdef KERN_BIG\n%endif                          ; encloses it (a kern_small pad, size pass 15)",
+   "why": "The %ifdef KERN_SMALL nop at vidsel.inc:1634-1636 sits inside the %ifdef KERN_BIG block (1356..2299), so no kernel assembles it; comment-only fix (removing the three lines is a separate, zero-byte code change)."
+  },
+  {
+   "file": "kernel/viddet.inc",
+   "old_text": "; is across a segment. This is that: ONE far door, `call bp` / `retf`, three\n; bytes, with BP naming the near `.text` routine - vid_apply, vid_setmode or\n; gfx_rowbase. It was three shims of four bytes, one per routine (and\n; spw_vid_detect a fourth until SPEC.md 2.5.3.3 put vid_detect in the blob\n; with its callers); the loader's side pays the BP load, in `.boot2` and\n; `.boot2`, which the machine gives back once it is up. `call`/`retf` touch no",
+   "new_text": "; is across a segment. This is that: ONE far door, `call bp` / `retf`, three\n; bytes, with BP naming the near `.text` routine - the splash's are vid_setmode\n; and gfx_rowbase (vid_apply is the blob's own copy, bvs_apply, now). It was\n; three shims of four bytes, one per routine (and\n; spw_vid_detect a fourth until SPEC.md 2.5.3.3 put vid_detect in the blob\n; with its callers); the loader's side pays the BP load, in `.boot2`,\n; which the machine gives back once it is up. `call`/`retf` touch no",
+   "why": "splash.inc:523-525 calls `bvs_apply` directly and spw_near only for vid_setmode, and splash.inc:639 for gfx_rowbase; VID_APPLY has no resident copy (viddet.inc:732-742). The duplicated '`.boot2` and `.boot2`' is a slip."
+  },
+  {
+   "file": "kernel/viddet.inc",
+   "old_text": "1 or 4, so the sign bit is clear",
+   "new_text": "1, 4, 8 or 16, so the sign bit is clear",
+   "why": "Under VID_EXT the VESA arm jumps to .st with AH = [vx_bpp], 8 or 16 (viddet.inc:679-683), and the cbw below runs on it too."
+  },
+  {
+   "file": "kernel/fsx.inc",
+   "old_text": "(SPEC.md 53.8, 0x02C0)",
+   "new_text": "(SPEC.md 53.8, 0x022F)",
+   "why": "OSAPI_FSX_CAPS is KERNEL_SEG:0x022F (os88api.inc:5301, kernel.asm OSAPI_RSLOT fsx_caps ; 0x022F)."
+  },
+  {
+   "file": "kernel/fsx.inc",
+   "old_text": "(SPEC.md 53.4, 0x02D0)",
+   "new_text": "(SPEC.md 53.4, 0x023B)",
+   "why": "OSAPI_FSX_MODE is KERNEL_SEG:0x023B (os88api.inc:5393)."
+  },
+  {
+   "file": "kernel/fsx.inc",
+   "old_text": "the frame clock, and the present (SPEC.md 53.5, 0x02D8)",
+   "new_text": "the frame clock (SPEC.md 53.5, 0x0241)",
+   "why": "OSAPI_FSX_WAIT is 0x0241 (os88api.inc:5401), and SPEC 53.5 'It is a pure clock': gfx_flush/[bb_dbl] no longer exist in kernel/."
+  },
+  {
+   "file": "kernel/fsx.inc",
+   "old_text": "0x04E8)",
+   "new_text": "0x03C5)",
+   "why": "OSAPI_FSX_PAGE is KERNEL_SEG:0x03C5 (os88api.inc:5414, kernel.asm:3851)."
+  },
+  {
+   "file": "kernel/fsx.inc",
+   "old_text": ";           window ptr, CX = flags (bit 0 = FSXF_KEEPWORKER, bit 1 =\n;           FSXF_FASTTICK; others refuse);",
+   "new_text": ";           window ptr, CX = flags (bit 0 = FSXF_KEEPWORKER, bit 1 =\n;           FSXF_FASTTICK, bit 2 = FSXF_RATE with DX/DI - kern_big, never\n;           with FASTTICK - bit 3 = FSXF_REAL, accepted and stripped on every\n;           kernel; others refuse), CH = the display (0 the window's, n\n;           display n-1 on kern_big; kern_small takes 0 alone);",
+   "why": "fsx_run strips FSXF_REAL on every kernel (fsx.inc:221), kern_big refuses CL >= 6 and CH past [vid_ndisp] (223-226) and banks DX/DI for FSXF_RATE (251-261); kern_small refuses CX >= 4 (228-229)."
+  },
+  {
+   "file": "kernel/fsx.inc",
+   "old_text": "gfx_unlock then flushes (if buffered) and re-shows the cursor",
+   "new_text": "gfx_unlock then re-shows the cursor",
+   "why": "There is no back buffer: SPEC 53.5 says gfx_flush and [bb_dbl] no longer exist in kernel/ (grep finds none)."
+  },
+  {
+   "file": "kernel/fsx.inc",
+   "old_text": "                                ; before the app's proc runs and read only by\n                                ; fsx_mode, so it needs no boot-time init\n                                ; either - and STILL CORRECT after the byte\n                                ; above lost the same argument (SPEC.md\n                                ; 12.8.5.1), because fsx_mode is legal only\n                                ; inside the bracket. The claim is about the",
+   "new_text": "                                ; before the app's proc runs and read only by\n                                ; fsx_mode (directly and through EXTD.DRV's\n                                ; EXTF_KIND) and fsx_surf, so it needs no\n                                ; boot-time init either - and STILL CORRECT\n                                ; after the byte above lost the same argument\n                                ; (SPEC.md 12.8.5.1), because both are legal\n                                ; only inside the bracket.",
+   "why": "fsx_surf reads [fsx_wdisp] (fsx.inc:807) after fsx_mine, and EXTF_KIND (extmod.inc:350) reads it for fsx_mode (fsx.inc:592); all inside a bracket."
+  },
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": "    OSAPI_SLOT fsx_wait           ; 0x0241 - frame clock / present (SPEC.md\n                                  ;          53.5): AL = 0 tick / 1 retrace",
+   "new_text": "    OSAPI_SLOT fsx_wait           ; 0x0241 - frame clock (SPEC.md\n                                  ;          53.5): AL = 0 tick / 1 retrace / 2 frame",
+   "why": "fsx_wait accepts AL = 2 FSXW_FRAME (fsx.inc:920-952) and flushes nothing (SPEC 53.5 'It is a pure clock')."
+  },
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": "                                  ;          53): AX = the FSXM bitmask this\n                                  ;          adapter can set, DL = vid_kind.",
+   "new_text": "                                  ;          53): AX = the FSXM bitmask the\n                                  ;          display of window BX (BX = 1..15:\n                                  ;          display BX-1) can set, DL = its kind.",
+   "why": "fsx_caps takes BX as a window or a 1..15 display index and answers that display (fsx.inc:124-168), not 'this adapter'."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "So on `kern_small` and\n`kern_emu` each expansion carries its OWN copy of the rows (`VID_TAB_ROWS`,\nat the macro's foot, read through CS with DS following it for the one\n`rep movsw`), and the kernel keeps only `vid_vxrow`, the VESA row its driver\nrewrites (§120.4): -36 resident on `kern_small`, -72 on `kern_emu`. `kern_big`\nkeeps the whole table resident (`VID_TAB_RES`) only because its blob is full\nto the byte at thirteen sectors - a fourteenth would buy it the same -72 - and\n`kern_mega` because its switch rewrites the segment column to selectors in\nplace.",
+   "new_text": "So on `kern_small`, `kern_emu` and `kern_big` each expansion carries its\nOWN copy of the rows (`VID_TAB_ROWS`, at the macro's foot, read through CS\nwith DS following it for the one `rep movsw`), and the kernel keeps only\n`vid_vxrow`, the VESA row its driver rewrites (§120.4): -36 resident on\n`kern_small`, -72 on `kern_emu` and on `kern_big`, which took this arm at\nthirteen sectors once kernel size pass 18's sweep3 freed room in its blob.\n`kern_mega` alone keeps the whole table resident (`VID_TAB_RES`), because\nits switch rewrites the segment column to selectors in place.",
+   "why": "viddet.inc:150-167: only KERN_MEGA defines VID_TAB_RES; kern_big takes the per-image rows at thirteen sectors (ksp18 sweep3)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "+38 bytes of `.bss` on `kern_big`/`kern_emu`; `kern_small` and `kern_mega` have no `VID_EXT` and keep 85",
+   "new_text": "+38 bytes of `.bss` on `kern_big`/`kern_emu`/`kern_mega`; `kern_small` has no `VID_EXT` and keeps 85",
+   "why": "kernel.asm:849-862 defines VID_EXT on every KERN_BIG build, kern_mega included (SPEC 120.3.4), and menu.inc:189 sizes MENU_BCMAX at 123 under VID_EXT."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "Leaving the Hercules writes 0 to 3B8h\n(video off) and 0 to 3BFh (graphics disallowed, and the page-1 decode locked\nout again); leaving a CGA writes 0 to 3D8h.",
+   "new_text": "Darking is `vid_blank_kind`'s (§39.18.1): leaving the Hercules writes 02h\nto 3B8h (graphics, page 0, video off) and leaves 3BFh alone; leaving a CGA\nwrites its own banked 3D8h value (`vid_cgamode`, §39.18.1.1) less bit 3;\nleaving a VGA or an EGA zeroes the Attribute Controller's Color Plane Enable.",
+   "why": "vid_blank -> vid_blank_kind -> vid_bk (vidsel.inc:1174-1279): the mono arm writes 3B8h = 0x02 only, the CGA arm vid_cgamode & ~8, the planar arm AC 12h = 0."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "The one case it does not cover is a VGA **and** a Hercules in the same\nmachine: 3D8h is a CGA register that a VGA does not implement, so the write\nlands nowhere and the VGA stays lit. Accepted rather than fixed — that\npairing is not a machine anybody built, and reaching the VGA's own screen-off\n(Sequencer register 1, bit 5) would put a VGA-specific register write on a\npath that runs on all three adapters.",
+   "new_text": "A VGA **and** a Hercules in the same machine is covered too: `vid_bk`'s\nplanar arm darks the VGA through the Attribute Controller's Color Plane\nEnable (§39.18.1), not through 3D8h, which a VGA does not implement.",
+   "why": "vid_bk's .planar arm (vidsel.inc:1254-1279) blanks VGA and EGA through AC 12h; VSW_SWITCH darks the outgoing card whenever exactly one kind is the mono one (963-976)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "four banks of 87 × 90 end at\n0x7796)",
+   "new_text": "four banks of 87 × 90 end at\n0x7E96)",
+   "why": "Bank 3 starts at 0x6000; 87*90 = 0x1E96, so 0x7E96 (viddet.inc:1397 'max offset 7E96h')."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "It is `vid_apply`'s own idiom. 36 bytes",
+   "new_text": "It is `vid_apply`'s own idiom. 32 bytes",
+   "why": "VID_CTX_W equ 16 words (vidsel.inc:1362)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "**Nothing on a drawing path calls any of it yet.** This is step 1 of\ndocs/plans/completed/DUAL-DISPLAY-PLAN.md §11 — the state and the swap — so the screen is\nbyte-identical to the build before it on all three adapters, by construction\nrather than by inspection. §39.13 raises `[vid_ndisp]` and still draws nothing;\nstep 4 is what first activates a display from a primitive.",
+   "new_text": "**When step 1 landed, nothing on a drawing path called any of it.** That\nwas step 1 of docs/plans/completed/DUAL-DISPLAY-PLAN.md §11 — the state and the\nswap — so the screen was byte-identical to the build before it on all three\nadapters, by construction rather than by inspection. Drawing has activated a\ndisplay per primitive since step 4 (§39.14).",
+   "why": "vid_ctx_act is called on drawing paths now: gfx_disp_run/gfx_disp_enter (vga12.inc) and the cursor's bracket (mouse.inc)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "**Two displays means `[vid_avail]` is `VID_A_HERC | VID_A_CGA` and nothing\nelse.** Every other value is one display, and the test is an equality rather\nthan a bit count for a reason per value:\n\n- **`VGA | CGA`** is one card. §39.11.1 sets the CGA bit on every VGA/EGA\n  without probing anything, because mode 6 is a standard BIOS mode there — so\n  a bit count would report two displays on the commonest machine in the tree\n  and programme the VGA twice.\n- **`VGA | HERC | CGA`** is a VGA with a real Hercules beside it, which *is*\n  two cards — and is deliberately not taken. The bitmap cannot say whether the\n  CGA bit is that VGA's mode 6 or a third card, and §39.11.4 already accepts\n  that pairing as one nobody built. Treating it as two displays would put the\n  desktop half on a monitor and half on the same monitor.",
+   "new_text": "**Two displays is `vid_dual_ok`'s answer** (§39.19): a mono card and a\ncolour card, an EGA primary refused. It is not a bit count, for a reason per\nvalue:\n\n- **`VGA | CGA`** is one card. §39.11.1 sets the CGA bit on every VGA/EGA\n  without probing anything, because mode 6 is a standard BIOS mode there — so\n  a bit count would report two displays on the commonest machine in the tree\n  and programme the VGA twice.\n- **`VGA | HERC | CGA`** is a VGA with a real Hercules beside it, which *is*\n  two cards — and is taken (docs/plans/completed/DUAL-DISPLAY-VGA.md):\n  `vid_disp_other` names the VGA as the colour card. A third, real CGA in\n  that machine is indistinguishable from the VGA's mode 6 and is never\n  programmed.",
+   "why": "vid_dual_ok (vidsel.inc:1923-1938) passes HERC plus VGA or CGA; vid_disp_other returns VID_VGA when the VGA bit is set; SPEC 39.19 already records the change."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "turns a `vid_tab` row into the nineteen words",
+   "new_text": "turns a `vid_tab` row into the sixteen words",
+   "why": "VID_CTX_W equ 16 (vidsel.inc:1362); the code's own header says 'the sixteen words' (vidsel.inc:2011)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "**What is still owed, and it is one thing: `vid_switch` does not re-run\nthis.** Switching the primary from the Control Panel's Display page leaves\n`vid_ctx` describing the arrangement before the switch, and §39.11.4's\n`vid_blank` darks a card display 1 now owns. Inert while nothing reads either\n— but it stops being inert at step 4, so it is that step's or step 7's and not\na thing to leave for the field to find.",
+   "new_text": "**What was owed then — `vid_switch` re-running this — is discharged:**\n`vid_switch` calls `vid_disp_init` as its step 3 (§39.19), so the records,\nthe chrome's extent and the union follow a change of primary.",
+   "why": "VSW_SWITCH calls %1_disp_init after vid_setmode under KERN_BIG (vidsel.inc:1038-1045)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "nearly free.** `fsx_run` picks the display with `wm_disp_of` (§39.17), makes it\nthe *only* display at the virtual origin, and every §53 contract is then",
+   "new_text": "nearly free.** `fsx_run` resolves the display with `wm_disp_of` (§39.17)\nand banks it; the first `fsx_mode` makes it the *only* display at the\nvirtual origin (§39.18.3), and every §53 contract is then",
+   "why": "fsx_run only banks [fsx_wdisp] (fsx.inc:405-411, 'THE SINGLE-DISPLAY COLLAPSE MOVED TO fsx_mode'); fsx_mode calls EXTF_ENTER after the caps test (619-627)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "eighteen-word run",
+   "new_text": "sixteen-word run",
+   "why": "VID_CTX_W equ 16; VID_CTX_KIND sits at VID_CTX_W*2+4, outside the copied run (vidsel.inc:1362-1370)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "**A SAME-MODE bracket still changes the geometry**, which is the trap §53.7\ndoes not lead you to expect. Paint (§42.7) sets no mode at all and takes the\nbracket purely for the lock — and on two displays its content origin still\nmoves from virtual (720, 0) to (0, 0), because the machine it is running on\nbecame a different shape. Entering a bracket may change the geometry even when\nit does not change the mode; `OSAPI_VIDEO` answers the bracket's display while\none is live, so an app that reads the screen size the ordinary way keeps\nworking.",
+   "new_text": "**A SAME-MODE bracket changes NO geometry** (§39.18.3). Paint (§42.7) sets\nno mode at all and takes the bracket purely for the lock, so the desktop\nstays the union in virtual coordinates; an app that wants the rect its\nbracket owns asks `fsx_surf` (§53.7.1).",
+   "why": "The collapse is fsx_mode's (fsx.inc:409-418, 619-627), and fsx_surf's header (fsx.inc:760-785) says a same-mode bracket keeps the virtual desktop."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "  Both armed and cleared under `pushf`/`cli`.",
+   "new_text": "  Both armed and cleared by one word store (adjacent, `[fsx_task]`\n  first): an 8086 takes an interrupt only between instructions, so\n  `sch_switch` never sees half a pair.",
+   "why": "fsx_run arms with `mov [fsx_task], dx` (fsx.inc:337, comment 353-360: 'no pushf/cli window is owed'); the restore disarms with `mov [fsx_task], ax` (489-490)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "event queue (`evq_pop` until empty)",
+   "new_text": "event queue (`evq_drain` into `fsx_evtmp`)",
+   "why": "fsx.inc:486-488: `mov di, fsx_evtmp / call evq_drain`."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "3. Disarm: `[fsx_task]` = `[fsx_worker]` = 0xFF, under `cli`.",
+   "new_text": "3. Disarm: `[fsx_task]` = `[fsx_worker]` = 0xFF, in one word store.",
+   "why": "fsx.inc:489-490 `mov ax, 0xFFFF / mov [fsx_task], ax`, no cli."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "   band (§11.91.7) and otherwise `wm_paint_all`. With `[bb_dbl]` armed the repaint renders into the\n   buffer and the callback epilogue's flush carries it to VRAM; without,\n   it writes VRAM direct.",
+   "new_text": "   band (§11.91.7) and otherwise `wm_paint_all`. It writes VRAM direct:\n   there is no back buffer (§53.5).",
+   "why": "SPEC 53.5 itself: gfx_flush and [bb_dbl] 'neither symbol exists in kernel/'; grep finds none."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "5. Return CF=0. The callback returns; its dispatch epilogue's\n   `gfx_unlock` flushes (if buffered) and brings the cursor back with a\n   fresh save-under from the restored VRAM — §7's own contract, nothing",
+   "new_text": "5. Return CF=0. The callback returns; its dispatch epilogue's\n   `gfx_unlock` brings the cursor back with a\n   fresh save-under from the restored VRAM — §7's own contract, nothing",
+   "why": "No buffer to flush (SPEC 53.5; no gfx_flush in kernel/)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "0x022F fsx_caps   out AX = FSXM bitmask for the live adapter, DL =\n                  vid_kind. Any context. Everything else preserved.\n0x0235 fsx_run    in AX = near entry, BX = own window ptr, CX = flags\n                  (bit 0 FSXF_KEEPWORKER, bit 1 FSXF_FASTTICK). X — the\n                  fence reads the caller's DS. UI-task window callback,\n                  lock held. Does not return until the app's proc does.\n                  CF=1 refused.\n0x023B fsx_mode   in AL = FSXM_* id, ES:DI = FSI_SIZE buffer (caller's\n                  ES). Bracket-only. CF=0 mode set + block filled;\n                  CF=1 refused (id, adapter, context).\n0x0241 fsx_wait   in AL = 0 next tick / 1 vertical retrace. Bracket-only\n                  (CF=1 outside). The frame clock (§53.5).",
+   "new_text": "0x022F fsx_caps   in BX = window (0 frontmost), or 1..15 = display BX-1.\n                  out AX = that display's FSXM bitmask, DL = its kind\n                  (VGA for VESA); CF=1 no such display. Any context.\n0x0235 fsx_run    in AX = near entry, BX = own window ptr, CL = flags\n                  (bit 0 FSXF_KEEPWORKER, bit 1 FSXF_FASTTICK, bit 2\n                  FSXF_RATE with DX/DI on kern_big, bit 3 FSXF_REAL),\n                  CH = display (§53.1.2). X — the\n                  fence reads the caller's DS. UI-task window callback,\n                  lock held. Does not return until the app's proc does.\n                  CF=1 refused.\n0x023B fsx_mode   in AL = FSXM_* id, ES:DI = FSI_SIZE buffer (caller's\n                  ES). Bracket-only. CF=0 mode set + block filled;\n                  CF=1 refused (id, adapter, context).\n0x0241 fsx_wait   in AL = 0 next tick / 1 vertical retrace / 2 next\n                  IRQ0, yielding (§53.5.1). Bracket-only (CF=1\n                  outside). The frame clock (§53.5).\n0x03C5 fsx_page   in AL = page index. Bracket-only, after fsx_mode in a\n                  mode that flips (§53.10). CF=0 shown, after a retrace\n                  wait; CF=1 refused, nothing written.",
+   "why": "fsx_caps takes BX and answers per display, DL = VGA for VESA, CF=1 past the last display (fsx.inc:124-168); fsx_run takes bits 2/3 and CH (221-262); fsx_wait accepts AL = 2 (920-952); fsx_page is slot 0x03C5 (kernel.asm:3851)."
+  }
+ ]
+}

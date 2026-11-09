@@ -614,15 +614,16 @@ vx_mkpal:
     ret
 
 ; -----------------------------------------------------------------------------
-; vx_init - VXV_INIT: DX:SI = the kernel's block, which lives in its boot blob
-;           (ES = KERNEL_SEG). Bank the kernel's segment and every pointer -
-;           the block is gone once the boot ends - and fill vid_tab row
+; vx_init - VXV_INIT: DX:SI = the kernel's block, which lives in its `.boot3`
+;           (DX = B3_SEG; the boot blob until BOOT3-PLAN wave 4), ES =
+;           KERNEL_SEG. Bank the kernel's segment and every pointer - the
+;           block is gone once the boot ends - and fill vid_tab row
 ;           VID_VESA.
 ; out: CF = 0; CF = 1 = a block of another vintage, nothing banked
 ; -----------------------------------------------------------------------------
 vx_init:
     push ds
-    mov ds, dx                  ; DS:SI = the block, in the kernel's boot blob
+    mov ds, dx                  ; DS:SI = the block, in the kernel's `.boot3`
     cmp word [si+VXB_VER], VX_ABI_VER
     jne .bad
     pop ds

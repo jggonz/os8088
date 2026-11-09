@@ -234,7 +234,7 @@ class Unit(object):
         self.rungs = set()      # globals an OS88_POPLADDER emitted
         cur = None
         with open(path, encoding="utf-8", errors="replace") as f:
-            lines = f.read().split("\n")
+            lines = khp_view(f.read().split("\n"))
         for n, raw in enumerate(lines, 1):
             self._n = n
             text = strip(raw)
@@ -795,7 +795,60 @@ def routines(path):
     return out, 0
 
 
+# THE KHP_* KNOBS (kernel/kernel.asm's KHP block, kernel hot-paths pass 1). A
+# knob selects one of two whole bodies for a hot path, and the walk cannot
+# take both: a `push` in the knob's arm and its `pop` in a later arm of the
+# same knob read, walked as one sequence, as a label reached at two depths.
+# So the corpus is walked once per CONFIGURATION - every knob off (what
+# kern_big and kern_small assemble) and every knob on (kern_mega) - with the
+# other arm blanked line for line, so line numbers stay true. Only KHP_*
+# conditionals are evaluated; every other %if is read exactly as before.
+KHP_ON = False
+_KHP_IF = re.compile(r"^\s*%(ifn?def)\s+(KHP_\w+)\b")
+_ANY_IF = re.compile(r"^\s*%if")
+_ELSE = re.compile(r"^\s*%else\b")
+_ELIF = re.compile(r"^\s*%elif")
+_ENDIF = re.compile(r"^\s*%endif\b")
+
+
+def khp_view(lines):
+    out, stack = [], []         # stack: [kind, active] - kind "khp"/"other"
+    for raw in lines:
+        m = _KHP_IF.match(raw)
+        live = all(a for _, a in stack)
+        if m:
+            on = KHP_ON if m.group(1) == "ifdef" else not KHP_ON
+            stack.append(["khp", on])
+            out.append("")
+            continue
+        if _ANY_IF.match(raw):
+            stack.append(["other", True])
+        elif stack and _ELSE.match(raw) and stack[-1][0] == "khp":
+            stack[-1][1] = not stack[-1][1]
+            out.append("")
+            continue
+        elif stack and _ELIF.match(raw) and stack[-1][0] == "khp":
+            raise SystemExit("stkbalance: %elif in a KHP_ conditional")
+        elif stack and _ENDIF.match(raw):
+            kind = stack.pop()[0]
+            if kind == "khp":
+                out.append("")
+                continue
+        out.append(raw if live else "")
+    return out
+
+
 def main():
+    global KHP_ON
+    rc = 0
+    for KHP_ON in (False, True):
+        print("stkbalance: KHP_* knobs %s" % ("ON (every knob: kern_mega's and the ones no kernel defines)" if KHP_ON
+                                              else "OFF (kern_big, kern_small)"))
+        rc |= main1()
+    return rc
+
+
+def main1():
     args = sys.argv[1:]
     if args:
         files = args

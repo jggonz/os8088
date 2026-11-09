@@ -25,10 +25,10 @@ VX_ABI_VER  equ 5               ; bump on ANY change to the contract below
 ; pointer at VXB_NULL (which draws nothing) and clears the VID_A_VESA bit,
 ; through the block it was handed. Neither
 ; sets a video mode: that is vid_switch's (SPEC.md 120.4).
-VXV_INIT    equ 0x40            ; in DX:SI = the kernel's vx_blk, in its boot
-                                ; blob (ES = KERNEL_SEG): bank the kernel's
+VXV_INIT    equ 0x40            ; in DX:SI = the kernel's vx_blk, in its
+                                ; `.boot3` (ES = KERNEL_SEG): bank the kernel's
                                 ; segment and COPY its pointers - the block
-                                ; is given back with the blob -
+                                ; is given back with `.boot3` -
                                 ; fill vid_tab row 4 from the chosen mode.
                                 ; Well clear of the DRVV_* range
 VXV_PICK    equ 0x41            ; in CL = a mode CLASS (below), after INIT:
@@ -52,8 +52,9 @@ VXV_PM      equ 0x43            ; kern_mega's alone (KERN-MEGA-PLAN 14.115):
                                 ; kern_mega keeps its VGA desktop
 
 ; --- a mode CLASS: the user's name for a mode, a card's number being the
-; card's (SPEC.md 120.2.3). ONE BYTE, because SYSTEM.CFG's buffer is boot
-; blob bytes and the blob had one: 0 is Auto; else bit 7 set, bits 0-1 the
+; card's (SPEC.md 120.2.3). ONE BYTE, because SYSTEM.CFG's buffer was boot
+; blob bytes and the blob had one (`.boot3b` since BOOT3-PLAN wave 2): 0 is
+; Auto; else bit 7 set, bits 0-1 the
 ; width, bits 2-3 the height, bit 4 the depth, from the four of each this
 ; image offers (120.2.2). The 'VM' record's fourth byte carries it, and
 ; DRVV_ATTACH takes it in CL

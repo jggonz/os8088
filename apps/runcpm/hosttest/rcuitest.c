@@ -498,6 +498,13 @@ int os88_file_mkdir(const char *name) { n_mkdir++; ferr = OS88_FERR_FULL; return
 int os88_mem_free(unsigned seg) { printf("HARNESS: os88_mem_free(%04x): not here\n", seg); exit(1); }
 unsigned os88_mem_regrow(unsigned seg, int kb) { printf("HARNESS: os88_mem_regrow: not here\n"); exit(1); }
 unsigned os88_mem_regrow_p(unsigned seg, unsigned paras) { printf("HARNESS: os88_mem_regrow_p: not here\n"); exit(1); }
+unsigned os88_mem_huge(int kb) { printf("HARNESS: os88_mem_huge(%d): not here\n", kb); exit(1); }
+unsigned os88_mem_huge_step(void) { return 0x1000; }
+unsigned os88_file_read_huge(const char *name, unsigned seg, unsigned lo, unsigned hi) { printf("HARNESS: os88_file_read_huge(%s): not here\n", name); exit(1); }
+int os88_file_write_huge(const char *name, unsigned seg, unsigned lo, unsigned hi) { printf("HARNESS: os88_file_write_huge(%s): not here\n", name); exit(1); }
+unsigned os88_file_hi(void) { return 0; }
+void os88_seg_get(void *dst, unsigned seg, unsigned off, unsigned n) { printf("HARNESS: os88_seg_get: not here\n"); exit(1); }
+void os88_seg_put(unsigned seg, unsigned off, const void *src, unsigned n) { printf("HARNESS: os88_seg_put: not here\n"); exit(1); }
 unsigned os88_mem_claim_p(unsigned paras)
 {
     printf("HARNESS: os88_mem_claim_p(%u): not a claim this program makes\n", paras);

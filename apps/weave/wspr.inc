@@ -76,8 +76,8 @@ wsm_markall:
     mov di, wsm_dirty
     mov al, 1
     push es
-    push cs
-    pop es
+    push ds                         ; ES = our data: DS, not CS (wcanvas.asm's
+    pop es                          ; header; KERN-MEGA-PLAN 14.163)
     rep stosb
     pop es
 .out:
@@ -290,8 +290,8 @@ wsm_drawspr:
     push es
     push ds
     mov si, di
-    push cs
-    pop es
+    push ds                         ; ES = our data: DS, not CS (wcanvas.asm's
+    pop es                          ; header; KERN-MEGA-PLAN 14.163)
     mov di, wsm_simg
     mov ds, [cs:wsm_bseg]
     rep movsb                       ; the image rows...
@@ -452,8 +452,8 @@ wsm_mkcolmap:
     mov cx, [wsm_ncol]
     mov al, 0xFF
     push es
-    push cs
-    pop es
+    push ds                         ; ES = our data: DS, not CS (wcanvas.asm's
+    pop es                          ; header; KERN-MEGA-PLAN 14.163)
     cld
     rep stosb
     pop es
@@ -517,8 +517,8 @@ wsm_mkcolmap:
     pop cx
     and al, 0x0F
     push es
-    push cs
-    pop es
+    push ds                         ; ES = our data: DS, not CS (wcanvas.asm's
+    pop es                          ; header; KERN-MEGA-PLAN 14.163)
     rep stosb
     pop es
 .next:
@@ -685,8 +685,8 @@ wsm_flush:
     mov cx, WSM_MAXBAND
     xor al, al
     push es
-    push cs
-    pop es
+    push ds                         ; ES = our data: DS, not CS (wcanvas.asm's
+    pop es                          ; header; KERN-MEGA-PLAN 14.163)
     rep stosb
     pop es
     xor bx, bx

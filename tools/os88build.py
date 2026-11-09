@@ -288,11 +288,38 @@ def _carry_inputs(d):
                 os.path.realpath(os.path.join(d, sub)):
             continue
         for n in os.listdir(src):
-            if not n.upper().endswith(".EXE"):
-                continue
+            if not n.upper().endswith((".EXE", ".DLL")):
+                continue                # PBRUSH.EXE needs its PBRUSH.DLL
             s = os.path.join(src, n)
             t = os.path.join(d, sub, n)
             if os.path.isfile(s) and not os.path.exists(t):
+                os.makedirs(os.path.dirname(t), exist_ok=True)
+                shutil.copy2(s, t)
+
+
+# FETCHED DATA A ROW DECLARES BY NAME, carried in BEFORE the tree's make
+# rather than after it. getarcrom.py keeps its pinned MAME zips in the SHARED
+# build/arcade-rom/ whatever $(BUILD) is (its CACHE), and no make rule
+# produces a .zip - so `inflate86`, `arcimport` and `m6502` declaring
+# `build/arcade-rom/qbert.zip` made the frozen tree's make die on "No rule to
+# make target" and the whole soak refused to start. An existing file with no
+# rule is something make accepts, so copying it first is the whole fix; a
+# copy, not a link, for the reason CARRY gives.
+FETCHED = (("arcade-rom", ".ZIP"),)
+
+
+def _carry_fetched(d):
+    """Copy into tree `d` the shared build/'s fetched caches rows declare."""
+    for sub, ext in FETCHED:
+        src = os.path.join(ROOT, "build", sub)
+        if not os.path.isdir(src) or os.path.realpath(src) == \
+                os.path.realpath(os.path.join(d, sub)):
+            continue
+        for n in os.listdir(src):
+            s = os.path.join(src, n)
+            t = os.path.join(d, sub, n)
+            if (n.upper().endswith(ext) and os.path.isfile(s)
+                    and not os.path.exists(t)):
                 os.makedirs(os.path.dirname(t), exist_ok=True)
                 shutil.copy2(s, t)
 
@@ -631,6 +658,25 @@ def nasm_version(path):
         return None
     m = re.search(r'^NASM version (\d+)\.(\d+)', (out.stdout or "") + (out.stderr or ""))
     return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def tk_python():
+    """An interpreter that can open the builder's WINDOW, or None: this one,
+    else a python3.N on PATH, whose `tkinter`, Pillow's `ImageTk` and numpy
+    all import - and `xvfb-run` to give it a display. A container's newest
+    python3 often has no Tk where the distribution's own python3.12 does
+    (tests/vbtguiwin.py)"""
+    import shutil
+    if not shutil.which("xvfb-run"):
+        return None
+    probe = "import tkinter, numpy; from PIL import ImageTk"
+    cands = [sys.executable] + [shutil.which("python3.%d" % n)
+                                for n in range(14, 10, -1)]
+    for c in cands:
+        if c and subprocess.run([c, "-c", probe], capture_output=True
+                                ).returncode == 0:
+            return c
+    return None
 
 
 def have_pil():
@@ -1048,6 +1094,7 @@ def tree(*args, **kw):
                 raise
         _sweep_truncated(d)
         _share_instruments(d)
+        _carry_fetched(d)
         # RELATIVE, and it has to be. The Makefile spells the C toolchain's
         # PATH as `$(CURDIR)/$(CC_SC)` where `CC_SC := $(BUILD)/cc/SmallerC`,
         # so an ABSOLUTE BUILD produces `$(CURDIR)//tmp/...` - a path that

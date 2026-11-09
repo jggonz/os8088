@@ -187,8 +187,9 @@ lb_srcrow:
     ret
 
 ; lb_orrow - OR of the colour planes of source row SI, bpr bytes, into
-; lb_sorb (our segment). DS is ours on entry and on exit. Clobbers AX, BX, CX,
-; DX, DI.
+; lb_sorb (our segment), through ES. DS AND ES are ours on entry (DS on exit
+; too): the store goes through ES and never CS, which is read-only on
+; kern_mega. Clobbers AX, BX, CX, DX, DI.
 lb_orrow:
     push si
     push ds
@@ -208,7 +209,8 @@ lb_orrow:
     loop .p
     pop cx
     pop si
-    mov [cs:lb_sorb+di], al
+    mov [es:lb_sorb+di], al         ; ES = ours at both callers: never CS,
+                                    ;   a #GP on kern_mega
     inc si
     inc di
     cmp di, bx
@@ -243,8 +245,8 @@ lb_vcore:
     mul word [lbp_cnt]
     add ax, lb_smk
     mov di, ax                      ; where this row's mask goes
-    push cs
-    pop es
+    push ds                         ; ES = OUR DATA (lb_orrow, lb_shrow):
+    pop es                          ;   never CS on kern_mega
     cmp word [lbp_mp], 0
     jne .mplane
     push di
@@ -345,7 +347,7 @@ lb_vcore:
     mul word [lbp_ps]
     add si, ax
     add si, [lbp_i0]
-    push cs
+    push ds                         ; (ES = ours, not CS: kern_mega)
     pop es
     mov di, lb_srow
     mov cx, [lbp_s]
@@ -697,6 +699,8 @@ lb_score:
     jmp .done
 .go:
     call lb_srcrow
+    push ds                         ; ES = OUR DATA for lb_orrow's stores and
+    pop es                          ;   lb_shrow's below (never CS: kern_mega)
     call lb_orrow                   ; lb_sorb[0..bpr-1], SI unchanged
     ; double it: lb_sorb2[2i], [2i+1] = the two nibbles of lb_sorb[i]
     xor si, si
@@ -719,9 +723,7 @@ lb_score:
     inc si
     cmp si, [lbp_bpr]
     jb .dbl
-    ; shift it into lb_mrow
-    push cs
-    pop es
+    ; shift it into lb_mrow (ES ours since lb_orrow)
     mov di, lb_mrow
     mov si, lb_sorb2
     add si, [lbp_i0]
@@ -2366,7 +2368,7 @@ lb_wobj:
     jmp .byte
 .shift:
     ; both rows shifted into place: colour into lb_srow, mask into lb_mrow
-    push cs
+    push ds                         ; (ES = ours, not CS: kern_mega)
     pop es
     mov cx, [lbp_s]
     mov si, lb_sorb

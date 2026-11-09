@@ -43,7 +43,7 @@ Link to another file's page or manual with `[[NAME.EXT]]` (for example `[[CHART.
 
 Supported Markdown: `#`/`##`/`###` headings, paragraphs, `-` and `1.` lists,
 `| tables |`, `> note`, `**bold**`, `*italic*`, `` `code` ``, links,
-`![caption](shot:id)` on a line of its own, and `![caption](video:cga/03-cga4)`
+`![caption](shot:id)` on a line of its own, and `![caption](video:cga/04-miku)`
 for a demo video the reader can play (the names are the files in
 `tools/guide/videos/`). Shots or videos on lines with no blank line between
 them make a gallery, side by side. Nothing else (no HTML, no nested lists, no code blocks).

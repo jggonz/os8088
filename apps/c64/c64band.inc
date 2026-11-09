@@ -51,6 +51,16 @@ c64_crow:   resb 80
 ; order, so one `mov ax,[tab+bx]` / `mov [di],ax` writes them left to right.
 c64_x2tab:  resb 512
 
+; c64_bandbm's per-cell colour block: four colours' 4x4 Bayer phases, laid
+; [pair value * 4 + line & 3] so a line reads all four at [bx], [bx+4], ...
+_c64_bfbest: resw 1                  ; c64_bandfind's best score...
+c64_bfk:    resw 1                  ; ...its k...
+c64_bfkk:   resw 1                  ; ...the k being tried...
+c64_bfst:   resw 1                  ; ...and the run's first row
+c64_bfcnt:  resw 1                  ; ...and the rows left of this k
+c64_bmblk:  resb 16
+c64_bmend:  resw 1                  ; ...and where its cell's eight lines end
+
 c64_spf:    resw 1                  ; c64_rowspan's first differing cell...
 c64_spl:    resw 1                  ; ...and its last
 c64_spa:    resw 1                  ; ...and the two row bases it measures
@@ -80,12 +90,11 @@ C64_X2STRIDE equ 80                 ; ...and of a pixel-doubled one
 ;   gseg:goff   the character generator: the CHARGEN ROM in the ROM claim, or
 ;               the RAM character set the VIC is pointed at. NEVER
 ;               OSAPI_FONT_GLYPHS - this is a C64 face (C64-SPEC §9.5)
-;   mode        0 = standard text. WAVE 1 COMPOSES STANDARD TEXT ONLY; every
-;               other mode fills the span with c64_bgfill and wave 4 writes
-;               the bitmap, multicolour and extended-background composers
-;               (docs/plans/completed/C64-PORT-PLAN.md wave 4). It is a stated gap, not a
-;               silent one: the harness asserts mode 0 against tools/c64ref.py
-;               bit for bit and no wave-1 gate claims the others
+;   mode        0 = standard text, the only mode the flush hands this
+;               composer; the other modes are c64scr.c's c64_bandx (C64-SPEC
+;               §9.10). A nonzero mode still fills the span with c64_bgfill,
+;               a fallback nothing calls. The harness asserts mode 0 against
+;               tools/c64ref.py bit for bit
 ;   bg          $D021, for the mode != 0 fill
 ;
 ; MONOCHROME BY LUMINANCE, RELATIVELY (C64-SPEC §9.6). The C hands over
@@ -229,6 +238,562 @@ _c64_band1:
 ; It is the reason the ES sentinel case exists in hosttest/c64memtest.asm: the
 ; forward and reverse `repe cmpsb` below load ES on purpose, and DF is set for
 ; the reverse scan and cleared before the return.
+
+; -----------------------------------------------------------------------------
+; void c64_sprconv(const unsigned char *sd, unsigned char *on,
+;                  unsigned char *lit, int mode, const unsigned *xexp)
+; One sprite line's three data bytes as c64_sprrow's ON and LIT (C64-SPEC
+; 9.11), all near: MODE bit 0 multicolour, bit 1 X-expanded (each byte is
+; two, through XEXP's 256 doubled words, high byte first), bits 2-4 whether
+; $D025, the sprite's own colour and $D026 are brighter than the paper. A
+; multicolour byte's pairs 01/10/11 are split as c64_bandbm splits a bitmap
+; byte. It was c64_spr_draw's C, a line at a time: 12% of a 286 under PCUG's
+; logo in the window.
+; -----------------------------------------------------------------------------
+_c64_sprconv:
+    push bp
+    mov bp, sp
+    sub sp, 8
+    push si
+    push di
+    cld
+    mov si, [bp+4]
+    mov di, [bp+6]
+    mov ax, [bp+8]
+    mov [bp-8], ax                  ; the LIT pointer
+    mov dx, [bp+10]
+    xor ax, ax
+    test dl, 4
+    jz .m1
+    mov al, 0xFF
+.m1:
+    mov [bp-2], al                  ; $D025 lit: all or nothing
+    xor ax, ax
+    test dl, 8
+    jz .m2
+    mov al, 0xFF
+.m2:
+    mov [bp-4], al                  ; the sprite's own colour
+    xor ax, ax
+    test dl, 16
+    jz .m3
+    mov al, 0xFF
+.m3:
+    mov [bp-6], al                  ; $D026
+    mov cx, 3
+.byte:
+    push cx
+    lodsb
+    test byte [bp+10], 1
+    jz .hires
+    mov ah, al                      ; the pairs' high bits...
+    shr ah, 1
+    and ah, 0x55
+    and al, 0x55                    ; ...and their low bits
+    mov cl, ah
+    and cl, al                      ; 11
+    xor ah, cl                      ; 10
+    xor al, cl                      ; 01
+    mov ch, al                      ; each to both pixels of its pair
+    shl ch, 1
+    or al, ch
+    mov ch, ah
+    shl ch, 1
+    or ah, ch
+    mov ch, cl
+    shl ch, 1
+    or cl, ch
+    mov dl, al
+    and dl, [bp-2]
+    mov dh, ah
+    and dh, [bp-4]
+    or dl, dh
+    mov dh, cl
+    and dh, [bp-6]
+    or dl, dh                       ; LIT
+    or al, ah
+    or al, cl                       ; ON
+    jmp short .store
+.hires:
+    mov dl, al
+    and dl, [bp-4]
+.store:
+    test byte [bp+10], 2
+    jnz .xs
+    mov [di], al
+    inc di
+    mov bx, [bp-8]
+    mov [bx], dl
+    inc word [bp-8]
+    jmp short .next
+.xs:
+    mov bx, [bp+12]
+    xor ah, ah
+    shl ax, 1
+    add bx, ax
+    mov ax, [bx]
+    mov [di], ah
+    mov [di+1], al
+    add di, 2
+    mov bx, [bp+12]
+    mov al, dl
+    xor ah, ah
+    shl ax, 1
+    add bx, ax
+    mov ax, [bx]
+    mov bx, [bp-8]
+    mov [bx], ah
+    mov [bx+1], al
+    add word [bp-8], 2
+.next:
+    pop cx
+    dec cx
+    jz .done
+    jmp .byte
+.done:
+    pop di
+    pop si
+    add sp, 8
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; void c64_sprrow(unsigned char *dst, const unsigned char *on,
+;                 const unsigned char *lit, int n, int cell, int sh,
+;                 int f, int l)
+; One line of a sprite over one band line (C64-SPEC 9.11): N bytes of pixels,
+; ON (the pixels the sprite sets) and LIT (those of them brighter than the
+; paper), placed from band cell CELL shifted SH (0..7) pixels right, and
+; only into cells F..L - the rest are another flush's. Each byte straddles
+; two cells: `shr ax, cl` with the byte in AH splits it into both at once.
+; -----------------------------------------------------------------------------
+_c64_sprrow:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    mov ax, [bp+4]
+    add [bp+16], ax                 ; f -> &dst[f]
+    add [bp+18], ax                 ; l -> &dst[l]
+    mov di, ax
+    add di, [bp+12]                 ; &dst[cell]
+    mov si, [bp+6]
+    mov bx, [bp+8]
+    mov cx, [bp+14]                 ; CL = the shift
+    cmp word [bp+10], 0
+    jle .out
+.lp:
+    mov ah, [si]
+    xor al, al
+    shr ax, cl                      ; AH this cell's part, AL the next's
+    mov dh, [bx]
+    xor dl, dl
+    shr dx, cl
+    cmp di, [bp+16]
+    jb .n1
+    cmp di, [bp+18]
+    ja .n1
+    not ah
+    and [di], ah
+    or [di], dh
+.n1:
+    inc di
+    cmp di, [bp+16]
+    jb .n2
+    cmp di, [bp+18]
+    ja .n2
+    not al
+    and [di], al
+    or [di], dl
+.n2:
+    inc si
+    inc bx
+    dec word [bp+10]
+    jnz .lp
+.out:
+    pop di
+    pop si
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; int c64_bandfind(const unsigned *sig, const unsigned *shsig, int n, int kmax)
+; C64-SPEC 9.4.1's band test: for k = -kmax..kmax (not 0), the longest run of
+; rows i with sig[i] == shsig[i+k], scored by how many of them CHANGED
+; (sig[i] != shsig[i]). Answers the best k (0: no run scored), and leaves the
+; run's first and last row in _c64_sb0/_c64_sb1 and its score in _c64_bfbest.
+; It was C, and 14% of a 286 under the Portland CUG demo's snow.
+; -----------------------------------------------------------------------------
+_c64_bandfind:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    mov word [_c64_bfbest], 0
+    mov word [c64_bfk], 0
+    mov ax, [bp+10]
+    neg ax
+    mov [c64_bfkk], ax              ; k = -kmax
+.kloop:
+    mov ax, [c64_bfkk]
+    cmp ax, [bp+10]
+    jle .kgo
+    jmp .done
+.kgo:
+    or ax, ax
+    jnz .k1
+    jmp .knext
+.k1:
+    ; ONLY THE ROWS WHOSE PARTNER EXISTS: i from max(0, -k) to
+    ; min(n, n - k), walked by pointer - where every i used to be tested
+    ; against both ends and its two words found from the arguments. The same
+    ; runs in the same order, so the same answer
+    xor bx, bx                      ; BX = the first i
+    mov cx, [bp+8]                  ; CX = one past the last
+    or ax, ax
+    jns .kpos
+    neg ax
+    mov bx, ax
+    jmp short .krng
+.kpos:
+    sub cx, ax
+.krng:
+    sub cx, bx
+    jg .kwalk
+    jmp .knext
+.kwalk:
+    mov [c64_bfcnt], cx
+    shl bx, 1
+    mov si, [bp+4]
+    add si, bx                      ; SI = &sig[i]
+    mov di, [bp+6]
+    add di, bx
+    mov ax, [c64_bfkk]
+    shl ax, 1
+    add di, ax                      ; DI = &shsig[i + k]
+    add bx, [bp+6]                  ; BX = &shsig[i]
+    xor cx, cx                      ; CX = the run, DX = its changed rows
+    xor dx, dx
+.iloop:
+    mov ax, [si]
+    cmp ax, [di]
+    jne .brk
+    or cx, cx
+    jnz .run
+    push ax
+    mov ax, si
+    sub ax, [bp+4]
+    shr ax, 1
+    mov [c64_bfst], ax              ; the run's first row
+    pop ax
+.run:
+    inc cx
+    cmp ax, [bx]                    ; shsig[i]: did it change?
+    je .inext
+    inc dx
+    jmp short .inext
+.brk:
+    jcxz .inext
+    call .score
+    xor cx, cx
+    xor dx, dx
+.inext:
+    add si, 2
+    add di, 2
+    add bx, 2
+    dec word [c64_bfcnt]
+    jnz .iloop
+    call .score
+.knext:
+    inc word [c64_bfkk]
+    jmp .kloop
+.done:
+    mov ax, [c64_bfk]
+    pop di
+    pop si
+    pop bp
+    ret
+; the run that just ended (CX rows, DX changed, from c64_bfst): the best yet?
+.score:
+    cmp dx, [_c64_bfbest]
+    jle .sr
+    mov [_c64_bfbest], dx
+    mov ax, [c64_bfkk]
+    mov [c64_bfk], ax
+    mov ax, [c64_bfst]
+    mov [_c64_sb0], ax
+    add ax, cx
+    dec ax
+    mov [_c64_sb1], ax
+.sr:
+    ret
+
+; -----------------------------------------------------------------------------
+; int c64_neq(const unsigned char *a, const unsigned char *b, int nwords)
+; 1 when NWORDS words at A and B differ, else 0 (C64-SPEC 9.4.1's source
+; proof: a row's 80 source bytes against what it was drawn from)
+; -----------------------------------------------------------------------------
+_c64_neq:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    push es
+    push ds
+    pop es
+    cld
+    mov si, [bp+4]
+    mov di, [bp+6]
+    mov cx, [bp+8]
+    xor ax, ax
+    jcxz .same
+    repe cmpsw
+    je .same
+    inc ax
+.same:
+    pop es
+    pop di
+    pop si
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; int c64_rvdiff(const unsigned char *a, const unsigned char *b)
+; 1 when two 48-byte display-register sets (C64-SPEC 9.10, C64_RVN) differ,
+; else 0. The latch asks it for every row a write landed on, every frame -
+; it was a C word loop and 8% of a 286 under a demo that splits every row.
+; -----------------------------------------------------------------------------
+; int c64_runfind(const unsigned char *a, const unsigned char *b, int from)
+; The next RUN of changed cells in two 80-byte source records (C64-SPEC 9.4.1:
+; 40 matrix bytes, then 40 colour bytes), both near: from cell FROM on, the
+; first cell whose matrix or colour byte differs, extended over every later
+; differing cell until three equal cells in a row (a gap of two or fewer is
+; folded in). Answers (first << 8) | last, or -1 when nothing from FROM on
+; differs. It was c64scr.c's loop, and SmallerC's byte loop cost the 286 more
+; than the cells it saved composing.
+_c64_runfind:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    mov si, [bp+4]
+    mov di, [bp+6]
+    mov bx, [bp+8]
+.seek:
+    cmp bx, 40
+    jae .none
+    mov al, [si+bx]
+    cmp al, [di+bx]
+    jne .hit
+    mov al, [si+bx+40]
+    cmp al, [di+bx+40]
+    jne .hit
+    inc bx
+    jmp short .seek
+.hit:
+    mov cx, bx                      ; CL = the run's first cell
+    mov dx, bx                      ; DL = its last differing cell
+.ext:
+    inc bx
+    cmp bx, 40
+    jae .done
+    mov ax, bx
+    sub ax, dx
+    cmp ax, 3                       ; three equal cells since the last: ends
+    ja .done
+    mov al, [si+bx]
+    cmp al, [di+bx]
+    jne .more
+    mov al, [si+bx+40]
+    cmp al, [di+bx+40]
+    je .ext
+.more:
+    mov dx, bx
+    jmp short .ext
+.done:
+    mov ah, cl
+    mov al, dl
+    jmp short .out
+.none:
+    mov ax, -1
+.out:
+    pop di
+    pop si
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+_c64_rvdiff:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    push es
+    push ds
+    pop es                          ; both sets are near: ES = DS for cmpsw
+    cld
+    mov si, [bp+4]
+    mov di, [bp+6]
+    mov cx, 24
+    xor ax, ax
+    repe cmpsw
+    je .same
+    inc ax
+.same:
+    pop es
+    pop di
+    pop si
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; void c64_bandbm(unsigned char *dst, const unsigned char *xm,
+;                 const unsigned char *xb, const unsigned char *col,
+;                 int n, int mc, int bg)
+; N cells of a BITMAP row into the band (C64-SPEC 9.10): dst is the band at
+; the first cell, xm the cells' matrix bytes, xb their bitmap bytes (eight a
+; cell), col their colour RAM nibbles, all near - c64scr.c copies the matrix
+; and bitmap out of the RAM claim first. mc 0 is hires (a 1 bit takes the
+; matrix's high nibble, a 0 its low); mc 1 is multicolour (pairs 00 paper,
+; 01 high nibble, 10 low, 11 colour RAM). Each colour is its 4x4 ordered
+; dither out of _c64_dmask[colour][line & 3].
+;
+; THE MULTICOLOUR BYTE HAS NO LOOP AND NO SHIFT BY A COUNT: AH = the pairs'
+; high bits and AL their low bits, both on the 0x55 lattice, give the four
+; pair-value selectors in seven ALU ops; one word shift doubles two of them
+; to both pixels of their pair at once (only bits 0-6 are set, so nothing
+; crosses from the low byte to the high), and four ANDs against the block
+; pick the colours. It is c64scr.c's loop at ~22 instructions a byte.
+; -----------------------------------------------------------------------------
+_c64_bandbm:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    cld
+    mov cx, [bp+12]                 ; n
+    cmp cx, 0
+    jg .go
+    jmp .out
+.go:
+    mov bx, [bp+16]                 ; the paper's phases, once a call
+    and bx, 15
+    shl bx, 1
+    shl bx, 1
+    mov ax, [_c64_dmask+bx]
+    mov [c64_bmblk], ax
+    mov ax, [_c64_dmask+bx+2]
+    mov [c64_bmblk+2], ax
+    mov si, [bp+8]                  ; xb
+    mov di, [bp+4]                  ; dst
+.cell:
+    push cx
+    mov bx, [bp+6]                  ; the matrix byte
+    mov al, [bx]
+    inc bx
+    mov [bp+6], bx
+    mov bl, al                      ; its high nibble's phases -> block+4
+    xor bh, bh
+    and bl, 0xF0
+    shr bx, 1
+    shr bx, 1
+    mov dx, [_c64_dmask+bx]
+    mov [c64_bmblk+4], dx
+    mov dx, [_c64_dmask+bx+2]
+    mov [c64_bmblk+6], dx
+    mov bl, al                      ; ...its low nibble's -> block+8
+    and bl, 15
+    xor bh, bh
+    shl bx, 1
+    shl bx, 1
+    mov dx, [_c64_dmask+bx]
+    mov [c64_bmblk+8], dx
+    mov dx, [_c64_dmask+bx+2]
+    mov [c64_bmblk+10], dx
+    mov bx, [bp+10]                 ; ...and the colour RAM's -> block+12
+    mov al, [bx]
+    inc bx
+    mov [bp+10], bx
+    mov bl, al
+    and bl, 15
+    xor bh, bh
+    shl bx, 1
+    shl bx, 1
+    mov dx, [_c64_dmask+bx]
+    mov [c64_bmblk+12], dx
+    mov dx, [_c64_dmask+bx+2]
+    mov [c64_bmblk+14], dx
+    mov ax, di
+    add ax, 320                     ; eight lines of a 40-byte band
+    mov [c64_bmend], ax
+    mov bx, c64_bmblk
+    cmp word [bp+14], 0
+    je .hline
+.mline:
+    lodsb
+    mov ah, al
+    shr ah, 1
+    and ax, 0x5555                  ; AH = high bits, AL = low bits
+    mov ch, ah
+    and ch, al                      ; s3 = 11
+    mov cl, ah
+    xor cl, ch                      ; s2 = 10
+    mov dl, al
+    xor dl, ch                      ; s1 = 01
+    mov dh, ah
+    or dh, al
+    xor dh, 0x55                    ; s0 = 00
+    mov ax, cx
+    shl ax, 1
+    or cx, ax                       ; s3, s2 doubled
+    mov ax, dx
+    shl ax, 1
+    or dx, ax                       ; s0, s1 doubled
+    and dh, [bx]                    ; paper
+    and dl, [bx+4]                  ; high nibble
+    and cl, [bx+8]                  ; low nibble
+    and ch, [bx+12]                 ; colour RAM
+    or ch, cl
+    or dl, dh
+    or ch, dl
+    mov [di], ch
+    add di, 40
+    inc bx
+    cmp bx, c64_bmblk+4
+    jne .m2
+    mov bx, c64_bmblk
+.m2:
+    cmp di, [c64_bmend]
+    jne .mline
+    jmp .next
+.hline:
+    lodsb                           ; hires: (b & high) | (~b & low)
+    mov ah, al
+    not ah
+    and al, [bx+4]
+    and ah, [bx+8]
+    or al, ah
+    mov [di], al
+    add di, 40
+    inc bx
+    cmp bx, c64_bmblk+4
+    jne .h2
+    mov bx, c64_bmblk
+.h2:
+    cmp di, [c64_bmend]
+    jne .hline
+.next:
+    sub di, 320 - 1                 ; the next cell, line 0
+    pop cx
+    dec cx
+    jz .out
+    jmp .cell
+.out:
+    pop di
+    pop si
+    pop bp
+    ret
+
 ; -----------------------------------------------------------------------------
 _c64_rowspan:
     push bp
@@ -501,6 +1066,374 @@ _c64_band_x2:
     dec dx
     jnz .row
 .out:
+    pop di
+    pop si
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; int c64_colrow(const unsigned char *m, int n, int sh, const unsigned char *g)
+; A SPRITE COLLISION ON ONE LINE (C64-SPEC 5.3.1): N bytes of opaque mask M,
+; whose first pixel is SH (0..7) pixels into G's first byte, against G - the
+; foreground of the cells under it, or another sprite's mask. Nonzero when a
+; set bit of M meets a set bit of G. G is read N + 1 bytes long. Byte i of M
+; covers the last 8 - SH pixels of G[i] and the first SH of G[i + 1]: one
+; 16-bit shift splits it between the two.
+; -----------------------------------------------------------------------------
+_c64_colrow:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    mov si, [bp+4]
+    mov dx, [bp+6]
+    mov cx, [bp+8]
+    mov di, [bp+10]
+    xor ax, ax
+    test dx, dx
+    jle .out
+.b:
+    mov bh, [si]
+    inc si
+    xor bl, bl
+    shr bx, cl
+    and bh, [di]
+    and bl, [di+1]
+    or bh, bl
+    jnz .hit
+    inc di
+    dec dx
+    jnz .b
+    jmp short .out
+.hit:
+    inc ax
+.out:
+    pop di
+    pop si
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; int c64_colrows(const unsigned char *mk, int n, int sh,
+;                 const unsigned char *g, int lines, int ye)
+; c64_colrow over LINES lines of one sprite in one character row (C64-SPEC
+; 5.3.1): line i's mask at MK (N bytes; a data line's mask 7 bytes after the
+; last, c64_sprmasks' slots), its foreground G + i at a stride of 8 - a cell's eight lines, as
+; c64_xb lays them out. YE bit 0: Y-expanded, the mask advancing every second
+; line; bit 1: the first line is its data line's second. Nonzero at the first
+; line that meets the foreground. One call a row, where the C loop it replaced
+; was most of a scan.
+; -----------------------------------------------------------------------------
+_c64_colrows:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    mov cx, [bp+8]
+    mov si, [bp+4]
+    mov di, [bp+10]
+.line:
+    cmp word [bp+12], 0
+    jle .none
+    push si
+    push di
+    mov dx, [bp+6]
+.b:
+    mov bh, [si]
+    inc si
+    xor bl, bl
+    shr bx, cl
+    and bh, [di]
+    and bl, [di+8]
+    or bh, bl
+    jnz .hit
+    add di, 8
+    dec dx
+    jnz .b
+    pop di
+    pop si
+    inc di                          ; the cells' next pixel line
+    dec word [bp+12]
+    test byte [bp+14], 1
+    jz .adv
+    xor byte [bp+14], 2             ; Y-expanded: a data line is two lines
+    test byte [bp+14], 2
+    jnz .line                       ; ...and this was its first
+.adv:
+    add si, 7
+    jmp short .line
+.hit:
+    pop di
+    pop si
+    mov ax, 1
+    jmp short .out
+.none:
+    xor ax, ax
+.out:
+    pop di
+    pop si
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; int c64_colblank(unsigned seg, unsigned a, int n, int mask,
+;                  const unsigned char *bk)
+; Whether the N character codes at SEG:A (each ANDed with MASK) are all
+; BLANK by BK's 256 answers (C64-SPEC 5.3.1): 1 all blank, 0 one is not, and
+; 2 + i when code i has no answer yet - the caller takes it and asks again
+; from i. SEG is the C64's RAM: the codes are read where they are.
+; -----------------------------------------------------------------------------
+_c64_colblank:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    push es
+    mov es, [bp+4]
+    mov si, [bp+6]
+    mov cx, [bp+8]
+    mov dx, [bp+10]
+    mov di, [bp+12]
+    xor bx, bx
+    mov ax, 1
+    jcxz .out
+.c:
+    mov bl, [es:si]
+    inc si
+    and bl, dl
+    cmp byte [di+bx], 1
+    jb .unk
+    ja .not
+    loop .c
+    jmp short .out                  ; (AX is still 1)
+.not:
+    xor ax, ax
+    jmp short .out
+.unk:
+    mov ax, si
+    sub ax, [bp+6]
+    inc ax                          ; SI was one past code i: 2 + i
+.out:
+    pop es
+    pop di
+    pop si
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; c64_mline - one sprite data line (3 bytes at SI, SI moved past them) as its
+; OPAQUE mask, 7 bytes at DI (C64-SPEC 5.3.1): DL bit 0 multicolour (a pair is
+; opaque unless 00), bit 1 X-expanded (each byte two, through c64_mlx's
+; doubled words, high byte first). Three or six bytes and zeros to the
+; seventh, so another sprite's line can be read against it one byte past its
+; end. Clobbers AX BX CX.
+; -----------------------------------------------------------------------------
+section .bss
+c64_mlx:    resw 1                          ; c64_xexp, for c64_mline
+section .text
+c64_mline:
+    push di
+    mov cx, 3
+.b:
+    lodsb
+    test dl, 1
+    jz .hi
+    mov ah, al
+    shr ah, 1
+    or al, ah
+    and al, 0x55
+    mov ah, al
+    shl ah, 1
+    or al, ah                       ; a pair: both pixels, unless 00
+.hi:
+    test dl, 2
+    jnz .xe
+    mov [di], al
+    inc di
+    loop .b
+    mov word [di], 0                ; bytes 3-6
+    mov word [di+2], 0
+    jmp short .e
+.xe:
+    xor ah, ah
+    mov bx, ax
+    shl bx, 1
+    add bx, [c64_mlx]
+    mov ax, [bx]
+    mov [di], ah                    ; the left half first
+    mov [di+1], al
+    add di, 2
+    loop .b
+    mov byte [di], 0                ; byte 6
+.e:
+    pop di
+    ret
+
+; -----------------------------------------------------------------------------
+; void c64_sprmasks(const unsigned char *sd, unsigned char *mk, int md,
+;                   const unsigned *xexp)
+; A sprite's 21 data lines as their opaque masks, c64_mline's 7 bytes apart
+; at MK (C64-SPEC 5.3.1); MD as c64_mline's DL.
+; -----------------------------------------------------------------------------
+_c64_sprmasks:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    mov ax, [bp+10]
+    mov [c64_mlx], ax
+    mov si, [bp+4]
+    mov di, [bp+6]
+    mov dl, [bp+8]
+    mov dh, 21
+.l:
+    call c64_mline
+    add di, 7
+    dec dh
+    jnz .l
+    pop di
+    pop si
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; int c64_colpair(const unsigned char *sa, const unsigned char *sb, int nb,
+;                 int d, int lines, int ye, int md, const unsigned *xexp,
+;                 unsigned char *tmp)
+; Two sprites over LINES lines (C64-SPEC 5.3.1), from their RAW data: SA and
+; SB the data line each starts on, B's first pixel D (0..47) pixels right of
+; A's, NB bytes of B that can meet A. YE bit 0 A is Y-expanded and bit 1 its
+; first line is a data line's second; bits 2 and 3 the same for B. MD bits
+; 0-1 A's c64_mline mode, 2-3 B's. TMP is 16 bytes of scratch. Each line is
+; converted as it is reached - a pair usually meets on its first, where the
+; sprites' 21 masks each would be most of the scan. Nonzero at the first
+; line where an opaque pixel of each meets.
+; -----------------------------------------------------------------------------
+_c64_colpair:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    mov ax, [bp+18]
+    mov [c64_mlx], ax
+.line:
+    cmp word [bp+12], 0
+    jle .none
+    mov si, [bp+4]
+    mov di, [bp+20]
+    mov dl, [bp+16]
+    call c64_mline                  ; A's line at TMP
+    mov si, [bp+6]
+    add di, 8
+    mov dl, [bp+16]
+    shr dl, 1
+    shr dl, 1
+    call c64_mline                  ; B's at TMP + 8
+    mov si, di
+    mov cx, [bp+10]
+    mov di, cx
+    and cx, 7
+    shr di, 1
+    shr di, 1
+    shr di, 1
+    add di, [bp+20]                 ; A from D's byte
+    mov dx, [bp+8]
+.b:
+    mov bh, [si]
+    inc si
+    xor bl, bl
+    shr bx, cl
+    and bh, [di]
+    and bl, [di+1]
+    or bh, bl
+    jnz .hit
+    inc di
+    dec dx
+    jg .b
+    dec word [bp+12]
+    mov ax, [bp+14]
+    test al, 1                      ; A Y-expanded:
+    jz .anext
+    xor al, 2
+    test al, 2
+    jnz .bstep                      ; ...a first half: the same line again
+.anext:
+    add word [bp+4], 3
+.bstep:
+    test al, 4
+    jz .bnext
+    xor al, 8
+    test al, 8
+    jnz .stepped
+.bnext:
+    add word [bp+6], 3
+.stepped:
+    mov [bp+14], ax
+    jmp .line
+.hit:
+    mov ax, 1
+    jmp short .out
+.none:
+    xor ax, ax
+.out:
+    pop di
+    pop si
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; void c64_sprbehind(unsigned char *on, int n, int sh, const unsigned char *g)
+; A sprite BEHIND the foreground ($D01B, C64-SPEC 5.3): its N bytes of ON lose
+; every pixel the foreground has. ON's first pixel is SH (0..7) pixels into
+; G's first byte, and G steps 8 bytes a cell (c64_xb's layout: a cell's eight
+; lines). Byte i of ON covers the last 8 - SH pixels of G[8i] and the first
+; SH of G[8i + 8]: one 16-bit shift left joins them.
+; -----------------------------------------------------------------------------
+_c64_sprbehind:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    mov di, [bp+4]
+    mov dx, [bp+6]
+    mov cx, [bp+8]
+    mov si, [bp+10]
+.b:
+    mov ah, [si]
+    mov al, [si+8]
+    shl ax, cl
+    not ah
+    and [di], ah
+    inc di
+    add si, 8
+    dec dx
+    jg .b
+    pop di
+    pop si
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; void c64_wmove(void *dst, const void *src, int nw)
+; NW words, DS to DS, forward - a scrolled row's shadows (c64_row_slide, 9.4),
+; ~150 rows a second under the PCUG demo's scroll, at half os88_memcpy's
+; byte-at-a-time cost. Blocks that do not overlap.
+; -----------------------------------------------------------------------------
+_c64_wmove:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    push es
+    push ds
+    pop es
+    cld
+    mov di, [bp+4]
+    mov si, [bp+6]
+    mov cx, [bp+8]
+    rep movsw                       ; cc8086:allow ES = DS, loaded above and
+                                    ; restored below; DF clear
+    pop es
     pop di
     pop si
     pop bp

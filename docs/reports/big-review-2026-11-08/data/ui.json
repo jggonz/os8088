@@ -1,0 +1,786 @@
+{
+ "area": "ui",
+ "title": "The UI task, toasts, clipboard, About, spinner",
+ "summary": "The UI task's model is sound, and in places better than the period systems it imitates. Every window callback goes through one dispatch environment (ui_bill). Posted work is gated by one OR-byte that the tick re-sets, so a forgotten post arrives late instead of never. The idle really sleeps, with the lost wakeup closed inside one cli span. Chrome boxes fire on the release, with the identity re-checked there. Toasts and the clipboard are small, honest designs: their hostile-input bounds are real, and the assembler enforces the toast length cap. The defects are narrow but real. On kern_big, the About box indexes its adapter table past the end on a VESA desktop; SPEC.md 39.29.4 named this and nobody fixed it. The race SPEC.md 13.9.2 fixed for timers is still open on the content-click, right-click and W_ONDRAG paths: the handler is read before gfx_lock and never re-tested. ui_dispatch identifies Locator by reading AM_ONCMD = 0 from a package segment without the lock. A typed plain Enter can be swallowed by the Alt+Enter latch. A toast raised under a fullscreen window expires unseen. The largest weakness is prose. ui.inc carries about two comment-only lines for every line of code, much of it size-pass history, and over fifty statements across the area's comments, SPEC sections 13, 14, 55, 59 and 75, and the SDK no longer match the code. SPEC.md 13's numbered loop describes a ui_task several redesigns old. The SDK tells package authors that a worker may call the clipboard, which the code says is unsafe. (Verification: 2 of the reviewer's 53 doc mismatches were refuted (ui.inc:1449's %endif tag, which the block's ui_timer_pass banner justifies, and an ABI-fingerprinted SDK contract line that is approximately true); the other 51 are applied as 59 exact edits. The ui_bill liveness test is 5 bytes, not 6.)",
+ "strengths": [
+  {
+   "title": "One dispatch environment for every window callback (ui_bill)",
+   "evidence": "kernel/ui.inc:1219-1247",
+   "why": "W_ONKEY, W_ONCLICK, W_ONMOUSEUP, W_ONDRAG, W_ONRC, W_ONWH, W_ONTIMER, AM_ONCMD and ui_rcmd share one stamp/bill/call body, so their environments cannot drift. The payload is banked on SS and swapped back through BP, which stores the start stamp into the freed slots at no extra cost."
+  },
+  {
+   "title": "Posted work degrades to latency, never to loss",
+   "evidence": "kernel/ui.inc:730-752, 1081-1088",
+   "why": "The xchg test-and-clear is atomic against an ISR, flags are cleared before the walk, and the tick sweep re-sets [ui_post], so a forgotten setter costs 55 ms rather than a dead feature. This is Win16's synthesize-from-flags lesson (WM_PAINT/WM_TIMER) applied to kernel deferred work. Copy it for any new deferred flag."
+  },
+  {
+   "title": "The idle halts, and the lost wakeup is closed correctly",
+   "evidence": "kernel/ui.inc:1156-1184",
+   "why": "The [sch_uiwake] test and task_sleep's state store share one IF=0 span, and the byte is spent on the far side either way. The comment records why [ui_post] cannot double as the wake byte. Mac System 6 spun in SystemTask, and Win3.x idled only through int 2Fh 1680h in Enhanced mode."
+  },
+  {
+   "title": "Release-edge chrome with identity re-check and a queue-aware stale-arm drop",
+   "evidence": "kernel/ui.inc:330-403, 667-682, 773-783, 1326-1371",
+   "why": "This is Mac TrackGoAway done as a once-per-pass sample with no modal loop. The arm is dropped only when the button is up AND the ring is empty, which is what keeps keyboard-mouse closes working. ui_lit_* draws only on a state change."
+  },
+  {
+   "title": "Byte-saving layout tricks held by %error, not prose",
+   "evidence": "kernel/ui.inc:1401, 1469, 3258, 3309-3320; kernel/toast.inc:137, 743",
+   "why": "The fall-through pairs, adjacent flag bytes, word-indexed x/y pairs and the two toast records of one shape all fail the build when moved, so the tricks stay safe."
+  },
+  {
+   "title": "Toast input treated as hostile, length cap owned by the assembler",
+   "evidence": "kernel/toast.inc:204-266, 214-217; kernel/kernel.asm:340-367",
+   "why": "Two independent bounds (characters kept, bytes examined), a printable-only filter, cld against a std package, and a TTL clamp to the signed-compare range. TOASTSTR/TOASTRUN fail at the line that wrote an over-long message."
+  },
+  {
+   "title": "toast_now draws on a fact, not an inference",
+   "evidence": "kernel/toast.inc:392-410",
+   "why": "It compares the lock's owner against the running task in one word read, and the torn-read interleaving is argued."
+  },
+  {
+   "title": "Clipboard sized to content, kernel-tagged, source pinned, and honest about its context",
+   "evidence": "kernel/clip.inc:36-56, 98-145",
+   "why": "A machine that never copies pays nothing; the copy survives the app's close; the caller's segment is pinned across the claim. The header states exactly why the burst is safe today and what would break it."
+  },
+  {
+   "title": "ui_drag_phase's interval safety argument",
+   "evidence": "kernel/ui.inc:2049-2063, 2095-2105",
+   "why": "Snapping toward the origin needs no clamp of its own on one display, and the two-display case where the argument fails keeps an explicit guard. A model of how to write a safety argument down."
+  }
+ ],
+ "findings": [
+  {
+   "id": "ui-1",
+   "kind": "bug",
+   "severity": "medium",
+   "title": "About on a VESA desktop indexes app_about_vid past its end and letters from a garbage pointer",
+   "detail": "app_about_vid has 3 entries, or 4 with GFX_VGA. app_about_paint_x indexes it with [vid_kind] and no bound. On kern_big with VID_EXT, [vid_kind] can be VID_VESA = 4, so the fifth word read is the first two bytes of app_about_v0 ('VG' = 0x4756) and the fourth line is lettered from DS:4756h up to the next NUL. SPEC.md 39.29.4 lists this exact table as broken by kind 4. fsx_capstab and cp_vidnam were fixed (ctrl.inc:7463 has cp_vvesa_buf); this table was not, and SPEC.md 120.5's table omits it.",
+   "evidence": [
+    "kernel/apps.inc:57-66 table has no VID_VESA row",
+    "kernel/apps.inc:113-118 unbounded index, comment says 0..2",
+    "kernel/viddet.inc:110,118-119 VID_VESA = 4 under VID_EXT",
+    "SPEC.md:82191 39.29.4 names app_about_vid as read past its end",
+    "kernel/ctrl.inc:7463 cp_vidnam has the VESA row"
+   ],
+   "recommendation": "Add a %ifdef VID_EXT row and a build-time bound, %if ($ - app_about_vid)/2 != VID_KIND_MAX + 1 / %error, so the next kind fails to assemble here instead of lettering garbage. Alternatively remove the table (ui-10).",
+   "phase": "now",
+   "bytes_est": "+18 .text resident on kern_big/kern_emu/kern_mega, 0 kern_small, 0 for the assert",
+   "prior_art": "",
+   "verdict": "confirmed",
+   "verify_note": "Re-read apps.inc:57-66/113-118: 3 rows, 4 under GFX_VGA; kern_big defines VID_EXT unless NOVIDEXT (kernel.asm:858-862) so [vid_kind] can be VID_VESA = 4 and the fifth word is 'VG' = 4756h from app_about_v0. Not in ABI-BREAK-LIST or KERNEL-BYTE-QUEUE. Note for the fix: a VESA mode's geometry varies (SPEC.md 120), so a fixed-geometry string would itself be wrong; the row wants a geometry-free name (e.g. 'VESA - 256 colors') or ui-10's composed line."
+  },
+  {
+   "id": "ui-2",
+   "kind": "hazard",
+   "severity": "medium",
+   "title": "Content-click, right-click and W_ONDRAG read the handler before gfx_lock and never re-test liveness (SPEC.md 13.9.2's race, unfixed elsewhere)",
+   "detail": "SPEC.md 13.9.2 fixed the timer pass: gfx_lock can block on a dying worker whose inst_task_die destroys the window under the lock and frees the region right after. The fix re-tests W_FLAGS under the lock. .content_front reads W_ONCLICK before gfx_lock with no re-test; ui_rdown reads W_ONRC before ui_rdown.lock; ui_arm_trk tests W_FLAGS and reads W_ONDRAG before the lock. wm_pkgcall has no liveness check, so this ends in a far call through a freed W_SEG, or a #GP on kern_mega. The code's own comments treat a worker reaching inst_task_die in that gap as live.",
+   "evidence": [
+    "kernel/ui.inc:579,592 W_ONCLICK read before gfx_lock",
+    "kernel/ui.inc:1569,1578 W_ONRC read before lock",
+    "kernel/ui.inc:1343-1356 W_ONDRAG tested/read before lock",
+    "kernel/ui.inc:823-831 the timer's under-lock re-test",
+    "kernel/instance.inc:1921-1946 inst_task_die: lock, unwin, unlock, mem_free_rec",
+    "kernel/wm.inc:396-460 wm_pkgcall: no W_FLAGS test",
+    "kernel/ui.inc:365-366,2562-2564 comments assume the path is live"
+   ],
+   "recommendation": "Test once in the funnel: test byte [si+W_FLAGS],1 / jz .out at ui_bill's head (every caller holds the lock; wm_destroy writes W_FLAGS = 0; only the UI task creates windows). Then drop .tp_locked's own W_FLAGS re-test and keep its W_ONTIMER re-read. Add a 'clickrace' row modelled on timerrace.",
+   "phase": "now",
+   "bytes_est": "+5 .text resident in ui_bill, -5 kern_big from .tp_locked: net 0 kern_big, +5 kern_small",
+   "prior_art": "",
+   "verdict": "corrected",
+   "verify_note": "Confirmed on all three paths: .content_front reads W_ONCLICK before gfx_lock (ui.inc:579-592); ui_rdown reads W_ONRC before .lock (1569-1580); ui_arm_trk tests W_FLAGS bit 1 and reads W_ONDRAG, then jumps to ui_rdown.lock (1343-1356). inst_task_die takes the lock, unwinds and sweeps windows, unlocks, then mem_free_rec (instance.inc:1921-1946) - the exact 13.9.2 interleaving. .mup_lk and ui_dispatch .app already re-test under the lock and are safe. Every ui_bill caller passes SI = a window record, so a head test is sound. Byte correction: `test byte [si],1 / jz .out` is 5 bytes (F6 04 01 + 74 xx), not 6: net 0 on kern_big after dropping .tp_locked's identical 5-byte test, +5 on kern_small."
+  },
+  {
+   "id": "ui-3",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "ui_dispatch decides 'is this Locator' by reading AM_ONCMD = 0 in the owner's segment without the lock",
+   "detail": "A package set with AM_ONCMD = 0 (the SDK does not reserve 0) is routed to the kernel ladder. Cell 1 is CMD_CLOSE + item, so a package's first menu item 0 closes the front window and item 1 runs CMD_SCDEL (Remove Shortcut) or CMD_FILES. Separately, .oncmd reads [es:bx+AM_ONCMD] with no BX = 0 test, and menu_win_set takes no lock. A set withdrawn to 0 between .notab's unlocked check and .handler's locked re-read therefore calls the word at offset 2 of the package image; jcxz guards only a zero word.",
+   "evidence": [
+    "kernel/ui.inc:2512-2536 .notab and .kernel",
+    "kernel/ui.inc:2586-2600 .handler/.oncmd reads AM_ONCMD with BX possibly 0",
+    "kernel/menu.inc:2588-2590 only menu_loc_set uses AM_ONCMD = 0",
+    "kernel/menu.inc:497-503 Locator IS [menu_win] = 0",
+    "kernel/menu.inc:448-457 menu_win_set takes no lock",
+    "apps/os88api.inc:4072 0 not reserved"
+   ],
+   "recommendation": "Use cmp word [menu_win],0 / jne .app and fall into .kernel. Delete the push es/KES/wm_strseg/cmp/pop es read. Add or bx,bx / jz .app_done in .oncmd, so a 0 handler is dropped by the existing jcxz.",
+   "phase": "now",
+   "bytes_est": "-19 .text resident, both kernels (est.)",
+   "prior_art": "",
+   "verdict": "confirmed",
+   "verify_note": "Only menu_loc_set has AM_ONCMD = 0 (menu.inc:2590); fm_menus has fm_oncmd_x (files.inc:2685), so [menu_win] = 0 really is the Locator test. SPEC.md 12.2 reserves 0 for Locator but the SDK's AM_ONCMD line (os88api.inc:4072) does not. .handler re-reads [menu_set] under the lock and can see 0 after a MENU_SET 0 in the gap (menu_relayout stores W_MENUS = 0 into [menu_set]), and .oncmd then reads [es:0+2] - the code's own comment names MENU_SET in the gap. -19 is consistent with removing the 22-byte .notab read plus the 8-byte [menu_set] load and adding 7 + 4."
+  },
+  {
+   "id": "ui-4",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "ui_cmd's jump table has no length assert against CMD_LAST",
+   "detail": "ui_cmd bounds the index by CMD_LAST and jumps through .tab. A CMD_* added in menu.inc without a table row assembles cleanly and jumps through the next word in .text, which is the code of .hiber or .ctrl. The comment's own count is already wrong: it says 11 or 12, and the truth is 10, or 11 with shortcuts.",
+   "evidence": [
+    "kernel/ui.inc:3023-3045",
+    "kernel/menu.inc:75-88 CMD_LAST"
+   ],
+   "recommendation": "Add .tab_end and %if (.tab_end - .tab)/2 != CMD_LAST / %error.",
+   "phase": "now",
+   "bytes_est": "0",
+   "prior_art": "",
+   "verdict": "confirmed",
+   "verify_note": "ui_cmd bounds by CMD_LAST and jumps through .tab with no length assert (ui.inc:3022-3045); the rows currently match CMD_* on all three arms; the comment's '11 or 12' is wrong (10, 11)."
+  },
+  {
+   "id": "ui-5",
+   "kind": "bug",
+   "severity": "low",
+   "title": "A typed plain Enter matches the Alt+Enter latch (scancode compare only)",
+   "detail": "The latch holds scancode 0x1C, and the dedupe compares AH alone. Enter (1C0Dh), Shift+Enter and Ctrl+Enter (1C0Ah) all match. An Enter still in the BIOS buffer when Alt+Enter is latched is replaced by Alt+Enter. On an enhanced ROM the enqueued 1C00h is then dispatched as well, so the result is two Alt+Enters (two fullscreen toggles) and no Enter. On an XT ROM the Enter alone is lost. The window is one UI pass.",
+   "evidence": [
+    "kernel/ui.inc:195-207",
+    "kernel/mouse.inc:3198-3214 latch stores KSC_ENTER",
+    "kernel/mouse.inc:2897 keystroke wakes the UI"
+   ],
+   "recommendation": "Add test al,0x0F / jnz .notae before the cmp. The two delivered spellings (1C00h, 1CF0h) have AL's low nibble 0; the Enters (0Dh, 0Ah) do not.",
+   "phase": "now",
+   "bytes_est": "+4 .text resident, both kernels",
+   "prior_art": "",
+   "verdict": "confirmed",
+   "verify_note": "kbd_track latches KSC_ENTER (mouse.inc:3198-3214) and ui_task compares AH alone (ui.inc:195-198), so a buffered 1C0Dh/1C0Ah matches. On an enhanced ROM the later 1C00h then passes .notae as AX = 1C00h - the same AX the latch delivers - so two Alt+Enters and no Enter; on an XT ROM the Enter is lost. `test al,0Fh / jnz` is 4 bytes and separates 00h/F0h from 0Dh/0Ah."
+  },
+  {
+   "id": "ui-6",
+   "kind": "bug",
+   "severity": "low",
+   "title": "A toast raised under a fullscreen window or saver is armed and expires unseen",
+   "detail": "toast_pass .up and toast_now both run toast_arm, which starts [toast_die], before menu_draw_bar, and only menu_draw_bar checks wm_fs_vis. A message raised while the bar is covered runs out its seconds invisibly. The comment says 'the message waits for it to end'.",
+   "evidence": [
+    "kernel/toast.inc:637-639,434-436 arm then draw",
+    "kernel/toast.inc:445-447 deadline set at arm",
+    "kernel/menu.inc:825 the fullscreen guard is in the painter",
+    "kernel/toast.inc:632-633 the claim"
+   ],
+   "recommendation": "In .up, leave [toast_want] set and skip the arm while wm_fs_vis answers CF = 1, so the message keeps the comment's promise. Otherwise correct the comment and SPEC.md 59.3.",
+   "phase": "now",
+   "bytes_est": "+5 to +10 .text resident (both arming sites), or 0 (documentation route)",
+   "prior_art": "",
+   "verdict": "corrected",
+   "verify_note": "Confirmed: toast_arm stamps [toast_die] (toast.inc:445-447) before menu_draw_bar's wm_fs_vis guard (menu.inc:825), and the expiry compare runs regardless. Correction: the proposed .up guard covers toast_pass only - toast_now's painter toast_ad (toast.inc:434-436) also arms first, so a toast raised from a fullscreen window's own callback still runs out unseen; keeping the comment's promise needs the guard in toast_arm's two callers (~+5 each) or in toast_arm itself."
+  },
+  {
+   "id": "ui-7",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "DF is defended in toast_show but trusted in clip_put, the slot whose failure corrupts the kernel heap",
+   "detail": "toast_show does cld because OSAPI_SLOT does not. clip_put/clip_get trust SPEC.md 1 rule 3. A std package calling clip_put makes rep movsb write clip_seg:0000 and then wrap to clip_seg:FFFF and walk downward - up to 64KB above the claim's base, i.e. into whatever lies past the claim - which is heap corruption from a package bug, while a backwards toast copy is bounded and harmless.",
+   "evidence": [
+    "kernel/toast.inc:204-209",
+    "kernel/clip.inc:150-151,196-198"
+   ],
+   "recommendation": "Add cld in clip_put (and clip_get), or state one rule for the slot surface and remove toast_show's.",
+   "phase": "now",
+   "bytes_est": "+1 (clip_put) or +2 (both), .text resident",
+   "prior_art": "",
+   "verdict": "corrected",
+   "verify_note": "Real: clip_put/clip_get do no cld (clip.inc:150-151, 196-198) while toast_show does. Detail corrected: with DF = 1 the copy writes clip_seg:0000 then wraps to clip_seg:FFFF and walks DOWN, i.e. it corrupts up to 64KB ABOVE the claim's base (past its end), not the arena below it. clip_get under std writes below the caller's own ES:DI, which is the caller's own damage."
+  },
+  {
+   "id": "ui-8",
+   "kind": "hazard",
+   "severity": "medium",
+   "title": "The SDK and SPEC.md 55.4 tell authors a worker may call the clipboard; the code says it must not",
+   "detail": "os88api.inc says 'legal from a window callback AND from a worker (SPEC.md 20.6 rule 7)' and SPEC.md 55.4 says 'Any context'. clip.inc's header says UI task or callback, not a worker, and cites 55.4 for it. clip_put calls mem_claim, which a worker may not do; rule 7's list does not include the clipboard; and the copy is a 32 KB burst between two possibly-movable segments, which is safe only on the UI task. An author following the SDK walks into the race the header describes.",
+   "evidence": [
+    "apps/os88api.inc:5669-5670",
+    "SPEC.md:110111",
+    "kernel/clip.inc:36-56",
+    "SPEC.md:46081-46087 rule 7 list"
+   ],
+   "recommendation": "Correct both texts (doc mismatches). If worker access is ever wanted, the header prices it: a sch_lock bracket round both bursts, +16 bytes.",
+   "phase": "now",
+   "bytes_est": "0",
+   "prior_art": "",
+   "verdict": "confirmed",
+   "verify_note": "os88api.inc:5669-5670 and SPEC.md 55.4 (110111) say workers may call it; clip.inc:36-56 says not a worker and why (mem_claim; 32KB bursts between movable segments); SPEC.md 20.6 rule 7's list (46081-46087) has no clipboard slot."
+  },
+  {
+   "id": "ui-9",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "'The kernel guarantees delivery' of W_ONMOUSEUP is false when the ring dropped the release",
+   "detail": ".arm_done clears a region-0 arm when the button is up and the ring is empty. That is right for the chrome, but for a package a full ring that dropped the EVT_MUP means the release is never delivered, and the package keeps its pressed state drawn: the thing SPEC.md 13.7 exists to prevent.",
+   "evidence": [
+    "kernel/ui.inc:325-327 the claim",
+    "kernel/ui.inc:773-783 the drop",
+    "kernel/events.inc:223-245 evq_mup/evq_push drop on full"
+   ],
+   "recommendation": "When [ui_armr] = 0 at the drop, dispatch W_ONMOUSEUP at [mouse_x]/[mouse_y] through .mup_lk's body. Or weaken the contract to 'unless the event ring overflowed'.",
+   "phase": "now",
+   "bytes_est": "+12 .text resident both kernels (est.), or 0",
+   "prior_art": "",
+   "verdict": "confirmed",
+   "verify_note": ".arm_done drops a region-0 arm when bit 0 of [mouse_btn] is clear and [evq_count] = 0 (ui.inc:773-783) without dispatching W_ONMOUSEUP, while .mup's comment says 'The kernel guarantees delivery' (325-327)."
+  },
+  {
+   "id": "ui-10",
+   "kind": "size",
+   "severity": "low",
+   "title": "About's fourth line from [vid_w]/[vid_h] instead of a per-kind string table",
+   "detail": "The four adapter strings plus the table are about 107 bytes of resident .text on kern_big and 79 on kern_small, and they must stay resident (DS reads them). Every new kind needs a row, and the missing one is ui-1. Composing '<name> - WxH - <colours>' from the live geometry with a short name table makes VESA read true and removes the class of defect.",
+   "evidence": [
+    "kernel/apps.inc:57-66",
+    "kernel/apps.inc:69-72 why the data is resident",
+    "SPEC.md:82185-82196 four kind-indexed tables broke"
+   ],
+   "recommendation": "Reuse clock.inc's resident decimal formatters if one takes a word; measure the symbol span before committing.",
+   "phase": "now",
+   "bytes_est": "-30 to -40 .text resident (ESTIMATED)",
+   "prior_art": "",
+   "verdict": "corrected",
+   "verify_note": "Sizes checked: the four strings are 26+26+21+26 = 99 bytes plus an 8-byte table = 107 on kern_big; kern_small has three strings and three words, 73 + 6 = 79 (not 81). The saving estimate is unmeasured."
+  },
+  {
+   "id": "ui-11",
+   "kind": "prior-art",
+   "severity": "low",
+   "title": "One user-settable double-click interval for the whole machine",
+   "detail": "The kernel has four independent detectors (UI_TDBLT, DESK_DBLT, FM_DBLCLK, FD_DBLCLK), 'deliberately the same number rather than a shared constant', and packages carry their own (SysCheck SC_DBLT, WIN16 LC_DBL, Lemmings). The user's hand is the variable, which is why Mac and Windows made it one setting.",
+   "evidence": [
+    "kernel/ui.inc:61-66",
+    "apps/syscheck/choose.inc:13",
+    "apps/win16/w16dlg.inc:180"
+   ],
+   "recommendation": "Use one .text byte with resting value 9, read by the four detectors and set from the Control Panel's Mouse page in CTRL.DRV. Publish it as an appended inline cell.",
+   "phase": "now",
+   "bytes_est": "+5 resident (+1 each at four compare sites, +1 byte) + 4-byte inline cell; CP UI in the module",
+   "prior_art": "Mac GetDblTime and the Mouse control panel; Win16 GetDoubleClickTime/SetDoubleClickTime",
+   "verdict": "confirmed",
+   "verify_note": "UI_TDBLT, DESK_DBLT and FM_DBLCLK are each `equ 9` and ui.inc:61-66 states the deliberate independence. Byte estimate (+1 per compare site) not measured."
+  },
+  {
+   "id": "ui-12",
+   "kind": "prior-art",
+   "severity": "low",
+   "title": "A clipboard generation count",
+   "detail": "Paint keeps a private bitmap clipboard beside the system text one by design, and no app can tell whether the system clipboard changed since it last looked. That leaves no cheap way to arbitrate 'which paste is newer' or to grey Paste after another app emptied it.",
+   "evidence": [
+    "kernel/clip.inc:7-12",
+    "SPEC.md 55.1"
+   ],
+   "recommendation": "Add inc word [clip_gen] at clip_put's common exit, published as an appended inline cell.",
+   "phase": "now",
+   "bytes_est": "+4 .text, +2 .bss, +4 cell",
+   "prior_art": "Mac Scrap Manager scrapCount (ZeroScrap bumps it; TEFromScrap/TEToScrap sync TextEdit's private scrap on suspend/resume)",
+   "verdict": "unchecked",
+   "verify_note": "Not re-verified (low, prior-art)."
+  },
+  {
+   "id": "ui-13",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "Reserve a format byte (AL = 0 TEXT) on the three clipboard slots",
+   "detail": "SPEC.md 55.1 is right to refuse a registry and negotiation. A format byte, with anything but 0 refused today, still lets the second format 55.1 names (Paint's bitmap) arrive without three new slots. Callers do not set AL now, so it needs a flag day.",
+   "evidence": [
+    "kernel/clip.inc:90-213",
+    "SPEC.md 55.1, 55.4"
+   ],
+   "recommendation": "Batch with the flag day: AL = format on clip_put/clip_get/clip_size, CF = 1 for unknown formats.",
+   "phase": "flagday",
+   "bytes_est": "+8 .text resident",
+   "prior_art": "Win16 CF_TEXT/CF_BITMAP formats; Mac typed scrap ('TEXT', 'PICT')",
+   "verdict": "unchecked",
+   "verify_note": "Not re-verified (low, flag-day rethink)."
+  },
+  {
+   "id": "ui-14",
+   "kind": "perf",
+   "severity": "low",
+   "title": "Clipboard copies are rep movsb",
+   "detail": "A 32 KB put or get is about 117 ms at 17 clocks a byte. rep movsw with a byte tail is about 12.5 clocks a byte on the 8088's 8-bit bus, roughly 87 ms. The question is whether to spend about 12 resident bytes to save 30 ms on the rarest operation in the area: no.",
+   "evidence": [
+    "kernel/clip.inc:39-40,150,198"
+   ],
+   "recommendation": "Do not take it. Recorded so it is not re-derived.",
+   "phase": "record",
+   "bytes_est": "+12 .text resident if taken",
+   "prior_art": "",
+   "verdict": "unchecked",
+   "verify_note": "Not re-verified (low, record only)."
+  },
+  {
+   "id": "ui-15",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "History in comments is where the drift lives",
+   "detail": "ui.inc is about 3,400 lines: roughly 1,150 carry code or data and 1,890 are comment-only or blank, and most code lines carry a trailing comment too; much of that prose is size-pass history and arguments with earlier versions. About fifteen of this review's mismatches are ui.inc's own comments, and nearly all are history that went stale when the code moved: ui_post_cmd, .close_box's lock, the back buffer, Timer/Bounce, STK0_SIZE 1,024, ui_lit_set. The invariant comments (%if blocks, 'binding' notes) are accurate.",
+   "evidence": [
+    "kernel/ui.inc:12,1216,1733,2139,2455,2575,2618,3293",
+    "SPEC.md 13 steps 1-5"
+   ],
+   "recommendation": "Adopt a convention: a comment states the invariant and the reason, and pass history and byte deltas go in the commit message (git log -L finds them). Sweep ui.inc once with the mismatch fixes, and rewrite SPEC.md 13's numbered loop from the code.",
+   "phase": "now",
+   "bytes_est": "0",
+   "prior_art": "",
+   "verdict": "corrected",
+   "verify_note": "The drift is real (this verification confirmed ~16 of ui.inc's own comment mismatches) but the size figures are off: grep counts ~1,150 lines of ui.inc that carry code or data and ~1,890 comment-only or blank lines, besides trailing comments on most code lines - roughly 1:2 by lines, not '550 instructions'."
+  },
+  {
+   "id": "ui-16",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "Under TOAST_Q, one raiser's retire takes down another raiser's message",
+   "detail": "The empty-string path calls toast_kill on whatever is up, while the queue is built on raiser identity. Instance B's 'take my message down' retires A's message. SPEC.md 59.11 documents this, so it is not a bug against the contract, but the contract contradicts its own ownership model.",
+   "evidence": [
+    "kernel/toast.inc:224-229,274,291-301",
+    "SPEC.md 59.11"
+   ],
+   "recommendation": "Retire only when DH = [toast_inst] (or the caller is the kernel, 0FFh).",
+   "phase": "now",
+   "bytes_est": "+6 to +10 .text resident, kern_big",
+   "prior_art": "",
+   "verdict": "corrected",
+   "verify_note": "Confirmed: toast_show's .kill calls toast_kill unconditionally (toast.inc:291-292) while the queue is built on DH identity, and SPEC.md 59.11 documents the behaviour. Bytes: `cmp dh,[toast_inst]` is 4 bytes plus a 2-byte jne, and the kernel (0FFh) exception adds more: about +6 to +10, not +4."
+  },
+  {
+   "id": "ui-17",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "ui_sys_open indexes fm_stattab without the bound toast_say exists to carry",
+   "detail": "The LD_* code is shifted and used as an index with no bound. toast_say was written because an out-of-range code letters whatever follows the table, and LD_NSTAT is its bound. This is latent while ldf_ld_run_name answers in range.",
+   "evidence": [
+    "kernel/ui.inc:2941-2959",
+    "kernel/toast.inc:324-327",
+    "kernel/files.inc:2375 LD_NSTAT"
+   ],
+   "recommendation": "Add `cmp al, LD_NSTAT / jae .back` before the index, or call KERNEL_SEG:toast_say with BX = fm_stattab and CX = LD_NSTAT after ui_tm_back (larger, since .text must far-call it).",
+   "phase": "now",
+   "bytes_est": "+4 (an in-line bound) or ~+6 (the toast_say route) .text resident",
+   "prior_art": "",
+   "verdict": "corrected",
+   "verify_note": "Confirmed latent: ui_sys_open indexes fm_stattab with no bound (ui.inc:2950-2952). Bytes corrected: ui_sys_open is .text and toast_say ends in retf, so the toast_say route is `call KERNEL_SEG:toast_say` (5) plus two 3-byte loads and a jump replacing 8 bytes of index - roughly +6, not -3. A bare `cmp al, LD_NSTAT / jae .back` is +4."
+  },
+  {
+   "id": "ui-18",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "A drag starves background drawing to one yield a tick",
+   "detail": "ui_track lingers with the gfx lock HELD, yielding until the tick, and drops it only between the erase and the re-lock. Background tasks run but can draw only in one yield slot a tick. SPEC.md 13's 'background tasks stay live here' is true of their CPU, not their pixels. This is a deliberate trade (an outline lit more often than dark).",
+   "evidence": [
+    "kernel/ui.inc:1735-1761",
+    "SPEC.md:28287-28296"
+   ],
+   "recommendation": "Keep the behaviour and state it accurately in SPEC.md 13.",
+   "phase": "record",
+   "bytes_est": "0",
+   "prior_art": "Win3.x and Mac froze all drawing during a drag outright",
+   "verdict": "confirmed",
+   "verify_note": "ui_track lingers with the lock held until the tick and unlocks only between erase and redraw (ui.inc:1735-1761); SPEC.md 13's 'background tasks stay live here' (28296) is CPU-only."
+  },
+  {
+   "id": "ui-19",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "A menu 'about to drop' moment for packages",
+   "detail": "The kernel grants itself this moment (ui_loc_gate, fm_bar_gate_x and hb_ok_x run on the press, before menu_track). A package has none, so to grey on facts (SPEC.md 47 rule 5) it must re-point AMENU_ITEMS at every state change, including ones it never sees, such as another app emptying the clipboard. WIN16 already synthesizes WM_INITMENU for its programs.",
+   "evidence": [
+    "kernel/ui.inc:495-513,2465-2485",
+    "SPEC.md:235269"
+   ],
+   "recommendation": "Add a W_ONMENU record word installed by an appended slot (W_ONRC's shape), called through ui_bill under the lock after ui_loc_gate and before menu_track, only for the bar owner that installed one.",
+   "phase": "now",
+   "bytes_est": "+14 .text resident, +24 .bss (kern_big record words), +6 cell",
+   "prior_art": "Mac AdjustMenus before MenuSelect; Win16 WM_INITMENU/WM_INITMENUPOPUP",
+   "verdict": "unchecked",
+   "verify_note": "Not re-verified (low, rethink)."
+  },
+  {
+   "id": "ui-20",
+   "kind": "prior-art",
+   "severity": "low",
+   "title": "One synchronous input path: a slow callback freezes the desktop",
+   "detail": "Every callback runs on task 0, so drags, menus and other windows stop while one handler runs; only the ISR-drawn pointer stays live. toast_now exists because of this. os8088's mitigations (per-callback billing, the Task Manager, worker tasks) are the right cheap answer, and adopting a separate UI thread is a different system.",
+   "evidence": [
+    "kernel/toast.inc:374-379",
+    "kernel/ui.inc:1219-1247"
+   ],
+   "recommendation": "Record only.",
+   "phase": "record",
+   "bytes_est": "0",
+   "prior_art": "OS/2 1.x PM's synchronous input queue had the same property; GEOS (on the 8088) split the UI thread from each app's process thread; AmigaOS ran input and window dragging in input.device's task",
+   "verdict": "unchecked",
+   "verify_note": "Not re-verified (low, record only)."
+  },
+  {
+   "id": "ui-21",
+   "kind": "perf",
+   "severity": "low",
+   "title": "The spinner recomputes the same eight endpoints four times a frame",
+   "detail": "_rowmk runs four times per frame with the same [_cos], each doing 8 _xform imuls. Caching would save about 24 imuls (about 3.5k cycles, 0.75 ms) a frame, at about 2 frames a second during boot, and the boot blob is full to the byte.",
+   "evidence": [
+    "kernel/spinner.inc:112-122,187-216,262-273,134-136"
+   ],
+   "recommendation": "Do not take it.",
+   "phase": "record",
+   "bytes_est": "+15-20 .boot2 if taken",
+   "prior_art": "",
+   "verdict": "confirmed",
+   "verify_note": "spl_spin calls _rowmk once directly and three times through _mkput with the same [_cos] (spinner.inc:112-122); record-only verdict stands."
+  }
+ ],
+ "doc_fixes": [
+  {
+   "file": "kernel/ui.inc",
+   "old_text": "; keyboard, drains one event from the system queue, runs any deferred\n",
+   "new_text": "; keyboard, drains the system event ring (up to EVQ_CAP records a pass,\n; SPEC.md 10.2), runs any deferred\n",
+   "why": "ui_task sets [ui_drain] = EVQ_CAP + 1 and loops .yield -> .evloop until the ring is empty (ui.inc:300, 707-713)."
+  },
+  {
+   "file": "kernel/ui.inc",
+   "old_text": "; ui_post_cmd for the kernel's own CMD_* (SPEC.md 13). The lock is a\n",
+   "new_text": "; a [ui_pcmd] store and a [ui_post] bump for the kernel's own CMD_*\n; (SPEC.md 13). The lock is a\n",
+   "why": "There is no ui_post_cmd routine; stikmenu.inc:1752 writes [ui_pcmd] and bumps [ui_post] itself (ui.inc:2640-2643)."
+  },
+  {
+   "file": "kernel/ui.inc",
+   "old_text": "; Step 4 is the system clock (SPEC.md 37): clk_tick every pass - it is cheap\n",
+   "new_text": "; Step 4 is the system clock (SPEC.md 37): clk_tick on every pass that sees\n; [ticks] move (SPEC.md 13.12) - it is cheap\n",
+   "why": "clk_tick sits after .posted_done's `cmp ax,[ui_lastt] / je .idle` (ui.inc:1081-1085, 1124)."
+  },
+  {
+   "file": "kernel/ui.inc",
+   "old_text": "; pops a context menu (SPEC.md 12.4) on two things only - the frontmost\n; file-manager window's content, and a DOCK TILE, whose one item is Close\n; (SPEC.md 30.2).",
+   "new_text": "; hands the press whole to a front window that installed W_ONRC (SPEC.md\n; 13.11), and otherwise pops a context menu (SPEC.md 12.4) on the frontmost\n; file-manager window's content, a DOCK TILE, whose one item is Close\n; (SPEC.md 30.2), and with OS88_SHORTCUTS a desktop shortcut (SPEC.md 26.8.5).",
+   "why": "ui_rdown dispatches [bx+W_ONRC] through ui_bill before the fm_menus test, and .strip calls sc_rclick_x under OS88_SHORTCUTS (ui.inc:1569-1583, 1607-1612)."
+  },
+  {
+   "file": "kernel/ui.inc",
+   "old_text": "; that is already frontmost never reaches wm_front), and QUIT (close box ->\n; app_close_win: window, task and state freed), raise, or drag them;\n",
+   "new_text": "; that is already frontmost never reaches wm_front), raise or drag them, and\n; ARM the chrome boxes, whose matching release QUITs (close box ->\n; app_close_win: window, task and state freed; SPEC.md 13.5);\n",
+   "why": ".close_box/.min_box only store [ui_armw]/[ui_armr]; app_close_win runs at .mup on the release over the same box (ui.inc:671-682, 345-395)."
+  },
+  {
+   "file": "kernel/ui.inc",
+   "old_text": "; ui_bill, which was already two of them.",
+   "new_text": "; ui_ptcall, which was already two of them.",
+   "why": "SPEC.md 13.7: 'It was `ui_ptcall` and served W_ONCLICK and W_ONMOUSEUP alone'."
+  },
+  {
+   "file": "kernel/ui.inc",
+   "old_text": "; STK0_SIZE 1,024 and a measured 274-byte watermark - it was +8 until the",
+   "new_text": "; STK0_SIZE 512 and SPEC.md 15.1's measured 246-byte watermark - it was +8 until the",
+   "why": "kernel.asm:1568 `STK0_SIZE equ 512`, whose comment divides by SPEC.md 15.1's 246."
+  },
+  {
+   "file": "kernel/ui.inc",
+   "old_text": ";      and a full repaint IF it moved\n; clobbers: AX, BX, CX, DX, DI (internal helper of the UI task)\n;\n; The gfx lock is only released while the outline is erased",
+   "new_text": ";      and the union of the old and new rects repainted (wm_paint_dmg) IF it\n;      moved\n; clobbers: AX, BX, CX, DX, SI, DI (internal helper of the UI task)\n;\n; The gfx lock is only released while the outline is erased",
+   "why": "ui_drag ends in wm_dmg_union + wm_paint_dmg (ui.inc:2004-2033) and loads SI = ui_drag_step at its head (ui.inc:1786)."
+  },
+  {
+   "file": "kernel/ui.inc",
+   "old_text": "                                ; a transient overlay never enters the back\n                                ; buffer, so no flush is needed here)\n",
+   "new_text": "                                ; a transient overlay, XOR-erased before\n                                ; the lock drops - SPEC.md 32 has no back\n                                ; buffer any more)\n",
+   "why": "No gfx_flush exists in kernel/; SPEC.md 32: 'It was written for a back buffer, and the back buffer is gone.'"
+  },
+  {
+   "file": "kernel/ui.inc",
+   "old_text": "                                ; the overlay is always erased before\n                                ; anyone else can draw. Going through the back\n                                ; buffer instead would dirty the whole window\n                                ; rect and flush it twice per pass.\n",
+   "new_text": "                                ; the overlay is always erased before\n                                ; anyone else can draw.\n",
+   "why": "SPEC.md 32's back buffer and its flush are gone; no gfx_flush in kernel/."
+  },
+  {
+   "file": "kernel/ui.inc",
+   "old_text": "; right. The tables-full refusals below (Timer and Bounce at their cap of ten)\n",
+   "new_text": "; right. Launches refused at a kind's cap (ui_cmd's beep, SPEC.md 29.4.1)\n",
+   "why": "Timer and Bounce are packages now (SPEC.md 14.8) and ui_loc_gate has no refusal below it (ui.inc:2465-2485)."
+  },
+  {
+   "file": "kernel/ui.inc",
+   "old_text": "    ; which is exactly why .close_box can take its own lock too. The guard",
+   "new_text": "    ; which is exactly why the close box's release (.mup) takes its own lock too. The guard",
+   "why": ".close_box only arms; the lock is taken at .mup_lk on the release (ui.inc:671-682, 362-364)."
+  },
+  {
+   "file": "kernel/ui.inc",
+   "old_text": "                                 ; know which is in the drive. The message\n                                 ; fits the 288px notice window, which a path\n                                 ; spelled out in full would not:\n                                 ; app_about_center centres it and font_str\n                                 ; stops at the SCREEN edge, not the window's\n",
+   "new_text": "                                 ; know which is in the drive. The message\n                                 ; is a toast, which TOASTRUN holds to\n                                 ; TOAST_MAX - and a path spelled out in\n                                 ; full would not fit it\n",
+   "why": "The failure path calls toast_show with ui_s_nofile (ui.inc:2936-2959); there is no notice window or app_about_center use here."
+  },
+  {
+   "file": "kernel/ui.inc",
+   "old_text": "; ui_post_cmd - defer one of the kernel's own menu commands (SPEC.md 13)\n; in:  AX = CMD_*\n; out: nothing (all registers preserved)\n",
+   "new_text": "; [ui_pcmd] - one of the kernel's own menu commands, DEFERRED (SPEC.md 13)\n; a poster stores the CMD_* in [ui_pcmd] and bumps [ui_post]; ui_task step 3\n; spends it (there is no ui_post_cmd routine any more - see the note below)\n",
+   "why": "No ui_post_cmd label exists; the note at ui.inc:2640 says its one caller writes the two stores itself."
+  },
+  {
+   "file": "kernel/ui.inc",
+   "old_text": "(8 on small;\n    cmp ax, CMD_LAST            ; 11 or 12 on big with shortcuts) are CONTIGUOUS",
+   "new_text": "(8 on small;\n    cmp ax, CMD_LAST            ; 10 on big, 11 with shortcuts) are CONTIGUOUS",
+   "why": "menu.inc: CMD_LAST = CMD_STIK = CMD_FILES+1 = 10, or 11 with OS88_SHORTCUTS; the .tab rows have 10/11 entries."
+  },
+  {
+   "file": "kernel/ui.inc",
+   "old_text": "across a repaint. ui_lit_set is the only",
+   "new_text": "across a repaint. ui_lit_go (ui_lit_on/off's body) is the only",
+   "why": "No ui_lit_set label exists; ui_lit_on and ui_lit_off both jump into ui_lit_go (ui.inc:1397-1407)."
+  },
+  {
+   "file": "kernel/ui.inc",
+   "old_text": "; ui_lit_on / ui_lit_off / ui_lit_set - draw or un-draw the held box\n; in:  AL = the wanted state (0 or 1) for ui_lit_set; the named entries carry\n;      their own, which is what keeps AL free at the four call sites\n",
+   "new_text": "; ui_lit_on / ui_lit_off - draw or un-draw the held box (body: ui_lit_go)\n; in:  nothing - each entry pushes AX and loads its own state (0 or 1) into AL\n;      for ui_lit_go, which is what keeps AL free at the four call sites\n",
+   "why": "There is no ui_lit_set entry; ui_lit_go is reached only after an entry's push ax / mov al (ui.inc:1397-1407)."
+  },
+  {
+   "file": "kernel/menu.inc",
+   "old_text": "                                ; ui_cmd is a compare ladder and an id it\n                                ; does not match falls out of the bottom and\n                                ; returns.",
+   "new_text": "                                ; ui_cmd's jump table sends it to .done,\n                                ; which returns.",
+   "why": "ui_cmd is `jmp word [bx + .tab]` and CMD_SEP's row is .done (ui.inc:3022-3045)."
+  },
+  {
+   "file": "kernel/toast.inc",
+   "old_text": "; toast_show STAGES and never draws, toast_pass (the UI task's idle pass)\n; draws. That is what makes the context rule `any`",
+   "new_text": "; toast_show STAGES, and draws on the spot only for a caller that provably\n; holds the lock (toast_now, SPEC.md 59.4); toast_pass (the UI task's idle\n; pass) draws the rest. That is what makes the context rule `any`",
+   "why": "toast_show ends in `call toast_now` (toast.inc:288-290), which draws via fpg_bare when task 0 owns the lock (392-432)."
+  },
+  {
+   "file": "kernel/toast.inc",
+   "old_text": "; gfx_lock is not reentrant. Deferring gives ONE drawing site, which is also\n; the ONE expiry site,",
+   "new_text": "; gfx_lock is not reentrant. Deferring gives ONE expiry site, which is also\n; the drawing site for every caller that does not hold the lock,",
+   "why": "toast_now (toast_ad) is a second drawing site; toast_pass remains the only expiry site."
+  },
+  {
+   "file": "kernel/toast.inc",
+   "old_text": "message (the buffer keeps 23)",
+   "new_text": "message (the buffer keeps TOAST_MAX)",
+   "why": "kernel.asm:340 TOAST_MAX equ 24, and toast_show copies up to TOAST_MAX (toast.inc:236)."
+  },
+  {
+   "file": "kernel/toast.inc",
+   "old_text": "; raise, and a half-copied buffer would letter as garbage. 23 bytes of\n; rep-less movsb is ~475 clocks, ~100 us against a 55 ms tick.",
+   "new_text": "; raise, and a half-copied buffer would letter as garbage. Up to 24 kept bytes\n; of the filtered `es lodsb` loop is ~2,000 clocks, ~0.5 ms, and a hostile\n; 256-byte scan ~14,000, ~3 ms (estimated), against a 55 ms tick.",
+   "why": "The copy is a filtered es lodsb loop bounded by TOAST_MAX = 24 kept and TOAST_SCAN = 256 examined (toast.inc:245-266), not a 23-byte movsb."
+  },
+  {
+   "file": "kernel/toast.inc",
+   "old_text": "                                ; carry it to VRAM does not come until the\n                                ; operation this announces is over (SPEC.md\n                                ; 32) - fpg_begin's reasoning exactly.\n",
+   "new_text": "                                ; draw it does not come until the\n                                ; operation this announces is over (SPEC.md\n                                ; 59.4) - fpg_begin's reasoning exactly.\n",
+   "why": "There is no back buffer to carry pixels to VRAM (SPEC.md 32); the reason is the UI task's pass not coming round (SPEC.md 59.4)."
+  },
+  {
+   "file": "kernel/toast.inc",
+   "old_text": "the message waits for it to end",
+   "new_text": "the strip is not drawn while it is covered, and its seconds still run",
+   "why": "toast_arm sets [toast_die] before menu_draw_bar's wm_fs_vis guard is reached (toast.inc:445-447, 637-639; menu.inc:825)."
+  },
+  {
+   "file": "kernel/toast.inc",
+   "old_text": "; Does not draw. Two of its three callers hold the gfx lock (fpg_begin,\n; inst_free's teardown) and one is inside toast_show's cli window; the pixels",
+   "new_text": "; Does not draw. Its callers are toast_show's retire (inside its cli window)\n; and toast_owner_gone (instance teardown, lock held or not); the pixels",
+   "why": "The only `call toast_kill` sites are toast.inc:292 (toast_show .kill) and 703 (toast_owner_gone); fpg_begin no longer retires a toast."
+  },
+  {
+   "file": "kernel/toast.inc",
+   "old_text": "; out:      nothing - all registers AND the flags preserved\n",
+   "new_text": "; out:      nothing - all registers AND the flags preserved. FAR: it ends in\n;           retf, so .cold reaches it through ct_toast_say\n",
+   "why": "toast_say ends in `retf` (toast.inc:364); kernel.asm:8108 ct_toast_say is `call KERNEL_SEG:toast_say / ret`."
+  },
+  {
+   "file": "kernel/apps.inc",
+   "old_text": "; 0, 1 or 2 (kernel/viddet.inc). xchg, not",
+   "new_text": "; 0..3 (kernel/viddet.inc) - but 4, VID_VESA, under VID_EXT, has no row here (SPEC.md 39.29.4). xchg, not",
+   "why": "viddet.inc:110-122: VID_EGA = 3 and VID_VESA = 4 under VID_EXT (kern_big); app_about_vid has 3 or 4 rows (apps.inc:57-60)."
+  },
+  {
+   "file": "kernel/spinner.inc",
+   "old_text": ";             AX = 320 + (AL - SPL_HALFW) * cos / 64. clobbers: nothing else",
+   "new_text": ";             AX = [spl_l_cx] + (AL - SPL_HALFW) * cos / 64. clobbers: nothing else",
+   "why": "The body adds [%1_l_cx] '...and NOT 320, which is VGA's centre alone' (spinner.inc:270)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "   - `[wm_fs]` non-zero (§11.2) → skip both menu-bar branches below and go",
+   "new_text": "   - `wm_fs_vis` answers CF = 1 (a visible fullscreen window, §11.2, §39.17.1) → skip both menu-bar branches below and go",
+   "why": "ui.inc:475-481 calls wm_fs_vis, 'The PREDICATE and not the latch (SPEC.md 39.17.1)'."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "store\n     `CP_ITIME` into `[cp_sel]` and `app_launch` KIND_CTRL (§31.5), no lock\n     held, beeping on refusal like any other launch.",
+   "new_text": "store\n     `CP_ITIME` into `[cp_sel]` and open the Control Panel through\n     `cpf_cp_open` (§31.5; §2.8.4 — the module load, which owns the refusal,\n     beep or toast), no lock held; with `OS88_SNDCARD` a press on the\n     speaker goes to SOUND.DRV first (`ui_clkcell`, §34.15).",
+   "why": "ui.inc:517-527 and ui_clkcell (3392-3406) call cpf_cp_open, not app_launch, and hand the speaker's press to SOUND.DRV."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "   - else `wm_hit`: close box → **quit**: gfx_lock, `app_close_win` BX",
+   "new_text": "   - else `wm_hit`: close box → **arm** (§13.5); the matching release over\n     the same box **quits**: gfx_lock, `app_close_win` BX",
+   "why": ".close_box/.min_box only arm; app_close_win/inst_minimize run at .mup under the lock (ui.inc:330-403, 667-682)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "gfx_unlock. Minimize box (AL=3) →\n     gfx_lock, `inst_minimize` BX",
+   "new_text": "gfx_unlock. Minimize box (AL=3) →\n     arm likewise; its release: gfx_lock, `inst_minimize` BX",
+   "why": "Both boxes share one arming body (ui.inc:671-682); .mup_min calls inst_minimize on the release."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "every pass. On release (outline drawn, lock held): xor-erase, clamp\n     w to WMIN_W..`[vid_w]`−W_X and h to WMIN_H..`[vid_h]`−W_Y, write\n     W_W/W_H, `wm_paint_dmg` over the union of the old and new rects\n     (§11.91 — the origin is fixed, so that is the origin plus the larger\n     size per axis), gfx_unlock — same no-relock rule.",
+   "new_text": "every pass. On release (outline drawn, lock held): xor-erase, clamp\n     w and h between the window's own minimum (`wm_min_axd`, §11.100.2;\n     WMIN_W/WMIN_H by default) and the screen edge less the origin, write\n     W_W/W_H, `wm_paint_dmg` over the union of the old and new rects\n     (§11.91 — the larger extent in y; in x the union of both rects, because\n     `wm_snap_win` can move the origin, §11.95.2), gfx_unlock — same\n     no-relock rule.",
+   "why": "ui_grow_clamp calls wm_min_axd (ui.inc:2397-2413) and the damage x is the union of both rects for wm_snap_win (2348-2368)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "     `fm_menus` → gfx_lock, `fm_rclick` then `fm_rcmd` (§22), gfx_unlock.",
+   "new_text": "     `fm_menus` → gfx_lock, `fm_rclick`, then `ui_rcmd` billed through\n     `ui_bill` (§22), gfx_unlock. With no window under the press, the dock\n     strip gets it (`dock_rclick`, §30.2) and, under `OS88_SHORTCUTS`, a\n     desktop shortcut opens its menu (`sc_rclick`, §26.8.5).",
+   "why": "ui_rdown .ctxwin runs fm_rclick_x then `mov bp, ui_rcmd / jmp .bill`; .strip calls dock_rclick then sc_rclick_x (ui.inc:1591-1612)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "Then, on the same deferred\n   channel, if `[clk_dirty]` is non-zero (§37): zero it and call\n   `clk_rtc_write` — the Control Panel changed the time and the hardware\n   RTC is written **here**, outside the lock, because a page proc may not\n   call BIOS (§31.1).",
+   "new_text": "The hardware RTC is no longer\n   written from this channel: `[clk_dirty]` is spent by `CTRL.DRV` when the\n   Control Panel closes (§37.94).",
+   "why": "ui.inc:1075-1080: '[clk_dirty] WAS DRAINED HERE and is not any more (SPEC.md 37.94)'; clk_rtc_write lives in clockw.inc."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "   ```\n   ui_post_cmd  in:  AX = CMD_* (§12.3)\n                out: nothing (all registers preserved)\n   ```\n\n   `ui_post_cmd` is one word store and is legal **from any lock-held\n   callback**",
+   "new_text": "   ```\n   [ui_pcmd]  a poster stores AX = CMD_* (§12.3) here and bumps [ui_post]\n   ```\n\n   Posting is one word store and one bump (§13.13), with no routine of its\n   own any more, and is legal **from any lock-held callback**",
+   "why": "No ui_post_cmd label exists; stikmenu.inc:1752-1753 writes [ui_pcmd] and `inc byte [ui_post]` itself."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "5. `task_yield`.",
+   "new_text": "5. Sleep until the next tick or an ISR's wake (`task_sleep`, §8.1.2.2,\n   with the lost wakeup closed under one IF=0 span, §8.1.2.3); `task_yield`\n   only in a `NOUIBLOCK=1` build.",
+   "why": "ui.inc:1156-1187: pushf/cli, test [sch_uiwake], task_sleep(1); task_yield is the %else (NOUIBLOCK) arm."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "   three-word table {CMD_ABOUT, CMD_TIMER, CMD_REBOOT} that restores the",
+   "new_text": "   two-word table {CMD_ABOUT, CMD_CLOSE} that restores the",
+   "why": "ui.inc:2614-2616: `ui_loc_base: dw CMD_ABOUT, CMD_CLOSE` / `UI_LOC_N equ 2`."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "\n`ui_cmd` (in: AX = CMD_*, 0 ignored) is the old flat dispatcher, unchanged:\nCMD_ABOUT/CTRL/CLOCK/BOUNCE/TASKS → `call\napp_launch` with AL = the matching KIND_* (§29; CMD_CTRL → KIND_CTRL, the\nControl Panel of §31). It runs on the UI task with\nno lock held, so the call is direct — the deferred `inst_launch` channel\nin step 3 exists for lock-held posters (e.g. W_ONCLICK handlers, and now\nevery app menu handler, which runs under the lock by contract §12.2).\nTimer/Bounce launch a **new instance** each time (up to their §29\ncaps); About/Control Panel/Task Manager are singletons — at cap,\napp_launch fronts (and un-minimizes) the existing instance instead. CMD_FILES → call\n`files_open` (§22 — mounts, then launches/fronts the Disk singleton via\napp_launch; does its own locking). CMD_CLOSE → **quit** the frontmost:\ngfx_lock, `wm_top`, and if BX ≠ 0 `app_close_win` under the same lock,\ngfx_unlock. CMD_REBOOT → gfx_lock (never released), `vid_text` (§39.6 —\nmode 3, or mode 7 with the Hercules graphics bit cleared),\n`sched_unhook` — which does not return, falling into §18.100's park and the\n",
+   "new_text": "`ui_cmd` (in: AX = CMD_*, 0 ignored) is a jump table indexed by `CMD_* − 1`\nand bounded by `CMD_LAST`; `CMD_SEP`'s row returns. It runs on the UI task\nwith no lock held, so every command does its own locking — the deferred\n`inst_launch` channel in step 3 exists for lock-held posters (e.g. W_ONCLICK\nhandlers, and every app menu handler, which runs under the lock by contract\n§12.2). CMD_ABOUT is the one kind it launches: `app_launch` with AL =\nKIND_ABOUT, a singleton fronted (and un-minimized) at its cap, and a beep\nwhen the tables are full. CMD_CTRL → `cpf_cp_open` (§2.8.4: the panel's\ncode is a module, so opening it reads a file and owns the refusal).\nCMD_TASKS → `ui_tm_open` (the Task Manager is a package on the system disk,\n§28). CMD_FILES → `fmf_files_open` (§22 — fronts, creates or moves a\nfile-manager window; does its own locking). CMD_CLOSE → **quit** the\nfrontmost: gfx_lock, `wm_top`, and if BX ≠ 0 `app_close_win` under the same\nlock, gfx_unlock — a beep when there is nothing to close. CMD_SHUTDOWN →\n`cpf_shutdown`. On kern_big CMD_HIBER → `hbf_open` (§87.1) and CMD_STIK →\n`stm_act_x` (§110.12); with `OS88_SHORTCUTS`, CMD_SCDEL → `desk_key_x`\nwith the Delete key (§26.8.5). CMD_REBOOT → flush the Control Panel\n(`cpf_cp_flush_close`, unless the post asked not to), detach every driver\n(`drv_shutdown_x`, §51.2), gfx_lock (never released), `vid_reboot` (a text\nmode on every display), `sched_unhook` — which does not return, falling\ninto §18.100's park and the `int 0x19` at its tail.\n",
+   "why": "ui_cmd's .tab (ui.inc:3039-3045) and its arms (3050-3174): only .about calls app_launch; there are no CLOCK/BOUNCE commands."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "matter: the count is a single word the producer only increments, so it cannot",
+   "new_text": "matter: the count is a single byte the producer only increments, so it cannot",
+   "why": "events.inc:352 `evq_count: resb 1`; the slot reads [cs:evq_count] / cbw (events.inc:314)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "Both keep their own test. They are reached by nothing else today, and a guard\nonly its one caller enforces is a guard the next caller forgets.",
+   "new_text": "Neither keeps a test of its own any more: `ui_arm_chk` is written into the\nladder's step (kernel size pass 16) and `ui_arm_trk`'s banner says its caller\ntests, so a second caller must test `[ui_armw]` itself.",
+   "why": "ui.inc:1278 '(WRITTEN IN ui_task's .arm_done step)'; ui.inc:1306 ui_arm_trk 'THE CALLER TESTS IT, so this body does not'."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "Two of the thirteen should not be here at all, and §31.5.2 records why:\n`[cp_dirty]`'s collection belongs where the click callback returns, and\n`[clk_dirty]`'s at the Control Panel's close. Both are cheap enough behind this\nword that neither is urgent.",
+   "new_text": "One of them should not be here at all, and §31.5.2 records why:\n`[cp_dirty]`'s collection belongs where the click callback returns. (The\nsecond, `[clk_dirty]`, has already moved to the Control Panel's close,\n§37.94.) It is cheap enough behind this word not to be urgent.",
+   "why": "ui.inc:1075-1080: [clk_dirty] is no longer drained by ui_task; [cp_dirty] still is (ui.inc:962)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "press already walked. Cost in `.bss`: `MAX_WIN` words, 24 bytes. It is\ntherefore in `kern_small` too, unlike §13.8.2 and §13.9 — those are\n`kern_big`'s because they *grew the record*, which is the thing this\ndeliberately does not do.",
+   "new_text": "press already walked. Cost in `.bss`: one record word, so `MAX_WIN` words,\n24 bytes. It is in `kern_small` too, unlike §13.8.2 and §13.9, although it\ngrew the record as they did: the side table it was born as went in kernel\nsize pass 4 (above).",
+   "why": "wm.inc:115 `W_ONRC equ W_SIDE+6`, a record word on both kernels; this section's own opening says it moved from the wm_onrc side table."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "stopped at `ui_timer_pass.locked` (SI asserted to be that record), `W_FLAGS`\nbit 0 is cleared there as a worker's teardown leaves it, and the pass must\nreach `.gone` before `ui_bill`. Broken on purpose - the `jz .gone` after the",
+   "new_text": "stopped at `ui_task.tp_locked` (SI asserted to be that record), `W_FLAGS`\nbit 0 is cleared there as a worker's teardown leaves it, and the pass must\nreach `.tp_gone` before `ui_bill`. Broken on purpose - the `jz .tp_gone` after the",
+   "why": "The labels are ui_task's .tp_locked/.tp_gone (ui.inc:822-832); tests/timerrace.py:59 breaks at ui_task.tp_locked."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "  \"Hercules - 720x348 - mono\" or \"CGA - 640x200 - mono\". The geometry cannot",
+   "new_text": "  \"Hercules - 720x348 - mono\", \"CGA - 640x200 - mono\" or, on kern_big,\n  \"EGA - 640x350 - 16 colors\" (a VESA desktop, kind 4, has no row yet:\n  §39.29.4). The geometry cannot",
+   "why": "apps.inc:57-66: app_about_v3 'EGA - 640x350 - 16 colors' under GFX_VGA, and no VID_VESA row."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "**Any context.** None of the three takes the gfx lock, touches VRAM or does\nI/O, so a worker task may call them (§20.6 rule 7).",
+   "new_text": "**The UI task or a window callback, never a worker.** None of the three\ntakes the gfx lock, touches VRAM or does I/O, but `clip_put` claims (which a\nworker may not, §20.6 rule 7) and both copies are bursts of up to 32KB\nbetween segments that may move — `clip.inc`'s header gives the argument,\nand the +16-byte `sch_lock` bracket that would lift the rule.",
+   "why": "clip.inc:36-56 'CONTEXT: THE UI TASK OR A WINDOW CALLBACK - not a worker (SPEC.md 55.4)'; rule 7's list has no clipboard slot."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "operation, not an error: it frees the block and clears the three words.",
+   "new_text": "operation, not an error: it frees the block and clears the three fields.",
+   "why": "clip_drop zeroes clip_seg (a word), clip_kb (a BYTE) and clip_bytes (a word) (clip.inc:257-260, 326-334)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "It carries **one inverted space\nof padding at each end**, which is what makes it read as a strip.",
+   "new_text": "It carries **one cell of padding**,\nwhich is what makes it read as a strip — laid out as §59.8.1's inset and 4px\nlead rather than a space at each end.",
+   "why": "toast_place counts the message plus one cell (toast.inc:516-519); §59.8.1 replaced the per-end space with an inset and 4px padding."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`Saved` is 7 cells and an 18-glyph clock in a 25-cell",
+   "new_text": "`Saved` is 6 cells and an 18-glyph clock in a 25-cell",
+   "why": "The strip is str_len + 1 cells (toast.inc:516-519), so 'Saved' is 6."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "The strip is its message plus\none inverted space at each end and no wider;",
+   "new_text": "The strip is its message plus\none cell (§59.8.1's inset and padding) and no wider;",
+   "why": "toast_place: `call str_len / inc cx` - the message plus one cell (toast.inc:516-519)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "and `Saved` is exactly 7 cells.",
+   "new_text": "and `Saved` is 6 cells.",
+   "why": "The strip is str_len + 1 cells (toast.inc:516-519)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "**`toast_show` never draws.** It stages and returns; `toast_pass`, in",
+   "new_text": "**`toast_show` stages; it draws only for a caller that provably holds the\nlock (§59.4).** Otherwise it stages and returns; `toast_pass`, in",
+   "why": "toast_show ends in `call toast_now` (toast.inc:288-290), which draws when task 0 owns the gfx lock."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "- **`toast_kill` does not draw and preserves the flags.** Two of its three\n  callers hold the gfx lock.",
+   "new_text": "- **`toast_kill` does not draw and preserves the flags.** Its callers are\n  `toast_show`'s retire, inside its `cli` window, and `toast_owner_gone` at\n  teardown, lock held or not.",
+   "why": "The only call sites are toast.inc:292 and 703; fpg_begin no longer retires a toast (toast.inc:176-183)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "The\n  strip is in the clock's field now, wholly right of `[vid_clk_hx]`, so the\n  two cannot touch and may be up together",
+   "new_text": "The\n  two are kept apart by geometry now — `toast_place` reserves the widget's\n  cells (§59.9.2) — so they cannot touch and may be up together",
+   "why": "toast.inc:185-191: §59.9 gave the strip the gap as a home, and 'They are kept apart by GEOMETRY now (toast_place reserves the widget's cells, SPEC.md 59.9.2)'."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "- **`ui_task`'s ladder names the next step in every \"nothing to do\" jump**, so\n  inserting `.chk_toast` meant re-pointing `.chk_zones`'s `je` at it. Get that\n  wrong and the new step is unreachable on every pass where the previous one\n  had nothing to do, which is nearly all of them (§22.8's own warning).\n",
+   "new_text": "- **`toast_pass` is a tick-gated step** (§13.12): it sits behind the one\n  `[ticks]` compare and runs on every tick pass, so no \"nothing to do\" jump\n  has to be re-pointed at it. Move it among the posted steps and §22.8's\n  warning comes back: a step a previous one's jump skips is unreachable on\n  nearly every pass.\n",
+   "why": "ui.inc:1081-1095: .chk_toast's `call toast_pass` follows the [ticks]/[ui_lastt] compare unconditionally; nothing jumps to it."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "otherwise. The test\nis three compares:",
+   "new_text": "otherwise. The test\nis three facts, asked in two compares (the flag and the owner are one word):",
+   "why": "toast_now is `cmp word [gfx_lock_flag], 1` (flag + owner) then `cmp byte [sch_cur], 0` (toast.inc:393-408)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "It ends in `gfx_flush`, for `fpg_begin`'s reason and not for tidiness: the\ndraw happens mid-lock and on a double-buffered machine (§32) the flush that\nwould carry it to VRAM does not come until `gfx_unlock` — which is after the\noperation being announced. Paint used to reach around that with a `pt_wait`\nof its own; it does not have to any more.\n",
+   "new_text": "It needs no flush: §32's back buffer is gone, so the draw reaches the glass\nthe moment it is made, mid-lock and before the operation being announced.\nPaint used to reach around the old flush with a `pt_wait` of its own; it does\nnot have to any more.\n",
+   "why": "toast_now ends in fpg_bare + menu_draw_bar with no gfx_flush (toast.inc:409-432); no gfx_flush exists in kernel/ (SPEC.md 32)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "same window again would recurse on a 384-byte task stack (§8): `sch_stkdie`,",
+   "new_text": "same window again would recurse on the UI task's 512-byte stack (`STK0_SIZE`,\n§8): `sch_stkdie`,",
+   "why": "wm.inc:2192 'The negotiator runs under the gfx lock on the UI task'; kernel.asm:1568 STK0_SIZE equ 512."
+  },
+  {
+   "file": "apps/os88api.inc",
+   "old_text": "; All three take no lock, touch no VRAM and do no I/O: legal from a window\n; callback AND from a worker (SPEC.md 20.6 rule 7).",
+   "new_text": "; All three take no lock, touch no VRAM and do no I/O, but they are legal from\n; a window callback (or the UI task) only - NOT from a worker (SPEC.md 55.4:\n; clip_put claims, and the copies are bursts between movable segments).",
+   "why": "clip.inc:36-56 forbids workers; column-0 SDK prose, so tools/abilock.py's fingerprint does not include it."
+  }
+ ]
+}

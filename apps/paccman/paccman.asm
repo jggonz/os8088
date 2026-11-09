@@ -57,7 +57,7 @@
                                     ; be held, so os88_main cannot do it)
 %define CC_STACK_CLASS OS88_STACK_256 | OS88_HIGH | OS88_HIGHMEM ; the worker asks for 256: a 384
                                     ; request can be REFUSED when both 384
-                                    ; slices are held (docs/PACCMAN-PORT-PLAN.md)
+                                    ; slices are held (docs/plans/completed/PACCMAN-PORT-PLAN.md)
                                     ; and NOT: CC_HAS_ONCLICK,
                                     ; CC_HAS_ONMOUSEUP, CC_HAS_ONRESIZE,
                                     ; CC_HAS_FDLG, CC_HAS_ONWAKE - an arcade

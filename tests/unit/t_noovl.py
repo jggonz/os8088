@@ -50,7 +50,8 @@ SHIPPED = ["build/os8088.img", "build/os8088-120.img", "build/os8088-720.img",
            "build/games360.img", "build/emu360.img", "build/util360.img",
            "build/more720.img", "build/small360.img", "build/small720.img",
            "build/win16.img", "build/win16-120.img", "build/win16-720.img",
-           "build/win16-360.img"]
+           "build/win16-360.img", "build/arcrel.img", "build/arcrel120.img",
+           "build/arcrel720.img", "build/arcrel360.img"]
 
 # Built disks that may carry an .OVL beside a package ON PURPOSE.
 EXEMPT = {
@@ -64,7 +65,8 @@ OVL_ALLOWED = [
     re.compile(r"os88ovl\.py\b.*-o\s+\S+\.OVL\b"),     # the cut itself
     re.compile(r"--part\s+\S+\.OVL\b"),                # appended as a part
     re.compile(r"^\S+\.OVL\s*:.*;\s*$"),               # askable by name
-    re.compile(r"call CC_PACKAGE,[^,]*,[^,]*,\w+\.OVL,.*,part\)\)$"),  # C part
+    re.compile(r"call CC_PACKAGE,[^,]*,[^,]*,\w+\.OVL,.*,part(,[^,]*)?\)\)$"),  # C part
+    # (and its sixth argument: parts that follow the overlay, C64's cores)
 ]
 OVL_RECIPE_EXEMPT = re.compile(r"cfsx", re.I)          # EXEMPT's fixture
 

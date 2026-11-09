@@ -3859,6 +3859,18 @@ dos_int22:                          ; the terminate ADDRESS: a child process
     jmp dos_terminate               ; has no children to send
 %endif                              ; DOS_EXTCORE
 %ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
+%ifdef DOS_PMGATE
+; dos_csel - THE CORE'S DATA SELECTOR, in WIN16's kern_mega arm alone
+; (DOS_PMGATE, the Makefile's $(MEGAAPPDIR)/doscore.bin; SPEC.md 124.31.7):
+; there the core runs in PROTECTED mode under a read-only CODE selector, so
+; every `[cs:]` cell below was a #GP kern_mega completed - fifteen an int 21h,
+; 7,187 for Write's open of a 20 KB file (KERN-MEGA-PLAN 14.164). WIN16's
+; host writes it once, through the block's data half (w16dosh.asm's
+; w16dh_init); the gate loads DS from it and keeps it for the whole call.
+; DOS.O88's and kern_dos's cores (real mode for every int 21h a program makes)
+; are assembled without it and are byte for byte what they were
+dos_csel    dw 0
+%endif
 
 dos_int21:
     ; --- ONTO OUR OWN STACK BEFORE A SINGLE WORD IS PUSHED (SPEC.md 96.7.2) --
@@ -3881,6 +3893,26 @@ dos_int21:
     ; IF IS 0 FROM THE GATE AND STAYS 0 UNTIL THE SWAP IS DONE, which is what
     ; makes one cell per value enough: nothing can nest while interrupts are
     ; off, and every cell is spent before the `sti`.
+%ifdef DOS_PMGATE
+    ; WIN16's PROTECTED-MODE core (dos_csel, above): DS is ours from here to
+    ; the `iret`, the program's banked in dos_gds - one word on the
+    ; program's stack for the moment, where WIN16's host has just had one
+    ; (w16dh_i21's AX); a Windows program's stack has no arena under it
+    push ds
+    mov ds, [cs:dos_csel]
+    pop word [dos_gds]
+    mov [dos_gax], ax
+    mov [dos_gbp], bp
+    mov bp, sp
+    mov ax, [bp]
+    mov [dos_gip], ax
+    mov ax, [bp+2]
+    mov [dos_gcs], ax
+    mov ax, [bp+4]
+    mov [dos_gfl], ax
+    mov ax, ss
+    mov [dos_gss], ax
+%else
     mov [cs:dos_gax], ax
     mov [cs:dos_gbp], bp
     mov bp, sp                      ; the three words the `int` pushed, read
@@ -3892,6 +3924,7 @@ dos_int21:
     mov [cs:dos_gfl], ax
     mov ax, ss
     mov [cs:dos_gss], ax
+%endif
     cmp ax, [cs:dos_sv_ss]          ; ALREADY ON IT: a program's ISR or INT
     je .keepsp                      ; 33h callback inside a live call, or one
                                     ; under dos_be_go's own swap. [dos_dstk]
@@ -3911,7 +3944,11 @@ dos_int21:
     mov al, [cs:dos_onprog]
     xor ah, ah
     push ax
+%ifdef DOS_PMGATE
+    mov byte [dos_onprog], 0
+%else
     mov byte [cs:dos_onprog], 0     ; **dos_be_go MUST NOT SWAP AGAIN**: it
+%endif
                                     ; would swap UPWARDS, to [dos_sv_sp],
                                     ; straight through the frame below. That
                                     ; byte's only consumer is dos_be_go, which
@@ -3924,14 +3961,20 @@ dos_int21:
 
     sti                             ; DOS runs its calls with interrupts on
     push bp
+%ifdef DOS_PMGATE
+    push word [dos_gds]             ; (DS is ours already)
+%else
     push ds
+%endif
     mov bp, sp                      ; [bp]=DS [bp+2]=BP [bp+4]=IP [bp+6]=CS
     push si                         ; [bp+8]=FLAGS, all on OUR stack now
     push di                         ; ...and [bp-2]=SI [bp-4]=DI [bp-6]=ES
     push es                         ; [bp-8]=DX, banked here rather than per
     push dx                         ; handler (SPEC.md 96.7.1)
+%ifndef DOS_PMGATE
     push cs
     pop ds
+%endif
 %ifdef DOSTRACE
     call dos_trace
 %endif
@@ -6047,7 +6090,12 @@ DOS_T21_N equ ($ - .t21) / 2        ; ...or .bad for a function we lack
     mov di, [bp-4]
     mov es, [bp-6]
     mov sp, bp                      ; ...and whatever depth a handler left at,
+%ifdef DOS_PMGATE
+    mov ds, [cs:dos_csel]           ; (a handler may have left any DS)
+    pop word [dos_gds]
+%else
     pop ds                          ; so the gate's promise does not rest on
+%endif
     pop bp                          ; every one of them being balanced
 
     ; --- AND BACK ONTO THE PROGRAM'S STACK TO `iret` (SPEC.md 96.7.2) -------
@@ -6065,6 +6113,28 @@ DOS_T21_N equ ($ - .t21) / 2        ; ...or .bad for a function we lack
                                     ; more re-entrant than a real one - but
                                     ; this is fifteen instructions and closing
                                     ; the window costs nothing
+%ifdef DOS_PMGATE
+    mov [dos_gax], ax               ; (DS ours: dos_csel)
+    pop ax
+    pop ax
+    pop ax
+    mov [dos_gfl], ax
+    pop ax
+    mov [dos_onprog], al
+    pop ax
+    mov [dos_dstk], ax
+    mov [dos_gbp], bp
+    pop bp
+    pop ax
+    mov ss, ax
+    mov sp, bp
+    mov ax, [dos_gfl]
+    mov [bp+4], ax
+    mov bp, [dos_gbp]
+    mov ax, [dos_gax]
+    mov ds, [dos_gds]               ; the program's DS, last
+    iret
+%else
     mov [cs:dos_gax], ax
     pop ax                          ; the replica IP and CS are ours and go
     pop ax                          ; nowhere: the program's own pair is still
@@ -6087,6 +6157,7 @@ DOS_T21_N equ ($ - .t21) / 2        ; ...or .bad for a function we lack
     mov bp, [cs:dos_gbp]
     mov ax, [cs:dos_gax]
     iret                            ; ...which puts IF back with them
+%endif
 %endif                              ; DOS_EXTCORE
 %ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 
@@ -7858,8 +7929,12 @@ dos_pt_body:
                                     ; `OTEPAD` (SPEC.md 96.33.21)
                                     ; ...none, and no drive either: the folder
     mov di, bx                      ; we stand in. A DRIVE with no separator
-                                    ; makes the directory part EMPTY, which
+    dec di                          ; makes the directory part EMPTY, which
                                     ; dos_walk_pbuf reads as that volume's root
+                                    ; - and DI is the COLON, so `.name`'s `inc`
+                                    ; lands on the name's first character. It
+                                    ; was the name itself, and `B:DOSHELLO.COM`
+                                    ; ran `B:\OSHELLO.COM` (SPEC.md 96.33.21)
 .name:
     mov si, di
     inc si                          ; the name starts one past the separator
@@ -9212,7 +9287,9 @@ dos_set_open:
     jc .r                           ; 96.32.2.3) - or not opened, and the
 %endif                              ; menu bar says why
 %ifdef DOS_WTAIL
+%ifdef DOS_WIN16                    ; (no WIN16 - kern_small - no NE to grey for)
     call dos_hne_ask                ; ...and is the program an NE (96.44.20)
+%endif
 %endif
     mov byte [dos_page], DOS_PAGE_SET
     jmp dos_swap
@@ -10696,11 +10773,15 @@ dos_l_envb: db 'Environment:', 0    ; ...and the rows under it are NAME=VALUE,
                                     ; one to a line (SPEC.md 96.32.2.1)
 dos_l_retb: db 'Return', 0          ; --- the setup area's furniture (96.32.2)
 %ifdef DOS_SETPART
-dos_s_nosetp: db 'Cannot open '     ; the part's refusal (96.32.2.3), whose
-%endif                              ; last word is the page's own name
+TOASTRUN dos_s_nosetp               ; the part's refusal (96.32.2.3), whose
+            db 'Cannot open '       ; last word is the page's own name
+%endif
 dos_l_tset: db 'Setup', 0           ; ...and its name, which the title row
                                     ; shows and the bar's own button carries -
                                     ; one page, one word (SPEC.md 96.32.2.1)
+%ifdef DOS_SETPART
+TOASTEND
+%endif
 dos_l_run:  db 'Run', 0             ; --- and the top bar's (96.32.1)
 dos_l_full: db 'Full Screen', 0     ; ...and the console's own (96.33.5)
 dos_l_savb: db 'Save Shortcut', 0
@@ -12516,6 +12597,7 @@ dos_sp_get:
     ret
 
 %ifdef DOS_WTAIL
+%ifdef DOS_WIN16
 ; -----------------------------------------------------------------------------
 ; dos_hne_ask - is the program the Setup page is about a WINDOWS one? (SPEC.md
 ; 96.44.20). `Close when done` greys for an NE: the program is WIN16's and
@@ -12578,7 +12660,8 @@ dos_hne_ask:
     pop ax
     popf
     ret
-%endif
+%endif                              ; DOS_WIN16: without WIN16 a program is
+%endif                              ; never one it runs, so nothing greys
 WIN_CODE_END
 
 ; dos_sp_drop - give the part back, if it is held. Every register preserved;
@@ -12851,10 +12934,11 @@ DOS_BTREC_SZ equ 18              ; **A MIRROR OF os88ui.inc's OS88UI_BT_SIZE**,
 %endif                           ; row's (96.32.2.4)
 %ifdef DOS_WTAIL
     WBSS DOS_B_MHEAD, DOS_MCKSZ  ; ...and Close when done, beside it (SPEC.md
-    WBSS DOS_B_HNE,   1          ; 96.44.20) - the TAIL's: only the Setup page
-    WBSS DOS_B_HNEK,  16         ; shows it and the .LNK reader's store is a
-%endif                           ; window's; 1 = the target is an NE, asked of
-                                 ; the locator in HNEK (name, folder, volume)
+%ifdef DOS_WIN16                 ; 96.44.20) - the TAIL's: only the Setup page
+    WBSS DOS_B_HNE,   1          ; shows it and the .LNK reader's store is a
+    WBSS DOS_B_HNEK,  16         ; window's; 1 = the target is an NE (WIN16's),
+%endif                           ; asked of the locator in HNEK (name, folder,
+%endif                           ; volume)
 %ifdef DOS_SETPART
     HBSS DOS_B_SPDOOR, 4         ; the Setup part's door, 0:claim - its
                                  ; segment word 0 = not held (96.32.2.3)
@@ -18454,8 +18538,10 @@ dos_mmou equ dos_hbss + DOS_B_MMOU   ; ...and the mouse's (96.36.8)
 dos_mwin equ dos_hbss + DOS_B_MWIN   ; ...and Run in a window (96.32.2.4)
 %ifdef DOS_WTAIL
 dos_mhead equ DOS_WB + DOS_B_MHEAD  ; ...and Close when done (96.44.20)
+%ifdef DOS_WIN16
 dos_hne equ DOS_WB + DOS_B_HNE      ; ...and the target is an NE: it greys
 dos_hnek equ DOS_WB + DOS_B_HNEK    ; ...and what that was asked of (16)
+%endif
 %endif
 %endif
 %ifdef DOS_SETPART
@@ -18572,6 +18658,9 @@ dos_gip     equ DOS_CBASE + DOS_B_GIP
 dos_gcs     equ DOS_CBASE + DOS_B_GCS
 dos_gfl     equ DOS_CBASE + DOS_B_GFL
 dos_gss     equ DOS_CBASE + DOS_B_GSS
+%ifdef DOS_PMGATE
+dos_gds     equ DOS_CBASE + DOS_B_GSP   ; the program's DS (the gate's PM arm)
+%endif
 dos_betgt   equ DOS_CBASE + DOS_B_BETGT
 dos_beflg   equ DOS_CBASE + DOS_B_BEFLG
 dos_onprog  equ DOS_CBASE + DOS_B_ONPRG

@@ -1,0 +1,624 @@
+{
+ "area": "text",
+ "title": "Font, icons, menus, file-op progress",
+ "summary": "The text engine is the strongest piece of 8088 engineering in this part of the kernel. font_run_x decides everything that belongs to a run once: the y test, both inks, the row base, the cell count, the trailing span and the plane grouping. It draws row-major from a pre-walked glyph-pointer table, so each cell row costs one store on mono and on VGA subset pairs, and unaligned runs cost n-1 plain stores plus two edge columns. Two systemic ideas have no period equivalent. The menu bar is a cell-diffed composition (menu_bcell is the record of what is on the glass). The file-progress widget is armed from the disk choke points and torn down only by gfx_unlock, so no caller can leave it up. The defects found are latent rather than live. fpg_bare banks the clip count but not the dock's hole, as every other bank site in the tree does. font_ink has a 14-byte VGA/gfx_mono1 arm that cannot be reached, and SPEC 11.96.17.1 still describes it as working. font_run leaves [gfx_color] differently depending on the path taken, and its header says otherwise. The menu layout measures package strings without a bound. OSAPI_FONT_GLYPHS can race the extended desktop's seam cut. The largest weakness is prose: about 45% of these files is comment, much of it 'it used to' history. Verification confirmed 32 of the 33 statements the reviewer found that no longer describe the code (in headers, SPEC and the SDK), and found three more, for 38 edits in all. Worthwhile rethinks are small and additive: kernel-synthesised BOLD in font_run, which retires the last structural reason for transparent text; real separator and check-mark item markers; and moving the once-per-run VGA prologue into the .vga rung.",
+ "strengths": [
+  {
+   "title": "font_run_x's run model",
+   "why": "Everything that belongs to a run is decided once. The per-cell-row work is lodsw/xchg/add/mov/and/xor/stosb, with a +8-biased glyph-pointer table so the row counter's inc is the loop test. This is the right shape for any 'many cells, one pen' primitive on an 8088.",
+   "evidence": "kernel/font.inc:1152 (FONT_RN_PX), 1400-1500 (pass 1), 1530-1600 (row pass), 1823-1925 (planar prologue)"
+  },
+  {
+   "title": "ROM font read in place, chosen and copied by measurement",
+   "why": "FONT_PICK times the candidates with the PIT. The 760 bytes are copied into a pinned top-down heap claim only on a machine whose ROM is more than 25% slower than RAM, and the same macro re-asks at resume. Nothing is resident on machines that do not need the copy.",
+   "evidence": "kernel/font.inc:213-420; kernel/hiber.inc:5062-5100"
+  },
+  {
+   "title": "The menu bar is one composition, and composing it is the diff",
+   "why": "menu_bcell is both the composition buffer and the record of what is on the glass. The padding is the erase, and a minute rollover redraws one glyph. menu_bput advances even when it drops a cell, which removed a livelock class by construction.",
+   "evidence": "kernel/menu.inc:1021-1290, 1455-1490"
+  },
+  {
+   "title": "Save-under claimed per drop, sized from the rect, with a correct fallback",
+   "why": "The claim is purgeable and movable. A refused or purged claim degrades to a damage-rect repaint, and the bdirty disarm around that repaint shows the XOR-highlight interaction was understood rather than patched.",
+   "evidence": "kernel/menu.inc:1822-2100"
+  },
+  {
+   "title": "MENU_DIS prefix and two labels over one db",
+   "why": "Greying an item costs one byte and no structure: the live label is the tail of the greyed one. This is cheaper than the Mac's per-menu enable mask and needs no API.",
+   "evidence": "kernel/menu.inc:2496-2499"
+  },
+  {
+   "title": "The progress widget belongs to the freeze, armed at the choke points",
+   "why": "dsk_xfer and drv_fs_call arm it, and gfx_unlock is its only teardown, so no bracket can be forgotten and no early return can leave it up. FPG_WARM stops a one-sector probe from flashing it on and off. None of DOS, Windows 3.x, OS/2 1.x or System 6 had a system-owned disk progress indicator.",
+   "evidence": "kernel/fprog.inc:440-520 (fpg_busy), 1181-1270 (fpg_finish)"
+  },
+  {
+   "title": "Data and adjacency checked at assembly time",
+   "why": "IREC/IRUN/IHALF/IEND turn a miscounted icon run stream into a build error. The %if adjacency guards (font_rn_fg/bg, xm/bm, ico_c1/c2, menu_bdirty/bovr, menu_seg/dseg) cost no bytes and fire on the edit that would break a one-word store.",
+   "evidence": "kernel/icons.inc:863-908; kernel/font.inc:2672-2677; kernel/menu.inc:2660-2690"
+  },
+  {
+   "title": "One-shot icon pens are spent on refusal too",
+   "why": "ico_c1/c2 are reset on the refused path as well as the drawn one, which is the case nobody tests.",
+   "evidence": "kernel/icons.inc:168, 213"
+  },
+  {
+   "title": "menu_hover reads the pointer once under cli",
+   "why": "It closes a torn-read race that was measured launching the wrong item 4 times in 320.",
+   "evidence": "kernel/menu.inc:2254-2300"
+  },
+  {
+   "title": "ascw.inc treats ASSOC.DAT as hostile",
+   "why": "It checks the size against 64KB and the buffer, the magic, both counts against the caps, and the counts against the bytes actually read. It takes header fields only if the bytes reached them, treats an I/O error as different from 'no file', and reads the volume it writes about.",
+   "evidence": "kernel/ascw.inc:384-445, 691-760"
+  }
+ ],
+ "findings": [
+  {
+   "id": "text-1",
+   "kind": "hazard",
+   "severity": "medium",
+   "title": "fpg_bare banks [wm_clip_n] but not [gfx_hole]",
+   "detail": "fpg_bare zeroes the clip count, runs the painter, and restores the count. On a DOCK_OPT kernel, CLIPQ is gfx_clip_query: with wm_clip_n = 0 and the hidden dock's strip open, it tail-jumps to gfx_hole_arm, which re-seeds wm_clip_tab with the desktop minus the strip. fpg_bare then restores the caller's fragment count over the hole's table. The caller's next primitive in the same hold clips against the wrong region and can paint over windows above it. Every other bank site in the tree saves both words. toast_now also goes through fpg_bare.",
+   "evidence": [
+    "kernel/fprog.inc:161-170 fpg_bare banks wm_clip_n only",
+    "kernel/vga12.inc:454-470 CLIPQ -> gfx_clip_query -> gfx_hole_arm",
+    "kernel/dockmod.inc:1542-1562 dkx_gfx_hole_arm re-seeds wm_clip_tab",
+    "kernel/vga12.inc:6638-6644 gfx_clip_run banks gfx_hole, comment names this exact hazard",
+    "kernel/menu.inc:1929-1935,2038-2039 menu_drop banks both",
+    "kernel/dockmod.inc:528-534 dkx_paint banks both",
+    "kernel/toast.inc:412 toast_now uses fpg_bare"
+   ],
+   "recommendation": "Under %ifdef DOCK_OPT, push word [gfx_hole] / and word [gfx_hole],0 before the painter call and pop word [gfx_hole] after it, inside fpg_bare itself so that all callers are covered. Verdict: PLAUSIBLE. It needs a handler that draws through a region after file I/O in the same hold while the strip is open.",
+   "phase": "now",
+   "bytes_est": "+13 .text kern_big only",
+   "verdict": "confirmed",
+   "verify_note": "Re-read: fpg_bare (fprog.inc:161-170) banks only [wm_clip_n]; with it 0 and [gfx_hole] set, CLIPQ -> gfx_clip_query (vga12.inc:463-468) -> dkx_gfx_hole_arm (dockmod.inc:1542-1562) calls dkk_wm_clip_seed, overwriting wm_clip_tab, and fpg_bare then pops the caller's old count over the hole's table. menu_drop (menu.inc:1929-1935) and dkx_paint bank both words. Banking the hole is safe: the widget is in the bar's rows, never under the bottom strip. +13 checks out (push mem 4, and mem,imm8 5, pop mem 4). Not in ABI-BREAK-LIST or KERNEL-BYTE-QUEUE. Live only with a region armed, the hidden dock open and file I/O in the same hold."
+  },
+  {
+   "id": "text-2",
+   "kind": "size",
+   "severity": "medium",
+   "title": "font_ink's VGA early-out and [gfx_mono1] test are unreachable",
+   "detail": "font_ink has one caller, font_char_bb, which font_char reaches only on a 1bpp display (vid_mono != 0, or vid_planes < 4 under VID_EXT, which vid_depth_set keeps in step with mono). So mov al,[vid_mono] / or al,[gfx_mono1] / jz .vga never jumps, and .vga is dead. That is 14 bytes plus about 40 clocks per glyph on every mono string drawn by kern_big (~1.2% of a cell). SPEC 11.96.17.1 and vga12.inc still credit this test with behaviour that exists on no path.",
+   "evidence": [
+    "kernel/font.inc:949-951 the test",
+    "kernel/font.inc:1006-1008 .vga",
+    "kernel/font.inc:603-610 font_char only calls font_char_bb on 1bpp",
+    "kernel/font.inc:789 the only call font_ink",
+    "kernel/font.inc:1011-1017 parity nops follow it"
+   ],
+   "recommendation": "Delete the three-instruction test and .vga on GFX_VGA builds, and re-balance the parity pad after it (t_hotpar). Correct SPEC 11.96.17.1 and vga12.inc:31 (see doc mismatches).",
+   "phase": "now",
+   "bytes_est": "-14 .text kern_big and kern_mega; 0 kern_small",
+   "verdict": "confirmed",
+   "verify_note": "Only caller is font.inc:789 in font_char_bb; font_char reaches it only when vid_mono=1 (GFX_VGA) or vid_planes<4 (VID_EXT), and vid_depth_set writes mono/planes as one word: 1/1, 0/4, or 0/vx_bpp with vx_bpp 8 or 16. So `jz .vga` never jumps. 14 bytes = mov al,[m] 3 + or al,[m] 4 + jz 2 + mov [m],al 3 + jmp short 2. An even deletion, so parity holds; the comments at font.inc:952-962 claiming the OR serves 11.96.17.1 go with the code."
+  },
+  {
+   "id": "text-3",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "font_run_x leaves [gfx_color] path-dependent and the contract is silent",
+   "detail": "The fast paths (.rm/.rmp/.rmu/.planar) never write the pen. .whole leaves it at the foreground. font_run_scell leaves it at the background for a refused cell. The header claims 'left at the run's foreground on a drawn run'. os88api.inc's OSAPI_FONT_RUN and SPEC 6.1 do not mention the pen. A package that draws with its pen after FONT_RUN gets different colours depending on adapter, theme and clip state.",
+   "evidence": [
+    "kernel/font.inc:1090-1093 header claim",
+    "kernel/font.inc:1951-1961 .whole sets fg",
+    "kernel/font.inc:2228-2236 font_run_scell sets bg first",
+    "apps/os88api.inc:5170-5193 no pen statement"
+   ],
+   "recommendation": "Document that the pen is undefined after the call (in the SDK and SPEC 6.1), at zero bytes. Alternatively, bank AL at entry and restore it at .out (+8 bytes) if a clean contract is preferred.",
+   "phase": "now",
+   "bytes_est": "0 (doc) or +8 .text both kernels",
+   "verdict": "confirmed",
+   "verify_note": "Only font.inc:1954/1960 (.whole) and 2235/2272 (font_run_scell) store [gfx_color]; the mono, planar and unaligned row passes read font_rn_fg/bg only. The header's 'foreground on a drawn run' is false for every single-pass run. Doc fixes below make it UNDEFINED; whether to restore instead is the owner's call."
+  },
+  {
+   "id": "text-4",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "OSAPI_FONT_GLYPHS can return the seam cut's borrowed table",
+   "detail": "On a SEAMCUT kernel, font_ch_seam points [font_seg]:[font_base] at LOW_SEG:font_seam_a minus a bias for one font_char call, under the gfx lock. osapi_font_glyphs takes no lock and reads the same pair, so a worker pre-empting the UI task mid-seam gets garbage glyphs. An app that copies the font before an FSX bracket would then keep the wrong font.",
+   "evidence": [
+    "kernel/font.inc:448-458 font_ch_seam swaps the pair",
+    "kernel/kernel.asm:6627-6632 osapi_font_glyphs reads it lock-free"
+   ],
+   "recommendation": "Keep a canonical pair for the API, written only by font_init, hbm_wake 4a and the kern_mega pool move. Alternatively, give the seam its own pair for font_char to load. The other option is to document the window in the slot row.",
+   "phase": "now",
+   "bytes_est": "+4 resident .bss, +~6 in each writer (.boot2/HIBER.DRV/.cold)",
+   "verdict": "confirmed",
+   "verify_note": "font_ch_seam (font.inc:448-458) rewrites both words for one font_char call and osapi_font_glyphs (kernel.asm:6627-6632) reads them with no lock; a pre-empting worker can also catch the pair torn between the two stores. SEAMCUT kernel only, and only while a seam cell is being drawn: low."
+  },
+  {
+   "id": "text-5",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "Menu layout measures package strings with an unbounded font_width_x",
+   "detail": "font_width_x is 8 x len mod 64K. menu_widest measures each item with it and then clamps. An item of 8,192 or more non-NUL bytes wraps to a narrow rect, and therefore a narrow save-under, while menu_trunc still letters 24 cells. That leaves permanent garbage outside the rect, which is exactly what menu_trunc's header says it prevents. menu_relayout also places the first app menu after the full AM_NAME width, while the name cell shows a 24-glyph copy: names of 25-60 characters leave a gap, and a wrapping name overlaps.",
+   "evidence": [
+    "kernel/font.inc:2542-2557 font_width_x",
+    "kernel/menu.inc:2427-2460 menu_widest",
+    "kernel/menu.inc:2390-2418 menu_trunc",
+    "kernel/menu.inc:570 vs 719 two different name widths"
+   ],
+   "recommendation": "Bound the measure at MENU_MAXCH+1 (menu_trunc's repne scasb already does this) in menu_widest. Take the name width from menu_abstr+MENU_ABPFX_LEN after building it.",
+   "phase": "now",
+   "bytes_est": "+4 to +8 .text both kernels",
+   "verdict": "confirmed",
+   "verify_note": "font_width_x is 8*len mod 64K (font.inc:2542-2557) and menu_widest (menu.inc:2427-2460) measures with it before clamping, so a NUL-less run of about 8,190+ bytes wraps to a narrow width. menu_trunc still letters MENU_MAXCH cells. That needs hostile or broken package strings: low. The name-width gap was not exercised: the full-width measure (menu.inc:570) against the menu_abstr copy (719) was read, not run."
+  },
+  {
+   "id": "text-6",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "fprog's one-word-store adjacencies are only half asserted",
+   "detail": "fpg_finish's xchg ax,[fpg_on] and KHP_FPG's cmp word [fpg_on],0 need fpg_warm to follow fpg_on on every kernel, but the %if guarding this sits inside %ifdef FPG_PARK (kern_big only). The three stores that empty the trough state in one word (fpg_pat plus fpg_px's low byte) have no %if at all, only prose.",
+   "evidence": [
+    "kernel/fprog.inc:1340-1344 guard inside FPG_PARK",
+    "kernel/fprog.inc:1199,1228 word accesses",
+    "kernel/fprog.inc:431,669,852 one-word trough stores",
+    "kernel/fprog.inc:1345-1352 prose-only adjacency"
+   ],
+   "recommendation": "Hoist the fpg_warm guard out of the %ifdef and add %if fpg_px - fpg_pat != 1.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "The %if (fpg_warm - fpg_on) != 1 at fprog.inc:1340-1344 is inside %ifdef FPG_PARK, but the xchg ax,[fpg_on] at 1228 runs on every kernel. fpg_pat/fpg_px adjacency is prose only; the %error at fprog.inc:110 guards px's high byte, not adjacency."
+  },
+  {
+   "id": "text-7",
+   "kind": "size",
+   "severity": "low",
+   "title": "font_run_x's once-per-run VGA prologue is resident on mono machines",
+   "detail": "MOVABLE-COLD-PLAN kept font_char's per-cell VGA writer in .text, rightly. font_run_x's .planar prologue plus its VESA door is 144 bytes by build/kernel.map (0x3E65..0x3EF5), and fnt_rn_edge's VGA arm is about 43 more (0x3F78..0x3FA3). Both run once per RUN, ahead of a ~4,300-cycle prologue, and both are dead on CGA/Hercules/MDA. The .vga rung's entry jump would cost about 15 clocks per run.",
+   "evidence": [
+    "build/kernel.map font_run_x.planar 3E65, .plno 3EF5",
+    "build/kernel.map fnt_rn_edge 3F6F, fnt_rn_edge.mono 3FA3",
+    "kernel/font.inc:1823-1925",
+    "kernel/font.inc:2024-2060 fnt_rn_edge",
+    "docs/plans/MOVABLE-COLD-PLAN.md:13-16 why font_char stayed"
+   ],
+   "recommendation": "Move .planar/.vxp0 and fnt_rn_edge's VGA arm into .vga, with a tests/vgarefs.txt row guarded by the [vid_planes]/[vid_mono] test font_run_x already makes. KERN_BUDGET is measured on VGA, so the budget machine pays the small plus. Owner's call.",
+   "phase": "now",
+   "bytes_est": "~-185 resident on mono kern_big machines, ~+10 on VGA/EGA (KERN_BUDGET)",
+   "verdict": "corrected",
+   "verify_note": "The .planar span is right (map 0x3E65..0x3EF5 = 144). fnt_rn_edge's VGA arm is 0x3F78..0x3FA3, about 43 bytes, not ~25, so the mono saving is ~-185. A .vga move puts a jump on VGA's per-run path and adds to KERN_BUDGET, which is measured on VGA. Not queued in KERNEL-BYTE-QUEUE."
+  },
+  {
+   "id": "text-8",
+   "kind": "size",
+   "severity": "low",
+   "title": "[vid_popmax] is a constant held in a memory word",
+   "detail": "vid_popmax dw MENU_POPMAX has never been written since vid_apply stopped computing it. Its only reader, menu_setup, can use immediates.",
+   "evidence": [
+    "kernel/viddet.inc:362",
+    "kernel/viddet.inc:918",
+    "kernel/menu.inc:1764-1766"
+   ],
+   "recommendation": "Use cmp ax, MENU_POPMAX / mov ax, MENU_POPMAX and delete the cell.",
+   "phase": "now",
+   "bytes_est": "-3 .text both kernels",
+   "verdict": "confirmed",
+   "verify_note": "Readers are menu.inc:1764/1766 only, besides comments and a C comment in apps/c64/c64menu.c. cmp ax,[m] 4 -> cmp ax,imm8 3; mov ax,[m] 3 -> mov ax,imm16 3; the dw goes: -3."
+  },
+  {
+   "id": "text-9",
+   "kind": "perf",
+   "severity": "low",
+   "title": "VGA ico_pass keeps its per-word column bookkeeping in memory",
+   "detail": "Per source word, the pass does add word [ico_col],2, dec word [ico_wleft], and up to three cmp word [ico_col],imm. That is about 90 clocks a word, roughly 4.8 ms per 32x32 desktop icon on an XT with a VGA (the owner's 5150 with a PVGA1A). PREDICTED. The 1bpp twin moved the same state into DL/DH; the VGA pass cannot, because DX is the GC port. The VGA arm also lacks the fully-off-right early-out that ico_core_bb has.",
+   "evidence": [
+    "kernel/icons.inc:592-655",
+    "kernel/icons.inc:557-560 bb early-out"
+   ],
+   "recommendation": "Test once per icon whether col0+2*ww+2 <= ROW_BYTES and take a compare-free copy of .word (KHP_ICONWORD's idea, applied to the planar arm). The same test gives the off-right early-out.",
+   "phase": "now",
+   "bytes_est": "+~20 in .vga (not resident on mono)",
+   "verdict": "confirmed",
+   "verify_note": "ico_pass (icons.inc:592-655) keeps ico_col/ico_wleft in memory with three memory compares per word, and has no off-right early-out (ico_core_bb has one at 557-560). The clock figure is PREDICTED, as the reviewer says."
+  },
+  {
+   "id": "text-10",
+   "kind": "perf",
+   "severity": "low",
+   "title": "ico_pass_bb makes a near call per framebuffer byte on shifted icons",
+   "detail": "There are three calls to ico_bbop_byte per word, each a call, a memory compare and a ret: about 55 clocks a byte. KHP_ICONWORD covers only shift 0 and is off pending LOG O5.",
+   "evidence": [
+    "kernel/icons.inc:760-800",
+    "kernel/icons.inc:817-826",
+    "docs/plans/LAST-DROP-PERF.md:602 row 15"
+   ],
+   "recommendation": "Price hoisting the op (two loop copies, as font_char_bb's .srow/.crow do) alongside row 15 when O5 is decided.",
+   "phase": "record",
+   "bytes_est": "+~30 .text if taken",
+   "listed_as": "LAST-DROP-PERF.md row 15 (KHP_ICONWORD) covers the aligned half only",
+   "verdict": "confirmed",
+   "verify_note": "Three `call ico_bbop_byte` per word (icons.inc:771/786/795); LAST-DROP-PERF.md:602 row 15 is KHP_ICONWORD, gated on LOG O5."
+  },
+  {
+   "id": "text-11",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "An empty volume keeps a stale ASSOC.DAT",
+   "detail": "When no package was placed, asw_close returns CF=1 and ascw_flush_x takes .same (success, nothing written). A volume whose packages were all removed keeps an old cache that names rows and associations for packages that are gone, even after a full-mode (installer) flush.",
+   "evidence": [
+    "kernel/ascw.inc:153-154",
+    "kernel/ascw.inc:186-188 .same",
+    "kernel/ascw.inc:983-990 asw_close .none"
+   ],
+   "recommendation": "When an old file exists (asw_dclus >= 2) and the build is empty, write a valid 16-byte header with both counts 0 instead. Verdict: PLAUSIBLE; impact depends on how asc_use treats rows whose packages are missing.",
+   "phase": "now",
+   "bytes_est": "+~10 FORMAT.DRV, 0 resident",
+   "verdict": "confirmed",
+   "verify_note": "asw_close .none returns CF=1 when ASC_NAPP - nb + nf = 0 (ascw.inc:976-979), and .built's `jc .same` writes nothing (153-154). The old file stands. Impact is PLAUSIBLE: asc_use's handling of rows for missing packages was not traced. FORMAT.DRV code, 0 resident."
+  },
+  {
+   "id": "text-12",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "menu_drop and fpg_paint fill a ground, then letter over it",
+   "detail": "menu_drop fills the whole rect and then runs font_run_x over every item, so each text cell is written twice. fpg_paint fills the bed under the icon, frame and trough. Doing it exactly once with the available primitives would take MORE primitive calls (pad strips per item), and redraws are priced by calls. The clean answer is composition through the band, which has been a knob since SPEC 5.9.6.",
+   "evidence": [
+    "kernel/menu.inc:1939-1985",
+    "kernel/fprog.inc:811-855",
+    "kernel/band.inc:1-40 (knob, SPEC 5.9.6)"
+   ],
+   "recommendation": "Do not hand-fix this. Revisit only if BAND returns as a shipped feature.",
+   "phase": "record",
+   "bytes_est": "0",
+   "verdict": "unchecked",
+   "verify_note": "Not re-derived."
+  },
+  {
+   "id": "text-13",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "Two parity nops under complementary %ifdefs are one unconditional nop",
+   "detail": "%ifdef KERN_SMALL nop / %ifndef KERN_SMALL nop emits exactly one byte on every build, with two different stated reasons.",
+   "evidence": [
+    "kernel/font.inc:1011-1017"
+   ],
+   "recommendation": "Collapse it to one nop carrying both reasons, or let text-2's edit re-derive it.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "font.inc:1009-1017: `%ifdef KERN_SMALL nop` + `%ifndef KERN_SMALL nop` = one nop on every build."
+  },
+  {
+   "id": "text-14",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "Routine headers carry history, and the history goes stale",
+   "detail": "Comment-only lines are 1,065 of font.inc's 2,793 lines, 1,288 of menu.inc's 2,721 and 811 of fprog.inc's 1,388, before counting the paragraph-long trailing comments. The mismatches found share one shape: the original contract line stands while a later pass appends a new paragraph about the change (font_char's whole-char clip, font_str_x's five callers, font_run_cell's '.slow', font_ink's planes, SAVE_SEG, MENU_SAVE_KB).",
+   "evidence": [
+    "kernel/font.inc:505-512",
+    "kernel/font.inc:1051-1054",
+    "kernel/font.inc:2085-2087",
+    "kernel/menu.inc:24-25",
+    "kernel/menu.inc:1732-1734"
+   ],
+   "recommendation": "Adopt a convention, not a gate: headers state only the current in/out/clobbers/invariants. 'It used to' paragraphs move to the SPEC section or the pass's report, leaving a one-line pointer. Apply it file by file as each is next touched.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "Counts reproduced with grep -c '^ *;': 1065/2793, 1288/2721, 811/1388. Of the 33 mismatches the reviewer listed, 32 held."
+  },
+  {
+   "id": "text-15",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "Kernel-synthesised BOLD in font_run",
+   "detail": "Overstrike is now the only structural reason a text pixel is written twice (SPEC 6.6.2 case 6: Word, Texpad, Frotz x2, cword). STIKMENU.DRV already synthesises bold as row | row>>1, which stays inside the cell on the ROM 8x8 set. A one-shot run style plus a bold copy of the row loop would make bold one pass and retire case 6 along with its registry rows.",
+   "evidence": [
+    "SPEC.md:10490-10500 case 6",
+    "kernel/stikmenu.inc:1387-1400 stm_text BOLD",
+    "kernel/font.inc:1152-1160 FONT_RN_PX"
+   ],
+   "recommendation": "Add an additive one-shot style cell (like OSAPI_ICON_PEN) and a bold row loop in font_run_x on kern_big. kern_small can keep the plain loop.",
+   "phase": "now",
+   "bytes_est": "+35..45 .text kern_big",
+   "prior_art": "QuickDraw's bold is a 1-pixel smear done by the text engine, and Windows GDI emboldens raster fonts the same way; in both, applications never double-strike.",
+   "verdict": "confirmed",
+   "verify_note": "SPEC 6.6.2 case 6 (overstrike) is as quoted, and STIKMENU.DRV's stm_text has STY_BOLD (stikmenu.inc:157, 1387-1432). The byte estimate is the reviewer's and was not re-derived. It adds an API cell, so it needs an abilock --update."
+  },
+  {
+   "id": "text-16",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "Real separator and check-mark item markers",
+   "detail": "Separators are MENU_DIS strings of hand-counted dashes, sized to the widest item when written, so a wider item added later makes the rule short (the kernel has two such strings; isotron, pixel and realdmg have their own). MENU_DIS doubles as a radio mark, which reads as 'disabled'. Proposed: MENU_SEP draws one gfx_hline across the interior over the already-filled ground, and MENU_CHK puts a mark in the existing 8px left margin and stays selectable. menu_item_dis remains one compare.",
+   "evidence": [
+    "kernel/menu.inc:2523-2534 menu_s_msep",
+    "kernel/menu.inc:2333-2340 menu_item_dis",
+    "SPEC.md:26455-26459 radio-mark usage",
+    "apps/isotron/isotron.asm:981, apps/pixel/pixel.asm:3847"
+   ],
+   "recommendation": "Add MENU_SEP=2 and MENU_CHK=3 as prefix bytes alongside the SDK change; old kernels would draw MENU_SEP as a selectable blank.",
+   "phase": "now",
+   "bytes_est": "+~12 menu_drop, -17 kern_big menu_s_msep; net ~-5, plus package strings",
+   "prior_art": "Mac '(-' meta and CheckItem; Windows MF_SEPARATOR/MF_CHECKED; Intuition CHECKIT.",
+   "verdict": "corrected",
+   "verify_note": "The two kernel separator strings are menu.inc:2523/2529 (and files.inc:2611/2613 fm_s_fsep, which the reviewer did not count). A 17-dash string is 19 bytes, and a MENU_SEP,0 string is 2, so the saving is -17, not -19 (corrected in bytes_est)."
+  },
+  {
+   "id": "text-17",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "The icon API is 16 px wide because the stage shares ico_ibuf with the desk band",
+   "detail": "ico_ibuf (256 bytes) could hold a 32x32 body, but ico_band occupies its top 136 bytes while a desktop cell composes, and OSAPI_ICON_DRAW is called inside that compose (the Wire's driver). A 32-px plain kind would need the stage moved out of the band.",
+   "evidence": [
+    "kernel/icons.inc:50-56",
+    "kernel/icons.inc:1325-1347",
+    "kernel/icons.inc:200-206"
+   ],
+   "recommendation": "Record only, so the limit is not 'fixed' into a band overrun. A 32-px kind costs +136 .bss.",
+   "phase": "record",
+   "bytes_est": "+136 .bss if ever taken",
+   "verdict": "unchecked",
+   "verify_note": "Not re-derived."
+  },
+  {
+   "id": "text-18",
+   "kind": "perf",
+   "severity": "low",
+   "title": "font_char's VGA writer multiplies y by 80 for every glyph",
+   "detail": "mov ax,ROW_BYTES / mul dx costs about 125 clocks per VGA glyph. The row table stops at 348 rows, and the 480-row table was refused after being measured. A shift-and-add y*80 saves about 45 clocks (~2% of a VGA cell) for about +13 resident bytes.",
+   "evidence": [
+    "kernel/font.inc:632-633",
+    "kernel/viddet.inc:464 VID_ROWTAB 348",
+    "docs/plans/MONO-RECLAIM-PLAN.md 4.0"
+   ],
+   "recommendation": "Not recommended. Recorded with the numbers so nobody re-derives it.",
+   "phase": "record",
+   "bytes_est": "+13 .text if taken",
+   "verdict": "unchecked",
+   "verify_note": "Not re-derived."
+  },
+  {
+   "id": "text-19",
+   "kind": "prior-art",
+   "severity": "low",
+   "title": "No keyboard path into a menu",
+   "detail": "The keyboard mouse steps a dropped menu item by item (menu_kbnav), but nothing opens the bar from the keyboard. Windows used F10/Alt plus mnemonics; the Mac showed Cmd-key equivalents. A real model would map a key to opening cell N, arrows walk cells and items, and Enter returns menu_track's (cell, item) pair.",
+   "evidence": [
+    "kernel/menu.inc:2153-2250 menu_kbnav"
+   ],
+   "recommendation": "Record only. It is about 150-250 .cold bytes and outside the 'no huge growth' brief.",
+   "phase": "record",
+   "bytes_est": "+150..250 .cold if taken",
+   "prior_art": "Windows 3.x Alt/F10 and accelerator tables; Mac Menu Manager Cmd-key equivalents; Intuition COMMSEQ.",
+   "verdict": "unchecked",
+   "verify_note": "Not re-derived."
+  }
+ ],
+ "doc_fixes": [
+  {
+   "file": "kernel/font.inc",
+   "old_text": "; Clipping is whole-char: if any part of the 8x8 cell would leave the screen\n; the glyph is skipped entirely (acceptable v1 behavior per SPEC.md 6) - and,\n; while a background task's clip region is armed, if any part of the cell\n; would leave THAT (SPEC.md 11.3). A glyph is one shape or none; the region\n; is the only thing here that could produce half of one, and half an 8x8\n; glyph is unreadable anyway.",
+   "new_text": "; Clipping: a cell that would leave the SCREEN is skipped entirely (on a\n; SEAMCUT kernel a cell a display seam crosses is cut there instead, SPEC.md\n; 39.14.11). Against an armed clip region the cell is cut to the ROWS\n; wm_clip_rows allows (SPEC.md 11.3.2) and, on kern_big, to the columns\n; [wm_clip_cm] allows (11.3.4); a cell no fragment reaches draws nothing.",
+   "why": "font_char's CLIPQ arm calls wm_clip_rows (font.inc:548-570) and the row loops AND [wm_clip_cm] on KERN_BIG; font_ch_spill cuts at a seam"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "Clipping is **whole-cell**: a\nglyph whose 8x8 cell would cross a screen edge is skipped entirely, and so\nis one whose cell is not wholly inside a single fragment of an armed clip\nregion (§11.3) — a glyph is one shape or none, and half an 8x8 glyph is\nunreadable.",
+   "new_text": "A\nglyph whose 8x8 cell would cross a screen edge is skipped entirely (a\ndisplay seam cuts it instead, §39.14.11). Against an armed clip region the\ncell is cut by ROWS (§11.3.2) and, on `kern_big`, by COLUMNS too (§11.3.4),\nso a cell an edge crosses draws the part on its side and one no fragment\nreaches draws nothing.",
+   "why": "font_char asks wm_clip_rows, not wm_clip_test (font.inc:548-570), and masks columns with [wm_clip_cm] on KERN_BIG"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "applies the same shifted row masks to every\nplane the adapter has (or/and-not per the `[gfx_color]` plane bit — at 1bpp\nthere is one plane and one bit, and `font_ink` rounds",
+   "new_text": "applies the same shifted row masks to the\none 1bpp plane (or/and-not per the ink bit — `font_ink` rounds",
+   "why": "font_char_bb's plane loop is gone: it writes [vid_rseg] once (font.inc:770-785)"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "A hibernated image\ncarries the pointer and resumes only on the machine that wrote it, whose ROM\nthe image's own IVT already names (§87.3).",
+   "new_text": "A hibernated image\ncarries the pointer, and the resume asks the reading machine again\n(`hbm_wake` step 4a, §6.0.1).",
+   "why": "hbm_wake 4a re-runs FONT_PICK and refills a heap copy or replaces the ROM pointer (hiber.inc:5062-5100; SPEC 6.0.1 'The resume re-asks')"
+  },
+  {
+   "file": "kernel/font.inc",
+   "old_text": "There is no RAM\n; copy: the 768 bytes of .lowbss the table and its blank cell were are not\n; resident on any machine.",
+   "new_text": "There is no RESIDENT\n; copy: the 768 bytes of .lowbss the table and its blank cell were are gone\n; from every machine, and only one whose ROM font_init times more than a\n; quarter slower than RAM copies the 760 into a 1KB MEM_K_FONT heap claim\n; (SPEC.md 6.0.1).",
+   "why": "font_init copies FONT_BYTES into a MEM_K_FONT claim when the timed ROM is >1.25x RAM (font.inc:360-395)"
+  },
+  {
+   "file": "kernel/font.inc",
+   "old_text": "; The same shifted-row masks as the VRAM path, applied to all four planes\n; in software: the [gfx_color] plane bit picks or (set bits) or and-not\n; (clear bits).",
+   "new_text": "; The same shifted-row masks as the VRAM path, applied in software to the\n; 1bpp framebuffer's one plane: font_ink's reduced ink picks or (set bits)\n; or and-not (clear bits).",
+   "why": "one write target, mov ds,[vid_rseg], no plane loop (font.inc:770-800); the ink is font_ink's 00/FF"
+  },
+  {
+   "file": "kernel/font.inc",
+   "old_text": "; font_ink - internal: font_char_bb's per-plane colour register\n;\n; The glyph loop tests bit 0 of CH once per plane and shifts, so on VGA the\n; colour index goes in untouched. On mono there is one plane and one bit to\n; give it: gfx_ink's black or white.",
+   "new_text": "; font_ink - internal: font_char_bb's ink register\n;\n; Its one caller is font_char_bb, which font_char reaches only on a 1bpp\n; display, so there is one plane and one bit to give the glyph loop's\n; `test ch, 1`: gfx_ink's black or white.",
+   "why": "one call site (font.inc:789); font_char calls font_char_bb only when vid_mono/vid_planes<4 (font.inc:603-610), which vid_depth_set ties to mono"
+  },
+  {
+   "file": "kernel/font.inc",
+   "old_text": "; out:      CH = the colour index (VGA) or 00/FF (mono); [font_dith] set",
+   "new_text": "; out:      CH = 00h or FFh; [font_dith] set",
+   "why": "font_ink runs only on 1bpp, so the VGA early-out never answers (font.inc:603-610, 949-951)"
+  },
+  {
+   "file": "kernel/font.inc",
+   "old_text": "Five call sites in the tree pass a package segment -\n; the window title (wm_draw_win), the app name and menu titles\n; (menu_draw_bar), and the item strings (menu_drop, menu_widest); every other\n; caller reaches this through font_str above with ES = DS.",
+   "new_text": "Three callers are left:\n; OSAPI_FONT_STR_XPARENT's X cell (slot 0x0068, ES = the package's),\n; wm_draw_win's caption (ES = the owner's) and font_run_x's .whole fallback.\n; font_str above (ES = DS) survives only in `make BOOTPROF=1`.",
+   "why": "call sites: kernel.asm:2672 (OSAPI_XCELL), wm.inc:7864, font.inc:1961; the menu draws through font_run_x and measures with font_width_x"
+  },
+  {
+   "file": "kernel/font.inc",
+   "old_text": "the pen is SPENT: it is left at the run's\n;           foreground on a drawn run and at its background on one whose cells\n;           were all refused by the clip region (font_run_scell sets it before\n;           the test). A caller that draws afterwards sets its own pen",
+   "new_text": "the pen is UNDEFINED after the call:\n;           the single-pass paths never write it, .whole leaves the\n;           foreground, and a run cut per cell leaves whatever its last cell\n;           set (font_run_scell sets the background before the test). A\n;           caller that draws afterwards sets its own pen",
+   "why": "only .whole (font.inc:1951-1961) and font_run_scell (2228-2272) store [gfx_color]; .rm/.rmp/.rmu/.planar never do"
+  },
+  {
+   "file": "kernel/font.inc",
+   "old_text": "A planar run takes .slow (SPEC.md\n; 6.1), so the 4-plane walk this used to carry could never run.",
+   "new_text": "A planar or off-grid run never\n; reaches it: .escape sends one to font_run_scell instead ([font_rn_pl],\n; [font_rn_k7]; SPEC.md 6.1.10, 6.1.11), so the 4-plane walk this used to\n; carry could never run.",
+   "why": "planar runs take .planar and per-cell escapes go .escape -> .cells -> font_run_scell (font.inc:1463-1475, 1823)"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "`font_ink` clears `[font_dith]` on the VGA path, so a greyed caption is a\ncheckerboard of black and white on Hercules and CGA and **solid colour 8** on\na VGA. An application cannot fix that from outside: `font_ink` is the\nkernel's.",
+   "new_text": "only the 1bpp renderer stipples (`font_ink`, whose one caller is\n`font_char_bb`), so a greyed caption is a\ncheckerboard of black and white on Hercules and CGA and **solid colour 8** on\na VGA. An application cannot fix that from outside: the renderer is the\nkernel's.",
+   "why": "font_ink is reached only from font_char_bb, on 1bpp (font.inc:603-610, 789); a VGA cell goes to font_char's .vram writer"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "So `font_ink` takes its mono path when `[vid_mono]` is set **or** the window\nbeing drawn has declared two colours. That path reduces the ink to 00h or FFh\nand sets `[font_dith]`, which is the checkerboard. Nothing new renders; an\nexisting path is reached from one more place.",
+   "new_text": "`font_ink` tests `[gfx_mono1]` beside `[vid_mono]` for this, but its one\ncaller is the 1bpp `font_char_bb`, so on a VGA the test is never reached and\nthe declaration changes nothing there. What holds a VGA to the claim is\n`font_run`'s planar prologue and `gfx_pen_dis`, below.",
+   "why": "font_ink's or al,[gfx_mono1] (font.inc:949-951) runs only when vid_mono=1; [gfx_mono1] is honoured at font.inc:1866 and vga12.inc:5019"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "different: §6.1's opaque renderer calls `font_ink` explicitly on **every**\nadapter, and computes its own checkerboard without asking `[vid_mono]`.",
+   "new_text": "different: §6.1's opaque renderer reduces the inks itself — inline in its\nmono prologue, and from `[gfx_mono1]` and `[gfx_dis]` in its planar one —\nand computes its own checkerboard without asking `[vid_mono]`.",
+   "why": "font_run_x has no call font_ink; it reduces inline (font.inc:1326-1350) and in .plset (1866-1900)"
+  },
+  {
+   "file": "kernel/vga12.inc",
+   "old_text": "font_ink takes its mono path here as well -\n                                ; reducing the ink to 00h/FFh, which the glyph\n                                ; loop turns into colour 0 and 15 across all\n                                ; four planes, and stippling a disabled one\n                                ; instead of leaving it solid CDGRAY.",
+   "new_text": "font_run's planar prologue stipples a\n                                ; disabled run instead of leaving it solid\n                                ; CDGRAY, and gfx_pen_dis rounds the pen to\n                                ; black (font_ink, the 1bpp renderer's, never\n                                ; sees a VGA).",
+   "why": "the readers of [gfx_mono1] are font.inc:1866 (.plset) and vga12.inc:5019 (gfx_pen_dis); font_ink's test is reached only on 1bpp"
+  },
+  {
+   "file": "kernel/wm.inc",
+   "old_text": "; This is the answer for the two primitives that cannot draw a partial\n; shape: font_char's 8x8 cell and ico_core's icon body (SPEC.md 6/25). Both\n; already skip a glyph that would cross a SCREEN edge; a clip edge is the\n; same decision one region in.",
+   "new_text": "; This is the answer for a shape drawn whole or not at all: ico_core's\n; icon body (SPEC.md 25), a font_run run before it goes per cell (6.1) and\n; vga12's scroll rect, with the cull's overlap test in wm_clip_rows.\n; font_char's 8x8 cell is no longer one of them: it is cut by ROWS through\n; wm_clip_rows (SPEC.md 11.3.2).",
+   "why": "callers: icons.inc:416, font.inc:1545/1944/2420, vga12.inc:5411, wm.inc:7013/8305; font_char calls wm_clip_rows (font.inc:559)"
+  },
+  {
+   "file": "apps/os88api.inc",
+   "old_text": "there are five kinds",
+   "new_text": "there are six kinds",
+   "why": "SPEC.md 6.6.2 lists six cases; column-0 prose, so tools/abilock.py's fingerprint is unaffected"
+  },
+  {
+   "file": "apps/os88api.inc",
+   "old_text": "                                                ; Off that path it falls back\n                                                ; to fill+FONT_STR, so it is\n                                                ; never slower than doing it\n                                                ; by hand",
+   "new_text": "                                                ; On kern_big a VGA pair whose\n                                                ; planes nest (SPEC.md\n                                                ; 6.1.10.1) and an unaligned x\n                                                ; (6.1.11) are one pass too;\n                                                ; anything else falls back to\n                                                ; fill+FONT_STR, so it is never\n                                                ; slower than doing it by hand.\n                                                ; The pen ([gfx_color]) is\n                                                ; undefined after the call",
+   "why": "font_run_x's .planar and unaligned prologues are single passes (font.inc:1600-1925); only .whole is fill+font_str_x. An OSAPI contract comment: needs `python3 tools/abilock.py --update` (no bump)"
+  },
+  {
+   "file": "apps/os88api.inc",
+   "old_text": "                                 ; that is neither 1 nor ICON_SOLID, or a\n                                 ; record taller than 16)",
+   "new_text": "                                 ; that is neither 1 nor ICON_SOLID - and on\n                                 ; kern_small anything but 1 - or a record of\n                                 ; 0 rows or taller than 16)",
+   "why": "icon_draw_x refuses AH=0 and, under KERN_SMALL, `jne` any kind but 1 (icons.inc:88-101). An OSAPI contract comment: needs `python3 tools/abilock.py --update` (no bump)"
+  },
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": "    mov dx, [font_seg]          ; table, or a baked face's copy in LOW_SEG",
+   "new_text": "    mov dx, [font_seg]          ; table, its MEM_K_FONT heap copy on a slow-ROM\n                                ; machine (SPEC.md 6.0.1), or a baked face's\n                                ; copy in LOW_SEG",
+   "why": "font_init's .point stores the MEM_K_FONT block's segment in [font_seg] (font.inc:370-395)"
+  },
+  {
+   "file": "kernel/band.inc",
+   "old_text": "; sharing: font_glyphs itself.",
+   "new_text": "; sharing: the glyph table itself, through [font_seg]:[font_base].",
+   "why": "font_glyphs exists only under BAKED_FONT (font.inc:2566); band.inc:579 loads [font_seg]"
+  },
+  {
+   "file": "kernel/icons.inc",
+   "old_text": "; Clipping: rows are clipped to the screen (0..479) - icons drawn inside\n; windows can hang off the bottom edge; byte columns past the right screen\n; edge (>= ROW_BYTES) are skipped defensively.",
+   "new_text": "; Clipping: rows are clipped to the screen (0 .. [vid_ch]-1) - icons drawn\n; inside windows can hang off the bottom edge; byte columns past the right\n; screen edge ([vid_stride] on the 1bpp pass, ROW_BYTES on the planar one)\n; are skipped defensively.",
+   "why": "ico_core clips to [vid_ch] (icons.inc:455); ico_core_bb/ico_pass_bb use [vid_stride] (558, 691); ico_pass uses ROW_BYTES"
+  },
+  {
+   "file": "kernel/icons.inc",
+   "old_text": ";               ORs the shifted mask-row bits into all four planes, the",
+   "new_text": ";               ORs the shifted mask-row bits into the one 1bpp plane, the",
+   "why": "ico_pass_bb loads ES = [vid_rseg] once and has no plane loop (icons.inc:684-690)"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "| `ico_disk32`| library record: 32×32 floppy disk (rect body, shutter, label area) |",
+   "new_text": "| `ico_disk32`| INDEXED record over `ico_pool` (§25.7), drawn by `icon_draw_ix` only: 32×32 floppy disk (rect body, shutter, label area) |",
+   "why": "ico_disk32 is IREC/IRUN data (icons.inc:979-985), which icon_draw would misread"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "ORs the shifted mask-row\nbits into all `[vid_planes]` planes at `[vid_rseg]` — the framebuffer itself\n— the black pass AND-NOTs the data-row\nbits out of them,",
+   "new_text": "ORs the shifted mask-row\nbits into the one 1bpp plane at `[vid_rseg]` — the framebuffer itself\n— the black pass AND-NOTs the data-row\nbits out of it,",
+   "why": "ico_pass_bb writes one plane; its plane loop was removed (icons.inc:684-690)"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "Bitmaps are hand-authored `dw` rows (like the menu-bar logo, the one\nsanctioned place for hand-made bitmap data — icons are the second).",
+   "new_text": "Bitmaps are hand-authored `dw` rows — the one sanctioned place for hand-made\nbitmap data (the menu-bar logo, which was the other, is seven rects since\n§12.05.1).",
+   "why": "menu.inc:898-940 draws the logo with gfx_fill/gfx_hline; there is no logo bitmap"
+  },
+  {
+   "file": "kernel/menu.inc",
+   "old_text": "; the System menu (an 11x11 hand-authored chip silhouette - the os8088\n; logo, and the one place bitmap data is hand-made), which is cell 0 in",
+   "new_text": "; the System menu (the os8088 logo, an 11x11 chip silhouette drawn as\n; seven rects - SPEC.md 12.05.1), which is cell 0 in",
+   "why": "menu.inc:898-940 is gfx_fill/gfx_hline calls; no bitmap"
+  },
+  {
+   "file": "kernel/menu.inc",
+   "old_text": "The pixels under the\n; dropped menu are saved to SAVE_SEG:0 and put back on release.",
+   "new_text": "The pixels under the\n; dropped menu are saved to a heap claim sized from its rect ([menu_sseg],\n; menu_drop) and put back on release - or repainted, if the claim is refused.",
+   "why": "menu_drop claims mem_bytes_kb(rect) as MEM_P_MSAVE into [menu_sseg], .noclaim repaints (menu.inc:1858-1889)"
+  },
+  {
+   "file": "kernel/menu.inc",
+   "old_text": "claimed HERE and released before this routine returns - MENU_SAVE_KB for\n; exactly as long as a menu is on screen, bounded at build time by the clamps\n; below and asserted in kernel.asm.",
+   "new_text": "claimed HERE and released before this routine returns - sized from the\n; menu's rect, at most MENU_SAVE_KB (the ceiling the clamps below hold and\n; kernel.asm asserts), for exactly as long as a menu is on screen.",
+   "why": "the claim size is mem_bytes_kb of the rect's bytes (menu.inc:1864-1889); MENU_SAVE_KB is only kernel.asm:9529's assert"
+  },
+  {
+   "file": "kernel/menu.inc",
+   "old_text": "and how many fit depends on the adapter:\n                                ; 16 at 480 or 348 rows, 11 at CGA's 200",
+   "new_text": "and that is MENU_POPMAX (11) on\n                                ; every adapter ([vid_popmax], laid down)",
+   "why": "vid_popmax dw MENU_POPMAX is never written (viddet.inc:362, 918; menu.inc:210-228)"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "and nothing bounds its\nwidth — `menu_widest` is taken as-is — so the honest budget is stated over\nthe descriptors that actually exist rather than as a general guarantee.",
+   "new_text": "and\n`menu_widest` clamps its WIDTH to `MENU_MAXW` exactly as it does a bar\nmenu's (`menu_trunc` cutting the text to fit), so the per-drop claim can\nnever pass the `MENU_SAVE_KB` ceiling kernel.asm asserts. The descriptors\nthat actually exist are well inside it.",
+   "why": "menu_widest clamps AX to MENU_MAXW for every caller (menu.inc:2452-2457); kernel.asm:9529 asserts the product"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "**A width clamp in\n`menu_popup` is the fix the day that stops being true** — a 16-item popup\nof screen-wide items would want ~83KB and would run off the end of the\nheap into `VIEW_SEG`.",
+   "new_text": "The width clamp this once asked for is `menu_widest`'s, and `menu_setup`\nholds every menu to `MENU_POPMAX` items, so no descriptor can outgrow the\nclaim.",
+   "why": "menu_widest's MENU_MAXW clamp and menu_setup's [vid_popmax] clamp (menu.inc:1764-1766, 2452-2457) bound every popup"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "because `menu_drop` draws the item through `gfx_pen_dis` rather than storing\n`CDGRAY`, and `font_ink` masks a flagged glyph to a checkerboard (§39.4/§46).",
+   "new_text": "because `menu_drop` sets the disabled pen through `thm_pen_dis` rather than\nstoring `CDGRAY`, and `font_run` folds the checkerboard into the run's own\nmask (§6.1.12, §39.4/§46).",
+   "why": "menu_drop calls thm_pen_dis then font_run_x (menu.inc:1960-1980); font_ink is not on that path"
+  },
+  {
+   "file": "kernel/menu.inc",
+   "old_text": "; forcing the whole bar for an 88px widget is what made the file-activity",
+   "new_text": "; forcing the whole bar for an 80px widget is what made the file-activity",
+   "why": "FPG_W = FPG_ICO_W + FPG_ISP + FPG_BOX_W + FPG_GAP = 80 since FPG_GAP became 0 (fprog.inc:55-64)"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "file-activity widget (§12.8) changes an 88px span and used to force all of it.",
+   "new_text": "file-activity widget (§12.8) changes an 80px span and used to force all of it.",
+   "why": "FPG_W is 80 (fprog.inc:64)"
+  },
+  {
+   "file": "kernel/fprog.inc",
+   "old_text": "(the file calls' own rule; fpg_arm banks the cursor debt lock-free) (fpg_stepb's\n; rule). The end only disowns it",
+   "new_text": "(the file calls' own rule,\n; and fpg_stepb's; fpg_arm banks the cursor debt lock-free). The end only\n; disowns it",
+   "why": "two parentheticals spliced on one overlong line (fprog.inc:1145-1146)"
+  },
+  {
+   "file": "kernel/ascw.inc",
+   "old_text": "; napp <= 32: the product fits AX",
+   "new_text": "; napp <= ASC_NAPP (90): 90 x 88 fits AX",
+   "why": "ASC_NAPP is 90 (assoc.inc:1844); the cmp al,ASC_NAPP at ascw.inc:409 is the bound"
+  },
+  {
+   "file": "kernel/ascw.inc",
+   "old_text": "; <= 31 * 88: the product fits AX",
+   "new_text": "; 8 x 8 bits: the product always fits AX",
+   "why": "ASC_NAPP is 90, not 32; an 8-bit mul cannot overflow AX (ascw.inc:963)"
+  }
+ ]
+}

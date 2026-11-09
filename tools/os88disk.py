@@ -2018,12 +2018,13 @@ def main() -> int:
                          "extension, '/' between them for a nested one")
     ap.add_argument("--kern-small", action="store_true",
                     help="this disk is for kern_small, whose listing holds "
-                         "DSK_NENT = 32 entries rather than kern_big's 64 "
-                         "(SPEC.md 22.6.2). Goes with --fatcap 2")
+                         "DSK_NENT = 32 entries; kern_big's grows with the "
+                         "folder up to 1,024 (SPEC.md 22.6.2, 22.6.4). Goes "
+                         "with --fatcap 2")
     ap.add_argument("--deep-folders", action="store_true",
-                    help="allow more than the kernel's 32-entry LISTING cap "
-                         "in a subfolder (never the root): the Disk window "
-                         "shows the first 31, the file API - OSAPI_FILE_FIND "
+                    help="allow more than the kernel's LISTING cap in a "
+                         "subfolder (never the root): the Disk window shows "
+                         "the first DSK_NENT less '..', the file API - OSAPI_FILE_FIND "
                          "and every name-taking cell - reaches them all "
                          "(SPEC.md 19, 71.3: a CP/M drive folder)")
     ap.add_argument("--dir-slots", metavar="FOLDER=N", action="append",

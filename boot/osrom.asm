@@ -330,6 +330,10 @@ rom_sock_check:
 ;                                 an offset into: `.text`, the window half
 ;                                 `.ovl` at FAT_SEG, and the blob `.boot2`,
 ;                                 whose segment is [spl_fseg]
+;   rt_b3, RT_B3SEG RT_HASB3      ...and `.boot3`, the third boot-only home
+;                                 (SPEC.md 2.9.15), at its constant segment -
+;                                 walked only by a ROM cut from a kernel that
+;                                 has the section
 ;   rt_vgab, RT_VGABRAM           kern_big's `.vgabuf` words, and the rung
 ;                                 they name, moved down to RT_COLDRAM
 ;   rt_mods                       per mod_tab ROW: its list and its count (the
@@ -547,7 +551,7 @@ rom_patch:
     pop ax
     retf
 
-; rp_walk - the four lists, looked at (BX = DX, CF = 1 at the first word that
+; rp_walk - the four lists (five with `.boot3`'s), looked at (BX = DX, CF = 1 at the first word that
 ; does not name DX) or written (BX = ROM_COLDSEG). BP = the blob, DX = where
 ; `.cold` runs now (rom_patch).
 rp_walk:
@@ -568,6 +572,13 @@ rp_walk:
     mov cx, RT_NBLOB
     call rp_list
     jc .out
+%if RT_HASB3                        ; ...and `.boot3`, the third boot-only
+    mov ax, RT_B3SEG                ; home (SPEC.md 2.9.15), at its constant
+    mov si, rt_b3                   ; segment. In BOTH kinds: unlike the
+    mov cx, RT_NB3                  ; window half it outlives the mount, so
+    call rp_list                    ; the HMA image's walk reaches it live
+    jc .out                         ; (BOOT3-PLAN 4.1)
+%endif
     ; ...and the planar decoder's buffers (kern_big): RT_NVGAB words in
     ; `.text` that name the `.vgabuf` rung move to the BOTTOM of the dead cold
     ; rung, which is where mem_floor_ax leaves them (ROM-PLAN 3.4.2)

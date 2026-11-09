@@ -4,7 +4,7 @@
 ; THE WIRE'S HTTP/1.0 CLIENT (SPEC.md 92.4), and the worker that drives it.
 ;
 ; --- WRITTEN SO IT COULD MOVE TO apps/ -------------------------------------
-; docs/WIRE-PLAN.md 11 defers a shared `apps/os88http.inc` and says why: the
+; docs/plans/completed/WIRE-PLAN.md 11 defers a shared `apps/os88http.inc` and says why: the
 ; browser's client is entangled with the browser's bss, so a third consumer
 ; is what should pay for the generalisation. This one is kept at arm's length
 ; from the rest of the package on purpose - it touches exactly five things

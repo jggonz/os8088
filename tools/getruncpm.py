@@ -36,13 +36,13 @@ WHAT LANDS in the output directory:
     LICENSE          RunCPM's MIT licence
     1STREAD.ME       the master disk's read-me
     A/0/*            the master disk, DISK/A0.zip unpacked: drive A user 0.
-                     Files above 65,535 bytes are NOT extracted - the file API
-                     a package reaches reads and writes whole files with a
-                     16-bit count (SPEC.md 74.3, 74.4) - and are listed in
-                     A/0/LEFT-OFF.TXT so the disk says what is missing (as of
-                     the pin: Z80ASM.PDF, BDOS.ASM, ZCPR3.ASM)
+                     Files of 8MB and more are NOT extracted - CP/M's own reach
+                     (SPEC.md 74.3.3: a file past 65,535 bytes is one huge
+                     claim) - and are listed in A/0/LEFT-OFF.TXT so the disk
+                     says what is missing (as of the pin: none; until 74.3.3
+                     the 64KB limit left off Z80ASM.PDF, BDOS.ASM, ZCPR3.ASM)
     A0.list          every extracted file with its size, one per line
-    left-off.list    the files above 65,535 bytes, with their sizes
+    left-off.list    the files of 8MB and more, with their sizes
     left-off/<KB>/LEFT-OFF.TXT   written by --select: the geometry's own
                      note (below), which the disk rules put in A/0 in place
                      of the master folder's
@@ -59,7 +59,7 @@ an XT session has room to SAVE (the kernel does not grow a directory and a
 full disk cannot take a $$$.SUB, an MBASIC program or TE's file); the 720KB
 and 1.44MB disks carry the whole master disk. Whatever a geometry leaves off
 is NAMED ON THAT DISK: --select writes the geometry's own LEFT-OFF.TXT
-(<out>/left-off/<KB>/LEFT-OFF.TXT) - the files above 65,535 bytes, every
+(<out>/left-off/<KB>/LEFT-OFF.TXT) - the files of 8MB and more, every
 submit file whose source this disk lacks (two on 720KB/1.44MB, eleven on
 360KB - only CLEAN.SUB runs there), and every master-disk file this geometry does not carry by policy
 or has no room for, each under its own heading - and prints it in place of
@@ -103,7 +103,8 @@ PINNED = {
     "LICENSE":         ("1ee0ceaa2d409ffe7d95b2ab1aac4948c6b4625c54aafc000c209084ac39e167", 1072),
 }
 
-MAX_FILE = 65535          # a whole file must fit a 16-bit count (SPEC.md 74.3)
+MAX_FILE = 8388607        # CP/M's own reach, 8MB less a byte: a file past 65,535
+                          # bytes is one huge claim (SPEC.md 74.3.3)
 
 # --select: what a geometry carries, in the order it is filled. Category first,
 # then name, so the choice is deterministic and reads as a policy rather than
@@ -300,13 +301,14 @@ def unpack(out, raw):
 
 def left_off_text(out, kept, left, geometry=None, by_policy=(), no_room=()):
     """The disk says what is not on it, in its own terms (a CP/M user reads
-    this with TYPE and has no SPEC.md): the files above 65,535 bytes, every
+    this with TYPE and has no SPEC.md): the files of 8MB and more, every
     submit file whose source this disk lacks and - for a geometry that does
     not carry the whole master disk - what it leaves off (`by_policy`: the
     curation, `no_room`: the budget) and why."""
-    text = ("Files of RunCPM's master disk that are NOT on this disk:\r\n"
-            "this port reads and writes whole files and cannot open one\r\n"
-            "larger than 65535 bytes, so these are left off.\r\n")
+    text = "Files of RunCPM's master disk that are NOT on this disk:\r\n"
+    if left:
+        text += ("this port cannot open a file of 8MB or more - CP/M's own\r\n"
+                 "reach - so these are left off.\r\n")
     for base, size in left:
         text += f"  {base:<12} {size:>7} bytes\r\n"
     # ...and the consequence, derived from the disk itself: a submit file

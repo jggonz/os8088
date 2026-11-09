@@ -175,9 +175,12 @@ def main():
         base = lin(seg)
         W = lambda n, k=0: u16(m.read(base + syms[n] + k, 2))   # noqa: E731
 
+        def heap():
+            return heapmap.Map(m, {n: S(n) for n in ("mem_base", "mem_top",
+                                                     "spl_live", "mem_tab")})
+
         def claims():
-            hm = heapmap.Map(m, {n: S(n) for n in ("mem_base", "mem_top",
-                                                   "spl_live", "mem_tab")})
+            hm = heap()
             return hm.claims + getattr(hm, "pool", [])
 
         def mine():
@@ -282,10 +285,19 @@ def main():
               "%d x %d" % (pw, ph))
         # TO THE GRANULE (SPEC.md 50.2.1): sc_pictkeep shrinks the decode
         # scratch through OSAPI_MEM_P's MEMP_REGROW, so the picture keeps its
-        # bytes to 512 and not to a whole KB - 64 x 48 at 4 bits is 1.5 KB
-        para = (ps * ph + 511) // 512 * 32
-        pc = [c for c in claims() if c.sel == pseg]
-        check("PICTURE: its claim is exactly its own %.1f KB" % (para / 64.0),
+        # bytes to 512 and not to a whole KB - 64 x 48 at 4 bits is 1.5 KB.
+        # ...EXCEPT IN kern_mega's POOL (tests/megaport.txt), where SCRIBE's
+        # claims all go above 1MB: the pool COUNTS IN KB (mx_tab's size is
+        # a KB word, and osapi_mem_p's KERN_MEGA arm rounds a pool REGROW to
+        # the KB that covers it - "conventional memory is what the granule
+        # is for", SPEC.md 50.3.7), so there the picture's own KB is 2
+        hm = heap()
+        inpool = any(c.sel == pseg for c in getattr(hm, "pool", []))
+        gran = 1024 if inpool else 512
+        para = (ps * ph + gran - 1) // gran * (gran // 16)
+        pc = [c for c in hm.claims + getattr(hm, "pool", []) if c.sel == pseg]
+        check("PICTURE: its claim is exactly its own %.1f KB%s"
+              % (para / 64.0, " (the pool's KB)" if inpool else ""),
               len(pc) == 1 and pc[0].para == para,
               "%r" % [(c.sel, c.para) for c in pc])
         check("PICTURE: no scratch or staging claim left",

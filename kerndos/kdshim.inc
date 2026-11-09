@@ -275,7 +275,9 @@ cw_clk_snapshot:
 section .bss
 ; sched.inc's, and the two the disk layer really uses: [sch_lock] is inc/dec'd
 ; around every int 13h and nothing reads it here (one task), and [ticks] is
-; the BIOS tick the retry paths time out against.
+; a word the disk layer names and nothing here advances: fdd_wait, which
+; times out against it, is outside KD_BUILD, and DSK_VOLID only mixes it
+; into a volume serial.
 sch_lock:     resb 1
 ticks:        resw 1
 ; clock.inc's snapshot, which cw_clk_snapshot above fills and diskw.inc reads
@@ -369,8 +371,9 @@ kretc_cx:         pop cx
 ; of one word instead of a compaction.
 ;
 ; It is NOT kernel/memory.inc: no records, no owners, no purge ranks, no
-; compaction, no two ends. mem_free_x accepts any segment and only the most
-; recent claim actually returns room, which is all a stack of two caches needs.
+; compaction, no two ends. mem_free_x accepts any segment and returns no room
+; at all: room comes back only through kd_shed, which is all a stack of two
+; caches needs.
 section .bss
 kd_top:           resw 1        ; the ceiling, in paragraphs: the first
                                 ; paragraph NOT ours

@@ -768,16 +768,15 @@ kd_vtab:
 ; -----------------------------------------------------------------------------
 ; kd_leave - the program is over (docs/plans/KERN-DOS-PLAN.md §9)
 ;
-; **THERE IS NOTHING TO GO BACK TO ON THIS ARM**, which is the first
-; deliberately destructive thing this OS does and reads like one: the user is
-; to be asked in its own window, at the moment of launch, with Cancel as the
-; default - docs/plans/KERN-DOS-PLAN.md §9, which is W7 and is not built. So
-; the machine restarts - and it says so first, because a
-; screen that goes black on its own is a crash and a screen that says why is a
-; machine doing what it was told.
+; HOME BY THE FIRST WAY THAT WORKS: a kern_mega park (`kd_unpark`), the live
+; resume (`kd_resume`, SPEC.md 96.49), or `int 19h` with the exit code in the
+; BDA (`kd_bda`, SPEC.md 96.41) for os8088's own boot to find. With no image
+; at all (SPEC.md 96.42, where the user was asked first) the machine restarts
+; - and it says so first, because a screen that goes black on its own is a
+; crash and a screen that says why is a machine doing what it was told.
 ;
-; W6's arm hangs off the same byte: with KDLF_REBOOT clear there is a
-; hibernation image to put back, and this is where the return stub goes.
+; Only a block with KDLF_REBOOT clear and no park reaches `.hold`, which has
+; nowhere to go and says so.
 ; -----------------------------------------------------------------------------
 kd_leave:
     ; **INTERRUPTS BACK ON, BECAUSE THE PROGRAM'S EXIT CAME THROUGH A GATE.**
@@ -825,8 +824,8 @@ kd_leave:
     mov si, [kd_lbp]            ; (it spends SI on the block's own fields)
 
     test word [si+KDL_FLAGS], KDLF_REBOOT
-    jz .hold                    ; W6: the return. Until it exists, a block
-                                ; that does not ask for the reboot has nowhere
+    jz .hold                    ; no park, no live resume and no reboot asked
+                                ; for: a block like that has nowhere
                                 ; to go and says so rather than restarting a
                                 ; machine the user expected back
     call kd_bda                 ; the exit code, where a boot can find it

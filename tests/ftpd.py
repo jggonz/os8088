@@ -114,6 +114,7 @@ import io
 import os
 import socket
 import struct
+import time
 import subprocess
 import sys
 
@@ -625,7 +626,8 @@ def run_gate(m, mo, fails):
         try:
             f = connect()
             break
-        except (OSError, ftplib.all_errors):
+        except ftplib.all_errors:       # a TUPLE (OSError in it): nested in
+                                        # another, the except is a TypeError
             gpace(1.0)
     if f is None:
         fails.append("nothing answered on port 21 - the server did not start, "
@@ -1007,6 +1009,46 @@ def run_gate(m, mo, fails):
     else:
         say("STOR immediately after LIST: %.2fs, so the pool did not starve"
             % dt)
+
+    say("--- 8f. a LIST of a folder that is not there ENDS (SPEC.md 77.25.1) ---")
+    # THE 150 GOES OUT BEFORE THE WALK, which runs on the UI task - so the
+    # refusal used to abort a data connection the worker had not ACCEPTED
+    # yet: the LISTENER went, the client's connection (made before it sent
+    # LIST, as ftplib's PASV does) was left open and empty, and the client
+    # read it until its own timeout and never saw the 550. Now the listing
+    # is empty, the data connection CLOSES and the reply is 550 - so both
+    # verbs must raise error_perm 550 well inside the timeout, and the
+    # control connection must still be in step afterwards (PWD answers).
+    # VERIFIED RED with fd_do_list's .nodir put back to fd_xfail: LIST NOSUCH
+    # timed out on the data socket.
+    f = connect()
+    f.login("os8088", "os8088")
+    for cmd in ("LIST NOSUCH", "NLST NOSUCH"):
+        rows = []
+        t0 = time.time()
+        try:
+            f.retrlines(cmd, rows.append)
+            fails.append("%s was answered as a listing of %d rows, not a 550"
+                         % (cmd, len(rows)))
+        except ftplib.error_perm as e:
+            say("%s -> %s (%.1fs)" % (cmd, str(e).strip(), time.time() - t0))
+            if not str(e).startswith("550"):
+                fails.append("%s answered %r, not a 550" % (cmd, str(e)))
+        except ftplib.all_errors + (EOFError,) as e:
+            fails.append("%s STALLED: %s: %s after %.1fs - the data connection "
+                         "was never closed, so the client never saw the "
+                         "refusal (SPEC.md 77.25.1)"
+                         % (cmd, type(e).__name__, e, time.time() - t0))
+            break
+    else:
+        pwd = f.pwd()
+        if pwd != "/":
+            fails.append("PWD after the refused listings says %r - the "
+                         "control connection is out of step" % pwd)
+    try:
+        f.quit()
+    except ftplib.all_errors:
+        f.close()
 
     say("--- 8c. an aborted transfer gives its socket back (SPEC.md 77.25) ---")
 

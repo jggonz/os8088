@@ -179,9 +179,9 @@ programs that read RTF.
 
 ## Good to know
 
-- If a file is longer than 4,000 characters, the program says **The document
-  was truncated to fit.** Do not save over the original.
+- If a file is longer than 4,000 characters, the program says **Truncated
+  to fit.** Do not save over the original.
 - Closing the window with its close box does not ask about unsaved changes.
   Use File > Close or Exit.
-- If the Font box cannot use a typeface it says **That typeface would not
+- If the Font box cannot use a typeface it says **Typeface would not
   open.**

@@ -179,7 +179,7 @@ WR_DTX      equ 160             ; ...its text pen, 8-ALIGNED
                                 ; **THE PANE IS SIZED FROM THE FORMAT AND THE
                                 ; LIST GETS WHAT IS LEFT**, which is the one
                                 ; place the shipped window departs from
-                                ; docs/WIRE-PLAN.md's mock. That mock has the
+                                ; docs/plans/completed/WIRE-PLAN.md's mock. That mock has the
                                 ; detail pane start at 176 - 208px - and a
                                 ; 27-column description in it, and 27 cells is
                                 ; 216px: the first build drew the last two
@@ -3484,7 +3484,7 @@ wr_i_file:  dw wr_it_refr, wr_it_run, wr_it_add, wr_it_close
 %include "wrhttp.inc"                   ; the client and the worker (92.4)
 %include "wrarc.inc"                    ; the unpacker and the RAM disk (92.13,
                                         ; 92.14)
-%include "wrtxt.inc"                    ; every string (docs/WIRE-PLAN.md 7)
+%include "wrtxt.inc"                    ; every string (docs/plans/completed/WIRE-PLAN.md 7)
 
 %define OS88UI_SCROLL                   ; the list's bar...
 %define OS88UI_SBDRAG                   ; ...and its thumb (SPEC.md 13.10.5)

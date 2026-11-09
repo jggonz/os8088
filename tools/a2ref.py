@@ -68,7 +68,7 @@ MODES = {"text": MODE_TEXT, "lores": MODE_LORES, "hires": MODE_HIRES}
 # WHICH MODES THIS FILE HAS A REFERENCE FOR. `--check lores` on a build whose
 # lo-res composer does not exist is a FAILURE and not a skip: the plan's rule
 # is that every harness step fails rather than passing when its subject is
-# absent (docs/APPLE2-PORT-PLAN.md Decision 12). Wave 3 added the other two.
+# absent (docs/plans/completed/APPLE2-PORT-PLAN.md Decision 12). Wave 3 added the other two.
 IMPLEMENTED = {"text", "lores", "hires"}
 
 # THE MIXED SPLIT: the top 160 scan lines in the graphics mode and the bottom
@@ -273,7 +273,7 @@ def want_modes(names):
         raise SystemExit("a2ref: asked to check %s and there is no reference "
                          "for it in this build - a step whose subject is "
                          "absent FAILS rather than passing "
-                         "(docs/APPLE2-PORT-PLAN.md Decision 12)"
+                         "(docs/plans/completed/APPLE2-PORT-PLAN.md Decision 12)"
                          % ", ".join(missing))
     return [MODES[n] for n in names]
 

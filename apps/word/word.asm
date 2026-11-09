@@ -9240,8 +9240,9 @@ wd_ldscan:
     je .hn                      ; a mark's byte is an index, not attrs
     test byte [bx], WDAT_HID
     jz .hn
-    mov byte [cs:wd_hashid], 1
-    jmp short .hdone
+    pop ds                      ; the package's, then the flag: the same
+    mov byte [wd_hashid], 1     ; eight bytes as a store through CS, which
+    jmp short .out              ; kern_mega made a #GP (14.162)
 .hn:
     inc bx
     loop .h
@@ -20759,7 +20760,7 @@ wd_dp_sb1:
     WDDC WDD_BTN, WDDF_DIS, 376,  46, wd_s_dtabs,  56, 0
     db 0
 
-wd_s_dgpara: db 'Paragraph', 0
+TOASTSTR wd_s_dgpara, 'Paragraph'
 wd_s_dalign: db 'Alignment', 0
 wd_s_dleft:  db 'Left', 0
 wd_s_dcent:  db 'Center', 0
@@ -20778,7 +20779,7 @@ wd_s_d0li:   db '0 li', 0
 wd_s_d1li:   db '1 li', 0
 wd_s_dtabs:  db 'Tabs...', 0
 
-wd_s_dgchar: db 'Character', 0
+TOASTSTR wd_s_dgchar, 'Character'
 wd_s_dbold:  db 'Bold', 0
 wd_s_dital:  db 'Italic', 0
 wd_s_dkaps:  db 'Small Kaps', 0     ; sic - char.des's literal spelling
@@ -20796,7 +20797,7 @@ wd_s_dcsp:   db 'Character Spacing', 0
 wd_s_dexp:   db 'Expanded', 0
 wd_s_dcond:  db 'Condensed', 0
 wd_s_dcanc:  db 'Cancel', 0
-wd_s_dsort:  db 'Sort', 0            ; sort.des
+TOASTSTR wd_s_dsort, 'Sort'          ; sort.des
 wd_s_dorder: db 'Sort Order', 0
 wd_s_dasc:   db 'Ascending', 0
 wd_s_ddes:   db 'Descending', 0
@@ -20811,7 +20812,7 @@ wd_s_dtab:   db 'Tab', 0
 wd_s_dfldn:  db 'Field number:', 0
 wd_s_dscol:  db 'Sort Column Only', 0    ; greyed: draft view has no column
 wd_s_dcase:  db 'Case Sensitive', 0      ; selection to restrict to
-wd_s_drenum: db 'Renumber', 0        ; renum.des
+TOASTSTR wd_s_drenum, 'Renumber'     ; renum.des
 wd_s_drpara: db 'Renumber Paragraphs', 0
 wd_s_dall:   db 'All', 0
 wd_s_dnumd:  db 'Numbered Only', 0
@@ -20821,7 +20822,7 @@ wd_s_dman:   db 'Manual:', 0
 wd_s_dstart: db 'Start at:', 0
 wd_s_dlevels: db 'Show all levels', 0    ; greyed: levels come from the style
 wd_s_dfmt:   db 'Format:', 0             ; sheet, and there is none
-wd_s_dtoc:   db 'Table of Contents', 0   ; toc.des
+TOASTSTR wd_s_dtoc, 'Table of Contents'  ; toc.des
 wd_s_dtocg:  db 'Table Of Contents', 0
 wd_s_dhead:  db 'Use Heading Paragraphs', 0
 wd_s_dtcfld: db 'Use Table Entry Fields', 0
@@ -20963,9 +20964,9 @@ wd_dlgconf:                         ; the confirm strip, pinned to the bottom
     WDDC WDD_BTN, 0,        320,  18, wd_s_dcanc,  56, 2
     db 0
 
-wd_s_dsrch:  db 'Search', 0
-wd_s_drepl:  db 'Replace', 0
-wd_s_dgo:    db 'Go To', 0
+TOASTSTR wd_s_dsrch, 'Search'
+TOASTSTR wd_s_drepl, 'Replace'
+TOASTSTR wd_s_dgo, 'Go To'
 wd_s_dsfor:  db 'Search For:', 0
 wd_s_drwith: db 'Replace With:', 0
 wd_s_dwword: db 'Whole Word', 0
@@ -20980,8 +20981,8 @@ wd_s_dno:    db 'No', 0
 wd_s_dconfq: db 'Replace this occurrence?', 0
 wd_s_askpre: db 'Do you want to save changes to ', 0
 wd_s_askpost: db '?', 0
-wd_m_nfound: db 'Search text not found', 0
-wd_m_baddoc: db 'Bad .DOC file', 0
+TOASTSTR wd_m_nfound, 'Search text not found'
+TOASTSTR wd_m_baddoc, 'Bad .DOC file'
 
 ; =============================================================================
 ; The menu data (SPEC.md 68.2) - verbatim from Opus resource/menus.cmd
@@ -21290,11 +21291,11 @@ wd_s_ovr:   db 'OVR', 0
 wd_s_sp4:   db '    ', 0
 wd_s_sp3:   db '   ', 0
 wd_s_about: db 'Microsoft Word', 0
-wd_s_abou2: db 'Version 1.1a for os8088', 0
+TOASTSTR wd_s_abou2, 'Version 1.1a for os8088'
 wd_s_abou3: db 'UI from the CHM Opus source release', 0
 wd_s_abou4: db 'Ported by Jorge Gonzalez', 0
 wd_s_ok:    db 'OK', 0
-wd_m_noclose: db 'Close refused, try again', 0
+TOASTSTR wd_m_noclose, 'Close refused, try again'
 
 ; --- window template (SPEC.md 11: 16 bytes, 8 words) ---------------------------
 ; A word processor's frame, not a note pad's: 600x440 at the 640x480
@@ -21354,32 +21355,32 @@ wd_s_default: db 'DOCUMENT.DOC', 0  ; Word's Document1, folded to 8.3: a 9-char
                                     ; save is worse than a shorter one
 wd_m_saved:   db 'Saved ', 0
 wd_m_loaded:  db 'Loaded ', 0
-wd_m_trunc:   db 'Truncated', 0
-wd_s_nul:     db 0              ; an EMPTY string retires whatever is up
+TOASTSTR wd_m_trunc, 'Truncated'
+TOASTSTR wd_s_nul               ; an EMPTY string retires whatever is up
                                 ; (SPEC.md 59.3) - one call, and this app
                                 ; never has to know whether one was
 
-wd_e_nomem:   db 'No memory', 0      ; the staging claim was refused (50.3)
+TOASTSTR wd_e_nomem, 'No memory'     ; the staging claim was refused (50.3)
 
 ; --- search and the clipboard (SPEC.md 68.7/55) ------------------------------
-wd_m_nopat:   db 'No search text', 0
+TOASTSTR wd_m_nopat, 'No search text'
 wd_m_repld:   db ' changes', 0       ; wd_saycnt's suffix: 'n changes' is the
                                      ; sweep's answer (SPEC.md 68.7)
-wd_m_noundo:  db 'Nothing to undo', 0
-wd_m_papfull: db 'Too many formats', 0
-wd_m_toobig:  db 'Too complex to save', 0
-wd_m_noclip:  db 'The clipboard is empty', 0        ; ^c with nothing in it
-wd_m_replong: db 'Replacement too long', 0          ; ...and ^m/^c past
+TOASTSTR wd_m_noundo, 'Nothing to undo'
+TOASTSTR wd_m_papfull, 'Too many formats'
+TOASTSTR wd_m_toobig, 'Too complex to save'
+TOASTSTR wd_m_noclip, 'The clipboard is empty'      ; ^c with nothing in it
+TOASTSTR wd_m_replong, 'Replacement too long'       ; ...and ^m/^c past
                                      ; WD_FRXMAX (SPEC.md 68.7)
-wd_m_toomanyp: db 'Too many paragraphs', 0          ; past WD_UMAXP (65.9)
-wd_m_noundo2: db 'Too large to undo', 0             ; the span is bigger than
+TOASTSTR wd_m_toomanyp, 'Too many paragraphs'       ; past WD_UMAXP (65.9)
+TOASTSTR wd_m_noundo2, 'Too large to undo'          ; the span is bigger than
                                      ; the undo blob, so the command refuses
                                      ; rather than do it unundoably (65.9)
-wd_m_notoc:   db 'No table of contents entries', 0
+TOASTSTR wd_m_notoc, 'No contents entries'
 wd_m_sorted:  db 'Sorted', 0
 wd_m_renumd:  db 'Renumbered', 0   ; more FKP pages than
                                      ; the staging claim holds (SPEC.md 68.4)
-wd_e_cbig:    db 'Too big to copy', 0   ; over CLIP_MAXKB, or the heap could
+TOASTSTR wd_e_cbig, 'Too big to copy'   ; over CLIP_MAXKB, or the heap could
                                         ; not fund the clipboard (SPEC.md 55)
 
 ; --- the real Word file format (SPEC.md 68.4) --------------------------------

@@ -13,6 +13,11 @@
 ;   MEGAHUGE: first LLLLLLLL last LLLLLLLL   the first and last windows'
 ;                              linear bases (OSAPI_SEG SEG_LIN)
 ;   MEGAHUGE: again NNNN       the query's answer after the free
+;   MEGAHUGE: w32 max NNNN got SSSS step CCCC bx BBBB | refused
+;                              the ask for a window every 32KB and a claim of
+;                              exactly that (MEGA-HUGE-PLAN F3)
+;   MEGAHUGE: avail AAAA BBBB DDDD  BX = MEMH_AVAIL's AX, BX, DX (F6)
+;   MEGAHUGE: memavail AAAA BBBB    OSAPI_MEM_AVAIL's, beside it
 ;   MEGAHUGE: ok | bad KKKK OOOO | no NN   the verdict, or where it broke
 ; =============================================================================
 
@@ -24,7 +29,8 @@ MH_STEPB    equ 64                  ; a pattern word every 64 bytes
 
 mh_entry:
     xor ax, ax                      ; --- the query ---------------------------
-    call OSAPI_MEM_HUGE
+    xor bx, bx                      ; (for a claim of 64KB windows: the ask
+    call OSAPI_MEM_HUGE             ; reads BX, MEGA-HUGE-PLAN F3)
     mov cl, 1
     jc .no
     mov [mh_kb], ax
@@ -106,6 +112,7 @@ mh_entry:
     mov cl, 4
     jc .no
     xor ax, ax
+    xor bx, bx
     call OSAPI_MEM_HUGE
     mov cl, 5
     jc .no
@@ -126,6 +133,68 @@ mh_entry:
     push ds
     pop es
     call mh_say
+    call mh_nl
+    xor ax, ax                      ; --- A WINDOW EVERY 32KB (MEGA-HUGE-PLAN
+    mov bx, 0x8000                  ; F3): the ask for that shape, and a claim
+    call OSAPI_MEM_HUGE             ; of exactly its answer - which never
+    mov cl, 9                       ; bridges, so the answer may not be the
+    jc .no                          ; bridge's
+    mov si, mh_s_w32
+    call mh_say
+    call mh_hex4
+    mov bx, 0x8000
+    call OSAPI_MEM_HUGE
+    jnc .w32
+    mov si, mh_s_w32n
+    call mh_say
+    call mh_nl
+    jmp short .avl
+.w32:
+    mov si, mh_s_w32g
+    call mh_say
+    mov ax, dx
+    call mh_hex4
+    mov si, mh_s_step
+    call mh_say
+    mov ax, cx
+    call mh_hex4
+    mov si, mh_s_bx
+    call mh_say
+    mov ax, bx
+    call mh_hex4
+    call mh_nl
+    push ds
+    pop es
+    call OSAPI_MEM_FREE
+.avl:
+    push ds
+    pop es
+    xor ax, ax                      ; --- MEMH_AVAIL (MEGA-HUGE-PLAN F6): the
+    xor dx, dx                      ; KB doors' answer with the pool counted
+    mov bx, MEMH_AVAIL
+    call OSAPI_MEM_HUGE
+    mov cl, 10
+    jc .no
+    mov si, mh_s_avl
+    call mh_say
+    call mh_hex4
+    mov al, ' '
+    out 0xE9, al
+    mov ax, bx
+    call mh_hex4
+    mov al, ' '
+    out 0xE9, al
+    mov ax, dx
+    call mh_hex4
+    call mh_nl
+    call OSAPI_MEM_AVAIL            ; ...and the heap's alone, beside it
+    mov si, mh_s_mav
+    call mh_say
+    call mh_hex4
+    mov al, ' '
+    out 0xE9, al
+    mov ax, bx
+    call mh_hex4
     call mh_nl
     mov ax, 64                      ; --- a WHOLE 64KB file into a 64KB pool
     call OSAPI_MEM_CLAIM            ; claim (KERN-MEGA-MEMORY-PLAN 8.6): the
@@ -293,6 +362,12 @@ mh_s_ovn:   db 'MEGAHUGE: over refused', 0
 mh_s_ovy:   db 'MEGAHUGE: over GOT', 0
 mh_s_bad:   db 'MEGAHUGE: bad ', 0
 mh_s_no:    db 'MEGAHUGE: no ', 0
+mh_s_w32:   db 'MEGAHUGE: w32 max ', 0
+mh_s_w32n:  db ' refused', 0
+mh_s_w32g:  db ' got ', 0
+mh_s_bx:    db ' bx ', 0
+mh_s_avl:   db 'MEGAHUGE: avail ', 0
+mh_s_mav:   db 'MEGAHUGE: memavail ', 0
 mh_s_c64:   db 'MEGAHUGE: claim64 at ', 0
 mh_s_f64:   db 'B64K.BIN', 0
 mh_s_r64:   db 'MEGAHUGE: read64 ok', 0

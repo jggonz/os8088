@@ -77,6 +77,24 @@ def claims(m, S):
             for i in range(MEM_MAX) if u16(raw, i * MC_SIZE)]
 
 
+def lin(m, seg, off=0):
+    """SEG:OFF linear - an LDT selector's base on kern_mega, where a region
+    and every claim are named by one (docs/BOCHS.md)"""
+    return m.lin(seg, off) if getattr(m, "bochs", False) else seg * 16 + off
+
+
+def seg_key(m, v):
+    """A segment WORD as mem_tab keys its claim, read NOW: the identity on
+    a real-mode kernel, the paragraph under an LDT selector on kern_mega,
+    where a move rebases the selector and never changes it (KERN-MEGA-MEMORY-
+    PLAN MC7.4; tests/sheetmove.py's seg_key). Paint's rows there are
+    OSAPI_SEG windows, each a selector of its own"""
+    if v and getattr(m, "bochs", False) and 0x100 <= v < 0xA000 and v & 4:
+        b = m.selector(v)
+        return b[0] >> 4 if b else v
+    return v
+
+
 def mine(cl, seg):
     """The claims owned by a package's own segment, biggest first."""
     return sorted([c for c in cl if c[2] == seg], key=lambda c: -c[1])
@@ -120,6 +138,27 @@ def park(mo, m):
     os88marty.settle(m)
 
 
+def glass(m):
+    """The screen as rows of one byte a pixel, on ANY card this row boots.
+
+    `m.vram("cga")` NAMES the card rather than asking it, so on MartyPC's
+    VGA machine it read 0xB8000 - unmapped under mode 12h - and handed back
+    the same blank screen twice: check 5 was green by construction there,
+    and that is how "kern_big passes on os8088_xt_vga" was reported for a
+    picture that differed. `vram()` asks the card and refuses a planar one,
+    and that refusal is the cue for `fbuf`, the rendered frame (a pixel's
+    colour packed into a byte, so a change of colour is a change). On the
+    kern_mega shim `vram()` is already the glass (docs/TEST-INCIDENTS.md 81).
+    """
+    try:
+        return m.vram()
+    except os88marty.MartyError:
+        w, h, px = m.fbuf()
+        pk = bytes((px[i] >> 6) << 4 | (px[i + 1] >> 6) << 2 | px[i + 2] >> 6
+                   for i in range(0, w * h * 3, 3))
+        return w, h, [pk[y * w:(y + 1) * w] for y in range(h)]
+
+
 def pkg_seg(m, S, title):
     for w in os88geom.windows(m, S):
         if w.title.startswith(title):
@@ -139,8 +178,8 @@ def heapfrag_ran(m, S):
     seg, _ = pkg_seg(m, S, "Heap")
     if not seg:
         return False
-    img = u16(m.read(seg * 16 + 8, 2))
-    b = m.read(seg * 16 + img, 48)
+    img = u16(m.read(lin(m, seg, 8), 2))
+    b = m.read(lin(m, seg, img), 48)
     done, posted, woke = b[28], b[46], b[47]      # heapfrag.asm's bss table
     locked = m.read(S("gfx_lock_flag"), 1)[0]
     return bool(done and not locked and (woke or not posted))
@@ -235,6 +274,19 @@ def main():
             print("FAIL: Paint declared no claim movable")
             return 1
 
+        # ON A 640x480 SCREEN (kern_mega's VGA) PAINT OPENS OVER ALL OF
+        # HEAPFRAG, title bar and close box, and the hole below could never be
+        # opened. Paint goes down far enough to leave heapfrag's title bar
+        # clear - only then, so the 640x200 run is the one it always was.
+        if uncovered(m, S, hf_win, prefer_title=True) is None:
+            dy = hf_win.y + os88geom.TITLE_H + 2 - pt_win.y
+            mo.drag(pt_win.x + 60, pt_win.y + 9, pt_win.x + 60,
+                    pt_win.y + 9 + dy)
+            os88marty.settle(m)
+            pt_seg, pt_win = pkg_seg(m, S, "Paint")
+            print("Paint moved down to clear heapfrag: %s"
+                  % ((pt_win.x, pt_win.y, pt_win.w, pt_win.h),))
+
         # --- draw, so the canvas holds something a stale row table wrecks ---
         cx0, cy0, cx1, cy1 = pt_win.content
         for i in range(4):
@@ -249,22 +301,26 @@ def main():
         P = pkg_syms("apps/paint/paint.asm")
 
         def pword(name):
-            return u16(m.read(pt_seg * 16 + P[name], 2))
+            return u16(m.read(lin(m, pt_seg, P[name]), 2))
 
-        cbase = pword("pt_base")
+        def rowdeltas(base):
+            rows = m.read(lin(m, pt_seg, P["pt_rowseg"]), nrows * 2)
+            return [(seg_key(m, u16(rows, i * 2)) - base) & 0xFFFF
+                    for i in range(nrows)]
+
+        cbase = seg_key(m, pword("pt_base"))
         csize = [c[1] for c in before if c[0] == cbase]
         if not csize:
             print("FAIL: [pt_base] %04x is not a claim Paint holds" % cbase)
             return 1
         canvas = (cbase, csize[0])
         nrows = pword("pt_ch")
-        rows0 = m.read(pt_seg * 16 + P["pt_rowseg"], nrows * 2)
         # the ROW TABLE is checked as DELTAS off the base: that is exactly what
         # pt_geom would recompute, so it must survive a move unchanged
-        d0 = [(u16(rows0, i * 2) - cbase) & 0xFFFF for i in range(nrows)]
+        d0 = rowdeltas(cbase)
         h0 = hashlib.md5(m.read(cbase * 16, canvas[1] * 16)).hexdigest()
         park(mo, m)
-        shot0 = m.vram("cga")
+        shot0 = glass(m)
         print("canvas [pt_base]=%04x %dKB rows=%d  md5 %s"
               % (cbase, canvas[1] // 64, nrows, h0[:12]))
 
@@ -319,7 +375,7 @@ def main():
               % ["%04x/%dKB" % (b, p // 64) for b, p, _, r in after])
 
         bad = 0
-        newbase = pword("pt_base")
+        newbase = seg_key(m, pword("pt_base"))
         moved = newbase != cbase
         print("  1 canvas moved        %s"
               % ("%04x -> %04x" % (cbase, newbase) if moved
@@ -335,23 +391,32 @@ def main():
               % ("OK" if ok2 else "CORRUPT", h1[:12]))
         bad += not ok2
 
-        rows1 = m.read(pt_seg * 16 + P["pt_rowseg"], nrows * 2)
-        d1 = [(u16(rows1, i * 2) - newbase) & 0xFFFF for i in range(nrows)]
+        d1 = rowdeltas(newbase)
         ok3 = d0 == d1
         print("  3 row table followed  %s  (%d rows)"
               % ("OK" if ok3 else "STALE", nrows))
         bad += not ok3
 
+        # ...as the WORDS Paint holds, since that is what pt_reloc recomputes
+        # the delta from: paragraphs on a real-mode kernel, and on kern_mega
+        # two selectors a move rebases and never renumbers (its windowed
+        # layout reaches the undo rows through pt_uwin[], not the delta)
         und = pword("pt_unseg")
-        ok4 = (und == 0) or (((und - newbase) & 0xFFFF) == pword("pt_undelta"))
+        ok4 = (und == 0) or (((und - pword("pt_base")) & 0xFFFF)
+                             == pword("pt_undelta"))
         print("  4 undo delta correct  %s" % ("OK" if ok4 else "WRONG"))
         bad += not ok4
 
         # --- raise Paint: the repaint is what reads pt_rowseg ---------------
-        mo.click(pt_win.x + 60, pt_win.y + 9)
+        # ON AN UNCOVERED PIXEL OF ITS TITLE: the second heapfrag opens over
+        # the left of Paint's title bar on a 640x480 screen, and a click at
+        # (x+60, y+9) raised heapfrag and captured it over the canvas
+        pt = uncovered(m, S, pt_win, prefer_title=True) or (pt_win.x + 60,
+                                                             pt_win.y + 9)
+        mo.click(*pt)
         os88marty.settle(m)
         park(mo, m)
-        shot1 = m.vram("cga")
+        shot1 = glass(m)
 
         def band(v):
             """The window's content rectangle, ONE BYTE PER PIXEL.
@@ -370,7 +435,22 @@ def main():
             return b"".join(bytes(rows[y][cx0:cx1])
                             for y in range(cy0, min(cy1, len(rows))))
 
-        same = band(shot0) == band(shot1)
+        b0, b1 = band(shot0), band(shot1)
+        same = b0 == b1
+        if not same:                    # where, so a failure reads off the log
+            w = cx1 - cx0
+            rows = [y for y in range(len(b0) // w)
+                    if b0[y * w:(y + 1) * w] != b1[y * w:(y + 1) * w]]
+            xs = set()
+            for y in rows:
+                xs |= set(i for i in range(w)
+                          if b0[y * w + i] != b1[y * w + i])
+            zn = m.read(S("wm_zn"), 1)[0]
+            print("      differs at screen x %d..%d, y %d..%d (%d of %d rows);"
+                  " z-order %s, Paint slot %d"
+                  % (cx0 + min(xs), cx0 + max(xs), cy0 + rows[0],
+                     cy0 + rows[-1], len(rows), len(b0) // w,
+                     list(m.read(S("wm_zord"), zn)), pt_win.i))
         print("  5 repaint identical   %s" % ("OK" if same else "DIFFERENT"))
         bad += not same
         print("VERDICT:", "OK" if not bad else "%d PROBLEM(S)" % bad)

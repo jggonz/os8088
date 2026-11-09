@@ -17,10 +17,10 @@ them, all written by `mkzip.py` in step 3a:
 
 | zip | holds |
 |---|---|
-| `os8088-<version>.zip` | every floppy, in a folder per disk size (`1440K/`, `1200K/`, `720K/`, `360K/`, with `128K-RAM/` inside the last two) and `PROGRAMS/<APP>/` for the one-program disks, every image and folder named 8.3; a `README.md` that explains every file, grouped by what the reader is trying to do; a `SHA256SUMS` |
+| `os8088-<version>.zip` | every floppy, in a folder per disk size (`1440K/`, `1200K/`, `720K/`, `360K/`, with `286-PLUS/` inside the first two and `128K-RAM/` inside the last two) and `PROGRAMS/<APP>/` for the one-program disks, every image and folder named 8.3; a `README.md` that explains every file, grouped by what the reader is trying to do; a `SHA256SUMS` |
 | `os8088-<version>-live.zip` | the live USB image and CD as `LIVEUSB.IMG` and `OS8088.ISO`, the Mac burner as `burn-usb-macos.py`, its own README and SHA256SUMS |
 | `os8088-<version>-videos.zip` | the three 86Box machines with the Video Player demos (`make viddemozip`) |
-| `os8088-<version>-tools.zip` | the PicoMEM firmware, the kernel ROMs cut against this build, the encoder, the Game Boy precompiler, the file splitter, the Browser's proxy and the DOS tools (`make toolszip`) |
+| `os8088-<version>-tools.zip` | the PicoMEM firmware, the kernel ROMs cut against this build, the encoder, the Video Battle builder, the Game Boy precompiler, the file splitter, the Browser's proxy and the DOS tools (`make toolszip`) |
 
 The main zip is the one every release has; the other three are written when
 their on-demand targets were built, and named as skipped when not. Eleven
@@ -235,7 +235,7 @@ pack when line 1 is not this version's date.
 
 ```bash
 cd "$OS_REPO"
-make clean && make && make emu
+make clean && make && make emu && make mega
 ls -l build/os8088.img build/os8088-120.img build/os8088-720.img \
       build/os8088-360.img \
       build/apps.img build/apps120.img build/apps720.img build/apps360.img \
@@ -245,21 +245,27 @@ ls -l build/os8088.img build/os8088-120.img build/os8088-720.img \
       build/small360.img build/small720.img \
       build/win16.img build/win16-120.img build/win16-720.img \
       build/win16-360.img \
-      build/emu.img
+      build/emu.img \
+      build/mega.img build/megaapps.img build/mega120.img build/megaapps120.img \
+      build/megaxtmp3.img build/megaxtmp3-120.img \
+      build/megawin16.img build/megawin16-120.img
 ```
 
-All twenty-two must exist -- step 3a refuses to pack without them.
+All thirty must exist -- step 3a refuses to pack without them. **`make mega`
+is not optional either** (the owner's, 2026-11-07: kern_mega ships): its eight
+disks go in `1440K/286-PLUS/` and `1200K/286-PLUS/`, and `mkzip.py` refuses a
+kern_mega system disk older than `build/megak/kernel.sys`, or that kernel
+older than `build/kernel.sys` - so it runs after `make`.
 
 **And the published tree** INSTALL upgrades from (SPEC.md 117.10.2):
 
 ```bash
-make mega              # kern_mega's system and apps disks, which the mega tree is cut from
 make nettree           # build/nettree/{big,mega,emu}/: system + apps, SYSTEM/OS88VER.TXT, OS88.IDX
 head -n 1 build/nettree/{big,mega,emu}/SYSTEM/OS88VER.TXT   # each YYYYMMDD
 ```
 
-`make nettree` builds all three trees, so it runs after `make emu` (above)
-and `make mega`: the emu tree is cut from `build/emu.img`, the mega tree from
+`make nettree` builds all three trees, so it runs after `make emu` and
+`make mega` (above): the emu tree is cut from `build/emu.img`, the mega tree from
 `build/mega.img` and `build/megaapps.img`.
 
 There are THREE trees, one per kernel, because kern_big, kern_mega and
@@ -289,8 +295,9 @@ make budget-check
 
 Branch and integration work may run a kernel up to 2KB over its budget
 (`KERN_GRACE`, docs/KERNEL-MEMORY.md) and `make` lets it; **a release may not
-run one byte over**. `budget-check` measures kern_big, kern_small and kern_emu
-against 100,864 / 64,000 / 100,864 and fails naming the one that is over. If it
+run one byte over**. `budget-check` measures kern_big, kern_small, kern_emu and kern_mega
+against 100,864 / 64,000 / 100,864 / 68,096 (kern_mega's RESIDENT figure,
+`MEGA_RESIDENT`) and fails naming the one that is over. If it
 fails, STOP: that is a size pass or a conversation with the owner about the
 budgets, never a raise to get the release out. Report each kernel's
 `KERN_SIZE` and spare from its output.
@@ -330,6 +337,10 @@ make runcpm-src && make runcpmdisk    # runcpm*.img
 make scribedisk paccmandisk           # scribe*.img, paccman*.img
 make 1942disk midirackdisk            # 1942*.img, midirack*.img
 make waverackdisk                     # waverack*.img -- WaveRack and its clips
+make vbattledisk                      # vbattle*.img -- Video Battle and its
+                                      # demo battle, the four sizes for CGA
+                                      # plus vbattlev (VGA) and vbattleh
+                                      # (Hercules), all in PROGRAMS/VBATTLE
 make pixeldisk                        # pixel.img -- PiXEL with its whole
                                       # gallery, which no software disk has
                                       # room for; the 1.44MB disk alone is
@@ -350,7 +361,8 @@ make viddemo viddemozip               # the three 86Box machines with the Video
 make toolszip                         # the firmware and utilities -- the tools
                                       # zip: it cuts the kernel ROMs (`make
                                       # rom`, `socketrom`) against THIS tree
-                                      # and packs the encoder, the Game Boy
+                                      # and packs the encoder, the Video
+                                      # Battle builder, the Game Boy
                                       # precompiler and the splitter bundles
 make usb-emu                          # os8088-emu-usb.img -- THE WEBSITE'S DEMO
                                       # DISK (SPEC.md 80.7), the same volume on
@@ -491,7 +503,7 @@ The script does seven things worth knowing about:
   would make `ALL10-144.IMG` and stop it too; that is a naming decision for
   the owner, not a fix to make at release time.
 - **It refuses to pack a partial release.** A missing image that `make` or
-  `make emu` builds stops it; a missing on-demand file is reported and
+  `make emu` or `make mega` builds stops it; a missing on-demand file is reported and
   skipped, and its zip is not written.
 - **It refuses a stale companion.** The live images, the videos zip and the
   tools zip must be newer than `build/kernel.sys` (step 2 says why); one that
@@ -554,7 +566,8 @@ in Notepad as on GitHub, generated from two tables in `mkzip.py`:
 - **`GROUPS`** -- the situations a reader is in, in the order the README takes
   them: *Start here* (the system and software pair per disk size, as a table),
   *More software disks for a 360KB machine*, *A second software disk for a
-  720KB machine*, *A machine with as little as 128KB of memory*, *In an
+  720KB machine*, *A machine with as little as 128KB of memory*, *A 286 or later* (the
+  kern_mega disks), *In an
   emulator or virtual machine* (the emulator disk), *Every program, on a set
   of disks*, *One program per disk*, and *About this zip* (checksums and the
   licence files). Each carries the instructions for using its own files --

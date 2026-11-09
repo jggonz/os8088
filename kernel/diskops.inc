@@ -192,8 +192,8 @@ CLO_WINSEC   equ 128            ; sectors per int 13h window: dsk_xfer advances
 
 ; --- this image's ABI with the resident thunk --------------------------------
 CLE_DISP     equ 0              ; ONE entry for the cloner: the image
-                                ; dispatches on DL itself, so four verbs cost
-                                ; one mod_fp slot...
+                                ; dispatches on DL itself, so every verb (six,
+                                ; ten with OS88_IMG) costs one mod_fp slot...
 CLO_NENT     equ 2              ; ...and a SECOND for the compressor, which
                                 ; rides in this image since SPEC.md 20.15.3 -
                                 ; compress.inc is `.modl` too, included right
@@ -3454,9 +3454,9 @@ clo_mtoast:
 
 clo_s_mis:   db ' is drive ', 0
 clo_s_mun:   db ' unmounted', 0
-clo_s_mfrag: db 'Too fragmented to mount', 0
-clo_s_mfull: db 'No drive letter free', 0
-clo_s_mhost: db 'Cannot mount from here', 0
+TOASTSTR clo_s_mfrag, 'Too fragmented to mount'
+TOASTSTR clo_s_mfull, 'No drive letter free'
+TOASTSTR clo_s_mhost, 'Cannot mount from here'
 
 ; this image's own working cells (a module may write to itself, SPEC.md 2.8)
 clo_mseg:    dw 0               ; the claim

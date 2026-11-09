@@ -21,11 +21,24 @@ and that TASKB, holding WIN16's window now, puts up the MessageBox this row
 reads: "TASKS OK", or each check that failed on either side.
 
 The row also watches the kernel's claim records while the programs run:
-WIN16's (every claim it makes, with every task's memory; the image's claim
-is the instance slot's and not among them) are at most the eight an owner
-may hold (SPEC.md 124.25.1), and when the MessageBox is closed and
+the instance's (WIN16's, with every task's memory) are at most the eight
+an owner may hold (SPEC.md 124.25.1), counted per owner word as the kernel
+counts them: the package image's claim is the instance slot's, the rest
+WIN16's segment's, and when the MessageBox is closed and
 the instance ends, the heap is the one before the launch: every task's
 claim and block went back.
+
+That the instance held TWO tasks at once is read off WIN16's task table at
+the MessageBox, a quiescent moment, and not sampled while they run: TASKS,
+the instance's first program, has record 0 (`w16_cur` starts at 0) and
+WinExec and ShellExecute take the first FREE record, so the TASKB left
+holding the MessageBox is in a record other than 0 only if it was started
+while TASKS still held record 0 (and TASKS's own GetNumTasks() == 2,
+"two", says the same from inside). The row used to poll `w16_ntk` from the
+host every tenth of a second for a high-water mark of 2, and on a fast
+host QEMU ran the whole two-task stretch between two polls: "never more
+than 1 task in the instance" with TASKS OK on the glass, two runs in three
+alone.
 """
 import argparse
 import os
@@ -80,15 +93,22 @@ def main():
                 own = [i]
         if own[0] is None:
             bad.append("no live instance at WIN16's segment %04x" % p.seg)
-        seen = {"max": 0, "tasks": 0}
+        seen = {"max": 0}
 
         def ready():
-            # every claim WIN16 makes is stamped with the segment it runs in
-            # (SPEC.md 50.3, mem_own), and those are the owner's eight; the
-            # image's claim is the slot's and is not one of them
-            n = sum(1 for c in claims(d, sym) if c[2] == p.seg)
+            # the image's claim is the slot's; every claim WIN16 makes is
+            # stamped with the segment it runs in (SPEC.md 50.3, mem_own).
+            # The bound is PER OWNER WORD, as mem_claim counts it
+            # (kernel/memory.inc, MEM_OWNER_MAX): the slot's image claim is
+            # not one of WIN16's eight, and adding the two together reported
+            # a legal 8 + 1 as "9, past the 8" (SPEC.md 124.25.1).
+            # A SAMPLE, so it can miss a peak and never invent one: the
+            # bound below is a check that may pass short, not a measurement
+            mine = sorted(c for c in claims(d, sym) if c[2] in (own[0], p.seg))
+            n = max(sum(1 for c in mine if c[2] == o) for o in (own[0], p.seg))
+            if n > seen["max"]:
+                seen["at"] = mine
             seen["max"] = max(seen["max"], n)
-            seen["tasks"] = max(seen["tasks"], p.pb("w16_ntk"))
             return p.waiting_msgbox(F.msgrow())
         # no sleep between looks: on QEMU TASKB is in the table for 10 to
         # 170 ms at a time, and a tenth of a second's poll missed it
@@ -106,8 +126,14 @@ def main():
                120, "TASKS's MessageBox to be up")
         d.idle(3.0)
         st = p.pb("w16_state")
-        print("1. state %d, at most %d tasks and %d claims of the instance's "
-              "seen" % (st, seen["tasks"], seen["max"]))
+        raw = d.read((p.seg << 4) + S["w16_task"], F.W16_MAXTASK * F.W16K_SIZE)
+        live = [i for i in range(F.W16_MAXTASK)
+                if raw[i * F.W16K_SIZE + F.W16K_ST]]
+        print("1. state %d, task records live %s (current %d), at most %d "
+              "claims under one of the instance's owners seen" % (st, live, p.pb("w16_cur"),
+                                                  seen["max"]))
+        print("   at the peak (segment, paragraphs, owner): %s" % ", ".join(
+            "%04x/%04x/%04x" % c for c in seen.get("at", ())))
         if st in (F.W16S_REFUSED, F.W16S_ENDED):
             bad.append("WIN16 %s it: %s / %s" % (
                 "refused" if st == F.W16S_REFUSED else "ended",
@@ -117,11 +143,14 @@ def main():
             print("   " + got.replace("\n", "\n   "))
             if got != WANT:
                 bad.append("the MessageBox says %r, not %r" % (got, WANT))
-            if seen["tasks"] < 2:
-                bad.append("never more than %d task in the instance" % seen["tasks"])
+            if len(live) != 1 or live[0] == 0:
+                bad.append("the MessageBox's TASKB is in task record(s) %s: "
+                           "one task, in a record other than TASKS's 0, is "
+                           "one started while TASKS still ran in the "
+                           "instance (SPEC.md 124.28.1)" % live)
             if seen["max"] > MAXCLAIMS:
-                bad.append("%d claims of the instance's, past the %d an owner "
-                           "may hold" % (seen["max"], MAXCLAIMS))
+                bad.append("%d claims under one owner of the instance's, past "
+                           "the %d an owner may hold" % (seen["max"], MAXCLAIMS))
             d.key("Enter")
             d.wait(lambda: p.pb("w16_state") == F.W16S_ENDED or F.gone(ui, p),
                    60, "the instance to end after its MessageBox")

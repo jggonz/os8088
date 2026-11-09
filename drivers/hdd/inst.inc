@@ -804,7 +804,7 @@ hd_bn_save:
     mov cx, [hd_bp]
     sub cx, hd_bbuf
     xor dx, dx
-    push cs
+    push ds
     pop es
     mov bx, hd_bbuf
     mov si, hd_s_bfile
@@ -982,9 +982,10 @@ hd_inst_sys:
                                 ; buffer under HIW_KMAXKB, because KERNEL.SYS
                                 ; was written whole and a system file could not
                                 ; be appended to. Both halves of that reason
-                                ; have expired: OSAPI_FILE_APPEND_SYS is the
-                                ; door (SPEC.md 19.6.1), hd_icopy_one's species
-                                ; test went with it, and the whole/chunked
+                                ; have expired: WRITE_SEQ's WSEQF_SYS is the
+                                ; door (SPEC.md 18.4.9, 19.6.1),
+                                ; hd_icopy_one's species test went with it,
+                                ; and the whole/chunked
                                 ; choice below is now a plain 32-bit "does it
                                 ; fit" - so a small buffer COPIES, slower, and
                                 ; hd_ibuf_get's size is a speed choice. Putting
@@ -2049,8 +2050,9 @@ hd_icopy_one:
     ; system one. A machine short of heap took the 32KB fallback and was then
     ; told `A file is too big for this machine` about a file the disk it booted
     ; from is carrying, and a kernel that grew past 96KB would have got the
-    ; same answer on every machine. OSAPI_FILE_APPEND_SYS is the door
-    ; (SPEC.md 19.6.1); hd_ibuf_get's size is a speed choice now.
+    ; same answer on every machine. OSAPI_FILE_WRITE_SEQ with WSEQF_SYS
+    ; is the door (SPEC.md 18.4.9, 19.6.1); hd_ibuf_get's size is a speed
+    ; choice now.
 .chunk:
     HDBSTEP 6
     call hd_isrc_here
@@ -2526,8 +2528,8 @@ hd_isd_add:
 hd_ivbr_get:
     call os88_ent
     push es
-    push cs
-    pop es
+    push ds                     ; (our DATA segment: under kern_mega CS is a
+    pop es                      ; read-only code alias, KERN-MEGA-PLAN 14.150)
     mov bx, hd_vbrtpl
     mov cx, 512
     xor dx, dx
@@ -2570,9 +2572,9 @@ hd_ifind_cx:
     mov di, hd_ifind
 hd_find_di:
     push es
-    push cs
-    pop es
-    call OSAPI_FILE_FIND_RAW
+    push ds                     ; ES = our DATA segment, which the kernel's
+    pop es                      ; copy writes: through CS it was ~1,700
+    call OSAPI_FILE_FIND_RAW    ; completed #GPs an install under kern_mega
     pop es
     ret
 

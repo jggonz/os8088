@@ -5190,7 +5190,7 @@ br_srcclaim:
     call br_memroom
     jc .out
     mov [br_srckb], ax
-    call br_claim
+    call br_hclaim
     jc .out
     mov [br_srcseg], dx
     jmp br_movable                  ; ...AND IT MOVES (NO-PINNING A3)
@@ -5547,13 +5547,40 @@ br_regrow:
 .grow:
     call OSAPI_MEM_REGROW
     jc .back
-    call br_reloc                   ; its word follows it (DX = where it is)
-    clc                             ; (br_reloc's compares leave CF anywhere)
+    call br_reloc                   ; its word follows it (DX = where it is),
+    clc                             ; and br_pageunpin declares it again: a
+                                    ; huge claim the pool could not hold any
+                                    ; more came down to the heap BORN PINNED
+                                    ; (SPEC.md 50.3.5's regrow). (br_reloc's
+                                    ; compares leave CF anywhere)
 .back:
     pop si
     pop bx
     jmp short br_pageunpin
 
+; br_hclaim - THE SOURCE'S AND THE DOCUMENT'S claim: br_claim's, and on
+; kern_mega in protected mode OSAPI_MEM_HUGE of ONE RUN (docs/plans/MEGA-
+; HUGE-PLAN.md 3, SPEC.md 71.18.2): above 1MB where the pool holds it, at
+; any size and regrown there, else the heap's - never a BRIDGE, because the
+; windows that read these claims (br_bwaim's SEG_AIM, br_at's SEG_AT) are
+; one piece's and a reach of 32-48 KiB would have to split at a cut. Two
+; buffers that may each sit on either side of 1MB lose nothing to that: the
+; pool and the heap together are what they can hold either way. A 1 KiB
+; claim is a run of one selector, and grows as one (OSAPI_MEM_REGROW)
+br_hclaim:
+    cmp byte [br_mega], 0
+    je br_claim
+    push ax
+    xor ax, ax
+    call br_pagepin
+    pop ax
+    push bx
+    push cx
+    mov bx, HUGE_NOBRIDGE
+    call OSAPI_MEM_HUGE             ; DX = its first selector (CX the step:
+    pop cx                          ; 8, never walked here)
+    pop bx
+    jmp br_pageunpin
 ; br_srcpin - AX = 0 PINS the source claim, AX = br_reloc lets it move again.
 ; Around a FILE_READ or FILE_WRITE whose ES:BX it is: the kernel holds that
 ; pointer across claims of its own before its transfer pin applies (SPEC.md
@@ -5618,7 +5645,7 @@ br_claimpage:
     call br_memroom
     jc .fail
     mov ax, 1
-    call br_claim
+    call br_hclaim
     jc .faildoc
     mov [br_docseg], dx
     call br_movable                 ; ...AND IT MOVES (NO-PINNING A3)
@@ -6436,6 +6463,27 @@ br_lineems_ensure:
     pop ax
     ret
 
+; br_avail - OSAPI_MEM_AVAIL's AX (the largest claim) and BX (the total free
+; KB), and on kern_mega in protected mode the same question with the POOL
+; counted (OSAPI_MEM_HUGE's MEMH_AVAIL ask, MEGA-HUGE-PLAN F6): every page
+; claim may sit above 1MB there, so the reserve is a share of what they can
+; all draw on. Keeps every other register
+br_avail:
+    cmp byte [br_mega], 0
+    je .conv
+    push cx
+    push dx
+    xor ax, ax
+    mov bx, MEMH_AVAIL
+    call OSAPI_MEM_HUGE
+    pop dx
+    pop cx
+    jnc .r
+.conv:
+    call OSAPI_MEM_AVAIL
+.r:
+    ret
+
 ; br_memroom - preserve the load-start conventional-memory reserve.
 ; in: AX = additional conventional KB wanted; out CF=1 if taking it would leave
 ; less than ceil(20% of the load-start free total). This asks live availability
@@ -6446,7 +6494,7 @@ br_memroom:
     push cx
     push dx
     mov [br_memneed], ax
-    call OSAPI_MEM_AVAIL           ; BX = current total free conventional KB
+    call br_avail                  ; BX = current total free KB
     mov ax, [br_membase]
     mov cx, 5
     xor dx, dx
@@ -6997,8 +7045,8 @@ br_load:
     mov byte [br_frameidx], 0
     mov byte [br_framecut], 0
     call br_free_all
-    call OSAPI_MEM_AVAIL
-    mov [br_membase], bx            ; conventional free total at this load's start
+    call br_avail
+    mov [br_membase], bx            ; the free total at this load's start
 
     mov ax, [br_srclen]             ; File > Open already gives us the exact
     or ax, [br_srclen_hi]           ; size. Association launches do not, so
@@ -14297,7 +14345,7 @@ br_a_size:    db 'size', 0
 br_a_alt:     db 'alt', 0
 br_a_checked: db 'checked', 0
 br_s_post:    db 'post', 0
-br_s_posting: db 'POST request', 0
+TOASTSTR br_s_posting, 'POST request'
 br_s_postget: db 'History GET: POST body not replayed', 0
 br_s_password: db 'password', 0
 br_s_pwwarn: db ' HTTP NOT SECURE', 0
@@ -14342,8 +14390,8 @@ br_s_webbrowser: db 'os8088 Web Browser', 0
 br_s_titlesfx: db ' - os8088 Web Browser', 0
 br_s_titlesfx_end:
 
-br_s_big:   db 'Page too large', 0
-br_s_bad:   db 'Cannot open page', 0
+TOASTSTR br_s_big, 'Page too large'
+TOASTSTR br_s_bad, 'Cannot open page'
 
                                 ; OS88UI_SBDRAG is at the TOP of this file, not
                                 ; here: SPEC.md 13.10.7.4

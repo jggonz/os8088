@@ -50,6 +50,14 @@ KOFS, KSECS = 504, 508                  # boot/boothd.asm's two patch words
 
 
 def b(name):
+    """build/NAME - or, under $OS88_MEGA (tests/megaport.txt), kern_mega's
+    own copy for what a kernel builds for itself: C: boots with A: empty, so
+    a kern_big KERNEL.SYS here would be the kernel Bochs ran, and kern_mega
+    has its own FSCHECK.DRV (SPEC.md 118.14.8)"""
+    if os.environ.get("OS88_MEGA") and name in ("kernel.sys", "boothd.bin",
+                                                "fscheck.drv"):
+        import os88build
+        return os.path.join(os88build.mega_build(), "megak", name)
     return F.b(name)
 
 

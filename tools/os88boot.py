@@ -61,13 +61,14 @@ def callsites(defines=("KERN_BIG",), build="build"):
     FLAT addresses a breakpoint can be armed on.
 
     **AND IN `kmain_o`, SPLICED IN WHERE kmain CALLS IT** (SPEC.md 2.5.3.3):
-    kmain's boot half is a blob body now, so kmain itself makes one gated call
-    and then the tail after the blob's release. Read as kmain alone, the whole
-    boot from `dsk_boot_from_x` to `spl_finish` would be ONE row named after
-    the gate - the failure the paragraph below calls invisible, one level up.
-    So kmain_o's own call sites are read too, and their return addresses are
-    in the BLOB, which stage 2 lands at `BLOB_SEG_AT` and holds until
-    `mem_unblob_x`: `HEAP_SEG*16` plus the label's offset out of the map.
+    kmain's boot half is a `.boot3` body now (the blob's until BOOT3-PLAN
+    wave 4), so kmain itself makes one far call and then the tail after the
+    release. Read as kmain alone, the whole boot from `dsk_boot_from_x` to
+    `as_boot` would be ONE row named after the call - the failure the
+    paragraph below calls invisible, one level up. So kmain_o's own call
+    sites are read too, and their return addresses are in `.boot3`, which
+    kz_all expands at `B3_RAM` and which lives until `mem_unblob_x`:
+    `B3_RAM*16` plus the label's offset out of the map.
 
     The RETURN address and not the call's own, because that is the address
     reached exactly once, after the phase has finished - a breakpoint on the
@@ -108,7 +109,7 @@ def callsites(defines=("KERN_BIG",), build="build"):
             cmd += ["-D" + d]
         cmd += ["-l", lst, "-o", binf, src]
         subprocess.run(cmd, check=True, cwd=ROOT)
-        # ...less `.cfx`'s cfx_tab, which tools/os88cfx.py stamps AFTER the
+        # ...less `.boot3`'s cfx_tab, which tools/os88cfx.py stamps AFTER the
         # assembly (SPEC.md 2.10.9): zeros in this one, os88sym's rule.
         theirs = open(built, "rb").read()
         mapf = os.path.join(ROOT, build, "kernel.map")
@@ -189,9 +190,10 @@ def callsites(defines=("KERN_BIG",), build="build"):
                 continue
             if i + 1 >= len(emit):
                 break
-            # THE MACRO'S OWN ARGUMENT BEATS THE BODY'S TEXT. SPLGATE1 and
-            # SPLGATE1 both end in a bare `call spl_gate`, so the body cannot
-            # tell drv_boot_x from xm_boot_x and the invocation can. A numeric
+            # THE MACRO'S OWN ARGUMENT BEATS THE BODY'S TEXT. SPLGATE1 (gone
+            # since BOOT3-PLAN wave 4) ended in a bare `call spl_gate`, so the
+            # body could not tell drv_boot_x from xm_boot_x and the invocation
+            # could; B3CALL's `push cs` + near call is the same. A numeric
             # argument is not a name - MARK and BPMARK take an index - so
             # those fall back.
             name = arg if (arg and not arg.isdigit()) else None
@@ -202,8 +204,8 @@ def callsites(defines=("KERN_BIG",), build="build"):
             # KERNEL_SEG:cw_vid_disp_init`), and the phase is still
             # vid_disp_init's.
             name = re.sub(r"^(?:cw|ovw|spw)_", "", name)
-            # ...and the blob's OWN copy of a CTRL.DRV routine is named for
-            # the panel's: `bvs_disp_init` is VSW_DISP expanded into the blob
+            # ...and the boot's OWN copy of a CTRL.DRV routine is named for
+            # the panel's: `bvs_disp_init` is VSW_DISP expanded into `.boot3`
             # (kernel.asm's KSW_SECT, kernel size pass 13), and the phase is
             # still vid_disp_init's
             name = re.sub(r"^bvs_", "vid_", name)
@@ -214,10 +216,12 @@ def callsites(defines=("KERN_BIG",), build="build"):
     out = sites(bodies["kmain"], lambda a: KERNEL_SEG * 16 + a)
     if bodies["kmain_o"]:
         # The listing's address is SECTION-relative (os88sym's header); the
-        # label's own value out of the map is the blob offset, and the first
-        # byte kmain_o emits is at that label.
+        # label's own value out of the map is the offset in kmain_o's
+        # section, and the first byte kmain_o emits is at that label. That
+        # section is `.boot3` since BOOT3-PLAN wave 4, at B3_RAM (it was the
+        # blob, at BLOB_SEG_AT)
         eq = os88sym.equates(defines)   # splash_entry's reason
-        heap = eq.get("BLOB_SEG_AT", eq["HEAP_SEG"])
+        heap = eq.get("B3_RAM", eq.get("BLOB_SEG_AT", eq["HEAP_SEG"]))
         lab = os88sym.syms(defines)["kmain_o"]
         first = bodies["kmain_o"][0][0]
         inner = sites(bodies["kmain_o"],

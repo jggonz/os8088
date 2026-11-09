@@ -1,0 +1,517 @@
+{
+ "area": "megacore",
+ "title": "kern_mega: the protected-mode kernel core",
+ "summary": "kern_mega's core is careful and its model is right. It is a 286 extender that never goes back to real mode on a per-event path: the tick, keyboard, int 16h and floppy are native, and every other BIOS call is reflected with the PIC kept at its protected-mode base. Fragile layout invariants are build-time %errors, and the fault model is better than Windows 3.0's UAE: per-task catch frames, a close attributed to one instance, and no loops.\n\nThe weakest seam is the 'never read kernel state through SS' rule of SPEC 20.18.2. The reflection path still reads .lowbss through SS after mega_svc_lend has moved SS to a 1 KB lent claim: mega_s2segc's [ss:mega_pm] at offset 1347h, mega_p2d's mem_tab, mega_useg's mega_ldt_alloc scan end, and mega_hibnc's landing. On any limit-checking CPU that is a fatal #SS (mc-1). A related hazard: an option-ROM IRQ arriving on an unlent foreign stack is reflected with a selector as the real-mode SS.\n\nThe second theme is how long interrupts stay off. Linear LDT walks run per block freed under cli, and compaction pieces of 64 KB are about 16 ms on the Victory 286. Both are fine on a 386 and marginal on the 286 that is this arm's reason to exist; the 16 ms piece is already in KERN-MEGA-PLAN 14.48.3.\n\nThe third is nine machine-global GDT scratch selectors held correct by prose; the compactor rebases SLD but not BACK.\n\nSeveral small ROM-fidelity bugs remain: a spurious IRQ7 gets a non-specific EOI, mega_rfclk breaks at midnight, keypad -/+ give no ASCII with NumLock off, and SEG_LEND clobbers the live loan before validating.\n\nThe file header, BOCHS.md and MEGA_CSELTOP still describe the retired static-identity GDT and the (S>>2)|4 LDT aliases; that is the largest doc debt. Nearly every fix is in .mega/.cold, which sit above 1 MB after the switch, so the conventional-memory cost is nil.",
+ "strengths": [
+  {
+   "title": "The PIC never moves for a reflection",
+   "why": "Copying IVT 08h-0Fh to the protected-mode base, instead of re-initialising the 8259, avoids ICW1's edge-latch reset (which lost the serial mouse) and is cheaper than DOSX's or OS/2's per-switch reprogramming.",
+   "evidence": "kernel/mega.inc:3407-3418 (no ICW1 note), 14877-14886 (the copy in mega_pmtail)"
+  },
+  {
+   "title": "No per-event path resets a 286",
+   "why": "The tick, keyboard, int 16h and floppy are native, so only rare services pay the CMOS-shutdown reset. The floppy is an accelerator with a BIOS fallback, judged by what the BIOS then does, which is a model worth copying for any native driver.",
+   "evidence": "mega_t08 1356, mega_k09 1640, mega_i16 2007, mega_fd13 6625, mega_fdjudge 6875"
+  },
+  {
+   "title": "A fault closes only the faulting package",
+   "why": "Per-task catch frames, attribution by pair and then by owning block, a catch that must call into the same instance, loop caps, and IVT cells given back. This is Windows 3.1's Catch/Throw plus ToolHelp, done by the kernel.",
+   "evidence": "mega_fkill 2540-2725, mega_pcin_n 3041, mega_fkivt 3113, mega_fbown"
+  },
+  {
+   "title": "The 286 string-restart behaviour is measured on the CPU",
+   "why": "Calibrating once at the switch absorbs the Victory's one-element-late restart and 86Box's CX-by-two quirk without special cases.",
+   "evidence": "mega_strcal 5100-5193, mega_strfix 5195-5283"
+  },
+  {
+   "title": "Code/data pairs are adjacent (data = code + 8)",
+   "why": "Conversion is a subtraction rather than an alias table, and it is validated by comparing bases (mega_ldt2ds). Windows needs separate AllocCStoDSAlias selectors for the same job.",
+   "evidence": "mega_cs2ds 4804, mega_ldt_alloc2 9882, mega_ldt2ds 9932"
+  },
+  {
+   "title": "Layout invariants are %errors, not prose",
+   "why": "Scratch-line placement, stub strides, the tail size against MX_OWN reads, and mirrored constants all fail the build when they drift.",
+   "evidence": "mega.inc:105-127, 888, 1036, 1139, 2102, 2127, 8801-8811; kernel.asm:8897; memory.inc:127"
+  },
+  {
+   "title": "mega_layoutf is a pure function of extended KB",
+   "why": "Every boot of a machine lays the tables out identically, which is what lets a park anchor and a hibernate resume be found.",
+   "evidence": "mega_layoutf 10888-10964"
+  },
+  {
+   "title": "The 8042 lost-edge watchdog",
+   "why": "A stranded byte is re-delivered through its own gate on the second consecutive tick, for one IN on the common tick. It is neither dropped nor polled for.",
+   "evidence": "mega_kwd 1437-1509"
+  },
+  {
+   "title": "Conventional bytes are treated as scarce",
+   "why": ".mega, the tables' tail and the refusal strings live above 1 MB, and the doors between .text and .mega are a closed list that os88ovlchk enforces.",
+   "evidence": "mega.inc:8750-8770 (tail), 14822-14837 (rung data), 14925-15032 (doors)"
+  }
+ ],
+ "findings": [
+  {
+   "id": "mc-1",
+   "kind": "bug",
+   "severity": "high",
+   "title": "A reflection on the LENT stack reads .lowbss through SS (fatal #SS on limit-checking CPUs)",
+   "detail": "mega_svc_lend switches SS to the 1 KB lent claim (limit 3FFh) and continues at mega_svc.low. On that stack three routines still read kernel state through SS. mega_s2segc runs 'cmp byte [ss:mega_pm],0' on every reflection (mega_pm is at .lowbss 1347h, past the limit), giving #SS in .cold code, which mega_fkill treats as the kernel's fault, so the machine halts; on QEMU, which checks no limit, it reads a heap byte instead. mega_rseg->mega_p2d reads mem_tab through SS whenever the BIOS returns a changed ES or DS. mega_hibnc lands the bounce at SS:dsk_secbuf when the read-ahead landing is shed. This is SPEC 20.18.2's rule, missed on the one path that makes SS foreign on purpose; 124.31.2's Mozart int 10h AX=1A00h goes exactly this way.",
+   "evidence": [
+    "kernel/mega.inc:3463-3488 mega_svc_lend sets SS to [mega_rsseg] and jumps to .low",
+    "kernel/mega.inc:3359,3381 call mega_s2segc unconditionally",
+    "kernel/mega.inc:5457-5458 cmp byte [ss:mega_pm],0",
+    "kernel/mega.inc:5804 mega_vrm also calls it",
+    "kernel/mega.inc:3826 .srnew calls mega_rseg; 5425 cmp [ss:si+MC_SEG],dx",
+    "kernel/mega.inc:5825 mega_hibnc mov ax, ss as the landing",
+    "apps/win16/win16.asm:1406-1414 the loan is a 1 KB claim",
+    "kernel/mega.inc:14062-14073 mega_mpbase gives the claim's selector an exact limit",
+    "build/megak/kernel.map: mega_pm at .lowbss 1347h",
+    "kernel/mega.inc:14320-14321 mega_rseg .nu -> mega_useg -> mega_ldt_alloc (9858: cmp di,[ss:mega_ldte]), a fourth SS read on the same path",
+    "build/megak/kernel.map: mem_tab at .lowbss 13CCh"
+   ],
+   "recommendation": "Have mega_s2segc and its .cold siblings (mega_slidec, mega_kaimf, mega_oddsegc, mega_bkaimf, mega_backf) read mega_pm through ES=LOW_SEG by name, as mega_codesel does, or give the protected-mode callers a PM entry that skips the test. Have mega_p2d read mem_tab through ES=LOW_SEG, and mega_hibnc use mov ax, LOW_SEG. Add a Bochs row with a probe that lends a 1 KB stack and issues int 10h 1A00h and 1130h from a stack of its own. Consider a fast gate listing non-bp [ss:] operands reachable from mega_svc.",
+   "phase": "now",
+   "bytes_est": "+16 (the reflection path's sites) to ~+40 (with the .cold siblings), .cold/.mega, above 1MB after the switch; 0 conventional",
+   "listed_as": "",
+   "verdict": "corrected",
+   "verify_note": "Confirmed on the code: mega_svc_lend loads SS = [mega_rsseg] (the 1 KB claim's data selector, limit 3FFh via mega_mpbase) and jumps to .low; .refl2 then calls mega_s2segc, whose first instruction is cmp byte [ss:mega_pm],0 with mega_pm at .lowbss 1347h (build/megak/kernel.map, .lowbss vstart 0). mega_p2d reads mem_tab (.lowbss 13CCh) through SS. Correction: there is a FOURTH read on the same path - mega_rseg's .nu arm calls mega_useg -> mega_ldt_alloc, whose scan ends at cmp di,[ss:mega_ldte]. An int 13h on the lent stack also runs mega_fd13 before .refl2 (not checked for SS reads). Not fixed, not listed. Bytes: about +16 for the three/four sites on the reflection path, nearer +40 if the .cold siblings named in the recommendation are converted too; all .cold/.mega."
+  },
+  {
+   "id": "mc-2",
+   "kind": "hazard",
+   "severity": "medium",
+   "title": "An option-ROM IRQ on an unlent foreign stack is reflected with a selector as the real-mode SS",
+   "detail": "In mega_svc .none, an IRQ the ROM owns arriving with SS neither LOW_SEG nor the lent stack goes to .nest/.low. [mega_rss] becomes the selector and mega_svc_lo loads it as a segment, so the ROM ISR pushes its frame at selector x 16, inside somebody's heap. The comment 'goes on as before' describes the bug SEG_LEND was invented for. WIN16 escapes it only because it re-lends before every run.",
+   "evidence": [
+    "kernel/mega.inc:3290-3296 .none sends an IRQ to .nest",
+    "kernel/mega.inc:3448-3456 mega_rss = SS unless it is the lent stack",
+    "kernel/mega.inc:3575-3577 .rmc mov ss,[mega_rss]",
+    "SPEC.md 124.31.2 item 3 'an IRQ the ROM owns goes on as before'"
+   ],
+   "recommendation": "(a) Reflect such IRQs on a small fixed kernel stack in .lowbss (128-192 bytes); or (b) mask the line and replay it at the next LOW_SEG reflection; or at least (c) make SEG_LEND mandatory for any package that keeps its own stack, documented in SPEC 50.6.11.",
+   "phase": "now",
+   "bytes_est": "(a) +20 .mega, +128..192 .lowbss resident conventional (owner's call); (c) 0",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "mega_svc .none tests frame byte +9 (the irqrom mark) and sends a ROM IRQ to .nest/.low only when [mega_rsseg] is 0; .rssok leaves mega_rss = SS (a selector), and mega_svc_lo .rmc does mov ss,[mega_rss] in real mode. The same path also meets mc-1's SS reads with the program's SS. SPEC 124.31.2 item 3 says 'goes on as before'. Not listed."
+  },
+  {
+   "id": "mc-3",
+   "kind": "bug",
+   "severity": "low",
+   "title": "SEG_LEND writes mega_rspar before validating the paragraph, and checks no owner",
+   "detail": "mega_segf .lset stores [mega_rspar] before mega_p2d can refuse. A refused lend while another loan is live leaves rsseg on the old claim and rspar on the refused paragraph, so protected and real mode use different stacks and the BIOS pushes into the wrong memory. SPEC says 'a claim of the caller's' but nothing checks MC_OWN.",
+   "evidence": [
+    "kernel/mega.inc:12779-12784 mov [es:mega_rspar],dx precedes call mega_p2d / jc .lno",
+    "SPEC.md 50.6.11 SEG_LEND row"
+   ],
+   "recommendation": "Store rspar after the jc .lno, keeping the paragraph in a register; optionally compare mem_tab's MC_OWN with mega_segown's byte.",
+   "phase": "now",
+   "bytes_est": "0..+12 .mega",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "mega_segf .lset stores [es:mega_rspar],dx before call mega_p2d / jc .lno, and mega_p2d keeps DX on failure, so a refused lend leaves rspar on the refused paragraph while rsseg names the old claim. mega_segown's BL is stored as mega_rsown but never compared with the claim's MC_OWN."
+  },
+  {
+   "id": "mc-4",
+   "kind": "hazard",
+   "severity": "medium",
+   "title": "Linear LDT walks with interrupts off, one per block on a teardown",
+   "detail": "mega_ldt_alloc and _alloc2 scan FREE0..mega_ldte with IF=0. mx_dfree walks the whole LDT for every program or driver block freed, and mx_free and mx_relall call it inside their own pushf/cli. With about 1,500 allocator entries on a 15 MB machine, a walk is predicted at about 5 ms on an 8 MHz 286 (about 26 clocks an entry), and a teardown with N blocks is N walks back to back with IF off. An 8250/16450 at 1200 baud overruns after 8.3 ms.",
+   "evidence": [
+    "kernel/mega.inc:9846-9880 mega_ldt_alloc scan under cli",
+    "kernel/mega.inc:9882-9930 mega_ldt_alloc2",
+    "kernel/mega.inc:9413-9478 mx_dfree walks the whole LDT",
+    "kernel/mega.inc:9251-9294 mx_free pushf/cli around mx_kill",
+    "kernel/mega.inc:9295-9335 mx_relall pushf/cli",
+    "kernel/mega.inc:10903-10910 ldtn = FREE0 + 512 + extKB/16"
+   ],
+   "recommendation": "Keep a high-water mark [mega_ldthi] raised by the allocators and end every walk there. Move mx_dfree out of mx_free's and mx_relall's cli (mega_ldt_free brackets its own write; only the mx_tab row needs the cli). Give mega_ldt_alloc a rotating start hint. Longer term, a free list chained through free descriptors (Windows/DPMI).",
+   "phase": "now",
+   "bytes_est": "+20..+30 .mega (above 1MB)",
+   "prior_art": "Windows 3.x and DPMI hosts chain free LDT entries through the descriptors for O(1) alloc; AmigaOS's Forbid-not-Disable habit",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "mega_ldt_alloc/_alloc2 scan from FREE0 to [ss:mega_ldte]/[ss:mega_ldtl] inside pushf/cli; mx_dfree walks FREE0..[mega_ldte] for owners below 80h, A0h-DFh and FFh; mx_free and mx_relall call mx_kill -> mx_unsel -> mx_dfree inside their own pushf/cli, mx_relall for every matching block in one cli. mega_layoutf: ldtn = extKB/16 + FREE0 + 512 (rounded), so ~1,470 allocator entries at 15MB. The 5 ms a walk is the reviewer's prediction (about 26-30 clocks an entry at 8 MHz), not a measurement. Not listed."
+  },
+  {
+   "id": "mc-5",
+   "kind": "hazard",
+   "severity": "medium",
+   "title": "Compaction moves 64 KB pieces with IF off (~16 ms on the Victory 286), and mx_alloc holds sch_lock across a full pack",
+   "detail": "mx_cpmove copies each piece and rebases its descriptors in one cli step, and mx_pcut cuts at 64 KB because a claim's own selector spans its piece. KERN-MEGA-PLAN 14.38 D6 measured 0.257 ms a KB above 1 MB, so a piece is about 16.4 ms plus the mx_desc LDT walk: two serial bytes at 1200 baud. mx_alloc's sch_lock across mx_packupf means about 0.5 s with no task switch per 2 MB packed (predicted).",
+   "evidence": [
+    "kernel/mega.inc:11055-11190 mx_cpmove pushf/cli per piece",
+    "kernel/mega.inc:11556-11587 mx_pcut 128 units (64KB)",
+    "kernel/mega.inc:8957-9100 mx_alloc inc [sch_lock] around the pack",
+    "docs/plans/KERN-MEGA-PLAN.md 14.38 D6: 0.257 ms/KB"
+   ],
+   "recommendation": "The 16 ms piece is already recorded in KERN-MEGA-PLAN 14.48.3; carry it into SPEC wherever pool compaction is described, and record mx_alloc's sch_lock hold across a full pack. The fix is a model change: a per-claim ISR-reachable flag (Windows GlobalFix / Mac HLock contract), so every other block moves with IF on and cuts at descriptor boundaries; MX_CPHOLD and SPEC 34.11's exception are half of it. That is a package contract, so it belongs on the flag day.",
+   "phase": "record",
+   "bytes_est": "+20 .mega once the contract exists",
+   "prior_art": "Windows 3.x moved MOVABLE segments with interrupts on; ISR-touched memory had to be fixed or page-locked. Mac Memory Manager: interrupt-time code touches only locked or non-relocatable blocks",
+   "listed_as": "KERN-MEGA-PLAN 14.48.3 (the ~16 ms 64KB worst case, already recorded)",
+   "verdict": "corrected",
+   "verify_note": "The mechanism is as stated (mx_cpmove: pushf/cli per piece; mx_pcut cuts at 128 units = 64KB; mx_alloc holds sch_lock across mx_packupf). Correction: the IF-off figure is ALREADY recorded - KERN-MEGA-PLAN 14.48.3 says '14.15's 64KB worst case is ~16 ms' at the Victory's 0.257 ms/KB (and ~15 ms for Pixelstein's 58KB piece), so 'record it' is done in the plan; what is new is the sch_lock hold across a whole pack (~0.5 s per 2MB, arithmetic) and the ISR-reachable-flag model change. The 0.257 ms/KB is LOADALL-PLAN's measured int 15h/LOADALL rate, i.e. the copy itself (answers open question 3)."
+  },
+  {
+   "id": "mc-6",
+   "kind": "bug",
+   "severity": "low",
+   "title": "Spurious IRQ7/IRQ15 get a non-specific EOI",
+   "detail": "A ROM-owned IRQ7 or IRQ15 gets mega_eoi1 or mega_eoi2, which send a non-specific EOI. For a spurious IRQ7, common on ATs, no ISR bit is set, so the EOI retires whatever interrupt is in service, wherever an ISR has sti'd before its EOI. The AT BIOS checks the ISR first.",
+   "evidence": [
+    "kernel/mega.inc:840-852 mega_idt_gate .romk/.irqm assign mega_eoi1/eoi2",
+    "kernel/mega.inc:2136-2150 mega_eoi2/eoi1",
+    "kernel/mega.inc:1095-1097 mega_capon's own spurious-IRQ7 note"
+   ],
+   "recommendation": "Give 27h and 77h a stub that reads OCW3 0Bh and skips the EOI (for 77h, the slave's) when bit 7 is clear.",
+   "phase": "now",
+   "bytes_est": "+16 .mega",
+   "prior_art": "IBM AT BIOS D11 (unexpected interrupt) reads the ISR before acknowledging",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "mega_idt_gate: an IRQ7 whose IVT cell is the system BIOS's (F000h, not an option ROM) falls through mega_irqrom to .romk/.irqm and gets mega_eoi1, a non-specific EOI (out 20h,20h) with no ISR read; mega_eoi2 sends non-specific EOIs to both PICs. Low is right."
+  },
+  {
+   "id": "mc-7",
+   "kind": "bug",
+   "severity": "low",
+   "title": "mega_rfclk miscounts a reflection that spans midnight",
+   "detail": "The periods are computed as [40:6C] - [mega_t0], low words only. A reflection across midnight sees 40:6C reset to 0, so AX is about 65,360: [ticks] jumps an hour, and the rate arm's .fix subtracts that from the time of day. The correct low word is new - t0 + 00B0h (1800B0h mod 65536).",
+   "evidence": [
+    "kernel/mega.inc:3892-3934 mega_rfclk",
+    "kernel/mega.inc:3897 sub ax,[mega_t0]",
+    "kernel/mega.inc:1361-1371 mega_t08's own midnight wrap"
+   ],
+   "recommendation": "When the subtraction gives 8000h or more, add 00B0h (jns over an add).",
+   "phase": "now",
+   "bytes_est": "+6 .mega",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "mega_rfclk does mov ax,[es:0x6C] / sub ax,[mega_t0] with no wrap handling, while mega_t08 resets 40:6C/6E at 1800B0h. Across midnight the difference is ~FF5xh; the 00B0h correction is right (180000h is 0 mod 65536)."
+  },
+  {
+   "id": "mc-8",
+   "kind": "bug",
+   "severity": "low",
+   "title": "mega_k09 fidelity: keypad -/+ give no ASCII with NumLock off; 40:96's right Ctrl/Alt bits are not kept",
+   "detail": "The .pad arm treats 4Ah and 4Eh as navigation keys, storing 4A00h and 4E00h where the AT BIOS gives 4A2Dh and 4E2Bh in every state. Bits 2-3 of 40:96 are never maintained, so int 16h AH=12h's AH is 40:18 alone. A plain Ctrl+ScrollLock (83-key Break) toggles Scroll Lock.",
+   "evidence": [
+    "kernel/mega.inc:1837-1858 .pad/.padnc",
+    "kernel/mega.inc:2069-2073 .shift AH=12h",
+    "kernel/mega.inc:1700-1703 only E0 46 is swallowed"
+   ],
+   "recommendation": "Exclude 4Ah/4Eh from the NumLock test (+8). Track the right-hand bits in 40:96 (+12). Leave the 83-key Break.",
+   "phase": "now",
+   "bytes_est": "+20 .mega",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": ".pad covers 47h-53h, so 4Ah and 4Eh take the NumLock/Shift test and store ASCII 0 with NumLock off; 40:96 is only ever touched in bits 0-1 (E1/E0 flags); AH=12h returns AH = [40:18]; only the E0-prefixed 46h is swallowed as Break."
+  },
+  {
+   "id": "mc-9",
+   "kind": "hazard",
+   "severity": "medium",
+   "title": "Global GDT scratch selectors held by prose; the compactor rebases SLD but not BACK",
+   "detail": "ODD, SLD, BACK, K0-K5, FD, VB, XA/XB and WIN are one descriptor each for the whole machine, re-aimed per use, correct only by comment ('holds ODD only until its next call', 'only a TASK loads it'). mx_cpmove rebases SLD alone. BACK, aimed by lz_match at a source 64 KB behind an output that may be a pool claim, keeps its old base if another task's mx_alloc packs that block while the decoding task is suspended mid-match.",
+   "evidence": [
+    "kernel/mega.inc:4002-4006 the ODD/SLD caveat",
+    "kernel/mega.inc:4064-4093 mega_bkaimf/mega_backf aim BACK",
+    "kernel/mega.inc:11173-11179 mov si,MEGA_SEL_SLD / lea cx,[si+8]: only SLD rebased",
+    "kernel/lz.inc:519-534 lz_match's BACK detour",
+    "kernel/mega.inc:157-169 K0..SLD ascend"
+   ],
+   "recommendation": "Now: rebase the whole K0..SLD range in mx_cpmove (mov si,MEGA_SEL_K0 / mov cx,MEGA_SEL_SLD+8; PSCR and CODE in between are based outside the pool and untouched). Rethink: one LDT selector per LZ or module stream, allocated with it (cheap once mc-4's allocator lands), retiring the scratches and their prose.",
+   "phase": "now",
+   "bytes_est": "0 .mega now (same instruction lengths); rethink about -60 .cold aim helpers against +40 alloc/free",
+   "prior_art": "Windows and DPMI hand each object its own selector (AllocSelector) rather than re-aiming shared ones",
+   "listed_as": "",
+   "verdict": "corrected",
+   "verify_note": "mx_cpmove's .h1 rebases the GDT range [MEGA_SEL_SLD, SLD+8) only, and BACK (SCR+6) is aimed by mega_backf/mega_bkaimf from lz_match; K0..SLD ascend (SCR+0..+9) with PSCR and CODE between. Corrections: (1) the 'now' change is 0 bytes, not +1 (mov si,imm16 / lea cx,[si+8] -> mov si,imm16 / mov cx,imm16 are both 6 bytes); (2) the likelier collision of the same class is another task's LZ decode re-aiming BACK, ODD or SLD while this one is suspended mid-match - mega_slidec's own comment concedes it for SLD - and widening the rebase does not cover that; whether LZ decoding is serialized (open question 4) was not established here. The compaction case alone is a narrow window."
+  },
+  {
+   "id": "mc-10",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "The kernel's own writes through CS are completed silently",
+   "detail": "mega_fault sends every #GP to mega_gpfix and mega_gpw whatever the CS, and mega_cs2ds maps 0x0060 to KDATA. A missed CSDO or PUSH_CSDATA in the kernel's .text becomes a permanent #GP per store, with no report on a shipped build. The trap exists for packages (L3); for the kernel it hides a bug.",
+   "evidence": [
+    "kernel/mega.inc:2418-2427 mega_fault dispatch with no CS test",
+    "kernel/mega.inc:4553-4558 mega_gpw takes the data segment from CS",
+    "kernel/mega.inc:4818-4823 mega_cs2ds: KERNEL_SEG -> KDATA"
+   ],
+   "recommendation": "Count fixups whose faulting CS is a GDT selector in a [mega_kfix] word that the harness reads (as it reads [mega_infault]); add a Bochs row asserting it stays 0 across a boot and a standard workload.",
+   "phase": "now",
+   "bytes_est": "+8 .mega",
+   "listed_as": "ABI-BREAK-LIST L3 (the package half)",
+   "verdict": "confirmed",
+   "verify_note": "mega_fault sends every vector 0Dh to mega_gpfix with no CS test; mega_gpw takes the data segment from the faulting CS via mega_cs2ds, which maps KERNEL_SEG (0x0060) to MEGA_SEL_KDATA; a CS: prefix goes to the trampoline and completes. So a kernel .text store through CS is silently completed. Only MEGATRAP=1 logs it."
+  },
+  {
+   "id": "mc-11",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "The write-only CMOS index port is read back",
+   "detail": "mega_enterf and mega_pmtail read-modify-write port 70h, which is write-only on the AT; every other site writes 8Dh or 0Dh outright.",
+   "evidence": [
+    "kernel/mega.inc:476-478 in al,0x70 / or al,0x80",
+    "kernel/mega.inc:14893-14895 in al,0x70 / and al,0x7F",
+    "kernel/mega.inc:3693,3719 mega_up writes 8Dh/0Dh"
+   ],
+   "recommendation": "mov al,0x8D / mov al,0x0D.",
+   "phase": "now",
+   "bytes_est": "-2 .cold, -2 .mega",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "mega_enterf: in al,0x70 / or al,0x80 / out 0x70,al; mega_pmtail: in al,0x70 / and al,0x7F / out. mega_svc_lo writes 8Dh/0Dh outright. in+or/and is 4 bytes against 2 for mov al,imm8, so -2 each."
+  },
+  {
+   "id": "mc-12",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "mega_s2segc truncates an off-grid base",
+   "detail": "It shifts the base right by 4 without testing the low nibble. A SEG_WINL window (any linear base) handed to a reflected BIOS call becomes a segment up to 15 bytes low, so a BIOS transfer lands early. SEG_REAL refuses exactly that case.",
+   "evidence": [
+    "kernel/mega.inc:5470-5486 shr ax,4 with no low-nibble test",
+    "kernel/mega.inc:12855-12857 SEG_REAL: test al,0x0F / jnz .rno"
+   ],
+   "recommendation": "Return FFFFh for a base with a nonzero low nibble; int 13h then bounces through mega_hibnc.",
+   "phase": "now",
+   "bytes_est": "+4 .cold",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "mega_s2segc shifts base 15:0 right by 4 and ors in base 23:16 with no low-nibble test; SEG_REAL refuses a base with test al,0x0F / jnz .rno."
+  },
+  {
+   "id": "mc-13",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "mega_ustab rows are never freed and can name a moved claim",
+   "detail": "mega_useg gives a permanent row (8 of them) and LDT entry per distinct segment. mega_rseg's .u arm sends it any non-identity, non-base segment, including one inside a conventional claim, despite the header's 'at or above A000h'. The row is physical, so it goes stale when that claim moves; a ninth distinct segment gets NULL.",
+   "evidence": [
+    "kernel/mega.inc:14299-14336 mega_rseg .u",
+    "kernel/mega.inc:14337-14385 mega_useg, no free path"
+   ],
+   "recommendation": "Limit useg to segments at A000h and above, and return NULL for an in-claim non-base segment; or free rows in mega_mpgap/mega_cdfree.",
+   "phase": "now",
+   "bytes_est": "+6 .mega",
+   "listed_as": "CODE-REVIEW-TWO-CYCLES-2026-11-01 row 18",
+   "verdict": "confirmed",
+   "verify_note": "mega_rseg's .u arm sends anything not identity and not a claim base (mega_p2d failure) to mega_useg, which allocates a permanent row and LDT entry; no path frees rows; mega_useg's own header now concedes in-claim segments reach it (14.135). Listed: CODE-REVIEW-TWO-CYCLES row 18 (its 'past 8 rows #GP' half is fixed: mega_rseg returns NULL)."
+  },
+  {
+   "id": "mc-14",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "MX_FWIN is set but never cleared",
+   "detail": "A block that has ever held a bound window moves with the FSXF_RATE hook held off for ever.",
+   "evidence": [
+    "kernel/mega.inc:13480 or byte [es:bx+MX_FL],MX_FWIN",
+    "kernel/mega.inc:11243 mx_cpflags tests it"
+   ],
+   "recommendation": "Clear it when the block's last window row goes (mega_ldt_free's wtab walk finds the row).",
+   "phase": "now",
+   "bytes_est": "+10 .mega",
+   "listed_as": "CODE-REVIEW-TWO-CYCLES-2026-11-01 kern_mega list",
+   "verdict": "confirmed",
+   "verify_note": "MX_FWIN is or'd in at 13480 and only tested at 11243; nothing clears it, so it lasts the block's life (MX_FL is rewritten when the entry is reused). Listed in CODE-REVIEW-TWO-CYCLES."
+  },
+  {
+   "id": "mc-15",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "mega_leds spins up to 2x65,536 polls inside IRQ1 with IF off; an ACK behind an AUX byte arrives as a scancode",
+   "detail": "mega_kack busy-waits with interrupts off from mega_k09 on every lock key. When the waiting byte is the AUX port's it returns without reading it, so the keyboard's FAh arrives later as an ordinary IRQ1 byte.",
+   "evidence": [
+    "kernel/mega.inc:1311-1345 mega_leds/mega_kack",
+    "kernel/mega.inc:1756-1759 called from .toggle in IRQ1"
+   ],
+   "recommendation": "Bound the wait to about 2,000 polls; make sure FAh/FEh are swallowed in mega_k09 or kbd_track.",
+   "phase": "now",
+   "bytes_est": "+4 .mega",
+   "listed_as": "",
+   "verdict": "corrected",
+   "verify_note": "mega_kack polls port 64h up to 65,536 times (xor cx,cx / loop) from mega_leds inside mega_k09 with IF off, and returns without reading an AUX byte. Correction: in mega_k09 itself a late FAh is harmless - bit 7 set makes it a break of 7Ah, which .notbrk sends to .eoi ('every other break is nothing'); kbm_isr's/kbd_track's handling of FAh was not checked, so the 'swallow' half stands only for them."
+  },
+  {
+   "id": "mc-16",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "Move the master PIC off 20h; the reflection path never re-initialises it, though several sites hard-code 20h-27h",
+   "detail": "With the base at 20h, mega_i21 probes the 8259's ISR on every keystroke to tell IRQ1 from int 21h; a program's int 20h/25h/26h enters the IRQ0/5/6 gates (int 26h sets the floppy-done flag); mega_fkivt special-cases 21h. 124.31.2 refused a move to 50h as 'the larger change to the reflection path', but the path never re-initialises the PIC and only copies IVT 08h-0Fh to the base, so a 50h base moves that copy to 50h-57h and nothing else. Correction: several sites hard-code 20h-27h as IRQ0-7 (mega_ivt_sync's 0x20*4 copy and 22h-28h rebuild, mega_idt_gate, mega_irqrom, mega_capon), so they move with the base too.",
+   "evidence": [
+    "kernel/mega.inc:952-1000 mega_i21",
+    "kernel/mega.inc:14877-14886 the IVT copy to MEGA_PIC_BASE",
+    "kernel/mega.inc:3146-3153 mega_fkivt's 21h mirror",
+    "kernel/mega.inc:1269-1283 mega_pic_at takes the base in AH",
+    "SPEC.md 124.31.2 item 2"
+   ],
+   "recommendation": "Re-open the decision with this observation: move to 50h, delete mega_i21 and the 21h special cases, and give 20h-27h to mega_swv. Check megados's mega_dropr and the hibernate path.",
+   "phase": "now",
+   "bytes_est": "about -81 .mega (mega_i21) against +4..+8 (two mega_swv stubs, the literals made symbolic): net about -70",
+   "prior_art": "Windows 3.0 standard mode's DOSX put the master PIC at 50h",
+   "listed_as": "SPEC.md 124.31.2 item 2 (refused)",
+   "verdict": "corrected",
+   "verify_note": "The observation that the PIC is never re-initialised for a reflection is right, but 'moves that copy and nothing else' is not: mega_ivt_sync copies IVT 08h-0Fh to the literal 0x20*4 and rebuilds gates from the literal 22h to 28h; mega_idt_gate's .notsvc (cmp al,0x28), .romk/.irqm (0x28, 0x26) and mega_irqrom (22h..28h) hard-code IRQ0-7 at 20h-27h, as does mega_capon's 0x26*4. All of those need MEGA_PIC_BASE-relative forms, and 20h-27h then need software gates. mega_i21 is 81 bytes (build/megak/kernel.map: 1C689h to mega_swok at 1C6DAh). The decision is still worth re-opening; SPEC 124.31.2 item 2's 'the larger change' is less large than it reads."
+  },
+  {
+   "id": "mc-17",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "OSAPI_XMEM_COPY writes anywhere below 1 MB",
+   "detail": "mx_copy accepts any conventional end with DX < 10h, unchecked. Under kern_mega every other stray package write is a contained #GP; this one reaches the IVT, the kernel at 600h or another package. It is HIMEM parity, not a regression.",
+   "evidence": [
+    "kernel/mega.inc:9773-9776 cmp dx,0x10 / jb .lowend"
+   ],
+   "recommendation": "Record it. If fault containment is ever promised, check the conventional end against the caller's claims and region (mega_fown's walk).",
+   "phase": "record",
+   "bytes_est": "+30 .mega if done",
+   "prior_art": "HIMEM.SYS's move function never validated the conventional end either",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "mx_copy: cmp dx,0x10 / jb .lowend accepts any conventional linear end below 1MB with no ownership check (the above-1MB arm is checked by mx_chk)."
+  },
+  {
+   "id": "mc-18",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "The software-vector dispatch enters a handler with the dispatcher's flags",
+   "detail": "mega_swc and mega_i21 retf into a package's handler with the arithmetic flags of mega_swok's compare, not those the int instruction left. Harmless for every handler in the tree, which read FLAGS from the frame.",
+   "evidence": [
+    "kernel/mega.inc:891-950 mega_swc",
+    "kernel/mega.inc:952-1000 mega_i21",
+    "kernel/mega.inc:1001-1022 mega_swok"
+   ],
+   "recommendation": "Record the behaviour in SPEC 20.18.1.",
+   "phase": "record",
+   "bytes_est": "0",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "mega_swc and mega_i21 build the handler's far address in the frame and retf after mega_swok, whose cmp/and set the arithmetic flags; the caller's arithmetic flags are only in the CPU frame."
+  },
+  {
+   "id": "mc-19",
+   "kind": "prior-art",
+   "severity": "low",
+   "title": "A 'protected-mode clean' header bit as the incremental road to L3",
+   "detail": "Windows 3.0's NE PROTMODE flag let a converted program say so. An os8088 class bit would let mega_gpw close a clean package on a CS store (a bug) while old binaries keep the fixups, and t_megapkg could ratchet the census. It starts retiring mega_gpfix/mega_gpw without waiting for The Wire to serve two builds.",
+   "evidence": [
+    "kernel/mega.inc:4271-4545 mega_gpfix",
+    "kernel/mega.inc:4546-4800 mega_gpw",
+    "docs/plans/ABI-BREAK-LIST.md L3"
+   ],
+   "recommendation": "Add one class bit (additive, so a lock update without a PKG_FMT bump) and a test in mega_gpw.",
+   "phase": "now",
+   "bytes_est": "+12 .mega",
+   "prior_art": "Windows 3.0 NE header PROTMODE / 'designed for an earlier version of Windows' warning",
+   "listed_as": "ABI-BREAK-LIST L3 (a staged alternative)",
+   "verdict": "unchecked",
+   "verify_note": "Low-severity prior-art proposal; not verified beyond the L3 row it cites."
+  }
+ ],
+ "doc_fixes": [
+  {
+   "file": "kernel/mega.inc",
+   "old_text": "It is wave M1 of KERN-MEGA-PLAN 10.",
+   "new_text": "It began as wave M1 of KERN-MEGA-PLAN 10.",
+   "why": "the file now holds the later waves' protected-mode halves and KERN-MEGA-MEMORY-PLAN's tables too (mega.inc 'M3: MEMORY ABOVE 1MB'; the M6 park is the megados.inc it includes)"
+  },
+  {
+   "file": "kernel/mega.inc",
+   "old_text": "; THE MAP (KERN-MEGA-PLAN 3). Every segment value the kernel and its packages\n; already hold keeps meaning what it means:\n;\n;   GDT entry i, for every i from 8 to 8191, is DATA with base i x 128 and a\n;   64KB limit, so selector N is segment N whenever N is a multiple of 8. That\n;   is every heap base (all of them are multiples of 32 paragraphs), LOW_SEG,\n;   0x0040, 0xA000, 0xB000, 0xB800 and 0xF000.\n;\n;   The EXCEPTIONS are the kernel's two code segments: entry 12 is KERNEL_SEG\n;   (0x0060) as READABLE CODE, because every package far-calls 0x0060:cell,\n;   and entry COLD_SEG/8 is `.cold` as code. Entries 1-7 have bases inside the\n;   IVT, which nothing loads as a segment, so they carry the kernel's own\n;   selectors (MEGA_SEL_*).\n;\n;   LDT entry i, for i from 0 to 2047, is READABLE CODE with base i x 512, so\n;   any 512-aligned conventional segment S has a code alias (S >> 2) | 4 - a\n;   package, a driver or a module is far-called through that. Its TI bit is\n;   set, so it can never equal an identity selector.",
+   "new_text": "; THE MAP (KERN-MEGA-PLAN 3, cut back by KERN-MEGA-MEMORY-PLAN MC7.4):\n;\n;   GDT entry i, for every i from 8 up to `.cold`'s own (MEGA_GDT_ID - 1), is\n;   DATA with base i x 128 and a 64KB limit, so selector N is segment N for\n;   every segment the kernel itself loads below COLD_SEG - LOW_SEG, the FAT\n;   window, 0x0040. Past it are the per-use scratches (MEGA_SEL_K0 ...).\n;\n;   The EXCEPTIONS are the kernel's two code segments: entry 12 is KERNEL_SEG\n;   (0x0060) as READABLE CODE, because every package far-calls 0x0060:cell,\n;   and entry COLD_SEG/8 is `.cold` as code. Entries 1-7 have bases inside the\n;   IVT, which nothing loads as a segment, so they carry the kernel's own\n;   selectors (MEGA_SEL_*).\n;\n;   The LDT sits on the GDT's base and its entries from MEGA_LDT_FREE0 are an\n;   allocator (mega_ldt_alloc): every claim, region, image, frame buffer and\n;   ROM is an LDT selector, an image's a code/data PAIR with data = code + 8.\n;   The block under this header is the detail.",
+   "why": "the .gdt loop in mega_enterf makes identity entries only below MEGA_GDT_ID = (COLD_SEG>>3)+1 and zeroes the rest (.gz); the static LDT aliases went with MC7 step 6 (mega_ldt_alloc/_alloc2, mega_cs2ds's +8 pairs)"
+  },
+  {
+   "file": "kernel/mega.inc",
+   "old_text": "; Both tables and the IDT live above 1MB (MEGA_*_LIN), which is why this is\n; kern_big's and why xm_sniff keeps XMEM.DRV out on this build: kern_mega\n; owns the memory up there.",
+   "new_text": "; The tables and the IDT are one block, at the top of extended memory or, on\n; a machine too small for that, in a conventional claim (the block below this\n; header). kern_mega owns the memory above 1MB, which is why xm_sniff keeps\n; XMEM.DRV out on this build.",
+   "why": "no MEGA_*_LIN symbol exists; mega_layoutf places the block and mega_enterf claims it in conventional memory (MEM_K_MTBL) when extended memory cannot hold it"
+  },
+  {
+   "file": "kernel/mega.inc",
+   "old_text": "; THE FAULT REPORTER. Every exception and every software interrupt nobody\n; handles ends in mega_fault, which writes the vector, the error code, CS:IP,\n; SS:SP and the registers to QEMU's debug console (port E9h) and stops. In\n; real mode a wild write corrupts something; here it is a #GP at the\n; instruction that did it, and that is only worth having if it is reported.",
+   "new_text": "; THE FAULT REPORTER. Every exception and every software interrupt nobody\n; handles ends in mega_fault. A #GP that is a package's far transfer through a\n; data segment, a write through a code segment or a segment-0 access is\n; completed (mega_gpfix, mega_gpw, mega_null0 and its mega_db step); a\n; package's own fault closes that package (mega_fkill); anything else is\n; reported - the vector, error code, CS:IP and SP on one line under the menu\n; bar, and the whole frame on port E9h in a MEGA_E9 build - and stops. In\n; real mode a wild write corrupts something; here it is a #GP at the\n; instruction that did it, and that is only worth having if it is reported.",
+   "why": "mega_fault sends 0Dh to mega_gpfix and 01h to mega_db before mega_report; mega_report calls mega_fkill first; the E9 dump is under %ifdef MEGA_E9 and the glass line (mega_fbuf, cw_font_run) is unconditional"
+  },
+  {
+   "file": "kernel/mega.inc",
+   "old_text": "70h-77h for themselves, 10 bytes apart",
+   "new_text": "70h-77h for themselves, 6 bytes apart",
+   "why": "the index is multiplied by 6 (mov ah,6 / mul ah) and the build asserts '%error mega_irv is six bytes a stub' (push word imm16 + jmp near)"
+  },
+  {
+   "file": "kernel/mega.inc",
+   "old_text": "this kernel always (mega_ivt_sync leaves 20h/21h alone), IRQ12's is whoever",
+   "new_text": "this kernel always (mega_ivt_sync rebuilds from 22h and makes gate 21h\n; mega_i21, which sends an int from a GDT CS to kbm_isr), IRQ12's is whoever",
+   "why": "mega_ivt_sync's .g1 starts at 22h and it then writes 'mov word [es:0x21 * 8], mega_i21' on every run; mega_i21 jumps to kbm_isr when IRQ1 is in service or the interrupted CS has TI clear"
+  },
+  {
+   "file": "kernel/mega.inc",
+   "old_text": "; mega_fault - report and stop",
+   "new_text": "; mega_fault - every exception: a #GP or #DB completed (mega_gpfix, mega_db),\n; a package's fault closed (mega_fkill), or reported and stopped",
+   "why": "mega_fault dispatches 0Dh to mega_gpfix and 01h to mega_db, and mega_report calls mega_fkill before the report and halt"
+  },
+  {
+   "file": "kernel/mega.inc",
+   "old_text": "; DS and ES go to the BIOS as SEGMENTS: an identity selector already is one,\n; the kernel's data alias is KERNEL_SEG, LOW0 is 0, and an LDT code alias is\n; its 512-aligned base. Coming back, a register the BIOS left alone is given\n; its own selector back, and one it changed - int 13h AH=08h's ES:DI, int 10h\n; AX=1130h's ES:BP - is taken as the identity selector it now is.",
+   "new_text": "; DS and ES go to the BIOS as SEGMENTS, each read off its descriptor\n; (mega_s2segc): an identity selector is itself, the kernel's data alias\n; KERNEL_SEG, LOW0 0, and a base above 1MB FFFFh. Coming back, a register the\n; BIOS left alone is given its own selector back, and one it changed - int 13h\n; AH=08h's ES:DI, int 10h AX=1130h's ES:BP - is made a selector by mega_rseg\n; (the identity map below `.cold`, a claim base's pair, or mega_useg's).",
+   "why": "mega_s2segc reads the base from the GDT/LDT descriptor and returns FFFFh above 1MB; .srnew calls mega_rseg, which returns identity below COLD_SEG, mega_p2d's pair data half, or a mega_useg row"
+  },
+  {
+   "file": "kernel/mega.inc",
+   "old_text": "caller's stack fault (0Ch), and an IRQ the ROM owns goes on as before.",
+   "new_text": "caller's stack fault (0Ch), and an IRQ the ROM owns is reflected on the\n; caller's stack, whose SELECTOR real mode then takes as its segment.",
+   "why": "mega_svc .none sends a ROM-owned IRQ to .nest/.low, [mega_rss] is set to SS when it is not the lent stack, and mega_svc_lo .rmc loads it into SS in real mode"
+  },
+  {
+   "file": "kernel/mega.inc",
+   "old_text": "; .cold: the segment has no room for it",
+   "new_text": "; .mega: the segment has no room for it",
+   "why": "mega_hibnc is assembled after 'section .mega' (mega.inc 5711) and build/megak/kernel.map places it in .mega at 184Ch; it is called through MEGA_SEL_CODE"
+  },
+  {
+   "file": "kernel/mega.inc",
+   "old_text": "FAR: it is .cold, because",
+   "new_text": "FAR: it is .mega's, because",
+   "why": "same: mega_hibnc lives in .mega (build/megak/kernel.map), not .cold"
+  },
+  {
+   "file": "kernel/mega.inc",
+   "old_text": "SI = DI = MEGA_SCOFF, CX = 2",
+   "new_text": "SI = DI = MEGA_SCOFF, CX = MEGA_SCCNT",
+   "why": ".probe does 'mov cx, MEGA_SCCNT' and MEGA_SCCNT equ 8"
+  },
+  {
+   "file": "kernel/mega.inc",
+   "old_text": "; THE LDT ALLOCATOR (KERN-MEGA-PLAN 13.3 step 1). Entries MEGA_LDT_FREE0 to\n; MEGA_LDT_N - 1 (768 of them) are descriptors with ANY 24-bit base and limit,\n; handed out and taken back by selector - where the entries below are the\n; fixed aliases, base i x 512, that a 512-aligned image is far-called through.\n; An entry is free when its access byte is 0 (not present), which is how\n; mega_enter leaves the whole range. Everything that READS a selector's base\n; asks the descriptor in this range (mega_selbase, mega_s2seg), and nothing\n; that converts a code alias to its image (mega_cs2ds, mega_ivt_sync) takes\n; one of these for an alias.",
+   "new_text": "; THE LDT ALLOCATOR (KERN-MEGA-PLAN 13.3 step 1). Entries MEGA_LDT_FREE0 to\n; [mega_ldtn] - 1 (MEGA_LDT_BASE of them, plus one per 16KB of extended\n; memory: mega_layoutf) are descriptors with ANY 24-bit base and limit, handed\n; out and taken back by selector; the entries below are the GDT's own, the\n; LDT's base being the GDT's (KERN-MEGA-MEMORY-PLAN MC7's step 6).\n; An entry is free when its access byte is 0 (not present), which is how\n; mega_enter leaves the whole range. Everything that READS a selector's base\n; asks its descriptor (mega_selbase, mega_s2segc), and a code selector's data\n; twin is + 8 only where mega_ldt2ds finds one (mega_cs2ds).",
+   "why": "mega_layoutf sets [mega_ldtn] = extKB/16 + FREE0 + MEGA_LDT_BASE rounded to 8; the scans end at [mega_ldte]/[mega_ldtl]; no MEGA_LDT_N, mega_s2seg or fixed aliases exist; mega_cs2ds sends an allocator selector to mega_ldt2ds"
+  },
+  {
+   "file": "kernel/mega.inc",
+   "old_text": "when all 768 are taken",
+   "new_text": "when every allocator entry is taken",
+   "why": "the scan's bound is cmp di,[ss:mega_ldte], which mega_layoutf sizes per machine"
+  },
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": "; MEGA_CSELTOP - kern_mega: the word on top of the stack, a 512-aligned DATA\n; segment, becomes its CODE alias (LDT entry seg/32, selector (seg >> 2) | 4,\n; kernel/mega.inc). Every register and FLAGS preserved.",
+   "new_text": "; MEGA_CSELTOP - kern_mega: the word on top of the stack, an image's DATA\n; selector (a pair's data half), becomes its CODE half, - 8 (KERN-MEGA-MEMORY-\n; PLAN MC7.4); a GDT selector, and any segment in real mode, is left alone.\n; Every register and FLAGS preserved.",
+   "why": "the macro does 'test byte [ss:bp+2],4 / jz %%rm / sub word [ss:bp+2],8' and skips everything in real mode (the k_dsel test or smsw's PE bit)"
+  },
+  {
+   "file": "docs/BOCHS.md",
+   "old_text": "and CS `FFD8` is `.mega` at 0. A CS with bit 2 set is an LDT\n  code alias, whose image is segment `(CS & ~7) << 2`.",
+   "new_text": "and CS `MEGA_SEL_CODE` (`(MEGA_GDT_SCR + 8) * 8`, 1058h on the\n  2026-11-08 layout - take it off the same build's `kernel.map`) is `.mega` at 0.\n  A CS with bit 2 set is an LDT code selector, a pair's code half (its data half\n  is CS + 8) at any base, so read that base off the descriptor (`dbg \"info ldt\"`)\n  rather than computing it.",
+   "why": "MEGA_SEL_CODE equ (MEGA_GDT_SCR + 8) * 8 (mega.inc), 1058h in build/megak/kernel.map; LDT code selectors come from mega_ldt_alloc2 at any base since MC7 step 6"
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "toast; an IRQ the ROM owns goes on as before.",
+   "new_text": "toast; an IRQ the ROM owns is reflected on the program's own stack, whose\n     selector real mode takes as a paragraph, so a program that runs on a\n     stack of its own must lend one (`SEG_LEND`).",
+   "why": "mega_svc .none sends a ROM-owned IRQ (frame byte +9 set) to .nest/.low, mega_rss = SS when it is not [mega_rsseg], and mega_svc_lo .rmc does mov ss,[mega_rss] in real mode"
+  }
+ ]
+}

@@ -1,0 +1,647 @@
+{
+ "area": "megados",
+ "title": "kern_mega DOS support, parking, residency; kern_dos",
+ "summary": "The park is among the best-engineered code in the tree. The snapshot returns twice, like setjmp. It parks only the kilobytes in use, which works because the claim map is out of band. Its facts arrive by two independent routes, the launch block below 1MB and the header above it, and the stub cross-checks them. The parked kernel builds the stub itself, one macro defines the sum for both of its takers, and %if assertions pin the layout. kern_dos matches that discipline: one disk layer and one DOS core across two hosts, a self-checking launch-block wire format, DOS=HIGH trampolines that put one word on the program's stack, and an EXEPACK unpacker that walks the stream dry before writing anything. The defects are at the edges and mostly on recovery paths that rarely run. The stub's second integrity check, written for W7's case, can never run for a park. The HMA kern_dos's mouse vector leaves its A20 trampoline at the first poll. W7's A20 opening tests the gate once, after the anchor is already cleared. The snapshot's fallback can, in a narrow case, build a park below the 128KB floor that keeps the stage clear of the loader. Size: about 1,000 bytes of the live resume (measured spans in the low image: kd_resume's body, kd_extents and the 459-byte hbs_stub) are dead in both kern_mega kern_dos images, which is 1KB back to low-DOS programs (KD_IMG_KB 37 -> 36), and a 512-byte gate-only buffer sits in every shipped kern_dos's .bss. On the documentation side, the t_mirror guard the comments rely on does not scan kerndos/. SPEC 87.9 still describes a retired resume route, and several comments describe a hibernate path through the park stub that no longer exists.",
+ "strengths": [
+  {
+   "title": "The snapshot returns twice",
+   "evidence": "kernel/megados.inc:735 mega_dosparkf; mega_dwake jmp mega_dosparkf.ret; snapshot point at :1018-1024",
+   "why": "It is kern_big's hbm_wake pattern carried into protected mode. hbm_dosrun stays one straight-line routine with an `or al,al` in it, not a state machine. It is the model for any future suspend."
+  },
+  {
+   "title": "The trip's facts come by two independent routes",
+   "evidence": "kerndos/kdpark.inc:106-110 passes the sum, KB and base from the launch block; kernel/megapark.inc:54-63 compares them with the header cells",
+   "why": "A stray write that shrinks the header cannot restore too little and still agree with itself. The header is deliberately not summed, and the reason is written down at megados.inc:45-48."
+  },
+  {
+   "title": "The stub is the parked kernel's own build",
+   "evidence": "kernel/megados.inc:1495 mega_dstubup copies mpk_stub out of HIBER.DRV's image",
+   "why": "A kern_dos and a kernel from different commits only have to agree on two numbers, KDP_GDT and selector 08h, so versions cannot skew."
+  },
+  {
+   "title": "One sum macro, two takers",
+   "evidence": "kernel/megados.inc:121-134 MPK_SUMLINES, used by mega_dsumall and megapark .sum",
+   "why": "The 22-byte phase step and phase 0 at every window let the two chunk the regions differently and still agree. It is WEAVE-SPEC 1.2's source-sharing rule applied to an algorithm."
+  },
+  {
+   "title": "The runs park",
+   "evidence": "kernel/megados.inc:592 mega_dmapb; SPEC 96.40.9 measures 196KB parked of 639KB",
+   "why": "The out-of-band claim map makes free heap stateless, so only in-use KB are parked and the program still gets the whole of conventional memory. It is a reason never to put headers inside heap blocks."
+  },
+  {
+   "title": "mega_dacc",
+   "evidence": "kernel/megados.inc:690",
+   "why": "Setting every accessed bit before the sum removes the whole class of 'the CPU wrote a table I sum' failures for the price of one pass."
+  },
+  {
+   "title": "W7's anchor is cleared before anything is decided",
+   "evidence": "kernel/megados.inc:2116-2128; megapark.inc:220-229",
+   "why": "A recovery that fails is never tried twice."
+  },
+  {
+   "title": "The launch block is a real wire format",
+   "evidence": "kerndos/kdlaunch.inc: KDL_MAGIC/KDL_VER/KDL_TLEN, the KDL_FIELDS gather/scatter, the zero-means-unfilled convention",
+   "why": "The sender counts the length and the receiver recomputes it from its own copy of one list. A table walk on each side replaces two copies of marshalling code, and absent fields read as defaults, not as zeros. It is better than DOS's EXEC parameter block."
+  },
+  {
+   "title": "One disk layer and one DOS core, two hosts, gated",
+   "evidence": "kerndos/kdos.asm includes apps/dos/dos.asm and kernel/disk*.inc unchanged; kdshim.inc lists every stub with its section; t_kdfar.py and t_kdapi.py",
+   "why": "The near/far hazard and the stray OSAPI far call, the two classic hazards of including code in a foreign root, are build failures."
+  },
+  {
+   "title": "DOS=HIGH trampolines with a private stack",
+   "evidence": "kerndos/kdhma.inc:15-27, kdh_tchk_src",
+   "why": "MS-DOS 5's design, with better stack discipline: one FLAGS word on the caller's stack, so a program that shrank its block to its own SP keeps its MCB intact."
+  },
+  {
+   "title": "kd_xunp checks everything before writing anything",
+   "evidence": "kerndos/kdxpack.inc:39-44 and the kxp_walk dry pass",
+   "why": "A refusal leaves the image byte-identical, which is what makes the LOADFIX and kd_tolow fallbacks safe to chain."
+  },
+  {
+   "title": "The live resume's refusal discipline",
+   "evidence": "kerndos/kdresume.inc:31-35 and 208-235",
+   "why": "Every refusal falls back to int 19h, nothing is torn down until the last moment, and the last message prints before the extent list is staged so a BIOS scroll cannot move it."
+  }
+ ],
+ "findings": [
+  {
+   "id": "md-1",
+   "kind": "bug",
+   "severity": "medium",
+   "title": "The park stub's PCHK check can never run, and its mega_hbwake leg is dead",
+   "detail": "`cmp ax, mega_dwake / je .cells` jumps every PARK past `.cells0`. `.cells0` compares MPK_C_PKB and MPK_C_PBASE against the summed copy at MPK_SAVE, and its comment calls it the guard for 'a header shrunk in BOTH places - W7's probe has no other copy to pass'. It is reached only for wake = mega_hbwake. That never happens: mega_dhcfill's only caller passes mega_dwake, and the hibernate resume now runs through megares.inc's own tail. mega_wrprobe passes the header's own cells, so the first check compares the header with itself, and MPK_C_PKB (3B8h) is not summed. After a warm reset, a park whose PKB cell was damaged passes every check, and the restore then moves too little or runs past 640KB.",
+   "evidence": [
+    "kernel/megapark.inc:69-75 the wake dispatch",
+    "kernel/megapark.inc:76-89 .cells0, reached only by mega_hbwake",
+    "kernel/megados.inc:1363-1364 the only mega_dhcfill call, with mega_dwake",
+    "kernel/megares.inc:579 and kernel/hiber.inc:4469 the resume's own mrt_wake",
+    "kernel/megados.inc:938-951 MPS_PCHK into MPK_SAVE",
+    "kernel/megados.inc:2141-2149, 2229-2231 W7 passes the header's own cells"
+   ],
+   "recommendation": "Route mega_dwake to .cells0 and delete the mega_hbwake compare and the NREG==0 arm. A park always has NREG>0, and MPK_SAVE and the header cells come from the same mega_dpkb and mega_dpbase, so a normal trip still passes.",
+   "phase": "now",
+   "bytes_est": "-12 HIBER.DRV image (cmp/je pair 5, NREG test 7), 0 resident",
+   "verdict": "confirmed",
+   "verify_note": "Re-read megapark.inc:67-88: mega_dwake takes `je .cells`, only mega_hbwake reaches .cells0. grep: the only mega_dhcfill call is megados.inc:1363 with AX = mega_dwake; mega_hbwake is written only into megares.inc's mrt_wake (hiber.inc:4469). W7 (megados.inc:2141-2149, 2229-2231) passes the header's own PSUM/PKB, and the sum starts at MPK_MAGIC (+400h), so MPK_C_PKB at 3B8h is unsummed while MPS_PCHK's copy at MPK_SAVE is summed. Not in ABI-BREAK-LIST or KERNEL-BYTE-QUEUE. Byte estimate refined to -12."
+  },
+  {
+   "id": "md-2",
+   "kind": "bug",
+   "severity": "medium",
+   "title": "The HMA kern_dos's mouse vector leaves its A20 trampoline at the first poll",
+   "detail": "kd_mou_arm writes CS:kd_mou_isr (CS = FFFFh on the HMA arm). kdh_tramp then rewrites it to a LOW_SEG slot. kd_mou_rearm runs on every INT 33h AX=3 and every key poll (through kd_mou_read) and compares the vector against CS:kd_mou_isr, so the slot fails the test. It re-arms once: the vector becomes FFFF:kd_mou_isr with no trampoline, the UART is re-initialised and one RBR byte is drained, possibly mid-packet. From then on, a program that shuts A20 (a direct int 15h AH=87h, which kdx_i15 passes to an IBM-AT ROM that leaves A20 shut, or AX=2400h) takes its next mouse IRQ into wrapped low memory.",
+   "evidence": [
+    "kerndos/kdmouse.inc:155-156 the vector written as CS:kd_mou_isr",
+    "kerndos/kdentry.inc:327 kd_mou_start before :396 kdh_tramp",
+    "kerndos/kdhma.inc:47-64 kdh_tramp rewrites KD_SEG vectors",
+    "kerndos/kdmouse.inc:391-395 the rearm compare",
+    "kerndos/kdmouse.inc:347 kd_mou_read calls kd_mou_rearm",
+    "apps/dos/dos.asm:3741 dos_hvec, the core's publish-through-slot helper (DOS_MEGA only)"
+   ],
+   "recommendation": "On KD_HMA, publish the vector through kdh_vslot in kd_mou_arm and compare against the same answer in kd_mou_rearm (kdh_vslot hands back the existing slot for the same target). dos_hvec is %ifdef DOS_MEGA and so absent from kern_big's kern_dos: use it only under KD_MEGA (the low arm's dos_hslot = 0 answers CS:target) or call kdh_vslot directly under %ifdef KD_HMA, so kern_big's image is unchanged.",
+   "phase": "now",
+   "bytes_est": "+8 HMA kern_dos image only (HMA bytes, not the program's); 0 elsewhere if gated",
+   "verdict": "corrected",
+   "verify_note": "Confirmed the defect: kd_mou_arm (kdmouse.inc:149-156) runs from kd_mou_start (kdentry.inc:327) before kdh_tramp (:396), which rewrites every IVT entry naming KD_SEG = FFFFh to a LOW_SEG slot; kd_mou_rearm (:391-395) then sees the slot and re-arms to FFFF:kd_mou_isr, after which the compare passes for good. kdx_i15 forwards AH=87h to the ROM (kdxms.inc:153, 186-187). Corrected the recommendation: dos_hvec exists only under DOS_MEGA (dos.asm:3734-3751, Makefile:7603 adds -DDOS_MEGA only for KERN_MEGA), so the reviewer's 'other arms behave as today' is true of the low mega arm but the call would not assemble on kern_big's kern_dos."
+  },
+  {
+   "id": "md-3",
+   "kind": "bug",
+   "severity": "medium",
+   "title": "W7's A20 opening tests the gate once, after the anchor is already cleared",
+   "detail": "mega_wrprobe clears the anchor, writes port 92h and then 8042 D1h/DFh. Its .kbw waits only for IBF to clear, which happens when the 8042 has read the byte, not when it has switched the output port. It then tests A20 exactly once and on a miss boots normally. The anchor is gone by then, so the session is lost with no message. The anchor read used int 15h AH=87h, which on an IBM-AT ROM leaves A20 shut, so the 8042 path is live on exactly the 286 ATs W7 targets. Every other opener in the area polls: kdh_tchk up to 65,536 times, kdp_a20w and mr_a20 512 times.",
+   "evidence": [
+    "kernel/megados.inc:2116-2128 anchor cleared first",
+    "kernel/megados.inc:2167-2176 the 92h and 8042 writes",
+    "kernel/megados.inc:2181-2182 single test, `jne .out ; still shut`",
+    "kerndos/kdhma.inc:203-206 kdh_tchk's poll loop"
+   ],
+   "recommendation": "Poll the test (xor cx,cx / loop), as kdh_tchk does.",
+   "phase": "now",
+   "bytes_est": "+8 .boot2 (transient)",
+   "verdict": "confirmed",
+   "verify_note": "Re-read megados.inc:2105-2182: the anchor is zeroed and written back (:2112-2125) before the header is even read, then 92h, D1h/DFh with .kbw (IBF-clear only, :2235-2242), one compare of 0:FFE0 against FFFF:FFF0 and `jne .out`. kdh_tchk_src (kdhma.inc:224-228) loops 65,536 times after the same writes. Clearing first is deliberate (a failed recovery is not retried), which is exactly why a single premature test loses the session."
+  },
+  {
+   "id": "md-4",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "The snapshot's fallback can build a prefix park below MPK_MIN_KB",
+   "detail": "The runs claim is KB-in-use + 16 with no floor. If the snapshot's recount outgrows it, .fallb parks a prefix of [mega_dclkb] KB, which can be under 128KB. The .ptry loop enforces MPK_MIN_KB, and megados.inc:94-97 says that floor is what keeps the stage (P - 16KB) clear of the loader's working area, with the packed kern_dos stream at KDS_TMPSEG = 64KB and up. The stage then sits at the OLD KB-in-use count, so it overlaps the stream only when that count was under roughly 64KB plus the packed stream's length, and the session's claims grew by more than 16KB between the claim and the snapshot. On kern_mega the kernel alone is ~70KB from 0600h, with LOW_SEG and DOS.O88's own claims above it, so the window is narrow.",
+   "evidence": [
+    "kernel/megados.inc:345-357 the runs claim, unfloored",
+    "kernel/megados.inc:795-798 .fallb uses dclkb",
+    "kernel/megados.inc:362-364 .ptry's MPK_MIN_KB floor",
+    "kernel/megados.inc:94-97 MPK_MIN_KB's reason",
+    "kernel/megados.inc:1823-1840 mega_dstgs, the stage at P-16KB",
+    "kernel/hiber.inc:144 KDS_TMPSEG 0x1000"
+   ],
+   "recommendation": "Clamp the runs claim to at least MPK_MIN_KB in mega_dosclaimf.",
+   "phase": "now",
+   "bytes_est": "+8 .mega (above 1MB)",
+   "verdict": "corrected",
+   "verify_note": "The code path is real: .fallb (megados.inc:795-798) sets mega_dpkb = mega_dclkb = KB-in-use + MPK_SLACK with no MPK_MIN_KB test, and mega_dstgs (:1830-1839) puts the stage at dpkb*64 - 400h when drmode = 0. Severity lowered medium -> low: it needs >16KB of new claims between mega_dosclaimf and the snapshot AND an old in-use count low enough that (count) KB falls inside KDS_TMPSEG's packed stream; with a ~70KB resident kernel at 0600h plus LOW_SEG and DOS.O88 that is a narrow case."
+  },
+  {
+   "id": "md-5",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "t_mirror does not scan kerndos/, so the kernel-to-kern_dos mirrors are unwatched",
+   "detail": "t_mirror scans a hand-written list plus kernel/*.inc and no kerndos/ file. Yet kdlayout.inc and hiber.inc (twice) name t_mirror as the guard, and megados.inc calls its KDL tail MIRRORED. The constants that cross between two artefacts on different disks are exactly the unwatched ones: KDL_CAP, KDL_XBASE..KDL_SNAPHI, KDB_*, KD_LSEG, KD_H_LBP/LBSZ and KDL_FLAGS. KDP_GDT (kdpark.inc) mirrors MPK_GDT under a different name, so even a glob would not compare them.",
+   "evidence": [
+    "tests/unit/t_mirror.py:89-178 the ASM list, 343-344 KERNEL_GLOB only",
+    "kerndos/kdlayout.inc:206",
+    "kernel/hiber.inc:150, 274",
+    "kernel/megados.inc:35-43",
+    "kerndos/kdpark.inc:21 KDP_GDT equ 0x380"
+   ],
+   "recommendation": "Add kerndos/*.inc and kdos.asm to the scan, with DIVERGENT rows (and their reasons) for the arm-dependent KD_SEG, KD_ORG and KDL_VMAX. Rename KDP_GDT to MPK_GDT.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "t_mirror.py main() builds its file set from ASM + glob(kernel/*.inc) + kernel/kernel.asm (:343-344); grep finds no 'kerndos' in the file. No other test compares them: tools/os88geom.py carries KD_SEG from hiber.inc only, and t_kdapi.py scans images for far calls, not constants."
+  },
+  {
+   "id": "md-6",
+   "kind": "size",
+   "severity": "medium",
+   "title": "Both kern_mega kern_dos images carry the live resume they can never run",
+   "detail": "On KD_MEGA, kd_resume starts with `jmp .no`, but its body, kd_extents, the strings, the kdr_* bss and the hbs_stub (hbstub.inc) are all still assembled. Only kd_stageseg is reached, from kd_unpark. Measured in a scratch re-assembly of the low image (byte-identical to build/megak/kerndosl.bin): kd_resume 0x5E5F..0x5FC4 = 357 bytes, kd_extents to the end of kdresume.inc's own code 0x5FDB..0x6098 = 189, hbs_stub 0x6098..0x6263 = 459, and 23 bytes of kdr_* .bss. The LOW image's rung is off the DOS program: 37,510 of 37,888 measured.",
+   "evidence": [
+    "kerndos/kdresume.inc:54-60 jmp .no under KD_MEGA",
+    "kerndos/kdresume.inc:651 %include hbstub.inc",
+    "kerndos/kdpark.inc:27 kd_stageseg's only mega caller",
+    "kerndos/kdlayout.inc:148-154 the low arm's KD_IMG_KB 37 measurement"
+   ],
+   "recommendation": "Gate the body, kd_extents, the strings, the kdr bss and the hbstub include under %ifndef KD_MEGA, keeping `kd_resume: stc/ret` and kd_stageseg. Then measure: predicted KD_IMG_KB 37 -> 36 on the low arm (37,510 - ~1,025 = ~36,485 of 36,864), +1KB per program there.",
+   "phase": "now",
+   "bytes_est": "about -1,025 each kern_mega kern_dos image (1,003 .text + 23 .bss, measured on the low arm); 0 on kern_big",
+   "verdict": "corrected",
+   "verify_note": "Confirmed and re-measured: assembled kerndos/kdos.asm with the Makefile's kerndosl flags into the scratchpad (cmp identical to build/megak/kerndosl.bin) and read the listing. No label in kdresume.inc other than kd_resume, kd_stageseg and the DOSR_MARK-only kdr_mark_init is named outside it. Estimate raised from ~950 to ~1,025 bytes (hbs_stub is 459 there, not 441)."
+  },
+  {
+   "id": "md-7",
+   "kind": "size",
+   "severity": "low",
+   "title": "kd_glb, a 512-byte gate-only buffer, sits in every shipped kern_dos's .bss",
+   "detail": "kd_glb is reserved unconditionally, but only kdosgate.inc, under KD_GATE, uses it. .bss counts against KIMG_SIZE and so against the rung, which is off the DOS program on kern_big and on the low arm.",
+   "evidence": [
+    "kerndos/kdentry.inc:1119-1121",
+    "kerndos/kdosgate.inc:18-111 the only user",
+    "kerndos/kdos.asm:180-182 KIMG_SIZE includes KBSS_SIZE"
+   ],
+   "recommendation": "Move it inside %ifdef KD_GATE.",
+   "phase": "now",
+   "bytes_est": "-512 rung (.bss) on kern_big's and both kern_mega kern_dos",
+   "verdict": "confirmed",
+   "verify_note": "kd_glb (kdentry.inc:1119-1121, resb KDL_SIZE = 512) is unconditional; every reference outside comments is in kdosgate.inc, whose body is %ifdef KD_GATE; kd_entry's bss clear keys off [kd_lbp], which shipped images point at kd_lblock, so removing it changes nothing at run time. On kern_big's shipped arm (34,796 of 34,816) it buys no whole KB by itself; on the low arm it combines with md-6."
+  },
+  {
+   "id": "md-8",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "KDL_PLOW is written, documented as binding, and read by nobody",
+   "detail": "mega_dosgo stores PLOW and kdlaunch says kern_dos's arena must end below it, but no kerndos file reads it. KDL_CAP, lowered in the same branch, is what bounds the arena, and the two always agree.",
+   "evidence": [
+    "kernel/megados.inc:1323-1330",
+    "kerndos/kdlaunch.inc:259-262",
+    "kerndos/kdentry.inc:196 the arena from KDL_CAP"
+   ],
+   "recommendation": "Drop the stores and free the word, or reuse it for md-15's header sum. Fix the comment either way. The %if at megados.inc:163 names KDL_PLOW - KDL_XBASE as the copy run's length and keeps its meaning.",
+   "phase": "now",
+   "bytes_est": "about -15 .mega (two stores and the shl), or reused",
+   "verdict": "confirmed",
+   "verify_note": "grep: KDL_PLOW appears only in megados.inc (equ, the run-length %if, two stores) and kdlaunch.inc's equ; no kerndos/, apps/, tools/ or tests/ reader."
+  },
+  {
+   "id": "md-9",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "mega_d8042get can bank a keystroke as the 8042 command byte",
+   "detail": "It flushes, sends 20h and takes the first non-AUX byte, accepting it if SYS (bit 2) is set. A scancode arriving in that window with bit 2 set (1Ch, 1Dh and about half of all codes) is banked. If its bit 0 is clear, mega_d8042put restores IRQ1 disabled and AEh does not undo that, so the keyboard is dead after the trip.",
+   "evidence": [
+    "kernel/megados.inc:1946-1958",
+    "kernel/megados.inc:1961-1984 mega_d8042put"
+   ],
+   "recommendation": "Send ADh before 20h and AEh after, or also require bit 0.",
+   "phase": "now",
+   "bytes_est": "+5 .mega",
+   "verdict": "confirmed",
+   "verify_note": "mega_d8042get (megados.inc:1944-1959) tests only bit 2; mega_dkobf skips AUX bytes but takes any keyboard byte; mega_d8042put writes the banked byte with 60h and then only AEh/F4h, neither of which sets command-byte bit 0. The window is a few microseconds with IF = 0, hence low."
+  },
+  {
+   "id": "md-10",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "kd_unpark and mr_a20 wait only 512 probes for an 8042 A20 gate",
+   "detail": "kdh_tchk polls up to 65,536 times; 512 probes on a fast 386 is around a millisecond. On a miss, kd_unpark prints the A20 sentence and int 19h follows (W7 may rescue the park, if md-3 is fixed), and the streaming resume fails outright.",
+   "evidence": [
+    "kerndos/kdpark.inc:135-142 kdp_a20w mov cx,512",
+    "kernel/megares.inc:481 mr_a20.w mov cx,512",
+    "kerndos/kdhma.inc:224 kdh_tchk xor cx,cx"
+   ],
+   "recommendation": "Use xor cx,cx in both.",
+   "phase": "now",
+   "bytes_est": "-1 HMA kern_dos, -1 HIBER.DRV",
+   "verdict": "confirmed",
+   "verify_note": "Both loops are `mov cx, 512` around a ~25-instruction probe (kdpark.inc:135-142, megares.inc:480-486); kdh_tchk_src uses `xor cx, cx` (kdhma.inc:224). 'Under a millisecond' softened to 'around a millisecond' - the probe's own cost depends on the CPU."
+  },
+  {
+   "id": "md-11",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "The park stub's 'press a key' accepts a PS/2 mouse byte",
+   "detail": "The refusal's key wait treats any byte with bit 7 clear as a key and never tests AUX (status bit 5). A mouse a DOS program left streaming restarts the machine on the first nudge, before the user has read the sentence. megares.inc already solves this with A7h.",
+   "evidence": [
+    "kernel/megapark.inc:242-254",
+    "kernel/megares.inc:252-256 the A7h fix (out 64h, A7h at :255)"
+   ],
+   "recommendation": "Skip AUX bytes (test al,0x20), as mega_dkobf does, or send A7h first.",
+   "phase": "now",
+   "bytes_est": "+4 HIBER.DRV",
+   "verdict": "confirmed",
+   "verify_note": "megapark.inc:242-254 tests status bit 0 and data bit 7 only; mega_dkobf (megados.inc:2002-2016) and megares.inc's .key (A7h) both handle AUX."
+  },
+  {
+   "id": "md-12",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "mega_dreg_add silently drops a region on overflow",
+   "detail": "A full list drops the region, which then goes unsummed. Today's bound (MX_NBLK-2 blocks, one split, plus ~10 fixed regions, against MPK_RMAX = MX_NBLK+10) is held only by arithmetic in a comment.",
+   "evidence": [
+    "kernel/megados.inc:480-497",
+    "kernel/megados.inc:73-76 MPK_RMAX"
+   ],
+   "recommendation": "Add an %if that states the worst case, so a new fixed region fails the build rather than the sum.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "mega_dreg_add's .full path (megados.inc:484-485) skips the store with no flag. Counted the snapshot's fixed regions: image, HMA save, in-place rest, five table pieces, .cold/.mega, the header list = 10, plus pool blocks less park and arena with at most one snap split = MX_NBLK - 1; the bound holds today."
+  },
+  {
+   "id": "md-13",
+   "kind": "size",
+   "severity": "low",
+   "title": "Ten kdback.inc doors are call X / ret around routines with the same contract",
+   "detail": "dos_k_read, rdat, write, append, wrat, delete, mkdir, rmdir, rename and dfree wrap near targets with identical contracts. kdb_betab can name the targets directly (or the doors become equ aliases). The far, ES-sensitive and AL-sensitive doors keep their bodies.",
+   "evidence": [
+    "kerndos/kdback.inc:50-113, 194-196",
+    "kerndos/kdback.inc:322-327 kdb_betab"
+   ],
+   "recommendation": "Name the near targets in kdb_betab, or alias the doors with equ so any other reference still assembles.",
+   "phase": "now",
+   "bytes_est": "-40 every kern_dos image",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked: each of the ten is `call <near dskw_*>` / `ret` (4 bytes) and is reached only through kdb_betab -> dos_bevec in kern_dos."
+  },
+  {
+   "id": "md-14",
+   "kind": "size",
+   "severity": "low",
+   "title": "mem_free_x is a no-op behind a compare, and its comment says otherwise",
+   "detail": "Both paths `ret` without returning room; only kd_shed ever gives room back. The header says the most recent claim returns room.",
+   "evidence": [
+    "kerndos/kdshim.inc:442-447",
+    "kerndos/kdshim.inc:372-373"
+   ],
+   "recommendation": "Alias it to kd_nothing and correct the comment.",
+   "phase": "now",
+   "bytes_est": "-8",
+   "verdict": "confirmed",
+   "verify_note": "kdshim.inc:442-447 is cmp/jne/ret/ret (8 bytes); kd_nothing exists at kdshim.inc:184."
+  },
+  {
+   "id": "md-15",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "Check the park header before jumping into it",
+   "detail": "The stub and its GDT run unverified. The kernel could put a 16-bit sum of header [0, MPK_C_END) into the freed KDL_PLOW word, and kd_unpark could read the header down with its existing kdx_87 and check it before lgdt. A mismatch takes the A20-failure path, so W7 still gets a try. The row changing meaning is a KDL_VER 6->7 bump on kern_mega's arm only.",
+   "evidence": [
+    "kernel/megados.inc:45-48 the header is unsummed by design",
+    "kerndos/kdxms.inc kdx_87",
+    "kerndos/kdpark.inc:98-128"
+   ],
+   "recommendation": "Take it with md-8. The deeper variant: a 30-byte bootstrap that verifies the stub against HIBER.DRV's summed copy before running the rest.",
+   "phase": "now",
+   "bytes_est": "+20 .mega, +35 HMA kern_dos",
+   "verdict": "unchecked",
+   "verify_note": "Low-severity design proposal; not re-derived."
+  },
+  {
+   "id": "md-16",
+   "kind": "hazard",
+   "severity": "low",
+   "title": "mem_claim_x's overflow test is the last bit shifted out",
+   "detail": "`shl ax,cl / jc` with CL = 6 sets CF from bit 10 of the input only, so 2,560KB becomes 8000h paragraphs with CF = 0. No caller asks for more than a few KB today.",
+   "evidence": [
+    "kerndos/kdshim.inc:409-412"
+   ],
+   "recommendation": "Add `cmp ax,0x400 / jae .no` before the shift, or comment the bound.",
+   "phase": "now",
+   "bytes_est": "+1 to +4",
+   "verdict": "confirmed",
+   "verify_note": "kdshim.inc:409-412: `mov cl, 6 / shl ax, cl / jc .no`; on the 8086 a multi-bit shift leaves CF = the last bit out (input bit 10). Latent only."
+  },
+  {
+   "id": "md-17",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "The stub's restore loop is wrong when PKB < 33",
+   "detail": "Each chunk's byte count subtracts bp's place in its 32KB, which is right only when every chunk after the first starts on a 32KB boundary. With PKB < 33 the first chunk ends at (PKB-1)KB, mid-32KB, so the next pass's `sub cx, ax` subtracts a large offset from 1KB and CX wraps: the stub moves tens of KB past P (PKB = 20 moves ~46KB more; PKB = 2 moves 0 bytes and spins). MPK_MIN_KB and a runs park's kernel-holding first run keep PKB far above that.",
+   "evidence": [
+    "kernel/megapark.inc:172-198"
+   ],
+   "recommendation": "Record. Comment it (or assert PKB >= 33 where the floor is set) if anyone lowers the floor.",
+   "phase": "record",
+   "bytes_est": "0",
+   "verdict": "corrected",
+   "verify_note": "Traced .rst (megapark.inc:176-198): bp=500h gives AX=1, CX=PKB-1; for PKB<33 the first move ends at (PKB-1)KB, then the second pass computes 1024 - (bp & 7FFFh) which wraps. So it overruns or hangs rather than 'restores PKB-1 KB'. Unreachable today (PKB >= 128 on a prefix park; a runs park's first run spans the ~70KB kernel), hence still 'record'."
+  },
+  {
+   "id": "md-18",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "The trip's own time is not counted, and x87 state is not reset",
+   "detail": "The copy, sum and stub restore all run with IF=0. KDL_TICK is read after the park and the stub restores before hbm_wake reads the tick, so the clock catch-up misses milliseconds to half a second (MEGADIAG's DOSP line measures it). mega_dwake restores the MSW but not the x87 control word a DOS program left. Packages fninit per operation, so none is exposed today.",
+   "evidence": [
+    "kernel/megados.inc:735-737 cli",
+    "kernel/megados.inc:1342-1348 KDL_TICK",
+    "apps/os88fp.inc:2770 fninit"
+   ],
+   "recommendation": "Record. If a package ever keeps x87 state across a yield, add FNINIT (gated on an FPU) in mega_dwake.",
+   "phase": "record",
+   "bytes_est": "0",
+   "verdict": "unchecked",
+   "verify_note": "Record-only; not re-derived."
+  },
+  {
+   "id": "md-19",
+   "kind": "size",
+   "severity": "low",
+   "title": "HIBER.DRV-only scratch is resident in kern_mega's conventional .text",
+   "detail": "mega_hbxl, hbxd, hbs, hbr, hbbl and hbf are 22 bytes of conventional .text used only by the module's hbm_xwrite and hbm_xres. The park's MPS scratch above 1MB is the precedent, MPS_NAME and MPS_TKB having moved there in size pass 2. mega_hbwk (4 bytes) must stay: it is stamped before the picture so that it is IN the image, and mega_hbwake reads it after the image is back, while the MPS scratch is the fresh kernel's and not part of any image.",
+   "evidence": [
+    "build/megak/kernel.map 4C66h..4C80h (26 bytes, mega_hbwk at 4C66h)",
+    "kernel/megados.inc:269-277",
+    "kernel/megados.inc:1815 jmp far [mega_hbwk]",
+    "kernel/hiber.inc:3946 mega_hbwk stamped in hbm_xplan",
+    "kernel/megados.inc:263-265 MPS precedent"
+   ],
+   "recommendation": "Move the six to MPS_* offsets; each site gains an ES override. Leave mega_hbwk in .text.",
+   "phase": "now",
+   "bytes_est": "-22 conventional resident, roughly +40 HIBER.DRV",
+   "verdict": "corrected",
+   "verify_note": "kernel.map has the seven cells at 4C66h-4C7Fh = 26 bytes, not 30. mega_hbwk cannot move: megados.inc:236-252 says the MPS tail 'is NOT SUMMED' and 'Nothing in it outlives one trip or one image', and hiber.inc:3946 stamps mega_hbwk before the picture precisely so mega_hbwake's `jmp far [mega_hbwk]` (megados.inc:1815) reads the image's value."
+  },
+  {
+   "id": "md-20",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "KDLF_RAHSH is a shift count named like a flag bit",
+   "detail": "KDLF_RAHSH equ 8 sits beside KDLF_NOMOUSE equ 8 (bit 3). A reader checking for bit collisions trips on it.",
+   "evidence": [
+    "kerndos/kdlaunch.inc:392 and :356",
+    "kerndos/kdentry.inc:533, apps/dos/dos.asm:8581 its users"
+   ],
+   "recommendation": "Rename it KDL_RAHSH (three files).",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "kdlaunch.inc:356 KDLF_NOMOUSE equ 8 and :392 KDLF_RAHSH equ 8 (a shift for KDLF_RAHM 0700h); used as `mov cl, KDLF_RAHSH` in kdentry.inc and dos.asm."
+  },
+  {
+   "id": "md-21",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "The A20 code is written out six times with four different budgets",
+   "detail": "The copies are mega_wrprobe inline (1 test), kdp_a20t/w and kd_a20shut (512), kdh_tchk_src (65,536), mr_a20 (512) and mega.inc's mega_a20. They live in four segments and three load contexts, so they cannot share a body, but they can share a macro for the test and the sequence.",
+   "evidence": [
+    "kernel/megados.inc:2167-2182",
+    "kerndos/kdpark.inc:134-160, 175-220",
+    "kerndos/kdhma.inc:185-227",
+    "kernel/megares.inc:466-516"
+   ],
+   "recommendation": "Add an A20 macro on MPK_SUMLINES' precedent, so the budget is one number.",
+   "phase": "now",
+   "bytes_est": "0 to -20",
+   "verdict": "unchecked",
+   "verify_note": "The individual budgets were checked under md-3 and md-10; the macro proposal itself not re-derived."
+  },
+  {
+   "id": "md-22",
+   "kind": "consistency",
+   "severity": "low",
+   "title": "kdlayout.inc is a changelog with a definition file inside it",
+   "detail": "274 lines for about 30 definitions. The prose carries superseded measurements (wave 4's 45,827, the 61->43->34 history) and one truncated sentence, and it drifts.",
+   "evidence": [
+    "kerndos/kdlayout.inc:39-243"
+   ],
+   "recommendation": "Keep the current measurement per arm and the rule, and move the history into SPEC 96.44's measurement log.",
+   "phase": "now",
+   "bytes_est": "0",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked: the truncated sentence is at kdlayout.inc:135 ('which holds 63' with no end) and the 61 -> 43 -> 34 history is in the KD_IMG_KB comment block (:180-200)."
+  },
+  {
+   "id": "md-23",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "Sum density per region class",
+   "detail": "The 1/32 sparse sum is right for pool blocks, which can be megabytes. For the kernel's own GDT, LDT, IDT and .cold/.mega, a few KB where a single wild word is most plausible, it catches an isolated changed word only about 1 time in 32. A per-region stride, dense there and sparse over pool blocks, costs about 10 bytes per taker. The XMS door and the AH=87h/88h filter already close the well-behaved routes.",
+   "evidence": [
+    "kernel/megados.inc:121-134",
+    "kerndos/kdxms.inc:155-185 the filter"
+   ],
+   "recommendation": "Record. Revisit only if a field trip is ever refused without a cause.",
+   "phase": "record",
+   "bytes_est": "+20 (if taken)",
+   "verdict": "unchecked",
+   "verify_note": "Record-only design note; not re-derived."
+  },
+  {
+   "id": "md-24",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "Reorganise the launch block at the next KDL_VER bump",
+   "detail": "The header has no spare byte, and the tail is a union by build (KDL_HOFF/HWDS/HSUM share bytes with XBASE/XKB). Every recent field was squeezed into a reserve that happened to exist (RSVD, HBPAD, POUT, MRSV). When the next field arrives: a header with 16 reserved bytes, the body, and a per-kernel tail named by a flag.",
+   "evidence": [
+    "kerndos/kdlaunch.inc:229-241, 300-321"
+   ],
+   "recommendation": "Take it at the next KDL_VER bump. It is a kernel/DOS.O88 version, not PKG_FMT.",
+   "phase": "flagday",
+   "bytes_est": "0",
+   "verdict": "unchecked",
+   "verify_note": "Flag-day proposal; not re-derived."
+  },
+  {
+   "id": "md-25",
+   "kind": "prior-art",
+   "severity": "low",
+   "title": "DOS 5 patched known EXEPACK stubs, and os8088 unpacks in the loader",
+   "detail": "MS-DOS 5's EXEC recognised the buggy EXEPACK unpacker and patched it, which is smaller. kd_xunp (~800 HMA bytes) unpacks any variant it can validate, keeping the 621KB arena. Since kd_tolow now runs refused programs on the low image with their own unpacker, kd_xunp buys ~36KB of arena per packed program and nothing else.",
+   "evidence": [
+    "kerndos/kdxpack.inc:1-44",
+    "kerndos/kdentry.inc:654-690 kd_xpack"
+   ],
+   "recommendation": "Keep. Recorded so the trade is explicit.",
+   "phase": "record",
+   "bytes_est": "0",
+   "prior_art": "MS-DOS 5 EXEC's EXEPACK fix-up, plus LOADFIX",
+   "verdict": "unchecked",
+   "verify_note": "Record-only; not re-derived."
+  }
+ ],
+ "doc_fixes": [
+  {
+   "file": "kernel/megapark.inc",
+   "old_text": ";      agree with itself (KERN-MEGA-DOS-PLAN 10.4). A resume passes its own\n;      cells (mega_hbgof); W7's probe, which after a reset has nothing else,\n;      passes the header's\n",
+   "new_text": ";      agree with itself (KERN-MEGA-DOS-PLAN 10.4). W7's probe, which after\n;      a reset has nothing else, passes the header's own. (A hibernate's\n;      resume no longer comes through here: kernel/megares.inc.)\n",
+   "why": "No mega_hbgof exists anywhere in kernel/ or drivers/; the resume is hbm_xres -> mega_hbgor -> megares.inc's mrt_wake (hiber.inc:4469, 4484)."
+  },
+  {
+   "file": "kernel/megapark.inc",
+   "old_text": "    ; --- a hibernate's COPIES, before the restore (W5; 0 on a park) ----------\n    ; the tables and every pool block, from where the resume read them into\n    ; this block to where the image had them. This stub runs on its own GDT\n",
+   "new_text": "    ; --- THE COPIES, before the restore (MPK_NCPY) ----------------------------\n    ; the banked table bytes back into the kernel's tables (MPK_PCPY), a runs\n    ; park's later runs out of the image, and the HMA's 64KB (MC4). This stub\n    ; runs on its own GDT\n",
+   "why": "mega_dosparkf counts MPK_NCPY up for every park: the mega_dsave bank (megados.inc:934), each run past the first (:995) and the HMA save (:1008); it is never 0 on a park."
+  },
+  {
+   "file": "kernel/megados.inc",
+   "old_text": "mega_dncpy  dw 0                    ; ...and MPK_NCPY (0 on a park)\n",
+   "new_text": "mega_dncpy  dw 0                    ; ...and MPK_NCPY: the bank's MPK_PCPY, a\n                                    ; runs park's later runs, the HMA save\n",
+   "why": "mega_dosparkf increments mega_dncpy at megados.inc:934, 995 and 1008, so a park always has at least MPK_PCPY (4) copies."
+  },
+  {
+   "file": "kernel/megados.inc",
+   "old_text": "MPK_C_WAKE  equ 0x3CE           ; dd where it jumps then: mega_dwake for a\n                                ;    park, mega_hbwake for a hibernate (W5)\n",
+   "new_text": "MPK_C_WAKE  equ 0x3CE           ; dd where it jumps then: mega_dwake, the\n                                ;    only wake mega_dhcfill is given (a\n                                ;    hibernate's resume is megares.inc's now)\n",
+   "why": "mega_dhcfill's only caller passes mega_dwake (megados.inc:1363-1364); the hibernate resume far-jumps to mega_hbwake from megares.inc's mrt_wake (hiber.inc:4469)."
+  },
+  {
+   "file": "kernel/megados.inc",
+   "old_text": "    mov word [mega_dncpy], 0        ; (a hibernate's resume sets it)\n",
+   "new_text": "    mov word [mega_dncpy], 0        ; (counted up by the copies below)\n",
+   "why": "The park's own copy loops count it (megados.inc:934, 995, 1008); hbm_xplan/hbm_xres reuse the cell for their own run list (hiber.inc:4003) and never build a park header."
+  },
+  {
+   "file": "kernel/megados.inc",
+   "old_text": ";                   the IVT's tick and keyboard back to the BIOS's, and out of\n",
+   "new_text": ";                   the IVT's tick, keyboard and int 15h back to the BIOS's,\n;                   and out of\n",
+   "why": "mega_dosgo calls mega_ivtrom (megados.inc:1399), which restores int 08h, 09h AND 15h (megados.inc:1723-1742)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "The IVT's tick and keyboard go back to the BIOS's,",
+   "new_text": "The IVT's tick, keyboard and int 15h go back to the BIOS's,",
+   "why": "mega_dosgo's mega_ivtrom puts int 15h (mega_r15) back with int 08h and 09h (kernel/megados.inc:1723-1742)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "its GDTR and IDTR cells against the build's constants",
+   "new_text": "its GDTR and IDTR cells against the copy `mega_dstubup` staged with it (this boot's, the tables moving with the machine since KERN-MEGA-MEMORY-PLAN MC2)",
+   "why": "mega_dstubup copies this boot's mega_gdtr/mega_idtr into mpk_tabs (megados.inc:1504-1513); mpk_tabs' bases are 0 in the build (megapark.inc:381-385)."
+  },
+  {
+   "file": "SPEC.md",
+   "old_text": "**The resume** (`hbm_xres`) reads the WHOLE FILE, through the bounce and the",
+   "new_text": "**The staged resume, RETIRED** (`hbm_xres` until KERN-MEGA-MEMORY-PLAN MC4.1\n(b), which replaced it with the streaming resume below; `mega_hbgof` and the\npark stub's hibernate leg are gone, and this paragraph is the design record).\nIt read the WHOLE FILE, through the bounce and the",
+   "why": "No mega_hbgof exists in the tree; hbm_xres stages kernel/megares.inc and leaves protected mode by mega_hbgor (hiber.inc:4469-4484, megados.inc:1762), as the paragraph after this one says."
+  },
+  {
+   "file": "kerndos/kdlayout.inc",
+   "old_text": "; MIRRORED in kernel/hiber.inc, and tests/unit/t_mirror.py is the guard.\n",
+   "new_text": "; MIRRORED in kernel/hiber.inc. NOT watched: tests/unit/t_mirror.py scans\n; kernel/ and not kerndos/, so the two are kept in step by hand.\n",
+   "why": "t_mirror.py's file set is its ASM list plus kernel/*.inc and kernel/kernel.asm (t_mirror.py:89-178, 343-344); no kerndos/ file is in it."
+  },
+  {
+   "file": "kernel/hiber.inc",
+   "old_text": "; tests/unit/t_mirror.py is what keeps them honest: a name defined in more than\n; one place has to agree everywhere, and these three are the whole of what the\n; kernel needs to know about a machine it is handing over to.\n",
+   "new_text": "; NOT watched: tests/unit/t_mirror.py scans kernel/ but not kerndos/, so\n; nothing compares these with kdlayout.inc's, and they are kept in step by\n; hand. These three are the whole of what the kernel needs to know about a\n; machine it is handing over to.\n",
+   "why": "t_mirror.py never reads kerndos/kdlayout.inc (t_mirror.py:343-344 globs kernel/*.inc only), so a name defined there and here is in one scanned file."
+  },
+  {
+   "file": "kernel/hiber.inc",
+   "old_text": "; MIRRORED in kerndos/kdlayout.inc, and tests/unit/t_mirror.py is the guard.\n",
+   "new_text": "; MIRRORED in kerndos/kdlayout.inc. NOT watched: tests/unit/t_mirror.py does\n; not scan kerndos/, so the two are kept in step by hand.\n",
+   "why": "Same: t_mirror.py's scan (t_mirror.py:343-344) has no kerndos/ file, so KDB_* is compared with nothing."
+  },
+  {
+   "file": "kernel/megados.inc",
+   "old_text": "; --- the kern_mega tail of the launch block, MIRRORED (kerndos/kdlaunch.inc) --\n",
+   "new_text": "; --- the kern_mega tail of the launch block, MIRRORED (kerndos/kdlaunch.inc) --\n; (by hand: tests/unit/t_mirror.py does not scan kerndos/)\n",
+   "why": "t_mirror.py scans kernel/*.inc but no kerndos/ file (t_mirror.py:343-344), so KDL_CAP..KDL_PLOW here and in kdlaunch.inc are not compared."
+  },
+  {
+   "file": "kerndos/kdlaunch.inc",
+   "old_text": ";    item 5's partial park), 0 = all parked:\n                                ;    kern_dos's arena must end below it\n",
+   "new_text": ";    item 5's partial park), 0 = all parked.\n                                ;    Nothing here reads it: KDL_CAP, lowered\n                                ;    with it, is what bounds the arena\n",
+   "why": "No kerndos/ file reads KDL_PLOW (grep); mega_dosgo lowers KDL_CAP in the same branch (megados.inc:1323-1330) and kd_entry sizes the arena from KDL_CAP (kdentry.inc:196)."
+  },
+  {
+   "file": "kerndos/kdkbd.inc",
+   "old_text": "                                ; and nobits is not zeroed by anything here -\n",
+   "new_text": "                                ; and kd_entry's .bss clear makes it 0 -\n",
+   "why": "kd_entry zeroes .bss from kd_b_start to kd_e_bss, skipping only the launch block (kdentry.inc:55-67), and kd_kbold is in .bss."
+  },
+  {
+   "file": "kerndos/kdentry.inc",
+   "old_text": "; **THERE IS NOTHING TO GO BACK TO ON THIS ARM**, which is the first\n; deliberately destructive thing this OS does and reads like one: the user is\n; to be asked in its own window, at the moment of launch, with Cancel as the\n; default - docs/plans/KERN-DOS-PLAN.md §9, which is W7 and is not built. So\n; the machine restarts - and it says so first, because a\n; screen that goes black on its own is a crash and a screen that says why is a\n; machine doing what it was told.\n;\n; W6's arm hangs off the same byte: with KDLF_REBOOT clear there is a\n; hibernation image to put back, and this is where the return stub goes.\n",
+   "new_text": "; HOME BY THE FIRST WAY THAT WORKS: a kern_mega park (`kd_unpark`), the live\n; resume (`kd_resume`, SPEC.md 96.49), or `int 19h` with the exit code in the\n; BDA (`kd_bda`, SPEC.md 96.41) for os8088's own boot to find. With no image\n; at all (SPEC.md 96.42, where the user was asked first) the machine restarts\n; - and it says so first, because a screen that goes black on its own is a\n; crash and a screen that says why is a machine doing what it was told.\n;\n; Only a block with KDLF_REBOOT clear and no park reaches `.hold`, which has\n; nowhere to go and says so.\n",
+   "why": "kd_leave jumps to kd_unpark when KDL_PBASE is set (kdentry.inc:815-820), calls kd_resume (:824), then int 19h via kd_bda when KDLF_REBOOT is set; the user is asked first per SPEC.md 96.42."
+  },
+  {
+   "file": "kerndos/kdentry.inc",
+   "old_text": "    jz .hold                    ; W6: the return. Until it exists, a block\n                                ; that does not ask for the reboot has nowhere\n",
+   "new_text": "    jz .hold                    ; no park, no live resume and no reboot asked\n                                ; for: a block like that has nowhere\n",
+   "why": "The return exists: kd_unpark and kd_resume are both tried above this test (kdentry.inc:815-824)."
+  },
+  {
+   "file": "kerndos/kdlayout.inc",
+   "old_text": "; off the DOS program at all - it is the HMA's, which holds 63\n",
+   "new_text": "; off the DOS program at all - it is the HMA's, which holds 63KB.\n",
+   "why": "The sentence stops mid-clause; the next line starts a new paragraph (**36 -> 37 ...)."
+  },
+  {
+   "file": "kerndos/kdlayout.inc",
+   "old_text": "; kern_dos sits at the bottom of conventional memory and everything above it\n",
+   "new_text": "; kern_dos sits at the bottom of conventional memory (on kern_mega's HMA arm\n; only its low rungs do: the image is at FFFF:0010) and everything above it\n",
+   "why": "KD_HMA, implied by KD_MEGA without KD_LOWDOS, sets KD_SEG = FFFF / KD_ORG = 10h (kdlayout.inc:34-45)."
+  },
+  {
+   "file": "kerndos/kdshim.inc",
+   "old_text": "; compaction, no two ends. mem_free_x accepts any segment and only the most\n; recent claim actually returns room, which is all a stack of two caches needs.\n",
+   "new_text": "; compaction, no two ends. mem_free_x accepts any segment and returns no room\n; at all: room comes back only through kd_shed, which is all a stack of two\n; caches needs.\n",
+   "why": "Both of mem_free_x's paths are a bare ret (kdshim.inc:442-447); kd_shed (kdshim.inc:545) is what raises kd_top."
+  },
+  {
+   "file": "kerndos/kdshim.inc",
+   "old_text": "; around every int 13h and nothing reads it here (one task), and [ticks] is\n; the BIOS tick the retry paths time out against.\n",
+   "new_text": "; around every int 13h and nothing reads it here (one task), and [ticks] is\n; a word the disk layer names and nothing here advances: fdd_wait, which\n; times out against it, is outside KD_BUILD, and DSK_VOLID only mixes it\n; into a volume serial.\n",
+   "why": "fdd_wait lives inside disk.inc's %ifndef KD_BUILD (disk.inc:10582-11180); the only other reader is diskw.inc's DSK_VOLID (:5917); no kerndos/ code writes ticks."
+  },
+  {
+   "file": "kernel/hiber.inc",
+   "old_text": "                                ; at KD_SEG and is 46KB, so the stream and the\n",
+   "new_text": "                                ; at KD_SEG and is under 40KB (KD_IMG_KB,\n                                ; kerndos/kdlayout.inc), so the stream and the\n",
+   "why": "build/kerndos.bin is 32,894 bytes and build/megak/kerndosl.bin 35,342; KD_IMG_KB is 34 (kern_big) and 37 (low) - no arm is 46KB."
+  },
+  {
+   "file": "kerndos/kdmouse.inc",
+   "old_text": "(`KD_IMG_KB` is 33 since apps\n; size pass 1 - kerndos/kdlayout.inc carries the measurement.)\n",
+   "new_text": "(kerndos/kdlayout.inc carries\n; the current `KD_IMG_KB` and its measurement.)\n",
+   "why": "KD_IMG_KB is 34 on kern_big's shipped arm, 39 on the HMA arm and 37 on the low arm (kdlayout.inc:103, 146, 154), not 33."
+  },
+  {
+   "file": "docs/plans/KERN-DOS-PLAN.md",
+   "old_text": "There is no second stub, no second extent walk and\nno second copy of the transport facts inside `kern_dos`.\n",
+   "new_text": "There was to be no second stub, no second extent walk\nand no second copy of the transport facts inside `kern_dos`. **Superseded in\npart by SPEC.md 96.49**: `kd_resume` (`kerndos/kdresume.inc`) now puts the\nimage back directly when it can - the stub shared as SOURCE\n(`kernel/hbstub.inc`), not copied - and this route is its fallback.\n",
+   "why": "kerndos/kdresume.inc is a second stub and extent walk (kd_resume, kd_extents, %include hbstub.inc), tried by kd_leave before int 19h (kdentry.inc:824)."
+  },
+  {
+   "file": "docs/plans/KERN-DOS-PLAN.md",
+   "old_text": "So `kd_leave` writes `'DX'`, the code and a checksum there,",
+   "new_text": "So `kd_bda` writes `'KDX1'`, the code word (its high byte the refusal\nreason, SPEC.md 96.40.7) and the arena in KB (96.41.1) there, and no checksum,",
+   "why": "kd_bda writes KDB_SIG 'KDX1', the whole kd_code word and the arena KB (kdentry.inc:921-941; kdlayout.inc KDB_*); there is no checksum."
+  }
+ ]
+}

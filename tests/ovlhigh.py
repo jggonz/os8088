@@ -133,8 +133,9 @@ def main():
 
         # the overlay's carve is a claim that appeared at the launch, owned by
         # the package's own segment (SPEC.md 50.2), whose bytes - past the
-        # read's head slack, a whole number of sectors under one cluster -
-        # ARE the module
+        # read's head slack - the run's place in its CLUSTER, a multiple of 16
+        # since SPEC.md 20.12.2.1 and NOT of 512 (parts are 16-aligned in the
+        # file, so on cword360's 1KB clusters it is 704 today) - ARE the module
         seen = set(c[0] for c in before)
         new = [c for c in after if c[0] not in seen and c[2] == region]
         print("region %04x, %d claims -> %d" % (region, len(before), len(after)))
@@ -145,7 +146,7 @@ def main():
         hit = []
         for c in new:
             span = m.read(c[0] * 16, c[1] * 16)
-            for slack in range(0, min(len(span), 32768), 512):
+            for slack in range(0, min(len(span), 32768), 16):
                 if span[slack:slack + len(module)] == module:
                     hit.append((c, slack))
                     break

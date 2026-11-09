@@ -355,10 +355,13 @@ def bochs(a):
         ring, rs, xs = words
         print("   SOUND.DRV after: [sbl_rseg] %04x, [sbl_extctl+2] %04x, the "
               "ring's claim %04x at %06x" % (rs[0], xs[0], ring[0], ring[1]))
-        want(all(w[0] & 4 and w[1] == ring[1] for w in (rs, xs)),
-             "SOUND.DRV's ring words SELECTORS of the ring's claim again "
-             "(W's stream stored paragraphs inside, and the return renamed "
-             "them: no real-mode segment outlives the bracket)")
+        want(rs[0] == 0 and xs[0] == 0,
+             "SOUND.DRV's ring words 0 after the last close (W's stream "
+             "stored paragraphs inside and its close, inside too, forgot "
+             "them - SPEC.md 34.5.3, KERN-MEGA-PLAN 14.182: no segment, real "
+             "or selector, outlives the stream or the bracket. A stream still "
+             "open across the return is P's and I's, played on in protected "
+             "mode through the renamed words by Q and J)")
     print("\n   the card's capture")
     capture(os.path.join(out, "sb.wav"))
     if a.keep or FAILS:

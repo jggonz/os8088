@@ -74,6 +74,13 @@ SEED_N = 4
 fails = []
 
 
+
+try:                            # FS_IOFH's unit: 128 bytes on kern_big
+    import os88geom as _g       # (SPEC.md 22.6.4), 256 on kern_small
+    _IOSH = _g.FV_IOSH
+except Exception:
+    _IOSH = 8
+
 def check(name, cond, note=""):
     print(f"  [{'PASS' if cond else 'FAIL'}] {name} {note}")
     if not cond:
@@ -94,7 +101,7 @@ def refbyte(m, row):
     n, vseg, iofh = slot0(m)
     if not vseg or not iofh:
         return None
-    return m.readseg(vseg, (iofh << 8) + FV_ICOIX + row, 1)[0]
+    return m.readseg(vseg, (iofh << _IOSH) + FV_ICOIX + row, 1)[0]
 
 
 def wins(m):

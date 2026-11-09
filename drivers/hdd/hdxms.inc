@@ -31,9 +31,11 @@
 ; conventional memory, without a fault). Nothing the arm covers calls the
 ; BIOS's block move, which is the one thing in the tree that might shut it.
 ;
-; WRITES ARE NEVER REDIRECTED, and that is the door's whole safety
-; argument: DSV_PKGCALL reaches two verbs, neither of them a sector, so no
-; package can reach DSV_BLK through it (SPEC.md 20.11).
+; WRITES ARE NEVER REDIRECTED, and no package can reach DSV_BLK through
+; DSV_PKGCALL (SPEC.md 20.11): its three verbs - these two and HDV_TOOL
+; (SPEC.md 117.4) - name no sector. HDV_TOOL's HDI_GO can still ERASE a
+; partition through the install engine, so for that verb the fence is
+; hd_iact_ok and the wizard's Confirm page, not the verb list.
 ; =============================================================================
 
 hd_xa_on:    db 0               ; 1: a buffer is armed

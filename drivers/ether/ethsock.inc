@@ -595,8 +595,11 @@ eth_v_rawtx:
     call usr_read               ; SI theirs, DI ours, CX bytes
     call nic_tx
     jc  .gone
-    inc word [eth_ntx]          ; the same counter the stack's own frames use:
-    inc word [eth_nrawtx]       ; the Control Panel page is about the CARD
+    inc word [eth_nrawtx]       ; the raw count. [eth_ntx], the CARD's count
+                                ; the Control Panel page shows, nic_tx has
+                                ; already taken (ne_tx, rt_tx): a second `inc`
+                                ; here counted every raw frame twice (kernel
+                                ; size pass 18 - the owner's call, -4)
     pop word [eth_useg]
     pop di
     pop si

@@ -51,6 +51,27 @@ SEG_ROM     equ 0x6000              ; ...and APPLE2.ROM's part, $D000-$FFFF at
 
 IMG_SECTORS equ 64                  ; 32KB of harness; the program follows
 DORMSEC     equ 64                  ; ...at this sector, 128 sectors of it
+%ifndef AOT_SLICE
+%define AOT_SLICE 997               ; (the translated legs' slice, below)
+%endif
+%ifdef FAST
+; THE FAST CORE'S LEG (APPLE2-SPEC section 4.6): the same rows, run through
+; a2fast.inc's _a2_run - the generated core, handing back to the accurate one
+; - with the part's $FE00 bytes read from CORESEC into SEG_CODE
+SEG_CODE    equ 0x7000
+CORESEC     equ 192                 ; after Dormann's 128 sectors
+CORESECS    equ 127                 ; $FE00 bytes
+%ifdef AOT
+; ...AND THE TRANSLATED LEGS (APPLE2-SPEC 4.7): Dormann's own code, half of
+; it translated ahead of time by m65aot.py, the core built for that range
+SEG_AOT     equ 0x8000
+SEG_TAB     equ 0x9000
+AOTSEC      equ CORESEC + CORESECS
+AOTSECS     equ 127
+TABSEC      equ AOTSEC + AOTSECS
+TABSECS     equ 40
+%endif
+%endif
 
 %macro PUSHI 1
     mov ax, %1
@@ -142,6 +163,10 @@ body:
     mov word [_a2_m+AM_RAMSEG], SEG_RAM
     mov word [_a2_m+AM_ROMSEG], SEG_ROM
     call mem_init
+%ifdef FAST
+    call fast_load
+    call fast_image
+%endif
 
 %ifdef DORMANN
     jmp dormann_main
@@ -230,6 +255,10 @@ rom_wr:
     push es
     mov es, [_a2_m+AM_ROMSEG]
     mov [es:bx], al
+%ifdef FAST
+    mov es, [_a2_m+AM_RAMSEG]       ; ...and the fast core's copy of it in the
+    mov [es:bx+A2_ROM_BASE], al     ; image (apple2.c builds that once: the
+%endif                              ; ROM of a running machine never changes)
     pop es
     ret
 
@@ -324,10 +353,19 @@ rows_main:
     call puts
     call row_wr
     call verdict
+%ifdef FAST
+    mov ax, 0x8D                    ; THE FAST CORE'S SLOT for STA abs sent
+    mov bx, 0x85                    ; to STA zp's - the same control, made in
+    call fpatch                     ; the core that actually runs the row
+    call row_wr
+    call control
+    call funpatch
+%else
     call patch_sta                  ; STA abs dispatched to STA zp, whose
     call row_wr                     ; one-byte operand lands the store
     call control                    ; SOMEWHERE ELSE ENTIRELY
     call unpatch_sta
+%endif
 
     mov si, msg_r5
     call puts
@@ -338,14 +376,16 @@ rows_main:
     call control
     call unpatch_iofence
 
-    mov si, msg_r6
-    call puts
+%ifndef FAST                        ; (the accurate core's fetch ES, which the
+    mov si, msg_r6                  ; fast core does not have: the plain leg
+    call puts                       ; is the one that asks)
     call row_seg
     call verdict
     call patch_esfix                ; the fetch segment is NOT reloaded after
     call row_seg                    ; the call out: a DELIBERATELY STALE ES
     call control
     call unpatch_esfix
+%endif
 
     mov si, msg_r7
     call puts
@@ -382,19 +422,35 @@ rows_main:
     call puts
     call row_cyc
     call verdict
+%ifdef FAST
+    call fpatch_cyc                 ; LDA abs,X's `sub bp,4` made 3 in the
+    call row_cyc                    ; fast core's own slot
+    call control
+    call funpatch_cyc
+%else
     call patch_cyc                  ; one opcode's cost made wrong
     call row_cyc
     call control
     call unpatch_cyc
+%endif
 
     mov si, msg_r2
     call puts
     call row_dec
     call verdict
+%ifdef FAST
+    mov ax, 0xF8                    ; the fast core's SED sent to CLD: no
+    mov bx, 0xD8                    ; decimal flag, so no ADC is ever handed
+    call fpatch                     ; back and every answer is binary
+    call row_dec
+    call control
+    call funpatch
+%else
     call patch_dec                  ; the decimal path is never entered
     call row_dec
     call control
     call unpatch_dec
+%endif
 
     mov si, msg_r11
     call puts
@@ -621,6 +677,22 @@ row_wr:
     call ram_rd
     cmp al, 0x99
     jne .bad
+%ifdef FAST
+    ; THE FAST CORE'S IMAGE holds slot space's $FF and the ROM's own bytes
+    ; above $C1FF (a2fast.inc's a2f_image), so "dropped" is: still those
+    mov bx, 0xCFFF
+    call ram_rd
+    cmp al, 0xFF
+    jne .bad
+    mov bx, 0xD000
+    call ram_rd
+    cmp al, 0xDD
+    jne .bad
+    mov bx, 0xFFFF
+    call ram_rd
+    cmp al, 0xDF
+    jne .bad
+%else
     mov bx, 0xCFFF
     call ram_rd
     cmp al, 0x99
@@ -633,6 +705,7 @@ row_wr:
     call ram_rd
     cmp al, 0x99
     jne .bad
+%endif
     ; ...AND THE ROM ITSELF DID NOT MOVE, which is the other half of "a write
     ; to $D000-$FFFF is dropped": a core that biased the store into the ROM
     ; part would leave RAM's poison alone and still be wrong.
@@ -1755,6 +1828,46 @@ row_intstk:
     mov ax, [_a2_m+AM_S]
     cmp al, 0xFD                    ; ...and put all three bytes back
     jne .bad
+    ; --- JSR AT S = 1: the return address fills $0101 and $0100 and S
+    ; WRAPS to $FF, so the PHA after it writes $01FF. The fast cores move
+    ; the address as one word, and once took S = 1 down that path: DI came
+    ; out $00FF, outside the $0100+S form, and the PHA wrote ZERO PAGE $FF
+    push es
+    mov es, [_a2_m+AM_RAMSEG]
+    mov word [es:0x0800], 0x1020    ; JSR $0810
+    mov byte [es:0x0802], 0x08
+    mov byte [es:0x0810], 0x48      ; PHA
+    mov byte [es:0x0811], 0x02      ; JAM
+    mov byte [es:0x00FF], 0x5A
+    mov byte [es:0x01FF], 0
+    pop es
+    mov word [_a2_m+AM_PC], 0x0800
+    mov word [_a2_m+AM_S], 0x0001
+    mov word [_a2_m+AM_A], 0x0077
+    mov word [_a2_m+AM_P], 0x0024
+    call rebias
+    PUSHI 200
+    call _a2_run
+    add sp, 2
+    mov bx, 0x0101
+    call ram_rd
+    cmp al, 0x08                    ; the return address, high...
+    jne .bad
+    mov bx, 0x0100
+    call ram_rd
+    cmp al, 0x02                    ; ...and low ($0802, JSR's last byte)
+    jne .bad
+    mov bx, 0x01FF
+    call ram_rd
+    cmp al, 0x77                    ; PHA after the wrap
+    jne .bad
+    mov bx, 0x00FF
+    call ram_rd
+    cmp al, 0x5A                    ; ...and zero page untouched
+    jne .bad
+    mov ax, [_a2_m+AM_S]
+    cmp al, 0xFE
+    jne .bad
     xor ax, ax
     jmp short .out
 .bad:
@@ -1831,6 +1944,9 @@ dormann_main:
     xor al, al
     rep stosb
     pop es
+%ifdef FAST
+    call fast_image                 ; the fixture landed on the image too
+%endif
 
     mov word [_a2_m+AM_PC], 0x0400
     mov word [_a2_m+AM_S], 0x00FD
@@ -1844,8 +1960,35 @@ dormann_main:
     ; notices within its first few hundred instructions. A run that reaches
     ; the success trap with this in place would mean the test was not being
     ; run at all.
+%ifdef AOT
+    ; THE TRANSLATED LEG'S CONTROL: every translated ADC and CMP, listed at
+    ; CTL_LIST, is broken in the translation itself - ADC becomes OR, and
+    ; CMP becomes ADC (an XOR, 8 lower, leaves Z set for the equal values
+    ; Dormann's checks compare) - proof that the translated code is what runs
+    push es
+    mov ax, SEG_AOT
+    mov es, ax
+    mov bx, CTL_LIST
+.ctl: mov si, [es:bx]
+    test si, si
+    jz .ctld
+    sub byte [es:si], 8             ; ADC (10h-15h) -> OR
+    cmp byte [es:si], 0x30
+    jb .ctln
+    sub byte [es:si], 0x20          ; CMP (38h-3Dh) -> ADC: equal values
+.ctln:                              ; no longer leave Z set
+    add bx, 2
+    jmp short .ctl
+.ctld:
+    pop es
+%elifdef FAST
+    mov ax, 0x69                    ; the fast core's ADC # slot sent to ORA #
+    mov bx, 0x09
+    call fpatch
+%else
     mov ax, [cs:a2_tab + 0x09*2]
     mov [cs:a2_tab + 0x69*2], ax
+%endif
     mov si, msg_neg
     call puts
 %endif
@@ -1854,17 +1997,36 @@ dormann_main:
     ; expires before its first fetch - which reads exactly like a test that
     ; will not start. The package's own cap is 16,384 for the same reason.
     mov cx, 20000                   ; outer passes of 30,000 cycles each
+%ifdef AOT
+    mov cx, 0xFFFF                  ; ...or of 997 (see below)
+%endif
 .run:
     push cx
+%ifdef AOT
+    ; THE TRANSLATED LEGS RUN SHORT ODD SLICES: the core consults the PC
+    ; table only at a jump or a run's start, and Dormann falls through whole
+    ; stretches with no jump - a part entered only that way would run on the
+    ; core, and its control would prove nothing. 997 cycles start runs all
+    ; over each part, and enter its translation mid-block
+    PUSHI AOT_SLICE
+%else
     PUSHI 30000
+%endif
     call _a2_run
     add sp, 2
     pop cx
     cmp ax, A2_RUN_JAM
     je .stuck
     ; ...has the program counter settled on a `jmp *`?
-    mov ax, [_a2_m+AM_PC]
+    ; A `jmp *` repeats the WHOLE state, not only the PC: a loop whose only
+    ; untranslated instructions are a stub's (Dormann's $0211 ADC #/RTS)
+    ; ends every slice on the stub's PC while A, X and the flags move on
+    call state_sig
     cmp ax, [cs:last_pc]
+    jne .moved
+    cmp bx, [cs:last_ax]
+    jne .moved
+    cmp dx, [cs:last_ys]
     jne .moved
     inc word [cs:same_n]
     cmp word [cs:same_n], 3
@@ -1872,9 +2034,15 @@ dormann_main:
     jmp short .cont
 .moved:
     mov [cs:last_pc], ax
+    mov [cs:last_ax], bx
+    mov [cs:last_ys], dx
     mov word [cs:same_n], 0
 .cont:
     loop .run
+%ifdef AOT
+    dec word [cs:aot_outer]         ; 0xFFFF x 32 slices of 997: the same
+    jnz .run                        ; ~2 billion cycles of slack as above
+%endif
     mov si, msg_slow
     call puts
     mov al, 5
@@ -1919,6 +2087,27 @@ dormann_main:
     cmp ax, DORMOK
     jne .bad
 %ifdef NEG
+%ifdef TRACE
+    push es
+    mov ax, SEG_RAM
+    mov es, ax
+    mov bx, [es:0xC2FE]
+    mov cx, 128
+    mov ax, [es:0xC2FC]             ; (ct_rom's entries into it)
+    call puthex
+    mov al, ':'
+    call putc
+.trn: mov ax, [es:bx+0xC300]
+    call puthex
+    mov al, ' '
+    call putc
+    add bx, 2
+    and bx, 0xFF
+    loop .trn
+    pop es
+    mov si, msg_nl
+    call puts
+%endif
     mov si, msg_nbad
     call puts
     mov al, 3
@@ -1936,14 +2125,72 @@ dormann_main:
     mov al, 0
     jmp exit
 %else
+%ifdef TRACE
+    ; (DEBUG: M65AOT_TRACE's ring of translated PCs, oldest first)
+    push es
+    mov ax, SEG_RAM
+    mov es, ax
+    mov bx, [es:0xC2FE]
+    mov cx, 128
+.tr: mov ax, [es:bx+0xC300]
+    call puthex
+    mov al, ' '
+    call putc
+    add bx, 2
+    and bx, 0xFF
+    loop .tr
+    pop es
+    mov si, msg_nl
+    call puts
+    mov ax, [_a2_fseg]
+    call puthex
+    mov ax, [a2f_left]
+    call puthex
+    mov ax, [_a2_m+AM_CNT]
+    call puthex
+    mov ax, [_a2_m+AM_REASON]
+    call puthex
+    mov si, msg_nl
+    call puts
+%endif
     mov si, msg_fail
     call puts
     mov al, 3
     jmp exit
 %endif
 
+aot_outer: dw 32
 last_pc: dw 0xFFFF
+last_ax: dw 0                       ; A | X << 8
+last_ys: dw 0                       ; Y | S << 8, P folded in
 same_n:  dw 0
+
+; state_sig - AX = PC, BX = A | X << 8 folded with zero page, DX = (Y | S
+; << 8) xor P
+state_sig:
+    mov ax, [_a2_m+AM_PC]
+    mov bl, [_a2_m+AM_A]
+    mov bh, [_a2_m+AM_X]
+    mov dl, [_a2_m+AM_Y]
+    mov dh, [_a2_m+AM_S]
+    xor dl, [_a2_m+AM_P]
+    ; ...and zero page, where a test keeps its loop counters: a loop that
+    ; leaves every register as it found it still moves those
+    push ds
+    push si
+    push cx
+    mov si, [_a2_m+AM_RAMSEG]
+    mov ds, si
+    xor si, si
+    mov cx, 128
+.zp: add bx, [si]
+    rol bx, 1
+    add si, 2
+    loop .zp
+    pop cx
+    pop si
+    pop ds
+    ret
 %endif
 
 ; =============================================================================
@@ -1954,6 +2201,11 @@ same_n:  dw 0
 SEG_LIN equ 0
 SEG_WIN equ 2
 %define OSAPI_SEG hst_seg
+%define OSAPI_MEM_CODESEL hst_codesel   ; ...and OSAPI_MEM_CODESEL's: the
+hst_codesel:                            ; segment itself (a2fast.inc)
+    mov ax, dx
+    clc
+    ret
 hst_seg:
     cmp bl, SEG_LIN
     jne .out
@@ -1968,7 +2220,150 @@ hst_seg:
     clc
     ret
 
+%ifdef FAST
+%define A2_FAST
+%endif
 %include "a2cpu.inc"
+%ifdef FAST
+%include "a2fast.inc"
+
+section .text
+; fast_load - the part's $FE00 bytes from CORESEC into SEG_CODE, made into the
+; 64KB code segment exactly as apple2.c's a2_fast_init makes it (a2f_core)
+fast_load:
+    push es
+    mov ax, SEG_CODE
+    mov es, ax
+    xor bx, bx
+    mov word [lba], CORESEC
+    mov cx, CORESECS
+.rd:
+    call rdsec
+    add bx, 512
+    inc word [lba]
+    loop .rd
+    pop es
+    PUSHI SEG_CODE
+    PUSHI SEG_CODE
+    call _a2f_core
+    add sp, 4
+    mov word [_a2_fseg], SEG_CODE
+%ifdef AOT
+    push es
+    mov ax, SEG_AOT
+    mov es, ax
+    xor bx, bx
+    mov word [lba], AOTSEC
+    mov cx, AOTSECS
+.ra:
+    call rdsec
+    add bx, 512
+    inc word [lba]
+    loop .ra
+    mov ax, SEG_TAB
+    mov es, ax
+    xor bx, bx
+    mov word [lba], TABSEC
+    mov cx, TABSECS
+.rt:
+    call rdsec
+    add bx, 512
+    inc word [lba]
+    loop .rt
+    pop es
+    mov word [_a2_faot], SEG_AOT
+    mov word [_a2_ftab], SEG_TAB
+%endif
+    ret
+
+; fast_image - the guest image in the RAM claim, over what is there now
+fast_image:
+    PUSHI SEG_ROM
+    PUSHI SEG_RAM
+    PUSHI SEG_RAM
+    call _a2f_image
+    add sp, 6
+    ret
+
+; fpatch - AX = an opcode whose fast-core slot now JUMPS to opcode BX's slot
+; (a near jmp in its first three bytes, saved for funpatch). A COPY of the
+; slot would carry rel16 calls aimed from the wrong place.
+fpatch:
+    push es
+    push di
+    mov di, SEG_CODE
+    mov es, di
+    mov [fp_op], ax
+    mov ah, al
+    xor al, al
+    mov di, ax                      ; the slot
+    mov ax, [es:di]
+    mov [fp_save], ax
+    mov al, [es:di+2]
+    mov [fp_save+2], al
+    mov ah, bl
+    xor al, al                      ; BX's slot
+    sub ax, di
+    sub ax, 3
+    mov byte [es:di], 0xE9
+    mov [es:di+1], ax
+    pop di
+    pop es
+    ret
+funpatch:
+    push es
+    push di
+    mov di, SEG_CODE
+    mov es, di
+    mov ax, [fp_op]
+    mov ah, al
+    xor al, al
+    mov di, ax
+    mov ax, [fp_save]
+    mov [es:di], ax
+    mov al, [fp_save+2]
+    mov [es:di+2], al
+    pop di
+    pop es
+    ret
+
+; fpatch_cyc - LDA abs,X ($BD) charges 3 where the table says 4: its slot's
+; first `sub bp,4` (83 ED 04) made `sub bp,3`
+fpatch_cyc:
+    mov ah, 4
+    mov al, 3
+    jmp short fcyc
+funpatch_cyc:
+    mov ah, 3
+    mov al, 4
+fcyc:
+    push es
+    push di
+    push cx
+    mov di, SEG_CODE
+    mov es, di
+    mov di, 0xBD00
+    mov cx, 254
+.f: cmp word [es:di], 0xED83
+    jne .n
+    cmp [es:di+2], ah
+    jne .n
+    mov [es:di+2], al
+    jmp short .o
+.n: inc di
+    loop .f
+.o: pop cx
+    pop di
+    pop es
+    ret
+
+section .data
+_a2_fseg:   dw 0
+_a2_faot:   dw 0                    ; (no translated ROM in this leg)
+_a2_ftab:   dw 0
+fp_op:      dw 0
+fp_save:    db 0, 0, 0
+%endif
 
 section .text
 

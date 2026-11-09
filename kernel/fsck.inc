@@ -21,7 +21,7 @@
 ; refused rather than executed, and the kernel keeps NOTHING between calls:
 ; the image and the workspace are the package's, and go when it goes.
 ;
-; RESIDENT: the stub (.text), fsk_cnear (.cold), [dsk_wgen] and its bump in
+; RESIDENT: the cell (.text), the stub and fsk_cnear (.cold), [dsk_wgen] and its bump in
 ; disk_write_x (disk.inc). Everything else is the image's.
 ; =============================================================================
 
@@ -305,10 +305,12 @@ FSK_NENT    equ 1
 ; per-call words are the kernel's ([fsk_sp], [fsk_cold], reached through DS =
 ; KERNEL_SEG) and its scratch is the workspace's (P_E onward).
 ;
-; **ES IS THE WORKSPACE, FROM fsk_entry's `mov es, dx` TO ITS RETURN**, and
-; nothing loads it again: KC banks it round every kernel routine, and the two
-; DS swaps (fsk_qpop, fsk_ph_fatcmp) copy it and leave it alone. So no
-; routine here reloads it, and the kernel holds no [fsk_ws] (kernel size pass
+; **ES IS THE WORKSPACE, FROM fsk_entry's `mov es, dx` TO ITS RETURN** -
+; except inside fsk_delsys, which spends ES on its name compares and on
+; the caller's buffer - and nothing else loads it again: KC banks it round
+; every kernel routine, and the two DS swaps (fsk_qpop, fsk_ph_fatcmp) copy
+; it and leave it alone. So no other routine reloads it, and the kernel
+; holds no [fsk_ws] (kernel size pass
 ; 17: fourteen reloads of a value ES already had). FSK_SIZE is the one verb
 ; that has no workspace, and it touches none.
 
@@ -380,7 +382,7 @@ fsk_ret:
 ; fsk_die - end the call with CF=1 and AX = FSKE_*, from any depth. Whatever
 ; FAT entries are still unflushed are dropped (dskw_refat): every repair
 ; flushes as it goes, so what is dropped was never meant to stand alone
-fsk_die:  ; STKBALANCE-OK: unwinds every frame at once to fsk_entry's, through [fk_sp]
+fsk_die:  ; STKBALANCE-OK: unwinds every frame at once to fsk_entry's, through [fsk_sp]
     mov sp, [fsk_sp]
     push ax
     KC dskw_refat
@@ -1562,8 +1564,8 @@ fsk_wdir:
     ret
 
 ; fsk_chainq - queue a chain's stop: AL = the code (row 3 for a cross-link,
-; else 2), [fk_a] = the cluster, [fk_b] = its place, BH = 1 repaired. The
-; path is the entry at [fk_e]
+; else 2), [P_A] = the cluster, [P_B] = its place, BH = 1 repaired. The
+; path is the entry at [P_E]
 fsk_chainq:
     mov bl, al
     mov si, [es:P_E]
@@ -1665,7 +1667,7 @@ fsk_dirent:
 ; -----------------------------------------------------------------------------
 ; fsk_filent - a file's entry (the check): its chain against its size, and
 ; the repairs SPEC.md 118.14.4 makes when it is asked to
-; in:  ES:SI = the entry ([fk_e]), BX = the level; out CF = 0
+; in:  ES:SI = the entry ([P_E]), BX = the level; out CF = 0
 ; -----------------------------------------------------------------------------
 fsk_filent:
     inc word [es:FSW_FILES]

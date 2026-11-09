@@ -4659,6 +4659,7 @@ np_save:
     call np_goto                ; the folder this document belongs to, if the
     jc .err                     ; volume has been moved since (SPEC.md 19.2);
                                 ; CF = we are not there, so write nothing
+    push ds                     ; (ours, back at .staged)
     mov ds, [np_dseg]
     xor si, si                  ; DS:SI = the note, ES:DI the expansion. NO
     xor di, di                  ; kernel variable is readable while DS is the
@@ -4675,8 +4676,11 @@ np_save:
     stosb
     jmp short .stage
 .staged:
-    push cs
-    pop ds                      ; ...and back, before anything else is read
+    pop ds                      ; ...and back, before anything else is read:
+                                ; the one we came in with, never CS - which
+                                ; is read-only under kern_mega, and the
+                                ; saved message's copy stores through DS
+                                ; (np_setmsg, np_scpy; KERN-MEGA-PLAN 14.150)
     mov cx, di                  ; ES:BX = the staged bytes (SPEC.md 20.3),
     xor bx, bx                  ; DX:CX their count (SPEC.md 18.4.1)
     xor dx, dx
@@ -11111,17 +11115,17 @@ np_q_pre:     db 'Save changes to ', 0   ; SPEC.md 27.15's alert, composed
                                             ; around the document's name
 np_m_saved:   db 'Saved ', 0
 np_m_loaded:  db 'Loaded ', 0
-np_m_trunc:   db 'Truncated', 0
-np_s_nul:     db 0              ; an EMPTY string retires whatever is up
+TOASTSTR np_m_trunc, 'Truncated'
+TOASTSTR np_s_nul               ; an EMPTY string retires whatever is up
                                 ; (SPEC.md 59.3) - one call, and this app
                                 ; never has to know whether one was
 
 %ifdef NPF_FIND
-np_e_noent:   db 'Not found', 0      ; Find's miss (np_fmiss); a FILE's
+TOASTSTR np_e_noent, 'Not found'     ; Find's miss (np_fmiss); a FILE's
                                      ; refusal is the kernel's words now
                                      ; (np_errmsg, SPEC.md 18.4.11)
 %endif
-np_e_nomem:   db 'No memory', 0      ; the staging claim was refused (50.3)
+TOASTSTR np_e_nomem, 'No memory'     ; the staging claim was refused (50.3)
 
 ; --- the find panel and the clipboard (SPEC.md 27.8/27.10/55) ----------------
 %ifdef NPF_FIND
@@ -11136,14 +11140,14 @@ np_b_all:     db 'All', 0
 np_b_x:       db 'X', 0
 np_m_wait:    db '...', 0            ; the worker owes a count (SPEC.md 27.10)
 np_m_blank:   db ' ', 0
-np_m_badpat:  db 'Bad pattern', 0
-np_m_nopat:   db 'No pattern', 0
+TOASTSTR np_m_badpat, 'Bad pattern'
+TOASTSTR np_m_nopat, 'No pattern'
 np_m_repld:   db ' replaced', 0
 %endif   ; NPF_FIND
 %ifdef NPF_UNDO
-np_m_noundo:  db 'Nothing to undo', 0
+TOASTSTR np_m_noundo, 'Nothing to undo'
 %endif
-np_e_cbig:    db 'Too big to copy', 0   ; over CLIP_MAXKB, or the heap could
+TOASTSTR np_e_cbig, 'Too big to copy'   ; over CLIP_MAXKB, or the heap could
                                         ; not fund the clipboard (SPEC.md 55)
 
 ; --- the state SPEC.md 27.8/27.9/27.10 added ---------------------------------

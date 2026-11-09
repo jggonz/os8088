@@ -91,8 +91,15 @@ with tempfile.TemporaryDirectory(dir=ROOT + "/build") as tmp:
         yo, xo, n = rw("vo_yoff"), rw("vo_xoff"), rb("vo_n")
         n_box = n + 2
         looks = []
+        # THE LOOKS ARE STEPPED, not paced: a polled pace(0.05) on a running
+        # guest overshoots by however long the host was descheduled, so on a
+        # soak's load the forty looks fell where the box put them and two
+        # landed on one join frame - 3 misses at [60, 1, 60], a failure of a
+        # toast that was on the glass (a whole-tier soak, 2026-11-07). An
+        # exact advance of a paused guest is the same spacing on any box.
+        step = int(0.05 * (os88marty.GUEST_PACE or 4.5) * os88marty.GUEST_HZ)
+        m.pause()
         for k in range(40):
-            m.pause()
             m.write(base + syms["vo_ttk"], m.read(ui._S("ticks"), 2))   # (kept up)
             fw, fh, img = m.fbuf(0)
             a = np.frombuffer(bytes(img), np.uint8).reshape(fh, fw, 3)
@@ -105,8 +112,8 @@ with tempfile.TemporaryDirectory(dir=ROOT + "/build") as tmp:
             c = np.array([(pal[3 * ii + j] * 255 + 31) // 63 for j in range(3)])
             ink = int((np.abs(box - c).max(2) <= 6).sum())
             looks.append((rw("vp_done"), ink, rb("vo_kind"), rb("vo_clip"), rb("vo_drawn"), rw("vp_foff")))
-            m.run()
-            os88marty.pace(m, 0.05)
+            m.advance(cycles=step)
+        m.run()
         top = max(x[1] for x in looks)
         gone = [l[0] for l in looks if l[1] < top * 0.5]
         pages = set(l[5] for l in looks if l[1] >= top * 0.5)

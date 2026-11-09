@@ -46,14 +46,16 @@ from pxsyms import pkg_syms, instance, u16      # noqa: E402
 ap = argparse.ArgumentParser()
 ap.add_argument("--machine", default="os8088_xt_vga_720b")
 a = ap.parse_args()
-syms, image = pkg_syms()
+MEGA = bool(os.environ.get("OS88_MEGA"))
+# the arm's main image is assembled -DPKG_MEGA too (its huge picture claim,
+# SPEC.md 106): compare it with that assembly, not the shipped one
+syms, image = pkg_syms(("PKG_MEGA",) if MEGA else ())
 import os88pkg                                          # noqa: E402
 # the IMAGE, not the file: a parted package's image ships packed when that
 # saves a sector (SPEC.md 20.13.8)
 # kern_mega (OS88_MEGA, tests/megaport.txt): PiXEL's ARM, whose main image is
 # this one and whose decoder parts are assembled -DPKG_MEGA (Makefile's
 # $(MEGAAPPDIR)/pixel.o88); every segment it names is an LDT selector there
-MEGA = bool(os.environ.get("OS88_MEGA"))
 PIXEL_O88 = "build/megak/apps/pixel.o88" if MEGA else "build/pixel.o88"
 o88 = os88pkg.image_unwrap(open(os88build.at(PIXEL_O88), "rb").read())
 if o88[:syms["op_table"]] != image[:syms["op_table"]]:

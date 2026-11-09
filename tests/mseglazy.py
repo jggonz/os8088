@@ -33,9 +33,18 @@ FIVE ASSERTIONS:
 
   3. THE KEY FETCHES IT, and the fetch is where the disk goes. Sectors moved
      across the key press (dsk_dbg_sec, which is why this row builds a DISKCNT
-     kernel) must be at least the part's own six, and afterwards op_seg
-     answers a segment, MSEG's three independent module checks pass on it, and
-     ms_lazy says 'F';
+     kernel; Bochs's FDC log on kern_mega) must be at least the part's own
+     six, and afterwards op_seg answers a segment, MSEG's three independent
+     module checks pass on it, and ms_lazy says 'F'. A sector the READ-AHEAD
+     already held (SPEC.md 18.95) counts when the fetch is seen being served
+     out of that chunk - its RAH_END moving past it. kern_mega's B: on Bochs
+     is that case: part 5 is OP_XMS there and read alone, its run split at
+     the track, and the second piece's fill caches the rest of the track -
+     all seven of part 6's LBAs - in the call that was reading part 5
+     anyway, so the fetch moves NOTHING and the count read 0. The cache
+     doing its job is not the launch reading the part (no claim, no byte of
+     the package's, no extra int 13h); a fetch that skips its read is still
+     red, on the cache's account as well as on MSEG's checks;
 
   4. A SECOND KEY GIVES IT BACK. op_seg answers 0 again, ms_lazy says 'D', and
      the claim table is BYTE-FOR-BYTE what it was before the fetch. A lazy
@@ -69,6 +78,7 @@ sys.path.insert(0, "tests/multiseg")
 import os88build
 import os88marty
 import os88mouse
+import os88fat
 import os88parts
 import os88sym
 import os88geom                                              # noqa: E402
@@ -139,6 +149,43 @@ def part_seg(m, seg, i):
     """op_seg's answer for part i, out of MSEG's own banked copy."""
     return struct.unpack_from(
         "<H", m.read(lin(m, seg, msegsym.sym("ms_seg") + i * 2), 2), 0)[0]
+
+
+def part_lbas(row):
+    """The LBAs on B: holding part ROW's bytes - MSEG.O88's cluster chain
+    out of the image itself (tools/os88fat.py), so nothing about where the
+    file landed is assumed."""
+    v = os88fat.Fat12(APPS_IMG)
+    e = v.find("MSEG.O88")[2]
+    if e is None:
+        raise SystemExit("mseglazy: no MSEG.O88 in the root of %s" % APPS_IMG)
+    lbas = [v.cluster_lba(c) + k
+            for c in v.chain(struct.unpack_from("<H", e, 26)[0])
+            for k in range(v.spc)]
+    lo = os88parts.byte_off(row)
+    return set(lbas[lo // 512:(lo + row["len"] - 1) // 512 + 1])
+
+
+def rah_held(m, S, lbas):
+    """{lba: (slot, chunk's first LBA, RAH_END)} for every LBA of LBAS a live
+    read-ahead chunk of B:'s holds (SPEC.md 18.95; tests/ldcost.py reads the
+    same table). On kern_mega the STORE is above 1MB but the table is .bss."""
+    e = os88sym.equates(DEFINES)
+    rec = e["RAH_REC"]
+    rd = lambda n, k: bytes(m.read(S(n), k))                     # noqa: E731
+    runs = struct.unpack_from("<H", rd("dsk_rah_runs", 2))[0]
+    sig = struct.unpack_from("<H", rd("dsk_sigcur", 2))[0]
+    tab = rd("dsk_rah_tab", e["DSK_RAH_RUNS"] * rec)
+    out = {}
+    for i in range(runs):
+        r = tab[i * rec:(i + 1) * rec]
+        lba, n, rsig = (struct.unpack_from("<H", r, e[f])[0]
+                        for f in ("RAH_LBA", "RAH_N", "RAH_SIG"))
+        if not n or r[e["RAH_VOL"]] != 1 or rsig != sig:
+            continue
+        for x in lbas & set(range(lba, lba + n)):
+            out[x] = (i, lba, r[e["RAH_END"]])
+    return out
 
 
 def title_of(m, S, seg, rec):
@@ -213,8 +260,13 @@ def run():
         if MEGA:
             # NO KNOB KERNEL ON kern_mega: Bochs's controller names every
             # sector it moves (the shim's xfers()), so the count is B:'s reads
+            # - and the LBAs themselves, kept for the cache's account below
+            got = set()
+
             def count():
-                return sum(1 for d, _, w in m.xfers() if d == 1 and w == "r")
+                x = [o // 512 for d, o, w in m.xfers() if d == 1 and w == "r"]
+                got.update(x)
+                return len(x)
         else:
             secs = S("dsk_dbg_sec")
 
@@ -273,10 +325,50 @@ def run():
         before = claims(m, S)
 
         # --- 3. the key, and the disk goes HERE ---------------------------
+        # ...or the READ-AHEAD does (SPEC.md 18.95). A fill caches the rest
+        # of the track past whatever missed, so the launch's read of the part
+        # BEFORE this one can leave part 6's sectors in a chunk, and the
+        # fetch is then served out of it with no transfer at all. That is the
+        # cache doing its job and not the loader reading the part: no claim,
+        # no byte of the package's, no int 13h the launch would not have
+        # made (the fill is the call that was reading part 5 anyway). It is
+        # what kern_mega's B: does on Bochs - part 5 is OP_XMS there, read
+        # alone through op_xload, its 3 sectors split at the track and the
+        # second piece filling 9 - and the count was 0. So the account is
+        # per SECTOR: each one the fetch needs either moves at the key or
+        # sits in a live chunk before it, and a chunk that excuses one must
+        # then show the fetch's read MOVING its end past it (RAH_END)
+        need = part_lbas(row)
+        held0 = rah_held(m, S, need)
         c0 = count()
+        if MEGA:
+            got.clear()
         os88marty.key_taken(m, "KeyL")
         os88marty.ui_done(m)
         fetch_secs = moved(c0)
+        held1 = rah_held(m, S, need)
+        served = {lba for lba, (slot, base, end) in held0.items()
+                  if lba in held1 and held1[lba][:2] == (slot, base)
+                  and end != held1[lba][2] > lba - base}
+        if served:
+            say("...and the read-ahead held %d of its %d sectors (LBA %d..%d)"
+                " and served them to the fetch"
+                % (len(served), len(need), min(served), max(served)))
+        stale = sorted(set(held0) - served)
+        if stale:
+            fails.append(
+                "the read-ahead held part %d's LBAs %r before the key and the "
+                "fetch's read did not end past them in that chunk (RAH_END) - "
+                "so they were neither moved at the key nor served out of the "
+                "cache" % (LAZY, stale))
+        if MEGA:
+            short = sorted(need - got - served)
+            if short:
+                fails.append(
+                    "part %d's LBAs %r neither moved at the key (Bochs's FDC "
+                    "log: %r) nor came out of the read-ahead"
+                    % (LAZY, short, sorted(got)))
+        fetch_secs += len(served)
         ps = part_seg(m, seg, LAZY)
         lz = chr(byte(m, seg, "ms_lazy"))
         t = title_of(m, S, seg, wrec)

@@ -63,12 +63,36 @@
  * every adapter: wm_fit clamps the window on a 200-line desktop, and an
  * absolute 20 there is a threshold the screen can never reach, so no scroll
  * is ever detected on the target machine. See c64_flush. */
-#define C64_SHIFT_NUM 4
-#define C64_SHIFT_DEN 5
+#define C64_SHIFT_NUM 1                     /* a QUARTER of the rows dirty (9.4.1) */
+#define C64_SHIFT_DEN 4
 
 static unsigned char c64_sh[C64_SHBYTES];   /* the frame shadow: the pixels
                                              * last blitted, not a model */
 static unsigned char c64_bnd[C64_BSTRIDE * 8];  /* one composed band */
+/* THE SOURCES EACH ROW WAS DRAWN FROM (9.4.1): its forty matrix bytes and
+ * its forty colour nibbles, as they stood when the row was composed in
+ * standard text with no sprite over it, and c64_srcok[r] while they are the
+ * WHOLE row's. A row dirty only through its matrix (c64_rowd 1) whose
+ * sources read the same is the same picture - its character set and its
+ * registers would have made it c64_rowd 2 - so it is skipped, with no
+ * compose and no compare. After a scroll the record slides with the shadow,
+ * and that is what makes a moved row free rather than a signature's hint */
+static unsigned char c64_srcsh[C64_ROWS][C64_COLS * 2];
+static unsigned char c64_srcok[C64_ROWS];
+static unsigned char c64_srct[C64_COLS * 2];
+/* ...and whether row r's glass has sprite pixels on it (9.4.1): a scroll
+ * would carry them with the row, and the row's redraw after is a frame of
+ * the picture in the wrong place - the CUG logo dropping a row and back */
+static unsigned char c64_sglass[C64_ROWS];
+
+/* c64_row_slide - row FROM's shadows to row TO: the pixels and the sources */
+static void c64_row_slide(int to, int from)
+{
+    c64_wmove(c64_sh + C64_X320(to), c64_sh + C64_X320(from), 160);
+    c64_wmove(c64_srcsh[to], c64_srcsh[from], C64_COLS);
+    c64_srcok[to] = c64_srcok[from];
+    c64_sglass[to] = c64_sglass[from];
+}
 /* ...AND ITS PIXEL-DOUBLED TWIN, WHICH IS THE WHOLE OF FULLSCREEN'S 2x (9.8).
  * The frame shadow stays 320x200 and every compare, signature and span is
  * still in C64 pixels: the doubling happens at BLIT TIME and nowhere else, so
@@ -79,7 +103,7 @@ static unsigned char c64_bx2[C64_X2STRIDE * 16];
 /* GLASS pixels per C64 cell: 8 or 16 a side (9.8's tier table). EVERY
  * cell<->pixel conversion in this file and in c64.c reads these two and not
  * the literal 8, which is the whole mechanism. c64_can2x is the TIER's answer
- * (c64_tier_init) and c64_no2x is blit1's. */
+ * (ovl_tier_init) and c64_no2x is blit1's. */
 static int c64_scw = 8, c64_sch = 8;
 static int c64_can2x, c64_no2x;
 static unsigned c64_sig[C64_ROWS];          /* this frame's row signatures */
@@ -130,6 +154,18 @@ static unsigned c64_chr_off;                /*   segment and offset */
 static unsigned c64_chr_lo, c64_chr_hi;     /* ...and its RAM range, if RAM */
 static int c64_chr_isram;
 static int c64_mode;                        /* 0 = standard text (5.1) */
+/* THE ROWS (9.10): each character row's matrix, bitmap, character set and
+ * mode, out of the registers c64_latch resolved for it. Row 0's are also the
+ * old single values the rest of the flush reads (c64_mbase, c64_chr_*,
+ * c64_mode): a screen nobody splits has every row the same */
+static unsigned c64_rmb[C64_ROWS];          /* the matrix */
+static unsigned c64_rbm[C64_ROWS];          /* the bitmap */
+static unsigned c64_rco[C64_ROWS];          /* the character set's offset, */
+static unsigned char c64_rcrom[C64_ROWS];   /* ...in the CHARGEN (1) or RAM */
+static unsigned char c64_rmode[C64_ROWS];   /* 0..7: ECM, BMM, MCM */
+static int c64_rgfx;                        /* a row is not standard text */
+static int c64_spr_any;                     /* a row has a sprite on (9.11) */
+static void c64_spr_dirty(void);
 static int c64_border_lit;
 
 /* --- the cost counters the harness prints (9.7) --------------------------
@@ -142,7 +178,7 @@ static int c64_border_lit;
  * build fails loudly on any that is missed. */
 #ifdef C64_HOST
 static unsigned c64_n_blit, c64_n_fill, c64_n_scroll, c64_n_cell;
-static unsigned c64_n_dirtypg, c64_n_rows, c64_n_x2;
+static unsigned c64_n_dirtypg, c64_n_rows, c64_n_x2, c64_n_proved, c64_n_fsxrun, c64_n_mrun, c64_n_shtest;
 #endif
 
 /* --- the status row's last state, for the delta draw (10) ---------------- */
@@ -161,7 +197,7 @@ static char c64_st_cpup[14];                /* ...and what is ON THE GLASS, so
 static char c64_st_fpsp[14];
 static int c64_st_ok;                       /* the row on the glass is ours */
 /* ...AND TWO MORE, BECAUSE A MESSAGE DOES NOT NECESSARILY TOUCH THE WHOLE ROW
- * (see c64_status). The row has two halves - the two SPEED fields at cells
+ * (see ovl_status). The row has two halves - the two SPEED fields at cells
  * 0..24, and the JOYSTICK/drive/lamp widgets from cell 25 on - and a message
  * of 25 cells or fewer stands on the first and not the second:
  *
@@ -228,12 +264,36 @@ static const unsigned char c64_ega[16] = {
 /* c64_lum_update - rebuild the 16 {and, xor} pairs c64band.inc reads, and the
  * uniform level a mode wave 1 cannot compose falls back to. Called at reset
  * and on every write to $D021 (c64io.c). */
+/* c64_cmask_for - the 16 {and, xor} pairs c64band.inc reads, for a text row
+ * whose paper is BG (9.6). A split screen's rows can differ in $D021 (9.10),
+ * so the flush rebuilds them when a row's paper is not the last one's */
+static int c64_cmask_bg = -1;
+static void c64_cmask_for(int bg)
+{
+    int fg, lb;
+
+    lb = c64_lum[bg];
+    for (fg = 0; fg < 16; fg++) {
+        if (c64_lum[fg] > lb) {
+            c64_cmask[fg * 2] = 0xFF;
+            c64_cmask[fg * 2 + 1] = 0x00;
+        } else if (c64_lum[fg] < lb) {
+            c64_cmask[fg * 2] = 0xFF;
+            c64_cmask[fg * 2 + 1] = 0xFF;
+        } else {
+            c64_cmask[fg * 2] = 0x00;
+            c64_cmask[fg * 2 + 1] = (unsigned char)(lb >= 128 ? 0xFF : 0x00);
+        }
+    }
+    c64_cmask_bg = bg;
+}
+
 static void c64_lum_update(void)
 {
     int fg, bg, lb, wasborder;
 
     wasborder = c64_border_lit;
-    bg = c64_vic[0x21] & 15;
+    bg = c64_rv[0][0x21] & 15;              /* row 0's (9.10) */
     lb = c64_lum[bg];
     for (fg = 0; fg < 16; fg++) {
         if (c64_lum[fg] > lb) {
@@ -249,7 +309,8 @@ static void c64_lum_update(void)
         }
     }
     c64_bgfill = (unsigned char)(lb >= 128 ? 0xFF : 0x00);
-    c64_border_lit = c64_lum[c64_vic[0x20] & 15] > lb;
+    c64_border_lit = c64_lum[c64_rv[0][0x20] & 15] > lb;
+    c64_cmask_bg = bg;
     /* THE BORDER IS FOUR FILLS AND IT IS REDRAWN ONLY WHEN IT WOULD LOOK
      * DIFFERENT. c64_border paints the strips c64_border_lit and nothing
      * else, so a $D020 or $D021 write that leaves that ONE BIT alone - colour
@@ -268,10 +329,44 @@ static void c64_lum_update(void)
 static void c64_row_dirty(int row)
 {
     if ((unsigned)row < C64_ROWS) {         /* 0 <= row < 25, one compare */
-        if (c64_rowd[row] == 0)
-            c64_rowd[row] = 1;              /* a span; 2 is not narrowed to 1 */
+        if (c64_rowd[row] != 2)
+            c64_rowd[row] |= 1;             /* a span; 2 is not narrowed to 1 */
         c64_dirty_any = 1;
     }
+}
+
+/* c64_row_whole - row ROW's SOURCES changed other than through its matrix
+ * cells (a register of its own, its character set or bitmap, a sprite over
+ * it): recomposed whole and then compared. c64_row_dirty's span would be
+ * narrowed against the write window and come out empty (9.10) */
+static void c64_row_whole(int row)
+{
+    if ((unsigned)row < C64_ROWS) {
+        c64_rowd[row] = 2;
+        c64_dirty_any = 1;
+    }
+}
+
+/* c64_row_gspan - row ROW's bitmap bytes for cells C0..C1 were written: bit
+ * 2 of c64_rowd, and the cells in c64_gf/c64_gl (9.10). A dirty PAGE is 32
+ * cells of a bitmap row, so a picture that changes a few bytes a frame
+ * recomposes those cells and not the row's forty */
+static unsigned char c64_gf[C64_ROWS], c64_gl[C64_ROWS];
+static void c64_row_gspan(int row, int c0, int c1)
+{
+    if (c64_rowd[row] == 2)
+        return;
+    if ((c64_rowd[row] & 4) == 0) {
+        c64_gf[row] = (unsigned char)c0;
+        c64_gl[row] = (unsigned char)c1;
+    } else {
+        if (c0 < (int)c64_gf[row])
+            c64_gf[row] = (unsigned char)c0;
+        if (c1 > (int)c64_gl[row])
+            c64_gl[row] = (unsigned char)c1;
+    }
+    c64_rowd[row] |= 4;
+    c64_dirty_any = 1;
 }
 
 /* c64_dirty_all - THE SOURCES changed for every row (a frame register, a
@@ -322,6 +417,7 @@ static void c64_force_rows(int r0, int r1, int c0, int c1)
 
 static void c64_sh_inval(void)
 {
+    os88_memset(c64_srcok, 0, C64_ROWS);    /* no row's sources are known */
     c64_sh_ok = 0;
     c64_st_ok = 0;
     c64_dirty_all();
@@ -381,7 +477,22 @@ static void c64_dirty_scan(void)
     /* the matrix: the window's row range AND the row's own pages */
     /* (nested `if`s, not `&&`/`||` chains, which SmallerC makes a 0/1
      * value per operand - apps size pass 1) */
-    if (c64_whi >= c64_wlo)
+    if (c64_rsplit) {
+        /* A SPLIT (9.10): each row against its OWN matrix */
+        if (c64_whi >= c64_wlo)
+            for (i = 0; i < C64_ROWS; i++) {
+                a0 = c64_rmb[i] + C64_X40(i);
+                a1 = a0 + C64_COLS - 1;
+                if (c64_whi >= a0)
+                    if (c64_wlo <= a1) {
+                        if (c64_pg_dirty(a0 >> 8))
+                            c64_row_dirty(i);
+                        else if (((a1 ^ a0) & 0xFF00) != 0)
+                            if (c64_pg_dirty(a1 >> 8))
+                                c64_row_dirty(i);
+                    }
+            }
+    } else if (c64_whi >= c64_wlo)
         if (c64_whi >= c64_mbase)
             if (c64_wlo < c64_mbase + C64_CELLS) {
                 unsigned f = (c64_wlo > c64_mbase) ? (c64_wlo - c64_mbase) : 0;
@@ -412,13 +523,42 @@ static void c64_dirty_scan(void)
             page = b * 8 + bit;
             a0 = (unsigned)page << 8;
             a1 = a0 + 255;
-            /* a RAM character set: a glyph can be anywhere, so every row */
-            if (c64_chr_isram)
-                if (a1 >= c64_chr_lo)
-                    if (a0 <= c64_chr_hi)
-                        c64_dirty_all();
+            if ((c64_rsplit | c64_rgfx) == 0) {
+                /* a RAM character set: a glyph can be anywhere, so every
+                 * row (the one-mode, one-set screen: today's test) */
+                if (c64_chr_isram)
+                    if (a1 >= c64_chr_lo)
+                        if (a0 <= c64_chr_hi)
+                            c64_dirty_all();
+                continue;
+            }
+            /* ...and row by row when the rows differ, or a row reads a
+             * bitmap: a bitmap row's 320 bytes, a text row's character set */
+            for (i = 0; i < C64_ROWS; i++) {
+                unsigned g0, g1;
+                if (c64_rmode[i] & 2) {
+                    g0 = c64_rbm[i] + C64_X320(i);
+                    g1 = g0 + 319;
+                    if (a1 >= g0)
+                        if (a0 <= g1)
+                            c64_row_gspan(i,
+                                a0 > g0 ? (int)((a0 - g0) >> 3) : 0,
+                                a1 < g1 ? (int)((a1 - g0) >> 3) : C64_COLS - 1);
+                    continue;
+                } else if (c64_rcrom[i]) {
+                    continue;
+                } else {
+                    g0 = c64_rco[i];
+                    g1 = g0 + 2047;
+                }
+                if (a1 >= g0)
+                    if (a0 <= g1)
+                        c64_row_whole(i);
+            }
         }
     }
+    /* ...and the sprites' own pages and pointers (9.11) */
+    c64_spr_dirty();
 }
 
 /* ==========================================================================
@@ -430,38 +570,813 @@ static void c64_dirty_scan(void)
  * which is how a stock machine gets its face, and why the boot screen works
  * with no charset anywhere in RAM.
  * ========================================================================*/
+
 static void c64_frame_regs(void)
 {
-    unsigned bank, cb, co;
+    unsigned bank, cb, co, v18;
+    unsigned char *rv;
+    int r;
 
-    bank = (unsigned)((~c64_cia[1][0x00]) & 3) << 14;
-    c64_mbase = bank + ((unsigned)((c64_vic[0x18] >> 4) & 15) << 10);
-    cb = ((unsigned)((c64_vic[0x18] >> 1) & 7) << 11);
-    co = cb;
-    cb += bank;
-    /* the CHARGEN is seen in banks 0 and 2 (bank bit 14 clear) at $1000 and
-     * $1800 (co & $3000 == $1000) - one compare for the four-term test
-     * `(bank == 0 || bank == $8000) && co >= $1000 && co < $2000`, since
-     * bank is only ever bits 14-15 and co a multiple of $800 below $4000 */
-    if (((bank & 0x4000) | (co & 0x3000)) == 0x1000) {
+    rv = c64_rv[0];
+    for (r = 0; r < C64_ROWS; r++) {
+        bank = (unsigned)((~rv[C64_RV_DD]) & 3) << 14;
+        v18 = rv[0x18];
+        c64_rmb[r] = bank + (((v18 >> 4) & 15) << 10);
+        c64_rbm[r] = bank + ((v18 & 8) << 10);
+        cb = ((v18 >> 1) & 7) << 11;
+        co = cb;
+        cb += bank;
+        /* the CHARGEN is seen in banks 0 and 2 (bank bit 14 clear) at $1000
+         * and $1800 (co & $3000 == $1000) - one compare for the four-term
+         * test `(bank == 0 || bank == $8000) && co >= $1000 && co < $2000`,
+         * since bank is only ever bits 14-15 and co a multiple of $800 */
+        if (((bank & 0x4000) | (co & 0x3000)) == 0x1000) {
+            c64_rcrom[r] = 1;
+            c64_rco[r] = C64_ROM_CHARGEN + (co - 0x1000);
+        } else {
+            c64_rcrom[r] = 0;
+            c64_rco[r] = cb;
+        }
+        /* $D011 bit 5 = BMM, bit 6 = ECM; $D016 bit 4 = MCM (5.1) */
+        c64_rmode[r] = (unsigned char)(((rv[0x11] >> 4) & 6) | ((rv[0x16] >> 4) & 1));
+        rv += C64_RVN;
+    }
+    c64_mbase = c64_rmb[0];
+    if (c64_rcrom[0]) {
         c64_chr_isram = 0;
         c64_chr_seg = c64_m.romseg;
-        c64_chr_off = C64_ROM_CHARGEN + (co - 0x1000);
         c64_chr_lo = 0;
         c64_chr_hi = 0;
     } else {
         c64_chr_isram = 1;
         c64_chr_seg = c64_m.ramseg;
-        c64_chr_off = cb;
-        c64_chr_lo = cb;
-        c64_chr_hi = cb + 2047;
+        c64_chr_lo = c64_rco[0];
+        c64_chr_hi = c64_rco[0] + 2047;
     }
-    /* $D011 bit 5 = BMM, bit 6 = ECM; $D016 bit 4 = MCM. Wave 1 composes
-     * mode 0 and c64band.inc fills the rest with the background until wave 4
-     * writes them (docs/plans/completed/C64-PORT-PLAN.md wave 4). */
-    c64_mode = ((c64_vic[0x11] >> 4) & 6)  /* ECM, BMM -> bits 2, 1 */
-             | ((c64_vic[0x16] >> 4) & 1);
+    c64_chr_off = c64_rco[0];
+    c64_mode = c64_rmode[0];
+    c64_rgfx = 0;
+    for (r = 0; r < C64_ROWS; r++)
+        c64_rgfx |= c64_rmode[r];
+    c64_fr_stale = 0;
     c64_watch_set();
+}
+
+/* ==========================================================================
+ * THE OTHER MODES (5.1, 9.6): bitmap, multicolour and extended-colour, in
+ * 1bpp. Text keeps 9.6's crisp ink-against-paper rule; a picture made of
+ * more colours than two a cell is ORDERED-DITHERED by the VIC's luminance on
+ * a 4x4 Bayer matrix, the same at every pixel, so neighbouring cells of
+ * different colour pairs agree with one another. c64_dmask[colour][y & 3] is
+ * the colour's pattern for an 8-pixel byte on that line (ovl_dither_init).
+ * ========================================================================*/
+unsigned char c64_dmask[16][4];            /* (c64band.inc reads it) */
+static unsigned char c64_xm[C64_COLS];      /* a row's matrix bytes */
+static unsigned char c64_xb[320];           /* ...its bitmap bytes */
+
+static unsigned c64_xexp[256];              /* X-expansion (9.11) */
+static unsigned char c64_sxf[C64_ROWS], c64_sxl[C64_ROWS];
+static void ovl_dither_init(void)
+{
+    static const unsigned char bay[4][4] = {
+        { 8, 136, 40, 168 }, { 200, 72, 232, 104 },
+        { 56, 184, 24, 152 }, { 248, 120, 216, 88 } };
+    int c, y, x;
+    unsigned m;
+
+    for (c = 0; c < 256; c++) {             /* a byte, each bit doubled */
+        m = 0;
+        for (x = 0; x < 8; x++)
+            if (c & (0x80 >> x))
+                m |= 0xC000u >> (x << 1);
+        c64_xexp[c] = m;
+    }
+    for (c = 0; c < C64_ROWS; c++)
+        c64_sxf[c] = C64_COLS;              /* no sprite over any row */
+    for (c = 0; c < 16; c++)
+        for (y = 0; y < 4; y++) {
+            m = 0;
+            for (x = 0; x < 8; x++)
+                if (c64_lum[c] > bay[y][x & 3])
+                    m |= 0x80 >> x;
+            c64_dmask[c][y] = (unsigned char)m;
+        }
+}
+
+/* c64_mcpix - a multicolour byte B (four 2-pixel pairs) in 1bpp: each pair
+ * value's pixels take that value's colour pattern, M0..M3 (c64_dmask for
+ * the colour, on this line). No per-pair loop and no shift by a count: the
+ * pairs' low and high bits are split into four selector masks at once,
+ * each doubled to both pixels of its pair */
+static unsigned char c64_mcpix(unsigned b, unsigned m0, unsigned m1,
+                               unsigned m2, unsigned m3)
+{
+    unsigned h, l, s0, s1, s2, s3;
+
+    h = (b >> 1) & 0x55;
+    l = b & 0x55;
+    s3 = h & l;
+    s2 = h ^ s3;                            /* h & ~l */
+    s1 = l ^ s3;                            /* l & ~h */
+    s0 = 0x55 ^ (h | l);
+    s0 |= s0 << 1;
+    s1 |= s1 << 1;
+    s2 |= s2 << 1;
+    s3 |= s3 << 1;
+    return (unsigned char)((s0 & m0) | (s1 & m1) | (s2 & m2) | (s3 & m3));
+}
+
+/* the glyph or bitmap bytes of one cell, out of the package's copy */
+static unsigned char c64_g8[8];
+
+/* c64_bandx - row ROW's cells F..L into the band, in a mode c64band.inc does
+ * not compose (c64_rmode[row] != 0). One loop per mode, the mode decided
+ * once a row */
+static void c64_bandx(int row, int f, int l)
+{
+    unsigned char *rv, *dst, *xb;
+    unsigned char *d0, *d1, *d2, *d3;
+    unsigned b, gseg, goff, code, a, y4;
+    int mode, c, y, bg, lb, lf, ecm;
+
+    rv = c64_rv[row];
+    mode = c64_rmode[row];
+    bg = rv[0x21] & 15;
+    c64_zcopy_out(c64_xm + f, c64_rmb[row] + C64_X40(row) + f, l - f + 1);
+    d0 = c64_dmask[bg];
+    if (mode & 4) {
+        if (mode != 4) {                    /* 5, 6, 7: the VIC shows black */
+            for (c = f; c <= l; c++)
+                for (y = 0, dst = c64_bnd + c; y < 8; y++, dst += C64_BSTRIDE)
+                    *dst = 0;
+            return;
+        }
+    }
+    if (mode & 2) {                         /* the bitmaps, 2 and 3: the
+                                             * hot loop, in c64band.inc */
+        c64_zcopy_out(c64_xb + (f << 3),
+                      c64_rbm[row] + C64_X320(row) + (f << 3), (l - f + 1) << 3);
+        c64_bandbm(c64_bnd + f, c64_xm + f, c64_xb + (f << 3),
+                   c64_col + C64_X40(row) + f, l - f + 1, mode & 1, bg);
+        return;
+    }
+    /* the texts, 1 (multicolour) and 4 (extended background colour) */
+    gseg = c64_rcrom[row] ? c64_m.romseg : c64_m.ramseg;
+    goff = c64_rco[row];
+    ecm = mode & 4;
+    d1 = c64_dmask[rv[0x22] & 15];
+    d2 = c64_dmask[rv[0x23] & 15];
+    for (c = f; c <= l; c++) {
+        code = c64_xm[c];
+        a = c64_col[C64_X40(row) + c] & 15;
+        lb = bg;
+        if (ecm) {
+            lb = rv[0x21 + (code >> 6)] & 15;
+            code &= 63;
+        }
+        b = goff + (code << 3);
+        for (y = 0; y < 8; y++)
+            c64_g8[y] = (unsigned char)os88_peek(gseg, b + y);
+        dst = c64_bnd + c;
+        if (ecm == 0)
+            if (a & 8) {                    /* a multicolour cell */
+                d3 = c64_dmask[a & 7];
+                for (y = 0; y < 8; y++, dst += C64_BSTRIDE) {
+                    y4 = y & 3;
+                    *dst = c64_mcpix(c64_g8[y], d0[y4], d1[y4], d2[y4], d3[y4]);
+                }
+                continue;
+            }
+        if (ecm == 0)
+            a &= 7;                         /* (a hires cell, colours 0-7) */
+        /* ink against paper, 9.6's rule, cell by cell */
+        lf = c64_lum[a];
+        lb = c64_lum[lb];
+        for (y = 0; y < 8; y++, dst += C64_BSTRIDE) {
+            if (lf > lb)
+                *dst = c64_g8[y];
+            else if (lf < lb)
+                *dst = (unsigned char)~c64_g8[y];
+            else
+                *dst = (unsigned char)(lb >= 128 ? 0xFF : 0x00);
+        }
+    }
+}
+
+/* ==========================================================================
+ * THE SPRITES (9.11): drawn over each composed row from THAT ROW's sprite
+ * registers (9.10), so a multiplexer that moves its eight down the screen
+ * mid-frame shows each instance where it was shown. Each sprite pixel is
+ * lit or dark against the row's paper by luminance (9.6); priority behind
+ * the foreground ($D01B) is not modelled (5.3) - the collision registers
+ * are, below (5.3.1).
+ * c64_spsig[r] is what is over row r - a sum over the sprites that touch it
+ * of their position, flags, colours, data pointer and data - and a row whose
+ * signature changed is recomposed whole; c64_spr_dirty takes it once a flush.
+ * ========================================================================*/
+static unsigned c64_spsig[C64_ROWS];
+static unsigned char c64_spd[63];           /* one sprite's data */
+#define c64_pfg  (c64_bx2 + 704)            /* [64] ovl_spr_fg's foreground:
+                                             * spr_draw runs before band_x2 */
+#define c64_pfs  (c64_bx2 + 768)            /* [48] a fullscreen line's
+                                             * pixels under a sprite behind */
+
+
+/* sprite k in row set RV: its top display line, height, left pixel, width,
+ * and data address; 0 when it is off or nowhere on the display.
+ *
+ * THE EIGHT SPRITES' GEOMETRY IS WORKED OUT ONCE A REGISTER SET, not once a
+ * row and a sprite: a program that sets its sprites above the display gives
+ * all 25 rows one set, and the Bright Pixel card spent 16% of a 286 here,
+ * reading each pointer through a call per row. c64_sg* is that set's answer,
+ * keyed on the set's 48 bytes and its matrix, and dropped at the start of
+ * every flush's sprite pass (c64_sg_ok = 0) because the POINTERS are RAM the
+ * machine may have rewritten since - nothing runs during a flush */
+static int c64_sp_y, c64_sp_h, c64_sp_x, c64_sp_w;
+static unsigned c64_sp_data;
+static int c64_sg_ok;
+static int c64_sg_row;                      /* the row it was last asked for */
+static unsigned char c64_sg_key[C64_RVN];
+static unsigned c64_sg_mb;
+static unsigned char c64_sg_on;             /* enabled AND across the window */
+static int c64_sgy[8], c64_sgh[8], c64_sgx[8], c64_sgw[8];
+static unsigned c64_sgd[8];
+static unsigned char c64_sgp[8];            /* the eight pointers */
+
+static void c64_sg_fill(const unsigned char *rv, unsigned mb)
+{
+    unsigned bank, x;
+    int k, m;
+
+    os88_memcpy(c64_sg_key, rv, C64_RVN);
+    c64_sg_mb = mb;
+    c64_sg_ok = 1;
+    c64_sg_on = 0;
+    if (rv[0x15] == 0)
+        return;
+    c64_zcopy_out(c64_sgp, mb + 0x3F8, 8);
+    bank = (unsigned)((~rv[C64_RV_DD]) & 3) << 14;
+    for (k = 0, m = 1; k < 8; k++, m <<= 1) {
+        if ((rv[0x15] & m) == 0)
+            continue;
+        c64_sgh[k] = (rv[0x17] & m) ? 42 : 21;
+        c64_sgw[k] = (rv[0x1D] & m) ? 48 : 24;
+        c64_sgy[k] = (int)rv[1 + k + k] - 50;   /* Y 50 is the window's top */
+        x = (unsigned)rv[k + k] | ((rv[0x10] & m) ? 0x100 : 0);
+        c64_sgx[k] = (int)x - 24;           /* X 24 is its left edge */
+        if (c64_sgx[k] + c64_sgw[k] <= 0 || c64_sgx[k] >= 320)
+            continue;
+        c64_sgd[k] = bank + ((unsigned)c64_sgp[k] << 6);
+        c64_sg_on |= (unsigned char)m;
+    }
+}
+
+static int c64_spr_geom(const unsigned char *rv, int row, int k)
+{
+    int r8;
+
+    if ((rv[0x15] & (1 << k)) == 0)
+        return 0;
+    /* the same row as the last call, or the next one down when the latch
+     * says it repeats the row above (c64_rsame): a hit with no compare. Any
+     * other row compares the set */
+    if (!c64_sg_ok || (row != c64_sg_row
+                       && !(row == c64_sg_row + 1 && c64_rsame[row])
+                       && (c64_sg_mb != c64_rmb[row]
+                           || c64_rvdiff(rv, c64_sg_key))))
+        c64_sg_fill(rv, c64_rmb[row]);
+    c64_sg_row = row;
+    if ((c64_sg_on & (1 << k)) == 0)
+        return 0;
+    r8 = row << 3;
+    c64_sp_y = c64_sgy[k];
+    c64_sp_h = c64_sgh[k];
+    if (c64_sp_y + c64_sp_h <= r8 || c64_sp_y >= r8 + 8)
+        return 0;
+    c64_sp_x = c64_sgx[k];
+    c64_sp_w = c64_sgw[k];
+    c64_sp_data = c64_sgd[k];
+    return 1;
+}
+
+static unsigned char c64_spg0[C64_ROWS], c64_spg1[C64_ROWS];  /* the pages
+                                             * a row's sprites' data is on */
+/* (c64_sxf/c64_sxl, beside ovl_dither_init: the cells a row's sprites were
+ * over, C64_COLS..0 when none) */
+static int c64_sef, c64_sel;
+static void c64_spr_dirty(void)
+{
+    int r, k, any, dd, f, l;
+    unsigned sig;
+    unsigned char *rv;
+
+    c64_sg_ok = 0;                          /* the pointers may have moved */
+    any = 0;
+    rv = c64_rv[0];
+    for (r = 0; r < C64_ROWS; r++, rv += C64_RVN)
+        any |= rv[0x15];
+    if ((any | c64_spr_any) == 0)
+        return;                             /* no sprite, now or last flush */
+    c64_spr_any = any;
+    rv = c64_rv[0];
+    for (r = 0; r < C64_ROWS; r++, rv += C64_RVN) {
+        /* A ROW WHOSE REGISTERS DID NOT MOVE, over pages nobody wrote, has
+         * the signature it had: its sprites' data pages and its matrix's
+         * pointer page are c64_spg0..c64_spg1 and c64_spgp (9.11) */
+        if (c64_rchg[r] == 0)
+            if (c64_spsig[r] != 0) {
+                for (k = c64_spg0[r]; k <= (int)c64_spg1[r]; k++)
+                    if (c64_pg_dirty((unsigned)k))
+                        break;
+                if (k > (int)c64_spg1[r])
+                    if (!c64_pg_dirty((c64_rmb[r] + 0x3F8) >> 8))
+                        continue;
+            } else {
+                continue;                   /* nothing over it then, and only
+                                             * a register can bring one */
+            }
+        c64_rchg[r] = 0;
+        sig = 0;
+        dd = 0;
+        c64_spg0[r] = 255;
+        c64_spg1[r] = 0;
+        c64_sef = C64_COLS;                     /* the cells covered: none */
+        c64_sel = 0;
+        if (rv[0x15])
+            for (k = 0; k < 8; k++)
+                if (c64_spr_geom(rv, r, k)) {
+                    sig += (unsigned)(k + 1) * 0x9E37u;
+                    sig = (sig << 3) ^ (sig >> 13) ^ (unsigned)c64_sp_x;
+                    sig = (sig << 3) ^ (sig >> 13) ^ (unsigned)c64_sp_y;
+                    sig = (sig << 3) ^ (sig >> 13) ^ c64_sp_data
+                        ^ ((unsigned)rv[0x27 + k] << 8) ^ rv[0x25] ^ ((unsigned)rv[0x26] << 4)
+                        ^ (((rv[0x1C] >> k) & 1) << 15) ^ ((unsigned)c64_sp_w << 7)
+                        ^ (((rv[0x1B] >> k) & 1) << 14);
+                    sig |= 1;               /* a row with a sprite is never 0 */
+                    if ((c64_sp_data >> 8) < c64_spg0[r])
+                        c64_spg0[r] = (unsigned char)(c64_sp_data >> 8);
+                    if (((c64_sp_data + 62) >> 8) > c64_spg1[r])
+                        c64_spg1[r] = (unsigned char)((c64_sp_data + 62) >> 8);
+                    f = c64_sp_x < 0 ? 0 : (c64_sp_x >> 3);
+                    l = c64_sp_x + c64_sp_w - 1;
+                    l = l > 319 ? C64_COLS - 1 : (l >> 3);
+                    if (f < c64_sef)
+                        c64_sef = f;
+                    if (l > c64_sel)
+                        c64_sel = l;
+                    if (c64_pg_dirty(c64_sp_data >> 8))
+                        dd = 1;                 /* its data was written */
+                    else if (c64_pg_dirty((c64_sp_data + 62) >> 8))
+                        dd = 1;
+                }
+        if (sig == 0)                           /* (0 means `nothing here`) */
+            if (dd == 0)
+                if (c64_spsig[r] == 0)
+                    continue;
+        if (sig != c64_spsig[r] || dd) {
+            /* the cells under the sprites before AND after: what was drawn
+             * over and what will be (9.11) */
+            f = c64_sxf[r];
+            l = c64_sxl[r];
+            if (c64_sef < f)
+                f = c64_sef;
+            if (c64_sel > l)
+                l = c64_sel;
+            c64_spsig[r] = sig;
+            c64_sxf[r] = (unsigned char)c64_sef;
+            c64_sxl[r] = (unsigned char)c64_sel;
+            if (f <= l)
+                c64_row_gspan(r, f, l);
+        }
+    }
+}
+
+/* c64_spr_draw - row ROW's sprites over its band, cells F..L. A line at a
+ * time: a multicolour byte's pairs are split into selector masks as
+ * c64_mcpix splits them, an X-expanded byte is two (c64_xexp), and the line
+ * goes onto the band in one c64band.inc call (c64_sprrow) */
+static unsigned char c64_son[6], c64_slit[6];
+static void c64_spr_draw(int row, int f, int l)
+{
+    unsigned char *rv, *dst, *sd;
+    int k, y, y0, y1, sl, j, sh, cell0, base, mc, xs, bg, l1, l2, l3, md, bh;
+
+    rv = c64_rv[row];
+    if (rv[0x15] == 0)
+        return;
+    bg = c64_lum[rv[0x21] & 15];
+    l1 = c64_lum[rv[0x25] & 15] > bg;
+    l3 = c64_lum[rv[0x26] & 15] > bg;
+    for (k = 7; k >= 0; k--) {              /* sprite 0 drawn last: on top */
+        if (!c64_spr_geom(rv, row, k))
+            continue;
+        /* only the band lines this sprite is on, and only their data */
+        y0 = c64_sp_y - (row << 3);
+        y1 = y0 + c64_sp_h;
+        if (y0 < 0)
+            y0 = 0;
+        if (y1 > 8)
+            y1 = 8;
+        j = (row << 3) + y0 - c64_sp_y;     /* the first sprite line... */
+        sl = (row << 3) + y1 - 1 - c64_sp_y;    /* ...and the last */
+        if (c64_sp_h == 42) {
+            j >>= 1;
+            sl >>= 1;
+        }
+        j = j + j + j;
+        c64_zcopy_out(c64_spd + j, c64_sp_data + j, sl + sl + sl + 3 - j);
+        mc = (rv[0x1C] >> k) & 1;
+        xs = (c64_sp_w == 48) ? 1 : 0;
+        l2 = c64_lum[rv[0x27 + k] & 15] > bg;
+        md = mc | (xs << 1) | (l1 << 2) | (l2 << 3) | (l3 << 4);
+        base = c64_sp_x + 32;               /* >= 8: no negative shift */
+        cell0 = (base >> 3) - 4;
+        sh = base & 7;
+        bh = (rv[0x1B] >> k) & 1;           /* BEHIND the foreground (5.3) */
+        if (bh)
+            ovl_spr_fg(row, cell0);
+        dst = c64_bnd + y0 * C64_BSTRIDE;
+        for (y = y0; y < y1; y++, dst += C64_BSTRIDE) {
+            sl = (row << 3) + y - c64_sp_y;
+            if (c64_sp_h == 42)
+                sl >>= 1;
+            sd = c64_spd + sl + sl + sl;
+            c64_sprconv(sd, c64_son, c64_slit, md, c64_xexp);
+            if (bh)
+                c64_sprbehind(c64_son, xs ? 6 : 3, sh, c64_pfg + y);
+            c64_sprrow(dst, c64_son, c64_slit, xs ? 6 : 3, cell0, sh, f, l);
+        }
+    }
+}
+
+/* ==========================================================================
+ * SPRITE COLLISIONS (C64-SPEC 5.3.1): $D01E, sprite with sprite, and $D01F,
+ * sprite with foreground, worked out when the program READS one and only
+ * then - once a frame each, so a second read in the frame finds what the
+ * first cleared, as on the machine, where the bits come back only as the
+ * beam passes the sprites again - or at a frame's start when $D01A enables a
+ * collision IRQ. A program that never reads them pays nothing.
+ *
+ * FROM THE REGISTERS AT THE READ: positions, expansion, multicolour and the
+ * pointers as the program has them then, which is what a game that reads in
+ * its interrupt has just drawn; the foreground under them from the display
+ * latch's row sets (9.10), with the fine scroll the screen has. A
+ * multiplexer's other instances (9.11) are not seen - only the eight
+ * sprites as they stand.
+ *
+ * A pixel is OPAQUE where it is not transparent - hires a set bit, a
+ * multicolour pair anything but 00 - and FOREGROUND where the VIC calls it
+ * so: a set bit, and in multicolour a pair 10 or 11. The line test is
+ * c64_colrow in c64band.inc.
+ * ========================================================================*/
+/* ITS SCRATCH IS c64_bx2's and c64_bnd's, which only a flush's bands use,
+ * and no flush runs inside a slice: ~1,400 bytes the package's 63.5KB
+ * (SPEC.md 20.1.1) would otherwise carry for registers most programs never
+ * read */
+#define c64_cptr (c64_bx2 + 40)             /* [8] the eight pointers */
+#define c64_cff  (c64_bx2 + 184)            /* [57] all ones: c64_colrow
+                                             * against it is "any byte set" */
+#define c64_cmk  (c64_bx2 + 256)            /* [147] a sprite's 21 line
+                                             * masks, 7 bytes apart */
+#define c64_cda  (c64_bx2 + 404)            /* [63] a pair's data, each */
+#define c64_cdb  (c64_bx2 + 468)
+#define c64_ctmp (c64_bx2 + 532)            /* [16] c64_colpair's scratch */
+#define c64_cbk  (c64_bnd)                  /* [256] a glyph's blankness this
+                                             * scan: 0 unknown, 1 blank, 2 not */
+#define c64_c8   (c64_bnd + 256)            /* [8] one glyph */
+#define c64_cbx  (c64_bnd + 264)            /* [56] the cells under a sprite,
+                                             * 8 bytes each, zero off-screen */
+static int c64_cmks;                        /* the sprite c64_cmk holds */
+static int c64_csx[8], c64_csy[8], c64_csw[8], c64_csh[8];  /* the geometry:
+                                             * real arrays, 80 bytes, because
+                                             * SmallerC computes a cast's
+                                             * address at every access and the
+                                             * scan is all accesses */
+static unsigned c64_csd[8];
+static int c64_con;                         /* the sprites on, as geometry */
+static unsigned c64_cgfr;                   /* ...was taken in this frame */
+
+/* sprite K's mode for c64_sprconv: multicolour, X-expanded - its ON is
+ * the opaque mask, 3 bytes or 6 */
+static int ovl_col_md(int k)
+{
+    return ((c64_vic[0x1C] >> k) & 1) | ((c64_csw[k] == 48) << 1);
+}
+
+/* the eight sprites as the registers stand: the mask of those on */
+static int ovl_col_geom(void)
+{
+    unsigned bank, x;
+    int k, m, en;
+
+    en = c64_vic[0x15];
+    if (en == 0)
+        return 0;
+    bank = (unsigned)((~c64_cia[1][0]) & 3) << 14;
+    c64_zcopy_out(c64_cptr, bank + (((unsigned)c64_vic[0x18] >> 4) << 10)
+                  + 0x3F8, 8);
+    for (k = 0, m = 1; k < 8; k++, m <<= 1) {
+        if ((en & m) == 0)
+            continue;
+        c64_csh[k] = (c64_vic[0x17] & m) ? 42 : 21;
+        c64_csw[k] = (c64_vic[0x1D] & m) ? 48 : 24;
+        c64_csy[k] = (int)c64_vic[1 + k + k] - 50;
+        x = (unsigned)c64_vic[k + k] | ((c64_vic[0x10] & m) ? 0x100 : 0);
+        c64_csx[k] = (int)x - 24;
+        c64_csd[k] = bank + ((unsigned)c64_cptr[k] << 6);
+    }
+    return en;
+}
+
+/* sprite K's 21 masks, made once a scan (the $D01F scan's, one sprite at
+ * a time) */
+static unsigned char *ovl_col_mk(int k)
+{
+    if (c64_cmks != k) {
+        c64_cmks = k;
+        c64_zcopy_out(c64_spd, c64_csd[k], 63);
+        c64_sprmasks(c64_spd, c64_cmk, ovl_col_md(k), c64_xexp);
+    }
+    return c64_cmk;
+}
+
+static int ovl_col_ss(int on)
+{
+    int i, j, a, b, y0, y1, d, n, la, lb, ya, yb, ss;
+
+    ss = 0;
+    for (i = 0; i < 7; i++) {
+        if ((on & (1 << i)) == 0)
+            continue;
+        for (j = i + 1; j < 8; j++) {
+            if ((on & (1 << j)) == 0)
+                continue;
+            if ((ss >> i) & (ss >> j) & 1)
+                continue;                   /* both already known */
+            a = i;
+            b = j;
+            if (c64_csx[j] < c64_csx[i]) {
+                a = j;
+                b = i;
+            }
+            d = c64_csx[b] - c64_csx[a];
+            if (d >= c64_csw[a])
+                continue;
+            y0 = c64_csy[a] > c64_csy[b] ? c64_csy[a] : c64_csy[b];
+            y1 = c64_csy[a] + c64_csh[a];
+            if (c64_csy[b] + c64_csh[b] < y1)
+                y1 = c64_csy[b] + c64_csh[b];
+            if (y0 >= y1)
+                continue;
+            c64_zcopy_out(c64_cda, c64_csd[a], 63);
+            c64_zcopy_out(c64_cdb, c64_csd[b], 63);
+            /* B's bytes that can meet A: those starting inside it */
+            n = (c64_csw[a] - (d & ~7)) >> 3;
+            if (n > (c64_csw[b] >> 3))
+                n = c64_csw[b] >> 3;
+            la = y0 - c64_csy[a];
+            lb = y0 - c64_csy[b];
+            ya = c64_csh[a] == 42;
+            yb = c64_csh[b] == 42;
+            if (c64_colpair(c64_cda + (ya ? la >> 1 : la) * 3,
+                            c64_cdb + (yb ? lb >> 1 : lb) * 3, n, d, y1 - y0,
+                            ya | ((ya & la) << 1) | (yb << 2)
+                            | ((yb & lb) << 3),
+                            ovl_col_md(a) | (ovl_col_md(b) << 2), c64_xexp,
+                            c64_ctmp))
+                ss |= (1 << a) | (1 << b);
+        }
+    }
+    return ss;
+}
+
+/* the foreground of graphics row ROW's cells C0..C1 into c64_xb, eight
+ * bytes a cell, as the composer lays them out */
+static void ovl_col_bgrow(int row, int c0, int c1)
+{
+    unsigned char *rv, *g;
+    unsigned bank, v18, co, cb;
+    int mode, n, c, i, mc;
+
+    rv = c64_rv[row];
+    bank = (unsigned)((~rv[C64_RV_DD]) & 3) << 14;
+    v18 = rv[0x18];
+    mode = ((rv[0x11] >> 4) & 6) | ((rv[0x16] >> 4) & 1);
+    n = c1 - c0 + 1;
+    g = c64_xb + (c0 << 3);
+    if (mode & 2) {
+        c64_zcopy_out(g, bank + ((v18 & 8) << 10) + C64_X320(row) + (c0 << 3),
+                      n << 3);
+    } else {
+        c64_zcopy_out(c64_xm + c0, bank + (((v18 >> 4) & 15) << 10)
+                      + C64_X40(row) + c0, n);
+        co = ((v18 >> 1) & 7) << 11;
+        cb = bank + co;
+        if (((bank & 0x4000) | (co & 0x3000)) == 0x1000)
+            c64_c8glyph(g, c64_xm + c0, n, c64_m.romseg,
+                        C64_ROM_CHARGEN + (co - 0x1000),
+                        (mode == 4) ? 0x3F : 0xFF);
+        else
+            c64_c8glyph(g, c64_xm + c0, n, c64_m.ramseg, cb,
+                        (mode == 4) ? 0x3F : 0xFF);
+    }
+    if ((mode & 1) == 0)
+        return;
+    for (c = c0; c <= c1; c++, g += 8) {    /* multicolour: 10 and 11 */
+        mc = (mode & 2) ? 1 : (c64_col[C64_X40(row) + c] & 8);
+        if (mc)
+            for (i = 0; i < 8; i++) {
+                unsigned b = g[i] & 0xAA;
+                g[i] = (unsigned char)(b | (b >> 1));
+            }
+    }
+}
+
+/* ovl_spr_fg - SPRITE PRIORITY ($D01B, 5.3): the foreground of row ROW's
+ * seven cells from C0, into c64_pfg (8 bytes a cell, zero off the screen),
+ * for c64_sprbehind to take out of a sprite that is behind it. The same
+ * foreground the collision scan reads (ovl_col_bgrow); the composer's own
+ * c64_xb is spent by then. Only a sprite behind pays it, once a row */
+static void ovl_spr_fg(int row, int c0)
+{
+    int d0 = c0 < 0 ? 0 : c0, d1 = c0 + 6 > 39 ? 39 : c0 + 6;
+
+    os88_memset(c64_pfg, 0, 64);
+    if (d0 > d1)
+        return;
+    ovl_col_bgrow(row, d0, d1);
+    os88_memcpy(c64_pfg + ((d0 - c0) << 3), c64_xb + (d0 << 3),
+                (d1 - d0 + 1) << 3);
+}
+
+/* ROW ROW's cells D0..D1 hold only blank glyphs - text, and every code's
+ * eight bytes zero - so no sprite can meet its foreground. Each code's
+ * answer is taken once a scan (c64_cbk), from the character set the row
+ * reads; a bitmap row is never called blank here */
+static unsigned c64_cbk_seg, c64_cbk_off;
+static int ovl_col_blank(int row, int d0, int d1)
+{
+    unsigned char *rv;
+    unsigned bank, co, seg, off, a;
+    int c, code, i, v, mask;
+
+    rv = c64_rv[row];
+    if (rv[0x11] & 0x20)
+        return 0;                           /* a bitmap */
+    bank = (unsigned)((~rv[C64_RV_DD]) & 3) << 14;
+    co = ((rv[0x18] >> 1) & 7) << 11;
+    if (((bank & 0x4000) | (co & 0x3000)) == 0x1000) {
+        seg = c64_m.romseg;
+        off = C64_ROM_CHARGEN + (co - 0x1000);
+    } else {
+        seg = c64_m.ramseg;
+        off = bank + co;
+    }
+    if (seg != c64_cbk_seg || off != c64_cbk_off) {
+        os88_memset(c64_cbk, 0, 256);       /* another character set */
+        c64_cbk_seg = seg;
+        c64_cbk_off = off;
+    }
+    mask = (rv[0x11] & 0x40) ? 0x3F : 0xFF;
+    a = bank + ((((unsigned)rv[0x18] >> 4) & 15) << 10) + C64_X40(row) + d0;
+    c = 0;
+    for (;;) {
+        v = c64_colblank(c64_m.ramseg, a + c, d1 - d0 - c + 1, mask, c64_cbk);
+        if (v < 2)
+            return v;
+        c += v - 2;                         /* code c's answer, taken once */
+        c64_xm[0] = (unsigned char)os88_peek(c64_m.ramseg, a + c);
+        code = c64_xm[0] & mask;
+        c64_c8glyph(c64_c8, c64_xm, 1, seg, off, mask);
+        v = 0;
+        for (i = 0; i < 8; i++)
+            v |= c64_c8[i];
+        c64_cbk[code] = (unsigned char)(v ? 2 : 1);
+    }
+}
+
+static int ovl_col_sb(int on)
+{
+    int k, l, g0, g1, ga, gb, row, a, b, px, c0, c1, d0, d1, sh, n, sb, ye;
+    unsigned char *g;
+
+    sb = 0;
+    c64_cbk_seg = 0xFFFF;                   /* every answer taken afresh: the
+                                             * glyphs are RAM */
+    os88_memset(c64_cff, 0xFF, 57);
+    for (k = 0; k < 8; k++) {
+        if ((on & (1 << k)) == 0)
+            continue;
+        px = c64_csx[k] - (c64_vic[0x16] & 7) + 64;
+        c0 = (px >> 3) - 8;                 /* the cell of its first pixel */
+        sh = px & 7;
+        c1 = c0 + (c64_csw[k] >> 3);        /* ...and of the byte after it */
+        if (c1 < 0 || c0 > 39)
+            continue;
+        d0 = c0 < 0 ? 0 : c0;
+        d1 = c1 > 39 ? 39 : c1;
+        g0 = c64_csy[k] + 3 - (c64_vic[0x11] & 7);  /* its graphics lines */
+        g1 = g0 + c64_csh[k];
+        ga = g0 < 0 ? 0 : g0;
+        gb = g1 > 200 ? 200 : g1;
+        if (ga >= gb)
+            continue;
+        n = c64_csw[k] == 48 ? 6 : 3;
+        ye = c64_csh[k] == 42;
+        for (row = ga >> 3; row <= (gb - 1) >> 3; row++) {
+            /* A ROW WITH NOTHING UNDER IT IS SKIPPED WHOLE: blank glyphs
+             * by their codes, else its foreground fetched and ORed */
+            if (ovl_col_blank(row, d0, d1))
+                continue;
+            ovl_col_bgrow(row, d0, d1);
+            if (c0 == d0 && c1 == d1) {
+                g = c64_xb + (c0 << 3);     /* (on the screen: as it lies) */
+            } else {
+                g = c64_cbx;
+                os88_memset(c64_cbx, 0, 56);
+                os88_memcpy(c64_cbx + ((d0 - c0) << 3), c64_xb + (d0 << 3),
+                            (d1 - d0 + 1) << 3);
+            }
+            if (!c64_colrow(g, (c1 - c0 + 1) << 3, 0, c64_cff))
+                continue;
+            a = row << 3;
+            b = a + 8;
+            if (a < ga)
+                a = ga;
+            if (b > gb)
+                b = gb;
+            l = a - g0;                     /* its display line */
+            if (c64_colrows(ovl_col_mk(k) + (ye ? l >> 1 : l) * 7, n, sh,
+                            g + (a & 7), b - a, ye | ((ye & l) << 1))) {
+                sb |= 1 << k;
+                break;
+            }
+        }
+    }
+    return sb;
+}
+
+/* the frame's scan of one register, once: 0 $D01E, 1 $D01F. The answer is
+ * ORed into the latch; a latch that was empty and is not raises the IRQ
+ * source (vicii.c: only the first collision since the register was read) */
+static void ovl_col_scan(int sb)
+{
+    int on, v;
+
+    if ((c64_col_ok >> sb) & 1)
+        if ((sb ? c64_col_frb : c64_col_frs) == c64_frames_lo)
+            return;
+    c64_col_ok |= (unsigned char)(1 << sb);
+    c64_cmks = -1;
+    if (c64_cgfr != c64_frames_lo || (c64_col_ok & 4) == 0) {
+        c64_con = ovl_col_geom();           /* once a frame for both */
+        c64_cgfr = c64_frames_lo;
+        c64_col_ok |= 4;
+    }
+    on = c64_con;
+    if (sb) {
+        c64_col_frb = c64_frames_lo;
+        v = on ? ovl_col_sb(on) : 0;
+        if (v && !c64_col_sb)
+            c64_vic[0x19] |= 0x02;
+        c64_col_sb |= (unsigned char)v;
+    } else {
+        c64_col_frs = c64_frames_lo;
+        v = on ? ovl_col_ss(on) : 0;
+        if (v && !c64_col_ss)
+            c64_vic[0x19] |= 0x04;
+        c64_col_ss |= (unsigned char)v;
+    }
+}
+
+static int ovl_col_read(int sb)
+{
+    int v;
+
+    ovl_col_scan(sb);
+    if (sb) {
+        v = c64_col_sb;
+        c64_col_sb = 0;
+    } else {
+        v = c64_col_ss;
+        c64_col_ss = 0;
+    }
+    return v;
+}
+
+/* a frame's start with $D01A asking (c64_advance): each source enabled is
+ * scanned, and c64_irq_update after it raises the line */
+static void ovl_col_tick(void)
+{
+    int want = c64_col_irq;
+
+    c64_col_irq = 0;
+    if (c64_col_off)
+        return;
+    if (want & 4)
+        ovl_col_scan(0);
+    if (want & 2)
+        ovl_col_scan(1);
 }
 
 /* c64_watch_set - tell the core WHERE the write window is worth taking (9.2).
@@ -470,9 +1385,19 @@ static void c64_frame_regs(void)
  * bits change, so the window never describes the previous matrix. */
 static void c64_watch_set(void)
 {
-    unsigned hi = c64_mbase + C64_CELLS - 1;
-    c64_scr_wr(C64_SCR_WATLO, (int)(c64_mbase & 0xFF));
-    c64_scr_wr(C64_SCR_WATLO + 1, C64_HIB(c64_mbase));
+    unsigned lo = c64_mbase, hi = c64_mbase + C64_CELLS - 1;
+    int r;
+
+    if (c64_rsplit)                         /* a split's rows may each have a
+                                             * matrix of their own (9.10) */
+        for (r = 1; r < C64_ROWS; r++) {
+            if (c64_rmb[r] < lo)
+                lo = c64_rmb[r];
+            if (c64_rmb[r] + C64_CELLS - 1 > hi)
+                hi = c64_rmb[r] + C64_CELLS - 1;
+        }
+    c64_scr_wr(C64_SCR_WATLO, (int)(lo & 0xFF));
+    c64_scr_wr(C64_SCR_WATLO + 1, C64_HIB(lo));
     c64_scr_wr(C64_SCR_WATHI, (int)(hi & 0xFF));
     c64_scr_wr(C64_SCR_WATHI + 1, (int)((hi >> 8) & 0xFF));
 }
@@ -599,7 +1524,7 @@ static void c64_watch_set(void)
 
 /* c64_flush_every (declared in c64.c) - host ticks between flushes, from the
  * tier and the numbers above. */
-static void c64_tier_init(void)
+static void ovl_tier_init(void)
 {
     int b;
 
@@ -706,7 +1631,7 @@ static void c64_tier_init(void)
  * SPEC already said - Recording, Volume, CRT and Mixer. The drive NUMBER
  * stays, because the drive is the one of those a user looks for - drawn
  * PLAIN and never lit, because grey does not survive on a black row (see
- * c64_status).
+ * ovl_status).
  *
  * AND A MESSAGE OWNS THE ROW'S 40 FIELD CELLS - NOT THE ROW. The alternative,
  * measured above, is a seven-character message area, and the messages this
@@ -813,7 +1738,7 @@ static void c64_st_band(int mask, int x, int y, int nb)
 #endif
 }
 
-/* c64_status - the row, at `y`, delta-drawn. `y` is the LIVE bottom of the
+/* ovl_status - the row, at `y`, delta-drawn. `y` is the LIVE bottom of the
  * content box and not a fixed offset from the top: on a 200-line adapter
  * wm_fit clamps the window and a fixed offset put this row - which carries
  * §1.4's permanent `C64.ROM missing` fact and every refusal - off the glass
@@ -916,7 +1841,7 @@ static void c64_st_lamps(int ox, int y, int flags)
  *
  * IT IS BOUNDED, AND THAT IS THE POINT RATHER THAN A MICRO-OPTIMISATION. The
  * header used to say it was asked "once per row REBUILD - not per flush", and
- * the code contradicted it: the caller evaluates it at the TOP of c64_status,
+ * the code contradicted it: the caller evaluates it at the TOP of ovl_status,
  * above every early return, so it ran on every flush for as long as a message
  * stood - on the path two lines below advertised as answering "nothing on the
  * row moved" in ZERO drawing calls. SmallerC's `while (s[n] != 0) n++;` is
@@ -955,7 +1880,7 @@ static int c64_slen(const char *s, int cap)
  * README.TXT` is 32 cells and there is nowhere else for it to go. */
 #define C64_MSGSHORT (C64_ST_JOYX / 8)
 
-static void c64_status(int ox, int y, int w)
+static void ovl_status(int ox, int y, int w)
 {
     const char *t;
     int msg, joy1, joy2, flags, sp, mshort, mlong, lfull, rfull, wchg, x2;
@@ -1409,10 +2334,18 @@ static void c64_row_font(int i, int f, int l, int sx, int y)
  * identical value per recomposed row - 25 x C64BENCH_SIG = 25.8 ms of pure
  * duplicate on the one path that recomposes everything. The gfx lock is held
  * for the whole flush, so the sources cannot move in between. */
+/* THE BAND THE LAST SHIFT TEST FOUND (9.4.1): its rows as they are NOW,
+ * c64_sb0..c64_sb1, which were c64_sb0+k..c64_sb1+k before */
+int c64_sb0, c64_sb1;                       /* (c64band.inc writes them) */
+
+#define C64_SHKMAX 12                       /* the furthest a band is sought */
 static int c64_shift_test(int nrows)
 {
     int i, k, moved;
 
+#ifdef C64_HOST
+    c64_n_shtest++;
+#endif
     for (i = 0; i < nrows; i++)
         c64_sig[i] = c64_rowsig(c64_m.ramseg, c64_mbase + C64_X40(i),
                                 c64_col + C64_X40(i), C64_COLS);
@@ -1423,18 +2356,16 @@ static int c64_shift_test(int nrows)
             moved = 1;
     if (!moved)
         return 0;
-    for (k = 1; k <= nrows - 1; k++) {
-        int ok = 1;
-        for (i = 0; i + k < nrows; i++) {
-            if (c64_sig[i] != c64_shsig[i + k]) {
-                ok = 0;
-                break;
-            }
-        }
-        if (ok)
-            return k;
-    }
-    return 0;
+    /* A BAND, UP OR DOWN (9.4.1). The longest run of rows i whose signature
+     * is the shadow's at i + k, scored by how many of them CHANGED - a run of
+     * blank rows matches every k and proves nothing, so it scores nothing -
+     * for k = +-1 .. +-C64_SHKMAX (c64band.inc's c64_bandfind). The whole-
+     * screen scroll the KERNAL does is the run covering every row; a demo
+     * that scrolls the top half of its screen down is a run of half of them.
+     * Three changed rows at least. */
+    k = c64_bandfind(c64_sig, c64_shsig, nrows,
+                     (nrows - 1 < C64_SHKMAX) ? nrows - 1 : C64_SHKMAX);
+    return (c64_bfbest >= 3) ? k : 0;
 }
 
 /* c64_span_of - row i's changed cell span, out of the write window and the
@@ -1457,7 +2388,7 @@ static int c64_span_of(int i)
     unsigned r0, r1;
     int mf = C64_COLS, ml = -1;
 
-    r0 = c64_mbase + C64_X40(i);
+    r0 = c64_rmb[i] + C64_X40(i);
     r1 = r0 + C64_COLS - 1;
     if (c64_whi >= c64_wlo)
         if (c64_whi >= r0)
@@ -1484,10 +2415,47 @@ static int c64_span_of(int i)
     return 1;
 }
 
+/* c64_mono_runs - text row I, its sources already in c64_srct and DIFFERENT
+ * from its whole record (9.4.1): composes into c64_bnd only the cells whose
+ * matrix or colour byte moved, in runs (a gap of two or fewer is folded in),
+ * and fills a gap between runs from the pixel shadow, which the record
+ * PROVES is those cells' picture. Leaves the span in c64_cspf..c64_cspl for
+ * the compare and the blit, which are as before. Falling snow is a cell or
+ * two per row, far apart: the composer was the whole first-to-last span. */
+static unsigned char c64_bf_miss, c64_bf_wait;   /* the shift test's backoff */
+
+static void c64_mono_runs(int i)
+{
+    int r, a, b, pl;
+
+    pl = -1;
+    c64_cspf = -1;
+    b = -1;
+    while ((r = c64_runfind(c64_srct, c64_srcsh[i], b + 1)) >= 0) {
+        a = r >> 8;
+        b = r & 0xFF;
+        if (pl >= 0)                        /* the proved cells between */
+            c64_rowcopy(c64_bnd + pl + 1, c64_sh + C64_X320(i) + pl + 1,
+                        a - pl - 1);
+        else
+            c64_cspf = a;
+        c64_band1(c64_bnd, a, b, c64_m.ramseg,
+                  c64_rmb[i] + C64_X40(i),
+                  c64_col + C64_X40(i),
+                  c64_rcrom[i] ? c64_m.romseg : c64_m.ramseg,
+                  c64_rco[i], 0, c64_rv[i][0x21] & 15);
+#ifdef C64_HOST
+        c64_n_mrun++;
+#endif
+        pl = b;
+    }
+    c64_cspl = pl;
+}
+
 static void c64_flush(void *win)
 {
-    int i, k, sp, f, l, df, dl, nrows, w, trust, rc;
-    int ox, oy, sx, sy, sty;
+    int i, k, sp, f, l, df, dl, nrows, w, trust, rc, mr, bt;
+    int ox, oy, sx, sy, sty, r0, r1, v0, v1;
 
     if (c64_geom(win) < 0)
         return;
@@ -1499,6 +2467,7 @@ static void c64_flush(void *win)
     sty = c64_gsty;
     nrows = c64_gnrows;
     c64_sig_ok = 0;
+    bt = 0;
 
     /* --- THE MESSAGE DEADLINE, AT THE TOP, BEFORE ANY BRANCH CAN RETURN ---
      * It used to live down beside the status row, AFTER a branch that
@@ -1517,7 +2486,7 @@ static void c64_flush(void *win)
     if (c64_msg[0] != 0)
         if ((unsigned)(os88_ticks() - c64_msg_until) < 0x8000u)
             c64_msg[0] = 0;                     /* and `msg != c64_st_shown` in
-                                             * c64_status is what redraws the
+                                             * ovl_status is what redraws the
                                              * widgets under it */
 
     /* THE ROM-LESS BANNER WAS HERE, and it is deleted rather than disabled.
@@ -1531,7 +2500,13 @@ static void c64_flush(void *win)
      * level up. */
 
 
-    c64_frame_regs();
+    /* the per-row tables only when a register set moved since (9.10): the
+     * latch and the resets recompute them, so a split screen does not pay
+     * 25 rows of bank arithmetic a flush; the watch is rewritten anyway */
+    if (c64_fr_stale)
+        c64_frame_regs();
+    else
+        c64_watch_set();
     c64_dirty_scan();
 
     if (c64_border_dirty | (c64_sh_ok ^ 1)) {     /* both 0 or 1 */
@@ -1546,7 +2521,13 @@ static void c64_flush(void *win)
      * signature means anything. */
     k = 0;
     if (c64_sh_ok)
-        if (c64_mode == 0)
+        if ((c64_rgfx | c64_rsplit) == 0)   /* plain text and one register
+                                             * set: the only screen a matrix
+                                             * signature names. SPRITES ARE
+                                             * FINE since 9.4.1: a slid row is
+                                             * examined whole (c64_rowd 8) and
+                                             * one with a sprite over it then
+                                             * or now is never proved */
             if (c64_hold_r0 > c64_hold_r1)
                 if (nrows > 1) {
                     int nd = 0;
@@ -1565,8 +2546,14 @@ static void c64_flush(void *win)
                      * survived that (9.4: the scroll is a hint and the compare is the
                      * truth) and the COST did not, which is the failure mode this
                      * threshold exists to stop. */
-                    if (nd * C64_SHIFT_DEN >= nrows * C64_SHIFT_NUM)
-                        k = c64_shift_test(nrows);
+                    if (nd * C64_SHIFT_DEN >= nrows * C64_SHIFT_NUM) {
+                        if (c64_bf_wait) {
+                            c64_bf_wait--;
+                        } else {
+                            k = c64_shift_test(nrows);
+                            bt = 1;
+                        }
+                    }
                 }
     if (k) {
         /* POSITIVE dy MOVES THE CONTENT UP, and the whole of this block is
@@ -1590,52 +2577,85 @@ static void c64_flush(void *win)
          * (9.4) and both stay multiples of 8 at either scale, because c64_gsx
          * is snapped and 40 * 16 is 640. A refusal falls back to bands here as
          * it always did. */
-        if (os88_gfx_scroll(sx, sy, sx + C64_COLS * c64_scw - 1,
-                            sy + nrows * c64_sch - 1,
+        /* THE BAND'S RECT (9.4.1): up, the rows sb0..sb1+k move up k and
+         * sb1+1..sb1+k are vacated; down, sb0-m..sb1 move down m and
+         * sb0-m..sb0-1 are vacated */
+        if (k > 0) {
+            r0 = c64_sb0;
+            r1 = c64_sb1 + k;
+            v0 = c64_sb1 + 1;
+        } else {
+            r0 = c64_sb0 + k;
+            r1 = c64_sb1;
+            v0 = r0;
+        }
+        v1 = v0 + ((k > 0) ? k : -k) - 1;
+        /* NO SCROLL UNDER A SPRITE (9.4.1): a sprite is not in the matrix
+         * the signatures match, so a scroll moves its pixels with the rows
+         * and the redraw that puts them back comes after - visibly, on a
+         * 286: the CUG logo dropped two rows for a frame whenever its snow
+         * fell in step. Rows with a sprite over them now, or on the glass
+         * from before, are composed in place instead */
+        for (i = r0; i <= r1; i++)
+            if (c64_spsig[i] | c64_sglass[i])
+                k = 0;
+        if (k == 0)
+            bt = 2;                         /* found, and refused under one */
+    }
+    if (k) {
+        if (os88_gfx_scroll(sx, sy + r0 * c64_sch,
+                            sx + C64_COLS * c64_scw - 1,
+                            sy + (r1 + 1) * c64_sch - 1,
                             k * c64_sch) == 0) {
 #ifdef C64_HOST
             c64_n_scroll++;
 #endif
-            os88_memcpy(c64_sh, c64_sh + C64_X320(k),
-                        C64_X40((nrows - k) * 8));
-            /* the k vacated rows: gfx_scroll leaves them for us, so they are
-             * drawn WHATEVER the compare says - a stale shadow row that
-             * happened to match would leave the glass blank (9.4) */
-            c64_force_rows(nrows - k, nrows - 1, 0, C64_COLS - 1);
-            for (i = nrows - k; i < nrows; i++) {
+            /* the shadows slide with it, a row at a time, in the order
+             * that never reads a row it has overwritten: the pixels, the
+             * sources each row was drawn from (c64_srcsh), and the
+             * signatures, which c64_sig[] already holds for the band */
+            if (k > 0) {
+                for (i = c64_sb0; i <= c64_sb1; i++)
+                    c64_row_slide(i, i + k);
+            } else {
+                for (i = c64_sb1; i >= c64_sb0; i--)
+                    c64_row_slide(i, i + k);
+            }
+            for (i = c64_sb0; i <= c64_sb1; i++) {
+                c64_shsig[i] = c64_sig[i];
+                /* SLID: the glass holds the row it came from, so the row is
+                 * examined WHOLE - proved, or composed and compared against
+                 * the slid shadow - even where nothing in its matrix moved,
+                 * because a sprite drawn over the row it came from moved
+                 * with it */
+                c64_rowd[i] = (c64_rowd[i] & 6) ? 2 : 8;
+            }
+            c64_dirty_any = 1;
+            /* the vacated rows: gfx_scroll leaves them for us, so they are
+             * drawn WHATEVER the compare says (9.4) */
+            c64_force_rows(v0, v1, 0, C64_COLS - 1);
+            for (i = v0; i <= v1; i++) {
                 c64_rowd[i] = 2;
                 c64_shsig[i] = 0;
+                c64_srcok[i] = 0;
             }
-            /* the shifted rows' signatures moved with them - and c64_sig[]
-             * already holds exactly those values, because that is what the
-             * test compared. No c64_rowsig call: the slide is a copy.
-             *
-             * AND `c64_rowd` IS *NOT* CLEARED FOR THE SHIFTED ROWS, WHICH
-             * WAS PROPOSED AND IS WRONG. Clearing it would skip composing and
-             * comparing the 16 rows the scroll slid, on the strength of the
-             * 16-bit signature alone - and C64-SPEC §9.4 is explicit that the
-             * signature is a HINT and that NOTHING RESTS ON IT: "after the
-             * scroll is emitted the shadow is moved with it and every row
-             * still goes through c64_rowspan against the moved shadow, so a
-             * row that did not really shift simply compares unequal and is
-             * drawn. The scroll is an optimisation whose failure mode is a
-             * redraw, never a wrong screen." A collision is trivial to build
-             * - screen code 1 in column 0 and screen code 2 in column 1 with
-             * everything else blank sign identically, because the signature
-             * is an XOR under a rotate - and skipping the compare turns that
-             * from a wasted recompose into WRONG PIXELS THAT NEVER GO AWAY,
-             * since the flags are then clear and nothing asks again.
-             * hosttest/c64uitest.c drives exactly that pair.
-             *
-             * So the 25 recomposes a scrolled frame costs are the price of
-             * the guarantee, and §9.7's `a k = 9 shift` row is what it costs
-             * (256.0 ms). The signature saves the SCROLL - 1 call plus k rows
-             * of drawing instead of 25 - not the compare. */
-            for (i = 0; i + k < nrows; i++)
-                c64_shsig[i] = c64_sig[i];
         } else {
             k = 0;                          /* refused: spans, and the shadow
                                              * stays true - nothing moved */
+        }
+    }
+    /* THE SHIFT TEST BACKS OFF UNDER A SPRITE (9.4.1): two tests in a row
+     * that FOUND a band and refused it because a sprite is on it, and the
+     * next three eligible flushes do not ask. PCUG's snow found its band
+     * under the logo every frame and paid the signature pass and the search
+     * for nothing. A test that finds no band does not count - typing and
+     * scrolling alternate, and the scroll is what the test is for */
+    if (bt) {
+        if (bt == 1) {
+            c64_bf_miss = 0;
+        } else if (++c64_bf_miss >= 2) {
+            c64_bf_miss = 0;
+            c64_bf_wait = 3;
         }
     }
 
@@ -1651,6 +2671,53 @@ static void c64_flush(void *win)
         if ((c64_rowd[i] | c64_force[i]) == 0)
             if (c64_sh_ok)
                 continue;
+        /* THE SOURCE PROOF (9.4.1): dirty only through its matrix, nothing
+         * unknown on the glass, plain text and no sprite, and its sources
+         * read what it was drawn from - the same pixels, proved and not
+         * guessed, so neither the compose nor the compare is owed */
+        mr = 0;
+        /* (A ROW UNDER A SPRITE qualifies when only its text moved -
+         * c64_rowd 1: its sprites are the ones on the glass, or
+         * c64_spr_dirty would have marked their cells. The record is of the
+         * TEXT, so the sprites are drawn over whatever is composed.) */
+        if ((c64_rowd[i] == 1) | (c64_rowd[i] == 8))
+            if (c64_force[i] == 0)
+                if (c64_srcok[i] & c64_sh_ok)
+                    if (c64_rmode[i] == 0)
+                    if ((c64_rowd[i] == 1)
+                            | ((c64_spsig[i] | c64_sglass[i]) == 0)) {
+                        c64_zcopy_out(c64_srct, c64_rmb[i] + C64_X40(i),
+                                      C64_COLS);
+                        os88_memcpy(c64_srct + C64_COLS, c64_col + C64_X40(i),
+                                    C64_COLS);
+                        if (!c64_neq(c64_srct, c64_srcsh[i], C64_COLS)) {
+#ifdef C64_HOST
+                            c64_n_proved++;
+#endif
+                            c64_rowd[i] = 0;
+                            continue;
+                        }
+                        /* ...and where it is not, the record still
+                         * names the cells that moved */
+                        mr = 1;
+                    }
+        if (c64_rowd[i] == 8)
+            c64_rowd[i] = 2;                /* slid and not proved: whole */
+        if (mr) {
+            if ((c64_rv[i][0x21] & 15) != c64_cmask_bg)
+                c64_cmask_for(c64_rv[i][0x21] & 15);
+            c64_mono_runs(i);
+            f = c64_cspf;
+            l = c64_cspl;
+            trust = 1;
+            if (c64_spsig[i])                /* once, over first..last: */
+                c64_spr_draw(i, f, l);      /* the gaps are the glass's own
+                                             * pixels, sprite and all, and a
+                                             * sprite pixel is SET, not
+                                             * toggled */
+            c64_sglass[i] = (c64_spsig[i] != 0);
+            goto c64_fl_composed;
+        }
 
         /* THE COMPOSE SPAN, and whether the shadow may be trusted for it.
          *   the shadow is invalid            -> the whole row, drawn
@@ -1671,8 +2738,20 @@ static void c64_flush(void *win)
         if (c64_sh_ok)
             if (c64_rowd[i] != 2) {
                 sp = 0;
-                if (c64_rowd[i] == 1)
+                if (c64_rowd[i] & 1)
                     sp = c64_span_of(i);
+                if (c64_rowd[i] & 4) {      /* ...and a bitmap's cells (9.10) */
+                    if (sp == 0) {
+                        c64_cspf = c64_gf[i];
+                        c64_cspl = c64_gl[i];
+                        sp = 1;
+                    } else {
+                        if ((int)c64_gf[i] < c64_cspf)
+                            c64_cspf = c64_gf[i];
+                        if ((int)c64_gl[i] > c64_cspl)
+                            c64_cspl = c64_gl[i];
+                    }
+                }
                 if (sp) {
                     f = c64_cspf;
                     l = c64_cspl;
@@ -1692,10 +2771,39 @@ static void c64_flush(void *win)
                 l = c64_fc1[i];
         }
 
-        c64_band1(c64_bnd, f, l, c64_m.ramseg,
-                  c64_mbase + C64_X40(i),
-                  c64_col + C64_X40(i),
-                  c64_chr_seg, c64_chr_off, c64_mode, c64_vic[0x21] & 15);
+        /* 9.10: each row from ITS OWN registers. A standard-text row is
+         * c64band.inc's, as it always was - the {and, xor} pairs are rebuilt
+         * only when this row's paper is not the last row's, which on a
+         * screen with no split is never; any other mode is c64_bandx's, and
+         * a row with a sprite over it has the sprites laid on top (9.11) */
+        if (c64_rmode[i] == 0) {
+            if ((c64_rv[i][0x21] & 15) != c64_cmask_bg)
+                c64_cmask_for(c64_rv[i][0x21] & 15);
+            c64_band1(c64_bnd, f, l, c64_m.ramseg,
+                      c64_rmb[i] + C64_X40(i),
+                      c64_col + C64_X40(i),
+                      c64_rcrom[i] ? c64_m.romseg : c64_m.ramseg,
+                      c64_rco[i], 0, c64_rv[i][0x21] & 15);
+        } else {
+            c64_bandx(i, f, l);
+        }
+        if (c64_spsig[i])
+            c64_spr_draw(i, f, l);
+        c64_sglass[i] = (c64_spsig[i] != 0);
+    c64_fl_composed:
+        /* ...and the record of the TEXT it was drawn from (9.4.1), sprites
+         * or not: the proof refuses a row with a sprite on the glass, and
+         * the cell path draws the sprites itself */
+        if (c64_rmode[i] == 0) {
+            c64_zcopy_out(c64_srcsh[i] + f, c64_rmb[i] + C64_X40(i) + f,
+                          l - f + 1);
+            os88_memcpy(c64_srcsh[i] + C64_COLS + f, c64_col + C64_X40(i) + f,
+                        l - f + 1);
+            if ((f == 0) & (l == C64_COLS - 1))
+                c64_srcok[i] = 1;
+        } else {
+            c64_srcok[i] = 0;
+        }
 #ifdef C64_HOST
         c64_n_cell += (unsigned)(l - f + 1);
         c64_n_rows++;
@@ -1711,7 +2819,7 @@ static void c64_flush(void *win)
          * rather than taken again: 25.8 ms of duplicate on the scroll path. */
         c64_shsig[i] = c64_sig_ok
                      ? c64_sig[i]
-                     : c64_rowsig(c64_m.ramseg, c64_mbase + C64_X40(i),
+                     : c64_rowsig(c64_m.ramseg, c64_rmb[i] + C64_X40(i),
                                   c64_col + C64_X40(i), C64_COLS);
         if (!trust) {
             df = f;
@@ -1787,7 +2895,7 @@ static void c64_flush(void *win)
             c64_row_font(i, df, dl, sx, sy + i * 8);    /* 9.5's font path */
             if (!c64_blit_said) {
                 c64_blit_said = 1;
-                c64_say("No bands here - text only.");
+                c64_say("No bands - text only.");
             }
         } else {
 #ifdef C64_HOST
@@ -1820,14 +2928,14 @@ static void c64_flush(void *win)
      * joysticks, c64_blank_rect and c64_sh_inval ever raised that flag, and
      * every one of them raises it for a FULL redraw - so the field compare
      * this row was rebuilt around was only ever exercised by the harness
-     * setting the flag by hand. c64_status's own early return answers
+     * setting the flag by hand. ovl_status's own early return answers
      * "nothing on the row moved" in zero drawing calls, which is what the
      * delta was built for; that is the gate. The old `c64_st_dirty` flag is
      * gone with it: every one of its setters either cleared c64_st_ok (a
      * message, an expose, an invalidated shadow) or changed a FIELD the
      * compare below already sees (Swap joysticks, a message expiring), so it
      * only ever said a second time what the row could work out for itself. */
-    c64_status(ox, sty, w);
+    ovl_status(ox, sty, w);
 }
 
 /* c64_blank_rect - a rectangle of the content box whose pixels are no longer
@@ -1900,4 +3008,401 @@ static void c64_blank_rect(void *win, int x1, int y1, int x2, int y2)
     if (c1 < c0)
         return;
     c64_force_rows(r0, r1, c0, c1);
+}
+
+/* ==========================================================================
+ * THE COLOUR SCREEN (C64-SPEC 9.12): FSXM_VGA13 inside SPEC.md 53's bracket.
+ *
+ * THE BRACKET'S RULES, obeyed by hand here as APPLE2-SPEC 13.3 obeys them
+ * (nothing in the toolchain enforces them):
+ *  1. c64_fsx_main is a plain RESIDENT function whose address is taken -
+ *     never an ovl_ (tools/cc8086.py refuses that by name).
+ *  2. After os88_fsx_mode no drawing slot is called: c64_say and c64_jam
+ *     test c64_fsx_up and leave the toast out, and nothing else the machine
+ *     can reach draws.
+ *  3. Keys are POLLED (c64_fsx_key, int 16h); no event is dispatched in here.
+ *     The key-up half is os88_key_down's map, which the IRQ1 handler keeps
+ *     whatever the UI task is doing - c64_kbd_poll reads it as in the window.
+ *  4. Idle is os88_fsx_wait, never os88_task_sleep.
+ *  5. Nothing touches PIT channel 0, the sound ports or an int 10h mode set;
+ *     the DAC and the overscan register are the app's in a foreign mode.
+ *  6. The exit is this function returning, on Alt+D or Alt+Enter - the
+ *     fullscreen chords of 9.8, for 9.8's reason: the C64 owns F and Esc.
+ * ========================================================================*/
+static int c64_fsx_id = -1;                 /* FSXM_VGA13, when the display has it */
+static int c64_fsx_ok;                      /* the glass has had a whole frame */
+static int c64_fsx_bord;                    /* the overscan colour last set */
+static unsigned c64_fsx_seg;                /* the framebuffer */
+static unsigned c64_fsx_tick;               /* the tick of the last frame */
+static void *c64_fsx_win;
+static char c64_fsi[OS88_FSI_SIZE];
+/* ONE 8bpp BAND (9.12) - AND IT IS THE WINDOW'S FRAME SHADOW'S FIRST 2,560
+ * BYTES, not bss of its own. The bracket throws that shadow away as it
+ * enters (c64_sh_inval, below) and the kernel's repaint on the way out
+ * rebuilds it whole, so for the whole session it holds nothing anyone reads
+ * - and the package is at its 64KB segment (13.1) */
+#define c64_b8 c64_sh
+typedef char c64_b8_fits[(320 * 8 <= C64_SHBYTES) ? 1 : -1];
+static unsigned char c64_k0[C64_COLS], c64_k1[C64_COLS];
+static unsigned char c64_k2[C64_COLS], c64_k3[C64_COLS];
+static unsigned char c64_kmc[C64_COLS];
+static unsigned char c64_scol[4];           /* a sprite's 0, $D025, own, $D026 */
+
+/* c64_fsx_avail - whether the display this window is on offers FSXM_VGA13.
+ * A FACT and not a guess (SPEC.md 47): os88_fsx_caps answers the ids that
+ * are settable THERE, and fsx_mode refuses on the same test */
+static int c64_fsx_avail(void *win)
+{
+    static int kind;
+    int mask;
+
+    c64_fsx_id = -1;
+    mask = os88_fsx_caps(win, &kind);
+    if (mask > 0)
+        if (mask & (1 << OS88_FSXM_VGA13))
+            c64_fsx_id = OS88_FSXM_VGA13;
+    return (c64_fsx_id >= 0) ? 1 : 0;
+}
+
+/* ovl_fsx_compose - row ROW's cells F..L into c64_b8 at colour: one
+ * c64_c8row call with the per-cell colours each mode names (9.12's table) */
+static void ovl_fsx_compose(int row, int f, int l)
+{
+    unsigned char *rv, *col;
+    int n, c, mode, bg, a, code;
+    unsigned gseg;
+
+    rv = c64_rv[row];
+    mode = c64_rmode[row];
+    bg = rv[0x21] & 15;
+    n = l - f + 1;
+    col = c64_col + C64_X40(row);
+    c64_zcopy_out(c64_xm + f, c64_rmb[row] + C64_X40(row) + f, n);
+    if (mode & 2) {
+        c64_zcopy_out(c64_xb + (f << 3),
+                      c64_rbm[row] + C64_X320(row) + (f << 3), n << 3);
+    } else if (mode < 5) {
+        gseg = c64_rcrom[row] ? c64_m.romseg : c64_m.ramseg;
+        c64_c8glyph(c64_xb + (f << 3), c64_xm + f, n, gseg, c64_rco[row],
+                    (mode == 4) ? 0x3F : 0xFF);
+    }
+    for (c = f; c <= l; c++) {
+        code = c64_xm[c];
+        a = col[c] & 15;
+        c64_kmc[c] = 0;
+        c64_k0[c] = (unsigned char)bg;
+        switch (mode) {
+        case 0:                             /* text: colour RAM on the paper */
+            c64_k1[c] = (unsigned char)a;
+            break;
+        case 4:                             /* ECM: the paper the code picks */
+            c64_k0[c] = (unsigned char)(rv[0x21 + (code >> 6)] & 15);
+            c64_k1[c] = (unsigned char)a;
+            break;
+        case 1:                             /* multicolour text */
+            if (a & 8) {
+                c64_kmc[c] = 1;
+                c64_k1[c] = (unsigned char)(rv[0x22] & 15);
+                c64_k2[c] = (unsigned char)(rv[0x23] & 15);
+                c64_k3[c] = (unsigned char)(a & 7);
+            } else {
+                c64_k1[c] = (unsigned char)(a & 7);
+            }
+            break;
+        case 2:                             /* hires bitmap */
+            c64_k1[c] = (unsigned char)(code >> 4);
+            c64_k0[c] = (unsigned char)(code & 15);
+            break;
+        case 3:                             /* multicolour bitmap */
+            c64_kmc[c] = 1;
+            c64_k1[c] = (unsigned char)(code >> 4);
+            c64_k2[c] = (unsigned char)(code & 15);
+            c64_k3[c] = (unsigned char)a;
+            break;
+        default:                            /* 5, 6, 7: the VIC shows black */
+            c64_k0[c] = 0;
+            c64_k1[c] = 0;
+        }
+    }
+    c64_c8row(c64_b8 + (f << 3), c64_xb + (f << 3), c64_k0 + f, c64_k1 + f,
+              c64_k2 + f, c64_k3 + f, c64_kmc + f, n);
+}
+
+/* ovl_fsx_sprites - row ROW's sprites over c64_b8, pixels of cells F..L
+ * only (9.11's geometry, 9.12's colours) */
+static void ovl_fsx_sprites(int row, int f, int l)
+{
+    unsigned char *rv;
+    int k, y, y0, y1, sl, j, bh, c0, p0, p1;
+
+    rv = c64_rv[row];
+    if (rv[0x15] == 0)
+        return;
+    c64_scol[1] = (unsigned char)(rv[0x25] & 15);
+    c64_scol[3] = (unsigned char)(rv[0x26] & 15);
+    for (k = 7; k >= 0; k--) {              /* sprite 0 drawn last: on top */
+        if (!c64_spr_geom(rv, row, k))
+            continue;
+        y0 = c64_sp_y - (row << 3);
+        y1 = y0 + c64_sp_h;
+        if (y0 < 0)
+            y0 = 0;
+        if (y1 > 8)
+            y1 = 8;
+        j = (row << 3) + y0 - c64_sp_y;
+        sl = (row << 3) + y1 - 1 - c64_sp_y;
+        if (c64_sp_h == 42) {
+            j >>= 1;
+            sl >>= 1;
+        }
+        j = j + j + j;
+        c64_zcopy_out(c64_spd + j, c64_sp_data + j, sl + sl + sl + 3 - j);
+        c64_scol[2] = (unsigned char)(rv[0x27 + k] & 15);
+        /* BEHIND THE FOREGROUND ($D01B, 5.3): the line's pixels under it are
+         * kept, it is drawn, and those the foreground has are put back */
+        bh = (rv[0x1B] >> k) & 1;
+        c0 = ((c64_sp_x + 64) >> 3) - 8;
+        p0 = c64_sp_x < (f << 3) ? (f << 3) : c64_sp_x;
+        p1 = c64_sp_x + c64_sp_w;
+        if (p1 > (l << 3) + 8)
+            p1 = (l << 3) + 8;
+        if (bh)
+            ovl_spr_fg(row, c0);
+        for (y = y0; y < y1; y++) {
+            sl = (row << 3) + y - c64_sp_y;
+            if (c64_sp_h == 42)
+                sl >>= 1;
+            if (bh && p0 < p1)
+                os88_memcpy(c64_pfs, c64_b8 + C64_X320(y) + p0, p1 - p0);
+            c64_c8spr(c64_b8 + C64_X320(y), c64_spd + sl + sl + sl,
+                      c64_sp_x, f << 3, (l << 3) + 8, c64_scol,
+                      (rv[0x1C] >> k) & 1, (c64_sp_w == 48) ? 1 : 0);
+            if (bh)
+                for (j = p0; j < p1; j++)
+                    if (c64_pfg[(((j >> 3) - c0) << 3) + y] & (0x80 >> (j & 7)))
+                        c64_b8[C64_X320(y) + j] = c64_pfs[j - p0];
+        }
+    }
+}
+
+/* ovl_fsx_frame - ONE colour frame, off the same dirty set the window's
+ * flush uses (9.2, 9.10, 9.11): each dirty row's span composed and copied */
+/* ovl_fsx_cells - text row ROW, cells F..L dirty through its matrix: the
+ * cells whose character or colour is not what the row was drawn from, a run
+ * at a time, composed and put; the record follows them */
+static unsigned char c64_fra[C64_COLS / 2], c64_frb[C64_COLS / 2];
+static void ovl_fsx_cells(int row, int f, int l)
+{
+    int r, a, b, y, n, j;
+    unsigned char *sh;
+
+    sh = c64_srcsh[row];
+    c64_zcopy_out(c64_srct, c64_rmb[row] + C64_X40(row), C64_COLS);
+    os88_memcpy(c64_srct + C64_COLS, c64_col + C64_X40(row), C64_COLS);
+    /* the runs, composed; a run is at least one cell and three apart from
+     * the next, so there are at most fourteen */
+    n = 0;
+    b = f - 1;
+    while ((r = c64_runfind(c64_srct, sh, b + 1)) >= 0) {
+        a = r >> 8;
+        if (a > l)
+            break;
+        b = r & 0xFF;
+        if (b > l)
+            b = l;
+        ovl_fsx_compose(row, a, b);
+        c64_fra[n] = (unsigned char)a;
+        c64_frb[n] = (unsigned char)b;
+        n++;
+    }
+    if (n == 0)
+        return;
+    /* the sprites ONCE over the first..last span: what they draw between
+     * the runs lands in the band and is never put */
+    if (c64_spsig[row])
+        ovl_fsx_sprites(row, c64_fra[0], c64_frb[n - 1]);
+    for (j = 0; j < n; j++) {
+        a = c64_fra[j];
+        b = c64_frb[j];
+        for (y = 0; y < 8; y++)
+            c64_fsx_put(c64_fsx_seg, C64_X320((row << 3) + y) + (a << 3),
+                        c64_b8 + C64_X320(y) + (a << 3), (b - a + 1) << 3);
+        os88_memcpy(sh + a, c64_srct + a, b - a + 1);
+        os88_memcpy(sh + C64_COLS + a, c64_srct + C64_COLS + a, b - a + 1);
+#ifdef C64_HOST
+        c64_n_fsxrun++;
+#endif
+    }
+}
+
+static void ovl_fsx_frame(void)
+{
+    int i, y, f, l, sp, b;
+
+    if (c64_fr_stale)
+        c64_frame_regs();
+    else
+        c64_watch_set();
+    c64_dirty_scan();
+    b = c64_rv[0][0x20] & 15;
+    if (b != c64_fsx_bord) {
+        c64_fsx_border(b);
+        c64_fsx_bord = b;
+    }
+    for (i = 0; i < C64_ROWS; i++) {
+        f = 0;
+        l = C64_COLS - 1;
+        if (c64_fsx_ok) {
+            if (c64_rowd[i] == 0)
+                continue;
+            if (c64_rowd[i] != 2) {
+                sp = 0;
+                if (c64_rowd[i] & 1)
+                    sp = c64_span_of(i);
+                if (c64_rowd[i] & 4) {
+                    if (sp == 0) {
+                        c64_cspf = c64_gf[i];
+                        c64_cspl = c64_gl[i];
+                        sp = 1;
+                    } else {
+                        if ((int)c64_gf[i] < c64_cspf)
+                            c64_cspf = c64_gf[i];
+                        if ((int)c64_gl[i] > c64_cspl)
+                            c64_cspl = c64_gl[i];
+                    }
+                }
+                if (sp == 0) {
+                    c64_rowd[i] = 0;
+                    continue;
+                }
+                f = c64_cspf;
+                l = c64_cspl;
+            }
+        }
+        /* ONLY THE CELLS THAT CHANGED (9.12): a plain text row dirtied only
+         * through its matrix and colour bytes - its sprites, if any, are the
+         * ones on the glass, or c64_spr_dirty would have marked their cells
+         * (c64_rowd 4) - and a whole record of the TEXT it was drawn from
+         * (c64_srcsh, 9.4.1's) - each run of changed cells, gaps of two or
+         * fewer folded in, the sprites drawn over the run, and nothing
+         * else. PCUG's logo rows were whole spans every frame for snow. A whole span is 2,560 bytes of
+         * 8bpp a row into an ISA VGA, and falling snow dirties every row
+         * from edge to edge: the colour screen wrote ~64KB a frame where
+         * the window wrote an eighth of that */
+        if (c64_fsx_ok)
+            if (c64_rowd[i] == 1)
+                if (c64_srcok[i])
+                    if (c64_rmode[i] == 0) {
+                        ovl_fsx_cells(i, f, l);
+                        c64_rowd[i] = 0;
+                        continue;
+                    }
+        ovl_fsx_compose(i, f, l);
+        if (c64_spsig[i])
+            ovl_fsx_sprites(i, f, l);
+        for (y = 0; y < 8; y++)
+            c64_fsx_put(c64_fsx_seg, C64_X320((i << 3) + y) + (f << 3),
+                        c64_b8 + C64_X320(y) + (f << 3), (l - f + 1) << 3);
+        /* ...and the record of the TEXT, sprites or not: here it is only
+         * ever read by ovl_fsx_cells, which draws the sprites itself, and
+         * the window cannot trust it - the shadow was invalidated at the
+         * mode set, so its first paint is every row whole, which rewrites
+         * the record by the window's rule */
+        if (c64_rmode[i] == 0) {
+            c64_zcopy_out(c64_srcsh[i] + f, c64_rmb[i] + C64_X40(i) + f,
+                          l - f + 1);
+            os88_memcpy(c64_srcsh[i] + C64_COLS + f, c64_col + C64_X40(i) + f,
+                        l - f + 1);
+            if ((f == 0) & (l == C64_COLS - 1))
+                c64_srcok[i] = 1;
+        } else {
+            c64_srcok[i] = 0;
+        }
+        c64_sglass[i] = (c64_spsig[i] != 0);
+        c64_rowd[i] = 0;
+    }
+    c64_dirty_any = 0;
+    c64_fsx_ok = 1;
+    c64_fsx_tick = os88_ticks();
+}
+
+/* c64_fsx_main - THE BRACKET (rules above) */
+static void c64_fsx_main(void)
+{
+    unsigned k, sc;
+    int n;
+
+    if (os88_fsx_mode(c64_fsx_id, c64_fsi) < 0)
+        return;                             /* refused, and nothing changed */
+    c64_fsx_seg = (unsigned)(unsigned char)c64_fsi[OS88_FSI_SEG]
+                | (((unsigned)(unsigned char)c64_fsi[OS88_FSI_SEG + 1]) << 8);
+    c64_fsx_up = 1;
+    c64_fsx_ok = 0;
+    c64_fsx_bord = -1;
+    /* THE WINDOW'S SHADOW IS A LIE FROM HERE ON, said here and not at the
+     * exit: SPEC.md 53.6 repaints the desktop before fsx_run returns, and
+     * that one paint finds the shadow invalid and redraws the window once
+     * (APPLE2-SPEC 13.3's reasoning, the same) */
+    c64_sh_inval();
+    c64_fsx_dac();
+    for (;;) {
+        k = c64_fsx_key();
+        if (k != 0xFFFFu) {                 /* (UNSIGNED: an Alt scan code
+                                             * above $7F is a negative int) */
+            sc = (k >> 8) & 0xFF;
+            if ((k & 0xFF) == 0) {
+                if ((sc == C64_SCAN_ALT_D) | (sc == OS88_SCAN_ENTER)
+                        | (sc == 0xA6))     /* Alt+Enter, enhanced set */
+                    break;
+                /* the three Preferences chords that only flip a latch and
+                 * say so (c64_say is fenced); the rest of the menu chords
+                 * open dialogs and wait for the window */
+                if (sc == 0x11) {
+                    ovl_cmd(C64_M_PREF, C64_I_WARP, c64_fsx_win);
+                    continue;
+                }
+                if (sc == 0x19) {
+                    ovl_cmd(C64_M_PREF, C64_I_PAUSE, c64_fsx_win);
+                    continue;
+                }
+                if (sc == 0x24) {
+                    ovl_cmd(C64_M_PREF, C64_I_SWAPJOY, c64_fsx_win);
+                    continue;
+                }
+                if ((sc == 0x1E) | (sc == 0x70) | (sc == 0x10)
+                        | (sc == 0xA2) | (sc == 0xA3))
+                    continue;
+            }
+            c64_key_push((int)(k & 0xFF), (int)sc);
+        }
+        n = c64_tick();
+        if (c64_scr_rd(C64_SCR_ANY))
+            c64_dirty_any = 1;
+        c64_fs_adapt(os88_ticks());         /* (9.13's frame skip, here too) */
+        if ((c64_dirty_any | (c64_fsx_ok ^ 1)) != 0)
+            if ((c64_fsx_ok == 0)
+                    | ((unsigned)(os88_ticks() - c64_fsx_tick)
+                       >= (unsigned)(1 + c64_fs_extra))) {
+                k = os88_ticks();
+                ovl_fsx_frame();
+                c64_fs_cost += (int)(os88_ticks() - k);
+            }
+        if (n == 0)
+            os88_fsx_wait(OS88_FSXW_TICK);  /* nothing owed this tick */
+    }
+    c64_fsx_up = 0;
+    c64_dirty_any = 1;
+}
+
+/* c64_fsx_enter - Preferences > Fullscreen on a display with FSXM_VGA13
+ * (9.12). 1 when the bracket ran, 0 when there is none to run, and the
+ * caller then takes 9.8's monochrome fullscreen */
+static int c64_fsx_enter(void *win)
+{
+    if (!c64_fsx_avail(win))
+        return 0;
+    c64_fsx_win = win;
+    if (os88_fsx_run(c64_fsx_main, win, 0) < 0)
+        return 0;                           /* refused (SPEC.md 53.1) */
+    return 1;
 }

@@ -38,10 +38,10 @@ PXL_OPEN    equ 2
 PXL_SLIDE   equ 3
 PXL_CLOSE   equ 4
 
-px_s_pixbig: db 'PIX holds 64K at most', 0
+TOASTSTR px_s_pixbig, 'PIX holds 64K at most'
 px_s_qmark: db '?', 0
 px_s_chg:   db 'Save changes to ', 0
-px_s_sfirst: db 'Save the edit first', 0
+TOASTSTR px_s_sfirst, 'Save the edit first'
 
 ; px_wcallu - CL = a verb of the WRITE part's, called (fetched if it must
 ; be). out its CF/AX. Preserves BX, DX, SI

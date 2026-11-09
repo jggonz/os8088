@@ -1,0 +1,313 @@
+{
+ "area": "gap-kernel-matrix-near-model",
+ "title": "Is the kern_small / kern_big / kern_mega / kern_emu matrix and the near-model rule still the right shape, and what do they cost?",
+ "summary": "The four kernels should stay separate build-time products. Building them into one binary that picks its mode at boot costs too much:\n- kern_small inside kern_big would cost +5,440 bytes of tables (task stacks 960 -> 2,816, FAT window 1,024 -> 4,608). kern_small has 5,120 bytes of headroom.\n- kern_mega inside kern_big would put roughly 12-14.7KB of protected-mode code on every XT. kern_big has 4,096 bytes of headroom.\n\nWindows 3.0 made the same choice: three kernel binaries from shared source, with WIN.COM picking one at start-up. Much of that model is already here and works well:\n- build names that imply each other and refuse bad combinations;\n- a set of feature switches resolved once, above the includes;\n- about 400 macro sites that serve real and protected mode without separate code paths;\n- packages that run unchanged on kern_big and kern_small.\n\nWhat is missing is a check that keeps each kernel's separate code honest. Of the review's 64 code bugs, 32 live in code that only one kernel or kernel group carries: 8 kern_mega, 4 kern_small, 20 the kern_big feature set. Only 5 of those are true divergence, where one contract has two diverging implementations:\n- two kern_big bugs fixed only on kern_mega (drivers-3, hiber-2);\n- three kern_small refusal stubs or guards (abi-2, dw-8, video-1).\n\nTest coverage runs inverse to importance. kern_small has 28 soak rows; kern_mega has about 430; test-full never boots kern_mega. t_hotpar pins entry parity on kern_big and kern_small but not on kern_mega, even though every kern_mega machine has the 16-bit bus where parity matters.\n\nThe near model still limits kern_big at the VGA rung's 64KB window: 6,946 bytes left, not the 19,842 that the KERN_CODE_MAX figure suggests. It does not limit kern_mega (14,056 free) or kern_small (32,565 free). Inside the kernel it is now a placement rule.\n\nRecommended now, with no ABI break and only a few resident bytes:\n- the one-kernel fixes plus a rule (gkm-1);\n- abi-3's four-kernel ABI gate plus refusal stubs that name their contract (gkm-2);\n- a MartyPC smallport.txt list (gkm-3);\n- t_hotpar on kern_mega plus a self-correcting parity macro (gkm-4);\n- a ratchet on raw build-name tests (gkm-7);\n- retire kern_emu by rebuilding VMMOUSE.DRV the way USBMOUSE.DRV works (gkm-6, about +40 bytes on kern_big).\n\nRecorded rather than recommended:\n- do not merge the kernels at run time (gkm-5);\n- do not flatten kern_small to one code segment while its ROM is a product (gkm-8, -540 bytes);\n- one system disk for the 8088 and the 286 only after L3 (gkm-9).\n\nThe overall line: kernels may fork, packages should not. L3 is the package half of the matrix question.",
+ "strengths": [
+  {
+   "title": "One product name per build, additive variants, nonsense combinations refused",
+   "why": "Each build has exactly one product name. KERN_EMU and KERN_MEGA imply KERN_BIG, so no '%ifdef KERN_BIG' site misses them. small+emu, small+mega and emu+mega are %errors.",
+   "evidence": "kernel/kernel.asm:190-246"
+  },
+  {
+   "title": "A feature-symbol configuration layer resolved above every include",
+   "why": "About 700 conditionals test named features (OS88_DRIVERS, OS88_COMPACT, OS88_REDIR, OS88_IMG, FCP_MOD...) instead of a build name. Each is resolved once with its reason, which plays the role of SysV's master file in a tree with no linker.",
+   "evidence": "kernel/kernel.asm:868-1112"
+  },
+  {
+   "title": "Protected-mode cleanliness enforced by the assembler",
+   "why": "KDS, KSEG, VSEG, CSDO and the rest are byte-identical to the real-mode instruction off kern_mega. Each is an %error in a section where its premise is false. About 400 sites (KSEG 54, CSDO 176, KDS 37, VSEG 22) serve both modes with no separate code path.",
+   "evidence": "kernel/kernel.asm:389-560"
+  },
+  {
+   "title": "The XT does not pay for the 286, and that is proved",
+   "why": "kern_big and kern_small are recorded byte-identical across every kern_mega-only change.",
+   "evidence": "docs/plans/KERN-MEGA-PLAN.md:798, 7190, 7529; MEGA-RELEASE-PLAN.md section 3"
+  },
+  {
+   "title": "Budgets derived per kernel and all four checked at release",
+   "why": "KERN_BUDGET, MEGA_RESIDENT and KERN_CODE_MAX are each derived from the kernel's own sections, and kernsize --release runs on the two extra kernels beside the shipped two.",
+   "evidence": "kernel/kernel.asm:1414-1466; Makefile:14830-14831"
+  },
+  {
+   "title": "Packages are one binary across kern_big and kern_small",
+   "why": "The SDK keeps MAX_TASKS at 14 and MAX_WIN at 12 while kern_small runs 5 and 6, so a small kernel's snapshot is over-allocated rather than overrun. Windows' lesson that everything above the kernel is mode-portable is already learned for packages.",
+   "evidence": "kernel/sched.inc:48,60; kernel/wm.inc:146"
+  },
+  {
+   "title": "Separate code at build time and shedding at run time are both used where each fits",
+   "why": "kern_small carries FCP_MOD and FDLG_MOD as on-demand modules, and kern_big drops its .vga rung at boot on mono machines.",
+   "evidence": "kernel/kernel.asm:1104,1112,1146-1158"
+  }
+ ],
+ "findings": [
+  {
+   "id": "gkm-1",
+   "kind": "hazard",
+   "severity": "medium",
+   "title": "A fix made on one kernel's code path leaves the shipped kernel with the defect",
+   "detail": "osapi_drv_classk_x counts loaded rows only under %ifdef KERN_MEGA. kern_big keeps 'cmp ax,1' on the KB sum, yet kern_big's own HMA placement zeroes DRVR_PARA on a loaded row, so a loaded class reads as absent (drivers-3). HBM_BADV routes to .badv only on kern_mega, although .badv is assembled on kern_big inside OS88_IMG (hiber-2). The rule that kern_big must stay byte-identical across kern_mega work is the right proof for kern_mega's own mechanism. Applied to a cause in shared code, it leaves kern_big broken. Neither defect is in MEGA-RELEASE-PLAN 4.2's list of kern_big defects.",
+   "evidence": [
+    "kernel/driver.inc:2167-2177, 2198-2209 (mega-only row count)",
+    "kernel/driver.inc:3933 and word [bx+DRVR_PARA], 0 ; no heap held",
+    "kernel/hiber.inc:3400-3404 HBM_BADV; 3405-3468 .badv inside %ifdef OS88_IMG",
+    "docs/plans/KERN-MEGA-PLAN.md:798 'kern_big assembles byte-identical with all of it'"
+   ],
+   "recommendation": "Make both fixes unconditional. Add to KERN-MEGA-PLAN's checklist: a fix under %ifdef KERN_MEGA says why its cause is not in shared code; if it is, the fix lands unconditionally in the same commit. Rewrite CLASSK's header (doc mismatch D8).",
+   "phase": "now",
+   "bytes_est": "+6 kern_big/kern_emu .cold (row count); 0 HIBER.DRV; 0 kern_small; 0 kern_mega",
+   "listed_as": "drivers-3, hiber-2 (this review); not in MEGA-RELEASE-PLAN 4.2",
+   "verdict": "corrected",
+   "verify_note": "drivers-3 confirmed: osapi_drv_classk_x counts rows only under %ifdef KERN_MEGA (driver.inc:2170-2209), and %1_hma (driver.inc:3933, under HMA_DRV, which kernel.asm:1176-1183 defines on kern_big/kern_emu with ROM_COLD and not on kern_mega) zeroes DRVR_PARA. hiber-2 confirmed, but the evidence is wrong: .badv is NOT assembled on kern_big inside OS88_IMG. The %ifdef OS88_IMG at hiber.inc:3404 wraps only .bimg; .b9/.b8/.b8s/.b7/.badv/.nox all sit inside the %ifdef KERN_MEGA opened at .b6 (3424-3466). Making the fix unconditional therefore means assembling .badv (and its hb_xseg free and hbm_vbk call) on kern_big too, not only re-pointing HBM_BADV. Bytes: the row-count arm is push/xor/inc/pop cx plus cmp cx,1 in place of cmp ax,1 = +5, not +6; HIBER.DRV grows by .badv's ~20 bytes on kern_big (module bytes, 0 resident). Neither item is in ABI-BREAK-LIST, KERNEL-BYTE-QUEUE or MEGA-RELEASE-PLAN."
+  },
+  {
+   "id": "gkm-2",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "kern_small's separate code fails at refusal stubs and guards, and no gate decodes them",
+   "detail": "Three of the four kern_small-only bugs are a stub or guard written apart from the full body. abi-2: OSAPI_XREFUSE clobbers AX on a cell whose contract says every register is kept. dw-8: the WRITE_AT stub enters below its neighbours' mov ax, FERR_NAME. video-1: the dual-card refusal is %ifdef KERN_BIG because vid_dual_ok lives there, although kern_small's vid_avail can hold both a CGA and a Hercules. t_api_abi reads build/kernel.bin only, and its FIXED ledger has no kern_small rows (abi-3).",
+   "evidence": [
+    "kernel/fsx.inc:1034-1042 guard under %ifdef KERN_BIG",
+    "tests/unit/t_api_abi.py main() opens build/kernel.bin only (abi-3)",
+    "kernel/kernel.asm OSAPI_XREFUSE macro and the FS_OP cell (abi-2)",
+    "kernel/diskw.inc WRITE_AT stub (dw-8)"
+   ],
+   "recommendation": "Take abi-3's --kernel mode over smallk, emuk and megak with per-kernel FIXED rows. Give OSAPI_XREFUSE an argument naming the cell's refusal shape (KEEP = stc/retf, or AX=FERR_x), so a stub cannot be written without naming the contract it answers. Make the video-1 guard test the hardware capability it protects.",
+   "phase": "now",
+   "bytes_est": "0 (gate); 0 abi-2 (cell stays 6 bytes); +0..+3 dw-8 and ~+6 video-1 on kern_small",
+   "listed_as": "abi-2, abi-3, dw-8, video-1 (this review)",
+   "verdict": "confirmed",
+   "verify_note": "abi-2, abi-3 and dw-8 confirmed by their own verifiers; video-1 corrected there (+13 kern_small, not ~+6). The guard is at fsx.inc:1034-1042 as cited, under %ifdef KERN_BIG. OSAPI_XREFUSE (kernel.asm:2595-2600) takes no argument and is used on four cells (0x04B3, 0x04CB, 0x04EF, 0x04F5), two of whose contracts differ, so a shape argument is a real guard. t_api_abi.py:457 opens build/kernel.bin only. Byte estimate for video-1 should read +13 (video.json)."
+  },
+  {
+   "id": "gkm-3",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "Test coverage per kernel is inverse to the product's floor",
+   "detail": "From suite.rows() (2,034 rows):\n- kern_big: about 1,490 soak rows and 12 full rows.\n- kern_mega: about 430 soak rows (343 mega- ports). test-full never boots it.\n- kern_small: 28 soak rows and one full row (small128).\n- kern_emu: 1 row.\n\n_ports already runs rows on kern_small's own build for 86Box (box86port.txt with @OS88_BUILD=build/smallk). There is no MartyPC lane, because _ports drops the 'marty' need and forces Bochs or 86Box. So the 128KB XT has no ported coverage on the instrument that models it.",
+   "evidence": [
+    "tests/suite.py:21712-21796 _ports drops marty/qemu needs",
+    "tests/suite.py:21804-21808 box86port kern_small form",
+    "docs/plans/MEGA-RELEASE-PLAN.md section 9 'test-full never boots kern_mega'",
+    "tests/megaport.txt 443 lines"
+   ],
+   "recommendation": "Add tests/smallport.txt and a 'small-' prefix to _ports that keeps the base row's marty need. Seed it with rows covering the modules where kern_small has two diverging bodies: desk, diskw, disk, memory, files, wm, fsx, and the module seam (FCP/FDLG).",
+   "phase": "now",
+   "bytes_est": "0 kernel bytes",
+   "listed_as": "",
+   "verdict": "corrected",
+   "verify_note": "Counts are about right: a re-count over suite.rows() (2,034 rows) gives roughly 21-28 kern_small soak rows depending on how a row is attributed, ~390-430 kern_mega, and test-full's 14 rows contain no kern_mega boot (megahigh is a host check). tests/megaport.txt is 443 lines. Correction: no box86port.txt line runs on kern_small today - the grammar supports `@OS88_BUILD=build/smallk @OS88_DEFINES=KERN_SMALL` (box86port.txt:6-7, a comment), but none of its 45 lines uses it. _ports drops the marty need (suite.py:21775-21777) as stated, so a smallport.txt lane needs a parser change, not only a list."
+  },
+  {
+   "id": "gkm-4",
+   "kind": "perf",
+   "severity": "low",
+   "title": "The parity gate covers kern_big and kern_small but not kern_mega, the only kernel whose every machine has a 16-bit bus",
+   "detail": "The parity gate (t_hotpar) pins HOT['big'] and, when the build is current, HOT['small']. It gives a reason for leaving kern_emu ungated and says nothing about kern_mega, although its own premise is that a word fetch at an odd address costs a second bus cycle on the 8086, V30 and 286. kern_small's 128KB machines are nearly all 8088s, where parity is free, yet it carries 9 build-gated hand pads; kern_mega carries 2. Each pad is tuned to one kernel, and a byte cut in shared code ahead of it flips parity on the kernels it was not tuned for.",
+   "evidence": [
+    "tests/unit/t_hotpar.py:4-6, 36-38, 128-142",
+    "pads: diskw.inc:193, font.inc:1010/1014/2069/2515, memory.inc:761, vga12.inc:4559, viddet.inc:1106, vidsel.inc:1634 (small); dock.inc:435, kernel.asm:6412, sched.inc:2770, wm.inc:7908 (big); instance.inc:723, mouse.inc:2260 (mega)",
+    "self-aligning precedent: kernel/vidext.inc:103, kernel/font.inc:620"
+   ],
+   "recommendation": "Pin HOT['mega'] in t_hotpar when build/megak is current. Replace the 15 build-gated pads with one HOTPAR even|odd macro: %if (($-$$)&1) != want / db 0 / %endif, placed at the same never-executed points. Section bases are even on every kernel, so the absolute form is sound.",
+   "phase": "now",
+   "bytes_est": "0 net (0 or 1 byte per site per kernel, chosen by the assembler)",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "t_hotpar.py's main() checks HOT['big'] and HOT['small'] only and its docstring excuses kern_emu, not kern_mega. The self-aligning precedent exists in the tree (vidext.inc:103 and font.inc:620 use `%if ($ - label) & 1 / db 0 / %endif`), so the macro shape assembles. Pad line numbers have drifted a few lines (e.g. diskw.inc:197, memory.inc:773, instance.inc:727, mouse.inc:2267), which does not change the finding."
+  },
+  {
+   "id": "gkm-5",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "Do not merge the kernels into one binary that picks its mode at boot (priced)",
+   "detail": "Section sizes:\n- kern_big: .text 40,328, .bss 5,366, .cold 37,566; KERN_SIZE 96,768 of 100,864.\n- kern_small: .text 30,035, .bss 2,936, .cold 21,031; 58,880 of 64,000.\n- kern_mega: .text 46,076, .bss 5,404, .cold 46,509, .mega 23,568; MEGA_RESIDENT 62,976 of 68,096.\n\nkern_small as kern_big that sheds at boot needs tables sized for the large machine: task stacks 2,816 against 960 (+1,856) and the FAT window 4,608 against 1,024 (+3,584). That is +5,440 against 5,120 of headroom, before any run-time door. The VGA slide alone needs 14 registered doors, and the 64KB would stop being proved by the assembler.\n\nkern_mega folded into kern_big is the section delta (.text +5,748, .cold +8,943) less .vga (2,030) and the KHP knobs (~452): about 12-14.7KB on every XT, against 4,096 of headroom. Windows 3.0 shipped KERNEL.EXE, KRNL286 and KRNL386 as separate binaries for this reason; 3.1 dropped the real-mode one.",
+   "evidence": [
+    "build/smallk/kernel.map, build/megak/kernel.map section lengths; bytes.md M5 for kern_big",
+    "kernel/sched.inc:176-177 '960 bytes against kern_big's 2,816'",
+    "kernel/kernel.asm:1519, 1565 DSK_FAT_SECS 2 / 9",
+    "tests/vgarefs.txt (14 doors)"
+   ],
+   "recommendation": "Keep four build-time kernels. Record this table in docs/KERNEL-MEMORY.md as the reason, so the merge is not proposed again as an obvious simplification.",
+   "phase": "record",
+   "bytes_est": "0 (keeping); +5,440 to +14,700 refused",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "Section sizes re-read from build/smallk/kernel.map (.text 0x7553 = 30,035, .bss 0xB78 = 2,936, .cold 0x5227 = 21,031) and build/megak/kernel.map (.text 46,076, .bss 5,404, .cold 46,509, .mega 23,568); kern_big .text 40,328, .cold 37,566, .vga 2,030 and KERN_SIZE 96,768 of 100,864 from kernsize. sched.inc:177 states 960 against 2,816; DSK_FAT_SECS is 2 (kernel.asm:1519) and 9 (:1565). +1,856 + 3,584 = +5,440 against 64,000 - 58,880 = 5,120. tests/vgarefs.txt has 14 registered doors. The mega deltas (.text +5,748, .cold +8,943) check."
+  },
+  {
+   "id": "gkm-6",
+   "kind": "rethink",
+   "severity": "medium",
+   "title": "Retire kern_emu: rebuild VMMOUSE.DRV the way USBMOUSE.DRV works",
+   "detail": "kern_emu exists to carry VMMOUSE's resident half: a gate byte, vmm_dsp, vmm_poll from ui_task and task_yield, and mou_apply_abs, 385 bytes in all. It also changes the idle loop (sched.inc:764, 1810, 2370, 2503). kern_big already ships a polled pointer driver with no kernel poll site: USBMOUSE.DRV's worker yields rather than sleeps for UM_HOTT ticks after a report, and delivers through OSAPI_MOUSE_FEED. mou_apply is a plain add and clamp with no acceleration, so an absolute report converts exactly into a feed: dx = scaled_x - mouse_x, read via OSAPI_MOUSE. The 386 probe moves into the driver behind OSAPI_CPU_INFO.",
+   "evidence": [
+    "SPEC.md 9.11.3 (vmm_poll in task_yield), 9.11.7 (385 bytes; 'kern_big plus this feature and nothing else')",
+    "drivers/usbmouse/usbmouse.asm:12-25, 88-93",
+    "kernel/mouse.inc:3952-4044 osapi_mouse_feed; 4067-4146 mou_apply_abs / mou_apply",
+    "kernel/driver.inc:62, 1082, 1192, 1243, 1262, 1511, 1779 kern_emu rows"
+   ],
+   "recommendation": "Rebuild VMMOUSE.DRV as a DRVC_POINT worker driver on kern_big. Remove KERN_EMU: 21 blocks, make emu, build/emuk, emu.img, its kernsize --release leg, its _SHIPPED_DEFS entry and its buildmatrix leg. The browser live image boots kern_big with VMMOUSE.DRV ticked. Try one prototype against the vmmouse row before removing any kernel code.",
+   "phase": "now",
+   "bytes_est": "+~40 kern_big resident (drv_tab row, name, label, CFG bit); -385 kern_emu-only resident; one kernel build retired",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "A rethink, not a defect; spot-checked, and confirmed as a priced option rather than a proven design. SPEC.md 9.11.5/9.11.7 give the 385 bytes and 'kern_big plus this feature and nothing else'. USBMOUSE.DRV is a worker driver with no kernel poll site that feeds OSAPI_MOUSE_FEED and yields for UM_HOTT ticks after a report (usbmouse.asm:12-15, 88-90). mou_apply (mouse.inc:4151) is an add then mou_clamp with no acceleration, so an absolute-to-delta conversion is exact as long as the driver reads mouse_x/y at the time of the feed. Unproven: that a worker rotation pumps a drag's spin loop as promptly as vmm_poll inside task_yield (9.11.3's freeze argument), and the +~40 byte figure, which is an estimate - DRV_MAX rises 6 -> 7 on kern_big with a row's .bss. The recommendation's 'prototype first' covers both."
+  },
+  {
+   "id": "gkm-7",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "Build names, not features, are still the main configuration language inside modules",
+   "detail": "Census of conditionals naming a build:\n- KERN_BIG: 636 blocks, 147 with two bodies (1,857 lines).\n- KERN_SMALL: 124 blocks, 46 with two bodies (341 lines).\n- KERN_MEGA: 406 blocks, 152 with two bodies (832 lines).\n- KERN_EMU: 21 blocks, 3 with two bodies.\n\nThere are about 700 feature-symbol tests beside these. 'kern_small is kern_big minus named features' holds only where a symbol exists. A guard placed under a raw build name is how video-1 happened.",
+   "evidence": [
+    "census script over kernel/*.inc and kernel.asm",
+    "KERN_BIG concentrations: ctrl.inc 95, wm.inc 85, vga12.inc 53, driver.inc 35",
+    "KERN_MEGA in shared files: memory.inc 58, hiber.inc 41, disk.inc 40, diskw.inc 30"
+   ],
+   "recommendation": "Add a ratchet shaped like tests/textsites.txt. Build names may appear in kernel.asm's define block and in mega*.inc; every other site is registered with a reason, and a new one fails make. Sites move to named capability symbols as their files are touched. No bulk conversion.",
+   "phase": "now",
+   "bytes_est": "0",
+   "listed_as": "",
+   "verdict": "confirmed",
+   "verify_note": "Re-counted %if/%ifdef/%elif lines naming each build over kernel/*.inc and kernel.asm: KERN_BIG 638, KERN_SMALL 126, KERN_MEGA 406, KERN_EMU 21; per-file KERN_BIG ctrl.inc 95, wm.inc 82, vga12.inc 51, driver.inc 33 - within a few of the reviewer's census."
+  },
+  {
+   "id": "gkm-8",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "Flattening kern_small to one code segment: priced, and not recommended while its ROM is a product",
+   "detail": "kern_small's .text + .bss + .cold is 54,002, which fits in 64KB. The crossings between .text and .cold cost about 540 bytes (bytes-4). On this kernel .cold buys only the ROM: there is no VGA rung to slide over and no HMA, and ROM_PKG puts a package in that ROM on kern_small alone. The crossings are written as literals (380 'call COLD_SEG:', 335 'call KERNEL_SEG:', plus §2.6.1's retf-ending entry bodies), so a flat build needs every one behind a macro first.",
+   "evidence": [
+    "kernel/kernel.asm:1152 (no VGA on kern_small), 1186-1191 ROM_PKG",
+    "grep: 380 call COLD_SEG:, 335 call KERNEL_SEG:",
+    "kernel/kernel.asm:5515-5530 COLDCALL/TEXTCALL"
+   ],
+   "recommendation": "Refuse while kern_small's ROM is a product: 21,031 bytes of .cold plus a package off a 128KB heap outweigh 540. If the owner drops the ROM for kern_small, the trade reverses.",
+   "phase": "record",
+   "bytes_est": "-540 kern_small if taken",
+   "listed_as": "bytes-4",
+   "verdict": "confirmed",
+   "verify_note": "380 `call COLD_SEG:` and 335 `call KERNEL_SEG:` re-counted. kernel.asm:1150-1153 says kern_small drives no VGA and has no rung to slide; ROM_PKG is kern_small-only at 1186-1191. 30,035 + 2,936 + 21,031 = 54,002. bytes-4 (-540) is confirmed in bytes.json."
+  },
+  {
+   "id": "gkm-9",
+   "kind": "rethink",
+   "severity": "low",
+   "title": "One disk set for the 8088 and the 286 (WIN.COM's half), after L3",
+   "detail": "kern_mega ships on its own 286-PLUS disks. Windows 3.0 chose the kernel in WIN.COM from one install, because NE ordinal linking made USER, GDI and the drivers portable across modes. os8088's kernel modules are bound to one kernel's layout (MOD_STAMP), so each kernel needs its own module set. A dual-kernel system disk would carry kern_mega's KERNEL.SYS (115,872 bytes) and its 11 modules (56,607), about 172KB: feasible at 1.2MB and 1.44MB only. Stage 2 reads the kernel as the first file in the data area, so a second kernel also needs a fixed placement in os88disk.py and a CPU and extended-memory test in .boot2. Packages still differ until L3.",
+   "evidence": [
+    "kernel/mod.inc:113-140 MOD_STAMP",
+    "build/megak/kernel.sys 115,872; build/megak/*.drv 56,607 (11 files)",
+    ".claude/skills/release-os8088/mkzip.py:312-325 286-PLUS disks"
+   ],
+   "recommendation": "Record as the product step that L3 enables, in this order: L3 plus megacore rethink 4's clean bit; then one apps disk; then the selector. Do not build the selector before L3.",
+   "phase": "record",
+   "bytes_est": "+60..+120 .boot2 (transient); +172KB on the 1.2/1.44MB system disks",
+   "listed_as": "ABI-BREAK-LIST L3 (precondition)",
+   "verdict": "confirmed",
+   "verify_note": "Spot-checked: MOD_STAMP is a function of the kernel's section sizes (mod.inc:138-140), kernel.sys is 115,872 bytes and build/megak holds 11 .drv files totalling 56,607; mkzip.py:312-325 makes the 286-PLUS disks a separate required group."
+  },
+  {
+   "id": "gkm-10",
+   "kind": "weakness",
+   "severity": "low",
+   "title": "Budget headroom decides which kernel gets a speed-up",
+   "detail": "kern_mega carries KHP knobs 1-11 because 'its conventional budget had room'. Knobs 2-11 speed up desktop paths the XT runs slowest, for example KHP_RELIT (a CGA full-screen exit, 781 -> 629 ms) and KHP_RAISEOL (a CGA raise, -5 to -14 ms). Those ten cost about 452 bytes on kern_big, 214 of them in .vga, which is resident only on VGA/EGA machines. They ship only on the 286/386 kernel. This is the rung rule applied across kernels: one kernel's headroom is not a reason for another kernel to lack a feature.",
+   "evidence": [
+    "kernel/kernel.asm:255-257",
+    "docs/plans/LAST-DROP-PERF.md section 7.2 rows 2-11 and 7.3"
+   ],
+   "recommendation": "Decide each knob by the target-machine question already used elsewhere: N bytes on kern_big for M cycles on the XT. For each one refused, record why kern_big says no.",
+   "phase": "now",
+   "bytes_est": "0 now; +452 kern_big if all ten are taken (+238 .text/.cold, +214 .vga)",
+   "listed_as": "LAST-DROP-PERF 7.2/7.3; wm.md and sysmisc.md KHP findings",
+   "verdict": "corrected",
+   "verify_note": "The weakness stands (kernel.asm:255-261: kern_mega carries the first eleven because 'its conventional budget had room'), and the bytes check: rows 2-11 of LAST-DROP-PERF 7.1 sum to 452, of which .vga is 122+39+21+32 = 214. But the recommendation is already largely done: LAST-DROP-PERF 7.1 prices each knob in kern_big bytes and XT time and has a 'why it is not on yet / what would flip it' column for every row, ranked for kern_big. What is left is the owner's per-row decision, not a new record."
+  },
+  {
+   "id": "gkm-11",
+   "kind": "weakness",
+   "severity": "medium",
+   "title": "The near model still limits kern_big, at the VGA rung, with 6,946 bytes left",
+   "detail": "The VGA rung is reached by near calls, so its last byte must be a KERNEL_SEG offset. On kern_big it sits above .text, .bss, the FAT window and .lowbss, and kernel.asm calls its guard 'the binding form of KERN_CODE_MAX now'. kernsize reports 6,946 bytes left in that window. CLAUDE.md and KERNEL-MEMORY.md still define KERN_CODE_MAX as .text + .bss, which reads as 19,842 left. kern_mega (14,056 free) and kern_small (32,565 free) are not limited by it.",
+   "evidence": [
+    "kernel/kernel.asm:8729-8736 VGA window guard",
+    "docs/reports/big-review-2026-11-08/areas/bytes.md bytes-4 (window 6,946)"
+   ],
+   "recommendation": "On kern_big, quote the window figure rather than KERN_CODE_MAX's; see doc mismatch D7. Note that a .lowbss or FAT-window byte on kern_big now costs window headroom as well as budget.",
+   "phase": "record",
+   "bytes_est": "0",
+   "listed_as": "bytes-4 (figure quoted, not named as the binding one)",
+   "verdict": "confirmed",
+   "verify_note": "kernsize today: 'segment .text+.bss 45,694 of KERN_CODE_MAX 65,536 -> 19,842 left' and 'window the VGA rung ends at KERNEL_SEG:0xe4de -> 6,946 of the 64KB window left'. The guard is kernel.asm:8731 with the comment 'the binding form of KERN_CODE_MAX now'. kern_small 65,536 - 32,971 = 32,565. docs/KERNEL-MEMORY.md 1121-1124 and SPEC.md 4028-4029 already say this; only CLAUDE.md/AGENTS.md's short form did not (doc fix applied)."
+  }
+ ],
+ "doc_fixes": [
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": "; A Macintosh-style GUI for the 8086: 640x480x16 (VGA mode 12h), pre-emptive\n; round-robin multitasking off the PIT, serial Microsoft mouse on COM1.",
+   "new_text": "; A Macintosh-style GUI for the 8086: VGA/EGA (mode 12h, kern_big), Hercules\n; or CGA, picked at boot (SPEC.md 39); pre-emptive round-robin multitasking\n; off the PIT; a serial mouse on COM1 or COM2, a PS/2 mouse or a pointing\n; driver (SPEC.md 9). Four kernels build from this file - the split below.",
+   "why": "The header describes the first VGA-only, COM1-only kernel: GFX_VGA is defined only under KERN_BIG (kernel.asm:1359-1361), kern_small drives no VGA (:1152), the mouse contests COM1/COM2 and has PS/2 and OSAPI_MOUSE_FEED backends, and four kernels build from this file."
+  },
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": "; BIOS data area (100KB of machine on kern_big, 64KB on kern_small).",
+   "new_text": "; BIOS data area (100KB of machine on kern_big and kern_emu, 64KB on\n; kern_small; on kern_mega 68KB held against MEGA_RESIDENT, the span less the\n; rungs that go above 1MB - rule 4 below).",
+   "why": "kern_mega's KERN_BUDGET is KERN_MEGA_RESIDENT_KB*1024 - KERNEL_SEG*16 = 68,096, held against MEGA_RESIDENT, not the whole span (kernel.asm KERN_BUDGET block, rule 4)."
+  },
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": "; KERN_BIG and KERN_SMALL are two builds off this one tree, and the knob is\n; `make KERN_BIG=1`.",
+   "new_text": "; KERN_BIG and KERN_SMALL are two builds off this one tree, and the knob is\n; `make KERN_SMALL=1` (`make small`); with no knob the Makefile sends\n; -DKERN_BIG.",
+   "why": "There is no KERN_BIG knob: the Makefile's knob is KERN_SMALL=1 (Makefile:1207) and with it unset it sends -DKERN_BIG (Makefile:1511-1515)."
+  },
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": "; THE BUDGETS. Three rules, each a different quantity (docs/KERNEL-MEMORY.md):",
+   "new_text": "; THE BUDGETS. Three rules, each a different quantity, and kern_mega's own\n; (rule 4, below) (docs/KERNEL-MEMORY.md):",
+   "why": "The block goes on to define rule 4 (KERN_MEGA_RESIDENT_KB equ 68 ; rule 4); docs/KERNEL-MEMORY.md frames it as 'THREE sentences, THREE quantities (and kern_mega's own)', so the header says the same rather than 'four'."
+  },
+  {
+   "file": "kernel/kernel.asm",
+   "old_text": ";      owner made it \"a normal build with its own budget\", a step towards a\n;      release that is not one yet.",
+   "new_text": ";      owner made it \"a normal build with its own budget\", a step towards a\n;      release, which came on 2026-11-07 (MEGA-RELEASE-PLAN 8 and 9).",
+   "why": "The owner answered 'Released' on 2026-11-07 and mkzip.py's mega group makes kern_mega's disks required release items (mkzip.py:312-325; commit e3be16bd)."
+  },
+  {
+   "file": "CLAUDE.md",
+   "old_text": "budgeted is not RELEASED, and no\n  release artefact carries its disks.",
+   "new_text": "budgeted and, since 2026-11-07,\n  RELEASED: the release zip requires its disks (`mkzip.py`'s `mega` group),\n  which `make mega` builds and `all` does not.",
+   "why": "Stale since 2026-11-07: the owner's answer was 'Released' and mkzip.py's mega group makes the 286-PLUS system, software, XTMP3 and WIN16 disks REQUIRED items (MEGA-RELEASE-PLAN 8-9; commit e3be16bd). CLAUDE.md and AGENTS.md carry the same rule and change together."
+  },
+  {
+   "file": "AGENTS.md",
+   "old_text": "budgeted is not RELEASED, and no\n  release artefact carries its disks.",
+   "new_text": "budgeted and, since 2026-11-07,\n  RELEASED: the release zip requires its disks (`mkzip.py`'s `mega` group),\n  which `make mega` builds and `all` does not.",
+   "why": "Stale since 2026-11-07: the owner's answer was 'Released' and mkzip.py's mega group makes the 286-PLUS system, software, XTMP3 and WIN16 disks REQUIRED items (MEGA-RELEASE-PLAN 8-9; commit e3be16bd). CLAUDE.md and AGENTS.md carry the same rule and change together."
+  },
+  {
+   "file": "docs/KERNEL-MEMORY.md",
+   "old_text": "(docs/plans/completed/msp1/megabudget.md) - a step towards a general release\nthat is not one yet, so no release artefact carries its disks.",
+   "new_text": "(docs/plans/completed/msp1/megabudget.md) - a step towards a general release,\nwhich came on 2026-11-07: the release zip now requires its disks\n(docs/plans/MEGA-RELEASE-PLAN.md 8 and 9), though `all` does not build them.",
+   "why": "Same stale claim as CLAUDE.md's: mkzip.py's mega group requires the kern_mega disks since 2026-11-07."
+  },
+  {
+   "file": "CLAUDE.md",
+   "old_text": "`KERN_CODE_MAX` is separate and absolute: `.text` + `.bss` inside one 64KB\n  window because offsets are 16 bits.",
+   "new_text": "`KERN_CODE_MAX` is separate and absolute: `.text` + `.bss` inside one 64KB\n  window because offsets are 16 bits - and on kern_big the near-called VGA\n  rung shares that window above the FAT window and LOW, so its guard binds\n  first (`kernsize`'s `window` line, docs/KERNEL-MEMORY.md).",
+   "why": "On kern_big the VGA rung guard (kernel.asm 'the binding form of KERN_CODE_MAX now', %if VGA_VSTART + VGA_SIZE > 0x10000) is the tighter limit: kernsize reports 6,946 bytes left in the window against 19,842 for .text+.bss. KERNEL-MEMORY.md 1121-1124 already says so; the short form did not."
+  },
+  {
+   "file": "AGENTS.md",
+   "old_text": "`KERN_CODE_MAX` is separate and absolute: `.text` + `.bss` inside one 64KB\n  window because offsets are 16 bits.",
+   "new_text": "`KERN_CODE_MAX` is separate and absolute: `.text` + `.bss` inside one 64KB\n  window because offsets are 16 bits - and on kern_big the near-called VGA\n  rung shares that window above the FAT window and LOW, so its guard binds\n  first (`kernsize`'s `window` line, docs/KERNEL-MEMORY.md).",
+   "why": "On kern_big the VGA rung guard (kernel.asm 'the binding form of KERN_CODE_MAX now', %if VGA_VSTART + VGA_SIZE > 0x10000) is the tighter limit: kernsize reports 6,946 bytes left in the window against 19,842 for .text+.bss. KERNEL-MEMORY.md 1121-1124 already says so; the short form did not."
+  },
+  {
+   "file": "kernel/driver.inc",
+   "old_text": "; `cmp ax, DRV_HDR_SZ / jb .bad`). Four bytes for eight, and one fewer\n; register in the contract.\n",
+   "new_text": "; `cmp ax, DRV_HDR_SZ / jb .bad`). Four bytes for eight, and one fewer\n; register in the contract. **NOT where an image has left the heap**: kern_big's\n; %1_hma and kern_mega's drv_hi_move both zero DRVR_PARA on a loaded row, so\n; the KB can be 0 for a class that is up. kern_mega counts rows for that\n; (below); kern_big, which assembles the `cmp ax, 1`, answers CF = 1 there.\n",
+   "why": "%1_hma (driver.inc:3933, assembled on kern_big and kern_emu under HMA_DRV) zeroes DRVR_PARA on a loaded row, so the header's 'AX = 0 exactly when no row of the class is loaded' is false on kern_big; kern_mega's arm already says so for drv_hi_move."
+  }
+ ]
+}
