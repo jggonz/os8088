@@ -773,6 +773,9 @@ void c64_c8spr(unsigned char *dst, const unsigned char *data, int x,
 static long h_fsx_putn;                     /* bytes put to the framebuffer */
 static int h_fsx_poke_at = -1;              /* the key pass that pokes row 10 */
 static int h_fsx_pokech = 0x02;             /* ...and the screen code it pokes */
+void c64_wr(unsigned a, int v);     /* defined below, with the Paste feeder's
+                                     * byte count */
+
 void c64_fsx_put(unsigned seg, unsigned off, const unsigned char *src, int n)
 {
     memcpy(segbase(seg) + off, src, n);
@@ -1106,6 +1109,8 @@ unsigned os88_part_seg(int i)
 int os88_part_fetch(int i) { return i == 2 ? -1 : 0; }  /* part 2 is the fast
                                              * core, refused (C64-SPEC 4.7) */
 void os88_part_drop(int i) { (void)i; }
+int os88_part_movable(int i) { (void)i; return 0; }  /* the harness never
+                                             * compacts (os88_mem_movable) */
 int os88_part_lazyok(int i) { (void)i; return 1; }
 int os88_part_optok(void) { return 1; }
 
