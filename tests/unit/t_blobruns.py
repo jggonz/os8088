@@ -202,10 +202,11 @@ def runs(path, nsec, dest=None):
 # so a sector of blob that costs stage 1 nothing can still cost stage 2 a call,
 # at the far end of the read where nobody looks. This walks the read exactly as
 # boot/boot2.asm's read_run does: on an 8088 the run ends at the first of the
-# cylinder's end, the sectors still wanted and the 64KB DMA page of the
-# DESTINATION, and the destination starts at KERNEL_SEG and advances 32
-# paragraphs a sector - with the packed kernel (SPEC.md 2.9.13) the plain head
-# is read first and the packed tail lands KZ_RPARA paragraphs further up.
+# cylinder's end and the sectors still wanted - with the packed kernel
+# (SPEC.md 2.9.13) the plain head is read first, at the track, and the packed
+# tail after it. The 64KB DMA page of the DESTINATION was a third bound until
+# SPEC.md 2.9.13.7, which reads a run the page would cut whole to the next
+# page's start and copies it down: a call a page boundary, given back.
 KERNEL_SEG = 0x0060
 
 
@@ -220,7 +221,6 @@ def kz(sub=""):
 def stage2_calls(start, spt, heads, nsec_blob, k, tail=0):
     runmax = spt * heads                    # an 8088's bound: the cylinder
     lba = start + nsec_blob
-    dest = KERNEL_SEG
     if k:
         # the plain head at the TRACK bound since the big review's BR-1 part 2
         # (boot2.asm: the splash's first tick runs those sectors before the
@@ -231,16 +231,11 @@ def stage2_calls(start, spt, heads, nsec_blob, k, tail=0):
         return None
     calls = 0
     for left, rpara, bound in parts:
-        dest += rpara
         while left:
             run = min(left, bound - lba % bound)
-            page = (-((dest << 4) & 0xFFFF)) & 0xFFFF
-            if page:
-                run = min(run, page >> 9)
             calls += 1
             lba += run
             left -= run
-            dest += run * 32
     return calls
 
 
@@ -295,11 +290,24 @@ def stage2_calls(start, spt, heads, nsec_blob, k, tail=0):
 # only while the tail's unpacked-less-packed + 64 stays in (20,480, 20,992]
 # (20,820 at 16.16: 172 bytes of growth, 340 of shrink) - and 1.2MB reads 8
 # at R 20,480 and at 21,504 alike, so its spare is not the 15 it looks.
+#
+# **SPEC.md 2.9.13.6 AND 2.9.13.7 TOOK ONE MORE OFF THREE OF THEM** (BOOT3-PLAN
+# 16.18). The DMA page is a bounce in read_run now, not a third bound, so the
+# run that crossed 0x10000 is one call where it was two - and the block
+# dictionary packs kern_big's tail 464 bytes smaller (159 -> 158 sectors,
+# R 20,992 -> 21,504). 360KB and 720KB 11 -> 10, 1.44MB 7 -> 6; 1.2MB stays 7
+# and the small disks 7 (kern_small's read never reaches 0x10000). The
+# dictionary ALONE would have cost 1.2MB a call (7 -> 8: the larger R moved the
+# page cut into a run), which is the bounce's other virtue - a page boundary
+# no longer decides where a run starts, so R cannot move a call by moving it.
+# The dictionary's sector is 360KB's and 720KB's slack now: the tail ends at
+# LBA 178, one short of the cylinder (`--tail 2` is their eleventh call);
+# 1.2MB has 16 spare, 1.44MB 18, the small disks 9.
 STAGE2 = {
-    "os8088-360.img": 11,   # head 5 at LBA 21..25, the tail 26..180: 0 free
-    "os8088-720.img": 11,   # (the 360KB disk's shape)
+    "os8088-360.img": 10,   # head 5 at LBA 21..25, the tail 26..178: 1 free
+    "os8088-720.img": 10,   # (the 360KB disk's shape)
     "os8088-120.img": 7,    # 9 at blob 13 / head 9 (BR-1's track-bound head)
-    "os8088.img": 7,        # 8 at blob 13 / head 9
+    "os8088.img": 6,        # 8 at blob 13 / head 9; 7 until the bounce
     "small360.img": 7,      # kern_small, 98 sectors packed, after its OWN
     "small720.img": 7,      # 7-sector blob; 8 at blob 11
 }

@@ -21,8 +21,10 @@ is what this row did not know for two months (the big review's BR-1,
 Under KZIP (the default since 2026-09-05) it starts at KERNEL.SYS + the blob,
 reads the KZ_HEADSEC plain sectors in runs of their own (at the TRACK bound
 since BR-1's part 2), and starts the packed tail afresh behind them, R
-paragraphs further up - and every run is cut at the 64KB DMA page of its
-destination as well as at the cylinder. On a 9-sector disk file sector 21 was
+paragraphs further up - and every run was cut at the 64KB DMA page of its
+destination as well as at the cylinder (until SPEC.md 2.9.13.7 met the page
+with a bounce instead, which takes the page out of the walk: a run is the
+cylinder and what is left, wherever it lands). On a 9-sector disk file sector 21 was
 in the head-1 half of cylinder 1, and every run containing it began after that
 cylinder's flip: the canary was INERT on the 360KB and 720KB disks of both
 shipped kernels while this row passed. So the walk below is the loader's own,
@@ -38,6 +40,12 @@ an absolute equ), the signature the build injected out of each disk's own boot
 sector (`mov di, KSIG`), the geometry out of each disk's own BPB, and walks the
 runs with its own code. A generator and a gate that share a model share its
 mistakes; BR-1 was exactly that.
+
+AND IT HOLDS EVERY DISK TO THE DMA BOUNCE (SPEC.md 2.9.13.7): read_run reads a
+run the 64KB page would cut whole to the next page's start, and boot2.asm's
+guards and BLOB_LIFT are sized for B2_BMAXSEC sectors of it - so a shipped disk
+whose BPB gives a longer cylinder fails here, read off that kernel's map.
+Break that on purpose with B2_BMAXSEC read as 30: the three 1.44MB disks fail.
 
 Break it on purpose: make os88ksig.py's `live()` answer True for every sector
 (so it chooses the first tail sector, file sector 22 on kern_big) and rebuild -
@@ -99,29 +107,26 @@ def bpb(img):
 def walk(lba0, spt, heads, k, nokzip_secs=None):
     """The runs (lba, count, which) stage 2 asks for on an 8088, which takes
     the CYLINDER bound (boot2.asm's gate): read_run cuts at the first of the
-    run bound, the sectors still wanted and the 64KB DMA page of the
-    destination. Under KZIP the head is read first at the TRACK (BR-1 part 2)
-    and the tail restarts behind it, R paragraphs further up."""
+    run bound and the sectors still wanted - the 64KB DMA page is a BOUNCE
+    there, not a bound (SPEC.md 2.9.13.7), so it cuts nothing. Under KZIP the
+    head is read first at the TRACK (BR-1 part 2) and the tail restarts
+    behind it, R paragraphs further up."""
     out = []
 
-    def load(lba, dest, left, runmax, which):
+    def load(lba, left, runmax, which):
         while left:
             n = min(runmax - lba % runmax, left)
-            page = (-((dest << 4) & 0xFFFF)) & 0xFFFF
-            if page:
-                n = min(n, page >> 9)
             out.append((lba, n, which))
             lba += n
             left -= n
-            dest += n * 32
-        return lba, dest
+        return lba
 
     lba = lba0 + k["blob"] // 512 if k else lba0
     if k is None:
-        load(lba, KERNEL_SEG, nokzip_secs, spt * heads, "plain")
+        load(lba, nokzip_secs, spt * heads, "plain")
         return out
-    lba, dest = load(lba, KERNEL_SEG, k["headsecs"], spt, "head")
-    load(lba, dest + k["rpara"], k["ksecs"] - k["headsecs"], spt * heads, "tail")
+    lba = load(lba, k["headsecs"], spt, "head")
+    load(lba, k["ksecs"] - k["headsecs"], spt * heads, "tail")
     return out
 
 
@@ -185,6 +190,17 @@ def main():
         if heads < 2:
             bad.append(f"{name}: one head - nothing to cross")
             continue
+        # ...AND THE BOUNCE HOLDS THIS DISK'S LONGEST RUN (SPEC.md 2.9.13.7).
+        # read_run reads a run the DMA page would cut to that page's start,
+        # and boot2.asm's guards and BLOB_LIFT are sized for B2_BMAXSEC
+        # sectors of it - the cylinder of the largest geometry. A disk whose
+        # BPB says more would bounce past what they proved
+        bmax = mapnum(sub, "B2_BMAXSEC")
+        if spt * heads > bmax:
+            bad.append(f"{name}: a cylinder of {spt * heads} sectors, and "
+                       f"stage 2's DMA bounce is sized for {bmax} "
+                       f"(B2_BMAXSEC, kernel.asm)")
+            continue
         c = data + fsec
         # THE SECTOR THE BUILD REALLY ARMED: the boot sector's `mov di, KSIG`
         # must name this disk's own file sector `fsec`
@@ -224,7 +240,8 @@ def main():
     if bad:
         sys.exit(
             "t_canary: the canary is NOT read after a head flip, or is not the "
-            "sector it claims, on:\n  " + "\n  ".join(bad) + "\n- it would "
+            "sector it claims, or the disk's runs outgrow stage 2's DMA bounce "
+            "(SPEC.md 2.9.13.7), on:\n  " + "\n  ".join(bad) + "\n- it would "
             "be loaded CORRECTLY on a machine whose FDC flips at the wrong "
             "sector, and the canary would pass on the one fault it is for "
             "(SPEC.md 18.93.1)"

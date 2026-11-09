@@ -42,8 +42,11 @@ blob length, a head), never a looser rule.
 
 THE MODEL IS stage 2's read_run, written out again here: a run stops at the
 first of [b2_runmax] (the CYLINDER on an 8088, which is where the canary is
-asked at all - boot2.asm's `.nocross` skips it on a track-bounded load), the
-sectors still wanted, and the 64KB DMA page of the destination. Under KZIP the
+asked at all - boot2.asm's `.nocross` skips it on a track-bounded load) and
+the sectors still wanted. The 64KB DMA page of the destination USED to be a
+third bound and is not one now: a run it would cut is read whole to the next
+page's start and copied down (SPEC.md 2.9.13.7), so a page moves no run's
+start and no flip in or out of one. Under KZIP the
 plain head is read first in runs of its own (at the TRACK since BR-1's part 2;
 `--head-bound cylinder` models the other answer to the owner's open question
 about part 2), and the packed tail restarts BEHIND it, R paragraphs up. The
@@ -109,20 +112,19 @@ def geometry(spec):
     return spec, lay.data_lba, spt, heads
 
 
-def runs(first, count, dest, bound):
-    """[(lba, n)] as read_run cuts `count` sectors from LBA `first` into
-    paragraph `dest`: the run bound (`bound` sectors, counted from LBA 0, so
-    a cylinder or a track boundary), what is left, and the 64KB DMA page."""
+def runs(first, count, bound):
+    """[(lba, n)] as read_run cuts `count` sectors from LBA `first`: the run
+    bound (`bound` sectors, counted from LBA 0, so a cylinder or a track
+    boundary) and what is left. NOT the 64KB DMA page, which read_run meets
+    with a bounce rather than a shorter run (SPEC.md 2.9.13.7) - so where a
+    run lands in memory has no say in where it starts."""
     out = []
     lba = first
     while count > 0:
         n = min(bound - lba % bound, count)
-        room = 0x10000 - ((dest * 16) & 0xFFFF)      # bytes to the page end
-        n = min(n, room // SECTOR)
         out.append((lba, n))
         lba += n
         count -= n
-        dest += n * (SECTOR // 16)
     return out
 
 
@@ -146,12 +148,11 @@ class Arm:
             # only a bound on the END, so an unknown one reads to the disk's
             # 64KB of KERNEL_SEG at most (the canary's own limit below)
             n = self.plain if self.plain else 0x10000 // SECTOR
-            return {"plain": runs(lba0, n, KERNEL_SEG, cyl)}
+            return {"plain": runs(lba0, n, cyl)}
         h = self.kz["headsecs"]
         hb = spt if self.head_bound == "track" else cyl
-        head = runs(lba0, h, KERNEL_SEG, hb)
-        tail = runs(lba0 + h, self.kz["ksecs"] - h,
-                    KERNEL_SEG + h * (SECTOR // 16) + self.kz["rpara"], cyl)
+        head = runs(lba0, h, hb)
+        tail = runs(lba0 + h, self.kz["ksecs"] - h, cyl)
         return {"head": head, "tail": tail}
 
     def live(self, fsec, data_lba, spt, heads):

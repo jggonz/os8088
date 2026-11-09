@@ -517,6 +517,63 @@ boot2_entry:
     %error "the packed kernel's tail is read over stage 2's blob - raise BLOB_LIFT (kernel.asm)"
   %endif
 %endif
+%endif
+
+; --- THE BOUNCE'S GUARDS (SPEC.md 2.9.13.7) ----------------------------------
+; read_run reads a run the 64KB DMA page would cut to P, the page boundary it
+; straddles, and copies it down - so [P, P + n*512) is written, and the part
+; above the run's own end is either this read's not-yet-read remainder or the
+; RAM past the read's end. Past the end it must stay under the blob, which is
+; the first thing above the load that is LIVE at stage 2 (the image's nobits
+; rungs, `.lowbss`, `.vgabuf` and `.boot3`'s scratch, are the kernel's, and
+; the kernel has not started; stage 1's sector and stack are above the blob,
+; and the IVT, the BIOS data area and the 0x580 DPT copy are under
+; KERNEL_SEG, below every P). The worst case is a run of B2_BMAXSEC sectors
+; at the HIGHEST page boundary the read crosses, so that is what is asserted,
+; per read, in bytes of linear address. A read that crosses no page cannot
+; bounce, and asserts nothing: kern_small's whole load is under its blob at
+; 0x10000.
+;
+; B2_BMAXSEC is kernel.asm's (BLOB_LIFT carries the same term): the largest
+; CYLINDER of any geometry a system disk is built in - 1.44MB's 18 x 2 - since
+; a run is never longer than the cylinder (bound 1). tests/unit/t_canary.py
+; reads it out of each kernel's map and refuses a shipped disk whose BPB
+; says more.
+%ifdef KZIP
+%if KZ_SECS
+B2_HLO      equ KERNEL_SEG*16                       ; the plain head's read
+B2_HHI      equ B2_HLO + KZ_HEADSEC*512
+B2_TLO      equ B2_HHI + KZ_RPARA*16                ; ...and the packed tail's
+B2_THI      equ B2_TLO + (KZ_SECS - KZ_HEADSEC)*512
+B2_HPHI     equ ((B2_HHI - 1) >> 16) << 16          ; the highest page each
+B2_TPHI     equ ((B2_THI - 1) >> 16) << 16          ; one reaches
+  %if B2_HPHI > B2_HLO
+    %if B2_HPHI + B2_BMAXSEC*512 > BLOB_SEG_AT*16
+      %error "the plain head's DMA bounce can reach stage 2's blob - see read_run's bound 3 (SPEC.md 2.9.13.7)"
+    %endif
+  %endif
+  %if B2_TPHI > B2_TLO
+B2_BNEND    equ B2_TPHI + B2_BMAXSEC*512            ; the bounce's worst end
+    %if B2_BNEND > BLOB_SEG_AT*16
+      %error "the packed tail's DMA bounce can reach stage 2's blob - BLOB_LIFT's bounce term (kernel.asm) should have prevented this (SPEC.md 2.9.13.7)"
+    %endif
+  %else
+B2_BNEND    equ 0                                   ; no page crossed: none
+  %endif
+%endif
+%else
+B2_PLO      equ KERNEL_SEG*16                       ; NOKZIP: one plain read
+B2_PHI      equ ((B2_PLO + B2_KSECS*512 - 1) >> 16) << 16
+  %if B2_PHI > B2_PLO
+B2_BNEND    equ B2_PHI + B2_BMAXSEC*512
+    %if B2_BNEND > BLOB_SEG_AT*16
+      %error "NOKZIP: the plain read's DMA bounce can reach stage 2's blob - BLOB_LIFT's bounce term (kernel.asm) should have prevented this (SPEC.md 2.9.13.7)"
+    %endif
+  %else
+B2_BNEND    equ 0
+  %endif
+%endif
+%ifdef KZIP
 
 ; -----------------------------------------------------------------------------
 ; kz_all - expand every block of the tail, in place (SPEC.md 2.9.13)
@@ -528,7 +585,10 @@ boot2_entry:
 ; Block i's bytes are at (head + R) paragraphs up plus what the blocks before
 ; it occupy; block i lands at (head + i * KZ_BLK). Both walk by whole
 ; PARAGRAPHS - os88kz.py pads each block to one - so neither pointer needs an
-; offset and the decoder starts every block at zero.
+; offset. Each block's 6-byte header is `packed, D + unpacked, D/16`, and the
+; decoder starts it at offset D of a segment D bytes below the landing, so
+; its matches reach back into the blocks already expanded (SPEC.md
+; 2.9.13.6). D + unpacked is under 64KB by os88kz.py's cap, so DI never wraps.
 ;
 ; A ROUTINE and not the straight line it began as, because the hard disk's
 ; boot sector calls it too (2.9.13.5) and a second copy of a decoder's driver
@@ -545,17 +605,22 @@ kz_all:
     mov ds, ax
     xor si, si
     lodsw                       ; the block's packed length...
-    mov bp, ax
-    lodsw                       ; ...and what it expands to
-    mov dx, ax
-    mov es, bx
-    push bx
-    push bp
-    call kz_expand              ; DS:SI -> ES:0, DX bytes, and DS:SI is left
+    xchg bp, ax
+    lodsw                       ; ...where its output ENDS, D + its length...
+    xchg dx, ax
+    lodsw                       ; ...and D/16, its DICTIONARY (2.9.13.6) in
+    push bx                     ; paragraphs: the final bytes below the
+    sub bx, ax                  ; landing its matches may reach. ES goes D
+    mov es, bx                  ; below the landing and DI starts at D, so
+    mov cl, 4                   ; a match reaching back D bytes is still at
+    shl ax, cl                  ; a non-negative offset. 0 on block 0, whose
+    xchg di, ax                 ; dictionary would be the plain head stage 2
+    push bp                     ; has written into (os88kz.py)
+    call kz_expand              ; DS:SI -> ES:DI..DX, and DS:SI is left
     pop bp                      ; past the stream
     pop bx
     pop ax
-    add bp, 4 + 15              ; the header, and up to the next paragraph
+    add bp, 6 + 15              ; the header, and up to the next paragraph
     mov cl, 4
     shr bp, cl
     add ax, bp                  ; ...the next block's bytes
@@ -585,8 +650,10 @@ kz_all:
 ; of it and the blocks at KERNEL_SEG + R + head/16 - THE SAME PLACE. So the
 ; whole of the difference is moving the head down, and kz_all is then the
 ; identical call on identical addresses. The move cannot overlap: R is
-; KZ_RPARA*16 from os88kz.py (18,432 on kern_big and 10,240 on kern_small at
-; the 2026-11-08 build) and the head is 4,608.
+; KZ_RPARA*16 from os88kz.py (21,504 on kern_big and 10,752 on kern_small at
+; BOOT3-PLAN 16.18) and the head is 2,560 (3,072 on kern_mega). The blocks'
+; dictionaries (2.9.13.6) need nothing here: they reach only into blocks
+; kz_all has already expanded, never into the head this moves.
 ; -----------------------------------------------------------------------------
 kz_hd:
     push bp                     ; the caller's boot timer, which it writes into
@@ -609,7 +676,9 @@ kz_hd:
 
 ; -----------------------------------------------------------------------------
 ; kz_expand - one LZ4 block (SPEC.md 2.9.13.2)
-; in:  DS:SI = the block's stream, ES = where it expands to, DX = its length
+; in:  DS:SI = the block's stream, ES:DI = where it expands to, DX = where it
+;      stops (DI + its length). DI is the block's DICTIONARY, D (2.9.13.6):
+;      ES:0 .. ES:DI-1 are final bytes its matches may copy from
 ; out: DS:SI one past the stream, DI = DX
 ; clobbers: AX, BX, CX, DI, BP, flags
 ;
@@ -632,7 +701,6 @@ kz_hd:
 ; simplification costs is two sectors of the forty it saves.
 ; -----------------------------------------------------------------------------
 kz_expand:
-    xor di, di
 .seq:
     lodsb                       ; the token: literal length in the high nibble,
     mov bl, al                  ; match length - 4 in the low one
@@ -699,7 +767,9 @@ kz_expand:
 ;      the track (SPEC.md 18.91.1). Either way EOT stays SPT.
 ;   2. the sectors still wanted
 ;   3. the 64KB DMA page - a single 512-aligned sector cannot cross one, a run
-;      can, and the controller answers a straddle with error 09h
+;      can, and the controller answers a straddle with error 09h. That one
+;      no longer SHORTENS the run: the run is read whole to the next page's
+;      start and copied down (SPEC.md 2.9.13.7), so a run is bounds 1 and 2
 ; -----------------------------------------------------------------------------
 read_run:
     mov es, [b2_dest]
@@ -714,26 +784,40 @@ read_run:
     jae .page
     mov di, bx
 
-    ; --- 3: the 64KB DMA page ----------------------------------------------
+    ; --- 3: the 64KB DMA page - a BOUNCE, not a bound (SPEC.md 2.9.13.7) ---
+    ; A run the page would cut is read WHOLE to the start of the page above
+    ; - P, which no run of 64KB or less can straddle - and `.out` below copies
+    ; it down to [b2_dest]. It used to be cut in two there, and that is a
+    ; whole int 13h, 1-2 revolutions, to move what one call could
+    ; (PERFORMANCE.md Part 2): one call a page, every boot.
+    ;
+    ; THE BOUNCE IS INSIDE THE LOAD, so it costs the boot floor nothing. The
+    ; run is [dest, dest + n*512) with dest < P < its end, so [P, P + n*512)
+    ; is the run's own top half plus at most n-1 sectors above it - which is
+    ; the part of this same read not yet read, or past the read's end and
+    ; under the blob, where nothing is live at stage 2. The guard at the foot
+    ; of the KZIP section asserts that, from the highest page boundary any
+    ; read crosses plus B2_BMAXSEC, on every kernel; kernel.asm's BLOB_LIFT
+    ; carries the same term so that it holds by construction. The copy runs
+    ; UP the address space with the source above the destination, so the
+    ; overlap is the safe direction for a forward `rep movsw`.
 .page:
-    mov ax, es
-    mov cl, 4
-    shl ax, cl                  ; the low 16 bits of the physical address
-    neg ax                      ; bytes to the page end (0 = a whole page)
-    jz .have
-    mov cl, 9
-    shr ax, cl
-    cmp ax, di
-    jae .have
-    mov di, ax                  ; ...and never zero: every destination here is
-                                ; 512-ALIGNED (ES starts at KERNEL_SEG and
-                                ; advances 32 paragraphs a sector), so the
-                                ; remainder is a multiple of 512 and the shift
-                                ; can only reach 0 from an AX the jz has taken
-.have:
 %ifdef FLOPPY_ONE
     mov di, 1                   ; FLOPPY1=1: one sector a call, the transfer
-%endif                          ; as it was before any of this
+%else                           ; as it was before any of this - and one
+                                ; 512-aligned sector straddles no page
+    mov ax, es
+    mov dx, di
+    mov cl, 5
+    shl dx, cl                  ; the run in paragraphs...
+    add dx, ax                  ; ...and the segment it ends at
+    or ax, 0x0FFF
+    inc ax                      ; P: the next page's segment (an aligned ES
+    cmp dx, ax                  ; names the page after it, which no run
+    jbe .have                   ; reaches, so it never bounces)
+    mov es, ax                  ; the run would straddle P: read it there
+%endif
+.have:
     mov [b2_runsz], di
     mov si, 3                   ; attempts
 
@@ -839,6 +923,21 @@ read_run:
 %endif
     mov ax, [b2_runsz]          ; the whole run: CF=0 is the contract
 .out:
+%ifndef FLOPPY_ONE
+    mov dx, es                  ; a BOUNCED run (bound 3 above) is at P and
+    cmp dx, [b2_dest]           ; not at its destination: copy what the BIOS
+    je .placed                  ; moved - AX sectors, with DISK_TRUST_AL's
+    mov es, [b2_dest]           ; short count as with the contract's - down
+    push ds                     ; to it. ES FIRST: [b2_dest] is a DS-relative
+    mov ds, dx                  ; word, and DS is P after this. AH is 0 (a
+    mov ch, al                  ; run is under 256 sectors), so CH:CL = AL:0
+    mov cl, ah                  ; is AL * 256 words. DF is 0, as kz_expand's
+    xor si, si                  ; `rep movsb` takes it to be after an int 13h
+    xor di, di
+    rep movsw
+    pop ds
+.placed:
+%endif
     add [b2_lba], ax            ; AX = the sectors it moved
     sub [b2_left], ax
     pushf                       ; the loop test, banked past the shift: three

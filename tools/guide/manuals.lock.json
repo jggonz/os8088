@@ -49,9 +49,9 @@
   "sources": [
    "apps/arcade"
   ],
-  "stamped": "1f3846d4",
-  "strings": "3f4829e726debac5",
-  "why": "review fixes: shorter toasts (the page quotes none), .ROM length checked against its set (the page's 'wrong set' wording covers it), Q*bert's sound board actually heard on a 386+ as the Sound section already says - no words change"
+  "stamped": "607f6357",
+  "strings": "f2e769a1e0e72cf8",
+  "why": "About card credits the contributor and covers every board; page gains the Arcade menu table (About Arcade, Close) as 1942's has"
  },
  "ARCHIVO_F88": {
   "sources": [],
@@ -1290,17 +1290,17 @@
   "sources": [
    "apps/vbattle"
   ],
-  "stamped": "d70ec25c",
-  "strings": "e619e1fa6fb6b44e",
-  "why": "read: the openings' seam setting and the victory read-ahead are below this page's level of detail"
+  "stamped": "607f6357",
+  "strings": "6282ad9c6b4aaa15",
+  "why": "same About card as VBATTLE.O88, whose page this one defers to for window, menu and keys; the rest of the vbattle diff is kern_mega hold sizing below this page's detail"
  },
  "VBATTLE_O88": {
   "sources": [
    "apps/vbattle"
   ],
-  "stamped": "d70ec25c",
-  "strings": "e619e1fa6fb6b44e",
-  "why": "read: the openings' seam setting and the victory read-ahead are below this page's level of detail"
+  "stamped": "607f6357",
+  "strings": "6282ad9c6b4aaa15",
+  "why": "Video Battle gains the standard About card; page gains the Video Battle menu table (About Video Battle, Close)"
  },
  "VESA_DRV": {
   "sources": [
