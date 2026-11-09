@@ -20923,7 +20923,7 @@ $(BUILD)/wireflet360.img: $(BUILD)/wireflet.o88 apps/wirefleet/README.TXT tools/
 vbattle: $(BUILD)/vbattle.o88 $(BUILD)/BATTLE.VBT
 $(BUILD)/vbattle.bin: apps/vbattle/vbattle.asm apps/vbattle/vbrules.inc apps/vbattle/vbgame.inc \
                       apps/vbattle/vbloop.inc apps/vbattle/vbhold.inc apps/vbattle/vbcache.inc apps/vbattle/vbinp.inc apps/vbattle/vbbm.inc \
-                      apps/vbattle/vbband.inc apps/video/vdec.inc apps/os88la.inc apps/os88ub.inc apps/os88api.inc | $(BUILD)
+                      apps/vbattle/vbband.inc apps/video/vdec.inc apps/os88la.inc apps/os88ub.inc apps/os88api.inc apps/os88ui.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -l $(BUILD)/vbattle.lst -o $@ $<
 $(BUILD)/vbattle.o88: $(BUILD)/vbattle.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $< -o $@
@@ -20933,7 +20933,7 @@ $(BUILD)/vbattle.o88: $(BUILD)/vbattle.bin tools/os88pkg.py $(PKGZSTAMP)
 $(BUILD)/vbattled.bin: apps/vbattle/vbattle.asm apps/vbattle/vbprof.inc apps/vbattle/vbrules.inc \
                        apps/vbattle/vbgame.inc apps/vbattle/vbloop.inc apps/vbattle/vbhold.inc apps/vbattle/vbcache.inc \
                        apps/vbattle/vbinp.inc apps/vbattle/vbbm.inc apps/vbattle/vbband.inc apps/video/vdec.inc \
-                       apps/os88la.inc apps/os88ub.inc apps/os88api.inc apps/os88real.inc | $(BUILD)
+                       apps/os88la.inc apps/os88ub.inc apps/os88api.inc apps/os88real.inc apps/os88ui.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -DVB_DIAG -o $@ apps/vbattle/vbattle.asm
 $(BUILD)/vbattled.o88: $(BUILD)/vbattled.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $< -o $@
