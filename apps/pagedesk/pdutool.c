@@ -458,9 +458,10 @@ static int ovl_select_click(int x, int y)
  * owns no edit records - the writer saves a mark on the page id's original,
  * and an inserted page has no id here at all - so a new mark is refused in
  * words rather than saved somewhere else or not at all */
+static const char pdu_svfirst[] = "Save first, then try again.";   /* verify-insert: marks, Duplicate, Extract */
 static int ovl_tool_nomark(void)
 {
-    pdu_tell("Save first, then mark this page.");
+    pdu_tell(pdu_svfirst);
     return 1;
 }
 

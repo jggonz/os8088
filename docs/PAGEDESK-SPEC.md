@@ -3947,7 +3947,7 @@ fixtures, `pdw_pgcheck.py`'s I1 checks against qpdf and Poppler).
 
 File > **Insert from PDF...** (File row 9) raises the OS file dialog; the
 chosen file is not opened. The status line then asks for the pages of that
-file, `Insert pages of NAME (N or N-M) after this page:`, and Enter inserts
+file, `Insert pages of NAME (3 or 2-4): `, and Enter inserts
 them after the page the command is for (the current page, or the Pages
 panel's selection; Move page moves them afterwards). One run of consecutive
 pages is one page operation, so one Undo takes it back. The inserted pages
@@ -3957,8 +3957,10 @@ output opens with the real pages. The file's page count is therefore not
 known when the range is typed: a range past its end is refused by the save
 (`PDE_RANGE`, `err_detail` 17) and nothing is written. Up to three
 different files per save (`PDM_NSLOT`), at most 240 pages in the view
-(20.11.1). Extract refuses a list that holds an inserted page ("Save first")
-- the extract pipeline reads one document.
+(20.11.1). Extract refuses a list that holds an inserted page, and Duplicate
+page refuses an inserted page (the writer takes a file page once, `err_detail`
+15), both with "Save first, then try again." - the extract pipeline reads one
+document. Insert blank page after an inserted page takes page 1's size.
 
 #### 20.16.2 The map and the row
 
@@ -3966,12 +3968,23 @@ different files per save (`PDM_NSLOT`), at most 240 pages in the view
 11-10, the file's 0-based page in bits 9-0, `PD_MAXPAGES` = 1,024). The row
 `PDU_DC_PAGES` holds, from byte `PDM_NAMES` = 960, slot k's 8.3 name at
 960 + 14k (NUL) and its folder at 1,002 + 4k: the cluster word then the
-volume + 1 (never 0). A slot is *in use* while a map entry names it; the
-command reuses the slot whose name and folder are equal, else the lowest
-unused one, else refuses ("An insert can use three files."). A foreign
+volume + 1 (never 0). A slot is *in use* while a map entry names it **or
+the undo history may bring one back** (`pdu_insmask`, a bit per slot named
+since `ud_init` - a new document - or since the history was last empty): an
+Undo of Delete page or a Redo of an Insert restores map entries that name
+the slot by number, so renaming it would save another file's pages in their
+place. The command reuses the slot whose name and folder are equal, else the
+lowest free one, else refuses ("Three files at most."). A foreign
 page is a duplicate for edit's purposes (`pdu_pg_isdup`) and `pdu_pg_id` is 0
-for it (the placeholder takes page 1's size); marks placed on it are not
-saved. The same file page twice is refused (the writer: `err_detail` 15).
+for it (the placeholder takes page 1's size). It owns no edit records, as a
+blank or a duplicate owns none (13.7): a new mark on any of them is refused
+in words ("Save first, then try again.", `pdutool.c`). The edit store keys a
+mark by the page ID, `pdu_ed_pg()` = `pdu_pg_id(pdu_page)`, which the
+renderer draws by and the writer saves by, and the notes panel maps through
+`pdu_pg_id` and its inverse `ovl_pg_view` (verify-insert: until then a mark
+was keyed by its VIEW index, so after any Insert, Move or Duplicate it was
+drawn and saved on another page). The same file page twice is refused (the
+writer: `err_detail` 15).
 
 #### 20.16.3 The writer
 
@@ -4008,7 +4021,14 @@ slot, a **foreign window** after `PH_TREE`:
    pre-assigned number (`gc_newnum`'s fallback).
 4. `PH_FROOTS` - the chosen pages, with their pre-assigned numbers: `/Parent`
    the document's root `/Pages`, `/Rotate` final (own + added quarter turns),
-   `MediaBox`/`CropBox`/`/Resources` materialised from the inherited values.
+   `MediaBox`/`CropBox`/`/Resources` materialised from the inherited values -
+   `/CropBox` and `/Resources` ALWAYS (an empty `<< >>` when the file's tree
+   has none), because under the source's root the page would otherwise take
+   up the source root's own inheritable ones.
+
+A failure inside a window names the file: `err_detail` 20 + slot, unless the
+detail is already set or the error is the target's (`PDE_DISKFULL`,
+`PDE_WPROT`), which the primary words as for any save.
 
 Within a window a resource used by several pages is copied **once**; across
 windows (different files) nothing is shared, so the growth is bounded by the
@@ -4027,9 +4047,11 @@ window less those already written (`err_detail` 16), a dictionary over
 
 #### 20.16.4 Sizes
 
-Image + bss, measured: PDWRT 47,648 (D24's cap 49,152, +2,266); the primary
-50,518 + 6,387 = 56,905 (+370 against 56,535, share +450); the overlay part
-42,770 (+1,513 against 41,257, share +2,600); PDENG and PDREND unchanged. The
+Image + bss, measured after the verifier's fixes: PDWRT 47,724 (D24's cap
+49,152, +2,342); the primary 50,574 + 6,389 = 56,963 (+428 against 56,535,
+share +450); the overlay part 43,132 (+1,875 against 41,257, share +2,600);
+PDENG and PDREND unchanged. One resident literal, "Save first, then try
+again.", serves the three refusals (a mark, Duplicate, Extract). The
 save claim is 40 KiB whenever the map holds a foreign page (no new claim, D12);
 the three bit maps live in the object table's tail for the window only.
 `t_pdstk` stays at 366 of 384 on `cc_onkey`: the command, its prompt and op 5
@@ -4040,11 +4062,14 @@ run in the overlay from the key's chain no deeper than the Extract prompt did.
 `make pdwrt-real`: round I of `pdw_real.c` inserts three pages of a file next
 to PAGES.PDF and one of a copy in another folder, byte-compares the source and
 the foreign files afterwards, re-opens the output through PDENG, then drives the
-refusals - a page past the end (17), a missing file, a form-field file
-(`ACROFORM.PDF`, 18), a full disk, Esc after six slices - each of which leaves no
-`PDSAVE.$$$`, no target and `PDW_OUT_REOPEN` set. `pdw_pgcheck.py` I1: `qpdf
+refusals - a page past the end (17), a missing file (named, 20), a form-field
+file (`ACROFORM.PDF`, 18), a full disk and Esc both in `PH_COPY` and INSIDE a
+foreign window (PDENG holding the foreign file; the disk-full one must not
+blame the file) - each of which leaves no `PDSAVE.$$$` and no target, and the
+in-window ones `PDW_OUT_REOPEN` set. `pdw_pgcheck.py` I1: `qpdf
 --check`, text, rotation and Poppler pixels of all twelve pages against the
-source pages, one copy of the shared font and form per inserted file, the link's
+source pages, every inserted page carrying its own `/MediaBox`, `/CropBox` and
+`/Resources`, one copy of the shared font and form per inserted file, the link's
 `/Dest` following its page, `/P` `/Popup` `/Parent` rewritten, and the source
 file the output's prefix. On the glass (QEMU VGA): File > Insert from PDF...,
 MARKUP.PDF pages 1-2 after page 1 of PAGES.PDF, Save As, the output opened with

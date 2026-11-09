@@ -331,7 +331,7 @@ static int ovl_pg_cmd(int id)
         break;
     case PGC_DUP:
         if (PDM_KIND(pdu_pgw(t)) == PDM_FOREIGN) {     /* verify-insert: the writer takes a file page once (15) */
-            pdu_tell("Save first, then duplicate it.");
+            pdu_tell(pdu_svfirst);
             break;
         }
         ovl_pg_do(3, t + 1, 0, pdu_pgw(t));
@@ -465,7 +465,7 @@ static int ovl_pg_key(int ascii, int scan)
         if (pdu_pk == PK_EXTRACT) {
             n = ovl_pg_list();
             if (n < 0) {
-                pdu_tell(n == -1 ? "Use a list like 1,3-5." : n == -3 ? "Save first, then extract." : "Page operations handle up to 240 pages.");
+                pdu_tell(n == -1 ? "Use a list like 1,3-5." : n == -3 ? pdu_svfirst : "Page operations handle up to 240 pages.");
                 return 1;
             }
             if (n == 0)
