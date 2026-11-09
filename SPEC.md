@@ -241689,3 +241689,118 @@ pentium-pciether`) is the 86Box profile.
    when a package opens one (§72.13).
 4. Open: the QEMU `rtl8139` model's handling of the dword accesses and of
    TSD's TOK/OWN timing has not been run; the harness's row is the first.
+
+## 127. Debug disks — a boot floppy per subsystem that shows what the driver found (`apps/snddiag/`, `drivers/sound/snddiag.inc`)
+
+*Design record and story list: docs/plans/DEBUG-DISKS-PLAN.md; diary:
+docs/HOW-DEBUG-DISKS-WERE-BUILT.md. Number 126 is held for MOUSECHK, draft PR #340.*
+
+A **debug disk** is a system disk that boots straight into a diagnostic
+program, which puts on the screen everything one subsystem's driver probed
+and everything a short exercise of it did. It is for a field report from a
+user with no debugger: they boot the disk, **photograph the screen** and send
+the pictures. It is not `make bootdiag` (§2.9.10), which is for a machine that
+cannot boot os8088 at all and so runs no kernel and no driver; a debug disk
+assumes the machine boots and asks what a driver made of its hardware.
+
+### 127.1 The rules every debug disk keeps (pinned)
+
+1. **The driver is the shipped SOURCE, built with one define.** The probes on
+   the screen are the probes the shipped driver runs, because they are the
+   same lines. The define adds a record and hooks that fill it; with the
+   define absent every hook expands to nothing, and the shipped driver is
+   **byte-identical** to one built without the hooks written at all
+   (`tests/unit/t_debugdisk.py` assembles both and compares).
+2. **One more package verb hands the record over**, on the driver's own
+   `OSAPI_DRV_CALL` door. A shipped driver answers it `CF=1, AX=0` like any
+   verb it does not know, which is how the program tells the builds apart -
+   and the program still runs on a shipped driver, saying it has no detail.
+3. **The record is resident.** A driver hands its attach-only code back
+   (§34.15.1); the record is state above the keep line, so it outlives the
+   probes that filled it.
+4. **Every page fits CGA's 640x200**: 17 rows of 78 columns of the 8x8 font,
+   drawn with `OSAPI_FONT_RUN` and redrawn row by row only where the text
+   changed (§6.1). The same text is on VGA, EGA and Hercules with a larger
+   row pitch (8, 10 or 12 pixels by screen height).
+5. **The disk asks for its driver in `SYSTEM.CFG`** (§51.3), so a card the
+   kernel's boot sniff cannot see is still probed, and **`\AUTOSTRT` opens
+   the program** (§26.10), so the machine boots into the report with nobody
+   at it.
+6. **Four geometries, in the release zip** beside the system disks, built by
+   `make` (they are in `$(SHIPIMGS)`, so they sign in their own slots,
+   §18.8.2.2) and alone by `make debugdisks`. Each carries the boot set, the
+   system packages, Note Pad and a `.TXT` saying what to send - not a second
+   system disk's payload.
+7. **A debug disk follows its driver.** A probe added to the driver is a row
+   added to the record and a line added to a page in the same change; the
+   record carries a version byte (`SDG_VER`) for a program reading an older
+   driver.
+
+### 127.2 The sound debug disk (`debug-sound*.img`; shipped)
+
+`build/debug-sound.img`, `-120`, `-720` and `-360`: the system disk of each
+geometry with `SOUND.DRV` replaced by `build/snddiag/sound.drv` (§127.3), a
+`SYSTEM.CFG` with `DW` bit 0 set, `SNDDIAG.O88` and `SNDDEBUG.TXT` at the
+root, and `\AUTOSTRT\SNDDIAG.LNK`. The Makefile's swap refuses to build if
+`$(BUILD)/sound.drv` ever leaves `$(DRIVERS)` (a `filter-out` matching nothing
+is silent), and `t_debugdisk` reads `SOUND.DRV` back off each image.
+
+### 127.3 SOUND.DRV's record and `SNDV_DIAG` (pinned; shipped)
+
+`drivers/sound/snddiag.inc` is included by `sound.asm` and by the package, so
+the layout has one source. Built with `-DSNDDIAG` the driver keeps:
+
+- **the reset scan**, base by base: the base, the last byte `2xAh` gave
+  (`AAh` is a DSP) or the last `2xEh` status, and the carry - up to seven
+  slots (six bases and the slow retry);
+- **the IRQ search**: how (PicoMEM, mixer `80h`, or the `F2h` probe), mixer
+  `80h`'s value, the `F2h` attempts, the stub that confirmed, the line before
+  §34.5.6's IRQ 5 test and, on an XT, `int 0Dh`'s segment there, and the
+  master PIC's mask at discovery;
+- **the stream at run time**: block-IRQ entries and spurious ones, the last
+  ACK byte, watchdog stops, playback starts, DSP writes that timed out, and a
+  **ring of the last 32 bytes written to the DSP** with a timeout flag each;
+- and, read at the copy, the whole stream record (the regime, the time
+  constant, the block size, the three counters, the watchdog, the 8237
+  cycle) and the 8259's mask, request and in-service registers.
+
+`SNDV_DIAG` = **14**, after `SNDV_RMODE`. `AL` is the sub-function:
+
+| AL | name | in | out |
+|---|---|---|---|
+| 0 | `SDGF_COPY` | `ES:DI` the caller's buffer | `SDG_LEN` bytes (`SDG_O_*`), `CX = SDG_LEN` |
+| 1 | `SDGF_MIXRD` | `AH` mixer register, `CL` 1-4 reads | one index write, then `CL` data reads into `AL, AH, DL, DH` - an ESS answers register `40h` read four times with `18h`, its part number and its configuration port (Linux `es18xx`'s identify) |
+| 2 | `SDGF_VOICE` | - | DSP `D8h` now, under `cli`: the voice (speaker) switch, `FFh` on / `00h` off. Legal while a stream plays; refused under high-speed DMA, which takes no command |
+| 3 | `SDGF_DSPCMD` | `AH` a DSP command | only with no stream open: up to two answer bytes in `AL, AH`, `CL` how many; **the DSP is reset afterwards** whatever it answered, so an operand it waits for cannot swallow the next command. The package asks `E7h` of a DSP 3.xx (an ESS answers `68h 8xh`) |
+
+Refusals are `CF=1` with `AX` = 1 no DSP, 2 busy, 3 no answer in
+`SBL_POLLS`, 4 an unknown `AL`. Nothing here is attach-only and every port
+touch is bounded. The hooks cost the diag build ~850 bytes; the shipped build
+nothing.
+
+### 127.4 SNDDIAG.O88 - Sound Debug (shipped)
+
+A window of 17 text rows; `1`, `2`, `3` choose the page, `P` runs the play
+test again, `R` cycles its rate (22,050, 11,025, 8,000, 44,100 Hz), `V`
+turns the `D8h` reading off and on, `Esc` closes.
+
+- **1 Detect** - CPU tier and protected mode, the adapter, the driver and
+  whether it is the debug build, the caps word by name, the DSP (base,
+  version, IRQ, DMA, the SB16's 16-bit channel, auto-init, the tier's state),
+  the reset scan, how the IRQ was found, the PIC now, the mixer kind, an ESS
+  chip's mixer and `E7h` identities, OPL, MPU-401, Covox and PicoMEM, a
+  `BLASTER=` line and a one-line verdict.
+- **2 Play test** - starts by itself two seconds after the window opens: a
+  square tone through the real stream path (`OSAPI_SND_STREAM`, a 16,384-byte
+  ring, `SND_OPENF_RING`, fed by a window timer), ten seconds, one row a
+  second with the bytes the card played (verb 9), the block IRQs, `D8h`, and
+  the mixer registers that can mute it (`22h`, `04h`, and an ESS's `60h`,
+  `62h`, `64h`), and the stream's state. The verdict names the FIRST thing
+  that stopped, in the order it can stop: the DMA, the block IRQ, the DSP's
+  voice, a mixer register. If none did it says so, and asks when the tone
+  stopped - a fault past the DSP is something no register can show.
+- **3 Registers** - mixer `01h-7Fh` (`00h`, the reset register, is never
+  read), the DSP write log oldest first, the stream record and the PIC.
+
+On kern_small, which refuses `OSAPI_WM_TIMER`, there is no play test and
+page 2 says so.

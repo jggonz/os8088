@@ -54,7 +54,11 @@ IMAGES = ["os8088-360.img", "os8088-720.img", "os8088-120.img",
           # starts at LBA 12 on both, and the band is about the SECTOR, so
           # they join the same intersection. small.img (1.44MB, on demand)
           # does NOT cross there and is why it is not shipped as it stands
-          "small360.img", "small720.img"]
+          "small360.img", "small720.img",
+          # the sound debug disk (SPEC.md 127): the system disk's boot and
+          # kernel at the system disk's LBA, on all four geometries
+          "debug-sound-360.img", "debug-sound-720.img",
+          "debug-sound-120.img", "debug-sound.img"]
 
 
 def ksig_off():

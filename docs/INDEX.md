@@ -419,6 +419,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | SKIES | `apps/skies/csload.asm` | §88 | no |
 | SKIES | `apps/skies/skies.asm` | §88 | yes |
 | SOLITAIRE | `apps/solitaire/solitaire.asm` | §43 | yes |
+| Sound Debug | `apps/snddiag/snddiag.asm` | §127.2 | no |
 | Sticky Note | `apps/stiknote/stiknote.asm` | §110.13 | yes |
 | System Check | `apps/syscheck/syscheck.asm` | §118 | yes |
 | TAMEGRAM | `apps/tamegram/tamegram.asm` | §49 | yes |
@@ -570,6 +571,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 123 | WaveRack — a sound recorder, WAV player and waveform editor (`apps/waverack/`, `WAVERACK.O88`) |
 | 124 | WIN16 — Windows 3.x programs in an os8088 window (`apps/win16/`, `WIN16.O88`) |
 | 125 | PCIETHER.DRV — PCI network cards for the big builds (`drivers/pciether/`) |
+| 127 | Debug disks — a boot floppy per subsystem that shows what the driver found (`apps/snddiag/`, `drivers/sound/snddiag.inc`) |
 
 ## docs/
 

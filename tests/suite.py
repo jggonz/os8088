@@ -1210,6 +1210,18 @@ FAST = [
         "mem_regrow taken out, and red at 7K on the SB leg with snd_keep "
         "written unconditionally",
         wants=("build/covoxsys720.img", "build/mixer360.img")),
+    Row("snddiag", "soak", py("tests/snddiag.py"), 120.0,
+        "THE SOUND DEBUG DISK, BOOTED (SPEC.md 127.2-127.4): "
+        "debug-sound-720.img on the SB 5150 with nobody at it. \\AUTOSTRT "
+        "opens SNDDIAG.O88, the play test starts by itself and runs ten "
+        "seconds - every second from 2 to 9 within 10% of 22,050 bytes and "
+        "taking block IRQs, no watchdog stop, a verdict that names nothing - "
+        "and pages 1 and 3 show the probe record: the -DSNDDIAG driver "
+        "answering SNDV_DIAG, the DSP at 220h, a BLASTER= line, E1h in the "
+        "DSP write log. Read out of the package's own text buffer, which is "
+        "what its rows draw",
+        needs=("marty",),
+        wants=("build/debug-sound-720.img", "build/apps720.img")),
     Row("sndonce", "soak", py("tests/unit/t_sndonce.py"), 1.0,
         "SPEC.md 34.15.1: nothing SOUND.DRV keeps reaches into what its "
         "attach hands back - read off the assembler's own listing, no "
@@ -1613,6 +1625,16 @@ FAST = [
         "cylinder 34 of the 360KB apps floppy, straddling; RED on that layout "
         "on three of the shipped apps disks. Its own FAT reader, not the "
         "writer's"),
+    Row("debugdisk", "fast", py("tests/unit/t_debugdisk.py"), 0.6,
+        "THE DEBUG DISKS (SPEC.md 127). The shipped SOUND.DRV is "
+        "byte-identical to one assembled from sound.asm and sb.inc with every "
+        "SDG_* hook, every %ifdef SNDDIAG block and the snddiag.inc include "
+        "deleted - red at 10,512 against 10,511 with one `nop` put in the "
+        "shipped arm's SDG_SPURHOOK. And each debug-sound image carries the "
+        "-DSNDDIAG SOUND.DRV (the Makefile's swap is a filter-out, silent "
+        "when it matches nothing), SNDDIAG.O88, SNDDEBUG.TXT, "
+        "\\AUTOSTRT\\SNDDIAG.LNK and a SYSTEM.CFG with DW bit 0, while the "
+        "four shipped system disks still carry the shipped driver"),
     Row("volsig", "fast", py("tests/unit/t_volsig.py"), 0.4,
         "NO TWO SHIPPED VOLUMES MAY SIGN THE SAME (SPEC.md 18.8.2). The "
         "kernel's entire swap detector is a rotate-add sum over LBA 0, and "

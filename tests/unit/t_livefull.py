@@ -95,6 +95,11 @@ LOCAL_EXEMPT = {
           "gate rather than a program; the packages built WITH it are "
           "cword/, paccman/, runcpm/, c64/, apple2/, weave/ and loom/, and "
           "every one of those is checked below",
+    "snddiag": "the sound DEBUG disk's program (SPEC.md 127): it reads a "
+               "record only the -DSNDDIAG SOUND.DRV keeps, so it ships on "
+               "the debug disks with that driver and nowhere else - beside "
+               "the live media's shipped SOUND.DRV it could only say it has "
+               "nothing to show",
 }
 
 

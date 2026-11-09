@@ -52,6 +52,8 @@
 %include "os88drv.inc"
 %include "sndpkg.inc"           ; the package verbs: the FM chip, whole
                                 ; (SPEC.md 34.12)
+%include "snddiag.inc"          ; the debug disk's record and verb (SPEC.md
+                                ; 127.3): every macro is empty unless SNDDIAG
 
 OS88_DRIVER 'Sound', DRVC_SOUND, snd_entry
 OS88_DRV_FOOT                   ; it cuts its HMA block at attach (the
@@ -1001,6 +1003,10 @@ opl_defpat:
 ; out: per verb; CF=1 AX=0 for a verb we do not know
 ; =============================================================================
 snd_pkg:
+%ifdef SNDDIAG
+    cmp bl, SNDV_DIAG           ; the debug disk's build only (SPEC.md 127.3)
+    je sdg_verb
+%endif
     cmp bl, SNDV_RMODE          ; (ahead of the mixer's gate: it is no mixer
     je snd_rmode                ; verb, and a machine without one has it)
     cmp bl, SNDV_MIXICON_THEME
@@ -1072,6 +1078,7 @@ snd_ident:
     mov ax, SND_SIG
     clc
     ret
+SDG_VERB                        ; snddiag.inc: resident, above snd_keep
 snd_pkg_oplw:                   ; SNDV_OPLW
     mov ax, SNDE_NOFM
     cmp byte [opl_kind], 0
@@ -1327,6 +1334,7 @@ opl_xmode:  db 0                ; the mode it was granted: SND_OPL2 / SND_OPL3
 %endif
 MPU_STATE
 SBL_STATE
+SDG_STATE                       ; snddiag.inc: the debug disk's record
 mix_kind:   db 0                ; 0 = no mixer: 1/2/3 the CT1335/1345/1745.
                                 ; It is the CORE's byte and not MIX_STATE's,
                                 ; because it is what says whether anything
